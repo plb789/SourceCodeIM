@@ -26,10 +26,11 @@
             <div class="sidebar-header">
                 <img id="current-avatar" class="avatar current-avatar" src="" alt="头像" title="点击更换头像">
                 <span id="current-user" class="current-user"></span>
+                <button id="add-friend-btn" class="logout-btn" title="添加好友">＋</button>
                 <button id="theme-btn" class="logout-btn" title="切换主题">主题</button>
                 <button id="logout-btn" class="logout-btn">退出</button>
             </div>
-            <div class="sidebar-title">在线用户</div>
+            <div class="sidebar-title">好友</div>
             <ul id="user-list" class="user-list">
                 <li class="user-item group-item active" data-user="">群聊</li>
             </ul>
@@ -50,6 +51,13 @@
     </div>
 
     <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif" class="hidden">
+
+    <!-- 好友右键菜单 -->
+    <div id="friend-menu" class="friend-menu hidden">
+        <div class="menu-item" data-action="remark">设置备注</div>
+        <div class="menu-item" data-action="block">拉黑</div>
+        <div class="menu-item" data-action="delete">删除好友</div>
+    </div>
 
     <script src="js/socket.js"></script>
     <script src="js/chat.js"></script>

@@ -14,6 +14,13 @@ const (
 	MsgTypeHistory     = 10 // 历史记录请求
 	MsgTypeHistoryResp = 11 // 历史记录响应
 	MsgTypeTyping      = 12 // 输入状态提示
+
+	MsgTypeFriendRequest     = 20 // 好友申请
+	MsgTypeFriendRequestResp = 21 // 好友申请响应
+	MsgTypeFriendList        = 22 // 好友列表同步
+	MsgTypeFriendDelete      = 23 // 删除好友
+	MsgTypeBlacklist         = 24 // 黑名单操作
+	MsgTypeFriendUpdate      = 25 // 好友备注/分组更新
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -32,4 +39,6 @@ type Message struct {
 	FileID      string `json:"file_id"`      // 文件传输唯一标识
 	TotalChunks int    `json:"total_chunks"` // 文件总分片数
 	MsgID       uint   `json:"msg_id"`       // 消息唯一 ID（持久化后回填，用于去重）
+	Remark      string `json:"remark"`       // 好友备注名
+	Group       string `json:"group"`        // 好友分组
 }

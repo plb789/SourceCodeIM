@@ -42,3 +42,40 @@ type FileRecord struct {
 
 // TableName 指定表名
 func (FileRecord) TableName() string { return "im_file" }
+
+// Friend 好友关系表 im_friend
+type Friend struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID     string    `gorm:"column:user_id;type:varchar(32);not null;index:idx_user_friend" json:"user_id"`
+	FriendID   string    `gorm:"column:friend_id;type:varchar(32);not null" json:"friend_id"`
+	Remark     string    `gorm:"column:remark;type:varchar(64);default:''" json:"remark"`         // 备注名
+	GroupName  string    `gorm:"column:group_name;type:varchar(32);default:''" json:"group_name"` // 分组
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (Friend) TableName() string { return "im_friend" }
+
+// FriendRequest 好友申请表 im_friend_request
+type FriendRequest struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
+	ToUser     string    `gorm:"column:to_user;type:varchar(32);not null;index:idx_to_user" json:"to_user"`
+	Message    string    `gorm:"column:message;type:varchar(255);default:''" json:"message"` // 验证消息
+	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"`         // 0待处理 1已同意 2已拒绝
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (FriendRequest) TableName() string { return "im_friend_request" }
+
+// Blacklist 黑名单表 im_blacklist
+type Blacklist struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID     string    `gorm:"column:user_id;type:varchar(32);not null;index:idx_user_block" json:"user_id"`
+	BlockedID  string    `gorm:"column:blocked_id;type:varchar(32);not null" json:"blocked_id"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (Blacklist) TableName() string { return "im_blacklist" }

@@ -20,7 +20,13 @@
         ERROR: 9,
         HISTORY: 10,
         HISTORY_RESP: 11,
-        TYPING: 12
+        TYPING: 12,
+        FRIEND_REQUEST: 20,
+        FRIEND_REQUEST_RESP: 21,
+        FRIEND_LIST: 22,
+        FRIEND_DELETE: 23,
+        BLACKLIST: 24,
+        FRIEND_UPDATE: 25
     };
 
     function connect(username, password) {

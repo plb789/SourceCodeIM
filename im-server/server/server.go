@@ -83,6 +83,16 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleFile(c, msg)
 	case protocol.MsgTypeTyping:
 		s.handleTyping(c, msg)
+	case protocol.MsgTypeFriendRequest:
+		s.handleFriendRequest(c, msg)
+	case protocol.MsgTypeFriendRequestResp:
+		s.handleFriendRequestResp(c, msg)
+	case protocol.MsgTypeFriendDelete:
+		s.handleFriendDelete(c, msg)
+	case protocol.MsgTypeBlacklist:
+		s.handleBlacklist(c, msg)
+	case protocol.MsgTypeFriendUpdate:
+		s.handleFriendUpdate(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -130,6 +140,10 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 
 	// 推送在线用户列表给所有在线用户
 	s.pushUserList()
+
+	// 推送好友列表 + 待处理好友申请
+	s.pushFriendList(c)
+	s.pushPendingRequests(c)
 	logger.Info("用户 %s 上线", user.Username)
 }
 
@@ -194,6 +208,12 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	// 私聊 AI 助手触发 AI 问答
 	if msg.ToUser == AIBotName {
 		s.handleAIChat(c, msg)
+		return
+	}
+
+	// 黑名单拦截：任一方向拉黑则禁止私聊
+	if s.isBlocked(c.username, msg.ToUser) {
+		s.sendError(c, "对方已将你拉黑或你已拉黑对方，无法发送消息")
 		return
 	}
 
