@@ -67,16 +67,31 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 			}
 		}
 		// 每个会话仅一条置顶：存在则替换，不存在则创建
-		var count int64
-		store.DB.Model(&model.MessagePin{}).Where("conv_key = ?", key).Count(&count)
-		if count > 0 {
-			store.DB.Model(&model.MessagePin{}).Where("conv_key = ?", key).
+		var existing model.MessagePin
+		if err := store.DB.Where("conv_key = ?", key).First(&existing).Error; err == nil {
+			// 阶段十三增强：置顶幂等——同一消息重复置顶时跳过写库与同步，
+			// 防止重复操作引起的冗余写库与双方全部设备的重复推送
+			// 原实现：无条件 Updates+同步，重复置顶同一消息会重复写库并重复推送
+			if existing.MsgID == record.ID {
+				s.sendError(c, "消息已在置顶中")
+				return
+			}
+			store.DB.Model(&model.MessagePin{}).Where("id = ?", existing.ID).
 				Updates(map[string]interface{}{"msg_id": record.ID, "pin_user": c.username})
 		} else {
 			store.DB.Create(&model.MessagePin{ConvKey: key, MsgID: record.ID, PinUser: c.username})
 		}
 		s.sendError(c, "消息已置顶")
 	} else {
+		// 阶段十三增强：取消置顶幂等——无置顶记录时跳过删库与同步，
+		// 防止重复取消引起的冗余删库与双方全部设备的重复推送
+		// 原实现：无条件 Delete+同步，重复取消置顶会重复删库并重复推送
+		var count int64
+		store.DB.Model(&model.MessagePin{}).Where("conv_key = ?", key).Count(&count)
+		if count == 0 {
+			s.sendError(c, "已取消置顶")
+			return
+		}
 		store.DB.Where("conv_key = ?", key).Delete(&model.MessagePin{})
 		s.sendError(c, "已取消置顶")
 	}

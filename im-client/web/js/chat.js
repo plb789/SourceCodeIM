@@ -3,7 +3,10 @@
     var MSG = IMSocket.MSG;
     var currentChatUser = ''; // 空字符串表示群聊
     var friendList = []; // 好友列表 [{username, remark, group, online, avatar}]
-    var unreadCount = {}; // username -> 未读数量
+    // 原实现：var unreadCount = {}; 本地未读计数，与服务端 cv.unread 双源不一致，多端已读后角标不同步
+    // 阶段十一：未读数服务端归口，统一使用服务端 CONV_LIST 推送的 unread 渲染，删除本地 unreadCount
+    var readWatermark = {}; // 对方用户名 -> 已读水位（对方已读到的我方最大消息 ID），跨会话保留供历史渲染即时应用
+    var convList = []; // 最近会话列表 [{target, last_msg, last_time, unread, pinned}]（服务端归口）
 
     var loginView = document.getElementById('login-view');
     var chatView = document.getElementById('chat-view');
@@ -441,8 +444,18 @@
                 if (visibleUser) appendFileMsg(msg.from_user, buf.name, formatSize(buf.size), url, 'other');
             }
             if (!visibleUser) {
-                unreadCount[msg.from_user] = (unreadCount[msg.from_user] || 0) + 1;
-                renderFriendList();
+                // 原实现：unreadCount[msg.from_user] = (unreadCount[msg.from_user] || 0) + 1; renderFriendList();
+                // 未读数服务端归口：文件消息不入 im_message 表，服务端未读统计不覆盖文件消息，
+                // 此处仅在本地会话列表乐观 +1（好友角标同源渲染），服务端 CONV_LIST 推送到达时以服务端数据归口覆盖
+                var fconv = null;
+                for (var fi = 0; fi < convList.length; fi++) {
+                    if (convList[fi].target === msg.from_user) { fconv = convList[fi]; break; }
+                }
+                if (fconv) {
+                    fconv.unread = (fconv.unread || 0) + 1;
+                    renderConvList();
+                    renderFriendList();
+                }
             }
             delete fileBuffers[msg.file_id];
         }
@@ -578,12 +591,15 @@
     });
 
     // ===== 最近会话列表（服务端归口：最后消息/未读数/置顶） =====
-    var convList = []; // [{target, last_msg, last_time, unread, pinned}]
+    // 原实现：var convList = []; 声明于此，阶段十一提前至文件顶部（好友列表角标同源读取服务端未读数）
     var convTarget = ''; // 当前右键的会话目标
 
     IMSocket.on(MSG.CONV_LIST, function (msg) {
         try { convList = JSON.parse(msg.content) || []; } catch (e) { convList = []; }
         renderConvList();
+        // 原实现：仅渲染会话列表，好友列表角标依赖本地 unreadCount，多端已读后不同步
+        // 未读数服务端归口：好友列表角标与 会话列表角标 同源渲染服务端未读数
+        renderFriendList();
     });
 
     function renderConvList() {
@@ -734,20 +750,40 @@
         var relevantUser = isMine ? msg.to_user : msg.from_user;
         if (currentChatUser === relevantUser) {
             appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, true);
-            // 正在查看会话时收到对方消息：自动发送已读回执
+            // 正在查看会话时收到对方消息：自动发送已读回执（客户端水位去重）
             if (!isMine && msg.msg_id) {
-                IMSocket.send({ msg_type: MSG.READ, to_user: msg.from_user, content: String(msg.msg_id) });
+                // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: msg.from_user, content: String(msg.msg_id) });
+                sendReadReceipt(msg.from_user, msg.msg_id);
             }
-        } else if (!isMine) {
-            unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1;
-            renderFriendList();
         }
+        // 原实现：else if (!isMine) { unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1; renderFriendList(); }
+        // 未读数服务端归口：服务端收到私聊会 notifyConvUpdate 推送 CONV_LIST（含未读数）到本端全部连接，
+        // 前端 CONV_LIST 处理中统一渲染会话列表与好友列表角标，本地不再自计数
     });
 
     // ===== 已读回执：更新自己发送消息的已读状态 =====
+    var sentReadId = {}; // 已发送的已读回执水位：目标用户 -> 已发送的最大消息 ID（客户端去重，服务端仍有会话行水位兜底）
+
+    // 发送已读回执：仅水位前进才发送，避免多端/重复打开会话产生回执风暴
+    function sendReadReceipt(target, maxId) {
+        maxId = parseInt(maxId, 10) || 0;
+        if (!target || !maxId) return;
+        // 原实现：每次直接 IMSocket.send 回执，无客户端水位去重
+        if (maxId <= (sentReadId[target] || 0)) return;
+        sentReadId[target] = maxId;
+        IMSocket.send({ msg_type: MSG.READ, to_user: target, content: String(maxId) });
+    }
+
+    // 原实现：仅当回执来自当前会话才处理，未打开会话时收到的回执被丢弃，
+    // 重新打开会话需等服务端 is_read 才能显示已读；现始终记录水位，供历史渲染即时应用
     IMSocket.on(MSG.READ, function (msg) {
-        if (msg.from_user !== currentChatUser) return;
         var lastID = parseInt(msg.content, 10) || 0;
+        if (!lastID) return;
+        // 记录对方已读水位（任一连接收到的回执都记录，跨会话保留）
+        if (lastID > (readWatermark[msg.from_user] || 0)) {
+            readWatermark[msg.from_user] = lastID;
+        }
+        if (msg.from_user !== currentChatUser) return;
         messageList.querySelectorAll('.msg-status').forEach(function (el) {
             var id = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
             if (id && id <= lastID) {
@@ -758,7 +794,22 @@
     });
 
     // ===== 消息撤回：将对应气泡替换为系统提示 =====
+    // 阶段十二增强：撤回通知携带原始消息接收方 to_user（群聊为空），
+    // 前端先做会话归属校验再渲染，杜绝跨会话串窗（撤回提示误渲染进当前打开的无关会话）；
+    // 并按 msg_id 去重，防服务端重复通知导致追加重复系统提示
+    var processedRecalls = {}; // 已处理的撤回通知：msg_id -> true（服务端已做撤回幂等，此处前端兜底去重）
+
     IMSocket.on(MSG.RECALL, function (msg) {
+        // 原实现：无去重、无归属校验，重复通知会追加重复提示，跨会话撤回提示会串入当前窗口
+        if (msg.msg_id && processedRecalls[msg.msg_id]) return;
+        if (msg.msg_id) processedRecalls[msg.msg_id] = true;
+
+        // 会话归属校验：私聊撤回归属对端会话（自己撤回则为接收方，否则为发送方），群聊撤回归属群聊（to_user 为空）
+        var owner = '';
+        if (msg.to_user) {
+            owner = (msg.from_user === IMSocket.getUsername()) ? msg.to_user : msg.from_user;
+        }
+        if (owner !== currentChatUser) return; // 非当前查看会话的撤回：仅服务端落库与 CONV_LIST 同步，本地不渲染
         var tip = msg.from_user === IMSocket.getUsername() ? '你撤回了一条消息' : msg.from_user + ' 撤回了一条消息';
         var el = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
         if (el) {
@@ -767,6 +818,7 @@
             tipEl.textContent = tip;
             el.replaceWith(tipEl);
         } else {
+            // 归属当前会话但元素不在窗口（消息超出已加载历史等）：保留原兜底提示
             appendSystem(tip);
         }
     });
@@ -779,7 +831,19 @@
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         currentChatUser = user;
-        if (currentChatUser !== '') unreadCount[currentChatUser] = 0;
+        // 原实现：if (currentChatUser !== '') unreadCount[currentChatUser] = 0; 本地计数清零
+        // 未读数服务端归口：本地乐观清零会话列表未读角标，服务端处理已读回执后推送 CONV_LIST 归口确认
+        if (currentChatUser !== '') {
+            var conv = null;
+            for (var ci = 0; ci < convList.length; ci++) {
+                if (convList[ci].target === currentChatUser) { conv = convList[ci]; break; }
+            }
+            if (conv && conv.unread > 0) {
+                conv.unread = 0;
+                renderConvList();
+                renderFriendList();
+            }
+        }
         updateChatTitle();
         renderFriendList();
         // 切换会话：重置定位状态、关闭搜索浮层、刷新置顶条
@@ -814,13 +878,14 @@
         // 服务端按 ID 倒序返回，正序渲染
         records.reverse().forEach(function (r) { renderHistoryRecord(r); });
 
-        // 加载历史后发送已读回执（对方消息的最大 ID）
+        // 加载历史后发送已读回执（对方消息的最大 ID，客户端水位去重）
         var maxId = 0;
         records.forEach(function (r) {
             if (r.from_user !== IMSocket.getUsername() && r.id > maxId) maxId = r.id;
         });
         if (maxId && currentChatUser !== '') {
-            IMSocket.send({ msg_type: MSG.READ, to_user: currentChatUser, content: String(maxId) });
+            // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: currentChatUser, content: String(maxId) });
+            sendReadReceipt(currentChatUser, maxId);
         }
     });
 
@@ -842,7 +907,11 @@
         var ts = Math.floor(new Date(r.create_time).getTime() / 1000) || 0;
         // 私聊消息显示已读/未读状态，群聊不显示
         var isPrivate = !!r.to_user;
-        var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, r.is_read);
+        // 原实现：仅按服务端 is_read 渲染；对方已读回执可能先于会话打开到达（当时未在会话内被丢弃），
+        // 现叠加本地已读水位即时应用：自己发送的私聊消息若已被读到更大 ID 则直接显示"已读"
+        var wm = (isMine && isPrivate) ? (readWatermark[r.to_user] || 0) : 0;
+        var isRead = r.is_read || (wm >= r.id);
+        var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, isRead);
         if (beforeEl) {
             messageList.insertBefore(div, beforeEl);
         } else {
@@ -994,9 +1063,15 @@
         try { info = JSON.parse(msg.content); } catch (e) {}
         if (!info) return;
         var target = info.target || '';
+        // 阶段十三增强：同步内容与现有状态一致时跳过（服务端置顶幂等的兜底去重），
+        // 防止重复同步引起置顶条重渲染闪烁
+        // 原实现：每次同步都更新并重渲染
+        var prev = pinInfo[target];
         if (info.msg_id) {
+            if (prev && prev.msg_id === info.msg_id && prev.pin_user === info.pin_user) return;
             pinInfo[target] = info;
         } else {
+            if (!prev) return;
             delete pinInfo[target];
         }
         // 当前正在查看该会话时立即刷新置顶条
@@ -1121,8 +1196,14 @@
             var avatarHtml = f.avatar
                 ? '<img class="avatar" src="' + f.avatar + '" alt="">'
                 : '<div class="avatar placeholder"></div>';
-            var badge = unreadCount[f.username]
-                ? '<span class="unread-badge">' + unreadCount[f.username] + '</span>'
+            // 原实现：var badge = unreadCount[f.username] ? ... 本地计数，与服务端会话角标双源不一致
+            // 未读数服务端归口：好友列表角标从服务端推送的会话列表读取未读数（与会话列表角标同源）
+            var funread = 0;
+            for (var ui = 0; ui < convList.length; ui++) {
+                if (convList[ui].target === f.username) { funread = convList[ui].unread || 0; break; }
+            }
+            var badge = funread > 0
+                ? '<span class="unread-badge">' + (funread > 99 ? '99+' : funread) + '</span>'
                 : '';
             var dot = f.online ? '<span class="online-dot"></span>' : '';
             html += '<li class="user-item' + (currentChatUser === f.username ? ' active' : '') + '" data-user="' + f.username + '">'

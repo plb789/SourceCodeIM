@@ -4,6 +4,10 @@
     var heartbeatTimer = null;
     var reconnectTimer = null;
     var currentUsername = '';
+    // 原实现：recallWindow 未声明（隐式全局）且未暴露 getRecallWindow，
+    // 服务端下发的撤回窗口配置从未被前端撤回菜单使用（恒用 120 秒兜底）
+    // 阶段十二修复：声明变量并暴露 getRecallWindow，撤回菜单显隐与配置文件 recall_window 保持一致
+    var recallWindow = 120;
     var messageHandlers = {}; // msg_type -> handler 函数数组
     var connected = false;
 
@@ -144,6 +148,11 @@
         return currentUsername;
     }
 
+    // 获取服务端下发的撤回时间窗口（秒），供消息菜单撤回项显隐判断
+    function getRecallWindow() {
+        return recallWindow;
+    }
+
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
@@ -151,6 +160,7 @@
         on: on,
         isConnected: isConnected,
         getUsername: getUsername,
+        getRecallWindow: getRecallWindow,
         stopHeartbeat: stopHeartbeat
     };
 })();

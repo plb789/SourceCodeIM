@@ -20,6 +20,8 @@ import (
 
 // handleRead 已读回执：更新已读状态并转发给对方
 // content 为已读到的最大消息 ID，服务端统一归口更新该范围内的消息状态
+// 阶段十一增强：基于会话行 last_read_id 水位去重，仅水位前进才写库+转发+推送，
+// 防止多端同时打开同一会话重复发送回执造成回执风暴（重复写库、重复转发、重复推送会话列表）
 func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 	if msg.ToUser == "" || msg.ToUser == c.username {
 		return
@@ -28,6 +30,20 @@ func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 	if err != nil || lastID == 0 {
 		return
 	}
+
+	// 读取者会话行：承载已读回执水位（对方发消息时会创建会话行，此处兜底创建保证水位有落点）
+	var conv model.Conversation
+	if err := store.DB.Where("user_id = ? AND target = ?", c.username, msg.ToUser).First(&conv).Error; err != nil {
+		conv = model.Conversation{UserID: c.username, Target: msg.ToUser}
+		store.DB.Create(&conv)
+	}
+	// 原实现：无水位判断，多端重复回执每次都写库+转发+推送
+	if uint(lastID) <= conv.LastReadID {
+		// 水位未前进：重复回执，去重跳过（不写库、不转发、不推送会话列表）
+		return
+	}
+	// 水位前进：先落水位，再更新消息状态
+	store.DB.Model(&model.Conversation{}).Where("id = ?", conv.ID).Update("last_read_id", lastID)
 
 	// 更新对方发给我的、ID 不超过 lastID 的消息为已读
 	store.DB.Model(&model.Message{}).
@@ -72,6 +88,13 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 		s.sendError(c, "超过撤回时间限制的消息无法撤回")
 		return
 	}
+	// 阶段十二增强：撤回幂等校验，已撤回消息拒绝重复撤回，
+	// 防止重复撤回通知（多端重复系统提示）、重复摘要刷新与重复置顶清理
+	// 原实现：无已撤回校验，同一消息可被重复撤回并重复通知双方
+	if record.Recalled {
+		s.sendError(c, "该消息已撤回，请勿重复操作")
+		return
+	}
 
 	// 标记为已撤回（保留记录，历史中显示"撤回了一条消息"）
 	store.DB.Model(&model.Message{}).Where("id = ?", record.ID).Update("recalled", true)
@@ -88,9 +111,13 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 	}
 
 	// 通知双方（群聊则广播）
+	// 阶段十二增强：通知携带原始消息接收方 ToUser（群聊为空），
+	// 供前端校验撤回消息归属会话，杜绝跨会话串窗（撤回提示渲染进无关会话窗口）
+	// 原实现：通知仅携带 FromUser/MsgID，前端无法判断归属，元素未找到时误渲染到当前打开的会话
 	notice := protocol.Message{
 		MsgType:   protocol.MsgTypeRecall,
 		FromUser:  c.username,
+		ToUser:    record.ToUser,
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
 	}

@@ -48,6 +48,8 @@ type Conversation struct {
 	LastMsg  string    `gorm:"column:last_msg;type:varchar(255)" json:"last_msg"`                                      // 最后一条消息摘要
 	LastTime time.Time `gorm:"column:last_time" json:"last_time"`
 	Pinned   bool      `gorm:"column:pinned;default:false" json:"pinned"` // 是否置顶
+	// 原实现：无已读回执水位字段，多端同时打开会话重复发送回执会重复写库+转发（回执风暴）
+	LastReadID uint `gorm:"column:last_read_id;default:0" json:"last_read_id"` // 已读回执水位：已读到的对方最大消息 ID（仅私聊会话使用，仅水位前进才处理回执）
 }
 
 // TableName 指定表名
