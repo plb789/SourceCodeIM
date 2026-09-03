@@ -17,6 +17,10 @@ const (
 	MsgTypeRead        = 13 // 已读回执
 	MsgTypeRecall      = 14 // 消息撤回
 	MsgTypeDelete      = 15 // 消息删除（仅删除者自己的视图）
+	MsgTypeSearch      = 16 // 消息搜索请求（content 为关键词）
+	MsgTypeSearchResp  = 17 // 消息搜索响应
+	MsgTypeConvList    = 18 // 最近会话列表同步
+	MsgTypeConvPin     = 19 // 会话置顶/取消置顶（content: pin/unpin）
 
 	MsgTypeFriendRequest     = 20 // 好友申请
 	MsgTypeFriendRequestResp = 21 // 好友申请响应
@@ -25,6 +29,8 @@ const (
 	MsgTypeBlacklist         = 24 // 黑名单操作
 	MsgTypeFriendUpdate      = 25 // 好友备注/分组更新
 	MsgTypeBlacklistList     = 26 // 黑名单列表同步
+	MsgTypeConvClear         = 27 // 会话清空（仅清当前用户视图，云端记录保留）
+	MsgTypeConvDelete        = 28 // 会话删除（从列表移除，云端记录保留）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

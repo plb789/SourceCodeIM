@@ -89,6 +89,14 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleRecall(c, msg)
 	case protocol.MsgTypeDelete:
 		s.handleDelete(c, msg)
+	case protocol.MsgTypeSearch:
+		s.handleSearch(c, msg)
+	case protocol.MsgTypeConvPin:
+		s.handleConvPin(c, msg)
+	case protocol.MsgTypeConvClear:
+		s.handleConvClear(c, msg)
+	case protocol.MsgTypeConvDelete:
+		s.handleConvDelete(c, msg)
 	case protocol.MsgTypeFriendRequest:
 		s.handleFriendRequest(c, msg)
 	case protocol.MsgTypeFriendRequestResp:
@@ -148,10 +156,12 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 推送在线用户列表给所有在线用户
 	s.pushUserList()
 
-	// 推送好友列表 + 待处理好友申请 + 黑名单列表
+	// 推送好友列表 + 待处理好友申请 + 黑名单列表 + 会话列表
 	s.pushFriendList(c)
 	s.pushPendingRequests(c)
 	s.pushBlacklist(c)
+	s.ensureGroupConv(user.Username)
+	s.pushConvList(c)
 	logger.Info("用户 %s 上线", user.Username)
 }
 
@@ -192,6 +202,12 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 
 	data, _ := json.Marshal(msg)
 	s.hub.Broadcast(data)
+
+	// 更新所有在线用户的群聊会话并推送会话列表（离线用户登录时确保存在）
+	for _, name := range s.hub.Usernames() {
+		s.touchConversation(name, "", msg.Content)
+		s.notifyConvUpdate(name)
+	}
 
 	// 群聊离线消息：给所有离线的注册用户入队
 	var usernames []string
@@ -249,6 +265,13 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	}
 	// 回显给发送方
 	c.send(data)
+
+	// 更新双方最近会话并推送
+	summary := msg.Content
+	s.touchConversation(c.username, msg.ToUser, summary)
+	s.touchConversation(msg.ToUser, c.username, summary)
+	s.notifyConvUpdate(c.username)
+	s.notifyConvUpdate(msg.ToUser)
 }
 
 // handleFile 文件传输处理：文件头（ChunkIndex=-1）与分片数据（ChunkIndex>=0）

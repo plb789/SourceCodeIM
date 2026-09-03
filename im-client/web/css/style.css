@@ -242,6 +242,11 @@ html, body {
     background: var(--hover);
 }
 
+/* 危险操作菜单项（删除会话等）：跟随主题警示色 */
+.friend-menu .menu-item.danger {
+    color: var(--danger, #fa5151);
+}
+
 .group-item {
     font-weight: bold;
 }
@@ -590,6 +595,242 @@ html, body {
     font-size: 12px;
     color: var(--text-light);
     padding: 6px 16px;
+}
+
+/* 关键词搜索（跟随主题色） */
+.sidebar {
+    position: relative;
+}
+
+.search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    position: relative;
+    z-index: 1300; /* 保证搜索框不被结果面板遮挡 */
+}
+
+.search-bar input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: var(--panel-bg);
+    border-radius: 4px;
+    padding: 7px 10px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.search-bar input::placeholder {
+    color: var(--text-light);
+}
+
+.search-clear-btn {
+    border: none;
+    background: none;
+    color: var(--text-light);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+
+.search-clear-btn:hover {
+    color: var(--text);
+}
+
+.search-panel {
+    position: absolute;
+    top: 92px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--panel-bg);
+    overflow-y: auto;
+    z-index: 1200;
+    box-shadow: 4px 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.search-title {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 10px 14px 6px;
+}
+
+.search-empty {
+    font-size: 13px;
+    color: var(--text-light);
+    padding: 16px 14px;
+    text-align: center;
+}
+
+.search-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+}
+
+.search-item:hover {
+    background: var(--hover);
+}
+
+.search-item-head {
+    font-size: 12px;
+    color: var(--primary);
+    margin-bottom: 2px;
+}
+
+.search-item-body {
+    font-size: 13px;
+    color: var(--text);
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.search-item-time {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 2px;
+}
+
+/* 侧栏 Tab（聊天/好友）与最近会话列表（微信风格，跟随主题色） */
+.sidebar-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+}
+
+.sidebar-tab {
+    flex: 1;
+    text-align: center;
+    padding: 10px 0;
+    font-size: 14px;
+    color: var(--text-light);
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.sidebar-tab:hover {
+    color: var(--text);
+}
+
+.sidebar-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+.friends-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.conv-list {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.conv-empty {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 20px 16px;
+    text-align: center;
+}
+
+.conv-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+}
+
+.conv-item:hover {
+    background: var(--hover);
+}
+
+.conv-item.active {
+    background: var(--active);
+}
+
+.conv-item.pinned {
+    background: var(--panel-bg);
+}
+
+.conv-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    background: var(--primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.conv-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.conv-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.conv-name {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conv-time {
+    font-size: 11px;
+    color: var(--text-light);
+    flex-shrink: 0;
+    margin-left: 6px;
+}
+
+.conv-msg {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conv-badge {
+    background: var(--danger, #fa5151);
+    color: #fff;
+    font-size: 11px;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 9px;
+    padding: 0 5px;
+    flex-shrink: 0;
+}
+
+.conv-pin-mark {
+    font-size: 12px;
+    flex-shrink: 0;
 }
 
 /* 自定义弹窗（确认/输入），微信风格 */

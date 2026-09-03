@@ -41,6 +41,8 @@ func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 	if target, ok := s.hub.Get(msg.ToUser); ok {
 		target.send(data)
 	}
+	// 未读数变化，刷新读取者自己的会话列表
+	s.pushConvList(c)
 }
 
 // handleRecall 消息撤回：仅限 2 分钟内自己发送的消息
@@ -95,4 +97,52 @@ func (s *Server) handleDelete(c *Client, msg *protocol.Message) {
 		store.DB.Create(&model.MessageDelete{UserID: c.username, MsgID: msg.MsgID})
 	}
 	s.sendError(c, "消息已删除")
+}
+
+// handleSearch 消息关键词搜索：ToUser 为空时搜索全部会话，否则搜索指定会话
+// 搜索范围仅限当前用户可见的消息（排除已撤回与自己删除的）
+func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
+	keyword := strings.TrimSpace(msg.Content)
+	if keyword == "" {
+		s.sendError(c, "请输入搜索关键词")
+		return
+	}
+	// 转义 LIKE 通配符，避免 % 和 _ 影响匹配
+	escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(keyword)
+
+	query := store.DB.Model(&model.Message{}).
+		Where("content LIKE ? AND recalled = ?", "%"+escaped+"%", false)
+
+	// 排除当前用户已删除的消息
+	var delIDs []uint
+	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
+	if len(delIDs) > 0 {
+		query = query.Where("id NOT IN ?", delIDs)
+	}
+
+	if msg.ToUser != "" {
+		// 指定会话搜索（私聊双向）
+		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+			2, c.username, msg.ToUser, msg.ToUser, c.username)
+	} else {
+		// 全局搜索：与我相关的群聊 + 私聊
+		query = query.Where("(msg_type = 1 OR (msg_type = 2 AND (from_user = ? OR to_user = ?)))", c.username, c.username)
+	}
+
+	var records []model.Message
+	if err := query.Order("id desc").Limit(20).Find(&records).Error; err != nil {
+		s.sendError(c, "搜索失败")
+		return
+	}
+
+	data, _ := json.Marshal(records)
+	resp := protocol.Message{
+		MsgType:   protocol.MsgTypeSearchResp,
+		FromUser:  c.username,
+		ToUser:    msg.ToUser,
+		Content:   string(data),
+		Timestamp: time.Now().Unix(),
+	}
+	respData, _ := json.Marshal(resp)
+	c.send(respData)
 }

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>即时通讯</title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=1.3">
 </head>
 <body>
     <!-- 登录视图 -->
@@ -30,12 +30,29 @@
                 <button id="theme-btn" class="logout-btn" title="切换主题">主题</button>
                 <button id="logout-btn" class="logout-btn">退出</button>
             </div>
-            <div class="sidebar-title">好友</div>
-            <ul id="user-list" class="user-list">
-                <li class="user-item group-item active" data-user="">群聊</li>
-            </ul>
-        </div>
+            <!-- 侧栏 Tab：聊天（会话列表）/ 好友（通讯录） -->
+            <div class="sidebar-tabs">
+                <div class="sidebar-tab active" data-tab="chat">聊天</div>
+                <div class="sidebar-tab" data-tab="friends">好友</div>
+            </div>
 
+            <!-- 最近会话列表（聊天 Tab） -->
+            <ul id="conv-list" class="user-list conv-list"></ul>
+
+            <!-- 好友面板（好友 Tab） -->
+            <div id="friends-panel" class="friends-panel hidden">
+                <div class="search-bar">
+                    <input id="search-input" placeholder="搜索聊天记录（回车）">
+                    <button id="search-clear-btn" class="hidden" title="关闭搜索结果">×</button>
+                </div>
+                <ul id="user-list" class="user-list">
+                    <li class="user-item group-item active" data-user="">群聊</li>
+                </ul>
+
+                <!-- 搜索结果面板 -->
+                <div id="search-panel" class="search-panel hidden"></div>
+            </div>
+        </div>
         <!-- 主聊天区 -->
         <div class="main-chat">
             <div class="chat-header">
@@ -91,6 +108,13 @@
         <div class="menu-item" data-action="del">删除</div>
     </div>
 
+    <!-- 会话右键菜单（置顶/清空/删除） -->
+    <div id="conv-menu" class="friend-menu hidden">
+        <div class="menu-item" data-action="pin">置顶聊天</div>
+        <div class="menu-item" data-action="clear">清空聊天记录</div>
+        <div class="menu-item danger" data-action="delete">删除会话</div>
+    </div>
+
     <!-- 自定义弹窗（确认/输入），禁止使用系统默认弹窗 -->
     <div id="modal-mask" class="modal-mask hidden">
         <div class="modal-box">
@@ -107,7 +131,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.1"></script>
-    <script src="js/chat.js?v=1.1"></script>
+    <script src="js/socket.js?v=1.5"></script>
+    <script src="js/chat.js?v=1.5"></script>
 </body>
 </html>

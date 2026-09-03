@@ -34,6 +34,8 @@
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
     var fileInput = document.getElementById('file-input');
+    var convListEl = document.getElementById('conv-list');
+    var friendsPanel = document.getElementById('friends-panel');
 
     // ===== 自定义弹窗 / Toast 提示（禁止使用系统默认弹窗） =====
     var modalMask = document.getElementById('modal-mask');
@@ -526,6 +528,136 @@
         userListEl.appendChild(group);
     }
 
+    // ===== 侧栏 Tab 切换：聊天（会话列表）/ 好友 =====
+    document.querySelectorAll('.sidebar-tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            document.querySelectorAll('.sidebar-tab').forEach(function (t) { t.classList.remove('active'); });
+            this.classList.add('active');
+            var isChat = this.getAttribute('data-tab') === 'chat';
+            convListEl.classList.toggle('hidden', !isChat);
+            friendsPanel.classList.toggle('hidden', isChat);
+        });
+    });
+
+    // ===== 最近会话列表（服务端归口：最后消息/未读数/置顶） =====
+    var convList = []; // [{target, last_msg, last_time, unread, pinned}]
+    var convTarget = ''; // 当前右键的会话目标
+
+    IMSocket.on(MSG.CONV_LIST, function (msg) {
+        try { convList = JSON.parse(msg.content) || []; } catch (e) { convList = []; }
+        renderConvList();
+    });
+
+    function renderConvList() {
+        convListEl.innerHTML = '';
+        if (convList.length === 0) {
+            var empty = document.createElement('li');
+            empty.className = 'conv-empty';
+            empty.textContent = '暂无会话，去好友页添加好友开始聊天吧';
+            convListEl.appendChild(empty);
+            return;
+        }
+        convList.forEach(function (cv) {
+            var isGroup = cv.target === '';
+            var convName = isGroup ? '群聊' : cv.target;
+            var li = document.createElement('li');
+            li.className = 'conv-item' + (cv.pinned ? ' pinned' : '');
+            if (currentChatUser === cv.target) li.classList.add('active');
+            li.setAttribute('data-user', cv.target);
+
+            var avatar = document.createElement('div');
+            avatar.className = 'conv-avatar';
+            avatar.textContent = convName.charAt(0).toUpperCase();
+
+            var main = document.createElement('div');
+            main.className = 'conv-main';
+            var headRow = document.createElement('div');
+            headRow.className = 'conv-head';
+            var nameEl = document.createElement('span');
+            nameEl.className = 'conv-name';
+            nameEl.textContent = convName;
+            var timeEl = document.createElement('span');
+            timeEl.className = 'conv-time';
+            timeEl.textContent = formatTime(cv.last_time * 1000);
+            headRow.appendChild(nameEl);
+            headRow.appendChild(timeEl);
+            var msgRow = document.createElement('div');
+            msgRow.className = 'conv-msg';
+            msgRow.textContent = cv.last_msg;
+            main.appendChild(headRow);
+            main.appendChild(msgRow);
+
+            var badge = document.createElement('span');
+            badge.className = 'conv-badge' + (cv.unread > 0 ? '' : ' hidden');
+            badge.textContent = cv.unread > 99 ? '99+' : cv.unread;
+
+            var pinMark = document.createElement('span');
+            pinMark.className = 'conv-pin-mark' + (cv.pinned ? '' : ' hidden');
+            pinMark.textContent = '📌';
+
+            li.appendChild(avatar);
+            li.appendChild(main);
+            li.appendChild(pinMark);
+            li.appendChild(badge);
+
+            li.addEventListener('click', function () {
+                openConversation(cv.target);
+            });
+            // 会话右键菜单：置顶/取消置顶
+            li.addEventListener('contextmenu', function (e) {
+                e.preventDefault();
+                convTarget = cv.target;
+                var pinItem = convMenu.querySelector('[data-action="pin"]');
+                pinItem.textContent = cv.pinned ? '取消置顶' : '置顶聊天';
+                convMenu.style.top = e.clientY + 'px';
+                convMenu.style.left = e.clientX + 'px';
+                convMenu.classList.remove('hidden');
+            });
+            convListEl.appendChild(li);
+        });
+    }
+
+    // 会话右键菜单：置顶/清空/删除
+    var convMenu = document.getElementById('conv-menu');
+    convMenu.querySelector('[data-action="pin"]').addEventListener('click', function () {
+        var pin = this.textContent === '置顶聊天';
+        IMSocket.send({
+            msg_type: MSG.CONV_PIN,
+            to_user: convTarget,
+            content: pin ? 'pin' : 'unpin'
+        });
+        convMenu.classList.add('hidden');
+    });
+    // 清空聊天记录：服务端将消息标记为当前用户已删除（云端记录保留），本地同步清空当前视图
+    convMenu.querySelector('[data-action="clear"]').addEventListener('click', function () {
+        convMenu.classList.add('hidden');
+        var name = convTarget === '' ? '群聊' : convTarget;
+        showConfirm('清空聊天记录', '确定清空与 ' + name + ' 的全部聊天记录吗？', function () {
+            IMSocket.send({ msg_type: MSG.CONV_CLEAR, to_user: convTarget });
+            // 当前正在查看该会话时，同步清空聊天窗口显示
+            if (convTarget === currentChatUser) {
+                messageList.innerHTML = '';
+                appendSystem('聊天记录已清空');
+            }
+        });
+    });
+    // 删除会话：从列表移除（云端记录保留），若正在查看则切回群聊
+    convMenu.querySelector('[data-action="delete"]').addEventListener('click', function () {
+        convMenu.classList.add('hidden');
+        var name = convTarget === '' ? '群聊' : convTarget;
+        showConfirm('删除会话', '确定删除与 ' + name + ' 的会话吗？聊天记录将保留在云端。', function () {
+            var isCurrent = convTarget === currentChatUser;
+            IMSocket.send({ msg_type: MSG.CONV_DELETE, to_user: convTarget });
+            // 正在查看被删除的会话时，切回群聊
+            if (isCurrent) {
+                openConversation('');
+            }
+        });
+    });
+    document.addEventListener('click', function () {
+        convMenu.classList.add('hidden');
+    });
+
     // 好友申请
     var processedRequests = {}; // 已处理的申请 ID，用于去重
     IMSocket.on(MSG.FRIEND_REQUEST, function (msg) {
@@ -604,6 +736,16 @@
     // ===== 历史消息：切换会话时请求，分页加载最近 20 条 =====
     var historyTarget = ''; // 发起历史请求时的会话目标，用于校验响应归属
 
+    // 切换会话：设置目标、清空显示、加载历史
+    function openConversation(user) {
+        currentChatUser = user;
+        if (currentChatUser !== '') unreadCount[currentChatUser] = 0;
+        updateChatTitle();
+        renderFriendList();
+        messageList.innerHTML = '';
+        loadHistory();
+    }
+
     function loadHistory() {
         historyTarget = currentChatUser;
         var msg = { msg_type: MSG.HISTORY, page: 1, page_size: 20 };
@@ -644,6 +786,81 @@
         appendMessage(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, r.is_read);
     }
 
+    // ===== 关键词搜索：回车搜索，结果面板展示，点击跳转会话 =====
+    var searchInput = document.getElementById('search-input');
+    var searchClearBtn = document.getElementById('search-clear-btn');
+    var searchPanel = document.getElementById('search-panel');
+
+    searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            var keyword = searchInput.value.trim();
+            if (!keyword) return;
+            IMSocket.send({ msg_type: MSG.SEARCH, content: keyword });
+        }
+    });
+
+    searchClearBtn.addEventListener('click', function () {
+        searchPanel.classList.add('hidden');
+        searchClearBtn.classList.add('hidden');
+        searchInput.value = '';
+    });
+
+    IMSocket.on(MSG.SEARCH_RESP, function (msg) {
+        var records = [];
+        try { records = JSON.parse(msg.content) || []; } catch (err) {}
+        searchPanel.innerHTML = '';
+
+        var title = document.createElement('div');
+        title.className = 'search-title';
+        title.textContent = '搜索结果 (' + records.length + ')';
+        searchPanel.appendChild(title);
+
+        if (records.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'search-empty';
+            empty.textContent = '暂无匹配的聊天记录';
+            searchPanel.appendChild(empty);
+        }
+
+        records.forEach(function (r) {
+            var isGroup = !r.to_user;
+            // 私聊会话对象：自己发送则是收件人，否则是发件人
+            var partner = isGroup ? '' : (r.from_user === IMSocket.getUsername() ? r.to_user : r.from_user);
+            var convName = isGroup ? '群聊' : partner;
+            var item = document.createElement('div');
+            item.className = 'search-item';
+            var head = document.createElement('div');
+            head.className = 'search-item-head';
+            head.textContent = convName + ' · ' + r.from_user;
+            var body = document.createElement('div');
+            body.className = 'search-item-body';
+            body.textContent = r.content;
+            var time = document.createElement('div');
+            time.className = 'search-item-time';
+            time.textContent = formatTime(r.create_time);
+            item.appendChild(head);
+            item.appendChild(body);
+            item.appendChild(time);
+            item.addEventListener('click', function () {
+                openConversation(partner);
+                searchPanel.classList.add('hidden');
+                searchClearBtn.classList.add('hidden');
+            });
+            searchPanel.appendChild(item);
+        });
+
+        searchPanel.classList.remove('hidden');
+        searchClearBtn.classList.remove('hidden');
+    });
+
+    // 格式化时间显示（月-日 时:分）
+    function formatTime(t) {
+        var d = new Date(t);
+        if (isNaN(d.getTime())) return '';
+        function pad(n) { return n < 10 ? '0' + n : n; }
+        return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+
     // 输入状态提示
     IMSocket.on(MSG.TYPING, function (msg) {
         if (msg.from_user === currentChatUser) {
@@ -677,13 +894,7 @@
 
         userListEl.querySelectorAll('.user-item').forEach(function (item) {
             item.addEventListener('click', function () {
-                currentChatUser = this.getAttribute('data-user');
-                if (currentChatUser !== '') unreadCount[currentChatUser] = 0;
-                updateChatTitle();
-                renderFriendList();
-                // 切换会话：清空当前显示并加载历史消息
-                messageList.innerHTML = '';
-                loadHistory();
+                openConversation(this.getAttribute('data-user'));
             });
             // 好友右键菜单（群聊不显示）
             if (item.getAttribute('data-user') !== '') {

@@ -40,6 +40,19 @@ type MessageDelete struct {
 // TableName 指定表名
 func (MessageDelete) TableName() string { return "im_msg_delete" }
 
+// Conversation 会话表 im_conversation（最近会话列表，服务端统一归口）
+type Conversation struct {
+	ID       uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID   string    `gorm:"column:user_id;type:varchar(32);not null;uniqueIndex:idx_conv_user_target" json:"user_id"`
+	Target   string    `gorm:"column:target;type:varchar(32);not null;uniqueIndex:idx_conv_user_target" json:"target"` // 对方用户名，空表示群聊
+	LastMsg  string    `gorm:"column:last_msg;type:varchar(255)" json:"last_msg"`                                      // 最后一条消息摘要
+	LastTime time.Time `gorm:"column:last_time" json:"last_time"`
+	Pinned   bool      `gorm:"column:pinned;default:false" json:"pinned"` // 是否置顶
+}
+
+// TableName 指定表名
+func (Conversation) TableName() string { return "im_conversation" }
+
 // FileRecord 文件传输记录表 im_file
 type FileRecord struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
