@@ -53,6 +53,18 @@ type Conversation struct {
 // TableName 指定表名
 func (Conversation) TableName() string { return "im_conversation" }
 
+// MessagePin 置顶消息表 im_msg_pin（会话维度，每个会话仅一条置顶消息，服务端统一归口）
+type MessagePin struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ConvKey    string    `gorm:"column:conv_key;type:varchar(65);not null;uniqueIndex" json:"conv_key"` // 会话键：群聊固定 group，私聊按字典序拼接 userA|userB
+	MsgID      uint      `gorm:"column:msg_id;not null" json:"msg_id"`                                  // 被置顶的消息 ID
+	PinUser    string    `gorm:"column:pin_user;type:varchar(32);not null" json:"pin_user"`             // 置顶操作人
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (MessagePin) TableName() string { return "im_msg_pin" }
+
 // FileRecord 文件传输记录表 im_file
 type FileRecord struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`

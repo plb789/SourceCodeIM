@@ -19,7 +19,9 @@ var upgrader = websocket.Upgrader{
 }
 
 func main() {
-	cfg := config.Default()
+	// 原实现：cfg := config.Default() 纯硬编码，现改为读取 config.yaml（缺省时回退默认值）
+	// cfg := config.Default()
+	cfg := config.Load()
 
 	// 1. 初始化 MySQL
 	if err := store.InitMySQL(cfg); err != nil {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"im-server/logger"
+	"im-server/model"
 	"im-server/protocol"
 	"im-server/store"
 )
@@ -44,6 +45,15 @@ func (s *Server) pushOfflineMessages(c *Client) {
 		var m protocol.Message
 		if json.Unmarshal([]byte(raw), &m) != nil {
 			continue
+		}
+		// 以数据库为准修正撤回状态：离线期间已被撤回的消息不再补发，
+		// 其撤回提示由打开会话时的历史加载按 recalled 字段统一渲染，避免前后不一致
+		// 原实现：直接按离线队列快照补发，撤回状态无法同步
+		if m.MsgID > 0 {
+			var rec model.Message
+			if err := store.DB.Select("recalled").First(&rec, m.MsgID).Error; err == nil && rec.Recalled {
+				continue
+			}
 		}
 		data, _ := json.Marshal(m)
 		c.send(data)

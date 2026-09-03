@@ -31,6 +31,10 @@ const (
 	MsgTypeBlacklistList     = 26 // 黑名单列表同步
 	MsgTypeConvClear         = 27 // 会话清空（仅清当前用户视图，云端记录保留）
 	MsgTypeConvDelete        = 28 // 会话删除（从列表移除，云端记录保留）
+	MsgTypeMsgPin            = 29 // 消息置顶/取消置顶（content: pin/unpin，msg_id 指定消息）
+	MsgTypeMsgPinSync        = 30 // 置顶消息状态同步（content 为 JSON，msg_id=0 表示无置顶）
+	MsgTypeConvSearch        = 31 // 会话内消息搜索（当前聊天窗口内）
+	MsgTypeConvSearchResp    = 32 // 会话内搜索响应
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

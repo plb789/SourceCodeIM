@@ -43,8 +43,8 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 推送给在线接收方（携带申请记录 ID，供前端去重）
-	if target, ok := s.hub.Get(msg.ToUser); ok {
+	// 推送给在线接收方的全部连接（携带申请记录 ID，供前端去重；多端同步）
+	if s.hub.Count(msg.ToUser) > 0 {
 		data, _ := json.Marshal(&protocol.Message{
 			MsgType:   protocol.MsgTypeFriendRequest,
 			FromUser:  c.username,
@@ -53,7 +53,7 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 			Timestamp: time.Now().Unix(),
 			MsgID:     req.ID,
 		})
-		target.send(data)
+		s.sendToUser(msg.ToUser, data)
 	}
 	s.sendError(c, "好友申请已发送")
 	logger.Info("好友申请：%s -> %s", c.username, msg.ToUser)
@@ -198,9 +198,10 @@ func (s *Server) isBlocked(a, b string) bool {
 	return count > 0
 }
 
-// refreshFriendList 向指定在线用户推送好友列表
+// refreshFriendList 向指定在线用户推送好友列表（推送其全部在线连接，多端同步）
+// 原实现：仅推送单一连接
 func (s *Server) refreshFriendList(username string) {
-	if c, ok := s.hub.Get(username); ok {
+	for _, c := range s.hub.GetAll(username) {
 		s.pushFriendList(c)
 	}
 }

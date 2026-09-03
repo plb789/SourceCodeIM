@@ -58,8 +58,28 @@
             <div class="chat-header">
                 <span id="chat-title">群聊</span>
                 <span id="chat-status" class="chat-status"></span>
+                <button id="conv-search-btn" class="logout-btn" title="搜索聊天记录">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                </button>
+            </div>
+            <!-- 置顶消息条：服务端归口，双方同步 -->
+            <div id="pin-bar" class="pin-bar hidden">
+                <span class="pin-bar-icon">📌</span>
+                <div class="pin-bar-main">
+                    <span id="pin-bar-user" class="pin-bar-user"></span>
+                    <span id="pin-bar-text" class="pin-bar-text"></span>
+                </div>
+                <button id="pin-bar-close" class="pin-bar-close" title="取消置顶">×</button>
             </div>
             <div id="message-list" class="message-list"></div>
+            <!-- 会话内搜索浮层：结果点击定位到消息并高亮 -->
+            <div id="conv-search" class="conv-search hidden">
+                <div class="conv-search-bar">
+                    <input id="conv-search-input" placeholder="搜索聊天记录，回车确认">
+                    <button id="conv-search-close" title="关闭">×</button>
+                </div>
+                <div id="conv-search-results" class="conv-search-results hidden"></div>
+            </div>
             <!-- 微信风格输入区：工具栏 + 输入框 + 底部操作行 -->
             <div class="input-bar">
                 <div class="input-toolbar">
@@ -102,8 +122,9 @@
         <div class="menu-item" data-action="delete">删除好友</div>
     </div>
 
-    <!-- 消息右键菜单（撤回/删除） -->
+    <!-- 消息右键菜单（置顶/撤回/删除） -->
     <div id="msg-menu" class="friend-menu hidden">
+        <div class="menu-item" data-action="pin">置顶</div>
         <div class="menu-item" data-action="recall">撤回</div>
         <div class="menu-item" data-action="del">删除</div>
     </div>
@@ -131,7 +152,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.5"></script>
-    <script src="js/chat.js?v=1.5"></script>
+    <script src="js/socket.js?v=1.9"></script>
+    <script src="js/chat.js?v=1.9"></script>
 </body>
 </html>

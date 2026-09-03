@@ -37,6 +37,19 @@
     var convListEl = document.getElementById('conv-list');
     var friendsPanel = document.getElementById('friends-panel');
 
+    // ===== 置顶消息条元素（服务端归口，双方同步） =====
+    var pinBar = document.getElementById('pin-bar');
+    var pinBarUser = document.getElementById('pin-bar-user');
+    var pinBarText = document.getElementById('pin-bar-text');
+    var pinBarClose = document.getElementById('pin-bar-close');
+
+    // ===== 会话内搜索元素 =====
+    var convSearchBtn = document.getElementById('conv-search-btn');
+    var convSearch = document.getElementById('conv-search');
+    var convSearchInput = document.getElementById('conv-search-input');
+    var convSearchClose = document.getElementById('conv-search-close');
+    var convSearchResults = document.getElementById('conv-search-results');
+
     // ===== 自定义弹窗 / Toast 提示（禁止使用系统默认弹窗） =====
     var modalMask = document.getElementById('modal-mask');
     var modalTitle = document.getElementById('modal-title');
@@ -203,11 +216,19 @@
         if (!el || !el.getAttribute('data-msg-id')) return;
         e.preventDefault();
         msgTarget = el;
-        // 撤回仅对自己发送且 2 分钟内的消息可见
+        var msgId = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
+        // 撤回仅对自己发送且窗口时间内的消息可见（窗口值由登录响应从服务端下发，预留 10 秒余量防边界超时）
+        // 原实现：固定 110 秒硬编码
+        // var within = Date.now() / 1000 - (parseInt(el.getAttribute('data-ts'), 10) || 0) < 110;
+        var win = (IMSocket.getRecallWindow ? IMSocket.getRecallWindow() : 120) - 10;
         var isMine = el.getAttribute('data-from') === IMSocket.getUsername();
-        var within = Date.now() / 1000 - (parseInt(el.getAttribute('data-ts'), 10) || 0) < 110;
+        var within = Date.now() / 1000 - (parseInt(el.getAttribute('data-ts'), 10) || 0) < win;
         var recallItem = msgMenu.querySelector('[data-action="recall"]');
         recallItem.style.display = (isMine && within) ? '' : 'none';
+        // 置顶项：当前消息已被置顶时显示"取消置顶"
+        var pinItem = msgMenu.querySelector('[data-action="pin"]');
+        var p = pinInfo[currentChatUser];
+        pinItem.textContent = (p && p.msg_id && p.msg_id === msgId) ? '取消置顶' : '置顶';
         msgMenu.style.top = e.clientY + 'px';
         msgMenu.style.left = e.clientX + 'px';
         msgMenu.classList.remove('hidden');
@@ -228,6 +249,16 @@
                         IMSocket.send({ msg_type: MSG.DELETE, msg_id: msgId });
                         el.remove();
                     }, '删除');
+                } else if (action === 'pin' && msgId) {
+                    // 置顶/取消置顶：服务端归口并同步双方，每个会话仅一条置顶
+                    var p = pinInfo[currentChatUser];
+                    var isPinned = !!(p && p.msg_id === msgId);
+                    IMSocket.send({
+                        msg_type: MSG.MSG_PIN,
+                        to_user: currentChatUser,
+                        msg_id: msgId,
+                        content: isPinned ? 'unpin' : 'pin'
+                    });
                 }
             }
             msgMenu.classList.add('hidden');
@@ -454,7 +485,14 @@
 
     // ===== 消息分发 =====
     IMSocket.on(MSG.LOGIN_RESP, function (msg) {
-        if (msg.content === 'ok') {
+        // 原实现：仅支持纯字符串 "ok"，服务端下发撤回窗口参数后 content 改为 JSON，导致登录被误判为失败
+        // if (msg.content === 'ok') {
+        var ok = msg.content === 'ok'; // 兼容旧版服务端纯字符串响应
+        if (!ok) {
+            // 新格式：content 为 JSON（result + recall_window 等服务端配置参数）
+            try { ok = JSON.parse(msg.content).result === 'ok'; } catch (e) {}
+        }
+        if (ok) {
             currentUserEl.textContent = IMSocket.getUsername();
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
@@ -735,6 +773,8 @@
 
     // ===== 历史消息：切换会话时请求，分页加载最近 20 条 =====
     var historyTarget = ''; // 发起历史请求时的会话目标，用于校验响应归属
+    var pinInfo = {};       // 置顶消息表：target -> {msg_id, from_user, content, create_time, pin_user}
+    var locateState = { active: false, msgId: 0, page: 1, maxPage: 50 }; // 会话内搜索定位翻页状态
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
@@ -742,7 +782,11 @@
         if (currentChatUser !== '') unreadCount[currentChatUser] = 0;
         updateChatTitle();
         renderFriendList();
+        // 切换会话：重置定位状态、关闭搜索浮层、刷新置顶条
+        locateState.active = false;
+        closeConvSearch();
         messageList.innerHTML = '';
+        renderPinBar();
         loadHistory();
     }
 
@@ -760,6 +804,13 @@
 
         var records = [];
         try { records = JSON.parse(msg.content) || []; } catch (e) {}
+
+        // 定位模式：向前翻页加载更早的消息（prepend 渲染），找到目标后高亮
+        if (locateState.active) {
+            handleLocatePage(records);
+            return;
+        }
+
         // 服务端按 ID 倒序返回，正序渲染
         records.reverse().forEach(function (r) { renderHistoryRecord(r); });
 
@@ -773,18 +824,205 @@
         }
     });
 
-    // 渲染单条历史记录
-    function renderHistoryRecord(r) {
+    // 渲染单条历史记录（beforeEl 传入时插入到该元素之前，用于向前翻页 prepend）
+    function renderHistoryRecord(r, beforeEl) {
         var isMine = r.from_user === IMSocket.getUsername();
         if (r.recalled) {
-            appendSystem((isMine ? '你' : r.from_user) + ' 撤回了一条消息');
+            var tip = document.createElement('div');
+            tip.className = 'system-tip';
+            tip.textContent = (isMine ? '你' : r.from_user) + ' 撤回了一条消息';
+            if (beforeEl) {
+                messageList.insertBefore(tip, beforeEl);
+            } else {
+                messageList.appendChild(tip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
             return;
         }
         var ts = Math.floor(new Date(r.create_time).getTime() / 1000) || 0;
         // 私聊消息显示已读/未读状态，群聊不显示
         var isPrivate = !!r.to_user;
-        appendMessage(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, r.is_read);
+        var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, r.is_read);
+        if (beforeEl) {
+            messageList.insertBefore(div, beforeEl);
+        } else {
+            messageList.appendChild(div);
+            messageList.scrollTop = messageList.scrollHeight;
+        }
     }
+
+    // ===== 会话内搜索定位：向前翻页加载直到找到目标消息 =====
+    function handleLocatePage(records) {
+        if (!locateState.active) return;
+        // 无更多历史仍未找到：停止定位
+        if (!records.length) {
+            locateState.active = false;
+            showToast('未找到该消息');
+            return;
+        }
+        // prepend 渲染：按返回顺序（新→旧）依次插入到当前最前，保持时间正序
+        records.forEach(function (r) {
+            renderHistoryRecord(r, messageList.firstChild);
+        });
+        // 已加载出目标消息则定位高亮
+        var el = messageList.querySelector('.message[data-msg-id="' + locateState.msgId + '"]');
+        if (el) {
+            locateState.active = false;
+            highlightMessage(el);
+            return;
+        }
+        loadNextLocatePage();
+    }
+
+    function loadNextLocatePage() {
+        locateState.page++;
+        if (locateState.page > locateState.maxPage) {
+            locateState.active = false;
+            showToast('未找到该消息（超出可加载范围）');
+            return;
+        }
+        var msg = { msg_type: MSG.HISTORY, page: locateState.page, page_size: 20 };
+        if (currentChatUser !== '') msg.to_user = currentChatUser;
+        IMSocket.send(msg);
+    }
+
+    // 定位高亮：滚动到消息位置并渐隐高亮 2 秒
+    function highlightMessage(el) {
+        el.scrollIntoView({ block: 'center' });
+        el.classList.remove('msg-highlight');
+        // 强制重启动画
+        void el.offsetWidth;
+        el.classList.add('msg-highlight');
+        setTimeout(function () { el.classList.remove('msg-highlight'); }, 2000);
+    }
+
+    // ===== 会话内搜索浮层：搜索当前会话消息，点击结果定位并高亮 =====
+    var convSearching = ''; // 发起搜索时的会话目标，用于校验响应归属
+
+    convSearchBtn.addEventListener('click', function () {
+        // 再次点击可关闭浮层
+        if (!convSearch.classList.contains('hidden')) {
+            closeConvSearch();
+            return;
+        }
+        convSearch.classList.remove('hidden');
+        convSearchInput.focus();
+    });
+
+    // 关闭搜索浮层：清空输入与结果，避免切换会话后残留上一次内容
+    function closeConvSearch() {
+        convSearch.classList.add('hidden');
+        convSearchResults.classList.add('hidden');
+        convSearchResults.innerHTML = '';
+        convSearchInput.value = '';
+    }
+
+    convSearchClose.addEventListener('click', closeConvSearch);
+
+    // Esc 快捷关闭搜索浮层
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !convSearch.classList.contains('hidden')) closeConvSearch();
+    });
+
+    // 回车发起搜索：携带当前会话目标（群聊为空），服务端按会话范围检索
+    convSearchInput.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        var keyword = convSearchInput.value.trim();
+        if (!keyword) return;
+        convSearching = currentChatUser;
+        var msg = { msg_type: MSG.CONV_SEARCH, content: keyword };
+        if (currentChatUser !== '') msg.to_user = currentChatUser;
+        IMSocket.send(msg);
+    });
+
+    IMSocket.on(MSG.CONV_SEARCH_RESP, function (msg) {
+        // 响应归属校验：期间已切换会话则丢弃本次结果
+        var target = msg.to_user || '';
+        if (target !== convSearching || target !== currentChatUser) return;
+
+        var records = [];
+        try { records = JSON.parse(msg.content) || []; } catch (e) {}
+        convSearchResults.innerHTML = '';
+
+        // 结果数量提示 / 空结果提示（复用空态样式）
+        var tip = document.createElement('div');
+        tip.className = 'conv-result-empty';
+        tip.textContent = records.length ? ('搜索结果（' + records.length + ' 条）') : '暂无匹配的聊天记录';
+        convSearchResults.appendChild(tip);
+
+        // 服务端按 ID 倒序返回，界面按时间正序展示
+        records.slice().reverse().forEach(function (r) {
+            var isMine = r.from_user === IMSocket.getUsername();
+            var item = document.createElement('div');
+            item.className = 'conv-result-item';
+            var head = document.createElement('div');
+            head.className = 'conv-result-head';
+            var who = document.createElement('span');
+            who.textContent = isMine ? '我' : r.from_user;
+            var when = document.createElement('span');
+            when.textContent = formatTime(new Date(r.create_time).getTime());
+            head.appendChild(who);
+            head.appendChild(when);
+            var body = document.createElement('div');
+            body.className = 'conv-result-body';
+            body.textContent = r.content;
+            item.appendChild(head);
+            item.appendChild(body);
+            item.addEventListener('click', function () {
+                var el = messageList.querySelector('.message[data-msg-id="' + r.id + '"]');
+                if (el) {
+                    // 消息已在窗口中：直接定位高亮
+                    highlightMessage(el);
+                } else {
+                    // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染）
+                    locateState.active = true;
+                    locateState.msgId = r.id;
+                    locateState.page = 1;
+                    loadNextLocatePage();
+                }
+                convSearch.classList.add('hidden');
+            });
+            convSearchResults.appendChild(item);
+        });
+
+        convSearchResults.classList.remove('hidden');
+    });
+
+    // ===== 置顶消息条：服务端归口同步，每个会话仅一条置顶消息 =====
+    IMSocket.on(MSG.MSG_PIN_SYNC, function (msg) {
+        var info = null;
+        try { info = JSON.parse(msg.content); } catch (e) {}
+        if (!info) return;
+        var target = info.target || '';
+        if (info.msg_id) {
+            pinInfo[target] = info;
+        } else {
+            delete pinInfo[target];
+        }
+        // 当前正在查看该会话时立即刷新置顶条
+        if (target === currentChatUser) renderPinBar();
+    });
+
+    function renderPinBar() {
+        var info = pinInfo[currentChatUser];
+        if (info && info.msg_id) {
+            pinBarUser.textContent = info.from_user + '：';
+            pinBarText.textContent = info.content;
+            pinBar.classList.remove('hidden');
+        } else {
+            pinBar.classList.add('hidden');
+        }
+    }
+
+    // 点击 × 取消置顶（发送取消请求，服务端同步双方）
+    pinBarClose.addEventListener('click', function () {
+        IMSocket.send({
+            msg_type: MSG.MSG_PIN,
+            to_user: currentChatUser,
+            msg_id: 0,
+            content: 'unpin'
+        });
+    });
 
     // ===== 关键词搜索：回车搜索，结果面板展示，点击跳转会话 =====
     var searchInput = document.getElementById('search-input');
@@ -924,10 +1162,11 @@
     }
 
     // ===== 消息渲染 =====
-    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
+    // 构建消息元素（返回 DOM 节点，不插入列表）：供实时消息与历史消息渲染复用
+    function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
-        // 携带消息 ID / 发送者 / 时间戳，供撤回、删除、已读功能使用
+        // 携带消息 ID / 发送者 / 时间戳，供撤回、删除、已读、置顶定位功能使用
         if (msgId) div.setAttribute('data-msg-id', msgId);
         div.setAttribute('data-from', fromUser);
         if (timestamp) div.setAttribute('data-ts', timestamp);
@@ -947,6 +1186,37 @@
             status.textContent = isRead ? '已读' : '未读';
             div.appendChild(status);
         }
+        return div;
+    }
+
+    // 实时消息：构建元素后追加到列表末尾并滚动到底部
+    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
+        // 原实现：构建与插入耦合在 appendMessage 内，历史消息无法复用，现拆分为 createMessageEl
+        // var div = document.createElement('div');
+        // div.className = 'message ' + type;
+        // // 携带消息 ID / 发送者 / 时间戳，供撤回、删除、已读功能使用
+        // if (msgId) div.setAttribute('data-msg-id', msgId);
+        // div.setAttribute('data-from', fromUser);
+        // if (timestamp) div.setAttribute('data-ts', timestamp);
+        // var nameEl = document.createElement('div');
+        // nameEl.className = 'message-name';
+        // nameEl.textContent = fromUser;
+        // var bubble = document.createElement('div');
+        // bubble.className = 'message-bubble';
+        // bubble.textContent = content;
+        // div.appendChild(nameEl);
+        // div.appendChild(bubble);
+        // // 自己发送的私聊消息显示已读/未读状态
+        // if (showReadStatus && type === 'self' && msgId) {
+        //     var status = document.createElement('div');
+        //     status.className = 'msg-status' + (isRead ? ' read' : '');
+        //     status.setAttribute('data-msg-id', msgId);
+        //     status.textContent = isRead ? '已读' : '未读';
+        //     div.appendChild(status);
+        // }
+        // messageList.appendChild(div);
+        // messageList.scrollTop = messageList.scrollHeight;
+        var div = createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }

@@ -79,7 +79,8 @@ func (s *Server) handleAIChat(c *Client, msg *protocol.Message) {
 			Timestamp: time.Now().Unix(),
 		}
 		data, _ := json.Marshal(resp)
-		c.send(data)
+		// 推送回复给用户全部在线连接（多端同步）
+		s.sendToUser(c.username, data)
 		logger.Info("AI 回复用户 %s", c.username)
 	}()
 }

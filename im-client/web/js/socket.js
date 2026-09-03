@@ -36,7 +36,11 @@
         FRIEND_DELETE: 23,
         BLACKLIST: 24,
         FRIEND_UPDATE: 25,
-        BLACKLIST_LIST: 26
+        BLACKLIST_LIST: 26,
+        MSG_PIN: 29,
+        MSG_PIN_SYNC: 30,
+        CONV_SEARCH: 31,
+        CONV_SEARCH_RESP: 32
     };
 
     function connect(username, password) {
@@ -109,9 +113,15 @@
 
     function dispatch(msg) {
         if (msg.msg_type === MSG.LOGIN_RESP) {
-            if (msg.content === 'ok') {
-                window._lastPassword = window._lastPassword || '';
-            }
+            // 登录响应携带服务端撤回时间窗口（recall_window 秒），供撤回菜单判断使用
+            // 兼容旧格式：content 为 "ok" 字符串时保持默认 120 秒
+            try {
+                var info = JSON.parse(msg.content);
+                if (info && info.recall_window > 0) {
+                    recallWindow = info.recall_window;
+                }
+            } catch (e) {}
+            window._lastPassword = window._lastPassword || '';
         }
         var handlers = messageHandlers[msg.msg_type];
         if (handlers) {

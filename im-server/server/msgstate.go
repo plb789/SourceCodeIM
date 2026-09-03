@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 
 	"im-server/model"
 	"im-server/protocol"
@@ -12,7 +15,8 @@ import (
 )
 
 // recallWindow 撤回时间窗口：2 分钟内可撤回
-const recallWindow = 2 * time.Minute
+// 原实现：const recallWindow = 2 * time.Minute 硬编码，现改为配置文件 recall_window 参数
+// const recallWindow = 2 * time.Minute
 
 // handleRead 已读回执：更新已读状态并转发给对方
 // content 为已读到的最大消息 ID，服务端统一归口更新该范围内的消息状态
@@ -30,7 +34,8 @@ func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 		Where("from_user = ? AND to_user = ? AND id <= ?", msg.ToUser, c.username, lastID).
 		Update("is_read", true)
 
-	// 回执转发给对方，供其界面显示"已读"
+	// 回执转发给对方全部在线连接，供其界面显示"已读"（多端同步）
+	// 原实现：s.hub.Get(msg.ToUser) 仅转发单一连接
 	data, _ := json.Marshal(&protocol.Message{
 		MsgType:   protocol.MsgTypeRead,
 		FromUser:  c.username,
@@ -38,11 +43,13 @@ func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 		Content:   msg.Content,
 		Timestamp: time.Now().Unix(),
 	})
-	if target, ok := s.hub.Get(msg.ToUser); ok {
-		target.send(data)
+	s.sendToUser(msg.ToUser, data)
+
+	// 未读数变化，刷新读取者全部在线连接的会话列表（多端同步未读清零）
+	// 原实现：s.pushConvList(c) 仅刷新当前连接
+	for _, conn := range s.hub.GetAll(c.username) {
+		s.pushConvList(conn)
 	}
-	// 未读数变化，刷新读取者自己的会话列表
-	s.pushConvList(c)
 }
 
 // handleRecall 消息撤回：仅限 2 分钟内自己发送的消息
@@ -60,13 +67,25 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 		s.sendError(c, "只能撤回自己发送的消息")
 		return
 	}
-	if time.Since(record.CreateTime) > recallWindow {
-		s.sendError(c, "超过 2 分钟的消息无法撤回")
+	// 撤回时间窗口从配置文件读取（recall_window，单位秒）
+	if time.Since(record.CreateTime) > time.Duration(s.cfg.RecallWindow)*time.Second {
+		s.sendError(c, "超过撤回时间限制的消息无法撤回")
 		return
 	}
 
 	// 标记为已撤回（保留记录，历史中显示"撤回了一条消息"）
 	store.DB.Model(&model.Message{}).Where("id = ?", record.ID).Update("recalled", true)
+
+	// 撤回后会话摘要联动：若撤回的是会话最后一条可见消息，摘要更新为撤回提示（服务端归口，多端随 CONV_LIST 同步）
+	s.refreshConvSummaryAfterRecall(record)
+
+	// 被撤回消息若已被置顶，自动取消置顶并同步双方
+	var pins []model.MessagePin
+	store.DB.Where("msg_id = ?", record.ID).Find(&pins)
+	for _, p := range pins {
+		store.DB.Delete(&model.MessagePin{}, p.ID)
+		s.syncPinByKey(p.ConvKey)
+	}
 
 	// 通知双方（群聊则广播）
 	notice := protocol.Message{
@@ -79,10 +98,59 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 	if record.ToUser == "" {
 		s.hub.Broadcast(data)
 	} else {
-		if target, ok := s.hub.Get(record.ToUser); ok {
-			target.send(data)
+		// 私聊撤回：通知双方全部在线连接（多端同步）
+		s.sendToUser(record.ToUser, data)
+		s.sendToUser(c.username, data)
+	}
+}
+
+// refreshConvSummaryAfterRecall 撤回后会话摘要联动：
+// 若被撤回消息是该会话最后一条可见消息，则相关会话行摘要更新为撤回提示，并推送会话列表多端同步
+// 原实现：撤回不影响会话摘要，撤回最后一条消息后会话列表仍显示原消息内容
+func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
+	// 查询该会话最新的未撤回消息，判断撤回的是否为最后一条可见消息
+	query := store.DB.Model(&model.Message{}).Where("recalled = ?", false)
+	var users []string // 需要更新摘要的会话归属者
+	if record.ToUser == "" {
+		// 群聊会话：全部群消息，摘要更新所有已存在群会话行的用户
+		query = query.Where("msg_type = ?", 1)
+		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
+	} else {
+		// 私聊会话：双方互发消息，摘要更新双方
+		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+			2, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
+		users = []string{record.FromUser, record.ToUser}
+	}
+	var latest model.Message
+	err := query.Order("id desc").First(&latest).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		// 查询异常，保守跳过
+		return
+	}
+	// 原实现：err != nil 一律 return，会话内全部消息均已撤回时查询无结果（ErrRecordNotFound），
+	// 被误判为"存在更新的可见消息"导致摘要不更新；实际此时被撤回的就是最后的可见消息，应更新摘要
+	// 摘要重算：撤回最后一条可见消息时显示撤回提示；撤回中间消息时重算为最新可见消息内容，
+	// 避免摘要残留已撤回内容（服务端统一归口，与会话列表展示保持一致）
+	summary := "[消息已撤回]"
+	if err == nil && latest.ID != record.ID {
+		// 会话存在更新的可见消息：摘要重算为最新可见消息内容
+		summary = latest.Content
+		if len(summary) > 200 {
+			summary = summary[:200]
 		}
-		c.send(data)
+	}
+	// 更新相关会话行摘要（保留 LastTime 不变，避免列表排序跳动）
+	for _, u := range users {
+		// 原实现：双方统一按 record.ToUser 匹配会话行，接收方的会话 target 为发送者导致匹配失败，摘要不更新
+		target := record.ToUser // 发送方视角：会话对端为接收者
+		if u == record.ToUser {
+			// 接收方视角：会话对端为发送者
+			target = record.FromUser
+		}
+		store.DB.Model(&model.Conversation{}).
+			Where("user_id = ? AND target = ?", u, target).
+			Update("last_msg", summary)
+		s.notifyConvUpdate(u)
 	}
 }
 
@@ -138,6 +206,54 @@ func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
 	data, _ := json.Marshal(records)
 	resp := protocol.Message{
 		MsgType:   protocol.MsgTypeSearchResp,
+		FromUser:  c.username,
+		ToUser:    msg.ToUser,
+		Content:   string(data),
+		Timestamp: time.Now().Unix(),
+	}
+	respData, _ := json.Marshal(resp)
+	c.send(respData)
+}
+
+// handleConvSearch 会话内消息搜索：在当前聊天窗口对应会话范围内搜索
+// ToUser 为空表示群聊会话，非空表示与指定用户的私聊会话
+func (s *Server) handleConvSearch(c *Client, msg *protocol.Message) {
+	keyword := strings.TrimSpace(msg.Content)
+	if keyword == "" {
+		s.sendError(c, "请输入搜索关键词")
+		return
+	}
+	// 转义 LIKE 通配符，避免 % 和 _ 影响匹配
+	escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(keyword)
+
+	query := store.DB.Model(&model.Message{}).
+		Where("content LIKE ? AND recalled = ?", "%"+escaped+"%", false)
+
+	// 排除当前用户已删除的消息
+	var delIDs []uint
+	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
+	if len(delIDs) > 0 {
+		query = query.Where("id NOT IN ?", delIDs)
+	}
+
+	if msg.ToUser == "" {
+		// 群聊会话内搜索：全部群消息
+		query = query.Where("msg_type = ?", 1)
+	} else {
+		// 私聊会话内搜索：双方互发的消息
+		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+			2, c.username, msg.ToUser, msg.ToUser, c.username)
+	}
+
+	var records []model.Message
+	if err := query.Order("id desc").Limit(50).Find(&records).Error; err != nil {
+		s.sendError(c, "搜索失败")
+		return
+	}
+
+	data, _ := json.Marshal(records)
+	resp := protocol.Message{
+		MsgType:   protocol.MsgTypeConvSearchResp,
 		FromUser:  c.username,
 		ToUser:    msg.ToUser,
 		Content:   string(data),

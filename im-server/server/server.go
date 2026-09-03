@@ -45,13 +45,28 @@ func (s *Server) HandleWS(conn *websocket.Conn) {
 	c.readPump()
 }
 
-// unregister 连接断开后的清理
+// sendToUser 向指定用户的全部在线连接推送数据（多端同步归口）
+func (s *Server) sendToUser(username string, data []byte) {
+	for _, c := range s.hub.GetAll(username) {
+		c.send(data)
+	}
+}
+
+// unregister 连接断开后的清理（按连接移除，同账号其他设备仍在线时不判定离线）
 func (s *Server) unregister(c *Client) {
 	if c.username == "" {
 		return
 	}
-	s.hub.Remove(c.username)
-	// 删除 Redis 在线缓存
+	// 移除当前连接，返回该用户剩余连接数
+	// 原实现：s.hub.Remove(c.username) 按用户名删除，旧连接断开时存在误删新连接的竞态
+	remaining := s.hub.Remove(c)
+	if remaining > 0 {
+		// 其他设备仍在线：不下线、不删缓存、不广播
+		logger.Info("用户 %s 一台设备断开，剩余在线连接 %d", c.username, remaining)
+		return
+	}
+
+	// 最后一个连接断开：删除 Redis 在线缓存
 	store.RDB.Del(context.Background(), store.KeyOnlineUser+c.username)
 
 	// 广播下线通知
@@ -97,6 +112,10 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleConvClear(c, msg)
 	case protocol.MsgTypeConvDelete:
 		s.handleConvDelete(c, msg)
+	case protocol.MsgTypeMsgPin:
+		s.handleMsgPin(c, msg)
+	case protocol.MsgTypeConvSearch:
+		s.handleConvSearch(c, msg)
 	case protocol.MsgTypeFriendRequest:
 		s.handleFriendRequest(c, msg)
 	case protocol.MsgTypeFriendRequestResp:
@@ -143,25 +162,28 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 批量推送离线消息
 	s.pushOfflineMessages(c)
 
-	// 广播上线通知
-	onlineMsg := protocol.Message{
-		MsgType:   protocol.MsgTypeOnline,
-		FromUser:  user.Username,
-		Content:   "online",
-		Timestamp: time.Now().Unix(),
+	// 仅首个设备上线时广播上线通知，多端重复登录不重复广播
+	if s.hub.Count(user.Username) == 1 {
+		onlineMsg := protocol.Message{
+			MsgType:   protocol.MsgTypeOnline,
+			FromUser:  user.Username,
+			Content:   "online",
+			Timestamp: time.Now().Unix(),
+		}
+		onlineData, _ := json.Marshal(onlineMsg)
+		s.hub.BroadcastExcept(user.Username, onlineData)
 	}
-	onlineData, _ := json.Marshal(onlineMsg)
-	s.hub.BroadcastExcept(user.Username, onlineData)
 
 	// 推送在线用户列表给所有在线用户
 	s.pushUserList()
 
-	// 推送好友列表 + 待处理好友申请 + 黑名单列表 + 会话列表
+	// 推送好友列表 + 待处理好友申请 + 黑名单列表 + 会话列表 + 置顶消息
 	s.pushFriendList(c)
 	s.pushPendingRequests(c)
 	s.pushBlacklist(c)
 	s.ensureGroupConv(user.Username)
 	s.pushConvList(c)
+	s.pushPinList(c)
 	logger.Info("用户 %s 上线", user.Username)
 }
 
@@ -257,14 +279,16 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 
 	data, _ := json.Marshal(msg)
 
-	if target, ok := s.hub.Get(msg.ToUser); ok {
-		target.send(data)
+	// 推送给接收方全部在线连接（多端同步）
+	if s.hub.Count(msg.ToUser) > 0 {
+		s.sendToUser(msg.ToUser, data)
 	} else if !s.isOnline(msg.ToUser) {
 		// 目标用户离线，消息入离线队列
 		s.queueOffline(msg.ToUser, msg)
 	}
-	// 回显给发送方
-	c.send(data)
+	// 回显给发送方全部在线连接（多端同步自己发送的消息）
+	// 原实现：c.send(data) 仅回显当前连接
+	s.sendToUser(c.username, data)
 
 	// 更新双方最近会话并推送
 	summary := msg.Content
@@ -321,10 +345,10 @@ func (s *Server) handleFileHeader(c *Client, msg *protocol.Message) {
 	store.RDB.Del(ctx, store.KeyFileChunk+fileID)
 	store.RDB.Expire(ctx, store.KeyFileChunk+fileID, 24*time.Hour)
 
-	// 中转文件头给接收方
-	if target, ok := s.hub.Get(msg.ToUser); ok {
+	// 中转文件头给接收方全部在线连接（多端同步）
+	if s.hub.Count(msg.ToUser) > 0 {
 		data, _ := json.Marshal(msg)
-		target.send(data)
+		s.sendToUser(msg.ToUser, data)
 	}
 	// 回显给发送方（携带 fileID）
 	data, _ := json.Marshal(msg)
@@ -342,10 +366,10 @@ func (s *Server) handleFileChunk(c *Client, msg *protocol.Message) {
 	ctx := context.Background()
 	key := store.KeyFileChunk + msg.FileID
 
-	// 中转分片给接收方
-	if target, ok := s.hub.Get(msg.ToUser); ok {
+	// 中转分片给接收方全部在线连接（多端同步）
+	if s.hub.Count(msg.ToUser) > 0 {
 		data, _ := json.Marshal(msg)
-		target.send(data)
+		s.sendToUser(msg.ToUser, data)
 	}
 
 	// 记录已传输分片序号
@@ -370,9 +394,8 @@ func (s *Server) handleTyping(c *Client, msg *protocol.Message) {
 	msg.MsgType = protocol.MsgTypeTyping
 	msg.FromUser = c.username
 	data, _ := json.Marshal(msg)
-	if target, ok := s.hub.Get(msg.ToUser); ok {
-		target.send(data)
-	}
+	// 输入状态推送给对方全部在线连接（多端同步）
+	s.sendToUser(msg.ToUser, data)
 }
 
 func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
@@ -459,11 +482,16 @@ func (s *Server) pushUserList() {
 	s.hub.Broadcast(data)
 }
 
-// sendLoginResp 发送登录响应
+// sendLoginResp 发送登录响应（携带服务端撤回时间窗口，供前端撤回菜单判断与窗口配置保持一致）
 func (s *Server) sendLoginResp(c *Client, result string) {
+	respInfo, _ := json.Marshal(map[string]interface{}{
+		"result":        result,
+		"recall_window": s.cfg.RecallWindow,
+	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,
-		Content: result,
+		// 原实现：Content 为固定字符串 "ok"，现改为 JSON 携带配置下发
+		Content: string(respInfo),
 	}
 	data, _ := json.Marshal(msg)
 	c.send(data)

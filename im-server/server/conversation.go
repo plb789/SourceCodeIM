@@ -83,9 +83,10 @@ func (s *Server) pushConvList(c *Client) {
 	c.send(data)
 }
 
-// notifyConvUpdate 在线时向指定用户推送会话列表
+// notifyConvUpdate 在线时向指定用户推送会话列表（推送其全部在线连接，多端同步）
+// 原实现：仅推送单一连接
 func (s *Server) notifyConvUpdate(username string) {
-	if c, ok := s.hub.Get(username); ok {
+	for _, c := range s.hub.GetAll(username) {
 		s.pushConvList(c)
 	}
 }
