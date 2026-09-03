@@ -22,11 +22,23 @@ type Message struct {
 	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
 	ToUser     string    `gorm:"column:to_user;type:varchar(32)" json:"to_user"` // 群聊为空
 	Content    string    `gorm:"column:content;type:text" json:"content"`
+	IsRead     bool      `gorm:"column:is_read;default:false" json:"is_read"`   // 已读状态
+	Recalled   bool      `gorm:"column:recalled;default:false" json:"recalled"` // 是否已撤回
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
 // TableName 指定表名
 func (Message) TableName() string { return "im_message" }
+
+// MessageDelete 用户删除消息记录表 im_msg_delete（仅影响删除者自己的视图）
+type MessageDelete struct {
+	ID     uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	UserID string `gorm:"column:user_id;type:varchar(32);not null;index:idx_del_user_msg" json:"user_id"`
+	MsgID  uint   `gorm:"column:msg_id;not null;index:idx_del_user_msg" json:"msg_id"`
+}
+
+// TableName 指定表名
+func (MessageDelete) TableName() string { return "im_msg_delete" }
 
 // FileRecord 文件传输记录表 im_file
 type FileRecord struct {

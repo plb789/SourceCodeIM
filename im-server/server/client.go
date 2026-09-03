@@ -11,10 +11,11 @@ import (
 
 // Client 单个客户端连接
 type Client struct {
-	server   *Server
-	conn     *websocket.Conn
-	username string
-	sendCh   chan []byte
+	server    *Server
+	conn      *websocket.Conn
+	username  string
+	loginTime time.Time // 本次登录时间，用于好友申请去重
+	sendCh    chan []byte
 }
 
 // newClient 创建客户端连接对象

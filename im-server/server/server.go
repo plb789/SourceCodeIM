@@ -83,6 +83,12 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleFile(c, msg)
 	case protocol.MsgTypeTyping:
 		s.handleTyping(c, msg)
+	case protocol.MsgTypeRead:
+		s.handleRead(c, msg)
+	case protocol.MsgTypeRecall:
+		s.handleRecall(c, msg)
+	case protocol.MsgTypeDelete:
+		s.handleDelete(c, msg)
 	case protocol.MsgTypeFriendRequest:
 		s.handleFriendRequest(c, msg)
 	case protocol.MsgTypeFriendRequestResp:
@@ -116,6 +122,7 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	}
 
 	c.username = user.Username
+	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
 	s.hub.Add(c)
 
 	// 写入 Redis 在线缓存
@@ -141,9 +148,10 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 推送在线用户列表给所有在线用户
 	s.pushUserList()
 
-	// 推送好友列表 + 待处理好友申请
+	// 推送好友列表 + 待处理好友申请 + 黑名单列表
 	s.pushFriendList(c)
 	s.pushPendingRequests(c)
+	s.pushBlacklist(c)
 	logger.Info("用户 %s 上线", user.Username)
 }
 
@@ -356,6 +364,13 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 
 	var records []model.Message
 	query := store.DB.Model(&model.Message{})
+
+	// 排除当前用户已删除的消息（删除仅影响自己的视图）
+	var delIDs []uint
+	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
+	if len(delIDs) > 0 {
+		query = query.Where("id NOT IN ?", delIDs)
+	}
 
 	if msg.ToUser == "" {
 		// 群聊历史

@@ -14,6 +14,9 @@ const (
 	MsgTypeHistory     = 10 // 历史记录请求
 	MsgTypeHistoryResp = 11 // 历史记录响应
 	MsgTypeTyping      = 12 // 输入状态提示
+	MsgTypeRead        = 13 // 已读回执
+	MsgTypeRecall      = 14 // 消息撤回
+	MsgTypeDelete      = 15 // 消息删除（仅删除者自己的视图）
 
 	MsgTypeFriendRequest     = 20 // 好友申请
 	MsgTypeFriendRequestResp = 21 // 好友申请响应
@@ -21,6 +24,7 @@ const (
 	MsgTypeFriendDelete      = 23 // 删除好友
 	MsgTypeBlacklist         = 24 // 黑名单操作
 	MsgTypeFriendUpdate      = 25 // 好友备注/分组更新
+	MsgTypeBlacklistList     = 26 // 黑名单列表同步
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

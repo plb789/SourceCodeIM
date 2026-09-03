@@ -43,14 +43,40 @@
                 <span id="chat-status" class="chat-status"></span>
             </div>
             <div id="message-list" class="message-list"></div>
+            <!-- 微信风格输入区：工具栏 + 输入框 + 底部操作行 -->
             <div class="input-bar">
-                <textarea id="message-input" placeholder="输入消息，回车发送" rows="1"></textarea>
-                <button id="send-btn">发送</button>
+                <div class="input-toolbar">
+                    <button id="emoji-btn" class="tool-btn" title="表情">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
+                    </button>
+                    <button id="image-btn" class="tool-btn" title="发送图片">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
+                    </button>
+                    <button id="file-btn" class="tool-btn" title="发送文件">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16v10z"/></svg>
+                    </button>
+                    <button id="screenshot-btn" class="tool-btn" title="截图发送">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 3h-2.18A3 3 0 0 0 12 1a3 3 0 0 0-2.82 2H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-5 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm6 16H5V5h2v2h10V5h2v14zM12 8a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+                    </button>
+                    <button id="clear-btn" class="tool-btn" title="清空当前聊天显示">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
+                </div>
+                <textarea id="message-input" placeholder="输入消息" rows="3"></textarea>
+                <div class="input-footer">
+                    <span class="input-hint">Enter 发送 / Ctrl+Enter 换行</span>
+                    <button id="send-btn">发送</button>
+                </div>
             </div>
+
+            <!-- 表情面板（自定义，禁止系统默认弹窗） -->
+            <div id="emoji-panel" class="emoji-panel hidden"></div>
         </div>
     </div>
 
     <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif" class="hidden">
+    <input type="file" id="image-input" accept="image/*" class="hidden">
+    <input type="file" id="file-input" class="hidden">
 
     <!-- 好友右键菜单 -->
     <div id="friend-menu" class="friend-menu hidden">
@@ -59,7 +85,29 @@
         <div class="menu-item" data-action="delete">删除好友</div>
     </div>
 
-    <script src="js/socket.js"></script>
-    <script src="js/chat.js"></script>
+    <!-- 消息右键菜单（撤回/删除） -->
+    <div id="msg-menu" class="friend-menu hidden">
+        <div class="menu-item" data-action="recall">撤回</div>
+        <div class="menu-item" data-action="del">删除</div>
+    </div>
+
+    <!-- 自定义弹窗（确认/输入），禁止使用系统默认弹窗 -->
+    <div id="modal-mask" class="modal-mask hidden">
+        <div class="modal-box">
+            <div id="modal-title" class="modal-title"></div>
+            <div id="modal-text" class="modal-text"></div>
+            <input type="text" id="modal-input" class="modal-input hidden" autocomplete="off">
+            <div class="modal-btns">
+                <button id="modal-cancel" class="modal-btn">取消</button>
+                <button id="modal-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 轻提示 -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="js/socket.js?v=1.1"></script>
+    <script src="js/chat.js?v=1.1"></script>
 </body>
 </html>

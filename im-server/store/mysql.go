@@ -27,7 +27,7 @@ func InitMySQL(cfg *config.Config) error {
 	}
 
 	// 自动创建数据表（首次启动）
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 

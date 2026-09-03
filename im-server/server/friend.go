@@ -43,7 +43,7 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 推送给在线接收方
+	// 推送给在线接收方（携带申请记录 ID，供前端去重）
 	if target, ok := s.hub.Get(msg.ToUser); ok {
 		data, _ := json.Marshal(&protocol.Message{
 			MsgType:   protocol.MsgTypeFriendRequest,
@@ -51,6 +51,7 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 			ToUser:    msg.ToUser,
 			Content:   msg.Content,
 			Timestamp: time.Now().Unix(),
+			MsgID:     req.ID,
 		})
 		target.send(data)
 	}
@@ -125,6 +126,32 @@ func (s *Server) handleBlacklist(c *Client, msg *protocol.Message) {
 		logger.Info("取消拉黑：%s -> %s", c.username, msg.ToUser)
 	}
 	s.refreshFriendList(c.username)
+	s.pushBlacklist(c)
+}
+
+// pushBlacklist 向指定用户推送黑名单列表（含头像）
+func (s *Server) pushBlacklist(c *Client) {
+	var blocked []model.Blacklist
+	store.DB.Where("user_id = ?", c.username).Find(&blocked)
+
+	infos := make([]FriendInfo, 0, len(blocked))
+	for _, b := range blocked {
+		var u model.User
+		store.DB.Where("username = ?", b.BlockedID).First(&u)
+		infos = append(infos, FriendInfo{
+			Username: b.BlockedID,
+			Avatar:   u.Avatar,
+		})
+	}
+
+	content, _ := json.Marshal(infos)
+	msg := protocol.Message{
+		MsgType:   protocol.MsgTypeBlacklistList,
+		Content:   string(content),
+		Timestamp: time.Now().Unix(),
+	}
+	data, _ := json.Marshal(msg)
+	c.send(data)
 }
 
 // handleFriendUpdate 好友备注/分组更新
@@ -207,9 +234,10 @@ func (s *Server) pushFriendList(c *Client) {
 }
 
 // pushPendingRequests 推送待处理的好友申请给指定用户
+// 仅推送登录前已存在的申请，登录后新来的申请由实时推送负责，避免重复推送
 func (s *Server) pushPendingRequests(c *Client) {
 	var reqs []model.FriendRequest
-	store.DB.Where("to_user = ? AND status = 0", c.username).Find(&reqs)
+	store.DB.Where("to_user = ? AND status = 0 AND create_time < ?", c.username, c.loginTime).Find(&reqs)
 	for _, r := range reqs {
 		data, _ := json.Marshal(&protocol.Message{
 			MsgType:   protocol.MsgTypeFriendRequest,
@@ -217,6 +245,7 @@ func (s *Server) pushPendingRequests(c *Client) {
 			ToUser:    r.ToUser,
 			Content:   r.Message,
 			Timestamp: r.CreateTime.Unix(),
+			MsgID:     r.ID,
 		})
 		c.send(data)
 	}
