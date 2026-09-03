@@ -1,0 +1,21 @@
+{
+  "name": "im-client-pc",
+  "version": "1.0.0",
+  "description": "即时通讯 PC 桌面客户端（Electron 打包 Web 源码）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.im.client",
+    "productName": "即时通讯",
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
