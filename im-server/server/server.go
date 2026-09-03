@@ -184,6 +184,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	s.ensureGroupConv(user.Username)
 	s.pushConvList(c)
 	s.pushPinList(c)
+	// 阶段十四增强：登录补发对端已读水位，重连/重登后本地"已读"显示即时恢复（多端同步）
+	s.pushReadWatermarks(c)
 	logger.Info("用户 %s 上线", user.Username)
 }
 

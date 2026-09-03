@@ -18,6 +18,33 @@ import (
 // 原实现：const recallWindow = 2 * time.Minute 硬编码，现改为配置文件 recall_window 参数
 // const recallWindow = 2 * time.Minute
 
+// pushReadWatermarks 登录时补发用户全部私聊会话的对端已读水位（服务端归口，多端同步）
+// 以 MSG.READ（from_user=对端）形式推送，复用前端现有已读处理（幂等，水位前进才更新）：
+// 重连/重登后本地已读水位即时恢复，历史渲染无需等待实时回执即可显示"已读"
+// 原实现：已读水位仅存于前端内存，重连丢失后需重新打开会话依赖服务端 is_read 恢复显示
+func (s *Server) pushReadWatermarks(c *Client) {
+	var convs []model.Conversation
+	store.DB.Where("user_id = ? AND target <> ''", c.username).Find(&convs)
+	for _, cv := range convs {
+		// 对端已读水位：我发给对方且已读的最大消息 ID
+		var maxID uint
+		store.DB.Model(&model.Message{}).
+			Where("from_user = ? AND to_user = ? AND is_read = ?", c.username, cv.Target, true).
+			Select("COALESCE(MAX(id), 0)").Scan(&maxID)
+		if maxID == 0 {
+			continue
+		}
+		data, _ := json.Marshal(&protocol.Message{
+			MsgType:   protocol.MsgTypeRead,
+			FromUser:  cv.Target,
+			ToUser:    c.username,
+			Content:   strconv.FormatUint(uint64(maxID), 10),
+			Timestamp: time.Now().Unix(),
+		})
+		c.send(data)
+	}
+}
+
 // handleRead 已读回执：更新已读状态并转发给对方
 // content 为已读到的最大消息 ID，服务端统一归口更新该范围内的消息状态
 // 阶段十一增强：基于会话行 last_read_id 水位去重，仅水位前进才写库+转发+推送，
@@ -190,6 +217,13 @@ func (s *Server) handleDelete(c *Client, msg *protocol.Message) {
 	store.DB.Model(&model.MessageDelete{}).Where("user_id = ? AND msg_id = ?", c.username, msg.MsgID).Count(&count)
 	if count == 0 {
 		store.DB.Create(&model.MessageDelete{UserID: c.username, MsgID: msg.MsgID})
+	}
+	// 阶段十四增强：删除的消息若是对方发给我的未读私聊消息，联动刷新未读角标（服务端归口）
+	// 原实现：删除后不推送会话列表，未读数包含已删除消息，角标不减
+	var record model.Message
+	if err := store.DB.First(&record, msg.MsgID).Error; err == nil &&
+		record.MsgType == 2 && record.ToUser == c.username && !record.IsRead {
+		s.notifyConvUpdate(c.username)
 	}
 	s.sendError(c, "消息已删除")
 }
