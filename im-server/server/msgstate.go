@@ -220,10 +220,26 @@ func (s *Server) handleDelete(c *Client, msg *protocol.Message) {
 	}
 	// 阶段十四增强：删除的消息若是对方发给我的未读私聊消息，联动刷新未读角标（服务端归口）
 	// 原实现：删除后不推送会话列表，未读数包含已删除消息，角标不减
+	// 原实现：if err := store.DB.First(&record, msg.MsgID).Error; err == nil &&
+	// 	record.MsgType == 2 && record.ToUser == c.username && !record.IsRead {
+	// 	s.notifyConvUpdate(c.username)
+	// }
+	// 阶段十五增强：提取消息查询结果复用，删除联动置顶需按消息归属会话校验置顶记录
 	var record model.Message
-	if err := store.DB.First(&record, msg.MsgID).Error; err == nil &&
-		record.MsgType == 2 && record.ToUser == c.username && !record.IsRead {
+	recordErr := store.DB.First(&record, msg.MsgID).Error
+	if recordErr == nil && record.MsgType == 2 && record.ToUser == c.username && !record.IsRead {
 		s.notifyConvUpdate(c.username)
+	}
+	// 阶段十五增强：置顶者删除置顶消息时联动取消置顶并同步（对齐撤回联动，服务端归口）
+	// 仅置顶人（pin_user）删除才联动，对方删除仅对自己生效、云端消息对置顶人仍可见
+	// 原实现：删除不处理置顶记录，置顶者视图中已删除的消息仍展示在置顶条
+	if recordErr == nil {
+		var pin model.MessagePin
+		if err := store.DB.Where("conv_key = ? AND pin_user = ?", convKey(record.FromUser, record.ToUser), c.username).
+			First(&pin).Error; err == nil && pin.MsgID == record.ID {
+			store.DB.Delete(&model.MessagePin{}, pin.ID)
+			s.syncPinByKey(pin.ConvKey)
+		}
 	}
 	s.sendError(c, "消息已删除")
 }

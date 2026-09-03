@@ -45,6 +45,7 @@
     var pinBarUser = document.getElementById('pin-bar-user');
     var pinBarText = document.getElementById('pin-bar-text');
     var pinBarClose = document.getElementById('pin-bar-close');
+    var pinBarMain = document.getElementById('pin-bar-main'); // 阶段十五：置顶条内容区，点击定位原消息
 
     // ===== 会话内搜索元素 =====
     var convSearchBtn = document.getElementById('conv-search-btn');
@@ -1097,6 +1098,25 @@
             msg_id: 0,
             content: 'unpin'
         });
+    });
+
+    // 阶段十五增强：点击置顶条定位原消息，复用会话内搜索的定位高亮机制
+    // 消息已在窗口内直接高亮，未加载则向前翻页查找；原消息不可见时由翻页上限兜底提示
+    // 原实现：置顶条仅展示内容，点击无响应
+    pinBarMain.addEventListener('click', function () {
+        var info = pinInfo[currentChatUser];
+        if (!info || !info.msg_id) return;
+        var el = messageList.querySelector('.message[data-msg-id="' + info.msg_id + '"]');
+        if (el) {
+            // 消息已在窗口中：直接定位高亮
+            highlightMessage(el);
+            return;
+        }
+        // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染）
+        locateState.active = true;
+        locateState.msgId = info.msg_id;
+        locateState.page = 1;
+        loadNextLocatePage();
     });
 
     // ===== 关键词搜索：回车搜索，结果面板展示，点击跳转会话 =====

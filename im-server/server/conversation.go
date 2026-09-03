@@ -200,6 +200,16 @@ func (s *Server) handleConvClear(c *Client, msg *protocol.Message) {
 		Where("user_id = ? AND target = ?", c.username, target).
 		Update("last_msg", "")
 
+	// 阶段十五增强：清空联动置顶——清空者为置顶人时自动取消置顶并同步双方
+	// （清空者视图内该会话消息已全部删除，置顶条不应继续展示；对方清空不影响置顶）
+	// 原实现：清空不处理置顶记录，置顶者清空后置顶条仍展示已清空的消息
+	var pin model.MessagePin
+	if err := store.DB.Where("conv_key = ? AND pin_user = ?", convKey(c.username, target), c.username).
+		First(&pin).Error; err == nil {
+		store.DB.Delete(&model.MessagePin{}, pin.ID)
+		s.syncPinByKey(pin.ConvKey)
+	}
+
 	s.sendError(c, "聊天记录已清空")
 	s.pushConvList(c)
 }
@@ -216,6 +226,16 @@ func (s *Server) handleConvDelete(c *Client, msg *protocol.Message) {
 	// 原实现：仅批量更新 is_read，会话删除重建后水位从 0 开始，旧消息回执会重复写库+转发
 	if target != "" {
 		s.markConvRead(c.username, target)
+	}
+
+	// 阶段十五增强：删除会话联动置顶——会话删除者为置顶人时自动取消置顶并同步双方，
+	// 防止会话行删除后登录补发孤儿置顶（pushPinList 仍会推送已删除会话的置顶）
+	// 原实现：删除会话不处理置顶记录，置顶者删除会话重登后仍被还原已删除会话的置顶条
+	var pin model.MessagePin
+	if err := store.DB.Where("conv_key = ? AND pin_user = ?", convKey(c.username, target), c.username).
+		First(&pin).Error; err == nil {
+		store.DB.Delete(&model.MessagePin{}, pin.ID)
+		s.syncPinByKey(pin.ConvKey)
 	}
 
 	s.sendError(c, "会话已删除")

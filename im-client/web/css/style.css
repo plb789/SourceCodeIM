@@ -961,6 +961,8 @@ html, body {
     white-space: nowrap;
     text-overflow: ellipsis;
     color: var(--text);
+    /* 阶段十五：点击置顶条定位原消息 */
+    cursor: pointer;
 }
 
 .pin-bar-user {
