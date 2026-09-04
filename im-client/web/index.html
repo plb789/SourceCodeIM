@@ -35,6 +35,8 @@
                 </div>
                 <div class="nav-icon sidebar-tab" data-tab="friends" title="通讯录">
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-3.31 0-8 1.67-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-3.33-4.69-5-8-5z"/></svg>
+                    <!-- 阶段二十九：通讯录图标红点角标（有待处理好友申请时显示，微信同款） -->
+                    <span id="nav-friends-badge" class="nav-badge hidden"></span>
                 </div>
             </div>
             <div class="nav-bottom">
@@ -64,6 +66,14 @@
 
             <!-- 好友面板（好友 Tab） -->
             <div id="friends-panel" class="friends-panel hidden">
+                <!-- 阶段二十九：微信式"新的朋友"入口（好友申请归口，红点角标显示待处理数） -->
+                <div id="new-friends-entry" class="new-friends-entry" title="查看好友申请">
+                    <span class="new-friends-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm11-4V7h-2v3h-3v2h3v3h2v-3h3v-2z"/></svg>
+                    </span>
+                    <span class="new-friends-text">新的朋友</span>
+                    <span id="new-friends-badge" class="new-friends-badge hidden"></span>
+                </div>
                 <ul id="user-list" class="user-list">
                     <li class="user-item group-item active" data-user="">群聊</li>
                 </ul>
@@ -98,6 +108,14 @@
                     <button id="conv-search-close" title="关闭">×</button>
                 </div>
                 <div id="conv-search-results" class="conv-search-results hidden"></div>
+            </div>
+            <!-- 阶段二十九：新的朋友浮层（微信式好友申请列表，同意/拒绝操作归口） -->
+            <div id="new-friends-panel" class="conv-search hidden">
+                <div class="conv-search-bar">
+                    <span class="new-friends-title">新的朋友</span>
+                    <button id="new-friends-close" title="关闭">×</button>
+                </div>
+                <div id="new-friends-list" class="new-friends-list"></div>
             </div>
             <!-- 微信风格输入区：工具栏 + 输入框 + 底部操作行 -->
             <div class="input-bar">
@@ -171,7 +189,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.12"></script>
-    <script src="js/chat.js?v=1.22"></script>
+    <script src="js/socket.js?v=1.13"></script>
+    <script src="js/chat.js?v=1.23"></script>
 </body>
 </html>

@@ -120,6 +120,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleFriendRequest(c, msg)
 	case protocol.MsgTypeFriendRequestResp:
 		s.handleFriendRequestResp(c, msg)
+	// 阶段二十九：好友申请列表查询（微信式"新的朋友"归口）
+	case protocol.MsgTypeFriendReqList:
+		s.handleFriendReqList(c, msg)
 	case protocol.MsgTypeFriendDelete:
 		s.handleFriendDelete(c, msg)
 	case protocol.MsgTypeBlacklist:

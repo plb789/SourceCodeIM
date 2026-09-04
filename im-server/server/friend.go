@@ -59,6 +59,56 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 	logger.Info("好友申请：%s -> %s", c.username, msg.ToUser)
 }
 
+// FriendReqItem 好友申请列表条目（阶段二十九：微信式"新的朋友"）
+type FriendReqItem struct {
+	ID         uint   `json:"id"`
+	FromUser   string `json:"from_user"`
+	Message    string `json:"message"`
+	Status     int8   `json:"status"` // 0待处理 1已同意 2已拒绝
+	CreateTime int64  `json:"create_time"`
+	Avatar     string `json:"avatar"`
+}
+
+// handleFriendReqList 处理好友申请列表请求：返回本人收到的全部申请记录与待处理数量（服务端归口）
+// 阶段二十九：原实现仅依赖临时弹窗通知，弹窗被关闭或覆盖后申请无法找回，现提供微信式"新的朋友"列表归口查询
+func (s *Server) handleFriendReqList(c *Client, msg *protocol.Message) {
+	var reqs []model.FriendRequest
+	store.DB.Where("to_user = ?", c.username).Order("id desc").Find(&reqs)
+
+	items := make([]FriendReqItem, 0, len(reqs))
+	pending := 0
+	for _, r := range reqs {
+		if r.Status == 0 {
+			pending++
+		}
+		avatar := ""
+		var u model.User
+		if err := store.DB.Where("username = ?", r.FromUser).First(&u).Error; err == nil {
+			avatar = u.Avatar
+		}
+		items = append(items, FriendReqItem{
+			ID:         r.ID,
+			FromUser:   r.FromUser,
+			Message:    r.Message,
+			Status:     r.Status,
+			CreateTime: r.CreateTime.Unix(),
+			Avatar:     avatar,
+		})
+	}
+
+	content, _ := json.Marshal(map[string]interface{}{
+		"list":    items,
+		"pending": pending,
+	})
+	data, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeFriendReqListResp,
+		ToUser:    c.username,
+		Content:   string(content),
+		Timestamp: time.Now().Unix(),
+	})
+	c.send(data)
+}
+
 // handleFriendRequestResp 处理好友申请响应（同意/拒绝）
 func (s *Server) handleFriendRequestResp(c *Client, msg *protocol.Message) {
 	// 查找待处理的申请
@@ -87,6 +137,18 @@ func (s *Server) handleFriendRequestResp(c *Client, msg *protocol.Message) {
 	// 双方刷新好友列表
 	s.refreshFriendList(req.FromUser)
 	s.refreshFriendList(req.ToUser)
+
+	// 阶段二十九：同步处理结果给申请方在线连接（微信式"对方已同意/拒绝你的好友申请"提示；多端同步）
+	// 原实现：仅刷新双方好友列表，申请方无任何提示，需自行发现好友列表变化
+	respData, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeFriendRequestResp,
+		FromUser:  c.username, // 处理人（申请方视角为"对方"）
+		ToUser:    req.FromUser,
+		Content:   msg.Content, // agree/reject
+		Timestamp: time.Now().Unix(),
+		MsgID:     req.ID,
+	})
+	s.sendToUser(req.FromUser, respData)
 }
 
 // handleFriendDelete 删除好友

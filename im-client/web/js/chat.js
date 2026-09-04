@@ -59,6 +59,15 @@
     var convSearchClose = document.getElementById('conv-search-close');
     var convSearchResults = document.getElementById('conv-search-results');
 
+    // ===== 阶段二十九：新的朋友元素（微信式好友申请归口） =====
+    var newFriendsEntry = document.getElementById('new-friends-entry');
+    var newFriendsBadge = document.getElementById('new-friends-badge');
+    var navFriendsBadge = document.getElementById('nav-friends-badge'); // 通讯录导航图标红点（微信同款，无需切Tab即可见）
+    var newFriendsPanel = document.getElementById('new-friends-panel');
+    var newFriendsClose = document.getElementById('new-friends-close');
+    var newFriendsListEl = document.getElementById('new-friends-list');
+    var friendReqListTimer = null; // 申请列表刷新防抖定时器（登录补发多条申请时仅触发一次拉取）
+
     // ===== 自定义弹窗 / Toast 提示（禁止使用系统默认弹窗） =====
     var modalMask = document.getElementById('modal-mask');
     var modalTitle = document.getElementById('modal-title');
@@ -867,22 +876,120 @@
         convMenu.classList.add('hidden');
     });
 
-    // 好友申请
+    // ===== 好友申请（阶段二十九：微信式"新的朋友"归口） =====
     var processedRequests = {}; // 已处理的申请 ID，用于去重
+    // 原实现：收到申请直接弹 showConfirm 确认弹窗（同意/拒绝），
+    // 缺陷：弹窗可被随手关闭或被后续申请覆盖，关闭后申请无处可寻，导致对方以为申请丢失
+    // IMSocket.on(MSG.FRIEND_REQUEST, function (msg) {
+    //     if (msg.msg_id) {
+    //         if (processedRequests[msg.msg_id]) return;
+    //         processedRequests[msg.msg_id] = true;
+    //     }
+    //     showConfirm('好友申请', msg.from_user + ' 请求添加你为好友，是否同意？', function () {
+    //         IMSocket.send({
+    //             msg_type: MSG.FRIEND_REQUEST_RESP,
+    //             to_user: msg.from_user,
+    //             content: 'agree'
+    //         });
+    //     }, '同意', '拒绝');
+    // });
     IMSocket.on(MSG.FRIEND_REQUEST, function (msg) {
-        // 依据申请记录 ID 去重，避免重复弹窗
+        // 依据申请记录 ID 去重（实时推送与登录补发可能重复）
         if (msg.msg_id) {
             if (processedRequests[msg.msg_id]) return;
             processedRequests[msg.msg_id] = true;
         }
-        // 自定义确认弹窗：同意 / 拒绝
-        showConfirm('好友申请', msg.from_user + ' 请求添加你为好友，是否同意？', function () {
-            IMSocket.send({
-                msg_type: MSG.FRIEND_REQUEST_RESP,
-                to_user: msg.from_user,
-                content: 'agree'
+        // 微信式轻提醒：Toast 提示 + "新的朋友"红点角标，申请进入列表随时可处理，不再弹确认框
+        showToast(msg.from_user + ' 请求添加你为好友');
+        refreshFriendReqList();
+    });
+
+    // 拉取好友申请列表（服务端归口：角标=待处理数量，列表=全部申请记录），300ms 防抖合并登录补发的连续多条
+    function refreshFriendReqList() {
+        clearTimeout(friendReqListTimer);
+        friendReqListTimer = setTimeout(function () {
+            IMSocket.send({ msg_type: MSG.FRIEND_REQ_LIST });
+        }, 300);
+    }
+
+    // 申请列表响应：更新角标，面板打开时同步渲染列表
+    IMSocket.on(MSG.FRIEND_REQ_LIST_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        var pending = data.pending || 0;
+        // 双角标同步：通讯录导航图标（微信同款）与好友面板"新的朋友"入口条
+        var badgeText = pending > 0 ? (pending > 99 ? '99+' : String(pending)) : '';
+        [newFriendsBadge, navFriendsBadge].forEach(function (el) {
+            if (!el) return;
+            if (badgeText) {
+                el.textContent = badgeText;
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+                el.textContent = '';
+            }
+        });
+        if (newFriendsPanel.classList.contains('hidden')) return; // 面板未打开时仅更新角标
+        renderFriendReqList(data.list || []);
+    });
+
+    // 渲染"新的朋友"申请列表（头像/用户名/验证消息/时间/状态或同意拒绝按钮）
+    function renderFriendReqList(list) {
+        if (!list.length) {
+            newFriendsListEl.innerHTML = '<div class="new-friends-empty">暂无好友申请</div>';
+            return;
+        }
+        var html = '';
+        list.forEach(function (r) {
+            var avatarHtml = r.avatar
+                ? '<img class="avatar" src="' + r.avatar + '" alt="">'
+                : '<div class="avatar placeholder"></div>';
+            var right = '';
+            if (r.status === 0) {
+                right = '<button class="req-btn primary" data-req-from="' + r.from_user + '" data-req-act="agree">同意</button>'
+                      + '<button class="req-btn" data-req-from="' + r.from_user + '" data-req-act="reject">拒绝</button>';
+            } else if (r.status === 1) {
+                right = '<span class="req-status">已同意</span>';
+            } else {
+                right = '<span class="req-status">已拒绝</span>';
+            }
+            var timeStr = r.create_time ? new Date(r.create_time * 1000).toLocaleString() : '';
+            html += '<div class="req-item">' + avatarHtml
+                + '<div class="req-info"><div class="req-name">' + r.from_user + '</div>'
+                + '<div class="req-msg">' + (r.message || '请求添加你为好友') + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
+                + '<div class="req-actions">' + right + '</div></div>';
+        });
+        newFriendsListEl.innerHTML = html;
+        newFriendsListEl.querySelectorAll('.req-btn').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                IMSocket.send({
+                    msg_type: MSG.FRIEND_REQUEST_RESP,
+                    to_user: this.getAttribute('data-req-from'),
+                    content: this.getAttribute('data-req-act') === 'agree' ? 'agree' : 'reject'
+                });
+                // 处理后刷新自身申请列表与角标（服务端归口，pending 递减、行内状态更新）
+                refreshFriendReqList();
             });
-        }, '同意', '拒绝');
+        });
+    }
+
+    // 入口点击：复用好友 Tab 切换逻辑后打开申请面板并拉取最新列表
+    newFriendsEntry.addEventListener('click', function () {
+        var friendsTab = document.querySelector('.sidebar-tab[data-tab="friends"]');
+        if (friendsTab && !friendsTab.classList.contains('active')) friendsTab.click();
+        newFriendsPanel.classList.remove('hidden');
+        newFriendsListEl.innerHTML = '<div class="new-friends-empty">加载中...</div>';
+        IMSocket.send({ msg_type: MSG.FRIEND_REQ_LIST });
+    });
+    newFriendsClose.addEventListener('click', function () {
+        newFriendsPanel.classList.add('hidden');
+    });
+
+    // 申请方收到处理结果同步：微信式"对方已同意/拒绝你的好友申请"提示（多端同步由服务端归口推送）
+    IMSocket.on(MSG.FRIEND_REQUEST_RESP, function (msg) {
+        if (msg.from_user === IMSocket.getUsername()) return; // 过滤本端回显
+        showToast(msg.from_user + (msg.content === 'agree' ? ' 已同意你的好友申请' : ' 已拒绝你的好友申请'));
     });
 
     // 上下线通知：更新好友在线状态

@@ -1281,3 +1281,150 @@ html, body {
 ::-webkit-scrollbar-corner {
     background: transparent;
 }
+
+/* ===== 阶段二十九：新的朋友（微信式好友申请归口） ===== */
+/* 好友面板顶部入口条 */
+.new-friends-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    margin: 6px 6px 0;
+    border-radius: 8px;
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    position: relative;
+    transition: background 0.15s;
+}
+
+.new-friends-entry:hover {
+    background: var(--hover);
+}
+
+.new-friends-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.new-friends-text {
+    font-size: 14px;
+    color: var(--text);
+}
+
+/* 待处理申请数红点角标（微信红点样式） */
+.new-friends-badge {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 11px;
+    text-align: center;
+}
+
+/* 申请列表浮层标题 */
+.new-friends-title {
+    flex: 1;
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--text);
+}
+
+/* 申请列表容器：复用全局自定义滚动条 */
+.new-friends-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    background: var(--panel-bg);
+}
+
+/* 单条申请行 */
+.req-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.req-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.req-name {
+    font-size: 14px;
+    color: var(--text);
+}
+
+.req-msg {
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.req-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* 同意/拒绝按钮：主题色归口 */
+.req-btn {
+    padding: 4px 14px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.req-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.req-btn.primary:hover {
+    opacity: 0.85;
+}
+
+.req-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.req-btn.primary:hover {
+    color: #fff;
+}
+
+/* 已处理状态文本 */
+.req-status {
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+/* 空列表/加载中提示 */
+.new-friends-empty {
+    padding: 24px 16px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
