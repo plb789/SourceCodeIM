@@ -330,12 +330,14 @@
     });
 
     // ===== 图片 / 文件发送（基于分片协议 msg_type=3，仅私聊） =====
+    // 阶段二十六：群聊图片改走 HTTP 上传链路（sendGroupImage，服务端广播），分片协议仍为私聊专属
     var CHUNK_SIZE = 4 * 1024; // 与开发文档一致：4KB 分片
     var pendingUploads = [];   // 等待服务端回执 file_id 的上传任务队列
     var fileBuffers = {};      // 接收中的文件组装缓冲 file_id -> {name,size,total,chunks,count}
 
     imageBtn.addEventListener('click', function () {
-        if (currentChatUser === '') { showToast('群聊暂不支持发送图片'); return; }
+        // 原实现：群聊视图拦截提示"群聊暂不支持发送图片"，阶段二十六放开——群聊图片走 HTTP 上传链路
+        // if (currentChatUser === '') { showToast('群聊暂不支持发送图片'); return; }
         imageInput.click();
     });
     fileBtn.addEventListener('click', function () {
@@ -343,7 +345,12 @@
         fileInput.click();
     });
     imageInput.addEventListener('change', function () {
-        if (imageInput.files[0]) sendFile(imageInput.files[0]);
+        if (imageInput.files[0]) {
+            // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
+            // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
+            if (currentChatUser === '') sendGroupImage(imageInput.files[0]);
+            else sendFile(imageInput.files[0]);
+        }
         imageInput.value = '';
     });
     fileInput.addEventListener('change', function () {
@@ -434,6 +441,56 @@
         if (el) el.setAttribute('data-msg-id', msg.msg_id);
     });
 
+    // ===== 阶段二十六：群聊图片发送（HTTP 上传 + 服务端广播，不走点对点分片协议） =====
+    // 流程：本地立即渲染（blob 预览 + nonce 标识）→ POST /upload/group/image → 服务端落库
+    // → 服务端广播 MSG.GROUP_IMAGE（含 msg_id）→ 发送端按 nonce 精确回填 msg_id，其余用户实时渲染
+    function sendGroupImage(file) {
+        if (!isImageName(file.name)) { showToast('群聊仅支持发送图片'); return; }
+        // nonce：本地气泡唯一标识，广播回填 msg_id 时精确匹配（对齐 FILE_PERSISTED 按 file_id 匹配的归口思路，并发发送不错位）
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        var url = URL.createObjectURL(file);
+        var bubble = appendImageMsg(IMSocket.getUsername(), url, 'self');
+        bubble.setAttribute('data-nonce', nonce);
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload/group/image?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&nonce=' + encodeURIComponent(nonce), {
+            method: 'POST',
+            body: fd
+        }).then(function (res) {
+            // 异常加固：HTTP 4xx/5xx（文件过大/非图片/未在线等）原被静默吞掉，仅网络错误触发 catch，此处统一告警
+            if (!res.ok) console.warn('群聊图片上传被拒绝:', res.status);
+        }).catch(function (e) {
+            // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级
+            console.warn('群聊图片上传失败（不影响本地预览）:', e);
+        });
+    }
+
+    // 群聊图片广播：发送端本地气泡按 nonce 回填 msg_id（撤回/删除/置顶能力前提），其余用户实时渲染
+    IMSocket.on(MSG.GROUP_IMAGE, function (msg) {
+        if (currentChatUser !== '') return; // 不在群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
+        // msg_id 去重（并发加固）：多端重复广播、离线补发与广播重叠、
+        // 发送端切会话后返回群聊（历史已渲染该图）等场景，防止重复气泡
+        // 原实现：无去重，重复投递会渲染重复图片气泡
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var meta = {};
+        try { meta = JSON.parse(msg.content); } catch (e) {}
+        var isMine = msg.from_user === IMSocket.getUsername();
+        if (isMine && meta.nonce) {
+            // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
+            // 多端场景：其他设备无带 nonce 的本地气泡，走下方通用渲染分支
+            var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            if (mineEl) {
+                if (msg.msg_id) mineEl.setAttribute('data-msg-id', msg.msg_id);
+                if (msg.timestamp) mineEl.setAttribute('data-ts', msg.timestamp);
+                return;
+            }
+        }
+        var el = appendImageMsg(msg.from_user, meta.url || '', isMine ? 'self' : 'other');
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+    });
+
     // 文件消息处理：自己收到的是文件头回执（开始上传），对方的是文件头/分片（接收组装）
     IMSocket.on(MSG.FILE, function (msg) {
         var isMine = msg.from_user === IMSocket.getUsername();
@@ -504,7 +561,8 @@
 
     // ===== 截图发送：屏幕捕获 -> 画布截帧 -> 按图片发送 =====
     screenshotBtn.addEventListener('click', function () {
-        if (currentChatUser === '') { showToast('群聊暂不支持发送截图'); return; }
+        // 原实现：群聊视图拦截提示"群聊暂不支持发送截图"，阶段二十六放开——截图即图片，走群聊 HTTP 上传链路
+        // if (currentChatUser === '') { showToast('群聊暂不支持发送截图'); return; }
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
             showToast('当前环境不支持截图，请使用 PC 端');
             return;
@@ -521,7 +579,10 @@
                 stream.getTracks().forEach(function (t) { t.stop(); });
                 canvas.toBlob(function (blob) {
                     if (!blob) { showToast('截图失败'); return; }
-                    sendFile(new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' }));
+                    var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
+                    // 阶段二十六：群聊视图截图走 HTTP 上传链路（截图即图片），私聊仍走分片协议
+                    if (currentChatUser === '') sendGroupImage(shot);
+                    else sendFile(shot);
                 }, 'image/png');
             };
         }).catch(function () {

@@ -36,6 +36,7 @@ const (
 	MsgTypeConvSearch        = 31 // 会话内消息搜索（当前聊天窗口内）
 	MsgTypeConvSearchResp    = 32 // 会话内搜索响应
 	MsgTypeFilePersisted     = 33 // 聊天文件持久化完成同步（携带 file_id + msg_id，双方实时气泡回填消息 ID）
+	MsgTypeGroupImage        = 34 // 群聊图片消息（阶段二十六：HTTP 上传后广播，content 为 JSON：url/name/size/nonce）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -27,9 +27,10 @@ const (
 
 // persistedMsgContent 持久化消息的 content 结构
 type persistedMsgContent struct {
-	URL  string `json:"url"`  // 静态资源 URL（/static/upload/xxx）
-	Name string `json:"name"` // 原始文件名
-	Size int64  `json:"size"` // 文件大小（字节）
+	URL   string `json:"url"`             // 静态资源 URL（/static/upload/xxx）
+	Name  string `json:"name"`            // 原始文件名
+	Size  int64  `json:"size"`            // 文件大小（字节）
+	Nonce string `json:"nonce,omitempty"` // 阶段二十六：客户端本地气泡标识（仅群聊图片携带，广播回填 msg_id 时精确匹配，历史渲染忽略）
 }
 
 // isImageExt 判断扩展名是否为图片（图片落库为图片消息，其余为文件消息）
@@ -180,4 +181,131 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})
+}
+
+// HandleGroupImageUpload 群聊图片上传：POST /upload/group/image?username=xxx&nonce=yyy（阶段二十六）
+// 群聊不走分片协议（分片协议为点对点设计，im_file 为收发双方模型），改走 HTTP 上传：
+// 校验图片格式 → 保存文件 → 落库 im_message（msg_type=4，ToUser 为空表示群聊）
+// → 广播 MsgTypeGroupImage 给全部在线用户（含发送方多端同步）→ 离线用户入队 → 会话摘要更新
+func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	nonce := r.URL.Query().Get("nonce") // 客户端生成的本地气泡标识：广播回填 msg_id 时按 nonce 精确匹配，杜绝并发发送错位
+	if username == "" {
+		http.Error(w, "缺少参数", http.StatusBadRequest)
+		return
+	}
+	// 在线校验（并发加固）：要求所声明用户存在活跃 WS 连接，防止离线/不存在用户名被冒用上传。
+	// 完整身份防伪需 WS 下发上传令牌（当前与 /upload/avatar 信任 username 参数的鉴权水位一致，此处为轻量活性锚点）
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		logger.Warn("群聊图片上传拒绝： %s 无活跃连接", username)
+		return
+	}
+
+	// 大小限制（读配置，缺省 20MB，与私聊文件传输同规则）
+	maxSize := int64(20 << 20)
+	if s.cfg.MaxFileSize > 0 {
+		maxSize = int64(s.cfg.MaxFileSize)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+	if err := r.ParseMultipartForm(maxSize); err != nil {
+		http.Error(w, "文件过大或解析失败", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "缺少文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// 群聊仅支持图片：按扩展名校验，非图片直接拒绝
+	if !isImageExt(filepath.Ext(header.Filename)) {
+		http.Error(w, "群聊仅支持发送图片", http.StatusBadRequest)
+		return
+	}
+	// 危险文件拦截（双保险，与分片传输同规则）
+	if isDangerousFile(header.Filename) {
+		http.Error(w, "禁止传输可执行文件", http.StatusBadRequest)
+		logger.Warn("群聊图片拦截： %s 尝试上传危险文件 %s", username, header.Filename)
+		return
+	}
+
+	// 存储目录（读配置，位于前端静态目录内，静态服务已托管，URL 可直接访问）
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = "../im-client/web/static/upload"
+	}
+
+	// 生成唯一文件名（时间戳+随机串，保留原扩展名；原始文件名存入消息 content）
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	b := make([]byte, 8)
+	rand.Read(b)
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hex.EncodeToString(b), ext)
+
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		http.Error(w, "目录创建失败", http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(dir, filename)
+	out, err := os.Create(dst)
+	if err != nil {
+		http.Error(w, "文件保存失败", http.StatusInternalServerError)
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		http.Error(w, "文件写入失败", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	url := "/static/upload/" + filename
+
+	// 落库消息：msg_type=4 图片消息，ToUser 为空表示群聊（与群聊文字消息同命名空间）
+	// nonce 写入 content 随广播下发：发送端本地气泡按 nonce 精确回填 msg_id（历史渲染不依赖该字段）
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
+	record := model.Message{
+		MsgType:  int8(MsgTypeImageSaved),
+		FromUser: username,
+		ToUser:   "",
+		Content:  string(contentBytes),
+	}
+	if err := store.DB.Create(&record).Error; err != nil {
+		http.Error(w, "消息落库失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 广播群聊图片消息给全部在线用户（含发送方，多端同步；发送端本地气泡按 nonce 精确回填 msg_id）
+	notice := &protocol.Message{
+		MsgType:   protocol.MsgTypeGroupImage,
+		FromUser:  username,
+		ToUser:    "",
+		Content:   string(contentBytes),
+		MsgID:     record.ID,
+		Timestamp: time.Now().Unix(),
+	}
+	data, _ := json.Marshal(notice)
+	s.hub.Broadcast(data)
+
+	// 群聊离线消息：给所有离线的注册用户入队（与群聊文字消息行为一致）
+	var usernames []string
+	if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err == nil {
+		for _, name := range usernames {
+			if name != username && !s.isOnline(name) {
+				s.queueOffline(name, notice)
+			}
+		}
+	}
+
+	// 更新所有在线用户的群聊会话摘要为 [图片] 并推送（离线用户登录时 ensureGroupConv 兜底存在）
+	for _, name := range s.hub.Usernames() {
+		s.touchConversation(name, "", "[图片]")
+		s.notifyConvUpdate(name)
+	}
+
+	logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
 }

@@ -116,7 +116,9 @@ func convMessageQuery(userID, target string) *gorm.DB {
 	query := store.DB.Model(&model.Message{})
 	if target == "" {
 		// 群聊：全部群消息
-		return query.Where("msg_type = ?", 1)
+		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
+		// 原实现：return query.Where("msg_type = ?", 1)
+		return query.Where("msg_type IN ? AND to_user = ''", []int{1, 4})
 	}
 	// 私聊：双方互发的消息
 	return query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",

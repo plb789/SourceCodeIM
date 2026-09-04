@@ -45,7 +45,8 @@
         MSG_PIN_SYNC: 30,
         CONV_SEARCH: 31,
         CONV_SEARCH_RESP: 32,
-        FILE_PERSISTED: 33
+        FILE_PERSISTED: 33,
+        GROUP_IMAGE: 34  // 阶段二十六：群聊图片消息广播（HTTP 上传落库后服务端下发，content 为 JSON：url/name/size/nonce）
     };
 
     function connect(username, password) {

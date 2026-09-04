@@ -167,7 +167,10 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 	var users []string // 需要更新摘要的会话归属者
 	if record.ToUser == "" {
 		// 群聊会话：全部群消息，摘要更新所有已存在群会话行的用户
-		query = query.Where("msg_type = ?", 1)
+		// 阶段二十六：纳入群聊图片消息(4)——撤回群聊图片后摘要应重算为最新可见的图片/文字消息；
+		// 需限定 to_user 为空，私聊图片同样为 msg_type=4 但 to_user 非空
+		// 原实现：query = query.Where("msg_type = ?", 1)
+		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4})
 		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
 	} else {
 		// 私聊会话：双方互发消息，摘要更新双方

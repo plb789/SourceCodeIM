@@ -51,6 +51,8 @@ func main() {
 	http.HandleFunc("/upload/avatar", srv.HandleAvatarUpload)
 	// 聊天文件持久化上传接口（阶段二十四：图片/文件消息落库，历史可重现）
 	http.HandleFunc("/upload/file", srv.HandleFileUpload)
+	// 群聊图片上传接口（阶段二十六：HTTP 上传落库 + 广播群成员，不走点对点分片协议）
+	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
 	// 静态文件托管前端（im-client/web）
 	http.Handle("/", http.FileServer(http.Dir("../im-client/web")))
 

@@ -1,0 +1,6 @@
+S3-API: http://172.16.33.231:9000
+web：http://172.16.33.231
+账号：gyxny
+密码：Gyxny@2023
+ACCESS_KEY：FiPY0zVQYgOadEUVhMqf
+SECRET_KEY：Qv2QE25WnoDg1Xd72LvdD6oWkxaafxHt4zawVp7Z

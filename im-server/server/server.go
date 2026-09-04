@@ -423,7 +423,9 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 
 	if msg.ToUser == "" {
 		// 群聊历史
-		query = query.Where("msg_type = ?", 1)
+		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
+		// 原实现：query.Where("msg_type = ?", 1)
+		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4})
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
