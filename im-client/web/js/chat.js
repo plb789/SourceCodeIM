@@ -3,6 +3,11 @@
     var MSG = IMSocket.MSG;
     var currentChatUser = ''; // 空字符串表示群聊
     var friendList = []; // 好友列表 [{username, remark, group, online, avatar}]
+    // 头像缺失修复：登录用户自己头像（服务端 LOGIN_RESP 下发，上传成功后同步更新），供消息气泡头像渲染
+    var myAvatar = '';
+    // 头像缺失修复：在线用户头像表（服务端 USER_LIST 推送，username -> avatar），
+    // 群聊发送者可能不在好友列表（无法从 friendList 取头像），从在线用户列表兜底获取
+    var userAvatars = {};
     // 原实现：var unreadCount = {}; 本地未读计数，与服务端 cv.unread 双源不一致，多端已读后角标不同步
     // 阶段十一：未读数服务端归口，统一使用服务端 CONV_LIST 推送的 unread 渲染，删除本地 unreadCount
     var readWatermark = {}; // 对方用户名 -> 已读水位（对方已读到的我方最大消息 ID），跨会话保留供历史渲染即时应用
@@ -168,7 +173,13 @@
             method: 'POST', body: formData
         }).then(function (r) { return r.json(); })
           .then(function (data) {
-              if (data.avatar) currentAvatarEl.src = data.avatar;
+              if (data.avatar) {
+                  currentAvatarEl.src = data.avatar;
+                  // 头像缺失修复：上传成功同步更新消息气泡头像数据源，后续发送的消息立即使用新头像
+                  // 原代码：仅更新导航栏 currentAvatarEl.src
+                  myAvatar = data.avatar;
+                  userAvatars[IMSocket.getUsername()] = data.avatar;
+              }
               else if (data.error) showToast(data.error);
           }).catch(function () { showToast('头像上传失败'); });
         avatarFileEl.value = '';
@@ -609,11 +620,38 @@
         }
         if (ok) {
             currentUserEl.textContent = IMSocket.getUsername();
+            // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
+            // 同步更新导航栏头像与消息气泡头像数据源
+            // 原代码：无 avatar 解析，导航栏头像登录后为空，消息气泡无头像可用
+            try {
+                var loginInfo = JSON.parse(msg.content);
+                if (loginInfo && loginInfo.avatar) {
+                    myAvatar = loginInfo.avatar;
+                    currentAvatarEl.src = myAvatar;
+                }
+            } catch (e) {}
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
         } else {
             showToast('登录失败：' + msg.content);
         }
+    });
+
+    // 头像缺失修复：在线用户列表推送（登录/上下线时服务端广播），
+    // 记录全部在线用户头像（含自己），群聊发送者不在好友列表时从此处兜底取头像
+    IMSocket.on(MSG.USER_LIST, function (msg) {
+        var infos = [];
+        try { infos = JSON.parse(msg.content) || []; } catch (e) { infos = []; }
+        infos.forEach(function (u) {
+            if (u && u.username) userAvatars[u.username] = u.avatar || '';
+            // 自己头像以 LOGIN_RESP/上传结果为最高优先级，USER_LIST 仅在缺失时兜底
+            if (u.username === IMSocket.getUsername()) {
+                if (!myAvatar && u.avatar) {
+                    myAvatar = u.avatar;
+                    currentAvatarEl.src = myAvatar;
+                }
+            }
+        });
     });
 
     IMSocket.on(MSG.ERROR, function (msg) {
@@ -1107,7 +1145,11 @@
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
         nameEl.textContent = r.from_user;
-        div.appendChild(nameEl);
+        // 头像缺失修复：与文字消息一致，头像 + 内容列（昵称/气泡/状态）微信风格结构
+        // 原代码：div.appendChild(nameEl); 平铺在 .message 下，无头像
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        body.appendChild(nameEl);
         if (r.msg_type === 4) {
             // 图片消息：URL 直出，点击查看大图
             var bubbleImg = document.createElement('div');
@@ -1119,7 +1161,7 @@
                 window.open(meta.url, '_blank');
             });
             bubbleImg.appendChild(img);
-            div.appendChild(bubbleImg);
+            body.appendChild(bubbleImg);
         } else {
             // 文件消息：文件卡片（图标+文件名+大小），点击下载
             var bubbleFile = document.createElement('div');
@@ -1148,7 +1190,7 @@
                     a.click();
                 });
             }
-            div.appendChild(bubbleFile);
+            body.appendChild(bubbleFile);
         }
         // 自己发送的私聊消息显示已读/未读状态（与文字消息一致）
         if (isMine && isPrivate && r.id) {
@@ -1156,8 +1198,11 @@
             status.className = 'msg-status' + (isRead ? ' read' : '');
             status.setAttribute('data-msg-id', r.id);
             status.textContent = isRead ? '已读' : '未读';
-            div.appendChild(status);
+            body.appendChild(status);
         }
+        // 头像缺失修复：头像在左（他人）/右（自己）
+        div.appendChild(getAvatarEl(r.from_user));
+        div.appendChild(body);
         return div;
     }
 
@@ -1536,6 +1581,41 @@
     }
 
     // ===== 消息渲染 =====
+    // 头像缺失修复：按发送者解析头像并构建头像元素（返回 DOM 节点）
+    // 优先级：自己（LOGIN_RESP/上传成功下发） > 好友列表（FRIEND_LIST 携带 avatar） > 在线用户表（USER_LIST 推送） > 首字母占位
+    function getAvatarEl(fromUser) {
+        var url = '';
+        if (fromUser === IMSocket.getUsername()) {
+            url = myAvatar;
+        }
+        if (!url) {
+            for (var i = 0; i < friendList.length; i++) {
+                if (friendList[i].username === fromUser) { url = friendList[i].avatar || ''; break; }
+            }
+        }
+        if (!url) url = userAvatars[fromUser] || '';
+        if (url) {
+            var img = document.createElement('img');
+            img.className = 'msg-avatar';
+            img.src = url;
+            img.alt = '';
+            // 头像文件失效（文件被清理/路径变更）时降级为首字母占位，避免破图
+            img.addEventListener('error', function () {
+                img.replaceWith(buildAvatarPlaceholder(fromUser));
+            });
+            return img;
+        }
+        return buildAvatarPlaceholder(fromUser);
+    }
+
+    // 首字母占位头像（与会话列表 conv-avatar 同风格，跟随主题色）
+    function buildAvatarPlaceholder(fromUser) {
+        var ph = document.createElement('div');
+        ph.className = 'msg-avatar placeholder';
+        ph.textContent = (fromUser || '?').charAt(0).toUpperCase();
+        return ph;
+    }
+
     // 构建消息元素（返回 DOM 节点，不插入列表）：供实时消息与历史消息渲染复用
     function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
         var div = document.createElement('div');
@@ -1550,16 +1630,23 @@
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         bubble.textContent = content;
-        div.appendChild(nameEl);
-        div.appendChild(bubble);
+        // 头像缺失修复：改为微信风格结构——头像 + 内容列（昵称/气泡/状态），
+        // 头像在左（他人）/右（自己），由 CSS flex 与 flex-direction:row-reverse 控制
+        // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        body.appendChild(nameEl);
+        body.appendChild(bubble);
         // 自己发送的私聊消息显示已读/未读状态
         if (showReadStatus && type === 'self' && msgId) {
             var status = document.createElement('div');
             status.className = 'msg-status' + (isRead ? ' read' : '');
             status.setAttribute('data-msg-id', msgId);
             status.textContent = isRead ? '已读' : '未读';
-            div.appendChild(status);
+            body.appendChild(status);
         }
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
         return div;
     }
 
@@ -1623,8 +1710,14 @@
             window.open(url, '_blank'); // 点击查看大图
         });
         bubble.appendChild(img);
-        div.appendChild(nameEl);
-        div.appendChild(bubble);
+        // 头像缺失修复：与文字消息一致，头像 + 内容列微信风格结构
+        // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        body.appendChild(nameEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
         return div;
@@ -1667,8 +1760,14 @@
                 a.click();
             });
         }
-        div.appendChild(nameEl);
-        div.appendChild(bubble);
+        // 头像缺失修复：与文字消息一致，头像 + 内容列微信风格结构
+        // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        body.appendChild(nameEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
         return div;

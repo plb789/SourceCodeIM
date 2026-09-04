@@ -157,7 +157,9 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	store.RDB.Set(ctx, store.KeyOnlineUser+user.Username, "online", 120*time.Second)
 
 	// 登录成功响应
-	s.sendLoginResp(c, "ok")
+	// 头像缺失修复：原实现仅下发 result 与 recall_window，前端拿不到自己头像，聊天消息气泡无法渲染头像
+	// 原代码：s.sendLoginResp(c, "ok")
+	s.sendLoginResp(c, "ok", user.Avatar)
 
 	// 批量推送离线消息
 	s.pushOfflineMessages(c)
@@ -489,10 +491,14 @@ func (s *Server) pushUserList() {
 }
 
 // sendLoginResp 发送登录响应（携带服务端撤回时间窗口，供前端撤回菜单判断与窗口配置保持一致）
-func (s *Server) sendLoginResp(c *Client, result string) {
+// 头像缺失修复：追加 avatar 参数，登录时下发登录用户自己头像（服务端归口），供导航栏与消息气泡渲染
+// 原代码：func (s *Server) sendLoginResp(c *Client, result string) {
+func (s *Server) sendLoginResp(c *Client, result string, avatar string) {
 	respInfo, _ := json.Marshal(map[string]interface{}{
 		"result":        result,
 		"recall_window": s.cfg.RecallWindow,
+		// 原代码：无 avatar 字段
+		"avatar": avatar,
 	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,

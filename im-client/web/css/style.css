@@ -448,16 +448,59 @@ html, body {
     padding: 20px;
 }
 
+/* 头像缺失修复：消息改为微信风格 flex 布局——头像 + 内容列（昵称/气泡/状态） */
+/* 原代码：
 .message {
     margin-bottom: 16px;
     max-width: 70%;
 }
+*/
+.message {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 16px;
+    max-width: 70%;
+}
 
+/* 头像缺失修复：自己消息行反转，头像贴右侧、内容列在其左（微信同款） */
+/* 阶段二十三修复：气泡为 inline-block，原仅 margin-left:auto 时气泡停在 70% 盒子左缘（视觉居中），
+   增加 text-align:right 使气泡贴合右侧，微信同款；现 flex 布局下由 row-reverse 控制对齐，text-align 不再需要
+原代码：
 .message.self {
     margin-left: auto;
-    /* 阶段二十三修复：气泡为 inline-block，原仅 margin-left:auto 时气泡停在 70% 盒子左缘（视觉居中），
-       增加 text-align:right 使气泡贴合右侧，微信同款 */
     text-align: right;
+}
+*/
+.message.self {
+    margin-left: auto;
+    flex-direction: row-reverse;
+}
+
+/* 头像缺失修复：消息头像（微信风格圆角方形，36px，与会话头像观感一致） */
+.msg-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    object-fit: cover;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+/* 头像缺失修复：首字母占位头像（无头像用户降级显示，与会话列表 conv-avatar 同风格，跟随主题色） */
+.msg-avatar.placeholder {
+    background: var(--primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+}
+
+/* 头像缺失修复：消息内容列（昵称/气泡/状态纵向排列），min-width:0 保证长文本气泡正常换行 */
+.message-body {
+    min-width: 0;
+    max-width: calc(100% - 46px); /* 减去头像 36px + 间距 10px，气泡不超出 70% 盒子 */
 }
 
 .message-name {
