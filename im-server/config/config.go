@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,7 +21,9 @@ type Config struct {
 	MaxConnections int `yaml:"max_connections"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
-	// 阶段二十四：聊天文件持久化存储目录（相对服务端运行目录，位于前端静态目录内可直接 URL 访问）
+	// 前端静态目录（web_dir，缺省时从 exe 所在目录逐级向上查找 im-client/web，相对路径基于 exe 所在目录解析）
+	WebDir string `yaml:"web_dir"`
+	// 阶段二十四：聊天文件持久化存储目录（相对路径基于 exe 所在目录解析，缺省时基于 WebDir 推导，位于前端静态目录内可直接 URL 访问）
 	UploadDir string `yaml:"upload_dir"`
 	// 阶段二十四：聊天文件持久化大小上限（字节）
 	MaxFileSize int `yaml:"max_file_size"`
@@ -42,8 +45,10 @@ func Default() *Config {
 		ChunkSize:         4096,
 		MaxConnections:    1000,
 		RecallWindow:      120,
-		UploadDir:         "../im-client/web/static/upload",
-		MaxFileSize:       20 << 20, // 20MB
+		// 原实现：UploadDir: "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
+		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
+		UploadDir:   "",
+		MaxFileSize: 20 << 20, // 20MB
 
 		MySQLDSN:      "root:root@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=Local",
 		RedisAddr:     "127.0.0.1:6379",
@@ -75,12 +80,58 @@ func Load() *Config {
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 90
 	}
+	// 前端静态目录兜底：缺省时从 exe 所在目录逐级向上查找 im-client/web
+	// 原实现：静态目录硬编码相对进程工作目录，从 bin 目录双击 exe 启动会 404
+	// 现改为锚定 exe 所在目录解析，任意目录启动均正确
+	cfg.WebDir = resolveWebDir(cfg.WebDir)
 	// 阶段二十四：文件持久化配置兜底
 	if cfg.UploadDir == "" {
-		cfg.UploadDir = "../im-client/web/static/upload"
+		// 原实现：cfg.UploadDir = "../im-client/web/static/upload"
+		cfg.UploadDir = filepath.Join(cfg.WebDir, "static", "upload")
+	} else {
+		cfg.UploadDir = resolvePath(cfg.UploadDir)
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = 20 << 20
 	}
 	return cfg
+}
+
+// exeDir 返回可执行文件所在目录（路径解析锚点，与进程工作目录无关，支持双击 bin 目录下的 exe 启动）
+func exeDir() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		// 极端情况下获取失败回退进程工作目录
+		return "."
+	}
+	return filepath.Dir(exePath)
+}
+
+// resolvePath 将配置路径解析为绝对路径：绝对路径直接返回，相对路径基于 exe 所在目录解析
+func resolvePath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(exeDir(), p)
+}
+
+// resolveWebDir 解析前端 web 目录：配置项优先，缺省时从 exe 所在目录逐级向上查找 im-client/web
+func resolveWebDir(configured string) string {
+	if configured != "" {
+		return resolvePath(configured)
+	}
+	dir := exeDir()
+	for i := 0; i < 4; i++ {
+		candidate := filepath.Join(dir, "im-client", "web")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	// 兜底：exe 所在目录上上级（与 exe 位于 im-server/bin 的目录结构对应）
+	return filepath.Join(exeDir(), "..", "..", "im-client", "web")
 }

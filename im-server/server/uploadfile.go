@@ -102,9 +102,11 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 存储目录（读配置，位于前端静态目录内，静态服务已托管，URL 可直接访问）
+	// 原实现：dir = "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
+	// 现改为基于配置 WebDir 推导兜底（config.Load 已保证 UploadDir 为锚定 exe 目录的绝对路径，此处仅防御）
 	dir := s.cfg.UploadDir
 	if dir == "" {
-		dir = "../im-client/web/static/upload"
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
 	}
 
 	// 生成唯一文件名（时间戳+随机串，保留原扩展名；原始文件名以 im_file 记录为准）
@@ -232,9 +234,11 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 存储目录（读配置，位于前端静态目录内，静态服务已托管，URL 可直接访问）
+	// 原实现：dir = "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
+	// 现改为基于配置 WebDir 推导兜底（config.Load 已保证 UploadDir 为锚定 exe 目录的绝对路径，此处仅防御）
 	dir := s.cfg.UploadDir
 	if dir == "" {
-		dir = "../im-client/web/static/upload"
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
 	}
 
 	// 生成唯一文件名（时间戳+随机串，保留原扩展名；原始文件名存入消息 content）

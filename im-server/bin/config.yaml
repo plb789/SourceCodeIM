@@ -1,4 +1,4 @@
-﻿# IM 服务端核心配置（与《开发文档》5.2 保持一致）
+# IM 服务端核心配置（与《开发文档》5.2 保持一致）
 # 说明：本文件由服务端启动时读取，缺省项自动回退内置默认值
 
 # WebSocket 监听地址
@@ -21,7 +21,11 @@ redis_addr: "127.0.0.1:6379"
 redis_password: ""
 redis_db: 0
 
-# 阶段二十四：聊天文件持久化存储目录（相对服务端运行目录）
-upload_dir: "../im-client/web/static/upload"
+# 前端静态目录（缺省留空：自动从 exe 所在目录逐级向上查找 im-client/web；相对路径基于 exe 所在目录解析）
+web_dir: ""
+# 阶段二十四：聊天文件持久化存储目录
+# 原实现：upload_dir: "../im-client/web/static/upload"（相对进程工作目录，仅根目录启动时正确）
+# 现改为留空：由服务端基于 web_dir 自动推导（exe 位于 bin 时推导结果为 im-client/web/static/upload）；如需自定义可配置绝对路径
+# upload_dir: "../im-client/web/static/upload"
 # 阶段二十四：聊天文件持久化大小上限（字节，默认 20MB）
 max_file_size: 20971520

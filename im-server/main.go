@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gorilla/websocket"
 
@@ -54,7 +55,11 @@ func main() {
 	// 群聊图片上传接口（阶段二十六：HTTP 上传落库 + 广播群成员，不走点对点分片协议）
 	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
 	// 静态文件托管前端（im-client/web）
-	http.Handle("/", http.FileServer(http.Dir("../im-client/web")))
+	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
+	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
+	http.Handle("/", http.FileServer(http.Dir(cfg.WebDir)))
+	// 头像目录注入（锚定 exe 所在目录解析，替代 avatar.go 中原相对路径实现）
+	server.SetAvatarDir(filepath.Join(cfg.WebDir, "static", "avatar"))
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {
