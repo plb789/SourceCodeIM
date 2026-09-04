@@ -1249,6 +1249,13 @@
             } catch (e) {}
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
+            // 登录持久化联动：自动恢复上次选中的会话（含群聊），并自动加载其聊天记录，
+            // 解决刷新后聊天内容为空、必须重新点击聊天对象才能显示的问题
+            // 原实现：登录成功后停留在默认空界面
+            try {
+                var lastChat = localStorage.getItem('im_last_chat_' + IMSocket.getUsername());
+                if (lastChat !== null) openConversation(lastChat || '');
+            } catch (e) {}
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
             // 并从乐观显示的聊天界面回退到登录界面
@@ -1284,6 +1291,9 @@
     IMSocket.on(MSG.FRIEND_LIST, function (msg) {
         try { friendList = JSON.parse(msg.content) || []; } catch (e) { friendList = []; }
         renderFriendList();
+        // 登录持久化联动：好友列表到达后刷新当前会话标题（刷新恢复会话时 FRIEND_LIST 晚于 LOGIN_RESP，
+        // 标题先显示账号名，备注名/在线状态就绪后在此同步刷新）
+        updateChatTitle();
     });
 
     // ===== 黑名单列表同步与渲染 =====
@@ -1737,6 +1747,8 @@
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         currentChatUser = user;
+        // 登录持久化联动：记录最近选中会话（key 按用户名隔离，多账号互不干扰），刷新自动登录后恢复该会话
+        try { localStorage.setItem('im_last_chat_' + IMSocket.getUsername(), user); } catch (e) {}
         // 原实现：if (currentChatUser !== '') unreadCount[currentChatUser] = 0; 本地计数清零
         // 未读数服务端归口：本地乐观清零会话列表未读角标，服务端处理已读回执后推送 CONV_LIST 归口确认
         if (currentChatUser !== '') {
