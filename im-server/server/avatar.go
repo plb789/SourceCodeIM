@@ -25,8 +25,15 @@ var allowedExt = map[string]bool{
 	".gif":  true,
 }
 
-// avatarDir 头像静态资源目录（相对服务端运行目录）
-const avatarDir = "../im-client/web/static/avatar"
+// avatarDir 头像静态资源目录
+// 原实现：const avatarDir = "../im-client/web/static/avatar"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
+// 现改为变量，由 main.go 启动时按配置注入（锚定 exe 所在目录解析，任意目录启动均正确）
+var avatarDir = "../im-client/web/static/avatar"
+
+// SetAvatarDir 注入头像目录（由 main.go 启动时调用，替代原相对路径常量）
+func SetAvatarDir(dir string) {
+	avatarDir = dir
+}
 
 // HandleAvatarUpload 处理头像上传：POST /upload/avatar?username=xxx
 func (s *Server) HandleAvatarUpload(w http.ResponseWriter, r *http.Request) {

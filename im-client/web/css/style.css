@@ -301,7 +301,14 @@ html, body {
 
 .avatar.placeholder {
     background: var(--placeholder-bg);
-    display: inline-block;
+    /* 头像降级统一：占位头像居中显示用户名首字母（原为空白色块） */
+    /* 原实现：display: inline-block; 无文字样式 */
+    /* display: inline-block; */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 14px;
 }
 
 .user-item {
@@ -951,6 +958,16 @@ html, body {
     justify-content: center;
     font-size: 16px;
     flex-shrink: 0;
+    overflow: hidden;
+}
+
+/* 会话头像降级统一：有头像时图片撑满占位容器（失效由 JS 降级回首字母） */
+.conv-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+    display: block;
 }
 
 .conv-main {

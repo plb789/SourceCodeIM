@@ -395,9 +395,9 @@
         // 本地立即渲染（自己发送的消息）
         var url = URL.createObjectURL(file);
         if (isImageName(file.name)) {
-            appendImageMsg(IMSocket.getUsername(), url, 'self');
+            appendImageMsg(IMSocket.getUsername(), url, 'self', currentChatUser !== '');
         } else {
-            appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self');
+            appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', currentChatUser !== '');
         }
         pendingUploads.push({ file: file, total: total });
         IMSocket.send({
@@ -469,7 +469,7 @@
         // nonce：本地气泡唯一标识，广播回填 msg_id 时精确匹配（对齐 FILE_PERSISTED 按 file_id 匹配的归口思路，并发发送不错位）
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         var url = URL.createObjectURL(file);
-        var bubble = appendImageMsg(IMSocket.getUsername(), url, 'self');
+        var bubble = appendImageMsg(IMSocket.getUsername(), url, 'self', false); // 群聊图片：显示发送者昵称
         bubble.setAttribute('data-nonce', nonce);
         var fd = new FormData();
         fd.append('file', file);
@@ -506,7 +506,7 @@
                 return;
             }
         }
-        var el = appendImageMsg(msg.from_user, meta.url || '', isMine ? 'self' : 'other');
+        var el = appendImageMsg(msg.from_user, meta.url || '', isMine ? 'self' : 'other', false); // 群聊图片广播：显示发送者昵称
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
     });
@@ -556,9 +556,9 @@
             var visibleUser = currentChatUser === msg.from_user;
             var mediaEl = null;
             if (isImageName(buf.name)) {
-                if (visibleUser) mediaEl = appendImageMsg(msg.from_user, url, 'other');
+                if (visibleUser) mediaEl = appendImageMsg(msg.from_user, url, 'other', true); // 点对点文件传输：私聊不显示昵称
             } else {
-                if (visibleUser) mediaEl = appendFileMsg(msg.from_user, buf.name, formatSize(buf.size), url, 'other');
+                if (visibleUser) mediaEl = appendFileMsg(msg.from_user, buf.name, formatSize(buf.size), url, 'other', true); // 点对点文件传输：私聊不显示昵称
             }
             if (mediaEl) mediaEl.setAttribute('data-file-id', msg.file_id); // 气泡记录 file_id，持久化通知回填 msg_id 用
             if (!visibleUser) {
@@ -783,9 +783,25 @@
             if (currentChatUser === cv.target) li.classList.add('active');
             li.setAttribute('data-user', cv.target);
 
+            // 会话头像：有头像显示图片（失效降级首字母），无头像显示首字母占位，群聊显示"群"字
+            // 原实现：avatar.textContent = convName.charAt(0).toUpperCase(); 会话头像一律首字母占位，从不显示真实头像
+            // avatar.textContent = convName.charAt(0).toUpperCase();
+            var avatarUrl = isGroup ? '' : getAvatarUrl(cv.target);
             var avatar = document.createElement('div');
             avatar.className = 'conv-avatar';
-            avatar.textContent = convName.charAt(0).toUpperCase();
+            if (avatarUrl) {
+                var avatarImg = document.createElement('img');
+                avatarImg.src = avatarUrl;
+                avatarImg.alt = '';
+                // 头像文件失效（文件被清理/路径变更）时降级为首字母占位，避免破图
+                avatarImg.addEventListener('error', function () {
+                    avatarImg.remove();
+                    avatar.textContent = convName.charAt(0).toUpperCase();
+                });
+                avatar.appendChild(avatarImg);
+            } else {
+                avatar.textContent = convName.charAt(0).toUpperCase();
+            }
 
             var main = document.createElement('div');
             main.className = 'conv-main';
@@ -942,9 +958,11 @@
         }
         var html = '';
         list.forEach(function (r) {
+            // 头像降级统一：无头像显示首字母占位（原为空白方块）
+            // 原实现：'<div class="avatar placeholder"></div>'
             var avatarHtml = r.avatar
                 ? '<img class="avatar" src="' + r.avatar + '" alt="">'
-                : '<div class="avatar placeholder"></div>';
+                : '<div class="avatar placeholder">' + (r.from_user || '?').charAt(0).toUpperCase() + '</div>';
             var right = '';
             if (r.status === 0) {
                 right = '<button class="req-btn primary" data-req-from="' + r.from_user + '" data-req-act="agree">同意</button>'
@@ -1113,13 +1131,14 @@
             for (var ci = 0; ci < convList.length; ci++) {
                 if (convList[ci].target === currentChatUser) { conv = convList[ci]; break; }
             }
-            if (conv && conv.unread > 0) {
-                conv.unread = 0;
-                renderConvList();
-                renderFriendList();
-            }
+            if (conv && conv.unread > 0) conv.unread = 0;
         }
         updateChatTitle();
+        // 切换会话后无条件重渲染两个列表，保证选中高亮跟随点击切换
+        // 原实现：renderConvList 仅在该会话有未读时调用（unread>0 分支内），点击无未读的好友时会话列表 active 停留在上一个会话
+        // if (conv && conv.unread > 0) { conv.unread = 0; renderConvList(); renderFriendList(); }
+        // renderFriendList();
+        renderConvList();
         renderFriendList();
         // 切换会话：重置定位状态、关闭搜索浮层、刷新置顶条
         locateState.active = false;
@@ -1256,7 +1275,10 @@
         // 原代码：div.appendChild(nameEl); 平铺在 .message 下，无头像
         var body = document.createElement('div');
         body.className = 'message-body';
-        body.appendChild(nameEl);
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称
+        // 原实现：body.appendChild(nameEl);
+        // body.appendChild(nameEl);
+        if (!isPrivate) body.appendChild(nameEl);
         if (r.msg_type === 4) {
             // 图片消息：URL 直出，点击查看大图
             var bubbleImg = document.createElement('div');
@@ -1638,9 +1660,11 @@
         });
         sorted.forEach(function (f) {
             var displayName = f.remark || f.username;
+            // 头像降级统一：有头像显示图片，无头像显示首字母占位（原为空白方块）
+            // 原实现：var avatarHtml = f.avatar ? '<img class="avatar" src="' + f.avatar + '" alt="">' : '<div class="avatar placeholder"></div>';
             var avatarHtml = f.avatar
                 ? '<img class="avatar" src="' + f.avatar + '" alt="">'
-                : '<div class="avatar placeholder"></div>';
+                : '<div class="avatar placeholder">' + displayName.charAt(0).toUpperCase() + '</div>';
             // 原实现：var badge = unreadCount[f.username] ? ... 本地计数，与服务端会话角标双源不一致
             // 未读数服务端归口：好友列表角标从服务端推送的会话列表读取未读数（与会话列表角标同源）
             var funread = 0;
@@ -1688,19 +1712,35 @@
     }
 
     // ===== 消息渲染 =====
+    // 头像缺失修复：按用户名解析头像 URL（空字符串表示无头像）
+    // 优先级：自己（LOGIN_RESP/上传成功下发） > 好友列表（FRIEND_LIST 携带 avatar） > 在线用户表（USER_LIST 推送）
+    // 会话列表/好友列表/消息气泡共用同一解析归口，头像数据更新后各处渲染口径一致
+    function getAvatarUrl(name) {
+        if (name === IMSocket.getUsername()) {
+            if (myAvatar) return myAvatar;
+        }
+        for (var i = 0; i < friendList.length; i++) {
+            if (friendList[i].username === name) return friendList[i].avatar || '';
+        }
+        return userAvatars[name] || '';
+    }
+
     // 头像缺失修复：按发送者解析头像并构建头像元素（返回 DOM 节点）
     // 优先级：自己（LOGIN_RESP/上传成功下发） > 好友列表（FRIEND_LIST 携带 avatar） > 在线用户表（USER_LIST 推送） > 首字母占位
+    // 原实现：解析逻辑内联于此，会话列表无法复用（会话列表头像长期为首字母占位）
     function getAvatarEl(fromUser) {
-        var url = '';
-        if (fromUser === IMSocket.getUsername()) {
-            url = myAvatar;
-        }
-        if (!url) {
-            for (var i = 0; i < friendList.length; i++) {
-                if (friendList[i].username === fromUser) { url = friendList[i].avatar || ''; break; }
-            }
-        }
-        if (!url) url = userAvatars[fromUser] || '';
+        var url = getAvatarUrl(fromUser);
+        // 原实现：解析逻辑内联
+        // var url = '';
+        // if (fromUser === IMSocket.getUsername()) {
+        //     url = myAvatar;
+        // }
+        // if (!url) {
+        //     for (var i = 0; i < friendList.length; i++) {
+        //         if (friendList[i].username === fromUser) { url = friendList[i].avatar || ''; break; }
+        //     }
+        // }
+        // if (!url) url = userAvatars[fromUser] || '';
         if (url) {
             var img = document.createElement('img');
             img.className = 'msg-avatar';
@@ -1742,7 +1782,11 @@
         // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
         var body = document.createElement('div');
         body.className = 'message-body';
-        body.appendChild(nameEl);
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称
+        // （第 6 参 showReadStatus 实际传入的是 isPrivate：私聊 true / 群聊 false）
+        // 原实现：body.appendChild(nameEl); 私聊/群聊气泡一律显示发送者昵称
+        // body.appendChild(nameEl);
+        if (!showReadStatus) body.appendChild(nameEl);
         body.appendChild(bubble);
         // 自己发送的私聊消息显示已读/未读状态
         if (showReadStatus && type === 'self' && msgId) {
@@ -1798,7 +1842,7 @@
     }
 
     // 图片消息渲染
-    function appendImageMsg(fromUser, url, type) {
+    function appendImageMsg(fromUser, url, type, isPrivate) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
@@ -1821,7 +1865,10 @@
         // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
         var body = document.createElement('div');
         body.className = 'message-body';
-        body.appendChild(nameEl);
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称
+        // 原实现：body.appendChild(nameEl);
+        // body.appendChild(nameEl);
+        if (!isPrivate) body.appendChild(nameEl);
         body.appendChild(bubble);
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
@@ -1831,7 +1878,7 @@
     }
 
     // 文件消息渲染（文件卡片：图标 + 文件名 + 大小，点击下载）
-    function appendFileMsg(fromUser, name, sizeText, url, type) {
+    function appendFileMsg(fromUser, name, sizeText, url, type, isPrivate) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
@@ -1871,7 +1918,10 @@
         // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
         var body = document.createElement('div');
         body.className = 'message-body';
-        body.appendChild(nameEl);
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称
+        // 原实现：body.appendChild(nameEl);
+        // body.appendChild(nameEl);
+        if (!isPrivate) body.appendChild(nameEl);
         body.appendChild(bubble);
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
