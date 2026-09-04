@@ -580,6 +580,18 @@
     // WebSocket 仅传信令，避免海量分片占满连接队列、挤掉普通聊天消息
     function sendFile(file) {
         var threshold = (IMSocket.getUploadThreshold && IMSocket.getUploadThreshold()) || 1048576;
+        // 阶段三十二：三层分流——超过分片直传上限直接拒绝；超过单请求直传上限走分片直传（进度回显可取消）；
+        // 超过 WS 分片阈值走单请求 HTTP 直传；小文件仍走 WS 分片协议（协议不变）
+        var maxDirect = (IMSocket.getMaxDirectSize && IMSocket.getMaxDirectSize()) || 2147483648;
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        if (file.size > maxDirect) {
+            showToast('文件超过大小上限（' + formatSize(maxDirect) + '），无法发送');
+            return;
+        }
+        if (file.size > maxFile) {
+            sendFileChunked(file);
+            return;
+        }
         if (file.size > threshold) {
             sendFileDirect(file);
             return;
@@ -630,6 +642,154 @@
             // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
             console.warn('大文件直传失败:', e);
         });
+    }
+
+    // 阶段三十二：分片直传活动表（uploadId → 状态），取消时据此中止在途 XHR
+    var activeChunkUploads = {};
+
+    // 阶段三十二：超大文件分片直传（>单请求直传上限，至 max_direct_size）
+    // 流程：本地立即渲染进度气泡（可取消）→ XHR 逐片 POST /upload/chunk（raw body，upload.onprogress 回显整体进度）
+    // → 服务端按片落盘并节流推送 FILE_PROGRESS（接收方"发送中 xx%"）→ 收齐合并落库推送 FILE_PERSISTED 回填 msg_id
+    // 原实现：fetch 单请求直传无进度事件，超大文件发送方无进度、接收方无感知、失败需整文件重传
+    function sendFileChunked(file) {
+        var chunkSize = (IMSocket.getUploadChunkSize && IMSocket.getUploadChunkSize()) || 4194304;
+        var total = Math.max(1, Math.ceil(file.size / chunkSize));
+        var toUser = currentChatUser;
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        var uploadId = 'u' + Date.now() + '_' + Math.random().toString(36).slice(2);
+        // 本地立即渲染进度气泡（发送方带取消按钮；blob URL 供发送完成前点击预览，落库后由 FILE_PERSISTED 归口）
+        var bubble = appendProgressBubble(IMSocket.getUsername(), file.name, formatSize(file.size), 'self', toUser !== '', uploadId, nonce, true);
+        var state = { xhr: null, cancelled: false };
+        activeChunkUploads[uploadId] = state;
+        // 进度回显：已完成片数 + 当前片 XHR 进度 → 整体百分比
+        function setProgress(ratio) {
+            var pct = Math.floor(ratio * 100);
+            var bar = bubble.querySelector('.file-progress-inner');
+            var txt = bubble.querySelector('.file-progress-text');
+            if (bar) bar.style.width = pct + '%';
+            if (txt) txt.textContent = '上传中 ' + pct + '%';
+        }
+        function failUpload(errText) {
+            bubble.classList.add('upload-failed');
+            var txt = bubble.querySelector('.file-progress-text');
+            if (txt) txt.textContent = '上传失败';
+            delete activeChunkUploads[uploadId];
+            showToast(errText);
+        }
+        function sendSeq(idx) {
+            if (state.cancelled) return;
+            var start = idx * chunkSize;
+            var blob = file.slice(start, Math.min(start + chunkSize, file.size));
+            var xhr = new XMLHttpRequest();
+            state.xhr = xhr;
+            xhr.open('POST', '/upload/chunk?username=' + encodeURIComponent(IMSocket.getUsername()) +
+                  '&to_user=' + encodeURIComponent(toUser) +
+                  '&nonce=' + encodeURIComponent(nonce) +
+                  '&upload_id=' + encodeURIComponent(uploadId) +
+                  '&seq=' + idx + '&total_chunks=' + total +
+                  '&file_name=' + encodeURIComponent(file.name) +
+                  '&file_size=' + file.size, true);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            // 单片上传进度叠加已完成片数换算整体进度（e.total 为当前片字节数）
+            xhr.upload.onprogress = function (e) {
+                if (e.lengthComputable) setProgress((idx + e.loaded / e.total) / total);
+            };
+            xhr.onload = function () {
+                if (state.cancelled) return;
+                if (xhr.status === 200) {
+                    setProgress((idx + 1) / total);
+                    if (idx + 1 < total) { sendSeq(idx + 1); return; }
+                    // 全部分片上传完成：终态（msg_id 回填）由 FILE_PERSISTED 服务端归口通知
+                    var bar = bubble.querySelector('.file-progress-inner');
+                    var txt = bubble.querySelector('.file-progress-text');
+                    if (bar) bar.style.width = '100%';
+                    if (txt) txt.textContent = '已发送';
+                    delete activeChunkUploads[uploadId];
+                } else {
+                    // 上传被服务端拒绝（超限/拉黑/未在线/取消等）：进度条置失败态，本地气泡保留供确认
+                    failUpload('文件上传失败：' + (xhr.responseText || ('HTTP ' + xhr.status)));
+                }
+            };
+            xhr.onerror = function () {
+                if (state.cancelled) return;
+                failUpload('文件上传失败：网络错误');
+            };
+            xhr.send(blob);
+        }
+        // 取消按钮：中止在途 XHR → WS 通知服务端清理会话并同步双方移除进度气泡
+        var cancelBtn = bubble.querySelector('.file-progress-cancel');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', function () {
+                if (state.cancelled) return;
+                state.cancelled = true;
+                if (state.xhr) state.xhr.abort();
+                delete activeChunkUploads[uploadId];
+                bubble.remove();
+                IMSocket.send({ msg_type: MSG.FILE_CANCEL, file_id: uploadId });
+            });
+        }
+        sendSeq(0);
+    }
+
+    // 阶段三十二：进度气泡构建（文件卡片 + 进度条 + 百分比文本，样式跟随主题色）
+    // 双端共用：发送方"上传中 xx%"带取消按钮，接收方"接收中 xx%"只读（微信同款）
+    function appendProgressBubble(fromUser, name, sizeText, type, isPrivate, uploadId, nonce, showCancel) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        // 撤回/回填锚点：data-from/data-ts 与文件气泡一致；data-upload-id 供进度/取消信令精确定位
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
+        div.setAttribute('data-upload-id', uploadId);
+        if (nonce) div.setAttribute('data-nonce', nonce);
+        var nameEl = document.createElement('div');
+        nameEl.className = 'message-name';
+        nameEl.textContent = fromUser;
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-file';
+        var icon = document.createElement('div');
+        icon.className = 'file-icon';
+        icon.textContent = '📄';
+        var info = document.createElement('div');
+        info.className = 'file-info';
+        var fileName = document.createElement('div');
+        fileName.className = 'file-name';
+        fileName.textContent = name;
+        var fileSize = document.createElement('div');
+        fileSize.className = 'file-size';
+        fileSize.textContent = sizeText;
+        info.appendChild(fileName);
+        info.appendChild(fileSize);
+        // 进度条 + 百分比文本
+        var progress = document.createElement('div');
+        progress.className = 'file-progress';
+        var bar = document.createElement('div');
+        bar.className = 'file-progress-inner';
+        bar.style.width = '0%';
+        progress.appendChild(bar);
+        var txt = document.createElement('div');
+        txt.className = 'file-progress-text';
+        txt.textContent = '上传中 0%';
+        info.appendChild(progress);
+        info.appendChild(txt);
+        bubble.appendChild(icon);
+        bubble.appendChild(info);
+        if (showCancel) {
+            var cancel = document.createElement('div');
+            cancel.className = 'file-progress-cancel';
+            cancel.textContent = '×';
+            cancel.title = '取消发送';
+            bubble.appendChild(cancel);
+        }
+        // 头像 + 内容列微信风格结构（与 appendFileMsg 一致）
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        if (!isPrivate) body.appendChild(nameEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
     }
 
     // 顺序发送分片：base64 编码后逐片上传
@@ -712,8 +872,22 @@
             if (mineEl) {
                 mineEl.setAttribute('data-msg-id', msg.msg_id);
                 mineEl.setAttribute('data-file-id', msg.file_id);
+                // 阶段三十二：分片直传气泡为进度形态，回填后移除进度条/百分比/取消按钮（转为终态文件卡片）
+                var prog = mineEl.querySelector('.file-progress');
+                if (prog) prog.remove();
+                var ptxt = mineEl.querySelector('.file-progress-text');
+                if (ptxt) ptxt.remove();
+                var pcancel = mineEl.querySelector('.file-progress-cancel');
+                if (pcancel) pcancel.remove();
+                mineEl.classList.remove('upload-failed');
                 return;
             }
+        }
+        // 阶段三十二：接收端移除同 nonce 的"接收中"进度气泡（分片直传路径），随后渲染正式卡片
+        // 原实现：无进度气泡通道，接收方对传输过程无感知
+        if (meta.nonce) {
+            var progEl = messageList.querySelector('.message[data-upload-id][data-nonce="' + meta.nonce + '"]');
+            if (progEl) progEl.remove();
         }
         // 归属校验（与 GROUP_IMAGE 口径一致）：私聊仅在对应会话视图渲染，不在窗口时依赖会话摘要/历史归口
         var peer = isMine ? msg.to_user : msg.from_user;
@@ -727,6 +901,52 @@
         mediaEl.setAttribute('data-msg-id', msg.msg_id);
         mediaEl.setAttribute('data-file-id', msg.file_id);
         if (msg.timestamp) mediaEl.setAttribute('data-ts', msg.timestamp);
+    });
+
+    // ===== 阶段三十二：超大文件分片直传进度同步 =====
+    // 接收方"发送中 xx%"进度气泡：服务端节流推送（单会话最快 500ms 一条），终态由 FILE_PERSISTED 归口替换
+    // 原实现：无进度通道，接收方对超大文件传输过程无感知，只能干等
+    IMSocket.on(MSG.FILE_PROGRESS, function (msg) {
+        var meta = {};
+        try { meta = JSON.parse(msg.content || '{}'); } catch (e) { return; }
+        if (!meta.upload_id) return;
+        // 归属校验：私聊仅对应会话视图渲染；群聊（to_user 为空）仅群聊视图渲染
+        // 进度为临时态，不在窗口时不补渲染（终态卡片/会话摘要由 FILE_PERSISTED/CONV_LIST 归口）
+        var peer = msg.to_user || '';
+        if (currentChatUser !== peer) return;
+        var isMine = msg.from_user === IMSocket.getUsername();
+        // 已有进度气泡：仅更新百分比与文本（优先 upload_id 精确匹配，nonce 兜底）
+        var el = messageList.querySelector('.message[data-upload-id="' + meta.upload_id + '"]');
+        if (!el && meta.nonce) {
+            el = messageList.querySelector('.message[data-nonce="' + meta.nonce + '"]');
+        }
+        if (!el) {
+            // 首次进度：创建接收方进度气泡（无取消按钮）
+            el = appendProgressBubble(msg.from_user, meta.file_name || '文件', formatSize(meta.file_size || 0), isMine ? 'self' : 'other', peer !== '', meta.upload_id, meta.nonce || '', false);
+        }
+        var ratio = meta.total > 0 ? Math.min(1, meta.received / meta.total) : 0;
+        var pct = Math.floor(ratio * 100);
+        var bar = el.querySelector('.file-progress-inner');
+        if (bar) bar.style.width = pct + '%';
+        var txt = el.querySelector('.file-progress-text');
+        if (txt) txt.textContent = (el.classList.contains('self') ? '上传中 ' : '接收中 ') + pct + '%';
+    });
+
+    // 阶段三十二：上传取消同步——双方移除进度气泡，接收方 Toast 提示（发送方多端静默移除）
+    IMSocket.on(MSG.FILE_CANCEL, function (msg) {
+        var meta = {};
+        try { meta = JSON.parse(msg.content || '{}'); } catch (e) { meta = {}; }
+        var el = null;
+        if (meta.upload_id) {
+            el = messageList.querySelector('.message[data-upload-id="' + meta.upload_id + '"]');
+        }
+        if (!el && meta.nonce) {
+            el = messageList.querySelector('.message[data-nonce="' + meta.nonce + '"]');
+        }
+        if (el) el.remove();
+        if (msg.from_user !== IMSocket.getUsername()) {
+            showToast('对方取消了文件发送');
+        }
     });
 
     // ===== 阶段二十六：群聊图片发送（HTTP 上传 + 服务端广播，不走点对点分片协议） =====

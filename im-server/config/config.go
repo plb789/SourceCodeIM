@@ -31,6 +31,10 @@ type Config struct {
 	SendQueueSize int `yaml:"send_queue_size"`
 	// 阶段三十一：大文件直传阈值（字节）：文件超过该值走 HTTP 直传链路，WebSocket 仅传信令，避免海量分片占用连接
 	HttpUploadThreshold int `yaml:"http_upload_threshold"`
+	// 阶段三十二：超大文件分片直传的单片大小（字节）：超过 MaxFileSize 的文件按该值分片逐片 HTTP 上传
+	UploadChunkSize int `yaml:"upload_chunk_size"`
+	// 阶段三十二：分片直传文件大小上限（字节）：超过该值前端直接拒绝（默认 2GB）
+	MaxDirectSize int `yaml:"max_direct_size"`
 
 	// MySQL 配置
 	MySQLDSN string `yaml:"mysql_dsn"`
@@ -114,6 +118,13 @@ func Load() *Config {
 	// 阶段三十一：大文件直传阈值兜底（1MB）
 	if cfg.HttpUploadThreshold <= 0 {
 		cfg.HttpUploadThreshold = 1 << 20
+	}
+	// 阶段三十二：分片直传配置兜底（单片 4MB / 上限 2GB）
+	if cfg.UploadChunkSize <= 0 {
+		cfg.UploadChunkSize = 4 << 20
+	}
+	if cfg.MaxDirectSize <= 0 {
+		cfg.MaxDirectSize = 2 << 30
 	}
 	return cfg
 }

@@ -42,6 +42,9 @@ const (
 	MsgTypeProfileUpdate     = 37 // 个人资料更新（阶段三十：content 为 JSON：nickname/gender/region/signature）
 	MsgTypeProfileQuery      = 38 // 个人资料查询（阶段三十：to_user 为目标用户名，查看微信式资料卡）
 	MsgTypeProfileResp       = 39 // 个人资料响应/同步（content 为 JSON：username/nickname/gender/region/signature/avatar/is_friend/remark）
+
+	MsgTypeFileProgress = 40 // 阶段三十二：超大文件分片直传进度同步（content 为 JSON：upload_id/nonce/received/total/file_name/file_size，服务端节流推送接收方）
+	MsgTypeFileCancel   = 41 // 阶段三十二：超大文件上传取消（上行 file_id=upload_id；下行 content 为 JSON：upload_id/nonce，双方移除进度气泡）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

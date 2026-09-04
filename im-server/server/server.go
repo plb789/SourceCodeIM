@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,13 +21,18 @@ import (
 type Server struct {
 	cfg *config.Config
 	hub *Hub
+	// 阶段三十二：超大文件分片直传会话表（upload_id → 会话），进度归口与收齐判定依据
+	// 仅存内存（重启丢失即重传，不落库不进 Redis，超大文件场景避免高频写）
+	uploadSessions map[string]*directUploadSession
+	uploadMu       sync.RWMutex
 }
 
 // NewServer 创建服务端实例
 func NewServer(cfg *config.Config) *Server {
 	return &Server{
-		cfg: cfg,
-		hub: NewHub(),
+		cfg:            cfg,
+		hub:            NewHub(),
+		uploadSessions: make(map[string]*directUploadSession),
 	}
 }
 
@@ -158,6 +164,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleProfileUpdate(c, msg)
 	case protocol.MsgTypeProfileQuery:
 		s.handleProfileQuery(c, msg)
+	// 阶段三十二：超大文件分片直传取消（发送方上行，服务端清理会话并同步双方）
+	case protocol.MsgTypeFileCancel:
+		s.handleFileCancel(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -542,6 +551,10 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		// 原代码：无 chunk_size / upload_threshold 字段（前端硬编码 4KB）
 		"chunk_size":       s.cfg.ChunkSize,
 		"upload_threshold": s.cfg.HttpUploadThreshold,
+		// 阶段三十二：下发单请求直传上限/分片直传单片大小/分片直传上限（前端三层分流与服务端配置保持一致）
+		"max_file_size":     s.cfg.MaxFileSize,
+		"upload_chunk_size": s.cfg.UploadChunkSize,
+		"max_direct_size":   s.cfg.MaxDirectSize,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
 		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）

@@ -12,6 +12,10 @@
     // 原实现：分片大小硬编码在前端 chat.js（4KB），与服务端配置脱节
     var chunkSize = 4096;        // 兜底默认值，登录响应携带 chunk_size 后覆盖
     var uploadThreshold = 1048576; // 兜底默认值（1MB），登录响应携带 upload_threshold 后覆盖
+    // 阶段三十二：分片直传相关配置（服务端归口下发，兜底值与服务端默认一致）
+    var maxFileSize = 20971520;      // 单请求直传上限（20MB），超过走分片直传
+    var uploadChunkSize = 4194304;   // 分片直传单片大小（4MB）
+    var maxDirectSize = 2147483648;  // 分片直传文件大小上限（2GB），超过直接拒绝
     var messageHandlers = {}; // msg_type -> handler 函数数组
     var connected = false;
 
@@ -55,7 +59,9 @@
         FRIEND_REQ_LIST_RESP: 36, // 阶段二十九：好友申请列表响应（content 为 JSON：list 申请记录 + pending 待处理数量）
         PROFILE_UPDATE: 37, // 阶段三十：个人资料更新（content 为 JSON：nickname/gender/region/signature）
         PROFILE_QUERY: 38,  // 阶段三十：个人资料查询（to_user 为目标用户名，微信式好友资料卡）
-        PROFILE_RESP: 39    // 阶段三十：个人资料响应/同步（content 为 JSON：username/nickname/gender/region/signature/avatar/is_friend/remark）
+        PROFILE_RESP: 39,   // 阶段三十：个人资料响应/同步（content 为 JSON：username/nickname/gender/region/signature/avatar/is_friend/remark）
+        FILE_PROGRESS: 40,  // 阶段三十二：超大文件分片直传进度（content 为 JSON：upload_id/nonce/received/total/file_name/file_size，服务端节流推送）
+        FILE_CANCEL: 41     // 阶段三十二：超大文件上传取消（下行 content 为 JSON：upload_id/nonce，双方移除进度气泡）
     };
 
     function connect(username, password) {
@@ -142,6 +148,16 @@
                 if (info && info.upload_threshold > 0) {
                     uploadThreshold = info.upload_threshold;
                 }
+                // 阶段三十二：接收分片直传配置（服务端归口）
+                if (info && info.max_file_size > 0) {
+                    maxFileSize = info.max_file_size;
+                }
+                if (info && info.upload_chunk_size > 0) {
+                    uploadChunkSize = info.upload_chunk_size;
+                }
+                if (info && info.max_direct_size > 0) {
+                    maxDirectSize = info.max_direct_size;
+                }
             } catch (e) {}
             window._lastPassword = window._lastPassword || '';
         }
@@ -186,6 +202,21 @@
         return ws ? ws.bufferedAmount : 0;
     }
 
+    // 阶段三十二：获取服务端下发的单请求直传上限（字节），超过走分片直传
+    function getMaxFileSize() {
+        return maxFileSize;
+    }
+
+    // 阶段三十二：获取服务端下发的分片直传单片大小（字节）
+    function getUploadChunkSize() {
+        return uploadChunkSize;
+    }
+
+    // 阶段三十二：获取服务端下发的分片直传文件大小上限（字节），超过直接拒绝发送
+    function getMaxDirectSize() {
+        return maxDirectSize;
+    }
+
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
@@ -197,6 +228,9 @@
         getChunkSize: getChunkSize,
         getUploadThreshold: getUploadThreshold,
         getBufferedAmount: getBufferedAmount,
+        getMaxFileSize: getMaxFileSize,
+        getUploadChunkSize: getUploadChunkSize,
+        getMaxDirectSize: getMaxDirectSize,
         stopHeartbeat: stopHeartbeat
     };
 })();
