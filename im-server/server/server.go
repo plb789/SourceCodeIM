@@ -191,7 +191,15 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		// 错误消息常因竞态来不及送达客户端，导致密码错误等场景无任何提示
 		// 现改为同步写错误消息送达后再关闭连接
 		// 原代码：s.sendError(c, err.Error()); c.Close()
-		c.SendErrorAndClose(err.Error())
+		// 错误分级：仅业务校验错误（用户名或密码错误/密码不能为空等）原样下发；
+		// 底层依赖错误（如 MySQL 空闲连接失效的 invalid connection）统一下发通用中文提示，
+		// 完整错误记日志排查——避免英文底层错误直接暴露给客户端
+		userErrMsg := err.Error()
+		if !isAuthBusinessError(err) {
+			logger.Error("登录底层依赖异常: %v", err)
+			userErrMsg = "登录服务暂不可用，请稍后重试"
+		}
+		c.SendErrorAndClose(userErrMsg)
 		return
 	}
 

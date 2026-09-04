@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +18,9 @@ type Client struct {
 	username  string
 	loginTime time.Time // 本次登录时间，用于好友申请去重
 	sendCh    chan []byte
+	// 回归加固：连接写互斥锁——writePump（队列写）与 SendErrorAndClose（登录失败同步写）
+	// 都可能写同一底层连接，gorilla/websocket 不允许并发写（会 panic 打崩进程），必须串行化
+	writeMu sync.Mutex
 }
 
 // newClient 创建客户端连接对象
@@ -61,16 +65,19 @@ func (c *Client) Close() {
 // SendErrorAndClose 同步发送错误消息后立即关闭连接：登录失败等需断开的场景使用
 // 原实现：sendError 走 sendCh 队列异步写出 + Close 立即关闭连接，writePump 常来不及把错误消息写出
 // 连接就已关闭，导致客户端登录失败时收不到任何提示（如"用户名或密码错误"），页面表现为无反应
-// 此处绕过发送队列直接同步写连接（writePump 此刻阻塞在 sendCh 上不会并发写，gorilla 连接写操作安全），
-// 确保错误提示送达后再断开，与 HandleWS 连接数上限处的同步写错误模式保持一致
+// 此处绕过发送队列直接同步写连接，确保错误提示送达后再断开，与 HandleWS 连接数上限处的同步写错误模式保持一致；
+// 写操作经 writeMu 与 writePump 串行化（异常客户端未登录先发非登录消息再发错误登录时，队列写与同步写可能并存）
 func (c *Client) SendErrorAndClose(content string) {
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeError,
 		Content: content,
 	}
 	data, _ := json.Marshal(msg)
+	c.writeMu.Lock()
 	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	err := c.conn.WriteMessage(websocket.TextMessage, data)
+	c.writeMu.Unlock()
+	if err != nil {
 		logger.Warn("向客户端发送登录错误提示失败: %v", err)
 	}
 	c.conn.Close()
@@ -105,10 +112,14 @@ func (c *Client) readPump() {
 }
 
 // writePump 写循环：将发送队列内容写回连接
+// 回归加固：写操作经 writeMu 串行化，避免与 SendErrorAndClose 的同步写并发冲突
 func (c *Client) writePump() {
 	for data := range c.sendCh {
+		c.writeMu.Lock()
 		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		err := c.conn.WriteMessage(websocket.TextMessage, data)
+		c.writeMu.Unlock()
+		if err != nil {
 			return
 		}
 	}

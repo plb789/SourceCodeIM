@@ -19,6 +19,19 @@ var ErrInvalidLogin = errors.New("用户名或密码错误")
 // ErrUserNotFound 用户名不存在（与密码错误区分：不存在时登录尝试自动注册，密码错误时直接提示）
 var ErrUserNotFound = errors.New("用户名不存在")
 
+// ErrEmptyUsername 用户名为空
+var ErrEmptyUsername = errors.New("用户名不能为空")
+
+// ErrEmptyPassword 密码为空
+var ErrEmptyPassword = errors.New("密码不能为空")
+
+// isAuthBusinessError 判定登录/注册链路的业务校验错误（可直接下发客户端展示）：
+// 底层依赖错误（MySQL/Redis 连接异常等，如 invalid connection）不属于业务错误，
+// 由调用方统一下发通用中文提示，完整错误仅记日志，避免英文底层错误暴露给客户端
+func isAuthBusinessError(err error) bool {
+	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword
+}
+
 // hashPassword 密码加密（SHA256）
 func hashPassword(password string) string {
 	sum := sha256.Sum256([]byte(password))
@@ -29,10 +42,10 @@ func hashPassword(password string) string {
 func registerUser(username, password string) (*model.User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
-		return nil, errors.New("用户名不能为空")
+		return nil, ErrEmptyUsername
 	}
 	if password == "" {
-		return nil, errors.New("密码不能为空")
+		return nil, ErrEmptyPassword
 	}
 
 	var count int64

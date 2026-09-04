@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
@@ -37,10 +39,27 @@ func InitMySQL(cfg *config.Config) error {
 	}
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetMaxIdleConns(10)
+	// 登录回归加固：部分环境 MySQL 会主动断开空闲连接（日志出现 wsarecv: connection aborted），
+	// 池中死连接导致"空闲后首次查询"报 invalid connection（该英文底层错误修复前还会原样下发客户端）
+	// 原代码：仅设置 MaxOpen/MaxIdle，无连接寿命限制与保活
+	sqlDB.SetConnMaxLifetime(4 * time.Minute) // 连接最长存活期，防复用临期连接
+	sqlDB.SetConnMaxIdleTime(1 * time.Minute) // 空闲连接最长滞留期，超时回收防死连接驻留
+	go keepMySQLAlive(sqlDB)                  // 后台定时 Ping 保活：剔除失效连接并按需重建，保证连接池始终可用
 
 	DB = db
 	logger.Info("MySQL 连接成功，数据表已就绪")
 	return nil
+}
+
+// keepMySQLAlive 后台保活：定时 Ping 数据库，剔除池中被服务端断开的死连接并按需重建
+func keepMySQLAlive(sqlDB *sql.DB) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := sqlDB.Ping(); err != nil {
+			logger.Warn("MySQL 保活 Ping 失败: %v", err)
+		}
+	}
 }
 
 // ensureDatabase 自动创建 im 数据库（不存在时）
