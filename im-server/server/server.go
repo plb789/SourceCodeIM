@@ -178,14 +178,20 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	password := msg.Content
 
 	// 用户名不存在则自动注册，存在则校验密码
+	// 登录失败提示修复：原实现 verifyUser 对"用户不存在"与"密码错误"返回同一错误（ErrInvalidLogin），
+	// 密码错误也会进入注册分支，最终提示误导性的"用户名已存在"
+	// 现改为仅用户不存在（ErrUserNotFound）时尝试自动注册，密码错误直接提示"用户名或密码错误"
 	user, err := verifyUser(username, password)
-	if err == ErrInvalidLogin {
+	if err == ErrUserNotFound {
 		// 尝试注册
 		user, err = registerUser(username, password)
 	}
 	if err != nil {
-		s.sendError(c, err.Error())
-		c.Close()
+		// 登录失败提示修复：原实现 sendError 走发送队列异步写出后立即 Close，
+		// 错误消息常因竞态来不及送达客户端，导致密码错误等场景无任何提示
+		// 现改为同步写错误消息送达后再关闭连接
+		// 原代码：s.sendError(c, err.Error()); c.Close()
+		c.SendErrorAndClose(err.Error())
 		return
 	}
 

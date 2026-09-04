@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -54,6 +55,24 @@ func (c *Client) sendBlock(data []byte, timeout time.Duration) bool {
 
 // Close 关闭连接
 func (c *Client) Close() {
+	c.conn.Close()
+}
+
+// SendErrorAndClose 同步发送错误消息后立即关闭连接：登录失败等需断开的场景使用
+// 原实现：sendError 走 sendCh 队列异步写出 + Close 立即关闭连接，writePump 常来不及把错误消息写出
+// 连接就已关闭，导致客户端登录失败时收不到任何提示（如"用户名或密码错误"），页面表现为无反应
+// 此处绕过发送队列直接同步写连接（writePump 此刻阻塞在 sendCh 上不会并发写，gorilla 连接写操作安全），
+// 确保错误提示送达后再断开，与 HandleWS 连接数上限处的同步写错误模式保持一致
+func (c *Client) SendErrorAndClose(content string) {
+	msg := protocol.Message{
+		MsgType: protocol.MsgTypeError,
+		Content: content,
+	}
+	data, _ := json.Marshal(msg)
+	c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		logger.Warn("向客户端发送登录错误提示失败: %v", err)
+	}
 	c.conn.Close()
 }
 

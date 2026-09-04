@@ -180,7 +180,9 @@
     function doLogin() {
         var username = loginUsername.value.trim();
         var password = loginPassword.value;
-        if (!username) { alert('请输入用户名'); return; }
+        // UI 规范修复：原代码 alert('请输入用户名') 为系统默认弹窗，违反"禁止使用系统默认弹窗"规则，改用页面内 Toast
+        if (!username) { showToast('请输入用户名'); return; }
+        if (!password) { showToast('请输入密码'); return; }
         IMSocket.connect(username, password);
     }
 

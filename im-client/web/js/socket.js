@@ -18,6 +18,9 @@
     var maxDirectSize = 2147483648;  // 分片直传文件大小上限（2GB），超过直接拒绝
     var messageHandlers = {}; // msg_type -> handler 函数数组
     var connected = false;
+    // 登录失败提示修复：登录成功标记——登录成功前连接断开不自动重连，
+    // 修复密码错误后服务端关闭连接、前端无条件重连导致"失败→重连→失败"无限循环且每次无提示
+    var loginOk = false;
 
     // 消息类型常量
     var MSG = {
@@ -66,6 +69,9 @@
 
     function connect(username, password) {
         currentUsername = username;
+        // 登录失败提示修复：记录本次连接使用的密码，登录成功后断线自动重连需携带真实密码
+        // 原实现：window._lastPassword 从未被赋真实值（恒为空字符串），断线重连用空密码登录必然失败
+        window._lastPassword = password || '';
         var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
         var url = proto + location.host + '/ws';
 
@@ -92,7 +98,12 @@
         ws.onclose = function () {
             connected = false;
             stopHeartbeat();
-            scheduleReconnect();
+            // 登录失败提示修复：仅登录成功后才自动重连。
+            // 登录失败（密码错误等）服务端会下发错误提示并关闭连接，原实现无条件重连会陷入
+            // "失败→3秒重连→失败"无限循环且每次都无提示，页面表现为点击登录后毫无反应
+            if (loginOk) {
+                scheduleReconnect();
+            }
         };
 
         ws.onerror = function () {
@@ -134,10 +145,18 @@
 
     function dispatch(msg) {
         if (msg.msg_type === MSG.LOGIN_RESP) {
+            // 登录失败提示修复：记录登录成功标记（新格式 content 为 JSON result='ok'，旧格式 content 为 'ok' 字符串），
+            // 登录成功前连接断开不自动重连
+            if (msg.content === 'ok') {
+                loginOk = true;
+            }
             // 登录响应携带服务端撤回时间窗口（recall_window 秒），供撤回菜单判断使用
             // 兼容旧格式：content 为 "ok" 字符串时保持默认 120 秒
             try {
                 var info = JSON.parse(msg.content);
+                if (info && info.result === 'ok') {
+                    loginOk = true;
+                }
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
                 }
