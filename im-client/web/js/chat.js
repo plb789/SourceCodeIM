@@ -24,6 +24,32 @@
     var currentUserEl = document.getElementById('current-user');
     var currentAvatarEl = document.getElementById('current-avatar');
     var avatarFileEl = document.getElementById('avatar-file');
+
+    // ===== 阶段三十：个人资料面板元素（微信式右侧滑出，点击自己头像打开） =====
+    var profileMask = document.getElementById('profile-mask');
+    var profilePanel = document.getElementById('profile-panel');
+    var profileClose = document.getElementById('profile-close');
+    var profileAvatarWrap = document.getElementById('profile-avatar-wrap');
+    var profileAvatarEl = document.getElementById('profile-avatar');
+    var profileUsernameEl = document.getElementById('profile-username');
+    var profileNicknameEl = document.getElementById('profile-nickname');
+    var profileGenderEl = document.getElementById('profile-gender');
+    var profileRegionEl = document.getElementById('profile-region');
+    var profileSignatureEl = document.getElementById('profile-signature');
+    var profileSaveBtn = document.getElementById('profile-save');
+
+    // ===== 阶段三十：好友资料卡元素（微信式居中卡片，点击好友头像弹出） =====
+    var friendCardMask = document.getElementById('friend-card-mask');
+    var friendCardClose = document.getElementById('friend-card-close');
+    var friendCardAvatar = document.getElementById('friend-card-avatar');
+    var friendCardName = document.getElementById('friend-card-name');
+    var friendCardGender = document.getElementById('friend-card-gender');
+    var friendCardUsername = document.getElementById('friend-card-username');
+    var friendCardRegion = document.getElementById('friend-card-region');
+    var friendCardSignature = document.getElementById('friend-card-signature');
+    var friendCardChatBtn = document.getElementById('friend-card-chat');
+    var friendCardRemarkBtn = document.getElementById('friend-card-remark');
+
     var userListEl = document.getElementById('user-list');
     var chatTitle = document.getElementById('chat-title');
     var chatStatus = document.getElementById('chat-status');
@@ -127,6 +153,9 @@
     });
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && !modalMask.classList.contains('hidden')) closeModal();
+        // 阶段三十：Esc 依次关闭资料卡/个人资料面板（后打开的优先关闭）
+        if (e.key === 'Escape' && !friendCardMask.classList.contains('hidden')) closeFriendCard();
+        else if (e.key === 'Escape' && !profilePanel.classList.contains('hidden')) closeProfilePanel();
     });
 
     // Toast 轻提示：2.5 秒后自动消失
@@ -172,7 +201,9 @@
     themeBtn.textContent = '主题·' + themeNames[getTheme()];
 
     // ===== 头像上传 =====
-    currentAvatarEl.addEventListener('click', function () { avatarFileEl.click(); });
+    // 阶段三十：点击导航栏头像改为打开微信式"个人资料"面板（面板内点击大头像更换头像）
+    // 原代码：currentAvatarEl.addEventListener('click', function () { avatarFileEl.click(); }); 点击直接弹文件选择
+    currentAvatarEl.addEventListener('click', openProfilePanel);
     avatarFileEl.addEventListener('change', function () {
         var file = avatarFileEl.files[0];
         if (!file) return;
@@ -188,10 +219,165 @@
                   // 原代码：仅更新导航栏 currentAvatarEl.src
                   myAvatar = data.avatar;
                   userAvatars[IMSocket.getUsername()] = data.avatar;
+                  // 阶段三十：资料面板内大头像同步更新（面板打开时换图即时可见）
+                  profileAvatarEl.src = data.avatar;
               }
               else if (data.error) showToast(data.error);
           }).catch(function () { showToast('头像上传失败'); });
         avatarFileEl.value = '';
+    });
+
+    // ===== 阶段三十：个人资料（微信式"我的个人资料"面板，服务端归口多端同步） =====
+    // 登录响应 LOGIN_RESP / 更新回推 PROFILE_RESP 均填充此状态
+    var myProfile = { nickname: '', gender: 0, region: '', signature: '' };
+    var friendCardTarget = ''; // 当前资料卡展示的目标用户名
+
+    // 打开个人资料面板：以当前资料状态填充表单
+    function openProfilePanel() {
+        profileUsernameEl.textContent = IMSocket.getUsername();
+        profileAvatarEl.src = myAvatar || '';
+        profileNicknameEl.value = myProfile.nickname || '';
+        profileRegionEl.value = myProfile.region || '';
+        profileSignatureEl.value = myProfile.signature || '';
+        applyGenderSelect(myProfile.gender || 0);
+        profileMask.classList.remove('hidden');
+        profilePanel.classList.remove('hidden');
+    }
+
+    function closeProfilePanel() {
+        profileMask.classList.add('hidden');
+        profilePanel.classList.add('hidden');
+    }
+
+    // 性别分段选择：高亮选中项
+    function applyGenderSelect(val) {
+        profileGenderEl.querySelectorAll('.gender-opt').forEach(function (opt) {
+            opt.classList.toggle('active', Number(opt.getAttribute('data-gender')) === Number(val));
+        });
+    }
+    profileGenderEl.addEventListener('click', function (e) {
+        var opt = e.target.closest('.gender-opt');
+        if (opt) applyGenderSelect(opt.getAttribute('data-gender'));
+    });
+
+    profileClose.addEventListener('click', closeProfilePanel);
+    profileMask.addEventListener('click', closeProfilePanel);
+    // 面板内点击大头像更换头像（复用现有 avatar-file 上传通道）
+    profileAvatarWrap.addEventListener('click', function () { avatarFileEl.click(); });
+
+    // 保存资料：前端轻校验后发送 PROFILE_UPDATE，服务端归口校验并回推多端同步
+    profileSaveBtn.addEventListener('click', function () {
+        var nickname = profileNicknameEl.value.trim();
+        var region = profileRegionEl.value.trim();
+        var signature = profileSignatureEl.value.trim();
+        var gender = 0;
+        var activeOpt = profileGenderEl.querySelector('.gender-opt.active');
+        if (activeOpt) gender = Number(activeOpt.getAttribute('data-gender'));
+        IMSocket.send({
+            msg_type: MSG.PROFILE_UPDATE,
+            content: JSON.stringify({ nickname: nickname, gender: gender, region: region, signature: signature })
+        });
+    });
+
+    // 个人资料响应/同步：自己（更新本地状态与面板/导航栏）；他人（填充好友资料卡）
+    IMSocket.on(MSG.PROFILE_RESP, function (msg) {
+        var info = null;
+        try { info = JSON.parse(msg.content); } catch (e) { return; }
+        if (!info || !info.username) return;
+        if (info.username === IMSocket.getUsername()) {
+            // 自己：更新资料状态与面板显示（多端同步：其他设备修改后本端面板即时刷新）
+            myProfile = {
+                nickname: info.nickname || '',
+                gender: info.gender || 0,
+                region: info.region || '',
+                signature: info.signature || ''
+            };
+            profileNicknameEl.value = myProfile.nickname;
+            profileRegionEl.value = myProfile.region;
+            profileSignatureEl.value = myProfile.signature;
+            applyGenderSelect(myProfile.gender);
+            if (info.avatar) {
+                myAvatar = info.avatar;
+                currentAvatarEl.src = info.avatar;
+                profileAvatarEl.src = info.avatar;
+                userAvatars[info.username] = info.avatar;
+            }
+        } else if (info.username === friendCardTarget) {
+            fillFriendCard(info);
+        }
+    });
+
+    // ===== 阶段三十：好友资料卡（微信式，点击好友头像弹出） =====
+    // 打开资料卡：先弹卡占位，PROFILE_QUERY 响应回来后填充（服务端归口：资料+好友关系+备注）
+    function openFriendCard(username) {
+        if (!username || username === IMSocket.getUsername()) {
+            // 点自己头像打开自己的资料面板（微信同款行为）
+            openProfilePanel();
+            return;
+        }
+        friendCardTarget = username;
+        friendCardAvatar.src = getAvatarUrl(username) || '';
+        friendCardName.textContent = '加载中...';
+        friendCardGender.textContent = '';
+        friendCardGender.className = 'friend-card-gender';
+        friendCardUsername.textContent = username;
+        friendCardRegion.textContent = '';
+        friendCardSignature.textContent = '';
+        friendCardRemarkBtn.classList.add('hidden');
+        friendCardMask.classList.remove('hidden');
+        IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: username });
+    }
+
+    // 填充资料卡内容（PROFILE_RESP 响应，好友显示备注与性别图标）
+    function fillFriendCard(info) {
+        var remark = info.remark || '';
+        var nickname = info.nickname || '';
+        // 微信式主名称：备注优先，其次昵称，最后用户名；括号内补充真实名称
+        var mainName = remark || nickname || info.username;
+        friendCardName.textContent = info.username === mainName ? mainName : mainName + '(' + info.username + ')';
+        // 性别图标：微信同款 ♂蓝 / ♀粉
+        var g = Number(info.gender) || 0;
+        if (g === 1) {
+            friendCardGender.textContent = '♂';
+            friendCardGender.className = 'friend-card-gender male';
+        } else if (g === 2) {
+            friendCardGender.textContent = '♀';
+            friendCardGender.className = 'friend-card-gender female';
+        } else {
+            friendCardGender.textContent = '';
+            friendCardGender.className = 'friend-card-gender';
+        }
+        friendCardAvatar.src = info.avatar || '';
+        friendCardRegion.textContent = info.region || '暂无';
+        friendCardSignature.textContent = info.signature || '暂无';
+        // 仅好友可设置备注（非好友隐藏按钮，服务端同样归口校验）
+        friendCardRemarkBtn.classList.toggle('hidden', !info.is_friend);
+    }
+
+    function closeFriendCard() {
+        friendCardMask.classList.add('hidden');
+        friendCardTarget = '';
+    }
+    friendCardClose.addEventListener('click', closeFriendCard);
+    // 点击遮罩关闭（资料卡为只读展示，无误操作风险）
+    friendCardMask.addEventListener('click', function (e) {
+        if (e.target === friendCardMask) closeFriendCard();
+    });
+
+    // 资料卡：发消息 = 切换到该会话并关卡
+    friendCardChatBtn.addEventListener('click', function () {
+        var target = friendCardTarget;
+        closeFriendCard();
+        if (target) openConversation(target);
+    });
+
+    // 资料卡：设置备注（复用自定义输入弹窗 + FRIEND_UPDATE，与右键菜单同通道）
+    friendCardRemarkBtn.addEventListener('click', function () {
+        var target = friendCardTarget;
+        if (!target) return;
+        showPrompt('设置备注', '请输入好友备注名', function (remark) {
+            IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: target, remark: remark });
+        });
     });
 
     // ===== 添加好友 =====
@@ -637,6 +823,15 @@
                 if (loginInfo && loginInfo.avatar) {
                     myAvatar = loginInfo.avatar;
                     currentAvatarEl.src = myAvatar;
+                }
+                // 阶段三十：登录响应携带完整个人资料，填充"我的个人资料"面板状态（服务端归口）
+                if (loginInfo && loginInfo.profile) {
+                    myProfile = {
+                        nickname: loginInfo.profile.nickname || '',
+                        gender: loginInfo.profile.gender || 0,
+                        region: loginInfo.profile.region || '',
+                        signature: loginInfo.profile.signature || ''
+                    };
                 }
             } catch (e) {}
             loginView.classList.add('hidden');
@@ -1684,11 +1879,21 @@
             item.addEventListener('click', function () {
                 openConversation(this.getAttribute('data-user'));
             });
+            // 阶段三十：点击好友列表头像弹出微信式资料卡（群聊条目除外）
+            var target = item.getAttribute('data-user');
+            var avatarNode = item.querySelector('.avatar');
+            if (target && avatarNode) {
+                avatarNode.style.cursor = 'pointer';
+                avatarNode.addEventListener('click', function (e) {
+                    e.stopPropagation(); // 阻止触发整行的打开会话
+                    openFriendCard(target);
+                });
+            }
             // 好友右键菜单（群聊不显示）
-            if (item.getAttribute('data-user') !== '') {
+            if (target !== '') {
                 item.addEventListener('contextmenu', function (e) {
                     e.preventDefault();
-                    menuTarget = this.getAttribute('data-user');
+                    menuTarget = target;
                     friendMenu.style.top = e.clientY + 'px';
                     friendMenu.style.left = e.clientX + 'px';
                     friendMenu.classList.remove('hidden');
@@ -1750,6 +1955,11 @@
             img.addEventListener('error', function () {
                 img.replaceWith(buildAvatarPlaceholder(fromUser));
             });
+            // 阶段三十：点击消息气泡头像弹出微信式资料卡（点自己头像打开个人资料面板）
+            img.style.cursor = 'pointer';
+            img.addEventListener('click', function () {
+                openFriendCard(fromUser);
+            });
             return img;
         }
         return buildAvatarPlaceholder(fromUser);
@@ -1760,6 +1970,11 @@
         var ph = document.createElement('div');
         ph.className = 'msg-avatar placeholder';
         ph.textContent = (fromUser || '?').charAt(0).toUpperCase();
+        // 阶段三十：占位头像同样可点击弹出资料卡
+        ph.style.cursor = 'pointer';
+        ph.addEventListener('click', function () {
+            openFriendCard(fromUser);
+        });
         return ph;
     }
 

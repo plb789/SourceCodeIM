@@ -39,6 +39,9 @@ const (
 	MsgTypeGroupImage        = 34 // 群聊图片消息（阶段二十六：HTTP 上传后广播，content 为 JSON：url/name/size/nonce）
 	MsgTypeFriendReqList     = 35 // 好友申请列表请求（阶段二十九：微信式"新的朋友"，拉取申请记录与待处理数量）
 	MsgTypeFriendReqListResp = 36 // 好友申请列表响应（content 为 JSON：list 申请记录 + pending 待处理数量，服务端归口）
+	MsgTypeProfileUpdate     = 37 // 个人资料更新（阶段三十：content 为 JSON：nickname/gender/region/signature）
+	MsgTypeProfileQuery      = 38 // 个人资料查询（阶段三十：to_user 为目标用户名，查看微信式资料卡）
+	MsgTypeProfileResp       = 39 // 个人资料响应/同步（content 为 JSON：username/nickname/gender/region/signature/avatar/is_friend/remark）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

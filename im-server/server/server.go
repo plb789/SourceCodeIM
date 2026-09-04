@@ -129,6 +129,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleBlacklist(c, msg)
 	case protocol.MsgTypeFriendUpdate:
 		s.handleFriendUpdate(c, msg)
+	// 阶段三十：个人资料更新（微信式资料面板）与查询（微信式好友资料卡）
+	case protocol.MsgTypeProfileUpdate:
+		s.handleProfileUpdate(c, msg)
+	case protocol.MsgTypeProfileQuery:
+		s.handleProfileQuery(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -162,7 +167,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 登录成功响应
 	// 头像缺失修复：原实现仅下发 result 与 recall_window，前端拿不到自己头像，聊天消息气泡无法渲染头像
 	// 原代码：s.sendLoginResp(c, "ok")
-	s.sendLoginResp(c, "ok", user.Avatar)
+	// 阶段三十：改传整个 user，登录响应携带完整个人资料（昵称/性别/地区/签名）
+	s.sendLoginResp(c, "ok", *user)
 
 	// 批量推送离线消息
 	s.pushOfflineMessages(c)
@@ -496,12 +502,20 @@ func (s *Server) pushUserList() {
 // sendLoginResp 发送登录响应（携带服务端撤回时间窗口，供前端撤回菜单判断与窗口配置保持一致）
 // 头像缺失修复：追加 avatar 参数，登录时下发登录用户自己头像（服务端归口），供导航栏与消息气泡渲染
 // 原代码：func (s *Server) sendLoginResp(c *Client, result string) {
-func (s *Server) sendLoginResp(c *Client, result string, avatar string) {
+// 阶段三十：avatar 参数改为整个 user，content JSON 追加 profile 完整个人资料
+func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 	respInfo, _ := json.Marshal(map[string]interface{}{
 		"result":        result,
 		"recall_window": s.cfg.RecallWindow,
 		// 原代码：无 avatar 字段
-		"avatar": avatar,
+		"avatar": user.Avatar,
+		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）
+		"profile": map[string]interface{}{
+			"nickname":  user.Nickname,
+			"gender":    user.Gender,
+			"region":    user.Region,
+			"signature": user.Signature,
+		},
 	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,

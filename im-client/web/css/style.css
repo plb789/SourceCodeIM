@@ -1445,3 +1445,334 @@ html, body {
     font-size: 13px;
     color: var(--text-light);
 }
+
+/* ===== 阶段三十：个人资料面板（微信式右侧滑出，点击自己头像打开） ===== */
+.profile-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 1600;
+}
+
+.profile-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 340px;
+    background: var(--panel-bg);
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.18);
+    z-index: 1650;
+    display: flex;
+    flex-direction: column;
+    animation: profile-slide-in 0.2s ease-out;
+}
+
+@keyframes profile-slide-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+.profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+}
+
+.profile-title {
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--text);
+}
+
+.profile-close {
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.profile-close:hover {
+    color: var(--text);
+    background: var(--hover);
+}
+
+.profile-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 20px 20px;
+}
+
+/* 资料行：左标签右内容（微信"我的个人资料"布局） */
+.profile-field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.profile-avatar-field {
+    padding: 16px 0;
+}
+
+.profile-label {
+    font-size: 14px;
+    color: var(--text);
+    flex-shrink: 0;
+}
+
+.profile-value {
+    font-size: 14px;
+    color: var(--text-light);
+    text-align: right;
+    word-break: break-all;
+}
+
+/* 头像大图：hover 出现相机角标提示可更换 */
+.profile-avatar-wrap {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    flex-shrink: 0;
+    background: var(--placeholder-bg);
+}
+
+.profile-avatar-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.profile-avatar-camera {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.profile-avatar-wrap:hover .profile-avatar-camera {
+    opacity: 1;
+}
+
+.profile-input {
+    width: 200px;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 10px;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    outline: none;
+    text-align: right;
+}
+
+.profile-input:focus {
+    border-color: var(--primary);
+}
+
+/* 性别分段选择：选中项主题色归口 */
+.gender-switch {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.gender-opt {
+    padding: 5px 14px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    background: var(--panel-bg);
+    transition: background 0.15s, color 0.15s;
+}
+
+.gender-opt + .gender-opt {
+    border-left: 1px solid var(--border);
+}
+
+.gender-opt:hover {
+    color: var(--primary);
+}
+
+.gender-opt.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+/* 保存按钮：主题色块 */
+.profile-save {
+    display: block;
+    width: 100%;
+    margin-top: 24px;
+    padding: 10px 0;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 15px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.profile-save:hover {
+    opacity: 0.85;
+}
+
+/* ===== 阶段三十：好友资料卡（微信式居中卡片，点击好友头像弹出） ===== */
+.friend-card-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.friend-card {
+    position: relative;
+    width: 360px;
+    background: var(--panel-bg);
+    border-radius: 8px;
+    padding: 24px 24px 20px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    animation: modal-in 0.15s ease-out;
+}
+
+.friend-card-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.friend-card-close:hover {
+    color: var(--text);
+    background: var(--hover);
+}
+
+.friend-card-top {
+    display: flex;
+    gap: 16px;
+}
+
+.friend-card-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--placeholder-bg);
+}
+
+.friend-card-info {
+    flex: 1;
+    min-width: 0;
+    padding-top: 2px;
+}
+
+.friend-card-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.friend-card-name {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--text);
+    word-break: break-all;
+}
+
+/* 性别图标：微信同款 ♂蓝 / ♀粉 */
+.friend-card-gender {
+    font-size: 16px;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.friend-card-gender.male {
+    color: #1e88e5;
+}
+
+.friend-card-gender.female {
+    color: #ec407a;
+}
+
+.friend-card-sub {
+    font-size: 13px;
+    color: var(--text-light);
+    line-height: 1.8;
+    word-break: break-all;
+}
+
+.friend-card-btns {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 20px;
+}
+
+/* 资料卡按钮：发消息主色实底，设置备注描边（与 req-btn 同风格主题色归口） */
+.friend-card-btn {
+    padding: 8px 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.friend-card-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.friend-card-btn.primary:hover {
+    opacity: 0.85;
+    color: #fff;
+}
+
+.friend-card-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.friend-card-btn.primary:hover {
+    color: #fff;
+}
+

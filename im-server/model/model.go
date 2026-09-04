@@ -4,10 +4,16 @@ import "time"
 
 // User 用户信息表 im_user
 type User struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username   string    `gorm:"column:username;type:varchar(32);uniqueIndex;not null" json:"username"`
-	Password   string    `gorm:"column:password;type:varchar(64);not null" json:"-"`
-	Avatar     string    `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);uniqueIndex;not null" json:"username"`
+	Password string `gorm:"column:password;type:varchar(64);not null" json:"-"`
+	Avatar   string `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`
+	// 原实现：仅 username/password/avatar 三字段，无个人资料，点击头像只能直接换图
+	// 阶段三十：新增个人资料字段（微信式"我的个人资料"：昵称/性别/地区/签名），AutoMigrate 自动加列
+	Nickname  string    `gorm:"column:nickname;type:varchar(32);default:''" json:"nickname"`      // 昵称（空则前端展示用户名）
+	Gender    int8      `gorm:"column:gender;type:tinyint;default:0" json:"gender"`               // 性别：0未知 1男 2女
+	Region    string    `gorm:"column:region;type:varchar(64);default:''" json:"region"`          // 地区（如：山西 太原）
+	Signature string    `gorm:"column:signature;type:varchar(128);default:''" json:"signature"`   // 个性签名
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }

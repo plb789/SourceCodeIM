@@ -159,6 +159,75 @@
         <div class="menu-item" data-action="delete">删除好友</div>
     </div>
 
+    <!-- 阶段三十：个人资料面板（微信式右侧滑出，点击自己头像打开，可修改头像/昵称/性别/地区/签名） -->
+    <div id="profile-mask" class="profile-mask hidden"></div>
+    <div id="profile-panel" class="profile-panel hidden">
+        <div class="profile-header">
+            <span class="profile-title">个人资料</span>
+            <button id="profile-close" class="profile-close" title="关闭">×</button>
+        </div>
+        <div class="profile-content">
+            <!-- 头像行：点击大头像更换（复用现有 /upload/avatar 接口） -->
+            <div class="profile-field profile-avatar-field">
+                <span class="profile-label">头像</span>
+                <div id="profile-avatar-wrap" class="profile-avatar-wrap" title="点击更换头像">
+                    <img id="profile-avatar" src="" alt="头像">
+                    <span class="profile-avatar-camera">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 3l-1.5 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.5L15 3H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
+                    </span>
+                </div>
+            </div>
+            <div class="profile-field">
+                <span class="profile-label">昵称</span>
+                <input id="profile-nickname" class="profile-input" maxlength="32" placeholder="输入昵称" autocomplete="off">
+            </div>
+            <div class="profile-field">
+                <span class="profile-label">微信号</span>
+                <span id="profile-username" class="profile-value"></span>
+            </div>
+            <div class="profile-field">
+                <span class="profile-label">性别</span>
+                <div id="profile-gender" class="gender-switch">
+                    <span class="gender-opt" data-gender="0">未知</span>
+                    <span class="gender-opt" data-gender="1">男</span>
+                    <span class="gender-opt" data-gender="2">女</span>
+                </div>
+            </div>
+            <div class="profile-field">
+                <span class="profile-label">地区</span>
+                <input id="profile-region" class="profile-input" maxlength="64" placeholder="如：山西 太原" autocomplete="off">
+            </div>
+            <div class="profile-field">
+                <span class="profile-label">签名</span>
+                <input id="profile-signature" class="profile-input" maxlength="128" placeholder="填写个性签名" autocomplete="off">
+            </div>
+            <button id="profile-save" class="profile-save">保存</button>
+        </div>
+    </div>
+
+    <!-- 阶段三十：好友资料卡（微信式居中卡片，点击好友头像弹出：大头像/备注/昵称/性别/地区/签名 + 发消息/设置备注） -->
+    <div id="friend-card-mask" class="friend-card-mask hidden">
+        <div id="friend-card" class="friend-card">
+            <button id="friend-card-close" class="friend-card-close" title="关闭">×</button>
+            <div class="friend-card-top">
+                <img id="friend-card-avatar" class="friend-card-avatar" src="" alt="头像">
+                <div class="friend-card-info">
+                    <div class="friend-card-name-row">
+                        <span id="friend-card-name" class="friend-card-name"></span>
+                        <span id="friend-card-gender" class="friend-card-gender"></span>
+                    </div>
+                    <div class="friend-card-sub">微信号：<span id="friend-card-username"></span></div>
+                    <div class="friend-card-sub">地区：<span id="friend-card-region"></span></div>
+                    <div class="friend-card-sub">签名：<span id="friend-card-signature"></span></div>
+                </div>
+            </div>
+            <div class="friend-card-btns">
+                <button id="friend-card-chat" class="friend-card-btn primary">发消息</button>
+                <button id="friend-card-remark" class="friend-card-btn">设置备注</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 消息右键菜单（置顶/撤回/删除） -->
     <div id="msg-menu" class="friend-menu hidden">
         <div class="menu-item" data-action="pin">置顶</div>
@@ -189,7 +258,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.13"></script>
-    <script src="js/chat.js?v=1.26"></script>
+    <script src="js/socket.js?v=1.14"></script>
+    <script src="js/chat.js?v=1.27"></script>
 </body>
 </html>
