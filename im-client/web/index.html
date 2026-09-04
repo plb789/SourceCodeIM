@@ -24,7 +24,10 @@
         <!-- 阶段二十三：微信风格改版——左侧图标导航栏（头像+聊天/好友图标切换+底部工具按钮） -->
         <div class="nav-rail">
             <div class="nav-top">
-                <img id="current-avatar" class="avatar current-avatar" src="" alt="头像" title="点击更换头像">
+                <!-- 头像降级修复：img 默认隐藏，无头像/图片加载失败时由 chat.js 切换显示首字母占位（原空 src 会被浏览器渲染为破图） -->
+                <img id="current-avatar" class="avatar current-avatar" src="" alt="头像" title="点击更换头像" style="display: none;">
+                <!-- 头像降级修复：无头像时显示账号首字母占位（跟随主题色，与图片头像点击行为一致） -->
+                <div id="current-avatar-ph" class="avatar current-avatar placeholder" title="点击更换头像"></div>
                 <span id="current-user" class="current-user"></span>
             </div>
             <div class="nav-icons">
@@ -171,7 +174,9 @@
             <div class="profile-field profile-avatar-field">
                 <span class="profile-label">头像</span>
                 <div id="profile-avatar-wrap" class="profile-avatar-wrap" title="点击更换头像">
-                    <img id="profile-avatar" src="" alt="头像">
+                    <!-- 头像降级修复：img 默认隐藏且不带 src（带空 src 会在页面加载时触发 error 误降级），由 chat.js 统一接管 -->
+                    <img id="profile-avatar" alt="头像" style="display: none;">
+                    <span id="profile-avatar-ph" class="profile-avatar-ph"></span>
                     <span class="profile-avatar-camera">
                         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 3l-1.5 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.5L15 3H9zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
                     </span>
@@ -259,6 +264,6 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="js/socket.js?v=1.16"></script>
-    <script src="js/chat.js?v=1.29"></script>
+    <script src="js/chat.js?v=1.30"></script>
 </body>
 </html>

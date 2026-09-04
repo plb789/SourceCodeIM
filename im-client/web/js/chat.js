@@ -23,6 +23,8 @@
     var addFriendBtn = document.getElementById('add-friend-btn');
     var currentUserEl = document.getElementById('current-user');
     var currentAvatarEl = document.getElementById('current-avatar');
+    // 头像降级修复：左上角首字母占位元素（无头像/图片加载失败时显示，原 img 空 src 渲染为破图）
+    var navAvatarPhEl = document.getElementById('current-avatar-ph');
     var avatarFileEl = document.getElementById('avatar-file');
 
     // ===== 阶段三十：个人资料面板元素（微信式右侧滑出，点击自己头像打开） =====
@@ -31,6 +33,8 @@
     var profileClose = document.getElementById('profile-close');
     var profileAvatarWrap = document.getElementById('profile-avatar-wrap');
     var profileAvatarEl = document.getElementById('profile-avatar');
+    // 头像降级修复：资料面板大头像首字母占位元素（无头像/图片加载失败时显示）
+    var profileAvatarPhEl = document.getElementById('profile-avatar-ph');
     var profileUsernameEl = document.getElementById('profile-username');
     var profileNicknameEl = document.getElementById('profile-nickname');
     var profileGenderEl = document.getElementById('profile-gender');
@@ -200,6 +204,49 @@
     });
     themeBtn.textContent = '主题·' + themeNames[getTheme()];
 
+    // ===== 头像降级修复：导航栏左上角头像统一入口 =====
+    // 原实现：各处直接 currentAvatarEl.src 赋值，新注册账号 avatar 为空时 img 空 src 被浏览器渲染为破图（碎图标）
+    var navAvatarFailedUrl = ''; // 记录加载失败的头像地址，避免重复设置同一失效 URL（缓存错误结果）导致空白
+    // 有头像显示图片，无头像显示账号首字母占位（跟随主题色）
+    function setNavAvatar(url) {
+        if (url && url !== navAvatarFailedUrl) {
+            currentAvatarEl.src = url;
+            currentAvatarEl.style.display = '';
+            navAvatarPhEl.style.display = 'none';
+        } else {
+            // 关键：空 src 会被浏览器渲染为破图，必须移除 src 并隐藏 img，改显首字母占位
+            currentAvatarEl.removeAttribute('src');
+            currentAvatarEl.style.display = 'none';
+            navAvatarPhEl.textContent = (IMSocket.getUsername() || '?').charAt(0).toUpperCase();
+            navAvatarPhEl.style.display = 'flex';
+        }
+    }
+    // 头像文件失效（文件被清理/路径变更）时降级为首字母占位，避免破图
+    currentAvatarEl.addEventListener('error', function () {
+        navAvatarFailedUrl = currentAvatarEl.getAttribute('src') || '';
+        setNavAvatar('');
+    });
+    // 占位头像与图片头像点击行为一致：打开个人资料面板
+    navAvatarPhEl.addEventListener('click', openProfilePanel);
+
+    // ===== 头像降级修复：资料面板大头像统一入口 =====
+    function setProfileAvatar(url) {
+        if (url) {
+            profileAvatarEl.src = url;
+            profileAvatarEl.style.display = '';
+            profileAvatarPhEl.style.display = 'none';
+        } else {
+            profileAvatarEl.removeAttribute('src');
+            profileAvatarEl.style.display = 'none';
+            profileAvatarPhEl.textContent = (IMSocket.getUsername() || '?').charAt(0).toUpperCase();
+            profileAvatarPhEl.style.display = 'flex';
+        }
+    }
+    // 头像文件失效时降级为首字母占位，避免破图
+    profileAvatarEl.addEventListener('error', function () {
+        setProfileAvatar('');
+    });
+
     // ===== 头像上传 =====
     // 阶段三十：点击导航栏头像改为打开微信式"个人资料"面板（面板内点击大头像更换头像）
     // 原代码：currentAvatarEl.addEventListener('click', function () { avatarFileEl.click(); }); 点击直接弹文件选择
@@ -214,13 +261,13 @@
         }).then(function (r) { return r.json(); })
           .then(function (data) {
               if (data.avatar) {
-                  currentAvatarEl.src = data.avatar;
+                  setNavAvatar(data.avatar);
                   // 头像缺失修复：上传成功同步更新消息气泡头像数据源，后续发送的消息立即使用新头像
                   // 原代码：仅更新导航栏 currentAvatarEl.src
                   myAvatar = data.avatar;
                   userAvatars[IMSocket.getUsername()] = data.avatar;
                   // 阶段三十：资料面板内大头像同步更新（面板打开时换图即时可见）
-                  profileAvatarEl.src = data.avatar;
+                  setProfileAvatar(data.avatar);
               }
               else if (data.error) showToast(data.error);
           }).catch(function () { showToast('头像上传失败'); });
@@ -235,7 +282,7 @@
     // 打开个人资料面板：以当前资料状态填充表单
     function openProfilePanel() {
         profileUsernameEl.textContent = IMSocket.getUsername();
-        profileAvatarEl.src = myAvatar || '';
+        setProfileAvatar(myAvatar || '');
         profileNicknameEl.value = myProfile.nickname || '';
         profileRegionEl.value = myProfile.region || '';
         profileSignatureEl.value = myProfile.signature || '';
@@ -298,8 +345,8 @@
             applyGenderSelect(myProfile.gender);
             if (info.avatar) {
                 myAvatar = info.avatar;
-                currentAvatarEl.src = info.avatar;
-                profileAvatarEl.src = info.avatar;
+                setNavAvatar(info.avatar);
+                setProfileAvatar(info.avatar);
                 userAvatars[info.username] = info.avatar;
             }
         } else if (info.username === friendCardTarget) {
@@ -1124,8 +1171,10 @@
                 var loginInfo = JSON.parse(msg.content);
                 if (loginInfo && loginInfo.avatar) {
                     myAvatar = loginInfo.avatar;
-                    currentAvatarEl.src = myAvatar;
                 }
+                // 头像降级修复：登录成功后统一刷新左上角头像（新注册账号无头像时显示账号首字母占位）
+                // 原实现：仅在有头像时赋值 currentAvatarEl.src，无头像时占位元素未刷新
+                setNavAvatar(myAvatar);
                 // 阶段三十：登录响应携带完整个人资料，填充"我的个人资料"面板状态（服务端归口）
                 if (loginInfo && loginInfo.profile) {
                     myProfile = {
@@ -1159,7 +1208,7 @@
             if (u.username === IMSocket.getUsername()) {
                 if (!myAvatar && u.avatar) {
                     myAvatar = u.avatar;
-                    currentAvatarEl.src = myAvatar;
+                    setNavAvatar(myAvatar);
                 }
             }
         });

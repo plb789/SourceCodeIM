@@ -1605,6 +1605,18 @@ html, body {
     display: block;
 }
 
+/* 头像降级修复：资料面板大头像无图时显示账号首字母占位（背景继承 wrap 主题色占位底色） */
+.profile-avatar-ph {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    pointer-events: none;
+}
+
 .profile-avatar-camera {
     position: absolute;
     left: 0;
