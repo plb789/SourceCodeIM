@@ -854,11 +854,17 @@
             f.online = (msg.content === 'online');
             renderFriendList();
         }
+        // 阶段二十七：归属校验——上下线提示仅群聊视图显示全部成员，私聊视图仅显示会话对方，
+        // 原实现：无校验，任何人的上下线提示都渲染进当前打开的无关会话，切换会话后提示消失（串窗）
+        if (currentChatUser !== '' && msg.from_user !== currentChatUser) return;
         appendSystem(msg.from_user + (msg.content === 'online' ? ' 上线了' : ' 下线了'));
     });
 
     // 群聊/私聊消息
     IMSocket.on(MSG.GROUP_CHAT, function (msg) {
+        // 阶段二十七：归属校验——群聊消息仅在群聊视图渲染（与 GROUP_IMAGE 处理口径一致），
+        // 原实现：无校验，私聊视图打开时收到的群聊消息被串入当前窗口，切换会话后"消失"
+        if (currentChatUser !== '') return;
         var isMine = msg.from_user === IMSocket.getUsername();
         appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, false);
     });
@@ -944,6 +950,13 @@
     var historyTarget = ''; // 发起历史请求时的会话目标，用于校验响应归属
     var pinInfo = {};       // 置顶消息表：target -> {msg_id, from_user, content, create_time, pin_user}
     var locateState = { active: false, msgId: 0, page: 1, maxPage: 50, src: 'search' }; // 会话内搜索定位翻页状态（src：定位来源 pin=置顶条/search=搜索结果）
+    // 阶段二十七：向上滚动加载更多历史（对齐微信体验）
+    // 原实现：切换会话仅加载最近 20 条且无向上翻页机制，实时/离线补发累积超过 20 条的消息
+    // 在切换会话再切回后窗口按"最近 20 条"重渲染，更早内容从窗口消失且无法再查看（用户反馈"聊天记录没了"）
+    var PAGE_SIZE = 20;      // 每页历史条数（与服务端分页默认一致）
+    var historyPage = 1;     // 当前会话已加载到的最大页码
+    var historyHasMore = true;  // 是否还有更早的历史可加载
+    var loadingMore = false;    // 翻页请求进行中标记（防止滚动重复触发）
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
@@ -968,15 +981,31 @@
         closeConvSearch();
         messageList.innerHTML = '';
         renderPinBar();
+        // 阶段二十七：切换会话重置滚动分页状态（重新从第 1 页加载）
+        historyPage = 1;
+        historyHasMore = true;
+        loadingMore = false;
         loadHistory();
     }
 
     function loadHistory() {
         historyTarget = currentChatUser;
-        var msg = { msg_type: MSG.HISTORY, page: 1, page_size: 20 };
+        var msg = { msg_type: MSG.HISTORY, page: 1, page_size: PAGE_SIZE };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
         IMSocket.send(msg);
     }
+
+    // 阶段二十七：滚动到顶部自动加载更早的历史消息（prepend 渲染并保持滚动位置不跳动）
+    // 原实现：无滚动加载机制，窗口内只有最近 20 条，更早记录无法查看
+    messageList.addEventListener('scroll', function () {
+        if (locateState.active || loadingMore || !historyHasMore) return; // 定位翻页中/请求中/无更多：不触发
+        if (messageList.scrollTop > 60) return; // 未滚动到顶部附近
+        if (messageList.scrollHeight <= messageList.clientHeight) return; // 内容未撑满一屏时不触发
+        loadingMore = true;
+        var msg = { msg_type: MSG.HISTORY, page: historyPage + 1, page_size: PAGE_SIZE };
+        if (currentChatUser !== '') msg.to_user = currentChatUser;
+        IMSocket.send(msg);
+    });
 
     IMSocket.on(MSG.HISTORY_RESP, function (msg) {
         // 响应与会话不匹配（期间用户已切换会话）则忽略
@@ -992,8 +1021,25 @@
             return;
         }
 
+        // 阶段二十七：向上滚动翻页（page>1）：prepend 渲染更早消息并保持滚动位置
+        if (msg.page > 1) {
+            loadingMore = false;
+            historyPage = msg.page;
+            // 返回条数不足一页说明已到最早记录，停止继续向上加载
+            historyHasMore = records.length >= msg.page_size;
+            if (!records.length) return; // 已到最早记录（边界兜底）
+            var prevHeight = messageList.scrollHeight;
+            // 服务端按 ID 倒序返回（新→旧），依次插到列表最前，保持时间正序
+            records.forEach(function (r) { renderHistoryRecord(r, messageList.firstChild); });
+            // 用高度差补偿滚动位置，避免 prepend 后视口跳动
+            messageList.scrollTop = messageList.scrollHeight - prevHeight;
+            return;
+        }
+
         // 服务端按 ID 倒序返回，正序渲染
         records.reverse().forEach(function (r) { renderHistoryRecord(r); });
+        // 阶段二十七：首页返回不足一页说明全部记录已加载完
+        historyHasMore = records.length >= msg.page_size;
 
         // 加载历史后发送已读回执（对方消息的最大 ID，客户端水位去重）
         var maxId = 0;
@@ -1120,13 +1166,19 @@
     // 原实现：未找到一律提示"未找到该消息"，置顶条场景下无法区分"原消息已删除/不可见"与"超出加载范围"
     function handleLocatePage(records) {
         if (!locateState.active) return;
+        // 阶段二十七：定位翻页与滚动翻页共用历史页码——定位已加载的页数计入 historyPage，
+        // 防止定位加载过早期数后，向上滚动又从旧页码重复请求造成消息重复渲染
+        if (locateState.page > historyPage) historyPage = locateState.page;
         // 无更多历史仍未找到：停止定位
         if (!records.length) {
             locateState.active = false;
+            historyHasMore = false; // 阶段二十七：服务端已无更早记录，滚动翻页同步停止
             // 历史接口排除已撤回与自己删除的消息：置顶条定位翻完仍无，多为原消息已被自己删除或已撤回
             showToast(locateState.src === 'pin' ? '原消息已删除或不可见' : '未找到该消息');
             return;
         }
+        // 返回条数不足一页：说明已翻到最早记录，滚动翻页同步停止
+        if (records.length < PAGE_SIZE) historyHasMore = false;
         // prepend 渲染：按返回顺序（新→旧）依次插入到当前最前，保持时间正序
         records.forEach(function (r) {
             renderHistoryRecord(r, messageList.firstChild);
@@ -1148,7 +1200,7 @@
             showToast(locateState.src === 'pin' ? '原消息超出可加载范围，未能定位' : '未找到该消息（超出可加载范围）');
             return;
         }
-        var msg = { msg_type: MSG.HISTORY, page: locateState.page, page_size: 20 };
+        var msg = { msg_type: MSG.HISTORY, page: locateState.page, page_size: PAGE_SIZE };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
         IMSocket.send(msg);
     }
