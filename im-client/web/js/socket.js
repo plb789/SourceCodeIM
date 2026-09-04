@@ -103,6 +103,10 @@
             // "失败→3秒重连→失败"无限循环且每次都无提示，页面表现为点击登录后毫无反应
             if (loginOk) {
                 scheduleReconnect();
+            } else {
+                // 登录持久化：未登录成功即断开（服务端未启动/密码错误被拒），
+                // 派发连接失败事件，供乐观显示的聊天界面回退到登录界面
+                try { window.dispatchEvent(new CustomEvent('im_connect_failed')); } catch (e) {}
             }
         };
 

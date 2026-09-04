@@ -187,24 +187,76 @@
     }
 
     // ===== 退出 =====
-    logoutBtn.addEventListener('click', function () { location.reload(); });
+    // 登录持久化：退出登录时清除已保存凭据，刷新后回到登录界面（否则自动登录会直接再次进入）
+    // 原实现：logoutBtn.addEventListener('click', function () { location.reload(); });
+    logoutBtn.addEventListener('click', function () {
+        clearAuth();
+        location.reload();
+    });
+
+    // ===== 登录持久化：刷新页面后保持登录状态 =====
+    // 原实现：登录状态仅存于 JS 内存变量，刷新后全部丢失，必须重新输入账号密码登录
+    // 方案：登录成功后将凭据存入 localStorage（base64 轻度混淆），页面加载时自动重连登录；
+    //       退出登录或登录失败（如密码已被修改）时清除凭据，回退到手动登录
+    function saveAuth(u, p) {
+        try { localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: u, p: p })))); } catch (e) {}
+    }
+    function clearAuth() {
+        try { localStorage.removeItem('im_auth'); } catch (e) {}
+    }
+    function getSavedAuth() {
+        try { return JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || null; } catch (e) { return null; }
+    }
+    // 页面加载时存在已保存凭据则自动登录（预填登录框便于用户感知当前账号）
+    // 乐观显示：立即切换到聊天界面再后台连接，避免等待服务端登录响应期间闪现登录窗口；
+    // 连接失败或登录失败时再回退到登录界面（见 LOGIN_RESP 失败分支与 im_connect_failed 监听）
+    (function autoLogin() {
+        var saved = getSavedAuth();
+        if (saved && saved.u && saved.p) {
+            loginUsername.value = saved.u;
+            loginPassword.value = saved.p;
+            loginView.classList.add('hidden');
+            chatView.classList.remove('hidden');
+            IMSocket.connect(saved.u, saved.p);
+        }
+    })();
+    // 登录持久化：自动登录期间连接失败（服务端未启动/登录被拒后断开），
+    // 从乐观显示的聊天界面回退到登录界面（socket.js onclose 且未登录成功时派发该事件）
+    window.addEventListener('im_connect_failed', function () {
+        loginView.classList.remove('hidden');
+        chatView.classList.add('hidden');
+    });
 
     // ===== 主题切换 =====
     var themes = ['light', 'dark', 'system'];
     var themeNames = { light: '浅色', dark: '深色', system: '跟随系统' };
+    // 主题按钮改为图标显示（与聊天/通讯录图标同风格 SVG，跟随主题色）：
+    // 浅色=太阳图标 深色=月亮图标 跟随系统=显示器图标，主题名称通过 title 悬停提示展示
+    // 原实现：themeBtn.textContent = '主题·' + themeNames[next] 文字按钮，已注释保留备用
+    // themeBtn.textContent = '主题·' + themeNames[next];
+    var themeIcons = {
+        light: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/></svg>',
+        dark: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.39 5.39 0 0 1 12 3z"/></svg>',
+        system: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>'
+    };
     function getTheme() { return localStorage.getItem('im_theme') || 'light'; }
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('im_theme', theme);
+    }
+    // 按当前主题刷新按钮图标与悬停提示
+    function renderThemeBtn(theme) {
+        themeBtn.innerHTML = themeIcons[theme];
+        themeBtn.title = '主题·' + themeNames[theme];
     }
     applyTheme(getTheme());
     themeBtn.addEventListener('click', function () {
         var idx = themes.indexOf(getTheme());
         var next = themes[(idx + 1) % themes.length];
         applyTheme(next);
-        themeBtn.textContent = '主题·' + themeNames[next];
+        renderThemeBtn(next);
     });
-    themeBtn.textContent = '主题·' + themeNames[getTheme()];
+    renderThemeBtn(getTheme());
 
     // ===== 头像降级修复：导航栏左上角头像统一入口 =====
     // 原实现：各处直接 currentAvatarEl.src 赋值，新注册账号 avatar 为空时 img 空 src 被浏览器渲染为破图（碎图标）
@@ -1165,6 +1217,9 @@
             try { ok = JSON.parse(msg.content).result === 'ok'; } catch (e) {}
         }
         if (ok) {
+            // 登录持久化：登录成功保存凭据，刷新页面时自动重登保持登录状态
+            // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
+            saveAuth(IMSocket.getUsername(), window._lastPassword || '');
             currentUserEl.textContent = IMSocket.getUsername();
             // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
             // 同步更新导航栏头像与消息气泡头像数据源
@@ -1195,6 +1250,11 @@
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
         } else {
+            // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
+            // 并从乐观显示的聊天界面回退到登录界面
+            clearAuth();
+            loginView.classList.remove('hidden');
+            chatView.classList.add('hidden');
             showToast('登录失败：' + msg.content);
         }
     });
