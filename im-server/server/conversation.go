@@ -62,10 +62,11 @@ func (s *Server) pushConvList(c *Client) {
 			// 私聊未读数：对方发给我且未读的未撤回消息
 			// 阶段十四增强：排除自己已删除的消息（删除仅对自己生效，不可见消息不应计入未读）
 			// 原实现：仅排除已撤回，删除未读消息后角标不减，与"删除仅对自己生效"语义矛盾
+			// 阶段二十四：图片消息(4)与文件消息(5)同样计入未读
 			store.DB.Model(&model.Message{}).
-				Where("msg_type = ? AND from_user = ? AND to_user = ? AND is_read = ? AND recalled = ?"+
+				Where("msg_type IN ? AND from_user = ? AND to_user = ? AND is_read = ? AND recalled = ?"+
 					" AND id NOT IN (SELECT msg_id FROM im_msg_delete WHERE user_id = ?)",
-					2, cv.Target, c.username, false, false, c.username).
+					[]int{2, 4, 5}, cv.Target, c.username, false, false, c.username).
 				Count(&unread)
 		}
 		infos = append(infos, ConvInfo{

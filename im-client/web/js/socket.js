@@ -44,7 +44,8 @@
         MSG_PIN: 29,
         MSG_PIN_SYNC: 30,
         CONV_SEARCH: 31,
-        CONV_SEARCH_RESP: 32
+        CONV_SEARCH_RESP: 32,
+        FILE_PERSISTED: 33
     };
 
     function connect(username, password) {

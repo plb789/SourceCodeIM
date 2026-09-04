@@ -381,7 +381,8 @@ func (s *Server) handleFileChunk(c *Client, msg *protocol.Message) {
 	if msg.TotalChunks > 0 {
 		count, _ := store.RDB.SCard(ctx, key).Result()
 		if int(count) >= msg.TotalChunks {
-			store.DB.Model(&model.FileRecord{}).Where("id = ?", msg.FileID).Update("status", 1)
+			// 阶段二十四：条件更新，避免覆盖持久化状态 3（上传接口与分片完成判定存在并发时序）
+			store.DB.Model(&model.FileRecord{}).Where("id = ? AND status < ?", msg.FileID, 3).Update("status", 1)
 			logger.Info("文件传输完成: fileID=%s", msg.FileID)
 			store.RDB.Del(ctx, key)
 		}
@@ -425,8 +426,9 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		query = query.Where("msg_type = ?", 1)
 	} else {
 		// 私聊历史：双方互发的私聊消息
-		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			2, c.username, msg.ToUser, msg.ToUser, c.username)
+		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
+		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+			[]int{2, 4, 5}, c.username, msg.ToUser, msg.ToUser, c.username)
 	}
 
 	if err := query.Order("id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&records).Error; err != nil {

@@ -171,8 +171,9 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
 	} else {
 		// 私聊会话：双方互发消息，摘要更新双方
-		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			2, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
+		// 阶段二十四：纳入图片消息(4)与文件消息(5)，撤回文字后摘要应重算为最新的图片/文件消息摘要
+		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+			[]int{2, 4, 5}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
 		users = []string{record.FromUser, record.ToUser}
 	}
 	var latest model.Message
@@ -185,10 +186,22 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 	// 被误判为"存在更新的可见消息"导致摘要不更新；实际此时被撤回的就是最后的可见消息，应更新摘要
 	// 摘要重算：撤回最后一条可见消息时显示撤回提示；撤回中间消息时重算为最新可见消息内容，
 	// 避免摘要残留已撤回内容（服务端统一归口，与会话列表展示保持一致）
+	// 阶段二十四：图片/文件消息的摘要按类型显示 [图片]/[文件]，避免 JSON 原文出现在会话列表
 	summary := "[消息已撤回]"
-	if err == nil && latest.ID != record.ID {
+	// 原实现：if err == nil && latest.ID != record.ID {
+	// 判断条件缺陷：被撤回消息已先标记 recalled，查询（recalled=false）必不返回自身，
+	// latest.ID 恒不等于 record.ID，导致撤回"最后一条可见消息"时误用更早的历史消息重算摘要
+	// （如显示旧消息内容/[图片]），而非预期的"[消息已撤回]"；
+	// 正确语义为仅当存在比被撤回消息更新的可见消息（即撤回的是中间消息）才重算摘要
+	if err == nil && latest.ID > record.ID {
 		// 会话存在更新的可见消息：摘要重算为最新可见消息内容
 		summary = latest.Content
+		switch latest.MsgType {
+		case 4:
+			summary = "[图片]"
+		case 5:
+			summary = "[文件]"
+		}
 		if len(summary) > 200 {
 			summary = summary[:200]
 		}

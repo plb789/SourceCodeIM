@@ -20,6 +20,10 @@ type Config struct {
 	MaxConnections int `yaml:"max_connections"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
+	// 阶段二十四：聊天文件持久化存储目录（相对服务端运行目录，位于前端静态目录内可直接 URL 访问）
+	UploadDir string `yaml:"upload_dir"`
+	// 阶段二十四：聊天文件持久化大小上限（字节）
+	MaxFileSize int `yaml:"max_file_size"`
 
 	// MySQL 配置
 	MySQLDSN string `yaml:"mysql_dsn"`
@@ -38,6 +42,8 @@ func Default() *Config {
 		ChunkSize:         4096,
 		MaxConnections:    1000,
 		RecallWindow:      120,
+		UploadDir:         "../im-client/web/static/upload",
+		MaxFileSize:       20 << 20, // 20MB
 
 		MySQLDSN:      "root:root@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=Local",
 		RedisAddr:     "127.0.0.1:6379",
@@ -68,6 +74,13 @@ func Load() *Config {
 	}
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 90
+	}
+	// 阶段二十四：文件持久化配置兜底
+	if cfg.UploadDir == "" {
+		cfg.UploadDir = "../im-client/web/static/upload"
+	}
+	if cfg.MaxFileSize <= 0 {
+		cfg.MaxFileSize = 20 << 20
 	}
 	return cfg
 }

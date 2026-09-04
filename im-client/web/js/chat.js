@@ -383,7 +383,11 @@
     function sendChunks(file, fileId, toUser, total) {
         var idx = 0;
         function next() {
-            if (idx >= total) return;
+            if (idx >= total) {
+                // 阶段二十四：分片全部发送完成后，回传原文件持久化（服务端按 file_id 幂等落库，历史可重现）
+                persistUploadedFile(file, fileId);
+                return;
+            }
             var start = idx * CHUNK_SIZE;
             var blob = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
             var reader = new FileReader();
@@ -401,6 +405,35 @@
         next();
     }
 
+    // 阶段二十四：回传原文件给服务端持久化（POST /upload/file，服务端按 file_id 幂等落库）
+    // 上传失败仅告警不影响实时显示（blob 渲染照常），刷新后该消息从历史中消失属预期降级
+    function persistUploadedFile(file, fileId) {
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload/file?file_id=' + encodeURIComponent(fileId) + '&username=' + encodeURIComponent(IMSocket.getUsername()), {
+            method: 'POST',
+            body: fd
+        }).then(function (r) { return r.json(); }).then(function (res) {
+            // msg_id 回填统一由 FILE_PERSISTED 服务端通知处理（服务端归口，双方一致，按 file_id 精确匹配）
+            // 原实现：HTTP 响应后取"最后一条无 msg_id 的 self 气泡"回填，仅发送方生效且并发发送时可能错位
+            // if (res && res.msg_id) {
+            //     var bubbles = messageList.querySelectorAll('.message.self:not([data-msg-id])');
+            //     var last = bubbles[bubbles.length - 1];
+            //     if (last) last.setAttribute('data-msg-id', res.msg_id);
+            // }
+        }).catch(function (e) {
+            console.warn('文件持久化上传失败（不影响实时显示）:', e);
+        });
+    }
+
+    // 持久化完成同步：双方实时气泡按 file_id 精确回填 msg_id
+    // （撤回/删除/置顶能力前提；对方撤回图片/文件时本端提示才能替换原气泡而非残留）
+    IMSocket.on(MSG.FILE_PERSISTED, function (msg) {
+        if (!msg.file_id || !msg.msg_id) return;
+        var el = messageList.querySelector('.message[data-file-id="' + msg.file_id + '"]');
+        if (el) el.setAttribute('data-msg-id', msg.msg_id);
+    });
+
     // 文件消息处理：自己收到的是文件头回执（开始上传），对方的是文件头/分片（接收组装）
     IMSocket.on(MSG.FILE, function (msg) {
         var isMine = msg.from_user === IMSocket.getUsername();
@@ -408,6 +441,11 @@
             // 服务端回执文件头：携带持久化 file_id，开始分片上传
             var task = pendingUploads.shift();
             if (task && msg.chunk_index === -1 && msg.file_id) {
+                // 气泡记录 file_id：持久化完成通知按 file_id 精确回填 msg_id（并发发送多文件不错位）
+                // 原实现：气泡不记录 file_id，回填依赖"最后一条无 msg_id 的气泡"推测，并发时可能错位
+                var mineBubbles = messageList.querySelectorAll('.message.self:not([data-file-id])');
+                var mineLast = mineBubbles[mineBubbles.length - 1];
+                if (mineLast) mineLast.setAttribute('data-file-id', msg.file_id);
                 sendChunks(task.file, msg.file_id, msg.to_user, task.total);
             }
             return;
@@ -439,11 +477,13 @@
             var blob = new Blob(parts);
             var url = URL.createObjectURL(blob);
             var visibleUser = currentChatUser === msg.from_user;
+            var mediaEl = null;
             if (isImageName(buf.name)) {
-                if (visibleUser) appendImageMsg(msg.from_user, url, 'other');
+                if (visibleUser) mediaEl = appendImageMsg(msg.from_user, url, 'other');
             } else {
-                if (visibleUser) appendFileMsg(msg.from_user, buf.name, formatSize(buf.size), url, 'other');
+                if (visibleUser) mediaEl = appendFileMsg(msg.from_user, buf.name, formatSize(buf.size), url, 'other');
             }
+            if (mediaEl) mediaEl.setAttribute('data-file-id', msg.file_id); // 气泡记录 file_id，持久化通知回填 msg_id 用
             if (!visibleUser) {
                 // 原实现：unreadCount[msg.from_user] = (unreadCount[msg.from_user] || 0) + 1; renderFriendList();
                 // 未读数服务端归口：文件消息不入 im_message 表，服务端未读统计不覆盖文件消息，
@@ -927,6 +967,17 @@
         // 现叠加本地已读水位即时应用：自己发送的私聊消息若已被读到更大 ID 则直接显示"已读"
         var wm = (isMine && isPrivate) ? (readWatermark[r.to_user] || 0) : 0;
         var isRead = r.is_read || (wm >= r.id);
+        // 阶段二十四：图片消息(4)/文件消息(5)持久化渲染（content 为 JSON：url/name/size）
+        if (r.msg_type === 4 || r.msg_type === 5) {
+            var mediaDiv = createMediaMessageEl(r, isMine, ts, isPrivate, isRead);
+            if (beforeEl) {
+                messageList.insertBefore(mediaDiv, beforeEl);
+            } else {
+                messageList.appendChild(mediaDiv);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, isRead);
         if (beforeEl) {
             messageList.insertBefore(div, beforeEl);
@@ -934,6 +985,73 @@
             messageList.appendChild(div);
             messageList.scrollTop = messageList.scrollHeight;
         }
+    }
+
+    // 阶段二十四：构建图片/文件历史消息元素（元数据与文字消息一致：msg-id/from/ts/已读状态，供撤回、定位复用）
+    function createMediaMessageEl(r, isMine, ts, isPrivate, isRead) {
+        var type = isMine ? 'self' : 'other';
+        var meta = {};
+        try { meta = JSON.parse(r.content); } catch (e) { meta = {}; }
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        if (r.id) div.setAttribute('data-msg-id', r.id);
+        div.setAttribute('data-from', r.from_user);
+        if (ts) div.setAttribute('data-ts', ts);
+        var nameEl = document.createElement('div');
+        nameEl.className = 'message-name';
+        nameEl.textContent = r.from_user;
+        div.appendChild(nameEl);
+        if (r.msg_type === 4) {
+            // 图片消息：URL 直出，点击查看大图
+            var bubbleImg = document.createElement('div');
+            bubbleImg.className = 'message-bubble bubble-image';
+            var img = document.createElement('img');
+            img.className = 'chat-image';
+            img.src = meta.url || '';
+            img.addEventListener('click', function () {
+                window.open(meta.url, '_blank');
+            });
+            bubbleImg.appendChild(img);
+            div.appendChild(bubbleImg);
+        } else {
+            // 文件消息：文件卡片（图标+文件名+大小），点击下载
+            var bubbleFile = document.createElement('div');
+            bubbleFile.className = 'message-bubble bubble-file';
+            var icon = document.createElement('div');
+            icon.className = 'file-icon';
+            icon.textContent = '📄';
+            var info = document.createElement('div');
+            info.className = 'file-info';
+            var fileName = document.createElement('div');
+            fileName.className = 'file-name';
+            fileName.textContent = meta.name || '未命名文件';
+            var fileSize = document.createElement('div');
+            fileSize.className = 'file-size';
+            fileSize.textContent = formatSize(meta.size || 0);
+            info.appendChild(fileName);
+            info.appendChild(fileSize);
+            bubbleFile.appendChild(icon);
+            bubbleFile.appendChild(info);
+            if (meta.url) {
+                bubbleFile.style.cursor = 'pointer';
+                bubbleFile.addEventListener('click', function () {
+                    var a = document.createElement('a');
+                    a.href = meta.url;
+                    a.download = meta.name || 'file';
+                    a.click();
+                });
+            }
+            div.appendChild(bubbleFile);
+        }
+        // 自己发送的私聊消息显示已读/未读状态（与文字消息一致）
+        if (isMine && isPrivate && r.id) {
+            var status = document.createElement('div');
+            status.className = 'msg-status' + (isRead ? ' read' : '');
+            status.setAttribute('data-msg-id', r.id);
+            status.textContent = isRead ? '已读' : '未读';
+            div.appendChild(status);
+        }
+        return div;
     }
 
     // ===== 会话内搜索定位：向前翻页加载直到找到目标消息 =====
@@ -1376,6 +1494,10 @@
     function appendImageMsg(fromUser, url, type) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
+        // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
+        // 原实现：未设置 data-from/data-ts，实时图片气泡回填 msg_id 后撤回菜单仍不可见（isMine 恒 false）
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
         nameEl.textContent = fromUser;
@@ -1392,12 +1514,17 @@
         div.appendChild(bubble);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
+        return div;
     }
 
     // 文件消息渲染（文件卡片：图标 + 文件名 + 大小，点击下载）
     function appendFileMsg(fromUser, name, sizeText, url, type) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
+        // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
+        // 原实现：未设置 data-from/data-ts，实时文件气泡回填 msg_id 后撤回菜单仍不可见（isMine 恒 false）
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
         nameEl.textContent = fromUser;
@@ -1431,5 +1558,6 @@
         div.appendChild(bubble);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
+        return div;
     }
 })();

@@ -20,3 +20,8 @@ mysql_dsn: "root:root@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=
 redis_addr: "127.0.0.1:6379"
 redis_password: ""
 redis_db: 0
+
+# 阶段二十四：聊天文件持久化存储目录（相对服务端运行目录）
+upload_dir: "../im-client/web/static/upload"
+# 阶段二十四：聊天文件持久化大小上限（字节，默认 20MB）
+max_file_size: 20971520

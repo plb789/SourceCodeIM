@@ -75,7 +75,8 @@ type FileRecord struct {
 	FilePath   string    `gorm:"column:file_path;type:varchar(255);not null" json:"file_path"`
 	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
 	ToUser     string    `gorm:"column:to_user;type:varchar(32);not null" json:"to_user"`
-	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"` // 0传输中 1传输完成 2传输失败
+	Status     int8      `gorm:"column:status;type:tinyint;default:0" json:"status"` // 0传输中 1传输完成 2传输失败 3已持久化（阶段二十四：文件已回传存储并落库消息）
+	MsgID      uint      `gorm:"column:msg_id;default:0" json:"msg_id"`              // 阶段二十四：持久化后对应的 im_message 消息 ID（幂等依据）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 

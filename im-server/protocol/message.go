@@ -35,6 +35,7 @@ const (
 	MsgTypeMsgPinSync        = 30 // 置顶消息状态同步（content 为 JSON，msg_id=0 表示无置顶）
 	MsgTypeConvSearch        = 31 // 会话内消息搜索（当前聊天窗口内）
 	MsgTypeConvSearchResp    = 32 // 会话内搜索响应
+	MsgTypeFilePersisted     = 33 // 聊天文件持久化完成同步（携带 file_id + msg_id，双方实时气泡回填消息 ID）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
