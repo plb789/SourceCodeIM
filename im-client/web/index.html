@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>即时通讯</title>
-    <link rel="stylesheet" href="css/style.css?v=1.3">
+    <link rel="stylesheet" href="css/style.css?v=1.7">
 </head>
 <body>
     <!-- 登录视图 -->
@@ -21,19 +21,42 @@
 
     <!-- 聊天视图 -->
     <div id="chat-view" class="chat-view hidden">
-        <!-- 左侧栏 -->
-        <div class="sidebar">
-            <div class="sidebar-header">
+        <!-- 阶段二十三：微信风格改版——左侧图标导航栏（头像+聊天/好友图标切换+底部工具按钮） -->
+        <div class="nav-rail">
+            <div class="nav-top">
                 <img id="current-avatar" class="avatar current-avatar" src="" alt="头像" title="点击更换头像">
                 <span id="current-user" class="current-user"></span>
-                <button id="add-friend-btn" class="logout-btn" title="添加好友">＋</button>
-                <button id="theme-btn" class="logout-btn" title="切换主题">主题</button>
-                <button id="logout-btn" class="logout-btn">退出</button>
             </div>
-            <!-- 侧栏 Tab：聊天（会话列表）/ 好友（通讯录） -->
-            <div class="sidebar-tabs">
-                <div class="sidebar-tab active" data-tab="chat">聊天</div>
-                <div class="sidebar-tab" data-tab="friends">好友</div>
+            <div class="nav-icons">
+                <!-- 复用 sidebar-tab 类名与 data-tab 属性，JS 切换逻辑零改动 -->
+                <div class="nav-icon sidebar-tab active" data-tab="chat" title="聊天">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 3C6.48 3 2 6.94 2 11.8c0 2.62 1.34 4.97 3.5 6.59-.13 1.06-.56 2.12-1.25 2.92-.2.24-.03.61.29.61 1.63 0 3.11-.62 4.23-1.45 1.02.28 2.11.43 3.23.43 5.52 0 10-3.94 10-8.8S17.52 3 12 3z"/></svg>
+                    <span id="nav-chat-badge" class="nav-badge hidden"></span>
+                </div>
+                <div class="nav-icon sidebar-tab" data-tab="friends" title="通讯录">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-3.31 0-8 1.67-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-3.33-4.69-5-8-5z"/></svg>
+                </div>
+            </div>
+            <div class="nav-bottom">
+                <button id="add-friend-btn" class="nav-btn" title="添加好友">
+                    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm11-4V7h-2v3h-3v2h3v3h2v-3h3v-2z"/></svg>
+                </button>
+                <button id="theme-btn" class="nav-btn" title="切换主题">
+                    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.39 5.39 0 0 1 12 3z"/></svg>
+                </button>
+                <button id="logout-btn" class="nav-btn" title="退出登录">
+                    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17 8l-1.41 1.41L17.17 11H9v2h8.17l-1.58 1.59L17 16l4-4zM5 5h6V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6v-2H5z"/></svg>
+                </button>
+            </div>
+        </div>
+        <!-- 列表栏：搜索框固定顶部（微信位置一致），下方为会话列表/好友列表 -->
+        <div class="sidebar">
+            <div class="search-bar">
+                <span id="search-icon-btn" class="search-icon" title="搜索">
+                    <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                </span>
+                <input id="search-input" placeholder="搜索">
+                <button id="search-clear-btn" class="hidden" title="清空搜索">×</button>
             </div>
 
             <!-- 最近会话列表（聊天 Tab） -->
@@ -41,17 +64,13 @@
 
             <!-- 好友面板（好友 Tab） -->
             <div id="friends-panel" class="friends-panel hidden">
-                <div class="search-bar">
-                    <input id="search-input" placeholder="搜索聊天记录（回车）">
-                    <button id="search-clear-btn" class="hidden" title="关闭搜索结果">×</button>
-                </div>
                 <ul id="user-list" class="user-list">
                     <li class="user-item group-item active" data-user="">群聊</li>
                 </ul>
-
-                <!-- 搜索结果面板 -->
-                <div id="search-panel" class="search-panel hidden"></div>
             </div>
+
+            <!-- 搜索结果面板：置于侧栏层，聊天/好友两个Tab下均可展示 -->
+            <div id="search-panel" class="search-panel hidden"></div>
         </div>
         <!-- 主聊天区 -->
         <div class="main-chat">
@@ -153,6 +172,6 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="js/socket.js?v=1.10"></script>
-    <script src="js/chat.js?v=1.13"></script>
+    <script src="js/chat.js?v=1.16"></script>
 </body>
 </html>

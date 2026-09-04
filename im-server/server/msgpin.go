@@ -8,6 +8,8 @@ import (
 	"im-server/model"
 	"im-server/protocol"
 	"im-server/store"
+
+	"gorm.io/gorm/clause"
 )
 
 // PinMsgInfo 推送给前端的置顶消息信息（MsgID=0 表示该会话无置顶消息）
@@ -76,10 +78,16 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 				s.sendError(c, "消息已在置顶中")
 				return
 			}
-			store.DB.Model(&model.MessagePin{}).Where("id = ?", existing.ID).
-				Updates(map[string]interface{}{"msg_id": record.ID, "pin_user": c.username})
-		} else {
-			store.DB.Create(&model.MessagePin{ConvKey: key, MsgID: record.ID, PinUser: c.username})
+		}
+		// 阶段十六增强：置顶写库并发安全——按会话键原子 upsert（唯一键冲突时更新），
+		// 多端并发置顶不同消息时后写者胜出且仅保留一行，避免"先查后写"竞态撞唯一索引静默失败
+		// 原实现：First→Create/Updates 两步写库且错误未检查，并发下第二个请求撞 conv_key 唯一索引后静默失败，提示与真实状态不一致
+		if err := store.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "conv_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"msg_id", "pin_user"}),
+		}).Create(&model.MessagePin{ConvKey: key, MsgID: record.ID, PinUser: c.username}).Error; err != nil {
+			s.sendError(c, "置顶失败，请稍后重试")
+			return
 		}
 		s.sendError(c, "消息已置顶")
 	} else {
@@ -92,7 +100,12 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 			s.sendError(c, "已取消置顶")
 			return
 		}
-		store.DB.Where("conv_key = ?", key).Delete(&model.MessagePin{})
+		// 阶段十六增强：取消置顶写库错误检查，失败时不误报成功也不触发同步
+		// 原实现：Delete 错误未检查，失败时仍提示成功并同步错误状态
+		if err := store.DB.Where("conv_key = ?", key).Delete(&model.MessagePin{}).Error; err != nil {
+			s.sendError(c, "取消置顶失败，请稍后重试")
+			return
+		}
 		s.sendError(c, "已取消置顶")
 	}
 
@@ -203,4 +216,18 @@ func (s *Server) pushPinList(c *Client) {
 		})
 		c.send(out)
 	}
+}
+
+// clearPinForConv 会话维度清理置顶记录并同步双方（阶段十六：删除好友/拉黑联动取消置顶）
+// 关系终止属会话级事件，无论置顶人是谁均整条清理，防止关系终止后置顶条残留（孤儿置顶）
+// 原实现：删除好友/拉黑仅删 im_friend/im_blacklist 记录，置顶记录残留导致双方重登仍还原置顶条
+func (s *Server) clearPinForConv(self, target string) {
+	key := convKey(self, target)
+	var count int64
+	store.DB.Model(&model.MessagePin{}).Where("conv_key = ?", key).Count(&count)
+	if count == 0 {
+		return
+	}
+	store.DB.Where("conv_key = ?", key).Delete(&model.MessagePin{})
+	s.syncPinByKey(key)
 }

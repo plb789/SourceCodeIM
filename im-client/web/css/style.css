@@ -32,6 +32,9 @@
     --panel-bg: #1e1e1e;
     --header-bg: #1a1a1a;
     --placeholder-bg: #555555;
+    --rail-bg: #141414;       /* 深色主题下导航栏更深 */
+    --rail-icon: #8a8a8a;
+    --rail-hover: rgba(255, 255, 255, 0.08);
     --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
 }
 
@@ -52,6 +55,9 @@
         --panel-bg: #1e1e1e;
         --header-bg: #1a1a1a;
         --placeholder-bg: #555555;
+        --rail-bg: #141414;
+        --rail-icon: #8a8a8a;
+        --rail-hover: rgba(255, 255, 255, 0.08);
         --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
     }
 }
@@ -150,12 +156,129 @@ html, body {
     flex-direction: column;
 }
 
+/* 原实现：侧栏头部（头像+用户名+工具按钮横排），阶段二十三改为左侧图标导航栏，保留备用
 .sidebar-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 14px 16px;
     border-bottom: 1px solid var(--border);
+}
+*/
+
+/* ===== 阶段二十三：微信风格左侧图标导航栏 ===== */
+.nav-rail {
+    width: 56px;
+    flex-shrink: 0;
+    background: var(--rail-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 18px 0 14px;
+}
+
+.nav-top {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+
+.nav-rail .current-avatar {
+    width: 34px;
+    height: 34px;
+}
+
+.nav-rail .current-user {
+    font-size: 10px;
+    color: var(--rail-icon);
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nav-icons {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 26px;
+}
+
+.nav-icon {
+    position: relative;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--rail-icon);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+}
+
+.nav-icon:hover {
+    background: var(--rail-hover);
+}
+
+.nav-icon.active {
+    color: var(--primary);
+}
+
+/* 微信风格：选中图标左侧主题色竖条指示 */
+.nav-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -9px;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--primary);
+}
+
+.nav-badge {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 10px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.nav-bottom {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.nav-btn {
+    padding: 6px;
+    border: none;
+    background: none;
+    color: var(--rail-icon);
+    cursor: pointer;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+}
+
+.nav-btn:hover {
+    background: var(--rail-hover);
+    color: var(--text);
 }
 
 .current-user {
@@ -332,6 +455,9 @@ html, body {
 
 .message.self {
     margin-left: auto;
+    /* 阶段二十三修复：气泡为 inline-block，原仅 margin-left:auto 时气泡停在 70% 盒子左缘（视觉居中），
+       增加 text-align:right 使气泡贴合右侧，微信同款 */
+    text-align: right;
 }
 
 .message-name {
@@ -516,7 +642,9 @@ html, body {
 
 /* 文件消息气泡（微信风格文件卡片） */
 .bubble-file {
-    display: flex;
+    /* 阶段二十三修复：原 display:flex 为块级显示，self 消息时不受父级 text-align 控制
+       导致自己的文件卡片停在 70% 盒子左缘（视觉居中），改为 inline-flex 贴合右对齐 */
+    display: inline-flex;
     align-items: center;
     gap: 10px;
     min-width: 200px;
@@ -643,7 +771,8 @@ html, body {
 
 .search-panel {
     position: absolute;
-    top: 92px;
+    /* 原实现：top: 92px;（搜索框在好友Tab内部），阶段二十三搜索框固定于列表栏顶部 */
+    top: 52px;
     left: 0;
     right: 0;
     bottom: 0;
@@ -699,7 +828,7 @@ html, body {
     margin-top: 2px;
 }
 
-/* 侧栏 Tab（聊天/好友）与最近会话列表（微信风格，跟随主题色） */
+/* 原实现：侧栏文字Tab（聊天/好友），阶段二十三改为左侧图标导航栏，保留备用
 .sidebar-tabs {
     display: flex;
     border-bottom: 1px solid var(--border);
@@ -725,6 +854,7 @@ html, body {
     color: var(--primary);
     border-bottom-color: var(--primary);
 }
+*/
 
 .friends-panel {
     display: flex;
@@ -1084,4 +1214,27 @@ html, body {
 .message.msg-highlight {
     animation: msg-highlight-fade 2s ease-out;
     border-radius: 6px;
+}
+
+/* 阶段二十三：全局自定义滚动条（替换系统默认 15px 宽滚动条，微信风格细滚动条） */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--rail-icon);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
 }

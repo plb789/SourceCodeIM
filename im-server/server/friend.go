@@ -97,6 +97,10 @@ func (s *Server) handleFriendDelete(c *Client, msg *protocol.Message) {
 	store.DB.Where("(user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)",
 		c.username, msg.ToUser, msg.ToUser, c.username).Delete(&model.Friend{})
 
+	// 阶段十六增强：删除好友联动取消置顶并同步双方，防止关系终止后置顶条残留（孤儿置顶）
+	// 原实现：仅删 im_friend 记录，置顶记录残留导致双方重登仍还原置顶条
+	s.clearPinForConv(c.username, msg.ToUser)
+
 	s.refreshFriendList(c.username)
 	s.refreshFriendList(msg.ToUser)
 	s.sendError(c, "已删除好友")
@@ -118,6 +122,9 @@ func (s *Server) handleBlacklist(c *Client, msg *protocol.Message) {
 		if count == 0 {
 			store.DB.Create(&model.Blacklist{UserID: c.username, BlockedID: msg.ToUser})
 		}
+		// 阶段十六增强：拉黑联动取消置顶并同步双方（拉黑已解除好友关系，防止置顶条残留）；取消拉黑不恢复置顶
+		// 原实现：拉黑不清理置顶记录，双方重登仍还原置顶条
+		s.clearPinForConv(c.username, msg.ToUser)
 		s.sendError(c, "已加入黑名单")
 		logger.Info("拉黑：%s -> %s", c.username, msg.ToUser)
 	} else if msg.Content == "unblock" {

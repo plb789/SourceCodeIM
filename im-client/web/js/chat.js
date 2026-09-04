@@ -588,6 +588,8 @@
             var isChat = this.getAttribute('data-tab') === 'chat';
             convListEl.classList.toggle('hidden', !isChat);
             friendsPanel.classList.toggle('hidden', isChat);
+            // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
+            closeSidebarSearch();
         });
     });
 
@@ -604,6 +606,19 @@
     });
 
     function renderConvList() {
+        // 阶段二十三：微信风格导航栏聊天图标未读角标（服务端归口，与会话列表同源汇总）
+        var navBadge = document.getElementById('nav-chat-badge');
+        if (navBadge) {
+            var navTotal = 0;
+            convList.forEach(function (cv) { navTotal += (cv.unread > 0 ? cv.unread : 0); });
+            if (navTotal > 0) {
+                navBadge.textContent = navTotal > 99 ? '99+' : navTotal;
+                navBadge.classList.remove('hidden');
+            } else {
+                navBadge.classList.add('hidden');
+                navBadge.textContent = ''; // 归零时同步清空文本，避免隐藏态残留旧数字
+            }
+        }
         convListEl.innerHTML = '';
         if (convList.length === 0) {
             var empty = document.createElement('li');
@@ -827,7 +842,7 @@
     // ===== 历史消息：切换会话时请求，分页加载最近 20 条 =====
     var historyTarget = ''; // 发起历史请求时的会话目标，用于校验响应归属
     var pinInfo = {};       // 置顶消息表：target -> {msg_id, from_user, content, create_time, pin_user}
-    var locateState = { active: false, msgId: 0, page: 1, maxPage: 50 }; // 会话内搜索定位翻页状态
+    var locateState = { active: false, msgId: 0, page: 1, maxPage: 50, src: 'search' }; // 会话内搜索定位翻页状态（src：定位来源 pin=置顶条/search=搜索结果）
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
@@ -922,12 +937,15 @@
     }
 
     // ===== 会话内搜索定位：向前翻页加载直到找到目标消息 =====
+    // 阶段十六增强：locateState.src 区分定位来源（pin=置顶条/search=搜索结果），未找到时按来源给出精确原因提示
+    // 原实现：未找到一律提示"未找到该消息"，置顶条场景下无法区分"原消息已删除/不可见"与"超出加载范围"
     function handleLocatePage(records) {
         if (!locateState.active) return;
         // 无更多历史仍未找到：停止定位
         if (!records.length) {
             locateState.active = false;
-            showToast('未找到该消息');
+            // 历史接口排除已撤回与自己删除的消息：置顶条定位翻完仍无，多为原消息已被自己删除或已撤回
+            showToast(locateState.src === 'pin' ? '原消息已删除或不可见' : '未找到该消息');
             return;
         }
         // prepend 渲染：按返回顺序（新→旧）依次插入到当前最前，保持时间正序
@@ -948,7 +966,7 @@
         locateState.page++;
         if (locateState.page > locateState.maxPage) {
             locateState.active = false;
-            showToast('未找到该消息（超出可加载范围）');
+            showToast(locateState.src === 'pin' ? '原消息超出可加载范围，未能定位' : '未找到该消息（超出可加载范围）');
             return;
         }
         var msg = { msg_type: MSG.HISTORY, page: locateState.page, page_size: 20 };
@@ -1044,10 +1062,11 @@
                     // 消息已在窗口中：直接定位高亮
                     highlightMessage(el);
                 } else {
-                    // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染）
+                    // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染），标记来源为搜索结果
                     locateState.active = true;
                     locateState.msgId = r.id;
                     locateState.page = 1;
+                    locateState.src = 'search'; // 阶段十六增强：标记定位来源，未找到时提示精确原因
                     loadNextLocatePage();
                 }
                 convSearch.classList.add('hidden');
@@ -1112,30 +1131,53 @@
             highlightMessage(el);
             return;
         }
-        // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染）
+        // 消息尚未加载：从第 2 页起向前翻页查找（第 1 页已渲染），标记来源为置顶条
         locateState.active = true;
         locateState.msgId = info.msg_id;
         locateState.page = 1;
+        locateState.src = 'pin'; // 阶段十六增强：标记定位来源，未找到时提示精确原因
         loadNextLocatePage();
     });
 
-    // ===== 关键词搜索：回车搜索，结果面板展示，点击跳转会话 =====
+    // ===== 关键词搜索：回车/点击放大镜搜索，结果面板展示，点击跳转会话 =====
     var searchInput = document.getElementById('search-input');
     var searchClearBtn = document.getElementById('search-clear-btn');
     var searchPanel = document.getElementById('search-panel');
+    var searchIconBtn = document.getElementById('search-icon-btn');
 
-    searchInput.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-            var keyword = searchInput.value.trim();
-            if (!keyword) return;
-            IMSocket.send({ msg_type: MSG.SEARCH, content: keyword });
-        }
-    });
-
-    searchClearBtn.addEventListener('click', function () {
+    // 阶段二十三：收起侧栏搜索状态（Tab切换/关闭结果共用）
+    function closeSidebarSearch() {
         searchPanel.classList.add('hidden');
         searchClearBtn.classList.add('hidden');
         searchInput.value = '';
+    }
+
+    function sendSidebarSearch() {
+        var keyword = searchInput.value.trim();
+        if (!keyword) return;
+        IMSocket.send({ msg_type: MSG.SEARCH, content: keyword });
+    }
+
+    searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            sendSidebarSearch();
+        } else if (e.key === 'Escape') {
+            // 阶段二十三：Esc 关闭搜索结果（输入框聚焦时优先作用于搜索）
+            closeSidebarSearch();
+        }
+    });
+
+    // 阶段二十三：点击放大镜图标触发搜索（等价回车）
+    searchIconBtn.addEventListener('click', sendSidebarSearch);
+
+    // 阶段二十三：有输入内容时才显示清除按钮
+    searchInput.addEventListener('input', function () {
+        searchClearBtn.classList.toggle('hidden', searchInput.value.length === 0);
+    });
+
+    searchClearBtn.addEventListener('click', function () {
+        closeSidebarSearch();
+        searchInput.focus();
     });
 
     IMSocket.on(MSG.SEARCH_RESP, function (msg) {
