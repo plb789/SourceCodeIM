@@ -8,6 +8,10 @@
     // 服务端下发的撤回窗口配置从未被前端撤回菜单使用（恒用 120 秒兜底）
     // 阶段十二修复：声明变量并暴露 getRecallWindow，撤回菜单显隐与配置文件 recall_window 保持一致
     var recallWindow = 120;
+    // 阶段三十一：服务端下发的文件分片大小与大文件直传阈值（服务端归口，登录响应覆盖默认值）
+    // 原实现：分片大小硬编码在前端 chat.js（4KB），与服务端配置脱节
+    var chunkSize = 4096;        // 兜底默认值，登录响应携带 chunk_size 后覆盖
+    var uploadThreshold = 1048576; // 兜底默认值（1MB），登录响应携带 upload_threshold 后覆盖
     var messageHandlers = {}; // msg_type -> handler 函数数组
     var connected = false;
 
@@ -131,6 +135,13 @@
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
                 }
+                // 阶段三十一：接收服务端下发的分片大小与大文件直传阈值（服务端归口）
+                if (info && info.chunk_size > 0) {
+                    chunkSize = info.chunk_size;
+                }
+                if (info && info.upload_threshold > 0) {
+                    uploadThreshold = info.upload_threshold;
+                }
             } catch (e) {}
             window._lastPassword = window._lastPassword || '';
         }
@@ -160,6 +171,21 @@
         return recallWindow;
     }
 
+    // 阶段三十一：获取服务端下发的文件分片大小（字节），分片发送逻辑与服务端配置保持一致
+    function getChunkSize() {
+        return chunkSize;
+    }
+
+    // 阶段三十一：获取服务端下发的大文件直传阈值（字节），超过该值的文件走 HTTP 直传
+    function getUploadThreshold() {
+        return uploadThreshold;
+    }
+
+    // 阶段三十一：获取底层 WebSocket 发送缓冲积压字节数（背压限速依据，防分片瞬间挤爆链路）
+    function getBufferedAmount() {
+        return ws ? ws.bufferedAmount : 0;
+    }
+
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
@@ -168,6 +194,9 @@
         isConnected: isConnected,
         getUsername: getUsername,
         getRecallWindow: getRecallWindow,
+        getChunkSize: getChunkSize,
+        getUploadThreshold: getUploadThreshold,
+        getBufferedAmount: getBufferedAmount,
         stopHeartbeat: stopHeartbeat
     };
 })();

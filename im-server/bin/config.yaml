@@ -8,9 +8,17 @@ heartbeat_timeout: 90
 # 心跳发送间隔（秒，客户端侧）
 heartbeat_interval: 30
 # 文件分片大小（字节）
-chunk_size: 4096
-# 最大在线连接数
-max_connections: 1000
+# 原实现：chunk_size: 4096（4KB 分片在大文件场景产生海量 WS 消息与 Redis 操作，20MB 文件需 5120 片）
+# 阶段三十一：提升至 64KB（base64 后约 87KB，仍在服务端单条消息 1MB 读取上限内），消息数降 16 倍
+chunk_size: 65536
+# 最大在线连接数（阶段三十一起在 HandleWS 实际执行校验，原实现该配置从未生效）
+# 原实现：max_connections: 1000
+max_connections: 10000
+# 单连接发送队列缓冲条数（阶段三十一：文件分片与聊天消息共用队列，过小会溢出丢消息）
+# 原实现：固定 256
+send_queue_size: 1024
+# 大文件直传阈值（字节，阶段三十一）：超过该值走 HTTP 直传链路（服务端流式落盘），WebSocket 仅传信令
+http_upload_threshold: 1048576
 # 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
 recall_window: 120
 

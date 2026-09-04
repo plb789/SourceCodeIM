@@ -27,6 +27,10 @@ type Config struct {
 	UploadDir string `yaml:"upload_dir"`
 	// 阶段二十四：聊天文件持久化大小上限（字节）
 	MaxFileSize int `yaml:"max_file_size"`
+	// 阶段三十一：单连接发送队列缓冲条数（文件分片与聊天消息共用，过小会挤爆队列导致丢消息）
+	SendQueueSize int `yaml:"send_queue_size"`
+	// 阶段三十一：大文件直传阈值（字节）：文件超过该值走 HTTP 直传链路，WebSocket 仅传信令，避免海量分片占用连接
+	HttpUploadThreshold int `yaml:"http_upload_threshold"`
 
 	// MySQL 配置
 	MySQLDSN string `yaml:"mysql_dsn"`
@@ -42,13 +46,21 @@ func Default() *Config {
 		WSAddr:            ":8888",
 		HeartbeatTimeout:  90,
 		HeartbeatInterval: 30,
-		ChunkSize:         4096,
-		MaxConnections:    1000,
-		RecallWindow:      120,
+		// 原实现：ChunkSize: 4096（4KB 分片在大文件场景产生海量消息与 Redis 操作）
+		// 阶段三十一：提升至 64KB（base64 后约 87KB，仍在单条消息 1MB 读取上限内），消息数降 16 倍
+		ChunkSize: 65536,
+		// 原实现：MaxConnections: 1000（万级在线场景不足）
+		// 阶段三十一：提升至 10000，并在 HandleWS 中实际执行校验（原配置项从未被使用）
+		MaxConnections: 10000,
+		RecallWindow:   120,
 		// 原实现：UploadDir: "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
 		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
 		UploadDir:   "",
 		MaxFileSize: 20 << 20, // 20MB
+		// 阶段三十一：发送队列缓冲 1024 条（原实现固定 256，大文件分片易溢出丢消息）
+		SendQueueSize: 1024,
+		// 阶段三十一：大文件直传阈值 1MB，超过走 HTTP 直传（io.Copy 流式落盘），绕开分片链路
+		HttpUploadThreshold: 1 << 20,
 
 		MySQLDSN:      "root:root@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=Local",
 		RedisAddr:     "127.0.0.1:6379",
@@ -93,6 +105,15 @@ func Load() *Config {
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = 20 << 20
+	}
+	// 阶段三十一：发送队列缓冲兜底（过小会导致高并发下丢消息）
+	if cfg.SendQueueSize <= 0 {
+		// 原实现：客户端固定 make(chan []byte, 256)
+		cfg.SendQueueSize = 1024
+	}
+	// 阶段三十一：大文件直传阈值兜底（1MB）
+	if cfg.HttpUploadThreshold <= 0 {
+		cfg.HttpUploadThreshold = 1 << 20
 	}
 	return cfg
 }

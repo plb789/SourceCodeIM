@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,11 +46,18 @@ func isImageExt(ext string) bool {
 // HandleFileUpload 处理聊天文件持久化上传：POST /upload/file?file_id=xxx&username=yyy
 // 流程：校验请求者身份 → 幂等检查（status==3 直接返回已有消息）→ 保存文件 → 落库 im_message
 // → 回写 im_file（status=3 + msg_id + file_path）→ 更新双方会话摘要为 [图片]/[文件]
+// 阶段三十一：file_id 为空时走大文件直传模式（handleDirectUpload），HTTP 先行落库，WebSocket 仅传信令
 func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	fileID := r.URL.Query().Get("file_id")
 	username := r.URL.Query().Get("username")
-	if fileID == "" || username == "" {
+	// 原实现：if fileID == "" || username == "" → 400（必须先经分片文件头换取 file_id）
+	if username == "" {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
+		return
+	}
+	// 阶段三十一：直传模式分流（大文件绕开分片链路，避免海量分片占用 WebSocket 连接与 Redis）
+	if fileID == "" {
+		s.handleDirectUpload(w, r, username)
 		return
 	}
 
@@ -180,6 +188,150 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	})
 	s.sendToUser(rec.FromUser, notice)
 	s.sendToUser(rec.ToUser, notice)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})
+}
+
+// handleDirectUpload 阶段三十一：大文件直传模式（HTTP 先行落库，WebSocket 仅传信令）
+// 触发条件：file_id 为空（发送端跳过分片协议，文件大小超过 upload_threshold 时前端分流至此）
+// 流程：在线校验 → 大小限制 → 危险文件/黑名单拦截 → 流式落盘 → 建档 im_file(status=3)
+// → 落库 im_message（content 携带 url/name/size/nonce）→ 推送 FILE_PERSISTED 给双方全部在线连接
+// 与分片路径差异：无分片进度，一次性完成；接收方按 content 直接渲染，发送端按 nonce 回填本地气泡
+// 已知边界：file_id 为空无幂等锚点，HTTP 层重试（网络超时后重发）会产生重复记录，前端失败时不自动重试
+func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, username string) {
+	toUser := r.URL.Query().Get("to_user")
+	nonce := r.URL.Query().Get("nonce") // 发送端本地气泡标识：FILE_PERSISTED 回填 msg_id 时按 nonce 精确匹配
+	if toUser == "" {
+		http.Error(w, "缺少接收方参数", http.StatusBadRequest)
+		return
+	}
+	// 在线校验（与群聊图片上传同水位：轻量活性锚点，防止离线/不存在用户名被冒用上传）
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		logger.Warn("大文件直传拒绝： %s 无活跃连接", username)
+		return
+	}
+	// 黑名单拦截：与私聊文字消息同规则
+	if s.isBlocked(username, toUser) {
+		http.Error(w, "对方已将你拉黑或你已拉黑对方，无法发送", http.StatusForbidden)
+		return
+	}
+
+	// 大小限制（读配置，缺省 20MB，与分片持久化同规则）
+	maxSize := int64(20 << 20)
+	if s.cfg.MaxFileSize > 0 {
+		maxSize = int64(s.cfg.MaxFileSize)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+	if err := r.ParseMultipartForm(maxSize); err != nil {
+		http.Error(w, "文件过大或解析失败", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "缺少文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// 危险文件拦截（与分片传输同规则）
+	if isDangerousFile(header.Filename) {
+		http.Error(w, "禁止传输可执行文件", http.StatusBadRequest)
+		logger.Warn("大文件直传拦截： %s 尝试上传危险文件 %s", username, header.Filename)
+		return
+	}
+
+	// 存储目录（与分片持久化同规则：读配置，兜底基于 WebDir 推导）
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
+	}
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	b := make([]byte, 8)
+	rand.Read(b)
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hex.EncodeToString(b), ext)
+
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		http.Error(w, "目录创建失败", http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(dir, filename)
+	out, err := os.Create(dst)
+	if err != nil {
+		http.Error(w, "文件保存失败", http.StatusInternalServerError)
+		return
+	}
+	// 流式落盘：io.Copy 逐块写磁盘，不经全量内存缓冲（大文件内存友好）
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		http.Error(w, "文件写入失败", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	url := "/static/upload/" + filename
+
+	// 建档 im_file：直传一次完成，直接置为已持久化状态 3
+	rec := model.FileRecord{
+		FileName: header.Filename,
+		FileSize: header.Size,
+		FilePath: url,
+		FromUser: username,
+		ToUser:   toUser,
+		Status:   3,
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		http.Error(w, "文件记录创建失败", http.StatusInternalServerError)
+		return
+	}
+	fileID := strconv.FormatUint(uint64(rec.ID), 10)
+
+	// 落库消息：图片为图片消息(4)，其余为文件消息(5)；nonce 写入 content 供发送端本地气泡回填
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
+	msgType := int8(MsgTypeFileSaved)
+	if isImageExt(ext) {
+		msgType = int8(MsgTypeImageSaved)
+	}
+	record := model.Message{
+		MsgType:  msgType,
+		FromUser: username,
+		ToUser:   toUser,
+		Content:  string(contentBytes),
+	}
+	if err := store.DB.Create(&record).Error; err != nil {
+		http.Error(w, "消息落库失败", http.StatusInternalServerError)
+		return
+	}
+	// 回写文件记录消息 ID（与分片持久化路径对齐，撤回/置顶能力前提）
+	store.DB.Model(&model.FileRecord{}).Where("id = ?", rec.ID).Update("msg_id", record.ID)
+
+	// 更新双方会话摘要并推送（按类型显示 [图片]/[文件]）
+	summary := "[文件]"
+	if msgType == int8(MsgTypeImageSaved) {
+		summary = "[图片]"
+	}
+	s.touchConversation(username, toUser, summary)
+	s.touchConversation(toUser, username, summary)
+	s.notifyConvUpdate(username)
+	s.notifyConvUpdate(toUser)
+
+	logger.Info("大文件直传: %s -> %s, 文件 %s (%d 字节), fileID=%s -> 消息%d, url=%s", username, toUser, header.Filename, header.Size, fileID, record.ID, url)
+
+	// 持久化完成通知双方全部在线连接：携带 content（url/name/size/nonce）+ msg_id + file_id
+	// 接收方按 content 直接渲染（原实现无此通道，接收方离线/无分片场景拿不到文件）
+	// 发送端按 nonce 精确回填本地气泡 msg_id；离线用户经历史加载与 CONV_LIST 覆盖（消息已落库）
+	notice, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeFilePersisted,
+		FromUser:  username,
+		ToUser:    toUser,
+		Content:   string(contentBytes),
+		FileID:    fileID,
+		MsgID:     record.ID,
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, notice)
+	s.sendToUser(toUser, notice)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})

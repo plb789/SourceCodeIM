@@ -537,7 +537,8 @@
 
     // ===== 图片 / 文件发送（基于分片协议 msg_type=3，仅私聊） =====
     // 阶段二十六：群聊图片改走 HTTP 上传链路（sendGroupImage，服务端广播），分片协议仍为私聊专属
-    var CHUNK_SIZE = 4 * 1024; // 与开发文档一致：4KB 分片
+    // 阶段三十一：分片大小不再硬编码，登录响应下发 chunk_size 后覆盖（服务端归口）；默认值仅兜底旧版服务端
+    var CHUNK_SIZE = 4 * 1024;
     var pendingUploads = [];   // 等待服务端回执 file_id 的上传任务队列
     var fileBuffers = {};      // 接收中的文件组装缓冲 file_id -> {name,size,total,chunks,count}
 
@@ -575,7 +576,15 @@
     }
 
     // 发起文件/图片传输：先发文件头（chunk_index=-1），等服务端回执 file_id 后再发分片
+    // 阶段三十一：大文件（超过服务端下发阈值 upload_threshold）分流至 HTTP 直传（sendFileDirect），
+    // WebSocket 仅传信令，避免海量分片占满连接队列、挤掉普通聊天消息
     function sendFile(file) {
+        var threshold = (IMSocket.getUploadThreshold && IMSocket.getUploadThreshold()) || 1048576;
+        if (file.size > threshold) {
+            sendFileDirect(file);
+            return;
+        }
+        // 原实现：所有文件一律走分片协议
         var total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
         var toUser = currentChatUser;
         // 本地立即渲染（自己发送的消息）
@@ -592,13 +601,51 @@
         });
     }
 
+    // 阶段三十一：大文件 HTTP 直传（对齐群聊图片 sendGroupImage 模式）
+    // 流程：本地立即渲染（blob 预览 + nonce 标识）→ POST /upload/file（无 file_id，服务端直传建档落库）
+    // → 服务端推送 FILE_PERSISTED（携带 content: url/name/size/nonce）→ 发送端按 nonce 回填 msg_id，
+    //   接收端按 content 直接渲染 URL，不走分片链路
+    function sendFileDirect(file) {
+        var toUser = currentChatUser;
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        var url = URL.createObjectURL(file);
+        var bubble;
+        if (isImageName(file.name)) {
+            bubble = appendImageMsg(IMSocket.getUsername(), url, 'self', true);
+        } else {
+            bubble = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', true);
+        }
+        bubble.setAttribute('data-nonce', nonce);
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&to_user=' + encodeURIComponent(toUser) +
+              '&nonce=' + encodeURIComponent(nonce), {
+            method: 'POST',
+            body: fd
+        }).then(function (res) {
+            // 异常加固：HTTP 4xx/5xx（文件过大/未在线/被拉黑等）统一告警，本地 blob 预览保留
+            if (!res.ok) console.warn('大文件直传被拒绝:', res.status);
+        }).catch(function (e) {
+            // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
+            console.warn('大文件直传失败:', e);
+        });
+    }
+
     // 顺序发送分片：base64 编码后逐片上传
+    // 阶段三十一：发送前检查底层 WebSocket 缓冲积压（bufferedAmount），超过 8 个分片量级时等待 10ms 重试——
+    // 原实现：FileReader 全速递归发送无任何节流，弱网时分片在浏览器/服务端队列堆积，挤掉普通聊天消息
     function sendChunks(file, fileId, toUser, total) {
         var idx = 0;
         function next() {
             if (idx >= total) {
                 // 阶段二十四：分片全部发送完成后，回传原文件持久化（服务端按 file_id 幂等落库，历史可重现）
                 persistUploadedFile(file, fileId);
+                return;
+            }
+            // 背压限速：底层积压超阈值（约 8 个分片）暂停发送，等待浏览器消化后再继续
+            if (IMSocket.getBufferedAmount && IMSocket.getBufferedAmount() > CHUNK_SIZE * 8) {
+                setTimeout(next, 10);
                 return;
             }
             var start = idx * CHUNK_SIZE;
@@ -641,10 +688,45 @@
 
     // 持久化完成同步：双方实时气泡按 file_id 精确回填 msg_id
     // （撤回/删除/置顶能力前提；对方撤回图片/文件时本端提示才能替换原气泡而非残留）
+    // 阶段三十一：扩展直传模式（content 携带 url/name/size/nonce）——
+    // 分片路径通知无 content，仅回填 msg_id（原逻辑不变）；直传路径接收端按 content 直接渲染，
+    // 发送端按 nonce 回填本地气泡（对齐群聊图片 GROUP_IMAGE 的归口思路）
     IMSocket.on(MSG.FILE_PERSISTED, function (msg) {
         if (!msg.file_id || !msg.msg_id) return;
+        // 分片路径：气泡已存在（file_id 随文件头回执记录），仅回填 msg_id
         var el = messageList.querySelector('.message[data-file-id="' + msg.file_id + '"]');
-        if (el) el.setAttribute('data-msg-id', msg.msg_id);
+        if (el) {
+            el.setAttribute('data-msg-id', msg.msg_id);
+            return;
+        }
+        // 直传路径：content 为空说明是旧版分片通知且气泡缺失，无需渲染
+        var meta = {};
+        try { meta = JSON.parse(msg.content || '{}'); } catch (e) {}
+        if (!meta.url) return;
+        // msg_id 去重（并发加固）：历史已渲染该消息、多端重复通知等场景防止重复气泡
+        if (messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var isMine = msg.from_user === IMSocket.getUsername();
+        // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
+        if (isMine && meta.nonce) {
+            var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            if (mineEl) {
+                mineEl.setAttribute('data-msg-id', msg.msg_id);
+                mineEl.setAttribute('data-file-id', msg.file_id);
+                return;
+            }
+        }
+        // 归属校验（与 GROUP_IMAGE 口径一致）：私聊仅在对应会话视图渲染，不在窗口时依赖会话摘要/历史归口
+        var peer = isMine ? msg.to_user : msg.from_user;
+        if (currentChatUser !== peer) return;
+        var mediaEl;
+        if (isImageName(meta.name || '')) {
+            mediaEl = appendImageMsg(msg.from_user, meta.url, isMine ? 'self' : 'other', true);
+        } else {
+            mediaEl = appendFileMsg(msg.from_user, meta.name || '未命名文件', formatSize(meta.size || 0), meta.url, isMine ? 'self' : 'other', true);
+        }
+        mediaEl.setAttribute('data-msg-id', msg.msg_id);
+        mediaEl.setAttribute('data-file-id', msg.file_id);
+        if (msg.timestamp) mediaEl.setAttribute('data-ts', msg.timestamp);
     });
 
     // ===== 阶段二十六：群聊图片发送（HTTP 上传 + 服务端广播，不走点对点分片协议） =====
@@ -832,6 +914,11 @@
                         region: loginInfo.profile.region || '',
                         signature: loginInfo.profile.signature || ''
                     };
+                }
+                // 阶段三十一：同步服务端下发的分片大小（服务端归口，覆盖前端兜底默认值）
+                // 原实现：CHUNK_SIZE 恒为前端硬编码 4KB，与服务端 chunk_size 配置脱节
+                if (loginInfo && loginInfo.chunk_size > 0) {
+                    CHUNK_SIZE = loginInfo.chunk_size;
                 }
             } catch (e) {}
             loginView.classList.add('hidden');

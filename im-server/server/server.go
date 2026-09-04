@@ -40,6 +40,18 @@ func (s *Server) HandleWS(conn *websocket.Conn) {
 		return
 	}
 
+	// 阶段三十一：最大在线连接数限制（max_connections 配置）
+	// 原实现：该配置项从未被执行校验，连接数仅受系统资源约束
+	if s.cfg.MaxConnections > 0 && s.hub.TotalConns() >= s.cfg.MaxConnections {
+		logger.Warn("拒绝新连接: 在线连接数已达上限 %d", s.cfg.MaxConnections)
+		// 回执错误提示后再关闭，前端可感知原因
+		errMsg, _ := json.Marshal(&protocol.Message{MsgType: protocol.MsgTypeError, Content: "服务器连接数已达上限，请稍后重试"})
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		conn.WriteMessage(websocket.TextMessage, errMsg)
+		conn.Close()
+		return
+	}
+
 	c := newClient(s, conn)
 	go c.writePump()
 	c.readPump()
@@ -50,6 +62,18 @@ func (s *Server) sendToUser(username string, data []byte) {
 	for _, c := range s.hub.GetAll(username) {
 		c.send(data)
 	}
+}
+
+// sendToUserBlock 向指定用户的全部在线连接阻塞推送（带超时）：文件分片等不可丢弃消息使用
+// 阶段三十一：任一连接推送失败返回 false，由调用方向发送方反馈传输失败（原实现静默丢弃分片导致文件损坏）
+func (s *Server) sendToUserBlock(username string, data []byte, timeout time.Duration) bool {
+	ok := true
+	for _, c := range s.hub.GetAll(username) {
+		if !c.sendBlock(data, timeout) {
+			ok = false
+		}
+	}
+	return ok
 }
 
 // unregister 连接断开后的清理（按连接移除，同账号其他设备仍在线时不判定离线）
@@ -380,16 +404,23 @@ func (s *Server) handleFileChunk(c *Client, msg *protocol.Message) {
 	key := store.KeyFileChunk + msg.FileID
 
 	// 中转分片给接收方全部在线连接（多端同步）
+	// 原实现：s.sendToUser(msg.ToUser, data) 非阻塞投递，接收方队列满时静默丢片，文件永远组装不齐且无提示
+	// 阶段三十一：改用阻塞背压推送（5 秒超时），接收方消费不及时节流发送方；失败时向发送方反馈，杜绝静默损坏
 	if s.hub.Count(msg.ToUser) > 0 {
 		data, _ := json.Marshal(msg)
-		s.sendToUser(msg.ToUser, data)
+		if !s.sendToUserBlock(msg.ToUser, data, 5*time.Second) {
+			s.sendError(c, "对方接收队列已满，文件传输中断，请重新发送")
+			return
+		}
 	}
 
 	// 记录已传输分片序号
 	store.RDB.SAdd(ctx, key, msg.ChunkIndex)
 
 	// 完成判定：已传输分片数达到总分片数
-	if msg.TotalChunks > 0 {
+	// 原实现：每个分片都执行一次 SCard 查询（20MB 文件产生 5120 次冗余 Redis 往返）
+	// 阶段三十一：仅最后一片到达时判定一次（发送方读循环串行处理，最后一片到达时其余分片必然已入集合）
+	if msg.TotalChunks > 0 && msg.ChunkIndex == msg.TotalChunks-1 {
 		count, _ := store.RDB.SCard(ctx, key).Result()
 		if int(count) >= msg.TotalChunks {
 			// 阶段二十四：条件更新，避免覆盖持久化状态 3（上传接口与分片完成判定存在并发时序）
@@ -507,6 +538,10 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 	respInfo, _ := json.Marshal(map[string]interface{}{
 		"result":        result,
 		"recall_window": s.cfg.RecallWindow,
+		// 阶段三十一：下发文件分片大小与大文件直传阈值（服务端归口，前端分片/分流逻辑与服务端配置保持一致）
+		// 原代码：无 chunk_size / upload_threshold 字段（前端硬编码 4KB）
+		"chunk_size":       s.cfg.ChunkSize,
+		"upload_threshold": s.cfg.HttpUploadThreshold,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
 		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）

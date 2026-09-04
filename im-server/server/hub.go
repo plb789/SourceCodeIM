@@ -92,11 +92,28 @@ func (h *Hub) Get(username string) (*Client, bool) {
 func (h *Hub) Usernames() []string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	names := make([]string, 0, len(h.clients))
+	names := make([]string, 0, h.connTotal())
 	for name := range h.clients {
 		names = append(names, name)
 	}
 	return names
+}
+
+// TotalConns 返回当前全部在线连接总数（阶段三十一：max_connections 上限校验使用）
+// 原实现：config 的 MaxConnections 配置项从未被执行校验
+func (h *Hub) TotalConns() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.connTotal()
+}
+
+// connTotal 统计连接总数（调用方须已持有读锁）
+func (h *Hub) connTotal() int {
+	total := 0
+	for _, set := range h.clients {
+		total += len(set)
+	}
+	return total
 }
 
 // Broadcast 向所有在线客户端的全部连接广播消息

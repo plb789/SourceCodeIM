@@ -20,19 +20,35 @@ type Client struct {
 
 // newClient 创建客户端连接对象
 func newClient(s *Server, conn *websocket.Conn) *Client {
+	// 原实现：sendCh: make(chan []byte, 256) 固定 256 缓冲，大文件分片与聊天消息混流时易溢出丢消息
+	// 阶段三十一：缓冲大小改由配置 send_queue_size 下发（默认 1024）
 	return &Client{
 		server: s,
 		conn:   conn,
-		sendCh: make(chan []byte, 256),
+		sendCh: make(chan []byte, s.cfg.SendQueueSize),
 	}
 }
 
 // send 非阻塞写入发送队列
+// 原实现：队列满直接丢弃消息并告警，对文件分片等不可丢消息会造成接收方永远收不齐文件
+// 阶段三十一：普通消息保持非阻塞丢弃语义（宁可丢一条聊天不可阻塞广播），文件分片改用 sendBlock
 func (c *Client) send(data []byte) {
 	select {
 	case c.sendCh <- data:
 	default:
 		logger.Warn("客户端 %s 发送队列已满，丢弃消息", c.username)
+	}
+}
+
+// sendBlock 阻塞写入发送队列（带超时）：文件分片中转等不可丢弃消息使用
+// 阻塞语义天然形成背压：接收方消费不及时节流发送方读循环，超时返回 false 由调用方通知发送失败
+func (c *Client) sendBlock(data []byte, timeout time.Duration) bool {
+	select {
+	case c.sendCh <- data:
+		return true
+	case <-time.After(timeout):
+		logger.Warn("客户端 %s 发送队列已满且等待超时，丢弃文件分片", c.username)
+		return false
 	}
 }
 
