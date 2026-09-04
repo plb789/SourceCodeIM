@@ -565,9 +565,20 @@ html, body {
     position: relative;
 }
 
+/* 微信风格输入卡片：圆角矩形悬浮于聊天背景上，与消息区留有空隙
+   原实现：border-top 直线边框 + 通栏背景（已注释保留）
+   .input-bar {
+       border-top: 1px solid var(--border);
+       background: var(--header-bg);
+       display: flex;
+       flex-direction: column;
+   }
+*/
 .input-bar {
-    border-top: 1px solid var(--border);
-    background: var(--header-bg);
+    background: var(--panel-bg);
+    margin: 0 12px 10px;
+    border-radius: 12px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
 }
