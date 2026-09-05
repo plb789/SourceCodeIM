@@ -11,6 +11,7 @@
     --hover: #d9d9d9;
     --active: #c8c8c8;
     --panel-bg: #ffffff;      /* 面板背景 */
+    --search-bg: #ffffff;     /* 搜索框背景（浅色下白色块与侧栏形成对比） */
     --header-bg: #fafafa;     /* 顶栏/输入栏背景 */
     --placeholder-bg: #ccc;   /* 头像占位 */
     --login-bg: linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%);
@@ -30,6 +31,7 @@
     --hover: #2a2a2a;
     --active: #383838;
     --panel-bg: #1e1e1e;
+    --search-bg: #2a2a2a;     /* 深色下略浅于侧栏，避免输入框与侧栏同色融为一体 */
     --header-bg: #1a1a1a;
     --placeholder-bg: #555555;
     --rail-bg: #141414;       /* 深色主题下导航栏更深 */
@@ -53,6 +55,7 @@
         --hover: #2a2a2a;
         --active: #383838;
         --panel-bg: #1e1e1e;
+        --search-bg: #2a2a2a; /* 跟随系统·深色：同 dark 主题 */
         --header-bg: #1a1a1a;
         --placeholder-bg: #555555;
         --rail-bg: #141414;
@@ -879,7 +882,7 @@ html, body {
     min-width: 0;
     border: none;
     outline: none;
-    background: var(--panel-bg);
+    background: var(--search-bg);
     border-radius: 4px;
     padding: 7px 10px;
     font-size: 13px;
