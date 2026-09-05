@@ -1219,9 +1219,39 @@
     });
 
     // ===== 截图发送：屏幕捕获 -> 画布截帧 -> 按图片发送 =====
+    // dataURL 转 Blob（Electron 静默抓屏结果为 PNG dataURL，编辑器与上传链路均收 Blob/File）
+    function dataUrlToBlob(dataUrl) {
+        try {
+            var arr = dataUrl.split(',');
+            var mime = arr[0].match(/:(.*?);/)[1];
+            var bin = atob(arr[1]);
+            var buf = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+            return new Blob([buf], { type: mime });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // 抓屏结果统一进入截图编辑器（编辑器模式，默认全图选区）
+    function openShotEditor(blob) {
+        if (!blob) { showToast('截图失败'); return; }
+        ScreenshotEditor.open(blob, sendScreenshotFile);
+    }
+
     screenshotBtn.addEventListener('click', function () {
         // 原实现：群聊视图拦截提示"群聊暂不支持发送截图"，阶段二十六放开——截图即图片，走群聊 HTTP 上传链路
         // if (currentChatUser === '') { showToast('群聊暂不支持发送截图'); return; }
+        // 阶段三十七（第三期）：PC 端 Electron 走主进程静默抓屏（desktopCapturer，不弹系统共享选择框）
+        if (window.desktop && window.desktop.captureScreen) {
+            window.desktop.captureScreen().then(function (dataUrl) {
+                openShotEditor(dataUrlToBlob(dataUrl));
+            }).catch(function () {
+                showToast('截图失败');
+            });
+            return;
+        }
+        // 原实现：浏览器 getDisplayMedia 抓屏（需系统共享弹窗人工选择；PC 端已被静默抓屏替代，此为浏览器回退路径）
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
             showToast('当前环境不支持截图，请使用 PC 端');
             return;
@@ -1285,6 +1315,16 @@
             }
         }
     });
+
+    // ===== 阶段三十七（第三期）：Alt+A 全局快捷键抓屏结果（Electron 主进程 globalShortcut 推送） =====
+    // 微信同款：任意界面按 Alt+A 静默抓屏进入截图编辑器；未登录丢弃、编辑器已开不重复进入
+    if (window.desktop && window.desktop.onGlobalShot) {
+        window.desktop.onGlobalShot(function (dataUrl) {
+            if (!IMSocket.isConnected()) return; // 未登录不响应
+            if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
+            openShotEditor(dataUrlToBlob(dataUrl));
+        });
+    }
 
     // ===== 清空当前聊天显示（保留云端记录） =====
     clearBtn.addEventListener('click', function () {

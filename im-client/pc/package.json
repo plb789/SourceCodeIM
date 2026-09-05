@@ -15,7 +15,8 @@
     "appId": "com.im.client",
     "productName": "即时通讯",
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     }
   }
 }
