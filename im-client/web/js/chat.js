@@ -1976,7 +1976,8 @@
         var isRead = r.is_read || (wm >= r.id);
         // 阶段二十四：图片消息(4)/文件消息(5)持久化渲染（content 为 JSON：url/name/size）
         if (r.msg_type === 4 || r.msg_type === 5) {
-            var mediaDiv = createMediaMessageEl(r, isMine, ts, isPrivate, isRead);
+            // 贴底快照在插入前采样：向上补插历史（beforeEl）不参与滚底；追加场景按当前是否贴底决定
+            var mediaDiv = createMediaMessageEl(r, isMine, ts, isPrivate, isRead, !beforeEl && isNearBottom());
             if (beforeEl) {
                 messageList.insertBefore(mediaDiv, beforeEl);
             } else {
@@ -1995,7 +1996,8 @@
     }
 
     // 阶段二十四：构建图片/文件历史消息元素（元数据与文字消息一致：msg-id/from/ts/已读状态，供撤回、定位复用）
-    function createMediaMessageEl(r, isMine, ts, isPrivate, isRead) {
+    // stickBottom：贴底快照由调用方在插入前采样（向上插入历史时为 false，不参与滚底）
+    function createMediaMessageEl(r, isMine, ts, isPrivate, isRead, stickBottom) {
         var type = isMine ? 'self' : 'other';
         var meta = {};
         try { meta = JSON.parse(r.content); } catch (e) { meta = {}; }
@@ -2022,6 +2024,14 @@
             var img = document.createElement('img');
             img.className = 'chat-image';
             img.src = meta.url || '';
+            // 图片显示一半修复（与实时渲染一致）：按调用方插入前的贴底快照决定加载撑高后是否滚底
+            // 原实现：load 回调内实时 isNearBottom() 判定——列表已被撑高导致误判，已废弃
+            // img.addEventListener('load', function () {
+            //     if (isNearBottom()) messageList.scrollTop = messageList.scrollHeight;
+            // });
+            img.addEventListener('load', function () {
+                if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
+            });
             img.addEventListener('click', function () {
                 window.open(meta.url, '_blank');
             });
@@ -2698,7 +2708,16 @@
     }
 
     // 图片消息渲染
+    // 判断消息列表是否接近底部（容差 80px）：图片异步加载撑高后决定是否跟随滚底，
+    // 用户正在翻看历史时（不在底部）不强行拉底打断浏览
+    function isNearBottom() {
+        return messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
+    }
+
     function appendImageMsg(fromUser, url, type, isPrivate) {
+        // 贴底状态必须在插入前快照：原实现 load 时再判 isNearBottom()，此时图片已把列表撑高
+        // （gap 瞬间≈图片高度>80px 容差），会被误判为"翻历史中"而放弃滚底，导致图片仍只显示一半
+        var stick = isNearBottom();
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
@@ -2713,6 +2732,15 @@
         var img = document.createElement('img');
         img.className = 'chat-image';
         img.src = url;
+        // 图片显示一半修复：图片异步加载完成前高度为 0，插入后立即滚底会停在半截；
+        // 加载完成后按"插入前贴底快照"决定是否再次滚底（stick 在插入前采样，不受加载撑高影响）
+        // 原实现：load 回调内实时 isNearBottom() 判定——此时列表已被撑高导致误判，已废弃
+        // img.addEventListener('load', function () {
+        //     if (isNearBottom()) messageList.scrollTop = messageList.scrollHeight;
+        // });
+        img.addEventListener('load', function () {
+            if (stick) messageList.scrollTop = messageList.scrollHeight;
+        });
         img.addEventListener('click', function () {
             window.open(url, '_blank'); // 点击查看大图
         });
