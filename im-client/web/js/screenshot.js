@@ -6,6 +6,7 @@
     // ===== DOM 元素（惰性创建，全局仅一份） =====
     var editorEl = null, wrapEl = null, toolbarEl = null, textInputEl = null;
     var baseCanvas = null, drawCanvas = null, maskCanvas = null;
+    var hintEl = null;         // 冻结态操作提示条（自绘，禁止系统弹窗）
     var bctx = null, dctx = null, mctx = null;
 
     // ===== 编辑器状态 =====
@@ -24,6 +25,8 @@
     var mosaicCanvas = null;   // 马赛克底图（原图降采样再放大，像素块效果）
     var onConfirm = null;      // 确认回调：function(blob)
     var imgUrl = '';           // 底图 blob URL（关闭时释放）
+    var mode = 'editor';       // 当前模式：editor（编辑器）/freeze（伪冻结遮罩，第二期）
+    var sizeLabel = null;      // 选区尺寸标签（伪冻结模式：拖拽时实时显示 宽×高）
 
     // 随图尺寸自适应的笔触参数（大图笔触更粗，视觉一致）
     var strokeWidth = 4, fontSize = 20, mosaicR = 24;
@@ -102,9 +105,20 @@
         textInputEl.className = 'shot-text-input hidden';
         textInputEl.placeholder = '输入文字，回车确认';
 
+        // 选区尺寸标签（伪冻结模式：拖拽时实时显示 宽×高，微信同款）
+        sizeLabel = document.createElement('div');
+        sizeLabel.className = 'shot-size-label hidden';
+
+        // 冻结态操作提示条（自绘非系统弹窗）：告知用户需拖拽框选（微信 Alt+A 同款引导）
+        hintEl = document.createElement('div');
+        hintEl.className = 'shot-hint hidden';
+        hintEl.textContent = '拖拽框选截图区域 · Enter 发送 · Esc 取消';
+
         editorEl.appendChild(wrapEl);
         editorEl.appendChild(toolbarEl);
         editorEl.appendChild(textInputEl);
+        editorEl.appendChild(sizeLabel);
+        editorEl.appendChild(hintEl);
         document.body.appendChild(editorEl);
 
         bctx = baseCanvas.getContext('2d');
@@ -191,8 +205,38 @@
         dctx.stroke();
     }
 
-    // ===== 打开编辑器 =====
+    // 隐藏选区尺寸标签
+    function hideSizeLabel() {
+        if (sizeLabel) sizeLabel.classList.add('hidden');
+    }
+
+    // 更新选区尺寸标签：显示 宽×高，位置跟随选区右下角（伪冻结模式，微信同款）
+    function updateSizeLabel() {
+        if (!sel || mode !== 'freeze' || sel.w < 4 || sel.h < 4) { hideSizeLabel(); return; }
+        var rect = wrapEl.getBoundingClientRect();
+        var px = rect.left + (sel.x + sel.w) * scale;  // 选区右下角屏幕坐标
+        var py = rect.top + (sel.y + sel.h) * scale;
+        sizeLabel.textContent = Math.round(sel.w) + ' × ' + Math.round(sel.h);
+        sizeLabel.classList.remove('hidden');
+        var tw = sizeLabel.offsetWidth, th = sizeLabel.offsetHeight;
+        var left = Math.min(Math.max(4, px - tw / 2), window.innerWidth - tw - 4);
+        var top = py + 8;
+        if (top + th > window.innerHeight - 4) top = py - th - 8; // 超出视口底部则显示在选区上方
+        sizeLabel.style.left = left + 'px';
+        sizeLabel.style.top = top + 'px';
+    }
+
+    // ===== 打开编辑器（编辑器模式：居中缩放，默认全图选区） =====
     function open(blob, confirmCb) {
+        load(blob, confirmCb, 'editor');
+    }
+
+    // ===== 打开伪冻结遮罩（第二期：画面铺满视口、空选区，拖拽框选后工具栏出现） =====
+    function freeze(blob, confirmCb) {
+        load(blob, confirmCb, 'freeze');
+    }
+
+    function load(blob, confirmCb, m) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
         imgUrl = URL.createObjectURL(blob);
@@ -210,20 +254,46 @@
                 c.width = imgW;
                 c.height = imgH;
             });
-            var maxW = window.innerWidth * 0.9;
-            var maxH = window.innerHeight * 0.78;
-            scale = Math.min(maxW / imgW, maxH / imgH, 1);
-            [baseCanvas, drawCanvas, maskCanvas].forEach(function (c) {
-                c.style.width = Math.round(imgW * scale) + 'px';
-                c.style.height = Math.round(imgH * scale) + 'px';
-            });
-            wrapEl.style.width = Math.round(imgW * scale) + 'px';
-            wrapEl.style.height = Math.round(imgH * scale) + 'px';
+            mode = m;
+            if (mode === 'freeze') {
+                // 伪冻结：cover 铺满视口（居中，溢出部分裁剪），贴近"屏幕被冻结"的观感
+                scale = Math.max(window.innerWidth / imgW, window.innerHeight / imgH);
+                var cw = Math.round(imgW * scale), ch = Math.round(imgH * scale);
+                var ox = Math.round((window.innerWidth - cw) / 2), oy = Math.round((window.innerHeight - ch) / 2);
+                [baseCanvas, drawCanvas, maskCanvas].forEach(function (c) {
+                    c.style.width = cw + 'px';
+                    c.style.height = ch + 'px';
+                    c.style.left = ox + 'px';
+                    c.style.top = oy + 'px';
+                });
+                wrapEl.style.width = window.innerWidth + 'px';
+                wrapEl.style.height = window.innerHeight + 'px';
+                sel = null; // 冻结态无选区：必须拖拽框选（微信同款）
+                editorEl.classList.add('freeze');
+                toolbarEl.classList.remove('visible'); // 选区完成后工具栏才出现
+                hintEl.classList.remove('hidden');     // 顶部操作提示：告知拖拽框选
+            } else {
+                // 编辑器模式：contain 居中缩放（与第一期一致）
+                var maxW = window.innerWidth * 0.9;
+                var maxH = window.innerHeight * 0.78;
+                scale = Math.min(maxW / imgW, maxH / imgH, 1);
+                [baseCanvas, drawCanvas, maskCanvas].forEach(function (c) {
+                    c.style.width = Math.round(imgW * scale) + 'px';
+                    c.style.height = Math.round(imgH * scale) + 'px';
+                    c.style.left = '0px';
+                    c.style.top = '0px';
+                });
+                wrapEl.style.width = Math.round(imgW * scale) + 'px';
+                wrapEl.style.height = Math.round(imgH * scale) + 'px';
+                sel = { x: 0, y: 0, w: imgW, h: imgH }; // 默认全图选区（粘贴后可直接发送）
+                editorEl.classList.remove('freeze');
+                hintEl.classList.add('hidden'); // 编辑器模式无冻结提示
+            }
             bctx.drawImage(img, 0, 0);
             dctx.clearRect(0, 0, imgW, imgH);
             buildMosaic();
             undoStack = [];
-            sel = { x: 0, y: 0, w: imgW, h: imgH }; // 默认全图选区（粘贴后可直接发送）
+            hideSizeLabel();
             setTool('select');
             drawMask();
             editorEl.classList.remove('hidden');
@@ -237,9 +307,14 @@
     function close() {
         if (!editorEl) return;
         editorEl.classList.add('hidden');
+        editorEl.classList.remove('freeze');
+        toolbarEl.classList.remove('visible');
+        hideSizeLabel();
+        hintEl.classList.add('hidden');
         hideTextInput();
         undoStack = [];
         sel = null;
+        mode = 'editor';
         img = null;
         if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = ''; }
     }
@@ -327,14 +402,55 @@
             }
         });
 
-        drawCanvas.addEventListener('mousedown', function (e) {
-            if (e.button !== 0 || !sel) return;
+        // 原实现：drawCanvas.addEventListener('mousedown', ...)——但遮罩层 maskCanvas 绝对定位位于最上层
+        // 且未放行鼠标事件，真实点击被其拦截导致冻结态无法框选、工具栏永不出现（第二期实测反馈）
+        // drawCanvas.addEventListener('mousedown', function (e) {
+        //     if (e.button !== 0) return;
+        //     var pt = toImg(e);
+        //     if (tool === 'select') {
+        //         // 选区工具：允许在空选区（冻结态）下直接拖拽框选
+        //         drawing = true;
+        //         sx = pt.x; sy = pt.y;
+        //         if (mode === 'freeze') {
+        //             toolbarEl.classList.remove('visible'); // 重新框选期间隐藏工具栏
+        //             hideSizeLabel();
+        //         }
+        //         return;
+        //     }
+        //     if (!sel) return; // 标注类工具需要先有选区
+        //     if (tool === 'text') {
+        //         showTextInput(pt);
+        //         return;
+        //     }
+        //     if (tool === 'rect' || tool === 'ellipse' || tool === 'arrow') {
+        //         pushUndo();
+        //         strokeSnapshot = dctx.getImageData(0, 0, imgW, imgH);
+        //         drawing = true;
+        //         sx = pt.x; sy = pt.y;
+        //     } else if (tool === 'brush' || tool === 'mosaic') {
+        //         pushUndo();
+        //         drawing = true;
+        //         sx = pt.x; sy = pt.y;
+        //         lx = pt.x; ly = pt.y;
+        //         strokeSegment(pt.x, pt.y, pt.x, pt.y);
+        //     }
+        // });
+        // 修复：mousedown 改绑容器 wrapEl——三画布的按下事件均冒泡至此统一接收，不依赖层叠顺序
+        wrapEl.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
             var pt = toImg(e);
             if (tool === 'select') {
+                // 选区工具：允许在空选区（冻结态）下直接拖拽框选
                 drawing = true;
                 sx = pt.x; sy = pt.y;
+                if (mode === 'freeze') {
+                    toolbarEl.classList.remove('visible'); // 重新框选期间隐藏工具栏
+                    hideSizeLabel();
+                    hintEl.classList.add('hidden'); // 开始框选即收起操作提示
+                }
                 return;
             }
+            if (!sel) return; // 标注类工具需要先有选区
             if (tool === 'text') {
                 showTextInput(pt);
                 return;
@@ -364,6 +480,7 @@
                     w: Math.abs(pt.x - sx), h: Math.abs(pt.y - sy)
                 };
                 drawMask();
+                if (mode === 'freeze') updateSizeLabel(); // 拖拽期间实时显示尺寸（微信同款）
             } else if (tool === 'rect' || tool === 'ellipse' || tool === 'arrow') {
                 dctx.putImageData(strokeSnapshot, 0, 0);
                 withSelClip(function () {
@@ -385,13 +502,26 @@
         });
 
         document.addEventListener('mouseup', function () {
+            // 冻结态选区完成：工具栏出现（微信同款），尺寸标签保持显示
+            if (drawing && mode === 'freeze' && tool === 'select' && sel && sel.w > 4 && sel.h > 4) {
+                toolbarEl.classList.add('visible');
+                updateSizeLabel();
+            }
             drawing = false;
             strokeSnapshot = null;
         });
 
-        // 选区工具下双击 = 快捷发送（微信同款）
-        drawCanvas.addEventListener('dblclick', function () {
-            if (tool === 'select' && sel && sel.w > 2 && sel.h > 2) output();
+        // 选区工具下双击选区内 = 快捷发送（微信同款；冻结态双击选区内生效，避免连续两次框选误触发送）
+        // 原实现绑在 drawCanvas 上（同 mousedown，会被最上层 maskCanvas 拦截），改绑 wrapEl 冒泡接收
+        // drawCanvas.addEventListener('dblclick', function (e) {
+        //     if (tool !== 'select' || !sel || sel.w < 2 || sel.h < 2) return;
+        //     var pt = toImg(e);
+        //     if (pt.x >= sel.x && pt.x <= sel.x + sel.w && pt.y >= sel.y && pt.y <= sel.y + sel.h) output();
+        // });
+        wrapEl.addEventListener('dblclick', function (e) {
+            if (tool !== 'select' || !sel || sel.w < 2 || sel.h < 2) return;
+            var pt = toImg(e);
+            if (pt.x >= sel.x && pt.x <= sel.x + sel.w && pt.y >= sel.y && pt.y <= sel.y + sel.h) output();
         });
 
         // 文字输入框：回车提交、Esc 取消（阻止冒泡避免触发编辑器快捷键）
@@ -442,6 +572,7 @@
     // ===== 对外接口 =====
     window.ScreenshotEditor = {
         open: open,
+        freeze: freeze,
         close: close,
         isOpen: isOpen
     };

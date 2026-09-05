@@ -2064,3 +2064,67 @@ html, body {
     display: none;
 }
 
+/* ===== 阶段三十五·第二期：伪冻结遮罩模式（截图按钮入口，贴近微信 Alt+A） ===== */
+/* 冻结态：画布容器铺满视口（cover 裁剪），去掉编辑器模式的外观修饰 */
+.shot-editor.freeze {
+    justify-content: flex-start;
+}
+
+.shot-editor.freeze .shot-canvas-wrap {
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+}
+
+/* 冻结态工具栏：浮动于视口底部居中，拖出选区后才出现（微信同款） */
+.shot-editor.freeze .shot-toolbar {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 0;
+    display: none;
+}
+
+.shot-editor.freeze .shot-toolbar.visible {
+    display: flex;
+}
+
+/* 选区尺寸标签（拖拽时实时显示 宽×高，功能性 HUD 深色底，不随主题） */
+.shot-size-label {
+    position: fixed;
+    z-index: 3100;
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 18px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.65);
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.shot-size-label.hidden {
+    display: none;
+}
+
+/* 冻结态操作提示条（自绘非系统弹窗，顶部居中；功能性 HUD 深色底，不随主题；不拦截鼠标） */
+.shot-hint {
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 3100;
+    padding: 6px 16px;
+    font-size: 13px;
+    line-height: 20px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.65);
+    border-radius: 6px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.shot-hint.hidden {
+    display: none;
+}
+
