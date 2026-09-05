@@ -98,5 +98,15 @@ contextBridge.exposeInMainWorld('desktop', {
     // 退出全屏冻结态（截图编辑完成/取消后调用，主进程恢复普通窗口与层级）
     exitFreeze: function () {
         ipcRenderer.send('shot:exit-freeze');
+    },
+    // 主进程抓屏完成推送（窗口仍透明期间，渲染层预加载冻结编辑器）
+    onShotPrepare: function (callback) {
+        ipcRenderer.on('shot:prepare', function (event, dataUrl) {
+            callback(dataUrl);
+        });
+    },
+    // 冻结编辑器首帧就绪通知（主进程收到后揭幕：透明度归位，用户看到的第一帧即冻结画面）
+    shotReady: function () {
+        ipcRenderer.send('shot:ready');
     }
 });

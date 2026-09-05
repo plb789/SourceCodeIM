@@ -1942,6 +1942,9 @@ html, body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    /* 阶段三十八修复：禁用编辑器内原生文字选择——防止框选拖拽时工具栏"取消/发送"文字被选中（蓝色高亮） */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .shot-editor.hidden {

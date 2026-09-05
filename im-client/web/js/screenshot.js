@@ -233,16 +233,19 @@
 
     // ===== 打开伪冻结遮罩（第二期：画面铺满视口、空选区，拖拽框选后工具栏出现） =====
     // 阶段三十八：第三参 onClose——编辑器关闭（发送或取消）时回调（PC 端用于通知主进程退出全屏冻结态）
+    // 阶段三十八：第四参 onReady——冻结画面首帧绘制完成回调（PC 端用于"编辑器就绪后再揭幕"，消除聊天界面闪现）
     var onCloseCb = null; // 冻结模式关闭回调（一次性，close 时消费）
-    function freeze(blob, confirmCb, onClose) {
+    var onReadyCb = null; // 冻结画面就绪回调（一次性，首帧绘制后消费）
+    function freeze(blob, confirmCb, onClose, onReady) {
         onCloseCb = onClose || null;
+        onReadyCb = onReady || null;
         load(blob, confirmCb, 'freeze');
     }
 
     function load(blob, confirmCb, m) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
-        if (m !== 'freeze') onCloseCb = null; // 编辑器模式无冻结回调
+        if (m !== 'freeze') { onCloseCb = null; onReadyCb = null; } // 编辑器模式无冻结回调
         imgUrl = URL.createObjectURL(blob);
         var image = new Image();
         image.onload = function () {
@@ -301,6 +304,12 @@
             setTool('select');
             drawMask();
             editorEl.classList.remove('hidden');
+            // 冻结画面首帧已绘制完毕（编辑器就绪）：通知 PC 端主进程可以揭幕（窗口透明度归位）
+            if (onReadyCb) {
+                var rcb = onReadyCb;
+                onReadyCb = null;
+                rcb();
+            }
         };
         image.onerror = function () {
             if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = ''; }
@@ -448,6 +457,12 @@
         // 修复：mousedown 改绑容器 wrapEl——三画布的按下事件均冒泡至此统一接收，不依赖层叠顺序
         wrapEl.addEventListener('mousedown', function (e) {
             if (e.button !== 0) return;
+            // 阶段三十八修复：阻止浏览器原生拖拽文字选择——否则框选时工具栏"取消/发送"文字被一起选中（蓝色高亮）
+            e.preventDefault();
+            // 阶段三十八修复：双击的第二段按下（e.detail>=2）不再重新起选区——
+            // 否则双击间微小移动会把 sel 重置成 1~2px 微小选区，dblclick 里 output() 因 sel.w<2 拒发，双击发送失效
+            // if (e.button !== 0) return;（原实现：未拦截双击第二段按下，导致双击起选区破坏已有选区）
+            if (e.detail >= 2) return;
             var pt = toImg(e);
             if (tool === 'select') {
                 // 选区工具：允许在空选区（冻结态）下直接拖拽框选
@@ -529,6 +544,8 @@
         //     if (pt.x >= sel.x && pt.x <= sel.x + sel.w && pt.y >= sel.y && pt.y <= sel.y + sel.h) output();
         // });
         wrapEl.addEventListener('dblclick', function (e) {
+            // 阶段三十八修复：阻止双击原生选词（否则双击处文字被选中，观感异常）
+            e.preventDefault();
             if (tool !== 'select' || !sel || sel.w < 2 || sel.h < 2) return;
             var pt = toImg(e);
             if (pt.x >= sel.x && pt.x <= sel.x + sel.w && pt.y >= sel.y && pt.y <= sel.y + sel.h) output();

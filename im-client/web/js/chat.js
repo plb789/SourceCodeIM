@@ -1283,10 +1283,20 @@
         }
     }
 
-    // 抓屏结果统一进入截图编辑器（编辑器模式，默认全图选区）
-    function openShotEditor(blob) {
-        if (!blob) { showToast('截图失败'); return; }
-        // 阶段三十八：QQ 同款全屏冻结截图——PC 端主窗口已被主进程置为全屏+置顶，
+    // 抓屏结果统一进入冻结截图编辑器（QQ 同款全屏冻结）
+    // prepared=true：主进程在窗口透明期间推送快照（shot:prepare），编辑器就绪后需通知揭幕（shotReady）
+    function openShotEditor(blob, prepared) {
+        if (!blob) {
+            showToast('截图失败');
+            if (prepared && window.desktop) {
+                // 失败兜底：主进程已切全屏冻结态，必须退出全屏（否则卡在全屏聊天界面挡住任务栏）+ 揭幕恢复透明度
+                // 原实现：仅 shotReady 揭幕（全屏态残留，用户反馈"程序全屏显示连任务栏都挡住"）
+                if (window.desktop.exitFreeze) window.desktop.exitFreeze();
+                if (window.desktop.shotReady) window.desktop.shotReady();
+            }
+            return;
+        }
+        // 阶段三十八：QQ 同款全屏冻结截图——PC 端主窗口已被主进程置为全屏+置顶（透明期间预加载），
         // freeze 模式画面铺满视口（视觉=屏幕被冻结画面覆盖），拖拽框选 → 工具栏标注 → 完成；
         // 编辑完成/取消后 onClose 退出全屏冻结，截图进输入框待发送区（点发送才真正发出）
         // 原实现：ScreenshotEditor.open(blob, sendScreenshotFile);（窗口式居中缩放，用户反馈"像在程序里打开图片"而非 QQ 截图）
@@ -1294,6 +1304,16 @@
             if (window.desktop && window.desktop.exitFreeze) window.desktop.exitFreeze();
             // Esc/取消退出后清掉残留焦点（用户反馈：退出截图后截图按钮残留黄色焦点框）
             if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        }, function () {
+            // 首帧绘制就绪：通知主进程揭幕（透明度归位，第一帧即冻结画面，无聊天界面闪现）
+            if (prepared && window.desktop && window.desktop.shotReady) window.desktop.shotReady();
+        });
+    }
+
+    // 主进程抓屏完成推送（窗口透明期间预加载冻结编辑器，就绪后主进程才揭幕——闪烁最小化）
+    if (window.desktop && window.desktop.onShotPrepare) {
+        window.desktop.onShotPrepare(function (dataUrl) {
+            openShotEditor(dataUrlToBlob(dataUrl), true);
         });
     }
 

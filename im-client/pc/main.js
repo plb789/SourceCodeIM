@@ -82,8 +82,9 @@ function showNotification(title, body) {
 }
 
 // ===== 阶段三十七（第三期）：静默抓屏 =====
-// 抓取主屏全分辨率画面并转为 PNG dataURL（desktopCapturer 无系统共享弹窗，替代浏览器 getDisplayMedia 的 PC 端方案）
-function captureScreen() {
+// 抓取主屏全分辨率画面并转为 dataURL（desktopCapturer 无系统共享弹窗，替代浏览器 getDisplayMedia 的 PC 端方案）
+// useJpeg=true 时编码 JPEG（质量 90，编码比 PNG 快数倍，冻结截图预览画质足够）；默认 PNG
+function captureScreen(useJpeg) {
     var display = screen.getPrimaryDisplay();
     // 抓屏分辨率必须传入物理像素（逻辑分辨率 * 缩放比），否则高 DPI 屏幕会抓出模糊的低分辨率缩略图
     var size = {
@@ -98,13 +99,19 @@ function captureScreen() {
         }
         if (!src && sources.length) src = sources[0];
         if (!src) return '';
-        return src.thumbnail.toDataURL();
+        // toJPEG 返回 Buffer（二进制），需转 base64 dataURL 字符串——直接传 Buffer 渲染层无法按 dataURL 解析
+        // 原实现：useJpeg ? src.thumbnail.toJPEG(90) : src.thumbnail.toDataURL()（Buffer 被当 dataURL 用导致"截图失败"且全屏卡住）
+        return useJpeg
+            ? 'data:image/jpeg;base64,' + src.thumbnail.toJPEG(90).toString('base64')
+            : src.thumbnail.toDataURL();
     });
 }
 
 // 渲染进程主动抓屏（截图按钮入口）：invoke('shot:capture') → 返回 PNG dataURL
 // 阶段三十八：QQ 同款全屏冻结截图——先让主窗口从画面上消失（不挡要截的内容）→ 抓屏 → 全屏+置顶展示冻结画面
-// 优化：用 setOpacity(0) 代替 hide——即时生效无动画且不引起任务栏闪动，恢复时仅透明度归位，闪烁感最小
+// 优化1：setOpacity(0) 代替 hide——即时生效无动画且不引起任务栏闪动
+// 优化2（就绪后揭幕）：抓屏完成时窗口仍保持全透明，先把快照推给渲染层加载冻结编辑器（此时用户看的仍是桌面），
+//       编辑器首帧绘制就绪（shot:ready）后再透明度归位——揭幕即冻结画面，消除"聊天界面闪现"，桌面暴露期大幅缩短
 async function captureWithHide() {
     var wasVisible = mainWindow && mainWindow.isVisible();
     if (mainWindow && !wasVisible) {
@@ -114,30 +121,57 @@ async function captureWithHide() {
     }
     // Windows 合成器输出"无本窗口"新帧需要一小段时间，抓早了仍可能拍到本窗口（150ms 为实测安全值）
     await new Promise(function (r) { setTimeout(r, 150); });
-    var ok = false;
+    var dataUrl = null;
     try {
-        var dataUrl = await captureScreen();
-        ok = !!dataUrl;
-        return dataUrl;
-    } finally {
-        if (mainWindow) {
-            if (ok) {
-                // 抓屏成功：全屏无边界（盖住任务栏，视觉与 QQ 冻结一致）+ 最高置顶（防其他窗口穿插）
-                mainWindow.setFullScreen(true);
-                mainWindow.setAlwaysOnTop(true, 'screen-saver');
-                if (!wasVisible) mainWindow.show();
-                mainWindow.setOpacity(1); // 透明度归位=冻结画面瞬间出现（无缝衔接）
-                mainWindow.focus();
-            } else {
-                // 抓屏失败：恢复正常窗口（编辑器打不开，退回聊天界面）
-                if (!wasVisible) mainWindow.show();
-                mainWindow.setOpacity(1);
-                mainWindow.focus();
-            }
-        }
+        // JPEG 质量 90：比 PNG 编码快数倍（1080p 省 50~200ms），预览/编辑画质足够；
+        // 最终发送的是编辑器选区裁剪后重新编码的图，不受底图格式影响
+        dataUrl = await captureScreen(true);
+    } catch (err) {
+        console.warn('抓屏失败:', err);
     }
+    if (!dataUrl) {
+        // 抓屏失败：立即恢复正常窗口（编辑器打不开，退回聊天界面）
+        if (mainWindow) {
+            if (!wasVisible) mainWindow.show();
+            mainWindow.setOpacity(1);
+            mainWindow.focus();
+        }
+        return null;
+    }
+    // 先切全屏+置顶（窗口仍全透明，用户无感知），渲染层视口即为全屏尺寸，编辑器按全屏铺满
+    mainWindow.setFullScreen(true);
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    if (!wasVisible) mainWindow.show();
+    // 推送渲染层预备冻结编辑器（解码+画布绘制在窗口透明期间后台完成）
+    var readyPromise = new Promise(function (resolve) {
+        var settled = false;
+        // 超时保护：渲染层异常（解码失败/脚本错误）时 1.2s 后强制揭幕，避免窗口永远透明卡死
+        shotReadyWaiter = function () {
+            if (settled) return;
+            settled = true;
+            resolve();
+        };
+        setTimeout(function () { shotReadyWaiter && shotReadyWaiter(); }, 1200);
+    });
+    mainWindow.webContents.send('shot:prepare', dataUrl);
+    await readyPromise;
+    // 编辑器就绪（或超时兜底）：揭幕——用户看到的第一帧就是全屏冻结画面
+    mainWindow.setOpacity(1);
+    mainWindow.focus();
+    return dataUrl;
     // 原实现：mainWindow.hide() + 300ms 延时（用户反馈屏幕空窗闪烁明显，且 hide/show 引起任务栏闪动）
+    // 第二版：抓屏成功立即 setOpacity(1)（揭幕时窗口内容还是聊天界面，编辑器稍后才盖上——双重闪烁）
 }
+
+// 冻结编辑器就绪信号（渲染层首帧绘制完成回调，消费 shotReadyWaiter 解除揭幕等待）
+let shotReadyWaiter = null;
+ipcMain.on('shot:ready', function () {
+    if (shotReadyWaiter) {
+        var w = shotReadyWaiter;
+        shotReadyWaiter = null;
+        w();
+    }
+});
 
 // 退出全屏冻结态（渲染层编辑器关闭/发送完成后调用，恢复普通窗口与层级）
 ipcMain.on('shot:exit-freeze', function () {
@@ -371,14 +405,13 @@ app.whenReady().then(function () {
     createTray();
 
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
-    // 阶段三十八：改走 captureWithHide——先隐藏主窗口再抓屏（QQ 同款），可截到被自己窗口挡住的内容
+    // 阶段三十八：改走 captureWithHide——先让主窗口消失再抓屏（QQ 同款），可截到被自己窗口挡住的内容；
+    // 快照经 shot:prepare 推送渲染层预加载冻结编辑器，就绪后揭幕（此处不再单独推送，避免重复打开）
     var shortcutOk = globalShortcut.register('Alt+A', function () {
-        captureWithHide().then(function (dataUrl) {
-            if (!dataUrl || !mainWindow) return;
-            mainWindow.webContents.send('shot:global-result', dataUrl);
-        }).catch(function (err) {
-            console.warn('Alt+A 全局截图抓屏失败:', err);
+        captureWithHide().catch(function (err) {
+            console.warn('Alt+A 全局截图失败:', err);
         });
+        // 原实现：抓屏后 send('shot:global-result') 推送渲染层打开编辑器（与 prepare 链路重复）
     });
     if (!shortcutOk) console.warn('Alt+A 全局快捷键注册失败（可能被其他应用占用）');
 
