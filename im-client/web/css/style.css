@@ -2131,6 +2131,66 @@ html, body {
     z-index: 1;
 }
 
+/* 阶段三十九：缩略图可点击预览（放大镜光标提示可查看） */
+.pending-shot-item img {
+    cursor: zoom-in;
+}
+
+/* ===== 阶段三十九：待发送截图预览浮层（点击缩略图放大查看编辑后效果，确认后发送） ===== */
+.shot-preview-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 3200;
+    background: rgba(0, 0, 0, 0.78); /* 预览压暗层（功能性，不随主题） */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
+.shot-preview-mask.hidden {
+    display: none;
+}
+
+.shot-preview-img {
+    max-width: 90vw;
+    max-height: 78vh;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.shot-preview-bar {
+    display: flex;
+    gap: 10px;
+}
+
+.shot-preview-btn {
+    padding: 7px 22px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.shot-preview-btn:hover {
+    background: var(--hover);
+}
+
+/* 主按钮走主题色（跟随主题切换） */
+.shot-preview-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.shot-preview-btn.primary:hover {
+    opacity: 0.9;
+}
+
 .pending-shot-del:hover {
     background: var(--active);
     color: var(--text);

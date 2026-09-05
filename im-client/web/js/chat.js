@@ -626,6 +626,8 @@
         cell.appendChild(thumb);
         cell.appendChild(del);
         pendingShotListEl.appendChild(cell);
+        // 阶段三十九：点击缩略图预览编辑后的最终画面（确认无误再发送）
+        thumb.addEventListener('click', function () { openShotPreview(item, cell); });
         // 原实现（单张：先清旧再建整条，文件名固定"截图.png"）
         // clearPendingShot();
         // pendingShot = blob;
@@ -662,6 +664,67 @@
         // 原实现：pendingShot = null; + 移除单条 bar
         pendingShots = [];
         removePendingShotBar();
+    }
+
+    // ===== 阶段三十九：待发送截图预览浮层（点击缩略图放大查看编辑后效果，确认后可一键发送此图） =====
+    var shotPreviewMask = null; // 预览遮罩 DOM（惰性创建，全局仅一份）
+
+    function openShotPreview(item, cell) {
+        if (!shotPreviewMask) {
+            // 惰性构建：深色遮罩 + 大图 + 关闭/发送按钮（自绘浮层，禁止系统默认弹窗）
+            shotPreviewMask = document.createElement('div');
+            shotPreviewMask.className = 'shot-preview-mask hidden';
+            var img = document.createElement('img');
+            img.className = 'shot-preview-img';
+            var bar = document.createElement('div');
+            bar.className = 'shot-preview-bar';
+            var sendBtn = document.createElement('button');
+            sendBtn.className = 'shot-preview-btn primary';
+            sendBtn.textContent = '发送此图';
+            var closeBtn = document.createElement('button');
+            closeBtn.className = 'shot-preview-btn';
+            closeBtn.textContent = '关闭';
+            bar.appendChild(sendBtn);
+            bar.appendChild(closeBtn);
+            shotPreviewMask.appendChild(img);
+            shotPreviewMask.appendChild(bar);
+            document.body.appendChild(shotPreviewMask);
+            // 事件只绑一次：点空白处/关闭按钮收起；发送此图走既有图片链路并从待发送区移除该张
+            closeBtn.addEventListener('click', hideShotPreview);
+            shotPreviewMask.addEventListener('click', function (e) {
+                if (e.target === shotPreviewMask) hideShotPreview(); // 仅点遮罩空白处关闭（点图/按钮不关）
+            });
+            sendBtn.addEventListener('click', function () {
+                var it = shotPreviewMask._item;
+                hideShotPreview();
+                if (!it) return;
+                var idx = pendingShots.indexOf(it);
+                if (idx >= 0) pendingShots.splice(idx, 1);
+                if (it._cell) it._cell.remove();
+                if (!pendingShots.length) removePendingShotBar(); // 发完最后一张收起待发送条
+                sendScreenshotFile(it.blob);
+                messageInput.focus();
+            });
+            // Esc 快捷关闭（仅预览可见时响应）
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && shotPreviewMask && !shotPreviewMask.classList.contains('hidden')) hideShotPreview();
+            });
+        }
+        shotPreviewMask._item = item;
+        item._cell = cell; // 记录对应缩略图节点（发送此图后移除用）
+        var pImg = shotPreviewMask.querySelector('.shot-preview-img');
+        if (pImg.src && pImg.src.indexOf('blob:') === 0) URL.revokeObjectURL(pImg.src); // 释放上一张预览的 blob URL
+        pImg.src = URL.createObjectURL(item.blob);
+        shotPreviewMask.classList.remove('hidden');
+    }
+
+    function hideShotPreview() {
+        if (!shotPreviewMask) return;
+        var pImg = shotPreviewMask.querySelector('.shot-preview-img');
+        if (pImg.src && pImg.src.indexOf('blob:') === 0) URL.revokeObjectURL(pImg.src);
+        pImg.src = '';
+        shotPreviewMask._item = null;
+        shotPreviewMask.classList.add('hidden');
     }
 
     function sendMessage() {
