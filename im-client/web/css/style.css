@@ -560,6 +560,31 @@ html, body {
     margin: 10px 0;
 }
 
+/* 输入区高度拖拽条：微信同款，常态隐藏指示线，hover/拖拽时显示主题色横条 */
+.input-resizer {
+    height: 6px;
+    cursor: ns-resize;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+}
+
+.input-resizer::after {
+    content: '';
+    width: 36px;
+    height: 3px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background 0.15s;
+}
+
+.input-resizer:hover::after,
+.input-resizer.dragging::after {
+    background: var(--primary);
+}
+
 /* 输入区（微信风格：工具栏 + 输入框 + 底部操作行） */
 .main-chat {
     position: relative;

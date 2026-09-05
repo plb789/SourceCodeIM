@@ -636,6 +636,56 @@
         }
     });
 
+    // ===== 微信风格：按住输入区上缘拖拽条上下拖动，调整输入框高度，消息区自适应 =====
+    var inputResizer = document.getElementById('input-resizer');
+    var INPUT_H_MIN = 60; // 最小高度：保证工具栏/一行输入/底部行完整可见
+    var INPUT_H_MAX = 480; // 最大高度上限（拖拽时还会按消息区剩余高度动态收紧）
+
+    // 表情面板为固定 bottom 定位，输入框高度变化后同步贴输入框上缘（原 CSS 固定 bottom:180px）
+    // 偏移量 = 工具栏 38px + 底部行约 46px + 输入框下边距 10px + 缝隙 6px
+    function syncEmojiPanelBottom() {
+        var h = messageInput.getBoundingClientRect().height;
+        emojiPanel.style.bottom = (h + 100) + 'px';
+    }
+
+    // 恢复上次拖拽高度（localStorage 持久化，刷新后保持）；无记录时默认取最小高度 60px
+    // 原实现：textarea rows=3 默认约 87px（高于最小高度），用户要求初始即为最小高度
+    (function restoreInputHeight() {
+        var savedH = 0;
+        try { savedH = parseInt(localStorage.getItem('im_input_height'), 10) || 0; } catch (e) {}
+        if (savedH >= INPUT_H_MIN && savedH <= INPUT_H_MAX) {
+            messageInput.style.height = savedH + 'px';
+        } else {
+            messageInput.style.height = INPUT_H_MIN + 'px';
+        }
+        syncEmojiPanelBottom();
+    })();
+
+    inputResizer.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        var startY = e.clientY;
+        var startH = messageInput.getBoundingClientRect().height;
+        inputResizer.classList.add('dragging');
+        document.body.style.userSelect = 'none'; // 拖拽期间禁用文本选择，避免干扰
+        function onMove(ev) {
+            var delta = startY - ev.clientY; // 上拖增高、下拖减高（微信同向）
+            // 消息区至少保留 150px 可视高度，防止输入框挤占全部聊天区
+            var maxH = Math.max(INPUT_H_MIN, messageList.getBoundingClientRect().height + startH - 150);
+            var newH = Math.min(Math.max(startH + delta, INPUT_H_MIN), Math.min(INPUT_H_MAX, maxH));
+            messageInput.style.height = newH + 'px';
+            syncEmojiPanelBottom();
+        }
+        function onUp() {
+            inputResizer.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            try { localStorage.setItem('im_input_height', String(messageInput.getBoundingClientRect().height)); } catch (err) {}
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+
     // ===== 图片 / 文件发送（基于分片协议 msg_type=3，仅私聊） =====
     // 阶段二十六：群聊图片改走 HTTP 上传链路（sendGroupImage，服务端广播），分片协议仍为私聊专属
     // 阶段三十一：分片大小不再硬编码，登录响应下发 chunk_size 后覆盖（服务端归口）；默认值仅兜底旧版服务端
