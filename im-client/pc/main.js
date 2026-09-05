@@ -9,6 +9,11 @@ let tray = null;
 // 服务端地址（默认本地）
 const SERVER_URL = 'http://localhost:8888/';
 
+// 应用图标路径（可配置）：托盘图标使用，更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径；
+// 注意与 build.bat 的 APP_ICON 变量（exe 图标）同步修改保持一致
+// 原实现：createTray 内直接写死 64.ico 文件名
+const APP_ICON = path.join(__dirname, '64.ico');
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1100,
@@ -39,9 +44,10 @@ function createWindow() {
 }
 
 function createTray() {
-    // 托盘图标使用项目自带 64.ico（原实现：空图标占位，Windows 托盘区看不到任何图标）
+    // 托盘图标使用 APP_ICON 常量（顶部可配置，原实现：空图标占位，Windows 托盘区看不到任何图标）
     // Tray(nativeImage.createEmpty());
-    tray = new Tray(path.join(__dirname, '64.ico'));
+    // tray = new Tray(path.join(__dirname, '64.ico'));
+    tray = new Tray(APP_ICON);
     tray.setToolTip('即时通讯');
     const contextMenu = Menu.buildFromTemplate([
         { label: '显示主窗口', click: function () { mainWindow.show(); } },

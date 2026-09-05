@@ -16,6 +16,10 @@ set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-bui
 set "BIN_DIR=%~dp0..\bin"
 set "UNPACKED_DIR=%~dp0dist\win-unpacked"
 
+rem 应用图标路径（可配置）：更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径；
+rem 注意 exe 图标与 main.js 托盘图标（APP_ICON 常量）建议同步修改保持一致
+set "APP_ICON=%~dp064.ico"
+
 echo [1/4] 检查 Node 环境...
 where node >nul 2>nul
 if errorlevel 1 (
@@ -41,11 +45,11 @@ if errorlevel 1 (
 )
 
 rem 设置 exe 图标：electron-builder 配置跳过签名时图标编辑一并跳过，且其要求 ico 至少 256px；
-rem rcedit 无尺寸限制，直接对打包产物改图标（64.ico 存在时执行，失败不阻断部署）
+rem rcedit 无尺寸限制，直接对打包产物改图标（APP_ICON 存在时执行，失败不阻断部署）
 set "RCEDIT=%~dp0node_modules\rcedit\bin\rcedit-x64.exe"
-if exist "%RCEDIT%" if exist "%~dp064.ico" (
-    echo 设置 exe 图标为 64.ico ...
-    "%RCEDIT%" "%UNPACKED_DIR%\即时通讯.exe" --set-icon "%~dp064.ico"
+if exist "%RCEDIT%" if exist "%APP_ICON%" (
+    echo 设置 exe 图标为 %APP_ICON% ...
+    "%RCEDIT%" "%UNPACKED_DIR%\即时通讯.exe" --set-icon "%APP_ICON%"
     if errorlevel 1 echo [警告] exe 图标设置失败，将继续部署（图标保持默认）
 )
 
