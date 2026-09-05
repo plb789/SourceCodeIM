@@ -1247,9 +1247,12 @@
                 // 阶段三十五·第一期：截帧后进入截图编辑器（选区/矩形/椭圆/箭头/画笔/文字/马赛克/撤销），确认后再发送
                 // 原实现：ScreenshotEditor.open(blob, sendScreenshotFile);（编辑器模式，默认全图选区、图像居中缩放）
                 // 阶段三十五·第二期：改走伪冻结遮罩（freeze）——画面铺满视口、全屏压暗、拖拽框选后工具栏出现，贴近微信 Alt+A 体验
+                // 阶段三十五·第二期（实测反馈调整）：截图按钮改回 open 编辑器模式（窗口式居中缩放，默认全图选区）；
+                // freeze 伪冻结遮罩保留为备选入口（window.ScreenshotEditor.freeze 接口不变，需要时换回即可）
+                // ScreenshotEditor.freeze(blob, sendScreenshotFile);
                 canvas.toBlob(function (blob) {
                     if (!blob) { showToast('截图失败'); return; }
-                    ScreenshotEditor.freeze(blob, sendScreenshotFile);
+                    ScreenshotEditor.open(blob, sendScreenshotFile);
                 }, 'image/png');
             };
         }).catch(function () {
