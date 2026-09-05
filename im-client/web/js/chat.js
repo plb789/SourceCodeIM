@@ -582,47 +582,98 @@
 
     // ===== 发送消息 =====
     // ===== 阶段三十八：截图待发送区（QQ 同款：编辑完成不直接发送，先进输入框上方待发送条，点发送才出） =====
-    var pendingShot = null;     // 待发送截图 blob
-    var pendingShotBar = null;  // 待发送条 DOM（输入区顶部）
+    // 阶段三十九：多次截图一起发送——待发送区改为截图列表，连续截多张累积暂存，点发送一次性全部发出
+    // 原实现：var pendingShot = null;（单张待发送 blob，新截图覆盖旧截图）
+    // var pendingShot = null;     // 待发送截图 blob
+    var pendingShots = [];      // 待发送截图列表（多次截图累积，每项为 blob）
+    var pendingShotBar = null;  // 待发送条 DOM（输入区顶部，仅一条，内部横向排列多张缩略图）
+    var pendingShotListEl = null; // 缩略图列表容器
 
-    function setPendingShot(blob) {
-        if (!blob) return;
-        clearPendingShot();
-        pendingShot = blob;
+    // 惰性创建待发送条（首张截图入列时才插入输入区顶部）
+    function ensurePendingShotBar() {
+        if (pendingShotBar) return;
         pendingShotBar = document.createElement('div');
         pendingShotBar.className = 'pending-shot';
-        var thumb = document.createElement('img');
-        thumb.src = URL.createObjectURL(blob);
-        thumb.onload = function () { URL.revokeObjectURL(thumb.src); }; // 已渲染即可释放
-        var name = document.createElement('span');
-        name.className = 'pending-shot-name';
-        name.textContent = '截图.png';
-        var del = document.createElement('button');
-        del.className = 'pending-shot-del';
-        del.textContent = '×';
-        del.title = '移除截图';
-        del.addEventListener('click', function () { clearPendingShot(); messageInput.focus(); });
-        pendingShotBar.appendChild(thumb);
-        pendingShotBar.appendChild(name);
-        pendingShotBar.appendChild(del);
+        pendingShotListEl = document.createElement('div');
+        pendingShotListEl.className = 'pending-shot-list';
+        pendingShotBar.appendChild(pendingShotListEl);
         var bar = document.querySelector('.input-bar');
         if (bar) bar.insertBefore(pendingShotBar, bar.firstChild);
     }
 
-    function clearPendingShot() {
-        pendingShot = null;
+    function setPendingShot(blob) {
+        if (!blob) return;
+        ensurePendingShotBar();
+        var item = { blob: blob };
+        pendingShots.push(item);
+        // 单张缩略图节点（右上角 × 可单独移除该张）
+        var cell = document.createElement('div');
+        cell.className = 'pending-shot-item';
+        var thumb = document.createElement('img');
+        thumb.src = URL.createObjectURL(blob);
+        thumb.onload = function () { URL.revokeObjectURL(thumb.src); }; // 已渲染即可释放
+        var del = document.createElement('button');
+        del.className = 'pending-shot-del';
+        del.textContent = '×';
+        del.title = '移除截图';
+        del.addEventListener('click', function () {
+            var idx = pendingShots.indexOf(item);
+            if (idx >= 0) pendingShots.splice(idx, 1);
+            cell.remove();
+            if (!pendingShots.length) removePendingShotBar(); // 全部移除后收起待发送条
+            messageInput.focus();
+        });
+        cell.appendChild(thumb);
+        cell.appendChild(del);
+        pendingShotListEl.appendChild(cell);
+        // 原实现（单张：先清旧再建整条，文件名固定"截图.png"）
+        // clearPendingShot();
+        // pendingShot = blob;
+        // pendingShotBar = document.createElement('div');
+        // pendingShotBar.className = 'pending-shot';
+        // var thumb = document.createElement('img');
+        // thumb.src = URL.createObjectURL(blob);
+        // thumb.onload = function () { URL.revokeObjectURL(thumb.src); }; // 已渲染即可释放
+        // var name = document.createElement('span');
+        // name.className = 'pending-shot-name';
+        // name.textContent = '截图.png';
+        // var del = document.createElement('button');
+        // del.className = 'pending-shot-del';
+        // del.textContent = '×';
+        // del.title = '移除截图';
+        // del.addEventListener('click', function () { clearPendingShot(); messageInput.focus(); });
+        // pendingShotBar.appendChild(thumb);
+        // pendingShotBar.appendChild(name);
+        // pendingShotBar.appendChild(del);
+        // var bar = document.querySelector('.input-bar');
+        // if (bar) bar.insertBefore(pendingShotBar, bar.firstChild);
+    }
+
+    // 仅收起待发送条 DOM（列表已空时调用）
+    function removePendingShotBar() {
         if (pendingShotBar) {
             pendingShotBar.remove();
             pendingShotBar = null;
+            pendingShotListEl = null;
         }
+    }
+
+    function clearPendingShot() {
+        // 原实现：pendingShot = null; + 移除单条 bar
+        pendingShots = [];
+        removePendingShotBar();
     }
 
     function sendMessage() {
         // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
-        if (pendingShot) {
-            var shot = pendingShot;
+        // 阶段三十九：一次发出全部待发送截图（逐张走既有图片链路，各自 nonce 气泡独立回填）
+        // 原实现：if (pendingShot) { 单张取出发送 }
+        if (pendingShots.length) {
+            var shots = pendingShots.slice();
             clearPendingShot();
-            sendScreenshotFile(shot);
+            // 修复：必须传 item.blob（列表项为 { blob: xx } 包装对象，直传会把对象序列化成 "[object Object]" 垃圾内容导致图片全碎）
+            // 原实现：for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i]);
+            for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i].blob);
             return;
         }
         var content = messageInput.value.trim();

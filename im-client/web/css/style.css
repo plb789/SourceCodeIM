@@ -2081,6 +2081,18 @@ html, body {
     border-radius: 8px;
 }
 
+/* 阶段三十九：多次截图一起发送——条内横向排列多张缩略图（放不下自动换行） */
+.pending-shot-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* 单张缩略图单元（相对定位：× 删除按钮钉在右上角） */
+.pending-shot-item {
+    position: relative;
+}
+
 .pending-shot img {
     width: 56px;
     height: 40px;
@@ -2089,11 +2101,12 @@ html, body {
     border: 1px solid var(--border);
 }
 
-.pending-shot-name {
+/* 原实现（单张：缩略图右侧文件名"截图.png"，多张模式下不再展示名称） */
+/* .pending-shot-name {
     flex: 1;
     font-size: 13px;
     color: var(--text);
-}
+} */
 
 .pending-shot-del {
     width: 24px;
@@ -2105,6 +2118,17 @@ html, body {
     font-size: 15px;
     line-height: 1;
     cursor: pointer;
+}
+
+/* 阶段三十九：删除按钮钉在所属缩略图右上角（覆盖原条内右侧平铺定位） */
+.pending-shot-item .pending-shot-del {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    width: 18px;
+    height: 18px;
+    font-size: 12px;
+    z-index: 1;
 }
 
 .pending-shot-del:hover {
