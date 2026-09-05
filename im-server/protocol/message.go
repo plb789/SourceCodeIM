@@ -45,6 +45,12 @@ const (
 
 	MsgTypeFileProgress = 40 // 阶段三十二：超大文件分片直传进度同步（content 为 JSON：upload_id/nonce/received/total/file_name/file_size，服务端节流推送接收方）
 	MsgTypeFileCancel   = 41 // 阶段三十二：超大文件上传取消（上行 file_id=upload_id；下行 content 为 JSON：upload_id/nonce，双方移除进度气泡）
+
+	// 阶段四十三：AI 问答（服务端归口调用模型服务，密钥仅存服务端配置）
+	MsgTypeAIAgents    = 42 // AI 智能体列表请求/响应（响应 content 为 JSON：[{name,avatar,model}]）
+	MsgTypeAIChat      = 43 // AI 问答提问（to_user=智能体名，content=问题文本）
+	MsgTypeAIStream    = 44 // AI 流式回复增量（from_user=智能体名，content=增量文本，stream_id 关联同一次回复）
+	MsgTypeAIStreamEnd = 45 // AI 流式回复结束（content=完整回复，msg_id=落库 ID，remark=error 时表示本次回复失败）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -65,4 +71,5 @@ type Message struct {
 	MsgID       uint   `json:"msg_id"`       // 消息唯一 ID（持久化后回填，用于去重）
 	Remark      string `json:"remark"`       // 好友备注名
 	Group       string `json:"group"`        // 好友分组
+	StreamID    string `json:"stream_id"`    // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
 }

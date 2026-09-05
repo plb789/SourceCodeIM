@@ -44,3 +44,86 @@ web_dir: ""
 # 阶段二十四：聊天文件持久化大小上限（字节，默认 20MB）
 # 阶段三十二：语义调整为"单请求直传上限"，1MB~20MB 走单请求直传，超过走分片直传（上限见 max_direct_size）
 # max_file_size: 20971520
+
+# ============================================================
+# 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存本文件，客户端不接触密钥）
+# providers 为 OpenAI 兼容 chat/completions 接口（可接 DeepSeek/Kimi/智谱/通义/OpenAI 等）
+# agents 为面向用户的智能体，通过 provider 名称绑定模型服务；未配置时内置"AI助手"（本地 Mock 应答）
+# 修改后需重启服务端生效
+# ============================================================
+# ============================================================
+# AI 问答配置（服务端归口：密钥仅存本文件，客户端不接触；修改后重启服务端生效）
+# ============================================================
+ai:
+  # 多轮对话携带的历史消息条数（按 用户+智能体 隔离取最近 N 条）
+  context_window: 20
+  # 限流：单用户在 limit_window 秒内最多提问 limit_count 次
+  limit_count: 10
+  limit_window: 60
+
+  # 模型服务列表（可同时配置多个，智能体按 name 绑定）
+  # supports_image: 是否支持图片识别（多模态模型如 glm-4v/qwen-vl/gpt-4o 填 true，
+  # 为 true 时绑定的智能体开放图片提问入口，前端可发图片给模型识别）
+  providers:
+    # DeepSeek
+    - name: deepseek
+      api_url: "https://api.deepseek.com/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "deepseek-chat"          # 推理模型可换 deepseek-reasoner
+      supports_image: false
+    # 智谱 GLM
+    - name: zhipu
+      api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+      api_key: "你的密钥"
+      model: "glm-4-flash"            # 免费额度模型；高端可换 glm-4-plus
+      supports_image: false
+    # 智谱视觉模型（图片识别示例：绑定到智能体后可发图提问）
+    # - name: zhipu-vision
+    #   api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    #   api_key: "你的密钥"
+    #   model: "glm-4v-plus"
+    #   supports_image: true
+    # Kimi (Moonshot)
+    - name: kimi
+      api_url: "https://api.moonshot.cn/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "moonshot-v1-8k"
+    # 通义千问（DashScope 兼容模式）
+    - name: qwen
+      api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "qwen-plus"
+    # OpenAI
+    - name: openai
+      api_url: "https://api.openai.com/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "gpt-4o-mini"
+    # 本地 Ollama（无需密钥，api_key 留空即可）
+    - name: ollama
+      api_url: "http://127.0.0.1:11434/v1/chat/completions"
+      api_key: ""
+      model: "gemma4:26b"
+      supports_image: true
+
+  # 智能体列表（左侧 AI 图标里可选的聊天助手；provider 未启用时该智能体降级为本地演示应答）
+  agents:
+    - name: "AI助手"                   # 全局唯一，会话列表展示名
+      provider: deepseek               # 绑定上面的 provider name
+      system_prompt: "你是一个即时通讯软件内的智能助手，回答简洁、准确、友好，使用中文回复。"
+      avatar: ""                       # 头像 URL，留空时前端显示 🤖 占位
+    - name: "翻译助手"
+      provider: zhipu
+      system_prompt: "你是一个专业翻译助手：自动检测用户输入的语言，中文译英文、其他语言译中文，仅输出译文，不要解释。"
+      avatar: ""
+    - name: "编程助手"
+      provider: kimi
+      system_prompt: "你是一个资深编程助手，用中文回答技术问题，先给结论再给可运行的代码示例。"
+      avatar: ""
+    - name: "创意写作"
+      provider: qwen
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""
+    - name: "本地测试"
+      provider: ollama
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""

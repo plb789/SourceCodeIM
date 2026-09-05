@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gorilla/websocket"
 
@@ -56,12 +57,24 @@ func main() {
 	http.HandleFunc("/upload/chunk", srv.HandleChunkUpload)
 	// 群聊图片上传接口（阶段二十六：HTTP 上传落库 + 广播群成员，不走点对点分片协议）
 	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
+	// AI 图片提问上传接口（阶段四十四：仅落盘不落库，提问正文由 AI_CHAT 图片信封统一落库）
+	http.HandleFunc("/upload/ai/image", srv.HandleAIImageUpload)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
-	http.Handle("/", http.FileServer(http.Dir(cfg.WebDir)))
+	// 阶段四十三：入口 HTML 禁用缓存（no-cache=每次回源校验），前端发版后普通刷新即可拿到新版；
+	// js/css 带 ?v= 版本号仍走浏览器缓存，不受影响
+	fileServer := http.FileServer(http.Dir(cfg.WebDir))
+	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 	// 头像目录注入（锚定 exe 所在目录解析，替代 avatar.go 中原相对路径实现）
 	server.SetAvatarDir(filepath.Join(cfg.WebDir, "static", "avatar"))
+	// 阶段四十三：AI 问答初始化（服务端归口：providers/agents 密钥仅存 config.yaml）
+	server.InitAI(cfg)
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

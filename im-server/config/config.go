@@ -42,6 +42,42 @@ type Config struct {
 	RedisAddr     string `yaml:"redis_addr"`
 	RedisPassword string `yaml:"redis_password"`
 	RedisDB       int    `yaml:"redis_db"`
+
+	// 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存服务端配置文件，客户端不接触密钥）
+	AI AIConfig `yaml:"ai"`
+}
+
+// AIProviderConfig AI 模型服务提供方（OpenAI 兼容 chat/completions 接口，可接 DeepSeek/Kimi/智谱/通义等）
+type AIProviderConfig struct {
+	Name   string `yaml:"name"`    // 提供方名称（智能体通过该名称绑定模型服务）
+	APIURL string `yaml:"api_url"` // chat/completions 完整接口地址
+	APIKey string `yaml:"api_key"` // API 密钥（仅存服务端）
+	Model  string `yaml:"model"`   // 模型名（如 deepseek-chat / glm-4-flash）
+	// SupportsImage 模型是否支持图片识别（多模态，如 glm-4v/qwen-vl/gpt-4o）。
+	// 阶段四十四：为 true 时绑定的智能体开放图片提问入口，服务端按 OpenAI 兼容多模态
+	// 格式（content 数组：text + image_url data URL）调模型；false 时前端隐藏发图入口，
+	// 服务端对图片提问直接拒绝（双保险）
+	SupportsImage bool `yaml:"supports_image"`
+}
+
+// AIAgentConfig AI 智能体（面向用户的聊天助手，绑定模型服务与系统提示词）
+type AIAgentConfig struct {
+	Name         string `yaml:"name"`          // 智能体名称（会话列表展示名，需全局唯一）
+	Provider     string `yaml:"provider"`      // 绑定的提供方名称（缺省或未命中时使用本地 Mock 应答）
+	SystemPrompt string `yaml:"system_prompt"` // 系统提示词（人设/能力定义）
+	Avatar       string `yaml:"avatar"`        // 头像 URL（缺省时前端回退 emoji 占位）
+}
+
+// AIConfig AI 问答配置节
+type AIConfig struct {
+	Providers []AIProviderConfig `yaml:"providers"` // 模型服务列表（多模型支持）
+	Agents    []AIAgentConfig    `yaml:"agents"`    // 智能体列表（用户可选择性聊天）
+	// 多轮对话携带的历史消息条数（按用户+智能体隔离取最近 N 条）
+	ContextWindow int `yaml:"context_window"`
+	// 限流：单用户在限流窗口内最大提问次数
+	LimitCount int `yaml:"limit_count"`
+	// 限流窗口（秒）
+	LimitWindow int `yaml:"limit_window"`
 }
 
 // Default 返回默认配置，与《开发文档》5.2 核心配置参数保持一致
@@ -70,6 +106,13 @@ func Default() *Config {
 		RedisAddr:     "127.0.0.1:6379",
 		RedisPassword: "",
 		RedisDB:       0,
+
+		// 阶段四十三：AI 问答默认参数（未配置 providers 时使用本地 Mock 应答保证功能可用）
+		AI: AIConfig{
+			ContextWindow: 20,
+			LimitCount:    10,
+			LimitWindow:   60,
+		},
 	}
 }
 
@@ -125,6 +168,16 @@ func Load() *Config {
 	}
 	if cfg.MaxDirectSize <= 0 {
 		cfg.MaxDirectSize = 2 << 30
+	}
+	// 阶段四十三：AI 问答参数兜底（显式配 0 时回退默认值）
+	if cfg.AI.ContextWindow <= 0 {
+		cfg.AI.ContextWindow = 20
+	}
+	if cfg.AI.LimitCount <= 0 {
+		cfg.AI.LimitCount = 10
+	}
+	if cfg.AI.LimitWindow <= 0 {
+		cfg.AI.LimitWindow = 60
 	}
 	return cfg
 }

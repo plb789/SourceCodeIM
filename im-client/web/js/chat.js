@@ -74,6 +74,9 @@
     var fileInput = document.getElementById('file-input');
     var convListEl = document.getElementById('conv-list');
     var friendsPanel = document.getElementById('friends-panel');
+    // 阶段四十三：AI 助手面板与智能体列表（服务端配置归口下发）
+    var aiPanel = document.getElementById('ai-panel');
+    var aiAgentList = document.getElementById('ai-agent-list');
 
     // ===== 置顶消息条元素（服务端归口，双方同步） =====
     var pinBar = document.getElementById('pin-bar');
@@ -938,6 +941,24 @@
         return m ? m.text : content;
     }
 
+    // 阶段四十四：解析 AI 图片提问信封 content（{"image":url,"text":附言}）；非图片信封返回 null。
+    // 必须同时有 image 字符串与 text 字段才判定，防止普通文本误判
+    function parseAIImageEnvelope(content) {
+        if (!content || content.charAt(0) !== '{') return null;
+        var m = null;
+        try { m = JSON.parse(content); } catch (e) { return null; }
+        if (!m || typeof m !== 'object' || typeof m.image !== 'string' || !m.image || typeof m.text !== 'string') return null;
+        return m;
+    }
+
+    // 阶段四十四：当前会话的 AI 智能体是否支持图片识别（服务端 AI_AGENTS 能力标记归口）
+    function aiAgentSupportsImage(name) {
+        for (var i = 0; i < aiAgents.length; i++) {
+            if (aiAgents[i].name === name) return !!aiAgents[i].image;
+        }
+        return false;
+    }
+
     function sendMessage() {
         // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
         // 阶段三十九：一次发出全部待发送截图（逐张走既有图片链路，各自 nonce 气泡独立回填）
@@ -952,17 +973,30 @@
         }
         var content = messageInput.value.trim();
         if (!content) return;
-        var msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
-        if (currentChatUser !== '') msg.to_user = currentChatUser;
+        // 阶段四十三：AI 智能体会话走专用问答协议（服务端归口调用模型并流式回复，密钥不下发）
+        var msg;
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content };
+        } else {
+            msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+            if (currentChatUser !== '') msg.to_user = currentChatUser;
+        }
         // 阶段四十：引用发送——content 换成引用信封 JSON（服务端归口解析会话摘要），发送后清引用条
         // 原实现：content 始终为纯文本
         if (quoteTarget) {
             msg.content = JSON.stringify({ quote: quoteTarget, text: content });
             clearQuoteTarget();
         }
+        // 阶段四十三：记录 AI 提问原文（在引用信封包装后取最终发送内容，重新生成与首次发送解析口径完全一致；
+        // text 为纯文本供"编辑提问"回填）
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            lastAIQuestion[currentChatUser] = { raw: msg.content, text: quoteDisplayText(msg.content) };
+        }
         if (IMSocket.send(msg)) {
             messageInput.value = '';
             messageInput.focus();
+            // 阶段四十三："思考中"指示不在发送时显示（原实现点发送即插入，会排在服务端回显的问题消息上面），
+            // 改为在 PRIVATE 回显处理器中问题消息上屏后再显示，保证时序为：我的提问 → 思考中 → AI 流式回复
         }
     }
     sendBtn.addEventListener('click', sendMessage);
@@ -979,7 +1013,8 @@
         messageInput.focus();
     }
     messageInput.addEventListener('input', function () {
-        if (currentChatUser !== '') {
+        // 阶段四十三：AI 会话无输入状态语义（对方非真实用户），跳过 TYPING 推送
+        if (currentChatUser !== '' && !isAIAgent(currentChatUser)) {
             IMSocket.send({ msg_type: MSG.TYPING, to_user: currentChatUser });
         }
     });
@@ -1070,6 +1105,13 @@
     imageBtn.addEventListener('click', function () {
         // 原实现：群聊视图拦截提示"群聊暂不支持发送图片"，阶段二十六放开——群聊图片走 HTTP 上传链路
         // if (currentChatUser === '') { showToast('群聊暂不支持发送图片'); return; }
+        // 阶段四十四：AI 会话走图片识别链路——仅支持图片的智能体（配置归口）可发图
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            if (!aiAgentSupportsImage(currentChatUser)) {
+                showToast('该助手不支持图片识别');
+                return;
+            }
+        }
         imageInput.click();
     });
     fileBtn.addEventListener('click', function () {
@@ -1081,6 +1123,7 @@
             // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
             // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
             if (currentChatUser === '') sendGroupImage(imageInput.files[0]);
+            else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
             else sendFile(imageInput.files[0]);
         }
         imageInput.value = '';
@@ -1506,6 +1549,47 @@
         });
     }
 
+    // 阶段四十四：AI 图片提问（图片识别）——POST /upload/ai/image 落盘（服务端不落库），
+    // 成功后发送 AI_CHAT 图片信封（{"image":url,"text":附言}），提问由服务端 AI_CHAT 归口统一落库
+    // （单条记录同时承载图片与附言，避免图片消息+信封消息重复气泡）。附言取发送时输入框内容（可空，
+    // 服务端给模型默认指令"请描述并分析这张图片"）；本地 blob 气泡仅作上传中预览，发送成功后由
+    // 服务端 PRIVATE 回显渲染最终气泡（无 nonce 去重链路，故发送前移除本地气泡防重复）
+    function sendAIImage(file) {
+        var agent = currentChatUser;
+        if (!agent || !isAIAgent(agent)) return;
+        if (!isImageName(file.name)) { showToast('仅支持发送图片文件'); return; }
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        if (file.size > maxFile) { showToast('图片超过大小上限（' + formatSize(maxFile) + '）'); return; }
+        var note = messageInput.value.trim();
+        var bubble = appendImageMsg(IMSocket.getUsername(), URL.createObjectURL(file), 'self', true);
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload/ai/image?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&to_user=' + encodeURIComponent(agent), {
+            method: 'POST',
+            body: fd
+        }).then(function (res) {
+            if (!res.ok) {
+                return res.text().then(function (t) { throw new Error(t || ('HTTP ' + res.status)); });
+            }
+            return res.json();
+        }).then(function (data) {
+            if (!data || !data.url) throw new Error('上传响应缺少图片地址');
+            var envelope = JSON.stringify({ image: data.url, text: note });
+            // 记录提问原文（重新生成按信封原样重发，服务端重新读图，口径与首次发送一致）
+            lastAIQuestion[agent] = { raw: envelope, text: note || '[图片]' };
+            bubble.remove(); // 回显渲染最终气泡，移除本地预览防重复
+            if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（图片已存档，可重新发）
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope })) {
+                throw new Error('消息发送失败');
+            }
+            messageInput.value = '';
+        }).catch(function (e) {
+            bubble.remove(); // 上传/发送失败：移除本地预览气泡（服务端无记录，避免幽灵气泡）
+            showToast('图片发送失败：' + (e.message || e));
+        });
+    }
+
     // 群聊图片广播：发送端本地气泡按 nonce 回填 msg_id（撤回/删除/置顶能力前提），其余用户实时渲染
     IMSocket.on(MSG.GROUP_IMAGE, function (msg) {
         if (currentChatUser !== '') return; // 不在群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
@@ -1793,6 +1877,8 @@
                 var lastChat = localStorage.getItem('im_last_chat_' + IMSocket.getUsername());
                 if (lastChat !== null) openConversation(lastChat || '');
             } catch (e) {}
+            // 阶段四十三：登录成功后拉取 AI 智能体列表（刷新自动重登/断线重连均会走 LOGIN_RESP，服务端配置归口）
+            requestAIAgents();
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
             // 并从乐观显示的聊天界面回退到登录界面
@@ -1829,6 +1915,10 @@
             return;
         }
         showToast(msg.content);
+        // 阶段四十三：AI 限流/智能体不存在等失败路径只发 ERROR 无 END 帧，这里同步收起"思考中"指示防空等
+        if (aiThinking[currentChatUser]) {
+            hideAIThinking(currentChatUser);
+        }
     });
 
     // 好友列表同步
@@ -1897,18 +1987,428 @@
         userListEl.appendChild(group);
     }
 
-    // ===== 侧栏 Tab 切换：聊天（会话列表）/ 好友 =====
+    // ===== 侧栏 Tab 切换：聊天（会话列表）/ AI 助手（智能体列表）/ 好友 =====
     document.querySelectorAll('.sidebar-tab').forEach(function (tab) {
         tab.addEventListener('click', function () {
             document.querySelectorAll('.sidebar-tab').forEach(function (t) { t.classList.remove('active'); });
             this.classList.add('active');
-            var isChat = this.getAttribute('data-tab') === 'chat';
-            convListEl.classList.toggle('hidden', !isChat);
-            friendsPanel.classList.toggle('hidden', isChat);
+            // 阶段四十三：新增 AI Tab（智能体列表），三面板互斥切换
+            var tabName = this.getAttribute('data-tab');
+            convListEl.classList.toggle('hidden', tabName !== 'chat');
+            friendsPanel.classList.toggle('hidden', tabName !== 'friends');
+            aiPanel.classList.toggle('hidden', tabName !== 'ai');
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
     });
+
+    // ===== 阶段四十三：AI 问答（智能体列表 / 流式打字机渲染） =====
+    // 服务端归口：智能体由 config.yaml 配置下发（仅名称/头像/模型名，密钥不下发），每人会话按 用户+智能体 隔离
+    var aiAgents = [];      // 智能体列表 [{name, avatar, model}]
+    var agentAvatars = {};  // 智能体头像映射（getAvatarUrl 渲染归口：服务端配置头像优先，缺失回退 emoji）
+    var aiStreams = {};     // 进行中的流式回复：stream_id -> {el, textEl, cursorEl, pending, shown, timer, done, finalId}
+    var aiThinking = {};    // 等待 AI 首段回复的"思考中"指示：agent -> {el}
+    var lastAIQuestion = {}; // 各智能体最近一次提问（重新生成/编辑提问按钮数据源）：agent -> { raw, text }
+
+    function isAIAgent(name) {
+        return aiAgents.some(function (a) { return a.name === name; });
+    }
+
+    // 请求智能体列表（登录成功后调用，断线重连重新登录后再次拉取）
+    function requestAIAgents() {
+        IMSocket.send({ msg_type: MSG.AI_AGENTS });
+    }
+
+    IMSocket.on(MSG.AI_AGENTS, function (msg) {
+        try { aiAgents = JSON.parse(msg.content) || []; } catch (e) { aiAgents = []; }
+        aiAgents.forEach(function (a) {
+            if (a && a.name && a.avatar) agentAvatars[a.name] = a.avatar;
+        });
+        renderAgentList();
+        // 阶段四十三：智能体列表晚于会话列表/历史消息到达（刷新页面时的正常时序），
+        // 此前 isAIAgent() 全部返回 false 导致 AI 头像降级为首字母——就绪后刷新会话列表与
+        // 当前智能体会话，头像统一回正为 🤖/配置图片
+        renderConvList();
+        if (currentChatUser && isAIAgent(currentChatUser)) {
+            openConversation(currentChatUser);
+        }
+        // 当前正停留在智能体会话时，刷新标题区（头像/名称就绪）
+        updateChatTitle();
+    });
+
+    // 渲染 AI 助手面板的智能体列表（布局对齐通讯录 user-item，主题色跟随现有变量）
+    function renderAgentList() {
+        aiAgentList.innerHTML = '';
+        if (!aiAgents.length) {
+            var empty = document.createElement('li');
+            empty.className = 'ai-agent-empty';
+            empty.textContent = '暂无可用的 AI 助手';
+            aiAgentList.appendChild(empty);
+            return;
+        }
+        aiAgents.forEach(function (a) {
+            var li = document.createElement('li');
+            li.className = 'user-item ai-agent-item' + (currentChatUser === a.name ? ' active' : '');
+
+            // 头像：服务端配置头像优先（图片失效降级 emoji），无配置回退 emoji 占位
+            var avatar = document.createElement('div');
+            avatar.className = 'avatar ai-agent-avatar';
+            if (a.avatar) {
+                var img = document.createElement('img');
+                img.src = a.avatar;
+                img.alt = '';
+                img.addEventListener('error', function () {
+                    img.remove();
+                    avatar.textContent = '🤖';
+                });
+                avatar.appendChild(img);
+            } else {
+                avatar.textContent = '🤖';
+            }
+
+            var info = document.createElement('div');
+            info.className = 'ai-agent-info';
+            var name = document.createElement('div');
+            name.className = 'ai-agent-name';
+            name.textContent = a.name;
+            var model = document.createElement('div');
+            model.className = 'ai-agent-model';
+            // 阶段四十四：图片识别能力标记（服务端配置归口下发，true 时该助手可收图）
+            model.textContent = (a.model || '智能助手') + (a.image ? ' · 支持图片' : '');
+            info.appendChild(name);
+            info.appendChild(model);
+
+            li.appendChild(avatar);
+            li.appendChild(info);
+            // 点击智能体进入对应 AI 会话（复用私聊会话链路：标题/历史/气泡渲染）
+            li.addEventListener('click', function () {
+                openConversation(a.name);
+                // 阶段四十三：重渲染列表让选中高亮跟随点击项（原实现只切会话，active 类停留在渲染时的旧状态）
+                renderAgentList();
+            });
+            aiAgentList.appendChild(li);
+        });
+    }
+
+    // "思考中"指示：发送后立即显示（豆包同款三点跳动），首段回复/失败时移除
+    function showAIThinking(agent) {
+        hideAIThinking(agent); // 连续提问时复用同一个指示气泡
+        var div = document.createElement('div');
+        div.className = 'message other ai-thinking';
+        div.setAttribute('data-from', agent);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble ai-thinking-bubble';
+        var label = document.createElement('span');
+        label.className = 'ai-thinking-text';
+        label.textContent = '思考中';
+        var dots = document.createElement('span');
+        dots.className = 'ai-thinking-dots';
+        for (var i = 0; i < 3; i++) {
+            dots.appendChild(document.createElement('i'));
+        }
+        bubble.appendChild(label);
+        bubble.appendChild(dots);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(agent));
+        div.appendChild(body);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        aiThinking[agent] = { el: div };
+    }
+
+    function hideAIThinking(agent) {
+        var t = aiThinking[agent];
+        if (t) {
+            t.el.remove();
+            delete aiThinking[agent];
+        }
+    }
+
+    // 剪贴板复制：clipboard API 优先，不可用回退 execCommand（HTTP 环境兼容）
+    function copyTextToClipboard(text) {
+        function fallback() {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); showToast('已复制'); } catch (e) { showToast('复制失败'); }
+            ta.remove();
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { showToast('已复制'); }).catch(fallback);
+        } else {
+            fallback();
+        }
+    }
+
+    // AI 回复操作栏（豆包同款）：复制回复 / 重新生成 / 编辑提问（SVG 线性图标，currentColor 跟随主题色）
+    // fullText 为回复 Markdown 原文（复制原文，渲染样式不带出）
+    function buildAIActionBar(agent, fullText) {
+        var bar = document.createElement('div');
+        bar.className = 'ai-actions';
+        // 24x24 线性图标（Feather 风格），stroke=currentColor 使悬停变色跟随主题
+        var ICONS = {
+            copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+            redo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+            edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+        };
+        function addBtn(title, icon, handler) {
+            var b = document.createElement('span');
+            b.className = 'ai-action-btn';
+            b.title = title;
+            b.innerHTML = icon; // 静态 SVG 常量，无用户内容
+            b.addEventListener('click', function (e) {
+                e.stopPropagation();
+                handler();
+            });
+            bar.appendChild(b);
+        }
+        addBtn('复制', ICONS.copy, function () { copyTextToClipboard(fullText); });
+        // 重新生成：原样重发最近一次提问（含引用信封原文，服务端解析口径与首次发送一致）
+        addBtn('重新生成', ICONS.redo, function () {
+            var q = lastAIQuestion[agent];
+            if (!q || !q.raw) { showToast('暂无原始提问，无法重新生成'); return; }
+            IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw });
+        });
+        // 编辑提问：提问正文回填输入框，修改后自行发送
+        addBtn('编辑提问', ICONS.edit, function () {
+            var q = lastAIQuestion[agent];
+            if (!q || !q.text) { showToast('暂无原始提问'); return; }
+            messageInput.value = q.text;
+            messageInput.focus();
+        });
+        return bar;
+    }
+
+    // 阶段四十三：AI 代码块"复制代码"按钮（事件委托：流式/历史动态生成的代码块无需逐个绑定）
+    messageList.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.ai-code-copy') : null;
+        if (!btn) return;
+        var block = btn.closest('.ai-code-block');
+        var codeEl = block ? block.querySelector('pre code') : null;
+        if (codeEl) copyTextToClipboard(codeEl.textContent);
+    });
+
+    // 阶段四十三：列表栏折叠/展开（悬停聊天区左缘显示按钮，折叠后按钮常驻；
+    // 解决 AI 长文本/宽代码被列表挤占看不全的问题；折叠状态持久化，刷新后保持）
+    var listPanel = document.getElementById('list-panel');
+    var listToggleBtn = document.getElementById('list-toggle-btn');
+    function applyListCollapsed(c) {
+        listPanel.classList.toggle('list-collapsed', c);
+        listToggleBtn.classList.toggle('collapsed', c);
+        listToggleBtn.title = c ? '展开列表' : '折叠列表';
+    }
+    try {
+        applyListCollapsed(localStorage.getItem('im_list_collapsed') === '1');
+    } catch (e) {}
+    listToggleBtn.addEventListener('click', function () {
+        var c = !listPanel.classList.contains('list-collapsed');
+        applyListCollapsed(c);
+        try { localStorage.setItem('im_list_collapsed', c ? '1' : '0'); } catch (e) {}
+    });
+
+    // 创建流式回复气泡（空气泡 + 闪烁光标，打字机逐字填充）
+    function createStreamBubble(agent, streamId) {
+        var div = document.createElement('div');
+        div.className = 'message other';
+        div.setAttribute('data-from', agent);
+        div.setAttribute('data-stream-id', streamId);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble ai-stream-bubble';
+        var text = document.createElement('span');
+        text.className = 'ai-stream-text ai-md';
+        var cursor = document.createElement('span');
+        cursor.className = 'ai-stream-cursor';
+        bubble.appendChild(text);
+        bubble.appendChild(cursor);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(agent));
+        div.appendChild(body);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return { el: div, textEl: text, cursorEl: cursor, pending: '', shown: '', timer: null, done: false, finalId: 0, agent: agent };
+    }
+
+    // 启动/复用打字机定时器：每 30ms 取一小段增量渲染（自适应步长，长文本加速追平）
+    function ensureStreamTimer(st) {
+        if (st.timer) return;
+        st.timer = setInterval(function () {
+            if (st.pending.length) {
+                var step = Math.max(2, Math.ceil(st.pending.length / 15));
+                st.shown += st.pending.slice(0, step);
+                st.pending = st.pending.slice(step);
+                // 阶段四十三：打字过程中同步渲染 Markdown（豆包同款，格式随输出逐步成型）
+                st.textEl.innerHTML = renderAIMarkdown(st.shown);
+                // 打字期间始终贴底跟随（微信/豆包同款体验）
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            if (st.done && !st.pending.length) {
+                clearInterval(st.timer);
+                st.timer = null;
+                finishStream(st);
+            }
+        }, 30);
+    }
+
+    // 流式回复收尾：去光标、回填消息 ID、发送已读回执（AI 回复计入未读，查看后归口清除）
+    function finishStream(st) {
+        st.cursorEl.remove();
+        // 最终态兜底渲染一次 Markdown（done 时 pending 可能为空，tick 内不再触发渲染）
+        st.textEl.innerHTML = renderAIMarkdown(st.shown);
+        // 阶段四十三：回复完成后追加操作栏（复制/重新生成/编辑提问，豆包同款）
+        var bodyEl = st.el.querySelector('.message-body');
+        if (bodyEl && !bodyEl.querySelector('.ai-actions')) {
+            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown));
+        }
+        if (st.finalId) st.el.setAttribute('data-msg-id', st.finalId);
+        var agent = st.el.getAttribute('data-from');
+        delete aiStreams[st.el.getAttribute('data-stream-id')];
+        if (st.finalId) sendReadReceipt(agent, st.finalId);
+        if (!st.shown) st.el.remove(); // 空回复（服务端异常）：移除空气泡
+    }
+
+    // AI 流式增量：仅当前正查看该智能体会话时实时渲染（未查看时忽略，完整回复落库后经历史/会话摘要可见）
+    IMSocket.on(MSG.AI_STREAM, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return; // 只处理自己的流
+        if (currentChatUser !== msg.from_user) return;
+        hideAIThinking(msg.from_user); // 首段回复到达，移除"思考中"指示
+        var st = aiStreams[msg.stream_id];
+        if (!st) {
+            st = createStreamBubble(msg.from_user, msg.stream_id);
+            aiStreams[msg.stream_id] = st;
+        }
+        st.pending += msg.content || '';
+        ensureStreamTimer(st);
+    });
+
+    // AI 流式结束：有流则收尾（END.content 为完整回复，仅在未曾收到增量时降级整段打字防重复）；
+    // 无流（如降级路径）且正在查看该会话时补一条完整回复
+    IMSocket.on(MSG.AI_STREAM_END, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return;
+        hideAIThinking(msg.from_user); // 失败/降级路径同样收起"思考中"指示
+        var st = aiStreams[msg.stream_id];
+        if (st) {
+            if (!st.shown && !st.pending.length && msg.content) st.pending = msg.content;
+            st.done = true;
+            st.finalId = msg.msg_id || 0;
+            ensureStreamTimer(st);
+            return;
+        }
+        if (msg.remark === 'error') return; // 失败且无气泡：服务端已 toast 提示
+        if (currentChatUser === msg.from_user) {
+            appendMessage(msg.from_user, msg.content, 'other', msg.msg_id, msg.timestamp, true);
+            if (msg.msg_id) sendReadReceipt(msg.from_user, msg.msg_id);
+        }
+    });
+
+    // 阶段四十三：代码块渲染（豆包同款：标题栏=语言名+复制按钮；highlight.js 本地语法高亮，
+    // 库未加载/不支持的语言自动回退纯文本转义，不影响降级路径）
+    function renderCodeBlock(lang, code) {
+        var displayLang = lang || '';
+        var H = (typeof hljs !== 'undefined') ? hljs : null;
+        var highlighted = null;
+        if (H && code) {
+            try {
+                if (lang && H.getLanguage(lang.toLowerCase())) {
+                    highlighted = H.highlight(code, { language: lang.toLowerCase(), ignoreIllegals: true }).value;
+                } else if (!lang) {
+                    // 无语言标记：自动检测（检测结果回显到标题栏）
+                    var auto = H.highlightAuto(code);
+                    highlighted = auto.value;
+                    if (auto.language) displayLang = auto.language;
+                }
+            } catch (e) { highlighted = null; }
+        }
+        if (highlighted === null) {
+            // 回退：手动 HTML 转义（hljs 未加载/语言不支持时仍保持代码框样式）
+            highlighted = code
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+        return '<div class="ai-code-block">'
+            + '<div class="ai-code-head">'
+            + '<span class="ai-code-lang">' + (displayLang || '代码') + '</span>'
+            + '<span class="ai-code-copy" title="复制代码">'
+            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>'
+            + '</span></div>'
+            + '<pre class="ai-md-pre"><code class="hljs">' + highlighted + '</code></pre>'
+            + '</div>';
+    }
+
+    // 阶段四十三：AI 消息 Markdown 渲染（安全白名单版）
+    // 先整体 HTML 转义防注入，再仅转换：代码块/行内代码/链接(仅http/s)/无序列表/有序列表/标题/加粗/斜体，
+    // 其余 Markdown 语法（表格/脚注等）按纯文本显示，AI 未使用语法时与纯文本渲染视觉一致
+    function renderAIMarkdown(text) {
+        if (!text) return '';
+        var raw = String(text);
+
+        // 代码块 ```...``` 先在原文上提取占位（hljs 需要未经转义的原始代码）：
+        // 阶段四十三优化：AI 偶尔漏写收尾 ```（流式输出中途更常见），奇数个围栏时自动补闭合，
+        // 避免整段代码连同 ``` 符号原样漏出（豆包同款行为）
+        if (((raw.match(/```/g) || []).length) % 2 === 1) {
+            raw += '\n```';
+        }
+        var codeBlocks = [];
+        raw = raw.replace(/```[ \t]*(\w*)[ \t]*\n?([\s\S]*?)```/g, function (_, lang, code) {
+            codeBlocks.push(renderCodeBlock(lang, code.replace(/\n$/, '')));
+            return '\u0000CB' + (codeBlocks.length - 1) + '\u0000';
+        });
+
+        // 剩余文本整体转义防注入，再做白名单行内/块级转换
+        var esc = raw
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
+        // 行内代码 `...` 提取占位
+        var inlineCodes = [];
+        esc = esc.replace(/`([^`\n]+)`/g, function (_, c) {
+            inlineCodes.push('<code class="ai-md-code">' + c.trim() + '</code>');
+            return '\u0000IC' + (inlineCodes.length - 1) + '\u0000';
+        });
+        // 链接 [text](url)：仅允许 http/https，防 javascript: 注入
+        esc = esc.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+            '<a class="ai-md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+        // 阶段四十三优化：水平分隔线 --- / *** / ___（独占一行）转为 <hr>，避免原样漏出符号
+        esc = esc.replace(/^ {0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '<hr class="ai-md-hr">');
+        // 阶段四十三优化：引用行 > 文字 转为引用块（转义后 > 为 &gt;），避免 ">" 原样漏出
+        esc = esc.replace(/^&gt;[ \t]?(.*)$/gm, '<blockquote class="ai-md-quote">$1</blockquote>');
+        // 无序列表：连续的 * / - 开头行合并为 ul（块级转换先于行内加粗斜体，避免列表符号被误转斜体）
+        esc = esc.replace(/((?:^[ \t]*[\*\-][ \t]+[^\n]+(?:\n|$))+)/gm, function (block) {
+            var items = block.trim().split('\n').map(function (l) {
+                return '<li>' + l.replace(/^[ \t]*[\*\-][ \t]+/, '') + '</li>';
+            }).join('');
+            return '<ul class="ai-md-ul">' + items + '</ul>';
+        });
+        // 有序列表：连续的 1. 2. 开头行合并为 ol
+        esc = esc.replace(/((?:^[ \t]*\d+\.[ \t]+[^\n]+(?:\n|$))+)/gm, function (block) {
+            var items = block.trim().split('\n').map(function (l) {
+                return '<li>' + l.replace(/^[ \t]*\d+\.[ \t]+/, '') + '</li>';
+            }).join('');
+            return '<ol class="ai-md-ol">' + items + '</ol>';
+        });
+        // 标题 # ~ ####：转为加粗行（聊天气泡内不需要真正的大标题层级）
+        esc = esc.replace(/^#{1,4}[ \t]+([^\n]+)$/gm, '<strong>$1</strong>');
+        // 加粗 **...**（先于斜体，避免 ** 被斜体规则拆解）
+        esc = esc.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        // 斜体 *...*（排除行首列表符号残余与相邻星号）
+        esc = esc.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+        // 换行转 <br>（占位的代码块/行内代码不含换行，不受影响）
+        esc = esc.replace(/\n/g, '<br>');
+        // 还原占位
+        esc = esc.replace(/\u0000CB(\d+)\u0000/g, function (_, i) { return codeBlocks[+i]; });
+        esc = esc.replace(/\u0000IC(\d+)\u0000/g, function (_, i) { return inlineCodes[+i]; });
+        return esc;
+    }
 
     // ===== 最近会话列表（服务端归口：最后消息/未读数/置顶） =====
     // 原实现：var convList = []; 声明于此，阶段十一提前至文件顶部（好友列表角标同源读取服务端未读数）
@@ -2061,18 +2561,20 @@
             var avatarUrl = isGroup ? '' : getAvatarUrl(cv.target);
             var avatar = document.createElement('div');
             avatar.className = 'conv-avatar';
+            // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
+            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : convName.charAt(0).toUpperCase();
             if (avatarUrl) {
                 var avatarImg = document.createElement('img');
                 avatarImg.src = avatarUrl;
                 avatarImg.alt = '';
-                // 头像文件失效（文件被清理/路径变更）时降级为首字母占位，避免破图
+                // 头像文件失效（文件被清理/路径变更）时降级占位，避免破图
                 avatarImg.addEventListener('error', function () {
                     avatarImg.remove();
-                    avatar.textContent = convName.charAt(0).toUpperCase();
+                    avatar.textContent = avatarFallback;
                 });
                 avatar.appendChild(avatarImg);
             } else {
-                avatar.textContent = convName.charAt(0).toUpperCase();
+                avatar.textContent = avatarFallback;
             }
 
             var main = document.createElement('div');
@@ -2327,6 +2829,10 @@
         var relevantUser = isMine ? msg.to_user : msg.from_user;
         if (currentChatUser === relevantUser) {
             appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, true);
+            // 阶段四十三：发给 AI 智能体的提问上屏后，紧随其后显示"思考中"指示（服务端回显先于流式帧送达，时序稳定）
+            if (isMine && isAIAgent(msg.to_user)) {
+                showAIThinking(msg.to_user);
+            }
             // 正在查看会话时收到对方消息：自动发送已读回执（客户端水位去重）
             if (!isMine && msg.msg_id) {
                 // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: msg.from_user, content: String(msg.msg_id) });
@@ -2415,6 +2921,16 @@
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         currentChatUser = user;
+        // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；
+        // 重新进入该会话时增量会重建气泡继续打字，END 帧保证最终完整）
+        for (var sid in aiStreams) {
+            if (aiStreams[sid].timer) clearInterval(aiStreams[sid].timer);
+            delete aiStreams[sid];
+        }
+        // 阶段四十三：同步清空"思考中"指示映射（DOM 随 messageList 清空，回复到达时若已离开该会话不影响渲染）
+        for (var ag in aiThinking) {
+            delete aiThinking[ag];
+        }
         // 阶段三十八：切换会话清空待发送截图（防止把 A 会话的截图误发到 B 会话）
         clearPendingShot();
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
@@ -2503,7 +3019,13 @@
         }
 
         // 服务端按 ID 倒序返回，正序渲染
-        records.reverse().forEach(function (r) { renderHistoryRecord(r); });
+        records.reverse().forEach(function (r) {
+            renderHistoryRecord(r);
+            // 阶段四十三：恢复各智能体最近一次提问（正序遍历后写即最新，供重新生成/编辑提问按钮使用）
+            if (r.from_user === IMSocket.getUsername() && isAIAgent(r.to_user)) {
+                lastAIQuestion[r.to_user] = { raw: r.content, text: quoteDisplayText(r.content) };
+            }
+        });
         // 阶段二十七：首页返回不足一页说明全部记录已加载完
         historyHasMore = records.length >= msg.page_size;
 
@@ -3128,6 +3650,10 @@
         if (currentChatUser === '') {
             chatTitle.textContent = '群聊';
             chatStatus.textContent = '';
+        } else if (isAIAgent(currentChatUser)) {
+            // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
+            chatTitle.textContent = currentChatUser;
+            chatStatus.textContent = 'AI 助手';
         } else {
             var f = friendList.find(function (x) { return x.username === currentChatUser; });
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
@@ -3146,6 +3672,8 @@
         for (var i = 0; i < friendList.length; i++) {
             if (friendList[i].username === name) return friendList[i].avatar || '';
         }
+        // 阶段四十三：AI 智能体头像（服务端配置归口下发，优先于在线用户表）
+        if (agentAvatars[name]) return agentAvatars[name];
         return userAvatars[name] || '';
     }
 
@@ -3175,9 +3703,10 @@
                 img.replaceWith(buildAvatarPlaceholder(fromUser));
             });
             // 阶段三十：点击消息气泡头像弹出微信式资料卡（点自己头像打开个人资料面板）
+            // 阶段四十三：AI 智能体非真实用户，无资料卡
             img.style.cursor = 'pointer';
             img.addEventListener('click', function () {
-                openFriendCard(fromUser);
+                if (!isAIAgent(fromUser)) openFriendCard(fromUser);
             });
             return img;
         }
@@ -3188,11 +3717,12 @@
     function buildAvatarPlaceholder(fromUser) {
         var ph = document.createElement('div');
         ph.className = 'msg-avatar placeholder';
-        ph.textContent = (fromUser || '?').charAt(0).toUpperCase();
-        // 阶段三十：占位头像同样可点击弹出资料卡
+        // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表/会话列表口径一致）
+        ph.textContent = isAIAgent(fromUser) ? '🤖' : (fromUser || '?').charAt(0).toUpperCase();
+        // 阶段三十：占位头像同样可点击弹出资料卡（AI 智能体无资料卡）
         ph.style.cursor = 'pointer';
         ph.addEventListener('click', function () {
-            openFriendCard(fromUser);
+            if (!isAIAgent(fromUser)) openFriendCard(fromUser);
         });
         return ph;
     }
@@ -3213,8 +3743,27 @@
         // 阶段四十：引用消息渲染——content 为引用信封时，气泡内先渲染引用块（灰底小字，点击定位原消息）再渲染回复正文；
         // 阶段四十一：引用块加"引用"前缀（用户一眼识别引用消息）；quote.url 存在时显示真实图片缩略图
         // 原实现：bubble.textContent = content（引用信封会原样显示 JSON 串）
-        var envelope = parseQuoteEnvelope(content);
-        if (envelope) {
+        // 阶段四十四：AI 图片提问信封（{"image":url,"text":附言}）渲染为图片气泡 + 附言——
+        // 仅对自己的消息且当前为 AI 会话时判定，普通聊天里手打的 JSON 字符串不受影响
+        var aiImgEnv = (type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null;
+        var envelope = aiImgEnv ? null : parseQuoteEnvelope(content);
+        if (aiImgEnv) {
+            bubble.classList.add('bubble-image');
+            var qImg = document.createElement('img');
+            qImg.className = 'chat-image';
+            qImg.src = aiImgEnv.image;
+            qImg.alt = '';
+            qImg.addEventListener('click', function () {
+                openImageViewer(aiImgEnv.image); // 与聊天图片一致走图片查看器
+            });
+            bubble.appendChild(qImg);
+            if (aiImgEnv.text) {
+                var aiImgText = document.createElement('div');
+                aiImgText.className = 'msg-text';
+                aiImgText.textContent = aiImgEnv.text;
+                bubble.appendChild(aiImgText);
+            }
+        } else if (envelope) {
             var q = envelope.quote;
             var quoteBlock = document.createElement('div');
             quoteBlock.className = 'msg-quote';
@@ -3254,8 +3803,21 @@
             bubble.appendChild(quoteBlock);
             var textDiv = document.createElement('div');
             textDiv.className = 'msg-text';
-            textDiv.textContent = envelope.text;
+            // 阶段四十三：AI 智能体消息渲染 Markdown，普通消息纯文本直出防 XSS
+            if (isAIAgent(fromUser)) {
+                textDiv.classList.add('ai-md');
+                textDiv.innerHTML = renderAIMarkdown(envelope.text);
+            } else {
+                textDiv.textContent = envelope.text;
+            }
             bubble.appendChild(textDiv);
+        } else if (isAIAgent(fromUser)) {
+            // 阶段四十三：AI 智能体回复渲染 Markdown（先 HTML 转义防注入，仅白名单转换：
+            // 加粗/斜体/标题/列表/行内代码/代码块/链接），解决 AI 返回的 **加粗**、* 列表 符号原样显示的问题
+            var mdDiv = document.createElement('div');
+            mdDiv.className = 'msg-text ai-md';
+            mdDiv.innerHTML = renderAIMarkdown(content);
+            bubble.appendChild(mdDiv);
         } else {
             // 原实现：bubble.textContent = content;（普通文本消息直出）
             bubble.textContent = content;
@@ -3278,6 +3840,10 @@
             status.setAttribute('data-msg-id', msgId);
             status.textContent = isRead ? '已读' : '未读';
             body.appendChild(status);
+        }
+        // 阶段四十三：AI 智能体回复（历史加载/END 降级整段渲染）气泡下追加操作栏（流式路径在 finishStream 追加）
+        if (isAIAgent(fromUser)) {
+            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content));
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);

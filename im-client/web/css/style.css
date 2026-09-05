@@ -429,6 +429,64 @@ html, body {
     display: flex;
     flex-direction: column;
     background: var(--chat-bg);
+    /* 阶段四十三：作为列表折叠按钮的定位基准 */
+    position: relative;
+    min-width: 0;
+}
+
+/* 阶段四十三：列表栏折叠（AI 长文本/宽代码需要更宽阅读区） */
+#list-panel {
+    transition: width 0.25s ease;
+}
+
+#list-panel.list-collapsed {
+    width: 0;
+    min-width: 0;
+    overflow: hidden;
+    border-right-width: 0;
+}
+
+#list-toggle-btn {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 7px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border);
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    color: var(--text-light);
+    cursor: pointer;
+    z-index: 40;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+#list-toggle-btn svg {
+    width: 7px;
+    height: 7px;
+    transition: transform 0.25s ease;
+}
+
+/* 悬停聊天区任意位置显示按钮；折叠后常驻（否则无从展开） */
+.main-chat:hover #list-toggle-btn,
+#list-toggle-btn.collapsed {
+    opacity: 1;
+}
+
+#list-toggle-btn:hover {
+    color: var(--primary);
+    background: var(--hover);
+}
+
+/* 折叠后箭头翻转向右（提示可展开） */
+#list-toggle-btn.collapsed svg {
+    transform: rotate(180deg);
 }
 
 .chat-header {
@@ -2447,5 +2505,287 @@ html, body {
 
 .shot-hint.hidden {
     display: none;
+}
+
+/* ============================================================
+   阶段四十三：AI 问答（AI Tab 智能体列表 + 流式打字机气泡）
+   配色全部复用现有主题变量，跟随主题色变化
+   ============================================================ */
+
+/* AI 助手面板智能体条目（布局对齐通讯录 user-item：头像 + 名称/模型两行） */
+.ai-agent-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-agent-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    background: var(--primary);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.ai-agent-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.ai-agent-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.ai-agent-name {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-agent-model {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-agent-empty {
+    padding: 20px 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+/* 流式回复气泡：打字机文本 + 闪烁光标（气泡基础样式复用 .message-bubble，pre-wrap 保留换行） */
+.ai-stream-bubble {
+    min-height: 20px;
+}
+
+.ai-stream-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 14px;
+    margin-left: 2px;
+    vertical-align: -2px;
+    background: var(--primary);
+    animation: ai-cursor-blink 0.8s steps(1) infinite;
+}
+
+@keyframes ai-cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* "思考中"指示气泡（发送后至流式首段前显示，豆包同款三点跳动） */
+.ai-thinking-bubble {
+    display: inline-flex;
+    align-items: center;
+}
+
+.ai-thinking-text {
+    font-size: 13px;
+    color: var(--text-light);
+    margin-right: 8px;
+}
+
+.ai-thinking-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.ai-thinking-dots i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+    opacity: 0.4;
+    animation: ai-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.ai-thinking-dots i:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.ai-thinking-dots i:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes ai-dot-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* AI 回复操作栏（豆包同款：气泡下方 复制/重新生成/编辑提问） */
+.ai-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 5px;
+}
+
+.ai-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    color: var(--text-light);
+    background: rgba(128, 128, 128, 0.12);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.ai-action-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
+.ai-action-btn:hover {
+    color: var(--primary);
+    background: rgba(128, 128, 128, 0.22);
+}
+
+/* AI 消息 Markdown 渲染（白名单转换后的元素样式，配色跟随主题变量） */
+.ai-md strong {
+    font-weight: 600;
+}
+
+.ai-md em {
+    font-style: italic;
+}
+
+.ai-md .ai-md-ul,
+.ai-md .ai-md-ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+
+.ai-md .ai-md-ul li,
+.ai-md .ai-md-ol li {
+    margin: 3px 0;
+}
+
+.ai-md .ai-md-code {
+    background: rgba(128, 128, 128, 0.18);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+}
+
+.ai-md .ai-md-pre {
+    background: rgba(128, 128, 128, 0.15);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    overflow-x: auto;
+}
+
+.ai-md .ai-md-pre code {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    white-space: pre;
+    background: none;
+    padding: 0;
+}
+
+/* AI 代码块容器（豆包同款：标题栏+深色代码区，整体圆角） */
+.ai-md .ai-code-block {
+    margin: 6px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0d1117;
+}
+
+.ai-md .ai-code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ai-md .ai-code-lang {
+    font-size: 12px;
+    color: #8b949e;
+    font-family: Consolas, Monaco, monospace;
+}
+
+.ai-md .ai-code-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    color: #8b949e;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ai-md .ai-code-copy svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+}
+
+.ai-md .ai-code-copy:hover {
+    color: #e6edf3;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* 代码块内的 pre：跟随深色容器，去掉独立边距/圆角（由容器统一） */
+.ai-md .ai-code-block .ai-md-pre {
+    margin: 0;
+    border-radius: 0;
+    background: transparent;
+}
+
+/* hljs 主题自带背景/内边距，统一由容器接管 */
+.ai-md .ai-code-block pre code.hljs {
+    padding: 8px 10px;
+    background: transparent;
+    display: block;
+}
+
+.ai-md .ai-md-link {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+.ai-md .ai-md-link:hover {
+    text-decoration: underline;
+}
+
+/* AI Markdown 分隔线（--- 独占一行） */
+.ai-md .ai-md-hr {
+    border: none;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    margin: 8px 0;
+}
+
+/* AI Markdown 引用块（> 开头行） */
+.ai-md .ai-md-quote {
+    margin: 4px 0;
+    padding: 2px 10px;
+    border-left: 3px solid var(--primary);
+    color: var(--text-light);
 }
 

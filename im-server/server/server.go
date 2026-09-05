@@ -167,6 +167,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段三十二：超大文件分片直传取消（发送方上行，服务端清理会话并同步双方）
 	case protocol.MsgTypeFileCancel:
 		s.handleFileCancel(c, msg)
+	// 阶段四十三：AI 问答（智能体列表查询 + 流式问答）
+	case protocol.MsgTypeAIAgents:
+		s.handleAIAgents(c, msg)
+	case protocol.MsgTypeAIChat:
+		s.handleAIChatMsg(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -263,6 +268,17 @@ func messageSummary(content string) string {
 	if err := json.Unmarshal([]byte(content), &envelope); err == nil && envelope.Quote != nil && envelope.Text != "" {
 		return envelope.Text
 	}
+	// 阶段四十四：AI 图片提问信封归口——会话摘要与模型上下文显示"[图片] 附言"，JSON 原串不外泄
+	var imgEnv struct {
+		Image string `json:"image"`
+		Text  string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(content), &imgEnv); err == nil && imgEnv.Image != "" {
+		if strings.TrimSpace(imgEnv.Text) == "" {
+			return "[图片]"
+		}
+		return "[图片] " + imgEnv.Text
+	}
 	return content
 }
 
@@ -328,9 +344,10 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 私聊 AI 助手触发 AI 问答
-	if msg.ToUser == AIBotName {
-		s.handleAIChat(c, msg)
+	// 阶段四十三：私聊目标为任意配置的 AI 智能体时走 AI 问答链路（流式打字机，按用户隔离）
+	// 原实现：仅支持固定 AIBotName 单一机器人，且不落库提问、无多轮上下文
+	if aiAgentByName(msg.ToUser) != nil {
+		s.handleAIChatMsg(c, msg)
 		return
 	}
 

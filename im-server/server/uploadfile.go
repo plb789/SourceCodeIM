@@ -465,3 +465,84 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
 }
+
+// HandleAIImageUpload 阶段四十四：AI 图片提问专用上传 POST /upload/ai/image?username=xxx&to_user=助手名
+// 与私聊/群聊图片上传的差异：不落库 im_message、不触会话摘要——提问正文由随后的 AI_CHAT 图片信封
+// 消息统一落库（单条记录同时承载图片与附言，历史/多端同步/会话摘要全走既有归口，避免重复气泡）。
+// 流程：在线校验 → 智能体图片能力校验（双保险，前端入口已按能力显隐）→ 图片格式校验 → 落盘 → 返回 {url}
+func (s *Server) HandleAIImageUpload(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	toAgent := r.URL.Query().Get("to_user")
+	if username == "" || toAgent == "" {
+		http.Error(w, "缺少参数", http.StatusBadRequest)
+		return
+	}
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		return
+	}
+	// 能力校验：不给不支持图片的智能体上传（配置归口，与 AI_CHAT 处理器同一判定口径）
+	agent := aiAgentByName(toAgent)
+	if agent == nil {
+		http.Error(w, "AI 助手不存在", http.StatusBadRequest)
+		return
+	}
+	if agent.Provider == nil || !agent.SupportsImage {
+		http.Error(w, "该助手不支持图片识别", http.StatusForbidden)
+		return
+	}
+
+	// 大小限制（与聊天文件同规则，读配置缺省 20MB）
+	maxSize := int64(20 << 20)
+	if s.cfg.MaxFileSize > 0 {
+		maxSize = int64(s.cfg.MaxFileSize)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+	if err := r.ParseMultipartForm(maxSize); err != nil {
+		http.Error(w, "文件过大或解析失败", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "缺少文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// 仅允许图片格式（多模态接口同样只认图片）
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if !isImageExt(ext) {
+		http.Error(w, "仅支持发送图片文件", http.StatusBadRequest)
+		return
+	}
+
+	// 存储目录归口（与直传一致：UploadDir 配置优先，兜底 WebDir/static/upload）
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
+	}
+	b := make([]byte, 8)
+	rand.Read(b)
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hex.EncodeToString(b), ext)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		http.Error(w, "目录创建失败", http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(dir, filename)
+	out, err := os.Create(dst)
+	if err != nil {
+		http.Error(w, "文件保存失败", http.StatusInternalServerError)
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		http.Error(w, "文件写入失败", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	url := "/static/upload/" + filename
+	logger.Info("AI 图片提问上传: %s -> %s, %s (%d 字节), url=%s", username, toAgent, header.Filename, header.Size, url)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"url": url})
+}
