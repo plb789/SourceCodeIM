@@ -2193,17 +2193,157 @@
         loadNextLocatePage();
     });
 
-    // ===== 关键词搜索：回车/点击放大镜搜索，结果面板展示，点击跳转会话 =====
+    // ===== 关键词搜索：输入时本地过滤联系人（用户名/备注），回车/放大镜搜索聊天记录，结果面板分区展示 =====
     var searchInput = document.getElementById('search-input');
     var searchClearBtn = document.getElementById('search-clear-btn');
     var searchPanel = document.getElementById('search-panel');
     var searchIconBtn = document.getElementById('search-icon-btn');
+    var lastSearchRecords = null; // 最近一次服务端聊天记录搜索结果（null=本次尚未搜索，[]=搜索无结果）
 
     // 阶段二十三：收起侧栏搜索状态（Tab切换/关闭结果共用）
     function closeSidebarSearch() {
         searchPanel.classList.add('hidden');
+        searchPanel.innerHTML = '';
         searchClearBtn.classList.add('hidden');
         searchInput.value = '';
+        lastSearchRecords = null; // 原实现：无此重置，收起后重开面板仍显示上次聊天记录结果
+    }
+
+    // 联系人本地过滤：匹配用户名/备注（不区分大小写），数据源为登录后服务端下发的好友列表（USER_LIST）
+    function filterContacts(keyword) {
+        var kw = keyword.toLowerCase();
+        return friendList.filter(function (f) {
+            return (f.username && f.username.toLowerCase().indexOf(kw) !== -1) ||
+                   (f.remark && f.remark.toLowerCase().indexOf(kw) !== -1);
+        });
+    }
+
+    // 构建联系人搜索结果项：头像（失效降级首字母）+ 显示名（备注优先）+ 用户名/在线状态，点击打开会话
+    function buildContactItem(f) {
+        var item = document.createElement('div');
+        item.className = 'search-contact';
+        var displayName = f.remark || f.username;
+        var avatar = document.createElement('div');
+        avatar.className = 'search-contact-avatar';
+        var avatarUrl = f.username ? getAvatarUrl(f.username) : '';
+        if (avatarUrl) {
+            var img = document.createElement('img');
+            img.src = avatarUrl;
+            img.alt = '';
+            // 头像文件失效时降级为首字母占位，避免破图（与会话列表同口径）
+            img.addEventListener('error', function () {
+                img.remove();
+                avatar.textContent = displayName.charAt(0).toUpperCase();
+            });
+            avatar.appendChild(img);
+        } else {
+            avatar.textContent = displayName.charAt(0).toUpperCase();
+        }
+        var main = document.createElement('div');
+        main.className = 'search-contact-main';
+        var nameEl = document.createElement('div');
+        nameEl.className = 'search-contact-name';
+        nameEl.textContent = displayName;
+        main.appendChild(nameEl);
+        // 副标题：好友显示用户名与在线状态；群聊项无用户名，不显示副标题
+        if (f.username) {
+            var subEl = document.createElement('div');
+            subEl.className = 'search-contact-sub';
+            subEl.textContent = f.username + (f.online ? ' · 在线' : '');
+            main.appendChild(subEl);
+        }
+        item.appendChild(avatar);
+        item.appendChild(main);
+        item.addEventListener('click', function () {
+            // 群聊项 username 为空，openConversation('') 即打开群聊会话（与会话列表口径一致）
+            openConversation(f.username);
+            searchPanel.classList.add('hidden');
+            searchClearBtn.classList.add('hidden');
+        });
+        return item;
+    }
+
+    // 统一渲染搜索面板：联系人分区（本地实时过滤）+ 群聊分区 + 聊天记录分区（服务端搜索结果）
+    function renderSearchPanel() {
+        var keyword = searchInput.value.trim();
+        searchPanel.innerHTML = '';
+        if (!keyword) {
+            searchPanel.classList.add('hidden');
+            searchClearBtn.classList.add('hidden');
+            return;
+        }
+        searchPanel.classList.remove('hidden');
+        searchClearBtn.classList.remove('hidden');
+
+        // 联系人分区：好友用户名/备注模糊匹配，输入即时过滤
+        var contacts = filterContacts(keyword);
+        var contactTitle = document.createElement('div');
+        contactTitle.className = 'search-title';
+        contactTitle.textContent = '联系人 (' + contacts.length + ')';
+        searchPanel.appendChild(contactTitle);
+        if (contacts.length === 0) {
+            var emptyContact = document.createElement('div');
+            emptyContact.className = 'search-empty';
+            emptyContact.textContent = '暂无匹配的联系人';
+            searchPanel.appendChild(emptyContact);
+        } else {
+            contacts.forEach(function (f) {
+                searchPanel.appendChild(buildContactItem(f));
+            });
+        }
+
+        // 群聊分区：会话列表存在群聊会话（target 为空）且关键词与「群聊」匹配时展示
+        // 原实现：搜索面板仅展示聊天记录，无联系人/群聊分区
+        var hasGroupConv = convList.some(function (cv) { return cv.target === ''; });
+        if (hasGroupConv && '群聊'.indexOf(keyword) !== -1) {
+            var groupTitle = document.createElement('div');
+            groupTitle.className = 'search-title';
+            groupTitle.textContent = '群聊';
+            searchPanel.appendChild(groupTitle);
+            searchPanel.appendChild(buildContactItem({ username: '', remark: '群聊', online: false }));
+        }
+
+        // 聊天记录分区：回车/放大镜触发服务端搜索（MSG.SEARCH）后展示，未搜索时给出操作提示
+        var msgTitle = document.createElement('div');
+        msgTitle.className = 'search-title';
+        searchPanel.appendChild(msgTitle);
+        if (lastSearchRecords === null) {
+            msgTitle.textContent = '聊天记录（回车搜索）';
+        } else {
+            msgTitle.textContent = '聊天记录 (' + lastSearchRecords.length + ')';
+            if (lastSearchRecords.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'search-empty';
+                empty.textContent = '暂无匹配的聊天记录';
+                searchPanel.appendChild(empty);
+            }
+            lastSearchRecords.forEach(function (r) {
+                var isGroup = !r.to_user;
+                // 私聊会话对象：自己发送则是收件人，否则是发件人
+                var partner = isGroup ? '' : (r.from_user === IMSocket.getUsername() ? r.to_user : r.from_user);
+                var convName = isGroup ? '群聊' : partner;
+                var item = document.createElement('div');
+                item.className = 'search-item';
+                var head = document.createElement('div');
+                head.className = 'search-item-head';
+                head.textContent = convName + ' · ' + r.from_user;
+                var body = document.createElement('div');
+                body.className = 'search-item-body';
+                body.textContent = r.content;
+                var time = document.createElement('div');
+                time.className = 'search-item-time';
+                time.textContent = formatTime(r.create_time);
+                item.appendChild(head);
+                item.appendChild(body);
+                item.appendChild(time);
+                item.addEventListener('click', function () {
+                    openConversation(partner);
+                    searchPanel.classList.add('hidden');
+                    searchClearBtn.classList.add('hidden');
+                });
+                searchPanel.appendChild(item);
+            });
+        }
     }
 
     function sendSidebarSearch() {
@@ -2224,9 +2364,10 @@
     // 阶段二十三：点击放大镜图标触发搜索（等价回车）
     searchIconBtn.addEventListener('click', sendSidebarSearch);
 
-    // 阶段二十三：有输入内容时才显示清除按钮
+    // 输入即搜：联系人本地实时过滤，聊天记录分区保持上次服务端结果
+    // 原实现：input 事件仅切换清除按钮显隐，回车后面板才显示
     searchInput.addEventListener('input', function () {
-        searchClearBtn.classList.toggle('hidden', searchInput.value.length === 0);
+        renderSearchPanel();
     });
 
     searchClearBtn.addEventListener('click', function () {
@@ -2237,49 +2378,8 @@
     IMSocket.on(MSG.SEARCH_RESP, function (msg) {
         var records = [];
         try { records = JSON.parse(msg.content) || []; } catch (err) {}
-        searchPanel.innerHTML = '';
-
-        var title = document.createElement('div');
-        title.className = 'search-title';
-        title.textContent = '搜索结果 (' + records.length + ')';
-        searchPanel.appendChild(title);
-
-        if (records.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'search-empty';
-            empty.textContent = '暂无匹配的聊天记录';
-            searchPanel.appendChild(empty);
-        }
-
-        records.forEach(function (r) {
-            var isGroup = !r.to_user;
-            // 私聊会话对象：自己发送则是收件人，否则是发件人
-            var partner = isGroup ? '' : (r.from_user === IMSocket.getUsername() ? r.to_user : r.from_user);
-            var convName = isGroup ? '群聊' : partner;
-            var item = document.createElement('div');
-            item.className = 'search-item';
-            var head = document.createElement('div');
-            head.className = 'search-item-head';
-            head.textContent = convName + ' · ' + r.from_user;
-            var body = document.createElement('div');
-            body.className = 'search-item-body';
-            body.textContent = r.content;
-            var time = document.createElement('div');
-            time.className = 'search-item-time';
-            time.textContent = formatTime(r.create_time);
-            item.appendChild(head);
-            item.appendChild(body);
-            item.appendChild(time);
-            item.addEventListener('click', function () {
-                openConversation(partner);
-                searchPanel.classList.add('hidden');
-                searchClearBtn.classList.add('hidden');
-            });
-            searchPanel.appendChild(item);
-        });
-
-        searchPanel.classList.remove('hidden');
-        searchClearBtn.classList.remove('hidden');
+        lastSearchRecords = records; // 原实现：收到响应直接重渲染面板，现交由 renderSearchPanel 统一分区渲染
+        renderSearchPanel();
     });
 
     // 格式化时间显示（月-日 时:分）
