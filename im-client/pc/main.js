@@ -39,8 +39,9 @@ function createWindow() {
 }
 
 function createTray() {
-    // 无图标时使用空图标占位
-    tray = new Tray(nativeImage.createEmpty());
+    // 托盘图标使用项目自带 64.ico（原实现：空图标占位，Windows 托盘区看不到任何图标）
+    // Tray(nativeImage.createEmpty());
+    tray = new Tray(path.join(__dirname, '64.ico'));
     tray.setToolTip('即时通讯');
     const contextMenu = Menu.buildFromTemplate([
         { label: '显示主窗口', click: function () { mainWindow.show(); } },

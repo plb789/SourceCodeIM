@@ -18,5 +18,8 @@
       "target": "nsis",
       "signAndEditExecutable": false
     }
+  },
+  "dependencies": {
+    "rcedit": "^4.0.1"
   }
 }

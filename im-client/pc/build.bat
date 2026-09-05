@@ -40,6 +40,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem 设置 exe 图标：electron-builder 配置跳过签名时图标编辑一并跳过，且其要求 ico 至少 256px；
+rem rcedit 无尺寸限制，直接对打包产物改图标（64.ico 存在时执行，失败不阻断部署）
+set "RCEDIT=%~dp0node_modules\rcedit\bin\rcedit-x64.exe"
+if exist "%RCEDIT%" if exist "%~dp064.ico" (
+    echo 设置 exe 图标为 64.ico ...
+    "%RCEDIT%" "%UNPACKED_DIR%\即时通讯.exe" --set-icon "%~dp064.ico"
+    if errorlevel 1 echo [警告] exe 图标设置失败，将继续部署（图标保持默认）
+)
+
 echo [4/4] 部署到 im-client\bin ...
 rem 先关闭正在运行的客户端，避免 exe 被占用导致清理失败（进程不存在时静默跳过）
 taskkill /f /im im-client.exe >nul 2>nul
