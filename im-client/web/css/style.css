@@ -1430,13 +1430,24 @@ html, body {
     background: transparent;
 }
 
+/* 阶段四十四：滚动条微信化——默认隐藏滑块，鼠标移入滚动区域后显示，移出立即隐藏；
+   显隐改由 JS 给滚动容器打 .sb-hover 标记类控制（纯 CSS :hover 在 Chromium 滚动条伪元素上
+   存在滞留：拖动滑块后移出/快速划过时 hover 不重算，滑块不消失）
+   原实现：*:hover::-webkit-scrollbar-thumb 纯 CSS 悬停浮现（存在移出不隐藏问题） */
 ::-webkit-scrollbar-thumb {
-    background: var(--rail-icon);
+    background: transparent;
     border-radius: 4px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-    background: var(--primary);
+/* 悬停标记类：滑块浮现（类由 JS mouseover/mouseout 精确增删）
+   阶段四十四：滑块增加透明度（#8a8a8a → rgba 半透明），视觉更轻盈不遮挡内容 */
+.sb-hover::-webkit-scrollbar-thumb {
+    background: rgba(138, 138, 138, 0.55);
+}
+
+/* 悬停标记下滑块自身 hover 加亮且透明度略降（更实，指示可拖拽） */
+.sb-hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(179, 179, 179, 0.8);
 }
 
 ::-webkit-scrollbar-corner {

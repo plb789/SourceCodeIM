@@ -3532,4 +3532,38 @@
         messageList.scrollTop = messageList.scrollHeight;
         return div;
     }
+
+    // ===== 阶段四十四：滚动条悬停显隐（微信设置页同款：默认隐藏，悬停滚动容器浮现，移出立即隐藏） =====
+    // 纯 CSS :hover 在 Chromium 滚动条伪元素上存在滞留（拖动滑块后移出/快速划过时 hover 不重算，滑块不消失），
+    // 改由 JS 精确控制：mouseover 时给最近的滚动容器加 .sb-hover（滑块浮现），mouseout 时移除（滑块隐藏）
+    (function () {
+        var sbLast = null; // 当前标记的滚动容器
+        // 判定是否为可滚动元素（存在纵向溢出才可能显示滚动条）
+        function sbScrollable(el) {
+            return el.scrollHeight > el.clientHeight + 1;
+        }
+        // 自触发点向上找最近的滚动容器（与 CSS :hover 命中语义一致）
+        function sbFind(el) {
+            while (el && el !== document.documentElement) {
+                if (sbScrollable(el)) return el;
+                el = el.parentElement;
+            }
+            return null;
+        }
+        document.addEventListener('mouseover', function (e) {
+            var el = sbFind(e.target);
+            if (el === sbLast) return;
+            if (sbLast) sbLast.classList.remove('sb-hover');
+            sbLast = el;
+            if (sbLast) sbLast.classList.add('sb-hover');
+        });
+        // 移出容器（relatedTarget 已不在容器内）立即取消标记，滑块隐藏
+        document.addEventListener('mouseout', function (e) {
+            if (!sbLast) return;
+            if (!sbLast.contains(e.relatedTarget)) {
+                sbLast.classList.remove('sb-hover');
+                sbLast = null;
+            }
+        });
+    })();
 })();

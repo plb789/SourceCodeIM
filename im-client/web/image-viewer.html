@@ -138,8 +138,18 @@
             border-radius: 4px;
         }
 
-        .iv-thumbs::-webkit-scrollbar-thumb:hover {
-            background: #07c160;
+        /* 阶段四十四：与全局同步微信化——默认隐藏滑块，鼠标移入缩略图条才显示，移出即隐藏
+           阶段四十四补充：滑块增加透明度（#3a3a3a → rgba 半透明），hover 加亮且略实 */
+        .iv-thumbs::-webkit-scrollbar-thumb {
+            background: transparent;
+        }
+
+        .iv-thumbs:hover::-webkit-scrollbar-thumb {
+            background: rgba(58, 58, 58, 0.6);
+        }
+
+        .iv-thumbs:hover::-webkit-scrollbar-thumb:hover {
+            background: rgba(90, 90, 90, 0.85);
         }
 
         .iv-thumbs::-webkit-scrollbar-corner {
