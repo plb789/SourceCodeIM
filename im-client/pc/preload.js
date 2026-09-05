@@ -94,5 +94,9 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('viewer:more', function (event, urls) {
             callback(urls);
         });
+    },
+    // 退出全屏冻结态（截图编辑完成/取消后调用，主进程恢复普通窗口与层级）
+    exitFreeze: function () {
+        ipcRenderer.send('shot:exit-freeze');
     }
 });

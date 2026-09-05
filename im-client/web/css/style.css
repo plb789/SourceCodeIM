@@ -2066,6 +2066,49 @@ html, body {
     display: none;
 }
 
+/* ===== 阶段三十八：截图待发送条（QQ 同款：编辑完成的截图先进输入框上方待发送区，点发送才出） ===== */
+.pending-shot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 12px 0;
+    padding: 6px 10px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.pending-shot img {
+    width: 56px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+}
+
+.pending-shot-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.pending-shot-del {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.pending-shot-del:hover {
+    background: var(--active);
+    color: var(--text);
+}
+
 /* ===== 阶段三十五·第二期：伪冻结遮罩模式（截图按钮入口，贴近微信 Alt+A） ===== */
 /* 冻结态：画布容器铺满视口（cover 裁剪），去掉编辑器模式的外观修饰 */
 .shot-editor.freeze {

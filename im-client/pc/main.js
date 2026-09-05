@@ -103,8 +103,53 @@ function captureScreen() {
 }
 
 // 渲染进程主动抓屏（截图按钮入口）：invoke('shot:capture') → 返回 PNG dataURL
+// 阶段三十八：QQ 同款全屏冻结截图——先让主窗口从画面上消失（不挡要截的内容）→ 抓屏 → 全屏+置顶展示冻结画面
+// 优化：用 setOpacity(0) 代替 hide——即时生效无动画且不引起任务栏闪动，恢复时仅透明度归位，闪烁感最小
+async function captureWithHide() {
+    var wasVisible = mainWindow && mainWindow.isVisible();
+    if (mainWindow && !wasVisible) {
+        // 托盘驻留（窗口隐藏）：维持隐藏，抓屏后由 show 带出
+    } else if (mainWindow) {
+        mainWindow.setOpacity(0); // 即时全透明（窗口仍占位，无 hide/show 动画与任务栏闪动）
+    }
+    // Windows 合成器输出"无本窗口"新帧需要一小段时间，抓早了仍可能拍到本窗口（150ms 为实测安全值）
+    await new Promise(function (r) { setTimeout(r, 150); });
+    var ok = false;
+    try {
+        var dataUrl = await captureScreen();
+        ok = !!dataUrl;
+        return dataUrl;
+    } finally {
+        if (mainWindow) {
+            if (ok) {
+                // 抓屏成功：全屏无边界（盖住任务栏，视觉与 QQ 冻结一致）+ 最高置顶（防其他窗口穿插）
+                mainWindow.setFullScreen(true);
+                mainWindow.setAlwaysOnTop(true, 'screen-saver');
+                if (!wasVisible) mainWindow.show();
+                mainWindow.setOpacity(1); // 透明度归位=冻结画面瞬间出现（无缝衔接）
+                mainWindow.focus();
+            } else {
+                // 抓屏失败：恢复正常窗口（编辑器打不开，退回聊天界面）
+                if (!wasVisible) mainWindow.show();
+                mainWindow.setOpacity(1);
+                mainWindow.focus();
+            }
+        }
+    }
+    // 原实现：mainWindow.hide() + 300ms 延时（用户反馈屏幕空窗闪烁明显，且 hide/show 引起任务栏闪动）
+}
+
+// 退出全屏冻结态（渲染层编辑器关闭/发送完成后调用，恢复普通窗口与层级）
+ipcMain.on('shot:exit-freeze', function () {
+    if (!mainWindow) return;
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setFullScreen(false);
+});
+
 ipcMain.handle('shot:capture', function () {
-    return captureScreen();
+    return captureWithHide();
+    // 原实现：直接抓屏（主窗口未隐藏，聊天窗口会挡住想要截取的屏幕内容）
+    // return captureScreen();
 });
 
 // ===== 阶段三十八：图片查看器窗口（QQ 同款：无边框自绘工具栏，置顶/翻页/缩略图/缩放/旋转/另存为） =====
@@ -326,11 +371,10 @@ app.whenReady().then(function () {
     createTray();
 
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
+    // 阶段三十八：改走 captureWithHide——先隐藏主窗口再抓屏（QQ 同款），可截到被自己窗口挡住的内容
     var shortcutOk = globalShortcut.register('Alt+A', function () {
-        captureScreen().then(function (dataUrl) {
+        captureWithHide().then(function (dataUrl) {
             if (!dataUrl || !mainWindow) return;
-            // 托盘驻留（窗口隐藏）时先恢复窗口，否则编辑器对用户不可见
-            if (!mainWindow.isVisible()) mainWindow.show();
             mainWindow.webContents.send('shot:global-result', dataUrl);
         }).catch(function (err) {
             console.warn('Alt+A 全局截图抓屏失败:', err);

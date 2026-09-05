@@ -581,7 +581,50 @@
     });
 
     // ===== 发送消息 =====
+    // ===== 阶段三十八：截图待发送区（QQ 同款：编辑完成不直接发送，先进输入框上方待发送条，点发送才出） =====
+    var pendingShot = null;     // 待发送截图 blob
+    var pendingShotBar = null;  // 待发送条 DOM（输入区顶部）
+
+    function setPendingShot(blob) {
+        if (!blob) return;
+        clearPendingShot();
+        pendingShot = blob;
+        pendingShotBar = document.createElement('div');
+        pendingShotBar.className = 'pending-shot';
+        var thumb = document.createElement('img');
+        thumb.src = URL.createObjectURL(blob);
+        thumb.onload = function () { URL.revokeObjectURL(thumb.src); }; // 已渲染即可释放
+        var name = document.createElement('span');
+        name.className = 'pending-shot-name';
+        name.textContent = '截图.png';
+        var del = document.createElement('button');
+        del.className = 'pending-shot-del';
+        del.textContent = '×';
+        del.title = '移除截图';
+        del.addEventListener('click', function () { clearPendingShot(); messageInput.focus(); });
+        pendingShotBar.appendChild(thumb);
+        pendingShotBar.appendChild(name);
+        pendingShotBar.appendChild(del);
+        var bar = document.querySelector('.input-bar');
+        if (bar) bar.insertBefore(pendingShotBar, bar.firstChild);
+    }
+
+    function clearPendingShot() {
+        pendingShot = null;
+        if (pendingShotBar) {
+            pendingShotBar.remove();
+            pendingShotBar = null;
+        }
+    }
+
     function sendMessage() {
+        // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
+        if (pendingShot) {
+            var shot = pendingShot;
+            clearPendingShot();
+            sendScreenshotFile(shot);
+            return;
+        }
         var content = messageInput.value.trim();
         if (!content) return;
         var msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
@@ -1243,10 +1286,19 @@
     // 抓屏结果统一进入截图编辑器（编辑器模式，默认全图选区）
     function openShotEditor(blob) {
         if (!blob) { showToast('截图失败'); return; }
-        ScreenshotEditor.open(blob, sendScreenshotFile);
+        // 阶段三十八：QQ 同款全屏冻结截图——PC 端主窗口已被主进程置为全屏+置顶，
+        // freeze 模式画面铺满视口（视觉=屏幕被冻结画面覆盖），拖拽框选 → 工具栏标注 → 完成；
+        // 编辑完成/取消后 onClose 退出全屏冻结，截图进输入框待发送区（点发送才真正发出）
+        // 原实现：ScreenshotEditor.open(blob, sendScreenshotFile);（窗口式居中缩放，用户反馈"像在程序里打开图片"而非 QQ 截图）
+        ScreenshotEditor.freeze(blob, setPendingShot, function () {
+            if (window.desktop && window.desktop.exitFreeze) window.desktop.exitFreeze();
+            // Esc/取消退出后清掉残留焦点（用户反馈：退出截图后截图按钮残留黄色焦点框）
+            if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        });
     }
 
     screenshotBtn.addEventListener('click', function () {
+        this.blur(); // 移除按钮焦点（避免退出截图后按钮残留焦点框高亮）
         // 原实现：群聊视图拦截提示"群聊暂不支持发送截图"，阶段二十六放开——截图即图片，走群聊 HTTP 上传链路
         // if (currentChatUser === '') { showToast('群聊暂不支持发送截图'); return; }
         // 阶段三十七（第三期）：PC 端 Electron 走主进程静默抓屏（desktopCapturer，不弹系统共享选择框）
@@ -2002,6 +2054,8 @@
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         currentChatUser = user;
+        // 阶段三十八：切换会话清空待发送截图（防止把 A 会话的截图误发到 B 会话）
+        clearPendingShot();
         // 登录持久化联动：记录最近选中会话（key 按用户名隔离，多账号互不干扰），刷新自动登录后恢复该会话
         try { localStorage.setItem('im_last_chat_' + IMSocket.getUsername(), user); } catch (e) {}
         // 原实现：if (currentChatUser !== '') unreadCount[currentChatUser] = 0; 本地计数清零

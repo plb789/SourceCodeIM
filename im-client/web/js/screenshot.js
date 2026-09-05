@@ -232,13 +232,17 @@
     }
 
     // ===== 打开伪冻结遮罩（第二期：画面铺满视口、空选区，拖拽框选后工具栏出现） =====
-    function freeze(blob, confirmCb) {
+    // 阶段三十八：第三参 onClose——编辑器关闭（发送或取消）时回调（PC 端用于通知主进程退出全屏冻结态）
+    var onCloseCb = null; // 冻结模式关闭回调（一次性，close 时消费）
+    function freeze(blob, confirmCb, onClose) {
+        onCloseCb = onClose || null;
         load(blob, confirmCb, 'freeze');
     }
 
     function load(blob, confirmCb, m) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
+        if (m !== 'freeze') onCloseCb = null; // 编辑器模式无冻结回调
         imgUrl = URL.createObjectURL(blob);
         var image = new Image();
         image.onload = function () {
@@ -317,6 +321,12 @@
         mode = 'editor';
         img = null;
         if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = ''; }
+        // 阶段三十八：冻结模式关闭回调（发送/取消/Esc 关闭统一触发，PC 端通知主进程退出全屏冻结）
+        if (onCloseCb) {
+            var cb = onCloseCb;
+            onCloseCb = null;
+            cb();
+        }
     }
 
     function isOpen() {
