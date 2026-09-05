@@ -252,6 +252,20 @@ func (s *Server) handleHeartbeat(c *Client) {
 	store.RDB.Set(context.Background(), store.KeyOnlineUser+c.username, "online", 120*time.Second)
 }
 
+// messageSummary 阶段四十：引用消息会话摘要归口——引用消息 content 为信封 JSON
+// （{"quote":{"msg_id","from","text"},"text":"回复正文"}），会话列表摘要必须取回复正文，
+// 否则 JSON 原串会直接显示在会话列表；解析失败（普通文本/历史数据）回退原文
+func messageSummary(content string) string {
+	var envelope struct {
+		Quote json.RawMessage `json:"quote"`
+		Text  string          `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(content), &envelope); err == nil && envelope.Quote != nil && envelope.Text != "" {
+		return envelope.Text
+	}
+	return content
+}
+
 // handleGroupChat 群聊广播并持久化
 func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	// 敏感词过滤
@@ -351,7 +365,8 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	s.sendToUser(c.username, data)
 
 	// 更新双方最近会话并推送
-	summary := msg.Content
+	// 阶段四十：引用消息 content 为信封 JSON，会话摘要归口解析出回复正文（原实现：summary := msg.Content 直存 JSON 原串）
+	summary := messageSummary(msg.Content)
 	s.touchConversation(c.username, msg.ToUser, summary)
 	s.touchConversation(msg.ToUser, c.username, summary)
 	s.notifyConvUpdate(c.username)

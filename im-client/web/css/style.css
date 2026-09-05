@@ -2191,6 +2191,95 @@ html, body {
     opacity: 0.9;
 }
 
+/* ===== 阶段四十：消息引用（微信同款：右键引用 → 引用条 → 引用信封随消息发出） ===== */
+/* 气泡内引用块：灰底 + 主题色左边框，文字左摘要、右可选缩略图，点击定位原消息 */
+.msg-quote {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+    padding: 4px 8px;
+    background: var(--hover);
+    border-left: 3px solid var(--primary);
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--text-light);
+    cursor: pointer;
+}
+
+.msg-quote:hover {
+    background: var(--active);
+}
+
+/* 引用文字（"引用 来源：摘要"，最多两行截断） */
+.msg-quote .msg-quote-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-all;
+}
+
+/* 阶段四十一：图片引用缩略图（真实图片内容，非"[图片]"纯文字） */
+.msg-quote-img {
+    height: 40px;
+    max-width: 72px;
+    object-fit: cover;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+/* 引用消息正文（.message-bubble 的 pre-wrap 自动继承，多行回复正常分行） */
+.msg-text {
+    word-break: break-word;
+}
+
+/* 输入区上方引用条（样式与截图待发送条同风格：面板色圆角条 + 圆形 × 按钮） */
+.quote-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 12px 0;
+    padding: 6px 10px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.quote-bar.hidden {
+    display: none;
+}
+
+.quote-bar-info {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.quote-bar-del {
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.quote-bar-del:hover {
+    background: var(--active);
+    color: var(--text);
+}
+
 .pending-shot-del:hover {
     background: var(--active);
     color: var(--text);

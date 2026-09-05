@@ -570,6 +570,33 @@
                         msg_id: msgId,
                         content: isPinned ? 'unpin' : 'pin'
                     });
+                } else if (action === 'quote' && msgId) {
+                    // 阶段四十：引用消息——收集被引用消息摘要，显示输入框上方引用条，随下一条文本消息一起发出（微信同款）
+                    // 阶段四十一：图片引用带图片地址（quote.url）——引用块内直接显示真实图片缩略图而非仅"[图片]"文字
+                    var qBubble = msgTarget.querySelector('.message-bubble');
+                    var qImg = qBubble ? qBubble.querySelector('.chat-image') : null;
+                    var qFrom = msgTarget.getAttribute('data-from') || '';
+                    if (qImg) {
+                        var qSrc = qImg.getAttribute('src') || '';
+                        // blob: URL 跨端无效（本页临时预览），转 dataURL 后随信封发出；服务器 URL 直接使用
+                        if (qSrc.indexOf('blob:') === 0) {
+                            // 原实现：图片引用仅存"[图片]"文字摘要，无真实图片内容
+                            blobToDataUrl(qSrc).then(function (d) {
+                                setQuoteTarget({ msg_id: msgId, from: qFrom, text: '[图片]', url: d || '' });
+                                messageInput.focus();
+                            });
+                        } else {
+                            setQuoteTarget({ msg_id: msgId, from: qFrom, text: '[图片]', url: qSrc });
+                            messageInput.focus();
+                        }
+                    } else if (qBubble) {
+                        // 引用消息正文取 .msg-text（引用块自身不重复计入摘要）；普通消息取气泡全文
+                        var qTextEl = qBubble.querySelector('.msg-text');
+                        var qSummary = ((qTextEl ? qTextEl.textContent : qBubble.textContent) || '').trim();
+                        if (qSummary.length > 50) qSummary = qSummary.slice(0, 50) + '…'; // 摘要截断（微信同款）
+                        setQuoteTarget({ msg_id: msgId, from: qFrom, text: qSummary });
+                        messageInput.focus();
+                    }
                 }
             }
             msgMenu.classList.add('hidden');
@@ -727,6 +754,60 @@
         shotPreviewMask.classList.add('hidden');
     }
 
+    // ===== 阶段四十：消息引用（微信同款：右键引用 → 输入框上方引用条 → 随下一条文本消息一起发出） =====
+    var quoteTarget = null; // 当前引用目标 { msg_id, from, text }（text 为被引用消息摘要）
+    var quoteBarEl = null;  // 引用条 DOM（输入区顶部，惰性创建）
+
+    // 设置引用目标并显示引用条（摘要过长截断，微信同款）
+    function setQuoteTarget(q) {
+        quoteTarget = q;
+        if (!quoteBarEl) {
+            quoteBarEl = document.createElement('div');
+            quoteBarEl.className = 'quote-bar hidden';
+            var info = document.createElement('span');
+            info.className = 'quote-bar-info';
+            var del = document.createElement('button');
+            del.className = 'quote-bar-del';
+            del.textContent = '×';
+            del.title = '取消引用';
+            del.addEventListener('click', function () { clearQuoteTarget(); messageInput.focus(); });
+            quoteBarEl.appendChild(info);
+            quoteBarEl.appendChild(del);
+            var bar = document.querySelector('.input-bar');
+            if (bar) {
+                // 插在截图待发送条之下（无截图条时插在最前），紧贴输入区工具栏
+                var ps = bar.querySelector('.pending-shot');
+                if (ps && ps.nextSibling) bar.insertBefore(quoteBarEl, ps.nextSibling);
+                else if (ps) bar.appendChild(quoteBarEl);
+                else bar.insertBefore(quoteBarEl, bar.firstChild);
+            }
+        }
+        quoteBarEl.querySelector('.quote-bar-info').textContent = '引用 ' + (q.from || '') + '：' + (q.text || '');
+        quoteBarEl.classList.remove('hidden');
+    }
+
+    function clearQuoteTarget() {
+        quoteTarget = null;
+        if (quoteBarEl) quoteBarEl.classList.add('hidden');
+    }
+
+    // 解析引用信封 content（{"quote":{msg_id,from,text},"text":回复}）；
+    // 非信封（普通文本/图片 JSON 等）返回 null——必须同时有 quote 对象与 text 字符串才判定为引用，
+    // 防止把图片消息 JSON（url/name/size）或纯数字文本误判为引用
+    function parseQuoteEnvelope(content) {
+        if (!content || content.charAt(0) !== '{') return null;
+        var m = null;
+        try { m = JSON.parse(content); } catch (e) { return null; }
+        if (!m || typeof m !== 'object' || !m.quote || typeof m.quote !== 'object' || typeof m.text !== 'string') return null;
+        return m;
+    }
+
+    // 搜索结果展示文本：引用信封显示回复正文（搜索命中含引用原文的 JSON 串，展示正文即可）
+    function quoteDisplayText(content) {
+        var m = parseQuoteEnvelope(content);
+        return m ? m.text : content;
+    }
+
     function sendMessage() {
         // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
         // 阶段三十九：一次发出全部待发送截图（逐张走既有图片链路，各自 nonce 气泡独立回填）
@@ -743,6 +824,12 @@
         if (!content) return;
         var msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
+        // 阶段四十：引用发送——content 换成引用信封 JSON（服务端归口解析会话摘要），发送后清引用条
+        // 原实现：content 始终为纯文本
+        if (quoteTarget) {
+            msg.content = JSON.stringify({ quote: quoteTarget, text: content });
+            clearQuoteTarget();
+        }
         if (IMSocket.send(msg)) {
             messageInput.value = '';
             messageInput.focus();
@@ -2190,6 +2277,8 @@
         currentChatUser = user;
         // 阶段三十八：切换会话清空待发送截图（防止把 A 会话的截图误发到 B 会话）
         clearPendingShot();
+        // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
+        clearQuoteTarget();
         // 登录持久化联动：记录最近选中会话（key 按用户名隔离，多账号互不干扰），刷新自动登录后恢复该会话
         try { localStorage.setItem('im_last_chat_' + IMSocket.getUsername(), user); } catch (e) {}
         // 原实现：if (currentChatUser !== '') unreadCount[currentChatUser] = 0; 本地计数清零
@@ -2543,7 +2632,7 @@
             head.appendChild(when);
             var body = document.createElement('div');
             body.className = 'conv-result-body';
-            body.textContent = r.content;
+            body.textContent = quoteDisplayText(r.content); // 阶段四十：引用消息显示回复正文而非 JSON 原串
             item.appendChild(head);
             item.appendChild(body);
             item.addEventListener('click', function () {
@@ -2765,7 +2854,7 @@
                 head.textContent = convName + ' · ' + r.from_user;
                 var body = document.createElement('div');
                 body.className = 'search-item-body';
-                body.textContent = r.content;
+                body.textContent = quoteDisplayText(r.content); // 阶段四十：引用消息显示回复正文而非 JSON 原串
                 var time = document.createElement('div');
                 time.className = 'search-item-time';
                 time.textContent = formatTime(r.create_time);
@@ -2981,7 +3070,56 @@
         nameEl.textContent = fromUser;
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.textContent = content;
+        // 阶段四十：引用消息渲染——content 为引用信封时，气泡内先渲染引用块（灰底小字，点击定位原消息）再渲染回复正文；
+        // 阶段四十一：引用块加"引用"前缀（用户一眼识别引用消息）；quote.url 存在时显示真实图片缩略图
+        // 原实现：bubble.textContent = content（引用信封会原样显示 JSON 串）
+        var envelope = parseQuoteEnvelope(content);
+        if (envelope) {
+            var q = envelope.quote;
+            var quoteBlock = document.createElement('div');
+            quoteBlock.className = 'msg-quote';
+            // "引用"前缀 + 来源 + 摘要（textContent 赋值防 XSS，摘要来自用户消息原文）
+            var qLabel = document.createElement('span');
+            qLabel.className = 'msg-quote-text';
+            qLabel.textContent = '引用 ' + (q.from || '') + '：' + (q.text || '');
+            quoteBlock.appendChild(qLabel);
+            // 图片引用：引用块内嵌真实缩略图（加载失败退化为纯"[图片]"文字）
+            if (q.url) {
+                var quoteImg = document.createElement('img');
+                quoteImg.className = 'msg-quote-img';
+                quoteImg.src = q.url;
+                quoteImg.addEventListener('error', function () { quoteImg.remove(); });
+                quoteBlock.appendChild(quoteImg);
+            }
+            if (q.msg_id) {
+                quoteBlock.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    // 定位被引用的原消息（微信同款）
+                    var qEl = messageList.querySelector('.message[data-msg-id="' + q.msg_id + '"]');
+                    if (qEl) {
+                        highlightMessage(qEl);
+                    } else {
+                        // 阶段四十一修复：原消息不在当前窗口（在未加载的更早历史中）时走翻页定位链路——
+                        // 复用会话内搜索的逐页向前加载机制，找到即滚动高亮；翻完无结果提示"未找到该消息"
+                        // 原实现：仅当前窗口内查找，找不到无操作（用户反馈：对方点击引用无法定位未加载的历史消息，
+                        // 必须手动滚轮翻到那条消息才能定位）
+                        locateState.active = true;
+                        locateState.msgId = q.msg_id;
+                        locateState.page = 1;
+                        locateState.src = 'search';
+                        loadNextLocatePage();
+                    }
+                });
+            }
+            bubble.appendChild(quoteBlock);
+            var textDiv = document.createElement('div');
+            textDiv.className = 'msg-text';
+            textDiv.textContent = envelope.text;
+            bubble.appendChild(textDiv);
+        } else {
+            // 原实现：bubble.textContent = content;（普通文本消息直出）
+            bubble.textContent = content;
+        }
         // 头像缺失修复：改为微信风格结构——头像 + 内容列（昵称/气泡/状态），
         // 头像在左（他人）/右（自己），由 CSS flex 与 flex-direction:row-reverse 控制
         // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
