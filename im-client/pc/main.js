@@ -62,6 +62,14 @@ function createTray() {
     tray.on('click', function () {
         mainWindow.show();
     });
+    // 阶段三十七（第四期·增强）：悬停托盘弹出预览面板（QQ 同款），200ms 节流避免扫过托盘时频繁弹出
+    tray.on('mouse-move', function () {
+        if (panelShowTimer) return;
+        panelShowTimer = setTimeout(function () {
+            panelShowTimer = null;
+            showTrayPanel();
+        }, 200);
+    });
 }
 
 // 桌面通知（供新消息提醒）
@@ -98,21 +106,108 @@ ipcMain.handle('shot:capture', function () {
 });
 
 // ===== 阶段三十七（第四期）：托盘未读提醒（微信同款：新消息闪动 + 悬停显示未读数 + 图标数字角标） =====
+// 阶段三十七（第四期·增强）：悬停预览面板（QQ 同款：无边框自绘窗口，头像+摘要+未读数+可点击跳转会话）
 var trayBadgeIcon = null; // 当前角标图标（渲染层 canvas 合成的 PNG dataURL），闪烁结束/未读清零时恢复
 var flashTimer = null;    // 托盘闪动定时器（避免重复起闪）
+var unreadData = { total: 0, detail: '', list: [] }; // 渲染层上报的最新未读数据缓存（面板数据源）
+var panelWin = null;      // 悬停预览面板窗口（惰性创建，显隐复用）
+var panelShowTimer = null;// 托盘悬停节流定时器
+var currentTooltip = '即时通讯'; // 原生 tooltip 文本（面板显示期间临时置空避免与面板重叠）
 
-// 未读数据上报：渲染层推送 {total, detail, icon}
+// 未读数据上报：渲染层推送 {total, detail, icon, list}
 ipcMain.on('tray:unread', function (event, data) {
     if (!tray || !data) return;
     var total = data.total || 0;
     trayBadgeIcon = data.icon || null;
+    unreadData = data;
     // 悬停 tooltip：无未读显示应用名，有未读显示明细（渲染层生成，如"admin(2) 群聊(5)"）
-    tray.setToolTip(total > 0 ? '即时通讯（' + (data.detail || total + ' 条未读') + '）' : '即时通讯');
+    currentTooltip = total > 0 ? '即时通讯（' + (data.detail || total + ' 条未读') + '）' : '即时通讯';
+    tray.setToolTip(currentTooltip);
     if (total > 0 && trayBadgeIcon) {
         tray.setImage(nativeImage.createFromDataURL(trayBadgeIcon));
     } else {
         tray.setImage(nativeImage.createFromPath(APP_ICON));
     }
+    // 未读归零时同步隐藏预览面板（面板停留时数据已过期）
+    if (total === 0) hideTrayPanel();
+});
+
+// ===== 托盘悬停预览面板：窗口管理 =====
+function ensureTrayPanel() {
+    if (panelWin) return panelWin;
+    panelWin = new BrowserWindow({
+        width: 320,
+        height: 200,
+        show: false,
+        frame: false,          // 无边框自绘（圆角/阴影由面板页面 CSS 实现）
+        resizable: false,
+        alwaysOnTop: true,
+        transparent: true,
+        skipTaskbar: true,     // 面板不进任务栏
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    panelWin.loadURL(SERVER_URL + 'tray-panel.html');
+    // 点击面板外任意处（面板失焦）自动隐藏
+    panelWin.on('blur', function () { hideTrayPanel(); });
+    panelWin.on('closed', function () { panelWin = null; });
+    return panelWin;
+}
+
+function showTrayPanel() {
+    if (!tray) return;
+    // 无未读时不弹面板（用户反馈：没消息时悬停弹"暂无新消息"多余，有消息才显示）；
+    // 此时保留原生 tooltip"即时通讯"即可
+    // 原实现：无未读也弹面板并显示"暂无新消息"空态
+    if (!(unreadData.list && unreadData.list.length)) return;
+    var p = ensureTrayPanel();
+    // 高度按未读条目数动态计算：标题 36px + 每条 64px + 上下留白
+    var n = Math.min((unreadData.list || []).length, 5);
+    var w = 320;
+    var h = 36 + n * 64 + 8;
+    // 定位：托盘图标水平居中，默认在图标上方（任务栏在顶部时放下方），越界校正到工作区内
+    var b = tray.getBounds();
+    var disp = screen.getDisplayNearestPoint({ x: b.x, y: b.y });
+    var wa = disp.workArea;
+    var x = Math.round(b.x + b.width / 2 - w / 2);
+    var y = b.y > wa.y + wa.height / 2 ? Math.round(b.y - h - 8) : Math.round(b.y + b.height + 8);
+    if (x < wa.x + 8) x = wa.x + 8;
+    if (x + w > wa.x + wa.width - 8) x = wa.x + wa.width - w - 8;
+    p.setBounds({ x: x, y: y, width: w, height: h });
+    if (p.isVisible()) {
+        p.webContents.send('tray:unread-push', unreadData); // 已显示：仅刷新数据
+        return;
+    }
+    p.showInactive(); // 不抢焦点：不打断当前输入，任务栏闪动状态不被清除
+    tray.setToolTip(''); // 面板显示期间隐藏原生 tooltip，避免与面板重叠
+    p.webContents.send('tray:unread-push', unreadData); // 推送最新数据（页面未加载完时由 get-unread 兜底拉取）
+}
+
+function hideTrayPanel() {
+    if (panelWin && panelWin.isVisible()) panelWin.hide();
+    if (tray) tray.setToolTip(currentTooltip); // 恢复原生 tooltip 明细
+}
+
+// 面板数据拉取（面板加载完成时兜底拉取）
+ipcMain.handle('tray:get-unread', function () {
+    return unreadData;
+});
+
+// 面板请求隐藏（鼠标移出面板时补充隐藏，比 blur 更跟手）
+ipcMain.on('tray:hide-panel', function () {
+    hideTrayPanel();
+});
+
+// 面板条目点击：隐藏面板 → 恢复主窗口 → 转发渲染层跳转对应会话
+ipcMain.on('tray:open-conv', function (event, target) {
+    hideTrayPanel();
+    if (!mainWindow) return;
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('tray:open-conv', target);
 });
 
 // 新消息闪动：托盘图标交替隐/显约 3 秒后停止（微信同款节奏），任务栏按钮同步橙色闪动

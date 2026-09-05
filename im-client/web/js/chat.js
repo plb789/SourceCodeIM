@@ -1551,23 +1551,31 @@
         return cv.toDataURL('image/png');
     }
 
-    // 上报未读汇总到主进程（托盘角标 + 悬停明细），总数增加时按需触发闪动；返回当前总数
+    // 上报未读汇总到主进程（托盘角标 + 悬停明细 + 预览面板列表），总数增加时按需触发闪动；返回当前总数
     function updateTrayBadge() {
         if (!(window.desktop && window.desktop.setUnread)) return 0;
         var total = 0;
         var parts = [];
+        var list = [];
         convList.forEach(function (cv) {
-            if (cv.unread > 0) {
-                total += cv.unread;
-                if (parts.length < 3) {
-                    // 会话名与列表同口径：群聊/好友备注优先，无备注回退用户名
-                    var name = cv.target === '' ? '群聊' : cv.target;
-                    if (cv.target !== '') {
-                        var convFriend = friendList.find(function (x) { return x.username === cv.target; });
-                        if (convFriend && convFriend.remark) name = convFriend.remark;
-                    }
-                    parts.push(name + '(' + cv.unread + ')');
-                }
+            if (cv.unread <= 0) return;
+            total += cv.unread;
+            // 会话名与列表同口径：群聊/好友备注优先，无备注回退用户名
+            var name = cv.target === '' ? '群聊' : cv.target;
+            if (cv.target !== '') {
+                var convFriend = friendList.find(function (x) { return x.username === cv.target; });
+                if (convFriend && convFriend.remark) name = convFriend.remark;
+            }
+            if (parts.length < 3) parts.push(name + '(' + cv.unread + ')');
+            // 预览面板明细（最多 5 条）：名称/最后消息摘要/未读数/头像（服务端头像优先，缺失面板内回退首字母）
+            if (list.length < 5) {
+                list.push({
+                    target: cv.target,
+                    name: name,
+                    last: cv.last_msg || '',
+                    unread: cv.unread,
+                    avatar: cv.target !== '' ? (userAvatars[cv.target] || '') : ''
+                });
             }
         });
         if (parts.length > 3) parts.push('…');
@@ -1576,13 +1584,21 @@
         window.desktop.setUnread({
             total: total,
             detail: parts.join(' '),
-            icon: buildTrayIconDataUrl(total)
+            icon: buildTrayIconDataUrl(total),
+            list: list
         });
         // 新消息且窗口未聚焦/被隐藏 → 托盘闪动；聚焦状态下仅更新角标，不打扰
         if (increased && (document.hidden || !windowFocused)) {
             window.desktop.flashTray();
         }
         return total;
+    }
+
+    // 托盘预览面板条目点击跳转（主进程转发 target）：恢复窗口并打开对应会话
+    if (window.desktop && window.desktop.onOpenConv) {
+        window.desktop.onOpenConv(function (target) {
+            openConversation(target);
+        });
     }
 
 

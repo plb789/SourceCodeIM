@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>托盘消息预览</title>
+    <!-- 复用主界面样式变量：面板主题自动跟随主界面浅色/深色切换 -->
+    <link rel="stylesheet" href="css/style.css?v=1.18">
+    <style>
+        /* body 透明：无框窗口背景交给 .tray-panel 自绘圆角 */
+        html, body { background: transparent; overflow: hidden; }
+
+        .tray-panel {
+            margin: 4px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+            overflow: hidden;
+        }
+
+        .tp-header {
+            padding: 8px 14px;
+            font-size: 13px;
+            color: var(--text-light);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tp-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 14px;
+            cursor: pointer;
+        }
+
+        .tp-item:hover { background: var(--hover); }
+
+        .tp-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 6px;
+            flex-shrink: 0;
+            object-fit: cover;
+        }
+
+        .tp-avatar-ph {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--placeholder-bg);
+            color: #fff;
+            font-size: 17px;
+        }
+
+        .tp-mid {
+            flex: 1;
+            min-width: 0;
+            margin: 0 10px;
+        }
+
+        .tp-name {
+            font-size: 14px;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tp-last {
+            font-size: 12px;
+            color: var(--text-light);
+            margin-top: 3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tp-badge {
+            flex-shrink: 0;
+            min-width: 18px;
+            height: 18px;
+            line-height: 18px;
+            padding: 0 5px;
+            background: #fa5151;
+            color: #fff;
+            font-size: 11px;
+            text-align: center;
+            border-radius: 9px;
+        }
+
+        .tp-empty {
+            padding: 30px 0;
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-light);
+        }
+    </style>
+</head>
+<body>
+    <div id="panel" class="tray-panel">
+        <div class="tp-header">新消息</div>
+        <div id="tp-list"></div>
+        <div id="tp-empty" class="tp-empty hidden">暂无新消息</div>
+    </div>
+    <!-- 阶段三十七（第四期·增强）：托盘悬停预览面板逻辑 -->
+    <script src="js/tray-panel.js?v=1"></script>
+</body>
+</html>

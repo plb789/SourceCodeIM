@@ -26,5 +26,30 @@ contextBridge.exposeInMainWorld('desktop', {
     // 阶段三十七（第四期）：新消息到达请求托盘闪动（主进程控制约 3 秒闪烁 + 任务栏橙色闪动）
     flashTray: function () {
         ipcRenderer.send('tray:flash');
+    },
+    // ===== 阶段三十七（第四期·增强）：托盘悬停预览面板（面板页与主窗口共用本 preload） =====
+    // 面板页拉取当前未读明细（兜底，正常由主进程显示前推送）
+    getTrayUnread: function () {
+        return ipcRenderer.invoke('tray:get-unread');
+    },
+    // 面板页订阅主进程推送的最新未读明细
+    onTrayUnreadPush: function (callback) {
+        ipcRenderer.on('tray:unread-push', function (event, data) {
+            callback(data);
+        });
+    },
+    // 面板条目点击：请求主进程恢复主窗口并跳转对应会话
+    openConv: function (target) {
+        ipcRenderer.send('tray:open-conv', target);
+    },
+    // 面板请求隐藏（鼠标移出面板时）
+    hidePanel: function () {
+        ipcRenderer.send('tray:hide-panel');
+    },
+    // 主聊天窗口订阅：托盘面板点击跳转会话（主进程转发 target）
+    onOpenConv: function (callback) {
+        ipcRenderer.on('tray:open-conv', function (event, target) {
+            callback(target);
+        });
     }
 });
