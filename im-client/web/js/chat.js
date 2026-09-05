@@ -1503,7 +1503,88 @@
         // 原实现：仅渲染会话列表，好友列表角标依赖本地 unreadCount，多端已读后不同步
         // 未读数服务端归口：好友列表角标与 会话列表角标 同源渲染服务端未读数
         renderFriendList();
+        // 阶段三十七（第四期）：PC 端托盘未读角标/悬停明细/新消息闪动（数据同源服务端归口未读数）
+        updateTrayBadge();
     });
+
+    // ===== 阶段三十七（第四期）：PC 端托盘未读提醒（微信同款：新消息闪动 + 悬停未读数 + 图标数字角标） =====
+    var trayBaseIcon = null;  // 托盘底图（懒加载，与 PC 端托盘/exe 同源图标，由 web/img/64.ico 静态提供）
+    var lastTrayTotal = -1;   // 上次上报的未读总数（-1 表示从未上报，首次必上报以初始化托盘状态）
+    var windowFocused = true; // 窗口聚焦状态（Electron 窗口失焦但可见时 document.hidden 仍为 false，需 focus/blur 辅助判断）
+
+    window.addEventListener('focus', function () { windowFocused = true; });
+    window.addEventListener('blur', function () { windowFocused = false; });
+
+    // 懒加载托盘底图（加载完成后补一次上报，确保角标立即可用；Web 浏览器端无桌面能力直接跳过）
+    if (window.desktop && window.desktop.setUnread) {
+        var trayIconImg = new Image();
+        trayIconImg.onload = function () {
+            trayBaseIcon = trayIconImg;
+            updateTrayBadge();
+        };
+        trayIconImg.src = '/img/64.ico';
+    }
+
+    // 合成托盘角标图标：底图 + 右下角红色圆点数字（>99 显示 99+），微信同款视觉
+    function buildTrayIconDataUrl(total) {
+        if (!trayBaseIcon) return '';
+        var cv = document.createElement('canvas');
+        cv.width = 64;
+        cv.height = 64;
+        var ctx = cv.getContext('2d');
+        ctx.drawImage(trayBaseIcon, 0, 0, 64, 64);
+        if (total > 0) {
+            var label = total > 99 ? '99+' : String(total);
+            ctx.fillStyle = '#fa5151';
+            ctx.beginPath();
+            ctx.arc(50, 50, 14, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold ' + (total > 99 ? 11 : 15) + 'px Microsoft YaHei';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, 50, 51);
+        }
+        return cv.toDataURL('image/png');
+    }
+
+    // 上报未读汇总到主进程（托盘角标 + 悬停明细），总数增加时按需触发闪动；返回当前总数
+    function updateTrayBadge() {
+        if (!(window.desktop && window.desktop.setUnread)) return 0;
+        var total = 0;
+        var parts = [];
+        convList.forEach(function (cv) {
+            if (cv.unread > 0) {
+                total += cv.unread;
+                if (parts.length < 3) {
+                    // 会话名与列表同口径：群聊/好友备注优先，无备注回退用户名
+                    var name = cv.target === '' ? '群聊' : cv.target;
+                    if (cv.target !== '') {
+                        var convFriend = friendList.find(function (x) { return x.username === cv.target; });
+                        if (convFriend && convFriend.remark) name = convFriend.remark;
+                    }
+                    parts.push(name + '(' + cv.unread + ')');
+                }
+            }
+        });
+        if (parts.length > 3) parts.push('…');
+        var increased = total > lastTrayTotal && lastTrayTotal >= 0; // 总数增加=收到新消息（聚焦+当前会话时服务端已读归零，不会误闪）
+        lastTrayTotal = total;
+        window.desktop.setUnread({
+            total: total,
+            detail: parts.join(' '),
+            icon: buildTrayIconDataUrl(total)
+        });
+        // 新消息且窗口未聚焦/被隐藏 → 托盘闪动；聚焦状态下仅更新角标，不打扰
+        if (increased && (document.hidden || !windowFocused)) {
+            window.desktop.flashTray();
+        }
+        return total;
+    }
+
 
     function renderConvList() {
         // 阶段二十三：微信风格导航栏聊天图标未读角标（服务端归口，与会话列表同源汇总）

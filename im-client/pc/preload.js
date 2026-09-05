@@ -18,5 +18,13 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('shot:global-result', function (event, dataUrl) {
             callback(dataUrl);
         });
+    },
+    // 阶段三十七（第四期）：托盘未读提醒——渲染层上报未读汇总 {total, detail, icon}（icon 为合成角标图 dataURL）
+    setUnread: function (data) {
+        ipcRenderer.send('tray:unread', data);
+    },
+    // 阶段三十七（第四期）：新消息到达请求托盘闪动（主进程控制约 3 秒闪烁 + 任务栏橙色闪动）
+    flashTray: function () {
+        ipcRenderer.send('tray:flash');
     }
 });

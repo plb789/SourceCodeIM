@@ -41,6 +41,11 @@ function createWindow() {
     mainWindow.on('closed', function () {
         mainWindow = null;
     });
+
+    // 窗口聚焦后停止任务栏橙色闪动（托盘图标角标保持，由未读归零时清除）
+    mainWindow.on('focus', function () {
+        mainWindow.flashFrame(false);
+    });
 }
 
 function createTray() {
@@ -90,6 +95,48 @@ function captureScreen() {
 // 渲染进程主动抓屏（截图按钮入口）：invoke('shot:capture') → 返回 PNG dataURL
 ipcMain.handle('shot:capture', function () {
     return captureScreen();
+});
+
+// ===== 阶段三十七（第四期）：托盘未读提醒（微信同款：新消息闪动 + 悬停显示未读数 + 图标数字角标） =====
+var trayBadgeIcon = null; // 当前角标图标（渲染层 canvas 合成的 PNG dataURL），闪烁结束/未读清零时恢复
+var flashTimer = null;    // 托盘闪动定时器（避免重复起闪）
+
+// 未读数据上报：渲染层推送 {total, detail, icon}
+ipcMain.on('tray:unread', function (event, data) {
+    if (!tray || !data) return;
+    var total = data.total || 0;
+    trayBadgeIcon = data.icon || null;
+    // 悬停 tooltip：无未读显示应用名，有未读显示明细（渲染层生成，如"admin(2) 群聊(5)"）
+    tray.setToolTip(total > 0 ? '即时通讯（' + (data.detail || total + ' 条未读') + '）' : '即时通讯');
+    if (total > 0 && trayBadgeIcon) {
+        tray.setImage(nativeImage.createFromDataURL(trayBadgeIcon));
+    } else {
+        tray.setImage(nativeImage.createFromPath(APP_ICON));
+    }
+});
+
+// 新消息闪动：托盘图标交替隐/显约 3 秒后停止（微信同款节奏），任务栏按钮同步橙色闪动
+ipcMain.on('tray:flash', function () {
+    if (!tray) return;
+    if (mainWindow) mainWindow.flashFrame(true);
+    if (flashTimer) return; // 已在闪烁中：任务栏闪动状态保持即可，不重复起定时器
+    var shown = true;
+    var flashCount = 0;
+    flashTimer = setInterval(function () {
+        if (!tray) { clearInterval(flashTimer); flashTimer = null; return; }
+        shown = !shown;
+        tray.setImage(shown ? nativeImage.createFromPath(APP_ICON) : nativeImage.createEmpty());
+        flashCount++;
+        if (flashCount >= 10) { // 10 次 × 300ms ≈ 3 秒后停止，恢复角标图标
+            clearInterval(flashTimer);
+            flashTimer = null;
+            if (trayBadgeIcon) {
+                tray.setImage(nativeImage.createFromDataURL(trayBadgeIcon));
+            } else {
+                tray.setImage(nativeImage.createFromPath(APP_ICON));
+            }
+        }
+    }, 300);
 });
 
 app.whenReady().then(function () {
