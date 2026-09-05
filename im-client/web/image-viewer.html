@@ -122,6 +122,29 @@
         .iv-thumb:hover { opacity: 1; }
 
         .iv-thumb.active { border-color: #07c160; opacity: 1; }
+
+        /* ===== 阶段三十九：缩略图条自定义滚动条（替换系统默认样式） ===== */
+        /* 规范对齐全局滚动条（8px 细条+圆角+透明轨道），配色贴合查看器深色固定主题，hover 亮主题绿 */
+        .iv-thumbs::-webkit-scrollbar {
+            height: 8px;
+        }
+
+        .iv-thumbs::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .iv-thumbs::-webkit-scrollbar-thumb {
+            background: #3a3a3a;
+            border-radius: 4px;
+        }
+
+        .iv-thumbs::-webkit-scrollbar-thumb:hover {
+            background: #07c160;
+        }
+
+        .iv-thumbs::-webkit-scrollbar-corner {
+            background: transparent;
+        }
     </style>
 </head>
 <body>
