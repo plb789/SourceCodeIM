@@ -1291,6 +1291,8 @@
     IMSocket.on(MSG.FRIEND_LIST, function (msg) {
         try { friendList = JSON.parse(msg.content) || []; } catch (e) { friendList = []; }
         renderFriendList();
+        // 备注联动：好友列表（含备注）到达后同步刷新会话列表，保证通讯录改备注后会话列表名称即时同步
+        renderConvList();
         // 登录持久化联动：好友列表到达后刷新当前会话标题（刷新恢复会话时 FRIEND_LIST 晚于 LOGIN_RESP，
         // 标题先显示账号名，备注名/在线状态就绪后在此同步刷新）
         updateChatTitle();
@@ -1400,7 +1402,13 @@
         }
         convList.forEach(function (cv) {
             var isGroup = cv.target === '';
+            // 原实现：var convName = isGroup ? '群聊' : cv.target; 会话列表只显示用户名，通讯录修改备注后不同步
+            // 修复：与通讯录/聊天标题同口径——好友备注优先显示，无备注回退用户名
             var convName = isGroup ? '群聊' : cv.target;
+            if (!isGroup) {
+                var convFriend = friendList.find(function (x) { return x.username === cv.target; });
+                if (convFriend && convFriend.remark) convName = convFriend.remark;
+            }
             var li = document.createElement('li');
             li.className = 'conv-item' + (cv.pinned ? ' pinned' : '');
             if (currentChatUser === cv.target) li.classList.add('active');
@@ -1466,6 +1474,10 @@
                 convTarget = cv.target;
                 var pinItem = convMenu.querySelector('[data-action="pin"]');
                 pinItem.textContent = cv.pinned ? '取消置顶' : '置顶聊天';
+                // 设置备注项仅好友可见（群聊/陌生人无备注概念），右键时动态显隐
+                var remarkItem = convMenu.querySelector('[data-action="remark"]');
+                var convIsFriend = friendList.some(function (x) { return x.username === cv.target; });
+                remarkItem.classList.toggle('hidden', !convIsFriend);
                 convMenu.style.top = e.clientY + 'px';
                 convMenu.style.left = e.clientX + 'px';
                 convMenu.classList.remove('hidden');
@@ -1484,6 +1496,18 @@
             content: pin ? 'pin' : 'unpin'
         });
         convMenu.classList.add('hidden');
+    });
+    // 设置备注：复用 FRIEND_UPDATE 通道（与通讯录右键菜单/资料卡同口径），仅好友可用（右键时已动态显隐，此处兜底校验）
+    convMenu.querySelector('[data-action="remark"]').addEventListener('click', function () {
+        convMenu.classList.add('hidden');
+        var isFriend = friendList.some(function (x) { return x.username === convTarget; });
+        if (!isFriend) {
+            showToast('仅好友可设置备注');
+            return;
+        }
+        showPrompt('设置备注', '请输入好友备注名', function (remark) {
+            IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: convTarget, remark: remark });
+        });
     });
     // 清空聊天记录：服务端将消息标记为当前用户已删除（云端记录保留），本地同步清空当前视图
     convMenu.querySelector('[data-action="clear"]').addEventListener('click', function () {
