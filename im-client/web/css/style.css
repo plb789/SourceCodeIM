@@ -1930,3 +1930,137 @@ html, body {
     color: #fff;
 }
 
+/* ===== 阶段三十五：截图编辑器（全屏遮罩 + 工具栏，面板色跟随主题变量） ===== */
+.shot-editor {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(0, 0, 0, 0.55); /* 抓图遮罩压暗层（功能性，不随主题） */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.shot-editor.hidden {
+    display: none;
+}
+
+/* 画布容器：底图/标注层/遮罩层三合一（尺寸由 JS 按视口适配设置） */
+.shot-canvas-wrap {
+    position: relative;
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+    background: #000;
+}
+
+.shot-canvas-wrap canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+}
+
+/* 工具栏：面板色/边框/激活态全部走主题变量，深浅色自动跟随 */
+.shot-toolbar {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.shot-tool {
+    width: 34px;
+    height: 34px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.shot-tool:hover {
+    background: var(--hover);
+}
+
+.shot-tool.active {
+    color: var(--primary);
+    background: var(--hover);
+}
+
+/* 标注颜色点（微信同款红/黄/蓝/绿/黑，选中描主题绿边） */
+.shot-color-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    margin: 0 3px;
+    flex-shrink: 0;
+}
+
+.shot-color-dot.active {
+    border-color: var(--primary);
+}
+
+.shot-sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin: 0 8px;
+}
+
+.shot-btn {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+    margin-left: 4px;
+}
+
+.shot-btn:hover {
+    background: var(--hover);
+}
+
+.shot-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.shot-btn.primary:hover {
+    opacity: 0.85;
+    background: var(--primary);
+}
+
+/* 文字工具浮动输入框（自定义实现，禁止系统弹窗） */
+.shot-text-input {
+    position: fixed;
+    z-index: 3100;
+    min-width: 180px;
+    padding: 6px 10px;
+    font-size: 14px;
+    border: 1px solid var(--primary);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    outline: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.shot-text-input.hidden {
+    display: none;
+}
+

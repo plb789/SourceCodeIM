@@ -1236,17 +1236,49 @@
                 canvas.height = video.videoHeight;
                 canvas.getContext('2d').drawImage(video, 0, 0);
                 stream.getTracks().forEach(function (t) { t.stop(); });
+                // 原实现：截帧后整屏直接发送，无选区与标注能力
+                // canvas.toBlob(function (blob) {
+                //     if (!blob) { showToast('截图失败'); return; }
+                //     var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
+                //     // 阶段二十六：群聊视图截图走 HTTP 上传链路（截图即图片），私聊仍走分片协议
+                //     if (currentChatUser === '') sendGroupImage(shot);
+                //     else sendFile(shot);
+                // }, 'image/png');
+                // 阶段三十四：截帧后进入截图编辑器（选区/矩形/椭圆/箭头/画笔/文字/马赛克/撤销），确认后再发送
                 canvas.toBlob(function (blob) {
                     if (!blob) { showToast('截图失败'); return; }
-                    var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
-                    // 阶段二十六：群聊视图截图走 HTTP 上传链路（截图即图片），私聊仍走分片协议
-                    if (currentChatUser === '') sendGroupImage(shot);
-                    else sendFile(shot);
+                    ScreenshotEditor.open(blob, sendScreenshotFile);
                 }, 'image/png');
             };
         }).catch(function () {
             showToast('已取消截图');
         });
+    });
+
+    // ===== 阶段三十五：截图编辑器确认后的统一发送入口（群聊走 HTTP 上传链路，私聊走分片/直传分流） =====
+    function sendScreenshotFile(blob) {
+        var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
+        if (currentChatUser === '') sendGroupImage(shot);
+        else sendFile(shot);
+    }
+
+    // ===== 阶段三十四：Ctrl+V 粘贴剪贴板截图（微信式：截图后直接粘贴发送） =====
+    // 仅拦截剪贴板中的图片项（文本粘贴不受影响），进入截图编辑器可标注或直接发送
+    document.addEventListener('paste', function (e) {
+        if (!IMSocket.isConnected()) return; // 未登录不拦截
+        if (chatView.classList.contains('hidden')) return; // 登录页不拦截
+        if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type && items[i].type.indexOf('image/') === 0) {
+                var file = items[i].getAsFile();
+                if (!file) return;
+                e.preventDefault(); // 阻止图片按默认行为插入输入框
+                ScreenshotEditor.open(file, sendScreenshotFile);
+                return;
+            }
+        }
     });
 
     // ===== 清空当前聊天显示（保留云端记录） =====
