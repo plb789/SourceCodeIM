@@ -2170,7 +2170,9 @@
                 if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
             });
             img.addEventListener('click', function () {
-                window.open(meta.url, '_blank');
+                // 原实现：window.open(meta.url, '_blank') 弹裸图片窗口
+                // 阶段三十八：历史图片消息统一走图片查看器（与实时气泡一致）
+                openImageViewer(meta.url || '');
             });
             bubbleImg.appendChild(img);
             body.appendChild(bubbleImg);
@@ -2851,6 +2853,23 @@
         return messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
     }
 
+    // 阶段三十八：打开图片查看器（PC 端 Electron 无边框工具栏窗口 / Web 端浏览器新标签，同套工具栏页面）
+    // 收集当前会话 DOM 内全部 http 图片作为翻页/缩略图列表；blob:// 仅本页面有效，跨窗口加载失败需过滤
+    function openImageViewer(url) {
+        var urls = [];
+        document.querySelectorAll('.chat-image').forEach(function (im) {
+            var u = im.getAttribute('src') || '';
+            if (u && u.indexOf('blob:') !== 0 && urls.indexOf(u) === -1) urls.push(u);
+        });
+        var idx = urls.indexOf(url);
+        if (window.desktop && window.desktop.openImageViewer) {
+            window.desktop.openImageViewer({ url: url, list: urls, index: idx });
+        } else {
+            window.__imageViewerList = urls; // Web 端查看器页从 opener 拉取列表
+            window.open('/image-viewer.html?url=' + encodeURIComponent(url), '_blank');
+        }
+    }
+
     function appendImageMsg(fromUser, url, type, isPrivate) {
         // 贴底状态必须在插入前快照：原实现 load 时再判 isNearBottom()，此时图片已把列表撑高
         // （gap 瞬间≈图片高度>80px 容差），会被误判为"翻历史中"而放弃滚底，导致图片仍只显示一半
@@ -2879,7 +2898,9 @@
             if (stick) messageList.scrollTop = messageList.scrollHeight;
         });
         img.addEventListener('click', function () {
-            window.open(url, '_blank'); // 点击查看大图
+            // 原实现：window.open(url, '_blank') 直接弹裸图片窗口，无工具栏
+            // 阶段三十八：改走图片查看器（置顶/翻页/缩略图/缩放/旋转/另存为）
+            openImageViewer(url);
         });
         bubble.appendChild(img);
         // 头像缺失修复：与文字消息一致，头像 + 内容列微信风格结构

@@ -1,6 +1,8 @@
 // main.js - Electron 主进程：窗口创建、桌面通知、托盘驻留
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen } = require('electron');
+// 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog } = require('electron');
+const fs = require('fs');
 const path = require('path');
 
 let mainWindow = null;
@@ -103,6 +105,76 @@ function captureScreen() {
 // 渲染进程主动抓屏（截图按钮入口）：invoke('shot:capture') → 返回 PNG dataURL
 ipcMain.handle('shot:capture', function () {
     return captureScreen();
+});
+
+// ===== 阶段三十八：图片查看器窗口（QQ 同款：无边框自绘工具栏，置顶/翻页/缩略图/缩放/旋转/另存为） =====
+var viewerWin = null; // 查看器窗口（单例复用：重复打开仅刷新内容）
+
+function ensureViewerWindow() {
+    if (viewerWin) return viewerWin;
+    viewerWin = new BrowserWindow({
+        width: 900,
+        height: 640,
+        minWidth: 480,
+        minHeight: 360,
+        show: false,
+        frame: false,          // 无边框：工具栏自绘（置顶/翻页/缩放等），工具栏区域可拖动窗口
+        backgroundColor: '#1e1e1e',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    viewerWin.loadURL(SERVER_URL + 'image-viewer.html');
+    viewerWin.on('close', function (e) {
+        // 关闭改为隐藏复用：保留窗口避免频繁重建（页面内 Esc/关闭按钮走同一隐藏逻辑）
+        if (viewerWin.isVisible()) {
+            e.preventDefault();
+            viewerWin.hide();
+        }
+    });
+    viewerWin.on('closed', function () { viewerWin = null; });
+    return viewerWin;
+}
+
+// 打开图片查看器：渲染层推送 {url, list, index}（list 为当前会话全部图片 URL，支持翻页/缩略图）
+ipcMain.on('image:open', function (event, data) {
+    var win = ensureViewerWindow();
+    var show = function () {
+        win.webContents.send('viewer:load', data);
+        win.show();
+        win.focus();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 查看器置顶切换（工具栏图钉按钮）
+ipcMain.on('image:set-always-on-top', function (event, on) {
+    if (viewerWin) viewerWin.setAlwaysOnTop(!!on);
+});
+
+// 查看器隐藏（页面 Esc/关闭按钮，与 close 拦截同逻辑）
+ipcMain.on('image:close', function () {
+    if (viewerWin) viewerWin.hide();
+});
+
+// 查看器另存为：渲染层已把图片转 PNG dataURL，主进程弹原生保存对话框后写文件
+ipcMain.handle('image:save', async function (event, data) {
+    if (!data || !data.dataUrl) return false;
+    var win = BrowserWindow.fromWebContents(event.sender);
+    var r = await dialog.showSaveDialog(win, {
+        defaultPath: data.name || 'img.png',
+        filters: [{ name: 'PNG 图片', extensions: ['png'] }]
+    });
+    if (r.canceled || !r.filePath) return false;
+    var base64 = data.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    await fs.promises.writeFile(r.filePath, Buffer.from(base64, 'base64'));
+    return true;
 });
 
 // ===== 阶段三十七（第四期）：托盘未读提醒（微信同款：新消息闪动 + 悬停显示未读数 + 图标数字角标） =====

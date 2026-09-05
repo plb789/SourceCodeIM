@@ -51,5 +51,28 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('tray:open-conv', function (event, target) {
             callback(target);
         });
+    },
+    // ===== 阶段三十八：图片查看器窗口（查看器页与主窗口共用本 preload） =====
+    // 请求打开查看器：data = {url, list, index}（list 为当前会话全部图片 URL，支持翻页/缩略图）
+    openImageViewer: function (data) {
+        ipcRenderer.send('image:open', data);
+    },
+    // 查看器页订阅主进程推送的图片数据
+    onViewerLoad: function (callback) {
+        ipcRenderer.on('viewer:load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 查看器置顶切换
+    setViewerAlwaysOnTop: function (on) {
+        ipcRenderer.send('image:set-always-on-top', on);
+    },
+    // 查看器隐藏（Esc/关闭按钮，窗口复用不销毁）
+    closeViewer: function () {
+        ipcRenderer.send('image:close');
+    },
+    // 另存为：data = {dataUrl, name}，主进程弹原生保存对话框后写文件
+    saveViewerImage: function (data) {
+        return ipcRenderer.invoke('image:save', data);
     }
 });

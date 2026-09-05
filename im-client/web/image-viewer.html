@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>图片查看</title>
+    <style>
+        /* 深色固定主题：图片查看器标准黑色沉浸背景（QQ 同款） */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #1e1e1e;
+            overflow: hidden;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        /* ===== 顶部工具栏：Electron 无边框窗口的拖动区（按钮 no-drag） ===== */
+        .iv-toolbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            background: rgba(32, 32, 32, 0.95);
+            border-bottom: 1px solid #333;
+            -webkit-app-region: drag;
+            z-index: 10;
+        }
+
+        .iv-btn {
+            -webkit-app-region: no-drag;
+            width: 34px;
+            height: 34px;
+            margin: 0 2px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #cccccc;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .iv-btn:hover { background: #3a3a3a; color: #ffffff; }
+
+        .iv-btn.active { background: #07c160; color: #ffffff; }
+
+        .iv-sep {
+            width: 1px;
+            height: 20px;
+            margin: 0 6px;
+            background: #444;
+        }
+
+        .iv-spacer { flex: 1; }
+
+        .iv-title {
+            color: #999;
+            font-size: 12px;
+            margin-right: 8px;
+            -webkit-app-region: no-drag;
+        }
+
+        /* ===== 图片画布区 ===== */
+        .iv-stage {
+            position: absolute;
+            top: 44px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            cursor: grab;
+        }
+
+        .iv-stage.dragging { cursor: grabbing; }
+
+        .iv-stage img {
+            max-width: 100%;
+            max-height: 100%;
+            transition: transform 0.08s ease-out;
+            will-change: transform;
+        }
+
+        /* ===== 底部缩略图条（缩略图按钮切换显隐） ===== */
+        .iv-thumbs {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(32, 32, 32, 0.95);
+            border-top: 1px solid #333;
+            overflow-x: auto;
+            z-index: 10;
+        }
+
+        .iv-thumbs.visible { display: flex; }
+
+        .iv-thumb {
+            height: 52px;
+            min-width: 52px;
+            border-radius: 4px;
+            border: 2px solid transparent;
+            object-fit: cover;
+            cursor: pointer;
+            opacity: 0.75;
+            flex-shrink: 0;
+        }
+
+        .iv-thumb:hover { opacity: 1; }
+
+        .iv-thumb.active { border-color: #07c160; opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="iv-toolbar" id="toolbar">
+        <button class="iv-btn" id="btnPin" title="置顶窗口">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 3v2l-1 1v5l3 2v2h-5v6l-1 1-1-1v-6H6v-2l3-2V6L8 5V3h8z"/></svg>
+        </button>
+        <div class="iv-sep"></div>
+        <button class="iv-btn" id="btnPrev" title="上一张（←）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <button class="iv-btn" id="btnNext" title="下一张（→）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+        <button class="iv-btn" id="btnThumbs" title="缩略图列表">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 4h5v5H4zM10.5 4h5v5h-5zM17 4h5v5h-5zM4 10.5h5v5H4zM10.5 10.5h5v5h-5zM17 10.5h5v5h-5zM4 17h5v5H4zM10.5 17h5v5h-5zM17 17h5v5h-5z"/></svg>
+        </button>
+        <div class="iv-sep"></div>
+        <button class="iv-btn" id="btnZoomIn" title="放大（+）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L21 21M10.5 7.5v6M7.5 10.5h6"/></svg>
+        </button>
+        <button class="iv-btn" id="btnZoomOut" title="缩小（-）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM15.5 15.5L21 21M7.5 10.5h6"/></svg>
+        </button>
+        <button class="iv-btn" id="btnFit" title="适应窗口（双击图片切换）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+        <button class="iv-btn" id="btnRotate" title="旋转 90°（R）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
+        </button>
+        <div class="iv-sep"></div>
+        <span class="iv-title" id="ivInfo">1 / 1</span>
+        <div class="iv-spacer"></div>
+        <button class="iv-btn" id="btnSave" title="另存为（Ctrl+S）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg>
+        </button>
+        <button class="iv-btn" id="btnClose" title="关闭（Esc）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+    </div>
+    <div class="iv-stage" id="stage"><img id="viewerImg" src="" alt=""></div>
+    <div class="iv-thumbs" id="thumbs"></div>
+    <!-- 阶段三十八：图片查看器窗口逻辑（置顶/翻页/缩略图/缩放/1:1适应/旋转/另存为；裁剪标注 OCR 第二期） -->
+    <script src="js/image-viewer.js?v=1"></script>
+</body>
+</html>
