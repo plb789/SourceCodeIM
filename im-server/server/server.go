@@ -300,8 +300,11 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	s.hub.Broadcast(data)
 
 	// 更新所有在线用户的群聊会话并推送会话列表（离线用户登录时确保存在）
+	// 阶段四十补充：群聊路径同样走会话摘要归口——引用消息 content 为信封 JSON，
+	// 原实现：touchConversation 直存 msg.Content，JSON 原串显示在会话列表（私聊路径已归口，群聊路径漏改）
+	summary := messageSummary(msg.Content)
 	for _, name := range s.hub.Usernames() {
-		s.touchConversation(name, "", msg.Content)
+		s.touchConversation(name, "", summary)
 		s.notifyConvUpdate(name)
 	}
 

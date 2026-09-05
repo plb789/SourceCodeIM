@@ -69,6 +69,13 @@ func (s *Server) pushConvList(c *Client) {
 					[]int{2, 4, 5}, cv.Target, c.username, false, false, c.username).
 				Count(&unread)
 		}
+		// 阶段四十补充：读取侧摘要归口自愈——历史引用消息曾把 JSON 原串直存进群聊摘要，
+		// 推送时统一再走一次 messageSummary，坏数据同时回写修正，避免旧摘要一直显示 JSON
+		healed := messageSummary(cv.LastMsg)
+		if healed != cv.LastMsg {
+			cv.LastMsg = healed
+			store.DB.Model(&model.Conversation{}).Where("id = ?", cv.ID).Update("last_msg", healed)
+		}
 		infos = append(infos, ConvInfo{
 			Target:   cv.Target,
 			LastMsg:  cv.LastMsg,
