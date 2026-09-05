@@ -1023,6 +1023,13 @@
             if (mineEl) {
                 mineEl.setAttribute('data-msg-id', msg.msg_id);
                 mineEl.setAttribute('data-file-id', msg.file_id);
+                // 阶段三十八：图片气泡 src 从 blob: 回填为服务器 URL——blob 仅本页面有效，
+                // 图片查看器（独立窗口）收集列表时跨窗口加载失败，导致自己发的图进不了翻页/缩略图列表
+                // 原实现：仅回填 msg_id/file_id，img.src 永远停留在 blob:
+                var mImg = mineEl.querySelector('.chat-image');
+                if (mImg && meta.url && mImg.getAttribute('src') && mImg.getAttribute('src').indexOf('blob:') === 0) {
+                    mImg.setAttribute('src', meta.url);
+                }
                 // 阶段三十二：分片直传气泡为进度形态，回填后移除进度条/百分比/取消按钮（转为终态文件卡片）
                 var prog = mineEl.querySelector('.file-progress');
                 if (prog) prog.remove();
@@ -2070,6 +2077,11 @@
             records.forEach(function (r) { renderHistoryRecord(r, messageList.firstChild); });
             // 用高度差补偿滚动位置，避免 prepend 后视口跳动
             messageList.scrollTop = messageList.scrollHeight - prevHeight;
+            // 阶段三十八：图片查看器请求的更早历史——本页图片推回查看器（翻页/缩略图联动）
+            if (viewerMorePending) {
+                viewerMorePending = false;
+                pushViewerOlderImages(records);
+            }
             return;
         }
 
@@ -2854,21 +2866,107 @@
     }
 
     // 阶段三十八：打开图片查看器（PC 端 Electron 无边框工具栏窗口 / Web 端浏览器新标签，同套工具栏页面）
-    // 收集当前会话 DOM 内全部 http 图片作为翻页/缩略图列表；blob:// 仅本页面有效，跨窗口加载失败需过滤
+    // 收集当前会话 DOM 内全部图片作为翻页/缩略图列表：
+    // - http(s) 图直接入列（跨窗口可用）
+    // - blob: 图（刚发送落库回填前/本地预览）跨窗口加载失败，转 dataURL 后入列（按 DOM 顺序保序）
+    function blobToDataUrl(u) {
+        return fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
+            return new Promise(function (res) {
+                var fr = new FileReader();
+                fr.onload = function () { res(fr.result); };
+                fr.onerror = function () { res(''); };
+                fr.readAsDataURL(b);
+            });
+        }).catch(function () { return ''; });
+    }
+
     function openImageViewer(url) {
-        var urls = [];
+        var ordered = [];
+        var jobs = [];
         document.querySelectorAll('.chat-image').forEach(function (im) {
             var u = im.getAttribute('src') || '';
-            if (u && u.indexOf('blob:') !== 0 && urls.indexOf(u) === -1) urls.push(u);
+            if (!u) return;
+            var i = ordered.length;
+            ordered.push(null); // 占位保序（DOM 顺序即时间顺序）
+            if (u.indexOf('blob:') === 0) {
+                jobs.push(blobToDataUrl(u).then(function (d) { ordered[i] = d || ''; }));
+            } else {
+                ordered[i] = u;
+            }
         });
-        var idx = urls.indexOf(url);
-        if (window.desktop && window.desktop.openImageViewer) {
-            window.desktop.openImageViewer({ url: url, list: urls, index: idx });
-        } else {
-            window.__imageViewerList = urls; // Web 端查看器页从 opener 拉取列表
-            window.open('/image-viewer.html?url=' + encodeURIComponent(url), '_blank');
+        Promise.all(jobs).then(function () {
+            // 保序去重（同 URL 或同内容 dataURL 只留第一张）
+            var list = [];
+            ordered.forEach(function (u) {
+                if (u && list.indexOf(u) === -1) list.push(u);
+            });
+            // 点击目标是 blob 时先转 dataURL 再定位（blob 字符串在列表中找不到）
+            var locate = Promise.resolve(url);
+            if (url && url.indexOf('blob:') === 0) {
+                locate = blobToDataUrl(url);
+            }
+            locate.then(function (target) {
+                var idx = list.indexOf(target);
+                if (idx === -1) {
+                    if (target) { list.unshift(target); idx = 0; }
+                    else idx = 0;
+                }
+                if (window.desktop && window.desktop.openImageViewer) {
+                    window.desktop.openImageViewer({ url: target, list: list, index: idx });
+                } else {
+                    window.__imageViewerList = list; // Web 端查看器页从 opener 拉取列表
+                    window.open('/image-viewer.html?url=' + encodeURIComponent(target), '_blank');
+                }
+            });
+        });
+    }
+
+    // ===== 查看器历史联动：查看器翻到列表头部时向主窗口请求更早图片 =====
+    // Electron：desktop.onViewerNeedMore 订阅（主进程转发查看器请求）；拉取复用 HISTORY 翻页链路
+    // （page+1 请求在 HISTORY_RESP page>1 分支渲染 DOM 后，检测 pending 标志把本页图片推回查看器）
+    var viewerMorePending = false; // 查看器请求更早图片中（HISTORY_RESP 到达时消费）
+    var viewerWebCallback = null;  // Web 端查看器回调（opener 桥直调）
+
+    function pushViewerOlderImages(records) {
+        var urls = [];
+        records.forEach(function (r) {
+            if (r.msg_type !== 4) return;
+            var m = {};
+            try { m = JSON.parse(r.content || '{}'); } catch (e) {}
+            if (m.url && urls.indexOf(m.url) === -1) urls.push(m.url);
+        });
+        if (!urls.length) return;
+        if (window.desktop && window.desktop.pushViewerImages) {
+            window.desktop.pushViewerImages(urls); // PC 端：主进程转发查看器窗口
+        }
+        if (viewerWebCallback) {
+            var cb = viewerWebCallback;
+            viewerWebCallback = null;
+            cb(urls); // Web 端：opener 桥回调
         }
     }
+
+    if (window.desktop && window.desktop.onViewerNeedMore) {
+        window.desktop.onViewerNeedMore(function () {
+            viewerMorePending = true;
+            // 复用滚动加载翻页链路（无更多历史时 HISTORY_RESP 空列表会自然终止，查看器侧去重兜底）
+            var msg = { msg_type: MSG.HISTORY, page: historyPage + 1, page_size: PAGE_SIZE };
+            if (currentChatUser !== '') msg.to_user = currentChatUser;
+            IMSocket.send(msg);
+        });
+    }
+
+    // Web 浏览器端：查看器页（window.open 新标签）通过 opener 桥请求更早图片
+    // （与上方 desktop 订阅同一拉取链路，回调用 viewerWebCallback 承接）
+    window.__imageViewerBridge = {
+        requestOlder: function (cb) {
+            viewerWebCallback = cb;
+            viewerMorePending = true;
+            var msg = { msg_type: MSG.HISTORY, page: historyPage + 1, page_size: PAGE_SIZE };
+            if (currentChatUser !== '') msg.to_user = currentChatUser;
+            IMSocket.send(msg);
+        }
+    };
 
     function appendImageMsg(fromUser, url, type, isPrivate) {
         // 贴底状态必须在插入前快照：原实现 load 时再判 isNearBottom()，此时图片已把列表撑高

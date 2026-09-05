@@ -55,6 +55,55 @@
         updateInfo();
     }
 
+    // ===== 阶段三十八：向主窗口请求更早历史图片（翻到列表头部时触发，联动翻页/缩略图） =====
+    // PC 端走 desktop IPC（查看器→主进程→主窗口 HISTORY 翻页→主进程回推）；Web 端走 opener 桥直调
+    var noMoreOlder = false;  // 已到最早记录（服务端空批后置位，不再重复请求）
+    var fetchingOlder = false; // 防重入
+    var moreCallback = null;   // 本轮请求的回调槽位（监听器只注册一次，避免累积）
+
+    function fetchOlder() {
+        if (fetchingOlder || noMoreOlder) return;
+        fetchingOlder = true;
+        moreCallback = function (urls) {
+            fetchingOlder = false;
+            if (!urls || !urls.length) { noMoreOlder = true; return; }
+            // 新图片按时间序插到列表头部（去重），当前显示不变（索引右移）
+            var added = 0;
+            urls.forEach(function (u) {
+                if (list.indexOf(u) === -1) {
+                    list.unshift(u);
+                    added++;
+                }
+            });
+            if (added) {
+                index += added;
+                renderThumbs();
+            } else {
+                noMoreOlder = true; // 本批全是已加载过的，视为已到头
+            }
+        };
+        if (window.desktop && window.desktop.viewerNeedMore) {
+            window.desktop.viewerNeedMore();
+        } else if (window.opener && window.opener.__imageViewerBridge) {
+            window.opener.__imageViewerBridge.requestOlder(moreCallback);
+        } else {
+            moreCallback = null;
+            fetchingOlder = false;
+            noMoreOlder = true; // 无桥接能力（直接打开的页面）：不联动
+        }
+    }
+
+    // PC 端：主窗口推送的更早图片批（监听器仅注册一次，经 moreCallback 槽位分发本轮回调）
+    if (window.desktop && window.desktop.onViewerMore) {
+        window.desktop.onViewerMore(function (urls) {
+            if (moreCallback) {
+                var cb = moreCallback;
+                moreCallback = null;
+                cb(urls);
+            }
+        });
+    }
+
     // 图片加载完成后按当前模式适配（fit=true 重算基准并复位偏移）
     img.addEventListener('load', function () {
         calcBaseFit();
@@ -83,7 +132,10 @@
     }
 
     // ===== 工具栏事件 =====
-    document.getElementById('btnPrev').addEventListener('click', function () { show(index - 1); });
+    document.getElementById('btnPrev').addEventListener('click', function () {
+        if (index <= 0) fetchOlder(); // 已到列表头部：向主窗口请求更早历史图片（加载后继续翻）
+        show(index - 1);
+    });
     document.getElementById('btnNext').addEventListener('click', function () { show(index + 1); });
     document.getElementById('btnZoomIn').addEventListener('click', function () { zoomBy(1.25); });
     document.getElementById('btnZoomOut').addEventListener('click', function () { zoomBy(0.8); });
@@ -178,7 +230,10 @@
 
     // ===== 键盘快捷键 =====
     window.addEventListener('keydown', function (e) {
-        if (e.key === 'ArrowLeft') show(index - 1);
+        if (e.key === 'ArrowLeft') {
+            if (index <= 0) fetchOlder(); // 键盘翻页同款联动
+            show(index - 1);
+        }
         else if (e.key === 'ArrowRight') show(index + 1);
         else if (e.key === 'Escape') {
             if (window.desktop && window.desktop.closeViewer) window.desktop.closeViewer();

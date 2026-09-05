@@ -74,5 +74,25 @@ contextBridge.exposeInMainWorld('desktop', {
     // 另存为：data = {dataUrl, name}，主进程弹原生保存对话框后写文件
     saveViewerImage: function (data) {
         return ipcRenderer.invoke('image:save', data);
+    },
+    // 查看器请求更早历史图片（查看器 → 主窗口拉取 → 主进程回推 viewer:more）
+    viewerNeedMore: function () {
+        ipcRenderer.send('image:need-more');
+    },
+    // 主聊天窗口订阅：查看器的更早图片请求（主进程转发）
+    onViewerNeedMore: function (callback) {
+        ipcRenderer.on('viewer:need-more', function () {
+            callback();
+        });
+    },
+    // 主聊天窗口推送一批更早历史图片给查看器
+    pushViewerImages: function (urls) {
+        ipcRenderer.send('image:more', urls);
+    },
+    // 查看器订阅：主窗口推送的更早历史图片列表
+    onViewerMore: function (callback) {
+        ipcRenderer.on('viewer:more', function (event, urls) {
+            callback(urls);
+        });
     }
 });

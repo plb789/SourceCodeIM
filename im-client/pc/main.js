@@ -177,6 +177,16 @@ ipcMain.handle('image:save', async function (event, data) {
     return true;
 });
 
+// 查看器请求更早历史图片：转发主聊天窗口（chat.js 走 HISTORY 翻页拉取后回推）
+ipcMain.on('image:need-more', function () {
+    if (mainWindow) mainWindow.webContents.send('viewer:need-more');
+});
+
+// 主聊天窗口推送一批更早历史图片：转发查看器窗口（列表头部插入，联动翻页/缩略图）
+ipcMain.on('image:more', function (event, urls) {
+    if (viewerWin) viewerWin.webContents.send('viewer:more', urls);
+});
+
 // ===== 阶段三十七（第四期）：托盘未读提醒（微信同款：新消息闪动 + 悬停显示未读数 + 图标数字角标） =====
 // 阶段三十七（第四期·增强）：悬停预览面板（QQ 同款：无边框自绘窗口，头像+摘要+未读数+可点击跳转会话）
 var trayBadgeIcon = null; // 当前角标图标（渲染层 canvas 合成的 PNG dataURL），闪烁结束/未读清零时恢复
