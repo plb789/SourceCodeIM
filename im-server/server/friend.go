@@ -55,7 +55,9 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 		})
 		s.sendToUser(msg.ToUser, data)
 	}
-	s.sendError(c, "好友申请已发送")
+	// 阶段四十二：申请回执文案统一为"好友申请已发送成功"（原"好友申请已发送"；
+	// 添加好友弹窗改版后客户端以此作为点选确认发送的成功提示，不再本地重复提示）
+	s.sendError(c, "好友申请已发送成功")
 	logger.Info("好友申请：%s -> %s", c.username, msg.ToUser)
 }
 

@@ -2280,6 +2280,70 @@ html, body {
     color: var(--text);
 }
 
+/* ===== 阶段四十二：添加好友弹窗（先搜索后申请：结果区条目样式同通讯录好友条目） ===== */
+.add-friend-result {
+    margin: 10px 0 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-bg);
+    overflow: hidden;
+}
+
+/* 状态提示行（搜索中/无该用户/不能添加自己/已是好友） */
+.add-friend-hint {
+    padding: 14px 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
+/* 结果条目：头像 + 主名 + 用户名副行（布局对齐通讯录 .user-item） */
+.add-friend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+}
+
+.add-friend-item:hover {
+    background: var(--hover);
+}
+
+/* 点选态：主题色描边高亮（选中后"确定"才可用） */
+.add-friend-item.selected {
+    background: var(--hover);
+    box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.add-friend-names {
+    flex: 1;
+    min-width: 0;
+}
+
+.add-friend-item .user-name {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.add-friend-sub {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 弹窗按钮禁用态（未点选用户时"确定"不可用） */
+.modal-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .pending-shot-del:hover {
     background: var(--active);
     color: var(--text);

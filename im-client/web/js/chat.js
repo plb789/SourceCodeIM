@@ -157,6 +157,8 @@
     });
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && !modalMask.classList.contains('hidden')) closeModal();
+        // 阶段四十二：Esc 关闭添加好友弹窗
+        if (e.key === 'Escape' && !addFriendMask.classList.contains('hidden')) closeAddFriendDialog();
         // 阶段三十：Esc 依次关闭资料卡/个人资料面板（后打开的优先关闭）
         if (e.key === 'Escape' && !friendCardMask.classList.contains('hidden')) closeFriendCard();
         else if (e.key === 'Escape' && !profilePanel.classList.contains('hidden')) closeProfilePanel();
@@ -406,6 +408,16 @@
         } else if (info.username === friendCardTarget) {
             fillFriendCard(info);
         }
+        // 阶段四十二：添加好友弹窗查询路由——查询结果填充搜索结果区（头像/昵称/用户名，点选后确认才发申请）
+        // 修复记录：此分支曾因同文件并行编辑相互覆盖而丢失，表现为搜索存在用户一直停在"搜索中..."
+        if (addFriendQuery && info.username === addFriendQuery) {
+            addFriendQuery = null;
+            if (info.is_friend) {
+                renderAddFriendHint('该用户已是你的好友'); // 已是好友：仅提示，"确定"保持禁用（服务端同样会拒绝重复申请）
+            } else {
+                renderAddFriendItem(info);
+            }
+        }
     });
 
     // ===== 阶段三十：好友资料卡（微信式，点击好友头像弹出） =====
@@ -482,15 +494,133 @@
     });
 
     // ===== 添加好友 =====
-    addFriendBtn.addEventListener('click', function () {
-        showPrompt('添加好友', '请输入对方用户名', function (name) {
-            if (name === IMSocket.getUsername()) {
-                showToast('不能添加自己为好友');
-                return;
-            }
-            IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: name, content: '请求添加你为好友' });
+    // 阶段四十二：添加好友弹窗改版（先搜索后申请）
+    // 原实现：showPrompt 输入用户名直接发申请，不存在的账号也提示"好友申请已发送"（误导）
+    // 新流程：输入 → 防抖后 PROFILE_QUERY 服务端查询 → 结果区展示头像/昵称条目（同通讯录样式）
+    //        → 点选该用户后"确定"才可用 → 确定发送申请；查无此人结果区显示"无该用户"
+    var addFriendMask = document.getElementById('add-friend-mask');
+    var addFriendInput = document.getElementById('add-friend-input');
+    var addFriendResult = document.getElementById('add-friend-result');
+    var addFriendOk = document.getElementById('add-friend-ok');
+    var addFriendCancel = document.getElementById('add-friend-cancel');
+    var addFriendQuery = null;      // 进行中的查询目标用户名（用于 PROFILE_RESP/ERROR 路由到本弹窗）
+    var addFriendFound = null;      // 已点选的用户资料（PROFILE_RESP JSON）
+    var addFriendSearchTimer = null; // 输入防抖定时器
+
+    function openAddFriendDialog() {
+        addFriendInput.value = '';
+        addFriendResult.classList.add('hidden');
+        addFriendResult.innerHTML = '';
+        addFriendQuery = null;
+        addFriendFound = null;
+        addFriendOk.disabled = true;
+        addFriendMask.classList.remove('hidden');
+        setTimeout(function () { addFriendInput.focus(); }, 50);
+    }
+
+    function closeAddFriendDialog() {
+        addFriendMask.classList.add('hidden');
+        addFriendQuery = null;
+        addFriendFound = null;
+        if (addFriendSearchTimer) { clearTimeout(addFriendSearchTimer); addFriendSearchTimer = null; }
+    }
+
+    // 渲染提示行（搜索中/无该用户/不能添加自己/已是好友等纯文字状态）
+    function renderAddFriendHint(text) {
+        addFriendResult.classList.remove('hidden');
+        addFriendResult.innerHTML = '';
+        var hint = document.createElement('div');
+        hint.className = 'add-friend-hint';
+        hint.textContent = text;
+        addFriendResult.appendChild(hint);
+    }
+
+    // 渲染查询结果条目（样式同通讯录好友条目：头像+主名+用户名副行；点击选中后"确定"才可用）
+    function renderAddFriendItem(info) {
+        addFriendResult.classList.remove('hidden');
+        addFriendResult.innerHTML = '';
+        var item = document.createElement('div');
+        item.className = 'add-friend-item';
+        // 头像降级：有头像显示图片，无头像显示首字母占位（与通讯录 renderFriendList 同规则）
+        if (info.avatar) {
+            var av = document.createElement('img');
+            av.className = 'avatar';
+            av.src = info.avatar;
+            item.appendChild(av);
+        } else {
+            var ph = document.createElement('div');
+            ph.className = 'avatar placeholder';
+            ph.textContent = (info.nickname || info.username).charAt(0).toUpperCase();
+            item.appendChild(ph);
+        }
+        var nameBox = document.createElement('div');
+        nameBox.className = 'add-friend-names';
+        var mainName = document.createElement('div');
+        mainName.className = 'user-name';
+        mainName.textContent = info.nickname || info.username; // 主名：昵称优先（同通讯录备注/昵称优先规则）
+        var subName = document.createElement('div');
+        subName.className = 'add-friend-sub';
+        subName.textContent = '用户名：' + info.username;
+        nameBox.appendChild(mainName);
+        nameBox.appendChild(subName);
+        item.appendChild(nameBox);
+        // 点选：选中高亮，"确定"解禁（用户明确要求点选确认后才发送申请）
+        item.addEventListener('click', function () {
+            addFriendResult.querySelectorAll('.add-friend-item').forEach(function (el) { el.classList.remove('selected'); });
+            item.classList.add('selected');
+            addFriendFound = info;
+            addFriendOk.disabled = false;
         });
+        addFriendResult.appendChild(item);
+    }
+
+    // 查询用户：自己直接本地提示；否则 PROFILE_QUERY 服务端归口查询（查无此人服务端回 ERROR"用户不存在"）
+    function searchAddFriend() {
+        var name = addFriendInput.value.trim();
+        addFriendFound = null;
+        addFriendOk.disabled = true;
+        if (!name) {
+            addFriendQuery = null;
+            addFriendResult.classList.add('hidden');
+            addFriendResult.innerHTML = '';
+            return;
+        }
+        if (name === IMSocket.getUsername()) {
+            addFriendQuery = null;
+            renderAddFriendHint('不能添加自己为好友');
+            return;
+        }
+        addFriendQuery = name;
+        renderAddFriendHint('搜索中...');
+        IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: name });
+    }
+
+    addFriendBtn.addEventListener('click', openAddFriendDialog);
+    addFriendCancel.addEventListener('click', closeAddFriendDialog);
+    addFriendInput.addEventListener('input', function () {
+        clearTimeout(addFriendSearchTimer);
+        addFriendSearchTimer = setTimeout(searchAddFriend, 400); // 停止输入 400ms 后自动查询
     });
+    addFriendInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); clearTimeout(addFriendSearchTimer); searchAddFriend(); }
+        if (e.key === 'Escape') closeAddFriendDialog();
+    });
+    // 确定：向点选的用户发送好友申请（成功提示走服务端回执"好友申请已发送成功"）
+    addFriendOk.addEventListener('click', function () {
+        if (!addFriendFound) return;
+        IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: addFriendFound.username, content: '请求添加你为好友' });
+        closeAddFriendDialog();
+    });
+    // 原实现：showPrompt 直接发送申请，不校验用户是否存在
+    // addFriendBtn.addEventListener('click', function () {
+    //     showPrompt('添加好友', '请输入对方用户名', function (name) {
+    //         if (name === IMSocket.getUsername()) {
+    //             showToast('不能添加自己为好友');
+    //             return;
+    //         }
+    //         IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: name, content: '请求添加你为好友' });
+    //     });
+    // });
 
     // ===== 好友右键菜单：备注 / 拉黑 / 删除，均带自定义确认弹窗 =====
     friendMenu.querySelectorAll('.menu-item').forEach(function (item) {
@@ -1691,6 +1821,13 @@
     });
 
     IMSocket.on(MSG.ERROR, function (msg) {
+        // 阶段四十二：添加好友弹窗查询中收到"用户不存在"时定向显示在结果区（不弹全局 toast）
+        // 修复记录：此分支曾因同文件并行编辑相互覆盖而丢失，导致查无此人时一直停在"搜索中..."且无提示
+        if (addFriendQuery && !addFriendMask.classList.contains('hidden') && msg.content === '用户不存在') {
+            addFriendQuery = null;
+            renderAddFriendHint('无该用户');
+            return;
+        }
         showToast(msg.content);
     });
 
