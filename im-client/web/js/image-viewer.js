@@ -266,4 +266,55 @@
         var idx = openerList.indexOf(url);
         loadData({ url: url, list: openerList, index: idx });
     }
+    // ===== 阶段四十五：缩略图条自绘悬浮滚动条（横向，不占布局空间，无空隙） =====
+    // 原生滚动条已隐藏（见 image-viewer.html 阶段四十五样式），此处生成滑块浮层：
+    // 悬停浮现（CSS :hover，真实元素无伪元素滞留问题）、随滚动同步、可拖拽
+    (function () {
+        if (!thumbsEl) return;
+        var thumb = document.createElement('div');
+        thumb.className = 'osb-thumb';
+        thumbsEl.appendChild(thumb);
+        // 按横向滚动比例刷新滑块位置与长度（与主窗口纵向滑块逻辑一致）
+        function osbUpdate() {
+            var sw = thumbsEl.scrollWidth, cw = thumbsEl.clientWidth, sl = thumbsEl.scrollLeft;
+            if (sw <= cw + 1) { thumb.style.display = 'none'; return; }
+            thumb.style.display = 'block';
+            var w = Math.max(30, Math.round(cw * cw / sw)); // 滑块最小 30px，缩略图越多越短
+            var maxLeft = cw - w - 2; // 两端各留 2px 边距
+            var viewLeft = 2 + Math.round(sl / Math.max(1, sw - cw) * (maxLeft - 2));
+            // 关键：滚动容器内绝对定位基于内容坐标系（随内容滚动），必须加上 scrollLeft 才能固定在可视区
+            thumb.style.width = w + 'px';
+            thumb.style.left = (sl + viewLeft) + 'px';
+        }
+        thumbsEl.addEventListener('scroll', osbUpdate, { passive: true });
+        thumbsEl.addEventListener('load', osbUpdate, true); // 捕获阶段监听缩略图加载完成（宽度变化影响滚动范围）
+        if (window.ResizeObserver) new ResizeObserver(osbUpdate).observe(thumbsEl);
+        // renderThumbs 重建 innerHTML 会移除滑块节点：监听子节点变化自动补回并刷新
+        if (window.MutationObserver) {
+            new MutationObserver(function () {
+                if (!thumbsEl.contains(thumb)) thumbsEl.appendChild(thumb);
+                osbUpdate();
+            }).observe(thumbsEl, { childList: true });
+        }
+        // 滑块拖拽：按位移比例映射回 scrollLeft（比例与 osbUpdate 一致）
+        thumb.addEventListener('mousedown', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var startX = e.clientX, startLeft = thumbsEl.scrollLeft;
+            thumb.classList.add('osb-drag');
+            function osbMove(ev) {
+                var maxLeft = thumbsEl.clientWidth - thumb.offsetWidth - 2;
+                var dx = ev.clientX - startX;
+                thumbsEl.scrollLeft = startLeft + dx * (thumbsEl.scrollWidth - thumbsEl.clientWidth) / Math.max(1, maxLeft - 2);
+            }
+            function osbUp() {
+                thumb.classList.remove('osb-drag');
+                document.removeEventListener('mousemove', osbMove);
+                document.removeEventListener('mouseup', osbUp);
+            }
+            document.addEventListener('mousemove', osbMove);
+            document.addEventListener('mouseup', osbUp);
+        });
+        osbUpdate();
+    })();
 })();

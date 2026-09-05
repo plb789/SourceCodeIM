@@ -8,6 +8,11 @@ const path = require('path');
 let mainWindow = null;
 let tray = null;
 
+// 阶段四十五：禁用 Windows Fluent/Overlay 悬浮滚动条特性——新 Chromium 在滚轮滚动时会浮现原生悬浮滚动条，
+// 且该特性无视页面 ::-webkit-scrollbar 自定义样式，与自绘悬浮滑块叠加出现"同一条轨道两条滚动条"。
+// 禁用后原生滚动条完全由页面 CSS 控制（宽度归零），仅保留自绘滑块
+app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar,OverlayScrollbars');
+
 // 服务端地址（默认本地）
 const SERVER_URL = 'http://localhost:8888/';
 

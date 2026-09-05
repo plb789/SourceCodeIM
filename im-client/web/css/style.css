@@ -1420,38 +1420,63 @@ html, body {
     border-radius: 6px;
 }
 
-/* 阶段二十三：全局自定义滚动条（替换系统默认 15px 宽滚动条，微信风格细滚动条） */
+/* ===== 阶段四十五：自绘悬浮滚动条（微信同款：不占布局空间，列表与聊天区之间无空隙） =====
+   原方案（阶段二十三/四十四）：自定义 8px 原生滚动条——即使默认隐藏透明也预留 8px 布局位，
+   在滚动容器边缘形成空隙；现改为原生滚动条宽度归零 + JS 生成绝对定位滑块浮层（.osb-thumb），
+   浮层不占布局、默认透明不拦截点击，容器悬停（.sb-hover 由既有 JS 委托精确增删）时浮现可拖拽
+   原实现：
+   ::-webkit-scrollbar { width: 8px; height: 8px; }
+   ::-webkit-scrollbar-track { background: transparent; }
+   ::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+   .sb-hover::-webkit-scrollbar-thumb { background: rgba(138, 138, 138, 0.55); }
+   .sb-hover::-webkit-scrollbar-thumb:hover { background: rgba(179, 179, 179, 0.8); }
+   ::-webkit-scrollbar-corner { background: transparent; } */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 0 !important;
+    height: 0 !important;
 }
 
-::-webkit-scrollbar-track {
-    background: transparent;
+/* 现代标准属性兜底：Chromium 的 Win11 Fluent 悬浮滚动条会无视 ::-webkit-scrollbar 宽度归零，
+   滚轮滚动时浮现原生悬浮条造成"同轨道双滚动条"；scrollbar-width:none 可彻底禁用（含 Fluent），
+   自绘滑块为普通 DOM 元素不受影响 */
+* {
+    scrollbar-width: none;
 }
 
-/* 阶段四十四：滚动条微信化——默认隐藏滑块，鼠标移入滚动区域后显示，移出立即隐藏；
-   显隐改由 JS 给滚动容器打 .sb-hover 标记类控制（纯 CSS :hover 在 Chromium 滚动条伪元素上
-   存在滞留：拖动滑块后移出/快速划过时 hover 不重算，滑块不消失）
-   原实现：*:hover::-webkit-scrollbar-thumb 纯 CSS 悬停浮现（存在移出不隐藏问题） */
-::-webkit-scrollbar-thumb {
-    background: transparent;
-    border-radius: 4px;
-}
-
-/* 悬停标记类：滑块浮现（类由 JS mouseover/mouseout 精确增删）
-   阶段四十四：滑块增加透明度（#8a8a8a → rgba 半透明），视觉更轻盈不遮挡内容 */
-.sb-hover::-webkit-scrollbar-thumb {
-    background: rgba(138, 138, 138, 0.55);
-}
-
-/* 悬停标记下滑块自身 hover 加亮且透明度略降（更实，指示可拖拽） */
-.sb-hover::-webkit-scrollbar-thumb:hover {
-    background: rgba(179, 179, 179, 0.8);
-}
-
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-corner {
     background: transparent;
+}
+
+/* 悬浮滑块：挂在 body 上的 position:fixed 浮层（不在滚动容器内部——
+   容器内定位会随滚轮的合成器滚动先漂移再回弹，快速滚动时出现重影），默认透明不拦截点击 */
+.osb-thumb {
+    position: fixed;
+    width: 6px;
+    border-radius: 3px;
+    background: rgba(138, 138, 138, 0.55);
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+    z-index: 60;
+}
+
+/* 容器悬停时滑块浮现且可拖拽（.sb-show 由 JS 显隐标记联动增删） */
+.osb-thumb.sb-show {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* 滑块自身悬停/拖拽中：加亮更实（指示可拖拽）；拖拽中强制可见（鼠标快速甩动离开滑块也不消失） */
+.osb-thumb.sb-show:hover,
+.osb-thumb.osb-drag {
+    background: rgba(179, 179, 179, 0.85);
+}
+
+.osb-thumb.osb-drag {
+    opacity: 1 !important;
+    pointer-events: auto !important;
 }
 
 /* ===== 阶段二十九：新的朋友（微信式好友申请归口） ===== */

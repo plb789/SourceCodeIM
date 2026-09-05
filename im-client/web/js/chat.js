@@ -2304,6 +2304,9 @@
         if (f) {
             f.online = (msg.content === 'online');
             renderFriendList();
+            // 标题栏在线状态联动：当前打开的会话正是该好友时，同步刷新"在线/离线"显示
+            // 原实现：只更新好友列表，标题栏状态停留在打开会话时的旧值，出现"提示下线了但标题栏仍显示在线"
+            updateChatTitle();
         }
         // 阶段二十七：归属校验——上下线提示仅群聊视图显示全部成员，私聊视图仅显示会话对方，
         // 原实现：无校验，任何人的上下线提示都渲染进当前打开的无关会话，切换会话后提示消失（串窗）
@@ -3542,8 +3545,10 @@
         function sbScrollable(el) {
             return el.scrollHeight > el.clientHeight + 1;
         }
-        // 自触发点向上找最近的滚动容器（与 CSS :hover 命中语义一致）
+        // 自触发点向上找最近的滚动容器（与 CSS :hover 命中语义一致）；
+        // 滑块本身挂在 body 上（不在容器内），鼠标移到滑块上时映射回其宿主容器
         function sbFind(el) {
+            if (el && el._osbHost) return el._osbHost;
             while (el && el !== document.documentElement) {
                 if (sbScrollable(el)) return el;
                 el = el.parentElement;
@@ -3552,18 +3557,99 @@
         }
         document.addEventListener('mouseover', function (e) {
             var el = sbFind(e.target);
-            if (el === sbLast) return;
-            if (sbLast) sbLast.classList.remove('sb-hover');
+            if (el === sbLast) { if (el) clearTimeout(el._osbHideT); return; }
+            if (sbLast) sbScheduleHide(sbLast);
             sbLast = el;
-            if (sbLast) sbLast.classList.add('sb-hover');
+            if (sbLast) { clearTimeout(sbLast._osbHideT); sbMark(sbLast, true); }
         });
-        // 移出容器（relatedTarget 已不在容器内）立即取消标记，滑块隐藏
+        // 鼠标移出：不立即隐藏，延迟 180ms 后按浏览器真实悬停状态决定是否隐藏
+        // （容器与滑块任一处于悬停则保持显示）——彻底解决"移到滑块上→判定离开容器→隐藏→
+        // 露出容器→又判定悬停→再显示"的循环闪烁，滑块可稳定点击拖拽
         document.addEventListener('mouseout', function (e) {
             if (!sbLast) return;
-            if (!sbLast.contains(e.relatedTarget)) {
-                sbLast.classList.remove('sb-hover');
-                sbLast = null;
+            if (!sbLast.contains(e.relatedTarget) && !(e.relatedTarget && e.relatedTarget._osbHost === sbLast)) {
+                sbScheduleHide(sbLast);
             }
         });
+        function sbScheduleHide(el) {
+            clearTimeout(el._osbHideT);
+            el._osbHideT = setTimeout(function () {
+                if (sbLast === el) sbLast = null;
+                if (!el.matches(':hover') && !(el._osbThumb && el._osbThumb.matches(':hover'))) {
+                    sbMark(el, false);
+                } else if (el._osbThumb) {
+                    el._osbThumb.classList.add('sb-show'); // 仍在悬停则保持滑块可见
+                }
+            }, 180);
+        }
+        // 标记/取消标记：容器加 .sb-hover，自绘滑块（挂在 body 上的 fixed 浮层）同步加 .sb-show 控制显隐
+        function sbMark(el, on) {
+            el.classList.toggle('sb-hover', on);
+            if (el._osbThumb) el._osbThumb.classList.toggle('sb-show', on);
+        }
+
+        // ===== 阶段四十五：自绘悬浮滚动条（微信同款：不占布局空间，消除容器边缘空隙） =====
+        // 滑块挂载在 body 上（position:fixed 浮层）而非滚动容器内部：
+        // 滚轮滚动由合成器线程即时移动内容层，容器内绝对定位的滑块会随内容先漂移、下一帧才被主线程
+        // 修正回来，快速滚动时视觉上出现"重影"；fixed 浮层不受滚动位移影响，彻底消除
+        function initOsb(el) {
+            if (el._osb) return; // 防重复初始化
+            el._osb = true;
+            var thumb = document.createElement('div');
+            thumb.className = 'osb-thumb';
+            document.body.appendChild(thumb);
+            thumb._osbHost = el; // 反向引用：悬停/移出判定时把滑块映射回宿主容器（防闪烁）
+            el._osbThumb = thumb; // 供显隐标记联动（sbMark）
+            // 按滚动比例刷新滑块位置与长度（比例同步，微信同款）；fixed 定位基于容器可视区实时矩形
+            function osbUpdate() {
+                var sh = el.scrollHeight, ch = el.clientHeight, st = el.scrollTop;
+                if (sh <= ch + 1 || ch === 0) { thumb.style.display = 'none'; return; }
+                var rect = el.getBoundingClientRect();
+                if (rect.height === 0) { thumb.style.display = 'none'; return; }
+                thumb.style.display = 'block';
+                var h = Math.max(30, Math.round(ch * ch / sh)); // 滑块最小 30px，内容越多越短
+                var maxTop = ch - h - 2; // 上下各留 2px 边距
+                var viewTop = 2 + Math.round(st / Math.max(1, sh - ch) * (maxTop - 2));
+                thumb.style.height = h + 'px';
+                thumb.style.top = Math.round(rect.top + viewTop) + 'px';
+                thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
+            }
+            // 滚动同步：scroll 事件里只排 rAF，回调在"本轮渲染、绘制前"执行，与合成器滚动同帧，无滞后重影
+            el.addEventListener('scroll', function () {
+                if (!el._osbRaf) {
+                    el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
+                }
+            }, { passive: true });
+            if (window.ResizeObserver) new ResizeObserver(osbUpdate).observe(el); // 容器尺寸变化同步（窗口缩放/侧栏切换）
+            // 列表重渲染（innerHTML 置空）后同步滚动范围（滑块在 body 上不会被移除，无需补回）
+            if (window.MutationObserver) new MutationObserver(osbUpdate).observe(el, { childList: true });
+            el.addEventListener('load', osbUpdate, true); // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
+            // 滑块拖拽：按下后按位移比例映射回 scrollTop（比例与 osbUpdate 一致）
+            thumb.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var startY = e.clientY, startTop = el.scrollTop;
+                thumb.classList.add('osb-drag');
+                function osbMove(ev) {
+                    var maxTop = el.clientHeight - thumb.offsetHeight - 2;
+                    var dy = ev.clientY - startY;
+                    el.scrollTop = startTop + dy * (el.scrollHeight - el.clientHeight) / Math.max(1, maxTop - 2);
+                }
+                function osbUp() {
+                    thumb.classList.remove('osb-drag');
+                    document.removeEventListener('mousemove', osbMove);
+                    document.removeEventListener('mouseup', osbUp);
+                }
+                document.addEventListener('mousemove', osbMove);
+                document.addEventListener('mouseup', osbUp);
+            });
+            osbUpdate();
+        }
+        // 主窗口全部纵向滚动容器（与 style.css 中 overflow-y: auto 的面板一一对应）
+        ['.message-list', '.conv-list', '.user-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content']
+            .forEach(function (sel) {
+                var el = document.querySelector(sel);
+                if (el) initOsb(el);
+            });
     })();
 })();
