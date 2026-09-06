@@ -1,0 +1,12 @@
+{
+  "appId": "com.gengyang.im",
+  "appName": "即时通讯",
+  "webDir": "../web",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "http",
+    "allowNavigation": ["*"]
+  }
+}

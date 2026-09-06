@@ -2,9 +2,13 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>即时通讯</title>
-    <link rel="stylesheet" href="css/style.css?v=1.49">
+    <!-- 手机版 APP 壳引导（Capacitor 专用）：浏览器环境自动跳过，详见文件头注释 -->
+    <script src="js/app-shell.js?v=1.0"></script>
+    <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
+    <script src="js/mobile.js?v=1.2"></script>
+    <link rel="stylesheet" href="css/style.css?v=1.50">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>

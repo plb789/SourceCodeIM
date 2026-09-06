@@ -3277,3 +3277,216 @@ html, body {
     display: block;
 }
 
+
+
+/* ============================================================
+   微信手机版移动布局（html.m 由 js/mobile.js 维护：
+   Capacitor 原生环境恒为 m；浏览器窗口 ≤768px 响应式切换）
+   仅新增规则不改动 PC 端既有样式，PC/WEB 宽窗口自动旁路
+   ============================================================ */
+
+/* 移动端返回按钮：PC/WEB 端恒隐藏，html.m 下显示 */
+.mobile-back {
+    display: none;
+}
+
+html.m body {
+    overflow: hidden; /* 防整页滚动，视图内各自滚动 */
+}
+
+/* 消息气泡禁用系统长按选择/呼出菜单：与自定义长按菜单（mobile.js 合成 contextmenu）冲突 */
+html.m .message {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+
+/* 小屏手机登录视图：内容可能超高，改为顶部对齐可滚动 */
+html.m .login-view {
+    align-items: flex-start;
+    padding-top: 8vh;
+    overflow-y: auto;
+}
+
+/* ---- 1. 底部导航栏（原左侧图标栏横排置底，微信同款） ---- */
+html.m .nav-rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px env(safe-area-inset-bottom, 0px);
+    border-top: 1px solid var(--border);
+    z-index: 50;
+}
+
+html.m .nav-top {
+    width: auto;
+}
+
+/* 底部栏空间有限：隐藏用户名文本，保留头像入口（点击打开资料面板） */
+html.m .nav-rail .current-user {
+    display: none;
+}
+
+html.m .nav-rail .current-avatar {
+    width: 30px;
+    height: 30px;
+}
+
+html.m .nav-icons {
+    flex-direction: row;
+    gap: 36px;
+    margin-top: 0;
+}
+
+/* 竖条指示在横排布局下改为图标主题色高亮（active 已有 color: var(--primary)） */
+html.m .nav-icon.active::before {
+    display: none;
+}
+
+html.m .nav-icon:active,
+html.m .nav-btn:active {
+    background: var(--rail-hover, var(--hover));
+}
+
+html.m .nav-bottom {
+    margin-top: 0;
+    flex-direction: row;
+    gap: 4px;
+}
+
+/* ---- 2. 列表视图全屏（底部导航留白 + 安全区） ---- */
+html.m .sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+}
+
+html.m #list-panel.list-collapsed {
+    width: 100%;
+    border-right-width: 0;
+}
+
+/* 触屏列表项加大点击区 */
+html.m .user-item {
+    padding: 14px 16px;
+}
+
+/* ---- 3. 聊天视图全屏覆盖（滑入滑出，body.in-chat 由 js/mobile.js 维护） ---- */
+html.m .main-chat {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    transform: translateX(100%);
+    transition: transform 0.28s ease;
+}
+
+html.m body.in-chat .main-chat {
+    transform: translateX(0);
+}
+
+/* 列表折叠按钮为 PC 交互，移动端隐藏 */
+html.m #list-toggle-btn {
+    display: none;
+}
+
+/* 聊天头部：返回按钮 + 标题截断 */
+html.m .mobile-back {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    margin-left: -8px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+html.m .mobile-back:active {
+    opacity: 0.7;
+}
+
+html.m #chat-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 空间有限：状态副文本隐藏（微信手机版同款行为） */
+html.m .chat-status {
+    display: none;
+}
+
+/* ---- 4. 消息区与气泡 ---- */
+html.m .message-list {
+    padding: 12px 10px;
+}
+
+html.m .message {
+    max-width: 82%;
+}
+
+/* ---- 5. 输入区（微信手机版紧凑样式） ---- */
+/* 输入框高度拖拽条为 PC 交互，移动端隐藏 */
+html.m #input-resizer {
+    display: none;
+}
+
+/* 截图依赖 Electron API，移动端隐藏入口 */
+html.m #screenshot-btn {
+    display: none;
+}
+
+/* 键盘手势条安全区：输入区底部留白 */
+html.m .input-bar {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+}
+
+html.m #message-input {
+    height: 40px;
+    min-height: 40px;
+    max-height: 120px;
+}
+
+/* 键盘快捷键提示对触屏无意义 */
+html.m .input-hint {
+    display: none;
+}
+
+/* ---- 6. 表情面板宽度自适应（bottom 由现有布局基准，贴住输入区上方） ---- */
+html.m .emoji-panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    bottom: calc(132px + env(safe-area-inset-bottom, 0px));
+    max-height: 240px;
+}
+
+/* ---- 7. 弹窗/菜单触屏适配 ---- */
+html.m .modal-box {
+    max-width: 92vw;
+}
+
+html.m .toast {
+    max-width: 80vw;
+}
+
+/* 右键菜单（触屏长按合成）：防溢出 + 层级高于聊天视图 */
+html.m #msg-menu,
+html.m #conv-menu,
+html.m #friend-menu {
+    max-width: 60vw;
+    z-index: 3000;
+}
