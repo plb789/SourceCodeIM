@@ -60,6 +60,8 @@ ai:
   # 限流：单用户在 limit_window 秒内最多提问 limit_count 次
   limit_count: 10
   limit_window: 60
+  # 阶段四十五：文档问答单文档提取文本上限（字符），超出截断后再送模型
+  doc_max_chars: 60000
 
   # 模型服务列表（可同时配置多个，智能体按 name 绑定）
   # supports_image: 是否支持图片识别（多模态模型如 glm-4v/qwen-vl/gpt-4o 填 true，
@@ -103,7 +105,12 @@ ai:
       api_url: "http://127.0.0.1:11434/v1/chat/completions"
       api_key: ""
       model: "gemma4:26b"
-      supports_image: true
+    # 阶段四十五 E2E 临时：文档导出/问答测试用 provider（实测完毕已停用，需要时取消注释并启动 tmpmock mockdoc）
+    # - name: doc-mock
+    #   api_url: "http://127.0.0.1:19128/v1/chat/completions"
+    #   api_key: "mock-key"
+    #   model: "mock-doc"
+    #   supports_image: true
 
   # 智能体列表（左侧 AI 图标里可选的聊天助手；provider 未启用时该智能体降级为本地演示应答）
   agents:
@@ -127,3 +134,8 @@ ai:
       provider: ollama
       system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
       avatar: ""
+    # 阶段四十五 E2E 临时：导出测试智能体（配套 doc-mock，实测完毕已停用）
+    # - name: "导出测试"
+    #   provider: doc-mock
+    #   system_prompt: "你是文档生成测试助手。"
+    #   avatar: ""

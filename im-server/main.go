@@ -59,6 +59,12 @@ func main() {
 	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
 	// AI 图片提问上传接口（阶段四十四：仅落盘不落库，提问正文由 AI_CHAT 图片信封统一落库）
 	http.HandleFunc("/upload/ai/image", srv.HandleAIImageUpload)
+	// AI 文档问答上传接口（阶段四十五：仅落盘+试解析不落库，提问正文由 AI_CHAT 文档信封统一落库）
+	http.HandleFunc("/upload/ai/doc", srv.HandleAIDocUpload)
+	// AI 回复表格导出 Excel（阶段四十五：服务端归口解析 Markdown 表格转 xlsx，文件消息回发会话）
+	http.HandleFunc("/export/ai/excel", srv.HandleAIExportExcel)
+	// AI 回复导出 Word（阶段四十五：Markdown → docx 转档，标题/段落/列表/引用/表格）
+	http.HandleFunc("/export/ai/word", srv.HandleAIExportWord)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）

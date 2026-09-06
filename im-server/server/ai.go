@@ -50,6 +50,8 @@ var (
 	aiLimitCount    = 10
 	aiLimitWindow   = 60 * time.Second
 	aiContextWindow = 20
+	// 阶段四十五：文档问答单文档提取文本上限（字符，config.yaml ai.doc_max_chars 可配）
+	aiDocMaxChars = 60000
 	// AI 专用 HTTP 客户端：不设总超时（流式长回复），仅限制响应头等待时间防死连接
 	aiHTTP = &http.Client{
 		Transport: &http.Transport{
@@ -103,6 +105,10 @@ func InitAI(cfg *config.Config) {
 	}
 	if cfg.AI.ContextWindow > 0 {
 		aiContextWindow = cfg.AI.ContextWindow
+	}
+	// 阶段四十五：文档问答提取上限兜底（config 归口，启动时覆盖）
+	if cfg.AI.DocMaxChars > 0 {
+		aiDocMaxChars = cfg.AI.DocMaxChars
 	}
 	logger.Info("AI 助手初始化完成：%d 个智能体，%d 个模型服务", len(aiAgents), len(provMap))
 }
@@ -279,6 +285,23 @@ func parseAIImageEnvelope(content string) *aiImageEnvelope {
 	return &env
 }
 
+// aiDocEnvelope 阶段四十五：AI 文档问答信封（前端经 /upload/ai/doc 上传后发送）
+// 服务端归口：提问时按 url 重新解析落盘文档提取文本，文档正文不经过前端
+type aiDocEnvelope struct {
+	Doc  string `json:"doc"`  // 服务端静态资源 URL（/static/upload/xxx，扩展名决定解析器）
+	Name string `json:"name"` // 原始文件名（会话摘要/回显展示用）
+	Text string `json:"text"` // 附言（可为空）
+}
+
+// parseAIDocEnvelope 解析 AI 文档问答信封（非文档提问返回 nil）
+func parseAIDocEnvelope(content string) *aiDocEnvelope {
+	var env aiDocEnvelope
+	if err := json.Unmarshal([]byte(content), &env); err != nil || env.Doc == "" {
+		return nil
+	}
+	return &env
+}
+
 // aiImageMimeByExt 按扩展名返回 data URL 的 MIME（仅允许常见图片格式）
 func aiImageMimeByExt(ext string) string {
 	switch strings.ToLower(ext) {
@@ -342,6 +365,14 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		imageEnv = env
 	}
 
+	// 阶段四十五：文档问答信封解析（与图片信封互斥：image/doc 字段不同时存在）
+	var docEnv *aiDocEnvelope
+	if imageEnv == nil {
+		if env := parseAIDocEnvelope(msg.Content); env != nil {
+			docEnv = env
+		}
+	}
+
 	// 问题文本：引用信封取正文（阶段四十同款归口），JSON 原串不发给模型
 	question := strings.TrimSpace(messageSummary(msg.Content))
 	if imageEnv != nil {
@@ -350,6 +381,13 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		question = strings.TrimSpace(imageEnv.Text)
 		if question == "" {
 			question = "请描述并分析这张图片"
+		}
+	}
+	if docEnv != nil {
+		// 阶段四十五：文档提问发给模型的指令用附言原文；无附言时给默认指令（文档是必要输入，不按空消息拦截）
+		question = strings.TrimSpace(docEnv.Text)
+		if question == "" {
+			question = "请总结这份文档的核心内容"
 		}
 	}
 	if question == "" {
@@ -363,6 +401,19 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			s.sendError(c, "该助手不支持图片识别，请选择标注「支持图片」的助手")
 			return
 		}
+	}
+
+	// 阶段四十五：文档问答——服务端归口解析落盘文档提取文本（文档正文不经过前端，
+	// 前端仅持有 URL），限流前先解析，文档非法/不存在时快速失败不消耗提问额度。
+	// 文档解析不依赖多模态能力：提取文本注入提示词，纯文本模型同样可答
+	var docPrompt string
+	if docEnv != nil {
+		text, err := s.aiLoadDocText(docEnv.Doc)
+		if err != nil {
+			s.sendError(c, err.Error())
+			return
+		}
+		docPrompt = aiBuildDocPrompt(docEnv.Name, text, question)
 	}
 
 	// 限流：单用户窗口内最多 aiLimitCount 次（Redis 计数，多端共享额度）
@@ -391,6 +442,11 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			{Type: "text", Text: question},
 			{Type: "image_url", ImageURL: &aiImageURLField{URL: dataURL}},
 		}
+	}
+
+	// 阶段四十五：文档提问——最后一条 user 消息替换为文档全文信封 + 附言（纯文本注入，任意文本模型可答）
+	if docEnv != nil {
+		chatMsgs[len(chatMsgs)-1].Content = docPrompt
 	}
 
 	// 提问落库（is_read=true：AI 会话无已读回执语义，避免自己发的提问永远显示"未读"）

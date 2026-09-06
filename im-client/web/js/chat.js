@@ -72,6 +72,7 @@
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
     var fileInput = document.getElementById('file-input');
+    var docInput = document.getElementById('doc-input'); // 阶段四十五：AI 文档问答选择框
     var convListEl = document.getElementById('conv-list');
     var friendsPanel = document.getElementById('friends-panel');
     // 阶段四十三：AI 助手面板与智能体列表（服务端配置归口下发）
@@ -951,6 +952,16 @@
         return m;
     }
 
+    // 阶段四十五：解析 AI 文档问答信封 content（{"doc":url,"name":文件名,"text":附言}）；
+    // 必须有 doc 字符串 + text 字段（name 可缺省）才判定，防止普通 JSON 文本误判
+    function parseAIDocEnvelope(content) {
+        if (!content || content.charAt(0) !== '{') return null;
+        var m = null;
+        try { m = JSON.parse(content); } catch (e) { return null; }
+        if (!m || typeof m !== 'object' || typeof m.doc !== 'string' || !m.doc || typeof m.text !== 'string') return null;
+        return m;
+    }
+
     // 阶段四十四：当前会话的 AI 智能体是否支持图片识别（服务端 AI_AGENTS 能力标记归口）
     function aiAgentSupportsImage(name) {
         for (var i = 0; i < aiAgents.length; i++) {
@@ -1116,6 +1127,9 @@
     });
     fileBtn.addEventListener('click', function () {
         if (currentChatUser === '') { showToast('群聊暂不支持发送文件'); return; }
+        // 阶段四十五：AI 会话文件按钮 = 文档问答入口（服务端解析文档文本注入提问，不依赖模型多模态）；
+        // 普通私聊仍走分片文件链路
+        if (isAIAgent(currentChatUser)) { docInput.click(); return; }
         fileInput.click();
     });
     imageInput.addEventListener('change', function () {
@@ -1131,6 +1145,11 @@
     fileInput.addEventListener('change', function () {
         if (fileInput.files[0]) sendFile(fileInput.files[0]);
         fileInput.value = '';
+    });
+    // 阶段四十五：AI 文档问答入口（文件按钮在 AI 会话触发）
+    docInput.addEventListener('change', function () {
+        if (docInput.files[0]) sendAIDoc(docInput.files[0]);
+        docInput.value = '';
     });
 
     function isImageName(name) {
@@ -1587,6 +1606,44 @@
         }).catch(function (e) {
             bubble.remove(); // 上传/发送失败：移除本地预览气泡（服务端无记录，避免幽灵气泡）
             showToast('图片发送失败：' + (e.message || e));
+        });
+    }
+
+    // 阶段四十五：AI 文档问答——POST /upload/ai/doc 落盘+服务端试解析（不落库），成功后发送
+    // AI_CHAT 文档信封（{"doc":url,"name":原名,"text":附言}）。文档正文不经过前端：提问时服务端
+    // 按 URL 重新解析落盘文档提取文本注入提示词。附言取发送时输入框内容（可空，服务端给默认指令）。
+    // 不依赖模型多模态能力：全部智能体均可发文档
+    function sendAIDoc(file) {
+        var agent = currentChatUser;
+        if (!agent || !isAIAgent(agent)) return;
+        if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(file.name)) { showToast('仅支持 docx/xlsx/xlsm/csv/md/txt 文档'); return; }
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        if (file.size > maxFile) { showToast('文档超过大小上限（' + formatSize(maxFile) + '）'); return; }
+        var note = messageInput.value.trim();
+        showToast('正在上传文档…');
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload/ai/doc?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&to_user=' + encodeURIComponent(agent), {
+            method: 'POST',
+            body: fd
+        }).then(function (res) {
+            if (!res.ok) {
+                return res.text().then(function (t) { throw new Error(t || ('HTTP ' + res.status)); });
+            }
+            return res.json();
+        }).then(function (data) {
+            if (!data || !data.url) throw new Error('上传响应缺少文档地址');
+            var envelope = JSON.stringify({ doc: data.url, name: file.name, text: note });
+            // 记录提问原文（重新生成按信封原样重发，服务端重新解析文档，口径与首次发送一致）
+            lastAIQuestion[agent] = { raw: envelope, text: note ? '[文档] ' + file.name + ' ' + note : '[文档] ' + file.name };
+            if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（文档已存档，可重新发）
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope })) {
+                throw new Error('消息发送失败');
+            }
+            messageInput.value = '';
+        }).catch(function (e) {
+            showToast('文档发送失败：' + (e.message || e));
         });
     }
 
@@ -2147,14 +2204,19 @@
 
     // AI 回复操作栏（豆包同款）：复制回复 / 重新生成 / 编辑提问（SVG 线性图标，currentColor 跟随主题色）
     // fullText 为回复 Markdown 原文（复制原文，渲染样式不带出）
-    function buildAIActionBar(agent, fullText) {
+    // 阶段四十五：表格回复追加「导出 Excel/Word」——服务端归口转档（POST /export/ai/excel|word，
+    // 服务端取回复原文解析转 xlsx 并以文件消息回发会话），msgId 缺失（流式未回填完）时不显示
+    function buildAIActionBar(agent, fullText, msgId) {
         var bar = document.createElement('div');
         bar.className = 'ai-actions';
         // 24x24 线性图标（Feather 风格），stroke=currentColor 使悬停变色跟随主题
         var ICONS = {
             copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
             redo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
-            edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+            edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+            excel: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="m9 13 6 6"/><path d="m15 13-6 6"/></svg>',
+            word: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2l1 5 2-10 1 5h2"/></svg>',
+            ppt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>'
         };
         function addBtn(title, icon, handler) {
             var b = document.createElement('span');
@@ -2181,7 +2243,159 @@
             messageInput.value = q.text;
             messageInput.focus();
         });
+        // 阶段四十五：Markdown 表格 → 导出 Excel/Word（服务端归口转档，文件消息回发会话）
+        if (msgId && detectMarkdownTable(fullText)) {
+            addBtn('导出 Excel', ICONS.excel, function () { exportAIDocument(msgId, 'excel'); });
+            addBtn('导出 Word', ICONS.word, function () { exportAIDocument(msgId, 'word'); });
+        }
+        // 阶段四十五：标题/要点结构 → 生成 PPT（前端 pptxgenjs 本地生成，直传回会话）
+        if (detectMarkdownSlides(fullText)) {
+            addBtn('生成 PPT', ICONS.ppt, function () { generateAIPpt(agent, fullText); });
+        }
         return bar;
+    }
+
+    // 阶段四十五：检测文本是否含 Markdown 表格（表头行 + --- 分隔行），用于显隐导出按钮
+    function detectMarkdownTable(text) {
+        if (!text) return false;
+        var lines = String(text).split('\n');
+        for (var i = 0; i < lines.length - 1; i++) {
+            if (/^\s*\|.+\|\s*$/.test(lines[i]) && /^\s*\|[\s:|\-]+\|\s*$/.test(lines[i + 1])) return true;
+        }
+        return false;
+    }
+
+    // 阶段四十五：导出 AI 文档（excel→xlsx / word→docx），成功后文件消息由服务端推送回会话
+    function exportAIDocument(msgId, format) {
+        var url = format === 'word' ? '/export/ai/word' : '/export/ai/excel';
+        showToast('正在生成' + (format === 'word' ? ' Word' : ' Excel') + '…');
+        fetch(url + '?msg_id=' + encodeURIComponent(msgId) + '&username=' + encodeURIComponent(IMSocket.getUsername()), {
+            method: 'POST'
+        }).then(function (res) {
+            if (!res.ok) return res.text().then(function (t) { throw new Error(t || ('HTTP ' + res.status)); });
+            return res.json();
+        }).then(function (data) {
+            if (data && data.url) showToast('已生成，文件已发送到会话');
+            else throw new Error('响应缺少文件地址');
+        }).catch(function (e) {
+            showToast('导出失败：' + (e.message || e));
+        });
+    }
+
+    // 阶段四十五：检测文本是否有演示文稿结构（标题行 或 ≥2 条列表项），用于显隐「生成 PPT」按钮
+    function detectMarkdownSlides(text) {
+        if (!text) return false;
+        var lines = String(text).split('\n');
+        var bullets = 0;
+        for (var i = 0; i < lines.length; i++) {
+            var t = lines[i].trim();
+            if (/^#{1,4}\s+\S/.test(t)) return true;
+            if (/^[-*]\s+\S/.test(t) || /^\d+\.\s+\S/.test(t)) bullets++;
+            if (bullets >= 2) return true;
+        }
+        return false;
+    }
+
+    // 阶段四十五：Markdown 大纲 → 幻灯片数据（# 首个为封面页，##/### 分页，列表/段落为要点，表格入当前页）
+    // 跳过代码块内容（代码不适合投影展示）
+    function parseMarkdownSlides(text) {
+        var slides = [];
+        var cur = null;
+        function newSlide(title) {
+            cur = { title: title, items: [], table: null };
+            slides.push(cur);
+        }
+        var lines = String(text).split('\n');
+        var inCode = false;
+        var firstH1 = true;
+        for (var i = 0; i < lines.length; i++) {
+            var t = lines[i].trim();
+            if (/^```/.test(t)) { inCode = !inCode; continue; }
+            if (inCode) continue;
+            if (/^#\s+\S/.test(t)) {
+                if (firstH1) {
+                    // 首个一级标题作封面页
+                    slides.push({ title: t.replace(/^#\s+/, ''), cover: true, items: [], table: null });
+                    firstH1 = false;
+                    cur = null;
+                } else {
+                    newSlide(t.replace(/^#\s+/, ''));
+                }
+            } else if (/^#{2,4}\s+\S/.test(t)) {
+                newSlide(t.replace(/^#{2,4}\s+/, ''));
+            } else if (/^\s*\|.+\|\s*$/.test(t) && i + 1 < lines.length && /^\s*\|[\s:|\-]+\|\s*$/.test(lines[i + 1].trim())) {
+                var target = cur || (newSlide(slides.length ? slides[slides.length - 1].title : '数据表格'), slides[slides.length - 1]);
+                var rows = [];
+                var j = i;
+                for (; j < lines.length; j++) {
+                    var rl = lines[j].trim();
+                    if (!/^\s*\|.+\|\s*$/.test(rl)) break;
+                    if (/^\s*\|[\s:|\-]+\|\s*$/.test(rl)) continue;
+                    rows.push(rl.replace(/^\||\|$/g, '').split('|').map(function (c) { return c.trim(); }));
+                }
+                if (rows.length) target.table = rows;
+                i = j - 1;
+            } else if (/^[-*]\s+\S/.test(t) || /^\d+\.\s+\S/.test(t)) {
+                if (!cur) newSlide(slides.length ? slides[slides.length - 1].title : '内容');
+                cur.items.push(t.replace(/^([-*]|\d+\.)\s+/, ''));
+            } else if (t) {
+                if (!cur) newSlide('内容');
+                cur.items.push(t);
+            }
+        }
+        return slides;
+    }
+
+    // 阶段四十五：AI 回复生成 PPT（前端 pptxgenjs 本地转档 → 复用 /upload/file 直传回会话，
+    // 本地气泡 + 服务端落库 + FILE_PERSISTED 回填 msg_id 全走既有链路）
+    function generateAIPpt(agent, text) {
+        if (typeof PptxGenJS === 'undefined') { showToast('PPT 组件未加载，请刷新重试'); return; }
+        var slides = parseMarkdownSlides(text);
+        if (!slides.length) { showToast('没有可生成演示文稿的内容'); return; }
+        showToast('正在生成 PPT…');
+        try {
+            var pptx = new PptxGenJS();
+            pptx.layout = 'LAYOUT_16x9';
+            var PRIMARY = '0B7C51'; // 主题绿（与 IM 主题色一致）
+            slides.forEach(function (s) {
+                var slide = pptx.addSlide();
+                if (s.cover) {
+                    slide.background = { color: PRIMARY };
+                    slide.addText(s.title, { x: 0.5, y: 2.0, w: 9, h: 1.2, fontSize: 30, bold: true, color: 'FFFFFF', align: 'center' });
+                    slide.addText('AI 生成 · ' + agent, { x: 0.5, y: 3.2, w: 9, h: 0.4, fontSize: 13, color: 'CFE8DB', align: 'center' });
+                    return;
+                }
+                slide.addText(s.title, { x: 0.5, y: 0.3, w: 9, h: 0.7, fontSize: 23, bold: true, color: PRIMARY });
+                var hasTable = s.table && s.table.length;
+                if (s.items.length) {
+                    var maxItems = hasTable ? 5 : 10;
+                    var arr = s.items.slice(0, maxItems).map(function (it) {
+                        return { text: it.length > 60 ? it.slice(0, 60) + '…' : it, options: { bullet: true, breakLine: true } };
+                    });
+                    slide.addText(arr, { x: 0.6, y: 1.15, w: 8.8, h: hasTable ? 2.4 : 4.3, fontSize: 15, color: '333333', valign: 'top' });
+                }
+                if (hasTable) {
+                    var rows = s.table.slice(0, 7).map(function (r) {
+                        return r.slice(0, 6).map(function (c) { return c.length > 20 ? c.slice(0, 20) + '…' : c; });
+                    });
+                    slide.addTable(rows, {
+                        x: 0.6, y: hasTable && s.items.length ? 3.6 : 1.3, w: 8.8, fontSize: 12,
+                        border: { type: 'solid', pt: 0.5, color: 'CCCCCC' },
+                        headerRow: false, fill: { color: 'F5F7F6' }
+                    });
+                }
+            });
+            pptx.write({ outputType: 'blob' }).then(function (blob) {
+                if (currentChatUser !== agent) { showToast('已切离会话，PPT 未发送'); return; }
+                var file = new File([blob], 'AI演示_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+                sendFileDirect(file); // 直传链路：本地气泡 + 落库 + FILE_PERSISTED 回填
+                showToast('PPT 已生成并发送到会话');
+            }).catch(function (e) {
+                showToast('PPT 生成失败：' + (e.message || e));
+            });
+        } catch (e) {
+            showToast('PPT 生成失败：' + (e.message || e));
+        }
     }
 
     // 阶段四十三：AI 代码块"复制代码"按钮（事件委托：流式/历史动态生成的代码块无需逐个绑定）
@@ -2262,9 +2476,10 @@
         // 最终态兜底渲染一次 Markdown（done 时 pending 可能为空，tick 内不再触发渲染）
         st.textEl.innerHTML = renderAIMarkdown(st.shown);
         // 阶段四十三：回复完成后追加操作栏（复制/重新生成/编辑提问，豆包同款）
+        // 阶段四十五：表格回复追加导出按钮（服务端归口转档，msg_id 用于取回复原文）
         var bodyEl = st.el.querySelector('.message-body');
         if (bodyEl && !bodyEl.querySelector('.ai-actions')) {
-            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown));
+            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown, st.finalId));
         }
         if (st.finalId) st.el.setAttribute('data-msg-id', st.finalId);
         var agent = st.el.getAttribute('data-from');
@@ -2369,6 +2584,51 @@
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
 
+        // 阶段四十五：Markdown 表格（表头行 + | --- | 分隔行 + 数据行）→ 真表格。
+        // 行级扫描提取占位（先于列表/加粗等转换，避免表格结构被行内规则破坏）；单元格内支持 **加粗**
+        var tables = [];
+        esc = (function (src) {
+            var lines = src.split('\n');
+            var out = [];
+            var rowRe = /^\s*\|.+\|\s*$/;
+            var sepRe = /^\s*\|[\s:|\-]+\|\s*$/;
+            function cell(c) {
+                return String(c).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            }
+            for (var i = 0; i < lines.length; i++) {
+                if (rowRe.test(lines[i]) && i + 1 < lines.length && sepRe.test(lines[i + 1])) {
+                    var rows = [];
+                    var j = i;
+                    for (; j < lines.length; j++) {
+                        if (!rowRe.test(lines[j])) break;
+                        if (sepRe.test(lines[j])) continue; // 分隔行不进数据（正文中重复分隔行跳过）
+                        var cells = lines[j].trim().replace(/^\||\|$/g, '').split('|').map(function (c) {
+                            return c.trim().replace(/\\\|/g, '|');
+                        });
+                        rows.push(cells);
+                    }
+                    if (rows.length >= 1) {
+                        var h = rows[0];
+                        var html = '<div class="ai-md-table-wrap"><table class="ai-md-table"><thead><tr>';
+                        h.forEach(function (c) { html += '<th>' + cell(c) + '</th>'; });
+                        html += '</tr></thead><tbody>';
+                        for (var k = 1; k < rows.length; k++) {
+                            html += '<tr>';
+                            for (var c2 = 0; c2 < h.length; c2++) html += '<td>' + cell(rows[k][c2] || '') + '</td>';
+                            html += '</tr>';
+                        }
+                        html += '</tbody></table></div>';
+                        tables.push(html);
+                        out.push('\u0000TB' + (tables.length - 1) + '\u0000');
+                    }
+                    i = j - 1;
+                    continue;
+                }
+                out.push(lines[i]);
+            }
+            return out.join('\n');
+        })(esc);
+
         // 行内代码 `...` 提取占位
         var inlineCodes = [];
         esc = esc.replace(/`([^`\n]+)`/g, function (_, c) {
@@ -2406,6 +2666,7 @@
         esc = esc.replace(/\n/g, '<br>');
         // 还原占位
         esc = esc.replace(/\u0000CB(\d+)\u0000/g, function (_, i) { return codeBlocks[+i]; });
+        esc = esc.replace(/\u0000TB(\d+)\u0000/g, function (_, i) { return tables[+i]; });
         esc = esc.replace(/\u0000IC(\d+)\u0000/g, function (_, i) { return inlineCodes[+i]; });
         return esc;
     }
@@ -3745,9 +4006,41 @@
         // 原实现：bubble.textContent = content（引用信封会原样显示 JSON 串）
         // 阶段四十四：AI 图片提问信封（{"image":url,"text":附言}）渲染为图片气泡 + 附言——
         // 仅对自己的消息且当前为 AI 会话时判定，普通聊天里手打的 JSON 字符串不受影响
-        var aiImgEnv = (type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null;
-        var envelope = aiImgEnv ? null : parseQuoteEnvelope(content);
-        if (aiImgEnv) {
+        // 阶段四十五：AI 文档问答信封（{"doc":url,"name":文件名,"text":附言}）渲染为文件卡片 + 附言
+        var aiDocEnv = (type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null;
+        var aiImgEnv = (!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null;
+        var envelope = (aiDocEnv || aiImgEnv) ? null : parseQuoteEnvelope(content);
+        if (aiDocEnv) {
+            // 微信文件卡片风格：扩展名色块图标 + 文件名 + 点击打开服务端文档（下载归口）
+            var docCard = document.createElement('div');
+            docCard.className = 'msg-doc-card';
+            var extName = ((aiDocEnv.doc || '').split('.').pop() || 'doc').toUpperCase();
+            var docIcon = document.createElement('span');
+            docIcon.className = 'msg-doc-icon';
+            docIcon.textContent = extName;
+            var docInfo = document.createElement('div');
+            docInfo.className = 'msg-doc-info';
+            var docName = document.createElement('div');
+            docName.className = 'msg-doc-name';
+            docName.textContent = aiDocEnv.name || '未命名文档';
+            var docSub = document.createElement('div');
+            docSub.className = 'msg-doc-sub';
+            docSub.textContent = '点击查看文档';
+            docInfo.appendChild(docName);
+            docInfo.appendChild(docSub);
+            docCard.appendChild(docIcon);
+            docCard.appendChild(docInfo);
+            docCard.addEventListener('click', function () {
+                window.open(aiDocEnv.doc, '_blank');
+            });
+            bubble.appendChild(docCard);
+            if (aiDocEnv.text) {
+                var docText = document.createElement('div');
+                docText.className = 'msg-text';
+                docText.textContent = aiDocEnv.text;
+                bubble.appendChild(docText);
+            }
+        } else if (aiImgEnv) {
             bubble.classList.add('bubble-image');
             var qImg = document.createElement('img');
             qImg.className = 'chat-image';
@@ -3842,8 +4135,9 @@
             body.appendChild(status);
         }
         // 阶段四十三：AI 智能体回复（历史加载/END 降级整段渲染）气泡下追加操作栏（流式路径在 finishStream 追加）
+        // 阶段四十五：携带消息 ID 供导出按钮服务端归口取原文
         if (isAIAgent(fromUser)) {
-            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content));
+            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId));
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);

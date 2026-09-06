@@ -78,6 +78,8 @@ type AIConfig struct {
 	LimitCount int `yaml:"limit_count"`
 	// 限流窗口（秒）
 	LimitWindow int `yaml:"limit_window"`
+	// 阶段四十五：文档问答单文档提取文本上限（字符），超出截断，防止超长文档撑爆模型上下文
+	DocMaxChars int `yaml:"doc_max_chars"`
 }
 
 // Default 返回默认配置，与《开发文档》5.2 核心配置参数保持一致
@@ -112,6 +114,8 @@ func Default() *Config {
 			ContextWindow: 20,
 			LimitCount:    10,
 			LimitWindow:   60,
+			// 阶段四十五：文档问答默认提取上限 60000 字
+			DocMaxChars: 60000,
 		},
 	}
 }
@@ -178,6 +182,10 @@ func Load() *Config {
 	}
 	if cfg.AI.LimitWindow <= 0 {
 		cfg.AI.LimitWindow = 60
+	}
+	// 阶段四十五：文档问答提取上限兜底
+	if cfg.AI.DocMaxChars <= 0 {
+		cfg.AI.DocMaxChars = 60000
 	}
 	return cfg
 }

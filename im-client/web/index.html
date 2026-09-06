@@ -171,6 +171,8 @@
     <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif" class="hidden">
     <input type="file" id="image-input" accept="image/*" class="hidden">
     <input type="file" id="file-input" class="hidden">
+    <!-- 阶段四十五：AI 文档问答选择框（docx/xlsx/xlsm/csv/md/txt，与服务端解析白名单一致） -->
+    <input type="file" id="doc-input" accept=".docx,.xlsx,.xlsm,.csv,.md,.txt" class="hidden">
 
     <!-- 好友右键菜单 -->
     <div id="friend-menu" class="friend-menu hidden">
@@ -301,6 +303,8 @@
     <script src="js/screenshot.js?v=1.6"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
     <script src="js/lib/highlight.min.js?v=11.9"></script>
-    <script src="js/chat.js?v=1.82"></script>
+    <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
+    <script src="js/lib/pptxgen.bundle.js?v=1.0"></script>
+    <script src="js/chat.js?v=1.83"></script>
 </body>
 </html>

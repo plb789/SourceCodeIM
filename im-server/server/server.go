@@ -279,6 +279,20 @@ func messageSummary(content string) string {
 		}
 		return "[图片] " + imgEnv.Text
 	}
+	// 阶段四十五：AI 文档问答信封归口——会话摘要与模型历史上下文显示"[文档] 文件名 附言"，
+	// JSON 原串不外泄；文档全文仅注入当次提问（handleAIChatMsg 归口），历史上下文只带摘要避免重复携带撑爆 token
+	var docEnv struct {
+		Doc  string `json:"doc"`
+		Name string `json:"name"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(content), &docEnv); err == nil && docEnv.Doc != "" {
+		summary := "[文档] " + docEnv.Name
+		if note := strings.TrimSpace(docEnv.Text); note != "" {
+			summary += " " + note
+		}
+		return summary
+	}
 	return content
 }
 
