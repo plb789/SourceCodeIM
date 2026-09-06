@@ -147,8 +147,21 @@ func TestBuildDocx(t *testing.T) {
 	if !strings.Contains(docXML, "<w:tbl>") || !strings.Contains(docXML, "b&amp;") {
 		t.Fatal("表格或转义缺失")
 	}
-	if !strings.Contains(docXML, "1. 步骤一") || !strings.Contains(docXML, "2. 步骤二") {
+	// 原：单 run 模板下编号与正文同处一个 <w:t>，直接断言 XML 连续串；
+	// 现行内 run 拆分后编号与正文分属不同 <w:t>，改为回读拼接文本断言（语义等价）
+	// if !strings.Contains(docXML, "1. 步骤一") || !strings.Contains(docXML, "2. 步骤二") {
+	// 	t.Fatal("有序列表编号错误")
+	// }
+	// 原写法：if err != nil { Fatal } else { 断言 }，不符合 Go indent-error-flow 惯例，改为先 Fatal 后继续
+	readBack, err := aiParseDocxText(data)
+	if err != nil {
+		t.Fatalf("回读 docx 失败: %v", err)
+	}
+	if !strings.Contains(readBack, "1. 步骤一") || !strings.Contains(readBack, "2. 步骤二") {
 		t.Fatal("有序列表编号错误")
+	}
+	if strings.Contains(readBack, "**") || strings.Contains(readBack, "`") {
+		t.Fatal("正文残留 Markdown 行内符号")
 	}
 	if !strings.Contains(docXML, "要点一") || !strings.Contains(docXML, "引用内容") {
 		t.Fatal("列表/引用内容缺失")
@@ -312,3 +325,7 @@ func TestAiLoadDocTextTruncate(t *testing.T) {
 		t.Fatal("不存在的文件应返回错误")
 	}
 }
+
+// 原 TestWordExportNoMarkdownResidue（含用户反馈对话片段的回归测试）已按需求清理；
+// Word 导出转换逻辑（aidoc.go 的 aiParseMarkdownBlocks / aiInlineRuns / aiBuildDocx）后续修改时
+// 建议自行临时编写用例验证：**加粗** / • 列表 / 两位数编号 / 反引号 四类场景不残留原文符号。

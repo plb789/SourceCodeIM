@@ -45,6 +45,21 @@ type Config struct {
 
 	// 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存服务端配置文件，客户端不接触密钥）
 	AI AIConfig `yaml:"ai"`
+
+	// 阶段四十六：OnlyOffice 在线文档编辑配置（服务端归口：JWT 密钥仅存 config.yaml，不下发客户端）
+	OnlyOffice OnlyOfficeConfig `yaml:"onlyoffice"`
+}
+
+// OnlyOfficeConfig OnlyOffice Document Server 对接配置（自建 Windows/Docker 版）
+type OnlyOfficeConfig struct {
+	// Enabled 是否启用在线编辑（false 时前端点击文件保持原下载行为，零回归）
+	Enabled bool `yaml:"enabled"`
+	// APIURL 浏览器加载编辑器 api.js 的完整地址（DocumentServer 对浏览器可见的地址）
+	APIURL string `yaml:"api_url"`
+	// ServerURL DocumentServer 回源拉取/保存文档时访问 im-server 的地址（需与 DS 网络互通）
+	ServerURL string `yaml:"server_url"`
+	// JWTSecret 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
+	JWTSecret string `yaml:"jwt_secret"`
 }
 
 // AIProviderConfig AI 模型服务提供方（OpenAI 兼容 chat/completions 接口，可接 DeepSeek/Kimi/智谱/通义等）
@@ -186,6 +201,10 @@ func Load() *Config {
 	// 阶段四十五：文档问答提取上限兜底
 	if cfg.AI.DocMaxChars <= 0 {
 		cfg.AI.DocMaxChars = 60000
+	}
+	// 阶段四十六：OnlyOffice 配置兜底——声明启用但参数残缺时强制关闭（避免启动后编辑器静默失败）
+	if cfg.OnlyOffice.Enabled && (cfg.OnlyOffice.APIURL == "" || cfg.OnlyOffice.ServerURL == "" || cfg.OnlyOffice.JWTSecret == "") {
+		cfg.OnlyOffice.Enabled = false
 	}
 	return cfg
 }

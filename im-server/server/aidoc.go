@@ -278,6 +278,13 @@ type aiDocBlock struct {
 // aiInlineXML 行内 Markdown 转换为 OOXML run 序列：**加粗** 生效，`code`/单个* 斜体降级为普通文本。
 // 文本已做 XML 转义
 func aiInlineXML(text string) string {
+	return aiInlineRuns(text, "")
+}
+
+// aiInlineRuns 行内 Markdown → run 序列（baseRPr 为每个 run 的基础 rPr 片段，可为空）。
+// 标题/引用等块级样式（字号/斜体/颜色）通过 baseRPr 注入每个 run，行内 **加粗** 叠加 <w:b/>。
+// 返回值是完整 run 序列，必须作为 <w:p> 直接子节点使用，不可再包进已有 <w:t>（会产生非法嵌套）
+func aiInlineRuns(text string, baseRPr string) string {
 	text = strings.ReplaceAll(text, "`", "")
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
@@ -295,23 +302,26 @@ func aiInlineXML(text string) string {
 			break
 		}
 		bold := rest[idx+2 : idx+2+end]
-		sb.WriteString(aiTextRun(rest[:idx], false))
-		sb.WriteString(aiTextRun(bold, true))
+		sb.WriteString(aiTextRun(rest[:idx], false, baseRPr))
+		sb.WriteString(aiTextRun(bold, true, baseRPr))
 		rest = rest[idx+2+end+2:]
 	}
-	sb.WriteString(aiTextRun(rest, false))
+	sb.WriteString(aiTextRun(rest, false, baseRPr))
 	return sb.String()
 }
 
-func aiTextRun(text string, bold bool) string {
+func aiTextRun(text string, bold bool, baseRPr string) string {
 	if text == "" {
 		return ""
 	}
-	b := ""
+	rpr := baseRPr
 	if bold {
-		b = "<w:b/>"
+		rpr += "<w:b/>"
 	}
-	return "<w:r><w:rPr>" + b + "</w:rPr><w:t xml:space=\"preserve\">" + text + "</w:t></w:r>"
+	if rpr == "" {
+		return "<w:r><w:t xml:space=\"preserve\">" + text + "</w:t></w:r>"
+	}
+	return "<w:r><w:rPr>" + rpr + "</w:rPr><w:t xml:space=\"preserve\">" + text + "</w:t></w:r>"
 }
 
 // aiParseMarkdownBlocks Markdown → 块序列（Word 导出用；列表/引用/标题/表格/段落归口）
@@ -370,12 +380,24 @@ func aiParseMarkdownBlocks(content string) []aiDocBlock {
 		case strings.HasPrefix(line, ">"):
 			blocks = append(blocks, aiDocBlock{Kind: "quote", Text: strings.TrimSpace(strings.TrimPrefix(line, ">"))})
 			i++
-		case strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* "):
-			blocks = append(blocks, aiDocBlock{Kind: "bullet", Text: strings.TrimSpace(line[2:])})
+		case strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "•"):
+			// 原：仅识别 "- "/"* "，"•" 前缀列表（DeepSeek 等模型常用）落入段落保留原文符号
+			t := strings.TrimPrefix(line, "- ")
+			t = strings.TrimPrefix(t, "* ")
+			t = strings.TrimSpace(strings.TrimPrefix(t, "•"))
+			blocks = append(blocks, aiDocBlock{Kind: "bullet", Text: t})
 			i++
-		case len(line) > 2 && line[0] >= '0' && line[0] <= '9' && (strings.HasPrefix(line[1:], ". ") || strings.HasPrefix(line[1:], ".\t")):
-			idx := strings.Index(line, ".")
-			blocks = append(blocks, aiDocBlock{Kind: "ordered", Text: strings.TrimSpace(line[idx+1:])})
+		case len(line) > 2 && line[0] >= '0' && line[0] <= '9':
+			// 原：仅支持个位数编号（line[1:] 前缀判定），"10. " 及以上落入段落保留原文编号
+			j := 0
+			for j < len(line) && line[j] >= '0' && line[j] <= '9' {
+				j++
+			}
+			if j > 0 && j+1 < len(line) && line[j] == '.' && (line[j+1] == ' ' || line[j+1] == '\t') {
+				blocks = append(blocks, aiDocBlock{Kind: "ordered", Text: strings.TrimSpace(line[j+2:])})
+			} else {
+				blocks = append(blocks, aiDocBlock{Kind: "para", Text: line})
+			}
 			i++
 		case line == "---" || line == "***" || line == "___":
 			i++ // 分隔线：Word 中省略（避免裸符号）
@@ -396,21 +418,26 @@ func aiBuildDocx(blocks []aiDocBlock) ([]byte, error) {
 		case "heading":
 			orderedNum = 0
 			size := 32 - (b.Level-1)*4 // h1=32(16pt) h2=28 h3=24 半磅
+			// 原：整体单 run 包裹（aiEscapeXML 纯文本），标题中的 **加粗**/`code` 行内标记原样残留；
+			// 改为 aiInlineRuns 生成多 run，块级加粗/字号经 baseRPr 注入每个 run
 			body.WriteString("<w:p><w:pPr><w:spacing w:before=\"160\" w:after=\"80\"/></w:pPr>" +
-				"<w:r><w:rPr><w:b/><w:sz w:val=\"" + strconv.Itoa(size) + "\"/><w:szCs w:val=\"" + strconv.Itoa(size) + "\"/></w:rPr>" +
-				"<w:t xml:space=\"preserve\">" + aiEscapeXML(b.Text) + "</w:t></w:r></w:p>")
+				aiInlineRuns(b.Text, "<w:b/><w:sz w:val=\""+strconv.Itoa(size)+"\"/><w:szCs w:val=\""+strconv.Itoa(size)+"\"/>") +
+				"</w:p>")
 		case "bullet":
 			orderedNum = 0
+			// 原：整体单 run 包裹（aiEscapeXML 纯文本），列表项中的 **加粗**/`code` 行内标记原样残留
 			body.WriteString("<w:p><w:pPr><w:ind w:left=\"420\"/></w:pPr>" +
-				"<w:r><w:t xml:space=\"preserve\">• " + aiEscapeXML(b.Text) + "</w:t></w:r></w:p>")
+				"<w:r><w:t xml:space=\"preserve\">• </w:t></w:r>" + aiInlineRuns(b.Text, "") + "</w:p>")
 		case "ordered":
 			orderedNum++
+			// 原：整体单 run 包裹（aiEscapeXML 纯文本），列表项中的 **加粗**/`code` 行内标记原样残留
 			body.WriteString("<w:p><w:pPr><w:ind w:left=\"420\"/></w:pPr>" +
-				"<w:r><w:t xml:space=\"preserve\">" + strconv.Itoa(orderedNum) + ". " + aiEscapeXML(b.Text) + "</w:t></w:r></w:p>")
+				"<w:r><w:t xml:space=\"preserve\">" + strconv.Itoa(orderedNum) + ". </w:t></w:r>" + aiInlineRuns(b.Text, "") + "</w:p>")
 		case "quote":
 			orderedNum = 0
+			// 原：整体单 run 包裹（aiEscapeXML 纯文本），引用块中的 **加粗**/`code` 行内标记原样残留
 			body.WriteString("<w:p><w:pPr><w:ind w:left=\"420\"/></w:pPr>" +
-				"<w:r><w:rPr><w:i/><w:color w:val=\"808080\"/></w:rPr><w:t xml:space=\"preserve\">" + aiEscapeXML(b.Text) + "</w:t></w:r></w:p>")
+				aiInlineRuns(b.Text, "<w:i/><w:color w:val=\"808080\"/>") + "</w:p>")
 		case "para":
 			orderedNum = 0
 			body.WriteString("<w:p><w:pPr><w:spacing w:after=\"60\"/></w:pPr>" + aiInlineXML(b.Text) + "</w:p>")

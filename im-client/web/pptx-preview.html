@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>幻灯片预览</title>
+    <!-- 阶段四十六：免费纯前端 PPT 预览页（iframe 内运行，与主应用全局变量完全隔离）
+         PPTXjs（开源 MIT）+ JSZip v2 + jQuery + d3/nv.d3（图表渲染）
+         注意：PPTXjs 要求 JSZip v2，故本页独立于 doc-preview.html（后者用 v3），互不污染
+         查询参数：?url=文档地址（支持相对路径与 blob: 地址） -->
+    <link rel="stylesheet" href="css/pptxjs.css?v=1.0">
+    <link rel="stylesheet" href="css/nv.d3.min.css?v=1.0">
+    <script src="js/lib/jquery.min.js?v=1.0"></script>
+    <script src="js/lib/jszip2.min.js?v=1.0"></script>
+    <!-- 阶段四十六实测补充：PPTXjs 无条件调用 FileReaderJS.setSync 与 JSZipUtils.getBinaryContent，缺一即抛异常 -->
+    <script src="js/lib/filereader.js?v=1.0"></script>
+    <script src="js/lib/jszip-utils.min.js?v=1.0"></script>
+    <script src="js/lib/dingbat.js?v=1.0"></script>
+    <script src="js/lib/d3.min.js?v=1.0"></script>
+    <script src="js/lib/nv.d3.min.js?v=1.0"></script>
+    <script src="js/lib/pptxjs.min.js?v=1.0"></script>
+    <script src="js/lib/divs2slides.min.js?v=1.0"></script>
+    <style>
+        html, body { margin: 0; padding: 0; background: #f5f5f5; }
+        /* 自绘滚动条（禁系统默认样式）：8px 圆角半透明灰，悬停加深 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(138, 138, 138, 0.45); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(138, 138, 138, 0.75); }
+        ::-webkit-scrollbar-corner { background: transparent; }
+        * { scrollbar-width: thin; scrollbar-color: rgba(138, 138, 138, 0.45) transparent; }
+        /* 幻灯片画布区：垂直排列，留白居中 */
+        #pptx-viewer { padding: 16px 0 24px; }
+        /* 加载/错误提示（PPTXjs 渲染为同步流程，加载态在触发前展示） */
+        #loading {
+            position: fixed; top: 45%; left: 0; right: 0; text-align: center;
+            color: #888; font-size: 14px; font-family: "Microsoft YaHei", sans-serif;
+        }
+        #err {
+            display: none; position: fixed; top: 42%; left: 0; right: 0; text-align: center;
+            color: #999; font-size: 14px; font-family: "Microsoft YaHei", sans-serif; line-height: 2;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">幻灯片加载中…</div>
+    <div id="err"></div>
+    <div id="pptx-viewer"></div>
+    <script>
+        // 解析查询参数（url=文档地址）
+        var qs = {};
+        location.search.substring(1).split('&').forEach(function (kv) {
+            var i = kv.indexOf('=');
+            if (i > 0) qs[decodeURIComponent(kv.substring(0, i))] = decodeURIComponent(kv.substring(i + 1));
+        });
+        var fileUrl = qs.url || '';
+        var loadingEl = document.getElementById('loading');
+        var errEl = document.getElementById('err');
+
+        function showError(msg) {
+            loadingEl.style.display = 'none';
+            errEl.style.display = 'block';
+            errEl.innerHTML = '预览失败：' + msg + '<br>可点击窗口右上角"下载"按钮获取文件';
+        }
+
+        if (!fileUrl) {
+            showError('缺少文档地址参数');
+        } else {
+            // PPTXjs：URL 拉取渲染（slideMode 关闭=连续浏览模式；mediaProcess 开启图片/音视频渲染）
+            try {
+                $('#pptx-viewer').pptxToHtml({
+                    pptxFileUrl: fileUrl,
+                    slideMode: false,
+                    keyBoardShortCut: false,
+                    mediaProcess: true,
+                    themeProcess: true,
+                    slidesScale: ""
+                });
+                // 渲染为同步流程：给 DOM 落地留一个周期后收起加载态
+                setTimeout(function () { loadingEl.style.display = 'none'; }, 600);
+            } catch (e) {
+                // 异常信息直接透出（含 PPTXjs 内部抛出的原始 message），便于实测定位
+                showError('幻灯片解析异常：' + (e && e.message ? e.message : e));
+            }
+        }
+    </script>
+</body>
+</html>

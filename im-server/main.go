@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gorilla/websocket"
 
@@ -65,16 +64,26 @@ func main() {
 	http.HandleFunc("/export/ai/excel", srv.HandleAIExportExcel)
 	// AI 回复导出 Word（阶段四十五：Markdown → docx 转档，标题/段落/列表/引用/表格）
 	http.HandleFunc("/export/ai/word", srv.HandleAIExportWord)
+	// 文档在线编辑（阶段四十六：OnlyOffice 对接——编辑器配置签发 / 文档回源下载 / 保存回调）
+	http.HandleFunc("/doc/editor", srv.HandleDocEditor)
+	http.HandleFunc("/doc/download", srv.HandleDocDownload)
+	http.HandleFunc("/doc/callback", srv.HandleDocCallback)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
 	// 阶段四十三：入口 HTML 禁用缓存（no-cache=每次回源校验），前端发版后普通刷新即可拿到新版；
 	// js/css 带 ?v= 版本号仍走浏览器缓存，不受影响
+	// 阶段四十八：所有静态资源统一 no-cache（每次回源校验，资源未变更时服务端返回 304，开销极小）。
+	// 根因修复：css/js 无 Cache-Control 时浏览器按启发式缓存且期间不回源验证，改版后客户端可能继续
+	// 复用陈旧甚至损坏的缓存副本（实例：登录界面改版后 PC 端仍加载旧样式，且 ?v= 版本号被并行会话
+	// 回退时彻底失效）。原先仅靠 ?v= 手动 bump，现服务端归口兜底。
 	fileServer := http.FileServer(http.Dir(cfg.WebDir))
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
-			w.Header().Set("Cache-Control", "no-cache")
-		}
+		// 原实现：仅对 HTML 入口禁用缓存（css/js 走浏览器启发式缓存，存在陈旧缓存风险）
+		// if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
+		// 	w.Header().Set("Cache-Control", "no-cache")
+		// }
+		w.Header().Set("Cache-Control", "no-cache")
 		fileServer.ServeHTTP(w, r)
 	}))
 	// 头像目录注入（锚定 exe 所在目录解析，替代 avatar.go 中原相对路径实现）

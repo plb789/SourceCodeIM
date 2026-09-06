@@ -82,15 +82,8 @@ html, body {
     display: none !important;
 }
 
-/* 登录视图 */
-.login-view {
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--login-bg);
-}
-
+/* ===================== 登录视图（阶段四十七：参考图风格左右分栏卡片） ===================== */
+/*
 .login-box {
     width: 320px;
     background: var(--panel-bg);
@@ -137,11 +130,338 @@ html, body {
     font-size: 15px;
     cursor: pointer;
 }
+*/
+
+/* 页面背景：跟随主题主色的浅色渐变 + 模糊光斑（旧纯灰渐变由 .login-view 内注释保留） */
+.login-view {
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    /* 兼容回退：主色混合不支持时使用固定底色 */
+    background: linear-gradient(135deg, #eef3ef 0%, #e0e8e3 100%);
+    /* 跟随主题：主色低饱和渐变（--primary 归口） */
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 6%, #ffffff) 0%, color-mix(in srgb, var(--primary) 16%, #e6eae8) 100%);
+}
+
+/* 背景装饰光斑：大圆形主色模糊块，营造参考图的柔焦氛围 */
+.login-view::before,
+.login-view::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    pointer-events: none;
+}
+
+.login-view::before {
+    width: 520px;
+    height: 520px;
+    left: -140px;
+    bottom: -180px;
+    background: color-mix(in srgb, var(--primary) 30%, transparent);
+    opacity: 0.35;
+}
+
+.login-view::after {
+    width: 420px;
+    height: 420px;
+    right: -120px;
+    top: -140px;
+    background: color-mix(in srgb, var(--primary) 24%, transparent);
+    opacity: 0.28;
+}
+
+/* 登录卡片：左右分栏容器 */
+.login-card {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    width: min(920px, 94vw);
+    min-height: 560px;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+}
+
+/* ---------- 左侧品牌区 ---------- */
+.login-brand {
+    position: relative;
+    width: 46%;
+    flex-shrink: 0;
+    padding: 64px 44px 40px;
+    display: flex;
+    flex-direction: column;
+    color: #ffffff;
+    /* 兼容回退：主色混合不支持时使用固定深色 */
+    background: linear-gradient(165deg, #123f27 0%, #0b1f15 100%);
+    /* 跟随主题：主色深色调渐变 */
+    background: linear-gradient(165deg, color-mix(in srgb, var(--primary) 28%, #0d1f15) 0%, color-mix(in srgb, var(--primary) 10%, #091209) 100%);
+}
+
+/* 装饰圆环（参考图左上大圆环） */
+.login-brand-ring {
+    position: absolute;
+    top: 36px;
+    right: -56px;
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    border: 52px solid rgba(255, 255, 255, 0.05);
+    pointer-events: none;
+}
+
+.login-brand-body {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.login-brand-caption {
+    font-size: 11px;
+    letter-spacing: 0.28em;
+    color: rgba(255, 255, 255, 0.55);
+    margin-bottom: 18px;
+}
+
+.login-brand-title {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+}
+
+.login-brand-desc {
+    font-size: 13px;
+    line-height: 1.9;
+    color: rgba(255, 255, 255, 0.78);
+    margin-bottom: 26px;
+}
+
+.login-brand-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.login-tag {
+    padding: 6px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 999px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.88);
+}
+
+/* 左侧底部：分隔线 + 链接区（参考图"快速查阅"） */
+.login-brand-foot {
+    margin-top: auto;
+    padding-top: 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.login-foot-label {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    margin-bottom: 10px;
+}
+
+.login-foot-links {
+    display: flex;
+    gap: 22px;
+}
+
+.login-foot-link {
+    font-size: 13px;
+    color: #ffffff;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    text-decoration-color: rgba(255, 255, 255, 0.4);
+}
+
+/* ---------- 右侧表单区 ---------- */
+.login-form-panel {
+    flex: 1;
+    background: var(--panel-bg);
+    padding: 52px 56px 32px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.login-form-caption {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    color: var(--primary);
+    margin-bottom: 10px;
+}
+
+.login-form-title {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.login-form-sub {
+    font-size: 13px;
+    color: var(--text-light);
+    margin-bottom: 26px;
+}
+
+.login-label {
+    display: block;
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+/* 输入域：图标 + 输入框 + 右侧按钮（密码眼睛） */
+.login-field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 14px;
+    margin-bottom: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.login-field:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.login-field-icon {
+    display: inline-flex;
+    color: var(--primary);
+    flex-shrink: 0;
+}
+
+.login-field input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.login-field input::placeholder {
+    color: var(--text-light);
+}
+
+/* 密码显隐切换按钮 */
+.login-eye {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 4px;
+    flex-shrink: 0;
+}
+
+.login-eye:hover {
+    color: var(--primary);
+}
+
+/* 登录按钮（主色归口） */
+#login-btn {
+    width: 100%;
+    height: 46px;
+    margin-top: 10px;
+    background: var(--primary);
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    letter-spacing: 6px;
+    cursor: pointer;
+    transition: filter 0.15s;
+}
+
+#login-btn:hover {
+    filter: brightness(0.94);
+}
+
+#login-btn:active {
+    filter: brightness(0.88);
+}
 
 .login-hint {
     font-size: 12px;
     color: var(--text-light);
+    text-align: center;
     margin-top: 14px;
+}
+
+/* 右侧底部版权（参考图页脚） */
+.login-form-foot {
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+    margin-top: 22px;
+}
+
+/* ---------- 深色主题适配 ---------- */
+[data-theme="dark"] .login-view {
+    /* 兼容回退 + 主色混合深色底 */
+    background: linear-gradient(135deg, #0d1510 0%, #111111 100%);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 8%, #0d0d0d) 0%, #111111 100%);
+}
+
+[data-theme="dark"] .login-brand {
+    background: linear-gradient(165deg, #0f2318 0%, #081109 100%);
+    background: linear-gradient(165deg, color-mix(in srgb, var(--primary) 16%, #0a140d) 0%, color-mix(in srgb, var(--primary) 6%, #050805) 100%);
+}
+
+[data-theme="dark"] .login-card {
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+/* 跟随系统主题（系统深色时同 dark） */
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] .login-view {
+        background: linear-gradient(135deg, #0d1510 0%, #111111 100%);
+        background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 8%, #0d0d0d) 0%, #111111 100%);
+    }
+
+    [data-theme="system"] .login-brand {
+        background: linear-gradient(165deg, #0f2318 0%, #081109 100%);
+        background: linear-gradient(165deg, color-mix(in srgb, var(--primary) 16%, #0a140d) 0%, color-mix(in srgb, var(--primary) 6%, #050805) 100%);
+    }
+
+    [data-theme="system"] .login-card {
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+    }
+}
+
+/* ---------- 窄屏适配：隐藏左侧品牌区 ---------- */
+@media (max-width: 860px) {
+    .login-card {
+        width: min(420px, 94vw);
+        min-height: 0;
+    }
+
+    .login-brand {
+        display: none;
+    }
+
+    .login-form-panel {
+        padding: 44px 36px 26px;
+    }
 }
 
 /* 聊天视图 */
@@ -2860,5 +3180,100 @@ html, body {
 }
 .ai-md .ai-md-table tbody tr:nth-child(even) td {
     background: rgba(128, 128, 128, 0.08);
+}
+
+/* ============================================================
+   阶段四十六：OnlyOffice 在线文档编辑弹窗（自研窗口，禁系统弹窗）
+   配色全部复用现有主题变量，跟随主题色/深浅主题变化
+   ============================================================ */
+
+/* 全屏遮罩（层级高于通用弹窗 2000，低于截图 HUD 3100） */
+.doc-editor-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 2500;
+}
+
+/* 编辑器大窗：居中 90vw×88vh，外观对齐 modal-box 圆角/阴影 */
+.doc-editor-window {
+    position: fixed;
+    top: 6vh;
+    left: 5vw;
+    width: 90vw;
+    height: 88vh;
+    background: var(--panel-bg);
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+    z-index: 2501;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modal-in 0.15s ease-out;
+}
+
+/* 标题栏：主题色底（跟随主题色变化），白字 */
+.doc-editor-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--primary);
+    color: #fff;
+    flex-shrink: 0;
+}
+
+/* 文件名（长名截断省略，避免挤压右侧按钮） */
+.doc-editor-name {
+    font-size: 14px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 12px;
+}
+
+/* 标题栏按钮组 */
+.doc-editor-tbtns {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* 标题栏按钮（半透明白底，悬停加深） */
+.doc-editor-tbtn {
+    border: none;
+    padding: 4px 12px;
+    font-size: 13px;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.doc-editor-tbtn:hover {
+    background: rgba(255, 255, 255, 0.35);
+}
+
+/* 编辑器挂载区：占满剩余空间（DocsAPI iframe 自适应 100%） */
+.doc-editor-body {
+    flex: 1;
+    min-height: 0;
+}
+
+.doc-editor-body #doc-editor-placeholder {
+    width: 100%;
+    height: 100%;
+}
+
+/* 阶段四十六：预览层 iframe（免费纯前端渲染，白底文档阅读区铺满窗口） */
+.doc-editor-body #doc-preview-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #f5f5f5;
+    display: block;
 }
 

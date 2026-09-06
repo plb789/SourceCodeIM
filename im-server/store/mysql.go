@@ -28,8 +28,8 @@ func InitMySQL(cfg *config.Config) error {
 		return fmt.Errorf("连接 MySQL 失败: %w", err)
 	}
 
-	// 自动创建数据表（首次启动）
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}); err != nil {
+	// 自动创建数据表（首次启动）；阶段四十六追加文档编辑版本表 im_doc_edit
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 

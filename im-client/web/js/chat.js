@@ -183,6 +183,23 @@
     loginPassword.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') doLogin();
     });
+    // 阶段四十七：账号输入框回车也能登录（参考图风格改版配套，原仅密码框支持回车）
+    loginUsername.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') doLogin();
+    });
+    // 阶段四十七：密码显隐切换（参考图右侧眼睛按钮）
+    var loginEye = document.getElementById('login-eye');
+    var loginEyeShow = document.getElementById('login-eye-show');
+    var loginEyeHide = document.getElementById('login-eye-hide');
+    if (loginEye) {
+        loginEye.addEventListener('click', function () {
+            var show = loginPassword.type === 'password';
+            loginPassword.type = show ? 'text' : 'password';
+            loginEyeShow.classList.toggle('hidden', show);
+            loginEyeHide.classList.toggle('hidden', !show);
+            loginEye.title = show ? '隐藏密码' : '显示密码';
+        });
+    }
     function doLogin() {
         var username = loginUsername.value.trim();
         var password = loginPassword.value;
@@ -2243,9 +2260,17 @@
             messageInput.value = q.text;
             messageInput.focus();
         });
-        // 阶段四十五：Markdown 表格 → 导出 Excel/Word（服务端归口转档，文件消息回发会话）
+        // 阶段四十五：Markdown 表格 → 导出 Excel（服务端归口转档，文件消息回发会话）
         if (msgId && detectMarkdownTable(fullText)) {
             addBtn('导出 Excel', ICONS.excel, function () { exportAIDocument(msgId, 'excel'); });
+        }
+        // 原：Word 导出与 Excel 共用表格检测条件，纯文字回复无导出入口，用户感知"无法生成 Word"
+        // if (msgId && detectMarkdownTable(fullText)) {
+        //     addBtn('导出 Excel', ICONS.excel, function () { exportAIDocument(msgId, 'excel'); });
+        //     addBtn('导出 Word', ICONS.word, function () { exportAIDocument(msgId, 'word'); });
+        // }
+        // Word 导出支持标题/段落/列表/引用/表格（aiParseMarkdownBlocks 归口），任何非空回复均可导出
+        if (msgId) {
             addBtn('导出 Word', ICONS.word, function () { exportAIDocument(msgId, 'word'); });
         }
         // 阶段四十五：标题/要点结构 → 生成 PPT（前端 pptxgenjs 本地生成，直传回会话）
@@ -3410,10 +3435,9 @@
             if (meta.url) {
                 bubbleFile.style.cursor = 'pointer';
                 bubbleFile.addEventListener('click', function () {
-                    var a = document.createElement('a');
-                    a.href = meta.url;
-                    a.download = meta.name || 'file';
-                    a.click();
+                    // 原实现：直接创建 <a download> 触发下载
+                    // 阶段四十六：docx/xlsx/pptx 点击在线编辑（msg_id 取历史消息 r.id），其余类型保持下载
+                    onFileCardClick(bubbleFile, r.id, meta.name, meta.url);
                 });
             }
             body.appendChild(bubbleFile);
@@ -4031,6 +4055,9 @@
             docCard.appendChild(docIcon);
             docCard.appendChild(docInfo);
             docCard.addEventListener('click', function () {
+                // 原实现：window.open 直接打开服务端文档（下载归口）
+                // 阶段四十六：docx/xlsx/pptx 文档信封点击在线编辑（msg_id 闭包可得，失败落预览层），其余类型保持原打开行为
+                if (isEditableDocName(aiDocEnv.name || aiDocEnv.doc) && msgId && openDocEditor(msgId, aiDocEnv.name, aiDocEnv.doc)) return;
                 window.open(aiDocEnv.doc, '_blank');
             });
             bubble.appendChild(docCard);
@@ -4247,6 +4274,148 @@
         });
     }
 
+    // ===== 阶段四十六：OnlyOffice 在线文档编辑（docx/xlsx/pptx 点击弹出自研编辑窗口，保存走服务端版本归口） =====
+    var docEditorInstance = null;  // DocsAPI.DocEditor 实例（关闭时必须 destroyEditor 释放 DS 协同会话）
+    var docEditorMsgId = 0;        // 当前编辑的消息 ID（标题栏"下载"按钮按最新版本下载）
+    var docEditorName = '';        // 当前编辑的展示文件名
+    var docEditorMode = 'edit';    // 弹窗模式：edit=OnlyOffice 编辑 / preview=免费纯前端只读预览
+    var docPreviewUrl = '';        // 预览模式的文档地址（标题栏"下载"按钮直接下载该地址）
+
+    // 可编辑扩展名判断（docx/xlsx/pptx）
+    function isEditableDocName(name) {
+        return /\.(docx|xlsx|pptx)$/i.test(name || '');
+    }
+
+    // 触发浏览器下载（标题栏"下载"按钮 / 在线编辑不可用时的回退行为）
+    // 走服务端 /doc/download 归口：服务端解析最新版本后以附件下发（未启用在线编辑时不可用）
+    function triggerDocDownload(msgId, name) {
+        var a = document.createElement('a');
+        a.href = '/doc/download?msg_id=' + msgId + '&username=' + encodeURIComponent(IMSocket.getUsername());
+        a.download = name || 'file';
+        a.click();
+    }
+
+    // 打开文档编辑弹窗（双层架构·编辑层）：服务端签发配置（含归属校验/版本解析/JWT）→ 懒加载 api.js → 拉起编辑器
+    // 任一环节失败（未启用 OnlyOffice/无权限/加载超时）→ 静默回退预览层（fallbackUrl 有效时）或下载
+    function openDocEditor(msgId, name, fallbackUrl) {
+        if (!msgId) return false;
+        fetch('/doc/editor?msg_id=' + msgId + '&username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (res) {
+                return res.json().then(function (data) {
+                    if (!res.ok) throw new Error((data && data.error) || '在线编辑不可用');
+                    return data;
+                });
+            })
+            .then(function (data) {
+                if (!data.config || !data.api_url) throw new Error('编辑器配置缺失');
+                docEditorMode = 'edit';
+                docEditorMsgId = msgId;
+                docEditorName = name || '';
+                document.getElementById('doc-editor-name').textContent = docEditorName || '文档';
+                document.getElementById('doc-editor-mask').classList.remove('hidden');
+                document.getElementById('doc-editor-window').classList.remove('hidden');
+                ensureDocsAPI(data.api_url, function (ok) {
+                    if (!ok) {
+                        // 编辑器脚本加载失败：回退预览层（原实现：提示后直接下载）
+                        closeDocEditor();
+                        if (fallbackUrl) { openDocPreview(fallbackUrl, docEditorName); return; }
+                        showToast('编辑器加载失败，已改为下载');
+                        triggerDocDownload(msgId, docEditorName);
+                        return;
+                    }
+                    try {
+                        if (docEditorInstance) { docEditorInstance.destroyEditor(); docEditorInstance = null; }
+                        document.getElementById('doc-editor-placeholder').innerHTML = '';
+                        docEditorInstance = new DocsAPI.DocEditor('doc-editor-placeholder', data.config);
+                    } catch (e) {
+                        closeDocEditor();
+                        if (fallbackUrl) { openDocPreview(fallbackUrl, docEditorName); return; }
+                        showToast('编辑器启动失败，已改为下载');
+                        triggerDocDownload(msgId, docEditorName);
+                    }
+                });
+            })
+            .catch(function () {
+                // 未启用 OnlyOffice（403）/网络异常：静默回退预览层（免费纯前端渲染，始终可用）
+                if (fallbackUrl) { openDocPreview(fallbackUrl, name); return; }
+                showToast('在线编辑不可用');
+                triggerDocDownload(msgId, name);
+            });
+        return true;
+    }
+
+    // 打开文档预览弹窗（双层架构·预览层，阶段四十六）：免费纯前端库渲染（零服务端依赖，未部署 OnlyOffice 也可用）
+    // docx/xlsx → doc-preview.html（docx-preview + SheetJS）；pptx → pptx-preview.html（PPTXjs）
+    // 通过 iframe 隔离：预览库的全局变量（JSZip v2/v3、jQuery、d3）不污染主应用，主应用也无需加载这批库
+    function openDocPreview(url, name) {
+        if (!url) return;
+        docEditorMode = 'preview';
+        docPreviewUrl = url;
+        docEditorName = name || '';
+        document.getElementById('doc-editor-name').textContent = docEditorName || '文档';
+        var ext = (name ? name.toLowerCase() : url.toLowerCase()).match(/\.(docx|xlsx|pptx)/);
+        var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
+        var type = (ext && ext[1]) || 'docx';
+        var holder = document.getElementById('doc-editor-placeholder');
+        holder.innerHTML = '';
+        var frame = document.createElement('iframe');
+        frame.id = 'doc-preview-iframe';
+        frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url);
+        holder.appendChild(frame);
+        document.getElementById('doc-editor-mask').classList.remove('hidden');
+        document.getElementById('doc-editor-window').classList.remove('hidden');
+    }
+
+    // 关闭文档编辑/预览弹窗：编辑模式销毁实例释放 DocumentServer 会话（约 10 秒缓存期内同 key 重开可复现现场）；
+    // 预览模式清空容器即卸载 iframe（停止渲染与播放）
+    function closeDocEditor() {
+        if (docEditorInstance) {
+            try { docEditorInstance.destroyEditor(); } catch (e) {}
+            docEditorInstance = null;
+        }
+        document.getElementById('doc-editor-placeholder').innerHTML = '';
+        document.getElementById('doc-editor-mask').classList.add('hidden');
+        document.getElementById('doc-editor-window').classList.add('hidden');
+    }
+
+    // 文件卡片点击统一入口（阶段四十六·双层架构）：
+    // msgId 优先取入参（历史/AI 卡片闭包可得），否则点击时从气泡 DOM 的 data-msg-id 解析——
+    // 实时文件消息渲染时尚未持久化，FILE_PERSISTED 回填只改 DOM 属性，闭包拿不到，必须动态读取
+    // 可编辑类型 → 编辑层（OnlyOffice 已部署时在线编辑，失败自动落预览层）；预览层免费兜底始终可用
+    // 其余类型（pdf/zip/图片等）→ 保持原下载行为
+    function onFileCardClick(bubbleEl, msgId, name, url) {
+        if (!msgId) {
+            var el = bubbleEl && bubbleEl.closest ? bubbleEl.closest('.message') : null;
+            msgId = el ? (parseInt(el.getAttribute('data-msg-id'), 10) || 0) : 0;
+        }
+        if (isEditableDocName(name) && url) {
+            // 编辑层要求已持久化（msg_id 存在）且地址为服务端 URL（blob 本地预览地址不送编辑层）
+            if (msgId > 0 && url.indexOf('blob:') !== 0 && openDocEditor(msgId, name, url)) return;
+            openDocPreview(url, name);
+            return;
+        }
+        var a = document.createElement('a');
+        a.href = url || '';
+        a.download = name || 'file';
+        a.click();
+    }
+
+    // 编辑/预览弹窗按钮绑定（关闭销毁实例/卸载 iframe；遮罩点击不关闭，防误触丢失未保存内容）
+    (function () {
+        document.getElementById('doc-editor-close').addEventListener('click', closeDocEditor);
+        document.getElementById('doc-editor-download').addEventListener('click', function () {
+            // 预览模式：直接下载消息内文档地址；编辑模式：走服务端 /doc/download 归口下载最新版本
+            if (docEditorMode === 'preview' && docPreviewUrl) {
+                var a = document.createElement('a');
+                a.href = docPreviewUrl;
+                a.download = docEditorName || 'file';
+                a.click();
+                return;
+            }
+            if (docEditorMsgId > 0) triggerDocDownload(docEditorMsgId, docEditorName);
+        });
+    })();
+
     // ===== 查看器历史联动：查看器翻到列表头部时向主窗口请求更早图片 =====
     // Electron：desktop.onViewerNeedMore 订阅（主进程转发查看器请求）；拉取复用 HISTORY 翻页链路
     // （page+1 请求在 HISTORY_RESP page>1 分支渲染 DOM 后，检测 pending 标志把本页图片推回查看器）
@@ -4374,10 +4543,9 @@
         if (url) {
             bubble.style.cursor = 'pointer';
             bubble.addEventListener('click', function () {
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = name;
-                a.click();
+                // 原实现：直接创建 <a download> 触发下载
+                // 阶段四十六：docx/xlsx/pptx 点击在线编辑（msg_id 点击时从 DOM 解析，兼容 FILE_PERSISTED 回填时机），其余保持下载
+                onFileCardClick(bubble, 0, name, url);
             });
         }
         // 头像缺失修复：与文字消息一致，头像 + 内容列微信风格结构

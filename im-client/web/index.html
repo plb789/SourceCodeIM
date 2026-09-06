@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>即时通讯</title>
-    <link rel="stylesheet" href="css/style.css?v=1.45">
+    <link rel="stylesheet" href="css/style.css?v=1.49">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
 <body>
-    <!-- 登录视图 -->
+    <!-- 登录视图（阶段四十七：参考图风格左右分栏卡片，主题色跟随现有设定；旧单卡片结构注释保留）
     <div id="login-view" class="login-view">
         <div class="login-box">
             <h1>即时通讯</h1>
@@ -18,6 +18,57 @@
             <input type="password" id="login-password" placeholder="密码" autocomplete="off">
             <button id="login-btn">登 录</button>
             <p class="login-hint">首次登录将自动注册</p>
+        </div>
+    </div>
+    -->
+    <div id="login-view" class="login-view">
+        <div class="login-card">
+            <!-- 左侧品牌区（深色主色调面板 + 装饰圆环） -->
+            <div class="login-brand">
+                <div class="login-brand-ring" aria-hidden="true"></div>
+                <div class="login-brand-body">
+                    <p class="login-brand-caption">INSTANT MESSENGER PLATFORM</p>
+                    <h1 class="login-brand-title">即时通讯</h1>
+                    <p class="login-brand-desc">以即时沟通、文件传输和 AI 协作为核心，构建更安全、更高效的企业数字化沟通平台。</p>
+                    <div class="login-brand-tags">
+                        <span class="login-tag">即时沟通</span>
+                        <span class="login-tag">文件传输</span>
+                        <span class="login-tag">AI 助手</span>
+                    </div>
+                    <div class="login-brand-foot">
+                        <p class="login-foot-label">安全接入</p>
+                        <p class="login-foot-links"><span class="login-foot-link">山西梗阳新能源有限公司</span></p>
+                    </div>
+                </div>
+            </div>
+            <!-- 右侧表单区（浅色面板） -->
+            <div class="login-form-panel">
+                <p class="login-form-caption">SYSTEM ACCESS</p>
+                <h2 class="login-form-title">账号登录</h2>
+                <p class="login-form-sub">请输入账号和密码，完成当前工作台的安全准入。</p>
+                <label class="login-label" for="login-username">账号</label>
+                <div class="login-field">
+                    <span class="login-field-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-3.31 0-8 1.67-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-3.33-4.69-5-8-5z"/></svg>
+                    </span>
+                    <input type="text" id="login-username" placeholder="请输入账号" autocomplete="off">
+                </div>
+                <label class="login-label" for="login-password">密码</label>
+                <div class="login-field">
+                    <span class="login-field-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M17 9V7a5 5 0 0 0-10 0v2H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V10a1 1 0 0 0-1-1zM9 7a3 3 0 0 1 6 0v2H9zm3 12a2 2 0 1 1 2-2 2 2 0 0 1-2 2z"/></svg>
+                    </span>
+                    <input type="password" id="login-password" placeholder="请输入密码" autocomplete="off">
+                    <!-- 密码显隐切换（参考图眼睛按钮） -->
+                    <button type="button" id="login-eye" class="login-eye" title="显示密码">
+                        <svg id="login-eye-show" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 5c-5 0-9.3 3.1-10.4 7.4a.9.9 0 0 0 0 .2C2.7 16.9 7 20 12 20s9.3-3.1 10.4-7.4a.9.9 0 0 0 0-.2C21.3 8.1 17 5 12 5zm0 12.5A4.5 4.5 0 1 1 16.5 13 4.5 4.5 0 0 1 12 17.5zm0-7A2.5 2.5 0 1 0 14.5 13 2.5 2.5 0 0 0 12 10.5z"/></svg>
+                        <svg id="login-eye-hide" class="hidden" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2.1 3.5 3.5 2.1l18.4 18.4-1.4 1.4-3.2-3.2A11.7 11.7 0 0 1 12 20c-5 0-9.3-3.1-10.4-7.4a.9.9 0 0 1 0-.2A12 12 0 0 1 5.4 7.9zm4.8 4.8a4.5 4.5 0 0 0 6.3 6.3zM12 5c5 0 9.3 3.1 10.4 7.4a.9.9 0 0 1 0 .2 11.6 11.6 0 0 1-2.5 4.4l-2.9-2.9A4.5 4.5 0 0 0 11.4 8l-1.6-1.6A12.6 12.6 0 0 1 12 5z"/></svg>
+                    </button>
+                </div>
+                <button id="login-btn">登 录</button>
+                <p class="login-hint">首次登录将自动注册</p>
+                <p class="login-form-foot">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
+            </div>
         </div>
     </div>
 
@@ -295,6 +346,22 @@
         </div>
     </div>
 
+    <!-- 阶段四十六：文档在线编辑弹窗（OnlyOffice，自研窗口禁用系统弹窗；标题栏跟随主题色，编辑器经 iframe 挂载） -->
+    <div id="doc-editor-mask" class="doc-editor-mask hidden"></div>
+    <div id="doc-editor-window" class="doc-editor-window hidden">
+        <div class="doc-editor-titlebar">
+            <span id="doc-editor-name" class="doc-editor-name">文档</span>
+            <span class="doc-editor-tbtns">
+                <button id="doc-editor-download" class="doc-editor-tbtn" title="下载最新版">下载</button>
+                <button id="doc-editor-close" class="doc-editor-tbtn" title="关闭">×</button>
+            </span>
+        </div>
+        <div class="doc-editor-body">
+            <!-- DocsAPI.DocEditor 挂载容器（编辑器 iframe 注入点） -->
+            <div id="doc-editor-placeholder"></div>
+        </div>
+    </div>
+
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
@@ -305,6 +372,6 @@
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
     <script src="js/lib/pptxgen.bundle.js?v=1.0"></script>
-    <script src="js/chat.js?v=1.83"></script>
+    <script src="js/chat.js?v=1.87"></script>
 </body>
 </html>

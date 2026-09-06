@@ -125,3 +125,15 @@ type Blacklist struct {
 
 // TableName 指定表名
 func (Blacklist) TableName() string { return "im_blacklist" }
+
+// DocEdit 文档在线编辑版本表 im_doc_edit（阶段四十六：OnlyOffice 保存回调后追加版本，每条消息一条记录）
+type DocEdit struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	MsgID     uint      `gorm:"column:msg_id;uniqueIndex;not null" json:"msg_id"`                // 关联的 im_message 消息 ID（文档版本归口锚点）
+	LatestURL string    `gorm:"column:latest_url;type:varchar(255);not null" json:"latest_url"` // 最新版本文件 URL（/static/upload/xxx）
+	Version   int       `gorm:"column:version;default:0" json:"version"`                        // 已保存版本数（参与 document.key 组成，防 DS 缓存旧版）
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (DocEdit) TableName() string { return "im_doc_edit" }

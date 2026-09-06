@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>文档预览</title>
+    <!-- 阶段四十六：免费纯前端文档预览页（iframe 内运行，与主应用样式/全局变量完全隔离）
+         docx → docx-preview.js（开源 MIT，依赖 JSZip v3）
+         xlsx → SheetJS（开源 Apache-2.0）逐 Sheet 转 HTML 表格
+         查询参数：?type=docx|xlsx&url=文档地址（支持相对路径与 blob: 地址） -->
+    <script src="js/lib/jszip.min.js?v=1.0"></script>
+    <script src="js/lib/docx-preview.min.js?v=1.0"></script>
+    <script src="js/lib/xlsx.full.min.js?v=1.0"></script>
+    <style>
+        /* 页面基础：白底文档阅读场景（预览内容与文档实际打印观感一致，不随主应用深色主题变化） */
+        html, body { margin: 0; padding: 0; background: #f5f5f5; }
+        /* 自绘滚动条（禁系统默认样式）：8px 圆角半透明灰，悬停加深 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(138, 138, 138, 0.45); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(138, 138, 138, 0.75); }
+        ::-webkit-scrollbar-corner { background: transparent; }
+        * { scrollbar-width: thin; scrollbar-color: rgba(138, 138, 138, 0.45) transparent; }
+        /* 加载中提示 */
+        #loading {
+            position: fixed; top: 45%; left: 0; right: 0; text-align: center;
+            color: #888; font-size: 14px; font-family: "Microsoft YaHei", sans-serif;
+        }
+        /* 错误提示 */
+        #err {
+            display: none; position: fixed; top: 42%; left: 0; right: 0; text-align: center;
+            color: #999; font-size: 14px; font-family: "Microsoft YaHei", sans-serif; line-height: 2;
+        }
+        /* docx 渲染容器：docx-preview 自带 .docx-wrapper 页面样式，这里控制边距 */
+        #viewer { padding: 12px 0 24px; }
+        #viewer .docx-wrapper { background: #f5f5f5; padding: 16px 0; }
+        /* xlsx 渲染容器：每个 Sheet 一段（Sheet 名标题 + HTML 表格） */
+        .xlsx-sheet { background: #fff; max-width: 960px; margin: 0 auto 20px; padding: 16px 20px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
+        .xlsx-sheet h3 { margin: 0 0 12px; font-size: 14px; color: #333; border-left: 3px solid #07c160; padding-left: 8px; font-family: "Microsoft YaHei", sans-serif; }
+        .xlsx-sheet table { border-collapse: collapse; font-size: 12px; font-family: "Microsoft YaHei", sans-serif; }
+        .xlsx-sheet td { border: 1px solid #e0e0e0; padding: 4px 10px; min-width: 48px; height: 22px; color: #333; white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <div id="loading">文档加载中…</div>
+    <div id="err"></div>
+    <div id="viewer"></div>
+    <script>
+        // 解析查询参数（type=docx|xlsx，url=文档地址）
+        var qs = {};
+        location.search.substring(1).split('&').forEach(function (kv) {
+            var i = kv.indexOf('=');
+            if (i > 0) qs[decodeURIComponent(kv.substring(0, i))] = decodeURIComponent(kv.substring(i + 1));
+        });
+        var type = (qs.type || '').toLowerCase();
+        var fileUrl = qs.url || '';
+        var loadingEl = document.getElementById('loading');
+        var errEl = document.getElementById('err');
+        var viewerEl = document.getElementById('viewer');
+
+        function showError(msg) {
+            loadingEl.style.display = 'none';
+            errEl.style.display = 'block';
+            errEl.innerHTML = '预览失败：' + msg + '<br>可点击窗口右上角"下载"按钮获取文件';
+        }
+
+        // xlsx 预览：逐 Sheet 转 HTML 表格（SheetJS 免费版即可满足）
+        function renderXlsx(buf) {
+            var wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+            wb.SheetNames.forEach(function (name) {
+                var html = XLSX.utils.sheet_to_html(wb.Sheets[name], { header: '', footer: '' });
+                var section = document.createElement('div');
+                section.className = 'xlsx-sheet';
+                var title = document.createElement('h3');
+                title.textContent = name;
+                section.appendChild(title);
+                // sheet_to_html 返回完整 HTML 文档串，innerHTML 赋值时浏览器自动剥离 html/body 外壳仅保留表格
+                var holder = document.createElement('div');
+                holder.innerHTML = html;
+                while (holder.firstChild) section.appendChild(holder.firstChild);
+                viewerEl.appendChild(section);
+            });
+            loadingEl.style.display = 'none';
+        }
+
+        // docx 预览：docx-preview 渲染（保留原文档分页/样式，纯前端零服务端）
+        function renderDocx(buf) {
+            docx.renderAsync(buf, viewerEl, viewerEl, {
+                inWrapper: true,
+                ignoreLastRenderedPageBreak: false,
+                experimental: false
+            }).then(function () {
+                loadingEl.style.display = 'none';
+            }).catch(function (e) {
+                showError('文档解析异常');
+            });
+        }
+
+        if (!fileUrl) {
+            showError('缺少文档地址参数');
+        } else {
+            fetch(fileUrl).then(function (res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.arrayBuffer();
+            }).then(function (buf) {
+                if (type === 'xlsx') renderXlsx(buf);
+                else renderDocx(buf);
+            }).catch(function (e) {
+                showError('文档加载失败');
+            });
+        }
+    </script>
+</body>
+</html>

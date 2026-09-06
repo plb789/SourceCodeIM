@@ -70,8 +70,8 @@ ai:
     # DeepSeek
     - name: deepseek
       api_url: "https://api.deepseek.com/v1/chat/completions"
-      api_key: "sk-你的密钥"
-      model: "deepseek-chat"          # 推理模型可换 deepseek-reasoner
+      api_key: "sk-fc5d6832eeaa45738c8cd65dccc5b8d3"
+      model: "deepseek-v4-flash"          # 可选：deepseek-v4-flash / deepseek-v4-flash-vision-exp
       supports_image: false
     # 智谱 GLM
     - name: zhipu
@@ -107,7 +107,7 @@ ai:
       model: "gemma4:26b"
     # 阶段四十五 E2E 临时：文档导出/问答测试用 provider（实测完毕已停用，需要时取消注释并启动 tmpmock mockdoc）
     # - name: doc-mock
-    #   api_url: "http://127.0.0.1:19128/v1/chat/completions"
+    #   api_url: "http://192.168.1.25:19128/v1/chat/completions"
     #   api_key: "mock-key"
     #   model: "mock-doc"
     #   supports_image: true
@@ -139,3 +139,18 @@ ai:
     #   provider: doc-mock
     #   system_prompt: "你是文档生成测试助手。"
     #   avatar: ""
+
+# ============================================================
+# 阶段四十六：OnlyOffice 在线文档编辑（自建 DocumentServer，docx/xlsx/pptx 在线编辑）
+# enabled 为 false 时前端点击文件保持原下载行为（未部署可保持关闭，零影响）
+# 部署步骤见 /docs/开发文档.md 阶段四十六；修改后需重启服务端生效
+# ============================================================
+onlyoffice:
+  # 是否启用在线编辑
+  enabled: false
+  # 浏览器加载编辑器 api.js 的完整地址（DocumentServer 对浏览器可见的地址，Windows 版默认端口 80）
+  api_url: "http://127.0.0.1:80/web-apps/apps/api/documents/api.js"
+  # DocumentServer 回源拉取/保存文档时访问 im-server 的地址（需与 DS 网络互通）
+  server_url: "http://127.0.0.1:8888"
+  # 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
+  jwt_secret: "im-onlyoffice-secret"
