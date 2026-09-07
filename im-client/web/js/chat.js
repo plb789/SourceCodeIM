@@ -2862,9 +2862,47 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
 
-        var st = { taskId: taskId, agent: agent, el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {} };
+        var st = { taskId: taskId, agent: agent, el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
         agentTaskCards[taskId] = st;
+        createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
         return st;
+    }
+
+    // ===== 阶段六十二（完整版）：底部常驻任务栏（Trae 同款）=====
+    // 任务运行期间在输入区上方常驻"N/M 个任务已完成"，点击展开清单面板；任务结束后隐藏
+    function createAgentTaskDock(st, goal) {
+        var inputBar = document.querySelector('.input-bar');
+        if (!inputBar || !inputBar.parentNode) return;
+        var dock = document.createElement('div');
+        dock.className = 'agent-task-dock';
+        var icon = document.createElement('span');
+        icon.className = 'agent-task-dock-icon';
+        icon.textContent = '☑';
+        var text = document.createElement('span');
+        text.className = 'agent-task-dock-text';
+        text.textContent = goal || '任务执行中';
+        text.title = goal || '';
+        var count = document.createElement('span');
+        count.className = 'agent-task-dock-count';
+        count.textContent = '0/0 个任务已完成';
+        var arrow = document.createElement('span');
+        arrow.className = 'agent-task-dock-arrow';
+        dock.appendChild(icon);
+        dock.appendChild(text);
+        dock.appendChild(count);
+        dock.appendChild(arrow);
+        var panel = document.createElement('div');
+        panel.className = 'agent-task-dock-panel hidden';
+        dock.addEventListener('click', function () {
+            panel.classList.toggle('hidden');
+            dock.classList.toggle('open');
+        });
+        var parent = inputBar.parentNode;
+        parent.insertBefore(dock, inputBar);
+        parent.insertBefore(panel, inputBar);
+        st.dock = dock;
+        st.dockCount = count;
+        st.dockPanel = panel;
     }
 
     function agentTaskScroll() {
@@ -2873,6 +2911,7 @@
 
     function setAgentTaskStatus(st, text, cls) {
         st.statusEl.textContent = text;
+        if (cls === 'running') st.statusEl.appendChild(agentDotsEl()); // 执行中：附跳动三点（其他状态仅文字）
         st.statusEl.className = 'agent-task-status ' + (cls || 'running');
     }
 
@@ -2880,6 +2919,9 @@
         setAgentTaskStatus(st, text, cls);
         st.stopBtn.disabled = true;
         st.stopBtn.textContent = '已结束';
+        // 阶段六十二（完整版）：任务结束收起底部任务栏（卡片内已完成状态接管）
+        if (st.dock) st.dock.classList.add('hidden');
+        if (st.dockPanel) st.dockPanel.classList.add('hidden');
     }
 
     // 思考事件：可折叠子块（新一轮思考默认展开，旧的自动折叠，避免卡片过长）
@@ -2904,15 +2946,118 @@
         agentTaskScroll();
     }
 
+    // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
+    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', run_command: '执行命令', todo_write: '更新任务清单' };
+
+    function agentToolChipText(tool, params) {
+        var p = params || {};
+        if (tool === 'read_file' || tool === 'write_file') return String(p.path || p.file || '');
+        if (tool === 'run_command') return String(p.command || p.cmd || '');
+        if (tool === 'todo_write') {
+            var n = Object.prototype.toString.call(p.todos) === '[object Array]' ? p.todos.length : 0;
+            return n ? n + ' 项任务' : '';
+        }
+        return '';
+    }
+
+    // ===== 阶段六十二：Agent 执行动态反馈 =====
+    // 跳动三点（复用普通 AI 聊天"思考中"的点动画样式）：思考中标签、工具执行中、任务状态共用
+    function agentDotsEl() {
+        var dots = document.createElement('span');
+        dots.className = 'ai-thinking-dots';
+        dots.innerHTML = '<i></i><i></i><i></i>';
+        return dots;
+    }
+
+    // ===== 阶段六十二：Agent 流式文本块（Trae CN 同款打字机）=====
+    // text_delta/thought_delta 增量进入同一流式块；归类在收尾时确定：
+    // tool_start 到来 → 收尾为"思考过程"折叠块；done → 收尾为正文（保持展开，Trae 同款）
+    function agentStreamText(st, delta) {
+        var cur = st.curText;
+        if (!cur) {
+            var block = document.createElement('div');
+            block.className = 'agent-event textstream';
+            var head = document.createElement('div');
+            head.className = 'agent-stream-head';
+            head.textContent = '思考中';
+            head.appendChild(agentDotsEl()); // 动态三点：正在生成，非卡住
+            var bodyEl = document.createElement('div');
+            bodyEl.className = 'agent-event-body ai-md';
+            var span = document.createElement('span');
+            span.className = 'agent-stream-text';
+            var cursor = document.createElement('span');
+            cursor.className = 'ai-stream-cursor';
+            bodyEl.appendChild(span);
+            bodyEl.appendChild(cursor);
+            block.appendChild(head);
+            block.appendChild(bodyEl);
+            st.events.appendChild(block);
+            cur = st.curText = { el: block, head: head, textEl: span, cursorEl: cursor, pending: '', shown: '', timer: null };
+            cur.timer = setInterval(function () {
+                if (cur.pending.length) {
+                    var step = Math.max(2, Math.ceil(cur.pending.length / 15));
+                    cur.shown += cur.pending.slice(0, step);
+                    cur.pending = cur.pending.slice(step);
+                    cur.textEl.innerHTML = renderAIMarkdown(cur.shown);
+                    agentTaskScroll();
+                }
+            }, 30);
+        }
+        cur.pending += delta || '';
+    }
+
+    // 收尾流式块：asThought=true 归类思考过程（折叠），false 归类正文（展开）。
+    // 返回是否收尾了非空内容（done 据此跳过重复的整段结果气泡）
+    function agentFinalizeText(st, asThought) {
+        var cur = st.curText;
+        if (!cur) return false;
+        clearInterval(cur.timer);
+        cur.timer = null;
+        cur.pending = '';
+        cur.cursorEl.remove();
+        st.curText = null;
+        if (!cur.shown.trim()) { cur.el.remove(); return false; }
+        cur.textEl.innerHTML = renderAIMarkdown(cur.shown);
+        if (asThought) {
+            cur.el.classList.add('thought');
+            cur.head.textContent = '思考过程';
+            cur.head.addEventListener('click', function () { cur.el.classList.toggle('collapsed'); });
+            cur.el.classList.add('collapsed');
+        } else {
+            cur.el.classList.add('answer');
+            cur.head.remove(); // 正文直出（Trae 同款无标题）
+        }
+        agentTaskScroll();
+        return true;
+    }
+
     // 工具事件：tool_start 建块等待结果回填（同一 tool_call 一块）
+    // 阶段六十二：人性化渲染——标题行（中文标题+芯片）+ 折叠详情（参数 JSON/输出），Trae CN 同款
     function addAgentTool(st, ev) {
         var block = document.createElement('div');
         block.className = 'agent-event tool pending';
         var head = document.createElement('div');
         head.className = 'agent-event-head';
-        head.textContent = '工具 · ' + (ev.tool || '');
+        var title = document.createElement('span');
+        title.className = 'agent-tool-title';
+        title.textContent = AGENT_TOOL_TITLE[ev.tool] || ('工具 · ' + (ev.tool || ''));
+        head.appendChild(title);
+        var chip = agentToolChipText(ev.tool, ev.params);
+        if (chip) {
+            var chipEl = document.createElement('span');
+            chipEl.className = 'agent-tool-chip';
+            chipEl.textContent = chip;
+            chipEl.title = chip;
+            head.appendChild(chipEl);
+        }
         // 阶段六十：执行环境标签（pc=用户本地 / server=服务端，tool_result 回填时按真实环境更新）
         head.appendChild(buildAgentEnvTag(ev.env));
+        // 阶段六十二：执行中动态指示（"执行中"文字 + 跳动三点），命令/本地执行耗时时表明未卡住
+        var running = document.createElement('span');
+        running.className = 'agent-tool-running';
+        running.textContent = '执行中';
+        running.appendChild(agentDotsEl());
+        head.appendChild(running);
         var argsEl = document.createElement('pre');
         argsEl.className = 'agent-event-args';
         argsEl.textContent = JSON.stringify(ev.params || {}, null, 2);
@@ -2921,9 +3066,52 @@
         block.appendChild(head);
         block.appendChild(argsEl);
         block.appendChild(outEl);
-        st.events.appendChild(block);
+        block.setAttribute('data-tool', ev.tool || ''); // 阶段六十二：回填匹配键（标题已中文化，不再含原始工具名）
+        // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
+        block.classList.add('collapsed');
+        head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
+        // 阶段六十二（完整版）：连续同类操作分组汇总（Trae 同款"已编辑 N 个文件，执行 M 条命令"）
+        // 仅 write_file/run_command 参与分组；组后被任何其他事件打断（思考/文本/读文件/清单行成为最后子块）则重新开组
+        var cat = ev.tool === 'write_file' ? 'w' : (ev.tool === 'run_command' ? 'c' : '');
+        if (cat && st.toolGroup && st.events.lastElementChild === st.toolGroup.el) {
+            st.toolGroup[cat]++;
+            updateAgentGroupHead(st.toolGroup);
+            st.toolGroup.body.appendChild(block);
+        } else if (cat) {
+            if (st.toolGroup) st.toolGroup.el.classList.remove('open'); // 旧组自动收起，仅保留当前组展开
+            var gEl = document.createElement('div');
+            gEl.className = 'agent-tool-group open';
+            var gHead = document.createElement('div');
+            gHead.className = 'agent-tool-group-head';
+            var gBody = document.createElement('div');
+            gBody.className = 'agent-tool-group-body';
+            gEl.appendChild(gHead);
+            gEl.appendChild(gBody);
+            var group = { el: gEl, head: gHead, body: gBody, w: cat === 'w' ? 1 : 0, c: cat === 'c' ? 1 : 0 };
+            gHead.addEventListener('click', function () { gEl.classList.toggle('open'); });
+            updateAgentGroupHead(group);
+            st.toolGroup = group;
+            st.events.appendChild(gEl);
+            gBody.appendChild(block);
+        } else {
+            st.toolGroup = null; // 读文件/清单等独立行打断分组
+            st.events.appendChild(block);
+        }
         st.tools[ev.tool + ':' + st.events.children.length] = block; // 占位（真实关联按 tool 名回填兜底）
         agentTaskScroll();
+    }
+
+    // 分组汇总标题："已编辑 N 个文件，执行 M 条命令"（含项数角标，点击组头展开/收起）
+    function updateAgentGroupHead(g) {
+        var parts = [];
+        if (g.w > 0) parts.push('已编辑 ' + g.w + ' 个文件');
+        if (g.c > 0) parts.push('执行 ' + g.c + ' 条命令');
+        if (!parts.length) parts.push('执行操作');
+        g.head.textContent = parts.join('，');
+        var cnt = document.createElement('span');
+        cnt.className = 'agent-tool-group-count';
+        cnt.textContent = (g.w + g.c) + ' 项';
+        g.head.appendChild(cnt);
     }
 
     // 阶段六十：执行环境小标签（跟随主题色，"本地执行"标识文件落在用户电脑）
@@ -2935,23 +3123,30 @@
     }
 
     function fillAgentTool(st, ev) {
-        // 回填规则：优先匹配该工具名最后一个 pending 块
+        // 回填规则：优先匹配该工具名最后一个 pending 块（阶段六十二：按 data-tool 匹配，标题已中文化）
         var blocks = st.events.querySelectorAll('.agent-event.tool.pending');
         var block = null;
         for (var i = blocks.length - 1; i >= 0; i--) {
-            var head = blocks[i].querySelector('.agent-event-head');
-            if (head && head.textContent.indexOf(ev.tool || '') !== -1) { block = blocks[i]; break; }
+            if (blocks[i].getAttribute('data-tool') === (ev.tool || '')) { block = blocks[i]; break; }
         }
         if (!block) { addAgentTool(st, { tool: ev.tool, params: {} }); blocks = st.events.querySelectorAll('.agent-event.tool.pending'); block = blocks[blocks.length - 1]; }
         block.classList.remove('pending');
         block.classList.add(ev.ok === false ? 'fail' : 'ok');
+        var running = block.querySelector('.agent-tool-running');
+        if (running) running.remove(); // 结果摘要行（✓/✕）接管执行态展示
         var outEl = block.querySelector('.agent-event-output');
         outEl.textContent = ev.output || '';
         outEl.classList.remove('hidden');
-        // 输出超长折叠（点击标题展开/收起）
-        if ((ev.output || '').length > 600) block.classList.add('collapsed');
+        // 阶段六十二：结果摘要行（输出首行常显）——"已编辑 main.go（+1 -1，34 字节）"/"命令已执行 xxx"/错误首行
+        var firstLine = (ev.output || '').split('\n')[0] || '';
+        if (firstLine.length > 120) firstLine = firstLine.slice(0, 120) + '…';
+        var resultLine = document.createElement('div');
+        resultLine.className = 'agent-tool-result' + (ev.ok === false ? ' fail' : '');
+        resultLine.textContent = (ev.ok === false ? '✕ ' : '✓ ') + firstLine;
         var head = block.querySelector('.agent-event-head');
-        head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
+        head.parentNode.insertBefore(resultLine, head.nextSibling);
+        // 失败自动展开详情（错误立即可见），成功保持折叠简洁行
+        if (ev.ok === false) block.classList.remove('collapsed');
         // 阶段六十：按真实执行环境更新标签（tool_start 的 env 仅为预判——本地等待超时会回退服务端）
         if (ev.env) {
             var oldTag = head.querySelector('.agent-env-tag');
@@ -2983,6 +3178,24 @@
         var percent = Math.round((done / total) * 100);
         st.bar.style.width = percent + '%';
         st.pct.textContent = percent + '%';
+        // 阶段六十二（完整版）：底部任务栏同步（计数 + 清单面板镜像）
+        if (st.dockCount) st.dockCount.textContent = done + '/' + total + ' 个任务已完成';
+        if (st.dockPanel) {
+            st.dockPanel.innerHTML = '';
+            todos.forEach(function (t) {
+                var item = document.createElement('div');
+                item.className = 'agent-todo-item ' + (t.status || 'pending');
+                var mark = document.createElement('span');
+                mark.className = 'agent-todo-mark';
+                mark.textContent = t.status === 'done' ? '✓' : (t.status === 'in_progress' ? '▸' : '○');
+                var text = document.createElement('span');
+                text.className = 'agent-todo-text';
+                text.textContent = t.content || '';
+                item.appendChild(mark);
+                item.appendChild(text);
+                st.dockPanel.appendChild(item);
+            });
+        }
         agentTaskScroll();
     }
 
@@ -3002,22 +3215,32 @@
             case 'status':
                 if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
                 else if (ev.status === 'running') setAgentTaskStatus(st, '执行中', 'running');
-                else if (ev.status === 'cancelled') finishAgentTask(st, '已取消', 'cancelled');
+                else if (ev.status === 'cancelled') { agentFinalizeText(st, true); finishAgentTask(st, '已取消', 'cancelled'); }
                 break;
             case 'thought': addAgentThought(st, ev.text); break;
-            case 'tool_start': addAgentTool(st, ev); break;
+            case 'text_delta': case 'thought_delta': agentStreamText(st, ev.text); break; // 阶段六十二：流式打字
+            case 'tool_start':
+                agentFinalizeText(st, true); // 流式文本归入"思考过程"折叠块（Trae 同款：出工具即收思考）
+                addAgentTool(st, ev);
+                break;
             case 'tool_result': fillAgentTool(st, ev); break;
             case 'todo': renderAgentTodo(st, ev); break;
             case 'done':
                 st.bar.style.width = '100%';
                 st.pct.textContent = '100%';
                 finishAgentTask(st, '已完成', 'done');
+                // 阶段六十二：最终答复已流式打字输出时直接收尾为正文，不再重复渲染整段气泡
                 if (ev.result) {
-                    // 最终答复以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）
-                    appendMessage(st.agent, ev.result, 'other', 0, msg.timestamp, true);
+                    if (!agentFinalizeText(st, false)) {
+                        // 最终答复以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）
+                        appendMessage(st.agent, ev.result, 'other', 0, msg.timestamp, true);
+                    }
+                } else {
+                    agentFinalizeText(st, true);
                 }
                 break;
             case 'error':
+                agentFinalizeText(st, true);
                 finishAgentTask(st, '失败', 'failed');
                 showToast(ev.message || '任务执行失败');
                 break;
@@ -3051,10 +3274,18 @@
         var okBtn = document.createElement('button');
         okBtn.className = 'agent-approve-ok';
         okBtn.textContent = '同意执行';
+        // 阶段六十二：同意并加入白名单——run_command 放行该命令首词（链式命令除外），write_file 开启写文件免审批，
+        // 服务端 DB 持久化，重启不丢；后续同类操作不再弹审批
+        var wlBtn = document.createElement('button');
+        wlBtn.className = 'agent-approve-wl';
+        wlBtn.textContent = '同意并加白';
+        wlBtn.title = ev.tool === 'write_file' ? '同意本次，且之后的写文件操作不再需要审批'
+            : '同意本次，且之后以相同命令开头的操作不再需要审批（链式命令除外）';
         var noBtn = document.createElement('button');
         noBtn.className = 'agent-approve-no';
         noBtn.textContent = '拒绝';
         actions.appendChild(okBtn);
+        actions.appendChild(wlBtn);
         actions.appendChild(noBtn);
         block.appendChild(head);
         block.appendChild(reason);
@@ -3065,6 +3296,7 @@
 
         function settle(done) {
             okBtn.disabled = true;
+            wlBtn.disabled = true;
             noBtn.disabled = true;
             editor.disabled = true;
             block.classList.add('settled');
@@ -3074,8 +3306,7 @@
             block.appendChild(tip);
         }
 
-        okBtn.addEventListener('click', function () {
-            if (okBtn.disabled) return;
+        function sendApprove(action, doneText) {
             var params = null;
             try { params = JSON.parse(editor.value); } catch (e) {
                 showToast('参数 JSON 格式错误，请修正后再同意');
@@ -3083,9 +3314,18 @@
             }
             IMSocket.send({
                 msg_type: MSG.AGENT_APPROVE,
-                content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: 'approve', params: params })
+                content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: action, params: params })
             });
-            settle('已同意');
+            settle(doneText);
+        }
+
+        okBtn.addEventListener('click', function () {
+            if (okBtn.disabled) return;
+            sendApprove('approve', '已同意');
+        });
+        wlBtn.addEventListener('click', function () {
+            if (wlBtn.disabled) return;
+            sendApprove('whitelist', '已同意并加入白名单，同类操作后续不再提示');
         });
         noBtn.addEventListener('click', function () {
             if (noBtn.disabled) return;

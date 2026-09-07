@@ -463,6 +463,146 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 	return msg.Content, msg.ToolCalls, nil
 }
 
+// aiAgentChatStream 阶段六十二：带工具定义的流式对话调用（Agent Loop 专用，Trae CN 同款打字机体验）。
+// onText/onReasoning 分别回调可见正文与推理摘要增量（reasoning_content，仅推理模型才有）；
+// 工具调用按 index 增量聚合（OpenAI 流式 tool_calls 分片下发），返回累计正文与完整调用列表。
+// streamed 表示本轮是否产生过增量：上游不支持流式/一次性返回时为 false，调用方回退整段事件兼容。
+func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition, onText, onReasoning func(string)) (string, []aiToolCall, bool, error) {
+	if agent.Provider == nil {
+		reply := "本地演示模式：服务端尚未配置模型服务，智能 Agent 需要 function calling 能力的模型（如 deepseek/glm/gpt 等），请先在服务端配置 providers。"
+		if onText != nil {
+			onText(reply)
+		}
+		return reply, nil, true, nil
+	}
+
+	body := map[string]interface{}{
+		"model":          agent.Provider.Model,
+		"messages":       msgs,
+		"stream":         true,
+		"stream_options": map[string]interface{}{"include_usage": true},
+	}
+	if len(tools) > 0 {
+		body["tools"] = tools
+		body["tool_choice"] = "auto"
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(data))
+	if err != nil {
+		return "", nil, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if agent.Provider.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+agent.Provider.APIKey)
+	}
+
+	resp, err := aiHTTP.Do(req)
+	if err != nil {
+		return "", nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		return "", nil, false, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var content strings.Builder
+	type accToolCall struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	tcs := map[int]*accToolCall{}
+	var order []int
+	streamed := false
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		d := chunk.Choices[0].Delta
+		if d.ReasoningContent != "" && onReasoning != nil {
+			streamed = true
+			onReasoning(d.ReasoningContent)
+		}
+		if d.Content != "" {
+			streamed = true
+			content.WriteString(d.Content)
+			if onText != nil {
+				onText(d.Content)
+			}
+		}
+		for _, tc := range d.ToolCalls {
+			acc := tcs[tc.Index]
+			if acc == nil {
+				acc = &accToolCall{}
+				tcs[tc.Index] = acc
+				order = append(order, tc.Index)
+			}
+			if tc.ID != "" {
+				acc.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				acc.name = tc.Function.Name
+			}
+			acc.args.WriteString(tc.Function.Arguments)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", nil, streamed, err
+	}
+
+	var calls []aiToolCall
+	for _, i := range order {
+		acc := tcs[i]
+		if acc.name == "" {
+			continue
+		}
+		var c aiToolCall
+		c.ID = acc.id
+		c.Type = "function"
+		c.Function.Name = acc.name
+		c.Function.Arguments = acc.args.String()
+		calls = append(calls, c)
+	}
+	return content.String(), calls, streamed, nil
+}
+
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）
 // excludeID：排除指定消息（本次提问已先行落库回显，组装历史时排除防上下文重复）；0 表示不排除
 func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string, excludeID uint) []aiChatMessage {

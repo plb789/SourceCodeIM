@@ -177,6 +177,19 @@ type AgentTaskRecord struct {
 // TableName 指定表名
 func (AgentTaskRecord) TableName() string { return "im_agent_task" }
 
+// AgentWhitelist 智能 Agent 审批白名单（阶段六十二）：审批弹窗"同意并加白"的持久化归口。
+// kind=cmd → value 为命令首词前缀（如 node/git），后续命中前缀的 run_command 自动放行；
+// kind=autowrite → 写文件免审批开关（存在记录即开启）。启动时加载进内存白名单，重启不丢
+type AgentWhitelist struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Kind       string    `gorm:"column:kind;type:varchar(16);not null;index" json:"kind"`
+	Value      string    `gorm:"column:value;type:varchar(128);not null" json:"value"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (AgentWhitelist) TableName() string { return "im_agent_whitelist" }
+
 // Message 聊天消息表 im_message
 type Message struct {
 	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`

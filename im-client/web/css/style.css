@@ -3033,6 +3033,134 @@ html, body {
     background: rgba(128, 128, 128, 0.22);
 }
 
+/* ===== 阶段六十二（完整版）：底部常驻任务栏 + 工具分组汇总 ===== */
+/* 底部任务栏（输入区上方常驻，Trae 同款）：主题色描边面板 + 计数 + 展开箭头 */
+.agent-task-dock {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 16px 6px;
+    padding: 8px 12px;
+    background: var(--panel-bg, #252526);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.agent-task-dock:hover {
+    border-color: var(--primary);
+}
+
+.agent-task-dock-icon {
+    color: var(--primary);
+    font-size: 14px;
+}
+
+.agent-task-dock-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text, #ddd);
+}
+
+.agent-task-dock-count {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--primary);
+}
+
+.agent-task-dock-arrow::before {
+    content: '⌄';
+    color: var(--text-light, #888);
+    font-size: 14px;
+    display: inline-block;
+    transition: transform 0.15s ease;
+}
+
+.agent-task-dock.open .agent-task-dock-arrow::before {
+    transform: rotate(180deg);
+}
+
+/* 任务栏展开的清单面板（镜像卡片内清单样式） */
+.agent-task-dock-panel {
+    margin: 0 16px 6px;
+    padding: 6px 12px;
+    background: var(--panel-bg, #252526);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.agent-task-dock-panel.hidden {
+    display: none;
+}
+
+/* 工具分组汇总："已编辑 N 个文件，执行 M 条命令"（Trae 同款，头部可点击展开/收起） */
+.agent-tool-group {
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    margin: 8px 0;
+    overflow: hidden;
+}
+
+.agent-tool-group-head {
+    display: flex;
+    align-items: center;
+    padding: 7px 10px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+    cursor: pointer;
+    user-select: none;
+    background: var(--panel-bg, #252526);
+    transition: background 0.15s ease;
+}
+
+.agent-tool-group-head:hover {
+    background: var(--hover, #2a2d2e);
+}
+
+.agent-tool-group-head::after {
+    content: '⌄';
+    margin-left: 6px;
+    color: var(--text-light, #888);
+    font-size: 13px;
+    display: inline-block;
+    transition: transform 0.15s ease;
+}
+
+.agent-tool-group:not(.open) .agent-tool-group-head::after {
+    transform: rotate(-90deg);
+}
+
+.agent-tool-group-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-light, #888);
+}
+
+.agent-tool-group-body {
+    padding: 0 6px 6px;
+    border-top: 1px solid var(--border, #333);
+}
+
+.agent-tool-group:not(.open) .agent-tool-group-body {
+    display: none;
+}
+
+.agent-tool-group-body .agent-event.tool {
+    margin: 6px 0 0;
+}
+
+.agent-tool-group-body .agent-event.tool:last-child {
+    margin-bottom: 0;
+}
+
 /* ===== 阶段六十二：AI 后续提问建议（Trae CN 同款可点击追问胶囊，跟随主题色） ===== */
 .ai-suggest-row {
     display: flex;
@@ -3639,6 +3767,45 @@ html.m #list-panel.list-collapsed {
     color: var(--primary);
 }
 
+/* ===== 阶段六十二：执行动态反馈（防"卡住"错觉） ===== */
+/* 执行中：齿轮旋转（结果回填后由 ✓ 完成 / ✕ 异常 静态标记接管） */
+.agent-event.tool.pending .agent-event-head::before {
+    display: inline-block;
+    animation: agent-gear-spin 1.4s linear infinite;
+}
+
+@keyframes agent-gear-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* 执行中标签 + 跳动三点（工具行头部右侧区域） */
+.agent-tool-running {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 10px;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--primary);
+}
+
+.agent-tool-running .ai-thinking-dots i,
+.agent-task-status .ai-thinking-dots i,
+.agent-stream-head .ai-thinking-dots i {
+    width: 4px;
+    height: 4px;
+}
+
+.agent-task-status .ai-thinking-dots {
+    margin-left: 5px;
+}
+
+.agent-task-status .ai-thinking-dots i {
+    display: inline-block;
+    vertical-align: middle;
+}
+
 .agent-event.tool.fail {
     border-color: rgba(245, 108, 108, 0.4);
 }
@@ -3659,6 +3826,57 @@ html.m #list-panel.list-collapsed {
 .agent-event.tool.fail .agent-event-head::after {
     content: '异常';
     color: #f56c6c;
+}
+
+/* ===== 阶段六十二：工具行人性化（中文标题+参数芯片+结果摘要行）与流式文本块（Trae CN 同款） ===== */
+/* 工具行：中文标题 */
+.agent-tool-title {
+    font-weight: 600;
+}
+
+/* 参数芯片：文件路径/命令文本（次级色等宽字体，跟随主题） */
+.agent-tool-chip {
+    max-width: 46%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 8px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--hover, #f7f7f7) 80%, transparent);
+    color: var(--text-secondary, #666);
+    font-size: 11px;
+    font-family: Consolas, Monaco, monospace;
+}
+
+/* 结果摘要行：输出首行常显（✓/✕ + 文本），失败红色 */
+.agent-tool-result {
+    padding: 5px 10px 6px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text, #333);
+    border-top: 1px solid var(--border, #ececec);
+    word-break: break-all;
+}
+
+.agent-tool-result.fail {
+    color: #f56c6c;
+}
+
+/* 流式文本块：进行中显示"思考中"标签（主题色），收尾后归类思考过程/正文 */
+.agent-stream-head {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--primary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-event.textstream.thought .agent-stream-head {
+    color: var(--text-secondary, #666);
+}
+
+.agent-event.textstream.answer {
+    border-color: color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 /* 折叠态：仅显示标题行（超长输出/历史思考收起） */
@@ -3729,13 +3947,34 @@ html.m #list-panel.list-collapsed {
     line-height: 1.5;
     font-family: Consolas, Monaco, monospace;
     resize: vertical;
-    background: var(--input-bg, #fff);
+    background: var(--panel-bg, #fff);
     color: var(--text, #333);
     outline: none;
 }
 
 .agent-approve-params:focus {
     border-color: var(--primary);
+}
+
+/* 阶段六十二：同意并加入白名单（描边主题色，与"同意执行"主按钮区分层级） */
+.agent-approve-wl {
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.agent-approve-wl:hover {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.agent-approve-wl:disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 
 .agent-approve-params:disabled {

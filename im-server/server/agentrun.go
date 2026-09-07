@@ -85,6 +85,7 @@ type AgentTask struct {
 	todo        []AgentTodoItem
 	approveCh   chan *AgentApproval   // 容量 1：等待审批时由 handleAgentApprove 投递
 	approveStep string                // 当前等待审批的步骤 key（toolCall.ID，防跨任务/跨步骤错投）
+	approveTool string                // 阶段六十二：当前等待审批的工具名（"同意并加白"按工具分流）
 	execCh      chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
 	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
 	steps       int
@@ -125,6 +126,24 @@ func InitAgent(cfg *config.Config) {
 	agentWorkRoot = cfg.AI.Agent.WorkspaceRoot
 	if err := store.DB.AutoMigrate(&model.AgentTaskRecord{}); err != nil {
 		logger.Error("Agent 任务表迁移失败: %v", err)
+	}
+	// 阶段六十二：加载审批白名单（命令前缀 + 写文件免审批开关）——审批弹窗"同意并加白"持久化，重启不丢
+	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
+		logger.Error("Agent 白名单表迁移失败: %v", err)
+	} else {
+		var wlRows []model.AgentWhitelist
+		store.DB.Where("kind = ?", "cmd").Find(&wlRows)
+		for _, r := range wlRows {
+			v := strings.ToLower(strings.TrimSpace(r.Value))
+			if v != "" && !agentCmdWhitelisted(v) {
+				agentAutoCmds = append(agentAutoCmds, v)
+			}
+		}
+		var awRow model.AgentWhitelist
+		if err := store.DB.Where("kind = ?", "autowrite").First(&awRow).Error; err == nil {
+			agentAutoWrite = true
+		}
+		logger.Info("Agent 审批白名单加载完成：命令前缀 %d 条（含配置），写文件免审批=%v", len(agentAutoCmds), agentAutoWrite)
 	}
 	// 定期清理已结束任务（防注册表泄漏）
 	go func() {
@@ -274,6 +293,8 @@ func (s *Server) agentSetStatus(t *AgentTask, status, text string) {
 // agentCommandAutoAllowed run_command 白名单归口：命令（小写化）恰以白名单前缀开头（词边界）时自动放行
 func agentCommandAutoAllowed(command string) bool {
 	lc := strings.ToLower(strings.TrimSpace(command))
+	agentWlMu.RLock()
+	defer agentWlMu.RUnlock()
 	for _, p := range agentAutoCmds {
 		p = strings.ToLower(strings.TrimSpace(p))
 		if p == "" {
@@ -286,13 +307,69 @@ func agentCommandAutoAllowed(command string) bool {
 	return false
 }
 
+// agentWlMu 阶段六十二：白名单运行态并发保护（agentAutoCmds 追加/agentAutoWrite 翻转 vs 风险分级读取）
+var agentWlMu sync.RWMutex
+
+// agentCmdWhitelisted 命令前缀是否已在白名单（启动加载与"同意并加白"去重用）
+func agentCmdWhitelisted(prefix string) bool {
+	agentWlMu.RLock()
+	defer agentWlMu.RUnlock()
+	for _, p := range agentAutoCmds {
+		if strings.ToLower(strings.TrimSpace(p)) == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// agentWhitelistCmd 审批"同意并加白"（run_command）：命令首词入白名单（内存+DB 持久化）。
+// 安全护栏：链式命令（含 && / || / | / & ）不加白——首词无法担保后续段落的危险性，仍仅本次放行
+func agentWhitelistCmd(command string) (string, bool) {
+	lc := strings.ToLower(strings.TrimSpace(command))
+	if lc == "" {
+		return "", false
+	}
+	if strings.ContainsAny(lc, "&|") {
+		return "", false
+	}
+	token := strings.Fields(lc)[0]
+	token = strings.Trim(token, "\"'")
+	if token == "" || len(token) > 64 {
+		return "", false
+	}
+	if agentCmdWhitelisted(token) {
+		return token, true
+	}
+	agentWlMu.Lock()
+	agentAutoCmds = append(agentAutoCmds, token)
+	agentWlMu.Unlock()
+	store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: token})
+	logger.Info("Agent 命令加白：%s（审批放行时用户确认）", token)
+	return token, true
+}
+
+// agentWhitelistAutoWrite 审批"同意并加白"（write_file）：开启写文件免审批（内存+DB 持久化）
+func agentWhitelistAutoWrite() {
+	agentWlMu.Lock()
+	already := agentAutoWrite
+	agentAutoWrite = true
+	agentWlMu.Unlock()
+	if !already {
+		store.DB.Create(&model.AgentWhitelist{Kind: "autowrite", Value: "on"})
+		logger.Info("Agent 写文件免审批已开启（审批放行时用户确认）")
+	}
+}
+
 // agentNeedsApproval 工具风险分级归口：返回是否需要人工审批与提示原因
 func agentNeedsApproval(tool string, params map[string]interface{}) (bool, string) {
 	switch tool {
 	case "read_file", "todo_write":
 		return false, "" // 只读与任务清单：安全，自动放行
 	case "write_file":
-		if agentAutoWrite {
+		agentWlMu.RLock()
+		auto := agentAutoWrite
+		agentWlMu.RUnlock()
+		if auto {
 			return false, ""
 		}
 		return true, "写入文件属于敏感操作，请确认文件路径与内容"
@@ -563,6 +640,7 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 		return "错误：创建目录失败 " + err.Error()
 	}
 	var n int
+	var diffStat string // 阶段六十二：+N -M 行变化统计（Trae CN 同款，仅 overwrite 且旧文件存在时计算）
 	if mode == "append" {
 		f, err := os.OpenFile(full, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -574,16 +652,48 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 			return "错误：写入失败 " + err.Error()
 		}
 	} else {
+		// 覆盖前读旧内容（存在才统计 diff；不存在视为创建）
+		oldContent, oldErr := os.ReadFile(full)
 		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 			return "错误：写入失败 " + err.Error()
 		}
 		n = len(content)
+		if oldErr == nil {
+			add, del := agentLineDiffStat(string(oldContent), content)
+			diffStat = fmt.Sprintf("+%d -%d ", add, del)
+		}
 	}
 	verb := "写入"
 	if mode == "append" {
 		verb = "追加"
 	}
+	if diffStat != "" {
+		return fmt.Sprintf("已编辑 %s（%s，%d 字节）", path, diffStat, n)
+	}
+	if mode == "overwrite" {
+		return fmt.Sprintf("已创建 %s（%d 字节）", path, n)
+	}
 	return fmt.Sprintf("已%s %s（%d 字节）", verb, path, n)
+}
+
+// agentLineDiffStat 行级 diff 统计（多行集合交集近似：added=新文独有行数 removed=旧文独有行数，
+// 展示用足够，非严格 LCS diff）
+func agentLineDiffStat(oldContent, newContent string) (int, int) {
+	oldSet := make(map[string]int)
+	for _, l := range strings.Split(oldContent, "\n") {
+		oldSet[l]++
+	}
+	common := 0
+	newCount := 0
+	for _, l := range strings.Split(newContent, "\n") {
+		newCount++
+		if oldSet[l] > 0 {
+			oldSet[l]--
+			common++
+		}
+	}
+	oldCount := len(strings.Split(oldContent, "\n"))
+	return newCount - common, oldCount - common
 }
 
 // agentToolTodoWrite 任务清单全量替换 + 进度事件推送（前端渲染清单卡片与进度条）
@@ -689,35 +799,38 @@ func agentNewTaskID() string {
 }
 
 // agentSystemPrompt Agent 系统提示词（工作区说明 + 本地授权目录 + 工具纪律 + 任务清单指引）。
-// sandbox 阶段六十一：PC 端用户自选工作区白名单（nil=未配置，保持默认工作区语义）
+// 阶段六十二修复：配置了主工作区（沙箱白名单）时主工作区优先宣传、命令无需 cd——
+// 此前服务端工作区路径排在最前，模型会 cd 到服务端路径（cd...&&... 链式命令必触发审批），
+// 与用户本地主工作区语义冲突
 func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) string {
-	sb := ""
+	workRule := "当前服务端为用户 " + username + " 分配了独立工作区（你的所有文件操作与命令执行都限制在该目录内）：" + wsDir + "。\n"
 	pathRule := "4. 所有文件操作仅使用工作区内的相对路径。"
 	if sandbox != nil && len(sandbox.Dirs) > 0 {
-		// 本地授权目录注入：模型据此可用绝对路径操作用户自选的项目文件夹
+		// 主工作区优先：命令执行的工作目录就是主工作区，模型无需（也不应）cd 切换目录
 		primary := sandbox.Primary
 		if primary == "" {
 			primary = sandbox.Dirs[0]
 		}
-		sb = "\n用户已在本地电脑授权以下目录（沙箱白名单，可直接读写）：\n"
+		workRule = "用户已在本地电脑授权以下目录（沙箱白名单，可直接读写），你的文件操作与命令执行默认发生在主工作区：\n"
 		for i, d := range sandbox.Dirs {
 			mark := ""
 			if d == primary {
-				mark = "（主工作区，相对路径落在此目录）"
+				mark = "（主工作区）"
 			}
-			sb += fmt.Sprintf("%d. %s%s\n", i+1, d, mark)
+			workRule += fmt.Sprintf("%d. %s%s\n", i+1, d, mark)
 		}
+		workRule += "命令执行的当前目录已经是主工作区，直接执行目标命令即可，禁止用 cd 切换目录（cd ... && ... 链式命令会触发人工审批）。\n"
+		workRule += "服务端另为用户 " + username + " 保留了独立回退工作区：" + wsDir + "（仅在本地执行器离线时使用）。\n"
 		pathRule = "4. 文件操作优先使用相对路径（落在主工作区）；操作白名单内其他授权目录时使用完整绝对路径，禁止访问白名单外的任何路径。"
 	}
-	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。当前服务端为用户 " + username +
-		" 分配了独立工作区（你的所有文件操作与命令执行都限制在该目录内）：" + wsDir + "\n" +
+	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。\n" +
+		workRule +
 		"可用工具：read_file（读文件）、write_file（写文件，需用户审批）、todo_write（任务清单）、run_command（执行命令，白名单外需审批）。\n" +
 		"工作纪律：\n" +
 		"1. 接到任务先分析，第一步必须调用 todo_write 建立任务清单（拆解为可执行的子步骤），并在推进过程中持续更新各条目状态。\n" +
 		"2. 每轮先输出你的思考（简述本步要做什么、为什么），再发起工具调用；需要用户审批的操作会先推送给用户确认。\n" +
 		"3. 工具结果回传后继续下一步；遇到错误要分析原因并调整方案，不要盲目重试同一操作。\n" +
 		pathRule + "\n" +
-		sb +
 		"5. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
 }
 
@@ -879,7 +992,15 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		t.mu.Unlock()
 
 		askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
-		content, toolCalls, err := aiAgentChat(askCtx, t.Agent, msgs, tools)
+		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
+		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
+		content, toolCalls, streamed, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,
+			func(delta string) {
+				s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
+			},
+			func(delta string) {
+				s.agentEmit(t, "thought_delta", map[string]interface{}{"text": delta})
+			})
 		cancelAsk()
 		if err != nil {
 			s.agentFinish(t, "failed", "", "模型调用失败："+err.Error())
@@ -896,13 +1017,16 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				s.agentFinish(t, "failed", "", "模型未返回有效内容")
 				return
 			}
-			s.agentEmit(t, "thought", map[string]interface{}{"text": content})
+			// 本轮已流式推送过（streamed）则不再重复整段；一次性返回的上游回退 thought 事件
+			if !streamed {
+				s.agentEmit(t, "thought", map[string]interface{}{"text": content})
+			}
 			s.agentFinish(t, "completed", content, "")
 			return
 		}
 
-		// 有思考文本先推送（体现思考过程）
-		if strings.TrimSpace(content) != "" {
+		// 有思考文本且未流式推送过则补推（体现思考过程）
+		if strings.TrimSpace(content) != "" && !streamed {
 			s.agentEmit(t, "thought", map[string]interface{}{"text": content})
 		}
 
@@ -978,12 +1102,14 @@ func (s *Server) agentWaitApproval(t *AgentTask, callID, tool string, params map
 	t.mu.Lock()
 	t.approveCh = ch
 	t.approveStep = step
+	t.approveTool = tool // 阶段六十二："同意并加白"按工具分流（run_command 加命令前缀 / write_file 开免审批）
 	t.Status = "waiting_approval"
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
 		t.approveCh = nil
 		t.approveStep = ""
+		t.approveTool = ""
 		t.mu.Unlock()
 	}()
 
@@ -1040,7 +1166,7 @@ func (s *Server) handleAgentApprove(c *Client, msg *protocol.Message) {
 		s.sendError(c, "审批请求格式错误")
 		return
 	}
-	if req.Action != "approve" && req.Action != "reject" {
+	if req.Action != "approve" && req.Action != "reject" && req.Action != "whitelist" {
 		s.sendError(c, "未知的审批操作")
 		return
 	}
@@ -1056,9 +1182,21 @@ func (s *Server) handleAgentApprove(c *Client, msg *protocol.Message) {
 	t.mu.Lock()
 	ch := t.approveCh
 	step := t.approveStep
+	tool := t.approveTool
 	t.mu.Unlock()
 	if ch == nil || step != req.Step { // 非等待态或步骤不匹配（迟到的审批）直接忽略
 		return
+	}
+	// 阶段六十二："同意并加白"= 先按工具持久化白名单，再按 approve 放行本次
+	if req.Action == "whitelist" {
+		switch tool {
+		case "run_command":
+			cmd, _ := req.Params["command"].(string)
+			agentWhitelistCmd(cmd) // 链式命令内部拒白，仅本次放行
+		case "write_file":
+			agentWhitelistAutoWrite()
+		}
+		req.Action = "approve"
 	}
 	select {
 	case ch <- &AgentApproval{Action: req.Action, Params: req.Params}:
