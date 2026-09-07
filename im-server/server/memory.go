@@ -161,7 +161,7 @@ func memProcessTask(t memExtractTask) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	raw, err := aiStreamChat(ctx, extractor, prompt, func(string) {})
+	raw, _, err := aiStreamChat(ctx, extractor, prompt, func(string) {}) // 记忆提取不关心 Token 统计
 	if err != nil {
 		logger.Warn("记忆提取模型调用失败（用户 %s，智能体 %s）：%v", t.Username, t.Agent.Name, err)
 		return

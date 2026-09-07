@@ -183,6 +183,7 @@ func reloadAIAgents() {
 			APIURL:        p.APIURL,
 			APIKey:        p.APIKey,
 			Model:         p.Model,
+			VisionModel:   p.VisionModel,
 			SupportsImage: p.SupportsImage,
 		}
 	}
@@ -249,9 +250,29 @@ func aiAgentList() []*AIRunAgent {
 
 // aiChatMessage OpenAI 兼容对话消息
 // 阶段四十四：Content 改为 interface{}——纯文本消息为 string，多模态消息为 []aiContentPart 数组
+// 阶段五十九：扩展工具调用链路字段——ToolCalls（assistant 发起的工具调用）、ToolCallID/Name（role=tool 结果回传）
 type aiChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role       string       `json:"role"`
+	Content    interface{}  `json:"content"`
+	ToolCalls  []aiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
+	Name       string       `json:"name,omitempty"`
+}
+
+// aiToolCall 模型返回的工具调用请求（阶段五十九：OpenAI 兼容 tool_calls 格式）
+type aiToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"` // JSON 字符串形式的参数
+	} `json:"function"`
+}
+
+// aiToolDefinition OpenAI 兼容工具定义（阶段五十九：Agent Loop 注入模型的 tools 数组元素）
+type aiToolDefinition struct {
+	Type     string                 `json:"type"` // 固定 "function"
+	Function map[string]interface{} `json:"function"`
 }
 
 // aiContentPart OpenAI 兼容多模态消息片段（阶段四十四：图片识别）
@@ -265,6 +286,13 @@ type aiImageURLField struct {
 	URL string `json:"url"` // 支持 data:image/xxx;base64,... 格式（服务端读盘转码，图片无需公网地址）
 }
 
+// aiUsage 模型响应 Token 消耗（OpenAI 兼容 usage 字段归口，随结束帧下发并随回复落库）
+type aiUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // aiNewStreamID 生成本次流式回复的关联 ID
 func aiNewStreamID() string {
 	b := make([]byte, 8)
@@ -274,26 +302,43 @@ func aiNewStreamID() string {
 	return hex.EncodeToString(b)
 }
 
-// aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复。
+// aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复
+// 与本次消耗的 Token 统计（stream_options.include_usage 请求归口，兼容服务无该字段时 usage 归零优雅降级）。
 // provider 为 nil 时使用本地 Mock 应答（未配置模型服务的降级路径）
-func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, onDelta func(string)) (string, error) {
+func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, onDelta func(string)) (string, aiUsage, error) {
 	if agent.Provider == nil {
 		reply := "我是 " + agent.Name + "（本地演示模式）。服务端尚未配置模型服务，请在 im-server/bin/config.yaml 的 ai 节点配置 providers（api_url/api_key/model）与 agents 后重启服务。"
 		onDelta(reply)
-		return reply, nil
+		return reply, aiUsage{}, nil
+	}
+
+	// 视觉模型自动路由：消息中出现多模态 content 数组（带图提问）且配置了 vision_model 时，
+	// 本次请求自动改用视觉模型，纯文本仍走主模型——同一智能体无需手动切换模型
+	modelName := agent.Provider.Model
+	for _, m := range msgs {
+		if _, isText := m.Content.(string); !isText {
+			if agent.Provider.VisionModel != "" {
+				modelName = agent.Provider.VisionModel
+				logger.Info("AI 视觉路由：智能体 %s 带图提问，使用视觉模型 %s", agent.Name, modelName)
+			} else {
+				logger.Warn("AI 视觉路由：智能体 %s 带图提问，但模型服务 %s 未配置视觉模型，仍使用主模型 %s（多模态内容可能被模型忽略）", agent.Name, agent.Provider.Name, modelName)
+			}
+			break
+		}
 	}
 
 	body, err := json.Marshal(map[string]interface{}{
-		"model":    agent.Provider.Model,
-		"messages": msgs,
-		"stream":   true,
+		"model":          modelName,
+		"messages":       msgs,
+		"stream":         true,
+		"stream_options": map[string]interface{}{"include_usage": true},
 	})
 	if err != nil {
-		return "", err
+		return "", aiUsage{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", aiUsage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if agent.Provider.APIKey != "" {
@@ -302,16 +347,18 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 
 	resp, err := aiHTTP.Do(req)
 	if err != nil {
-		return "", err
+		return "", aiUsage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return "", aiUsage{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
-	// 解析 SSE 流：形如 "data: {...}"，终止帧 "data: [DONE]"；增量取 choices[0].delta.content
+	// 解析 SSE 流：形如 "data: {...}"，终止帧 "data: [DONE]"；增量取 choices[0].delta.content，
+	// usage 随末尾帧下发（include_usage），取到即记（无则保持零值，前端不显示）
 	var full strings.Builder
+	var usage aiUsage
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -329,9 +376,13 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage *aiUsage `json:"usage"`
 		}
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
+		}
+		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+			usage = *chunk.Usage
 		}
 		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 			delta := chunk.Choices[0].Delta.Content
@@ -340,16 +391,78 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return full.String(), err
+		return full.String(), usage, err
 	}
 	if full.Len() == 0 {
-		return "", fmt.Errorf("AI 服务未返回内容")
+		return "", usage, fmt.Errorf("AI 服务未返回内容")
 	}
-	return full.String(), nil
+	return full.String(), usage, nil
+}
+
+// aiAgentChat 阶段五十九：带工具定义的非流式对话调用（Agent Loop 决策专用）。
+// 请求体携带 tools（OpenAI 兼容 function calling 格式），返回助手文本与工具调用请求列表；
+// 未发起工具调用时 toolCalls 为空、content 即最终答复。
+// provider 为 nil 时返回本地 Mock 应答（与聊天链路同款降级提示，Agent 无法执行任务）。
+func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition) (string, []aiToolCall, error) {
+	if agent.Provider == nil {
+		reply := "本地演示模式：服务端尚未配置模型服务，智能 Agent 需要 function calling 能力的模型（如 deepseek/glm/gpt 等），请先在服务端配置 providers。"
+		return reply, nil, nil
+	}
+
+	body := map[string]interface{}{
+		"model":       agent.Provider.Model,
+		"messages":    msgs,
+		"stream":      false,
+		"tools":       tools,
+		"tool_choice": "auto",
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(data))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if agent.Provider.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+agent.Provider.APIKey)
+	}
+
+	resp, err := aiHTTP.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content   string       `json:"content"`
+				ToolCalls []aiToolCall `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", nil, fmt.Errorf("AI 响应解析失败: %w", err)
+	}
+	if len(out.Choices) == 0 {
+		return "", nil, fmt.Errorf("AI 服务未返回内容")
+	}
+	msg := out.Choices[0].Message
+	return msg.Content, msg.ToolCalls, nil
 }
 
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）
-func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string) []aiChatMessage {
+// excludeID：排除指定消息（本次提问已先行落库回显，组装历史时排除防上下文重复）；0 表示不排除
+func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string, excludeID uint) []aiChatMessage {
 	msgs := make([]aiChatMessage, 0, aiContextWindow+2)
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
@@ -366,9 +479,12 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: memCtx})
 	}
 	var records []model.Message
-	store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-		2, username, agent.Name, agent.Name, username).
-		Order("id DESC").Limit(aiContextWindow).Find(&records)
+	query := store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+		2, username, agent.Name, agent.Name, username)
+	if excludeID > 0 {
+		query = query.Where("id <> ?", excludeID)
+	}
+	query.Order("id DESC").Limit(aiContextWindow).Find(&records)
 	for i := len(records) - 1; i >= 0; i-- {
 		content := messageSummary(records[i].Content) // 引用信封取正文，JSON 原串不进模型上下文
 		if content == "" {
@@ -583,28 +699,20 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 先组装上下文（此时本次提问尚未落库，避免上下文重复）
-	chatMsgs := s.aiBuildContext(c.username, agent, question)
-
-	// 阶段四十四：图片提问——最后一条 user 消息替换为多模态 content 数组（文本 + base64 图片）
+	// 阶段四十四：图片提问数据加载（本地文件读 + base64，快速操作；失败直接报错不落库）
+	var imageDataURL string
 	if imageEnv != nil {
 		dataURL, err := s.aiLoadImageDataURL(imageEnv.Image)
 		if err != nil {
 			s.sendError(c, err.Error())
 			return
 		}
-		chatMsgs[len(chatMsgs)-1].Content = []aiContentPart{
-			{Type: "text", Text: question},
-			{Type: "image_url", ImageURL: &aiImageURLField{URL: dataURL}},
-		}
+		imageDataURL = dataURL
 	}
 
-	// 阶段四十五：文档提问——最后一条 user 消息替换为文档全文信封 + 附言（纯文本注入，任意文本模型可答）
-	if docEnv != nil {
-		chatMsgs[len(chatMsgs)-1].Content = docPrompt
-	}
-
-	// 提问落库（is_read=true：AI 会话无已读回执语义，避免自己发的提问永远显示"未读"）
+	// 提问先落库并立即回显：用户消息秒级上屏（原实现先做知识库/记忆向量检索再回显，
+	// embedding API 网络慢时自己发的提问要等数秒才显示；回显/思考中应在提问瞬间出现）
+	// 落库 is_read=true：AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
 	record := model.Message{
 		MsgType:  2,
 		FromUser: c.username,
@@ -615,12 +723,14 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	store.DB.Create(&record)
 
 	// 回显提问给自己全部在线连接（复用私聊渲染链路，多端同步）
+	// IsRead=true 随帧下发：AI 会话无回执语义，与落库口径一致，客户端直接显示"已读"
 	echo := protocol.Message{
 		MsgType:   protocol.MsgTypePrivate,
 		FromUser:  c.username,
 		ToUser:    agent.Name,
 		Content:   msg.Content,
 		MsgID:     record.ID,
+		IsRead:    true,
 		Timestamp: time.Now().Unix(),
 	}
 	echoData, _ := json.Marshal(echo)
@@ -630,12 +740,30 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	s.touchConversation(c.username, agent.Name, messageSummary(msg.Content))
 	s.notifyConvUpdate(c.username)
 
+	// 再组装上下文（此时本次提问已落库，按 excludeID 排除防上下文重复）：
+	// 知识库命中与长期记忆均为向量检索（embedding API 调用），耗时随网络波动，
+	// 放在回显之后——用户先看到自己的消息和"思考中"，模型首字延迟不受影响
+	chatMsgs := s.aiBuildContext(c.username, agent, question, record.ID)
+
+	// 阶段四十四：图片提问——最后一条 user 消息替换为多模态 content 数组（文本 + base64 图片）
+	if imageDataURL != "" {
+		chatMsgs[len(chatMsgs)-1].Content = []aiContentPart{
+			{Type: "text", Text: question},
+			{Type: "image_url", ImageURL: &aiImageURLField{URL: imageDataURL}},
+		}
+	}
+
+	// 阶段四十五：文档提问——最后一条 user 消息替换为文档全文信封 + 附言（纯文本注入，任意文本模型可答）
+	if docEnv != nil {
+		chatMsgs[len(chatMsgs)-1].Content = docPrompt
+	}
+
 	// 异步调用模型流式接口，避免阻塞 WebSocket 主调度
 	streamID := aiNewStreamID()
 	go func() {
 		askCtx, cancel := context.WithTimeout(context.Background(), aiAskTimeout)
 		defer cancel()
-		full, err := aiStreamChat(askCtx, agent, chatMsgs, func(delta string) {
+		full, usage, err := aiStreamChat(askCtx, agent, chatMsgs, func(delta string) {
 			chunk := protocol.Message{
 				MsgType:   protocol.MsgTypeAIStream,
 				FromUser:  agent.Name,
@@ -666,11 +794,15 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		}
 
 		// 完整回复落库（is_read=false：计入会话未读，多端打开会话后由回执归口清除）
+		// Token 消耗随回复落库（服务端 usage 归口，历史加载同样可显示）
 		reply := model.Message{
-			MsgType:  2,
-			FromUser: agent.Name,
-			ToUser:   c.username,
-			Content:  full,
+			MsgType:          2,
+			FromUser:         agent.Name,
+			ToUser:           c.username,
+			Content:          full,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
 		}
 		store.DB.Create(&reply)
 		s.touchConversation(c.username, agent.Name, messageSummary(full))
@@ -680,17 +812,20 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		memEnqueueExtract(agent, c.username, question, full)
 
 		endMsg := protocol.Message{
-			MsgType:   protocol.MsgTypeAIStreamEnd,
-			FromUser:  agent.Name,
-			ToUser:    c.username,
-			Content:   full,
-			MsgID:     reply.ID,
-			StreamID:  streamID,
-			Timestamp: time.Now().Unix(),
+			MsgType:          protocol.MsgTypeAIStreamEnd,
+			FromUser:         agent.Name,
+			ToUser:           c.username,
+			Content:          full,
+			MsgID:            reply.ID,
+			StreamID:         streamID,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
+			Timestamp:        time.Now().Unix(),
 		}
 		data, _ := json.Marshal(endMsg)
 		s.sendToUser(c.username, data)
-		logger.Info("AI 回复用户 %s（智能体 %s，%d 字）", c.username, agent.Name, len([]rune(full)))
+		logger.Info("AI 回复用户 %s（智能体 %s，%d 字，tokens：%d 提问/%d 生成/%d 共）", c.username, agent.Name, len([]rune(full)), usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 	}()
 }
 
@@ -722,7 +857,7 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 			promptMsgs = append(promptMsgs, aiChatMessage{Role: "system", Content: kbCtx})
 		}
 		promptMsgs = append(promptMsgs, aiChatMessage{Role: "user", Content: question})
-		reply, err := aiStreamChat(askCtx, agent, promptMsgs, func(string) {}) // 群聊场景整段回复，增量丢弃
+		reply, usage, err := aiStreamChat(askCtx, agent, promptMsgs, func(string) {}) // 群聊场景整段回复，增量丢弃
 		if err != nil {
 			logger.Error("群聊 AI 应答失败（用户 %s）：%v", c.username, err)
 			return
@@ -730,10 +865,13 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 		reply = "@" + c.username + " " + reply
 
 		record := model.Message{
-			MsgType:  int8(protocol.MsgTypeGroupChat),
-			FromUser: AIBotName,
-			ToUser:   "",
-			Content:  reply,
+			MsgType:          int8(protocol.MsgTypeGroupChat),
+			FromUser:         AIBotName,
+			ToUser:           "",
+			Content:          reply,
+			PromptTokens:     usage.PromptTokens,
+			CompletionTokens: usage.CompletionTokens,
+			TotalTokens:      usage.TotalTokens,
 		}
 		store.DB.Create(&record)
 

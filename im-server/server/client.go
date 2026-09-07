@@ -17,7 +17,9 @@ type Client struct {
 	conn      *websocket.Conn
 	username  string
 	loginTime time.Time // 本次登录时间，用于好友申请去重
-	sendCh    chan []byte
+	// 阶段六十：登录设备类型（"pc"=Electron 桌面端，空=Web/手机）——Agent 本地执行器据此判定工具下发目标
+	platform string
+	sendCh   chan []byte
 	// 回归加固：连接写互斥锁——writePump（队列写）与 SendErrorAndClose（登录失败同步写）
 	// 都可能写同一底层连接，gorilla/websocket 不允许并发写（会 panic 打崩进程），必须串行化
 	writeMu sync.Mutex

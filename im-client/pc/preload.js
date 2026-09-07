@@ -108,5 +108,24 @@ contextBridge.exposeInMainWorld('desktop', {
     // 冻结编辑器首帧就绪通知（主进程收到后揭幕：透明度归位，用户看到的第一帧即冻结画面）
     shotReady: function () {
         ipcRenderer.send('shot:ready');
+    },
+    // ===== 阶段六十：Agent 本地执行器 =====
+    // 渲染进程桥接：服务端下发的本地执行请求转发主进程执行（req = {username, tool, params}）
+    // 返回 Promise<{ok, output}>，结果由渲染进程经 WS 回传服务端
+    agentExec: function (req) {
+        return ipcRenderer.invoke('agent:exec', req);
+    },
+    // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
+    // 原生目录选择对话框（返回所选目录绝对路径，取消返回空串）
+    sandboxChoose: function (title) {
+        return ipcRenderer.invoke('sandbox:choose', title);
+    },
+    // 拉取当前用户沙箱配置（Promise<{primary, dirs}>）
+    sandboxGet: function (username) {
+        return ipcRenderer.invoke('sandbox:get', username);
+    },
+    // 保存沙箱配置（payload = {username, primary, dirs}，返回 Promise<{ok, cfg}>）
+    sandboxSave: function (payload) {
+        return ipcRenderer.invoke('sandbox:save', payload);
     }
 });

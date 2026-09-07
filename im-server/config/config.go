@@ -72,6 +72,9 @@ type AIProviderConfig struct {
 	APIURL string `yaml:"api_url"` // chat/completions 完整接口地址
 	APIKey string `yaml:"api_key"` // API 密钥（仅存服务端）
 	Model  string `yaml:"model"`   // 模型名（如 deepseek-chat / glm-4-flash）
+     // VisionModel 视觉模型名（选填）：文本/视觉分立的模型（如 deepseek-v4-flash-vision-exp）填此字段，
+     // 带图提问时服务端自动路由，纯文本仍走主模型；为空统一走主模型
+     VisionModel string `yaml:"vision_model"`
 	// SupportsImage 模型是否支持图片识别（多模态，如 glm-4v/qwen-vl/gpt-4o）。
 	// 阶段四十四：为 true 时绑定的智能体开放图片提问入口，服务端按 OpenAI 兼容多模态
 	// 格式（content 数组：text + image_url data URL）调模型；false 时前端隐藏发图入口，
@@ -123,6 +126,20 @@ type MemoryConfig struct {
 	ExtractProvider string  `yaml:"extract_provider"` // 提取用模型服务名（留空=用智能体当前绑定模型；建议填本地 ollama 零成本）
 }
 
+// AgentConfig 阶段五十九：智能 Agent 自动化任务配置（工具调用闭环+权限审批；enabled=false 时功能整体关闭）
+type AgentConfig struct {
+	Enabled               bool     `yaml:"enabled"`                 // 总开关（false 时 AGENT_RUN 返回明确提示）
+	MaxSteps              int      `yaml:"max_steps"`               // 单任务最大迭代步数（0=30，防模型死循环）
+	ToolTimeoutSeconds    int      `yaml:"tool_timeout_seconds"`    // 命令执行默认超时秒（0=60，上限 300）
+	ApproveTimeoutSeconds int      `yaml:"approve_timeout_seconds"` // 高危工具审批等待超时秒（0=300，超时任务挂起）
+	AutoWrite             bool     `yaml:"auto_write"`              // write_file 是否免审批（默认 false 走审批；内网信任环境可开）
+	AutoCommands          []string `yaml:"auto_commands"`           // run_command 命令前缀白名单（命中自动放行，其余强制审批）
+	WorkspaceRoot         string   `yaml:"workspace_root"`          // 工作区根目录（空=exe目录/agent_workspace，按 username 隔离子目录）
+	// PcExecutor 阶段六十：本地执行器开关——true 时用户 PC 端在线，文件/命令工具下放到其电脑本地执行
+	// （文件直接落在用户磁盘 %APPDATA%/即时通讯/agent_workspace/<用户名>/；PC 离线或执行超时自动回退服务端工作区）
+	PcExecutor bool `yaml:"pc_executor"`
+}
+
 // AIConfig AI 问答配置节
 type AIConfig struct {
 	Providers []AIProviderConfig `yaml:"providers"` // 模型服务列表（多模型支持）
@@ -134,6 +151,8 @@ type AIConfig struct {
 	UserAgent UserAgentConfig `yaml:"user_agent"`
 	// 阶段五十八：智能体长期记忆（按 用户+智能体 隔离；回复后异步提取，提问时向量召回注入）
 	Memory MemoryConfig `yaml:"memory"`
+	// 阶段五十九：智能 Agent 自动化任务（工具调用闭环+权限审批）
+	Agent AgentConfig `yaml:"agent"`
 	// 多轮对话携带的历史消息条数（按用户+智能体隔离取最近 N 条）
 	ContextWindow int `yaml:"context_window"`
 	// 限流：单用户在限流窗口内最大提问次数
@@ -254,6 +273,12 @@ func Load() *Config {
 		cfg.AI.KB.DataDir = filepath.Join(exeDir(), "data", "kb")
 	} else {
 		cfg.AI.KB.DataDir = resolvePath(cfg.AI.KB.DataDir)
+	}
+	// 阶段五十九：Agent 工作区根目录兜底（锚定 exe 目录/agent_workspace，按 username 隔离子目录）
+	if cfg.AI.Agent.WorkspaceRoot == "" {
+		cfg.AI.Agent.WorkspaceRoot = filepath.Join(exeDir(), "agent_workspace")
+	} else {
+		cfg.AI.Agent.WorkspaceRoot = resolvePath(cfg.AI.Agent.WorkspaceRoot)
 	}
 	// 阶段五十一：知识库参数兜底（切片 500 字/重叠 50/注入 3 条/上下文上限 4000 字）
 	if cfg.AI.KB.ChunkSize <= 0 {

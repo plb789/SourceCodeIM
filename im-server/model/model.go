@@ -31,6 +31,9 @@ type AIProvider struct {
 	APIURL string `gorm:"column:api_url;type:varchar(255);not null" json:"api_url"`      // OpenAI 兼容 chat/completions 完整接口地址
 	APIKey string `gorm:"column:api_key;type:varchar(255);default:''" json:"-"`          // API 密钥（仅服务端与管理后台归口，普通聊天链路不下发）
 	Model  string `gorm:"column:model;type:varchar(128);not null" json:"model"`          // 模型名（如 deepseek-v4-flash）
+	// VisionModel 视觉模型名（选填）：文本与视觉分立的模型（如 DeepSeek 文本/视觉双模型）填此字段，
+	// 带图提问时服务端自动路由到该模型，纯文本仍走主模型；为空则统一走主模型（单模型多模态如 glm-4v 无需填）
+	VisionModel string `gorm:"column:vision_model;type:varchar(128);default:''" json:"vision_model"`
 	// SupportsImage 是否支持图片识别（多模态），为 true 时绑定的智能体开放图片提问入口
 	SupportsImage bool `gorm:"column:supports_image;default:false" json:"supports_image"`
 	// Enabled 启用状态：false 时绑定的智能体降级为本地 Mock 应答
@@ -154,16 +157,40 @@ type AIMemoryPref struct {
 // TableName 指定表名
 func (AIMemoryPref) TableName() string { return "im_ai_memory_pref" }
 
+// AgentTaskRecord 智能 Agent 自动化任务记录（阶段五十九）：任务闭环审计归口。
+// 运行态在内存（事件流实时推送），结束态（completed/failed/cancelled）落库供追溯；
+// Result 存最终答复摘要，Error 存失败/取消原因
+type AgentTaskRecord struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID     string    `gorm:"column:task_id;type:varchar(40);not null;uniqueIndex" json:"task_id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户
+	AgentName  string    `gorm:"column:agent_name;type:varchar(64);not null" json:"agent_name"`   // 执行智能体
+	Goal       string    `gorm:"column:goal;type:text" json:"goal"`                               // 任务目标
+	Status     string    `gorm:"column:status;type:varchar(16);not null" json:"status"`           // completed/failed/cancelled
+	Result     string    `gorm:"column:result;type:text" json:"result"`                           // 最终答复（完成时）
+	Error      string    `gorm:"column:error;type:text" json:"error"`                             // 失败/取消原因
+	Steps      int       `gorm:"column:steps;not null;default:0" json:"steps"`                    // 实际迭代步数
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AgentTaskRecord) TableName() string { return "im_agent_task" }
+
 // Message 聊天消息表 im_message
 type Message struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	MsgType    int8      `gorm:"column:msg_type;type:tinyint;not null" json:"msg_type"` // 1群聊 2私聊 3文件消息
-	FromUser   string    `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
-	ToUser     string    `gorm:"column:to_user;type:varchar(32)" json:"to_user"` // 群聊为空
-	Content    string    `gorm:"column:content;type:text" json:"content"`
-	IsRead     bool      `gorm:"column:is_read;default:false" json:"is_read"`   // 已读状态
-	Recalled   bool      `gorm:"column:recalled;default:false" json:"recalled"` // 是否已撤回
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	MsgType  int8   `gorm:"column:msg_type;type:tinyint;not null" json:"msg_type"` // 1群聊 2私聊 3文件消息
+	FromUser string `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
+	ToUser   string `gorm:"column:to_user;type:varchar(32)" json:"to_user"` // 群聊为空
+	Content  string `gorm:"column:content;type:text" json:"content"`
+	IsRead   bool   `gorm:"column:is_read;default:false" json:"is_read"`   // 已读状态
+	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"` // 是否已撤回
+	// AI 回复 Token 消耗（服务端 usage 归口；普通消息恒为 0，历史加载同样可显示）
+	PromptTokens     int       `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`
+	CompletionTokens int       `gorm:"column:completion_tokens;default:0" json:"completion_tokens,omitempty"`
+	TotalTokens      int       `gorm:"column:total_tokens;default:0" json:"total_tokens,omitempty"`
+	CreateTime       time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
 // TableName 指定表名

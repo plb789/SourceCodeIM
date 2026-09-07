@@ -68,7 +68,14 @@
         AI_AGENTS: 42,      // 阶段四十三：AI 智能体列表请求/响应（content 为 JSON：[{name,avatar,model}]）
         AI_CHAT: 43,        // 阶段四十三：AI 问答提问（to_user=智能体名，服务端归口调用模型）
         AI_STREAM: 44,      // 阶段四十三：AI 流式回复增量（content=增量文本，stream_id 关联同一次回复）
-        AI_STREAM_END: 45   // 阶段四十三：AI 流式回复结束（content=完整回复，msg_id=落库 ID，remark=error 表示失败）
+        AI_STREAM_END: 45,  // 阶段四十三：AI 流式回复结束（content=完整回复，msg_id=落库 ID，remark=error 表示失败）
+        AGENT_RUN: 46,      // 阶段五十九：Agent 任务发起/取消（上行，content 为 JSON：{goal,agent_name} / {task_id,action:"cancel"}）
+        AGENT_EVENT: 47,    // 阶段五十九：Agent 任务事件流（下行，content 为 JSON：{task_id,type,...}）
+        AGENT_APPROVE_REQ: 48, // 阶段五十九：Agent 高危工具审批请求（下行，content 为 JSON：{task_id,step,tool,params,reason}）
+        AGENT_APPROVE: 49,  // 阶段五十九：Agent 审批结果（上行，content 为 JSON：{task_id,step,action,params?}）
+        AGENT_EXEC_REQ: 50, // 阶段六十：Agent 本地执行请求（下行，仅 PC 端处理，content 为 JSON：{task_id,step,tool,params}）
+        AGENT_EXEC_RESP: 51, // 阶段六十：Agent 本地执行结果（上行，content 为 JSON：{task_id,step,ok,output}）
+        AGENT_SANDBOX: 52 // 阶段六十一：Agent 沙箱白名单上报（上行，仅 PC 端，content 为 JSON：{primary,dirs}）
     };
 
     function connect(username, password) {
@@ -83,8 +90,9 @@
 
         ws.onopen = function () {
             connected = true;
-            // 发送登录消息
-            send({ msg_type: MSG.LOGIN, from_user: username, content: password });
+            // 发送登录消息（阶段六十：PC 端 Electron preload 暴露 window.desktop，据此上报设备类型，
+            // 服务端 Agent 本地执行器按 platform=pc 判定文件/命令工具下发目标；Web/手机端为空走服务端执行）
+            send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: window.desktop ? 'pc' : '' });
             // 启动心跳
             startHeartbeat();
         };

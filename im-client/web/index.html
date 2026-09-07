@@ -8,7 +8,7 @@
     <script src="js/app-shell.js?v=1.0"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
     <script src="js/mobile.js?v=1.2"></script>
-    <link rel="stylesheet" href="css/style.css?v=1.53">
+    <link rel="stylesheet" href="css/style.css?v=1.55">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -230,6 +230,14 @@
                     <button id="clear-btn" class="tool-btn" title="清空当前聊天显示">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
+                    <!-- 阶段五十九：Agent 任务模式开关（仅 AI 智能体会话可用，开启后发送内容作为自动化任务目标） -->
+                    <button id="agent-mode-btn" class="tool-btn agent-mode-btn hidden" title="Agent 任务模式：输入任务目标，智能体将自主规划并调用工具完成（写文件/命令需审批）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h3a3 3 0 0 1 3 3v1h.27c.34-.6 .99-1 1.73-1a2 2 0 0 1 0 4c-.74 0-1.39-.4-1.73-1H19v1a3 3 0 0 1-3 3h-3v1.27c.6 .34 1 .99 1 1.73a2 2 0 0 1-4 0c0-.74 .4-1.39 1-1.73V18H8a3 3 0 0 1-3-3v-1h-.27c-.34 .6-.99 1-1.73 1a2 2 0 0 1 0-4c.74 0 1.39 .4 1.73 1H5v-1a3 3 0 0 1 3-3h3V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/></svg>
+                    </button>
+                    <!-- 阶段六十一：Agent 工作区/沙箱白名单按钮（仅 PC 端本地执行器可用，用户自选任意文件夹作为主工作区并维护授权目录白名单） -->
+                    <button id="agent-ws-btn" class="tool-btn agent-ws-btn hidden" title="Agent 工作区：选择本地文件夹作为主工作区，并维护沙箱白名单（授权目录内允许 Agent 读写文件）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+                    </button>
                 </div>
                 <textarea id="message-input" placeholder="输入消息" rows="3"></textarea>
                 <div class="input-footer">
@@ -436,6 +444,30 @@
         </div>
     </div>
 
+    <!-- 阶段六十一：Agent 工作区/沙箱白名单面板（仅 PC 端；用户自选主工作区 + 授权目录白名单，自研弹窗复用知识库弹窗骨架） -->
+    <div id="agent-ws-mask" class="modal-mask hidden">
+        <div class="modal-box kb-box agent-ws-box">
+            <div class="modal-title">Agent 工作区</div>
+            <div class="agent-ws-tip">选择本地文件夹作为 Agent 主工作区（相对路径的文件都落在此目录），并维护授权目录白名单：白名单内目录允许 Agent 直接读写，白名单外的任何路径都会被拒绝。配置仅保存在本机。</div>
+            <div class="agent-ws-section">
+                <div class="agent-ws-label">主工作区</div>
+                <div class="agent-ws-primary-row">
+                    <span id="agent-ws-primary" class="agent-ws-path">未设置（使用默认工作区）</span>
+                    <button id="agent-ws-pick" class="kb-create-btn agent-ws-mini-btn">选择文件夹</button>
+                </div>
+            </div>
+            <div class="agent-ws-section">
+                <div class="agent-ws-label">授权目录白名单</div>
+                <div id="agent-ws-dirs" class="agent-ws-dirs"></div>
+                <button id="agent-ws-add" class="kb-op-btn agent-ws-add-btn">+ 添加授权目录</button>
+            </div>
+            <div class="modal-btns">
+                <button id="agent-ws-save" class="kb-create-btn">保存</button>
+                <button id="agent-ws-close" class="modal-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 阶段四十六：文档在线编辑弹窗（OnlyOffice，自研窗口禁用系统弹窗；标题栏跟随主题色，编辑器经 iframe 挂载） -->
     <div id="doc-editor-mask" class="doc-editor-mask hidden"></div>
     <div id="doc-editor-window" class="doc-editor-window hidden">
@@ -462,6 +494,6 @@
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
     <script src="js/lib/pptxgen.bundle.js?v=1.0"></script>
-    <script src="js/chat.js?v=1.89"></script>
+    <script src="js/chat.js?v=1.92"></script>
 </body>
 </html>

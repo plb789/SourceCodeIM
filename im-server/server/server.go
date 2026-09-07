@@ -172,6 +172,17 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleAIAgents(c, msg)
 	case protocol.MsgTypeAIChat:
 		s.handleAIChatMsg(c, msg)
+	// 阶段五十九：智能 Agent 自动化任务（任务发起/取消 + 审批结果上行）
+	case protocol.MsgTypeAgentRun:
+		s.handleAgentRun(c, msg)
+	case protocol.MsgTypeAgentApprove:
+		s.handleAgentApprove(c, msg)
+	// 阶段六十：Agent 本地执行器——PC 端回传本地工具执行结果
+	case protocol.MsgTypeAgentExecResp:
+		s.handleAgentExecResp(c, msg)
+	// 阶段六十一：Agent 沙箱白名单——PC 端上报用户自选工作区/授权目录
+	case protocol.MsgTypeAgentSandbox:
+		s.handleAgentSandbox(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -210,6 +221,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 
 	c.username = user.Username
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
+	// 阶段六十：记录登录设备类型（"pc"=Electron 桌面端）——Agent 本地执行器据此判定工具下发目标
+	c.platform = strings.TrimSpace(msg.Platform)
 	s.hub.Add(c)
 
 	// 写入 Redis 在线缓存

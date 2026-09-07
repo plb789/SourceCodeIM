@@ -87,6 +87,9 @@ func main() {
 	http.HandleFunc("PUT /api/agents/{id}/memory/pref", srv.HandleMemoryPref)
 	http.HandleFunc("DELETE /api/agents/{id}/memory/{mid}", srv.HandleMemoryDelete)
 	http.HandleFunc("DELETE /api/agents/{id}/memory", srv.HandleMemoryClear)
+
+	// 阶段五十九：Agent 工作区静态访问（页面预览支撑，仅限本人工作区内文件）
+	http.HandleFunc("GET /agent/preview", srv.HandleAgentPreview)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
@@ -117,6 +120,8 @@ func main() {
 	server.InitKB(cfg)
 	// 阶段五十八：智能体长期记忆初始化（须在 InitKB 之后：向量库实例由 KB 模块创建）
 	server.InitMemory(cfg)
+	// 阶段五十九：智能 Agent 自动化任务初始化（工具调用闭环+权限审批，须在 InitAI 之后复用智能体索引）
+	server.InitAgent(cfg)
 	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
 	server.RegisterAdminRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）

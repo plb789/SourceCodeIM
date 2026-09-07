@@ -69,6 +69,8 @@
     var fileBtn = document.getElementById('file-btn');
     var screenshotBtn = document.getElementById('screenshot-btn');
     var clearBtn = document.getElementById('clear-btn');
+    var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
+    var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
     var fileInput = document.getElementById('file-input');
@@ -988,22 +990,40 @@
     }
 
     function sendMessage() {
+        var content = messageInput.value.trim();
         // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
         // 阶段三十九：一次发出全部待发送截图（逐张走既有图片链路，各自 nonce 气泡独立回填）
-        // 原实现：if (pendingShot) { 单张取出发送 }
+        // 截图附言随发：输入框文字取走并清空后随截图一并发出——AI 会话作为图片附言入信封（单气泡图+文），
+        // 普通会话作为独立文字消息紧随图片发出；原实现分支无条件 return，文字留在输入框需二次点击发送
         if (pendingShots.length) {
             var shots = pendingShots.slice();
+            var note = content;
             clearPendingShot();
+            messageInput.value = '';
             // 修复：必须传 item.blob（列表项为 { blob: xx } 包装对象，直传会把对象序列化成 "[object Object]" 垃圾内容导致图片全碎）
             // 原实现：for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i]);
-            for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i].blob);
-            return;
+            for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i].blob, note);
+            messageInput.focus();
+            if (currentChatUser !== '' && isAIAgent(currentChatUser)) return; // AI：附言已入图片信封
+            if (!note) return; // 无附言：仅发图
+            content = note; // 普通/群聊：附言继续走下方普通消息链路，与截图同次点击一起发出
         }
-        var content = messageInput.value.trim();
         if (!content) return;
         // 阶段四十三：AI 智能体会话走专用问答协议（服务端归口调用模型并流式回复，密钥不下发）
         var msg;
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            // 阶段五十九：Agent 任务模式——发送内容作为自动化任务目标（服务端建任务闭环，事件流实时回推）
+            if (agentMode) {
+                clearQuoteTarget(); // 任务目标不参与引用（引用信封 JSON 会破坏 AGENT_RUN 协议格式）
+                msg = { msg_type: MSG.AGENT_RUN, to_user: currentChatUser, content: JSON.stringify({ goal: content, agent_name: currentChatUser }) };
+                if (IMSocket.send(msg)) {
+                    messageInput.value = '';
+                    messageInput.focus();
+                    // 本地回显任务目标（任务事件不落库，仅实时展示；最终答复同样实时渲染）
+                    appendMessage(IMSocket.getUsername(), content, 'self', 0, Math.floor(Date.now() / 1000), false);
+                }
+                return;
+            }
             msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content };
         } else {
             msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
@@ -1455,12 +1475,30 @@
     // 阶段三十一：扩展直传模式（content 携带 url/name/size/nonce）——
     // 分片路径通知无 content，仅回填 msg_id（原逻辑不变）；直传路径接收端按 content 直接渲染，
     // 发送端按 nonce 回填本地气泡（对齐群聊图片 GROUP_IMAGE 的归口思路）
+    // 图片/文件气泡已读状态回填：气泡 msg_id 落库回填时，同步回填状态元素（发送时元素已建、msg_id 为空），
+    // 并按对方已读水位即时定态——处理"回执先于落库通知到达"的时序（对方开着会话时秒读）
+    function applyBubbleReadStatus(el, msgId, peer) {
+        var st = el.querySelector('.msg-status');
+        if (!st) return;
+        st.setAttribute('data-msg-id', msgId);
+        var read = (readWatermark[peer] || 0) >= msgId;
+        st.textContent = read ? '已读' : '未读';
+        if (read) st.classList.add('read');
+    }
+
     IMSocket.on(MSG.FILE_PERSISTED, function (msg) {
         if (!msg.file_id || !msg.msg_id) return;
         // 分片路径：气泡已存在（file_id 随文件头回执记录），仅回填 msg_id
         var el = messageList.querySelector('.message[data-file-id="' + msg.file_id + '"]');
         if (el) {
             el.setAttribute('data-msg-id', msg.msg_id);
+            // 发送端图片气泡带已读状态元素（接收端无），按对端回填
+            var peer = msg.from_user === IMSocket.getUsername() ? (msg.to_user || '') : msg.from_user;
+            applyBubbleReadStatus(el, msg.msg_id, peer);
+            // 接收端正在查看会话：自动发已读回执（与文字消息一致；水位去重，服务端归口清除未读角标）
+            if (msg.from_user !== IMSocket.getUsername() && currentChatUser === msg.from_user) {
+                sendReadReceipt(msg.from_user, msg.msg_id);
+            }
             return;
         }
         // 直传路径：content 为空说明是旧版分片通知且气泡缺失，无需渲染
@@ -1476,6 +1514,7 @@
             if (mineEl) {
                 mineEl.setAttribute('data-msg-id', msg.msg_id);
                 mineEl.setAttribute('data-file-id', msg.file_id);
+                applyBubbleReadStatus(mineEl, msg.msg_id, msg.to_user || '');
                 // 阶段三十八：图片气泡 src 从 blob: 回填为服务器 URL——blob 仅本页面有效，
                 // 图片查看器（独立窗口）收集列表时跨窗口加载失败，导致自己发的图进不了翻页/缩略图列表
                 // 原实现：仅回填 msg_id/file_id，img.src 永远停留在 blob:
@@ -1512,6 +1551,8 @@
         mediaEl.setAttribute('data-msg-id', msg.msg_id);
         mediaEl.setAttribute('data-file-id', msg.file_id);
         if (msg.timestamp) mediaEl.setAttribute('data-ts', msg.timestamp);
+        // 接收端正在查看会话：自动发已读回执（与文字消息一致；发送端图片即时翻"已读"，未读角标服务端归口清除）
+        if (!isMine) sendReadReceipt(msg.from_user, msg.msg_id);
     });
 
     // ===== 阶段三十二：超大文件分片直传进度同步 =====
@@ -1590,13 +1631,15 @@
     // （单条记录同时承载图片与附言，避免图片消息+信封消息重复气泡）。附言取发送时输入框内容（可空，
     // 服务端给模型默认指令"请描述并分析这张图片"）；本地 blob 气泡仅作上传中预览，发送成功后由
     // 服务端 PRIVATE 回显渲染最终气泡（无 nonce 去重链路，故发送前移除本地气泡防重复）
-    function sendAIImage(file) {
+    // noteText 可选：截图附言（sendMessage 截图分支预先取走输入框文字传入）；
+    // 缺省时取发送时输入框内容（图片按钮路径）
+    function sendAIImage(file, noteText) {
         var agent = currentChatUser;
         if (!agent || !isAIAgent(agent)) return;
         if (!isImageName(file.name)) { showToast('仅支持发送图片文件'); return; }
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxFile) { showToast('图片超过大小上限（' + formatSize(maxFile) + '）'); return; }
-        var note = messageInput.value.trim();
+        var note = (noteText !== undefined && noteText !== null) ? String(noteText) : messageInput.value.trim();
         var bubble = appendImageMsg(IMSocket.getUsername(), URL.createObjectURL(file), 'self', true);
         var fd = new FormData();
         fd.append('file', file);
@@ -1861,6 +1904,9 @@
     // ===== 阶段三十五：截图编辑器确认后的统一发送入口（群聊走 HTTP 上传链路，私聊走分片/直传分流） =====
     function sendScreenshotFile(blob) {
         var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
+        // AI 智能体会话：截图同样走 AI 图片识别链路（/upload/ai/image + AI_CHAT 信封），
+        // 与图片按钮一致；原实现直走通用文件链路，AI 不响应文件消息导致截图提问无应答
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) { sendAIImage(shot); return; }
         if (currentChatUser === '') sendGroupImage(shot);
         else sendFile(shot);
     }
@@ -1953,6 +1999,18 @@
             } catch (e) {}
             // 阶段四十三：登录成功后拉取 AI 智能体列表（刷新自动重登/断线重连均会走 LOGIN_RESP，服务端配置归口）
             requestAIAgents();
+            // 阶段六十一：登录成功后自动上报本机沙箱白名单（服务端仅内存保存，重启即丢失；
+            // PC 重启/断线重连均走 LOGIN_RESP，从主进程本地持久化拉取后重新上报，保证 Agent 任务随时可用授权目录）
+            if (agentWsSupported()) {
+                window.desktop.sandboxGet(IMSocket.getUsername()).then(function (cfg) {
+                    cfg = cfg || {};
+                    if (!cfg.primary && (!cfg.dirs || !cfg.dirs.length)) return; // 未配置=默认工作区语义，无需上报
+                    IMSocket.send({
+                        msg_type: MSG.AGENT_SANDBOX,
+                        content: JSON.stringify({ primary: cfg.primary || '', dirs: cfg.dirs || [] })
+                    });
+                });
+            }
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
             // 并从乐观显示的聊天界面回退到登录界面
@@ -2237,9 +2295,17 @@
     // fullText 为回复 Markdown 原文（复制原文，渲染样式不带出）
     // 阶段四十五：表格回复追加「导出 Excel/Word」——服务端归口转档（POST /export/ai/excel|word，
     // 服务端取回复原文解析转 xlsx 并以文件消息回发会话），msgId 缺失（流式未回填完）时不显示
-    function buildAIActionBar(agent, fullText, msgId) {
+    // tokens 为本次回复 Token 消耗（服务端 usage 归口，{total,prompt,completion}），无数据不显示
+    function buildAIActionBar(agent, fullText, msgId, tokens) {
         var bar = document.createElement('div');
         bar.className = 'ai-actions';
+        if (tokens && tokens.total > 0) {
+            var tk = document.createElement('span');
+            tk.className = 'ai-token-info';
+            tk.title = '提示 ' + tokens.prompt + ' + 生成 ' + tokens.completion + ' = 共 ' + tokens.total + ' Tokens';
+            tk.textContent = '⚡ ' + tokens.total + ' tokens';
+            bar.appendChild(tk);
+        }
         // 24x24 线性图标（Feather 风格），stroke=currentColor 使悬停变色跟随主题
         var ICONS = {
             copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
@@ -2516,9 +2582,10 @@
         st.textEl.innerHTML = renderAIMarkdown(st.shown);
         // 阶段四十三：回复完成后追加操作栏（复制/重新生成/编辑提问，豆包同款）
         // 阶段四十五：表格回复追加导出按钮（服务端归口转档，msg_id 用于取回复原文）
+        // Token 消耗标注随操作栏渲染（服务端 usage 归口，随结束帧下发）
         var bodyEl = st.el.querySelector('.message-body');
         if (bodyEl && !bodyEl.querySelector('.ai-actions')) {
-            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown, st.finalId));
+            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown, st.finalId, st.tokens));
         }
         if (st.finalId) st.el.setAttribute('data-msg-id', st.finalId);
         var agent = st.el.getAttribute('data-from');
@@ -2551,15 +2618,479 @@
             if (!st.shown && !st.pending.length && msg.content) st.pending = msg.content;
             st.done = true;
             st.finalId = msg.msg_id || 0;
+            // Token 消耗随结束帧下发（服务端 usage 归口），收尾时渲染到操作栏
+            st.tokens = { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 };
             ensureStreamTimer(st);
             return;
         }
         if (msg.remark === 'error') return; // 失败且无气泡：服务端已 toast 提示
         if (currentChatUser === msg.from_user) {
-            appendMessage(msg.from_user, msg.content, 'other', msg.msg_id, msg.timestamp, true);
+            appendMessage(msg.from_user, msg.content, 'other', msg.msg_id, msg.timestamp, true, false,
+                { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 });
             if (msg.msg_id) sendReadReceipt(msg.from_user, msg.msg_id);
         }
     });
+
+    // ===== 阶段五十九：智能 Agent 任务模式（工具调用闭环 + 权限审批，事件流实时渲染） =====
+    // 交互设计对齐 Trae CN：发起任务 → 任务卡片（清单+进度条）→ 思考/工具/审批子事件流 → 最终答复
+    var agentMode = false;    // 当前是否处于 Agent 任务模式（仅 AI 智能体会话内可开启）
+    var agentTaskCards = {};  // task_id → 任务卡片状态（切会话 DOM 清空但状态保留，重进不重放事件）
+
+    function setAgentMode(on) {
+        agentMode = on;
+        agentModeBtn.classList.toggle('active', on);
+        messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
+    }
+
+    agentModeBtn.addEventListener('click', function () {
+        if (!currentChatUser || !isAIAgent(currentChatUser)) return;
+        setAgentMode(!agentMode);
+    });
+
+    // ===== 阶段六十一：Agent 工作区/沙箱白名单面板（仅 PC 端本地执行器可用） =====
+    // 主工作区=相对路径落盘根目录；授权目录白名单=绝对路径文件操作仅允许落在这些目录内（本地执行时强校验）。
+    // 配置持久化在 PC 主进程本机文件（按用户名隔离，本地磁盘路径不上服务端库），保存成功后经 WS msg 52
+    // 上报服务端注入 Agent 提示词（告知可用目录）；服务端仅内存保存用于提示，不据此放行任何路径。
+    var agentWsMask = document.getElementById('agent-ws-mask');
+    var agentWsDirsEl = document.getElementById('agent-ws-dirs');
+    var agentWsPrimaryEl = document.getElementById('agent-ws-primary');
+    var agentWsPrimary = ''; // 面板编辑态：主工作区目录（空=默认工作区）
+    var agentWsDirs = [];    // 面板编辑态：授权目录列表
+
+    // 是否支持本地工作区配置（仅 PC 端 preload 暴露了 sandbox API；Web 端工作区在服务端，无自选意义）
+    function agentWsSupported() {
+        return !!(window.desktop && typeof window.desktop.sandboxChoose === 'function');
+    }
+
+    // 渲染授权目录列表（每行：路径 + 移除按钮；空白名单给占位提示）
+    function renderAgentWsDirs() {
+        agentWsDirsEl.innerHTML = '';
+        if (!agentWsDirs.length) {
+            var empty = document.createElement('div');
+            empty.className = 'agent-ws-empty';
+            empty.textContent = '尚未授权任何目录（Agent 仅能操作主工作区内的相对路径）';
+            agentWsDirsEl.appendChild(empty);
+            return;
+        }
+        agentWsDirs.forEach(function (d, i) {
+            var row = document.createElement('div');
+            row.className = 'agent-ws-dir-row';
+            var p = document.createElement('span');
+            p.className = 'agent-ws-dir-path';
+            p.textContent = d;
+            p.title = d;
+            var del = document.createElement('button');
+            del.className = 'agent-ws-dir-del';
+            del.title = '移除该目录';
+            del.textContent = '×';
+            del.addEventListener('click', function () {
+                agentWsDirs.splice(i, 1);
+                if (agentWsPrimary && agentWsDirs.indexOf(agentWsPrimary) < 0) agentWsPrimary = ''; // 主工作区被移除则回退默认工作区
+                agentWsPrimaryEl.textContent = agentWsPrimary || '未设置（使用默认工作区）';
+                agentWsPrimaryEl.title = agentWsPrimary || '';
+                renderAgentWsDirs();
+            });
+            row.appendChild(p);
+            row.appendChild(del);
+            agentWsDirsEl.appendChild(row);
+        });
+    }
+
+    // 打开面板：先从主进程拉取当前用户已保存配置填充编辑态
+    function openAgentWsPanel() {
+        if (!agentWsSupported()) { showToast('仅 PC 客户端支持自定义工作区'); return; }
+        window.desktop.sandboxGet(IMSocket.getUsername()).then(function (cfg) {
+            cfg = cfg || {};
+            agentWsPrimary = cfg.primary || '';
+            agentWsDirs = (cfg.dirs || []).slice();
+            agentWsPrimaryEl.textContent = agentWsPrimary || '未设置（使用默认工作区）';
+            agentWsPrimaryEl.title = agentWsPrimary || '';
+            renderAgentWsDirs();
+            agentWsMask.classList.remove('hidden');
+        });
+    }
+
+    agentWsBtn.addEventListener('click', openAgentWsPanel);
+    document.getElementById('agent-ws-close').addEventListener('click', function () {
+        agentWsMask.classList.add('hidden');
+    });
+    agentWsMask.addEventListener('click', function (e) {
+        if (e.target === agentWsMask) agentWsMask.classList.add('hidden'); // 点遮罩关闭
+    });
+
+    // 选择主工作区：原生目录对话框；主工作区自动并入授权目录（相对路径落盘依赖它，保存端也强制归一化）
+    document.getElementById('agent-ws-pick').addEventListener('click', function () {
+        window.desktop.sandboxChoose('选择主工作区文件夹').then(function (dir) {
+            if (!dir) return;
+            agentWsPrimary = dir;
+            if (agentWsDirs.indexOf(dir) < 0) agentWsDirs.unshift(dir);
+            agentWsPrimaryEl.textContent = dir;
+            agentWsPrimaryEl.title = dir;
+            renderAgentWsDirs();
+        });
+    });
+
+    // 添加授权目录（重复选择去重；上限由主进程归一化裁剪）
+    document.getElementById('agent-ws-add').addEventListener('click', function () {
+        window.desktop.sandboxChoose('选择授权目录').then(function (dir) {
+            if (!dir) return;
+            if (agentWsDirs.indexOf(dir) < 0) {
+                agentWsDirs.push(dir);
+                renderAgentWsDirs();
+            }
+        });
+    });
+
+    // 保存：主进程归一化+持久化（本机文件）→ WS msg 52 上报服务端注入提示词 → 关面板
+    document.getElementById('agent-ws-save').addEventListener('click', function () {
+        var dirs = agentWsDirs.slice();
+        if (agentWsPrimary && dirs.indexOf(agentWsPrimary) < 0) dirs.unshift(agentWsPrimary);
+        window.desktop.sandboxSave({ username: IMSocket.getUsername(), primary: agentWsPrimary, dirs: dirs }).then(function (r) {
+            if (!r || !r.ok) { showToast((r && r.msg) || '保存失败'); return; }
+            agentWsPrimary = r.cfg.primary;
+            agentWsDirs = r.cfg.dirs;
+            IMSocket.send({
+                msg_type: MSG.AGENT_SANDBOX,
+                content: JSON.stringify({ primary: agentWsPrimary, dirs: agentWsDirs })
+            });
+            agentWsMask.classList.add('hidden');
+            showToast('工作区配置已保存');
+        });
+    });
+
+    // 任务卡片：每次任务一张容器卡片，内部追加思考/工具/审批子事件流
+    function createAgentTaskCard(agent, taskId, goal) {
+        var div = document.createElement('div');
+        div.className = 'message other';
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        var card = document.createElement('div');
+        card.className = 'agent-task-card';
+
+        var head = document.createElement('div');
+        head.className = 'agent-task-head';
+        var title = document.createElement('span');
+        title.className = 'agent-task-title';
+        title.textContent = '任务';
+        var goalEl = document.createElement('span');
+        goalEl.className = 'agent-task-goal';
+        goalEl.textContent = goal || '';
+        goalEl.title = goal || '';
+        var statusEl = document.createElement('span');
+        statusEl.className = 'agent-task-status running';
+        statusEl.textContent = '执行中';
+        var stopBtn = document.createElement('button');
+        stopBtn.className = 'agent-task-stop';
+        stopBtn.textContent = '停止';
+        stopBtn.addEventListener('click', function () {
+            if (stopBtn.disabled) return;
+            IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: taskId, action: 'cancel' }) });
+            stopBtn.disabled = true;
+            stopBtn.textContent = '取消中…';
+        });
+        head.appendChild(title);
+        head.appendChild(goalEl);
+        head.appendChild(statusEl);
+        head.appendChild(stopBtn);
+        card.appendChild(head);
+
+        // 进度条（todo_write 驱动：done/total；track 轨道 + bar 填充）
+        var prog = document.createElement('div');
+        prog.className = 'agent-task-progress';
+        var track = document.createElement('div');
+        track.className = 'agent-task-track';
+        var bar = document.createElement('div');
+        bar.className = 'agent-task-bar';
+        track.appendChild(bar);
+        var pct = document.createElement('span');
+        pct.className = 'agent-task-pct';
+        pct.textContent = '0%';
+        prog.appendChild(track);
+        prog.appendChild(pct);
+        card.appendChild(prog);
+
+        var todoList = document.createElement('div');
+        todoList.className = 'agent-todo-list hidden';
+        card.appendChild(todoList);
+
+        var events = document.createElement('div');
+        events.className = 'agent-events';
+        card.appendChild(events);
+
+        body.appendChild(card);
+        div.appendChild(getAvatarEl(agent));
+        div.appendChild(body);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+
+        var st = { taskId: taskId, agent: agent, el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {} };
+        agentTaskCards[taskId] = st;
+        return st;
+    }
+
+    function agentTaskScroll() {
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+
+    function setAgentTaskStatus(st, text, cls) {
+        st.statusEl.textContent = text;
+        st.statusEl.className = 'agent-task-status ' + (cls || 'running');
+    }
+
+    function finishAgentTask(st, text, cls) {
+        setAgentTaskStatus(st, text, cls);
+        st.stopBtn.disabled = true;
+        st.stopBtn.textContent = '已结束';
+    }
+
+    // 思考事件：可折叠子块（新一轮思考默认展开，旧的自动折叠，避免卡片过长）
+    function addAgentThought(st, text) {
+        if (st.events.querySelector('.agent-event.thought.collapsed')) {
+            // 无操作：旧思考块保持折叠状态
+        }
+        var olds = st.events.querySelectorAll('.agent-event.thought:not(.collapsed)');
+        for (var i = 0; i < olds.length; i++) olds[i].classList.add('collapsed');
+        var block = document.createElement('div');
+        block.className = 'agent-event thought';
+        var head = document.createElement('div');
+        head.className = 'agent-event-head';
+        head.textContent = '思考';
+        head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
+        var bodyEl = document.createElement('div');
+        bodyEl.className = 'agent-event-body ai-md';
+        bodyEl.innerHTML = renderAIMarkdown(text || '');
+        block.appendChild(head);
+        block.appendChild(bodyEl);
+        st.events.appendChild(block);
+        agentTaskScroll();
+    }
+
+    // 工具事件：tool_start 建块等待结果回填（同一 tool_call 一块）
+    function addAgentTool(st, ev) {
+        var block = document.createElement('div');
+        block.className = 'agent-event tool pending';
+        var head = document.createElement('div');
+        head.className = 'agent-event-head';
+        head.textContent = '工具 · ' + (ev.tool || '');
+        // 阶段六十：执行环境标签（pc=用户本地 / server=服务端，tool_result 回填时按真实环境更新）
+        head.appendChild(buildAgentEnvTag(ev.env));
+        var argsEl = document.createElement('pre');
+        argsEl.className = 'agent-event-args';
+        argsEl.textContent = JSON.stringify(ev.params || {}, null, 2);
+        var outEl = document.createElement('pre');
+        outEl.className = 'agent-event-output hidden';
+        block.appendChild(head);
+        block.appendChild(argsEl);
+        block.appendChild(outEl);
+        st.events.appendChild(block);
+        st.tools[ev.tool + ':' + st.events.children.length] = block; // 占位（真实关联按 tool 名回填兜底）
+        agentTaskScroll();
+    }
+
+    // 阶段六十：执行环境小标签（跟随主题色，"本地执行"标识文件落在用户电脑）
+    function buildAgentEnvTag(env) {
+        var tag = document.createElement('span');
+        tag.className = 'agent-env-tag' + (env === 'pc' ? ' pc' : '');
+        tag.textContent = env === 'pc' ? '本地执行' : '服务端执行';
+        return tag;
+    }
+
+    function fillAgentTool(st, ev) {
+        // 回填规则：优先匹配该工具名最后一个 pending 块
+        var blocks = st.events.querySelectorAll('.agent-event.tool.pending');
+        var block = null;
+        for (var i = blocks.length - 1; i >= 0; i--) {
+            var head = blocks[i].querySelector('.agent-event-head');
+            if (head && head.textContent.indexOf(ev.tool || '') !== -1) { block = blocks[i]; break; }
+        }
+        if (!block) { addAgentTool(st, { tool: ev.tool, params: {} }); blocks = st.events.querySelectorAll('.agent-event.tool.pending'); block = blocks[blocks.length - 1]; }
+        block.classList.remove('pending');
+        block.classList.add(ev.ok === false ? 'fail' : 'ok');
+        var outEl = block.querySelector('.agent-event-output');
+        outEl.textContent = ev.output || '';
+        outEl.classList.remove('hidden');
+        // 输出超长折叠（点击标题展开/收起）
+        if ((ev.output || '').length > 600) block.classList.add('collapsed');
+        var head = block.querySelector('.agent-event-head');
+        head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
+        // 阶段六十：按真实执行环境更新标签（tool_start 的 env 仅为预判——本地等待超时会回退服务端）
+        if (ev.env) {
+            var oldTag = head.querySelector('.agent-env-tag');
+            if (oldTag) oldTag.remove();
+            head.appendChild(buildAgentEnvTag(ev.env));
+        }
+        agentTaskScroll();
+    }
+
+    // 任务清单事件：全量重绘清单 + 进度条（Trae 同款实时反馈）
+    function renderAgentTodo(st, ev) {
+        var todos = ev.todos || [];
+        st.todoList.innerHTML = '';
+        st.todoList.classList.remove('hidden');
+        todos.forEach(function (t) {
+            var item = document.createElement('div');
+            item.className = 'agent-todo-item ' + (t.status || 'pending');
+            var mark = document.createElement('span');
+            mark.className = 'agent-todo-mark';
+            mark.textContent = t.status === 'done' ? '✓' : (t.status === 'in_progress' ? '▸' : '○');
+            var text = document.createElement('span');
+            text.className = 'agent-todo-text';
+            text.textContent = t.content || '';
+            item.appendChild(mark);
+            item.appendChild(text);
+            st.todoList.appendChild(item);
+        });
+        var done = ev.done || 0, total = ev.total || todos.length || 1;
+        var percent = Math.round((done / total) * 100);
+        st.bar.style.width = percent + '%';
+        st.pct.textContent = percent + '%';
+        agentTaskScroll();
+    }
+
+    // Agent 事件流分发（事件不落库：仅当前会话实时渲染，切换会话后不重放）
+    IMSocket.on(MSG.AGENT_EVENT, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return;
+        var ev;
+        try { ev = JSON.parse(msg.content); } catch (e) { return; }
+        if (!ev || !ev.task_id) return;
+        if (currentChatUser !== msg.from_user) return; // 仅当前会话实时渲染
+        var st = agentTaskCards[ev.task_id];
+        if (ev.type === 'status' && ev.status === 'running' && ev.goal && !st) {
+            st = createAgentTaskCard(msg.from_user, ev.task_id, ev.goal);
+        }
+        if (!st) return;
+        switch (ev.type) {
+            case 'status':
+                if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
+                else if (ev.status === 'running') setAgentTaskStatus(st, '执行中', 'running');
+                else if (ev.status === 'cancelled') finishAgentTask(st, '已取消', 'cancelled');
+                break;
+            case 'thought': addAgentThought(st, ev.text); break;
+            case 'tool_start': addAgentTool(st, ev); break;
+            case 'tool_result': fillAgentTool(st, ev); break;
+            case 'todo': renderAgentTodo(st, ev); break;
+            case 'done':
+                st.bar.style.width = '100%';
+                st.pct.textContent = '100%';
+                finishAgentTask(st, '已完成', 'done');
+                if (ev.result) {
+                    // 最终答复以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）
+                    appendMessage(st.agent, ev.result, 'other', 0, msg.timestamp, true);
+                }
+                break;
+            case 'error':
+                finishAgentTask(st, '失败', 'failed');
+                showToast(ev.message || '任务执行失败');
+                break;
+        }
+    });
+
+    // 审批请求卡片：参数 JSON 可直接编辑（改参放行），同意/拒绝上行归口
+    IMSocket.on(MSG.AGENT_APPROVE_REQ, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return;
+        var ev;
+        try { ev = JSON.parse(msg.content); } catch (e) { return; }
+        if (!ev || !ev.task_id) return;
+        if (currentChatUser !== msg.from_user) return;
+        var st = agentTaskCards[ev.task_id];
+        if (!st) return;
+
+        var block = document.createElement('div');
+        block.className = 'agent-event approve';
+        var head = document.createElement('div');
+        head.className = 'agent-event-head approve';
+        head.textContent = '需要审批 · ' + (ev.tool || '');
+        var reason = document.createElement('div');
+        reason.className = 'agent-approve-reason';
+        reason.textContent = ev.reason || '该操作需要确认';
+        var editor = document.createElement('textarea');
+        editor.className = 'agent-approve-params';
+        editor.rows = 4;
+        editor.value = JSON.stringify(ev.params || {}, null, 2);
+        var actions = document.createElement('div');
+        actions.className = 'agent-approve-actions';
+        var okBtn = document.createElement('button');
+        okBtn.className = 'agent-approve-ok';
+        okBtn.textContent = '同意执行';
+        var noBtn = document.createElement('button');
+        noBtn.className = 'agent-approve-no';
+        noBtn.textContent = '拒绝';
+        actions.appendChild(okBtn);
+        actions.appendChild(noBtn);
+        block.appendChild(head);
+        block.appendChild(reason);
+        block.appendChild(editor);
+        block.appendChild(actions);
+        st.events.appendChild(block);
+        agentTaskScroll();
+
+        function settle(done) {
+            okBtn.disabled = true;
+            noBtn.disabled = true;
+            editor.disabled = true;
+            block.classList.add('settled');
+            var tip = document.createElement('div');
+            tip.className = 'agent-approve-tip';
+            tip.textContent = done;
+            block.appendChild(tip);
+        }
+
+        okBtn.addEventListener('click', function () {
+            if (okBtn.disabled) return;
+            var params = null;
+            try { params = JSON.parse(editor.value); } catch (e) {
+                showToast('参数 JSON 格式错误，请修正后再同意');
+                return;
+            }
+            IMSocket.send({
+                msg_type: MSG.AGENT_APPROVE,
+                content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: 'approve', params: params })
+            });
+            settle('已同意');
+        });
+        noBtn.addEventListener('click', function () {
+            if (noBtn.disabled) return;
+            IMSocket.send({
+                msg_type: MSG.AGENT_APPROVE,
+                content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: 'reject' })
+            });
+            settle('已拒绝，等待 Agent 调整方案');
+        });
+    });
+
+    // ===== 阶段六十：Agent 本地执行器桥接（仅 PC 端生效） =====
+    // 服务端下发的本地执行请求（50）经 preload 暴露的 agentExec 转发主进程执行，结果（51）回传服务端。
+    // Web/手机端无 window.desktop.agentExec，不注册监听，服务端对其永远走服务端执行（hub.HasPC=false）
+    if (window.desktop && typeof window.desktop.agentExec === 'function') {
+        IMSocket.on(MSG.AGENT_EXEC_REQ, function (msg) {
+            if (msg.to_user !== IMSocket.getUsername()) return;
+            var ev;
+            try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (!ev || !ev.task_id || !ev.step) return;
+            // 请求里带当前登录用户名：主进程按用户名隔离本地工作区（防同机多账号串目录）
+            var req = { username: IMSocket.getUsername(), tool: ev.tool, params: ev.params || {} };
+            window.desktop.agentExec(req).then(function (res) {
+                IMSocket.send({
+                    msg_type: MSG.AGENT_EXEC_RESP,
+                    from_user: IMSocket.getUsername(),
+                    content: JSON.stringify({
+                        task_id: ev.task_id, step: ev.step,
+                        ok: !!(res && res.ok), output: (res && res.output) || ''
+                    })
+                });
+            }).catch(function (err) {
+                // IPC 链路异常（主进程执行器崩溃等）：按工具级失败回传，模型据此调整方案
+                IMSocket.send({
+                    msg_type: MSG.AGENT_EXEC_RESP,
+                    from_user: IMSocket.getUsername(),
+                    content: JSON.stringify({
+                        task_id: ev.task_id, step: ev.step, ok: false,
+                        output: '错误：本地执行器异常 ' + (err && err.message || err)
+                    })
+                });
+            });
+        });
+    }
 
     // 阶段四十三：代码块渲染（豆包同款：标题栏=语言名+复制按钮；highlight.js 本地语法高亮，
     // 库未加载/不支持的语言自动回退纯文本转义，不影响降级路径）
@@ -3128,7 +3659,10 @@
         var isMine = msg.from_user === IMSocket.getUsername();
         var relevantUser = isMine ? msg.to_user : msg.from_user;
         if (currentChatUser === relevantUser) {
-            appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, true);
+            // 已读状态随回显帧下发（服务端归口）：AI 提问回显 is_read=true 显示"已读"；
+            // 普通私聊帧无该字段保持"未读"，由对方阅读回执链路更新
+            appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, true,
+                isMine ? msg.is_read === true : undefined);
             // 阶段四十三：发给 AI 智能体的提问上屏后，紧随其后显示"思考中"指示（服务端回显先于流式帧送达，时序稳定）
             if (isMine && isAIAgent(msg.to_user)) {
                 showAIThinking(msg.to_user);
@@ -3221,6 +3755,11 @@
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         currentChatUser = user;
+        // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用；切换会话退出任务模式
+        if (agentMode) setAgentMode(false);
+        agentModeBtn.classList.toggle('hidden', !(user && isAIAgent(user)));
+        // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
+        agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
         // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；
         // 重新进入该会话时增量会重建气泡继续打字，END 帧保证最终完整）
         for (var sid in aiStreams) {
@@ -3374,7 +3913,8 @@
             }
             return;
         }
-        var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, isRead);
+        var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, isRead,
+            isAIAgent(r.from_user) ? { total: r.total_tokens || 0, prompt: r.prompt_tokens || 0, completion: r.completion_tokens || 0 } : undefined);
         if (beforeEl) {
             messageList.insertBefore(div, beforeEl);
         } else {
@@ -4036,7 +4576,8 @@
     }
 
     // 构建消息元素（返回 DOM 节点，不插入列表）：供实时消息与历史消息渲染复用
-    function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
+    // tokens 可选：AI 回复的 Token 消耗（服务端 usage 归口，历史加载/END 降级路径透传给操作栏）
+    function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 携带消息 ID / 发送者 / 时间戳，供撤回、删除、已读、置顶定位功能使用
@@ -4195,7 +4736,8 @@
     }
 
     // 实时消息：构建元素后追加到列表末尾并滚动到底部
-    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead) {
+    // tokens 可选：AI 回复 Token 消耗（END 降级整段渲染路径透传）
+    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
         // 原实现：构建与插入耦合在 appendMessage 内，历史消息无法复用，现拆分为 createMessageEl
         // var div = document.createElement('div');
         // div.className = 'message ' + type;
@@ -4528,6 +5070,15 @@
         // body.appendChild(nameEl);
         if (!isPrivate) body.appendChild(nameEl);
         body.appendChild(bubble);
+        // 自己发送的私聊图片同样显示已读/未读（与文字消息一致）。发送时 msg_id 未落库，先建元素显示"未读"，
+        // FILE_PERSISTED 回填气泡 msg_id 时同步回填状态元素（回执处理器按 data-msg-id 水位翻已读）
+        if (type === 'self' && isPrivate) {
+            var imgStatus = document.createElement('div');
+            imgStatus.className = 'msg-status';
+            imgStatus.setAttribute('data-msg-id', '');
+            imgStatus.textContent = '未读';
+            body.appendChild(imgStatus);
+        }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
         messageList.appendChild(div);
@@ -5439,7 +5990,9 @@
         // 阶段五十七：追加我的智能体弹窗列表 #ua-list（该元素复用 kb-list 类，querySelector('.kb-list')
         // 仅命中 DOM 序靠前的知识库弹窗列表，须按 id 显式补初始化）
         // 阶段五十八：追加记忆管理弹窗列表 #memory-list（同坑：复用 kb-list 类，按 id 显式补初始化）
-        ['.message-list', '.conv-list', '.user-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list']
+        // 通讯录/AI 助手列表同坑修复：.user-list 类被 #conv-list/#user-list/#ai-agent-list 三处复用，
+        // 原 querySelector('.user-list') 仅命中 DOM 序第一的会话列表，通讯录与 AI Tab 列表从未挂上自绘滑块
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list']
             .forEach(function (sel) {
                 var el = document.querySelector(sel);
                 if (el) initOsb(el);

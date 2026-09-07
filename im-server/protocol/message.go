@@ -51,6 +51,19 @@ const (
 	MsgTypeAIChat      = 43 // AI 问答提问（to_user=智能体名，content=问题文本）
 	MsgTypeAIStream    = 44 // AI 流式回复增量（from_user=智能体名，content=增量文本，stream_id 关联同一次回复）
 	MsgTypeAIStreamEnd = 45 // AI 流式回复结束（content=完整回复，msg_id=落库 ID，remark=error 时表示本次回复失败）
+
+	// 阶段五十九：智能 Agent 自动化任务（工具调用闭环 + 权限审批，事件流推送给发起用户）
+	MsgTypeAgentRun        = 46 // 上行：发起/取消任务（content 为 JSON：发起 {goal,agent_name}；取消 {task_id,action:"cancel"}）
+	MsgTypeAgentEvent      = 47 // 下行：任务事件流（content 为 JSON：{task_id,type,...}，type=thought/tool_start/tool_result/todo/status/done/error）
+	MsgTypeAgentApproveReq = 48 // 下行：高危工具审批请求（content 为 JSON：{task_id,step,tool,params,reason}）
+	MsgTypeAgentApprove    = 49 // 上行：审批结果（content 为 JSON：{task_id,step,action:"approve"/"reject",params?}，params 为改参放行后的新参数）
+
+	// 阶段六十：Agent 本地执行器（PC 端在线时文件/命令工具下放到用户本地执行，文件落在用户电脑）
+	MsgTypeAgentExecReq  = 50 // 下行：服务端 → PC 渲染进程，本地工具执行请求（content 为 JSON：{task_id,step,tool,params}，step=tool_call ID 归属校验键）
+	MsgTypeAgentExecResp = 51 // 上行：PC 渲染进程 → 服务端，本地执行结果（content 为 JSON：{task_id,step,ok,output}，迟到/不匹配直接丢弃）
+
+	// 阶段六十一：Agent 用户自选工作区/沙箱白名单（PC 端用户自选任意文件夹作为本地工作区，白名单目录内允许文件操作）
+	MsgTypeAgentSandbox = 52 // 上行：PC 渲染进程 → 服务端，沙箱白名单上报（content 为 JSON：{primary:"主工作区目录",dirs:["授权目录",...]}；登录后/变更时上报，服务端仅内存保存用于提示词注入）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -72,4 +85,12 @@ type Message struct {
 	Remark      string `json:"remark"`       // 好友备注名
 	Group       string `json:"group"`        // 好友分组
 	StreamID    string `json:"stream_id"`    // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
+	Platform    string `json:"platform"`     // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
+	// AI 回复 Token 消耗（服务端 usage 归口，随 AI_STREAM_END 结束帧下发；其余消息恒为 0 不序列化）
+	PromptTokens     int `json:"prompt_tokens,omitempty"`
+	CompletionTokens int `json:"completion_tokens,omitempty"`
+	TotalTokens      int `json:"total_tokens,omitempty"`
+	// 已读状态（随私聊回显帧下发：AI 提问回显为 true——AI 会话无回执语义，服务端落库即视为已读；
+	// 普通私聊回显为 false 保持既有回执链路）
+	IsRead bool `json:"is_read,omitempty"`
 }

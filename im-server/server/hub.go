@@ -88,6 +88,19 @@ func (h *Hub) Get(username string) (*Client, bool) {
 	return nil, false
 }
 
+// HasPC 阶段六十：该用户是否存在 PC 端（Electron）在线连接——Agent 本地执行器下发判定依据。
+// 多端同账号在线时任一 PC 连接在线即视为可下发（执行结果经 WS 回传，与具体连接无关）
+func (h *Hub) HasPC(username string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients[username] {
+		if c.platform == "pc" {
+			return true
+		}
+	}
+	return false
+}
+
 // Usernames 返回所有在线用户名（去重，任一连接在线即在线）
 func (h *Hub) Usernames() []string {
 	h.mu.RLock()

@@ -355,7 +355,8 @@
             { key: 'name', label: '服务名称（智能体绑定锚点，全局唯一）', placeholder: '如：deepseek' },
             { key: 'api_url', label: '接口地址（OpenAI 兼容 chat/completions 完整 URL）', placeholder: 'https://api.deepseek.com/v1/chat/completions' },
             { key: 'api_key', label: 'API 密钥（仅存服务端数据库）', type: 'password', placeholder: 'sk-...' },
-            { key: 'model', label: '模型名', placeholder: '如：deepseek-v4-flash' },
+            { key: 'model', label: '模型名（文本对话用）', placeholder: '如：deepseek-v4-flash' },
+            { key: 'vision_model', label: '视觉模型名（选填，发图提问时自动启用）', placeholder: '如：deepseek-v4-flash-vision-exp' },
             { key: 'supports_image', label: '支持图片识别（多模态模型勾选）', type: 'checkbox' },
             { key: 'enabled', label: '启用（停用后绑定的智能体降级本地演示应答）', type: 'checkbox', default: true }
         ];

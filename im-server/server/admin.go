@@ -265,6 +265,19 @@ type adminProviderDTO struct {
 	APIURL        string `json:"api_url"`
 	APIKey        string `json:"api_key"`
 	Model         string `json:"model"`
+	VisionModel   string `json:"vision_model"`
+	SupportsImage bool   `json:"supports_image"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// adminProviderReq 管理端模型服务请求体：模型 APIKey 字段带 json:"-"（普通聊天链路不下发），
+// 直接解码进模型会丢弃请求里的 api_key，故经本 DTO 归口接收后再映射回模型
+type adminProviderReq struct {
+	Name          string `json:"name"`
+	APIURL        string `json:"api_url"`
+	APIKey        string `json:"api_key"`
+	Model         string `json:"model"`
+	VisionModel   string `json:"vision_model"`
 	SupportsImage bool   `json:"supports_image"`
 	Enabled       bool   `json:"enabled"`
 }
@@ -277,6 +290,7 @@ func adminProviderView(p model.AIProvider) adminProviderDTO {
 		APIURL:        p.APIURL,
 		APIKey:        p.APIKey,
 		Model:         p.Model,
+		VisionModel:   p.VisionModel,
 		SupportsImage: p.SupportsImage,
 		Enabled:       p.Enabled,
 	}
@@ -298,21 +312,30 @@ func (s *Server) handleAdminProviderList(w http.ResponseWriter, r *http.Request)
 
 // handleAdminProviderCreate 新增模型服务
 func (s *Server) handleAdminProviderCreate(w http.ResponseWriter, r *http.Request) {
-	var p model.AIProvider
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var req adminProviderReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" || strings.TrimSpace(p.APIURL) == "" || strings.TrimSpace(p.Model) == "" {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || strings.TrimSpace(req.APIURL) == "" || strings.TrimSpace(req.Model) == "" {
 		adminFail(w, http.StatusBadRequest, "名称、接口地址、模型名均不能为空")
 		return
 	}
 	var count int64
-	store.DB.Model(&model.AIProvider{}).Where("name = ?", p.Name).Count(&count)
+	store.DB.Model(&model.AIProvider{}).Where("name = ?", req.Name).Count(&count)
 	if count > 0 {
-		adminFail(w, http.StatusConflict, "模型服务名称已存在："+p.Name)
+		adminFail(w, http.StatusConflict, "模型服务名称已存在："+req.Name)
 		return
+	}
+	p := model.AIProvider{
+		Name:          req.Name,
+		APIURL:        strings.TrimSpace(req.APIURL),
+		APIKey:        strings.TrimSpace(req.APIKey),
+		Model:         strings.TrimSpace(req.Model),
+		VisionModel:   strings.TrimSpace(req.VisionModel),
+		SupportsImage: req.SupportsImage,
+		Enabled:       req.Enabled,
 	}
 	if err := store.DB.Create(&p).Error; err != nil {
 		logger.Error("新增模型服务 %s 失败: %v", p.Name, err)
@@ -329,29 +352,30 @@ func (s *Server) handleAdminProviderUpdate(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	var p model.AIProvider
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var req adminProviderReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" || strings.TrimSpace(p.APIURL) == "" || strings.TrimSpace(p.Model) == "" {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || strings.TrimSpace(req.APIURL) == "" || strings.TrimSpace(req.Model) == "" {
 		adminFail(w, http.StatusBadRequest, "名称、接口地址、模型名均不能为空")
 		return
 	}
 	// 名称唯一性校验（排除自身）
 	var dup model.AIProvider
-	if err := store.DB.Where("name = ? AND id <> ?", p.Name, id).First(&dup).Error; err == nil {
-		adminFail(w, http.StatusConflict, "模型服务名称已存在："+p.Name)
+	if err := store.DB.Where("name = ? AND id <> ?", req.Name, id).First(&dup).Error; err == nil {
+		adminFail(w, http.StatusConflict, "模型服务名称已存在："+req.Name)
 		return
 	}
 	result := store.DB.Model(&model.AIProvider{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"name":           p.Name,
-		"api_url":        strings.TrimSpace(p.APIURL),
-		"api_key":        p.APIKey,
-		"model":          strings.TrimSpace(p.Model),
-		"supports_image": p.SupportsImage,
-		"enabled":        p.Enabled,
+		"name":           req.Name,
+		"api_url":        strings.TrimSpace(req.APIURL),
+		"api_key":        strings.TrimSpace(req.APIKey),
+		"model":          strings.TrimSpace(req.Model),
+		"vision_model":   strings.TrimSpace(req.VisionModel),
+		"supports_image": req.SupportsImage,
+		"enabled":        req.Enabled,
 	})
 	if result.Error != nil {
 		logger.Error("更新模型服务失败（id=%d）: %v", id, result.Error)
@@ -362,7 +386,7 @@ func (s *Server) handleAdminProviderUpdate(w http.ResponseWriter, r *http.Reques
 		adminFail(w, http.StatusNotFound, "模型服务不存在或内容未变化")
 		return
 	}
-	s.adminAfterAIChange(fmt.Sprintf("更新模型服务 %s", p.Name))
+	s.adminAfterAIChange(fmt.Sprintf("更新模型服务 %s", req.Name))
 	adminJSON(w, map[string]interface{}{"id": id})
 }
 

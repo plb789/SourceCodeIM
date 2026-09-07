@@ -1,212 +1,434 @@
-[INFO] 2026/09/04 14:36:20 MySQL 连接成功，数据表已就绪
-[INFO] 2026/09/04 14:36:20 Redis 连接成功
-[INFO] 2026/09/04 14:36:20 缓存预热完成，加载用户 55 个
-[INFO] 2026/09/04 14:36:20 IM 服务端启动，监听 :8888
-[INFO] 2026/09/04 14:38:23 客户端接入: 127.0.0.1:16548
+[INFO] 2026/09/05 02:37:31 MySQL 连接成功，数据表已就绪
+[INFO] 2026/09/05 02:37:31 Redis 连接成功
+[INFO] 2026/09/05 02:37:31 缓存预热完成，加载用户 118 个
+[INFO] 2026/09/05 02:37:31 IM 服务端启动，监听 :8888
+[INFO] 2026/09/05 02:37:33 客户端接入: 127.0.0.1:18733
+[INFO] 2026/09/05 02:37:33 用户 testavatar9527 上线
+[INFO] 2026/09/05 02:37:50 客户端接入: 127.0.0.1:51115
 
-2026/09/04 14:38:23 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1minvalid connection
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P16a903137' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:23 用户 P16a903137 上线
-[INFO] 2026/09/04 14:38:23 客户端接入: 127.0.0.1:16551
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[0.518ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'smokea1788547070' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:37:50 客户端接入: 127.0.0.1:51116
+[INFO] 2026/09/05 02:37:50 用户 smokea1788547070 上线
 
-2026/09/04 14:38:23 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P16b903137' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:23 用户 P16b903137 上线
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[2.672ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'smokeb1788547070' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:37:50 客户端接入: 127.0.0.1:51118
 
-2026/09/04 14:38:23 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.680ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P16a903137' AND target = 'P16b903137' ORDER BY `im_conversation`.`id` LIMIT 1
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[0.520ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'smokec1788547070' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:37:50 用户 smokeb1788547070 上线
+[INFO] 2026/09/05 02:37:50 用户 smokec1788547070 上线
 
-2026/09/04 14:38:23 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.509ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P16b903137' AND target = 'P16a903137' ORDER BY `im_conversation`.`id` LIMIT 1
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'smokea1788547070' AND target = 'smokeb1788547070' ORDER BY `im_conversation`.`id` LIMIT 1
 
-2026/09/04 14:38:23 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.534ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:63 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'smokeb1788547070' AND target = 'smokea1788547070' ORDER BY `im_conversation`.`id` LIMIT 1
 
-2026/09/04 14:38:24 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:24 删除好友：P16a903137 <-> P16b903137
-[INFO] 2026/09/04 14:38:25 用户 P16b903137 下线
-[INFO] 2026/09/04 14:38:25 客户端接入: 127.0.0.1:16573
-[INFO] 2026/09/04 14:38:25 用户 P16b903137 上线
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
+[0m[33m[0.535ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'smokeb1788547070' AND target = 'smokea1788547070' ORDER BY `im_conversation`.`id` LIMIT 1
 
-2026/09/04 14:38:26 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:65 [35;1mError 1292 (22007): Incorrect datetime value: '0000-00-00' for column 'last_time' at row 1
+[0m[33m[0.514ms] [34;1m[rows:0][0m INSERT INTO `im_conversation` (`user_id`,`target`,`last_msg`,`last_time`,`pinned`,`last_read_id`) VALUES ('smokeb1788547070','smokea1788547070','','0000-00-00 00:00:00',false,0)
 
-2026/09/04 14:38:26 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:26 拉黑：P16a903137 -> P16b903137
-[INFO] 2026/09/04 14:38:27 用户 P16b903137 下线
-[INFO] 2026/09/04 14:38:27 客户端接入: 127.0.0.1:16597
-[INFO] 2026/09/04 14:38:27 用户 P16b903137 上线
-[INFO] 2026/09/04 14:38:28 取消拉黑：P16a903137 -> P16b903137
-[INFO] 2026/09/04 14:38:28 用户 P16b903137 下线
-[INFO] 2026/09/04 14:38:28 客户端接入: 127.0.0.1:16600
-[INFO] 2026/09/04 14:38:28 用户 P16b903137 上线
-[INFO] 2026/09/04 14:38:29 客户端接入: 127.0.0.1:16602
-[INFO] 2026/09/04 14:38:29 用户 P16a903137 新设备接入，当前在线连接数 2
-[INFO] 2026/09/04 14:38:29 用户 P16a903137 上线
+2026/09/05 02:37:50 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:183 [35;1mrecord not found
+[0m[33m[4.691ms] [34;1m[rows:0][0m SELECT * FROM `im_message` WHERE recalled = false AND (msg_type IN (2,4,5) AND ((from_user = 'smokea1788547070' AND to_user = 'smokeb1788547070') OR (from_user = 'smokeb1788547070' AND to_user = 'smokea1788547070'))) ORDER BY id desc,`im_message`.`id` LIMIT 1
+[INFO] 2026/09/05 02:37:50 用户 smokea1788547070 下线
+[INFO] 2026/09/05 02:37:50 用户 smokeb1788547070 下线
+[INFO] 2026/09/05 02:37:50 用户 smokec1788547070 下线
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51222
 
-2026/09/04 14:38:30 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:30 用户 P16a903137 一台设备断开，剩余在线连接 1
-[INFO] 2026/09/04 14:38:30 用户 P16a903137 下线
-[INFO] 2026/09/04 14:38:30 客户端接入: 127.0.0.1:16604
-[INFO] 2026/09/04 14:38:30 用户 P16a903137 上线
+2026/09/05 02:38:01 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[0.561ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'loginreg1788547081' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51223
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 新设备接入，当前在线连接数 2
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51224
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 上线
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51225
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 一台设备断开，剩余在线连接 1
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 上线
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51226
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 新设备接入，当前在线连接数 2
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51227
 
-2026/09/04 14:38:32 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
+2026/09/05 02:38:01 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[0.514ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'loginregnew1788547081' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51228
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 上线
 
-2026/09/04 14:38:33 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.656ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
+2026/09/05 02:38:01 [31;1mE:/SourceCodeIM/im-server/server/auth.go:72 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'loginregempty1788547081' ORDER BY `im_user`.`id` LIMIT 1
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51229
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 新设备接入，当前在线连接数 3
 
-2026/09/04 14:38:33 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.509ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16a903137|P16b903137' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:33 用户 P16a903137 下线
-[INFO] 2026/09/04 14:38:33 用户 P16b903137 下线
-[INFO] 2026/09/04 14:38:40 客户端接入: 127.0.0.1:16612
-
-2026/09/04 14:38:40 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.503ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P15a920420' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:40 用户 P15a920420 上线
-[INFO] 2026/09/04 14:38:40 客户端接入: 127.0.0.1:16613
-
-2026/09/04 14:38:40 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P15b920420' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:40 用户 P15b920420 上线
-
-2026/09/04 14:38:40 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P15a920420' AND target = 'P15b920420' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 14:38:40 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P15b920420' AND target = 'P15a920420' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 14:38:40 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:41 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:239 [35;1mrecord not found
-[0m[33m[0.573ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' AND pin_user = 'P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:42 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:43 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.566ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:43 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:208 [35;1mrecord not found
-[0m[33m[0.508ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' AND pin_user = 'P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:44 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:45 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:45 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:46 用户 P15b920420 下线
-[INFO] 2026/09/04 14:38:46 客户端接入: 127.0.0.1:16630
-[INFO] 2026/09/04 14:38:46 用户 P15b920420 上线
-
-2026/09/04 14:38:47 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:48 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:49 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.503ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:49 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.565ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P15a920420|P15b920420' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:50 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'group' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:38:50 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'group' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:38:50 用户 P15a920420 下线
-[INFO] 2026/09/04 14:38:50 用户 P15b920420 下线
-[INFO] 2026/09/04 14:39:34 客户端接入: 127.0.0.1:23299
-
-2026/09/04 14:39:34 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.658ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P16uia090404' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:39:34 用户 P16uia090404 上线
-[INFO] 2026/09/04 14:39:46 客户端接入: 127.0.0.1:18646
-
-2026/09/04 14:39:46 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.710ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P16uib090404' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:39:46 用户 P16uib090404 上线
-[INFO] 2026/09/04 14:40:12 好友申请：P16uia090404 -> P16uib090404
-[INFO] 2026/09/04 14:40:23 好友申请同意：P16uia090404 <-> P16uib090404
-
-2026/09/04 14:40:55 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.532ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P16uia090404' AND target = 'P16uib090404' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 14:40:55 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P16uib090404' AND target = 'P16uia090404' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 14:41:22 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:73 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16uia090404|P16uib090404' ORDER BY `im_msg_pin`.`id` LIMIT 1
-
-2026/09/04 14:42:02 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:63 [35;1minvalid connection
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'P16uia090404' AND target = 'P16uib090404' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 14:42:02 [31;1mE:/SourceCodeIM/im-server/server/msgstate.go:65 [35;1mError 1292 (22007): Incorrect datetime value: '0000-00-00' for column 'last_time' at row 1
-[0m[33m[1.007ms] [34;1m[rows:0][0m INSERT INTO `im_conversation` (`user_id`,`target`,`last_msg`,`last_time`,`pinned`,`last_read_id`) VALUES ('P16uia090404','P16uib090404','','0000-00-00 00:00:00',false,0)
-[INFO] 2026/09/04 14:43:59 用户 P16uib090404 下线
-[INFO] 2026/09/04 14:43:59 用户 P16uia090404 下线
-[INFO] 2026/09/04 14:44:09 客户端接入: 127.0.0.1:33550
-
-2026/09/04 14:44:09 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1minvalid connection
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'P16uia090404' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 14:44:13 客户端接入: 127.0.0.1:14450
-[INFO] 2026/09/04 14:44:17 客户端接入: 127.0.0.1:27051
-[INFO] 2026/09/04 14:44:21 客户端接入: 127.0.0.1:47608
-[INFO] 2026/09/04 14:44:23 客户端接入: 127.0.0.1:29788
-[INFO] 2026/09/04 14:44:23 用户 P16uia090404 上线
-[INFO] 2026/09/04 14:44:34 客户端接入: 127.0.0.1:17648
-[INFO] 2026/09/04 14:44:34 用户 P16uib090404 上线
-
-2026/09/04 14:44:57 [31;1mE:/SourceCodeIM/im-server/server/msgpin.go:161 [35;1mrecord not found
-[0m[33m[0.521ms] [34;1m[rows:0][0m SELECT * FROM `im_msg_pin` WHERE conv_key = 'P16uia090404|P16uib090404' ORDER BY `im_msg_pin`.`id` LIMIT 1
-[INFO] 2026/09/04 14:44:57 删除好友：P16uia090404 <-> P16uib090404
-[INFO] 2026/09/04 15:23:48 用户 P16uia090404 下线
-[INFO] 2026/09/04 15:24:06 客户端接入: 127.0.0.1:42515
-
-2026/09/04 15:24:06 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[4.180ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'uitestA' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 15:24:06 用户 uitestA 上线
-[INFO] 2026/09/04 15:25:58 用户 P16uib090404 下线
-[INFO] 2026/09/04 15:25:58 用户 uitestA 下线
-[INFO] 2026/09/04 15:29:33 客户端接入: 127.0.0.1:32976
-[INFO] 2026/09/04 15:29:33 用户 uitestA 上线
-[INFO] 2026/09/04 15:30:22 客户端接入: 127.0.0.1:28519
-
-2026/09/04 15:30:22 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'uitestB' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 15:30:22 用户 uitestB 上线
-
-2026/09/04 15:31:17 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.545ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'uitestB' AND target = 'uitestA' ORDER BY `im_conversation`.`id` LIMIT 1
-
-2026/09/04 15:31:17 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
-[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'uitestA' AND target = 'uitestB' ORDER BY `im_conversation`.`id` LIMIT 1
-[INFO] 2026/09/04 15:33:56 用户 uitestA 下线
-[INFO] 2026/09/04 15:34:15 客户端接入: 127.0.0.1:10307
-[INFO] 2026/09/04 15:34:15 用户 uitestA 上线
-[INFO] 2026/09/04 15:34:30 用户 uitestB 下线
-[INFO] 2026/09/04 15:34:35 客户端接入: 127.0.0.1:20549
-[INFO] 2026/09/04 15:34:35 用户 uitestB 上线
-[INFO] 2026/09/04 15:39:47 用户 uitestA 下线
-[INFO] 2026/09/04 15:39:51 客户端接入: 127.0.0.1:19875
-[INFO] 2026/09/04 15:39:51 用户 uitestA 上线
-[INFO] 2026/09/04 15:40:07 用户 uitestB 下线
-[INFO] 2026/09/04 15:40:11 客户端接入: 127.0.0.1:40402
-[INFO] 2026/09/04 15:40:11 用户 uitestB 上线
-[INFO] 2026/09/04 15:43:50 客户端接入: 127.0.0.1:60411
-
-2026/09/04 15:43:50 [31;1mE:/SourceCodeIM/im-server/server/auth.go:56 [35;1minvalid connection
-[0m[33m[0.565ms] [34;1m[rows:0][0m SELECT * FROM `im_user` WHERE username = 'admin' ORDER BY `im_user`.`id` LIMIT 1
-[INFO] 2026/09/04 15:43:51 客户端接入: 127.0.0.1:45731
-[INFO] 2026/09/04 15:43:51 用户 admin 上线，推送离线消息 1 条
-[INFO] 2026/09/04 15:43:51 用户 admin 上线
+2026/09/05 02:38:01 [31;1mE:/SourceCodeIM/im-server/server/conversation.go:33 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `im_conversation` WHERE user_id = 'loginreg1788547081' AND target = 'loginreg1788547081' ORDER BY `im_conversation`.`id` LIMIT 1
+[INFO] 2026/09/05 02:38:01 用户 loginregnew1788547081 上线
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 上线
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 一台设备断开，剩余在线连接 2
+[INFO] 2026/09/05 02:38:01 客户端接入: 127.0.0.1:51230
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 新设备接入，当前在线连接数 3
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 一台设备断开，剩余在线连接 2
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 一台设备断开，剩余在线连接 1
+[INFO] 2026/09/05 02:38:01 用户 loginregnew1788547081 下线
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 上线
+[INFO] 2026/09/05 02:38:01 用户 loginreg1788547081 下线
+[INFO] 2026/09/05 02:44:11 用户 testavatar9527 下线
+[INFO] 2026/09/05 02:44:18 客户端接入: 127.0.0.1:37779
+[INFO] 2026/09/05 02:44:18 用户 panlibing 上线，推送离线消息 3 条
+[INFO] 2026/09/05 02:44:18 用户 panlibing 上线
+[INFO] 2026/09/05 02:44:59 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:17 客户端接入: 127.0.0.1:21313
+[INFO] 2026/09/05 02:48:17 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:19 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:19 客户端接入: 127.0.0.1:42425
+[INFO] 2026/09/05 02:48:19 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:20 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:20 客户端接入: 127.0.0.1:29950
+[INFO] 2026/09/05 02:48:20 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:21 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:22 客户端接入: 127.0.0.1:17762
+[INFO] 2026/09/05 02:48:22 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:22 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:22 客户端接入: 127.0.0.1:23716
+[INFO] 2026/09/05 02:48:22 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:23 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:23 客户端接入: 127.0.0.1:4714
+[INFO] 2026/09/05 02:48:23 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:23 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:23 客户端接入: 127.0.0.1:59717
+[INFO] 2026/09/05 02:48:23 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:23 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:23 客户端接入: 127.0.0.1:25329
+[INFO] 2026/09/05 02:48:23 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:24 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:24 客户端接入: 127.0.0.1:28205
+[INFO] 2026/09/05 02:48:24 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:24 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:24 客户端接入: 127.0.0.1:19023
+[INFO] 2026/09/05 02:48:24 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:27 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:27 客户端接入: 127.0.0.1:32370
+[INFO] 2026/09/05 02:48:27 用户 panlibing 上线
+[INFO] 2026/09/05 02:48:27 用户 panlibing 下线
+[INFO] 2026/09/05 02:48:27 客户端接入: 127.0.0.1:3180
+[INFO] 2026/09/05 02:48:27 用户 panlibing 上线
+[INFO] 2026/09/05 02:50:57 用户 panlibing 下线
+[INFO] 2026/09/05 02:50:57 客户端接入: 127.0.0.1:27778
+[INFO] 2026/09/05 02:50:57 用户 panlibing 上线
+[INFO] 2026/09/05 02:50:57 用户 panlibing 下线
+[INFO] 2026/09/05 02:50:57 客户端接入: 127.0.0.1:17165
+[INFO] 2026/09/05 02:50:57 用户 panlibing 上线
+[INFO] 2026/09/05 02:50:58 用户 panlibing 下线
+[INFO] 2026/09/05 02:50:58 客户端接入: 127.0.0.1:15925
+[INFO] 2026/09/05 02:50:58 用户 panlibing 上线
+[INFO] 2026/09/05 02:50:59 用户 panlibing 下线
+[INFO] 2026/09/05 02:50:59 客户端接入: 127.0.0.1:19155
+[INFO] 2026/09/05 02:50:59 用户 panlibing 上线
+[INFO] 2026/09/05 02:50:59 用户 panlibing 下线
+[INFO] 2026/09/05 02:50:59 客户端接入: 127.0.0.1:26432
+[INFO] 2026/09/05 02:50:59 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:00 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:00 客户端接入: 127.0.0.1:43951
+[INFO] 2026/09/05 02:51:00 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:01 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:01 客户端接入: 127.0.0.1:26661
+[INFO] 2026/09/05 02:51:01 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:01 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:01 客户端接入: 127.0.0.1:8917
+[INFO] 2026/09/05 02:51:01 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:01 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:01 客户端接入: 127.0.0.1:45149
+[INFO] 2026/09/05 02:51:01 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:01 客户端接入: 127.0.0.1:22846
+[INFO] 2026/09/05 02:51:01 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 客户端接入: 127.0.0.1:51366
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 客户端接入: 127.0.0.1:10253
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 客户端接入: 127.0.0.1:3289
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 客户端接入: 127.0.0.1:36360
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:02 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:02 客户端接入: 127.0.0.1:58886
+[INFO] 2026/09/05 02:51:02 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:63659
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:18862
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:49171
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:12416
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:25403
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:03 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:03 客户端接入: 127.0.0.1:61338
+[INFO] 2026/09/05 02:51:03 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:04 用户 panlibing 下线
+[INFO] 2026/09/05 02:51:04 客户端接入: 127.0.0.1:65339
+[INFO] 2026/09/05 02:51:04 用户 panlibing 上线
+[INFO] 2026/09/05 02:51:08 客户端接入: 127.0.0.1:29201
+[INFO] 2026/09/05 02:51:11 客户端接入: 127.0.0.1:52694
+[INFO] 2026/09/05 02:51:11 用户 admin 上线，推送离线消息 3 条
+[INFO] 2026/09/05 02:51:11 用户 admin 上线
+[INFO] 2026/09/05 02:51:12 用户 admin 下线
+[INFO] 2026/09/05 02:51:12 客户端接入: 127.0.0.1:18816
+[INFO] 2026/09/05 02:51:12 用户 admin 上线
+[INFO] 2026/09/05 02:51:14 用户 admin 下线
+[INFO] 2026/09/05 02:51:14 客户端接入: 127.0.0.1:6941
+[INFO] 2026/09/05 02:51:14 用户 admin 上线
+[INFO] 2026/09/05 02:51:15 用户 admin 下线
+[INFO] 2026/09/05 02:51:15 客户端接入: 127.0.0.1:61293
+[INFO] 2026/09/05 02:51:15 用户 admin 上线
+[INFO] 2026/09/05 02:51:15 用户 admin 下线
+[INFO] 2026/09/05 02:51:15 客户端接入: 127.0.0.1:9011
+[INFO] 2026/09/05 02:51:15 用户 admin 上线
+[INFO] 2026/09/05 02:51:18 用户 admin 下线
+[INFO] 2026/09/05 02:51:18 客户端接入: 127.0.0.1:48178
+[INFO] 2026/09/05 02:51:18 用户 admin 上线
+[INFO] 2026/09/05 02:51:21 用户 admin 下线
+[INFO] 2026/09/05 02:51:21 客户端接入: 127.0.0.1:27966
+[INFO] 2026/09/05 02:51:21 用户 admin 上线
+[INFO] 2026/09/05 02:51:30 用户 admin 下线
+[INFO] 2026/09/05 02:51:30 客户端接入: 127.0.0.1:26930
+[INFO] 2026/09/05 02:51:30 用户 admin 上线
+[INFO] 2026/09/05 02:51:36 用户 admin 下线
+[INFO] 2026/09/05 02:51:36 客户端接入: 127.0.0.1:54762
+[INFO] 2026/09/05 02:51:36 用户 admin 上线
+[INFO] 2026/09/05 02:51:39 用户 admin 下线
+[INFO] 2026/09/05 02:51:39 客户端接入: 127.0.0.1:15575
+[INFO] 2026/09/05 02:51:39 用户 admin 上线
+[INFO] 2026/09/05 02:52:09 用户 admin 下线
+[INFO] 2026/09/05 02:52:09 客户端接入: 127.0.0.1:22993
+[INFO] 2026/09/05 02:52:09 用户 admin 上线
+[INFO] 2026/09/05 02:52:11 用户 admin 下线
+[INFO] 2026/09/05 02:52:12 客户端接入: 127.0.0.1:48737
+[INFO] 2026/09/05 02:52:12 用户 admin 上线
+[INFO] 2026/09/05 02:52:16 用户 admin 下线
+[INFO] 2026/09/05 02:52:17 客户端接入: 127.0.0.1:38108
+[INFO] 2026/09/05 02:52:17 用户 admin 上线
+[INFO] 2026/09/05 02:56:24 用户 panlibing 下线
+[INFO] 2026/09/05 02:56:24 客户端接入: 127.0.0.1:24399
+[INFO] 2026/09/05 02:56:24 用户 panlibing 上线
+[INFO] 2026/09/05 02:56:54 用户 admin 下线
+[INFO] 2026/09/05 02:56:54 客户端接入: 127.0.0.1:1452
+[INFO] 2026/09/05 02:56:54 用户 admin 上线
+[INFO] 2026/09/05 02:56:56 用户 admin 下线
+[INFO] 2026/09/05 02:56:56 客户端接入: 127.0.0.1:22544
+[INFO] 2026/09/05 02:56:56 用户 admin 上线
+[INFO] 2026/09/05 02:56:57 用户 admin 下线
+[INFO] 2026/09/05 02:56:57 客户端接入: 127.0.0.1:41551
+[INFO] 2026/09/05 02:56:57 用户 admin 上线
+[INFO] 2026/09/05 02:56:58 用户 admin 下线
+[INFO] 2026/09/05 02:56:58 客户端接入: 127.0.0.1:62851
+[INFO] 2026/09/05 02:56:58 用户 admin 上线
+[INFO] 2026/09/05 02:56:59 用户 admin 下线
+[INFO] 2026/09/05 02:56:59 客户端接入: 127.0.0.1:15768
+[INFO] 2026/09/05 02:56:59 用户 admin 上线
+[INFO] 2026/09/05 02:57:17 用户 admin 下线
+[INFO] 2026/09/05 02:57:17 客户端接入: 127.0.0.1:43595
+[INFO] 2026/09/05 02:57:17 用户 admin 上线
+[INFO] 2026/09/05 02:57:19 用户 admin 下线
+[INFO] 2026/09/05 02:57:19 客户端接入: 127.0.0.1:55858
+[INFO] 2026/09/05 02:57:19 用户 admin 上线
+[INFO] 2026/09/05 02:57:20 用户 admin 下线
+[INFO] 2026/09/05 02:57:20 客户端接入: 127.0.0.1:29805
+[INFO] 2026/09/05 02:57:20 用户 admin 上线
+[INFO] 2026/09/05 02:57:20 用户 admin 下线
+[INFO] 2026/09/05 02:57:20 客户端接入: 127.0.0.1:16585
+[INFO] 2026/09/05 02:57:20 用户 admin 上线
+[INFO] 2026/09/05 02:57:21 用户 admin 下线
+[INFO] 2026/09/05 02:57:21 客户端接入: 127.0.0.1:27815
+[INFO] 2026/09/05 02:57:21 用户 admin 上线
+[INFO] 2026/09/05 02:57:22 用户 admin 下线
+[INFO] 2026/09/05 02:57:22 客户端接入: 127.0.0.1:23075
+[INFO] 2026/09/05 02:57:22 用户 admin 上线
+[INFO] 2026/09/05 03:02:01 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:01 客户端接入: 127.0.0.1:51650
+[INFO] 2026/09/05 03:02:01 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:01 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:01 客户端接入: 127.0.0.1:31208
+[INFO] 2026/09/05 03:02:01 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:02 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:02 客户端接入: 127.0.0.1:3058
+[INFO] 2026/09/05 03:02:02 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:02 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:02 客户端接入: 127.0.0.1:22529
+[INFO] 2026/09/05 03:02:02 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:03 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:03 客户端接入: 127.0.0.1:31184
+[INFO] 2026/09/05 03:02:03 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:03 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:03 客户端接入: 127.0.0.1:18941
+[INFO] 2026/09/05 03:02:03 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:04 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:04 客户端接入: 127.0.0.1:14322
+[INFO] 2026/09/05 03:02:04 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:05 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:05 客户端接入: 127.0.0.1:24486
+[INFO] 2026/09/05 03:02:05 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:05 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:05 客户端接入: 127.0.0.1:14982
+[INFO] 2026/09/05 03:02:05 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:06 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:06 客户端接入: 127.0.0.1:51606
+[INFO] 2026/09/05 03:02:06 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:08 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:08 客户端接入: 127.0.0.1:26536
+[INFO] 2026/09/05 03:02:08 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:09 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:09 客户端接入: 127.0.0.1:23479
+[INFO] 2026/09/05 03:02:09 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:10 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:10 客户端接入: 127.0.0.1:6306
+[INFO] 2026/09/05 03:02:10 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:10 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:10 客户端接入: 127.0.0.1:6486
+[INFO] 2026/09/05 03:02:10 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:11 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:11 客户端接入: 127.0.0.1:42464
+[INFO] 2026/09/05 03:02:11 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:11 用户 panlibing 下线
+[INFO] 2026/09/05 03:02:11 客户端接入: 127.0.0.1:29986
+[INFO] 2026/09/05 03:02:11 用户 panlibing 上线
+[INFO] 2026/09/05 03:02:14 用户 admin 下线
+[INFO] 2026/09/05 03:02:14 客户端接入: 127.0.0.1:56322
+[INFO] 2026/09/05 03:02:14 用户 admin 上线
+[INFO] 2026/09/05 03:02:15 用户 admin 下线
+[INFO] 2026/09/05 03:02:15 客户端接入: 127.0.0.1:10861
+[INFO] 2026/09/05 03:02:15 用户 admin 上线
+[INFO] 2026/09/05 03:02:15 用户 admin 下线
+[INFO] 2026/09/05 03:02:15 客户端接入: 127.0.0.1:4068
+[INFO] 2026/09/05 03:02:15 用户 admin 上线
+[INFO] 2026/09/05 03:02:16 用户 admin 下线
+[INFO] 2026/09/05 03:02:16 客户端接入: 127.0.0.1:62955
+[INFO] 2026/09/05 03:02:16 用户 admin 上线
+[INFO] 2026/09/05 03:02:16 用户 admin 下线
+[INFO] 2026/09/05 03:02:16 客户端接入: 127.0.0.1:58223
+[INFO] 2026/09/05 03:02:16 用户 admin 上线
+[INFO] 2026/09/05 03:02:17 用户 admin 下线
+[INFO] 2026/09/05 03:02:17 客户端接入: 127.0.0.1:15181
+[INFO] 2026/09/05 03:02:17 用户 admin 上线
+[INFO] 2026/09/05 03:02:17 用户 admin 下线
+[INFO] 2026/09/05 03:02:17 客户端接入: 127.0.0.1:22337
+[INFO] 2026/09/05 03:02:17 用户 admin 上线
+[INFO] 2026/09/05 03:02:19 用户 admin 下线
+[INFO] 2026/09/05 03:02:19 客户端接入: 127.0.0.1:53288
+[INFO] 2026/09/05 03:02:19 用户 admin 上线
+[INFO] 2026/09/05 03:02:20 用户 admin 下线
+[INFO] 2026/09/05 03:02:20 客户端接入: 127.0.0.1:10065
+[INFO] 2026/09/05 03:02:20 用户 admin 上线
+[INFO] 2026/09/05 03:02:20 用户 admin 下线
+[INFO] 2026/09/05 03:02:20 客户端接入: 127.0.0.1:43894
+[INFO] 2026/09/05 03:02:20 用户 admin 上线
+[INFO] 2026/09/05 03:02:21 用户 admin 下线
+[INFO] 2026/09/05 03:02:21 客户端接入: 127.0.0.1:51860
+[INFO] 2026/09/05 03:02:21 用户 admin 上线
+[INFO] 2026/09/05 03:02:22 用户 admin 下线
+[INFO] 2026/09/05 03:02:22 客户端接入: 127.0.0.1:52908
+[INFO] 2026/09/05 03:02:22 用户 admin 上线
+[INFO] 2026/09/05 03:02:22 用户 admin 下线
+[INFO] 2026/09/05 03:02:22 客户端接入: 127.0.0.1:23979
+[INFO] 2026/09/05 03:02:22 用户 admin 上线
+[INFO] 2026/09/05 03:02:23 用户 admin 下线
+[INFO] 2026/09/05 03:02:23 客户端接入: 127.0.0.1:56220
+[INFO] 2026/09/05 03:02:23 用户 admin 上线
+[INFO] 2026/09/05 03:02:24 用户 admin 下线
+[INFO] 2026/09/05 03:02:24 客户端接入: 127.0.0.1:37772
+[INFO] 2026/09/05 03:02:24 用户 admin 上线
+[INFO] 2026/09/05 03:02:24 用户 admin 下线
+[INFO] 2026/09/05 03:02:24 客户端接入: 127.0.0.1:2431
+[INFO] 2026/09/05 03:02:24 用户 admin 上线
+[INFO] 2026/09/05 03:02:25 用户 admin 下线
+[INFO] 2026/09/05 03:02:25 客户端接入: 127.0.0.1:20791
+[INFO] 2026/09/05 03:02:25 用户 admin 上线
+[INFO] 2026/09/05 03:02:25 用户 admin 下线
+[INFO] 2026/09/05 03:02:25 客户端接入: 127.0.0.1:47893
+[INFO] 2026/09/05 03:02:25 用户 admin 上线
+[INFO] 2026/09/05 03:02:26 用户 admin 下线
+[INFO] 2026/09/05 03:02:26 客户端接入: 127.0.0.1:28507
+[INFO] 2026/09/05 03:02:26 用户 admin 上线
+[INFO] 2026/09/05 03:02:27 用户 admin 下线
+[INFO] 2026/09/05 03:02:27 客户端接入: 127.0.0.1:20925
+[INFO] 2026/09/05 03:02:27 用户 admin 上线
+[INFO] 2026/09/05 03:02:27 用户 admin 下线
+[INFO] 2026/09/05 03:02:27 客户端接入: 127.0.0.1:33748
+[INFO] 2026/09/05 03:02:27 用户 admin 上线
+[INFO] 2026/09/05 03:02:28 用户 admin 下线
+[INFO] 2026/09/05 03:02:28 客户端接入: 127.0.0.1:21847
+[INFO] 2026/09/05 03:02:28 用户 admin 上线
+[INFO] 2026/09/05 03:02:28 用户 admin 下线
+[INFO] 2026/09/05 03:02:28 客户端接入: 127.0.0.1:8329
+[INFO] 2026/09/05 03:02:28 用户 admin 上线
+[INFO] 2026/09/05 03:02:29 用户 admin 下线
+[INFO] 2026/09/05 03:02:29 客户端接入: 127.0.0.1:42964
+[INFO] 2026/09/05 03:02:29 用户 admin 上线
+[INFO] 2026/09/05 03:02:30 用户 admin 下线
+[INFO] 2026/09/05 03:02:30 客户端接入: 127.0.0.1:3261
+[INFO] 2026/09/05 03:02:30 用户 admin 上线
+[INFO] 2026/09/05 03:02:30 用户 admin 下线
+[INFO] 2026/09/05 03:02:30 客户端接入: 127.0.0.1:45913
+[INFO] 2026/09/05 03:02:30 用户 admin 上线
+[INFO] 2026/09/05 03:02:31 用户 admin 下线
+[INFO] 2026/09/05 03:02:31 客户端接入: 127.0.0.1:43863
+[INFO] 2026/09/05 03:02:31 用户 admin 上线
+[INFO] 2026/09/05 03:02:31 用户 admin 下线
+[INFO] 2026/09/05 03:02:31 客户端接入: 127.0.0.1:27161
+[INFO] 2026/09/05 03:02:31 用户 admin 上线
+[INFO] 2026/09/05 03:02:32 用户 admin 下线
+[INFO] 2026/09/05 03:02:32 客户端接入: 127.0.0.1:56897
+[INFO] 2026/09/05 03:02:32 用户 admin 上线
+[INFO] 2026/09/05 03:02:32 用户 admin 下线
+[INFO] 2026/09/05 03:02:32 客户端接入: 127.0.0.1:45376
+[INFO] 2026/09/05 03:02:33 用户 admin 上线
+[INFO] 2026/09/05 03:02:33 用户 admin 下线
+[INFO] 2026/09/05 03:02:33 客户端接入: 127.0.0.1:18045
+[INFO] 2026/09/05 03:02:33 用户 admin 上线
+[INFO] 2026/09/05 03:02:34 用户 admin 下线
+[INFO] 2026/09/05 03:02:34 客户端接入: 127.0.0.1:1046
+[INFO] 2026/09/05 03:02:34 用户 admin 上线
+[INFO] 2026/09/05 03:02:34 用户 admin 下线
+[INFO] 2026/09/05 03:02:34 客户端接入: 127.0.0.1:45578
+[INFO] 2026/09/05 03:02:34 用户 admin 上线
+[INFO] 2026/09/05 03:02:35 用户 admin 下线
+[INFO] 2026/09/05 03:02:35 客户端接入: 127.0.0.1:59297
+[INFO] 2026/09/05 03:02:35 用户 admin 上线
+[INFO] 2026/09/05 03:02:35 用户 admin 下线
+[INFO] 2026/09/05 03:02:35 客户端接入: 127.0.0.1:17448
+[INFO] 2026/09/05 03:02:35 用户 admin 上线
+[INFO] 2026/09/05 03:02:36 用户 admin 下线
+[INFO] 2026/09/05 03:02:36 客户端接入: 127.0.0.1:1202
+[INFO] 2026/09/05 03:02:36 用户 admin 上线
+[INFO] 2026/09/05 03:02:37 用户 admin 下线
+[INFO] 2026/09/05 03:02:37 客户端接入: 127.0.0.1:54465
+[INFO] 2026/09/05 03:02:37 用户 admin 上线
+[INFO] 2026/09/05 03:02:37 用户 admin 下线
+[INFO] 2026/09/05 03:02:37 客户端接入: 127.0.0.1:29473
+[INFO] 2026/09/05 03:02:37 用户 admin 上线
+[INFO] 2026/09/05 03:02:38 用户 admin 下线
+[INFO] 2026/09/05 03:02:38 客户端接入: 127.0.0.1:28268
+[INFO] 2026/09/05 03:02:38 用户 admin 上线
+[INFO] 2026/09/05 03:02:38 用户 admin 下线
+[INFO] 2026/09/05 03:02:38 客户端接入: 127.0.0.1:65041
+[INFO] 2026/09/05 03:02:38 用户 admin 上线
+[INFO] 2026/09/05 03:02:54 用户 panlibing 下线
+[INFO] 2026/09/05 03:03:57 用户 admin 下线
+[INFO] 2026/09/05 03:03:58 客户端接入: 127.0.0.1:28324
+[INFO] 2026/09/05 03:03:58 用户 admin 上线
+[INFO] 2026/09/05 03:04:00 用户 admin 下线
+[INFO] 2026/09/05 03:04:00 客户端接入: 127.0.0.1:44549
+[INFO] 2026/09/05 03:04:00 用户 admin 上线
+[INFO] 2026/09/05 03:04:01 用户 admin 下线

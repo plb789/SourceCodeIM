@@ -1,9 +1,11 @@
 // main.js - Electron 主进程：窗口创建、桌面通知、托盘驻留
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
+// 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
 const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const agentExecutor = require('./agent-executor.js');
 
 let mainWindow = null;
 let tray = null;
@@ -264,6 +266,89 @@ ipcMain.handle('image:save', async function (event, data) {
 // 查看器请求更早历史图片：转发主聊天窗口（chat.js 走 HISTORY 翻页拉取后回推）
 ipcMain.on('image:need-more', function () {
     if (mainWindow) mainWindow.webContents.send('viewer:need-more');
+});
+
+// ===== 阶段六十：Agent 本地执行器 =====
+// 服务端 Agent 状态机经 WS → 渲染进程（chat.js 桥接）→ 本 IPC → 本地执行文件/命令 → 结果原路回传服务端。
+// 工作区：userData/agent_workspace/<用户名>/（与微信文件同级的用户数据目录，按用户名隔离）；
+// 路径安全/限额/超时全部归口 agent-executor.js（与服务端同款语义），审批归口仍在服务端
+agentExecutor.setRoot(path.join(app.getPath('userData'), 'agent_workspace'));
+ipcMain.handle('agent:exec', function (event, req) {
+    return new Promise(function (resolve) {
+        // 阶段六十一：执行前按请求用户名注入该用户的沙箱白名单（主工作区/授权目录，未配置=默认工作区语义）
+        agentExecutor.setSandbox(req && req.username, sandboxStore[String((req && req.username) || '')] || null);
+        agentExecutor.execTool(req, function (result) {
+            resolve(result);
+        });
+    });
+});
+
+// ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
+// 用户在渲染层工作区面板自选任意文件夹作为主工作区并维护授权目录白名单（原生目录选择对话框），
+// 配置持久化在本机 userData/agent_sandbox.json（按用户名隔离，本地磁盘路径机器相关，不上服务端数据库）；
+// 每次本地执行前按请求用户名注入执行器（setSandbox），白名单变更由渲染层经 WS 上报服务端（msg 52）注入提示词
+const sandboxFile = path.join(app.getPath('userData'), 'agent_sandbox.json');
+const sandboxStore = (function () {
+    try {
+        const v = JSON.parse(fs.readFileSync(sandboxFile, 'utf8'));
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+    } catch (e) {}
+    return {};
+})();
+
+function sandboxSaveStore() {
+    try {
+        fs.writeFileSync(sandboxFile, JSON.stringify(sandboxStore, null, 2), 'utf8');
+    } catch (e) {}
+}
+
+// 每目录数量/路径长度上限（与执行器/服务端语义一致，防滥用）
+const SANDBOX_MAX_DIRS = 10;
+const SANDBOX_MAX_PATH_LEN = 512;
+
+function sandboxNormalize(cfg) {
+    const dirs = [];
+    const seen = {};
+    (cfg && cfg.dirs || []).forEach(function (d) {
+        d = String(d || '').trim();
+        if (!d || d.length > SANDBOX_MAX_PATH_LEN || seen[d]) return;
+        seen[d] = true;
+        dirs.push(d);
+    });
+    if (dirs.length > SANDBOX_MAX_DIRS) dirs.length = SANDBOX_MAX_DIRS;
+    let primary = String((cfg && cfg.primary) || '').trim();
+    if (primary.length > SANDBOX_MAX_PATH_LEN || (primary && seen[primary] === undefined)) primary = dirs[0] || '';
+    return { primary: primary, dirs: dirs };
+}
+
+// 渲染层拉取当前用户沙箱配置
+ipcMain.handle('sandbox:get', function (event, username) {
+    return sandboxStore[String(username || '')] || { primary: '', dirs: [] };
+});
+
+// 渲染层保存沙箱配置（校验裁剪后持久化 + 返回归一化结果；上报服务端由渲染层归口）
+ipcMain.handle('sandbox:save', function (event, payload) {
+    const username = String((payload && payload.username) || '');
+    if (!username) return { ok: false, msg: '缺少用户名' };
+    const cfg = sandboxNormalize(payload);
+    if (cfg.dirs.length) {
+        sandboxStore[username] = cfg;
+    } else {
+        delete sandboxStore[username]; // 空白名单=清除，回默认工作区语义
+    }
+    sandboxSaveStore();
+    return { ok: true, cfg: cfg };
+});
+
+// 原生目录选择对话框（用户自选主工作区/授权目录入口）
+ipcMain.handle('sandbox:choose', async function (event, title) {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    const r = await dialog.showOpenDialog(win, {
+        title: String(title || '选择工作区文件夹'),
+        properties: ['openDirectory', 'createDirectory']
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return '';
+    return r.filePaths[0];
 });
 
 // 主聊天窗口推送一批更早历史图片：转发查看器窗口（列表头部插入，联动翻页/缩略图）
