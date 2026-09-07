@@ -45,7 +45,7 @@ func (AIProvider) TableName() string { return "im_ai_provider" }
 // AIAgent AI 智能体表 im_ai_agent（阶段四十九：面向用户的聊天助手，后台管理界面可热更新增删改）
 type AIAgent struct {
 	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Name string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"` // 智能体名称（会话列表展示名，全局唯一）
+	Name string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"` // 智能体名称（会话列表展示名，全局唯一——对话路由按名字，重名会歧义）
 	// Provider 绑定的提供方名称（空或未命中时降级本地 Mock 应答）
 	Provider string `gorm:"column:provider;type:varchar(64);default:''" json:"provider"`
 	// SystemPrompt 系统提示词（人设/能力定义）
@@ -57,7 +57,11 @@ type AIAgent struct {
 	// SortID 排序号（越小越靠前，同值按 ID 升序）
 	SortID int `gorm:"column:sort_id;default:0" json:"sort_id"`
 	// KBIDs 阶段五十一：绑定的知识库 ID（逗号分隔字符串，空=不启用知识库检索；个人库仅库归属者对话时生效）
-	KBIDs      string    `gorm:"column:kb_ids;type:varchar(255);default:''" json:"kb_ids"`
+	KBIDs string `gorm:"column:kb_ids;type:varchar(255);default:''" json:"kb_ids"`
+	// Scope 阶段五十七：归属范围（public=管理员全局智能体，user=用户个人智能体；存量数据默认 public）
+	Scope string `gorm:"column:scope;type:varchar(8);default:'public'" json:"scope"`
+	// Owner 阶段五十七：个人智能体归属用户名（公共智能体为空；个人智能体仅归属者可见可对话）
+	Owner      string    `gorm:"column:owner;type:varchar(32);default:'';index" json:"owner"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
@@ -104,6 +108,51 @@ type KBFile struct {
 
 // TableName 指定表名
 func (KBFile) TableName() string { return "im_kb_file" }
+
+// UserKB 用户知识库勾选表 im_user_kb（阶段五十六：用户端自选知识库，对所有智能体对话生效）
+// 与 AIAgent.KBIDs（智能体绑定库）并行的用户级勾选，AI 问答链路两方合并去重后注入；
+// 个人库命中权限由 kbSearch 归口过滤（仅归属者生效），勾选串仅是候选集不构成越权面
+type UserKB struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);uniqueIndex;not null" json:"username"`
+	// KBIDs 用户勾选的知识库 ID（逗号分隔字符串，空=未勾选）
+	KBIDs      string    `gorm:"column:kb_ids;type:varchar(1024);default:''" json:"kb_ids"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (UserKB) TableName() string { return "im_user_kb" }
+
+// AIMemory AI 智能体长期记忆（阶段五十八）：按 用户+智能体 隔离（agent_id + username 联合索引），
+// MySQL 为权威归口，chromem 向量集合 mem_<agentID> 仅作检索索引（元数据带 username/memid）
+type AIMemory struct {
+	ID      uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	AgentID uint `gorm:"column:agent_id;not null;index:idx_mem_agent_user" json:"agent_id"` // 智能体 DB ID（改名不变；智能体删除级联清理）
+	// Username 记忆归属用户（谁与该智能体聊出的记忆；跨用户零泄露）
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_mem_agent_user" json:"username"`
+	// Content 记忆条目正文（独立事实句，提取时截断至 200 字）
+	Content string `gorm:"column:content;type:varchar(512);not null" json:"content"`
+	// Source 记忆来源：auto=AI 对话自动提取 manual=用户手动新增
+	Source     string    `gorm:"column:source;type:varchar(8);default:'auto'" json:"source"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (AIMemory) TableName() string { return "im_ai_memory" }
+
+// AIMemoryPref 用户级记忆总开关（阶段五十八）：username 唯一，缺行默认开启；
+// 关闭后该用户不再触发自动提取也不再注入召回（手动新增仍允许）
+type AIMemoryPref struct {
+	Username string `gorm:"column:username;type:varchar(32);primaryKey" json:"username"`
+	// Enabled 禁用 default:true 标签——GORM 对零值字段+default 标签会从 INSERT 剔除交给 DB 默认值，
+	// 导致"新建偏好行且要求 enabled=false"永远落库为 true（阶段五十八实测）；缺行默认开启语义由 memUserEnabled 代码层保证
+	Enabled    bool      `gorm:"column:enabled" json:"enabled"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AIMemoryPref) TableName() string { return "im_ai_memory_pref" }
 
 // Message 聊天消息表 im_message
 type Message struct {

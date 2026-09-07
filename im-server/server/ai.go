@@ -35,6 +35,8 @@ const aiAskTimeout = 5 * time.Minute
 
 // AIRunAgent 运行时 AI 智能体（配置中的 agent + 解析后的 provider 引用）
 type AIRunAgent struct {
+	// ID 数据库记录 ID（阶段五十八：长期记忆按 agent_id 归键，改名不变；内置 mock 兜底智能体无 DB 记录为 0，不做记忆）
+	ID           uint
 	Name         string
 	SystemPrompt string
 	Avatar       string
@@ -44,6 +46,8 @@ type AIRunAgent struct {
 	// KBIDs 阶段五十一：绑定的知识库 ID 列表（逗号分隔字符串，空=不启用 RAG 检索注入；
 	// 个人库仅归属者对话时参与检索，权限过滤归口 kbSearch）
 	KBIDs string
+	// Owner 阶段五十七：个人智能体归属用户名（空=管理员公共智能体全员可见；个人智能体仅归属者可见可对话）
+	Owner string
 }
 
 // 运行时状态（阶段四十九起可热重载，读写锁保护：对话链路 RLock 读，后台管理变更时 Lock 写）
@@ -57,6 +61,11 @@ var (
 	aiContextWindow = 20
 	// 阶段四十五：文档问答单文档提取文本上限（字符，config.yaml ai.doc_max_chars 可配）
 	aiDocMaxChars = 60000
+	// 阶段五十七：用户自建智能体配置（config.yaml ai.user_agent 归口，启动时加载）
+	aiUserEnabled    = false  // 总开关（默认关闭，需 config 显式开启）
+	aiUserProviders  []string // 用户可选模型服务白名单（provider 名）
+	aiUserMaxPerUser = 10     // 每人自建数量上限
+	aiUserPromptMax  = 2000   // 提示词最大字符数
 	// AI 专用 HTTP 客户端：不设总超时（流式长回复），仅限制响应头等待时间防死连接
 	aiHTTP = &http.Client{
 		Transport: &http.Transport{
@@ -90,6 +99,15 @@ func InitAI(cfg *config.Config) {
 	// 阶段四十五：文档问答提取上限兜底（config 归口，启动时覆盖）
 	if cfg.AI.DocMaxChars > 0 {
 		aiDocMaxChars = cfg.AI.DocMaxChars
+	}
+	// 阶段五十七：用户自建智能体配置（config 归口，启动时加载；白名单/上限均有兜底默认值）
+	aiUserEnabled = cfg.AI.UserAgent.Enabled
+	aiUserProviders = cfg.AI.UserAgent.Providers
+	if cfg.AI.UserAgent.MaxPerUser > 0 {
+		aiUserMaxPerUser = cfg.AI.UserAgent.MaxPerUser
+	}
+	if cfg.AI.UserAgent.PromptLimit > 0 {
+		aiUserPromptMax = cfg.AI.UserAgent.PromptLimit
 	}
 }
 
@@ -175,7 +193,7 @@ func reloadAIAgents() {
 		if strings.TrimSpace(a.Name) == "" {
 			continue
 		}
-		ra := &AIRunAgent{Name: a.Name, SystemPrompt: a.SystemPrompt, Avatar: a.Avatar, KBIDs: a.KBIDs}
+		ra := &AIRunAgent{ID: a.ID, Name: a.Name, SystemPrompt: a.SystemPrompt, Avatar: a.Avatar, KBIDs: a.KBIDs, Owner: a.Owner}
 		if p, ok := provMap[a.Provider]; ok {
 			ra.Provider = p
 			ra.SupportsImage = p.SupportsImage // 图片识别能力随 provider 继承
@@ -201,10 +219,25 @@ func reloadAIAgents() {
 }
 
 // aiAgentByName 按名称查找智能体（nil 表示不存在，读锁保护）
+// 原实现：直接按名返回（阶段五十七起对话路由统一走 aiAgentForUser 权限归口，本函数保留供列表构建等无权限场景）
 func aiAgentByName(name string) *AIRunAgent {
 	aiMu.RLock()
 	defer aiMu.RUnlock()
 	return aiAgentIndex[name]
+}
+
+// aiAgentForUser 按名称查找当前用户可对话的智能体（阶段五十七权限归口）：
+// 公共智能体（Owner 空）全员可用；个人智能体（Owner 非空）仅归属者可用，他人访问视同不存在
+// （防探测：错误提示与"不存在"一致，不泄露他人个人智能体的存在性）
+func aiAgentForUser(name, username string) *AIRunAgent {
+	a := aiAgentByName(name)
+	if a == nil {
+		return nil
+	}
+	if a.Owner != "" && a.Owner != username {
+		return nil
+	}
+	return a
 }
 
 // aiAgentList 运行时智能体列表快照（读锁保护，后台广播与列表下发归口）
@@ -321,9 +354,16 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
 	}
-	// 阶段五十一：RAG 知识库检索注入（agent 绑定库归口，个人库仅归属者生效；无命中/未配置时为空不注入）
-	if kbCtx := kbContextForAgent(agent.KBIDs, question, username); kbCtx != "" {
+	// 原实现：仅注入智能体绑定的知识库（阶段五十一，个人库仅归属者生效；无命中/未配置时为空不注入）
+	// if kbCtx := kbContextForAgent(agent.KBIDs, question, username); kbCtx != "" {
+	// 阶段五十六：合并用户勾选库（im_user_kb 归口，对所有智能体生效）；个人库命中仍由 kbSearch 权限过滤兜底
+	// （2026-09-07 实测教训：此处曾被并行编辑还原为旧实现，导致私聊 AI 问答不注入用户勾选库，E2E 暴露后重新修复）
+	if kbCtx := kbContextForAgent(kbMergeIDStrings(agent.KBIDs, kbUserSelectedIDs(username)), question, username); kbCtx != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: kbCtx})
+	}
+	// 阶段五十八：长期记忆注入（按 用户+智能体 隔离的向量召回，top_k 条；关闭/降级/无命中时为空不注入）
+	if memCtx := memContextForAgent(agent, username, question); memCtx != "" {
+		msgs = append(msgs, aiChatMessage{Role: "system", Content: memCtx})
 	}
 	var records []model.Message
 	store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
@@ -346,7 +386,8 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 
 // handleAIAgents 下发 AI 智能体列表（服务端归口：仅下发名称/头像/模型名/图片能力标记，不下发任何密钥）
 func (s *Server) handleAIAgents(c *Client, _ *protocol.Message) {
-	data, _ := json.Marshal(aiAgentsPublicInfo())
+	// 阶段五十七：按请求者视角下发（公共智能体 + 该用户自建的个人智能体）
+	data, _ := json.Marshal(aiAgentsPublicInfo(c.username))
 	resp := protocol.Message{
 		MsgType:   protocol.MsgTypeAIAgents,
 		Content:   string(data),
@@ -356,20 +397,28 @@ func (s *Server) handleAIAgents(c *Client, _ *protocol.Message) {
 	c.send(out)
 }
 
-// aiAgentsPublicInfo 阶段四十九：构建对外下发的智能体公开信息列表（原实现内联于 handleAIAgents，
+// aiAgentsPublicInfo 构建对外下发的智能体公开信息列表（原实现内联于 handleAIAgents，
 // 现抽归口函数供消息下发与后台变更广播共用，保证两链路格式一致）
-func aiAgentsPublicInfo() []map[string]interface{} {
+// 阶段五十七：按视角过滤——公共智能体（Owner 空）全员可见，个人智能体仅归属者可见；不下发任何密钥
+func aiAgentsPublicInfo(username string) []map[string]interface{} {
 	list := make([]map[string]interface{}, 0)
 	for _, a := range aiAgentList() {
+		if a.Owner != "" && a.Owner != username {
+			continue
+		}
 		modelName := ""
 		if a.Provider != nil {
 			modelName = a.Provider.Model
 		}
 		list = append(list, map[string]interface{}{
+			// 阶段五十八：下发 DB ID（前端据此调用记忆管理接口 /api/agents/{id}/memory）
+			"id":     a.ID,
 			"name":   a.Name,
 			"avatar": a.Avatar,
 			"model":  modelName,
 			"image":  a.SupportsImage,
+			// 阶段五十七：个人标记（前端据此显示"个人"小标与管理入口）
+			"owner": a.Owner,
 		})
 	}
 	return list
@@ -458,7 +507,8 @@ func (s *Server) aiLoadImageDataURL(url string) (string, error) {
 // handleAIChatMsg 阶段四十三：AI 问答（流式）——每人按 用户+智能体 隔离，多轮上下文，逐段推送实现打字机效果
 // 阶段四十四：content 为图片信封 JSON（{"image":url,"text":附言}）时走多模态链路，模型不支持图片直接拒绝
 func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
-	agent := aiAgentByName(strings.TrimSpace(msg.ToUser))
+	// 原实现：agent := aiAgentByName(strings.TrimSpace(msg.ToUser))（阶段五十七起走权限归口，个人智能体仅归属者可对话）
+	agent := aiAgentForUser(strings.TrimSpace(msg.ToUser), c.username)
 	if agent == nil {
 		s.sendError(c, "AI 助手不存在或已被移除")
 		return
@@ -626,6 +676,9 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		s.touchConversation(c.username, agent.Name, messageSummary(full))
 		s.notifyConvUpdate(c.username)
 
+		// 阶段五十八：异步记忆提取（有界队列，满则丢弃本轮；仅私聊，群聊不提取）
+		memEnqueueExtract(agent, c.username, question, full)
+
 		endMsg := protocol.Message{
 			MsgType:   protocol.MsgTypeAIStreamEnd,
 			FromUser:  agent.Name,
@@ -662,8 +715,10 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 		if agent.SystemPrompt != "" {
 			promptMsgs = append(promptMsgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
 		}
-		// 阶段五十一：群聊 @AI 助手同样注入 RAG 知识库上下文（个人库按提问者权限过滤）
-		if kbCtx := kbContextForAgent(agent.KBIDs, question, c.username); kbCtx != "" {
+		// 原实现：仅注入智能体绑定的知识库（阶段五十一，群聊 @AI 助手按提问者权限过滤个人库）
+		// if kbCtx := kbContextForAgent(agent.KBIDs, question, c.username); kbCtx != "" {
+		// 阶段五十六：合并用户勾选库（im_user_kb 归口，群聊 @AI 同样生效，个人库按提问者权限过滤）
+		if kbCtx := kbContextForAgent(kbMergeIDStrings(agent.KBIDs, kbUserSelectedIDs(c.username)), question, c.username); kbCtx != "" {
 			promptMsgs = append(promptMsgs, aiChatMessage{Role: "system", Content: kbCtx})
 		}
 		promptMsgs = append(promptMsgs, aiChatMessage{Role: "user", Content: question})

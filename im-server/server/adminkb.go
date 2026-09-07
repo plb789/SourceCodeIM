@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -174,7 +175,42 @@ func (s *Server) handleAdminKBDelete(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "知识库不存在")
 		return
 	}
-	// 先清文件（记录 + 磁盘），再清向量集合，最后删库记录
+	// 阶段五十六：清理逻辑抽归口 kbDestroyKB（用户端个人库删除共用）
+	// 原实现：清理逻辑内联于本 handler
+	//	// 先清文件（记录 + 磁盘），再清向量集合，最后删库记录
+	//	var files []model.KBFile
+	//	store.DB.Where("kb_id = ?", id).Find(&files)
+	//	for _, f := range files {
+	//		if f.Path != "" {
+	//			if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
+	//				logger.Warn("删除知识文件失败 %s: %v", f.Path, err)
+	//			}
+	//		}
+	//		store.DB.Delete(&model.KBFile{}, f.ID)
+	//	}
+	//	// 阶段五十二：联动清理知识文件目录（仅空目录可删，防历史遗留文件被误清；实测踩坑：原先残留空目录）
+	//	if err := os.Remove(filepath.Join(kbDataDir, "files", fmt.Sprintf("kb_%d", id))); err != nil && !os.IsNotExist(err) {
+	//		logger.Warn("清理知识文件目录失败 kb_%d: %v", id, err)
+	//	}
+	//	kbDeleteKBCollection(id)
+	//	if err := store.DB.Delete(&model.KB{}, id).Error; err != nil {
+	//		logger.Error("删除知识库失败（id=%d）: %v", id, err)
+	//		adminFail(w, http.StatusInternalServerError, "删除知识库失败")
+	//		return
+	//	}
+	if err := kbDestroyKB(&kb); err != nil {
+		logger.Error("删除知识库失败（id=%d）: %v", id, err)
+		adminFail(w, http.StatusInternalServerError, "删除知识库失败")
+		return
+	}
+	logger.Info("后台管理：删除知识库 %s（id=%d，文件与向量集合已联动清理）", kb.Name, id)
+	adminJSON(w, map[string]interface{}{"deleted": true})
+}
+
+// kbDestroyKB 知识库销毁归口（阶段五十六从 handleAdminKBDelete 抽出，管理端与用户端共用）：
+// 先清文件（记录 + 磁盘），再清向量集合与知识文件目录，最后删库记录
+func kbDestroyKB(kb *model.KB) error {
+	id := kb.ID
 	var files []model.KBFile
 	store.DB.Where("kb_id = ?", id).Find(&files)
 	for _, f := range files {
@@ -191,12 +227,10 @@ func (s *Server) handleAdminKBDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	kbDeleteKBCollection(id)
 	if err := store.DB.Delete(&model.KB{}, id).Error; err != nil {
-		logger.Error("删除知识库失败（id=%d）: %v", id, err)
-		adminFail(w, http.StatusInternalServerError, "删除知识库失败")
-		return
+		return err
 	}
-	logger.Info("后台管理：删除知识库 %s（id=%d，清理 %d 个文件与向量集合）", kb.Name, id, len(files))
-	adminJSON(w, map[string]interface{}{"deleted": true})
+	logger.Info("知识库已删除 %s（id=%d，清理 %d 个文件与向量集合）", kb.Name, id, len(files))
+	return nil
 }
 
 // handleAdminKBFileList 知识库文件列表（含向量化状态，前端轮询刷新）
@@ -225,10 +259,6 @@ func (s *Server) handleAdminKBFileUpload(w http.ResponseWriter, r *http.Request)
 		adminFail(w, http.StatusNotFound, "知识库不存在")
 		return
 	}
-	if err := r.ParseMultipartForm(kbMaxFileSize); err != nil {
-		adminFail(w, http.StatusBadRequest, "文件上传解析失败或超出大小限制")
-		return
-	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		adminFail(w, http.StatusBadRequest, "未取到上传文件（字段名 file）")
@@ -236,40 +266,105 @@ func (s *Server) handleAdminKBFileUpload(w http.ResponseWriter, r *http.Request)
 	}
 	defer file.Close()
 
-	ext := filepath.Ext(header.Filename)
-	if !kbAllowedExt(ext) {
-		adminFail(w, http.StatusBadRequest, "仅支持 docx/xlsx/xlsm/csv/md/txt 文件")
-		return
-	}
-	if header.Size > kbMaxFileSize {
-		adminFail(w, http.StatusBadRequest, fmt.Sprintf("文件超出大小限制（%d MB）", kbMaxFileSize>>20))
+	// 大小限制归口：ParseMultipartForm 以 kbMaxFileSize 为上限（超限解析报错）
+	if err := r.ParseMultipartForm(kbMaxFileSize); err != nil {
+		adminFail(w, http.StatusBadRequest, "文件上传解析失败或超出大小限制")
 		return
 	}
 
+	// 阶段五十六：落盘/校验/建记录逻辑抽归口 kbSaveUploadFile（用户端个人库上传共用）
+	// 原实现：逻辑内联于本 handler
+	//	if err := r.ParseMultipartForm(kbMaxFileSize); err != nil {
+	//		adminFail(w, http.StatusBadRequest, "文件上传解析失败或超出大小限制")
+	//		return
+	//	}
+	//	ext := filepath.Ext(header.Filename)
+	//	if !kbAllowedExt(ext) {
+	//		adminFail(w, http.StatusBadRequest, "仅支持 docx/xlsx/xlsm/csv/md/txt 文件")
+	//		return
+	//	}
+	//	if header.Size > kbMaxFileSize {
+	//		adminFail(w, http.StatusBadRequest, fmt.Sprintf("文件超出大小限制（%d MB）", kbMaxFileSize>>20))
+	//		return
+	//	}
+	//	// 落盘归口：DataDir/files/kb_<id>/<纳秒时间戳>_<原始文件名>（避免重名覆盖）
+	//	dir := filepath.Join(kbDataDir, "files", fmt.Sprintf("kb_%d", kbID))
+	//	if err := os.MkdirAll(dir, 0o755); err != nil {
+	//		logger.Error("知识文件目录创建失败 %s: %v", dir, err)
+	//		adminFail(w, http.StatusInternalServerError, "知识文件目录创建失败")
+	//		return
+	//	}
+	//	safeName := kbSafeFileName(header.Filename)
+	//	diskPath := filepath.Join(dir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), safeName))
+	//	dst, err := os.Create(diskPath)
+	//	if err != nil {
+	//		logger.Error("知识文件落盘失败 %s: %v", diskPath, err)
+	//		adminFail(w, http.StatusInternalServerError, "知识文件落盘失败")
+	//		return
+	//	}
+	//	written, copyErr := io.Copy(dst, file)
+	//	closeErr := dst.Close()
+	//	if copyErr != nil || closeErr != nil {
+	//		os.Remove(diskPath)
+	//		logger.Error("知识文件写入失败 %s: %v", diskPath, copyErr)
+	//		adminFail(w, http.StatusInternalServerError, "知识文件写入失败")
+	//		return
+	//	}
+	//	rec := model.KBFile{
+	//		KBID:   kbID,
+	//		Name:   header.Filename,
+	//		Path:   diskPath,
+	//		Size:   written,
+	//		Status: "processing",
+	//	}
+	//	if err := store.DB.Create(&rec).Error; err != nil {
+	//		os.Remove(diskPath)
+	//		logger.Error("知识文件记录创建失败: %v", err)
+	//		adminFail(w, http.StatusInternalServerError, "知识文件记录创建失败")
+	//		return
+	//	}
+	//	// 异步流水线：解析 → 切片 → 向量化 → 入库（前端轮询状态）
+	//	go kbProcessFile(rec.ID)
+	rec, status, errMsg := kbSaveUploadFile(kbID, header, file)
+	if errMsg != "" {
+		adminFail(w, status, errMsg)
+		return
+	}
+	logger.Info("后台管理：上传知识文件 %s（库 %s，%d 字节），异步向量化已启动", rec.Name, kb.Name, rec.Size)
+	adminJSON(w, rec)
+}
+
+// kbSaveUploadFile 知识文件上传落盘归口（阶段五十六从 handleAdminKBFileUpload 抽出，管理端与用户端共用）：
+// 校验扩展名白名单/大小上限 → 落盘 DataDir/files/kb_<id>/<纳秒时间戳>_<原名> → 建记录 → 异步流水线向量化
+// 返回 (记录, HTTP状态码, 错误消息)；错误消息为空表示成功
+func kbSaveUploadFile(kbID uint, header *multipart.FileHeader, file multipart.File) (*model.KBFile, int, string) {
+	ext := filepath.Ext(header.Filename)
+	if !kbAllowedExt(ext) {
+		return nil, http.StatusBadRequest, "仅支持 docx/xlsx/xlsm/csv/md/txt 文件"
+	}
+	if header.Size > kbMaxFileSize {
+		return nil, http.StatusBadRequest, fmt.Sprintf("文件超出大小限制（%d MB）", kbMaxFileSize>>20)
+	}
 	// 落盘归口：DataDir/files/kb_<id>/<纳秒时间戳>_<原始文件名>（避免重名覆盖）
 	dir := filepath.Join(kbDataDir, "files", fmt.Sprintf("kb_%d", kbID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		logger.Error("知识文件目录创建失败 %s: %v", dir, err)
-		adminFail(w, http.StatusInternalServerError, "知识文件目录创建失败")
-		return
+		return nil, http.StatusInternalServerError, "知识文件目录创建失败"
 	}
 	safeName := kbSafeFileName(header.Filename)
 	diskPath := filepath.Join(dir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), safeName))
 	dst, err := os.Create(diskPath)
 	if err != nil {
 		logger.Error("知识文件落盘失败 %s: %v", diskPath, err)
-		adminFail(w, http.StatusInternalServerError, "知识文件落盘失败")
-		return
+		return nil, http.StatusInternalServerError, "知识文件落盘失败"
 	}
 	written, copyErr := io.Copy(dst, file)
 	closeErr := dst.Close()
 	if copyErr != nil || closeErr != nil {
 		os.Remove(diskPath)
 		logger.Error("知识文件写入失败 %s: %v", diskPath, copyErr)
-		adminFail(w, http.StatusInternalServerError, "知识文件写入失败")
-		return
+		return nil, http.StatusInternalServerError, "知识文件写入失败"
 	}
-
 	rec := model.KBFile{
 		KBID:   kbID,
 		Name:   header.Filename,
@@ -280,13 +375,11 @@ func (s *Server) handleAdminKBFileUpload(w http.ResponseWriter, r *http.Request)
 	if err := store.DB.Create(&rec).Error; err != nil {
 		os.Remove(diskPath)
 		logger.Error("知识文件记录创建失败: %v", err)
-		adminFail(w, http.StatusInternalServerError, "知识文件记录创建失败")
-		return
+		return nil, http.StatusInternalServerError, "知识文件记录创建失败"
 	}
 	// 异步流水线：解析 → 切片 → 向量化 → 入库（前端轮询状态）
 	go kbProcessFile(rec.ID)
-	logger.Info("后台管理：上传知识文件 %s（库 %s，%d 字节），异步向量化已启动", rec.Name, kb.Name, rec.Size)
-	adminJSON(w, rec)
+	return &rec, http.StatusOK, ""
 }
 
 // kbSafeFileName 清洗上传文件名：仅保留路径基本名，过滤控制符与文件系统保留字符
@@ -312,19 +405,38 @@ func (s *Server) handleAdminKBFileDelete(w http.ResponseWriter, r *http.Request)
 		adminFail(w, http.StatusNotFound, "知识文件不存在")
 		return
 	}
-	kbDeleteFileVectors(f.KBID, f.ID)
-	if f.Path != "" {
-		if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
-			logger.Warn("删除知识文件磁盘文件失败 %s: %v", f.Path, err)
-		}
-	}
-	if err := store.DB.Delete(&model.KBFile{}, id).Error; err != nil {
+	// 阶段五十六：清理逻辑抽归口 kbDestroyFile（用户端个人库文件删除共用）
+	// 原实现：清理逻辑内联于本 handler
+	//	kbDeleteFileVectors(f.KBID, f.ID)
+	//	if f.Path != "" {
+	//		if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
+	//			logger.Warn("删除知识文件磁盘文件失败 %s: %v", f.Path, err)
+	//		}
+	//	}
+	//	if err := store.DB.Delete(&model.KBFile{}, id).Error; err != nil {
+	//		logger.Error("删除知识文件记录失败（id=%d）: %v", id, err)
+	//		adminFail(w, http.StatusInternalServerError, "删除知识文件失败")
+	//		return
+	//	}
+	if err := kbDestroyFile(&f); err != nil {
 		logger.Error("删除知识文件记录失败（id=%d）: %v", id, err)
 		adminFail(w, http.StatusInternalServerError, "删除知识文件失败")
 		return
 	}
 	logger.Info("后台管理：删除知识文件 %s（id=%d，向量已联动清理）", f.Name, id)
 	adminJSON(w, map[string]interface{}{"deleted": true})
+}
+
+// kbDestroyFile 知识文件销毁归口（阶段五十六从 handleAdminKBFileDelete 抽出，管理端与用户端共用）：
+// 向量联动清理 + 磁盘文件删除 + 记录删除
+func kbDestroyFile(f *model.KBFile) error {
+	kbDeleteFileVectors(f.KBID, f.ID)
+	if f.Path != "" {
+		if err := os.Remove(f.Path); err != nil && !os.IsNotExist(err) {
+			logger.Warn("删除知识文件磁盘文件失败 %s: %v", f.Path, err)
+		}
+	}
+	return store.DB.Delete(&model.KBFile{}, f.ID).Error
 }
 
 // adminKBSearchReq 命中测试请求体

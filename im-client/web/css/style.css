@@ -3490,3 +3490,395 @@ html.m #friend-menu {
     max-width: 60vw;
     z-index: 3000;
 }
+
+/* ===== 阶段五十六：我的知识库弹窗（用户端个人库自建/上传/勾选，颜色全部关联现有主题变量） ===== */
+.kb-box {
+    width: 440px;
+    max-width: calc(100vw - 40px);
+    max-height: min(600px, calc(100vh - 60px));
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+}
+
+.kb-status {
+    font-size: 12px;
+    color: var(--text-light);
+    line-height: 1.5;
+    margin-bottom: 10px;
+}
+
+.kb-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.kb-name-input {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.kb-create-btn {
+    flex: none;
+    height: 36px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 4px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.kb-create-btn:hover {
+    opacity: 0.85;
+}
+
+.kb-create-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.kb-list {
+    flex: 1;
+    min-height: 140px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.kb-empty {
+    padding: 24px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
+.kb-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.kb-item:last-child {
+    border-bottom: none;
+}
+
+.kb-item-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kb-item-check {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.kb-item-name {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kb-item-tag {
+    flex: none;
+    font-size: 11px;
+    line-height: 16px;
+    padding: 1px 6px;
+    border-radius: 3px;
+}
+
+.kb-item-tag.public {
+    background: var(--hover);
+    color: var(--text-light);
+}
+
+.kb-item-tag.user {
+    background: var(--primary);
+    color: #fff;
+}
+
+.kb-item-meta {
+    flex: none;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.kb-item-ops {
+    margin-left: auto;
+    display: flex;
+    gap: 4px;
+    flex: none;
+}
+
+.kb-op-btn {
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.kb-op-btn:hover {
+    background: var(--hover);
+}
+
+.kb-item-desc {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-top: 4px;
+    word-break: break-all;
+}
+
+.kb-files {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+}
+
+.kb-file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.kb-file-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kb-file-status {
+    flex: none;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+}
+
+.kb-file-status.processing {
+    background: var(--hover);
+    color: var(--text-light);
+}
+
+.kb-file-status.ready {
+    background: var(--primary);
+    color: #fff;
+}
+
+.kb-file-status.failed {
+    background: var(--active);
+    color: var(--text);
+}
+
+.kb-file-del {
+    flex: none;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.kb-file-del:hover {
+    color: var(--text);
+}
+
+.kb-upload-row {
+    margin-top: 6px;
+}
+
+.kb-upload-btn {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 12px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.kb-upload-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+/* ===== 阶段五十七：我的智能体（个人智能体自建/编辑/删除，样式复用知识库弹窗骨架，颜色全部关联现有主题变量） ===== */
+
+/* 智能体列表"个人"小标（主题色描边弱化呈现，与公共智能体区分） */
+.ai-agent-owner-tag {
+    display: inline-block;
+    font-size: 10px;
+    line-height: 14px;
+    padding: 0 4px;
+    margin-left: 4px;
+    border-radius: 3px;
+    background: var(--primary);
+    color: #fff;
+    vertical-align: 1px;
+}
+
+/* 表单区（新建/编辑共用，编辑态由 JS 填充回显） */
+.ua-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.ua-form.hidden {
+    display: none;
+}
+
+.ua-form-row {
+    display: flex;
+    gap: 8px;
+}
+
+/* emoji 头像输入框（窄列居中显示表情） */
+.ua-avatar-input {
+    flex: none;
+    width: 64px;
+    margin-bottom: 0;
+    text-align: center;
+    font-size: 18px;
+}
+
+/* 模型下拉（白名单选项，外观对齐输入框） */
+.ua-form select.modal-input {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-light) 50%), linear-gradient(135deg, var(--text-light) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+    cursor: pointer;
+}
+
+/* 提示词多行输入（输入区同款自绘滚动条风格由全局接管） */
+.ua-prompt-input {
+    width: 100%;
+    box-sizing: border-box;
+    height: auto;
+    min-height: 76px;
+    padding: 8px 10px;
+    line-height: 1.5;
+    resize: vertical;
+    font-family: inherit;
+}
+
+/* 按钮行：取消编辑（弱化）+ 新建/保存（主题色）右对齐 */
+.ua-form-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.ua-cancel-btn {
+    font-size: 13px;
+    color: var(--text-light);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+}
+
+.ua-cancel-btn.hidden {
+    display: none;
+}
+
+/* ===== 阶段五十八：记忆管理弹窗（用户+智能体 隔离的长期记忆管理；骨架复用知识库弹窗，颜色全部关联现有主题变量） ===== */
+
+/* 开关行：左说明文案（主+副两行）右总开关 */
+.memory-switch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--hover);
+}
+
+.memory-switch-label {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.memory-switch-label span:first-child {
+    font-size: 13px;
+    color: var(--text);
+}
+
+.memory-switch-tip {
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1.4;
+}
+
+.memory-switch {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.memory-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* 手动新增行：输入框 + 添加按钮（功能降级时 JS 加 hidden 整行隐藏） */
+.memory-add-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.memory-add-row.hidden {
+    display: none;
+}
+
+.memory-add-row .modal-input {
+    flex: 1;
+    margin-bottom: 0;
+    min-width: 0;
+}
+
+/* 清空全部按钮（与关闭按钮同行右对齐，样式继承 kb-op-btn 主题色） */
+.memory-clear-btn.hidden {
+    display: none;
+}
+
+.modal-btns .memory-clear-btn {
+    margin-right: auto;
+    font-size: 13px;
+    padding: 6px 10px;
+}
+
+/* 记忆条目正文列可收缩（长文本单行截断，悬停 title 看全文） */
+#memory-list .kb-item-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: normal;
+}

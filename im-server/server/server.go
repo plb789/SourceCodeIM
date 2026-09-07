@@ -360,7 +360,8 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 
 	// 阶段四十三：私聊目标为任意配置的 AI 智能体时走 AI 问答链路（流式打字机，按用户隔离）
 	// 原实现：仅支持固定 AIBotName 单一机器人，且不落库提问、无多轮上下文
-	if aiAgentByName(msg.ToUser) != nil {
+	// 原实现：aiAgentByName(msg.ToUser) != nil（阶段五十七起走权限归口，他人个人智能体视同不存在，回落普通私聊被"用户不存在"拦截）
+	if aiAgentForUser(msg.ToUser, c.username) != nil {
 		s.handleAIChatMsg(c, msg)
 		return
 	}

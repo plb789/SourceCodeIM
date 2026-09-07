@@ -140,3 +140,16 @@ func (h *Hub) BroadcastExcept(except string, data []byte) {
 		}
 	}
 }
+
+// BroadcastUser 阶段五十七：按用户视角广播——每个在线用户按其用户名生成各自内容下发
+// （AI 智能体列表因人而异：公共智能体 + 该用户自建的个人智能体；同一用户的全部设备收到相同内容）
+func (h *Hub) BroadcastUser(generate func(username string) []byte) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for name, set := range h.clients {
+		data := generate(name)
+		for c := range set {
+			c.send(data)
+		}
+	}
+}

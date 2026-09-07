@@ -106,6 +106,23 @@ type KBConfig struct {
 	DataDir        string  `yaml:"data_dir"`        // 知识文件与向量库根目录（空=exe目录/data/kb，锚定 exe 解析）
 }
 
+// UserAgentConfig 阶段五十七：用户自建智能体配置（模型白名单归口，防费用失控；enabled=false 时功能整体关闭）
+type UserAgentConfig struct {
+	Enabled     bool     `yaml:"enabled"`      // 用户自建智能体总开关（false 时用户侧接口返回明确提示）
+	Providers   []string `yaml:"providers"`    // 用户可选模型服务白名单（provider 名，须与已启用的模型服务名匹配）
+	MaxPerUser  int      `yaml:"max_per_user"` // 每人自建数量上限（0=10）
+	PromptLimit int      `yaml:"prompt_limit"` // 提示词最大字符数（0=2000）
+}
+
+// MemoryConfig 阶段五十八：智能体长期记忆配置（提取-去重-存储-注入-管理五环；关闭/降级时全链路静默，不影响聊天）
+type MemoryConfig struct {
+	Enabled         bool    `yaml:"enabled"`          // 总开关（false 时不提取不注入，管理接口仍可查看已存记忆）
+	TopK            int     `yaml:"top_k"`            // 每次提问注入的召回记忆条数（0=5）
+	MaxPerAgent     int     `yaml:"max_per_agent"`    // 每 用户+智能体 记忆条数上限，超出淘汰最旧（0=200）
+	DedupThreshold  float64 `yaml:"dedup_threshold"`  // 去重相似度阈值（0=0.85，与已有记忆最高相似度达阈值则跳过）
+	ExtractProvider string  `yaml:"extract_provider"` // 提取用模型服务名（留空=用智能体当前绑定模型；建议填本地 ollama 零成本）
+}
+
 // AIConfig AI 问答配置节
 type AIConfig struct {
 	Providers []AIProviderConfig `yaml:"providers"` // 模型服务列表（多模型支持）
@@ -113,6 +130,10 @@ type AIConfig struct {
 	// 阶段五十一：知识库向量化通道与参数（embedding 未配置时知识库功能降级关闭，不影响其他功能）
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	KB        KBConfig        `yaml:"kb"`
+	// 阶段五十七：用户自建智能体（个人智能体仅归属者可见可用，模型从白名单中选）
+	UserAgent UserAgentConfig `yaml:"user_agent"`
+	// 阶段五十八：智能体长期记忆（按 用户+智能体 隔离；回复后异步提取，提问时向量召回注入）
+	Memory MemoryConfig `yaml:"memory"`
 	// 多轮对话携带的历史消息条数（按用户+智能体隔离取最近 N 条）
 	ContextWindow int `yaml:"context_window"`
 	// 限流：单用户在限流窗口内最大提问次数

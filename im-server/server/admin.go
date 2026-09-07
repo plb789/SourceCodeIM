@@ -415,6 +415,9 @@ func (s *Server) handleAdminAgentCreate(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusBadRequest, "智能体名称不能为空")
 		return
 	}
+	// 阶段五十七：管理端创建的智能体一律为公共智能体（Scope/Owner 强制归口，防请求体误传）
+	a.Scope = "public"
+	a.Owner = ""
 	var count int64
 	store.DB.Model(&model.AIAgent{}).Where("name = ?", a.Name).Count(&count)
 	if count > 0 {
@@ -489,6 +492,8 @@ func (s *Server) handleAdminAgentDelete(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusInternalServerError, "删除智能体失败")
 		return
 	}
+	// 阶段五十八：级联清理该智能体的长期记忆（MySQL 行 + 向量集合）
+	memDestroyAgent(id)
 	s.adminAfterAIChange(fmt.Sprintf("删除智能体 %s", a.Name))
 	adminJSON(w, map[string]interface{}{"deleted": true})
 }
@@ -498,16 +503,24 @@ func (s *Server) handleAdminAgentDelete(w http.ResponseWriter, r *http.Request) 
 // adminAfterAIChange 阶段四十九：AI 配置变更后置归口——重建运行时索引（写锁原子替换）
 // 并向全部在线客户端广播 AI_AGENTS 列表刷新（前端 IMSocket.on(AI_AGENTS) 收到即重渲染，
 // 无需重启服务端，无需客户端手动刷新）
+// 阶段五十七：广播改为逐用户视角（公共智能体 + 该用户自建的个人智能体），用户侧自建智能体变更复用同一归口 aiChangeApply
 func (s *Server) adminAfterAIChange(action string) {
-	reloadAIAgents()
-	msg := protocol.Message{
-		MsgType:   protocol.MsgTypeAIAgents,
-		Content:   string(mustJSON(aiAgentsPublicInfo())),
-		Timestamp: time.Now().Unix(),
-	}
-	data, _ := json.Marshal(msg)
-	s.hub.Broadcast(data)
+	s.aiChangeApply(action)
 	logger.Info("后台管理：%s，已热更新生效并广播在线客户端", action)
+}
+
+// aiChangeApply 阶段五十七：AI 配置变更应用归口（管理端与用户端共用）——
+// 重建运行时索引 + 按用户视角广播 AI_AGENTS 刷新（每用户内容=公共智能体+其个人智能体）
+func (s *Server) aiChangeApply(action string) {
+	reloadAIAgents()
+	s.hub.BroadcastUser(func(username string) []byte {
+		msg := protocol.Message{
+			MsgType:   protocol.MsgTypeAIAgents,
+			Content:   string(mustJSON(aiAgentsPublicInfo(username))),
+			Timestamp: time.Now().Unix(),
+		}
+		return mustJSON(msg)
+	})
 }
 
 // mustJSON 序列化（失败返回空对象串，广播场景不允许中断主流程）

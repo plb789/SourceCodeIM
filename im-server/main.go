@@ -68,6 +68,25 @@ func main() {
 	http.HandleFunc("/doc/editor", srv.HandleDocEditor)
 	http.HandleFunc("/doc/download", srv.HandleDocDownload)
 	http.HandleFunc("/doc/callback", srv.HandleDocCallback)
+	// 用户端个人知识库（阶段五十六：自建/上传/勾选，勾选后对所有智能体对话生效；个人库仅归属者可管理）
+	http.HandleFunc("GET /api/kb", srv.HandleUserKBGet)
+	http.HandleFunc("POST /api/kb", srv.HandleUserKBCreate)
+	http.HandleFunc("PUT /api/kb/select", srv.HandleUserKBSelect)
+	http.HandleFunc("POST /api/kb/file", srv.HandleUserKBFileUpload)
+	http.HandleFunc("GET /api/kb/{id}/files", srv.HandleUserKBFiles)
+	http.HandleFunc("DELETE /api/kb/file/{id}", srv.HandleUserKBFileDelete)
+	http.HandleFunc("DELETE /api/kb/{id}", srv.HandleUserKBDelete)
+	// 用户端个人智能体（阶段五十七：自建/编辑/删除，仅归属者可见可对话；模型走 config.yaml 白名单）
+	http.HandleFunc("GET /api/agents", srv.HandleUserAgentGet)
+	http.HandleFunc("POST /api/agents", srv.HandleUserAgentCreate)
+	http.HandleFunc("PUT /api/agents/{id}", srv.HandleUserAgentUpdate)
+	http.HandleFunc("DELETE /api/agents/{id}", srv.HandleUserAgentDelete)
+	// 智能体长期记忆（阶段五十八：提取/注入归口 memory.go，管理接口鉴权水位与 /api/agents 一致）
+	http.HandleFunc("GET /api/agents/{id}/memory", srv.HandleMemoryGet)
+	http.HandleFunc("POST /api/agents/{id}/memory", srv.HandleMemoryAdd)
+	http.HandleFunc("PUT /api/agents/{id}/memory/pref", srv.HandleMemoryPref)
+	http.HandleFunc("DELETE /api/agents/{id}/memory/{mid}", srv.HandleMemoryDelete)
+	http.HandleFunc("DELETE /api/agents/{id}/memory", srv.HandleMemoryClear)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
@@ -96,6 +115,8 @@ func main() {
 	server.InitAI(cfg)
 	// 阶段五十一：知识库模块初始化（chromem-go 向量库 + embedding 配置归口，未配置时静默降级）
 	server.InitKB(cfg)
+	// 阶段五十八：智能体长期记忆初始化（须在 InitKB 之后：向量库实例由 KB 模块创建）
+	server.InitMemory(cfg)
 	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
 	server.RegisterAdminRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）

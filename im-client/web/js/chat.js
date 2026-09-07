@@ -2088,6 +2088,12 @@
         return aiAgents.some(function (a) { return a.name === name; });
     }
 
+    // 阶段五十七：头像形态判定——URL（图片头像）与 emoji/文本（自建智能体 emoji 头像）分路渲染，
+    // emoji 直接作为 img.src 会触发破图降级丢失用户所选表情，须走文本占位链路
+    function aiAvatarIsUrl(v) {
+        return /^(https?:\/\/|\/|\.\.?\/)/.test(v);
+    }
+
     // 请求智能体列表（登录成功后调用，断线重连重新登录后再次拉取）
     function requestAIAgents() {
         IMSocket.send({ msg_type: MSG.AI_AGENTS });
@@ -2125,9 +2131,10 @@
             li.className = 'user-item ai-agent-item' + (currentChatUser === a.name ? ' active' : '');
 
             // 头像：服务端配置头像优先（图片失效降级 emoji），无配置回退 emoji 占位
+            // 阶段五十七：emoji 文本头像（自建智能体）直接渲染文本，不按 URL 走 img 破图降级
             var avatar = document.createElement('div');
             avatar.className = 'avatar ai-agent-avatar';
-            if (a.avatar) {
+            if (a.avatar && aiAvatarIsUrl(a.avatar)) {
                 var img = document.createElement('img');
                 img.src = a.avatar;
                 img.alt = '';
@@ -2137,7 +2144,7 @@
                 });
                 avatar.appendChild(img);
             } else {
-                avatar.textContent = '🤖';
+                avatar.textContent = a.avatar || '🤖';
             }
 
             var info = document.createElement('div');
@@ -2145,6 +2152,13 @@
             var name = document.createElement('div');
             name.className = 'ai-agent-name';
             name.textContent = a.name;
+            // 阶段五十七：个人智能体标记（owner 非空=自建，服务端按用户视角过滤下发）
+            if (a.owner) {
+                var ownerTag = document.createElement('span');
+                ownerTag.className = 'ai-agent-owner-tag';
+                ownerTag.textContent = '个人';
+                name.appendChild(ownerTag);
+            }
             var model = document.createElement('div');
             model.className = 'ai-agent-model';
             // 阶段四十四：图片识别能力标记（服务端配置归口下发，true 时该助手可收图）
@@ -3944,6 +3958,8 @@
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
             chatStatus.textContent = f && f.online ? '在线' : '离线';
         }
+        // 阶段五十八：记忆管理按钮仅 AI 智能体会话显示（群聊/普通用户会话隐藏）
+        memoryBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
     }
 
     // ===== 消息渲染 =====
@@ -3958,7 +3974,8 @@
             if (friendList[i].username === name) return friendList[i].avatar || '';
         }
         // 阶段四十三：AI 智能体头像（服务端配置归口下发，优先于在线用户表）
-        if (agentAvatars[name]) return agentAvatars[name];
+        // 阶段五十七：emoji 文本头像不作为 img.src（破图），交由占位元素渲染 emoji
+        if (agentAvatars[name] && aiAvatarIsUrl(agentAvatars[name])) return agentAvatars[name];
         return userAvatars[name] || '';
     }
 
@@ -4003,7 +4020,13 @@
         var ph = document.createElement('div');
         ph.className = 'msg-avatar placeholder';
         // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表/会话列表口径一致）
-        ph.textContent = isAIAgent(fromUser) ? '🤖' : (fromUser || '?').charAt(0).toUpperCase();
+        // 阶段五十七：自建智能体 emoji 文本头像直接作为占位文本展示（aiAvatarIsUrl 分路）
+        if (isAIAgent(fromUser)) {
+            var aiAv = agentAvatars[fromUser] || '';
+            ph.textContent = aiAv && !aiAvatarIsUrl(aiAv) ? aiAv : '🤖';
+        } else {
+            ph.textContent = (fromUser || '?').charAt(0).toUpperCase();
+        }
         // 阶段三十：占位头像同样可点击弹出资料卡（AI 智能体无资料卡）
         ph.style.cursor = 'pointer';
         ph.addEventListener('click', function () {
@@ -4564,6 +4587,744 @@
         return div;
     }
 
+    // ===== 阶段五十六：我的知识库（个人库自建/上传/文件管理 + 勾选，勾选后对所有 AI 助手对话生效） =====
+    // 服务端归口：/api/kb 系列（个人库仅归属者可管理，公共库只读可勾选）；检索命中权限由服务端 kbSearch 过滤
+    var kbMask = document.getElementById('kb-mask');
+    var kbEntry = document.getElementById('kb-entry');
+    var kbEntryBadge = document.getElementById('kb-entry-badge');
+    var kbStatusEl = document.getElementById('kb-status');
+    var kbListEl = document.getElementById('kb-list');
+    var kbNewName = document.getElementById('kb-new-name');
+    var kbCreateBtn = document.getElementById('kb-create-btn');
+    var kbCloseBtn = document.getElementById('kb-close');
+    var kbData = null;       // 服务端总览数据（embed 状态 + 库列表 + 勾选态）
+    var kbFilesCache = {};   // 展开的文件面板缓存：kbId -> 文件数组（null=加载中）
+    var kbExpanded = {};     // 文件面板展开态：kbId -> true
+    var kbPollTimer = null;  // 处理中文件状态轮询（弹窗打开期间每 5 秒）
+
+    function kbUsername() {
+        return encodeURIComponent(IMSocket.getUsername());
+    }
+
+    function kbOpenDialog() {
+        kbMask.classList.remove('hidden');
+        kbLoadData();
+        // 弹窗打开期间统一轮询：展开面板中存在处理中文件时刷新状态（轮询内部自判，无开销空转）
+        if (kbPollTimer) clearInterval(kbPollTimer);
+        kbPollTimer = setInterval(kbPollTick, 5000);
+    }
+
+    function kbCloseDialog() {
+        kbMask.classList.add('hidden');
+        if (kbPollTimer) {
+            clearInterval(kbPollTimer);
+            kbPollTimer = null;
+        }
+    }
+
+    kbEntry.addEventListener('click', kbOpenDialog);
+    kbCloseBtn.addEventListener('click', kbCloseDialog);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !kbMask.classList.contains('hidden')) kbCloseDialog();
+    });
+
+    // 拉取总览数据并重渲染（建库/删除/上传后复用）
+    function kbLoadData() {
+        fetch('/api/kb?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '知识库加载失败'); return; }
+                kbData = res.data;
+                kbRender();
+            })
+            .catch(function () { showToast('知识库加载失败'); });
+    }
+
+    // 轮询 tick：仅刷新展开中的文件面板（processing 状态变化由重渲染反映）
+    function kbPollTick() {
+        if (kbMask.classList.contains('hidden')) {
+            clearInterval(kbPollTimer);
+            kbPollTimer = null;
+            return;
+        }
+        Object.keys(kbFilesCache).forEach(function (id) {
+            if (!kbExpanded[id] || kbFilesCache[id] === null) return;
+            fetch('/api/kb/' + id + '/files?username=' + kbUsername())
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (res.ok) {
+                        kbFilesCache[id] = res.data;
+                        kbRender();
+                    }
+                })
+                .catch(function () { /* 轮询失败静默，下轮再试 */ });
+        });
+    }
+
+    function kbRender() {
+        if (!kbData) return;
+        // 状态行：勾选语义 + embedding 通道提示（未配置时可建库但不可向量化，服务端归口下发）
+        kbStatusEl.innerHTML = kbData.embed_enabled
+            ? '勾选的知识库对所有 AI 助手对话生效，命中参考资料自动注入（每问前 ' + kbData.top_k + ' 条）。向量模型：' + (kbData.model || '-')
+            : '<span class="kb-status-off">embedding 服务未配置：可建库与上传，文件暂无法向量化检索（需管理员在 config.yaml 配置 ai.embedding）</span>';
+        // 库列表
+        kbListEl.innerHTML = '';
+        if (!kbData.kbs || !kbData.kbs.length) {
+            var empty = document.createElement('div');
+            empty.className = 'kb-empty';
+            empty.textContent = '暂无知识库，可在上方新建个人知识库';
+            kbListEl.appendChild(empty);
+        } else {
+            kbData.kbs.forEach(function (kb) {
+                kbListEl.appendChild(kbRenderItem(kb));
+            });
+        }
+        // 入口角标：已勾选数量（无勾选时隐藏，微信红点同款语义）
+        var selCount = (kbData.kbs || []).filter(function (k) { return k.selected; }).length;
+        if (selCount > 0) {
+            kbEntryBadge.textContent = selCount;
+            kbEntryBadge.classList.remove('hidden');
+        } else {
+            kbEntryBadge.classList.add('hidden');
+        }
+    }
+
+    function kbRenderItem(kb) {
+        var item = document.createElement('div');
+        item.className = 'kb-item';
+
+        var head = document.createElement('div');
+        head.className = 'kb-item-head';
+
+        // 勾选框：即时保存（服务端 upsert 归口，失败回滚重渲染）
+        var check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'kb-item-check';
+        check.checked = !!kb.selected;
+        check.title = '勾选后该知识库对所有 AI 助手对话生效';
+        check.addEventListener('change', function () {
+            kbToggleSelect(kb.id, check.checked);
+        });
+
+        var name = document.createElement('span');
+        name.className = 'kb-item-name';
+        name.textContent = kb.name;
+        name.title = kb.name;
+
+        var tag = document.createElement('span');
+        tag.className = 'kb-item-tag ' + kb.scope;
+        tag.textContent = kb.scope === 'user' ? '个人' : '公共';
+
+        var meta = document.createElement('span');
+        meta.className = 'kb-item-meta';
+        meta.textContent = kb.file_count + ' 文件 / ' + kb.chunk_count + ' 切片';
+
+        var ops = document.createElement('span');
+        ops.className = 'kb-item-ops';
+        // 文件面板展开/收起（公共库同样可查看文件列表，仅个人库可管理）
+        var filesBtn = document.createElement('button');
+        filesBtn.className = 'kb-op-btn';
+        filesBtn.textContent = kbExpanded[kb.id] ? '收起' : '文件';
+        filesBtn.addEventListener('click', function () {
+            kbExpanded[kb.id] = !kbExpanded[kb.id];
+            kbRender();
+        });
+        ops.appendChild(filesBtn);
+        // 删除整库：仅个人库
+        if (kb.scope === 'user') {
+            var delBtn = document.createElement('button');
+            delBtn.className = 'kb-op-btn';
+            delBtn.textContent = '删除';
+            delBtn.addEventListener('click', function () {
+                showConfirm('删除知识库', '确定删除个人知识库「' + kb.name + '」？库内所有文件与向量将同步清理。', function () {
+                    fetch('/api/kb/' + kb.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                        .then(function (r) { return r.json(); })
+                        .then(function (res) {
+                            if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                            showToast('知识库已删除');
+                            delete kbFilesCache[kb.id];
+                            delete kbExpanded[kb.id];
+                            kbLoadData();
+                        })
+                        .catch(function () { showToast('删除失败'); });
+                }, '删除');
+            });
+            ops.appendChild(delBtn);
+        }
+
+        head.appendChild(check);
+        head.appendChild(name);
+        head.appendChild(tag);
+        head.appendChild(meta);
+        head.appendChild(ops);
+        item.appendChild(head);
+
+        if (kb.desc) {
+            var desc = document.createElement('div');
+            desc.className = 'kb-item-desc';
+            desc.textContent = kb.desc;
+            item.appendChild(desc);
+        }
+
+        // 展开的文件面板（懒加载，缓存命中直接渲染）
+        if (kbExpanded[kb.id]) {
+            var fp = document.createElement('div');
+            fp.className = 'kb-files';
+            var files = kbFilesCache[kb.id];
+            if (files === null || files === undefined) {
+                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '加载中…' }));
+                kbLoadFiles(kb.id);
+            } else if (!files.length) {
+                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无文件，点击下方按钮上传' }));
+            } else {
+                files.forEach(function (f) {
+                    fp.appendChild(kbRenderFileRow(kb.id, f));
+                });
+            }
+            // 上传入口：仅个人库
+            if (kb.scope === 'user') {
+                var upRow = document.createElement('div');
+                upRow.className = 'kb-upload-row';
+                var upBtn = document.createElement('button');
+                upBtn.className = 'kb-upload-btn';
+                upBtn.textContent = '上传文件（docx / xlsx / xlsm / csv / md / txt）';
+                upBtn.addEventListener('click', function () {
+                    kbUploadFiles(kb.id);
+                });
+                upRow.appendChild(upBtn);
+                fp.appendChild(upRow);
+            }
+            item.appendChild(fp);
+        }
+        return item;
+    }
+
+    function kbRenderFileRow(kbId, f) {
+        var row = document.createElement('div');
+        row.className = 'kb-file-row';
+        var fn = document.createElement('span');
+        fn.className = 'kb-file-name';
+        fn.textContent = f.name;
+        fn.title = f.name + (f.status === 'failed' && f.error ? '（失败原因：' + f.error + '）' : '');
+        var st = document.createElement('span');
+        st.className = 'kb-file-status ' + f.status;
+        st.textContent = f.status === 'processing' ? '处理中' : (f.status === 'ready' ? '可检索' : '失败');
+        var del = document.createElement('button');
+        del.className = 'kb-file-del';
+        del.textContent = '×';
+        del.title = '删除文件';
+        del.addEventListener('click', function () {
+            showConfirm('删除文件', '确定删除「' + f.name + '」？该文件的向量将同步清理。', function () {
+                fetch('/api/kb/file/' + f.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('文件已删除');
+                        delete kbFilesCache[kbId];
+                        kbLoadData();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            }, '删除');
+        });
+        row.appendChild(fn);
+        row.appendChild(st);
+        row.appendChild(del);
+        return row;
+    }
+
+    function kbLoadFiles(kbId) {
+        kbFilesCache[kbId] = null; // 加载中标记（防重复触发）
+        fetch('/api/kb/' + kbId + '/files?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                kbFilesCache[kbId] = res.ok ? (res.data || []) : [];
+                kbRender();
+            })
+            .catch(function () {
+                kbFilesCache[kbId] = [];
+                kbRender();
+            });
+    }
+
+    // 勾选/取消勾选：以当前勾选集为基线增删后整体保存（服务端逐库校验权限）
+    function kbToggleSelect(kbId, on) {
+        var cur = (kbData.kbs || []).filter(function (k) { return k.selected; }).map(function (k) { return k.id; });
+        var next = on ? cur.concat([kbId]) : cur.filter(function (id) { return id !== kbId; });
+        fetch('/api/kb/select?username=' + kbUsername(), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kb_ids: next })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '保存勾选失败'); kbRender(); return; }
+                // 本地同步勾选态（服务端已归口，避免整表重查）
+                kbData.kbs.forEach(function (k) { k.selected = next.indexOf(k.id) !== -1; });
+                kbRender();
+            })
+            .catch(function () { showToast('保存勾选失败'); kbRender(); });
+    }
+
+    // 新建个人知识库
+    function kbCreate() {
+        var name = kbNewName.value.trim();
+        if (!name) { showToast('请输入知识库名称'); return; }
+        kbCreateBtn.disabled = true;
+        fetch('/api/kb?username=' + kbUsername(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, desc: '' })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '新建失败'); return; }
+                showToast('知识库「' + name + '」已创建');
+                kbNewName.value = '';
+                kbLoadData();
+            })
+            .catch(function () { showToast('新建失败'); })
+            .finally(function () { kbCreateBtn.disabled = false; });
+    }
+    kbCreateBtn.addEventListener('click', kbCreate);
+    kbNewName.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            kbCreate();
+        }
+    });
+
+    // 上传文件到个人库（多选逐个串行上传，全部完成后刷新状态）
+    function kbUploadFiles(kbId) {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.docx,.xlsx,.xlsm,.csv,.md,.txt';
+        input.multiple = true;
+        input.addEventListener('change', function () {
+            var files = Array.prototype.slice.call(input.files || []);
+            if (!files.length) return;
+            var i = 0;
+            (function next() {
+                if (i >= files.length) {
+                    showToast('上传完成，向量化处理中');
+                    delete kbFilesCache[kbId];
+                    kbLoadData();
+                    return;
+                }
+                var fd = new FormData();
+                fd.append('file', files[i]);
+                fetch('/api/kb/file?username=' + kbUsername() + '&kb_id=' + kbId, { method: 'POST', body: fd })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) showToast(res.msg || '上传失败：' + files[i].name);
+                        i++;
+                        next();
+                    })
+                    .catch(function () {
+                        showToast('上传失败：' + files[i].name);
+                        i++;
+                        next();
+                    });
+            })();
+        });
+        input.click();
+    }
+
+    // ===== 阶段五十七：我的智能体（个人智能体自建/编辑/删除，仅归属者可见可对话） =====
+    // 服务端归口：/api/agents 系列（模型可选范围由管理员在 config.yaml ai.user_agent 白名单圈定，
+    // 提示词/名称长度与数量上限均由服务端校验）；新建/编辑/删除成功后服务端按用户视角广播 AI_AGENTS，
+    // 侧栏智能体列表经既有监听自动刷新，此处无需手动同步
+    var uaMask = document.getElementById('ua-mask');
+    var uaEntry = document.getElementById('ua-entry');
+    var uaEntryBadge = document.getElementById('ua-entry-badge');
+    var uaStatusEl = document.getElementById('ua-status');
+    var uaNameInput = document.getElementById('ua-name');
+    var uaAvatarInput = document.getElementById('ua-avatar');
+    var uaProviderSel = document.getElementById('ua-provider');
+    var uaPromptInput = document.getElementById('ua-prompt');
+    var uaSaveBtn = document.getElementById('ua-save-btn');
+    var uaCancelBtn = document.getElementById('ua-cancel-btn');
+    var uaCloseBtn = document.getElementById('ua-close');
+    var uaListEl = document.getElementById('ua-list');
+    var uaForm = document.querySelector('.ua-form');
+    var uaData = null;       // 服务端总览数据（开关/白名单/我的智能体）
+    var uaEditingId = 0;     // 编辑中的智能体 ID（0=新建态）
+
+    function uaOpenDialog() {
+        uaMask.classList.remove('hidden');
+        uaResetForm();
+        uaLoad();
+    }
+
+    function uaCloseDialog() {
+        uaMask.classList.add('hidden');
+    }
+
+    uaEntry.addEventListener('click', uaOpenDialog);
+    uaCloseBtn.addEventListener('click', uaCloseDialog);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !uaMask.classList.contains('hidden')) uaCloseDialog();
+    });
+
+    // 拉取总览数据并重渲染（新建/编辑/删除后复用）
+    function uaLoad() {
+        fetch('/api/agents?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '智能体加载失败'); return; }
+                uaData = res.data;
+                uaRender();
+            })
+            .catch(function () { showToast('智能体加载失败'); });
+    }
+
+    function uaRender() {
+        if (!uaData) return;
+        // 功能关闭：隐藏表单，仅提示（服务端归口 ai.user_agent.enabled）
+        if (!uaData.enabled) {
+            uaStatusEl.innerHTML = '<span class="kb-status-off">管理员未开放自建智能体功能（config.yaml ai.user_agent.enabled）</span>';
+            uaForm.classList.add('hidden');
+            uaListEl.innerHTML = '';
+            uaEntryBadge.classList.add('hidden');
+            return;
+        }
+        uaForm.classList.remove('hidden');
+        uaStatusEl.textContent = '自建智能体仅自己可见可对话，模型范围由管理员圈定（' +
+            (uaData.mine ? uaData.mine.length : 0) + '/' + uaData.max_per_user + ' 个）';
+        // 模型下拉（白名单归口下发：名称 + 模型名，不含密钥；保留当前已选项）
+        var cur = uaProviderSel.value;
+        uaProviderSel.innerHTML = '';
+        (uaData.providers || []).forEach(function (p) {
+            var opt = document.createElement('option');
+            opt.value = p.name;
+            opt.textContent = p.name + '（' + p.model + '）';
+            uaProviderSel.appendChild(opt);
+        });
+        if (cur && Array.prototype.some.call(uaProviderSel.options, function (o) { return o.value === cur; })) {
+            uaProviderSel.value = cur;
+        }
+        // 我的智能体列表
+        uaListEl.innerHTML = '';
+        if (!uaData.mine || !uaData.mine.length) {
+            uaListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无自建智能体，在上方填写名称与提示词即可创建' }));
+        } else {
+            uaData.mine.forEach(function (a) {
+                uaListEl.appendChild(uaRenderItem(a));
+            });
+        }
+        // 入口角标：自建数量（0 时隐藏，与知识库入口红点同语义）
+        var count = (uaData.mine || []).length;
+        if (count > 0) {
+            uaEntryBadge.textContent = count;
+            uaEntryBadge.classList.remove('hidden');
+        } else {
+            uaEntryBadge.classList.add('hidden');
+        }
+    }
+
+    function uaRenderItem(a) {
+        var item = document.createElement('div');
+        item.className = 'kb-item';
+
+        var head = document.createElement('div');
+        head.className = 'kb-item-head';
+
+        var name = document.createElement('span');
+        name.className = 'kb-item-name';
+        name.textContent = (a.avatar && !aiAvatarIsUrl(a.avatar) ? a.avatar + ' ' : '') + a.name;
+        name.title = a.name;
+
+        var tag = document.createElement('span');
+        tag.className = 'kb-item-tag user';
+        tag.textContent = a.enabled ? '启用中' : '已停用';
+
+        var meta = document.createElement('span');
+        meta.className = 'kb-item-meta';
+        meta.textContent = a.provider;
+
+        var ops = document.createElement('span');
+        ops.className = 'kb-item-ops';
+        var editBtn = document.createElement('button');
+        editBtn.className = 'kb-op-btn';
+        editBtn.textContent = '编辑';
+        editBtn.addEventListener('click', function () {
+            uaBeginEdit(a);
+        });
+        ops.appendChild(editBtn);
+        var delBtn = document.createElement('button');
+        delBtn.className = 'kb-op-btn';
+        delBtn.textContent = '删除';
+        delBtn.addEventListener('click', function () {
+            showConfirm('删除智能体', '确定删除个人智能体「' + a.name + '」？历史聊天记录保留，仅不可再对话。', function () {
+                fetch('/api/agents/' + a.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('智能体已删除');
+                        if (uaEditingId === a.id) uaResetForm();
+                        uaLoad();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            }, '删除');
+        });
+        ops.appendChild(delBtn);
+
+        head.appendChild(name);
+        head.appendChild(tag);
+        head.appendChild(meta);
+        head.appendChild(ops);
+        item.appendChild(head);
+
+        // 提示词预览（单行截断，编辑时表单完整回显）
+        if (a.system_prompt) {
+            var desc = document.createElement('div');
+            desc.className = 'kb-item-desc';
+            desc.textContent = a.system_prompt;
+            item.appendChild(desc);
+        }
+        return item;
+    }
+
+    // 进入编辑态：表单回显 + 按钮切换（再点"保存"走 PUT）
+    function uaBeginEdit(a) {
+        uaEditingId = a.id;
+        uaNameInput.value = a.name;
+        uaAvatarInput.value = a.avatar && !aiAvatarIsUrl(a.avatar) ? a.avatar : '';
+        uaProviderSel.value = a.provider;
+        uaPromptInput.value = a.system_prompt || '';
+        uaSaveBtn.textContent = '保存修改';
+        uaCancelBtn.classList.remove('hidden');
+        uaNameInput.focus();
+    }
+
+    // 表单复位为新建态
+    function uaResetForm() {
+        uaEditingId = 0;
+        uaNameInput.value = '';
+        uaAvatarInput.value = '';
+        uaPromptInput.value = '';
+        uaSaveBtn.textContent = '新建';
+        uaCancelBtn.classList.add('hidden');
+    }
+
+    // 新建/保存（服务端校验归口：名称唯一/长度/数量上限/模型白名单，失败提示服务端消息）
+    function uaSave() {
+        var name = uaNameInput.value.trim();
+        if (!name) { showToast('请填写智能体名称'); return; }
+        var body = {
+            name: name,
+            avatar: uaAvatarInput.value.trim(),
+            system_prompt: uaPromptInput.value,
+            provider: uaProviderSel.value
+        };
+        var isEdit = uaEditingId > 0;
+        var url = isEdit ? '/api/agents/' + uaEditingId + '?username=' + kbUsername() : '/api/agents?username=' + kbUsername();
+        uaSaveBtn.disabled = true;
+        fetch(url, {
+            method: isEdit ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || (isEdit ? '保存失败' : '新建失败')); return; }
+                showToast(isEdit ? '智能体已更新' : '智能体「' + name + '」已创建');
+                uaResetForm();
+                uaLoad();
+            })
+            .catch(function () { showToast(isEdit ? '保存失败' : '新建失败'); })
+            .finally(function () { uaSaveBtn.disabled = false; });
+    }
+    uaSaveBtn.addEventListener('click', uaSave);
+    uaCancelBtn.addEventListener('click', uaResetForm);
+    uaNameInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            uaSave();
+        }
+    });
+
+    // ===== 阶段五十八：记忆管理（用户+智能体 隔离的长期记忆查看/手动新增/删除/清空/开关） =====
+    // 服务端归口：/api/agents/{id}/memory 系列（id 取 AI_AGENTS 下发列表；提取/注入全在服务端，此处仅展示管理）
+    var memoryBtn = document.getElementById('memory-btn');
+    var memoryMask = document.getElementById('memory-mask');
+    var memoryStatusEl = document.getElementById('memory-status');
+    var memoryPrefInput = document.getElementById('memory-pref');
+    var memoryAddRow = document.getElementById('memory-add-row');
+    var memoryInput = document.getElementById('memory-input');
+    var memoryAddBtn = document.getElementById('memory-add-btn');
+    var memoryListEl = document.getElementById('memory-list');
+    var memoryClearBtn = document.getElementById('memory-clear');
+    var memoryCloseBtn = document.getElementById('memory-close');
+    var memFeatureOk = false; // 服务端功能可用性缓存（总开关关闭/向量降级时隐藏新增区与开关）
+
+    // 当前会话智能体的 DB ID（AI_AGENTS 下发归口携带 id；未就绪返回 0）
+    function memAgentId() {
+        var a = aiAgents.find(function (x) { return x.name === currentChatUser; });
+        return a ? (a.id || 0) : 0;
+    }
+
+    function memOpenDialog() {
+        if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+        if (!memAgentId()) {
+            showToast('智能体信息未就绪，请稍后重试');
+            return;
+        }
+        memoryMask.classList.remove('hidden');
+        memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（记忆按 账号+智能体 隔离，仅你可见）';
+        memoryListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        memLoad();
+    }
+
+    function memCloseDialog() {
+        memoryMask.classList.add('hidden');
+    }
+
+    // 拉取记忆列表 + 用户开关 + 功能可用性
+    function memLoad() {
+        var id = memAgentId();
+        if (!id) { memCloseDialog(); return; }
+        fetch('/api/agents/' + id + '/memory?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '记忆加载失败'); return; }
+                memFeatureOk = !!res.data.feature;
+                memoryPrefInput.checked = !!res.data.pref;
+                memoryPrefInput.disabled = !memFeatureOk;
+                memoryAddRow.classList.toggle('hidden', !memFeatureOk);
+                memoryClearBtn.classList.toggle('hidden', !(res.data.memories || []).length);
+                memRender(res.data.memories || []);
+            })
+            .catch(function () { showToast('记忆加载失败'); });
+    }
+
+    function memRender(list) {
+        memoryListEl.innerHTML = '';
+        if (!list.length) {
+            memoryListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无记忆，聊几句或手动添加一条试试' }));
+            return;
+        }
+        list.forEach(function (m) {
+            var item = document.createElement('div');
+            item.className = 'kb-item';
+
+            var head = document.createElement('div');
+            head.className = 'kb-item-head';
+
+            // 记忆正文（单行截断，悬停 title 看全文）
+            var name = document.createElement('span');
+            name.className = 'kb-item-name';
+            name.textContent = m.content;
+            name.title = m.content;
+
+            // 来源标签：自动提取（灰）/ 手动添加（主题色，与"个人"标签同款）
+            var tag = document.createElement('span');
+            tag.className = 'kb-item-tag ' + (m.source === 'manual' ? 'user' : 'public');
+            tag.textContent = m.source === 'manual' ? '手动' : '自动';
+
+            var meta = document.createElement('span');
+            meta.className = 'kb-item-meta';
+            meta.textContent = memFormatTime(m.create_time);
+
+            var ops = document.createElement('span');
+            ops.className = 'kb-item-ops';
+            var delBtn = document.createElement('button');
+            delBtn.className = 'kb-op-btn';
+            delBtn.textContent = '删除';
+            delBtn.addEventListener('click', function () {
+                fetch('/api/agents/' + memAgentId() + '/memory/' + m.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('记忆已删除');
+                        memLoad();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            });
+            ops.appendChild(delBtn);
+
+            head.appendChild(name);
+            head.appendChild(tag);
+            head.appendChild(meta);
+            head.appendChild(ops);
+            item.appendChild(head);
+            memoryListEl.appendChild(item);
+        });
+    }
+
+    function memFormatTime(ts) {
+        var d = new Date(ts);
+        if (!ts || isNaN(d.getTime())) return '';
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    // 手动新增记忆（服务端同样走去重归口，重复内容会提示已存在）
+    function memAdd() {
+        var content = memoryInput.value.trim();
+        if (!content) { showToast('请输入记忆内容'); return; }
+        memoryAddBtn.disabled = true;
+        fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
+                showToast('记忆已添加');
+                memoryInput.value = '';
+                memLoad();
+            })
+            .catch(function () { showToast('添加失败'); })
+            .finally(function () { memoryAddBtn.disabled = false; });
+    }
+
+    memoryBtn.addEventListener('click', memOpenDialog);
+    memoryCloseBtn.addEventListener('click', memCloseDialog);
+    memoryAddBtn.addEventListener('click', memAdd);
+    memoryInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            memAdd();
+        }
+    });
+    memoryClearBtn.addEventListener('click', function () {
+        showConfirm('清空记忆', '确定清空与「' + currentChatUser + '」的全部记忆？此操作不可恢复。', function () {
+            fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), { method: 'DELETE' })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (!res.ok) { showToast(res.msg || '清空失败'); return; }
+                    showToast('记忆已清空');
+                    memLoad();
+                })
+                .catch(function () { showToast('清空失败'); });
+        }, '清空');
+    });
+    // 用户级开关（关闭后不再自动提取与注入召回，已存记忆保留；失败回滚勾选态）
+    memoryPrefInput.addEventListener('change', function () {
+        var want = memoryPrefInput.checked;
+        fetch('/api/agents/' + memAgentId() + '/memory/pref?username=' + kbUsername(), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: want })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) {
+                    showToast(res.msg || '保存失败');
+                    memoryPrefInput.checked = !want;
+                    return;
+                }
+                showToast(want ? '已开启记忆' : '已关闭记忆（已存记忆保留）');
+            })
+            .catch(function () {
+                showToast('保存失败');
+                memoryPrefInput.checked = !want;
+            });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !memoryMask.classList.contains('hidden')) memCloseDialog();
+    });
+
     // ===== 阶段四十四：滚动条悬停显隐（微信设置页同款：默认隐藏，悬停滚动容器浮现，移出立即隐藏） =====
     // 纯 CSS :hover 在 Chromium 滚动条伪元素上存在滞留（拖动滑块后移出/快速划过时 hover 不重算，滑块不消失），
     // 改由 JS 精确控制：mouseover 时给最近的滚动容器加 .sb-hover（滑块浮现），mouseout 时移除（滑块隐藏）
@@ -4674,7 +5435,11 @@
             osbUpdate();
         }
         // 主窗口全部纵向滚动容器（与 style.css 中 overflow-y: auto 的面板一一对应）
-        ['.message-list', '.conv-list', '.user-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content']
+        // 阶段五十六：追加我的知识库弹窗库列表 .kb-list
+        // 阶段五十七：追加我的智能体弹窗列表 #ua-list（该元素复用 kb-list 类，querySelector('.kb-list')
+        // 仅命中 DOM 序靠前的知识库弹窗列表，须按 id 显式补初始化）
+        // 阶段五十八：追加记忆管理弹窗列表 #memory-list（同坑：复用 kb-list 类，按 id 显式补初始化）
+        ['.message-list', '.conv-list', '.user-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list']
             .forEach(function (sel) {
                 var el = document.querySelector(sel);
                 if (el) initOsb(el);
