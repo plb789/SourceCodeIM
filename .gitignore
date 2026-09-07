@@ -2,3 +2,7 @@
 Redis-x64-5.0.14.1/
 *.exe
 *.zip
+*.gob
+*.log
+*.xlsx
+*.docx

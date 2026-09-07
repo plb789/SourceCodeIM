@@ -1,0 +1,6 @@
+recorder-core
+
+**recorder-core**（推荐，兼容性最好，PC / 安卓 /iOS14.3+）GitHub
+github：`https://github.com/junlin365/recorder-core`
+
+- 能力：监听`touchstart/mousedown`按住开始录音；`touchend/mouseup`松开停止录音；输出 wav/mp3/blob；拿到 blob 直接 FormData 上传 Go 后端；支持波形显示。

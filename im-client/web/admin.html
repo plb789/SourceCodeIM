@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>后台管理 - 即时通讯</title>
+    <!-- 主题防闪烁：先于样式渲染读取本地主题偏好（与 chat.js 同一套 im_theme 约定） -->
+    <script>
+        (function () {
+            var theme = localStorage.getItem('im_theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
+    <link rel="stylesheet" href="css/style.css?v=1.50">
+    <link rel="stylesheet" href="css/admin.css?v=1.5">
+</head>
+<body>
+    <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
+    <div id="admin-login" class="admin-login-view">
+        <div class="admin-login-card">
+            <h1 class="admin-login-title">后台管理</h1>
+            <p class="admin-login-sub">即时通讯管理控制台</p>
+            <input type="text" id="admin-login-username" class="admin-input" placeholder="管理员账号" autocomplete="username">
+            <input type="password" id="admin-login-password" class="admin-input" placeholder="密码" autocomplete="current-password">
+            <button id="admin-login-btn" class="admin-btn primary block">登 录</button>
+            <p class="admin-login-hint">仅管理员白名单账号可登录</p>
+            <a class="admin-login-back" href="/">← 返回聊天</a>
+        </div>
+    </div>
+
+    <!-- 主界面：左侧导航 + 右侧内容 -->
+    <div id="admin-main" class="admin-main hidden">
+        <aside class="admin-side">
+            <div class="admin-side-head">
+                <span class="admin-side-title">后台管理</span>
+                <button id="admin-theme-btn" class="admin-theme-btn" title="切换主题（浅色/深色/跟随系统）">主题</button>
+            </div>
+            <nav class="admin-nav">
+                <button class="admin-nav-item active" data-view="dashboard">性能仪表盘</button>
+                <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
+                <button class="admin-nav-item" data-view="agents">AI 智能体</button>
+                <button class="admin-nav-item" data-view="knowledge">知识库</button>
+                <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
+            </nav>
+            <div class="admin-side-foot">
+                <span id="admin-current-user" class="admin-current-user"></span>
+                <button id="admin-logout-btn" class="admin-btn small">退出登录</button>
+            </div>
+        </aside>
+
+        <main class="admin-body">
+            <!-- 性能仪表盘（阶段五十） -->
+            <section id="admin-view-dashboard" class="admin-view active">
+                <header class="admin-view-head">
+                    <h2>性能仪表盘</h2>
+                    <span id="dash-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <!-- 核心业务指标卡片 -->
+                <div class="dash-cards">
+                    <div class="dash-card">
+                        <span class="dash-card-label">在线用户</span>
+                        <span class="dash-card-value" id="dash-online-users">-</span>
+                        <span class="dash-card-sub" id="dash-online-conns">连接数 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">今日消息</span>
+                        <span class="dash-card-value" id="dash-today-msgs">-</span>
+                        <span class="dash-card-sub" id="dash-total-msgs">总量 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">注册用户</span>
+                        <span class="dash-card-value" id="dash-total-users">-</span>
+                        <span class="dash-card-sub" id="dash-ai-count">AI 智能体 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">上传占用</span>
+                        <span class="dash-card-value" id="dash-upload-size">-</span>
+                        <span class="dash-card-sub" id="dash-upload-files">文件数 -</span>
+                    </div>
+                </div>
+                <!-- 图表区：内存/GC 实时曲线 + 今日消息分布 -->
+                <div class="dash-charts">
+                    <div class="dash-chart-box">
+                        <h3 class="dash-chart-title">内存与 Goroutine 实时曲线（10 分钟窗口）</h3>
+                        <div id="dash-chart-mem" class="dash-chart"></div>
+                    </div>
+                    <div class="dash-chart-box">
+                        <h3 class="dash-chart-title">今日消息分布（按小时）</h3>
+                        <div id="dash-chart-msg" class="dash-chart"></div>
+                    </div>
+                </div>
+                <!-- 运行环境小卡片 -->
+                <h3 class="dash-subtitle">运行环境</h3>
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">堆内存</span><span class="dash-card-value sm" id="dash-heap">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">Goroutines</span><span class="dash-card-value sm" id="dash-goroutines">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">GC 次数</span><span class="dash-card-value sm" id="dash-gc">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">运行时长</span><span class="dash-card-value sm" id="dash-uptime">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">MySQL 连接池</span><span class="dash-card-value sm" id="dash-mysql">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">Redis 延迟</span><span class="dash-card-value sm" id="dash-redis">-</span></div>
+                </div>
+                <p class="admin-view-tip" id="dash-meta"></p>
+            </section>
+
+            <!-- AI 模型服务管理 -->
+            <section id="admin-view-providers" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 模型服务</h2>
+                    <button id="provider-add" class="admin-btn primary">+ 新增模型服务</button>
+                </header>
+                <p class="admin-view-tip">OpenAI 兼容 chat/completions 接口；停用后绑定的智能体降级为本地演示应答。保存后立即热生效，在线客户端自动刷新。</p>
+                <div id="provider-list" class="admin-cards"></div>
+            </section>
+
+            <!-- AI 智能体管理 -->
+            <section id="admin-view-agents" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 智能体</h2>
+                    <button id="agent-add" class="admin-btn primary">+ 新增智能体</button>
+                </header>
+                <p class="admin-view-tip">面向用户的聊天助手；停用后不再下发客户端。保存后立即热生效，在线客户端自动刷新。</p>
+                <div id="agent-list" class="admin-cards"></div>
+            </section>
+
+            <!-- 知识库（阶段五十一：库管理/文件向量化/命中测试） -->
+            <section id="admin-view-knowledge" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>知识库</h2>
+                    <span id="kb-status" class="admin-view-tip">加载中…</span>
+                    <button id="kb-add" class="admin-btn primary">+ 新增知识库</button>
+                </header>
+                <p class="admin-view-tip">公共库绑定智能体后对所有用户生效；个人库仅归属者与该智能体对话时参与检索。上传文件自动解析→切片→向量化（docx/xlsx/xlsm/csv/md/txt）。</p>
+                <div id="kb-list" class="admin-cards"></div>
+
+                <!-- 选中库的详情面板：文件管理 + 命中测试 -->
+                <div id="kb-detail" class="admin-kb-panel hidden">
+                    <h3 class="admin-kb-panel-title" id="kb-detail-title">文件管理</h3>
+                    <div class="admin-kb-upload-row">
+                        <input type="file" id="kb-file-input" class="admin-kb-file-input">
+                        <button id="kb-file-upload" class="admin-btn primary">上传并向量化</button>
+                        <!-- 阶段五十二：文本直贴建知识 / 整库重新向量化 -->
+                        <button id="kb-file-text" class="admin-btn">文本直贴</button>
+                        <button id="kb-rebuild-btn" class="admin-btn">整库重建</button>
+                        <button id="kb-file-refresh" class="admin-btn small">刷新</button>
+                        <span id="kb-file-tip" class="admin-view-tip"></span>
+                    </div>
+                    <div id="kb-file-list" class="admin-kb-files"></div>
+
+                    <h3 class="admin-kb-panel-title">检索调试（阈值/注入判定可视化）</h3>
+                    <div class="admin-kb-test-row">
+                        <input type="text" id="kb-test-query" class="admin-input" placeholder="输入测试问题，展示全部候选命中及阈值过滤/注入判定">
+                        <button id="kb-test-btn" class="admin-btn primary">调试</button>
+                    </div>
+                    <div id="kb-test-result" class="admin-kb-hits"></div>
+                </div>
+            </section>
+
+            <!-- 量化数据管理（阶段五十四：全库向量切片表格化展示/搜索/行内微调） -->
+            <section id="admin-view-vecdata" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>量化数据管理</h2>
+                    <span id="vec-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全部知识库已向量化切片的统一管理视图：可按库筛选、按内容关键词搜索；行内编辑保存后自动重新向量化，删除后不再参与检索，文本类文件可编辑源文（改后自动重切片）。注意：切片编辑仅改向量库，源文件不改动，重建时将被覆盖。</p>
+                <!-- 筛选工具条：库下拉 + 关键词搜索 + 刷新 -->
+                <div class="vec-toolbar">
+                    <select id="vec-kb-filter" class="admin-input vec-select" title="按知识库筛选">
+                        <option value="0">全部知识库</option>
+                    </select>
+                    <input type="text" id="vec-search" class="admin-input vec-search-input" placeholder="按切片内容关键词搜索">
+                    <button id="vec-search-btn" class="admin-btn primary">搜索</button>
+                    <button id="vec-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 全宽表格：库/文件/切片号/字数/维度/范数/内容/操作 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>知识库</th>
+                                <th>文件</th>
+                                <th>切片</th>
+                                <th>字数</th>
+                                <th>维度</th>
+                                <th>范数</th>
+                                <th class="vec-th-content">内容</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vec-tbody">
+                            <tr><td colspan="8" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="vec-prev" class="admin-btn small">上一页</button>
+                    <span id="vec-page-info" class="admin-view-tip">-</span>
+                    <button id="vec-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- 新增/编辑弹窗（动态表单，自定义弹窗禁用系统默认弹窗） -->
+    <div id="admin-edit-mask" class="modal-mask hidden">
+        <div class="modal-box admin-edit-box">
+            <div id="admin-edit-title" class="modal-title"></div>
+            <div id="admin-edit-form" class="admin-edit-form"></div>
+            <div class="modal-btns">
+                <button id="admin-edit-cancel" class="modal-btn">取消</button>
+                <button id="admin-edit-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认弹窗（删除等危险操作二次确认） -->
+    <div id="admin-confirm-mask" class="modal-mask hidden">
+        <div class="modal-box">
+            <div id="admin-confirm-text" class="modal-text"></div>
+            <div class="modal-btns">
+                <button id="admin-confirm-cancel" class="modal-btn">取消</button>
+                <button id="admin-confirm-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 切片查看弹窗（阶段五十二：查看文件已入库的切片内容与字数） -->
+    <div id="admin-chunks-mask" class="modal-mask hidden">
+        <div class="modal-box admin-chunks-box">
+            <div id="admin-chunks-title" class="modal-title"></div>
+            <div id="admin-chunks-list" class="admin-chunks-list"></div>
+            <div class="modal-btns">
+                <button id="admin-chunks-close" class="modal-btn primary">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 轻提示 -->
+    <div id="admin-toast" class="toast hidden"></div>
+
+    <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
+    <script src="js/lib/echarts.min.js?v=5.5.1"></script>
+    <script src="js/admin.js?v=1.6"></script>
+</body>
+</html>

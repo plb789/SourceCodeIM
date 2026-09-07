@@ -29,7 +29,9 @@ func InitMySQL(cfg *config.Config) error {
 	}
 
 	// 自动创建数据表（首次启动）；阶段四十六追加文档编辑版本表 im_doc_edit
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}); err != nil {
+	// 阶段四十九：追加 AI 模型服务表 im_ai_provider 与 AI 智能体表 im_ai_agent（后台管理热更新数据源）
+	// 阶段五十一：追加知识库表 im_kb 与知识文件表 im_kb_file（RAG 向量化数据源）
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 

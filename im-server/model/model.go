@@ -10,16 +10,100 @@ type User struct {
 	Avatar   string `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`
 	// 原实现：仅 username/password/avatar 三字段，无个人资料，点击头像只能直接换图
 	// 阶段三十：新增个人资料字段（微信式"我的个人资料"：昵称/性别/地区/签名），AutoMigrate 自动加列
-	Nickname  string    `gorm:"column:nickname;type:varchar(32);default:''" json:"nickname"`      // 昵称（空则前端展示用户名）
-	Gender    int8      `gorm:"column:gender;type:tinyint;default:0" json:"gender"`               // 性别：0未知 1男 2女
-	Region    string    `gorm:"column:region;type:varchar(64);default:''" json:"region"`          // 地区（如：山西 太原）
-	Signature string    `gorm:"column:signature;type:varchar(128);default:''" json:"signature"`   // 个性签名
+	Nickname  string `gorm:"column:nickname;type:varchar(32);default:''" json:"nickname"`    // 昵称（空则前端展示用户名）
+	Gender    int8   `gorm:"column:gender;type:tinyint;default:0" json:"gender"`             // 性别：0未知 1男 2女
+	Region    string `gorm:"column:region;type:varchar(64);default:''" json:"region"`        // 地区（如：山西 太原）
+	Signature string `gorm:"column:signature;type:varchar(128);default:''" json:"signature"` // 个性签名
+	// 阶段四十九：后台管理权限角色（0普通用户 1管理员）——config.yaml admin_users 白名单启动时自动标记
+	Role       int8      `gorm:"column:role;type:tinyint;default:0" json:"role"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 指定表名
 func (User) TableName() string { return "im_user" }
+
+// AIProvider AI 模型服务表 im_ai_provider（阶段四十九：AI 配置迁入数据库，后台管理界面可热更新增删改）
+// 原实现：providers 存于 config.yaml，修改后需重启服务端生效
+type AIProvider struct {
+	ID     uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name   string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"` // 提供方名称（智能体绑定锚点，全局唯一）
+	APIURL string `gorm:"column:api_url;type:varchar(255);not null" json:"api_url"`      // OpenAI 兼容 chat/completions 完整接口地址
+	APIKey string `gorm:"column:api_key;type:varchar(255);default:''" json:"-"`          // API 密钥（仅服务端与管理后台归口，普通聊天链路不下发）
+	Model  string `gorm:"column:model;type:varchar(128);not null" json:"model"`          // 模型名（如 deepseek-v4-flash）
+	// SupportsImage 是否支持图片识别（多模态），为 true 时绑定的智能体开放图片提问入口
+	SupportsImage bool `gorm:"column:supports_image;default:false" json:"supports_image"`
+	// Enabled 启用状态：false 时绑定的智能体降级为本地 Mock 应答
+	Enabled    bool      `gorm:"column:enabled;default:true" json:"enabled"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AIProvider) TableName() string { return "im_ai_provider" }
+
+// AIAgent AI 智能体表 im_ai_agent（阶段四十九：面向用户的聊天助手，后台管理界面可热更新增删改）
+type AIAgent struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"` // 智能体名称（会话列表展示名，全局唯一）
+	// Provider 绑定的提供方名称（空或未命中时降级本地 Mock 应答）
+	Provider string `gorm:"column:provider;type:varchar(64);default:''" json:"provider"`
+	// SystemPrompt 系统提示词（人设/能力定义）
+	SystemPrompt string `gorm:"column:system_prompt;type:text" json:"system_prompt"`
+	// Avatar 头像 URL（空时前端回退 🤖 占位）
+	Avatar string `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`
+	// Enabled 启用状态：false 时不下发客户端（停用不删除，可随时恢复）
+	Enabled bool `gorm:"column:enabled;default:true" json:"enabled"`
+	// SortID 排序号（越小越靠前，同值按 ID 升序）
+	SortID int `gorm:"column:sort_id;default:0" json:"sort_id"`
+	// KBIDs 阶段五十一：绑定的知识库 ID（逗号分隔字符串，空=不启用知识库检索；个人库仅库归属者对话时生效）
+	KBIDs      string    `gorm:"column:kb_ids;type:varchar(255);default:''" json:"kb_ids"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AIAgent) TableName() string { return "im_ai_agent" }
+
+// KB 知识库表 im_kb（阶段五十一：公共/个人知识库，scope 归口权限）
+type KB struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name string `gorm:"column:name;type:varchar(64);not null;uniqueIndex:idx_kb_name_scope" json:"name"`
+	// Scope 库范围：public 公共库（绑定它的智能体对所有用户生效）/ user 个人库（仅归属者对话时生效）
+	Scope string `gorm:"column:scope;type:varchar(16);not null;default:'public';uniqueIndex:idx_kb_name_scope" json:"scope"`
+	// Owner 个人库归属用户名（公共库为空）
+	Owner string `gorm:"column:owner;type:varchar(64);default:''" json:"owner"`
+	// Desc 库描述（用途说明）
+	Desc string `gorm:"column:desc;type:varchar(255);default:''" json:"desc"`
+	// EmbedModel 建库时的 embedding 模型名（入库与检索必须同模型，更换模型需重建库）
+	EmbedModel string `gorm:"column:embed_model;type:varchar(128);default:''" json:"embed_model"`
+	// Dim 向量维度（首片入库时确定，后续文件维度不一致拒绝入库）
+	Dim        int       `gorm:"column:dim;default:0" json:"dim"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (KB) TableName() string { return "im_kb" }
+
+// KBFile 知识库文件表 im_kb_file（阶段五十一：上传→解析→切片→向量化流水线状态归口）
+type KBFile struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	KBID uint   `gorm:"column:kb_id;index;not null" json:"kb_id"`
+	Name string `gorm:"column:name;type:varchar(255);not null" json:"name"`   // 原始文件名
+	Path string `gorm:"column:path;type:varchar(255);default:''" json:"path"` // 落盘路径（DataDir/files/<kbID>/）
+	Size int64  `gorm:"column:size;default:0" json:"size"`
+	// Chunks 成功入库的切片数
+	Chunks int `gorm:"column:chunks;default:0" json:"chunks"`
+	// Status 处理状态：processing 处理中 / ready 可检索 / failed 失败
+	Status string `gorm:"column:status;type:varchar(16);default:'processing'" json:"status"`
+	// Error 失败原因（status=failed 时展示）
+	Error      string    `gorm:"column:error;type:varchar(255);default:''" json:"error"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (KBFile) TableName() string { return "im_kb_file" }
 
 // Message 聊天消息表 im_message
 type Message struct {
@@ -128,10 +212,10 @@ func (Blacklist) TableName() string { return "im_blacklist" }
 
 // DocEdit 文档在线编辑版本表 im_doc_edit（阶段四十六：OnlyOffice 保存回调后追加版本，每条消息一条记录）
 type DocEdit struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	MsgID     uint      `gorm:"column:msg_id;uniqueIndex;not null" json:"msg_id"`                // 关联的 im_message 消息 ID（文档版本归口锚点）
-	LatestURL string    `gorm:"column:latest_url;type:varchar(255);not null" json:"latest_url"` // 最新版本文件 URL（/static/upload/xxx）
-	Version   int       `gorm:"column:version;default:0" json:"version"`                        // 已保存版本数（参与 document.key 组成，防 DS 缓存旧版）
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	MsgID      uint      `gorm:"column:msg_id;uniqueIndex;not null" json:"msg_id"`               // 关联的 im_message 消息 ID（文档版本归口锚点）
+	LatestURL  string    `gorm:"column:latest_url;type:varchar(255);not null" json:"latest_url"` // 最新版本文件 URL（/static/upload/xxx）
+	Version    int       `gorm:"column:version;default:0" json:"version"`                        // 已保存版本数（参与 document.key 组成，防 DS 缓存旧版）
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 

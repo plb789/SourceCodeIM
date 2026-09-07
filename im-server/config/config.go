@@ -46,6 +46,10 @@ type Config struct {
 	// 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存服务端配置文件，客户端不接触密钥）
 	AI AIConfig `yaml:"ai"`
 
+	// 阶段四十九：后台管理——管理员用户名白名单（启动时自动标记 im_user.role=1；
+	// 管理登录时同时实时比对白名单，未注册账号首次登录 IM 注册后下次启动补标记）
+	AdminUsers []string `yaml:"admin_users"`
+
 	// 阶段四十六：OnlyOffice 在线文档编辑配置（服务端归口：JWT 密钥仅存 config.yaml，不下发客户端）
 	OnlyOffice OnlyOfficeConfig `yaml:"onlyoffice"`
 }
@@ -83,10 +87,32 @@ type AIAgentConfig struct {
 	Avatar       string `yaml:"avatar"`        // 头像 URL（缺省时前端回退 emoji 占位）
 }
 
+// EmbeddingConfig 阶段五十一：知识库向量化 embedding 服务配置（OpenAI 兼容 /embeddings 接口归口）
+// DeepSeek 不提供 embedding API，可接任意兼容服务（硅基流动 bge-m3 / 智谱 embedding-3 / 本地 ollama 等）
+type EmbeddingConfig struct {
+	APIURL    string `yaml:"api_url"`    // 完整接口地址（如 https://api.siliconflow.cn/v1/embeddings）
+	APIKey    string `yaml:"api_key"`    // API 密钥（仅存服务端，不下发客户端）
+	Model     string `yaml:"model"`      // 向量模型名（如 BAAI/bge-m3）
+	BatchSize int    `yaml:"batch_size"` // 单次请求批量条数（0=16）
+}
+
+// KBConfig 阶段五十一：知识库配置（切片/检索参数与数据目录，config 归口避免硬编码）
+type KBConfig struct {
+	ChunkSize      int     `yaml:"chunk_size"`      // 切片字符数（0=500）
+	ChunkOverlap   int     `yaml:"chunk_overlap"`   // 相邻切片重叠字符（0=50）
+	TopK           int     `yaml:"top_k"`           // AI 对话注入条数（0=3）
+	MaxContext     int     `yaml:"max_context"`     // 注入文本总长上限字符（0=4000）
+	ScoreThreshold float64 `yaml:"score_threshold"` // 阶段五十二：命中相似度阈值（0=不过滤；低于阈值的命中视为不相关不注入，不同 embedding 服务分布不同需按实测调整）
+	DataDir        string  `yaml:"data_dir"`        // 知识文件与向量库根目录（空=exe目录/data/kb，锚定 exe 解析）
+}
+
 // AIConfig AI 问答配置节
 type AIConfig struct {
 	Providers []AIProviderConfig `yaml:"providers"` // 模型服务列表（多模型支持）
 	Agents    []AIAgentConfig    `yaml:"agents"`    // 智能体列表（用户可选择性聊天）
+	// 阶段五十一：知识库向量化通道与参数（embedding 未配置时知识库功能降级关闭，不影响其他功能）
+	Embedding EmbeddingConfig `yaml:"embedding"`
+	KB        KBConfig        `yaml:"kb"`
 	// 多轮对话携带的历史消息条数（按用户+智能体隔离取最近 N 条）
 	ContextWindow int `yaml:"context_window"`
 	// 限流：单用户在限流窗口内最大提问次数
@@ -201,6 +227,36 @@ func Load() *Config {
 	// 阶段四十五：文档问答提取上限兜底
 	if cfg.AI.DocMaxChars <= 0 {
 		cfg.AI.DocMaxChars = 60000
+	}
+	// 阶段五十一：知识库数据目录兜底（锚定 exe 目录/data/kb，与 UploadDir 同规则不硬编码绝对路径）
+	if cfg.AI.KB.DataDir == "" {
+		cfg.AI.KB.DataDir = filepath.Join(exeDir(), "data", "kb")
+	} else {
+		cfg.AI.KB.DataDir = resolvePath(cfg.AI.KB.DataDir)
+	}
+	// 阶段五十一：知识库参数兜底（切片 500 字/重叠 50/注入 3 条/上下文上限 4000 字）
+	if cfg.AI.KB.ChunkSize <= 0 {
+		cfg.AI.KB.ChunkSize = 500
+	}
+	if cfg.AI.KB.ChunkOverlap < 0 {
+		cfg.AI.KB.ChunkOverlap = 0
+	}
+	if cfg.AI.KB.ChunkOverlap >= cfg.AI.KB.ChunkSize {
+		cfg.AI.KB.ChunkOverlap = cfg.AI.KB.ChunkSize / 10
+	}
+	if cfg.AI.KB.TopK <= 0 {
+		cfg.AI.KB.TopK = 3
+	}
+	if cfg.AI.KB.MaxContext <= 0 {
+		cfg.AI.KB.MaxContext = 4000
+	}
+	// 阶段五十二：相似度阈值兜底（负值视 0=不过滤）
+	if cfg.AI.KB.ScoreThreshold < 0 {
+		cfg.AI.KB.ScoreThreshold = 0
+	}
+	// 阶段五十一：embedding 批量大小兜底
+	if cfg.AI.Embedding.BatchSize <= 0 {
+		cfg.AI.Embedding.BatchSize = 16
 	}
 	// 阶段四十六：OnlyOffice 配置兜底——声明启用但参数残缺时强制关闭（避免启动后编辑器静默失败）
 	if cfg.OnlyOffice.Enabled && (cfg.OnlyOffice.APIURL == "" || cfg.OnlyOffice.ServerURL == "" || cfg.OnlyOffice.JWTSecret == "") {

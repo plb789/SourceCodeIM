@@ -663,14 +663,44 @@ func aiParseDocxText(data []byte) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// aiParseSpreadsheetRows 表格行 → 文本（单元格 " | " 连接，行间换行；与 Markdown 表格风格一致便于模型理解）
+// aiSpreadsheetText 表格行 → 标准化文本（阶段五十五：表格向量化数据标准化）
+// 规则：单元格空白压缩；行首尾空单元格裁剪；行内连续空单元格压缩为 1 个空段；全空行剔除；
+// 单元格 " | " 连接、行间换行，与 Markdown 表格风格一致便于模型理解
 func aiSpreadsheetText(rows [][]string) string {
 	var lines []string
 	for _, row := range rows {
-		line := strings.TrimSpace(strings.Join(row, " | "))
-		if line != "" {
-			lines = append(lines, line)
+		// 阶段五十五：单元格标准化——去首尾空白 + 内部连续空白压缩为单空格
+		cells := make([]string, 0, len(row))
+		for _, c := range row {
+			cells = append(cells, strings.Join(strings.Fields(c), " "))
 		}
+		// 裁剪行首尾连续空单元格（xlsx 排版空白列的主污染源）
+		start, end := 0, len(cells)
+		for start < end && cells[start] == "" {
+			start++
+		}
+		for end > start && cells[end-1] == "" {
+			end--
+		}
+		cells = cells[start:end]
+		// 行内连续空单元格压缩为 1 个空段（保留列间隔感，避免错误合并相邻数据列）
+		compact := make([]string, 0, len(cells))
+		prevEmpty := false
+		for _, c := range cells {
+			if c == "" {
+				if prevEmpty {
+					continue
+				}
+				prevEmpty = true
+			} else {
+				prevEmpty = false
+			}
+			compact = append(compact, c)
+		}
+		if len(compact) == 0 {
+			continue // 全空行剔除
+		}
+		lines = append(lines, strings.Join(compact, " | "))
 	}
 	return strings.Join(lines, "\n")
 }

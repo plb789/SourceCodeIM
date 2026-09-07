@@ -88,8 +88,18 @@ func main() {
 	}))
 	// 头像目录注入（锚定 exe 所在目录解析，替代 avatar.go 中原相对路径实现）
 	server.SetAvatarDir(filepath.Join(cfg.WebDir, "static", "avatar"))
-	// 阶段四十三：AI 问答初始化（服务端归口：providers/agents 密钥仅存 config.yaml）
+	// 阶段四十九：后台管理——admin_users 白名单标记管理员角色（未注册账号注册后下次启动补标记）
+	server.MarkAdminUsers(cfg)
+	// 阶段四十三：AI 问答初始化（服务端归口）
+	// 原实现：providers/agents 直接从 config.yaml 构建，修改后需重启
+	// 阶段四十九起：首次启动种子导入数据库，之后从数据库加载；后台管理界面增删改后热生效
 	server.InitAI(cfg)
+	// 阶段五十一：知识库模块初始化（chromem-go 向量库 + embedding 配置归口，未配置时静默降级）
+	server.InitKB(cfg)
+	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
+	server.RegisterAdminRoutes(srv)
+	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）
+	server.StartAdminUploadScanner(cfg.UploadDir)
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

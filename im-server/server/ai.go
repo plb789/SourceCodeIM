@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"im-server/config"
@@ -40,10 +41,14 @@ type AIRunAgent struct {
 	Provider     *config.AIProviderConfig // nil 表示未绑定可用模型服务，使用本地 Mock 应答
 	// SupportsImage 绑定的模型是否支持图片识别（阶段四十四：继承 provider 配置归口）
 	SupportsImage bool
+	// KBIDs 阶段五十一：绑定的知识库 ID 列表（逗号分隔字符串，空=不启用 RAG 检索注入；
+	// 个人库仅归属者对话时参与检索，权限过滤归口 kbSearch）
+	KBIDs string
 }
 
-// 运行时状态（InitAI 启动时初始化，只读访问无锁竞争）
+// 运行时状态（阶段四十九起可热重载，读写锁保护：对话链路 RLock 读，后台管理变更时 Lock 写）
 var (
+	aiMu         sync.RWMutex
 	aiAgents     []*AIRunAgent
 	aiAgentIndex map[string]*AIRunAgent
 	// 限流与上下文参数（config.yaml ai 节点可配，均有兜底默认值）
@@ -60,41 +65,17 @@ var (
 	}
 )
 
-// InitAI 阶段四十三：初始化 AI 智能体（服务端归口：API 地址与密钥仅存服务端配置，客户端不接触）
+// InitAI 阶段四十三：初始化 AI 智能体（服务端归口：API 地址与密钥仅存服务端，客户端不接触）
 // 未配置任何智能体时内置默认"AI助手"（本地 Mock 应答），保证功能开箱可用
+// 原实现：直接从 config.yaml 的 cfg.AI 构建，修改配置后需重启服务端生效
+// 阶段四十九：AI 配置迁入数据库（im_ai_provider / im_ai_agent）——首次启动（两表均空）时
+// 从 config.yaml 导入种子数据，之后以数据库为唯一运行时数据源；后台管理界面增删改后
+// 调用 reloadAIAgents() 热生效（无需重启）
 func InitAI(cfg *config.Config) {
-	aiAgentIndex = make(map[string]*AIRunAgent)
-
-	// 提供方索引：智能体按名称绑定模型服务
-	provMap := make(map[string]*config.AIProviderConfig)
-	for i := range cfg.AI.Providers {
-		p := &cfg.AI.Providers[i]
-		if p.Name == "" {
-			p.Name = fmt.Sprintf("provider-%d", i+1)
-		}
-		provMap[p.Name] = p
-	}
-
-	for _, a := range cfg.AI.Agents {
-		if strings.TrimSpace(a.Name) == "" {
-			continue
-		}
-		ra := &AIRunAgent{Name: a.Name, SystemPrompt: a.SystemPrompt, Avatar: a.Avatar}
-		if p, ok := provMap[a.Provider]; ok {
-			ra.Provider = p
-			ra.SupportsImage = p.SupportsImage // 阶段四十四：图片识别能力随 provider 继承
-		} else {
-			logger.Warn("AI 智能体 %s 绑定的提供方 %q 未配置，将使用本地 Mock 应答", a.Name, a.Provider)
-		}
-		aiAgents = append(aiAgents, ra)
-		aiAgentIndex[a.Name] = ra
-	}
-	if len(aiAgents) == 0 {
-		ra := &AIRunAgent{Name: AIBotName}
-		aiAgents = append(aiAgents, ra)
-		aiAgentIndex[AIBotName] = ra
-		logger.Warn("未配置 AI 智能体，内置默认\"AI助手\"（本地 Mock 应答）；请在 config.yaml 的 ai 节点配置 providers 与 agents")
-	}
+	// 种子导入：全新部署（AI 两表均空）时从 config.yaml 迁入一次
+	seedAIFromConfig(cfg)
+	// 从数据库构建运行时索引
+	reloadAIAgents()
 
 	// 限流与上下文参数兜底
 	if cfg.AI.LimitCount > 0 {
@@ -110,12 +91,127 @@ func InitAI(cfg *config.Config) {
 	if cfg.AI.DocMaxChars > 0 {
 		aiDocMaxChars = cfg.AI.DocMaxChars
 	}
-	logger.Info("AI 助手初始化完成：%d 个智能体，%d 个模型服务", len(aiAgents), len(provMap))
 }
 
-// aiAgentByName 按名称查找智能体（nil 表示不存在）
+// seedAIFromConfig 阶段四十九：种子导入——仅当 im_ai_provider 与 im_ai_agent 两表均空（全新部署）时，
+// 将 config.yaml 的 ai.providers / ai.agents 导入数据库；之后数据库为唯一数据源，
+// 管理员在后台删除全部配置后重启不会重复导入（如需恢复出厂可手动清空两张表后重启）
+func seedAIFromConfig(cfg *config.Config) {
+	var provCount, agentCount int64
+	store.DB.Model(&model.AIProvider{}).Count(&provCount)
+	store.DB.Model(&model.AIAgent{}).Count(&agentCount)
+	if provCount > 0 || agentCount > 0 {
+		return
+	}
+
+	// 迁入模型服务
+	for i := range cfg.AI.Providers {
+		p := cfg.AI.Providers[i]
+		if strings.TrimSpace(p.Name) == "" {
+			p.Name = fmt.Sprintf("provider-%d", i+1)
+		}
+		rec := model.AIProvider{
+			Name:          p.Name,
+			APIURL:        p.APIURL,
+			APIKey:        p.APIKey,
+			Model:         p.Model,
+			SupportsImage: p.SupportsImage,
+			Enabled:       true,
+		}
+		if err := store.DB.Create(&rec).Error; err != nil {
+			logger.Error("AI 种子导入模型服务 %s 失败: %v", p.Name, err)
+		}
+	}
+	// 迁入智能体
+	for _, a := range cfg.AI.Agents {
+		if strings.TrimSpace(a.Name) == "" {
+			continue
+		}
+		rec := model.AIAgent{
+			Name:         a.Name,
+			Provider:     a.Provider,
+			SystemPrompt: a.SystemPrompt,
+			Avatar:       a.Avatar,
+			Enabled:      true,
+			SortID:       0,
+		}
+		if err := store.DB.Create(&rec).Error; err != nil {
+			logger.Error("AI 种子导入智能体 %s 失败: %v", a.Name, err)
+		}
+	}
+	logger.Info("AI 配置种子导入完成：%d 个模型服务，%d 个智能体（源自 config.yaml，后续以后台管理配置为准）", len(cfg.AI.Providers), len(cfg.AI.Agents))
+}
+
+// reloadAIAgents 阶段四十九：从数据库重建 AI 运行时索引（写锁保护，支持运行中热重载）
+// 原实现：InitAI 直接遍历 cfg.AI.Agents 构建索引（修改配置需重启）
+// 模型服务未启用（enabled=false）或智能体停用（enabled=false）时不参与运行时构建：
+// 停用的智能体不下发客户端；停用的模型服务使绑定智能体降级本地 Mock 应答
+func reloadAIAgents() {
+	// 读取数据库配置
+	var provs []model.AIProvider
+	store.DB.Order("id ASC").Find(&provs)
+	var agents []model.AIAgent
+	store.DB.Where("enabled = ?", true).Order("sort_id ASC, id ASC").Find(&agents)
+
+	// 提供方索引（值拷贝，与数据库记录解耦，热重载时原子替换）
+	provMap := make(map[string]*config.AIProviderConfig)
+	for i := range provs {
+		p := &provs[i]
+		if !p.Enabled {
+			continue
+		}
+		provMap[p.Name] = &config.AIProviderConfig{
+			Name:          p.Name,
+			APIURL:        p.APIURL,
+			APIKey:        p.APIKey,
+			Model:         p.Model,
+			SupportsImage: p.SupportsImage,
+		}
+	}
+
+	newIndex := make(map[string]*AIRunAgent)
+	newList := make([]*AIRunAgent, 0, len(agents))
+	for _, a := range agents {
+		if strings.TrimSpace(a.Name) == "" {
+			continue
+		}
+		ra := &AIRunAgent{Name: a.Name, SystemPrompt: a.SystemPrompt, Avatar: a.Avatar, KBIDs: a.KBIDs}
+		if p, ok := provMap[a.Provider]; ok {
+			ra.Provider = p
+			ra.SupportsImage = p.SupportsImage // 图片识别能力随 provider 继承
+		} else {
+			logger.Warn("AI 智能体 %s 绑定的提供方 %q 未配置或已停用，将使用本地 Mock 应答", a.Name, a.Provider)
+		}
+		newList = append(newList, ra)
+		newIndex[a.Name] = ra
+	}
+	if len(newList) == 0 {
+		ra := &AIRunAgent{Name: AIBotName}
+		newList = append(newList, ra)
+		newIndex[AIBotName] = ra
+		logger.Warn("未配置 AI 智能体，内置默认\"AI助手\"（本地 Mock 应答）；请在后台管理界面添加智能体")
+	}
+
+	// 写锁原子替换（对话链路持 RLock 读取，替换期间阻塞极短）
+	aiMu.Lock()
+	aiAgents = newList
+	aiAgentIndex = newIndex
+	aiMu.Unlock()
+	logger.Info("AI 助手加载完成：%d 个智能体，%d 个可用模型服务", len(newList), len(provMap))
+}
+
+// aiAgentByName 按名称查找智能体（nil 表示不存在，读锁保护）
 func aiAgentByName(name string) *AIRunAgent {
+	aiMu.RLock()
+	defer aiMu.RUnlock()
 	return aiAgentIndex[name]
+}
+
+// aiAgentList 运行时智能体列表快照（读锁保护，后台广播与列表下发归口）
+func aiAgentList() []*AIRunAgent {
+	aiMu.RLock()
+	defer aiMu.RUnlock()
+	return aiAgents
 }
 
 // aiChatMessage OpenAI 兼容对话消息
@@ -225,6 +321,10 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
 	}
+	// 阶段五十一：RAG 知识库检索注入（agent 绑定库归口，个人库仅归属者生效；无命中/未配置时为空不注入）
+	if kbCtx := kbContextForAgent(agent.KBIDs, question, username); kbCtx != "" {
+		msgs = append(msgs, aiChatMessage{Role: "system", Content: kbCtx})
+	}
 	var records []model.Message
 	store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
 		2, username, agent.Name, agent.Name, username).
@@ -246,21 +346,7 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 
 // handleAIAgents 下发 AI 智能体列表（服务端归口：仅下发名称/头像/模型名/图片能力标记，不下发任何密钥）
 func (s *Server) handleAIAgents(c *Client, _ *protocol.Message) {
-	type agentInfo struct {
-		Name   string `json:"name"`
-		Avatar string `json:"avatar"`
-		Model  string `json:"model"`
-		Image  bool   `json:"image"` // 阶段四十四：是否支持图片识别（能力标记，前端据此显隐发图入口）
-	}
-	list := make([]agentInfo, 0, len(aiAgents))
-	for _, a := range aiAgents {
-		modelName := ""
-		if a.Provider != nil {
-			modelName = a.Provider.Model
-		}
-		list = append(list, agentInfo{Name: a.Name, Avatar: a.Avatar, Model: modelName, Image: a.SupportsImage})
-	}
-	data, _ := json.Marshal(list)
+	data, _ := json.Marshal(aiAgentsPublicInfo())
 	resp := protocol.Message{
 		MsgType:   protocol.MsgTypeAIAgents,
 		Content:   string(data),
@@ -268,6 +354,25 @@ func (s *Server) handleAIAgents(c *Client, _ *protocol.Message) {
 	}
 	out, _ := json.Marshal(resp)
 	c.send(out)
+}
+
+// aiAgentsPublicInfo 阶段四十九：构建对外下发的智能体公开信息列表（原实现内联于 handleAIAgents，
+// 现抽归口函数供消息下发与后台变更广播共用，保证两链路格式一致）
+func aiAgentsPublicInfo() []map[string]interface{} {
+	list := make([]map[string]interface{}, 0)
+	for _, a := range aiAgentList() {
+		modelName := ""
+		if a.Provider != nil {
+			modelName = a.Provider.Model
+		}
+		list = append(list, map[string]interface{}{
+			"name":   a.Name,
+			"avatar": a.Avatar,
+			"model":  modelName,
+			"image":  a.SupportsImage,
+		})
+	}
+	return list
 }
 
 // aiImageEnvelope 阶段四十四：AI 图片提问信封（前端经 /upload/ai/image 上传后发送）
@@ -547,7 +652,7 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 	if question == "" {
 		return
 	}
-	agent := aiAgents[0]
+	agent := aiAgentList()[0] // 阶段四十九：读锁快照取首个智能体（原实现直读全局切片）
 
 	// 异步调用 AI 并在群聊回复
 	go func() {
@@ -556,6 +661,10 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 		promptMsgs := make([]aiChatMessage, 0, 2)
 		if agent.SystemPrompt != "" {
 			promptMsgs = append(promptMsgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
+		}
+		// 阶段五十一：群聊 @AI 助手同样注入 RAG 知识库上下文（个人库按提问者权限过滤）
+		if kbCtx := kbContextForAgent(agent.KBIDs, question, c.username); kbCtx != "" {
+			promptMsgs = append(promptMsgs, aiChatMessage{Role: "system", Content: kbCtx})
 		}
 		promptMsgs = append(promptMsgs, aiChatMessage{Role: "user", Content: question})
 		reply, err := aiStreamChat(askCtx, agent, promptMsgs, func(string) {}) // 群聊场景整段回复，增量丢弃

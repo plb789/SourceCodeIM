@@ -1,0 +1,540 @@
+package server
+
+// ===== 阶段四十九：后台管理模块 =====
+// 设计归口：
+//   1. 管理后台复用 IM 账号体系（im_user 表），仅 role=1（管理员）或 config.yaml admin_users
+//      白名单内的账号可登录；登录成功签发 Redis 会话 Token（2 小时 TTL，滑动续期）
+//   2. AI 模型服务（im_ai_provider）与智能体（im_ai_agent）的增删改查接口；
+//      每次变更成功后调用 reloadAIAgents() 重建运行时索引（写锁原子替换），
+//      并向全部在线客户端广播 AI_AGENTS 列表刷新（前端零改动热生效，无需重启）
+//   3. 登录防爆破：单 IP 10 分钟内最多失败 5 次（Redis 计数）
+//   4. 所有响应均为 JSON：{"ok":true,"data":...} / {"ok":false,"msg":"..."}
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"context"
+
+	"im-server/config"
+	"im-server/logger"
+	"im-server/model"
+	"im-server/protocol"
+	"im-server/store"
+)
+
+// 管理会话 Token 存储键前缀与有效期
+const (
+	adminTokenKey = "im:admin:token:"
+	adminTokenTTL = 2 * time.Hour
+	// 登录防爆破：单 IP 失败计数键前缀 / 窗口 / 上限
+	adminFailKey    = "im:admin:loginfail:"
+	adminFailWindow = 10 * time.Minute
+	adminFailMax    = 5
+)
+
+// MarkAdminUsers 阶段四十九：启动时按 config.yaml admin_users 白名单将对应账号标记为管理员角色
+// 白名单中的账号若尚未注册则忽略（IM 首次登录自动注册后，下次启动自动补标记；
+// 管理登录同时实时比对白名单，不受标记时序影响）
+func MarkAdminUsers(cfg *config.Config) {
+	if len(cfg.AdminUsers) == 0 {
+		return
+	}
+	// 清理空白与重复项
+	names := make([]string, 0, len(cfg.AdminUsers))
+	seen := make(map[string]bool)
+	for _, n := range cfg.AdminUsers {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return
+	}
+	if err := store.DB.Model(&model.User{}).Where("username IN ?", names).Update("role", 1).Error; err != nil {
+		logger.Error("管理员角色标记失败: %v", err)
+		return
+	}
+	logger.Info("管理员角色标记完成：白名单 %d 个账号（未注册的账号将在注册后的下次启动补标记）", len(names))
+}
+
+// RegisterAdminRoutes 注册后台管理路由（Go 1.22+ 方法+路径模式，main.go 调用归口）
+func RegisterAdminRoutes(s *Server) {
+	http.HandleFunc("POST /admin/api/login", s.handleAdminLogin)
+	http.HandleFunc("POST /admin/api/logout", s.adminGuard(s.handleAdminLogout))
+	// 阶段五十：性能仪表盘指标
+	http.HandleFunc("GET /admin/api/metrics", s.adminGuard(s.handleAdminMetrics))
+	// AI 模型服务管理
+	http.HandleFunc("GET /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderList))
+	http.HandleFunc("POST /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderCreate))
+	http.HandleFunc("PUT /admin/api/ai/providers/{id}", s.adminGuard(s.handleAdminProviderUpdate))
+	http.HandleFunc("DELETE /admin/api/ai/providers/{id}", s.adminGuard(s.handleAdminProviderDelete))
+	// AI 智能体管理
+	http.HandleFunc("GET /admin/api/ai/agents", s.adminGuard(s.handleAdminAgentList))
+	http.HandleFunc("POST /admin/api/ai/agents", s.adminGuard(s.handleAdminAgentCreate))
+	http.HandleFunc("PUT /admin/api/ai/agents/{id}", s.adminGuard(s.handleAdminAgentUpdate))
+	http.HandleFunc("DELETE /admin/api/ai/agents/{id}", s.adminGuard(s.handleAdminAgentDelete))
+	// 阶段五十一：知识库管理（库 CRUD/文件上传删除/命中测试，实现归口 adminkb.go）
+	http.HandleFunc("GET /admin/api/kb/status", s.adminGuard(s.handleAdminKBStatus))
+	http.HandleFunc("GET /admin/api/kb/list", s.adminGuard(s.handleAdminKBList))
+	http.HandleFunc("POST /admin/api/kb", s.adminGuard(s.handleAdminKBCreate))
+	http.HandleFunc("PUT /admin/api/kb/{id}", s.adminGuard(s.handleAdminKBUpdate))
+	http.HandleFunc("DELETE /admin/api/kb/{id}", s.adminGuard(s.handleAdminKBDelete))
+	http.HandleFunc("GET /admin/api/kb/{id}/files", s.adminGuard(s.handleAdminKBFileList))
+	http.HandleFunc("POST /admin/api/kb/{id}/files", s.adminGuard(s.handleAdminKBFileUpload))
+	http.HandleFunc("DELETE /admin/api/kb/file/{id}", s.adminGuard(s.handleAdminKBFileDelete))
+	http.HandleFunc("POST /admin/api/kb/search", s.adminGuard(s.handleAdminKBSearch))
+	// 阶段五十二：文本直贴建知识 / 切片详情 / 单文件与整库重新向量化
+	http.HandleFunc("POST /admin/api/kb/{id}/text", s.adminGuard(s.handleAdminKBFileText))
+	http.HandleFunc("GET /admin/api/kb/file/{id}/chunks", s.adminGuard(s.handleAdminKBFileChunks))
+	http.HandleFunc("POST /admin/api/kb/file/{id}/rebuild", s.adminGuard(s.handleAdminKBFileRebuild))
+	http.HandleFunc("POST /admin/api/kb/{id}/rebuild", s.adminGuard(s.handleAdminKBRebuild))
+	// 阶段五十三：知识库数据微调（检索调试/切片编辑删除/源文编辑重建）
+	http.HandleFunc("POST /admin/api/kb/{id}/debug", s.adminGuard(s.handleAdminKBDebug))
+	http.HandleFunc("PUT /admin/api/kb/file/{id}/chunk/{cid}", s.adminGuard(s.handleAdminKBChunkEdit))
+	http.HandleFunc("DELETE /admin/api/kb/file/{id}/chunk/{cid}", s.adminGuard(s.handleAdminKBChunkDelete))
+	http.HandleFunc("GET /admin/api/kb/file/{id}/source", s.adminGuard(s.handleAdminKBFileSourceGet))
+	http.HandleFunc("PUT /admin/api/kb/file/{id}/source", s.adminGuard(s.handleAdminKBFileSourcePut))
+	// 阶段五十四：量化数据管理（跨库切片聚合表格化展示/搜索/分页，实现归口 adminkb.go）
+	http.HandleFunc("GET /admin/api/kb/chunks", s.adminGuard(s.handleAdminKBVecChunks))
+}
+
+// ===== 通用归口 =====
+
+// adminJSON 管理接口成功响应归口
+func adminJSON(w http.ResponseWriter, data interface{}) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	resp := map[string]interface{}{"ok": true, "data": data}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// adminFail 管理接口失败响应归口（httpStatus 用于区分 401 未登录 / 400 业务错误 / 409 冲突等）
+func adminFail(w http.ResponseWriter, httpStatus int, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(httpStatus)
+	resp := map[string]interface{}{"ok": false, "msg": msg}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// adminGuard 管理接口鉴权中间件：校验 Authorization: Bearer <token>（Redis 会话，滑动续期）
+func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			adminFail(w, http.StatusUnauthorized, "未登录或登录已过期")
+			return
+		}
+		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if token == "" {
+			adminFail(w, http.StatusUnauthorized, "未登录或登录已过期")
+			return
+		}
+		ctx := context.Background()
+		key := adminTokenKey + token
+		username, err := store.RDB.Get(ctx, key).Result()
+		if err != nil || username == "" {
+			adminFail(w, http.StatusUnauthorized, "登录已过期，请重新登录")
+			return
+		}
+		// 滑动续期：活跃会话自动延长
+		store.RDB.Expire(ctx, key, adminTokenTTL)
+		// 阶段五十一：实时复核管理员身份（role=1 或白名单，与登录校验同口径）
+		// 原实现：仅校验 Redis 会话存在，管理员被移除后已签发会话仍可继续操作至 TTL 过期
+		var u model.User
+		if err := store.DB.Select("username", "role").Where("username = ?", username).First(&u).Error; err != nil {
+			adminFail(w, http.StatusUnauthorized, "登录已过期，请重新登录")
+			return
+		}
+		if u.Role != 1 && !s.isAdminWhitelisted(u.Username) {
+			// 已无管理员权限：立即吊销会话
+			store.RDB.Del(ctx, key)
+			adminFail(w, http.StatusForbidden, "账号已无后台管理权限")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// adminClientIP 提取客户端 IP（防爆破计数维度；反代场景取 X-Forwarded-For 首段）
+func adminClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.SplitN(xff, ",", 2)
+		if ip := strings.TrimSpace(parts[0]); ip != "" {
+			return ip
+		}
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// ===== 登录 / 登出 =====
+
+// handleAdminLogin 管理员登录：复用 IM 账号密码（SHA256），仅管理员角色或白名单账号放行
+func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+
+	// 防爆破：单 IP 窗口内失败超限直接拒绝
+	ctx := context.Background()
+	ip := adminClientIP(r)
+	failKey := adminFailKey + ip
+	if count, _ := store.RDB.Get(ctx, failKey).Int(); count >= adminFailMax {
+		adminFail(w, http.StatusTooManyRequests, "登录失败次数过多，请 10 分钟后再试")
+		return
+	}
+
+	// 复用 IM 登录校验（用户不存在/密码错误与聊天端同口径）
+	user, err := verifyUser(req.Username, req.Password)
+	if err != nil {
+		store.RDB.Incr(ctx, failKey)
+		store.RDB.Expire(ctx, failKey, adminFailWindow)
+		logger.Warn("后台管理登录失败（IP %s，账号 %s）：%v", ip, req.Username, err)
+		adminFail(w, http.StatusUnauthorized, "用户名或密码错误")
+		return
+	}
+	// 管理员身份校验：role=1 或 config.yaml admin_users 白名单（双通道，兼容注册后未重启未标记的场景）
+	if user.Role != 1 && !s.isAdminWhitelisted(user.Username) {
+		adminFail(w, http.StatusForbidden, "该账号无后台管理权限")
+		return
+	}
+
+	// 签发会话 Token（32 字节随机数 hex，Redis 记录归属账号）
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		adminFail(w, http.StatusInternalServerError, "会话签发失败，请重试")
+		return
+	}
+	token := hex.EncodeToString(b)
+	store.RDB.Set(ctx, adminTokenKey+token, user.Username, adminTokenTTL)
+
+	// 登录成功清除失败计数
+	store.RDB.Del(ctx, failKey)
+	logger.Info("管理员 %s 登录后台（IP %s）", user.Username, ip)
+	adminJSON(w, map[string]interface{}{
+		"token":    token,
+		"username": user.Username,
+		"nickname": user.Nickname,
+	})
+}
+
+// isAdminWhitelisted 实时比对 config.yaml admin_users 白名单
+func (s *Server) isAdminWhitelisted(username string) bool {
+	for _, n := range s.cfg.AdminUsers {
+		if strings.TrimSpace(n) == username {
+			return true
+		}
+	}
+	return false
+}
+
+// handleAdminLogout 管理员登出：销毁会话 Token
+func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token != "" {
+		store.RDB.Del(context.Background(), adminTokenKey+strings.TrimSpace(token))
+	}
+	adminJSON(w, map[string]interface{}{"logout": true})
+}
+
+// ===== AI 模型服务管理（im_ai_provider） =====
+
+// adminProviderDTO 管理端模型服务响应体：显式包含 api_key——模型字段带 json:"-"（普通聊天链路
+// 永不下发密钥），管理接口经登录鉴权后经本 DTO 归口输出，供管理界面编辑回显
+type adminProviderDTO struct {
+	ID            uint   `json:"id"`
+	Name          string `json:"name"`
+	APIURL        string `json:"api_url"`
+	APIKey        string `json:"api_key"`
+	Model         string `json:"model"`
+	SupportsImage bool   `json:"supports_image"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// adminProviderView 模型记录 → 管理 DTO 归口转换
+func adminProviderView(p model.AIProvider) adminProviderDTO {
+	return adminProviderDTO{
+		ID:            p.ID,
+		Name:          p.Name,
+		APIURL:        p.APIURL,
+		APIKey:        p.APIKey,
+		Model:         p.Model,
+		SupportsImage: p.SupportsImage,
+		Enabled:       p.Enabled,
+	}
+}
+
+// handleAdminProviderList 模型服务列表（含 api_key：管理界面编辑需要，仅管理鉴权后可读）
+func (s *Server) handleAdminProviderList(w http.ResponseWriter, r *http.Request) {
+	var list []model.AIProvider
+	if err := store.DB.Order("id ASC").Find(&list).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询模型服务失败")
+		return
+	}
+	views := make([]adminProviderDTO, 0, len(list))
+	for _, p := range list {
+		views = append(views, adminProviderView(p))
+	}
+	adminJSON(w, views)
+}
+
+// handleAdminProviderCreate 新增模型服务
+func (s *Server) handleAdminProviderCreate(w http.ResponseWriter, r *http.Request) {
+	var p model.AIProvider
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" || strings.TrimSpace(p.APIURL) == "" || strings.TrimSpace(p.Model) == "" {
+		adminFail(w, http.StatusBadRequest, "名称、接口地址、模型名均不能为空")
+		return
+	}
+	var count int64
+	store.DB.Model(&model.AIProvider{}).Where("name = ?", p.Name).Count(&count)
+	if count > 0 {
+		adminFail(w, http.StatusConflict, "模型服务名称已存在："+p.Name)
+		return
+	}
+	if err := store.DB.Create(&p).Error; err != nil {
+		logger.Error("新增模型服务 %s 失败: %v", p.Name, err)
+		adminFail(w, http.StatusInternalServerError, "新增模型服务失败")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("新增模型服务 %s", p.Name))
+	adminJSON(w, adminProviderView(p))
+}
+
+// handleAdminProviderUpdate 更新模型服务（按路径参数 id）
+func (s *Server) handleAdminProviderUpdate(w http.ResponseWriter, r *http.Request) {
+	id, ok := adminPathID(w, r)
+	if !ok {
+		return
+	}
+	var p model.AIProvider
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" || strings.TrimSpace(p.APIURL) == "" || strings.TrimSpace(p.Model) == "" {
+		adminFail(w, http.StatusBadRequest, "名称、接口地址、模型名均不能为空")
+		return
+	}
+	// 名称唯一性校验（排除自身）
+	var dup model.AIProvider
+	if err := store.DB.Where("name = ? AND id <> ?", p.Name, id).First(&dup).Error; err == nil {
+		adminFail(w, http.StatusConflict, "模型服务名称已存在："+p.Name)
+		return
+	}
+	result := store.DB.Model(&model.AIProvider{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name":           p.Name,
+		"api_url":        strings.TrimSpace(p.APIURL),
+		"api_key":        p.APIKey,
+		"model":          strings.TrimSpace(p.Model),
+		"supports_image": p.SupportsImage,
+		"enabled":        p.Enabled,
+	})
+	if result.Error != nil {
+		logger.Error("更新模型服务失败（id=%d）: %v", id, result.Error)
+		adminFail(w, http.StatusInternalServerError, "更新模型服务失败")
+		return
+	}
+	if result.RowsAffected == 0 {
+		adminFail(w, http.StatusNotFound, "模型服务不存在或内容未变化")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("更新模型服务 %s", p.Name))
+	adminJSON(w, map[string]interface{}{"id": id})
+}
+
+// handleAdminProviderDelete 删除模型服务（被智能体绑定时拒绝，防止误删导致静默降级 Mock）
+func (s *Server) handleAdminProviderDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := adminPathID(w, r)
+	if !ok {
+		return
+	}
+	var p model.AIProvider
+	if err := store.DB.First(&p, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "模型服务不存在")
+		return
+	}
+	var bindCount int64
+	store.DB.Model(&model.AIAgent{}).Where("provider = ?", p.Name).Count(&bindCount)
+	if bindCount > 0 {
+		adminFail(w, http.StatusConflict, fmt.Sprintf("该模型服务被 %d 个智能体绑定，请先解除绑定后再删除", bindCount))
+		return
+	}
+	if err := store.DB.Delete(&model.AIProvider{}, id).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "删除模型服务失败")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("删除模型服务 %s", p.Name))
+	adminJSON(w, map[string]interface{}{"deleted": true})
+}
+
+// ===== AI 智能体管理（im_ai_agent） =====
+
+// handleAdminAgentList 智能体列表（含停用项，管理界面区分展示）
+func (s *Server) handleAdminAgentList(w http.ResponseWriter, r *http.Request) {
+	var list []model.AIAgent
+	if err := store.DB.Order("sort_id ASC, id ASC").Find(&list).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询智能体失败")
+		return
+	}
+	adminJSON(w, list)
+}
+
+// handleAdminAgentCreate 新增智能体
+func (s *Server) handleAdminAgentCreate(w http.ResponseWriter, r *http.Request) {
+	var a model.AIAgent
+	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	a.Name = strings.TrimSpace(a.Name)
+	if a.Name == "" {
+		adminFail(w, http.StatusBadRequest, "智能体名称不能为空")
+		return
+	}
+	var count int64
+	store.DB.Model(&model.AIAgent{}).Where("name = ?", a.Name).Count(&count)
+	if count > 0 {
+		adminFail(w, http.StatusConflict, "智能体名称已存在："+a.Name)
+		return
+	}
+	if err := store.DB.Create(&a).Error; err != nil {
+		logger.Error("新增智能体 %s 失败: %v", a.Name, err)
+		adminFail(w, http.StatusInternalServerError, "新增智能体失败")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("新增智能体 %s", a.Name))
+	adminJSON(w, a)
+}
+
+// handleAdminAgentUpdate 更新智能体（按路径参数 id）
+func (s *Server) handleAdminAgentUpdate(w http.ResponseWriter, r *http.Request) {
+	id, ok := adminPathID(w, r)
+	if !ok {
+		return
+	}
+	var a model.AIAgent
+	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	a.Name = strings.TrimSpace(a.Name)
+	if a.Name == "" {
+		adminFail(w, http.StatusBadRequest, "智能体名称不能为空")
+		return
+	}
+	// 名称唯一性校验（排除自身）
+	var dup model.AIAgent
+	if err := store.DB.Where("name = ? AND id <> ?", a.Name, id).First(&dup).Error; err == nil {
+		adminFail(w, http.StatusConflict, "智能体名称已存在："+a.Name)
+		return
+	}
+	result := store.DB.Model(&model.AIAgent{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"name":          a.Name,
+		"provider":      strings.TrimSpace(a.Provider),
+		"system_prompt": a.SystemPrompt,
+		"avatar":        strings.TrimSpace(a.Avatar),
+		"enabled":       a.Enabled,
+		"sort_id":       a.SortID,
+		"kb_ids":        strings.TrimSpace(a.KBIDs), // 阶段五十一：绑定知识库（RAG 检索注入归口）
+	})
+	if result.Error != nil {
+		logger.Error("更新智能体失败（id=%d）: %v", id, result.Error)
+		adminFail(w, http.StatusInternalServerError, "更新智能体失败")
+		return
+	}
+	if result.RowsAffected == 0 {
+		adminFail(w, http.StatusNotFound, "智能体不存在或内容未变化")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("更新智能体 %s", a.Name))
+	adminJSON(w, map[string]interface{}{"id": id})
+}
+
+// handleAdminAgentDelete 删除智能体
+func (s *Server) handleAdminAgentDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := adminPathID(w, r)
+	if !ok {
+		return
+	}
+	var a model.AIAgent
+	if err := store.DB.First(&a, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "智能体不存在")
+		return
+	}
+	if err := store.DB.Delete(&model.AIAgent{}, id).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "删除智能体失败")
+		return
+	}
+	s.adminAfterAIChange(fmt.Sprintf("删除智能体 %s", a.Name))
+	adminJSON(w, map[string]interface{}{"deleted": true})
+}
+
+// ===== 变更后置归口 =====
+
+// adminAfterAIChange 阶段四十九：AI 配置变更后置归口——重建运行时索引（写锁原子替换）
+// 并向全部在线客户端广播 AI_AGENTS 列表刷新（前端 IMSocket.on(AI_AGENTS) 收到即重渲染，
+// 无需重启服务端，无需客户端手动刷新）
+func (s *Server) adminAfterAIChange(action string) {
+	reloadAIAgents()
+	msg := protocol.Message{
+		MsgType:   protocol.MsgTypeAIAgents,
+		Content:   string(mustJSON(aiAgentsPublicInfo())),
+		Timestamp: time.Now().Unix(),
+	}
+	data, _ := json.Marshal(msg)
+	s.hub.Broadcast(data)
+	logger.Info("后台管理：%s，已热更新生效并广播在线客户端", action)
+}
+
+// mustJSON 序列化（失败返回空对象串，广播场景不允许中断主流程）
+func mustJSON(v interface{}) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return data
+}
+
+// adminPathID 解析路径参数 {id}（Go 1.22+ r.PathValue），非法时直接写错误响应
+func adminPathID(w http.ResponseWriter, r *http.Request) (uint, bool) {
+	raw := r.PathValue("id")
+	var id uint
+	if _, err := fmt.Sscanf(raw, "%d", &id); err != nil || id == 0 {
+		adminFail(w, http.StatusBadRequest, "路径参数 id 非法")
+		return 0, false
+	}
+	return id, true
+}
+
+// adminQueryUint 解析 URL 查询参数为非负整数（非法或负值返回 0，由调用方决定缺省语义）
+func adminQueryUint(raw string) uint {
+	var id uint
+	if _, err := fmt.Sscanf(strings.TrimSpace(raw), "%d", &id); err != nil {
+		return 0
+	}
+	return id
+}
