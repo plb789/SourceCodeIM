@@ -3033,6 +3033,38 @@ html, body {
     background: rgba(128, 128, 128, 0.22);
 }
 
+/* ===== 阶段六十二：AI 后续提问建议（Trae CN 同款可点击追问胶囊，跟随主题色） ===== */
+.ai-suggest-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    /* 与对方消息气泡左侧对齐（头像 36px + 间距 10px） */
+    padding: 4px 0 10px 46px;
+}
+
+.ai-suggest-chip {
+    max-width: 320px;
+    padding: 7px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.4;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.ai-suggest-chip:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--hover);
+}
+
 /* AI 回复 Token 消耗标注（服务端 usage 归口）：小字次级色跟随主题，靠操作栏右侧对齐 */
 .ai-token-info {
     align-self: center;

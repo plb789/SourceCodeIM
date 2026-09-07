@@ -2599,6 +2599,7 @@
         if (msg.to_user !== IMSocket.getUsername()) return; // 只处理自己的流
         if (currentChatUser !== msg.from_user) return;
         hideAIThinking(msg.from_user); // 首段回复到达，移除"思考中"指示
+        removeAISuggestRow(); // 新一轮回复开始，移除上一轮的后续提问建议
         var st = aiStreams[msg.stream_id];
         if (!st) {
             st = createStreamBubble(msg.from_user, msg.stream_id);
@@ -2629,6 +2630,44 @@
                 { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 });
             if (msg.msg_id) sendReadReceipt(msg.from_user, msg.msg_id);
         }
+    });
+
+    // ===== 阶段六十二：后续提问建议（Trae CN 同款，点击直接继续提问）=====
+    // 服务端回复完成后异步生成、独立帧推送（晚于结束帧浮现）；仅渲染在最后一条回复下方
+    function removeAISuggestRow() {
+        var old = messageList.querySelector('.ai-suggest-row');
+        if (old) old.remove();
+    }
+
+    function renderAISuggestRow(agent, list) {
+        removeAISuggestRow();
+        if (!list.length) return;
+        var row = document.createElement('div');
+        row.className = 'ai-suggest-row';
+        list.forEach(function (q) {
+            var chip = document.createElement('button');
+            chip.className = 'ai-suggest-chip';
+            chip.type = 'button';
+            chip.textContent = q;
+            chip.title = '点击发送：' + q;
+            chip.addEventListener('click', function () {
+                if (currentChatUser !== agent || !isAIAgent(agent)) return; // 已切走会话则不发送
+                messageInput.value = q;
+                removeAISuggestRow(); // 发送即消费，等新一轮回复再生成
+                sendMessage(); // 复用既有提问链路（AI_CHAT 信封/思考中/上下文归口）
+            });
+            row.appendChild(chip);
+        });
+        messageList.appendChild(row);
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+
+    IMSocket.on(MSG.AI_SUGGEST, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return;  // 只处理自己的建议
+        if (currentChatUser !== msg.from_user) return;       // 仅当前正查看的会话渲染（切回会话不重放，与 Trae 一致）
+        var list = [];
+        try { list = JSON.parse(msg.content) || []; } catch (e) {}
+        if (Array.isArray(list)) renderAISuggestRow(msg.from_user, list);
     });
 
     // ===== 阶段五十九：智能 Agent 任务模式（工具调用闭环 + 权限审批，事件流实时渲染） =====
@@ -4727,8 +4766,10 @@
         }
         // 阶段四十三：AI 智能体回复（历史加载/END 降级整段渲染）气泡下追加操作栏（流式路径在 finishStream 追加）
         // 阶段四十五：携带消息 ID 供导出按钮服务端归口取原文
+        // 阶段六十二修复：透传 tokens（历史响应含 prompt/completion/total_tokens，此前构建操作栏漏传第 4 参，
+        // 刷新浏览器/重新登录后 AI 回复只剩操作栏、Token 消耗标注消失）
         if (isAIAgent(fromUser)) {
-            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId));
+            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId, tokens));
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
@@ -4763,7 +4804,7 @@
         // }
         // messageList.appendChild(div);
         // messageList.scrollTop = messageList.scrollHeight;
-        var div = createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead);
+        var div = createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }

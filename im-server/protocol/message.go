@@ -64,6 +64,9 @@ const (
 
 	// 阶段六十一：Agent 用户自选工作区/沙箱白名单（PC 端用户自选任意文件夹作为本地工作区，白名单目录内允许文件操作）
 	MsgTypeAgentSandbox = 52 // 上行：PC 渲染进程 → 服务端，沙箱白名单上报（content 为 JSON：{primary:"主工作区目录",dirs:["授权目录",...]}；登录后/变更时上报，服务端仅内存保存用于提示词注入）
+
+	// 阶段六十二：AI 后续提问建议（Trae CN 同款，回复完成后点击可直接继续提问）
+	MsgTypeAISuggest = 53 // 下行：后续提问建议（from_user=智能体名，content 为 JSON 字符串数组，仅当前查看会话时渲染）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

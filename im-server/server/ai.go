@@ -410,11 +410,14 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 	}
 
 	body := map[string]interface{}{
-		"model":       agent.Provider.Model,
-		"messages":    msgs,
-		"stream":      false,
-		"tools":       tools,
-		"tool_choice": "auto",
+		"model":    agent.Provider.Model,
+		"messages": msgs,
+		"stream":   false,
+	}
+	// tools 为空时不携带该字段：后续提问建议复用本函数发起纯文本调用，部分上游对 "tools": null 报错
+	if len(tools) > 0 {
+		body["tools"] = tools
+		body["tool_choice"] = "auto"
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -826,7 +829,82 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		data, _ := json.Marshal(endMsg)
 		s.sendToUser(c.username, data)
 		logger.Info("AI 回复用户 %s（智能体 %s，%d 字，tokens：%d 提问/%d 生成/%d 共）", c.username, agent.Name, len([]rune(full)), usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+
+		// 阶段六十二：后续提问建议（Trae CN 同款）——结束帧先行下发（回复立即收尾），
+		// 建议异步生成后经独立帧推送，浮现稍晚不阻塞交互；失败静默无建议
+		go func() {
+			sugs := aiGenerateSuggestions(agent, question, full)
+			if len(sugs) == 0 {
+				return
+			}
+			payload, _ := json.Marshal(sugs)
+			sugMsg := protocol.Message{
+				MsgType:   protocol.MsgTypeAISuggest,
+				FromUser:  agent.Name,
+				ToUser:    c.username,
+				Content:   string(payload),
+				Timestamp: time.Now().Unix(),
+			}
+			sugData, _ := json.Marshal(sugMsg)
+			s.sendToUser(c.username, sugData)
+		}()
 	}()
+}
+
+// aiGenerateSuggestions 生成后续提问建议：仅用最后一轮问答做轻量调用（不重发整套上下文，控制成本），
+// 15s 超时/失败静默返回空（建议属增强体验，不因它报错打扰用户）
+func aiGenerateSuggestions(agent *AIRunAgent, question, reply string) []string {
+	if agent.Provider == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	replyCut := reply
+	if r := []rune(replyCut); len(r) > 800 {
+		replyCut = string(r[:800])
+	}
+	prompt := "基于下面这轮用户与AI助手的问答，提出3个用户最可能继续追问的问题。\n" +
+		"要求：每条不超过20个字、口语化、可直接作为用户下一条消息发送；只输出JSON字符串数组（示例：[\"问题1\",\"问题2\",\"问题3\"]），不要输出任何其他内容。\n\n" +
+		"用户提问：" + question + "\n\n助手回复：" + replyCut
+	out, _, err := aiAgentChat(ctx, agent, []aiChatMessage{{Role: "user", Content: prompt}}, nil)
+	if err != nil {
+		return nil
+	}
+	return aiParseSuggestions(out)
+}
+
+// aiParseSuggestions 解析建议输出：优先按 JSON 数组解析，失败降级按行拆；
+// 过滤空/超长项（>40 字视为非短问题），最多保留 3 条
+func aiParseSuggestions(out string) []string {
+	out = strings.TrimSpace(out)
+	var arr []string
+	if strings.HasPrefix(out, "[") {
+		if err := json.Unmarshal([]byte(out), &arr); err != nil {
+			arr = nil
+		}
+	}
+	if arr == nil {
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSpace(line)
+			line = strings.Trim(line, "-*•>、）)\"“”0123456789. ")
+			if line != "" {
+				arr = append(arr, line)
+			}
+		}
+	}
+	res := make([]string, 0, 3)
+	for _, s := range arr {
+		s = strings.TrimSpace(s)
+		n := len([]rune(s))
+		if n < 2 || n > 40 {
+			continue
+		}
+		res = append(res, s)
+		if len(res) >= 3 {
+			break
+		}
+	}
+	return res
 }
 
 // handleGroupAI 群聊 @AI助手 唤醒应答（阶段四十三：改用配置的模型服务，取第一个智能体的人设与非流式整段回复）
