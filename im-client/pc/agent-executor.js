@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 
 // 与服务端一致的体积/次数上限
 const READ_MAX_CHARS = 50000;
@@ -480,8 +480,31 @@ function decodeOutput(buf) {
     }
 }
 
-// run_command：工作区目录执行命令（cmd /C，chcp 65001 统一 UTF-8 输出，超时强杀，输出截断）
-function runCommandSync(username, params, done) {
+// run_command：工作区目录执行命令（cmd /C，超时强杀，输出截断）。
+// 阶段七十五：与服务端 agentToolRunCommand 同款语义——输出管道流式读取，行级聚合 200ms 节流
+// 经 onFrame 回调上行（渲染层转发服务端转任务事件流，控制台实时可见）；执行期间可"转后台"
+// （requestBg 触发）：立即回传"已转入后台"不阻塞模型，进程继续跑完，终帧 final=true 带退出码/耗时。
+// 后台兜底 30 分钟强杀。行级字节缓冲转码（UTF-8 严格 + GBK 兜底），多字节字符跨块不断裂
+const CMD_STREAM_MAX_BYTES = 64 * 1024; // 控制台流式下发累计上限（与服务端 agentCmdStreamMaxBytes 一致）
+const CMD_STREAM_FLUSH_MS = 200;        // 输出聚合下发节流（毫秒，与服务端一致）
+const CMD_BG_TIMEOUT_MS = 30 * 60 * 1000; // 转后台兜底强杀
+
+// 每用户当前运行中命令登记（requestBg 归口；同用户同时至多一条命令——服务端任务队列串行派发）
+const runningCmds = {};
+
+// requestBg 阶段七十五：转后台请求入口（main 进程 IPC agent:bg 调用）。
+// 命中运行中命令 → 触发其 bg 回调（runCommandSync 内立即 done 返回、进程继续）返回 true；无运行中命令返回 false
+function requestBg(username) {
+    const rc = runningCmds[username];
+    if (rc && !rc.done) {
+        rc.bgRequested = true;
+        if (typeof rc.onBg === 'function') rc.onBg();
+        return true;
+    }
+    return false;
+}
+
+function runCommandSync(username, params, done, onFrame) {
     const command = String((params && params.command) || '').trim();
     if (!command) {
         done({ ok: false, output: '错误：command 不能为空' });
@@ -501,25 +524,125 @@ function runCommandSync(username, params, done) {
     }
     // chcp 65001 先切控制台代码页（有真实控制台的场景生效；windowsHide 隐藏控制台下不生效，
     // 编码正确性由 decodeOutput 按字节检测兜底，与 Go 服务端同款）
-    const cp = exec('chcp 65001 >nul 2>&1 & ' + command, {
-        cwd: ws,
-        timeout: timeoutSec * 1000,
-        killSignal: 'SIGKILL',
-        windowsHide: true, // 不闪黑色控制台窗口
-        encoding: 'buffer',
-        maxBuffer: 4 * 1024 * 1024
-    }, function (error, stdout, stderr) {
-        let text = decodeOutput(Buffer.concat([Buffer.from(stdout || []), Buffer.from(stderr || [])]));
+    let child;
+    try {
+        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command], {
+            cwd: ws,
+            windowsHide: true, // 不闪黑色控制台窗口
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+    } catch (e) {
+        done({ ok: false, output: '错误：' + (e.message || e) });
+        return;
+    }
+    const startedAt = Date.now();
+
+    // 输出泵：stdout/stderr 按行收口（\n 单字节不会切断多字节序列，行级整体转码安全）；
+    // 累计超 CMD_STREAM_MAX_BYTES 停止下发增量（over 标记），模型结果仍全量另存（head+tail 环形）
+    let lineBuf = Buffer.alloc(0);
+    let total = 0;
+    let over = false;
+    let fullText = '';
+    let pendingFrame = null; // 200ms 聚合窗口内的待下发行
+    const pushFrame = function (chunk, isFinal) {
+        if (typeof onFrame === 'function') {
+            onFrame({
+                chunk: chunk,
+                total_bytes: total,
+                over: over,
+                final: !!isFinal,
+                exit_code: isFinal ? exitCode : 0,
+                duration_ms: Date.now() - startedAt
+            });
+        }
+    };
+    let exitCode = 0;
+    let timedOut = false;
+    let bgd = false;
+    let finished = false;
+
+    const addLine = function (raw) {
+        total += raw.length;
+        let text;
+        try { text = utf8Strict.decode(raw); } catch (e) { text = gbkDecoder.decode(raw); }
+        // 模型结果环形保留（上限 head 8KB + tail 56KB，与服务端同款语义）
+        if (fullText.length <= CMD_OUT_FULL_MAX) {
+            fullText += text;
+            if (fullText.length > CMD_OUT_FULL_MAX) {
+                fullText = fullText.slice(0, CMD_OUT_FULL_HEAD) + '\n…（中间输出已截断）…\n' + fullText.slice(-CMD_OUT_FULL_TAIL);
+            }
+        }
+        if (total > CMD_STREAM_MAX_BYTES) { over = true; return; }
+        pendingFrame = (pendingFrame || '') + text;
+    };
+    const pump = function (stream) {
+        stream.on('data', function (buf) {
+            let data = buf;
+            while (data.length) {
+                const nl = data.indexOf(0x0A);
+                if (nl < 0) { lineBuf = Buffer.concat([lineBuf, data]); data = Buffer.alloc(0); break; }
+                let line = data.slice(0, nl + 1);
+                data = data.slice(nl + 1);
+                if (lineBuf.length) { line = Buffer.concat([lineBuf, line]); lineBuf = Buffer.alloc(0); }
+                addLine(line);
+            }
+        });
+    };
+    pump(child.stdout);
+    pump(child.stderr);
+
+    // 节流下发：200ms 聚合一次（与服务端一致，防逐行刷屏拖垮 WS/IPC）
+    const tick = setInterval(function () {
+        if (finished || !pendingFrame) return;
+        const chunk = pendingFrame;
+        pendingFrame = null;
+        pushFrame(chunk, false);
+    }, CMD_STREAM_FLUSH_MS);
+
+    // 前台超时强杀（转后台时切换为 30 分钟兜底）
+    let killTimer = setTimeout(function () { timedOut = true; try { child.kill('SIGKILL'); } catch (e) {} }, timeoutSec * 1000);
+
+    const cleanup = function () {
+        clearInterval(tick);
+        clearTimeout(killTimer);
+        delete runningCmds[username];
+        finished = true;
+    };
+
+    // 转后台：立即回传"已转入后台"（不阻塞模型），进程继续，输出继续流，结束发 final 终帧
+    runningCmds[username] = {
+        onBg: function () {
+            if (bgd || finished) return;
+            bgd = true;
+            clearTimeout(killTimer); // 停前台超时
+            killTimer = setTimeout(function () { try { child.kill('SIGKILL'); } catch (e) {} }, CMD_BG_TIMEOUT_MS);
+            done({ ok: true, output: '命令已转入后台执行（输出在任务卡控制台实时展示；结束后控制台显示退出码，无需等待即可继续其他操作）' });
+        }
+    };
+
+    const finish = function (code) {
+        if (bgd) { // 转后台进程结束：仅发终帧（前端控制台显示退出码），不再回传结果
+            cleanup();
+            if (pendingFrame) { pushFrame(pendingFrame, false); pendingFrame = null; }
+            exitCode = code;
+            pushFrame('', true);
+            return;
+        }
+        cleanup();
+        if (pendingFrame) { pushFrame(pendingFrame, false); pendingFrame = null; }
+        exitCode = code;
+        pushFrame('', true);
+        let text = fullText;
         if (text.length > CMD_OUT_MAX_CHARS) {
             text = text.slice(0, CMD_OUT_MAX_CHARS) + '\n…（输出过长已截断，共 ' + text.length + ' 字符）';
         }
-        if (error) {
-            if (error.killed || error.signal === 'SIGKILL') {
-                done({ ok: false, output: '错误：命令执行超时（' + timeoutSec + ' 秒），已终止\n输出：\n' + text });
-                return;
-            }
+        if (timedOut) {
+            done({ ok: false, output: '错误：命令执行超时（' + timeoutSec + ' 秒），已终止\n输出：\n' + text });
+            return;
+        }
+        if (code !== 0) {
             // 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
-            done({ ok: false, output: '命令退出码异常：' + (error.code || error.message) + '\n输出：\n' + text });
+            done({ ok: false, output: '命令退出码异常：' + code + '\n输出：\n' + text });
             return;
         }
         if (!text.trim()) {
@@ -527,9 +650,22 @@ function runCommandSync(username, params, done) {
             return;
         }
         done({ ok: true, output: text });
+    };
+    child.on('error', function (e) {
+        if (finished || bgd) return;
+        cleanup();
+        done({ ok: false, output: '错误：' + (e.message || e) });
     });
-    // exec timeout 触发后仍会回调（error.killed=true），无需额外处理
+    child.on('close', function (code) {
+        if (lineBuf.length) { addLine(lineBuf); lineBuf = Buffer.alloc(0); } // 无换行尾行收口
+        finish(code === null ? (timedOut ? -1 : 0) : code);
+    });
 }
+
+// 模型结果环形保留容量（head+tail，与服务端 fullHead/fullTail 语义一致）
+const CMD_OUT_FULL_MAX = 64 * 1024;
+const CMD_OUT_FULL_HEAD = 8 * 1024;
+const CMD_OUT_FULL_TAIL = 56 * 1024;
 
 // 工具执行入口：main 进程 IPC handler 调用。req = {username, tool, params}
 function execTool(req, done) {
@@ -570,5 +706,6 @@ module.exports = {
     getSandbox: getSandbox,
     safePath: safePath,
     sanitizeUsername: sanitizeUsername,
-    execTool: execTool
+    execTool: execTool,
+    requestBg: requestBg // 阶段七十五：长命令转后台请求入口
 };

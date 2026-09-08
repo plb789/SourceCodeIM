@@ -186,6 +186,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段六十一：Agent 沙箱白名单——PC 端上报用户自选工作区/授权目录
 	case protocol.MsgTypeAgentSandbox:
 		s.handleAgentSandbox(c, msg)
+	// 阶段七十五：命令实时输出流（PC 上行转发任务事件流）+ 长命令转后台
+	case protocol.MsgTypeAgentToolOutput:
+		s.handleAgentToolOutput(c, msg)
+	case protocol.MsgTypeAgentBg:
+		s.handleAgentBg(c, msg)
 	// 阶段七十一：AI 多会话（Trae 同款"新建会话"）——列表/新建/删除
 	case protocol.MsgTypeAISessionList:
 		s.handleAISessionList(c, msg)

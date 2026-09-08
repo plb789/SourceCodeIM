@@ -114,6 +114,17 @@ contextBridge.exposeInMainWorld('desktop', {
     agentExec: function (req) {
         return ipcRenderer.invoke('agent:exec', req);
     },
+    // ===== 阶段七十五：本地命令输出流（run_command 实时控制台） =====
+    // 主进程推送输出帧 {chunk,total_bytes,over,final,exit_code,duration_ms}，渲染层盖 task_id/step 戳后经 WS 上行服务端
+    onAgentOutput: function (callback) {
+        ipcRenderer.on('agent:output', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // 长命令"转后台"请求（服务端下行 msg 61 桥接至执行器，命中后命令立即返回、进程继续）
+    agentBg: function (username) {
+        ipcRenderer.send('agent:bg', { username: username });
+    },
     // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
     // 原生目录选择对话框（返回所选目录绝对路径，取消返回空串）
     sandboxChoose: function (title) {

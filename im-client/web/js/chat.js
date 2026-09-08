@@ -3433,6 +3433,13 @@
         block.appendChild(argsEl);
         block.appendChild(outEl);
         block.setAttribute('data-tool', ev.tool || ''); // 阶段六十二：回填匹配键（标题已中文化，不再含原始工具名）
+        if (ev.call_id) block.setAttribute('data-call-id', ev.call_id); // 阶段七十五：控制台输出/转后台按步骤精确归属
+        // 阶段七十五：run_command 实时控制台 + 转后台按钮（Trae 同款——输出流式可见不再"盲等"，
+        // >5 秒浮现"转后台"，点击立即返回不阻塞对话、进程继续输出继续流）
+        if (ev.tool === 'run_command' && ev.call_id) {
+            buildAgentCmdConsole(block, st, ev.call_id);
+            agentConsoleBegin(st, ev); // 阶段七十五（增强）：同步写入底部独立控制台抽屉 + 浮出"打开控制台"入口
+        }
         // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
         block.classList.add('collapsed');
         head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
@@ -3488,6 +3495,251 @@
         return tag;
     }
 
+    // ===== 阶段七十五：run_command 实时控制台（Trae 同款）=====
+    // 命令输出流式滚动展示（tool_output 事件驱动），执行中"执行中 · Xs"计时防"卡住"错觉，
+    // >5 秒浮现"转后台"按钮（点击上行 msg 61：命令立即返回不阻塞对话，进程继续、输出继续流，
+    // 结束后 tool_exit 终帧在控制台标注退出码/耗时）
+    function buildAgentCmdConsole(block, st, callId) {
+        var con = document.createElement('div');
+        con.className = 'agent-cmd-console hidden';
+        var pre = document.createElement('pre');
+        pre.className = 'agent-cmd-console-pre';
+        con.appendChild(pre);
+        var outEl = block.querySelector('.agent-event-output');
+        block.insertBefore(con, outEl); // 控制台位于参数详情与结果详情之间
+        var bgBtn = document.createElement('button');
+        bgBtn.className = 'agent-tool-bgbtn hidden';
+        bgBtn.type = 'button';
+        bgBtn.textContent = '转后台';
+        bgBtn.title = '命令转入后台继续执行，对话不再等待（输出仍在控制台实时展示）';
+        bgBtn.addEventListener('click', function () {
+            if (bgBtn.disabled) return;
+            IMSocket.send({ msg_type: MSG.AGENT_BG, content: JSON.stringify({ task_id: st.taskId, step: callId }) });
+            bgBtn.disabled = true;
+            bgBtn.textContent = '已转后台';
+        });
+        block.querySelector('.agent-event-head').appendChild(bgBtn);
+        block._bgBtn = bgBtn;
+        block._bgTimer = setTimeout(function () {
+            if (block.classList.contains('pending')) bgBtn.classList.remove('hidden');
+        }, 5000);
+        // 执行计时："执行中 · Xs"（每秒刷新；保留原三点跳动动画节点不被重建）
+        var running = block.querySelector('.agent-tool-running');
+        if (running) {
+            var dots = running.querySelector('.ai-thinking-dots');
+            var secSpan = document.createElement('span');
+            secSpan.className = 'agent-tool-elapsed';
+            running.textContent = '';
+            secSpan.textContent = '执行中';
+            running.appendChild(secSpan);
+            if (dots) running.appendChild(dots);
+            var t0 = Date.now();
+            block._elapsedTimer = setInterval(function () {
+                if (!running.isConnected) { clearInterval(block._elapsedTimer); return; }
+                secSpan.textContent = '执行中 · ' + Math.round((Date.now() - t0) / 1000) + 's';
+            }, 1000);
+        }
+    }
+
+    // 收尾工具块动态元素（转后台按钮/计时器；tool_result 或 tool_exit 先到者触发）
+    function stopAgentToolTimers(block) {
+        if (block._bgTimer) { clearTimeout(block._bgTimer); block._bgTimer = null; }
+        if (block._elapsedTimer) { clearInterval(block._elapsedTimer); block._elapsedTimer = null; }
+        if (block._bgBtn) { block._bgBtn.remove(); block._bgBtn = null; }
+    }
+
+    // 控制台归属：按 call_id 精确匹配；兜底最后一个执行中的 run_command 块（旧服务端事件无 call_id 时）
+    function findAgentCmdBlock(st, callId) {
+        if (callId) {
+            var hit = st.events.querySelector('.agent-event.tool[data-call-id="' + callId + '"]');
+            if (hit) return hit;
+        }
+        var blocks = st.events.querySelectorAll('.agent-event.tool.pending[data-tool="run_command"]');
+        return blocks.length ? blocks[blocks.length - 1] : null;
+    }
+
+    // 实时输出帧 → 控制台追加（底部跟随：用户上翻查看历史时暂停自动滚动；展示上限后提示）
+    function updateAgentToolOutput(st, ev) {
+        agentConsoleOutput(st, ev); // 底部独立控制台抽屉同步（同源双写）
+        var block = findAgentCmdBlock(st, ev.call_id);
+        if (!block) return;
+        var con = block.querySelector('.agent-cmd-console');
+        var pre = block.querySelector('.agent-cmd-console-pre');
+        if (!con || !pre) return;
+        if (con.classList.contains('hidden')) {
+            con.classList.remove('hidden');
+            // 抽屉已打开时不自动展开内嵌控制台（同一输出两处展开重复刷屏；点标题可手动回看）
+            if (!agentConsole.open) block.classList.remove('collapsed');
+        }
+        var stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 40;
+        if (ev.chunk) {
+            pre.appendChild(document.createTextNode(ev.chunk));
+            // 展示环上限：仅保留尾部 60KB（完整输出以 tool_result 汇总与服务端留档为准）
+            if (pre.textContent.length > 80000) pre.textContent = pre.textContent.slice(-60000);
+        }
+        if (ev.over && !block._overTip) {
+            block._overTip = true;
+            pre.appendChild(document.createTextNode('\n…（输出已达实时展示上限，后续增量不再下发，结束后按上限汇总）\n'));
+        }
+        if (stick) {
+            pre.scrollTop = pre.scrollHeight;
+            agentTaskScroll();
+        }
+    }
+
+    // 进程结束终帧 → 控制台标注退出码/耗时/输出量（仅前端控制台展示，不进模型上下文）
+    function finalizeAgentToolExit(st, ev) {
+        agentConsoleExit(st, ev); // 底部独立控制台抽屉同步退出码行
+        var block = findAgentCmdBlock(st, ev.call_id);
+        if (!block) return;
+        stopAgentToolTimers(block);
+        var pre = block.querySelector('.agent-cmd-console-pre');
+        if (!pre || block._exitShown) return;
+        block._exitShown = true;
+        var dur = ev.duration_ms || 0;
+        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+        var line = document.createElement('div');
+        line.className = 'agent-cmd-console-exit' + (ev.exit_code ? ' fail' : '');
+        line.textContent = '— 进程已退出 · 退出码 ' + (ev.exit_code || 0) + ' · 耗时 ' + durText +
+            (ev.total_bytes ? ' · 输出 ' + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
+        pre.parentNode.appendChild(line);
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    // ===== 阶段七十五（增强）：TRAE CN 同款独立控制台抽屉 + "打开控制台"浮标 =====
+    // 任务执行中命令开始跑/有输出时输入区上方浮现"打开控制台"浮标，点击展开底部独立控制台面板
+    //（统一展示本任务全部命令输出流：> 命令头 + 实时输出 + 退出码标注），与任务卡内嵌控制台同源双写；
+    // 抽屉会话级归属：切换会话/新任务自动清空重开
+    var agentConsole = { root: null, body: null, cmdEl: null, chip: null, open: false, stick: true, taskId: null, agent: null, overTip: false };
+
+    function agentConsoleEnsure() {
+        if (agentConsole.root) return true;
+        var inputBar = document.querySelector('.input-bar');
+        if (!inputBar || !inputBar.parentNode) return false;
+        var root = document.createElement('div');
+        root.className = 'agent-console-drawer hidden';
+        var head = document.createElement('div');
+        head.className = 'agent-console-head';
+        var title = document.createElement('span');
+        title.className = 'agent-console-title';
+        title.textContent = '控制台';
+        var cmd = document.createElement('span');
+        cmd.className = 'agent-console-cmd';
+        var clearBtn = document.createElement('button');
+        clearBtn.className = 'agent-console-btn';
+        clearBtn.type = 'button';
+        clearBtn.textContent = '清空';
+        clearBtn.addEventListener('click', function () { agentConsole.body.textContent = ''; });
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'agent-console-btn';
+        closeBtn.type = 'button';
+        closeBtn.textContent = '✕';
+        closeBtn.title = '收起控制台';
+        closeBtn.addEventListener('click', function () { agentConsoleToggle(false); });
+        head.appendChild(title);
+        head.appendChild(cmd);
+        head.appendChild(clearBtn);
+        head.appendChild(closeBtn);
+        var body = document.createElement('div');
+        body.className = 'agent-console-body';
+        body.addEventListener('scroll', function () {
+            agentConsole.stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
+        });
+        root.appendChild(head);
+        root.appendChild(body);
+        inputBar.parentNode.insertBefore(root, inputBar);
+        var chip = document.createElement('button');
+        chip.className = 'agent-console-chip hidden';
+        chip.type = 'button';
+        chip.textContent = '▤ 打开控制台';
+        chip.addEventListener('click', function () { agentConsoleToggle(true); });
+        inputBar.parentNode.insertBefore(chip, inputBar);
+        agentConsole.root = root;
+        agentConsole.body = body;
+        agentConsole.cmdEl = cmd;
+        agentConsole.chip = chip;
+        return true;
+    }
+
+    function agentConsoleToggle(open) {
+        if (!agentConsole.root) return;
+        agentConsole.open = open;
+        agentConsole.root.classList.toggle('hidden', !open);
+        if (agentConsole.chip) agentConsole.chip.classList.add('hidden'); // 打开即收浮标；关闭后下方输出事件会再浮出
+        if (open && agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+    }
+
+    // 新命令开始（run_command tool_start）：换任务清空重开、写命令头、浮标提示
+    function agentConsoleBegin(st, ev) {
+        if (!agentConsoleEnsure()) return;
+        if (agentConsole.agent !== st.agent || agentConsole.taskId !== st.taskId) {
+            agentConsole.body.textContent = '';
+            agentConsole.overTip = false;
+            agentConsole.agent = st.agent;
+            agentConsole.taskId = st.taskId;
+        }
+        agentConsole.cmdEl.textContent = (ev.params && ev.params.command) || '';
+        agentConsole.cmdEl.title = agentConsole.cmdEl.textContent;
+        var line = document.createElement('div');
+        line.className = 'agent-console-line-cmd';
+        line.textContent = '> ' + ((ev.params && ev.params.command) || '');
+        agentConsole.body.appendChild(line);
+        agentConsoleShowHint();
+        if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+    }
+
+    // 实时输出帧 → 抽屉追加（与任务卡内嵌控制台同源双写）
+    function agentConsoleOutput(st, ev) {
+        if (!agentConsole.root || !agentConsole.taskId || agentConsole.taskId !== st.taskId) return;
+        if (ev.chunk) {
+            agentConsole.body.appendChild(document.createTextNode(ev.chunk));
+            // 展示环上限：仅保留尾部（完整输出以任务卡与服务端留档为准）
+            if (agentConsole.body.textContent.length > 100000) {
+                while (agentConsole.body.textContent.length > 80000 && agentConsole.body.firstChild) {
+                    agentConsole.body.removeChild(agentConsole.body.firstChild);
+                }
+            }
+        }
+        if (ev.over && !agentConsole.overTip) {
+            agentConsole.overTip = true;
+            agentConsole.body.appendChild(document.createTextNode('\n…（输出已达实时展示上限，后续增量不再下发）\n'));
+        }
+        agentConsoleShowHint();
+        if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+    }
+
+    // 进程结束 → 抽屉追加退出码标注行
+    function agentConsoleExit(st, ev) {
+        if (!agentConsole.root || !agentConsole.taskId || agentConsole.taskId !== st.taskId) return;
+        var dur = ev.duration_ms || 0;
+        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+        var line = document.createElement('div');
+        line.className = 'agent-console-line-exit' + (ev.exit_code ? ' fail' : '');
+        line.textContent = '— 进程已退出 · 退出码 ' + (ev.exit_code || 0) + ' · 耗时 ' + durText +
+            (ev.total_bytes ? ' · 输出 ' + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
+        agentConsole.body.appendChild(line);
+        if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+    }
+
+    // 浮标提示：抽屉收起时命令有动静即浮现（TRAE 同款"打开控制台"入口）
+    function agentConsoleShowHint() {
+        if (!agentConsole.open && agentConsole.chip) agentConsole.chip.classList.remove('hidden');
+    }
+
+    // 任务完结收浮标（抽屉保留日志，用户手动关闭）
+    function agentConsoleTaskEnd() {
+        if (agentConsole.chip) agentConsole.chip.classList.add('hidden');
+    }
+
+    // 切换会话复位：抽屉收起清空、浮标隐藏（控制台会话级归属，不跨会话串日志）
+    function agentConsoleReset() {
+        if (!agentConsole.root) return;
+        agentConsoleToggle(false);
+        agentConsole.body.textContent = '';
+        agentConsole.taskId = null;
+        agentConsole.agent = null;
+    }
+
     function fillAgentTool(st, ev) {
         // 回填规则：优先匹配该工具名最后一个 pending 块（阶段六十二：按 data-tool 匹配，标题已中文化）
         var blocks = st.events.querySelectorAll('.agent-event.tool.pending');
@@ -3496,13 +3748,20 @@
             if (blocks[i].getAttribute('data-tool') === (ev.tool || '')) { block = blocks[i]; break; }
         }
         if (!block) { addAgentTool(st, { tool: ev.tool, params: {} }); blocks = st.events.querySelectorAll('.agent-event.tool.pending'); block = blocks[blocks.length - 1]; }
+        stopAgentToolTimers(block); // 阶段七十五：收尾转后台按钮/执行计时（命令已结束）
         block.classList.remove('pending');
         block.classList.add(ev.ok === false ? 'fail' : 'ok');
         var running = block.querySelector('.agent-tool-running');
         if (running) running.remove(); // 结果摘要行（✓/✕）接管执行态展示
         var outEl = block.querySelector('.agent-event-output');
-        outEl.textContent = ev.output || '';
-        outEl.classList.remove('hidden');
+        // 阶段七十五：run_command 有实时控制台时输出已在控制台流式展示，不再重复灌满详情区
+        // （控制台保留完整流与退出码行；无控制台的兜底路径仍走详情区文本）
+        if (block.querySelector('.agent-cmd-console')) {
+            outEl.classList.add('hidden');
+        } else {
+            outEl.textContent = ev.output || '';
+            outEl.classList.remove('hidden');
+        }
         // 阶段六十二：结果摘要行（输出首行常显）——"已编辑 main.go（+1 -1，34 字节）"/"命令已执行 xxx"/错误首行
         var firstLine = (ev.output || '').split('\n')[0] || '';
         if (firstLine.length > 120) firstLine = firstLine.slice(0, 120) + '…';
@@ -3622,6 +3881,8 @@
                 addAgentTool(st, ev);
                 break;
             case 'tool_result': fillAgentTool(st, ev); break;
+            case 'tool_output': updateAgentToolOutput(st, ev); break; // 阶段七十五：命令实时输出 → 控制台
+            case 'tool_exit': finalizeAgentToolExit(st, ev); break;   // 阶段七十五：进程结束 → 退出码/耗时标注
             case 'todo': renderAgentTodo(st, ev); break;
             case 'done':
                 st.bar.style.width = '100%';
@@ -3629,6 +3890,7 @@
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
                 collapseAgentCard(st);
                 finishAgentTask(st, '已完成', 'done');
+                agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
                 // 阶段七十：最终答复统一以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）。
                 // 原路径"已流式则收尾为卡内正文"被 .agent-event-body 240px 滚动框限制且混在执行日志里，
                 // 观感似过程输出而非回复（用户感知"总结没出现，切会话才看到"）；现卡内流式文本折叠归入
@@ -3643,11 +3905,13 @@
                         if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
                     }
                 }
+                agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
                 agentTaskNotify(msg, st, '已完成');
                 break;
             case 'error':
                 agentFinalizeText(st, true);
                 finishAgentTask(st, '失败', 'failed');
+                agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
                 showToast(ev.message || '任务执行失败');
                 // 阶段六十六：失败通知气泡实时渲染（内容与服务端落库留档一致），并已读归口
                 if (ev.msg_id) {
@@ -3768,6 +4032,23 @@
     // 服务端下发的本地执行请求（50）经 preload 暴露的 agentExec 转发主进程执行，结果（51）回传服务端。
     // Web/手机端无 window.desktop.agentExec，不注册监听，服务端对其永远走服务端执行（hub.HasPC=false）
     if (window.desktop && typeof window.desktop.agentExec === 'function') {
+        // 阶段七十五：当前本地执行中的 run_command 归属（{task_id,step}），输出帧按它盖戳上行；
+        // 同用户同时至多一条命令（服务端任务队列串行派发 + 执行器按用户名归口），迟到终帧后即清
+        var activeExec = null;
+        window.desktop.onAgentOutput(function (frame) {
+            if (!activeExec) return;
+            IMSocket.send({
+                msg_type: MSG.AGENT_TOOL_OUTPUT,
+                from_user: IMSocket.getUsername(),
+                content: JSON.stringify({
+                    task_id: activeExec.task_id, step: activeExec.step,
+                    chunk: frame.chunk || '', total_bytes: frame.total_bytes || 0,
+                    over: !!frame.over, final: !!frame.final,
+                    exit_code: frame.exit_code || 0, duration_ms: frame.duration_ms || 0
+                })
+            });
+            if (frame.final) activeExec = null; // 终帧：本次命令输出流结束
+        });
         IMSocket.on(MSG.AGENT_EXEC_REQ, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
             var ev;
@@ -3775,7 +4056,9 @@
             if (!ev || !ev.task_id || !ev.step) return;
             // 请求里带当前登录用户名：主进程按用户名隔离本地工作区（防同机多账号串目录）
             var req = { username: IMSocket.getUsername(), tool: ev.tool, params: ev.params || {} };
+            if (ev.tool === 'run_command') activeExec = { task_id: ev.task_id, step: ev.step };
             window.desktop.agentExec(req).then(function (res) {
+                if (ev.tool === 'run_command' && activeExec && activeExec.step === ev.step) activeExec = null;
                 IMSocket.send({
                     msg_type: MSG.AGENT_EXEC_RESP,
                     from_user: IMSocket.getUsername(),
@@ -3786,6 +4069,7 @@
                 });
             }).catch(function (err) {
                 // IPC 链路异常（主进程执行器崩溃等）：按工具级失败回传，模型据此调整方案
+                if (ev.tool === 'run_command' && activeExec && activeExec.step === ev.step) activeExec = null;
                 IMSocket.send({
                     msg_type: MSG.AGENT_EXEC_RESP,
                     from_user: IMSocket.getUsername(),
@@ -3795,6 +4079,14 @@
                     })
                 });
             });
+        });
+        // 阶段七十五：服务端转后台请求下行桥接（服务端执行时直接生效；PC 本地执行时转发给执行器）
+        IMSocket.on(MSG.AGENT_BG, function (msg) {
+            if (msg.to_user !== IMSocket.getUsername()) return;
+            var ev;
+            try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (!ev || !ev.step) return;
+            if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
         });
     }
 
@@ -4566,6 +4858,8 @@
         }
         // 阶段三十八：切换会话清空待发送截图（防止把 A 会话的截图误发到 B 会话）
         clearPendingShot();
+        // 阶段七十五（增强）：切换会话复位独立控制台抽屉（控制台会话级归属，不跨会话串日志）
+        agentConsoleReset();
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
         clearQuoteTarget();
         // 阶段七十：清空 AGENT_RUN 回显待达标记（防会话切换后误吞后续 AI 问答的"思考中"指示）

@@ -82,7 +82,9 @@
         AI_SESSION_DEL: 56,  // 阶段七十一：删除会话（上行 to_user=智能体名 + session_id）
         PURGE_APPLY: 57,     // 阶段七十二：私聊永久删除审批（上行发起 to_user=对方；下行卡片状态 content 为 JSON：{apply_id,from_user,to_user,status}）
         PURGE_RESP: 58,      // 阶段七十二：私聊永久删除审批响应（上行 to_user=发起方，msg_id=apply_id，content=agree/reject）
-        AI_STOP: 59          // 阶段七十三：AI 流式问答停止（上行 to_user=智能体名；发送按钮"停止"态触发）
+        AI_STOP: 59,         // 阶段七十三：AI 流式问答停止（上行 to_user=智能体名；发送按钮"停止"态触发）
+        AGENT_TOOL_OUTPUT: 60, // 阶段七十五：本地命令输出流上行（PC 渲染进程 → 服务端，content 为 JSON：{task_id,step,chunk,total_bytes,over,final,exit_code,duration_ms}）
+        AGENT_BG: 61         // 阶段七十五：长命令"转后台"（上行前端 → 服务端 {task_id,step}；下行服务端 → PC 渲染层原样转发桥接执行器）
     };
 
     function connect(username, password) {

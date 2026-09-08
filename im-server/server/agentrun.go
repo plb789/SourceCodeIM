@@ -1,12 +1,16 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
@@ -40,7 +45,28 @@ const (
 	agentCmdTimeoutMax  = 300           // run_command 超时秒上限
 	agentTodoMaxItems   = 50            // 任务清单条数上限
 	agentTaskIdleClean  = 2 * time.Hour // 结束任务在内存注册表中的保留时长（防泄漏）
+
+	// 阶段七十四：文件工具补全（list_dir/grep/edit_file/delete_file）与 read_file 分段读取的限额
+	agentGrepMaxResults   = 50      // grep 默认返回条数
+	agentGrepResultsHard  = 200     // grep 返回条数硬上限（max_results 参数钳制）
+	agentGrepFileMaxHits  = 20      // grep 单文件展示命中上限（防单文件刷屏挤掉其他文件）
+	agentGrepMaxFiles     = 2000    // grep 单次遍历文件数上限（防超大工作区拖死任务）
+	agentGrepMaxFileBytes = 2 << 20 // grep 跳过的单文件大小上限（2MB，大文件多为数据/日志非代码）
+	agentGrepLineMaxRunes = 200     // grep 匹配行展示截断宽度
+	agentListDirMax       = 500     // list_dir 单次列目录条目上限
+
+	// 阶段七十五：命令执行实时输出流 + 转后台限额
+	agentCmdStreamMaxBytes = 64 << 10         // 控制台流式输出累计上限（超出停止下发增量，结束帧注明总字节；模型结果仍按 agentCmdOutMaxChars 截断）
+	agentCmdStreamFlushMs  = 200              // 输出聚合下发节流（毫秒，防逐行刷屏拖垮 WS）
+	agentBgCmdTimeout      = 30 * time.Minute // 转后台后的兜底强杀超时（前台仍按命令自身 timeout）
 )
+
+// agentGrepSkipDirs grep 遍历跳过的目录名（依赖/构建产物/版本库等非源码大目录）
+var agentGrepSkipDirs = map[string]bool{
+	".git": true, ".idea": true, ".vscode": true, "node_modules": true,
+	"vendor": true, "__pycache__": true, "dist": true, "build": true,
+	"bin": true, "obj": true, "target": true,
+}
 
 // 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载，均有兜底默认值）
 var (
@@ -94,6 +120,8 @@ type AgentTask struct {
 	approveTool string                // 阶段六十二：当前等待审批的工具名（"同意并加白"按工具分流）
 	execCh      chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
 	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
+	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
+	runBgStep   string                // 转后台通道归属步骤（toolCall.ID，防错投）
 	steps       int
 	stepSeq     int // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
 	endOnce     sync.Once
@@ -324,11 +352,13 @@ func agentToolDefinitions() []aiToolDefinition {
 	tools := []aiToolDefinition{
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "read_file",
-			"description": "读取文本文件内容（代码/文档/配置等）。支持工作区相对路径；用户配置白名单后也可用授权目录内的绝对路径。",
+			"description": "读取文本文件内容（代码/文档/配置等）。支持工作区相对路径；用户配置白名单后也可用授权目录内的绝对路径。大文件可用 offset/limit 按行分段读取。",
 			"parameters": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"path": map[string]interface{}{"type": "string", "description": "工作区内相对路径（如 src/main.go），或授权目录内的绝对路径"},
+					"path":   map[string]interface{}{"type": "string", "description": "工作区内相对路径（如 src/main.go），或授权目录内的绝对路径"},
+					"offset": map[string]interface{}{"type": "integer", "description": "起始行号（1 起，默认从头读）"},
+					"limit":  map[string]interface{}{"type": "integer", "description": "最多读取行数（默认读到文件尾）"},
 				},
 				"required": []string{"path"},
 			},
@@ -344,6 +374,57 @@ func agentToolDefinitions() []aiToolDefinition {
 					"mode":    map[string]interface{}{"type": "string", "enum": []string{"overwrite", "append"}, "description": "写入模式，默认 overwrite"},
 				},
 				"required": []string{"path", "content"},
+			},
+		}},
+		{Type: "function", Function: map[string]interface{}{
+			"name":        "edit_file",
+			"description": "编辑文本文件：把文件中的 old_string 精确替换为 new_string（改动局部内容时比 write_file 整文件重写更高效省事）。需要用户审批。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path":        map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
+					"old_string":  map[string]interface{}{"type": "string", "description": "要被替换的精确原文（须与文件内容逐字一致，含缩进换行）"},
+					"new_string":  map[string]interface{}{"type": "string", "description": "替换后的新文本（传空串即删除该段）"},
+					"replace_all": map[string]interface{}{"type": "boolean", "description": "目标文本多处匹配时是否全部替换，默认 false（要求唯一匹配）"},
+				},
+				"required": []string{"path", "old_string", "new_string"},
+			},
+		}},
+		{Type: "function", Function: map[string]interface{}{
+			"name":        "delete_file",
+			"description": "删除工作区内文件或目录（不可恢复，需用户审批）。删除非空目录必须 recursive=true。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path":      map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
+					"recursive": map[string]interface{}{"type": "boolean", "description": "目录递归删除（删非空目录必传 true），删除文件时忽略"},
+				},
+				"required": []string{"path"},
+			},
+		}},
+		{Type: "function", Function: map[string]interface{}{
+			"name":        "list_dir",
+			"description": "列出目录内容（子目录在前、文件在后，含文件大小），用于浏览工作区/项目结构。默认列工作区根目录。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"path": map[string]interface{}{"type": "string", "description": "目录相对路径（默认工作区根目录），或授权目录内的绝对路径"},
+				},
+			},
+		}},
+		{Type: "function", Function: map[string]interface{}{
+			"name":        "grep",
+			"description": "在工作区内按内容搜索文件（返回 文件:行号: 内容 列表），自动跳过二进制与依赖目录。定位代码/配置关键词时优先用本工具，避免整读大文件。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"pattern":     map[string]interface{}{"type": "string", "description": "搜索的文本（默认按字面匹配）或正则表达式"},
+					"is_regex":    map[string]interface{}{"type": "boolean", "description": "pattern 按正则解析，默认 false"},
+					"path":        map[string]interface{}{"type": "string", "description": "搜索起点（文件或目录的相对路径，默认工作区根目录）"},
+					"include":     map[string]interface{}{"type": "string", "description": "文件名过滤通配符（如 *.go、*.md）"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "最多返回条数（1-200，默认 50）"},
+				},
+				"required": []string{"pattern"},
 			},
 		}},
 		{Type: "function", Function: map[string]interface{}{
@@ -491,7 +572,8 @@ func agentWhitelistCmd(command string) (string, bool) {
 	return token, true
 }
 
-// agentWhitelistAutoWrite 审批"同意并加白"（write_file）：开启写文件免审批（内存+DB 持久化）
+// agentWhitelistAutoWrite 审批"同意并加白"（write_file/edit_file）：开启写文件免审批（内存+DB 持久化）。
+// 阶段七十四：edit_file 同为文件写操作，共用此白名单
 func agentWhitelistAutoWrite() {
 	agentWlMu.Lock()
 	already := agentAutoWrite
@@ -506,16 +588,20 @@ func agentWhitelistAutoWrite() {
 // agentNeedsApproval 工具风险分级归口：返回是否需要人工审批与提示原因
 func agentNeedsApproval(tool string, params map[string]interface{}) (bool, string) {
 	switch tool {
-	case "read_file", "todo_write":
-		return false, "" // 只读与任务清单：安全，自动放行
-	case "write_file":
+	case "read_file", "todo_write", "list_dir", "grep":
+		return false, "" // 只读与任务清单：安全，自动放行（阶段七十四新增 list_dir/grep）
+	case "write_file", "edit_file":
+		// 阶段七十四：edit_file 与 write_file 同为写操作，共用写文件免审批白名单
 		agentWlMu.RLock()
 		auto := agentAutoWrite
 		agentWlMu.RUnlock()
 		if auto {
 			return false, ""
 		}
-		return true, "写入文件属于敏感操作，请确认文件路径与内容"
+		return true, "写入/编辑文件属于敏感操作，请确认文件路径与内容"
+	case "delete_file":
+		// 阶段七十四：删除不可恢复，恒需审批且不参与"同意并加白"
+		return true, "删除文件/目录不可恢复，请确认目标路径"
 	case "run_command":
 		cmd, _ := params["command"].(string)
 		if agentCommandAutoAllowed(cmd) {
@@ -535,17 +621,26 @@ func agentNeedsApproval(tool string, params map[string]interface{}) (bool, strin
 	return true, "未知工具默认走人工审批"
 }
 
-// agentToolExec 工具执行归口（均已在调用前完成审批）；返回给模型的结果文本
-func agentToolExec(s *Server, t *AgentTask, tool string, params map[string]interface{}) string {
+// agentToolExec 工具执行归口（均已在调用前完成审批）；返回给模型的结果文本。
+// callID 用于 run_command 输出流/转后台事件归属（tool_call ID 贯通前后端）
+func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[string]interface{}) string {
 	switch tool {
 	case "read_file":
 		return agentToolReadFile(t.Username, params)
 	case "write_file":
 		return agentToolWriteFile(t.Username, params)
+	case "edit_file":
+		return agentToolEditFile(t.Username, params) // 阶段七十四：精确替换编辑
+	case "delete_file":
+		return agentToolDeleteFile(t.Username, params) // 阶段七十四：删除文件/目录
+	case "list_dir":
+		return agentToolListDir(t.Username, params) // 阶段七十四：列目录
+	case "grep":
+		return agentToolGrep(t.Username, params) // 阶段七十四：内容搜索
 	case "todo_write":
 		return agentToolTodoWrite(s, t, params)
 	case "run_command":
-		return agentToolRunCommand(t.Username, params)
+		return agentToolRunCommand(s, t, callID, params) // 阶段七十五：流式输出 + 转后台
 	case "http_request":
 		return agentToolHttpRequest(params) // 阶段六十八：服务端代理 HTTP 请求
 	case "web_search":
@@ -580,7 +675,7 @@ func agentToolEnvHint(s *Server, t *AgentTask, tool string) string {
 // 返回 (结果文本, 执行环境 env)，env 用于事件流展示（pc=用户本地 / server=服务端）
 func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params map[string]interface{}) (string, string) {
 	if agentToolServerOnly(tool) {
-		return agentToolExec(s, t, tool, params), "server"
+		return agentToolExec(s, t, callID, tool, params), "server"
 	}
 	if agentPcExec && s.hub.HasPC(t.Username) {
 		if result, ok := s.agentWaitLocalExec(t, callID, tool, params); ok {
@@ -591,7 +686,7 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 		// 与既有工具超时语义一致，保证任务闭环优先
 		logger.Warn("Agent 本地执行回传超时，回退服务端执行：%s 工具 %s", t.ID, tool)
 	}
-	return agentToolExec(s, t, tool, params), "server"
+	return agentToolExec(s, t, callID, tool, params), "server"
 }
 
 // agentStepTrace 阶段六十五：单步工具调用轨迹落库归口（免审/审批通过/拒绝/取消/超时/本地回退各分支统一收口）。
@@ -626,17 +721,25 @@ func (s *Server) agentStepTrace(t *AgentTask, tool string, params map[string]int
 
 // agentWaitLocalExec 阶段六十：下发本地执行请求并挂起等待 PC 回传。
 // step 用 toolCall.ID 归口（与服务端审批同款防错投机制），迟到/不匹配回传直接丢弃。
+// 阶段七十五：挂起期间收到"转后台"请求（runBgCh close）时原样转发给 PC 渲染层——
+// PC 执行器会立即回传"已转入后台"结果（进程继续跑，输出经 msg 60 持续上行），
+// 本函数继续等待该回传，不做服务端回退（避免与 PC 正在跑的进程重复执行）。
 // 返回 (结果文本, true=已收到 PC 回传；false=等待超时需回退服务端)
 func (s *Server) agentWaitLocalExec(t *AgentTask, step, tool string, params map[string]interface{}) (string, bool) {
 	ch := make(chan *AgentExecResult, 1)
 	t.mu.Lock()
 	t.execCh = ch
 	t.execStep = step
+	bgCh := make(chan struct{})
+	t.runBgCh = bgCh
+	t.runBgStep = step // 阶段七十五：转后台请求按步骤归属
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
 		t.execCh = nil
 		t.execStep = ""
+		t.runBgCh = nil
+		t.runBgStep = ""
 		t.mu.Unlock()
 	}()
 
@@ -666,13 +769,44 @@ func (s *Server) agentWaitLocalExec(t *AgentTask, step, tool string, params map[
 			wait = time.Duration(v)*time.Second + 15*time.Second
 		}
 	}
-	select {
-	case r := <-ch:
-		// 工具级失败（路径越界等）照常回传，模型据此自纠；仅超时走回退
-		return r.Output, true
-	case <-time.After(wait):
-		return "", false
+	deadline := time.Now().Add(wait)
+	bgSent := false // 阶段七十五：转后台请求转发幂等标记（重复点击只转发一次）
+	for {
+		d := time.Until(deadline)
+		if d <= 0 {
+			return "", false
+		}
+		timer := time.NewTimer(d)
+		select {
+		case r := <-ch:
+			timer.Stop()
+			// 工具级失败（路径越界等）照常回传，模型据此自纠；仅超时走回退
+			return r.Output, true
+		case <-bgCh:
+			timer.Stop()
+			if bgSent {
+				continue // 已转发过（重复点击），继续等待回传
+			}
+			bgSent = true
+			// 原样转发转后台请求给 PC 渲染层（桥接到本地执行器，立即回传"已转入后台"）
+			bgData, _ := json.Marshal(map[string]interface{}{"task_id": t.ID, "step": step})
+			s.sendToUser(t.Username, mustAgentMsg(protocol.MsgTypeAgentBg, t, string(bgData)))
+		case <-timer.C:
+			return "", false
+		}
 	}
+}
+
+// mustAgentMsg 阶段七十五：构造服务端 → 用户的 Agent 信令帧（From=智能体名，前端按会话归属渲染）
+func mustAgentMsg(msgType int, t *AgentTask, content string) []byte {
+	out, _ := json.Marshal(protocol.Message{
+		MsgType:   msgType,
+		FromUser:  t.Agent.Name,
+		ToUser:    t.Username,
+		Content:   content,
+		Timestamp: time.Now().Unix(),
+	})
+	return out
 }
 
 // handleAgentExecResp 阶段六十：PC 本地执行结果上行（msg_type=51）。
@@ -705,6 +839,78 @@ func (s *Server) handleAgentExecResp(c *Client, msg *protocol.Message) {
 	select {
 	case ch <- &AgentExecResult{OK: req.OK, Output: req.Output}:
 	default:
+	}
+}
+
+// handleAgentToolOutput 阶段七十五：PC 本地命令输出上行（msg_type=60），转发为任务事件流
+// tool_output（增量）/tool_exit（进程结束，退出码/耗时仅前端控制台展示，不进模型上下文）。
+// 校验任务归属后按 call_id（step）下发；非运行中任务的迟到帧静默丢弃
+func (s *Server) handleAgentToolOutput(c *Client, msg *protocol.Message) {
+	var req struct {
+		TaskID     string `json:"task_id"`
+		Step       string `json:"step"`
+		Chunk      string `json:"chunk"`
+		TotalBytes int    `json:"total_bytes"`
+		Over       bool   `json:"over"`
+		Final      bool   `json:"final"`
+		ExitCode   int    `json:"exit_code"`
+		DurationMS int64  `json:"duration_ms"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" || req.Step == "" {
+		return
+	}
+	v, ok := agentTasks.Load(req.TaskID)
+	if !ok {
+		return
+	}
+	t := v.(*AgentTask)
+	if t.Username != c.username { // 仅发起人自己的 PC 连接可上行
+		return
+	}
+	if req.Final {
+		s.agentEmit(t, "tool_exit", map[string]interface{}{
+			"call_id": req.Step, "exit_code": req.ExitCode,
+			"duration_ms": req.DurationMS, "total_bytes": req.TotalBytes,
+		})
+		return
+	}
+	s.agentEmit(t, "tool_output", map[string]interface{}{
+		"call_id": req.Step, "chunk": req.Chunk, "total_bytes": req.TotalBytes, "over": req.Over,
+	})
+}
+
+// handleAgentBg 阶段七十五：长命令"转后台"请求上行（msg_type=61）。
+// 命令在服务端执行：close runBgCh 使 agentToolRunCommand 立即返回、进程转后台继续；
+// 命令在 PC 本地执行（agentWaitLocalExec 挂起中）：通道同样触发，由其转发给 PC 渲染层桥接执行器。
+// 步骤不匹配/通道不存在（命令已结束等）静默忽略
+func (s *Server) handleAgentBg(c *Client, msg *protocol.Message) {
+	var req struct {
+		TaskID string `json:"task_id"`
+		Step   string `json:"step"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" || req.Step == "" {
+		return
+	}
+	v, ok := agentTasks.Load(req.TaskID)
+	if !ok {
+		return
+	}
+	t := v.(*AgentTask)
+	if t.Username != c.username {
+		return
+	}
+	t.mu.Lock()
+	ch := t.runBgCh
+	step := t.runBgStep
+	if ch != nil && step == req.Step {
+		t.runBgCh = nil // 先摘再 close：防重复请求 close 已关闭通道 panic
+		t.runBgStep = ""
+	} else {
+		ch = nil
+	}
+	t.mu.Unlock()
+	if ch != nil {
+		close(ch)
 	}
 }
 
@@ -782,7 +988,8 @@ func (s *Server) agentSandboxFor(username string) *AgentSandbox {
 	return nil
 }
 
-// agentToolReadFile 读取工作区文本文件（UTF-8 输出，超长截断，GBK 兜底转码）
+// agentToolReadFile 读取工作区文本文件（UTF-8 输出，超长截断，GBK 兜底转码）。
+// 阶段七十四：新增二进制检测（含 NUL 字节不灌上下文）与 offset/limit 行级分段读取
 func agentToolReadFile(username string, params map[string]interface{}) string {
 	path, _ := params["path"].(string)
 	full, err := agentSafePath(username, path)
@@ -792,6 +999,10 @@ func agentToolReadFile(username string, params map[string]interface{}) string {
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return "错误：读取失败 " + err.Error()
+	}
+	// 二进制检测：含 NUL 字节视为二进制文件，避免乱码灌入模型上下文
+	if bytes.IndexByte(data, 0) >= 0 {
+		return fmt.Sprintf("（二进制文件，不支持文本读取，大小 %d 字节）", len(data))
 	}
 	text := string(data)
 	// GBK 编码兜底：Windows 常见中文文本为 GBK，UTF-8 解码出现替换符时尝试转码
@@ -804,10 +1015,31 @@ func agentToolReadFile(username string, params map[string]interface{}) string {
 	if len(runes) == 0 {
 		return "（空文件）"
 	}
+	// offset/limit 行级分段（行号 1 起；limit<=0 视为读到文件尾）
+	lines := strings.Split(text, "\n")
+	offset := 1
+	if v, ok := params["offset"].(float64); ok && v > 1 {
+		offset = int(v)
+	}
+	end := len(lines)
+	if v, ok := params["limit"].(float64); ok && v > 0 {
+		if e := offset - 1 + int(v); e < end {
+			end = e
+		}
+	}
+	seg := text
+	if offset > 1 || end < len(lines) {
+		if offset > len(lines) {
+			return fmt.Sprintf("（文件共 %d 行，offset 超出范围）", len(lines))
+		}
+		seg = strings.Join(lines[offset-1:end], "\n")
+		seg = strings.TrimRight(seg, "\n")
+		runes = []rune(seg)
+	}
 	if len(runes) > agentReadMaxChars {
 		return fmt.Sprintf("文件共 %d 字符，已截断显示前 %d 字符：\n%s", len(runes), agentReadMaxChars, string(runes[:agentReadMaxChars]))
 	}
-	return text
+	return seg
 }
 
 // agentToolWriteFile 工作区写文件（自动建父目录；overwrite/append）
@@ -867,6 +1099,295 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 		return fmt.Sprintf("已创建 %s（%d 字节）", path, n)
 	}
 	return fmt.Sprintf("已%s %s（%d 字节）", verb, path, n)
+}
+
+// agentToolEditFile 阶段七十四：精确替换编辑（old_string→new_string，比整文件重写省 token）。
+// 语义对齐主流编码智能体：old_string 须与文件内容逐字一致；多处匹配要求唯一化或显式 replace_all；
+// GBK 文件编辑后统一转存 UTF-8（与 write_file 写入语义一致）
+func agentToolEditFile(username string, params map[string]interface{}) string {
+	path, _ := params["path"].(string)
+	oldStr := agentParamString(params["old_string"])
+	newStr := agentParamString(params["new_string"])
+	replaceAll, _ := params["replace_all"].(bool)
+	if strings.TrimSpace(oldStr) == "" {
+		return "错误：old_string 不能为空"
+	}
+	if oldStr == newStr {
+		return "错误：old_string 与 new_string 相同，无内容变化"
+	}
+	if len([]rune(oldStr)) > agentWriteMaxChars || len([]rune(newStr)) > agentWriteMaxChars {
+		return fmt.Sprintf("错误：替换内容超长（单次上限 %d 字符）", agentWriteMaxChars)
+	}
+	full, err := agentSafePath(username, path)
+	if err != nil {
+		return "错误：" + err.Error()
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "错误：读取失败 " + err.Error()
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return "错误：不支持编辑二进制文件"
+	}
+	text := string(data)
+	if strings.ContainsRune(text, 0xFFFD) { // GBK 兜底（同 read_file）
+		if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(data); gerr == nil {
+			text = string(gbk)
+		}
+	}
+	count := strings.Count(text, oldStr)
+	if count == 0 {
+		return "错误：未找到目标文本（old_string 须与文件内容精确一致，含缩进与换行；可先用 grep/read_file 确认原文）"
+	}
+	if count > 1 && !replaceAll {
+		return fmt.Sprintf("错误：目标文本匹配 %d 处，请扩大 old_string 上下文使其唯一，或传 replace_all=true 全部替换", count)
+	}
+	var newText string
+	if replaceAll {
+		newText = strings.ReplaceAll(text, oldStr, newStr)
+	} else {
+		newText = strings.Replace(text, oldStr, newStr, 1)
+	}
+	if err := os.WriteFile(full, []byte(newText), 0o644); err != nil {
+		return "错误：写入失败 " + err.Error()
+	}
+	add, del := agentLineDiffStat(text, newText)
+	return fmt.Sprintf("已编辑 %s（+%d -%d，替换 %d 处）", path, add, del, count)
+}
+
+// agentToolDeleteFile 阶段七十四：删除工作区内文件/目录（审批归口在 agentNeedsApproval，恒需审批）。
+// agentSafePath 已拒绝空路径与"."，工作区根本身不可删；非空目录必须显式 recursive=true
+func agentToolDeleteFile(username string, params map[string]interface{}) string {
+	path, _ := params["path"].(string)
+	recursive, _ := params["recursive"].(bool)
+	full, err := agentSafePath(username, path)
+	if err != nil {
+		return "错误：" + err.Error()
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "错误：目标不存在 " + err.Error()
+	}
+	if info.IsDir() {
+		if !recursive {
+			if err := os.Remove(full); err != nil {
+				return "错误：" + path + " 是目录且非空，需传 recursive=true 递归删除"
+			}
+			return "已删除目录 " + path + "/（空目录）"
+		}
+		n := 0
+		_ = filepath.WalkDir(full, func(_ string, _ fs.DirEntry, _ error) error { n++; return nil })
+		if err := os.RemoveAll(full); err != nil {
+			return "错误：删除失败 " + err.Error()
+		}
+		return fmt.Sprintf("已删除目录 %s/（递归，含 %d 个条目）", path, n)
+	}
+	if err := os.Remove(full); err != nil {
+		return "错误：删除失败 " + err.Error()
+	}
+	return fmt.Sprintf("已删除文件 %s（%d 字节）", path, info.Size())
+}
+
+// agentToolListDir 阶段七十四：列目录（子目录在前、文件在后，各按名称排序，含文件大小）。
+// path 缺省列工作区根目录；超 agentListDirMax 条目截断防撑爆上下文
+func agentToolListDir(username string, params map[string]interface{}) string {
+	dirParam := strings.TrimSpace(agentParamString(params["path"]))
+	var full string
+	if dirParam == "" || dirParam == "." {
+		ws, err := agentWorkspaceDir(username)
+		if err != nil {
+			return "错误：" + err.Error()
+		}
+		full = ws
+	} else {
+		var err error
+		if full, err = agentSafePath(username, dirParam); err != nil {
+			return "错误：" + err.Error()
+		}
+	}
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		return "错误：" + err.Error()
+	}
+	if len(entries) == 0 {
+		return "（空目录）"
+	}
+	var b strings.Builder
+	shown := 0
+	truncated := false
+	for _, e := range entries { // 目录在前（os.ReadDir 已按名排序）
+		if !e.IsDir() {
+			continue
+		}
+		if shown >= agentListDirMax {
+			truncated = true
+			break
+		}
+		fmt.Fprintf(&b, "%s/\n", e.Name())
+		shown++
+	}
+	for _, e := range entries { // 文件在后
+		if e.IsDir() {
+			continue
+		}
+		if shown >= agentListDirMax {
+			truncated = true
+			break
+		}
+		size := ""
+		if fi, ferr := e.Info(); ferr == nil {
+			size = fmt.Sprintf("（%d 字节）", fi.Size())
+		}
+		fmt.Fprintf(&b, "%s %s\n", e.Name(), size)
+		shown++
+	}
+	head := fmt.Sprintf("共 %d 个条目", len(entries))
+	if truncated {
+		head += fmt.Sprintf("（仅显示前 %d 条）", shown)
+	}
+	return head + "：\n" + strings.TrimRight(b.String(), "\n")
+}
+
+// agentToolGrep 阶段七十四：工作区内容搜索（文件:行号: 内容），字面/正则双模式。
+// 防护：跳过依赖与构建目录、2MB 以上大文件、二进制（NUL 检测）；文件数/单文件命中/总条数三重上限
+func agentToolGrep(username string, params map[string]interface{}) string {
+	pattern := agentParamString(params["pattern"])
+	if strings.TrimSpace(pattern) == "" {
+		return "错误：pattern 不能为空"
+	}
+	isRegex, _ := params["is_regex"].(bool)
+	matcher, err := regexp.Compile(pattern)
+	if !isRegex {
+		matcher, err = regexp.Compile(regexp.QuoteMeta(pattern)) // 字面模式转义后仍走同一匹配路径
+	}
+	if err != nil {
+		return "错误：正则表达式无效 " + err.Error()
+	}
+	include := strings.TrimSpace(agentParamString(params["include"]))
+	var incRe *regexp.Regexp
+	if include != "" {
+		if incRe, err = regexp.Compile(globToRegexp(include)); err != nil {
+			return "错误：include 通配符无效 " + err.Error()
+		}
+	}
+	maxResults := agentGrepMaxResults
+	if v, ok := params["max_results"].(float64); ok && v >= 1 {
+		maxResults = int(v)
+		if maxResults > agentGrepResultsHard {
+			maxResults = agentGrepResultsHard
+		}
+	}
+	// 起点：path 缺省为工作区根；显式 path 走安全校验（可为文件或目录）
+	dirParam := strings.TrimSpace(agentParamString(params["path"]))
+	var root string
+	if dirParam == "" || dirParam == "." {
+		ws, werr := agentWorkspaceDir(username)
+		if werr != nil {
+			return "错误：" + werr.Error()
+		}
+		root = ws
+	} else if root, err = agentSafePath(username, dirParam); err != nil {
+		return "错误：" + err.Error()
+	}
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return "错误：" + err.Error()
+	}
+	relBase := func(p string) string {
+		if rootInfo.IsDir() {
+			if r, rerr := filepath.Rel(root, p); rerr == nil {
+				return filepath.ToSlash(r)
+			}
+		} else if r, rerr := filepath.Rel(filepath.Dir(root), p); rerr == nil {
+			return filepath.ToSlash(r)
+		}
+		return filepath.ToSlash(p)
+	}
+	var b strings.Builder
+	total := 0
+	fileCount := 0
+	fileHits := 0 // 单文件命中计数（跨文件清零）
+	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return nil // 无权限/竞态删除等逐项跳过
+		}
+		if d.IsDir() {
+			if p != root && agentGrepSkipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if total >= maxResults || fileCount >= agentGrepMaxFiles {
+			return fs.SkipAll
+		}
+		fileCount++
+		if incRe != nil && !incRe.MatchString(filepath.ToSlash(d.Name())) {
+			return nil
+		}
+		if fi, ferr := d.Info(); ferr != nil || fi.Size() > agentGrepMaxFileBytes {
+			return nil
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil || bytes.IndexByte(data, 0) >= 0 {
+			return nil // 读取失败或二进制跳过
+		}
+		text := string(data)
+		if strings.ContainsRune(text, 0xFFFD) { // GBK 兜底（同 read_file）
+			if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(data); gerr == nil {
+				text = string(gbk)
+			}
+		}
+		rel := relBase(p)
+		fileHits = 0
+		for i, line := range strings.Split(text, "\n") {
+			if total >= maxResults {
+				return fs.SkipAll
+			}
+			if fileHits >= agentGrepFileMaxHits {
+				break // 该文件命中过多仅展示前缀，继续搜其他文件
+			}
+			if !matcher.MatchString(line) {
+				continue
+			}
+			trimmed := strings.TrimSpace(line)
+			if r := []rune(trimmed); len(r) > agentGrepLineMaxRunes {
+				trimmed = string(r[:agentGrepLineMaxRunes]) + "…"
+			}
+			fmt.Fprintf(&b, "%s:%d: %s\n", rel, i+1, trimmed)
+			total++
+			fileHits++
+		}
+		return nil
+	})
+	_ = walkErr // 遍历中断（SkipAll）属正常配额收敛
+	if total == 0 {
+		return "（无匹配结果）"
+	}
+	tail := ""
+	if total >= maxResults {
+		tail = fmt.Sprintf("\n…（已达 %d 条上限，结果可能不完整，可缩小 path/include 范围或提高 max_results）", maxResults)
+	} else if fileCount >= agentGrepMaxFiles {
+		tail = fmt.Sprintf("\n…（遍历文件数已达 %d 上限，结果可能不完整）", agentGrepMaxFiles)
+	}
+	return fmt.Sprintf("共 %d 处匹配：\n%s", total, strings.TrimRight(b.String(), "\n")) + tail
+}
+
+// globToRegexp 阶段七十四：文件名通配符（* ?）转正则（仅用于 include 过滤，大小写不敏感）
+func globToRegexp(g string) string {
+	var sb strings.Builder
+	sb.WriteString("(?i)^")
+	for _, c := range g {
+		switch c {
+		case '*':
+			sb.WriteString("[^/\\\\]*")
+		case '?':
+			sb.WriteString("[^/\\\\]")
+		default:
+			sb.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	sb.WriteString("$")
+	return sb.String()
 }
 
 // agentLineDiffStat 行级 diff 统计（多行集合交集近似：added=新文独有行数 removed=旧文独有行数，
@@ -935,8 +1456,11 @@ func agentToolTodoWrite(s *Server, t *AgentTask, params map[string]interface{}) 
 	return fmt.Sprintf("任务清单已更新（共 %d 项，已完成 %d 项）", len(items), done)
 }
 
-// agentToolRunCommand 工作区内执行命令（cmd /C，超时强杀，输出截断；chcp 65001 统一 UTF-8 输出）
-func agentToolRunCommand(username string, params map[string]interface{}) string {
+// agentToolRunCommand 工作区内执行命令（cmd /C，超时强杀，输出截断；chcp 65001 统一 UTF-8 输出）。
+// 阶段七十五：输出管道流式读取，行级聚合 200ms 节流下发 tool_output 事件（控制台实时可见）；
+// 执行期间用户可请求"转后台"（runBgCh close 触发）——立即返回不阻塞模型，进程继续跑完，
+// 结束后发 tool_exit 事件（退出码/耗时仅前端展示，不进模型上下文）。后台兜底 30 分钟强杀。
+func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[string]interface{}) string {
 	command, _ := params["command"].(string)
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -949,37 +1473,194 @@ func agentToolRunCommand(username string, params map[string]interface{}) string 
 		}
 		timeout = time.Duration(v) * time.Second
 	}
-	ws, err := agentWorkspaceDir(username)
+	ws, err := agentWorkspaceDir(t.Username)
 	if err != nil {
 		return "错误：" + err.Error()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// chcp 65001 先切控制台代码页为 UTF-8（失败不中断），解决中文输出乱码
 	cmd := exec.CommandContext(ctx, "cmd", "/C", "chcp 65001 >nul 2>&1 & "+command)
 	cmd.Dir = ws
-	out, err := cmd.CombinedOutput()
-	text := string(out)
-	if strings.ContainsRune(text, 0xFFFD) {
-		if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(out); gerr == nil {
-			text = string(gbk)
+	stdout, perr := cmd.StdoutPipe()
+	if perr != nil {
+		return "错误：" + perr.Error()
+	}
+	stderr, perr := cmd.StderrPipe()
+	if perr != nil {
+		return "错误：" + perr.Error()
+	}
+	if err := cmd.Start(); err != nil {
+		return "错误：启动失败 " + err.Error()
+	}
+	start := time.Now()
+
+	// 注册"转后台"请求通道（handleAgentBg 校验步骤后 close 广播）
+	bgCh := make(chan struct{})
+	t.mu.Lock()
+	t.runBgCh = bgCh
+	t.runBgStep = callID
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.runBgCh = nil
+		t.runBgStep = ""
+		t.mu.Unlock()
+	}()
+
+	// 前台超时（后台化时 Stop 并换 30 分钟兜底）
+	timer := time.AfterFunc(timeout, cancel)
+
+	// 输出泵：stdout/stderr 各一个 goroutine 按行收口，行级 UTF-8 检测 + GBK 兜底转码；
+	// 累计超 agentCmdStreamMaxBytes 停止下发（over 标记），全量另存 head+tail 供模型结果组装
+	var (
+		mu       sync.Mutex
+		acc      []string // 待下发行（已转码）
+		fullBuf  []byte   // 模型结果用（head 8KB + tail 56KB 环形丢弃中间，上限 64KB）
+		total    int      // 原始字节计数
+		over     bool     // 流式下发截断标记
+		fullOver bool     // 模型结果截断标记（超过 head+tail 容量后丢弃中间段）
+	)
+	const fullHead = 8 << 10
+	const fullTail = 56 << 10
+	addLine := func(raw []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		total += len(raw)
+		if len(fullBuf) <= fullHead+fullTail {
+			if len(fullBuf)+len(raw) > fullHead+fullTail {
+				fullOver = true // 中间将截断：保头保尾
+			}
+			fullBuf = append(fullBuf, raw...)
+			if len(fullBuf) > fullHead+fullTail {
+				tail := fullBuf[len(fullBuf)-fullTail:]
+				fullBuf = append(fullBuf[:0:fullHead], append([]byte("…（中间输出已截断）…\n"), tail...)...)
+			}
+		}
+		if total > agentCmdStreamMaxBytes {
+			over = true
+			return
+		}
+		text := string(raw)
+		if !utf8.Valid(raw) { // 行级 GBK 兜底（\n 单字节不会切断多字节序列）
+			if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(raw); gerr == nil {
+				text = string(gbk)
+			}
+		}
+		acc = append(acc, text)
+	}
+	pump := func(r io.Reader) {
+		br := bufio.NewReaderSize(r, 8192)
+		for {
+			line, err := br.ReadBytes('\n')
+			if len(line) > 0 {
+				addLine(line)
+			}
+			if err != nil {
+				return
+			}
 		}
 	}
-	runes := []rune(text)
-	if len(runes) > agentCmdOutMaxChars {
-		text = string(runes[:agentCmdOutMaxChars]) + fmt.Sprintf("\n…（输出过长已截断，共 %d 字符）", len(runes))
-	}
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Sprintf("错误：命令执行超时（%v），已终止\n输出：\n%s", timeout, text)
+	go pump(stdout)
+	go pump(stderr)
+
+	// 节流下发：200ms 聚合一次，锁内取走待发行、锁外推送
+	stopTick := make(chan struct{})
+	defer close(stopTick)
+	go func() {
+		tk := time.NewTicker(time.Duration(agentCmdStreamFlushMs) * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stopTick:
+				return
+			case <-tk.C:
+				mu.Lock()
+				if len(acc) == 0 {
+					mu.Unlock()
+					continue
+				}
+				chunk := strings.Join(acc, "")
+				acc = nil
+				ovr := over
+				tot := total
+				mu.Unlock()
+				s.agentEmit(t, "tool_output", map[string]interface{}{"call_id": callID, "chunk": chunk, "total_bytes": tot, "over": ovr})
+			}
 		}
-		// 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
-		return fmt.Sprintf("命令退出码异常：%v\n输出：\n%s", err, text)
+	}()
+
+	finalFlush := func() {
+		mu.Lock()
+		chunk := strings.Join(acc, "")
+		acc = nil
+		ovr := over
+		tot := total
+		mu.Unlock()
+		if chunk != "" || ovr {
+			s.agentEmit(t, "tool_output", map[string]interface{}{"call_id": callID, "chunk": chunk, "total_bytes": tot, "over": ovr})
+		}
 	}
-	if strings.TrimSpace(text) == "" {
-		return "（命令执行成功，无输出）"
+	modelText := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		text := string(fullBuf)
+		if strings.ContainsRune(text, 0xFFFD) {
+			if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(fullBuf); gerr == nil {
+				text = string(gbk)
+			}
+		}
+		runes := []rune(text)
+		if len(runes) > agentCmdOutMaxChars {
+			text = string(runes[:agentCmdOutMaxChars]) + fmt.Sprintf("\n…（输出过长已截断，共 %d 字符）", len(runes))
+		}
+		if fullOver && len(runes) <= agentCmdOutMaxChars {
+			text += "\n…（输出较长，仅保留头尾）"
+		}
+		return text
 	}
-	return text
+
+	doneCh := make(chan error, 1)
+	go func() { doneCh <- cmd.Wait() }()
+
+	select {
+	case err := <-doneCh:
+		finalFlush()
+		text := modelText()
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Sprintf("错误：命令执行超时（%v），已终止\n输出：\n%s", timeout, text)
+			}
+			// 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
+			return fmt.Sprintf("命令退出码异常：%v\n输出：\n%s", err, text)
+		}
+		if strings.TrimSpace(text) == "" {
+			return "（命令执行成功，无输出）"
+		}
+		return text
+	case <-bgCh:
+		// 转后台：停前台超时，换 30 分钟兜底强杀；进程继续，输出继续流，结束仅发 tool_exit 事件
+		timer.Stop()
+		time.AfterFunc(agentBgCmdTimeout, cancel)
+		go func() {
+			err := <-doneCh
+			finalFlush()
+			exitCode := 0
+			if err != nil {
+				if ee, ok := err.(*exec.ExitError); ok {
+					exitCode = ee.ExitCode()
+				} else {
+					exitCode = -1
+				}
+			}
+			s.agentEmit(t, "tool_exit", map[string]interface{}{
+				"call_id": callID, "exit_code": exitCode,
+				"duration_ms": time.Since(start).Milliseconds(), "total_bytes": total,
+			})
+			cancel() // 释放 CommandContext 资源
+		}()
+		return "命令已转入后台执行（输出在任务卡控制台实时展示；结束后控制台显示退出码，无需等待即可继续其他操作）"
+	}
 }
 
 // agentNewTaskID 生成任务 ID（agt_时间戳_随机 hex）
@@ -1017,7 +1698,10 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 		pathRule = "4. 文件操作优先使用相对路径（落在主工作区）；操作白名单内其他授权目录时使用完整绝对路径，禁止访问白名单外的任何路径。"
 	}
 	// 阶段六十八：工具列表动态归口（与 agentToolDefinitions 注入 schema 同口径，未开启不宣传防误调用）
-	toolList := "read_file（读文件）、write_file（写文件，需用户审批）、todo_write（任务清单）、run_command（执行命令，白名单外需审批）"
+	// 阶段七十四：补全 list_dir/grep/edit_file/delete_file
+	toolList := "read_file（读文件，支持 offset/limit 分段）、list_dir（列目录）、grep（按内容搜索文件）、" +
+		"write_file（写文件，需用户审批）、edit_file（精确替换编辑文件，需用户审批）、delete_file（删除文件/目录，需用户审批且不可恢复）、" +
+		"todo_write（任务清单）、run_command（执行命令，白名单外需审批）"
 	if agentHttpEnabled {
 		toolList += "、http_request（HTTP 接口调用/网页抓取，非只读方法需审批）"
 	}
@@ -1032,8 +1716,10 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 		"2. 每轮先输出你的思考（简述本步要做什么、为什么），再发起工具调用；需要用户审批的操作会先推送给用户确认。\n" +
 		"3. 工具结果回传后继续下一步；遇到错误要分析原因并调整方案，不要盲目重试同一操作。\n" +
 		pathRule + "\n" +
-		"5. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
-		"6. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
+		"5. 浏览目录结构用 list_dir；定位内容先 grep 搜索再 read_file 按需分段（offset/limit）读取，避免整读大文件。\n" +
+		"6. 修改既有文件优先 edit_file 精确替换，仅新建文件或整体重写时才用 write_file。\n" +
+		"7. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
+		"8. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
 }
 
 // agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
@@ -1402,7 +2088,8 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			// 阶段六十五：计时起点前移至 tool_start 之前，轨迹耗时覆盖"审批等待 + 执行"全程
 			start := time.Now()
 
-			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName)})
+			// 阶段七十五：事件携带 call_id（toolCall ID），前端控制台输出/转后台按钮按步骤精确归属
+			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID})
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
 			needApprove, reason := agentNeedsApproval(toolName, params)
@@ -1550,13 +2237,15 @@ func (s *Server) handleAgentApprove(c *Client, msg *protocol.Message) {
 	if ch == nil || step != req.Step { // 非等待态或步骤不匹配（迟到的审批）直接忽略
 		return
 	}
-	// 阶段六十二："同意并加白"= 先按工具持久化白名单，再按 approve 放行本次
+	// 阶段六十二："同意并加白"= 先按工具持久化白名单，再按 approve 放行本次。
+	// 阶段七十四：edit_file 与 write_file 共用写文件免审批；delete_file 不可加白（恒需逐次审批，
+	// 上行 whitelist 仅等同本次 approve，无白名单副作用）
 	if req.Action == "whitelist" {
 		switch tool {
 		case "run_command":
 			cmd, _ := req.Params["command"].(string)
 			agentWhitelistCmd(cmd) // 链式命令内部拒白，仅本次放行
-		case "write_file":
+		case "write_file", "edit_file":
 			agentWhitelistAutoWrite()
 		}
 		req.Action = "approve"

@@ -282,10 +282,19 @@ ipcMain.handle('agent:exec', function (event, req) {
     return new Promise(function (resolve) {
         // 阶段六十一：执行前按请求用户名注入该用户的沙箱白名单（主工作区/授权目录，未配置=默认工作区语义）
         agentExecutor.setSandbox(req && req.username, sandboxStore[String((req && req.username) || '')] || null);
+        // 阶段七十五：run_command 输出帧实时推渲染层（渲染层盖 task_id/step 戳后经 WS 上行服务端转控制台事件）
+        req.onFrame = function (frame) {
+            if (!event.sender.isDestroyed()) event.sender.send('agent:output', frame);
+        };
         agentExecutor.execTool(req, function (result) {
             resolve(result);
         });
     });
+});
+
+// 阶段七十五：长命令"转后台"请求（渲染层 ← 服务端下行 msg 61 桥接）——命中运行中命令立即返回不阻塞模型
+ipcMain.on('agent:bg', function (event, req) {
+    agentExecutor.requestBg(String((req && req.username) || ''));
 });
 
 // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====

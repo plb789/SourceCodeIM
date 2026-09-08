@@ -4043,6 +4043,202 @@ html.m #list-panel.list-collapsed {
     color: var(--text, #333);
 }
 
+/* ===== 阶段七十五：run_command 实时控制台（Trae 同款——输出流式滚动，执行不再"盲等"） ===== */
+/* 容器：参数详情与结果详情之间，终端风深色底（跟随主题混色）；折叠态整体隐藏 */
+.agent-cmd-console {
+    border-top: 1px solid var(--border, #ececec);
+    background: color-mix(in srgb, var(--hover, #f7f7f7) 75%, transparent);
+}
+
+.agent-event.collapsed .agent-cmd-console {
+    display: none;
+}
+
+/* 输出区：等宽字体流式滚动（滚动条走全局自绘悬浮滑块，禁止原生样式） */
+.agent-cmd-console-pre {
+    margin: 0;
+    padding: 6px 10px;
+    max-height: 180px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    font-size: 11px;
+    line-height: 1.55;
+    font-family: Consolas, Monaco, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text, #333);
+}
+
+/* 进程结束标注行：退出码/耗时/输出量（退出码非零红色警示） */
+.agent-cmd-console-exit {
+    padding: 4px 10px 6px;
+    border-top: 1px dashed var(--border, #ececec);
+    font-size: 11px;
+    color: var(--primary);
+    user-select: none;
+}
+
+.agent-cmd-console-exit.fail {
+    color: #f56c6c;
+}
+
+/* 转后台按钮：执行中 >5 秒浮现（描边主题色；head 非 flex，右浮与"完成/异常"角标同法且互斥出现） */
+.agent-tool-bgbtn {
+    float: right;
+    margin-left: 8px;
+    padding: 1px 10px;
+    font-size: 11px;
+    line-height: 1.6;
+    border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--primary);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.agent-tool-bgbtn:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.agent-tool-bgbtn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* 执行计时秒数（"执行中 · 12s"，跟随主题色与既有执行态一致） */
+.agent-tool-elapsed {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ===== 阶段七十五（增强）：TRAE CN 同款独立控制台抽屉 + "打开控制台"浮标 ===== */
+/* 抽屉：输入区上方独立面板，统一展示本任务命令输出流（> 命令头 + 实时输出 + 退出码标注） */
+.agent-console-drawer {
+    margin: 0 12px 8px;
+    height: 240px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border, #e0e0e0));
+    border-radius: 10px;
+    background: var(--panel-bg, #fff);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+
+.agent-console-drawer.hidden {
+    display: none;
+}
+
+.agent-console-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border, #ececec);
+    background: color-mix(in srgb, var(--primary) 6%, transparent);
+    user-select: none;
+}
+
+.agent-console-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+    flex-shrink: 0;
+}
+
+/* 当前命令回显（超长省略，悬停 title 看全） */
+.agent-console-cmd {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-family: Consolas, Monaco, monospace;
+    color: var(--text-secondary, #999);
+}
+
+.agent-console-btn {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 1px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.agent-console-btn:hover {
+    background: var(--hover, #f0f0f0);
+    color: var(--text, #333);
+}
+
+/* 日志区：等宽流式滚动（滚动条走全局自绘悬浮滑块）；命令头/退出码行带色，普通输出正文色 */
+.agent-console-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.55;
+    font-family: Consolas, Monaco, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text, #333);
+    background: color-mix(in srgb, var(--hover, #f7f7f7) 60%, transparent);
+}
+
+.agent-console-line-cmd {
+    margin: 6px 0 2px;
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.agent-console-line-cmd:first-child {
+    margin-top: 0;
+}
+
+.agent-console-line-exit {
+    margin-top: 2px;
+    color: var(--primary);
+    user-select: none;
+}
+
+.agent-console-line-exit.fail {
+    color: #f56c6c;
+}
+
+/* 浮标：输入区上方居中小胶囊（任务执行中有命令动静即浮现，点击展开抽屉） */
+.agent-console-chip {
+    display: block;
+    margin: 0 auto 8px;
+    padding: 4px 16px;
+    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    border-radius: 14px;
+    background: var(--panel-bg, #fff);
+    color: var(--primary);
+    font-size: 12px;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
+    animation: agent-console-chip-in 0.25s ease-out;
+}
+
+.agent-console-chip.hidden {
+    display: none;
+}
+
+.agent-console-chip:hover {
+    background: color-mix(in srgb, var(--primary) 8%, var(--panel-bg, #fff));
+}
+
+@keyframes agent-console-chip-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 /* 审批请求子卡片 */
 .agent-event.approve {
     border-color: color-mix(in srgb, var(--primary) 35%, transparent);
