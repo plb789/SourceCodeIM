@@ -206,7 +206,8 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 			summary = "[文件]"
 		}
 		if len(summary) > 200 {
-			summary = summary[:200]
+			// 阶段六十六同源修复：按字符截断（原字节截断会切碎中文多字节字符，MySQL 拒绝无效 UTF-8）
+			summary = string([]rune(summary)[:200])
 		}
 	}
 	// 更新相关会话行摘要（保留 LastTime 不变，避免列表排序跳动）

@@ -2862,7 +2862,7 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
 
-        var st = { taskId: taskId, agent: agent, el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
+        var st = { taskId: taskId, agent: agent, goal: goal || '', el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
         agentTaskCards[taskId] = st;
         createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
         return st;
@@ -2947,12 +2947,20 @@
     }
 
     // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
-    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', run_command: '执行命令', todo_write: '更新任务清单' };
+    // 阶段六十八：新增 http_request / web_search 映射
+    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索' };
 
     function agentToolChipText(tool, params) {
         var p = params || {};
         if (tool === 'read_file' || tool === 'write_file') return String(p.path || p.file || '');
         if (tool === 'run_command') return String(p.command || p.cmd || '');
+        if (tool === 'http_request') {
+            var m = String(p.method || 'GET').toUpperCase();
+            var u = String(p.url || '');
+            if (u.length > 70) u = u.slice(0, 70) + '…';
+            return (m + ' ' + u).trim();
+        }
+        if (tool === 'web_search') return String(p.query || '');
         if (tool === 'todo_write') {
             var n = Object.prototype.toString.call(p.todos) === '[object Array]' ? p.todos.length : 0;
             return n ? n + ' 项任务' : '';
@@ -3205,17 +3213,40 @@
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
-        if (currentChatUser !== msg.from_user) return; // 仅当前会话实时渲染
         var st = agentTaskCards[ev.task_id];
-        if (ev.type === 'status' && ev.status === 'running' && ev.goal && !st) {
+        // 阶段六十六：完结事件不依赖当前会话——切走会话/最小化后也要弹系统级提醒
+        // （会话角标与摘要由服务端完结消息落库联动归口，此处补即时可感知；当前会话路径由 switch 内 agentTaskNotify 覆盖）
+        if ((ev.type === 'done' || ev.type === 'error') && currentChatUser !== msg.from_user) {
+            agentTaskNotify(msg, st, ev.type === 'done' ? '已完成' : '执行失败');
+            return;
+        }
+        if (currentChatUser !== msg.from_user) return; // 仅当前会话实时渲染
+        // 阶段六十七：排队任务同样建卡（含位次）；后续位次更新事件复用既有卡片
+        if (ev.type === 'status' && (ev.status === 'running' || ev.status === 'queued') && ev.goal && !st) {
             st = createAgentTaskCard(msg.from_user, ev.task_id, ev.goal);
         }
         if (!st) return;
         switch (ev.type) {
             case 'status':
-                if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
-                else if (ev.status === 'running') setAgentTaskStatus(st, '执行中', 'running');
-                else if (ev.status === 'cancelled') { agentFinalizeText(st, true); finishAgentTask(st, '已取消', 'cancelled'); }
+                if (ev.status === 'queued') {
+                    // 阶段六十七：排队中（含位次前移更新），按钮转"取消排队"
+                    setAgentTaskStatus(st, '排队中 · 第 ' + (ev.position || 1) + ' 位', 'queued');
+                    st.stopBtn.disabled = false;
+                    st.stopBtn.textContent = '取消排队';
+                }
+                else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
+                else if (ev.status === 'running') {
+                    setAgentTaskStatus(st, '执行中', 'running');
+                    // 阶段六十七：自队列派发后按钮复位（排队态曾改为"取消排队"）
+                    st.stopBtn.disabled = false;
+                    st.stopBtn.textContent = '停止';
+                }
+                else if (ev.status === 'cancelled') {
+                    agentFinalizeText(st, true);
+                    finishAgentTask(st, '已取消', 'cancelled');
+                    // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
+                    if (ev.msg_id) appendMessage(msg.from_user, '任务已取消', 'other', ev.msg_id, msg.timestamp, true);
+                }
                 break;
             case 'thought': addAgentThought(st, ev.text); break;
             case 'text_delta': case 'thought_delta': agentStreamText(st, ev.text); break; // 阶段六十二：流式打字
@@ -3233,19 +3264,43 @@
                 if (ev.result) {
                     if (!agentFinalizeText(st, false)) {
                         // 最终答复以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）
-                        appendMessage(st.agent, ev.result, 'other', 0, msg.timestamp, true);
+                        // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
+                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
                     }
+                    // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
+                    if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
                 } else {
                     agentFinalizeText(st, true);
                 }
+                agentTaskNotify(msg, st, '已完成');
                 break;
             case 'error':
                 agentFinalizeText(st, true);
                 finishAgentTask(st, '失败', 'failed');
                 showToast(ev.message || '任务执行失败');
+                // 阶段六十六：失败通知气泡实时渲染（内容与服务端落库留档一致），并已读归口
+                if (ev.msg_id) {
+                    appendMessage(msg.from_user, '任务执行失败：' + (ev.message || '未知原因'), 'other', ev.msg_id, msg.timestamp, true);
+                    sendReadReceipt(msg.from_user, ev.msg_id);
+                }
+                agentTaskNotify(msg, st, '执行失败');
                 break;
         }
     });
+
+    // 阶段六十六：任务完结系统级提醒归口——窗口隐藏或已切走会话时，PC 端弹系统桌面通知，
+    // Web 端轻提示兜底；会话角标/摘要由服务端完结消息落库联动（CONV_LIST 归口），此处补"即时可感知"体验
+    function agentTaskNotify(msg, st, statusText) {
+        if (!document.hidden && currentChatUser === msg.from_user) return; // 正盯着该会话，任务卡片即通知
+        var goal = (st && st.goal) ? String(st.goal) : '';
+        if (goal.length > 20) goal = goal.slice(0, 20) + '…';
+        var body = '任务' + statusText + (goal ? '：' + goal : '');
+        if (window.desktop && typeof window.desktop.notify === 'function') {
+            window.desktop.notify('Agent 任务', body);
+        } else {
+            showToast(body);
+        }
+    }
 
     // 审批请求卡片：参数 JSON 可直接编辑（改参放行），同意/拒绝上行归口
     IMSocket.on(MSG.AGENT_APPROVE_REQ, function (msg) {
@@ -6187,9 +6242,9 @@
     var thStatus = '';     // 当前状态筛选（空=全部）
     var thExpandId = '';   // 当前展开详情的 task_id（翻页后保持展开语义无必要，翻页重置）
 
-    // thStateLabel 状态中文标签映射（running 运行中/completed 已完成/failed 失败/cancelled 已取消）
+    // thStateLabel 状态中文标签映射（queued 排队中/running 运行中/completed 已完成/failed 失败/cancelled 已取消）
     function thStateLabel(s) {
-        return { running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
+        return { queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
     }
 
     // thFormatTime 时间展示归口：yyyy-MM-dd HH:mm

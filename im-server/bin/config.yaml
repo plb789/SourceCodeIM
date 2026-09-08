@@ -116,6 +116,27 @@ ai:
     # 文件直接落在用户磁盘（%APPDATA%/即时通讯/agent_workspace/<用户名>/）；
     # PC 离线或本地执行超时自动回退服务端工作区执行，任务不中断。false 时全部在服务端执行（阶段五十九行为）
     pc_executor: true
+    # 阶段六十七：任务队列——每用户同时运行任务数上限（concurrency，0=1）与排队上限（queue_size，0=5）；
+    # 超出并发数的新任务自动排队（FIFO，任务完成/取消后自动派发队首），排队已满时新任务直接拒绝
+    concurrency: 1
+    queue_size: 5
+    # 阶段六十八：http_request 工具——服务端代理 HTTP 请求（调接口/查数据/抓取网页），
+    # GET/HEAD 只读自动放行，POST/PUT/DELETE/PATCH 需用户审批；默认开启，false 时模型工具列表不注入
+    http_enabled: true
+    # 是否允许 http_request 访问内网/回环地址（默认 true 适配内网信任部署）；
+    # false 时在拨号层拦截私网/回环/链路本地 IP（按 DNS 解析后的真实 IP 拦截，域名绕不过），防模型被诱导探测内网
+    http_allow_private: true
+    # 阶段六十八：web_search 联网搜索工具（默认关闭，须配置服务商后开启 enabled=true）
+    # provider 四选一：
+    #   tavily     —— AI 搜索 API（https://tavily.com 注册取 key，需 api_key）
+    #   bocha      —— 博查搜索，国内直连（https://open.bochaai.com 注册取 key，需 api_key）
+    #   searxng    —— 自建元搜索实例（需 endpoint，实例须开启 JSON 输出 format=json）
+    #   duckduckgo —— 免 Key 兜底（国内网络环境通常不可达，建议 tavily/bocha）
+    web_search:
+      enabled: true                        # 开启联网搜索工具（博查，国内直连）
+      provider: "bocha"
+      api_key: "sk-4c76a2a5358143ff84c5ad8fb316ccfc"
+      endpoint: ""                         # bocha 不使用，留空
 
   # 模型服务列表（可同时配置多个，智能体按 name 绑定）
   # supports_image: 是否支持图片识别（多模态模型如 glm-4v/qwen-vl/gpt-4o 填 true，

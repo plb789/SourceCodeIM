@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,6 +52,8 @@ var (
 	agentAutoCmds    []string
 	agentWorkRoot    = ""
 	agentPcExec      = false // 阶段六十：本地执行器开关（true 时 PC 端在线则文件/命令下放用户本地执行）
+	agentConcurrency = 1     // 阶段六十七：每用户同时运行任务数上限
+	agentQueueSize   = 5     // 阶段六十七：每用户排队任务数上限（排队已满直接拒绝）
 )
 
 // AgentTodoItem 任务清单条目（todo_write 全量替换，前端渲染进度条）
@@ -78,8 +81,10 @@ type AgentTask struct {
 	Agent    *AIRunAgent
 	Goal     string
 
-	Status    string // running / waiting_approval / completed / failed / cancelled
+	Status    string // queued / running / waiting_approval / completed / failed / cancelled
 	Cancelled atomic.Bool
+
+	EnqueueSeq uint64 // 阶段六十七：入队序号（FIFO 派发排序依据，直接启动的任务不使用）
 
 	mu          sync.Mutex
 	todo        []AgentTodoItem
@@ -95,6 +100,66 @@ type AgentTask struct {
 
 // 任务注册表（taskID → task；含近期结束任务用于取消竞态兜底，定期清理防泄漏）
 var agentTasks sync.Map // map[string]*AgentTask
+
+// agentQueueMu 阶段六十七：任务发起/派发互斥锁——「统计并发+入队/启动」与「完结后派发队首」
+// 均在锁内完成，防止并发发起时双双判定有空位超开任务（sendToUser 为非阻塞投递，锁内推送安全）
+var agentQueueMu sync.Mutex
+
+// agentEnqueueSeq 阶段六十七：全局入队序号发生器（保证 FIFO 严格递增）
+var agentEnqueueSeq atomic.Uint64
+
+// agentCountForUser 统计用户当前活动任务数（running/waiting_approval）与排队任务列表（按 EnqueueSeq 升序）
+// 调用方须持有 agentQueueMu
+func agentCountForUser(username string) (active int, queued []*AgentTask) {
+	agentTasks.Range(func(_, value any) bool {
+		t := value.(*AgentTask)
+		if t.Username != username {
+			return true
+		}
+		t.mu.Lock()
+		st := t.Status
+		t.mu.Unlock()
+		switch st {
+		case "running", "waiting_approval":
+			active++
+		case "queued":
+			queued = append(queued, t)
+		}
+		return true
+	})
+	sort.Slice(queued, func(i, j int) bool { return queued[i].EnqueueSeq < queued[j].EnqueueSeq })
+	return active, queued
+}
+
+// agentDispatchNext 阶段六十七：派发归口——用户活动任务数低于并发上限时，启动队首最早入队的排队任务；
+// 无论是否派发，均给全部排队任务广播当前位次（队首取走/取消中段任务后位次前移，未变的幂等刷新）。
+// 任务完结（completed/failed/cancelled）与取消排队后统一调用
+func (s *Server) agentDispatchNext(username string) {
+	agentQueueMu.Lock()
+	active, queued := agentCountForUser(username)
+	var head *AgentTask
+	if active < agentConcurrency && len(queued) > 0 {
+		head = queued[0]
+		queued = queued[1:]
+		head.mu.Lock()
+		head.Status = "running"
+		head.mu.Unlock()
+		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", head.ID).Update("status", "running")
+	}
+	// 排队位次广播（i+1 即当前位次：队首被派发取走或中段任务取消后，后续任务位次前移）
+	for i := range queued {
+		s.agentEmit(queued[i], "status", map[string]interface{}{"status": "queued", "text": "排队中", "position": i + 1})
+	}
+	agentQueueMu.Unlock()
+	if head == nil {
+		return
+	}
+	logger.Info("Agent 任务自队列派发 %s（用户 %s，剩余排队 %d）", head.ID, username, len(queued))
+	// 已受理事件（前端将排队卡片切换为执行中）
+	s.agentEmit(head, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": head.Goal, "agent": head.Agent.Name, "from_queue": true})
+	// 异步执行状态机（不阻塞 WebSocket 主调度）
+	go s.runAgentTask(head)
+}
 
 // usernameSanitizeRe 用户名 → 目录名归口（注册用户名本就受限，防御性兜底：
 // 仅保留字母数字下划线中划线与常用中文，其余字符替换为下划线，防路径拼接注入）
@@ -123,10 +188,31 @@ func InitAgent(cfg *config.Config) {
 	agentAutoWrite = cfg.AI.Agent.AutoWrite
 	agentAutoCmds = cfg.AI.Agent.AutoCommands
 	agentPcExec = cfg.AI.Agent.PcExecutor
+	// 阶段六十七：任务队列参数归口（并发上限 0=1，排队上限 0=5）
+	if cfg.AI.Agent.Concurrency > 0 {
+		agentConcurrency = cfg.AI.Agent.Concurrency
+	}
+	if cfg.AI.Agent.QueueSize > 0 {
+		agentQueueSize = cfg.AI.Agent.QueueSize
+	}
 	// 工作区根目录已在 config.Load 归口解析为绝对路径（空=exe目录/agent_workspace）
 	agentWorkRoot = cfg.AI.Agent.WorkspaceRoot
+	// 阶段六十八：网络工具配置归口（http_request 默认开启；web_search 默认关闭须显式配置服务商）
+	agentHttpEnabled = cfg.AI.Agent.HttpEnabled == nil || *cfg.AI.Agent.HttpEnabled
+	agentHttpAllowPrivate = cfg.AI.Agent.HttpAllowPrivate == nil || *cfg.AI.Agent.HttpAllowPrivate
+	agentSearchEnabled = cfg.AI.Agent.WebSearch.Enabled != nil && *cfg.AI.Agent.WebSearch.Enabled
+	agentSearchProvider = strings.ToLower(strings.TrimSpace(cfg.AI.Agent.WebSearch.Provider))
+	agentSearchAPIKey = strings.TrimSpace(cfg.AI.Agent.WebSearch.APIKey)
+	agentSearchEndpoint = strings.TrimSpace(cfg.AI.Agent.WebSearch.Endpoint)
 	if err := store.DB.AutoMigrate(&model.AgentTaskRecord{}); err != nil {
 		logger.Error("Agent 任务表迁移失败: %v", err)
+	}
+	// 阶段六十七：服务重启遗留态归口——内存任务注册表随进程消失，落库的 queued/running 记录
+	// 已不可能恢复（queued 从未启动、running 执行中断），统一标记 failed 防任务历史出现幻影进行态
+	if err := store.DB.Model(&model.AgentTaskRecord{}).
+		Where("status IN ?", []string{"queued", "running"}).
+		Updates(map[string]interface{}{"status": "failed", "error": "服务重启，任务中断"}); err != nil {
+		logger.Error("Agent 遗留任务状态清理失败: %v", err)
 	}
 	// 阶段六十五：执行步骤留痕表迁移
 	if err := store.DB.AutoMigrate(&model.AgentStepRecord{}); err != nil {
@@ -168,6 +254,9 @@ func InitAgent(cfg *config.Config) {
 		}
 	}()
 	logger.Info("智能 Agent 模块加载完成：enabled=%v，max_steps=%d，工作区=%s", agentEnabled, agentMaxSteps, agentWorkRoot)
+	// 阶段六十八：网络工具状态日志（web_search 未开启时提示配置方式，方便管理员启用）
+	logger.Info("Agent 网络工具：http_request=%v（内网访问=%v），web_search=%v（provider=%s）",
+		agentHttpEnabled, agentHttpAllowPrivate, agentSearchEnabled, agentSearchProvider)
 }
 
 // agentWorkspaceDir 用户工作区目录（按 username 隔离，不存在则创建）
@@ -205,9 +294,10 @@ func agentSafePath(username, p string) (string, error) {
 	return full, nil
 }
 
-// agentToolDefinitions 注入模型的四工具 schema（OpenAI function calling 格式）
+// agentToolDefinitions 注入模型的工具 schema（OpenAI function calling 格式；
+// 阶段六十八：http_request/web_search 按配置开关动态注入，未开启不进 schema 防模型误调用）
 func agentToolDefinitions() []aiToolDefinition {
-	return []aiToolDefinition{
+	tools := []aiToolDefinition{
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "read_file",
 			"description": "读取文本文件内容（代码/文档/配置等）。支持工作区相对路径；用户配置白名单后也可用授权目录内的绝对路径。",
@@ -266,6 +356,39 @@ func agentToolDefinitions() []aiToolDefinition {
 			},
 		}},
 	}
+	// 阶段六十八：网络工具（HTTP 请求 + 联网搜索）
+	if agentHttpEnabled {
+		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
+			"name":        "http_request",
+			"description": "向指定 URL 发起 HTTP 请求（调用接口/查询数据/抓取网页内容）。支持自定义方法、请求头与请求体；GET/HEAD 只读请求自动放行，POST/PUT/DELETE/PATCH 需用户审批。返回状态码与响应体。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url":     map[string]interface{}{"type": "string", "description": "完整请求地址（http/https）"},
+					"method":  map[string]interface{}{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}, "description": "HTTP 方法，默认 GET"},
+					"headers": map[string]interface{}{"type": "object", "description": "自定义请求头键值对（可选，如 {\"Authorization\": \"Bearer xxx\"}）"},
+					"body":    map[string]interface{}{"type": "string", "description": "请求体（POST/PUT/PATCH 时使用，通常为 JSON 字符串）"},
+					"timeout": map[string]interface{}{"type": "integer", "description": "超时秒数（1-300，默认 60）"},
+				},
+				"required": []string{"url"},
+			},
+		}})
+	}
+	if agentSearchEnabled {
+		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
+			"name":        "web_search",
+			"description": "联网搜索获取实时信息（新闻/资料/行情/文档等）。返回网页标题、链接与摘要；需要页面或接口全文时再用 http_request 抓取。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "搜索关键词（可用空格组合多个词）"},
+					"count": map[string]interface{}{"type": "integer", "description": "结果条数（1-10，默认 5）"},
+				},
+				"required": []string{"query"},
+			},
+		}})
+	}
+	return tools
 }
 
 // agentEmit 任务事件推送归口（事件流实时送达发起用户全部在线连接）
@@ -384,6 +507,15 @@ func agentNeedsApproval(tool string, params map[string]interface{}) (bool, strin
 			return false, ""
 		}
 		return true, "命令不在自动放行白名单内，请确认后执行"
+	case "web_search":
+		return false, "" // 阶段六十八：只读搜索，自动放行
+	case "http_request":
+		// 阶段六十八：GET/HEAD 只读请求自动放行；非只读方法可能改变远端数据，走审批
+		method := strings.ToUpper(strings.TrimSpace(agentParamString(params["method"])))
+		if method == "GET" || method == "HEAD" || method == "" {
+			return false, ""
+		}
+		return true, "向外部服务发起非只读请求（" + method + "），请确认目标地址与请求内容"
 	}
 	return true, "未知工具默认走人工审批"
 }
@@ -399,14 +531,25 @@ func agentToolExec(s *Server, t *AgentTask, tool string, params map[string]inter
 		return agentToolTodoWrite(s, t, params)
 	case "run_command":
 		return agentToolRunCommand(t.Username, params)
+	case "http_request":
+		return agentToolHttpRequest(params) // 阶段六十八：服务端代理 HTTP 请求
+	case "web_search":
+		return agentToolWebSearch(params) // 阶段六十八：联网搜索
 	}
 	return "错误：未知工具 " + tool
+}
+
+// agentToolServerOnly 阶段六十八：始终服务端执行的工具归口（不下放 PC 本地执行器）——
+// todo_write 为纯任务清单状态；http_request/web_search 为服务端网络操作
+// （数据归口服务端统一执行，且 PC 本地执行器无对应实现）
+func agentToolServerOnly(tool string) bool {
+	return tool == "todo_write" || tool == "http_request" || tool == "web_search"
 }
 
 // agentToolEnvHint 阶段六十：tool_start 事件携带的执行环境预判（仅供前端即时展示提示）。
 // 实际环境以 tool_result 事件的 env 为准——本地等待超时会回退服务端执行
 func agentToolEnvHint(s *Server, t *AgentTask, tool string) string {
-	if tool == "todo_write" || !agentPcExec {
+	if agentToolServerOnly(tool) || !agentPcExec {
 		return "server"
 	}
 	if s.hub.HasPC(t.Username) {
@@ -416,12 +559,12 @@ func agentToolEnvHint(s *Server, t *AgentTask, tool string) string {
 }
 
 // agentToolExecDispatch 阶段六十：工具执行环境分派归口。
-// todo_write 为纯任务清单状态（与执行环境无关）始终服务端处理；
+// todo_write/http_request/web_search 等服务端工具始终服务端处理（agentToolServerOnly 归口）；
 // 文件/命令工具在「本地执行器开启 + 发起人 PC 端在线」时下放到其电脑本地执行（文件直接落在用户磁盘），
 // PC 离线或回传超时自动回退服务端工作区执行，任务不中断。
 // 返回 (结果文本, 执行环境 env)，env 用于事件流展示（pc=用户本地 / server=服务端）
 func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params map[string]interface{}) (string, string) {
-	if tool == "todo_write" {
+	if agentToolServerOnly(tool) {
 		return agentToolExec(s, t, tool, params), "server"
 	}
 	if agentPcExec && s.hub.HasPC(t.Username) {
@@ -858,15 +1001,24 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 		workRule += "服务端另为用户 " + username + " 保留了独立回退工作区：" + wsDir + "（仅在本地执行器离线时使用）。\n"
 		pathRule = "4. 文件操作优先使用相对路径（落在主工作区）；操作白名单内其他授权目录时使用完整绝对路径，禁止访问白名单外的任何路径。"
 	}
+	// 阶段六十八：工具列表动态归口（与 agentToolDefinitions 注入 schema 同口径，未开启不宣传防误调用）
+	toolList := "read_file（读文件）、write_file（写文件，需用户审批）、todo_write（任务清单）、run_command（执行命令，白名单外需审批）"
+	if agentHttpEnabled {
+		toolList += "、http_request（HTTP 接口调用/网页抓取，非只读方法需审批）"
+	}
+	if agentSearchEnabled {
+		toolList += "、web_search（联网搜索）"
+	}
 	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。\n" +
 		workRule +
-		"可用工具：read_file（读文件）、write_file（写文件，需用户审批）、todo_write（任务清单）、run_command（执行命令，白名单外需审批）。\n" +
+		"可用工具：" + toolList + "。\n" +
 		"工作纪律：\n" +
 		"1. 接到任务先分析，第一步必须调用 todo_write 建立任务清单（拆解为可执行的子步骤），并在推进过程中持续更新各条目状态。\n" +
 		"2. 每轮先输出你的思考（简述本步要做什么、为什么），再发起工具调用；需要用户审批的操作会先推送给用户确认。\n" +
 		"3. 工具结果回传后继续下一步；遇到错误要分析原因并调整方案，不要盲目重试同一操作。\n" +
 		pathRule + "\n" +
-		"5. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
+		"5. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
+		"6. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
 }
 
 // handleAgentRun 阶段五十九：任务发起/取消（上行 msg_type=46）
@@ -893,6 +1045,16 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		if v, ok := agentTasks.Load(req.TaskID); ok {
 			t := v.(*AgentTask)
 			if t.Username == c.username { // 仅发起人可取消
+				t.mu.Lock()
+				st := t.Status
+				t.mu.Unlock()
+				// 阶段六十七：排队任务取消——未启动无状态机可唤醒，直接收尾
+				// （agentFinish 落库 cancelled+"任务已取消"通知留档，is_read=true 本人操作无未读），随后派发队首
+				if st == "queued" {
+					s.agentFinish(t, "cancelled", "", "")
+					s.agentDispatchNext(t.Username)
+					return
+				}
 				t.Cancelled.Store(true)
 				t.mu.Lock()
 				ch := t.approveCh
@@ -934,23 +1096,13 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 单用户并发限制：同时仅允许一个活动任务（防滥用与资源失控）
-	busy := false
-	agentTasks.Range(func(_, value any) bool {
-		t := value.(*AgentTask)
-		if t.Username == c.username {
-			t.mu.Lock()
-			st := t.Status
-			t.mu.Unlock()
-			if st == "running" || st == "waiting_approval" {
-				busy = true
-				return false
-			}
-		}
-		return true
-	})
-	if busy {
-		s.sendError(c, "已有任务在执行中，请先等待完成或取消当前任务")
+	// 阶段六十七：任务队列归口——活动任务数低于并发上限直接启动，超出入队排队（FIFO），
+	// 排队已满拒绝；全程持锁防并发发起竞态超开（sendToUser 非阻塞投递，锁内推送安全）
+	agentQueueMu.Lock()
+	active, queued := agentCountForUser(c.username)
+	if active >= agentConcurrency && len(queued) >= agentQueueSize {
+		agentQueueMu.Unlock()
+		s.sendError(c, fmt.Sprintf("已有任务在执行中且排队已满（并发 %d + 排队 %d），请等待任务完成或取消后再发起", agentConcurrency, agentQueueSize))
 		return
 	}
 
@@ -959,25 +1111,48 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		Username: c.username,
 		Agent:    agent,
 		Goal:     goal,
-		Status:   "running",
 	}
-	agentTasks.Store(t.ID, t)
+	if active < agentConcurrency {
+		// 有空位：直接启动（阶段五十九原路径）
+		t.Status = "running"
+		agentTasks.Store(t.ID, t)
+		agentQueueMu.Unlock()
 
-	// 落库初始记录（running 态即建行，结束态更新，任务全程可追溯）
+		// 落库初始记录（running 态即建行，结束态更新，任务全程可追溯）
+		rec := model.AgentTaskRecord{
+			TaskID:    t.ID,
+			Username:  c.username,
+			AgentName: agent.Name,
+			Goal:      goal,
+			Status:    "running",
+		}
+		store.DB.Create(&rec)
+
+		// 已受理事件（前端创建任务面板）
+		s.agentEmit(t, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": goal, "agent": agent.Name})
+
+		// 异步执行状态机（不阻塞 WebSocket 主调度）
+		go s.runAgentTask(t)
+		return
+	}
+
+	// 无空位：入队排队（FIFO 序号归口，落库 queued 态，任务历史可见）
+	t.Status = "queued"
+	t.EnqueueSeq = agentEnqueueSeq.Add(1)
+	agentTasks.Store(t.ID, t)
+	position := len(queued) + 1
+	agentQueueMu.Unlock()
+
 	rec := model.AgentTaskRecord{
 		TaskID:    t.ID,
 		Username:  c.username,
 		AgentName: agent.Name,
 		Goal:      goal,
-		Status:    "running",
+		Status:    "queued",
 	}
 	store.DB.Create(&rec)
-
-	// 已受理事件（前端创建任务面板）
-	s.agentEmit(t, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": goal, "agent": agent.Name})
-
-	// 异步执行状态机（不阻塞 WebSocket 主调度）
-	go s.runAgentTask(t)
+	logger.Info("Agent 任务入队 %s（用户 %s，排队位次 %d）", t.ID, c.username, position)
+	s.agentEmit(t, "status", map[string]interface{}{"status": "queued", "text": "排队中", "position": position, "goal": goal, "agent": agent.Name})
 }
 
 // agentFinish 任务结束归口：状态落库 + done/error 事件推送（endOnce 防重复收尾）
@@ -988,9 +1163,45 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		t.mu.Unlock()
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
 			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps})
+		// 阶段六十六：任务完结通知落库（会话流留档+未读归口：切走会话/最小化/离线后经历史与角标可靠感知）
+		// completed 落最终答复（修复事件流不落库、重登后最终答复丢失）；failed/cancelled 落简短通知；
+		// cancelled 由用户本人现场操作触发，is_read=true 不产生未读提醒
+		notifyContent := ""
+		notifyRead := false
 		switch status {
 		case "completed":
-			s.agentEmit(t, "done", map[string]interface{}{"result": result, "steps": t.steps})
+			notifyContent = result
+		case "cancelled":
+			notifyContent = "任务已取消"
+			notifyRead = true
+		default:
+			if errMsg != "" {
+				notifyContent = "任务执行失败：" + errMsg
+			} else {
+				notifyContent = "任务执行失败"
+			}
+		}
+		var msgID uint
+		if notifyContent != "" {
+			reply := model.Message{
+				MsgType:  2,
+				FromUser: t.Agent.Name,
+				ToUser:   t.Username,
+				Content:  notifyContent,
+				IsRead:   notifyRead,
+			}
+			if err := store.DB.Create(&reply).Error; err == nil {
+				msgID = reply.ID
+			} else {
+				logger.Error("Agent 完结通知落库失败（任务 %s）：%v", t.ID, err)
+			}
+			// 会话摘要与未读归口联动（CONV_LIST 推送后托盘角标/闪动自动生效）
+			s.touchConversation(t.Username, t.Agent.Name, messageSummary(notifyContent))
+			s.notifyConvUpdate(t.Username)
+		}
+		switch status {
+		case "completed":
+			s.agentEmit(t, "done", map[string]interface{}{"result": result, "steps": t.steps, "msg_id": msgID})
 			// 阶段六十三：任务完成后异步提炼可复用经验入库（原实现：任务结束即止，无经验沉淀）
 			var todoSummary string
 			t.mu.Lock()
@@ -1000,11 +1211,13 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 			t.mu.Unlock()
 			agentExpEnqueue(t.Agent, t.Username, t.Goal, todoSummary, result, t.steps)
 		case "cancelled":
-			s.agentEmit(t, "status", map[string]interface{}{"status": "cancelled", "text": "任务已取消"})
+			s.agentEmit(t, "status", map[string]interface{}{"status": "cancelled", "text": "任务已取消", "msg_id": msgID})
 		default:
-			s.agentEmit(t, "error", map[string]interface{}{"message": errMsg, "steps": t.steps})
+			s.agentEmit(t, "error", map[string]interface{}{"message": errMsg, "steps": t.steps, "msg_id": msgID})
 		}
 		logger.Info("Agent 任务结束 %s（用户 %s，状态 %s，%d 步）", t.ID, t.Username, status, t.steps)
+		// 阶段六十七：任务释放并发名额后派发归口——队首排队任务自动启动（活动数达上限时为空操作）
+		s.agentDispatchNext(t.Username)
 	})
 }
 

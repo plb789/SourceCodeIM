@@ -72,9 +72,9 @@ type AIProviderConfig struct {
 	APIURL string `yaml:"api_url"` // chat/completions 完整接口地址
 	APIKey string `yaml:"api_key"` // API 密钥（仅存服务端）
 	Model  string `yaml:"model"`   // 模型名（如 deepseek-chat / glm-4-flash）
-     // VisionModel 视觉模型名（选填）：文本/视觉分立的模型（如 deepseek-v4-flash-vision-exp）填此字段，
-     // 带图提问时服务端自动路由，纯文本仍走主模型；为空统一走主模型
-     VisionModel string `yaml:"vision_model"`
+	// VisionModel 视觉模型名（选填）：文本/视觉分立的模型（如 deepseek-v4-flash-vision-exp）填此字段，
+	// 带图提问时服务端自动路由，纯文本仍走主模型；为空统一走主模型
+	VisionModel string `yaml:"vision_model"`
 	// SupportsImage 模型是否支持图片识别（多模态，如 glm-4v/qwen-vl/gpt-4o）。
 	// 阶段四十四：为 true 时绑定的智能体开放图片提问入口，服务端按 OpenAI 兼容多模态
 	// 格式（content 数组：text + image_url data URL）调模型；false 时前端隐藏发图入口，
@@ -138,6 +138,29 @@ type AgentConfig struct {
 	// PcExecutor 阶段六十：本地执行器开关——true 时用户 PC 端在线，文件/命令工具下放到其电脑本地执行
 	// （文件直接落在用户磁盘 %APPDATA%/即时通讯/agent_workspace/<用户名>/；PC 离线或执行超时自动回退服务端工作区）
 	PcExecutor bool `yaml:"pc_executor"`
+	// Concurrency 阶段六十七：每用户同时运行任务数上限（0=1；超过上限的新任务进入排队）
+	Concurrency int `yaml:"concurrency"`
+	// QueueSize 阶段六十七：每用户排队任务数上限（0=5；排队已满时新任务直接拒绝）
+	QueueSize int `yaml:"queue_size"`
+	// HttpEnabled 阶段六十八：http_request 工具开关（nil=默认开启；服务端代理 HTTP 接口调用/数据查询/网页抓取）
+	HttpEnabled *bool `yaml:"http_enabled"`
+	// HttpAllowPrivate 阶段六十八：是否允许 http_request 访问内网/回环地址（nil=默认允许，内网信任部署；
+	// 显式 false 时在拨号层拦截私网/回环/链路本地 IP，防模型被诱导探测内网——DNS 解析后的真实 IP 拦截，域名绕不过）
+	HttpAllowPrivate *bool `yaml:"http_allow_private"`
+	// WebSearch 阶段六十八：web_search 联网搜索配置（多服务商，默认关闭须显式开启）
+	WebSearch WebSearchConfig `yaml:"web_search"`
+}
+
+// WebSearchConfig 阶段六十八：Agent 联网搜索服务商配置（web_search 工具归口）
+type WebSearchConfig struct {
+	// Enabled 总开关（nil=默认关闭；须配置 provider 后开启，避免未配置时模型反复调用失败浪费步数）
+	Enabled *bool `yaml:"enabled"`
+	// Provider 搜索服务商：tavily / bocha / searxng / duckduckgo
+	Provider string `yaml:"provider"`
+	// APIKey tavily/bocha 需要的 API Key（searxng/duckduckgo 留空）
+	APIKey string `yaml:"api_key"`
+	// Endpoint searxng 自建实例地址（如 http://127.0.0.1:8889；其他服务商留空）
+	Endpoint string `yaml:"endpoint"`
 }
 
 // AIConfig AI 问答配置节

@@ -4,10 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
     platform: process.platform,
-    // 后续可扩展桌面通知、快捷键等能力
+    // 阶段六十六：系统桌面通知（Agent 任务完结提醒等场景），转发主进程弹系统通知
     notify: function (title, body) {
-        // 桌面通知由主进程处理，此处占位
-        console.log('[desktop notify]', title, body);
+        ipcRenderer.send('notify', { title: title, body: body });
     },
     // 阶段三十七（第三期）：静默抓屏（无系统共享弹窗），返回 PNG dataURL（Promise）
     captureScreen: function () {

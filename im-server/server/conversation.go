@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"im-server/logger"
 	"im-server/model"
 	"im-server/protocol"
 	"im-server/store"
@@ -24,19 +25,24 @@ type ConvInfo struct {
 
 // touchConversation 刷新会话（存在则更新最后消息，不存在则创建）
 func (s *Server) touchConversation(userID, target, lastMsg string) {
-	// 摘要截断，避免超出字段长度
-	if len(lastMsg) > 200 {
-		lastMsg = lastMsg[:200]
+	// 阶段六十六修复：摘要截断按字符截取——原实现 lastMsg[:200] 按字节截断，中文多字节字符
+	// 被拦腰切断产生无效 UTF-8，MySQL 拒绝写入且错误被吞，导致会话行创建/更新静默失败（任务完结通知无角标）
+	if runes := []rune(lastMsg); len(runes) > 200 {
+		lastMsg = string(runes[:200])
 	}
 	now := time.Now()
 	var conv model.Conversation
 	err := store.DB.Where("user_id = ? AND target = ?", userID, target).First(&conv).Error
 	if err != nil {
-		store.DB.Create(&model.Conversation{UserID: userID, Target: target, LastMsg: lastMsg, LastTime: now})
+		if err := store.DB.Create(&model.Conversation{UserID: userID, Target: target, LastMsg: lastMsg, LastTime: now}).Error; err != nil {
+			logger.Error("会话行创建失败（用户 %s，目标 %s）：%v", userID, target, err)
+		}
 	} else {
 		conv.LastMsg = lastMsg
 		conv.LastTime = now
-		store.DB.Save(&conv)
+		if err := store.DB.Save(&conv).Error; err != nil {
+			logger.Error("会话行更新失败（用户 %s，目标 %s）：%v", userID, target, err)
+		}
 	}
 }
 

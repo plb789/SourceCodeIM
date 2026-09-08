@@ -88,6 +88,11 @@ function showNotification(title, body) {
     }
 }
 
+// 阶段六十六：渲染层系统通知转发（Agent 任务完结提醒等场景）
+ipcMain.on('notify', function (event, payload) {
+    showNotification(String((payload && payload.title) || '即时通讯'), String((payload && payload.body) || ''));
+});
+
 // ===== 阶段三十七（第三期）：静默抓屏 =====
 // 抓取主屏全分辨率画面并转为 dataURL（desktopCapturer 无系统共享弹窗，替代浏览器 getDisplayMedia 的 PC 端方案）
 // useJpeg=true 时编码 JPEG（质量 90，编码比 PNG 快数倍，冻结截图预览画质足够）；默认 PNG

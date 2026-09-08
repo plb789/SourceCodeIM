@@ -1181,7 +1181,7 @@
 
     // atStateLabel 状态中文标签映射（与用户端口径一致）
     function atStateLabel(s) {
-        return { running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
+        return { queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
     }
 
     // atFormatTime 时间展示归口：yyyy-MM-dd HH:mm

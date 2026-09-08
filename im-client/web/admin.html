@@ -12,8 +12,8 @@
         })();
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
-    <link rel="stylesheet" href="css/style.css?v=1.50">
-    <link rel="stylesheet" href="css/admin.css?v=1.6">
+    <link rel="stylesheet" href="css/style.css?v=1.51">
+    <link rel="stylesheet" href="css/admin.css?v=1.7">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -213,6 +213,7 @@
                     <input type="text" id="at-user-filter" class="admin-input vec-search-input" placeholder="按用户名搜索">
                     <select id="at-status-filter" class="admin-input vec-select" title="按状态筛选">
                         <option value="">全部状态</option>
+                        <option value="queued">排队中</option>
                         <option value="running">运行中</option>
                         <option value="completed">已完成</option>
                         <option value="failed">失败</option>
@@ -302,6 +303,6 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.8"></script>
+    <script src="js/admin.js?v=1.10"></script>
 </body>
 </html>

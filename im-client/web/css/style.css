@@ -3610,6 +3610,12 @@ html.m #list-panel.list-collapsed {
     background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
+/* 阶段六十七：排队中（主题色低饱和中性态，与执行中区分） */
+.agent-task-status.queued {
+    color: var(--text-secondary, #909399);
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
 .agent-task-status.waiting {
     color: #e6a23c;
     background: rgba(230, 162, 60, 0.14);
@@ -4455,6 +4461,11 @@ html.m #friend-menu {
 .taskhist-badge.st-running {
     background: color-mix(in srgb, var(--primary) 60%, #ffffff);
     animation: taskhist-pulse 1.2s ease-in-out infinite;
+}
+
+/* 阶段六十七：排队中徽标（中性灰蓝，弱于运行中的脉冲） */
+.taskhist-badge.st-queued {
+    background: color-mix(in srgb, var(--primary) 22%, var(--text-light, #cccccc));
 }
 
 .taskhist-badge.st-completed {

@@ -864,6 +864,11 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     animation: at-pulse 1.2s ease-in-out infinite;
 }
 
+/* 阶段六十七：排队中徽标（中性灰蓝，弱于运行中的脉冲） */
+.at-badge.at-st-queued {
+    background: color-mix(in srgb, var(--primary) 22%, var(--text-light, #cccccc));
+}
+
 .at-badge.at-st-completed {
     background: var(--primary);
 }
