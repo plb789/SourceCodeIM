@@ -76,6 +76,9 @@ const (
 	// 阶段七十二：私聊永久删除审批（双方同意才物理删除，会话内审批卡片）
 	MsgTypePurgeApply = 57 // 上行：发起删除申请（to_user=对方）；下行：审批卡片状态同步（content 为 JSON：{apply_id,from_user,to_user,status}，status 0待处理 1已同意 2已拒绝；发起/响应/登录补推/结果变更 复用同一帧）
 	MsgTypePurgeResp  = 58 // 上行：审批结果（to_user=发起方，msg_id=apply_id，content=agree/reject）；无独立下行——结果经 57 卡片帧同步双方
+
+	// 阶段七十三：AI 流式问答停止（Trae CN 同款"停止"按钮）——中断该用户对该智能体进行中的流式回复
+	MsgTypeAIStop = 59 // 上行：停止问答（to_user=智能体名）；停止后由问答协程统一收口：已生成部分落库 + 下行 45 结束帧（remark="stopped"）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -89,17 +92,17 @@ type Message struct {
 	FileData    []byte `json:"file_data"`
 	ChunkIndex  int    `json:"chunk_index"`
 	Timestamp   int64  `json:"timestamp"`
-	Page        int    `json:"page"`         // 分页页码（从 1 开始）
-	PageSize    int    `json:"page_size"`    // 每页条数
-	FileID      string `json:"file_id"`      // 文件传输唯一标识
-	TotalChunks int    `json:"total_chunks"` // 文件总分片数
-	MsgID       uint   `json:"msg_id"`       // 消息唯一 ID（持久化后回填，用于去重）
-	Remark      string `json:"remark"`       // 好友备注名
-	Group       string `json:"group"`        // 好友分组
-	StreamID    string `json:"stream_id"`    // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
-	SessionID   uint   `json:"session_id"`   // 阶段七十一：AI 多会话 ID（HISTORY 按会话区间拉历史；0=不区分会话取全量）
+	Page        int    `json:"page"`            // 分页页码（从 1 开始）
+	PageSize    int    `json:"page_size"`       // 每页条数
+	FileID      string `json:"file_id"`         // 文件传输唯一标识
+	TotalChunks int    `json:"total_chunks"`    // 文件总分片数
+	MsgID       uint   `json:"msg_id"`          // 消息唯一 ID（持久化后回填，用于去重）
+	Remark      string `json:"remark"`          // 好友备注名
+	Group       string `json:"group"`           // 好友分组
+	StreamID    string `json:"stream_id"`       // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
+	SessionID   uint   `json:"session_id"`      // 阶段七十一：AI 多会话 ID（HISTORY 按会话区间拉历史；0=不区分会话取全量）
 	Clear       bool   `json:"clear,omitempty"` // 阶段七十二：AI_SESSION_DEL 置 true 时为"清空会话"（真删除消息+任务记录，会话行保留；sid=0 允许），缺省 false 维持"删除会话并入默认"语义
-	Platform    string `json:"platform"`     // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
+	Platform    string `json:"platform"`        // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
 	// AI 回复 Token 消耗（服务端 usage 归口，随 AI_STREAM_END 结束帧下发；其余消息恒为 0 不序列化）
 	PromptTokens     int `json:"prompt_tokens,omitempty"`
 	CompletionTokens int `json:"completion_tokens,omitempty"`

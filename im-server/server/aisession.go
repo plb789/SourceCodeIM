@@ -25,12 +25,25 @@ func initAISessionTable() {
 	}
 	// 阶段七十一修复：移除区间法时期遗留的联合唯一索引（username+agent_name 唯一导致
 	// 每用户+智能体仅能建一行会话，第二次"新建会话"必撞唯一约束静默失败），
-	// 改为普通联合索引支持多会话（AutoMigrate 不会删既有索引，需显式迁移；重复执行幂等）
-	if err := store.DB.Exec("ALTER TABLE im_ai_session DROP INDEX idx_aisess_user_agent_id").Error; err == nil {
-		logger.Info("已移除 im_ai_session 遗留联合唯一索引 idx_aisess_user_agent_id（原索引导致多会话新建失败）")
+	// 改为普通联合索引支持多会话（AutoMigrate 不会删既有索引，需显式迁移）。
+	// 阶段七十三修复：迁移幂等归口——MySQL 对"删不存在的索引"报 1091、"重复建索引"报 1061，
+	// 原实现每次启动都刷错误日志；改为先查 information_schema 确认索引存在性后再执行
+	if aiSessionIndexExists("idx_aisess_user_agent_id") {
+		if err := store.DB.Exec("ALTER TABLE im_ai_session DROP INDEX idx_aisess_user_agent_id").Error; err == nil {
+			logger.Info("已移除 im_ai_session 遗留联合唯一索引 idx_aisess_user_agent_id（原索引导致多会话新建失败）")
+		}
 	}
-	store.DB.Exec("ALTER TABLE im_ai_session ADD INDEX idx_aisess_user_agent (username, agent_name)")
+	if !aiSessionIndexExists("idx_aisess_user_agent") {
+		store.DB.Exec("ALTER TABLE im_ai_session ADD INDEX idx_aisess_user_agent (username, agent_name)")
+	}
 	backfillAISessionStamps()
+}
+
+// aiSessionIndexExists 检查当前库 im_ai_session 表上指定索引是否存在（迁移幂等判断归口）
+func aiSessionIndexExists(name string) bool {
+	var count int64
+	store.DB.Raw("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'im_ai_session' AND index_name = ?", name).Scan(&count)
+	return count > 0
 }
 
 // backfillAISessionStamps 存量区间法数据一次性迁移：首版方案按 first_msg_id 区间切分会话，

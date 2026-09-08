@@ -1025,6 +1025,19 @@
     }
 
     function sendMessage() {
+        // 阶段七十三：停止态优先（Trae 同款）——AI 问答生成中/任务执行中时，发送按钮与 Enter 均为"停止"：
+        // 任务模式下取消进行中任务（复用 AGENT_RUN cancel 既有机制），否则停止进行中的流式问答（AI_STOP）
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            var stopTaskId = agentMode ? agentActiveTask[currentChatUser] : null;
+            if (stopTaskId) {
+                IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: stopTaskId, action: 'cancel' }) });
+                return;
+            }
+            if (aiAgentGenerating(currentChatUser)) {
+                IMSocket.send({ msg_type: MSG.AI_STOP, to_user: currentChatUser });
+                return;
+            }
+        }
         var content = messageInput.value.trim();
         // 阶段三十八：待发送截图优先（QQ 同款：Enter/发送按钮先发出待发送区的截图）
         // 阶段三十九：一次发出全部待发送截图（逐张走既有图片链路，各自 nonce 气泡独立回填）
@@ -2216,9 +2229,35 @@
     var aiThinking = {};    // 等待 AI 首段回复的"思考中"指示：agent -> {el}
     var lastAIQuestion = {}; // 各智能体最近一次提问（重新生成/编辑提问按钮数据源）：agent -> { raw, text }
     var agentEchoPending = {}; // 阶段七十：AGENT_RUN 回显待达标记（PRIVATE 处理器据此抑制"思考中"，任务模式无 AI 问答指示）：agent -> true
+    var agentActiveTask = {}; // 阶段七十三：各智能体进行中的任务（agent -> 最近 task_id），发送按钮"停止"态数据源
 
     function isAIAgent(name) {
         return aiAgents.some(function (a) { return a.name === name; });
+    }
+
+    // 阶段七十三：当前会话是否有进行中的 AI 问答（"思考中"或流式打字中）
+    function aiAgentGenerating(agent) {
+        if (aiThinking[agent]) return true;
+        for (var sid in aiStreams) {
+            var st = aiStreams[sid];
+            if (st.agent === agent && !st.done) return true;
+        }
+        return false;
+    }
+
+    // 阶段七十三：发送按钮"停止"态归口（Trae CN 同款）——当前会话为 AI 智能体且有进行中的
+    // 问答或（任务模式下的）执行中任务时，按钮由"发送"切换为"停止"，点击中断生成/取消任务。
+    // 问答停止走 AI_STOP（服务端中断模型流式调用），任务停止复用 AGENT_RUN cancel（既有机制）
+    function updateSendBtnState() {
+        var stopping = currentChatUser !== '' && isAIAgent(currentChatUser) &&
+            ((agentMode && agentActiveTask[currentChatUser]) || aiAgentGenerating(currentChatUser));
+        if (stopping) {
+            sendBtn.classList.add('stopping');
+            sendBtn.innerHTML = '<span class="stop-icon"></span>停止';
+        } else {
+            sendBtn.classList.remove('stopping');
+            sendBtn.textContent = '发送';
+        }
     }
 
     // 阶段五十七：头像形态判定——URL（图片头像）与 emoji/文本（自建智能体 emoji 头像）分路渲染，
@@ -2341,6 +2380,7 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
         aiThinking[agent] = { el: div };
+        updateSendBtnState(); // 阶段七十三：提问已受理即进入"停止"态（思考阶段同样可停止）
     }
 
     function hideAIThinking(agent) {
@@ -2348,6 +2388,7 @@
         if (t) {
             t.el.remove();
             delete aiThinking[agent];
+            updateSendBtnState();
         }
     }
 
@@ -2633,7 +2674,9 @@
         div.appendChild(body);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
-        return { el: div, textEl: text, cursorEl: cursor, pending: '', shown: '', timer: null, done: false, finalId: 0, agent: agent };
+        // 注意：此处不调用 updateSendBtnState——调用方在返回后才把流注册进 aiStreams，
+        // 注册前"生成中"判定查不到本流会误判为空闲（实测：思考中是停止、流式输出却回到发送）
+        return { el: div, textEl: text, cursorEl: cursor, pending: '', shown: '', timer: null, done: false, finalId: 0, agent: agent, stopped: false };
     }
 
     // 启动/复用打字机定时器：每 30ms 取一小段增量渲染（自适应步长，长文本加速追平）
@@ -2672,8 +2715,16 @@
         if (st.finalId) st.el.setAttribute('data-msg-id', st.finalId);
         var agent = st.el.getAttribute('data-from');
         delete aiStreams[st.el.getAttribute('data-stream-id')];
+        // 阶段七十三：用户停止生成的留痕标注（部分回复正常保留，操作栏照常渲染）
+        if (st.stopped && bodyEl && !bodyEl.querySelector('.ai-stopped-note')) {
+            var note = document.createElement('span');
+            note.className = 'ai-stopped-note';
+            note.textContent = '已停止生成';
+            bodyEl.appendChild(note);
+        }
         if (st.finalId) sendReadReceipt(agent, st.finalId);
         if (!st.shown) st.el.remove(); // 空回复（服务端异常）：移除空气泡
+        updateSendBtnState(); // 阶段七十三：问答收尾后复位发送按钮
     }
 
     // AI 流式增量：仅当前正查看该智能体会话时实时渲染（未查看时忽略，完整回复落库后经历史/会话摘要可见）
@@ -2695,6 +2746,7 @@
             if (!st0) {
                 st0 = createStreamBubble(msg.from_user, msg.stream_id);
                 aiStreams[msg.stream_id] = st0;
+                updateSendBtnState(); // 阶段七十三：注册后再刷新（流式输出中保持"停止"态）
             }
             insertAISearchRow(st0, meta);
             return;
@@ -2705,6 +2757,7 @@
         if (!st) {
             st = createStreamBubble(msg.from_user, msg.stream_id);
             aiStreams[msg.stream_id] = st;
+            updateSendBtnState(); // 阶段七十三：注册后再刷新（流式输出中保持"停止"态）
         }
         st.pending += msg.content || '';
         ensureStreamTimer(st);
@@ -2750,12 +2803,15 @@
             if (!st.shown && !st.pending.length && msg.content) st.pending = msg.content;
             st.done = true;
             st.finalId = msg.msg_id || 0;
+            if (msg.remark === 'stopped') st.stopped = true; // 阶段七十三：用户停止，收尾时留痕
             // Token 消耗随结束帧下发（服务端 usage 归口），收尾时渲染到操作栏
             st.tokens = { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 };
             ensureStreamTimer(st);
             return;
         }
         if (msg.remark === 'error') return; // 失败且无气泡：服务端已 toast 提示
+        // 阶段七十三：停止且无已生成内容（"思考中"阶段停止，无气泡无落库）：无帧可补
+        if (msg.remark === 'stopped' && !msg.content && !msg.msg_id) return;
         if (currentChatUser === msg.from_user) {
             appendMessage(msg.from_user, msg.content, 'other', msg.msg_id, msg.timestamp, true, false,
                 { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 });
@@ -2821,6 +2877,7 @@
         agentMode = on;
         agentModeBtn.classList.toggle('active', on);
         messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
+        updateSendBtnState(); // 阶段七十三：模式切换联动发送按钮停止态（任务执行中开/关任务模式）
     }
 
     agentModeBtn.addEventListener('click', function () {
@@ -3009,6 +3066,8 @@
         var stampSess = (typeof sid === 'number') ? sid : (aiViewSession[agent] || 0);
         var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
         agentTaskCards[taskId] = st;
+        agentActiveTask[agent] = taskId; // 阶段七十三：进行中任务登记（发送按钮"停止"态数据源）
+        updateSendBtnState();
         removeAISuggestRow(); // 阶段七十：新任务开始即消费上一轮后续提问胶囊（与 AI 问答新一轮回复同语义）
         createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
         return st;
@@ -3066,6 +3125,11 @@
         setAgentTaskStatus(st, text, cls);
         st.stopBtn.disabled = true;
         st.stopBtn.textContent = '已结束';
+        // 阶段七十三：任务完结即清进行中标记（当前会话发送按钮"停止"态复位）
+        if (agentActiveTask[st.agent] === st.taskId) {
+            delete agentActiveTask[st.agent];
+            updateSendBtnState();
+        }
         // 阶段六十二（完整版）：任务结束收起底部任务栏（卡片内已完成状态接管）
         if (st.dock) st.dock.classList.add('hidden');
         if (st.dockPanel) st.dockPanel.classList.add('hidden');
@@ -3228,6 +3292,11 @@
                         // 原漏洞：内存卡存在（st）时既不重挂也不插重放卡，切会话返回后卡片消失，
                         // 仅重登（内存为空）才走重放分支显示；实时卡 DOM 已随切会话分离且状态滞后于 DB，不再复用
                         if (st && !st.finished) finishAgentTask(st, thStateLabel(t.status), t.status); // 切走期间完结：校正滞留状态并收任务栏
+                        // 阶段七十三：切走期间完结的任务清进行中标记（finishAgentTask 仅对内存卡生效，此处兜底）
+                        if (agentActiveTask[agent] === t.task_id) {
+                            delete agentActiveTask[agent];
+                            updateSendBtnState();
+                        }
                         if (t.reply_msg_id) agentInsertReplayCard(agent, t);
                         return;
                     }
@@ -3238,9 +3307,12 @@
                     } else if (!st) {
                         messageList.appendChild(agentBuildReplayCard(agent, t));
                     }
+                    // 阶段七十三：重放发现的进行中任务登记（当前会话发送按钮"停止"态恢复）
+                    agentActiveTask[agent] = t.task_id;
                     liveAny = true;
                 });
                 if (liveAny) agentTaskScroll();
+                updateSendBtnState();
             })
             .catch(function () { /* 任务重放失败静默：历史消息与任务历史弹窗兜底 */ });
     }
@@ -3499,6 +3571,12 @@
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
         var st = agentTaskCards[ev.task_id];
+        // 阶段七十三：任务完结/取消即清进行中标记（不依赖当前查看会话——切走期间完结也要复位发送按钮态）
+        if (agentActiveTask[msg.from_user] === ev.task_id &&
+            (ev.type === 'done' || ev.type === 'error' || (ev.type === 'status' && ev.status === 'cancelled'))) {
+            delete agentActiveTask[msg.from_user];
+            updateSendBtnState();
+        }
         // 阶段六十六：完结事件不依赖当前会话——切走会话/最小化后也要弹系统级提醒
         // （会话角标与摘要由服务端完结消息落库联动归口，此处补即时可感知；当前会话路径由 switch 内 agentTaskNotify 覆盖）
         if ((ev.type === 'done' || ev.type === 'error') && currentChatUser !== msg.from_user) {
@@ -4519,6 +4597,7 @@
         loadingMore = false;
         // 阶段七十一：AI 智能体会话先归口会话列表（确定当前查看会话）再按区间拉历史；
         // 普通会话直接拉全量历史（行为不变）
+        updateSendBtnState(); // 阶段七十三：切换会话后按新会话的生成/任务状态刷新发送按钮
         if (user && isAIAgent(user)) {
             aiSessionRequestList(user, function () { loadHistory(); });
         } else {
@@ -4654,6 +4733,7 @@
             delete aiStreams[sid2];
         }
         for (var ag in aiThinking) delete aiThinking[ag];
+        updateSendBtnState(); // 阶段七十三：会话内切换后刷新发送按钮态（视图已清，问答流标记随帧重建）
         loadHistory();
     }
 

@@ -81,7 +81,8 @@
         AI_SESSION_NEW: 55,  // 阶段七十一：新建会话（上行 to_user=智能体名；下行 content 为 JSON：{session_id,title}）
         AI_SESSION_DEL: 56,  // 阶段七十一：删除会话（上行 to_user=智能体名 + session_id）
         PURGE_APPLY: 57,     // 阶段七十二：私聊永久删除审批（上行发起 to_user=对方；下行卡片状态 content 为 JSON：{apply_id,from_user,to_user,status}）
-        PURGE_RESP: 58       // 阶段七十二：私聊永久删除审批响应（上行 to_user=发起方，msg_id=apply_id，content=agree/reject）
+        PURGE_RESP: 58,      // 阶段七十二：私聊永久删除审批响应（上行 to_user=发起方，msg_id=apply_id，content=agree/reject）
+        AI_STOP: 59          // 阶段七十三：AI 流式问答停止（上行 to_user=智能体名；发送按钮"停止"态触发）
     };
 
     function connect(username, password) {

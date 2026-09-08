@@ -1111,6 +1111,25 @@ html, body {
     opacity: 0.88;
 }
 
+/* 阶段七十三：发送按钮"停止"态（Trae 同款）——问答生成中/任务执行中显示，背景仍跟随主题色 */
+#send-btn .stop-icon {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 6px;
+    vertical-align: -1px;
+    background: #fff;
+    border-radius: 2px;
+}
+
+/* 阶段七十三：AI 回复气泡"已停止生成"留痕标注（弱化灰字，操作栏下方） */
+.ai-stopped-note {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
 /* 表情面板（自定义，跟随主题色） */
 .emoji-panel {
     position: absolute;

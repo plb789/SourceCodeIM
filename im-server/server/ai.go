@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -300,6 +301,64 @@ func aiNewStreamID() string {
 		return fmt.Sprintf("s%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// ===== 阶段七十三：AI 流式问答停止归口（Trae CN 同款"停止"按钮）=====
+
+// aiStreamStopEntry 活跃流停止句柄（streamID → 归属 + context 取消函数）
+type aiStreamStopEntry struct {
+	username string
+	agent    string
+	cancel   context.CancelFunc
+}
+
+var (
+	aiStreamStopMu sync.Mutex
+	aiStreamStops  = map[string]*aiStreamStopEntry{}
+)
+
+// aiStreamStopRegister 注册活跃流停止句柄（问答上下文建立时调用，含"思考中"检索阶段）
+func aiStreamStopRegister(streamID, username, agent string, cancel context.CancelFunc) {
+	aiStreamStopMu.Lock()
+	aiStreamStops[streamID] = &aiStreamStopEntry{username: username, agent: agent, cancel: cancel}
+	aiStreamStopMu.Unlock()
+}
+
+// aiStreamStopUnregister 注销停止句柄（问答协程退出统一调用）
+func aiStreamStopUnregister(streamID string) {
+	aiStreamStopMu.Lock()
+	delete(aiStreamStops, streamID)
+	aiStreamStopMu.Unlock()
+}
+
+// aiStreamStopTrigger 停止该用户对该智能体的全部活跃流（含"思考中"与流式输出中），
+// 返回停止条数（0=无可停止流：已自然结束或他端已停止，请求方静默）。
+// 取消后在锁外逐个触发，问答协程统一收口（已生成部分落库 + stopped 结束帧）
+func aiStreamStopTrigger(username, agent string) int {
+	aiStreamStopMu.Lock()
+	var cancels []context.CancelFunc
+	for id, e := range aiStreamStops {
+		if e.username == username && e.agent == agent {
+			cancels = append(cancels, e.cancel)
+			delete(aiStreamStops, id)
+		}
+	}
+	aiStreamStopMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return len(cancels)
+}
+
+// handleAIStop 阶段七十三：停止正在进行的 AI 流式问答（上行 msg_type=59，to_user=智能体名）
+// 仅中断模型流式调用，不产生错误提示；收口由问答协程负责（见 handleAIChatMsg 的 stopped 分支）
+func (s *Server) handleAIStop(c *Client, msg *protocol.Message) {
+	agent := strings.TrimSpace(msg.ToUser)
+	if agent == "" {
+		s.sendError(c, "缺少智能体名")
+		return
+	}
+	aiStreamStopTrigger(c.username, agent)
 }
 
 // aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复
@@ -910,6 +969,12 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	// 再组装上下文（此时本次提问已落库，按 excludeID 排除防上下文重复）：
 	// 知识库命中与长期记忆均为向量检索（embedding API 调用），耗时随网络波动，
 	// 放在回显之后——用户先看到自己的消息和"思考中"，模型首字延迟不受影响
+	// 阶段七十三：停止句柄在此处（检索阶段开始前）即注册——"思考中"阶段同样可停止，
+	// 避免 embedding 检索耗时期间点停止无效的死区；问答协程退出时注销
+	streamID := aiNewStreamID()
+	askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
+	aiStreamStopRegister(streamID, c.username, agent.Name, cancelAsk)
+
 	chatMsgs := s.aiBuildContext(c.username, agent, question, record.ID, sid)
 
 	// 阶段四十四：图片提问——最后一条 user 消息替换为多模态 content 数组（文本 + base64 图片）
@@ -926,11 +991,15 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	}
 
 	// 异步调用模型流式接口，避免阻塞 WebSocket 主调度
-	streamID := aiNewStreamID()
 	go func() {
-		askCtx, cancel := context.WithTimeout(context.Background(), aiAskTimeout)
-		defer cancel()
+		// 阶段七十三：协程退出统一收口（注销停止句柄 + 释放超时上下文）
+		defer cancelAsk()
+		defer aiStreamStopUnregister(streamID)
+		// 已推送增量累计（服务端侧留档口径）：正常完成时与 aiStreamChat 返回值一致；
+		// 用户停止（context.Canceled）时按它落库已生成部分（联网搜索循环链路自身不返回部分内容）
+		var pushed strings.Builder
 		pushDelta := func(delta string) {
+			pushed.WriteString(delta)
 			chunk := protocol.Message{
 				MsgType:   protocol.MsgTypeAIStream,
 				FromUser:  agent.Name,
@@ -954,6 +1023,41 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			full, usage, err = aiStreamChat(askCtx, agent, chatMsgs, pushDelta)
 		}
 		if err != nil {
+			// 阶段七十三：用户主动停止（Trae 同款）——已生成部分落库留档（无则不落库），
+			// 结束帧 remark="stopped" 前端收尾气泡；不报错、不提取记忆（部分回答不进长期记忆）
+			if errors.Is(err, context.Canceled) {
+				partial := pushed.String()
+				var msgID uint
+				if strings.TrimSpace(partial) != "" {
+					reply := model.Message{
+						MsgType:     2,
+						FromUser:    agent.Name,
+						ToUser:      c.username,
+						Content:     partial,
+						IsRead:      false,
+						AISessionID: sid, // 与提问同会话盖戳，问答成对归位
+					}
+					store.DB.Create(&reply)
+					msgID = reply.ID
+					s.touchConversation(c.username, agent.Name, messageSummary(partial))
+					s.notifyConvUpdate(c.username)
+				}
+				endMsg := protocol.Message{
+					MsgType:   protocol.MsgTypeAIStreamEnd,
+					FromUser:  agent.Name,
+					ToUser:    c.username,
+					Content:   partial,
+					MsgID:     msgID,
+					StreamID:  streamID,
+					SessionID: sid,
+					Remark:    "stopped",
+					Timestamp: time.Now().Unix(),
+				}
+				data, _ := json.Marshal(endMsg)
+				s.sendToUser(c.username, data)
+				logger.Info("AI 问答被用户停止（用户 %s，智能体 %s，已生成 %d 字）", c.username, agent.Name, len([]rune(partial)))
+				return
+			}
 			logger.Error("AI 问答失败（用户 %s，智能体 %s）：%v", c.username, agent.Name, err)
 			s.sendError(c, "AI 服务异常，请稍后重试")
 			// 结束帧（error 标记）：前端移除打字中的气泡

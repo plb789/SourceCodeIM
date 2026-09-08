@@ -172,6 +172,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleAIAgents(c, msg)
 	case protocol.MsgTypeAIChat:
 		s.handleAIChatMsg(c, msg)
+	// 阶段七十三：AI 流式问答停止（Trae 同款"停止"按钮）
+	case protocol.MsgTypeAIStop:
+		s.handleAIStop(c, msg)
 	// 阶段五十九：智能 Agent 自动化任务（任务发起/取消 + 审批结果上行）
 	case protocol.MsgTypeAgentRun:
 		s.handleAgentRun(c, msg)
