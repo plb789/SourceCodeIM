@@ -1020,8 +1020,9 @@
                 if (IMSocket.send(msg)) {
                     messageInput.value = '';
                     messageInput.focus();
-                    // 本地回显任务目标（任务事件不落库，仅实时展示；最终答复同样实时渲染）
-                    appendMessage(IMSocket.getUsername(), content, 'self', 0, Math.floor(Date.now() / 1000), false);
+                    // 阶段七十：任务目标改由服务端落库回显（真实 msg_id，切会话/重登历史不丢，与 AI 问答同口径）；
+                    // 标记待达回显，PRIVATE 处理器据此抑制"思考中"指示（任务模式无 AI 问答指示）
+                    agentEchoPending[currentChatUser] = true;
                 }
                 return;
             }
@@ -2144,6 +2145,7 @@
     var aiStreams = {};     // 进行中的流式回复：stream_id -> {el, textEl, cursorEl, pending, shown, timer, done, finalId}
     var aiThinking = {};    // 等待 AI 首段回复的"思考中"指示：agent -> {el}
     var lastAIQuestion = {}; // 各智能体最近一次提问（重新生成/编辑提问按钮数据源）：agent -> { raw, text }
+    var agentEchoPending = {}; // 阶段七十：AGENT_RUN 回显待达标记（PRIVATE 处理器据此抑制"思考中"，任务模式无 AI 问答指示）：agent -> true
 
     function isAIAgent(name) {
         return aiAgents.some(function (a) { return a.name === name; });
@@ -2708,7 +2710,7 @@
                 if (currentChatUser !== agent || !isAIAgent(agent)) return; // 已切走会话则不发送
                 messageInput.value = q;
                 removeAISuggestRow(); // 发送即消费，等新一轮回复再生成
-                sendMessage(); // 复用既有提问链路（AI_CHAT 信封/思考中/上下文归口）
+                sendMessage(); // 复用既有提问链路（Agent 模式开启走 AGENT_RUN 新任务，关闭走 AI_CHAT 普通问答）
             });
             row.appendChild(chip);
         });
@@ -2927,8 +2929,9 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
 
-        var st = { taskId: taskId, agent: agent, goal: goal || '', el: div, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
+        var st = { taskId: taskId, agent: agent, goal: goal || '', el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
         agentTaskCards[taskId] = st;
+        removeAISuggestRow(); // 阶段七十：新任务开始即消费上一轮后续提问胶囊（与 AI 问答新一轮回复同语义）
         createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
         return st;
     }
@@ -2981,12 +2984,29 @@
     }
 
     function finishAgentTask(st, text, cls) {
+        st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
         setAgentTaskStatus(st, text, cls);
         st.stopBtn.disabled = true;
         st.stopBtn.textContent = '已结束';
         // 阶段六十二（完整版）：任务结束收起底部任务栏（卡片内已完成状态接管）
         if (st.dock) st.dock.classList.add('hidden');
         if (st.dockPanel) st.dockPanel.classList.add('hidden');
+    }
+
+    // collapseAgentCard 阶段七十：任务完结卡片折叠归口——执行过程（思考/工具/清单）整体收起，
+    // 与重进会话时的重放卡观感一致；点击卡头可再展开/回看完整过程（仅隐藏，不销毁任何子块）
+    function collapseAgentCard(st) {
+        if (!st.headToggle) {
+            st.headToggle = true;
+            st.head.style.cursor = 'pointer'; // 折叠后卡头可点击展开（仅完结态显示手型，运行态不变）
+            st.head.addEventListener('click', function () {
+                var hidden = st.events.classList.toggle('hidden'); // true=现已被隐藏
+                if (!hidden && st.todoList.children.length) st.todoList.classList.remove('hidden');
+                else st.todoList.classList.add('hidden');
+            });
+        }
+        st.events.classList.add('hidden');
+        st.todoList.classList.add('hidden');
     }
 
     // 思考事件：可折叠子块（新一轮思考默认展开，旧的自动折叠，避免卡片过长）
@@ -3086,6 +3106,8 @@
         if (!cur) return false;
         clearInterval(cur.timer);
         cur.timer = null;
+        // 打字机未播完的增量先拼回已展示文本再收尾，避免 done/tool_start 到达时截断答复
+        cur.shown += cur.pending;
         cur.pending = '';
         cur.cursorEl.remove();
         st.curText = null;
@@ -3102,6 +3124,123 @@
         }
         agentTaskScroll();
         return true;
+    }
+
+    // ===== 阶段七十：任务卡会话重放归口 =====
+    // 事件流仅实时渲染（不落库），切会话后卡片 DOM 随 messageList 清空；重进智能体会话按 DB 归口恢复可见性：
+    // 1) 已完结任务：以完结答复气泡（reply_msg_id）为锚点，在其上方内联重放任务卡（点击展开详情与执行轨迹，
+    //    复用任务历史弹窗的渲染链路与样式）；任务在切走期间完结时同步校正内存卡状态（done 事件因会话归属被跳过）
+    // 2) 运行中/排队任务：内存实时卡仍在（事件流继续推送）则重挂 DOM 续播；无内存卡（他端发起）按 DB 快照渲染静态卡
+    function agentReplayTasks() {
+        var agent = currentChatUser;
+        fetch('/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) +
+            '&agent=' + encodeURIComponent(agent) + '&page=1&size=20')
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok || currentChatUser !== agent) return; // 会话已切换：丢弃过期响应
+                var tasks = (res.data && res.data.tasks) || [];
+                var liveAny = false;
+                tasks.forEach(function (t) {
+                    var finished = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
+                    var st = agentTaskCards[t.task_id];
+                    if (finished) {
+                        // 完结任务统一按 DB 归口重放（答复气泡锚点插入，与重新登录视图一致）。
+                        // 原漏洞：内存卡存在（st）时既不重挂也不插重放卡，切会话返回后卡片消失，
+                        // 仅重登（内存为空）才走重放分支显示；实时卡 DOM 已随切会话分离且状态滞后于 DB，不再复用
+                        if (st && !st.finished) finishAgentTask(st, thStateLabel(t.status), t.status); // 切走期间完结：校正滞留状态并收任务栏
+                        if (t.reply_msg_id) agentInsertReplayCard(agent, t);
+                        return;
+                    }
+                    // 运行中/排队：内存实时卡重挂续播（后续事件继续上屏）；无内存卡（他端发起）按 DB 快照渲染静态卡
+                    if (st) {
+                        messageList.appendChild(st.el);
+                    } else {
+                        messageList.appendChild(agentBuildReplayCard(agent, t));
+                    }
+                    liveAny = true;
+                });
+                if (liveAny) agentTaskScroll();
+            })
+            .catch(function () { /* 任务重放失败静默：历史消息与任务历史弹窗兜底 */ });
+    }
+
+    // agentBuildReplayCard 重放卡构造（复用任务历史弹窗卡样式；包裹消息行容器对齐气泡宽度，带智能体头像）
+    function agentBuildReplayCard(agent, t) {
+        var row = document.createElement('div');
+        row.className = 'message other';
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        var card = document.createElement('div');
+        card.className = 'taskhist-card';
+
+        var head = document.createElement('div');
+        head.className = 'taskhist-head';
+        var badge = document.createElement('span');
+        badge.className = 'taskhist-badge st-' + t.status;
+        badge.textContent = thStateLabel(t.status);
+        var goal = document.createElement('span');
+        goal.className = 'taskhist-goal';
+        goal.textContent = t.goal || '(无目标)';
+        goal.title = t.goal || '';
+        head.appendChild(badge);
+        head.appendChild(goal);
+        card.appendChild(head);
+
+        var meta = document.createElement('div');
+        meta.className = 'taskhist-meta';
+        meta.textContent = (t.steps || 0) + ' 步 · ' + thFormatTime(t.update_time || t.create_time);
+        card.appendChild(meta);
+
+        var detail = document.createElement('div');
+        detail.className = 'taskhist-detail hidden';
+        card.appendChild(detail);
+
+        card.addEventListener('click', function () {
+            if (card.classList.contains('expanded')) {
+                card.classList.remove('expanded');
+                detail.classList.add('hidden');
+                return;
+            }
+            card.classList.add('expanded');
+            detail.classList.remove('hidden');
+            detail.textContent = '加载详情…';
+            fetch('/api/agent/task/' + encodeURIComponent(t.task_id) + '?username=' + encodeURIComponent(kbUsername()))
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
+                    var d = res.data || {};
+                    detail.innerHTML = '';
+                    function row(label, text) {
+                        if (!text) return;
+                        var lab = document.createElement('div');
+                        lab.className = 'taskhist-d-label';
+                        lab.textContent = label;
+                        var bod = document.createElement('div');
+                        bod.className = 'taskhist-d-body';
+                        bod.textContent = text;
+                        detail.appendChild(lab);
+                        detail.appendChild(bod);
+                    }
+                    row('任务目标', d.goal);
+                    if (d.status === 'completed') row('最终总结', d.result);
+                    if (d.status === 'failed') row('失败原因', d.error);
+                    if (d.status === 'cancelled') row('取消说明', d.error);
+                    thLoadSteps(detail, t.task_id); // 执行轨迹懒加载（与任务历史弹窗同链路）
+                })
+                .catch(function () { detail.textContent = '详情加载失败'; });
+        });
+
+        body.appendChild(card);
+        row.appendChild(getAvatarEl(agent));
+        row.appendChild(body);
+        return row;
+    }
+
+    // agentInsertReplayCard 重放卡插入完结答复气泡之前（reply_msg_id 锚点；气泡不在已加载窗口则不插，翻页兜底走任务历史）
+    function agentInsertReplayCard(agent, t) {
+        var anchor = messageList.querySelector('.message[data-msg-id="' + t.reply_msg_id + '"]');
+        if (!anchor) return;
+        messageList.insertBefore(agentBuildReplayCard(agent, t), anchor);
     }
 
     // 工具事件：tool_start 建块等待结果回填（同一 tool_call 一块）
@@ -3307,6 +3446,8 @@
                     st.stopBtn.textContent = '停止';
                 }
                 else if (ev.status === 'cancelled') {
+                    // 阶段七十：取消同样折叠执行过程（与完成态观感一致，点击卡头可回看）
+                    collapseAgentCard(st);
                     agentFinalizeText(st, true);
                     finishAgentTask(st, '已取消', 'cancelled');
                     // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
@@ -3324,18 +3465,19 @@
             case 'done':
                 st.bar.style.width = '100%';
                 st.pct.textContent = '100%';
+                // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
+                collapseAgentCard(st);
                 finishAgentTask(st, '已完成', 'done');
-                // 阶段六十二：最终答复已流式打字输出时直接收尾为正文，不再重复渲染整段气泡
+                // 阶段七十：最终答复统一以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）。
+                // 原路径"已流式则收尾为卡内正文"被 .agent-event-body 240px 滚动框限制且混在执行日志里，
+                // 观感似过程输出而非回复（用户感知"总结没出现，切会话才看到"）；现卡内流式文本折叠归入
+                // 思考过程防内容丢失，答复气泡实时上屏，与切会话/重登后的历史视图完全一致
+                agentFinalizeText(st, true);
                 if (ev.result) {
-                    if (!agentFinalizeText(st, false)) {
-                        // 最终答复以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）
-                        // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
-                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
-                    }
+                    // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
+                    appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
                     // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
                     if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
-                } else {
-                    agentFinalizeText(st, true);
                 }
                 agentTaskNotify(msg, st, '已完成');
                 break;
@@ -4063,8 +4205,10 @@
             appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, true,
                 isMine ? msg.is_read === true : undefined);
             // 阶段四十三：发给 AI 智能体的提问上屏后，紧随其后显示"思考中"指示（服务端回显先于流式帧送达，时序稳定）
+            // 阶段七十：AGENT_RUN 回显（agentEchoPending 标记）不显示"思考中"——任务模式由任务卡接管反馈
             if (isMine && isAIAgent(msg.to_user)) {
-                showAIThinking(msg.to_user);
+                if (agentEchoPending[msg.to_user]) delete agentEchoPending[msg.to_user];
+                else showAIThinking(msg.to_user);
             }
             // 正在查看会话时收到对方消息：自动发送已读回执（客户端水位去重）
             if (!isMine && msg.msg_id) {
@@ -4175,6 +4319,8 @@
         clearPendingShot();
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
         clearQuoteTarget();
+        // 阶段七十：清空 AGENT_RUN 回显待达标记（防会话切换后误吞后续 AI 问答的"思考中"指示）
+        for (var ep in agentEchoPending) delete agentEchoPending[ep];
         // 登录持久化联动：记录最近选中会话（key 按用户名隔离，多账号互不干扰），刷新自动登录后恢复该会话
         try { localStorage.setItem('im_last_chat_' + IMSocket.getUsername(), user); } catch (e) {}
         // 原实现：if (currentChatUser !== '') unreadCount[currentChatUser] = 0; 本地计数清零
@@ -4268,6 +4414,10 @@
         });
         // 阶段二十七：首页返回不足一页说明全部记录已加载完
         historyHasMore = records.length >= msg.page_size;
+
+        // 阶段七十：智能体会话历史渲染后归口恢复任务可见性——
+        // 已完结任务在答复气泡前内联重放任务卡（执行过程 DB 归口），运行中任务重挂实时卡续播
+        if (isAIAgent(currentChatUser)) agentReplayTasks();
 
         // 加载历史后发送已读回执（对方消息的最大 ID，客户端水位去重）
         var maxId = 0;

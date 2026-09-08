@@ -170,6 +170,8 @@ type AgentTaskRecord struct {
 	Result     string    `gorm:"column:result;type:text" json:"result"`                           // 最终答复（完成时）
 	Error      string    `gorm:"column:error;type:text" json:"error"`                             // 失败/取消原因
 	Steps      int       `gorm:"column:steps;not null;default:0" json:"steps"`                    // 实际迭代步数
+	// ReplyMsgID 完结通知消息 ID（阶段七十）：前端重进会话时以答复气泡为锚点内联重放任务卡，执行过程历史可见
+	ReplyMsgID uint      `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }

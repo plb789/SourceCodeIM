@@ -1027,6 +1027,37 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 		"6. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
 }
 
+// agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
+// 与 AI 问答提问落库回显同口径 ai.go handleAIChat；最终答复由 agentFinish 落库，问答成对可见）
+func (s *Server) agentEchoGoal(c *Client, agentName, goal string) {
+	record := model.Message{
+		MsgType:  2,
+		FromUser: c.username,
+		ToUser:   agentName,
+		Content:  goal,
+		IsRead:   true, // AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
+	}
+	if err := store.DB.Create(&record).Error; err != nil {
+		logger.Error("Agent 任务目标落库失败（用户 %s）：%v", c.username, err)
+		return
+	}
+	// 回显给发起人全部在线连接（复用私聊渲染链路，多端同步），真实 msg_id 随帧下发
+	echo := protocol.Message{
+		MsgType:   protocol.MsgTypePrivate,
+		FromUser:  c.username,
+		ToUser:    agentName,
+		Content:   goal,
+		MsgID:     record.ID,
+		IsRead:    true,
+		Timestamp: time.Now().Unix(),
+	}
+	echoData, _ := json.Marshal(echo)
+	s.sendToUser(c.username, echoData)
+	// 会话摘要归口（会话列表显示任务目标并排序置顶）
+	s.touchConversation(c.username, agentName, messageSummary(goal))
+	s.notifyConvUpdate(c.username)
+}
+
 // handleAgentRun 阶段五十九：任务发起/取消（上行 msg_type=46）
 // 发起 content 为 JSON {goal, agent_name}；取消 content 为 JSON {task_id, action:"cancel"}
 func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
@@ -1134,6 +1165,9 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		}
 		store.DB.Create(&rec)
 
+		// 阶段七十：任务目标落库回显（提问进会话历史，切会话/重登不丢；先于受理事件保证提问气泡在任务卡上方）
+		s.agentEchoGoal(c, agent.Name, goal)
+
 		// 已受理事件（前端创建任务面板）
 		s.agentEmit(t, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": goal, "agent": agent.Name})
 
@@ -1158,6 +1192,8 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	}
 	store.DB.Create(&rec)
 	logger.Info("Agent 任务入队 %s（用户 %s，排队位次 %d）", t.ID, c.username, position)
+	// 阶段七十：任务目标落库回显（排队任务同口径，提问进会话历史；先于受理事件保证提问气泡在任务卡上方）
+	s.agentEchoGoal(c, agent.Name, goal)
 	s.agentEmit(t, "status", map[string]interface{}{"status": "queued", "text": "排队中", "position": position, "goal": goal, "agent": agent.Name})
 }
 
@@ -1198,6 +1234,8 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 			}
 			if err := store.DB.Create(&reply).Error; err == nil {
 				msgID = reply.ID
+				// 阶段七十：完结答复消息 ID 回写任务记录（前端重进会话按此锚点在答复气泡前内联重放任务卡）
+				store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).Update("reply_msg_id", msgID)
 			} else {
 				logger.Error("Agent 完结通知落库失败（任务 %s）：%v", t.ID, err)
 			}
@@ -1216,6 +1254,25 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 			}
 			t.mu.Unlock()
 			agentExpEnqueue(t.Agent, t.Username, t.Goal, todoSummary, result, t.steps)
+			// 阶段七十：后续提问建议（Trae 同款，与普通 AI 问答同链路）——done 帧先行下发（答复立即收尾），
+			// 建议异步生成后经独立帧推送（客户端胶囊点击直接续问：Agent 模式开启发起新任务，关闭走普通问答）；
+			// 仅 completed 生成（失败/取消无追问语义），失败静默无建议
+			go func() {
+				sugs := aiGenerateSuggestions(t.Agent, t.Goal, result)
+				if len(sugs) == 0 {
+					return
+				}
+				payload, _ := json.Marshal(sugs)
+				sugMsg := protocol.Message{
+					MsgType:   protocol.MsgTypeAISuggest,
+					FromUser:  t.Agent.Name,
+					ToUser:    t.Username,
+					Content:   string(payload),
+					Timestamp: time.Now().Unix(),
+				}
+				sugData, _ := json.Marshal(sugMsg)
+				s.sendToUser(t.Username, sugData)
+			}()
 		case "cancelled":
 			s.agentEmit(t, "status", map[string]interface{}{"status": "cancelled", "text": "任务已取消", "msg_id": msgID})
 		default:
@@ -1537,16 +1594,17 @@ func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, map[string]interface{}{
-			"task_id":     r.TaskID,
-			"username":    r.Username,
-			"agent_name":  r.AgentName,
-			"goal":        truncateRunes(r.Goal, 100),
-			"result":      truncateRunes(r.Result, 300),
-			"error":       truncateRunes(r.Error, 200),
-			"status":      r.Status,
-			"steps":       r.Steps,
-			"create_time": r.CreateTime,
-			"update_time": r.UpdateTime,
+			"task_id":      r.TaskID,
+			"username":     r.Username,
+			"agent_name":   r.AgentName,
+			"goal":         truncateRunes(r.Goal, 100),
+			"result":       truncateRunes(r.Result, 300),
+			"error":        truncateRunes(r.Error, 200),
+			"status":       r.Status,
+			"steps":        r.Steps,
+			"reply_msg_id": r.ReplyMsgID,
+			"create_time":  r.CreateTime,
+			"update_time":  r.UpdateTime,
 		})
 	}
 	return out
@@ -1562,6 +1620,10 @@ func (s *Server) HandleAgentTaskList(w http.ResponseWriter, r *http.Request) {
 	db := store.DB.Model(&model.AgentTaskRecord{}).Where("username = ?", username)
 	if status != "" {
 		db = db.Where("status = ?", status)
+	}
+	// 阶段七十：agent 过滤（会话内任务卡重放按智能体归口拉取，不掺其他会话任务）
+	if ag := strings.TrimSpace(r.URL.Query().Get("agent")); ag != "" {
+		db = db.Where("agent_name = ?", ag)
 	}
 	var total int64
 	db.Count(&total)
