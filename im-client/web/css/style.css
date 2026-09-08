@@ -4239,21 +4239,72 @@ html.m #list-panel.list-collapsed {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ===== 阶段七十六：Agent 工作区文件面板（Trae CN 同款——Agent 模式开启时聊天区右侧显示） ===== */
-/* 整体：聊天列右侧独立分栏（flex 子项），主题色边框分割 */
+/* ===== 阶段七十六：Agent 工作区文件面板（Trae CN 同款三栏——工作区(左) | 预览(中) | 聊天(右)） ===== */
+/* 整体：横向容器（宽度自适应两分栏之和），插在聊天主体左侧，右缘与聊天区分界 */
 .ws-panel {
-    width: 320px;
     flex-shrink: 0;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     min-height: 0;
-    border-left: 1px solid var(--border, #e5e5e5);
+    border-right: 1px solid var(--border, #e5e5e5);
     background: var(--panel-bg, #fff);
     overflow: hidden;
 }
 
 .ws-panel.hidden {
     display: none;
+}
+
+/* 左分栏：工作区文件树（宽度可拖拽，默认 230px） */
+.ws-col-tree {
+    width: var(--ws-tree-w, 230px);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* 中分栏：文件预览/编辑（宽度可拖拽，默认 400px；无标签隐藏时整体收起） */
+.ws-col-view {
+    width: var(--ws-view-w, 400px);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid var(--border, #ececec);
+}
+
+.ws-col-view.hidden {
+    display: none;
+}
+
+/* 分栏拖拽条：贴分栏右缘的悬浮热区（宽 6px），hover/拖拽中显主题色竖线（输入框拖拽条同款交互） */
+.ws-splitter {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -3px;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 5;
+}
+
+.ws-splitter::after {
+    content: '';
+    position: absolute;
+    left: 2.5px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: transparent;
+    transition: background 0.15s ease;
+}
+
+.ws-splitter:hover::after,
+.ws-splitter.dragging::after {
+    background: var(--primary);
 }
 
 /* 头部：标题 + 工作区根路径回显（超长省略悬停看全）+ 刷新 */
@@ -4430,20 +4481,7 @@ html.m #list-panel.list-collapsed {
     user-select: none;
 }
 
-/* 文件预览/编辑区（面板下半部） */
-.ws-panel-view {
-    height: 46%;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    border-top: 1px solid var(--border, #ececec);
-    background: color-mix(in srgb, var(--hover, #fafafa) 55%, transparent);
-}
-
-.ws-panel-view.hidden {
-    display: none;
-}
+/* 文件预览/编辑区：三栏化后为独立中分栏（.ws-col-view，见顶部容器区），旧上下堆叠样式已移除 */
 
 .ws-view-head {
     display: flex;
@@ -4536,6 +4574,115 @@ html.m #list-panel.list-collapsed {
     overscroll-behavior: contain;
 }
 
+/* 面包屑路径条（Trae CN 同款）：固定标签栏下方靠左，超长时 JS 省略头部段（保留靠近文件名的尾部） */
+.ws-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border, #ececec);
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    font-size: 11px;
+    overflow: hidden;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.ws-crumbs-item {
+    color: var(--text-secondary, #999);
+    flex-shrink: 0;
+}
+
+.ws-crumbs-item:hover {
+    color: var(--text, #333);
+}
+
+.ws-crumbs-item.file {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.ws-crumbs-sep {
+    color: var(--text-secondary, #bbb);
+    flex-shrink: 0;
+}
+
+.ws-crumbs-ellipsis {
+    color: var(--text-secondary, #bbb);
+    flex-shrink: 0;
+}
+
+/* 当前行高亮条：代码区悬停/点击行淡主题色底（pointer-events 穿透不挡交互，行号区被其遮挡忽略） */
+.ws-code-hl {
+    position: absolute;
+    left: 0;
+    z-index: 0;
+    background: color-mix(in srgb, var(--primary) 9%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
+    pointer-events: none;
+}
+
+/* 悬停定义提示（Trae CN 同款）：签名 + 定义行号，点击跳转；挂 body fixed 定位 */
+.ws-hover-tip {
+    position: fixed;
+    z-index: 10000;
+    display: none;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.ws-hover-tip-sig {
+    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-size: 12px;
+    color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-hover-tip-meta {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--primary);
+}
+
+/* 代码区（预览/编辑共用）：行号列 + 代码列横排，滚动由 wrap 统一承接（自绘滑块挂在 wrap 上） */
+.ws-code-wrap {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    position: relative; /* 当前行高亮条(.ws-code-hl)的定位基准：必须相对本滚动区，否则偏移到分栏坐标系 */
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: color-mix(in srgb, var(--hover, #fafafa) 55%, transparent);
+}
+
+/* 行号列：与代码同字体行高严格对齐；横向滚动时 sticky 固定在左缘 */
+.ws-code-ln {
+    flex-shrink: 0;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 34px;
+    padding: 10px 8px 10px 6px;
+    text-align: right;
+    white-space: pre;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: Consolas, Monaco, 'Courier New', monospace;
+    color: var(--text-secondary, #999);
+    opacity: 0.75;
+    background: var(--panel-bg, #fff);
+    border-right: 1px solid var(--border, #ececec);
+    user-select: none;
+}
+
 .ws-view-pre {
     margin: 0;
     padding: 10px 12px;
@@ -4543,6 +4690,8 @@ html.m #list-panel.list-collapsed {
     line-height: 1.6;
     font-family: Consolas, Monaco, 'Courier New', monospace;
     tab-size: 4;
+    flex: 1;
+    min-width: 0;
 }
 
 .ws-view-pre code {
@@ -4554,8 +4703,8 @@ html.m #list-panel.list-collapsed {
 
 /* 编辑态：等宽 textarea 满幅 */
 .ws-edit-ta {
-    width: 100%;
-    height: 100%;
+    flex: 1;
+    min-width: 0;
     display: block;
     border: none;
     outline: none;
@@ -4567,7 +4716,9 @@ html.m #list-panel.list-collapsed {
     tab-size: 4;
     color: var(--text, #333);
     background: transparent;
-    overflow: auto;             /* 内容超长可滚（系统滚动条全局禁用，自绘滑块经 _osbInit 挂载） */
+    white-space: pre;           /* 行号对齐：不软换行 */
+    overflow-x: auto;           /* 长行横向滚（纵向由 JS 撑高 + wrap 统一滚动） */
+    overflow-y: hidden;
     overscroll-behavior: contain;
 }
 

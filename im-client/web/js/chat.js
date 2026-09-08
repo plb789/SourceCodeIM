@@ -3865,6 +3865,17 @@
         var aside = document.createElement('aside');
         aside.id = 'ws-panel';
         aside.className = 'ws-panel hidden';
+        // 三栏布局（Trae CN 同款）：工作区树(左) | 拖拽条 | 预览(中)，聊天主体排右侧；
+        // 两栏宽度经 CSS 变量注入，拖拽分隔条调整并 localStorage 持久化
+        try {
+            var tw = parseInt(localStorage.getItem('ws_tree_w'), 10);
+            var vw = parseInt(localStorage.getItem('ws_view_w'), 10);
+            if (tw >= 160 && tw <= 480) aside.style.setProperty('--ws-tree-w', tw + 'px');
+            if (vw >= 240 && vw <= 760) aside.style.setProperty('--ws-view-w', vw + 'px');
+        } catch (e) {}
+        // 左分栏：工作区树
+        var colTree = document.createElement('div');
+        colTree.className = 'ws-col-tree';
         // 头部：标题 + 工作区根路径回显 + 刷新
         var head = document.createElement('div');
         head.className = 'ws-panel-head';
@@ -3885,9 +3896,16 @@
         // 文件树（懒加载：展开目录时才拉取子级）
         wsPanel.treeEl = document.createElement('div');
         wsPanel.treeEl.className = 'ws-panel-tree';
-        // 文件预览/编辑区（Trae CN 同款：标签栏 + 内容区，多文件并存切换）
+        colTree.appendChild(head);
+        colTree.appendChild(wsPanel.treeEl);
+        // 左分隔条：拖拽调整树宽（贴树分栏右缘的悬浮热区，hover 显主题色竖线）
+        var splitL = document.createElement('div');
+        splitL.className = 'ws-splitter';
+        splitL.title = '拖拽调整宽度';
+        colTree.appendChild(splitL);
+        // 中分栏：文件预览/编辑（Trae CN 同款标签页 + 内容区，多文件并存切换）
         wsPanel.viewEl = document.createElement('div');
-        wsPanel.viewEl.className = 'ws-panel-view hidden';
+        wsPanel.viewEl.className = 'ws-col-view hidden';
         var viewHead = document.createElement('div');
         viewHead.className = 'ws-view-head';
         wsPanel.tabBarEl = document.createElement('div');
@@ -3920,15 +3938,51 @@
         viewHead.appendChild(btnClose);
         wsPanel.viewBody = document.createElement('div');
         wsPanel.viewBody.className = 'ws-view-body';
+        // 面包屑路径条（Trae CN 同款）：固定在标签栏下方显示当前文件完整路径，不随内容滚动
+        wsPanel.crumbsEl = document.createElement('div');
+        wsPanel.crumbsEl.className = 'ws-crumbs';
         wsPanel.viewEl.appendChild(viewHead);
+        wsPanel.viewEl.appendChild(wsPanel.crumbsEl);
         wsPanel.viewEl.appendChild(wsPanel.viewBody);
+        // 右分隔条：拖拽调整预览宽（贴预览分栏右缘；预览隐藏时分栏连带隐藏，无需单独同步）
+        var splitR = document.createElement('div');
+        splitR.className = 'ws-splitter';
+        splitR.title = '拖拽调整宽度';
+        wsPanel.viewEl.appendChild(splitR);
         // 阶段七十六：文件树与预览区挂自绘悬浮滑块（全局系统滚动条已禁用，动态容器须显式注册）
         if (window._osbInit) { window._osbInit(wsPanel.treeEl); window._osbInit(wsPanel.viewBody); }
-        aside.appendChild(head);
-        aside.appendChild(wsPanel.treeEl);
+        aside.appendChild(colTree);
         aside.appendChild(wsPanel.viewEl);
-        view.appendChild(aside);
+        // 面板插到聊天主体之前（工作区左、预览中、聊天右）
+        var mainChat = view.querySelector('.main-chat');
+        if (mainChat) view.insertBefore(aside, mainChat); else view.appendChild(aside);
         wsPanel.aside = aside;
+        // 水平拖拽调宽（与聊天输入框高度拖拽同款交互：mousedown→mousemove→mouseup，持久化）
+        function wsBindSplitter(sp, col, cssVar, minW, maxW, storeKey) {
+            sp.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                sp.classList.add('dragging');
+                document.body.style.userSelect = 'none'; // 拖拽期间禁用文本选择
+                var startX = e.clientX;
+                var startW = col.getBoundingClientRect().width;
+                function onMove(ev) {
+                    // 拖拽边界跟随鼠标：右移 dx>0 加宽（两栏一致，往哪拖边界往哪走）
+                    var w = Math.min(Math.max(startW + (ev.clientX - startX), minW), maxW);
+                    aside.style.setProperty(cssVar, Math.round(w) + 'px');
+                }
+                function onUp() {
+                    sp.classList.remove('dragging');
+                    document.body.style.userSelect = '';
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    try { localStorage.setItem(storeKey, String(Math.round(col.getBoundingClientRect().width))); } catch (err) {}
+                }
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+        wsBindSplitter(splitL, colTree, '--ws-tree-w', 160, 480, 'ws_tree_w');
+        wsBindSplitter(splitR, wsPanel.viewEl, '--ws-view-w', 240, 760, 'ws_view_w');
         // 响应归路：服务端 63 帧按 req_id 投递
         IMSocket.on(MSG.WS_FILE_RESP, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
@@ -4225,15 +4279,65 @@
         wsPanel.btnSave.classList.add('hidden');
         wsPanel.btnCancel.classList.add('hidden');
         wsPanel.viewBody.textContent = '';
-        if (!t) return;
+        if (!t) { wsPanel.crumbsEl.textContent = ''; return; }
+        // 面包屑路径（Trae CN 同款）：靠左正序显示，逐段 › 分隔，末段文件名高亮；超长省略头部段
+        wsPanel.crumbsEl.textContent = '';
+        var segs = path.split(/[\\/]+/).filter(function (s) { return s.length > 0; });
+        segs.forEach(function (seg, si) {
+            if (si > 0) {
+                var sep = document.createElement('span');
+                sep.className = 'ws-crumbs-sep';
+                sep.textContent = '›';
+                wsPanel.crumbsEl.appendChild(sep);
+            }
+            var it = document.createElement('span');
+            it.className = 'ws-crumbs-item' + (si === segs.length - 1 ? ' file' : '');
+            it.textContent = seg;
+            it.title = path;
+            wsPanel.crumbsEl.appendChild(it);
+        });
+        // 宽度放不下时从头移除段落，最左补 …（保留靠近文件名的尾部段）
+        (function fitCrumbs() {
+            var el = wsPanel.crumbsEl;
+            var guard = 0;
+            while (el.scrollWidth > el.clientWidth && el.children.length > 2 && guard++ < 20) {
+                el.removeChild(el.firstChild);                       // 首段
+                if (el.firstChild && el.firstChild.classList.contains('ws-crumbs-sep')) el.removeChild(el.firstChild); // 随后分隔符
+                if (!el.querySelector('.ws-crumbs-ellipsis')) {
+                    var dots = document.createElement('span');
+                    dots.className = 'ws-crumbs-ellipsis';
+                    dots.textContent = '…';
+                    el.insertBefore(dots, el.firstChild);
+                }
+            }
+        })();
         var editable = !t.loading && !t.error && !t.binary;
         if (wsPanel.editing && editable) {
             var ta = document.createElement('textarea');
             ta.className = 'ws-edit-ta';
             ta.value = t.draft !== undefined ? t.draft : t.content;
             ta.spellcheck = false;
-            wsPanel.viewBody.appendChild(ta);
-            if (window._osbInit) window._osbInit(ta);
+            ta.wrap = 'off'; // 关闭软换行（长行横向滚动），保证行号与代码行一一对应
+            // 编辑态行号列（Trae CN 同款）：输入增删行时同步刷新行号
+            var lnCol = document.createElement('div');
+            lnCol.className = 'ws-code-ln';
+            var editWrap = document.createElement('div');
+            editWrap.className = 'ws-code-wrap';
+            editWrap.appendChild(lnCol);
+            editWrap.appendChild(ta);
+            wsPanel.viewBody.appendChild(editWrap);
+            function syncEditLn() {
+                var n = ta.value.split('\n').length;
+                var s = '';
+                for (var i = 1; i <= n; i++) s += i + '\n';
+                lnCol.textContent = s;
+                // textarea 不会随内容自动撑高，显式撑到内容高度（纵向滚动由 wrap 承接，行号随之对齐）
+                ta.style.height = 'auto';
+                ta.style.height = ta.scrollHeight + 'px';
+            }
+            ta.addEventListener('input', syncEditLn);
+            syncEditLn();
+            if (window._osbInit) window._osbInit(editWrap);
             wsPanel.ta = ta;
             wsPanel.btnSave.classList.remove('hidden');
             wsPanel.btnCancel.classList.remove('hidden');
@@ -4278,6 +4382,15 @@
         var text = t.content;
         var ext = (path.replace(/^.*\./, '') || '').toLowerCase();
         var lang = WS_LANG_MAP[ext] || '';
+        // 源码预览：行号列 + 高亮代码（同字体行高严格对齐，横向滚动时行号 sticky 固定）
+        var wrap = document.createElement('div');
+        wrap.className = 'ws-code-wrap';
+        var ln = document.createElement('div');
+        ln.className = 'ws-code-ln';
+        var lines = text.split('\n');
+        var lnText = '';
+        for (var i = 1; i <= lines.length; i++) lnText += i + '\n';
+        ln.textContent = lnText;
         var pre = document.createElement('pre');
         pre.className = 'ws-view-pre';
         var code = document.createElement('code');
@@ -4297,8 +4410,123 @@
         }
         if (!done) code.textContent = text;
         pre.appendChild(code);
-        wsPanel.viewBody.appendChild(pre);
+        wrap.appendChild(ln);
+        wrap.appendChild(pre);
+        wsPanel.viewBody.appendChild(wrap);
+        wsPanelBindCode(wrap, code, t.content, lines.length); // 当前行高亮 + 悬停定义提示（Trae CN 同款交互）
         wsPanel.btnEdit.classList.remove('hidden');
+    }
+
+    // 扫描当前文件内的函数/方法/类型定义（轻量词法级，非 LSP）：悬停标识符命中定义时给提示
+    function wsScanDefs(content) {
+        var defs = [];
+        var rows = content.split('\n');
+        // 通用函数定义：func/def/function 关键字 + c 系“类型 名(…){”粗匹配（行内无 = 防调用误报）
+        var reKw = /^\s*(?:func|def|function)\s+\(?[^)]*\)?\s*\(?\s*([A-Za-z_$][\w$]*)/;
+        var reBrace = /^ {0,8}([A-Za-z_][\w$]*(?:::\s*[\w$]+)?)\s*\([^;=]*\)\s*(?:const\s*)?\{?\s*$/;
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            if (!row.trim() || /^\s*\/\//.test(row) || /^\s*#/.test(row) || /^\s*\*/.test(row)) continue;
+            var m = row.match(reKw) || (!/[=;]/.test(row) ? row.match(reBrace) : null);
+            if (m && m[1] && m[1].length > 1) {
+                defs.push({ name: m[1], line: i, sig: row.trim().slice(0, 200) });
+            }
+        }
+        return defs;
+    }
+
+    // 代码区交互：当前行高亮（悬停跟随/点击固定）+ 标识符悬停提示（文件内定义，点击跳转定义行）
+    function wsPanelBindCode(wrap, code, content, lineCount) {
+        var cs = getComputedStyle(code);
+        var LINE_H = parseFloat(cs.lineHeight) || 19.2;
+        var tip = null;
+        // 当前行高亮条（内容坐标系，随 wrap 滚动）
+        var hl = document.createElement('div');
+        hl.className = 'ws-code-hl';
+        hl.style.display = 'none';
+        wrap.appendChild(hl);
+        var codeTop = code.getBoundingClientRect().top - wrap.getBoundingClientRect().top + wrap.scrollTop - (parseFloat(cs.paddingTop) || 0);
+        var fixedLine = -1; // 点击固定的行（-1 无）
+        function showHl(line0) {
+            if (line0 < 0 || line0 >= lineCount) { hl.style.display = 'none'; return; }
+            hl.style.display = 'block';
+            hl.style.top = (codeTop + line0 * LINE_H) + 'px';
+            hl.style.height = LINE_H + 'px';
+            hl.style.width = Math.max(wrap.scrollWidth, wrap.clientWidth) + 'px';
+        }
+        function lineFromEvent(e) {
+            var rect = code.getBoundingClientRect();
+            return Math.floor((e.clientY - rect.top) / LINE_H);
+        }
+        // 悬停提示（挂 body 避免被 wrap overflow 裁剪）
+        function hideTip() { if (tip) { tip.remove(); tip = null; } }
+        function showTip(e, def) {
+            if (!tip) {
+                tip = document.createElement('div');
+                tip.className = 'ws-hover-tip';
+                tip.addEventListener('mousedown', function (ev) {
+                    ev.stopPropagation();
+                    var target = def.line; // 跳定义行并闪烁
+                    showHl(target);
+                    fixedLine = target;
+                    wrap.scrollTop = Math.max(0, target * LINE_H - wrap.clientHeight / 3);
+                    hideTip();
+                });
+                document.body.appendChild(tip);
+            }
+            tip.textContent = '';
+            var sig = document.createElement('div');
+            sig.className = 'ws-hover-tip-sig';
+            sig.textContent = def.sig;
+            var meta = document.createElement('div');
+            meta.className = 'ws-hover-tip-meta';
+            meta.textContent = '第 ' + (def.line + 1) + ' 行定义 · 点击跳转';
+            tip.appendChild(sig);
+            tip.appendChild(meta);
+            var tw = Math.min(520, Math.max(260, sig.textContent.length * 7));
+            tip.style.width = tw + 'px';
+            var x = Math.min(e.clientX + 14, window.innerWidth - tw - 12);
+            var y = e.clientY + 18;
+            tip.style.left = x + 'px';
+            tip.style.top = y + 'px';
+            tip.style.display = 'block';
+        }
+        // 标识符提取（caretRangeFromPoint 字符级向两侧扩展）
+        function identAt(e) {
+            var range = document.caretRangeFromPoint(e.clientX, e.clientY);
+            if (!range || !range.startContainer || range.startContainer.nodeType !== 3) return '';
+            var text = range.startContainer.textContent || '';
+            var off = range.startOffset;
+            var isw = function (ch) { return /[A-Za-z0-9_$]/.test(ch); };
+            var s = off, t2 = off;
+            while (s > 0 && isw(text[s - 1])) s--;
+            while (t2 < text.length && isw(text[t2])) t2++;
+            return s === t2 ? '' : text.slice(s, t2);
+        }
+        var defs = wsScanDefs(content);
+        var lastIdent = '';
+        wrap.addEventListener('mousemove', function (e) {
+            showHl(lineFromEvent(e));
+            var ident = identAt(e);
+            if (ident && ident !== lastIdent) {
+                var hit = null;
+                for (var i = 0; i < defs.length; i++) if (defs[i].name === ident) { hit = defs[i]; break; }
+                if (hit) showTip(e, hit); else hideTip();
+            } else if (!ident) {
+                hideTip();
+            }
+            lastIdent = ident;
+        });
+        wrap.addEventListener('mouseleave', function () {
+            showHl(fixedLine);
+            hideTip();
+            lastIdent = '';
+        });
+        wrap.addEventListener('click', function (e) {
+            var line0 = lineFromEvent(e);
+            fixedLine = (line0 === fixedLine) ? -1 : line0; // 点击固定当前行，再点同行取消
+            showHl(fixedLine >= 0 ? fixedLine : line0);
+        });
     }
 
     // 进入编辑模式（纯文本 textarea，等宽字体与预览一致；二进制/加载中/错误禁编辑）
