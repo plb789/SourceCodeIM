@@ -16,8 +16,8 @@ set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-bui
 set "BIN_DIR=%~dp0..\bin"
 set "UNPACKED_DIR=%~dp0dist\win-unpacked"
 
-rem 应用图标路径（可配置）：更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径；
-rem 注意 exe 图标与 main.js 托盘图标（APP_ICON 常量）建议同步修改保持一致
+rem 应用图标路径（可配置）：更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径
+rem NOTE: keep this icon in sync with main.js tray icon const
 set "APP_ICON=%~dp064.ico"
 
 echo [1/4] 检查 Node 环境...

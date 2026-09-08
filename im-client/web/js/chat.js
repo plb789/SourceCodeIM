@@ -3174,12 +3174,13 @@
     }
 
     // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
-    // 阶段六十八：新增 http_request / web_search 映射
-    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索' };
+    // 阶段六十八：新增 http_request / web_search 映射；阶段七十四：新增 edit_file/delete_file/list_dir/grep 映射
+    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', edit_file: '编辑文件', delete_file: '删除文件', list_dir: '列目录', grep: '搜索文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索' };
 
     function agentToolChipText(tool, params) {
         var p = params || {};
-        if (tool === 'read_file' || tool === 'write_file') return String(p.path || p.file || '');
+        if (tool === 'read_file' || tool === 'write_file' || tool === 'edit_file' || tool === 'delete_file' || tool === 'list_dir') return String(p.path || p.file || '');
+        if (tool === 'grep') return String(p.pattern || '');
         if (tool === 'run_command') return String(p.command || p.cmd || '');
         if (tool === 'http_request') {
             var m = String(p.method || 'GET').toUpperCase();
@@ -3700,17 +3701,18 @@
         okBtn.className = 'agent-approve-ok';
         okBtn.textContent = '同意执行';
         // 阶段六十二：同意并加入白名单——run_command 放行该命令首词（链式命令除外），write_file 开启写文件免审批，
-        // 服务端 DB 持久化，重启不丢；后续同类操作不再弹审批
+        // 服务端 DB 持久化，重启不丢；后续同类操作不再弹审批。
+        // 阶段七十四：edit_file 共用写文件免审批；delete_file 不可加白（不可恢复操作逐次确认），不显示加白按钮
         var wlBtn = document.createElement('button');
         wlBtn.className = 'agent-approve-wl';
         wlBtn.textContent = '同意并加白';
-        wlBtn.title = ev.tool === 'write_file' ? '同意本次，且之后的写文件操作不再需要审批'
+        wlBtn.title = (ev.tool === 'write_file' || ev.tool === 'edit_file') ? '同意本次，且之后的写/编辑文件操作不再需要审批'
             : '同意本次，且之后以相同命令开头的操作不再需要审批（链式命令除外）';
         var noBtn = document.createElement('button');
         noBtn.className = 'agent-approve-no';
         noBtn.textContent = '拒绝';
         actions.appendChild(okBtn);
-        actions.appendChild(wlBtn);
+        if (ev.tool !== 'delete_file') actions.appendChild(wlBtn);
         actions.appendChild(noBtn);
         block.appendChild(head);
         block.appendChild(reason);

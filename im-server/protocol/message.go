@@ -79,6 +79,10 @@ const (
 
 	// 阶段七十三：AI 流式问答停止（Trae CN 同款"停止"按钮）——中断该用户对该智能体进行中的流式回复
 	MsgTypeAIStop = 59 // 上行：停止问答（to_user=智能体名）；停止后由问答协程统一收口：已生成部分落库 + 下行 45 结束帧（remark="stopped"）
+
+	// 阶段七十五：命令执行实时输出流 + 转后台（TRAE 同款——长命令不阻塞对话，输出控制台实时可见）
+	MsgTypeAgentToolOutput = 60 // 上行：PC 渲染进程 → 服务端，本地命令输出增量/终态（content 为 JSON：{task_id,step,chunk,total_bytes,over,final,exit_code,duration_ms}；final=true 为进程结束帧，服务端转发为任务事件流 tool_output/tool_exit）
+	MsgTypeAgentBg         = 61 // 双向：前端 → 服务端请求长命令转后台（{task_id,step}）；服务端执行的服务端本地命令直接生效，PC 本地执行时服务端原样转发给 PC 渲染进程桥接到执行器
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
