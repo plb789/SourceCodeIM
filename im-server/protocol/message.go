@@ -29,7 +29,7 @@ const (
 	MsgTypeBlacklist         = 24 // 黑名单操作
 	MsgTypeFriendUpdate      = 25 // 好友备注/分组更新
 	MsgTypeBlacklistList     = 26 // 黑名单列表同步
-	MsgTypeConvClear         = 27 // 会话清空（仅清当前用户视图，云端记录保留）
+	MsgTypeConvClear         = 27 // 会话清空（clear=false 缺省：仅清当前用户视图，写删除表云端保留；clear=true：永久删除——物理删除云端消息，群聊拒绝，AI 会话按 session_id 限定当前会话）
 	MsgTypeConvDelete        = 28 // 会话删除（从列表移除，云端记录保留）
 	MsgTypeMsgPin            = 29 // 消息置顶/取消置顶（content: pin/unpin，msg_id 指定消息）
 	MsgTypeMsgPinSync        = 30 // 置顶消息状态同步（content 为 JSON，msg_id=0 表示无置顶）
@@ -71,7 +71,7 @@ const (
 	// 阶段七十一：AI 多会话（Trae CN 同款"新建会话"）——用户+智能体 多会话归口，im_message 表结构零改动
 	MsgTypeAISessionList = 54 // 上行请求/下行响应：会话列表（上行 to_user=智能体名；下行 content 为 JSON：{current_id,sessions:[{id,title,create_time}]}）
 	MsgTypeAISessionNew  = 55 // 上行：新建会话（to_user=智能体名；下行 content 为 JSON：{session_id,title}，首条消息落库时回填区间起点）
-	MsgTypeAISessionDel  = 56 // 上行：删除会话（to_user=智能体名，session_id 指定；默认会话（最早一条）禁止删除）
+	MsgTypeAISessionDel  = 56 // 上行：删除/清空会话（to_user=智能体名，session_id 指定；默认会话（最早一条）禁止删除）。clear=true 时为"清空会话"：真删除该会话全部消息与任务记录（含默认会话 sid=0，会话行保留）；clear=false 为删除会话：消息并入默认会话
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -94,6 +94,7 @@ type Message struct {
 	Group       string `json:"group"`        // 好友分组
 	StreamID    string `json:"stream_id"`    // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
 	SessionID   uint   `json:"session_id"`   // 阶段七十一：AI 多会话 ID（HISTORY 按会话区间拉历史；0=不区分会话取全量）
+	Clear       bool   `json:"clear,omitempty"` // 阶段七十二：AI_SESSION_DEL 置 true 时为"清空会话"（真删除消息+任务记录，会话行保留；sid=0 允许），缺省 false 维持"删除会话并入默认"语义
 	Platform    string `json:"platform"`     // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
 	// AI 回复 Token 消耗（服务端 usage 归口，随 AI_STREAM_END 结束帧下发；其余消息恒为 0 不序列化）
 	PromptTokens     int `json:"prompt_tokens,omitempty"`

@@ -1681,6 +1681,14 @@ html, body {
     color: #fff;
 }
 
+/* 阶段七十二：弹窗第二动作（红色危险项，如"永久删除"），微信式红字按钮 */
+.modal-btn.modal-btn-danger {
+    color: #e64340;
+}
+.modal-btn.modal-btn-danger:hover {
+    background: rgba(230, 67, 64, 0.08);
+}
+
 /* Toast 轻提示 */
 .toast {
     position: fixed;
@@ -5004,6 +5012,7 @@ html.m #friend-menu {
     flex-shrink: 0;
     width: 22px;
     height: 22px;
+    margin-left: 4px; /* 清空+删除双按钮并排时留出间距 */
     padding: 0;
     border: none;
     border-radius: 50%;

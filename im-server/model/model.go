@@ -234,13 +234,16 @@ func (AgentStepRecord) TableName() string { return "im_agent_step" }
 
 // Message 聊天消息表 im_message
 type Message struct {
-	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	MsgType  int8   `gorm:"column:msg_type;type:tinyint;not null" json:"msg_type"` // 1群聊 2私聊 3文件消息
-	FromUser string `gorm:"column:from_user;type:varchar(32);not null" json:"from_user"`
-	ToUser   string `gorm:"column:to_user;type:varchar(32)" json:"to_user"` // 群聊为空
+	ID      uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	MsgType int8 `gorm:"column:msg_type;type:tinyint;not null" json:"msg_type"` // 1群聊 2私聊 3文件消息
+	// 阶段七十二：复合索引 idx_msg_from_to_read（from_user+to_user+is_read 全等值前缀）——
+	// 登录会话列表的未读数 COUNT 原为全表扫描（EXPLAIN type=ALL，千万级消息时登录分钟级卡顿），
+	// 私聊历史按双方互发对查询同样受益；群聊历史/AI 会话历史仍走主键倒扫 LIMIT（实测无劣化）
+	FromUser string `gorm:"column:from_user;type:varchar(32);not null;index:idx_msg_from_to_read,priority:1" json:"from_user"`
+	ToUser   string `gorm:"column:to_user;type:varchar(32);index:idx_msg_from_to_read,priority:2" json:"to_user"` // 群聊为空
 	Content  string `gorm:"column:content;type:text" json:"content"`
-	IsRead   bool   `gorm:"column:is_read;default:false" json:"is_read"`   // 已读状态
-	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"` // 是否已撤回
+	IsRead   bool   `gorm:"column:is_read;default:false;index:idx_msg_from_to_read,priority:3" json:"is_read"` // 已读状态
+	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"`                                     // 是否已撤回
 	// AI 回复 Token 消耗（服务端 usage 归口；普通消息恒为 0，历史加载同样可显示）
 	PromptTokens     int `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`
 	CompletionTokens int `gorm:"column:completion_tokens;default:0" json:"completion_tokens,omitempty"`

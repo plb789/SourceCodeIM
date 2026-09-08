@@ -183,12 +183,29 @@ func (s *Server) handleAISessionNew(c *Client, msg *protocol.Message) {
 	c.send(out)
 }
 
-// handleAISessionDel 删除会话（session_id 指定；默认会话 sid=0 不可删）：
-// 会话内消息与任务记录归并默认会话（盖戳改 0，历史不丢），随后回传最新会话列表
+// handleAISessionDel 删除/清空会话（session_id 指定）。
+// clear=false（缺省）：删除会话——会话内消息与任务记录归并默认会话（盖戳改 0，历史不丢），会话行删除；sid=0 禁止
+// clear=true：清空会话——真删除该会话全部消息与任务记录（物理 DELETE，不可恢复），会话行保留可继续用；
+// sid=0（默认会话）允许清空（这正是消化默认会话堆积的入口），必须按用户对限定删除范围
+// （ai_session_id=0 是全局共享值，裸删会清掉所有用户的默认会话）；完成后回传最新会话列表
 func (s *Server) handleAISessionDel(c *Client, msg *protocol.Message) {
 	agent := aiAgentForUser(strings.TrimSpace(msg.ToUser), c.username)
 	if agent == nil {
 		s.sendError(c, "AI 助手不存在或已被移除")
+		return
+	}
+	if msg.Clear {
+		// 清空会话：sid>0 校验会话归属（防协议直发清他人会话），sid=0 恒通过
+		if msg.SessionID > 0 {
+			var row model.AISession
+			if err := store.DB.Where("id = ? AND username = ? AND agent_name = ?", msg.SessionID, c.username, agent.Name).
+				First(&row).Error; err != nil {
+				s.sendError(c, "会话不存在或已被删除")
+				return
+			}
+		}
+		aiSessionClearMessages(c.username, agent.Name, msg.SessionID)
+		s.handleAISessionList(c, msg)
 		return
 	}
 	if msg.SessionID == 0 {
@@ -208,4 +225,28 @@ func (s *Server) handleAISessionDel(c *Client, msg *protocol.Message) {
 	store.DB.Delete(&row)
 	// 删除后回传最新会话列表（客户端直接刷新面板与当前会话）
 	s.handleAISessionList(c, msg)
+}
+
+// aiSessionClearMessages 清空会话真删除：物理 DELETE 消息与任务记录。
+// 消息按 用户+智能体 双向对限定（sid=0 全局共享值必须带用户对）；单条 DELETE LIMIT 分批执行
+// （百万级堆积一次删除会产生长事务锁表，分批 5000/批逐批清直到删空，批间让出写锁）
+func aiSessionClearMessages(username, agentName string, sid uint) {
+	const batch = 5000
+	cond := "ai_session_id = ? AND msg_type IN (2,4,5) AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))"
+	args := []interface{}{sid, username, agentName, agentName, username}
+	for i := 0; i < 10000; i++ { // 万批保险丝：5000 万行上限，防异常死循环
+		res := store.DB.Exec("DELETE FROM im_message WHERE "+cond+" LIMIT ?", append(args, batch)...)
+		if res.Error != nil {
+			logger.Error("清空会话（%s/%s/sid=%d）删除消息失败: %v", username, agentName, sid, res.Error)
+			break
+		}
+		if res.RowsAffected < int64(batch) {
+			break
+		}
+	}
+	// 任务记录经 model 归口删除（TableName 由 model 统一，禁手写表名——原误写 im_agent_task_record 与真实表 im_agent_task 不符静默删空）
+	if err := store.DB.Where("username = ? AND agent_name = ? AND session_id = ?", username, agentName, sid).
+		Delete(&model.AgentTaskRecord{}).Error; err != nil {
+		logger.Error("清空会话（%s/%s/sid=%d）删除任务记录失败: %v", username, agentName, sid, err)
+	}
 }

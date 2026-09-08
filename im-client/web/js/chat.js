@@ -112,14 +112,18 @@
     var modalInput = document.getElementById('modal-input');
     var modalOk = document.getElementById('modal-ok');
     var modalCancel = document.getElementById('modal-cancel');
+    // 阶段七十二：弹窗第二动作按钮（红色危险操作，如"永久删除"）——showChoice 双选项确认用，常规弹窗恒隐藏
+    var modalExtra = document.getElementById('modal-extra');
     var toastEl = document.getElementById('toast');
     var toastTimer = null;
     var modalOkCallback = null; // 当前弹窗确定按钮回调
+    var modalExtraCallback = null; // 第二动作按钮回调
 
     // 关闭弹窗
     function closeModal() {
         modalMask.classList.add('hidden');
         modalOkCallback = null;
+        modalExtraCallback = null;
     }
 
     // 确认弹窗：title 标题、text 内容、onOk 确定回调、okText 确定按钮文字（默认"确定"）、cancelText 取消按钮文字（默认"取消"）
@@ -130,7 +134,30 @@
         modalInput.classList.add('hidden');
         modalOk.textContent = okText || '确定';
         modalCancel.textContent = cancelText || '取消';
+        modalExtra.classList.add('hidden'); // 常规确认无第二动作
         modalOkCallback = onOk;
+        modalMask.classList.remove('hidden');
+    }
+
+    // 阶段七十二：双选项弹窗——主选项（绿色 primary）+ 可选危险选项（红色）+ 取消。
+    // 用于"清空显示（云端保留）/ 永久删除（不可恢复）"类二选一场景；extra 为 null 时退化为单选确认
+    function showChoice(title, text, primaryText, onPrimary, extra) {
+        modalTitle.textContent = title;
+        modalText.textContent = text;
+        modalText.classList.remove('hidden');
+        modalInput.classList.add('hidden');
+        modalOk.textContent = primaryText;
+        modalOkCallback = onPrimary;
+        if (extra) {
+            modalExtra.textContent = extra.text;
+            modalExtraCallback = extra.cb;
+            modalExtra.classList.remove('hidden');
+        } else {
+            modalExtra.textContent = '';
+            modalExtraCallback = null;
+            modalExtra.classList.add('hidden');
+        }
+        modalCancel.textContent = '取消';
         modalMask.classList.remove('hidden');
     }
 
@@ -143,6 +170,7 @@
         modalInput.value = '';
         modalInput.placeholder = placeholder || '';
         modalOk.textContent = '确定';
+        modalExtra.classList.add('hidden'); // 输入弹窗无第二动作
         modalOkCallback = function () {
             var val = modalInput.value.trim();
             if (val) onOk(val);
@@ -153,6 +181,12 @@
 
     modalOk.addEventListener('click', function () {
         var cb = modalOkCallback;
+        closeModal();
+        if (cb) cb();
+    });
+    // 阶段七十二：第二动作按钮（红色危险项，如"永久删除"）
+    modalExtra.addEventListener('click', function () {
+        var cb = modalExtraCallback;
         closeModal();
         if (cb) cb();
     });
@@ -1949,10 +1983,39 @@
 
     // ===== 清空当前聊天显示（保留云端记录） =====
     clearBtn.addEventListener('click', function () {
-        var target = currentChatUser === '' ? '群聊' : currentChatUser;
-        showConfirm('清空聊天', '确定清空与 "' + target + '" 的聊天显示吗？（云端记录保留）', function () {
-            messageList.innerHTML = '';
-        }, '清空');
+        var isGroup = currentChatUser === '';
+        var isAI = !isGroup && isAIAgent(currentChatUser);
+        // 阶段七十二：清空聊天双选项——清空显示（服务端写删除表，本端不再加载，云端保留）/ 永久删除（物理删除云端记录，不可恢复）。
+        // 原实现仅清本地视图不写删除表，刷新或重开会话后历史原样回来，清空形同虚设
+        // 永久删除仅私聊与 AI 会话提供（群聊消息影响全员，仅提供清空显示）；AI 会话永久删除范围为当前查看会话
+        showChoice('清空聊天',
+            '仅清空本端显示，云端记录保留且不再加载；或彻底删除云端记录，双方均不可见，不可恢复。',
+            '云端保留',
+            function () {
+                IMSocket.send({ msg_type: MSG.CONV_CLEAR, to_user: currentChatUser });
+                messageList.innerHTML = '';
+                appendSystem('聊天显示已清空（云端记录保留）');
+            },
+            isGroup ? null : {
+                text: isAI ? '永久删除' : '永久删除',
+                cb: function () {
+                    IMSocket.send({
+                        msg_type: MSG.CONV_CLEAR,
+                        to_user: currentChatUser,
+                        clear: true,
+                        session_id: isAI ? (aiViewSession[currentChatUser] || 0) : 0
+                    });
+                    messageList.innerHTML = '';
+                    if (isAI) {
+                        // 服务端已物理删除，重拉得到空态（分页游标归位）
+                        historyPage = 1;
+                        historyHasMore = true;
+                        loadingMore = false;
+                        loadHistory();
+                    }
+                    appendSystem(isAI ? '当前会话已从云端永久删除' : '云端聊天记录已永久删除');
+                }
+            });
     });
 
     // ===== 消息分发 =====
@@ -4398,6 +4461,7 @@
     var aiSessions = {};      // agent -> { list: [{id,title,first_msg_id,create_time}], currentId }
     var aiViewSession = {};   // agent -> 当前查看会话 id（0=默认全量，无会话行）
     var aiSessionListCb = {}; // agent -> 会话列表响应回调（openConversation 等列表到达后再拉历史）
+    var aiClearPending = null; // 阶段七十二：在途清空请求 {agent,sid}——清空回执（列表帧）到达后按此刷新当前查看视图（他端清空不受影响，视图下次切换自然归位）
 
     // aiSessionDisplayList 服务端无会话行时注入虚拟"默认会话"（id=0=全量历史，老用户无感）
     function aiSessionDisplayList(agent) {
@@ -4454,7 +4518,23 @@
             main.appendChild(t);
             main.appendChild(tm);
             item.appendChild(main);
-            if (s.id > 0) { // 虚拟默认会话（id=0）不可删除
+            // 阶段七十二：清空按钮（扫帚图标，真删除消息，所有会话含默认会话均有——默认会话堆积的唯一消化入口）
+            var clr = document.createElement('button');
+            clr.className = 'ai-session-item-del ai-session-item-clear';
+            clr.title = '清空会话（彻底删除消息，不可恢复）';
+            // 扫帚 SVG：柄=描边斜线，帚头=实心大梯形（实心比描边在 18px 下辨识度高），与垃圾桶图标区分度最高；currentColor 随悬停变红
+            clr.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 4 L12.6 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="M11.2 10.2 L13.8 12.8 L10.6 20 L3.2 12.8 Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+            clr.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var isDefault = s.id === 0;
+                var name = isDefault ? '默认会话' : '「' + (s.title || '未命名会话') + '」';
+                showConfirm('清空会话', '将彻底删除' + name + '的全部消息与任务记录，此操作不可恢复。确定清空吗？', function () {
+                    aiClearPending = { agent: agent, sid: s.id }; // 列表回执（清空完成后下发）到达时按此刷新当前查看视图
+                    IMSocket.send({ msg_type: MSG.AI_SESSION_DEL, to_user: agent, session_id: s.id, clear: true });
+                }, '清空');
+            });
+            item.appendChild(clr);
+            if (s.id > 0) { // 虚拟默认会话（id=0）不可删除，仅可清空
                 var del = document.createElement('button');
                 del.className = 'ai-session-item-del';
                 del.title = '删除会话';
@@ -4509,6 +4589,18 @@
                 historyHasMore = true;
                 loadingMore = false;
                 loadHistory();
+            }
+        }
+        // 阶段七十二：清空回执（列表帧仅在清空落库后下发）——正在查看被清空会话时立即刷新为空态
+        if (aiClearPending && aiClearPending.agent === agent) {
+            var p = aiClearPending;
+            aiClearPending = null;
+            if ((aiViewSession[agent] || 0) === p.sid && currentChatUser === agent) {
+                messageList.innerHTML = '';
+                historyPage = 1;
+                historyHasMore = true;
+                loadingMore = false;
+                loadHistory(); // 服务端已删空，回执后重拉得到空态提示
             }
         }
         renderAISessionPanel(agent);
