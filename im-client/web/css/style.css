@@ -3562,6 +3562,45 @@ html.m #list-panel.list-collapsed {
     border-radius: 6px;
 }
 
+/* ===== 阶段六十九：普通聊天联网搜索（开关高亮 + 回复气泡内搜索行，跟随 --primary 主题色） ===== */
+
+/* 联网搜索开关按钮：active 态主题色高亮（与任务模式开关同款视觉） */
+.web-search-btn.active {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border-radius: 6px;
+}
+
+/* 回复气泡内「联网搜索」状态行（正文上方，搜索关键词 + 结果条数） */
+.ai-search-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 8px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    color: var(--primary);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.ai-search-row svg {
+    flex: none;
+}
+
+.ai-search-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 搜索失败态（红色警示，跟随全局错误色变量） */
+.ai-search-row.ai-search-fail {
+    color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 8%, transparent);
+}
+
 /* 任务卡片容器（消息流内独立卡片，微信气泡加宽版） */
 .agent-task-card {
     width: min(560px, 78vw);

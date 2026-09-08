@@ -238,6 +238,10 @@
                     <button id="agent-mode-btn" class="tool-btn agent-mode-btn hidden" title="Agent 任务模式：输入任务目标，智能体将自主规划并调用工具完成（写文件/命令需审批）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h3a3 3 0 0 1 3 3v1h.27c.34-.6 .99-1 1.73-1a2 2 0 0 1 0 4c-.74 0-1.39-.4-1.73-1H19v1a3 3 0 0 1-3 3h-3v1.27c.6 .34 1 .99 1 1.73a2 2 0 0 1-4 0c0-.74 .4-1.39 1-1.73V18H8a3 3 0 0 1-3-3v-1h-.27c-.34 .6-.99 1-1.73 1a2 2 0 0 1 0-4c.74 0 1.39 .4 1.73 1H5v-1a3 3 0 0 1 3-3h3V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/></svg>
                     </button>
+                    <!-- 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启联网搜索时显示，开启后 AI 问答可实时搜索） -->
+                    <button id="web-search-btn" class="tool-btn web-search-btn hidden" title="联网搜索：开启后 AI 问答可实时联网查询最新信息（搜索过程与结果条数随回复展示）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                    </button>
                     <!-- 阶段六十一：Agent 工作区/沙箱白名单按钮（仅 PC 端本地执行器可用，用户自选任意文件夹作为主工作区并维护授权目录白名单） -->
                     <button id="agent-ws-btn" class="tool-btn agent-ws-btn hidden" title="Agent 工作区：选择本地文件夹作为主工作区，并维护沙箱白名单（授权目录内允许 Agent 读写文件）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
@@ -522,6 +526,6 @@
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
     <script src="js/lib/pptxgen.bundle.js?v=1.0"></script>
-    <script src="js/chat.js?v=1.98"></script>
+    <script src="js/chat.js?v=1.99"></script>
 </body>
 </html>

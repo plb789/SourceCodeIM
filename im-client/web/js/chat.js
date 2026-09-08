@@ -71,6 +71,7 @@
     var clearBtn = document.getElementById('clear-btn');
     var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
+    var webSearchBtn = document.getElementById('web-search-btn'); // 阶段六十九：普通聊天联网搜索开关（AI 会话且服务端开启时显示）
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
     var fileInput = document.getElementById('file-input');
@@ -1025,6 +1026,8 @@
                 return;
             }
             msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content };
+            // 阶段六十九：联网搜索开关开启时经 remark 上行（服务端归口校验配置，未开启时降级普通问答）
+            if (webSearchOn && webSearchAvailable) msg.remark = 'web_search';
         } else {
             msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
             if (currentChatUser !== '') msg.to_user = currentChatUser;
@@ -2159,6 +2162,10 @@
 
     IMSocket.on(MSG.AI_AGENTS, function (msg) {
         try { aiAgents = JSON.parse(msg.content) || []; } catch (e) { aiAgents = []; }
+        // 阶段六十九：服务端联网搜索能力标志（随列表全局归口下发，前端据此显隐联网开关按钮）
+        webSearchAvailable = aiAgents.length > 0 && !!aiAgents[0].web_search;
+        if (!webSearchAvailable) webSearchOn = false;
+        webSearchBtn.classList.toggle('active', webSearchOn);
         aiAgents.forEach(function (a) {
             if (a && a.name && a.avatar) agentAvatars[a.name] = a.avatar;
         });
@@ -2327,11 +2334,14 @@
             bar.appendChild(b);
         }
         addBtn('复制', ICONS.copy, function () { copyTextToClipboard(fullText); });
-        // 重新生成：原样重发最近一次提问（含引用信封原文，服务端解析口径与首次发送一致）
+        // 重新生成：原样重发最近一次提问（含引用信封原文，服务端解析口径与首次发送一致；
+        // 阶段六十九：按当前联网开关状态随行 remark，与服务端配置双重归口）
         addBtn('重新生成', ICONS.redo, function () {
             var q = lastAIQuestion[agent];
             if (!q || !q.raw) { showToast('暂无原始提问，无法重新生成'); return; }
-            IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw });
+            var regen = { msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw };
+            if (webSearchOn && webSearchAvailable) regen.remark = 'web_search';
+            IMSocket.send(regen);
         });
         // 编辑提问：提问正文回填输入框，修改后自行发送
         addBtn('编辑提问', ICONS.edit, function () {
@@ -2598,6 +2608,22 @@
     IMSocket.on(MSG.AI_STREAM, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return; // 只处理自己的流
         if (currentChatUser !== msg.from_user) return;
+        // 阶段六十九：工具状态帧（remark=tool，content 为 JSON）——普通聊天联网搜索过程行，
+        // 渲染在回复气泡正文上方，不进打字机正文
+        if (msg.remark === 'tool') {
+            var meta = null;
+            try { meta = JSON.parse(msg.content); } catch (e) { return; }
+            if (!meta || meta.tool !== 'web_search') return;
+            hideAIThinking(msg.from_user); // 搜索行为先于正文出现，同样收起"思考中"指示
+            removeAISuggestRow();
+            var st0 = aiStreams[msg.stream_id];
+            if (!st0) {
+                st0 = createStreamBubble(msg.from_user, msg.stream_id);
+                aiStreams[msg.stream_id] = st0;
+            }
+            insertAISearchRow(st0, meta);
+            return;
+        }
         hideAIThinking(msg.from_user); // 首段回复到达，移除"思考中"指示
         removeAISuggestRow(); // 新一轮回复开始，移除上一轮的后续提问建议
         var st = aiStreams[msg.stream_id];
@@ -2608,6 +2634,34 @@
         st.pending += msg.content || '';
         ensureStreamTimer(st);
     });
+
+    // 阶段六十九：在流式气泡正文上方插入「联网搜索」状态行（结果条数/失败态跟随，主题色变量渲染）
+    function insertAISearchRow(st, meta) {
+        var bubble = st.textEl.parentElement;
+        if (!bubble) return;
+        var row = document.createElement('div');
+        row.className = 'ai-search-row' + (meta.ok ? '' : ' ai-search-fail');
+        row.setAttribute('data-round', st.searchRound = (st.searchRound || 0) + 1);
+        var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('width', '14');
+        icon.setAttribute('height', '14');
+        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('fill', 'currentColor');
+        path.setAttribute('d', 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z');
+        icon.appendChild(path);
+        var label = document.createElement('span');
+        label.className = 'ai-search-label';
+        if (meta.ok) {
+            label.textContent = '联网搜索：' + (meta.query || '') + '（' + (meta.results || 0) + ' 条结果）';
+        } else {
+            label.textContent = '联网搜索：' + (meta.query || '') + '（失败，已基于已有知识作答）';
+        }
+        row.appendChild(icon);
+        row.appendChild(label);
+        bubble.insertBefore(row, st.textEl); // 正文上方，随打字机输出保持在搜索行之下
+        messageList.scrollTop = messageList.scrollHeight;
+    }
 
     // AI 流式结束：有流则收尾（END.content 为完整回复，仅在未曾收到增量时降级整段打字防重复）；
     // 无流（如降级路径）且正在查看该会话时补一条完整回复
@@ -2674,6 +2728,17 @@
     // 交互设计对齐 Trae CN：发起任务 → 任务卡片（清单+进度条）→ 思考/工具/审批子事件流 → 最终答复
     var agentMode = false;    // 当前是否处于 Agent 任务模式（仅 AI 智能体会话内可开启）
     var agentTaskCards = {};  // task_id → 任务卡片状态（切会话 DOM 清空但状态保留，重进不重放事件）
+
+    // ===== 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启 web_search 时可用） =====
+    var webSearchOn = false;        // 当前联网搜索开关状态（跨会话保持用户选择）
+    var webSearchAvailable = false; // 服务端联网搜索能力标志（AI_AGENTS 列表下发，配置归口）
+
+    webSearchBtn.addEventListener('click', function () {
+        if (!currentChatUser || !isAIAgent(currentChatUser) || !webSearchAvailable) return;
+        webSearchOn = !webSearchOn;
+        webSearchBtn.classList.toggle('active', webSearchOn);
+        showToast(webSearchOn ? '已开启联网搜索，AI 问答可实时查询最新信息' : '已关闭联网搜索');
+    });
 
     function setAgentMode(on) {
         agentMode = on;
@@ -4092,6 +4157,8 @@
         // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用；切换会话退出任务模式
         if (agentMode) setAgentMode(false);
         agentModeBtn.classList.toggle('hidden', !(user && isAIAgent(user)));
+        // 阶段六十九：联网搜索开关仅 AI 智能体会话且服务端开启时显示（开关状态跨会话保持）
+        webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
         // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
         agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
         // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；

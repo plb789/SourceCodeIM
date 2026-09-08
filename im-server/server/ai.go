@@ -678,6 +678,8 @@ func aiAgentsPublicInfo(username string) []map[string]interface{} {
 			"image":  a.SupportsImage,
 			// 阶段五十七：个人标记（前端据此显示"个人"小标与管理入口）
 			"owner": a.Owner,
+			// 阶段六十九：服务端联网搜索开关（前端据此显隐普通聊天联网按钮，配置全局归口）
+			"web_search": agentSearchEnabled,
 		})
 	}
 	return list
@@ -809,6 +811,10 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段六十九：普通聊天联网搜索开关（前端经上行 remark="web_search" 传递；服务端配置未开启时
+	// 静默降级为普通问答，配置归口与 Agent 任务共用 agentSearchEnabled）
+	useSearch := msg.Remark == "web_search" && agentSearchEnabled
+
 	// 阶段四十四：图片能力双保险校验（前端入口已隐藏，此处兜底防止协议直发绕过）
 	if imageEnv != nil {
 		if agent.Provider == nil || !agent.SupportsImage {
@@ -906,7 +912,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	go func() {
 		askCtx, cancel := context.WithTimeout(context.Background(), aiAskTimeout)
 		defer cancel()
-		full, usage, err := aiStreamChat(askCtx, agent, chatMsgs, func(delta string) {
+		pushDelta := func(delta string) {
 			chunk := protocol.Message{
 				MsgType:   protocol.MsgTypeAIStream,
 				FromUser:  agent.Name,
@@ -918,7 +924,16 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			data, _ := json.Marshal(chunk)
 			// 推送增量到用户全部在线连接（多端同步打字机效果）
 			s.sendToUser(c.username, data)
-		})
+		}
+		var full string
+		var usage aiUsage
+		var err error
+		if useSearch {
+			// 阶段六十九：联网问答循环（模型按需调用 web_search 后作答）
+			full, usage, err = s.aiChatLoopWithSearch(askCtx, agent, c.username, chatMsgs, streamID, pushDelta)
+		} else {
+			full, usage, err = aiStreamChat(askCtx, agent, chatMsgs, pushDelta)
+		}
 		if err != nil {
 			logger.Error("AI 问答失败（用户 %s，智能体 %s）：%v", c.username, agent.Name, err)
 			s.sendError(c, "AI 服务异常，请稍后重试")
@@ -989,6 +1004,75 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			s.sendToUser(c.username, sugData)
 		}()
 	}()
+}
+
+// ===== 阶段六十九：普通聊天联网问答（输入框联网开关开启时，模型按需调用 web_search 后作答） =====
+
+// aiSearchLoopMaxRounds 普通聊天联网问答最大工具轮数（轻量问答场景，远少于 Agent 任务的 agentMaxSteps；
+// 达到上限后不再注入工具，强制模型基于已有信息作答防死循环）
+const aiSearchLoopMaxRounds = 4
+
+// aiChatLoopWithSearch 普通聊天联网问答循环：复用 aiAgentChatStream 流式接口与 agentToolWebSearch
+// 执行归口（只读免审批、始终服务端执行）。仅注入 web_search 单工具（普通聊天轻量问答，不开放
+// 文件/命令等 Agent 工具）；每轮工具调用经 aiPushToolFrame 推送搜索状态帧供前端渲染「联网搜索」行。
+// 注意：流式链路不返回 usage（与 Agent 任务一致），联网问答的 Token 统计记 0。
+func (s *Server) aiChatLoopWithSearch(ctx context.Context, agent *AIRunAgent, username string, msgs []aiChatMessage, streamID string, onText func(string)) (string, aiUsage, error) {
+	var usage aiUsage
+	tools := []aiToolDefinition{agentWebSearchToolDef()}
+	for round := 0; ; round++ {
+		var useTools []aiToolDefinition
+		if round < aiSearchLoopMaxRounds {
+			useTools = tools
+		}
+		content, toolCalls, _, err := aiAgentChatStream(ctx, agent, msgs, useTools, onText, nil)
+		if err != nil {
+			return "", usage, err
+		}
+		// 无工具调用：模型给出最终答复（正文已流式推送，usage 不可得记 0）
+		if len(toolCalls) == 0 {
+			return content, usage, nil
+		}
+		// assistant 消息（含 tool_calls）入历史，后续 tool 结果按 tool_call_id 对应回传
+		msgs = append(msgs, aiChatMessage{Role: "assistant", Content: content, ToolCalls: toolCalls})
+		for _, tc := range toolCalls {
+			var result string
+			meta := map[string]interface{}{"tool": tc.Function.Name, "ok": false, "query": "", "results": 0}
+			if tc.Function.Name != "web_search" {
+				// 普通聊天仅开放搜索：模型误调其它工具时回传错误文本，模型据此自纠
+				result = "错误：普通聊天模式仅支持联网搜索工具"
+			} else {
+				var params map[string]interface{}
+				if strings.TrimSpace(tc.Function.Arguments) != "" {
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &params); err != nil {
+						params = nil // 非法参数按缺参处理，工具内部报错回传模型自纠
+					}
+				}
+				result = agentToolWebSearch(params)
+				meta["ok"] = !strings.HasPrefix(result, "错误")
+				meta["query"] = agentParamString(params["query"])
+				meta["results"] = strings.Count(result, "链接：") // agentSearchFormat 固定格式计数
+			}
+			s.aiPushToolFrame(agent, username, streamID, meta)
+			msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: tc.Function.Name})
+		}
+	}
+}
+
+// aiPushToolFrame 普通聊天搜索状态帧推送（复用 AI_STREAM 通道，remark="tool" 区分正文增量；
+// content 为 JSON {tool,ok,query,results}，仅实时展示不落库）
+func (s *Server) aiPushToolFrame(agent *AIRunAgent, username, streamID string, meta map[string]interface{}) {
+	data, _ := json.Marshal(meta)
+	msg := protocol.Message{
+		MsgType:   protocol.MsgTypeAIStream,
+		FromUser:  agent.Name,
+		ToUser:    username,
+		Content:   string(data),
+		Remark:    "tool",
+		StreamID:  streamID,
+		Timestamp: time.Now().Unix(),
+	}
+	out, _ := json.Marshal(msg)
+	s.sendToUser(username, out)
 }
 
 // aiGenerateSuggestions 生成后续提问建议：仅用最后一轮问答做轻量调用（不重发整套上下文，控制成本），

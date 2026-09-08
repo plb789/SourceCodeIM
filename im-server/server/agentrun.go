@@ -294,6 +294,23 @@ func agentSafePath(username, p string) (string, error) {
 	return full, nil
 }
 
+// agentWebSearchToolDef web_search 工具 schema 归口（阶段六十九提取：Agent 任务与普通聊天
+// 联网问答共用同一 schema，文案/参数防两处漂移）
+func agentWebSearchToolDef() aiToolDefinition {
+	return aiToolDefinition{Type: "function", Function: map[string]interface{}{
+		"name":        "web_search",
+		"description": "联网搜索获取实时信息（新闻/资料/行情/文档等）。返回网页标题、链接与摘要；需要页面或接口全文时再用 http_request 抓取。",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string", "description": "搜索关键词（可用空格组合多个词）"},
+				"count": map[string]interface{}{"type": "integer", "description": "结果条数（1-10，默认 5）"},
+			},
+			"required": []string{"query"},
+		},
+	}}
+}
+
 // agentToolDefinitions 注入模型的工具 schema（OpenAI function calling 格式；
 // 阶段六十八：http_request/web_search 按配置开关动态注入，未开启不进 schema 防模型误调用）
 func agentToolDefinitions() []aiToolDefinition {
@@ -375,18 +392,7 @@ func agentToolDefinitions() []aiToolDefinition {
 		}})
 	}
 	if agentSearchEnabled {
-		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
-			"name":        "web_search",
-			"description": "联网搜索获取实时信息（新闻/资料/行情/文档等）。返回网页标题、链接与摘要；需要页面或接口全文时再用 http_request 抓取。",
-			"parameters": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query": map[string]interface{}{"type": "string", "description": "搜索关键词（可用空格组合多个词）"},
-					"count": map[string]interface{}{"type": "integer", "description": "结果条数（1-10，默认 5）"},
-				},
-				"required": []string{"query"},
-			},
-		}})
+		tools = append(tools, agentWebSearchToolDef())
 	}
 	return tools
 }
