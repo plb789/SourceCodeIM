@@ -848,6 +848,130 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     padding: 32px 0 !important;
 }
 
+/* ===== Agent 任务审计（阶段六十四）：状态徽标 + 详情弹窗 ===== */
+/* 状态徽标：running 主题色呼吸 / completed 主题绿 / failed 危险红 / cancelled 中性灰 */
+.at-badge {
+    display: inline-block;
+    font-size: 11px;
+    line-height: 18px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    color: #fff;
+}
+
+.at-badge.at-st-running {
+    background: color-mix(in srgb, var(--primary) 60%, #ffffff);
+    animation: at-pulse 1.2s ease-in-out infinite;
+}
+
+.at-badge.at-st-completed {
+    background: var(--primary);
+}
+
+.at-badge.at-st-failed {
+    background: var(--danger, #fa5151);
+}
+
+.at-badge.at-st-cancelled {
+    background: var(--text-light);
+}
+
+/* 运行中徽标呼吸动画（动态反馈，避免误以为卡住） */
+@keyframes at-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+/* 详情弹窗：元信息行 + 标签/正文（pre-wrap 保留换行） */
+.at-detail-meta {
+    font-size: 12px;
+    color: var(--text-light);
+    padding-bottom: 8px;
+    border-bottom: 1px dashed var(--border);
+}
+
+.at-detail-label {
+    font-size: 12px;
+    color: var(--primary);
+    margin: 10px 0 4px;
+}
+
+.at-detail-body {
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.7;
+}
+
+/* ===== 执行轨迹（阶段六十五：每步工具调用留痕时间线，主题色变量关联） ===== */
+.at-steps {
+    margin-top: 12px;
+}
+
+.at-step {
+    padding: 6px 10px;
+    border-left: 2px solid var(--primary);
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 6px;
+}
+
+/* 失败/被拒步骤：左侧描边转危险色提示 */
+.at-step.fail {
+    border-left-color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 6%, transparent);
+}
+
+.at-step-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.at-step-seq {
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    font-size: 11px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+}
+
+.at-step.fail .at-step-seq {
+    background: var(--danger, #fa5151);
+}
+
+.at-step-tool {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--text);
+    font-family: Consolas, monospace;
+}
+
+.at-step-meta {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: auto;
+}
+
+.at-step-body {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    margin-top: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
 /* 分页条 */
 .vec-pager {
     display: flex;

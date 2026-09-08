@@ -190,6 +190,27 @@ type AgentWhitelist struct {
 // TableName 指定表名
 func (AgentWhitelist) TableName() string { return "im_agent_whitelist" }
 
+// AgentStepRecord Agent 任务执行步骤留痕（阶段六十五）：每步工具调用即时落库，任务运行中亦可追溯。
+// Params 存参数 JSON 摘要、Result 存结果摘要（均截断）；Approval 记录审批情况
+// （none=免审批 / approved=审批通过（可能改参）/ rejected=用户拒绝 / cancelled=用户取消 / timeout=审批超时）；
+// Env 记录执行环境（server=服务端工作区 / pc=用户 PC 本地执行）
+type AgentStepRecord struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID     string    `gorm:"column:task_id;type:varchar(40);not null;index" json:"task_id"`
+	Seq        int       `gorm:"column:seq;not null" json:"seq"`                    // 任务内递增步骤序号（从 1 开始）
+	Tool       string    `gorm:"column:tool;type:varchar(32);not null" json:"tool"` // 工具名
+	Params     string    `gorm:"column:params;type:text" json:"params"`             // 参数 JSON 摘要
+	Result     string    `gorm:"column:result;type:text" json:"result"`             // 结果摘要
+	OK         bool      `gorm:"column:ok;not null" json:"ok"`                      // 结果是否成功
+	Env        string    `gorm:"column:env;type:varchar(8)" json:"env"`             // 执行环境 pc/server
+	Approval   string    `gorm:"column:approval;type:varchar(16)" json:"approval"`  // 审批情况
+	DurationMS int64     `gorm:"column:duration_ms;not null;default:0" json:"duration_ms"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (AgentStepRecord) TableName() string { return "im_agent_step" }
+
 // Message 聊天消息表 im_message
 type Message struct {
 	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`

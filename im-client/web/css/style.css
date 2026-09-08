@@ -4377,6 +4377,230 @@ html.m #friend-menu {
     color: #fff;
 }
 
+/* 阶段六十三：Agent 任务经验来源标签（主题色描边，区别于手动实底/自动灰底） */
+.kb-item-tag.agent {
+    background: transparent;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    line-height: 14px;
+}
+
+/* ===== 阶段六十四：Agent 任务历史弹窗 ===== */
+/* 状态筛选 chips 按钮组：选中态主题色实底 */
+.taskhist-filter {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 10px;
+    flex-wrap: wrap;
+}
+
+.taskhist-chip {
+    padding: 4px 12px;
+    font-size: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text-light);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.taskhist-chip:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.taskhist-chip.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* 任务卡片：状态徽标 + 目标摘要 + 元信息；展开态左侧主题色描边强调 */
+.taskhist-card {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.taskhist-card:hover {
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.taskhist-card.expanded {
+    border-left-color: var(--primary);
+}
+
+.taskhist-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+/* 状态徽标：running 主题色 / completed 绿色 / failed 危险红 / cancelled 中性灰 */
+.taskhist-badge {
+    flex: none;
+    font-size: 11px;
+    line-height: 16px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    color: #fff;
+}
+
+.taskhist-badge.st-running {
+    background: color-mix(in srgb, var(--primary) 60%, #ffffff);
+    animation: taskhist-pulse 1.2s ease-in-out infinite;
+}
+
+.taskhist-badge.st-completed {
+    background: var(--primary);
+}
+
+.taskhist-badge.st-failed {
+    background: var(--danger, #fa5151);
+}
+
+.taskhist-badge.st-cancelled {
+    background: var(--text-light);
+}
+
+/* 运行中徽标呼吸动画（动态反馈，避免误以为卡住） */
+@keyframes taskhist-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+.taskhist-goal {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.taskhist-meta {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+/* 展开详情区：pre-wrap 保留换行，主题色标签行 */
+.taskhist-detail {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.taskhist-d-label {
+    font-size: 11px;
+    color: var(--primary);
+    margin: 6px 0 2px;
+}
+
+.taskhist-d-body {
+    font-size: 12px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+}
+
+/* ===== 阶段六十五：任务详情执行轨迹（每步工具调用时间线，主题色变量关联） ===== */
+.th-steps {
+    margin-top: 10px;
+}
+
+.th-steps-title {
+    font-size: 11px;
+    color: var(--primary);
+    margin: 4px 0 6px;
+}
+
+.th-step {
+    padding: 5px 8px;
+    border-left: 2px solid var(--primary);
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 6px;
+}
+
+/* 失败/被拒步骤：左侧描边转危险色提示 */
+.th-step.fail {
+    border-left-color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 6%, transparent);
+}
+
+.th-step-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.th-step-seq {
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    font-size: 11px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+}
+
+.th-step.fail .th-step-seq {
+    background: var(--danger, #fa5151);
+}
+
+.th-step-tool {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--text);
+    font-family: Consolas, monospace;
+}
+
+.th-step-meta {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: auto;
+}
+
+.th-step-body {
+    font-size: 11px;
+    color: var(--text-light);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.5;
+    margin-top: 3px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 分页条：与弹窗按钮组同排 */
+.taskhist-pager {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.taskhist-pager .kb-status {
+    flex: 1;
+    text-align: center;
+}
+
 .kb-item-meta {
     flex: none;
     font-size: 12px;

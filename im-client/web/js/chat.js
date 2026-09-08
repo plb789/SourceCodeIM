@@ -4779,6 +4779,9 @@
         }
         // 阶段五十八：记忆管理按钮仅 AI 智能体会话显示（群聊/普通用户会话隐藏）
         memoryBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
+        // 阶段六十四：任务历史按钮同口径显隐（与记忆按钮一致，仅 AI 智能体会话显示）
+        var taskhistBtn = document.getElementById('taskhist-btn');
+        if (taskhistBtn) taskhistBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
     }
 
     // ===== 消息渲染 =====
@@ -6048,10 +6051,19 @@
             name.textContent = m.content;
             name.title = m.content;
 
-            // 来源标签：自动提取（灰）/ 手动添加（主题色，与"个人"标签同款）
+            // 来源标签：手动添加（主题色实底）/ 任务经验（主题色描边，Agent 任务沉淀）/ 自动提取（灰）
+            // 原实现：仅 manual/auto 两态；阶段六十三新增 Agent 任务经验来源
             var tag = document.createElement('span');
-            tag.className = 'kb-item-tag ' + (m.source === 'manual' ? 'user' : 'public');
-            tag.textContent = m.source === 'manual' ? '手动' : '自动';
+            if (m.source === 'manual') {
+                tag.className = 'kb-item-tag user';
+                tag.textContent = '手动';
+            } else if (m.source === 'agent') {
+                tag.className = 'kb-item-tag agent';
+                tag.textContent = '任务';
+            } else {
+                tag.className = 'kb-item-tag public';
+                tag.textContent = '自动';
+            }
 
             var meta = document.createElement('span');
             meta.className = 'kb-item-meta';
@@ -6155,6 +6167,245 @@
     });
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && !memoryMask.classList.contains('hidden')) memCloseDialog();
+    });
+
+    // ===== 阶段六十四：Agent 任务历史（本人任务分页列表/状态筛选/点击展开详情） =====
+    // 服务端归口：GET /api/agent/tasks（分页+状态筛选）/ GET /api/agent/task/{task_id}（全文详情），
+    // 此处仅展示；运行中任务同样入库可见，展开后可点"刷新"查看最新状态
+    var taskhistBtn = document.getElementById('taskhist-btn');
+    var taskhistMask = document.getElementById('taskhist-mask');
+    var taskhistStatusEl = document.getElementById('taskhist-status');
+    var taskhistFilterEl = document.getElementById('taskhist-filter');
+    var taskhistListEl = document.getElementById('taskhist-list');
+    var taskhistPageInfo = document.getElementById('taskhist-page-info');
+    var taskhistPrev = document.getElementById('taskhist-prev');
+    var taskhistNext = document.getElementById('taskhist-next');
+    var taskhistClose = document.getElementById('taskhist-close');
+    var thPage = 1;        // 当前页码
+    var thTotal = 0;       // 匹配总条数
+    var TH_SIZE = 20;      // 每页条数（与服务端上限一致）
+    var thStatus = '';     // 当前状态筛选（空=全部）
+    var thExpandId = '';   // 当前展开详情的 task_id（翻页后保持展开语义无必要，翻页重置）
+
+    // thStateLabel 状态中文标签映射（running 运行中/completed 已完成/failed 失败/cancelled 已取消）
+    function thStateLabel(s) {
+        return { running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
+    }
+
+    // thFormatTime 时间展示归口：yyyy-MM-dd HH:mm
+    function thFormatTime(ts) {
+        var d = new Date(ts);
+        if (!ts || isNaN(d.getTime())) return '';
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') +
+            ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    function taskhistOpenDialog() {
+        if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+        taskhistMask.classList.remove('hidden');
+        taskhistStatusEl.textContent = '当前智能体：' + currentChatUser + '（任务历史仅本人可见）';
+        taskhistListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        thPage = 1;
+        thStatus = '';
+        // 重置筛选 chips 到"全部"
+        taskhistFilterEl.querySelectorAll('.taskhist-chip').forEach(function (c) {
+            c.classList.toggle('active', c.dataset.status === '');
+        });
+        taskhistLoad();
+    }
+
+    function taskhistCloseDialog() {
+        taskhistMask.classList.add('hidden');
+    }
+
+    // taskhistLoad 拉取任务分页列表（筛选与页码取自模块内状态）
+    function taskhistLoad() {
+        var url = '/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) +
+            '&page=' + thPage + '&size=' + TH_SIZE;
+        if (thStatus) url += '&status=' + encodeURIComponent(thStatus);
+        taskhistListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        fetch(url)
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '加载失败'); taskhistListEl.innerHTML = '<div class="kb-empty">加载失败</div>'; return; }
+                thTotal = res.data.total || 0;
+                var pages = Math.max(1, Math.ceil(thTotal / TH_SIZE));
+                if (thPage > pages) { thPage = pages; taskhistLoad(); return; } // 筛选后页码越界兜底
+                taskhistRender(res.data.tasks || []);
+                taskhistPageInfo.textContent = thTotal ? ('共 ' + thTotal + ' 条 · 第 ' + thPage + ' / ' + pages + ' 页') : '暂无任务';
+                taskhistPrev.disabled = thPage <= 1;
+                taskhistNext.disabled = thPage >= pages;
+            })
+            .catch(function () { showToast('加载失败'); taskhistListEl.innerHTML = '<div class="kb-empty">加载失败</div>'; });
+    }
+
+    // taskhistRender 任务卡渲染：状态徽标 + 目标摘要 + 元信息；点击卡片展开/收起全文详情
+    // 详情全文按需拉取（列表项 goal/result 为截断摘要），展开态懒加载避免列表响应过大
+    function taskhistRender(tasks) {
+        taskhistListEl.innerHTML = '';
+        if (!tasks.length) {
+            taskhistListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无任务' }));
+            return;
+        }
+        tasks.forEach(function (t) {
+            var card = document.createElement('div');
+            card.className = 'taskhist-card' + (t.task_id === thExpandId ? ' expanded' : '');
+
+            var head = document.createElement('div');
+            head.className = 'taskhist-head';
+            // 状态徽标（状态名做 class 锚点，主题色变量关联）
+            var badge = document.createElement('span');
+            badge.className = 'taskhist-badge st-' + t.status;
+            badge.textContent = thStateLabel(t.status);
+            // 目标摘要（单行截断，悬停 title 看列表截断文本）
+            var goal = document.createElement('span');
+            goal.className = 'taskhist-goal';
+            goal.textContent = t.goal || '(无目标)';
+            goal.title = t.goal || '';
+            head.appendChild(badge);
+            head.appendChild(goal);
+            card.appendChild(head);
+
+            // 元信息行：智能体 · N 步 · 发起时间（结束态展示最近活动时间）
+            var meta = document.createElement('div');
+            meta.className = 'taskhist-meta';
+            meta.textContent = t.agent_name + ' · ' + (t.steps || 0) + ' 步 · ' + thFormatTime(t.update_time || t.create_time);
+            card.appendChild(meta);
+
+            // 详情容器（展开时懒加载全文）
+            var detail = document.createElement('div');
+            detail.className = 'taskhist-detail hidden';
+            card.appendChild(detail);
+
+            card.addEventListener('click', function () {
+                if (card.classList.contains('expanded')) {
+                    card.classList.remove('expanded');
+                    detail.classList.add('hidden');
+                    thExpandId = '';
+                    return;
+                }
+                // 收起其他已展开卡片（手风琴语义，避免长详情堆叠看不清）
+                taskhistListEl.querySelectorAll('.taskhist-card.expanded').forEach(function (c) {
+                    c.classList.remove('expanded');
+                    c.querySelector('.taskhist-detail').classList.add('hidden');
+                });
+                card.classList.add('expanded');
+                thExpandId = t.task_id;
+                detail.classList.remove('hidden');
+                detail.textContent = '加载详情…';
+                fetch('/api/agent/task/' + encodeURIComponent(t.task_id) + '?username=' + encodeURIComponent(kbUsername()))
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
+                        var d = res.data || {};
+                        detail.innerHTML = '';
+                        // 详情行构造辅助：标签 + pre-wrap 正文（保留换行）
+                        function row(label, text) {
+                            if (!text) return;
+                            var lab = document.createElement('div');
+                            lab.className = 'taskhist-d-label';
+                            lab.textContent = label;
+                            var body = document.createElement('div');
+                            body.className = 'taskhist-d-body';
+                            body.textContent = text;
+                            detail.appendChild(lab);
+                            detail.appendChild(body);
+                        }
+                        row('任务目标', d.goal);
+                        if (d.status === 'completed') row('最终总结', d.result);
+                        if (d.status === 'failed') row('失败原因', d.error);
+                        if (d.status === 'cancelled') row('取消说明', d.error);
+                        // 阶段六十五：详情渲染完成后追加执行轨迹区块（在详情回调内触发，避免 innerHTML 清空竞态）
+                        thLoadSteps(detail, t.task_id);
+                    })
+                    .catch(function () { detail.textContent = '详情加载失败'; });
+            });
+            taskhistListEl.appendChild(card);
+        });
+    }
+
+    taskhistBtn.addEventListener('click', taskhistOpenDialog);
+    taskhistClose.addEventListener('click', taskhistCloseDialog);
+
+    // ===== 阶段六十五：执行轨迹渲染 =====
+    // thApprovalLabel 审批情况标签文案归口
+    function thApprovalLabel(a) {
+        return { none: '免审批', approved: '审批通过', rejected: '用户拒绝', cancelled: '用户取消', timeout: '审批超时' }[a] || a || '—';
+    }
+    // thEnvLabel 执行环境标签文案归口
+    function thEnvLabel(e) {
+        return e === 'pc' ? '本地执行' : '服务端';
+    }
+    // thLoadSteps 执行轨迹拉取与渲染：每步工具调用时间线（序号/工具/环境/审批/耗时 + 参数结果摘要）
+    // 调用时机由任务详情回调触发（详情渲染完成后追加，避免并行竞态清空）
+    function thLoadSteps(detail, taskID) {
+        var box = document.createElement('div');
+        box.className = 'th-steps';
+        box.textContent = '执行轨迹加载中…';
+        detail.appendChild(box);
+        fetch('/api/agent/task/' + encodeURIComponent(taskID) + '/steps?username=' + encodeURIComponent(kbUsername()))
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { box.textContent = res.msg || '执行轨迹加载失败'; return; }
+                var steps = res.data.steps || [];
+                box.innerHTML = '';
+                var title = document.createElement('div');
+                title.className = 'th-steps-title';
+                title.textContent = steps.length ? ('执行轨迹（' + steps.length + ' 步）') : '执行轨迹（无工具调用）';
+                box.appendChild(title);
+                steps.forEach(function (s) {
+                    var item = document.createElement('div');
+                    item.className = 'th-step' + (s.ok ? '' : ' fail');
+                    var head = document.createElement('div');
+                    head.className = 'th-step-head';
+                    var seq = document.createElement('span');
+                    seq.className = 'th-step-seq';
+                    seq.textContent = s.seq;
+                    var tool = document.createElement('span');
+                    tool.className = 'th-step-tool';
+                    tool.textContent = s.tool;
+                    head.appendChild(seq);
+                    head.appendChild(tool);
+                    // 元信息一次拼接：执行环境 · 审批情况 · 耗时
+                    var meta = document.createElement('span');
+                    meta.className = 'th-step-meta';
+                    meta.textContent = thEnvLabel(s.env) + ' · ' + thApprovalLabel(s.approval) + ' · ' + (s.duration_ms || 0) + 'ms';
+                    head.appendChild(meta);
+                    item.appendChild(head);
+                    if (s.params) {
+                        var p = document.createElement('div');
+                        p.className = 'th-step-body';
+                        p.textContent = '参数：' + s.params;
+                        p.title = s.params; // 悬停看全文（服务端已截断）
+                        item.appendChild(p);
+                    }
+                    if (s.result) {
+                        var rEl = document.createElement('div');
+                        rEl.className = 'th-step-body';
+                        rEl.textContent = (s.ok ? '结果：' : '错误：') + s.result;
+                        rEl.title = s.result;
+                        item.appendChild(rEl);
+                    }
+                    box.appendChild(item);
+                });
+            })
+            .catch(function () { box.textContent = '执行轨迹加载失败'; });
+    }
+
+    taskhistPrev.addEventListener('click', function () { if (thPage > 1) { thPage--; taskhistLoad(); } });
+    taskhistNext.addEventListener('click', function () { thPage++; taskhistLoad(); });
+    // 状态筛选 chips：切换后重置页码并重新加载
+    taskhistFilterEl.addEventListener('click', function (e) {
+        var chip = e.target.closest('.taskhist-chip');
+        if (!chip) return;
+        taskhistFilterEl.querySelectorAll('.taskhist-chip').forEach(function (c) { c.classList.remove('active'); });
+        chip.classList.add('active');
+        thStatus = chip.dataset.status || '';
+        thPage = 1;
+        taskhistLoad();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !taskhistMask.classList.contains('hidden')) taskhistCloseDialog();
     });
 
     // ===== 阶段四十四：滚动条悬停显隐（微信设置页同款：默认隐藏，悬停滚动容器浮现，移出立即隐藏） =====

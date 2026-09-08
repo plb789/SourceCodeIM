@@ -300,43 +300,61 @@ func memGetCollection(agentID uint) (*chromem.Collection, error) {
 	return kbVectorDB.GetOrCreateCollection(fmt.Sprintf("mem_%d", agentID), nil, nil)
 }
 
+// memQueryTop 记忆向量检索归口（memContextForAgent 与 agentExpContext 共用）：
+// 按查询文本向量检索该 用户+智能体 的 top_k 条记忆内容；任何异常返回 nil（不外抛）
+// 原实现：检索逻辑内联在 memContextForAgent 中，阶段六十三抽出归口供 Agent 经验注入复用
+func memQueryTop(agentID uint, username, query string, topK int) []string {
+	query = strings.TrimSpace(query)
+	if agentID == 0 || !kbEmbedEnabled() || query == "" || topK <= 0 {
+		return nil
+	}
+	col, err := memGetCollection(agentID)
+	if err != nil {
+		return nil
+	}
+	n := col.Count()
+	if n <= 0 {
+		return nil
+	}
+	if n > topK {
+		n = topK
+	}
+	vecs, err := kbEmbed([]string{query})
+	if err != nil || len(vecs) == 0 {
+		return nil
+	}
+	res, err := col.QueryEmbedding(context.Background(), vecs[0], n, map[string]string{"username": username}, nil)
+	if err != nil || len(res) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(res))
+	for _, r := range res {
+		if c := strings.TrimSpace(r.Content); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // memContextForAgent 注入归口（aiBuildContext 调用）：问题向量检索该 用户+智能体 的 top_k 条记忆，
 // 拼装 system 消息；任何异常静默返回空串（不阻断问答链路）
+// 原实现：检索逻辑内联于本函数（向量检索→拼装）；阶段六十三改走 memQueryTop 归口
 func memContextForAgent(agent *AIRunAgent, username, question string) string {
-	question = strings.TrimSpace(question)
-	if agent == nil || agent.ID == 0 || !memEnabled || !kbEmbedEnabled() || question == "" {
+	if agent == nil || agent.ID == 0 || !memEnabled || question == "" {
 		return ""
 	}
 	if !memUserEnabled(username) {
 		return ""
 	}
-	col, err := memGetCollection(agent.ID)
-	if err != nil {
-		return ""
-	}
-	n := col.Count()
-	if n <= 0 {
-		return ""
-	}
-	if n > memTopK {
-		n = memTopK
-	}
-	vecs, err := kbEmbed([]string{question})
-	if err != nil || len(vecs) == 0 {
-		return ""
-	}
-	res, err := col.QueryEmbedding(context.Background(), vecs[0], n, map[string]string{"username": username}, nil)
-	if err != nil || len(res) == 0 {
+	items := memQueryTop(agent.ID, username, question, memTopK)
+	if len(items) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("以下是你要长期记住的关于该用户的记忆（背景参考，与本次问题相关时可自然运用，不要逐条复述）：")
-	for _, r := range res {
-		content := strings.TrimSpace(r.Content)
-		if content != "" {
-			b.WriteString("\n- ")
-			b.WriteString(content)
-		}
+	for _, content := range items {
+		b.WriteString("\n- ")
+		b.WriteString(content)
 	}
 	return b.String()
 }
@@ -516,4 +534,100 @@ func (s *Server) HandleMemoryClear(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	adminJSON(w, map[string]interface{}{"cleared": true})
+}
+
+// ===== 阶段六十三：Agent 经验记忆 =====
+// 目标：Agent 任务完成后异步提炼「可复用经验」（编译命令/项目结构/环境约束/踩坑教训/用户要求），
+// 复用既有记忆存储链路落库（source=agent 与聊天记忆区分）；下次同类任务发起时按目标向量检索注入，
+// 实现「越用越顺手」的经验沉淀闭环。复用约束：受 ai.memory.enabled 总开关与用户级记忆偏好控制，
+// 去重/上限淘汰/向量索引全走 memSaveItem 归口，无需新增配置节点。
+
+// agentExpEnqueue Agent 任务经验提取入口（agentFinish completed 分支调用）：
+// 任务完成频率远低于聊天，直接开 goroutine 异步提取即可（无需独立队列限流），失败仅记日志
+func agentExpEnqueue(agent *AIRunAgent, username, goal, todoSummary, result string, steps int) {
+	// 内置 mock 兜底智能体（无 DB 记录 ID=0）不做记忆（无法定位归属与集合）
+	if agent == nil || agent.ID == 0 || !memEnabled || !kbEmbedEnabled() {
+		return
+	}
+	if !memUserEnabled(username) {
+		return
+	}
+	go agentExpExtract(agent, username, goal, todoSummary, result, steps)
+}
+
+// agentExpExtract 经验提取执行：任务要素（目标+清单终态+步数+最终总结）交提取模型提炼可复用经验，
+// 逐条走 memSaveItem 落库（source="agent"）；提取模型复用 memExtractProvider 归口
+func agentExpExtract(agent *AIRunAgent, username, goal, todoSummary, result string, steps int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("Agent 经验提取异常恢复（用户 %s，智能体 %s）：%v", username, agent.Name, r)
+		}
+	}()
+	extractor := memExtractProvider(agent)
+	if extractor == nil {
+		return
+	}
+	sys := "你是任务经验提炼器。从一次 Agent 自动化任务的执行记录中提炼值得长期记住、下次同类任务可直接复用的经验。" +
+		"值得记录的内容举例：本环境可用的命令与工具链（如 Go 可用 go run/go build、npm 可用，即使基础操作也算——它证明了本环境支持该做法）、" +
+		"项目结构与关键文件位置、环境约束（如改配置须重启才生效）、用户明确的要求或偏好、踩过的坑与有效解法。" +
+		"规则：每条经验独立成句、具体可操作、不超过100字；最多3条；只提炼记录中明确体现的信息，不推测、不编造；没有值得记的内容时输出空数组。" +
+		"仅输出 JSON 字符串数组，格式如 [\"本环境 Go 工具链可用，go run 可直接执行单文件程序\",...]，不要输出任何其他内容。"
+	var b strings.Builder
+	b.WriteString("任务目标：" + truncateRunes(goal, 1000) + "\n")
+	if todoSummary != "" {
+		b.WriteString("任务清单（最终状态）：\n" + truncateRunes(todoSummary, 1500) + "\n")
+	}
+	b.WriteString(fmt.Sprintf("执行步数：%d\n", steps))
+	if result != "" {
+		b.WriteString("最终总结：" + truncateRunes(result, 1500))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	// 经验提取不关心 Token 统计，回调留空
+	raw, _, err := aiStreamChat(ctx, extractor, []aiChatMessage{
+		{Role: "system", Content: sys},
+		{Role: "user", Content: b.String()},
+	}, func(string) {})
+	if err != nil {
+		logger.Warn("Agent 经验提取模型调用失败（用户 %s，智能体 %s）：%v", username, agent.Name, err)
+		return
+	}
+	logger.Info("Agent 经验提取模型原始输出（用户 %s）：%s", username, truncateRunes(strings.TrimSpace(raw), 300))
+	items, err := parseMemoryItems(raw)
+	if err != nil || len(items) == 0 {
+		logger.Warn("Agent 经验提取无入库内容（用户 %s，智能体 %s，解析失败=%v，条数=%d）", username, agent.Name, err, len(items))
+		return // 无值得记的经验或输出异常，静默结束
+	}
+	saved := 0
+	for _, item := range items {
+		// 复用记忆落库归口（精确+向量去重、上限淘汰、向量索引全复用）；source=agent 标记任务经验
+		if memSaveItem(agent.ID, username, item, "agent") > 0 {
+			saved++
+		}
+	}
+	logger.Info("Agent 任务经验沉淀完成（用户 %s，智能体 %s，提炼 %d 条入库 %d 条）", username, agent.Name, len(items), saved)
+}
+
+// agentExpContext Agent 任务经验注入归口（runAgentTask 启动时调用）：按任务目标向量检索
+// 该 用户+智能体 的历史记忆（聊天记忆与任务经验同一集合，按相似度混合召回 top_k 条），
+// 拼装 system 附加段；任何异常静默返回空串（不阻断任务链路）
+func agentExpContext(agent *AIRunAgent, username, goal string) string {
+	if agent == nil || agent.ID == 0 || !memEnabled || goal == "" {
+		return ""
+	}
+	if !memUserEnabled(username) {
+		return ""
+	}
+	items := memQueryTop(agent.ID, username, goal, memTopK)
+	if len(items) == 0 {
+		return ""
+	}
+	logger.Info("Agent 任务注入历史经验（用户 %s，智能体 %s，%d 条）", username, agent.Name, len(items))
+	var b strings.Builder
+	b.WriteString("以下是你长期记住的关于该用户的记忆与历史任务经验（背景参考，与本次任务相关时可自然运用，不要逐条复述）：")
+	for _, content := range items {
+		b.WriteString("\n- ")
+		b.WriteString(content)
+	}
+	return b.String()
 }

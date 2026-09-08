@@ -127,6 +127,8 @@
             // 阶段五十四：量化数据管理视图同样依赖 embedding 状态（编辑重嵌校验）与库下拉数据
             if (item.dataset.view === 'knowledge') { loadKBStatus(); loadKBList(); }
             else if (item.dataset.view === 'vecdata') { loadKBStatus(); loadVecKbOptions(); loadVecData(); }
+            // 阶段六十四：进入 Agent 任务审计视图拉取任务列表
+            else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
             else stopKBPolling();
         });
     });
@@ -1171,6 +1173,223 @@
         var pages = Math.max(1, Math.ceil(vecTotal / VEC_SIZE));
         if (vecPage < pages) { vecPage++; loadVecData(); }
     });
+
+    // ===== Agent 任务审计（阶段六十四：/admin/api/agent/tasks 全量任务分页 + 用户名/状态筛选 + 详情弹窗） =====
+    var AT_SIZE = 20;  // 每页条数（服务端上限 100）
+    var atPage = 1;    // 当前页码
+    var atTotal = 0;   // 匹配总条数
+
+    // atStateLabel 状态中文标签映射（与用户端口径一致）
+    function atStateLabel(s) {
+        return { running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
+    }
+
+    // atFormatTime 时间展示归口：yyyy-MM-dd HH:mm
+    function atFormatTime(ts) {
+        var d = new Date(ts);
+        if (!ts || isNaN(d.getTime())) return '-';
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') +
+            ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    // loadAgentTasks 主列表：全量任务分页（筛选取自工具条；空数据显示"暂无数据"）
+    function loadAgentTasks() {
+        var user = $('at-user-filter').value.trim();
+        var status = $('at-status-filter').value;
+        var url = '/admin/api/agent/tasks?page=' + atPage + '&size=' + AT_SIZE;
+        if (user) url += '&user=' + encodeURIComponent(user);
+        if (status) url += '&status=' + encodeURIComponent(status);
+        var body = $('at-tbody');
+        body.innerHTML = '<tr><td colspan="9" class="vec-empty">加载中…</td></tr>';
+        api('GET', url).then(function (result) {
+            if (!result.ok) {
+                body.innerHTML = '<tr><td colspan="9" class="vec-empty">加载失败</td></tr>';
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data || {};
+            atTotal = d.total || 0;
+            var pages = Math.max(1, Math.ceil(atTotal / AT_SIZE));
+            if (atPage > pages) { atPage = pages; loadAgentTasks(); return; } // 筛选后页码越界兜底
+            renderAgentTasks(d.tasks || []);
+            $('at-page-info').textContent = '共 ' + atTotal + ' 条 · 第 ' + atPage + ' / ' + pages + ' 页';
+            $('at-prev').disabled = atPage <= 1;
+            $('at-next').disabled = atPage >= pages;
+            $('at-status').textContent = '共 ' + atTotal + ' 条任务记录';
+        }).catch(function (e) {
+            body.innerHTML = '<tr><td colspan="9" class="vec-empty">加载失败</td></tr>';
+            showToast(e.message || '网络异常');
+        });
+    }
+
+    // atTd 单元格构造辅助（统一 class 与纯文本写入，防注入）
+    function atTd(text, cls) {
+        var td = document.createElement('td');
+        if (cls) td.className = cls;
+        td.textContent = text;
+        return td;
+    }
+
+    // renderAgentTasks 表格行渲染：目标列截断（title 悬浮全文）；操作列详情（全文弹窗）
+    function renderAgentTasks(tasks) {
+        var body = $('at-tbody');
+        body.innerHTML = '';
+        if (!tasks.length) {
+            body.innerHTML = '<tr><td colspan="9" class="vec-empty">暂无数据</td></tr>';
+            return;
+        }
+        tasks.forEach(function (t) {
+            var tr = document.createElement('tr');
+            tr.appendChild(atTd(t.task_id, 'vec-td-nowrap'));
+            tr.appendChild(atTd(t.username, 'vec-td-nowrap'));
+            tr.appendChild(atTd(t.agent_name, 'vec-td-nowrap'));
+            // 目标列：截断主文本（title 悬浮列表截断文本）
+            var tdGoal = document.createElement('td');
+            tdGoal.className = 'vec-td-file';
+            tdGoal.textContent = t.goal || '-';
+            tdGoal.title = t.goal || '';
+            tr.appendChild(tdGoal);
+            // 状态徽标
+            var tdSt = document.createElement('td');
+            var badge = document.createElement('span');
+            badge.className = 'at-badge at-st-' + t.status;
+            badge.textContent = atStateLabel(t.status);
+            tdSt.appendChild(badge);
+            tr.appendChild(tdSt);
+            tr.appendChild(atTd(String(t.steps || 0), 'vec-td-num'));
+            tr.appendChild(atTd(atFormatTime(t.create_time), 'vec-td-nowrap'));
+            tr.appendChild(atTd(atFormatTime(t.update_time), 'vec-td-nowrap'));
+            // 操作列：详情（全文弹窗，按需拉取）
+            var tdAct = document.createElement('td');
+            tdAct.className = 'vec-td-actions';
+            var btn = document.createElement('button');
+            btn.className = 'admin-btn small';
+            btn.textContent = '详情';
+            btn.addEventListener('click', function () { atOpenDetail(t.task_id); });
+            tdAct.appendChild(btn);
+            tr.appendChild(tdAct);
+            body.appendChild(tr);
+        });
+    }
+
+    // atOpenDetail 任务详情弹窗：按需拉取全文（目标/总结/失败原因，pre-wrap 保留换行）
+    function atOpenDetail(taskID) {
+        var mask = $('admin-atdetail-mask');
+        var title = $('admin-atdetail-title');
+        var bodyEl = $('admin-atdetail-body');
+        title.textContent = '任务详情 ' + taskID;
+        bodyEl.innerHTML = '<div class="vec-empty">加载中…</div>';
+        mask.classList.remove('hidden');
+        api('GET', '/admin/api/agent/task/' + encodeURIComponent(taskID)).then(function (result) {
+            if (!result.ok) { bodyEl.textContent = result.msg || '详情加载失败'; return; }
+            var d = result.data || {};
+            bodyEl.innerHTML = '';
+            function row(label, text) {
+                if (!text) return;
+                var lab = document.createElement('div');
+                lab.className = 'at-detail-label';
+                lab.textContent = label;
+                var body = document.createElement('div');
+                body.className = 'at-detail-body';
+                body.textContent = text;
+                bodyEl.appendChild(lab);
+                bodyEl.appendChild(body);
+            }
+            var meta = document.createElement('div');
+            meta.className = 'at-detail-meta';
+            meta.textContent = '用户：' + d.username + ' · 智能体：' + d.agent_name + ' · 状态：' + atStateLabel(d.status) +
+                ' · ' + (d.steps || 0) + ' 步 · 发起 ' + atFormatTime(d.create_time) + ' · 最近活动 ' + atFormatTime(d.update_time);
+            bodyEl.appendChild(meta);
+            row('任务目标', d.goal);
+            if (d.status === 'completed') row('最终总结', d.result);
+            if (d.status === 'failed') row('失败原因', d.error);
+            if (d.status === 'cancelled') row('取消说明', d.error);
+            // 阶段六十五：详情渲染完成后追加执行轨迹区块
+            atLoadSteps(bodyEl, taskID);
+        }).catch(function (e) { bodyEl.textContent = e.message || '网络异常'; });
+    }
+
+    // ===== 执行轨迹（阶段六十五：单任务全量步骤留痕时间线） =====
+    // atApprovalLabel 审批情况标签文案归口
+    function atApprovalLabel(a) {
+        return { none: '免审批', approved: '审批通过', rejected: '用户拒绝', cancelled: '用户取消', timeout: '审批超时' }[a] || a || '—';
+    }
+    // atEnvLabel 执行环境标签文案归口
+    function atEnvLabel(e) {
+        return e === 'pc' ? '本地执行' : '服务端';
+    }
+    // atLoadSteps 执行轨迹拉取与渲染（详情回调内触发，避免并行竞态清空）
+    function atLoadSteps(bodyEl, taskID) {
+        var box = document.createElement('div');
+        box.className = 'at-steps';
+        box.innerHTML = '<div class="at-detail-label">执行轨迹</div><div class="vec-empty">加载中…</div>';
+        bodyEl.appendChild(box);
+        api('GET', '/admin/api/agent/task/' + encodeURIComponent(taskID) + '/steps').then(function (result) {
+            if (!result.ok) {
+                box.innerHTML = '<div class="at-detail-label">执行轨迹</div><div class="vec-empty">' + (result.msg || '加载失败') + '</div>';
+                return;
+            }
+            var steps = result.data.steps || [];
+            box.innerHTML = '<div class="at-detail-label">执行轨迹（' + steps.length + ' 步）</div>';
+            if (!steps.length) {
+                var empty = document.createElement('div');
+                empty.className = 'vec-empty';
+                empty.textContent = '无工具调用';
+                box.appendChild(empty);
+                return;
+            }
+            steps.forEach(function (s) {
+                var item = document.createElement('div');
+                item.className = 'at-step' + (s.ok ? '' : ' fail');
+                var head = document.createElement('div');
+                head.className = 'at-step-head';
+                var seq = document.createElement('span');
+                seq.className = 'at-step-seq';
+                seq.textContent = s.seq;
+                var tool = document.createElement('span');
+                tool.className = 'at-step-tool';
+                tool.textContent = s.tool;
+                var meta = document.createElement('span');
+                meta.className = 'at-step-meta';
+                meta.textContent = atEnvLabel(s.env) + ' · ' + atApprovalLabel(s.approval) + ' · ' + (s.duration_ms || 0) + 'ms · ' + atFormatTime(s.create_time);
+                head.appendChild(seq);
+                head.appendChild(tool);
+                head.appendChild(meta);
+                item.appendChild(head);
+                if (s.params) {
+                    var p = document.createElement('div');
+                    p.className = 'at-step-body';
+                    p.textContent = '参数：' + s.params;
+                    p.title = s.params;
+                    item.appendChild(p);
+                }
+                if (s.result) {
+                    var r = document.createElement('div');
+                    r.className = 'at-step-body';
+                    r.textContent = (s.ok ? '结果：' : '错误：') + s.result;
+                    r.title = s.result;
+                    item.appendChild(r);
+                }
+                box.appendChild(item);
+            });
+        }).catch(function (e) {
+            box.innerHTML = '<div class="at-detail-label">执行轨迹</div><div class="vec-empty">' + (e.message || '网络异常') + '</div>';
+        });
+    }
+
+    // 工具条事件：用户名搜索（按钮+回车）/ 状态筛选 / 刷新 / 分页 / 详情关闭
+    $('at-search-btn').addEventListener('click', function () { atPage = 1; loadAgentTasks(); });
+    $('at-user-filter').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { atPage = 1; loadAgentTasks(); }
+    });
+    $('at-status-filter').addEventListener('change', function () { atPage = 1; loadAgentTasks(); });
+    $('at-refresh').addEventListener('click', loadAgentTasks);
+    $('at-prev').addEventListener('click', function () { if (atPage > 1) { atPage--; loadAgentTasks(); } });
+    $('at-next').addEventListener('click', function () {
+        var pages = Math.max(1, Math.ceil(atTotal / AT_SIZE));
+        if (atPage < pages) { atPage++; loadAgentTasks(); }
+    });
+    $('admin-atdetail-close').addEventListener('click', function () { $('admin-atdetail-mask').classList.add('hidden'); });
 
     // stopKBPolling 离开知识库视图/退出登录时停止处理中文件轮询
     function stopKBPolling() {

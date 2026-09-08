@@ -88,6 +88,12 @@ func main() {
 	http.HandleFunc("DELETE /api/agents/{id}/memory/{mid}", srv.HandleMemoryDelete)
 	http.HandleFunc("DELETE /api/agents/{id}/memory", srv.HandleMemoryClear)
 
+	// 阶段六十四：Agent 任务历史（用户端仅本人任务，鉴权水位与 /api/agents 一致；管理端审计走 adminGuard）
+	http.HandleFunc("GET /api/agent/tasks", srv.HandleAgentTaskList)
+	http.HandleFunc("GET /api/agent/task/{task_id}", srv.HandleAgentTaskDetail)
+	// 阶段六十五：Agent 任务执行轨迹（每步工具调用留痕，详情展开时拉取）
+	http.HandleFunc("GET /api/agent/task/{task_id}/steps", srv.HandleAgentTaskSteps)
+
 	// 阶段五十九：Agent 工作区静态访问（页面预览支撑，仅限本人工作区内文件）
 	http.HandleFunc("GET /agent/preview", srv.HandleAgentPreview)
 	// 静态文件托管前端（im-client/web）

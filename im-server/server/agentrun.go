@@ -89,6 +89,7 @@ type AgentTask struct {
 	execCh      chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
 	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
 	steps       int
+	stepSeq     int // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
 	endOnce     sync.Once
 }
 
@@ -126,6 +127,10 @@ func InitAgent(cfg *config.Config) {
 	agentWorkRoot = cfg.AI.Agent.WorkspaceRoot
 	if err := store.DB.AutoMigrate(&model.AgentTaskRecord{}); err != nil {
 		logger.Error("Agent 任务表迁移失败: %v", err)
+	}
+	// 阶段六十五：执行步骤留痕表迁移
+	if err := store.DB.AutoMigrate(&model.AgentStepRecord{}); err != nil {
+		logger.Error("Agent 执行轨迹表迁移失败: %v", err)
 	}
 	// 阶段六十二：加载审批白名单（命令前缀 + 写文件免审批开关）——审批弹窗"同意并加白"持久化，重启不丢
 	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
@@ -429,6 +434,36 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 		logger.Warn("Agent 本地执行回传超时，回退服务端执行：%s 工具 %s", t.ID, tool)
 	}
 	return agentToolExec(s, t, tool, params), "server"
+}
+
+// agentStepTrace 阶段六十五：单步工具调用轨迹落库归口（免审/审批通过/拒绝/取消/超时/本地回退各分支统一收口）。
+// 每步即时落库（任务运行中查看详情亦可追溯已执行部分），序号取任务内递增 stepSeq；
+// 参数摘要截断 1000 字、结果摘要截断 2000 字防超长撑表；落库失败仅记日志不阻断任务执行
+func (s *Server) agentStepTrace(t *AgentTask, tool string, params map[string]interface{}, result string, ok bool, env, approval string, durationMS int64) {
+	t.mu.Lock()
+	t.stepSeq++
+	seq := t.stepSeq
+	t.mu.Unlock()
+	paramsJSON := ""
+	if len(params) > 0 {
+		if b, err := json.Marshal(params); err == nil {
+			paramsJSON = truncateRunes(string(b), 1000)
+		}
+	}
+	rec := model.AgentStepRecord{
+		TaskID:     t.ID,
+		Seq:        seq,
+		Tool:       tool,
+		Params:     paramsJSON,
+		Result:     truncateRunes(result, 2000),
+		OK:         ok,
+		Env:        env,
+		Approval:   approval,
+		DurationMS: durationMS,
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		logger.Error("Agent 执行轨迹落库失败（任务 %s 步骤 %d）：%v", t.ID, seq, err)
+	}
 }
 
 // agentWaitLocalExec 阶段六十：下发本地执行请求并挂起等待 PC 回传。
@@ -956,6 +991,14 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		switch status {
 		case "completed":
 			s.agentEmit(t, "done", map[string]interface{}{"result": result, "steps": t.steps})
+			// 阶段六十三：任务完成后异步提炼可复用经验入库（原实现：任务结束即止，无经验沉淀）
+			var todoSummary string
+			t.mu.Lock()
+			for _, it := range t.todo {
+				todoSummary += "[" + it.Status + "] " + it.Content + "\n"
+			}
+			t.mu.Unlock()
+			agentExpEnqueue(t.Agent, t.Username, t.Goal, todoSummary, result, t.steps)
 		case "cancelled":
 			s.agentEmit(t, "status", map[string]interface{}{"status": "cancelled", "text": "任务已取消"})
 		default:
@@ -973,9 +1016,15 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		return
 	}
 
+	// 阶段六十三：系统提示词追加历史经验上下文（按任务目标向量检索该用户与该智能体的记忆与任务经验，
+	// 原实现：仅注入 agentSystemPrompt，无经验复用）
+	sysContent := agentSystemPrompt(t.Username, wsDir, s.agentSandboxFor(t.Username))
+	if expCtx := agentExpContext(t.Agent, t.Username, t.Goal); expCtx != "" {
+		sysContent += "\n\n" + expCtx
+	}
 	msgs := []aiChatMessage{
 		// 阶段六十一：PC 端在线且用户配置了沙箱白名单时，注入本地授权目录（模型据此可用绝对路径操作用户自选目录）
-		{Role: "system", Content: agentSystemPrompt(t.Username, wsDir, s.agentSandboxFor(t.Username))},
+		{Role: "system", Content: sysContent},
 		{Role: "user", Content: t.Goal},
 	}
 	tools := agentToolDefinitions()
@@ -1047,38 +1096,49 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				}
 			}
 
+			// 阶段六十五：计时起点前移至 tool_start 之前，轨迹耗时覆盖"审批等待 + 执行"全程
+			start := time.Now()
+
 			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName)})
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
 			needApprove, reason := agentNeedsApproval(toolName, params)
 			var result string
+			var env string
 			if needApprove {
 				approved, out, aerr := s.agentWaitApproval(t, tc.ID, toolName, params, reason)
 				if aerr != nil {
+					// 阶段六十五：审批等待超时先留痕再中止任务
+					s.agentStepTrace(t, toolName, params, aerr.Error(), false, "server", "timeout", time.Since(start).Milliseconds())
 					s.agentFinish(t, "failed", "", aerr.Error())
 					return
 				}
 				if approved == "cancel" {
+					// 阶段六十五：审批中取消先留痕再收尾任务
+					s.agentStepTrace(t, toolName, params, "用户取消了任务", false, "server", "cancelled", time.Since(start).Milliseconds())
 					s.agentFinish(t, "cancelled", "", "用户取消")
 					return
 				}
 				if approved == "reject" {
 					result = "用户拒绝了该操作" + out
 					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": false, "output": result, "rejected": true})
+					// 阶段六十五：用户拒绝留痕（该步未执行）
+					s.agentStepTrace(t, toolName, params, result, false, "server", "rejected", time.Since(start).Milliseconds())
 				} else {
 					// 阶段六十：执行环境分派（PC 在线且开关开启时本地执行，事件流带 env 标签）
-					var env string
 					result, env = s.agentToolExecDispatch(t, tc.ID, toolName, params)
 					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": !strings.HasPrefix(result, "错误"), "output": result, "env": env})
+					// 阶段六十五：审批通过留痕（params 已含用户改参后的最终参数）
+					s.agentStepTrace(t, toolName, params, result, !strings.HasPrefix(result, "错误"), env, "approved", time.Since(start).Milliseconds())
 				}
 			} else {
-				start := time.Now()
-				var env string
 				result, env = s.agentToolExecDispatch(t, tc.ID, toolName, params)
 				s.agentEmit(t, "tool_result", map[string]interface{}{
 					"tool": toolName, "ok": !strings.HasPrefix(result, "错误"), "output": result,
 					"duration_ms": time.Since(start).Milliseconds(), "env": env,
 				})
+				// 阶段六十五：免审批步骤留痕
+				s.agentStepTrace(t, toolName, params, result, !strings.HasPrefix(result, "错误"), env, "none", time.Since(start).Milliseconds())
 			}
 
 			// tool 结果消息入历史（role=tool + tool_call_id，OpenAI 兼容格式）
@@ -1226,4 +1286,148 @@ func (s *Server) HandleAgentPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	// ServeFile 自动处理 MIME/Range/缓存头；路径已归口校验不越界
 	http.ServeFile(w, r, full)
+}
+
+// ===== 阶段六十四：Agent 任务历史查看 =====
+// 用户端：查看本人任务分页列表与单任务详情（鉴权水位与 /api/agents 一致：username 查询参数）；
+// 管理端：审计全部用户任务（adminGuard 保护，支持用户名/状态筛选）。
+// 数据归口 im_agent_task（running 态即建行、结束态更新，任务全程可追溯）；
+// 列表项 goal/result 截断防超长记录撑大响应，全文经详情接口获取。
+
+// agentTaskListQuery 任务列表查询参数解析归口（用户端与管理端共用）：页码/条数/状态筛选
+// 返回 (page, size, status)；status 为空表示不筛选
+func agentTaskListQuery(r *http.Request) (int, int, string) {
+	page := int(adminQueryUint(r.URL.Query().Get("page")))
+	if page <= 0 {
+		page = 1
+	}
+	size := int(adminQueryUint(r.URL.Query().Get("size")))
+	if size <= 0 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	return page, size, status
+}
+
+// agentTaskBrief 列表项构造归口：goal 截断 100 字、result 截断 300 字（全文走详情接口），
+// 其余字段原样输出（含 update_time 供前端展示最近活动时间）
+func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, map[string]interface{}{
+			"task_id":     r.TaskID,
+			"username":    r.Username,
+			"agent_name":  r.AgentName,
+			"goal":        truncateRunes(r.Goal, 100),
+			"result":      truncateRunes(r.Result, 300),
+			"error":       truncateRunes(r.Error, 200),
+			"status":      r.Status,
+			"steps":       r.Steps,
+			"create_time": r.CreateTime,
+			"update_time": r.UpdateTime,
+		})
+	}
+	return out
+}
+
+// HandleAgentTaskList 用户端任务历史分页列表（仅本人任务；status 可选筛选）
+func (s *Server) HandleAgentTaskList(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	page, size, status := agentTaskListQuery(r)
+	db := store.DB.Model(&model.AgentTaskRecord{}).Where("username = ?", username)
+	if status != "" {
+		db = db.Where("status = ?", status)
+	}
+	var total int64
+	db.Count(&total)
+	var rows []model.AgentTaskRecord
+	db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
+	adminJSON(w, map[string]interface{}{
+		"total": total, "page": page, "size": size,
+		"tasks": agentTaskBrief(rows),
+	})
+}
+
+// HandleAgentTaskDetail 用户端单任务详情（归属校验：仅本人任务可看，全文返回）
+func (s *Server) HandleAgentTaskDetail(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	var rec model.AgentTaskRecord
+	if err := store.DB.Where("task_id = ? AND username = ?", taskID, username).First(&rec).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	adminJSON(w, rec)
+}
+
+// HandleAdminAgentTaskList 管理端全量任务审计列表（user 用户名模糊筛选 + status 精确筛选 + 分页）
+func (s *Server) HandleAdminAgentTaskList(w http.ResponseWriter, r *http.Request) {
+	page, size, status := agentTaskListQuery(r)
+	user := strings.TrimSpace(r.URL.Query().Get("user"))
+	db := store.DB.Model(&model.AgentTaskRecord{})
+	if user != "" {
+		db = db.Where("username LIKE ?", "%"+user+"%")
+	}
+	if status != "" {
+		db = db.Where("status = ?", status)
+	}
+	var total int64
+	db.Count(&total)
+	var rows []model.AgentTaskRecord
+	db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
+	adminJSON(w, map[string]interface{}{
+		"total": total, "page": page, "size": size,
+		"tasks": agentTaskBrief(rows),
+	})
+}
+
+// HandleAdminAgentTaskDetail 管理端单任务详情（管理员权限，不做 username 限制，全文返回）
+func (s *Server) HandleAdminAgentTaskDetail(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	var rec model.AgentTaskRecord
+	if err := store.DB.Where("task_id = ?", taskID).First(&rec).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	adminJSON(w, rec)
+}
+
+// ===== 阶段六十五：Agent 执行轨迹留痕 =====
+// 每步工具调用即时落库 im_agent_step（免审/审批通过/拒绝/取消/超时各分支统一走 agentStepTrace 归口），
+// 用户端/管理端均按任务维度拉取全量步骤（步数上限 agentMaxSteps 且摘要已截断，体积可控，不分页）
+
+// HandleAgentTaskSteps 用户端单任务执行轨迹（归属校验：仅本人任务可看，按序号升序全量返回）
+func (s *Server) HandleAgentTaskSteps(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	// 归属校验归口 im_agent_task：非本人任务一律 404（与详情接口同语义）
+	var cnt int64
+	store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ? AND username = ?", taskID, username).Count(&cnt)
+	if cnt == 0 {
+		adminFail(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	var rows []model.AgentStepRecord
+	store.DB.Where("task_id = ?", taskID).Order("seq ASC").Find(&rows)
+	adminJSON(w, map[string]interface{}{"task_id": taskID, "total": len(rows), "steps": rows})
+}
+
+// HandleAdminAgentTaskSteps 管理端单任务执行轨迹（管理员权限，不做 username 限制）
+func (s *Server) HandleAdminAgentTaskSteps(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	var rows []model.AgentStepRecord
+	store.DB.Where("task_id = ?", taskID).Order("seq ASC").Find(&rows)
+	adminJSON(w, map[string]interface{}{"task_id": taskID, "total": len(rows), "steps": rows})
 }

@@ -106,6 +106,11 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("PUT /admin/api/kb/file/{id}/source", s.adminGuard(s.handleAdminKBFileSourcePut))
 	// 阶段五十四：量化数据管理（跨库切片聚合表格化展示/搜索/分页，实现归口 adminkb.go）
 	http.HandleFunc("GET /admin/api/kb/chunks", s.adminGuard(s.handleAdminKBVecChunks))
+	// 阶段六十四：Agent 任务审计（全量任务分页列表 + 单任务详情，实现归口 agentrun.go）
+	http.HandleFunc("GET /admin/api/agent/tasks", s.adminGuard(s.HandleAdminAgentTaskList))
+	http.HandleFunc("GET /admin/api/agent/task/{task_id}", s.adminGuard(s.HandleAdminAgentTaskDetail))
+	// 阶段六十五：Agent 任务执行轨迹审计（单任务全量步骤留痕）
+	http.HandleFunc("GET /admin/api/agent/task/{task_id}/steps", s.adminGuard(s.HandleAdminAgentTaskSteps))
 }
 
 // ===== 通用归口 =====
