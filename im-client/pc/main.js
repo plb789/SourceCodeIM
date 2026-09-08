@@ -297,6 +297,13 @@ ipcMain.on('agent:bg', function (event, req) {
     agentExecutor.requestBg(String((req && req.username) || ''));
 });
 
+// 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑 ← 服务端下行 msg 64 桥接）——
+// 与 agent:exec 同款：执行前按请求用户名注入沙箱白名单，路径校验/限额归口 agent-executor.js
+ipcMain.handle('agent:fileop', function (event, req) {
+    agentExecutor.setSandbox(String((req && req.username) || ''), sandboxStore[String((req && req.username) || '')] || null);
+    return agentExecutor.fileOp(String((req && req.username) || ''), req || {});
+});
+
 // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
 // 用户在渲染层工作区面板自选任意文件夹作为主工作区并维护授权目录白名单（原生目录选择对话框），
 // 配置持久化在本机 userData/agent_sandbox.json（按用户名隔离，本地磁盘路径机器相关，不上服务端数据库）；

@@ -83,6 +83,13 @@ const (
 	// 阶段七十五：命令执行实时输出流 + 转后台（TRAE 同款——长命令不阻塞对话，输出控制台实时可见）
 	MsgTypeAgentToolOutput = 60 // 上行：PC 渲染进程 → 服务端，本地命令输出增量/终态（content 为 JSON：{task_id,step,chunk,total_bytes,over,final,exit_code,duration_ms}；final=true 为进程结束帧，服务端转发为任务事件流 tool_output/tool_exit）
 	MsgTypeAgentBg         = 61 // 双向：前端 → 服务端请求长命令转后台（{task_id,step}）；服务端执行的服务端本地命令直接生效，PC 本地执行时服务端原样转发给 PC 渲染进程桥接到执行器
+
+	// 阶段七十六：Agent 工作区文件面板（Trae CN 同款——右侧文件树 + 高亮预览 + 手动编辑保存；
+	// 执行环境与 Agent 工具同源：PC 在线走用户本地磁盘（经 64/65 转发），离线回退服务端工作区）
+	MsgTypeWsFileReq  = 62 // 上行：web 前端 → 服务端文件面板请求（content 为 JSON：{op:"tree"/"read"/"save",req_id,path,content?}）
+	MsgTypeWsFileResp = 63 // 下行：服务端 → web 前端文件面板响应（content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
+	MsgTypePcFileReq  = 64 // 下行：服务端 → PC 渲染进程，本地文件操作请求（content 为 JSON：{op,req_id,path,content?}，路径校验复用执行器 safePath）
+	MsgTypePcFileResp = 65 // 上行：PC 渲染进程 → 服务端本地文件操作结果（content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -125,6 +125,12 @@ contextBridge.exposeInMainWorld('desktop', {
     agentBg: function (username) {
         ipcRenderer.send('agent:bg', { username: username });
     },
+    // ===== 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑） =====
+    // 渲染进程桥接：服务端下发的文件操作转发主进程执行（req = {username, op, path, content}）
+    // 返回 Promise<{ok, error?, root?, entries?/content?, binary?, truncated?}>，结果由渲染进程经 WS 回传服务端
+    workspaceOp: function (req) {
+        return ipcRenderer.invoke('agent:fileop', req);
+    },
     // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
     // 原生目录选择对话框（返回所选目录绝对路径，取消返回空串）
     sandboxChoose: function (title) {

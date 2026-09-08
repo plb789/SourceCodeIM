@@ -117,10 +117,14 @@ func (c *Client) readPump() {
 // 回归加固：写操作经 writeMu 串行化，避免与 SendErrorAndClose 的同步写并发冲突
 func (c *Client) writePump() {
 	for data := range c.sendCh {
+		wStart := time.Now()
 		c.writeMu.Lock()
 		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		err := c.conn.WriteMessage(websocket.TextMessage, data)
 		c.writeMu.Unlock()
+		if cost := time.Since(wStart); cost > 200*time.Millisecond {
+			logger.Warn("慢写观测（用户 %s 写耗时 %v 帧 %d 字节）", c.username, cost, len(data))
+		}
 		if err != nil {
 			return
 		}

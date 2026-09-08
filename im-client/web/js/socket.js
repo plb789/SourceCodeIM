@@ -84,7 +84,11 @@
         PURGE_RESP: 58,      // 阶段七十二：私聊永久删除审批响应（上行 to_user=发起方，msg_id=apply_id，content=agree/reject）
         AI_STOP: 59,         // 阶段七十三：AI 流式问答停止（上行 to_user=智能体名；发送按钮"停止"态触发）
         AGENT_TOOL_OUTPUT: 60, // 阶段七十五：本地命令输出流上行（PC 渲染进程 → 服务端，content 为 JSON：{task_id,step,chunk,total_bytes,over,final,exit_code,duration_ms}）
-        AGENT_BG: 61         // 阶段七十五：长命令"转后台"（上行前端 → 服务端 {task_id,step}；下行服务端 → PC 渲染层原样转发桥接执行器）
+        AGENT_BG: 61,        // 阶段七十五：长命令"转后台"（上行前端 → 服务端 {task_id,step}；下行服务端 → PC 渲染层原样转发桥接执行器）
+        WS_FILE_REQ: 62,     // 阶段七十六：工作区文件面板请求上行（web 前端 → 服务端，content 为 JSON：{op:"tree"/"read"/"save",req_id,path,content?}）
+        WS_FILE_RESP: 63,    // 阶段七十六：工作区文件面板响应下行（服务端 → web 前端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
+        PC_FILE_REQ: 64,     // 阶段七十六：本地文件操作请求下行（服务端 → PC 渲染进程，仅 PC 端处理，content 为 JSON：{op,req_id,path,content?}）
+        PC_FILE_RESP: 65     // 阶段七十六：本地文件操作结果上行（PC 渲染进程 → 服务端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
     };
 
     function connect(username, password) {

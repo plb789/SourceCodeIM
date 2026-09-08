@@ -2878,6 +2878,8 @@
         agentModeBtn.classList.toggle('active', on);
         messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
         updateSendBtnState(); // 阶段七十三：模式切换联动发送按钮停止态（任务执行中开/关任务模式）
+        // 阶段七十六：Agent 模式联动工作区文件面板（开启显示右侧文件树，关闭隐藏只留聊天）
+        wsPanelSetVisible(on && !!currentChatUser && isAIAgent(currentChatUser));
     }
 
     agentModeBtn.addEventListener('click', function () {
@@ -3440,6 +3442,10 @@
             buildAgentCmdConsole(block, st, ev.call_id);
             agentConsoleBegin(st, ev); // 阶段七十五（增强）：同步写入底部独立控制台抽屉 + 浮出"打开控制台"入口
         }
+        // 阶段七十六：文件面板角标（write_file=新 / edit_file=改），工具结果到达后刷新树并自动打开
+        if ((ev.tool === 'write_file' || ev.tool === 'edit_file') && ev.params && ev.params.path) {
+            wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
+        }
         // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
         block.classList.add('collapsed');
         head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
@@ -3740,6 +3746,594 @@
         agentConsole.agent = null;
     }
 
+    // ===== 阶段七十六：Agent 工作区文件面板（Trae CN 同款）=====
+    // Agent 模式开启时聊天区右侧显示工作区文件树（目录懒加载展开），点击文件高亮预览源码
+    //（highlight.js 本地库，cpp/go/js/py 等常用语言），可切编辑模式手动修改保存回磁盘；
+    // write_file/edit_file 工具执行后自动刷新树、打"新/改"角标并自动打开该文件。
+    // 文件操作经服务端归口（msg 62/63）：PC 在线落到用户本地磁盘（沙箱白名单校验），离线回退服务端工作区。
+    var wsPanel = {
+        aside: null, treeEl: null, viewEl: null, viewBody: null, viewName: null, rootEl: null,
+        btnEdit: null, btnSave: null, btnCancel: null, ta: null,
+        visible: false, root: '', reqSeq: 0, pending: {},
+        expanded: {},  // 目录路径 → true（刷新后保持展开）
+        dirRows: {},   // 目录路径 → { arrow, kids }
+        fileRows: {},  // 文件路径 → 行元素（角标定位）
+        badges: {},    // 文件路径 → 'new' | 'mod'
+        curPath: null, curContent: '', editing: false,
+        // 阶段七十六增强（Trae CN 同款标签页）：多文件同时打开、点标签切换、× 关闭；
+        // tabs: path → {name,content,binary,truncated,isMd,error,loading,draft?}，draft=未保存编辑草稿（切标签保留）
+        tabs: {}, tabOrder: [], activeTab: null
+    };
+
+    // 扩展名 → highlight.js 语言映射（覆盖常见源码/配置；未命中走纯文本）
+    var WS_LANG_MAP = {
+        go: 'go', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+        ts: 'typescript', tsx: 'typescript', py: 'python', c: 'c', h: 'c',
+        cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', java: 'java', cs: 'csharp',
+        rs: 'rust', rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin', scala: 'scala',
+        sh: 'bash', bash: 'bash', bat: 'batch', cmd: 'batch', ps1: 'powershell',
+        json: 'json', xml: 'xml', html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
+        md: 'markdown', yml: 'yaml', yaml: 'yaml', sql: 'sql', ini: 'ini', toml: 'toml',
+        lua: 'lua', vue: 'xml', dart: 'dart', r: 'r', pl: 'perl', m: 'objectivec'
+    };
+
+    // 扩展名 → 文件类型图标（Trae CN 同款彩色语言徽标）：bg=品牌底色 label=徽标字母 fg=深色字（黄底等浅背景用）
+    // 特殊类型（图片/音视频/压缩/可执行）用 emoji 更直观；未命中回退 📄
+    var WS_ICON_MAP = {
+        go:    { bg: '#00ADD8', label: 'GO' },
+        js:    { bg: '#F7DF1E', label: 'JS', fg: '#323330' },
+        mjs:   { bg: '#F7DF1E', label: 'JS', fg: '#323330' },
+        cjs:   { bg: '#F7DF1E', label: 'JS', fg: '#323330' },
+        ts:    { bg: '#3178C6', label: 'TS' },
+        tsx:   { bg: '#3178C6', label: 'TS' },
+        jsx:   { bg: '#61DAFB', label: 'JX', fg: '#20232a' },
+        py:    { bg: '#3776AB', label: 'PY' },
+        java:  { bg: '#EA2D2E', label: 'JV' },
+        c:     { bg: '#5C6BC0', label: 'C' },
+        h:     { bg: '#5C6BC0', label: 'H' },
+        cpp:   { bg: '#00599C', label: 'C++' },
+        hpp:   { bg: '#00599C', label: 'H+' },
+        cc:    { bg: '#00599C', label: 'C++' },
+        cs:    { bg: '#68217A', label: 'C#' },
+        rs:    { bg: '#DEA584', label: 'RS', fg: '#4a2b1d' },
+        php:   { bg: '#777BB4', label: 'PHP' },
+        rb:    { bg: '#CC342D', label: 'RB' },
+        swift: { bg: '#F05138', label: 'SW' },
+        kt:    { bg: '#7F52FF', label: 'KT' },
+        dart:  { bg: '#0175C2', label: 'DA' },
+        vue:   { bg: '#42B883', label: 'V' },
+        html:  { bg: '#E34F26', label: '<>' },
+        htm:   { bg: '#E34F26', label: '<>' },
+        css:   { bg: '#1572B6', label: 'CS' },
+        scss:  { bg: '#CC6699', label: 'SC' },
+        less:  { bg: '#2B5E91', label: 'LE' },
+        json:  { bg: '#E8E4B8', label: '{}', fg: '#5a5510' },
+        xml:   { bg: '#0060AC', label: 'XM' },
+        yml:   { bg: '#cb171e', label: 'Y' },
+        yaml:  { bg: '#cb171e', label: 'Y' },
+        md:    { bg: '#519ABA', label: 'MD' },
+        markdown: { bg: '#519ABA', label: 'MD' },
+        sql:   { bg: '#DD6B20', label: 'SQ' },
+        sh:    { bg: '#89e051', label: 'SH', fg: '#283c1a' },
+        bat:   { bg: '#C1F12E', label: 'BT', fg: '#3d4a12' },
+        cmd:   { bg: '#C1F12E', label: 'BT', fg: '#3d4a12' },
+        ps1:   { bg: '#5391FE', label: 'PS' },
+        lua:   { bg: '#4B62C6', label: 'LU' },
+        ini:   { bg: '#9AA0A6', label: 'IN' },
+        toml:  { bg: '#9AA0A6', label: 'TM' },
+        pdf:   { bg: '#B30B00', label: 'PD' },
+        // 特殊类型 emoji（缩略图形义直观看图即知）
+        png: { emoji: '🖼' }, jpg: { emoji: '🖼' }, jpeg: { emoji: '🖼' }, gif: { emoji: '🖼' },
+        webp: { emoji: '🖼' }, bmp: { emoji: '🖼' }, svg: { emoji: '🖼' }, ico: { emoji: '🖼' },
+        mp3: { emoji: '🎵' }, wav: { emoji: '🎵' }, flac: { emoji: '🎵' }, ogg: { emoji: '🎵' },
+        mp4: { emoji: '🎬' }, avi: { emoji: '🎬' }, mkv: { emoji: '🎬' }, mov: { emoji: '🎬' },
+        zip: { emoji: '📦' }, rar: { emoji: '📦' }, '7z': { emoji: '📦' }, tar: { emoji: '📦' }, gz: { emoji: '📦' },
+        exe: { emoji: '⚙️' }, dll: { emoji: '⚙️' }, msi: { emoji: '⚙️' }, apk: { emoji: '🤖' },
+        woff: { emoji: '🅰' }, ttf: { emoji: '🅰' }, otf: { emoji: '🅰' }
+    };
+
+    // 生成文件类型图标元素（目录=文件夹；命中映射出彩色徽标/emoji；未识别=普通文件）
+    function wsMakeFileIcon(en) {
+        var el = document.createElement('span');
+        el.className = 'ws-row-icon';
+        if (en.dir) {
+            el.textContent = '📁';
+            return el;
+        }
+        var ext = (en.name.replace(/^.*\./, '') || '').toLowerCase();
+        var ic = WS_ICON_MAP[ext];
+        if (!ic) {
+            el.textContent = '📄';
+            return el;
+        }
+        if (ic.emoji) {
+            el.textContent = ic.emoji;
+            return el;
+        }
+        el.className = 'ws-row-icon ws-file-icon';
+        el.style.background = ic.bg;
+        el.textContent = ic.label;
+        if (ic.fg) el.style.color = ic.fg;
+        el.title = ext.toUpperCase();
+        return el;
+    }
+
+    function wsPanelEnsure() {
+        if (wsPanel.aside) return true;
+        var view = document.querySelector('.chat-view');
+        if (!view) return false;
+        var aside = document.createElement('aside');
+        aside.id = 'ws-panel';
+        aside.className = 'ws-panel hidden';
+        // 头部：标题 + 工作区根路径回显 + 刷新
+        var head = document.createElement('div');
+        head.className = 'ws-panel-head';
+        var title = document.createElement('span');
+        title.className = 'ws-panel-title';
+        title.textContent = '工作区';
+        wsPanel.rootEl = document.createElement('span');
+        wsPanel.rootEl.className = 'ws-panel-root';
+        var refreshBtn = document.createElement('button');
+        refreshBtn.className = 'ws-panel-btn';
+        refreshBtn.type = 'button';
+        refreshBtn.textContent = '刷新';
+        refreshBtn.title = '重新加载文件树';
+        refreshBtn.addEventListener('click', function () { wsPanelRefreshTree(); });
+        head.appendChild(title);
+        head.appendChild(wsPanel.rootEl);
+        head.appendChild(refreshBtn);
+        // 文件树（懒加载：展开目录时才拉取子级）
+        wsPanel.treeEl = document.createElement('div');
+        wsPanel.treeEl.className = 'ws-panel-tree';
+        // 文件预览/编辑区（Trae CN 同款：标签栏 + 内容区，多文件并存切换）
+        wsPanel.viewEl = document.createElement('div');
+        wsPanel.viewEl.className = 'ws-panel-view hidden';
+        var viewHead = document.createElement('div');
+        viewHead.className = 'ws-view-head';
+        wsPanel.tabBarEl = document.createElement('div');
+        wsPanel.tabBarEl.className = 'ws-tab-bar';
+        wsPanel.btnEdit = document.createElement('button');
+        wsPanel.btnEdit.className = 'ws-panel-btn';
+        wsPanel.btnEdit.type = 'button';
+        wsPanel.btnEdit.textContent = '编辑';
+        wsPanel.btnEdit.addEventListener('click', wsPanelStartEdit);
+        wsPanel.btnSave = document.createElement('button');
+        wsPanel.btnSave.className = 'ws-panel-btn primary';
+        wsPanel.btnSave.type = 'button';
+        wsPanel.btnSave.textContent = '保存';
+        wsPanel.btnSave.addEventListener('click', wsPanelSave);
+        wsPanel.btnCancel = document.createElement('button');
+        wsPanel.btnCancel.className = 'ws-panel-btn';
+        wsPanel.btnCancel.type = 'button';
+        wsPanel.btnCancel.textContent = '取消';
+        wsPanel.btnCancel.addEventListener('click', function () { if (wsPanel.activeTab) wsPanelOpen(wsPanel.activeTab, true); });
+        var btnClose = document.createElement('button');
+        btnClose.className = 'ws-panel-btn';
+        btnClose.type = 'button';
+        btnClose.textContent = '×';
+        btnClose.title = '关闭当前标签';
+        btnClose.addEventListener('click', function () { if (wsPanel.activeTab) wsPanelCloseTab(wsPanel.activeTab); });
+        viewHead.appendChild(wsPanel.tabBarEl);
+        viewHead.appendChild(wsPanel.btnEdit);
+        viewHead.appendChild(wsPanel.btnSave);
+        viewHead.appendChild(wsPanel.btnCancel);
+        viewHead.appendChild(btnClose);
+        wsPanel.viewBody = document.createElement('div');
+        wsPanel.viewBody.className = 'ws-view-body';
+        wsPanel.viewEl.appendChild(viewHead);
+        wsPanel.viewEl.appendChild(wsPanel.viewBody);
+        // 阶段七十六：文件树与预览区挂自绘悬浮滑块（全局系统滚动条已禁用，动态容器须显式注册）
+        if (window._osbInit) { window._osbInit(wsPanel.treeEl); window._osbInit(wsPanel.viewBody); }
+        aside.appendChild(head);
+        aside.appendChild(wsPanel.treeEl);
+        aside.appendChild(wsPanel.viewEl);
+        view.appendChild(aside);
+        wsPanel.aside = aside;
+        // 响应归路：服务端 63 帧按 req_id 投递
+        IMSocket.on(MSG.WS_FILE_RESP, function (msg) {
+            if (msg.to_user !== IMSocket.getUsername()) return;
+            var ev;
+            try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'recv63', t: Date.now(), rid: ev.req_id });
+            var p = wsPanel.pending[ev.req_id];
+            if (!p) return;
+            clearTimeout(p.timer);
+            delete wsPanel.pending[ev.req_id];
+            if (ev.ok) p.resolve(ev); else p.reject(new Error(ev.error || '操作失败'));
+        });
+        return true;
+    }
+
+    // 面板显隐归口：Agent 模式开 + 当前会话为 AI 智能体 才显示（开面板即拉取根目录）
+    function wsPanelSetVisible(on) {
+        if (on) {
+            if (!wsPanelEnsure()) return;
+            wsPanel.visible = true;
+            wsPanel.aside.classList.remove('hidden');
+            wsPanelRefreshTree();
+        } else {
+            wsPanel.visible = false;
+            if (wsPanel.aside) wsPanel.aside.classList.add('hidden');
+        }
+    }
+
+    // 面板请求归口（tree/read/save），req_id 归属 + 20 秒超时
+    function wsPanelReq(op, path, content) {
+        return new Promise(function (resolve, reject) {
+            if (!wsPanelEnsure()) { reject(new Error('面板未就绪')); return; }
+            var reqId = 'fp' + (++wsPanel.reqSeq) + '_' + Date.now();
+            var rec = {
+                resolve: resolve, reject: reject,
+                timer: setTimeout(function () {
+                    delete wsPanel.pending[reqId];
+                    reject(new Error('请求超时'));
+                }, 20000)
+            };
+            wsPanel.pending[reqId] = rec;
+            if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'send62', t: Date.now(), rid: reqId });
+            var okSend = IMSocket.send({
+                msg_type: MSG.WS_FILE_REQ,
+                from_user: IMSocket.getUsername(),
+                content: JSON.stringify({ op: op, req_id: reqId, path: path || '', content: content || '' })
+            });
+            if (!okSend) {
+                clearTimeout(rec.timer);
+                delete wsPanel.pending[reqId];
+                reject(new Error('连接不可用'));
+            }
+        });
+    }
+
+    // 刷新文件树：保留展开状态与角标，根目录重拉，已展开目录随渲染自动重载
+    function wsPanelRefreshTree() {
+        if (!wsPanel.visible || !wsPanel.treeEl) return;
+        wsPanel.dirRows = {};
+        wsPanel.fileRows = {};
+        wsPanel.treeEl.textContent = '';
+        wsPanelLoadDir('', wsPanel.treeEl);
+    }
+
+    // 拉取并渲染一级目录（path 为空=工作区根；子路径用 / 拼接）
+    function wsPanelLoadDir(path, container) {
+        container.textContent = '';
+        var loading = document.createElement('div');
+        loading.className = 'ws-panel-hint';
+        loading.textContent = '加载中…';
+        container.appendChild(loading);
+        wsPanelReq('tree', path).then(function (res) {
+            if (path === '' && wsPanel.rootEl) {
+                wsPanel.root = res.root || '';
+                wsPanel.rootEl.textContent = wsPanel.root;
+                wsPanel.rootEl.title = wsPanel.root;
+            }
+            container.textContent = '';
+            if (!res.entries || !res.entries.length) {
+                var empty = document.createElement('div');
+                empty.className = 'ws-panel-hint';
+                empty.textContent = '（空目录）';
+                container.appendChild(empty);
+                return;
+            }
+            res.entries.forEach(function (en) {
+                container.appendChild(wsPanelMakeRow(path, en));
+            });
+        }).catch(function (err) {
+            container.textContent = '';
+            var tip = document.createElement('div');
+            tip.className = 'ws-panel-hint';
+            tip.textContent = '加载失败：' + (err && err.message || err);
+            container.appendChild(tip);
+        });
+    }
+
+    // 生成一行（目录可展开懒加载；文件点击预览；带 新/改 角标）
+    // 结构：row（块级）= head（flex 行：箭头+图标+名称）+ kids（子节点缩进容器，目录独有）
+    // 修复：原 kids 直接塞进 flex row 被横排到目录名右侧（层级深了视觉错乱），现 head/kids 分层标准缩进树
+    function wsPanelMakeRow(parentPath, en) {
+        var selfPath = parentPath ? parentPath + '/' + en.name : en.name;
+        var row = document.createElement('div');
+        row.className = 'ws-row ' + (en.dir ? 'dir' : 'file');
+        var head = document.createElement('div');
+        head.className = 'ws-row-head';
+        head.title = en.name + (en.dir ? '' : '（' + (en.size || 0) + ' 字节）');
+        var arrow = document.createElement('span');
+        arrow.className = 'ws-row-arrow';
+        arrow.textContent = en.dir ? '▸' : '';
+        var icon = wsMakeFileIcon(en); // 按扩展名出彩色语言徽标（Trae CN 同款）
+        var name = document.createElement('span');
+        name.className = 'ws-row-name';
+        name.textContent = en.name;
+        head.appendChild(arrow);
+        head.appendChild(icon);
+        head.appendChild(name);
+        row.appendChild(head);
+        if (!en.dir) {
+            wsPanel.fileRows[selfPath] = head;
+            if (wsPanel.badges[selfPath]) head.classList.add(wsPanel.badges[selfPath] === 'new' ? 'badge-new' : 'badge-mod');
+            head.addEventListener('click', function () {
+                Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
+                head.classList.add('active');
+                wsPanelOpen(selfPath);
+            });
+            return row;
+        }
+        var kids = document.createElement('div');
+        kids.className = 'ws-row-kids hidden';
+        wsPanel.dirRows[selfPath] = { arrow: arrow, kids: kids };
+        head.addEventListener('click', function () {
+            var key = selfPath;
+            if (wsPanel.expanded[key]) {
+                wsPanel.expanded[key] = false;
+                kids.classList.add('hidden');
+                arrow.textContent = '▸';
+                head.classList.remove('open');
+            } else {
+                wsPanel.expanded[key] = true;
+                if (!kids.dataset.loaded) {
+                    kids.dataset.loaded = '1';
+                    wsPanelLoadDir(key, kids);
+                }
+                kids.classList.remove('hidden');
+                arrow.textContent = '▾';
+                head.classList.add('open');
+            }
+        });
+        // 刷新后恢复展开态（懒加载链式自动重建整棵展开子树）
+        if (wsPanel.expanded[selfPath]) {
+            kids.dataset.loaded = '1';
+            wsPanelLoadDir(selfPath, kids);
+            arrow.textContent = '▾';
+            head.classList.add('open');
+            kids.classList.remove('hidden');
+        }
+        row.appendChild(kids);
+        return row;
+    }
+
+    // 绝对路径 → 相对工作区键（根前缀剥离；无法归一化返回 null，仅触发刷新不打角标）
+    function wsPanelNormalizeKey(p) {
+        var key = String(p || '').trim().replace(/\\/g, '/');
+        if (!key) return null;
+        if (!wsPanel.root) return null;
+        var rootN = wsPanel.root.replace(/\\/g, '/').replace(/\/+$/, '');
+        var lowKey = key.toLowerCase(), lowRoot = rootN.toLowerCase();
+        if (lowKey === lowRoot) return '';
+        if (lowKey.indexOf(lowRoot + '/') === 0) return key.slice(rootN.length + 1);
+        if (key.indexOf('/') === 0 || /^[a-zA-Z]:/.test(key)) return null; // 工作区外绝对路径
+        return key; // 已是相对路径
+    }
+
+    // 工具写入/编辑文件：打角标（addAgentTool 工具开始时调用）
+    function wsPanelTouchPath(path, kind) {
+        var key = wsPanelNormalizeKey(path);
+        if (!key && key !== '') return;
+        wsPanel.badges[key] = kind;
+        var row = wsPanel.fileRows[key];
+        if (row) row.classList.add(kind === 'new' ? 'badge-new' : 'badge-mod');
+    }
+
+    // 工具结果到达：刷新树 + TRAE 同款自动打开该文件（面板可见时）；已开标签强制重读磁盘最新内容
+    function wsPanelOnToolResult(ev) {
+        if (!wsPanel.visible) return;
+        if (ev.tool !== 'write_file' && ev.tool !== 'edit_file') return;
+        var key = wsPanelNormalizeKey(ev.params && ev.params.path);
+        if (key || key === '') {
+            Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
+            wsPanelOpen(key, true); // 重载：工具已改磁盘，丢弃旧内容/草稿读最新
+        }
+        wsPanelRefreshTree();
+    }
+
+    // 打开文件预览（Trae CN 同款标签页）：已打开→激活切换；未打开→建标签读内容。
+    // forceReload=true（取消编辑/保存后重读）：丢弃草稿重读磁盘内容
+    function wsPanelOpen(path, forceReload) {
+        wsPanel.viewEl.classList.remove('hidden');
+        if (wsPanel.tabs[path] && !forceReload) {
+            wsPanelActivate(path);
+            return;
+        }
+        if (!wsPanel.tabs[path]) {
+            wsPanel.tabs[path] = { name: path.replace(/^.*[\\/]/, ''), loading: true };
+            wsPanel.tabOrder.push(path);
+        } else {
+            wsPanel.tabs[path] = { name: path.replace(/^.*[\\/]/, ''), loading: true }; // 重载：清旧内容与草稿
+        }
+        wsPanelActivate(path);
+        wsPanelReq('read', path).then(function (res) {
+            var t = wsPanel.tabs[path];
+            if (!t) return; // 标签已被关闭，丢弃迟到响应
+            t.loading = false;
+            t.binary = !!res.binary;
+            t.truncated = !!res.truncated;
+            t.content = res.content || '';
+            t.error = '';
+            var ext = (path.replace(/^.*\./, '') || '').toLowerCase();
+            t.isMd = ext === 'md' || ext === 'markdown'; // MD 文件走渲染预览（Trae CN 同款）
+            if (wsPanel.activeTab === path) wsPanelRenderTab();
+        }).catch(function (err) {
+            var t = wsPanel.tabs[path];
+            if (!t) return;
+            t.loading = false;
+            t.error = (err && err.message || err);
+            if (wsPanel.activeTab === path) wsPanelRenderTab();
+        });
+    }
+
+    // 激活标签（编辑中切走先存草稿，切回恢复编辑态不丢改动）
+    function wsPanelActivate(path) {
+        if (wsPanel.editing && wsPanel.ta && wsPanel.activeTab && wsPanel.tabs[wsPanel.activeTab]) {
+            wsPanel.tabs[wsPanel.activeTab].draft = wsPanel.ta.value; // 草稿随标签留存
+        }
+        wsPanel.editing = false;
+        wsPanel.ta = null;
+        wsPanel.activeTab = path;
+        wsPanelRenderTabs();
+        wsPanelRenderTab();
+    }
+
+    // 关闭标签：激活相邻标签；全部关闭收起预览区
+    function wsPanelCloseTab(path) {
+        var idx = wsPanel.tabOrder.indexOf(path);
+        if (idx < 0) return;
+        delete wsPanel.tabs[path];
+        wsPanel.tabOrder.splice(idx, 1);
+        if (wsPanel.activeTab === path) {
+            wsPanel.editing = false;
+            wsPanel.ta = null;
+            wsPanel.activeTab = wsPanel.tabOrder[Math.min(idx, wsPanel.tabOrder.length - 1)] || null;
+        }
+        if (!wsPanel.activeTab) {
+            wsPanel.viewEl.classList.add('hidden');
+            wsPanelRenderTabs();
+            return;
+        }
+        wsPanelRenderTabs();
+        wsPanelRenderTab();
+    }
+
+    // 渲染标签栏（横向滚动，active 高亮 + 主题色顶条；× 关闭单标签）
+    function wsPanelRenderTabs() {
+        if (!wsPanel.tabBarEl) return;
+        wsPanel.tabBarEl.textContent = '';
+        wsPanel.tabOrder.forEach(function (p) {
+            var t = wsPanel.tabs[p];
+            var tab = document.createElement('div');
+            tab.className = 'ws-tab' + (p === wsPanel.activeTab ? ' active' : '');
+            tab.title = p;
+            tab.appendChild(wsMakeFileIcon({ name: (t && t.name) || p, dir: false })); // 标签前缀文件类型徽标
+            var nm = document.createElement('span');
+            nm.className = 'ws-tab-name';
+            nm.textContent = (t && t.draft !== undefined ? '● ' : '') + (t ? t.name : p); // 有草稿标 ● 提示未保存
+            var x = document.createElement('span');
+            x.className = 'ws-tab-close';
+            x.textContent = '×';
+            x.title = '关闭';
+            x.addEventListener('click', function (e) { e.stopPropagation(); wsPanelCloseTab(p); });
+            tab.appendChild(nm);
+            tab.appendChild(x);
+            tab.addEventListener('click', function () { if (p !== wsPanel.activeTab) wsPanelActivate(p); });
+            wsPanel.tabBarEl.appendChild(tab);
+        });
+    }
+
+    // 渲染当前标签内容：加载中/错误/二进制提示；MD 走 renderAIMarkdown 渲染（复用 .ai-md 样式：表格/代码块/复制）；
+    // 其余源码 hljs 高亮；编辑态 textarea（草稿恢复）
+    function wsPanelRenderTab() {
+        var path = wsPanel.activeTab;
+        var t = path ? wsPanel.tabs[path] : null;
+        wsPanel.btnEdit.classList.add('hidden');
+        wsPanel.btnSave.classList.add('hidden');
+        wsPanel.btnCancel.classList.add('hidden');
+        wsPanel.viewBody.textContent = '';
+        if (!t) return;
+        var editable = !t.loading && !t.error && !t.binary;
+        if (wsPanel.editing && editable) {
+            var ta = document.createElement('textarea');
+            ta.className = 'ws-edit-ta';
+            ta.value = t.draft !== undefined ? t.draft : t.content;
+            ta.spellcheck = false;
+            wsPanel.viewBody.appendChild(ta);
+            if (window._osbInit) window._osbInit(ta);
+            wsPanel.ta = ta;
+            wsPanel.btnSave.classList.remove('hidden');
+            wsPanel.btnCancel.classList.remove('hidden');
+            ta.focus();
+            return;
+        }
+        if (t.truncated) {
+            var tip = document.createElement('div');
+            tip.className = 'ws-panel-hint';
+            tip.textContent = '— 文件较大，仅显示前 512KB，编辑保存将覆盖全文，请注意 —';
+            wsPanel.viewBody.appendChild(tip);
+        }
+        if (t.loading) {
+            var hint = document.createElement('div');
+            hint.className = 'ws-panel-hint';
+            hint.textContent = '加载中…';
+            wsPanel.viewBody.appendChild(hint);
+            return;
+        }
+        if (t.error) {
+            var errTip = document.createElement('div');
+            errTip.className = 'ws-panel-hint';
+            errTip.textContent = '读取失败：' + t.error;
+            wsPanel.viewBody.appendChild(errTip);
+            return;
+        }
+        if (t.binary) {
+            var binTip = document.createElement('div');
+            binTip.className = 'ws-panel-hint';
+            binTip.textContent = '二进制文件暂不支持面板预览';
+            wsPanel.viewBody.appendChild(binTip);
+            return;
+        }
+        if (t.isMd) {
+            var md = document.createElement('div');
+            md.className = 'ws-view-md ai-md'; // 复用 AI 消息 Markdown 全套样式（表格/代码块高亮/复制按钮）
+            md.innerHTML = renderAIMarkdown(t.content);
+            wsPanel.viewBody.appendChild(md);
+            wsPanel.btnEdit.classList.remove('hidden');
+            return;
+        }
+        var text = t.content;
+        var ext = (path.replace(/^.*\./, '') || '').toLowerCase();
+        var lang = WS_LANG_MAP[ext] || '';
+        var pre = document.createElement('pre');
+        pre.className = 'ws-view-pre';
+        var code = document.createElement('code');
+        var H = (typeof hljs !== 'undefined') ? hljs : null;
+        var done = false;
+        if (H && text) {
+            try {
+                if (lang && H.getLanguage(lang)) {
+                    code.innerHTML = H.highlight(text, { language: lang, ignoreIllegals: true }).value;
+                    done = true;
+                } else {
+                    var auto = H.highlightAuto(text);
+                    code.innerHTML = auto.value;
+                    done = true;
+                }
+            } catch (e) { done = false; }
+        }
+        if (!done) code.textContent = text;
+        pre.appendChild(code);
+        wsPanel.viewBody.appendChild(pre);
+        wsPanel.btnEdit.classList.remove('hidden');
+    }
+
+    // 进入编辑模式（纯文本 textarea，等宽字体与预览一致；二进制/加载中/错误禁编辑）
+    function wsPanelStartEdit() {
+        if (!wsPanel.activeTab || wsPanel.editing) return;
+        var t = wsPanel.tabs[wsPanel.activeTab];
+        if (!t || t.loading || t.error || t.binary) return;
+        wsPanel.editing = true;
+        wsPanelRenderTab();
+    }
+
+    // 保存（写回磁盘：PC 在线=用户本地，离线=服务端工作区），成功后更新标签内容 + 刷新树
+    function wsPanelSave() {
+        var path = wsPanel.activeTab;
+        if (!path || !wsPanel.editing || !wsPanel.ta) return;
+        var t = wsPanel.tabs[path];
+        var content = wsPanel.ta.value;
+        wsPanel.btnSave.disabled = true;
+        wsPanelReq('save', path, content).then(function () {
+            wsPanel.btnSave.disabled = false;
+            showToast('已保存：' + path.replace(/^.*[\\/]/, ''));
+            delete wsPanel.badges[path];
+            t.content = content;
+            delete t.draft;
+            wsPanel.editing = false;
+            wsPanel.ta = null;
+            wsPanelRenderTabs();
+            wsPanelRenderTab();
+            wsPanelRefreshTree();
+        }).catch(function (err) {
+            wsPanel.btnSave.disabled = false;
+            showToast('保存失败：' + (err && err.message || err));
+        });
+    }
+
     function fillAgentTool(st, ev) {
         // 回填规则：优先匹配该工具名最后一个 pending 块（阶段六十二：按 data-tool 匹配，标题已中文化）
         var blocks = st.events.querySelectorAll('.agent-event.tool.pending');
@@ -3880,7 +4474,10 @@
                 agentFinalizeText(st, true); // 流式文本归入"思考过程"折叠块（Trae 同款：出工具即收思考）
                 addAgentTool(st, ev);
                 break;
-            case 'tool_result': fillAgentTool(st, ev); break;
+            case 'tool_result':
+                fillAgentTool(st, ev);
+                wsPanelOnToolResult(ev); // 阶段七十六：文件面板刷新树 + 自动打开生成/修改的文件
+                break;
             case 'tool_output': updateAgentToolOutput(st, ev); break; // 阶段七十五：命令实时输出 → 控制台
             case 'tool_exit': finalizeAgentToolExit(st, ev); break;   // 阶段七十五：进程结束 → 退出码/耗时标注
             case 'todo': renderAgentTodo(st, ev); break;
@@ -4087,6 +4684,33 @@
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
             if (!ev || !ev.step) return;
             if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
+        });
+        // 阶段七十六：工作区文件面板本地操作桥接（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
+        IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
+            if (msg.to_user !== IMSocket.getUsername()) return;
+            var ev;
+            try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (!ev || !ev.req_id || !ev.op) return;
+            if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'recv64', t: Date.now(), rid: ev.req_id });
+            window.desktop.workspaceOp({ username: IMSocket.getUsername(), op: ev.op, path: ev.path || '', content: ev.content || '' }).then(function (res) {
+                if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'send65', t: Date.now() });
+                IMSocket.send({
+                    msg_type: MSG.PC_FILE_RESP,
+                    from_user: IMSocket.getUsername(),
+                    content: JSON.stringify({
+                        op: ev.op, req_id: ev.req_id,
+                        ok: !!(res && res.ok), error: (res && res.error) || '',
+                        root: (res && res.root) || '', entries: (res && res.entries) || [],
+                        content: (res && res.content) || '', binary: !!(res && res.binary), truncated: !!(res && res.truncated)
+                    })
+                });
+            }).catch(function (err) {
+                IMSocket.send({
+                    msg_type: MSG.PC_FILE_RESP,
+                    from_user: IMSocket.getUsername(),
+                    content: JSON.stringify({ op: ev.op, req_id: ev.req_id, ok: false, error: '本地文件操作异常 ' + (err && err.message || err) })
+                });
+            });
         });
     }
 
@@ -7543,6 +8167,8 @@
             // 列表重渲染（innerHTML 置空）后同步滚动范围（滑块在 body 上不会被移除，无需补回）
             if (window.MutationObserver) new MutationObserver(osbUpdate).observe(el, { childList: true });
             el.addEventListener('load', osbUpdate, true); // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
+            // textarea 编辑输入改变内容高度（行增减），MutationObserver 感知不到 value 变化，input 时同步滑块
+            if (el.tagName === 'TEXTAREA') el.addEventListener('input', osbUpdate);
             // 滑块拖拽：按下后按位移比例映射回 scrollTop（比例与 osbUpdate 一致）
             thumb.addEventListener('mousedown', function (e) {
                 e.preventDefault();
@@ -7578,5 +8204,7 @@
                 var el = document.querySelector(sel);
                 if (el) initOsb(el);
             });
+        // 阶段七十六：暴露给动态创建的滚动容器挂自绘滑块（Agent 工作区文件树/预览区/编辑 textarea）
+        window._osbInit = initOsb;
     })();
 })();

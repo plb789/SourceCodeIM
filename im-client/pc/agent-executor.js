@@ -699,6 +699,101 @@ function execTool(req, done) {
     }
 }
 
+// ===== 阶段七十六：工作区文件面板（web 右侧文件树/预览/编辑，经服务端 msg 64 转发到本地磁盘执行）=====
+// 路径校验与 Agent 工具同源（safePath：相对路径→主工作区，绝对路径→沙箱授权目录），白名单外一律拒绝。
+// 限额：单次读取 512KB（超出截断）；二进制检测（前 8KB 含 NUL）；非 UTF-8 按 GBK 兜底转码（与命令输出同款）。
+const WS_FILE_READ_MAX = 512 * 1024;
+
+// 一级目录列表（tree）：子目录在前文件在后，跳过噪音目录；返回真实工作区根路径供面板展示
+function fileTreeLevel(username, p) {
+    let full, ws;
+    const pv = String(p || '').trim();
+    if (!pv || pv === '.') {
+        ws = userRoot(username);
+        full = ws;
+    } else {
+        const r = safePath(username, pv);
+        if (r.err) return { ok: false, error: r.err };
+        full = r.full;
+        ws = r.ws;
+    }
+    let entries;
+    try {
+        entries = fs.readdirSync(full, { withFileTypes: true });
+    } catch (e) {
+        return { ok: false, error: '无法读取目录：' + (e.message || e) };
+    }
+    const list = [];
+    for (const it of entries) {
+        if (SKIP_DIRS[it.name]) continue;
+        try {
+            if (it.isDirectory()) {
+                list.push({ name: it.name, dir: true });
+            } else {
+                let size = 0;
+                try { size = fs.statSync(path.join(full, it.name)).size; } catch (e) {}
+                list.push({ name: it.name, dir: false, size: size });
+            }
+        } catch (e) { continue; } // 权限等异常条目直接跳过
+    }
+    list.sort(function (a, b) {
+        if (a.dir !== b.dir) return a.dir ? -1 : 1;
+        return a.name.localeCompare(b.name, 'zh-CN');
+    });
+    let rootLabel = ws;
+    try { rootLabel = fs.realpathSync(ws); } catch (e) {}
+    return { ok: true, root: rootLabel, entries: list };
+}
+
+// 读文件（read）：文本内容（截断标记）；二进制只给标记不回传内容
+function fileReadLevel(username, p) {
+    const r = safePath(username, p);
+    if (r.err) return { ok: false, error: r.err };
+    let st;
+    try { st = fs.statSync(r.full); } catch (e) {
+        return { ok: false, error: '文件不存在或无法访问' };
+    }
+    if (st.isDirectory()) return { ok: false, error: '目标是目录，请展开浏览' };
+    let fd = null;
+    try {
+        fd = fs.openSync(r.full, 'r');
+        const buf = Buffer.alloc(Math.min(st.size, WS_FILE_READ_MAX));
+        const n = fs.readSync(fd, buf, 0, buf.length, 0);
+        const data = buf.subarray(0, n);
+        const head = data.subarray(0, Math.min(n, 8000));
+        const truncated = st.size > n;
+        if (head.includes(0)) return { ok: true, binary: true, truncated: truncated };
+        let text = decodeOutput(data); // UTF-8 严格解码失败回退 GBK（与命令输出同款）
+        return { ok: true, content: text, truncated: truncated };
+    } catch (e) {
+        return { ok: false, error: '读取失败：' + (e.message || e) };
+    } finally {
+        try { if (fd !== null) fs.closeSync(fd); } catch (e) {}
+    }
+}
+
+// 写文件（save）：UTF-8 落盘，自动建父目录（与 write_file 工具同语义）
+function fileSaveLevel(username, p, content) {
+    const r = safePath(username, p);
+    if (r.err) return { ok: false, error: r.err };
+    try {
+        fs.mkdirSync(path.dirname(r.full), { recursive: true });
+        fs.writeFileSync(r.full, String(content == null ? '' : content), 'utf8');
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: '保存失败：' + (e.message || e) };
+    }
+}
+
+// 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}）
+function fileOp(username, payload) {
+    const op = payload && payload.op;
+    if (op === 'tree') return fileTreeLevel(username, payload.path);
+    if (op === 'read') return fileReadLevel(username, payload.path);
+    if (op === 'save') return fileSaveLevel(username, payload.path, payload.content);
+    return { ok: false, error: '未知操作' };
+}
+
 module.exports = {
     setRoot: setRoot,
     getRoot: getRoot,
@@ -707,5 +802,6 @@ module.exports = {
     safePath: safePath,
     sanitizeUsername: sanitizeUsername,
     execTool: execTool,
-    requestBg: requestBg // 阶段七十五：长命令转后台请求入口
+    requestBg: requestBg, // 阶段七十五：长命令转后台请求入口
+    fileOp: fileOp // 阶段七十六：工作区文件面板操作入口
 };

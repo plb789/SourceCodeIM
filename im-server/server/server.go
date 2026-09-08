@@ -191,6 +191,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleAgentToolOutput(c, msg)
 	case protocol.MsgTypeAgentBg:
 		s.handleAgentBg(c, msg)
+	// 阶段七十六：工作区文件面板（web 请求归口 + PC 本地文件操作回传投递）
+	case protocol.MsgTypeWsFileReq:
+		s.handleWsFileReq(c, msg)
+	case protocol.MsgTypePcFileResp:
+		s.handlePcFileResp(c, msg)
 	// 阶段七十一：AI 多会话（Trae 同款"新建会话"）——列表/新建/删除
 	case protocol.MsgTypeAISessionList:
 		s.handleAISessionList(c, msg)
