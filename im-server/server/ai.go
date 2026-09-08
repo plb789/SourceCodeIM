@@ -605,7 +605,9 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）
 // excludeID：排除指定消息（本次提问已先行落库回显，组装历史时排除防上下文重复）；0 表示不排除
-func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string, excludeID uint) []aiChatMessage {
+// sessionID：阶段七十一多会话归口——仅取该会话盖戳的历史（0=默认会话存量全量；
+// 新建会话即干净上下文，任意历史会话续聊即恢复该会话上下文）
+func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string, excludeID uint, sessionID uint) []aiChatMessage {
 	msgs := make([]aiChatMessage, 0, aiContextWindow+2)
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
@@ -624,6 +626,9 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 	var records []model.Message
 	query := store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
 		2, username, agent.Name, agent.Name, username)
+	// 阶段七十一：AI 多会话上下文归口——仅取本会话盖戳的历史（新建会话即干净上下文，
+	// 避免单会话内容无界累积；0=默认会话，存量历史全量，老用户行为不变）
+	query = query.Where("ai_session_id = ?", sessionID)
 	if excludeID > 0 {
 		query = query.Where("id <> ?", excludeID)
 	}
@@ -775,6 +780,14 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段七十一：多会话归属校验（上行 session_id 指定目标会话，0=默认会话；
+	// 非法 id 拒绝，防协议直发把消息盖到他人/不存在的会话）
+	sid := msg.SessionID
+	if !aiSessionValidate(c.username, agent.Name, sid) {
+		s.sendError(c, "会话不存在或已被删除")
+		return
+	}
+
 	// 阶段四十四：图片提问信封解析（引用信封之外的另一类 JSON content）
 	var imageEnv *aiImageEnvelope
 	if env := parseAIImageEnvelope(msg.Content); env != nil {
@@ -863,22 +876,27 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	// embedding API 网络慢时自己发的提问要等数秒才显示；回显/思考中应在提问瞬间出现）
 	// 落库 is_read=true：AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
 	record := model.Message{
-		MsgType:  2,
-		FromUser: c.username,
-		ToUser:   agent.Name,
-		Content:  msg.Content,
-		IsRead:   true,
+		MsgType:     2,
+		FromUser:    c.username,
+		ToUser:      agent.Name,
+		Content:     msg.Content,
+		IsRead:      true,
+		AISessionID: sid, // 阶段七十一：消息级会话盖戳（0=默认会话）
 	}
 	store.DB.Create(&record)
+	// 阶段七十一：占位标题会话以首问生成标题（服务端归口）
+	aiSessionAutoTitle(c.username, agent.Name, sid, question)
 
 	// 回显提问给自己全部在线连接（复用私聊渲染链路，多端同步）
-	// IsRead=true 随帧下发：AI 会话无回执语义，与落库口径一致，客户端直接显示"已读"
+	// IsRead=true 随帧下发：AI 会话无回执语义，与落库口径一致，客户端直接显示"已读"；
+	// SessionID 随帧下发：多端按会话归属过滤渲染（他端在其他会话的提问不串入本端视图）
 	echo := protocol.Message{
 		MsgType:   protocol.MsgTypePrivate,
 		FromUser:  c.username,
 		ToUser:    agent.Name,
 		Content:   msg.Content,
 		MsgID:     record.ID,
+		SessionID: sid,
 		IsRead:    true,
 		Timestamp: time.Now().Unix(),
 	}
@@ -892,7 +910,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	// 再组装上下文（此时本次提问已落库，按 excludeID 排除防上下文重复）：
 	// 知识库命中与长期记忆均为向量检索（embedding API 调用），耗时随网络波动，
 	// 放在回显之后——用户先看到自己的消息和"思考中"，模型首字延迟不受影响
-	chatMsgs := s.aiBuildContext(c.username, agent, question, record.ID)
+	chatMsgs := s.aiBuildContext(c.username, agent, question, record.ID, sid)
 
 	// 阶段四十四：图片提问——最后一条 user 消息替换为多模态 content 数组（文本 + base64 图片）
 	if imageDataURL != "" {
@@ -919,6 +937,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 				ToUser:    c.username,
 				Content:   delta,
 				StreamID:  streamID,
+				SessionID: sid, // 阶段七十一：流帧携带会话归属，客户端按会话过滤渲染
 				Timestamp: time.Now().Unix(),
 			}
 			data, _ := json.Marshal(chunk)
@@ -943,6 +962,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 				FromUser:  agent.Name,
 				ToUser:    c.username,
 				StreamID:  streamID,
+				SessionID: sid,
 				Remark:    "error",
 				Timestamp: time.Now().Unix(),
 			}
@@ -952,7 +972,8 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		}
 
 		// 完整回复落库（is_read=false：计入会话未读，多端打开会话后由回执归口清除）
-		// Token 消耗随回复落库（服务端 usage 归口，历史加载同样可显示）
+		// Token 消耗随回复落库（服务端 usage 归口，历史加载同样可显示）；
+		// 回复与提问同会话盖戳（闭包捕获 sid），保证问答成对归位
 		reply := model.Message{
 			MsgType:          2,
 			FromUser:         agent.Name,
@@ -961,6 +982,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			PromptTokens:     usage.PromptTokens,
 			CompletionTokens: usage.CompletionTokens,
 			TotalTokens:      usage.TotalTokens,
+			AISessionID:      sid,
 		}
 		store.DB.Create(&reply)
 		s.touchConversation(c.username, agent.Name, messageSummary(full))
@@ -976,6 +998,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			Content:          full,
 			MsgID:            reply.ID,
 			StreamID:         streamID,
+			SessionID:        sid, // 阶段七十一：流帧携带会话归属，客户端按会话过滤渲染
 			PromptTokens:     usage.PromptTokens,
 			CompletionTokens: usage.CompletionTokens,
 			TotalTokens:      usage.TotalTokens,

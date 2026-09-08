@@ -67,6 +67,11 @@ const (
 
 	// 阶段六十二：AI 后续提问建议（Trae CN 同款，回复完成后点击可直接继续提问）
 	MsgTypeAISuggest = 53 // 下行：后续提问建议（from_user=智能体名，content 为 JSON 字符串数组，仅当前查看会话时渲染）
+
+	// 阶段七十一：AI 多会话（Trae CN 同款"新建会话"）——用户+智能体 多会话归口，im_message 表结构零改动
+	MsgTypeAISessionList = 54 // 上行请求/下行响应：会话列表（上行 to_user=智能体名；下行 content 为 JSON：{current_id,sessions:[{id,title,create_time}]}）
+	MsgTypeAISessionNew  = 55 // 上行：新建会话（to_user=智能体名；下行 content 为 JSON：{session_id,title}，首条消息落库时回填区间起点）
+	MsgTypeAISessionDel  = 56 // 上行：删除会话（to_user=智能体名，session_id 指定；默认会话（最早一条）禁止删除）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -88,6 +93,7 @@ type Message struct {
 	Remark      string `json:"remark"`       // 好友备注名
 	Group       string `json:"group"`        // 好友分组
 	StreamID    string `json:"stream_id"`    // 阶段四十三：AI 流式回复关联 ID（同一次回复的增量与结束帧共用）
+	SessionID   uint   `json:"session_id"`   // 阶段七十一：AI 多会话 ID（HISTORY 按会话区间拉历史；0=不区分会话取全量）
 	Platform    string `json:"platform"`     // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
 	// AI 回复 Token 消耗（服务端 usage 归口，随 AI_STREAM_END 结束帧下发；其余消息恒为 0 不序列化）
 	PromptTokens     int `json:"prompt_tokens,omitempty"`

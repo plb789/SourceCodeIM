@@ -183,6 +183,13 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段六十一：Agent 沙箱白名单——PC 端上报用户自选工作区/授权目录
 	case protocol.MsgTypeAgentSandbox:
 		s.handleAgentSandbox(c, msg)
+	// 阶段七十一：AI 多会话（Trae 同款"新建会话"）——列表/新建/删除
+	case protocol.MsgTypeAISessionList:
+		s.handleAISessionList(c, msg)
+	case protocol.MsgTypeAISessionNew:
+		s.handleAISessionNew(c, msg)
+	case protocol.MsgTypeAISessionDel:
+		s.handleAISessionDel(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -559,6 +566,12 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
 			[]int{2, 4, 5}, c.username, msg.ToUser, msg.ToUser, c.username)
+		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
+		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
+		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）
+		if aiAgentForUser(msg.ToUser, c.username) != nil {
+			query = query.Where("ai_session_id = ?", msg.SessionID)
+		}
 	}
 
 	if err := query.Order("id desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&records).Error; err != nil {

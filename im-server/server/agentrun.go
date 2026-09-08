@@ -85,6 +85,7 @@ type AgentTask struct {
 	Cancelled atomic.Bool
 
 	EnqueueSeq uint64 // 阶段六十七：入队序号（FIFO 派发排序依据，直接启动的任务不使用）
+	SessionID  uint   // 阶段七十一：归属 AI 会话（受理时盖戳，0=默认会话；任务卡重放按会话过滤）
 
 	mu          sync.Mutex
 	todo        []AgentTodoItem
@@ -218,6 +219,8 @@ func InitAgent(cfg *config.Config) {
 	if err := store.DB.AutoMigrate(&model.AgentStepRecord{}); err != nil {
 		logger.Error("Agent 执行轨迹表迁移失败: %v", err)
 	}
+	// 阶段七十一：AI 多会话表迁移（用户+智能体 多会话归口，Trae 同款"新建会话"）
+	initAISessionTable()
 	// 阶段六十二：加载审批白名单（命令前缀 + 写文件免审批开关）——审批弹窗"同意并加白"持久化，重启不丢
 	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
 		logger.Error("Agent 白名单表迁移失败: %v", err)
@@ -404,6 +407,8 @@ func (s *Server) agentEmit(t *AgentTask, eventType string, payload map[string]in
 	}
 	payload["task_id"] = t.ID
 	payload["type"] = eventType
+	// 阶段七十一：事件流携带会话归属，客户端任务卡按会话盖戳过滤渲染（多端防串会话）
+	payload["session_id"] = t.SessionID
 	data, _ := json.Marshal(payload)
 	msg := protocol.Message{
 		MsgType:   protocol.MsgTypeAgentEvent,
@@ -1028,26 +1033,32 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 }
 
 // agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
-// 与 AI 问答提问落库回显同口径 ai.go handleAIChat；最终答复由 agentFinish 落库，问答成对可见）
-func (s *Server) agentEchoGoal(c *Client, agentName, goal string) {
+// 与 AI 问答提问落库回显同口径 ai.go handleAIChat；最终答复由 agentFinish 落库，问答成对可见）。
+// 阶段七十一：sid 指定归属会话（0=默认会话），回显/落库同源盖戳
+func (s *Server) agentEchoGoal(c *Client, agentName, goal string, sid uint) {
 	record := model.Message{
-		MsgType:  2,
-		FromUser: c.username,
-		ToUser:   agentName,
-		Content:  goal,
-		IsRead:   true, // AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
+		MsgType:     2,
+		FromUser:    c.username,
+		ToUser:      agentName,
+		Content:     goal,
+		IsRead:      true, // AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
+		AISessionID: sid,
 	}
 	if err := store.DB.Create(&record).Error; err != nil {
 		logger.Error("Agent 任务目标落库失败（用户 %s）：%v", c.username, err)
 		return
 	}
-	// 回显给发起人全部在线连接（复用私聊渲染链路，多端同步），真实 msg_id 随帧下发
+	// 阶段七十一：占位标题会话以任务目标生成标题（与 AI 提问同归口）
+	aiSessionAutoTitle(c.username, agentName, sid, goal)
+	// 回显给发起人全部在线连接（复用私聊渲染链路，多端同步），真实 msg_id 随帧下发；
+	// SessionID 随帧下发：多端按会话归属过滤渲染
 	echo := protocol.Message{
 		MsgType:   protocol.MsgTypePrivate,
 		FromUser:  c.username,
 		ToUser:    agentName,
 		Content:   goal,
 		MsgID:     record.ID,
+		SessionID: sid,
 		IsRead:    true,
 		Timestamp: time.Now().Unix(),
 	}
@@ -1067,6 +1078,7 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		Action    string `json:"action"`
 		Goal      string `json:"goal"`
 		AgentName string `json:"agent_name"`
+		SessionID uint   `json:"session_id"` // 阶段七十一：归属会话（0=默认会话），任务全程按此盖戳
 	}
 	if err := json.Unmarshal([]byte(content), &req); err != nil {
 		s.sendError(c, "任务请求格式错误")
@@ -1133,6 +1145,13 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段七十一：多会话归属校验（0=默认会话），任务回显/答复/记录全程按此会话盖戳
+	sid := req.SessionID
+	if !aiSessionValidate(c.username, agent.Name, sid) {
+		s.sendError(c, "会话不存在或已被删除")
+		return
+	}
+
 	// 阶段六十七：任务队列归口——活动任务数低于并发上限直接启动，超出入队排队（FIFO），
 	// 排队已满拒绝；全程持锁防并发发起竞态超开（sendToUser 非阻塞投递，锁内推送安全）
 	agentQueueMu.Lock()
@@ -1144,10 +1163,11 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	}
 
 	t := &AgentTask{
-		ID:       agentNewTaskID(),
-		Username: c.username,
-		Agent:    agent,
-		Goal:     goal,
+		ID:        agentNewTaskID(),
+		Username:  c.username,
+		Agent:     agent,
+		Goal:      goal,
+		SessionID: sid, // 阶段七十一：任务全程会话归属（事件流/答复/任务记录同源）
 	}
 	if active < agentConcurrency {
 		// 有空位：直接启动（阶段五十九原路径）
@@ -1162,11 +1182,12 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 			AgentName: agent.Name,
 			Goal:      goal,
 			Status:    "running",
+			SessionID: sid,
 		}
 		store.DB.Create(&rec)
 
 		// 阶段七十：任务目标落库回显（提问进会话历史，切会话/重登不丢；先于受理事件保证提问气泡在任务卡上方）
-		s.agentEchoGoal(c, agent.Name, goal)
+		s.agentEchoGoal(c, agent.Name, goal, sid)
 
 		// 已受理事件（前端创建任务面板）
 		s.agentEmit(t, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": goal, "agent": agent.Name})
@@ -1189,11 +1210,12 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		AgentName: agent.Name,
 		Goal:      goal,
 		Status:    "queued",
+		SessionID: sid,
 	}
 	store.DB.Create(&rec)
 	logger.Info("Agent 任务入队 %s（用户 %s，排队位次 %d）", t.ID, c.username, position)
 	// 阶段七十：任务目标落库回显（排队任务同口径，提问进会话历史；先于受理事件保证提问气泡在任务卡上方）
-	s.agentEchoGoal(c, agent.Name, goal)
+	s.agentEchoGoal(c, agent.Name, goal, sid)
 	s.agentEmit(t, "status", map[string]interface{}{"status": "queued", "text": "排队中", "position": position, "goal": goal, "agent": agent.Name})
 }
 
@@ -1226,11 +1248,12 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		var msgID uint
 		if notifyContent != "" {
 			reply := model.Message{
-				MsgType:  2,
-				FromUser: t.Agent.Name,
-				ToUser:   t.Username,
-				Content:  notifyContent,
-				IsRead:   notifyRead,
+				MsgType:     2,
+				FromUser:    t.Agent.Name,
+				ToUser:      t.Username,
+				Content:     notifyContent,
+				IsRead:      notifyRead,
+				AISessionID: t.SessionID, // 阶段七十一：完结答复与任务目标同会话盖戳，问答成对归位
 			}
 			if err := store.DB.Create(&reply).Error; err == nil {
 				msgID = reply.ID
@@ -1603,6 +1626,7 @@ func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
 			"status":       r.Status,
 			"steps":        r.Steps,
 			"reply_msg_id": r.ReplyMsgID,
+			"session_id":   r.SessionID,
 			"create_time":  r.CreateTime,
 			"update_time":  r.UpdateTime,
 		})
@@ -1624,6 +1648,11 @@ func (s *Server) HandleAgentTaskList(w http.ResponseWriter, r *http.Request) {
 	// 阶段七十：agent 过滤（会话内任务卡重放按智能体归口拉取，不掺其他会话任务）
 	if ag := strings.TrimSpace(r.URL.Query().Get("agent")); ag != "" {
 		db = db.Where("agent_name = ?", ag)
+	}
+	// 阶段七十一：会话过滤（任务卡重放按当前查看会话拉取；参数缺省=不过滤（任务历史弹窗全量），
+	// 显式传 0=默认会话（未盖戳存量任务），防跨会话运行中任务卡串显）
+	if r.URL.Query().Has("session_id") {
+		db = db.Where("session_id = ?", adminQueryUint(r.URL.Query().Get("session_id")))
 	}
 	var total int64
 	db.Count(&total)

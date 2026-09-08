@@ -1889,7 +1889,11 @@ html, body {
     opacity: 0;
     transition: opacity 0.15s;
     pointer-events: none;
-    z-index: 60;
+    /* 阶段七十二修复：滑块挂在 body 上，原 z-index:60 低于浮层面板（conv-search 系 1200+），
+       悬停浮层内滚动容器（会话列表/表情面板/搜索结果/弹窗列表等）时滑块被面板整体盖住不可见；
+       提到全应用浮层最高层之上（现最高 3200）。滑块仅在鼠标悬停宿主容器时浮现，
+       弹窗遮罩挡住容器时 mouseover 命中的是遮罩，不会误亮滑块，故置顶无副作用 */
+    z-index: 3300;
 }
 
 /* 容器悬停时滑块浮现且可拖拽（.sb-show 由 JS 显隐标记联动增删） */
@@ -4926,4 +4930,107 @@ html.m #friend-menu {
     flex: 1;
     min-width: 0;
     font-weight: normal;
+}
+
+/* ====== 阶段七十一：AI 多会话面板（Trae 同款"新建会话"，浮层复用 conv-search 基座）====== */
+.ai-session-list {
+    /* 最多直接展示 5 条（单条实测 52px：padding 9+9 + 标题行 18 + 时间行 2+14 + 分隔线 1），
+       超出后列表区滚动查看，面板整体高度恒定，防会话增多遮挡聊天页面/超出聊天窗口边界；
+       max-height 取 5 条整高：不留缝（露出下一条半截头像形似渲染故障） */
+    max-height: calc(5 * 52px);
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    /* 滚动条走全局自绘悬浮滑块（chat.js initOsb 注册 #ai-session-list），原生条沿用全局归零，勿在此另开 */
+}
+
+/* 新建按钮：主题色胶囊（覆盖 conv-search-bar button 的 20px 透明图标式基线） */
+.conv-search-bar .ai-session-new-btn {
+    margin-left: auto;
+    padding: 4px 12px;
+    border: none;
+    border-radius: 12px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.conv-search-bar .ai-session-new-btn:hover {
+    opacity: 0.85;
+}
+
+.ai-session-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+.ai-session-item:hover {
+    background: var(--hover);
+}
+
+/* 当前查看会话：主题色左侧标识条 + 浅色底 */
+.ai-session-item.active {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.ai-session-item-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.ai-session-item-title {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ai-session-item-time {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+.ai-session-item-del {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s, color 0.12s;
+}
+
+.ai-session-item:hover .ai-session-item-del {
+    opacity: 1;
+}
+
+.ai-session-item-del:hover {
+    color: #e64340;
+}
+
+/* 新会话空态提示（消息列表居中引导，首条消息上屏时移除） */
+.ai-session-empty {
+    margin: 80px auto 0;
+    padding: 0 32px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+    line-height: 1.8;
 }

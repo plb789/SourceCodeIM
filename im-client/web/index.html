@@ -8,7 +8,7 @@
     <script src="js/app-shell.js?v=1.0"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
     <script src="js/mobile.js?v=1.2"></script>
-    <link rel="stylesheet" href="css/style.css?v=1.59">
+    <link rel="stylesheet" href="css/style.css?v=1.65">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -184,6 +184,10 @@
                 <button id="taskhist-btn" class="logout-btn hidden" title="任务历史">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.95 6.95 0 0 1-4.9-2.03l-1.42 1.42A8.95 8.95 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
                 </button>
+                <!-- 阶段七十一：AI 多会话按钮（Trae 同款"新建会话"，仅 AI 智能体会话显示） -->
+                <button id="ai-session-btn" class="logout-btn hidden" title="会话历史 / 新建会话">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l3 3 3-3h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 4 1.2 2.6L16 10l-2.4 1.7L14.4 15 12 13.6 9.6 15l.8-3.3L8 10l2.8-.4L12 7z"/></svg>
+                </button>
                 <button id="conv-search-btn" class="logout-btn" title="搜索聊天记录">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
                 </button>
@@ -207,6 +211,15 @@
                     <button id="conv-search-close" title="关闭">×</button>
                 </div>
                 <div id="conv-search-results" class="conv-search-results hidden"></div>
+            </div>
+            <!-- 阶段七十一：AI 多会话面板（Trae 同款"新建会话"，自绘浮层） -->
+            <div id="ai-session-panel" class="conv-search ai-session-panel hidden">
+                <div class="conv-search-bar">
+                    <span class="new-friends-title">会话列表</span>
+                    <button id="ai-session-new" class="ai-session-new-btn" title="新建会话">＋ 新会话</button>
+                    <button id="ai-session-close" title="关闭">×</button>
+                </div>
+                <div id="ai-session-list" class="ai-session-list"></div>
             </div>
             <!-- 阶段二十九：新的朋友浮层（微信式好友申请列表，同意/拒绝操作归口） -->
             <div id="new-friends-panel" class="conv-search hidden">
@@ -526,6 +539,6 @@
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
     <script src="js/lib/pptxgen.bundle.js?v=1.0"></script>
-    <script src="js/chat.js?v=1.99"></script>
+    <script src="js/chat.js?v=2.05"></script>
 </body>
 </html>

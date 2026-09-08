@@ -157,21 +157,40 @@ type AIMemoryPref struct {
 // TableName 指定表名
 func (AIMemoryPref) TableName() string { return "im_ai_memory_pref" }
 
+// AISession AI 多会话（阶段七十一，Trae CN 同款"新建会话"）：用户+智能体 多会话归口表。
+// 消息归属采用消息级盖戳：im_message.ai_session_id 记录所属会话 id，任意会话均可随时续聊
+// （0=默认会话：存量历史与未区分消息归口；本表仅存会话元信息）。
+// FirstMsgID 为区间法方案遗留列（仅作存量数据一次性迁移的解析源，回填后恒 0 不再使用）
+type AISession struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;index:idx_aisess_user_agent" json:"username"`     // 会话归属用户（联合普通索引：一用户+智能体多会话，勿用唯一索引）
+	AgentName  string    `gorm:"column:agent_name;type:varchar(64);not null;index:idx_aisess_user_agent" json:"agent_name"` // 智能体名
+	Title      string    `gorm:"column:title;type:varchar(64);not null;default:''" json:"title"`                            // 会话标题（首问截取，服务端归口生成）
+	FirstMsgID uint      `gorm:"column:first_msg_id;not null;default:0" json:"first_msg_id"`                                // 遗留列：区间法首条消息 id（迁移后恒 0）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AISession) TableName() string { return "im_ai_session" }
+
 // AgentTaskRecord 智能 Agent 自动化任务记录（阶段五十九）：任务闭环审计归口。
 // 运行态在内存（事件流实时推送），结束态（completed/failed/cancelled）落库供追溯；
 // Result 存最终答复摘要，Error 存失败/取消原因
 type AgentTaskRecord struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskID     string    `gorm:"column:task_id;type:varchar(40);not null;uniqueIndex" json:"task_id"`
-	Username   string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户
-	AgentName  string    `gorm:"column:agent_name;type:varchar(64);not null" json:"agent_name"`   // 执行智能体
-	Goal       string    `gorm:"column:goal;type:text" json:"goal"`                               // 任务目标
-	Status     string    `gorm:"column:status;type:varchar(16);not null" json:"status"`           // completed/failed/cancelled
-	Result     string    `gorm:"column:result;type:text" json:"result"`                           // 最终答复（完成时）
-	Error      string    `gorm:"column:error;type:text" json:"error"`                             // 失败/取消原因
-	Steps      int       `gorm:"column:steps;not null;default:0" json:"steps"`                    // 实际迭代步数
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID    string `gorm:"column:task_id;type:varchar(40);not null;uniqueIndex" json:"task_id"`
+	Username  string `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户
+	AgentName string `gorm:"column:agent_name;type:varchar(64);not null" json:"agent_name"`   // 执行智能体
+	Goal      string `gorm:"column:goal;type:text" json:"goal"`                               // 任务目标
+	Status    string `gorm:"column:status;type:varchar(16);not null" json:"status"`           // completed/failed/cancelled
+	Result    string `gorm:"column:result;type:text" json:"result"`                           // 最终答复（完成时）
+	Error     string `gorm:"column:error;type:text" json:"error"`                             // 失败/取消原因
+	Steps     int    `gorm:"column:steps;not null;default:0" json:"steps"`                    // 实际迭代步数
 	// ReplyMsgID 完结通知消息 ID（阶段七十）：前端重进会话时以答复气泡为锚点内联重放任务卡，执行过程历史可见
-	ReplyMsgID uint      `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
+	ReplyMsgID uint `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
+	// SessionID 归属 AI 会话（阶段七十一）：任务回显落库时按当前生效会话盖戳，任务卡重放按会话区间过滤防串会话
+	SessionID  uint      `gorm:"column:session_id;not null;default:0" json:"session_id"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
@@ -223,10 +242,13 @@ type Message struct {
 	IsRead   bool   `gorm:"column:is_read;default:false" json:"is_read"`   // 已读状态
 	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"` // 是否已撤回
 	// AI 回复 Token 消耗（服务端 usage 归口；普通消息恒为 0，历史加载同样可显示）
-	PromptTokens     int       `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`
-	CompletionTokens int       `gorm:"column:completion_tokens;default:0" json:"completion_tokens,omitempty"`
-	TotalTokens      int       `gorm:"column:total_tokens;default:0" json:"total_tokens,omitempty"`
-	CreateTime       time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	PromptTokens     int `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`
+	CompletionTokens int `gorm:"column:completion_tokens;default:0" json:"completion_tokens,omitempty"`
+	TotalTokens      int `gorm:"column:total_tokens;default:0" json:"total_tokens,omitempty"`
+	// AISessionID 归属 AI 多会话（阶段七十一）：AI 提问/回复、Agent 任务回显与答复落库时盖戳，
+	// 上下文/历史/任务卡按列过滤实现会话隔离；0=默认会话（存量历史与未区分消息归口）
+	AISessionID uint      `gorm:"column:ai_session_id;not null;default:0;index" json:"ai_session_id"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
 // TableName 指定表名

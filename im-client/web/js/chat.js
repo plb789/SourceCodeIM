@@ -1013,10 +1013,12 @@
         // 阶段四十三：AI 智能体会话走专用问答协议（服务端归口调用模型并流式回复，密钥不下发）
         var msg;
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            // 阶段七十一：本端当前查看会话 id（发问/任务按它归口盖戳，任意历史会话均可续聊）
+            var sid = aiViewSession[currentChatUser] || 0;
             // 阶段五十九：Agent 任务模式——发送内容作为自动化任务目标（服务端建任务闭环，事件流实时回推）
             if (agentMode) {
                 clearQuoteTarget(); // 任务目标不参与引用（引用信封 JSON 会破坏 AGENT_RUN 协议格式）
-                msg = { msg_type: MSG.AGENT_RUN, to_user: currentChatUser, content: JSON.stringify({ goal: content, agent_name: currentChatUser }) };
+                msg = { msg_type: MSG.AGENT_RUN, to_user: currentChatUser, content: JSON.stringify({ goal: content, agent_name: currentChatUser, session_id: sid }) };
                 if (IMSocket.send(msg)) {
                     messageInput.value = '';
                     messageInput.focus();
@@ -1026,7 +1028,8 @@
                 }
                 return;
             }
-            msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content };
+            // 阶段七十一：流式回复按会话归属渲染（服务端落库同源，AI_STREAM/END 帧携带同 sid 过滤）
+            msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content, session_id: sid };
             // 阶段六十九：联网搜索开关开启时经 remark 上行（服务端归口校验配置，未开启时降级普通问答）
             if (webSearchOn && webSearchAvailable) msg.remark = 'web_search';
         } else {
@@ -1663,7 +1666,7 @@
             lastAIQuestion[agent] = { raw: envelope, text: note || '[图片]' };
             bubble.remove(); // 回显渲染最终气泡，移除本地预览防重复
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（图片已存档，可重新发）
-            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope })) {
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
                 throw new Error('消息发送失败');
             }
             messageInput.value = '';
@@ -1702,7 +1705,7 @@
             // 记录提问原文（重新生成按信封原样重发，服务端重新解析文档，口径与首次发送一致）
             lastAIQuestion[agent] = { raw: envelope, text: note ? '[文档] ' + file.name + ' ' + note : '[文档] ' + file.name };
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（文档已存档，可重新发）
-            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope })) {
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
                 throw new Error('消息发送失败');
             }
             messageInput.value = '';
@@ -2341,7 +2344,7 @@
         addBtn('重新生成', ICONS.redo, function () {
             var q = lastAIQuestion[agent];
             if (!q || !q.raw) { showToast('暂无原始提问，无法重新生成'); return; }
-            var regen = { msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw };
+            var regen = { msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw, session_id: aiViewSession[agent] || 0 };
             if (webSearchOn && webSearchAvailable) regen.remark = 'web_search';
             IMSocket.send(regen);
         });
@@ -2610,6 +2613,9 @@
     IMSocket.on(MSG.AI_STREAM, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return; // 只处理自己的流
         if (currentChatUser !== msg.from_user) return;
+        // 阶段七十一：流帧携带会话归属（服务端落库同源），与本端查看会话不符（他端在其他会话发起/
+        // 本端已切走）则不渲染（回复落库按会话归位，切回该会话经历史可见；旧服务端无 sid 字段=0 兼容）
+        if ((msg.session_id || 0) !== (aiViewSession[msg.from_user] || 0)) return;
         // 阶段六十九：工具状态帧（remark=tool，content 为 JSON）——普通聊天联网搜索过程行，
         // 渲染在回复气泡正文上方，不进打字机正文
         if (msg.remark === 'tool') {
@@ -2670,6 +2676,8 @@
     IMSocket.on(MSG.AI_STREAM_END, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return;
         hideAIThinking(msg.from_user); // 失败/降级路径同样收起"思考中"指示
+        // 阶段七十一：结束帧同口径按会话归属过滤（与本端查看会话不符不渲染，回复已落库切回经历史可见）
+        if ((msg.session_id || 0) !== (aiViewSession[msg.from_user] || 0)) return;
         var st = aiStreams[msg.stream_id];
         if (st) {
             if (!st.shown && !st.pending.length && msg.content) st.pending = msg.content;
@@ -2865,7 +2873,8 @@
     });
 
     // 任务卡片：每次任务一张容器卡片，内部追加思考/工具/审批子事件流
-    function createAgentTaskCard(agent, taskId, goal) {
+    // sid：归属会话 id（事件帧携带，服务端盖戳同源；缺省回落当前查看会话）
+    function createAgentTaskCard(agent, taskId, goal, sid) {
         var div = document.createElement('div');
         div.className = 'message other';
         var body = document.createElement('div');
@@ -2929,7 +2938,9 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
 
-        var st = { taskId: taskId, agent: agent, goal: goal || '', el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
+        // 阶段七十一：任务卡归属会话盖戳（事件帧 sid 优先，缺省回落当前查看会话），完结气泡/重挂按此归口防串会话
+        var stampSess = (typeof sid === 'number') ? sid : (aiViewSession[agent] || 0);
+        var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
         agentTaskCards[taskId] = st;
         removeAISuggestRow(); // 阶段七十：新任务开始即消费上一轮后续提问胶囊（与 AI 问答新一轮回复同语义）
         createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
@@ -3133,8 +3144,10 @@
     // 2) 运行中/排队任务：内存实时卡仍在（事件流继续推送）则重挂 DOM 续播；无内存卡（他端发起）按 DB 快照渲染静态卡
     function agentReplayTasks() {
         var agent = currentChatUser;
+        // 阶段七十一：按当前查看会话过滤（服务端归口；0=默认会话，仅重放未盖戳存量任务，防跨会话串显）
         fetch('/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) +
-            '&agent=' + encodeURIComponent(agent) + '&page=1&size=20')
+            '&agent=' + encodeURIComponent(agent) + '&page=1&size=20' +
+            '&session_id=' + (aiViewSession[agent] || 0))
             .then(function (r) { return r.json(); })
             .then(function (res) {
                 if (!res.ok || currentChatUser !== agent) return; // 会话已切换：丢弃过期响应
@@ -3152,9 +3165,10 @@
                         return;
                     }
                     // 运行中/排队：内存实时卡重挂续播（后续事件继续上屏）；无内存卡（他端发起）按 DB 快照渲染静态卡
-                    if (st) {
+                    // 会话归属双保险：内存卡盖戳校验 + 服务端 session_id 过滤，他端/跨会话任务不进当前视图
+                    if (st && st.sessionId === (aiViewSession[agent] || 0)) {
                         messageList.appendChild(st.el);
-                    } else {
+                    } else if (!st) {
                         messageList.appendChild(agentBuildReplayCard(agent, t));
                     }
                     liveAny = true;
@@ -3426,8 +3440,9 @@
         }
         if (currentChatUser !== msg.from_user) return; // 仅当前会话实时渲染
         // 阶段六十七：排队任务同样建卡（含位次）；后续位次更新事件复用既有卡片
+        // 阶段七十一：事件帧携带会话归属（服务端盖戳同源），建卡按它盖戳防串会话
         if (ev.type === 'status' && (ev.status === 'running' || ev.status === 'queued') && ev.goal && !st) {
-            st = createAgentTaskCard(msg.from_user, ev.task_id, ev.goal);
+            st = createAgentTaskCard(msg.from_user, ev.task_id, ev.goal, ev.session_id);
         }
         if (!st) return;
         switch (ev.type) {
@@ -3474,10 +3489,13 @@
                 // 思考过程防内容丢失，答复气泡实时上屏，与切会话/重登后的历史视图完全一致
                 agentFinalizeText(st, true);
                 if (ev.result) {
-                    // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
-                    appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
-                    // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
-                    if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
+                    // 阶段七十一：完结气泡按任务归属会话渲染（执行中切走会话不串视图；回复已落库，切回经历史可见）
+                    if (st.sessionId === (aiViewSession[st.agent] || 0)) {
+                        // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
+                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
+                        // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
+                        if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
+                    }
                 }
                 agentTaskNotify(msg, st, '已完成');
                 break;
@@ -4199,6 +4217,10 @@
     IMSocket.on(MSG.PRIVATE, function (msg) {
         var isMine = msg.from_user === IMSocket.getUsername();
         var relevantUser = isMine ? msg.to_user : msg.from_user;
+        // 阶段七十一：AI 提问/任务目标回显帧携带会话归属（服务端落库同源），与本端查看会话不符
+        //（他端在其他会话发起）不渲染（落库按会话归位，切回经历史可见；旧服务端无 sid 字段不拦截）
+        if (isMine && isAIAgent(msg.to_user) && msg.session_id !== undefined &&
+            (msg.session_id || 0) !== (aiViewSession[msg.to_user] || 0)) return;
         if (currentChatUser === relevantUser) {
             // 已读状态随回显帧下发（服务端归口）：AI 提问回显 is_read=true 显示"已读"；
             // 普通私聊帧无该字段保持"未读"，由对方阅读回执链路更新
@@ -4348,15 +4370,198 @@
         historyPage = 1;
         historyHasMore = true;
         loadingMore = false;
-        loadHistory();
+        // 阶段七十一：AI 智能体会话先归口会话列表（确定当前查看会话）再按区间拉历史；
+        // 普通会话直接拉全量历史（行为不变）
+        if (user && isAIAgent(user)) {
+            aiSessionRequestList(user, function () { loadHistory(); });
+        } else {
+            loadHistory();
+        }
     }
 
     function loadHistory() {
         historyTarget = currentChatUser;
         var msg = { msg_type: MSG.HISTORY, page: 1, page_size: PAGE_SIZE };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
+        // 阶段七十一：AI 多会话恒传当前查看会话（服务端按消息盖戳 ai_session_id 过滤；
+        // 0=默认会话存量全量，普通会话不传不受影响）
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            msg.session_id = aiViewSession[currentChatUser] || 0;
+        }
         IMSocket.send(msg);
     }
+
+    // ====== 阶段七十一：AI 多会话（Trae 同款"新建会话"）======
+    // 归属归口：服务端消息级盖戳（im_message.ai_session_id），上下文/历史/任务卡全部按列过滤；
+    // AI 提问、Agent 任务、流式回复/事件帧均携带 session_id（服务端落库同源），客户端仅持有查看态——
+    // aiViewSession 记录各智能体当前查看的会话 id（HISTORY/发问盖戳/渲染过滤按它归口，任意会话可续聊）
+    var aiSessions = {};      // agent -> { list: [{id,title,first_msg_id,create_time}], currentId }
+    var aiViewSession = {};   // agent -> 当前查看会话 id（0=默认全量，无会话行）
+    var aiSessionListCb = {}; // agent -> 会话列表响应回调（openConversation 等列表到达后再拉历史）
+
+    // aiSessionDisplayList 服务端无会话行时注入虚拟"默认会话"（id=0=全量历史，老用户无感）
+    function aiSessionDisplayList(agent) {
+        var st = aiSessions[agent];
+        if (st && st.list.length) return st.list;
+        return [{ id: 0, title: '默认会话', first_msg_id: 0, create_time: 0 }];
+    }
+
+    function aiSessionExists(agent, sid) {
+        return aiSessionDisplayList(agent).some(function (s) { return s.id === sid; });
+    }
+
+    // aiSessionRequestList 拉会话列表（AI_SESSION_LIST 响应归口更新缓存/面板并回调）；
+    // 2.5s 兜底：旧服务端不识别新帧时直接回调（session_id=0 全量，行为不回退）
+    function aiSessionRequestList(agent, cb) {
+        var done = false;
+        var finish = function () {
+            if (done) return;
+            done = true;
+            delete aiSessionListCb[agent];
+            if (cb) cb();
+        };
+        var to = setTimeout(finish, 2500);
+        aiSessionListCb[agent] = function () {
+            if (done) return;
+            done = true;
+            clearTimeout(to);
+            if (cb) cb();
+        };
+        IMSocket.send({ msg_type: MSG.AI_SESSION_LIST, to_user: agent });
+    }
+
+    function closeAISessionPanel() {
+        var p = document.getElementById('ai-session-panel');
+        if (p) p.classList.add('hidden');
+    }
+
+    function renderAISessionPanel(agent) {
+        var box = document.getElementById('ai-session-list');
+        if (!box) return;
+        box.innerHTML = '';
+        var view = aiViewSession[agent] || 0;
+        aiSessionDisplayList(agent).forEach(function (s) {
+            var item = document.createElement('div');
+            item.className = 'ai-session-item' + (s.id === view ? ' active' : '');
+            var main = document.createElement('div');
+            main.className = 'ai-session-item-main';
+            var t = document.createElement('div');
+            t.className = 'ai-session-item-title';
+            t.textContent = s.title || '未命名会话';
+            var tm = document.createElement('div');
+            tm.className = 'ai-session-item-time';
+            tm.textContent = s.create_time ? thFormatTime(s.create_time * 1000) : '全部历史'; // create_time 为 Unix 秒（任务历史 API 为毫秒，thFormatTime 归一口径）
+            main.appendChild(t);
+            main.appendChild(tm);
+            item.appendChild(main);
+            if (s.id > 0) { // 虚拟默认会话（id=0）不可删除
+                var del = document.createElement('button');
+                del.className = 'ai-session-item-del';
+                del.title = '删除会话';
+                // 阶段七十二：删除按钮改垃圾桶图标（与"清空聊天"按钮同款 SVG，currentColor 随悬停变红；15px 保证小面板下可辨识）
+                del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
+                del.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    showConfirm('删除会话', '删除后该会话消息将并入默认会话展示，确定删除「' + (s.title || '未命名会话') + '」吗？', function () {
+                        IMSocket.send({ msg_type: MSG.AI_SESSION_DEL, to_user: agent, session_id: s.id });
+                    }, '删除');
+                });
+                item.appendChild(del);
+            }
+            item.addEventListener('click', function () {
+                if ((aiViewSession[agent] || 0) === s.id) { closeAISessionPanel(); return; }
+                aiSwitchSession(agent, s.id);
+            });
+            box.appendChild(item);
+        });
+    }
+
+    // aiSwitchSession 切换查看会话：清空视图按新区间重拉（与 openConversation 同口径），
+    // 在途流式/任务卡按帧内 session_id 过滤自动隔离（回复落库按会话归位，切回经历史可见）
+    function aiSwitchSession(agent, sid) {
+        aiViewSession[agent] = sid;
+        closeAISessionPanel();
+        messageList.innerHTML = '';
+        historyPage = 1;
+        historyHasMore = true;
+        loadingMore = false;
+        for (var sid2 in aiStreams) {
+            if (aiStreams[sid2].timer) clearInterval(aiStreams[sid2].timer);
+            delete aiStreams[sid2];
+        }
+        for (var ag in aiThinking) delete aiThinking[ag];
+        loadHistory();
+    }
+
+    // 会话列表响应：更新缓存；查看中的会话已被删除（他端操作）时回落到最新会话并重载视图
+    // 响应帧按协议惯例 from=发起人自己，智能体名取 to_user（服务端归口回填）
+    IMSocket.on(MSG.AI_SESSION_LIST, function (msg) {
+        var agent = msg.to_user;
+        if (!isAIAgent(agent)) return;
+        var data;
+        try { data = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        aiSessions[agent] = { list: data.sessions || [], currentId: data.current_id || 0 };
+        if (!aiSessionExists(agent, aiViewSession[agent] || 0)) {
+            aiViewSession[agent] = aiSessions[agent].currentId;
+            if (currentChatUser === agent) {
+                messageList.innerHTML = '';
+                historyPage = 1;
+                historyHasMore = true;
+                loadingMore = false;
+                loadHistory();
+            }
+        }
+        renderAISessionPanel(agent);
+        if (aiSessionListCb[agent]) aiSessionListCb[agent]();
+    });
+
+    // 新建会话响应：切换到新会话（服务端返回空页 → 空态提示），并刷新会话列表缓存
+    // 响应帧按协议惯例 from=发起人自己，智能体名取 to_user（原误取 from_user 致 isAIAgent 校验失败静默丢弃——"点击新建没反应"根因）
+    IMSocket.on(MSG.AI_SESSION_NEW, function (msg) {
+        var agent = msg.to_user;
+        if (!isAIAgent(agent)) return;
+        var data;
+        try { data = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (currentChatUser !== agent) return; // 入口仅在当前会话视图，他端响应不处理
+        aiViewSession[agent] = data.session_id || 0;
+        closeAISessionPanel();
+        messageList.innerHTML = '';
+        historyPage = 1;
+        historyHasMore = true;
+        loadingMore = false;
+        aiSessionRequestList(agent);
+        loadHistory();
+    });
+
+    // 阶段七十一：新会话空态提示（历史为空时居中引导；首条消息上屏时由 appendMessage 移除）
+    function renderAISessionEmpty() {
+        if (messageList.querySelector('.ai-session-empty')) return;
+        var d = document.createElement('div');
+        d.className = 'ai-session-empty';
+        d.textContent = '开始新的对话吧，直接输入提问，或开启 Agent 模式派发任务';
+        messageList.appendChild(d);
+    }
+
+    // 会话面板交互：开合 + 新建（事件委托绑一次，渲染仅刷新列表区）
+    (function () {
+        var btn = document.getElementById('ai-session-btn');
+        var panel = document.getElementById('ai-session-panel');
+        var newBtn = document.getElementById('ai-session-new');
+        var closeBtn = document.getElementById('ai-session-close');
+        if (!btn || !panel) return;
+        btn.addEventListener('click', function () {
+            if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+            if (!panel.classList.contains('hidden')) { closeAISessionPanel(); return; }
+            panel.classList.remove('hidden');
+            renderAISessionPanel(currentChatUser);
+            aiSessionRequestList(currentChatUser); // 打开即刷新（服务端归口）
+        });
+        closeBtn.addEventListener('click', closeAISessionPanel);
+        newBtn.addEventListener('click', function () {
+            if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+            IMSocket.send({ msg_type: MSG.AI_SESSION_NEW, to_user: currentChatUser });
+        });
+    })();
 
     // 阶段二十七：滚动到顶部自动加载更早的历史消息（prepend 渲染并保持滚动位置不跳动）
     // 原实现：无滚动加载机制，窗口内只有最近 20 条，更早记录无法查看
@@ -4367,6 +4572,10 @@
         loadingMore = true;
         var msg = { msg_type: MSG.HISTORY, page: historyPage + 1, page_size: PAGE_SIZE };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
+        // 阶段七十一：翻页同口径按当前查看会话拉取
+        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+            msg.session_id = aiViewSession[currentChatUser] || 0;
+        }
         IMSocket.send(msg);
     });
 
@@ -4414,6 +4623,8 @@
         });
         // 阶段二十七：首页返回不足一页说明全部记录已加载完
         historyHasMore = records.length >= msg.page_size;
+        // 阶段七十一：空会话空态引导（新建会话/默认空会话；首条消息上屏时移除）
+        if (!records.length && isAIAgent(target)) renderAISessionEmpty();
 
         // 阶段七十：智能体会话历史渲染后归口恢复任务可见性——
         // 已完结任务在答复气泡前内联重放任务卡（执行过程 DB 归口），运行中任务重挂实时卡续播
@@ -5054,6 +5265,12 @@
         // 阶段六十四：任务历史按钮同口径显隐（与记忆按钮一致，仅 AI 智能体会话显示）
         var taskhistBtn = document.getElementById('taskhist-btn');
         if (taskhistBtn) taskhistBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
+        // 阶段七十一：AI 多会话按钮同口径显隐（Trae 同款"新建会话"入口）
+        var aiSessionBtn = document.getElementById('ai-session-btn');
+        if (aiSessionBtn) {
+            aiSessionBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
+            if (aiSessionBtn.classList.contains('hidden')) closeAISessionPanel();
+        }
     }
 
     // ===== 消息渲染 =====
@@ -5294,6 +5511,9 @@
     // 实时消息：构建元素后追加到列表末尾并滚动到底部
     // tokens 可选：AI 回复 Token 消耗（END 降级整段渲染路径透传）
     function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
+        // 阶段七十一：新会话首条消息上屏时移除空态引导
+        var emptyTip = messageList.querySelector('.ai-session-empty');
+        if (emptyTip) emptyTip.remove();
         // 原实现：构建与插入耦合在 appendMessage 内，历史消息无法复用，现拆分为 createMessageEl
         // var div = document.createElement('div');
         // div.className = 'message ' + type;
@@ -6796,7 +7016,9 @@
         // 阶段五十八：追加记忆管理弹窗列表 #memory-list（同坑：复用 kb-list 类，按 id 显式补初始化）
         // 通讯录/AI 助手列表同坑修复：.user-list 类被 #conv-list/#user-list/#ai-agent-list 三处复用，
         // 原 querySelector('.user-list') 仅命中 DOM 序第一的会话列表，通讯录与 AI Tab 列表从未挂上自绘滑块
-        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list']
+        // 阶段七十二：追加 AI 多会话列表 #ai-session-list（超过 5 条后滚动查看；
+        // 面板初始带 hidden 但 DOM 常驻，启动时可直接注册，滚轮/悬停行为与其余面板一致）
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list']
             .forEach(function (sel) {
                 var el = document.querySelector(sel);
                 if (el) initOsb(el);
