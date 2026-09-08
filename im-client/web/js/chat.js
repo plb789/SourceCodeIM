@@ -1989,7 +1989,7 @@
         // 原实现仅清本地视图不写删除表，刷新或重开会话后历史原样回来，清空形同虚设
         // 永久删除仅私聊与 AI 会话提供（群聊消息影响全员，仅提供清空显示）；AI 会话永久删除范围为当前查看会话
         showChoice('清空聊天',
-            '仅清空本端显示，云端记录保留且不再加载；或彻底删除云端记录，双方均不可见，不可恢复。',
+            '仅清空本端显示，云端记录保留且不再加载；私聊永久删除需对方同意后执行，AI 会话可直接删除当前会话。',
             '云端保留',
             function () {
                 IMSocket.send({ msg_type: MSG.CONV_CLEAR, to_user: currentChatUser });
@@ -1997,23 +1997,27 @@
                 appendSystem('聊天显示已清空（云端记录保留）');
             },
             isGroup ? null : {
-                text: isAI ? '永久删除' : '永久删除',
+                text: isAI ? '永久删除' : '申请删除双方记录',
                 cb: function () {
-                    IMSocket.send({
-                        msg_type: MSG.CONV_CLEAR,
-                        to_user: currentChatUser,
-                        clear: true,
-                        session_id: isAI ? (aiViewSession[currentChatUser] || 0) : 0
-                    });
-                    messageList.innerHTML = '';
                     if (isAI) {
+                        // AI 会话：自己的数据自己删，无需审批
+                        IMSocket.send({
+                            msg_type: MSG.CONV_CLEAR,
+                            to_user: currentChatUser,
+                            clear: true,
+                            session_id: aiViewSession[currentChatUser] || 0
+                        });
+                        messageList.innerHTML = '';
                         // 服务端已物理删除，重拉得到空态（分页游标归位）
                         historyPage = 1;
                         historyHasMore = true;
                         loadingMore = false;
                         loadHistory();
+                        appendSystem('当前会话已从云端永久删除');
+                    } else {
+                        // 私聊走双方审批流：服务端落申请单并推审批卡片，对方同意才物理删除申请前的记录
+                        IMSocket.send({ msg_type: MSG.PURGE_APPLY, to_user: currentChatUser });
                     }
-                    appendSystem(isAI ? '当前会话已从云端永久删除' : '云端聊天记录已永久删除');
                 }
             });
     });
@@ -4338,6 +4342,86 @@
         });
     });
 
+    // ===== 阶段七十二：私聊永久删除审批（会话内审批卡片）=====
+    // 归口：服务端申请单落库（同一对用户仅一条待处理）；卡片状态经 PURGE_APPLY 帧同步双方
+    // （发起/审批/登录补推/终态变更 复用同一帧），前端按 from_user===自己 区分发起/审批视角
+    var purgeCards = {}; // peer -> {apply_id, from_user, to_user, status}
+
+    IMSocket.on(MSG.PURGE_APPLY, function (msg) {
+        var p = null;
+        try { p = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (!p.apply_id || !p.from_user) return;
+        var me = IMSocket.getUsername();
+        var peer = (p.from_user === me) ? p.to_user : p.from_user;
+        purgeCards[peer] = p;
+        if (currentChatUser !== peer) return;
+        if (p.status === 1) {
+            // 对方已同意：云端已物理删除，重拉当前视图清掉残留气泡（卡片由历史加载钩子重挂终态）
+            messageList.innerHTML = '';
+            historyPage = 1;
+            historyHasMore = true;
+            loadingMore = false;
+            loadHistory();
+            return;
+        }
+        renderPurgeCard();
+    });
+
+    // 渲染/更新当前会话的审批卡片（历史加载后追加与会话内实时状态同步共用；原位替换幂等）
+    function renderPurgeCard() {
+        var p = purgeCards[currentChatUser];
+        if (!p) return;
+        var me = IMSocket.getUsername();
+        var isSender = p.from_user === me;
+        var text = '', actions = null;
+        if (p.status === 0) {
+            if (isSender) {
+                text = '已向对方发送删除申请，等待对方处理';
+            } else {
+                text = '对方申请彻底删除你们双方的聊天记录（申请前的消息），是否同意？';
+                actions = [
+                    { text: '同意删除', cls: 'purge-btn-agree', act: 'agree' },
+                    { text: '拒绝', cls: 'purge-btn-reject', act: 'reject' }
+                ];
+            }
+        } else if (p.status === 1) {
+            text = isSender ? '对方已同意删除申请，双方聊天记录已彻底删除' : '已同意删除申请，双方聊天记录已彻底删除';
+        } else {
+            text = isSender ? '对方拒绝了你的删除申请，聊天记录保留' : '已拒绝删除申请，聊天记录保留';
+        }
+        var card = document.createElement('div');
+        card.className = 'msg-purge-card';
+        card.setAttribute('data-apply-id', p.apply_id);
+        var tip = document.createElement('div');
+        tip.className = 'purge-tip';
+        tip.textContent = text;
+        card.appendChild(tip);
+        if (actions) {
+            var bar = document.createElement('div');
+            bar.className = 'purge-actions';
+            actions.forEach(function (a) {
+                var btn = document.createElement('button');
+                btn.className = 'purge-btn ' + a.cls;
+                btn.textContent = a.text;
+                btn.addEventListener('click', function () {
+                    // 点击即锁按钮防重复提交，终态以服务端 57 帧归口回推（拒绝/同意后卡片原位更新）
+                    bar.querySelectorAll('.purge-btn').forEach(function (b) { b.disabled = true; });
+                    tip.textContent = '处理中…';
+                    IMSocket.send({ msg_type: MSG.PURGE_RESP, to_user: p.from_user, msg_id: p.apply_id, content: a.act });
+                });
+                bar.appendChild(btn);
+            });
+            card.appendChild(bar);
+        }
+        var old = messageList.querySelector('.msg-purge-card');
+        if (old) {
+            messageList.replaceChild(card, old);
+        } else {
+            messageList.appendChild(card);
+        }
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+
     // ===== 消息撤回：将对应气泡替换为系统提示 =====
     // 阶段十二增强：撤回通知携带原始消息接收方 to_user（群聊为空），
     // 前端先做会话归属校验再渲染，杜绝跨会话串窗（撤回提示误渲染进当前打开的无关会话）；
@@ -4721,6 +4805,9 @@
         // 阶段七十：智能体会话历史渲染后归口恢复任务可见性——
         // 已完结任务在答复气泡前内联重放任务卡（执行过程 DB 归口），运行中任务重挂实时卡续播
         if (isAIAgent(currentChatUser)) agentReplayTasks();
+
+        // 阶段七十二：历史渲染后补挂永久删除审批卡片（若有未处理/已终态申请）
+        renderPurgeCard();
 
         // 加载历史后发送已读回执（对方消息的最大 ID，客户端水位去重）
         var maxId = 0;

@@ -336,6 +336,21 @@ type FriendRequest struct {
 // TableName 指定表名
 func (FriendRequest) TableName() string { return "im_friend_request" }
 
+// MsgPurgeApply 私聊永久删除审批表 im_msg_purge_apply（阶段七十二）
+// 一方发起"彻底删除双方聊天记录"申请，对方同意后服务端才物理删除申请时点前的双方互发消息；
+// 同一对用户同时仅允许一条待处理申请；申请落库归口，离线方重登时补推审批卡片不丢失
+type MsgPurgeApply struct {
+	ID         uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	FromUser   string     `gorm:"column:from_user;type:varchar(32);not null;index:idx_purge_from" json:"from_user"` // 发起方
+	ToUser     string     `gorm:"column:to_user;type:varchar(32);not null;index:idx_purge_to" json:"to_user"`       // 审批方
+	Status     int8       `gorm:"column:status;type:tinyint;default:0" json:"status"`                               // 0待处理 1已同意 2已拒绝
+	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`                             // 发起时间（删除范围截止点，审批期间的新消息不连带）
+	HandleTime *time.Time `gorm:"column:handle_time" json:"handle_time"`                                            // 处理时间（未处理为 NULL；零值 time.Time 会被严格模式拒插，故用指针）
+}
+
+// TableName 指定表名
+func (MsgPurgeApply) TableName() string { return "im_msg_purge_apply" }
+
 // Blacklist 黑名单表 im_blacklist
 type Blacklist struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`

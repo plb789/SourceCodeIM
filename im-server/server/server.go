@@ -188,6 +188,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleAISessionList(c, msg)
 	case protocol.MsgTypeAISessionNew:
 		s.handleAISessionNew(c, msg)
+	// 阶段七十二：私聊永久删除审批（发起/响应，会话内审批卡片）
+	case protocol.MsgTypePurgeApply:
+		s.handlePurgeApply(c, msg)
+	case protocol.MsgTypePurgeResp:
+		s.handlePurgeResp(c, msg)
 	case protocol.MsgTypeAISessionDel:
 		s.handleAISessionDel(c, msg)
 	default:
@@ -267,6 +272,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	s.ensureGroupConv(user.Username)
 	s.pushConvList(c)
 	s.pushPinList(c)
+	// 阶段七十二：补推与我相关的未处理永久删除审批卡片（离线审批不丢失）
+	s.pushPendingPurges(c)
 	// 阶段十四增强：登录补发对端已读水位，重连/重登后本地"已读"显示即时恢复（多端同步）
 	s.pushReadWatermarks(c)
 	logger.Info("用户 %s 上线", user.Username)

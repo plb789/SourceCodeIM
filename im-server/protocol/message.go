@@ -72,6 +72,10 @@ const (
 	MsgTypeAISessionList = 54 // 上行请求/下行响应：会话列表（上行 to_user=智能体名；下行 content 为 JSON：{current_id,sessions:[{id,title,create_time}]}）
 	MsgTypeAISessionNew  = 55 // 上行：新建会话（to_user=智能体名；下行 content 为 JSON：{session_id,title}，首条消息落库时回填区间起点）
 	MsgTypeAISessionDel  = 56 // 上行：删除/清空会话（to_user=智能体名，session_id 指定；默认会话（最早一条）禁止删除）。clear=true 时为"清空会话"：真删除该会话全部消息与任务记录（含默认会话 sid=0，会话行保留）；clear=false 为删除会话：消息并入默认会话
+
+	// 阶段七十二：私聊永久删除审批（双方同意才物理删除，会话内审批卡片）
+	MsgTypePurgeApply = 57 // 上行：发起删除申请（to_user=对方）；下行：审批卡片状态同步（content 为 JSON：{apply_id,from_user,to_user,status}，status 0待处理 1已同意 2已拒绝；发起/响应/登录补推/结果变更 复用同一帧）
+	MsgTypePurgeResp  = 58 // 上行：审批结果（to_user=发起方，msg_id=apply_id，content=agree/reject）；无独立下行——结果经 57 卡片帧同步双方
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

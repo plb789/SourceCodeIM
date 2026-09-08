@@ -943,6 +943,54 @@ html, body {
     margin: 10px 0;
 }
 
+/* ===== 阶段七十二：私聊永久删除审批卡片（会话内居中窄卡，微信式操作卡）===== */
+.msg-purge-card {
+    width: 300px;
+    margin: 12px auto;
+    padding: 14px 16px;
+    background: var(--bubble-other);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    text-align: center;
+}
+.msg-purge-card .purge-tip {
+    font-size: 12px;
+    color: var(--text-light);
+    line-height: 1.6;
+}
+.msg-purge-card .purge-actions {
+    margin-top: 10px;
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+.msg-purge-card .purge-btn {
+    padding: 5px 18px;
+    border-radius: 4px;
+    border: none;
+    font-size: 12px;
+    cursor: pointer;
+}
+.msg-purge-card .purge-btn.purge-btn-agree {
+    background: var(--primary);
+    color: #fff;
+}
+.msg-purge-card .purge-btn.purge-btn-agree:hover {
+    opacity: 0.9;
+}
+.msg-purge-card .purge-btn.purge-btn-reject {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-light);
+}
+.msg-purge-card .purge-btn.purge-btn-reject:hover {
+    border-color: var(--text-light);
+}
+.msg-purge-card .purge-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* 输入区高度拖拽条：微信同款，常态隐藏指示线，hover/拖拽时显示主题色横条 */
 .input-resizer {
     height: 6px;

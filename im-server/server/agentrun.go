@@ -221,6 +221,10 @@ func InitAgent(cfg *config.Config) {
 	}
 	// 阶段七十一：AI 多会话表迁移（用户+智能体 多会话归口，Trae 同款"新建会话"）
 	initAISessionTable()
+	// 阶段七十二：私聊永久删除审批表迁移（双方同意才物理删除）
+	if err := store.DB.AutoMigrate(&model.MsgPurgeApply{}); err != nil {
+		logger.Error("永久删除审批表迁移失败: %v", err)
+	}
 	// 阶段六十二：加载审批白名单（命令前缀 + 写文件免审批开关）——审批弹窗"同意并加白"持久化，重启不丢
 	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
 		logger.Error("Agent 白名单表迁移失败: %v", err)

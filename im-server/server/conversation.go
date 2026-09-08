@@ -177,55 +177,37 @@ func (s *Server) markConvRead(userID, target string) {
 }
 
 // handleConvClear 会话清空（clear=false 缺省：视图清空——消息写入删除表，本端不再加载，云端记录保留；
-// clear=true：永久删除——物理删除云端消息，双方均不可见且不可恢复）。
+// clear=true：永久删除——物理删除云端消息，仅 AI 会话可用（自己的数据自己删），
+// 私聊永久删除已升级为双方审批流（MsgTypePurgeApply），协议直发不允许绕过对方同意）。
 // 群聊仅支持视图清空（永久删除影响全员，协议层拒绝）；AI 会话永久删除范围为 session_id 指定的当前查看会话
 // 同时清空未读与会话摘要，保留会话行与最后时间，避免列表排序跳动
 func (s *Server) handleConvClear(c *Client, msg *protocol.Message) {
 	target := strings.TrimSpace(msg.ToUser) // 群聊为空
 
-	// 阶段七十二：永久删除分支——物理 DELETE 云端消息
+	// 阶段七十二：永久删除分支——仅 AI 会话直清，私聊引导走审批流
 	if msg.Clear {
 		if target == "" {
 			s.sendError(c, "群聊不支持永久删除")
 			return
 		}
-		if agent := aiAgentForUser(target, c.username); agent != nil {
-			// AI 会话：sid>0 校验归属（防协议直发删他人会话），sid=0 默认会话恒通过；
-			// 复用 aiSessionClearMessages（分批删除消息+任务记录，默认会话按用户对限定）
-			if msg.SessionID > 0 {
-				var row model.AISession
-				if err := store.DB.Where("id = ? AND username = ? AND agent_name = ?", msg.SessionID, c.username, agent.Name).
-					First(&row).Error; err != nil {
-					s.sendError(c, "会话不存在或已被删除")
-					return
-				}
-			}
-			aiSessionClearMessages(c.username, agent.Name, msg.SessionID)
-		} else {
-			// 私聊永久删除：物理删除双方互发消息（范围与历史加载口径一致含图片/文件，分批防长事务锁表）
-			cond := "msg_type IN (2,4,5) AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))"
-			args := []interface{}{c.username, target, target, c.username}
-			for i := 0; i < 10000; i++ { // 万批保险丝：5000 万行上限，防异常死循环
-				res := store.DB.Exec("DELETE FROM im_message WHERE "+cond+" LIMIT ?", append(args, 5000)...)
-				if res.Error != nil {
-					logger.Error("永久删除会话（%s/%s）失败: %v", c.username, target, res.Error)
-					break
-				}
-				if res.RowsAffected < 5000 {
-					break
-				}
+		agent := aiAgentForUser(target, c.username)
+		if agent == nil {
+			s.sendError(c, "私聊记录删除需对方同意，请使用删除申请")
+			return
+		}
+		// AI 会话：sid>0 校验归属（防协议直发删他人会话），sid=0 默认会话恒通过；
+		// 复用 aiSessionClearMessages（分批删除消息+任务记录，默认会话按用户对限定）
+		if msg.SessionID > 0 {
+			var row model.AISession
+			if err := store.DB.Where("id = ? AND username = ? AND agent_name = ?", msg.SessionID, c.username, agent.Name).
+				First(&row).Error; err != nil {
+				s.sendError(c, "会话不存在或已被删除")
+				return
 			}
 		}
-		// 置顶消息已物理删除，清理置顶防孤儿条目展示；会话摘要清空（保留会话行）
-		var pin model.MessagePin
-		if err := store.DB.Where("conv_key = ? AND pin_user = ?", convKey(c.username, target), c.username).
-			First(&pin).Error; err == nil {
-			store.DB.Delete(&model.MessagePin{}, pin.ID)
-			s.syncPinByKey(pin.ConvKey)
-		}
-		store.DB.Model(&model.Conversation{}).
-			Where("user_id = ? AND target = ?", c.username, target).
-			Update("last_msg", "")
+		aiSessionClearMessages(c.username, agent.Name, msg.SessionID)
+		// 尾务清理（置顶防孤儿展示 + 摘要清空保留会话行），与审批同意路径共用归口
+		s.purgeConvTails(c.username, target)
 		s.sendError(c, "云端聊天记录已永久删除")
 		return
 	}
