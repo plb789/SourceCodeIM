@@ -4112,10 +4112,12 @@ html.m #list-panel.list-collapsed {
 }
 
 /* ===== 阶段七十五（增强）：TRAE CN 同款独立控制台抽屉 + "打开控制台"浮标 ===== */
-/* 抽屉：输入区上方独立面板，统一展示本任务命令输出流（> 命令头 + 实时输出 + 退出码标注） */
+/* 抽屉：停靠预览区下方（中栏纵排底部，Trae CN 同款），统一展示本任务命令输出流
+   （> 命令头 + 实时输出 + 退出码标注）；窄屏回退输入框上方（margin 由原样式保留） */
 .agent-console-drawer {
-    margin: 0 12px 8px;
+    margin: 0 8px 8px;
     height: 240px;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border, #e0e0e0));
@@ -4211,10 +4213,12 @@ html.m #list-panel.list-collapsed {
     color: #f56c6c;
 }
 
-/* 浮标：输入区上方居中小胶囊（任务执行中有命令动静即浮现，点击展开抽屉） */
+/* 浮标：预览区下方居中小胶囊（任务执行中有命令动静即浮现，点击在预览下方展开抽屉；
+   窄屏回退输入框上方），flex 项 auto 边距水平居中 */
 .agent-console-chip {
     display: block;
     margin: 0 auto 8px;
+    flex-shrink: 0;
     padding: 4px 16px;
     border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
     border-radius: 14px;
@@ -4265,7 +4269,7 @@ html.m #list-panel.list-collapsed {
     min-height: 0;
 }
 
-/* 中分栏：文件预览/编辑（宽度可拖拽，默认 400px；无标签隐藏时整体收起） */
+/* 中分栏：文件预览/编辑（宽度可拖拽，默认 400px；无标签且控制台收起时整栏收起） */
 .ws-col-view {
     width: var(--ws-view-w, 400px);
     position: relative;
@@ -4277,6 +4281,20 @@ html.m #list-panel.list-collapsed {
 }
 
 .ws-col-view.hidden {
+    display: none;
+}
+
+/* 预览内层（原 .ws-col-view 语义拆分）：纵向填满中栏剩余空间，控制台抽屉/浮标停靠其下方 */
+.ws-view {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.ws-view.hidden {
     display: none;
 }
 

@@ -3443,8 +3443,9 @@
             agentConsoleBegin(st, ev); // 阶段七十五（增强）：同步写入底部独立控制台抽屉 + 浮出"打开控制台"入口
         }
         // 阶段七十六：文件面板角标（write_file=新 / edit_file=改），工具结果到达后刷新树并自动打开
-        if ((ev.tool === 'write_file' || ev.tool === 'edit_file') && ev.params && ev.params.path) {
-            wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
+        // delete_file 同记路径（结果到达后删行/关标签），但不打角标
+        if ((ev.tool === 'write_file' || ev.tool === 'edit_file' || ev.tool === 'delete_file') && ev.params && ev.params.path) {
+            if (ev.tool !== 'delete_file') wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
             wsPanel.lastToolPath[ev.tool] = ev.params.path; // 记路径：tool_result 不带 params，按工具名取回刷新预览
         }
         // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
@@ -3621,8 +3622,19 @@
 
     function agentConsoleEnsure() {
         if (agentConsole.root) return true;
-        var inputBar = document.querySelector('.input-bar');
-        if (!inputBar || !inputBar.parentNode) return false;
+        // 停靠点：优先预览区下方（Trae CN 同款，中栏纵排底部）；窄屏（≤900px 工作区整体隐藏）或
+        // 面板未就绪时回退输入框上方
+        var host = null, before = null;
+        var wsReady = wsPanelEnsure() && wsPanel.colView;
+        var narrow = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+        if (wsReady && !narrow) {
+            host = wsPanel.colView;
+        } else {
+            var inputBar = document.querySelector('.input-bar');
+            if (!inputBar || !inputBar.parentNode) return false;
+            host = inputBar.parentNode;
+            before = inputBar;
+        }
         var root = document.createElement('div');
         root.className = 'agent-console-drawer hidden';
         var head = document.createElement('div');
@@ -3652,15 +3664,16 @@
         body.addEventListener('scroll', function () {
             agentConsole.stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
         });
+        if (window._osbInit) window._osbInit(body); // 自绘悬浮滑块（全局系统滚动条已禁用）
         root.appendChild(head);
         root.appendChild(body);
-        inputBar.parentNode.insertBefore(root, inputBar);
+        host.insertBefore(root, before); // before=null 时等同 append（中栏停靠：排到预览区之下）
         var chip = document.createElement('button');
         chip.className = 'agent-console-chip hidden';
         chip.type = 'button';
         chip.textContent = '▤ 打开控制台';
         chip.addEventListener('click', function () { agentConsoleToggle(true); });
-        inputBar.parentNode.insertBefore(chip, inputBar);
+        host.insertBefore(chip, before);
         agentConsole.root = root;
         agentConsole.body = body;
         agentConsole.cmdEl = cmd;
@@ -3674,6 +3687,7 @@
         agentConsole.root.classList.toggle('hidden', !open);
         if (agentConsole.chip) agentConsole.chip.classList.add('hidden'); // 打开即收浮标；关闭后下方输出事件会再浮出
         if (open && agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+        wsPanelSyncViewCol(); // 停靠预览下方：无标签时仅控制台展开也要显示中栏，收起后无标签则整栏收回
     }
 
     // 新命令开始（run_command tool_start）：换任务清空重开、写命令头、浮标提示
@@ -3730,12 +3744,18 @@
 
     // 浮标提示：抽屉收起时命令有动静即浮现（TRAE 同款"打开控制台"入口）
     function agentConsoleShowHint() {
-        if (!agentConsole.open && agentConsole.chip) agentConsole.chip.classList.remove('hidden');
+        if (!agentConsole.open && agentConsole.chip) {
+            agentConsole.chip.classList.remove('hidden');
+            wsPanelSyncViewCol(); // 浮标停靠预览下方：浮现时中栏可能全隐（无标签），须联动显示
+        }
     }
 
     // 任务完结收浮标（抽屉保留日志，用户手动关闭）
     function agentConsoleTaskEnd() {
-        if (agentConsole.chip) agentConsole.chip.classList.add('hidden');
+        if (agentConsole.chip) {
+            agentConsole.chip.classList.add('hidden');
+            wsPanelSyncViewCol(); // 浮标收起后中栏可能全隐（无标签且抽屉收起），联动收回
+        }
     }
 
     // 切换会话复位：抽屉收起清空、浮标隐藏（控制台会话级归属，不跨会话串日志）
@@ -3916,7 +3936,11 @@
         colTree.appendChild(splitL);
         // 中分栏：文件预览/编辑（Trae CN 同款标签页 + 内容区，多文件并存切换）
         wsPanel.viewEl = document.createElement('div');
-        wsPanel.viewEl.className = 'ws-col-view hidden';
+        wsPanel.viewEl.className = 'ws-view hidden';
+        // 中栏包装容器（Trae CN 同款）：预览(上) + 控制台抽屉(下) 纵向停靠；宽度变量/显隐归此容器，
+        // 预览与控制台各自独立显隐（有标签或控制台展开任一即显示整栏，见 wsPanelSyncViewCol）
+        wsPanel.colView = document.createElement('div');
+        wsPanel.colView.className = 'ws-col-view hidden';
         var viewHead = document.createElement('div');
         viewHead.className = 'ws-view-head';
         wsPanel.tabBarEl = document.createElement('div');
@@ -3955,15 +3979,16 @@
         wsPanel.viewEl.appendChild(viewHead);
         wsPanel.viewEl.appendChild(wsPanel.crumbsEl);
         wsPanel.viewEl.appendChild(wsPanel.viewBody);
-        // 右分隔条：拖拽调整预览宽（贴预览分栏右缘；预览隐藏时分栏连带隐藏，无需单独同步）
+        // 右分隔条：拖拽调整预览宽（贴中栏右缘，罩全栏高度；中栏显隐由 wsPanelSyncViewCol 统一同步）
         var splitR = document.createElement('div');
         splitR.className = 'ws-splitter';
         splitR.title = '拖拽调整宽度';
-        wsPanel.viewEl.appendChild(splitR);
+        wsPanel.colView.appendChild(splitR);
+        wsPanel.colView.appendChild(wsPanel.viewEl);
         // 阶段七十六：文件树与预览区挂自绘悬浮滑块（全局系统滚动条已禁用，动态容器须显式注册）
         if (window._osbInit) { window._osbInit(wsPanel.treeEl); window._osbInit(wsPanel.viewBody); }
         aside.appendChild(colTree);
-        aside.appendChild(wsPanel.viewEl);
+        aside.appendChild(wsPanel.colView);
         // 面板插到聊天主体之前（工作区左、预览中、聊天右）
         var mainChat = view.querySelector('.main-chat');
         if (mainChat) view.insertBefore(aside, mainChat); else view.appendChild(aside);
@@ -3993,7 +4018,7 @@
             });
         }
         wsBindSplitter(splitL, colTree, '--ws-tree-w', 160, 480, 'ws_tree_w');
-        wsBindSplitter(splitR, wsPanel.viewEl, '--ws-view-w', 240, 760, 'ws_view_w');
+        wsBindSplitter(splitR, wsPanel.colView, '--ws-view-w', 240, 760, 'ws_view_w');
         // 响应归路：服务端 63 帧按 req_id 投递
         IMSocket.on(MSG.WS_FILE_RESP, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
@@ -4007,6 +4032,15 @@
             if (ev.ok) p.resolve(ev); else p.reject(new Error(ev.error || '操作失败'));
         });
         return true;
+    }
+
+    // 中栏显隐归口：有打开标签、控制台展开、或"打开控制台"浮标可见 任一即显示整栏
+    // （控制台停靠预览下方后，预览与控制台/浮标独立显隐）
+    function wsPanelSyncViewCol() {
+        if (!wsPanel.colView) return;
+        var chipOn = !!(agentConsole && agentConsole.chip && !agentConsole.chip.classList.contains('hidden'));
+        var show = !!wsPanel.activeTab || !!(agentConsole && (agentConsole.open || chipOn));
+        wsPanel.colView.classList.toggle('hidden', !show);
     }
 
     // 面板显隐归口：Agent 模式开 + 当前会话为 AI 智能体 才显示（开面板即拉取根目录）
@@ -4181,9 +4215,22 @@
     // 路径取值：tool_result 不带 params（服务端只回 tool/ok/output），回退用 tool_start 时按工具名记下的路径
     function wsPanelOnToolResult(ev) {
         if (!wsPanel.visible) return;
-        if (ev.tool !== 'write_file' && ev.tool !== 'edit_file') return;
+        if (ev.tool !== 'write_file' && ev.tool !== 'edit_file' && ev.tool !== 'delete_file') return;
         var path = (ev.params && ev.params.path) || wsPanel.lastToolPath[ev.tool] || '';
         var key = wsPanelNormalizeKey(path);
+        if (ev.tool === 'delete_file') {
+            wsPanelRefreshTree(); // 无论成败先刷新树对齐磁盘实际
+            if (ev.ok === false || key === null) return; // 删除失败/路径无法归一化：仅刷新
+            // 删除成功：清该路径（含子路径，删目录场景）角标/符号缓存/展开态，关闭相关预览标签
+            var low = (key || '').toLowerCase();
+            var lowDir = low ? low + '/' : '';
+            var isHit = function (k) { var lk = k.toLowerCase(); return lk === low || (lowDir && lk.indexOf(lowDir) === 0); };
+            Object.keys(wsPanel.tabs).forEach(function (t) { if (isHit(t)) wsPanelCloseTab(t); });
+            [wsPanel.badges, wsPanel.symTab, wsPanel.expanded].forEach(function (m) {
+                Object.keys(m).forEach(function (k) { if (isHit(k)) delete m[k]; });
+            });
+            return;
+        }
         if (key || key === '') {
             delete wsPanel.symTab[key]; // 文件被工具改写，符号缓存失效（下次渲染/扫描重建）
             Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
@@ -4196,6 +4243,7 @@
     // forceReload=true（取消编辑/保存后重读）：丢弃草稿重读磁盘内容
     function wsPanelOpen(path, forceReload) {
         wsPanel.viewEl.classList.remove('hidden');
+        wsPanelSyncViewCol(); // 打标签显示中栏
         if (wsPanel.tabs[path] && !forceReload) {
             wsPanelActivate(path);
             return;
@@ -4297,6 +4345,7 @@
         }
         if (!wsPanel.activeTab) {
             wsPanel.viewEl.classList.add('hidden');
+            wsPanelSyncViewCol(); // 全关后中栏仅当控制台仍展开时保留（控制台停靠预览下方）
             wsPanelRenderTabs();
             return;
         }
