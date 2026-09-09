@@ -899,7 +899,8 @@ function termInput(s, cmd, onFrame) {
         if (cdErr) push(cdErr);
         else push(s.cwd + '>\r\n');
         s.lastUsed = Date.now();
-        return { ok: true, cwd: s.cwd };
+        // sync 标记：本地记账命令无 exit 帧，前端须同步解除运行态（否则 running 卡死后续命令全部无反应）
+        return { ok: true, cwd: s.cwd, sync: true };
     }
     const startedAt = Date.now();
     let child;

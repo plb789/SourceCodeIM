@@ -3905,6 +3905,15 @@
                 tab.running = false;
                 agentConsole.stopBtn.disabled = true;
                 agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || '命令被拒绝') + '\r\n');
+            } else if (res && (res.sync || res.cwd)) { // cd/切盘等本地记账命令：无 exit 帧，这里同步解除运行态并更新提示符
+                // 兼容判断：新执行器返回 sync 标记；旧执行器（未重启主进程）cd 也只带 cwd 回来——
+                // 两条路径都无 exit 帧，若不在此解除运行态，tab.running 永久卡死后续命令全部被吞
+                tab.running = false;
+                agentConsole.stopBtn.disabled = true;
+                if (res.cwd) {
+                    tab.cwd = String(res.cwd);
+                    if (agentConsole.active === tab.id) agentConsole.promptEl.textContent = tab.cwd + '>';
+                }
             }
         }).catch(function () {
             tab.running = false;
