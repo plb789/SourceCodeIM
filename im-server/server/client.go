@@ -94,7 +94,7 @@ func (c *Client) readPump() {
 
 	// 心跳超时：90s 未收到任何消息判定离线
 	timeout := time.Duration(c.server.cfg.HeartbeatTimeout) * time.Second
-	c.conn.SetReadLimit(1 << 20) // 单条消息最大 1MB
+	c.conn.SetReadLimit(4 << 20) // 单条消息最大 4MB（文件面板 readb 的 65 上行回传 base64 可达约 2.7MB，普通消息不受影响）
 
 	for {
 		c.conn.SetReadDeadline(time.Now().Add(timeout))

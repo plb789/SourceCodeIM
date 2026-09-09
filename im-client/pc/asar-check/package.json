@@ -1,0 +1,9 @@
+{
+  "name": "im-client-pc",
+  "version": "1.0.0",
+  "description": "即时通讯 PC 桌面客户端（Electron 打包 Web 源码）",
+  "main": "main.js",
+  "dependencies": {
+    "rcedit": "^4.0.1"
+  }
+}

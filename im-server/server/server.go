@@ -498,7 +498,10 @@ func (s *Server) handleFileHeader(c *Client, msg *protocol.Message) {
 	// 中转文件头给接收方全部在线连接（多端同步）
 	if s.hub.Count(msg.ToUser) > 0 {
 		data, _ := json.Marshal(msg)
+		logger.Info("文件头中转: %s -> %s, 在线连接 %d, 帧 %d 字节, chunk=%d", c.username, msg.ToUser, s.hub.Count(msg.ToUser), len(data), msg.ChunkIndex)
 		s.sendToUser(msg.ToUser, data)
+	} else {
+		logger.Warn("文件头中转跳过: 接收方 %s 不在线（hub 无连接）", msg.ToUser)
 	}
 	// 回显给发送方（携带 fileID）
 	data, _ := json.Marshal(msg)

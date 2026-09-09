@@ -4670,6 +4670,129 @@ html.m #list-panel.list-collapsed {
     color: var(--primary);
 }
 
+/* Excel 预览：sheet 名切换条（类标签横向滚动）+ 表格（复用 ai-md 表格底子，实线边框更密） */
+.ws-xlsx-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.ws-xlsx-chip {
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    color: var(--text-secondary, #888);
+    background: color-mix(in srgb, var(--hover, #f5f5f5) 70%, transparent);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.ws-xlsx-chip:hover { color: var(--text, #333); }
+
+.ws-xlsx-chip.active {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    font-weight: 600;
+}
+
+.ws-xlsx-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 10px 12px;
+}
+
+.ws-xlsx-body table {
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.ws-xlsx-body td {
+    border: 1px solid var(--border, #e0e0e0);
+    padding: 3px 10px;
+    white-space: nowrap;
+    min-width: 40px;
+}
+
+.ws-xlsx-body tr:first-child td {
+    background: color-mix(in srgb, var(--hover, #f5f5f5) 60%, transparent);
+    font-weight: 600;
+}
+
+/* PPT 预览：翻页工具条 + Canvas（宽度自适应，保持幻灯片比例） */
+.ws-pptx {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 12px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.ws-pptx-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+.ws-pptx-btn {
+    padding: 4px 14px;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text, #333);
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.ws-pptx-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.ws-pptx-idx {
+    font-size: 12.5px;
+    color: var(--text-secondary, #888);
+    min-width: 70px;
+    text-align: center;
+}
+
+.ws-pptx-canvas {
+    width: 100%;
+    max-width: 720px;
+    height: auto;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 4px;
+    background: #fff;
+}
+
+/* Word 文档预览（mammoth 转 HTML）：排版微调——标题层级/表格边框/图片限宽，整体沿用 ai-md 样式 */
+.ws-view-docx img {
+    max-width: 100%;
+    height: auto;
+}
+
+.ws-view-docx table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.ws-view-docx td,
+.ws-view-docx th {
+    border: 1px solid var(--border, #e0e0e0);
+    padding: 4px 8px;
+}
+
 /* 预览区代码符号着色（Trae CN 同款观感）：hljs github-dark 主题未定义 punctuation（继承灰白基色），此处按语言作用域覆盖 */
 .ws-view-pre code .hljs-punctuation,
 .ws-view-pre code .hljs-operator {

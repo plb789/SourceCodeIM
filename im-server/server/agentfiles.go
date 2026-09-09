@@ -9,6 +9,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -26,8 +27,9 @@ import (
 
 // 面板操作限额（防超长内容撑爆 WS 帧 / 防滥用）
 const (
-	wsFileReadMax   = 512 << 10        // 单次读文件上限 512KB（超出截断，编辑保存不受限但帧体过大由 WS 层兜底）
-	wsFileOpTimeout = 15 * time.Second // PC 文件操作回传等待上限（本地磁盘 IO 很快，超时视为 PC 无响应）
+	wsFileReadMax    = 512 << 10        // 单次读文件上限 512KB（超出截断，编辑保存不受限但帧体过大由 WS 层兜底）
+	wsFileReadB64Max = 2 << 20          // readb 二进制读上限 2MB（base64 后约 2.7MB，PC 65 上行需在 WS 读限 4MB 内；供 docx 预览等场景）
+	wsFileOpTimeout  = 15 * time.Second // PC 文件操作回传等待上限（本地磁盘 IO 很快，超时视为 PC 无响应）
 )
 
 // wsFileEntry 文件树节点（一级目录条目）
@@ -213,6 +215,8 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 		return wsServerTree(username, path)
 	case "read":
 		return wsServerRead(username, path)
+	case "readb":
+		return wsServerReadB64(username, path)
 	case "save":
 		return wsServerSave(username, path, content)
 	}
@@ -289,6 +293,29 @@ func wsServerRead(username, path string) *wsFileResult {
 		}
 	}
 	return &wsFileResult{OK: true, Content: text, Truncated: truncated}
+}
+
+// wsServerReadB64 读二进制文件转 base64（≤2MB，供 docx 等文档前端解析预览；Binary 标记二进制模式）
+func wsServerReadB64(username, path string) *wsFileResult {
+	full, _, err := wsServerResolve(username, path)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return &wsFileResult{Error: "文件不存在或无法访问"}
+	}
+	if info.IsDir() {
+		return &wsFileResult{Error: "目标是目录，请展开浏览"}
+	}
+	if info.Size() > int64(wsFileReadB64Max) {
+		return &wsFileResult{Error: "文档过大（超过 2MB），暂不支持预览"}
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return &wsFileResult{Error: "读取失败：" + err.Error()}
+	}
+	return &wsFileResult{OK: true, Binary: true, Content: base64.StdEncoding.EncodeToString(data)}
 }
 
 // wsServerSave 写文件（自动建父目录；UTF-8 落盘，与执行器 write_file 同语义）

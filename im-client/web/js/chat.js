@@ -3824,6 +3824,11 @@
         ini:   { bg: '#9AA0A6', label: 'IN' },
         toml:  { bg: '#9AA0A6', label: 'TM' },
         pdf:   { bg: '#B30B00', label: 'PD' },
+        docx:  { bg: '#2B579A', label: 'W' },
+        docm:  { bg: '#2B579A', label: 'W' },
+        doc:   { bg: '#2B579A', label: 'W' },
+        xlsx:  { bg: '#217346', label: 'X' },
+        pptx:  { bg: '#D24726', label: 'P' },
         // 特殊类型 emoji（缩略图形义直观看图即知）
         png: { emoji: '🖼' }, jpg: { emoji: '🖼' }, jpeg: { emoji: '🖼' }, gif: { emoji: '🖼' },
         webp: { emoji: '🖼' }, bmp: { emoji: '🖼' }, svg: { emoji: '🖼' }, ico: { emoji: '🖼' },
@@ -4196,6 +4201,14 @@
             wsPanel.tabs[path] = { name: path.replace(/^.*[\\/]/, ''), loading: true }; // 重载：清旧内容与草稿
         }
         wsPanelActivate(path);
+        var extOpen = (path.replace(/^.*\./, '') || '').toLowerCase();
+        // Office 文档走二进制读取 + 前端解析预览（Trae CN 同款）：docx=mammoth / xlsx=SheetJS / pptx=PptxViewJS
+        var docKinds = { docx: 'isDocx', docm: 'isDocx', xlsx: 'isXlsx', xlsm: 'isXlsx', pptx: 'isPptx', pptm: 'isPptx' };
+        if (docKinds[extOpen]) {
+            wsPanel.tabs[path][docKinds[extOpen]] = true;
+            wsPanelLoadBin(path); // 统一 base64 读通道（PC IPC 直读 / 浏览器 62 readb）
+            return;
+        }
         wsPanelReq('read', path).then(function (res) {
             var t = wsPanel.tabs[path];
             if (!t) return; // 标签已被关闭，丢弃迟到响应
@@ -4214,6 +4227,43 @@
             t.error = (err && err.message || err);
             if (wsPanel.activeTab === path) wsPanelRenderTab();
         });
+    }
+
+    // base64 → ArrayBuffer（docx 等二进制文档前端解析用）
+    function wsB64ToBuf(b64) {
+        var bin = atob(b64 || '');
+        var buf = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+        return buf.buffer;
+    }
+
+    // Office 文档（docx/xlsx/pptx）读取：PC 端直接 IPC 读本地文件（绕 WS 帧限），浏览器端走 62 readb（服务端/PC 转发，≤2MB）
+    // 结果为 base64 存 t.b64，渲染时各解析器消费（解析结果缓存，切标签秒开）
+    function wsPanelLoadBin(path) {
+        var done = function (b64) {
+            var t = wsPanel.tabs[path];
+            if (!t) return;
+            t.loading = false;
+            t.b64 = b64 || '';
+            if (wsPanel.activeTab === path) wsPanelRenderTab();
+        };
+        var fail = function (err) {
+            var t = wsPanel.tabs[path];
+            if (!t) return;
+            t.loading = false;
+            t.error = (err && err.message || err) || '读取失败';
+            if (wsPanel.activeTab === path) wsPanelRenderTab();
+        };
+        if (window.desktop && window.desktop.workspaceOp) {
+            window.desktop.workspaceOp({ username: IMSocket.getUsername(), op: 'readb', path: path }).then(function (r) {
+                if (r && r.ok) done(r.content);
+                else fail(new Error((r && r.error) || '读取失败'));
+            }).catch(fail);
+            return;
+        }
+        wsPanelReq('readb', path).then(function (res) {
+            done(res.content || '');
+        }).catch(fail);
     }
 
     // 激活标签（编辑中切走先存草稿，切回恢复编辑态不丢改动）
@@ -4414,6 +4464,186 @@
             md.innerHTML = renderAIMarkdown(t.content);
             wsPanel.viewBody.appendChild(md);
             wsPanel.btnEdit.classList.remove('hidden');
+            return;
+        }
+        if (t.isDocx) { // Word 文档预览：mammoth 转 HTML（复用 ai-md 排版样式），不支持编辑保存
+            wsPanel.btnEdit.classList.add('hidden'); // docx 只读，隐藏编辑按钮（防源码标签切来时残留）
+            var docTip = document.createElement('div');
+            docTip.className = 'ws-panel-hint';
+            docTip.textContent = 'Word 文档预览（只读）';
+            wsPanel.viewBody.appendChild(docTip);
+            if (!t.docHtml) {
+                if (typeof mammoth === 'undefined') {
+                    var noLib = document.createElement('div');
+                    noLib.className = 'ws-panel-hint';
+                    noLib.textContent = '文档组件未加载，无法预览';
+                    wsPanel.viewBody.appendChild(noLib);
+                    return;
+                }
+                if (!t.b64) {
+                    var noData = document.createElement('div');
+                    noData.className = 'ws-panel-hint';
+                    noData.textContent = '文档数据为空';
+                    wsPanel.viewBody.appendChild(noData);
+                    return;
+                }
+                var parsing = document.createElement('div');
+                parsing.className = 'ws-panel-hint';
+                parsing.textContent = '文档解析中…';
+                wsPanel.viewBody.appendChild(parsing);
+                (function (p) {
+                    mammoth.convertToHtml({ arrayBuffer: wsB64ToBuf(t.b64) }).then(function (r) {
+                        var tt = wsPanel.tabs[p];
+                        if (!tt) return;
+                        tt.docHtml = (r && r.value) || '<p>（空文档）</p>';
+                        if (wsPanel.activeTab === p) wsPanelRenderTab();
+                    }).catch(function (e) {
+                        var tt = wsPanel.tabs[p];
+                        if (!tt) return;
+                        tt.docHtml = '<p>解析失败：' + (e && e.message || e) + '</p>';
+                        if (wsPanel.activeTab === p) wsPanelRenderTab();
+                    });
+                })(path);
+                return;
+            }
+            var docBody = document.createElement('div');
+            docBody.className = 'ws-view-md ai-md ws-view-docx';
+            docBody.innerHTML = t.docHtml;
+            wsPanel.viewBody.appendChild(docBody);
+            return;
+        }
+        if (t.isXlsx) { // Excel 表格预览：SheetJS 解析（sheet 名切换条 + HTML 表格），只读
+            wsPanel.btnEdit.classList.add('hidden');
+            var xlsxTip = document.createElement('div');
+            xlsxTip.className = 'ws-panel-hint';
+            xlsxTip.textContent = 'Excel 表格预览（只读）';
+            wsPanel.viewBody.appendChild(xlsxTip);
+            if (typeof XLSX === 'undefined') {
+                var noX = document.createElement('div');
+                noX.className = 'ws-panel-hint';
+                noX.textContent = '表格组件未加载，无法预览';
+                wsPanel.viewBody.appendChild(noX);
+                return;
+            }
+            if (!t.b64) {
+                var noXd = document.createElement('div');
+                noXd.className = 'ws-panel-hint';
+                noXd.textContent = '文件数据为空';
+                wsPanel.viewBody.appendChild(noXd);
+                return;
+            }
+            if (!t.wb) {
+                try { t.wb = XLSX.read(wsB64ToBuf(t.b64), { type: 'array' }); }
+                catch (e) {
+                    var badX = document.createElement('div');
+                    badX.className = 'ws-panel-hint';
+                    badX.textContent = '解析失败：' + (e && e.message || e);
+                    wsPanel.viewBody.appendChild(badX);
+                    return;
+                }
+            }
+            var names = t.wb.SheetNames || [];
+            if (!names.length) {
+                var emptyX = document.createElement('div');
+                emptyX.className = 'ws-panel-hint';
+                emptyX.textContent = '（空工作簿）';
+                wsPanel.viewBody.appendChild(emptyX);
+                return;
+            }
+            if (!t.sheetIdx) t.sheetIdx = 0; // 当前 sheet 下标（切标签后保留）
+            var bar = document.createElement('div');
+            bar.className = 'ws-xlsx-tabs';
+            names.forEach(function (nm, si) {
+                var chip = document.createElement('span');
+                chip.className = 'ws-xlsx-chip' + (si === t.sheetIdx ? ' active' : '');
+                chip.textContent = nm;
+                chip.title = '切换到 ' + nm;
+                (function (idx) {
+                    chip.addEventListener('click', function () {
+                        var tt = wsPanel.tabs[path];
+                        if (!tt) return;
+                        tt.sheetIdx = idx;
+                        wsPanelRenderTab();
+                    });
+                })(si);
+                bar.appendChild(chip);
+            });
+            wsPanel.viewBody.appendChild(bar);
+            var xbody = document.createElement('div');
+            xbody.className = 'ws-view-md ai-md ws-xlsx-body';
+            try {
+                var wsObj = t.wb.Sheets[names[t.sheetIdx]];
+                xbody.innerHTML = XLSX.utils.sheet_to_html(wsObj, { header: '', footer: '' }) || '<p>（空表）</p>';
+            } catch (e2) {
+                xbody.innerHTML = '<p>渲染失败：' + (e2 && e2.message || e2) + '</p>';
+            }
+            wsPanel.viewBody.appendChild(xbody);
+            return;
+        }
+        if (t.isPptx) { // PPT 幻灯片预览：PptxViewJS Canvas 渲染（翻页工具条），只读
+            wsPanel.btnEdit.classList.add('hidden');
+            var pptTip = document.createElement('div');
+            pptTip.className = 'ws-panel-hint';
+            pptTip.textContent = 'PPT 幻灯片预览（只读）';
+            wsPanel.viewBody.appendChild(pptTip);
+            if (typeof PptxViewJS === 'undefined' || typeof JSZip === 'undefined') {
+                var noP = document.createElement('div');
+                noP.className = 'ws-panel-hint';
+                noP.textContent = '幻灯片组件未加载，无法预览';
+                wsPanel.viewBody.appendChild(noP);
+                return;
+            }
+            if (!t.b64) {
+                var noPd = document.createElement('div');
+                noPd.className = 'ws-panel-hint';
+                noPd.textContent = '文件数据为空';
+                wsPanel.viewBody.appendChild(noPd);
+                return;
+            }
+            var pptBox = document.createElement('div');
+            pptBox.className = 'ws-pptx';
+            var pptBar = document.createElement('div');
+            pptBar.className = 'ws-pptx-bar';
+            var btnPrev = document.createElement('button');
+            btnPrev.className = 'ws-pptx-btn';
+            btnPrev.textContent = '‹ 上一页';
+            var pptIdx = document.createElement('span');
+            pptIdx.className = 'ws-pptx-idx';
+            pptIdx.textContent = '加载中…';
+            var btnNext = document.createElement('button');
+            btnNext.className = 'ws-pptx-btn';
+            btnNext.textContent = '下一页 ›';
+            pptBar.appendChild(btnPrev);
+            pptBar.appendChild(pptIdx);
+            pptBar.appendChild(btnNext);
+            var canvas = document.createElement('canvas');
+            canvas.className = 'ws-pptx-canvas';
+            pptBox.appendChild(pptBar);
+            pptBox.appendChild(canvas);
+            wsPanel.viewBody.appendChild(pptBox);
+            (function (p) {
+                try {
+                    var viewer = new PptxViewJS.PPTXViewer({ canvas: canvas });
+                    var blob = new Blob([wsB64ToBuf(t.b64)], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+                    var syncIdx = function () {
+                        var total = 0, cur = 0;
+                        try { total = viewer.getSlideCount(); cur = viewer.getCurrentSlideIndex() + 1; } catch (e) {}
+                        pptIdx.textContent = total ? (cur + ' / ' + total) : '—';
+                    };
+                    viewer.on('slideChanged', syncIdx);
+                    viewer.on('renderComplete', syncIdx);
+                    viewer.loadFile(blob).then(function () {
+                        syncIdx();
+                        return viewer.render();
+                    }).then(syncIdx).catch(function (e) {
+                        pptIdx.textContent = '解析失败：' + (e && e.message || e);
+                    });
+                    btnPrev.addEventListener('click', function () { viewer.previousSlide().then(syncIdx).catch(function () {}); });
+                    btnNext.addEventListener('click', function () { viewer.nextSlide().then(syncIdx).catch(function () {}); });
+                } catch (e) {
+                    pptIdx.textContent = '加载失败：' + (e && e.message || e);
+                }
+            })(path);
             return;
         }
         var text = t.content;
