@@ -2006,6 +2006,13 @@ html, body {
     pointer-events: auto !important;
 }
 
+/* 横向版滑块（标签栏等纯横滚容器）：贴容器底边，宽度由 JS 按横向滚动比例设置 */
+.osb-thumb.osb-h {
+    width: auto;
+    height: 6px;
+    border-radius: 3px;
+}
+
 /* ===== 阶段二十九：新的朋友（微信式好友申请归口） ===== */
 /* 好友面板顶部入口条 */
 .new-friends-entry {
@@ -4779,6 +4786,11 @@ html.m #list-panel.list-collapsed {
     min-width: 0;
     display: flex;
     overflow-x: auto; /* 纯横向滚动条，不加 contain：纵向滚轮可链式传给页面（吞掉则标签栏区域滚轮失灵） */
+    scrollbar-width: none; /* 原生滚动条隐藏，走自绘悬浮滑块（悬停浮现，Trae CN 同款） */
+}
+
+.ws-tab-bar::-webkit-scrollbar {
+    display: none;
 }
 
 .ws-tab {

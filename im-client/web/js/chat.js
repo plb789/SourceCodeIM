@@ -4254,6 +4254,7 @@
         viewHead.className = 'ws-view-head';
         wsPanel.tabBarEl = document.createElement('div');
         wsPanel.tabBarEl.className = 'ws-tab-bar';
+        if (window._osbInitH) window._osbInitH(wsPanel.tabBarEl); // 多标签横向自绘滑块（悬停浮现可拖拽，Trae CN 同款）
         wsPanel.btnEdit = document.createElement('button');
         wsPanel.btnEdit.className = 'ws-panel-btn';
         wsPanel.btnEdit.type = 'button';
@@ -4693,6 +4694,13 @@
             tab.addEventListener('click', function () { if (p !== wsPanel.activeTab) wsPanelActivate(p); });
             wsPanel.tabBarEl.appendChild(tab);
         });
+        // 激活标签自动滚入可视区（Trae CN 同款）：标签多到横向溢出时，切换/新开标签后保证当前标签可见
+        var act = wsPanel.tabBarEl.querySelector('.ws-tab.active');
+        if (act) {
+            var al = act.offsetLeft, ar = al + act.offsetWidth, sl = wsPanel.tabBarEl.scrollLeft, cw = wsPanel.tabBarEl.clientWidth;
+            if (al < sl + 4) wsPanel.tabBarEl.scrollLeft = al - 4;
+            else if (ar > sl + cw - 4) wsPanel.tabBarEl.scrollLeft = ar - cw + 4;
+        }
     }
 
     // 渲染当前标签内容：加载中/错误/二进制提示；MD 走 renderAIMarkdown 渲染（复用 .ai-md 样式：表格/代码块/复制）；
@@ -9094,9 +9102,9 @@
     // 改由 JS 精确控制：mouseover 时给最近的滚动容器加 .sb-hover（滑块浮现），mouseout 时移除（滑块隐藏）
     (function () {
         var sbLast = null; // 当前标记的滚动容器
-        // 判定是否为可滚动元素（存在纵向溢出才可能显示滚动条）
+        // 判定是否为可滚动元素（存在纵向或横向溢出才可能显示滚动条；横向用于标签栏等纯横滚容器）
         function sbScrollable(el) {
-            return el.scrollHeight > el.clientHeight + 1;
+            return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
         }
         // 自触发点向上找最近的滚动容器（与 CSS :hover 命中语义一致）；
         // 滑块本身挂在 body 上（不在容器内），鼠标移到滑块上时映射回其宿主容器
@@ -9236,6 +9244,82 @@
             });
             osbUpdate();
         }
+        // ===== 横向自绘悬浮滚动条（initOsb 的水平镜像）：预览区标签栏等多标签横滚容器用 =====
+        // 滑块贴容器底边（宽 6px 高度按比例），几何/拖拽/同步触发与纵向版同构；显隐复用 sbMark（el._osbThumb 指向本滑块）
+        function initOsbH(el) {
+            if (el._osbH) return; // 防重复初始化
+            el._osbH = true;
+            el._osb = true;       // 同时占住纵向版防重复标记（横滚容器无需再挂纵向滑块）
+            var thumb = document.createElement('div');
+            thumb.className = 'osb-thumb osb-h';
+            document.body.appendChild(thumb);
+            thumb._osbHost = el;
+            el._osbThumb = thumb; // 悬停显隐联动（sbMark/sbScheduleHide 通用读写 _osbThumb）
+            // 按横向滚动比例刷新滑块位置与长度；fixed 定位基于容器可视区实时矩形
+            function osbUpdate() {
+                var sw = el.scrollWidth, cw = el.clientWidth, sl = el.scrollLeft;
+                if (sw <= cw + 1 || cw === 0) {
+                    thumb.style.display = 'none'; return;
+                }
+                var rect = el.getBoundingClientRect();
+                if (rect.width === 0) {
+                    thumb.style.display = 'none'; return;
+                }
+                thumb.style.display = 'block';
+                var w = Math.max(30, Math.round(cw * cw / sw)); // 滑块最小 30px，标签越多越短
+                var maxLeft = cw - w - 2; // 左右各留 2px 边距
+                var viewLeft = 2 + Math.round(sl / Math.max(1, sw - cw) * (maxLeft - 2));
+                thumb.style.width = w + 'px';
+                thumb.style.left = Math.round(rect.left + viewLeft) + 'px';
+                thumb.style.top = Math.round(rect.bottom - 8) + 'px'; // 底部 2px 边距（高 6px）
+            }
+            // 时长制多帧复查（与纵向版同参）：标签增删/窗口缩放等布局收敛后滑块必然归位
+            function osbTick(ms) {
+                if (el._osbTicking) return;
+                el._osbTicking = true;
+                var t0 = Date.now(), n = 0;
+                (function tick() {
+                    n++;
+                    osbUpdate();
+                    if (Date.now() - t0 < (ms || 600) && n < 90) requestAnimationFrame(tick);
+                    else el._osbTicking = false;
+                })();
+            }
+            el.addEventListener('scroll', function () {
+                if (!el._osbRaf) {
+                    el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
+                }
+            }, { passive: true });
+            if (window.ResizeObserver) new ResizeObserver(function () { osbUpdate(); }).observe(el);
+            el.addEventListener('click', function () { osbUpdate(); osbTick(); }, true);
+            if (window.MutationObserver) new MutationObserver(function () {
+                osbUpdate();
+                osbTick();
+            }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            el._osbUpdate = osbUpdate; // mousemove 兜底/过渡钩子通用入口
+            el._osbTick = osbTick;
+            (window._osbHosts = window._osbHosts || []).push(el); // 登记宿主：CSS 布局过渡时全程跟踪
+            // 滑块拖拽：按下后按位移比例映射回 scrollLeft（比例与 osbUpdate 一致）
+            thumb.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var startX = e.clientX, startLeft = el.scrollLeft;
+                thumb.classList.add('osb-drag');
+                function osbMove(ev) {
+                    var maxLeft = el.clientWidth - thumb.offsetWidth - 2;
+                    var dx = ev.clientX - startX;
+                    el.scrollLeft = startLeft + dx * (el.scrollWidth - el.clientWidth) / Math.max(1, maxLeft - 2);
+                }
+                function osbUp() {
+                    thumb.classList.remove('osb-drag');
+                    document.removeEventListener('mousemove', osbMove);
+                    document.removeEventListener('mouseup', osbUp);
+                }
+                document.addEventListener('mousemove', osbMove);
+                document.addEventListener('mouseup', osbUp);
+            });
+            osbUpdate();
+        }
         // 主窗口全部纵向滚动容器（与 style.css 中 overflow-y: auto 的面板一一对应）
         // 阶段五十六：追加我的知识库弹窗库列表 .kb-list
         // 阶段五十七：追加我的智能体弹窗列表 #ua-list（该元素复用 kb-list 类，querySelector('.kb-list')
@@ -9252,6 +9336,7 @@
             });
         // 阶段七十六：暴露给动态创建的滚动容器挂自绘滑块（Agent 工作区文件树/预览区/编辑 textarea）
         window._osbInit = initOsb;
+        window._osbInitH = initOsbH; // 横向版：预览区多标签栏（动态创建，建栏时挂）
         // ===== 布局类 CSS 过渡钩子：列表栏折叠（#list-panel width 0.25s）等布局动画进行中，
         // 内容逐帧重排（每帧 sh 变一行高），mutation/resize 均不触发——必须在过渡全程逐帧跟踪。
         // transitionrun/start 起查，transitionend/cancel 收尾再复查一次
