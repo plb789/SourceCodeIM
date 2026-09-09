@@ -4238,6 +4238,18 @@
         wsPanel.treeEl.className = 'ws-panel-tree';
         colTree.appendChild(head);
         colTree.appendChild(wsPanel.treeEl);
+        // 右键菜单挂 body（fixed 贴光标，不受面板 overflow 裁剪）；树空白区右键出根级菜单（新建/刷新）
+        if (!wsPanel.ctxMenu) {
+            wsPanel.ctxMenu = document.createElement('div');
+            wsPanel.ctxMenu.className = 'ws-more-menu ws-ctx-menu hidden';
+            document.body.appendChild(wsPanel.ctxMenu);
+            document.addEventListener('click', wsPanelCtxClose);
+        }
+        wsPanel.treeEl.addEventListener('contextmenu', function (e) {
+            if (e.target.closest('.ws-row')) return; // 行内右键由行处理器负责（已 stopPropagation，此处兜底）
+            e.preventDefault();
+            wsPanelShowCtx(e, '', true);
+        });
         // 左分隔条：拖拽调整树宽（贴树分栏右缘的悬浮热区，hover 显主题色竖线）
         var splitL = document.createElement('div');
         splitL.className = 'ws-splitter';
@@ -4463,6 +4475,12 @@
         head.appendChild(icon);
         head.appendChild(name);
         row.appendChild(head);
+        // 右键菜单（Trae CN 同款）：文件/目录通用，阻止冒泡防树空白区处理器覆盖为根级菜单
+        head.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            wsPanelShowCtx(e, selfPath, !!en.dir);
+        });
         if (!en.dir) {
             wsPanel.fileRows[selfPath] = head;
             if (wsPanel.badges[selfPath]) head.classList.add(wsPanel.badges[selfPath] === 'new' ? 'badge-new' : 'badge-mod');
@@ -4475,7 +4493,7 @@
         }
         var kids = document.createElement('div');
         kids.className = 'ws-row-kids hidden';
-        wsPanel.dirRows[selfPath] = { arrow: arrow, kids: kids };
+        wsPanel.dirRows[selfPath] = { arrow: arrow, kids: kids, head: head }; // head 引用：程序化展开时补 open 样式
         head.addEventListener('click', function () {
             var key = selfPath;
             if (wsPanel.expanded[key]) {
@@ -4538,14 +4556,7 @@
         if (ev.tool === 'delete_file') {
             wsPanelRefreshTree(); // 无论成败先刷新树对齐磁盘实际
             if (ev.ok === false || key === null) return; // 删除失败/路径无法归一化：仅刷新
-            // 删除成功：清该路径（含子路径，删目录场景）角标/符号缓存/展开态，关闭相关预览标签
-            var low = (key || '').toLowerCase();
-            var lowDir = low ? low + '/' : '';
-            var isHit = function (k) { var lk = k.toLowerCase(); return lk === low || (lowDir && lk.indexOf(lowDir) === 0); };
-            Object.keys(wsPanel.tabs).forEach(function (t) { if (isHit(t)) wsPanelCloseTab(t); });
-            [wsPanel.badges, wsPanel.symTab, wsPanel.expanded].forEach(function (m) {
-                Object.keys(m).forEach(function (k) { if (isHit(k)) delete m[k]; });
-            });
+            wsPanelForgetKey(key); // 删除成功：清该路径（含子路径，删目录场景）角标/符号缓存/展开态，关闭相关预览标签
             return;
         }
         if (key || key === '') {
@@ -4554,6 +4565,129 @@
             wsPanelOpen(key, true); // 重载：工具已改磁盘，丢弃旧内容/草稿读最新
         }
         wsPanelRefreshTree();
+    }
+
+    // 路径失效清理（工具删除/右键删除/重命名后调用）：清该路径（含子路径，目录场景）的
+    // 角标/符号缓存/展开态，并关闭相关预览标签（关闭后自动激活相邻标签）
+    function wsPanelForgetKey(key) {
+        if (!key && key !== '') return;
+        var low = (key || '').toLowerCase();
+        var lowDir = low ? low + '/' : '';
+        var isHit = function (k) { var lk = k.toLowerCase(); return lk === low || (lowDir && lk.indexOf(lowDir) === 0); };
+        Object.keys(wsPanel.tabs).forEach(function (t) { if (isHit(t)) wsPanelCloseTab(t); });
+        [wsPanel.badges, wsPanel.symTab, wsPanel.expanded].forEach(function (m) {
+            Object.keys(m).forEach(function (k) { if (isHit(k)) delete m[k]; });
+        });
+    }
+
+    // 局部刷新指定目录层级（key=''=根）：右键新建/重命名/删除后只刷该层，
+    // 不整棵重建（保留其他目录展开态）；父级未渲染时回退整树刷新
+    function wsPanelRefreshDir(key) {
+        if (key === '') {
+            wsPanelLoadDir('', wsPanel.treeEl);
+            return;
+        }
+        var d = wsPanel.dirRows[key];
+        if (d) {
+            d.kids.dataset.loaded = '1';
+            wsPanelLoadDir(key, d.kids);
+        } else {
+            wsPanelRefreshTree();
+        }
+    }
+
+    // 新建内容落在目录后：刷新该层并确保目录展开（新条目立即可见）
+    function wsPanelExpandAndRefresh(key) {
+        wsPanelRefreshDir(key);
+        var d = wsPanel.dirRows[key];
+        if (d && !wsPanel.expanded[key]) {
+            wsPanel.expanded[key] = true;
+            d.kids.classList.remove('hidden');
+            d.arrow.textContent = '▾';
+            d.head.classList.add('open');
+        }
+    }
+
+    // ===== 工作区文件右键菜单（Trae CN 同款）：打开/所在目录/复制路径/重命名/删除/新建/刷新 =====
+    // 菜单挂 body（fixed 贴光标，不受面板 overflow 裁剪），项目按目标类型（文件/目录/根空白）动态装配
+    function wsPanelCtxClose() {
+        if (wsPanel.ctxMenu) wsPanel.ctxMenu.classList.add('hidden');
+    }
+    function wsPanelShowCtx(e, path, isDir) {
+        var m = wsPanel.ctxMenu;
+        if (!m) return;
+        m.textContent = '';
+        var add = function (ico, txt, fn, danger) {
+            var it = document.createElement('div');
+            it.className = 'ws-more-item' + (danger ? ' danger' : '');
+            var i = document.createElement('span');
+            i.className = 'ws-more-ico';
+            i.textContent = ico;
+            var t = document.createElement('span');
+            t.className = 'ws-more-txt';
+            t.textContent = txt;
+            it.appendChild(i);
+            it.appendChild(t);
+            it.addEventListener('click', function () { wsPanelCtxClose(); fn(); });
+            m.appendChild(it);
+        };
+        // 请求封装：失败 toast（错误信息由 PC 执行器/服务端归口返回，前端只透传）
+        var req = function (op, p, content, done) {
+            wsPanelReq(op, p, content).then(function (r) {
+                if (!r.ok) { showToast(r.error || '操作失败'); return; }
+                if (done) done();
+            }).catch(function (err) { showToast('操作失败：' + (err && err.message || err)); });
+        };
+        var name = path.replace(/^.*[\\/]/, '') || '工作区根目录';
+        var parent = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
+
+        if (!isDir) add('📄', '打开', function () { wsPanelOpen(path); });
+        // 打开所在目录/复制路径需具体目标（文件或目录），树空白区右键（path=''）无意义不显示
+        if (path) add('📂', '打开所在目录', function () { req('reveal', path, ''); });
+        if (path) add('🔗', '复制路径', function () {
+            var full = path ? (wsPanel.root ? wsPanel.root.replace(/[\\/]+$/, '') + '/' + path : path) : (wsPanel.root || '');
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(full).then(function () { showToast('路径已复制'); }, function () { showToast('复制失败'); });
+            } else showToast('当前环境不支持复制');
+        });
+        if (isDir) {
+            add('📄', '新建文件', function () {
+                showPrompt('新建文件', '位于 ' + name, function (val) {
+                    req('newfile', path, val, function () { wsPanelExpandAndRefresh(path); });
+                });
+            });
+            add('📁', '新建文件夹', function () {
+                showPrompt('新建文件夹', '位于 ' + name, function (val) {
+                    req('newdir', path, val, function () { wsPanelExpandAndRefresh(path); });
+                });
+            });
+        }
+        if (path) add('✏️', '重命名', function () {
+            showPrompt('重命名', '当前：' + name, function (val) {
+                req('rename', path, val, function () {
+                    var newKey = parent ? parent + '/' + val : val;
+                    wsPanelForgetKey(path);   // 旧键失效：关旧标签清缓存
+                    wsPanelForgetKey(newKey); // 防旧角标/缓存挂到新键
+                    wsPanelRefreshDir(parent);
+                });
+            });
+        });
+        if (path) add('🗑', '删除', function () {
+            showConfirm('删除' + (isDir ? '目录' : '文件'),
+                '确定删除「' + name + '」吗？' + (isDir ? '目录内全部内容将被删除，' : '') + '该操作不可恢复。',
+                function () {
+                    req('delete', path, '', function () {
+                        wsPanelForgetKey(path);
+                        wsPanelRefreshDir(parent);
+                    });
+                });
+        }, true);
+        if (isDir) add('🔄', '刷新', function () { wsPanelRefreshDir(path); });
+
+        // 先渲染测尺寸再钳位，防视口下缘/右缘溢出
+        m.classList.remove('hidden');
+        m.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8)) + 'px';
+        m.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8)) + 'px';
     }
 
     // 打开文件预览（Trae CN 同款标签页）：已打开→激活切换；未打开→建标签读内容。

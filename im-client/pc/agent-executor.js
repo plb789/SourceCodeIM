@@ -803,6 +803,99 @@ function fileSaveLevel(username, p, content) {
     }
 }
 
+// ===== 工作区文件管理操作（右键菜单：delete/rename/newfile/newdir/reveal）=====
+// 名字合法性：取末段文件名，禁路径分隔符/..、Windows 非法字符与控制字符
+function wsEntryName(name) {
+    name = String(name || '').trim().replace(/\\/g, '/');
+    const i = name.lastIndexOf('/');
+    if (i >= 0) name = name.slice(i + 1);
+    if (!name || name === '.' || name === '..') return null;
+    if (/[<>:"|?*\u0000-\u001f]/.test(name)) return null;
+    return name;
+}
+
+// 删除文件/目录（递归）：根目录与工作区外一律拒绝
+function fileDeleteLevel(username, p) {
+    const r = safePath(username, p);
+    if (r.err) return { ok: false, error: r.err };
+    if (!r.full || path.resolve(r.full) === path.resolve(userRoot(username))) {
+        return { ok: false, error: '不能删除工作区根目录' };
+    }
+    try {
+        if (!fs.existsSync(r.full)) return { ok: false, error: '文件不存在或无法访问' };
+        fs.rmSync(r.full, { recursive: true });
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: '删除失败：' + (e.message || e) };
+    }
+}
+
+// 重命名（仅本级改名，不跨目录移动）：目标名冲突拒绝；Windows 大小写改名豁免存在性检查
+function fileRenameLevel(username, p, newName) {
+    const r = safePath(username, p);
+    if (r.err) return { ok: false, error: r.err };
+    newName = wsEntryName(newName);
+    if (!newName) return { ok: false, error: '名称非法（不能包含路径分隔符与 <>:"|?* 等字符）' };
+    if (!r.full || path.resolve(r.full) === path.resolve(userRoot(username))) {
+        return { ok: false, error: '不能重命名工作区根目录' };
+    }
+    try {
+        if (!fs.existsSync(r.full)) return { ok: false, error: '文件不存在或无法访问' };
+        const dst = path.join(path.dirname(r.full), newName);
+        const sameCase = dst.toLowerCase() === path.resolve(r.full).toLowerCase();
+        if (!sameCase && fs.existsSync(dst)) return { ok: false, error: '同名文件已存在' };
+        fs.renameSync(r.full, dst);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: '重命名失败：' + (e.message || e) };
+    }
+}
+
+// 新建文件/目录（path=父级目录，相对根；content=名称）；空父级=工作区根（与 fileTreeLevel 同款特判，safePath 不收空路径）
+function fileCreateLevel(username, parent, name, isDir) {
+    let full;
+    const pv = String(parent || '').trim();
+    if (!pv || pv === '.' || pv === '/') {
+        full = userRoot(username);
+    } else {
+        const r = safePath(username, pv);
+        if (r.err) return { ok: false, error: r.err };
+        full = r.full;
+    }
+    name = wsEntryName(name);
+    if (!name) return { ok: false, error: '名称非法（不能包含路径分隔符与 <>:"|?* 等字符）' };
+    try {
+        const st = fs.statSync(full);
+        if (!st.isDirectory()) return { ok: false, error: '目标父级不是目录' };
+    } catch (e) {
+        return { ok: false, error: '父目录不存在' };
+    }
+    const dst = path.join(full, name);
+    if (fs.existsSync(dst)) return { ok: false, error: '同名文件已存在' };
+    try {
+        if (isDir) fs.mkdirSync(dst);
+        else fs.writeFileSync(dst, '', { flag: 'wx' });
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: (isDir ? '创建目录失败：' : '创建文件失败：') + (e.message || e) };
+    }
+}
+
+// 打开所在目录（仅 Windows 资源管理器）：文件定位选中（explorer /select），目录直接打开
+function fileRevealLevel(username, p) {
+    const r = safePath(username, p);
+    if (r.err) return { ok: false, error: r.err };
+    try {
+        const st = fs.statSync(r.full);
+        const { spawn } = require('child_process');
+        if (st.isDirectory()) spawn('explorer', [r.full], { detached: true, stdio: 'ignore' }).unref();
+        else spawn('explorer', ['/select,', r.full], { detached: true, stdio: 'ignore' }).unref();
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: '打开目录失败：' + (e.message || e) };
+    }
+}
+
 // 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}）
 function fileOp(username, payload) {
     const op = payload && payload.op;
@@ -810,6 +903,11 @@ function fileOp(username, payload) {
     if (op === 'read') return fileReadLevel(username, payload.path);
     if (op === 'readb') return fileReadB64Level(username, payload.path);
     if (op === 'save') return fileSaveLevel(username, payload.path, payload.content);
+    if (op === 'delete') return fileDeleteLevel(username, payload.path);
+    if (op === 'rename') return fileRenameLevel(username, payload.path, payload.content);
+    if (op === 'newfile') return fileCreateLevel(username, payload.path, payload.content, false);
+    if (op === 'newdir') return fileCreateLevel(username, payload.path, payload.content, true);
+    if (op === 'reveal') return fileRevealLevel(username, payload.path);
     return { ok: false, error: '未知操作' };
 }
 

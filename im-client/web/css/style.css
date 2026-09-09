@@ -4614,6 +4614,28 @@ html.m #list-panel.list-collapsed {
     display: none;
 }
 
+/* 工作区文件右键菜单：挂 body fixed 贴光标（left/top 由 JS 钳位设置），层级高于面板与弹层。
+   必须抵消 .ws-more-menu 的 right:0——left+right 同时生效会把菜单拉伸成通栏横条遮住整行内容 */
+.ws-ctx-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: auto;
+    bottom: auto;
+    min-width: 150px;
+    max-width: 280px;
+    z-index: 2600;
+}
+
+/* 右键菜单危险项（删除）：红字 + 红色悬停底，主题浅深色通用 */
+.ws-more-item.danger {
+    color: #e05b5b;
+}
+
+.ws-more-item.danger:hover {
+    background: rgba(224, 91, 91, 0.12);
+}
+
 .ws-more-item {
     display: flex;
     align-items: center;
