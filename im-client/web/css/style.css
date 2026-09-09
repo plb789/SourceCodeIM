@@ -4644,8 +4644,26 @@ html.m #list-panel.list-collapsed {
     cursor: pointer;
 }
 
+/* 阶段七十六：JetBrains Mono 本地字体（Trae CN 同款代码字体，latin 子集，中文回退系统字体）——笔画比 Cascadia 饱满 */
+@font-face {
+    font-family: 'JetBrains Mono IM';
+    src: url('../fonts/JetBrainsMono-400.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'JetBrains Mono IM';
+    src: url('../fonts/JetBrainsMono-500.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
 .ws-hover-tip-sig {
-    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-weight: 500;
     font-size: 12px;
     color: var(--text, #333);
     overflow: hidden;
@@ -4823,7 +4841,8 @@ html.m #list-panel.list-collapsed {
     white-space: pre;
     font-size: 12px;
     line-height: 1.6;
-    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-weight: 500;
     color: var(--text-secondary, #999);
     opacity: 0.75;
     background: var(--panel-bg, #fff);
@@ -4836,7 +4855,8 @@ html.m #list-panel.list-collapsed {
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.6;
-    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-weight: 500;
     tab-size: 4;
     flex: 1;
     min-width: 0;
@@ -4892,7 +4912,8 @@ html.m #list-panel.list-collapsed {
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.6;
-    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-weight: 500;
     tab-size: 4;
     color: var(--text, #333);
     background: transparent;
