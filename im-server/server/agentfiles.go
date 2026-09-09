@@ -219,6 +219,17 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 		return wsServerReadB64(username, path)
 	case "save":
 		return wsServerSave(username, path, content)
+	case "delete":
+		return wsServerDelete(username, path)
+	case "rename":
+		return wsServerRename(username, path, content)
+	case "newfile":
+		return wsServerCreateEntry(username, path, content, false)
+	case "newdir":
+		return wsServerCreateEntry(username, path, content, true)
+	case "reveal":
+		// 打开所在目录依赖本地资源管理器（explorer /select），服务端工作区无此概念
+		return &wsFileResult{Error: "打开所在目录仅 PC 客户端支持"}
 	}
 	return &wsFileResult{Error: "未知操作"}
 }
@@ -330,6 +341,103 @@ func wsServerSave(username, path, content string) *wsFileResult {
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		return &wsFileResult{Error: "保存失败：" + err.Error()}
 	}
+	return &wsFileResult{OK: true}
+}
+
+// wsEntryName 校验新建/重命名的名字：仅取末段文件名，禁路径分隔符、..、Windows 非法字符与控制字符
+func wsEntryName(name string) (string, bool) {
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if name == "" || name == "." || name == ".." {
+		return "", false
+	}
+	if strings.ContainsAny(name, `<>:"|?*`) || strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 }) {
+		return "", false
+	}
+	return name, true
+}
+
+// wsServerDelete 删除文件/目录（递归，工作区内）：根目录一律拒绝
+func wsServerDelete(username, path string) *wsFileResult {
+	if strings.TrimSpace(path) == "" {
+		return &wsFileResult{Error: "不能删除工作区根目录"}
+	}
+	full, _, err := wsServerResolve(username, path)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	if _, err := os.Stat(full); err != nil {
+		return &wsFileResult{Error: "文件不存在或无法访问"}
+	}
+	if err := os.RemoveAll(full); err != nil {
+		return &wsFileResult{Error: "删除失败：" + err.Error()}
+	}
+	logger.Info("工作区删除（用户 %s：%s）", username, path)
+	return &wsFileResult{OK: true}
+}
+
+// wsServerRename 重命名（仅本级改名，content=新名称；不跨目录移动）：目标名冲突拒绝
+func wsServerRename(username, path, newName string) *wsFileResult {
+	if strings.TrimSpace(path) == "" {
+		return &wsFileResult{Error: "不能重命名工作区根目录"}
+	}
+	newName, ok := wsEntryName(newName)
+	if !ok {
+		return &wsFileResult{Error: "名称非法（不能包含路径分隔符与 <>:\"|?* 等字符）"}
+	}
+	full, _, err := wsServerResolve(username, path)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	if _, err := os.Lstat(full); err != nil {
+		return &wsFileResult{Error: "文件不存在或无法访问"}
+	}
+	dst := filepath.Join(filepath.Dir(full), newName)
+	if _, err := os.Lstat(dst); err == nil {
+		return &wsFileResult{Error: "同名文件已存在"}
+	}
+	if err := os.Rename(full, dst); err != nil {
+		return &wsFileResult{Error: "重命名失败：" + err.Error()}
+	}
+	logger.Info("工作区重命名（用户 %s：%s -> %s）", username, path, newName)
+	return &wsFileResult{OK: true}
+}
+
+// wsServerCreateEntry 新建文件/目录（path=父级目录，content=名称）
+func wsServerCreateEntry(username, path, name string, dir bool) *wsFileResult {
+	name, ok := wsEntryName(name)
+	if !ok {
+		return &wsFileResult{Error: "名称非法（不能包含路径分隔符与 <>:\"|?* 等字符）"}
+	}
+	full, _, err := wsServerResolve(username, path)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	if info, err := os.Stat(full); err != nil || !info.IsDir() {
+		return &wsFileResult{Error: "父目录不存在或不是目录"}
+	}
+	dst := filepath.Join(full, name)
+	if _, err := os.Lstat(dst); err == nil {
+		return &wsFileResult{Error: "同名文件已存在"}
+	}
+	if dir {
+		if err := os.Mkdir(dst, 0o755); err != nil {
+			return &wsFileResult{Error: "创建目录失败：" + err.Error()}
+		}
+	} else {
+		f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err != nil {
+			return &wsFileResult{Error: "创建文件失败：" + err.Error()}
+		}
+		f.Close()
+	}
+	kind := "文件"
+	if dir {
+		kind = "目录"
+	}
+	logger.Info("工作区新建%s（用户 %s：%s/%s）", kind, username, path, name)
 	return &wsFileResult{OK: true}
 }
 
