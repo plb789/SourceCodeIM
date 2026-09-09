@@ -4612,14 +4612,22 @@ html.m #list-panel.list-collapsed {
     flex-shrink: 0;
 }
 
-/* 当前行高亮条：代码区悬停/点击行淡主题色底（pointer-events 穿透不挡交互，行号区被其遮挡忽略） */
+/* 悬停行高亮条：跟随鼠标的临时底色，中性淡色（前景色 8%，暗色主题下呈深色微亮，不刺眼） */
 .ws-code-hl {
     position: absolute;
     left: 0;
     z-index: 0;
-    background: color-mix(in srgb, var(--primary) 9%, transparent);
-    border-top: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--primary) 14%, transparent);
+    background: color-mix(in srgb, var(--text, #fff) 8%, transparent);
+    pointer-events: none;
+}
+
+/* 固定行高亮条：点击行常驻底色（主题色 16% + 左侧主题色竖条），与悬停条独立共存 */
+.ws-code-hl-fixed {
+    position: absolute;
+    left: 0;
+    z-index: 0;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    border-left: 2px solid var(--primary);
     pointer-events: none;
 }
 
@@ -4637,7 +4645,7 @@ html.m #list-panel.list-collapsed {
 }
 
 .ws-hover-tip-sig {
-    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
     font-size: 12px;
     color: var(--text, #333);
     overflow: hidden;
@@ -4645,10 +4653,27 @@ html.m #list-panel.list-collapsed {
     white-space: nowrap;
 }
 
+.ws-hover-tip-doc {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--border, #e0e0e0);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary, #888);
+    white-space: normal;
+    word-break: break-all;
+}
+
 .ws-hover-tip-meta {
     margin-top: 4px;
     font-size: 11px;
     color: var(--primary);
+}
+
+/* 预览区代码符号着色（Trae CN 同款观感）：hljs github-dark 主题未定义 punctuation（继承灰白基色），此处按语言作用域覆盖 */
+.ws-view-pre code .hljs-punctuation,
+.ws-view-pre code .hljs-operator {
+    color: #ff7b72;
 }
 
 /* 代码区（预览/编辑共用）：行号列 + 代码列横排，滚动由 wrap 统一承接（自绘滑块挂在 wrap 上） */
@@ -4675,7 +4700,7 @@ html.m #list-panel.list-collapsed {
     white-space: pre;
     font-size: 12px;
     line-height: 1.6;
-    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
     color: var(--text-secondary, #999);
     opacity: 0.75;
     background: var(--panel-bg, #fff);
@@ -4688,7 +4713,7 @@ html.m #list-panel.list-collapsed {
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.6;
-    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
     tab-size: 4;
     flex: 1;
     min-width: 0;
@@ -4699,6 +4724,38 @@ html.m #list-panel.list-collapsed {
     background: transparent;
     padding: 0;
     border-radius: 0;
+}
+
+/* 编辑态：grid 单格叠放（高亮 pre 在下 + 透明 textarea 在上，Trae CN 同款编辑态着色） */
+.ws-edit-body {
+    flex: 1;
+    min-width: 0;
+    display: grid; /* pre 与 ta 同落 1/1 格：天然同宽同高，对齐不依赖 JS 同步 */
+}
+
+.ws-edit-body > .ws-edit-pre,
+.ws-edit-body > .ws-edit-ta {
+    grid-area: 1 / 1;
+}
+
+/* 高亮底层：交互全部穿透给 textarea（选择/点击/光标都在 ta，颜色由本层呈现） */
+.ws-edit-pre {
+    margin: 0;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* 透明输入层：文字不可见只留光标与选区（两级选择器压过下方 .ws-edit-ta 的 color，防重影） */
+.ws-edit-body > .ws-edit-ta-overlay {
+    color: transparent;
+    caret-color: var(--primary);
+    background: transparent;
+    overflow: hidden !important; /* 滚动统一由外层 wrap 承接，ta 内部不滚保证与高亮层对齐 */
+}
+
+.ws-edit-body > .ws-edit-ta-overlay::selection {
+    background: color-mix(in srgb, var(--primary) 32%, transparent);
+    color: transparent;
 }
 
 /* 编辑态：等宽 textarea 满幅 */
@@ -4712,7 +4769,7 @@ html.m #list-panel.list-collapsed {
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.6;
-    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-family: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
     tab-size: 4;
     color: var(--text, #333);
     background: transparent;

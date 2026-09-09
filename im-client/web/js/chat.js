@@ -3762,7 +3762,9 @@
         curPath: null, curContent: '', editing: false,
         // 阶段七十六增强（Trae CN 同款标签页）：多文件同时打开、点标签切换、× 关闭；
         // tabs: path → {name,content,binary,truncated,isMd,error,loading,draft?}，draft=未保存编辑草稿（切标签保留）
-        tabs: {}, tabOrder: [], activeTab: null
+        tabs: {}, tabOrder: [], activeTab: null,
+        // 跨文件符号表：path → wsScanDefs 结果（打开文件时缓存 + 后台扫同目录源码文件），悬停提示跨文件命中
+        symTab: {}, symBusy: {}, pendingGoto: null, codeView: null
     };
 
     // 扩展名 → highlight.js 语言映射（覆盖常见源码/配置；未命中走纯文本）
@@ -4172,6 +4174,7 @@
         if (ev.tool !== 'write_file' && ev.tool !== 'edit_file') return;
         var key = wsPanelNormalizeKey(ev.params && ev.params.path);
         if (key || key === '') {
+            delete wsPanel.symTab[key]; // 文件被工具改写，符号缓存失效（下次渲染/扫描重建）
             Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
             wsPanelOpen(key, true); // 重载：工具已改磁盘，丢弃旧内容/草稿读最新
         }
@@ -4314,28 +4317,62 @@
         var editable = !t.loading && !t.error && !t.binary;
         if (wsPanel.editing && editable) {
             var ta = document.createElement('textarea');
-            ta.className = 'ws-edit-ta';
+            ta.className = 'ws-edit-ta ws-edit-ta-overlay';
             ta.value = t.draft !== undefined ? t.draft : t.content;
             ta.spellcheck = false;
             ta.wrap = 'off'; // 关闭软换行（长行横向滚动），保证行号与代码行一一对应
             // 编辑态行号列（Trae CN 同款）：输入增删行时同步刷新行号
             var lnCol = document.createElement('div');
             lnCol.className = 'ws-code-ln';
+            // 高亮底层：与预览同款 pre+code，透明 textarea 叠加其上（文字透明只留光标/选区，颜色由底层呈现）
+            var pre = document.createElement('pre');
+            pre.className = 'ws-view-pre ws-edit-pre';
+            pre.setAttribute('aria-hidden', 'true');
+            var code = document.createElement('code');
+            pre.appendChild(code);
+            var editStack = document.createElement('div');
+            editStack.className = 'ws-edit-body'; // grid 单格叠放：pre 与 ta 同位置同尺寸
+            editStack.appendChild(pre);
+            editStack.appendChild(ta);
             var editWrap = document.createElement('div');
             editWrap.className = 'ws-code-wrap';
             editWrap.appendChild(lnCol);
-            editWrap.appendChild(ta);
+            editWrap.appendChild(editStack);
             wsPanel.viewBody.appendChild(editWrap);
+            var H = (typeof hljs !== 'undefined') ? hljs : null;
+            var extE = (path.replace(/^.*\./, '') || '').toLowerCase();
+            var langE = WS_LANG_MAP[extE] || '';
+            var hlTimer = null;
             function syncEditLn() {
                 var n = ta.value.split('\n').length;
                 var s = '';
                 for (var i = 1; i <= n; i++) s += i + '\n';
                 lnCol.textContent = s;
-                // textarea 不会随内容自动撑高，显式撑到内容高度（纵向滚动由 wrap 承接，行号随之对齐）
+                // textarea 显式撑到内容高度（纵向滚动由 wrap 承接，行号随之对齐；grid 叠放保证与高亮层同高）
                 ta.style.height = 'auto';
                 ta.style.height = ta.scrollHeight + 'px';
+                pre.style.minHeight = ta.scrollHeight + 'px';
             }
-            ta.addEventListener('input', syncEditLn);
+            // 实时重高亮底层（150ms 防抖；hljs 全文重刷，512KB 截断上限内可接受）
+            function refreshEditHl() {
+                var v = ta.value;
+                var done = false;
+                if (H && v) {
+                    try {
+                        code.innerHTML = (langE && H.getLanguage(langE))
+                            ? H.highlight(v, { language: langE, ignoreIllegals: true }).value
+                            : H.highlightAuto(v).value;
+                        done = true;
+                    } catch (e) { done = false; }
+                }
+                if (!done) code.textContent = v;
+            }
+            ta.addEventListener('input', function () {
+                syncEditLn();
+                if (hlTimer) clearTimeout(hlTimer);
+                hlTimer = setTimeout(refreshEditHl, 150);
+            });
+            refreshEditHl();
             syncEditLn();
             if (window._osbInit) window._osbInit(editWrap);
             wsPanel.ta = ta;
@@ -4413,47 +4450,170 @@
         wrap.appendChild(ln);
         wrap.appendChild(pre);
         wsPanel.viewBody.appendChild(wrap);
-        wsPanelBindCode(wrap, code, t.content, lines.length); // 当前行高亮 + 悬停定义提示（Trae CN 同款交互）
+        wsPanelBindCode(wrap, code, t.content, lines.length, path); // 当前行高亮 + 悬停定义提示（文件内+同目录跨文件）
+        wsSymScanDir(wsDirOf(path)); // 后台懒扫同目录源码文件符号表（busy 防重，下次悬停生效）
+        // 跨文件跳转：目标文件渲染完成后滚到定义行
+        if (wsPanel.pendingGoto && wsPanel.pendingGoto.path === path) {
+            var gotoLine = wsPanel.pendingGoto.line;
+            wsPanel.pendingGoto = null;
+            if (wsPanel.codeView) wsPanel.codeView.fixLine(gotoLine);
+        }
         wsPanel.btnEdit.classList.remove('hidden');
     }
 
-    // 扫描当前文件内的函数/方法/类型定义（轻量词法级，非 LSP）：悬停标识符命中定义时给提示
+    // 扫描当前文件内的函数/方法/变量/类型定义（轻量词法级，非 LSP）：悬停标识符命中定义时给提示
+    // 提取声明行上方紧邻的连续注释（Go //、Python #）作为文档（Trae CN 同款悬停文档效果），最多 3 行
+    function wsDocAbove(rows, i) {
+        var docs = [];
+        var j = i - 1;
+        while (j >= 0 && docs.length < 3) {
+            var t = rows[j].trim();
+            if (/^\/\/|^#/.test(t) && !/^#!/.test(t)) {
+                docs.unshift(t.replace(/^(\/\/+|#)\s?/, ''));
+                j--;
+            } else break;
+        }
+        var s = docs.join(' ').trim();
+        return s.length > 140 ? s.slice(0, 140) + '…' : s;
+    }
+
     function wsScanDefs(content) {
         var defs = [];
         var rows = content.split('\n');
-        // 通用函数定义：func/def/function 关键字 + c 系“类型 名(…){”粗匹配（行内无 = 防调用误报）
+        // 函数：func/def/function 关键字 + c 系“类型 名(…){”粗匹配（行内无 = 防调用误报）
         var reKw = /^\s*(?:func|def|function)\s+\(?[^)]*\)?\s*\(?\s*([A-Za-z_$][\w$]*)/;
         var reBrace = /^ {0,8}([A-Za-z_][\w$]*(?:::\s*[\w$]+)?)\s*\([^;=]*\)\s*(?:const\s*)?\{?\s*$/;
+        // 变量声明：go/js/ts 的 var/const/let NAME（后跟 =、: 或类型）；Go type NAME struct/interface；
+        // Python 顶层赋值 NAME = value（非比较、无函数调用括号开头，粗收）
+        var reVar = /^\s*(?:var|const|let)\s+([A-Za-z_$][\w$]*)\s*(?:[=:]|\s|$)/;
+        var reType = /^\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)?\s*[A-Za-z_{]?/;
+        var rePyAssign = /^ {0,4}([A-Za-z_]\w*)\s*=\s*[^=]/;
         for (var i = 0; i < rows.length; i++) {
             var row = rows[i];
             if (!row.trim() || /^\s*\/\//.test(row) || /^\s*#/.test(row) || /^\s*\*/.test(row)) continue;
-            var m = row.match(reKw) || (!/[=;]/.test(row) ? row.match(reBrace) : null);
+            var m = row.match(reKw);
+            if (!m && !/[=;]/.test(row)) m = row.match(reBrace);
+            if (!m) m = row.match(reVar) || row.match(reType);
+            if (!m && /^\s*[A-Za-z_]\w*\s*=[^=]/.test(row) && !/\(\s*$/.test(row)) m = row.match(rePyAssign);
             if (m && m[1] && m[1].length > 1) {
-                defs.push({ name: m[1], line: i, sig: row.trim().slice(0, 200) });
+                defs.push({ name: m[1], line: i, sig: row.trim().slice(0, 200), doc: wsDocAbove(rows, i) });
             }
         }
         return defs;
     }
 
-    // 代码区交互：当前行高亮（悬停跟随/点击固定）+ 标识符悬停提示（文件内定义，点击跳转定义行）
-    function wsPanelBindCode(wrap, code, content, lineCount) {
+    // ===== 跨文件符号表（懒加载）：打开文件时后台扫描同目录源码文件，悬停提示可跨文件命中并跳转 =====
+    var WS_SOURCE_EXTS = ['go', 'js', 'ts', 'py', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'java', 'rs', 'php', 'rb', 'swift', 'kt', 'vue', 'mjs'];
+    var WS_SYM_DIR_LIMIT = 40;  // 单目录最多扫描文件数（防大目录洪泛）
+    var WS_SYM_CONCURRENCY = 4; // 同时在途的 read 请求数
+
+    function wsDirOf(path) {
+        var i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        return i < 0 ? '' : path.slice(0, i);
+    }
+
+    function wsBaseName(path) {
+        return path.replace(/^.*[\\/]/, '');
+    }
+
+    function wsIsSourceFile(name) {
+        var ext = (name.replace(/^.*\./, '') || '').toLowerCase();
+        return WS_SOURCE_EXTS.indexOf(ext) >= 0;
+    }
+
+    // 后台扫描目录：tree 拉目录清单 → 过滤源码文件 → 限流并发 read → 符号表入缓存；失败静默（提示降级为文件内级）
+    function wsSymScanDir(dir) {
+        if (wsPanel.symBusy[dir]) return;
+        wsPanel.symBusy[dir] = true;
+        wsPanelReq('tree', dir).then(function (res) {
+            var entries = (res && res.entries) || [];
+            var files = [];
+            for (var i = 0; i < entries.length && files.length < WS_SYM_DIR_LIMIT; i++) {
+                var en = entries[i];
+                if (!en.dir && wsIsSourceFile(en.name)) {
+                    var full = dir ? (dir.replace(/[\\/]+$/, '') + '/' + en.name) : en.name;
+                    if (!wsPanel.symTab[full]) files.push(full); // 已缓存的跳过（文件被工具改写时按路径精确失效）
+                }
+            }
+            var idx = 0, done = 0;
+            function next() {
+                if (idx >= files.length) {
+                    if (++done >= Math.min(files.length, WS_SYM_CONCURRENCY) || idx >= files.length) delete wsPanel.symBusy[dir];
+                    return;
+                }
+                var p = files[idx++];
+                wsPanelReq('read', p).then(function (r) {
+                    if (r && !r.binary) wsPanel.symTab[p] = wsScanDefs(r.content || '');
+                    next();
+                }).catch(next);
+            }
+            if (files.length === 0) { delete wsPanel.symBusy[dir]; return; }
+            for (var k = 0; k < Math.min(WS_SYM_CONCURRENCY, files.length); k++) next();
+        }).catch(function () { delete wsPanel.symBusy[dir]; });
+    }
+
+    // 符号查找：当前文件优先，其次同目录其他文件（跨文件）；返回 def 附 file 字段
+    function wsFindDef(name, curPath) {
+        var local = wsPanel.symTab[curPath];
+        if (local) {
+            for (var i = 0; i < local.length; i++) if (local[i].name === name) {
+                return { name: name, line: local[i].line, sig: local[i].sig, doc: local[i].doc, file: curPath };
+            }
+        }
+        var dir = wsDirOf(curPath);
+        for (var p in wsPanel.symTab) {
+            if (p === curPath || wsDirOf(p) !== dir) continue;
+            var arr = wsPanel.symTab[p];
+            for (var j = 0; j < arr.length; j++) if (arr[j].name === name) {
+                return { name: name, line: arr[j].line, sig: arr[j].sig, doc: arr[j].doc, file: p };
+            }
+        }
+        return null;
+    }
+
+    // 跳转到指定文件的指定行（跨文件）：已打开直接滚，未打开先打开，渲染完成后消费 pendingGoto
+    function wsPanelGoto(path, line) {
+        if (wsPanel.activeTab === path) {
+            if (wsPanel.codeView) wsPanel.codeView.fixLine(line);
+            return;
+        }
+        wsPanel.pendingGoto = { path: path, line: line };
+        if (wsPanel.tabs[path]) wsPanelActivate(path); // activate 内部会 renderTab → 消费 pendingGoto
+        else wsPanelOpen(path);                        // read 完成渲染后消费
+    }
+
+    // 代码区交互：当前行高亮（悬停跟随/点击固定）+ 标识符悬停提示（文件内+同目录跨文件定义，点击跳转定义行）
+    function wsPanelBindCode(wrap, code, content, lineCount, path) {
         var cs = getComputedStyle(code);
         var LINE_H = parseFloat(cs.lineHeight) || 19.2;
         var tip = null;
-        // 当前行高亮条（内容坐标系，随 wrap 滚动）
-        var hl = document.createElement('div');
-        hl.className = 'ws-code-hl';
-        hl.style.display = 'none';
-        wrap.appendChild(hl);
+        // 双高亮条（内容坐标系，随 wrap 滚动）：悬停条跟随鼠标（暗色微亮），固定条点击行常驻（主题色），互不覆盖
+        var hlHover = document.createElement('div');
+        hlHover.className = 'ws-code-hl';
+        hlHover.style.display = 'none';
+        wrap.appendChild(hlHover);
+        var hlFixed = document.createElement('div');
+        hlFixed.className = 'ws-code-hl-fixed';
+        hlFixed.style.display = 'none';
+        wrap.appendChild(hlFixed);
         var codeTop = code.getBoundingClientRect().top - wrap.getBoundingClientRect().top + wrap.scrollTop - (parseFloat(cs.paddingTop) || 0);
         var fixedLine = -1; // 点击固定的行（-1 无）
-        function showHl(line0) {
-            if (line0 < 0 || line0 >= lineCount) { hl.style.display = 'none'; return; }
-            hl.style.display = 'block';
-            hl.style.top = (codeTop + line0 * LINE_H) + 'px';
-            hl.style.height = LINE_H + 'px';
-            hl.style.width = Math.max(wrap.scrollWidth, wrap.clientWidth) + 'px';
+        function placeHl(el, line0) {
+            if (line0 < 0 || line0 >= lineCount) { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            el.style.top = (codeTop + line0 * LINE_H) + 'px';
+            el.style.height = LINE_H + 'px';
+            el.style.width = Math.max(wrap.scrollWidth, wrap.clientWidth) + 'px';
         }
+        // 暴露给跨文件跳转：滚动到行 + 固定高亮
+        wsPanel.codeView = {
+            wrap: wrap,
+            fixLine: function (line0) {
+                fixedLine = line0;
+                placeHl(hlFixed, line0);
+                wrap.scrollTop = Math.max(0, line0 * LINE_H - wrap.clientHeight / 3);
+            }
+        };
         function lineFromEvent(e) {
             var rect = code.getBoundingClientRect();
             return Math.floor((e.clientY - rect.top) / LINE_H);
@@ -4466,11 +4626,9 @@
                 tip.className = 'ws-hover-tip';
                 tip.addEventListener('mousedown', function (ev) {
                     ev.stopPropagation();
-                    var target = def.line; // 跳定义行并闪烁
-                    showHl(target);
-                    fixedLine = target;
-                    wrap.scrollTop = Math.max(0, target * LINE_H - wrap.clientHeight / 3);
+                    var target = def.line;
                     hideTip();
+                    wsPanelGoto(def.file, target); // 跨文件：切到定义文件并滚到定义行
                 });
                 document.body.appendChild(tip);
             }
@@ -4478,10 +4636,18 @@
             var sig = document.createElement('div');
             sig.className = 'ws-hover-tip-sig';
             sig.textContent = def.sig;
+            tip.appendChild(sig);
+            if (def.doc) {
+                var doc = document.createElement('div');
+                doc.className = 'ws-hover-tip-doc';
+                doc.textContent = def.doc; // 声明上方注释文档（Trae CN 同款悬停文档）
+                tip.appendChild(doc);
+            }
             var meta = document.createElement('div');
             meta.className = 'ws-hover-tip-meta';
-            meta.textContent = '第 ' + (def.line + 1) + ' 行定义 · 点击跳转';
+            meta.textContent = '第 ' + (def.line + 1) + ' 行定义' + (def.file && def.file !== path ? ' · ' + wsBaseName(def.file) : '') + ' · 点击跳转';
             tip.appendChild(sig);
+            if (def.doc) tip.appendChild(doc);
             tip.appendChild(meta);
             var tw = Math.min(520, Math.max(260, sig.textContent.length * 7));
             tip.style.width = tw + 'px';
@@ -4504,13 +4670,13 @@
             return s === t2 ? '' : text.slice(s, t2);
         }
         var defs = wsScanDefs(content);
+        wsPanel.symTab[path] = defs; // 本文件符号入缓存（保存/重渲染后同步刷新）
         var lastIdent = '';
         wrap.addEventListener('mousemove', function (e) {
-            showHl(lineFromEvent(e));
+            placeHl(hlHover, lineFromEvent(e)); // 悬停条跟随（固定条不受影响）
             var ident = identAt(e);
             if (ident && ident !== lastIdent) {
-                var hit = null;
-                for (var i = 0; i < defs.length; i++) if (defs[i].name === ident) { hit = defs[i]; break; }
+                var hit = wsFindDef(ident, path); // 文件内优先，其次同目录跨文件
                 if (hit) showTip(e, hit); else hideTip();
             } else if (!ident) {
                 hideTip();
@@ -4518,14 +4684,14 @@
             lastIdent = ident;
         });
         wrap.addEventListener('mouseleave', function () {
-            showHl(fixedLine);
+            placeHl(hlHover, -1);
             hideTip();
             lastIdent = '';
         });
         wrap.addEventListener('click', function (e) {
             var line0 = lineFromEvent(e);
-            fixedLine = (line0 === fixedLine) ? -1 : line0; // 点击固定当前行，再点同行取消
-            showHl(fixedLine >= 0 ? fixedLine : line0);
+            fixedLine = (line0 === fixedLine) ? -1 : line0; // 点击固定当前行（主题色条），再点同行取消
+            placeHl(hlFixed, fixedLine);
         });
     }
 
