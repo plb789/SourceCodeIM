@@ -4559,9 +4559,9 @@
     // forceReload=true（取消编辑/保存后重读）：丢弃草稿重读磁盘内容
     function wsPanelOpen(path, forceReload) {
         wsPanel.viewEl.classList.remove('hidden');
-        wsPanelSyncViewCol(); // 打标签显示中栏
         if (wsPanel.tabs[path] && !forceReload) {
             wsPanelActivate(path);
+            wsPanelSyncViewCol(); // 先激活再同步：首开时 activeTab 在此刻才就位，提前同步会误判"无标签"把中栏藏掉
             return;
         }
         if (!wsPanel.tabs[path]) {
@@ -4571,6 +4571,7 @@
             wsPanel.tabs[path] = { name: path.replace(/^.*[\\/]/, ''), loading: true }; // 重载：清旧内容与草稿
         }
         wsPanelActivate(path);
+        wsPanelSyncViewCol(); // 先激活再同步（同上）
         var extOpen = (path.replace(/^.*\./, '') || '').toLowerCase();
         // Office 文档走二进制读取 + 前端解析预览（Trae CN 同款）：docx=mammoth / xlsx=SheetJS / pptx=PptxViewJS
         var docKinds = { docx: 'isDocx', docm: 'isDocx', xlsx: 'isXlsx', xlsm: 'isXlsx', pptx: 'isPptx', pptm: 'isPptx' };
