@@ -4498,9 +4498,10 @@ html.m #list-panel.list-collapsed {
 
 .ws-nav-tab:hover { color: var(--text, #333); }
 
+/* 浏览区标签：黑白灰跟随主题明暗（不用绿色点缀） */
 .ws-nav-tab.active {
-    color: var(--primary, #07c160);
-    border-bottom-color: var(--primary, #07c160);
+    color: var(--text, #333);
+    border-bottom-color: var(--text-secondary, #999);
     font-weight: 600;
 }
 
@@ -4527,7 +4528,7 @@ html.m #list-panel.list-collapsed {
     flex: 1;
     font-size: 13px;
     font-weight: 600;
-    color: var(--primary, #07c160);
+    color: var(--text, #333);
 }
 
 .ws-git-branch {
@@ -4873,11 +4874,64 @@ html.m #list-panel.list-collapsed {
 
 .ws-git-menu-item.disabled { opacity: .45; cursor: default; }
 
-/* 智能体审查区：固定在文件滚动区下方（不入滚动流，文件再多也不被顶走） */
+/* 拖拽条（与输入区拖拽条同款交互）：常态隐藏指示线，hover/拖拽显示主题色横条 */
+.ws-git-dragbar {
+    height: 6px;
+    cursor: ns-resize;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+}
+
+.ws-git-dragbar::after {
+    content: '';
+    width: 36px;
+    height: 3px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background 0.15s;
+}
+
+.ws-git-dragbar:hover::after,
+.ws-git-dragbar.dragging::after {
+    background: var(--primary);
+}
+
+/* 底部固定区（智能体审查 + 提交历史）：max-height 由拖拽条控制，内容不足时自适应收缩 */
+.ws-git-bottom {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-height: 0;
+}
+
+/* 折叠分区头：三角 + 标题，可点击收起/展开 */
+.ws-git-sec-h.toggle {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.ws-git-sec-h.toggle:hover { color: var(--text, #333); }
+
+.ws-git-tri {
+    display: inline-block;
+    font-size: 10px;
+    line-height: 1;
+    transition: transform .15s;
+}
+
+.ws-git-tri.closed { transform: rotate(-90deg); }
+
+/* 智能体审查区：固定高度（拖拽条①调整，行内样式），缩小后内容内部滚动（自绘滑块） */
 .ws-git-review {
     flex-shrink: 0;
-    margin-top: 10px;
-    padding-top: 4px;
+    overflow-y: auto;
+    padding-top: 2px;
     border-top: 1px solid var(--border, #ececec);
 }
 
@@ -4966,12 +5020,10 @@ html.m #list-panel.list-collapsed {
     flex-shrink: 0;
 }
 
-/* 提交历史时间线：固定在审查区下方，超高内部滚动（自绘滑块），不占文件区空间 */
+/* 提交历史时间线：固定高度（两处拖拽条调整，行内样式），超出即内部滚动（自绘滑块） */
 .ws-git-log {
     flex-shrink: 0;
-    max-height: 240px;
     overflow-y: auto;
-    margin-top: 8px;
     border-top: 1px solid var(--border, #ececec);
     padding: 2px 0 8px;
 }
@@ -5124,13 +5176,13 @@ html.m #list-panel.list-collapsed {
 
 .ws-git-help-copy:hover { text-decoration: underline; }
 
-/* diff 预览标签的面包屑"差异对比"徽标 */
+/* diff 预览标签的面包屑"差异对比"徽标（黑白灰跟随主题） */
 .ws-crumbs-diff {
     flex-shrink: 0;
     padding: 1px 7px;
     border-radius: 4px;
-    background: color-mix(in srgb, var(--primary, #07c160) 12%, transparent);
-    color: var(--primary, #07c160);
+    background: color-mix(in srgb, var(--text, #333) 10%, transparent);
+    color: var(--text-secondary, #999);
     font-size: 11px;
     font-weight: 600;
 }
@@ -5181,14 +5233,14 @@ html.m #list-panel.list-collapsed {
     gap: 6px;
     padding: 8px 6px 8px 10px; /* 右缘收窄：图标按钮组更贴右边（与 TRAE CN 面板头一致） */
     border-bottom: 1px solid var(--border, #ececec);
-    background: color-mix(in srgb, var(--primary) 6%, transparent);
+    background: var(--header-bg, #fafafa); /* 中性底色跟随主题明暗 */
     user-select: none;
 }
 
 .ws-panel-title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--primary);
+    color: var(--text, #333);
     flex-shrink: 0;
 }
 
@@ -5509,9 +5561,10 @@ html.m #list-panel.list-collapsed {
     color: var(--text, #333);
 }
 
+/* 预览列标签页：激活态黑白灰跟随主题（不用绿色点缀） */
 .ws-tab.active {
-    background: color-mix(in srgb, var(--primary) 10%, transparent);
-    color: var(--primary);
+    background: color-mix(in srgb, var(--text, #333) 10%, transparent);
+    color: var(--text, #333);
     font-weight: 600;
 }
 
@@ -5522,7 +5575,7 @@ html.m #list-panel.list-collapsed {
     left: 0;
     right: 0;
     height: 2px;
-    background: var(--primary);
+    background: var(--text-secondary, #999);
 }
 
 .ws-tab-name {
@@ -5561,14 +5614,14 @@ html.m #list-panel.list-collapsed {
     overscroll-behavior: contain;
 }
 
-/* 面包屑路径条（Trae CN 同款）：固定标签栏下方靠左，超长时 JS 省略头部段（保留靠近文件名的尾部） */
+/* 面包屑路径条（Trae CN 同款）：固定标签栏下方靠左，超长时 JS 省略头部段（保留靠近文件名的尾部）；中性底色跟随主题 */
 .ws-crumbs {
     display: flex;
     align-items: center;
     gap: 4px;
     padding: 4px 10px;
     border-bottom: 1px solid var(--border, #ececec);
-    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    background: var(--header-bg, #fafafa);
     font-size: 11px;
     overflow: hidden;
     white-space: nowrap;
@@ -5585,7 +5638,7 @@ html.m #list-panel.list-collapsed {
 }
 
 .ws-crumbs-item.file {
-    color: var(--primary);
+    color: var(--text, #333);
     font-weight: 600;
 }
 

@@ -4056,10 +4056,12 @@
         // repo=false=尚非 git 仓库（引导初始化）；staged/changes= porcelain XY 解析结果
         // amend=修改上次提交模式；log=提交历史缓存（null=加载中）；branches=本地分支缓存（审查目标选择）
         // reviewTarget=审查目标分支；reviewBusy=审查进行中；lastReviewKey=上次报告标签键（查看上次报告）
+        // reviewCollapsed/logCollapsed=审查/提交历史折叠态；reviewH/logH=审查/历史各自固定高度（独立拖拽条调整，localStorage 持久化）
         git: {
             mode: false, loaded: false, busy: false, repo: true, branch: '', upstream: '', ahead: 0, behind: 0,
             staged: [], changes: [], amend: false, log: null, logBusy: false,
-            branches: null, reviewTarget: '', reviewBusy: false, lastReviewKey: ''
+            branches: null, reviewTarget: '', reviewBusy: false, lastReviewKey: '',
+            reviewCollapsed: false, logCollapsed: false, reviewH: 150, logH: 220
         },
         gitEl: null, gitBody: null, gitMsg: null, gitCommitBtn: null, headEl: null
     };
@@ -4909,17 +4911,87 @@
             am.addEventListener('click', function () { wsPanelGitToggleAmend(); });
             el.appendChild(am);
         }
-        // 变更主体：文件列表独立滚动区（文件多时自身滚动，不把审查区顶走）+ 底部固定审查区/提交历史
+        // 变更主体：文件列表独立滚动区（文件多时自身滚动，不把审查区顶走）
         var body = document.createElement('div');
         body.className = 'ws-git-body';
         body.appendChild(wsGitSection('暂存的更改', g.staged, 'staged'));
         body.appendChild(wsGitSection('更改', g.changes, 'changes'));
         wsPanel.gitBody = body;
         el.appendChild(body);
-        el.appendChild(wsGitReviewSection(g));
+        // 拖拽条×2（输入区同款交互）各自独立：① 文件区下方→调智能体审查高度 ② 审查与历史之间→仅调提交历史高度
+        // 拖动时上方分区整体平移不缩放、历史永不越过审查边界（上限按另一分区当前高度动态钳制）；高度 localStorage 持久化
+        if (g._hRestored !== true) {
+            g._hRestored = true;
+            try {
+                var sh1 = parseInt(localStorage.getItem('im_git_review_h'), 10);
+                var sh2 = parseInt(localStorage.getItem('im_git_log_h'), 10);
+                if (sh1 >= 72 && sh1 <= 800) g.reviewH = sh1;
+                if (sh2 >= 80 && sh2 <= 800) g.logH = sh2;
+            } catch (e2) {}
+        }
+        function bindGitDrag(bar, sec, other, lsKey, minH, reserve) {
+            bar.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                var startY = e.clientY;
+                var startH = sec.getBoundingClientRect().height;
+                bar.classList.add('dragging');
+                document.body.style.userSelect = 'none'; // 拖拽期间禁用文本选择（与输入区拖拽条同款）
+                function onMove(ev) {
+                    var maxH = el.clientHeight - other.getBoundingClientRect().height - reserve; // 联合上限防越界
+                    var nh = startH + (startY - ev.clientY); // 上拖加高、下拖减高
+                    nh = Math.max(minH, Math.min(nh, Math.max(minH, maxH)));
+                    if (sec === logSec) g.logH = nh; else g.reviewH = nh;
+                    sec.style.height = nh + 'px';
+                    try { localStorage.setItem(lsKey, String(nh)); } catch (e2) {}
+                }
+                function onUp() {
+                    bar.classList.remove('dragging');
+                    document.body.style.userSelect = '';
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                }
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+        // 底部固定区：智能体审查（固定高度）+ 拖拽条② + 提交历史（固定高度）
+        var bottom = document.createElement('div');
+        bottom.className = 'ws-git-bottom';
+        var reviewSec = wsGitReviewSection(g);
         var logSec = wsGitLogSection(g);
-        el.appendChild(logSec);
-        if (window._osbInit) { window._osbInit(body); window._osbInit(logSec); } // 文件区与时间线各自的自绘滚动条
+        if (!g.reviewCollapsed) reviewSec.style.height = g.reviewH + 'px';
+        if (!g.logCollapsed) logSec.style.height = g.logH + 'px';
+        var drag2 = document.createElement('div');
+        drag2.className = 'ws-git-dragbar';
+        drag2.title = '拖拽调整提交历史高度';
+        var drag = document.createElement('div');
+        drag.className = 'ws-git-dragbar';
+        drag.title = '拖拽调整智能体审查高度';
+        bindGitDrag(drag, reviewSec, logSec, 'im_git_review_h', 72, 300);
+        bindGitDrag(drag2, logSec, reviewSec, 'im_git_log_h', 80, 300);
+        bottom.appendChild(reviewSec);
+        bottom.appendChild(drag2);
+        bottom.appendChild(logSec);
+        el.appendChild(drag);
+        el.appendChild(bottom);
+        if (g.reviewCollapsed) drag.style.display = 'none'; // 审查收起时无可调对象
+        if (g.logCollapsed) drag2.style.display = 'none'; // 历史收起时无可调对象
+        if (window._osbInit) { window._osbInit(body); window._osbInit(reviewSec); window._osbInit(logSec); } // 各分区自绘滚动条
+    }
+
+    // 折叠分区头（Trae CN 同款）：▾ 三角 + 标题，点击收起/展开；collapsed 时三角右转
+    function wsGitSecHeader(title, count, collapsed, onToggle) {
+        var h = document.createElement('div');
+        h.className = 'ws-git-sec-h toggle';
+        var tri = document.createElement('span');
+        tri.className = 'ws-git-tri' + (collapsed ? ' closed' : '');
+        tri.textContent = '▾';
+        h.appendChild(tri);
+        var t = document.createElement('span');
+        t.textContent = title + (count !== null && count !== undefined ? '（' + count + '）' : '');
+        h.appendChild(t);
+        h.addEventListener('click', onToggle);
+        return h;
     }
 
     // 使用上次提交信息：预填 HEAD 的提交主题（输入框已有内容时不覆盖）
@@ -5124,14 +5196,15 @@
         });
     }
 
-    // 智能体审查区：总结并审查按钮（+下拉）与 当前分支 → 目标分支 选择行
+    // 智能体审查区：总结并审查按钮（+下拉）与 当前分支 → 目标分支 选择行；头部三角可折叠
     function wsGitReviewSection(g) {
         var sec = document.createElement('div');
         sec.className = 'ws-git-review';
-        var h = document.createElement('div');
-        h.className = 'ws-git-sec-h';
-        h.textContent = '智能体审查';
-        sec.appendChild(h);
+        sec.appendChild(wsGitSecHeader('智能体审查', null, g.reviewCollapsed, function () {
+            g.reviewCollapsed = !g.reviewCollapsed;
+            wsPanelGitRender();
+        }));
+        if (g.reviewCollapsed) return sec;
         var row = document.createElement('div');
         row.className = 'ws-git-review-btnrow';
         var btn = document.createElement('button');
@@ -5252,19 +5325,23 @@
             var old = el.querySelector('.ws-git-log');
             var fresh = wsGitLogSection(g);
             if (old) old.replaceWith(fresh);
-            else el.appendChild(fresh); // 渲染时占位分区缺失（时序兜底）：直接补到固定底部
+            else { // 渲染时占位分区缺失（时序兜底）：补进底部固定区
+                var b = el.querySelector('.ws-git-bottom');
+                (b || el).appendChild(fresh);
+            }
             if (window._osbInit) window._osbInit(fresh); // 时间线内部滚动自绘滑块
         });
     }
 
-    // 提交历史时间线（Trae CN 同款）：纵向时间线 + 未推送云标记 + HEAD 分支徽标，点击查看提交详情
+    // 提交历史时间线（Trae CN 同款）：纵向时间线 + 未推送云标记 + HEAD 分支徽标，点击查看提交详情；头部三角可折叠
     function wsGitLogSection(g) {
         var sec = document.createElement('div');
         sec.className = 'ws-git-log';
-        var h = document.createElement('div');
-        h.className = 'ws-git-sec-h';
-        h.textContent = '提交历史' + (g.log && g.log.length ? '（' + g.log.length + '）' : '');
-        sec.appendChild(h);
+        sec.appendChild(wsGitSecHeader('提交历史', g.log && g.log.length ? g.log.length : null, g.logCollapsed, function () {
+            g.logCollapsed = !g.logCollapsed;
+            wsPanelGitRender();
+        }));
+        if (g.logCollapsed) return sec;
         if (!g.log) {
             var ld = document.createElement('div');
             ld.className = 'ws-git-empty';
