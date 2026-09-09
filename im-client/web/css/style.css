@@ -15,6 +15,9 @@
     --header-bg: #fafafa;     /* 顶栏/输入栏背景 */
     --placeholder-bg: #ccc;   /* 头像占位 */
     --login-bg: linear-gradient(135deg, #f5f5f5 0%, #e8e8e8 100%);
+    --text-secondary: #999999;                    /* 次级文字（原各处 fallback #999 归口主题管理） */
+    --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.08); /* 浮层阴影（控制台抽屉等，随主题深浅） */
+    --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.10); /* 轻阴影（浮标胶囊等小浮层） */
 }
 
 /* 深色主题 */
@@ -38,6 +41,9 @@
     --rail-icon: #8a8a8a;
     --rail-hover: rgba(255, 255, 255, 0.08);
     --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
+    --text-secondary: #8a8a8a;                     /* 深色下次级文字同 --text-light */
+    --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);  /* 深色下阴影加重才可见 */
+    --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
 /* 跟随系统：系统为深色时应用深色变量 */
@@ -62,6 +68,9 @@
         --rail-icon: #8a8a8a;
         --rail-hover: rgba(255, 255, 255, 0.08);
         --login-bg: linear-gradient(135deg, #111111 0%, #1e1e1e 100%);
+        --text-secondary: #8a8a8a;                    /* 跟随系统·深色：同 dark 主题 */
+        --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.45);
+        --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.5);
     }
 }
 
@@ -4120,15 +4129,26 @@ html.m #list-panel.list-collapsed {
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border, #e0e0e0));
+    border: 1px solid var(--border, #e0e0e0); /* 边框跟随主题中性色（不再混入主题绿） */
     border-radius: 10px;
     background: var(--panel-bg, #fff);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-pop, 0 4px 16px rgba(0, 0, 0, 0.08)); /* 阴影随主题深浅 */
     overflow: hidden;
 }
 
 .agent-console-drawer.hidden {
     display: none;
+}
+
+/* 停靠中栏（预览区下方）：与预览区同宽对齐——去掉左右留缝/圆角/浮层阴影/侧边框，
+   只保留顶部一条分隔线，成为中栏的贴底一体化区块（TRAE CN 同款）；
+   窄屏回退输入框上方时不在 .ws-col-view 内，仍用上面的浮动卡片样式 */
+.ws-col-view .agent-console-drawer {
+    margin: 0;
+    border: none;
+    border-top: 1px solid var(--border, #ececec);
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .agent-console-head {
@@ -4137,7 +4157,7 @@ html.m #list-panel.list-collapsed {
     gap: 8px;
     padding: 4px 8px;
     border-bottom: 1px solid var(--border, #ececec);
-    background: color-mix(in srgb, var(--primary) 6%, transparent);
+    background: var(--header-bg, #fafafa); /* 头部跟随主题中性色（去掉绿色 tint） */
     user-select: none;
 }
 
@@ -4171,13 +4191,14 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-console-tab:hover {
-    background: color-mix(in srgb, var(--primary) 9%, transparent);
+    background: var(--hover, #f0f0f0);
     color: var(--text, #333);
 }
 
+/* 激活标签：中性高亮（TRAE CN 同款灰底深字，不用主题绿） */
 .agent-console-tab.active {
-    background: color-mix(in srgb, var(--primary) 15%, transparent);
-    color: var(--primary);
+    background: var(--active, #c8c8c8);
+    color: var(--text, #333);
     font-weight: 600;
 }
 
@@ -4211,15 +4232,15 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-console-tab-add:hover {
-    background: color-mix(in srgb, var(--primary) 12%, transparent);
-    color: var(--primary);
+    background: var(--hover, #f0f0f0);
+    color: var(--text, #333);
 }
 
 /* 旧标题样式保留（当前已由标签栏替代，防其他处引用悬空） */
 .agent-console-title {
     font-size: 12px;
     font-weight: 600;
-    color: var(--primary);
+    color: var(--text, #333);
     flex-shrink: 0;
 }
 
@@ -4275,7 +4296,7 @@ html.m #list-panel.list-collapsed {
     gap: 6px;
     padding: 5px 10px;
     border-top: 1px solid var(--border, #ececec);
-    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    background: var(--header-bg, #fafafa); /* 输入行跟随主题中性色（去掉绿色 tint） */
     flex-shrink: 0;
 }
 
@@ -4286,7 +4307,7 @@ html.m #list-panel.list-collapsed {
 .agent-console-prompt {
     font-family: Consolas, Monaco, monospace;
     font-size: 11px;
-    color: var(--primary);
+    color: var(--text-light, #999); /* 提示符跟随主题中性色（不用主题绿） */
     max-width: 45%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4304,7 +4325,7 @@ html.m #list-panel.list-collapsed {
     font-family: Consolas, Monaco, monospace;
     font-size: 12px;
     color: var(--text, #333);
-    caret-color: var(--primary);
+    caret-color: var(--text, #333);
 }
 
 .agent-console-input::placeholder {
@@ -4313,10 +4334,10 @@ html.m #list-panel.list-collapsed {
 
 .agent-console-stop {
     flex-shrink: 0;
-    border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border, #e0e0e0));
+    border: 1px solid var(--border, #e0e0e0); /* 停止按钮跟随主题中性色 */
     border-radius: 6px;
     background: transparent;
-    color: var(--primary);
+    color: var(--text, #333);
     font-size: 10px;
     line-height: 1;
     padding: 4px 8px;
@@ -4324,7 +4345,7 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-console-stop:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    background: var(--hover, #f0f0f0);
 }
 
 .agent-console-stop:disabled {
@@ -4335,7 +4356,7 @@ html.m #list-panel.list-collapsed {
 .agent-console-line-cmd {
     margin: 6px 0 2px;
     font-weight: 600;
-    color: var(--primary);
+    color: var(--text, #333); /* 命令头跟随主题中性色 */
 }
 
 .agent-console-line-cmd:first-child {
@@ -4344,7 +4365,7 @@ html.m #list-panel.list-collapsed {
 
 .agent-console-line-exit {
     margin-top: 2px;
-    color: var(--primary);
+    color: var(--text-light, #999); /* 退出码跟随主题中性色 */
     user-select: none;
 }
 
@@ -4359,13 +4380,13 @@ html.m #list-panel.list-collapsed {
     margin: 0 auto 8px;
     flex-shrink: 0;
     padding: 4px 16px;
-    border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+    border: 1px solid var(--border, #e0e0e0); /* 浮标跟随主题中性色（不再绿边绿字） */
     border-radius: 14px;
     background: var(--panel-bg, #fff);
-    color: var(--primary);
+    color: var(--text, #333);
     font-size: 12px;
     cursor: pointer;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
+    box-shadow: var(--shadow-soft, 0 2px 10px rgba(0, 0, 0, 0.10)); /* 阴影随主题深浅 */
     animation: agent-console-chip-in 0.25s ease-out;
 }
 
@@ -4374,7 +4395,7 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-console-chip:hover {
-    background: color-mix(in srgb, var(--primary) 8%, var(--panel-bg, #fff));
+    background: var(--hover, #f0f0f0);
 }
 
 @keyframes agent-console-chip-in {
@@ -4520,10 +4541,10 @@ html.m #list-panel.list-collapsed {
     opacity: 0.88;
 }
 
-/* 控制台常驻入口激活态：控制台展开时按钮保持主题色高亮 */
+/* 按钮激活态（菜单展开时"···"高亮）：主题中性色，与整体灰阶一致 */
 .ws-panel-btn.active {
-    color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 13%, transparent);
+    color: var(--text, #333);
+    background: var(--active, #c8c8c8);
     font-weight: 600;
 }
 
@@ -4568,7 +4589,7 @@ html.m #list-panel.list-collapsed {
     background: var(--panel-bg, #fff);
     border: 1px solid var(--border, #ececec);
     border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+    box-shadow: var(--shadow-pop, 0 6px 20px rgba(0, 0, 0, 0.12)); /* 阴影随主题深浅 */
     padding: 4px;
     z-index: 80;
 }
@@ -4602,13 +4623,15 @@ html.m #list-panel.list-collapsed {
     flex: 1;
 }
 
+/* 悬停/激活：主题中性色（TRAE CN 同款灰底，不用主题绿） */
 .ws-more-item:hover {
-    background: color-mix(in srgb, var(--primary) 10%, transparent);
-    color: var(--primary);
+    background: var(--hover, #f0f0f0);
+    color: var(--text, #333);
 }
 
 .ws-more-item.active {
-    color: var(--primary);
+    background: var(--active, #c8c8c8);
+    color: var(--text, #333);
     font-weight: 600;
 }
 
