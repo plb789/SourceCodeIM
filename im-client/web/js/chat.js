@@ -8743,7 +8743,7 @@
         // 都会在下一次 mousemove 时被覆盖（osbUpdate 只读几个缓存布局值，move 频率下无性能压力）
         document.addEventListener('mousemove', function () {
             if (sbLast && sbLast._osbUpdate && sbLast._osbThumb && sbLast._osbThumb.classList.contains('sb-show')) {
-                sbLast._osbUpdate();
+                sbLast._osbUpdate('move');
             }
         }, { passive: true });
         function sbScheduleHide(el) {
@@ -8763,7 +8763,7 @@
         function sbMark(el, on) {
             el.classList.toggle('sb-hover', on);
             if (el._osbThumb) el._osbThumb.classList.toggle('sb-show', on);
-            if (on && el._osbUpdate) el._osbUpdate();
+            if (on && el._osbUpdate) el._osbUpdate('sbOn'); // 浮现时强制重定位，杜绝残留旧位置
         }
 
         // ===== 阶段四十五：自绘悬浮滚动条（微信同款：不占布局空间，消除容器边缘空隙） =====
@@ -8781,9 +8781,13 @@
             // 按滚动比例刷新滑块位置与长度（比例同步，微信同款）；fixed 定位基于容器可视区实时矩形
             function osbUpdate() {
                 var sh = el.scrollHeight, ch = el.clientHeight, st = el.scrollTop;
-                if (sh <= ch + 1 || ch === 0) { thumb.style.display = 'none'; return; }
+                if (sh <= ch + 1 || ch === 0) {
+                    thumb.style.display = 'none'; return;
+                }
                 var rect = el.getBoundingClientRect();
-                if (rect.height === 0) { thumb.style.display = 'none'; return; }
+                if (rect.height === 0) {
+                    thumb.style.display = 'none'; return;
+                }
                 thumb.style.display = 'block';
                 var h = Math.max(30, Math.round(ch * ch / sh)); // 滑块最小 30px，内容越多越短
                 var maxTop = ch - h - 2; // 上下各留 2px 边距
@@ -8792,27 +8796,39 @@
                 thumb.style.top = Math.round(rect.top + viewTop) + 'px';
                 thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
             }
+            // 时长制多帧复查：按墙钟时长（默认 600ms）逐帧重测。帧数制（18 帧）在高刷屏
+            // （144Hz≈125ms）会提前收兵，追不完 250ms 宽度过渡等布局动画；期间位置稳定即静默收敛
+            function osbTick(ms) {
+                if (el._osbTicking) return;
+                el._osbTicking = true;
+                var t0 = Date.now(), n = 0;
+                (function tick() {
+                    n++;
+                    osbUpdate();
+                    if (Date.now() - t0 < (ms || 600) && n < 90) requestAnimationFrame(tick);
+                    else el._osbTicking = false;
+                })();
+            }
             // 滚动同步：scroll 事件里只排 rAF，回调在"本轮渲染、绘制前"执行，与合成器滚动同帧，无滞后重影
             el.addEventListener('scroll', function () {
                 if (!el._osbRaf) {
                     el._osbRaf = requestAnimationFrame(function () { el._osbRaf = 0; osbUpdate(); });
                 }
             }, { passive: true });
-            if (window.ResizeObserver) new ResizeObserver(osbUpdate).observe(el); // 容器尺寸变化同步（窗口缩放/侧栏切换）
-            // 列表重渲染（innerHTML 置空）与内容高度变化同步滚动范围（滑块在 body 上不会被移除，无需补回）
-            // subtree+attributes：折叠/展开只切换子容器 display/class（不增删节点），childList 盲区导致滑块按旧高度绘制
-            // 再补一帧 rAF 复查：折叠可能触发 Chromium 滚动锚定（scroll anchoring）修正 scrollTop——
-            // 这类钳制不触发 scroll 事件，微任务时机量到的是钳制前布局，下一帧才是最终位置
+            if (window.ResizeObserver) new ResizeObserver(function () { osbUpdate(); }).observe(el); // 容器尺寸变化同步（窗口缩放/侧栏切换）
+            // 折叠/展开类点击：click 后时长制复查（默认 600ms）。捕获阶段监听容器内一切点击，
+            // 无论折叠由哪个处理器实现（class 切换/懒加载/子树重建），布局收敛后滑块必然归位
+            el.addEventListener('click', function () { osbUpdate(); osbTick(); }, true);
             if (window.MutationObserver) new MutationObserver(function () {
                 osbUpdate();
-                if (!el._osbRaf2) {
-                    el._osbRaf2 = requestAnimationFrame(function () { el._osbRaf2 = 0; osbUpdate(); });
-                }
+                osbTick();
             }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
             el._osbUpdate = osbUpdate; // 暴露给显隐联动：每次滑块浮现都强制重定位（sbMark 调用），杜绝残留旧位置
-            el.addEventListener('load', osbUpdate, true); // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
+            el._osbTick = osbTick;     // 暴露给过渡钩子：布局动画进行中持续跟踪（见下方 transitionrun 监听）
+            (window._osbHosts = window._osbHosts || []).push(el); // 宿主登记：过渡钩子按目标节点反查所属滚动容器
+            el.addEventListener('load', function () { osbUpdate(); }, true); // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
             // textarea 编辑输入改变内容高度（行增减），MutationObserver 感知不到 value 变化，input 时同步滑块
-            if (el.tagName === 'TEXTAREA') el.addEventListener('input', osbUpdate);
+            if (el.tagName === 'TEXTAREA') el.addEventListener('input', function () { osbUpdate(); });
             // 滑块拖拽：按下后按位移比例映射回 scrollTop（比例与 osbUpdate 一致）
             thumb.addEventListener('mousedown', function (e) {
                 e.preventDefault();
@@ -8850,5 +8866,19 @@
             });
         // 阶段七十六：暴露给动态创建的滚动容器挂自绘滑块（Agent 工作区文件树/预览区/编辑 textarea）
         window._osbInit = initOsb;
+        // ===== 布局类 CSS 过渡钩子：列表栏折叠（#list-panel width 0.25s）等布局动画进行中，
+        // 内容逐帧重排（每帧 sh 变一行高），mutation/resize 均不触发——必须在过渡全程逐帧跟踪。
+        // transitionrun/start 起查，transitionend/cancel 收尾再复查一次
+        var OSB_LAYOUT_PROPS = ',width,height,max-height,min-height,padding,padding-top,padding-bottom,margin,margin-top,margin-bottom,top,bottom,left,right,font-size,line-height,flex-basis,';
+        function osbOnTransition(e) {
+            if (OSB_LAYOUT_PROPS.indexOf(',' + e.propertyName + ',') < 0 || e.propertyName.indexOf(' ') >= 0) return;
+            // 过渡元素可能不在任何滚动容器内（如列表栏折叠动画改的是聊天区宽度），
+            // 布局属性过渡一律复查全部登记容器（读布局共享一次回流，成本可忽略）
+            (window._osbHosts || []).forEach(function (h) { if (h._osbTick) h._osbTick(700); });
+        }
+        document.addEventListener('transitionrun', osbOnTransition, true);
+        document.addEventListener('transitionstart', osbOnTransition, true);
+        document.addEventListener('transitionend', osbOnTransition, true);
+        document.addEventListener('transitioncancel', osbOnTransition, true);
     })();
 })();
