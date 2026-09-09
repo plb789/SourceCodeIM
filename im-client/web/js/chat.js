@@ -3445,6 +3445,7 @@
         // 阶段七十六：文件面板角标（write_file=新 / edit_file=改），工具结果到达后刷新树并自动打开
         if ((ev.tool === 'write_file' || ev.tool === 'edit_file') && ev.params && ev.params.path) {
             wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
+            wsPanel.lastToolPath[ev.tool] = ev.params.path; // 记路径：tool_result 不带 params，按工具名取回刷新预览
         }
         // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
         block.classList.add('collapsed');
@@ -3759,6 +3760,9 @@
         dirRows: {},   // 目录路径 → { arrow, kids }
         fileRows: {},  // 文件路径 → 行元素（角标定位）
         badges: {},    // 文件路径 → 'new' | 'mod'
+        // 工具名 → 最近一次 tool_start 的写入路径：tool_result 事件不带 params（服务端只回 tool/ok/output），
+        // 结果到达时按工具名取回路径刷新已开标签（与 fillAgentTool 按工具名匹配最后一个 pending 块同一语义）
+        lastToolPath: {},
         curPath: null, curContent: '', editing: false,
         // 阶段七十六增强（Trae CN 同款标签页）：多文件同时打开、点标签切换、× 关闭；
         // tabs: path → {name,content,binary,truncated,isMd,error,loading,draft?}，draft=未保存编辑草稿（切标签保留）
@@ -4174,10 +4178,12 @@
     }
 
     // 工具结果到达：刷新树 + TRAE 同款自动打开该文件（面板可见时）；已开标签强制重读磁盘最新内容
+    // 路径取值：tool_result 不带 params（服务端只回 tool/ok/output），回退用 tool_start 时按工具名记下的路径
     function wsPanelOnToolResult(ev) {
         if (!wsPanel.visible) return;
         if (ev.tool !== 'write_file' && ev.tool !== 'edit_file') return;
-        var key = wsPanelNormalizeKey(ev.params && ev.params.path);
+        var path = (ev.params && ev.params.path) || wsPanel.lastToolPath[ev.tool] || '';
+        var key = wsPanelNormalizeKey(path);
         if (key || key === '') {
             delete wsPanel.symTab[key]; // 文件被工具改写，符号缓存失效（下次渲染/扫描重建）
             Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
