@@ -2861,6 +2861,16 @@
     // 交互设计对齐 Trae CN：发起任务 → 任务卡片（清单+进度条）→ 思考/工具/审批子事件流 → 最终答复
     var agentMode = false;    // 当前是否处于 Agent 任务模式（仅 AI 智能体会话内可开启）
     var agentTaskCards = {};  // task_id → 任务卡片状态（切会话 DOM 清空但状态保留，重进不重放事件）
+    // 阶段七十八：各 AI 会话的 Agent 开关记忆——切换好友再切回自动恢复原开关，不用重新打开；
+    // localStorage 按账号持久化，刷新页面后同样恢复
+    var agentModeByUser = (function () {
+        try { return JSON.parse(localStorage.getItem('im_agent_mode_' + (IMSocket.getUsername() || '')) || '{}') || {}; }
+        catch (e) { return {}; }
+    })();
+    function agentModeMemSave() {
+        try { localStorage.setItem('im_agent_mode_' + (IMSocket.getUsername() || ''), JSON.stringify(agentModeByUser)); } catch (e) {}
+    }
+    var agentConsoleOpenByUser = {}; // 各 AI 会话的控制台开合记忆（内存级：日志本身按会话复位，仅恢复显示状态）
 
     // ===== 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启 web_search 时可用） =====
     var webSearchOn = false;        // 当前联网搜索开关状态（跨会话保持用户选择）
@@ -2885,6 +2895,8 @@
     agentModeBtn.addEventListener('click', function () {
         if (!currentChatUser || !isAIAgent(currentChatUser)) return;
         setAgentMode(!agentMode);
+        agentModeByUser[currentChatUser] = agentMode; // 开关记忆落盘：切会话/刷新后恢复
+        agentModeMemSave();
     });
 
     // ===== 阶段六十一：Agent 工作区/沙箱白名单面板（仅 PC 端本地执行器可用） =====
@@ -6445,10 +6457,18 @@
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
+        // 阶段七十八：离开旧会话前记忆其 Agent 开关（仅 AI 会话）——切回时自动恢复，不用重新打开
+        if (currentChatUser && isAIAgent(currentChatUser)) {
+            agentModeByUser[currentChatUser] = agentMode;
+            agentModeMemSave();
+            agentConsoleOpenByUser[currentChatUser] = agentConsole.open; // 控制台开合状态同样按会话记忆
+        }
         currentChatUser = user;
-        // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用；切换会话退出任务模式
-        if (agentMode) setAgentMode(false);
-        agentModeBtn.classList.toggle('hidden', !(user && isAIAgent(user)));
+        // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用
+        // 阶段七十八：AI 会话恢复该会话记忆的开关状态；普通好友会话强制关闭（Agent 仅对 AI 有意义）
+        var targetIsAgent = !!(user && isAIAgent(user));
+        setAgentMode(targetIsAgent ? !!agentModeByUser[user] : false);
+        agentModeBtn.classList.toggle('hidden', !targetIsAgent);
         // 阶段六十九：联网搜索开关仅 AI 智能体会话且服务端开启时显示（开关状态跨会话保持）
         webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
         // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
@@ -6467,6 +6487,12 @@
         clearPendingShot();
         // 阶段七十五（增强）：切换会话复位独立控制台抽屉（控制台会话级归属，不跨会话串日志）
         agentConsoleReset();
+        // 阶段七十八：恢复该 AI 会话的控制台开合状态（日志仍按会话清空，仅恢复"开着"的显示状态；
+        // 需 Agent 模式已恢复开启——工作区面板可见控制台才有停靠位）
+        if (targetIsAgent && agentMode && agentConsoleOpenByUser[user]) {
+            agentConsoleEnsure();
+            agentConsoleToggle(true);
+        }
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
         clearQuoteTarget();
         // 阶段七十：清空 AGENT_RUN 回显待达标记（防会话切换后误吞后续 AI 问答的"思考中"指示）
