@@ -4135,12 +4135,87 @@ html.m #list-panel.list-collapsed {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 10px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border, #ececec);
     background: color-mix(in srgb, var(--primary) 6%, transparent);
     user-select: none;
 }
 
+/* 标签栏（Trae CN 同款多终端标签）：任务输出固定首标签 + 终端标签可关 + "+" 新建；
+   超出横向滚动（自绘滑块挂不上小容器，直接原生隐藏滚动条+滚轮横移） */
+.agent-console-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.agent-console-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.agent-console-tab {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: color-mix(in srgb, var(--text, #333) 62%, transparent);
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.agent-console-tab:hover {
+    background: color-mix(in srgb, var(--primary) 9%, transparent);
+    color: var(--text, #333);
+}
+
+.agent-console-tab.active {
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.agent-console-tab-name {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-console-tab-x {
+    font-size: 10px;
+    opacity: 0.55;
+    line-height: 1;
+}
+
+.agent-console-tab-x:hover {
+    opacity: 1;
+}
+
+/* "+" 新建终端按钮（Trae CN 同款位置） */
+.agent-console-tab-add {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: color-mix(in srgb, var(--text, #333) 62%, transparent);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 7px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.agent-console-tab-add:hover {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+}
+
+/* 旧标题样式保留（当前已由标签栏替代，防其他处引用悬空） */
 .agent-console-title {
     font-size: 12px;
     font-weight: 600;
@@ -4191,6 +4266,70 @@ html.m #list-panel.list-collapsed {
     word-break: break-all;
     color: var(--text, #333);
     background: color-mix(in srgb, var(--hover, #f7f7f7) 60%, transparent);
+}
+
+/* 终端输入行（仅终端标签显示）：提示符 + 命令输入 + 停止按钮，Trae CN 终端同款布局 */
+.agent-console-inputrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-top: 1px solid var(--border, #ececec);
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    flex-shrink: 0;
+}
+
+.agent-console-inputrow.hidden {
+    display: none;
+}
+
+.agent-console-prompt {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 11px;
+    color: var(--primary);
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.agent-console-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    color: var(--text, #333);
+    caret-color: var(--primary);
+}
+
+.agent-console-input::placeholder {
+    color: color-mix(in srgb, var(--text, #333) 38%, transparent);
+}
+
+.agent-console-stop {
+    flex-shrink: 0;
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border, #e0e0e0));
+    border-radius: 6px;
+    background: transparent;
+    color: var(--primary);
+    font-size: 10px;
+    line-height: 1;
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.agent-console-stop:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.agent-console-stop:disabled {
+    opacity: 0.35;
+    cursor: default;
 }
 
 .agent-console-line-cmd {
@@ -4330,7 +4469,7 @@ html.m #list-panel.list-collapsed {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 10px;
+    padding: 8px 6px 8px 10px; /* 右缘收窄：图标按钮组更贴右边（与 TRAE CN 面板头一致） */
     border-bottom: 1px solid var(--border, #ececec);
     background: color-mix(in srgb, var(--primary) 6%, transparent);
     user-select: none;
@@ -4379,6 +4518,98 @@ html.m #list-panel.list-collapsed {
 
 .ws-panel-btn.primary:hover {
     opacity: 0.88;
+}
+
+/* 控制台常驻入口激活态：控制台展开时按钮保持主题色高亮 */
+.ws-panel-btn.active {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 13%, transparent);
+    font-weight: 600;
+}
+
+/* 头部"刷新"与"更多操作"图标按钮：TRAE CN 同款图标化按钮，统一固定尺寸盒（22×22 居中），
+   字形各自调优但盒尺寸完全一致，避免两个按钮大小不一 */
+.ws-refresh-btn,
+.ws-more-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+}
+
+/* 刷新：圆形箭头图标 */
+.ws-refresh-btn {
+    font-size: 15px;
+    font-weight: 700;
+    margin-left: -2px; /* 收拢与"···"的间距 */
+}
+
+/* 更多操作（···）：加大字形与字间距 */
+.ws-more-btn {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+/* 头部"更多操作"（⋯）与自绘下拉菜单：浮层右对齐弹出，低频操作统一收纳（禁用系统弹窗） */
+.ws-more {
+    position: relative;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.ws-more-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 132px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #ececec);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+    padding: 4px;
+    z-index: 80;
+}
+
+.ws-more-menu.hidden {
+    display: none;
+}
+
+.ws-more-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text, #333);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+/* 菜单项图标：定宽对齐文字列（后续新项复用） */
+.ws-more-ico {
+    width: 18px;
+    text-align: center;
+    margin-right: 7px;
+    font-size: 13px;
+    opacity: 0.8;
+}
+
+.ws-more-txt {
+    flex: 1;
+}
+
+.ws-more-item:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    color: var(--primary);
+}
+
+.ws-more-item.active {
+    color: var(--primary);
+    font-weight: 600;
 }
 
 .ws-panel-btn:disabled {

@@ -813,6 +813,188 @@ function fileOp(username, payload) {
     return { ok: false, error: '未知操作' };
 }
 
+// ===== 阶段七十七：控制台本地终端（Trae CN 同款多标签）=====
+// 用户在控制台手敲命令：纯本地交互环路（渲染层 → IPC → 本执行器），不经服务端
+// （任意命令不进服务端面，浏览器端无本地执行器天然不可用）。每标签一条会话：
+// cwd 连续记账（cd/盘符切换不 spawn），普通命令逐条 spawn cmd /c 执行（同一会话同时只跑一条），
+// 输出行级收口 200ms 聚合推帧（与 run_command 同款管道），结束回退出码/耗时/最终 cwd。
+
+const TERM_STREAM_MAX = 512 * 1024;         // 单条命令输出流上限（超出停止下发，标记 over）
+const TERM_IDLE_MS = 30 * 60 * 1000;        // 会话空闲回收（无运行中命令且 30 分钟无操作）
+
+const termSessions = {}; // username消毒|term_id → {username, termId, cwd, child, lastUsed}
+
+function termDefaultCwd(username) {
+    const ws = userRoot(username);
+    try { return fs.realpathSync(ws); } catch (e) { return ws; }
+}
+
+// 空闲会话清扫（termOp 每次调用顺带执行，免独立定时器）：无运行中命令且超时即回收
+function termSweep() {
+    const now = Date.now();
+    Object.keys(termSessions).forEach(function (k) {
+        const s = termSessions[k];
+        if (!s.child && now - s.lastUsed > TERM_IDLE_MS) delete termSessions[k];
+    });
+}
+
+// 打开会话（幂等）：cwd 默认落用户工作区根；已存在回传当前 cwd
+function termOpen(username, termId) {
+    termSweep();
+    const id = String(termId || '').trim();
+    if (!id) return { ok: false, error: '缺少终端标识' };
+    const key = sanitizeUsername(username) + '|' + id;
+    if (!termSessions[key]) {
+        try { fs.mkdirSync(userRoot(username), { recursive: true }); } catch (e) {} // 工作区不存在时先建，保证 cwd 有效
+        termSessions[key] = { username: sanitizeUsername(username), termId: id, cwd: termDefaultCwd(username), child: null, lastUsed: Date.now() };
+    }
+    return { ok: true, cwd: termSessions[key].cwd };
+}
+
+// cd/盘符切换本地记账（与 cmd.exe 语义对齐，不 spawn）：cd 回工作区根、cd .. / cd 路径、cd /d X:\dir、X: 切盘
+// 返回 null=非 cd 命令；否则返回错误文本（失败）或 ''（成功，cwd 已更新）
+function termApplyCd(s, line) {
+    const m = /^cd(\s+(\/d\s+)?(.+))?$/i.exec(line);
+    const driveM = /^[a-zA-Z]:$/.test(line);
+    if (!m && !driveM) return null;
+    const fail = function (msg) { return msg + '\r\n'; };
+    let target;
+    if (driveM) {
+        target = line.slice(0, 2);
+    } else if (m[3]) {
+        target = m[3].trim().replace(/^"|"$/g, '');
+        if (!target) target = '';
+        else if (/^\/d\s+/i.test(target)) target = target.replace(/^\/d\s+/i, ''); // cd /d 已被正则吃掉，双保险
+    } else {
+        target = '';
+    }
+    if (!target) { s.cwd = termDefaultCwd(s.username); return ''; } // 裸 cd 回工作区根
+    if (/^[a-zA-Z]:$/.test(target)) { // 仅盘符：切到该盘根（cmd 原语义为该盘上次目录，此处简化为根）
+        const base = target + '\\';
+        if (!fs.existsSync(base)) return fail('系统找不到指定的驱动器。');
+        s.cwd = base;
+        return '';
+    }
+    let np;
+    if (/^[a-zA-Z]:/.test(target) || target.startsWith('\\') || target.startsWith('/')) np = path.resolve(target);
+    else if (/^~/.test(target)) np = path.join(os.homedir(), target.slice(1).replace(/^[\\/]+/, ''));
+    else np = path.resolve(s.cwd, target);
+    let st;
+    try { st = fs.statSync(np); } catch (e) { return fail('系统找不到指定的路径。'); }
+    if (!st.isDirectory()) return fail('目标不是目录。');
+    s.cwd = np;
+    return '';
+}
+
+// 逐命令执行（input）：同步校验立即返回受理结果；输出经 onFrame 异步推帧，完成以 exit 帧收口
+function termInput(s, cmd, onFrame) {
+    const line = String(cmd == null ? '' : cmd).replace(/[\r\n]+/g, ' ').trim();
+    if (!line) return { ok: true };
+    s.lastUsed = Date.now();
+    if (s.child) return { ok: false, error: '上一条命令仍在执行中（可点 ■ 停止）' };
+    const push = function (chunk) { if (typeof onFrame === 'function') onFrame({ term_id: s.termId, type: 'out', chunk: chunk }); };
+    push(s.cwd + '> ' + line + '\r\n'); // 命令回显（提示符风格，Trae 同款）
+    const cdErr = termApplyCd(s, line);
+    if (cdErr !== null) { // cd/切盘本地记账：不 spawn，回显新提示符
+        if (cdErr) push(cdErr);
+        else push(s.cwd + '>\r\n');
+        s.lastUsed = Date.now();
+        return { ok: true, cwd: s.cwd };
+    }
+    const startedAt = Date.now();
+    let child;
+    try {
+        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + line], {
+            cwd: s.cwd,
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+    } catch (e) {
+        push((e.message || e) + '\r\n');
+        return { ok: true, cwd: s.cwd };
+    }
+    s.child = child;
+    let lineBuf = Buffer.alloc(0);
+    let pending = '';
+    let total = 0;
+    let over = false;
+    let finished = false;
+    const flush = function () {
+        if (!pending) return;
+        const chunk = pending;
+        pending = '';
+        if (typeof onFrame === 'function') onFrame({ term_id: s.termId, type: 'out', chunk: chunk, total_bytes: total, over: over });
+    };
+    const tick = setInterval(flush, CMD_STREAM_FLUSH_MS);
+    const addChunk = function (buf) {
+        let data = buf;
+        while (data.length) {
+            const nl = data.indexOf(0x0A);
+            if (nl < 0) { lineBuf = Buffer.concat([lineBuf, data]); return; }
+            let piece = data.slice(0, nl + 1);
+            data = data.slice(nl + 1);
+            if (lineBuf.length) { piece = Buffer.concat([lineBuf, piece]); lineBuf = Buffer.alloc(0); }
+            total += piece.length;
+            if (total > TERM_STREAM_MAX) { over = true; continue; }
+            let text;
+            try { text = utf8Strict.decode(piece); } catch (e) { text = gbkDecoder.decode(piece); }
+            pending += text;
+        }
+    };
+    child.stdout.on('data', addChunk);
+    child.stderr.on('data', addChunk);
+    const finish = function (code) {
+        if (finished) return;
+        finished = true;
+        clearInterval(tick);
+        if (lineBuf.length) { // 无换行尾行收口
+            let text;
+            try { text = utf8Strict.decode(lineBuf); } catch (e) { text = gbkDecoder.decode(lineBuf); }
+            pending += text;
+            lineBuf = Buffer.alloc(0);
+        }
+        flush();
+        s.child = null;
+        s.lastUsed = Date.now();
+        if (typeof onFrame === 'function') {
+            onFrame({ term_id: s.termId, type: 'exit', exit_code: code === null ? -1 : code, duration_ms: Date.now() - startedAt, cwd: s.cwd, over: over });
+        }
+    };
+    child.on('error', function (e) {
+        push((e.message || e) + '\r\n');
+        finish(-1);
+    });
+    child.on('close', function (code) { finish(code); });
+    return { ok: true };
+}
+
+// 终端操作入口（main.js 经 IPC 调用）：req={username, action, term_id, cmd}
+// open/input/stop/close；input 受理后命令异步执行，输出/完成经 onFrame 推回渲染层
+function termOp(req, onFrame) {
+    const username = sanitizeUsername((req && req.username) || '');
+    const action = req && req.action;
+    const id = String((req && req.term_id) || '').trim();
+    termSweep();
+    if (action === 'open') return termOpen((req && req.username) || '', id);
+    const s = termSessions[username + '|' + id];
+    if (action === 'input') {
+        if (!s) return { ok: false, error: '会话已失效，请新建终端' };
+        return termInput(s, req && req.cmd, onFrame);
+    }
+    if (action === 'stop') {
+        if (s && s.child) { try { s.child.kill(); } catch (e) {} return { ok: true }; }
+        return { ok: false, error: '没有运行中的命令' };
+    }
+    if (action === 'close') {
+        if (s) {
+            if (s.child) { try { s.child.kill(); } catch (e) {} }
+            delete termSessions[username + '|' + id];
+        }
+        return { ok: true };
+    }
+    return { ok: false, error: '未知操作' };
+}
+
 module.exports = {
     setRoot: setRoot,
     getRoot: getRoot,
@@ -822,5 +1004,6 @@ module.exports = {
     sanitizeUsername: sanitizeUsername,
     execTool: execTool,
     requestBg: requestBg, // 阶段七十五：长命令转后台请求入口
-    fileOp: fileOp // 阶段七十六：工作区文件面板操作入口
+    fileOp: fileOp, // 阶段七十六：工作区文件面板操作入口
+    termOp: termOp // 阶段七十七：控制台本地终端（多标签）
 };

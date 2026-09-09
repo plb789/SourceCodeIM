@@ -304,6 +304,16 @@ ipcMain.handle('agent:fileop', function (event, req) {
     return agentExecutor.fileOp(String((req && req.username) || ''), req || {});
 });
 
+// ===== 阶段七十七：控制台本地终端（Trae CN 同款多标签）=====
+// 渲染层控制台手敲命令 → 本 IPC → 执行器逐命令本地执行；输出/退出帧经 'agent:term-event' 推回渲染层
+// （纯本地环路不经服务端，任意命令不进服务端面）；执行前按用户名注入沙箱白名单与文件面板同款
+ipcMain.handle('agent:term', function (event, req) {
+    agentExecutor.setSandbox(String((req && req.username) || ''), sandboxStore[String((req && req.username) || '')] || null);
+    return agentExecutor.termOp(req || {}, function (frame) {
+        if (!event.sender.isDestroyed()) event.sender.send('agent:term-event', frame);
+    });
+});
+
 // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
 // 用户在渲染层工作区面板自选任意文件夹作为主工作区并维护授权目录白名单（原生目录选择对话框），
 // 配置持久化在本机 userData/agent_sandbox.json（按用户名隔离，本地磁盘路径机器相关，不上服务端数据库）；

@@ -131,6 +131,18 @@ contextBridge.exposeInMainWorld('desktop', {
     workspaceOp: function (req) {
         return ipcRenderer.invoke('agent:fileop', req);
     },
+    // ===== 阶段七十七：控制台本地终端（Trae CN 同款多标签） =====
+    // 手敲命令本地执行（纯本地环路不经服务端）：req={username, action:'open'|'input'|'stop'|'close', term_id, cmd?}
+    // 返回同步受理结果 Promise<{ok, error?, cwd?}>；输出/退出帧经 onTermEvent 推送
+    // {term_id, type:'out'|'exit', chunk?, total_bytes?, over?, exit_code?, duration_ms?, cwd?}
+    termOp: function (req) {
+        return ipcRenderer.invoke('agent:term', req);
+    },
+    onTermEvent: function (callback) {
+        ipcRenderer.on('agent:term-event', function (event, frame) {
+            callback(frame);
+        });
+    },
     // ===== 阶段六十一：用户自选工作区/沙箱白名单 =====
     // 原生目录选择对话框（返回所选目录绝对路径，取消返回空串）
     sandboxChoose: function (title) {

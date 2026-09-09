@@ -3618,7 +3618,10 @@
     // 任务执行中命令开始跑/有输出时输入区上方浮现"打开控制台"浮标，点击展开底部独立控制台面板
     //（统一展示本任务全部命令输出流：> 命令头 + 实时输出 + 退出码标注），与任务卡内嵌控制台同源双写；
     // 抽屉会话级归属：切换会话/新任务自动清空重开
-    var agentConsole = { root: null, body: null, cmdEl: null, chip: null, open: false, stick: true, taskId: null, agent: null, overTip: false };
+    // 阶段七十七：控制台多标签（Trae CN 同款）——tabs[0] 固定"任务输出"（Agent 命令输出流），
+    // "+" 新建本地终端标签（手敲命令逐条执行，纯本地 IPC 环路不经服务端，仅 PC 客户端可用）
+    var agentConsole = { root: null, body: null, cmdEl: null, chip: null, open: false, stick: true, taskId: null, agent: null, overTip: false,
+        tabs: [], active: '__task__', seq: 0, tabsEl: null, inputWrap: null, promptEl: null, inputEl: null, stopBtn: null };
 
     function agentConsoleEnsure() {
         if (agentConsole.root) return true;
@@ -3637,36 +3640,66 @@
         }
         var root = document.createElement('div');
         root.className = 'agent-console-drawer hidden';
+        // 头部：标签栏（任务输出 + 终端标签 + 新建）+ 当前 Agent 命令 + 清空/收起
         var head = document.createElement('div');
         head.className = 'agent-console-head';
-        var title = document.createElement('span');
-        title.className = 'agent-console-title';
-        title.textContent = '控制台';
+        var tabsEl = document.createElement('div');
+        tabsEl.className = 'agent-console-tabs';
         var cmd = document.createElement('span');
         cmd.className = 'agent-console-cmd';
         var clearBtn = document.createElement('button');
         clearBtn.className = 'agent-console-btn';
         clearBtn.type = 'button';
         clearBtn.textContent = '清空';
-        clearBtn.addEventListener('click', function () { agentConsole.body.textContent = ''; });
+        clearBtn.addEventListener('click', function () {
+            var t = agentConsoleTabActive();
+            if (t) t.bodyEl.textContent = '';
+        });
         var closeBtn = document.createElement('button');
         closeBtn.className = 'agent-console-btn';
         closeBtn.type = 'button';
         closeBtn.textContent = '✕';
         closeBtn.title = '收起控制台';
         closeBtn.addEventListener('click', function () { agentConsoleToggle(false); });
-        head.appendChild(title);
+        head.appendChild(tabsEl);
         head.appendChild(cmd);
         head.appendChild(clearBtn);
         head.appendChild(closeBtn);
+        // 任务输出标签体（默认标签）：agentConsoleBegin/Output/Exit 同源双写目标不变
         var body = document.createElement('div');
         body.className = 'agent-console-body';
         body.addEventListener('scroll', function () {
             agentConsole.stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 40;
         });
         if (window._osbInit) window._osbInit(body); // 自绘悬浮滑块（全局系统滚动条已禁用）
+        // 终端输入行（仅终端标签显示）：提示符 + 命令输入 + 停止按钮
+        var inputWrap = document.createElement('div');
+        inputWrap.className = 'agent-console-inputrow hidden';
+        var promptEl = document.createElement('span');
+        promptEl.className = 'agent-console-prompt';
+        var inputEl = document.createElement('input');
+        inputEl.className = 'agent-console-input';
+        inputEl.type = 'text';
+        inputEl.spellcheck = false;
+        inputEl.placeholder = '输入命令，回车执行（↑↓ 翻历史）';
+        inputEl.addEventListener('keydown', agentConsoleTermKey);
+        var stopBtn = document.createElement('button');
+        stopBtn.className = 'agent-console-stop';
+        stopBtn.type = 'button';
+        stopBtn.textContent = '■';
+        stopBtn.title = '停止当前命令';
+        stopBtn.disabled = true;
+        stopBtn.addEventListener('click', function () {
+            var t = agentConsoleTabActive();
+            if (!t || t.kind !== 'term' || !(window.desktop && window.desktop.termOp)) return;
+            window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'stop', term_id: t.id });
+        });
+        inputWrap.appendChild(promptEl);
+        inputWrap.appendChild(inputEl);
+        inputWrap.appendChild(stopBtn);
         root.appendChild(head);
         root.appendChild(body);
+        root.appendChild(inputWrap);
         host.insertBefore(root, before); // before=null 时等同 append（中栏停靠：排到预览区之下）
         var chip = document.createElement('button');
         chip.className = 'agent-console-chip hidden';
@@ -3678,7 +3711,206 @@
         agentConsole.body = body;
         agentConsole.cmdEl = cmd;
         agentConsole.chip = chip;
+        agentConsole.tabsEl = tabsEl;
+        agentConsole.inputWrap = inputWrap;
+        agentConsole.promptEl = promptEl;
+        agentConsole.inputEl = inputEl;
+        agentConsole.stopBtn = stopBtn;
+        agentConsole.tabs = [{ id: '__task__', kind: 'task', name: '任务输出', bodyEl: body, fixed: true, running: false, cwd: '' }];
+        agentConsole.active = '__task__';
+        // 本地终端帧路由（执行器输出/退出帧 → 对应标签；仅 PC 端有此桥）
+        if (window.desktop && window.desktop.onTermEvent) {
+            window.desktop.onTermEvent(function (f) { agentConsoleTermFrame(f); });
+        }
+        agentConsoleRenderTabs();
         return true;
+    }
+
+    // 当前激活标签对象（兜底任务输出标签）
+    function agentConsoleTabActive() {
+        for (var i = 0; i < agentConsole.tabs.length; i++) {
+            if (agentConsole.tabs[i].id === agentConsole.active) return agentConsole.tabs[i];
+        }
+        return agentConsole.tabs[0];
+    }
+
+    // 标签栏渲染：任务输出固定（不可关），终端标签可关（✕），末尾"+"新建终端
+    function agentConsoleRenderTabs() {
+        var bar = agentConsole.tabsEl;
+        if (!bar) return;
+        bar.textContent = '';
+        agentConsole.tabs.forEach(function (t) {
+            var el = document.createElement('div');
+            el.className = 'agent-console-tab' + (t.id === agentConsole.active ? ' active' : '');
+            var name = document.createElement('span');
+            name.className = 'agent-console-tab-name';
+            name.textContent = (t.kind === 'term' && t.running ? '⟳ ' : '') + t.name; // 运行中标记
+            el.appendChild(name);
+            if (t.kind === 'term') {
+                var x = document.createElement('span');
+                x.className = 'agent-console-tab-x';
+                x.textContent = '✕';
+                x.title = '关闭终端';
+                x.addEventListener('click', function (e) { e.stopPropagation(); agentConsoleTermClose(t.id); });
+                el.appendChild(x);
+            }
+            el.addEventListener('click', function () { agentConsoleSwitchTab(t.id); });
+            bar.appendChild(el);
+        });
+        var add = document.createElement('button');
+        add.className = 'agent-console-tab-add';
+        add.type = 'button';
+        add.textContent = '+';
+        add.title = (window.desktop && window.desktop.termOp) ? '新建终端' : '新建终端（仅 PC 客户端支持本地执行）';
+        add.addEventListener('click', agentConsoleTermCreate);
+        bar.appendChild(add);
+    }
+
+    // 切换标签：体显隐 + 输入行随终端标签显隐 + 提示符/停止按钮状态同步
+    function agentConsoleSwitchTab(id) {
+        agentConsole.active = id;
+        agentConsole.tabs.forEach(function (t) { t.bodyEl.classList.toggle('hidden', t.id !== id); });
+        var t = agentConsoleTabActive();
+        var isTerm = !!(t && t.kind === 'term');
+        agentConsole.inputWrap.classList.toggle('hidden', !isTerm);
+        if (isTerm) {
+            agentConsole.promptEl.textContent = (t.cwd || '') + '>';
+            agentConsole.stopBtn.disabled = !t.running;
+            if (agentConsole.open) setTimeout(function () { agentConsole.inputEl.focus(); }, 0);
+        }
+        agentConsoleRenderTabs();
+    }
+
+    // 新建终端标签：PC 端（有本地执行器桥）经 IPC 打开会话；浏览器端占位提示
+    function agentConsoleTermCreate() {
+        if (!agentConsoleEnsure()) return;
+        var id = 'term' + (++agentConsole.seq) + '_' + (Date.now() % 100000);
+        var bodyEl = document.createElement('div');
+        bodyEl.className = 'agent-console-body hidden';
+        var tab = { id: id, kind: 'term', name: '终端 ' + agentConsole.seq, bodyEl: bodyEl, cwd: '', running: false, hist: [], histIdx: -1, stick: true };
+        bodyEl.addEventListener('scroll', function () {
+            tab.stick = bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 40;
+        });
+        if (window._osbInit) window._osbInit(bodyEl);
+        agentConsole.root.insertBefore(bodyEl, agentConsole.inputWrap);
+        agentConsole.tabs.push(tab);
+        agentConsoleSwitchTab(id);
+        if (!(window.desktop && window.desktop.termOp)) {
+            agentConsoleTermAppend(tab, '✕ 本地终端仅 PC 客户端支持（浏览器端无本地执行能力）。\r\n');
+            return;
+        }
+        window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'open', term_id: id }).then(function (res) {
+            if (res && res.ok) {
+                tab.cwd = String(res.cwd || '');
+                agentConsoleTermAppend(tab, tab.cwd + '>\r\n');
+                if (agentConsole.active === id) agentConsole.promptEl.textContent = tab.cwd + '>';
+            } else {
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || '终端打开失败') + '\r\n');
+            }
+        }).catch(function () {
+            agentConsoleTermAppend(tab, '✕ 终端打开失败（本地桥异常）。\r\n');
+        });
+    }
+
+    // 关闭终端标签：通知执行器销毁会话（运行中命令一并 kill），激活相邻标签
+    function agentConsoleTermClose(id) {
+        var idx = -1;
+        for (var i = 0; i < agentConsole.tabs.length; i++) {
+            if (agentConsole.tabs[i].id === id) { idx = i; break; }
+        }
+        if (idx < 0) return;
+        var tab = agentConsole.tabs[idx];
+        if (tab.kind === 'term' && window.desktop && window.desktop.termOp) {
+            window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'close', term_id: id });
+        }
+        tab.bodyEl.remove();
+        agentConsole.tabs.splice(idx, 1);
+        if (agentConsole.active === id) {
+            var next = agentConsole.tabs[Math.min(idx, agentConsole.tabs.length - 1)];
+            agentConsoleSwitchTab(next ? next.id : '__task__');
+        } else {
+            agentConsoleRenderTabs();
+        }
+    }
+
+    // 终端输出追加（底部跟随：上翻查历史时暂停自动滚动；展示上限保留尾部 100KB）
+    function agentConsoleTermAppend(tab, text) {
+        if (!tab || !text) return;
+        var el = tab.bodyEl;
+        var stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+        el.appendChild(document.createTextNode(text));
+        if (el.textContent.length > 130000) el.textContent = el.textContent.slice(-100000);
+        if (stick) el.scrollTop = el.scrollHeight;
+    }
+
+    // 执行器帧路由：out→追加输出；exit→退出码/耗时行 + cwd 更新 + 解除运行态
+    function agentConsoleTermFrame(f) {
+        if (!f || !f.term_id) return;
+        var tab = null;
+        for (var i = 0; i < agentConsole.tabs.length; i++) {
+            if (agentConsole.tabs[i].id === f.term_id) { tab = agentConsole.tabs[i]; break; }
+        }
+        if (!tab || tab.kind !== 'term') return;
+        if (f.type === 'out') {
+            agentConsoleTermAppend(tab, String(f.chunk || ''));
+            return;
+        }
+        if (f.type === 'exit') {
+            tab.running = false;
+            var dur = f.duration_ms || 0;
+            var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+            agentConsoleTermAppend(tab, '进程已结束，退出码 ' + (f.exit_code || 0) + '，耗时 ' + durText + (f.over ? '（输出超限已截断）' : '') + '\r\n');
+            tab.cwd = String(f.cwd || tab.cwd || '');
+            if (agentConsole.active === tab.id) {
+                agentConsole.promptEl.textContent = tab.cwd + '>';
+                agentConsole.stopBtn.disabled = true;
+            }
+        }
+    }
+
+    // 终端输入：回车执行（运行中拒绝，执行器同步受理），↑↓ 翻本标签命令历史
+    function agentConsoleTermKey(e) {
+        var tab = agentConsoleTabActive();
+        if (!tab || tab.kind !== 'term') return;
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!tab.hist.length) return;
+            if (e.key === 'ArrowUp') {
+                tab.histIdx = tab.histIdx < 0 ? tab.hist.length - 1 : Math.max(0, tab.histIdx - 1);
+                agentConsole.inputEl.value = tab.hist[tab.histIdx] || '';
+            } else {
+                if (tab.histIdx < 0) return;
+                tab.histIdx++;
+                if (tab.histIdx >= tab.hist.length) { tab.histIdx = -1; agentConsole.inputEl.value = ''; }
+                else agentConsole.inputEl.value = tab.hist[tab.histIdx];
+            }
+            return;
+        }
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var cmd = agentConsole.inputEl.value.replace(/\s+$/, '');
+        if (!cmd || tab.running) return;
+        if (!(window.desktop && window.desktop.termOp)) {
+            agentConsoleTermAppend(tab, '✕ 本地终端仅 PC 客户端支持。\r\n');
+            return;
+        }
+        tab.hist.push(cmd);
+        if (tab.hist.length > 50) tab.hist.shift();
+        tab.histIdx = -1;
+        agentConsole.inputEl.value = '';
+        tab.running = true;
+        agentConsole.stopBtn.disabled = false;
+        window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'input', term_id: tab.id, cmd: cmd }).then(function (res) {
+            if (res && res.ok === false) { // 执行器拒绝（上一条未结束/会话失效）
+                tab.running = false;
+                agentConsole.stopBtn.disabled = true;
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || '命令被拒绝') + '\r\n');
+            }
+        }).catch(function () {
+            tab.running = false;
+            agentConsole.stopBtn.disabled = true;
+            agentConsoleTermAppend(tab, '✕ 命令执行异常（本地桥）。\r\n');
+        });
     }
 
     function agentConsoleToggle(open) {
@@ -3686,7 +3918,17 @@
         agentConsole.open = open;
         agentConsole.root.classList.toggle('hidden', !open);
         if (agentConsole.chip) agentConsole.chip.classList.add('hidden'); // 打开即收浮标；关闭后下方输出事件会再浮出
-        if (open && agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+        // "⋯"菜单里的控制台项同步：开=高亮"收起控制台"，关="打开控制台"（图标不动，仅文字切换）
+        if (wsPanel.conItem) {
+            var conTxt = wsPanel.conItem.querySelector('.ws-more-txt');
+            if (conTxt) conTxt.textContent = open ? '收起控制台' : '打开控制台';
+            wsPanel.conItem.classList.toggle('active', open);
+        }
+        if (open) {
+            var t = agentConsoleTabActive();
+            if (t && t.kind === 'term' && t.stick) t.bodyEl.scrollTop = t.bodyEl.scrollHeight;
+            if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+        }
         wsPanelSyncViewCol(); // 停靠预览下方：无标签时仅控制台展开也要显示中栏，收起后无标签则整栏收回
     }
 
@@ -3916,14 +4158,60 @@
         wsPanel.rootEl = document.createElement('span');
         wsPanel.rootEl.className = 'ws-panel-root';
         var refreshBtn = document.createElement('button');
-        refreshBtn.className = 'ws-panel-btn';
+        refreshBtn.className = 'ws-panel-btn ws-refresh-btn';
         refreshBtn.type = 'button';
-        refreshBtn.textContent = '刷新';
+        refreshBtn.textContent = '⟳'; // TRAE CN 同款圆形刷新箭头图标（悬停看文字说明）
         refreshBtn.title = '重新加载文件树';
         refreshBtn.addEventListener('click', function () { wsPanelRefreshTree(); });
+        // 头部"更多操作"（⋯）下拉菜单（阶段七十七，自绘浮层不用系统弹窗）：低频操作统一收纳，
+        // 以后新按钮直接往 wsMoreItems 里加一项即可，不再撑爆头部
+        var moreWrap = document.createElement('div');
+        moreWrap.className = 'ws-more';
+        var moreBtn = document.createElement('button');
+        moreBtn.className = 'ws-panel-btn ws-more-btn';
+        moreBtn.type = 'button';
+        moreBtn.textContent = '···';
+        moreBtn.title = '更多操作';
+        var menu = document.createElement('div');
+        menu.className = 'ws-more-menu hidden';
+        var conItem = document.createElement('div');
+        conItem.className = 'ws-more-item';
+        // 图标 + 文字（后续新菜单项照此结构：span.ws-more-ico 图标 + span.ws-more-txt 文字）
+        var conIco = document.createElement('span');
+        conIco.className = 'ws-more-ico';
+        conIco.textContent = '▤';
+        var conTxt = document.createElement('span');
+        conTxt.className = 'ws-more-txt';
+        conTxt.textContent = '打开控制台';
+        conItem.appendChild(conIco);
+        conItem.appendChild(conTxt);
+        conItem.addEventListener('click', function () {
+            agentConsoleEnsure();
+            agentConsoleToggle(!agentConsole.open); // 常驻入口：随时展开/收起底部控制台
+            wsPanelMenuClose();
+        });
+        menu.appendChild(conItem);
+        moreWrap.appendChild(moreBtn);
+        moreWrap.appendChild(menu);
+        moreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            menu.classList.toggle('hidden');
+            moreBtn.classList.toggle('active', !menu.classList.contains('hidden'));
+        });
+        // 点外部收起（捕获一次注册，含 Esc）；stopPropagation 防点按钮自身立即关闭
+        document.addEventListener('click', function (e) {
+            if (!moreWrap.contains(e.target)) wsPanelMenuClose();
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') wsPanelMenuClose();
+        });
         head.appendChild(title);
         head.appendChild(wsPanel.rootEl);
         head.appendChild(refreshBtn);
+        head.appendChild(moreWrap);
+        wsPanel.moreBtn = moreBtn;
+        wsPanel.moreMenu = menu;
+        wsPanel.conItem = conItem;
         // 文件树（懒加载：展开目录时才拉取子级）
         wsPanel.treeEl = document.createElement('div');
         wsPanel.treeEl.className = 'ws-panel-tree';
@@ -4032,6 +4320,13 @@
             if (ev.ok) p.resolve(ev); else p.reject(new Error(ev.error || '操作失败'));
         });
         return true;
+    }
+
+    // 头部"更多操作"菜单收起归口（点外部/Esc/选中菜单项共用）
+    function wsPanelMenuClose() {
+        if (!wsPanel.moreMenu) return;
+        wsPanel.moreMenu.classList.add('hidden');
+        if (wsPanel.moreBtn) wsPanel.moreBtn.classList.remove('active');
     }
 
     // 中栏显隐归口：有打开标签、控制台展开、或"打开控制台"浮标可见 任一即显示整栏
