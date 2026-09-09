@@ -4474,6 +4474,679 @@ html.m #list-panel.list-collapsed {
     display: none;
 }
 
+/* ===== 源代码管理（Trae CN 同款）：左栏顶部页签 + git 视图 ===== */
+/* 视图页签：文件 / 源代码管理，下划线式激活态（主题色） */
+.ws-nav-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px 0;
+    border-bottom: 1px solid var(--border, #ececec);
+    background: var(--panel-bg, #f7f7f7);
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.ws-nav-tab {
+    padding: 6px 10px 7px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+}
+
+.ws-nav-tab:hover { color: var(--text, #333); }
+
+.ws-nav-tab.active {
+    color: var(--primary, #07c160);
+    border-bottom-color: var(--primary, #07c160);
+    font-weight: 600;
+}
+
+/* git 视图整体（替换树区域）：纵排 头部/分支/提交框/变更主体；relative 作为帮助气泡定位锚 */
+.ws-git-view {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.ws-git-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 6px 7px 10px;
+    border-bottom: 1px solid var(--border, #ececec);
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.ws-git-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary, #07c160);
+}
+
+.ws-git-branch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 4px;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.ws-git-branch-name {
+    font-weight: 600;
+    color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-git-ab {
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+/* 全新仓库（尚无提交）引导提示 */
+.ws-git-nocommits {
+    padding: 0 10px 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    flex-shrink: 0;
+}
+
+/* 提交信息输入（Trae CN 同款单行紧凑框）：文字样式归本类，边框/背景/按钮由外层容器统一承载 */
+.ws-git-msg {
+    color: var(--text, #333);
+    font-size: 12px;
+    font-family: inherit;
+    line-height: 1.45;
+    resize: none;
+    outline: none;
+    overflow-y: auto;
+}
+
+.ws-git-commit-row {
+    display: flex;
+    padding: 0 10px 8px;
+    flex-shrink: 0;
+}
+
+/* 提交按钮：中性黑灰/白配色（Trae CN 同款），跟随主题明暗；amend 态琥珀警示 */
+.ws-git-commit {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px 0 0 6px;
+    background: var(--search-bg, #fff);
+    color: var(--text, #333);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 修改上次提交（amend）模式：琥珀色警示主按钮（状态警示色，深浅主题均可读） */
+.ws-git-commit.amend {
+    background: var(--warning, #d29922);
+    border-color: transparent;
+    color: #fff;
+}
+
+.ws-git-commit:hover { background: var(--active, #c8c8c8); }
+
+.ws-git-commit:disabled { opacity: .5; cursor: default; }
+
+/* 变更主体（可滚动）；busy 时半透明禁言 */
+.ws-git-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 8px;
+}
+
+.ws-git-body.git-busy { opacity: .55; pointer-events: none; }
+
+.ws-git-sec { margin-top: 6px; }
+
+.ws-git-sec-h {
+    padding: 5px 10px 3px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    user-select: none;
+}
+
+.ws-git-empty {
+    padding: 3px 10px;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+}
+
+/* 变更行：状态徽标 + 文件名 + 目录维度 + 悬停操作 */
+.ws-git-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.ws-git-row:hover { background: var(--hover, #f0f0f0); }
+
+.ws-git-st {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.ws-git-st.st-m { background: #d29922; }  /* 修改 黄 */
+.ws-git-st.st-a { background: #3fb950; }  /* 新增 绿 */
+.ws-git-st.st-d { background: #f85149; }  /* 删除 红 */
+.ws-git-st.st-r { background: #a371f7; }  /* 重命名 紫 */
+.ws-git-st.st-c { background: #58a6ff; }  /* 复制 蓝 */
+.ws-git-st.st-t { background: #d29922; }  /* 类型变更 */
+.ws-git-st.st-u { background: #8b949e; }  /* 未跟踪 灰 */
+
+.ws-git-name {
+    color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+}
+
+.ws-git-dir {
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-left: auto;
+    flex-shrink: 2;
+    direction: rtl; /* 长目录优先显示靠近文件的尾部段 */
+}
+
+/* 悬停操作（暂存/取消/放弃）：平时隐藏，行悬停浮现 */
+/* 悬停操作按钮：visibility 占位而非 display 折叠——空间恒定，悬停出现/消失不再引起行高变化（防抖动） */
+.ws-git-acts { display: inline-flex; visibility: hidden; flex-shrink: 0; gap: 2px; }
+
+.ws-git-row:hover .ws-git-acts { visibility: visible; }
+
+.ws-git-act {
+    width: 20px;
+    height: 20px;
+    line-height: 18px;
+    text-align: center;
+    border-radius: 4px;
+    font-size: 14px;
+    color: var(--text, #333);
+    background: transparent;
+    cursor: pointer;
+    user-select: none;
+}
+
+.ws-git-act:hover { background: color-mix(in srgb, var(--primary, #07c160) 15%, transparent); color: var(--primary, #07c160); }
+
+.ws-git-act.danger:hover {
+    background: color-mix(in srgb, #f85149 15%, transparent);
+    color: #f85149;
+}
+
+/* 非仓库引导 */
+.ws-git-norepo {
+    padding: 18px 12px 10px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    text-align: center;
+}
+
+.ws-git-init {
+    display: block;
+    margin: 0 auto;
+    padding: 7px 18px;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary, #07c160);
+    color: #fff;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ws-git-init:hover { opacity: .88; }
+
+/* ===== 阶段七十八：源代码管理增强（Trae CN 同款）=====
+   AI 提交信息按钮 / 提交下拉 / 修改模式提示 / 自绘菜单 / 智能体审查 / 提交历史时间线 / 提交详情头 */
+
+/* 提交信息输入容器（Trae CN 同款单行紧凑框）：容器承载边框/背景，✦ AI 生成与 ▾ 菜单内嵌右侧；
+   色调全部跟随主题变量（输入底色/边框/文字/主色），随主题三色联动 */
+.ws-git-msg-wrap {
+    display: flex;
+    align-items: flex-start;
+    margin: 6px 10px;
+    padding: 0 2px 0 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 8px;
+    background: var(--search-bg, #fff); /* --search-bg 深浅主题均有定义（深色 #2a2a2a），避免白底回退 */
+    flex-shrink: 0;
+    transition: border-color .15s;
+}
+
+.ws-git-msg-wrap:focus-within { border-color: var(--primary, #07c160); }
+
+.ws-git-msg-wrap .ws-git-msg {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 0 6px 10px;
+    background: transparent;
+    border: none;
+}
+
+.ws-git-ai-btn {
+    width: 26px;
+    height: 26px;
+    line-height: 24px;
+    margin-top: 2px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--primary, #07c160);
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    padding: 0;
+}
+
+.ws-git-ai-btn:hover { background: color-mix(in srgb, var(--primary, #07c160) 15%, transparent); }
+
+.ws-git-ai-btn.loading {
+    animation: wsGitAiPulse 1s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes wsGitAiPulse { 50% { opacity: .3; } }
+
+/* 输入框右侧 ▾ 菜单按钮（AI 生成/使用上次信息/清空） */
+.ws-git-msg-arrow {
+    width: 20px;
+    height: 26px;
+    margin-top: 2px;
+    margin-right: 2px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary, #999);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.ws-git-msg-arrow:hover { color: var(--text, #333); background: var(--hover, #f0f0f0); }
+
+/* 提交按钮右侧下拉段（同底色一体，细分隔线），跟随主题明暗 */
+.ws-git-commit-arrow {
+    width: 30px;
+    flex-shrink: 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    background: var(--search-bg, #fff);
+    color: var(--text-secondary, #999);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+
+.ws-git-commit-arrow:hover {
+    background: var(--active, #c8c8c8);
+    color: var(--text, #333);
+}
+
+.ws-git-commit-arrow:disabled { opacity: .5; cursor: default; }
+
+/* 修改模式提示条：琥珀色细条，点击取消 */
+.ws-git-amend-tip {
+    margin: 0 10px 8px;
+    padding: 4px 9px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--warning, #d29922) 14%, transparent);
+    color: var(--warning, #d29922);
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+/* git 视图内自绘下拉菜单（提交方式/审查动作/目标分支共用）：贴锚点下方右对齐 */
+.ws-git-menu {
+    position: absolute;
+    z-index: 60;
+    min-width: 172px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #ececec);
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop, 0 6px 20px rgba(0, 0, 0, 0.12));
+}
+
+.ws-git-menu-item {
+    padding: 6px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    color: var(--text, #333);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-git-menu-item:hover {
+    background: var(--hover, #f0f0f0);
+    color: var(--primary, #07c160);
+}
+
+.ws-git-menu-item.danger:hover { color: #f85149; }
+
+.ws-git-menu-item.disabled { opacity: .45; cursor: default; }
+
+/* 智能体审查区：固定在文件滚动区下方（不入滚动流，文件再多也不被顶走） */
+.ws-git-review {
+    flex-shrink: 0;
+    margin-top: 10px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border, #ececec);
+}
+
+.ws-git-review-btnrow {
+    display: flex;
+    padding: 2px 10px 6px;
+}
+
+/* 总结并审查：中性黑灰/白配色（Trae CN 同款），跟随主题明暗——深色=深灰底浅字，浅色=白底深字 */
+.ws-git-review-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px 0 0 6px;
+    background: var(--search-bg, #fff);
+    color: var(--text, #333);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background .15s, border-color .15s;
+}
+
+.ws-git-review-btn:hover { background: var(--active, #c8c8c8); }
+
+.ws-git-review-btn:disabled { opacity: .55; cursor: default; }
+
+.ws-git-review-arrow {
+    width: 30px;
+    flex-shrink: 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    background: var(--search-bg, #fff);
+    color: var(--text-secondary, #999);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+
+.ws-git-review-arrow:hover { background: var(--active, #c8c8c8); }
+
+/* 分支选择行：⎇ 当前分支 → ⎇ 目标分支▾（目标分支按钮同款中性底色） */
+.ws-git-review-branches {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px 8px;
+    font-size: 12px;
+    min-width: 0;
+}
+
+.ws-git-review-branch {
+    font-weight: 600;
+    color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.ws-git-review-branch.to {
+    display: inline-block;
+    max-width: 46%;
+    padding: 4px 9px;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    background: var(--search-bg, #fff);
+    color: var(--text, #333);
+    cursor: pointer;
+    font-size: 12px;
+    flex-shrink: 0;
+    transition: background .15s, border-color .15s;
+}
+
+.ws-git-review-branch.to:hover { background: var(--active, #c8c8c8); }
+
+.ws-git-review-branch.to:disabled { opacity: .55; cursor: default; }
+
+.ws-git-review-sep {
+    color: var(--text-secondary, #999);
+    flex-shrink: 0;
+}
+
+/* 提交历史时间线：固定在审查区下方，超高内部滚动（自绘滑块），不占文件区空间 */
+.ws-git-log {
+    flex-shrink: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    margin-top: 8px;
+    border-top: 1px solid var(--border, #ececec);
+    padding: 2px 0 8px;
+}
+
+.ws-git-log-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 10px 4px 26px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.ws-git-log-row:hover { background: var(--hover, #f0f0f0); }
+
+/* 时间线竖线：贯穿行高，末行只画到圆点为止 */
+.ws-git-log-row::before {
+    content: '';
+    position: absolute;
+    left: 16px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border, #e0e0e0);
+}
+
+.ws-git-log-row:last-child::before { bottom: 50%; }
+
+.ws-git-log-dot {
+    position: absolute;
+    left: 12.5px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    margin-top: -4px;
+    border-radius: 50%;
+    background: var(--primary, #07c160);
+    box-shadow: 0 0 0 2px var(--panel-bg, #fff);
+    z-index: 1;
+}
+
+.ws-git-log-msg {
+    flex: 1;
+    min-width: 0;
+    color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-git-log-branch {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--primary, #07c160) 15%, transparent);
+    color: var(--primary, #07c160);
+}
+
+.ws-git-log-un {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+}
+
+/* 提交详情（预览列）：diff 上方元信息头 */
+.ws-commit-meta {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border, #ececec);
+    flex-shrink: 0;
+}
+
+.ws-commit-subject {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+    word-break: break-all;
+}
+
+.ws-commit-info {
+    margin-top: 3px;
+    font-size: 11.5px;
+    color: var(--text-secondary, #999);
+}
+
+/* 帮助按钮「?」圆形描边，与 ⟳/··· 同视觉族 */
+.ws-git-help-btn {
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 13px;
+}
+
+/* 配置帮助气泡：锚定头部下方右侧，自绘面板（阴影/圆角/主题变量），内部可滚动 */
+.ws-git-help-pop {
+    position: absolute;
+    top: 40px;
+    right: 8px;
+    z-index: 40;
+    width: 288px;
+    max-height: calc(100% - 52px);
+    overflow-y: auto;
+    padding: 6px 0 8px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, .14));
+    text-align: left;
+}
+
+.ws-git-help-sec { padding: 7px 13px 1px; }
+
+.ws-git-help-h {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary, #07c160);
+    margin-bottom: 4px;
+}
+
+.ws-git-help-line {
+    font-size: 11.5px;
+    color: var(--text-secondary, #999);
+    line-height: 1.6;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.ws-git-help-cmd {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    background: var(--hover, #f2f2f2);
+    color: var(--text, #333);
+    padding: 1px 6px;
+    border-radius: 4px;
+    word-break: break-all;
+    cursor: text;
+}
+
+.ws-git-help-copy {
+    font-size: 10.5px;
+    color: var(--primary, #07c160);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.ws-git-help-copy:hover { text-decoration: underline; }
+
+/* diff 预览标签的面包屑"差异对比"徽标 */
+.ws-crumbs-diff {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary, #07c160) 12%, transparent);
+    color: var(--primary, #07c160);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* diff 内容：等宽 + 行距紧凑（hljs diff 内置 +行绿/-行红/@行蓝） */
+.ws-diff-pre {
+    margin: 0;
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    tab-size: 4;
+    white-space: pre;
+    overflow: auto;
+}
+
 /* 分栏拖拽条：贴分栏右缘的悬浮热区（宽 6px），hover/拖拽中显主题色竖线（输入框拖拽条同款交互） */
 .ws-splitter {
     position: absolute;

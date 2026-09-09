@@ -9,11 +9,15 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +25,7 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
+	"im-server/config"
 	"im-server/logger"
 	"im-server/protocol"
 )
@@ -121,8 +126,9 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 	if isAbsishPath(path) && !(agentPcExec && s.hub.HasPC(username)) {
 		return &wsFileResult{Error: "本地绝对路径仅在 PC 端在线时可用（沙箱授权目录内）"}
 	}
-	if agentPcExec && s.hub.HasPC(username) {
-		if res := s.wsFileWaitPC(username, reqID, op, path, content); res != nil {
+	if agentPcExec && s.hub.HasPC(username) && op != "gitai" {
+		// gitai（AI 提交信息/审查）必须服务端执行：AI 模型服务归口服务端，PC 不参与
+		if res := s.wsFileWaitPC(username, reqID, op, path, content, wsFileOpWaitFor(op)); res != nil {
 			return res
 		}
 		logger.Warn("文件面板 PC 回传超时，回退服务端工作区（用户 %s op %s）", username, op)
@@ -140,7 +146,8 @@ func isAbsishPath(p string) bool {
 }
 
 // wsFileWaitPC 转发 PC 并挂起等待回传（msg 64 下发，65 回传经 handlePcFileResp 投递）；超时返回 nil
-func (s *Server) wsFileWaitPC(username, reqID, op, path, content string) *wsFileResult {
+// wait 上限按 op 区分：git push/pull 是网络操作（远端慢时可达分钟级），本地 IO 保持 15s
+func (s *Server) wsFileWaitPC(username, reqID, op, path, content string, wait time.Duration) *wsFileResult {
 	key := username + "|" + reqID
 	ch := make(chan *wsFileResult, 1)
 	wsFileMu.Lock()
@@ -169,7 +176,7 @@ func (s *Server) wsFileWaitPC(username, reqID, op, path, content string) *wsFile
 		logger.Info("文件面板 PC 回传（用户 %s op %s req_id %s ok %v error %q root %q 条目 %d）",
 			username, op, reqID, res.OK, res.Error, res.Root, len(res.Entries))
 		return res
-	case <-time.After(wsFileOpTimeout):
+	case <-time.After(wait):
 		logger.Warn("文件面板 PC 回传超时（用户 %s op %s req_id %s）", username, op, reqID)
 		return nil
 	}
@@ -230,8 +237,429 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 	case "reveal":
 		// 打开所在目录依赖本地资源管理器（explorer /select），服务端工作区无此概念
 		return &wsFileResult{Error: "打开所在目录仅 PC 客户端支持"}
+	case "git":
+		// 源代码管理：git 子命令执行（status/add/unstage/discard/commit/push/pull/init/diff）
+		return wsServerGit(username, content)
+	case "gitai":
+		// 源代码管理 AI（提交信息生成 / 智能体审查）：模型服务归口服务端，diff 由前端收集上行
+		return wsServerGitAI(username, content)
 	}
 	return &wsFileResult{Error: "未知操作"}
+}
+
+// wsFileOpWaitFor PC 回传等待上限按 op 区分：git push/pull 走网络（远端慢时可达分钟级）放宽到 130s，其余保持 15s
+func wsFileOpWaitFor(op string) time.Duration {
+	if op == "git" {
+		return 130 * time.Second
+	}
+	return wsFileOpTimeout
+}
+
+// wsGitMaxOutput 单次 git 命令输出截断上限（diff 大文件防帧体爆炸）
+const wsGitMaxOutput = 512 << 10
+
+// wsGitReq 前端 git 请求体（content 为 JSON）
+type wsGitReq struct {
+	Sub    string   `json:"sub"`              // status/diff/diffhead/diffcached/diffrev/add/unstage/discard/commit/push/pushu/pull/init/log/show/branches
+	Paths  []string `json:"paths,omitempty"`  // add/unstage/discard 目标
+	Path   string   `json:"path,omitempty"`   // diff 目标 / show 的提交 hash
+	Msg    string   `json:"msg,omitempty"`    // commit 信息
+	Branch string   `json:"branch,omitempty"` // log 未推送判定的当前分支 / push 无上游兜底
+	Target string   `json:"target,omitempty"` // diffrev 审查目标分支
+	Amend  bool     `json:"amend,omitempty"`  // commit 追加模式（--amend 覆盖上一次提交）
+}
+
+// wsGitBuildArgs 子命令 → git 参数与超时（PC 执行器与服务端同一张映射表口径）
+func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
+	switch r.Sub {
+	case "status":
+		return []string{"status", "--porcelain=v1", "-b"}, 20 * time.Second, nil
+	case "diff":
+		if strings.TrimSpace(r.Path) == "" {
+			return nil, 0, errors.New("缺少差异文件路径")
+		}
+		return []string{"diff", "HEAD", "--", r.Path}, 20 * time.Second, nil
+	case "add":
+		if len(r.Paths) == 0 {
+			return nil, 0, errors.New("缺少暂存目标")
+		}
+		return append([]string{"add", "--"}, r.Paths...), 30 * time.Second, nil
+	case "unstage":
+		if len(r.Paths) == 0 {
+			return nil, 0, errors.New("缺少取消暂存目标")
+		}
+		return append([]string{"reset", "-q", "HEAD", "--"}, r.Paths...), 30 * time.Second, nil
+	case "discard":
+		if len(r.Paths) == 0 {
+			return nil, 0, errors.New("缺少放弃目标")
+		}
+		return append([]string{"checkout", "-q", "--"}, r.Paths...), 30 * time.Second, nil
+	case "commit":
+		if strings.TrimSpace(r.Msg) == "" {
+			return nil, 0, errors.New("请填写提交信息")
+		}
+		args := []string{"commit", "-q", "-m", r.Msg}
+		if r.Amend {
+			args = append(args, "--amend")
+		}
+		return args, 60 * time.Second, nil
+	case "diffhead":
+		// 全部跟踪文件的工作区变更（AI 提交信息源）
+		return []string{"diff", "HEAD"}, 30 * time.Second, nil
+	case "diffcached":
+		// 暂存区变更（AI 提交信息优先数据源）
+		return []string{"diff", "--cached"}, 30 * time.Second, nil
+	case "diffrev":
+		// 分支审查：目标分支...HEAD 三点 diff（merge-base 以来的变更）
+		if strings.TrimSpace(r.Target) == "" {
+			return nil, 0, errors.New("请选择审查目标分支")
+		}
+		return []string{"diff", r.Target + "...HEAD"}, 60 * time.Second, nil
+	case "log":
+		// 提交历史（近 30 条，\x1f 分段防止字段内分隔符冲突）
+		return []string{"log", "-30", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
+	case "show":
+		if strings.TrimSpace(r.Path) == "" {
+			return nil, 0, errors.New("缺少提交 hash")
+		}
+		return []string{"show", r.Path, "--no-color", "--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
+	case "branches":
+		return []string{"for-each-ref", "refs/heads", "--format=%(refname:short)"}, 20 * time.Second, nil
+	case "untracked":
+		// 未跟踪文件全量清单（-z NUL 分隔防文件名含空格/引号解析错位）：
+		// git status 会把整个未跟踪目录折叠为 "dir/"，前端用它展开目录内的具体文件
+		return []string{"ls-files", "--others", "--exclude-standard", "-z"}, 20 * time.Second, nil
+	case "push":
+		return []string{"push"}, 120 * time.Second, nil
+	case "pushu":
+		// 无上游分支的兜底推送：git push -u origin <branch>
+		if strings.TrimSpace(r.Branch) == "" {
+			return nil, 0, errors.New("缺少分支名")
+		}
+		return []string{"push", "-u", "origin", r.Branch}, 120 * time.Second, nil
+	case "pull":
+		return []string{"pull", "--no-edit"}, 120 * time.Second, nil
+	case "init":
+		return []string{"init", "-q"}, 30 * time.Second, nil
+	}
+	return nil, 0, errors.New("未知 git 子命令")
+}
+
+// wsGitExec 在 dir 下执行 git 子命令（超时控制 + 输出截断），返回 (输出, 失败错误)
+func wsGitExec(dir string, args []string, timeout time.Duration) (string, error) {
+	if _, err := exec.LookPath("git"); err != nil {
+		return "", errors.New("未检测到 git，请先安装 Git 并加入 PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	// core.quotepath=off：中文/非 ASCII 文件名原样输出（与 PC 执行器同款前缀，双端口径一致）
+	fullArgs := append([]string{"-c", "core.quotepath=off"}, args...)
+	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if len(out) > wsGitMaxOutput {
+		out = out[:wsGitMaxOutput]
+	}
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", errors.New(msg)
+	}
+	return string(out), nil
+}
+
+// wsGitStatusParse 解析 git status --porcelain=v1 -b 输出：
+// 首行 "## main...origin/main [ahead 1, behind 2]" → 分支/上游/领先落后；其余 XY 行 → 变更条目；
+// 全新仓库（无任何提交）输出 "## No commits yet on master"，末段才是真实分支名（noCommits=true 供前端提示）
+func wsGitStatusParse(out string) (branch, upstream string, ahead, behind int, noCommits bool, changes []map[string]string) {
+	for _, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		if ln == "" {
+			continue
+		}
+		if strings.HasPrefix(ln, "## ") {
+			b := strings.TrimPrefix(ln, "## ")
+			if strings.HasPrefix(b, "HEAD (no branch)") {
+				branch = "(游离 HEAD)"
+				continue
+			}
+			if m := strings.TrimSpace(strings.TrimPrefix(b, "No commits yet on ")); m != b && m != "" {
+				branch = m
+				noCommits = true
+				continue
+			}
+			if j := strings.Index(b, "..."); j >= 0 {
+				branch = b[:j]
+				rest := b[j+3:]
+				if k := strings.IndexAny(rest, " ["); k >= 0 {
+					upstream = rest[:k]
+				} else {
+					upstream = rest
+				}
+			} else if b != "" {
+				branch = b // 无上游分支
+			}
+			if s := strings.Index(b, "["); s >= 0 {
+				e := strings.Index(b, "]")
+				if e > s {
+					for _, part := range strings.Split(b[s+1:e], ",") {
+						f := strings.Fields(strings.TrimSpace(part))
+						if len(f) == 2 {
+							if n, err := strconv.Atoi(f[1]); err == nil {
+								if f[0] == "ahead" {
+									ahead = n
+								} else if f[0] == "behind" {
+									behind = n
+								}
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
+		if len(ln) < 4 {
+			continue
+		}
+		x, y := string(ln[0]), string(ln[1])
+		if x == "!" && y == "!" {
+			continue // .gitignore 忽略项不展示
+		}
+		changes = append(changes, map[string]string{"p": ln[3:], "x": x, "y": y})
+	}
+	return branch, upstream, ahead, behind, noCommits, changes
+}
+
+// wsGitResultPack git 结果统一打包（ok 帧内 JSON：错误也在内容里，前端按 error 字段分支提示）
+func wsGitResultPack(payload map[string]interface{}) *wsFileResult {
+	payload["git"] = true
+	b, _ := json.Marshal(payload)
+	return &wsFileResult{OK: true, Content: string(b)}
+}
+
+// wsGitErrorHint 常见 git 失败场景中文引导（与服务端/执行器同口径）：身份未配置 / 远程未配置
+func wsGitErrorHint(msg, sub string) string {
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "tell me who you are") || strings.Contains(low, "user.name") {
+		return msg + "\n—— 请先在终端配置 git 身份（全局一次即可）：\n" +
+			"git config --global user.name \"你的名字\"\n" +
+			"git config --global user.email \"你的邮箱@example.com\""
+	}
+	if sub == "push" || sub == "pushu" || sub == "pull" {
+		for _, kw := range []string{
+			"does not appear to be a git repository", "no configured push destination",
+			"could not read from remote repository", "repository does not exist",
+		} {
+			if strings.Contains(low, kw) {
+				return msg + "\n—— 仓库尚未关联远程地址，请先执行：\n" +
+					"git remote add origin https://github.com/用户名/仓库名.git"
+			}
+		}
+	}
+	return msg
+}
+
+// wsServerGit 服务端工作区 git 执行（PC 离线回退；服务器需安装 git）
+func wsServerGit(username, content string) *wsFileResult {
+	ws, err := agentWorkspaceDir(username)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	var r wsGitReq
+	if err := json.Unmarshal([]byte(content), &r); err != nil {
+		return &wsFileResult{Error: "git 请求解析失败"}
+	}
+	args, timeout, err := wsGitBuildArgs(&r)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	out, gerr := wsGitExec(ws, args, timeout)
+	if gerr != nil {
+		// status 下"不是仓库"是常态（引导初始化），不算失败
+		if r.Sub == "status" && strings.Contains(gerr.Error(), "not a git repository") {
+			return wsGitResultPack(map[string]interface{}{"sub": "status", "repo": false})
+		}
+		return wsGitResultPack(map[string]interface{}{"sub": r.Sub, "error": wsGitErrorHint(gerr.Error(), r.Sub)})
+	}
+	switch r.Sub {
+	case "status":
+		branch, upstream, ahead, behind, noCommits, changes := wsGitStatusParse(out)
+		return wsGitResultPack(map[string]interface{}{
+			"sub": "status", "repo": true, "branch": branch, "upstream": upstream,
+			"ahead": ahead, "behind": behind, "no_commits": noCommits, "changes": changes,
+		})
+	case "log":
+		commits := wsGitLogParse(out)
+		// 未推送集合：origin/<branch>..HEAD 可解析则逐条标记；无上游/报错=全部未推送
+		if r.Branch != "" {
+			un, uerr := wsGitExec(ws, []string{"log", "origin/" + r.Branch + "..HEAD", "--format=%H"}, 30*time.Second)
+			if uerr != nil {
+				for _, c := range commits {
+					c["un"] = true
+				}
+			} else {
+				pushed := map[string]bool{}
+				for _, ln := range strings.Split(un, "\n") {
+					ln = strings.TrimSpace(ln)
+					if ln != "" {
+						pushed[ln] = true
+					}
+				}
+				for _, c := range commits {
+					c["un"] = !pushed[c["h"].(string)]
+				}
+			}
+		} else {
+			for _, c := range commits {
+				c["un"] = true
+			}
+		}
+		return wsGitResultPack(map[string]interface{}{"sub": "log", "commits": commits})
+	case "show":
+		// 首行 __META__ 头拆出提交元信息，其余为 diff 正文
+		meta, rest := wsGitShowSplit(out)
+		return wsGitResultPack(map[string]interface{}{"sub": "show", "meta": meta, "diff": rest})
+	case "branches":
+		list := []string{}
+		for _, ln := range strings.Split(out, "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln != "" {
+				list = append(list, ln)
+			}
+		}
+		return wsGitResultPack(map[string]interface{}{"sub": "branches", "list": list})
+	case "untracked":
+		files := []string{}
+		for _, f := range strings.Split(out, "\x00") {
+			// 不 TrimSpace：文件名可能合法含首尾空格，仅过滤 NUL 分隔产生的空段
+			if f != "" {
+				files = append(files, f)
+			}
+		}
+		return wsGitResultPack(map[string]interface{}{"sub": "untracked", "files": files})
+	case "diff", "diffhead", "diffcached", "diffrev":
+		return wsGitResultPack(map[string]interface{}{"sub": "diff", "diff": out})
+	default:
+		return wsGitResultPack(map[string]interface{}{"sub": r.Sub, "output": strings.TrimSpace(out)})
+	}
+}
+
+// wsGitLogParse 提交历史解析：%H\x1f%h\x1f%s\x1f%an\x1f%at 每提交一行，首条标记 HEAD
+func wsGitLogParse(out string) []map[string]interface{} {
+	commits := []map[string]interface{}{}
+	for i, ln := range strings.Split(out, "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		if ln == "" {
+			continue
+		}
+		f := strings.Split(ln, "\x1f")
+		if len(f) < 5 {
+			continue
+		}
+		at, _ := strconv.ParseInt(f[4], 10, 64)
+		commits = append(commits, map[string]interface{}{
+			"h": f[0], "sh": f[1], "msg": f[2], "an": f[3], "at": at, "head": i == 0,
+		})
+	}
+	return commits
+}
+
+// wsGitShowSplit git show 输出拆分：首行 __META__\x1f 分段（hash/短hash/主题/作者/时间），其余为 diff
+func wsGitShowSplit(out string) (map[string]interface{}, string) {
+	out = strings.TrimPrefix(out, "__META__")
+	idx := strings.Index(out, "\n")
+	if idx < 0 {
+		return map[string]interface{}{}, out
+	}
+	f := strings.Split(out[:idx], "\x1f")
+	meta := map[string]interface{}{}
+	if len(f) >= 5 {
+		at, _ := strconv.ParseInt(f[4], 10, 64)
+		meta = map[string]interface{}{"h": f[0], "sh": f[1], "msg": f[2], "an": f[3], "at": at}
+	}
+	return meta, strings.TrimPrefix(out[idx+1:], "\n")
+}
+
+// ===== 源代码管理 AI（提交信息生成 / 智能体审查）：模型服务归口服务端 =====
+
+// wsGitAIMaxDiff 上行 diff 截断上限（字符）：防 token 爆炸，超长截断并注明
+const wsGitAIMaxDiff = 32000
+
+// wsGitAIReq gitai 请求体
+type wsGitAIReq struct {
+	Mode   string `json:"mode"`             // commitmsg=生成提交信息 / review=分支审查报告
+	Diff   string `json:"diff"`             // 前端收集的 diff 内容
+	Target string `json:"target,omitempty"` // review 目标分支
+}
+
+// wsGitAIMsgClean 提交信息清洗：去代码块围栏/引号/换行，压成一行，限长
+func wsGitAIMsgClean(s string) string {
+	s = strings.NewReplacer("\r", " ", "\n", " ", "`", "", "\"", "", "'", "", "；", "; ", "。", ".").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	if s != "" && s[0] == ' ' {
+		s = strings.TrimSpace(s)
+	}
+	if r := []rune(s); len(r) > 110 {
+		s = string(r[:110]) + "…"
+	}
+	return s
+}
+
+// wsServerGitAI AI 提交信息/审查报告生成（复用聊天同源模型服务；取首个可用 provider）
+func wsServerGitAI(username, content string) *wsFileResult {
+	var r wsGitAIReq
+	if err := json.Unmarshal([]byte(content), &r); err != nil {
+		return &wsFileResult{Error: "gitai 请求解析失败"}
+	}
+	diff := r.Diff
+	if diff == "" {
+		return &wsFileResult{Error: "缺少 diff 内容"}
+	}
+	if len(diff) > wsGitAIMaxDiff {
+		diff = diff[:wsGitAIMaxDiff] + "\n…（diff 过长已截断）"
+	}
+	aiMu.RLock()
+	var prov *config.AIProviderConfig
+	for _, a := range aiAgents {
+		if a.Provider != nil {
+			prov = a.Provider
+			break
+		}
+	}
+	aiMu.RUnlock()
+	if prov == nil {
+		return &wsFileResult{Error: "服务端尚未配置模型服务（AI providers），无法使用智能提交信息/审查"}
+	}
+	var sys string
+	if r.Mode == "review" {
+		sys = "你是资深代码审查员。审查给出的分支变更 diff（相对目标分支 " + strings.TrimSpace(r.Target) +
+			" 的三点差异），输出 Markdown 审查报告，结构：## 变更总结（3-6 条要点，逐条概述改了什么、为什么）、" +
+			"## 潜在问题（按严重程度列出，含位置与原因；确无问题则写\"未发现明显问题\"）、## 改进建议（可执行的具体建议）。全中文，简洁专业。"
+	} else {
+		sys = "你是提交信息生成助手。根据 git diff 生成一条符合 Conventional Commits 规范的中文提交信息：" +
+			"格式为 type(scope): 描述，type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略；" +
+			"描述概括本次变更的核心内容与目的。只输出这一行文本，不要任何解释、引号或代码块标记。"
+	}
+	agent := &AIRunAgent{Name: "Git助手", Provider: prov}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	text, _, err := aiStreamChat(ctx, agent, []aiChatMessage{
+		{Role: "system", Content: sys},
+		{Role: "user", Content: "git diff:\n```\n" + diff + "\n```"},
+	}, func(string) {})
+	if err != nil {
+		return &wsFileResult{Error: "AI 调用失败：" + err.Error()}
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return &wsFileResult{Error: "AI 未返回内容，请稍后重试"}
+	}
+	if r.Mode == "commitmsg" {
+		text = wsGitAIMsgClean(text)
+	}
+	return wsGitResultPack(map[string]interface{}{"mode": r.Mode, "text": text})
 }
 
 // wsServerTree 列目录（相对路径解析到用户工作区，agentSafePath 防 .. 逃逸；路径为空=根目录）

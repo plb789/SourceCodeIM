@@ -10,7 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 // 与服务端一致的体积/次数上限
 const READ_MAX_CHARS = 50000;
@@ -896,7 +896,235 @@ function fileRevealLevel(username, p) {
     }
 }
 
-// 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}）
+// ===== 源代码管理（Trae CN 同款）：git 子命令本地执行 =====
+// execFile 异步执行（push/pull 可达分钟级，同步等待会阻塞主进程冻结客户端）；参数数组直传不经 shell，
+// 无注入面；-c core.quotepath=off 让中文文件名原样输出而非八进制转义。结果契约与服务端一致：
+// 成功/业务失败均 ok:true + content JSON（业务失败带 error 字段），仅 git 不存在等硬错误 ok:false。
+const GIT_SUB_SPEC = {
+    status:   { args: ['status', '--porcelain=v1', '-b'], timeout: 20000 },
+    diff:     { args: ['diff', 'HEAD', '--'],             timeout: 20000, needPath: true },
+    diffhead: { args: ['diff', 'HEAD'],                   timeout: 30000 },
+    diffcached: { args: ['diff', '--cached'],             timeout: 30000 },
+    diffrev:  { args: ['diff'],                           timeout: 60000, needTarget: true },
+    add:      { args: ['add', '--'],                      timeout: 30000, needPaths: true },
+    unstage:  { args: ['reset', '-q', 'HEAD', '--'],      timeout: 30000, needPaths: true },
+    discard:  { args: ['checkout', '-q', '--'],           timeout: 30000, needPaths: true },
+    commit:   { args: ['commit', '-q', '-m'],             timeout: 60000, needMsg: true },
+    log:      { args: ['log', '-30', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000 },
+    show:     { args: ['show', '--no-color', '--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000, needPath: true },
+    branches: { args: ['for-each-ref', 'refs/heads', '--format=%(refname:short)'], timeout: 20000 },
+    // 未跟踪文件全量清单（-z NUL 分隔防文件名解析错位）：git status 把未跟踪目录折叠为 "dir/"，前端用它展开
+    untracked: { args: ['ls-files', '--others', '--exclude-standard', '-z'], timeout: 20000 },
+    push:     { args: ['push'],                           timeout: 115000 },
+    pushu:    { args: ['push', '-u', 'origin'],           timeout: 115000, needBranch: true },
+    pull:     { args: ['pull', '--no-edit'],              timeout: 115000 },
+    init:     { args: ['init', '-q'],                     timeout: 30000 }
+};
+
+// git status --porcelain=v1 -b 输出解析（与服务端 wsGitStatusParse 同口径）
+function gitStatusParse(text) {
+    const changes = [];
+    let branch = '', upstream = '', ahead = 0, behind = 0, noCommits = false;
+    String(text || '').split('\n').forEach(function (raw) {
+        const ln = raw.replace(/\r$/, '');
+        if (!ln) return;
+        if (ln.indexOf('## ') === 0) {
+            const b = ln.slice(3);
+            if (b.indexOf('HEAD (no branch)') === 0) { branch = '(游离 HEAD)'; return; }
+            // 全新仓库（无任何提交）：git 输出 "## No commits yet on master"，末段才是真实分支名
+            const nc = b.match(/^No commits yet on (.+)$/);
+            if (nc) { branch = nc[1].trim(); noCommits = true; return; }
+            const j = b.indexOf('...');
+            if (j >= 0) {
+                branch = b.slice(0, j);
+                const rest = b.slice(j + 3);
+                const k = rest.search(/[\s\[]/);
+                upstream = k >= 0 ? rest.slice(0, k) : rest;
+            } else if (b) { branch = b; }
+            const s = b.indexOf('['), e = b.indexOf(']');
+            if (s >= 0 && e > s) {
+                b.slice(s + 1, e).split(',').forEach(function (part) {
+                    const f = part.trim().split(/\s+/);
+                    if (f.length === 2) {
+                        const n = parseInt(f[1], 10);
+                        if (!isNaN(n)) { if (f[0] === 'ahead') ahead = n; else if (f[0] === 'behind') behind = n; }
+                    }
+                });
+            }
+            return;
+        }
+        if (ln.length < 4) return;
+        const x = ln[0], y = ln[1];
+        if (x === '!' && y === '!') return; // .gitignore 忽略项
+        changes.push({ p: ln.slice(3), x: x, y: y });
+    });
+    return { branch: branch, upstream: upstream, ahead: ahead, behind: behind, no_commits: noCommits, changes: changes };
+}
+
+// 常见 git 失败场景中文引导：身份未配置（commit）/ 远程未配置（push/pull）——原文透传 + 追加可操作提示
+function gitErrorHint(msg, sub) {
+    if (/tell me who you are|user\.name/i.test(msg)) {
+        return msg + '\n—— 请先在控制台终端配置 git 身份（全局一次即可）：\n' +
+            'git config --global user.name "你的名字"\n' +
+            'git config --global user.email "你的邮箱@example.com"';
+    }
+    if ((sub === 'push' || sub === 'pushu' || sub === 'pull') &&
+        /does not appear to be a git repository|No configured push destination|could not read from remote repository| Repository does not exist/i.test(msg)) {
+        return msg + '\n—— 仓库尚未关联远程地址，请先在控制台终端执行：\n' +
+            'git remote add origin https://github.com/用户名/仓库名.git';
+    }
+    return msg;
+}
+
+// git log 输出解析（%H\x1f%h\x1f%s\x1f%an\x1f%at，首条为 HEAD）——与服务端 wsGitLogParse 同口径
+function gitLogParse(text) {
+    const commits = [];
+    String(text || '').split('\n').forEach(function (raw, i) {
+        const ln = raw.replace(/\r$/, '');
+        if (!ln) return;
+        const f = ln.split('\x1f');
+        if (f.length < 5) return;
+        commits.push({ h: f[0], sh: f[1], msg: f[2], an: f[3], at: parseInt(f[4], 10) || 0, head: i === 0 });
+    });
+    return commits;
+}
+
+// git show 输出拆分：首行 __META__ 头 + diff 正文——与服务端 wsGitShowSplit 同口径
+function gitShowSplit(text) {
+    let out = String(text || '');
+    if (out.indexOf('__META__') === 0) out = out.slice(8);
+    const idx = out.indexOf('\n');
+    if (idx < 0) return { meta: {}, diff: out };
+    const f = out.slice(0, idx).split('\x1f');
+    const meta = f.length >= 5
+        ? { h: f[0], sh: f[1], msg: f[2], an: f[3], at: parseInt(f[4], 10) || 0 }
+        : {};
+    return { meta: meta, diff: out.slice(idx + 1).replace(/^\n/, '') };
+}
+
+function gitOp(username, content) {
+    let r;
+    try { r = JSON.parse(content || '{}'); } catch (e) {
+        return Promise.resolve({ ok: false, error: 'git 请求解析失败' });
+    }
+    const spec = GIT_SUB_SPEC[r.sub];
+    if (!spec) return Promise.resolve({ ok: false, error: '未知 git 子命令' });
+    if (spec.needPath && !String(r.path || '').trim()) return Promise.resolve({ ok: false, error: r.sub === 'show' ? '缺少提交 hash' : '缺少差异文件路径' });
+    if (spec.needTarget && !String(r.target || '').trim()) return Promise.resolve({ ok: false, error: '请选择审查目标分支' });
+    if (spec.needPaths && (!r.paths || !r.paths.length)) return Promise.resolve({ ok: false, error: '缺少操作目标' });
+    if (spec.needMsg && !String(r.msg || '').trim()) return Promise.resolve({ ok: false, error: '请填写提交信息' });
+    if (spec.needBranch && !String(r.branch || '').trim()) return Promise.resolve({ ok: false, error: '缺少分支名' });
+    // add/unstage/discard/commit 分支会重新赋值拼接参数，必须 let（const 重赋值抛 TypeError）
+    let args = ['-c', 'core.quotepath=off'].concat(spec.args);
+    if (r.sub === 'diff') args.push(String(r.path));
+    if (r.sub === 'show') args.push(String(r.path));
+    if (r.sub === 'diffrev') args.push(String(r.target) + '...HEAD');
+    if (r.sub === 'add' || r.sub === 'unstage' || r.sub === 'discard') args = args.concat(r.paths.map(String));
+    if (r.sub === 'commit') args = args.concat(r.amend ? ['--amend'] : []).concat([String(r.msg)]);
+    if (r.sub === 'pushu') args.push(String(r.branch));
+    // log 需要二次执行拿未推送集合（origin/<branch>..HEAD）；失败=无上游 → 全部未推送
+    function execGit(exArgs, timeout) {
+        return new Promise(function (res2) {
+            execFile('git', exArgs, {
+                cwd: userRoot(username), timeout: timeout,
+                maxBuffer: 4 * 1024 * 1024, windowsHide: true
+            }, function (err, stdout, stderr) {
+                let buf;
+                try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
+                catch (e) { buf = Buffer.alloc(0); }
+                res2({ err: err, text: decodeOutput(buf) });
+            });
+        });
+    }
+    if (r.sub === 'log') {
+        const branch = String(r.branch || '').trim();
+        return execGit(args, spec.timeout).then(function (m) {
+            if (m.err) {
+                // 全新仓库 log 会报错：空历史静默返回（不算业务失败）
+                return { ok: true, content: JSON.stringify({ sub: 'log', commits: [] }) };
+            }
+            const commits = gitLogParse(m.text);
+            const unArgs = ['-c', 'core.quotepath=off', 'log', 'origin/' + branch + '..HEAD', '--format=%H'];
+            if (!branch) {
+                commits.forEach(function (c) { c.un = true; });
+                return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits }) };
+            }
+            return execGit(unArgs, 20000).then(function (um) {
+                if (um.err) {
+                    commits.forEach(function (c) { c.un = true; });
+                } else {
+                    const pushed = {};
+                    um.text.split('\n').forEach(function (ln) {
+                        ln = ln.trim();
+                        if (ln) pushed[ln] = true;
+                    });
+                    commits.forEach(function (c) { c.un = !pushed[c.h]; });
+                }
+                return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits }) };
+            });
+        });
+    }
+    return new Promise(function (resolve) {
+        execFile('git', args, {
+            cwd: userRoot(username), timeout: spec.timeout,
+            maxBuffer: 4 * 1024 * 1024, windowsHide: true
+        }, function (err, stdout, stderr) {
+            let buf;
+            try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
+            catch (e) { buf = Buffer.alloc(0); }
+            const outTxt = decodeOutput(buf);
+            if (err && err.code === 'ENOENT') {
+                resolve({ ok: false, error: '未检测到 git，请先安装 Git 并加入 PATH' });
+                return;
+            }
+            if (err) {
+                // status 下"不是仓库"是常态（引导前端初始化），不算失败
+                if (r.sub === 'status' && outTxt.indexOf('not a git repository') >= 0) {
+                    resolve({ ok: true, content: JSON.stringify({ sub: 'status', repo: false }) });
+                    return;
+                }
+                // 全新仓库 log 报错 → 空历史
+                if (r.sub === 'log') {
+                    resolve({ ok: true, content: JSON.stringify({ sub: 'log', commits: [] }) });
+                    return;
+                }
+                const msg = gitErrorHint(outTxt.trim() || (err.message || String(err)), r.sub);
+                resolve({ ok: true, content: JSON.stringify({ sub: r.sub, error: msg.slice(0, 8192) }) });
+                return;
+            }
+            if (r.sub === 'status') {
+                const st = gitStatusParse(outTxt);
+                st.sub = 'status'; st.repo = true;
+                resolve({ ok: true, content: JSON.stringify(st) });
+                return;
+            }
+            if (r.sub === 'diff' || r.sub === 'diffhead' || r.sub === 'diffcached' || r.sub === 'diffrev') {
+                resolve({ ok: true, content: JSON.stringify({ sub: 'diff', diff: outTxt }) });
+                return;
+            }
+            if (r.sub === 'show') {
+                const sp = gitShowSplit(outTxt);
+                sp.sub = 'show';
+                resolve({ ok: true, content: JSON.stringify(sp) });
+                return;
+            }
+            if (r.sub === 'branches') {
+                const list = outTxt.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+                resolve({ ok: true, content: JSON.stringify({ sub: 'branches', list: list }) });
+                return;
+            }
+            if (r.sub === 'untracked') {
+                // -z NUL 分隔；不 trim：文件名可能合法含首尾空格，仅滤空段（与服务端同口径）
+                const files = outTxt.split('\x00').filter(Boolean);
+                resolve({ ok: true, content: JSON.stringify({ sub: 'untracked', files: files }) });
+                return;
+            }
+            resolve({ ok: true, content: JSON.stringify({ sub: r.sub, output: outTxt.trim() }) });
+        });
+    });
+}
+
+// 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}；git 返回 Promise 由 IPC 层 await）
 function fileOp(username, payload) {
     const op = payload && payload.op;
     if (op === 'tree') return fileTreeLevel(username, payload.path);
@@ -908,6 +1136,7 @@ function fileOp(username, payload) {
     if (op === 'newfile') return fileCreateLevel(username, payload.path, payload.content, false);
     if (op === 'newdir') return fileCreateLevel(username, payload.path, payload.content, true);
     if (op === 'reveal') return fileRevealLevel(username, payload.path);
+    if (op === 'git') return gitOp(username, payload.content);
     return { ok: false, error: '未知操作' };
 }
 
