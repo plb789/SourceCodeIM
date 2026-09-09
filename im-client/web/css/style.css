@@ -4497,8 +4497,7 @@ html.m #list-panel.list-collapsed {
     flex: 1;
     min-width: 0;
     display: flex;
-    overflow-x: auto;
-    overscroll-behavior: contain;
+    overflow-x: auto; /* 纯横向滚动条，不加 contain：纵向滚轮可链式传给页面（吞掉则标签栏区域滚轮失灵） */
 }
 
 .ws-tab {
@@ -4563,7 +4562,7 @@ html.m #list-panel.list-collapsed {
 /* MD 渲染预览（复用 .ai-md 全套样式）+ 预览内边距 */
 .ws-view-md {
     padding: 10px 14px;
-    font-size: 12.5px;
+    font-size: 14px;
 }
 
 /* 预览代码区：等宽 + hljs 配色（与聊天代码块同主题） */
@@ -4693,8 +4692,7 @@ html.m #list-panel.list-collapsed {
     display: flex;
     gap: 6px;
     padding: 6px 10px;
-    overflow-x: auto;
-    overscroll-behavior: contain;
+    overflow-x: auto; /* 纯横向滚动条，不加 contain（同标签栏，防纵向滚轮被吞） */
     flex-shrink: 0;
     border-bottom: 1px solid var(--border, #e0e0e0);
 }
@@ -4721,8 +4719,7 @@ html.m #list-panel.list-collapsed {
 .ws-xlsx-body {
     flex: 1;
     min-height: 0;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: auto; /* 纵向实际由外层 .ws-view-body 承接（高度随内容增长），不能加 contain 否则吞滚轮 */
     padding: 10px 12px;
 }
 
@@ -4751,8 +4748,7 @@ html.m #list-panel.list-collapsed {
     flex-direction: column;
     align-items: center;
     padding: 10px 12px;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: auto; /* 纵向实际由外层 .ws-view-body 承接，不能加 contain 否则吞滚轮 */
 }
 
 .ws-pptx-bar {
@@ -4794,21 +4790,58 @@ html.m #list-panel.list-collapsed {
     background: #fff;
 }
 
-/* Word 文档预览（mammoth 转 HTML）：排版微调——标题层级/表格边框/图片限宽，整体沿用 ai-md 样式 */
+/* Word 文档预览（mammoth 转 HTML）：mammoth 只还原内容结构（标题/段落/表格/图片），
+   页面排版按"文档纸面"样式重建——居中白纸卡片 + Word 标准页边距比例 + 阅读级字号行距 */
+.ws-view-docx {
+    background: var(--bg, #fff);
+    max-width: 760px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 48px 56px;
+    min-height: 100%;
+    box-sizing: border-box;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--text, #000) 8%, transparent);
+    font-size: 15.5px;
+    line-height: 1.85;
+    color: var(--text, #333);
+}
+
+.ws-view-docx h1 { font-size: 1.9em; margin: 0.4em 0 0.8em; text-align: center; line-height: 1.4; }
+.ws-view-docx h2 { font-size: 1.45em; margin: 1.4em 0 0.6em; line-height: 1.4; }
+.ws-view-docx h3 { font-size: 1.2em; margin: 1.2em 0 0.5em; line-height: 1.4; }
+.ws-view-docx p { margin: 0.55em 0; text-align: justify; text-justify: inter-ideograph; }
 .ws-view-docx img {
+    display: block;
     max-width: 100%;
     height: auto;
+    margin: 14px auto;
+    border-radius: 2px;
 }
 
 .ws-view-docx table {
     border-collapse: collapse;
     width: 100%;
+    margin: 12px 0;
+    font-size: 0.92em;
 }
 
 .ws-view-docx td,
 .ws-view-docx th {
     border: 1px solid var(--border, #e0e0e0);
-    padding: 4px 8px;
+    padding: 6px 10px;
+}
+
+.ws-view-docx th { background: color-mix(in srgb, var(--hover, #f5f5f5) 60%, transparent); }
+
+.ws-view-docx ul,
+.ws-view-docx ol { margin: 0.55em 0; padding-left: 2em; }
+.ws-view-docx li { margin: 0.25em 0; }
+.ws-view-docx blockquote {
+    margin: 0.8em 0;
+    padding: 4px 14px;
+    border-left: 3px solid var(--primary);
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    color: var(--text-secondary, #666);
 }
 
 /* 预览区代码符号着色（Trae CN 同款观感）：hljs github-dark 主题未定义 punctuation（继承灰白基色），此处按语言作用域覆盖 */
@@ -4818,6 +4851,9 @@ html.m #list-panel.list-collapsed {
 }
 
 /* 代码区（预览/编辑共用）：行号列 + 代码列横排，滚动由 wrap 统一承接（自绘滑块挂在 wrap 上） */
+/* 注意：本容器只横向滚动（高度随内容增长，纵向滚动在外层 .ws-view-body），
+   不能加 overscroll-behavior:contain——Chromium 会对"光标下最近的滚动容器"应用 contain，
+   纵向无溢出时也吞掉滚轮且不向父级链式传递，表现为代码区滚轮失灵只能拖滑块 */
 .ws-code-wrap {
     flex: 1;
     min-width: 0;
@@ -4825,7 +4861,6 @@ html.m #list-panel.list-collapsed {
     display: flex;
     position: relative; /* 当前行高亮条(.ws-code-hl)的定位基准：必须相对本滚动区，否则偏移到分栏坐标系 */
     overflow: auto;
-    overscroll-behavior: contain;
     background: color-mix(in srgb, var(--hover, #fafafa) 55%, transparent);
 }
 
@@ -4839,7 +4874,7 @@ html.m #list-panel.list-collapsed {
     padding: 10px 8px 10px 6px;
     text-align: right;
     white-space: pre;
-    font-size: 12px;
+    font-size: 13.5px;
     line-height: 1.6;
     font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
     font-weight: 500;
@@ -4853,7 +4888,7 @@ html.m #list-panel.list-collapsed {
 .ws-view-pre {
     margin: 0;
     padding: 10px 12px;
-    font-size: 12px;
+    font-size: 13.5px;
     line-height: 1.6;
     font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
     font-weight: 500;
@@ -4910,7 +4945,7 @@ html.m #list-panel.list-collapsed {
     outline: none;
     resize: none;
     padding: 10px 12px;
-    font-size: 12px;
+    font-size: 13.5px;
     line-height: 1.6;
     font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
     font-weight: 500;
@@ -4920,7 +4955,7 @@ html.m #list-panel.list-collapsed {
     white-space: pre;           /* 行号对齐：不软换行 */
     overflow-x: auto;           /* 长行横向滚（纵向由 JS 撑高 + wrap 统一滚动） */
     overflow-y: hidden;
-    overscroll-behavior: contain;
+    /* 不能加 overscroll-behavior:contain——本容器纵向无溢出，contain 会吞掉滚轮不向 wrap 链式传递（编辑态滚轮失灵） */
 }
 
 /* 窄屏（手机 APP/小窗）隐藏文件面板，仅保留聊天 */

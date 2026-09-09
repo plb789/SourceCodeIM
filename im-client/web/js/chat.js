@@ -8738,6 +8738,14 @@
                 sbScheduleHide(sbLast);
             }
         });
+        // 终极兜底：滑块可见期间每次鼠标移动都强制重定位。
+        // 折叠/展开、滚动锚定钳制、面板布局变化等任何时序漏洞导致的位置残留，
+        // 都会在下一次 mousemove 时被覆盖（osbUpdate 只读几个缓存布局值，move 频率下无性能压力）
+        document.addEventListener('mousemove', function () {
+            if (sbLast && sbLast._osbUpdate && sbLast._osbThumb && sbLast._osbThumb.classList.contains('sb-show')) {
+                sbLast._osbUpdate();
+            }
+        }, { passive: true });
         function sbScheduleHide(el) {
             clearTimeout(el._osbHideT);
             el._osbHideT = setTimeout(function () {
@@ -8749,10 +8757,13 @@
                 }
             }, 180);
         }
-        // 标记/取消标记：容器加 .sb-hover，自绘滑块（挂在 body 上的 fixed 浮层）同步加 .sb-show 控制显隐
+        // 标记/取消标记：容器加 .sb-hover，自绘滑块（挂在 body 上的 fixed 浮层）同步加 .sb-show 控制显隐；
+        // 浮现时强制重定位（_osbUpdate）：折叠/展开等布局变化若发生在滑块显示期间，
+        // 任何遗漏的同步路径（滚动锚定钳制等）都会在下次浮现时被纠正，滑块不再残留旧位置
         function sbMark(el, on) {
             el.classList.toggle('sb-hover', on);
             if (el._osbThumb) el._osbThumb.classList.toggle('sb-show', on);
+            if (on && el._osbUpdate) el._osbUpdate();
         }
 
         // ===== 阶段四十五：自绘悬浮滚动条（微信同款：不占布局空间，消除容器边缘空隙） =====
@@ -8788,8 +8799,17 @@
                 }
             }, { passive: true });
             if (window.ResizeObserver) new ResizeObserver(osbUpdate).observe(el); // 容器尺寸变化同步（窗口缩放/侧栏切换）
-            // 列表重渲染（innerHTML 置空）后同步滚动范围（滑块在 body 上不会被移除，无需补回）
-            if (window.MutationObserver) new MutationObserver(osbUpdate).observe(el, { childList: true });
+            // 列表重渲染（innerHTML 置空）与内容高度变化同步滚动范围（滑块在 body 上不会被移除，无需补回）
+            // subtree+attributes：折叠/展开只切换子容器 display/class（不增删节点），childList 盲区导致滑块按旧高度绘制
+            // 再补一帧 rAF 复查：折叠可能触发 Chromium 滚动锚定（scroll anchoring）修正 scrollTop——
+            // 这类钳制不触发 scroll 事件，微任务时机量到的是钳制前布局，下一帧才是最终位置
+            if (window.MutationObserver) new MutationObserver(function () {
+                osbUpdate();
+                if (!el._osbRaf2) {
+                    el._osbRaf2 = requestAnimationFrame(function () { el._osbRaf2 = 0; osbUpdate(); });
+                }
+            }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            el._osbUpdate = osbUpdate; // 暴露给显隐联动：每次滑块浮现都强制重定位（sbMark 调用），杜绝残留旧位置
             el.addEventListener('load', osbUpdate, true); // 捕获阶段监听内部图片加载完成（高度变化影响滚动范围）
             // textarea 编辑输入改变内容高度（行增减），MutationObserver 感知不到 value 变化，input 时同步滑块
             if (el.tagName === 'TEXTAREA') el.addEventListener('input', osbUpdate);
