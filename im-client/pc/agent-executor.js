@@ -1092,6 +1092,11 @@ const GIT_SUB_SPEC = {
     untracked: { args: ['ls-files', '--others', '--exclude-standard', '-z'], timeout: 20000 },
     push:     { args: ['push'],                           timeout: 115000 },
     pushu:    { args: ['push', '-u', 'origin'],           timeout: 115000, needBranch: true },
+    // 关联远程仓库（面板推送引导闭环）：git remote add origin <url>，url 走 target 字段
+    remoteadd: { args: ['remote', 'add', 'origin'],       timeout: 20000, needUrl: true },
+    // 读当前远程地址（未关联 origin 时 git 报 "No such remote"，前端静默视为未关联）/ 修改远程地址
+    remoteurl: { args: ['remote', 'get-url', 'origin'],   timeout: 20000 },
+    remoteseturl: { args: ['remote', 'set-url', 'origin'], timeout: 20000, needUrl: true },
     pull:     { args: ['pull', '--no-edit'],              timeout: 115000 },
     init:     { args: ['init', '-q'],                     timeout: 30000 }
 };
@@ -1148,6 +1153,10 @@ function gitErrorHint(msg, sub) {
         return msg + '\n—— 仓库尚未关联远程地址，请先在控制台终端执行：\n' +
             'git remote add origin https://github.com/用户名/仓库名.git';
     }
+    if (sub === 'remoteadd' && /already exists/i.test(msg)) {
+        return msg + '\n—— 已关联过远程地址，如需修改请在控制台终端执行：\n' +
+            'git remote set-url origin 新地址';
+    }
     return msg;
 }
 
@@ -1184,8 +1193,17 @@ function gitOp(username, content) {
     }
     const spec = GIT_SUB_SPEC[r.sub];
     if (!spec) return Promise.resolve({ ok: false, error: '未知 git 子命令' });
+    // 项目根归口：带 proj 时 git 的 cwd 指向工作区子目录（safePath 防穿越，与服务端同口径）
+    let base = userRoot(username);
+    const projName = String(r.proj || '').trim();
+    if (projName) {
+        const pr = safePath(username, projName);
+        if (pr.err || !isDirectorySync(pr.full)) return Promise.resolve({ ok: false, error: '项目目录不存在' });
+        base = pr.full;
+    }
     if (spec.needPath && !String(r.path || '').trim()) return Promise.resolve({ ok: false, error: r.sub === 'show' ? '缺少提交 hash' : '缺少差异文件路径' });
     if (spec.needTarget && !String(r.target || '').trim()) return Promise.resolve({ ok: false, error: '请选择审查目标分支' });
+    if (spec.needUrl && !String(r.target || '').trim()) return Promise.resolve({ ok: false, error: '请填写远程仓库地址' });
     if (spec.needPaths && (!r.paths || !r.paths.length)) return Promise.resolve({ ok: false, error: '缺少操作目标' });
     if (spec.needMsg && !String(r.msg || '').trim()) return Promise.resolve({ ok: false, error: '请填写提交信息' });
     if (spec.needBranch && !String(r.branch || '').trim()) return Promise.resolve({ ok: false, error: '缺少分支名' });
@@ -1197,11 +1215,13 @@ function gitOp(username, content) {
     if (r.sub === 'add' || r.sub === 'unstage' || r.sub === 'discard') args = args.concat(r.paths.map(String));
     if (r.sub === 'commit') args = args.concat(r.amend ? ['--amend'] : []).concat([String(r.msg)]);
     if (r.sub === 'pushu') args.push(String(r.branch));
+    if (r.sub === 'remoteadd') args.push(String(r.target).trim()); // 远程地址是最后一个位置参数，缺失时 git 只会打印 usage
+    if (r.sub === 'remoteseturl') args.push(String(r.target).trim());
     // log 需要二次执行拿未推送集合（origin/<branch>..HEAD）；失败=无上游 → 全部未推送
     function execGit(exArgs, timeout) {
         return new Promise(function (res2) {
             execFile('git', exArgs, {
-                cwd: userRoot(username), timeout: timeout,
+                cwd: base, timeout: timeout,
                 maxBuffer: 4 * 1024 * 1024, windowsHide: true
             }, function (err, stdout, stderr) {
                 let buf;
@@ -1241,7 +1261,7 @@ function gitOp(username, content) {
     }
     return new Promise(function (resolve) {
         execFile('git', args, {
-            cwd: userRoot(username), timeout: spec.timeout,
+            cwd: base, timeout: spec.timeout,
             maxBuffer: 4 * 1024 * 1024, windowsHide: true
         }, function (err, stdout, stderr) {
             let buf;
@@ -1299,6 +1319,121 @@ function gitOp(username, content) {
     });
 }
 
+// ===== 项目体系（TRAE「打开文件夹/克隆 Git 仓库/最近」同款，与服务端同构）=====
+// 项目 = 工作区根下的一个子目录。文件树根/请求 path 天然以 proj 为前缀（safePath 校验覆盖），
+// PC 侧归口：项目元数据（userRoot/.im_proj.json）、git 的 cwd 指向、克隆/列表/切换 op。
+
+function isDirectorySync(p) {
+    try { return fs.statSync(p).isDirectory(); } catch (e) { return false; }
+}
+
+function projMetaPath(username) { return path.join(userRoot(username), '.im_proj.json'); }
+
+function projMetaLoad(username) {
+    const m = { cur: '', ts: {} };
+    try {
+        const d = JSON.parse(fs.readFileSync(projMetaPath(username), 'utf8'));
+        if (d && typeof d === 'object') {
+            m.cur = String(d.cur || '');
+            if (d.ts && typeof d.ts === 'object') {
+                Object.keys(d.ts).forEach(function (k) { m.ts[k] = Number(d.ts[k]) || 0; });
+            }
+        }
+    } catch (e) {}
+    return m;
+}
+
+function projMetaSave(username, m) {
+    try { fs.mkdirSync(userRoot(username), { recursive: true }); } catch (e) {}
+    try { fs.writeFileSync(projMetaPath(username), JSON.stringify(m)); } catch (e) {}
+}
+
+// 更新项目最近使用时间并把 cur 设为该项目（proj 空串=回到工作区根）
+function projTouch(username, projName) {
+    const m = projMetaLoad(username);
+    m.cur = String(projName || '').trim();
+    if (m.cur) m.ts[m.cur] = Math.floor(Date.now() / 1000);
+    projMetaSave(username, m);
+}
+
+// 项目列表：一级子目录（is_git 标记含 .git），按最近使用倒序，带当前项目
+function projListLevel(username) {
+    const ws = userRoot(username);
+    const m = projMetaLoad(username);
+    let entries;
+    try { entries = fs.readdirSync(ws, { withFileTypes: true }); } catch (e) {
+        return { ok: true, content: JSON.stringify({ proj: m.cur, list: [] }) };
+    }
+    const list = [];
+    for (const it of entries) {
+        if (!it.isDirectory() || it.name.startsWith('.')) continue;
+        list.push({ name: it.name, is_git: isDirectorySync(path.join(ws, it.name, '.git')), ts: m.ts[it.name] || 0 });
+    }
+    list.sort(function (a, b) { return b.ts - a.ts; });
+    return { ok: true, content: JSON.stringify({ proj: m.cur, list: list }) };
+}
+
+// 切换当前项目（content=JSON{proj}；空串=回到工作区根）
+function projOpenLevel(username, content) {
+    let projName = '';
+    try { projName = String((JSON.parse(content || '{}').proj) || '').trim(); } catch (e) {}
+    if (projName) {
+        const r = safePath(username, projName);
+        if (r.err || !isDirectorySync(r.full)) return { ok: false, error: '项目目录不存在' };
+    }
+    projTouch(username, projName);
+    return { ok: true };
+}
+
+// 克隆仓库到工作区子目录并自动切换（content=JSON{url,name,token}；token 仅内存拼接不落盘）
+function projCloneLevel(username, content) {
+    let req;
+    try { req = JSON.parse(content || '{}'); } catch (e) {
+        return Promise.resolve({ ok: false, error: '请求解析失败' });
+    }
+    let url = String(req.url || '').trim();
+    let name = String(req.name || '').trim();
+    const token = String(req.token || '').trim();
+    if (!name && url) name = url.slice(url.lastIndexOf('/') + 1).replace(/\.git$/, '');
+    if (!name || name.length > 100 || /[\\/]/.test(name) || name.indexOf('..') >= 0 || name.indexOf(':') >= 0) {
+        return Promise.resolve({ ok: false, error: '目录名不合法（仅限常规名称，不含路径分隔符）' });
+    }
+    if (!url || (!/^https:\/\//.test(url) && !/^git@/.test(url) && !/^ssh:\/\//.test(url))) {
+        return Promise.resolve({ ok: false, error: '仓库地址需以 https:// 、git@ 或 ssh:// 开头' });
+    }
+    if (/^https:\/\//.test(url) && token) url = url.replace('://', '://' + token + '@'); // PAT 仅出现在本次进程参数
+    const ws = userRoot(username);
+    const dest = path.join(ws, name);
+    if (fs.existsSync(dest)) return Promise.resolve({ ok: false, error: '目录已存在：' + name });
+    return new Promise(function (resolve) {
+        execFile('git', ['-c', 'core.quotepath=off', 'clone', '--progress', url, name], {
+            cwd: ws, timeout: 600000, maxBuffer: 4 * 1024 * 1024, windowsHide: true
+        }, function (err, stdout, stderr) {
+            if (err && err.code === 'ENOENT') {
+                resolve({ ok: false, error: '未检测到 git，请先安装 Git 并加入 PATH' });
+                return;
+            }
+            if (err) {
+                let buf;
+                try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
+                catch (e) { buf = Buffer.alloc(0); }
+                let msg = (decodeOutput(buf).trim() || err.message || String(err)).slice(0, 8192);
+                if (/Authentication failed|403/.test(msg)) {
+                    msg += '\n—— 私有仓库请在克隆弹窗填入访问 Token（GitHub：Settings → Developer settings → Personal access tokens）';
+                } else if (/not an empty directory/.test(msg)) {
+                    msg = '目录已存在：' + name;
+                } else if (/Repository not found|not found/i.test(msg)) {
+                    msg += '\n—— 仓库不存在或无权访问，请检查地址（私有仓库需填 Token）';
+                }
+                resolve({ ok: false, error: msg });
+                return;
+            }
+            projTouch(username, name);
+            resolve({ ok: true });
+        });
+    });
+}
+
 // 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}；git 返回 Promise 由 IPC 层 await）
 function fileOp(username, payload) {
     const op = payload && payload.op;
@@ -1311,6 +1446,9 @@ function fileOp(username, payload) {
     if (op === 'newfile') return fileCreateLevel(username, payload.path, payload.content, false);
     if (op === 'newdir') return fileCreateLevel(username, payload.path, payload.content, true);
     if (op === 'reveal') return fileRevealLevel(username, payload.path);
+    if (op === 'proj_list') return projListLevel(username);
+    if (op === 'proj_open') return projOpenLevel(username, payload.content);
+    if (op === 'proj_clone') return projCloneLevel(username, payload.content);
     if (op === 'git') return gitOp(username, payload.content);
     return { ok: false, error: '未知操作' };
 }

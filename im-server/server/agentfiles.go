@@ -129,6 +129,10 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 	if agentPcExec.Load() && s.hub.HasPC(username) && op != "gitai" {
 		// gitai（AI 提交信息/审查）必须服务端执行：AI 模型服务归口服务端，PC 不参与
 		if res := s.wsFileWaitPC(username, reqID, op, path, content, wsFileOpWaitFor(op)); res != nil {
+			// 当前项目服务端归口：PC 执行 proj_* 成功后，服务端同步写元数据（提示词构建读服务端这份）
+			if res.OK && (op == "proj_open" || op == "proj_clone") {
+				wsProjTouch(username, wsProjNameFromContent(op, content))
+			}
 			return res
 		}
 		logger.Warn("文件面板 PC 回传超时，回退服务端工作区（用户 %s op %s）", username, op)
@@ -137,6 +141,19 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 		}
 	}
 	return wsFileServerOp(username, op, path, content)
+}
+
+// wsProjNameFromContent 从 proj_* 请求 content 提取项目名（proj_open=proj 字段 / proj_clone=name 字段）
+func wsProjNameFromContent(op, content string) string {
+	var req struct {
+		Proj string `json:"proj"`
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal([]byte(content), &req)
+	if op == "proj_open" {
+		return strings.TrimSpace(req.Proj)
+	}
+	return strings.TrimSpace(req.Name)
 }
 
 // isAbsishPath 绝对路径判定（盘符/根分隔符，与 agentSafePath 口径一致）
@@ -237,6 +254,15 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 	case "reveal":
 		// 打开所在目录依赖本地资源管理器（explorer /select），服务端工作区无此概念
 		return &wsFileResult{Error: "打开所在目录仅 PC 客户端支持"}
+	case "proj_list":
+		// 项目列表：工作区一级子目录 + 当前项目 + 最近使用排序（TRAE「最近」同款）
+		return wsProjList(username)
+	case "proj_open":
+		// 切换当前项目（content=JSON{proj}）：目录须存在，写元数据
+		return wsProjOpen(username, content)
+	case "proj_clone":
+		// 克隆 Git 仓库到工作区子目录并自动切换（content=JSON{url,name,token}）
+		return wsProjClone(username, content)
 	case "git":
 		// 源代码管理：git 子命令执行（status/add/unstage/discard/commit/push/pull/init/diff）
 		return wsServerGit(username, content)
@@ -247,8 +273,12 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 	return &wsFileResult{Error: "未知操作"}
 }
 
-// wsFileOpWaitFor PC 回传等待上限按 op 区分：git push/pull 走网络（远端慢时可达分钟级）放宽到 130s，其余保持 15s
+// wsFileOpWaitFor PC 回传等待上限按 op 区分：git push/pull 走网络（远端慢时可达分钟级）放宽到 130s，
+// proj_clone 大仓库克隆可达分钟级放宽到 610s（须 ≥ PC 端克隆超时，否则超时回退会双执行），其余保持 15s
 func wsFileOpWaitFor(op string) time.Duration {
+	if op == "proj_clone" {
+		return 610 * time.Second
+	}
 	if op == "git" {
 		return 130 * time.Second
 	}
@@ -260,12 +290,13 @@ const wsGitMaxOutput = 512 << 10
 
 // wsGitReq 前端 git 请求体（content 为 JSON）
 type wsGitReq struct {
-	Sub    string   `json:"sub"`              // status/diff/diffhead/diffcached/diffrev/add/unstage/discard/commit/push/pushu/pull/init/log/show/branches
+	Sub    string   `json:"sub"`              // status/diff/diffhead/diffcached/diffrev/add/unstage/discard/commit/push/pushu/remoteadd/remoteurl/remoteseturl/pull/init/log/show/branches
 	Paths  []string `json:"paths,omitempty"`  // add/unstage/discard 目标
 	Path   string   `json:"path,omitempty"`   // diff 目标 / show 的提交 hash
 	Msg    string   `json:"msg,omitempty"`    // commit 信息
 	Branch string   `json:"branch,omitempty"` // log 未推送判定的当前分支 / push 无上游兜底
 	Target string   `json:"target,omitempty"` // diffrev 审查目标分支
+	Proj   string   `json:"proj,omitempty"`   // 当前项目（工作区子目录名）；空=工作区根本身
 	Amend  bool     `json:"amend,omitempty"`  // commit 追加模式（--amend 覆盖上一次提交）
 }
 
@@ -337,6 +368,21 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 			return nil, 0, errors.New("缺少分支名")
 		}
 		return []string{"push", "-u", "origin", r.Branch}, 120 * time.Second, nil
+	case "remoteadd":
+		// 关联远程仓库（面板推送引导闭环）：git remote add origin <url>，url 走 Target 字段
+		if strings.TrimSpace(r.Target) == "" {
+			return nil, 0, errors.New("请填写远程仓库地址")
+		}
+		return []string{"remote", "add", "origin", r.Target}, 20 * time.Second, nil
+	case "remoteurl":
+		// 读当前远程地址（未关联 origin 时 git 报 "No such remote"，前端静默视为未关联）
+		return []string{"remote", "get-url", "origin"}, 20 * time.Second, nil
+	case "remoteseturl":
+		// 修改远程地址：git remote set-url origin <新url>
+		if strings.TrimSpace(r.Target) == "" {
+			return nil, 0, errors.New("请填写远程仓库地址")
+		}
+		return []string{"remote", "set-url", "origin", r.Target}, 20 * time.Second, nil
 	case "pull":
 		return []string{"pull", "--no-edit"}, 120 * time.Second, nil
 	case "init":
@@ -458,6 +504,10 @@ func wsGitErrorHint(msg, sub string) string {
 			}
 		}
 	}
+	if sub == "remoteadd" && strings.Contains(low, "already exists") {
+		return msg + "\n—— 已关联过远程地址，如需修改请执行：\n" +
+			"git remote set-url origin 新地址"
+	}
 	return msg
 }
 
@@ -471,11 +521,20 @@ func wsServerGit(username, content string) *wsFileResult {
 	if err := json.Unmarshal([]byte(content), &r); err != nil {
 		return &wsFileResult{Error: "git 请求解析失败"}
 	}
+	// 项目根归口：带 proj 时 git 的 cwd 指向工作区子目录（agentSafePath 防穿越）
+	base := ws
+	if proj := strings.TrimSpace(r.Proj); proj != "" {
+		p, perr := agentSafePath(username, proj)
+		if perr != nil || !wsProjDirExists(p) {
+			return &wsFileResult{Error: "项目目录不存在"}
+		}
+		base = p
+	}
 	args, timeout, err := wsGitBuildArgs(&r)
 	if err != nil {
 		return &wsFileResult{Error: err.Error()}
 	}
-	out, gerr := wsGitExec(ws, args, timeout)
+	out, gerr := wsGitExec(base, args, timeout)
 	if gerr != nil {
 		// status 下"不是仓库"是常态（引导初始化），不算失败
 		if r.Sub == "status" && strings.Contains(gerr.Error(), "not a git repository") {
@@ -494,7 +553,7 @@ func wsServerGit(username, content string) *wsFileResult {
 		commits := wsGitLogParse(out)
 		// 未推送集合：origin/<branch>..HEAD 可解析则逐条标记；无上游/报错=全部未推送
 		if r.Branch != "" {
-			un, uerr := wsGitExec(ws, []string{"log", "origin/" + r.Branch + "..HEAD", "--format=%H"}, 30*time.Second)
+			un, uerr := wsGitExec(base, []string{"log", "origin/" + r.Branch + "..HEAD", "--format=%H"}, 30*time.Second)
 			if uerr != nil {
 				for _, c := range commits {
 					c["un"] = true
@@ -893,4 +952,168 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ===== 项目体系（TRAE「打开文件夹/克隆 Git 仓库/最近」同款）=====
+// 项目 = 工作区根下的一个子目录（一个仓库一个项目）。文件树根/请求 path 天然以 proj 为前缀，
+// 服务端只需归口三件事：项目元数据（当前项目+最近使用）、git 的 -C 指向、克隆/列表/切换 op。
+
+// wsProjMeta 项目元数据（持久化于工作区根 .im_proj.json，PC/服务端工作区同构）
+type wsProjMeta struct {
+	Cur string           `json:"cur"`
+	TS  map[string]int64 `json:"ts"`
+}
+
+func wsProjMetaPath(username string) (string, error) {
+	ws, err := agentWorkspaceDir(username)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(ws, ".im_proj.json"), nil
+}
+
+func wsProjMetaLoad(username string) *wsProjMeta {
+	m := &wsProjMeta{TS: map[string]int64{}}
+	p, err := wsProjMetaPath(username)
+	if err == nil {
+		if data, rerr := os.ReadFile(p); rerr == nil {
+			_ = json.Unmarshal(data, m)
+		}
+	}
+	if m.TS == nil {
+		m.TS = map[string]int64{}
+	}
+	return m
+}
+
+func wsProjMetaSave(username string, m *wsProjMeta) {
+	p, err := wsProjMetaPath(username)
+	if err != nil {
+		return
+	}
+	data, _ := json.Marshal(m)
+	_ = os.WriteFile(p, data, 0o644)
+}
+
+// wsProjTouch 更新项目最近使用时间并把 cur 设为该项目（proj 空串=回到工作区根，cur 置空）
+func wsProjTouch(username, proj string) {
+	m := wsProjMetaLoad(username)
+	m.Cur = strings.TrimSpace(proj)
+	if m.Cur != "" {
+		m.TS[m.Cur] = time.Now().Unix()
+	}
+	wsProjMetaSave(username, m)
+}
+
+func wsProjDirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
+}
+
+// wsProjValidName 克隆目录名合法性：禁路径分隔符/.. 与盘符（目录名不是路径）
+func wsProjValidName(name string) bool {
+	if name == "" || len(name) > 100 {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || strings.Contains(name, ":") {
+		return false
+	}
+	return filepath.Clean(name) == name
+}
+
+// wsProjList 项目列表：一级子目录（is_git 标记含 .git 仓库），按最近使用倒序，带当前项目
+func wsProjList(username string) *wsFileResult {
+	ws, err := agentWorkspaceDir(username)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	m := wsProjMetaLoad(username)
+	ents, _ := os.ReadDir(ws)
+	type projItem struct {
+		Name  string `json:"name"`
+		IsGit bool   `json:"is_git"`
+		TS    int64  `json:"ts"`
+	}
+	list := []projItem{}
+	for _, e := range ents {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // 隐藏目录（含 .im_proj.json 所在工作区根元数据）不作为项目
+		}
+		it := projItem{Name: e.Name(), TS: m.TS[e.Name()]}
+		if _, serr := os.Stat(filepath.Join(ws, e.Name(), ".git")); serr == nil {
+			it.IsGit = true
+		}
+		list = append(list, it)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].TS > list[j].TS })
+	data, _ := json.Marshal(map[string]interface{}{"proj": m.Cur, "list": list})
+	return &wsFileResult{OK: true, Content: string(data)}
+}
+
+// wsProjOpen 切换当前项目（content=JSON{proj}；空串=回到工作区根）
+func wsProjOpen(username, content string) *wsFileResult {
+	var req struct {
+		Proj string `json:"proj"`
+	}
+	_ = json.Unmarshal([]byte(content), &req)
+	proj := strings.TrimSpace(req.Proj)
+	if proj != "" {
+		p, err := agentSafePath(username, proj)
+		if err != nil || !wsProjDirExists(p) {
+			return &wsFileResult{Error: "项目目录不存在"}
+		}
+	}
+	wsProjTouch(username, proj)
+	return &wsFileResult{OK: true}
+}
+
+// wsProjClone 克隆仓库到工作区子目录并自动切换（content=JSON{url,name,token}）。
+// token 仅内存拼接 URL（私有仓库 PAT），不落盘不进日志；克隆进度由 git stderr 输出，完成后写元数据。
+func wsProjClone(username, content string) *wsFileResult {
+	var req struct {
+		URL   string `json:"url"`
+		Name  string `json:"name"`
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(content), &req); err != nil {
+		return &wsFileResult{Error: "请求解析失败"}
+	}
+	url := strings.TrimSpace(req.URL)
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		// 默认目录名取 URL 尾段（去 .git 后缀）
+		name = strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git")
+	}
+	if !wsProjValidName(name) {
+		return &wsFileResult{Error: "目录名不合法（仅限常规名称，不含路径分隔符）"}
+	}
+	if url == "" || (!strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "git@") && !strings.HasPrefix(url, "ssh://")) {
+		return &wsFileResult{Error: "仓库地址需以 https:// 、git@ 或 ssh:// 开头"}
+	}
+	if strings.HasPrefix(url, "https://") && strings.TrimSpace(req.Token) != "" {
+		url = strings.Replace(url, "://", "://"+strings.TrimSpace(req.Token)+"@", 1) // PAT 凭证仅出现在本次进程参数
+	}
+	ws, err := agentWorkspaceDir(username)
+	if err != nil {
+		return &wsFileResult{Error: err.Error()}
+	}
+	dest := filepath.Join(ws, name)
+	if _, serr := os.Stat(dest); serr == nil {
+		return &wsFileResult{Error: "目录已存在：" + name}
+	}
+	out, cerr := wsGitExec(ws, []string{"clone", "--progress", url, name}, 600*time.Second)
+	_ = out
+	if cerr != nil {
+		msg := cerr.Error()
+		if strings.Contains(msg, "Authentication failed") || strings.Contains(msg, "403") {
+			msg += "\n—— 私有仓库请在克隆弹窗填入访问 Token（GitHub：Settings → Developer settings → Personal access tokens）"
+		} else if strings.Contains(msg, "already exists and is not an empty directory") {
+			msg = "目录已存在：" + name
+		} else if strings.Contains(msg, "Repository not found") || strings.Contains(msg, "not found") {
+			msg += "\n—— 仓库不存在或无权访问，请检查地址（私有仓库需填 Token）"
+		}
+		return &wsFileResult{Error: msg}
+	}
+	wsProjTouch(username, name)
+	return &wsFileResult{OK: true}
 }

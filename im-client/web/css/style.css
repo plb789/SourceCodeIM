@@ -5749,6 +5749,58 @@ html.m #list-panel.list-collapsed {
     pointer-events: none;
 }
 
+/* ===== 文件预览 git 变更装饰（Trae CN 同款）：绿底=新增/修改行，行号栏红条=删除位置 ===== */
+/* 绿色底色条：与 hljs diff 加行（#033a16）同色系半透明叠加，不挡代码着色；左缘绿竖条强化边界感 */
+.ws-code-diff-add {
+    position: absolute;
+    left: 0;
+    z-index: 0;
+    background: rgba(46, 160, 67, 0.16);
+    box-shadow: inset 2px 0 0 rgba(46, 160, 67, 0.65);
+    pointer-events: none;
+}
+
+/* 删除位置标记：行号栏内红色小短条（sticky 行号栏内绝对定位，横向滚动不跑偏） */
+.ws-code-diff-del {
+    position: absolute;
+    left: 4px;
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    background: #f85149;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.ws-code-diff-del:hover {
+    background: #ff6f64;
+}
+
+/* 删除内容预览浮层：复用 .ws-hover-tip 容器（fixed 挂 body），头部红字 + 等宽删除行预览 */
+.ws-diff-tip-head {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f85149;
+    margin-bottom: 4px;
+}
+
+.ws-diff-tip-pre {
+    margin: 0;
+    padding: 6px 8px;
+    max-width: 340px;
+    max-height: 180px;
+    overflow: hidden;
+    background: color-mix(in srgb, #67060c 32%, transparent);
+    border-radius: 6px;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: #ffdcd7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    text-align: left;
+}
+
 /* 悬停定义提示（Trae CN 同款）：签名 + 定义行号，点击跳转；挂 body fixed 定位 */
 .ws-hover-tip {
     position: fixed;
@@ -5761,6 +5813,173 @@ html.m #list-panel.list-collapsed {
     padding: 8px 10px;
     cursor: pointer;
 }
+
+/* ===== 项目体系（TRAE「打开文件夹/克隆 Git 仓库/最近」同款）===== */
+/* ▾ 项目切换按钮（头部，与刷新/更多按钮同款基础样式，主题色跟随） */
+.ws-proj-btn {
+    font-size: 12px;
+    line-height: 1;
+    padding: 3px 7px;
+}
+
+/* 项目弹层：复用 ws-more-menu 容器样式，加宽放列表；最近项目列表纵向滚动自绘 */
+.ws-proj-menu {
+    min-width: 240px;
+    max-width: 300px;
+}
+
+.ws-proj-sec {
+    padding: 8px 14px 4px;
+    font-size: 11px;
+    color: var(--text-tertiary, #9098a8);
+    user-select: none;
+}
+
+.ws-proj-list {
+    max-height: 300px;
+    overflow-y: auto;
+    padding-bottom: 4px;
+}
+
+.ws-proj-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--text, #24292f);
+}
+
+.ws-proj-item:hover {
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.ws-proj-item.active {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+/* 色块缩写头像（TRAE「最近」列表同款）：主题色系彩色底 + 白字缩写 */
+.ws-proj-av {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--primary);
+}
+
+.ws-proj-item:nth-child(4n + 2) .ws-proj-av { background: #4d8f4d; }
+.ws-proj-item:nth-child(4n + 3) .ws-proj-av { background: #b0689d; }
+.ws-proj-item:nth-child(4n + 4) .ws-proj-av { background: #4d7fb0; }
+
+.ws-proj-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-proj-tag {
+    flex: none;
+    font-size: 9.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--text-tertiary, #9098a8);
+    border: 1px solid var(--border, #e0e0e0);
+    letter-spacing: 0.5px;
+}
+
+.ws-proj-cur {
+    flex: none;
+    width: 14px;
+    color: var(--primary);
+    font-weight: 700;
+    text-align: center;
+}
+
+.ws-proj-empty {
+    padding: 10px 14px 12px;
+    font-size: 12px;
+    color: var(--text-tertiary, #9098a8);
+    text-align: center;
+}
+
+/* 克隆弹窗（自绘，不用系统弹窗）：遮罩 + 居中卡片，三字段表单 */
+.ws-proj-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 11000;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 15vh;
+}
+
+.ws-proj-dlg {
+    width: 400px;
+    max-width: calc(100vw - 32px);
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    padding: 16px 18px;
+}
+
+.ws-proj-dlg-t {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text, #24292f);
+    margin-bottom: 12px;
+}
+
+.ws-proj-dlg-l {
+    font-size: 11.5px;
+    color: var(--text-secondary, #57606a);
+    margin: 10px 0 4px;
+}
+
+.ws-proj-dlg-i {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 9px;
+    font-size: 12.5px;
+    color: var(--text, #24292f);
+    background: var(--input-bg, #f6f8fa);
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    outline: none;
+}
+
+.ws-proj-dlg-i:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.ws-proj-dlg-err {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #d1242f;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.ws-proj-dlg-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
 
 /* 阶段七十六：JetBrains Mono 本地字体（Trae CN 同款代码字体，latin 子集，中文回退系统字体）——笔画比 Cascadia 饱满 */
 @font-face {

@@ -2321,6 +2321,10 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 		workRule += "服务端另为用户 " + username + " 保留了独立回退工作区：" + wsDir + "（仅在本地执行器离线时使用）。\n"
 		pathRule = "4. 文件操作优先使用相对路径（落在主工作区）；操作白名单内其他授权目录时使用完整绝对路径，禁止访问白名单外的任何路径。"
 	}
+	// 当前项目提示：用户在文件面板切换到工作区子项目后，引导 AI 把操作聚焦该目录（TRAE「打开文件夹」同款语义）
+	if cur := wsProjMetaLoad(username).Cur; strings.TrimSpace(cur) != "" {
+		workRule += "\n当前项目：用户正在工作区的子目录 \"" + cur + "/\" 内开发（已克隆的独立仓库）。本次任务的所有文件读写与命令执行请优先在该目录内进行（相对路径以 \"" + cur + "/\" 前缀落点，或命令中进入该目录），不要把文件散落到工作区根。\n"
+	}
 	// 阶段六十八：工具列表动态归口（与 agentToolDefinitions 注入 schema 同口径，未开启不宣传防误调用）
 	// 阶段七十四：补全 list_dir/grep/edit_file/delete_file
 	toolList := "read_file（读文件，支持 offset/limit 分段）、list_dir（列目录）、grep（按内容搜索文件）、" +

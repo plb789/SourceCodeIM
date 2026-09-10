@@ -162,12 +162,13 @@
     }
 
     // 输入弹窗：title 标题、placeholder 输入框占位提示、onOk 确定回调（参数为输入值）
-    function showPrompt(title, placeholder, onOk) {
+    function showPrompt(title, placeholder, onOk, prefill) {
+        if (typeof prefill !== 'string') prefill = '';
         modalTitle.textContent = title;
         modalText.textContent = '';
         modalText.classList.add('hidden');
         modalInput.classList.remove('hidden');
-        modalInput.value = '';
+        modalInput.value = prefill; // 预填（如修改远程地址时带入当前地址），不传则保持空输入
         modalInput.placeholder = placeholder || '';
         modalOk.textContent = '确定';
         modalExtra.classList.add('hidden'); // 输入弹窗无第二动作
@@ -4384,6 +4385,8 @@
         aside: null, treeEl: null, viewEl: null, viewBody: null, viewName: null, rootEl: null,
         btnEdit: null, btnSave: null, btnCancel: null, ta: null,
         visible: false, root: '', reqSeq: 0, pending: {},
+        // 项目体系（TRAE「打开文件夹/克隆 Git 仓库/最近」同款）：proj=当前项目名（''=工作区根），projList=项目缓存
+        proj: '', projList: [], projLoaded: false,
         expanded: {},  // 目录路径 → true（刷新后保持展开）
         dirRows: {},   // 目录路径 → { arrow, kids }
         fileRows: {},  // 文件路径 → 行元素（角标定位）
@@ -4406,6 +4409,7 @@
             mode: false, loaded: false, busy: false, repo: true, branch: '', upstream: '', ahead: 0, behind: 0,
             staged: [], changes: [], amend: false, log: null, logBusy: false,
             branches: null, reviewTarget: '', reviewBusy: false, lastReviewKey: '',
+            untrackedCache: null, // 未跟踪文件清单 TTL 缓存 {t, list}：文件预览"新文件整绿"判断用，防频繁全量拉取
             reviewCollapsed: false, logCollapsed: false, reviewH: 150, logH: 220
         },
         gitEl: null, gitBody: null, gitMsg: null, gitCommitBtn: null, headEl: null
@@ -4585,6 +4589,17 @@
         });
         head.appendChild(title);
         head.appendChild(wsPanel.rootEl);
+        // 项目切换（TRAE「打开文件夹/克隆仓库」同款入口）：▾ 弹层 = 克隆 Git 仓库 + 项目列表（最近优先）
+        var projBtn = document.createElement('button');
+        projBtn.className = 'ws-panel-btn ws-proj-btn';
+        projBtn.type = 'button';
+        projBtn.textContent = '▾';
+        projBtn.title = '切换项目 / 克隆 Git 仓库';
+        projBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            wsPanelProjMenu(projBtn);
+        });
+        head.appendChild(projBtn);
         head.appendChild(refreshBtn);
         head.appendChild(moreWrap);
         wsPanel.moreBtn = moreBtn;
@@ -4749,17 +4764,285 @@
         wsPanel.colView.classList.toggle('hidden', !show);
     }
 
-    // 面板显隐归口：Agent 模式开 + 当前会话为 AI 智能体 才显示（开面板即拉取根目录）
+    // 面板显隐归口：Agent 模式开 + 当前会话为 AI 智能体 才显示（开面板即恢复上次项目并拉取根目录）
     function wsPanelSetVisible(on) {
         if (on) {
             if (!wsPanelEnsure()) return;
             wsPanel.visible = true;
             wsPanel.aside.classList.remove('hidden');
-            wsPanelRefreshTree();
+            if (!wsPanel.projLoaded) {
+                wsPanelProjRestore().catch(function () { wsPanelRefreshTree(); });
+            } else {
+                wsPanelRefreshTree();
+            }
         } else {
             wsPanel.visible = false;
             if (wsPanel.aside) wsPanel.aside.classList.add('hidden');
         }
+    }
+
+    // 恢复上次项目（服务端归口 .im_proj.json）：有当前项目则树根定位项目目录，随后刷新
+    function wsPanelProjRestore() {
+        return wsPanelReq('proj_list', '').then(function (res) {
+            var d = {};
+            try { d = JSON.parse(res.content || '{}'); } catch (e) {}
+            wsPanel.projList = Array.isArray(d.list) ? d.list : [];
+            wsPanel.proj = String(d.proj || '');
+            wsPanel.projLoaded = true;
+            wsPanelProjSyncLabel();
+            wsPanelRefreshTree();
+            if (wsPanel.git.mode) wsPanelGitRefresh();
+        });
+    }
+
+    // ===== 项目体系 UI（TRAE 同款）：▾ 弹层 + 克隆弹窗 + 项目切换 =====
+
+    // git 视角路径（相对项目根）→ 文件面板 fs 视角（带 proj/ 前缀）
+    function wsProjFsPath(p) {
+        return (wsPanel.proj && p && p.indexOf(wsPanel.proj + '/') !== 0) ? wsPanel.proj + '/' + p : p;
+    }
+
+    // 根路径回显：项目模式下显示「项目名 · 完整根」，工作区根模式显示完整根
+    function wsPanelProjSyncLabel() {
+        if (!wsPanel.rootEl) return;
+        if (wsPanel.proj) {
+            wsPanel.rootEl.textContent = wsPanel.proj + ' · ' + wsPanel.root;
+        } else {
+            wsPanel.rootEl.textContent = wsPanel.root;
+        }
+        wsPanel.rootEl.title = wsPanel.proj ? ('当前项目：' + wsPanel.proj) : wsPanel.root;
+    }
+
+    // 切换当前项目：proj_open 落库 → 清空所有预览标签（旧项目路径失效）→ 重建树 → git 面板刷新
+    function wsPanelProjSwitch(name) {
+        wsPanelReq('proj_open', '', JSON.stringify({ proj: name })).then(function () {
+            wsPanel.proj = name || '';
+            var meta = wsPanel.projList.filter(function (it) { return it.name === name; })[0];
+            if (meta) meta.ts = Math.floor(Date.now() / 1000); // 本地列表最近使用置顶
+            wsPanelProjListRefresh();
+            Object.keys(wsPanel.tabs).forEach(wsPanelCloseTab);
+            wsPanel.expanded = {};
+            wsPanel.badges = {};
+            wsPanel.git.loaded = false; wsPanel.git.repo = true; wsPanel.git.branch = ''; wsPanel.git.log = null;
+            wsPanelProjSyncLabel();
+            wsPanelRefreshTree();
+            if (wsPanel.git.mode) wsPanelGitRefresh();
+        }).catch(function (err) {
+            showToast('切换失败：' + (err && err.message || err));
+        });
+    }
+
+    // 项目列表刷新（静默，弹层每次打开也拉一次保新鲜）
+    function wsPanelProjListRefresh() {
+        wsPanelReq('proj_list', '').then(function (res) {
+            var d = {};
+            try { d = JSON.parse(res.content || '{}'); } catch (e) {}
+            wsPanel.projList = Array.isArray(d.list) ? d.list : [];
+            if (typeof d.proj === 'string' && d.proj !== wsPanel.proj) wsPanel.proj = d.proj;
+        }).catch(function () {});
+    }
+
+    // 项目弹层（TRAE 菜单同款自绘浮层）：克隆 Git 仓库 / 工作区根 / 项目列表（最近使用倒序，✓ 标当前）
+    function wsPanelProjMenu(anchorBtn) {
+        var old = document.getElementById('ws-proj-menu');
+        if (old) { old.remove(); return; }
+        wsPanelMenuClose();
+        var menu = document.createElement('div');
+        menu.id = 'ws-proj-menu';
+        menu.className = 'ws-more-menu ws-proj-menu';
+        // 顶部：克隆 Git 仓库入口（TRAE 同款图标行）
+        var cloneItem = document.createElement('div');
+        cloneItem.className = 'ws-more-item';
+        var ci = document.createElement('span');
+        ci.className = 'ws-more-ico';
+        ci.textContent = '⤓';
+        var ct = document.createElement('span');
+        ct.className = 'ws-more-txt';
+        ct.textContent = '克隆 Git 仓库';
+        cloneItem.appendChild(ci);
+        cloneItem.appendChild(ct);
+        cloneItem.addEventListener('click', function () {
+            menu.remove();
+            wsPanelProjCloneDlg();
+        });
+        menu.appendChild(cloneItem);
+        // 工作区根入口（proj 非空时显示，回到根目录视图）
+        if (wsPanel.proj) {
+            var rootItem = document.createElement('div');
+            rootItem.className = 'ws-more-item';
+            var ri = document.createElement('span');
+            ri.className = 'ws-more-ico';
+            ri.textContent = '⌂';
+            var rt = document.createElement('span');
+            rt.className = 'ws-more-txt';
+            rt.textContent = '工作区根';
+            rootItem.appendChild(ri);
+            rootItem.appendChild(rt);
+            rootItem.addEventListener('click', function () {
+                menu.remove();
+                wsPanelProjSwitch('');
+            });
+            menu.appendChild(rootItem);
+        }
+        // 项目列表标题（有项目才显示）
+        var sec = document.createElement('div');
+        sec.className = 'ws-proj-sec';
+        sec.textContent = '项目';
+        menu.appendChild(sec);
+        var listWrap = document.createElement('div');
+        listWrap.className = 'ws-proj-list';
+        listWrap.textContent = '加载中…';
+        menu.appendChild(listWrap);
+        document.body.appendChild(menu);
+        // 定位：.ws-more-menu 的 absolute top:calc(100%+4px) 只适配 .ws-more 内嵌锚点；
+        // 本弹层挂 body，须改 fixed 视口坐标——锚按钮下方右对齐，下方放不下翻转到上方，四边留 8px
+        var br = anchorBtn.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.right = 'auto';
+        var mw = menu.offsetWidth || 240;
+        var mh = menu.offsetHeight || 0;
+        var ml = Math.min(Math.max(8, br.right - mw), window.innerWidth - mw - 8);
+        var mt = br.bottom + 4;
+        if (mt + mh > window.innerHeight - 8 && br.top - mh - 4 > 8) mt = br.top - mh - 4;
+        menu.style.left = Math.max(8, ml) + 'px';
+        menu.style.top = Math.max(8, mt) + 'px';
+        var close = function () { menu.remove(); document.removeEventListener('mousedown', outside, true); };
+        var outside = function (ev) { if (!menu.contains(ev.target) && ev.target !== anchorBtn) close(); };
+        setTimeout(function () { document.addEventListener('mousedown', outside, true); }, 0);
+        // 拉取列表渲染（色块缩写 + 名称 + git 标记 + ✓ 当前）——TRAE「最近」同款
+        wsPanelReq('proj_list', '').then(function (res) {
+            var d = {};
+            try { d = JSON.parse(res.content || '{}'); } catch (e) {}
+            wsPanel.projList = Array.isArray(d.list) ? d.list : [];
+            if (menu.parentNode === null) return; // 弹层已被关掉：丢弃
+            listWrap.textContent = '';
+            var list = wsPanel.projList;
+            if (!list.length) {
+                var empty = document.createElement('div');
+                empty.className = 'ws-proj-empty';
+                empty.textContent = '暂无项目，克隆一个仓库试试';
+                listWrap.appendChild(empty);
+                return;
+            }
+            list.forEach(function (it) {
+                var row = document.createElement('div');
+                row.className = 'ws-proj-item' + (it.name === wsPanel.proj ? ' active' : '');
+                var av = document.createElement('span');
+                av.className = 'ws-proj-av';
+                av.textContent = (it.name.slice(0, 1) || '?').toUpperCase();
+                var nm = document.createElement('span');
+                nm.className = 'ws-proj-name';
+                nm.textContent = it.name;
+                var tag = document.createElement('span');
+                tag.className = 'ws-proj-tag';
+                tag.textContent = it.is_git ? 'GIT' : 'DIR';
+                var cur = document.createElement('span');
+                cur.className = 'ws-proj-cur';
+                cur.textContent = it.name === wsPanel.proj ? '✓' : '';
+                row.appendChild(av);
+                row.appendChild(nm);
+                row.appendChild(tag);
+                row.appendChild(cur);
+                row.addEventListener('click', function () {
+                    close();
+                    if (it.name !== wsPanel.proj) wsPanelProjSwitch(it.name);
+                });
+                listWrap.appendChild(row);
+            });
+        }).catch(function () {
+            if (listWrap.parentNode) {
+                listWrap.textContent = '';
+                var err = document.createElement('div');
+                err.className = 'ws-proj-empty';
+                err.textContent = '项目列表加载失败';
+                listWrap.appendChild(err);
+            }
+        });
+    }
+
+    // 克隆弹窗（自绘三字段：仓库地址 / 目录名（可留空自动取尾段）/ 访问 Token（私有仓库可选））
+    function wsPanelProjCloneDlg() {
+        var old = document.getElementById('ws-proj-dlg');
+        if (old) old.remove();
+        var mask = document.createElement('div');
+        mask.id = 'ws-proj-dlg';
+        mask.className = 'ws-proj-mask';
+        var dlg = document.createElement('div');
+        dlg.className = 'ws-proj-dlg';
+        var ttl = document.createElement('div');
+        ttl.className = 'ws-proj-dlg-t';
+        ttl.textContent = '克隆 Git 仓库';
+        dlg.appendChild(ttl);
+        var fields = [
+            { key: 'url', label: '仓库地址', ph: 'https://github.com/用户名/仓库名.git', type: 'text' },
+            { key: 'name', label: '目录名（留空自动取地址尾段）', ph: '如 my-repo', type: 'text' },
+            { key: 'token', label: '访问 Token（私有仓库选填，不落盘）', ph: 'ghp_xxxxxxxx', type: 'password' }
+        ];
+        var inputs = {};
+        fields.forEach(function (f) {
+            var lb = document.createElement('div');
+            lb.className = 'ws-proj-dlg-l';
+            lb.textContent = f.label;
+            var inp = document.createElement('input');
+            inp.className = 'ws-proj-dlg-i';
+            inp.type = f.type;
+            inp.placeholder = f.ph;
+            inputs[f.key] = inp;
+            dlg.appendChild(lb);
+            dlg.appendChild(inp);
+        });
+        var errEl = document.createElement('div');
+        errEl.className = 'ws-proj-dlg-err hidden';
+        dlg.appendChild(errEl);
+        var btnRow = document.createElement('div');
+        btnRow.className = 'ws-proj-dlg-btns';
+        var cancel = document.createElement('button');
+        cancel.className = 'ws-panel-btn';
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        var ok = document.createElement('button');
+        ok.className = 'ws-panel-btn primary';
+        ok.type = 'button';
+        ok.textContent = '克隆';
+        btnRow.appendChild(cancel);
+        btnRow.appendChild(ok);
+        dlg.appendChild(btnRow);
+        mask.appendChild(dlg);
+        document.body.appendChild(mask);
+        var close = function () { mask.remove(); };
+        cancel.addEventListener('click', close);
+        mask.addEventListener('mousedown', function (ev) { if (ev.target === mask) close(); });
+        inputs.url.focus();
+        ok.addEventListener('click', function () {
+            var url = inputs.url.value.trim();
+            var name = inputs.name.value.trim();
+            var token = inputs.token.value.trim();
+            if (!/^(https?:\/\/|git@|ssh:\/\/)[^\s'"`]+$/.test(url)) {
+                errEl.textContent = '仓库地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            if (name && (name.length > 100 || /[\\/]/.test(name) || name.indexOf('..') >= 0 || name.indexOf(':') >= 0)) {
+                errEl.textContent = '目录名不合法（不含路径分隔符与 ..）';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            errEl.classList.add('hidden');
+            ok.disabled = true;
+            ok.textContent = '克隆中…';
+            wsPanelReq('proj_clone', '', JSON.stringify({ url: url, name: name, token: token }), 620000).then(function (res) {
+                if (!res.ok) throw new Error(res.error || '克隆失败');
+                close();
+                showToast('克隆完成');
+                var newName = name || url.slice(url.lastIndexOf('/') + 1).replace(/\.git$/, '');
+                wsPanelProjSwitch(newName); // 克隆成功自动切换到新项目（TRAE 同款体验）
+            }).catch(function (err) {
+                ok.disabled = false;
+                ok.textContent = '克隆';
+                errEl.textContent = err && err.message || String(err);
+                errEl.classList.remove('hidden');
+            });
+        });
     }
 
     // 面板请求归口（tree/read/save/git…），req_id 归属 + 超时（默认 20 秒；git push/pull 网络操作传更长）
@@ -4789,21 +5072,33 @@
         });
     }
 
-    // 刷新文件树：保留展开状态与角标，根目录重拉，已展开目录随渲染自动重载
+    // 刷新文件树：保留展开状态与角标，根目录重拉，已展开目录随渲染自动重载（根=当前项目目录）
     function wsPanelRefreshTree() {
         if (!wsPanel.visible || !wsPanel.treeEl) return;
         wsPanel.dirRows = {};
         wsPanel.fileRows = {};
         wsPanel.treeEl.textContent = '';
-        wsPanelLoadDir('', wsPanel.treeEl);
+        wsPanelLoadDir(wsPanel.proj || '', wsPanel.treeEl);
     }
 
     // ===== 源代码管理（Trae CN 同款）：工作区 git 面板 =====
     // 执行归口 wsPanelReq('git')：PC 在线走本地执行器（execFile 异步，不阻塞客户端），
     // 离线回退服务端工作区（服务器需装 git）。视图切换不销毁文件树状态。
 
-    // git 请求包装：硬错误（ok=false）与业务错误（content.error）统一抛出，成功返回解析后的 JSON
+    // git 请求包装：硬错误（ok=false）与业务错误（content.error）统一抛出，成功返回解析后的 JSON。
+    // 项目归口：自动携带 proj（git cwd=项目目录）；path/paths 若是文件面板视角（带 proj/ 前缀）剥为项目内相对路径
     function wsPanelGitReq(payload, timeoutMs) {
+        var proj = wsPanel.proj || '';
+        if (proj) {
+            var pre = proj + '/';
+            if (payload.path && payload.path.indexOf(pre) === 0) payload.path = payload.path.slice(pre.length);
+            if (payload.paths) {
+                payload.paths = payload.paths.map(function (p) {
+                    return (p && p.indexOf(pre) === 0) ? p.slice(pre.length) : p;
+                });
+            }
+            payload.proj = proj;
+        }
         var isNet = payload.sub === 'push' || payload.sub === 'pushu' || payload.sub === 'pull';
         return wsPanelReq('git', '', JSON.stringify(payload), timeoutMs || (isNet ? 125000 : 25000)).then(function (res) {
             if (!res.ok) throw new Error(res.error || 'git 操作失败');
@@ -4812,6 +5107,42 @@
             if (data.error) throw new Error(data.error);
             return data;
         });
+    }
+
+    // unified diff 解析：git diff 输出 → 行级变更标记数据（文件预览绿底/删除标记用）
+    // 返回 { added:Set<newLine0>, deleted:[{at:newLine0, lines:[被删行文本]}] }
+    // added=新文件中新增/修改行（0-based）；deleted.at=删除内容在新文件中的落点行（0-based，标记压在该行上缘）
+    function wsParseDiffHunks(diffText) {
+        var res = { added: new Set(), deleted: [] };
+        if (!diffText || /Binary files .* differ|GIT binary patch/.test(diffText)) return res;
+        var cur = -1;        // 当前新文件行号（1-based；-1=尚未进入 hunk）
+        var pend = null;     // 暂存中的删除组
+        function flush() {
+            if (pend && pend.lines.length) res.deleted.push(pend);
+            pend = null;
+        }
+        var rows = diffText.split('\n');
+        for (var i = 0; i < rows.length; i++) {
+            var ln = rows[i];
+            var m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(ln);
+            if (m) { flush(); cur = parseInt(m[1], 10); continue; } // hunk 头：cur=该 hunk 新文件起始行
+            if (cur < 0) continue;                                  // hunk 前的文件头（diff --git/+++/---/index 等）
+            if (ln.indexOf('\\ No newline at end of file') === 0) continue; // git 无换行结尾标记（'\\' 转义反斜杠）
+            var c = ln.charAt(0);
+            if (c === '+') {                    // 新增/修改行（1-based cur → 0-based cur-1）
+                if (pend && pend.lines.length) { pend.at = cur - 1; flush(); } // 修改块：删除组紧贴 + 行
+                res.added.add(cur - 1);
+                cur++;
+            } else if (c === '-') {             // 删除行：暂存，落点=下一条上下文/新增行
+                if (!pend) pend = { at: cur - 1, lines: [] };
+                pend.lines.push(ln.slice(1));
+            } else if (c === ' ' || ln === '') { // 上下文行（空行=上下文空行，diff 行首必带空格，防御空串）
+                if (pend && pend.lines.length) { pend.at = cur - 1; flush(); }
+                cur++;
+            } else { flush(); cur = -1; }        // 其余（新 hunk 间文件头等）：结束当前 hunk
+        }
+        flush();                                 // hunk 尾部删除组
+        return res;
     }
 
     // 视图切换：git 视图显示时隐藏树与文件树头部（git 有自己的头部），首次/每次切入自动刷新状态
@@ -4863,20 +5194,63 @@
         });
     }
 
+    // 关联远程仓库弹窗：自绘输入框收集远程地址；URL 非法时 toast 提示并携带上次输入重弹。
+    // prefill 为输入框预填值（修改远程地址时带入当前地址，选中即可改）
+    function wsPromptRemoteUrl(onOk, lastUrl, prefill) {
+        showPrompt('关联远程仓库', lastUrl || 'https://github.com/用户名/仓库名.git', function (url) {
+            // 除协议与无空白外，额外拒绝反引号/引号（从文档示例复制时易夹带的脏字符，会导致 remote URL 存脏数据）
+            if (!/^(https?:\/\/|git@|ssh:\/\/)[^\s'"`]+$/.test(url)) {
+                showToast('地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符');
+                wsPromptRemoteUrl(onOk, null, url); // 非法重弹：带上刚输入的值便于就地修正
+                return;
+            }
+            onOk(url);
+        }, prefill);
+    }
+
+    // 远程地址查看/修改弹窗：先读当前 origin 地址（未关联则静默预填空），确定后 set-url 更新
+    function wsPanelGitRemoteDlg() {
+        var edit = function (cur) {
+            wsPromptRemoteUrl(function (url) {
+                wsPanelGitAct({ sub: 'remoteseturl', target: url }, '远程地址已更新');
+            }, null, cur);
+        };
+        wsPanelGitReq({ sub: 'remoteurl' }).then(function (d) {
+            edit((d.output || '').trim());
+        }).catch(function () { edit(''); }); // 未关联 origin（No such remote）：预填空
+    }
+
     // git 动作归口（stage/unstage/discard/push/pull/init）：执行后刷新状态；pull 顺带刷新文件树（拉取可能改文件）
     function wsPanelGitAct(payload, doneTip) {
-        if (wsPanel.git.busy) return;
+        if (wsPanel.git.busy) return Promise.resolve(); // 忙碌时静默忽略，返回已决议 promise 便于链式调用
         wsPanel.git.busy = true;
         if (wsPanel.gitBody) wsPanel.gitBody.classList.add('git-busy');
-        wsPanelGitReq(payload).then(function () {
+        return wsPanelGitReq(payload).then(function () {
             if (doneTip) showToast(doneTip);
         }).catch(function (err) {
+            var msg = err && err.message || String(err);
             // push 无上游分支：自动改用 -u origin <branch> 兜底重推一次（TRAE 同款首次推送体验）
-            if (payload.sub === 'push' && /no upstream|上游/.test(err && err.message || '')) {
+            if (payload.sub === 'push' && /no upstream|上游/.test(msg)) {
                 wsPanel.git.busy = false;
                 return wsPanelGitAct({ sub: 'pushu', branch: wsPanel.git.branch }, doneTip);
             }
-            showToast('操作失败：' + (err && err.message || err));
+            // 仓库未关联远程地址：弹自绘输入框收集 URL → remoteadd → pushu 首推（面板内闭环，免去终端命令）
+            if ((payload.sub === 'push' || payload.sub === 'pushu') && /No configured push destination/i.test(msg)) {
+                wsPanel.git.busy = false;
+                if (wsPanel.git.noCommits) { showToast('请先提交至少一次，再关联远程推送'); return; }
+                wsPromptRemoteUrl(function (url) {
+                    wsPanelGitAct({ sub: 'remoteadd', target: url }).then(function () {
+                        return wsPanelGitAct({ sub: 'pushu', branch: wsPanel.git.branch }, doneTip || '远程已关联，推送成功');
+                    }).catch(function () {}); // 失败细节已由内层 toast 提示
+                });
+                return;
+            }
+            // 远程已存在（重复关联）：自动转 set-url 更新地址——同一弹窗既可首次关联也可随时改地址
+            if (payload.sub === 'remoteadd' && /already exists/i.test(msg)) {
+                wsPanel.git.busy = false; // 先释放，递归调用才能过 busy guard（同 no-upstream/无 remote 分支）
+                return wsPanelGitAct({ sub: 'remoteseturl', target: payload.target }, doneTip);
+            }
+            showToast('操作失败：' + msg);
         }).then(function () {
             wsPanel.git.busy = false;
             wsPanelGitRefresh().then(function () {
@@ -5112,8 +5486,15 @@
             pushB.textContent = '⬆';
             pushB.title = '推送（push）';
             pushB.addEventListener('click', function () { wsPanelGitAct({ sub: 'push' }, '已推送'); });
+            var rmB = document.createElement('button');
+            rmB.className = 'ws-panel-btn';
+            rmB.type = 'button';
+            rmB.textContent = '⇄';
+            rmB.title = '远程仓库地址（查看/修改）';
+            rmB.addEventListener('click', wsPanelGitRemoteDlg);
             head.appendChild(pullB);
             head.appendChild(pushB);
+            head.appendChild(rmB);
         }
         var helpB = document.createElement('button');
         helpB.className = 'ws-panel-btn ws-git-help-btn';
@@ -5756,9 +6137,10 @@
         });
     }
 
-    // 点击变更文件：跟踪中 → diff 预览标签；未跟踪 → 直接打开文件预览
+    // 点击变更文件：跟踪中 → diff 预览标签；未跟踪 → 直接打开文件预览。
+    // p 是 git 视角路径（相对项目根）：文件面板 open/read 需要 fs 视角（带 proj/ 前缀）
     function wsPanelGitOpenDiff(p, e) {
-        if (e && (e.x === '?' || e.y === '?')) { wsPanelOpen(p); return; }
+        if (e && (e.x === '?' || e.y === '?')) { wsPanelOpen(wsProjFsPath(p)); return; }
         var key = 'diff:' + p;
         wsPanel.viewEl.classList.remove('hidden');
         var idx = wsPanel.tabOrder.indexOf(key);
@@ -5775,9 +6157,95 @@
         }).catch(function (err) {
             var t = wsPanel.tabs[key];
             if (!t) return;
+            var msg = err && err.message || String(err);
+            // 仓库已 init 但尚无任何提交（HEAD 不存在）：以"整文件新增"为对比基线（Trae/VSCode 同款语义）
+            if (/bad revision 'HEAD'/i.test(msg)) {
+                wsPanelReq('read', wsProjFsPath(p)).then(function (res) {
+                    var tt = wsPanel.tabs[key];
+                    if (!tt) return;
+                    tt.loading = false;
+                    if (res.binary) { tt.error = '仓库尚未有任何提交，二进制文件暂无对比基线'; }
+                    else {
+                        var lines = (res.content || '').split('\n');
+                        if (lines.length && lines[lines.length - 1] === '') lines.pop(); // 去掉结尾换行产生的空串
+                        var pseudo = ['diff --git a/' + p + ' b/' + p, '--- /dev/null', '+++ b/' + p,
+                            '@@ -0,0 +1,' + lines.length + ' @@'];
+                        lines.forEach(function (l) { pseudo.push('+' + l); });
+                        tt.diffText = pseudo.join('\n');
+                    }
+                    if (wsPanel.activeTab === key) wsPanelRenderTab();
+                }).catch(function () {
+                    var tt = wsPanel.tabs[key];
+                    if (!tt) return;
+                    tt.loading = false;
+                    tt.error = '仓库尚未有任何提交，暂无对比基线';
+                    if (wsPanel.activeTab === key) wsPanelRenderTab();
+                });
+                return;
+            }
+            // 非 git 仓库：友好提示，不暴露 git 原始报错
+            if (/not a git repository/i.test(msg)) msg = '当前工作区不是 Git 仓库，无法对比差异';
             t.loading = false;
-            t.error = err && err.message || String(err);
+            t.error = msg;
             if (wsPanel.activeTab === key) wsPanelRenderTab();
+        });
+    }
+
+    // 未跟踪文件清单（10 秒 TTL 缓存）：diff 为空时判断"新文件整绿"用；失败静默回空清单
+    function wsPanelGitUntracked() {
+        var g = wsPanel.git;
+        var now = Date.now();
+        if (g.untrackedCache && now - g.untrackedCache.t < 10000) return Promise.resolve(g.untrackedCache.list);
+        return wsPanelGitReq({ sub: 'untracked' }).then(function (d) {
+            var list = d.files || [];
+            g.untrackedCache = { t: now, list: list };
+            return list;
+        });
+    }
+
+    // 文件预览 git 变更装饰（Trae CN 同款）：后台拉该文件 diff 解析行级变更，存 t.gitDecor 供渲染；
+    // 新增/修改行绿底、删除位置行号栏红条。任何 git 错误静默降级（不是仓库/无提交/未装 git 均不出提示）
+    function wsPanelLoadGitDecor(path) {
+        var t = wsPanel.tabs[path];
+        if (!t) return;
+        var apply = function (decor) {
+            var tt = wsPanel.tabs[path];
+            if (!tt) return;
+            tt.gitDecor = decor;
+            // 仅当前激活标签且非编辑态时重渲染；恢复纵横滚动位置防长文件跳顶
+            if (wsPanel.activeTab === path && !wsPanel.editing) {
+                var vb = wsPanel.viewBody;
+                var oldWrap = vb.querySelector('.ws-code-wrap');
+                var st = vb.scrollTop, sl = oldWrap ? oldWrap.scrollLeft : 0;
+                wsPanelRenderTab();
+                vb.scrollTop = st;
+                var nw = vb.querySelector('.ws-code-wrap');
+                if (nw) nw.scrollLeft = sl;
+            }
+        };
+        // 未跟踪新文件 → 整文件标绿（Trae 同款）：未跟踪清单带 TTL 缓存，未命中/失败静默
+        var tryUntrackedAllGreen = function () {
+            var key = String(path).replace(/\\/g, '/');
+            wsPanelGitUntracked().then(function (files) {
+                var tt = wsPanel.tabs[path];
+                if (!tt) return;
+                var hit = (files || []).some(function (f) { return String(f).replace(/\\/g, '/') === key; });
+                if (!hit) return;
+                var n = (tt.content || '').split('\n').length;
+                var all = new Set();
+                for (var i = 0; i < n; i++) all.add(i);
+                apply({ added: all, deleted: [] });
+            }).catch(function () {});
+        };
+        wsPanelGitReq({ sub: 'diff', path: path }).then(function (d) {
+            if (!wsPanel.tabs[path]) return; // 标签已关闭：丢弃迟到响应
+            var decor = wsParseDiffHunks(d.diff || '');
+            if (decor.added.size || decor.deleted.length) { apply(decor); return; }
+            tryUntrackedAllGreen(); // diff 为空：可能整文件未跟踪（新文件）
+        }).catch(function () {
+            // diff 失败（全新仓库无提交 HEAD 不存在/非仓库）：仍可识别未跟踪新文件整绿
+            if (!wsPanel.tabs[path]) return;
+            tryUntrackedAllGreen();
         });
     }
 
@@ -5790,10 +6258,9 @@
         loading.textContent = '加载中…';
         container.appendChild(loading);
         wsPanelReq('tree', path).then(function (res) {
-            if (path === '' && wsPanel.rootEl) {
+            if (path === (wsPanel.proj || '') && wsPanel.rootEl) {
                 wsPanel.root = res.root || '';
-                wsPanel.rootEl.textContent = wsPanel.root;
-                wsPanel.rootEl.title = wsPanel.root;
+                wsPanelProjSyncLabel();
             }
             container.textContent = '';
             if (!res.entries || !res.entries.length) {
@@ -5945,7 +6412,7 @@
     // 不整棵重建（保留其他目录展开态）；父级未渲染时回退整树刷新
     function wsPanelRefreshDir(key) {
         if (key === '') {
-            wsPanelLoadDir('', wsPanel.treeEl);
+            wsPanelLoadDir(wsPanel.proj || '', wsPanel.treeEl);
             return;
         }
         var d = wsPanel.dirRows[key];
@@ -6086,6 +6553,7 @@
             t.error = '';
             var ext = (path.replace(/^.*\./, '') || '').toLowerCase();
             t.isMd = ext === 'md' || ext === 'markdown'; // MD 文件走渲染预览（Trae CN 同款）
+            if (!t.binary && !t.isMd) wsPanelLoadGitDecor(path); // git 变更装饰（后台静默，失败无感）
             if (wsPanel.activeTab === path) wsPanelRenderTab();
         }).catch(function (err) {
             var t = wsPanel.tabs[path];
@@ -6854,6 +7322,62 @@
             fixedLine = (line0 === fixedLine) ? -1 : line0; // 点击固定当前行（主题色条），再点同行取消
             placeHl(hlFixed, fixedLine);
         });
+        // git 变更装饰（Trae CN 同款）：绿底=新增/修改行；行号栏红条=删除位置（悬停预览删除内容、点击开差异对比）
+        var decorTab = wsPanel.tabs[path];
+        var decor = decorTab && decorTab.gitDecor;
+        if (decor && (decor.added.size || decor.deleted.length)) {
+            var oldDTip = document.querySelector('.ws-diff-tip');
+            if (oldDTip) oldDTip.remove(); // 上一次渲染残留的删除预览浮层清理（重渲染后旧标记已随 DOM 销毁）
+            var dw = Math.max(wrap.scrollWidth, wrap.clientWidth);
+            decor.added.forEach(function (l0) { // 绿色底色条：与 .ws-code-hl 同款绝对定位覆盖（横向滚动随内容）
+                if (l0 < 0 || l0 >= lineCount) return;
+                var bar = document.createElement('div');
+                bar.className = 'ws-code-diff-add';
+                bar.style.top = (codeTop + l0 * LINE_H) + 'px';
+                bar.style.height = LINE_H + 'px';
+                bar.style.width = dw + 'px';
+                wrap.appendChild(bar);
+            });
+            var lnEl = wrap.querySelector('.ws-code-ln');
+            if (lnEl && decor.deleted.length) {
+                var lnPadTop = parseFloat(getComputedStyle(lnEl).paddingTop) || 0;
+                var dTip = null;
+                var hideDelTip = function () { if (dTip) { dTip.remove(); dTip = null; } };
+                decor.deleted.forEach(function (g) {
+                    if (g.at < 0 || g.at > lineCount) return;
+                    var mark = document.createElement('div');
+                    mark.className = 'ws-code-diff-del';
+                    mark.style.top = (lnPadTop + g.at * LINE_H - 1.5) + 'px'; // 压在删除落点行上缘
+                    mark.addEventListener('mouseenter', function () {
+                        hideDelTip();
+                        dTip = document.createElement('div');
+                        dTip.className = 'ws-hover-tip ws-diff-tip';
+                        var h = document.createElement('div');
+                        h.className = 'ws-diff-tip-head';
+                        h.textContent = '删除了 ' + g.lines.length + ' 行 · 点击查看差异对比';
+                        dTip.appendChild(h);
+                        var dp = document.createElement('pre');
+                        dp.className = 'ws-diff-tip-pre';
+                        dp.textContent = g.lines.slice(0, 8).join('\n') + (g.lines.length > 8 ? '\n…' : '');
+                        dTip.appendChild(dp);
+                        document.body.appendChild(dTip);
+                        var r = mark.getBoundingClientRect();
+                        dTip.style.left = Math.max(8, Math.min(r.right + 10, window.innerWidth - 360)) + 'px';
+                        dTip.style.top = Math.max(8, Math.min(r.top - 6, window.innerHeight - 180)) + 'px';
+                        dTip.style.display = 'block';
+                    });
+                    mark.addEventListener('mouseleave', hideDelTip);
+                    mark.addEventListener('click', function (e2) {
+                        e2.stopPropagation();
+                        hideDelTip();
+                        wsPanelGitOpenDiff(path, null); // 直达该文件完整差异对比标签
+                    });
+                    lnEl.appendChild(mark);
+                });
+                wrap.addEventListener('scroll', hideDelTip); // 滚动/点击别处时收浮层
+                wrap.addEventListener('mousedown', hideDelTip);
+            }
+        }
     }
 
     // 进入编辑模式（纯文本 textarea，等宽字体与预览一致；二进制/加载中/错误禁编辑）
@@ -6882,6 +7406,7 @@
             wsPanel.ta = null;
             wsPanelRenderTabs();
             wsPanelRenderTab();
+            wsPanelLoadGitDecor(path); // 保存后重拉变更装饰（绿底/删除标记随编辑即时更新）
             wsPanelRefreshTree();
         }).catch(function (err) {
             wsPanel.btnSave.disabled = false;
