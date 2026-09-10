@@ -126,10 +126,33 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.send('agent:bg', { username: username });
     },
     // ===== 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑） =====
-    // 渲染进程桥接：服务端下发的文件操作转发主进程执行（req = {username, op, path, content}）
+    // 渲染进程桥接：服务端下发的文件操作转发主进程执行（req = {username, op, path, content, req_id}）
     // 返回 Promise<{ok, error?, root?, entries?/content?, binary?, truncated?}>，结果由渲染进程经 WS 回传服务端
     workspaceOp: function (req) {
         return ipcRenderer.invoke('agent:fileop', req);
+    },
+    // 克隆进度多帧（proj_clone 专用）：主进程推送 {req_id,pct,stage,speed,sent}，渲染层转发 65 progress 帧到服务端
+    onWorkspaceProgress: function (callback) {
+        ipcRenderer.on('agent:fileop-progress', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // ===== 阶段七十八：克隆 Token 记忆（safeStorage 按 host 加密存本机，渲染层经 WS 面板请求场景调用） =====
+    tokenGet: function (host) {
+        return ipcRenderer.invoke('agent:token-get', { host: host });
+    },
+    tokenSet: function (host, token) {
+        return ipcRenderer.invoke('agent:token-set', { host: host, token: token });
+    },
+    // ===== 阶段八十一：SSH 快连簿（PC 本地存 host/port/user，无密码） =====
+    sshList: function () {
+        return ipcRenderer.invoke('agent:ssh-list');
+    },
+    sshSave: function (req) {
+        return ipcRenderer.invoke('agent:ssh-save', req);
+    },
+    sshDel: function (req) {
+        return ipcRenderer.invoke('agent:ssh-del', req);
     },
     // ===== 阶段七十七：控制台本地终端（Trae CN 同款多标签） =====
     // 手敲命令本地执行（纯本地环路不经服务端）：req={username, action:'open'|'input'|'stop'|'close', term_id, cmd?}

@@ -4122,6 +4122,19 @@
         add.title = (window.desktop && window.desktop.termOp) ? '新建终端' : '新建终端（仅 PC 客户端支持本地执行）';
         add.addEventListener('click', agentConsoleTermCreate);
         bar.appendChild(add);
+        // SSH 连接入口（仅 PC 端本地终端可用时显示）：快连弹窗 → 终端托管 ssh 会话
+        if (window.desktop && window.desktop.termOp && window.desktop.sshList) {
+            var sshBtn = document.createElement('button');
+            sshBtn.className = 'agent-console-tab-add';
+            sshBtn.type = 'button';
+            sshBtn.textContent = 'SSH';
+            sshBtn.style.width = 'auto';
+            sshBtn.style.padding = '0 7px';
+            sshBtn.style.fontSize = '10px';
+            sshBtn.title = '连接远程主机（SSH）';
+            sshBtn.addEventListener('click', agentConsoleSshDlg);
+            bar.appendChild(sshBtn);
+        }
     }
 
     // 切换标签：体显隐 + 输入行随终端标签显隐 + 提示符/停止按钮状态同步
@@ -4167,6 +4180,155 @@
             }
         }).catch(function () {
             agentConsoleTermAppend(tab, '✕ 终端打开失败（本地桥异常）。\r\n');
+        });
+    }
+
+    // ===== SSH 远程主机连接（阶段八十一）：快连弹窗 → 终端托管 ssh 会话 =====
+    // 快连簿存 PC 本地（host/port/user，无密码）；密码/密钥认证由 ssh 自身提示处理（远端 TTY 负责回显/关闭回显）
+    function agentConsoleSshDlg() {
+        var old = document.getElementById('ws-ssh-dlg');
+        if (old) old.remove();
+        var mask = document.createElement('div');
+        mask.id = 'ws-ssh-dlg';
+        mask.className = 'ws-proj-mask';
+        var dlg = document.createElement('div');
+        dlg.className = 'ws-proj-dlg';
+        var ttl = document.createElement('div');
+        ttl.className = 'ws-proj-dlg-t';
+        ttl.textContent = '连接远程主机（SSH）';
+        dlg.appendChild(ttl);
+        var fields = [
+            { key: 'host', label: '主机（IP 或域名）', ph: '如 192.168.1.10', type: 'text' },
+            { key: 'port', label: '端口（默认 22）', ph: '22', type: 'text' },
+            { key: 'user', label: '用户名（可留空）', ph: '如 root', type: 'text' }
+        ];
+        var inputs = {};
+        var bookEl = null;
+        fields.forEach(function (f, fi) {
+            var lb = document.createElement('div');
+            lb.className = 'ws-proj-dlg-l';
+            lb.textContent = f.label;
+            var inp = document.createElement('input');
+            inp.className = 'ws-proj-dlg-i';
+            inp.type = f.type;
+            inp.placeholder = f.ph;
+            inputs[f.key] = inp;
+            dlg.appendChild(lb);
+            dlg.appendChild(inp);
+            if (fi === 0) {
+                bookEl = document.createElement('div');
+                bookEl.className = 'ws-proj-dlg-recents';
+                dlg.appendChild(bookEl);
+            }
+        });
+        var errEl = document.createElement('div');
+        errEl.className = 'ws-proj-dlg-err hidden';
+        dlg.appendChild(errEl);
+        var btnRow = document.createElement('div');
+        btnRow.className = 'ws-proj-dlg-btns';
+        var cancel = document.createElement('button');
+        cancel.className = 'ws-panel-btn';
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        var ok = document.createElement('button');
+        ok.className = 'ws-panel-btn primary';
+        ok.type = 'button';
+        ok.textContent = '连接';
+        btnRow.appendChild(cancel);
+        btnRow.appendChild(ok);
+        dlg.appendChild(btnRow);
+        mask.appendChild(dlg);
+        document.body.appendChild(mask);
+
+        var close = function () { mask.remove(); };
+        cancel.addEventListener('click', close);
+        mask.addEventListener('mousedown', function (ev) { if (ev.target === mask) close(); });
+        inputs.host.focus();
+
+        // 快连簿渲染（点击回填，双击直连，右侧 × 删除）
+        window.desktop.sshList().then(function (res) {
+            var list = (res && res.list) || [];
+            if (!list.length || !bookEl) return;
+            list.forEach(function (it) {
+                var row = document.createElement('div');
+                row.className = 'ws-proj-dlg-ri';
+                var n = document.createElement('span');
+                n.className = 'ws-proj-dlg-ri-n';
+                n.textContent = it.name || (it.user ? it.user + '@' : '') + it.host;
+                var u = document.createElement('span');
+                u.className = 'ws-proj-dlg-ri-u';
+                u.textContent = (it.user ? it.user + '@' : '') + it.host + (it.port && it.port !== 22 ? ':' + it.port : '');
+                var del = document.createElement('span');
+                del.textContent = '✕';
+                del.style.cssText = 'color:#d1242f;cursor:pointer;flex-shrink:0;padding:0 2px;';
+                del.title = '删除此快连';
+                del.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    window.desktop.sshDel({ host: it.host, user: it.user || '', port: it.port || 22 }).then(function () { row.remove(); }).catch(function () {});
+                });
+                row.appendChild(n);
+                row.appendChild(u);
+                row.appendChild(del);
+                row.addEventListener('click', function () {
+                    inputs.host.value = it.host || '';
+                    inputs.port.value = it.port && it.port !== 22 ? String(it.port) : '';
+                    inputs.user.value = it.user || '';
+                    inputs.host.focus();
+                });
+                row.addEventListener('dblclick', function () { conn(it); });
+                bookEl.appendChild(row);
+            });
+        }).catch(function () {});
+
+        function conn(it) {
+            close();
+            agentConsoleTermCreateSsh(it.host, it.port || 22, it.user || '');
+        }
+
+        ok.addEventListener('click', function () {
+            var host = inputs.host.value.trim();
+            var port = parseInt(inputs.port.value, 10) || 22;
+            var user = inputs.user.value.trim();
+            if (!host) {
+                errEl.textContent = '主机不能为空';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            if (inputs.port.value.trim() && (!/^\d+$/.test(inputs.port.value.trim()) || port < 1 || port > 65535)) {
+                errEl.textContent = '端口需为 1-65535 的数字';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            if (window.desktop.sshSave) {
+                window.desktop.sshSave({ host: host, port: port, user: user, name: '' }).catch(function () {});
+            }
+            close();
+            agentConsoleTermCreateSsh(host, port, user);
+        });
+    }
+
+    // 新建 SSH 终端标签：term_id 独立命名空间（ssh 前缀），提示符=user@host，输入经执行器直写远端 stdin
+    function agentConsoleTermCreateSsh(host, port, user) {
+        if (!agentConsoleEnsure()) return;
+        var id = 'ssh' + (++agentConsole.seq) + '_' + (Date.now() % 100000);
+        var bodyEl = document.createElement('div');
+        bodyEl.className = 'agent-console-body hidden';
+        var label = (user ? user + '@' : '') + host;
+        var tab = { id: id, kind: 'term', ssh: true, name: label, bodyEl: bodyEl, cwd: label, running: false, hist: [], histIdx: -1, stick: true };
+        bodyEl.addEventListener('scroll', function () {
+            tab.stick = bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 40;
+        });
+        if (window._osbInit) window._osbInit(bodyEl);
+        agentConsole.root.insertBefore(bodyEl, agentConsole.inputWrap);
+        agentConsole.tabs.push(tab);
+        agentConsoleSwitchTab(id);
+        agentConsoleTermAppend(tab, '正在连接 ' + label + (port !== 22 ? ':' + port : '') + '…（首次连接自动接受主机指纹；密码/密钥口令在远端提示后输入）\r\n');
+        window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'ssh', term_id: id, host: host, port: port, user: user }).then(function (res) {
+            if (!res || res.ok !== true) {
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || 'SSH 连接失败') + '\r\n');
+            }
+        }).catch(function () {
+            agentConsoleTermAppend(tab, '✕ SSH 连接失败（本地桥异常）。\r\n');
         });
     }
 
@@ -4217,7 +4379,11 @@
             tab.running = false;
             var dur = f.duration_ms || 0;
             var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
-            agentConsoleTermAppend(tab, '进程已结束，退出码 ' + (f.exit_code || 0) + '，耗时 ' + durText + (f.over ? '（输出超限已截断）' : '') + '\r\n');
+            if (f.ssh) { // SSH 会话退出（exit 命令/连接断开）：区分文案，提示符恢复就绪态
+                agentConsoleTermAppend(tab, 'SSH 连接已关闭' + (f.exit_code ? '（退出码 ' + f.exit_code + '）' : '') + '\r\n');
+            } else {
+                agentConsoleTermAppend(tab, '进程已结束，退出码 ' + (f.exit_code || 0) + '，耗时 ' + durText + (f.over ? '（输出超限已截断）' : '') + '\r\n');
+            }
             tab.cwd = String(f.cwd || tab.cwd || '');
             if (agentConsole.active === tab.id) {
                 agentConsole.promptEl.textContent = tab.cwd + '>';
@@ -4733,11 +4899,15 @@
         }
         wsBindSplitter(splitL, colTree, '--ws-tree-w', 160, 480, 'ws_tree_w');
         wsBindSplitter(splitR, wsPanel.colView, '--ws-view-w', 240, 760, 'ws_view_w');
-        // 响应归路：服务端 63 帧按 req_id 投递
+        // 响应归路：服务端 63 帧按 req_id 投递；type=progress 为克隆进度中间帧（同 req_id 多帧，不结束 Promise）
         IMSocket.on(MSG.WS_FILE_RESP, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
             var ev;
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (ev.type === 'progress') {
+                if (wsPanel.onCloneProgress) { try { wsPanel.onCloneProgress(ev); } catch (err) {} }
+                return;
+            }
             if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'recv63', t: Date.now(), rid: ev.req_id });
             var p = wsPanel.pending[ev.req_id];
             if (!p) return;
@@ -4960,10 +5130,12 @@
         });
     }
 
-    // 克隆弹窗（自绘三字段：仓库地址 / 目录名（可留空自动取尾段）/ 访问 Token（私有仓库可选））
+    // 克隆弹窗（自绘：仓库地址 / 目录名（可留空自动取尾段）/ 访问 Token（私有仓库可选））
+    // P0：克隆中进度条（主题色）+ 取消克隆（63/65 progress 多帧驱动）；P1：最近克隆回填 + Token 记忆（PC safeStorage）
     function wsPanelProjCloneDlg() {
         var old = document.getElementById('ws-proj-dlg');
         if (old) old.remove();
+        var isPC = !!(window.desktop && window.desktop.tokenGet && window.desktop.tokenSet);
         var mask = document.createElement('div');
         mask.id = 'ws-proj-dlg';
         mask.className = 'ws-proj-mask';
@@ -4979,7 +5151,8 @@
             { key: 'token', label: '访问 Token（私有仓库选填，不落盘）', ph: 'ghp_xxxxxxxx', type: 'password' }
         ];
         var inputs = {};
-        fields.forEach(function (f) {
+        var recentsEl = null;
+        fields.forEach(function (f, fi) {
             var lb = document.createElement('div');
             lb.className = 'ws-proj-dlg-l';
             lb.textContent = f.label;
@@ -4990,10 +5163,44 @@
             inputs[f.key] = inp;
             dlg.appendChild(lb);
             dlg.appendChild(inp);
+            if (fi === 0) {
+                // 最近克隆列表（P1：proj_list 归口返回 recents，点击回填地址与目录名）
+                recentsEl = document.createElement('div');
+                recentsEl.className = 'ws-proj-dlg-recents';
+                dlg.appendChild(recentsEl);
+            }
         });
+        // Token 记忆（仅 PC 端：Electron safeStorage 按 host 加密存本机，浏览器端无此能力自动隐藏）
+        var rememberRow = null;
+        var rememberChk = null;
+        if (isPC) {
+            rememberRow = document.createElement('label');
+            rememberRow.className = 'ws-proj-dlg-remember';
+            rememberChk = document.createElement('input');
+            rememberChk.type = 'checkbox';
+            rememberChk.checked = true;
+            var rememberTxt = document.createElement('span');
+            rememberTxt.textContent = '记住此站点的 Token（本机加密保存）';
+            rememberRow.appendChild(rememberChk);
+            rememberRow.appendChild(rememberTxt);
+            dlg.appendChild(rememberRow);
+        }
         var errEl = document.createElement('div');
         errEl.className = 'ws-proj-dlg-err hidden';
         dlg.appendChild(errEl);
+        // 进度区（克隆中显示）：主题色进度条 + 阶段/速度状态行
+        var prog = document.createElement('div');
+        prog.className = 'ws-proj-dlg-prog';
+        var bar = document.createElement('div');
+        bar.className = 'ws-proj-dlg-bar';
+        var fill = document.createElement('div');
+        fill.className = 'ws-proj-dlg-fill';
+        bar.appendChild(fill);
+        var stageEl = document.createElement('div');
+        stageEl.className = 'ws-proj-dlg-stage';
+        prog.appendChild(bar);
+        prog.appendChild(stageEl);
+        dlg.appendChild(prog);
         var btnRow = document.createElement('div');
         btnRow.className = 'ws-proj-dlg-btns';
         var cancel = document.createElement('button');
@@ -5004,15 +5211,108 @@
         ok.className = 'ws-panel-btn primary';
         ok.type = 'button';
         ok.textContent = '克隆';
+        var stopBtn = document.createElement('button');
+        stopBtn.className = 'ws-panel-btn danger';
+        stopBtn.type = 'button';
+        stopBtn.textContent = '取消克隆';
+        stopBtn.style.display = 'none';
         btnRow.appendChild(cancel);
+        btnRow.appendChild(stopBtn);
         btnRow.appendChild(ok);
         dlg.appendChild(btnRow);
         mask.appendChild(dlg);
         document.body.appendChild(mask);
-        var close = function () { mask.remove(); };
+
+        var cloneReqId = '';      // 运行中克隆的 req_id（取消目标）
+        var canceled = false;     // 取消后忽略迟到错误展示
+        var urlFillSeq = 0;       // Token 回填竞态序号（url 快速变更时丢弃过期回填）
+
+        function fmtBytes(n) {
+            if (!n || n <= 0) return '';
+            var u = ['B', 'KB', 'MB', 'GB'], i = 0;
+            while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+            return (n >= 100 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i];
+        }
+
+        function hostOf(u) {
+            var m = /^(?:https?:\/\/|ssh:\/\/)(?:[^@/]+@)?([^@/:]+)/.exec(u) || /^git@([^:]+):/.exec(u);
+            return (m && m[1] || '').toLowerCase();
+        }
+
+        var close = function () {
+            wsPanel.onCloneProgress = null; // 解绑进度回调（弹窗生命周期内持有）
+            mask.remove();
+        };
+
+        // 进度帧归口：63（服务端直推/PC 65 转发）与 65 多帧统一走这里更新 UI
+        wsPanel.onCloneProgress = function (ev) {
+            if (!cloneReqId || ev.req_id !== cloneReqId) return;
+            prog.classList.add('on');
+            fill.style.width = Math.max(2, Math.min(100, ev.pct || 0)) + '%';
+            var extra = [];
+            if (ev.speed) extra.push(ev.speed);
+            var sentTxt = fmtBytes(ev.sent);
+            if (sentTxt) extra.push('已接收 ' + sentTxt);
+            stageEl.innerHTML = '';
+            var b = document.createElement('b');
+            b.textContent = (ev.pct || 0) + '%';
+            stageEl.appendChild(b);
+            stageEl.appendChild(document.createTextNode(' ' + (ev.stage || '克隆中') + (extra.length ? ' · ' + extra.join(' · ') : '')));
+        };
+
+        // 最近克隆列表渲染（拉取失败静默——列表属增强体验）
+        wsPanelReq('proj_list', '', '', 8000).then(function (res) {
+            var data = {};
+            try { data = JSON.parse(res.content || '{}'); } catch (e) {}
+            var list = data.recents || [];
+            if (!list.length || !recentsEl) return;
+            list.slice(0, 6).forEach(function (r) {
+                var it = document.createElement('div');
+                it.className = 'ws-proj-dlg-ri';
+                var n = document.createElement('span');
+                n.className = 'ws-proj-dlg-ri-n';
+                n.textContent = r.name || '';
+                var u = document.createElement('span');
+                u.className = 'ws-proj-dlg-ri-u';
+                u.textContent = r.url || '';
+                u.title = r.url || '';
+                it.appendChild(n);
+                it.appendChild(u);
+                it.addEventListener('click', function () {
+                    inputs.url.value = r.url || '';
+                    if (!inputs.name.value) inputs.name.value = r.name || '';
+                    inputs.url.focus();
+                });
+                recentsEl.appendChild(it);
+            });
+        }).catch(function () {});
+
+        // Token 自动回填（PC 端）：url 就绪后按 host 查本机加密存储，命中即回填并勾选记住
+        function maybeFillToken() {
+            if (!isPC) return;
+            var seq = ++urlFillSeq;
+            var host = hostOf(inputs.url.value.trim());
+            if (!host) return;
+            window.desktop.tokenGet(host).then(function (t) {
+                if (seq !== urlFillSeq || !t) return;
+                if (!inputs.token.value) inputs.token.value = t;
+                if (rememberChk) rememberChk.checked = true;
+            }).catch(function () {});
+        }
+        inputs.url.addEventListener('change', maybeFillToken);
+        inputs.url.addEventListener('blur', maybeFillToken);
+
         cancel.addEventListener('click', close);
         mask.addEventListener('mousedown', function (ev) { if (ev.target === mask) close(); });
         inputs.url.focus();
+        // 取消克隆：按 req_id 精确取消（服务端/PC 执行器双路归口），迟到结果按已取消处理
+        stopBtn.addEventListener('click', function () {
+            if (!cloneReqId) return;
+            canceled = true;
+            wsPanelReq('proj_clone_cancel', '', JSON.stringify({ target: cloneReqId }), 10000).catch(function () {});
+            close();
+            showToast('正在取消克隆…');
+        });
         ok.addEventListener('click', function () {
             var url = inputs.url.value.trim();
             var name = inputs.name.value.trim();
@@ -5030,26 +5330,52 @@
             errEl.classList.add('hidden');
             ok.disabled = true;
             ok.textContent = '克隆中…';
-            wsPanelReq('proj_clone', '', JSON.stringify({ url: url, name: name, token: token }), 620000).then(function (res) {
+            cancel.style.display = 'none';
+            stopBtn.style.display = '';
+            prog.classList.add('on');
+            fill.style.width = '2%';
+            stageEl.innerHTML = '';
+            stageEl.appendChild(document.createTextNode('正在连接仓库…'));
+            var req = wsPanelReq('proj_clone', '', JSON.stringify({ url: url, name: name, token: token }), 620000);
+            cloneReqId = req.reqId;
+            req.then(function (res) {
                 if (!res.ok) throw new Error(res.error || '克隆失败');
+                if (isPC && rememberChk) {
+                    window.desktop.tokenSet(hostOf(url), rememberChk.checked ? token : '').catch(function () {});
+                }
                 close();
                 showToast('克隆完成');
                 var newName = name || url.slice(url.lastIndexOf('/') + 1).replace(/\.git$/, '');
                 wsPanelProjSwitch(newName); // 克隆成功自动切换到新项目（TRAE 同款体验）
             }).catch(function (err) {
-                ok.disabled = false;
-                ok.textContent = '克隆';
-                errEl.textContent = err && err.message || String(err);
-                errEl.classList.remove('hidden');
+                var msg = err && err.message || String(err);
+                close();
+                if (canceled || msg === '已取消') { showToast('克隆已取消'); return; }
+                showToast('克隆失败：' + msg.split('\n')[0].slice(0, 80));
+                // 复开弹窗回填原值与错误，便于修正重试
+                wsPanelProjCloneDlg();
+                var dlg2 = document.getElementById('ws-proj-dlg');
+                if (dlg2) {
+                    var ins = dlg2.querySelectorAll('.ws-proj-dlg-i');
+                    if (ins[0]) ins[0].value = url;
+                    if (ins[1]) ins[1].value = name;
+                    if (ins[2]) ins[2].value = token;
+                    var e2 = dlg2.querySelector('.ws-proj-dlg-err');
+                    if (e2) {
+                        e2.textContent = msg;
+                        e2.classList.remove('hidden');
+                    }
+                }
             });
         });
     }
 
-    // 面板请求归口（tree/read/save/git…），req_id 归属 + 超时（默认 20 秒；git push/pull 网络操作传更长）
+    // 面板请求归口（tree/read/save/git…），req_id 归属 + 超时（默认 20 秒；git push/pull 网络操作传更长）。
+    // reqId 挂在返回 Promise 上（p.reqId），克隆取消按钮等场景需拿到 target
     function wsPanelReq(op, path, content, timeoutMs) {
-        return new Promise(function (resolve, reject) {
-            if (!wsPanelEnsure()) { reject(new Error('面板未就绪')); return; }
-            var reqId = 'fp' + (++wsPanel.reqSeq) + '_' + Date.now();
+        if (!wsPanelEnsure()) return Promise.reject(new Error('面板未就绪'));
+        var reqId = 'fp' + (++wsPanel.reqSeq) + '_' + Date.now();
+        var p = new Promise(function (resolve, reject) {
             var rec = {
                 resolve: resolve, reject: reject,
                 timer: setTimeout(function () {
@@ -5070,6 +5396,8 @@
                 reject(new Error('连接不可用'));
             }
         });
+        p.reqId = reqId;
+        return p;
     }
 
     // 刷新文件树：保留展开状态与角标，根目录重拉，已展开目录随渲染自动重载（根=当前项目目录）
@@ -7797,14 +8125,14 @@
             if (!ev || !ev.step) return;
             if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
         });
-        // 阶段七十六：工作区文件面板本地操作桥接（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
+        // 阶段七十六：工作区文件面板本地操作桥（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
         IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
             var ev;
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
             if (!ev || !ev.req_id || !ev.op) return;
             if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'recv64', t: Date.now(), rid: ev.req_id });
-            window.desktop.workspaceOp({ username: IMSocket.getUsername(), op: ev.op, path: ev.path || '', content: ev.content || '' }).then(function (res) {
+            window.desktop.workspaceOp({ username: IMSocket.getUsername(), op: ev.op, path: ev.path || '', content: ev.content || '', req_id: ev.req_id }).then(function (res) {
                 if (window.desktop && window.desktop.fileopTrace) window.desktop.fileopTrace({ phase: 'send65', t: Date.now() });
                 IMSocket.send({
                     msg_type: MSG.PC_FILE_RESP,
@@ -7824,6 +8152,21 @@
                 });
             });
         });
+        // 克隆进度多帧桥（仅 PC 端）：主进程执行器 stderr 解析 → IPC 推帧 → 65 progress 帧上行服务端 → 63 下发 web
+        if (window.desktop && window.desktop.onWorkspaceProgress && !window._wsCloneProgressBound) {
+            window._wsCloneProgressBound = true;
+            window.desktop.onWorkspaceProgress(function (p) {
+                if (!p || !p.req_id) return;
+                IMSocket.send({
+                    msg_type: MSG.PC_FILE_RESP,
+                    from_user: IMSocket.getUsername(),
+                    content: JSON.stringify({
+                        op: 'proj_clone', req_id: p.req_id, type: 'progress',
+                        pct: p.pct || 0, stage: p.stage || '', speed: p.speed || '', sent: p.sent || 0
+                    })
+                });
+            });
+        }
     }
 
     // 阶段四十三：代码块渲染（豆包同款：标题栏=语言名+复制按钮；highlight.js 本地语法高亮，

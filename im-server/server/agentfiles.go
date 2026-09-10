@@ -8,14 +8,17 @@ package server
 // 所有请求按 req_id 归属（web 上行 62 携带，下行 63 原样带回），PC 回传超时自动回退服务端。
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,6 +123,19 @@ func (s *Server) wsFileSendResp(username, op, reqID string, res *wsFileResult) {
 	s.sendToUser(username, out)
 }
 
+// wsCloneProgressSend 下行 63 进度中间帧（proj_clone 专用：同 req_id 多帧，前端仅更新进度 UI 不结束 Promise）
+func (s *Server) wsCloneProgressSend(username, reqID string, pct int, stage, speed string, sent int64) {
+	data, _ := json.Marshal(map[string]interface{}{
+		"op": "proj_clone", "req_id": reqID, "type": "progress",
+		"pct": pct, "stage": stage, "speed": speed, "sent": sent,
+	})
+	out, _ := json.Marshal(protocol.Message{
+		MsgType: protocol.MsgTypeWsFileResp, FromUser: "系统", ToUser: username,
+		Content: string(data), Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, out)
+}
+
 // wsFileDispatch 执行环境分派：PC 在线转发本地（64/65），离线/超时回退服务端工作区。
 // 绝对路径是 PC 本地概念（沙箱授权目录），服务端回退模式不支持。
 func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFileResult {
@@ -132,6 +148,9 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 			// 当前项目服务端归口：PC 执行 proj_* 成功后，服务端同步写元数据（提示词构建读服务端这份）
 			if res.OK && (op == "proj_open" || op == "proj_clone") {
 				wsProjTouch(username, wsProjNameFromContent(op, content))
+				if op == "proj_clone" {
+					wsProjRecentAdd(username, wsProjURLFromContent(content), wsProjNameFromContent(op, content))
+				}
 			}
 			return res
 		}
@@ -140,7 +159,14 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 			return &wsFileResult{Error: "PC 端无响应，本地绝对路径不可用"}
 		}
 	}
-	return wsFileServerOp(username, op, path, content)
+	// 克隆进度推送闭包：服务端流式克隆 → 63 中间帧实时下发（进度归口用户+req_id）
+	var push wsProgressFn
+	if op == "proj_clone" {
+		push = func(pct int, stage, speed string, sent int64) {
+			s.wsCloneProgressSend(username, reqID, pct, stage, speed, sent)
+		}
+	}
+	return wsFileServerOp(username, reqID, op, path, content, push)
 }
 
 // wsProjNameFromContent 从 proj_* 请求 content 提取项目名（proj_open=proj 字段 / proj_clone=name 字段）
@@ -154,6 +180,15 @@ func wsProjNameFromContent(op, content string) string {
 		return strings.TrimSpace(req.Proj)
 	}
 	return strings.TrimSpace(req.Name)
+}
+
+// wsProjURLFromContent 从 proj_clone 请求 content 提取原始仓库地址（recents 记录用）
+func wsProjURLFromContent(content string) string {
+	var req struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal([]byte(content), &req)
+	return strings.TrimSpace(req.URL)
 }
 
 // isAbsishPath 绝对路径判定（盘符/根分隔符，与 agentSafePath 口径一致）
@@ -214,9 +249,19 @@ func (s *Server) handlePcFileResp(c *Client, msg *protocol.Message) {
 		Content string        `json:"content"`
 		Binary  bool          `json:"binary"`
 		Trunc   bool          `json:"truncated"`
+		Type    string        `json:"type"` // "progress"：克隆进度中间帧（同 req_id 多帧，不结束等待）
+		Pct     int           `json:"pct"`
+		Stage   string        `json:"stage"`
+		Speed   string        `json:"speed"`
+		Sent    int64         `json:"sent"`
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.ReqID == "" {
 		logger.Warn("文件面板 65 帧解析失败（用户 %s）：%s", c.username, msg.Content)
+		return
+	}
+	// PC 克隆进度帧：原样转发 web（63 中间帧），不投递等待通道（最终帧才收口）
+	if req.Type == "progress" {
+		s.wsCloneProgressSend(c.username, req.ReqID, req.Pct, req.Stage, req.Speed, req.Sent)
 		return
 	}
 	wsFileMu.Lock()
@@ -232,8 +277,8 @@ func (s *Server) handlePcFileResp(c *Client, msg *protocol.Message) {
 	}
 }
 
-// wsFileServerOp 服务端工作区执行（PC 离线回退）
-func wsFileServerOp(username, op, path, content string) *wsFileResult {
+// wsFileServerOp 服务端工作区执行（PC 离线回退）；push 仅 proj_clone 使用（进度中间帧推送）
+func wsFileServerOp(username, reqID, op, path, content string, push wsProgressFn) *wsFileResult {
 	switch op {
 	case "tree":
 		return wsServerTree(username, path)
@@ -261,8 +306,11 @@ func wsFileServerOp(username, op, path, content string) *wsFileResult {
 		// 切换当前项目（content=JSON{proj}）：目录须存在，写元数据
 		return wsProjOpen(username, content)
 	case "proj_clone":
-		// 克隆 Git 仓库到工作区子目录并自动切换（content=JSON{url,name,token}）
-		return wsProjClone(username, content)
+		// 克隆 Git 仓库到工作区子目录并自动切换（content=JSON{url,name,token}）：流式进度 + 可取消
+		return wsProjClone(username, reqID, content, push)
+	case "proj_clone_cancel":
+		// 取消运行中克隆（content=JSON{target:克隆请求的 req_id}）：kill 进程 + 清理半成品目录
+		return wsProjCloneCancel(username, content)
 	case "git":
 		// 源代码管理：git 子命令执行（status/add/unstage/discard/commit/push/pull/init/diff）
 		return wsServerGit(username, content)
@@ -960,8 +1008,16 @@ func min(a, b int) int {
 
 // wsProjMeta 项目元数据（持久化于工作区根 .im_proj.json，PC/服务端工作区同构）
 type wsProjMeta struct {
-	Cur string           `json:"cur"`
-	TS  map[string]int64 `json:"ts"`
+	Cur     string           `json:"cur"`
+	TS      map[string]int64 `json:"ts"`
+	Recents []wsProjRecent   `json:"recents,omitempty"` // 最近克隆历史（去凭证 URL，弹窗回填用）
+}
+
+// wsProjRecent 最近克隆条目（P1：克隆弹窗「最近克隆」回填）
+type wsProjRecent struct {
+	URL  string `json:"url"`
+	Name string `json:"name"`
+	TS   int64  `json:"ts"`
 }
 
 func wsProjMetaPath(username string) (string, error) {
@@ -1046,8 +1102,38 @@ func wsProjList(username string) *wsFileResult {
 		list = append(list, it)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].TS > list[j].TS })
-	data, _ := json.Marshal(map[string]interface{}{"proj": m.Cur, "list": list})
+	data, _ := json.Marshal(map[string]interface{}{"proj": m.Cur, "list": list, "recents": m.Recents})
 	return &wsFileResult{OK: true, Content: string(data)}
+}
+
+// wsProjRecentAdd 记录克隆历史：URL 剥凭证后按 URL 去重置顶，上限 10 条（新旧 clone 双路归口此处）
+func wsProjRecentAdd(username, rawURL, name string) {
+	u := wsProjSanitizeURL(rawURL)
+	if u == "" || name == "" {
+		return
+	}
+	m := wsProjMetaLoad(username)
+	out := make([]wsProjRecent, 0, 11)
+	out = append(out, wsProjRecent{URL: u, Name: name, TS: time.Now().Unix()})
+	for _, r := range m.Recents {
+		if r.URL == u || len(out) >= 10 {
+			continue
+		}
+		out = append(out, r)
+	}
+	m.Recents = out
+	wsProjMetaSave(username, m)
+}
+
+// wsProjSanitizeURL 剥离 URL 中的凭证段（https://token@host → https://host），防 Token 泄入元数据
+func wsProjSanitizeURL(u string) string {
+	u = strings.TrimSpace(u)
+	if j := strings.Index(u, "://"); j >= 0 {
+		if i := strings.Index(u[j+3:], "@"); i >= 0 {
+			u = u[:j+3] + u[j+3+i+1:]
+		}
+	}
+	return u
 }
 
 // wsProjOpen 切换当前项目（content=JSON{proj}；空串=回到工作区根）
@@ -1067,9 +1153,133 @@ func wsProjOpen(username, content string) *wsFileResult {
 	return &wsFileResult{OK: true}
 }
 
+// 运行中克隆登记（取消归口：key username|req_id → 进程句柄；PC 在线时克隆在 PC 执行，此表为空）
+var (
+	wsCloneMu      sync.Mutex
+	wsCloneRunning = make(map[string]*wsCloneProc)
+)
+
+type wsCloneProc struct {
+	cancel context.CancelFunc
+	dir    string // 半成品目录（取消 kill 后 git 不会自清理，须手动删除）
+}
+
+// wsProgressFn 克隆进度回调（pct 阶段百分比 / stage 阶段名 / speed 速度文本 / sent 已接收字节估算）
+type wsProgressFn func(pct int, stage, speed string, sent int64)
+
+// wsProjCloneCancel 取消运行中克隆：ctx 取消杀进程 → wsProjClone 收尾统一清理半成品目录
+func wsProjCloneCancel(username, content string) *wsFileResult {
+	var req struct {
+		Target string `json:"target"`
+	}
+	_ = json.Unmarshal([]byte(content), &req)
+	target := strings.TrimSpace(req.Target)
+	if target == "" {
+		return &wsFileResult{Error: "缺少目标 req_id"}
+	}
+	wsCloneMu.Lock()
+	p := wsCloneRunning[username+"|"+target]
+	wsCloneMu.Unlock()
+	if p == nil {
+		return &wsFileResult{Error: "克隆已结束或不在服务端执行"}
+	}
+	p.cancel()
+	return &wsFileResult{OK: true}
+}
+
+// wsCloneProgressPump 扫描 git --progress stderr 推送进度（\r 单行刷写 → 按 \r/\n 双分隔切行）；
+// 返回 stderr 尾段文本（错误信息提取用，cap 8KB）。节流 500ms/帧。
+// recover 兜底：pump 在独立 goroutine 运行，任何解析异常只中断进度推送（克隆本身继续走完），绝不带崩服务端
+func wsCloneProgressPump(username, reqID string, r io.Reader, push wsProgressFn) string {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Warn("克隆进度解析异常恢复（用户 %s req_id %s）：%v", username, reqID, r)
+		}
+	}()
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 256*1024)
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if atEOF && len(data) == 0 {
+			return 0, nil, nil
+		}
+		if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	rePct := regexp.MustCompile(`(Receiving objects|Resolving deltas|Updating files|Checking out files):\s+(\d+)%`)
+	reSpeed := regexp.MustCompile(`\|\s+([\d.]+\s+[KMG]?i?B/s)`)
+	// 已接收量：git 进度行形如 "Receiving objects:  45% (123/456), 1.23 MiB | 2.34 MiB/s"（两组：数值+单位）
+	reSent := regexp.MustCompile(`,\s+([\d.]+)\s+([KMG]?i?B)`)
+	// 远端统计阶段（大仓库 Enumerating/Counting/Compressing 可持续数分钟，且先于 Receiving objects）：
+	// 命中即推帧（pct 置 0、阶段透出远端行为），避免前端长时间停留在"正在连接仓库…"无反馈
+	reRemote := regexp.MustCompile(`remote:\s*(Enumerating objects|Counting objects|Compressing objects)(?::\s*(\d+)%)?`)
+	var tail strings.Builder
+	var lastPush time.Time
+	anySeen := false // stderr 首个非空行即推帧：远端枚举对象阶段 git 无输出，先用"连接远端中"占位反馈
+	pct, stage, speed, sent := -1, "", "", int64(0)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if !anySeen {
+			anySeen = true
+			if stage == "" {
+				stage = "连接远端中"
+			}
+		}
+		tail.WriteString(line)
+		tail.WriteByte('\n')
+		if tail.Len() > 8192 {
+			tail.Reset()
+			tail.WriteString(line)
+			tail.WriteByte('\n')
+		}
+		if m := rePct.FindStringSubmatch(line); m != nil {
+			stage = m[1]
+			pct, _ = strconv.Atoi(m[2])
+		}
+		if m := reRemote.FindStringSubmatch(line); m != nil {
+			stage = m[1]
+			if m[2] != "" {
+				stage += " " + m[2] + "%"
+			}
+		}
+		if m := reSpeed.FindStringSubmatch(line); m != nil {
+			speed = m[1]
+		}
+		if m := reSent.FindStringSubmatch(line); m != nil {
+			v, _ := strconv.ParseFloat(m[1], 64)
+			switch m[2][0] {
+			case 'G':
+				sent = int64(v * (1 << 30))
+			case 'M':
+				sent = int64(v * (1 << 20))
+			case 'K':
+				sent = int64(v * (1 << 10))
+			default:
+				sent = int64(v)
+			}
+		}
+		if anySeen && push != nil && time.Since(lastPush) >= 500*time.Millisecond {
+			lastPush = time.Now()
+			if pct < 0 {
+				pct = 0
+			}
+			push(pct, stage, speed, sent)
+		}
+	}
+	return tail.String()
+}
+
 // wsProjClone 克隆仓库到工作区子目录并自动切换（content=JSON{url,name,token}）。
-// token 仅内存拼接 URL（私有仓库 PAT），不落盘不进日志；克隆进度由 git stderr 输出，完成后写元数据。
-func wsProjClone(username, content string) *wsFileResult {
+// token 仅内存拼接 URL（私有仓库 PAT），不落盘不进日志；--progress stderr 流式解析 → 63 进度中间帧；
+// 登记运行句柄支持取消（proj_clone_cancel → ctx kill → 半成品目录清理）；完成后写元数据与克隆历史。
+func wsProjClone(username, reqID, content string, push wsProgressFn) *wsFileResult {
 	var req struct {
 		URL   string `json:"url"`
 		Name  string `json:"name"`
@@ -1101,10 +1311,45 @@ func wsProjClone(username, content string) *wsFileResult {
 	if _, serr := os.Stat(dest); serr == nil {
 		return &wsFileResult{Error: "目录已存在：" + name}
 	}
-	out, cerr := wsGitExec(ws, []string{"clone", "--progress", url, name}, 600*time.Second)
-	_ = out
-	if cerr != nil {
-		msg := cerr.Error()
+	if _, serr := exec.LookPath("git"); serr != nil {
+		return &wsFileResult{Error: "未检测到 git，请先安装 Git 并加入 PATH"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-c", "credential.helper=", "-c", "core.quotepath=off", "clone", "--progress", url, name)
+	cmd.Dir = ws
+	// 禁用交互式凭据弹窗：服务端无人值守，匿名 401 仓库若触发 GCM 对话框会挂住克隆直至超时。
+	// 实测 GCM 2.7.3 对 gitee 这类未知主机无视 GCM_INTERACTIVE=never，必须 -c credential.helper=
+	// 置空彻底禁用助手（GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=echo 双保险防终端/askpass 提示）；
+	// URL 内嵌 Token 的私有仓库克隆不受影响（凭证随 URL 传递，不经 helper）。
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=echo", "GCM_INTERACTIVE=never")
+	stderr, perr := cmd.StderrPipe()
+	if perr != nil {
+		return &wsFileResult{Error: perr.Error()}
+	}
+	if serr := cmd.Start(); serr != nil {
+		return &wsFileResult{Error: serr.Error()}
+	}
+	key := username + "|" + reqID
+	wsCloneMu.Lock()
+	wsCloneRunning[key] = &wsCloneProc{cancel: cancel, dir: dest}
+	wsCloneMu.Unlock()
+	tailCh := make(chan string, 1)
+	go func() { tailCh <- wsCloneProgressPump(username, reqID, stderr, push) }()
+	werr := cmd.Wait()
+	wsCloneMu.Lock()
+	delete(wsCloneRunning, key)
+	wsCloneMu.Unlock()
+	tail := <-tailCh
+	if ctx.Err() == context.Canceled {
+		os.RemoveAll(dest) // 取消：git 被杀不会自清理，手动删半成品
+		return &wsFileResult{Error: "已取消"}
+	}
+	if werr != nil {
+		msg := strings.TrimSpace(tail)
+		if msg == "" {
+			msg = werr.Error()
+		}
 		if strings.Contains(msg, "Authentication failed") || strings.Contains(msg, "403") {
 			msg += "\n—— 私有仓库请在克隆弹窗填入访问 Token（GitHub：Settings → Developer settings → Personal access tokens）"
 		} else if strings.Contains(msg, "already exists and is not an empty directory") {
@@ -1112,8 +1357,10 @@ func wsProjClone(username, content string) *wsFileResult {
 		} else if strings.Contains(msg, "Repository not found") || strings.Contains(msg, "not found") {
 			msg += "\n—— 仓库不存在或无权访问，请检查地址（私有仓库需填 Token）"
 		}
+		os.RemoveAll(dest) // 失败兜底清理（git 通常自清理，双保险）
 		return &wsFileResult{Error: msg}
 	}
 	wsProjTouch(username, name)
+	wsProjRecentAdd(username, wsProjSanitizeURL(strings.TrimSpace(req.URL)), name)
 	return &wsFileResult{OK: true}
 }

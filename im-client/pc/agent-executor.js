@@ -1330,7 +1330,7 @@ function isDirectorySync(p) {
 function projMetaPath(username) { return path.join(userRoot(username), '.im_proj.json'); }
 
 function projMetaLoad(username) {
-    const m = { cur: '', ts: {} };
+    const m = { cur: '', ts: {}, recents: [] };
     try {
         const d = JSON.parse(fs.readFileSync(projMetaPath(username), 'utf8'));
         if (d && typeof d === 'object') {
@@ -1338,6 +1338,7 @@ function projMetaLoad(username) {
             if (d.ts && typeof d.ts === 'object') {
                 Object.keys(d.ts).forEach(function (k) { m.ts[k] = Number(d.ts[k]) || 0; });
             }
+            if (Array.isArray(d.recents)) m.recents = d.recents; // 最近克隆历史（与服務端 .im_proj.json 同构）
         }
     } catch (e) {}
     return m;
@@ -1356,13 +1357,13 @@ function projTouch(username, projName) {
     projMetaSave(username, m);
 }
 
-// 项目列表：一级子目录（is_git 标记含 .git），按最近使用倒序，带当前项目
+// 项目列表：一级子目录（is_git 标记含 .git），按最近使用倒序，带当前项目与最近克隆历史（recents 供克隆弹窗回填）
 function projListLevel(username) {
     const ws = userRoot(username);
     const m = projMetaLoad(username);
     let entries;
     try { entries = fs.readdirSync(ws, { withFileTypes: true }); } catch (e) {
-        return { ok: true, content: JSON.stringify({ proj: m.cur, list: [] }) };
+        return { ok: true, content: JSON.stringify({ proj: m.cur, list: [], recents: m.recents || [] }) };
     }
     const list = [];
     for (const it of entries) {
@@ -1370,7 +1371,7 @@ function projListLevel(username) {
         list.push({ name: it.name, is_git: isDirectorySync(path.join(ws, it.name, '.git')), ts: m.ts[it.name] || 0 });
     }
     list.sort(function (a, b) { return b.ts - a.ts; });
-    return { ok: true, content: JSON.stringify({ proj: m.cur, list: list }) };
+    return { ok: true, content: JSON.stringify({ proj: m.cur, list: list, recents: m.recents || [] }) };
 }
 
 // 切换当前项目（content=JSON{proj}；空串=回到工作区根）
@@ -1385,8 +1386,60 @@ function projOpenLevel(username, content) {
     return { ok: true };
 }
 
-// 克隆仓库到工作区子目录并自动切换（content=JSON{url,name,token}；token 仅内存拼接不落盘）
-function projCloneLevel(username, content) {
+// ===== 克隆进度与取消（与服务端 wsProjClone/wsCloneProgressPump/wsProjCloneCancel 同构）=====
+
+// 运行中克隆登记：key username消毒|req_id → {child, dest, canceled, timer}
+const pcClones = {};
+
+// Windows 杀进程树（git.exe 之下还有 git-remote-https 等传输子进程，child.kill 只杀主进程不够）
+function killTree(child) {
+    if (!child || !child.pid) return;
+    try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }); } catch (e) {}
+}
+
+// git --progress stderr 行解析正则（与服务端同款）：
+//   "Receiving objects:  45% (123/456), 1.23 MiB | 2.34 MiB/s"
+const CLONE_RE_PCT = /(Receiving objects|Resolving deltas|Updating files|Checking out files):\s+(\d+)%/;
+const CLONE_RE_SPEED = /\|\s+([\d.]+\s+[KMG]?i?B\/s)/;
+const CLONE_RE_SENT = /,\s+([\d.]+\s+[KMG]?i?B)/;
+// 远端统计阶段（大仓库 Enumerating/Counting/Compressing 可持续数分钟，先于 Receiving objects）：
+// 命中即推帧（pct 置 0、阶段透出远端行为），与服务端 wsCloneProgressPump 同构
+const CLONE_RE_REMOTE = /remote:\s*(Enumerating objects|Counting objects|Compressing objects)(?::\s*(\d+)%)?/;
+
+function cloneSentBytes(m) {
+    const parts = m[1].split(/\s+/); // "1.23 MiB" → ["1.23", "MiB"]
+    const v = parseFloat(parts[0]) || 0;
+    const c = (parts[1] || '').charAt(0);
+    if (c === 'G') return v * (1 << 30);
+    if (c === 'M') return v * (1 << 20);
+    if (c === 'K') return v * (1 << 10);
+    return v;
+}
+
+// 克隆历史：URL 剥凭证后按 URL 去重置顶，上限 10 条（与服务端 wsProjRecentAdd 同构，PC 本地元数据一份）
+function projRecentAdd(username, rawURL, name) {
+    let u = String(rawURL || '').trim();
+    if (u.indexOf('://') >= 0) {
+        const pre = u.slice(0, u.indexOf('://') + 3);
+        const rest = u.slice(pre.length);
+        const at = rest.indexOf('@');
+        if (at >= 0) u = pre + rest.slice(at + 1);
+    }
+    if (!u || !name) return;
+    const m = projMetaLoad(username);
+    const out = [Object.assign({ url: u, name: name, ts: Math.floor(Date.now() / 1000) })];
+    for (const r of m.recents || []) {
+        if (r.url === u || out.length >= 10) continue;
+        out.push(r);
+    }
+    m.recents = out;
+    projMetaSave(username, m);
+}
+
+// 克隆仓库到工作区子目录并自动切换（content=JSON{url,name,token}；token 仅内存拼接不落盘）。
+// spawn --progress 流式解析 stderr → onProgress({pct,stage,speed,sent}) 节流 500ms 多帧回传；
+// 登记句柄支持取消（proj_clone_cancel → taskkill /T /F → 半成品目录清理）；失败/取消均清理 dest
+function projCloneLevel(username, content, reqId, onProgress) {
     let req;
     try { req = JSON.parse(content || '{}'); } catch (e) {
         return Promise.resolve({ ok: false, error: '请求解析失败' });
@@ -1401,23 +1454,86 @@ function projCloneLevel(username, content) {
     if (!url || (!/^https:\/\//.test(url) && !/^git@/.test(url) && !/^ssh:\/\//.test(url))) {
         return Promise.resolve({ ok: false, error: '仓库地址需以 https:// 、git@ 或 ssh:// 开头' });
     }
+    const rawURL = url;
     if (/^https:\/\//.test(url) && token) url = url.replace('://', '://' + token + '@'); // PAT 仅出现在本次进程参数
     const ws = userRoot(username);
     const dest = path.join(ws, name);
     if (fs.existsSync(dest)) return Promise.resolve({ ok: false, error: '目录已存在：' + name });
     return new Promise(function (resolve) {
-        execFile('git', ['-c', 'core.quotepath=off', 'clone', '--progress', url, name], {
-            cwd: ws, timeout: 600000, maxBuffer: 4 * 1024 * 1024, windowsHide: true
-        }, function (err, stdout, stderr) {
-            if (err && err.code === 'ENOENT') {
-                resolve({ ok: false, error: '未检测到 git，请先安装 Git 并加入 PATH' });
+        let done = false;
+        const finish = function (res) {
+            if (done) return;
+            done = true;
+            clearTimeout(proc.timer);
+            if (pcClones[key] === proc) delete pcClones[key];
+            resolve(res);
+        };
+        let child;
+        try {
+            child = spawn('git', ['-c', 'credential.helper=', '-c', 'core.quotepath=off', 'clone', '--progress', url, name], {
+                cwd: ws, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+                // 禁用交互式凭据弹窗（实测 GCM 2.7.3 无视 GCM_INTERACTIVE，须 -c credential.helper= 置空）；
+                // 凭据统一走弹窗 Token 字段（URL 内嵌），系统凭据库中已存的凭证经 helper 禁用后不再生效
+                env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', GCM_INTERACTIVE: 'never' })
+            });
+        } catch (e) {
+            resolve({ ok: false, error: '未检测到 git，请先安装 Git 并加入 PATH' });
+            return;
+        }
+        const key = sanitizeUsername(username) + '|' + String(reqId || '');
+        const proc = { child: child, dest: dest, canceled: false, timer: null };
+        pcClones[key] = proc;
+        proc.timer = setTimeout(function () { killTree(child); }, 600000); // 与服务端 600s 超时对齐
+        // stderr 流式进度解析：\r 单行刷写 → \r/\n 双分隔切行，行内正则提取，节流 500ms 回调
+        let lineBuf = Buffer.alloc(0);
+        let tail = '';
+        let lastPush = 0;
+        let pct = -1, stage = '', speed = '', sent = 0;
+        let anySeen = false; // stderr 首行即推帧（"连接远端中"占位）：远端枚举对象阶段 git 无输出
+        child.stderr.on('data', function (chunk) {
+            lineBuf = Buffer.concat([lineBuf, chunk]);
+            if (lineBuf.length > 256 * 1024) lineBuf = lineBuf.slice(lineBuf.length - 256 * 1024);
+            for (;;) {
+                let idx = -1;
+                for (let j = 0; j < lineBuf.length; j++) {
+                    const b = lineBuf[j];
+                    if (b === 13 || b === 10) { idx = j; break; }
+                }
+                if (idx < 0) break;
+                const lineBytes = lineBuf.slice(0, idx);
+                lineBuf = lineBuf.slice(idx + 1);
+                const line = decodeOutput(lineBytes).trim();
+                if (!line) continue;
+                if (!anySeen) {
+                    anySeen = true;
+                    if (!stage) stage = '连接远端中';
+                }
+                tail = (tail.length > 8192 ? '' : tail) + line + '\n';
+                const m1 = CLONE_RE_PCT.exec(line);
+                if (m1) { stage = m1[1]; pct = parseInt(m1[2], 10) || 0; }
+                const m0 = CLONE_RE_REMOTE.exec(line);
+                if (m0) { stage = m0[1] + (m0[2] ? ' ' + m0[2] + '%' : ''); }
+                const m2 = CLONE_RE_SPEED.exec(line);
+                if (m2) speed = m2[1];
+                const m3 = CLONE_RE_SENT.exec(line);
+                if (m3) sent = cloneSentBytes(m3);
+                if (anySeen && onProgress && Date.now() - lastPush >= 500) {
+                    lastPush = Date.now();
+                    try { onProgress({ pct: Math.max(pct, 0), stage: stage, speed: speed, sent: Math.round(sent) }); } catch (e) {}
+                }
+            }
+        });
+        child.on('error', function (err) {
+            finish({ ok: false, error: err && err.code === 'ENOENT' ? '未检测到 git，请先安装 Git 并加入 PATH' : String(err && err.message || err) });
+        });
+        child.on('close', function (code) {
+            if (proc.canceled) {
+                try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e) {} // 取消：git 被杀不自清理，删半成品
+                finish({ ok: false, error: '已取消' });
                 return;
             }
-            if (err) {
-                let buf;
-                try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
-                catch (e) { buf = Buffer.alloc(0); }
-                let msg = (decodeOutput(buf).trim() || err.message || String(err)).slice(0, 8192);
+            if (code !== 0) {
+                let msg = (tail.trim() || 'git clone 退出码 ' + code).slice(0, 8192);
                 if (/Authentication failed|403/.test(msg)) {
                     msg += '\n—— 私有仓库请在克隆弹窗填入访问 Token（GitHub：Settings → Developer settings → Personal access tokens）';
                 } else if (/not an empty directory/.test(msg)) {
@@ -1425,17 +1541,32 @@ function projCloneLevel(username, content) {
                 } else if (/Repository not found|not found/i.test(msg)) {
                     msg += '\n—— 仓库不存在或无权访问，请检查地址（私有仓库需填 Token）';
                 }
-                resolve({ ok: false, error: msg });
+                try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e) {} // 失败兜底清理
+                finish({ ok: false, error: msg });
                 return;
             }
             projTouch(username, name);
-            resolve({ ok: true });
+            projRecentAdd(username, rawURL, name);
+            finish({ ok: true });
         });
     });
 }
 
-// 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content}；git 返回 Promise 由 IPC 层 await）
-function fileOp(username, payload) {
+// 取消运行中克隆（content=JSON{target:克隆请求的 req_id}）：taskkill /T /F → close 回调统一清理半成品
+function projCloneCancelLevel(username, content) {
+    let target = '';
+    try { target = String((JSON.parse(content || '{}').target) || '').trim(); } catch (e) {}
+    if (!target) return { ok: false, error: '缺少目标 req_id' };
+    const p = pcClones[sanitizeUsername(username) + '|' + target];
+    if (!p) return { ok: false, error: '克隆已结束或不在本机执行' };
+    p.canceled = true;
+    killTree(p.child);
+    return { ok: true };
+}
+
+// 文件面板操作入口（main.js 经 IPC 调用；payload: {op, path, content, req_id}；git/clone 返回 Promise 由 IPC 层 await；
+// onProgress 仅 proj_clone 用：进度回调 {pct,stage,speed,sent}，main.js 注入 req_id 后经 IPC 推帧回渲染层）
+function fileOp(username, payload, onProgress) {
     const op = payload && payload.op;
     if (op === 'tree') return fileTreeLevel(username, payload.path);
     if (op === 'read') return fileReadLevel(username, payload.path);
@@ -1448,7 +1579,8 @@ function fileOp(username, payload) {
     if (op === 'reveal') return fileRevealLevel(username, payload.path);
     if (op === 'proj_list') return projListLevel(username);
     if (op === 'proj_open') return projOpenLevel(username, payload.content);
-    if (op === 'proj_clone') return projCloneLevel(username, payload.content);
+    if (op === 'proj_clone') return projCloneLevel(username, payload.content, payload.req_id || '', onProgress);
+    if (op === 'proj_clone_cancel') return projCloneCancelLevel(username, payload.content);
     if (op === 'git') return gitOp(username, payload.content);
     return { ok: false, error: '未知操作' };
 }
@@ -1610,30 +1742,100 @@ function termInput(s, cmd, onFrame) {
 }
 
 // 终端操作入口（main.js 经 IPC 调用）：req={username, action, term_id, cmd}
-// open/input/stop/close；input 受理后命令异步执行，输出/完成经 onFrame 推回渲染层
+// open/input/stop/close + ssh（阶段八十一：SSH 远程主机托管，快连弹窗 → 本地 ssh 进程 → 终端标签）；
+// input 受理后命令异步执行，输出/完成经 onFrame 推回渲染层
 function termOp(req, onFrame) {
     const username = sanitizeUsername((req && req.username) || '');
     const action = req && req.action;
     const id = String((req && req.term_id) || '').trim();
     termSweep();
     if (action === 'open') return termOpen((req && req.username) || '', id);
+    if (action === 'ssh') return termSsh((req && req.username) || '', id, req, onFrame);
     const s = termSessions[username + '|' + id];
     if (action === 'input') {
         if (!s) return { ok: false, error: '会话已失效，请新建终端' };
+        if (s.ssh) return termSshInput(s, req && req.cmd); // SSH 交互会话：input 直写远端 stdin
         return termInput(s, req && req.cmd, onFrame);
     }
     if (action === 'stop') {
-        if (s && s.child) { try { s.child.kill(); } catch (e) {} return { ok: true }; }
+        if (s && s.child) {
+            if (s.ssh) killTree(s.child); else { try { s.child.kill(); } catch (e) {} }
+            return { ok: true };
+        }
         return { ok: false, error: '没有运行中的命令' };
     }
     if (action === 'close') {
         if (s) {
-            if (s.child) { try { s.child.kill(); } catch (e) {} }
+            if (s.child) { if (s.ssh) killTree(s.child); else { try { s.child.kill(); } catch (e) {} } }
             delete termSessions[username + '|' + id];
         }
         return { ok: true };
     }
     return { ok: false, error: '未知操作' };
+}
+
+// ===== 阶段八十一：SSH 远程主机（终端托管会话）=====
+// 无 PTY 依赖方案：ssh -tt 强制分配远端伪终端（stdin 管道不回显，远端 TTY 回显即所见即所得），
+// 提示符/行编辑/密码提示均由远端 TTY 提供；本地仅做字节流转发 + ANSI 控制序列清洗（textContent 渲染兼容）
+const SSH_RE_ANSI = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+
+function sshClean(text) {
+    return String(text || '')
+        .replace(SSH_RE_ANSI, '')       // CSI/OSC/杂项转义清洗（textContent 无法渲染颜色码）
+        .replace(/\r\n/g, '\n')         // 统一换行
+        .replace(/\r/g, '\n');          // 孤立 \r（进度刷写）转换行，避免长行覆盖
+}
+
+// 打开 SSH 会话（幂等）：req 携带 {host, port, user}；输出/退出经 onFrame 推帧
+function termSsh(username, termId, req, onFrame) {
+    termSweep();
+    const id = String(termId || '').trim();
+    if (!id) return { ok: false, error: '缺少终端标识' };
+    const key = sanitizeUsername(username) + '|' + id;
+    if (termSessions[key]) return { ok: true, cwd: termSessions[key].cwd || '' };
+    const host = String((req && req.host) || '').trim();
+    const user = String((req && req.user) || '').trim();
+    const port = parseInt(req && req.port, 10) || 22;
+    if (!host || !/^[A-Za-z0-9._-]+$/.test(host)) return { ok: false, error: '主机名不合法' };
+    if (user && !/^[A-Za-z0-9._-]+$/.test(user)) return { ok: false, error: '用户名不合法' };
+    let child;
+    try {
+        const args = ['-tt', '-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=15', '-p', String(port)];
+        if (user) args.push(user + '@' + host); else args.push(host);
+        child = spawn('ssh', args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+        return { ok: false, error: 'SSH 启动失败（需系统安装 OpenSSH 客户端）' };
+    }
+    const s = { username: sanitizeUsername(username), termId: id, cwd: user ? user + '@' + host : host, child: child, lastUsed: Date.now(), ssh: { host: host, port: port, user: user } };
+    termSessions[key] = s;
+    // 输出转发：stdout/stderr 合并 → ANSI 清洗 → out 帧（无行缓冲：交互式会话需要即时回显）
+    const forward = function (buf) {
+        if (typeof onFrame === 'function') onFrame({ term_id: id, type: 'out', chunk: sshClean(decodeOutput(buf)) });
+    };
+    child.stdout.on('data', forward);
+    child.stderr.on('data', forward);
+    child.on('error', function (e) {
+        if (typeof onFrame === 'function') onFrame({ term_id: id, type: 'out', chunk: '✕ SSH 启动失败：' + (e.message || e) + '（需系统安装 OpenSSH 客户端）\n' });
+        child.emit('close', -1);
+    });
+    child.on('close', function (code) {
+        if (termSessions[key] === s) delete termSessions[key];
+        if (typeof onFrame === 'function') {
+            onFrame({ term_id: id, type: 'exit', exit_code: code === null ? -1 : code, duration_ms: 0, cwd: s.cwd, ssh: true });
+        }
+    });
+    return { ok: true, cwd: s.cwd, sync: true };
+}
+
+// SSH 会话输入：整行直写远端 stdin（sync 标记：无 exit 帧，前端立即解除运行态可继续输入）
+function termSshInput(s, cmd) {
+    const line = String(cmd == null ? '' : cmd);
+    s.lastUsed = Date.now();
+    if (!s.child) return { ok: false, error: 'SSH 连接已断开' };
+    try { s.child.stdin.write(line + '\r'); } catch (e) {
+        return { ok: false, error: 'SSH 连接已断开' };
+    }
+    return { ok: true, sync: true };
 }
 
 module.exports = {

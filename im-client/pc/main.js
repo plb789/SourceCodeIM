@@ -2,7 +2,7 @@
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const agentExecutor = require('./agent-executor.js');
@@ -300,10 +300,99 @@ ipcMain.on('agent:bg', function (event, req) {
 });
 
 // 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑 ← 服务端下行 msg 64 桥接）——
-// 与 agent:exec 同款：执行前按请求用户名注入沙箱白名单，路径校验/限额归口 agent-executor.js
+// 与 agent:exec 同款：执行前按请求用户名注入沙箱白名单，路径校验/限额归口 agent-executor.js；
+// 克隆进度多帧：执行器 onProgress 回调 → 'agent:fileop-progress' IPC 推回渲染层（渲染层补 req_id 转发 65 帧到服务端）
 ipcMain.handle('agent:fileop', function (event, req) {
-    agentExecutor.setSandbox(String((req && req.username) || ''), sandboxStore[String((req && req.username) || '')] || null);
-    return agentExecutor.fileOp(String((req && req.username) || ''), req || {});
+    const uname = String((req && req.username) || '');
+    agentExecutor.setSandbox(uname, sandboxStore[uname] || null);
+    const reqId = String((req && req.req_id) || '');
+    return agentExecutor.fileOp(uname, req || {}, function (p) {
+        if (event.sender.isDestroyed()) return;
+        event.sender.send('agent:fileop-progress', Object.assign({ req_id: reqId }, p || {}));
+    });
+});
+
+// ===== 阶段七十八：克隆 Token 记忆（PC safeStorage 按 host 加密存本机）=====
+// 私有仓库 PAT 记忆归口：safeStorage 用 OS 级凭据加密（Windows DPAPI），密文落 userData/agent_tokens.json；
+// 按 host 一条（github.com / gitlab.example.com…），空 token = 删除该 host 记录；浏览器端无 safeStorage 天然不提供
+const tokenFile = path.join(app.getPath('userData'), 'agent_tokens.json');
+
+function tokenStoreLoad() {
+    try { return JSON.parse(fs.readFileSync(tokenFile, 'utf8')) || {}; } catch (e) { return {}; }
+}
+
+function tokenStoreSave(store) {
+    try { fs.writeFileSync(tokenFile, JSON.stringify(store)); } catch (e) {}
+}
+
+ipcMain.handle('agent:token-get', function (event, req) {
+    const host = String((req && req.host) || '').toLowerCase().trim();
+    if (!host || !safeStorage.isEncryptionAvailable()) return { token: '' };
+    const store = tokenStoreLoad();
+    const enc = store[host];
+    if (!enc) return { token: '' };
+    try {
+        return { token: safeStorage.decryptString(Buffer.from(enc, 'base64')) };
+    } catch (e) {
+        delete store[host]; // 解密失败（换机/凭据变更）即清除脏数据
+        tokenStoreSave(store);
+        return { token: '' };
+    }
+});
+
+ipcMain.handle('agent:token-set', function (event, req) {
+    const host = String((req && req.host) || '').toLowerCase().trim();
+    const token = String((req && req.token) || '');
+    if (!host) return { ok: false };
+    const store = tokenStoreLoad();
+    if (!token) {
+        delete store[host]; // 取消记住 = 删除该 host 记录
+    } else {
+        if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: '系统不支持凭据加密' };
+        store[host] = safeStorage.encryptString(token).toString('base64');
+    }
+    tokenStoreSave(store);
+    return { ok: true };
+});
+
+// ===== 阶段八十一：SSH 快连簿（PC 本地 userData/agent_ssh.json）=====
+// 仅存 host/port/user/备注（无密码——密码/密钥认证由 ssh 自己的机制处理），按 host|port|user 去重置顶，上限 10 条
+const sshBookFile = path.join(app.getPath('userData'), 'agent_ssh.json');
+
+function sshBookLoad() {
+    try { const l = JSON.parse(fs.readFileSync(sshBookFile, 'utf8')); return Array.isArray(l) ? l : []; } catch (e) { return []; }
+}
+
+function sshBookSave(list) {
+    try { fs.writeFileSync(sshBookFile, JSON.stringify(list)); } catch (e) {}
+}
+
+ipcMain.handle('agent:ssh-list', function () {
+    return { list: sshBookLoad() };
+});
+
+ipcMain.handle('agent:ssh-save', function (event, req) {
+    const host = String((req && req.host) || '').trim().toLowerCase();
+    const user = String((req && req.user) || '').trim();
+    const port = parseInt(req && req.port, 10) || 22;
+    const name = String((req && req.name) || '').trim();
+    if (!host) return { ok: false, error: '主机不能为空' };
+    const list = sshBookLoad().filter(function (it) {
+        return !(it.host === host && it.user === user && (it.port || 22) === port);
+    });
+    list.unshift({ host: host, user: user, port: port, name: name, ts: Date.now() });
+    sshBookSave(list.slice(0, 10));
+    return { ok: true };
+});
+
+ipcMain.handle('agent:ssh-del', function (event, req) {
+    const host = String((req && req.host) || '').trim().toLowerCase();
+    const user = String((req && req.user) || '').trim();
+    const port = parseInt(req && req.port, 10) || 22;
+    sshBookSave(sshBookLoad().filter(function (it) {
+        return !(it.host === host && it.user === user && (it.port || 22) === port);
+    }));
+    return { ok: true };
 });
 
 // ===== 阶段七十七：控制台本地终端（Trae CN 同款多标签）=====

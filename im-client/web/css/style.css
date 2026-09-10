@@ -5360,6 +5360,17 @@ html.m #list-panel.list-collapsed {
     opacity: 0.88;
 }
 
+/* 危险操作按钮（取消克隆等）：红色警示，跟随主题但保持警示辨识度 */
+.ws-panel-btn.danger {
+    color: #d1242f;
+    border: 1px solid color-mix(in srgb, #d1242f 45%, transparent);
+}
+
+.ws-panel-btn.danger:hover {
+    background: color-mix(in srgb, #d1242f 12%, transparent);
+    color: #d1242f;
+}
+
 /* 按钮激活态（菜单展开时"···"高亮）：主题中性色，与整体灰阶一致 */
 .ws-panel-btn.active {
     color: var(--text, #333);
@@ -5978,6 +5989,108 @@ html.m #list-panel.list-collapsed {
     justify-content: flex-end;
     gap: 8px;
     margin-top: 16px;
+}
+
+/* 克隆弹窗增强：最近克隆回填 + Token 记忆勾选 + 进度条（主题色） */
+.ws-proj-dlg-recents {
+    margin-top: 10px;
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    max-height: 132px;
+    overflow-y: auto;
+}
+
+.ws-proj-dlg-recents:empty {
+    display: none;
+}
+
+.ws-proj-dlg-ri {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    font-size: 11.5px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.ws-proj-dlg-ri:last-child {
+    border-bottom: none;
+}
+
+.ws-proj-dlg-ri:hover {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.ws-proj-dlg-ri-n {
+    color: var(--text, #24292f);
+    font-weight: 600;
+    flex-shrink: 0;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-proj-dlg-ri-u {
+    color: var(--text-secondary, #57606a);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ws-proj-dlg-remember {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 11.5px;
+    color: var(--text-secondary, #57606a);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ws-proj-dlg-remember input {
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.ws-proj-dlg-prog {
+    display: none;
+    margin-top: 12px;
+}
+
+.ws-proj-dlg-prog.on {
+    display: block;
+}
+
+.ws-proj-dlg-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--input-bg, #eaeef2);
+    overflow: hidden;
+}
+
+.ws-proj-dlg-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: var(--primary);
+    transition: width 0.35s ease;
+}
+
+.ws-proj-dlg-stage {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--text-secondary, #57606a);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-proj-dlg-stage b {
+    color: var(--primary);
+    font-weight: 600;
 }
 
 
