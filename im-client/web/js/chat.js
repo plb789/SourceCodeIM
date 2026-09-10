@@ -5643,6 +5643,21 @@
             un.title = '取消暂存';
             un.addEventListener('click', function (ev) { ev.stopPropagation(); wsPanelGitAct({ sub: 'unstage', paths: [p] }); });
             acts.appendChild(un);
+            // 已暂存变更的放弃：从 HEAD 恢复（staged=discard 语义，checkout HEAD --）。
+            // staged 删除/改名旧路径 index 中已无该文件，checkout -- 必报 pathspec 不匹配（实测 Developer 场景）
+            if (e.x !== 'A') { // 暂存的新增文件 HEAD 中不存在，放弃必失败——只留取消暂存
+                var sdis = document.createElement('span');
+                sdis.className = 'ws-git-act danger';
+                sdis.textContent = '↩';
+                sdis.title = '放弃已暂存的修改（不可恢复）';
+                sdis.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    showConfirm('放弃修改', '确定放弃「' + p + '」的暂存修改吗？将恢复为上次提交的内容，不可恢复。', function () {
+                        wsPanelGitAct({ sub: 'discard', paths: [p], staged: true });
+                    }, '放弃');
+                });
+                acts.appendChild(sdis);
+            }
         } else {
             var ad = document.createElement('span');
             ad.className = 'ws-git-act';
@@ -6233,14 +6248,15 @@
         });
     }
 
-    // 拉取本地分支列表（审查目标选择用）；默认目标优先 main/master，其次首个非当前分支
+    // 拉取分支列表（审查目标选择用）：本地 + 远端跟踪分支（origin/xxx，服务端 refs/heads+refs/remotes）；
+    // 默认目标优先 main/master，其次首个非当前分支；origin/HEAD 是符号引用不是真分支，全链路排除
     function wsPanelGitLoadBranches() {
         var g = wsPanel.git;
         wsPanelGitReq({ sub: 'branches' }).then(function (d) {
-            g.branches = d.list || [];
+            g.branches = (d.list || []).filter(function (b) { return !/\/HEAD$/.test(b); });
             if (g.reviewTarget && g.branches.indexOf(g.reviewTarget) < 0) g.reviewTarget = ''; // 目标分支已失效
             if (!g.reviewTarget) {
-                var pref = ['main', 'master'].filter(function (b) {
+                var pref = ['main', 'master', 'origin/main', 'origin/master'].filter(function (b) {
                     return b !== g.branch && g.branches.indexOf(b) >= 0;
                 });
                 g.reviewTarget = pref[0] || g.branches.filter(function (b) { return b !== g.branch; })[0] || '';
@@ -6306,8 +6322,8 @@
         to.addEventListener('click', function (e) {
             e.stopPropagation();
             if (g.branches === null) { showToast('分支列表加载中，请稍候'); return; }
-            var list = g.branches.filter(function (b) { return b !== g.branch; });
-            if (!list.length) { showToast('没有可选的目标分支（仅当前分支）'); return; }
+            var list = g.branches.filter(function (b) { return b !== g.branch && !/\/HEAD$/.test(b); });
+            if (!list.length) { showToast('当前仓库没有其他分支可对比（本地与远端都只有 ' + (g.branch || '当前分支') + '）；新建分支或拉取远端分支后即可审查'); return; }
             wsGitMenu(to, list.map(function (b) {
                 return { label: '⎇ ' + b, onclick: function () {
                     g.reviewTarget = b;

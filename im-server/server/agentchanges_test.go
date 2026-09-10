@@ -27,6 +27,9 @@ func TestMain(m *testing.M) {
 	if err := store.DB.AutoMigrate(&model.AgentChangeRecord{}); err != nil {
 		os.Exit(1)
 	}
+	// agentWorkRoot 归测试环境同步赋值（生产在 agentInit）：空值会让 agentWorkspaceDir 退化为
+	// 相对路径，且 GIT_CEILING_DIRECTORIES 为空失去向上搜索防护（wsGitExec 防窜仓测试依赖）
+	agentWorkRoot = cfg.AI.Agent.WorkspaceRoot
 	os.Exit(m.Run())
 }
 

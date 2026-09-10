@@ -346,6 +346,7 @@ type wsGitReq struct {
 	Target string   `json:"target,omitempty"` // diffrev 审查目标分支
 	Proj   string   `json:"proj,omitempty"`   // 当前项目（工作区子目录名）；空=工作区根本身
 	Amend  bool     `json:"amend,omitempty"`  // commit 追加模式（--amend 覆盖上一次提交）
+	Staged bool     `json:"staged,omitempty"` // discard 已暂存变更：checkout HEAD --（staged 删除/改名旧路径在 index 中已不存在，checkout -- 必报 pathspec 不匹配）
 }
 
 // wsGitBuildArgs 子命令 → git 参数与超时（PC 执行器与服务端同一张映射表口径）
@@ -371,6 +372,11 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 	case "discard":
 		if len(r.Paths) == 0 {
 			return nil, 0, errors.New("缺少放弃目标")
+		}
+		if r.Staged {
+			// 已暂存变更放弃：从 HEAD 恢复索引+工作树。staged 删除（D_）/改名旧路径在 index 中已不存在，
+			// checkout -- <p> 从 index 恢复会报 pathspec 不匹配（实测）；HEAD 版本仍可恢复
+			return append([]string{"checkout", "-q", "HEAD", "--"}, r.Paths...), 30 * time.Second, nil
 		}
 		return append([]string{"checkout", "-q", "--"}, r.Paths...), 30 * time.Second, nil
 	case "commit":
@@ -403,7 +409,9 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 		}
 		return []string{"show", r.Path, "--no-color", "--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
 	case "branches":
-		return []string{"for-each-ref", "refs/heads", "--format=%(refname:short)"}, 20 * time.Second, nil
+		// 本地 + 远端跟踪分支：审查目标可选 origin/xxx（三点 diff origin/main...HEAD 合法口径）；
+		// --format 输出全名，branches 响应段归一为短名并剔除裸 remote 容器（refs/remotes/origin）
+		return []string{"for-each-ref", "refs/heads", "refs/remotes", "--format=%(refname)"}, 20 * time.Second, nil
 	case "untracked":
 		// 未跟踪文件全量清单（-z NUL 分隔防文件名含空格/引号解析错位）：
 		// git status 会把整个未跟踪目录折叠为 "dir/"，前端用它展开目录内的具体文件
@@ -449,6 +457,15 @@ func wsGitExec(dir string, args []string, timeout time.Duration) (string, error)
 	// core.quotepath=off：中文/非 ASCII 文件名原样输出（与 PC 执行器同款前缀，双端口径一致）
 	fullArgs := append([]string{"-c", "core.quotepath=off"}, args...)
 	cmd := exec.CommandContext(ctx, "git", fullArgs...)
+	// GIT_CEILING_DIRECTORIES 防护（阶段八十一）：git 默认向上搜索父目录 .git，服务端工作区根
+	// 不是仓库时会窜到宿主目录的仓库（如部署目录本身是 git 仓库），面板显示无关变更造成误导。
+	// 以工作区根为搜索上限阻断越界；工作区根自身的 .git 与项目子目录仓库（repo_ui）不受影响。
+	// 兜底：agentWorkRoot 未初始化（如测试环境）时用 dir 父目录，保证 ceiling 恒为非空绝对路径
+	ceil := agentWorkRoot
+	if ceil == "" {
+		ceil = filepath.Dir(dir)
+	}
+	cmd.Env = append(os.Environ(), "GIT_CEILING_DIRECTORIES="+ceil)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if len(out) > wsGitMaxOutput {
@@ -588,7 +605,22 @@ func wsServerGit(username, content string) *wsFileResult {
 		if r.Sub == "status" && strings.Contains(gerr.Error(), "not a git repository") {
 			return wsGitResultPack(map[string]interface{}{"sub": "status", "repo": false})
 		}
-		return wsGitResultPack(map[string]interface{}{"sub": r.Sub, "error": wsGitErrorHint(gerr.Error(), r.Sub)})
+		// 放弃变更降级：checkout -- 从 index 恢复，但 staged 删除/改名旧路径 index 中已无该文件，
+		// 必报 pathspec 不匹配（实测 Developer 场景）——自动改从 HEAD 恢复重试一次
+		if r.Sub == "discard" && !r.Staged && strings.Contains(gerr.Error(), "did not match any file(s) known to git") {
+			if retry, rerr := wsGitExec(base, append([]string{"checkout", "-q", "HEAD", "--"}, r.Paths...), 30*time.Second); rerr == nil {
+				out = retry
+				gerr = nil
+			}
+		}
+		if gerr != nil {
+			msg := wsGitErrorHint(gerr.Error(), r.Sub)
+			// staged 放弃对 HEAD 中不存在的文件（暂存的新增 A_）必失败：引导先取消暂存（不做自动删文件的危险动作）
+			if r.Sub == "discard" && r.Staged && strings.Contains(gerr.Error(), "did not match any file(s) known to git") {
+				msg += "\n—— 该文件在上次提交中不存在（暂存的新增文件）：请先「取消暂存」，再在更改区处理或通过文件树删除"
+			}
+			return wsGitResultPack(map[string]interface{}{"sub": r.Sub, "error": msg})
+		}
 	}
 	switch r.Sub {
 	case "status":
@@ -629,11 +661,20 @@ func wsServerGit(username, content string) *wsFileResult {
 		meta, rest := wsGitShowSplit(out)
 		return wsGitResultPack(map[string]interface{}{"sub": "show", "meta": meta, "diff": rest})
 	case "branches":
+		// --format 全名输出（refs/heads/master、refs/remotes/origin/main），此处归一为短名：
+		// 本地分支直接剥前缀；远端须两层以上（origin/xxx）——裸 remote 容器（refs/remotes/origin，
+		// 本地 push 后 fetch 前会出现）不是分支，diff 无意义，剔除
 		list := []string{}
 		for _, ln := range strings.Split(out, "\n") {
 			ln = strings.TrimSpace(ln)
-			if ln != "" {
-				list = append(list, ln)
+			switch {
+			case strings.HasPrefix(ln, "refs/heads/"):
+				list = append(list, strings.TrimPrefix(ln, "refs/heads/"))
+			case strings.HasPrefix(ln, "refs/remotes/"):
+				short := strings.TrimPrefix(ln, "refs/remotes/")
+				if strings.Contains(short, "/") {
+					list = append(list, short)
+				}
 			}
 		}
 		return wsGitResultPack(map[string]interface{}{"sub": "branches", "list": list})
@@ -1322,7 +1363,8 @@ func wsProjClone(username, reqID, content string, push wsProgressFn) *wsFileResu
 	// 实测 GCM 2.7.3 对 gitee 这类未知主机无视 GCM_INTERACTIVE=never，必须 -c credential.helper=
 	// 置空彻底禁用助手（GIT_TERMINAL_PROMPT=0 + GIT_ASKPASS=echo 双保险防终端/askpass 提示）；
 	// URL 内嵌 Token 的私有仓库克隆不受影响（凭证随 URL 传递，不经 helper）。
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=echo", "GCM_INTERACTIVE=never")
+	// GIT_CEILING_DIRECTORIES 同 wsGitExec：阻断向上搜索到宿主目录仓库
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=echo", "GCM_INTERACTIVE=never", "GIT_CEILING_DIRECTORIES="+agentWorkRoot)
 	stderr, perr := cmd.StderrPipe()
 	if perr != nil {
 		return &wsFileResult{Error: perr.Error()}

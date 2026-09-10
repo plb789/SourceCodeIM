@@ -1087,7 +1087,8 @@ const GIT_SUB_SPEC = {
     commit:   { args: ['commit', '-q', '-m'],             timeout: 60000, needMsg: true },
     log:      { args: ['log', '-30', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000 },
     show:     { args: ['show', '--no-color', '--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000, needPath: true },
-    branches: { args: ['for-each-ref', 'refs/heads', '--format=%(refname:short)'], timeout: 20000 },
+    // 本地 + 远端跟踪分支：审查目标可选 origin/xxx（三点 diff 合法口径）；origin/HEAD 由前端过滤
+    branches: { args: ['for-each-ref', 'refs/heads', 'refs/remotes', '--format=%(refname:short)'], timeout: 20000 },
     // 未跟踪文件全量清单（-z NUL 分隔防文件名解析错位）：git status 把未跟踪目录折叠为 "dir/"，前端用它展开
     untracked: { args: ['ls-files', '--others', '--exclude-standard', '-z'], timeout: 20000 },
     push:     { args: ['push'],                           timeout: 115000 },
@@ -1212,17 +1213,23 @@ function gitOp(username, content) {
     if (r.sub === 'diff') args.push(String(r.path));
     if (r.sub === 'show') args.push(String(r.path));
     if (r.sub === 'diffrev') args.push(String(r.target) + '...HEAD');
-    if (r.sub === 'add' || r.sub === 'unstage' || r.sub === 'discard') args = args.concat(r.paths.map(String));
+    // discard：staged 变更走 checkout HEAD --（staged 删除/改名旧路径 index 中已不存在，checkout -- 必报 pathspec 不匹配，实测同服务端）
+    if (r.sub === 'add' || r.sub === 'unstage') args = args.concat(r.paths.map(String));
+    if (r.sub === 'discard') args = (r.staged ? ['-c', 'core.quotepath=off', 'checkout', '-q', 'HEAD', '--'] : args).concat(r.paths.map(String));
     if (r.sub === 'commit') args = args.concat(r.amend ? ['--amend'] : []).concat([String(r.msg)]);
     if (r.sub === 'pushu') args.push(String(r.branch));
     if (r.sub === 'remoteadd') args.push(String(r.target).trim()); // 远程地址是最后一个位置参数，缺失时 git 只会打印 usage
     if (r.sub === 'remoteseturl') args.push(String(r.target).trim());
     // log 需要二次执行拿未推送集合（origin/<branch>..HEAD）；失败=无上游 → 全部未推送
+    // GIT_CEILING_DIRECTORIES 防护（与服务端 wsGitExec 同口径）：工作区根非仓库时阻断 git
+    // 向上搜索父目录 .git（会窜到宿主目录仓库显示无关变更）；主工作区根自身/项目仓库不受影响
+    const gitEnv = { env: Object.assign({}, process.env, { GIT_CEILING_DIRECTORIES: path.dirname(userRoot(username)) }) };
     function execGit(exArgs, timeout) {
         return new Promise(function (res2) {
             execFile('git', exArgs, {
                 cwd: base, timeout: timeout,
-                maxBuffer: 4 * 1024 * 1024, windowsHide: true
+                maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+                env: gitEnv.env
             }, function (err, stdout, stderr) {
                 let buf;
                 try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
@@ -1262,7 +1269,8 @@ function gitOp(username, content) {
     return new Promise(function (resolve) {
         execFile('git', args, {
             cwd: base, timeout: spec.timeout,
-            maxBuffer: 4 * 1024 * 1024, windowsHide: true
+            maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+            env: gitEnv.env
         }, function (err, stdout, stderr) {
             let buf;
             try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
@@ -1283,7 +1291,24 @@ function gitOp(username, content) {
                     resolve({ ok: true, content: JSON.stringify({ sub: 'log', commits: [] }) });
                     return;
                 }
-                const msg = gitErrorHint(outTxt.trim() || (err.message || String(err)), r.sub);
+                // 放弃变更降级：checkout -- 从 index 恢复，staged 删除等 index 无该文件场景必报 pathspec
+                // 不匹配——自动改从 HEAD 恢复重试一次（与服务端 wsServerGit 同口径）
+                if (r.sub === 'discard' && !r.staged && outTxt.indexOf('did not match any file(s) known to git') >= 0) {
+                    execGit(['-c', 'core.quotepath=off', 'checkout', '-q', 'HEAD', '--'].concat(r.paths.map(String)), spec.timeout).then(function (m2) {
+                        if (!m2.err) {
+                            resolve({ ok: true, content: JSON.stringify({ sub: r.sub, output: m2.text.trim() }) });
+                            return;
+                        }
+                        const msg2 = gitErrorHint(m2.text.trim() || (m2.err.message || String(m2.err)), r.sub);
+                        resolve({ ok: true, content: JSON.stringify({ sub: r.sub, error: msg2.slice(0, 8192) }) });
+                    });
+                    return;
+                }
+                // staged 放弃对 HEAD 中不存在的文件（暂存的新增 A_）必失败：引导先取消暂存（不做自动删文件的危险动作）
+                let msg = gitErrorHint(outTxt.trim() || (err.message || String(err)), r.sub);
+                if (r.sub === 'discard' && r.staged && outTxt.indexOf('did not match any file(s) known to git') >= 0) {
+                    msg += '\n—— 该文件在上次提交中不存在（暂存的新增文件）：请先「取消暂存」，再在更改区处理或通过文件树删除';
+                }
                 resolve({ ok: true, content: JSON.stringify({ sub: r.sub, error: msg.slice(0, 8192) }) });
                 return;
             }
@@ -1304,7 +1329,17 @@ function gitOp(username, content) {
                 return;
             }
             if (r.sub === 'branches') {
-                const list = outTxt.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+                // --format 全名输出归一为短名：本地分支剥 refs/heads/；远端须两层以上（origin/xxx），
+                // 裸 remote 容器（refs/remotes/origin）剔除——与服务端 branches 响应段同口径
+                const list = [];
+                outTxt.split('\n').map(function (s) { return s.trim(); }).filter(Boolean).forEach(function (ln) {
+                    if (ln.indexOf('refs/heads/') === 0) {
+                        list.push(ln.slice('refs/heads/'.length));
+                    } else if (ln.indexOf('refs/remotes/') === 0) {
+                        const short = ln.slice('refs/remotes/'.length);
+                        if (short.indexOf('/') >= 0) list.push(short);
+                    }
+                });
                 resolve({ ok: true, content: JSON.stringify({ sub: 'branches', list: list }) });
                 return;
             }
