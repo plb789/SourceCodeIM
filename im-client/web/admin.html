@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.51">
-    <link rel="stylesheet" href="css/admin.css?v=1.7">
+    <link rel="stylesheet" href="css/admin.css?v=1.8">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -43,6 +43,7 @@
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
+                <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
                 <span id="admin-current-user" class="admin-current-user"></span>
@@ -250,6 +251,22 @@
                     <button id="at-next" class="admin-btn small">下一页</button>
                 </div>
             </section>
+
+            <!-- Agent 运行参数设置（阶段八十一：后台热更新，保存即生效+重启不丢） -->
+            <section id="admin-view-agentsettings" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>Agent 设置</h2>
+                    <span id="agentset-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">Agent 自动化任务的运行参数。保存后立即热生效（运行中任务的下一步即按新值判定），无需重启服务端；设置持久化保存，重启后保持。</p>
+                <div class="agentset-row">
+                    <label class="agentset-label" for="agentset-max-steps">单任务最大迭代步数</label>
+                    <input type="number" id="agentset-max-steps" class="admin-input agentset-input" min="1" max="500" step="1" title="步数=模型决策+工具执行的一轮循环">
+                    <button id="agentset-save" class="admin-btn primary">保存</button>
+                    <span id="agentset-tip" class="admin-view-tip"></span>
+                </div>
+                <p class="admin-view-tip">步数指"模型决策 + 工具执行"的循环轮数，达到上限任务以失败结束（提示"已达最大迭代步数"）。默认 30；复杂任务（多文件编辑/多命令执行）建议调大，取值 1~500。</p>
+            </section>
         </main>
     </div>
 
@@ -303,6 +320,6 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.10"></script>
+    <script src="js/admin.js?v=1.11"></script>
 </body>
 </html>

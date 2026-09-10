@@ -985,3 +985,26 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     gap: 14px;
     margin-top: 14px;
 }
+
+/* ===== Agent 运行参数设置（阶段八十一：max_steps 后台热更新） ===== */
+.agentset-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--panel-bg, #252526);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.agentset-label {
+    flex-shrink: 0;
+    font-size: 13px;
+    color: var(--text, #ddd);
+}
+
+.agentset-input {
+    width: 120px;
+    flex-shrink: 0;
+}

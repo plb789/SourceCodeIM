@@ -129,6 +129,8 @@
             else if (item.dataset.view === 'vecdata') { loadKBStatus(); loadVecKbOptions(); loadVecData(); }
             // 阶段六十四：进入 Agent 任务审计视图拉取任务列表
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
+            // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
+            else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); }
             else stopKBPolling();
         });
     });
@@ -1221,6 +1223,37 @@
             showToast(e.message || '网络异常');
         });
     }
+
+    // ===== Agent 运行参数设置（阶段八十一：max_steps 后台热更新） =====
+    // 读取当前生效值（内存值，含热改未重启部分）回填输入框
+    function loadAgentSettings() {
+        api('GET', '/admin/api/agent/settings').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var v = result.data.max_steps;
+            $('agentset-max-steps').value = v;
+            $('agentset-tip').textContent = '当前生效：' + v + ' 步';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+    // 保存：服务端内存原子写入立即热生效（运行中任务下一步即按新值判定）+ 落库重启不丢
+    $('agentset-save').addEventListener('click', function () {
+        var raw = $('agentset-max-steps').value.trim();
+        var v = parseInt(raw, 10);
+        if (!v || v < 1 || v > 500 || String(v) !== raw) {
+            showToast('步数须为 1~500 的整数');
+            return;
+        }
+        api('PUT', '/admin/api/agent/settings', { max_steps: v }).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '保存失败');
+                return;
+            }
+            $('agentset-tip').textContent = '当前生效：' + result.data.max_steps + ' 步（已热生效）';
+            showToast('已保存并热生效：' + result.data.max_steps + ' 步');
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
 
     // atTd 单元格构造辅助（统一 class 与纯文本写入，防注入）
     function atTd(text, cls) {

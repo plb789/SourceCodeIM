@@ -74,7 +74,7 @@ var agentGrepSkipDirs = map[string]bool{
 // 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载，均有兜底默认值）
 var (
 	agentEnabled     = false
-	agentMaxSteps    = 30
+	agentMaxSteps    atomic.Int64 // 单任务最大迭代步数（阶段八十一：后台管理可热改+DB 持久化，任务循环每步实时读取）
 	agentToolTimeout = 60 * time.Second
 	agentApproveWait = 300 * time.Second
 	agentAutoWrite   = false
@@ -84,6 +84,14 @@ var (
 	agentConcurrency = 1     // 阶段六十七：每用户同时运行任务数上限
 	agentQueueSize   = 5     // 阶段六十七：每用户排队任务数上限（排队已满直接拒绝）
 )
+
+// 后台可调 max_steps 的合法区间（上限防"防死循环"初衷失效；后台保存与启动加载共用同一校验）
+const (
+	agentStepsMin = 1
+	agentStepsMax = 500
+)
+
+func init() { agentMaxSteps.Store(30) } // 兜底默认（config.yaml/DB 均未配置时生效）
 
 // AgentTodoItem 任务清单条目（todo_write 全量替换，前端渲染进度条）
 type AgentTodoItem struct {
@@ -230,7 +238,7 @@ func agentUsernameDir(username string) string {
 func InitAgent(cfg *config.Config) {
 	agentEnabled = cfg.AI.Agent.Enabled
 	if cfg.AI.Agent.MaxSteps > 0 {
-		agentMaxSteps = cfg.AI.Agent.MaxSteps
+		agentMaxSteps.Store(int64(cfg.AI.Agent.MaxSteps))
 	}
 	if cfg.AI.Agent.ToolTimeoutSeconds > 0 {
 		t := cfg.AI.Agent.ToolTimeoutSeconds
@@ -303,6 +311,14 @@ func InitAgent(cfg *config.Config) {
 		}
 		logger.Info("Agent 审批白名单加载完成：命令前缀 %d 条（含配置），写文件免审批=%v", len(agentAutoCmds), agentAutoWrite)
 	}
+	// 阶段八十一：后台可调 max_steps 启动加载（im_agent_whitelist kind=maxsteps）——后台保存即落库，
+	// DB 值优先于 config.yaml（后台调整属最新意图）；越界/坏值忽略回落配置值
+	var msRow model.AgentWhitelist
+	if err := store.DB.Where("kind = ?", "maxsteps").First(&msRow).Error; err == nil {
+		if v, perr := strconv.Atoi(strings.TrimSpace(msRow.Value)); perr == nil && v >= agentStepsMin && v <= agentStepsMax {
+			agentMaxSteps.Store(int64(v))
+		}
+	}
 	// 定期清理已结束任务（防注册表泄漏）
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
@@ -320,7 +336,7 @@ func InitAgent(cfg *config.Config) {
 			})
 		}
 	}()
-	logger.Info("智能 Agent 模块加载完成：enabled=%v，max_steps=%d，工作区=%s", agentEnabled, agentMaxSteps, agentWorkRoot)
+	logger.Info("智能 Agent 模块加载完成：enabled=%v，max_steps=%d，工作区=%s", agentEnabled, agentMaxSteps.Load(), agentWorkRoot)
 	// 阶段六十八：网络工具状态日志（web_search 未开启时提示配置方式，方便管理员启用）
 	logger.Info("Agent 网络工具：http_request=%v（内网访问=%v），web_search=%v（provider=%s）",
 		agentHttpEnabled, agentHttpAllowPrivate, agentSearchEnabled, agentSearchProvider)
@@ -2626,10 +2642,10 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
 		}
 
-		// 步数限制：防模型死循环
+		// 步数限制：防模型死循环（阶段八十一：agentMaxSteps 为 atomic，后台热改后运行中任务下一步即按新值判定）
 		t.steps++
-		if t.steps >= agentMaxSteps {
-			s.agentFinish(t, "failed", "", fmt.Sprintf("已达最大迭代步数（%d），任务中止", agentMaxSteps))
+		if t.steps >= int(agentMaxSteps.Load()) {
+			s.agentFinish(t, "failed", "", fmt.Sprintf("已达最大迭代步数（%d），任务中止", agentMaxSteps.Load()))
 			return
 		}
 	}

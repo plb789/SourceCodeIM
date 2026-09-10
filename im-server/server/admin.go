@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,6 +112,42 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/agent/task/{task_id}", s.adminGuard(s.HandleAdminAgentTaskDetail))
 	// 阶段六十五：Agent 任务执行轨迹审计（单任务全量步骤留痕）
 	http.HandleFunc("GET /admin/api/agent/task/{task_id}/steps", s.adminGuard(s.HandleAdminAgentTaskSteps))
+	// 阶段八十一：Agent 运行参数设置（max_steps 后台热更新，保存即生效+落库重启不丢）
+	http.HandleFunc("GET /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsGet))
+	http.HandleFunc("PUT /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsSave))
+}
+
+// ===== Agent 运行参数设置（阶段八十一：后台热更新） =====
+
+// handleAdminAgentSettingsGet 返回当前生效的 Agent 运行参数（内存值为准，含后台热改未重启的部分）
+func (s *Server) handleAdminAgentSettingsGet(w http.ResponseWriter, r *http.Request) {
+	adminJSON(w, map[string]interface{}{"max_steps": agentMaxSteps.Load()})
+}
+
+// handleAdminAgentSettingsSave 保存 Agent 运行参数：内存原子写入立即热生效（运行中任务下一步即按新值判定），
+// 落库 im_agent_whitelist kind=maxsteps（启动时 InitAgent 加载，重启不丢）。
+// 刻意不回写 config.yaml（注释会丢）：yaml 值仅作 DB 无记录时的初始默认
+func (s *Server) handleAdminAgentSettingsSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxSteps int `json:"max_steps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if req.MaxSteps < agentStepsMin || req.MaxSteps > agentStepsMax {
+		adminFail(w, http.StatusBadRequest, fmt.Sprintf("max_steps 取值范围 %d~%d", agentStepsMin, agentStepsMax))
+		return
+	}
+	agentMaxSteps.Store(int64(req.MaxSteps))
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ?", "maxsteps").First(&row).Error; err == nil {
+		store.DB.Model(&row).Update("value", strconv.Itoa(req.MaxSteps))
+	} else {
+		store.DB.Create(&model.AgentWhitelist{Kind: "maxsteps", Value: strconv.Itoa(req.MaxSteps)})
+	}
+	logger.Info("后台管理：Agent max_steps 调整为 %d（热生效，运行中任务下一步即按新值判定）", req.MaxSteps)
+	adminJSON(w, map[string]interface{}{"max_steps": req.MaxSteps})
 }
 
 // ===== 通用归口 =====
