@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.51">
-    <link rel="stylesheet" href="css/admin.css?v=1.8">
+    <link rel="stylesheet" href="css/admin.css?v=1.9">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -252,20 +252,108 @@
                 </div>
             </section>
 
-            <!-- Agent 运行参数设置（阶段八十一：后台热更新，保存即生效+重启不丢） -->
+            <!-- Agent 运行参数设置（阶段八十一/八十二：后台热更新，保存即生效+重启不丢） -->
             <section id="admin-view-agentsettings" class="admin-view">
                 <header class="admin-view-head">
                     <h2>Agent 设置</h2>
                     <span id="agentset-status" class="admin-view-tip"></span>
                 </header>
-                <p class="admin-view-tip">Agent 自动化任务的运行参数。保存后立即热生效（运行中任务的下一步即按新值判定），无需重启服务端；设置持久化保存，重启后保持。</p>
-                <div class="agentset-row">
-                    <label class="agentset-label" for="agentset-max-steps">单任务最大迭代步数</label>
-                    <input type="number" id="agentset-max-steps" class="admin-input agentset-input" min="1" max="500" step="1" title="步数=模型决策+工具执行的一轮循环">
-                    <button id="agentset-save" class="admin-btn primary">保存</button>
+                <p class="admin-view-tip">Agent 自动化任务的运行参数。保存后立即热生效（运行中任务的下一步即按新值判定），无需重启服务端；全部设置持久化保存，重启后保持。</p>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">基础限制</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-max-steps" title="步数=模型决策+工具执行的一轮循环，达到上限任务以失败结束">单任务最大迭代步数</label>
+                        <input type="number" id="agentset-max-steps" class="admin-input agentset-num" min="1" max="500" step="1">
+                        <span class="agentset-range">1~500</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-tool-timeout" title="run_command/http_request 等工具默认超时">命令默认超时（秒）</label>
+                        <input type="number" id="agentset-tool-timeout" class="admin-input agentset-num" min="5" max="300" step="1">
+                        <span class="agentset-range">5~300</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-approve-timeout" title="高危工具（写文件/删文件/命令等）等待用户审批的超时">审批等待超时（秒）</label>
+                        <input type="number" id="agentset-approve-timeout" class="admin-input agentset-num" min="10" max="3600" step="1">
+                        <span class="agentset-range">10~3600</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-concurrency" title="每用户同时运行的任务数上限">每用户并发任务数</label>
+                        <input type="number" id="agentset-concurrency" class="admin-input agentset-num" min="1" max="10" step="1">
+                        <span class="agentset-range">1~10</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-queue-size" title="每用户排队任务数上限，排队满时新任务直接拒绝">每用户排队上限</label>
+                        <input type="number" id="agentset-queue-size" class="admin-input agentset-num" min="1" max="50" step="1">
+                        <span class="agentset-range">1~50</span>
+                    </div>
+                </div>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">任务与审批</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-enabled"> Agent 功能总开关（关闭后无法发起新任务）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-pc-exec"> 本地执行器（PC 在线时文件/命令在用户电脑本地执行）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-autowrite"> 写文件/编辑文件免审批（全局开关，对所有用户生效）</label>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">命令自动放行白名单 <span class="agentset-sub-tip">（全局白名单：命中前缀的命令免审批，对所有用户生效）</span></label>
+                        <div id="agentset-cmds" class="agentset-cmds"></div>
+                        <div class="agentset-cmd-add">
+                            <input type="text" id="agentset-cmd-input" class="admin-input" placeholder="命令首词，如 git / node / npm（回车添加）" maxlength="64">
+                            <button id="agentset-cmd-add" class="admin-btn small">添加</button>
+                        </div>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">用户个人命令白名单 <span class="agentset-sub-tip">（按用户隔离：来自审批弹窗"同意并加白"，仅该用户本人生效；点 × 收回）</span></label>
+                        <div id="agentset-user-cmds" class="agentset-cmds"></div>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">用户个人写文件免审批 <span class="agentset-sub-tip">（按用户隔离：来自审批弹窗加白，仅该用户写/编辑文件免审批；点 × 收回）</span></label>
+                        <div id="agentset-user-write" class="agentset-cmds"></div>
+                    </div>
+                </div>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">网络工具</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-http-enabled"> http_request 工具（服务端代理 HTTP 请求）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-http-private"> 允许访问内网/回环地址（关闭后在拨号层拦截私网地址）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-search-enabled"> web_search 联网搜索（Agent 与普通聊天共用）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-provider">搜索服务商</label>
+                        <select id="agentset-search-provider" class="admin-input agentset-num">
+                            <option value="">未选择</option>
+                            <option value="tavily">tavily（需 API Key）</option>
+                            <option value="bocha">bocha（需 API Key）</option>
+                            <option value="searxng">searxng（需实例地址）</option>
+                            <option value="duckduckgo">duckduckgo（免 Key）</option>
+                        </select>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-key">搜索 API Key</label>
+                        <input type="password" id="agentset-search-key" class="admin-input agentset-wide" placeholder="" autocomplete="new-password">
+                        <span id="agentset-key-hint" class="agentset-sub-tip"></span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-endpoint">SearXNG 实例地址</label>
+                        <input type="text" id="agentset-search-endpoint" class="admin-input agentset-wide" placeholder="如 http://127.0.0.1:8889">
+                    </div>
+                </div>
+
+                <div class="agentset-actions">
+                    <button id="agentset-save" class="admin-btn primary">保存全部设置</button>
                     <span id="agentset-tip" class="admin-view-tip"></span>
                 </div>
-                <p class="admin-view-tip">步数指"模型决策 + 工具执行"的循环轮数，达到上限任务以失败结束（提示"已达最大迭代步数"）。默认 30；复杂任务（多文件编辑/多命令执行）建议调大，取值 1~500。</p>
             </section>
         </main>
     </div>
@@ -320,6 +408,6 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.11"></script>
+    <script src="js/admin.js?v=1.12"></script>
 </body>
 </html>

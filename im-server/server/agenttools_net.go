@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 // 阶段六十八：Agent 工具扩展（HTTP 请求 + 联网搜索）
 // http_request：服务端代理 HTTP 接口调用（调接口/查数据/抓取网页），GET/HEAD 只读自动放行，
@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -33,15 +34,39 @@ const (
 	agentHttpDialTimeout = 10 * time.Second
 )
 
-// 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载）
+// 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载）。
+// 阶段八十二：后台管理可热改（atomic），落库 im_agent_whitelist 重启不丢
 var (
-	agentHttpEnabled      = false // http_request 工具开关（nil 配置=默认开启，InitAgent 归口）
-	agentHttpAllowPrivate = true  // 是否允许访问内网/回环地址（内网信任部署默认允许）
-	agentSearchEnabled    = false // web_search 工具开关（默认关闭，须显式开启）
-	agentSearchProvider   = ""    // tavily / bocha / searxng / duckduckgo
-	agentSearchAPIKey     = ""    // tavily/bocha API Key
-	agentSearchEndpoint   = ""    // searxng 自建实例地址
+	agentHttpEnabled      atomic.Bool // http_request 工具开关（nil 配置=默认开启，InitAgent 归口）
+	agentHttpAllowPrivate atomic.Bool // 是否允许访问内网/回环地址（内网信任部署默认允许）
+	agentSearchEnabled    atomic.Bool // web_search 工具开关（默认关闭，须显式开启）
 )
+
+// agentSearchCfg web_search 服务商配置快照（provider/key/endpoint 三元组整体替换防撕裂）
+type agentSearchCfg struct {
+	Provider string // tavily / bocha / searxng / duckduckgo
+	APIKey   string // tavily/bocha API Key
+	Endpoint string // searxng 自建实例地址
+}
+
+var agentSearchConf atomic.Value // *agentSearchCfg
+
+// agentSearchConfig 读取当前搜索配置快照（未初始化时返回零值结构）
+func agentSearchConfig() *agentSearchCfg {
+	if v, ok := agentSearchConf.Load().(*agentSearchCfg); ok && v != nil {
+		return v
+	}
+	return &agentSearchCfg{}
+}
+
+// agentSearchConfigStore 整体替换搜索配置快照（InitAgent 启动加载与后台保存归口）
+func agentSearchConfigStore(provider, apiKey, endpoint string) {
+	agentSearchConf.Store(&agentSearchCfg{
+		Provider: strings.ToLower(strings.TrimSpace(provider)),
+		APIKey:   strings.TrimSpace(apiKey),
+		Endpoint: strings.TrimSpace(endpoint),
+	})
+}
 
 // agentHTTPMethods http_request 允许的 HTTP 方法（白名单外方法直接报错）
 var agentHTTPMethods = map[string]bool{
@@ -58,7 +83,7 @@ func agentIsPrivateIP(ip net.IP) bool {
 // DialContext 地址解析回调）拦截私网/回环地址——回调拿到的是 DNS 解析后的真实 IP，域名解析绕不过
 func agentHTTPTransport() *http.Transport {
 	t := &http.Transport{Proxy: http.ProxyFromEnvironment}
-	if agentHttpAllowPrivate {
+	if agentHttpAllowPrivate.Load() {
 		return t
 	}
 	dialer := &net.Dialer{Timeout: agentHttpDialTimeout}
@@ -92,7 +117,7 @@ func agentToolHttpRequest(params map[string]interface{}) string {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return "错误：url 无效（仅支持 http/https 完整地址）"
 	}
-	timeout := agentToolTimeout
+	timeout := time.Duration(agentToolTimeout.Load()) * time.Second
 	if v, ok := params["timeout"].(float64); ok && v > 0 {
 		if v > agentCmdTimeoutMax {
 			v = agentCmdTimeoutMax
@@ -196,8 +221,8 @@ func agentParamString(v interface{}) string {
 
 // agentToolWebSearch web_search 工具执行归口：按配置服务商分发，统一格式化回传
 func agentToolWebSearch(params map[string]interface{}) string {
-	if !agentSearchEnabled {
-		return "错误：联网搜索未开启（服务端 config.yaml ai.agent.web_search 配置 enabled=true 并选择 provider）"
+	if !agentSearchEnabled.Load() {
+		return "错误：联网搜索未开启（后台管理 Agent 设置或 config.yaml ai.agent.web_search 配置 enabled=true 并选择 provider）"
 	}
 	query := strings.TrimSpace(agentParamString(params["query"]))
 	if query == "" {
@@ -210,7 +235,8 @@ func agentToolWebSearch(params map[string]interface{}) string {
 			count = agentSearchMaxCount
 		}
 	}
-	switch agentSearchProvider {
+	scfg := agentSearchConfig()
+	switch scfg.Provider {
 	case "tavily":
 		return agentSearchTavily(query, count)
 	case "bocha":
@@ -220,7 +246,7 @@ func agentToolWebSearch(params map[string]interface{}) string {
 	case "duckduckgo":
 		return agentSearchDuckDuckGo(query, count)
 	}
-	return "错误：未知的搜索服务商 provider=" + agentSearchProvider + "（支持 tavily/bocha/searxng/duckduckgo）"
+	return "错误：未知的搜索服务商 provider=" + scfg.Provider + "（支持 tavily/bocha/searxng/duckduckgo）"
 }
 
 // agentSearchFormat 搜索结果统一格式化归口
@@ -269,10 +295,11 @@ func agentSearchPost(apiURL string, headers map[string]string, body string) ([]b
 
 // agentSearchTavily Tavily 搜索（AI 检索 API，https://api.tavily.com）
 func agentSearchTavily(query string, count int) string {
-	if agentSearchAPIKey == "" {
-		return "错误：搜索服务商 tavily 需要 API Key（config.yaml ai.agent.web_search.api_key）"
+	key := agentSearchConfig().APIKey
+	if key == "" {
+		return "错误：搜索服务商 tavily 需要 API Key（后台管理 Agent 设置或 config.yaml ai.agent.web_search.api_key）"
 	}
-	body := fmt.Sprintf(`{"api_key":%q,"query":%q,"max_results":%d,"search_depth":"basic"}`, agentSearchAPIKey, query, count)
+	body := fmt.Sprintf(`{"api_key":%q,"query":%q,"max_results":%d,"search_depth":"basic"}`, key, query, count)
 	data, err := agentSearchPost("https://api.tavily.com/search", nil, body)
 	if err != nil {
 		return "错误：搜索请求失败 " + err.Error()
@@ -296,12 +323,13 @@ func agentSearchTavily(query string, count int) string {
 
 // agentSearchBocha 博查搜索（国内服务商，https://api.bochaai.com/v1/web-search）
 func agentSearchBocha(query string, count int) string {
-	if agentSearchAPIKey == "" {
-		return "错误：搜索服务商 bocha 需要 API Key（config.yaml ai.agent.web_search.api_key）"
+	key := agentSearchConfig().APIKey
+	if key == "" {
+		return "错误：搜索服务商 bocha 需要 API Key（后台管理 Agent 设置或 config.yaml ai.agent.web_search.api_key）"
 	}
 	body := fmt.Sprintf(`{"query":%q,"count":%d,"summary":true}`, query, count)
 	data, err := agentSearchPost("https://api.bochaai.com/v1/web-search",
-		map[string]string{"Authorization": "Bearer " + agentSearchAPIKey}, body)
+		map[string]string{"Authorization": "Bearer " + key}, body)
 	if err != nil {
 		return "错误：搜索请求失败 " + err.Error()
 	}
@@ -337,10 +365,11 @@ func agentSearchBocha(query string, count int) string {
 
 // agentSearchSearXNG SearXNG 自建实例搜索（JSON 输出格式，需实例开启 format=json）
 func agentSearchSearXNG(query string, count int) string {
-	if agentSearchEndpoint == "" {
-		return "错误：搜索服务商 searxng 需要配置实例地址（config.yaml ai.agent.web_search.endpoint，如 http://127.0.0.1:8889）"
+	endpoint := agentSearchConfig().Endpoint
+	if endpoint == "" {
+		return "错误：搜索服务商 searxng 需要配置实例地址（后台管理 Agent 设置或 config.yaml ai.agent.web_search.endpoint，如 http://127.0.0.1:8889）"
 	}
-	api := strings.TrimRight(agentSearchEndpoint, "/") + "/search?q=" + url.QueryEscape(query) + "&format=json"
+	api := strings.TrimRight(endpoint, "/") + "/search?q=" + url.QueryEscape(query) + "&format=json"
 	ctx, cancel := context.WithTimeout(context.Background(), agentSearchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)

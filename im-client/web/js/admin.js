@@ -1224,34 +1224,223 @@
         });
     }
 
-    // ===== Agent 运行参数设置（阶段八十一：max_steps 后台热更新） =====
-    // 读取当前生效值（内存值，含热改未重启部分）回填输入框
+    // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====
+    var agentSetCmds = []; // 全局命令白名单工作副本（增删后随保存一并全量提交）
+    // 阶段八十三：用户个人白名单（按用户隔离，来自审批弹窗"同意并加白"；后台仅查看/收回）
+    var agentSetUserCmds = {};  // { username: [前缀, ...] }
+    var agentSetUserWrite = []; // [username, ...] 已开启个人写免审批的用户
+
+    // 命令白名单标签渲染（× 可删，保存时全量提交）
+    function agentSetCmdsRender() {
+        var box = $('agentset-cmds');
+        box.innerHTML = '';
+        if (!agentSetCmds.length) {
+            var empty = document.createElement('span');
+            empty.className = 'agentset-cmd-empty';
+            empty.textContent = '（空——所有命令均需审批）';
+            box.appendChild(empty);
+            return;
+        }
+        agentSetCmds.forEach(function (c, i) {
+            var chip = document.createElement('span');
+            chip.className = 'agentset-cmd-chip';
+            chip.appendChild(document.createTextNode(c));
+            var del = document.createElement('button');
+            del.className = 'agentset-cmd-del';
+            del.textContent = '×';
+            del.title = '移除 ' + c;
+            del.addEventListener('click', function () {
+                agentSetCmds.splice(i, 1);
+                agentSetCmdsRender();
+            });
+            chip.appendChild(del);
+            box.appendChild(chip);
+        });
+    }
+
+    // 阶段八十三：个人白名单渲染（命令：用户›前缀；写免审批：用户名）。× 即时收回（服务端同步删行）
+    function agentSetUserWlRender() {
+        var cmdBox = $('agentset-user-cmds');
+        var writeBox = $('agentset-user-write');
+        cmdBox.innerHTML = '';
+        writeBox.innerHTML = '';
+        var users = Object.keys(agentSetUserCmds).sort();
+        var cmdCount = 0;
+        users.forEach(function (u) { cmdCount += (agentSetUserCmds[u] || []).length; });
+        if (!cmdCount) {
+            var empty = document.createElement('span');
+            empty.className = 'agentset-cmd-empty';
+            empty.textContent = '（暂无——各用户在审批弹窗点"同意并加白"后在此显示，仅对其本人生效）';
+            cmdBox.appendChild(empty);
+        } else {
+            users.forEach(function (u) {
+                (agentSetUserCmds[u] || []).forEach(function (c) {
+                    cmdBox.appendChild(agentSetUserChip(u, c, false));
+                });
+            });
+        }
+        if (!agentSetUserWrite.length) {
+            var empty2 = document.createElement('span');
+            empty2.className = 'agentset-cmd-empty';
+            empty2.textContent = '（暂无——各用户在审批弹窗加白后在此显示，仅对其本人生效）';
+            writeBox.appendChild(empty2);
+        } else {
+            agentSetUserWrite.slice().sort().forEach(function (u) {
+                writeBox.appendChild(agentSetUserChip(u, '', true));
+            });
+        }
+    }
+
+    // agentSetUserChip 个人白名单条目标签（user 高亮用户名，cmd 为空=写免审批条目）
+    function agentSetUserChip(user, cmd, isWrite) {
+        var chip = document.createElement('span');
+        chip.className = 'agentset-cmd-chip agentset-user-chip';
+        var u = document.createElement('span');
+        u.className = 'agentset-user-chip-name';
+        u.textContent = user;
+        chip.appendChild(u);
+        if (!isWrite) {
+            chip.appendChild(document.createTextNode('›'));
+            chip.appendChild(document.createTextNode(' ' + cmd));
+        } else {
+            chip.appendChild(document.createTextNode(' 写文件免审批'));
+        }
+        var del = document.createElement('button');
+        del.className = 'agentset-cmd-del';
+        del.textContent = '×';
+        del.title = isWrite ? '收回 ' + user + ' 的写文件免审批' : '移除 ' + user + ' 的 ' + cmd + ' 白名单';
+        del.addEventListener('click', function () {
+            var body = isWrite ? { user_autowrite_off: user } : { user_cmd_remove: { username: user, command: cmd } };
+            api('PUT', '/admin/api/agent/settings', body).then(function (result) {
+                if (!result.ok) {
+                    showToast(result.msg || '操作失败');
+                    return;
+                }
+                if (isWrite) {
+                    agentSetUserWrite = agentSetUserWrite.filter(function (x) { return x !== user; });
+                } else {
+                    var list = (agentSetUserCmds[user] || []).filter(function (x) { return x !== cmd; });
+                    if (list.length) agentSetUserCmds[user] = list; else delete agentSetUserCmds[user];
+                }
+                agentSetUserWlRender();
+                agentSetApplyKeyHint(result.data || {});
+                showToast(isWrite ? '已收回该用户的写文件免审批' : '已移除该用户的个人白名单条目');
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+        chip.appendChild(del);
+        return chip;
+    }
+
+    function agentSetApplyKeyHint(d) {
+        // 密钥脱敏：不回显明文，仅提示配置状态；留空=保持不变
+        $('agentset-key-hint').textContent = d.search_key_set ? d.search_key_hint : '未配置';
+        $('agentset-search-key').placeholder = d.search_key_set ? '留空保持不变' : 'tavily/bocha 的 API Key';
+    }
+
+    // 读取当前生效值（内存值，含热改未重启部分）回填表单
     function loadAgentSettings() {
         api('GET', '/admin/api/agent/settings').then(function (result) {
             if (!result.ok) {
                 showToast(result.msg || '加载失败');
                 return;
             }
-            var v = result.data.max_steps;
-            $('agentset-max-steps').value = v;
-            $('agentset-tip').textContent = '当前生效：' + v + ' 步';
+            var d = result.data;
+            $('agentset-max-steps').value = d.max_steps;
+            $('agentset-tool-timeout').value = d.tool_timeout;
+            $('agentset-approve-timeout').value = d.approve_timeout;
+            $('agentset-concurrency').value = d.concurrency;
+            $('agentset-queue-size').value = d.queue_size;
+            $('agentset-enabled').checked = !!d.enabled;
+            $('agentset-pc-exec').checked = !!d.pc_executor;
+            $('agentset-autowrite').checked = !!d.auto_write;
+            agentSetCmds = (d.auto_commands || []).slice();
+            agentSetCmdsRender();
+            // 阶段八十三：个人白名单视图回填（查看/收回，不随"保存全部"提交）
+            agentSetUserCmds = d.user_commands || {};
+            agentSetUserWrite = d.user_autowrite || [];
+            agentSetUserWlRender();
+            $('agentset-http-enabled').checked = !!d.http_enabled;
+            $('agentset-http-private').checked = !!d.http_allow_private;
+            $('agentset-search-enabled').checked = !!d.search_enabled;
+            $('agentset-search-provider').value = d.search_provider || '';
+            $('agentset-search-key').value = '';
+            $('agentset-search-endpoint').value = d.search_endpoint || '';
+            agentSetApplyKeyHint(d);
+            $('agentset-tip').textContent = '已加载当前生效值';
+            $('agentset-status').textContent = '';
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     }
-    // 保存：服务端内存原子写入立即热生效（运行中任务下一步即按新值判定）+ 落库重启不丢
-    $('agentset-save').addEventListener('click', function () {
-        var raw = $('agentset-max-steps').value.trim();
-        var v = parseInt(raw, 10);
-        if (!v || v < 1 || v > 500 || String(v) !== raw) {
-            showToast('步数须为 1~500 的整数');
+
+    function agentSetAddCmd() {
+        var input = $('agentset-cmd-input');
+        var v = input.value.trim().toLowerCase();
+        if (!v) return;
+        if (agentSetCmds.indexOf(v) >= 0) {
+            showToast('该前缀已在白名单');
             return;
         }
-        api('PUT', '/admin/api/agent/settings', { max_steps: v }).then(function (result) {
+        agentSetCmds.push(v);
+        agentSetCmdsRender();
+        input.value = '';
+    }
+    $('agentset-cmd-add').addEventListener('click', agentSetAddCmd);
+    $('agentset-cmd-input').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            agentSetAddCmd();
+        }
+    });
+
+    // 保存：服务端内存原子写入立即热生效（运行中任务下一步即按新值判定）+ 落库重启不丢
+    $('agentset-save').addEventListener('click', function () {
+        var num = function (id, lo, hi) {
+            var raw = $(id).value.trim();
+            var v = parseInt(raw, 10);
+            if (raw === '' || String(v) !== raw || v < lo || v > hi) {
+                showToast('存在超出允许范围的数值，请检查标有范围提示的输入项');
+                return null;
+            }
+            return v;
+        };
+        var maxSteps = num('agentset-max-steps', 1, 500);
+        var toolTimeout = num('agentset-tool-timeout', 5, 300);
+        var approveTimeout = num('agentset-approve-timeout', 10, 3600);
+        var concurrency = num('agentset-concurrency', 1, 10);
+        var queueSize = num('agentset-queue-size', 1, 50);
+        if (maxSteps === null || toolTimeout === null || approveTimeout === null || concurrency === null || queueSize === null) return;
+        var body = {
+            max_steps: maxSteps,
+            tool_timeout: toolTimeout,
+            approve_timeout: approveTimeout,
+            concurrency: concurrency,
+            queue_size: queueSize,
+            enabled: $('agentset-enabled').checked,
+            pc_executor: $('agentset-pc-exec').checked,
+            auto_write: $('agentset-autowrite').checked,
+            auto_commands: agentSetCmds.slice(),
+            http_enabled: $('agentset-http-enabled').checked,
+            http_allow_private: $('agentset-http-private').checked,
+            search_enabled: $('agentset-search-enabled').checked,
+            search_provider: $('agentset-search-provider').value,
+            search_endpoint: $('agentset-search-endpoint').value.trim()
+        };
+        var keyVal = $('agentset-search-key').value.trim();
+        if (keyVal !== '') body.search_key = keyVal; // 留空=保持不变（不传该字段）
+        api('PUT', '/admin/api/agent/settings', body).then(function (result) {
             if (!result.ok) {
                 showToast(result.msg || '保存失败');
                 return;
             }
-            $('agentset-tip').textContent = '当前生效：' + result.data.max_steps + ' 步（已热生效）';
-            showToast('已保存并热生效：' + result.data.max_steps + ' 步');
+            $('agentset-search-key').value = '';
+            agentSetApplyKeyHint(result.data);
+            // 阶段八十三：保存回执附带个人白名单快照，同步刷新（保存主体不影响个人白名单）
+            if (result.data && result.data.user_commands) {
+                agentSetUserCmds = result.data.user_commands;
+                agentSetUserWrite = result.data.user_autowrite || [];
+                agentSetUserWlRender();
+            }
+            $('agentset-tip').textContent = '已保存并热生效（' + new Date().toLocaleTimeString() + '）';
+            showToast('Agent 设置已保存并热生效');
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 

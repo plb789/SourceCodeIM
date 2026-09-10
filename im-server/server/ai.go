@@ -743,7 +743,7 @@ func aiAgentsPublicInfo(username string) []map[string]interface{} {
 			// 阶段五十七：个人标记（前端据此显示"个人"小标与管理入口）
 			"owner": a.Owner,
 			// 阶段六十九：服务端联网搜索开关（前端据此显隐普通聊天联网按钮，配置全局归口）
-			"web_search": agentSearchEnabled,
+			"web_search": agentSearchEnabled.Load(),
 		})
 	}
 	return list
@@ -885,7 +885,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 
 	// 阶段六十九：普通聊天联网搜索开关（前端经上行 remark="web_search" 传递；服务端配置未开启时
 	// 静默降级为普通问答，配置归口与 Agent 任务共用 agentSearchEnabled）
-	useSearch := msg.Remark == "web_search" && agentSearchEnabled
+	useSearch := msg.Remark == "web_search" && agentSearchEnabled.Load()
 
 	// 阶段四十四：图片能力双保险校验（前端入口已隐藏，此处兜底防止协议直发绕过）
 	if imageEnv != nil {

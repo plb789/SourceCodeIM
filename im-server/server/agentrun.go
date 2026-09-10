@@ -71,27 +71,44 @@ var agentGrepSkipDirs = map[string]bool{
 	"bin": true, "obj": true, "target": true,
 }
 
-// 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载，均有兜底默认值）
+// 运行时配置（InitAgent 从 config.yaml ai.agent 节点加载，均有兜底默认值）。
+// 阶段八十一/八十二：除 agentWorkRoot（路径安全归口，仅启动加载）与白名单两变量（agentWlMu 保护）外，
+// 全部为 atomic——后台管理保存即热生效（运行中任务下一步即按新值判定），落库重启不丢
 var (
-	agentEnabled     = false
-	agentMaxSteps    atomic.Int64 // 单任务最大迭代步数（阶段八十一：后台管理可热改+DB 持久化，任务循环每步实时读取）
-	agentToolTimeout = 60 * time.Second
-	agentApproveWait = 300 * time.Second
-	agentAutoWrite   = false
-	agentAutoCmds    []string
-	agentWorkRoot    = ""
-	agentPcExec      = false // 阶段六十：本地执行器开关（true 时 PC 端在线则文件/命令下放用户本地执行）
-	agentConcurrency = 1     // 阶段六十七：每用户同时运行任务数上限
-	agentQueueSize   = 5     // 阶段六十七：每用户排队任务数上限（排队已满直接拒绝）
+	agentEnabled     atomic.Bool             // Agent 总开关
+	agentMaxSteps    atomic.Int64            // 单任务最大迭代步数
+	agentToolTimeout atomic.Int64            // run_command 默认超时秒（1~300）
+	agentApproveWait atomic.Int64            // 高危工具审批等待超时秒
+	agentAutoWrite   = false                 // 全局写文件免审批（后台设置；agentWlMu 保护）
+	agentAutoCmds    []string                // 全局命令自动放行白名单前缀（后台设置，对全员生效；agentWlMu 保护）
+	agentUserCmds    = map[string][]string{} // 阶段八十三：用户个人命令白名单（审批弹窗"同意并加白"仅本人生效；agentWlMu 保护）
+	agentUserWrite   = map[string]bool{}     // 阶段八十三：用户个人写文件免审批开关（同上；agentWlMu 保护）
+	agentWorkRoot    = ""                    // 工作区根目录（不开放热改：改错路径会让新任务文件落错磁盘位置）
+	agentPcExec      atomic.Bool             // 本地执行器开关（true 时 PC 端在线则文件/命令下放用户本地执行）
+	agentConcurrency atomic.Int64            // 每用户同时运行任务数上限
+	agentQueueSize   atomic.Int64            // 每用户排队任务数上限（排队已满直接拒绝）
 )
 
-// 后台可调 max_steps 的合法区间（上限防"防死循环"初衷失效；后台保存与启动加载共用同一校验）
+// 后台可调参数的合法区间（后台保存与启动加载共用同一校验）
 const (
-	agentStepsMin = 1
-	agentStepsMax = 500
+	agentStepsMin   = 1
+	agentStepsMax   = 500
+	agentToolTMin   = 5  // run_command 默认超时秒下限
+	agentApproveMin = 10 // 审批等待秒下限
+	agentApproveMax = 3600
+	agentConcMin    = 1 // 每用户并发上限区间
+	agentConcMax    = 10
+	agentQueueMin   = 1 // 排队上限区间
+	agentQueueMax   = 50
 )
 
-func init() { agentMaxSteps.Store(30) } // 兜底默认（config.yaml/DB 均未配置时生效）
+func init() { // 兜底默认（config.yaml/DB 均未配置时生效）
+	agentMaxSteps.Store(30)
+	agentToolTimeout.Store(60)
+	agentApproveWait.Store(300)
+	agentConcurrency.Store(1)
+	agentQueueSize.Store(5)
+}
 
 // AgentTodoItem 任务清单条目（todo_write 全量替换，前端渲染进度条）
 type AgentTodoItem struct {
@@ -203,7 +220,7 @@ func (s *Server) agentDispatchNext(username string) {
 	agentQueueMu.Lock()
 	active, queued := agentCountForUser(username)
 	var head *AgentTask
-	if active < agentConcurrency && len(queued) > 0 {
+	if active < int(agentConcurrency.Load()) && len(queued) > 0 {
 		head = queued[0]
 		queued = queued[1:]
 		head.mu.Lock()
@@ -236,7 +253,7 @@ func agentUsernameDir(username string) string {
 
 // InitAgent 阶段五十九：初始化智能 Agent 模块（config 归口 + 任务表迁移）
 func InitAgent(cfg *config.Config) {
-	agentEnabled = cfg.AI.Agent.Enabled
+	agentEnabled.Store(cfg.AI.Agent.Enabled)
 	if cfg.AI.Agent.MaxSteps > 0 {
 		agentMaxSteps.Store(int64(cfg.AI.Agent.MaxSteps))
 	}
@@ -245,30 +262,31 @@ func InitAgent(cfg *config.Config) {
 		if t > agentCmdTimeoutMax {
 			t = agentCmdTimeoutMax
 		}
-		agentToolTimeout = time.Duration(t) * time.Second
+		agentToolTimeout.Store(int64(t))
 	}
 	if cfg.AI.Agent.ApproveTimeoutSeconds > 0 {
-		agentApproveWait = time.Duration(cfg.AI.Agent.ApproveTimeoutSeconds) * time.Second
+		agentApproveWait.Store(int64(cfg.AI.Agent.ApproveTimeoutSeconds))
 	}
 	agentAutoWrite = cfg.AI.Agent.AutoWrite
 	agentAutoCmds = cfg.AI.Agent.AutoCommands
-	agentPcExec = cfg.AI.Agent.PcExecutor
+	agentPcExec.Store(cfg.AI.Agent.PcExecutor)
 	// 阶段六十七：任务队列参数归口（并发上限 0=1，排队上限 0=5）
 	if cfg.AI.Agent.Concurrency > 0 {
-		agentConcurrency = cfg.AI.Agent.Concurrency
+		agentConcurrency.Store(int64(cfg.AI.Agent.Concurrency))
 	}
 	if cfg.AI.Agent.QueueSize > 0 {
-		agentQueueSize = cfg.AI.Agent.QueueSize
+		agentQueueSize.Store(int64(cfg.AI.Agent.QueueSize))
 	}
 	// 工作区根目录已在 config.Load 归口解析为绝对路径（空=exe目录/agent_workspace）
 	agentWorkRoot = cfg.AI.Agent.WorkspaceRoot
 	// 阶段六十八：网络工具配置归口（http_request 默认开启；web_search 默认关闭须显式配置服务商）
-	agentHttpEnabled = cfg.AI.Agent.HttpEnabled == nil || *cfg.AI.Agent.HttpEnabled
-	agentHttpAllowPrivate = cfg.AI.Agent.HttpAllowPrivate == nil || *cfg.AI.Agent.HttpAllowPrivate
-	agentSearchEnabled = cfg.AI.Agent.WebSearch.Enabled != nil && *cfg.AI.Agent.WebSearch.Enabled
-	agentSearchProvider = strings.ToLower(strings.TrimSpace(cfg.AI.Agent.WebSearch.Provider))
-	agentSearchAPIKey = strings.TrimSpace(cfg.AI.Agent.WebSearch.APIKey)
-	agentSearchEndpoint = strings.TrimSpace(cfg.AI.Agent.WebSearch.Endpoint)
+	agentHttpEnabled.Store(cfg.AI.Agent.HttpEnabled == nil || *cfg.AI.Agent.HttpEnabled)
+	agentHttpAllowPrivate.Store(cfg.AI.Agent.HttpAllowPrivate == nil || *cfg.AI.Agent.HttpAllowPrivate)
+	agentSearchEnabled.Store(cfg.AI.Agent.WebSearch.Enabled != nil && *cfg.AI.Agent.WebSearch.Enabled)
+	agentSearchConfigStore(
+		strings.ToLower(strings.TrimSpace(cfg.AI.Agent.WebSearch.Provider)),
+		strings.TrimSpace(cfg.AI.Agent.WebSearch.APIKey),
+		strings.TrimSpace(cfg.AI.Agent.WebSearch.Endpoint))
 	if err := store.DB.AutoMigrate(&model.AgentTaskRecord{}); err != nil {
 		logger.Error("Agent 任务表迁移失败: %v", err)
 	}
@@ -297,28 +315,136 @@ func InitAgent(cfg *config.Config) {
 	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
 		logger.Error("Agent 白名单表迁移失败: %v", err)
 	} else {
+		// 阶段八十二：命令白名单改全量语义（后台管理 = 全局唯一真值）。首次升级（无 cmdinit 标记）时
+		// 将 config.yaml 白名单与既有 DB 全局行（审批加白）合并回写 DB 并打标记，之后 DB 集合即真值（空集亦合法）。
+		// 阶段八十三：行按 username 拆分——空=全局（agentAutoCmds），非空=用户个人（agentUserCmds，仅本人生效）
 		var wlRows []model.AgentWhitelist
 		store.DB.Where("kind = ?", "cmd").Find(&wlRows)
-		for _, r := range wlRows {
-			v := strings.ToLower(strings.TrimSpace(r.Value))
-			if v != "" && !agentCmdWhitelisted(v) {
-				agentAutoCmds = append(agentAutoCmds, v)
+		var initRow model.AgentWhitelist
+		dbInit := store.DB.Where("kind = ?", "cmdinit").First(&initRow).Error == nil
+		if dbInit || len(wlRows) > 0 {
+			cmds := make([]string, 0, len(wlRows))
+			seen := map[string]bool{}
+			userSeen := map[string]map[string]bool{}
+			for _, r := range wlRows {
+				v := strings.ToLower(strings.TrimSpace(r.Value))
+				if v == "" {
+					continue
+				}
+				if r.Username != "" {
+					// 用户个人行：按用户去重装载（仅该用户生效）
+					if userSeen[r.Username] == nil {
+						userSeen[r.Username] = map[string]bool{}
+					}
+					if !userSeen[r.Username][v] {
+						userSeen[r.Username][v] = true
+						agentUserCmds[r.Username] = append(agentUserCmds[r.Username], v)
+					}
+					continue
+				}
+				if !seen[v] {
+					seen[v] = true
+					cmds = append(cmds, v)
+				}
+			}
+			if !dbInit {
+				// 一次性迁移：config 白名单并入 DB 全局集合 + 写初始化标记
+				for _, v := range agentAutoCmds {
+					v = strings.ToLower(strings.TrimSpace(v))
+					if v != "" && !seen[v] {
+						seen[v] = true
+						cmds = append(cmds, v)
+						store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: v})
+					}
+				}
+				store.DB.Create(&model.AgentWhitelist{Kind: "cmdinit", Value: "1"})
+			}
+			agentAutoCmds = cmds
+		} else {
+			// DB 从未有白名单：固化 config 值进 DB（后台接管为唯一真值）
+			for _, v := range agentAutoCmds {
+				v = strings.ToLower(strings.TrimSpace(v))
+				if v != "" {
+					store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: v})
+				}
+			}
+			store.DB.Create(&model.AgentWhitelist{Kind: "cmdinit", Value: "1"})
+		}
+		// 阶段八十三：写文件免审批按 username 拆分——空=全局开关（后台设置），非空=用户个人开关（审批加白）
+		var awRows []model.AgentWhitelist
+		store.DB.Where("kind = ?", "autowrite").Find(&awRows)
+		for _, r := range awRows {
+			if r.Username == "" {
+				agentAutoWrite = r.Value != "0" // 阶段八十二：支持关闭（"0"=关）；旧记录空值/"on" 视为开
+			} else {
+				agentUserWrite[r.Username] = r.Value != "0"
 			}
 		}
-		var awRow model.AgentWhitelist
-		if err := store.DB.Where("kind = ?", "autowrite").First(&awRow).Error; err == nil {
-			agentAutoWrite = true
-		}
-		logger.Info("Agent 审批白名单加载完成：命令前缀 %d 条（含配置），写文件免审批=%v", len(agentAutoCmds), agentAutoWrite)
+		logger.Info("Agent 审批白名单加载完成：全局命令前缀 %d 条，全局写免审批=%v，个人白名单用户数 %d（命令 %d 条，写免审批 %d 人）",
+			len(agentAutoCmds), agentAutoWrite, len(agentUserCmds), func() int {
+				n := 0
+				for _, l := range agentUserCmds {
+					n += len(l)
+				}
+				return n
+			}(), len(agentUserWrite))
 	}
-	// 阶段八十一：后台可调 max_steps 启动加载（im_agent_whitelist kind=maxsteps）——后台保存即落库，
-	// DB 值优先于 config.yaml（后台调整属最新意图）；越界/坏值忽略回落配置值
-	var msRow model.AgentWhitelist
-	if err := store.DB.Where("kind = ?", "maxsteps").First(&msRow).Error; err == nil {
-		if v, perr := strconv.Atoi(strings.TrimSpace(msRow.Value)); perr == nil && v >= agentStepsMin && v <= agentStepsMax {
-			agentMaxSteps.Store(int64(v))
+	// 阶段八十一/八十二：后台热更新参数启动加载（im_agent_whitelist 多 kind 行）——后台保存即落库，
+	// DB 值优先于 config.yaml（后台调整属最新意图）；越界/坏值忽略回落配置值。
+	// 阶段八十三：限定 username=''（恒为全局行）——个人 autowrite 行不在此列，避免覆盖全局开关
+	var setRows []model.AgentWhitelist
+	store.DB.Where("kind IN ? AND username = ?", []string{
+		"maxsteps", "tool_timeout", "approve_timeout", "concurrency", "queue_size",
+		"enabled", "pcexec", "autowrite",
+		"http_enabled", "http_private", "search_enabled", "search_provider", "search_key", "search_endpoint",
+	}, "").Find(&setRows)
+	sp, sk, se := agentSearchConfig().Provider, agentSearchConfig().APIKey, agentSearchConfig().Endpoint
+	for _, r := range setRows {
+		v := strings.TrimSpace(r.Value)
+		switch r.Kind {
+		case "maxsteps":
+			if n, e := strconv.Atoi(v); e == nil && n >= agentStepsMin && n <= agentStepsMax {
+				agentMaxSteps.Store(int64(n))
+			}
+		case "tool_timeout":
+			if n, e := strconv.Atoi(v); e == nil && n >= agentToolTMin && n <= agentCmdTimeoutMax {
+				agentToolTimeout.Store(int64(n))
+			}
+		case "approve_timeout":
+			if n, e := strconv.Atoi(v); e == nil && n >= agentApproveMin && n <= agentApproveMax {
+				agentApproveWait.Store(int64(n))
+			}
+		case "concurrency":
+			if n, e := strconv.Atoi(v); e == nil && n >= agentConcMin && n <= agentConcMax {
+				agentConcurrency.Store(int64(n))
+			}
+		case "queue_size":
+			if n, e := strconv.Atoi(v); e == nil && n >= agentQueueMin && n <= agentQueueMax {
+				agentQueueSize.Store(int64(n))
+			}
+		case "enabled":
+			agentEnabled.Store(v == "1")
+		case "pcexec":
+			agentPcExec.Store(v == "1")
+		case "autowrite":
+			agentAutoWrite = v != "0" // 与上方旧记录兼容语义一致
+		case "http_enabled":
+			agentHttpEnabled.Store(v == "1")
+		case "http_private":
+			agentHttpAllowPrivate.Store(v == "1")
+		case "search_enabled":
+			agentSearchEnabled.Store(v == "1")
+		case "search_provider":
+			if v != "" {
+				sp = strings.ToLower(v)
+			}
+		case "search_key":
+			sk = v
+		case "search_endpoint":
+			se = v
 		}
 	}
+	agentSearchConfigStore(sp, sk, se)
 	// 定期清理已结束任务（防注册表泄漏）
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
@@ -336,10 +462,10 @@ func InitAgent(cfg *config.Config) {
 			})
 		}
 	}()
-	logger.Info("智能 Agent 模块加载完成：enabled=%v，max_steps=%d，工作区=%s", agentEnabled, agentMaxSteps.Load(), agentWorkRoot)
+	logger.Info("智能 Agent 模块加载完成：enabled=%v，max_steps=%d，工作区=%s", agentEnabled.Load(), agentMaxSteps.Load(), agentWorkRoot)
 	// 阶段六十八：网络工具状态日志（web_search 未开启时提示配置方式，方便管理员启用）
 	logger.Info("Agent 网络工具：http_request=%v（内网访问=%v），web_search=%v（provider=%s）",
-		agentHttpEnabled, agentHttpAllowPrivate, agentSearchEnabled, agentSearchProvider)
+		agentHttpEnabled.Load(), agentHttpAllowPrivate.Load(), agentSearchEnabled.Load(), agentSearchConfig().Provider)
 }
 
 // agentWorkspaceDir 用户工作区目录（按 username 隔离，不存在则创建）
@@ -510,7 +636,7 @@ func agentToolDefinitions() []aiToolDefinition {
 		}},
 	}
 	// 阶段六十八：网络工具（HTTP 请求 + 联网搜索）
-	if agentHttpEnabled {
+	if agentHttpEnabled.Load() {
 		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
 			"name":        "http_request",
 			"description": "向指定 URL 发起 HTTP 请求（调用接口/查询数据/抓取网页内容）。支持自定义方法、请求头与请求体；GET/HEAD 只读请求自动放行，POST/PUT/DELETE/PATCH 需用户审批。返回状态码与响应体。",
@@ -527,7 +653,7 @@ func agentToolDefinitions() []aiToolDefinition {
 			},
 		}})
 	}
-	if agentSearchEnabled {
+	if agentSearchEnabled.Load() {
 		tools = append(tools, agentWebSearchToolDef())
 	}
 	return tools
@@ -562,41 +688,38 @@ func (s *Server) agentSetStatus(t *AgentTask, status, text string) {
 	s.agentEmit(t, "status", map[string]interface{}{"status": status, "text": text})
 }
 
-// agentCommandAutoAllowed run_command 白名单归口：命令（小写化）恰以白名单前缀开头（词边界）时自动放行
-func agentCommandAutoAllowed(command string) bool {
+// agentCommandAutoAllowed run_command 白名单归口：命令（小写化）恰以白名单前缀开头（词边界）时自动放行。
+// 阶段八十三：按用户隔离——该用户个人白名单 ∪ 全局白名单（后台设置）任一命中即放行
+func agentCommandAutoAllowed(username, command string) bool {
 	lc := strings.ToLower(strings.TrimSpace(command))
 	agentWlMu.RLock()
 	defer agentWlMu.RUnlock()
-	for _, p := range agentAutoCmds {
-		p = strings.ToLower(strings.TrimSpace(p))
-		if p == "" {
-			continue
+	check := func(list []string) bool {
+		for _, p := range list {
+			p = strings.ToLower(strings.TrimSpace(p))
+			if p == "" {
+				continue
+			}
+			if lc == p || strings.HasPrefix(lc, p+" ") {
+				return true
+			}
 		}
-		if lc == p || strings.HasPrefix(lc, p+" ") {
-			return true
-		}
+		return false
 	}
-	return false
+	if check(agentUserCmds[username]) {
+		return true
+	}
+	return check(agentAutoCmds)
 }
 
-// agentWlMu 阶段六十二：白名单运行态并发保护（agentAutoCmds 追加/agentAutoWrite 翻转 vs 风险分级读取）
+// agentWlMu 阶段六十二：白名单运行态并发保护（agentAutoCmds/agentUserCmds 变更 vs 风险分级读取）
 var agentWlMu sync.RWMutex
 
-// agentCmdWhitelisted 命令前缀是否已在白名单（启动加载与"同意并加白"去重用）
-func agentCmdWhitelisted(prefix string) bool {
-	agentWlMu.RLock()
-	defer agentWlMu.RUnlock()
-	for _, p := range agentAutoCmds {
-		if strings.ToLower(strings.TrimSpace(p)) == prefix {
-			return true
-		}
-	}
-	return false
-}
-
-// agentWhitelistCmd 审批"同意并加白"（run_command）：命令首词入白名单（内存+DB 持久化）。
+// agentWhitelistCmd 审批"同意并加白"（run_command）：命令首词入发起用户个人白名单（内存+DB 持久化）。
+// 阶段八十三：白名单按用户隔离——A 加白仅 A 本人生效，B 跑同类命令仍需自行审批；
+// 后台管理员的全局白名单仍对全员生效（生效判定=个人 ∪ 全局）。
 // 安全护栏：链式命令（含 && / || / | / & ）不加白——首词无法担保后续段落的危险性，仍仅本次放行
-func agentWhitelistCmd(command string) (string, bool) {
+func agentWhitelistCmd(username, command string) (string, bool) {
 	lc := strings.ToLower(strings.TrimSpace(command))
 	if lc == "" {
 		return "", false
@@ -609,39 +732,48 @@ func agentWhitelistCmd(command string) (string, bool) {
 	if token == "" || len(token) > 64 {
 		return "", false
 	}
-	if agentCmdWhitelisted(token) {
-		return token, true
-	}
 	agentWlMu.Lock()
-	agentAutoCmds = append(agentAutoCmds, token)
+	already := false
+	for _, p := range agentUserCmds[username] {
+		if p == token {
+			already = true
+			break
+		}
+	}
+	if !already {
+		agentUserCmds[username] = append(agentUserCmds[username], token)
+	}
 	agentWlMu.Unlock()
-	store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: token})
-	logger.Info("Agent 命令加白：%s（审批放行时用户确认）", token)
+	if !already {
+		store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: token, Username: username})
+		logger.Info("Agent 命令加白：%s（用户 %s，审批放行时确认，仅本人生效）", token, username)
+	}
 	return token, true
 }
 
-// agentWhitelistAutoWrite 审批"同意并加白"（write_file/edit_file）：开启写文件免审批（内存+DB 持久化）。
-// 阶段七十四：edit_file 同为文件写操作，共用此白名单
-func agentWhitelistAutoWrite() {
+// agentWhitelistAutoWrite 审批"同意并加白"（write_file/edit_file）：开启发起用户的写文件免审批（内存+DB 持久化）。
+// 阶段七十四：edit_file 同为文件写操作，共用此白名单；阶段八十三：仅对该用户本人生效（全局开关归后台设置）
+func agentWhitelistAutoWrite(username string) {
 	agentWlMu.Lock()
-	already := agentAutoWrite
-	agentAutoWrite = true
+	already := agentUserWrite[username]
+	agentUserWrite[username] = true
 	agentWlMu.Unlock()
 	if !already {
-		store.DB.Create(&model.AgentWhitelist{Kind: "autowrite", Value: "on"})
-		logger.Info("Agent 写文件免审批已开启（审批放行时用户确认）")
+		store.DB.Create(&model.AgentWhitelist{Kind: "autowrite", Value: "on", Username: username})
+		logger.Info("Agent 写文件免审批已开启（用户 %s，审批放行时确认，仅本人生效）", username)
 	}
 }
 
-// agentNeedsApproval 工具风险分级归口：返回是否需要人工审批与提示原因
-func agentNeedsApproval(tool string, params map[string]interface{}) (bool, string) {
+// agentNeedsApproval 工具风险分级归口：返回是否需要人工审批与提示原因。
+// username 阶段八十三：白名单按用户隔离（个人 ∪ 全局），调用方传任务发起人
+func agentNeedsApproval(username, tool string, params map[string]interface{}) (bool, string) {
 	switch tool {
 	case "read_file", "todo_write", "list_dir", "grep":
 		return false, "" // 只读与任务清单：安全，自动放行（阶段七十四新增 list_dir/grep）
 	case "write_file", "edit_file":
 		// 阶段七十四：edit_file 与 write_file 同为写操作，共用写文件免审批白名单
 		agentWlMu.RLock()
-		auto := agentAutoWrite
+		auto := agentAutoWrite || agentUserWrite[username]
 		agentWlMu.RUnlock()
 		if auto {
 			return false, ""
@@ -652,7 +784,7 @@ func agentNeedsApproval(tool string, params map[string]interface{}) (bool, strin
 		return true, "删除文件/目录不可恢复，请确认目标路径"
 	case "run_command":
 		cmd, _ := params["command"].(string)
-		if agentCommandAutoAllowed(cmd) {
+		if agentCommandAutoAllowed(username, cmd) {
 			return false, ""
 		}
 		return true, "命令不在自动放行白名单内，请确认后执行"
@@ -707,7 +839,7 @@ func agentToolServerOnly(tool string) bool {
 // agentToolEnvHint 阶段六十：tool_start 事件携带的执行环境预判（仅供前端即时展示提示）。
 // 实际环境以 tool_result 事件的 env 为准——本地等待超时会回退服务端执行
 func agentToolEnvHint(s *Server, t *AgentTask, tool string) string {
-	if agentToolServerOnly(tool) || !agentPcExec {
+	if agentToolServerOnly(tool) || !agentPcExec.Load() {
 		return "server"
 	}
 	if s.hub.HasPC(t.Username) {
@@ -725,7 +857,7 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 	if agentToolServerOnly(tool) {
 		return agentToolExec(s, t, callID, tool, params), "server"
 	}
-	if agentPcExec && s.hub.HasPC(t.Username) {
+	if agentPcExec.Load() && s.hub.HasPC(t.Username) {
 		if result, ok := s.agentWaitLocalExec(t, callID, tool, params); ok {
 			return result, "pc"
 		}
@@ -808,7 +940,7 @@ func (s *Server) agentWaitLocalExec(t *AgentTask, step, tool string, params map[
 	s.sendToUser(t.Username, out)
 
 	// 等待上限 = 工具自身超时 + 回传余量（PC 端命令执行已有自身超时强杀；余量覆盖 WS 转发与 IPC 往返）
-	wait := agentToolTimeout + 15*time.Second
+	wait := time.Duration(agentToolTimeout.Load())*time.Second + 15*time.Second
 	if tool == "run_command" {
 		if v, ok := params["timeout"].(float64); ok && v > 0 {
 			if v > agentCmdTimeoutMax {
@@ -1045,7 +1177,7 @@ func (s *Server) handleAgentSandbox(c *Client, msg *protocol.Message) {
 // agentSandboxFor 阶段六十一：读取用户沙箱白名单（仅在 PC 端在线时返回——
 // Web/手机端发起的任务永远走服务端执行，注入本地目录提示反而误导模型）
 func (s *Server) agentSandboxFor(username string) *AgentSandbox {
-	if !agentPcExec || !s.hub.HasPC(username) {
+	if !agentPcExec.Load() || !s.hub.HasPC(username) {
 		return nil
 	}
 	if v, ok := agentSandboxes.Load(username); ok {
@@ -1958,7 +2090,7 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	if command == "" {
 		return "错误：command 不能为空"
 	}
-	timeout := agentToolTimeout
+	timeout := time.Duration(agentToolTimeout.Load()) * time.Second
 	if v, ok := params["timeout"].(float64); ok && v > 0 {
 		if v > agentCmdTimeoutMax {
 			v = agentCmdTimeoutMax
@@ -2194,10 +2326,10 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 	toolList := "read_file（读文件，支持 offset/limit 分段）、list_dir（列目录）、grep（按内容搜索文件）、" +
 		"write_file（写文件，需用户审批）、edit_file（精确替换编辑文件，需用户审批）、delete_file（删除文件/目录，需用户审批且不可恢复）、" +
 		"todo_write（任务清单）、run_command（执行命令，白名单外需审批）"
-	if agentHttpEnabled {
+	if agentHttpEnabled.Load() {
 		toolList += "、http_request（HTTP 接口调用/网页抓取，非只读方法需审批）"
 	}
-	if agentSearchEnabled {
+	if agentSearchEnabled.Load() {
 		toolList += "、web_search（联网搜索）"
 	}
 	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。\n" +
@@ -2304,8 +2436,8 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	}
 
 	// 发起分支
-	if !agentEnabled {
-		s.sendError(c, "智能 Agent 功能未开启（服务端 config.yaml ai.agent.enabled=false）")
+	if !agentEnabled.Load() {
+		s.sendError(c, "智能 Agent 功能未开启（后台管理 Agent 设置或 config.yaml ai.agent.enabled 可开启）")
 		return
 	}
 	goal := strings.TrimSpace(req.Goal)
@@ -2338,9 +2470,9 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	// 排队已满拒绝；全程持锁防并发发起竞态超开（sendToUser 非阻塞投递，锁内推送安全）
 	agentQueueMu.Lock()
 	active, queued := agentCountForUser(c.username)
-	if active >= agentConcurrency && len(queued) >= agentQueueSize {
+	if active >= int(agentConcurrency.Load()) && len(queued) >= int(agentQueueSize.Load()) {
 		agentQueueMu.Unlock()
-		s.sendError(c, fmt.Sprintf("已有任务在执行中且排队已满（并发 %d + 排队 %d），请等待任务完成或取消后再发起", agentConcurrency, agentQueueSize))
+		s.sendError(c, fmt.Sprintf("已有任务在执行中且排队已满（并发 %d + 排队 %d），请等待任务完成或取消后再发起", agentConcurrency.Load(), agentQueueSize.Load()))
 		return
 	}
 
@@ -2351,7 +2483,7 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		Goal:      goal,
 		SessionID: sid, // 阶段七十一：任务全程会话归属（事件流/答复/任务记录同源）
 	}
-	if active < agentConcurrency {
+	if active < int(agentConcurrency.Load()) {
 		// 有空位：直接启动（阶段五十九原路径）
 		t.Status = "running"
 		agentTasks.Store(t.ID, t)
@@ -2599,7 +2731,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID})
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
-			needApprove, reason := agentNeedsApproval(toolName, params)
+			needApprove, reason := agentNeedsApproval(t.Username, toolName, params)
 			var result string
 			var env string
 			if needApprove {
@@ -2706,8 +2838,8 @@ func (s *Server) agentWaitApproval(t *AgentTask, callID, tool string, params map
 		default: // cancel
 			return "cancel", "", nil
 		}
-	case <-time.After(agentApproveWait):
-		return "", "", fmt.Errorf("审批等待超时（%v），任务中止", agentApproveWait)
+	case <-time.After(time.Duration(agentApproveWait.Load()) * time.Second):
+		return "", "", fmt.Errorf("审批等待超时（%d 秒），任务中止", agentApproveWait.Load())
 	}
 }
 
@@ -2751,9 +2883,9 @@ func (s *Server) handleAgentApprove(c *Client, msg *protocol.Message) {
 		switch tool {
 		case "run_command":
 			cmd, _ := req.Params["command"].(string)
-			agentWhitelistCmd(cmd) // 链式命令内部拒白，仅本次放行
+			agentWhitelistCmd(t.Username, cmd) // 链式命令内部拒白，仅本次放行；阶段八十三仅对发起人生效
 		case "write_file", "edit_file":
-			agentWhitelistAutoWrite()
+			agentWhitelistAutoWrite(t.Username)
 		}
 		req.Action = "approve"
 	}

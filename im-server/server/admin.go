@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -117,37 +118,270 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("PUT /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsSave))
 }
 
-// ===== Agent 运行参数设置（阶段八十一：后台热更新） =====
+// ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====
+
+// agentSettingPut PUT /admin/api/agent/settings 请求体（指针字段=nil=不修改，部分更新）
+type agentSettingPut struct {
+	MaxSteps       *int     `json:"max_steps"`
+	ToolTimeout    *int     `json:"tool_timeout"`
+	ApproveTimeout *int     `json:"approve_timeout"`
+	Concurrency    *int     `json:"concurrency"`
+	QueueSize      *int     `json:"queue_size"`
+	Enabled        *bool    `json:"enabled"`
+	PcExecutor     *bool    `json:"pc_executor"`
+	AutoWrite      *bool    `json:"auto_write"`
+	AutoCommands   []string `json:"auto_commands"` // nil=不改；非 nil=全量替换全局白名单（DB 即唯一真值，不影响用户个人白名单）
+	HttpEnabled    *bool    `json:"http_enabled"`
+	HttpPrivate    *bool    `json:"http_allow_private"`
+	SearchEnabled  *bool    `json:"search_enabled"`
+	SearchProvider *string  `json:"search_provider"`
+	SearchKey      *string  `json:"search_key"` // ""=清除；字段缺省=保持不变
+	SearchEndpoint *string  `json:"search_endpoint"`
+	// 阶段八十三：个人白名单管理（审批弹窗"同意并加白"按用户隔离，后台可查看/收回）
+	UserCmdRemove    *agentUserCmdRemove `json:"user_cmd_remove"`    // 非 nil=移除该用户的一条个人命令白名单
+	UserAutoWriteOff *string             `json:"user_autowrite_off"` // 非 nil=收回该用户的个人写文件免审批
+}
+
+// agentUserCmdRemove 移除用户个人命令白名单条目（阶段八十三）
+type agentUserCmdRemove struct {
+	Username string `json:"username"`
+	Command  string `json:"command"`
+}
+
+// agentSettingRowUpsert kind 行 upsert 归口（存在改值，不存在建行）。
+// 阶段八十三：限定 username=” 全局行——个人白名单行不受后台参数保存影响
+func agentSettingRowUpsert(kind, value string) {
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ? AND username = ?", kind, "").First(&row).Error; err == nil {
+		store.DB.Model(&row).Update("value", value)
+	} else {
+		store.DB.Create(&model.AgentWhitelist{Kind: kind, Value: value})
+	}
+}
+
+// agentSettingsPayload 当前生效参数快照（GET 响应与保存后回执共用归口；搜索密钥脱敏只回提示不回明文）。
+// 阶段八十三：附带用户个人白名单视图（后台管理员查看/收回全体用户的审批加白）
+func agentSettingsPayload() map[string]interface{} {
+	agentWlMu.RLock()
+	autowrite := agentAutoWrite
+	cmds := make([]string, len(agentAutoCmds))
+	copy(cmds, agentAutoCmds)
+	userCmds := make(map[string][]string, len(agentUserCmds))
+	for u, list := range agentUserCmds {
+		cp := make([]string, len(list))
+		copy(cp, list)
+		userCmds[u] = cp
+	}
+	userWrite := make([]string, 0, len(agentUserWrite))
+	for u, on := range agentUserWrite {
+		if on {
+			userWrite = append(userWrite, u)
+		}
+	}
+	sort.Strings(userWrite)
+	agentWlMu.RUnlock()
+	scfg := agentSearchConfig()
+	keyHint := ""
+	if scfg.APIKey != "" {
+		key := scfg.APIKey
+		if len(key) > 4 {
+			key = key[len(key)-4:]
+		}
+		keyHint = "已配置（尾4位 " + key + "）"
+	}
+	return map[string]interface{}{
+		"max_steps":          agentMaxSteps.Load(),
+		"tool_timeout":       agentToolTimeout.Load(),
+		"approve_timeout":    agentApproveWait.Load(),
+		"concurrency":        agentConcurrency.Load(),
+		"queue_size":         agentQueueSize.Load(),
+		"enabled":            agentEnabled.Load(),
+		"pc_executor":        agentPcExec.Load(),
+		"auto_write":         autowrite,
+		"auto_commands":      cmds,
+		"user_commands":      userCmds,  // 阶段八十三：用户个人命令白名单（map[username][]前缀）
+		"user_autowrite":     userWrite, // 阶段八十三：已开启个人写免审批的用户名列表
+		"http_enabled":       agentHttpEnabled.Load(),
+		"http_allow_private": agentHttpAllowPrivate.Load(),
+		"search_enabled":     agentSearchEnabled.Load(),
+		"search_provider":    scfg.Provider,
+		"search_key_set":     scfg.APIKey != "",
+		"search_key_hint":    keyHint,
+		"search_endpoint":    scfg.Endpoint,
+	}
+}
 
 // handleAdminAgentSettingsGet 返回当前生效的 Agent 运行参数（内存值为准，含后台热改未重启的部分）
 func (s *Server) handleAdminAgentSettingsGet(w http.ResponseWriter, r *http.Request) {
-	adminJSON(w, map[string]interface{}{"max_steps": agentMaxSteps.Load()})
+	adminJSON(w, agentSettingsPayload())
 }
 
-// handleAdminAgentSettingsSave 保存 Agent 运行参数：内存原子写入立即热生效（运行中任务下一步即按新值判定），
-// 落库 im_agent_whitelist kind=maxsteps（启动时 InitAgent 加载，重启不丢）。
+// handleAdminAgentSettingsSave 保存 Agent 运行参数（部分更新：字段缺省=不改）：
+// 内存原子写入立即热生效（运行中任务下一步即按新值判定），落库 im_agent_whitelist（启动加载，重启不丢）。
 // 刻意不回写 config.yaml（注释会丢）：yaml 值仅作 DB 无记录时的初始默认
 func (s *Server) handleAdminAgentSettingsSave(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		MaxSteps int `json:"max_steps"`
-	}
+	var req agentSettingPut
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	if req.MaxSteps < agentStepsMin || req.MaxSteps > agentStepsMax {
-		adminFail(w, http.StatusBadRequest, fmt.Sprintf("max_steps 取值范围 %d~%d", agentStepsMin, agentStepsMax))
+	applyInt := func(p *int, lo, hi int, kind, name string) bool {
+		if p == nil {
+			return true
+		}
+		if *p < lo || *p > hi {
+			adminFail(w, http.StatusBadRequest, fmt.Sprintf("%s 取值范围 %d~%d", name, lo, hi))
+			return false
+		}
+		switch kind {
+		case "maxsteps":
+			agentMaxSteps.Store(int64(*p))
+		case "tool_timeout":
+			agentToolTimeout.Store(int64(*p))
+		case "approve_timeout":
+			agentApproveWait.Store(int64(*p))
+		case "concurrency":
+			agentConcurrency.Store(int64(*p))
+		case "queue_size":
+			agentQueueSize.Store(int64(*p))
+		}
+		agentSettingRowUpsert(kind, strconv.Itoa(*p))
+		return true
+	}
+	applyBool := func(p *bool, kind string, apply func(bool)) bool {
+		if p == nil {
+			return true
+		}
+		apply(*p)
+		v := "0"
+		if *p {
+			v = "1"
+		}
+		agentSettingRowUpsert(kind, v)
+		return true
+	}
+	if !applyInt(req.MaxSteps, agentStepsMin, agentStepsMax, "maxsteps", "最大迭代步数") ||
+		!applyInt(req.ToolTimeout, agentToolTMin, agentCmdTimeoutMax, "tool_timeout", "命令超时秒") ||
+		!applyInt(req.ApproveTimeout, agentApproveMin, agentApproveMax, "approve_timeout", "审批等待秒") ||
+		!applyInt(req.Concurrency, agentConcMin, agentConcMax, "concurrency", "并发上限") ||
+		!applyInt(req.QueueSize, agentQueueMin, agentQueueMax, "queue_size", "排队上限") {
 		return
 	}
-	agentMaxSteps.Store(int64(req.MaxSteps))
-	var row model.AgentWhitelist
-	if err := store.DB.Where("kind = ?", "maxsteps").First(&row).Error; err == nil {
-		store.DB.Model(&row).Update("value", strconv.Itoa(req.MaxSteps))
-	} else {
-		store.DB.Create(&model.AgentWhitelist{Kind: "maxsteps", Value: strconv.Itoa(req.MaxSteps)})
+	if !applyBool(req.Enabled, "enabled", agentEnabled.Store) ||
+		!applyBool(req.PcExecutor, "pcexec", agentPcExec.Store) ||
+		!applyBool(req.HttpEnabled, "http_enabled", agentHttpEnabled.Store) ||
+		!applyBool(req.HttpPrivate, "http_private", agentHttpAllowPrivate.Store) ||
+		!applyBool(req.SearchEnabled, "search_enabled", agentSearchEnabled.Store) {
+		return
 	}
-	logger.Info("后台管理：Agent max_steps 调整为 %d（热生效，运行中任务下一步即按新值判定）", req.MaxSteps)
-	adminJSON(w, map[string]interface{}{"max_steps": req.MaxSteps})
+	// 写文件免审批：与审批弹窗"同意并加白"共用 agentWlMu 保护（内存翻转 + DB upsert）
+	if req.AutoWrite != nil {
+		agentWlMu.Lock()
+		agentAutoWrite = *req.AutoWrite
+		agentWlMu.Unlock()
+		v := "0"
+		if *req.AutoWrite {
+			v = "1"
+		}
+		agentSettingRowUpsert("autowrite", v)
+	}
+	// 命令白名单全量替换（清洗：小写/去空/去重/限长限数；同步保证 cmdinit 标记存在）。
+	// 阶段八十三：仅替换全局行（username=''），用户个人白名单不受影响
+	if req.AutoCommands != nil {
+		seen := map[string]bool{}
+		cmds := make([]string, 0, len(req.AutoCommands))
+		for _, raw := range req.AutoCommands {
+			v := strings.ToLower(strings.TrimSpace(raw))
+			if v == "" || len(v) > 64 || seen[v] {
+				continue
+			}
+			seen[v] = true
+			cmds = append(cmds, v)
+			if len(cmds) >= 64 {
+				break
+			}
+		}
+		agentWlMu.Lock()
+		agentAutoCmds = cmds
+		agentWlMu.Unlock()
+		store.DB.Where("kind = ? AND username = ?", "cmd", "").Delete(&model.AgentWhitelist{})
+		for _, v := range cmds {
+			store.DB.Create(&model.AgentWhitelist{Kind: "cmd", Value: v})
+		}
+		agentSettingRowUpsert("cmdinit", "1")
+	}
+	// 阶段八十三：个人白名单管理——移除用户个人命令白名单条目 / 收回个人写免审批（内存+DB 同步）
+	if req.UserCmdRemove != nil {
+		u := strings.TrimSpace(req.UserCmdRemove.Username)
+		c := strings.ToLower(strings.TrimSpace(req.UserCmdRemove.Command))
+		if u == "" || c == "" || len(c) > 64 {
+			adminFail(w, http.StatusBadRequest, "移除个人白名单：username 与 command 必填")
+			return
+		}
+		agentWlMu.Lock()
+		list := agentUserCmds[u]
+		out := make([]string, 0, len(list))
+		for _, p := range list {
+			if p != c {
+				out = append(out, p)
+			}
+		}
+		if len(out) != len(list) {
+			if len(out) == 0 {
+				delete(agentUserCmds, u)
+			} else {
+				agentUserCmds[u] = out
+			}
+		}
+		agentWlMu.Unlock()
+		store.DB.Where("kind = ? AND username = ? AND value = ?", "cmd", u, c).
+			Delete(&model.AgentWhitelist{})
+		logger.Info("后台移除个人命令白名单：用户 %s，前缀 %s", u, c)
+	}
+	if req.UserAutoWriteOff != nil {
+		u := strings.TrimSpace(*req.UserAutoWriteOff)
+		if u == "" {
+			adminFail(w, http.StatusBadRequest, "收回个人写免审批：username 必填")
+			return
+		}
+		agentWlMu.Lock()
+		delete(agentUserWrite, u)
+		agentWlMu.Unlock()
+		store.DB.Where("kind = ? AND username = ?", "autowrite", u).Delete(&model.AgentWhitelist{})
+		logger.Info("后台收回个人写文件免审批：用户 %s", u)
+	}
+	// web_search 服务商配置（三元组整体快照替换；密钥传空串=清除）
+	if req.SearchProvider != nil || req.SearchKey != nil || req.SearchEndpoint != nil {
+		scfg := agentSearchConfig()
+		provider, key, endpoint := scfg.Provider, scfg.APIKey, scfg.Endpoint
+		if req.SearchProvider != nil {
+			provider = strings.ToLower(strings.TrimSpace(*req.SearchProvider))
+			switch provider {
+			case "", "tavily", "bocha", "searxng", "duckduckgo":
+			default:
+				adminFail(w, http.StatusBadRequest, "搜索服务商仅支持 tavily/bocha/searxng/duckduckgo")
+				return
+			}
+		}
+		if req.SearchKey != nil {
+			key = strings.TrimSpace(*req.SearchKey)
+		}
+		if req.SearchEndpoint != nil {
+			endpoint = strings.TrimSpace(*req.SearchEndpoint)
+		}
+		agentSearchConfigStore(provider, key, endpoint)
+		if req.SearchProvider != nil {
+			agentSettingRowUpsert("search_provider", provider)
+		}
+		if req.SearchKey != nil {
+			agentSettingRowUpsert("search_key", key)
+		}
+		if req.SearchEndpoint != nil {
+			agentSettingRowUpsert("search_endpoint", endpoint)
+		}
+	}
+	logger.Info("后台管理：Agent 运行参数已更新（热生效）")
+	adminJSON(w, agentSettingsPayload())
 }
 
 // ===== 通用归口 =====

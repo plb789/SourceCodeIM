@@ -986,25 +986,147 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     margin-top: 14px;
 }
 
-/* ===== Agent 运行参数设置（阶段八十一：max_steps 后台热更新） ===== */
+/* ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） ===== */
+.agentset-group {
+    background: var(--panel-bg, #252526);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    padding: 6px 16px 12px;
+    margin-bottom: 12px;
+}
+
+.agentset-group-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #ddd);
+    margin: 10px 0 4px;
+}
+
 .agentset-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 14px 16px;
-    background: var(--panel-bg, #252526);
-    border: 1px solid var(--border, #333);
-    border-radius: 8px;
-    margin-bottom: 12px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border-light, #2d2d2d);
+}
+
+.agentset-row:last-child {
+    border-bottom: none;
+}
+
+.agentset-col {
+    flex-direction: column;
+    align-items: stretch;
 }
 
 .agentset-label {
     flex-shrink: 0;
+    width: 170px;
     font-size: 13px;
     color: var(--text, #ddd);
 }
 
-.agentset-input {
-    width: 120px;
+.agentset-num {
+    width: 110px;
     flex-shrink: 0;
+}
+
+.agentset-wide {
+    flex: 1;
+    min-width: 200px;
+}
+
+.agentset-range {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-dim, #888);
+    font-family: Consolas, monospace;
+}
+
+.agentset-sub-tip {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-dim, #888);
+}
+
+.agentset-switch-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+    cursor: pointer;
+    user-select: none;
+}
+
+.agentset-switch-label input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--primary, #07c160);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* 命令白名单标签区 */
+.agentset-cmds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 0;
+    min-height: 26px;
+}
+
+.agentset-cmd-empty {
+    font-size: 12px;
+    color: var(--text-dim, #888);
+}
+
+.agentset-cmd-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px 2px 10px;
+    background: var(--primary-bg, rgba(7, 193, 96, 0.12));
+    border: 1px solid var(--primary-border, rgba(7, 193, 96, 0.35));
+    border-radius: 12px;
+    font-size: 12px;
+    font-family: Consolas, monospace;
+    color: var(--text, #ddd);
+}
+
+.agentset-cmd-del {
+    border: none;
+    background: transparent;
+    color: var(--text-dim, #888);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+.agentset-cmd-del:hover {
+    color: var(--danger, #e05555);
+}
+
+/* 阶段八十三：用户个人白名单条目（用户名高亮前缀 + › 命令），配色沿用全局条目主题变量 */
+.agentset-user-chip .agentset-user-chip-name {
+    font-weight: 600;
+    color: var(--text-strong, #fff);
+}
+
+.agentset-cmd-add {
+    display: flex;
+    gap: 8px;
+}
+
+.agentset-cmd-add .admin-input {
+    flex: 1;
+    max-width: 360px;
+}
+
+.agentset-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
 }

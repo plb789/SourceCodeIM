@@ -199,12 +199,21 @@ type AgentTaskRecord struct {
 func (AgentTaskRecord) TableName() string { return "im_agent_task" }
 
 // AgentWhitelist 智能 Agent 审批白名单（阶段六十二）：审批弹窗"同意并加白"的持久化归口。
-// kind=cmd → value 为命令首词前缀（如 node/git），后续命中前缀的 run_command 自动放行；
-// kind=autowrite → 写文件免审批开关（存在记录即开启）。启动时加载进内存白名单，重启不丢
+// kind=cmd → value 为命令首词前缀（如 node/git），后续命中前缀的 run_command 自动放行（阶段八十二：后台全量管理，DB 即真值）；
+// kind=autowrite → 写文件免审批开关（value "0"=关，空/"on"/"1"=开，兼容旧记录）；
+// kind=cmdinit → 命令白名单 DB 初始化标记（存在即 DB 集合为唯一真值，空集亦合法）；
+// 阶段八十一/八十二扩展 kind=maxsteps/tool_timeout/approve_timeout/concurrency/queue_size/enabled/pcexec/
+// http_enabled/http_private/search_enabled/search_provider/search_key/search_endpoint → 后台热更新参数（数值/开关存 "1"/"0"，密钥与地址原文存 value）。
+// 阶段八十三：白名单按用户隔离——username 空=全局行（后台管理员设置，对全员生效）；非空=该用户个人行
+// （审批弹窗"同意并加白"仅对发起用户本人生效，A 加白不影响 B）；生效判定=个人行 ∪ 全局行。
+// 热更新参数行（maxsteps 等）恒为全局行（username 恒空）。
+// 启动时加载进内存（atomic），重启不丢
 type AgentWhitelist struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Kind       string    `gorm:"column:kind;type:varchar(16);not null;index" json:"kind"`
-	Value      string    `gorm:"column:value;type:varchar(128);not null" json:"value"`
+	ID    uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Kind  string `gorm:"column:kind;type:varchar(16);not null;index" json:"kind"`
+	Value string `gorm:"column:value;type:varchar(512);not null" json:"value"` // 阶段八十二：512 容纳搜索 endpoint 完整 URL
+	// Username 白名单归属（阶段八十三）：空=全局（后台设置对全员生效）；非空=用户个人（仅该用户生效）
+	Username   string    `gorm:"column:username;type:varchar(32);not null;default:'';index" json:"username"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 

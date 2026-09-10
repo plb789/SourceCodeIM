@@ -87,7 +87,7 @@ func (s *Server) handleWsFileReq(c *Client, msg *protocol.Message) {
 		return
 	}
 	logger.Info("文件面板请求（用户 %s op %s path %q req_id %s PC在线 %v 执行器开关 %v）",
-		c.username, req.Op, req.Path, reqID, s.hub.HasPC(c.username), agentPcExec)
+		c.username, req.Op, req.Path, reqID, s.hub.HasPC(c.username), agentPcExec.Load())
 	// 阶段七十六修复：PC 回传等待最长 15s，绝不能同步卡在 readPump——
 	// 否则本连接的 65 回传滞留 TCP 缓冲读不进来，必然"超时→回退→迟到丢弃"死循环
 	// （实测全链 trace：64 下行 12ms 即达、渲染层 10ms 完成并回 65，唯独 65 上行滞后 15s）
@@ -123,10 +123,10 @@ func (s *Server) wsFileSendResp(username, op, reqID string, res *wsFileResult) {
 // wsFileDispatch 执行环境分派：PC 在线转发本地（64/65），离线/超时回退服务端工作区。
 // 绝对路径是 PC 本地概念（沙箱授权目录），服务端回退模式不支持。
 func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFileResult {
-	if isAbsishPath(path) && !(agentPcExec && s.hub.HasPC(username)) {
+	if isAbsishPath(path) && !(agentPcExec.Load() && s.hub.HasPC(username)) {
 		return &wsFileResult{Error: "本地绝对路径仅在 PC 端在线时可用（沙箱授权目录内）"}
 	}
-	if agentPcExec && s.hub.HasPC(username) && op != "gitai" {
+	if agentPcExec.Load() && s.hub.HasPC(username) && op != "gitai" {
 		// gitai（AI 提交信息/审查）必须服务端执行：AI 模型服务归口服务端，PC 不参与
 		if res := s.wsFileWaitPC(username, reqID, op, path, content, wsFileOpWaitFor(op)); res != nil {
 			return res
