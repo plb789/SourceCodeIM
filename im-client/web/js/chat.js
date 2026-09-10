@@ -5998,20 +5998,35 @@
                 if (sh2 >= 80 && sh2 <= 800) g.logH = sh2;
             } catch (e2) {}
         }
-        function bindGitDrag(bar, sec, other, lsKey, minH, reserve) {
+        // 底部两区独立高度调整（直觉交互）：拖历史条只动历史区、拖审查条只动审查区，
+        // 另一侧恒不动——高度变化由弹性的文件列表区（.ws-git-body，flex:1 自身滚动）吸收，
+        // 文件区保底 bodyMin 不被压没。上限 = 面板高 - 两拖拽条12 - bodyMin - 对方当前高度，
+        // 比旧版固定 reserve 300 宽裕得多（旧版矮窗口锁死的根因）
+        var bodyMin = 48;
+        var minReview = 72, minLog = 80;
+        function saveSplit() {
+            try {
+                localStorage.setItem('im_git_review_h', String(g.reviewH));
+                localStorage.setItem('im_git_log_h', String(g.logH));
+            } catch (e2) {}
+        }
+        function bindGitDrag(bar, which) { // which='review'（drag① 文件区下方）| 'log'（drag② 审查与历史之间）
+            var minSelf = which === 'review' ? minReview : minLog;
             bar.addEventListener('mousedown', function (e) {
                 e.preventDefault();
                 var startY = e.clientY;
-                var startH = sec.getBoundingClientRect().height;
+                var startH = which === 'review' ? g.reviewH : g.logH;
+                // 对方快照：拖拽过程中恒不动；对方折叠时不占高度，本区可用上限相应放开
+                var otherH = which === 'review' ? (g.logCollapsed ? 0 : g.logH) : (g.reviewCollapsed ? 0 : g.reviewH);
+                var maxSelf = el.clientHeight - 12 - bodyMin - otherH;
                 bar.classList.add('dragging');
                 document.body.style.userSelect = 'none'; // 拖拽期间禁用文本选择（与输入区拖拽条同款）
                 function onMove(ev) {
-                    var maxH = el.clientHeight - other.getBoundingClientRect().height - reserve; // 联合上限防越界
-                    var nh = startH + (startY - ev.clientY); // 上拖加高、下拖减高
-                    nh = Math.max(minH, Math.min(nh, Math.max(minH, maxH)));
-                    if (sec === logSec) g.logH = nh; else g.reviewH = nh;
-                    sec.style.height = nh + 'px';
-                    try { localStorage.setItem(lsKey, String(nh)); } catch (e2) {}
+                    var nh = Math.max(minSelf, Math.min(startH + (startY - ev.clientY), Math.max(minSelf, maxSelf)));
+                    if (which === 'review') g.reviewH = Math.round(nh);
+                    else g.logH = Math.round(nh);
+                    (which === 'review' ? reviewSec : logSec).style.height = nh + 'px';
+                    saveSplit();
                 }
                 function onUp() {
                     bar.classList.remove('dragging');
@@ -6028,16 +6043,47 @@
         bottom.className = 'ws-git-bottom';
         var reviewSec = wsGitReviewSection(g);
         var logSec = wsGitLogSection(g);
-        if (!g.reviewCollapsed) reviewSec.style.height = g.reviewH + 'px';
-        if (!g.logCollapsed) logSec.style.height = g.logH + 'px';
+        // 初始高度钳制（与拖拽模型同源）：avail = 面板高 - 两条拖拽条12 - 文件区保底 bodyMin。
+        // 折叠分区不设固定高度（收缩为头部自然高度，腾出的空间由文件区 flex:1 向下吸收——
+        // 否则折叠后留下固定高度的空白盒、底部布局整体上蹿）；展开分区照旧钳制，
+        // clientHeight<150 视为面板尚未完成布局——跳过钳制与落盘，仅设 style
+        if (el.clientHeight >= 150) {
+            var avail = Math.max(minReview + minLog, el.clientHeight - 12 - bodyMin);
+            var revOpen = !g.reviewCollapsed, logOpen = !g.logCollapsed;
+            if (revOpen && logOpen) {
+                var hr = Math.max(minReview, Math.min(g.reviewH, avail - minLog));
+                var hl = Math.max(minLog, Math.min(g.logH, avail - minReview));
+                if (hr + hl > avail) { // 超预算：压较大者到预算内（另一侧保最小值）
+                    var over = hr + hl - avail;
+                    if (hr > hl) hr = Math.max(minReview, hr - over);
+                    else hl = Math.max(minLog, hl - over);
+                }
+                reviewSec.style.height = hr + 'px';
+                logSec.style.height = hl + 'px';
+                g.reviewH = Math.round(hr);
+                g.logH = Math.round(hl);
+            } else if (revOpen) { // 仅审查展开：历史不占预算，审查可用上限放开到 avail
+                reviewSec.style.height = Math.max(minReview, Math.min(g.reviewH, avail)) + 'px';
+                logSec.style.height = '';
+            } else if (logOpen) { // 仅历史展开：审查不占预算，历史可用上限放开到 avail
+                logSec.style.height = Math.max(minLog, Math.min(g.logH, avail)) + 'px';
+                reviewSec.style.height = '';
+            } else { // 双折叠：均收缩为头部自然高度
+                reviewSec.style.height = '';
+                logSec.style.height = '';
+            }
+        } else {
+            reviewSec.style.height = g.reviewCollapsed ? '' : g.reviewH + 'px';
+            logSec.style.height = g.logCollapsed ? '' : g.logH + 'px';
+        }
         var drag2 = document.createElement('div');
         drag2.className = 'ws-git-dragbar';
         drag2.title = '拖拽调整提交历史高度';
         var drag = document.createElement('div');
         drag.className = 'ws-git-dragbar';
         drag.title = '拖拽调整智能体审查高度';
-        bindGitDrag(drag, reviewSec, logSec, 'im_git_review_h', 72, 300);
-        bindGitDrag(drag2, logSec, reviewSec, 'im_git_log_h', 80, 300);
+        bindGitDrag(drag, 'review');
+        bindGitDrag(drag2, 'log');
         bottom.appendChild(reviewSec);
         bottom.appendChild(drag2);
         bottom.appendChild(logSec);

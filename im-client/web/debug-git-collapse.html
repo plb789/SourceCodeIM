@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>git面板折叠行为复现（临时调试页）</title>
+<link rel="stylesheet" href="./css/style.css">
+<style>
+  html, body { margin: 0; height: 100%; }
+  #wrap { height: 640px; width: 340px; margin: 20px auto; border: 1px solid #ccc; display: flex; flex-direction: column; }
+  #log { position: fixed; right: 10px; top: 10px; width: 420px; font: 11px/1.5 monospace; background: #fffde7; border: 1px solid #ccc; padding: 6px; z-index: 9; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="log">调试信息：
+</div>
+<div id="wrap"></div>
+<script>
+// ===== 忠实复刻 chat.js wsPanelGitRender / wsGitReviewSection / wsGitLogSection / wsGitSecHeader / bindGitDrag =====
+var g = { logCollapsed: false, reviewCollapsed: false, reviewH: 150, logH: 220, log: [], branch: 'main', reviewTarget: null, _hRestored: false };
+var el;
+
+function h(tag, cls, text) { var d = document.createElement(tag); if (cls) d.className = cls; if (text != null) d.textContent = text; return d; }
+function L(msg) { document.getElementById('log').textContent += '\n' + msg; }
+
+function wsGitSecHeader(title, count, collapsed, onToggle) {
+    var hd = h('div', 'ws-git-sec-h toggle');
+    var tri = h('span', 'ws-git-tri' + (collapsed ? ' closed' : ''), '▾');
+    hd.appendChild(tri);
+    hd.appendChild(h('span', null, title + (count !== null && count !== undefined ? '（' + count + '）' : '')));
+    hd.addEventListener('click', onToggle);
+    return hd;
+}
+
+function wsGitReviewSection() {
+    var sec = h('div', 'ws-git-review');
+    sec.appendChild(wsGitSecHeader('智能体审查', null, g.reviewCollapsed, function () {
+        g.reviewCollapsed = !g.reviewCollapsed; render();
+    }));
+    if (g.reviewCollapsed) return sec;
+    var row = h('div', 'ws-git-review-btnrow');
+    row.appendChild(h('button', 'ws-git-review-btn', '总结并审查'));
+    row.appendChild(h('button', 'ws-git-review-arrow', '▾'));
+    var br = h('div', 'ws-git-review-branches');
+    br.appendChild(h('span', 'ws-git-review-branch', '⎇ main'));
+    br.appendChild(h('span', 'ws-git-review-sep', '→'));
+    br.appendChild(h('button', 'ws-git-review-branch to', '⎇ 选择目标分支'));
+    sec.appendChild(row); sec.appendChild(br);
+    return sec;
+}
+
+function wsGitLogSection() {
+    var sec = h('div', 'ws-git-log');
+    sec.appendChild(wsGitSecHeader('提交历史', g.log.length || null, g.logCollapsed, function () {
+        L('点击 提交历史 折叠三角：logCollapsed ' + g.logCollapsed + ' -> ' + (!g.logCollapsed));
+        g.logCollapsed = !g.logCollapsed; render();
+    }));
+    if (g.logCollapsed) return sec;
+    for (var i = 0; i < 8; i++) {
+        var row = h('div', 'ws-git-log-row' + (i === 0 ? ' head' : ''));
+        row.appendChild(h('span', 'ws-git-log-dot'));
+        row.appendChild(h('span', 'ws-git-log-msg', '提交信息 ' + (i + 1)));
+        sec.appendChild(row);
+    }
+    return sec;
+}
+
+var bodyMin = 48, minReview = 72, minLog = 80;
+var reviewSec, logSec, drag, drag2;
+
+function bindGitDrag(bar, which) {
+    bar.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        var startY = e.clientY;
+        var startH = which === 'review' ? g.reviewH : g.logH;
+        var otherH = which === 'review' ? (g.logCollapsed ? 0 : g.logH) : (g.reviewCollapsed ? 0 : g.reviewH);
+        var maxSelf = el.clientHeight - 12 - bodyMin - otherH;
+        bar.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        function onMove(ev) {
+            var minSelf = which === 'review' ? minReview : minLog;
+            var nh = Math.max(minSelf, Math.min(startH + (startY - ev.clientY), Math.max(minSelf, maxSelf)));
+            if (which === 'review') g.reviewH = Math.round(nh); else g.logH = Math.round(nh);
+            (which === 'review' ? reviewSec : logSec).style.height = nh + 'px';
+        }
+        function onUp() {
+            bar.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            L('拖拽结束 which=' + which + ' reviewH=' + g.reviewH + ' logH=' + g.logH);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
+function render() {
+    el.innerHTML = '';
+    el.appendChild(h('div', 'ws-git-head', '')).appendChild(h('span', 'ws-git-title', '源代码管理'));
+    el.lastChild.appendChild(h('button', 'ws-panel-btn ws-refresh-btn', '⟳'));
+    var br = h('div', 'ws-git-branch');
+    br.appendChild(h('span', 'ws-git-branch-name', '⎇ main'));
+    el.appendChild(br);
+    var mw = h('div', 'ws-git-msg-wrap');
+    var msg = h('textarea', 'ws-git-msg'); msg.rows = 1; msg.placeholder = '提交变更内容（Ctrl+Enter 提交）';
+    mw.appendChild(msg); mw.appendChild(h('button', 'ws-git-ai-btn', '✦')); mw.appendChild(h('button', 'ws-git-msg-arrow', '▾'));
+    el.appendChild(mw);
+    var cr = h('div', 'ws-git-commit-row');
+    cr.appendChild(h('button', 'ws-git-commit', '✓ 提交全部更改'));
+    cr.appendChild(h('button', 'ws-git-commit-arrow', '▾'));
+    el.appendChild(cr);
+    var body = h('div', 'ws-git-body');
+    var s1 = h('div', 'ws-git-sec'); s1.appendChild(h('div', 'ws-git-sec-h', '暂存的更改'));
+    var s2 = h('div', 'ws-git-sec'); s2.appendChild(h('div', 'ws-git-sec-h', '更改'));
+    for (var i = 0; i < 6; i++) s2.appendChild(h('div', 'ws-git-empty', '文件 ' + (i + 1) + '.js'));
+    body.appendChild(s1); body.appendChild(s2);
+    el.appendChild(body);
+    drag = h('div', 'ws-git-dragbar'); drag.title = '拖拽调整智能体审查高度';
+    drag2 = h('div', 'ws-git-dragbar'); drag2.title = '拖拽调整提交历史高度';
+    bindGitDrag(drag, 'review'); bindGitDrag(drag2, 'log');
+
+    var bottom = h('div', 'ws-git-bottom');
+    reviewSec = wsGitReviewSection();
+    logSec = wsGitLogSection();
+    // ===== 与 chat.js 修复后的钳制逻辑一致 =====
+    if (el.clientHeight >= 150) {
+        var avail = Math.max(minReview + minLog, el.clientHeight - 12 - bodyMin);
+        var revOpen = !g.reviewCollapsed, logOpen = !g.logCollapsed;
+        if (revOpen && logOpen) {
+            var hr = Math.max(minReview, Math.min(g.reviewH, avail - minLog));
+            var hl = Math.max(minLog, Math.min(g.logH, avail - minReview));
+            if (hr + hl > avail) {
+                var over = hr + hl - avail;
+                if (hr > hl) hr = Math.max(minReview, hr - over); else hl = Math.max(minLog, hl - over);
+            }
+            reviewSec.style.height = hr + 'px';
+            logSec.style.height = hl + 'px';
+            g.reviewH = Math.round(hr); g.logH = Math.round(hl);
+        } else if (revOpen) {
+            reviewSec.style.height = Math.max(minReview, Math.min(g.reviewH, avail)) + 'px';
+            logSec.style.height = '';
+        } else if (logOpen) {
+            logSec.style.height = Math.max(minLog, Math.min(g.logH, avail)) + 'px';
+            reviewSec.style.height = '';
+        } else {
+            reviewSec.style.height = '';
+            logSec.style.height = '';
+        }
+    } else {
+        reviewSec.style.height = g.reviewCollapsed ? '' : g.reviewH + 'px';
+        logSec.style.height = g.logCollapsed ? '' : g.logH + 'px';
+    }
+    bottom.appendChild(reviewSec);
+    bottom.appendChild(drag2);
+    bottom.appendChild(logSec);
+    el.appendChild(drag);
+    el.appendChild(bottom);
+    if (g.reviewCollapsed) drag.style.display = 'none';
+    if (g.logCollapsed) drag2.style.display = 'none';
+    var lr = logSec.getBoundingClientRect(), rr = reviewSec.getBoundingClientRect();
+    L('渲染后: logCollapsed=' + g.logCollapsed + ' logSec.style.height=' + logSec.style.height + ' 实际高=' + Math.round(lr.height) + ' top=' + Math.round(lr.top) + ' | review 高=' + Math.round(rr.height) + ' top=' + Math.round(rr.top));
+}
+
+el = document.getElementById('wrap');
+el.className = 'ws-git-view';
+for (var i = 0; i < 8; i++) g.log.push({ msg: '提交 ' + i });
+render();
+</script>
+</body>
+</html>
