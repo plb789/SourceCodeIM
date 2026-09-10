@@ -2656,7 +2656,7 @@
     // 创建流式回复气泡（空气泡 + 闪烁光标，打字机逐字填充）
     function createStreamBubble(agent, streamId) {
         var div = document.createElement('div');
-        div.className = 'message other';
+        div.className = 'message other ai'; // ai 标记：AI 回复行放宽 max-width（宽表格/代码按需扩大展示范围）
         div.setAttribute('data-from', agent);
         div.setAttribute('data-stream-id', streamId);
         var body = document.createElement('div');
@@ -2705,6 +2705,7 @@
         st.cursorEl.remove();
         // 最终态兜底渲染一次 Markdown（done 时 pending 可能为空，tick 内不再触发渲染）
         st.textEl.innerHTML = renderAIMarkdown(st.shown);
+        initAIMdHScroll(st.textEl); // 收尾后 DOM 稳定，宽表格/代码块挂横向自绘滑块
         // 阶段四十三：回复完成后追加操作栏（复制/重新生成/编辑提问，豆包同款）
         // 阶段四十五：表格回复追加导出按钮（服务端归口转档，msg_id 用于取回复原文）
         // Token 消耗标注随操作栏渲染（服务端 usage 归口，随结束帧下发）
@@ -3014,7 +3015,7 @@
     // sid：归属会话 id（事件帧携带，服务端盖戳同源；缺省回落当前查看会话）
     function createAgentTaskCard(agent, taskId, goal, sid) {
         var div = document.createElement('div');
-        div.className = 'message other';
+        div.className = 'message other ai'; // ai 标记：任务卡行同宽放宽
         var body = document.createElement('div');
         body.className = 'message-body';
         var card = document.createElement('div');
@@ -3181,6 +3182,7 @@
         var bodyEl = document.createElement('div');
         bodyEl.className = 'agent-event-body ai-md';
         bodyEl.innerHTML = renderAIMarkdown(text || '');
+        initAIMdHScroll(bodyEl); // 宽表格/代码块挂横向自绘滑块（思考文本一次性渲染，DOM 已稳定）
         block.appendChild(head);
         block.appendChild(bodyEl);
         st.events.appendChild(block);
@@ -3270,6 +3272,7 @@
         st.curText = null;
         if (!cur.shown.trim()) { cur.el.remove(); return false; }
         cur.textEl.innerHTML = renderAIMarkdown(cur.shown);
+        initAIMdHScroll(cur.el); // 收尾后 DOM 稳定，宽表格/代码块挂横向自绘滑块
         if (asThought) {
             cur.el.classList.add('thought');
             cur.head.textContent = '思考过程';
@@ -3335,7 +3338,7 @@
     // agentBuildReplayCard 重放卡构造（复用任务历史弹窗卡样式；包裹消息行容器对齐气泡宽度，带智能体头像）
     function agentBuildReplayCard(agent, t) {
         var row = document.createElement('div');
-        row.className = 'message other';
+        row.className = 'message other ai'; // ai 标记：重放卡行同宽放宽
         var body = document.createElement('div');
         body.className = 'message-body';
         var card = document.createElement('div');
@@ -7073,6 +7076,20 @@
         return esc;
     }
 
+    // AI Markdown 内横向滚动容器（宽表格/代码块）挂横向自绘悬浮滑块：
+    // 原生滚动条已全局隐藏（scrollbar-width:none），气泡夹紧后超宽表格转为内部横滚，
+    // 无滑块则横向溢出内容不可见也不可拖（仅 Shift+滚轮可用）；复用阶段四十五横向版滑块
+    // （悬停浮现、可拖拽，微信同款）。仅在稳定态调用（流式收尾/历史加载）——
+    // 打字机期间每 30ms 整体重建 innerHTML，逐元素挂 Observer/滑块会随重建泄漏
+    function initAIMdHScroll(root) {
+        if (!window._osbInitH || !root || !root.querySelectorAll) return;
+        var wraps = root.querySelectorAll('.ai-md-table-wrap:not([data-osb-h]), .ai-md-pre:not([data-osb-h])');
+        for (var i = 0; i < wraps.length; i++) {
+            wraps[i].setAttribute('data-osb-h', '1'); // 防重复挂载标记
+            window._osbInitH(wraps[i]);
+        }
+    }
+
     // ===== 最近会话列表（服务端归口：最后消息/未读数/置顶） =====
     // 原实现：var convList = []; 声明于此，阶段十一提前至文件顶部（好友列表角标同源读取服务端未读数）
     var convTarget = ''; // 当前右键的会话目标
@@ -8753,7 +8770,8 @@
     // tokens 可选：AI 回复的 Token 消耗（服务端 usage 归口，历史加载/END 降级路径透传给操作栏）
     function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
         var div = document.createElement('div');
-        div.className = 'message ' + type;
+        // ai 标记：AI 智能体消息行放宽 max-width（宽表格/代码块按需扩大展示范围；普通用户消息保持 70%）
+        div.className = 'message ' + type + (isAIAgent(fromUser) ? ' ai' : '');
         // 携带消息 ID / 发送者 / 时间戳，供撤回、删除、已读、置顶定位功能使用
         if (msgId) div.setAttribute('data-msg-id', msgId);
         div.setAttribute('data-from', fromUser);
@@ -8908,6 +8926,8 @@
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
+        // AI 回复（历史加载/END 降级整段渲染）DOM 稳定后，宽表格/代码块挂横向自绘滑块
+        if (isAIAgent(fromUser)) initAIMdHScroll(div);
         return div;
     }
 

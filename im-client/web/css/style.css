@@ -869,6 +869,12 @@ html, body {
     max-width: 70%;
 }
 
+/* AI 回复行放宽到 90%：宽表格/代码块等宽内容按需扩大展示范围（inline-block 收缩特性，
+   短内容仍紧凑贴合不拉伸）；用户消息保持 70%（微信同款） */
+.message.ai {
+    max-width: 90%;
+}
+
 /* 头像缺失修复：自己消息行反转，头像贴右侧、内容列在其左（微信同款） */
 /* 阶段二十三修复：气泡为 inline-block，原仅 margin-left:auto 时气泡停在 70% 盒子左缘（视觉居中），
    增加 text-align:right 使气泡贴合右侧，微信同款；现 flex 布局下由 row-reverse 控制对齐，text-align 不再需要
@@ -936,6 +942,9 @@ html, body {
 
 .message-bubble {
     display: inline-block;
+    /* 防溢出夹紧：AI 表格单元格 nowrap 会把 inline-block 收缩宽度撑到超过父盒可用宽度，
+       不夹紧时整只气泡连同正文一起冲出聊天区（实测截图）；超宽表格/代码块交给内部横向滚动 */
+    max-width: 100%;
     padding: 10px 14px;
     border-radius: 6px;
     font-size: 14px;
@@ -6294,6 +6303,11 @@ html.m .message-list {
 
 html.m .message {
     max-width: 82%;
+}
+
+/* 手机版 AI 回复行同规则放宽（宽表格/代码块按需扩大展示范围） */
+html.m .message.ai {
+    max-width: 92%;
 }
 
 /* ---- 5. 输入区（微信手机版紧凑样式） ---- */
