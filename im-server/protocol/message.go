@@ -90,6 +90,9 @@ const (
 	MsgTypeWsFileResp = 63 // 下行：服务端 → web 前端文件面板响应（content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
 	MsgTypePcFileReq  = 64 // 下行：服务端 → PC 渲染进程，本地文件操作请求（content 为 JSON：{op,req_id,path,content?}，路径校验复用执行器 safePath）
 	MsgTypePcFileResp = 65 // 上行：PC 渲染进程 → 服务端本地文件操作结果（content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
+
+	// 阶段七十七：Agent 文件变更审查（TRAE CN 同款"文件变更审查条"——撤销/保留归口）
+	MsgTypeAgentChanges = 66 // 上行：审查操作（content 为 JSON：{task_id,action:"keep"/"revert",path?}，path 缺省=全部 pending）；下行：审查后全量刷新帧（content 为 JSON：{task_id,session_id,changes:[{path,kind,adds,dels,status}],total_adds,total_dels}）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

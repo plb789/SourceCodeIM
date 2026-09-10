@@ -278,6 +278,8 @@ ipcMain.on('image:need-more', function () {
 // 工作区：userData/agent_workspace/<用户名>/（与微信文件同级的用户数据目录，按用户名隔离）；
 // 路径安全/限额/超时全部归口 agent-executor.js（与服务端同款语义），审批归口仍在服务端
 agentExecutor.setRoot(path.join(app.getPath('userData'), 'agent_workspace'));
+// 阶段八十：本地变更审查备份根目录（写/改/删首触备份原文件字节；撤销/保留经执行器下行清理）
+agentExecutor.setBackupRoot(path.join(app.getPath('userData'), 'agent_change_backups'));
 ipcMain.handle('agent:exec', function (event, req) {
     return new Promise(function (resolve) {
         // 阶段六十一：执行前按请求用户名注入该用户的沙箱白名单（主工作区/授权目录，未配置=默认工作区语义）

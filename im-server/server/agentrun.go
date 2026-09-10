@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,8 @@ const (
 	agentCmdStreamMaxBytes = 64 << 10         // 控制台流式输出累计上限（超出停止下发增量，结束帧注明总字节；模型结果仍按 agentCmdOutMaxChars 截断）
 	agentCmdStreamFlushMs  = 200              // 输出聚合下发节流（毫秒，防逐行刷屏拖垮 WS）
 	agentBgCmdTimeout      = 30 * time.Minute // 转后台后的兜底强杀超时（前台仍按命令自身 timeout）
+
+	agentChangeMaxFiles = 200 // 阶段七十七：递归删目录时逐文件快照上限（防超大目录拖垮任务，超出部分不记变更不可撤销）
 )
 
 // agentGrepSkipDirs grep 遍历跳过的目录名（依赖/构建产物/版本库等非源码大目录）
@@ -96,9 +99,32 @@ type AgentApproval struct {
 
 // AgentExecResult 阶段六十：PC 本地执行器回传的工具执行结果（handleAgentExecResp 投递到等待中的任务）
 type AgentExecResult struct {
-	OK     bool   // false=工具级失败（路径越界/读失败等），结果照常回传模型自纠
-	Output string // 给模型的结果文本（与服务端执行同格式约定）
+	OK      bool            // false=工具级失败（路径越界/读失败等），结果照常回传模型自纠
+	Output  string          // 给模型的结果文本（与服务端执行同格式约定）
+	Changes []agentPCChange // 阶段八十：本地文件变更（写/改/删回传，服务端登记审查条）
 }
+
+// agentPCChange 阶段八十：PC 本地执行回传的结构化文件变更（执行器首触备份后组装）。
+// 文件在用户磁盘，服务端读不到内容——统计由执行器按任务前备份计算上报，服务端免重算；
+// 撤销时把 Backup/Local 原样下发执行器还原字节（Kind=create 删除任务中新建的文件）
+type agentPCChange struct {
+	Path    string `json:"path"`    // 展示路径（正斜杠）
+	Local   string `json:"local"`   // 文件本地绝对路径
+	Kind    string `json:"kind"`    // create/modify/delete（首触行语义）
+	Adds    int    `json:"adds"`    // 相对任务前内容的累计新增行数
+	Dels    int    `json:"dels"`    // 相对任务前内容的累计删除行数
+	Backup  string `json:"backup"`  // 本地备份文件绝对路径（create 为空）
+	Deleted bool   `json:"deleted"` // 操作后文件已不存在
+}
+
+// pcRevertWait 阶段八十：撤销本地变更的回传等待器（步骤键归口防错投，异步不阻塞审查上行）
+type pcRevertWait struct {
+	username string
+	ch       chan *AgentExecResult
+}
+
+// pcRevertWaiters 撤销等待表：step(rv-<taskID>-<纳秒>) → *pcRevertWait（完成/超时即删）
+var pcRevertWaiters sync.Map
 
 // AgentTask 运行中任务状态（内存态；结束态落库 im_agent_task 供追溯）
 type AgentTask struct {
@@ -123,7 +149,9 @@ type AgentTask struct {
 	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
 	runBgStep   string                // 转后台通道归属步骤（toolCall.ID，防错投）
 	steps       int
-	stepSeq     int // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
+	stepSeq     int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
+	changeSeq   int               // 阶段七十七：变更快照序号（备份文件命名去重）
+	changes     []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
 	endOnce     sync.Once
 }
 
@@ -246,6 +274,10 @@ func InitAgent(cfg *config.Config) {
 	// 阶段六十五：执行步骤留痕表迁移
 	if err := store.DB.AutoMigrate(&model.AgentStepRecord{}); err != nil {
 		logger.Error("Agent 执行轨迹表迁移失败: %v", err)
+	}
+	// 阶段七十七：任务文件变更审查表迁移（TRAE CN 同款"文件变更审查条"归口）
+	if err := store.DB.AutoMigrate(&model.AgentChangeRecord{}); err != nil {
+		logger.Error("Agent 变更审查表迁移失败: %v", err)
 	}
 	// 阶段七十一：AI 多会话表迁移（用户+智能体 多会话归口，Trae 同款"新建会话"）
 	initAISessionTable()
@@ -628,11 +660,11 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 	case "read_file":
 		return agentToolReadFile(t.Username, params)
 	case "write_file":
-		return agentToolWriteFile(t.Username, params)
+		return agentToolWriteFile(t, params)
 	case "edit_file":
-		return agentToolEditFile(t.Username, params) // 阶段七十四：精确替换编辑
+		return agentToolEditFile(t, params) // 阶段七十四：精确替换编辑
 	case "delete_file":
-		return agentToolDeleteFile(t.Username, params) // 阶段七十四：删除文件/目录
+		return agentToolDeleteFile(t, params) // 阶段七十四：删除文件/目录
 	case "list_dir":
 		return agentToolListDir(t.Username, params) // 阶段七十四：列目录
 	case "grep":
@@ -810,16 +842,29 @@ func mustAgentMsg(msgType int, t *AgentTask, content string) []byte {
 }
 
 // handleAgentExecResp 阶段六十：PC 本地执行结果上行（msg_type=51）。
-// 校验发起人与步骤后投递到等待中的任务；非等待态/步骤不匹配（迟到回传）静默丢弃
+// 校验发起人与步骤后投递到等待中的任务；非等待态/步骤不匹配（迟到回传）静默丢弃。
+// 阶段八十：步骤命中撤销等待表（rv-*）走审查撤销完成归口（标记 reverted + 推送 66 帧）
 func (s *Server) handleAgentExecResp(c *Client, msg *protocol.Message) {
 	var req struct {
-		TaskID string `json:"task_id"`
-		Step   string `json:"step"`
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
+		TaskID  string          `json:"task_id"`
+		Step    string          `json:"step"`
+		OK      bool            `json:"ok"`
+		Output  string          `json:"output"`
+		Changes []agentPCChange `json:"changes"`
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
 		return // 本地执行回传属于旁路信令，格式异常静默丢弃即可
+	}
+	// 阶段八十：撤销本地变更的回传（任务可能已完结不在等待态，按步骤表独立归口）
+	if w, ok := pcRevertWaiters.Load(req.Step); ok {
+		wt := w.(*pcRevertWait)
+		if wt.username == c.username { // 仅发起人自己的 PC 连接可回传
+			select {
+			case wt.ch <- &AgentExecResult{OK: req.OK, Output: req.Output}:
+			default:
+			}
+		}
+		return
 	}
 	v, ok := agentTasks.Load(req.TaskID)
 	if !ok {
@@ -836,8 +881,13 @@ func (s *Server) handleAgentExecResp(c *Client, msg *protocol.Message) {
 	if ch == nil || step != req.Step { // 非等待态或步骤不匹配（迟到的回传）直接丢弃
 		return
 	}
+	r := &AgentExecResult{OK: req.OK, Output: req.Output, Changes: req.Changes}
+	// 阶段八十：本地文件工具回传携带变更——登记审查行（env=pc）并推送审查条（任务中即时可见）
+	if len(r.Changes) > 0 {
+		s.agentRecordPCChanges(t, r.Changes)
+	}
 	select {
-	case ch <- &AgentExecResult{OK: req.OK, Output: req.Output}:
+	case ch <- r:
 	default:
 	}
 }
@@ -1042,8 +1092,10 @@ func agentToolReadFile(username string, params map[string]interface{}) string {
 	return seg
 }
 
-// agentToolWriteFile 工作区写文件（自动建父目录；overwrite/append）
-func agentToolWriteFile(username string, params map[string]interface{}) string {
+// agentToolWriteFile 工作区写文件（自动建父目录；overwrite/append）。
+// 阶段七十七：写前快照改前内容归口变更审查（不存在=创建语义；备份失败不记录、不阻断任务）
+func agentToolWriteFile(t *AgentTask, params map[string]interface{}) string {
+	username := t.Username
 	path, _ := params["path"].(string)
 	content, _ := params["content"].(string)
 	mode, _ := params["mode"].(string)
@@ -1064,6 +1116,7 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "错误：创建目录失败 " + err.Error()
 	}
+	bak := agentSnapshotBefore(t, full) // 阶段七十七：写前快照（""=新建；成功后据此登记 create/modify）
 	var n int
 	var diffStat string // 阶段六十二：+N -M 行变化统计（Trae CN 同款，仅 overwrite 且旧文件存在时计算）
 	if mode == "append" {
@@ -1088,6 +1141,12 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 			diffStat = fmt.Sprintf("+%d -%d ", add, del)
 		}
 	}
+	// 阶段七十七：登记变更（kind 由"改前是否存在"决定——append 到不存在的文件同属 create）
+	kind := "modify"
+	if bak == "" {
+		kind = "create"
+	}
+	agentRecordChange(t, agentRelPath(username, full), kind, bak)
 	verb := "写入"
 	if mode == "append" {
 		verb = "追加"
@@ -1104,7 +1163,8 @@ func agentToolWriteFile(username string, params map[string]interface{}) string {
 // agentToolEditFile 阶段七十四：精确替换编辑（old_string→new_string，比整文件重写省 token）。
 // 语义对齐主流编码智能体：old_string 须与文件内容逐字一致；多处匹配要求唯一化或显式 replace_all；
 // GBK 文件编辑后统一转存 UTF-8（与 write_file 写入语义一致）
-func agentToolEditFile(username string, params map[string]interface{}) string {
+func agentToolEditFile(t *AgentTask, params map[string]interface{}) string {
+	username := t.Username
 	path, _ := params["path"].(string)
 	oldStr := agentParamString(params["old_string"])
 	newStr := agentParamString(params["new_string"])
@@ -1126,6 +1186,7 @@ func agentToolEditFile(username string, params map[string]interface{}) string {
 	if err != nil {
 		return "错误：读取失败 " + err.Error()
 	}
+	bak := agentSnapshotBefore(t, full) // 阶段七十七：改前快照（编辑必为已有文件；备份失败则不记变更、不可撤销）
 	if bytes.IndexByte(data, 0) >= 0 {
 		return "错误：不支持编辑二进制文件"
 	}
@@ -1151,13 +1212,18 @@ func agentToolEditFile(username string, params map[string]interface{}) string {
 	if err := os.WriteFile(full, []byte(newText), 0o644); err != nil {
 		return "错误：写入失败 " + err.Error()
 	}
+	if bak != "" {
+		agentRecordChange(t, agentRelPath(username, full), "modify", bak) // 阶段七十七：登记变更
+	}
 	add, del := agentLineDiffStat(text, newText)
 	return fmt.Sprintf("已编辑 %s（+%d -%d，替换 %d 处）", path, add, del, count)
 }
 
 // agentToolDeleteFile 阶段七十四：删除工作区内文件/目录（审批归口在 agentNeedsApproval，恒需审批）。
-// agentSafePath 已拒绝空路径与"."，工作区根本身不可删；非空目录必须显式 recursive=true
-func agentToolDeleteFile(username string, params map[string]interface{}) string {
+// agentSafePath 已拒绝空路径与"."，工作区根本身不可删；非空目录必须显式 recursive=true。
+// 阶段七十七：删除前逐文件快照（撤销可还原）；快照失败的文件不记变更（不可撤销）
+func agentToolDeleteFile(t *AgentTask, params map[string]interface{}) string {
+	username := t.Username
 	path, _ := params["path"].(string)
 	recursive, _ := params["recursive"].(bool)
 	full, err := agentSafePath(username, path)
@@ -1175,15 +1241,43 @@ func agentToolDeleteFile(username string, params map[string]interface{}) string 
 			}
 			return "已删除目录 " + path + "/（空目录）"
 		}
+		// 阶段七十七：递归删除前先快照全部文件（删后无法再读），单文件单行 kind=delete；
+		// 超出 agentChangeMaxFiles 截断（截断部分不记变更不可撤销），空目录不还原（可容忍）
+		var snapFiles []string
 		n := 0
-		_ = filepath.WalkDir(full, func(_ string, _ fs.DirEntry, _ error) error { n++; return nil })
+		_ = filepath.WalkDir(full, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				return nil
+			}
+			n++
+			if len(snapFiles) < agentChangeMaxFiles {
+				snapFiles = append(snapFiles, p)
+			}
+			return nil
+		})
+		baks := make([]string, len(snapFiles))
+		for i, p := range snapFiles {
+			baks[i] = agentSnapshotBefore(t, p)
+		}
 		if err := os.RemoveAll(full); err != nil {
 			return "错误：删除失败 " + err.Error()
 		}
+		for i, p := range snapFiles {
+			if baks[i] != "" {
+				agentRecordChange(t, agentRelPath(username, p), "delete", baks[i])
+			}
+		}
 		return fmt.Sprintf("已删除目录 %s/（递归，含 %d 个条目）", path, n)
 	}
+	bak := agentSnapshotBefore(t, full) // 删前快照（撤销还原）
 	if err := os.Remove(full); err != nil {
 		return "错误：删除失败 " + err.Error()
+	}
+	if bak != "" {
+		agentRecordChange(t, agentRelPath(username, full), "delete", bak) // 阶段七十七：登记变更
 	}
 	return fmt.Sprintf("已删除文件 %s（%d 字节）", path, info.Size())
 }
@@ -1408,6 +1502,388 @@ func agentLineDiffStat(oldContent, newContent string) (int, int) {
 	}
 	oldCount := len(strings.Split(oldContent, "\n"))
 	return newCount - common, oldCount - common
+}
+
+// ===== 阶段七十七：文件变更审查归口（TRAE CN 同款"文件变更审查条"） =====
+// 快照归口：write/edit/delete 落盘前备份"改前内容"到 <kbDataDir>/agent_changes/<taskID>/；
+// 统计归口：任务完结时统一 diff（agentFinalizeChanges）；撤销归口：按 Kind 还原（handleAgentChanges）。
+
+// agentChangeRec 任务内文件变更内存态（t.mu 保护；同路径首触保留最早 before，任务级累积 diff）
+type agentChangeRec struct {
+	Path   string // 工作区相对路径（正斜杠）
+	Kind   string // create/modify/delete（首触语义：原不存在=create，否则 modify/delete）
+	Backup string // 首触备份绝对路径（create 首触为空——任务前文件不存在）
+	Env    string // 阶段八十：server=服务端工作区（完结统一 diff 统计）/ pc=用户本地（统计执行器上报，免重算）
+}
+
+// agentChangeView 下发视图（done/error 事件与下行 66 刷新帧共用）
+type agentChangeView struct {
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	Adds   int    `json:"adds"`
+	Dels   int    `json:"dels"`
+	Status string `json:"status"`
+}
+
+// agentRelPath 工作区内绝对路径 → 相对路径（正斜杠，记录表与前端展示归口）；解析失败回退文件名
+func agentRelPath(username, full string) string {
+	ws, err := agentWorkspaceDir(username)
+	if err != nil {
+		return filepath.Base(full)
+	}
+	rel, err := filepath.Rel(ws, full)
+	if err != nil {
+		return filepath.Base(full)
+	}
+	return filepath.ToSlash(rel)
+}
+
+// agentSnapshotBefore 写/改/删前快照：备份改前内容到 agent_changes/<taskID>/<seq>_<basename>。
+// 返回备份绝对路径；原不存在返回 ""（创建语义）；备份失败也返回 ""（不记录、不阻断任务）。
+// 同路径重复触碰直接复用首触备份（最早 before，撤销即还原任务前状态，不产生冗余备份文件）
+func agentSnapshotBefore(t *AgentTask, full string) string {
+	rel := agentRelPath(t.Username, full)
+	t.mu.Lock()
+	var exist *agentChangeRec
+	for _, r := range t.changes {
+		if r.Path == rel {
+			exist = r
+			break
+		}
+	}
+	t.mu.Unlock()
+	if exist != nil {
+		return exist.Backup // 首触已备份：create 复用 ""（仍为创建语义）
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "" // 原不存在=创建语义；读失败视同不存在
+	}
+	dir := filepath.Join(kbDataDir, "agent_changes", t.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	t.mu.Lock()
+	t.changeSeq++
+	seq := t.changeSeq
+	t.mu.Unlock()
+	dst := filepath.Join(dir, fmt.Sprintf("%d_%s", seq, filepath.Base(full)))
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return ""
+	}
+	return dst
+}
+
+// agentRecordChange 变更登记：锁内写内存归口（同路径去重，首触为准），锁外落库（status=pending）。
+// 落库失败仅记日志（撤销链路以内存+DB 双归口，重启后靠 DB 重放）
+func agentRecordChange(t *AgentTask, rel, kind, backup string) {
+	t.mu.Lock()
+	dup := false
+	for _, r := range t.changes {
+		if r.Path == rel {
+			dup = true
+			break
+		}
+	}
+	if !dup {
+		t.changes = append(t.changes, &agentChangeRec{Path: rel, Kind: kind, Backup: backup})
+	}
+	t.mu.Unlock()
+	if dup {
+		return
+	}
+	if err := store.DB.Create(&model.AgentChangeRecord{
+		TaskID: t.ID, Username: t.Username, Path: rel, Kind: kind, BackupFile: backup, Status: "pending",
+	}).Error; err != nil {
+		logger.Error("Agent 变更登记落库失败（任务 %s，%s）：%v", t.ID, rel, err)
+	}
+}
+
+// agentRecordPCChanges 阶段八十：PC 本地执行变更登记归口（env=pc 行）。
+// 文件在用户磁盘服务端读不到——行数统计由执行器按任务前备份计算后上报，此处免重算直接落库；
+// create 行操作后又删除（任务中建了又删）净零剔除；同路径重复触碰回写最新累计行数。
+// 逐条登记后推送 66 全量帧：审查条任务执行中即时可见（TRAE 同款），不等到完结
+func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
+	changed := false
+	for _, ch := range changes {
+		if ch.Path == "" {
+			continue
+		}
+		t.mu.Lock()
+		dup := false
+		for _, r := range t.changes {
+			if r.Path == ch.Path {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			t.changes = append(t.changes, &agentChangeRec{Path: ch.Path, Kind: ch.Kind, Backup: ch.Backup, Env: "pc"})
+		}
+		t.mu.Unlock()
+		if ch.Deleted && ch.Kind == "create" {
+			// 任务中新建又删除：净零，剔除记录行（含首触即删除的极端同帧场景，不登记）
+			store.DB.Where("task_id = ? AND path = ?", t.ID, ch.Path).Delete(&model.AgentChangeRecord{})
+			changed = true
+			continue
+		}
+		if dup {
+			// 同路径重复触碰：回写最新累计行数（首触 kind/备份不变，撤销仍还原任务前状态）
+			store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, ch.Path).
+				Updates(map[string]interface{}{"adds": ch.Adds, "dels": ch.Dels})
+			changed = true
+			continue
+		}
+		if err := store.DB.Create(&model.AgentChangeRecord{
+			TaskID: t.ID, Username: t.Username, Path: ch.Path, Kind: ch.Kind,
+			Adds: ch.Adds, Dels: ch.Dels, BackupFile: ch.Backup, LocalPath: ch.Local,
+			Env: "pc", Status: "pending",
+		}).Error; err != nil {
+			logger.Error("Agent 本地变更登记落库失败（任务 %s，%s）：%v", t.ID, ch.Path, err)
+			continue
+		}
+		changed = true
+	}
+	if changed {
+		s.agentChangesPush(t.Username, t.ID)
+	}
+}
+
+// agentFinalizeChanges 任务完结统计归口（agentFinish done/error/cancelled emit 前调用）：
+// 逐文件 diff 当前内容 vs 首触 before，回写记录表并返回下发视图（无变更返回 nil）。
+// 任务中先建后删（首触 create 且当前已不存在）净零，从清单剔除；二进制（含 NUL）行数记 0
+func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
+	t.mu.Lock()
+	recs := make([]*agentChangeRec, len(t.changes))
+	copy(recs, t.changes)
+	t.mu.Unlock()
+	if len(recs) == 0 {
+		return nil
+	}
+	views := make([]agentChangeView, 0, len(recs))
+	for _, r := range recs {
+		// 阶段八十：pc 行统计由执行器上报时已回写（本地文件服务端读不到），免重算直接取库内最新值；
+		// 行不存在（净零剔除）不进完结视图
+		if r.Env == "pc" {
+			var row model.AgentChangeRecord
+			if err := store.DB.Where("task_id = ? AND path = ?", t.ID, r.Path).First(&row).Error; err != nil {
+				continue
+			}
+			views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: row.Adds, Dels: row.Dels, Status: row.Status})
+			continue
+		}
+		full, err := agentSafePath(t.Username, r.Path)
+		if err != nil {
+			continue
+		}
+		var before string
+		if r.Backup != "" {
+			b, rerr := os.ReadFile(r.Backup)
+			if rerr != nil {
+				continue // 备份丢失：无法统计也无法撤销，跳过
+			}
+			before = string(b)
+		}
+		cur, cerr := os.ReadFile(full)
+		curExists := cerr == nil
+		if r.Backup == "" && !curExists {
+			// 任务中先建后删：净零，剔除记录行
+			store.DB.Where("task_id = ? AND path = ?", t.ID, r.Path).Delete(&model.AgentChangeRecord{})
+			continue
+		}
+		var adds, dels int
+		if !curExists {
+			_, dels = agentLineDiffStat(before, "") // modify/delete 后文件已不在：del=before 行数
+		} else if bytes.IndexByte(cur, 0) >= 0 || bytes.IndexByte([]byte(before), 0) >= 0 {
+			adds, dels = 0, 0 // 二进制文件：记录变更但行数记 0
+		} else {
+			adds, dels = agentLineDiffStat(before, string(cur))
+		}
+		store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, r.Path).
+			Updates(map[string]interface{}{"adds": adds, "dels": dels})
+		views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: adds, Dels: dels, Status: "pending"})
+	}
+	if len(views) == 0 {
+		return nil
+	}
+	return views
+}
+
+// agentChangesPush 下行 66 全量刷新帧：从 DB 读全量构造（不依赖内存任务态，天然支持多端/重连/重启）。
+// 会话归属随帧下发（前端任务卡按会话过滤渲染，与 agentEmit 同口径）
+func (s *Server) agentChangesPush(username, taskID string) {
+	var rec model.AgentTaskRecord
+	agentName, sid := "", uint(0)
+	if err := store.DB.Select("agent_name", "session_id").Where("task_id = ?", taskID).First(&rec).Error; err == nil {
+		agentName, sid = rec.AgentName, rec.SessionID
+	}
+	var rows []model.AgentChangeRecord
+	store.DB.Where("task_id = ?", taskID).Order("id ASC").Find(&rows)
+	changes := make([]agentChangeView, 0, len(rows))
+	totalAdds, totalDels := 0, 0
+	for _, r := range rows {
+		changes = append(changes, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: r.Adds, Dels: r.Dels, Status: r.Status})
+		totalAdds += r.Adds
+		totalDels += r.Dels
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"task_id": taskID, "session_id": sid, "changes": changes,
+		"total_adds": totalAdds, "total_dels": totalDels,
+	})
+	out, _ := json.Marshal(protocol.Message{
+		MsgType:   protocol.MsgTypeAgentChanges,
+		FromUser:  agentName,
+		ToUser:    username,
+		Content:   string(payload),
+		SessionID: sid,
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, out)
+}
+
+// handleAgentChanges 阶段七十七：文件变更审查上行（content 为 JSON：{task_id,action,path?}）。
+// action=keep 弃备份确认保留；revert 按 Kind 还原（modify/delete → 恢复备份，create → 删除文件，
+// git discard 同语义：用户事后手动改动会被覆盖）。path 缺省=全部 pending 行。
+// 处理后回下行 66 全量帧同步多端；全部行离开 pending 后清理备份目录（孤儿容忍）
+func (s *Server) handleAgentChanges(c *Client, msg *protocol.Message) {
+	var req struct {
+		TaskID string `json:"task_id"`
+		Action string `json:"action"` // keep / revert
+		Path   string `json:"path"`   // 缺省=全部 pending
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
+		s.sendError(c, "参数错误")
+		return
+	}
+	if req.Action != "keep" && req.Action != "revert" {
+		s.sendError(c, "action 仅支持 keep/revert")
+		return
+	}
+	db := store.DB.Where("task_id = ? AND username = ? AND status = ?", req.TaskID, c.username, "pending")
+	if req.Path != "" {
+		db = db.Where("path = ?", req.Path)
+	}
+	var rows []model.AgentChangeRecord
+	db.Order("id ASC").Find(&rows)
+	// 阶段八十：env=pc 行的文件在用户磁盘，撤销/保留需下发其 PC 执行器执行（服务端只归口登记与状态）
+	var pcRows []model.AgentChangeRecord
+	for _, r := range rows {
+		if r.Env == "pc" {
+			pcRows = append(pcRows, r)
+			continue
+		}
+		if req.Action == "keep" {
+			if r.BackupFile != "" {
+				os.Remove(r.BackupFile)
+			}
+			store.DB.Model(&model.AgentChangeRecord{}).Where("id = ?", r.ID).Update("status", "kept")
+			continue
+		}
+		// revert：按 Kind 还原工作区文件
+		if full, err := agentSafePath(c.username, r.Path); err == nil {
+			if r.Kind == "create" {
+				os.Remove(full)
+			} else if data, rerr := os.ReadFile(r.BackupFile); rerr == nil {
+				os.MkdirAll(filepath.Dir(full), 0o755) // 递归删目录后父目录可能已不存在
+				os.WriteFile(full, data, 0o644)
+			}
+		}
+		if r.BackupFile != "" {
+			os.Remove(r.BackupFile)
+		}
+		store.DB.Model(&model.AgentChangeRecord{}).Where("id = ?", r.ID).Update("status", "reverted")
+	}
+	// 阶段八十：pc 行归口（keep=标记后异步清备份；revert=下发执行器还原，完成回传后再标记 reverted）
+	if len(pcRows) > 0 {
+		if !s.hub.HasPC(c.username) {
+			s.sendError(c, "本地文件变更需 PC 客户端在线才能"+map[string]string{"keep": "清理备份", "revert": "撤销"}[req.Action])
+			return
+		}
+		if req.Action == "keep" {
+			backs := make([]string, 0, len(pcRows))
+			for _, r := range pcRows {
+				if r.BackupFile != "" {
+					backs = append(backs, r.BackupFile)
+				}
+				store.DB.Model(&model.AgentChangeRecord{}).Where("id = ?", r.ID).Update("status", "kept")
+			}
+			if len(backs) > 0 {
+				go s.agentPCBackupCleanup(c.username, req.TaskID, backs) // fire-and-forget：离线时孤儿备份由执行器 7 天兜底清理
+			}
+		} else {
+			s.agentPCRevertAsync(c, req.TaskID, pcRows)
+			return // 撤销结果由执行器回传后异步标记 + 推送 66（此处先不刷帧，行保持 pending）
+		}
+	}
+	var cnt int64
+	store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND status = ?", req.TaskID, "pending").Count(&cnt)
+	if cnt == 0 {
+		os.RemoveAll(filepath.Join(kbDataDir, "agent_changes", req.TaskID))
+	}
+	s.agentChangesPush(c.username, req.TaskID)
+}
+
+// agentPCBackupCleanup 阶段八十：保留后的本地备份清理（经执行器下行 agent_cleanup_backups，尽力而为）
+func (s *Server) agentPCBackupCleanup(username, taskID string, backups []string) {
+	reqData, _ := json.Marshal(map[string]interface{}{
+		"task_id": taskID, "step": "cb-" + taskID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10),
+		"tool": "agent_cleanup_backups", "params": map[string]interface{}{"backups": backups},
+	})
+	out, _ := json.Marshal(protocol.Message{
+		MsgType: protocol.MsgTypeAgentExecReq, FromUser: "", ToUser: username,
+		Content: string(reqData), Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, out)
+}
+
+// agentPCRevertAsync 阶段八十：撤销本地变更——下发执行器 agent_revert_change 并挂异步等待器，
+// 回传成功后标记 reverted + 推送 66 帧；超时（PC 掉线/无响应）行保持 pending，用户可重试。
+// 步骤键含纳秒防并发撤销错投；FromUser 由前端按会话归属桥接（此处占位空串不影响下行投递）
+func (s *Server) agentPCRevertAsync(c *Client, taskID string, pcRows []model.AgentChangeRecord) {
+	step := "rv-" + taskID + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	changes := make([]map[string]interface{}, 0, len(pcRows))
+	ids := make([]uint, 0, len(pcRows))
+	for _, r := range pcRows {
+		ids = append(ids, r.ID)
+		changes = append(changes, map[string]interface{}{
+			"path": r.Path, "local": r.LocalPath, "backup": r.BackupFile, "kind": r.Kind,
+		})
+	}
+	w := &pcRevertWait{username: c.username, ch: make(chan *AgentExecResult, 1)}
+	pcRevertWaiters.Store(step, w)
+	defer pcRevertWaiters.Delete(step)
+
+	reqData, _ := json.Marshal(map[string]interface{}{
+		"task_id": taskID, "step": step,
+		"tool": "agent_revert_change", "params": map[string]interface{}{"changes": changes},
+	})
+	out, _ := json.Marshal(protocol.Message{
+		MsgType: protocol.MsgTypeAgentExecReq, FromUser: "", ToUser: c.username,
+		Content: string(reqData), Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(c.username, out)
+
+	// 异步等待回传：同步等待会占死上行连接的读循环——撤销常从 PC 端发起，执行器回传经同一 WS 连接，
+	// 读循环被占则回传永远进不来（必然 15 秒超时），故归口 goroutine
+	username := c.username
+	go func() {
+		select {
+		case res := <-w.ch:
+			if !res.OK {
+				logger.Warn("Agent 本地变更撤销执行失败（任务 %s）：%s", taskID, res.Output)
+				return // 行保持 pending，用户可重试
+			}
+			store.DB.Model(&model.AgentChangeRecord{}).Where("id IN ?", ids).Update("status", "reverted")
+			var cnt int64
+			store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND status = ?", taskID, "pending").Count(&cnt)
+			if cnt == 0 {
+				os.RemoveAll(filepath.Join(kbDataDir, "agent_changes", taskID))
+			}
+			s.agentChangesPush(username, taskID)
+		case <-time.After(15 * time.Second):
+			logger.Warn("Agent 本地变更撤销回传超时（任务 %s），行保持待审查", taskID)
+		}
+	}()
 }
 
 // agentToolTodoWrite 任务清单全量替换 + 进度事件推送（前端渲染清单卡片与进度条）
@@ -1958,7 +2434,13 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		}
 		switch status {
 		case "completed":
-			s.agentEmit(t, "done", map[string]interface{}{"result": result, "steps": t.steps, "msg_id": msgID})
+			// 阶段七十七：完结统计文件变更（done/error/cancelled 均携带——中途取消的脏改也可撤销）
+			changes := s.agentFinalizeChanges(t)
+			donePayload := map[string]interface{}{"result": result, "steps": t.steps, "msg_id": msgID}
+			if len(changes) > 0 {
+				donePayload["changes"] = changes
+			}
+			s.agentEmit(t, "done", donePayload)
 			// 阶段六十三：任务完成后异步提炼可复用经验入库（原实现：任务结束即止，无经验沉淀）
 			var todoSummary string
 			t.mu.Lock()
@@ -1987,9 +2469,18 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				s.sendToUser(t.Username, sugData)
 			}()
 		case "cancelled":
-			s.agentEmit(t, "status", map[string]interface{}{"status": "cancelled", "text": "任务已取消", "msg_id": msgID})
+			// 阶段七十七：取消同样结算变更（任务中已落盘的脏改出现审查条，可撤销）
+			cancelPayload := map[string]interface{}{"status": "cancelled", "text": "任务已取消", "msg_id": msgID}
+			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
+				cancelPayload["changes"] = changes
+			}
+			s.agentEmit(t, "status", cancelPayload)
 		default:
-			s.agentEmit(t, "error", map[string]interface{}{"message": errMsg, "steps": t.steps, "msg_id": msgID})
+			errPayload := map[string]interface{}{"message": errMsg, "steps": t.steps, "msg_id": msgID}
+			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
+				errPayload["changes"] = changes
+			}
+			s.agentEmit(t, "error", errPayload)
 		}
 		logger.Info("Agent 任务结束 %s（用户 %s，状态 %s，%d 步）", t.ID, t.Username, status, t.steps)
 		// 阶段六十七：任务释放并发名额后派发归口——队首排队任务自动启动（活动数达上限时为空操作）
@@ -2351,13 +2842,38 @@ func (s *Server) HandleAgentTaskList(w http.ResponseWriter, r *http.Request) {
 	db.Count(&total)
 	var rows []model.AgentTaskRecord
 	db.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
+	briefs := agentTaskBrief(rows)
+	// 阶段七十九：用户端列表附待审查变更（仅有 pending 行的任务才带 changes 键，一次分组查询归口）。
+	// 会话打开重放时即可点亮输入区上方"文件变更"审查页签，无需点开任务卡
+	if len(rows) > 0 {
+		ids := make([]string, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.TaskID)
+		}
+		var chRows []model.AgentChangeRecord
+		store.DB.Where("task_id IN ? AND status = ?", ids, "pending").Order("id ASC").Find(&chRows)
+		if len(chRows) > 0 {
+			byTask := map[string][]model.AgentChangeRecord{}
+			for _, c := range chRows {
+				byTask[c.TaskID] = append(byTask[c.TaskID], c)
+			}
+			for _, b := range briefs {
+				if tid, _ := b["task_id"].(string); tid != "" {
+					if cs := byTask[tid]; len(cs) > 0 {
+						b["changes"] = cs
+					}
+				}
+			}
+		}
+	}
 	adminJSON(w, map[string]interface{}{
 		"total": total, "page": page, "size": size,
-		"tasks": agentTaskBrief(rows),
+		"tasks": briefs,
 	})
 }
 
-// HandleAgentTaskDetail 用户端单任务详情（归属校验：仅本人任务可看，全文返回）
+// HandleAgentTaskDetail 用户端单任务详情（归属校验：仅本人任务可看，全文返回）。
+// 阶段七十七：附 changes 文件变更记录（重放卡渲染审查条，pending 可操作）
 func (s *Server) HandleAgentTaskDetail(w http.ResponseWriter, r *http.Request) {
 	username, ok := userKBUsername(w, r)
 	if !ok {
@@ -2369,7 +2885,14 @@ func (s *Server) HandleAgentTaskDetail(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "任务不存在")
 		return
 	}
-	adminJSON(w, rec)
+	// 保持原返回结构（记录字段平铺顶层）并追加 changes 键（前端旧解析不破坏）
+	var changes []model.AgentChangeRecord
+	store.DB.Where("task_id = ?", taskID).Order("id ASC").Find(&changes)
+	data, _ := json.Marshal(rec)
+	var body map[string]interface{}
+	_ = json.Unmarshal(data, &body)
+	body["changes"] = changes
+	adminJSON(w, body)
 }
 
 // HandleAdminAgentTaskList 管理端全量任务审计列表（user 用户名模糊筛选 + status 精确筛选 + 分页）

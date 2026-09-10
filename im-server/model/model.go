@@ -232,6 +232,29 @@ type AgentStepRecord struct {
 // TableName 指定表名
 func (AgentStepRecord) TableName() string { return "im_agent_step" }
 
+// AgentChangeRecord 阶段七十七：Agent 任务文件变更审查记录（TRAE CN 同款"文件变更审查条"归口）。
+// 工具 write_file/edit_file/delete_file 落盘前快照改前内容（BackupFile 指向备份文件），
+// 任务完结时统一统计增删行数；撤销即按 Kind 还原/删除文件，保留即弃备份。
+// Status: pending=待审查 kept=已保留 reverted=已撤销
+type AgentChangeRecord struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID     string    `gorm:"column:task_id;type:varchar(40);not null;index" json:"task_id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户（撤销上行归属校验）
+	Path       string    `gorm:"column:path;type:varchar(512);not null" json:"path"`              // 工作区相对路径（正斜杠）
+	Kind       string    `gorm:"column:kind;type:varchar(8);not null" json:"kind"`                // create/modify/delete
+	Adds       int       `gorm:"column:adds;not null;default:0" json:"adds"`                      // 新增行数（完结时统计回写）
+	Dels       int       `gorm:"column:dels;not null;default:0" json:"dels"`                      // 删除行数（完结时统计回写）
+	BackupFile string    `gorm:"column:backup_file;type:varchar(512)" json:"backup_file"`         // 改前内容备份文件绝对路径（create 为空）
+	Env        string    `gorm:"column:env;type:varchar(8);not null;default:server" json:"env"`   // 阶段八十：归属环境 server=服务端工作区 / pc=用户本地磁盘（撤销需下发执行器）
+	LocalPath  string    `gorm:"column:local_path;type:varchar(512)" json:"local_path"`           // 阶段八十：pc 环境文件本地绝对路径（撤销下发执行器还原用）
+	Status     string    `gorm:"column:status;type:varchar(12);not null;default:pending" json:"status"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AgentChangeRecord) TableName() string { return "im_agent_change" }
+
 // Message 聊天消息表 im_message
 type Message struct {
 	ID      uint `gorm:"primaryKey;autoIncrement" json:"id"`

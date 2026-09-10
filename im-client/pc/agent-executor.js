@@ -181,8 +181,129 @@ function readFileSync(username, params) {
     return { ok: true, output: seg };
 }
 
+// ===== 阶段八十：本地执行文件变更审查（撤销/保留）=====
+// 服务端审查链路（im_agent_change 表 + 下行 66 帧）仅覆盖服务端工作区；PC 本地执行的文件落在用户磁盘，
+// 服务端读不到内容。本模块按「任务+路径」首触把原文件字节备份到本地备份目录（确定性文件名，执行器
+// 重启后同路径不重复备份），并在回传结果中携带结构化 changes 数组：服务端据此登记变更（env=pc）并
+// 推送审查条；用户点撤销时服务端把备份/本地路径原样下发，由本执行器还原字节（文件在用户磁盘只有本地能还原）。
+const crypto = require('crypto');
+let backupRoot = path.join(os.tmpdir(), 'im_agent_change_backups');
+const PC_CHANGE_MAX_FILES = 200; // 递归删目录逐文件快照上限（与服务端 agentChangeMaxFiles 同值）
+
+// 启动时由 main 进程注入备份根目录（userData/agent_change_backups），并顺手清理孤儿备份
+function setBackupRoot(root) {
+    backupRoot = String(root || backupRoot);
+    pruneChangeBackups();
+}
+
+// 备份文件：<root>/<taskID>/<sha1(rel)前16>_<basename>——确定性命名让「首触已备份」可落盘判断
+function pcBackupPath(taskId, rel, base) {
+    const h = crypto.createHash('sha1').update(String(rel)).digest('hex').slice(0, 16);
+    return path.join(backupRoot, String(taskId), h + '_' + base);
+}
+
+// 孤儿清理：删除 7 天前的任务备份目录（保留/撤销成功由服务端另行下发清理请求，此处仅兜底）
+function pruneChangeBackups() {
+    let dirs;
+    try { dirs = fs.readdirSync(backupRoot); } catch (e) { return; }
+    const week = 7 * 24 * 3600 * 1000;
+    dirs.forEach(function (d) {
+        const full = path.join(backupRoot, d);
+        try { if (Date.now() - fs.statSync(full).mtimeMs > week) fs.rmSync(full, { recursive: true, force: true }); } catch (e) {}
+    });
+}
+
+// 首触备份：本任务该路径未备份过且文件存在 → 备份当前字节，返回备份绝对路径（''=创建语义/读取失败）
+function pcEnsureBackup(taskId, rel, full) {
+    const bp = pcBackupPath(taskId, rel, path.basename(full));
+    try {
+        if (fs.existsSync(bp)) return bp; // 首触已备份（含执行器重启后）：复用最早 before
+    } catch (e) {}
+    let data;
+    try { data = fs.readFileSync(full); } catch (e) { return ''; } // 原不存在=创建语义
+    try {
+        fs.mkdirSync(path.dirname(bp), { recursive: true });
+        fs.writeFileSync(bp, data);
+    } catch (e) { return ''; }
+    return bp;
+}
+
+// 操作前调用：无 task_id（旧渲染层）不做审查；否则首触备份，返回备份路径供 pcReport 组装
+function pcBegin(taskId, rel, full) {
+    if (!taskId) return '';
+    return pcEnsureBackup(taskId, rel, full);
+}
+
+// 累计行数统计：与任务前原始内容（备份）diff；备份为空=创建语义（全部为新增）；二进制（含 NUL）记 0/0
+function pcDiffStat(backup, curText) {
+    if (!backup) return { adds: String(curText || '').split('\n').length, dels: 0 };
+    let buf;
+    try { buf = fs.readFileSync(backup); } catch (e) { return { adds: 0, dels: 0 }; }
+    if (buf.includes(0)) return { adds: 0, dels: 0 };
+    const before = decodeOutput(buf);
+    return { adds: lineDiffStat(before, curText), dels: lineDiffStat(curText, before) };
+}
+
+// 变更上报组装：kind=首触行语义（任务前已存在→opKind，不存在→create）；deleted=操作后文件已不在
+function pcReport(taskId, rel, full, backup, opKind, curText, deleted) {
+    if (!taskId) return null;
+    const stat = pcDiffStat(backup, curText);
+    return {
+        path: String(rel).replace(/\\/g, '/'),
+        local: full,
+        kind: backup ? opKind : 'create',
+        adds: stat.adds,
+        dels: stat.dels,
+        backup: backup,
+        deleted: !!deleted
+    };
+}
+
+// 撤销本地变更（服务端审查操作下行）：create→删除任务中新建的文件；modify/delete→还原任务前字节
+function revertChangesSync(username, params) {
+    const list = (params && params.changes) || [];
+    let n = 0;
+    const errs = [];
+    list.forEach(function (c) {
+        try {
+            if (c && c.kind === 'create' && c.local) {
+                fs.rmSync(c.local, { force: true });
+            } else if (c && c.backup) {
+                const data = fs.readFileSync(c.backup); // 还原任务前原始字节（GBK 原文件按字节还原不转码）
+                fs.mkdirSync(path.dirname(c.local), { recursive: true });
+                fs.writeFileSync(c.local, data);
+            } else {
+                return;
+            }
+            try { if (c.backup) fs.rmSync(c.backup, { force: true }); } catch (e) {}
+            n++;
+        } catch (e) {
+            errs.push((c && c.path || '?') + '：' + (e.message || e));
+        }
+    });
+    if (errs.length) return { ok: false, output: '错误：部分撤销失败\n' + errs.join('\n') };
+    return { ok: true, output: '已撤销 ' + n + ' 项本地变更' };
+}
+
+// 保留后备份清理（fire-and-forget）：逐个删备份文件，空任务目录顺手移除
+function cleanupBackupsSync(username, params) {
+    const list = (params && params.backups) || [];
+    list.forEach(function (b) {
+        try { if (b) fs.rmSync(b, { force: true }); } catch (e) {}
+    });
+    try {
+        const dirs = {};
+        list.forEach(function (b) { if (b) dirs[path.dirname(path.resolve(String(b)))] = 1; });
+        Object.keys(dirs).forEach(function (d) {
+            if (!d.startsWith(path.resolve(backupRoot))) return; // 越界防护：仅清备份根内目录
+            try { if (!fs.readdirSync(d).length) fs.rmdirSync(d); } catch (e) {}
+        });
+    } catch (e) {}
+    return { ok: true, output: '已清理 ' + list.length + ' 项备份' };
+}
+
 // write_file：工作区写文件（自动建父目录；overwrite/append）
-function writeFileSync(username, params) {
+function writeFileSync(taskId, username, params) {
     const p = params && params.path;
     const content = String((params && params.content) || '');
     let mode = String((params && params.mode) || 'overwrite');
@@ -194,6 +315,8 @@ function writeFileSync(username, params) {
     }
     const { full, err } = safePath(username, p);
     if (err) return { ok: false, output: '错误：' + err };
+    const rel = String(p).replace(/\\/g, '/');
+    const bak = pcBegin(taskId, rel, full); // 写前首触备份（''=任务前不存在，创建语义）
     try {
         fs.mkdirSync(path.dirname(full), { recursive: true });
         if (mode === 'append') {
@@ -204,13 +327,21 @@ function writeFileSync(username, params) {
     } catch (e) {
         return { ok: false, output: '错误：写入失败 ' + (e.message || e) };
     }
+    // 变更统计口径：任务前原始内容（备份）vs 落盘后全文（覆盖追加链、create 后 append 等场景统一准确）
+    let curText = content;
+    if (taskId) {
+        try { curText = decodeOutput(fs.readFileSync(full)); } catch (e) { curText = content; }
+    }
+    const change = pcReport(taskId, rel, full, bak, 'modify', curText, false);
     const verb = mode === 'append' ? '追加' : '写入';
-    return { ok: true, output: '已' + verb + ' ' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）' };
+    const res = { ok: true, output: '已' + verb + ' ' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）' };
+    if (change) res.changes = [change];
+    return res;
 }
 
 // edit_file 阶段七十四：精确替换编辑（old_string→new_string），语义与服务端 agentToolEditFile 一致：
 // old_string 须逐字一致；多处匹配要求唯一化或显式 replace_all；GBK 文件编辑后统一转存 UTF-8
-function editFileSync(username, params) {
+function editFileSync(taskId, username, params) {
     const p = params && params.path;
     const oldStr = String((params && params.old_string) || '');
     const newStr = String((params && params.new_string) || '');
@@ -222,6 +353,8 @@ function editFileSync(username, params) {
     }
     const { full, err } = safePath(username, p);
     if (err) return { ok: false, output: '错误：' + err };
+    const rel = String(p).replace(/\\/g, '/');
+    const bak = pcBegin(taskId, rel, full); // 改前首触备份（''=任务前不存在——edit 目标必存在，此仅备份失败兜底）
     let buf;
     try {
         buf = fs.readFileSync(full);
@@ -245,21 +378,28 @@ function editFileSync(username, params) {
     }
     const add = lineDiffStat(text, newText);
     const del = lineDiffStat(newText, text);
-    return { ok: true, output: '已编辑 ' + p + '（+' + add + ' -' + del + '，替换 ' + count + ' 处）' };
+    const res = { ok: true, output: '已编辑 ' + p + '（+' + add + ' -' + del + '，替换 ' + count + ' 处）' };
+    // 阶段八十：变更审查上报——统计口径与摘要行不同（摘要=本次替换 diff；上报=任务前原始内容整体 diff）
+    const change = pcReport(taskId, rel, full, bak, 'modify', newText, false);
+    if (change) res.changes = [change];
+    return res;
 }
 
 // delete_file 阶段七十四：删除文件/目录（审批归口服务端；非空目录必须 recursive=true）
-function deleteFileSync(username, params) {
+// 阶段八十：删前逐文件首触备份（递归目录与服务端同款 WalkDir 快照语义），回传 changes 供审查撤销
+function deleteFileSync(taskId, username, params) {
     const p = params && params.path;
     const recursive = !!(params && params.recursive);
     const { full, err } = safePath(username, p);
     if (err) return { ok: false, output: '错误：' + err };
+    const rel = String(p).replace(/\\/g, '/');
     let stat;
     try {
         stat = fs.statSync(full);
     } catch (e) {
         return { ok: false, output: '错误：目标不存在 ' + (e.message || e) };
     }
+    const changes = [];
     if (stat.isDirectory()) {
         if (!recursive) {
             try {
@@ -269,23 +409,49 @@ function deleteFileSync(username, params) {
             }
             return { ok: true, output: '已删除目录 ' + p + '/（空目录）' };
         }
-        let n = 1; // 统计口径含根目录本身（与服务端 WalkDir 一致）
+        // 与服务端同款：删前逐文件快照（上限 PC_CHANGE_MAX_FILES，超出不记变更不可撤销）
+        const snap = [];
         try {
-            countEntries(full, function () { n++; });
+            (function walk(dir, relDir) {
+                if (snap.length >= PC_CHANGE_MAX_FILES) return;
+                let items;
+                try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+                items.forEach(function (it) {
+                    if (snap.length >= PC_CHANGE_MAX_FILES) return;
+                    const fp = path.join(dir, it.name);
+                    const rp = relDir ? relDir + '/' + it.name : it.name;
+                    if (it.isDirectory()) walk(fp, rp);
+                    else snap.push({ full: fp, rel: rp });
+                });
+            })(full, '');
         } catch (e) {}
+        const backs = snap.map(function (f) { return pcBegin(taskId, rel + '/' + f.rel, f.full); });
+        let n = 1; // 统计口径含根目录本身（与服务端 WalkDir 一致）；删前统计（删后目录已不存在读不到）
+        try { countEntries(full, function () { n++; }); } catch (e) {}
         try {
             fs.rmSync(full, { recursive: true, force: false });
         } catch (e) {
             return { ok: false, output: '错误：删除失败 ' + (e.message || e) };
         }
-        return { ok: true, output: '已删除目录 ' + p + '/（递归，含 ' + n + ' 个条目）' };
+        if (taskId) {
+            snap.forEach(function (f, i) {
+                if (backs[i]) changes.push(pcReport(taskId, rel + '/' + f.rel, f.full, backs[i], 'delete', '', true));
+            });
+        }
+        const res = { ok: true, output: '已删除目录 ' + p + '/（递归，含 ' + n + ' 个条目）' };
+        if (changes.length) res.changes = changes.filter(Boolean);
+        return res;
     }
+    const bak = pcBegin(taskId, rel, full); // 删前首触备份（撤销还原）
     try {
         fs.unlinkSync(full);
     } catch (e) {
         return { ok: false, output: '错误：删除失败 ' + (e.message || e) };
     }
-    return { ok: true, output: '已删除文件 ' + p + '（' + stat.size + ' 字节）' };
+    const res = { ok: true, output: '已删除文件 ' + p + '（' + stat.size + ' 字节）' };
+    const change = pcReport(taskId, rel, full, bak, 'delete', '', true);
+    if (change) res.changes = [change];
+    return res;
 }
 
 // 递归统计条目数（delete_file 结果说明用；失败不阻断删除主流程）
@@ -667,23 +833,25 @@ const CMD_OUT_FULL_MAX = 64 * 1024;
 const CMD_OUT_FULL_HEAD = 8 * 1024;
 const CMD_OUT_FULL_TAIL = 56 * 1024;
 
-// 工具执行入口：main 进程 IPC handler 调用。req = {username, tool, params}
+// 工具执行入口：main 进程 IPC handler 调用。req = {username, tool, params, task_id}
+// task_id 阶段八十：本地文件工具据此做首触备份并回传 changes（缺省=旧渲染层，不做变更审查）
 function execTool(req, done) {
     const username = sanitizeUsername(req && req.username);
     const tool = req && req.tool;
     const params = req && req.params;
+    const taskId = String((req && req.task_id) || '');
     switch (tool) {
         case 'read_file':
             done(readFileSync(username, params));
             return;
         case 'write_file':
-            done(writeFileSync(username, params));
+            done(writeFileSync(taskId, username, params));
             return;
         case 'edit_file':
-            done(editFileSync(username, params));
+            done(editFileSync(taskId, username, params));
             return;
         case 'delete_file':
-            done(deleteFileSync(username, params));
+            done(deleteFileSync(taskId, username, params));
             return;
         case 'list_dir':
             done(listDirSync(username, params));
@@ -693,6 +861,13 @@ function execTool(req, done) {
             return;
         case 'run_command':
             runCommandSync(username, params, done);
+            return;
+        // 阶段八十：变更审查下行（撤销=还原字节并删备份；保留=仅清理备份），文件在用户磁盘只有本地能执行
+        case 'agent_revert_change':
+            done(revertChangesSync(username, params));
+            return;
+        case 'agent_cleanup_backups':
+            done(cleanupBackupsSync(username, params));
             return;
         default:
             done({ ok: false, output: '错误：未知工具 ' + tool });
@@ -1326,6 +1501,7 @@ function termOp(req, onFrame) {
 module.exports = {
     setRoot: setRoot,
     getRoot: getRoot,
+    setBackupRoot: setBackupRoot, // 阶段八十：本地变更审查备份根目录（main 启动时注入并清理孤儿）
     setSandbox: setSandbox,
     getSandbox: getSandbox,
     safePath: safePath,

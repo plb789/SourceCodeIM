@@ -3146,14 +3146,14 @@ html, body {
     background: rgba(128, 128, 128, 0.22);
 }
 
-/* ===== 阶段六十二（完整版）：底部常驻任务栏 + 工具分组汇总 ===== */
-/* 底部任务栏（输入区上方常驻，Trae 同款）：主题色描边面板 + 计数 + 展开箭头 */
-.agent-task-dock {
+/* ===== 阶段七十九：输入区上方停靠栏（TRAE CN 同款单栏双页签）+ 工具分组汇总 ===== */
+/* 停靠栏：左侧"任务/文件变更"双页签图标切换视图，右侧展开箭头；无内容时整栏隐藏 */
+.agent-dock {
     display: flex;
     align-items: center;
     gap: 10px;
     margin: 0 16px 6px;
-    padding: 8px 12px;
+    padding: 6px 12px;
     background: var(--panel-bg, #252526);
     border: 1px solid var(--border, #333);
     border-radius: 8px;
@@ -3162,16 +3162,54 @@ html, body {
     transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.agent-task-dock:hover {
+.agent-dock:hover {
     border-color: var(--primary);
 }
 
-.agent-task-dock-icon {
-    color: var(--primary);
-    font-size: 14px;
+.agent-dock.hidden {
+    display: none;
 }
 
-.agent-task-dock-text {
+/* 双页签图标：激活页签主题色描边高亮 */
+.agent-dock-tabs {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.agent-dock-tab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    color: var(--text-light, #888);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.agent-dock-tab svg {
+    display: block;
+}
+
+.agent-dock-tab:hover {
+    color: var(--primary);
+}
+
+.agent-dock-tab.active {
+    color: var(--primary);
+    border-color: var(--border, #333);
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+.agent-dock-tab.hidden {
+    display: none;
+}
+
+/* 视图内容：任务目标 / 待审查提示（flex 撑开，超长省略） */
+.agent-dock-text {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -3181,25 +3219,48 @@ html, body {
     color: var(--text, #ddd);
 }
 
-.agent-task-dock-count {
+/* 任务页签计数（N/M 个任务已完成，主题色） */
+.agent-dock-meta.task {
     flex-shrink: 0;
     font-size: 12px;
     color: var(--primary);
 }
 
-.agent-task-dock-arrow::before {
-    content: '⌄';
+.agent-dock-meta.task.hidden {
+    display: none;
+}
+
+/* 文件变更页签统计（+X -Y，git 同款绿/红） */
+.agent-dock-meta.changes {
+    flex-shrink: 0;
+    display: flex;
+    gap: 6px;
+    font-size: 12px;
+    font-family: Consolas, Monaco, monospace;
+}
+
+.agent-dock-meta.changes.hidden {
+    display: none;
+}
+
+/* 展开箭头：SVG chevron flex 垂直居中（原 '⌄' 字符受字体基线影响与文字错位） */
+.agent-dock-arrow {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
     color: var(--text-light, #888);
-    font-size: 14px;
-    display: inline-block;
     transition: transform 0.15s ease;
 }
 
-.agent-task-dock.open .agent-task-dock-arrow::before {
+.agent-dock-arrow svg {
+    display: block;
+}
+
+.agent-dock.open .agent-dock-arrow {
     transform: rotate(180deg);
 }
 
-/* 任务栏展开的清单面板（镜像卡片内清单样式） */
+/* 停靠栏展开面板（任务清单镜像 / 文件变更行 + 审查底栏共用） */
 .agent-task-dock-panel {
     margin: 0 16px 6px;
     padding: 6px 12px;
@@ -3212,6 +3273,11 @@ html, body {
 
 .agent-task-dock-panel.hidden {
     display: none;
+}
+
+/* 面板内的文件行列表：去掉卡片内审查条的首行分隔线（首行贴面板顶） */
+.agent-task-dock-panel .agent-changes-list {
+    border-top: none;
 }
 
 /* 工具分组汇总："已编辑 N 个文件，执行 M 条命令"（Trae 同款，头部可点击展开/收起） */
@@ -3715,8 +3781,11 @@ html.m #list-panel.list-collapsed {
 }
 
 /* 任务卡片容器（消息流内独立卡片，微信气泡加宽版） */
+/* 防溢出夹紧：vw 基准不含左侧栏，窄窗口时 560px 定宽会冲出聊天区右缘（实测截图）；
+   width 仅为期望宽度，max-width:100% 相对消息体夹紧，超宽时跟随容器收缩 */
 .agent-task-card {
     width: min(560px, 78vw);
+    max-width: 100%;
     background: var(--bubble-other, #ffffff);
     border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
     border-radius: 10px;
@@ -6119,6 +6188,206 @@ html.m #list-panel.list-collapsed {
     padding: 0 10px 8px;
     font-size: 11px;
     color: var(--text-secondary, #999);
+}
+
+/* ===== 阶段七十七：文件变更审查条（TRAE CN 同款，颜色全部关联现有主题变量随主题变化） ===== */
+.agent-changes {
+    margin-top: 8px;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 8px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--primary) 3%, var(--panel-bg, #fff));
+}
+
+/* 折叠汇总头：N 个文件已更改 +X -Y */
+.agent-changes-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-changes-cnt {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text, #333);
+}
+
+.agent-changes-stat {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+    font-size: 12px;
+    font-family: Consolas, Monaco, monospace;
+}
+
+/* 增删行数（git 同款绿/红） */
+.diff-add {
+    color: #22a05a;
+}
+
+.diff-del {
+    color: #d4553f;
+}
+
+.agent-changes-arrow {
+    font-size: 11px;
+    color: var(--text-light, #999);
+    transition: transform 0.15s ease;
+}
+
+/* 逐文件列表（默认收起） */
+.agent-changes-list {
+    border-top: 1px solid var(--border, #e0e0e0);
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.agent-changes-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.agent-changes-row:hover {
+    background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+
+.agent-changes-row + .agent-changes-row {
+    border-top: 1px solid color-mix(in srgb, var(--border, #e0e0e0) 55%, transparent);
+}
+
+/* git 同款字母标：A=新建绿 M=修改蓝 D=删除红 */
+.agent-changes-ico {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    border-radius: 4px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: Consolas, Monaco, monospace;
+}
+
+.agent-changes-ico.k-create {
+    color: #22a05a;
+    background: color-mix(in srgb, #22a05a 14%, transparent);
+}
+
+.agent-changes-ico.k-modify {
+    color: #3a7bd5;
+    background: color-mix(in srgb, #3a7bd5 14%, transparent);
+}
+
+.agent-changes-ico.k-delete {
+    color: #d4553f;
+    background: color-mix(in srgb, #d4553f 14%, transparent);
+}
+
+.agent-changes-name {
+    color: var(--text, #333);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
+}
+
+.agent-changes-dir {
+    color: var(--text-light, #999);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl; /* 长路径省略头部（靠文件名一侧保留尾部），与 TRAE 同款 */
+    text-align: left;
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-changes-dstat {
+    flex: none;
+    display: flex;
+    gap: 5px;
+    font-size: 11px;
+    font-family: Consolas, Monaco, monospace;
+}
+
+/* 状态徽标：待审查/已保留/已撤销 */
+.agent-changes-badge {
+    flex: none;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.agent-changes-badge.pending {
+    color: color-mix(in srgb, var(--primary) 80%, var(--text, #333));
+}
+
+.agent-changes-badge.reverted {
+    color: #d4553f;
+}
+
+.agent-changes-badge.kept {
+    color: #22a05a;
+}
+
+/* 逐文件撤销小按钮（描边弱化，不抢底栏主按钮层级） */
+.agent-changes-revert {
+    border: 1px solid var(--border, #e0e0e0);
+    background: transparent;
+    color: var(--text-secondary, #888);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.agent-changes-revert:hover:not(:disabled) {
+    border-color: #d4553f;
+    color: #d4553f;
+    background: color-mix(in srgb, #d4553f 8%, transparent);
+}
+
+.agent-changes-revert:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* 待审查底栏：N 个文件待审查 + 全部撤销/全部保留 */
+.agent-changes-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-top: 1px solid var(--border, #e0e0e0);
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.agent-changes-pending {
+    font-size: 12px;
+    color: var(--text, #333);
+}
+
+.agent-changes-btns {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+}
+
+.agent-changes-btns .agent-approve-ok,
+.agent-changes-btns .agent-approve-no {
+    padding: 4px 14px;
 }
 
 /* ===== 阶段六十一：Agent 工作区/沙箱白名单面板（仅 PC 端；复用知识库弹窗骨架，颜色全部关联现有主题变量） ===== */

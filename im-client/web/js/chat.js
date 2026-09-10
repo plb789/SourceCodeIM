@@ -3079,50 +3079,167 @@
 
         // 阶段七十一：任务卡归属会话盖戳（事件帧 sid 优先，缺省回落当前查看会话），完结气泡/重挂按此归口防串会话
         var stampSess = (typeof sid === 'number') ? sid : (aiViewSession[agent] || 0);
-        var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null };
+        var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null, todoDone: 0, todoTotal: 0, todoRaw: [] };
         agentTaskCards[taskId] = st;
         agentActiveTask[agent] = taskId; // 阶段七十三：进行中任务登记（发送按钮"停止"态数据源）
         updateSendBtnState();
         removeAISuggestRow(); // 阶段七十：新任务开始即消费上一轮后续提问胶囊（与 AI 问答新一轮回复同语义）
-        createAgentTaskDock(st, goal); // 阶段六十二（完整版）：输入区上方常驻任务栏
+        agentDockSync(); // 阶段七十九：输入区上方停靠栏"任务"页签亮起（TRAE CN 同款单栏双页签）
         return st;
     }
 
-    // ===== 阶段六十二（完整版）：底部常驻任务栏（Trae 同款）=====
-    // 任务运行期间在输入区上方常驻"N/M 个任务已完成"，点击展开清单面板；任务结束后隐藏
-    function createAgentTaskDock(st, goal) {
+    // ===== 阶段七十九：输入区上方停靠栏（TRAE CN 同款单栏双页签）=====
+    // "任务"页签：任务运行期间显示（目标 + N/M 个任务已完成，面板为清单镜像）；
+    // "文件变更"页签：存在待审查文件变更时显示（N 个文件待审查 +X -Y，面板为文件行 + 全部撤销/保留）。
+    // 两页签同时存在时靠左侧双图标切换视图，点击栏体展开/收起面板；均无时整栏隐藏
+    var agentPendingChanges = {}; // agent → {taskId, changes, totalAdds, totalDels, pending}（待审查变更状态归口：实时事件/下行66/历史重放三路共用）
+    var agentDock = null;         // 停靠栏单例句柄（DOM 引用 + 当前激活页签）
+
+    function agentDockEnsure() {
+        if (agentDock) return agentDock;
         var inputBar = document.querySelector('.input-bar');
-        if (!inputBar || !inputBar.parentNode) return;
-        var dock = document.createElement('div');
-        dock.className = 'agent-task-dock';
-        var icon = document.createElement('span');
-        icon.className = 'agent-task-dock-icon';
-        icon.textContent = '☑';
+        if (!inputBar || !inputBar.parentNode) return null;
+        var root = document.createElement('div');
+        root.className = 'agent-dock hidden';
+        var tabs = document.createElement('div');
+        tabs.className = 'agent-dock-tabs';
+        // 页签图标：SVG 线条图标（TRAE CN 同款风格，stroke=currentColor 跟随主题色）
+        // 原实现：文本字符 '☑'/'耘'（'耘'为占位字，无图标语义）
+        var taskTab = document.createElement('span');
+        taskTab.className = 'agent-dock-tab task';
+        taskTab.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.75" y="2" width="10.5" height="12.5" rx="1.5"/><path d="M5.25 1.5h5.5v2h-5.5z"/><path d="M5.5 8.2l1.8 1.8 3.4-3.6"/></svg>';
+        taskTab.title = '任务进度';
+        var chTab = document.createElement('span');
+        chTab.className = 'agent-dock-tab changes';
+        // 文件差异图标：文档折角 + 上加号下减号（git diff 同款语义）
+        chTab.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5H4.5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5z"/><path d="M9 1.5V5h3.5"/><path d="M8 6.8v3.4M6.3 8.5h3.4"/><path d="M6.3 12h3.4"/></svg>';
+        chTab.title = '文件变更待审查';
+        tabs.appendChild(taskTab);
+        tabs.appendChild(chTab);
         var text = document.createElement('span');
-        text.className = 'agent-task-dock-text';
-        text.textContent = goal || '任务执行中';
-        text.title = goal || '';
-        var count = document.createElement('span');
-        count.className = 'agent-task-dock-count';
-        count.textContent = '0/0 个任务已完成';
+        text.className = 'agent-dock-text';
+        var metaTask = document.createElement('span');
+        metaTask.className = 'agent-dock-meta task';
+        var metaChA = document.createElement('span');
+        metaChA.className = 'diff-add';
+        var metaChD = document.createElement('span');
+        metaChD.className = 'diff-del';
+        var metaChanges = document.createElement('span');
+        metaChanges.className = 'agent-dock-meta changes hidden';
+        metaChanges.appendChild(metaChA);
+        metaChanges.appendChild(metaChD);
+        // 展开箭头：SVG chevron（原 '⌄' 字符受字体基线影响，与文字垂直错位）
         var arrow = document.createElement('span');
-        arrow.className = 'agent-task-dock-arrow';
-        dock.appendChild(icon);
-        dock.appendChild(text);
-        dock.appendChild(count);
-        dock.appendChild(arrow);
+        arrow.className = 'agent-dock-arrow';
+        arrow.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg>';
+        root.appendChild(tabs);
+        root.appendChild(text);
+        root.appendChild(metaTask);
+        root.appendChild(metaChanges);
+        root.appendChild(arrow);
         var panel = document.createElement('div');
-        panel.className = 'agent-task-dock-panel hidden';
-        dock.addEventListener('click', function () {
+        panel.className = 'agent-task-dock-panel hidden'; // 复用既有面板样式（输入区上方展开）
+        // 点页签图标切换视图（不展开面板）；点栏体其余区域展开/收起面板
+        taskTab.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (agentDock && agentDock.active !== 'task') { agentDock.active = 'task'; agentDockSync(); }
+        });
+        chTab.addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (agentDock && agentDock.active !== 'changes') { agentDock.active = 'changes'; agentDockSync(); }
+        });
+        root.addEventListener('click', function () {
             panel.classList.toggle('hidden');
-            dock.classList.toggle('open');
+            root.classList.toggle('open');
         });
         var parent = inputBar.parentNode;
-        parent.insertBefore(dock, inputBar);
         parent.insertBefore(panel, inputBar);
-        st.dock = dock;
-        st.dockCount = count;
-        st.dockPanel = panel;
+        parent.insertBefore(root, panel);
+        agentDock = {
+            root: root, taskTab: taskTab, chTab: chTab, text: text,
+            metaTask: metaTask, metaChanges: metaChanges, metaChA: metaChA, metaChD: metaChD,
+            arrow: arrow, panel: panel, active: ''
+        };
+        return agentDock;
+    }
+
+    // agentDockSetChanges 待审查变更状态归口：done/error/cancelled 事件、下行 66 刷新帧、历史任务详情重放三路共用。
+    // pending 清零即摘除该智能体条目；仅当前查看的智能体变化时才刷新停靠栏（其他会话静默登记，切回时呈现）
+    function agentDockSetChanges(agent, taskId, changes) {
+        var list = (changes || []).filter(function (c) { return c && c.path; });
+        if (!agent || !list.length) return;
+        var totalAdds = 0, totalDels = 0, pending = 0;
+        list.forEach(function (c) {
+            totalAdds += (c.adds || 0);
+            totalDels += (c.dels || 0);
+            if ((c.status || 'pending') === 'pending') pending++;
+        });
+        if (pending > 0) {
+            agentPendingChanges[agent] = { taskId: taskId, changes: list, totalAdds: totalAdds, totalDels: totalDels, pending: pending };
+        } else {
+            delete agentPendingChanges[agent];
+        }
+        if (agent === currentChatUser) agentDockSync();
+    }
+
+    // agentDockSync 停靠栏重绘归口：按当前会话智能体的运行任务与待审查变更计算页签显隐/视图内容/面板内容。
+    // 激活页签失效时自动切换（任务完结→切文件变更；变更清零→切任务；均无→整栏隐藏）
+    function agentDockSync() {
+        var d = agentDockEnsure();
+        if (!d) return;
+        var agent = (currentChatUser && isAIAgent(currentChatUser)) ? currentChatUser : '';
+        var taskSt = agent ? agentTaskCards[agentActiveTask[agent]] : null;
+        var ch = agent ? agentPendingChanges[agent] : null;
+        var hasTask = !!taskSt && !taskSt.finished;
+        var hasChanges = !!ch;
+        d.taskTab.classList.toggle('hidden', !hasTask);
+        d.chTab.classList.toggle('hidden', !hasChanges);
+        if (!hasTask && !hasChanges) {
+            d.root.classList.add('hidden');
+            d.panel.classList.add('hidden');
+            d.root.classList.remove('open');
+            d.active = '';
+            return;
+        }
+        if (d.active !== 'task' && d.active !== 'changes') d.active = hasTask ? 'task' : 'changes';
+        if (d.active === 'task' && !hasTask) d.active = 'changes';
+        if (d.active === 'changes' && !hasChanges) d.active = hasTask ? 'task' : 'changes';
+        d.root.classList.remove('hidden');
+        d.taskTab.classList.toggle('active', d.active === 'task');
+        d.chTab.classList.toggle('active', d.active === 'changes');
+        if (d.active === 'task') {
+            d.text.textContent = taskSt.goal || '任务执行中';
+            d.text.title = taskSt.goal || '';
+            d.metaTask.textContent = (taskSt.todoDone || 0) + '/' + (taskSt.todoTotal || 0) + ' 个任务已完成';
+            d.metaTask.classList.remove('hidden');
+            d.metaChanges.classList.add('hidden');
+        } else {
+            d.text.textContent = ch.pending + ' 个文件待审查';
+            d.text.title = '仅统计服务端工作区变更；撤销将还原文件到任务前内容';
+            d.metaChA.textContent = '+' + ch.totalAdds;
+            d.metaChD.textContent = '-' + ch.totalDels;
+            d.metaTask.classList.add('hidden');
+            d.metaChanges.classList.remove('hidden');
+        }
+        // 面板内容重绘（展开/收起状态下均准备就绪，展开时即时可见）
+        d.panel.innerHTML = '';
+        if (d.active === 'task' && taskSt) {
+            (taskSt.todoRaw || []).forEach(function (t) {
+                var item = document.createElement('div');
+                item.className = 'agent-todo-item ' + (t.status || 'pending');
+                var mark = document.createElement('span');
+                mark.className = 'agent-todo-mark';
+                mark.textContent = t.status === 'done' ? '✓' : (t.status === 'in_progress' ? '▸' : '○');
+                var tEl = document.createElement('span');
+                tEl.className = 'agent-todo-text';
+                tEl.textContent = t.content || '';
+                item.appendChild(mark);
+                item.appendChild(tEl);
+                d.panel.appendChild(item);
+            });
+        } else if (ch) {
+            d.panel.appendChild(agentBuildChangesList(ch.taskId, ch.changes));
+        }
     }
 
     function agentTaskScroll() {
@@ -3145,9 +3262,9 @@
             delete agentActiveTask[st.agent];
             updateSendBtnState();
         }
-        // 阶段六十二（完整版）：任务结束收起底部任务栏（卡片内已完成状态接管）
-        if (st.dock) st.dock.classList.add('hidden');
-        if (st.dockPanel) st.dockPanel.classList.add('hidden');
+        // 阶段七十九：任务结束收"任务"页签（卡片内已完成状态接管）；若该任务有待审查变更，
+        // 停靠栏自动切换到"文件变更"页签（TRAE CN 同款：任务完成后待审查条顶到输入区上方）
+        agentDockSync();
     }
 
     // collapseAgentCard 阶段七十：任务完结卡片折叠归口——执行过程（思考/工具/清单）整体收起，
@@ -3302,7 +3419,9 @@
                 if (!res.ok || currentChatUser !== agent) return; // 会话已切换：丢弃过期响应
                 var tasks = (res.data && res.data.tasks) || [];
                 var liveAny = false;
+                var seenTasks = {}, seenPending = {};
                 tasks.forEach(function (t) {
+                    seenTasks[t.task_id] = true;
                     var finished = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
                     var st = agentTaskCards[t.task_id];
                     if (finished) {
@@ -3316,6 +3435,12 @@
                             updateSendBtnState();
                         }
                         if (t.reply_msg_id) agentInsertReplayCard(agent, t);
+                        // 阶段七十九：待审查变更登记停靠栏（服务端列表仅 pending 任务带 changes 键；
+                        // 重进会话/刷新页面后输入区上方仍可见，无需点开任务卡）
+                        if (t.changes && t.changes.length) {
+                            seenPending[t.task_id] = true;
+                            agentDockSetChanges(agent, t.task_id, t.changes);
+                        }
                         return;
                     }
                     // 运行中/排队：内存实时卡重挂续播（后续事件继续上屏）；无内存卡（他端发起）按 DB 快照渲染静态卡
@@ -3330,6 +3455,13 @@
                     liveAny = true;
                 });
                 if (liveAny) agentTaskScroll();
+                // 阶段七十九：已登记的 pending 任务若出现在本页且服务端已无 pending 行（他端已处置），
+                // 摘除停靠栏残留页签（本页未出现的任务不动——可能在更早分页）
+                var pc = agentPendingChanges[agent];
+                if (pc && seenTasks[pc.taskId] && !seenPending[pc.taskId]) {
+                    delete agentPendingChanges[agent];
+                    agentDockSync();
+                }
                 updateSendBtnState();
             })
             .catch(function () { /* 任务重放失败静默：历史消息与任务历史弹窗兜底 */ });
@@ -3396,6 +3528,13 @@
                     if (d.status === 'completed') row('最终总结', d.result);
                     if (d.status === 'failed') row('失败原因', d.error);
                     if (d.status === 'cancelled') row('取消说明', d.error);
+                    // 阶段七十七：文件变更审查条（历史任务 pending 可操作，kept/reverted 只读徽标）
+                    if (d.changes && d.changes.length) {
+                        var chBox = agentBuildChangesBox(t.task_id, d.changes);
+                        if (chBox) detail.appendChild(chBox);
+                        // 阶段七十九：pending 变更登记到停靠栏（重进会话/刷新页面后输入区上方仍可见）
+                        agentDockSetChanges(agent, t.task_id, d.changes);
+                    }
                     thLoadSteps(detail, t.task_id); // 执行轨迹懒加载（与任务历史弹窗同链路）
                 })
                 .catch(function () { detail.textContent = '详情加载失败'; });
@@ -3412,6 +3551,209 @@
         var anchor = messageList.querySelector('.message[data-msg-id="' + t.reply_msg_id + '"]');
         if (!anchor) return;
         messageList.insertBefore(agentBuildReplayCard(agent, t), anchor);
+    }
+
+    // ===== 阶段七十七：文件变更审查条（TRAE CN 同款）=====
+    // 任务 done/error/cancelled 后渲染"N 个文件已更改 +X -Y"折叠汇总 + 逐文件行（git 同款 A/M/D 标
+    // + 增删行数）+ 待审查底栏（全部撤销/全部保留）。仅统计服务端工作区变更（PC 本地执行不经服务端归口）；
+    // 撤销为 git discard 语义：直接还原任务前内容。live 卡与重放卡详情共用 agentBuildChangesBox。
+
+    // 上行审查操作（path 缺省=全部 pending；服务端处理后回下行 66 全量刷新帧同步多端）
+    function sendAgentChangesAction(taskId, action, path) {
+        var payload = { task_id: taskId, action: action };
+        if (path) payload.path = path;
+        IMSocket.send({ msg_type: MSG.AGENT_CHANGES, content: JSON.stringify(payload) });
+    }
+
+    // 路径拆分：[文件名, 目录]（正斜杠归一，目录部分悬停可见全文）
+    function splitChangePath(p) {
+        var s = String(p || '').replace(/\\/g, '/');
+        var i = s.lastIndexOf('/');
+        if (i < 0) return [s, ''];
+        return [s.slice(i + 1), s.slice(0, i)];
+    }
+
+    // 构建逐文件行列表 + 待审查底栏（卡片审查条主体与停靠栏面板共用；返回包裹层）。
+    // pending 行存在时附"N 个文件待审查 + 全部撤销/全部保留"底栏
+    function agentBuildChangesList(taskId, changes) {
+        var list = (changes || []).filter(function (c) { return c && c.path; });
+        var totalAdds = 0, totalDels = 0, pending = 0;
+        list.forEach(function (c) {
+            totalAdds += (c.adds || 0);
+            totalDels += (c.dels || 0);
+            if ((c.status || 'pending') === 'pending') pending++;
+        });
+
+        var wrap = document.createElement('div');
+        wrap.className = 'agent-changes-body';
+
+        // 逐文件列表
+        var bodyEl = document.createElement('div');
+        bodyEl.className = 'agent-changes-list';
+        list.forEach(function (c) {
+            var st = c.status || 'pending';
+            var row = document.createElement('div');
+            row.className = 'agent-changes-row st-' + st;
+            var ico = document.createElement('span');
+            ico.className = 'agent-changes-ico k-' + (c.kind || 'modify');
+            ico.textContent = c.kind === 'create' ? 'A' : (c.kind === 'delete' ? 'D' : 'M');
+            ico.title = c.kind === 'create' ? '新建' : (c.kind === 'delete' ? '删除' : '修改');
+            var names = splitChangePath(c.path);
+            var nameEl = document.createElement('span');
+            nameEl.className = 'agent-changes-name';
+            nameEl.textContent = names[0];
+            var dirEl = document.createElement('span');
+            dirEl.className = 'agent-changes-dir';
+            dirEl.textContent = names[1];
+            dirEl.title = c.path;
+            var dstat = document.createElement('span');
+            dstat.className = 'agent-changes-dstat';
+            var a = document.createElement('span');
+            a.className = 'diff-add';
+            a.textContent = '+' + (c.adds || 0);
+            var d = document.createElement('span');
+            d.className = 'diff-del';
+            d.textContent = '-' + (c.dels || 0);
+            dstat.appendChild(a);
+            dstat.appendChild(d);
+            var badge = document.createElement('span');
+            badge.className = 'agent-changes-badge ' + st;
+            if (st === 'kept') {
+                badge.textContent = '已保留';
+            } else if (st === 'reverted') {
+                badge.textContent = '已撤销';
+            } else {
+                badge.textContent = '待审查';
+                var rv = document.createElement('button');
+                rv.className = 'agent-changes-revert';
+                rv.textContent = '撤销';
+                rv.title = '还原该文件到任务前内容';
+                rv.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (rv.disabled) return;
+                    rv.disabled = true;
+                    sendAgentChangesAction(taskId, 'revert', c.path);
+                });
+                badge.appendChild(rv);
+            }
+            row.appendChild(ico);
+            row.appendChild(nameEl);
+            row.appendChild(dirEl);
+            row.appendChild(dstat);
+            row.appendChild(badge);
+            // 点击行打开工作区预览（面板可见时；强制重读磁盘最新）
+            row.addEventListener('click', function (e) {
+                e.stopPropagation(); // 阻断冒泡：避免触发外层任务卡折叠切换
+                if (wsPanel.visible && typeof wsPanelOpen === 'function') wsPanelOpen(c.path, true);
+            });
+            bodyEl.appendChild(row);
+        });
+        wrap.appendChild(bodyEl);
+
+        // 底栏（仅存在 pending 时）：N 个文件待审查 + 全部撤销/全部保留
+        if (pending > 0) {
+            var actions = document.createElement('div');
+            actions.className = 'agent-changes-actions';
+            var label = document.createElement('span');
+            label.className = 'agent-changes-pending';
+            label.textContent = pending + ' 个文件待审查';
+            var btns = document.createElement('div');
+            btns.className = 'agent-changes-btns';
+            var revertAll = document.createElement('button');
+            revertAll.className = 'agent-approve-no';
+            revertAll.textContent = '全部撤销';
+            revertAll.addEventListener('click', function () {
+                if (revertAll.disabled) return;
+                revertAll.disabled = true;
+                keepAll.disabled = true;
+                sendAgentChangesAction(taskId, 'revert');
+            });
+            var keepAll = document.createElement('button');
+            keepAll.className = 'agent-approve-ok';
+            keepAll.textContent = '全部保留';
+            keepAll.addEventListener('click', function () {
+                if (keepAll.disabled) return;
+                revertAll.disabled = true;
+                keepAll.disabled = true;
+                sendAgentChangesAction(taskId, 'keep');
+            });
+            btns.appendChild(revertAll);
+            btns.appendChild(keepAll);
+            // 底栏整块阻断冒泡：点按钮/空白处均不触发外层任务卡折叠
+            actions.addEventListener('click', function (e) { e.stopPropagation(); });
+            actions.appendChild(label);
+            actions.appendChild(btns);
+            wrap.appendChild(actions);
+        }
+        return wrap;
+    }
+
+    // 构建审查条卡片块（可重入：下行 66 全量刷新时整块重建）。changes 为空返回 null。
+    // 结构：折叠汇总头（N 个文件已更改 +X -Y，默认收起）+ 逐文件列表 + 待审查底栏
+    function agentBuildChangesBox(taskId, changes) {
+        var list = (changes || []).filter(function (c) { return c && c.path; });
+        if (!list.length) return null;
+        var totalAdds = 0, totalDels = 0;
+        list.forEach(function (c) {
+            totalAdds += (c.adds || 0);
+            totalDels += (c.dels || 0);
+        });
+
+        var box = document.createElement('div');
+        box.className = 'agent-changes';
+        box.title = '仅统计服务端工作区变更；撤销将还原该文件到任务前内容';
+
+        // 折叠汇总头：N 个文件已更改  +X -Y（默认收起，点击展开逐文件）
+        var head = document.createElement('div');
+        head.className = 'agent-changes-head';
+        var cnt = document.createElement('span');
+        cnt.className = 'agent-changes-cnt';
+        cnt.textContent = list.length + ' 个文件已更改';
+        var stat = document.createElement('span');
+        stat.className = 'agent-changes-stat';
+        var addEl = document.createElement('span');
+        addEl.className = 'diff-add';
+        addEl.textContent = '+' + totalAdds;
+        var delEl = document.createElement('span');
+        delEl.className = 'diff-del';
+        delEl.textContent = '-' + totalDels;
+        stat.appendChild(addEl);
+        stat.appendChild(delEl);
+        var arrow = document.createElement('span');
+        arrow.className = 'agent-changes-arrow';
+        arrow.textContent = '▸';
+        head.appendChild(cnt);
+        head.appendChild(stat);
+        head.appendChild(arrow);
+
+        var body = agentBuildChangesList(taskId, changes);
+        var listEl = body.querySelector('.agent-changes-list');
+        listEl.classList.add('hidden'); // 默认收起
+        head.addEventListener('click', function (e) {
+            e.stopPropagation(); // 阻断冒泡：避免点击展开文件列表时连带触发外层任务卡折叠
+            var hidden = listEl.classList.toggle('hidden');
+            arrow.textContent = hidden ? '▸' : '▾';
+        });
+
+        box.appendChild(head);
+        box.appendChild(body);
+        return box;
+    }
+
+    // live 任务卡渲染/刷新审查条（事件与下行 66 刷新共用，整块重建可重入）
+    function agentRenderChanges(st, changes) {
+        var card = st.head ? st.head.parentNode : null;
+        if (card) {
+            var old = card.querySelector('.agent-changes');
+            if (old) old.remove();
+            var box = agentBuildChangesBox(st.taskId, changes);
+            if (box) {
+                card.appendChild(box);
+                agentTaskScroll();
+            }
+        }
+        // 阶段七十九：同步停靠栏"文件变更"页签（TRAE CN 同款：待审查条顶到输入区上方）
+        agentDockSetChanges(st.agent, st.taskId, changes);
     }
 
     // 工具事件：tool_start 建块等待结果回填（同一 tool_call 一块）
@@ -6570,11 +6912,23 @@
             outEl.classList.remove('hidden');
         }
         // 阶段六十二：结果摘要行（输出首行常显）——"已编辑 main.go（+1 -1，34 字节）"/"命令已执行 xxx"/错误首行
+        // +/-行数着色（git 同款绿/红）：仅带符号数字着色，替换处数/字节数等无符号数字不受影响
         var firstLine = (ev.output || '').split('\n')[0] || '';
         if (firstLine.length > 120) firstLine = firstLine.slice(0, 120) + '…';
         var resultLine = document.createElement('div');
         resultLine.className = 'agent-tool-result' + (ev.ok === false ? ' fail' : '');
-        resultLine.textContent = (ev.ok === false ? '✕ ' : '✓ ') + firstLine;
+        resultLine.appendChild(document.createTextNode(ev.ok === false ? '✕ ' : '✓ '));
+        // 后随分隔符（空格/逗号/闭括号/行尾）才着色：防路径中 "file-2.txt" 的 "-2" 误着色
+        var statRe = /([+-]\d+)(?=[\s，）]|$)/g, statM, statLast = 0;
+        while ((statM = statRe.exec(firstLine))) {
+            if (statM.index > statLast) resultLine.appendChild(document.createTextNode(firstLine.slice(statLast, statM.index)));
+            var stat = document.createElement('span');
+            stat.className = statM[1].charAt(0) === '+' ? 'diff-add' : 'diff-del';
+            stat.textContent = statM[1];
+            resultLine.appendChild(stat);
+            statLast = statM.index + statM[0].length;
+        }
+        if (statLast < firstLine.length) resultLine.appendChild(document.createTextNode(firstLine.slice(statLast)));
         var head = block.querySelector('.agent-event-head');
         head.parentNode.insertBefore(resultLine, head.nextSibling);
         // 失败自动展开详情（错误立即可见），成功保持折叠简洁行
@@ -6610,24 +6964,11 @@
         var percent = Math.round((done / total) * 100);
         st.bar.style.width = percent + '%';
         st.pct.textContent = percent + '%';
-        // 阶段六十二（完整版）：底部任务栏同步（计数 + 清单面板镜像）
-        if (st.dockCount) st.dockCount.textContent = done + '/' + total + ' 个任务已完成';
-        if (st.dockPanel) {
-            st.dockPanel.innerHTML = '';
-            todos.forEach(function (t) {
-                var item = document.createElement('div');
-                item.className = 'agent-todo-item ' + (t.status || 'pending');
-                var mark = document.createElement('span');
-                mark.className = 'agent-todo-mark';
-                mark.textContent = t.status === 'done' ? '✓' : (t.status === 'in_progress' ? '▸' : '○');
-                var text = document.createElement('span');
-                text.className = 'agent-todo-text';
-                text.textContent = t.content || '';
-                item.appendChild(mark);
-                item.appendChild(text);
-                st.dockPanel.appendChild(item);
-            });
-        }
+        // 阶段七十九：停靠栏"任务"页签数据源（计数 + 清单面板镜像由 agentDockSync 重绘）
+        st.todoDone = done;
+        st.todoTotal = total;
+        st.todoRaw = todos;
+        agentDockSync();
         agentTaskScroll();
     }
 
@@ -6700,6 +7041,8 @@
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
                 collapseAgentCard(st);
                 finishAgentTask(st, '已完成', 'done');
+                // 阶段七十七：文件变更审查条（TRAE CN 同款，撤销/保留归口）
+                if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
                 // 阶段七十：最终答复统一以正常 AI 消息气泡展示（含 Markdown 渲染与操作栏）。
                 // 原路径"已流式则收尾为卡内正文"被 .agent-event-body 240px 滚动框限制且混在执行日志里，
@@ -6721,6 +7064,8 @@
             case 'error':
                 agentFinalizeText(st, true);
                 finishAgentTask(st, '失败', 'failed');
+                // 阶段七十七：失败同样结算变更（已落盘的脏改可撤销）
+                if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
                 showToast(ev.message || '任务执行失败');
                 // 阶段六十六：失败通知气泡实时渲染（内容与服务端落库留档一致），并已读归口
@@ -6838,6 +7183,33 @@
         });
     });
 
+    // ===== 阶段七十七：文件变更审查全量刷新帧（保留/撤销后服务端回推，多端一致） =====
+    IMSocket.on(MSG.AGENT_CHANGES, function (msg) {
+        if (msg.to_user !== IMSocket.getUsername()) return;
+        var ev;
+        try { ev = JSON.parse(msg.content); } catch (e) { return; }
+        if (!ev || !ev.task_id) return;
+        // 刷新当前会话 live 卡审查条（重放卡在重进会话时经详情接口重建，此处不处理）
+        var st = agentTaskCards[ev.task_id];
+        if (st && currentChatUser === msg.from_user) agentRenderChanges(st, ev.changes);
+        // 阶段七十九：同步停靠栏"文件变更"页签（pending 清零自动摘除页签/收面板）
+        agentDockSetChanges(msg.from_user, ev.task_id, ev.changes);
+        // 工作区面板对齐磁盘实际：撤销已改变工作区内容（新建撤销=文件被删，关相关标签；
+        // 其余撤销=内容还原，已开标签强制重读）——仅当前查看智能体的变更需要刷新
+        if (wsPanel.visible && currentChatUser === msg.from_user) {
+            (ev.changes || []).forEach(function (c) {
+                if (c.status !== 'reverted') return;
+                var key = wsPanelNormalizeKey(c.path);
+                if (c.kind === 'create') {
+                    wsPanelForgetKey(key);
+                    return;
+                }
+                if ((key || key === '') && wsPanel.tabs[key]) wsPanelOpen(key, true);
+            });
+            wsPanelRefreshTree();
+        }
+    });
+
     // ===== 阶段六十：Agent 本地执行器桥接（仅 PC 端生效） =====
     // 服务端下发的本地执行请求（50）经 preload 暴露的 agentExec 转发主进程执行，结果（51）回传服务端。
     // Web/手机端无 window.desktop.agentExec，不注册监听，服务端对其永远走服务端执行（hub.HasPC=false）
@@ -6865,7 +7237,8 @@
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
             if (!ev || !ev.task_id || !ev.step) return;
             // 请求里带当前登录用户名：主进程按用户名隔离本地工作区（防同机多账号串目录）
-            var req = { username: IMSocket.getUsername(), tool: ev.tool, params: ev.params || {} };
+            // task_id 阶段八十：本地文件工具据此做首触备份，撤销/保留链路（审查条）依赖
+            var req = { username: IMSocket.getUsername(), tool: ev.tool, params: ev.params || {}, task_id: ev.task_id };
             if (ev.tool === 'run_command') activeExec = { task_id: ev.task_id, step: ev.step };
             window.desktop.agentExec(req).then(function (res) {
                 if (ev.tool === 'run_command' && activeExec && activeExec.step === ev.step) activeExec = null;
@@ -6874,7 +7247,8 @@
                     from_user: IMSocket.getUsername(),
                     content: JSON.stringify({
                         task_id: ev.task_id, step: ev.step,
-                        ok: !!(res && res.ok), output: (res && res.output) || ''
+                        ok: !!(res && res.ok), output: (res && res.output) || '',
+                        changes: (res && res.changes) || [] // 阶段八十：本地文件变更上报（服务端登记审查条）
                     })
                 });
             }).catch(function (err) {
@@ -7725,6 +8099,9 @@
             agentConsoleEnsure();
             agentConsoleToggle(true);
         }
+        // 阶段七十九：停靠栏按新会话归口重绘（该智能体的运行任务/待审查变更页签；非 AI 会话整栏隐藏，
+        // 待重放接口返回后补充登记 pending 变更）
+        agentDockSync();
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
         clearQuoteTarget();
         // 阶段七十：清空 AGENT_RUN 回显待达标记（防会话切换后误吞后续 AI 问答的"思考中"指示）

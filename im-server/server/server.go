@@ -196,6 +196,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleWsFileReq(c, msg)
 	case protocol.MsgTypePcFileResp:
 		s.handlePcFileResp(c, msg)
+	// 阶段七十七：文件变更审查（保留/撤销，回下行 66 全量刷新帧）
+	case protocol.MsgTypeAgentChanges:
+		s.handleAgentChanges(c, msg)
 	// 阶段七十一：AI 多会话（Trae 同款"新建会话"）——列表/新建/删除
 	case protocol.MsgTypeAISessionList:
 		s.handleAISessionList(c, msg)
