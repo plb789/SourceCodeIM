@@ -59,6 +59,8 @@
     // 头像降级修复：资料面板大头像首字母占位元素（无头像/图片加载失败时显示）
     var profileAvatarPhEl = document.getElementById('profile-avatar-ph');
     var profileUsernameEl = document.getElementById('profile-username');
+    // 阶段八十六：资料面板积分行（只读，三端可见；与标题栏积分共用 setPointsBalance 归口刷新）
+    var profilePointsEl = document.getElementById('profile-points');
     var profileNicknameEl = document.getElementById('profile-nickname');
     var profileGenderEl = document.getElementById('profile-gender');
     var profileRegionEl = document.getElementById('profile-region');
@@ -413,6 +415,8 @@
         var v = Math.round(Number(n) * 100) / 100;
         titlebarPointsNumEl.textContent = String(v);
         titlebarPointsEl.style.display = ''; // CSS 默认 display:none，清空内联后按样式表 flex 显示
+        // 阶段八十六：资料面板积分行同步刷新（面板打开时实时跟随，Web/手机端仅此处可见积分）
+        if (profilePointsEl) profilePointsEl.textContent = String(v);
         // 悬停提示走 index.html 静态 data-tip + CSS 自绘气泡（不设原生 title，否则停留 1-2 秒会叠出系统气泡）
     }
 

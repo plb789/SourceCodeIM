@@ -343,6 +343,11 @@
                 <span class="profile-label">账号</span>
                 <span id="profile-username" class="profile-value"></span>
             </div>
+            <!-- 阶段八十六：积分行（只读展示，三端可见）——与 PC 标题栏积分同源同归口（setPointsBalance 统一刷新），服务端下发前端零计算 -->
+            <div class="profile-field">
+                <span class="profile-label">积分</span>
+                <span id="profile-points" class="profile-value"></span>
+            </div>
             <div class="profile-field">
                 <span class="profile-label">性别</span>
                 <div id="profile-gender" class="gender-switch">
@@ -576,7 +581,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.66"></script>
+    <script src="js/chat.js?v=2.67"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
