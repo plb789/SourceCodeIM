@@ -23,6 +23,21 @@ type User struct {
 	Points int `gorm:"column:points;type:int;default:100" json:"points"`
 }
 
+// PointsLog 阶段七十八：积分流水（AI 扣分/管理员调整/注册赠送全量审计，后台积分管理面板数据源）
+type PointsLog struct {
+	ID           int64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	Username     string    `gorm:"column:username;type:varchar(64);index" json:"username"`             // 积分归属用户
+	Change       int       `gorm:"column:change;type:int" json:"change"`                               // 变动量：正=增加 负=扣除
+	BalanceAfter int       `gorm:"column:balance_after;type:int" json:"balance_after"`                 // 变动后余额（对账归口）
+	Reason       string    `gorm:"column:reason;type:varchar(32);index" json:"reason"`                 // ai_deduct / admin_adjust / register_grant
+	Operator     string    `gorm:"column:operator;type:varchar(64)" json:"operator"`                   // 操作人（管理员调整时记录；系统行为为 system）
+	Detail       string    `gorm:"column:detail;type:varchar(255)" json:"detail"`                      // 人类可读说明（如 AI 问答消耗 tokens 数）
+	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定（GORM 默认复数命名不符合本项目规范，显式指定）
+func (PointsLog) TableName() string { return "im_points_log" }
+
 // TableName 指定表名
 func (User) TableName() string { return "im_user" }
 

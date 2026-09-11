@@ -1325,6 +1325,9 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		} else {
 			balancePtr = &balance
 			logger.Info("积分扣除（用户 %s，- %d 积分，%d tokens，余额 %d）", c.username, cost, usage.TotalTokens, balance)
+			// 阶段七十八：流水审计（AI 问答扣除，操作人 system）
+			recordPointsLog(c.username, -cost, balance, "ai_deduct", "system",
+				fmt.Sprintf("AI 问答（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分向上取整", agent.Name, usage.TotalTokens))
 		}
 
 		endMsg := protocol.Message{

@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.10">
+    <link rel="stylesheet" href="css/admin.css?v=1.13">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -293,6 +293,7 @@
                     <table class="vec-table">
                         <thead>
                             <tr>
+                                <th>ID</th>
                                 <th>用户名</th>
                                 <th>昵称</th>
                                 <th>角色</th>
@@ -311,6 +312,52 @@
                     <button id="points-prev" class="admin-btn small">上一页</button>
                     <span id="points-page-info" class="admin-view-tip">-</span>
                     <button id="points-next" class="admin-btn small">下一页</button>
+                </div>
+
+                <!-- 阶段七十八：积分流水审计（AI 扣分/管理员调整/注册赠送全量记录，服务端分页） -->
+                <h3 class="dash-subtitle">积分流水记录</h3>
+                <div class="vec-toolbar">
+                    <input type="text" id="plog-username" class="admin-input vec-search-input" placeholder="按用户名过滤">
+                    <input type="text" id="plog-userid" class="admin-input vec-search-input" placeholder="按用户 ID 过滤" title="数字用户 ID（可在上方用户表格 ID 列查看），优先于用户名筛选">
+                    <select id="plog-reason" class="admin-input vec-select" title="按类型筛选">
+                        <option value="">全部类型</option>
+                        <option value="ai_deduct">AI 问答扣除</option>
+                        <option value="admin_adjust">管理员调整</option>
+                        <option value="register_grant">注册赠送</option>
+                    </select>
+                    <button id="plog-refresh" class="admin-btn primary">查询</button>
+                    <button id="plog-export" class="admin-btn small" title="按当前筛选条件导出全部流水为 CSV 文件">导出 CSV</button>
+                </div>
+                <!-- 时间范围筛选（阶段七十八）：与查询/导出同口径，留空不限制；结束时间为纯日期时按当天末秒收口 -->
+                <div class="vec-toolbar">
+                    <span class="plog-time-label">时间从</span>
+                    <input type="datetime-local" id="plog-start" class="admin-input plog-time-input" title="起始时间（含），留空不限制">
+                    <span class="plog-time-label">至</span>
+                    <input type="datetime-local" id="plog-end" class="admin-input plog-time-input" title="结束时间（含），留空不限制">
+                    <span class="admin-view-tip">时间范围同时作用于流水查询与导出</span>
+                </div>
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>用户</th>
+                                <th>类型</th>
+                                <th>变动</th>
+                                <th>变动后余额</th>
+                                <th>操作人</th>
+                                <th>说明</th>
+                            </tr>
+                        </thead>
+                        <tbody id="plog-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="vec-pager">
+                    <button id="plog-prev" class="admin-btn small">上一页</button>
+                    <span id="plog-page-info" class="admin-view-tip">-</span>
+                    <button id="plog-next" class="admin-btn small">下一页</button>
                 </div>
             </section>
 
@@ -470,6 +517,6 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.13"></script>
+    <script src="js/admin.js?v=1.18"></script>
 </body>
 </html>

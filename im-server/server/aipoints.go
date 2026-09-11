@@ -11,6 +11,7 @@ package server
 import (
 	"fmt"
 
+	"im-server/logger"
 	"im-server/model"
 	"im-server/store"
 
@@ -54,4 +55,20 @@ func userPointsDeduct(username string, cost int) (int, error) {
 		return 0, fmt.Errorf("用户不存在: %s", username)
 	}
 	return userPoints(username)
+}
+
+// recordPointsLog 阶段七十八：积分流水落库（AI 扣分/管理员调整/注册赠送统一审计入口）。
+// 写失败不影响主流程（余额变更已生效），仅记错误日志便于发现审计缺口
+func recordPointsLog(username string, change, balanceAfter int, reason, operator, detail string) {
+	entry := &model.PointsLog{
+		Username:     username,
+		Change:       change,
+		BalanceAfter: balanceAfter,
+		Reason:       reason,
+		Operator:     operator,
+		Detail:       detail,
+	}
+	if err := store.DB.Create(entry).Error; err != nil {
+		logger.Error("积分流水记录失败（用户 %s，变动 %d，原因 %s）：%v", username, change, reason, err)
+	}
 }

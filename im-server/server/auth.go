@@ -64,6 +64,8 @@ func registerUser(username, password string) (*model.User, error) {
 	if err := store.DB.Create(user).Error; err != nil {
 		return nil, err
 	}
+	// 阶段七十八：注册赠送流水审计（系统行为，操作人 system）
+	recordPointsLog(username, 100, 100, "register_grant", "system", "新用户注册赠送 100 积分")
 	return user, nil
 }
 

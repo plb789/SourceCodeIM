@@ -131,8 +131,8 @@
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); }
-            // 阶段七十八：进入积分管理视图拉取用户积分列表
-            else if (item.dataset.view === 'points') { loadPointsUsers(); }
+            // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
+            else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             else stopKBPolling();
         });
     });
@@ -1836,7 +1836,7 @@
         if (pointsPage > pages) pointsPage = pages;
         if (!pointsFiltered.length) {
             // 搜索无命中显示"暂无用户"（区别于加载失败的错误态）
-            tbody.innerHTML = '<tr><td colspan="6" class="vec-empty">' +
+            tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">' +
                 (pointsAll.length ? '暂无匹配用户' : '暂无用户') + '</td></tr>';
             $('points-page-info').textContent = '-';
             return;
@@ -1850,12 +1850,14 @@
             var numCls = pts <= 0 ? 'points-num points-zero' : (pts < 10 ? 'points-num points-low' : 'points-num');
             var zeroTag = pts <= 0 ? ' <span class="at-badge at-st-failed">已拦截</span>' : '';
             html += '<tr>' +
+                '<td class="points-uid">' + (u.id || '-') + '</td>' +
                 '<td class="points-username">' + escHtml(u.username || '') + '</td>' +
                 '<td>' + escHtml(u.nickname || u.username || '') + '</td>' +
                 '<td>' + (u.role === 1 ? '<span class="at-badge at-st-completed">管理员</span>' : '<span class="points-role-normal">普通用户</span>') + '</td>' +
                 '<td><strong class="' + numCls + '">' + pts + '</strong>' + zeroTag + '</td>' +
                 '<td class="points-time">' + escHtml(u.create_time || '-') + '</td>' +
-                '<td><button class="admin-btn small points-edit-btn" data-username="' + escAttr(u.username || '') + '">调整</button></td>' +
+                '<td><button class="admin-btn small points-edit-btn" data-username="' + escAttr(u.username || '') + '">调整</button>' +
+                ' <button class="admin-btn small points-log-btn" data-username="' + escAttr(u.username || '') + '" title="查看该用户积分流水">流水</button></td>' +
                 '</tr>';
         });
         tbody.innerHTML = html;
@@ -1889,14 +1891,24 @@
                     closeEditModal();
                     showToast('已将 ' + u.username + ' 积分调整为 ' + n);
                     loadPointsUsers(); // 重拉列表刷新统计与表格（余额以服务端为准）
+                    loadPointsLogs();  // 阶段七十八：流水表同步刷新，本轮调整记录即时可见
                 }).catch(function (e) { showToast(e.message || '网络异常'); });
         });
     }
 
-    // 表格内"调整"按钮：事件委托（重渲染无需重复绑定）
+    // 表格内"调整"/"流水"按钮：事件委托（重渲染无需重复绑定）
     $('points-tbody').addEventListener('click', function (e) {
-        var btn = e.target.closest('.points-edit-btn');
-        if (btn) openPointsEdit(btn.getAttribute('data-username'));
+        var editBtn = e.target.closest('.points-edit-btn');
+        if (editBtn) { openPointsEdit(editBtn.getAttribute('data-username')); return; }
+        // "流水"：填充流水区用户名过滤条件并定位到流水表（清掉可能冲突的用户 ID 筛选）
+        var logBtn = e.target.closest('.points-log-btn');
+        if (logBtn) {
+            $('plog-username').value = logBtn.getAttribute('data-username');
+            $('plog-userid').value = '';
+            plogPage = 1;
+            loadPointsLogs();
+            document.getElementById('plog-tbody').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
     });
     // 搜索实时过滤 + 刷新重拉
     $('points-search').addEventListener('input', function () { applyPointsFilter(false); });
@@ -1908,5 +1920,118 @@
     $('points-next').addEventListener('click', function () {
         var pages = Math.ceil(pointsFiltered.length / POINTS_PAGE_SIZE);
         if (pointsPage < pages) { pointsPage++; renderPointsTable(); }
+    });
+
+    // ===== 阶段七十八：积分流水记录（审计视图，服务端分页归口） =====
+    // 数据源：AI 问答扣除 / 管理员调整 / 注册赠送（服务端 aipoints.recordPointsLog 统一落库）
+    var plogPage = 1;
+    var plogTotal = 0; // 最近一次查询的总条数（计算总页数用）
+    var PLOG_PAGE_SIZE = 15;
+
+    // 流水筛选参数（用户名/用户 ID/类型/时间范围）：查询与导出共用，保证所见即所导；
+    // datetime-local 值形如 2026-09-12T00:05，T 换空格后服务端按 "2006-01-02 15:04" 解析；
+    // user_id 服务端解析为用户名后过滤，同时传用户名时两者叠加（以服务端口径为准）
+    function pointsLogFilterQuery() {
+        var start = ($('plog-start').value || '').trim().replace('T', ' ');
+        var end = ($('plog-end').value || '').trim().replace('T', ' ');
+        return 'username=' + encodeURIComponent(($('plog-username').value || '').trim()) +
+            '&user_id=' + encodeURIComponent(($('plog-userid').value || '').trim()) +
+            '&reason=' + encodeURIComponent($('plog-reason').value || '') +
+            '&start=' + encodeURIComponent(start) +
+            '&end=' + encodeURIComponent(end);
+    }
+
+    // 类型徽标映射（与 admin.css 中 .plog-badge-* 配色一一对应）
+    var PLOG_REASON_TEXT = {
+        ai_deduct: 'AI 问答扣除',
+        admin_adjust: '管理员调整',
+        register_grant: '注册赠送'
+    };
+    var PLOG_REASON_CLS = {
+        ai_deduct: 'plog-badge-ai',
+        admin_adjust: 'plog-badge-admin',
+        register_grant: 'plog-badge-reg'
+    };
+
+    function loadPointsLogs() {
+        $('plog-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">加载中…</td></tr>';
+        var path = '/admin/api/points/logs?' + pointsLogFilterQuery() +
+            '&page=' + plogPage + '&page_size=' + PLOG_PAGE_SIZE;
+        api('GET', path).then(function (result) {
+            if (!result.ok) {
+                $('plog-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">' + escHtml(result.msg || '加载失败') + '</td></tr>';
+                $('plog-page-info').textContent = '-';
+                return;
+            }
+            var logs = result.data.logs || [];
+            plogTotal = result.data.total || 0;
+            var pages = Math.max(1, Math.ceil(plogTotal / PLOG_PAGE_SIZE));
+            if (plogPage > pages) plogPage = pages;
+            if (!logs.length) {
+                // 有过滤条件时提示无匹配，无过滤时提示暂无记录（区别于加载失败）
+                var filtered = ($('plog-username').value || '').trim() || ($('plog-userid').value || '').trim() ||
+                    $('plog-reason').value ||
+                    ($('plog-start').value || '').trim() || ($('plog-end').value || '').trim();
+                $('plog-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">' + (filtered ? '暂无匹配流水' : '暂无流水记录') + '</td></tr>';
+                $('plog-page-info').textContent = '-';
+                return;
+            }
+            var html = '';
+            logs.forEach(function (l) {
+                var pos = l.change > 0;
+                var reasonText = PLOG_REASON_TEXT[l.reason] || l.reason;
+                var reasonCls = PLOG_REASON_CLS[l.reason] || 'plog-badge-admin';
+                html += '<tr>' +
+                    '<td class="points-time">' + escHtml(l.create_time || '-') + '</td>' +
+                    '<td class="points-username">' + escHtml(l.username || '') + '</td>' +
+                    '<td><span class="at-badge ' + reasonCls + '">' + escHtml(reasonText) + '</span></td>' +
+                    '<td class="' + (pos ? 'plog-change-plus' : 'plog-change-minus') + '">' + (pos ? '+' : '') + l.change + '</td>' +
+                    '<td class="points-num-cell">' + l.balance_after + '</td>' +
+                    '<td class="points-time">' + escHtml(l.operator || 'system') + '</td>' +
+                    '<td class="plog-detail">' + escHtml(l.detail || '') + '</td>' +
+                    '</tr>';
+            });
+            $('plog-tbody').innerHTML = html;
+            $('plog-page-info').textContent = '第 ' + plogPage + ' / ' + pages + ' 页（共 ' + plogTotal + ' 条）';
+        }).catch(function (e) {
+            $('plog-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">' + escHtml(e.message || '网络异常') + '</td></tr>';
+        });
+    }
+
+    // 查询（回第一页）/ 类型切换 / 分页
+    $('plog-refresh').addEventListener('click', function () { plogPage = 1; loadPointsLogs(); });
+    $('plog-reason').addEventListener('change', function () { plogPage = 1; loadPointsLogs(); });
+    $('plog-prev').addEventListener('click', function () {
+        if (plogPage > 1) { plogPage--; loadPointsLogs(); }
+    });
+    $('plog-next').addEventListener('click', function () {
+        var pages = Math.max(1, Math.ceil(plogTotal / PLOG_PAGE_SIZE));
+        if (plogPage < pages) { plogPage++; loadPointsLogs(); }
+    });
+
+    // 导出 CSV：带 Token 的 fetch + blob 下载（<a> 直下无法携带 Authorization 头）；
+    // 导出范围 = 当前筛选条件下的全部流水（服务端流式生成，无行数上限）
+    $('plog-export').addEventListener('click', function () {
+        showToast('正在导出流水…');
+        fetch('/admin/api/points/logs/export?' + pointsLogFilterQuery(), {
+            headers: { 'Authorization': 'Bearer ' + getToken() }
+        }).then(function (resp) {
+            if (!resp.ok) { throw new Error('导出失败（HTTP ' + resp.status + '）'); }
+            // 从 Content-Disposition 取服务端生成的中文文件名（filename* RFC 5987 编码）
+            var cd = resp.headers.get('Content-Disposition') || '';
+            var m = cd.match(/filename\*=UTF-8''([^;]+)/);
+            var fname = m ? decodeURIComponent(m[1]) : 'points_logs.csv';
+            return resp.blob().then(function (blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = fname;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+                showToast('流水已导出：' + fname);
+            });
+        }).catch(function (e) {
+            showToast(e.message || '导出失败，请重试');
+        });
     });
 })();

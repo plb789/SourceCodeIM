@@ -120,6 +120,10 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
 	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))
 	http.HandleFunc("PUT /admin/api/users/{username}/points", s.adminGuard(s.handleAdminUserPointsPut))
+	// 阶段七十八：积分流水审计查询（AI 扣分/管理员调整/注册赠送全量记录，服务端分页）
+	http.HandleFunc("GET /admin/api/points/logs", s.adminGuard(s.handleAdminPointsLogs))
+	// 阶段七十八：流水 CSV 导出（服务端流式生成，支持与查询一致的过滤条件）
+	http.HandleFunc("GET /admin/api/points/logs/export", s.adminGuard(s.handleAdminPointsLogsExport))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====
@@ -440,8 +444,20 @@ func (s *Server) adminGuard(next http.HandlerFunc) http.HandlerFunc {
 			adminFail(w, http.StatusForbidden, "账号已无后台管理权限")
 			return
 		}
-		next(w, r)
+		// 阶段七十八：注入管理员身份到上下文（积分调整等写操作的流水审计需记录操作人）
+		next(w, r.WithContext(context.WithValue(r.Context(), ctxKeyAdminUser{}, u.Username)))
 	}
+}
+
+// ctxKeyAdminUser 管理员身份上下文键（私有类型防碰撞）
+type ctxKeyAdminUser struct{}
+
+// adminUserFromCtx 读取当前登录管理员用户名（未注入时返回空串）
+func adminUserFromCtx(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxKeyAdminUser{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // adminClientIP 提取客户端 IP（防爆破计数维度；反代场景取 X-Forwarded-For 首段）

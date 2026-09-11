@@ -1164,3 +1164,58 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     color: var(--text-light, #8a8a8a);
     white-space: nowrap;
 }
+
+/* ===== 阶段七十八：积分流水记录 ===== */
+/* 变动量着色：加分为微信绿（主题色），扣除为危险红，与现有主题变量关联 */
+.plog-change-plus {
+    font-weight: 600;
+    color: var(--primary, #07c160);
+}
+
+.plog-change-minus {
+    font-weight: 600;
+    color: var(--danger, #fa5151);
+}
+
+/* 类型徽标：AI 扣除橙 / 管理员调整主题色 / 注册赠送绿，复用 at-badge 基础形状 */
+.plog-badge-ai {
+    background: var(--warning, #d29922);
+}
+
+.plog-badge-admin {
+    background: color-mix(in srgb, var(--primary) 75%, #666666);
+}
+
+.plog-badge-reg {
+    background: var(--primary, #07c160);
+}
+
+/* 说明列与余额列弱化排版 */
+.plog-detail {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    max-width: 320px;
+}
+
+.points-num-cell {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+/* ===== 阶段七十八：流水时间范围筛选 ===== */
+.plog-time-label {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    white-space: nowrap;
+}
+
+.plog-time-input {
+    min-width: 190px;
+}
+
+/* 用户 ID 列：等宽小字弱化显示（与用户名列区分） */
+.points-uid {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+}
