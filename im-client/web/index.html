@@ -15,7 +15,7 @@
             document.documentElement.classList.add('pc-titlebar');
         }
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.03">
+    <link rel="stylesheet" href="css/style.css?v=2.04">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -260,7 +260,16 @@
                 <div id="new-friends-list" class="new-friends-list"></div>
             </div>
             <!-- 微信风格输入区：工具栏 + 输入框 + 底部操作行 -->
-            <div class="input-bar">
+            <div class="input-bar" id="input-bar">
+                <!-- 阶段八十七：多选模式工具栏（进入多选后替换输入区，合并转发/逐条转发/取消） -->
+                <div id="ms-bar" class="ms-bar hidden">
+                    <span id="ms-count" class="ms-count">已选 0 条</span>
+                    <div class="ms-actions">
+                        <button id="ms-merge" class="modal-btn primary" disabled>合并转发</button>
+                        <button id="ms-single" class="modal-btn" disabled>逐条转发</button>
+                        <button id="ms-cancel" class="modal-btn">取消</button>
+                    </div>
+                </div>
                 <div class="input-toolbar">
                     <button id="emoji-btn" class="tool-btn" title="表情">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
@@ -399,6 +408,8 @@
         <div class="menu-item" data-action="quote">引用</div>
         <!-- 阶段八十六：微信同款消息转发（文本/引用原样转发；图片/文件经源地址重取后走既有直传链路） -->
         <div class="menu-item" data-action="forward">转发</div>
+        <!-- 阶段八十七：多选模式（勾选多条 → 底部工具栏合并转发/逐条转发） -->
+        <div class="menu-item" data-action="multi">多选</div>
         <div class="menu-item" data-action="del">删除</div>
     </div>
 
@@ -445,6 +456,18 @@
             <div id="fwd-list" class="fwd-list"></div>
             <div class="modal-btns">
                 <button id="fwd-cancel" class="modal-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段八十七：合并转发详情弹窗（微信"聊天记录"卡片点开后的逐条详情） -->
+    <div id="merged-mask" class="modal-mask hidden">
+        <div class="modal-box merged-box">
+            <div class="modal-title">聊天记录</div>
+            <div id="merged-parties" class="merged-parties"></div>
+            <div id="merged-detail" class="merged-detail"></div>
+            <div class="modal-btns">
+                <button id="merged-close" class="modal-btn">关闭</button>
             </div>
         </div>
     </div>
@@ -595,7 +618,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.69"></script>
+    <script src="js/chat.js?v=2.72"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

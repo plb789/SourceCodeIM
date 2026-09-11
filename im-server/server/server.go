@@ -336,6 +336,20 @@ func messageSummary(content string) string {
 		}
 		return summary
 	}
+	// 阶段八十七：合并转发信封归口——会话摘要显示"[聊天记录] N条消息"，JSON 原串不外泄
+	var mergedEnv struct {
+		Merged struct {
+			C int               `json:"c"`
+			I []json.RawMessage `json:"i"`
+		} `json:"merged"`
+	}
+	if err := json.Unmarshal([]byte(content), &mergedEnv); err == nil && (mergedEnv.Merged.C > 0 || len(mergedEnv.Merged.I) > 0) {
+		count := mergedEnv.Merged.C
+		if count == 0 {
+			count = len(mergedEnv.Merged.I)
+		}
+		return "[聊天记录] " + strconv.Itoa(count) + "条消息"
+	}
 	return content
 }
 

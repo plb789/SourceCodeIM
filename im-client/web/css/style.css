@@ -7335,6 +7335,225 @@ html.m #friend-menu {
     color: var(--text-light);
 }
 
+/* ===== 阶段八十七：多选模式（复选框 + 选中高亮 + 底部工具栏，微信同款） ===== */
+.message {
+    position: relative;
+}
+
+.ms-check {
+    position: absolute;
+    top: 50%;
+    width: 18px;
+    height: 18px;
+    margin-top: -9px;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    background: var(--panel-bg);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* 自/他人消息复选框统一显示在消息列表左侧空白列（消息列表留出 26px 左内边距） */
+.message.self .ms-check,
+.message.other .ms-check {
+    left: -26px;
+}
+
+.message.selected .ms-check {
+    border-color: var(--primary);
+    background: var(--primary);
+}
+
+.message.selected .ms-check::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 2px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+/* 多选模式下消息悬停提示可点击 */
+.multi-select #message-list .message {
+    cursor: pointer;
+}
+
+.ms-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.ms-count {
+    font-size: 13px;
+    color: var(--text-light);
+}
+
+.ms-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* 多选模式下隐藏原输入区（工具栏/输入框/底行），仅显示多选工具栏 */
+.input-bar.ms-mode .input-toolbar,
+.input-bar.ms-mode #message-input,
+.input-bar.ms-mode .input-footer {
+    display: none;
+}
+
+/* ===== 阶段八十七：合并转发"聊天记录"卡片气泡 ===== */
+.merged-bubble {
+    min-width: 180px;
+    cursor: pointer;
+}
+
+.merged-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+
+.merged-sub {
+    font-size: 12px;
+    color: var(--text-light);
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ===== 阶段八十七：合并转发详情弹窗 ===== */
+.merged-box {
+    width: 420px;
+    max-width: 92vw;
+}
+
+.merged-parties {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-bottom: 8px;
+}
+
+.merged-detail {
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-bg);
+    padding: 6px 0;
+}
+
+.md-row {
+    display: flex;
+    gap: 10px;
+    padding: 8px 14px;
+}
+
+.md-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 5px;
+    flex-shrink: 0;
+    object-fit: cover;
+}
+
+.md-avatar-ph {
+    width: 32px;
+    height: 32px;
+    border-radius: 5px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary);
+    color: #fff;
+    font-size: 14px;
+}
+
+.md-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.md-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.md-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.md-time {
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+.md-text {
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 3px;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.md-img {
+    max-width: 160px;
+    max-height: 160px;
+    border-radius: 6px;
+    margin-top: 4px;
+    display: block;
+    cursor: pointer;
+}
+
+.md-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--hover);
+    cursor: pointer;
+}
+
+.md-file:hover {
+    border-color: var(--primary);
+}
+
+.md-file-name {
+    font-size: 13px;
+    color: var(--text);
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.md-file-size {
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.md-empty {
+    padding: 24px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
 .kb-empty {
     padding: 24px 0;
     text-align: center;

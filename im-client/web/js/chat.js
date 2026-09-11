@@ -851,7 +851,11 @@
                     });
                 } else if (action === 'forward' && msgId) {
                     // 阶段八十六：微信同款消息转发——打开目标选择弹窗（文本/引用原样；图片/文件重取后走直传）
+                    fwdMode = 'single';
                     openForwardPicker(msgTarget);
+                } else if (action === 'multi' && msgId) {
+                    // 阶段八十七：进入多选模式（复选框 + 底部工具栏，合并转发/逐条转发）
+                    enterMultiSelect();
                 } else if (action === 'quote' && msgId) {
                     // 阶段四十：引用消息——收集被引用消息摘要，显示输入框上方引用条，随下一条文本消息一起发出（微信同款）
                     // 阶段四十一：图片引用带图片地址（quote.url）——引用块内直接显示真实图片缩略图而非仅"[图片]"文字
@@ -895,10 +899,11 @@
     var fwdList = document.getElementById('fwd-list');
     var fwdCancel = document.getElementById('fwd-cancel');
     var fwdPendingEl = null; // 待转发的消息元素（弹窗关闭即释放）
+    // 阶段八十七：转发模式——single 单条（默认）｜merge 多选合并｜multi 多选逐条
+    var fwdMode = 'single';
 
     function openForwardPicker(el) {
-        if (!el) return;
-        fwdPendingEl = el;
+        fwdPendingEl = el || null; // 多选模式不携带单条元素（阶段八十七）
         fwdSearch.value = '';
         renderForwardList('');
         fwdMask.classList.remove('hidden');
@@ -964,10 +969,23 @@
             item.appendChild(info);
             item.addEventListener('click', function () {
                 var el = fwdPendingEl; // 闭包先捕获，弹窗关闭会清空引用
+                var mode = fwdMode;
                 closeForwardPicker();
-                showConfirm('转发', '转发给「' + it.name + '」？', function () {
-                    doForward(el, it.target);
-                }, '发送');
+                if (mode === 'merge') {
+                    // 阶段八十七：多选合并转发——多条打包为一条"聊天记录"信封消息
+                    showConfirm('合并转发', '将选中的 ' + multiSelectedCount() + ' 条消息合并转发给「' + it.name + '」？', function () {
+                        sendMergedForward(it.target);
+                    }, '发送');
+                } else if (mode === 'multi') {
+                    // 阶段八十七：逐条转发——按时间顺序逐条原样转发
+                    showConfirm('逐条转发', '将选中的 ' + multiSelectedCount() + ' 条消息逐条转发给「' + it.name + '」？', function () {
+                        sendMultiForward(it.target);
+                    }, '发送');
+                } else {
+                    showConfirm('转发', '转发给「' + it.name + '」？', function () {
+                        doForward(el, it.target);
+                    }, '发送');
+                }
             });
             fwdList.appendChild(item);
         });
@@ -984,7 +1002,8 @@
     }
 
     // 执行转发：图片/文件重取后走直传（suppressLocal 防污染当前视图）；文本/引用信封原样重发（服务端回显渲染）
-    function doForward(el, target) {
+    // silent：逐条转发（阶段八十七）循环调用时抑制单条 toast，由 sendMultiForward 汇总提示
+    function doForward(el, target, silent) {
         if (!el) return;
         var bubble = el.querySelector('.message-bubble');
         // 图片消息
@@ -993,13 +1012,13 @@
             fetchSrcAsFile(img.getAttribute('src'), 'image.png').then(function (f) {
                 if (target === '') {
                     sendGroupImage(f, true);
-                    showToast('已转发');
+                    if (!silent) showToast('已转发');
                 } else {
                     sendFileDirect(f, target, true).then(function (res) {
-                        showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
-                    }).catch(function () { showToast('转发失败'); });
+                        if (!silent) showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
+                    }).catch(function () { if (!silent) showToast('转发失败'); });
                 }
-            }).catch(function () { showToast('转发失败：图片获取失败'); });
+            }).catch(function () { if (!silent) showToast('转发失败：图片获取失败'); });
             return;
         }
         // 文件消息（群聊不收文件，与发送按钮既有口径一致）
@@ -1010,9 +1029,9 @@
             var fnameEl = bubble.querySelector('.file-name');
             fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || '文件').then(function (f) {
                 sendFileDirect(f, target, true).then(function (res) {
-                    showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
-                }).catch(function () { showToast('转发失败'); });
-            }).catch(function () { showToast('转发失败：文件获取失败'); });
+                    if (!silent) showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
+                }).catch(function () { if (!silent) showToast('转发失败'); });
+            }).catch(function () { if (!silent) showToast('转发失败：文件获取失败'); });
             return;
         }
         // 文本 / 引用信封 / AI 文本：原始 content 原样重发（引用块完整保真），降级取正文可见文本
@@ -1022,8 +1041,284 @@
         if (!content) { showToast('该消息不支持转发'); return; }
         var m = { msg_type: target === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
         if (target !== '') m.to_user = target;
-        if (IMSocket.send(m)) showToast('已转发'); else showToast('转发失败');
+        if (IMSocket.send(m)) { if (!silent) showToast('已转发'); } else showToast('转发失败');
     }
+
+    // ===== 阶段八十七：多选合并转发（微信同款：复选框勾选 → 工具栏合并/逐条转发） =====
+    var multiSelectMode = false;
+    var multiSelected = {};   // msgId -> true（选中集合，DOM 顺序在发送时按列表顺序重采）
+    var inputBarEl = document.getElementById('input-bar');
+    var msBarEl = document.getElementById('ms-bar');
+    var msCountEl = document.getElementById('ms-count');
+    var msMergeBtn = document.getElementById('ms-merge');
+    var msSingleBtn = document.getElementById('ms-single');
+    var msCancelBtn = document.getElementById('ms-cancel');
+    var mergedCache = {};     // mergeKey -> 合并信封（详情弹窗数据源；信封可能超 data-raw 上限不走 DOM）
+    var mergedSeq = 0;
+
+    function multiSelectedCount() {
+        return Object.keys(multiSelected).length;
+    }
+
+    function enterMultiSelect() {
+        if (multiSelectMode) return;
+        // AI 会话消息为问答流，合并转发语义不适用（群聊 currentChatUser==='' 是多选主场景，放行）
+        if (isAIAgent(currentChatUser)) {
+            showToast('AI 会话暂不支持多选转发');
+            return;
+        }
+        multiSelectMode = true;
+        multiSelected = {};
+        inputBarEl.classList.add('ms-mode');
+        msBarEl.classList.remove('hidden');
+        updateMsCount();
+        // 为可选中消息（有 msg_id）插入复选框；系统提示/撤回提示等无 id 消息自然排除
+        messageList.querySelectorAll('.message[data-msg-id]').forEach(function (el) {
+            if (el.querySelector('.ms-check')) return;
+            var ck = document.createElement('span');
+            ck.className = 'ms-check';
+            el.appendChild(ck);
+        });
+    }
+
+    function exitMultiSelect() {
+        if (!multiSelectMode) return;
+        multiSelectMode = false;
+        multiSelected = {};
+        inputBarEl.classList.remove('ms-mode');
+        msBarEl.classList.add('hidden');
+        messageList.querySelectorAll('.ms-check').forEach(function (ck) { ck.remove(); });
+        messageList.querySelectorAll('.message.selected').forEach(function (el) { el.classList.remove('selected'); });
+    }
+
+    function updateMsCount() {
+        var n = multiSelectedCount();
+        msCountEl.textContent = '已选 ' + n + ' 条';
+        msMergeBtn.disabled = msSingleBtn.disabled = n === 0;
+    }
+
+    // 多选模式点击归口（捕获阶段）：整条消息点击即切换勾选，并拦截图片预览/文件下载/头像资料卡等子交互
+    messageList.addEventListener('click', function (e) {
+        if (!multiSelectMode) return;
+        var row = e.target.closest ? e.target.closest('.message[data-msg-id]') : null;
+        e.stopPropagation();
+        e.preventDefault();
+        if (!row) return;
+        var id = row.getAttribute('data-msg-id');
+        // 多选模式期间新到达的消息无复选框，首次勾选时补插（与既有消息视觉一致）
+        if (!row.querySelector('.ms-check')) {
+            var ck = document.createElement('span');
+            ck.className = 'ms-check';
+            row.appendChild(ck);
+        }
+        if (multiSelected[id]) {
+            delete multiSelected[id];
+            row.classList.remove('selected');
+        } else {
+            multiSelected[id] = true;
+            row.classList.add('selected');
+        }
+        updateMsCount();
+    }, true);
+
+    msCancelBtn.addEventListener('click', exitMultiSelect);
+    // 合并/逐条转发：带模式打开目标选择弹窗（选择器确认后按模式分流）
+    msMergeBtn.addEventListener('click', function () {
+        if (!multiSelectedCount()) return;
+        fwdMode = 'merge';
+        openForwardPicker(null);
+    });
+    msSingleBtn.addEventListener('click', function () {
+        if (!multiSelectedCount()) return;
+        fwdMode = 'multi';
+        openForwardPicker(null);
+    });
+
+    // 从 DOM 顺序重采选中元素（列表顺序即时间顺序，跨页选中的历史消息仅取当前窗口内存在的）
+    function multiSelectedEls() {
+        var els = [];
+        messageList.querySelectorAll('.message[data-msg-id]').forEach(function (el) {
+            if (multiSelected[el.getAttribute('data-msg-id')]) els.push(el);
+        });
+        return els;
+    }
+
+    // 构造合并信封 {merged:{c:总条数,i:[{f:发送者,t:时间,k:类型,...}]}}；超出 48KB 拒发（Message.Content 为 TEXT 64KB 上限，留安全余量）
+    // blob:/data: 源（图片/文件尚未完成上传回填）无法跨会话访问，跳过并计数提示
+    function buildMergedPayload() {
+        var items = [];
+        var skipped = 0;
+        multiSelectedEls().forEach(function (el) {
+            var bubble = el.querySelector('.message-bubble');
+            if (!bubble) return;
+            var item = {
+                f: el.getAttribute('data-from') || '',
+                t: parseInt(el.getAttribute('data-ts'), 10) || 0
+            };
+            var img = bubble.querySelector('.chat-image');
+            if (img && img.getAttribute('src')) {
+                var src = img.getAttribute('src');
+                if (src.indexOf('blob:') === 0 || src.indexOf('data:') === 0) { skipped++; return; }
+                item.k = 'image';
+                item.u = src;
+            } else if (bubble.classList.contains('bubble-file')) {
+                var furl = bubble.getAttribute('data-url') || '';
+                if (!furl || furl.indexOf('blob:') === 0) { skipped++; return; }
+                item.k = 'file';
+                item.u = furl;
+                var fnEl = bubble.querySelector('.file-name');
+                item.n = (fnEl && fnEl.textContent) || '文件';
+                var fsEl = bubble.querySelector('.file-size');
+                item.s = (fsEl && fsEl.textContent) || '';
+            } else {
+                var tx = bubble.querySelector('.msg-text');
+                var text = ((tx ? tx.textContent : (bubble.textContent || '')) || '').trim();
+                if (!text) { skipped++; return; }
+                item.k = 'text';
+                item.x = text;
+            }
+            items.push(item);
+        });
+        if (!items.length) return { err: '选中的消息暂不支持合并转发' };
+        var payload = JSON.stringify({ merged: { c: items.length, i: items } });
+        if (payload.length > 48000) return { err: '合并内容过大，请减少勾选条数' };
+        return { payload: payload, items: items, skipped: skipped };
+    }
+
+    function sendMergedForward(target) {
+        var built = buildMergedPayload();
+        if (built.err) { showToast(built.err); return; }
+        var m = { msg_type: target === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
+        if (target !== '') m.to_user = target;
+        if (!IMSocket.send(m)) { showToast('转发失败'); return; }
+        exitMultiSelect();
+        showToast(built.skipped ? ('已转发（' + built.skipped + '条未完成上传的消息已跳过）') : '已转发');
+    }
+
+    function sendMultiForward(target) {
+        var els = multiSelectedEls();
+        if (!els.length) { showToast('选中的消息暂不支持转发'); return; }
+        var n = els.length;
+        els.forEach(function (el) { doForward(el, target, true); }); // 静默逐条（异步上传各自进行）
+        exitMultiSelect();
+        showToast('已逐条转发 ' + n + ' 条消息');
+    }
+
+    // 合并信封解析：仅识别 {"merged":{c,i:[...]}} 结构，普通 JSON 文本不受影响
+    function parseMergedEnvelope(content) {
+        if (!content || content.charAt(0) !== '{') return null;
+        var o = null;
+        try { o = JSON.parse(content); } catch (e) { return null; }
+        if (o && o.merged && typeof o.merged === 'object' && Object.prototype.toString.call(o.merged.i) === '[object Array]') {
+            return o.merged;
+        }
+        return null;
+    }
+
+    // 合并转发详情弹窗：按信封逐条渲染（文本/图片/文件），显示名按备注→昵称→账号归口解析
+    function openMergedDetail(key) {
+        var env = mergedCache[key];
+        var mask = document.getElementById('merged-mask');
+        var parties = document.getElementById('merged-parties');
+        var detail = document.getElementById('merged-detail');
+        if (!env) { showToast('详情已过期，请重新打开会话'); return; }
+        var names = [];
+        (env.i || []).forEach(function (it) {
+            var dn = senderDisplayName(it.f);
+            if (dn && names.indexOf(dn) < 0) names.push(dn);
+        });
+        parties.textContent = names.join('、') + '：' + (env.c || (env.i || []).length) + '条消息';
+        detail.innerHTML = '';
+        var items = env.i || [];
+        if (!items.length) {
+            detail.innerHTML = '<div class="md-empty">暂无内容</div>';
+        }
+        items.forEach(function (it) {
+            var row = document.createElement('div');
+            row.className = 'md-row';
+            var url = getAvatarUrl(it.f);
+            var av;
+            if (url) {
+                av = document.createElement('img');
+                av.className = 'md-avatar';
+                av.src = url;
+            } else {
+                av = document.createElement('span');
+                av.className = 'md-avatar-ph';
+                av.textContent = (senderDisplayName(it.f) || '?').charAt(0).toUpperCase();
+            }
+            row.appendChild(av);
+            var main = document.createElement('div');
+            main.className = 'md-main';
+            var head = document.createElement('div');
+            head.className = 'md-head';
+            var nm = document.createElement('span');
+            nm.className = 'md-name';
+            nm.textContent = senderDisplayName(it.f);
+            var tm = document.createElement('span');
+            tm.className = 'md-time';
+            tm.textContent = it.t ? fmtMdTime(it.t) : '';
+            head.appendChild(nm);
+            head.appendChild(tm);
+            main.appendChild(head);
+            if (it.k === 'image' && it.u) {
+                var im = document.createElement('img');
+                im.className = 'md-img';
+                im.src = it.u;
+                // 阶段八十七：点击查看大图——查看列表限定在该条合并记录内的图片（微信详情内翻页语义）
+                im.style.cursor = 'pointer';
+                im.addEventListener('click', function () {
+                    var imgs = [];
+                    items.forEach(function (x) {
+                        if (x.k === 'image' && x.u && imgs.indexOf(x.u) < 0) imgs.push(x.u);
+                    });
+                    openImageViewer(it.u, imgs);
+                });
+                main.appendChild(im);
+            } else if (it.k === 'file' && it.u) {
+                var fc = document.createElement('div');
+                fc.className = 'md-file';
+                fc.title = '点击下载';
+                var fn = document.createElement('span');
+                fn.className = 'md-file-name';
+                fn.textContent = it.n || '文件';
+                var fs = document.createElement('span');
+                fs.className = 'md-file-size';
+                fs.textContent = it.s || '';
+                fc.appendChild(fn);
+                fc.appendChild(fs);
+                fc.addEventListener('click', function () { window.open(it.u, '_blank'); });
+                main.appendChild(fc);
+            } else {
+                var tx = document.createElement('div');
+                tx.className = 'md-text';
+                tx.textContent = it.x || '';
+                main.appendChild(tx);
+            }
+            row.appendChild(main);
+            detail.appendChild(row);
+        });
+        mask.classList.remove('hidden');
+    }
+
+    // 详情时间格式化：当天 HH:mm，跨天 MM-DD HH:mm
+    function fmtMdTime(ts) {
+        var d = new Date(ts * 1000);
+        var now = new Date();
+        var hm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+        if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) return hm;
+        return ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' + hm;
+    }
+
+    (function bindMergedModal() {
+        var mask = document.getElementById('merged-mask');
+        document.getElementById('merged-close').addEventListener('click', function () {
+            mask.classList.add('hidden');
+        });
+        mask.addEventListener('click', function (e) {
+            if (e.target === mask) mask.classList.add('hidden');
+        });
+    })();
 
     // ===== 发送消息 =====
     // ===== 阶段三十八：截图待发送区（QQ 同款：编辑完成不直接发送，先进输入框上方待发送条，点发送才出） =====
@@ -9571,6 +9866,8 @@
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
+        // 阶段八十七：切换会话强制退出多选模式（多选仅对当前会话有效，跨会话勾选无意义）
+        exitMultiSelect();
         // 阶段七十八：离开旧会话前记忆其 Agent 开关（仅 AI 会话）——切回时自动恢复，不用重新打开
         if (currentChatUser && isAIAgent(currentChatUser)) {
             agentModeByUser[currentChatUser] = agentMode;
@@ -10693,10 +10990,35 @@
         // 阶段四十四：AI 图片提问信封（{"image":url,"text":附言}）渲染为图片气泡 + 附言——
         // 仅对自己的消息且当前为 AI 会话时判定，普通聊天里手打的 JSON 字符串不受影响
         // 阶段四十五：AI 文档问答信封（{"doc":url,"name":文件名,"text":附言}）渲染为文件卡片 + 附言
-        var aiDocEnv = (type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null;
-        var aiImgEnv = (!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null;
-        var envelope = (aiDocEnv || aiImgEnv) ? null : parseQuoteEnvelope(content);
-        if (aiDocEnv) {
+        // 阶段八十七：合并转发信封（{"merged":{c:条数,i:[{f:发送者,k:类型,...}]}}）渲染为"聊天记录"卡片气泡
+        var mergedEnv = parseMergedEnvelope(content);
+        var aiDocEnv = mergedEnv ? null : ((type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null);
+        var aiImgEnv = (mergedEnv || aiDocEnv) ? null : ((!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null);
+        var envelope = (aiDocEnv || aiImgEnv || mergedEnv) ? null : parseQuoteEnvelope(content);
+        if (mergedEnv) {
+            // 微信"聊天记录"卡片：标题 + 参与人摘要 + 条数，点击打开详情弹窗（openMergedDetail）
+            bubble.classList.add('merged-bubble');
+            var mTitle = document.createElement('div');
+            mTitle.className = 'merged-title';
+            mTitle.textContent = '聊天记录';
+            bubble.appendChild(mTitle);
+            var mNames = [];
+            (mergedEnv.i || []).forEach(function (it) {
+                var dn = senderDisplayName(it.f);
+                if (dn && mNames.indexOf(dn) < 0 && mNames.length < 4) mNames.push(dn);
+            });
+            var mSub = document.createElement('div');
+            mSub.className = 'merged-sub';
+            mSub.textContent = mNames.join('、') + '：' + (mergedEnv.c || (mergedEnv.i || []).length) + '条消息';
+            bubble.appendChild(mSub);
+            // 详情数据注册缓存（信封可能超过 data-raw 的 64KB 上限，DOM 属性不可靠，走运行时缓存）
+            var mergeKey = 'mk' + Date.now() + '_' + (mergedSeq++);
+            mergedCache[mergeKey] = mergedEnv;
+            bubble.setAttribute('data-merge-key', mergeKey);
+            bubble.addEventListener('click', function () {
+                openMergedDetail(mergeKey);
+            });
+        } else if (aiDocEnv) {
             // 微信文件卡片风格：扩展名色块图标 + 文件名 + 点击打开服务端文档（下载归口）
             var docCard = document.createElement('div');
             docCard.className = 'msg-doc-card';
@@ -10904,7 +11226,21 @@
         }).catch(function () { return ''; });
     }
 
-    function openImageViewer(url) {
+    function openImageViewer(url, listOverride) {
+        // 阶段八十七：listOverride（合并转发详情）直接以指定列表查看（信封内图片均为服务器 URL），
+        // 不收集聊天窗口 DOM——详情弹窗属 modal 层，混入聊天列表会出现"看不见的图"参与翻页
+        if (listOverride && listOverride.length) {
+            var oList = listOverride.slice();
+            var oTarget = (url && oList.indexOf(url) >= 0) ? url : oList[0];
+            var oIdx = oList.indexOf(oTarget);
+            if (window.desktop && window.desktop.openImageViewer) {
+                window.desktop.openImageViewer({ url: oTarget, list: oList, index: oIdx });
+            } else {
+                window.__imageViewerList = oList;
+                window.open('/image-viewer.html?url=' + encodeURIComponent(oTarget), '_blank');
+            }
+            return;
+        }
         var ordered = [];
         var jobs = [];
         document.querySelectorAll('.chat-image').forEach(function (im) {
