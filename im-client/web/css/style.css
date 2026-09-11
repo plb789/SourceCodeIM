@@ -8046,22 +8046,80 @@ html.m #friend-menu {
 }
 
 /* ===== 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字） ===== */
-/* 初始隐藏（style 内联），登录响应携带 points 后由 JS 显示；积分数字计算/扣减全部服务端归口 */
+/* 初始隐藏（style 内联），登录响应携带 points 后由 JS 显示；积分数字计算/扣减全部服务端归口；
+   阶段七十八补充：按 TRAE CN 布局移到标题栏右侧、紧贴原生最小化按钮左侧——
+   绝对定位脱离 flex 流（左侧用户区不再挤占），right 用 WCO 环境变量动态取窗口按钮区宽度
+   （最大化/还原自动跟随），env 不可用时回退固定 142px（三按钮约 138-140px + 间隙） */
 .pc-titlebar .titlebar-points {
+    position: absolute;
+    right: 142px;
+    right: calc(100% - env(titlebar-area-width, 100%) + 8px);
+    top: 50%;
+    transform: translateY(-50%);
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: 8px;
     padding: 2px 10px;
     border-radius: 12px;
     font-size: 12px;
     line-height: 1.4;
     cursor: default;
+    /* 从拖拽区排除：拖拽区元素收不到悬停事件，title 原生提示无法触发（积分纯展示无点击行为） */
+    -webkit-app-region: no-drag;
     transition: background 0.15s;
 }
 
 .pc-titlebar .titlebar-points:hover {
     background: color-mix(in srgb, var(--titlebar-fg) 10%, transparent);
+}
+
+/* 阶段七十八：积分自绘 tooltip（替代原生 title 提示，样式与全站一致）：
+   底色/文字用标题栏前景/背景反色（--titlebar-fg 做 底、--titlebar-bg 做字），深浅主题/跟随系统自动适配；
+   圆角 + 上指小三角（::before 旋转方块），标题栏贴顶故气泡向下淡入展开；
+   pointer-events:none 保证气泡不截获鼠标；data-tip 文案在 index.html 维护 */
+.pc-titlebar .titlebar-points::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%) translateY(-3px);
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--titlebar-fg);
+    color: var(--titlebar-bg);
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+    z-index: 1;
+}
+
+/* 上指三角：与气泡同底色、45° 旋转方块，中心对齐气泡上沿，视觉上连成一体 */
+.pc-titlebar .titlebar-points::before {
+    content: '';
+    position: absolute;
+    top: calc(100% + 7px);
+    left: calc(50% - 4px);
+    width: 8px;
+    height: 8px;
+    background: var(--titlebar-fg);
+    transform: rotate(45deg);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease;
+    z-index: 1;
+}
+
+.pc-titlebar .titlebar-points:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+.pc-titlebar .titlebar-points:hover::before {
+    opacity: 1;
 }
 
 /* 闪电图标与 AI 回复操作栏 tokens 前的 ⚡ 同源（文本 ⚡），金色为积分功能色 */

@@ -396,7 +396,7 @@
     function setPointsBalance(n) {
         titlebarPointsNumEl.textContent = String(n);
         titlebarPointsEl.style.display = ''; // CSS 默认 display:none，清空内联后按样式表 flex 显示
-        titlebarPointsEl.title = 'AI 积分：每 1000 tokens 消耗 1 积分';
+        // 悬停提示走 index.html 静态 data-tip + CSS 自绘气泡（不设原生 title，否则停留 1-2 秒会叠出系统气泡）
     }
 
     // ===== 头像降级修复：资料面板大头像统一入口 =====
