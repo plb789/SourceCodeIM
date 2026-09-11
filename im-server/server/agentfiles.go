@@ -347,6 +347,7 @@ type wsGitReq struct {
 	Proj   string   `json:"proj,omitempty"`   // 当前项目（工作区子目录名）；空=工作区根本身
 	Amend  bool     `json:"amend,omitempty"`  // commit 追加模式（--amend 覆盖上一次提交）
 	Staged bool     `json:"staged,omitempty"` // discard 已暂存变更：checkout HEAD --（staged 删除/改名旧路径在 index 中已不存在，checkout -- 必报 pathspec 不匹配）
+	Skip   int      `json:"skip,omitempty"`   // log 分页跳过条数（前端滚动到底加载下一页）
 }
 
 // wsGitBuildArgs 子命令 → git 参数与超时（PC 执行器与服务端同一张映射表口径）
@@ -401,8 +402,12 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 		}
 		return []string{"diff", r.Target + "...HEAD"}, 60 * time.Second, nil
 	case "log":
-		// 提交历史（近 30 条，\x1f 分段防止字段内分隔符冲突）
-		return []string{"log", "-30", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
+		// 提交历史（分页：skip 起取 31 条——多 1 条仅探测 has_more，\x1f 分段防止字段内分隔符冲突）
+		skip := r.Skip
+		if skip < 0 {
+			skip = 0
+		}
+		return []string{"log", "--skip=" + strconv.Itoa(skip), "-31", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
 	case "show":
 		if strings.TrimSpace(r.Path) == "" {
 			return nil, 0, errors.New("缺少提交 hash")
@@ -631,6 +636,17 @@ func wsServerGit(username, content string) *wsFileResult {
 		})
 	case "log":
 		commits := wsGitLogParse(out)
+		// 分页探测：多取的第 31 条只用于 has_more 判定，截回 30 条；非首页（skip>0）首条不是 HEAD，清掉 head 标记
+		hasMore := false
+		if len(commits) > 30 {
+			commits = commits[:30]
+			hasMore = true
+		}
+		if r.Skip > 0 {
+			for _, c := range commits {
+				c["head"] = false
+			}
+		}
 		// 未推送集合：origin/<branch>..HEAD 可解析则逐条标记；无上游/报错=全部未推送
 		if r.Branch != "" {
 			un, uerr := wsGitExec(base, []string{"log", "origin/" + r.Branch + "..HEAD", "--format=%H"}, 30*time.Second)
@@ -655,7 +671,7 @@ func wsServerGit(username, content string) *wsFileResult {
 				c["un"] = true
 			}
 		}
-		return wsGitResultPack(map[string]interface{}{"sub": "log", "commits": commits})
+		return wsGitResultPack(map[string]interface{}{"sub": "log", "commits": commits, "has_more": hasMore})
 	case "show":
 		// 首行 __META__ 头拆出提交元信息，其余为 diff 正文
 		meta, rest := wsGitShowSplit(out)

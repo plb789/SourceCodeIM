@@ -4607,12 +4607,13 @@
         symTab: {}, symBusy: {}, pendingGoto: null, codeView: null,
         // 源代码管理（Trae CN 同款）：mode=git 视图显示中；busy=git 操作进行中（防并发点击）
         // repo=false=尚非 git 仓库（引导初始化）；staged/changes= porcelain XY 解析结果
-        // amend=修改上次提交模式；log=提交历史缓存（null=加载中）；branches=本地分支缓存（审查目标选择）
+        // amend=修改上次提交模式；log=提交历史缓存（null=加载中）；logHasMore=log 还有下一页（滚动到底自动加载）
+        // branches=本地分支缓存（审查目标选择）
         // reviewTarget=审查目标分支；reviewBusy=审查进行中；lastReviewKey=上次报告标签键（查看上次报告）
         // reviewCollapsed/logCollapsed=审查/提交历史折叠态；reviewH/logH=审查/历史各自固定高度（独立拖拽条调整，localStorage 持久化）
         git: {
             mode: false, loaded: false, busy: false, repo: true, branch: '', upstream: '', ahead: 0, behind: 0,
-            staged: [], changes: [], amend: false, log: null, logBusy: false,
+            staged: [], changes: [], amend: false, log: null, logBusy: false, logHasMore: false,
             branches: null, reviewTarget: '', reviewBusy: false, lastReviewKey: '',
             untrackedCache: null, // 未跟踪文件清单 TTL 缓存 {t, list}：文件预览"新文件整绿"判断用，防频繁全量拉取
             reviewCollapsed: false, logCollapsed: false, reviewH: 150, logH: 220
@@ -6130,7 +6131,7 @@
         el.appendChild(bottom);
         if (g.reviewCollapsed) drag.style.display = 'none'; // 审查收起时无可调对象
         if (g.logCollapsed) drag2.style.display = 'none'; // 历史收起时无可调对象
-        if (window._osbInit) { window._osbInit(body); window._osbInit(reviewSec); } // 各分区自绘滚动条（历史区改用常驻细滚动条，见 .ws-git-log）
+        if (window._osbInit) { window._osbInit(body); window._osbInit(reviewSec); window._osbInit(logSec); } // 各分区自绘滚动条（原生滚动条全局隐藏，历史区同方案挂悬浮滑块）
     }
 
     // 折叠分区头（Trae CN 同款）：▾ 三角 + 标题，点击收起/展开；collapsed 时三角右转
@@ -6464,27 +6465,65 @@
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     }
 
-    // 拉取提交历史（近 30 条 + 未推送标记）；完成后原位替换时间线分区（不打断其余视图）
+    // 拉取提交历史首页（skip=0 前 30 条 + 未推送标记）；完成后原位替换时间线分区（不打断其余视图）
     function wsPanelGitLoadLog() {
         var g = wsPanel.git;
         if (g.logBusy) return;
         g.logBusy = true;
-        wsPanelGitReq({ sub: 'log', branch: g.branch }).then(function (d) {
+        wsPanelGitReq({ sub: 'log', branch: g.branch, skip: 0 }).then(function (d) {
             g.log = d.commits || [];
+            g.logHasMore = !!d.has_more;
         }).catch(function () {
             g.log = [];
+            g.logHasMore = false;
         }).then(function () {
             g.logBusy = false;
             var el = wsPanel.gitEl;
             if (!el || g.log === null) return;
             var old = el.querySelector('.ws-git-log');
             var fresh = wsGitLogSection(g);
-            if (old) old.replaceWith(fresh);
-            else { // 渲染时占位分区缺失（时序兜底）：补进底部固定区
+            if (old) {
+                // 继承旧分区的行内固定高度：异步刷新若不继承，历史区会被内容撑高、拖拽条失效，
+                // 直到点三角折叠/展开触发全量重渲染才恢复（实测踩坑）
+                fresh.style.height = old.style.height;
+                old.replaceWith(fresh);
+            } else { // 渲染时占位分区缺失（时序兜底）：补进底部固定区
                 var b = el.querySelector('.ws-git-bottom');
                 (b || el).appendChild(fresh);
             }
-            // 历史区不挂自绘滑块（常驻细滚动条见 .ws-git-log），刷新替换后无需重挂
+            if (window._osbInit) window._osbInit(fresh); // 自绘悬浮滑块（原生滚动条全局隐藏，见 .ws-git-log）
+        });
+    }
+
+    // 滚动到底自动加载下一页（Trae CN 同款）：skip=已加载条数，新行原位追加不整区重渲染（保持滚动位置）
+    function wsPanelGitLoadMore() {
+        var g = wsPanel.git;
+        if (g.logBusy || g.log === null || !g.log.length || !g.logHasMore || g.logCollapsed) return;
+        g.logBusy = true;
+        var el = wsPanel.gitEl;
+        var sec = el && el.querySelector('.ws-git-log');
+        var moreEl = sec && sec.querySelector('.ws-git-log-more');
+        if (moreEl) moreEl.textContent = '加载中…';
+        wsPanelGitReq({ sub: 'log', branch: g.branch, skip: g.log.length }).then(function (d) {
+            if (g.log === null) return; // 加载期间 status 刷新已重置历史（首页重拉中），丢弃本页
+            g.logHasMore = !!d.has_more;
+            g.log = g.log.concat(d.commits || []);
+            var el2 = wsPanel.gitEl;
+            var sec2 = el2 && el2.querySelector('.ws-git-log');
+            if (sec2) { // 原位追加：新行插到分页指示行前，指示文案随 has_more 更新
+                var m = sec2.querySelector('.ws-git-log-more');
+                (d.commits || []).forEach(function (c) { sec2.insertBefore(wsGitLogRow(g, c), m || null); });
+                if (m) m.textContent = g.logHasMore ? '上滑加载更多' : '已全部加载';
+                if (sec2._osbUpdate) sec2._osbUpdate(); // 内容增高后同步滑块长度/位置
+            } else if (wsPanel.git.mode) {
+                wsPanelGitRender(); // 兜底：分区已被重建（如折叠切换），整区重渲染
+            }
+        }).catch(function () {
+            var el3 = wsPanel.gitEl;
+            var m3 = el3 && el3.querySelector('.ws-git-log-more');
+            if (m3) m3.textContent = '上滑加载更多'; // 失败不终止分页：再次滚到底可重试
+        }).then(function () {
+            g.logBusy = false;
         });
     }
 
@@ -6511,34 +6550,48 @@
             sec.appendChild(empty);
             return sec;
         }
-        g.log.forEach(function (c) {
-            var row = document.createElement('div');
-            row.className = 'ws-git-log-row' + (c.head ? ' head' : '');
-            row.title = c.msg + '\n' + c.an + ' · ' + wsGitFmtTime(c.at) + (c.un ? '\n未推送到远程' : '');
-            var dot = document.createElement('span');
-            dot.className = 'ws-git-log-dot';
-            var main = document.createElement('span');
-            main.className = 'ws-git-log-msg';
-            main.textContent = c.msg;
-            row.appendChild(dot);
-            row.appendChild(main);
-            if (c.head && g.branch) {
-                var bb = document.createElement('span');
-                bb.className = 'ws-git-log-branch';
-                bb.textContent = g.branch;
-                row.appendChild(bb);
-            }
-            if (c.un) {
-                var cl = document.createElement('span');
-                cl.className = 'ws-git-log-un';
-                cl.textContent = '☁';
-                cl.title = '未推送';
-                row.appendChild(cl);
-            }
-            row.addEventListener('click', function () { wsPanelGitOpenCommit(c); });
-            sec.appendChild(row);
-        });
+        g.log.forEach(function (c) { sec.appendChild(wsGitLogRow(g, c)); });
+        // 分页指示行（Trae CN 同款滚动加载）：整页或有下一页时显示，滚到底自动拉下一页
+        if (g.logHasMore || g.log.length >= 30) {
+            var more = document.createElement('div');
+            more.className = 'ws-git-log-more';
+            more.textContent = g.logHasMore ? '上滑加载更多' : '已全部加载';
+            sec.appendChild(more);
+        }
+        sec.addEventListener('scroll', function () { // 距底 60px 内触发加载（logBusy 防重复触发）
+            if (!g.logHasMore || g.logBusy || g.log === null || !g.log.length) return;
+            if (sec.scrollTop + sec.clientHeight >= sec.scrollHeight - 60) wsPanelGitLoadMore();
+        }, { passive: true });
         return sec;
+    }
+
+    // 时间线单行（全量渲染与滚动分页追加共用）：圆点 + 提交信息 + HEAD 分支徽标 + 未推送云标记
+    function wsGitLogRow(g, c) {
+        var row = document.createElement('div');
+        row.className = 'ws-git-log-row' + (c.head ? ' head' : '');
+        row.title = c.msg + '\n' + c.an + ' · ' + wsGitFmtTime(c.at) + (c.un ? '\n未推送到远程' : '');
+        var dot = document.createElement('span');
+        dot.className = 'ws-git-log-dot';
+        var main = document.createElement('span');
+        main.className = 'ws-git-log-msg';
+        main.textContent = c.msg;
+        row.appendChild(dot);
+        row.appendChild(main);
+        if (c.head && g.branch) {
+            var bb = document.createElement('span');
+            bb.className = 'ws-git-log-branch';
+            bb.textContent = g.branch;
+            row.appendChild(bb);
+        }
+        if (c.un) {
+            var cl = document.createElement('span');
+            cl.className = 'ws-git-log-un';
+            cl.textContent = '☁';
+            cl.title = '未推送';
+            row.appendChild(cl);
+        }
+        row.addEventListener('click', function () { wsPanelGitOpenCommit(c); });
+        return row;
     }
 
     // 点击时间线条目：打开提交详情标签（元信息头 + 全量 diff）
