@@ -436,6 +436,8 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	notice := &protocol.Message{
 		MsgType:   protocol.MsgTypeGroupImage,
 		FromUser:  username,
+		// 阶段八十五：群聊帧携带发送者昵称（服务端归口，与文字群聊帧同规则）
+		FromName:  nicknameOf(username),
 		ToUser:    "",
 		Content:   string(contentBytes),
 		MsgID:     record.ID,

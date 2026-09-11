@@ -3,6 +3,21 @@
     var MSG = IMSocket.MSG;
     var currentChatUser = ''; // 空字符串表示群聊
     var friendList = []; // 好友列表 [{username, remark, group, online, avatar}]
+    // 阶段八十五：群聊发送者昵称缓存（服务端归口：群聊帧 from_name / 历史帧 names 合并填充，逐条覆盖保持最新）
+    var nickCache = {};
+    // 群聊发送者展示名解析（微信式，与资料卡主名称规则一致）：好友备注 → 昵称 → 账号
+    // 覆盖：群聊文字/图片/文件名称标签、引用前缀、撤回提示；备注是 viewing 方视角数据，由前端 friendList 叠加
+    function senderDisplayName(u) {
+        if (!u) return '';
+        for (var i = 0; i < friendList.length; i++) {
+            if (friendList[i].username === u) {
+                var rk = (friendList[i].remark || '').trim();
+                if (rk) return rk;
+                break;
+            }
+        }
+        return (nickCache[u] || '').trim() || u;
+    }
     // 头像缺失修复：登录用户自己头像（服务端 LOGIN_RESP 下发，上传成功后同步更新），供消息气泡头像渲染
     var myAvatar = '';
     // 头像缺失修复：在线用户头像表（服务端 USER_LIST 推送，username -> avatar），
@@ -1490,7 +1505,8 @@
         if (nonce) div.setAttribute('data-nonce', nonce);
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
-        nameEl.textContent = fromUser;
+        // 阶段八十五：发送者展示名（备注→昵称→账号）
+        nameEl.textContent = senderDisplayName(fromUser);
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble bubble-file';
         var icon = document.createElement('div');
@@ -1840,6 +1856,8 @@
         var meta = {};
         try { meta = JSON.parse(msg.content); } catch (e) {}
         var isMine = msg.from_user === IMSocket.getUsername();
+        // 阶段八十五：先合并服务端下发的发送者昵称，再渲染（群聊图片标签与文字标签同规则）
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
         if (isMine && meta.nonce) {
             // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
             // 多端场景：其他设备无带 nonce 的本地气泡，走下方通用渲染分支
@@ -9199,6 +9217,8 @@
         // 阶段二十七：归属校验——群聊消息仅在群聊视图渲染（与 GROUP_IMAGE 处理口径一致），
         // 原实现：无校验，私聊视图打开时收到的群聊消息被串入当前窗口，切换会话后"消失"
         if (currentChatUser !== '') return;
+        // 阶段八十五：先合并服务端下发的发送者昵称（服务端归口），再渲染名称标签（备注→昵称→账号）
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
         var isMine = msg.from_user === IMSocket.getUsername();
         appendMessage(msg.from_user, msg.content, isMine ? 'self' : 'other', msg.msg_id, msg.timestamp, false);
     });
@@ -9360,7 +9380,7 @@
             owner = (msg.from_user === IMSocket.getUsername()) ? msg.to_user : msg.from_user;
         }
         if (owner !== currentChatUser) return; // 非当前查看会话的撤回：仅服务端落库与 CONV_LIST 同步，本地不渲染
-        var tip = msg.from_user === IMSocket.getUsername() ? '你撤回了一条消息' : msg.from_user + ' 撤回了一条消息';
+        var tip = msg.from_user === IMSocket.getUsername() ? '你撤回了一条消息' : senderDisplayName(msg.from_user) + ' 撤回了一条消息';
         var el = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
         if (el) {
             var tipEl = document.createElement('div');
@@ -9704,6 +9724,12 @@
 
         var records = [];
         try { records = JSON.parse(msg.content) || []; } catch (e) {}
+        // 阶段八十五：先合并服务端下发的页内发送者昵称映射（服务端归口），再渲染（群聊标签/引用前缀/撤回提示共用）
+        if (msg.names) {
+            for (var nk in msg.names) {
+                if (msg.names[nk]) nickCache[nk] = msg.names[nk];
+            }
+        }
 
         // 定位模式：向前翻页加载更早的消息（prepend 渲染），找到目标后高亮
         if (locateState.active) {
@@ -9768,7 +9794,7 @@
         if (r.recalled) {
             var tip = document.createElement('div');
             tip.className = 'system-tip';
-            tip.textContent = (isMine ? '你' : r.from_user) + ' 撤回了一条消息';
+            tip.textContent = (isMine ? '你' : senderDisplayName(r.from_user)) + ' 撤回了一条消息';
             if (beforeEl) {
                 messageList.insertBefore(tip, beforeEl);
             } else {
@@ -10479,7 +10505,8 @@
         if (timestamp) div.setAttribute('data-ts', timestamp);
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
-        nameEl.textContent = fromUser;
+        // 阶段八十五：发送者展示名（备注→昵称→账号），历史与实时同源解析
+        nameEl.textContent = senderDisplayName(fromUser);
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         // 阶段四十：引用消息渲染——content 为引用信封时，气泡内先渲染引用块（灰底小字，点击定位原消息）再渲染回复正文；
@@ -10545,9 +10572,10 @@
             var quoteBlock = document.createElement('div');
             quoteBlock.className = 'msg-quote';
             // "引用"前缀 + 来源 + 摘要（textContent 赋值防 XSS，摘要来自用户消息原文）
+            // 阶段八十五：来源按展示名解析（备注→昵称→账号），群聊/私聊引用一致
             var qLabel = document.createElement('span');
             qLabel.className = 'msg-quote-text';
-            qLabel.textContent = '引用 ' + (q.from || '') + '：' + (q.text || '');
+            qLabel.textContent = '引用 ' + (senderDisplayName(q.from) || '') + '：' + (q.text || '');
             quoteBlock.appendChild(qLabel);
             // 图片引用：引用块内嵌真实缩略图（加载失败退化为纯"[图片]"文字）
             if (q.url) {
@@ -10940,7 +10968,8 @@
         div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
-        nameEl.textContent = fromUser;
+        // 阶段八十五：发送者展示名（备注→昵称→账号）
+        nameEl.textContent = senderDisplayName(fromUser);
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble bubble-image';
         var img = document.createElement('img');
@@ -10996,7 +11025,8 @@
         div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
-        nameEl.textContent = fromUser;
+        // 阶段八十五：发送者展示名（备注→昵称→账号）
+        nameEl.textContent = senderDisplayName(fromUser);
         var bubble = document.createElement('div');
         bubble.className = 'message-bubble bubble-file';
         var icon = document.createElement('div');

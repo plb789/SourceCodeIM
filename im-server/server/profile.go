@@ -96,6 +96,8 @@ func (s *Server) handleProfileUpdate(c *Client, msg *protocol.Message) {
 		s.sendError(c, "资料保存失败")
 		return
 	}
+	// 阶段八十五：昵称缓存失效（群聊帧/历史帧下发用），下次读取回源取新昵称
+	nickCache.Delete(c.username)
 
 	// 回推本人全部在线连接（多端同步），is_friend/remark 对自己无意义固定零值
 	info, ok := s.buildProfileInfo(c.username, c.username)

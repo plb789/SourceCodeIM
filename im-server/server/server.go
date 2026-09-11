@@ -339,6 +339,22 @@ func messageSummary(content string) string {
 	return content
 }
 
+// ===== 阶段八十五：群聊发送者昵称下发（服务端归口） =====
+// nickCache 昵称缓存：群聊每条消息/每页历史都要携带发送者昵称，直查库会放大热点路径压力；
+// 命中缓存零查询，未回源一次主键查询后回填；空昵称同样缓存防穿透；资料更新时删除对应条目（handleProfileUpdate）
+var nickCache sync.Map // username -> nickname(string)
+
+func nicknameOf(username string) string {
+	if v, ok := nickCache.Load(username); ok {
+		s, _ := v.(string)
+		return s
+	}
+	var nk string
+	store.DB.Model(&model.User{}).Select("nickname").Where("username = ?", username).Scan(&nk)
+	nickCache.Store(username, nk)
+	return nk
+}
+
 // handleGroupChat 群聊广播并持久化
 func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	// 敏感词过滤
@@ -356,6 +372,8 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 
 	msg.MsgType = protocol.MsgTypeGroupChat
 	msg.FromUser = c.username
+	// 阶段八十五：群聊帧携带发送者昵称（服务端归口，前端"备注→昵称→账号"解析渲染发送者标签）
+	msg.FromName = nicknameOf(c.username)
 	msg.ToUser = ""
 	msg.Timestamp = time.Now().Unix()
 
@@ -605,12 +623,23 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段八十五：页内发送者昵称映射（服务端归口一次解析，前端合并缓存后按"备注→昵称→账号"渲染）。
+	// 群聊标签/引用前缀/撤回提示共用；nicknameOf 自带缓存，页内去重后实际回源查询极少
+	names := make(map[string]string)
+	for _, r := range records {
+		if _, done := names[r.FromUser]; done {
+			continue
+		}
+		names[r.FromUser] = nicknameOf(r.FromUser)
+	}
+
 	data, _ := json.Marshal(records)
 	resp := protocol.Message{
 		MsgType:   protocol.MsgTypeHistoryResp,
 		FromUser:  c.username,
 		ToUser:    msg.ToUser,
 		Content:   string(data),
+		Names:     names,
 		Page:      page,
 		PageSize:  pageSize,
 		Timestamp: time.Now().Unix(),

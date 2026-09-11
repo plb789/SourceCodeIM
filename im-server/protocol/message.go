@@ -127,4 +127,9 @@ type Message struct {
 	// 已读状态（随私聊回显帧下发：AI 提问回显为 true——AI 会话无回执语义，服务端落库即视为已读；
 	// 普通私聊回显为 false 保持既有回执链路）
 	IsRead bool `json:"is_read,omitempty"`
+	// 阶段八十五：发送者昵称（服务端归口解析，群聊帧 GROUP_CHAT/GROUP_IMAGE 下发；空昵称前端降级显示账号）。
+	// 备注是 viewing 方视角数据不随帧下发，前端按"备注→昵称→账号"叠加解析
+	FromName string `json:"from_name,omitempty"`
+	// 阶段八十五：历史响应（HISTORY_RESP）携带页内发送者昵称映射（username→nickname），前端合并进昵称缓存后再渲染
+	Names map[string]string `json:"names,omitempty"`
 }
