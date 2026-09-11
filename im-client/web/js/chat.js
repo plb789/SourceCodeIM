@@ -4748,7 +4748,7 @@
         var refreshBtn = document.createElement('button');
         refreshBtn.className = 'ws-panel-btn ws-refresh-btn';
         refreshBtn.type = 'button';
-        refreshBtn.textContent = '⟳'; // TRAE CN 同款圆形刷新箭头图标（悬停看文字说明）
+        refreshBtn.innerHTML = wsGitIco('refresh'); // TRAE CN 同款 codicon 刷新图标（与源代码管理头部统一）
         refreshBtn.title = '重新加载文件树';
         refreshBtn.addEventListener('click', function () { wsPanelRefreshTree(); });
         // 头部"更多操作"（⋯）下拉菜单（阶段七十七，自绘浮层不用系统弹窗）：低频操作统一收纳，
@@ -5843,6 +5843,18 @@
         }, 0);
     }
 
+    // TRAE CN 同款 codicon 图标（microsoft/vscode-codicons，fill=currentColor 随主题色变化）：
+    // path 数据内联为 JS 常量，运行时零外部文件依赖，正式环境不新增任何资源目录
+    var WS_GIT_ICONS = {
+        // 裸「?」帮助图标：弧线笔画 1.5 + 实心圆点，点独立绘制保证小尺寸下清晰可见
+        'question': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M5.1 6A2.9 2.9 0 0 1 10.9 6A2.9 2.9 0 0 1 8 8.9L8 10.2" fill="none" stroke="currentColor" stroke-linecap="round" style="stroke-width:1.5"/><circle cx="8" cy="12.7" r="1.15" fill="currentColor" stroke="none"/></svg>',
+        'arrow-swap': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M11.3536 1.64645C11.1583 1.45118 10.8417 1.45118 10.6464 1.64645C10.4512 1.84171 10.4512 2.15829 10.6464 2.35355L12.2929 4H2.5C2.22386 4 2 4.22386 2 4.5C2 4.77614 2.22386 5 2.5 5H12.2929L10.6464 6.64645C10.4512 6.84171 10.4512 7.15829 10.6464 7.35355C10.8417 7.54882 11.1583 7.54882 11.3536 7.35355L13.8536 4.85355C14.0488 4.65829 14.0488 4.34171 13.8536 4.14645L11.3536 1.64645ZM5.35355 9.35355C5.54882 9.15829 5.54882 8.84171 5.35355 8.64645C5.15829 8.45118 4.84171 8.45118 4.64645 8.64645L2.14645 11.1464C1.95118 11.3417 1.95118 11.6583 2.14645 11.8536L4.64645 14.3536C4.84171 14.5488 5.15829 14.5488 5.35355 14.3536C5.54882 14.1583 5.54882 13.8417 5.35355 13.6464L3.70711 12H13.5C13.7761 12 14 11.7761 14 11.5C14 11.2239 13.7761 11 13.5 11H3.70711L5.35355 9.35355Z"/></svg>',
+        'repo-pull': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M4.85 6.15C4.755 6.05 4.627 6 4.5 6C4.372 6 4.245 6.05 4.15 6.15C4.05 6.245 4 6.373 4 6.5C4 6.627 4.05 6.755 4.15 6.85L7.15 9.85C7.245 9.95 7.372 10 7.5 10C7.628 10 7.755 9.95 7.85 9.85L10.85 6.85C10.95 6.755 11 6.628 11 6.5C11 6.372 10.95 6.245 10.85 6.15C10.755 6.05 10.627 6 10.5 6C10.373 6 10.245 6.05 10.15 6.15L8 8.29V1.5C8 1.22 7.78 1 7.5 1C7.22 1 7 1.22 7 1.5V8.29L4.85 6.15Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.95 13H12.5C12.78 13 13 13.22 13 13.5C13 13.78 12.78 14 12.5 14H9.95C9.72 15.14 8.71 16 7.5 16C6.29 16 5.28 15.14 5.05 14H2.5C2.22 14 2 13.78 2 13.5C2 13.22 2.22 13 2.5 13H5.05C5.28 11.86 6.29 11 7.5 11C8.71 11 9.72 11.86 9.95 13ZM6.09 14C6.29 14.58 6.85 15 7.5 15C8.15 15 8.71 14.58 8.91 14C8.97 13.84 9 13.68 9 13.5C9 13.32 8.97 13.16 8.91 13C8.71 12.42 8.15 12 7.5 12C6.85 12 6.29 12.42 6.09 13C6.03 13.16 6 13.32 6 13.5C6 13.68 6.03 13.84 6.09 14Z"/></svg>',
+        'repo-push': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M4.85 4.85C4.755 4.95 4.627 5 4.5 5C4.372 5 4.245 4.95 4.15 4.85C4.05 4.755 4 4.627 4 4.5C4 4.373 4.05 4.245 4.15 4.15L7.15 1.15C7.245 1.05 7.372 1 7.5 1C7.628 1 7.755 1.05 7.85 1.15L10.85 4.15C10.95 4.245 11 4.372 11 4.5C11 4.628 10.95 4.755 10.85 4.85C10.755 4.95 10.627 5 10.5 5C10.373 5 10.245 4.95 10.15 4.85L8 2.71V9.5C8 9.78 7.78 10 7.5 10C7.22 10 7 9.78 7 9.5V2.71L4.85 4.85Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.95 13H12.5C12.78 13 13 13.22 13 13.5C13 13.78 12.78 14 12.5 14H9.95C9.72 15.14 8.71 16 7.5 16C6.29 16 5.28 15.14 5.05 14H2.5C2.22 14 2 13.78 2 13.5C2 13.22 2.22 13 2.5 13H5.05C5.28 11.86 6.29 11 7.5 11C8.71 11 9.72 11.86 9.95 13ZM6.09 14C6.29 14.58 6.85 15 7.5 15C8.15 15 8.71 14.58 8.91 14C8.97 13.84 9 13.68 9 13.5C9 13.32 8.97 13.16 8.91 13C8.71 12.42 8.15 12 7.5 12C6.85 12 6.29 12.42 6.09 13C6.03 13.16 6 13.32 6 13.5C6 13.68 6.03 13.84 6.09 14Z"/></svg>',
+        'refresh': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M3 8C3 5.23858 5.23858 3 8 3C9.63527 3 11.0878 3.78495 12.0005 5H10C9.72386 5 9.5 5.22386 9.5 5.5C9.5 5.77614 9.72386 6 10 6H12.8904C12.8973 6.00014 12.9041 6.00014 12.911 6H13C13.2761 6 13.5 5.77614 13.5 5.5V2.5C13.5 2.22386 13.2761 2 13 2C12.7239 2 12.5 2.22386 12.5 2.5V4.03138C11.4009 2.78613 9.79253 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14C11.1301 14 13.6999 11.6035 13.9756 8.54488C14.0003 8.26985 13.7975 8.0268 13.5225 8.00202C13.2474 7.97723 13.0044 8.1801 12.9796 8.45512C12.75 11.003 10.6079 13 8 13C5.23858 13 3 10.7614 3 8Z"/></svg>'
+    };
+    function wsGitIco(name) { return WS_GIT_ICONS[name] || ''; }
+
     // git 视图渲染（每次数据刷新全量重建；DOM 简单量小，无性能压力）
     function wsPanelGitRender() {
         var g = wsPanel.git;
@@ -5860,19 +5872,19 @@
             var pullB = document.createElement('button');
             pullB.className = 'ws-panel-btn';
             pullB.type = 'button';
-            pullB.textContent = '⬇';
+            pullB.innerHTML = wsGitIco('repo-pull'); // TRAE CN 同款 codicon 拉取图标
             pullB.title = '拉取（pull）';
             pullB.addEventListener('click', function () { wsPanelGitAct({ sub: 'pull' }, '已拉取'); });
             var pushB = document.createElement('button');
             pushB.className = 'ws-panel-btn';
             pushB.type = 'button';
-            pushB.textContent = '⬆';
+            pushB.innerHTML = wsGitIco('repo-push'); // TRAE CN 同款 codicon 推送图标
             pushB.title = '推送（push）';
             pushB.addEventListener('click', function () { wsPanelGitAct({ sub: 'push' }, '已推送'); });
             var rmB = document.createElement('button');
             rmB.className = 'ws-panel-btn';
             rmB.type = 'button';
-            rmB.textContent = '⇄';
+            rmB.innerHTML = wsGitIco('arrow-swap'); // TRAE CN 同款 codicon ⇄ 交换箭头（上→下←，与拉取/推送同粗细）
             rmB.title = '远程仓库地址（查看/修改）';
             rmB.addEventListener('click', wsPanelGitRemoteDlg);
             head.appendChild(pullB);
@@ -5882,14 +5894,14 @@
         var helpB = document.createElement('button');
         helpB.className = 'ws-panel-btn ws-git-help-btn';
         helpB.type = 'button';
-        helpB.textContent = '?';
+        helpB.innerHTML = wsGitIco('question'); // 自绘裸「?」矢量图标（与其它按钮同粗细，圆点小尺寸下清晰）
         helpB.title = '配置帮助（身份 / 远程仓库 / 鉴权）';
         helpB.addEventListener('click', function () { wsPanelGitToggleHelp(); });
         head.appendChild(helpB);
         var refB = document.createElement('button');
         refB.className = 'ws-panel-btn ws-refresh-btn';
         refB.type = 'button';
-        refB.textContent = '⟳';
+        refB.innerHTML = wsGitIco('refresh'); // TRAE CN 同款 codicon 刷新图标
         refB.title = '刷新状态';
         refB.addEventListener('click', function () { wsPanelGitRefresh(); });
         head.appendChild(refB);

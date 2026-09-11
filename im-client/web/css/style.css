@@ -5567,6 +5567,21 @@ html.m #list-panel.list-collapsed {
     color: var(--text, #333);
 }
 
+/* TRAE CN 同款 codicon 矢量图标（拉取/推送/刷新）：currentColor 随主题色 */
+.ws-panel-btn svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    pointer-events: none;
+}
+
+/* 图标加粗：同色细描边撑厚填充路径（描边宽度按 16 viewBox 计，缩到 13px 约增粗 0.5px） */
+.ws-panel-btn svg path {
+    stroke: currentColor;
+    stroke-width: .7;
+    stroke-linejoin: round;
+}
+
 .ws-panel-btn.primary {
     color: var(--panel-bg, #fff);
     background: var(--primary);
