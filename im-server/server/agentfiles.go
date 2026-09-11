@@ -674,7 +674,7 @@ func wsServerGit(username, content string) *wsFileResult {
 				c["files"] = list
 			}
 		}
-		// 未推送集合：origin/<branch>..HEAD 可解析则逐条标记；无上游/报错=全部未推送
+		// 未推送集合：origin/<branch>..HEAD 输出的就是未推送提交，逐条标记；无上游/报错=全部未推送
 		if r.Branch != "" {
 			un, uerr := wsGitExec(base, []string{"log", "origin/" + r.Branch + "..HEAD", "--format=%H"}, 30*time.Second)
 			if uerr != nil {
@@ -682,15 +682,15 @@ func wsServerGit(username, content string) *wsFileResult {
 					c["un"] = true
 				}
 			} else {
-				pushed := map[string]bool{}
+				unpushed := map[string]bool{}
 				for _, ln := range strings.Split(un, "\n") {
 					ln = strings.TrimSpace(ln)
 					if ln != "" {
-						pushed[ln] = true
+						unpushed[ln] = true
 					}
 				}
 				for _, c := range commits {
-					c["un"] = !pushed[c["h"].(string)]
+					c["un"] = unpushed[c["h"].(string)]
 				}
 			}
 		} else {

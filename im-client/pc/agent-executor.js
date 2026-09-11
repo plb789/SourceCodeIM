@@ -1334,7 +1334,7 @@ function gitOp(username, content) {
                         c.files = list;
                     });
                 }
-                // 未推送集合（origin/<branch>..HEAD）；失败=无上游 → 全部未推送
+                // 未推送集合（origin/<branch>..HEAD 输出的就是未推送提交）；失败=无上游 → 全部未推送
                 const unArgs = ['-c', 'core.quotepath=off', 'log', 'origin/' + branch + '..HEAD', '--format=%H'];
                 if (!branch) {
                     commits.forEach(function (c) { c.un = true; });
@@ -1344,12 +1344,12 @@ function gitOp(username, content) {
                     if (um.err) {
                         commits.forEach(function (c) { c.un = true; });
                     } else {
-                        const pushed = {};
+                        const unpushed = {};
                         um.text.split('\n').forEach(function (ln) {
                             ln = ln.trim();
-                            if (ln) pushed[ln] = true;
+                            if (ln) unpushed[ln] = true;
                         });
-                        commits.forEach(function (c) { c.un = !pushed[c.h]; });
+                        commits.forEach(function (c) { c.un = !!unpushed[c.h]; });
                     }
                     return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits, has_more: hasMore }) };
                 });
