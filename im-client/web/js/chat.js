@@ -25,6 +25,11 @@
     var currentAvatarEl = document.getElementById('current-avatar');
     // 头像降级修复：左上角首字母占位元素（无头像/图片加载失败时显示，原 img 空 src 渲染为破图）
     var navAvatarPhEl = document.getElementById('current-avatar-ph');
+    // 阶段七十八：标题栏用户区元素（仅 PC 端 Electron 壳内可见；Web/手机端无 pc-titlebar 类标题栏整体不显示，保持 nav-rail 原位）
+    var titlebarUserEl = document.getElementById('titlebar-user');
+    var titlebarAvatarEl = document.getElementById('titlebar-avatar');
+    var titlebarAvatarPhEl = document.getElementById('titlebar-avatar-ph');
+    var titlebarUsernameEl = document.getElementById('titlebar-username');
     var avatarFileEl = document.getElementById('avatar-file');
 
     // ===== 阶段三十：个人资料面板元素（微信式右侧滑出，点击自己头像打开） =====
@@ -301,9 +306,31 @@
         system: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>'
     };
     function getTheme() { return localStorage.getItem('im_theme') || 'light'; }
+    // ===== 阶段七十七：PC 端自定义标题栏（Electron titleBarOverlay）主题同步 =====
+    // 仅 Electron 壳内生效（window.desktop.setTitlebarColors 由 preload 注入，浏览器/手机 APP 不存在自动旁路）；
+    // 原生窗口按钮底色/符号色必须与 style.css --titlebar-bg/--titlebar-fg、main.js titleBarOverlay 初值一致（三方同值，改动需同步）
+    var TITLEBAR_COLORS = {
+        light: { color: '#f5f5f5', symbolColor: '#333333' },
+        dark: { color: '#1a1a1a', symbolColor: '#e0e0e0' }
+    };
+    // 解析生效主题（system 模式下跟随系统深浅）
+    function titlebarIsDark(theme) {
+        return theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    function syncTitlebarTheme(theme) {
+        if (!(window.desktop && window.desktop.setTitlebarColors)) return;
+        var c = TITLEBAR_COLORS[titlebarIsDark(theme) ? 'dark' : 'light'];
+        window.desktop.setTitlebarColors(c.color, c.symbolColor);
+    }
+    // 「跟随系统」模式下系统深浅切换时同步标题栏按钮配色（主题变量由 CSS 媒体查询自动生效）
+    var titlebarSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    var titlebarSchemeHandler = function () { syncTitlebarTheme(getTheme()); };
+    if (titlebarSchemeQuery.addEventListener) titlebarSchemeQuery.addEventListener('change', titlebarSchemeHandler);
+    else if (titlebarSchemeQuery.addListener) titlebarSchemeQuery.addListener(titlebarSchemeHandler);
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('im_theme', theme);
+        syncTitlebarTheme(theme);
     }
     // 按当前主题刷新按钮图标与悬停提示
     function renderThemeBtn(theme) {
@@ -324,16 +351,26 @@
     var navAvatarFailedUrl = ''; // 记录加载失败的头像地址，避免重复设置同一失效 URL（缓存错误结果）导致空白
     // 有头像显示图片，无头像显示账号首字母占位（跟随主题色）
     function setNavAvatar(url) {
-        if (url && url !== navAvatarFailedUrl) {
+        var okImg = url && url !== navAvatarFailedUrl;
+        if (okImg) {
             currentAvatarEl.src = url;
             currentAvatarEl.style.display = '';
             navAvatarPhEl.style.display = 'none';
+            // 阶段七十八：标题栏头像同步（同一数据源，上传/资料保存后两处同时刷新）
+            titlebarAvatarEl.src = url;
+            titlebarAvatarEl.style.display = '';
+            titlebarAvatarPhEl.style.display = 'none';
         } else {
             // 关键：空 src 会被浏览器渲染为破图，必须移除 src 并隐藏 img，改显首字母占位
             currentAvatarEl.removeAttribute('src');
             currentAvatarEl.style.display = 'none';
             navAvatarPhEl.textContent = (IMSocket.getUsername() || '?').charAt(0).toUpperCase();
             navAvatarPhEl.style.display = 'flex';
+            // 阶段七十八：标题栏同步降级为首字母占位
+            titlebarAvatarEl.removeAttribute('src');
+            titlebarAvatarEl.style.display = 'none';
+            titlebarAvatarPhEl.textContent = (IMSocket.getUsername() || '?').charAt(0).toUpperCase();
+            titlebarAvatarPhEl.style.display = 'flex';
         }
     }
     // 头像文件失效（文件被清理/路径变更）时降级为首字母占位，避免破图
@@ -341,8 +378,15 @@
         navAvatarFailedUrl = currentAvatarEl.getAttribute('src') || '';
         setNavAvatar('');
     });
+    // 阶段七十八：标题栏头像同样降级（两处 img 同 src，任一失效统一走降级入口）
+    titlebarAvatarEl.addEventListener('error', function () {
+        navAvatarFailedUrl = titlebarAvatarEl.getAttribute('src') || '';
+        setNavAvatar('');
+    });
     // 占位头像与图片头像点击行为一致：打开个人资料面板
     navAvatarPhEl.addEventListener('click', openProfilePanel);
+    // 阶段七十八：标题栏用户区（头像+账号）整块可点，行为与 nav-rail 顶部头像一致（CSS no-drag 保证可点击）
+    titlebarUserEl.addEventListener('click', openProfilePanel);
 
     // ===== 头像降级修复：资料面板大头像统一入口 =====
     function setProfileAvatar(url) {
@@ -2050,6 +2094,9 @@
             // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
             saveAuth(IMSocket.getUsername(), window._lastPassword || '');
             currentUserEl.textContent = IMSocket.getUsername();
+            // 阶段七十八：标题栏用户区（头像+账号）同步显示（仅 PC 端可见，Web/手机端标题栏整体隐藏不受影响）
+            titlebarUsernameEl.textContent = IMSocket.getUsername();
+            titlebarUserEl.classList.remove('hidden');
             // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
             // 同步更新导航栏头像与消息气泡头像数据源
             // 原代码：无 avatar 解析，导航栏头像登录后为空，消息气泡无头像可用

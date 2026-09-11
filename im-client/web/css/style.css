@@ -7919,3 +7919,128 @@ html.m #friend-menu {
     color: var(--text-light);
     line-height: 1.8;
 }
+
+/* ===== 阶段七十七：PC 端自定义标题栏（Electron titleBarStyle:'hidden' + 原生 overlay 按钮） ===== */
+/* 仅 Electron 壳内启用（index.html 头部引导脚本给根节点挂 pc-titlebar 类），浏览器/手机 APP 自动旁路 */
+:root {
+    --titlebar-h: 34px;
+    /* 标题栏配色归口：与 chat.js TITLEBAR_COLORS、main.js titleBarOverlay 初值三方同值，改动需同步 */
+    --titlebar-bg: #f5f5f5;
+    --titlebar-fg: #333333;
+}
+[data-theme="dark"] {
+    --titlebar-bg: #1a1a1a;
+    --titlebar-fg: #e0e0e0;
+}
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] {
+        --titlebar-bg: #1a1a1a;
+        --titlebar-fg: #e0e0e0;
+    }
+}
+
+.app-titlebar {
+    display: none; /* 默认隐藏，仅 .pc-titlebar（Electron 壳内）时启用 */
+}
+
+.pc-titlebar .app-titlebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--titlebar-h);
+    /* 压过全部浮层（全站最高 11000 遮罩），保证任意弹窗状态下标题栏仍可拖动窗口 */
+    z-index: 12000;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    /* 右侧留白避开原生窗口按钮（最小化/最大化/关闭约 138px 宽），内容再窄也不被按钮压住 */
+    padding: 0 150px 0 12px;
+    background: var(--titlebar-bg);
+    color: var(--titlebar-fg);
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag; /* 整条可拖动窗口，双击最大化/还原（系统原生行为） */
+    user-select: none;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.pc-titlebar .app-titlebar-logo {
+    flex: none;
+    color: var(--primary); /* 跟随主题色 */
+}
+
+.pc-titlebar .app-titlebar-title {
+    flex: none;
+    font-weight: 600;
+    letter-spacing: 1px;
+    opacity: 0.85;
+}
+
+/* 顶栏让位：登录视图/聊天视图整体下移标题栏高度，其余浮层（居中/底部定位）不受影响 */
+.pc-titlebar .login-view,
+.pc-titlebar .chat-view {
+    height: calc(100vh - var(--titlebar-h));
+    margin-top: var(--titlebar-h);
+}
+
+/* 个人资料面板固定贴顶（top:0），标题栏存在时其头部（关闭按钮）会被压住，需同步让位 */
+.pc-titlebar .profile-panel {
+    top: var(--titlebar-h);
+}
+
+/* ===== 阶段七十八：标题栏用户区（头像+账号，自 nav-rail 顶部上移） ===== */
+/* no-drag 从拖拽区排除，保证头像可点击打开个人资料面板（与 nav-rail 顶部头像行为一致） */
+.pc-titlebar .titlebar-user {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 12px;
+    padding: 3px 10px 3px 3px;
+    border-radius: 14px;
+    -webkit-app-region: no-drag;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.pc-titlebar .titlebar-user:hover {
+    background: color-mix(in srgb, var(--titlebar-fg) 10%, transparent);
+}
+
+.pc-titlebar .titlebar-avatar {
+    /* 注意：此处不能写 display:none——JS 显示头像的方式是清空内联 display（style.display=''），
+       CSS 的 none 会接管导致永远隐藏；初始隐藏由 index.html 内联 style="display:none" 承担 */
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex: none;
+}
+
+.pc-titlebar .titlebar-avatar-ph {
+    display: none; /* 默认隐藏，无头像时由 JS 切换显示 */
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    flex: none;
+}
+
+.pc-titlebar .titlebar-username {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--titlebar-fg);
+}
+
+/* PC 端用户区上移标题栏：nav-rail 顶部头像/账号整体隐藏（Web 浏览器/手机端无 pc-titlebar 类不受影响） */
+.pc-titlebar .nav-rail .nav-top {
+    display: none;
+}

@@ -30,6 +30,11 @@ function createWindow() {
         minWidth: 800,
         minHeight: 560,
         title: '即时通讯',
+        // 阶段七十七：自定义标题栏——隐藏系统标题栏，由网页自绘顶栏（整条可拖动窗口/双击最大化还原），
+        // 最小化/最大化/关闭仍用原生 overlay 按钮（保留分屏布局悬停/窗口阴影/边缘缩放），
+        // 按钮底色/符号色随主题经 titlebar:overlay IPC 动态更新（初始浅色，与渲染层首次同步前一致）
+        titleBarStyle: 'hidden',
+        titleBarOverlay: { color: '#f5f5f5', symbolColor: '#333333', height: 34 },
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -91,6 +96,22 @@ function showNotification(title, body) {
 // 阶段六十六：渲染层系统通知转发（Agent 任务完结提醒等场景）
 ipcMain.on('notify', function (event, payload) {
     showNotification(String((payload && payload.title) || '即时通讯'), String((payload && payload.body) || ''));
+});
+
+// 阶段七十七：渲染层主题切换时同步原生窗口按钮（titleBarOverlay）配色，浅色/深色跟随主题；
+// 非 Windows 平台无 overlay 支持时 setTitleBarOverlay 会抛错，静默失败即可（按钮本就不存在）
+ipcMain.handle('titlebar:overlay', function (event, colors) {
+    var win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || !colors || !colors.color) return false;
+    try {
+        win.setTitleBarOverlay({
+            color: String(colors.color),
+            symbolColor: String(colors.symbolColor || '#333333')
+        });
+        return true;
+    } catch (e) {
+        return false;
+    }
 });
 
 // ===== 阶段三十七（第三期）：静默抓屏 =====

@@ -178,5 +178,10 @@ contextBridge.exposeInMainWorld('desktop', {
     // 保存沙箱配置（payload = {username, primary, dirs}，返回 Promise<{ok, cfg}>）
     sandboxSave: function (payload) {
         return ipcRenderer.invoke('sandbox:save', payload);
+    },
+    // ===== 阶段七十七：自定义标题栏（Electron titleBarOverlay）=====
+    // 主题切换时同步原生窗口按钮配色（浅色 #f5f5f5/#333333，深色 #1a1a1a/#e0e0e0，与 style.css --titlebar-* 同值）
+    setTitlebarColors: function (color, symbolColor) {
+        return ipcRenderer.invoke('titlebar:overlay', { color: color, symbolColor: symbolColor });
     }
 });
