@@ -1085,7 +1085,10 @@ const GIT_SUB_SPEC = {
     unstage:  { args: ['reset', '-q', 'HEAD', '--'],      timeout: 30000, needPaths: true },
     discard:  { args: ['checkout', '-q', '--'],           timeout: 30000, needPaths: true },
     commit:   { args: ['commit', '-q', '-m'],             timeout: 60000, needMsg: true },
-    log:      { args: ['log', '-30', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000 },
+    // log：31 条（多 1 条仅探测 has_more，截回 30）+ %b 多行正文 + --numstat 行级增删；
+    // --skip 由 gitOp 按 r.skip 动态插入（首页 0 不发）。文件状态（M/A/D/R）numstat 不带，
+    // 处理段另跑一条 --name-status 按 hash 合并（与服务端 wsGit 同口径，两 flag 同用 git 只认其一）
+    log:      { args: ['log', '-31', '--format=%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%b%x1e', '--numstat'], timeout: 30000 },
     show:     { args: ['show', '--no-color', '--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at'], timeout: 30000, needPath: true },
     // 本地 + 远端跟踪分支：审查目标可选 origin/xxx（三点 diff 合法口径）；origin/HEAD 由前端过滤
     branches: { args: ['for-each-ref', 'refs/heads', 'refs/remotes', '--format=%(refname:short)'], timeout: 20000 },
@@ -1161,17 +1164,69 @@ function gitErrorHint(msg, sub) {
     return msg;
 }
 
-// git log 输出解析（%H\x1f%h\x1f%s\x1f%an\x1f%at，首条为 HEAD）——与服务端 wsGitLogParse 同口径
+// git 40 位 hash 判定（log 解析/状态解析共用）
+const gitIsHex40 = (s) => /^[0-9a-f]{40}$/.test(s);
+
+// git log 输出解析（format=%H\x1f%h\x1f%s\x1f%an\x1f%at\x1f%b\x1e + --numstat）——与服务端 wsGitLogParse 同口径。
+// 结构：%b 是 \x1e 前最后字段（多行正文跨行无妨），\x1e 后跟该提交的 numstat 行（add\tdelete\tpath）。
+// 状态机：meta 行（40hex+\x1f 开头）开新提交；其后普通行并入 body 直到 \x1e 行；
+// \x1e 后按 tab 三段解析 numstat 求和 ins/del、计文件数。body 中 "数字\t数字\tx" 形状行
+// 因仍在 inBody 阶段不会被误判（顺序保证）。head 标记由调用方按 skip 归口（这里不标）。
 function gitLogParse(text) {
     const commits = [];
-    String(text || '').split('\n').forEach(function (raw, i) {
+    let cur = null, inBody = false, ins = 0, del = 0, nfile = 0;
+    const flush = function () {
+        if (cur) {
+            cur.body = cur.body.replace(/\n+$/, ''); // %b 尾部自带换行
+            cur.ins = ins; cur.del = del; cur.n = nfile;
+            commits.push(cur);
+        }
+        ins = 0; del = 0; nfile = 0;
+    };
+    String(text || '').split('\n').forEach(function (raw) {
         const ln = raw.replace(/\r$/, '');
-        if (!ln) return;
-        const f = ln.split('\x1f');
-        if (f.length < 5) return;
-        commits.push({ h: f[0], sh: f[1], msg: f[2], an: f[3], at: parseInt(f[4], 10) || 0, head: i === 0 });
+        if (ln.length >= 41 && ln[40] === '\x1f' && gitIsHex40(ln.slice(0, 40))) { // meta 行：H\x1fsh\x1fs\x1fan\x1fat\x1f[body首行]
+            flush();
+            const f = ln.split('\x1f');
+            if (f.length < 5) { cur = null; return; }
+            let body = f.length >= 6 ? f[5] : '';
+            // %b 为空时（无正文提交，实测 git 字节流）\x1e 紧贴 meta 行尾（at\x1f\x1e），
+            // body 字段会带上 \x1e——此时本条 body 已结束，直接闭合，防后续 numstat 被并入 body；
+            // %b 非空时 %b 尾部自带 \n，\x1e 独占一行，走正常 inBody 流程（与服务端 wsGitLog 同口径）
+            if (body.slice(-1) === '\x1e') { body = body.slice(0, -1); inBody = false; } else { inBody = true; }
+            cur = { h: f[0], sh: f[1], msg: f[2], an: f[3], at: parseInt(f[4], 10) || 0, body: body };
+            return;
+        }
+        if (ln === '\x1e') { inBody = false; return; } // body 结束标记
+        if (!cur) return;
+        if (inBody) { cur.body += '\n' + ln; return; } // body 延续行（含空行，正文空行是合法内容）
+        const p = ln.split('\t');
+        if (p.length === 3) { // numstat 行（二进制文件为 -）
+            nfile++;
+            if (p[0] !== '-') ins += parseInt(p[0], 10) || 0;
+            if (p[1] !== '-') del += parseInt(p[1], 10) || 0;
+        }
     });
+    flush();
     return commits;
+}
+
+// git log --name-status 输出解析（format=%H\x1e + 每文件状态行）：hash → [{p:路径, s:状态}]。
+// 状态行：M/A/D 为 "S\tpath"；rename 为 "R100\told\tnew"（取新路径展示，状态记 R）——与服务端 wsGitLogStatus 同口径
+function gitLogStatus(text) {
+    const res = {};
+    let curH = '';
+    String(text || '').split('\n').forEach(function (raw) {
+        const ln = raw.replace(/\r$/, '').replace(/\x1e$/, '');
+        if (!ln) return;
+        if (gitIsHex40(ln)) { curH = ln; return; }
+        if (!curH) return;
+        const p = ln.split('\t');
+        if (p.length >= 2) {
+            (res[curH] = res[curH] || []).push({ p: p[p.length - 1], s: p[0][0] });
+        }
+    });
+    return res;
 }
 
 // git show 输出拆分：首行 __META__ 头 + diff 正文——与服务端 wsGitShowSplit 同口径
@@ -1240,29 +1295,64 @@ function gitOp(username, content) {
     }
     if (r.sub === 'log') {
         const branch = String(r.branch || '').trim();
+        // 分页：--skip=N 动态插入（skip<0 视为 0；首页 0 不发参数，与服务端同口径）
+        let skip = parseInt(r.skip, 10) || 0;
+        if (skip < 0) skip = 0;
+        if (skip > 0) {
+            const li = args.indexOf('log');
+            args.splice(li + 1, 0, '--skip=' + skip);
+        }
         return execGit(args, spec.timeout).then(function (m) {
             if (m.err) {
                 // 全新仓库 log 会报错：空历史静默返回（不算业务失败）
                 return { ok: true, content: JSON.stringify({ sub: 'log', commits: [] }) };
             }
             const commits = gitLogParse(m.text);
-            const unArgs = ['-c', 'core.quotepath=off', 'log', 'origin/' + branch + '..HEAD', '--format=%H'];
-            if (!branch) {
-                commits.forEach(function (c) { c.un = true; });
-                return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits }) };
+            // 分页探测：多取的第 31 条只用于 has_more 判定，截回 30 条；
+            // head 标记归口：首页（skip=0）首条，翻页页全部无 head
+            let hasMore = false;
+            if (commits.length > 30) {
+                commits.length = 30;
+                hasMore = true;
             }
-            return execGit(unArgs, 20000).then(function (um) {
-                if (um.err) {
-                    commits.forEach(function (c) { c.un = true; });
-                } else {
-                    const pushed = {};
-                    um.text.split('\n').forEach(function (ln) {
-                        ln = ln.trim();
-                        if (ln) pushed[ln] = true;
+            if (skip > 0) {
+                commits.forEach(function (c) { c.head = false; });
+            } else if (commits.length) {
+                commits[0].head = true;
+            }
+            // 可展开文件清单：--name-status 按 hash 合并（numstat 不带状态字母）；
+            // 每提交限 200 条防大提交 JSON 膨胀，截断置 fm 由前端提示（与服务端同口径）
+            return execGit(['-c', 'core.quotepath=off', 'log', '--skip=' + skip, '-31', '--format=%H%x1e', '--name-status'], 30000).then(function (sm) {
+                if (!sm.err) {
+                    const stMap = gitLogStatus(sm.text);
+                    commits.forEach(function (c) {
+                        let list = stMap[c.h] || [];
+                        if (list.length > 200) {
+                            c.fm = true;
+                            list = list.slice(0, 200);
+                        }
+                        c.files = list;
                     });
-                    commits.forEach(function (c) { c.un = !pushed[c.h]; });
                 }
-                return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits }) };
+                // 未推送集合（origin/<branch>..HEAD）；失败=无上游 → 全部未推送
+                const unArgs = ['-c', 'core.quotepath=off', 'log', 'origin/' + branch + '..HEAD', '--format=%H'];
+                if (!branch) {
+                    commits.forEach(function (c) { c.un = true; });
+                    return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits, has_more: hasMore }) };
+                }
+                return execGit(unArgs, 20000).then(function (um) {
+                    if (um.err) {
+                        commits.forEach(function (c) { c.un = true; });
+                    } else {
+                        const pushed = {};
+                        um.text.split('\n').forEach(function (ln) {
+                            ln = ln.trim();
+                            if (ln) pushed[ln] = true;
+                        });
+                        commits.forEach(function (c) { c.un = !pushed[c.h]; });
+                    }
+                    return { ok: true, content: JSON.stringify({ sub: 'log', commits: commits, has_more: hasMore }) };
+                });
             });
         });
     }

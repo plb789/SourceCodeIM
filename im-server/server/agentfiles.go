@@ -348,6 +348,7 @@ type wsGitReq struct {
 	Amend  bool     `json:"amend,omitempty"`  // commit 追加模式（--amend 覆盖上一次提交）
 	Staged bool     `json:"staged,omitempty"` // discard 已暂存变更：checkout HEAD --（staged 删除/改名旧路径在 index 中已不存在，checkout -- 必报 pathspec 不匹配）
 	Skip   int      `json:"skip,omitempty"`   // log 分页跳过条数（前端滚动到底加载下一页）
+	File   string   `json:"file,omitempty"`   // show 指定文件：提交历史展开列表点击单文件看该提交中此文件的 diff
 }
 
 // wsGitBuildArgs 子命令 → git 参数与超时（PC 执行器与服务端同一张映射表口径）
@@ -402,17 +403,24 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 		}
 		return []string{"diff", r.Target + "...HEAD"}, 60 * time.Second, nil
 	case "log":
-		// 提交历史（分页：skip 起取 31 条——多 1 条仅探测 has_more，\x1f 分段防止字段内分隔符冲突）
+		// 提交历史（分页：skip 起取 31 条——多 1 条仅探测 has_more）。
+		// format 末位放 %b（多行正文，跨行无妨——它是 \x1e 前的最后字段），随 --numstat 输出
+		// 行级增删（add\tdelete\tpath）供详情卡统计与可展开文件列表；文件状态（M/A/D/R）
+		// numstat 不带，处理段另跑一条 --name-status 按 hash 合并（两 flag 同用 git 只认其一，实测）
 		skip := r.Skip
 		if skip < 0 {
 			skip = 0
 		}
-		return []string{"log", "--skip=" + strconv.Itoa(skip), "-31", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
+		return []string{"log", "--skip=" + strconv.Itoa(skip), "-31", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%b%x1e", "--numstat"}, 30 * time.Second, nil
 	case "show":
 		if strings.TrimSpace(r.Path) == "" {
 			return nil, 0, errors.New("缺少提交 hash")
 		}
-		return []string{"show", r.Path, "--no-color", "--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at"}, 30 * time.Second, nil
+		args := []string{"show", r.Path, "--no-color", "--format=__META__%H%x1f%h%x1f%s%x1f%an%x1f%at"}
+		if strings.TrimSpace(r.File) != "" { // 提交内单文件 diff
+			args = append(args, "--", r.File)
+		}
+		return args, 30 * time.Second, nil
 	case "branches":
 		// 本地 + 远端跟踪分支：审查目标可选 origin/xxx（三点 diff origin/main...HEAD 合法口径）；
 		// --format 输出全名，branches 响应段归一为短名并剔除裸 remote 容器（refs/remotes/origin）
@@ -636,7 +644,7 @@ func wsServerGit(username, content string) *wsFileResult {
 		})
 	case "log":
 		commits := wsGitLogParse(out)
-		// 分页探测：多取的第 31 条只用于 has_more 判定，截回 30 条；非首页（skip>0）首条不是 HEAD，清掉 head 标记
+		// 分页探测：多取的第 31 条只用于 has_more 判定，截回 30 条；head 标记归口：首页首条
 		hasMore := false
 		if len(commits) > 30 {
 			commits = commits[:30]
@@ -645,6 +653,25 @@ func wsServerGit(username, content string) *wsFileResult {
 		if r.Skip > 0 {
 			for _, c := range commits {
 				c["head"] = false
+			}
+		} else if len(commits) > 0 {
+			commits[0]["head"] = true
+		}
+		// 可展开文件清单：name-status 按 hash 合并进各提交（numstat 不带状态字母）。
+		// 每提交限 200 条防大提交 JSON 膨胀，截断置 fm 由前端提示"其余 N 个文件"
+		skip := r.Skip
+		if skip < 0 {
+			skip = 0
+		}
+		if stOut, serr := wsGitExec(base, []string{"log", "--skip=" + strconv.Itoa(skip), "-31", "--format=%H%x1e", "--name-status"}, 30*time.Second); serr == nil {
+			stMap := wsGitLogStatus(stOut)
+			for _, c := range commits {
+				list := stMap[c["h"].(string)]
+				if len(list) > 200 {
+					c["fm"] = true
+					list = list[:200]
+				}
+				c["files"] = list
 			}
 		}
 		// 未推送集合：origin/<branch>..HEAD 可解析则逐条标记；无上游/报错=全部未推送
@@ -710,24 +737,118 @@ func wsServerGit(username, content string) *wsFileResult {
 	}
 }
 
-// wsGitLogParse 提交历史解析：%H\x1f%h\x1f%s\x1f%an\x1f%at 每提交一行，首条标记 HEAD
+// wsGitIsHex40 40 位十六进制小写 hash 判定（提交 meta 行识别用）
+func wsGitIsHex40(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// wsGitLogParse git log 解析（format=%H\x1f%h\x1f%s\x1f%an\x1f%at\x1f%b\x1e + --numstat）。
+// 结构：%b 是 \x1e 前最后字段（多行正文跨行无妨），\x1e 后跟该提交的 numstat 行（add\tdelete\tpath）。
+// 状态机：meta 行（40hex+\x1f 开头）开新提交；其后普通行并入 body 直到 \x1e 行；
+// \x1e 后按 tab 三段解析 numstat 求和 ins/del、计文件数。body 中 "数字\t数字\tx" 形状行
+// 因仍在 inBody 阶段不会被误判（顺序保证）。
 func wsGitLogParse(out string) []map[string]interface{} {
 	commits := []map[string]interface{}{}
-	for i, ln := range strings.Split(out, "\n") {
-		ln = strings.TrimRight(ln, "\r")
+	var cur map[string]interface{}
+	inBody := false
+	ins, del, nfile := 0, 0, 0
+	flush := func() {
+		if cur != nil {
+			cur["body"] = strings.TrimRight(cur["body"].(string), "\n") // %b 尾部自带换行
+			cur["ins"] = ins
+			cur["del"] = del
+			cur["n"] = nfile
+			commits = append(commits, cur)
+		}
+		ins, del, nfile = 0, 0, 0
+	}
+	for _, raw := range strings.Split(out, "\n") {
+		ln := strings.TrimRight(raw, "\r")
+		if len(ln) >= 41 && ln[40] == '\x1f' && wsGitIsHex40(ln[:40]) { // meta 行：H\x1fsh\x1fs\x1fan\x1fat\x1f[body首行]
+			flush()
+			f := strings.SplitN(ln, "\x1f", 6)
+			if len(f) < 5 {
+				cur = nil
+				continue
+			}
+			at, _ := strconv.ParseInt(f[4], 10, 64)
+			body := ""
+			if len(f) == 6 {
+				body = f[5]
+			}
+			// %b 为空时（无正文提交，实测 git 字节流）\x1e 紧贴 meta 行尾（at\x1f\x1e），
+			// body 字段会带上 \x1e——此时本条 body 已结束，直接闭合，防后续 numstat 被并入 body；
+			// %b 非空时 %b 尾部自带 \n，\x1e 独占一行，走正常 inBody 流程
+			if strings.HasSuffix(body, "\x1e") {
+				body = strings.TrimSuffix(body, "\x1e")
+				inBody = false
+			} else {
+				inBody = true
+			}
+			cur = map[string]interface{}{"h": f[0], "sh": f[1], "msg": f[2], "an": f[3], "at": at, "body": body}
+			continue
+		}
+		if ln == "\x1e" { // body 结束标记
+			inBody = false
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		if inBody { // body 延续行（含空行，正文空行是合法内容）
+			cur["body"] = cur["body"].(string) + "\n" + ln
+			continue
+		}
+		if p := strings.SplitN(ln, "\t", 3); len(p) == 3 { // numstat 行（二进制文件为 -）
+			nfile++
+			if p[0] != "-" {
+				if v, e := strconv.Atoi(p[0]); e == nil {
+					ins += v
+				}
+			}
+			if p[1] != "-" {
+				if v, e := strconv.Atoi(p[1]); e == nil {
+					del += v
+				}
+			}
+		}
+	}
+	flush()
+	return commits
+}
+
+// wsGitLogStatus --name-status 输出解析（format=%H\x1e + 每文件状态行）：hash → [{p:路径, s:状态}]。
+// 状态行：M/A/D 为 "S\tpath"；rename 为 "R100\told\tnew"（取新路径展示，状态记 R）
+func wsGitLogStatus(out string) map[string][]map[string]string {
+	res := map[string][]map[string]string{}
+	curH := ""
+	for _, raw := range strings.Split(out, "\n") {
+		ln := strings.TrimRight(strings.TrimRight(raw, "\r"), "\x1e")
 		if ln == "" {
 			continue
 		}
-		f := strings.Split(ln, "\x1f")
-		if len(f) < 5 {
+		if wsGitIsHex40(ln) {
+			curH = ln
 			continue
 		}
-		at, _ := strconv.ParseInt(f[4], 10, 64)
-		commits = append(commits, map[string]interface{}{
-			"h": f[0], "sh": f[1], "msg": f[2], "an": f[3], "at": at, "head": i == 0,
-		})
+		if curH == "" {
+			continue
+		}
+		p := strings.Split(ln, "\t")
+		if len(p) >= 2 {
+			res[curH] = append(res[curH], map[string]string{"p": p[len(p)-1], "s": string(p[0][0])})
+		}
 	}
-	return commits
+	return res
 }
 
 // wsGitShowSplit git show 输出拆分：首行 __META__\x1f 分段（hash/短hash/主题/作者/时间），其余为 diff

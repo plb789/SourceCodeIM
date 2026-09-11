@@ -4613,7 +4613,7 @@
         // reviewCollapsed/logCollapsed=审查/提交历史折叠态；reviewH/logH=审查/历史各自固定高度（独立拖拽条调整，localStorage 持久化）
         git: {
             mode: false, loaded: false, busy: false, repo: true, branch: '', upstream: '', ahead: 0, behind: 0,
-            staged: [], changes: [], amend: false, log: null, logBusy: false, logHasMore: false,
+            staged: [], changes: [], amend: false, log: null, logBusy: false, logHasMore: false, logOpen: {},
             branches: null, reviewTarget: '', reviewBusy: false, lastReviewKey: '',
             untrackedCache: null, // 未跟踪文件清单 TTL 缓存 {t, list}：文件预览"新文件整绿"判断用，防频繁全量拉取
             reviewCollapsed: false, logCollapsed: false, reviewH: 150, logH: 220
@@ -6488,6 +6488,7 @@
             var old = el.querySelector('.ws-git-log');
             var fresh = wsGitLogSection(g);
             if (old) {
+                wsGitCommitCardHide(); // 旧分区被替换后其悬停行消失，先收起详情卡防悬空
                 // 继承旧分区的行内固定高度：异步刷新若不继承，历史区会被内容撑高、拖拽条失效，
                 // 直到点三角折叠/展开触发全量重渲染才恢复（实测踩坑）
                 fresh.style.height = old.style.height;
@@ -6564,39 +6565,238 @@
             sec.appendChild(more);
         }
         sec.addEventListener('scroll', function () { // 距底 60px 内触发加载（logBusy 防重复触发）
+            wsGitCommitCardHide(); // 滚动时悬停行已移位，详情卡立即隐藏
             if (!g.logHasMore || g.logBusy || g.log === null || !g.log.length) return;
             if (sec.scrollTop + sec.clientHeight >= sec.scrollHeight - 60) wsPanelGitLoadMore();
         }, { passive: true });
         return sec;
     }
 
-    // 时间线单行（全量渲染与滚动分页追加共用）：圆点 + 提交信息 + HEAD 分支徽标 + 未推送云标记
+    // 时间线单项（全量渲染与滚动分页追加共用，TRAE CN 同款）：
+    // 提交头行（圆点+箭头+主题+HEAD 徽标+未推送云标，悬停弹详情卡，点击展开/收起文件列表）+ 可展开文件区
     function wsGitLogRow(g, c) {
-        var row = document.createElement('div');
-        row.className = 'ws-git-log-row' + (c.head ? ' head' : '');
-        row.title = c.msg + '\n' + c.an + ' · ' + wsGitFmtTime(c.at) + (c.un ? '\n未推送到远程' : '');
+        var item = document.createElement('div');
+        item.className = 'ws-git-log-item';
+        var head = document.createElement('div');
+        head.className = 'ws-git-log-row' + (c.head ? ' head' : '');
+        var files = c.files || [];
+        var arrow = document.createElement('span');
+        arrow.className = 'ws-git-log-arrow';
+        arrow.textContent = files.length ? '▸' : '';
         var dot = document.createElement('span');
         dot.className = 'ws-git-log-dot';
         var main = document.createElement('span');
         main.className = 'ws-git-log-msg';
         main.textContent = c.msg;
-        row.appendChild(dot);
-        row.appendChild(main);
+        head.appendChild(dot);
+        head.appendChild(arrow);
+        head.appendChild(main);
         if (c.head && g.branch) {
             var bb = document.createElement('span');
             bb.className = 'ws-git-log-branch';
             bb.textContent = g.branch;
-            row.appendChild(bb);
+            head.appendChild(bb);
         }
         if (c.un) {
             var cl = document.createElement('span');
             cl.className = 'ws-git-log-un';
             cl.textContent = '☁';
             cl.title = '未推送';
-            row.appendChild(cl);
+            head.appendChild(cl);
         }
-        row.addEventListener('click', function () { wsPanelGitOpenCommit(c); });
-        return row;
+        item.appendChild(head);
+        // 可展开文件列表（TRAE CN 同款）：状态/增删数据随 log 一次带回，展开零请求；点文件看该提交内此文件 diff
+        var box = document.createElement('div');
+        box.className = 'ws-git-log-files';
+        box.style.display = 'none';
+        files.forEach(function (f) {
+            var fr = document.createElement('div');
+            fr.className = 'ws-git-log-file';
+            var badge = document.createElement('span');
+            badge.className = 'ws-git-file-badge';
+            badge.textContent = wsGitFileBadge(f.p);
+            var nm = document.createElement('span');
+            nm.className = 'ws-git-file-name';
+            nm.textContent = f.p.replace(/^.*[\\/]/, '');
+            var di = f.p.lastIndexOf('/');
+            var dir = document.createElement('span');
+            dir.className = 'ws-git-file-dir';
+            dir.textContent = di >= 0 ? f.p.slice(0, di) : '';
+            fr.title = f.p;
+            var mk = document.createElement('span');
+            mk.className = 'ws-git-file-mark mk-' + String(f.s || 'M').toLowerCase();
+            mk.textContent = f.s || 'M';
+            fr.appendChild(badge);
+            fr.appendChild(nm);
+            fr.appendChild(dir);
+            fr.appendChild(mk);
+            fr.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                wsPanelGitOpenCommitFile(c, f.p);
+            });
+            box.appendChild(fr);
+        });
+        if (c.fm) { // 大提交截断提示（服务端每提交限 200 文件防 JSON 膨胀）
+            var fm = document.createElement('div');
+            fm.className = 'ws-git-log-file fm-more';
+            fm.textContent = '文件过多，仅显示前 200 个';
+            box.appendChild(fm);
+        }
+        item.appendChild(box);
+        var setOpen = function (on) { // 展开状态记在 g.logOpen（hash→bool），全量重渲染/分页追加后保持
+            g.logOpen[c.h] = on;
+            item.classList.toggle('open', on);
+            box.style.display = on ? '' : 'none';
+            if (files.length) arrow.textContent = on ? '▾' : '▸';
+        };
+        head.addEventListener('click', function () { setOpen(!g.logOpen[c.h]); });
+        if (g.logOpen[c.h]) setOpen(true);
+        head.addEventListener('mouseenter', function () { wsGitCommitCardShow(head, c); });
+        head.addEventListener('mouseleave', wsGitCommitCardHide);
+        return item;
+    }
+
+    // 提交详情悬浮卡（TRAE CN 同款）：悬停提交行 400ms 弹出——作者+相对/绝对时间、完整提交信息（标题+正文）、
+    // 增删统计、短 hash 复制。单例复用防频繁创建；移出行 250ms 后隐藏（允许移入卡内），卡自身移出立即隐藏。
+    // 内容全部 DOM+textContent 构建（提交信息来自 git 任意输入，防注入）
+    var wsGitCardEl = null, wsGitCardShowTimer = null, wsGitCardHideTimer = null;
+    function wsGitCommitCardShow(anchor, c) {
+        clearTimeout(wsGitCardHideTimer);
+        clearTimeout(wsGitCardShowTimer);
+        wsGitCardShowTimer = setTimeout(function () {
+            if (!wsGitCardEl) {
+                wsGitCardEl = document.createElement('div');
+                wsGitCardEl.className = 'ws-git-commit-card';
+                wsGitCardEl.addEventListener('mouseenter', function () { clearTimeout(wsGitCardHideTimer); });
+                wsGitCardEl.addEventListener('mouseleave', wsGitCommitCardHide);
+                document.body.appendChild(wsGitCardEl);
+                if (window._osbInit) window._osbInit(wsGitCardEl); // 卡内容超高可滚动（原生滚动条全局隐藏，统一自绘悬浮滑块）
+            }
+            var card = wsGitCardEl;
+            card.textContent = '';
+            var au = document.createElement('div');
+            au.className = 'wc-author';
+            var av = document.createElement('span');
+            av.className = 'wc-avatar';
+            av.textContent = (c.an || '?').slice(0, 1).toUpperCase();
+            var an = document.createElement('b');
+            an.textContent = c.an || '';
+            var tm = document.createElement('span');
+            tm.className = 'wc-time';
+            tm.textContent = wsGitRelTime(c.at) + ' (' + wsGitAbsTime(c.at) + ')';
+            au.appendChild(av);
+            au.appendChild(an);
+            au.appendChild(tm);
+            card.appendChild(au);
+            var ms = document.createElement('div');
+            ms.className = 'wc-msg';
+            ms.textContent = c.msg || '';
+            card.appendChild(ms);
+            if (c.body) { // 提交正文（git %b，可为空）
+                var bd = document.createElement('div');
+                bd.className = 'wc-body';
+                bd.textContent = c.body;
+                card.appendChild(bd);
+            }
+            // 统计行：仅有文件数/增删数据时显示（PC 本地执行器旧版不带 c.n/c.files，此时跳过，
+            // 不能引用 files——本函数在 wsGitLogRow 外，files 不在作用域，实测 ReferenceError 导致卡中断构建永不显示）
+            if (c.n != null || c.files) {
+                var st = document.createElement('div');
+                st.className = 'wc-stat';
+                var n = c.n != null ? c.n : (c.files || []).length;
+                st.appendChild(document.createTextNode('已更改 ' + n + ' 个文件，'));
+                var ins = document.createElement('span');
+                ins.className = 'wc-ins';
+                ins.textContent = (c.ins || 0) + ' 行插入(+)';
+                var dl = document.createElement('span');
+                dl.className = 'wc-del';
+                dl.textContent = (c.del || 0) + ' 行删除(-)';
+                st.appendChild(ins);
+                st.appendChild(document.createTextNode('，'));
+                st.appendChild(dl);
+                card.appendChild(st);
+            }
+            var hr = document.createElement('div');
+            hr.className = 'wc-hash';
+            var cd = document.createElement('code');
+            cd.textContent = c.sh || (c.h || '').slice(0, 7);
+            var cp = document.createElement('button');
+            cp.type = 'button';
+            cp.textContent = '复制 hash';
+            cp.addEventListener('click', function () {
+                navigator.clipboard.writeText(c.h || '').then(function () { showToast('已复制提交 hash'); }, function () { showToast('复制失败'); });
+            });
+            hr.appendChild(cd);
+            hr.appendChild(cp);
+            card.appendChild(hr);
+            card.style.display = 'block';
+            // 定位：行右侧（面板外空档），右侧放不下换左侧；垂直夹取在视口内
+            var r = anchor.getBoundingClientRect();
+            var cw = 380, ch = card.offsetHeight;
+            var left = r.right + 10;
+            if (left + cw > window.innerWidth - 8) left = Math.max(8, r.left - cw - 10);
+            if (left + cw > window.innerWidth - 8) left = window.innerWidth - cw - 8;
+            var top = Math.min(Math.max(8, r.top - 10), Math.max(8, window.innerHeight - ch - 8));
+            card.style.left = left + 'px';
+            card.style.top = top + 'px';
+        }, 400);
+    }
+    function wsGitCommitCardHide() {
+        clearTimeout(wsGitCardShowTimer);
+        clearTimeout(wsGitCardHideTimer);
+        wsGitCardHideTimer = setTimeout(function () {
+            if (wsGitCardEl) wsGitCardEl.style.display = 'none';
+        }, 250);
+    }
+
+    // 相对时间（详情卡用，TRAE CN 同款）：刚刚/N 分钟前/N 小时前/N 天前/日期
+    function wsGitRelTime(at) {
+        var diff = Date.now() - (at || 0) * 1000;
+        if (diff < 60e3) return '刚刚';
+        if (diff < 3600e3) return Math.floor(diff / 60e3) + ' 分钟前';
+        if (diff < 86400e3) return Math.floor(diff / 3600e3) + ' 小时前';
+        if (diff < 7 * 86400e3) return Math.floor(diff / 86400e3) + ' 天前';
+        return wsGitAbsTime(at);
+    }
+
+    // 绝对时间（详情卡用）：2026年9月11日 09:03
+    function wsGitAbsTime(at) {
+        var d = new Date((at || 0) * 1000);
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    // 文件语言短徽标（TRAE CN 同款风格：JS/TS/GO/MD/#…），未知扩展名显示占位点
+    function wsGitFileBadge(path) {
+        var name = path.replace(/^.*[\\/]/, '');
+        var ext = name.indexOf('.') >= 0 ? name.split('.').pop().toLowerCase() : '';
+        var map = { js: 'JS', mjs: 'JS', cjs: 'JS', ts: 'TS', jsx: 'JSX', tsx: 'TSX', go: 'GO', md: 'MD', json: '{}', html: '<>', htm: '<>', css: '#', scss: '#', less: '#', py: 'PY', java: 'JA', c: 'C', h: 'H', cpp: 'C+', cc: 'C+', hpp: 'C+', cs: 'C#', rs: 'RS', php: 'PHP', rb: 'RB', sh: 'SH', bat: 'BAT', cmd: 'BAT', ps1: 'PS', yaml: 'Y', yml: 'Y', toml: 'T', sql: 'SQL', vue: 'VUE', xml: 'XML', svg: 'SVG', lua: 'LUA', swift: 'SW', kt: 'KT', txt: 'T', log: 'T' };
+        return map[ext] || '•';
+    }
+
+    // 点击提交展开列表中的文件：打开该提交内单文件 diff 标签（git show <hash> -- <path>）
+    function wsPanelGitOpenCommitFile(c, p) {
+        var sh = c.sh || (c.h || '').slice(0, 7);
+        var key = 'cfile:' + c.h + ':' + p;
+        wsPanel.viewEl.classList.remove('hidden');
+        if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
+        wsPanel.tabs[key] = { name: '提交: ' + sh + ' · ' + p.replace(/^.*[\\/]/, ''), commitView: true, diffPath: sh, loading: true }; // 重开即刷新
+        wsPanelActivate(key);
+        wsPanelSyncViewCol();
+        wsPanelGitReq({ sub: 'show', path: c.h, file: p }).then(function (d) {
+            var t = wsPanel.tabs[key];
+            if (!t) return;
+            t.loading = false;
+            t.commitMeta = d.meta || {};
+            t.diffText = d.diff || '';
+            if (wsPanel.activeTab === key) wsPanelRenderTab();
+        }).catch(function (err) {
+            var t = wsPanel.tabs[key];
+            if (!t) return;
+            t.loading = false;
+            t.error = err && err.message || String(err);
+            if (wsPanel.activeTab === key) wsPanelRenderTab();
+        });
     }
 
     // 点击时间线条目：打开提交详情标签（元信息头 + 全量 diff）

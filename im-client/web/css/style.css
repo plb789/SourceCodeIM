@@ -5181,6 +5181,211 @@ html.m #list-panel.list-collapsed {
     color: var(--text-secondary, #999);
 }
 
+/* 提交头行展开箭头：有文件列表才显示，展开时旋转（由 JS 切换字符 ▸/▾） */
+.ws-git-log-arrow {
+    flex-shrink: 0;
+    width: 10px;
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    text-align: center;
+}
+
+/* 可展开文件列表（TRAE CN 同款）：缩进虚线引导，文件行=语言徽标+文件名+目录+状态标 */
+.ws-git-log-files {
+    margin: 0 10px 4px 30px;
+    padding-left: 9px;
+    border-left: 1px dashed var(--border, #d9d9d9);
+}
+
+.ws-git-log-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 3px 6px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11.5px;
+}
+
+.ws-git-log-file:hover {
+    background: color-mix(in srgb, var(--primary, #07c160) 8%, transparent);
+}
+
+/* 语言短徽标：主题色淡底，与 TRAE CN 同款短标签（JS/GO/#…） */
+.ws-git-file-badge {
+    flex-shrink: 0;
+    min-width: 20px;
+    text-align: center;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary, #07c160) 14%, transparent);
+    color: var(--primary, #07c160);
+}
+
+.ws-git-file-name {
+    flex-shrink: 0;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text, #333);
+}
+
+.ws-git-file-dir {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary, #999);
+    font-size: 10.5px;
+}
+
+/* 变更状态标：M 修改 / A 新增=绿，D 删除=红，R 改名=蓝（git 惯例配色） */
+.ws-git-file-mark {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.ws-git-file-mark.mk-m,
+.ws-git-file-mark.mk-a {
+    color: #29a345;
+}
+
+.ws-git-file-mark.mk-d {
+    color: #e05252;
+}
+
+.ws-git-file-mark.mk-r,
+.ws-git-file-mark.mk-c {
+    color: #3b82d6;
+}
+
+.ws-git-log-file.fm-more {
+    cursor: default;
+    color: var(--text-secondary, #999);
+}
+
+.ws-git-log-file.fm-more:hover {
+    background: none;
+}
+
+/* 提交详情悬浮卡（TRAE CN 同款）：悬停提交行弹出，fixed 定位在行右侧（面板外空档） */
+.ws-git-commit-card {
+    display: none;
+    position: fixed;
+    z-index: 10020;
+    width: 380px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border, #e5e5e5);
+    background: var(--panel-bg, #fff);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+    font-size: 12px;
+    color: var(--text, #333);
+}
+
+.ws-git-commit-card .wc-author {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.ws-git-commit-card .wc-avatar {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--primary, #07c160);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ws-git-commit-card .wc-author b {
+    font-size: 12.5px;
+}
+
+.ws-git-commit-card .wc-time {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+}
+
+.ws-git-commit-card .wc-msg {
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.ws-git-commit-card .wc-body {
+    margin-top: 5px;
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--text, #333) 5%, transparent);
+    color: var(--text-secondary, #666);
+    font-size: 11.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ws-git-commit-card .wc-stat {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--border, #ececec);
+    color: var(--text-secondary, #666);
+}
+
+.ws-git-commit-card .wc-ins {
+    color: #29a345;
+}
+
+.ws-git-commit-card .wc-del {
+    color: #e05252;
+}
+
+.ws-git-commit-card .wc-hash {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.ws-git-commit-card .wc-hash code {
+    font-size: 11.5px;
+    color: var(--text-secondary, #666);
+}
+
+.ws-git-commit-card .wc-hash button {
+    border: 1px solid var(--border, #d9d9d9);
+    background: none;
+    color: var(--primary, #07c160);
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.ws-git-commit-card .wc-hash button:hover {
+    background: color-mix(in srgb, var(--primary, #07c160) 10%, transparent);
+}
+
 /* 提交详情（预览列）：diff 上方元信息头 */
 .ws-commit-meta {
     padding: 10px 12px;

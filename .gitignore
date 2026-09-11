@@ -1,5 +1,7 @@
 # 你要排除的目录（写在这里）
 Redis-x64-5.0.14.1/
+.tmp-cdp/
+.tmp-cdp-profile/
 *.exe
 *.zip
 *.gob
