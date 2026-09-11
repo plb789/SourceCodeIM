@@ -15,7 +15,7 @@
             document.documentElement.classList.add('pc-titlebar');
         }
     </script>
-    <link rel="stylesheet" href="css/style.css?v=1.97">
+    <link rel="stylesheet" href="css/style.css?v=1.98">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -33,6 +33,12 @@
             <img id="titlebar-avatar" class="titlebar-avatar" alt="头像" style="display: none;">
             <span id="titlebar-avatar-ph" class="titlebar-avatar-ph"></span>
             <span id="titlebar-username" class="titlebar-username"></span>
+        </div>
+        <!-- 阶段七十八：AI 积分（TRAE CN 同款）——⚡ 闪电（与 AI 回复操作栏 tokens 前同款图标）+ 余额数字，
+             服务端归口（登录响应/AI 结束帧下发），仅 PC 端标题栏展示；悬停提示扣分规则 -->
+        <div id="titlebar-points" class="titlebar-points" style="display: none;">
+            <span class="titlebar-points-icon">⚡</span>
+            <span id="titlebar-points-num" class="titlebar-points-num">0</span>
         </div>
     </div>
     <!-- 登录视图（阶段四十七：参考图风格左右分栏卡片，主题色跟随现有设定；旧单卡片结构注释保留）
@@ -568,6 +574,6 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.60"></script>
+    <script src="js/chat.js?v=2.61"></script>
 </body>
 </html>

@@ -8044,3 +8044,33 @@ html.m #friend-menu {
 .pc-titlebar .nav-rail .nav-top {
     display: none;
 }
+
+/* ===== 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字） ===== */
+/* 初始隐藏（style 内联），登录响应携带 points 后由 JS 显示；积分数字计算/扣减全部服务端归口 */
+.pc-titlebar .titlebar-points {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: default;
+    transition: background 0.15s;
+}
+
+.pc-titlebar .titlebar-points:hover {
+    background: color-mix(in srgb, var(--titlebar-fg) 10%, transparent);
+}
+
+/* 闪电图标与 AI 回复操作栏 tokens 前的 ⚡ 同源（文本 ⚡），金色为积分功能色 */
+.pc-titlebar .titlebar-points-icon {
+    font-size: 12px;
+    color: #e8a33d;
+}
+
+.pc-titlebar .titlebar-points-num {
+    color: var(--titlebar-fg);
+    font-weight: 600;
+}

@@ -680,6 +680,8 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 			"region":    user.Region,
 			"signature": user.Signature,
 		},
+		// 阶段七十八：下发 AI 积分余额（PC 端标题栏 ⚡ 积分显示数据源，服务端归口）
+		"points": user.Points,
 	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,

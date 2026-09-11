@@ -116,6 +116,10 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段八十一：Agent 运行参数设置（max_steps 后台热更新，保存即生效+落库重启不丢）
 	http.HandleFunc("GET /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsGet))
 	http.HandleFunc("PUT /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsSave))
+
+	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
+	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))
+	http.HandleFunc("PUT /admin/api/users/{username}/points", s.adminGuard(s.handleAdminUserPointsPut))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====

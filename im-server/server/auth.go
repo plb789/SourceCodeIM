@@ -59,6 +59,7 @@ func registerUser(username, password string) (*model.User, error) {
 	user := &model.User{
 		Username: username,
 		Password: hashPassword(password),
+		Points:   100, // 阶段七十八：新用户注册赠送 100 积分（列默认值兜底，此处显式赋值防 GORM 零值插 0）
 	}
 	if err := store.DB.Create(user).Error; err != nil {
 		return nil, err

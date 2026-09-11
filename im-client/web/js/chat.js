@@ -30,6 +30,9 @@
     var titlebarAvatarEl = document.getElementById('titlebar-avatar');
     var titlebarAvatarPhEl = document.getElementById('titlebar-avatar-ph');
     var titlebarUsernameEl = document.getElementById('titlebar-username');
+    // 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字，服务端归口下发，前端不做任何积分计算）
+    var titlebarPointsEl = document.getElementById('titlebar-points');
+    var titlebarPointsNumEl = document.getElementById('titlebar-points-num');
     var avatarFileEl = document.getElementById('avatar-file');
 
     // ===== 阶段三十：个人资料面板元素（微信式右侧滑出，点击自己头像打开） =====
@@ -387,6 +390,14 @@
     navAvatarPhEl.addEventListener('click', openProfilePanel);
     // 阶段七十八：标题栏用户区（头像+账号）整块可点，行为与 nav-rail 顶部头像一致（CSS no-drag 保证可点击）
     titlebarUserEl.addEventListener('click', openProfilePanel);
+
+    // ===== 阶段七十八：标题栏 AI 积分显示（TRAE CN 同款）=====
+    // 服务端归口：余额仅来自登录响应/AI 结束帧下发，前端只做展示，不做任何扣减计算
+    function setPointsBalance(n) {
+        titlebarPointsNumEl.textContent = String(n);
+        titlebarPointsEl.style.display = ''; // CSS 默认 display:none，清空内联后按样式表 flex 显示
+        titlebarPointsEl.title = 'AI 积分：每 1000 tokens 消耗 1 积分';
+    }
 
     // ===== 头像降级修复：资料面板大头像统一入口 =====
     function setProfileAvatar(url) {
@@ -2122,6 +2133,10 @@
                 if (loginInfo && loginInfo.chunk_size > 0) {
                     CHUNK_SIZE = loginInfo.chunk_size;
                 }
+                // 阶段七十八：登录响应携带 AI 积分余额（服务端归口），标题栏 ⚡ 积分显示
+                if (loginInfo && typeof loginInfo.points === 'number') {
+                    setPointsBalance(loginInfo.points);
+                }
             } catch (e) {}
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
@@ -2884,6 +2899,8 @@
     IMSocket.on(MSG.AI_STREAM_END, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return;
         hideAIThinking(msg.from_user); // 失败/降级路径同样收起"思考中"指示
+        // 阶段七十八：结束帧携带扣分后积分余额（服务端归口，仅成功扣分帧有值）→ 标题栏实时刷新
+        if (msg.points_balance != null) setPointsBalance(msg.points_balance);
         // 阶段七十一：结束帧同口径按会话归属过滤（与本端查看会话不符不渲染，回复已落库切回经历史可见）
         if ((msg.session_id || 0) !== (aiViewSession[msg.from_user] || 0)) return;
         var st = aiStreams[msg.stream_id];

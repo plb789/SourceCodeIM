@@ -18,6 +18,9 @@ type User struct {
 	Role       int8      `gorm:"column:role;type:tinyint;default:0" json:"role"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	// 阶段七十八：AI 积分（TRAE CN 同款问答积分）——按 Token 消耗折算扣除（1000 tokens = 1 积分，向上取整），
+	// 余额不足拦截 AI 提问；列默认值 100：AutoMigrate 加列时存量用户自动补 100，注册逻辑另显式赋值
+	Points int `gorm:"column:points;type:int;default:100" json:"points"`
 }
 
 // TableName 指定表名
