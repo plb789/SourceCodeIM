@@ -6059,13 +6059,18 @@
                 // 对方快照：拖拽过程中恒不动；对方折叠时不占高度，本区可用上限相应放开
                 var otherH = which === 'review' ? (g.logCollapsed ? 0 : g.logH) : (g.reviewCollapsed ? 0 : g.reviewH);
                 var maxSelf = el.clientHeight - 12 - bodyMin - otherH;
+                // 拖拽目标实时从 DOM 查（不用闭包快照）：提交历史分区会被 wsPanelGitLoadLog 异步
+                // replaceWith 原位刷新，闭包捕获的旧元素已脱离 DOM——拖它高度纹丝不动，
+                // 直到点三角全量重渲染重建闭包才恢复（实测踩坑根因）
+                var sel = which === 'review' ? '.ws-git-review' : '.ws-git-log';
                 bar.classList.add('dragging');
                 document.body.style.userSelect = 'none'; // 拖拽期间禁用文本选择（与输入区拖拽条同款）
                 function onMove(ev) {
                     var nh = Math.max(minSelf, Math.min(startH + (startY - ev.clientY), Math.max(minSelf, maxSelf)));
                     if (which === 'review') g.reviewH = Math.round(nh);
                     else g.logH = Math.round(nh);
-                    (which === 'review' ? reviewSec : logSec).style.height = nh + 'px';
+                    var target = el.querySelector(sel);
+                    if (target) target.style.height = nh + 'px';
                     saveSplit();
                 }
                 function onUp() {
