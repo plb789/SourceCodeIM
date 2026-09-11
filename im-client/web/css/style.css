@@ -5098,10 +5098,14 @@ html.m #list-panel.list-collapsed {
     flex-shrink: 0;
 }
 
-/* 提交历史时间线：固定高度（两处拖拽条调整，行内样式），超出即内部滚动（自绘滑块） */
+/* 提交历史时间线：固定高度（两处拖拽条调整，行内样式），超出即内部滚动。
+   用局部常驻细滚动条（agent-ws-dirs 同款先例）：内容溢出即显示、可点击拖动，
+   不走悬停浮现的自绘滑块（该区已不挂 _osbInit，避免双滚动条） */
 .ws-git-log {
     flex-shrink: 0;
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.55) transparent; /* 与自绘滑块同色，跟随明暗主题 */
     border-top: 1px solid var(--border, #ececec);
     padding: 2px 0 8px;
 }

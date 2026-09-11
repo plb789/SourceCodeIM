@@ -2736,6 +2736,20 @@
         // 阶段七十一：流帧携带会话归属（服务端落库同源），与本端查看会话不符（他端在其他会话发起/
         // 本端已切走）则不渲染（回复落库按会话归位，切回该会话经历史可见；旧服务端无 sid 字段=0 兼容）
         if ((msg.session_id || 0) !== (aiViewSession[msg.from_user] || 0)) return;
+        // 阶段八十四：历史压缩提示帧（remark=compress）——TRAE 同款"历史对话压缩中"，
+        // 较早历史被服务端 LLM 摘要归并时的实时状态行，与联网搜索行同款交互（不进正文不落库）
+        if (msg.remark === 'compress') {
+            hideAIThinking(msg.from_user);
+            removeAISuggestRow();
+            var stc = aiStreams[msg.stream_id];
+            if (!stc) {
+                stc = createStreamBubble(msg.from_user, msg.stream_id);
+                aiStreams[msg.stream_id] = stc;
+                updateSendBtnState(); // 流式输出即将开始，保持"停止"态一致
+            }
+            insertAICompressRow(stc);
+            return;
+        }
         // 阶段六十九：工具状态帧（remark=tool，content 为 JSON）——普通聊天联网搜索过程行，
         // 渲染在回复气泡正文上方，不进打字机正文
         if (msg.remark === 'tool') {
@@ -2790,6 +2804,31 @@
         row.appendChild(icon);
         row.appendChild(label);
         bubble.insertBefore(row, st.textEl); // 正文上方，随打字机输出保持在搜索行之下
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+
+    // 阶段八十四：在流式气泡正文上方插入「历史对话压缩中」状态行（TRAE 同款；复用联网搜索行
+    // 的主题样式类，跟随主题色变化；每次回复至多一条，压缩完成后保留作过程留痕，不落库）
+    function insertAICompressRow(st) {
+        var bubble = st.textEl.parentElement;
+        if (!bubble || st.compressRow) return; // 已插入过则跳过（一次回复仅压缩一次）
+        var row = document.createElement('div');
+        row.className = 'ai-search-row';
+        st.compressRow = row;
+        var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('viewBox', '0 0 24 24');
+        icon.setAttribute('width', '14');
+        icon.setAttribute('height', '14');
+        var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('fill', 'currentColor');
+        path.setAttribute('d', 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8A5.87 5.87 0 0 1 6 12c0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z');
+        icon.appendChild(path);
+        var label = document.createElement('span');
+        label.className = 'ai-search-label';
+        label.textContent = '历史对话压缩中…（较早记录正在归并为摘要以提升响应速度）';
+        row.appendChild(icon);
+        row.appendChild(label);
+        bubble.insertBefore(row, st.textEl); // 正文上方，压缩完成后保留为过程留痕
         messageList.scrollTop = messageList.scrollHeight;
     }
 
@@ -6091,7 +6130,7 @@
         el.appendChild(bottom);
         if (g.reviewCollapsed) drag.style.display = 'none'; // 审查收起时无可调对象
         if (g.logCollapsed) drag2.style.display = 'none'; // 历史收起时无可调对象
-        if (window._osbInit) { window._osbInit(body); window._osbInit(reviewSec); window._osbInit(logSec); } // 各分区自绘滚动条
+        if (window._osbInit) { window._osbInit(body); window._osbInit(reviewSec); } // 各分区自绘滚动条（历史区改用常驻细滚动条，见 .ws-git-log）
     }
 
     // 折叠分区头（Trae CN 同款）：▾ 三角 + 标题，点击收起/展开；collapsed 时三角右转
@@ -6445,7 +6484,7 @@
                 var b = el.querySelector('.ws-git-bottom');
                 (b || el).appendChild(fresh);
             }
-            if (window._osbInit) window._osbInit(fresh); // 时间线内部滚动自绘滑块
+            // 历史区不挂自绘滑块（常驻细滚动条见 .ws-git-log），刷新替换后无需重挂
         });
     }
 
@@ -7939,6 +7978,13 @@
                 break;
             case 'thought': addAgentThought(st, ev.text); break;
             case 'text_delta': case 'thought_delta': agentStreamText(st, ev.text); break; // 阶段六十二：流式打字
+            case 'history_compress':
+                // 阶段八十四：TRAE 同款"历史对话压缩中"——长任务上下文自动瘦身（较早已完成工具轮归并为摘要）；
+                // start=压缩开始提示，done=完成（完成不重复上屏，避免思考区出现两条）
+                if (!ev.phase || ev.phase === 'start') {
+                    addAgentThought(st, '历史对话压缩中…（较早执行记录正在归并为摘要，节省 token 并加速响应）');
+                }
+                break;
             case 'tool_start':
                 agentFinalizeText(st, true); // 流式文本归入"思考过程"折叠块（Trae 同款：出工具即收思考）
                 addAgentTool(st, ev);

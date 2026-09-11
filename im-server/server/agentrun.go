@@ -62,7 +62,15 @@ const (
 	agentBgCmdTimeout      = 30 * time.Minute // 转后台后的兜底强杀超时（前台仍按命令自身 timeout）
 
 	agentChangeMaxFiles = 200 // 阶段七十七：递归删目录时逐文件快照上限（防超大目录拖垮任务，超出部分不记变更不可撤销）
+
+	// 阶段八十四：任务循环历史压缩保留轮数（最近 N 个完整"模型决策+工具执行"轮保留原文，
+	// 更早轮次 LLM 摘要归并；阈值与 AI 问答共用 aiCompressThreshold，config.yaml ai.compress_threshold_tokens）
+	agentCompressKeepTurns = 3
 )
+
+// agentToolResultMaxChars 阶段八十四：工具结果写入模型上下文的字符上限
+// （0=默认 8000，负数=不截断；仅约束进模型的历史，前端执行控制台与留痕仍显示全量）
+var agentToolResultMaxChars = 8000
 
 // agentGrepSkipDirs grep 遍历跳过的目录名（依赖/构建产物/版本库等非源码大目录）
 var agentGrepSkipDirs = map[string]bool{
@@ -269,6 +277,12 @@ func InitAgent(cfg *config.Config) {
 	}
 	agentAutoWrite = cfg.AI.Agent.AutoWrite
 	agentAutoCmds = cfg.AI.Agent.AutoCommands
+	// 阶段八十四：工具结果入模型上下文的字符上限（0=默认 8000，负数=不截断；前端控制台仍显示全量）
+	if cfg.AI.Agent.ToolResultMaxChars > 0 {
+		agentToolResultMaxChars = cfg.AI.Agent.ToolResultMaxChars
+	} else if cfg.AI.Agent.ToolResultMaxChars < 0 {
+		agentToolResultMaxChars = -1
+	}
 	agentPcExec.Store(cfg.AI.Agent.PcExecutor)
 	// 阶段六十七：任务队列参数归口（并发上限 0=1，排队上限 0=5）
 	if cfg.AI.Agent.Concurrency > 0 {
@@ -2672,6 +2686,10 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		t.Status = "running"
 		t.mu.Unlock()
 
+		// 阶段八十四：TRAE 同款历史压缩——上下文估算 token 超阈值时把最早若干完整工具轮
+		// LLM 摘要归并（assistant+tool 配对永不拆分），Recent 轮保留原文；事件流实时提示前端
+		msgs = s.agentCompressTaskHistory(t, msgs)
+
 		askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
 		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
@@ -2774,8 +2792,9 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				s.agentStepTrace(t, toolName, params, result, !strings.HasPrefix(result, "错误"), env, "none", time.Since(start).Milliseconds())
 			}
 
-			// tool 结果消息入历史（role=tool + tool_call_id，OpenAI 兼容格式）
-			msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+			// tool 结果消息入历史（role=tool + tool_call_id，OpenAI 兼容格式）；
+			// 阶段八十四：超长结果先截断再入模型上下文（前端 tool_result 事件与留痕仍是全量）
+			msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(result), ToolCallID: tc.ID, Name: toolName})
 		}
 
 		// 步数限制：防模型死循环（阶段八十一：agentMaxSteps 为 atomic，后台热改后运行中任务下一步即按新值判定）
@@ -2785,6 +2804,98 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			return
 		}
 	}
+}
+
+// agentTruncateToolResult 阶段八十四：工具结果入模型上下文前的字符截断归口——
+// 保留头 2/3 + 尾 1/3（尾部常含最终状态/错误信息，对模型决策更关键），中段以省略标注替代。
+// 仅约束进模型的历史；前端执行控制台（tool_result 事件）与步骤留痕仍是全量。
+// run_command 已有 agentCmdOutMaxChars 截断（其标注位于结果末尾，本函数尾部保留天然保护其完整性）
+func agentTruncateToolResult(s string) string {
+	limit := agentToolResultMaxChars
+	if limit < 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	head := limit * 2 / 3
+	tail := (limit - head) / 2
+	omit := len(runes) - head - tail
+	return string(runes[:head]) +
+		fmt.Sprintf("\n…[中段省略 %d 字符，全量输出见执行控制台/留痕]…\n", omit) +
+		string(runes[len(runes)-tail:])
+}
+
+// agentCompressBoundary 阶段八十四：计算任务历史压缩边界——返回最近第 keepTurns 个完整
+// 工具轮（assistant+tool_calls 起）的消息下标，msgs[start:] 保留原文，msgs[1:start] 可整段摘要。
+// 在 assistant(含 tool_calls) 处切割保证其与后续 tool 结果（tool_call_id 配对）要么全在保留区、
+// 要么全在压缩区，OpenAI 兼容格式不会因拆对而报错；start<=1 表示无可压缩轮次
+func agentCompressBoundary(msgs []aiChatMessage, keepTurns int) int {
+	starts := make([]int, 0, 8)
+	for i := 2; i < len(msgs); i++ { // 0=system 1=任务目标（goal），均不参与压缩
+		if msgs[i].Role == "assistant" && len(msgs[i].ToolCalls) > 0 {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) <= keepTurns {
+		return 0
+	}
+	return starts[len(starts)-keepTurns]
+}
+
+// agentCompressTaskHistory 阶段八十四：Agent 任务循环历史压缩归口（每轮模型调用前执行）。
+// 长任务 msgs 无界增长且每轮全量重发，token 消耗随步数近似平方级膨胀——超阈值时把最早若干
+// 完整工具轮 LLM 摘要成一条 user 消息（旧摘要文本也在转录内，天然增量合并），最近
+// agentCompressKeepTurns 轮保留原文。摘要失败时若未超 3 倍阈值则本轮跳过（下轮重试），
+// 超 3 倍则紧急截断（弃旧轮+省略声明）防"上下文超长"直接压死任务
+func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []aiChatMessage {
+	if aiCompressThreshold <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {
+		return msgs
+	}
+	if aiMsgsEstimateTokens(msgs) < aiCompressThreshold {
+		return msgs
+	}
+	bnd := agentCompressBoundary(msgs, agentCompressKeepTurns)
+	if bnd <= 2 {
+		return msgs // 不足可压缩轮次（保留区外没有完整轮）
+	}
+	before := len(msgs)
+	est := aiMsgsEstimateTokens(msgs)
+	// 压缩开始先推事件（TRAE 同款"历史对话压缩中"实时提示，摘要期间用户可见进度）
+	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "start", "before": before, "est_tokens": est})
+	// 转录压缩区（跳过 0=system；1=goal 亦纳入转录，摘要需原始目标锚定语义）
+	segs := make([]string, 0, bnd-1)
+	for i := 1; i < bnd; i++ {
+		role := "用户"
+		switch msgs[i].Role {
+		case "assistant":
+			role = "模型"
+		case "tool":
+			role = "工具结果(" + msgs[i].Name + ")"
+		}
+		segs = append(segs, role+"："+aiChatMsgText(msgs[i]))
+	}
+	summary := aiCompressSummarize(nil, t.Agent, "", segs)
+	if summary == "" {
+		if est < aiCompressThreshold*3 {
+			return msgs // 瞬时失败：本轮维持全量，下轮重试
+		}
+		// 溢出紧急截断：不再调 LLM，直接弃旧轮留声明，任务保命优先
+		out := make([]aiChatMessage, 0, len(msgs)-bnd+3)
+		out = append(out, msgs[0], msgs[1],
+			aiChatMessage{Role: "user", Content: fmt.Sprintf("[系统提示] 更早的 %d 条执行记录因上下文超长被省略，请基于下方近期记录继续完成任务。", bnd-1)})
+		out = append(out, msgs[bnd:]...)
+		logger.Info("Agent 任务 %s 历史压缩失败，紧急截断 %d→%d 条", t.ID, before, len(out))
+		return out
+	}
+	out := make([]aiChatMessage, 0, len(msgs)-bnd+3)
+	out = append(out, msgs[0], msgs[1],
+		aiChatMessage{Role: "user", Content: "[前序执行历史摘要（较早工具轮已压缩归并）]\n" + summary})
+	out = append(out, msgs[bnd:]...)
+	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "done", "before": before, "after": len(out), "est_tokens": aiMsgsEstimateTokens(out)})
+	logger.Info("Agent 任务 %s 历史压缩：%d→%d 条（估算 token %d→%d）", t.ID, before, len(out), est, aiMsgsEstimateTokens(out))
+	return out
 }
 
 // agentWaitApproval 审批挂起：推送审批请求，阻塞等待用户上行结果（approve/reject/cancel/超时）。

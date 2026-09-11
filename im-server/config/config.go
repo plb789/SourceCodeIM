@@ -149,6 +149,9 @@ type AgentConfig struct {
 	HttpAllowPrivate *bool `yaml:"http_allow_private"`
 	// WebSearch 阶段六十八：web_search 联网搜索配置（多服务商，默认关闭须显式开启）
 	WebSearch WebSearchConfig `yaml:"web_search"`
+	// ToolResultMaxChars 阶段八十四：工具结果写入模型上下文的字符上限（TRAE 同款上下文瘦身；
+	// 超长保留头 2/3 + 尾 1/3 并留省略标注，前端执行控制台仍显示全量）。0=默认 8000，负数=不截断
+	ToolResultMaxChars int `yaml:"tool_result_max_chars"`
 }
 
 // WebSearchConfig 阶段六十八：Agent 联网搜索服务商配置（web_search 工具归口）
@@ -184,6 +187,12 @@ type AIConfig struct {
 	LimitWindow int `yaml:"limit_window"`
 	// 阶段四十五：文档问答单文档提取文本上限（字符），超出截断，防止超长文档撑爆模型上下文
 	DocMaxChars int `yaml:"doc_max_chars"`
+	// 阶段八十四：TRAE 同款历史对话压缩触发阈值（估算 token 数，AI 问答与 Agent 任务共用；
+	// 历史上下文超过阈值时把较旧部分 LLM 摘要成一条摘要消息注入，仅最近 N 条保留原文）。
+	// 0=默认 12000，负数=禁用压缩
+	CompressThresholdTokens int `yaml:"compress_threshold_tokens"`
+	// 阶段八十四：压缩时保留最近原文消息条数（0=默认 6），更早历史并入摘要；摘要按会话缓存增量合并
+	CompressKeepMessages int `yaml:"compress_keep_messages"`
 }
 
 // Default 返回默认配置，与《开发文档》5.2 核心配置参数保持一致

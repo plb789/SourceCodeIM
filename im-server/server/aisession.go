@@ -8,6 +8,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -218,6 +219,8 @@ func (s *Server) handleAISessionDel(c *Client, msg *protocol.Message) {
 			}
 		}
 		aiSessionClearMessages(c.username, agent.Name, msg.SessionID)
+		// 阶段八十四：清空真删除后摘要缓存同步失效（摘要引用的原文已不存在，续用会污染上下文）
+		aiCompressCache.Delete(fmt.Sprintf("%d|%s|%s", msg.SessionID, c.username, agent.Name))
 		s.handleAISessionList(c, msg)
 		return
 	}

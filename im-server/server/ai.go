@@ -62,6 +62,15 @@ var (
 	aiContextWindow = 20
 	// 阶段四十五：文档问答单文档提取文本上限（字符，config.yaml ai.doc_max_chars 可配）
 	aiDocMaxChars = 60000
+	// 阶段八十四：TRAE 同款历史对话压缩参数（config.yaml ai.compress_* 归口，AI 问答与 Agent 任务共用）
+	aiCompressThreshold = 12000 // 历史上下文估算 token 达到该值触发压缩（<=0 禁用）
+	aiCompressKeep      = 6     // 压缩时保留最近原文消息条数，更早历史并入摘要
+	aiCompressScanExtra = 60    // 压缩启用时额外回溯的更早历史条数（原窗口外不再"滑走即丢"）
+	aiCompressMaxOut    = 4000  // 摘要文本字符上限（防摘要本身失控膨胀）
+	// 阶段八十四：会话摘要缓存（key "sid|user|agent" → 已覆盖到 uptoID 的摘要；服务重启后
+	// 首问触发一次重压缩，属派生缓存可接受；会话清空/删除时同步失效）
+	aiCompressMu    sync.Mutex
+	aiCompressCache sync.Map
 	// 阶段五十七：用户自建智能体配置（config.yaml ai.user_agent 归口，启动时加载）
 	aiUserEnabled    = false  // 总开关（默认关闭，需 config 显式开启）
 	aiUserProviders  []string // 用户可选模型服务白名单（provider 名）
@@ -100,6 +109,15 @@ func InitAI(cfg *config.Config) {
 	// 阶段四十五：文档问答提取上限兜底（config 归口，启动时覆盖）
 	if cfg.AI.DocMaxChars > 0 {
 		aiDocMaxChars = cfg.AI.DocMaxChars
+	}
+	// 阶段八十四：历史压缩参数兜底（0=默认，负数=禁用压缩）
+	if cfg.AI.CompressThresholdTokens > 0 {
+		aiCompressThreshold = cfg.AI.CompressThresholdTokens
+	} else if cfg.AI.CompressThresholdTokens < 0 {
+		aiCompressThreshold = -1
+	}
+	if cfg.AI.CompressKeepMessages > 0 {
+		aiCompressKeep = cfg.AI.CompressKeepMessages
 	}
 	// 阶段五十七：用户自建智能体配置（config 归口，启动时加载；白名单/上限均有兜底默认值）
 	aiUserEnabled = cfg.AI.UserAgent.Enabled
@@ -666,7 +684,9 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 // excludeID：排除指定消息（本次提问已先行落库回显，组装历史时排除防上下文重复）；0 表示不排除
 // sessionID：阶段七十一多会话归口——仅取该会话盖戳的历史（0=默认会话存量全量；
 // 新建会话即干净上下文，任意历史会话续聊即恢复该会话上下文）
-func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question string, excludeID uint, sessionID uint) []aiChatMessage {
+// streamID：阶段八十四历史压缩提示帧关联（压缩触发时随帧下发"历史对话压缩中"，与流式回复同 ID）
+// ctx：阶段八十四压缩摘要调用挂接停止句柄（"思考中/压缩中"阶段点停止同样即时生效）
+func (s *Server) aiBuildContext(ctx context.Context, username string, agent *AIRunAgent, question string, excludeID uint, sessionID uint, streamID string) []aiChatMessage {
 	msgs := make([]aiChatMessage, 0, aiContextWindow+2)
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
@@ -691,7 +711,20 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 	if excludeID > 0 {
 		query = query.Where("id <> ?", excludeID)
 	}
-	query.Order("id DESC").Limit(aiContextWindow).Find(&records)
+	// 阶段八十四：压缩启用时额外回溯 aiCompressScanExtra 条更早历史（原窗口外滑走即丢 → 可进摘要长期保留）；
+	// 未触发压缩时仍按原 aiContextWindow 窗口取尾，行为与 token 上界完全不变
+	limit := aiContextWindow
+	if aiCompressThreshold > 0 {
+		limit += aiCompressScanExtra
+	}
+	query.Order("id DESC").Limit(limit).Find(&records)
+	// 阶段八十四：TRAE 同款历史压缩——估算 token 超阈值时把较旧历史 LLM 摘要成一条消息，
+	// 最近 aiCompressKeep 条保留原文（摘要按会话缓存增量合并，未触发/失败时行为与原窗口完全一致）
+	records, summary := s.aiCompressHistory(ctx, username, agent, records, sessionID, streamID)
+	if summary != "" {
+		// 摘要消息时序：更早摘要 → 最近原文 → 本轮提问；role=user 紧随其后为原文历史，OpenAI 兼容格式允许
+		msgs = append(msgs, aiChatMessage{Role: "user", Content: "[历史对话摘要（较早轮次已压缩归并）]\n" + summary})
+	}
 	for i := len(records) - 1; i >= 0; i-- {
 		content := messageSummary(records[i].Content) // 引用信封取正文，JSON 原串不进模型上下文
 		if content == "" {
@@ -705,6 +738,180 @@ func (s *Server) aiBuildContext(username string, agent *AIRunAgent, question str
 	}
 	msgs = append(msgs, aiChatMessage{Role: "user", Content: question})
 	return msgs
+}
+
+// aiCompressEntry 阶段八十四：会话历史摘要缓存条目（summary 覆盖到消息 ID <= uptoID 的全部历史）
+type aiCompressEntry struct {
+	Summary string
+	UptoID  uint
+}
+
+// aiCompressHistory 阶段八十四：AI 问答历史压缩归口（TRAE 同款"历史对话压缩"）。
+// 入参 records 为按 id DESC 拉取的本会话历史（含窗口外回溯）；行为分三档：
+//  1. 估算 token < 阈值：返回原窗口尾部（aiContextWindow 条），与既有行为逐字节一致，零额外开销
+//  2. 超阈值且摘要可生成：LLM 把"较旧部分"（剔除最近 aiCompressKeep 条原文）摘要为一条文本，
+//     与缓存摘要增量合并（只摘要缓存未覆盖的新增段），缓存更新后返回 最近原文 + 摘要
+//  3. 摘要失败（未配模型/网络异常）：回退原窗口尾部，不注入摘要（下一问重试）
+//
+// 返回值：实际参与上下文的原文历史 records + 非空 summary（调用方按 摘要→原文→提问 顺序注入）
+func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *AIRunAgent, records []model.Message, sessionID uint, streamID string) ([]model.Message, string) {
+	rawTail := func() []model.Message {
+		if len(records) > aiContextWindow {
+			return records[len(records)-aiContextWindow:]
+		}
+		return records
+	}
+	if aiCompressThreshold <= 0 || agent == nil || agent.Provider == nil {
+		return rawTail(), ""
+	}
+	total := 0
+	for i := range records {
+		total += aiEstimateTokens(records[i].Content)
+	}
+	if total < aiCompressThreshold {
+		return rawTail(), "" // 未达阈值：原窗口行为不变
+	}
+	keep := aiCompressKeep
+	if keep >= len(records) {
+		return rawTail(), "" // 原文不足以让出时直接维持原样（阈值超得多时靠下一档兜底也无妨）
+	}
+	old := records[:len(records)-keep] // 待摘要的较旧段（按 id ASC 语义处理，存储序为 DESC）
+	key := fmt.Sprintf("%d|%s|%s", sessionID, username, agent.Name)
+	entry, _ := aiCompressCache.Load(key)
+	var ent *aiCompressEntry
+	if entry != nil {
+		ent = entry.(*aiCompressEntry)
+	}
+	// 增量收集：只摘要缓存未覆盖（id > ent.UptoID）的段落；缓存已全覆盖则直接复用，零 LLM 调用
+	segs := make([]string, 0, len(old))
+	maxOldID := uint(0)
+	for i := len(old) - 1; i >= 0; i-- { // id ASC 顺序转录
+		if old[i].ID > maxOldID {
+			maxOldID = old[i].ID
+		}
+		if ent != nil && old[i].ID <= ent.UptoID {
+			continue
+		}
+		content := messageSummary(old[i].Content)
+		if content == "" {
+			continue
+		}
+		role := "用户"
+		if old[i].FromUser != username {
+			role = "AI"
+		}
+		segs = append(segs, role+"："+content)
+	}
+	prev := ""
+	if ent != nil {
+		prev = ent.Summary
+	}
+	summary := prev
+	if len(segs) > 0 {
+		s.aiPushCompressFrame(agent, username, streamID) // 提示帧先发（"历史对话压缩中"与思考中指示同屏期）
+		summary = aiCompressSummarize(ctx, agent, prev, segs)
+		if summary == "" {
+			return rawTail(), "" // 摘要失败：回退原窗口，不注入
+		}
+		aiCompressMu.Lock()
+		aiCompressCache.Store(key, &aiCompressEntry{Summary: summary, UptoID: maxOldID})
+		aiCompressMu.Unlock()
+	}
+	kept := records[len(records)-keep:]
+	logger.Info("AI 历史压缩触发（%s/%s/sid=%d）：摘要 %d 字，保留原文 %d 条", username, agent.Name, sessionID, len([]rune(summary)), len(kept))
+	return kept, summary
+}
+
+// aiCompressSummarize 阶段八十四：LLM 摘要归口——把上一摘要与新增历史段合并为一份紧凑摘要
+// （provider 未配置/调用失败返回空串；aiStreamChat 丢弃增量，不产生对用户的流式输出；
+// ctx 为空时按独立超时上下文处理——Agent 任务路径无停止句柄可挂）
+func aiCompressSummarize(ctx context.Context, agent *AIRunAgent, prevSummary string, segs []string) string {
+	var b strings.Builder
+	b.WriteString("你是即时通讯系统的对话上下文压缩器。请把提供的历史对话记录蒸馏为一份紧凑摘要，供 AI 在后续对话中作为较早历史的记忆使用。要求：\n" +
+		"1. 保留关键事实、结论、决定、数字、文件/路径/命令及其结果、未解决的问题；\n" +
+		"2. 合并重复内容，省略寒暄与无信息量语句；\n" +
+		"3. 只输出摘要正文本身，使用中文，不要任何开场白或解释。")
+	msgs := []aiChatMessage{{Role: "system", Content: b.String()}}
+	var q strings.Builder
+	if strings.TrimSpace(prevSummary) != "" {
+		q.WriteString("[已有摘要]\n" + prevSummary + "\n\n")
+	}
+	q.WriteString("[新增历史记录]\n")
+	for _, s := range segs {
+		q.WriteString(s + "\n")
+	}
+	q.WriteString("\n请输出合并后的完整摘要。")
+	msgs = append(msgs, aiChatMessage{Role: "user", Content: q.String()})
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), aiAskTimeout)
+		defer cancel()
+	}
+	out, _, err := aiStreamChat(ctx, agent, msgs, func(string) {})
+	if err != nil {
+		logger.Error("AI 历史压缩摘要生成失败: %v", err)
+		return ""
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return ""
+	}
+	if r := []rune(out); len(r) > aiCompressMaxOut { // 摘要自身失控膨胀兜底（保留头部）
+		out = string(r[:aiCompressMaxOut]) + "…（摘要过长已截断）"
+	}
+	return out
+}
+
+// aiPushCompressFrame 阶段八十四：历史压缩状态帧（复用 AI_STREAM 通道，remark="compress" 区分；
+// 前端在回复气泡正文上方渲染"历史对话压缩中"状态行，与联网搜索行同款交互，仅实时展示不落库）
+func (s *Server) aiPushCompressFrame(agent *AIRunAgent, username, streamID string) {
+	msg := protocol.Message{
+		MsgType:   protocol.MsgTypeAIStream,
+		FromUser:  agent.Name,
+		ToUser:    username,
+		Content:   "{}",
+		Remark:    "compress",
+		StreamID:  streamID,
+		Timestamp: time.Now().Unix(),
+	}
+	out, _ := json.Marshal(msg)
+	s.sendToUser(username, out)
+}
+
+// aiEstimateTokens 阶段八十四：token 粗估归口——CJK/全角区约 1 字符 1 token，其余约 4 字符 1 token
+// （压缩触发判据仅用粗估，无需精确分词；误差由阈值余量吸收）
+func aiEstimateTokens(s string) int {
+	cjk, other := 0, 0
+	for _, r := range s {
+		if r > 0x2E7F { // CJK 统一表意、扩展、全角标点、假名等宽字符区粗归一类
+			cjk++
+		} else {
+			other++
+		}
+	}
+	return cjk + other/4
+}
+
+// aiChatMsgText 阶段八十四：消息文本化归口（Content 通常为 string；多模态数组等结构化内容
+// 序列化为 JSON 计入估算/转录，保证压缩判据不漏算）
+func aiChatMsgText(m aiChatMessage) string {
+	if v, ok := m.Content.(string); ok {
+		return v
+	}
+	b, err := json.Marshal(m.Content)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// aiMsgsEstimateTokens 阶段八十四：一组消息的 token 粗估（role 标签一并计入）
+func aiMsgsEstimateTokens(msgs []aiChatMessage) int {
+	total := 0
+	for i := range msgs {
+		total += aiEstimateTokens(msgs[i].Role) + aiEstimateTokens(aiChatMsgText(msgs[i]))
+	}
+	return total
 }
 
 // handleAIAgents 下发 AI 智能体列表（服务端归口：仅下发名称/头像/模型名/图片能力标记，不下发任何密钥）
@@ -975,7 +1182,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
 	aiStreamStopRegister(streamID, c.username, agent.Name, cancelAsk)
 
-	chatMsgs := s.aiBuildContext(c.username, agent, question, record.ID, sid)
+	chatMsgs := s.aiBuildContext(askCtx, c.username, agent, question, record.ID, sid, streamID)
 
 	// 阶段四十四：图片提问——最后一条 user 消息替换为多模态 content 数组（文本 + base64 图片）
 	if imageDataURL != "" {
