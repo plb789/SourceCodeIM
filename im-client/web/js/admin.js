@@ -131,6 +131,8 @@
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); }
+            // 阶段七十八：进入积分管理视图拉取用户积分列表
+            else if (item.dataset.view === 'points') { loadPointsUsers(); }
             else stopKBPolling();
         });
     });
@@ -1775,4 +1777,136 @@
     } else {
         showLogin();
     }
+
+    // ===== 阶段七十八：积分管理（AI 积分 = TRAE CN 同款问答积分） =====
+    // 数据归口：积分余额/扣减全部在服务端（aipoints.go），后台仅做查询展示与绝对值调整；
+    // 空数据显示"暂无用户"，仅请求出错时显示"加载失败"
+    var pointsAll = [];        // 全量用户（含积分）
+    var pointsFiltered = [];   // 搜索过滤后（分页数据源）
+    var pointsPage = 1;        // 当前页（1 起）
+    var POINTS_PAGE_SIZE = 10;
+
+    function loadPointsUsers() {
+        $('points-status').textContent = '加载中…';
+        api('GET', '/admin/api/users').then(function (result) {
+            if (!result.ok) {
+                $('points-status').textContent = result.msg || '加载失败';
+                showToast(result.msg || '积分列表加载失败');
+                return;
+            }
+            pointsAll = result.data.users || [];
+            $('points-status').textContent = '共 ' + pointsAll.length + ' 个用户，更新于 ' + new Date().toLocaleTimeString();
+            applyPointsFilter(true);
+        }).catch(function (e) {
+            $('points-status').textContent = e.message || '网络异常';
+        });
+    }
+
+    // 搜索过滤 + 回到第一页（reset=true 时重算统计卡片）
+    function applyPointsFilter(resetStats) {
+        var kw = ($('points-search').value || '').trim().toLowerCase();
+        pointsFiltered = pointsAll.filter(function (u) {
+            if (!kw) return true;
+            return (u.username || '').toLowerCase().indexOf(kw) !== -1 ||
+                   (u.nickname || '').toLowerCase().indexOf(kw) !== -1;
+        });
+        pointsPage = 1;
+        if (resetStats) renderPointsStats();
+        renderPointsTable();
+    }
+
+    // 统计卡片：用户总数/管理员数/积分总量/平均/低积分人数（低积分阈值 10 与表格红色警示一致）
+    function renderPointsStats() {
+        var admins = 0, total = 0, low = 0;
+        pointsAll.forEach(function (u) {
+            if (u.role === 1) admins++;
+            total += (u.points || 0);
+            if ((u.points || 0) < 10) low++;
+        });
+        $('points-stat-users').textContent = String(pointsAll.length);
+        $('points-stat-admins').textContent = '管理员 ' + admins;
+        $('points-stat-total').textContent = String(total);
+        $('points-stat-avg').textContent = pointsAll.length ? String(Math.round(total / pointsAll.length)) : '-';
+        $('points-stat-low').textContent = String(low);
+    }
+
+    function renderPointsTable() {
+        var tbody = $('points-tbody');
+        var pages = Math.max(1, Math.ceil(pointsFiltered.length / POINTS_PAGE_SIZE));
+        if (pointsPage > pages) pointsPage = pages;
+        if (!pointsFiltered.length) {
+            // 搜索无命中显示"暂无用户"（区别于加载失败的错误态）
+            tbody.innerHTML = '<tr><td colspan="6" class="vec-empty">' +
+                (pointsAll.length ? '暂无匹配用户' : '暂无用户') + '</td></tr>';
+            $('points-page-info').textContent = '-';
+            return;
+        }
+        var start = (pointsPage - 1) * POINTS_PAGE_SIZE;
+        var rows = pointsFiltered.slice(start, start + POINTS_PAGE_SIZE);
+        var html = '';
+        rows.forEach(function (u) {
+            var pts = u.points || 0;
+            // 低积分（<10）红色警示；0 分额外标注"已拦截"（AI 提问被服务端拒绝）
+            var numCls = pts <= 0 ? 'points-num points-zero' : (pts < 10 ? 'points-num points-low' : 'points-num');
+            var zeroTag = pts <= 0 ? ' <span class="at-badge at-st-failed">已拦截</span>' : '';
+            html += '<tr>' +
+                '<td class="points-username">' + escHtml(u.username || '') + '</td>' +
+                '<td>' + escHtml(u.nickname || u.username || '') + '</td>' +
+                '<td>' + (u.role === 1 ? '<span class="at-badge at-st-completed">管理员</span>' : '<span class="points-role-normal">普通用户</span>') + '</td>' +
+                '<td><strong class="' + numCls + '">' + pts + '</strong>' + zeroTag + '</td>' +
+                '<td class="points-time">' + escHtml(u.create_time || '-') + '</td>' +
+                '<td><button class="admin-btn small points-edit-btn" data-username="' + escAttr(u.username || '') + '">调整</button></td>' +
+                '</tr>';
+        });
+        tbody.innerHTML = html;
+        $('points-page-info').textContent = '第 ' + pointsPage + ' / ' + pages + ' 页（共 ' + pointsFiltered.length + ' 人）';
+    }
+
+    // HTML 转义（表格单元格内容由用户数据拼出，防注入）
+    function escHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function escAttr(s) { return escHtml(s); }
+
+    // 调整积分弹窗：绝对值设置（充值=直接填新余额），服务端归口校验非负
+    function openPointsEdit(username) {
+        var u = null;
+        for (var i = 0; i < pointsAll.length; i++) {
+            if (pointsAll[i].username === username) { u = pointsAll[i]; break; }
+        }
+        if (!u) { showToast('用户数据已过期，请刷新后重试'); return; }
+        openEditModal('调整积分 - ' + u.username + (u.nickname && u.nickname !== u.username ? '（' + u.nickname + '）' : ''), [
+            { key: 'points', label: '积分余额', type: 'number', placeholder: '非负整数', hint: '绝对值设置（充值直接填新余额），保存立即生效；AI 问答按 1000 tokens = 1 积分自动扣除' }
+        ], { points: u.points || 0 }, function (data) {
+            var n = Math.floor(Number(data.points));
+            if (isNaN(n) || n < 0 || String(n) !== String(data.points).trim()) {
+                showToast('积分必须为非负整数');
+                return; // 弹窗保留，可修正后再次保存
+            }
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/points', { points: n })
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                    closeEditModal();
+                    showToast('已将 ' + u.username + ' 积分调整为 ' + n);
+                    loadPointsUsers(); // 重拉列表刷新统计与表格（余额以服务端为准）
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 表格内"调整"按钮：事件委托（重渲染无需重复绑定）
+    $('points-tbody').addEventListener('click', function (e) {
+        var btn = e.target.closest('.points-edit-btn');
+        if (btn) openPointsEdit(btn.getAttribute('data-username'));
+    });
+    // 搜索实时过滤 + 刷新重拉
+    $('points-search').addEventListener('input', function () { applyPointsFilter(false); });
+    $('points-refresh').addEventListener('click', loadPointsUsers);
+    // 分页
+    $('points-prev').addEventListener('click', function () {
+        if (pointsPage > 1) { pointsPage--; renderPointsTable(); }
+    });
+    $('points-next').addEventListener('click', function () {
+        var pages = Math.ceil(pointsFiltered.length / POINTS_PAGE_SIZE);
+        if (pointsPage < pages) { pointsPage++; renderPointsTable(); }
+    });
 })();

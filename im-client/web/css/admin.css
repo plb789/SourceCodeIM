@@ -1130,3 +1130,37 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     gap: 12px;
     margin-top: 4px;
 }
+
+/* ===== 阶段七十八：积分管理面板 ===== */
+/* 用户名列：等宽字体便于对齐辨识 */
+.points-username {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+}
+
+/* 积分余额强调：加粗放大；低积分（<10）警示橙红、零积分危险红，与现有 --danger/--warning 主题变量关联 */
+.points-num {
+    font-size: 14px;
+    color: var(--text, #333333);
+}
+
+.points-num.points-low {
+    color: var(--warning, #d29922);
+}
+
+.points-num.points-zero {
+    color: var(--danger, #fa5151);
+}
+
+/* 角色列：管理员用主题色徽标（复用 at-badge 基础类），普通用户弱化纯文本 */
+.points-role-normal {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+}
+
+/* 注册时间弱化显示 */
+.points-time {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    white-space: nowrap;
+}

@@ -12,8 +12,8 @@
         })();
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
-    <link rel="stylesheet" href="css/style.css?v=1.51">
-    <link rel="stylesheet" href="css/admin.css?v=1.9">
+    <link rel="stylesheet" href="css/style.css?v=1.52">
+    <link rel="stylesheet" href="css/admin.css?v=1.10">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -43,6 +43,7 @@
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
+                <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -252,6 +253,67 @@
                 </div>
             </section>
 
+            <!-- 积分管理（阶段七十八：AI 积分 = TRAE CN 同款问答积分，扣分归口服务端 aipoints.go） -->
+            <section id="admin-view-points" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>积分管理</h2>
+                    <span id="points-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">AI 问答积分：按 Token 消耗折算扣除（1000 tokens = 1 积分，向上取整），余额不足拦截 AI 提问。此处调整保存后立即生效；在线用户在下一次 AI 回答结束后自动刷新显示。</p>
+                <!-- 统计卡片：复用仪表盘 dash-cards 样式 -->
+                <div class="dash-cards">
+                    <div class="dash-card">
+                        <span class="dash-card-label">用户总数</span>
+                        <span class="dash-card-value" id="points-stat-users">-</span>
+                        <span class="dash-card-sub" id="points-stat-admins">管理员 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">积分总量</span>
+                        <span class="dash-card-value" id="points-stat-total">-</span>
+                        <span class="dash-card-sub">全部用户余额合计</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">平均积分</span>
+                        <span class="dash-card-value" id="points-stat-avg">-</span>
+                        <span class="dash-card-sub">按用户总数平均</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">低积分用户</span>
+                        <span class="dash-card-value" id="points-stat-low">-</span>
+                        <span class="dash-card-sub">余额不足 10 分</span>
+                    </div>
+                </div>
+                <!-- 搜索工具条：实时过滤（用户名/昵称） -->
+                <div class="vec-toolbar">
+                    <input type="text" id="points-search" class="admin-input vec-search-input" placeholder="按用户名/昵称搜索（实时过滤）">
+                    <button id="points-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 用户积分表格 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>角色</th>
+                                <th>积分余额</th>
+                                <th>注册时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="points-tbody">
+                            <tr><td colspan="6" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="points-prev" class="admin-btn small">上一页</button>
+                    <span id="points-page-info" class="admin-view-tip">-</span>
+                    <button id="points-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
             <!-- Agent 运行参数设置（阶段八十一/八十二：后台热更新，保存即生效+重启不丢） -->
             <section id="admin-view-agentsettings" class="admin-view">
                 <header class="admin-view-head">
@@ -408,6 +470,6 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.12"></script>
+    <script src="js/admin.js?v=1.13"></script>
 </body>
 </html>
