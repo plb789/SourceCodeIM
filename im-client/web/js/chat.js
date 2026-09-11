@@ -23,6 +23,9 @@
     // 头像缺失修复：在线用户头像表（服务端 USER_LIST 推送，username -> avatar），
     // 群聊发送者可能不在好友列表（无法从 friendList 取头像），从在线用户列表兜底获取
     var userAvatars = {};
+    // 阶段八十六：在线用户快照（同一 USER_LIST 推送重建，含非好友）——
+    // 非好友私聊标题的在线状态兜底数据源（好友仍以 friendList.online 为准）
+    var onlineUsers = {};
     // 原实现：var unreadCount = {}; 本地未读计数，与服务端 cv.unread 双源不一致，多端已读后角标不同步
     // 阶段十一：未读数服务端归口，统一使用服务端 CONV_LIST 推送的 unread 渲染，删除本地 unreadCount
     var readWatermark = {}; // 对方用户名 -> 已读水位（对方已读到的我方最大消息 ID），跨会话保留供历史渲染即时应用
@@ -846,6 +849,9 @@
                         msg_id: msgId,
                         content: isPinned ? 'unpin' : 'pin'
                     });
+                } else if (action === 'forward' && msgId) {
+                    // 阶段八十六：微信同款消息转发——打开目标选择弹窗（文本/引用原样；图片/文件重取后走直传）
+                    openForwardPicker(msgTarget);
                 } else if (action === 'quote' && msgId) {
                     // 阶段四十：引用消息——收集被引用消息摘要，显示输入框上方引用条，随下一条文本消息一起发出（微信同款）
                     // 阶段四十一：图片引用带图片地址（quote.url）——引用块内直接显示真实图片缩略图而非仅"[图片]"文字
@@ -882,6 +888,142 @@
     document.addEventListener('click', function () {
         msgMenu.classList.add('hidden');
     });
+
+    // ===== 阶段八十六：消息转发（微信同款：右键转发 → 目标选择弹窗 → 确认发送） =====
+    var fwdMask = document.getElementById('fwd-mask');
+    var fwdSearch = document.getElementById('fwd-search');
+    var fwdList = document.getElementById('fwd-list');
+    var fwdCancel = document.getElementById('fwd-cancel');
+    var fwdPendingEl = null; // 待转发的消息元素（弹窗关闭即释放）
+
+    function openForwardPicker(el) {
+        if (!el) return;
+        fwdPendingEl = el;
+        fwdSearch.value = '';
+        renderForwardList('');
+        fwdMask.classList.remove('hidden');
+    }
+
+    function closeForwardPicker() {
+        fwdMask.classList.add('hidden');
+        fwdPendingEl = null;
+    }
+    fwdCancel.addEventListener('click', closeForwardPicker);
+    fwdMask.addEventListener('click', function (e) {
+        if (e.target === fwdMask) closeForwardPicker(); // 点遮罩关闭（转发未执行无误操作风险）
+    });
+    fwdSearch.addEventListener('input', function () {
+        renderForwardList(fwdSearch.value.trim().toLowerCase());
+    });
+
+    // 目标列表：群聊置顶 + 好友（排除 AI 智能体会话，在线优先同通讯录排序），按备注/昵称/账号关键字过滤
+    function renderForwardList(kw) {
+        fwdList.innerHTML = '';
+        var items = [];
+        if (!kw || '群聊'.indexOf(kw) >= 0 || 'group'.indexOf(kw) >= 0) {
+            items.push({ target: '', name: '群聊', sub: '群内所有成员可见', ph: '群' });
+        }
+        for (var i = 0; i < friendList.length; i++) {
+            var f = friendList[i];
+            if (isAIAgent(f.username)) continue; // AI 智能体会话不作为转发目标（微信无此语义）
+            var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
+            if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) continue;
+            items.push({ target: f.username, name: disp, sub: f.username + (f.online ? ' · 在线' : ''), avatar: f.avatar, online: f.online });
+        }
+        if (!items.length) {
+            fwdList.innerHTML = '<div class="fwd-empty">无匹配联系人</div>';
+            return;
+        }
+        items.sort(function (a, b) { // 在线优先（群聊项视为恒在线置顶）
+            return (b.online === true || b.target === '' ? 1 : 0) - (a.online === true || a.target === '' ? 1 : 0);
+        });
+        items.forEach(function (it) {
+            var item = document.createElement('div');
+            item.className = 'fwd-item';
+            if (it.avatar) {
+                var av = document.createElement('img');
+                av.className = 'fwd-avatar';
+                av.src = it.avatar;
+                item.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'fwd-avatar-ph';
+                ph.textContent = it.ph || (it.name || '?').charAt(0).toUpperCase();
+                item.appendChild(ph);
+            }
+            var info = document.createElement('div');
+            info.className = 'fwd-info';
+            var nm = document.createElement('div');
+            nm.className = 'fwd-name';
+            nm.textContent = it.name;
+            var sub = document.createElement('div');
+            sub.className = 'fwd-sub';
+            sub.textContent = it.sub || '';
+            info.appendChild(nm);
+            info.appendChild(sub);
+            item.appendChild(info);
+            item.addEventListener('click', function () {
+                var el = fwdPendingEl; // 闭包先捕获，弹窗关闭会清空引用
+                closeForwardPicker();
+                showConfirm('转发', '转发给「' + it.name + '」？', function () {
+                    doForward(el, it.target);
+                }, '发送');
+            });
+            fwdList.appendChild(item);
+        });
+    }
+
+    // 从消息源地址（服务端 URL / 本地 blob / dataURL）重取内容构造 File，复用既有上传链路
+    function fetchSrcAsFile(src, fallbackName) {
+        return fetch(src).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.blob();
+        }).then(function (b) {
+            return new File([b], fallbackName || '文件', { type: b.type || 'application/octet-stream' });
+        });
+    }
+
+    // 执行转发：图片/文件重取后走直传（suppressLocal 防污染当前视图）；文本/引用信封原样重发（服务端回显渲染）
+    function doForward(el, target) {
+        if (!el) return;
+        var bubble = el.querySelector('.message-bubble');
+        // 图片消息
+        var img = bubble ? bubble.querySelector('.chat-image') : null;
+        if (img && img.getAttribute('src')) {
+            fetchSrcAsFile(img.getAttribute('src'), 'image.png').then(function (f) {
+                if (target === '') {
+                    sendGroupImage(f, true);
+                    showToast('已转发');
+                } else {
+                    sendFileDirect(f, target, true).then(function (res) {
+                        showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
+                    }).catch(function () { showToast('转发失败'); });
+                }
+            }).catch(function () { showToast('转发失败：图片获取失败'); });
+            return;
+        }
+        // 文件消息（群聊不收文件，与发送按钮既有口径一致）
+        if (bubble && bubble.classList.contains('bubble-file')) {
+            if (target === '') { showToast('群聊暂不支持转发文件'); return; }
+            var furl = bubble.getAttribute('data-url') || '';
+            if (!furl) { showToast('该消息暂不支持转发'); return; }
+            var fnameEl = bubble.querySelector('.file-name');
+            fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || '文件').then(function (f) {
+                sendFileDirect(f, target, true).then(function (res) {
+                    showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
+                }).catch(function () { showToast('转发失败'); });
+            }).catch(function () { showToast('转发失败：文件获取失败'); });
+            return;
+        }
+        // 文本 / 引用信封 / AI 文本：原始 content 原样重发（引用块完整保真），降级取正文可见文本
+        var raw = el.getAttribute('data-raw');
+        var tx = bubble ? bubble.querySelector('.msg-text') : null;
+        var content = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
+        if (!content) { showToast('该消息不支持转发'); return; }
+        var m = { msg_type: target === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+        if (target !== '') m.to_user = target;
+        if (IMSocket.send(m)) showToast('已转发'); else showToast('转发失败');
+    }
 
     // ===== 发送消息 =====
     // ===== 阶段三十八：截图待发送区（QQ 同款：编辑完成不直接发送，先进输入框上方待发送条，点发送才出） =====
@@ -1383,20 +1525,25 @@
     // 流程：本地立即渲染（blob 预览 + nonce 标识）→ POST /upload/file（无 file_id，服务端直传建档落库）
     // → 服务端推送 FILE_PERSISTED（携带 content: url/name/size/nonce）→ 发送端按 nonce 回填 msg_id，
     //   接收端按 content 直接渲染 URL，不走分片链路
-    function sendFileDirect(file) {
-        var toUser = currentChatUser;
+    // 阶段八十六：toUserOverride/suppressLocal 供消息转发复用——指定目标会话（默认仍取当前会话）、
+    // 抑制本地气泡（FILE_PERSISTED 对 nonce 无匹配气泡时静默跳过，已确认容错）；
+    // 返回上传 fetch 的 Promise（普通发送不关心返回值，转发据此 toast 成败）
+    function sendFileDirect(file, toUserOverride, suppressLocal) {
+        var toUser = toUserOverride || currentChatUser;
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
-        var url = URL.createObjectURL(file);
-        var bubble;
-        if (isImageName(file.name)) {
-            bubble = appendImageMsg(IMSocket.getUsername(), url, 'self', true);
-        } else {
-            bubble = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', true);
+        if (!suppressLocal) {
+            var url = URL.createObjectURL(file);
+            if (isImageName(file.name)) {
+                var b1 = appendImageMsg(IMSocket.getUsername(), url, 'self', true);
+                b1.setAttribute('data-nonce', nonce);
+            } else {
+                var b2 = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', true);
+                b2.setAttribute('data-nonce', nonce);
+            }
         }
-        bubble.setAttribute('data-nonce', nonce);
         var fd = new FormData();
         fd.append('file', file);
-        fetch('/upload/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
+        return fetch('/upload/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
               '&to_user=' + encodeURIComponent(toUser) +
               '&nonce=' + encodeURIComponent(nonce), {
             method: 'POST',
@@ -1404,9 +1551,11 @@
         }).then(function (res) {
             // 异常加固：HTTP 4xx/5xx（文件过大/未在线/被拉黑等）统一告警，本地 blob 预览保留
             if (!res.ok) console.warn('大文件直传被拒绝:', res.status);
+            return res; // 阶段八十六：转发链路据此判定成败
         }).catch(function (e) {
             // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
             console.warn('大文件直传失败:', e);
+            throw e; // 阶段八十六：转发链路据此提示失败
         });
     }
 
@@ -1747,13 +1896,17 @@
     // ===== 阶段二十六：群聊图片发送（HTTP 上传 + 服务端广播，不走点对点分片协议） =====
     // 流程：本地立即渲染（blob 预览 + nonce 标识）→ POST /upload/group/image → 服务端落库
     // → 服务端广播 MSG.GROUP_IMAGE（含 msg_id）→ 发送端按 nonce 精确回填 msg_id，其余用户实时渲染
-    function sendGroupImage(file) {
+    // suppressLocal：转发场景（阶段八十六）抑制本地回显气泡——目标会话非当前窗口，本地渲染会污染当前视图；
+    // 服务端广播回来后由 GROUP_IMAGE 处理器按 currentChatUser 归口渲染（目标群聊打开时正常上屏，未打开仅记未读）
+    function sendGroupImage(file, suppressLocal) {
         if (!isImageName(file.name)) { showToast('群聊仅支持发送图片'); return; }
         // nonce：本地气泡唯一标识，广播回填 msg_id 时精确匹配（对齐 FILE_PERSISTED 按 file_id 匹配的归口思路，并发发送不错位）
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
-        var url = URL.createObjectURL(file);
-        var bubble = appendImageMsg(IMSocket.getUsername(), url, 'self', false); // 群聊图片：显示发送者昵称
-        bubble.setAttribute('data-nonce', nonce);
+        if (!suppressLocal) {
+            var url = URL.createObjectURL(file);
+            var bubble = appendImageMsg(IMSocket.getUsername(), url, 'self', false); // 群聊图片：显示发送者昵称
+            bubble.setAttribute('data-nonce', nonce);
+        }
         var fd = new FormData();
         fd.append('file', file);
         fetch('/upload/group/image?username=' + encodeURIComponent(IMSocket.getUsername()) +
@@ -2212,8 +2365,12 @@
     IMSocket.on(MSG.USER_LIST, function (msg) {
         var infos = [];
         try { infos = JSON.parse(msg.content) || []; } catch (e) { infos = []; }
+        var nextOnline = {}; // 阶段八十六：快照整体重建（上下线都伴随全量推送），确保掉线用户被移除
         infos.forEach(function (u) {
-            if (u && u.username) userAvatars[u.username] = u.avatar || '';
+            if (u && u.username) {
+                userAvatars[u.username] = u.avatar || '';
+                nextOnline[u.username] = true;
+            }
             // 自己头像以 LOGIN_RESP/上传结果为最高优先级，USER_LIST 仅在缺失时兜底
             if (u.username === IMSocket.getUsername()) {
                 if (!myAvatar && u.avatar) {
@@ -2222,6 +2379,9 @@
                 }
             }
         });
+        onlineUsers = nextOnline;
+        // 在线快照变化后刷新当前会话标题状态（覆盖非好友会话：好友会话另有 USER_STATUS 联动）
+        updateChatTitle();
     });
 
     IMSocket.on(MSG.ERROR, function (msg) {
@@ -10398,6 +10558,17 @@
         renderBlacklist();
     }
 
+    // 阶段八十六：会话对端在线状态统一解析——好友以 friendList.online（USER_STATUS 逐条联动）为准；
+    // 非好友没有好友条目，从 USER_LIST 在线快照兜底（原实现直接判'离线'，非好友私聊恒显离线）
+    function isPeerOnline(u) {
+        if (!u) return false;
+        if (u === IMSocket.getUsername()) return true; // 自己与自己的多端会话视为在线
+        for (var i = 0; i < friendList.length; i++) {
+            if (friendList[i].username === u) return !!friendList[i].online;
+        }
+        return !!onlineUsers[u];
+    }
+
     function updateChatTitle() {
         if (currentChatUser === '') {
             chatTitle.textContent = '群聊';
@@ -10409,7 +10580,7 @@
         } else {
             var f = friendList.find(function (x) { return x.username === currentChatUser; });
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
-            chatStatus.textContent = f && f.online ? '在线' : '离线';
+            chatStatus.textContent = isPeerOnline(currentChatUser) ? '在线' : '离线';
         }
         // 阶段五十八：记忆管理按钮仅 AI 智能体会话显示（群聊/普通用户会话隐藏）
         memoryBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
@@ -10507,6 +10678,9 @@
         if (msgId) div.setAttribute('data-msg-id', msgId);
         div.setAttribute('data-from', fromUser);
         if (timestamp) div.setAttribute('data-ts', timestamp);
+        // 阶段八十六：消息转发——保留原始 content（纯文本或引用信封 JSON），转发时原样重发（引用块完整保真）；
+        // 超过 64KB（如含 dataURL 图片的引用信封）不存，转发时降级取气泡可见文本
+        if (content && String(content).length <= 65536) div.setAttribute('data-raw', content);
         var nameEl = document.createElement('div');
         nameEl.className = 'message-name';
         // 阶段八十五：发送者展示名（备注→昵称→账号），历史与实时同源解析
@@ -11049,6 +11223,8 @@
         bubble.appendChild(icon);
         bubble.appendChild(info);
         if (url) {
+            // 阶段八十六：消息转发需要文件源地址（服务端 URL 或本地 blob），存 DOM 供转发重取
+            bubble.setAttribute('data-url', url);
             bubble.style.cursor = 'pointer';
             bubble.addEventListener('click', function () {
                 // 原实现：直接创建 <a download> 触发下载

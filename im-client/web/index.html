@@ -15,7 +15,7 @@
             document.documentElement.classList.add('pc-titlebar');
         }
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.02">
+    <link rel="stylesheet" href="css/style.css?v=2.03">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -397,6 +397,8 @@
         <div class="menu-item" data-action="recall">撤回</div>
         <!-- 阶段四十：微信同款消息引用（右键引用 → 输入框上方引用条 → 随下一条消息一起发出） -->
         <div class="menu-item" data-action="quote">引用</div>
+        <!-- 阶段八十六：微信同款消息转发（文本/引用原样转发；图片/文件经源地址重取后走既有直传链路） -->
+        <div class="menu-item" data-action="forward">转发</div>
         <div class="menu-item" data-action="del">删除</div>
     </div>
 
@@ -431,6 +433,18 @@
             <div class="modal-btns">
                 <button id="add-friend-cancel" class="modal-btn">取消</button>
                 <button id="add-friend-ok" class="modal-btn primary" disabled>确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段八十六：消息转发目标选择弹窗（微信同款：群聊置顶 + 好友列表在线优先 + 搜索过滤；自研弹窗禁用系统弹窗） -->
+    <div id="fwd-mask" class="modal-mask hidden">
+        <div class="modal-box fwd-box">
+            <div class="modal-title">转发到</div>
+            <input type="text" id="fwd-search" class="modal-input" placeholder="搜索好友" autocomplete="off">
+            <div id="fwd-list" class="fwd-list"></div>
+            <div class="modal-btns">
+                <button id="fwd-cancel" class="modal-btn">取消</button>
             </div>
         </div>
     </div>
@@ -581,7 +595,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.67"></script>
+    <script src="js/chat.js?v=2.69"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
