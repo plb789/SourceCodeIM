@@ -7984,6 +7984,15 @@ html.m #friend-menu {
     margin-top: var(--titlebar-h);
 }
 
+/* 阶段八十五修复：登录后 login-view 为 display:none、标题栏 fixed 不占流，chat-view 成为 body 首个
+   在流子元素，其 margin-top 与 body 外边距塌陷溢出到 body 外 → 文档多出 34px 可滚动高度
+   （实测 scrollHeight=100vh+34）。滚动链（列表到顶继续滚）/消息定位 scrollIntoView 会把整页滚下
+   34px 且不自动复位：固定标题栏不动，好友名称行被盖、左栏按钮整体上移（仅 PC 端有此 margin 故仅 PC 复现）。
+   禁止根滚动兜底（移动端 html.m body 同款约定），不影响视图内各自滚动 */
+.pc-titlebar body {
+    overflow: hidden;
+}
+
 /* 个人资料面板固定贴顶（top:0），标题栏存在时其头部（关闭按钮）会被压住，需同步让位 */
 .pc-titlebar .profile-panel {
     top: var(--titlebar-h);
@@ -8043,6 +8052,14 @@ html.m #friend-menu {
 /* PC 端用户区上移标题栏：nav-rail 顶部头像/账号整体隐藏（Web 浏览器/手机端无 pc-titlebar 类不受影响） */
 .pc-titlebar .nav-rail .nav-top {
     display: none;
+}
+
+/* PC 端左栏图标组上移 34px：用户区上移标题栏后 nav-top 隐藏，聊天按钮上方留白达 44px；
+   按需求 PC 端聊天/AI助手/通讯录按钮组整体上移 34px（margin-top 26px→-8px，首个按钮距窗口顶
+   78px→44px，仍低于标题栏底 34px 约 10px，不被 fixed 标题栏遮挡且可正常点击）。
+   :not(.m) 防 PC 窗口极窄进入移动布局时残留负边距；Web 端（无 pc-titlebar）与手机 APP 端完全不受影响 */
+.pc-titlebar:not(.m) .nav-icons {
+    margin-top: -8px;
 }
 
 /* ===== 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字） ===== */

@@ -681,26 +681,17 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 }
 
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）
+// 阶段八十五：消息时序固定为 系统提示 → [历史摘要] → 历史原文 → [知识库命中] → [长期记忆] → 本轮提问
+// （稳定前缀在前、逐问易变内容在后，命中 OpenAI 兼容服务的隐式前缀缓存降低 prompt 计费，勿再前插易变内容）
 // excludeID：排除指定消息（本次提问已先行落库回显，组装历史时排除防上下文重复）；0 表示不排除
 // sessionID：阶段七十一多会话归口——仅取该会话盖戳的历史（0=默认会话存量全量；
 // 新建会话即干净上下文，任意历史会话续聊即恢复该会话上下文）
 // streamID：阶段八十四历史压缩提示帧关联（压缩触发时随帧下发"历史对话压缩中"，与流式回复同 ID）
 // ctx：阶段八十四压缩摘要调用挂接停止句柄（"思考中/压缩中"阶段点停止同样即时生效）
 func (s *Server) aiBuildContext(ctx context.Context, username string, agent *AIRunAgent, question string, excludeID uint, sessionID uint, streamID string) []aiChatMessage {
-	msgs := make([]aiChatMessage, 0, aiContextWindow+2)
+	msgs := make([]aiChatMessage, 0, aiContextWindow+4)
 	if agent.SystemPrompt != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: agent.SystemPrompt})
-	}
-	// 原实现：仅注入智能体绑定的知识库（阶段五十一，个人库仅归属者生效；无命中/未配置时为空不注入）
-	// if kbCtx := kbContextForAgent(agent.KBIDs, question, username); kbCtx != "" {
-	// 阶段五十六：合并用户勾选库（im_user_kb 归口，对所有智能体生效）；个人库命中仍由 kbSearch 权限过滤兜底
-	// （2026-09-07 实测教训：此处曾被并行编辑还原为旧实现，导致私聊 AI 问答不注入用户勾选库，E2E 暴露后重新修复）
-	if kbCtx := kbContextForAgent(kbMergeIDStrings(agent.KBIDs, kbUserSelectedIDs(username)), question, username); kbCtx != "" {
-		msgs = append(msgs, aiChatMessage{Role: "system", Content: kbCtx})
-	}
-	// 阶段五十八：长期记忆注入（按 用户+智能体 隔离的向量召回，top_k 条；关闭/降级/无命中时为空不注入）
-	if memCtx := memContextForAgent(agent, username, question); memCtx != "" {
-		msgs = append(msgs, aiChatMessage{Role: "system", Content: memCtx})
 	}
 	var records []model.Message
 	query := store.DB.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
@@ -736,7 +727,24 @@ func (s *Server) aiBuildContext(ctx context.Context, username string, agent *AIR
 		}
 		msgs = append(msgs, aiChatMessage{Role: role, Content: content})
 	}
+	// 阶段八十五：TRAE CN 同款"提示缓存友好"尾部注入——知识库命中与长期记忆是逐问变化的易变内容，
+	// 原插在 system 之后/历史之前，会把"系统提示+摘要+历史"这段稳定前缀的隐式前缀缓存打穿
+	// （DeepSeek/GLM/Kimi/硅基流动等 OpenAI 兼容服务按 messages 数组前缀命中缓存，命中部分约 1/10 计费，
+	// 多轮追问时前缀逐问原样增长可反复命中）；移到历史之后、本轮提问之前，注入内容与 role 均不变，
+	// 仅时序调整——语义无任何变化，长会话 prompt 计费显著下降
+	// 原实现：仅注入智能体绑定的知识库（阶段五十一，个人库仅归属者生效；无命中/未配置时为空不注入）
+	// 阶段五十六：合并用户勾选库（im_user_kb 归口，对所有智能体生效）；个人库命中仍由 kbSearch 权限过滤兜底
+	// （2026-09-07 实测教训：注入调用曾被并行编辑还原为旧实现，导致私聊 AI 问答不注入用户勾选库，E2E 暴露后重新修复——勿删合并逻辑）
+	if kbCtx := kbContextForAgent(kbMergeIDStrings(agent.KBIDs, kbUserSelectedIDs(username)), question, username); kbCtx != "" {
+		msgs = append(msgs, aiChatMessage{Role: "system", Content: kbCtx})
+	}
+	// 阶段五十八：长期记忆注入（按 用户+智能体 隔离的向量召回，top_k 条；关闭/降级/无命中时为空不注入）
+	if memCtx := memContextForAgent(agent, username, question); memCtx != "" {
+		msgs = append(msgs, aiChatMessage{Role: "system", Content: memCtx})
+	}
 	msgs = append(msgs, aiChatMessage{Role: "user", Content: question})
+	// 阶段八十五：组装结果估算日志（"提示占用过多"排查归口——与模型侧 usage 口径有粗估误差，仅供趋势观察）
+	logger.Info("AI 上下文组装（%s/%s/sid=%d）：消息 %d 条，估算 prompt ≈ %d tokens", username, agent.Name, sessionID, len(msgs), aiMsgsEstimateTokens(msgs))
 	return msgs
 }
 

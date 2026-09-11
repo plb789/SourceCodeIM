@@ -451,6 +451,15 @@
     var myProfile = { nickname: '', gender: 0, region: '', signature: '' };
     var friendCardTarget = ''; // 当前资料卡展示的目标用户名
 
+    // 我的名称展示归口：昵称优先，无昵称（空/纯空白）降级显示账号
+    // 覆盖位置：PC 端标题栏用户区 + Web/手机端侧栏顶部用户名（两侧同步刷新，三端规则一致）
+    // 数据源：登录响应 profile.nickname / 资料响应 PROFILE_RESP（服务端归口，多端同步）
+    function syncMyDisplayName() {
+        var name = (myProfile.nickname || '').trim() || IMSocket.getUsername();
+        if (titlebarUsernameEl) titlebarUsernameEl.textContent = name;
+        if (currentUserEl) currentUserEl.textContent = name;
+    }
+
     // 打开个人资料面板：以当前资料状态填充表单
     function openProfilePanel() {
         profileUsernameEl.textContent = IMSocket.getUsername();
@@ -511,6 +520,8 @@
                 region: info.region || '',
                 signature: info.signature || ''
             };
+            // 资料更新/多端同步后展示名即时跟随：昵称优先，无昵称降级账号（标题栏+侧栏顶部）
+            syncMyDisplayName();
             profileNicknameEl.value = myProfile.nickname;
             profileRegionEl.value = myProfile.region;
             profileSignatureEl.value = myProfile.signature;
@@ -2106,9 +2117,8 @@
             // 登录持久化：登录成功保存凭据，刷新页面时自动重登保持登录状态
             // window._lastPassword 为本次连接使用的密码（socket.js connect 时记录）
             saveAuth(IMSocket.getUsername(), window._lastPassword || '');
-            currentUserEl.textContent = IMSocket.getUsername();
-            // 阶段七十八：标题栏用户区（头像+账号）同步显示（仅 PC 端可见，Web/手机端标题栏整体隐藏不受影响）
-            titlebarUsernameEl.textContent = IMSocket.getUsername();
+            // 先按账号显示（侧栏顶部+PC 标题栏），登录响应解析出昵称后由 syncMyDisplayName() 纠正为"昵称优先"
+            syncMyDisplayName();
             titlebarUserEl.classList.remove('hidden');
             // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
             // 同步更新导航栏头像与消息气泡头像数据源
@@ -2129,6 +2139,8 @@
                         region: loginInfo.profile.region || '',
                         signature: loginInfo.profile.signature || ''
                     };
+                    // 有昵称时展示名从账号纠正为昵称（无昵称 syncMyDisplayName 内部降级仍显账号）
+                    syncMyDisplayName();
                 }
                 // 阶段三十一：同步服务端下发的分片大小（服务端归口，覆盖前端兜底默认值）
                 // 原实现：CHUNK_SIZE 恒为前端硬编码 4KB，与服务端 chunk_size 配置脱节
