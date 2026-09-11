@@ -1314,20 +1314,21 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		memEnqueueExtract(agent, c.username, question, full)
 
 		// 阶段七十八：问答成功完成才扣积分（失败/停止路径已在上方 return，不扣分即"失败自动退还"）；
-		// 按 usage 折算（1000 tokens = 1 积分向上取整，无 usage 按最低 1 积分），余额钳制非负；
+		// 按 usage 折算（1000 tokens = 1 积分，双精度保留 3 位小数如 4506 tokens = 4.506，
+		// 无 usage 按最低 1 积分），余额钳制非负；
 		// 扣后余额随结束帧下发，PC 端标题栏 ⚡ 积分实时刷新（服务端归口，客户端不做任何积分计算）；
 		// 指针携带：扣分成功才置值（余额为 0 也会下发），nil=扣分失败时前端保持旧值
 		cost := aiPointsCost(usage.TotalTokens)
-		var balancePtr *int
+		var balancePtr *float64
 		if balance, err := userPointsDeduct(c.username, cost); err != nil {
 			// 扣分失败不阻断回复展示（回复已落库），仅记日志便于对账
 			logger.Error("积分扣除失败（用户 %s，消耗 %d tokens）：%v", c.username, usage.TotalTokens, err)
 		} else {
 			balancePtr = &balance
-			logger.Info("积分扣除（用户 %s，- %d 积分，%d tokens，余额 %d）", c.username, cost, usage.TotalTokens, balance)
+			logger.Info("积分扣除（用户 %s，- %.3f 积分，%d tokens，余额 %.3f）", c.username, cost, usage.TotalTokens, balance)
 			// 阶段七十八：流水审计（AI 问答扣除，操作人 system）
 			recordPointsLog(c.username, -cost, balance, "ai_deduct", "system",
-				fmt.Sprintf("AI 问答（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分向上取整", agent.Name, usage.TotalTokens))
+				fmt.Sprintf("AI 问答（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", agent.Name, usage.TotalTokens))
 		}
 
 		endMsg := protocol.Message{

@@ -38,7 +38,7 @@
              服务端归口（登录响应/AI 结束帧下发），仅 PC 端标题栏展示；悬停提示扣分规则（自绘 tooltip：
              data-tip 供 CSS content 读取，原生 title 已移除避免双气泡；元素 no-drag 保证悬停事件可达）；
              CSS 绝对定位到标题栏右侧、紧贴原生最小化按钮左侧（TRAE CN 布局），DOM 位置不参与 flex 排布 -->
-        <div id="titlebar-points" class="titlebar-points" style="display: none;" data-tip="每 1000 tokens 消耗 1 积分；问答失败或中断不扣分">
+        <div id="titlebar-points" class="titlebar-points" style="display: none;" data-tip="每 1000 tokens 消耗 1 积分（精确折算）；问答失败或中断不扣分">
             <span class="titlebar-points-icon">⚡</span>
             <span id="titlebar-points-num" class="titlebar-points-num">0</span>
         </div>
@@ -576,7 +576,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.62"></script>
+    <script src="js/chat.js?v=2.63"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

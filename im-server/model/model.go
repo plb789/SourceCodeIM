@@ -18,20 +18,22 @@ type User struct {
 	Role       int8      `gorm:"column:role;type:tinyint;default:0" json:"role"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
-	// 阶段七十八：AI 积分（TRAE CN 同款问答积分）——按 Token 消耗折算扣除（1000 tokens = 1 积分，向上取整），
-	// 余额不足拦截 AI 提问；列默认值 100：AutoMigrate 加列时存量用户自动补 100，注册逻辑另显式赋值
-	Points int `gorm:"column:points;type:int;default:100" json:"points"`
+	// 阶段七十八：AI 积分（TRAE CN 同款问答积分）——按 Token 消耗折算扣除（1000 tokens = 1 积分，
+	// 双精度保留 3 位小数，如 4506 tokens = 4.506 积分），余额不足拦截 AI 提问；
+	// 列默认值 100：AutoMigrate 加列时存量用户自动补 100，注册逻辑另显式赋值；
+	// 双精度迁移：int → double（AutoMigrate 改列型，存量整数值自动成为浮点值，无需数据修复）
+	Points float64 `gorm:"column:points;type:double;default:100" json:"points"`
 }
 
 // PointsLog 阶段七十八：积分流水（AI 扣分/管理员调整/注册赠送全量审计，后台积分管理面板数据源）
 type PointsLog struct {
 	ID           int64     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
-	Username     string    `gorm:"column:username;type:varchar(64);index" json:"username"`             // 积分归属用户
-	Change       int       `gorm:"column:change;type:int" json:"change"`                               // 变动量：正=增加 负=扣除
-	BalanceAfter int       `gorm:"column:balance_after;type:int" json:"balance_after"`                 // 变动后余额（对账归口）
-	Reason       string    `gorm:"column:reason;type:varchar(32);index" json:"reason"`                 // ai_deduct / admin_adjust / register_grant
-	Operator     string    `gorm:"column:operator;type:varchar(64)" json:"operator"`                   // 操作人（管理员调整时记录；系统行为为 system）
-	Detail       string    `gorm:"column:detail;type:varchar(255)" json:"detail"`                      // 人类可读说明（如 AI 问答消耗 tokens 数）
+	Username     string    `gorm:"column:username;type:varchar(64);index" json:"username"` // 积分归属用户
+	Change       float64   `gorm:"column:change;type:double" json:"change"`                // 变动量：正=增加 负=扣除（双精度，保留 3 位小数）
+	BalanceAfter float64   `gorm:"column:balance_after;type:double" json:"balance_after"`  // 变动后余额（对账归口，双精度）
+	Reason       string    `gorm:"column:reason;type:varchar(32);index" json:"reason"`     // ai_deduct / admin_adjust / register_grant
+	Operator     string    `gorm:"column:operator;type:varchar(64)" json:"operator"`       // 操作人（管理员调整时记录；系统行为为 system）
+	Detail       string    `gorm:"column:detail;type:varchar(255)" json:"detail"`          // 人类可读说明（如 AI 问答消耗 tokens 数）
 	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
 }
 

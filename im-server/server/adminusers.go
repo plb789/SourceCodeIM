@@ -9,6 +9,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,12 +31,12 @@ func (s *Server) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type userRow struct {
-		ID         uint   `json:"id"`
-		Username   string `json:"username"`
-		Nickname   string `json:"nickname"`
-		Role       int8   `json:"role"`
-		Points     int    `json:"points"`
-		CreateTime string `json:"create_time"`
+		ID         uint    `json:"id"`
+		Username   string  `json:"username"`
+		Nickname   string  `json:"nickname"`
+		Role       int8    `json:"role"`
+		Points     float64 `json:"points"`
+		CreateTime string  `json:"create_time"`
 	}
 	rows := make([]userRow, 0, len(users))
 	for _, u := range users {
@@ -52,7 +53,8 @@ func (s *Server) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAdminUserPointsPut PUT /admin/api/users/{username}/points
-// 请求体 {"points": 100}：绝对值设置（>=0），充值/纠正均走此归口；
+// 请求体 {"points": 100}：绝对值设置（>=0，支持小数如 12.5，服务端四舍五入到 2 位小数），
+// 充值/纠正均走此归口；
 // 阶段七十八：调整写入积分流水（记录变动量与操作管理员）
 func (s *Server) handleAdminUserPointsPut(w http.ResponseWriter, r *http.Request) {
 	username := r.PathValue("username")
@@ -62,7 +64,7 @@ func (s *Server) handleAdminUserPointsPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body struct {
-		Points *int `json:"points"`
+		Points *float64 `json:"points"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Points == nil {
 		adminFail(w, http.StatusBadRequest, "参数错误：需要 points 字段")
@@ -72,20 +74,22 @@ func (s *Server) handleAdminUserPointsPut(w http.ResponseWriter, r *http.Request
 		adminFail(w, http.StatusBadRequest, "积分不能为负数")
 		return
 	}
+	// 双精度归口：服务端统一四舍五入到 2 位小数（防管理员传任意精度导致流水对账困难）
+	pts := math.Round(*body.Points*100) / 100
 	// 先取旧余额用于计算流水变动量（用户不存在时此处即报错，避免误写调整流水）
 	var old model.User
 	if err := store.DB.Select("username", "points").Where("username = ?", username).First(&old).Error; err != nil {
 		adminFail(w, http.StatusNotFound, "用户不存在")
 		return
 	}
-	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Update("points", *body.Points).Error; err != nil {
+	if err := store.DB.Model(&model.User{}).Where("username = ?", username).Update("points", pts).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "积分更新失败")
 		return
 	}
-	// 阶段七十八：调整流水审计（变动量 = 新 - 旧，记录操作管理员）
-	recordPointsLog(username, *body.Points-old.Points, *body.Points, "admin_adjust",
-		adminUserFromCtx(r), fmt.Sprintf("管理员手动调整积分：%d → %d", old.Points, *body.Points))
-	adminJSON(w, map[string]interface{}{"ok": true, "username": username, "points": *body.Points})
+	// 阶段七十八：调整流水审计（变动量 = 新 - 旧，记录操作管理员；金额均为双精度）
+	recordPointsLog(username, pts-old.Points, pts, "admin_adjust",
+		adminUserFromCtx(r), fmt.Sprintf("管理员手动调整积分：%s → %s", fmtF2(old.Points), fmtF2(pts)))
+	adminJSON(w, map[string]interface{}{"ok": true, "username": username, "points": pts})
 }
 
 // pointsTimeFilter 阶段七十八：解析 start/end 时间范围参数并附加到查询（流水查询与导出共用，口径一致）。
@@ -183,8 +187,8 @@ func (s *Server) handleAdminPointsLogsExport(w http.ResponseWriter, r *http.Requ
 			l.CreateTime.Format("2006-01-02 15:04:05"),
 			csvSafe(l.Username),
 			pointsReasonText(l.Reason),
-			strconv.Itoa(l.Change),
-			strconv.Itoa(l.BalanceAfter),
+			fmtF3(l.Change),
+			fmtF3(l.BalanceAfter),
 			csvSafe(l.Operator),
 			csvSafe(l.Detail),
 		}
@@ -236,6 +240,16 @@ func pointsReasonText(reason string) string {
 	default:
 		return reason
 	}
+}
+
+// fmtF2 余额类展示：浮点保留 2 位小数并去掉多余的尾零（95 → "95"，12.5 → "12.5"）
+func fmtF2(v float64) string {
+	return strconv.FormatFloat(math.Round(v*100)/100, 'f', -1, 64)
+}
+
+// fmtF3 变动/余额 CSV 导出：保留 3 位小数并去尾零（-4.506 → "-4.506"，95 → "95"）
+func fmtF3(v float64) string {
+	return strconv.FormatFloat(math.Round(v*1000)/1000, 'f', -1, 64)
 }
 
 // csvSafe CSV 公式注入防护：以 = + @ 开头（及含制表/换行）的单元格前加单引号，
@@ -297,14 +311,14 @@ func (s *Server) handleAdminPointsLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type logRow struct {
-		ID           int64  `json:"id"`
-		Username     string `json:"username"`
-		Change       int    `json:"change"`
-		BalanceAfter int    `json:"balance_after"`
-		Reason       string `json:"reason"`
-		Operator     string `json:"operator"`
-		Detail       string `json:"detail"`
-		CreateTime   string `json:"create_time"`
+		ID           int64   `json:"id"`
+		Username     string  `json:"username"`
+		Change       float64 `json:"change"`
+		BalanceAfter float64 `json:"balance_after"`
+		Reason       string  `json:"reason"`
+		Operator     string  `json:"operator"`
+		Detail       string  `json:"detail"`
+		CreateTime   string  `json:"create_time"`
 	}
 	rows := make([]logRow, 0, len(logs))
 	for _, l := range logs {

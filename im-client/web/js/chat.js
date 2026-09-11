@@ -392,9 +392,11 @@
     titlebarUserEl.addEventListener('click', openProfilePanel);
 
     // ===== 阶段七十八：标题栏 AI 积分显示（TRAE CN 同款）=====
-    // 服务端归口：余额仅来自登录响应/AI 结束帧下发，前端只做展示，不做任何扣减计算
+    // 服务端归口：余额仅来自登录响应/AI 结束帧下发，前端只做展示，不做任何扣减计算；
+    // 双精度：服务端按 tokens/1000 保留 3 位小数扣除，前端展示格式化最多 2 位小数去尾零（94.506 → 94.51）
     function setPointsBalance(n) {
-        titlebarPointsNumEl.textContent = String(n);
+        var v = Math.round(Number(n) * 100) / 100;
+        titlebarPointsNumEl.textContent = String(v);
         titlebarPointsEl.style.display = ''; // CSS 默认 display:none，清空内联后按样式表 flex 显示
         // 悬停提示走 index.html 静态 data-tip + CSS 自绘气泡（不设原生 title，否则停留 1-2 秒会叠出系统气泡）
     }

@@ -123,7 +123,7 @@ type Message struct {
 	TotalTokens      int `json:"total_tokens,omitempty"`
 	// 阶段七十八：扣分后剩余 AI 积分（服务端归口，仅 AI 问答成功结束帧携带，客户端标题栏实时刷新）。
 	// 用指针：余额恰为 0 时也要下发（值类型 + omitempty 会把 0 丢掉导致前端不刷新），nil=本次未扣分/扣分失败
-	PointsBalance *int `json:"points_balance,omitempty"`
+	PointsBalance *float64 `json:"points_balance,omitempty"` // 阶段七十八：AI 问答扣后余额（双精度，nil=扣分失败前端保持旧值）
 	// 已读状态（随私聊回显帧下发：AI 提问回显为 true——AI 会话无回执语义，服务端落库即视为已读；
 	// 普通私聊回显为 false 保持既有回执链路）
 	IsRead bool `json:"is_read,omitempty"`

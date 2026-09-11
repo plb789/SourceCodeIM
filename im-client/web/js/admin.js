@@ -1784,6 +1784,13 @@
     var pointsAll = [];        // 全量用户（含积分）
     var pointsFiltered = [];   // 搜索过滤后（分页数据源）
     var pointsPage = 1;        // 当前页（1 起）
+
+    // 双精度积分显示格式化：最多 2 位小数、去尾零（95 → "95"，94.506 → "94.51"，0.5 → "0.5"）；
+    // 数值计算/存储归口服务端（保留 3 位小数），前端仅展示格式化
+    function fmtPts(n) {
+        var v = Math.round(Number(n) * 100) / 100;
+        return String(v);
+    }
     var POINTS_PAGE_SIZE = 10;
 
     function loadPointsUsers() {
@@ -1825,8 +1832,8 @@
         });
         $('points-stat-users').textContent = String(pointsAll.length);
         $('points-stat-admins').textContent = '管理员 ' + admins;
-        $('points-stat-total').textContent = String(total);
-        $('points-stat-avg').textContent = pointsAll.length ? String(Math.round(total / pointsAll.length)) : '-';
+        $('points-stat-total').textContent = fmtPts(total);
+        $('points-stat-avg').textContent = pointsAll.length ? fmtPts(total / pointsAll.length) : '-';
         $('points-stat-low').textContent = String(low);
     }
 
@@ -1854,7 +1861,7 @@
                 '<td class="points-username">' + escHtml(u.username || '') + '</td>' +
                 '<td>' + escHtml(u.nickname || u.username || '') + '</td>' +
                 '<td>' + (u.role === 1 ? '<span class="at-badge at-st-completed">管理员</span>' : '<span class="points-role-normal">普通用户</span>') + '</td>' +
-                '<td><strong class="' + numCls + '">' + pts + '</strong>' + zeroTag + '</td>' +
+                '<td><strong class="' + numCls + '">' + fmtPts(pts) + '</strong>' + zeroTag + '</td>' +
                 '<td class="points-time">' + escHtml(u.create_time || '-') + '</td>' +
                 '<td><button class="admin-btn small points-edit-btn" data-username="' + escAttr(u.username || '') + '">调整</button>' +
                 ' <button class="admin-btn small points-log-btn" data-username="' + escAttr(u.username || '') + '" title="查看该用户积分流水">流水</button></td>' +
@@ -1878,18 +1885,20 @@
         }
         if (!u) { showToast('用户数据已过期，请刷新后重试'); return; }
         openEditModal('调整积分 - ' + u.username + (u.nickname && u.nickname !== u.username ? '（' + u.nickname + '）' : ''), [
-            { key: 'points', label: '积分余额', type: 'number', placeholder: '非负整数', hint: '绝对值设置（充值直接填新余额），保存立即生效；AI 问答按 1000 tokens = 1 积分自动扣除' }
+            { key: 'points', label: '积分余额', type: 'number', placeholder: '非负数，最多 2 位小数', hint: '绝对值设置（充值直接填新余额，支持小数），保存立即生效；AI 问答按 1000 tokens = 1 积分折算扣除' }
         ], { points: u.points || 0 }, function (data) {
-            var n = Math.floor(Number(data.points));
-            if (isNaN(n) || n < 0 || String(n) !== String(data.points).trim()) {
-                showToast('积分必须为非负整数');
+            // 双精度：允许最多 2 位小数（如 12.5 / 0.88），服务端归口再次四舍五入到 2 位
+            var raw = String(data.points).trim();
+            var n = Math.round(Number(raw) * 100) / 100;
+            if (isNaN(n) || n < 0 || !/^\d+(\.\d{1,2})?$/.test(raw)) {
+                showToast('积分必须为非负数（最多 2 位小数）');
                 return; // 弹窗保留，可修正后再次保存
             }
             api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/points', { points: n })
                 .then(function (result) {
                     if (!result.ok) { showToast(result.msg || '保存失败'); return; }
                     closeEditModal();
-                    showToast('已将 ' + u.username + ' 积分调整为 ' + n);
+                    showToast('已将 ' + u.username + ' 积分调整为 ' + fmtPts(n));
                     loadPointsUsers(); // 重拉列表刷新统计与表格（余额以服务端为准）
                     loadPointsLogs();  // 阶段七十八：流水表同步刷新，本轮调整记录即时可见
                 }).catch(function (e) { showToast(e.message || '网络异常'); });
@@ -1985,8 +1994,8 @@
                     '<td class="points-time">' + escHtml(l.create_time || '-') + '</td>' +
                     '<td class="points-username">' + escHtml(l.username || '') + '</td>' +
                     '<td><span class="at-badge ' + reasonCls + '">' + escHtml(reasonText) + '</span></td>' +
-                    '<td class="' + (pos ? 'plog-change-plus' : 'plog-change-minus') + '">' + (pos ? '+' : '') + l.change + '</td>' +
-                    '<td class="points-num-cell">' + l.balance_after + '</td>' +
+                    '<td class="' + (pos ? 'plog-change-plus' : 'plog-change-minus') + '">' + (pos ? '+' : '') + fmtPts(l.change) + '</td>' +
+                    '<td class="points-num-cell">' + fmtPts(l.balance_after) + '</td>' +
                     '<td class="points-time">' + escHtml(l.operator || 'system') + '</td>' +
                     '<td class="plog-detail">' + escHtml(l.detail || '') + '</td>' +
                     '</tr>';
