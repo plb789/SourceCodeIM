@@ -48,6 +48,7 @@ const BIN_MAX = 2 * 1024 * 1024;
 // 二进制扩展名清单（命中即走 base64 通道；未命中再查 NUL 字节兜底）
 const BINARY_EXTS = ['docx', 'docm', 'xlsx', 'xlsm', 'pptx', 'pptm', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'zip', '7z', 'rar', 'gz', 'tgz', 'tar', 'exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'class', 'jar', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'mp3', 'wav', 'flac', 'mp4', 'avi', 'mov', 'mkv', 'psd', 'ai', 'sketch', 'apk'];
 let pathGuard = null;  // main.js 注入 agentExecutor.safePath（browser-manager 不可反向 require，防循环依赖）
+let taskBackupApi = null; // 阶段九十七：main.js 注入任务备份查询/保留/撤销（agentExecutor.getTaskBackup 等）
 let viewerUrl = '';    // main.js 注入 SERVER_URL + 'file-viewer.html'
 
 // 配置文件：userData/agent_browser.json（{cdp_port: 0}；0=关闭 CDP 端口）
@@ -458,6 +459,22 @@ function readFilePayload(username, relPath) {
         payload.mime = 'text';
         payload.truncated = truncated;
         payload.editable = !truncated;
+        // 阶段九十七：任务修改探测——存在任务前备份且与当前内容不同 → 携带 baseline 供红蓝 gutter/保留撤销
+        if (!truncated && taskBackupApi && typeof taskBackupApi.get === 'function') {
+            const tb = taskBackupApi.get(abs);
+            if (tb && tb.backup) {
+                let bbuf = null;
+                try { bbuf = fs.readFileSync(tb.backup); } catch (e) { bbuf = null; }
+                if (bbuf && bbuf.length > 0 && bbuf.length <= TEXT_MAX) {
+                    if (bbuf.length >= 3 && bbuf[0] === 0xef && bbuf[1] === 0xbb && bbuf[2] === 0xbf) bbuf = bbuf.slice(3);
+                    const baseline = bbuf.toString('utf8');
+                    if (baseline !== payload.content) { // 内容相同（幂等写）不标记
+                        payload.task_modified = true;
+                        payload.baseline = baseline;
+                    }
+                }
+            }
+        }
     }
     return { ok: true, payload: payload, abs: abs };
 }
@@ -550,6 +567,10 @@ function viewerSave(payload) {
     try { fs.writeFileSync(tab.filePath, content, 'utf8'); } catch (e) {
         return { ok: false, error: '写入失败：' + (e.message || e) };
     }
+    // 阶段九十七：手工保存=接受当前内容（含 AI 改动）→ 任务备份按"保留"语义清理
+    if (taskBackupApi && typeof taskBackupApi.keep === 'function') {
+        try { taskBackupApi.keep(tab.filePath); } catch (e) {}
+    }
     tab.dirty = false;
     // 同步最新内容进 lastPayload（刷新标签=重渲染已保存内容）
     if (tab.lastPayload) tab.lastPayload.content = content;
@@ -558,6 +579,32 @@ function viewerSave(payload) {
     }
     statePush();
     return { ok: true };
+}
+
+// taskChangeOp 任务变更保留/撤销归口（阶段九十七）：路径只认 tab.filePath（页面仅传 tab_id）。
+// keep=接受当前磁盘内容（删备份）；revert=还原任务前字节并重读盘刷新 payload（页面全量重渲染）
+function taskChangeOp(payload, op) {
+    const tabId = String((payload && payload.tab_id) || '');
+    const tab = tabs.find(function (t) { return t.id === tabId && t.kind === 'file'; });
+    if (!tab) return { ok: false, error: '标签不存在或已关闭' };
+    if (!tab.filePath) return { ok: false, error: '该页无本地文件' };
+    if (!taskBackupApi || typeof taskBackupApi[op] !== 'function') return { ok: false, error: '任务备份能力未就绪' };
+    const r = taskBackupApi[op](tab.filePath);
+    if (r && r.ok && tab.lastPayload) {
+        if (op === 'revert') { // 撤销：重读盘刷新（内容回任务前，标记随备份删除自然消失）
+            const rr = readFilePayload(tab.username, tab.relPath);
+            if (rr.ok) tab.lastPayload = Object.assign(rr.payload, { tab_id: tab.id });
+        } else { // 保留：清标记，baseline 对齐当前内容（gutter 随之清空）
+            delete tab.lastPayload.task_modified;
+            delete tab.lastPayload.baseline;
+        }
+        fileLoadPush(tab); // 重注入 payload → 页面 __wsFileLoad 全量刷新
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('browser:file-saved', { path: tab.relPath });
+        }
+        statePush();
+    }
+    return r;
 }
 
 // ===== Agent 工具实现（agent-executor.js 归口调用，与主进程同上下文） =====
@@ -955,6 +1002,13 @@ function init(win) {
     ipcMain.handle('browser:file-save', function (event, payload) {
         return viewerSave(payload);
     });
+    // 阶段九十七：任务变更保留/撤销（viewer 页"任务已修改"条按钮，路径归口 tab.filePath）
+    ipcMain.handle('browser:task-keep', function (event, payload) {
+        return taskChangeOp(payload, 'keep');
+    });
+    ipcMain.handle('browser:task-revert', function (event, payload) {
+        return taskChangeOp(payload, 'revert');
+    });
     // viewer 页脏标记（编辑未保存）→ tab 栏圆点提示
     ipcMain.on('browser:viewer-dirty', function (event, payload) {
         const tab = tabs.find(function (t) { return t.id === String((payload && payload.tab_id) || '') && t.kind === 'file'; });
@@ -972,6 +1026,12 @@ function setPathGuard(fn) {
     pathGuard = typeof fn === 'function' ? fn : null;
 }
 
+// setTaskBackupApi 注入任务备份查询/保留/撤销（阶段九十七，main.js 传入 agentExecutor 三个 helper——
+// browser-manager 不可反向 require agent-executor，会循环依赖）
+function setTaskBackupApi(api) {
+    taskBackupApi = (api && typeof api === 'object') ? api : null;
+}
+
 // setViewerUrl 注入 viewer 页地址（main.js 传 SERVER_URL + 'file-viewer.html'，PC 壳页面
 // 由服务端提供，file-viewer.html 随 web 目录同源分发）
 function setViewerUrl(url) {
@@ -982,6 +1042,7 @@ module.exports = {
     init: init,
     setCdpSwitch: setCdpSwitch,
     setPathGuard: setPathGuard,
+    setTaskBackupApi: setTaskBackupApi, // 阶段九十七：任务备份查询/保留/撤销注入
     setViewerUrl: setViewerUrl,
     agentExecute: agentExecute,
     statePush: statePush

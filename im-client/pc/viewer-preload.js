@@ -15,5 +15,13 @@ contextBridge.exposeInMainWorld('imviewer', {
     // 编辑未保存脏标记（tab 栏圆点提示；开/关随编辑态变化上报）
     setDirty: function (tabId, dirty) {
         ipcRenderer.send('browser:viewer-dirty', { tab_id: String(tabId || ''), dirty: !!dirty });
+    },
+    // 阶段九十七：任务变更"保留"（接受当前磁盘内容，主进程清备份与标记）
+    taskKeep: function (tabId) {
+        return ipcRenderer.invoke('browser:task-keep', { tab_id: String(tabId || '') });
+    },
+    // 阶段九十七：任务变更"撤销"（还原任务前内容，主进程重读盘并重注入 payload 刷新）
+    taskRevert: function (tabId) {
+        return ipcRenderer.invoke('browser:task-revert', { tab_id: String(tabId || '') });
     }
 });

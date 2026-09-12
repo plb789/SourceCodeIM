@@ -4093,6 +4093,13 @@
         },
         setDirty: function (tabId, dirty) {
             window.desktop.browserViewerDirty(tabId, dirty);
+        },
+        // 阶段一百：任务变更保留/撤销桥接（此前缺失导致 viewer 页按钮点击抛 TypeError 无反应）
+        taskKeep: function (tabId) {
+            return window.desktop.browserTaskKeep(tabId);
+        },
+        taskRevert: function (tabId) {
+            return window.desktop.browserTaskRevert(tabId);
         }
     };
 
@@ -5326,6 +5333,7 @@
 
         var box = document.createElement('div');
         box.className = 'agent-changes';
+        box.dataset.changesTask = taskId; // 66 帧全量刷新定位标记（live 卡与重放卡共用，按 task_id 扫描重建）
         box.title = '仅统计服务端工作区变更；撤销将还原该文件到任务前内容';
 
         // 折叠汇总头：N 个文件已更改  +X -Y（默认收起，点击展开逐文件）
@@ -10142,9 +10150,17 @@
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
-        // 刷新当前会话 live 卡审查条（重放卡在重进会话时经详情接口重建，此处不处理）
+        // live 卡状态同步（后续任务事件渲染用最新变更集）
         var st = agentTaskCards[ev.task_id];
-        if (st && currentChatUser === msg.from_user) agentRenderChanges(st, ev.changes);
+        if (st) st.changes = ev.changes;
+        // 阶段一百：live 卡与重放卡审查条统一按容器标记整块重建——此前仅刷 live 卡，
+        // 重进会话后的历史（重放）卡点"全部保留/全部撤销"后 UI 不动，被误以为按钮无效
+        if (currentChatUser === msg.from_user) {
+            document.querySelectorAll('.agent-changes[data-changes-task="' + ev.task_id + '"]').forEach(function (old) {
+                var fresh = agentBuildChangesBox(ev.task_id, ev.changes); // 每处独立实例（事件监听器不随节点复用）
+                if (fresh) old.replaceWith(fresh); else old.remove();
+            });
+        }
         // 阶段七十九：同步停靠栏"文件变更"页签（pending 清零自动摘除页签/收面板）
         agentDockSetChanges(msg.from_user, ev.task_id, ev.changes);
         // 工作区面板对齐磁盘实际：撤销已改变工作区内容（新建撤销=文件被删，关相关标签；

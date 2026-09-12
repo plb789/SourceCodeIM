@@ -805,7 +805,14 @@ app.whenReady().then(function () {
     // 阶段九十二：文件查看标签依赖注入——路径校验复用 agentExecutor.safePath（防循环依赖改注入），
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html');
+    // 阶段一百：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=100');
+    // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
+    browserManager.setTaskBackupApi({
+        get: agentExecutor.getTaskBackup,
+        keep: agentExecutor.keepTaskChange,
+        revert: agentExecutor.revertTaskChange
+    });
 
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
     // 阶段三十八：改走 captureWithHide——先让主窗口消失再抓屏（QQ 同款），可截到被自己窗口挡住的内容；

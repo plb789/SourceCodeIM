@@ -126,6 +126,14 @@
         #fv-diff-info .fv-commit-subject { font-size: 13px; margin-bottom: 2px; }
         #fv-diff-info .fv-commit-info { font-size: 11.5px; }
         #fv-diff { flex: 1; min-height: 0; background: #232428; }
+        /* 阶段九十七：红蓝绿 gutter（TRAE CN 同款配色：新增绿条/修改蓝条/删除红块） */
+        .fv-btn.danger { border-color: #cf222e; color: #e5534b; }
+        .fv-btn.danger:hover { background: rgba(207, 34, 46, 0.15); }
+        .fv-g-add, .fv-g-mod { margin-left: 4px; border-left: 3px solid; }
+        .fv-g-add { border-left-color: #2da44e; }
+        .fv-g-mod { border-left-color: #316dca; }
+        .fv-g-del { position: relative; }
+        .fv-g-del::before { content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 9px; height: 3px; background: #cf222e; border-radius: 2px; }
         /* pptx */
         .fv-pptx { padding: 16px; text-align: center; }
         .fv-pptx-bar { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -141,6 +149,8 @@
         <span id="fv-status"></span>
         <button id="fv-btn-edit" class="fv-btn hidden">编辑</button>
         <button id="fv-btn-save" class="fv-btn primary hidden">保存</button>
+        <button id="fv-btn-keep" class="fv-btn primary hidden">保留变更</button>
+        <button id="fv-btn-revert" class="fv-btn hidden">撤销变更</button>
         <button id="fv-btn-cancel" class="fv-btn hidden">取消</button>
     </div>
     <div id="fv-body"></div>
@@ -169,6 +179,12 @@
         var diffEd = null;          // diff 编辑器实例（复用，不随渲染重建）
         var diffSide = true;        // true=并排 false=行内
         var diffOrigModel = null, diffModModel = null; // 每次渲染重建并释放旧模型，防泄漏
+        var btnKeep = document.getElementById('fv-btn-keep');   // 阶段九十七：任务变更保留/撤销
+        var btnRevert = document.getElementById('fv-btn-revert');
+        var previewLock = false;    // 主动取消后的预览锁（防"打开即编辑"回流，编辑按钮恢复）
+        var dirtyNow = false;       // 编辑态脏标记（保存按钮显隐/状态栏驱动）
+        var suppressDirty = false;  // monacoTakeOver setValue 期间屏蔽手工脏判定
+        var fvBase = '';            // gutter 基线（任务文件=任务前内容；普通文件=最近保存内容）
 
         // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
         // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
@@ -182,46 +198,260 @@
             ini: 'ini', cfg: 'ini', conf: 'ini', yaml: 'yaml', yml: 'yaml', sql: 'sql', lua: 'lua', php: 'php', rb: 'ruby'
         };
         var monacoEditor = null, monacoReady = false, monacoLoading = false, monacoPendingCb = null;
+        var monacoDead = false;     // 加载失败标记（防 render 自动回流造成循环重试；点"编辑"可重置重试）
+        var monacoFailTimer = null; // 看门狗：回调静默不触发时强制回落预览（实测并行加载曾静默挂死）
         var monacoBox = document.getElementById('fv-monaco');
         function monacoLang() { return MONACO_LANG[((data && data.ext) || '').toLowerCase()] || 'plaintext'; }
         function ensureMonaco() {
-            if (monacoReady || monacoLoading) { return; }
+            if (monacoReady || monacoLoading || monacoDead) { return; }
             monacoLoading = true;
             require.config({ paths: { vs: '/lib/monaco/min/vs' } });
-            require(['vs/editor/editor.main'], function () {
-                monaco.editor.defineTheme('im-dark', {
-                    base: 'vs-dark', inherit: true, rules: [],
-                    colors: {
-                        'editor.background': '#232428',
-                        'editorLineNumber.foreground': '#6a6b70',
-                        'editorLineNumber.activeForeground': '#a8a9ad',
-                        'editor.lineHighlightBackground': '#2a2b30',
-                        'editorCursor.foreground': '#e8e8e8',
-                        'editor.selectionBackground': '#50608c'
-                    }
+            window.MonacoEnvironment = { baseUrl: '/lib/monaco/min/' }; // 语言服务 worker（cssWorker 等）同源加载基址
+            /* 原实现（单次并行加载 5 模块）——已实测存在静默挂死缺陷，改为下方两段式加载：
+            require(['vs/editor/editor.main',
+                     'vs/language/css/cssMode',        // cssMode 即贡献入口（0.52 布局无 monaco.contribution.js）：属性文档悬停/补全（阶段九十八）
+                     'vs/language/typescript/tsMode',  // tsMode：JS/TS 类型签名+JSDoc 悬停/参数提示/补全（阶段九十九）
+                     'vs/language/html/htmlMode',      // htmlMode：标签/属性 MDN 文档悬停/补全（阶段九十九）
+                     'vs/language/json/jsonMode'       // jsonMode：schema 悬停/补全（阶段九十九）
+            ], function () { monacoBoot(); });
+            */
+            // 两段式加载（阶段一百修复）：并行加载时语言模块体积小先于 editor.main 执行，其工厂内同步
+            // require('vs/editor/editor.api')——该模块 ID 要等 editor.main 执行完才注册，先执行者抛错且
+            // AMD 成功/错误回调均不触发 → 页面永久"编辑器加载中…"空白。先内核后语言服务（实测顺序通过）。
+            require(['vs/editor/editor.main'], function () { // 第一段：编辑器内核（含全部语言贡献注册）
+                require(['vs/language/css/cssMode',        // cssMode：属性文档悬停/补全（阶段九十八）
+                         'vs/language/typescript/tsMode',  // tsMode：JS/TS 类型签名+JSDoc 悬停/参数提示/补全（阶段九十九）
+                         'vs/language/html/htmlMode',      // htmlMode：标签/属性 MDN 文档悬停/补全（阶段九十九）
+                         'vs/language/json/jsonMode'       // jsonMode：schema 悬停/补全（阶段九十九）
+                ], function () { monacoBoot(); }, function (e) { // 第二段：语言服务（悬停/补全增强）
+                    console.error('Monaco 语言服务模块加载失败：', e);
+                    monacoLoading = false;
+                    monacoFailFallback(); // 语言服务失败不影响编辑：内核已就绪仍可正常编辑
                 });
-                monacoEditor = monaco.editor.create(monacoBox, {
-                    value: '', language: 'plaintext', theme: 'im-dark', automaticLayout: true,
-                    fontSize: 12, lineHeight: 19, fontFamily: 'Consolas, "Courier New", monospace',
-                    minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
-                    wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true
-                });
-                monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { doSave(); });
-                monacoEditor.onDidChangeModelContent(function () {
+            }, function (e) {
+                console.error('Monaco 内核加载失败：', e);
+                monacoLoading = false;
+                monacoFailFallback();
+            });
+            clearTimeout(monacoFailTimer);
+            monacoFailTimer = setTimeout(function () { // 看门狗：15 秒无回调强制回落预览（防静默挂死卡死页面）
+                if (monacoReady || monacoDead) return;
+                console.error('Monaco 加载超时（15 秒无响应），回落预览');
+                monacoLoading = false;
+                monacoDead = true;
+                monacoFailFallback();
+            }, 15000);
+        }
+        function monacoBoot() { // 内核+语言服务全部就绪：关诊断/主题/建实例/挂监听（原 require 回调体平移）
+            clearTimeout(monacoFailTimer);
+            try { monaco.languages.css.cssDefaults.setOptions({ validate: false }); } catch (e) {} // 阶段九十八：关校验红线（避免项目现有 CSS 飘波浪线），仅保留 hover/补全
+            try { // 阶段九十九：关 TS/JS 诊断红线（大文件类型推断开销+噪音），hover/补全不受影响
+                var tsDefaults = monaco.languages.typescript.typescriptDefaults;
+                var jsDefaults = monaco.languages.typescript.javascriptDefaults;
+                tsDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true, noSuggestionDiagnostics: true });
+                jsDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true, noSuggestionDiagnostics: true });
+                tsDefaults.setCompilerOptions({ allowJs: true, allowNonTsExtensions: true, target: 99, moduleResolution: 2, allowUmdGlobalAccess: true });
+                jsDefaults.setCompilerOptions({ allowJs: true, allowNonTsExtensions: true, target: 99, moduleResolution: 2, checkJs: false, allowUmdGlobalAccess: true });
+            } catch (e) {}
+            try { monaco.languages.json.jsonDefaults.setOptions({ validate: false, allowComments: true, trailingCommas: true }); } catch (e) {} // 阶段九十九：关 JSON 校验
+            try { monaco.languages.html.htmlDefaults.setOptions({ format: { tabSize: 4, insertSpaces: true }, suggest: { html5: true } }); } catch (e) {} // 阶段九十九：HTML 补全配置
+            monaco.editor.defineTheme('im-dark', {
+                base: 'vs-dark', inherit: true, rules: [],
+                colors: {
+                    'editor.background': '#232428',
+                    'editorLineNumber.foreground': '#6a6b70',
+                    'editorLineNumber.activeForeground': '#a8a9ad',
+                    'editor.lineHighlightBackground': '#2a2b30',
+                    'editorCursor.foreground': '#e8e8e8',
+                    'editor.selectionBackground': '#50608c'
+                }
+            });
+            monacoEditor = monaco.editor.create(monacoBox, {
+                value: '', language: 'plaintext', theme: 'im-dark', automaticLayout: true,
+                fontSize: 12, lineHeight: 19, fontFamily: 'Consolas, "Courier New", monospace',
+                minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
+                wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true,
+                colorDecorators: true // 阶段九十八：颜色值前色块（悬停弹调色板，Monaco 内置 standaloneColorPicker）
+            });
+            monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { doSave(); });
+            monacoEditor.onDidChangeModelContent(function () {
+                if (!suppressDirty) {
                     draft = monacoEditor.getValue();
+                    dirtyNow = true;
+                    btnSave.classList.remove('hidden'); // 阶段九十七：编辑过后提示保存按钮（TRAE CN 同款）
+                    btnKeep.classList.add('hidden');    // dirty 后由保存接管（保存=保留全部改动）
+                    btnRevert.classList.add('hidden');
                     if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
                     setStatus('已修改（未保存）', 'dirty');
-                });
-                monacoReady = true;
-                var f = monacoPendingCb; monacoPendingCb = null;
-                if (f) f();
+                }
+                scheduleGutter(); // 红蓝绿 gutter 防抖重算（含 setValue 引发的一次）
             });
+            monacoReady = true;
+            registerCssHover(); // 阶段九十八：monaco 就绪后注册选择器特性 hover（monaco 为 AMD 异步全局，顶层注册会崩页面）
+            var f = monacoPendingCb; monacoPendingCb = null;
+            if (f) f();
+        }
+        function monacoFailFallback() { // Monaco 加载失败/超时兜底：内容永远可见（编辑等待中同"取消"路径回落静态预览）
+            clearTimeout(monacoFailTimer);
+            monacoPendingCb = null;
+            if (editing) {
+                editing = false;
+                previewLock = true; // 防 render 自动回流编辑态造成循环重试；"编辑"按钮保留（点击可重置 monacoDead 重试）
+                monacoBox.style.display = 'none';
+            } else if (data && (data.kind === 'diff' || data.kind === 'commit') && diffWrap.style.display !== 'none') {
+                diffWrap.style.display = 'none';
+                btnDiffMode.classList.add('hidden');
+                bodyEl.style.display = '';
+            }
+            render();
+            setStatus('编辑器加载失败，已切换为预览（可点"编辑"重试）', 'dirty');
+        }
+        // ===== 阶段九十八：CSS 选择器特性 hover（TRAE CN 同款：悬停选择器显示应用预览与 (ID, 类, 元素) 特性三元组） =====
+        // 注意：registerCssHover 须在 ensureMonaco 的 require 回调内调用（monaco 就绪后），严禁顶层执行
+        function registerCssHover() {
+            ['css', 'scss', 'less'].forEach(function (lang) {
+                monaco.languages.registerHoverProvider(lang, {
+                    provideHover: function (model, pos) {
+                        var hit = cssSelectorAt(model, pos);
+                        if (!hit || hit.sel.charAt(0) === '@') return null; // @media 等规则头不提示
+                        var p1 = model.getPositionAt(hit.segOff), p2 = model.getPositionAt(hit.segOff + hit.segLen);
+                        return {
+                            range: new monaco.Range(p1.lineNumber, p1.column, p2.lineNumber, p2.column),
+                            contents: [
+                                { value: '```html\n' + cssHoverPreview(hit.sel) + '\n```' },
+                                { value: '选择器特性: (' + cssSpecificity(hit.sel).join(', ') + ')' }
+                            ]
+                        };
+                    }
+                });
+            });
+        }
+        function cssSelectorAt(model, pos) { // 定位光标所在规则头内的逗号选择器段，返回 {sel, segOff, segLen} 或 null
+            var off = model.getOffsetAt(pos);
+            var text = model.getValue();
+            var re = /([^{}]+)\{/g, m, hit = null;
+            while ((m = re.exec(text))) { // 规则头扫描：光标须落在"选择器…{"(含)区间内（属性区自然排除）
+                if (off >= m.index && off <= m.index + m[1].length + 1) { hit = m; break; }
+            }
+            if (!hit) return null;
+            var hStart = hit.index, hdr = hit[1], i = 0;
+            for (;;) { // 逗号拆段，按 offset 定位光标所在段
+                var comma = hdr.indexOf(',', i);
+                var segEnd = comma === -1 ? hdr.length : comma;
+                if (off <= hStart + segEnd) {
+                    var segText = hdr.slice(i, segEnd);
+                    return { sel: segText.trim(), segOff: hStart + i, segLen: segText.length };
+                }
+                if (comma === -1) return null;
+                i = comma + 1;
+            }
+        }
+        function cssSpecificity(selText) { // 标准三元组 (ID, 类/属性/伪类, 元素/伪元素)；:not/:is/:has 参数计入，:where 不计
+            var s = String(selText).replace(/\/\*[\s\S]*?\*\//g, '');
+            s = s.replace(/:(?:not|is|has|matches)\(/gi, '('); // 剥壳保参（参数按规范计入）
+            s = s.replace(/::?where\([^)]*\)/gi, ' ');         // :where 参数为 0 权重，整体移除
+            var a = (s.match(/#[\w-]+/g) || []).length;
+            var b = (s.match(/\.[\w-]+|\[[^\]]*\]/g) || []).length
+                  + (s.match(/(?<!:):[\w-]+/g) || []).length;  // 单冒号伪类（:hover 等），:: 伪元素除外
+            var c = (s.match(/::[\w-]+/g) || []).length;
+            var bare = s.replace(/#[\w-]+|\.[\w-]+|\[[^\]]*\]|::?[\w-]+/g, ' ');
+            var ems = bare.split(/[\s>+~(),]+/).filter(function (t) { return /^[a-zA-Z][\w-]*$/.test(t); });
+            c += ems.length;
+            return [a, b, c];
+        }
+        function cssHoverPreview(sel) { // 截图同款应用预览：<div id="x" class="a b">
+            var s = sel.replace(/\/\*[\s\S]*?\*\//g, '').replace(/::?[\w-]+(?:\([^)]*\))?/g, ''); // 伪类/伪元素不入预览
+            var attrs = [];
+            var idm = s.match(/#([\w-]+)/);
+            if (idm) attrs.push('id="' + idm[1] + '"');
+            var clsm = s.match(/\.([\w-]+)/g);
+            if (clsm) attrs.push('class="' + clsm.map(function (c2) { return c2.slice(1); }).join(' ') + '"');
+            var tag = (s.match(/(?:^|[\s>+~(])([a-zA-Z][\w-]*)/) || [])[1];
+            return '<' + (tag || 'element') + (attrs.length ? ' ' + attrs.join(' ') : '') + '>';
         }
         function monacoTakeOver(val) { // 切换编辑内容到 Monaco 并置语言
             monacoBox.style.display = 'block';
+            suppressDirty = true; // setValue 引发的内容变更事件不算手工编辑
             monacoEditor.setValue((val || '').replace(/\r\n/g, '\n'));
+            suppressDirty = false;
             monaco.editor.setModelLanguage(monacoEditor.getModel(), monacoLang());
+            dirtyNow = false;
             monacoEditor.focus();
+            scheduleGutter(); // 阶段九十七：进入编辑即按 baseline 画红蓝绿 gutter
+        }
+        // ===== 阶段九十七：红蓝绿 gutter（TRAE CN 同款：新增绿条/修改蓝条/删除红块） =====
+        // Monaco standalone 无内置 git gutter（VS Code 由 git 扩展提供），自实现 baseline 行级
+        // diff + margin decorations：前后缀裁剪 + 核心区 LCS DP；核心区超限降级不画（防卡顿）
+        var gutterTimer = null;
+        var gutterCol = null;       // Monaco decorations collection（复用）
+        var gutterDecoIds = [];     // 旧版 API 兜底
+        var GUTTER_CORE_MAX = 1200; // 裁剪后核心区单侧行数上限（1200² DP ≈ 5.8MB 可控）
+        function lcsAlign(a, b) { // 返回递增 [[ai,bi]] 行对齐对
+            var n = a.length, m = b.length, w = m + 1;
+            var dp = new Uint32Array((n + 1) * w);
+            for (var i = n - 1; i >= 0; i--) {
+                for (var j = m - 1; j >= 0; j--) {
+                    dp[i * w + j] = (a[i] === b[j]) ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+                }
+            }
+            var pairs = [], x = 0, y = 0;
+            while (x < n && y < m) {
+                if (a[x] === b[y]) { pairs.push([x, y]); x++; y++; }
+                else if (dp[(x + 1) * w + y] >= dp[x * w + y + 1]) x++;
+                else y++;
+            }
+            return pairs;
+        }
+        function computeGutterMarks(baseText, curText) { // {added:[b行0基], modified:[b行0基], deleted:[b侧锚定行0基]}
+            var marks = { added: [], modified: [], deleted: [] };
+            var a = String(baseText || '').replace(/\r\n/g, '\n').split('\n');
+            var b = String(curText || '').replace(/\r\n/g, '\n').split('\n');
+            var pre = 0; // 前缀裁剪：编辑场景改动局部，先剔出相同前后缀
+            while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+            var suf = 0;
+            while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+            var ca = a.slice(pre, a.length - suf), cb = b.slice(pre, b.length - suf);
+            if ((!ca.length && !cb.length) || ca.length > GUTTER_CORE_MAX || cb.length > GUTTER_CORE_MAX) return marks; // 无差异/超限降级
+            var pairs = lcsAlign(ca, cb);
+            var ai = 0, bi = 0, p = 0;
+            function flush(aLen, bLen) { // 未匹配段分类：min(a,b)=修改蓝，b 剩余=新增绿，a 剩余=删除红块（锚定其后 b 行）
+                var mm = Math.min(aLen, bLen);
+                for (var x = 0; x < mm; x++) marks.modified.push(pre + bi + x);
+                for (var x = mm; x < bLen; x++) marks.added.push(pre + bi + x);
+                if (aLen > bLen) marks.deleted.push(pre + bi + bLen);
+            }
+            while (p < pairs.length) {
+                flush(pairs[p][0] - ai, pairs[p][1] - bi);
+                ai = pairs[p][0] + 1; bi = pairs[p][1] + 1; p++;
+            }
+            flush(ca.length - ai, cb.length - bi);
+            return marks;
+        }
+        function applyGutter() {
+            gutterTimer = null;
+            if (!monacoReady || !monacoEditor) return;
+            var model = monacoEditor.getModel();
+            if (!model || monacoBox.style.display === 'none') return;
+            var marks = computeGutterMarks(fvBase, model.getValue());
+            var lineCount = model.getLineCount();
+            var decos = [];
+            function push(l0, cls) {
+                if (l0 < 0 || l0 >= lineCount) return;
+                decos.push({ range: new monaco.Range(l0 + 1, 1, l0 + 1, 1), options: { isWholeLine: true, linesDecorationsClassName: cls } });
+            }
+            marks.added.forEach(function (l) { push(l, 'fv-g-add'); });
+            marks.modified.forEach(function (l) { push(l, 'fv-g-mod'); });
+            marks.deleted.forEach(function (l) { push(Math.min(l, lineCount - 1), 'fv-g-del'); }); // 文件尾删除锚定末行
+            if (monacoEditor.createDecorationsCollection) {
+                if (!gutterCol) gutterCol = monacoEditor.createDecorationsCollection();
+                gutterCol.set(decos);
+            } else { // 旧版 API 兜底
+                gutterDecoIds = monacoEditor.deltaDecorations(gutterDecoIds, decos);
+            }
+        }
+        function scheduleGutter() { // 防抖：输入高峰避免每次击键全量 diff
+            if (gutterTimer) clearTimeout(gutterTimer);
+            gutterTimer = setTimeout(applyGutter, 250);
         }
         var data = null;      // 当前 payload（刷新重注入覆盖）
         var editing = false;  // 编辑态
@@ -565,6 +795,10 @@
             btnDiffMode.classList.remove('hidden');
             diffHeaderInfo(p);
             if (!monacoReady) { // 复用编辑态同一条懒加载通道，就绪后自动渲染
+                if (monacoDead) { // 阶段一百：编辑器加载失败过 → 直接静态渲染兜底，不再循环重试
+                    renderDiffStatic(p.content || '');
+                    return;
+                }
                 setStatus('对比器加载中…');
                 monacoPendingCb = function () { if (diffWrap.style.display !== 'none') renderDiffApply(data); };
                 ensureMonaco();
@@ -618,6 +852,8 @@
             bodyEl.style.display = '';
             btnEdit.classList.add('hidden');
             btnSave.classList.add('hidden');
+            btnKeep.classList.add('hidden');
+            btnRevert.classList.add('hidden');
             btnCancel.classList.add('hidden');
             if (!data) { nameEl.textContent = '（未打开）'; setStatus(''); return; }
             nameEl.textContent = data.title || data.name || '';
@@ -664,20 +900,41 @@
                     bodyEl.appendChild(renderCode(p.content || '', p.ext || ''));
                 }
             }
+            var isMdFile = (p.ext === 'md' || p.ext === 'markdown');
             if (p.editable && hasViewer()) {
-                btnEdit.classList.remove('hidden');
-                if (editing) showEditor();
+                if (isMdFile) { // MD 保持现状：预览 + 手动编辑按钮
+                    btnEdit.classList.remove('hidden');
+                    if (editing) showEditor();
+                } else if (!editing && !previewLock && !monacoDead) { // 阶段九十七：源码文件打开即编辑（免点"编辑"，TRAE CN 同款）；monacoDead 时跳过自动编辑走下方预览+编辑按钮兜底
+                    editing = true;
+                    draft = '';
+                    showEditor();
+                } else if (editing) {
+                    showEditor();
+                } else { // previewLock：主动取消后保持预览态，编辑按钮恢复
+                    btnEdit.classList.remove('hidden');
+                }
             }
-            setStatus(editing ? '已修改' : (p.editable ? '' : '只读'), editing ? 'dirty' : '');
+            if (editing) { // 编辑态：dirty 优先，任务修改次之
+                setStatus(dirtyNow ? '已修改（未保存）' : (p.task_modified ? '任务已修改，可保留或撤销' : ''), (dirtyNow || p.task_modified) ? 'dirty' : '');
+            } else if (p.editable) {
+                setStatus(p.task_modified ? '任务已修改，可保留或撤销' : '', p.task_modified ? 'dirty' : '');
+            } else {
+                setStatus('只读', '');
+            }
+            updateTaskButtons(); // 预览/编辑态统一收口（预览态任务文件也可保留/撤销）
         }
 
         // ===== 编辑态 =====
         function showEditor() {
             bodyEl.style.display = 'none';
             var val = draft || (data && data.content) || '';
+            // gutter 基线：任务文件=任务前备份内容（打开即见 AI 改动红蓝绿），否则=最近保存内容
+            fvBase = (data && data.task_modified && data.baseline != null) ? data.baseline : ((data && data.__saved != null) ? data.__saved : ((data && data.content) || ''));
+            dirtyNow = false;
             if (monacoReady) {
                 monacoTakeOver(val);
-                setStatus(''); // setValue 会触发一次内容变更提示，重置
+                setStatus(''); // setValue 会触发一次内容变更提示，重置（render 尾部按 dirty/任务标记落最终状态）
             } else {
                 monacoBox.style.display = 'block';
                 setStatus('编辑器加载中…');
@@ -685,21 +942,80 @@
                 ensureMonaco(); // 首次进入编辑才加载 Monaco（本地资源毫秒级），加载完成自动接管
             }
             btnEdit.classList.add('hidden');
-            btnSave.classList.remove('hidden');
+            btnSave.classList.add('hidden'); // 阶段九十七：dirty 才显示保存按钮
             btnCancel.classList.remove('hidden');
+            updateTaskButtons();
+        }
+        function updateTaskButtons() { // 任务修改按钮：任务文件 + 未 dirty 即显示（预览/编辑态均可保留或撤销；dirty 后由保存接管）
+            var show = !!(data && data.task_modified && hasViewer() && !dirtyNow);
+            btnKeep.classList.toggle('hidden', !show);
+            btnRevert.classList.toggle('hidden', !show);
         }
         btnEdit.addEventListener('click', function () {
             if (!data || !data.editable || editing) return;
             editing = true;
+            previewLock = false; // 手动再进编辑（取消后的预览锁解除）
+            monacoDead = false;  // 阶段一百：手动重试即重置失败标记（monacoDead 时 ensureMonaco 拒绝加载）
             draft = '';
             render(); // monacoTakeOver 内部会 focus；Monaco 未就绪时接管完成后自动 focus
         });
         btnCancel.addEventListener('click', function () {
             editing = false;
+            previewLock = true; // 阶段九十七：主动取消后保持预览态（防"打开即编辑"回流），编辑按钮恢复
             draft = '';
+            dirtyNow = false;
             if (data) data.content = data.__saved != null ? data.__saved : data.content; // 取消：回到已保存内容
             if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, false);
             render();
+        });
+        // ===== 阶段九十七：任务变更保留/撤销（TRAE CN 同款语义） =====
+        btnKeep.addEventListener('click', function () {
+            if (!data || !data.task_modified || !hasViewer()) return;
+            btnKeep.disabled = true;
+            viewerBridge().taskKeep(data.tab_id).then(function (r) {
+                btnKeep.disabled = false;
+                if (r && r.ok) { // 保留：接受当前磁盘内容（含 AI 改动），主进程已清备份
+                    data.task_modified = false;
+                    delete data.baseline;
+                    fvBase = (data.__saved != null) ? data.__saved : (data.content || '');
+                    updateTaskButtons();
+                    setStatus('已保留任务变更', 'saved');
+                    setTimeout(function () { if (statusEl.textContent === '已保留任务变更') setStatus('', ''); }, 2000);
+                } else {
+                    setStatus('保留失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                }
+            }).catch(function (e) {
+                btnKeep.disabled = false;
+                setStatus('保留失败：' + (e && e.message || e), 'dirty');
+            });
+        });
+        var revertArmed = false; // 撤销二次确认（会丢弃任务改动与未保存编辑，防误触）
+        btnRevert.addEventListener('click', function () {
+            if (!data || !data.task_modified || !hasViewer()) return;
+            if (!revertArmed) {
+                revertArmed = true;
+                btnRevert.textContent = '确认撤销？';
+                btnRevert.classList.add('danger');
+                setTimeout(function () {
+                    revertArmed = false;
+                    btnRevert.textContent = '撤销变更';
+                    btnRevert.classList.remove('danger');
+                }, 3000);
+                return;
+            }
+            revertArmed = false;
+            btnRevert.textContent = '撤销变更';
+            btnRevert.classList.remove('danger');
+            btnRevert.disabled = true;
+            draft = ''; // 撤销即丢弃未保存编辑与任务改动，主进程重读盘重注入后回到任务前内容
+            viewerBridge().taskRevert(data.tab_id).then(function (r) {
+                btnRevert.disabled = false;
+                if (r && r.ok) { /* 主进程重读盘并重注入 payload → __wsFileLoad 全量刷新 */ }
+                else setStatus('撤销失败：' + ((r && r.error) || '未知错误'), 'dirty');
+            }).catch(function (e) {
+                btnRevert.disabled = false;
+                setStatus('撤销失败：' + (e && e.message || e), 'dirty');
+            });
         });
         function doSave() {
             if (!data || !hasViewer()) return;
@@ -712,6 +1028,8 @@
                     draft = '';
                     data.__saved = content;
                     data.content = content;
+                    if (data.task_modified) { data.task_modified = false; delete data.baseline; } // 阶段九十七：保存=保留全部改动（主进程已清任务备份）
+                    fvBase = content; // gutter 基线对齐已保存内容
                     viewerBridge().setDirty(data.tab_id, false);
                     render();
                     setStatus('已保存', 'saved');
@@ -731,6 +1049,7 @@
             try { data = JSON.parse(jsonStr); } catch (e) { data = null; }
             editing = false;
             draft = '';
+            previewLock = false; // 阶段九十七：新 payload 注入重置预览锁（重开文件自动进编辑态）
             document.title = data ? (data.name || data.title || '文件预览') : '文件预览';
             render();
         };

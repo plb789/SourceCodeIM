@@ -259,6 +259,15 @@ contextBridge.exposeInMainWorld('desktop', {
     browserViewerDirty: function (tabId, dirty) {
         ipcRenderer.send('browser:viewer-dirty', { tab_id: String(tabId || ''), dirty: !!dirty });
     },
+    // ===== 阶段一百：任务变更保留/撤销（viewer 页"任务已修改"条按钮桥接——此前缺失导致按钮点击无反应） =====
+    // 保留变更：接受当前磁盘内容（主进程删备份+清索引）
+    browserTaskKeep: function (tabId) {
+        return ipcRenderer.invoke('browser:task-keep', { tab_id: String(tabId || '') });
+    },
+    // 撤销变更：还原任务前字节（主进程读备份回写+重读盘刷新页面）
+    browserTaskRevert: function (tabId) {
+        return ipcRenderer.invoke('browser:task-revert', { tab_id: String(tabId || '') });
+    },
     // 订阅 file 标签 payload 推送（主进程 → 渲染层：{tab_id, payload}，iframe 分发）
     onFileLoad: function (callback) {
         ipcRenderer.on('browser:file-load', function (event, data) {

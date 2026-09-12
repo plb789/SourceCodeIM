@@ -2248,6 +2248,9 @@ func (s *Server) agentPCRevertAsync(c *Client, taskID string, pcRows []model.Age
 		case res := <-w.ch:
 			if !res.OK {
 				logger.Warn("Agent 本地变更撤销执行失败（任务 %s）：%s", taskID, res.Output)
+				// 阶段一百：失败也推 66 帧重建审查条（按钮恢复可点可重试，行保持待审查）——
+				// 原实现仅记日志不推帧，前端按钮灰死且无任何变化，被误以为按钮无效
+				s.agentChangesPush(username, taskID)
 				return // 行保持 pending，用户可重试
 			}
 			store.DB.Model(&model.AgentChangeRecord{}).Where("id IN ?", ids).Update("status", "reverted")
@@ -2259,6 +2262,7 @@ func (s *Server) agentPCRevertAsync(c *Client, taskID string, pcRows []model.Age
 			s.agentChangesPush(username, taskID)
 		case <-time.After(15 * time.Second):
 			logger.Warn("Agent 本地变更撤销回传超时（任务 %s），行保持待审查", taskID)
+			s.agentChangesPush(username, taskID) // 阶段一百：超时也推帧恢复前端按钮可点（行保持待审查可重试）
 		}
 	}()
 }

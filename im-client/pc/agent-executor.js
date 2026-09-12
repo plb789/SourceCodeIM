@@ -198,6 +198,7 @@ const PC_CHANGE_MAX_FILES = 200; // 递归删目录逐文件快照上限（与�
 // 启动时由 main 进程注入备份根目录（userData/agent_change_backups），并顺手清理孤儿备份
 function setBackupRoot(root) {
     backupRoot = String(root || backupRoot);
+    loadBackupIndex(); // 阶段九十七：加载备份索引（重启后保留查询能力）
     pruneChangeBackups();
 }
 
@@ -230,7 +231,74 @@ function pcEnsureBackup(taskId, rel, full) {
         fs.mkdirSync(path.dirname(bp), { recursive: true });
         fs.writeFileSync(bp, data);
     } catch (e) { return ''; }
+    indexBackup(full, bp, taskId); // 阶段九十七：登记索引（浏览区任务修改标记/保留/撤销查询用）
     return bp;
+}
+
+// ===== 阶段九十七：任务备份索引（浏览区"任务已修改"标记与保留/撤销归口查询） =====
+// pcBackupPath 用 sha1(rel) 前缀命名，无法从本地绝对路径反推备份文件名，故首触备份成功时
+// 同步登记「本地绝对路径 → 备份信息」索引并持久化（执行器/主进程重启后仍可查询）
+let backupIndex = {};
+function backupIndexPath() { return path.join(backupRoot, 'index.json'); }
+function loadBackupIndex() {
+    try { backupIndex = JSON.parse(fs.readFileSync(backupIndexPath(), 'utf8')) || {}; } catch (e) { backupIndex = {}; }
+}
+let backupIndexSaveTimer = null;
+function saveBackupIndexSoon() { // 节流落盘（任务写文件高频场景避免每次 IO）
+    if (backupIndexSaveTimer) return;
+    backupIndexSaveTimer = setTimeout(function () {
+        backupIndexSaveTimer = null;
+        try { fs.writeFileSync(backupIndexPath(), JSON.stringify(backupIndex), 'utf8'); } catch (e) {}
+    }, 500);
+}
+function normIndexKey(full) { return String(full || '').replace(/\\/g, '/').toLowerCase(); } // Windows 大小写/分隔符归一
+function indexBackup(full, bp, taskId) {
+    backupIndex[normIndexKey(full)] = { backup: bp, taskId: String(taskId || ''), ts: Date.now() };
+    saveBackupIndexSoon();
+}
+function dropBackupIndexByBackup(bp) { // 按备份路径反查清理（撤销/保留/清理联动）
+    const key = normIndexKey(bp);
+    Object.keys(backupIndex).forEach(function (k) {
+        if (normIndexKey(backupIndex[k].backup) === key) delete backupIndex[k];
+    });
+    saveBackupIndexSoon();
+}
+// 查询本地文件的任务备份（备份文件存在才返回 {backup, taskId, ts}，否则 null）
+function getTaskBackup(full) {
+    const it = backupIndex[normIndexKey(full)];
+    if (!it || !it.backup) return null;
+    try { if (!fs.existsSync(it.backup)) return null; } catch (e) { return null; }
+    return { backup: it.backup, taskId: it.taskId, ts: it.ts };
+}
+// 保留变更：接受当前磁盘内容 → 删备份文件 + 清索引 + 空目录顺手移除（对齐 cleanupBackupsSync 行为）
+function keepTaskChange(full) {
+    const it = backupIndex[normIndexKey(full)];
+    if (!it) return { ok: true };
+    try { if (it.backup) fs.rmSync(it.backup, { force: true }); } catch (e) {}
+    const dir = path.dirname(it.backup);
+    delete backupIndex[normIndexKey(full)];
+    saveBackupIndexSoon();
+    try {
+        if (dir && path.resolve(dir) !== path.resolve(backupRoot)) {
+            try { if (!fs.readdirSync(dir).length) fs.rmdirSync(dir); } catch (e) {}
+            const root = path.dirname(dir);
+            try { if (!fs.readdirSync(root).length) fs.rmdirSync(root); } catch (e) {}
+        }
+    } catch (e) {}
+    return { ok: true };
+}
+// 撤销变更：还原任务前原始字节并清备份/索引（还原失败不动索引，可重试）
+function revertTaskChange(full) {
+    const it = backupIndex[normIndexKey(full)];
+    if (!it || !it.backup) return { ok: false, error: '该文件没有任务前备份' };
+    let data;
+    try { data = fs.readFileSync(it.backup); } catch (e) { return { ok: false, error: '备份读取失败：' + (e.message || e) }; }
+    try {
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, data);
+    } catch (e) { return { ok: false, error: '还原写入失败：' + (e.message || e) }; }
+    keepTaskChange(full);
+    return { ok: true };
 }
 
 // 操作前调用：无 task_id（旧渲染层）不做审查；否则首触备份，返回备份路径供 pcReport 组装
@@ -281,6 +349,7 @@ function revertChangesSync(username, params) {
                 return;
             }
             try { if (c.backup) fs.rmSync(c.backup, { force: true }); } catch (e) {}
+            dropBackupIndexByBackup(c.backup); // 阶段九十七：索引联动清理
             n++;
         } catch (e) {
             errs.push((c && c.path || '?') + '：' + (e.message || e));
@@ -295,6 +364,7 @@ function cleanupBackupsSync(username, params) {
     const list = (params && params.backups) || [];
     list.forEach(function (b) {
         try { if (b) fs.rmSync(b, { force: true }); } catch (e) {}
+        dropBackupIndexByBackup(b); // 阶段九十七：索引联动清理
     });
     try {
         const dirs = {};
@@ -2020,5 +2090,8 @@ module.exports = {
     execTool: execTool,
     requestBg: requestBg, // 阶段七十五：长命令转后台请求入口
     fileOp: fileOp, // 阶段七十六：工作区文件面板操作入口
-    termOp: termOp // 阶段七十七：控制台本地终端（多标签）
+    termOp: termOp, // 阶段七十七：控制台本地终端（多标签）
+    getTaskBackup: getTaskBackup, // 阶段九十七：任务备份查询（main 注入 browser-manager 供 payload 探测）
+    keepTaskChange: keepTaskChange, // 阶段九十七：保留任务变更（接受当前内容并清备份）
+    revertTaskChange: revertTaskChange // 阶段九十七：撤销任务变更（还原任务前字节）
 };
