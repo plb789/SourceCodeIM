@@ -70,17 +70,28 @@
         }
         .fv-code-wrap pre { padding: 0 16px 12px 12px; background: transparent; }
         .fv-code-wrap code { font: 12px/1.55 Consolas, "Courier New", monospace; background: transparent; }
-        /* 纯文本编辑器 */
-        #fv-editor {
-            width: 100%; height: 100%; min-height: calc(100vh - 46px); display: none;
-            border: none; outline: none; resize: none; tab-size: 4;
-            padding: 10px 16px; background: #232428; color: #d4d4d4;
-            font: 12px/1.55 Consolas, "Courier New", monospace;
-            white-space: pre; overflow: auto;
+        /* 纯文本编辑器（双叠层：textarea 流内 autosize 撑高，外层统一滚动——两层无各自滚动条，
+           根治滚动同步像素误差；高亮层统一 \n，根治 Windows CRLF 在 pre 中的宽度错位） */
+        #fv-editor-stack { position: relative; display: none; height: calc(100vh - 46px); min-height: 320px; overflow: auto; background: #232428; }
+        #fv-editor-stack::-webkit-scrollbar { width: 8px; height: 8px; }
+        #fv-editor-stack::-webkit-scrollbar-track { background: transparent; }
+        #fv-editor-stack::-webkit-scrollbar-thumb { background: #4a4b50; border-radius: 4px; }
+        #fv-editor-hl {
+            position: absolute; top: 0; left: 0; width: 100%; margin: 0; overflow: visible; pointer-events: none;
+            padding: 10px 16px; font: 12px/1.55 Consolas, "Courier New", monospace; tab-size: 4;
+            white-space: pre-wrap; overflow-wrap: break-word; color: #d4d4d4; box-sizing: border-box;
         }
-        #fv-editor::-webkit-scrollbar { width: 8px; height: 8px; }
-        #fv-editor::-webkit-scrollbar-track { background: transparent; }
-        #fv-editor::-webkit-scrollbar-thumb { background: #4a4b50; border-radius: 4px; }
+        #fv-editor-hl code { display: block; }
+        #fv-editor {
+            position: relative; display: block; width: 100%; min-height: calc(100vh - 46px); min-height: max(calc(100vh - 46px), 320px);
+            border: none; outline: none; resize: none; tab-size: 4; overflow: hidden;
+            padding: 10px 16px; background: transparent; color: transparent; caret-color: #e8e8e8;
+            font: 12px/1.55 Consolas, "Courier New", monospace;
+            white-space: pre-wrap; overflow-wrap: break-word; box-sizing: border-box;
+        }
+        #fv-editor::selection { background: rgba(80,140,255,0.4); color: transparent; }
+        /* Monaco（TRAE/VS Code 同款编辑内核）：编辑态主力，textarea 叠层仅作加载期兜底 */
+        #fv-monaco { position: absolute; inset: 0; display: none; }
         /* md / docx 排版（对齐主程序 ai-md 观感：表格边框/代码块深底/引用线） */
         .fv-md { padding: 16px 20px; line-height: 1.7; font-size: 13.5px; max-width: 980px; }
         .fv-md h1, .fv-md h2, .fv-md h3, .fv-md h4 { margin: 18px 0 10px; line-height: 1.4; color: #f0f0f0; }
@@ -139,7 +150,12 @@
         <button id="fv-btn-cancel" class="fv-btn hidden">取消</button>
     </div>
     <div id="fv-body"></div>
-    <textarea id="fv-editor" spellcheck="false"></textarea>
+    <div id="fv-editor-stack">
+        <pre id="fv-editor-hl" aria-hidden="true"><code></code></pre>
+        <textarea id="fv-editor" spellcheck="false"></textarea>
+        <div id="fv-monaco"></div>
+    </div>
+    <script src="/lib/monaco/vs/loader.js"></script>
     <script>
     (function () {
         'use strict';
@@ -150,6 +166,88 @@
         var btnSave = document.getElementById('fv-btn-save');
         var btnCancel = document.getElementById('fv-btn-cancel');
         var editorEl = document.getElementById('fv-editor');
+        var stackEl = document.getElementById('fv-editor-stack');
+        var hlPre = document.getElementById('fv-editor-hl');
+        var hlCode = hlPre ? hlPre.querySelector('code') : null;
+        var hlTimer = null;
+        // syncEditorHl 编辑态语法高亮：textarea 文字透明，由底层 pre 显示 hljs 着色内容。
+        // 值统一 \n（textarea 在 Windows 下是 \r\n，pre 中 \r 会被渲染成异常宽度导致整行错位）
+        function syncEditorHl() {
+            if (!hlCode || !data) return;
+            var v = (editorEl.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            var lang = LANG_MAP[((data.ext || '') + '').toLowerCase()] || '';
+            var html = '';
+            if (window.hljs && v) {
+                try {
+                    html = (lang && window.hljs.getLanguage(lang))
+                        ? window.hljs.highlight(v, { language: lang, ignoreIllegals: true }).value
+                        : window.hljs.highlightAuto(v).value;
+                } catch (e) { html = ''; }
+            }
+            hlCode.innerHTML = html || esc(v);
+        }
+        function syncEditorHlSoon() { if (hlTimer) clearTimeout(hlTimer); hlTimer = setTimeout(function () { syncEditorHl(); autosizeEditor(); }, 90); }
+        // autosizeEditor textarea 高度跟随内容（滚动交给外层 stack，两层永无滚动差）
+        function autosizeEditor() {
+            editorEl.style.height = 'auto';
+            editorEl.style.height = Math.max(editorEl.scrollHeight, stackEl.clientHeight) + 'px';
+        }
+
+        // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核）=====
+        // 叠层 textarea 方案在中英混排下两套布局引擎字体 fallback 宽度不一致，永远有像素级错位；
+        // Monaco 自行测量渲染每行，光标像素级精确。textarea 叠层仅作 Monaco 加载完成前的兜底。
+        var MONACO_LANG = {
+            js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+            ts: 'typescript', tsx: 'typescript', py: 'python', c: 'c', h: 'c',
+            cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', cs: 'csharp', java: 'java', go: 'go', rs: 'rust',
+            json: 'json', xml: 'xml', html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
+            md: 'markdown', markdown: 'markdown', sh: 'shell', bash: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell',
+            ini: 'ini', cfg: 'ini', conf: 'ini', yaml: 'yaml', yml: 'yaml', sql: 'sql', lua: 'lua', php: 'php', rb: 'ruby'
+        };
+        var monacoEditor = null, monacoReady = false, monacoLoading = false, monacoPendingCb = null;
+        var monacoBox = document.getElementById('fv-monaco');
+        function monacoLang() { return MONACO_LANG[((data && data.ext) || '').toLowerCase()] || 'plaintext'; }
+        function ensureMonaco() {
+            if (monacoReady || monacoLoading) { return; }
+            monacoLoading = true;
+            require.config({ paths: { vs: '/lib/monaco/vs' } });
+            require(['vs/editor/editor.main'], function () {
+                monaco.editor.defineTheme('im-dark', {
+                    base: 'vs-dark', inherit: true, rules: [],
+                    colors: {
+                        'editor.background': '#232428',
+                        'editorLineNumber.foreground': '#6a6b70',
+                        'editorLineNumber.activeForeground': '#a8a9ad',
+                        'editor.lineHighlightBackground': '#2a2b30',
+                        'editorCursor.foreground': '#e8e8e8',
+                        'editor.selectionBackground': '#50608c'
+                    }
+                });
+                monacoEditor = monaco.editor.create(monacoBox, {
+                    value: '', language: 'plaintext', theme: 'im-dark', automaticLayout: true,
+                    fontSize: 12, lineHeight: 19, fontFamily: 'Consolas, "Courier New", monospace',
+                    minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
+                    wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true
+                });
+                monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { doSave(); });
+                monacoEditor.onDidChangeModelContent(function () {
+                    draft = monacoEditor.getValue();
+                    if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
+                    setStatus('已修改（未保存）', 'dirty');
+                });
+                monacoReady = true;
+                var f = monacoPendingCb; monacoPendingCb = null;
+                if (f) f();
+            });
+        }
+        function monacoTakeOver(val) { // 切换编辑内容到 Monaco 并置语言
+            monacoBox.style.display = 'block';
+            editorEl.style.display = 'none';
+            hlPre.style.display = 'none';
+            monacoEditor.setValue((val || '').replace(/\r\n/g, '\n'));
+            monaco.editor.setModelLanguage(monacoEditor.getModel(), monacoLang());
+            monacoEditor.focus();
+        }
         var data = null;      // 当前 payload（刷新重注入覆盖）
         var editing = false;  // 编辑态
         var draft = '';       // 编辑草稿（保存成功前不入库；切标签 BrowserView 不销毁天然保留）
@@ -450,7 +548,7 @@
         // ===== 主渲染入口 =====
         function render() {
             bodyEl.innerHTML = '';
-            editorEl.style.display = 'none';
+            stackEl.style.display = 'none';
             bodyEl.style.display = '';
             btnEdit.classList.add('hidden');
             btnSave.classList.add('hidden');
@@ -499,7 +597,14 @@
                 bodyEl.appendChild(ban);
             }
             if (!editing) {
-                bodyEl.appendChild(renderCode(p.content || '', p.ext || ''));
+                if (p.ext === 'md' || p.ext === 'markdown') { // 阶段九十四修复：MD 恢复渲染预览——renderMarkdown 完整存在但文本类统一 renderCode 时分流被删，成了死代码
+                    var mdWrap = document.createElement('div');
+                    mdWrap.className = 'fv-md';
+                    mdWrap.innerHTML = renderMarkdown(p.content || '');
+                    bodyEl.appendChild(mdWrap);
+                } else {
+                    bodyEl.appendChild(renderCode(p.content || '', p.ext || ''));
+                }
             }
             if (p.editable && hasViewer()) {
                 btnEdit.classList.remove('hidden');
@@ -511,8 +616,22 @@
         // ===== 编辑态 =====
         function showEditor() {
             bodyEl.style.display = 'none';
-            editorEl.style.display = 'block';
-            editorEl.value = draft || (data && data.content) || '';
+            stackEl.style.display = 'block';
+            var val = draft || (data && data.content) || '';
+            if (monacoReady) {
+                monacoTakeOver(val);
+                setStatus(''); // setValue 会触发一次内容变更提示，重置
+            } else {
+                monacoBox.style.display = 'none';
+                editorEl.style.display = 'block';
+                hlPre.style.display = '';
+                editorEl.value = val;
+                autosizeEditor();
+                syncEditorHl();
+                editorEl.focus();
+                monacoPendingCb = function () { if (editing && stackEl.style.display === 'block') { monacoTakeOver(val); setStatus(''); } };
+                ensureMonaco(); // 首次进入编辑才加载 Monaco（本地资源毫秒级），加载完成自动接管
+            }
             btnEdit.classList.add('hidden');
             btnSave.classList.remove('hidden');
             btnCancel.classList.remove('hidden');
@@ -533,6 +652,8 @@
         });
         editorEl.addEventListener('input', function () {
             draft = editorEl.value;
+            autosizeEditor();
+            syncEditorHlSoon();
             if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
             setStatus('已修改（未保存）', 'dirty');
         });
@@ -544,12 +665,14 @@
                 editorEl.value = editorEl.value.slice(0, s) + '    ' + editorEl.value.slice(en);
                 editorEl.selectionStart = editorEl.selectionEnd = s + 4;
                 draft = editorEl.value;
+                autosizeEditor();
+                syncEditorHlSoon();
                 if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
             }
         });
         function doSave() {
             if (!data || !hasViewer()) return;
-            var content = editorEl.value;
+            var content = (monacoReady && monacoBox.style.display === 'block') ? monacoEditor.getValue() : editorEl.value;
             btnSave.disabled = true;
             viewerBridge().save(data.tab_id, content).then(function (r) {
                 btnSave.disabled = false;

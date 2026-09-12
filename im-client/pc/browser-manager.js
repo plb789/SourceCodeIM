@@ -154,6 +154,22 @@ function wcFor(tab, timeoutMs) {
 // attachWebContents 挂接 webview 宿主 webContents 事件（wv-ready 时调用；幂等——同一
 // wcId 重复上报只挂一次；guest 崩溃重建产生新 id 时重新挂接）。事件归口 → statePush 驱动
 // 渲染层标签栏/地址栏刷新（与旧 BrowserView 时代同一套监听，仅载体改为 fromId 直达）
+// GUEST_SCROLLBAR_CSS 浏览区 guest 页面注入的主题化滚动条样式——第三方网站默认白条与应用暗色
+// 主题冲突（应用 UI 滚动条已自绘，网页内容区由内核渲染）；8px 圆角半透明与主界面滑块同风格。
+// insertCSS 属 DevTools 级 API 不受站点 CSP 限制；样式仅对当前文档有效，导航后需重新注入
+const GUEST_SCROLLBAR_CSS =
+    '::-webkit-scrollbar { width: 8px; height: 8px; }' +
+    '::-webkit-scrollbar-track { background: transparent; }' +
+    '::-webkit-scrollbar-thumb { background: rgba(138,138,138,0.45); border-radius: 4px; }' +
+    '::-webkit-scrollbar-thumb:hover { background: rgba(138,138,138,0.7); }' +
+    '::-webkit-scrollbar-corner { background: transparent; }';
+
+// injectGuestScrollbarCss 向 guest 主框架注入滚动条样式（user origin 高于网站作者样式，稳定覆盖）
+function injectGuestScrollbarCss(wc) {
+    if (!wc || wc.isDestroyed()) return;
+    wc.insertCSS(GUEST_SCROLLBAR_CSS, { cssOrigin: 'user' }).catch(function () { /* 页面销毁竞态静默 */ });
+}
+
 function attachWebContents(tab, wc) {
     if (!tab || !wc || wc.isDestroyed()) return;
     if (tab.__hookedId === tab.wcId) return;
@@ -179,8 +195,9 @@ function attachWebContents(tab, wc) {
         }
         statePush();
     });
-    wc.on('did-navigate', function (e, u) { tab.url = u; statePush(); });
+    wc.on('did-navigate', function (e, u) { tab.url = u; statePush(); injectGuestScrollbarCss(wc); }); // 导航后样式失效需重注
     wc.on('did-navigate-in-page', function (e, u) { tab.url = u; statePush(); });
+    wc.on('dom-ready', function () { injectGuestScrollbarCss(wc); }); // 首次就绪注入
     // web 标签采集站点 favicon（TRAE 同款标签图标；file 标签用扩展名徽标不走这里）
     wc.on('page-favicon-updated', function (e, icons) {
         const fav = (icons && icons.length) ? String(icons[0] || '') : '';
