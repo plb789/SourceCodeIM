@@ -423,17 +423,40 @@
         </div>
     </div>
 
-    <!-- 消息右键菜单（置顶/撤回/删除） -->
+    <!-- 消息右键菜单（置顶/撤回/复制/引用/转发/多选/删除）；阶段八十八：全部菜单项加线性图标（与多选工具栏同风格） -->
     <div id="msg-menu" class="friend-menu hidden">
-        <div class="menu-item" data-action="pin">置顶</div>
-        <div class="menu-item" data-action="recall">撤回</div>
+        <div class="menu-item" data-action="pin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-.8 6H9.8L9 4z"/><path d="M7.5 10h9"/><path d="M12 10v11"/></svg>
+            <span class="mi-text">置顶</span>
+        </div>
+        <div class="menu-item" data-action="recall">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 4 10l4 4"/><path d="M4 10h9a5 5 0 0 1 0 10h-4"/></svg>
+            撤回
+        </div>
+        <!-- 阶段八十八：微信同款右键复制（文本取可见文本；图片转 PNG 写剪贴板；文件复制文件名） -->
+        <div class="menu-item" data-action="copy">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+            复制
+        </div>
         <!-- 阶段四十：微信同款消息引用（右键引用 → 输入框上方引用条 → 随下一条消息一起发出） -->
-        <div class="menu-item" data-action="quote">引用</div>
+        <div class="menu-item" data-action="quote">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+            引用
+        </div>
         <!-- 阶段八十六：微信同款消息转发（文本/引用原样转发；图片/文件经源地址重取后走既有直传链路） -->
-        <div class="menu-item" data-action="forward">转发</div>
+        <div class="menu-item" data-action="forward">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 18v-4a6 6 0 0 1 6-6h8"/><path d="m15 4 4 4-4 4"/></svg>
+            转发
+        </div>
         <!-- 阶段八十七：多选模式（勾选多条 → 底部工具栏合并转发/逐条转发） -->
-        <div class="menu-item" data-action="multi">多选</div>
-        <div class="menu-item" data-action="del">删除</div>
+        <div class="menu-item" data-action="multi">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8.5 12 2.5 2.5 5-5"/></svg>
+            多选
+        </div>
+        <div class="menu-item" data-action="del">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><path d="M10 11v6m4-6v6"/></svg>
+            删除
+        </div>
     </div>
 
     <!-- 会话右键菜单（置顶/备注/清空/删除） -->

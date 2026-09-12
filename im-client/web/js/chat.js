@@ -816,9 +816,11 @@
         var recallItem = msgMenu.querySelector('[data-action="recall"]');
         recallItem.style.display = (isMine && within) ? '' : 'none';
         // 置顶项：当前消息已被置顶时显示"取消置顶"
+        // 阶段八十八：只改 .mi-text 文字节点——直接赋 textContent 会连同 SVG 图标一起清掉（实测丢图标根因）
         var pinItem = msgMenu.querySelector('[data-action="pin"]');
+        var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
         var p = pinInfo[currentChatUser];
-        pinItem.textContent = (p && p.msg_id && p.msg_id === msgId) ? '取消置顶' : '置顶';
+        pinLabel.textContent = (p && p.msg_id && p.msg_id === msgId) ? '取消置顶' : '置顶';
         msgMenu.style.top = e.clientY + 'px';
         msgMenu.style.left = e.clientX + 'px';
         msgMenu.classList.remove('hidden');
@@ -853,6 +855,9 @@
                     // 阶段八十六：微信同款消息转发——打开目标选择弹窗（文本/引用原样；图片/文件重取后走直传）
                     fwdMode = 'single';
                     openForwardPicker(msgTarget);
+                } else if (action === 'copy') {
+                    // 阶段八十八：右键复制——文本取气泡可见文本（含引用块）；图片转 PNG 写剪贴板（降级复制链接）；文件复制文件名
+                    copyMsgContent(msgTarget);
                 } else if (action === 'multi' && msgId) {
                     // 阶段八十七：进入多选模式（复选框 + 底部工具栏，合并转发/逐条转发）
                     enterMultiSelect();
@@ -3098,6 +3103,45 @@
         } else {
             fallback();
         }
+    }
+
+    // ===== 阶段八十八：消息右键复制归口 =====
+    // 按气泡类型分发：图片→canvas 转 PNG 写剪贴板；文件→复制文件名；其余→复制可见文本（含引用块）
+    function copyMsgContent(el) {
+        var bubble = el.querySelector('.message-bubble');
+        if (!bubble) { showToast('该消息不支持复制'); return; }
+        var img = bubble.querySelector('.chat-image');
+        if (img && img.getAttribute('src')) { copyImageToClipboard(img.getAttribute('src')); return; }
+        if (bubble.classList.contains('bubble-file')) {
+            var fnEl = bubble.querySelector('.file-name');
+            copyTextToClipboard((fnEl && fnEl.textContent) || '文件');
+            return;
+        }
+        var text = (bubble.innerText || bubble.textContent || '').trim();
+        if (!text) { showToast('该消息不支持复制'); return; }
+        copyTextToClipboard(text);
+    }
+
+    // 图片复制：图片同源加载无跨域污染，canvas 转 PNG 写入剪贴板；
+    // Clipboard API 不可用（HTTP 非安全上下文）或写入失败时降级复制图片链接
+    function copyImageToClipboard(url) {
+        var img = new Image();
+        img.onload = function () {
+            try {
+                var cv = document.createElement('canvas');
+                cv.width = img.naturalWidth;
+                cv.height = img.naturalHeight;
+                cv.getContext('2d').drawImage(img, 0, 0);
+                cv.toBlob(function (blob) {
+                    if (!blob || !navigator.clipboard || !window.ClipboardItem) { copyTextToClipboard(url); return; }
+                    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+                        .then(function () { showToast('图片已复制'); })
+                        .catch(function () { copyTextToClipboard(url); });
+                }, 'image/png');
+            } catch (e) { copyTextToClipboard(url); }
+        };
+        img.onerror = function () { showToast('图片加载失败，无法复制'); };
+        img.src = url;
     }
 
     // AI 回复操作栏（豆包同款）：复制回复 / 重新生成 / 编辑提问（SVG 线性图标，currentColor 跟随主题色）
