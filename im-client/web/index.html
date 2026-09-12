@@ -342,9 +342,18 @@
 
     <!-- 好友右键菜单 -->
     <div id="friend-menu" class="friend-menu hidden">
-        <div class="menu-item" data-action="remark">设置备注</div>
-        <div class="menu-item" data-action="block">拉黑</div>
-        <div class="menu-item" data-action="delete">删除好友</div>
+        <div class="menu-item" data-action="remark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            设置备注
+        </div>
+        <div class="menu-item" data-action="block">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M5.8 5.8l12.4 12.4"/></svg>
+            拉黑
+        </div>
+        <div class="menu-item" data-action="delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><path d="M10 11v6m4-6v6"/></svg>
+            删除好友
+        </div>
     </div>
 
     <!-- 阶段三十：个人资料面板（微信式右侧滑出，点击自己头像打开，可修改头像/昵称/性别/地区/签名） -->
@@ -459,12 +468,24 @@
         </div>
     </div>
 
-    <!-- 会话右键菜单（置顶/备注/清空/删除） -->
+    <!-- 会话右键菜单（置顶/备注/清空/删除）；阶段八十八：统一加线性图标，置顶文字动态改写走 .mi-text（防 textContent 清图标坑） -->
     <div id="conv-menu" class="friend-menu hidden">
-        <div class="menu-item" data-action="pin">置顶聊天</div>
-        <div class="menu-item" data-action="remark">设置备注</div>
-        <div class="menu-item" data-action="clear">清空聊天记录</div>
-        <div class="menu-item danger" data-action="delete">删除会话</div>
+        <div class="menu-item" data-action="pin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-.8 6H9.8L9 4z"/><path d="M7.5 10h9"/><path d="M12 10v11"/></svg>
+            <span class="mi-text">置顶聊天</span>
+        </div>
+        <div class="menu-item" data-action="remark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+            设置备注
+        </div>
+        <div class="menu-item" data-action="clear">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            清空聊天记录
+        </div>
+        <div class="menu-item danger" data-action="delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><path d="M10 11v6m4-6v6"/></svg>
+            删除会话
+        </div>
     </div>
 
     <!-- 自定义弹窗（确认/输入），禁止使用系统默认弹窗 -->

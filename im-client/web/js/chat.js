@@ -9650,7 +9650,9 @@
                 e.preventDefault();
                 convTarget = cv.target;
                 var pinItem = convMenu.querySelector('[data-action="pin"]');
-                pinItem.textContent = cv.pinned ? '取消置顶' : '置顶聊天';
+                // 阶段八十八：只改 .mi-text 文字节点，防止 textContent 连同 SVG 图标一起清掉（与消息菜单同坑同修）
+                var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
+                pinLabel.textContent = cv.pinned ? '取消置顶' : '置顶聊天';
                 // 设置备注项仅好友可见（群聊/陌生人无备注概念），右键时动态显隐
                 var remarkItem = convMenu.querySelector('[data-action="remark"]');
                 var convIsFriend = friendList.some(function (x) { return x.username === cv.target; });
