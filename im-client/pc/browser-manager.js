@@ -20,7 +20,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const { app, ipcMain, session, webContents } = require('electron');
+const { app, ipcMain, session, webContents, shell } = require('electron');
 
 // ===== 模块状态 =====
 let mainWindow = null;       // 主窗口引用（init 时注入）
@@ -223,10 +223,12 @@ function statePush() {
                 id: t.id, title: t.title, url: t.url, loading: t.loading,
                 kind: t.kind || 'web',
                 file_name: t.kind === 'file' ? (t.relPath || t.title) : '',
+                file_path: t.kind === 'file' ? (t.filePath || '') : '', // 阶段九十四：绝对路径（悬停 tooltip + 打开所在目录）
                 ext: t.kind === 'file' && t.relPath ? path.extname(t.relPath).replace('.', '').toLowerCase() : '',
                 data_kind: t.kind === 'file' ? (t.dataKind || '') : '',
                 favicon: t.kind === 'web' ? (t.favicon || '') : '',
-                dirty: !!t.dirty
+                dirty: !!t.dirty,
+                pinned: !!t.pinned
             };
         }),
         active_id: tab ? tab.id : null,
@@ -256,6 +258,67 @@ function selectTab(tabId) {
     activeId = tab.id;
     statePush();
     return true;
+}
+
+// ===== 阶段九十四：标签右键菜单操作（关闭其他/右侧/全部、移动、固定切换、系统浏览器打开） =====
+// 归口主进程：标签数组唯一权威在主进程，批量关闭/排序/固定在此变更后统一 statePush；
+// 固定（pinned）标签防误关——不参与 close-others/close-right/close-all 批量关闭
+function tabsOp(op, tabId, arg) {
+    const tab = tabId ? tabs.find(function (t) { return t.id === String(tabId); }) : null;
+    switch (String(op || '')) {
+        case 'close-others': {
+            if (!tab) return false;
+            const keep = [tab.id];
+            tabs.forEach(function (t) { if (t.pinned) keep.push(t.id); });
+            tabs.slice().forEach(function (t) { if (keep.indexOf(t.id) < 0) destroyTab(t); });
+            activeId = tab.id; // 活动页若被波及则落到保留的目标上
+            statePush();
+            return true;
+        }
+        case 'close-right': {
+            if (!tab) return false;
+            const i = tabs.indexOf(tab);
+            tabs.slice(i + 1).forEach(function (t) { if (!t.pinned) destroyTab(t); });
+            if (!activeTab()) activeId = tab.id;
+            statePush();
+            return true;
+        }
+        case 'close-all': {
+            tabs.slice().forEach(function (t) { if (!t.pinned) destroyTab(t); });
+            if (tabs.length === 0) { activeId = null; setPanel(false); return true; }
+            if (!activeTab()) activeId = tabs[0].id;
+            statePush();
+            return true;
+        }
+        case 'move': { // arg: 'left' | 'right'，与相邻标签交换（固定标签不参与，前端禁用入口）
+            if (!tab) return false;
+            const i = tabs.indexOf(tab);
+            const j = i + (String(arg) === 'left' ? -1 : 1);
+            if (j < 0 || j >= tabs.length) return false;
+            tabs.splice(i, 1);
+            tabs.splice(j, 0, tab);
+            statePush();
+            return true;
+        }
+        case 'pin': { // 切换固定态（前端按当前态显示"固定/取消固定"）
+            if (!tab) return false;
+            tab.pinned = !tab.pinned;
+            statePush();
+            return true;
+        }
+        case 'show-in-folder': { // 阶段九十四：在文件资源管理器中显示（TRAE"打开所在目录"同款）
+            if (!tab || tab.kind !== 'file' || !tab.filePath) return false;
+            shell.showItemInFolder(tab.filePath);
+            return true;
+        }
+        case 'open-external': { // 仅放行 http(s)，交给系统默认浏览器
+            const u = String(arg || '');
+            if (!/^https?:\/\//i.test(u)) return false;
+            shell.openExternal(u);
+            return true;
+        }
+    }
+    return false;
 }
 
 // closeTab 关闭标签页（不传 id=关活动页；全部关闭自动收起面板）
@@ -824,6 +887,10 @@ function init(win) {
     ipcMain.handle('browser:closetab', function (event, tabId) {
         closeTab(tabId);
         return { ok: true };
+    });
+    // 阶段九十四：标签右键菜单批量操作（关闭其他/右侧/全部、移动、固定切换、系统浏览器打开）
+    ipcMain.handle('browser:tabs-op', function (event, payload) {
+        return { ok: tabsOp(payload && payload.op, payload && payload.tab_id, payload && payload.url) };
     });
     // CDP 端口设置（渲染层设置入口；写配置 + 提示重启生效——启动参数仅进程启动时读取）
     ipcMain.handle('browser:cdp-set', function (event, port) {

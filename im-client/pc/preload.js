@@ -222,6 +222,10 @@ contextBridge.exposeInMainWorld('desktop', {
     browserCloseTab: function (tabId) {
         return ipcRenderer.invoke('browser:closetab', tabId);
     },
+    // 阶段九十四：标签右键菜单批量操作（关闭其他/右侧/全部、移动、固定切换、系统浏览器打开）
+    browserTabsOp: function (op, tabId, arg) {
+        return ipcRenderer.invoke('browser:tabs-op', { op: String(op || ''), tab_id: String(tabId || ''), url: String(arg || '') });
+    },
     // CDP 远程调试端口（Chrome DevTools Protocol）读写（0=关闭；改动需重启客户端生效）
     browserCdpGet: function () {
         return ipcRenderer.invoke('browser:cdp-get');

@@ -62,6 +62,24 @@ function createWindow() {
     // 持久化过非 1 缩放（如 0.9），启动归一；配合渲染层禁用缩放入口（chat.js wheel/keydown）
     mainWindow.webContents.setZoomFactor(1);
 
+    // 阶段九十三：主窗口刷新快捷键——Menu.setApplicationMenu(null) 后默认刷新键全部失效，
+    // 页面（css/js）发版后只能重启客户端才能拿到新版（实例：列表折叠按钮定位修复后 PC 端
+    // 始终加载旧样式，用户误以为修复无效）。注册：Ctrl+R / F5 = reload（回源校验，配合
+    // 服务端静态资源 no-cache 拿最新）；Ctrl+Shift+R = reloadIgnoringCache（绕过一切缓存强刷）
+    mainWindow.webContents.on('before-input-event', function (event, input) {
+        if (input.type !== 'keyDown') return;
+        var key = (input.key || '').toLowerCase();
+        var ctrl = input.control || input.meta;
+        if (ctrl && key === 'r') {
+            event.preventDefault();
+            if (input.shift) mainWindow.webContents.reloadIgnoringCache();
+            else mainWindow.webContents.reload();
+        } else if (key === 'f5') {
+            event.preventDefault();
+            mainWindow.webContents.reload();
+        }
+    });
+
     // 最小化到托盘而非退出
     mainWindow.on('close', function (event) {
         if (!app.isQuitting) {

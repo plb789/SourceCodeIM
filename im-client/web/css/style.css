@@ -723,6 +723,37 @@ html, body {
     flex-shrink: 0;
 }
 
+/* 阶段九十四：浏览区标签右键菜单（复用 .friend-menu 主题样式；
+   z-index 1700 需盖过浏览区面板 1600，否则菜单被面板截断） */
+.browser-tab-menu {
+    z-index: 1700;
+    min-width: 150px;
+}
+
+.browser-tab-menu .menu-sep {
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--border);
+}
+
+.browser-tab-menu .menu-item.disabled {
+    color: var(--text-light);
+    opacity: 0.55;
+    cursor: default;
+}
+
+.browser-tab-menu .menu-item.disabled:hover {
+    background: none;
+}
+
+/* 固定标签锁形小图标（currentColor 跟随主题） */
+.browser-tab-pin {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    color: var(--text-light);
+}
+
 .group-item {
     font-weight: bold;
 }
@@ -791,7 +822,7 @@ html, body {
 
 #list-toggle-btn {
     position: absolute;
-    left: var(--browser-w, 0px); /* 浏览区展开时避让左侧浏览区（把手贴聊天列左缘） */
+    left: 0; /* 固定贴列表右侧（聊天区左缘），不随浏览区宽度跑位（旧实现 left:var(--browser-w) 导致开浏览区后按钮跑到浏览区右缘） */
     top: 50%;
     transform: translateY(-50%);
     width: 7px;
@@ -805,7 +836,7 @@ html, body {
     border-radius: 0 6px 6px 0;
     color: var(--text-light);
     cursor: pointer;
-    z-index: 40;
+    z-index: 1601; /* 高于浏览区面板（1600）：浏览区展开时按钮仍贴列表右侧可见可点（浮于浏览区左缘之上） */
     opacity: 0;
     transition: opacity 0.2s ease;
 }
@@ -819,6 +850,18 @@ html, body {
 /* 悬停聊天区任意位置显示按钮；折叠后常驻（否则无从展开） */
 .main-chat:hover #list-toggle-btn,
 #list-toggle-btn.collapsed {
+    opacity: 1;
+}
+
+/* 阶段九十三：按钮搬入工作区面板时锚其左缘内侧——工作区开启时面板顶替列表右缘位置，
+   按钮贴面板左缘内侧（不左移骑边界，避免视觉上缩进列表内），与按钮在聊天区时同一侧 */
+#ws-panel > #list-toggle-btn {
+    transform: translateY(-50%);
+}
+
+/* 工作区面板内 hover/折叠态显隐（按钮搬入后原 .main-chat:hover 祖先链失效，补齐同款规则） */
+#ws-panel:hover > #list-toggle-btn,
+#ws-panel > #list-toggle-btn.collapsed {
     opacity: 1;
 }
 
@@ -4529,7 +4572,10 @@ html.m #list-panel.list-collapsed {
     min-height: 0;
     border-right: 1px solid var(--border, #e5e5e5);
     background: var(--panel-bg, #fff);
-    overflow: hidden;
+    /* 阶段九十三：改 visible——列表折叠按钮搬入面板锚左缘外沿（left:-7px 溢出显示，=列表栏右缘），
+       溢出的只有按钮把手；内部滚动裁剪由各列自身 overflow 负责，不受影响 */
+    position: relative; /* 作为搬入按钮的 absolute 定位基准 */
+    overflow: visible;
 }
 
 .ws-panel.hidden {
@@ -8727,6 +8773,13 @@ html.m .ms-actions {
     visibility: hidden;
 }
 
+/* 阶段九十三：收起态豁免列表折叠按钮——列表按钮任何时候都贴列表右侧可见可点（浮于浏览区
+   左缘之上）；否则收起态用户在列表右侧看不到把手，会误以为列表按钮跑到了浏览区右缘
+   （与右缘的聊天列展开按钮混淆） */
+.main-chat.browser-chat-collapsed > #list-toggle-btn {
+    visibility: visible;
+}
+
 .browser-splitter::after {
     content: '';
     position: absolute;
@@ -8781,9 +8834,18 @@ html.m .ms-actions {
     right: 0;
 }
 
+/* 主题色底+白箭头：与左缘列表折叠按钮（灰底）一眼区分（两者尺寸一致但职责不同，
+   避免误认"列表按钮跑到浏览区右缘"） */
+.browser-expand-btn {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
 .browser-expand-btn:hover {
-    color: var(--primary);
-    background: var(--hover);
+    color: #fff;
+    background: var(--primary-hover, var(--primary));
+    filter: brightness(1.08);
 }
 
 .browser-expand-btn svg {

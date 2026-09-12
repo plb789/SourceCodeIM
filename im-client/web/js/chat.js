@@ -4175,12 +4175,44 @@
             mc.classList.remove('browser-chat-collapsed');
             return;
         }
-        var totalW = mc.clientWidth;
+        // 主区可用宽不能读 mc.clientWidth——收起态 padding-left 即面板宽，窗口缩小时旧 padding
+        // 会把 main-chat 的 border box 撑到大于容器（padding 属于 border box，flex 压不掉），
+        // clientWidth 被钉死在历史最大值，重算输入=输出永远卡死（实例：最大化后还原，浏览区
+        // 仍为最大化宽度超出视口被裁）。改为：父容器宽减去流内兄弟实占宽，与自身 padding 无关。
+        var host = mc.parentElement;
+        var totalW = host ? host.clientWidth : mc.clientWidth;
+        if (host) {
+            for (var k = 0; k < host.children.length; k++) {
+                var sib = host.children[k];
+                if (sib === mc) continue;
+                var sp = getComputedStyle(sib);
+                if (sp.position === 'absolute' || sp.position === 'fixed') continue;
+                totalW -= sib.offsetWidth;
+            }
+        }
         var collapsed = false;
         try { collapsed = localStorage.getItem(BROWSER_SPLIT_COLLAPSED_KEY) === '1'; } catch (e) {}
         var saved = parseInt(localStorage.getItem(BROWSER_SPLIT_KEY), 10);
         // 收起态直接占满全宽（不走钳制：钳制的聊天列保底与收起互斥）
         browserApplySplit(collapsed ? totalW : browserClampSplitW((saved > 0) ? saved : Math.round(totalW * 0.52), totalW), collapsed);
+    }
+
+    // 阶段九十三：窗口尺寸变化时重新钳制分栏宽——--browser-w 是拖拽时按当时窗口宽算出的固定像素
+    // 并持久化，窗口缩窄后若不重算，浏览区面板会超出视口导致右侧内容看不到（实例：缩窗后文件
+    // 标签页右缘被裁）。收起态重算后仍占满全宽，展开态按存档宽钳制进新窗口。
+    // 双保险：window resize 之外再挂 ResizeObserver 直盯主区尺寸——系统原生 overlay 最大化/
+    // 还原按钮在部分环境下不向页面派发 resize 事件（实测：最大化后浏览区仍为拖拽旧宽度超出
+    // 视口），而主区尺寸变化必然来自 flex 重排，Observer 全覆盖；面板宽度/padding 均不改变
+    // 主区 border box，不会自我循环触发。
+    var browserSyncSplitTimer = null;
+    function browserQueueSyncSplit() {
+        if (browserPanelEl.classList.contains('hidden')) return;
+        if (browserSyncSplitTimer) clearTimeout(browserSyncSplitTimer);
+        browserSyncSplitTimer = setTimeout(browserSyncSplit, 80); // 轻防抖：连续变化只算最后一次，避免高频写存储
+    }
+    window.addEventListener('resize', browserQueueSyncSplit);
+    if (window.ResizeObserver && browserPanelEl.parentElement) {
+        new ResizeObserver(browserQueueSyncSplit).observe(browserPanelEl.parentElement);
     }
 
     // 分栏拖拽：按住浏览区右缘把手左右拖动调宽；聊天列压过收起阈值吸附为全宽，
@@ -4362,8 +4394,18 @@
         (state.tabs || []).forEach(function (t) {
             var isFile = t.kind === 'file';
             var chip = document.createElement('div');
-            chip.className = 'browser-tab' + (t.id === state.active_id ? ' active' : '') + (isFile ? ' is-file' : '') + (t.dirty ? ' dirty' : '');
-            chip.title = t.title || (isFile ? (t.file_name || '') : '(无标题)');
+            chip.className = 'browser-tab' + (t.id === state.active_id ? ' active' : '') + (isFile ? ' is-file' : '') + (t.dirty ? ' dirty' : '') + (t.pinned ? ' pinned' : '');
+            // 阶段九十四：悬停 tooltip 显示完整路径（TRAE 同款）——文件标签显绝对路径，网页标签仍显标题
+            chip.title = isFile ? (t.file_path || t.file_name || t.title || '') : (t.title || '(无标题)');
+            if (t.pinned) { // 阶段九十四：固定标签——锁形小图标（防误关，批量关闭跳过，菜单可取消固定）
+                var pin = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                pin.setAttribute('viewBox', '0 0 24 24');
+                pin.setAttribute('width', '10');
+                pin.setAttribute('height', '10');
+                pin.setAttribute('class', 'browser-tab-pin');
+                pin.innerHTML = '<path fill="currentColor" d="M16 12V7a4 4 0 0 0-8 0v5H6v8h12v-8h-2zm-6-5a2 2 0 0 1 4 0v5h-4V7z"/>';
+                chip.appendChild(pin);
+            }
             if (t.loading) {
                 var spin = document.createElement('span');
                 spin.className = 'browser-tab-loading';
@@ -4379,6 +4421,7 @@
             close.className = 'browser-icon-btn browser-tab-close';
             close.title = '关闭标签页';
             close.textContent = t.dirty ? '●' : '×';
+            if (t.pinned) close.classList.add('hidden'); // 固定标签不显示关闭按钮（防误关）
             if (t.dirty) { // 未保存圆点：悬停时切回 × 供关闭（TRAE 同款）
                 chip.addEventListener('mouseenter', function () { close.textContent = '×'; });
                 chip.addEventListener('mouseleave', function () { close.textContent = '●'; });
@@ -4389,6 +4432,10 @@
             });
             chip.appendChild(close);
             chip.addEventListener('click', function () { window.desktop.browserSelect(t.id); });
+            chip.addEventListener('contextmenu', function (e) { // 阶段九十四：标签右键菜单（TRAE CN 同款子集）
+                e.preventDefault();
+                browserTabContextMenu(e, t, state);
+            });
             browserTabsEl.appendChild(chip);
         });
         if (window._osbInitH) window._osbInitH(browserTabsEl); // 标签多时横向自绘滑块（悬停浮现可拖拽，Trae CN 同款；幂等防重复挂载）
@@ -4396,6 +4443,85 @@
         if (actTab && actTab.scrollIntoView) {
             try { actTab.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { actTab.scrollIntoView(); }
         }
+    }
+
+    // ===== 阶段九十四：浏览区标签右键菜单（TRAE CN 同款子集；自绘 .friend-menu 主题样式，
+    // 禁用系统默认菜单；动态构建——菜单项随标签类型/固定态/位置变化） =====
+    var browserTabMenuEl = null;
+    function browserCloseTabMenu() {
+        if (browserTabMenuEl) { browserTabMenuEl.remove(); browserTabMenuEl = null; }
+        document.removeEventListener('mousedown', browserTabMenuOutside, true);
+        document.removeEventListener('keydown', browserTabMenuEsc, true);
+    }
+    function browserTabMenuOutside(e) {
+        if (browserTabMenuEl && !browserTabMenuEl.contains(e.target)) browserCloseTabMenu();
+    }
+    function browserTabMenuEsc(e) { if (e.key === 'Escape') browserCloseTabMenu(); }
+    function browserTabContextMenu(e, t, state) {
+        browserCloseTabMenu();
+        var all = state.tabs || [];
+        var idx = -1;
+        all.forEach(function (x, i) { if (x.id === t.id) idx = i; });
+        var isFile = t.kind === 'file';
+        var items = [
+            { label: '关闭', fn: function () { window.desktop.browserCloseTab(t.id); } },
+            { label: '关闭其他', fn: function () { window.desktop.browserTabsOp('close-others', t.id); } },
+            { label: '关闭右侧标签页', disabled: idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('close-right', t.id); } },
+            { label: '全部关闭', fn: function () { window.desktop.browserTabsOp('close-all', ''); } },
+            { sep: true },
+            { label: isFile ? '复制路径' : '复制网址', fn: function () {
+                var txt = isFile ? (t.file_path || t.file_name || '') : (t.url || ''); // 优先绝对路径（file_name 兜底，不再回落到标题避免复制成文件名）
+                if (!txt) return;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(txt).then(function () { showToast('已复制'); }, function () {});
+                }
+            } }
+        ];
+        if (!isFile && t.url && /^https?:\/\//i.test(t.url)) {
+            items.push({ label: '在系统浏览器打开', fn: function () { window.desktop.browserTabsOp('open-external', '', t.url); } });
+        }
+        if (isFile && t.file_path) {
+            items.push({ label: '打开文件所在目录', fn: function () { window.desktop.browserTabsOp('show-in-folder', t.id); } }); // 阶段九十四：TRAE"在文件资源管理器中显示"同款
+        }
+        items.push({ sep: true });
+        items.push({ label: t.pinned ? '取消固定' : '固定标签', fn: function () { window.desktop.browserTabsOp('pin', t.id); } });
+        items.push({ sep: true });
+        items.push({ label: '左移标签', disabled: t.pinned || idx <= 0, fn: function () { window.desktop.browserTabsOp('move', t.id, 'left'); } });
+        items.push({ label: '右移标签', disabled: t.pinned || idx < 0 || idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('move', t.id, 'right'); } });
+        // 动态构建菜单 DOM（复用 .friend-menu 主题样式容器）
+        var menu = document.createElement('div');
+        menu.className = 'friend-menu browser-tab-menu';
+        items.forEach(function (it) {
+            if (it.sep) {
+                var sep = document.createElement('div');
+                sep.className = 'menu-sep';
+                menu.appendChild(sep);
+                return;
+            }
+            var mi = document.createElement('div');
+            mi.className = 'menu-item' + (it.disabled ? ' disabled' : '');
+            var txt = document.createElement('span');
+            txt.className = 'mi-text';
+            txt.textContent = it.label;
+            mi.appendChild(txt);
+            if (!it.disabled) {
+                mi.addEventListener('click', function () {
+                    browserCloseTabMenu();
+                    it.fn();
+                });
+            }
+            menu.appendChild(mi);
+        });
+        document.body.appendChild(menu);
+        // 定位：右/下缘防溢出翻转
+        var r = menu.getBoundingClientRect();
+        menu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - r.width - 8)) + 'px';
+        menu.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - r.height - 8)) + 'px';
+        browserTabMenuEl = menu;
+        setTimeout(function () { // 异步挂全局关闭（避开本次右键事件冒泡）
+            document.addEventListener('mousedown', browserTabMenuOutside, true);
+            document.addEventListener('keydown', browserTabMenuEsc, true);
+        }, 0);
     }
 
     // 状态应用（主进程 browser:state 推送归口）：显隐/标签栏/地址栏/导航按钮可用态
@@ -6384,6 +6510,7 @@
         var mainChat = view.querySelector('.main-chat');
         if (mainChat) view.insertBefore(aside, mainChat); else view.appendChild(aside);
         wsPanel.aside = aside;
+        syncListToggleAnchor(); // 创建即锚定：面板显示时列表折叠按钮搬入面板贴左缘外沿（=列表右缘）
         // 水平拖拽调宽（与聊天输入框高度拖拽同款交互：mousedown→mousemove→mouseup，持久化）
         function wsBindSplitter(sp, col, cssVar, minW, maxW, storeKey) {
             sp.addEventListener('mousedown', function (e) {
@@ -6452,12 +6579,29 @@
         wsPanel.colView.classList.toggle('hidden', !show);
     }
 
+    // 阶段九十三：列表折叠按钮锚点归口——工作区面板开启时面板插在列表栏与聊天区之间
+    //（wsPanelEnsure 的 insertBefore），.main-chat 左缘退到面板右缘，按钮留 .main-chat 会贴到
+    // 工作区右缘（用户看到"列表按钮跑到工作区上"）。归口：面板显示时按钮搬入 .ws-panel 锚其
+    // 左缘外沿（= 列表栏右缘，视觉位置与无面板时完全一致），面板隐藏时搬回 .main-chat。
+    function syncListToggleAnchor() {
+        if (!listToggleBtn || !wsPanel.aside) return;
+        if (!wsPanel.aside.classList.contains('hidden')) {
+            if (listToggleBtn.parentNode !== wsPanel.aside) {
+                wsPanel.aside.insertBefore(listToggleBtn, wsPanel.aside.firstChild);
+            }
+        } else if (listToggleBtn.parentNode === wsPanel.aside) {
+            var host = document.querySelector('.main-chat');
+            if (host) host.insertBefore(listToggleBtn, host.firstChild);
+        }
+    }
+
     // 面板显隐归口：Agent 模式开 + 当前会话为 AI 智能体 才显示（开面板即恢复上次项目并拉取根目录）
     function wsPanelSetVisible(on) {
         if (on) {
             if (!wsPanelEnsure()) return;
             wsPanel.visible = true;
             wsPanel.aside.classList.remove('hidden');
+            syncListToggleAnchor();
             if (!wsPanel.projLoaded) {
                 wsPanelProjRestore().catch(function () { wsPanelRefreshTree(); });
             } else {
@@ -6466,6 +6610,7 @@
         } else {
             wsPanel.visible = false;
             if (wsPanel.aside) wsPanel.aside.classList.add('hidden');
+            syncListToggleAnchor();
         }
     }
 
