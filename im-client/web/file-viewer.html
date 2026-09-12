@@ -70,28 +70,10 @@
         }
         .fv-code-wrap pre { padding: 0 16px 12px 12px; background: transparent; }
         .fv-code-wrap code { font: 12px/1.55 Consolas, "Courier New", monospace; background: transparent; }
-        /* 纯文本编辑器（双叠层：textarea 流内 autosize 撑高，外层统一滚动——两层无各自滚动条，
-           根治滚动同步像素误差；高亮层统一 \n，根治 Windows CRLF 在 pre 中的宽度错位） */
-        #fv-editor-stack { position: relative; display: none; height: calc(100vh - 46px); min-height: 320px; overflow: auto; background: #232428; }
-        #fv-editor-stack::-webkit-scrollbar { width: 8px; height: 8px; }
-        #fv-editor-stack::-webkit-scrollbar-track { background: transparent; }
-        #fv-editor-stack::-webkit-scrollbar-thumb { background: #4a4b50; border-radius: 4px; }
-        #fv-editor-hl {
-            position: absolute; top: 0; left: 0; width: 100%; margin: 0; overflow: visible; pointer-events: none;
-            padding: 10px 16px; font: 12px/1.55 Consolas, "Courier New", monospace; tab-size: 4;
-            white-space: pre-wrap; overflow-wrap: break-word; color: #d4d4d4; box-sizing: border-box;
-        }
-        #fv-editor-hl code { display: block; }
-        #fv-editor {
-            position: relative; display: block; width: 100%; min-height: calc(100vh - 46px); min-height: max(calc(100vh - 46px), 320px);
-            border: none; outline: none; resize: none; tab-size: 4; overflow: hidden;
-            padding: 10px 16px; background: transparent; color: transparent; caret-color: #e8e8e8;
-            font: 12px/1.55 Consolas, "Courier New", monospace;
-            white-space: pre-wrap; overflow-wrap: break-word; box-sizing: border-box;
-        }
-        #fv-editor::selection { background: rgba(80,140,255,0.4); color: transparent; }
-        /* Monaco（TRAE/VS Code 同款编辑内核）：编辑态主力，textarea 叠层仅作加载期兜底 */
-        #fv-monaco { position: absolute; inset: 0; display: none; }
+        /* 阶段九十五：编辑态唯一内核 = Monaco（TRAE/VS Code 同款编辑内核）。
+           旧 textarea+hljs 双叠层方案因中英混排两套布局引擎字体 fallback 宽度不一致、
+           永远存在像素级错位，已整体裁除。Monaco 自渲染自带滚动条（可主题化）。 */
+        #fv-monaco { position: relative; display: none; height: calc(100vh - 46px); min-height: 320px; background: #232428; }
         /* md / docx 排版（对齐主程序 ai-md 观感：表格边框/代码块深底/引用线） */
         .fv-md { padding: 16px 20px; line-height: 1.7; font-size: 13.5px; max-width: 980px; }
         .fv-md h1, .fv-md h2, .fv-md h3, .fv-md h4 { margin: 18px 0 10px; line-height: 1.4; color: #f0f0f0; }
@@ -131,7 +113,19 @@
         .fv-commit-meta { padding: 14px 20px 0; }
         .fv-commit-subject { font-size: 14.5px; font-weight: 600; color: #f0f0f0; margin-bottom: 4px; }
         .fv-commit-info { font-size: 12px; color: #8a8b8f; }
-        .fv-diff-path { padding: 10px 20px 0; font-size: 12px; color: #8a8b8f; }
+        /* 阶段九十六：Monaco diff 对比视图（kind=diff/commit 专用，VS Code 同款对比器） */
+        #fv-diff-wrap { flex: 1; min-height: 0; display: none; flex-direction: column; }
+        #fv-diff-head {
+            flex: none; display: flex; align-items: center; gap: 8px;
+            padding: 7px 12px; border-bottom: 1px solid #36373b; background: #2a2b2f;
+        }
+        #fv-diff-info {
+            flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            font-size: 12px; color: #8a8b8f;
+        }
+        #fv-diff-info .fv-commit-subject { font-size: 13px; margin-bottom: 2px; }
+        #fv-diff-info .fv-commit-info { font-size: 11.5px; }
+        #fv-diff { flex: 1; min-height: 0; background: #232428; }
         /* pptx */
         .fv-pptx { padding: 16px; text-align: center; }
         .fv-pptx-bar { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -150,12 +144,15 @@
         <button id="fv-btn-cancel" class="fv-btn hidden">取消</button>
     </div>
     <div id="fv-body"></div>
-    <div id="fv-editor-stack">
-        <pre id="fv-editor-hl" aria-hidden="true"><code></code></pre>
-        <textarea id="fv-editor" spellcheck="false"></textarea>
-        <div id="fv-monaco"></div>
+    <div id="fv-diff-wrap">
+        <div id="fv-diff-head">
+            <div id="fv-diff-info"></div>
+            <button id="fv-btn-diffmode" class="fv-btn hidden">行内对比</button>
+        </div>
+        <div id="fv-diff"></div>
     </div>
-    <script src="/lib/monaco/vs/loader.js"></script>
+    <div id="fv-monaco"></div>
+    <script src="/lib/monaco/min/vs/loader.js"></script>
     <script>
     (function () {
         'use strict';
@@ -165,37 +162,17 @@
         var btnEdit = document.getElementById('fv-btn-edit');
         var btnSave = document.getElementById('fv-btn-save');
         var btnCancel = document.getElementById('fv-btn-cancel');
-        var editorEl = document.getElementById('fv-editor');
-        var stackEl = document.getElementById('fv-editor-stack');
-        var hlPre = document.getElementById('fv-editor-hl');
-        var hlCode = hlPre ? hlPre.querySelector('code') : null;
-        var hlTimer = null;
-        // syncEditorHl 编辑态语法高亮：textarea 文字透明，由底层 pre 显示 hljs 着色内容。
-        // 值统一 \n（textarea 在 Windows 下是 \r\n，pre 中 \r 会被渲染成异常宽度导致整行错位）
-        function syncEditorHl() {
-            if (!hlCode || !data) return;
-            var v = (editorEl.value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            var lang = LANG_MAP[((data.ext || '') + '').toLowerCase()] || '';
-            var html = '';
-            if (window.hljs && v) {
-                try {
-                    html = (lang && window.hljs.getLanguage(lang))
-                        ? window.hljs.highlight(v, { language: lang, ignoreIllegals: true }).value
-                        : window.hljs.highlightAuto(v).value;
-                } catch (e) { html = ''; }
-            }
-            hlCode.innerHTML = html || esc(v);
-        }
-        function syncEditorHlSoon() { if (hlTimer) clearTimeout(hlTimer); hlTimer = setTimeout(function () { syncEditorHl(); autosizeEditor(); }, 90); }
-        // autosizeEditor textarea 高度跟随内容（滚动交给外层 stack，两层永无滚动差）
-        function autosizeEditor() {
-            editorEl.style.height = 'auto';
-            editorEl.style.height = Math.max(editorEl.scrollHeight, stackEl.clientHeight) + 'px';
-        }
+        var diffWrap = document.getElementById('fv-diff-wrap');   // 阶段九十六：Monaco diff 对比视图
+        var diffInfo = document.getElementById('fv-diff-info');
+        var diffBox = document.getElementById('fv-diff');
+        var btnDiffMode = document.getElementById('fv-btn-diffmode');
+        var diffEd = null;          // diff 编辑器实例（复用，不随渲染重建）
+        var diffSide = true;        // true=并排 false=行内
+        var diffOrigModel = null, diffModModel = null; // 每次渲染重建并释放旧模型，防泄漏
 
-        // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核）=====
-        // 叠层 textarea 方案在中英混排下两套布局引擎字体 fallback 宽度不一致，永远有像素级错位；
-        // Monaco 自行测量渲染每行，光标像素级精确。textarea 叠层仅作 Monaco 加载完成前的兜底。
+        // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
+        // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
+        // Monaco 自行测量渲染每行，光标像素级精确。加载完成前状态栏显示"编辑器加载中…"（本地资源毫秒级）。
         var MONACO_LANG = {
             js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
             ts: 'typescript', tsx: 'typescript', py: 'python', c: 'c', h: 'c',
@@ -210,7 +187,7 @@
         function ensureMonaco() {
             if (monacoReady || monacoLoading) { return; }
             monacoLoading = true;
-            require.config({ paths: { vs: '/lib/monaco/vs' } });
+            require.config({ paths: { vs: '/lib/monaco/min/vs' } });
             require(['vs/editor/editor.main'], function () {
                 monaco.editor.defineTheme('im-dark', {
                     base: 'vs-dark', inherit: true, rules: [],
@@ -242,8 +219,6 @@
         }
         function monacoTakeOver(val) { // 切换编辑内容到 Monaco 并置语言
             monacoBox.style.display = 'block';
-            editorEl.style.display = 'none';
-            hlPre.style.display = 'none';
             monacoEditor.setValue((val || '').replace(/\r\n/g, '\n'));
             monaco.editor.setModelLanguage(monacoEditor.getModel(), monacoLang());
             monacoEditor.focus();
@@ -496,28 +471,9 @@
             bodyEl.appendChild(box2);
         }
 
-        function renderCommitMeta(meta) {
-            if (!meta) return;
-            var box = document.createElement('div');
-            box.className = 'fv-commit-meta';
-            if (meta.msg) {
-                var s = document.createElement('div');
-                s.className = 'fv-commit-subject';
-                s.textContent = meta.msg;
-                box.appendChild(s);
-            }
-            var info = [meta.an, meta.at ? new Date(meta.at).toLocaleString('zh-CN') : '', meta.sh]
-                .filter(function (x) { return x; }).join(' · ');
-            if (info) {
-                var d = document.createElement('div');
-                d.className = 'fv-commit-info';
-                d.textContent = info;
-                box.appendChild(d);
-            }
-            bodyEl.appendChild(box);
-        }
-
-        function renderDiff(text) {
+        // ===== diff 对比视图（阶段九十六：Monaco diff 编辑器增强）=====
+        // 静态渲染兜底：二进制差异、非 unified 格式、无差异文本时退回 hljs 高亮
+        function renderDiffStatic(text) {
             var wrap = document.createElement('div');
             wrap.className = 'fv-code-wrap';
             var lines = text.split('\n');
@@ -544,11 +500,121 @@
                 bodyEl.appendChild(hint);
             }
         }
+        // parseUnifiedDiff：把 git unified diff 还原为 original/modified 双文本。
+        // 规则：hunk 外（diff --git/index/---/+++ 等）与 @@ 行两侧共有，保持多文件/多 hunk 对齐；
+        // hunk 内 '-' 进 original、'+' 进 modified、' ' 两侧共有、'\'（No newline）为非内容行忽略。
+        function parseUnifiedDiff(text) {
+            var orig = [], mod = [], binary = false, inHunk = false;
+            var lines = (text || '').replace(/\r\n/g, '\n').split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var L = lines[i];
+                if (inHunk) {
+                    if (L.indexOf('@@') === 0) { orig.push(L); mod.push(L); continue; } // 下一 hunk
+                    var c = L.charAt(0);
+                    if (c === '\\') continue;
+                    if (c === '+') mod.push(L.slice(1));
+                    else if (c === '-') orig.push(L.slice(1));
+                    else { orig.push(L); mod.push(L); } // 上下文行
+                    continue;
+                }
+                if (L.indexOf('@@') === 0) { inHunk = true; orig.push(L); mod.push(L); continue; }
+                if (L.charAt(0) === '\\') continue;
+                if (L.indexOf('Binary files ') === 0 || L.indexOf('GIT binary patch') === 0) binary = true;
+                orig.push(L); mod.push(L); // 文件头/元信息行：两侧共有
+            }
+            return { original: orig.join('\n'), modified: mod.join('\n'), binary: binary };
+        }
+        // diffExtOf：优先 meta.path 扩展名，否则取 diff 文本最后一个 +++ b/xx 目标路径的扩展名（决定对比器内语法高亮语言）
+        function diffExtOf(p, text) {
+            var path = (p.meta && p.meta.path) || '';
+            var m = /\.([A-Za-z0-9_]+)\s*$/.exec(path);
+            if (m) return m[1].toLowerCase();
+            var lines = text.split('\n');
+            for (var i = lines.length - 1; i >= 0; i--) {
+                if (lines[i].indexOf('+++ ') === 0) {
+                    var mm = /\.([A-Za-z0-9_]+)\s*$/.exec(lines[i].slice(4));
+                    if (mm) return mm[1].toLowerCase();
+                }
+            }
+            return '';
+        }
+        function diffHeaderInfo(p) { // 头部信息条：commit 元信息或文件路径
+            diffInfo.innerHTML = '';
+            if (p.kind === 'commit' && p.meta) {
+                if (p.meta.msg) {
+                    var s = document.createElement('div');
+                    s.className = 'fv-commit-subject';
+                    s.textContent = p.meta.msg;
+                    diffInfo.appendChild(s);
+                }
+                var info = [p.meta.an, p.meta.at ? new Date(p.meta.at).toLocaleString('zh-CN') : '', p.meta.sh]
+                    .filter(function (x) { return x; }).join(' · ');
+                if (info) {
+                    var d = document.createElement('div');
+                    d.className = 'fv-commit-info';
+                    d.textContent = info;
+                    diffInfo.appendChild(d);
+                }
+            } else if (p.meta && p.meta.path) {
+                diffInfo.textContent = '文件：' + p.meta.path;
+            }
+        }
+        function renderDiffView(p) { // diff/commit 渲染入口（bodyEl 隐藏，diff 视图接管）
+            bodyEl.style.display = 'none';
+            diffWrap.style.display = 'flex';
+            btnDiffMode.classList.remove('hidden');
+            diffHeaderInfo(p);
+            if (!monacoReady) { // 复用编辑态同一条懒加载通道，就绪后自动渲染
+                setStatus('对比器加载中…');
+                monacoPendingCb = function () { if (diffWrap.style.display !== 'none') renderDiffApply(data); };
+                ensureMonaco();
+                return;
+            }
+            renderDiffApply(p);
+        }
+        function renderDiffApply(p) {
+            setStatus('只读');
+            var text = p.content || '';
+            var fallback = function () { // 兜底：恢复 bodyEl + 静态渲染
+                diffWrap.style.display = 'none';
+                btnDiffMode.classList.add('hidden');
+                bodyEl.style.display = '';
+                renderDiffStatic(text);
+            };
+            if (!text) { fallback(); return; } // 无差异：静态提示条最直观
+            var parsed = parseUnifiedDiff(text);
+            if (parsed.binary || (!parsed.original && !parsed.modified)) { fallback(); return; } // 二进制差异/非 unified 格式
+            var lang = MONACO_LANG[diffExtOf(p, text)] || 'plaintext';
+            if (!diffEd) { // 首次渲染时创建，之后复用
+                diffEd = monaco.editor.createDiffEditor(diffBox, {
+                    theme: 'im-dark', readOnly: true, originalEditable: false,
+                    automaticLayout: true, fontSize: 12, lineHeight: 19,
+                    fontFamily: 'Consolas, "Courier New", monospace',
+                    renderSideBySide: diffSide, renderIndicators: true, diffWordWrap: 'on',
+                    hideUnchangedRegions: { enabled: true, contextLineCount: 3 }, // 折叠未变更区（VS Code 同款）
+                    scrollBeyondLastLine: false, minimap: { enabled: false }
+                });
+            }
+            if (diffOrigModel) diffOrigModel.dispose();
+            if (diffModModel) diffModModel.dispose();
+            diffOrigModel = monaco.editor.createModel(parsed.original, lang);
+            diffModModel = monaco.editor.createModel(parsed.modified, lang);
+            diffEd.setModel({ original: diffOrigModel, modified: diffModModel });
+            btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
+        }
+        btnDiffMode.addEventListener('click', function () { // 并排/行内切换（TRAE CN 同款）
+            if (!diffEd) return;
+            diffSide = !diffSide;
+            diffEd.updateOptions({ renderSideBySide: diffSide });
+            btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
+        });
 
         // ===== 主渲染入口 =====
         function render() {
             bodyEl.innerHTML = '';
-            stackEl.style.display = 'none';
+            monacoBox.style.display = 'none';
+            diffWrap.style.display = 'none';
+            btnDiffMode.classList.add('hidden');
             bodyEl.style.display = '';
             btnEdit.classList.add('hidden');
             btnSave.classList.add('hidden');
@@ -565,16 +631,8 @@
                 bodyEl.appendChild(md);
                 return;
             }
-            if (p.kind === 'diff' || p.kind === 'commit') {
-                setStatus('只读');
-                if (p.kind === 'commit') renderCommitMeta(p.meta);
-                else if (p.meta && p.meta.path) {
-                    var ph = document.createElement('div');
-                    ph.className = 'fv-diff-path';
-                    ph.textContent = '文件：' + p.meta.path;
-                    bodyEl.appendChild(ph);
-                }
-                renderDiff(p.content || '');
+            if (p.kind === 'diff' || p.kind === 'commit') { // 阶段九十六：Monaco diff 对比视图（含静态兜底）
+                renderDiffView(p);
                 return;
             }
             // kind === 'file'
@@ -616,20 +674,14 @@
         // ===== 编辑态 =====
         function showEditor() {
             bodyEl.style.display = 'none';
-            stackEl.style.display = 'block';
             var val = draft || (data && data.content) || '';
             if (monacoReady) {
                 monacoTakeOver(val);
                 setStatus(''); // setValue 会触发一次内容变更提示，重置
             } else {
-                monacoBox.style.display = 'none';
-                editorEl.style.display = 'block';
-                hlPre.style.display = '';
-                editorEl.value = val;
-                autosizeEditor();
-                syncEditorHl();
-                editorEl.focus();
-                monacoPendingCb = function () { if (editing && stackEl.style.display === 'block') { monacoTakeOver(val); setStatus(''); } };
+                monacoBox.style.display = 'block';
+                setStatus('编辑器加载中…');
+                monacoPendingCb = function () { if (editing && monacoBox.style.display === 'block') { monacoTakeOver(draft || (data && data.content) || ''); setStatus(''); } };
                 ensureMonaco(); // 首次进入编辑才加载 Monaco（本地资源毫秒级），加载完成自动接管
             }
             btnEdit.classList.add('hidden');
@@ -640,8 +692,7 @@
             if (!data || !data.editable || editing) return;
             editing = true;
             draft = '';
-            render();
-            editorEl.focus();
+            render(); // monacoTakeOver 内部会 focus；Monaco 未就绪时接管完成后自动 focus
         });
         btnCancel.addEventListener('click', function () {
             editing = false;
@@ -650,29 +701,9 @@
             if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, false);
             render();
         });
-        editorEl.addEventListener('input', function () {
-            draft = editorEl.value;
-            autosizeEditor();
-            syncEditorHlSoon();
-            if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
-            setStatus('已修改（未保存）', 'dirty');
-        });
-        editorEl.addEventListener('keydown', function (e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); doSave(); }
-            if (e.key === 'Tab') { // Tab 缩进而不是跳出焦点
-                e.preventDefault();
-                var s = editorEl.selectionStart, en = editorEl.selectionEnd;
-                editorEl.value = editorEl.value.slice(0, s) + '    ' + editorEl.value.slice(en);
-                editorEl.selectionStart = editorEl.selectionEnd = s + 4;
-                draft = editorEl.value;
-                autosizeEditor();
-                syncEditorHlSoon();
-                if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
-            }
-        });
         function doSave() {
             if (!data || !hasViewer()) return;
-            var content = (monacoReady && monacoBox.style.display === 'block') ? monacoEditor.getValue() : editorEl.value;
+            var content = (monacoReady && monacoBox.style.display === 'block') ? monacoEditor.getValue() : (draft || (data && data.content) || '');
             btnSave.disabled = true;
             viewerBridge().save(data.tab_id, content).then(function (r) {
                 btnSave.disabled = false;
