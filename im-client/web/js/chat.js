@@ -4478,7 +4478,13 @@
             } }
         ];
         if (!isFile && t.url && /^https?:\/\//i.test(t.url)) {
-            items.push({ label: '在系统浏览器打开', fn: function () { window.desktop.browserTabsOp('open-external', '', t.url); } });
+            items.push({ label: '在系统浏览器打开', fn: function () { // 阶段九十四：结果回执——失败 toast 具体原因（禁止静默无反应）
+                window.desktop.browserTabsOp('open-external', '', t.url).then(function (r) {
+                    if (!r || !r.ok) showToast('打开失败：主进程拒绝该地址');
+                }).catch(function (err) {
+                    showToast('打开失败：' + (err && err.message ? err.message : 'IPC 异常'));
+                });
+            } });
         }
         if (isFile && t.file_path) {
             items.push({ label: '打开文件所在目录', fn: function () { window.desktop.browserTabsOp('show-in-folder', t.id); } }); // 阶段九十四：TRAE"在文件资源管理器中显示"同款

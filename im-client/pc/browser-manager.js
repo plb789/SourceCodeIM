@@ -20,6 +20,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { app, ipcMain, session, webContents, shell } = require('electron');
 
 // ===== 模块状态 =====
@@ -159,7 +160,10 @@ function attachWebContents(tab, wc) {
     tab.__hookedId = tab.wcId;
     // 页面 window.open / target=_blank：转应用内新标签页（http/https 才放行；deny 阻断弹窗本身）
     wc.setWindowOpenHandler(function (details) {
-        if (urlAllowed(details.url)) createTab(details.url, true);
+        if (urlAllowed(details.url)) {
+            createTab(details.url, true); // 前台激活：点链接直接看新页（TRAE 同款）
+            statePush(); // 立即推送——createTab 只改主进程状态不推送，缺此步渲染层无感知（点链接"无反应"，点任意标签后才刷出新标签）
+        }
         return { action: 'deny' };
     });
     wc.on('page-title-updated', function (e, title) {
@@ -313,8 +317,9 @@ function tabsOp(op, tabId, arg) {
         }
         case 'open-external': { // 仅放行 http(s)，交给系统默认浏览器
             const u = String(arg || '');
-            if (!/^https?:\/\//i.test(u)) return false;
-            shell.openExternal(u);
+            console.log('[browser-manager] open-external 收到地址:', JSON.stringify(u)); // 阶段九十四诊断：无反应问题实测
+            if (!/^https?:\/\//i.test(u)) { console.log('[browser-manager] open-external 拒绝：非 http(s)'); return false; }
+            shell.openExternal(u).catch(function (e) { console.error('[browser-manager] openExternal 失败:', e && e.message); }); // 拒绝时留痕（默认 unhandled rejection 静默）
             return true;
         }
     }
@@ -596,7 +601,7 @@ async function toolNavigate(params) {
     if (!mainWindow || mainWindow.isDestroyed()) {
         return { ok: false, output: '错误：主窗口未就绪' };
     }
-    const newTab = !!(params && params.new_tab);
+    let newTab = !!(params && params.new_tab); // 阶段九十四修复：file 活动标签强制新开时需重新赋值，声明成 const 会抛 "Assignment to constant variable"
     let tab = activeTab();
     if (tab && tab.kind === 'file') newTab = true; // 活动为文件查看页：强制新开网页标签，不覆盖文件视图
     if (newTab || !tab) {
@@ -760,11 +765,31 @@ async function toolScreenshot() {
     if (!image || image.isEmpty()) return { ok: false, output: '错误：截图内容为空（页面可能未渲染完成）' };
     const dir = path.join(app.getPath('userData'), 'browser-shots');
     try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* 目录可能已存在 */ }
-    const file = path.join(dir, 'browser-' + Date.now() + '.png');
-    try { fs.writeFileSync(file, image.toPNG()); } catch (e) {
-        return { ok: false, output: '错误：截图保存失败——' + (e.message || e) };
+    // 阶段九十四：落盘健壮化——目录级降级。实测火绒等 HIPS 会拦截"新编译未签名 exe 写用户目录"
+    // （23:24 旧 exe 写入成功、重编译后被拦，连 .tmp 都 EPERM 且重试无效），故主目录失败后
+    // 降级系统 TEMP 目录保功能可用；临时文件+原子改名+瞬时锁重试仍保留（防杀软扫描锁）
+    const png = image.toPNG();
+    const dirs = [dir, path.join(os.tmpdir(), 'im-client-shots')];
+    let lastErr = null;
+    for (let d = 0; d < dirs.length; d++) {
+        try { fs.mkdirSync(dirs[d], { recursive: true }); } catch (e) { /* 目录可能已存在 */ }
+        for (let i = 0; i < 3; i++) {
+            const file = path.join(dirs[d], 'browser-' + Date.now() + '-' + i + '.png');
+            const tmp = file + '.tmp';
+            try {
+                fs.writeFileSync(tmp, png);
+                fs.renameSync(tmp, file);
+                return { ok: true, output: '截图已保存: ' + file + '（可在文件管理器打开查看；页面内容用户在浏览区实时可见）' };
+            } catch (e) {
+                lastErr = e;
+                try { fs.unlinkSync(tmp); } catch (e2) { /* tmp 可能未创建 */ }
+                const code = e && e.code;
+                if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') break; // 非锁类错误（如 ENOSPC）重试无意义
+                try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120); } catch (e2) { /* 同步等待 120ms 再试 */ }
+            }
+        }
     }
-    return { ok: true, output: '截图已保存: ' + file + '（可在文件管理器打开查看；页面内容用户在浏览区实时可见）' };
+    return { ok: false, output: '错误：截图保存失败——' + ((lastErr && lastErr.message) || lastErr) + '。多次出现时请在安全软件（如火绒）中将 im-client.exe 加入信任区' };
 }
 
 // toolEval browser_eval：页面内执行任意 JS（服务端已强制审批）
