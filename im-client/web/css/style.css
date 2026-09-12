@@ -8743,6 +8743,54 @@ html.m .ms-actions {
     background: var(--primary);
 }
 
+/* 阶段九十三：聊天列收起态展开按钮——尺寸/配色与左缘展开列表按钮（#list-toggle-btn）一致，
+   镜像贴浏览区右缘垂直居中，常显比拖把手显眼，点击一次性恢复收起前的展开宽度 */
+.browser-expand-btn {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    z-index: 1602; /* 盖过分栏把手（1601）与内容区，按钮命中优先 */
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 7px;   /* 与 #list-toggle-btn 同尺寸（7×40） */
+    height: 40px;
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border);
+    border-right: none;
+    border-radius: 6px 0 0 6px; /* 镜像 list-toggle：贴右缘，左侧圆角 */
+    color: var(--text-light);
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+
+/* 仅聊天列收起态（浏览区占满全宽）显示 */
+.main-chat.browser-chat-collapsed .browser-expand-btn {
+    display: flex;
+}
+
+/* 透明热区扩展：视觉保持 7×40 与列表按钮一致，点击容差加大（贴边窄条不易点准） */
+.browser-expand-btn::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    bottom: -8px;
+    left: -8px;
+    right: 0;
+}
+
+.browser-expand-btn:hover {
+    color: var(--primary);
+    background: var(--hover);
+}
+
+.browser-expand-btn svg {
+    width: 7px;   /* 与 #list-toggle-btn svg 同尺寸 */
+    height: 7px;
+}
+
 /* 拖拽中：全局 col-resize 光标 + 禁止选中；对浏览区 iframe/webview 施加 pointer-events:none
    （guest 不再截获鼠标，渲染层全局正常收 mousemove，拖拽不中断——阶段九十三 DOM 化后归口 CSS） */
 body.browser-resizing {
@@ -8785,8 +8833,10 @@ body.browser-resizing .browser-web-frame {
     gap: 0;
     flex: 1;
     min-width: 0;
-    /* 标签过多按比例收缩而非横向滚动（免滚动条）；极端窄屏下超出部分裁切 */
-    overflow: hidden;
+    /* 标签过多横向滚动查看（Trae CN 同款）：标签不压缩省略，悬停浮现自绘滑块可拖拽查看溢出标签 */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none; /* 原生滚动条隐藏，走自绘悬浮滑块（initOsbH，工作区标签栏同款） */
 }
 
 .browser-tab {
@@ -8795,7 +8845,7 @@ body.browser-resizing .browser-web-frame {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    flex: 0 1 auto;
+    flex: 0 0 auto; /* 不收缩：标签多时超出部分横向滚动，而非压缩出省略号 */
     max-width: 200px;
     min-width: 56px;
     padding: 0 8px 0 10px;

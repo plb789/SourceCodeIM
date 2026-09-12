@@ -4138,8 +4138,8 @@
     var browserSplitLastPersisted = 0; // 上次已持久化的分栏宽度（去抖：宽度不变不重复写存储）
     var browserChatCollapsed = false;  // 聊天列是否已收起（浏览区占满全宽，右缘把手可拖回）
     var BROWSER_SPLIT_MIN_PANEL = 280;  // 浏览区最小宽
-    var BROWSER_SPLIT_MIN_CHAT = 180;   // 聊天列最小保留宽（未收起时）
-    var BROWSER_SPLIT_COLLAPSE_AT = 60; // 展开态向右压缩：聊天列窄于此值吸附收起（与恢复线拉开迟滞防抖）
+    var BROWSER_SPLIT_MIN_CHAT = 290;   // 聊天列最小保留宽（未收起时）
+    var BROWSER_SPLIT_COLLAPSE_AT = 280; // 展开态向右压缩：聊天列窄于此值吸附收起（与恢复线拉开迟滞防抖）
     // 基准宽度：.main-chat 为 border-box，clientWidth 恒等于总宽（与 padding 无关，实测确认），
     // 浏览区宽 w，聊天列宽 = clientWidth - w（旧实现误减 padding 当总宽，导致拖拽宽度振荡）
     function browserClampSplitW(w, totalW) {
@@ -4224,6 +4224,23 @@
         });
         window.addEventListener('mouseup', endDrag);
         window.addEventListener('blur', endDrag); // 拖拽中窗口失焦（鼠标在窗外释放）兜底复位
+    })();
+
+    // 阶段九十三：聊天列收起态展开按钮（TRAE CN 收起条同款）——收起后右缘常显半胶囊，
+    // 点击一次性恢复收起前的展开宽度（收起期间宽度存档不被覆盖，见 browserApplySplit），
+    // 比拖把手显眼；无存档时回落默认 52%
+    (function browserInitExpandBtn() {
+        var btn = document.getElementById('browser-expand-btn');
+        if (!btn || btn.dataset.expandBound) return;
+        btn.dataset.expandBound = '1';
+        btn.addEventListener('click', function () {
+            var mc = browserPanelEl.parentElement;
+            if (!mc || !browserChatCollapsed || browserPanelEl.classList.contains('hidden')) return;
+            var totalW = mc.clientWidth;
+            var saved = 0;
+            try { saved = parseInt(localStorage.getItem(BROWSER_SPLIT_KEY), 10); } catch (e) {}
+            browserApplySplit(browserClampSplitW((saved > 0) ? saved : Math.round(totalW * 0.52), totalW), false);
+        });
     })();
 
     // file 标签路径面包屑（TRAE 同款）：seg=路径段，sep='›'，末段当前文件名高亮
@@ -4374,6 +4391,11 @@
             chip.addEventListener('click', function () { window.desktop.browserSelect(t.id); });
             browserTabsEl.appendChild(chip);
         });
+        if (window._osbInitH) window._osbInitH(browserTabsEl); // 标签多时横向自绘滑块（悬停浮现可拖拽，Trae CN 同款；幂等防重复挂载）
+        var actTab = browserTabsEl.querySelector('.browser-tab.active'); // 激活标签滚入可视区（切换/新开在溢出区时可见）
+        if (actTab && actTab.scrollIntoView) {
+            try { actTab.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { actTab.scrollIntoView(); }
+        }
     }
 
     // 状态应用（主进程 browser:state 推送归口）：显隐/标签栏/地址栏/导航按钮可用态
