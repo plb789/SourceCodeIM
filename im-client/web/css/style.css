@@ -7340,12 +7340,14 @@ html.m #friend-menu {
     position: relative;
 }
 
+/* 复选框改为 flex 首项占据真实空间：消息行整体右移让位，不再被列表左缘裁剪（微信同款）；
+   position:relative 供选中态对勾 ::after 定位锚点 */
 .ms-check {
-    position: absolute;
-    top: 50%;
+    position: relative;
+    order: -1;
+    align-self: center;
     width: 18px;
     height: 18px;
-    margin-top: -9px;
     border: 2px solid var(--border);
     border-radius: 50%;
     background: var(--panel-bg);
@@ -7353,10 +7355,10 @@ html.m #friend-menu {
     flex-shrink: 0;
 }
 
-/* 自/他人消息复选框统一显示在消息列表左侧空白列（消息列表留出 26px 左内边距） */
-.message.self .ms-check,
-.message.other .ms-check {
-    left: -26px;
+/* 自消息行为 row-reverse（头像贴右），order:1 使复选框排到本行内容最左，
+   即紧贴消息前方显示（对方消息复选框则在列表左侧统一列） */
+.message.self .ms-check {
+    order: 1;
 }
 
 .message.selected .ms-check {
@@ -7377,7 +7379,7 @@ html.m #friend-menu {
 }
 
 /* 多选模式下消息悬停提示可点击 */
-.multi-select #message-list .message {
+#message-list.multi-select .message {
     cursor: pointer;
 }
 
@@ -7397,6 +7399,34 @@ html.m #friend-menu {
 .ms-actions {
     display: flex;
     gap: 8px;
+}
+
+/* 阶段八十八：多选工具栏按钮图标化——覆盖 .modal-btn 的 flex:1（弹窗等分语义在窄工具栏把文字压成两行），
+   改按内容收缩 + nowrap，图标内联 SVG currentColor 跟随按钮文字色（主色按钮白、普通按钮主题字色） */
+.ms-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 12px;
+    white-space: nowrap;
+}
+
+.ms-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* 手机版多选工具栏：6 按钮窄屏放不下，允许统计与按钮分两行、按钮行内再换行 */
+html.m .ms-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+}
+
+html.m .ms-actions {
+    flex-wrap: wrap;
 }
 
 /* 多选模式下隐藏原输入区（工具栏/输入框/底行），仅显示多选工具栏 */

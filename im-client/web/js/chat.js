@@ -1052,6 +1052,9 @@
     var msCountEl = document.getElementById('ms-count');
     var msMergeBtn = document.getElementById('ms-merge');
     var msSingleBtn = document.getElementById('ms-single');
+    var msSaveBtn = document.getElementById('ms-save');   // 阶段八十八：保存到电脑
+    var msCopyBtn = document.getElementById('ms-copy');   // 阶段八十八：复制
+    var msDelBtn = document.getElementById('ms-del');     // 阶段八十八：删除
     var msCancelBtn = document.getElementById('ms-cancel');
     var mergedCache = {};     // mergeKey -> 合并信封（详情弹窗数据源；信封可能超 data-raw 上限不走 DOM）
     var mergedSeq = 0;
@@ -1071,6 +1074,7 @@
         multiSelected = {};
         inputBarEl.classList.add('ms-mode');
         msBarEl.classList.remove('hidden');
+        messageList.classList.add('multi-select'); // 阶段八十八：复选框列样式归口（悬停手型 + 自消息行放宽对齐）
         updateMsCount();
         // 为可选中消息（有 msg_id）插入复选框；系统提示/撤回提示等无 id 消息自然排除
         messageList.querySelectorAll('.message[data-msg-id]').forEach(function (el) {
@@ -1087,6 +1091,7 @@
         multiSelected = {};
         inputBarEl.classList.remove('ms-mode');
         msBarEl.classList.add('hidden');
+        messageList.classList.remove('multi-select');
         messageList.querySelectorAll('.ms-check').forEach(function (ck) { ck.remove(); });
         messageList.querySelectorAll('.message.selected').forEach(function (el) { el.classList.remove('selected'); });
     }
@@ -1095,6 +1100,8 @@
         var n = multiSelectedCount();
         msCountEl.textContent = '已选 ' + n + ' 条';
         msMergeBtn.disabled = msSingleBtn.disabled = n === 0;
+        // 阶段八十八：保存到电脑/复制/删除同样需有选中项才可用
+        msSaveBtn.disabled = msCopyBtn.disabled = msDelBtn.disabled = n === 0;
     }
 
     // 多选模式点击归口（捕获阶段）：整条消息点击即切换勾选，并拦截图片预览/文件下载/头像资料卡等子交互
@@ -1132,6 +1139,131 @@
         if (!multiSelectedCount()) return;
         fwdMode = 'multi';
         openForwardPicker(null);
+    });
+
+    // ===== 阶段八十八：多选保存到电脑/复制/删除 =====
+    // 选区内容重采（与 buildMergedPayload 同构的 DOM 提取，但不做 blob/data 跳过——
+    // 本会话内 blob/data 地址可下载可读，仅转发跨会话场景才不可用）
+    function collectSelectedItems() {
+        var items = [];
+        multiSelectedEls().forEach(function (el) {
+            var bubble = el.querySelector('.message-bubble');
+            if (!bubble) return;
+            var item = {
+                f: el.getAttribute('data-from') || '',
+                t: parseInt(el.getAttribute('data-ts'), 10) || 0
+            };
+            var img = bubble.querySelector('.chat-image');
+            if (img && img.getAttribute('src')) {
+                item.k = 'image';
+                item.u = img.getAttribute('src');
+            } else if (bubble.classList.contains('bubble-file')) {
+                item.k = 'file';
+                item.u = bubble.getAttribute('data-url') || '';
+                var fnEl = bubble.querySelector('.file-name');
+                item.n = (fnEl && fnEl.textContent) || '文件';
+            } else {
+                var tx = bubble.querySelector('.msg-text');
+                var text = ((tx ? tx.textContent : (bubble.textContent || '')) || '').trim();
+                if (!text) return;
+                item.k = 'text';
+                item.x = text;
+            }
+            items.push(item);
+        });
+        return items;
+    }
+
+    // 选中项展示时间（txt 导出/复制用，无时间戳省略）
+    function fmtSelTime(ts) {
+        if (!ts) return '';
+        var d = new Date(ts * 1000);
+        return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) +
+            ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+
+    // 从 URL 猜下载文件名（data:/blob: 无路径语义用 fallback；服务端 URL 取末段）
+    function guessSelFileName(u, fallback) {
+        if (!u || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0) return fallback;
+        var seg = (u.split('?')[0] || '').split('/');
+        try { return decodeURIComponent(seg.pop()) || fallback; } catch (e) { return fallback; }
+    }
+
+    // 触发浏览器下载（与 onFileCardClick 同一 <a download> 归口；多文件间隔 200ms 防浏览器连发限流）
+    function triggerSelDownload(url, name, delayMs) {
+        setTimeout(function () {
+            var a = document.createElement('a');
+            a.href = url || '';
+            a.download = name || 'file';
+            a.click();
+        }, delayMs || 0);
+    }
+
+    // 保存到电脑：图片/文件逐个下载，文本消息汇总为 txt（仅存在文本消息时生成）
+    msSaveBtn.addEventListener('click', function () {
+        var items = collectSelectedItems();
+        if (!items.length) { showToast('选中的消息暂无可保存的内容'); return; }
+        var delay = 0;
+        var fileCount = 0;
+        var lines = [];
+        items.forEach(function (it) {
+            var name = senderDisplayName(it.f) || it.f || '';
+            var time = fmtSelTime(it.t);
+            if (it.k === 'image') {
+                triggerSelDownload(it.u, guessSelFileName(it.u, 'image_' + ((it.t || Date.now() / 1000) | 0) + '.png'), delay);
+                delay += 200;
+                fileCount++;
+            } else if (it.k === 'file') {
+                triggerSelDownload(it.u, guessSelFileName(it.u, it.n || 'file'), delay);
+                delay += 200;
+                fileCount++;
+            } else {
+                lines.push((name + (time ? ' ' + time : '')) + '\n' + (it.x || ''));
+            }
+        });
+        if (lines.length) {
+            var d = new Date();
+            var stamp = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) +
+                '_' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2);
+            var blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = '聊天记录_' + stamp + '.txt';
+            a.click();
+            fileCount++;
+        }
+        exitMultiSelect();
+        showToast('已保存 ' + fileCount + ' 个文件到下载目录');
+    });
+
+    // 复制：文本原文 + 图片/文件占位，带发送者与时间头（微信合并复制同款格式）
+    msCopyBtn.addEventListener('click', function () {
+        var items = collectSelectedItems();
+        if (!items.length) { showToast('选中的消息暂无可复制的内容'); return; }
+        var lines = items.map(function (it) {
+            var name = senderDisplayName(it.f) || it.f || '';
+            var time = fmtSelTime(it.t);
+            var head = name + (time ? ' ' + time : '');
+            var body = it.k === 'image' ? '[图片]' : (it.k === 'file' ? '[文件] ' + (it.n || '') : (it.x || ''));
+            return head + '\n' + body;
+        });
+        copyTextToClipboard(lines.join('\n\n'));
+    });
+
+    // 删除：与单条删除同归口（MSG.DELETE 仅从自己的聊天窗口移除，云端对对方仍可见）
+    msDelBtn.addEventListener('click', function () {
+        var els = multiSelectedEls();
+        var n = els.length;
+        if (!n) { showToast('未选中任何消息'); return; }
+        showConfirm('删除消息', '确定删除选中的 ' + n + ' 条消息吗？仅从你的聊天窗口移除。', function () {
+            els.forEach(function (el) {
+                var id = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
+                if (id) IMSocket.send({ msg_type: MSG.DELETE, msg_id: id });
+                el.remove();
+            });
+            exitMultiSelect();
+            showToast('已删除 ' + n + ' 条消息');
+        }, '删除');
     });
 
     // 从 DOM 顺序重采选中元素（列表顺序即时间顺序，跨页选中的历史消息仅取当前窗口内存在的）
@@ -1222,6 +1354,9 @@
         var parties = document.getElementById('merged-parties');
         var detail = document.getElementById('merged-detail');
         if (!env) { showToast('详情已过期，请重新打开会话'); return; }
+        // 阶段八十八：原生滚动条全局隐藏（style.css ::-webkit-scrollbar 归零 + scrollbar-width:none），
+        // 详情列表须挂自绘悬浮滑块否则滚动时无任何滚动条指示；initOsb 幂等（el._osb 防重复）
+        if (window._osbInit) window._osbInit(detail);
         var names = [];
         (env.i || []).forEach(function (it) {
             var dn = senderDisplayName(it.f);
