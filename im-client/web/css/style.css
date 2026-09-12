@@ -8721,6 +8721,12 @@ html.m .ms-actions {
     z-index: 1601;
 }
 
+/* 阶段九十二：聊天列收起态（浏览区拖满全宽）——聊天内容整体隐藏只留浏览区与右缘把手，
+   把手仍可向左拖回恢复聊天列（visibility 保留布局，不影响把手命中） */
+.main-chat.browser-chat-collapsed > :not(.browser-panel) {
+    visibility: hidden;
+}
+
 .browser-splitter::after {
     content: '';
     position: absolute;

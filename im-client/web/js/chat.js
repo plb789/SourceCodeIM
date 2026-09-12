@@ -4131,30 +4131,40 @@
 
     // 阶段九十二：分栏宽度同步——浏览区居中（贴主区左缘）、聊天列压缩到右侧（padding-left），
     // 消息/输入框保持可见可用；宽度持久化 localStorage（拖拽调整后跨会话保留）。
-    // 基准宽度剔除已加的 padding（兼容 content-box/border-box 两种 box-sizing，防反馈环路）；
+    // 基准宽度 = .main-chat 的 clientWidth（border-box 恒定总宽，与 padding 无关，实测确认）；
     // 同时写 --browser-w 供 conv-search 等通栏浮层避让浏览区
     var BROWSER_SPLIT_KEY = 'im_browser_split_w';
+    var BROWSER_SPLIT_COLLAPSED_KEY = 'im_browser_split_chat_collapsed';
     var browserSplitLastPersisted = 0; // 上次已持久化的分栏宽度（去抖：宽度不变不重复写存储）
-    var BROWSER_SPLIT_MIN_PANEL = 280; // 浏览区最小宽
-    var BROWSER_SPLIT_MIN_CHAT = 320;  // 聊天列最小保留宽
-    function browserClampSplitW(w, baseW) {
-        var maxW = baseW - BROWSER_SPLIT_MIN_CHAT;
-        if (w > maxW) w = Math.max(BROWSER_SPLIT_MIN_PANEL, maxW);
-        if (w < BROWSER_SPLIT_MIN_PANEL) w = Math.min(BROWSER_SPLIT_MIN_PANEL, baseW);
+    var browserChatCollapsed = false;  // 聊天列是否已收起（浏览区占满全宽，右缘把手可拖回）
+    var BROWSER_SPLIT_MIN_PANEL = 280;  // 浏览区最小宽
+    var BROWSER_SPLIT_MIN_CHAT = 180;   // 聊天列最小保留宽（未收起时）
+    var BROWSER_SPLIT_COLLAPSE_AT = 60; // 展开态向右压缩：聊天列窄于此值吸附收起（与恢复线拉开迟滞防抖）
+    // 基准宽度：.main-chat 为 border-box，clientWidth 恒等于总宽（与 padding 无关，实测确认），
+    // 浏览区宽 w，聊天列宽 = clientWidth - w（旧实现误减 padding 当总宽，导致拖拽宽度振荡）
+    function browserClampSplitW(w, totalW) {
+        var maxW = totalW - BROWSER_SPLIT_MIN_CHAT;
+        if (w > maxW) w = maxW;
+        if (w < BROWSER_SPLIT_MIN_PANEL) w = Math.min(BROWSER_SPLIT_MIN_PANEL, totalW);
         return Math.round(w);
     }
-    function browserApplySplit(w) {
+    function browserApplySplit(w, collapsed) {
         w = Math.round(w);
         var mc = browserPanelEl.parentElement;
         if (!mc) return;
+        browserChatCollapsed = !!collapsed;
         browserPanelEl.style.width = w + 'px';
         mc.style.paddingLeft = w + 'px';
         mc.style.setProperty('--browser-w', w + 'px');
-        // 侧栏折叠动画期间本函数逐帧触发，仅在宽度真变化时写一次存储（去抖）
-        if (w !== browserSplitLastPersisted) {
-            browserSplitLastPersisted = w;
-            try { localStorage.setItem(BROWSER_SPLIT_KEY, String(w)); } catch (e) {}
-        }
+        mc.classList.toggle('browser-chat-collapsed', browserChatCollapsed);
+        try {
+            localStorage.setItem(BROWSER_SPLIT_COLLAPSED_KEY, browserChatCollapsed ? '1' : '0');
+            // 收起时不覆盖宽度存储（保留上次展开宽度供拖回后继续用）；展开时去抖写存储
+            if (!browserChatCollapsed && w !== browserSplitLastPersisted) {
+                browserSplitLastPersisted = w;
+                localStorage.setItem(BROWSER_SPLIT_KEY, String(w));
+            }
+        } catch (e) {}
     }
     function browserSyncSplit() {
         var mc = browserPanelEl.parentElement;
@@ -4162,16 +4172,21 @@
         if (browserPanelEl.classList.contains('hidden')) {
             mc.style.paddingLeft = '';
             mc.style.setProperty('--browser-w', '0px');
+            mc.classList.remove('browser-chat-collapsed');
             return;
         }
-        var baseW = mc.clientWidth - (parseFloat(mc.style.paddingLeft) || 0);
+        var totalW = mc.clientWidth;
+        var collapsed = false;
+        try { collapsed = localStorage.getItem(BROWSER_SPLIT_COLLAPSED_KEY) === '1'; } catch (e) {}
         var saved = parseInt(localStorage.getItem(BROWSER_SPLIT_KEY), 10);
-        var w = (saved > 0) ? saved : Math.round(baseW * 0.52);
-        browserApplySplit(browserClampSplitW(w, baseW));
+        // 收起态直接占满全宽（不走钳制：钳制的聊天列保底与收起互斥）
+        browserApplySplit(collapsed ? totalW : browserClampSplitW((saved > 0) ? saved : Math.round(totalW * 0.52), totalW), collapsed);
     }
 
-    // 分栏拖拽：按住浏览区右缘把手左右拖动调宽。拖拽期间 body 挂 browser-resizing 类，
-    // CSS 对 iframe/webview 施加 pointer-events:none（guest 不再截获鼠标，渲染层全局收 mousemove）
+    // 分栏拖拽：按住浏览区右缘把手左右拖动调宽；聊天列压过收起阈值吸附为全宽，
+    // 从全宽往回拖直接展开到最小保留宽（迟滞区间不重叠，无抖动）。
+    // 拖拽期间 body 挂 browser-resizing 类，CSS 对 iframe/webview 施加 pointer-events:none
+    // （guest 不再截获鼠标，渲染层全局收 mousemove）
     (function browserInitSplitter() {
         var sp = document.getElementById('browser-splitter');
         if (!sp || sp.dataset.splitBound) return;
@@ -4195,8 +4210,16 @@
         window.addEventListener('mousemove', function (e) {
             if (!dragging) return;
             var mc = browserPanelEl.parentElement;
-            var baseW = mc.clientWidth - (parseFloat(mc.style.paddingLeft) || 0);
-            browserApplySplit(browserClampSplitW(startW + (e.clientX - startX), baseW));
+            var totalW = mc.clientWidth;
+            var target = startW + (e.clientX - startX);
+            if (!browserChatCollapsed && totalW - target < BROWSER_SPLIT_COLLAPSE_AT) {
+                browserApplySplit(totalW, true); // 展开态压过收起线 → 吸附收起
+            } else if (browserChatCollapsed && target >= totalW - BROWSER_SPLIT_COLLAPSE_AT) {
+                browserApplySplit(totalW, true); // 收起态未拖过恢复线 → 保持收起
+            } else {
+                if (browserChatCollapsed) target = Math.min(target, totalW - BROWSER_SPLIT_MIN_CHAT); // 拖回即展开到最小保留宽
+                browserApplySplit(browserClampSplitW(target, totalW), false);
+            }
             e.preventDefault();
         });
         window.addEventListener('mouseup', endDrag);
