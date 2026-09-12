@@ -130,6 +130,12 @@ ai:
     # 文件直接落在用户磁盘（%APPDATA%/即时通讯/agent_workspace/<用户名>/）；
     # PC 离线或本地执行超时自动回退服务端工作区执行，任务不中断。false 时全部在服务端执行（阶段五十九行为）
     pc_executor: true
+    # 阶段九十一：内置浏览器工具开关（默认开启，nil 视为 true）——TRAE CN 同款内置浏览区，
+    # browser_* 工具族（navigate/snapshot/click/input/screenshot/eval/tabs/close）经用户 PC 客户端
+    # 的内置浏览器（WebContentsView，与主应用会话隔离）在本地真实执行，可操作 JS 渲染页面与登录态；
+    # 点击/输入/执行脚本需用户审批，打开/快照/截图自动放行；false 时不注入不执行（http_request 等不受影响）。
+    # 注意：依赖 PC 客户端在线（pc_executor 亦为 true 时才下发）
+    pc_browser: true
     # 阶段六十七：任务队列——每用户同时运行任务数上限（concurrency，0=1）与排队上限（queue_size，0=5）；
     # 超出并发数的新任务自动排队（FIFO，任务完成/取消后自动派发队首），排队已满时新任务直接拒绝
     concurrency: 1
@@ -235,6 +241,54 @@ ai:
     providers: ["deepseek", "ollama"] # 用户可选模型服务白名单（须与上面 providers 中已启用的 name 匹配）
     max_per_user: 10                  # 每人自建数量上限
     prompt_limit: 2000                # 提示词最大字符数
+
+# ============================================================
+# 阶段八十八：MCP（Model Context Protocol）——TRAE CN 同款 MCP 能力，服务端归口
+# Go 服务端作为 MCP Host 统一管理连接：stdio 在服务端本机拉起子进程，sse/http 直连远程端点；
+# 发现的工具供 AI 问答与智能 Agent 注入调用。服务器配置以 im_mcp_server 表为唯一数据源
+# （后台管理界面增删改热生效），下方 servers 仅首次启动表空时作种子导入
+# ============================================================
+mcp:
+  enabled: true                       # 总开关（false 时断开全部连接，工具不参与 AI 对话，后台配置记录保留）
+  user_enabled: true                  # 用户自建 MCP 总开关（阶段九十：PC 端"我的 MCP 服务器"入口——
+                                      # 用户在自己电脑配置本地 stdio 服务器，工具清单经 msg 67 上报注入
+                                      # Agent，调用经 PC 本地执行器执行，命令/凭据仅存用户本机；
+                                      # false 时本机工具不注入不执行，其他能力不受影响）
+  stdio_whitelist:                    # 用户自建服务器（owner 非空）的 stdio 命令白名单（可执行名比对，
+                                      # 兼容 .exe/.cmd/.bat 后缀；空=用户自建 stdio 全部拒绝。
+                                      # 管理员公共服务器不受限——管理员本就掌控服务端主机）
+    - "npx"
+    - "uvx"
+    - "node"
+    - "python"
+    - "python3"
+  connect_timeout_seconds: 30         # 建连（初始化握手）与工具发现超时秒
+  tool_timeout_seconds: 60            # 单次工具调用超时秒
+  # servers:                          # 种子服务器示例（仅首次启动导入；之后以后台管理配置为准）
+  # ===== 生产可用实例（均为官方维护、开箱即用；按需取消注释后重启） =====
+  #   - name: filesystem               # 文件系统访问（官方 @modelcontextprotocol/server-filesystem）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "D:/workspace", "E:/docs"]
+  #     # 注意：args 末尾的目录列表为允许访问的根目录，务必改成实际业务目录，避免放开整盘
+  #   - name: fetch                    # 网页抓取（官方 mcp-server-fetch，把网页转为 Markdown 供模型阅读）
+  #     transport: stdio
+  #     command: uvx
+  #     args: ["mcp-server-fetch"]
+  #   - name: memory                   # 长期记忆知识图谱（官方 @modelcontextprotocol/server-memory）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-memory"]
+  #     env: { "MEMORY_FILE_PATH": "./data/memory.json" }
+  #   - name: github                   # GitHub 仓库/Issue/PR 操作（官方，需个人访问令牌）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-github"]
+  #     env: { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxx" }
+  #   - name: remote-demo              # 远程 MCP 端点（新版 Streamable HTTP 协议，推荐）
+  #     transport: http
+  #     url: "https://mcp.example.com/mcp"
+  #     headers: { "Authorization": "Bearer xxx" }
 
 # ============================================================
 # 阶段四十九：后台管理

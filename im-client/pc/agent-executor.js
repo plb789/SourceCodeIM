@@ -1,5 +1,6 @@
 // agent-executor.js - 阶段六十：Agent 本地执行器核心（纯 Node 模块，不依赖 Electron API，可独立测试）
 // 职责：接收服务端下发的工具执行请求（read_file/write_file/edit_file/delete_file/list_dir/grep/run_command），在用户电脑本地执行并回传结果。
+// 阶段九十：本机 MCP 工具（mcp_pc_ 前缀）经 mcp-manager 调用；阶段九十一：内置浏览器工具（browser_ 前缀）经 browser-manager 调用
 // 设计约束（与服务端 agentrun.go 语义对齐）：
 //   1. 工作区隔离：所有文件操作严格限制在 <root>/<用户名消毒后>/ 内，拒绝绝对路径/盘符/.. 逃逸（与服务端 agentSafePath 同款双保险）
 //   2. 结果约定：output 以"错误："前缀表示工具级失败（模型据此自纠）；执行器仅做本地执行，审批归口在服务端
@@ -11,6 +12,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn, execFile } = require('child_process');
+// 阶段九十：本机 MCP 工具调用归口（用户自定义 stdio 服务器；配置反查由 main 注入 mcpCfgGetter）
+const mcpManager = require('./mcp-manager.js');
+// 阶段九十一：内置浏览器管理器（与主进程共用同一实例——main.js 亦 require 本模块的宿主进程）
+const browserManager = require('./browser-manager.js');
 
 // 与服务端一致的体积/次数上限
 const READ_MAX_CHARS = 50000;
@@ -870,8 +875,48 @@ function execTool(req, done) {
             done(cleanupBackupsSync(username, params));
             return;
         default:
+            // 阶段九十：本机 MCP 工具（服务端注入命名空间 mcp_pc_<服务器>_<工具>），走 mcp-manager 常驻会话调用
+            if (String(tool || '').indexOf('mcp_pc_') === 0) {
+                callPcMcp(username, tool, params, done);
+                return;
+            }
+            // 阶段九十一：内置浏览器工具（browser_navigate/snapshot/click/input/screenshot/eval/tabs/close），
+            // browser-manager 与本执行器同在主进程，直调免二次 IPC
+            if (String(tool || '').indexOf('browser_') === 0) {
+                callBrowserTool(tool, params, done);
+                return;
+            }
             done({ ok: false, output: '错误：未知工具 ' + tool });
     }
+}
+
+// ===== 阶段九十一：内置浏览器工具调用 =====
+// browser-manager.js 归口实现（WebContentsView 多标签页/快照/截图/脚本），这里仅 Promise→done 桥接
+function callBrowserTool(tool, params, done) {
+    browserManager.agentExecute(tool, params).then(function (r) {
+        done(r || { ok: false, output: '错误：内置浏览器工具无返回' });
+    }).catch(function (e) {
+        done({ ok: false, output: '错误：内置浏览器调用异常——' + (e.message || e) });
+    });
+}
+
+// ===== 阶段九十：本机 MCP 工具调用 =====
+// 服务端注入的工具清单不含 env/command（凭据不出本机）；调用时按需反查配置兜底建连
+let mcpCfgGetter = null;
+function setMcpCfgGetter(fn) {
+    mcpCfgGetter = fn;
+}
+
+function callPcMcp(username, tool, params, done) {
+    if (!mcpCfgGetter) {
+        done({ ok: false, output: '错误：本机 MCP 功能不可用' });
+        return;
+    }
+    mcpManager.callTool(username, tool, params || {}, mcpCfgGetter).then(function (r) {
+        done(r);
+    }).catch(function (e) {
+        done({ ok: false, output: '错误：本机 MCP 调用异常——' + (e.message || e) });
+    });
 }
 
 // ===== 阶段七十六：工作区文件面板（web 右侧文件树/预览/编辑，经服务端 msg 64 转发到本地磁盘执行）=====
@@ -1969,6 +2014,7 @@ module.exports = {
     setBackupRoot: setBackupRoot, // 阶段八十：本地变更审查备份根目录（main 启动时注入并清理孤儿）
     setSandbox: setSandbox,
     getSandbox: getSandbox,
+    setMcpCfgGetter: setMcpCfgGetter, // 阶段九十：本机 MCP 配置反查注入（main 启动时注入，按需建连兜底）
     safePath: safePath,
     sanitizeUsername: sanitizeUsername,
     execTool: execTool,

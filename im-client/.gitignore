@@ -1,6 +1,6 @@
 # 你要排除的目录（写在这里）
 bin/
-
+webbin/
 # 手机版 Capacitor 工程本机构建产物与工具链（勿提交）
 app/node_modules/
 app/tools/

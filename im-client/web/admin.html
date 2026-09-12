@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.13">
+    <link rel="stylesheet" href="css/admin.css?v=1.14">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -40,6 +40,7 @@
                 <button class="admin-nav-item active" data-view="dashboard">性能仪表盘</button>
                 <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
                 <button class="admin-nav-item" data-view="agents">AI 智能体</button>
+                <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -464,6 +465,22 @@
                     <span id="agentset-tip" class="admin-view-tip"></span>
                 </div>
             </section>
+
+            <!-- MCP 服务器管理（阶段八十九：TRAE CN 同款 MCP 能力，服务端归口） -->
+            <section id="admin-view-mcp" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>MCP 服务器</h2>
+                    <span id="mcp-status" class="admin-view-tip"></span>
+                    <button id="mcp-add" class="admin-btn primary">+ 新增服务器</button>
+                </header>
+                <p class="admin-view-tip">MCP（Model Context Protocol）服务器由服务端统一建连与调用：stdio 在服务端本机拉起子进程，sse/http 直连远程端点。已连接服务器的启用工具自动注入 AI 智能体（默认逐次人工确认，可开启免审批）。配置保存即热生效，无需重启。</p>
+                <div class="admin-mcp-toolbar">
+                    <button id="mcp-import" class="admin-btn small">导入 mcp.json</button>
+                    <button id="mcp-refresh" class="admin-btn small">刷新</button>
+                    <span id="mcp-global-tip" class="admin-view-tip"></span>
+                </div>
+                <div id="mcp-server-list" class="admin-cards"></div>
+            </section>
         </main>
     </div>
 
@@ -486,6 +503,31 @@
             <div class="modal-btns">
                 <button id="admin-confirm-cancel" class="modal-btn">取消</button>
                 <button id="admin-confirm-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MCP 工具管理弹窗（阶段八十九：单工具启用/禁用，TRAE 同款 per-tool 开关） -->
+    <div id="mcp-tools-mask" class="modal-mask hidden">
+        <div class="modal-box admin-mcp-tools-box">
+            <div id="mcp-tools-title" class="modal-title"></div>
+            <div id="mcp-tools-list" class="admin-mcp-tools-list"></div>
+            <div class="modal-btns">
+                <button id="mcp-tools-cancel" class="modal-btn">取消</button>
+                <button id="mcp-tools-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MCP JSON 导入弹窗（阶段八十九：兼容 TRAE/Claude/Cursor 的 mcp.json 格式） -->
+    <div id="mcp-import-mask" class="modal-mask hidden">
+        <div class="modal-box admin-mcp-import-box">
+            <div class="modal-title">导入 mcp.json</div>
+            <p class="admin-field-hint">粘贴 TRAE / Claude / Cursor 的 mcp.json 内容（{"mcpServers": {...}} 或直接的服务器对象），将逐个导入为 MCP 服务器。</p>
+            <textarea id="mcp-import-text" class="admin-input admin-mcp-import-text" placeholder='{"mcpServers": {"everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}}}'></textarea>
+            <div class="modal-btns">
+                <button id="mcp-import-cancel" class="modal-btn">取消</button>
+                <button id="mcp-import-ok" class="modal-btn primary">导 入</button>
             </div>
         </div>
     </div>
@@ -517,7 +559,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.19"></script>
+    <script src="js/admin.js?v=1.20"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

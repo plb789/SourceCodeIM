@@ -69,6 +69,7 @@
         $('admin-login-password').value = '';
         stopDashboardPolling(); // 离开主界面停止仪表盘轮询
         stopKBPolling(); // 阶段五十一：同步停止知识文件处理状态轮询
+        stopMCPPolling(); // 阶段八十九：同步停止 MCP 状态轮询
     }
     function showMain() {
         $('admin-login').classList.add('hidden');
@@ -119,6 +120,7 @@
             document.querySelectorAll('.admin-view').forEach(function (v) { v.classList.remove('active'); });
             var view = $('admin-view-' + item.dataset.view);
             if (view) view.classList.add('active');
+            stopMCPPolling(); // 阶段八十九：切换视图统一切断 MCP 状态轮询，mcp 分支按需重启
             // 进入列表页时刷新数据（agents 依赖 providers 下拉数据，串行加载避免竞态）
             if (item.dataset.view === 'providers') loadProviders();
             if (item.dataset.view === 'agents') loadProviders().then(loadAgents);
@@ -133,6 +135,8 @@
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
+            // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
+            else if (item.dataset.view === 'mcp') { loadMCPServers(); startMCPPolling(); }
             else stopKBPolling();
         });
     });
@@ -276,6 +280,14 @@
         // 阶段五十二：切片查看弹窗同步支持 Escape 关闭
         if (!$('admin-chunks-mask').classList.contains('hidden')) {
             $('admin-chunks-mask').classList.add('hidden');
+        }
+        // 阶段八十九：MCP 工具/日志弹窗与 JSON 导入弹窗同步支持 Escape 关闭
+        if (!$('mcp-tools-mask').classList.contains('hidden')) {
+            $('mcp-tools-mask').classList.add('hidden');
+            mcpToolsCtx = null;
+        }
+        if (!$('mcp-import-mask').classList.contains('hidden')) {
+            $('mcp-import-mask').classList.add('hidden');
         }
     });
 
@@ -2042,5 +2054,481 @@
         }).catch(function (e) {
             showToast(e.message || '导出失败，请重试');
         });
+    });
+
+    // ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，服务端归口建连与调用） =====
+    var mcpServers = [];
+    var mcpSettingsInfo = null;
+    var mcpPollTimer = null;
+    var mcpToolsCtx = null;  // 工具管理弹窗上下文 { server }
+    var mcpModalMode = 'tools'; // 弹窗壳复用：'tools'=工具启停（保存生效）/'log'=stderr 日志（只读）
+
+    // 状态轮询：仅 MCP 视图激活期间运行，实时反映 connecting/connected/error 变化
+    function startMCPPolling() {
+        stopMCPPolling();
+        mcpPollTimer = setInterval(function () { loadMCPServers(true); }, 5000);
+    }
+    function stopMCPPolling() {
+        if (mcpPollTimer) { clearInterval(mcpPollTimer); mcpPollTimer = null; }
+    }
+
+    function loadMCPServers(quiet) {
+        return api('GET', '/admin/api/mcp/servers').then(function (result) {
+            if (!result.ok) {
+                if (!quiet) showToast(result.msg || '加载失败');
+                return;
+            }
+            mcpServers = (result.data && result.data.servers) || [];
+            mcpSettingsInfo = (result.data && result.data.settings) || null;
+            renderMCPServers();
+        }).catch(function (e) {
+            if (!quiet) showToast(e.message || '网络异常');
+        });
+    }
+
+    var MCP_STATUS_TEXT = {
+        connected: '已连接',
+        connecting: '连接中',
+        disconnected: '未连接',
+        error: '错误'
+    };
+
+    function renderMCPServers() {
+        // 全局设置提示（config.yaml 归口，只读展示）
+        if (mcpSettingsInfo) {
+            $('mcp-global-tip').textContent = '总开关 ' + (mcpSettingsInfo.enabled ? '开启' : '关闭') +
+                ' · 用户级开关 ' + (mcpSettingsInfo.user_enabled ? '开启' : '关闭') +
+                ' · 建连超时 ' + mcpSettingsInfo.connect_timeout_s + 's / 工具超时 ' + mcpSettingsInfo.tool_timeout_s + 's（config.yaml）';
+        }
+        var box = $('mcp-server-list');
+        box.innerHTML = '';
+        $('mcp-status').textContent = mcpServers.length ? ('共 ' + mcpServers.length + ' 个服务器') : '';
+        if (!mcpServers.length) {
+            var empty = document.createElement('div');
+            empty.className = 'admin-card-empty';
+            empty.textContent = '暂无 MCP 服务器，点击右上角新增或导入 mcp.json';
+            box.appendChild(empty);
+            return;
+        }
+        mcpServers.forEach(function (sv) {
+            var card = document.createElement('div');
+            card.className = 'admin-card' + (sv.enabled ? '' : ' disabled');
+
+            var main = document.createElement('div');
+            main.className = 'admin-card-main';
+            var name = document.createElement('div');
+            name.className = 'admin-card-name';
+            var dot = document.createElement('span');
+            dot.className = 'mcp-status-dot ' + (sv.status || 'disconnected');
+            dot.title = MCP_STATUS_TEXT[sv.status] || sv.status;
+            name.appendChild(dot);
+            name.appendChild(document.createTextNode(' ' + sv.name));
+            var tagT = document.createElement('span');
+            tagT.className = 'admin-card-tag';
+            tagT.textContent = sv.transport;
+            name.appendChild(tagT);
+            if (sv.auto_approve) {
+                var tagAuto = document.createElement('span');
+                tagAuto.className = 'admin-card-tag';
+                tagAuto.textContent = '免审批';
+                name.appendChild(tagAuto);
+            }
+            if (!sv.enabled) {
+                var tagOff = document.createElement('span');
+                tagOff.className = 'admin-card-tag off';
+                tagOff.textContent = '已停用';
+                name.appendChild(tagOff);
+            }
+            var desc = document.createElement('div');
+            desc.className = 'admin-card-desc';
+            desc.textContent = sv.transport === 'stdio'
+                ? (sv.command + ' ' + (sv.args || []).join(' '))
+                : (sv.url || '-');
+            desc.title = desc.textContent;
+            var tools = document.createElement('div');
+            tools.className = 'admin-card-desc';
+            tools.textContent = '工具 ' + (sv.tool_count || 0) + ' 个 · ' + (MCP_STATUS_TEXT[sv.status] || sv.status);
+            main.appendChild(name);
+            main.appendChild(desc);
+            main.appendChild(tools);
+            if (sv.status_msg && (sv.status === 'error' || sv.status === 'connecting')) {
+                var msg = document.createElement('div');
+                msg.className = 'mcp-status-msg';
+                msg.textContent = sv.status_msg;
+                main.appendChild(msg);
+            }
+            card.appendChild(main);
+
+            var actions = document.createElement('div');
+            actions.className = 'admin-card-actions';
+            function addBtn(text, cls, fn) {
+                var b = document.createElement('button');
+                b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+                b.textContent = text;
+                b.addEventListener('click', fn);
+                actions.appendChild(b);
+            }
+            addBtn('工具', '', function () { openMCPToolsModal(sv); });
+            addBtn('编辑', '', function () { openMCPServerModal(sv); });
+            if (sv.enabled) addBtn('重连', '', function () {
+                api('POST', '/admin/api/mcp/servers/' + sv.id + '/reconnect').then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '重连失败'); return; }
+                    showToast('已发起重连');
+                    loadMCPServers(true);
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+            });
+            addBtn(sv.enabled ? '停用' : '启用', '', function () {
+                var payload = mcpFullPayload(sv, { enabled: !sv.enabled });
+                api('PUT', '/admin/api/mcp/servers/' + sv.id, payload).then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                    showToast(sv.enabled ? '已停用并断开连接' : '已启用并开始建连');
+                    loadMCPServers(true);
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+            });
+            if (sv.stderr_log && sv.stderr_log.length) {
+                addBtn('日志', '', function () { openMCPLogModal(sv); });
+            }
+            addBtn('删除', 'danger', function () {
+                confirmBox('确定删除 MCP 服务器「' + sv.name + '」吗？连接将立即断开。', function () {
+                    api('DELETE', '/admin/api/mcp/servers/' + sv.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除并断开连接');
+                        loadMCPServers(true);
+                    }).catch(function (e) { showToast(e.message || '网络异常'); });
+                });
+            });
+            card.appendChild(actions);
+            box.appendChild(card);
+        });
+    }
+
+    // mcpFullPayload 以列表视图缓存为基底构建完整配置（启停/工具清单保存复用，
+    // 仅覆盖指定字段，避免PUT 请求丢字段导致配置被重置）
+    function mcpFullPayload(sv, overrides) {
+        var p = {
+            name: sv.name,
+            transport: sv.transport,
+            command: sv.command || '',
+            args: sv.args || [],
+            env: sv.env || {},
+            url: sv.url || '',
+            headers: sv.headers || {},
+            enabled: !!sv.enabled,
+            auto_approve: !!sv.auto_approve,
+            disabled_tools: sv.disabled_tools || []
+        };
+        if (overrides) {
+            Object.keys(overrides).forEach(function (k) { p[k] = overrides[k]; });
+        }
+        return p;
+    }
+
+    // ===== 编辑/新增弹窗（复用通用动态表单 + 追加"测试连接"按钮） =====
+    function mcpParseLines(t) {
+        return String(t || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+    }
+    // kvText → 对象：每行 KEY=VALUE（env）或 KEY: VALUE（headers），首个分隔符切分
+    function mcpParseKVText(t, sep) {
+        var kv = {};
+        mcpParseLines(t).forEach(function (line) {
+            var idx = line.indexOf(sep);
+            if (idx <= 0) return;
+            kv[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        });
+        return kv;
+    }
+
+    function mcpPayloadFromForm(data, base) {
+        var transport = data.transport || 'stdio';
+        return {
+            name: (data.name || '').trim(),
+            transport: transport,
+            command: (data.command || '').trim(),
+            args: mcpParseLines(data.args),
+            env: mcpParseKVText(data.env, '='),
+            url: (data.url || '').trim(),
+            headers: mcpParseKVText(data.headers, ':'),
+            enabled: !!data.enabled,
+            auto_approve: !!data.auto_approve,
+            disabled_tools: base ? (base.disabled_tools || []) : []
+        };
+    }
+
+    function openMCPServerModal(sv) {
+        var fields = [
+            { key: 'name', label: '服务器名称（全局唯一，工具将以 mcp_名称_工具名 注入）', placeholder: '如：everything' },
+            {
+                key: 'transport', label: '传输类型', type: 'select',
+                options: [
+                    { value: 'stdio', label: 'stdio（服务端本机拉起子进程）' },
+                    { value: 'sse', label: 'sse（远程 SSE 端点）' },
+                    { value: 'http', label: 'http（远程 Streamable HTTP 端点）' }
+                ]
+            },
+            { key: 'command', label: '启动命令（stdio）', placeholder: '如：npx 或 C:\bin\server.exe' },
+            { key: 'args', label: '命令参数（stdio，每行一个）', type: 'textarea', placeholder: '-y\n@modelcontextprotocol/server-everything' },
+            { key: 'url', label: '服务地址（sse / http）', placeholder: 'https://example.com/mcp' },
+            { key: 'headers', label: '请求头（sse / http，每行一条，格式 KEY: VALUE）', type: 'textarea', placeholder: 'Authorization: Bearer sk-xxx' },
+            { key: 'env', label: '环境变量（每行一条，格式 KEY=VALUE）', type: 'textarea', placeholder: 'API_KEY=xxx' },
+            { key: 'enabled', label: '启用（保存即建连；总开关关闭时不建连）', type: 'checkbox', default: true },
+            { key: 'auto_approve', label: '免审批（勾选后该服务器工具调用不再逐次人工确认，请谨慎）', type: 'checkbox' }
+        ];
+        var values = {};
+        if (sv) {
+            values = {
+                name: sv.name,
+                transport: sv.transport || 'stdio',
+                command: sv.command || '',
+                args: (sv.args || []).join('\n'),
+                url: sv.url || '',
+                headers: Object.keys(sv.headers || {}).map(function (k) { return k + ': ' + sv.headers[k]; }).join('\n'),
+                env: Object.keys(sv.env || {}).map(function (k) { return k + '=' + sv.env[k]; }).join('\n'),
+                enabled: sv.enabled,
+                auto_approve: sv.auto_approve
+            };
+        }
+        openEditModal(sv ? '编辑 MCP 服务器' : '新增 MCP 服务器', fields, values, function (data) {
+            var payload = mcpPayloadFromForm(data, sv);
+            if (!payload.name) { showToast('服务器名称不能为空'); return; }
+            if (payload.transport === 'stdio' && !payload.command) { showToast('stdio 传输必须填写启动命令'); return; }
+            if (payload.transport !== 'stdio' && !payload.url) { showToast('sse / http 传输必须填写服务地址'); return; }
+            var req = sv
+                ? api('PUT', '/admin/api/mcp/servers/' + sv.id, payload)
+                : api('POST', '/admin/api/mcp/servers', payload);
+            req.then(function (result) {
+                if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                closeEditModal();
+                showToast(sv ? '已保存，配置变更自动重建连接' : '已新增，正在建连');
+                loadMCPServers(true);
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+        // 追加"测试连接"按钮与结果区（保存前验证，TRAE 同款；stdio 会真实拉起子进程用完即收）
+        var form = $('admin-edit-form');
+        // 阶段九十：生产可用模板一键填充（官方维护实例，与 config.yaml 生产示例同源；
+        // 仅新增时展示——编辑态一键覆盖会误伤既有配置）
+        if (!sv) {
+            var mcpTemplates = [
+                { label: '文件系统 filesystem', name: 'filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', 'D:/workspace'], env: {}, hint: '官方文件读写；末尾目录为允许访问的根，务必改成实际业务目录' },
+                { label: '网页抓取 fetch', name: 'fetch', command: 'uvx', args: ['mcp-server-fetch'], env: {}, hint: '官方网页抓取，网页转 Markdown 供模型阅读（需本机 uv）' },
+                { label: '长期记忆 memory', name: 'memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], env: { MEMORY_FILE_PATH: './data/memory.json' }, hint: '官方知识图谱记忆，落点建议改到数据目录' },
+                { label: 'GitHub', name: 'github', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_xxxxxxxxxxxxxxxxxxxx' }, hint: '官方仓库/Issue/PR 操作；令牌需替换为个人访问令牌' }
+            ];
+            var tplWrap = document.createElement('div');
+            tplWrap.className = 'admin-field';
+            var tplLabel = document.createElement('label');
+            tplLabel.textContent = '生产模板（点击一键填充，填后按提示改参数）';
+            tplWrap.appendChild(tplLabel);
+            var tplRow = document.createElement('div');
+            tplRow.className = 'admin-mcp-tpl-row';
+            mcpTemplates.forEach(function (tpl) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'admin-btn small';
+                b.title = tpl.hint;
+                b.textContent = tpl.label;
+                b.addEventListener('click', function () {
+                    var setv = function (key, v) { var el = $('af_' + key); if (el) el.value = v; };
+                    setv('name', tpl.name);
+                    setv('transport', 'stdio');
+                    setv('command', tpl.command);
+                    setv('args', tpl.args.join('\n'));
+                    setv('url', '');
+                    setv('headers', '');
+                    setv('env', Object.keys(tpl.env || {}).map(function (k) { return k + '=' + tpl.env[k]; }).join('\n'));
+                    var en = $('af_enabled'); if (en) en.checked = true;
+                    showToast('模板已填充：' + tpl.hint);
+                });
+                tplRow.appendChild(b);
+            });
+            tplWrap.appendChild(tplRow);
+            form.appendChild(tplWrap);
+        }
+        var wrap = document.createElement('div');
+        wrap.className = 'admin-field';
+        var testBtn = document.createElement('button');
+        testBtn.type = 'button';
+        testBtn.className = 'admin-btn small';
+        testBtn.textContent = '测试连接';
+        var out = document.createElement('div');
+        out.className = 'admin-field-hint';
+        testBtn.addEventListener('click', function () {
+            var payload = mcpPayloadFromForm(collectEditForm(), sv);
+            if (!payload.name) { out.textContent = '请先填写服务器名称'; return; }
+            if (payload.transport === 'stdio' && !payload.command) { out.textContent = 'stdio 传输必须填写启动命令'; return; }
+            if (payload.transport !== 'stdio' && !payload.url) { out.textContent = 'sse / http 传输必须填写服务地址'; return; }
+            testBtn.disabled = true;
+            out.textContent = '连接中…（stdio 将临时拉起子进程）';
+            api('POST', '/admin/api/mcp/test', payload).then(function (result) {
+                testBtn.disabled = false;
+                if (!result.ok) { out.textContent = result.msg || '连接失败'; return; }
+                var d = result.data || {};
+                out.textContent = '连接成功：' + (d.server_name || '未知服务') +
+                    (d.server_version ? ' v' + d.server_version : '') +
+                    '，协议 ' + (d.protocol_version || '-') +
+                    '，发现 ' + (d.tool_count || 0) + ' 个工具，耗时 ' + (d.elapsed_ms || 0) + 'ms';
+            }).catch(function (e) {
+                testBtn.disabled = false;
+                out.textContent = e.message || '网络异常';
+            });
+        });
+        wrap.appendChild(testBtn);
+        wrap.appendChild(out);
+        form.appendChild(wrap);
+    }
+    $('mcp-add').addEventListener('click', function () { openMCPServerModal(null); });
+    $('mcp-refresh').addEventListener('click', function () { loadMCPServers(); });
+
+    // ===== 工具启停弹窗（per-tool 开关，保存走 PUT 完整配置） =====
+    function openMCPToolsModal(sv) {
+        mcpModalMode = 'tools';
+        mcpToolsCtx = { server: sv };
+        $('mcp-tools-title').textContent = '工具管理 - ' + sv.name;
+        var list = $('mcp-tools-list');
+        list.innerHTML = '';
+        var disabled = {};
+        (sv.disabled_tools || []).forEach(function (n) { disabled[n] = true; });
+        if (!sv.tools || !sv.tools.length) {
+            var tip = document.createElement('div');
+            tip.className = 'admin-card-empty';
+            tip.textContent = '未发现工具（服务器可能未连接或未提供工具）';
+            list.appendChild(tip);
+        } else {
+            sv.tools.forEach(function (t) {
+                var item = document.createElement('label');
+                item.className = 'admin-mcp-tool-item';
+                var cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.checked = !disabled[t.name];
+                cb.setAttribute('data-tool', t.name);
+                var txt = document.createElement('div');
+                var nm = document.createElement('div');
+                nm.className = 'admin-mcp-tool-name';
+                nm.textContent = t.name;
+                var de = document.createElement('div');
+                de.className = 'admin-mcp-tool-desc';
+                de.textContent = t.description || '（无描述）';
+                de.title = t.description || '';
+                txt.appendChild(nm);
+                txt.appendChild(de);
+                item.appendChild(cb);
+                item.appendChild(txt);
+                list.appendChild(item);
+            });
+        }
+        $('mcp-tools-ok').textContent = '保 存';
+        $('mcp-tools-mask').classList.remove('hidden');
+    }
+
+    function openMCPLogModal(sv) {
+        mcpModalMode = 'log';
+        mcpToolsCtx = null;
+        $('mcp-tools-title').textContent = 'stderr 日志 - ' + sv.name;
+        var list = $('mcp-tools-list');
+        list.innerHTML = '';
+        (sv.stderr_log || []).forEach(function (line) {
+            var item = document.createElement('div');
+            item.className = 'admin-mcp-tool-desc';
+            item.style.maxHeight = 'none';
+            item.textContent = line;
+            list.appendChild(item);
+        });
+        if (!list.children.length) {
+            var tip = document.createElement('div');
+            tip.className = 'admin-card-empty';
+            tip.textContent = '暂无日志';
+            list.appendChild(tip);
+        }
+        $('mcp-tools-ok').textContent = '关 闭';
+        $('mcp-tools-mask').classList.remove('hidden');
+    }
+
+    $('mcp-tools-cancel').addEventListener('click', function () {
+        $('mcp-tools-mask').classList.add('hidden');
+        mcpToolsCtx = null;
+    });
+    $('mcp-tools-ok').addEventListener('click', function () {
+        if (mcpModalMode === 'log') { // 日志只读，按钮即关闭
+            $('mcp-tools-mask').classList.add('hidden');
+            return;
+        }
+        if (!mcpToolsCtx) return;
+        var disabled = [];
+        $('mcp-tools-list').querySelectorAll('input[type=checkbox][data-tool]').forEach(function (cb) {
+            if (!cb.checked) disabled.push(cb.getAttribute('data-tool'));
+        });
+        var payload = mcpFullPayload(mcpToolsCtx.server, { disabled_tools: disabled });
+        api('PUT', '/admin/api/mcp/servers/' + mcpToolsCtx.server.id, payload).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            $('mcp-tools-mask').classList.add('hidden');
+            mcpToolsCtx = null;
+            showToast('工具启停已保存并热生效');
+            loadMCPServers(true);
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // ===== mcp.json 导入（兼容 TRAE / Claude / Cursor 格式） =====
+    $('mcp-import').addEventListener('click', function () {
+        $('mcp-import-text').value = '';
+        $('mcp-import-mask').classList.remove('hidden');
+        $('mcp-import-text').focus();
+    });
+    $('mcp-import-cancel').addEventListener('click', function () {
+        $('mcp-import-mask').classList.add('hidden');
+    });
+    $('mcp-import-ok').addEventListener('click', function () {
+        var text = $('mcp-import-text').value.trim();
+        if (!text) { showToast('请先粘贴 mcp.json 内容'); return; }
+        var obj;
+        try { obj = JSON.parse(text); } catch (e) { showToast('JSON 解析失败：' + e.message); return; }
+        if (obj && obj.mcpServers && typeof obj.mcpServers === 'object') obj = obj.mcpServers;
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { showToast('格式不正确：应为 {"mcpServers": {...}} 或服务器对象'); return; }
+        var names = Object.keys(obj).filter(function (k) {
+            return obj[k] && typeof obj[k] === 'object' && !Array.isArray(obj[k]);
+        });
+        if (!names.length) { showToast('未找到可导入的服务器配置'); return; }
+        var okCount = 0, failMsgs = [];
+        function next(i) {
+            if (i >= names.length) {
+                $('mcp-import-mask').classList.add('hidden');
+                if (okCount) showToast('导入完成：成功 ' + okCount + ' 个' + (failMsgs.length ? '，失败 ' + failMsgs.length + ' 个' : ''));
+                else showToast(failMsgs[0] || '导入失败');
+                loadMCPServers(true);
+                return;
+            }
+            var name = names[i], e = obj[name];
+            var transport = String(e.type || e.transport || '').toLowerCase();
+            if (transport !== 'stdio' && transport !== 'sse' && transport !== 'http') {
+                transport = e.command ? 'stdio' : 'http';
+            }
+            var args = e.args || [];
+            if (!Array.isArray(args)) args = String(args).split(/\s+/).filter(Boolean);
+            var env = e.env || {};
+            if (Array.isArray(env)) { // Claude 变体：["K=V", ...]
+                var kv = {};
+                env.forEach(function (s) { var j = String(s).indexOf('='); if (j > 0) kv[String(s).slice(0, j)] = String(s).slice(j + 1); });
+                env = kv;
+            }
+            var payload = {
+                name: name,
+                transport: transport,
+                command: String(e.command || ''),
+                args: args.map(String),
+                env: env,
+                url: String(e.url || ''),
+                headers: e.headers || {},
+                enabled: true,
+                auto_approve: false,
+                disabled_tools: []
+            };
+            api('POST', '/admin/api/mcp/servers', payload).then(function (result) {
+                if (result.ok) okCount++;
+                else failMsgs.push(name + '：' + (result.msg || '导入失败'));
+                next(i + 1);
+            }).catch(function () {
+                failMsgs.push(name + '：网络异常');
+                next(i + 1);
+            });
+        }
+        next(0);
     });
 })();

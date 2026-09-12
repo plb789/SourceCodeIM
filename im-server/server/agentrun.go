@@ -296,6 +296,8 @@ func InitAgent(cfg *config.Config) {
 	// 阶段六十八：网络工具配置归口（http_request 默认开启；web_search 默认关闭须显式配置服务商）
 	agentHttpEnabled.Store(cfg.AI.Agent.HttpEnabled == nil || *cfg.AI.Agent.HttpEnabled)
 	agentHttpAllowPrivate.Store(cfg.AI.Agent.HttpAllowPrivate == nil || *cfg.AI.Agent.HttpAllowPrivate)
+	// 阶段九十一：内置浏览器工具开关（默认开启——审批分级已收敛风险，关闭即整体下线）
+	agentBrowserEnabled.Store(cfg.AI.Agent.PCBrowser == nil || *cfg.AI.Agent.PCBrowser)
 	agentSearchEnabled.Store(cfg.AI.Agent.WebSearch.Enabled != nil && *cfg.AI.Agent.WebSearch.Enabled)
 	agentSearchConfigStore(
 		strings.ToLower(strings.TrimSpace(cfg.AI.Agent.WebSearch.Provider)),
@@ -410,7 +412,7 @@ func InitAgent(cfg *config.Config) {
 	store.DB.Where("kind IN ? AND username = ?", []string{
 		"maxsteps", "tool_timeout", "approve_timeout", "concurrency", "queue_size",
 		"enabled", "pcexec", "autowrite",
-		"http_enabled", "http_private", "search_enabled", "search_provider", "search_key", "search_endpoint",
+		"http_enabled", "http_private", "browser_enabled", "search_enabled", "search_provider", "search_key", "search_endpoint",
 	}, "").Find(&setRows)
 	sp, sk, se := agentSearchConfig().Provider, agentSearchConfig().APIKey, agentSearchConfig().Endpoint
 	for _, r := range setRows {
@@ -446,6 +448,8 @@ func InitAgent(cfg *config.Config) {
 			agentHttpEnabled.Store(v == "1")
 		case "http_private":
 			agentHttpAllowPrivate.Store(v == "1")
+		case "browser_enabled":
+			agentBrowserEnabled.Store(v == "1")
 		case "search_enabled":
 			agentSearchEnabled.Store(v == "1")
 		case "search_provider":
@@ -536,7 +540,7 @@ func agentWebSearchToolDef() aiToolDefinition {
 
 // agentToolDefinitions 注入模型的工具 schema（OpenAI function calling 格式；
 // 阶段六十八：http_request/web_search 按配置开关动态注入，未开启不进 schema 防模型误调用）
-func agentToolDefinitions() []aiToolDefinition {
+func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 	tools := []aiToolDefinition{
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "read_file",
@@ -669,6 +673,21 @@ func agentToolDefinitions() []aiToolDefinition {
 	}
 	if agentSearchEnabled.Load() {
 		tools = append(tools, agentWebSearchToolDef())
+	}
+	// 阶段九十一：内置浏览器工具注入（WebContentsView 在用户电脑上，PC 端本地执行；
+	// 开关 ai.agent.pc_browser + 仅发起人 PC 端在线时注入——离线时调用必失败，schema 反而误导模型）
+	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
+		tools = append(tools, agentBrowserToolDefs()...)
+	}
+	// 阶段八十九：MCP 工具注入（TRAE CN 同款）——已连接且启用的 MCP 服务器工具动态进入
+	// schema（命名空间化 mcp_<服务器>_<工具>），模型按需调用；服务器离线时自然为空
+	if mcpDefs := mcpOpenAIToolDefinitions(); len(mcpDefs) > 0 {
+		tools = append(tools, mcpDefs...)
+	}
+	// 阶段九十：用户自定义本机 MCP 工具注入（mcp_pc_ 命名空间，仅注入该用户上报的清单；
+	// 经 PC 本地执行器调用，PC 离线时不注入——调用必失败，schema 反而误导模型）
+	if pcDefs := s.mcpPcOpenAIToolDefinitions(username); len(pcDefs) > 0 {
+		tools = append(tools, pcDefs...)
 	}
 	return tools
 }
@@ -812,12 +831,60 @@ func agentNeedsApproval(username, tool string, params map[string]interface{}) (b
 		}
 		return true, "向外部服务发起非只读请求（" + method + "），请确认目标地址与请求内容"
 	}
+	// 阶段九十一：内置浏览器工具风险分级——只读/导航/tab 管理免审批（页面内容用户实时可见），
+	// click/input/eval 逐次审批（见 agentBrowserNeedsApproval）
+	if isAgentBrowserTool(tool) {
+		return agentBrowserNeedsApproval(tool)
+	}
+	// 阶段九十：用户本机 MCP 工具风险分级——默认逐次人工审批（模型可借工具在用户电脑上
+	// 执行任意逻辑，未经确认放行风险高；审批弹窗可改参放行/直接放行/拒绝）
+	if serverName, toolName, ok := agentPcRouteToolKey(username, tool); ok {
+		return true, "调用你电脑本机的 MCP 服务器「" + serverName + "」的工具 " + toolName + "，将在本机执行，请确认"
+	}
+	// 阶段八十九：MCP 工具风险分级（TRAE 同款默认人工确认）——服务器开启 auto_approve 免审批，
+	// 默认逐次审批（审批弹窗可改参放行/直接放行/拒绝），防外部工具未经确认改动数据
+	if serverName, toolName, ok := mcpRouteToolKey(tool); ok {
+		if mcpServerAutoApprove(serverName) {
+			return false, ""
+		}
+		return true, "调用 MCP 服务器「" + serverName + "」的工具 " + toolName + "，请确认后执行"
+	}
 	return true, "未知工具默认走人工审批"
 }
 
 // agentToolExec 工具执行归口（均已在调用前完成审批）；返回给模型的结果文本。
 // callID 用于 run_command 输出流/转后台事件归属（tool_call ID 贯通前后端）
 func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[string]interface{}) string {
+	// 阶段九十一：内置浏览器工具不在服务端执行（WebContentsView 在用户电脑上，服务端无浏览器可调）。
+	// 正常路径经 agentToolExecDispatch 下发 PC 本地执行器；落到这里=PC 离线或回传超时
+	if msg := agentBrowserPcFallbackMsg(tool); msg != "" {
+		return msg
+	}
+	// 阶段九十：本机 MCP 工具不在服务端执行（stdio 子进程在用户电脑上，服务端无进程可调）。
+	// 正常路径经 agentToolExecDispatch 下发 PC 本地执行器；落到这里=PC 离线或回传超时，
+	// 不做服务端回退（服务端回退无法等价执行，明确报错让模型向用户说明更稳妥）
+	if strings.HasPrefix(tool, "mcp_pc_") {
+		if _, _, ok := agentPcRouteToolKey(t.Username, tool); !ok {
+			return "错误：本机 MCP 工具 " + tool + " 未找到（可能已被用户移除或服务器已下线）"
+		}
+		return "错误：本机 MCP 工具仅在用户的 PC 端在线时可用（当前 PC 端离线或执行回传超时），请告知用户启动 PC 端后重试"
+	}
+	// 阶段八十九：MCP 工具执行（命名空间 key → 服务器+原始工具名路由归口）。
+	// 错误统一"错误："前缀——与内置工具错误语义一致（前端 tool_result 的 ok 标记据此判定）
+	if strings.HasPrefix(tool, "mcp_") {
+		serverName, toolName, ok := mcpRouteToolKey(tool)
+		if !ok {
+			return "错误：MCP 工具 " + tool + " 未找到（服务器可能已断开或工具已下线）"
+		}
+		out, err := mcpCallTool(serverName, toolName, params)
+		if err != nil {
+			return "错误：" + err.Error()
+		}
+		if out == "" {
+			out = "（工具执行成功，无文本输出）" // 防空结果让模型误判失败
+		}
+		return out
+	}
 	switch tool {
 	case "read_file":
 		return agentToolReadFile(t.Username, params)
@@ -845,8 +912,15 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 
 // agentToolServerOnly 阶段六十八：始终服务端执行的工具归口（不下放 PC 本地执行器）——
 // todo_write 为纯任务清单状态；http_request/web_search 为服务端网络操作
-// （数据归口服务端统一执行，且 PC 本地执行器无对应实现）
+// （数据归口服务端统一执行，且 PC 本地执行器无对应实现）。
+// 阶段八十九：MCP 工具会话归口在服务端连接管理器（TRAE CN 同款服务端归口），恒为 server。
+// 阶段九十：mcp_pc_ 本机工具恒不在此列——执行载体在用户电脑（agentToolExecDispatch 分派）
 func agentToolServerOnly(tool string) bool {
+	if strings.HasPrefix(tool, "mcp_") && !strings.HasPrefix(tool, "mcp_pc_") {
+		if _, _, ok := mcpRouteToolKey(tool); ok {
+			return true
+		}
+	}
 	return tool == "todo_write" || tool == "http_request" || tool == "web_search"
 }
 
@@ -860,6 +934,25 @@ func agentToolEnvHint(s *Server, t *AgentTask, tool string) string {
 		return "pc"
 	}
 	return "server"
+}
+
+// agentToolLabel 阶段八十九：tool_start 事件的人类可读标题归口——MCP 工具名是命名空间
+// key（规整后不可精确反解），服务端按路由结果下发「MCP · 服务器 / 工具」展示名，前端直用。
+// 阶段九十：本机 MCP 工具下发「MCP · 服务器 / 工具（本机）」展示名，前端直用无需再解析
+func agentToolLabel(username, tool string) string {
+	// 阶段九十一：内置浏览器工具展示名（内置浏览器 · 打开页面 等）
+	if l := agentBrowserLabel(tool); l != "" {
+		return l
+	}
+	if strings.HasPrefix(tool, "mcp_pc_") {
+		if serverName, toolName, ok := agentPcRouteToolKey(username, tool); ok {
+			return "MCP · " + serverName + " / " + toolName + "（本机）"
+		}
+	}
+	if serverName, toolName, ok := mcpRouteToolKey(tool); ok {
+		return "MCP · " + serverName + " / " + toolName
+	}
+	return ""
 }
 
 // agentToolExecDispatch 阶段六十：工具执行环境分派归口。
@@ -1198,6 +1291,128 @@ func (s *Server) agentSandboxFor(username string) *AgentSandbox {
 		return v.(*AgentSandbox)
 	}
 	return nil
+}
+
+// ===== 阶段九十：用户自定义本机 MCP 服务器（TRAE 同款本地 stdio，凭据仅存用户本机） =====
+
+// AgentPcTool PC 端上报的单个本机 MCP 工具元数据（不含命令/环境变量等敏感配置——
+// 那些仅存用户本机 agent_mcp.json，服务端只拿工具名/描述/参数 schema 供模型注入与路由）
+type AgentPcTool struct {
+	Server      string          `json:"server"`                 // 本机 MCP 服务器名（用户自定义，PC 端进程管理归口）
+	Tool        string          `json:"tool"`                   // 工具原始名（服务器内唯一）
+	Description string          `json:"description,omitempty"`  // 工具说明（供模型理解）
+	InputSchema json.RawMessage `json:"input_schema,omitempty"` // 参数 JSON Schema（原样透传）
+}
+
+// agentPcToolSet 单用户本机 MCP 工具清单快照（整体覆盖更新，无部分更新语义）
+type agentPcToolSet struct {
+	tools []AgentPcTool
+}
+
+// agentPcToolStore username → *agentPcToolSet（登录后/清单变更时由 PC 端 msg 67 全量覆盖；
+// 仅内存不落库——清单源头在用户本机，服务端重启后等 PC 重新上报即可，无持久化必要）
+var agentPcToolStore sync.Map
+
+const (
+	agentPcMcpMaxServers   = 10      // 本机 MCP 服务器数量上限（防滥用）
+	agentPcMcpMaxTools     = 64      // 工具总数上限（防注入 schema 撑爆模型上下文）
+	agentPcMcpMaxNameLen   = 128     // 服务器名/工具名长度上限
+	agentPcMcpMaxDescLen   = 512     // 工具描述长度上限
+	agentPcMcpMaxSchemaLen = 8 << 10 // 单工具参数 schema 字节数上限（超长丢弃走空 schema 兜底）
+)
+
+// handleAgentPcTools 阶段九十：PC 端本机 MCP 工具清单上报（msg_type=67）。
+// 仅接受 platform=pc 连接；清洗校验后原子覆盖内存态（空清单=清除注入）；
+// 异常静默丢弃（旁路信令不影响主链路）；回执 {ok,count} 供前端确认收口
+func (s *Server) handleAgentPcTools(c *Client, msg *protocol.Message) {
+	if c.platform != "pc" {
+		return // 工具由 PC 本地进程发现并执行，其他端上报无执行载体
+	}
+	var req struct {
+		Tools []AgentPcTool `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil {
+		return
+	}
+	cleaned := make([]AgentPcTool, 0, len(req.Tools))
+	seen := make(map[string]bool)   // server+tool 去重
+	servers := make(map[string]int) // 服务器名 → 计数（超限防御）
+	for _, t := range req.Tools {
+		t.Server = strings.TrimSpace(t.Server)
+		t.Tool = strings.TrimSpace(t.Tool)
+		if t.Server == "" || t.Tool == "" ||
+			len(t.Server) > agentPcMcpMaxNameLen || len(t.Tool) > agentPcMcpMaxNameLen {
+			continue
+		}
+		if len(t.Description) > agentPcMcpMaxDescLen {
+			t.Description = truncateRunes(t.Description, agentPcMcpMaxDescLen)
+		}
+		if len(t.InputSchema) > agentPcMcpMaxSchemaLen {
+			t.InputSchema = nil // 超长 schema 丢弃，注入时走空对象兜底
+		}
+		key := t.Server + "\x00" + t.Tool
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		servers[t.Server]++
+		if len(servers) > agentPcMcpMaxServers {
+			break
+		}
+		cleaned = append(cleaned, t)
+	}
+	if len(cleaned) > agentPcMcpMaxTools {
+		cleaned = cleaned[:agentPcMcpMaxTools]
+	}
+	if len(cleaned) == 0 {
+		agentPcToolStore.Delete(c.username)
+	} else {
+		agentPcToolStore.Store(c.username, &agentPcToolSet{tools: cleaned})
+	}
+	logger.Info("Agent 本机 MCP 工具清单上报：用户 %s，%d 个工具", c.username, len(cleaned))
+	// 确认帧：前端 toast 提示上报收口（count=0 表示已清除注入）
+	if ack, err := json.Marshal(map[string]interface{}{"ok": true, "count": len(cleaned)}); err == nil {
+		out, _ := json.Marshal(protocol.Message{
+			MsgType:   protocol.MsgTypeAgentPcTools,
+			ToUser:    c.username,
+			Content:   string(ack),
+			Timestamp: time.Now().Unix(),
+		})
+		s.sendToUser(c.username, out)
+	}
+}
+
+// agentPcToolsFor 读取用户本机 MCP 工具清单（快照值，调用方可安全遍历）
+func (s *Server) agentPcToolsFor(username string) []AgentPcTool {
+	if !agentPcExec.Load() || !s.hub.HasPC(username) {
+		return nil // 与沙箱白名单同款口径：仅 PC 端在线时有效（离线时调用必失败，注入反而误导模型）
+	}
+	if v, ok := agentPcToolStore.Load(username); ok {
+		return v.(*agentPcToolSet).tools
+	}
+	return nil
+}
+
+// agentPcToolKey 本机 MCP 工具注入名（与服务端 mcpToolKey 同一算法、mcp_pc_ 命名空间前缀；
+// PC 端 mcp-manager.js pcToolKey 保持逐字节一致——路由按名反查，两端算法不一致即调用错位）
+func agentPcToolKey(server, tool string) string {
+	return mcpToolKey("pc_"+server, tool)
+}
+
+// agentPcRouteToolKey 按注入名反查本机工具路由（mcp_pc_<服务器>_<工具> 归属确认；
+// 直接读存储不校验 PC 在线——审批/报错路径需要准确归属，在线性由注入与执行分派归口把关。
+// O(n) 遍历——单用户清单受 64 上限约束，量级足够小）
+func agentPcRouteToolKey(username, key string) (serverName, toolName string, ok bool) {
+	v, has := agentPcToolStore.Load(username)
+	if !has {
+		return "", "", false
+	}
+	for _, t := range v.(*agentPcToolSet).tools {
+		if agentPcToolKey(t.Server, t.Tool) == key {
+			return t.Server, t.Tool, true
+		}
+	}
+	return "", "", false
 }
 
 // agentToolReadFile 读取工作区文本文件（UTF-8 输出，超长截断，GBK 兜底转码）。
@@ -2313,8 +2528,9 @@ func agentNewTaskID() string {
 // agentSystemPrompt Agent 系统提示词（工作区说明 + 本地授权目录 + 工具纪律 + 任务清单指引）。
 // 阶段六十二修复：配置了主工作区（沙箱白名单）时主工作区优先宣传、命令无需 cd——
 // 此前服务端工作区路径排在最前，模型会 cd 到服务端路径（cd...&&... 链式命令必触发审批），
-// 与用户本地主工作区语义冲突
-func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) string {
+// 与用户本地主工作区语义冲突。
+// 阶段九十：增加本机 MCP 工具纪律说明（清单已按 mcp_pc_ 前缀注入 schema）
+func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) string {
 	workRule := "当前服务端为用户 " + username + " 分配了独立工作区（你的所有文件操作与命令执行都限制在该目录内）：" + wsDir + "。\n"
 	pathRule := "4. 所有文件操作仅使用工作区内的相对路径。"
 	if sandbox != nil && len(sandbox.Dirs) > 0 {
@@ -2349,6 +2565,15 @@ func agentSystemPrompt(username string, wsDir string, sandbox *AgentSandbox) str
 	}
 	if agentSearchEnabled.Load() {
 		toolList += "、web_search（联网搜索）"
+	}
+	// 阶段九十一：内置浏览器工具提示（仅 PC 在线时已注入 schema，这里给分工纪律：
+	// JS 渲染/登录态页面用 browser_*，纯接口/静态抓取仍优先 http_request）
+	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
+		toolList += "、内置浏览器工具（browser_navigate/browser_snapshot/browser_click/browser_input/browser_screenshot/browser_eval/browser_tabs/browser_close，在用户电脑内置浏览器打开与操作网页；登录态/JS 渲染页面优先用本族工具，纯接口调用仍用 http_request）"
+	}
+	// 阶段九十：本机 MCP 工具提示（schema 已按用户上报清单动态注入，这里给纪律性说明防误用）
+	if pcTools := s.agentPcToolsFor(username); len(pcTools) > 0 {
+		toolList += "、本机 MCP 工具（mcp_pc_ 前缀，经用户电脑本地执行，使用前确认语义与参数来自用户数据）"
 	}
 	return "你是运行在即时通讯软件内的智能 Agent（自动化任务执行器）。\n" +
 		workRule +
@@ -2664,7 +2889,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 
 	// 阶段六十三：系统提示词追加历史经验上下文（按任务目标向量检索该用户与该智能体的记忆与任务经验，
 	// 原实现：仅注入 agentSystemPrompt，无经验复用）
-	sysContent := agentSystemPrompt(t.Username, wsDir, s.agentSandboxFor(t.Username))
+	sysContent := s.agentSystemPrompt(t.Username, wsDir, s.agentSandboxFor(t.Username))
 	if expCtx := agentExpContext(t.Agent, t.Username, t.Goal); expCtx != "" {
 		sysContent += "\n\n" + expCtx
 	}
@@ -2673,7 +2898,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		{Role: "system", Content: sysContent},
 		{Role: "user", Content: t.Goal},
 	}
-	tools := agentToolDefinitions()
+	tools := s.agentToolDefinitions(t.Username)
 
 	for {
 		// 取消检查（模型调用前）
@@ -2750,7 +2975,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			start := time.Now()
 
 			// 阶段七十五：事件携带 call_id（toolCall ID），前端控制台输出/转后台按钮按步骤精确归属
-			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID})
+			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID, "label": agentToolLabel(t.Username, toolName)})
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
 			needApprove, reason := agentNeedsApproval(t.Username, toolName, params)
@@ -2921,6 +3146,7 @@ func (s *Server) agentWaitApproval(t *AgentTask, callID, tool string, params map
 		"task_id": t.ID,
 		"step":    step,
 		"tool":    tool,
+		"label":   agentToolLabel(t.Username, tool), // 阶段八十九：MCP 工具下发人类可读展示名（命名空间 key 不可反解）
 		"params":  params,
 		"reason":  reason,
 	})

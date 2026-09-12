@@ -15,7 +15,7 @@
             document.documentElement.classList.add('pc-titlebar');
         }
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.04">
+    <link rel="stylesheet" href="css/style.css?v=2.05">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -321,6 +321,14 @@
                     <button id="agent-ws-btn" class="tool-btn agent-ws-btn hidden" title="Agent 工作区：选择本地文件夹作为主工作区，并维护沙箱白名单（授权目录内允许 Agent 读写文件）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
                     </button>
+                    <!-- 阶段九十：我的 MCP 服务器按钮（仅 PC 端；用户自定义本机 stdio MCP 服务器，TRAE 同款本地执行） -->
+                    <button id="agent-mcp-btn" class="tool-btn agent-mcp-btn hidden" title="我的 MCP 服务器：配置本机 MCP 服务器（stdio），工具清单上报后 AI Agent 可在本机调用（凭据仅存本机）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>
+                    </button>
+                    <!-- 阶段九十一：内置浏览区开关（仅 PC Electron 壳内显示——chat.js 能力检测控制显隐，Web/手机端保持隐藏） -->
+                    <button id="browser-btn" class="tool-btn browser-btn hidden" title="内置浏览器：打开浏览区面板，Agent 可在面板中打开网页并直接操作">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                    </button>
                 </div>
                 <textarea id="message-input" placeholder="输入消息" rows="3"></textarea>
                 <div class="input-footer">
@@ -331,6 +339,39 @@
 
             <!-- 表情面板（自定义，禁止系统默认弹窗） -->
             <div id="emoji-panel" class="emoji-panel hidden"></div>
+
+            <!-- 阶段九十一：内置浏览区面板（TRAE CN 同款，仅 PC Electron 壳启用——chat.js 能力检测后启用交互）。
+                 网页内容由主进程 BrowserView 原生渲染并精确贴合 #browser-content 矩形（browser:bounds 上报），
+                 本 DOM 仅承担标签栏/工具栏与内容区占位（加载间隙背景可见），Web/手机端整块保持隐藏 -->
+            <div id="browser-panel" class="browser-panel hidden">
+                <div class="browser-tabbar">
+                    <div id="browser-tabs" class="browser-tabs"></div>
+                    <button id="browser-newtab" class="browser-icon-btn" title="新建标签页">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    </button>
+                    <button id="browser-panel-close" class="browser-icon-btn" title="收起浏览区">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                </div>
+                <div class="browser-toolbar">
+                    <button id="browser-back" class="browser-icon-btn" title="后退">
+                        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                    </button>
+                    <button id="browser-forward" class="browser-icon-btn" title="前进">
+                        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="m12 4-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/></svg>
+                    </button>
+                    <button id="browser-reload" class="browser-icon-btn" title="刷新">
+                        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                    </button>
+                    <input id="browser-url" class="browser-url" placeholder="输入网址，回车打开" spellcheck="false" autocomplete="off">
+                    <!-- 阶段九十二：file 标签显示只读路径面包屑（TRAE 同款），仅 web 标签显示网址输入栏 -->
+                    <div id="browser-crumbs" class="browser-crumbs hidden"></div>
+                    <button id="browser-go" class="browser-go-btn" title="打开">前往</button>
+                    </div>
+                    <!-- 阶段九十二：分栏拖拽把手（浏览区右缘，左右拖动调宽；样式与工作区分隔线统一） -->
+                    <div id="browser-splitter" class="browser-splitter" title="拖拽调整宽度"></div>
+                <div id="browser-content" class="browser-content"></div>
+            </div>
         </div>
     </div>
 
@@ -653,6 +694,51 @@
         </div>
     </div>
 
+    <!-- 阶段九十：我的 MCP 服务器面板（仅 PC 端；用户自定义本机 stdio MCP 服务器，保存后本机建连发现工具，
+         工具清单经 WS msg 67 上报服务端注入 Agent，调用下放本机执行器；凭据仅存本机不上报） -->
+    <div id="agent-mcp-mask" class="modal-mask hidden">
+        <div class="modal-box kb-box agent-mcp-box">
+            <div class="modal-title">我的 MCP 服务器</div>
+            <div class="agent-ws-tip">配置本机 MCP 服务器（stdio）：保存后在本机拉起子进程并自动发现工具，工具清单上报服务端后 AI Agent 即可调用（调用在本机执行）。支持每服务器一键"测试连接"，凭据仅保存在本机。</div>
+            <div id="agent-mcp-list" class="agent-mcp-list"></div>
+            <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
+            <!-- 编辑区（新增/编辑共用，隐藏切换） -->
+            <div id="agent-mcp-edit" class="agent-mcp-edit hidden">
+                <div class="agent-mcp-field">
+                    <label>服务器名称</label>
+                    <input id="agent-mcp-name" type="text" placeholder="如：filesystem（全局唯一，工具将以 mcp_pc_名称_工具名 注入）">
+                </div>
+                <div class="agent-mcp-field">
+                    <label>启动命令</label>
+                    <input id="agent-mcp-command" type="text" placeholder="如：node 或 npx（.cmd/.bat 自动经 cmd 转发）">
+                </div>
+                <div class="agent-mcp-field">
+                    <label>命令参数（每行一个）</label>
+                    <textarea id="agent-mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                </div>
+                <div class="agent-mcp-field">
+                    <label>环境变量（每行一条 KEY=VALUE）</label>
+                    <textarea id="agent-mcp-env" rows="2" placeholder="API_KEY=xxx"></textarea>
+                </div>
+                <label class="agent-mcp-enable-row">
+                    <input id="agent-mcp-enabled" type="checkbox" checked>
+                    启用（保存后自动建连并上报工具清单）
+                </label>
+                <div class="agent-mcp-test-row">
+                    <button id="agent-mcp-test" class="kb-create-btn agent-ws-mini-btn">测试连接</button>
+                    <span id="agent-mcp-test-out" class="agent-mcp-test-out"></span>
+                </div>
+                <div class="modal-btns">
+                    <button id="agent-mcp-edit-save" class="kb-create-btn">保存服务器</button>
+                    <button id="agent-mcp-edit-cancel" class="modal-btn">取消</button>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="agent-mcp-close" class="modal-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 阶段四十六：文档在线编辑弹窗（OnlyOffice，自研窗口禁用系统弹窗；标题栏跟随主题色，编辑器经 iframe 挂载） -->
     <div id="doc-editor-mask" class="doc-editor-mask hidden"></div>
     <div id="doc-editor-window" class="doc-editor-window hidden">
@@ -685,7 +771,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.72"></script>
+    <script src="js/chat.js?v=2.74"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

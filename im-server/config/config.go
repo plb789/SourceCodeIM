@@ -46,6 +46,9 @@ type Config struct {
 	// 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存服务端配置文件，客户端不接触密钥）
 	AI AIConfig `yaml:"ai"`
 
+	// 阶段八十八：MCP（Model Context Protocol）功能配置（服务端归口，TRAE CN 同款 MCP 能力）
+	MCP MCPConfig `yaml:"mcp"`
+
 	// 阶段四十九：后台管理——管理员用户名白名单（启动时自动标记 im_user.role=1；
 	// 管理登录时同时实时比对白名单，未注册账号首次登录 IM 注册后下次启动补标记）
 	AdminUsers []string `yaml:"admin_users"`
@@ -147,6 +150,10 @@ type AgentConfig struct {
 	// HttpAllowPrivate 阶段六十八：是否允许 http_request 访问内网/回环地址（nil=默认允许，内网信任部署；
 	// 显式 false 时在拨号层拦截私网/回环/链路本地 IP，防模型被诱导探测内网——DNS 解析后的真实 IP 拦截，域名绕不过）
 	HttpAllowPrivate *bool `yaml:"http_allow_private"`
+	// PCBrowser 阶段九十一：内置浏览器工具开关（nil=默认开启；TRAE CN 同款内置浏览区——
+	// browser_* 工具族经 PC 端 WebContentsView 在用户电脑本地执行，能操作登录态/JS 渲染页面；
+	// false 时 browser_* 不注入不执行，http_request 等服务端工具不受影响）
+	PCBrowser *bool `yaml:"pc_browser"`
 	// WebSearch 阶段六十八：web_search 联网搜索配置（多服务商，默认关闭须显式开启）
 	WebSearch WebSearchConfig `yaml:"web_search"`
 	// ToolResultMaxChars 阶段八十四：工具结果写入模型上下文的字符上限（TRAE 同款上下文瘦身；
@@ -164,6 +171,37 @@ type WebSearchConfig struct {
 	APIKey string `yaml:"api_key"`
 	// Endpoint searxng 自建实例地址（如 http://127.0.0.1:8889；其他服务商留空）
 	Endpoint string `yaml:"endpoint"`
+}
+
+// MCPServerConfig 阶段八十八：MCP 服务器种子配置（config.yaml 归口，仅首次启动表空时导入
+// im_mcp_server 表，之后以后台管理配置为唯一数据源，与 AI providers 种子导入同款策略）
+type MCPServerConfig struct {
+	Name      string            `yaml:"name"`      // 服务器名（全局唯一）
+	Transport string            `yaml:"transport"` // stdio / sse / http
+	Command   string            `yaml:"command"`   // stdio：可执行命令（如 npx）
+	Args      []string          `yaml:"args"`      // stdio：命令参数
+	Env       map[string]string `yaml:"env"`       // stdio：附加环境变量
+	URL       string            `yaml:"url"`       // sse/http：完整端点地址
+	Headers   map[string]string `yaml:"headers"`   // sse/http：附加请求头（如 Authorization）
+	Enabled   *bool             `yaml:"enabled"`   // 缺省启用
+}
+
+// MCPConfig 阶段八十八：MCP（Model Context Protocol）功能配置节
+type MCPConfig struct {
+	// Enabled 总开关：false 时连接管理器断开全部会话，MCP 工具不参与 AI 对话（后台已配置的记录保留）
+	Enabled bool `yaml:"enabled"`
+	// UserEnabled 用户自建 MCP 总开关（阶段八十九开放用户侧入口时生效，先归口配置位）
+	UserEnabled bool `yaml:"user_enabled"`
+	// StdioWhitelist 用户自建服务器（owner 非空）允许的 stdio 命令白名单（按可执行名精确比对，
+	// 兼容 .exe/.cmd/.bat 后缀；空=用户自建 stdio 全部拒绝）。管理员公共服务器（owner 空）不受限——
+	// 管理员本就掌控服务端主机，配置面与 config.yaml 同权
+	StdioWhitelist []string `yaml:"stdio_whitelist"`
+	// ConnectTimeoutSeconds 建连（初始化握手）与工具发现超时秒（0=30）
+	ConnectTimeoutSeconds int `yaml:"connect_timeout_seconds"`
+	// ToolTimeoutSeconds 单次工具调用超时秒（0=60，阶段八十九 Agent 链路归口使用）
+	ToolTimeoutSeconds int `yaml:"tool_timeout_seconds"`
+	// Servers 种子服务器列表（仅首次启动导入，之后数据库为唯一数据源）
+	Servers []MCPServerConfig `yaml:"servers"`
 }
 
 // AIConfig AI 问答配置节
@@ -230,6 +268,9 @@ func Default() *Config {
 			// 阶段四十五：文档问答默认提取上限 60000 字
 			DocMaxChars: 60000,
 		},
+
+		// 阶段八十八：MCP 默认开启（未配置服务器时空转零开销；超时由 server/mcp.go 兜底）
+		MCP: MCPConfig{Enabled: true},
 	}
 }
 

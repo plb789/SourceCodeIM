@@ -85,6 +85,13 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/ai/agents", s.adminGuard(s.handleAdminAgentCreate))
 	http.HandleFunc("PUT /admin/api/ai/agents/{id}", s.adminGuard(s.handleAdminAgentUpdate))
 	http.HandleFunc("DELETE /admin/api/ai/agents/{id}", s.adminGuard(s.handleAdminAgentDelete))
+	// 阶段八十八：MCP 服务器管理（TRAE CN 同款 MCP 能力，服务端归口；配置热更新即建连/断连）
+	http.HandleFunc("GET /admin/api/mcp/servers", s.adminGuard(s.handleAdminMCPList))
+	http.HandleFunc("POST /admin/api/mcp/servers", s.adminGuard(s.handleAdminMCPCreate))
+	http.HandleFunc("PUT /admin/api/mcp/servers/{id}", s.adminGuard(s.handleAdminMCPUpdate))
+	http.HandleFunc("DELETE /admin/api/mcp/servers/{id}", s.adminGuard(s.handleAdminMCPDelete))
+	http.HandleFunc("POST /admin/api/mcp/servers/{id}/reconnect", s.adminGuard(s.handleAdminMCPReconnect))
+	http.HandleFunc("POST /admin/api/mcp/test", s.adminGuard(s.handleAdminMCPTest))
 	// 阶段五十一：知识库管理（库 CRUD/文件上传删除/命中测试，实现归口 adminkb.go）
 	http.HandleFunc("GET /admin/api/kb/status", s.adminGuard(s.handleAdminKBStatus))
 	http.HandleFunc("GET /admin/api/kb/list", s.adminGuard(s.handleAdminKBList))
@@ -141,6 +148,7 @@ type agentSettingPut struct {
 	AutoCommands   []string `json:"auto_commands"` // nil=不改；非 nil=全量替换全局白名单（DB 即唯一真值，不影响用户个人白名单）
 	HttpEnabled    *bool    `json:"http_enabled"`
 	HttpPrivate    *bool    `json:"http_allow_private"`
+	BrowserEnabled *bool    `json:"browser_enabled"` // 阶段九十一：内置浏览器工具开关
 	SearchEnabled  *bool    `json:"search_enabled"`
 	SearchProvider *string  `json:"search_provider"`
 	SearchKey      *string  `json:"search_key"` // ""=清除；字段缺省=保持不变
@@ -211,6 +219,7 @@ func agentSettingsPayload() map[string]interface{} {
 		"user_autowrite":     userWrite, // 阶段八十三：已开启个人写免审批的用户名列表
 		"http_enabled":       agentHttpEnabled.Load(),
 		"http_allow_private": agentHttpAllowPrivate.Load(),
+		"browser_enabled":    agentBrowserEnabled.Load(), // 阶段九十一：内置浏览器工具开关
 		"search_enabled":     agentSearchEnabled.Load(),
 		"search_provider":    scfg.Provider,
 		"search_key_set":     scfg.APIKey != "",
@@ -279,6 +288,7 @@ func (s *Server) handleAdminAgentSettingsSave(w http.ResponseWriter, r *http.Req
 		!applyBool(req.PcExecutor, "pcexec", agentPcExec.Store) ||
 		!applyBool(req.HttpEnabled, "http_enabled", agentHttpEnabled.Store) ||
 		!applyBool(req.HttpPrivate, "http_private", agentHttpAllowPrivate.Store) ||
+		!applyBool(req.BrowserEnabled, "browser_enabled", agentBrowserEnabled.Store) ||
 		!applyBool(req.SearchEnabled, "search_enabled", agentSearchEnabled.Store) {
 		return
 	}

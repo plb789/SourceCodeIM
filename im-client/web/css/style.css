@@ -791,7 +791,7 @@ html, body {
 
 #list-toggle-btn {
     position: absolute;
-    left: 0;
+    left: var(--browser-w, 0px); /* 浏览区展开时避让左侧浏览区（把手贴聊天列左缘） */
     top: 50%;
     transform: translateY(-50%);
     width: 7px;
@@ -1174,7 +1174,7 @@ html, body {
 /* 表情面板（自定义，跟随主题色） */
 .emoji-panel {
     position: absolute;
-    left: 12px;
+    left: calc(12px + var(--browser-w, 0px)); /* 浏览区展开时避让左侧浏览区 */
     bottom: 180px;
     width: 320px;
     max-height: 200px;
@@ -4259,6 +4259,15 @@ html.m #list-panel.list-collapsed {
     box-shadow: none;
 }
 
+/* 阶段九十二：控制台停靠浏览区底部（Trae CN 同款）——通栏贴底、仅顶部分隔线、去圆角/边框/阴影 */
+.browser-panel .agent-console-drawer {
+    margin: 0;
+    border: none;
+    border-top: 1px solid var(--border, #ececec);
+    border-radius: 0;
+    box-shadow: none;
+}
+
 .agent-console-head {
     display: flex;
     align-items: center;
@@ -7086,6 +7095,189 @@ html.m #list-panel.list-collapsed {
     width: 100%;
 }
 
+/* ===== 阶段九十：我的 MCP 服务器面板（仅 PC 端，全部复用现有主题变量，明暗三态自动跟随） ===== */
+.agent-mcp-box {
+    width: 560px;
+    max-height: 78vh;
+    overflow-y: auto;
+    scrollbar-width: thin; /* 与工作区面板同款局部细滚动条（全局原生条已禁用） */
+}
+
+.agent-mcp-list {
+    margin-bottom: 10px;
+    border: 1px solid var(--border, #ececec);
+    border-radius: 6px;
+}
+
+.agent-mcp-server-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border, #ececec);
+}
+
+.agent-mcp-server-row:last-child {
+    border-bottom: none;
+}
+
+.agent-mcp-server-row:hover {
+    background: var(--hover, #f7f7f7);
+}
+
+/* 状态灯：connected 主题绿 / connecting 橙闪 / error 红 / disabled 灰（与管理端语义一致） */
+.mcp-dot {
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-light, #9aa0a6);
+}
+
+.mcp-dot.connected {
+    background: var(--primary, #07c160);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #07c160) 18%, transparent);
+}
+
+.mcp-dot.connecting {
+    background: #ff976a;
+    animation: mcp-blink 1.2s ease-in-out infinite;
+}
+
+.mcp-dot.error {
+    background: var(--danger, #fa5151);
+}
+
+@keyframes mcp-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.agent-mcp-server-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-mcp-server-meta {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-mcp-server-cmd {
+    font-size: 11px;
+    color: var(--text-secondary, #666);
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
+}
+
+.agent-mcp-op {
+    flex: none;
+    border: 1px solid var(--border, #ececec);
+    background: transparent;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.agent-mcp-op:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.agent-mcp-op.danger:hover {
+    border-color: var(--danger, #fa5151);
+    color: var(--danger, #fa5151);
+}
+
+.agent-mcp-empty {
+    padding: 16px 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.agent-mcp-edit {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border, #ececec);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--hover, #f7f7f7) 40%, transparent);
+}
+
+.agent-mcp-field {
+    margin-bottom: 8px;
+}
+
+.agent-mcp-field label {
+    display: block;
+    font-size: 12px;
+    color: var(--text, #333);
+    margin-bottom: 4px;
+}
+
+.agent-mcp-field input,
+.agent-mcp-field textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border, #ececec);
+    border-radius: 4px;
+    padding: 7px 9px;
+    font-size: 12px;
+    color: var(--text, #333);
+    background: var(--panel-bg, #fff);
+    outline: none;
+    resize: vertical;
+    transition: border-color 0.15s;
+    font-family: inherit;
+}
+
+.agent-mcp-field input:focus,
+.agent-mcp-field textarea:focus {
+    border-color: var(--primary);
+}
+
+.agent-mcp-enable-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text, #333);
+    margin: 8px 0;
+    cursor: pointer;
+}
+
+.agent-mcp-test-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.agent-mcp-test-out {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-secondary, #666);
+    line-height: 1.5;
+    word-break: break-all;
+}
+
 /* 触屏列表项加大点击区 */
 html.m .user-item {
     padding: 14px 16px;
@@ -8493,4 +8685,359 @@ html.m .ms-actions {
 .pc-titlebar .titlebar-points-num {
     color: var(--titlebar-fg);
     font-weight: 600;
+}
+
+/* ===== 阶段九十一：内置浏览区面板（TRAE CN 同款，仅 PC Electron 壳内启用） =====
+   阶段九十三（全 DOM 化）：file 标签由主页面 iframe 承载、web 标签由主页面 <webview> 承载
+   （真 Chromium 内核但是 DOM 元素），面板 DOM 自绘标签栏/工具栏，内容区铺满 iframe/webview；
+   配色全部走现有主题变量（跟随主题切换） */
+.browser-panel {
+    /* 阶段九十二：TRAE 同款分栏——浏览区居中（贴 .main-chat 左缘，会话侧栏与聊天区之间），
+       聊天列经 .main-chat 的 padding-left 压缩到右侧仍然可见可用（消息/输入框/提问不中断）；
+       宽度由 browserSyncSplit 像素化（拖拽把手可调，localStorage 持久化） */
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 52%;
+    /* 高于会话内搜索等浮层（conv-search z-index 1200），浏览区展开时为最上层视图 */
+    z-index: 1600;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    border-right: 1px solid var(--border);
+}
+
+/* 分栏拖拽把手：骑在浏览区右缘（命中带样式与工作区分隔线 .ws-splitter 完全统一——
+   默认透明，悬停/拖拽中仅浮现 1px 主题色细线，不再是宽色带） */
+.browser-splitter {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 100%;
+    width: 6px;
+    margin-left: -3px;
+    cursor: col-resize;
+    z-index: 1601;
+}
+
+.browser-splitter::after {
+    content: '';
+    position: absolute;
+    left: 2.5px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: transparent;
+    transition: background 0.15s ease;
+}
+
+.browser-splitter:hover::after,
+.browser-splitter.dragging::after {
+    background: var(--primary);
+}
+
+/* 拖拽中：全局 col-resize 光标 + 禁止选中；对浏览区 iframe/webview 施加 pointer-events:none
+   （guest 不再截获鼠标，渲染层全局正常收 mousemove，拖拽不中断——阶段九十三 DOM 化后归口 CSS） */
+body.browser-resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+body.browser-resizing .browser-file-frame,
+body.browser-resizing .browser-web-frame {
+    pointer-events: none;
+}
+
+/* TRAE CN 同款标签条：平底矩形标签 + 细竖分隔线，激活项与内容区同色融合（盖住底线）+ 顶部主题色亮条 */
+.browser-tabbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 34px;
+    padding: 0 6px;
+    flex: none;
+    background: var(--chat-bg);
+}
+
+/* 标签条底线：激活标签以自身不透明背景盖住该线，实现与下方内容区无缝融合 */
+.browser-tabbar::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--border);
+    pointer-events: none;
+}
+
+.browser-tabs {
+    display: flex;
+    align-items: stretch;
+    align-self: stretch;
+    gap: 0;
+    flex: 1;
+    min-width: 0;
+    /* 标签过多按比例收缩而非横向滚动（免滚动条）；极端窄屏下超出部分裁切 */
+    overflow: hidden;
+}
+
+.browser-tab {
+    position: relative;
+    z-index: 1; /* 盖住标签条底线 */
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    max-width: 200px;
+    min-width: 56px;
+    padding: 0 8px 0 10px;
+    border: none;
+    border-right: 1px solid var(--border); /* TRAE 同款细竖分隔 */
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.browser-tab:hover {
+    background: color-mix(in srgb, var(--panel-bg) 45%, transparent);
+}
+
+.browser-tab.active {
+    background: var(--panel-bg);
+    color: var(--text);
+    box-shadow: inset 0 2px 0 var(--primary); /* TRAE 同款激活顶部亮条 */
+}
+
+.browser-tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 关闭钮弱化显示（TRAE 同款：默认半透明，悬停标签/按钮时高亮） */
+.browser-tab .browser-tab-close {
+    opacity: .55;
+}
+
+.browser-tab .browser-tab-close:hover {
+    opacity: 1;
+}
+
+/* 标签图标：file=扩展名着色徽标（文字色随类型，底色自动同色调淡化）；bare=无框容器（favicon/地球） */
+.browser-tab-ico {
+    flex: none;
+    min-width: 18px;
+    height: 15px;
+    padding: 0 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .2px;
+    line-height: 1;
+    border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    box-sizing: border-box;
+}
+
+.browser-tab-ico.bare {
+    min-width: 0;
+    width: 15px;
+    padding: 0;
+    border: none;
+    background: none;
+}
+
+.browser-tab-fav {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    object-fit: contain;
+}
+
+.browser-tab-globe {
+    width: 13px;
+    height: 13px;
+    color: var(--text-light);
+}
+
+/* 未保存圆点（TRAE 同款，悬停切回 × 由 JS 处理） */
+.browser-tab.dirty .browser-tab-close {
+    color: var(--primary);
+}
+
+.browser-tab-loading {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--primary);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: browser-spin 0.8s linear infinite;
+}
+
+@keyframes browser-spin {
+    to { transform: rotate(360deg); }
+}
+
+.browser-icon-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 0;
+}
+
+.browser-icon-btn:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.browser-icon-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.browser-icon-btn:disabled:hover {
+    background: transparent;
+    color: var(--text-light);
+}
+
+/* 标签页内关闭钮：比工具栏图标钮更小一号，贴合 chip 高度 */
+.browser-tab-close {
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    font-size: 13px;
+    line-height: 1;
+    border-radius: 3px;
+    color: var(--text-light);
+}
+
+.browser-tab.active .browser-tab-close:hover {
+    background: var(--border);
+    color: var(--text);
+}
+
+.browser-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.browser-url {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--chat-bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+.browser-url:focus {
+    border-color: var(--primary);
+}
+
+/* 阶段九十二：file 标签只读路径面包屑（TRAE 同款，替代网址输入栏；末段为当前文件名高亮） */
+.browser-crumbs {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--chat-bg);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.browser-crumbs .bc-seg {
+    flex: none;
+    color: var(--text-light);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.browser-crumbs .bc-seg.current {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.browser-crumbs .bc-sep {
+    flex: none;
+    color: var(--border);
+}
+
+/* 阶段九十二：浏览区展开时通栏浮层避让左侧浏览区（--browser-w 由 JS 同步；浏览区居中、聊天在右） */
+.main-chat .conv-search {
+    left: var(--browser-w, 0px);
+}
+
+.browser-go-btn {
+    flex: none;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 14px;
+    background: var(--primary);
+    color: #ffffff;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.browser-go-btn:hover {
+    filter: brightness(1.08);
+}
+
+.browser-content {
+    position: relative; /* DOM viewer iframe 的定位上下文 */
+    flex: 1;
+    min-height: 0;
+    background: var(--panel-bg);
+}
+
+/* 阶段九十二：DOM viewer iframe（file 标签内容承载，铺满内容区；原生层已不参与 file 标签，
+   悬停提示/弹窗遮罩/分隔线等页面 DOM 恢复最高层级不再被遮挡） */
+.browser-file-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: var(--panel-bg);
+}
+
+/* 阶段九十三：web 标签 <webview>（真 Chromium 内核但是页面 DOM 元素，与 iframe 同层级——
+   工具提示/弹窗遮罩/分隔线/控制台等页面 DOM 恒在其上不再被遮挡）。铺满内容区，
+   持久分区/隔离参数由 chat.js 以属性注入 */
+.browser-web-frame {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: var(--panel-bg);
 }

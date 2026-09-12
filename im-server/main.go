@@ -128,6 +128,8 @@ func main() {
 	server.InitMemory(cfg)
 	// 阶段五十九：智能 Agent 自动化任务初始化（工具调用闭环+权限审批，须在 InitAI 之后复用智能体索引）
 	server.InitAgent(cfg)
+	// 阶段八十八：MCP 客户端初始化（TRAE CN 同款 MCP 能力，服务端归口；须在 DB 就绪后调用）
+	server.InitMCP(cfg)
 	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
 	server.RegisterAdminRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）

@@ -179,9 +179,100 @@ contextBridge.exposeInMainWorld('desktop', {
     sandboxSave: function (payload) {
         return ipcRenderer.invoke('sandbox:save', payload);
     },
+    // ===== 阶段九十：用户自定义 MCP 服务器（本机 stdio，配置与凭据仅存本机） =====
+    // 拉取当前用户的 MCP 服务器配置（Promise<{servers:[{name,command,args,env,enabled}]}>）
+    mcpGet: function (username) {
+        return ipcRenderer.invoke('mcp:get', username);
+    },
+    // 保存配置（payload = {username, servers}，返回 Promise<{ok, servers?}>；保存即重建本机会话）
+    mcpSave: function (payload) {
+        return ipcRenderer.invoke('mcp:save', payload);
+    },
+    // 删除单个服务器（payload = {username, name}，返回 Promise<{ok}>）
+    mcpDel: function (payload) {
+        return ipcRenderer.invoke('mcp:del', payload);
+    },
+    // 测试连接（cfg = {name, command, args, env}，返回 Promise<{ok, tools?, elapsed_ms?, server_name?, msg?}>）
+    mcpTest: function (cfg) {
+        return ipcRenderer.invoke('mcp:test', cfg);
+    },
+    // 会话状态+工具清单快照（Promise<{tools:[{server,tool,description,input_schema}], status:[{name,status,status_msg,tool_count}]}>）
+    mcpSyncState: function (username) {
+        return ipcRenderer.invoke('mcp:sync-state', username);
+    },
     // ===== 阶段七十七：自定义标题栏（Electron titleBarOverlay）=====
     // 主题切换时同步原生窗口按钮配色（浅色 #f5f5f5/#333333，深色 #1a1a1a/#e0e0e0，与 style.css --titlebar-* 同值）
     setTitlebarColors: function (color, symbolColor) {
         return ipcRenderer.invoke('titlebar:overlay', { color: color, symbolColor: symbolColor });
+    },
+
+    // ===== 阶段九十一：内置浏览器（TRAE CN 同款浏览区）=====
+    // 面板显隐（agent 工具链路在主进程侧自动展开；渲染层按钮显式开关走这里）
+    browserPanel: function (visible) {
+        return ipcRenderer.invoke('browser:panel', visible);
+    },
+    // 导航操作（action: back/forward/reload/stop/goto；goto 时带 url）
+    browserNav: function (action, url) {
+        return ipcRenderer.invoke('browser:nav', { action: action, url: url });
+    },
+    // 标签页切换/关闭
+    browserSelect: function (tabId) {
+        return ipcRenderer.invoke('browser:select', tabId);
+    },
+    browserCloseTab: function (tabId) {
+        return ipcRenderer.invoke('browser:closetab', tabId);
+    },
+    // CDP 远程调试端口（Chrome DevTools Protocol）读写（0=关闭；改动需重启客户端生效）
+    browserCdpGet: function () {
+        return ipcRenderer.invoke('browser:cdp-get');
+    },
+    browserCdpSet: function (port) {
+        return ipcRenderer.invoke('browser:cdp-set', port);
+    },
+    // 浏览区状态推送（主进程 → 渲染层：tab 列表/活动页/加载态/导航可用性/cdp_port）
+    onBrowserState: function (callback) {
+        ipcRenderer.on('browser:state', function (event, state) {
+            callback(state);
+        });
+    },
+    // ===== 阶段九十二：文件查看归口（工作区文件/diff/审查报告统一进浏览区标签，TRAE CN 化） =====
+    // 打开工作区文件查看标签：req = {username, path}（工作区相对路径，主进程 safePath 校验后读盘注入）
+    browserOpenFile: function (req) {
+        return ipcRenderer.invoke('browser:open-file', req);
+    },
+    // 打开直传内容标签（git diff/提交详情/审查报告等不经磁盘内容）：
+    // payload = {kind:'diff'|'commit'|'md'|'text', title, content, meta?}
+    browserOpenData: function (payload) {
+        return ipcRenderer.invoke('browser:open-data', payload);
+    },
+    // ===== 阶段九十二（DOM 化 viewer）：file 标签由主页面同源 iframe 承载（不再走原生视图），
+    // 主页面作为宿主负责建框/显隐/转发 payload，并提供保存/脏标记桥接 =====
+    // 宿主代 viewer 页保存（主进程路径校验归口不变）
+    browserFileSave: function (tabId, content) {
+        return ipcRenderer.invoke('browser:file-save', { tab_id: String(tabId || ''), content: String(content != null ? content : '') });
+    },
+    // 宿主代 viewer 页上报脏标记（编辑未保存）
+    browserViewerDirty: function (tabId, dirty) {
+        ipcRenderer.send('browser:viewer-dirty', { tab_id: String(tabId || ''), dirty: !!dirty });
+    },
+    // 订阅 file 标签 payload 推送（主进程 → 渲染层：{tab_id, payload}，iframe 分发）
+    onFileLoad: function (callback) {
+        ipcRenderer.on('browser:file-load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 阶段九十三：分栏拖拽已无需主进程配合（web 标签同样由 DOM webview 承载，
+    // 拖拽期以 CSS pointer-events 屏蔽 guest 鼠标，见 style.css browser-resizing）
+    // ===== 阶段九十三：web 标签 <webview> 就绪上报 =====
+    // 渲染层按 state 建 webview 后 dom-ready 上报宿主 webContents id
+    // （主进程经 webContents.fromId 挂事件/执行导航与 Agent 工具）
+    browserWvReady: function (tabId, wcId) {
+        ipcRenderer.send('browser:wv-ready', { tab_id: String(tabId || ''), wc_id: parseInt(wcId, 10) || 0 });
+    },
+    // viewer 页保存成功通知（主进程 → 渲染层：{path}，用于刷新文件树与 git 装饰）
+    onFileSaved: function (callback) {
+        ipcRenderer.on('browser:file-saved', function (event, info) {
+            callback(info);
+        });
     }
 });

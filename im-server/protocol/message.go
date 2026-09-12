@@ -93,6 +93,9 @@ const (
 
 	// 阶段七十七：Agent 文件变更审查（TRAE CN 同款"文件变更审查条"——撤销/保留归口）
 	MsgTypeAgentChanges = 66 // 上行：审查操作（content 为 JSON：{task_id,action:"keep"/"revert",path?}，path 缺省=全部 pending）；下行：审查后全量刷新帧（content 为 JSON：{task_id,session_id,changes:[{path,kind,adds,dels,status}],total_adds,total_dels}）
+
+	// 阶段九十：用户自定义本机 MCP 服务器（TRAE 同款本地 stdio，命令/环境变量等凭据仅存用户本机）
+	MsgTypeAgentPcTools = 67 // 上行：PC 渲染进程 → 服务端，本机 MCP 工具清单上报（content 为 JSON：{tools:[{server,tool,description,input_schema}]}，登录后/清单变更时全量覆盖上报）；下行：服务端确认帧（content 为 JSON：{ok:true,count:N}，N=0 表示已清除注入）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

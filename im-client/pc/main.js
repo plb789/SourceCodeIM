@@ -6,6 +6,10 @@ const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCaptur
 const fs = require('fs');
 const path = require('path');
 const agentExecutor = require('./agent-executor.js');
+// 阶段九十：PC 端用户自定义 MCP 服务器管理器（本地 stdio 常驻会话/工具发现/调用，执行器经 require 直接调用）
+const mcpManager = require('./mcp-manager.js');
+// 阶段九十一：内置浏览器管理器（TRAE CN 同款浏览区——多标签页/Agent 工具直调/CDP 端口开关）
+const browserManager = require('./browser-manager.js');
 
 let mainWindow = null;
 let tray = null;
@@ -14,6 +18,12 @@ let tray = null;
 // 且该特性无视页面 ::-webkit-scrollbar 自定义样式，与自绘悬浮滑块叠加出现"同一条轨道两条滚动条"。
 // 禁用后原生滚动条完全由页面 CSS 控制（宽度归零），仅保留自绘滑块
 app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar,OverlayScrollbars');
+
+// 阶段九十一：CDP 远程调试端口开关（Chrome DevTools Protocol，OpenClaw/TraeClaw 控制 Trae 同款）——
+// 必须在 app ready 前注入启动参数（Chromium 仅启动时读取）。userData/agent_browser.json 配置
+// {cdp_port: 9222} 开启（默认关闭）；开启后任何本机 CDP 客户端可附加窗口读页/执行 JS，
+// 等同本机进程完全控制客户端，仅建议开发调试场景开启
+browserManager.setCdpSwitch();
 
 // 服务端地址（默认本地）
 const SERVER_URL = 'http://localhost:8888/';
@@ -38,11 +48,19 @@ function createWindow() {
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
-            nodeIntegration: false
+            nodeIntegration: false,
+            // 阶段九十三：浏览区网页标签改用 <webview> 承载（真 Chromium 内核但是 DOM 元素，
+            // 与 file 标签 iframe 同层级）——工具提示/弹窗遮罩/分隔线等页面 DOM 不再被原生层遮挡
+            webviewTag: true
         }
     });
 
     mainWindow.loadURL(SERVER_URL);
+
+    // 阶段九十二：主窗口固定 100% 缩放——页面缩放（Ctrl+滚轮）会让 CSS px 与 BrowserView
+    // bounds（DIP）刻度错位（原生视图盖住分隔线/相邻 UI），且 Chromium 可能在会话配置里
+    // 持久化过非 1 缩放（如 0.9），启动归一；配合渲染层禁用缩放入口（chat.js wheel/keydown）
+    mainWindow.webContents.setZoomFactor(1);
 
     // 最小化到托盘而非退出
     mainWindow.on('close', function (event) {
@@ -494,6 +512,132 @@ ipcMain.handle('sandbox:choose', async function (event, title) {
     return r.filePaths[0];
 });
 
+// ===== 阶段九十：用户自定义 MCP 服务器（TRAE 同款本地 stdio） =====
+// 配置持久化在本机 userData/agent_mcp.json（按用户名隔离，env 里的 API Key 等凭据不出本机）；
+// 运行时归口 mcp-manager.js（常驻会话/工具发现/调用），工具清单由渲染层经 WS 上报服务端（msg 67）注入模型
+const mcpFile = path.join(app.getPath('userData'), 'agent_mcp.json');
+
+function mcpStoreLoad() {
+    try {
+        const v = JSON.parse(fs.readFileSync(mcpFile, 'utf8'));
+        if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+    } catch (e) {}
+    return {};
+}
+
+function mcpStoreSave(store) {
+    try { fs.writeFileSync(mcpFile, JSON.stringify(store, null, 2), 'utf8'); } catch (e) {}
+}
+
+const MCP_MAX_SERVERS = 10;
+const MCP_NAME_RE = /^[0-9A-Za-z_\-\u4e00-\u9fa5]{1,64}$/;
+
+// 配置归一化裁剪（与执行器/管理器语义一致，防滥用）：stdio 专属；名称唯一、命令必填、args/env 限额
+function mcpNormalize(servers) {
+    const out = [];
+    const seen = {};
+    (Array.isArray(servers) ? servers : []).forEach(function (sv) {
+        if (!sv || typeof sv !== 'object' || out.length >= MCP_MAX_SERVERS) return;
+        const name = String(sv.name || '').trim();
+        const command = String(sv.command || '').trim();
+        if (!name || !MCP_NAME_RE.test(name) || seen[name] || !command || command.length > 512) return;
+        seen[name] = true;
+        const args = [];
+        (Array.isArray(sv.args) ? sv.args : []).forEach(function (a) {
+            const s = String(a || '');
+            if (args.length < 32 && s.length <= 1024) args.push(s);
+        });
+        const env = {};
+        const keys = Object.keys(sv.env && typeof sv.env === 'object' ? sv.env : {});
+        keys.forEach(function (k) {
+            if (Object.keys(env).length >= 16 || !k || k.length > 128) return;
+            const v = String(sv.env[k] || '');
+            if (v.length <= 2048) env[k] = v;
+        });
+        out.push({
+            name: name,
+            transport: 'stdio',
+            command: command,
+            args: args,
+            env: env,
+            enabled: sv.enabled !== false
+        });
+    });
+    return out;
+}
+
+// 按用户名+服务器名查配置（执行器兜底建连时反查）
+function mcpCfgGetter(username, serverName) {
+    const store = mcpStoreLoad();
+    const list = store[String(username || '')] && store[String(username || '')].servers || [];
+    for (let i = 0; i < list.length; i++) {
+        if (list[i].name === serverName) return list[i];
+    }
+    return null;
+}
+agentExecutor.setMcpCfgGetter(mcpCfgGetter);
+
+// 拉取该用户的 MCP 服务器配置（设置面板回显）
+ipcMain.handle('mcp:get', function (event, username) {
+    const store = mcpStoreLoad();
+    const rec = store[String(username || '')];
+    return { servers: (rec && rec.servers) || [] };
+});
+
+// 保存配置（归一化落盘 + 重建常驻会话；工具清单上报由渲染层在会话就绪后经 msg 67 归口）
+ipcMain.handle('mcp:save', function (event, payload) {
+    const username = String((payload && payload.username) || '');
+    if (!username) return { ok: false, msg: '缺少用户名' };
+    const servers = mcpNormalize(payload && payload.servers);
+    const store = mcpStoreLoad();
+    if (servers.length) {
+        store[username] = { servers: servers };
+    } else {
+        delete store[username]; // 空配置=清除
+    }
+    mcpStoreSave(store);
+    mcpManager.setConfig(username, servers);
+    return { ok: true, servers: servers };
+});
+
+// 删除单个服务器（保存即断连回收）
+ipcMain.handle('mcp:del', function (event, payload) {
+    const username = String((payload && payload.username) || '');
+    const name = String((payload && payload.name) || '');
+    const store = mcpStoreLoad();
+    const rec = store[username];
+    if (!rec || !name) return { ok: false, msg: '配置不存在' };
+    rec.servers = (rec.servers || []).filter(function (sv) { return sv.name !== name; });
+    if (rec.servers.length) store[username] = rec; else delete store[username];
+    mcpStoreSave(store);
+    mcpManager.setConfig(username, rec.servers || []);
+    return { ok: true };
+});
+
+// 测试连接（临时会话验证，不常驻；返回服务信息/工具清单/耗时）
+ipcMain.handle('mcp:test', function (event, cfg) {
+    return mcpManager.testServer({
+        name: String((cfg && cfg.name) || 'test'),
+        command: String((cfg && cfg.command) || ''),
+        args: (cfg && cfg.args) || [],
+        env: (cfg && cfg.env) || {},
+        enabled: true
+    });
+});
+
+// 会话状态+工具清单快照（渲染层轮询：登录后/保存后等会话就绪即上报 msg 67）；
+// 首次同步按本机存储自动拉起常驻会话（登录场景无需显式 start，流程不变）
+const mcpSyncSeeded = {};
+ipcMain.handle('mcp:sync-state', function (event, username) {
+    const uname = String(username || '');
+    if (uname && !mcpSyncSeeded[uname]) {
+        mcpSyncSeeded[uname] = true;
+        const rec = mcpStoreLoad()[uname];
+        mcpManager.setConfig(uname, (rec && rec.servers) || []);
+    }
+    return { tools: mcpManager.listTools(uname), status: mcpManager.status(uname) };
+});
+
 // 主聊天窗口推送一批更早历史图片：转发查看器窗口（列表头部插入，联动翻页/缩略图）
 ipcMain.on('image:more', function (event, urls) {
     if (viewerWin) viewerWin.webContents.send('viewer:more', urls);
@@ -637,6 +781,14 @@ app.whenReady().then(function () {
     createWindow();
     createTray();
 
+    // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；
+    // 需在 createWindow 之后——mainWindow 引用就绪后 agent 工具与面板控制才可用）
+    browserManager.init(mainWindow);
+    // 阶段九十二：文件查看标签依赖注入——路径校验复用 agentExecutor.safePath（防循环依赖改注入），
+    // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
+    browserManager.setPathGuard(agentExecutor.safePath);
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html');
+
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
     // 阶段三十八：改走 captureWithHide——先让主窗口消失再抓屏（QQ 同款），可截到被自己窗口挡住的内容；
     // 快照经 shot:prepare 推送渲染层预加载冻结编辑器，就绪后揭幕（此处不再单独推送，避免重复打开）
@@ -653,9 +805,10 @@ app.whenReady().then(function () {
     });
 });
 
-// 退出前释放全部全局快捷键（避免残留占用）
+// 退出前释放全部全局快捷键（避免残留占用），并回收全部 MCP 子进程树
 app.on('will-quit', function () {
     globalShortcut.unregisterAll();
+    try { mcpManager.disposeAll(); } catch (e) {} // 阶段九十：本机 MCP 服务器进程随应用退出全量回收
 });
 
 app.on('window-all-closed', function () {

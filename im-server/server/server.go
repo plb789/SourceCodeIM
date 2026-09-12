@@ -199,6 +199,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段七十七：文件变更审查（保留/撤销，回下行 66 全量刷新帧）
 	case protocol.MsgTypeAgentChanges:
 		s.handleAgentChanges(c, msg)
+	// 阶段九十：用户自定义本机 MCP 工具清单上报（注入 Agent 工具 schema，调用经 PC 本地执行器执行）
+	case protocol.MsgTypeAgentPcTools:
+		s.handleAgentPcTools(c, msg)
 	// 阶段七十一：AI 多会话（Trae 同款"新建会话"）——列表/新建/删除
 	case protocol.MsgTypeAISessionList:
 		s.handleAISessionList(c, msg)

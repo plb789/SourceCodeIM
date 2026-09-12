@@ -425,3 +425,39 @@ type DocEdit struct {
 
 // TableName 指定表名
 func (DocEdit) TableName() string { return "im_doc_edit" }
+
+// MCPServer MCP 服务器配置表 im_mcp_server（阶段八十八：TRAE CN 同款 MCP 能力，服务端归口）
+// Go 服务端作为 MCP Host 统一管理所有 MCP Server 连接：stdio（服务端本地子进程）/
+// sse（远程 SSE）/ http（远程 Streamable HTTP）三种传输；发现的工具供 AI 问答与智能
+// Agent 注入调用（阶段八十九接入 Agent Loop），工具定义与执行细节客户端零感知
+type MCPServer struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name      string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"`              // 服务器名（连接条目与工具命名空间锚点，全局唯一）
+	Transport string `gorm:"column:transport;type:varchar(8);not null;default:'stdio'" json:"transport"` // stdio / sse / http
+	// Command/Args 仅 stdio：可执行命令与参数（Args 为 JSON 数组字符串，含空格参数不丢真）
+	Command string `gorm:"column:command;type:varchar(255);default:''" json:"command"`
+	Args    string `gorm:"column:args;type:text" json:"args"`
+	// Env 仅 stdio：环境变量（JSON 对象字符串，可能含密钥，仅服务端归口不下发普通链路）
+	Env string `gorm:"column:env;type:text" json:"-"`
+	// URL/Headers 仅 sse/http：完整端点地址与附加请求头（Headers 为 JSON 对象字符串，可挂 Bearer 鉴权）
+	URL     string `gorm:"column:url;type:varchar(512);default:''" json:"url"`
+	Headers string `gorm:"column:headers;type:text" json:"-"`
+	// Owner 归属用户名（空=管理员公共服务器；阶段八十九用户自建预留：个人服务器 stdio 受白名单约束）
+	Owner string `gorm:"column:owner;type:varchar(32);default:''" json:"owner"`
+	// Enabled 启用状态（false 时连接循环退出、工具不注入）；AutoApprove 免审批开关
+	// （true 时 Agent 调用该服务器工具自动放行，false 默认逐次人工审批——TRAE 同款默认确认）
+	Enabled       bool   `gorm:"column:enabled;default:true" json:"enabled"`
+	AutoApprove   bool   `gorm:"column:auto_approve;default:false" json:"auto_approve"`
+	DisabledTools string `gorm:"column:disabled_tools;type:text" json:"-"`
+	// Status 运行状态（连接管理器回写）：connecting/connected/disconnected/error；StatusMsg 附言（错误原因等）
+	Status    string `gorm:"column:status;type:varchar(16);default:'disconnected'" json:"status"`
+	StatusMsg string `gorm:"column:status_msg;type:varchar(512);default:''" json:"status_msg"`
+	// ToolsCache 工具发现缓存（JSON 数组：name/description/input_schema，离线时管理页展示兜底）；ToolCount 工具数量
+	ToolsCache string    `gorm:"column:tools_cache;type:mediumtext" json:"-"`
+	ToolCount  int       `gorm:"column:tool_count;default:0" json:"tool_count"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (MCPServer) TableName() string { return "im_mcp_server" }

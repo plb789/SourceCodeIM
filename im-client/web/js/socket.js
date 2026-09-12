@@ -76,6 +76,7 @@
         AGENT_EXEC_REQ: 50, // 阶段六十：Agent 本地执行请求（下行，仅 PC 端处理，content 为 JSON：{task_id,step,tool,params}）
         AGENT_EXEC_RESP: 51, // 阶段六十：Agent 本地执行结果（上行，content 为 JSON：{task_id,step,ok,output}）
         AGENT_SANDBOX: 52, // 阶段六十一：Agent 沙箱白名单上报（上行，仅 PC 端，content 为 JSON：{primary,dirs}）
+        AGENT_PC_TOOLS: 67, // 阶段九十：本机 MCP 工具清单上报（上行，仅 PC 端，content 为 JSON：{tools:[{server,tool,description,input_schema}]}；下行确认帧 {ok,count}）
         AI_SUGGEST: 53,    // 阶段六十二：AI 后续提问建议（下行，content 为 JSON 字符串数组，回复完成后浮现）
         AI_SESSION_LIST: 54, // 阶段七十一：AI 多会话列表请求/响应（上行 to_user=智能体名；下行 content 为 JSON：{current_id,sessions}）
         AI_SESSION_NEW: 55,  // 阶段七十一：新建会话（上行 to_user=智能体名；下行 content 为 JSON：{session_id,title}）

@@ -99,6 +99,7 @@
     var clearBtn = document.getElementById('clear-btn');
     var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
+    var agentMcpBtn = document.getElementById('agent-mcp-btn'); // 阶段九十：我的 MCP 服务器入口（仅 PC 端，本机 stdio 自定义）
     var webSearchBtn = document.getElementById('web-search-btn'); // 阶段六十九：普通聊天联网搜索开关（AI 会话且服务端开启时显示）
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
@@ -2785,6 +2786,9 @@
                     });
                 });
             }
+            // 阶段九十：登录后拉起本机 MCP 会话并上报工具清单（首查触发主进程自动建连，
+            // 建连异步完成，轮询窗口内每次工具清单变化即重报，服务端全量覆盖语义）
+            if (agentMcpSupported()) startPcMcpReportLoop(12);
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
             // 并从乐观显示的聊天界面回退到登录界面
@@ -3785,6 +3789,676 @@
         });
     });
 
+    // ===== 阶段九十：我的 MCP 服务器（仅 PC 端；TRAE 同款本机 stdio，工具清单上报服务端注入 Agent） =====
+    // 配置与凭据存 PC 主进程 agent_mcp.json（按用户名隔离）；面板仅增删改/测试/展示状态，
+    // 工具清单上报归口 reportPcMcpTools（登录/保存后轮询窗口内清单变化即重报，服务端全量覆盖）
+    var agentMcpMask = document.getElementById('agent-mcp-mask');
+    var agentMcpListEl = document.getElementById('agent-mcp-list');
+    var agentMcpEditEl = document.getElementById('agent-mcp-edit');
+    var agentMcpServers = [];     // 编辑态：本机服务器配置（与主进程存储同构）
+    var agentMcpEditing = -1;     // 当前编辑行索引（-1=新增）
+    var agentMcpLiveStatus = [];  // 会话状态快照：[{name,status,status_msg,tool_count}]
+    var agentMcpLastReport = '';  // 上次上报工具清单指纹（去重，避免重复上报）
+    var agentMcpStatusTimer = null; // 面板打开期间的状态轮询
+
+    // 是否支持本机 MCP 配置（仅 PC 端 preload 暴露 mcpGet；Web 端无本机进程概念）
+    function agentMcpSupported() {
+        return !!(window.desktop && typeof window.desktop.mcpGet === 'function');
+    }
+
+    // 工具清单上报归口：主进程快照变化才上报（服务端 sync.Map 全量覆盖，空清单=清除注入）
+    function reportPcMcpTools() {
+        if (!agentMcpSupported()) return;
+        window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
+            var fingerprint = JSON.stringify((st && st.tools) || []);
+            if (fingerprint === agentMcpLastReport) return;
+            agentMcpLastReport = fingerprint;
+            IMSocket.send({
+                msg_type: MSG.AGENT_PC_TOOLS,
+                content: JSON.stringify({ tools: (st && st.tools) || [] })
+            });
+        }).catch(function () { /* 主进程异常时静默，下轮重试 */ });
+    }
+
+    // 建连/保存后的上报窗口：会话建连异步，窗口期内每秒快照一次，清单稳定即自动停报
+    function startPcMcpReportLoop(times) {
+        var n = 0;
+        (function tick() {
+            if (n++ >= times) return;
+            reportPcMcpTools();
+            setTimeout(tick, 1000);
+        })();
+    }
+
+    // 面板打开期间轮询会话状态（连接中/已连接/错误实时可见），关闭即停
+    function startMcpStatusPoll() {
+        stopMcpStatusPoll();
+        agentMcpStatusTimer = setInterval(function () {
+            window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
+                agentMcpLiveStatus = (st && st.status) || [];
+                renderAgentMcpList();
+            }).catch(function () {});
+        }, 1200);
+    }
+    function stopMcpStatusPoll() {
+        if (agentMcpStatusTimer) { clearInterval(agentMcpStatusTimer); agentMcpStatusTimer = null; }
+    }
+
+    function mcpStatusText(s) {
+        return { connected: '已连接', connecting: '连接中', error: '错误', disabled: '已停用' }[s] || s || '未连接';
+    }
+
+    function renderAgentMcpList() {
+        agentMcpListEl.innerHTML = '';
+        if (!agentMcpServers.length) {
+            var empty = document.createElement('div');
+            empty.className = 'agent-mcp-empty';
+            empty.textContent = '尚未配置本机 MCP 服务器';
+            agentMcpListEl.appendChild(empty);
+            return;
+        }
+        agentMcpServers.forEach(function (sv, i) {
+            var row = document.createElement('div');
+            row.className = 'agent-mcp-server-row';
+            var live = null;
+            agentMcpLiveStatus.forEach(function (s) { if (s.name === sv.name) live = s; });
+            var dot = document.createElement('span');
+            dot.className = 'mcp-dot ' + (sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
+            dot.title = mcpStatusText(sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
+            var name = document.createElement('span');
+            name.className = 'agent-mcp-server-name';
+            name.textContent = sv.name;
+            var meta = document.createElement('span');
+            meta.className = 'agent-mcp-server-meta';
+            if (!sv.enabled) {
+                meta.textContent = '已停用';
+            } else if (live && live.status === 'error' && live.status_msg) {
+                meta.textContent = live.status_msg;
+                meta.title = live.status_msg;
+            } else {
+                meta.textContent = '工具 ' + ((live && live.tool_count) || 0) + ' 个 · ' + mcpStatusText((live && live.status) || 'connecting');
+            }
+            var cmd = document.createElement('span');
+            cmd.className = 'agent-mcp-server-cmd';
+            cmd.textContent = sv.command + ' ' + (sv.args || []).join(' ');
+            cmd.title = cmd.textContent;
+            row.appendChild(dot);
+            row.appendChild(name);
+            row.appendChild(meta);
+            row.appendChild(cmd);
+            var edit = document.createElement('button');
+            edit.className = 'agent-mcp-op';
+            edit.textContent = '编辑';
+            edit.addEventListener('click', function () { openMcpEdit(i); });
+            var del = document.createElement('button');
+            del.className = 'agent-mcp-op danger';
+            del.textContent = '删除';
+            del.addEventListener('click', function () {
+                showConfirm('删除 MCP 服务器', '确定删除「' + sv.name + '」吗？本机进程将立即停止并回收。', function () {
+                    window.desktop.mcpDel({ username: IMSocket.getUsername(), name: sv.name }).then(function (r) {
+                        if (!r || !r.ok) { showToast((r && r.msg) || '删除失败'); return; }
+                        agentMcpServers.splice(i, 1);
+                        agentMcpLastReport = ''; // 允许重新上报（含工具减少后的清单）
+                        startPcMcpReportLoop(8);
+                        renderAgentMcpList();
+                        showToast('已删除并停止本机进程');
+                    });
+                });
+            });
+            row.appendChild(edit);
+            row.appendChild(del);
+            agentMcpListEl.appendChild(row);
+        });
+    }
+
+    function openMcpPanel() {
+        if (!agentMcpSupported()) { showToast('仅 PC 客户端支持自定义 MCP 服务器'); return; }
+        window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
+            agentMcpServers = (r && r.servers) || [];
+            agentMcpLiveStatus = [];
+            agentMcpEditEl.classList.add('hidden');
+            renderAgentMcpList();
+            agentMcpMask.classList.remove('hidden');
+            reportPcMcpTools(); // 打开面板先快照一次状态
+            startMcpStatusPoll();
+        });
+    }
+
+    function closeMcpPanel() {
+        agentMcpMask.classList.add('hidden');
+        stopMcpStatusPoll();
+    }
+
+    // 编辑区填充（idx=-1 新增）：args/env 转行文本
+    function openMcpEdit(idx) {
+        agentMcpEditing = idx;
+        var sv = idx >= 0 ? agentMcpServers[idx] : { name: '', command: '', args: [], env: {}, enabled: true };
+        document.getElementById('agent-mcp-name').value = sv.name;
+        document.getElementById('agent-mcp-command').value = sv.command || '';
+        document.getElementById('agent-mcp-args').value = (sv.args || []).join('\n');
+        var envLines = [];
+        Object.keys(sv.env || {}).forEach(function (k) { envLines.push(k + '=' + sv.env[k]); });
+        document.getElementById('agent-mcp-env').value = envLines.join('\n');
+        document.getElementById('agent-mcp-enabled').checked = sv.enabled !== false;
+        document.getElementById('agent-mcp-test-out').textContent = '';
+        agentMcpEditEl.classList.remove('hidden');
+    }
+
+    function collectMcpForm() {
+        var env = {};
+        String(document.getElementById('agent-mcp-env').value || '').split(/\r?\n/).forEach(function (line) {
+            line = line.trim();
+            if (!line) return;
+            var j = line.indexOf('=');
+            if (j <= 0) return;
+            env[line.slice(0, j).trim()] = line.slice(j + 1).trim();
+        });
+        return {
+            name: String(document.getElementById('agent-mcp-name').value || '').trim(),
+            command: String(document.getElementById('agent-mcp-command').value || '').trim(),
+            args: String(document.getElementById('agent-mcp-args').value || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s; }),
+            env: env,
+            enabled: document.getElementById('agent-mcp-enabled').checked
+        };
+    }
+
+    // 持久化归口：保存 → 本机会话重建 → 清指纹重报工具清单
+    function persistMcpServers() {
+        window.desktop.mcpSave({ username: IMSocket.getUsername(), servers: agentMcpServers }).then(function (r) {
+            if (!r || !r.ok) { showToast((r && r.msg) || '保存失败'); return; }
+            agentMcpServers = r.servers || agentMcpServers;
+            agentMcpLastReport = '';
+            startPcMcpReportLoop(12); // 建连窗口内清单稳定后自动完成上报
+            renderAgentMcpList();
+            showToast('已保存，正在建连并上报工具清单');
+        });
+    }
+
+    document.getElementById('agent-mcp-add').addEventListener('click', function () {
+        if (agentMcpServers.length >= 10) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        openMcpEdit(-1);
+    });
+    document.getElementById('agent-mcp-edit-cancel').addEventListener('click', function () {
+        agentMcpEditEl.classList.add('hidden');
+    });
+    document.getElementById('agent-mcp-edit-save').addEventListener('click', function () {
+        var cfg = collectMcpForm();
+        if (!cfg.name || !/^[0-9A-Za-z_\-\u4e00-\u9fa5]{1,64}$/.test(cfg.name)) { showToast('服务器名称需为 1-64 位中文/字母/数字/中划线/下划线'); return; }
+        if (!cfg.command) { showToast('启动命令不能为空'); return; }
+        for (var i = 0; i < agentMcpServers.length; i++) {
+            if (i !== agentMcpEditing && agentMcpServers[i].name === cfg.name) { showToast('服务器名称已存在'); return; }
+        }
+        if (agentMcpEditing >= 0) agentMcpServers[agentMcpEditing] = cfg;
+        else agentMcpServers.push(cfg);
+        agentMcpEditEl.classList.add('hidden');
+        persistMcpServers();
+    });
+    // 测试连接：临时会话验证（不常驻），展示服务信息/工具数/耗时
+    document.getElementById('agent-mcp-test').addEventListener('click', function () {
+        var out = document.getElementById('agent-mcp-test-out');
+        var cfg = collectMcpForm();
+        if (!cfg.name || !cfg.command) { out.textContent = '请先填写服务器名称与启动命令'; return; }
+        out.textContent = '连接中…';
+        window.desktop.mcpTest(cfg).then(function (r) {
+            if (!r || !r.ok) { out.textContent = (r && r.msg) || '连接失败'; return; }
+            out.textContent = '连接成功：' + (r.server_name || cfg.name) +
+                (r.server_version ? ' v' + r.server_version : '') +
+                '，' + ((r.tools || []).length) + ' 个工具，耗时 ' + (r.elapsed_ms || 0) + 'ms';
+        }).catch(function (e) {
+            out.textContent = '测试异常：' + (e && e.message || e);
+        });
+    });
+    agentMcpBtn.addEventListener('click', openMcpPanel);
+    document.getElementById('agent-mcp-close').addEventListener('click', closeMcpPanel);
+    agentMcpMask.addEventListener('click', function (e) {
+        if (e.target === agentMcpMask) closeMcpPanel(); // 点遮罩关闭
+    });
+
+    // ===== 阶段九十一：内置浏览区（TRAE CN 同款，仅 PC Electron 壳内启用） =====
+    // 阶段九十三（全 DOM 化）：file 标签由主页面同源 iframe 承载，web 标签由主页面 <webview>
+    // 承载（真 Chromium 内核但是 DOM 元素，与 iframe 同层级）——工具提示/弹窗遮罩/分隔线/控制台
+    // 等页面 DOM 恢复最高层级，不再被原生 BrowserView 层遮挡。渲染层负责面板自绘与 iframe/webview
+    // 元素建/删/显隐，状态归口主进程推送（browser:state 单向数据流）。
+    // Web/手机端无 desktop 桥自动旁路：开关按钮保持 hidden，面板永不展开
+    var browserBtn = document.getElementById('browser-btn');
+    var browserPanelEl = document.getElementById('browser-panel');
+    var browserTabsEl = document.getElementById('browser-tabs');
+    var browserUrlEl = document.getElementById('browser-url');
+    var browserContentEl = document.getElementById('browser-content');
+    var browserBackBtn = document.getElementById('browser-back');
+    var browserForwardBtn = document.getElementById('browser-forward');
+    var browserReloadBtn = document.getElementById('browser-reload');
+    var browserCrumbsEl = document.getElementById('browser-crumbs');
+    var browserGoBtn = document.getElementById('browser-go');
+    var browserLastState = null; // 最近一次主进程推送的浏览区状态（判断文件标签是否已开用）
+
+    function browserSupported() {
+        return !!(window.desktop && typeof window.desktop.browserPanel === 'function');
+    }
+
+    // 阶段九十二：PC 端锁定页面缩放——Ctrl+滚轮/Ctrl±0 缩放会改变主页面刻度，浏览区内
+    // iframe/webview 与页面 UI 的视觉比例随之失衡（TRAE 同款固定缩放，保持 1:1 观感稳定）
+    if (window.desktop) {
+        window.addEventListener('wheel', function (e) {
+            if (e.ctrlKey) e.preventDefault();
+        }, { passive: false });
+        window.addEventListener('keydown', function (e) {
+            if (e.ctrlKey && !e.altKey && !e.shiftKey &&
+                (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0')) {
+                e.preventDefault();
+            }
+        });
+    }
+
+    // ===== 阶段九十二（DOM 化 viewer）：file 标签由主页面同源 iframe 承载。
+    // 宿主职责：按 tab_id 建 iframe / 跟随活动态显隐 / 分发 file-load payload / 代 viewer 页转发保存与脏标记
+    var fileFrames = {}; // tab_id → {frame, ready, pending}
+
+    function fileFramePush(rec, payload) {
+        try { rec.frame.contentWindow.__wsFileLoad(JSON.stringify(payload)); } catch (e) { /* 页面未就绪忽略 */ }
+    }
+
+    function fileFrameFor(tabId) {
+        var rec = fileFrames[tabId];
+        if (rec) return rec;
+        var frame = document.createElement('iframe');
+        frame.className = 'browser-file-frame hidden';
+        frame.src = 'file-viewer.html'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
+        frame.addEventListener('load', function () {
+            var r = fileFrames[tabId];
+            if (!r) return;
+            r.ready = true;
+            if (r.pending) { fileFramePush(r, r.pending); r.pending = null; } // 早于 load 到达的 payload 补投
+        });
+        browserContentEl.appendChild(frame);
+        return (fileFrames[tabId] = { frame: frame, ready: false, pending: null });
+    }
+
+    if (browserSupported() && typeof window.desktop.onFileLoad === 'function') {
+        window.desktop.onFileLoad(function (data) {
+            var tabId = String((data && data.tab_id) || '');
+            var payload = data && data.payload;
+            if (!tabId || !payload) return;
+            var rec = fileFrameFor(tabId);
+            if (rec.ready) fileFramePush(rec, payload);
+            else rec.pending = payload;
+        });
+    }
+
+    // viewer 页桥：iframe 内 file-viewer.html 无 preload（viewer-preload 仅原生视图时代使用），
+    // 保存/脏标记经 parent.__imViewerHost 转发主进程（路径校验归口不变）
+    window.__imViewerHost = {
+        save: function (tabId, content) {
+            return window.desktop.browserFileSave(tabId, content);
+        },
+        setDirty: function (tabId, dirty) {
+            window.desktop.browserViewerDirty(tabId, dirty);
+        }
+    };
+
+    // ===== 阶段九十三（全 DOM 化）：web 标签由主页面 <webview> 承载 =====
+    // 真 Chromium 内核但属页面 DOM（与 file iframe 同层级）：工具提示/弹窗遮罩/分隔线等
+    // 页面 DOM 恒在其上，不再被原生层遮挡。宿主职责：按 tab_id 建 webview（src=首载地址）/
+    // 跟随活动态显隐 / 标签关闭即移除（元素移除即销毁 guest）；dom-ready 上报宿主 webContents
+    // id（主进程 fromId 挂事件+执行导航与 Agent 工具）。持久分区 persist:agent-browser 与
+    // 主窗口会话隔离（登录态/Cookie 跨会话保留）；allowpopups 仅为主进程 setWindowOpenHandler
+    // 能收到 window.open/target=_blank（deny 弹窗并转应用内新标签）
+    var webFrames = {}; // tab_id → {el, reported}
+
+    function webFrameFor(tabId, url) {
+        var rec = webFrames[tabId];
+        if (rec) return rec;
+        var el = document.createElement('webview');
+        el.className = 'browser-web-frame hidden';
+        el.setAttribute('partition', 'persist:agent-browser');
+        el.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, nodeIntegration=no');
+        el.setAttribute('allowpopups', '');
+        el.addEventListener('dom-ready', function () {
+            var r = webFrames[tabId];
+            if (!r || r.reported) return;
+            r.reported = true;
+            try { window.desktop.browserWvReady(tabId, el.getWebContentsId()); } catch (e) { /* 桥异常忽略 */ }
+        });
+        // guest 进程崩溃重建后 webContents id 会变：允许下次 dom-ready 重新上报（主进程幂等重挂）
+        function wvGone() { var r = webFrames[tabId]; if (r) r.reported = false; }
+        el.addEventListener('render-process-gone', wvGone);
+        el.addEventListener('crashed', wvGone);
+        // src 先于插入 DOM 设置：插入即按首载地址加载（避免先 about:blank 再二次跳转）
+        el.setAttribute('src', url || 'about:blank');
+        browserContentEl.appendChild(el);
+        return (webFrames[tabId] = { el: el, reported: false });
+    }
+
+    // 阶段九十二：分栏宽度同步——浏览区居中（贴主区左缘）、聊天列压缩到右侧（padding-left），
+    // 消息/输入框保持可见可用；宽度持久化 localStorage（拖拽调整后跨会话保留）。
+    // 基准宽度剔除已加的 padding（兼容 content-box/border-box 两种 box-sizing，防反馈环路）；
+    // 同时写 --browser-w 供 conv-search 等通栏浮层避让浏览区
+    var BROWSER_SPLIT_KEY = 'im_browser_split_w';
+    var browserSplitLastPersisted = 0; // 上次已持久化的分栏宽度（去抖：宽度不变不重复写存储）
+    var BROWSER_SPLIT_MIN_PANEL = 280; // 浏览区最小宽
+    var BROWSER_SPLIT_MIN_CHAT = 320;  // 聊天列最小保留宽
+    function browserClampSplitW(w, baseW) {
+        var maxW = baseW - BROWSER_SPLIT_MIN_CHAT;
+        if (w > maxW) w = Math.max(BROWSER_SPLIT_MIN_PANEL, maxW);
+        if (w < BROWSER_SPLIT_MIN_PANEL) w = Math.min(BROWSER_SPLIT_MIN_PANEL, baseW);
+        return Math.round(w);
+    }
+    function browserApplySplit(w) {
+        w = Math.round(w);
+        var mc = browserPanelEl.parentElement;
+        if (!mc) return;
+        browserPanelEl.style.width = w + 'px';
+        mc.style.paddingLeft = w + 'px';
+        mc.style.setProperty('--browser-w', w + 'px');
+        // 侧栏折叠动画期间本函数逐帧触发，仅在宽度真变化时写一次存储（去抖）
+        if (w !== browserSplitLastPersisted) {
+            browserSplitLastPersisted = w;
+            try { localStorage.setItem(BROWSER_SPLIT_KEY, String(w)); } catch (e) {}
+        }
+    }
+    function browserSyncSplit() {
+        var mc = browserPanelEl.parentElement;
+        if (!mc) return;
+        if (browserPanelEl.classList.contains('hidden')) {
+            mc.style.paddingLeft = '';
+            mc.style.setProperty('--browser-w', '0px');
+            return;
+        }
+        var baseW = mc.clientWidth - (parseFloat(mc.style.paddingLeft) || 0);
+        var saved = parseInt(localStorage.getItem(BROWSER_SPLIT_KEY), 10);
+        var w = (saved > 0) ? saved : Math.round(baseW * 0.52);
+        browserApplySplit(browserClampSplitW(w, baseW));
+    }
+
+    // 分栏拖拽：按住浏览区右缘把手左右拖动调宽。拖拽期间 body 挂 browser-resizing 类，
+    // CSS 对 iframe/webview 施加 pointer-events:none（guest 不再截获鼠标，渲染层全局收 mousemove）
+    (function browserInitSplitter() {
+        var sp = document.getElementById('browser-splitter');
+        if (!sp || sp.dataset.splitBound) return;
+        sp.dataset.splitBound = '1';
+        var dragging = false, startX = 0, startW = 0;
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            sp.classList.remove('dragging');
+            document.body.classList.remove('browser-resizing');
+        }
+        sp.addEventListener('mousedown', function (e) {
+            if (browserPanelEl.classList.contains('hidden')) return;
+            dragging = true;
+            startX = e.clientX;
+            startW = browserPanelEl.offsetWidth;
+            sp.classList.add('dragging');
+            document.body.classList.add('browser-resizing');
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var mc = browserPanelEl.parentElement;
+            var baseW = mc.clientWidth - (parseFloat(mc.style.paddingLeft) || 0);
+            browserApplySplit(browserClampSplitW(startW + (e.clientX - startX), baseW));
+            e.preventDefault();
+        });
+        window.addEventListener('mouseup', endDrag);
+        window.addEventListener('blur', endDrag); // 拖拽中窗口失焦（鼠标在窗外释放）兜底复位
+    })();
+
+    // file 标签路径面包屑（TRAE 同款）：seg=路径段，sep='›'，末段当前文件名高亮
+    function browserRenderCrumbs(relPath) {
+        browserCrumbsEl.innerHTML = '';
+        var parts = String(relPath || '').split(/[\\/]+/).filter(function (s) { return !!s; });
+        if (!parts.length) parts = ['文件预览'];
+        parts.forEach(function (seg, i) {
+            if (i > 0) {
+                var sep = document.createElement('span');
+                sep.className = 'bc-sep';
+                sep.textContent = '›';
+                browserCrumbsEl.appendChild(sep);
+            }
+            var el = document.createElement('span');
+            el.className = 'bc-seg' + (i === parts.length - 1 ? ' current' : '');
+            el.textContent = seg;
+            browserCrumbsEl.appendChild(el);
+        });
+    }
+
+    // 工作区相对路径是否已有对应浏览区文件标签（statePush 的 file_name 即 relPath）
+    function browserHasFileTab(relPath) {
+        return !!(browserLastState && (browserLastState.tabs || []).some(function (t) {
+            return t.kind === 'file' && t.file_name === relPath;
+        }));
+    }
+
+    // 地址栏输入补协议：无 scheme 时默认 https://（主进程 urlAllowed 仅放行 http/https）
+    function browserNormalizeUrl(raw) {
+        var u = String(raw || '').trim();
+        if (!u) return '';
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(u)) u = 'https://' + u;
+        return u;
+    }
+
+    // 阶段九十三：原生层已移除，iframe/webview 尺寸完全由 CSS 布局驱动（inset:0 铺满内容区），
+    // 无需主进程 bounds 贴合；分栏/侧栏/窗口变化时浏览器内容自动跟随
+
+    // 阶段九十二：标签图标（TRAE CN 同款语义）——file 标签按扩展名/数据类型着色徽标，
+    // web 标签站点 favicon（无则地球兜底）。语言色为 VSCode 通行配色（文件类型语义色，非主题色）
+    var BROWSER_EXT_COLORS = {
+        js: '#e8d44d', mjs: '#e8d44d', cjs: '#e8d44d', jsx: '#e8d44d',
+        ts: '#3178c6', tsx: '#3178c6', go: '#00add8', py: '#3572a5', java: '#b07219',
+        rs: '#dea584', c: '#8a6fd6', h: '#8a6fd6', cpp: '#8a6fd6', cc: '#8a6fd6',
+        cxx: '#8a6fd6', hpp: '#8a6fd6', cs: '#68217a', rb: '#cc3428', php: '#4f5d95',
+        swift: '#f05138', kt: '#7f52ff', md: '#519aba', json: '#cbcb41', xml: '#e37933',
+        html: '#e34c26', htm: '#e34c26', css: '#563d7c', scss: '#c6538c', sql: '#c9a96e',
+        sh: '#89e051', bat: '#c1f12e', ps1: '#5391c1', yml: '#6d80a6', yaml: '#6d80a6',
+        txt: '#9aa0a6', log: '#9aa0a6', ini: '#9aa0a6', conf: '#9aa0a6',
+        doc: '#2b579a', docx: '#2b579a', docm: '#2b579a', xls: '#217346', xlsx: '#217346',
+        xlsm: '#217346', ppt: '#d24726', pptx: '#d24726', pptm: '#d24726', pdf: '#b30b00',
+        png: '#a074c4', jpg: '#a074c4', jpeg: '#a074c4', gif: '#a074c4', webp: '#a074c4',
+        bmp: '#a074c4', svg: '#ffb13b', ico: '#ffb13b', zip: '#efb43c', rar: '#efb43c', '7z': '#efb43c'
+    };
+
+    // 地球兜底图标（web 标签无 favicon 时）
+    function browserGlobeIcon() {
+        var NS = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.classList.add('browser-tab-globe');
+        var g = document.createElementNS(NS, 'g');
+        g.setAttribute('fill', 'none');
+        g.setAttribute('stroke', 'currentColor');
+        g.setAttribute('stroke-width', '1.2');
+        var c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', '8'); c.setAttribute('cy', '8'); c.setAttribute('r', '6');
+        var mer = document.createElementNS(NS, 'ellipse');
+        mer.setAttribute('cx', '8'); mer.setAttribute('cy', '8'); mer.setAttribute('rx', '2.6'); mer.setAttribute('ry', '6');
+        var eq = document.createElementNS(NS, 'line');
+        eq.setAttribute('x1', '2'); eq.setAttribute('y1', '8'); eq.setAttribute('x2', '14'); eq.setAttribute('y2', '8');
+        g.appendChild(c); g.appendChild(mer); g.appendChild(eq);
+        svg.appendChild(g);
+        return svg;
+    }
+
+    // 按标签类型构造图标节点
+    function browserTabIcon(t) {
+        var el = document.createElement('span');
+        el.className = 'browser-tab-ico';
+        if (t.kind === 'file') {
+            var dk = t.data_kind || '';
+            var label, color;
+            if (dk === 'diff') { label = '±'; color = '#d29922'; }
+            else if (dk === 'commit') { label = '⎇'; color = '#b48ce3'; }
+            else if (dk === 'md') { label = 'MD'; color = BROWSER_EXT_COLORS.md; }
+            else if (dk === 'text') { label = 'TXT'; color = BROWSER_EXT_COLORS.txt; }
+            else {
+                var ext = (t.ext || '').toLowerCase();
+                label = ext ? ext.slice(0, 4).toUpperCase() : 'FILE';
+                color = BROWSER_EXT_COLORS[ext] || 'var(--text-light)';
+            }
+            el.textContent = label;
+            el.style.color = color;
+            return el;
+        }
+        if (t.favicon) {
+            var img = document.createElement('img');
+            img.className = 'browser-tab-fav';
+            img.src = t.favicon;
+            img.alt = '';
+            img.addEventListener('error', function () {
+                img.replaceWith(browserGlobeIcon());
+            });
+            el.classList.add('bare');
+            el.appendChild(img);
+            return el;
+        }
+        el.classList.add('bare');
+        el.appendChild(browserGlobeIcon());
+        return el;
+    }
+
+    // 标签栏渲染：主进程推送全量 tabs，按 active_id 高亮；加载中显示旋转指示；
+    // file 标签预览态斜体+ (Preview) 后缀 + 未保存圆点（TRAE CN 同款）
+    function browserRenderTabs(state) {
+        browserTabsEl.innerHTML = '';
+        (state.tabs || []).forEach(function (t) {
+            var isFile = t.kind === 'file';
+            var chip = document.createElement('div');
+            chip.className = 'browser-tab' + (t.id === state.active_id ? ' active' : '') + (isFile ? ' is-file' : '') + (t.dirty ? ' dirty' : '');
+            chip.title = t.title || (isFile ? (t.file_name || '') : '(无标题)');
+            if (t.loading) {
+                var spin = document.createElement('span');
+                spin.className = 'browser-tab-loading';
+                chip.appendChild(spin);
+            } else {
+                chip.appendChild(browserTabIcon(t));
+            }
+            var title = document.createElement('span');
+            title.className = 'browser-tab-title';
+            title.textContent = t.title || '(无标题)';
+            chip.appendChild(title);
+            var close = document.createElement('span');
+            close.className = 'browser-icon-btn browser-tab-close';
+            close.title = '关闭标签页';
+            close.textContent = t.dirty ? '●' : '×';
+            if (t.dirty) { // 未保存圆点：悬停时切回 × 供关闭（TRAE 同款）
+                chip.addEventListener('mouseenter', function () { close.textContent = '×'; });
+                chip.addEventListener('mouseleave', function () { close.textContent = '●'; });
+            }
+            close.addEventListener('click', function (e) {
+                e.stopPropagation();
+                window.desktop.browserCloseTab(t.id);
+            });
+            chip.appendChild(close);
+            chip.addEventListener('click', function () { window.desktop.browserSelect(t.id); });
+            browserTabsEl.appendChild(chip);
+        });
+    }
+
+    // 状态应用（主进程 browser:state 推送归口）：显隐/标签栏/地址栏/导航按钮可用态
+    function browserApplyState(state) {
+        if (!state) return;
+        browserLastState = state;
+        browserPanelEl.classList.toggle('hidden', !state.visible);
+        browserSyncSplit(); // 分栏宽度与聊天列压缩同步（展开/收起/标签变化统一归口）
+        if (!state.visible) return;
+        browserRenderTabs(state);
+        // 阶段九十二：DOM viewer 同步——file 标签 iframe 建池/显隐/清理（仅活动 file 标签可见；
+        // 网页标签活动时全部隐藏、webview 接管），标签关闭即移除对应 iframe
+        var activeFileId = state.kind === 'file' ? String(state.active_id || '') : '';
+        var alive = {};
+        (state.tabs || []).forEach(function (t) { if (t.kind === 'file') alive[t.id] = true; });
+        Object.keys(fileFrames).forEach(function (id) {
+            if (!alive[id]) { // 标签已关闭 → 移除 iframe
+                fileFrames[id].frame.remove();
+                delete fileFrames[id];
+                return;
+            }
+            fileFrames[id].frame.classList.toggle('hidden', id !== activeFileId);
+        });
+        if (activeFileId && !fileFrames[activeFileId]) {
+            fileFrameFor(activeFileId).frame.classList.remove('hidden'); // 状态先于 file-load 到达的兜底建框
+        }
+        // 阶段九十三：web 标签 webview 同步——仅活动 web 标签建框/可见（首次激活时按当前
+        // url 首载），file 标签活动时全部隐藏；标签关闭即移除对应 webview（元素移除即销毁 guest）
+        var activeWebId = state.kind === 'web' ? String(state.active_id || '') : '';
+        var aliveWeb = {};
+        var activeWebUrl = 'about:blank';
+        (state.tabs || []).forEach(function (t) {
+            if (t.kind !== 'web') return;
+            aliveWeb[t.id] = true;
+            if (t.id === activeWebId) activeWebUrl = t.url || 'about:blank';
+        });
+        Object.keys(webFrames).forEach(function (id) {
+            if (!aliveWeb[id]) { // 标签已关闭 → 移除 webview
+                webFrames[id].el.remove();
+                delete webFrames[id];
+                return;
+            }
+            webFrames[id].el.classList.toggle('hidden', id !== activeWebId);
+        });
+        if (activeWebId) {
+            webFrameFor(activeWebId, activeWebUrl).el.classList.remove('hidden');
+        }
+        // 阶段九十二：file 标签显示只读路径面包屑（TRAE 同款），web 标签才显示网址输入栏
+        var isFileTab = state.kind === 'file';
+        browserCrumbsEl.classList.toggle('hidden', !isFileTab);
+        browserUrlEl.classList.toggle('hidden', isFileTab);
+        browserGoBtn.classList.toggle('hidden', isFileTab);
+        if (isFileTab) browserRenderCrumbs(state.url);
+        // 地址栏：用户正在输入时不覆盖（避免打字被状态推送清掉）
+        if (document.activeElement !== browserUrlEl) {
+            browserUrlEl.value = (!state.url || state.url === 'about:blank') ? '' : state.url;
+        }
+        browserBackBtn.disabled = !state.can_back;
+        browserForwardBtn.disabled = !state.can_forward;
+        browserReloadBtn.disabled = false;
+    }
+
+    if (browserSupported()) {
+        // 状态订阅（主进程 did-finish-load/操作/页面事件均会推送）
+        window.desktop.onBrowserState(browserApplyState);
+        // 阶段九十二：浏览区文件标签保存写盘 → 刷新工作区树（角标/状态对齐磁盘实际）
+        if (typeof window.desktop.onFileSaved === 'function') {
+            window.desktop.onFileSaved(function () { wsPanelRefreshTree(); });
+        }
+        // 尺寸变化跟随（分栏拖拽/侧栏折叠/窗口缩放改变浏览区宽度 → 分栏宽度与聊天列压缩重算；
+        // iframe/webview 尺寸由 CSS 自动跟随，无需额外上报）
+        if (typeof ResizeObserver === 'function') {
+            var browserRO = new ResizeObserver(function () {
+                browserSyncSplit();
+            });
+            browserRO.observe(browserContentEl);
+            if (browserPanelEl.parentElement) browserRO.observe(browserPanelEl.parentElement);
+        } else {
+            window.addEventListener('resize', browserSyncSplit);
+        }
+        // 阶段九十二：窗口缩放时分栏宽度重算（面板为像素宽，需随主区尺寸重新分配）
+        window.addEventListener('resize', browserSyncSplit);
+        // 工具栏开关：请求展开/收起（实际显隐以主进程回推状态为准）
+        browserBtn.addEventListener('click', function () {
+            window.desktop.browserPanel(browserPanelEl.classList.contains('hidden'));
+        });
+        document.getElementById('browser-panel-close').addEventListener('click', function () {
+            window.desktop.browserPanel(false);
+        });
+        document.getElementById('browser-newtab').addEventListener('click', function () {
+            window.desktop.browserNav('newtab', '');
+        });
+        browserBackBtn.addEventListener('click', function () { window.desktop.browserNav('back', ''); });
+        browserForwardBtn.addEventListener('click', function () { window.desktop.browserNav('forward', ''); });
+        browserReloadBtn.addEventListener('click', function () { window.desktop.browserNav('reload', ''); });
+        function browserGo() {
+            var u = browserNormalizeUrl(browserUrlEl.value);
+            if (!u) return;
+            window.desktop.browserNav('goto', u);
+        }
+        document.getElementById('browser-go').addEventListener('click', browserGo);
+        browserUrlEl.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); browserGo(); }
+        });
+        // 开关按钮仅在 PC 壳内显示（能力检测）
+        browserBtn.classList.remove('hidden');
+    }
+
     // 任务卡片：每次任务一张容器卡片，内部追加思考/工具/审批子事件流
     // sid：归属会话 id（事件帧携带，服务端盖戳同源；缺省回落当前查看会话）
     function createAgentTaskCard(agent, taskId, goal, sid) {
@@ -4415,10 +5089,10 @@
             row.appendChild(dirEl);
             row.appendChild(dstat);
             row.appendChild(badge);
-            // 点击行打开工作区预览（面板可见时；强制重读磁盘最新）
+            // 点击行打开工作区预览（面板可见时；强制重读磁盘最新）。PC 端改道浏览区标签（阶段九十二）
             row.addEventListener('click', function (e) {
                 e.stopPropagation(); // 阻断冒泡：避免触发外层任务卡折叠切换
-                if (wsPanel.visible && typeof wsPanelOpen === 'function') wsPanelOpen(c.path, true);
+                if ((wsPcViewer() || wsPanel.visible) && typeof wsOpenFile === 'function') wsOpenFile(c.path, true);
             });
             bodyEl.appendChild(row);
         });
@@ -4539,7 +5213,8 @@
         head.className = 'agent-event-head';
         var title = document.createElement('span');
         title.className = 'agent-tool-title';
-        title.textContent = AGENT_TOOL_TITLE[ev.tool] || ('工具 · ' + (ev.tool || ''));
+        // 阶段八十九：MCP 工具服务端下发人类可读展示名（label="MCP · 服务器 / 工具"），命名空间 key 不可反解
+        title.textContent = ev.label || AGENT_TOOL_TITLE[ev.tool] || ('工具 · ' + (ev.tool || ''));
         head.appendChild(title);
         var chip = agentToolChipText(ev.tool, ev.params);
         if (chip) {
@@ -4756,18 +5431,28 @@
 
     function agentConsoleEnsure() {
         if (agentConsole.root) return true;
-        // 停靠点：优先预览区下方（Trae CN 同款，中栏纵排底部）；窄屏（≤900px 工作区整体隐藏）或
-        // 面板未就绪时回退输入框上方
-        var host = null, before = null;
+        // 停靠点（阶段九十二）：PC 优先浏览器面板底部停靠（Trae CN 同款——浏览区下方控制台抽屉；
+        // #browser-panel 为 flex 纵排，抽屉排到内容区之下即"浏览区底部"，开合改变内容元素尺寸，
+        // ResizeObserver 自动重报原生视图 bounds 无需额外同步）。窄屏（≤900px 工作区整体隐藏）
+        // 或面板未就绪时回退：PC 旧布局回退工作区预览列下方，Web/手机回退输入框上方
+        var host = null, before = null, chipHost = null, chipBefore = null;
         var wsReady = wsPanelEnsure() && wsPanel.colView;
         var narrow = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
-        if (wsReady && !narrow) {
+        if (browserSupported() && browserPanelEl) {
+            host = browserPanelEl; // 浏览区底部停靠（Trae CN 同款）
+        } else if (wsReady && !narrow) {
             host = wsPanel.colView;
         } else {
             var inputBar = document.querySelector('.input-bar');
             if (!inputBar || !inputBar.parentNode) return false;
             host = inputBar.parentNode;
             before = inputBar;
+        }
+        // "打开控制台"浮标始终归属聊天区输入框上方（浏览区停靠时引导入口仍在聊天侧）
+        chipHost = host; chipBefore = before;
+        if (host === browserPanelEl) {
+            var ib = document.querySelector('.input-bar');
+            if (ib && ib.parentNode) { chipHost = ib.parentNode; chipBefore = ib; }
         }
         var root = document.createElement('div');
         root.className = 'agent-console-drawer hidden';
@@ -4831,13 +5516,13 @@
         root.appendChild(head);
         root.appendChild(body);
         root.appendChild(inputWrap);
-        host.insertBefore(root, before); // before=null 时等同 append（中栏停靠：排到预览区之下）
+        host.insertBefore(root, before); // before=null 时等同 append（浏览区/中栏停靠：排到内容区之下）
         var chip = document.createElement('button');
         chip.className = 'agent-console-chip hidden';
         chip.type = 'button';
         chip.textContent = '▤ 打开控制台';
         chip.addEventListener('click', function () { agentConsoleToggle(true); });
-        host.insertBefore(chip, before);
+        chipHost.insertBefore(chip, chipBefore); // 浮标固定聊天区输入框上方
         agentConsole.root = root;
         agentConsole.body = body;
         agentConsole.cmdEl = cmd;
@@ -5234,8 +5919,15 @@
             var t = agentConsoleTabActive();
             if (t && t.kind === 'term' && t.stick) t.bodyEl.scrollTop = t.bodyEl.scrollHeight;
             if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
+            // 浏览区底部停靠模式：面板隐藏时随控制台一并唤起（Trae 同款，点"打开控制台"带出浏览区）；
+            // 收起不动面板（关控制台≠关浏览区）
+            if (browserSupported() && browserPanelEl && browserPanelEl.contains(agentConsole.root) &&
+                browserPanelEl.classList.contains('hidden') &&
+                window.desktop && typeof window.desktop.browserPanel === 'function') {
+                window.desktop.browserPanel(true);
+            }
         }
-        wsPanelSyncViewCol(); // 停靠预览下方：无标签时仅控制台展开也要显示中栏，收起后无标签则整栏收回
+        wsPanelSyncViewCol(); // 回退停靠（中栏）时保底逻辑；浏览区停靠模式下对中栏为无操作
     }
 
     // 新命令开始（run_command tool_start）：换任务清空重开、写命令头、浮标提示
@@ -5701,8 +6393,15 @@
 
     // 中栏显隐归口：有打开标签、控制台展开、或"打开控制台"浮标可见 任一即显示整栏
     // （控制台停靠预览下方后，预览与控制台/浮标独立显隐）
+    // 阶段九十二：控制台已改停靠浏览区底部（browser-panel 内）——中栏显隐不再受控制台/浮标影响，
+    // 否则控制台一开就会把空的旧预览列撑出来（工作区与浏览区之间出现空白条）；
+    // 仅回退停靠中栏的旧布局（Web/窄屏/无浏览面板）保留该联动
     function wsPanelSyncViewCol() {
         if (!wsPanel.colView) return;
+        if (browserSupported() && browserPanelEl && agentConsole.root && browserPanelEl.contains(agentConsole.root)) {
+            wsPanel.colView.classList.toggle('hidden', !wsPanel.activeTab);
+            return;
+        }
         var chipOn = !!(agentConsole && agentConsole.chip && !agentConsole.chip.classList.contains('hidden'));
         var show = !!wsPanel.activeTab || !!(agentConsole && (agentConsole.open || chipOn));
         wsPanel.colView.classList.toggle('hidden', !show);
@@ -7175,7 +7874,7 @@
         return sec;
     }
 
-    // 执行智能体审查：目标分支三点 diff → gitai 生成 Markdown 报告 → 右侧预览标签打开
+    // 执行智能体审查：目标分支三点 diff → gitai 生成 Markdown 报告 → 预览标签打开（PC 进浏览区）
     function wsPanelGitDoReview() {
         var g = wsPanel.git;
         if (g.reviewBusy) return;
@@ -7183,10 +7882,17 @@
         g.reviewBusy = true;
         wsPanelGitRender(); // 按钮进入"审查中…"态
         var target = g.reviewTarget;
+        var pcView = wsPcViewer(); // PC：报告进浏览区标签（阶段九十二）
         var diffTxt = '';
         wsPanelGitReq({ sub: 'diffrev', target: target }).then(function (d) {
             diffTxt = d.diff || '';
             if (!diffTxt.trim()) throw new Error('当前分支相对 ' + target + ' 没有差异，无需审查');
+            if (pcView) {
+                return wsPanelGitAIReq({ mode: 'review', diff: diffTxt, target: target }).then(function (r) {
+                    wsOpenData({ key: 'review:' + target, kind: 'md', title: '审查报告: ' + target, content: r.text || '（AI 未返回内容）', meta: { target: target } });
+                    showToast('审查报告已生成');
+                });
+            }
             // 报告标签先占位（loading 态），报告回来后 Markdown 渲染
             var key = 'review:' + target;
             wsPanel.viewEl.classList.remove('hidden');
@@ -7524,6 +8230,14 @@
     function wsPanelGitOpenCommitFile(c, p) {
         var sh = c.sh || (c.h || '').slice(0, 7);
         var key = 'cfile:' + c.h + ':' + p;
+        if (wsPcViewer()) { // PC：提交单文件 diff 进浏览区标签（阶段九十二）
+            wsPanelGitReq({ sub: 'show', path: c.h, file: p }).then(function (d) {
+                wsOpenData({ key: key, kind: 'commit', title: '提交: ' + sh + ' · ' + p.replace(/^.*[\\/]/, ''), content: d.diff || '', meta: d.meta || {} });
+            }).catch(function (err) {
+                showToast('提交详情获取失败：' + (err && err.message || err));
+            });
+            return;
+        }
         wsPanel.viewEl.classList.remove('hidden');
         if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
         wsPanel.tabs[key] = { name: '提交: ' + sh + ' · ' + p.replace(/^.*[\\/]/, ''), commitView: true, diffPath: sh, loading: true }; // 重开即刷新
@@ -7549,6 +8263,14 @@
     function wsPanelGitOpenCommit(c) {
         var sh = c.sh || (c.h || '').slice(0, 7);
         var key = 'show:' + c.h;
+        if (wsPcViewer()) { // PC：提交详情进浏览区标签（阶段九十二）
+            wsPanelGitReq({ sub: 'show', path: c.h }).then(function (d) {
+                wsOpenData({ key: key, kind: 'commit', title: '提交: ' + sh, content: d.diff || '', meta: d.meta || {} });
+            }).catch(function (err) {
+                showToast('提交详情获取失败：' + (err && err.message || err));
+            });
+            return;
+        }
         wsPanel.viewEl.classList.remove('hidden');
         if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
         wsPanel.tabs[key] = { name: '提交: ' + sh, commitView: true, diffPath: sh, loading: true }; // 重开即刷新
@@ -7573,7 +8295,35 @@
     // 点击变更文件：跟踪中 → diff 预览标签；未跟踪 → 直接打开文件预览。
     // p 是 git 视角路径（相对项目根）：文件面板 open/read 需要 fs 视角（带 proj/ 前缀）
     function wsPanelGitOpenDiff(p, e) {
-        if (e && (e.x === '?' || e.y === '?')) { wsPanelOpen(wsProjFsPath(p)); return; }
+        if (e && (e.x === '?' || e.y === '?')) { wsOpenFile(wsProjFsPath(p)); return; }
+        if (wsPcViewer()) { // PC：diff 进浏览区标签（阶段九十二）
+            var diffKey = 'diff:' + p;
+            var diffTitle = 'diff: ' + p.replace(/^.*[\\/]/, '');
+            wsPanelGitReq({ sub: 'diff', path: p }).then(function (d) {
+                wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: d.diff || '', meta: { path: p } });
+            }).catch(function (err) {
+                var msg = err && err.message || String(err);
+                // 仓库已 init 但尚无任何提交（HEAD 不存在）：以"整文件新增"为对比基线（Trae/VSCode 同款语义）
+                if (/bad revision 'HEAD'/i.test(msg)) {
+                    wsPanelReq('read', wsProjFsPath(p)).then(function (res) {
+                        if (res.binary) { showToast('仓库尚未有任何提交，二进制文件暂无对比基线'); return; }
+                        var lines = (res.content || '').split('\n');
+                        if (lines.length && lines[lines.length - 1] === '') lines.pop(); // 去掉结尾换行产生的空串
+                        var pseudo = ['diff --git a/' + p + ' b/' + p, '--- /dev/null', '+++ b/' + p,
+                            '@@ -0,0 +1,' + lines.length + ' @@'];
+                        lines.forEach(function (l) { pseudo.push('+' + l); });
+                        wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: pseudo.join('\n'), meta: { path: p } });
+                    }).catch(function () {
+                        showToast('仓库尚未有任何提交，暂无对比基线');
+                    });
+                    return;
+                }
+                // 非 git 仓库：友好提示，不暴露 git 原始报错
+                if (/not a git repository/i.test(msg)) msg = '当前工作区不是 Git 仓库，无法对比差异';
+                showToast('diff 获取失败：' + msg);
+            });
+            return;
+        }
         var key = 'diff:' + p;
         wsPanel.viewEl.classList.remove('hidden');
         var idx = wsPanel.tabOrder.indexOf(key);
@@ -7748,7 +8498,7 @@
             head.addEventListener('click', function () {
                 Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
                 head.classList.add('active');
-                wsPanelOpen(selfPath);
+                wsOpenFile(selfPath); // PC 进浏览区标签，Web/手机走 wsPanel（阶段九十二）
             });
             return row;
         }
@@ -7810,20 +8560,31 @@
     // 工具结果到达：刷新树 + TRAE 同款自动打开该文件（面板可见时）；已开标签强制重读磁盘最新内容
     // 路径取值：tool_result 不带 params（服务端只回 tool/ok/output），回退用 tool_start 时按工具名记下的路径
     function wsPanelOnToolResult(ev) {
-        if (!wsPanel.visible) return;
+        if (!wsPanel.visible && !wsPcViewer()) return;
         if (ev.tool !== 'write_file' && ev.tool !== 'edit_file' && ev.tool !== 'delete_file') return;
         var path = (ev.params && ev.params.path) || wsPanel.lastToolPath[ev.tool] || '';
         var key = wsPanelNormalizeKey(path);
         if (ev.tool === 'delete_file') {
             wsPanelRefreshTree(); // 无论成败先刷新树对齐磁盘实际
             if (ev.ok === false || key === null) return; // 删除失败/路径无法归一化：仅刷新
+            if (wsPcViewer()) { // PC：联动关闭对应浏览区文件标签（含子路径，删目录场景）
+                (browserLastState && browserLastState.tabs || []).forEach(function (t) {
+                    if (t.kind === 'file' && t.file_name && (t.file_name === key || t.file_name.indexOf(key + '/') === 0)) {
+                        window.desktop.browserCloseTab(t.id);
+                    }
+                });
+            }
             wsPanelForgetKey(key); // 删除成功：清该路径（含子路径，删目录场景）角标/符号缓存/展开态，关闭相关预览标签
             return;
         }
         if (key || key === '') {
             delete wsPanel.symTab[key]; // 文件被工具改写，符号缓存失效（下次渲染/扫描重建）
-            Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
-            wsPanelOpen(key, true); // 重载：工具已改磁盘，丢弃旧内容/草稿读最新
+            if (wsPcViewer()) {
+                wsOpenFile(key, true); // PC：浏览区标签复用重读磁盘最新（未开则自动打开，TRAE 同款）
+            } else {
+                Array.prototype.forEach.call(wsPanel.treeEl.querySelectorAll('.ws-row-head.active'), function (el) { el.classList.remove('active'); });
+                wsPanelOpen(key, true); // 重载：工具已改磁盘，丢弃旧内容/草稿读最新
+            }
         }
         wsPanelRefreshTree();
     }
@@ -7902,7 +8663,7 @@
         var name = path.replace(/^.*[\\/]/, '') || '工作区根目录';
         var parent = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
 
-        if (!isDir) add('📄', '打开', function () { wsPanelOpen(path); });
+        if (!isDir) add('📄', '打开', function () { wsOpenFile(path); }); // PC 进浏览区标签，Web/手机走 wsPanel
         // 打开所在目录/复制路径需具体目标（文件或目录），树空白区右键（path=''）无意义不显示
         if (path) add('📂', '打开所在目录', function () { req('reveal', path, ''); });
         if (path) add('🔗', '复制路径', function () {
@@ -7949,6 +8710,36 @@
         m.classList.remove('hidden');
         m.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8)) + 'px';
         m.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8)) + 'px';
+    }
+
+    // ===== 阶段九十二：文件查看归口（TRAE CN 化） =====
+    // PC 端（desktop 桥具备 browserOpenFile）所有文件查看/预览/编辑、git diff、提交详情、
+    // 审查报告统一进内置浏览区标签；Web/手机端（无桥）走 wsPanel 原路，行为完全不变
+    function wsPcViewer() {
+        return !!(window.desktop && typeof window.desktop.browserOpenFile === 'function' && typeof window.desktop.browserOpenData === 'function');
+    }
+    // 打开工作区文件（浏览区标签：主进程 safePath 校验读盘；同文件复用标签刷新）
+    function wsOpenFile(path, forceReload) {
+        if (wsPcViewer()) {
+            window.desktop.browserOpenFile({ username: IMSocket.getUsername(), path: path }).then(function (r) {
+                if (r && !r.ok) showToast('浏览区打开失败：' + (r.error || '未知错误'));
+            }).catch(function (e) {
+                showToast('浏览区打开失败：' + (e && e.message || e));
+            });
+            return;
+        }
+        wsPanelOpen(path, forceReload); // Web/手机原路（forceReload 仅 wsPanel 语义需要）
+    }
+    // 打开直传内容标签（diff/提交详情/审查报告）：payload = {key?, kind, title, content, meta?}。
+    // key 相同复用标签刷新（重开即刷新语义）。PC 走浏览区返回 true；Web/手机返回 false 由调用方走原路
+    function wsOpenData(payload) {
+        if (!wsPcViewer()) return false;
+        window.desktop.browserOpenData(payload).then(function (r) {
+            if (r && !r.ok) showToast('浏览区打开失败：' + (r.error || '未知错误'));
+        }).catch(function (e) {
+            showToast('浏览区打开失败：' + (e && e.message || e));
+        });
+        return true;
     }
 
     // 打开文件预览（Trae CN 同款标签页）：已打开→激活切换；未打开→建标签读内容。
@@ -9071,7 +9862,7 @@
         block.className = 'agent-event approve';
         var head = document.createElement('div');
         head.className = 'agent-event-head approve';
-        head.textContent = '需要审批 · ' + (ev.tool || '');
+        head.textContent = '需要审批 · ' + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '');
         var reason = document.createElement('div');
         reason.className = 'agent-approve-reason';
         reason.textContent = ev.reason || '该操作需要确认';
@@ -9096,7 +9887,8 @@
         noBtn.className = 'agent-approve-no';
         noBtn.textContent = '拒绝';
         actions.appendChild(okBtn);
-        if (ev.tool !== 'delete_file') actions.appendChild(wlBtn);
+        // 阶段八十九：MCP 工具无命令前缀/写文件白名单语义（服务端 whitelist 分支无副作用），不显示加白按钮
+        if (ev.tool !== 'delete_file' && String(ev.tool || '').indexOf('mcp_') !== 0) actions.appendChild(wlBtn);
         actions.appendChild(noBtn);
         block.appendChild(head);
         block.appendChild(reason);
@@ -9161,15 +9953,16 @@
         agentDockSetChanges(msg.from_user, ev.task_id, ev.changes);
         // 工作区面板对齐磁盘实际：撤销已改变工作区内容（新建撤销=文件被删，关相关标签；
         // 其余撤销=内容还原，已开标签强制重读）——仅当前查看智能体的变更需要刷新
-        if (wsPanel.visible && currentChatUser === msg.from_user) {
+        if ((wsPanel.visible || wsPcViewer()) && currentChatUser === msg.from_user) {
             (ev.changes || []).forEach(function (c) {
                 if (c.status !== 'reverted') return;
                 var key = wsPanelNormalizeKey(c.path);
                 if (c.kind === 'create') {
-                    wsPanelForgetKey(key);
+                    if (!wsPcViewer()) wsPanelForgetKey(key); // PC：撤销新建=文件已删，标签随删除联动另行关闭（delete_file 事件）
                     return;
                 }
-                if ((key || key === '') && wsPanel.tabs[key]) wsPanelOpen(key, true);
+                // PC：已开标签重读磁盘还原后内容；未开不强行打开（对齐 wsPanel 仅刷新已开语义）
+                if ((key || key === '') && (wsPcViewer() ? browserHasFileTab(key) : wsPanel.tabs[key])) wsOpenFile(key, true);
             });
             wsPanelRefreshTree();
         }
@@ -9236,6 +10029,13 @@
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
             if (!ev || !ev.step) return;
             if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
+        });
+        // 阶段九十：本机 MCP 工具清单上报的服务端确认帧（下行回执：{ok,count}）
+        IMSocket.on(MSG.AGENT_PC_TOOLS, function (msg) {
+            if (msg.to_user !== IMSocket.getUsername()) return;
+            var ev;
+            try { ev = JSON.parse(msg.content); } catch (e) { return; }
+            if (ev && ev.ok) showToast('本机 MCP 工具已上报（' + (ev.count || 0) + ' 个）');
         });
         // 阶段七十六：工作区文件面板本地操作桥（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
         IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
@@ -10065,6 +10865,8 @@
         webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
         // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
         agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
+        // 阶段九十：我的 MCP 服务器按钮同显隐（仅 PC 端，本机 stdio 自定义）
+        agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
         // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；
         // 重新进入该会话时增量会重建气泡继续打字，END 帧保证最终完整）
         for (var sid in aiStreams) {
