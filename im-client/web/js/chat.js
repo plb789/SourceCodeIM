@@ -8155,8 +8155,10 @@
         bottom.className = 'ws-git-bottom';
         var reviewSec = wsGitReviewSection(g);
         // 历史分区复用判定：有数据且签名一致 → 复用旧分区（滚动/悬停/滑块状态保留）；
-        // 否则新建（数据变化路径先收起 body 级单例悬停详情卡，防旧行销毁后卡片悬空）
-        var logSig = (g.log && g.log.length) ? JSON.stringify([g.branch, g.log, g.ahead]) : null;
+        // 否则新建（数据变化路径先收起 body 级单例悬停详情卡，防旧行销毁后卡片悬空）。
+        // 阶段一百零五修复：折叠态必须入签名——点击头部三角只翻 logCollapsed、数据不变，
+        // 旧签名一致会误判复用旧展开分区，导致三角不转向也不折叠（折叠后内容结构不同本就该重建）
+        var logSig = (g.log && g.log.length) ? JSON.stringify([g.branch, g.log, g.ahead, g.logCollapsed ? 1 : 0]) : null;
         var logSec = (prevLogSec && logSig !== null && prevLogSec._logSig === logSig) ? prevLogSec : wsGitLogSection(g);
         if (logSec !== prevLogSec) {
             if (logSig !== null) logSec._logSig = logSig;
