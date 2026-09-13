@@ -221,18 +221,20 @@ func memSaveItem(agentID uint, username, content, source string) uint {
 		return 0
 	}
 	// 向量去重：与已有记忆最高相似度达阈值视为重复
-	col, err := memGetCollection(agentID)
-	if err != nil {
-		logger.Warn("记忆向量集合获取失败（agent=%d）：%v", agentID, err)
-		return 0
+	// 阶段一百零五修复（用户实测反馈 2026-09-13）：原实现向量化失败/集合获取失败直接 return 0，
+	// Ollama 等向量化服务未运行时手动添加被误报"该记忆已存在"、自动提取与任务经验全部丢失——
+	// 现改为降级仅文本落库（向量只服务去重与召回，缺向量只是暂不可被向量召回，不应阻断保存）
+	col, colErr := memGetCollection(agentID)
+	if colErr != nil {
+		logger.Warn("记忆向量集合获取失败（agent=%d），降级仅文本保存：%v", agentID, colErr)
 	}
-	vecs, err := kbEmbed([]string{content})
-	if err != nil || len(vecs) == 0 {
-		logger.Warn("记忆向量化失败（agent=%d）：%v", agentID, err)
-		return 0
+	vecs, vecErr := kbEmbed([]string{content})
+	if vecErr != nil || len(vecs) == 0 {
+		logger.Warn("记忆向量化失败（agent=%d），降级仅文本保存：%v", agentID, vecErr)
+		vecs = nil
 	}
-	if n := col.Count(); n > 0 {
-		topN := n
+	if colErr == nil && len(vecs) > 0 && col.Count() > 0 {
+		topN := col.Count()
 		if topN > 3 {
 			topN = 3
 		}
@@ -252,14 +254,17 @@ func memSaveItem(agentID uint, username, content, source string) uint {
 		logger.Warn("记忆落库失败（agent=%d，用户 %s）：%v", agentID, username, err)
 		return 0
 	}
-	// 向量索引（文档 ID 与元数据锚定 MySQL 记忆 ID，单删/清空按 memid/username 过滤归口）
-	if err := col.AddDocuments(context.Background(), []chromem.Document{{
-		ID:        fmt.Sprintf("m%d", rec.ID),
-		Metadata:  map[string]string{"username": username, "memid": strconv.FormatUint(uint64(rec.ID), 10)},
-		Content:   content,
-		Embedding: vecs[0],
-	}}, 1); err != nil {
-		logger.Warn("记忆向量索引写入失败（agent=%d，mem=%d）：%v", agentID, rec.ID, err)
+	// 向量索引（文档 ID 与元数据锚定 MySQL 记忆 ID，单删/清空按 memid/username 过滤归口）；
+	// 阶段一百零五：向量化降级（vecs 为空）时跳过索引，记忆已按文本落库，Ollama 恢复后新记忆自动带向量
+	if colErr == nil && len(vecs) > 0 {
+		if err := col.AddDocuments(context.Background(), []chromem.Document{{
+			ID:        fmt.Sprintf("m%d", rec.ID),
+			Metadata:  map[string]string{"username": username, "memid": strconv.FormatUint(uint64(rec.ID), 10)},
+			Content:   content,
+			Embedding: vecs[0],
+		}}, 1); err != nil {
+			logger.Warn("记忆向量索引写入失败（agent=%d，mem=%d）：%v", agentID, rec.ID, err)
+		}
 	}
 	return rec.ID
 }

@@ -15,7 +15,7 @@
             document.documentElement.classList.add('pc-titlebar');
         }
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.05">
+    <link rel="stylesheet" href="css/style.css?v=2.06">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -679,14 +679,44 @@
                     </button>
                 </div>
             </section>
-            <!-- 规则与记忆：聚合入口（弹窗承载管理，此处说明+跳转） -->
+            <!-- 规则与记忆：阶段一百零五重做为 TRAE CN 同款页内直管布局（卡片+范围页签+创建按钮+空态指引；
+                 规则卡片按 全局/仅本智能体 页签分列，记忆卡片带头部总开关；API 与旧弹窗同归口） -->
             <section id="settings-view-rules" class="settings-view hidden">
                 <h2 class="settings-title">规则与记忆</h2>
                 <h3 class="settings-subtitle">规则</h3>
-                <p class="settings-desc">规则为硬性约束：AI 回答与 Agent 任务执行前会先逐条对照检查。分「全局」（对全部智能体生效）与「仅本智能体」两层。</p>
-                <h3 class="settings-subtitle">记忆</h3>
-                <p class="settings-desc">记忆为背景参考：AI 在对话中自动记住重要信息，回答相关问题时自然运用。按 账号+智能体 隔离，仅你可见。</p>
-                <button id="settings-open-mem" class="settings-btn">打开规则与记忆管理</button>
+                <div class="settings-card settings-manage-card">
+                    <div class="settings-card-head">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">规则</div>
+                            <div class="settings-card-desc">创建并管理规则，聊天回答与 Agent 任务执行前都会先逐条对照检查。</div>
+                        </div>
+                        <button id="settings-rule-create" class="settings-primary-btn">+ 创建</button>
+                    </div>
+                    <div class="settings-card-tabs">
+                        <button class="settings-scope-tab active" data-scope="global">全局</button>
+                        <button class="settings-scope-tab" data-scope="agent">仅本智能体</button>
+                    </div>
+                    <div id="settings-rule-create-row" class="settings-create-row hidden">
+                        <input id="settings-rule-input" type="text" placeholder="输入规则内容，如：所有回答使用中文（保存到当前页签范围）">
+                        <button id="settings-rule-confirm" class="settings-primary-btn">添加</button>
+                    </div>
+                    <div id="settings-rule-list" class="settings-entity-list"></div>
+                </div>
+                <h3 class="settings-subtitle">记忆 <span class="settings-beta">Beta</span></h3>
+                <div class="settings-card settings-manage-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">记忆</div>
+                            <div class="settings-card-desc">允许 AI 记住你历史对话中的相关上下文（按 账号+智能体 隔离，仅你可见）。</div>
+                        </div>
+                        <input id="settings-mem-pref" type="checkbox" class="memory-switch">
+                    </div>
+                    <div id="settings-mem-create-row" class="settings-create-row">
+                        <input id="settings-mem-input" type="text" placeholder="手动添加一条记忆，如：我偏好简洁的回答">
+                        <button id="settings-mem-confirm" class="settings-primary-btn">添加</button>
+                    </div>
+                    <div id="settings-mem-list" class="settings-entity-list"></div>
+                </div>
             </section>
             <!-- 任务与自动化：Agent 任务入口 -->
             <section id="settings-view-tasks" class="settings-view hidden">
@@ -955,7 +985,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=2.75"></script>
+    <script src="js/chat.js?v=2.77"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

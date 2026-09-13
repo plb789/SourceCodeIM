@@ -393,6 +393,7 @@
         settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
         if (view === 'appearance') settingsRenderTheme();
+        if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
     }
 
     // 主题卡片高亮当前主题（与标题栏主题按钮同源 getTheme）
@@ -446,12 +447,8 @@
             settingsRenderTheme();
         });
     });
-    // 聚合入口：规则与记忆/任务历史（复用现有弹窗，先关设置页避免层级叠置）
-    var settingsOpenMem = document.getElementById('settings-open-mem');
-    if (settingsOpenMem) settingsOpenMem.addEventListener('click', function () {
-        settingsClose();
-        memOpenDialog();
-    });
+    // 聚合入口：任务历史（复用现有弹窗，先关设置页避免层级叠置）
+    // 【阶段一百零五修订】"打开规则与记忆管理"按钮已随页内直管改造移除（原弹窗与 memory-btn 入口保留可用）
     var settingsOpenTask = document.getElementById('settings-open-taskhist');
     if (settingsOpenTask) settingsOpenTask.addEventListener('click', function () {
         settingsClose();
@@ -473,6 +470,266 @@
             settingsClose();
         }
     }, true);
+
+    // ===== 阶段一百零五：设置页"规则与记忆"TRAE CN 同款页内直管 =====
+    // 布局：规则卡片（头+范围页签+创建行+条目）/ 记忆卡片（头+总开关+添加行+条目）；
+    // API 与阶段一百零四弹窗同归口 /api/agents/{id}/rules、/api/agents/{id}/memory，双入口并存
+    var settingsRuleScope = 'global'; // 规则页签当前范围（global=全局 / agent=仅本智能体）
+    var settingsRulesData = [];       // 规则全量缓存（一次拉取，前端按页签范围过滤渲染）
+
+    // 空态渲染归口（居中图标+主副两行文字，TRAE 同款）
+    function settingsEmptyAt(listId, main, sub) {
+        var el = document.getElementById(listId);
+        if (!el) return;
+        el.innerHTML = '<div class="settings-empty">' +
+            '<svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>' +
+            '<div class="settings-empty-main"></div><div class="settings-empty-sub"></div></div>';
+        el.querySelector('.settings-empty-main').textContent = main;
+        el.querySelector('.settings-empty-sub').textContent = sub;
+    }
+
+    // 进入"规则与记忆"分类：校验智能体上下文并加载两组数据
+    function settingsRulesEnter() {
+        var idOk = memAgentId() > 0; // 依赖当前会话智能体（memAgentId 为函数声明提升，同作用域可调）
+        var ruleCreate = document.getElementById('settings-rule-create');
+        if (ruleCreate) ruleCreate.disabled = !idOk;
+        var pref = document.getElementById('settings-mem-pref');
+        if (!idOk) {
+            if (pref) { pref.disabled = true; pref.checked = false; }
+            var row = document.getElementById('settings-mem-create-row');
+            if (row) row.classList.add('hidden');
+            settingsEmptyAt('settings-rule-list', '请先选择智能体', '在左侧会话列表选择一个 AI 智能体后再管理规则');
+            settingsEmptyAt('settings-mem-list', '请先选择智能体', '在左侧会话列表选择一个 AI 智能体后再管理记忆');
+            return;
+        }
+        if (pref) pref.disabled = false;
+        var memRow = document.getElementById('settings-mem-create-row');
+        if (memRow) memRow.classList.remove('hidden');
+        sRulesLoad();
+        sMemLoad();
+    }
+
+    // 规则列表：全量拉取后按页签范围过滤（全局=agent_id 0 / 仅本智能体=当前会话智能体 id）
+    function sRulesLoad() {
+        var listEl = document.getElementById('settings-rule-list');
+        if (listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '规则加载失败'); return; }
+                settingsRulesData = res.data.rules || [];
+                sRulesRender();
+            })
+            .catch(function () { showToast('规则加载失败'); });
+    }
+
+    function sRulesRender() {
+        var listEl = document.getElementById('settings-rule-list');
+        if (!listEl) return;
+        var scopeId = settingsRuleScope === 'global' ? 0 : memAgentId();
+        var list = settingsRulesData.filter(function (ru) { return (ru.agent_id || 0) === scopeId; });
+        if (!list.length) {
+            settingsEmptyAt('settings-rule-list', '暂无规则', '点击右上角「+ 创建」以添加你的第一个规则');
+            return;
+        }
+        listEl.innerHTML = '';
+        list.forEach(function (ru) {
+            var item = document.createElement('div');
+            item.className = 'settings-entity-item';
+            var content = document.createElement('span');
+            content.className = 'settings-entity-content';
+            content.textContent = ru.content;
+            content.title = ru.content;
+            // 启用开关（禁用后不注入不删除，可随时恢复；复用弹窗同款 memory-switch 样式）
+            var en = document.createElement('input');
+            en.type = 'checkbox';
+            en.className = 'memory-switch';
+            en.checked = !!ru.enabled;
+            en.title = en.checked ? '已启用（点击禁用）' : '已禁用（点击启用）';
+            en.addEventListener('change', function () {
+                var want = en.checked;
+                fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '/enabled?username=' + kbUsername(), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: want })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '保存失败'); en.checked = !want; return; }
+                        ru.enabled = want;
+                        showToast(want ? '规则已启用' : '规则已禁用（不删除）');
+                    })
+                    .catch(function () { showToast('保存失败'); en.checked = !want; });
+            });
+            var del = document.createElement('button');
+            del.className = 'kb-op-btn';
+            del.textContent = '删除';
+            del.addEventListener('click', function () {
+                fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('规则已删除');
+                        sRulesLoad();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            });
+            item.appendChild(content);
+            item.appendChild(en);
+            item.appendChild(del);
+            listEl.appendChild(item);
+        });
+    }
+
+    // 规则添加：范围=当前页签（global/agent），保存后下轮回答即生效
+    function sRulesAdd() {
+        var input = document.getElementById('settings-rule-input');
+        var content = (input.value || '').trim();
+        if (!content) { showToast('请输入规则内容'); return; }
+        fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content, scope: settingsRuleScope })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
+                showToast('规则已添加，下轮回答即生效');
+                input.value = '';
+                sRulesLoad();
+            })
+            .catch(function () { showToast('添加失败'); });
+    }
+
+    // 记忆：列表+总开关（feature 未配置时禁用开关并提示）+添加+单条删除
+    function sMemLoad() {
+        var listEl = document.getElementById('settings-mem-list');
+        if (listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '记忆加载失败'); return; }
+                var featureOk = !!res.data.feature;
+                var pref = document.getElementById('settings-mem-pref');
+                if (pref) { pref.checked = !!res.data.pref; pref.disabled = !featureOk; }
+                var memRow = document.getElementById('settings-mem-create-row');
+                if (memRow) memRow.classList.toggle('hidden', !featureOk);
+                sMemRender(res.data.memories || []);
+            })
+            .catch(function () { showToast('记忆加载失败'); });
+    }
+
+    function sMemRender(list) {
+        var listEl = document.getElementById('settings-mem-list');
+        if (!listEl) return;
+        if (!list.length) {
+            settingsEmptyAt('settings-mem-list', '暂无记忆', '聊几句或手动添加一条试试');
+            return;
+        }
+        listEl.innerHTML = '';
+        list.forEach(function (m) {
+            var item = document.createElement('div');
+            item.className = 'settings-entity-item';
+            var content = document.createElement('span');
+            content.className = 'settings-entity-content';
+            content.textContent = m.content;
+            content.title = m.content;
+            // 来源标签：手动添加（主题色实底）/ 任务经验（主题色描边）/ 自动提取（灰），与弹窗同规则
+            var tag = document.createElement('span');
+            if (m.source === 'manual') {
+                tag.className = 'kb-item-tag user';
+                tag.textContent = '手动';
+            } else if (m.source === 'agent') {
+                tag.className = 'kb-item-tag agent';
+                tag.textContent = '任务';
+            } else {
+                tag.className = 'kb-item-tag public';
+                tag.textContent = '自动';
+            }
+            var del = document.createElement('button');
+            del.className = 'kb-op-btn';
+            del.textContent = '删除';
+            del.addEventListener('click', function () {
+                fetch('/api/agents/' + memAgentId() + '/memory/' + m.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('记忆已删除');
+                        sMemLoad();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            });
+            item.appendChild(content);
+            item.appendChild(tag);
+            item.appendChild(del);
+            listEl.appendChild(item);
+        });
+    }
+
+    // 记忆手动添加（服务端走去重归口，重复内容会提示已存在）
+    function sMemAdd() {
+        var input = document.getElementById('settings-mem-input');
+        var content = (input.value || '').trim();
+        if (!content) { showToast('请输入记忆内容'); return; }
+        fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
+                showToast('记忆已添加');
+                input.value = '';
+                sMemLoad();
+            })
+            .catch(function () { showToast('添加失败'); });
+    }
+
+    // 设置页规则与记忆交互绑定
+    var sRuleCreate = document.getElementById('settings-rule-create');
+    if (sRuleCreate) sRuleCreate.addEventListener('click', function () {
+        var row = document.getElementById('settings-rule-create-row');
+        row.classList.toggle('hidden');
+        if (!row.classList.contains('hidden')) document.getElementById('settings-rule-input').focus();
+    });
+    document.querySelectorAll('.settings-scope-tab').forEach(function (t) {
+        t.addEventListener('click', function () {
+            settingsRuleScope = t.dataset.scope;
+            document.querySelectorAll('.settings-scope-tab').forEach(function (x) {
+                x.classList.toggle('active', x === t);
+            });
+            sRulesRender(); // 页签切换仅前端过滤，不重新拉取
+        });
+    });
+    var sRuleConfirm = document.getElementById('settings-rule-confirm');
+    if (sRuleConfirm) sRuleConfirm.addEventListener('click', sRulesAdd);
+    var sRuleInput = document.getElementById('settings-rule-input');
+    if (sRuleInput) sRuleInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); sRulesAdd(); }
+    });
+    var sMemConfirm = document.getElementById('settings-mem-confirm');
+    if (sMemConfirm) sMemConfirm.addEventListener('click', sMemAdd);
+    var sMemInput = document.getElementById('settings-mem-input');
+    if (sMemInput) sMemInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); sMemAdd(); }
+    });
+    // 记忆总开关（与弹窗同归口 PUT /memory/pref；关闭后不再提取与注入，已存记忆保留）
+    var sMemPref = document.getElementById('settings-mem-pref');
+    if (sMemPref) sMemPref.addEventListener('change', function () {
+        var want = sMemPref.checked;
+        fetch('/api/agents/' + memAgentId() + '/memory/pref?username=' + kbUsername(), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: want })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '保存失败'); sMemPref.checked = !want; return; }
+                showToast(want ? '已开启记忆' : '已关闭记忆（已存记忆保留）');
+            })
+            .catch(function () { showToast('保存失败'); sMemPref.checked = !want; });
+    });
 
     // ===== 头像降级修复：导航栏左上角头像统一入口 =====
     // 原实现：各处直接 currentAvatarEl.src 赋值，新注册账号 avatar 为空时 img 空 src 被浏览器渲染为破图（碎图标）
@@ -14307,7 +14564,9 @@
         // 原 querySelector('.user-list') 仅命中 DOM 序第一的会话列表，通讯录与 AI Tab 列表从未挂上自绘滑块
         // 阶段七十二：追加 AI 多会话列表 #ai-session-list（超过 5 条后滚动查看；
         // 面板初始带 hidden 但 DOM 常驻，启动时可直接注册，滚轮/悬停行为与其余面板一致）
-        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list']
+        // 阶段一百零五：追加设置页规则/记忆列表 #settings-rule-list/#settings-mem-list
+        // （同坑：TRAE 版设置页直管列表，DOM 静态常驻但未注册导致限高可滚却不显示滑块，2026-09-13 用户反馈）
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list']
             .forEach(function (sel) {
                 var el = document.querySelector(sel);
                 if (el) initOsb(el);

@@ -8624,6 +8624,188 @@ html.m .ms-actions {
     overflow: hidden;
 }
 
+/* ===== 阶段一百零五：设置页"规则与记忆"TRAE CN 同款页内直管布局（卡片头/范围页签/创建行/条目/空态） ===== */
+
+/* 管理卡片：内部区块之间用分隔线（TRAE 卡片同款） */
+.settings-manage-card {
+    padding: 0;
+    overflow: hidden;
+}
+
+/* 卡片头：左标题+描述，右操作按钮 */
+.settings-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+}
+
+.settings-card-head-text {
+    min-width: 0;
+}
+
+.settings-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.settings-card-desc {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+/* 创建按钮（主题色实底小按钮，"+ 创建"） */
+.settings-primary-btn {
+    flex-shrink: 0;
+    padding: 7px 16px;
+    border: none;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.settings-primary-btn:hover {
+    opacity: 0.88;
+}
+
+/* 范围页签（全局/仅本智能体）：底部主题色下划线，TRAE 同款 */
+.settings-card-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px;
+    border-top: 1px solid var(--border);
+}
+
+.settings-scope-tab {
+    border: none;
+    background: none;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s;
+}
+
+.settings-scope-tab:hover {
+    color: var(--text);
+}
+
+.settings-scope-tab.active {
+    color: var(--primary);
+    font-weight: 600;
+    border-bottom-color: var(--primary);
+}
+
+/* 创建行内输入行 */
+.settings-create-row {
+    display: flex;
+    gap: 10px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+}
+
+.settings-create-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+}
+
+.settings-create-row input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+/* 记忆卡片头行：标题+描述 | 总开关 */
+.settings-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+}
+
+/* 条目列表：区块间分隔线；限高内部滚动（内容过多时用户可滚动查看，2026-09-13 用户反馈），
+   悬停浮现的自绘滑块由阶段四十五全局委托自动接管（mouseover 向上找可滚动容器即挂滑块，无需注册） */
+.settings-entity-list {
+    max-height: 320px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+}
+
+.settings-entity-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+}
+
+.settings-entity-item + .settings-entity-item {
+    border-top: 1px solid var(--border);
+}
+
+.settings-entity-content {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Beta 灰标（记忆标题旁，TRAE 同款） */
+.settings-beta {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--primary);
+    font-size: 11px;
+    font-weight: 500;
+    vertical-align: 2px;
+}
+
+/* 空态（居中图标+主副两行文字，TRAE 同款） */
+.settings-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 34px 16px;
+    text-align: center;
+}
+
+.settings-empty svg {
+    color: var(--text-secondary);
+    opacity: 0.55;
+}
+
+.settings-empty-main {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.settings-empty-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 /* 页签栏：规则 / 记忆 切换 */
 .memtabs {
     display: flex;

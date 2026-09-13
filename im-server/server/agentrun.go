@@ -313,9 +313,11 @@ func InitAgent(cfg *config.Config) {
 	}
 	// 阶段六十七：服务重启遗留态归口——内存任务注册表随进程消失，落库的 queued/running 记录
 	// 已不可能恢复（queued 从未启动、running 执行中断），统一标记 failed 防任务历史出现幻影进行态
+	// 阶段一百零五修复（2026-09-13 启动日志误报）：链式调用返回 *gorm.DB 指针恒非 nil，
+	// 原实现直接 `if err := ...Updates(...)` 判空导致每次启动必误报 ERROR——须取 .Error 属性
 	if err := store.DB.Model(&model.AgentTaskRecord{}).
 		Where("status IN ?", []string{"queued", "running"}).
-		Updates(map[string]interface{}{"status": "failed", "error": "服务重启，任务中断"}); err != nil {
+		Updates(map[string]interface{}{"status": "failed", "error": "服务重启，任务中断"}).Error; err != nil {
 		logger.Error("Agent 遗留任务状态清理失败: %v", err)
 	}
 	// 阶段六十五：执行步骤留痕表迁移
