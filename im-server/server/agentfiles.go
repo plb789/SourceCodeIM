@@ -166,7 +166,7 @@ func (s *Server) wsFileDispatch(username, reqID, op, path, content string) *wsFi
 			s.wsCloneProgressSend(username, reqID, pct, stage, speed, sent)
 		}
 	}
-	return wsFileServerOp(username, reqID, op, path, content, push)
+	return wsFileServerOp(s, username, reqID, op, path, content, push)
 }
 
 // wsProjNameFromContent 从 proj_* 请求 content 提取项目名（proj_open=proj 字段 / proj_clone=name 字段）
@@ -277,8 +277,9 @@ func (s *Server) handlePcFileResp(c *Client, msg *protocol.Message) {
 	}
 }
 
-// wsFileServerOp 服务端工作区执行（PC 离线回退）；push 仅 proj_clone 使用（进度中间帧推送）
-func wsFileServerOp(username, reqID, op, path, content string, push wsProgressFn) *wsFileResult {
+// wsFileServerOp 服务端工作区执行（PC 离线回退）；push 仅 proj_clone 使用（进度中间帧推送）；
+// 阶段一百零五：gitai 流式需 Server 的 sendToUser 推送通道，实例由调用方传入
+func wsFileServerOp(s *Server, username, reqID, op, path, content string, push wsProgressFn) *wsFileResult {
 	switch op {
 	case "tree":
 		return wsServerTree(username, path)
@@ -316,7 +317,7 @@ func wsFileServerOp(username, reqID, op, path, content string, push wsProgressFn
 		return wsServerGit(username, content)
 	case "gitai":
 		// 源代码管理 AI（提交信息生成 / 智能体审查）：模型服务归口服务端，diff 由前端收集上行
-		return wsServerGitAI(username, content)
+		return s.wsServerGitAI(username, content)
 	}
 	return &wsFileResult{Error: "未知操作"}
 }
@@ -879,21 +880,44 @@ type wsGitAIReq struct {
 	Target string `json:"target,omitempty"` // review 目标分支
 }
 
-// wsGitAIMsgClean 提交信息清洗：去代码块围栏/引号/换行，压成一行，限长
+// wsGitAIMsgClean 提交信息清洗（阶段一百零五改造）：去围栏标记/引号；标题行压成一行限 110 字；
+// 标题后保留一个分隔空行；正文保留「- 」多行列表结构与缩进（TRAE 同款），内部空行丢弃，总长限 2000 字符
 func wsGitAIMsgClean(s string) string {
-	s = strings.NewReplacer("\r", " ", "\n", " ", "`", "", "\"", "", "'", "", "；", "; ", "。", ".").Replace(s)
-	s = strings.Join(strings.Fields(s), " ")
-	if s != "" && s[0] == ' ' {
-		s = strings.TrimSpace(s)
+	s = strings.NewReplacer("`", "", "\"", "", "'", "").Replace(s)
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	var out []string
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed == "" {
+			// 空行：仅标题之后保留一个分隔空行（前导空行/正文内部空行丢弃）
+			if len(out) == 1 {
+				out = append(out, "")
+			}
+			continue
+		}
+		if len(out) == 0 {
+			// 标题行：压空格限长（时间线/提交历史单行显示口径）
+			t := strings.Join(strings.Fields(trimmed), " ")
+			if r := []rune(t); len(r) > 110 {
+				t = string(r[:110]) + "…"
+			}
+			out = append(out, t)
+			continue
+		}
+		// 正文行：保留缩进（列表续行），去行尾空白
+		out = append(out, strings.TrimRight(ln, " \t"))
 	}
-	if r := []rune(s); len(r) > 110 {
-		s = string(r[:110]) + "…"
+	res := strings.TrimRight(strings.Join(out, "\n"), "\n ")
+	if r := []rune(res); len(r) > 2000 {
+		res = string(r[:2000]) + "\n…（说明过长已截断）"
 	}
-	return s
+	return res
 }
 
-// wsServerGitAI AI 提交信息/审查报告生成（复用聊天同源模型服务；取首个可用 provider）
-func wsServerGitAI(username, content string) *wsFileResult {
+// wsServerGitAI AI 提交信息/审查报告生成（复用聊天同源模型服务；取首个可用 provider）。
+// 阶段一百零五（用户反馈 2026-09-13）：commitmsg 模式改流式——模型增量经 AGENT_EVENT 通道
+// 以 type=git_ai_delta 实时下发（TRAE CN 同款打字机填入提交框），最终响应仍归口 ws_file_op 校准。
+func (s *Server) wsServerGitAI(username, content string) *wsFileResult {
 	var r wsGitAIReq
 	if err := json.Unmarshal([]byte(content), &r); err != nil {
 		return &wsFileResult{Error: "gitai 请求解析失败"}
@@ -918,22 +942,74 @@ func wsServerGitAI(username, content string) *wsFileResult {
 		return &wsFileResult{Error: "服务端尚未配置模型服务（AI providers），无法使用智能提交信息/审查"}
 	}
 	var sys string
+	// 阶段一百零五补强（用户反馈 1ff9131 只有标题）：按 diff 统计文件数注入硬性要求——
+	// 多文件变更必须逐条正文，模型仍只回标题时带纠偏指令自动重试一次（见下方 commitmsg 清洗后补检）
+	nFiles := strings.Count(diff, "diff --git ")
 	if r.Mode == "review" {
 		sys = "你是资深代码审查员。审查给出的分支变更 diff（相对目标分支 " + strings.TrimSpace(r.Target) +
 			" 的三点差异），输出 Markdown 审查报告，结构：## 变更总结（3-6 条要点，逐条概述改了什么、为什么）、" +
 			"## 潜在问题（按严重程度列出，含位置与原因；确无问题则写\"未发现明显问题\"）、## 改进建议（可执行的具体建议）。全中文，简洁专业。"
 	} else {
-		sys = "你是提交信息生成助手。根据 git diff 生成一条符合 Conventional Commits 规范的中文提交信息：" +
-			"格式为 type(scope): 描述，type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略；" +
-			"描述概括本次变更的核心内容与目的。只输出这一行文本，不要任何解释、引号或代码块标记。"
+		// 阶段一百零五（用户反馈 2026-09-13）：原实现只生成单行标题且清洗时压掉全部换行——
+		// 多文件提交没有逐文件说明（TRAE CN 同款为「标题+空行+逐条变更说明」）。改为多行格式。
+		sys = "你是提交信息生成助手。根据 git diff 生成符合 Conventional Commits 规范的中文提交信息。"
+		if nFiles >= 2 {
+			sys += "本次变更涉及 " + strconv.Itoa(nFiles) + " 个文件（diff 可能被截断，实际数量只会更多），每个文件都必须在正文中逐条说明。"
+		}
+		sys += "格式：" +
+			"第一行为标题：type(scope): 描述（type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略），概括本次变更核心；" +
+			"随后空一行，正文用「- 」开头的列表逐条说明变更：多个文件时按文件（或逻辑分组）逐条写明改了什么、为什么改，" +
+			"同一条目下的补充说明用两空格缩进的续行；" +
+			"仅当只改动 1 个文件且改动极小（如仅改错别字、调整一个数值）时才允许省略正文只留标题。" +
+			"只输出提交信息本身，不要解释、引号或代码块标记。"
+		// 原提示词（「单文件小改动可不加正文」的口子被模型扩大到多文件删除类变更，导致只回标题，已废弃保留备查）：
+		// sys = "你是提交信息生成助手。根据 git diff 生成符合 Conventional Commits 规范的中文提交信息，格式：" +
+		// 	"第一行为标题：type(scope): 描述（type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略），概括本次变更核心；" +
+		// 	"随后空一行，正文用「- 」开头的列表逐条说明变更：多个文件时按文件（或逻辑分组）逐条写明改了什么、为什么改，" +
+		// 	"同一条目下的补充说明用两空格缩进的续行；单文件小改动可不加正文只留标题。" +
+		// 	"只输出提交信息本身，不要解释、引号或代码块标记。"
 	}
 	agent := &AIRunAgent{Name: "Git助手", Provider: prov}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
-	defer cancel()
-	text, _, err := aiStreamChat(ctx, agent, []aiChatMessage{
-		{Role: "system", Content: sys},
-		{Role: "user", Content: "git diff:\n```\n" + diff + "\n```"},
-	}, func(string) {})
+	// 流式增量归口：commitmsg 模式经 AGENT_EVENT 实时下发打字机增量（审查报告走标签页一次性展示，不流式）
+	onDelta := func(chunk string) {
+		if r.Mode != "commitmsg" || chunk == "" {
+			return
+		}
+		data, _ := json.Marshal(map[string]interface{}{"type": "git_ai_delta", "text": chunk})
+		msg := protocol.Message{
+			MsgType:   protocol.MsgTypeAgentEvent,
+			FromUser:  "Git助手",
+			ToUser:    username,
+			Content:   string(data),
+			Timestamp: time.Now().Unix(),
+		}
+		out, _ := json.Marshal(msg)
+		s.sendToUser(username, out)
+	}
+	// gitai_reset：清空提交框打字机残文（仅重试前使用，前端同 type 处理）
+	sendReset := func() {
+		data, _ := json.Marshal(map[string]interface{}{"type": "git_ai_reset"})
+		msg := protocol.Message{
+			MsgType:   protocol.MsgTypeAgentEvent,
+			FromUser:  "Git助手",
+			ToUser:    username,
+			Content:   string(data),
+			Timestamp: time.Now().Unix(),
+		}
+		out, _ := json.Marshal(msg)
+		s.sendToUser(username, out)
+	}
+	// 单次 AI 调用归口（150s 超时；重试共用同一套 diff 与增量通道）
+	callAI := func(prompt string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+		defer cancel()
+		text, _, err := aiStreamChat(ctx, agent, []aiChatMessage{
+			{Role: "system", Content: prompt},
+			{Role: "user", Content: "git diff:\n```\n" + diff + "\n```"},
+		}, onDelta)
+		return text, err
+	}
+	text, err := callAI(sys)
 	if err != nil {
 		return &wsFileResult{Error: "AI 调用失败：" + err.Error()}
 	}
@@ -943,6 +1019,17 @@ func wsServerGitAI(username, content string) *wsFileResult {
 	}
 	if r.Mode == "commitmsg" {
 		text = wsGitAIMsgClean(text)
+		// 阶段一百零五补强（用户反馈 1ff9131）：多文件变更但模型只回了单行标题——
+		// 先下发 git_ai_reset 清空打字机残文，再带纠偏指令重试一次；重试仍无正文则按原样放行
+		if nFiles >= 2 && !strings.Contains(text, "\n") {
+			sendReset()
+			logger.Info("AI 提交信息多文件仅标题，自动纠偏重试（用户 %s 文件数 %d）", username, nFiles)
+			if text2, err2 := callAI(sys + "\n注意：上一次你只返回了标题行，正文缺失。本次必须输出：标题 + 空一行 + 「- 」开头的多行正文列表，逐个文件说明改了什么、为什么改。"); err2 == nil {
+				if t := strings.TrimSpace(text2); t != "" && strings.Contains(t, "\n") {
+					text = wsGitAIMsgClean(t)
+				}
+			}
+		}
 	}
 	return wsGitResultPack(map[string]interface{}{"mode": r.Mode, "text": text})
 }

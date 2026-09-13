@@ -489,7 +489,8 @@
     }
 
     // 进入"规则与记忆"分类：校验智能体上下文并加载两组数据
-    function settingsRulesEnter() {
+    // silent=静默刷新（会话切换联动用）：不清空列表不显示"加载中"，数据到达后原位重绘，避免残影闪烁
+    function settingsRulesEnter(silent) {
         var idOk = memAgentId() > 0; // 依赖当前会话智能体（memAgentId 为函数声明提升，同作用域可调）
         var ruleCreate = document.getElementById('settings-rule-create');
         if (ruleCreate) ruleCreate.disabled = !idOk;
@@ -505,14 +506,14 @@
         if (pref) pref.disabled = false;
         var memRow = document.getElementById('settings-mem-create-row');
         if (memRow) memRow.classList.remove('hidden');
-        sRulesLoad();
-        sMemLoad();
+        sRulesLoad(silent);
+        sMemLoad(silent);
     }
 
     // 规则列表：全量拉取后按页签范围过滤（全局=agent_id 0 / 仅本智能体=当前会话智能体 id）
-    function sRulesLoad() {
+    function sRulesLoad(silent) {
         var listEl = document.getElementById('settings-rule-list');
-        if (listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
         fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
@@ -601,10 +602,10 @@
             .catch(function () { showToast('添加失败'); });
     }
 
-    // 记忆：列表+总开关（feature 未配置时禁用开关并提示）+添加+单条删除
-    function sMemLoad() {
+    // 记忆：列表+总开关（feature 未配置时禁用开关并提示）+添加+单条删除（silent 同规则列表）
+    function sMemLoad(silent) {
         var listEl = document.getElementById('settings-mem-list');
-        if (listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
         fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
@@ -4215,6 +4216,11 @@
     }
 
     function renderAgentMcpList() {
+        // 阶段一百零五：签名比对防闪烁——面板打开期间 1.2 秒轮询会话状态，每次回调都调本函数，
+        // 状态无变化时跳过重建（原实现每次清空重建，MCP 面板开着列表就持续闪烁且悬停态丢失）
+        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus]);
+        if (sig === renderAgentMcpList._sig) return;
+        renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
         if (!agentMcpServers.length) {
             var empty = document.createElement('div');
@@ -5209,6 +5215,13 @@
         if (d.active !== 'task' && d.active !== 'changes') d.active = hasTask ? 'task' : 'changes';
         if (d.active === 'task' && !hasTask) d.active = 'changes';
         if (d.active === 'changes' && !hasChanges) d.active = hasTask ? 'task' : 'changes';
+        // 阶段一百零五：签名比对防闪烁——停靠栏由 Agent 事件高频驱动（进度/todo 逐步更新），
+        // 渲染输入无变化时跳过重建（原实现每次清空重建面板，任务执行期间反复闪烁）
+        var dockSig = JSON.stringify([d.active, hasTask, hasChanges,
+            taskSt ? [taskSt.goal, taskSt.todoDone, taskSt.todoTotal, taskSt.todoRaw] : null,
+            ch ? [ch.pending, ch.totalAdds, ch.totalDels, ch.changes] : null]);
+        if (dockSig === d._sig) return;
+        d._sig = dockSig;
         d.root.classList.remove('hidden');
         d.taskTab.classList.toggle('active', d.active === 'task');
         d.chTab.classList.toggle('active', d.active === 'changes');
@@ -7973,13 +7986,16 @@
         var msg = document.createElement('textarea');
         msg.className = 'ws-git-msg';
         msg.rows = 1;
-        msg.placeholder = '提交变更内容（Ctrl+Enter 提交）';
+        // 阶段一百零五：占位缩短为单行（原"提交变更内容（Ctrl+Enter 提交）"在窄面板折行，
+        // 撑高输入框两倍；完整提示移入 title），高度上限 96→64px（约 3 行，TRAE CN 同款紧凑）
+        msg.placeholder = '提交信息';
+        msg.title = '提交变更内容，Ctrl+Enter 提交';
         msg.value = wsPanel.gitMsg && wsPanel.gitMsg.value || ''; // 重渲染保留输入
         wsPanel.gitMsg = msg;
-        // 自动增高：单行起步（Trae CN 同款高度），换行内容多时最高撑到 4 行左右
+        // 自动增高：单行起步（Trae CN 同款高度），换行内容多时最高撑到 3 行左右
         function growMsg() {
             msg.style.height = 'auto';
-            msg.style.height = Math.min(msg.scrollHeight, 96) + 'px';
+            msg.style.height = Math.min(msg.scrollHeight, 64) + 'px';
         }
         wsPanel.gitMsgGrow = growMsg;
         msg.addEventListener('input', growMsg);
@@ -8232,6 +8248,8 @@
     function wsPanelGitDoCommit(andPush) {
         var g = wsPanel.git;
         if (g.busy) return;
+        // 阶段一百零五：AI 生成流式中禁止提交（框内是未完成的打字机文本，防误提交半截信息）
+        if (g.aiBusy || wsGitAIStreaming) { showToast('AI 正在生成提交信息，请稍候'); return; }
         var msg = wsPanel.gitMsg;
         var text = (msg && msg.value || '').trim();
         if (!text) { showToast(g.amend ? '请填写修改后的提交信息' : '请填写提交信息'); if (msg) msg.focus(); return; }
@@ -8339,11 +8357,25 @@
         }, 0);
     }
 
-    // AI 生成提交信息：暂存区 diff 优先（即将提交的内容最有代表性），为空回退全部工作区变更
+    // AI 生成提交信息：暂存区 diff 优先（即将提交的内容最有代表性），为空回退全部工作区变更。
+    // 阶段一百零五：流式打字机（TRAE CN 同款）——服务端经 AGENT_EVENT 下发 git_ai_delta 增量实时填入
+    // 提交框，最终响应到达后以清洗后全文校准；生成期间清空原输入，失败恢复原值
+    var wsGitAIStreaming = false; // 生成中标记（delta 事件与请求响应的窗口期判定）
+    function wsGitAIDelta(text) {
+        if (!wsGitAIStreaming) return;
+        var msg = wsPanel.gitMsg;
+        if (!msg) return;
+        msg.value += text;
+        if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
+    }
     function wsPanelGitGenMsg(btn) {
         var g = wsPanel.git;
         if (g.aiBusy) return;
         g.aiBusy = true;
+        var msg = wsPanel.gitMsg;
+        var prev = msg ? msg.value : '';
+        if (msg) { msg.value = ''; if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow(); }
+        wsGitAIStreaming = true;
         btn.classList.add('loading');
         var diffTxt = '';
         wsPanelGitReq({ sub: 'diffcached' }).then(function (d) {
@@ -8353,14 +8385,18 @@
             if (!diffTxt.trim()) throw new Error('没有可分析的变更（暂存区与工作区均为空）');
             return wsPanelGitAIReq({ mode: 'commitmsg', diff: diffTxt });
         }).then(function (r) {
+            wsGitAIStreaming = false; // 先停 delta 再校准，防响应文本被增量覆盖
             if (wsPanel.gitMsg && r.text) {
                 wsPanel.gitMsg.value = r.text;
                 if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
                 wsPanel.gitMsg.focus();
             }
         }).catch(function (err) {
+            wsGitAIStreaming = false;
+            if (msg) { msg.value = prev; if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow(); } // 失败恢复原输入
             showToast('AI 提交信息：' + (err && err.message || err));
         }).then(function () {
+            wsGitAIStreaming = false;
             g.aiBusy = false;
             btn.classList.remove('loading');
         });
@@ -8521,6 +8557,11 @@
             if (!el || g.log === null) return;
             var old = el.querySelector('.ws-git-log');
             var fresh = wsGitLogSection(g);
+            // 阶段一百零五：签名比对防闪烁——提交/推送后重拉历史，内容（分支/提交列表/未推送数）
+            // 无变化时跳过整区替换（原实现每次 replaceWith，悬停详情卡/滚动位置丢失且视觉闪烁）
+            var sig = JSON.stringify([g.branch, g.log, g.ahead]);
+            if (old && sig === wsPanelGitLoadLog._sig) return;
+            wsPanelGitLoadLog._sig = sig;
             if (old) {
                 wsGitCommitCardHide(); // 旧分区被替换后其悬停行消失，先收起详情卡防悬空
                 // 继承旧分区的行内固定高度：异步刷新若不继承，历史区会被内容撑高、拖拽条失效，
@@ -10308,6 +10349,16 @@
         if (msg.to_user !== IMSocket.getUsername()) return;
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
+        // 阶段一百零五：AI 提交信息流式增量（无 task_id，不走任务卡分发；生成中打字机填入提交框）
+        if (ev && ev.type === 'git_ai_delta') { wsGitAIDelta(ev.text || ''); return; }
+        // 阶段一百零五补强：多文件仅标题时服务端自动纠偏重试，重试前清空提交框第一次的残文
+        if (ev && ev.type === 'git_ai_reset') {
+            if (wsGitAIStreaming && wsPanel.gitMsg) {
+                wsPanel.gitMsg.value = '';
+                if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
+            }
+            return;
+        }
         if (!ev || !ev.task_id) return;
         // 阶段一百零二：Agent 任务扣后积分余额实时刷新（done 帧携带，服务端归口；
         // 与当前查看会话无关——切走会话/最小化时完结也要刷新标题栏 ⚡ 积分）
@@ -10981,6 +11032,12 @@
                 navBadge.textContent = ''; // 归零时同步清空文本，避免隐藏态残留旧数字
             }
         }
+        // 阶段一百零五：签名比对防闪烁——每条消息/CONV_LIST 推送都会调本函数，
+        // 数据无变化时跳过清空重建（原实现每次 innerHTML='' 全量重建，连续消息/群聊场景
+        // 会话列表反复闪烁、头像重载、悬停态丢失；签名含 高亮会话+列表全字段+好友备注头像）
+        var convSig = JSON.stringify([currentChatUser, convList, friendList]);
+        if (convSig === renderConvList._sig) return;
+        renderConvList._sig = convSig;
         convListEl.innerHTML = '';
         if (convList.length === 0) {
             var empty = document.createElement('li');
@@ -11504,6 +11561,13 @@
         // 阶段七十九：停靠栏按新会话归口重绘（该智能体的运行任务/待审查变更页签；非 AI 会话整栏隐藏，
         // 待重放接口返回后补充登记 pending 变更）
         agentDockSync();
+        // 阶段一百零五修复（2026-09-13 用户反馈"仅本智能体规则在切换智能体后仍可见"）：
+        // 设置页停留在"规则与记忆"分类时切换会话，规则/记忆列表须按新会话智能体重载——
+        // 原实现仅进入分类时加载一次，切换会话后列表仍显示上一智能体的数据
+        if (settingsMask && !settingsMask.classList.contains('hidden')) {
+            var srv = document.getElementById('settings-view-rules');
+            if (srv && !srv.classList.contains('hidden')) settingsRulesEnter(true); // 静默刷新防残影闪烁
+        }
         // 阶段四十：切换会话清空引用条（防止把 A 会话的消息引用发到 B 会话）
         clearQuoteTarget();
         // 阶段七十：清空 AGENT_RUN 回显待达标记（防会话切换后误吞后续 AI 问答的"思考中"指示）
@@ -13257,6 +13321,11 @@
 
     function kbRender() {
         if (!kbData) return;
+        // 阶段一百零五：签名比对防闪烁——5 秒轮询展开面板每次回调都会重渲染，
+        // 数据无变化时跳过（原实现弹窗开着每 5 秒整弹窗清空重建，展开/悬停交互被打断）
+        var ksig = JSON.stringify([kbData, kbFilesCache, kbExpanded]);
+        if (ksig === kbRender._sig) return;
+        kbRender._sig = ksig;
         // 状态行：勾选语义 + embedding 通道提示（未配置时可建库但不可向量化，服务端归口下发）
         kbStatusEl.innerHTML = kbData.embed_enabled
             ? '勾选的知识库对所有 AI 助手对话生效，命中参考资料自动注入（每问前 ' + kbData.top_k + ' 条）。向量模型：' + (kbData.model || '-')
