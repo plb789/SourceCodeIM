@@ -9525,6 +9525,7 @@ body.browser-resizing .browser-web-frame {
     padding: 0 6px;
     flex: none;
     background: var(--chat-bg);
+    user-select: none; /* 标签栏文字禁止按住左键拖选（标签名是操作区不是文本区，用户反馈 2026-09-14） */
 }
 
 /* 标签条底线：激活标签以自身不透明背景盖住该线，实现与下方内容区无缝融合 */
@@ -9740,8 +9741,12 @@ body.browser-resizing .browser-web-frame {
     font-size: 12px;
     line-height: 1.2;
     white-space: nowrap;
-    overflow: hidden;
+    overflow-x: auto; /* 阶段一百一十：符号段加入后可能超宽，横向滚动查看（隐藏原生滚动条，样式规约） */
+    overflow-y: hidden;
+    scrollbar-width: none;
 }
+
+.browser-crumbs::-webkit-scrollbar { display: none; }
 
 .browser-crumbs .bc-seg {
     flex: none;
@@ -9759,6 +9764,119 @@ body.browser-resizing .browser-web-frame {
 .browser-crumbs .bc-sep {
     flex: none;
     color: var(--border);
+}
+
+/* 阶段一百一十：TRAE CN 同款符号段——函数ƒ(紫)/类◇(蓝)，可点跳转编辑器对应行（悬停主题色） */
+.browser-crumbs .bc-sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.browser-crumbs .bc-sym:hover {
+    color: var(--primary);
+}
+
+.bc-sym-ico {
+    font-style: normal;
+    font-weight: 700;
+    font-size: 11px;
+    line-height: 1;
+    flex: none;
+}
+
+.bc-sym-ico.fn { color: #c586c0; }
+.bc-sym-ico.cls { color: #569cd6; }
+
+/* 阶段一百一十(2)：符号折叠展开段"…"与全量符号菜单（TRAE CN 同款折叠交互；自绘弹层挂 body） */
+.browser-crumbs .bc-more {
+    cursor: pointer;
+    color: var(--text-light);
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 0 2px;
+}
+
+.browser-crumbs .bc-more:hover {
+    color: var(--primary);
+}
+
+.bc-sym-menu {
+    position: fixed;
+    z-index: 1660; /* 浏览区面板(1600)之上、系统级弹窗(1700+)之下 */
+    min-width: 180px;
+    max-width: 320px;
+    max-height: 340px;
+    display: flex;
+    flex-direction: column;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    font-size: 12px;
+    overflow: hidden;
+}
+
+.bc-sym-menu-head {
+    flex: none;
+    padding: 6px 10px;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+}
+
+.bc-sym-menu-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto; /* 滚动条走全局自绘样式 */
+    padding: 4px 0;
+}
+
+.bc-sym-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.bc-sym-menu-item:hover {
+    background: var(--hover);
+}
+
+.bc-sym-menu-item .nm {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bc-sym-menu-item .ln {
+    margin-left: auto;
+    padding-left: 12px;
+    color: var(--text-light);
+    font-size: 11px; /* 同名符号（声明+定义）靠行号区分 */
+}
+
+/* 阶段一百一十(3)：树形折叠三角（TRAE CN 同款）——有子符号显示 ▾/▸，叶子占位对齐 */
+.bc-sym-menu-item .tri {
+    flex: none;
+    width: 12px;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--text-light);
+    text-align: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.bc-sym-menu-item .tri:hover {
+    color: var(--primary);
+}
+
+.bc-sym-menu-item .tri.leaf {
+    cursor: default;
 }
 
 /* 阶段九十二：浏览区展开时通栏浮层避让左侧浏览区（--browser-w 由 JS 同步；浏览区居中、聊天在右） */

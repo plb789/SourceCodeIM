@@ -234,6 +234,18 @@
         .fv-g-mod { border-left-color: #316dca; }
         .fv-g-del { position: relative; }
         .fv-g-del::before { content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 9px; height: 3px; background: #cf222e; border-radius: 2px; }
+        /* 阶段一百一十一：变更整行背景（TRAE CN 同款：新增绿底/修改蓝底）+ 变更导航胶囊 */
+        .fv-tl-add { background: rgba(46, 160, 67, 0.16); }
+        .fv-tl-mod { background: rgba(56, 139, 253, 0.15); }
+        .fv-task-nav {
+            flex: none; display: inline-flex; align-items: center; gap: 1px;
+            padding: 0 3px; height: 24px; border: 1px solid var(--fv-border); border-radius: 12px;
+            background: var(--fv-panel); font-size: 11px; color: var(--fv-text);
+        }
+        .fv-task-nav.hidden { display: none; }
+        .fv-nav-btn { border: none; background: transparent; color: var(--fv-text); font-size: 15px; line-height: 1; width: 18px; height: 20px; cursor: pointer; border-radius: 4px; padding: 0; }
+        .fv-nav-btn:hover { background: rgba(128, 128, 128, 0.2); }
+        #fv-nav-pos { min-width: 30px; text-align: center; color: var(--fv-text-light); }
         /* pptx */
         .fv-pptx { padding: 16px; text-align: center; }
         .fv-pptx-bar { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -268,7 +280,12 @@
         <button id="fv-btn-save" class="fv-btn primary hidden">保存</button>
         <button id="fv-btn-keep" class="fv-btn primary hidden">保留变更</button>
         <button id="fv-btn-revert" class="fv-btn hidden">撤销变更</button>
-        <button id="fv-btn-cancel" class="fv-btn hidden">取消</button>
+        <button id="fv-btn-cancel" class="fv-btn hidden">锁定</button>
+        <div id="fv-task-nav" class="fv-task-nav hidden" title="变更导航（任务文件=Agent 改动位置；普通文件=本次未保存编辑）">
+            <button id="fv-nav-prev" class="fv-nav-btn" title="上一处变更">‹</button>
+            <span id="fv-nav-pos">1/1</span>
+            <button id="fv-nav-next" class="fv-nav-btn" title="下一处变更">›</button>
+        </div>
     </div>
     <div id="fv-body"></div>
     <div id="fv-diff-wrap">
@@ -387,10 +404,11 @@
                 window.addEventListener('blur', fvCloseCtxMenu);
             }, 0);
         }
-        // fvAttachCtxMenu 给编辑器挂中文右键菜单：domOwner 提供容器 DOM（普通编辑器/diff 编辑器
-        // 均有 getDomNode），actEditor 提供命令来源（diff 需用 getModifiedEditor 取内部编辑器）
+        // fvAttachCtxMenu 给编辑器挂中文右键菜单：domOwner 提供容器 DOM（普通编辑器传编辑器实例
+        // 自带 getDomNode；diff 编辑器实例不暴露 getDomNode，直接传容器 #fv-diff），
+        // actEditor 提供命令来源（diff 需用 getModifiedEditor 取内部编辑器）
         function fvAttachCtxMenu(domOwner, actEditor, readonly) {
-            var dom = domOwner.getDomNode();
+            var dom = (typeof domOwner.getDomNode === 'function') ? domOwner.getDomNode() : domOwner;
             if (!dom || dom.__fvCtxHooked) return;
             dom.__fvCtxHooked = true;
             dom.addEventListener('contextmenu', function (e) {
@@ -421,6 +439,111 @@
                 fvShowCtxMenu(e.clientX, e.clientY, items);
             }, true); // 捕获阶段：先于 Monaco 内置 contextmenu 处理器（bubble），拦下即不再弹英文菜单
         }
+
+        // ===== 阶段一百一十：TRAE CN 同款代码符号面包屑 =====
+        // Monaco 独立版仅 TS/JS/HTML/CSS/JSON 内置符号提供者，C++/Go/Rust 等没有；此处自扫
+        // （逐行轻量正则，全语言通用，行号与编辑器行号一致，导航用途足够）。结果经
+        // viewerBridge().reportSymbols 推给宿主页渲染面包屑符号段，点击经 __fvReveal 跳回编辑器。
+        // 树形层级：C系按花括号深度、Python 按缩进推导父子关系（depth/hasKids 供菜单折叠展开）
+        function fvScanSymbols(text, ext) {
+            var out = [];
+            if (!text) return out;
+            var lines = String(text).split('\n');
+            var py = (ext || '').toLowerCase() === 'py';
+            // 控制流关键字不作函数名（if/for/while 等带 ( 的行不是声明）
+            var ctl = /^(if|for|while|switch|catch|return|else|do|elif|try|finally|with|foreach|using|lock|throw)$/;
+            // 未闭合祖先符号栈：新符号 scope 更小或同级则逐层弹出，栈顶即父符号
+            var stack = [];
+            var d = 0; // 花括号深度（C系）
+            function pushSym(name, kind, line, scope) {
+                var s = { name: name, kind: kind, line: line, depth: 0, hasKids: false, scope: scope };
+                while (stack.length && stack[stack.length - 1].scope >= scope) stack.pop();
+                if (stack.length) {
+                    s.depth = stack[stack.length - 1].depth + 1;
+                    stack[stack.length - 1].hasKids = true;
+                }
+                stack.push(s);
+                out.push(s);
+            }
+            // 符号自身作用域深度：签名行自带 { 直接用；换行大括号风格向后看 3 行找 "{"；
+            // 无括号（原型/单行箭头）按 +1 兜底（后续同级符号会正确将其弹出）
+            function braceScope(startD, i, raw) {
+                var net = raw.split('{').length - raw.split('}').length;
+                if (net > 0) return startD + net;
+                for (var k = i + 1; k < lines.length && k <= i + 3; k++) {
+                    if (/^\s*\{/.test(lines[k])) return startD + 1;
+                    if (lines[k].indexOf('}') >= 0) break;
+                }
+                return startD + 1;
+            }
+            for (var i = 0; i < lines.length && out.length < 200; i++) {
+                var raw = lines[i];
+                var startD = d;
+                if (raw && raw.length <= 400) { // 空行/超长行（压缩数据）不匹配符号，但花括号深度照常累计
+                    var t = raw.trim();
+                    if (t && t.charAt(0) !== '}' && t.charAt(0) !== '*' &&
+                        t.slice(0, 2) !== '//' && t.slice(0, 2) !== '/*' && t.charAt(0) !== '#') {
+                        var m;
+                        if (py) {
+                            var indN = (raw.match(/^[ \t]*/)[0]).replace(/\t/g, '    ').length;
+                            if ((m = t.match(/^(?:async\s+)?def\s+([A-Za-z_]\w*)/))) pushSym(m[1], 'function', i + 1, indN);
+                            else if ((m = t.match(/^class\s+([A-Za-z_]\w*)/))) pushSym(m[1], 'class', i + 1, indN);
+                        } else {
+                            // 类/结构体/接口/枚举（含 Go type X struct、TS interface）
+                            if ((m = t.match(/^(?:export\s+|abstract\s+|public\s+|final\s+)*(?:class|interface|struct|enum|union|namespace)\s+([A-Za-z_]\w*)/)) ||
+                                (m = t.match(/^type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b/))) {
+                                pushSym(m[1], 'class', i + 1, braceScope(startD, i, raw));
+                            } else if (
+                                // 显式函数关键字（function/fn/func/def，含 Go 方法接收器）与 JS 箭头常量
+                                (m = t.match(/^(?:export\s+|default\s+|async\s+|pub\s+|static\s+)*(?:function\s*\*?|fn\s+|func\s+(?:\([^)]*\)\s*)?|def\s+)([A-Za-z_$][\w$]*)\s*[(<]/)) ||
+                                (m = t.match(/^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\(|[A-Za-z_$][\w$]*\s*=>)/))) {
+                                pushSym(m[1], 'function', i + 1, braceScope(startD, i, raw));
+                            } else if (
+                                // C/C++/Java/C#/TS 方法签名（限定符+返回类型+名字(）——名字非控制字、行内无 '='（排除调用/赋值行）
+                                (m = t.match(/^(?:(?:static|const|unsigned|signed|inline|virtual|override|public|private|protected|extern|unsafe|async|export|final|abstract|internal|readonly|template)\s+)*(?:[A-Za-z_][\w:<>]*[\s*&]+)+\*?([A-Za-z_]\w*)\s*\(/)) &&
+                                !ctl.test(m[1]) && t.indexOf('=') < 0 && !/^return\b/.test(t)) {
+                                pushSym(m[1], 'function', i + 1, braceScope(startD, i, raw));
+                            }
+                        }
+                    }
+                }
+                d = startD + (raw.split('{').length - raw.split('}').length); // 每行累计花括号深度（字符串/注释含括号会有偏差，导航可接受）
+            }
+            return out;
+        }
+        var fvSymPushTimer = null;
+        function fvPushSymbolsSoon() { // 防抖推送（monaco 输入期每次按键触发，避免高频扫描卡顿）
+            clearTimeout(fvSymPushTimer);
+            fvSymPushTimer = setTimeout(fvPushSymbols, 400);
+        }
+        function fvPushSymbols() {
+            clearTimeout(fvSymPushTimer);
+            if (!data || !hasViewer()) return;
+            var text = (monacoReady && monacoBox.style.display !== 'none')
+                ? monacoEditor.getValue()
+                : (data.content || '');
+            try { viewerBridge().reportSymbols(data.tab_id, fvScanSymbols(text, data.ext)); } catch (e) {}
+        }
+        // 宿主页面包屑符号点击跳转：编辑态 monaco 精确居中定位；静态预览按行号比例近似滚动
+        // （静态代码是整块 hljs 文本+分离行号条，无逐行 DOM；可编辑文件常规都处于 monaco 态）
+        window.__fvReveal = function (line) {
+            line = parseInt(line, 10) || 1;
+            if (monacoReady && monacoBox.style.display !== 'none') {
+                try {
+                    monacoEditor.revealLineInCenter(line);
+                    monacoEditor.setPosition({ lineNumber: line, column: 1 });
+                    monacoEditor.focus();
+                } catch (e) {}
+                return;
+            }
+            var wrap = bodyEl.querySelector('.fv-code-wrap');
+            if (wrap) {
+                var codeEl = wrap.querySelector('code');
+                var total = (codeEl ? codeEl.textContent.split('\n').length : 0) || 1;
+                var lnH = wrap.offsetHeight / total;
+                bodyEl.scrollTop = Math.max(0, wrap.offsetTop + (line - 1) * lnH - bodyEl.clientHeight / 2);
+            }
+        };
 
         // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
         // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
@@ -539,6 +662,7 @@
                     setStatus('已修改（未保存）', 'dirty');
                 }
                 scheduleGutter(); // 红蓝绿 gutter 防抖重算（含 setValue 引发的一次）
+                fvPushSymbolsSoon(); // 阶段一百一十：编辑内容变化 → 重新扫描符号推送面包屑（防抖）
             });
             monacoReady = true;
             registerCssHover(); // 阶段九十八：monaco 就绪后注册选择器特性 hover（monaco 为 AMD 异步全局，顶层注册会崩页面）
@@ -689,12 +813,14 @@
             var marks = computeGutterMarks(fvBase, model.getValue());
             var lineCount = model.getLineCount();
             var decos = [];
-            function push(l0, cls) {
+            function push(l0, cls, wholeCls) {
                 if (l0 < 0 || l0 >= lineCount) return;
-                decos.push({ range: new monaco.Range(l0 + 1, 1, l0 + 1, 1), options: { isWholeLine: true, linesDecorationsClassName: cls } });
+                var opts = { isWholeLine: true, linesDecorationsClassName: cls };
+                if (wholeCls) opts.className = wholeCls; // 阶段一百一十一：整行背景（TRAE CN 同款：新增绿底/修改蓝底）
+                decos.push({ range: new monaco.Range(l0 + 1, 1, l0 + 1, 1), options: opts });
             }
-            marks.added.forEach(function (l) { push(l, 'fv-g-add'); });
-            marks.modified.forEach(function (l) { push(l, 'fv-g-mod'); });
+            marks.added.forEach(function (l) { push(l, 'fv-g-add', 'fv-tl-add'); });
+            marks.modified.forEach(function (l) { push(l, 'fv-g-mod', 'fv-tl-mod'); });
             marks.deleted.forEach(function (l) { push(Math.min(l, lineCount - 1), 'fv-g-del'); }); // 文件尾删除锚定末行
             if (monacoEditor.createDecorationsCollection) {
                 if (!gutterCol) gutterCol = monacoEditor.createDecorationsCollection();
@@ -702,6 +828,44 @@
             } else { // 旧版 API 兜底
                 gutterDecoIds = monacoEditor.deltaDecorations(gutterDecoIds, decos);
             }
+            updateTaskNav(marks, lineCount);
+        }
+        // ===== 阶段一百一十一：变更导航（TRAE CN 同款 ‹ 1/N ›）=====
+        // 相邻 ≤2 行的变更锚点合并为一块（一段连续新增算一处），跳转落到块首行居中。
+        // 任务文件块=Agent 改动位置（fvBase=任务前基线）；普通文件=本次未保存编辑（fvBase=最近保存内容）
+        var taskChangeBlocks = [];
+        var taskNavIdx = 0;
+        var taskNavEl = document.getElementById('fv-task-nav');
+        var taskNavPos = document.getElementById('fv-nav-pos');
+        function updateTaskNav(marks, lineCount) {
+            var anchors = marks.added.concat(marks.modified, marks.deleted.map(function (l) { return Math.min(l, lineCount - 1); }));
+            anchors.sort(function (a, b) { return a - b; });
+            taskChangeBlocks = [];
+            anchors.forEach(function (l) {
+                if (l < 0 || l >= lineCount) return;
+                var last = taskChangeBlocks[taskChangeBlocks.length - 1];
+                if (last && l - last.end <= 2) last.end = l;
+                else taskChangeBlocks.push({ start: l, end: l });
+            });
+            if (taskNavEl) {
+                if (taskChangeBlocks.length) {
+                    taskNavEl.classList.remove('hidden');
+                    if (taskNavIdx >= taskChangeBlocks.length) taskNavIdx = 0;
+                    taskNavPos.textContent = (taskNavIdx + 1) + '/' + taskChangeBlocks.length;
+                } else {
+                    taskNavEl.classList.add('hidden');
+                    taskNavIdx = 0;
+                }
+            }
+        }
+        function taskNavGo(dir) {
+            if (!taskChangeBlocks.length || !monacoReady || !monacoEditor) return;
+            taskNavIdx = (taskNavIdx + dir + taskChangeBlocks.length) % taskChangeBlocks.length;
+            var line = taskChangeBlocks[taskNavIdx].start + 1;
+            monacoEditor.revealLineInCenter(line);
+            monacoEditor.setPosition({ lineNumber: line, column: 1 });
+            monacoEditor.focus();
+            taskNavPos.textContent = (taskNavIdx + 1) + '/' + taskChangeBlocks.length;
         }
         function scheduleGutter() { // 防抖：输入高峰避免每次击键全量 diff
             if (gutterTimer) clearTimeout(gutterTimer);
@@ -1082,7 +1246,10 @@
                     hideUnchangedRegions: { enabled: true, contextLineCount: 3 }, // 折叠未变更区（VS Code 同款）
                     scrollBeyondLastLine: false, minimap: { enabled: false }
                 });
-                fvAttachCtxMenu(diffEd, diffEd.getModifiedEditor(), true); // 阶段一百一十：diff 只读右键（复制/全选）
+                // 容器直接用 diffBox（本版 Monaco 的 diff 编辑器对象不暴露 getDomNode，
+                // 传 diffEd 会在首次渲染抛 TypeError 中断 setModel，导致第一次打开空白、
+                // 点第二次才出内容——实测定位）。挂容器上左右两栏右键均为中文菜单
+                fvAttachCtxMenu(diffBox, diffEd.getModifiedEditor(), true); // 阶段一百一十：diff 只读右键（复制/全选）
             }
             if (diffOrigModel) diffOrigModel.dispose();
             if (diffModModel) diffModModel.dispose();
@@ -1155,6 +1322,7 @@
                     bodyEl.appendChild(renderCode(p.content || '', p.ext || ''));
                 }
             }
+            fvPushSymbolsSoon(); // 阶段一百一十：文本内容就绪 → 扫描符号推送宿主页面包屑（防抖）
             var isMdFile = (p.ext === 'md' || p.ext === 'markdown');
             if (p.editable && hasViewer()) {
                 if (isMdFile) { // MD 保持现状：预览 + 手动编辑按钮
@@ -1223,6 +1391,9 @@
             if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, false);
             render();
         });
+        // ===== 阶段一百一十一：变更导航按钮（‹ › 循环跳转变更块，居中定位） =====
+        document.getElementById('fv-nav-prev').addEventListener('click', function () { taskNavGo(-1); });
+        document.getElementById('fv-nav-next').addEventListener('click', function () { taskNavGo(1); });
         // ===== 阶段九十七：任务变更保留/撤销（TRAE CN 同款语义） =====
         btnKeep.addEventListener('click', function () {
             if (!data || !data.task_modified || !hasViewer()) return;

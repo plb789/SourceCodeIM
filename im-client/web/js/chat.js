@@ -4442,7 +4442,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=111'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
+        frame.src = 'file-viewer.html?v=116'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -4479,6 +4479,17 @@
         },
         taskRevert: function (tabId) {
             return window.desktop.browserTaskRevert(tabId);
+        },
+        // 阶段一百一十：viewer 推送代码符号（TRAE CN 同款符号面包屑）——存于 frame 记录，
+        // 若为当前活动 file 标签则立即刷新面包屑（符号段可点击，经 __fvReveal 跳转编辑器行）
+        reportSymbols: function (tabId, symbols) {
+            var rec = fileFrames[tabId];
+            if (!rec) return;
+            rec.symbols = Array.isArray(symbols) ? symbols : [];
+            var st = browserLastState;
+            if (st && st.kind === 'file' && String(st.active_id || '') === String(tabId)) {
+                browserRenderCrumbs(st.url, st);
+            }
         }
     };
 
@@ -4661,11 +4672,131 @@
         });
     })();
 
-    // file 标签路径面包屑（TRAE 同款）：seg=路径段，sep='›'，末段当前文件名高亮
-    function browserRenderCrumbs(relPath) {
+    // ===== 阶段一百一十(2)：符号全量菜单（TRAE CN 同款折叠交互）=====
+    // 自绘弹层挂在 body（面包屑 overflow-x:auto 会裁剪子元素）；项=符号图标+名称+行号，
+    // 点击跳转编辑器对应行；外点/Esc/重复点"…"关闭。滚动条走全局自绘样式
+    var bcSymMenuEl = null;
+    var bcSymAnchor = null;
+    function bcCloseSymMenu() {
+        if (!bcSymMenuEl) return;
+        var el = bcSymMenuEl;
+        bcSymMenuEl = null;
+        bcSymAnchor = null;
+        // 自绘滚动条清理：滑块浮层移出 body，宿主登记表移除本容器（菜单每次开关都是新节点，不清理会累积死引用）
+        var listEl = el.querySelector('.bc-sym-menu-list');
+        if (listEl) {
+            if (listEl._osbThumb) {
+                listEl._osbThumb.remove();
+                listEl._osbThumb = null;
+            }
+            if (window._osbHosts) {
+                var ix = window._osbHosts.indexOf(listEl);
+                if (ix >= 0) window._osbHosts.splice(ix, 1);
+            }
+        }
+        el.remove();
+        document.removeEventListener('mousedown', bcSymMenuOutside, true);
+        document.removeEventListener('keydown', bcSymMenuEsc, true);
+    }
+    function bcSymMenuOutside(ev) {
+        if (!bcSymMenuEl) return;
+        if (bcSymAnchor && (ev.target === bcSymAnchor || bcSymAnchor.contains(ev.target))) return; // 点锚点交给 click 做开/关切换
+        if (!bcSymMenuEl.contains(ev.target)) bcCloseSymMenu();
+    }
+    function bcSymMenuEsc(ev) {
+        if (ev.key === 'Escape') bcCloseSymMenu();
+    }
+    function bcOpenSymMenu(anchor, syms, onPick) {
+        bcCloseSymMenu();
+        var expanded = {};
+        syms.forEach(function (s, k) { expanded[k] = false; }); // 默认全部折叠（用户反馈 2026-09-14），点三角逐级展开
+        var menu = document.createElement('div');
+        menu.className = 'bc-sym-menu';
+        var head = document.createElement('div');
+        head.className = 'bc-sym-menu-head';
+        head.textContent = '符号（' + syms.length + ' 个）';
+        menu.appendChild(head);
+        var list = document.createElement('div');
+        list.className = 'bc-sym-menu-list';
+        // 树形渲染（TRAE CN 同款）：按 depth 缩进，hasKids 的行带 ▾/▸ 三角折叠；
+        // 收起父节点时隐藏其所有后代行（hideAt 记录折叠层级，遇到不深于它的行即复位）
+        function renderRows() {
+            list.innerHTML = '';
+            var hideAt = -1;
+            syms.forEach(function (s, idx) {
+                if (hideAt >= 0) {
+                    if (s.depth > hideAt) return; // 折叠父节点内的后代行
+                    hideAt = -1;
+                }
+                var item = document.createElement('div');
+                item.className = 'bc-sym-menu-item';
+                item.style.paddingLeft = (10 + s.depth * 14) + 'px';
+                item.title = (s.kind === 'class' ? '类 ' : '函数 ') + s.name + '（第 ' + s.line + ' 行）';
+                var tri = document.createElement('span');
+                tri.className = 'tri' + (s.hasKids ? '' : ' leaf');
+                if (s.hasKids) {
+                    tri.textContent = expanded[idx] ? '▾' : '▸';
+                    tri.addEventListener('click', function (ev) {
+                        ev.stopPropagation(); // 只切换折叠，不触发跳转
+                        expanded[idx] = !expanded[idx];
+                        renderRows();
+                    });
+                }
+                item.appendChild(tri);
+                var ico = document.createElement('span');
+                ico.className = 'bc-sym-ico ' + (s.kind === 'class' ? 'cls' : 'fn');
+                ico.textContent = s.kind === 'class' ? '◇' : 'ƒ';
+                var nm = document.createElement('span');
+                nm.className = 'nm';
+                nm.textContent = s.name;
+                var ln = document.createElement('span');
+                ln.className = 'ln';
+                ln.textContent = ':' + s.line; // 同名符号（声明+定义）靠行号区分
+                item.appendChild(ico);
+                item.appendChild(nm);
+                item.appendChild(ln);
+                item.addEventListener('click', function () {
+                    bcCloseSymMenu();
+                    onPick(s);
+                });
+                list.appendChild(item);
+                if (s.hasKids && !expanded[idx]) hideAt = s.depth;
+            });
+            if (list._osbUpdate) list._osbUpdate('rows'); // 折叠/展开重建行后刷新滑块几何（位置/长度）
+        }
+        renderRows();
+        menu.appendChild(list);
+        if (window._osbInit) window._osbInit(list); // 阶段一百一十(4)：注册自绘悬浮滚动条（原生条已全局禁用，未注册则限高可滚但无滑块）
+        document.body.appendChild(menu);
+        bcSymMenuEl = menu;
+        bcSymAnchor = anchor;
+        // 定位：锚点下方，右缘夹紧防溢出；下方放不下翻转到锚点上方
+        var r = anchor.getBoundingClientRect();
+        menu.style.visibility = 'hidden';
+        var mw = menu.offsetWidth, mh = menu.offsetHeight;
+        var left = Math.min(r.left, window.innerWidth - mw - 8);
+        var top = r.bottom + 4;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+        menu.style.left = Math.max(8, left) + 'px';
+        menu.style.top = top + 'px';
+        menu.style.visibility = '';
+        document.addEventListener('mousedown', bcSymMenuOutside, true);
+        document.addEventListener('keydown', bcSymMenuEsc, true);
+    }
+
+    // file 标签路径面包屑（TRAE CN 同款）：seg=路径段，sep='›'，末段文件名带文件类型图标
+    // （与标签页图标同源），其后为代码符号段（viewer 页扫描推送：函数ƒ紫/类◇蓝，点击跳转对应行）；
+    // 符号超过 6 个时按 TRAE CN 同款折叠：内联前 6 个 + "…"展开段点击弹出全量符号菜单
+    function browserRenderCrumbs(relPath, st) {
         browserCrumbsEl.innerHTML = '';
         var parts = String(relPath || '').split(/[\\/]+/).filter(function (s) { return !!s; });
         if (!parts.length) parts = ['文件预览'];
+        var tab = null;
+        if (st && st.kind === 'file') {
+            (st.tabs || []).forEach(function (t) {
+                if (t.kind === 'file' && t.id === st.active_id) tab = t;
+            });
+        }
         parts.forEach(function (seg, i) {
             if (i > 0) {
                 var sep = document.createElement('span');
@@ -4676,8 +4807,61 @@
             var el = document.createElement('span');
             el.className = 'bc-seg' + (i === parts.length - 1 ? ' current' : '');
             el.textContent = seg;
+            // 末段文件名前缀文件类型图标（CPP/JS/MD…，复用标签页图标构造器）
+            if (i === parts.length - 1 && tab) {
+                el.insertBefore(browserTabIcon({ kind: 'file', data_kind: tab.data_kind, ext: tab.ext }), el.firstChild);
+            }
             browserCrumbsEl.appendChild(el);
         });
+        // 符号段：点击跳转 viewer 编辑器对应行（编辑态 monaco 精确定位/静态预览近似滚动）；
+        // 超过 6 个折叠：内联前 6 个，"…"段点击弹出全量符号菜单（TRAE CN 同款）
+        var rec = (st && st.active_id) ? fileFrames[st.active_id] : null;
+        var syms = (rec && rec.symbols) || [];
+        function bcJump(s) {
+            var r = st ? fileFrames[st.active_id] : null;
+            if (r && r.ready) {
+                try { r.frame.contentWindow.__fvReveal(s.line); } catch (e) { /* 未就绪忽略 */ }
+            }
+        }
+        function makeSymSeg(s) {
+            var sep = document.createElement('span');
+            sep.className = 'bc-sep';
+            sep.textContent = '›';
+            browserCrumbsEl.appendChild(sep);
+            var seg = document.createElement('span');
+            seg.className = 'bc-seg bc-sym';
+            seg.title = (s.kind === 'class' ? '类 ' : '函数 ') + s.name + '（第 ' + s.line + ' 行，点击跳转）';
+            var ico = document.createElement('span');
+            ico.className = 'bc-sym-ico ' + (s.kind === 'class' ? 'cls' : 'fn');
+            ico.textContent = s.kind === 'class' ? '◇' : 'ƒ';
+            seg.appendChild(ico);
+            var nm = document.createElement('span');
+            nm.textContent = s.name;
+            seg.appendChild(nm);
+            seg.addEventListener('click', function () { bcJump(s); });
+            browserCrumbsEl.appendChild(seg);
+        }
+        if (syms.length) {
+            if (syms.length <= 6) {
+                syms.forEach(makeSymSeg);
+            } else {
+                for (var k = 0; k < 6; k++) makeSymSeg(syms[k]);
+                var msep = document.createElement('span');
+                msep.className = 'bc-sep';
+                msep.textContent = '›';
+                browserCrumbsEl.appendChild(msep);
+                var more = document.createElement('span');
+                more.className = 'bc-seg bc-more';
+                more.textContent = '…';
+                more.title = '查看全部 ' + syms.length + ' 个符号';
+                more.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    if (bcSymMenuEl && bcSymAnchor === more) { bcCloseSymMenu(); return; } // 再点一次收起
+                    bcOpenSymMenu(more, syms, bcJump);
+                });
+                browserCrumbsEl.appendChild(more);
+            }
+        }
     }
 
     // 工作区相对路径是否已有对应浏览区文件标签（statePush 的 file_name 即 relPath）
@@ -4966,7 +5150,12 @@
         browserCrumbsEl.classList.toggle('hidden', !isFileTab);
         browserUrlEl.classList.toggle('hidden', isFileTab);
         browserGoBtn.classList.toggle('hidden', isFileTab);
-        if (isFileTab) browserRenderCrumbs(state.url);
+        // 阶段一百一十：file 标签无网页导航语义 → 后退/前进/刷新一并隐藏（原仅随 can_back/can_forward
+        // 置灰仍占位，用户实测反馈文件标签下这三个按钮多余，应不显示）
+        browserBackBtn.classList.toggle('hidden', isFileTab);
+        browserForwardBtn.classList.toggle('hidden', isFileTab);
+        browserReloadBtn.classList.toggle('hidden', isFileTab);
+        if (isFileTab) browserRenderCrumbs(state.url, state);
         // 地址栏：用户正在输入时不覆盖（避免打字被状态推送清掉）
         if (document.activeElement !== browserUrlEl) {
             browserUrlEl.value = (!state.url || state.url === 'about:blank') ? '' : state.url;
