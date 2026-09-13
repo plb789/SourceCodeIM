@@ -544,13 +544,15 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 // onText/onReasoning 分别回调可见正文与推理摘要增量（reasoning_content，仅推理模型才有）；
 // 工具调用按 index 增量聚合（OpenAI 流式 tool_calls 分片下发），返回累计正文与完整调用列表。
 // streamed 表示本轮是否产生过增量：上游不支持流式/一次性返回时为 false，调用方回退整段事件兼容。
-func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition, onText, onReasoning func(string)) (string, []aiToolCall, bool, error) {
+// 阶段一百零二：返回 usage（usage 随末尾帧下发且该帧 choices 为空，须在 choices 判空前取记），
+// Agent 任务循环据此累计全任务 Token 消耗（完结扣积分/落库/随帧下发）
+func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition, onText, onReasoning func(string)) (string, []aiToolCall, bool, aiUsage, error) {
 	if agent.Provider == nil {
 		reply := "本地演示模式：服务端尚未配置模型服务，智能 Agent 需要 function calling 能力的模型（如 deepseek/glm/gpt 等），请先在服务端配置 providers。"
 		if onText != nil {
 			onText(reply)
 		}
-		return reply, nil, true, nil
+		return reply, nil, true, aiUsage{}, nil
 	}
 
 	body := map[string]interface{}{
@@ -565,11 +567,11 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, false, aiUsage{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(data))
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, false, aiUsage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if agent.Provider.APIKey != "" {
@@ -578,12 +580,12 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 
 	resp, err := aiHTTP.Do(req)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, false, aiUsage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return "", nil, false, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return "", nil, false, aiUsage{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
 	var content strings.Builder
@@ -595,6 +597,7 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 	tcs := map[int]*accToolCall{}
 	var order []int
 	streamed := false
+	var usage aiUsage
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
@@ -625,9 +628,14 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage *aiUsage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		// 阶段一百零二：usage 随末尾帧下发且该帧 choices 为空，须在 choices 判空前取记
+		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+			usage = *chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -661,7 +669,7 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", nil, streamed, err
+		return "", nil, streamed, usage, err
 	}
 
 	var calls []aiToolCall
@@ -677,7 +685,7 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 		c.Function.Arguments = acc.args.String()
 		calls = append(calls, c)
 	}
-	return content.String(), calls, streamed, nil
+	return content.String(), calls, streamed, usage, nil
 }
 
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）
@@ -1387,7 +1395,7 @@ const aiSearchLoopMaxRounds = 4
 // aiChatLoopWithSearch 普通聊天联网问答循环：复用 aiAgentChatStream 流式接口与 agentToolWebSearch
 // 执行归口（只读免审批、始终服务端执行）。仅注入 web_search 单工具（普通聊天轻量问答，不开放
 // 文件/命令等 Agent 工具）；每轮工具调用经 aiPushToolFrame 推送搜索状态帧供前端渲染「联网搜索」行。
-// 注意：流式链路不返回 usage（与 Agent 任务一致），联网问答的 Token 统计记 0。
+// 阶段一百零二：底层流式调用已返回 usage，逐轮累加（原流式链路取不到 usage 记 0 的妥协取消）
 func (s *Server) aiChatLoopWithSearch(ctx context.Context, agent *AIRunAgent, username string, msgs []aiChatMessage, streamID string, onText func(string)) (string, aiUsage, error) {
 	var usage aiUsage
 	tools := []aiToolDefinition{agentWebSearchToolDef()}
@@ -1396,11 +1404,15 @@ func (s *Server) aiChatLoopWithSearch(ctx context.Context, agent *AIRunAgent, us
 		if round < aiSearchLoopMaxRounds {
 			useTools = tools
 		}
-		content, toolCalls, _, err := aiAgentChatStream(ctx, agent, msgs, useTools, onText, nil)
+		content, toolCalls, _, u, err := aiAgentChatStream(ctx, agent, msgs, useTools, onText, nil)
 		if err != nil {
 			return "", usage, err
 		}
-		// 无工具调用：模型给出最终答复（正文已流式推送，usage 不可得记 0）
+		// 阶段一百零二：累加每轮 Token 消耗（联网问答与普通问答同口径落库/下发）
+		usage.PromptTokens += u.PromptTokens
+		usage.CompletionTokens += u.CompletionTokens
+		usage.TotalTokens += u.TotalTokens
+		// 无工具调用：模型给出最终答复（正文已流式推送）
 		if len(toolCalls) == 0 {
 			return content, usage, nil
 		}

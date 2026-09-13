@@ -4884,6 +4884,11 @@
         st.statusEl.className = 'agent-task-status ' + (cls || 'running');
     }
 
+    // 阶段一百零二：任务卡状态行的 Token 消耗标注（与气泡操作栏 ⚡ 格式一致；0=上游未返回 usage 不显示）
+    function agentTokensTag(tokens) {
+        return tokens && tokens.total > 0 ? '（⚡ ' + tokens.total + ' tokens）' : '';
+    }
+
     function finishAgentTask(st, text, cls) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
         setAgentTaskStatus(st, text, cls);
@@ -9931,6 +9936,9 @@
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
+        // 阶段一百零二：Agent 任务扣后积分余额实时刷新（done 帧携带，服务端归口；
+        // 与当前查看会话无关——切走会话/最小化时完结也要刷新标题栏 ⚡ 积分）
+        if (ev.points_balance != null) setPointsBalance(ev.points_balance);
         var st = agentTaskCards[ev.task_id];
         // 阶段七十三：任务完结/取消即清进行中标记（不依赖当前查看会话——切走期间完结也要复位发送按钮态）
         if (agentActiveTask[msg.from_user] === ev.task_id &&
@@ -9970,7 +9978,8 @@
                     // 阶段七十：取消同样折叠执行过程（与完成态观感一致，点击卡头可回看）
                     collapseAgentCard(st);
                     agentFinalizeText(st, true);
-                    finishAgentTask(st, '已取消', 'cancelled');
+                    // 阶段一百零二：取消不扣积分，已消耗 Token 标注到任务卡
+                    finishAgentTask(st, '已取消' + agentTokensTag({ total: ev.total_tokens || 0 }), 'cancelled');
                     // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
                     if (ev.msg_id) appendMessage(msg.from_user, '任务已取消', 'other', ev.msg_id, msg.timestamp, true);
                 }
@@ -9998,9 +10007,11 @@
             case 'done':
                 st.bar.style.width = '100%';
                 st.pct.textContent = '100%';
+                // 阶段一百零二：全任务 Token 消耗记录（任务卡标注 + 答复气泡操作栏复用）
+                st.tokens = { total: ev.total_tokens || 0, prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0 };
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
                 collapseAgentCard(st);
-                finishAgentTask(st, '已完成', 'done');
+                finishAgentTask(st, '已完成' + agentTokensTag(st.tokens), 'done');
                 // 阶段七十七：文件变更审查条（TRAE CN 同款，撤销/保留归口）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
@@ -10013,7 +10024,8 @@
                     // 阶段七十一：完结气泡按任务归属会话渲染（执行中切走会话不串视图；回复已落库，切回经历史可见）
                     if (st.sessionId === (aiViewSession[st.agent] || 0)) {
                         // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
-                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true);
+                        // 阶段一百零二：透传全任务 Token 消耗（答复气泡操作栏 ⚡ 标注，与普通回复同口径）
+                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true, false, st.tokens);
                         // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
                         if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
                     }
@@ -10023,7 +10035,8 @@
                 break;
             case 'error':
                 agentFinalizeText(st, true);
-                finishAgentTask(st, '失败', 'failed');
+                // 阶段一百零二：失败不扣积分，已消耗 Token 标注到任务卡
+                finishAgentTask(st, '失败' + agentTokensTag({ total: ev.total_tokens || 0 }), 'failed');
                 // 阶段七十七：失败同样结算变更（已落盘的脏改可撤销）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标

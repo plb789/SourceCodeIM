@@ -729,6 +729,8 @@ function decodeOutput(buf) {
 const CMD_STREAM_MAX_BYTES = 64 * 1024; // 控制台流式下发累计上限（与服务端 agentCmdStreamMaxBytes 一致）
 const CMD_STREAM_FLUSH_MS = 200;        // 输出聚合下发节流（毫秒，与服务端一致）
 const CMD_BG_TIMEOUT_MS = 30 * 60 * 1000; // 转后台兜底强杀
+const CMD_DONE_SENTINEL = '__AGENT_CMD_DONE__'; // 阶段一百零一：命令尾部完成哨兵（与服务端 agentCmdDoneSentinel 一致；读到该行即命令链收尾，孙进程占管道也能及时返回）
+const CMD_FORCE_RETURN_MS = 5000; // 阶段一百零一：超时杀树后等 'close' 的宽限（到点强制收尾返回已有输出，不挂死任务）
 
 // 每用户当前运行中命令登记（requestBg 归口；同用户同时至多一条命令——服务端任务队列串行派发）
 const runningCmds = {};
@@ -765,9 +767,10 @@ function runCommandSync(username, params, done, onFrame) {
     }
     // chcp 65001 先切控制台代码页（有真实控制台的场景生效；windowsHide 隐藏控制台下不生效，
     // 编码正确性由 decodeOutput 按字节检测兜底，与 Go 服务端同款）
+    // 阶段一百零一：命令尾部追加完成哨兵（与服务端同款语义）
     let child;
     try {
-        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command], {
+        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command + ' & echo ' + CMD_DONE_SENTINEL], {
             cwd: ws,
             windowsHide: true, // 不闪黑色控制台窗口
             stdio: ['ignore', 'pipe', 'pipe']
@@ -801,8 +804,16 @@ function runCommandSync(username, params, done, onFrame) {
     let timedOut = false;
     let bgd = false;
     let finished = false;
+    // 阶段一百零一：收尾幂等标记（哨兵/超时兜底/close 三路竞态只收尾一次）+ 强返定时器
+    let finishedSent = false;
+    let forceTimer = null;
 
     const addLine = function (raw) {
+        // 阶段一百零一：完成哨兵行——命中即收尾返回（该行不计入输出上下文），孙进程占管道也不挂死
+        if (raw.includes(CMD_DONE_SENTINEL)) {
+            finish(timedOut ? -1 : 0);
+            return;
+        }
         total += raw.length;
         let text;
         try { text = utf8Strict.decode(raw); } catch (e) { text = gbkDecoder.decode(raw); }
@@ -840,12 +851,19 @@ function runCommandSync(username, params, done, onFrame) {
         pushFrame(chunk, false);
     }, CMD_STREAM_FLUSH_MS);
 
-    // 前台超时强杀（转后台时切换为 30 分钟兜底）
-    let killTimer = setTimeout(function () { timedOut = true; try { child.kill('SIGKILL'); } catch (e) {} }, timeoutSec * 1000);
+    // 前台超时强杀（转后台时切换为 30 分钟兜底）：
+    // 阶段一百零一：taskkill /T /F 递归杀整树（child.kill 只杀 cmd.exe，powershell 等孙进程
+    // 存活会攥着管道导致 'close' 永不触发），并设 5 秒兜底强制收尾（杀树后仍收不到 close 时不挂死任务）
+    let killTimer = setTimeout(function () {
+        timedOut = true;
+        killTree(child);
+        forceTimer = setTimeout(function () { if (!bgd) finish(-1); }, CMD_FORCE_RETURN_MS);
+    }, timeoutSec * 1000);
 
     const cleanup = function () {
         clearInterval(tick);
         clearTimeout(killTimer);
+        if (forceTimer) clearTimeout(forceTimer);
         delete runningCmds[username];
         finished = true;
     };
@@ -856,12 +874,16 @@ function runCommandSync(username, params, done, onFrame) {
             if (bgd || finished) return;
             bgd = true;
             clearTimeout(killTimer); // 停前台超时
-            killTimer = setTimeout(function () { try { child.kill('SIGKILL'); } catch (e) {} }, CMD_BG_TIMEOUT_MS);
+            if (forceTimer) { clearTimeout(forceTimer); forceTimer = null; } // 阶段一百零一：转后台取消前台强返兜底
+            killTimer = setTimeout(function () { killTree(child); }, CMD_BG_TIMEOUT_MS); // 30 分钟兜底同样杀整树
             done({ ok: true, output: '命令已转入后台执行（输出在任务卡控制台实时展示；结束后控制台显示退出码，无需等待即可继续其他操作）' });
         }
     };
 
     const finish = function (code) {
+        // 阶段一百零一：幂等保护——哨兵/超时兜底/close 三路竞态只收尾一次
+        if (finishedSent) return;
+        finishedSent = true;
         if (bgd) { // 转后台进程结束：仅发终帧（前端控制台显示退出码），不再回传结果
             cleanup();
             if (pendingFrame) { pushFrame(pendingFrame, false); pendingFrame = null; }
@@ -893,7 +915,8 @@ function runCommandSync(username, params, done, onFrame) {
         done({ ok: true, output: text });
     };
     child.on('error', function (e) {
-        if (finished || bgd) return;
+        if (finishedSent || bgd) return; // 阶段一百零一：与哨兵/超时兜底竞态防双发
+        finishedSent = true; // 防 error 后紧随的 close 再次触发 finish 双发 done
         cleanup();
         done({ ok: false, output: '错误：' + (e.message || e) });
     });

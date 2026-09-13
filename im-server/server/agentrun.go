@@ -61,6 +61,10 @@ const (
 	agentCmdStreamFlushMs  = 200              // 输出聚合下发节流（毫秒，防逐行刷屏拖垮 WS）
 	agentBgCmdTimeout      = 30 * time.Minute // 转后台后的兜底强杀超时（前台仍按命令自身 timeout）
 
+	// 阶段一百零一：命令超时收尾三保险（杀整树 / 哨兵提前判定 / 强返兜底），修复任务永久挂死
+	agentCmdDoneSentinel   = "__AGENT_CMD_DONE__" // 命令尾部完成哨兵（读到该行即命令链收尾，孙进程占管道也能及时返回；PC 端 CMD_DONE_SENTINEL 与此一致）
+	agentCmdForceReturnGap = 5 * time.Second      // 超时杀树后的强返宽限（到点强制返回已有输出，绝不等管道 EOF 挂死任务）
+
 	agentChangeMaxFiles = 200 // 阶段七十七：递归删目录时逐文件快照上限（防超大目录拖垮任务，超出部分不记变更不可撤销）
 
 	// 阶段八十四：任务循环历史压缩保留轮数（最近 N 个完整"模型决策+工具执行"轮保留原文，
@@ -185,6 +189,7 @@ type AgentTask struct {
 	stepSeq     int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
 	changeSeq   int               // 阶段七十七：变更快照序号（备份文件命名去重）
 	changes     []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
+	usageTotal  aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/扣积分/随帧下发）
 	endOnce     sync.Once
 }
 
@@ -2313,6 +2318,16 @@ func agentToolTodoWrite(s *Server, t *AgentTask, params map[string]interface{}) 
 	return fmt.Sprintf("任务清单已更新（共 %d 项，已完成 %d 项）", len(items), done)
 }
 
+// agentKillTree 阶段一百零一：Windows 递归终止进程树（taskkill /F /T /PID）。
+// 原 cancel/Process.Kill 只杀 cmd.exe 直接子进程，powershell 等孙进程存活会攥着
+// stdout 管道句柄导致 cmd.Wait 永久阻塞（完成信号回不来、任务挂死）；失败仅忽略（调用方 cancel 兜底）
+func agentKillTree(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
+}
+
 // agentToolRunCommand 工作区内执行命令（cmd /C，超时强杀，输出截断；chcp 65001 统一 UTF-8 输出）。
 // 阶段七十五：输出管道流式读取，行级聚合 200ms 节流下发 tool_output 事件（控制台实时可见）；
 // 执行期间用户可请求"转后台"（runBgCh close 触发）——立即返回不阻塞模型，进程继续跑完，
@@ -2337,7 +2352,9 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// chcp 65001 先切控制台代码页为 UTF-8（失败不中断），解决中文输出乱码
-	cmd := exec.CommandContext(ctx, "cmd", "/C", "chcp 65001 >nul 2>&1 & "+command)
+	// 阶段一百零一：命令尾部追加完成哨兵——读到哨兵行即命令链收尾（powershell 等孙进程占住
+	// stdout 管道时 cmd.Wait 会永久阻塞，哨兵先到即返回已有输出，不等进程退出）
+	cmd := exec.CommandContext(ctx, "cmd", "/C", "chcp 65001 >nul 2>&1 & "+command+" & echo "+agentCmdDoneSentinel)
 	cmd.Dir = ws
 	stdout, perr := cmd.StdoutPipe()
 	if perr != nil {
@@ -2365,8 +2382,16 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 		t.mu.Unlock()
 	}()
 
-	// 前台超时（后台化时 Stop 并换 30 分钟兜底）
-	timer := time.AfterFunc(timeout, cancel)
+	// 前台超时（后台化时 Stop 并换 30 分钟兜底）：
+	// 阶段一百零一：先 taskkill /F /T 递归杀整树（cancel 仅杀 cmd.exe，孙进程存活会攥管道
+	// 导致 cmd.Wait 永久阻塞），再 cancel 兜底；timedOutFlag 供 Wait 返回分支判定超时
+	// （原检查 ctx.Err()==DeadlineExceeded 永假——ctx 是 WithCancel 创建，超时会被误报"退出码异常"）
+	var timedOutFlag atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOutFlag.Store(true)
+		agentKillTree(cmd.Process.Pid)
+		cancel()
+	})
 
 	// 输出泵：stdout/stderr 各一个 goroutine 按行收口，行级 UTF-8 检测 + GBK 兜底转码；
 	// 累计超 agentCmdStreamMaxBytes 停止下发（over 标记），全量另存 head+tail 供模型结果组装
@@ -2380,9 +2405,20 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	)
 	const fullHead = 8 << 10
 	const fullTail = 56 << 10
+	// 阶段一百零一：完成哨兵信号（容量 1，重复命中忽略）——读到哨兵行即命令链收尾
+	doneSentinel := make(chan struct{}, 1)
+
 	addLine := func(raw []byte) {
 		mu.Lock()
 		defer mu.Unlock()
+		// 阶段一百零一：哨兵行不计入输出上下文（total/fullBuf/acc 均不含），命中即通知主流程可提前返回
+		if bytes.Contains(raw, []byte(agentCmdDoneSentinel)) {
+			select {
+			case doneSentinel <- struct{}{}:
+			default:
+			}
+			return
+		}
 		total += len(raw)
 		if len(fullBuf) <= fullHead+fullTail {
 			if len(fullBuf)+len(raw) > fullHead+fullTail {
@@ -2480,12 +2516,17 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	doneCh := make(chan error, 1)
 	go func() { doneCh <- cmd.Wait() }()
 
+	// 阶段一百零一：超时强返计时器（超时杀树后再等 agentCmdForceReturnGap 宽限，
+	// 个别残留进程攥管道仍可致 Wait 不返回，到点强制收尾，任务绝不挂死）
+	forceReturn := time.NewTimer(timeout + agentCmdForceReturnGap)
+	defer forceReturn.Stop()
+
 	select {
 	case err := <-doneCh:
 		finalFlush()
 		text := modelText()
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
+			if timedOutFlag.Load() {
 				return fmt.Sprintf("错误：命令执行超时（%v），已终止\n输出：\n%s", timeout, text)
 			}
 			// 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
@@ -2495,10 +2536,25 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 			return "（命令执行成功，无输出）"
 		}
 		return text
+	case <-doneSentinel:
+		// 阶段一百零一：哨兵先到即返回（命令链已跑完、输出已完整；cmd.Wait 因孙进程占管道
+		// 未返回时不再死等，TRAE 同款哨兵语义）。残余输出仍会经输出泵推到控制台，不进模型
+		finalFlush()
+		text := modelText()
+		if strings.TrimSpace(text) == "" {
+			return "（命令执行成功，无输出）"
+		}
+		return text
+	case <-forceReturn.C:
+		// 阶段一百零一：强返兜底——杀树已在超时时刻发生，Wait 仍未返回则强制收尾
+		finalFlush()
+		text := modelText()
+		return fmt.Sprintf("错误：命令执行超时（%v），已强制终止\n输出：\n%s", timeout, text)
 	case <-bgCh:
-		// 转后台：停前台超时，换 30 分钟兜底强杀；进程继续，输出继续流，结束仅发 tool_exit 事件
+		// 转后台：停前台超时，换 30 分钟兜底强杀（阶段一百零一：同样杀整树再 cancel 兜底）；
+		// 进程继续，输出继续流，结束仅发 tool_exit 事件
 		timer.Stop()
-		time.AfterFunc(agentBgCmdTimeout, cancel)
+		time.AfterFunc(agentBgCmdTimeout, func() { agentKillTree(cmd.Process.Pid); cancel() })
 		go func() {
 			err := <-doneCh
 			finalFlush()
@@ -2785,6 +2841,7 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 	t.endOnce.Do(func() {
 		t.mu.Lock()
 		t.Status = status
+		usage := t.usageTotal // 阶段一百零二：快照全任务 Token 累计（落库/扣积分/随帧下发）
 		t.mu.Unlock()
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
 			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps})
@@ -2815,6 +2872,10 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				Content:     notifyContent,
 				IsRead:      notifyRead,
 				AISessionID: t.SessionID, // 阶段七十一：完结答复与任务目标同会话盖戳，问答成对归位
+				// 阶段一百零二：任务全程 Token 消耗随完结消息落库（历史加载与普通回复同口径显示）
+				PromptTokens:     usage.PromptTokens,
+				CompletionTokens: usage.CompletionTokens,
+				TotalTokens:      usage.TotalTokens,
 			}
 			if err := store.DB.Create(&reply).Error; err == nil {
 				msgID = reply.ID
@@ -2829,9 +2890,34 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		}
 		switch status {
 		case "completed":
+			// 阶段一百零二：任务完成扣积分（与普通问答同口径：按 1000 tokens = 1 积分折算，失败/取消不扣）；
+			// 扣后余额随 done 帧下发，前端标题栏 ⚡ 积分实时刷新（服务端归口，客户端不做任何积分计算）
+			cost := aiPointsCost(usage.TotalTokens)
+			var balancePtr *float64
+			if usage.TotalTokens > 0 {
+				if balance, derr := userPointsDeduct(t.Username, cost); derr != nil {
+					// 扣分失败不阻断任务收尾（答复已落库），仅记日志便于对账
+					logger.Error("Agent 任务积分扣除失败（任务 %s，用户 %s，消耗 %d tokens）：%v", t.ID, t.Username, usage.TotalTokens, derr)
+				} else {
+					balancePtr = &balance
+					logger.Info("Agent 任务积分扣除（任务 %s，用户 %s，- %.3f 积分，%d tokens，余额 %.3f）", t.ID, t.Username, cost, usage.TotalTokens, balance)
+					// 积分流水审计（Agent 任务扣除，操作人 system）
+					recordPointsLog(t.Username, -cost, balance, "ai_agent_deduct", "system",
+						fmt.Sprintf("Agent 任务（智能体 %s，%d 步）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", t.Agent.Name, t.steps, usage.TotalTokens))
+				}
+			}
 			// 阶段七十七：完结统计文件变更（done/error/cancelled 均携带——中途取消的脏改也可撤销）
 			changes := s.agentFinalizeChanges(t)
-			donePayload := map[string]interface{}{"result": result, "steps": t.steps, "msg_id": msgID}
+			donePayload := map[string]interface{}{
+				"result": result, "steps": t.steps, "msg_id": msgID,
+				// 阶段一百零二：全任务 Token 消耗随完结帧下发（前端任务卡与答复气泡同口径标注）
+				"prompt_tokens":     usage.PromptTokens,
+				"completion_tokens": usage.CompletionTokens,
+				"total_tokens":      usage.TotalTokens,
+			}
+			if balancePtr != nil {
+				donePayload["points_balance"] = *balancePtr
+			}
 			if len(changes) > 0 {
 				donePayload["changes"] = changes
 			}
@@ -2865,13 +2951,25 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 			}()
 		case "cancelled":
 			// 阶段七十七：取消同样结算变更（任务中已落盘的脏改出现审查条，可撤销）
-			cancelPayload := map[string]interface{}{"status": "cancelled", "text": "任务已取消", "msg_id": msgID}
+			// 阶段一百零二：取消不扣积分，但已消耗 Token 随帧下发（用户可感知消耗）
+			cancelPayload := map[string]interface{}{
+				"status": "cancelled", "text": "任务已取消", "msg_id": msgID,
+				"prompt_tokens":     usage.PromptTokens,
+				"completion_tokens": usage.CompletionTokens,
+				"total_tokens":      usage.TotalTokens,
+			}
 			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
 				cancelPayload["changes"] = changes
 			}
 			s.agentEmit(t, "status", cancelPayload)
 		default:
-			errPayload := map[string]interface{}{"message": errMsg, "steps": t.steps, "msg_id": msgID}
+			errPayload := map[string]interface{}{
+				"message": errMsg, "steps": t.steps, "msg_id": msgID,
+				// 阶段一百零二：失败不扣积分，但已消耗 Token 随帧下发（用户可感知消耗）
+				"prompt_tokens":     usage.PromptTokens,
+				"completion_tokens": usage.CompletionTokens,
+				"total_tokens":      usage.TotalTokens,
+			}
 			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
 				errPayload["changes"] = changes
 			}
@@ -2922,7 +3020,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
 		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
-		content, toolCalls, streamed, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,
+		content, toolCalls, streamed, u, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,
 			func(delta string) {
 				s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
 			},
@@ -2930,6 +3028,13 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				s.agentEmit(t, "thought_delta", map[string]interface{}{"text": delta})
 			})
 		cancelAsk()
+		// 阶段一百零二：任务全程 Token 累计（每轮模型调用累加；失败轮已产生的消耗同样计入，
+		// 完结时统一落库/随帧下发，completed 再扣积分）
+		t.mu.Lock()
+		t.usageTotal.PromptTokens += u.PromptTokens
+		t.usageTotal.CompletionTokens += u.CompletionTokens
+		t.usageTotal.TotalTokens += u.TotalTokens
+		t.mu.Unlock()
 		if err != nil {
 			s.agentFinish(t, "failed", "", "模型调用失败："+err.Error())
 			return
