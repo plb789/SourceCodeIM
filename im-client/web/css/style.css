@@ -8386,10 +8386,13 @@ html.m .ms-actions {
 /* 设置页：仅占用主聊天区（浏览区）——原 fixed inset:0 铺满全屏会盖住左侧列表栏（用户实测反馈
    2026-09-13），改为 absolute 定位相对 .main-chat（该容器 position:relative 已就绪），左侧列表
    保持可见可点，与浏览区全屏语义一致；DOM 由 JS 移入 .main-chat 内部 */
+/* z-index 1640：高于浏览区整组（面板 1600 / 把手与列表按钮 1601 / 展开按钮 1602）——浏览区
+   可见时点标题栏设置按钮，设置页直接盖在浏览区上层（原 100 被浏览区盖住看似"点了没反应"）；
+   低于个人资料面板（1650）/弹窗系（1700+），设置页开着时弹出各面板仍正常置顶 */
 .settings-mask {
     position: absolute;
     inset: 0;
-    z-index: 100;
+    z-index: 1640;
     display: flex;
     background: var(--panel-bg);
     color: var(--text);
@@ -9418,6 +9421,13 @@ html.m .ms-actions {
    左缘之上）；否则收起态用户在列表右侧看不到把手，会误以为列表按钮跑到了浏览区右缘
    （与右缘的聊天列展开按钮混淆） */
 .main-chat.browser-chat-collapsed > #list-toggle-btn {
+    visibility: visible;
+}
+
+/* 阶段一百零六：收起态豁免设置页——设置页 DOM 挂在 .main-chat 下，会被上面的收起态
+   visibility:hidden 规则误伤（浏览区占满全宽时点设置按钮，页面打开了却看不见）；豁免后
+   设置页（z-index 1640 高于浏览区）正常盖在浏览区上层 */
+.main-chat.browser-chat-collapsed > #settings-mask {
     visibility: visible;
 }
 
