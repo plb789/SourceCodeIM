@@ -7554,6 +7554,15 @@
         if (on) wsPanelGitRefresh();
     }
 
+    // git 操作进度条开关：提交/推送/拉取全程显示（Trae CN 同款），完成/失败隐藏。
+    // 进度条元素每次渲染随 git 视图重建，这里实时查询（操作期间无全量重渲染，元素稳定）
+    function wsGitProgress(on) {
+        var el = wsPanel.gitEl;
+        if (!el) return;
+        var p = el.querySelector('.ws-git-progress');
+        if (p) p.classList.toggle('on', !!on);
+    }
+
     // 拉取 git 状态并重渲染（busy 防并发；失败 Toast 后仍重渲染保持视图一致）
     function wsPanelGitRefresh() {
         var g = wsPanel.git;
@@ -7572,8 +7581,10 @@
             g.staged = all.filter(function (e) { return e.x !== ' ' && e.x !== '?'; });
             g.changes = all.filter(function (e) { return e.y !== ' ' || e.x === '?'; });
             g.loaded = true;
-            // 提交历史每次刷新重拉（提交/推送后未推送标记会变）；分支列表同源刷新（审查目标选择用）
-            g.log = g.noCommits ? [] : null;
+            // 提交历史每次刷新重拉（提交/推送后未推送标记会变）；分支列表同源刷新（审查目标选择用）。
+            // 阶段一百零五修复：已有数据时保留旧列表静默校准（原实现先置 null，每次切换模式/刷新都闪"加载中…"），
+            // LoadLog 完成后经元素签名比对：数据未变零重绘，变了才原位替换；首次打开仍为加载中占位
+            g.log = g.noCommits ? [] : (g.log || null);
             if (g.repo && !g.noCommits) {
                 wsPanelGitLoadLog();
                 wsPanelGitLoadBranches();
@@ -7621,6 +7632,11 @@
         if (wsPanel.git.busy) return Promise.resolve(); // 忙碌时静默忽略，返回已决议 promise 便于链式调用
         wsPanel.git.busy = true;
         if (wsPanel.gitBody) wsPanel.gitBody.classList.add('git-busy');
+        // 阶段一百零五：耗时操作（提交/推送/拉取）全程显示不定态水平进度条（Trae CN 同款），
+        // 无上游兜底重推（push→pushu）递归续接，进度条持续到整链完结
+        var longOp = payload.sub === 'commit' || payload.sub === 'push' ||
+            payload.sub === 'pushu' || payload.sub === 'pull';
+        if (longOp) wsGitProgress(true);
         return wsPanelGitReq(payload).then(function () {
             if (doneTip) showToast(doneTip);
         }).catch(function (err) {
@@ -7648,6 +7664,7 @@
             }
             showToast('操作失败：' + msg);
         }).then(function () {
+            wsGitProgress(false); // 进度条随操作完结隐藏（成功/失败同口径）
             wsPanel.git.busy = false;
             wsPanelGitRefresh().then(function () {
                 if (payload.sub === 'pull') wsPanelRefreshTree(); // 拉取落地的新文件同步到树
@@ -7888,6 +7905,9 @@
         var g = wsPanel.git;
         var el = wsPanel.gitEl;
         if (!el) return;
+        // 阶段一百零五修复：清理前先捕获旧提交历史分区——数据未变（元素签名一致）时整区重渲染原样复用，
+        // 模式切换/状态刷新触发的重建不再丢失历史区滚动位置与悬停详情卡
+        var prevLogSec = el.querySelector('.ws-git-log');
         el.textContent = '';
         // 头部：标题 + 拉取/推送/刷新（非仓库时仅初始化引导，不显示动作按钮）
         var head = document.createElement('div');
@@ -7934,6 +7954,10 @@
         refB.addEventListener('click', function () { wsPanelGitRefresh(); });
         head.appendChild(refB);
         el.appendChild(head);
+        // 阶段一百零五：git 操作进度条（Trae CN 同款不定态水平滑动）——提交/推送/拉取期间显示，完成即隐
+        var prog = document.createElement('div');
+        prog.className = 'ws-git-progress';
+        el.appendChild(prog);
         // 尚非 git 仓库：引导初始化（Trae CN 同款）
         if (!g.repo) {
             var hint = document.createElement('div');
@@ -8130,7 +8154,14 @@
         var bottom = document.createElement('div');
         bottom.className = 'ws-git-bottom';
         var reviewSec = wsGitReviewSection(g);
-        var logSec = wsGitLogSection(g);
+        // 历史分区复用判定：有数据且签名一致 → 复用旧分区（滚动/悬停/滑块状态保留）；
+        // 否则新建（数据变化路径先收起 body 级单例悬停详情卡，防旧行销毁后卡片悬空）
+        var logSig = (g.log && g.log.length) ? JSON.stringify([g.branch, g.log, g.ahead]) : null;
+        var logSec = (prevLogSec && logSig !== null && prevLogSec._logSig === logSig) ? prevLogSec : wsGitLogSection(g);
+        if (logSec !== prevLogSec) {
+            if (logSig !== null) logSec._logSig = logSig;
+            wsGitCommitCardHide();
+        }
         // 初始高度钳制（与拖拽模型同源）：avail = 面板高 - 两条拖拽条12 - 文件区保底 bodyMin。
         // 折叠分区不设固定高度（收缩为头部自然高度，腾出的空间由文件区 flex:1 向下吸收——
         // 否则折叠后留下固定高度的空白盒、底部布局整体上蹿）；展开分区照旧钳制，
@@ -8549,8 +8580,9 @@
             g.log = d.commits || [];
             g.logHasMore = !!d.has_more;
         }).catch(function () {
-            g.log = [];
-            g.logHasMore = false;
+            // 拉取失败：此前已有数据则保留静默降级（下次刷新自动重试，不把已有历史误显示为"暂无提交"）；
+            // 仅首次（null）置空数组走"暂无提交"口径
+            if (!g.log) g.log = [];
         }).then(function () {
             g.logBusy = false;
             var el = wsPanel.gitEl;
@@ -8560,8 +8592,12 @@
             // 阶段一百零五：签名比对防闪烁——提交/推送后重拉历史，内容（分支/提交列表/未推送数）
             // 无变化时跳过整区替换（原实现每次 replaceWith，悬停详情卡/滚动位置丢失且视觉闪烁）
             var sig = JSON.stringify([g.branch, g.log, g.ahead]);
-            if (old && sig === wsPanelGitLoadLog._sig) return;
-            wsPanelGitLoadLog._sig = sig;
+            // 阶段一百零五修复：签名锚定到旧分区元素本身（原静态闭包签名在整区重渲染后失真——
+            // 模式切换回源代码管理触发 wsPanelGitRender 重建出"加载中…"分区，随后相同数据
+            // 被静态签名误判为无变化而跳过替换，提交历史永久停留加载中）。
+            // 元素级签名：重建的加载中分区无 _logSig 必替换；数据未变的原位分区仍跳过（防闪烁）
+            if (old && old._logSig === sig) return;
+            fresh._logSig = sig;
             if (old) {
                 wsGitCommitCardHide(); // 旧分区被替换后其悬停行消失，先收起详情卡防悬空
                 // 继承旧分区的行内固定高度：异步刷新若不继承，历史区会被内容撑高、拖拽条失效，
@@ -8596,6 +8632,9 @@
                 (d.commits || []).forEach(function (c) { sec2.insertBefore(wsGitLogRow(g, c), m || null); });
                 if (m) m.textContent = g.logHasMore ? '上滑加载更多' : '已全部加载';
                 if (sec2._osbUpdate) sec2._osbUpdate(); // 内容增高后同步滑块长度/位置
+                // 元素签名同步追加后的全量数据：保持「元素._logSig == 当前渲染数据签名」不变量——
+                // 否则签名停在第一页，之后刷新即使数据完全一致也会误判变化整区替换（历史区滚动位置丢失）
+                sec2._logSig = JSON.stringify([g.branch, g.log, g.ahead]);
             } else if (wsPanel.git.mode) {
                 wsPanelGitRender(); // 兜底：分区已被重建（如折叠切换），整区重渲染
             }
