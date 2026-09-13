@@ -4983,6 +4983,12 @@ html.m #list-panel.list-collapsed {
 
 @keyframes wsGitAiPulse { 50% { opacity: .3; } }
 
+/* AI 生成中占位文案（「AI 正在生成提交信息…」）：置灰斜体与真实内容区分，首个增量到达即清除 */
+.ws-git-msg.ai-ph {
+    color: var(--text-secondary, #999);
+    font-style: italic;
+}
+
 /* 输入框右侧 ▾ 菜单按钮（AI 生成/使用上次信息/清空） */
 .ws-git-msg-arrow {
     width: 20px;

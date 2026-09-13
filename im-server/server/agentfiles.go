@@ -881,7 +881,9 @@ type wsGitAIReq struct {
 }
 
 // wsGitAIMsgClean 提交信息清洗（阶段一百零五改造）：去围栏标记/引号；标题行压成一行限 110 字；
-// 标题后保留一个分隔空行；正文保留「- 」多行列表结构与缩进（TRAE 同款），内部空行丢弃，总长限 2000 字符
+// 标题后保留一个分隔空行；正文保留「- 」多行列表结构与缩进（TRAE 同款），内部空行丢弃。
+// 阶段一百零五简洁化（用户反馈）：总长限 2000→500 字符——正文要求每条一行简单明了，
+// 超限说明模型未遵守简洁口径，截断兜底防长篇大论
 func wsGitAIMsgClean(s string) string {
 	s = strings.NewReplacer("`", "", "\"", "", "'", "").Replace(s)
 	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
@@ -908,8 +910,8 @@ func wsGitAIMsgClean(s string) string {
 		out = append(out, strings.TrimRight(ln, " \t"))
 	}
 	res := strings.TrimRight(strings.Join(out, "\n"), "\n ")
-	if r := []rune(res); len(r) > 2000 {
-		res = string(r[:2000]) + "\n…（说明过长已截断）"
+	if r := []rune(res); len(r) > 500 {
+		res = string(r[:500]) + "\n…（说明过长已截断）"
 	}
 	return res
 }
@@ -943,31 +945,13 @@ func (s *Server) wsServerGitAI(username, content string) *wsFileResult {
 	}
 	var sys string
 	// 阶段一百零五补强（用户反馈 1ff9131 只有标题）：按 diff 统计文件数注入硬性要求——
-	// 多文件变更必须逐条正文，模型仍只回标题时带纠偏指令自动重试一次（见下方 commitmsg 清洗后补检）
+	// 多文件变更必须逐条正文，模型仍只回标题时带纠偏指令自动重试一次（见下方 commitmsg 清洗后补检）。
+	// 阶段一百零六：提示词模板后台化（admingitprompt.go 归口）——admin 可配置热更新，此处只传运行时动态量
 	nFiles := strings.Count(diff, "diff --git ")
 	if r.Mode == "review" {
-		sys = "你是资深代码审查员。审查给出的分支变更 diff（相对目标分支 " + strings.TrimSpace(r.Target) +
-			" 的三点差异），输出 Markdown 审查报告，结构：## 变更总结（3-6 条要点，逐条概述改了什么、为什么）、" +
-			"## 潜在问题（按严重程度列出，含位置与原因；确无问题则写\"未发现明显问题\"）、## 改进建议（可执行的具体建议）。全中文，简洁专业。"
+		sys = gitReviewSys(strings.TrimSpace(r.Target))
 	} else {
-		// 阶段一百零五（用户反馈 2026-09-13）：原实现只生成单行标题且清洗时压掉全部换行——
-		// 多文件提交没有逐文件说明（TRAE CN 同款为「标题+空行+逐条变更说明」）。改为多行格式。
-		sys = "你是提交信息生成助手。根据 git diff 生成符合 Conventional Commits 规范的中文提交信息。"
-		if nFiles >= 2 {
-			sys += "本次变更涉及 " + strconv.Itoa(nFiles) + " 个文件（diff 可能被截断，实际数量只会更多），每个文件都必须在正文中逐条说明。"
-		}
-		sys += "格式：" +
-			"第一行为标题：type(scope): 描述（type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略），概括本次变更核心；" +
-			"随后空一行，正文用「- 」开头的列表逐条说明变更：多个文件时按文件（或逻辑分组）逐条写明改了什么、为什么改，" +
-			"同一条目下的补充说明用两空格缩进的续行；" +
-			"仅当只改动 1 个文件且改动极小（如仅改错别字、调整一个数值）时才允许省略正文只留标题。" +
-			"只输出提交信息本身，不要解释、引号或代码块标记。"
-		// 原提示词（「单文件小改动可不加正文」的口子被模型扩大到多文件删除类变更，导致只回标题，已废弃保留备查）：
-		// sys = "你是提交信息生成助手。根据 git diff 生成符合 Conventional Commits 规范的中文提交信息，格式：" +
-		// 	"第一行为标题：type(scope): 描述（type 从 feat/fix/refactor/style/docs/test/chore/perf 中选择，scope 可省略），概括本次变更核心；" +
-		// 	"随后空一行，正文用「- 」开头的列表逐条说明变更：多个文件时按文件（或逻辑分组）逐条写明改了什么、为什么改，" +
-		// 	"同一条目下的补充说明用两空格缩进的续行；单文件小改动可不加正文只留标题。" +
-		// 	"只输出提交信息本身，不要解释、引号或代码块标记。"
+		sys = gitCommitmsgSys(nFiles)
 	}
 	agent := &AIRunAgent{Name: "Git助手", Provider: prov}
 	// 流式增量归口：commitmsg 模式经 AGENT_EVENT 实时下发打字机增量（审查报告走标签页一次性展示，不流式）
@@ -1024,7 +1008,7 @@ func (s *Server) wsServerGitAI(username, content string) *wsFileResult {
 		if nFiles >= 2 && !strings.Contains(text, "\n") {
 			sendReset()
 			logger.Info("AI 提交信息多文件仅标题，自动纠偏重试（用户 %s 文件数 %d）", username, nFiles)
-			if text2, err2 := callAI(sys + "\n注意：上一次你只返回了标题行，正文缺失。本次必须输出：标题 + 空一行 + 「- 」开头的多行正文列表，逐个文件说明改了什么、为什么改。"); err2 == nil {
+			if text2, err2 := callAI(sys + "\n注意：上一次你只返回了标题行，正文缺失。本次必须输出：标题 + 空一行 + 「- 」开头的简短正文列表（每条一行、简单明了，逐个文件或逻辑分组一句话说明）。"); err2 == nil {
 				if t := strings.TrimSpace(text2); t != "" && strings.Contains(t, "\n") {
 					text = wsGitAIMsgClean(t)
 				}

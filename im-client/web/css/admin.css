@@ -1333,3 +1333,16 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     font-family: Consolas, Menlo, monospace;
     font-size: 12px;
 }
+
+/* Git 助手提示词编辑区（阶段一百零六）：等宽字体便于阅读提示词文本，纵向可拉伸 */
+.admin-gitprompt-text {
+    width: 100%;
+    resize: vertical;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.agentset-gitprompt-actions {
+    margin-top: 6px;
+}

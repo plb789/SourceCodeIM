@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.14">
+    <link rel="stylesheet" href="css/admin.css?v=1.15">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -460,6 +460,24 @@
                     </div>
                 </div>
 
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">Git 助手提示词</h3>
+                    <p class="admin-view-tip">源代码管理「AI 生成提交信息」与「AI 审查报告」的系统提示词。保存后下一次生成即按新提示词执行（热更新，无需重启服务端），持久化保存重启不丢；清空输入框并保存即恢复内置默认。</p>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label" for="agentset-git-commitmsg">AI 生成提交信息提示词 <span class="agentset-sub-tip">（占位符 {files} 会替换为多文件硬性要求，可省略——省略时多文件场景仍自动追加）</span></label>
+                        <textarea id="agentset-git-commitmsg" class="admin-input admin-gitprompt-text" rows="6" placeholder="留空使用内置默认"></textarea>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label" for="agentset-git-review">AI 审查报告提示词 <span class="agentset-sub-tip">（占位符 {target} 会替换为审查目标分支名，可省略）</span></label>
+                        <textarea id="agentset-git-review" class="admin-input admin-gitprompt-text" rows="6" placeholder="留空使用内置默认"></textarea>
+                    </div>
+                    <div class="agentset-actions agentset-gitprompt-actions">
+                        <button id="agentset-gitprompt-save" class="admin-btn primary">保存提示词</button>
+                        <button id="agentset-gitprompt-reset" class="admin-btn small">恢复默认</button>
+                        <span id="agentset-gitprompt-state" class="agentset-sub-tip"></span>
+                    </div>
+                </div>
+
                 <div class="agentset-actions">
                     <button id="agentset-save" class="admin-btn primary">保存全部设置</button>
                     <span id="agentset-tip" class="admin-view-tip"></span>
@@ -559,7 +577,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.20"></script>
+    <script src="js/admin.js?v=1.21"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

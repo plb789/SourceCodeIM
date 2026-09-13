@@ -334,6 +334,8 @@ func InitAgent(cfg *config.Config) {
 	if err := store.DB.AutoMigrate(&model.MsgPurgeApply{}); err != nil {
 		logger.Error("永久删除审批表迁移失败: %v", err)
 	}
+	// 阶段一百零六：Git 助手提示词表迁移 + 启动加载（后台可配置热更新，DB 值优先于内置默认）
+	initGitPrompts()
 	// 阶段六十二：加载审批白名单（命令前缀 + 写文件免审批开关）——审批弹窗"同意并加白"持久化，重启不丢
 	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
 		logger.Error("Agent 白名单表迁移失败: %v", err)

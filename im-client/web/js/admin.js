@@ -132,7 +132,7 @@
             // 阶段六十四：进入 Agent 任务审计视图拉取任务列表
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
-            else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); }
+            else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1456,6 +1456,59 @@
             $('agentset-tip').textContent = '已保存并热生效（' + new Date().toLocaleTimeString() + '）';
             showToast('Agent 设置已保存并热生效');
         }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // ===== 阶段一百零六：Git 助手提示词后台管理（admin 可配置热更新） =====
+    // 读取当前生效提示词回填（有自定义回自定义，否则回内置默认全文）与来源标记
+    function loadGitPrompts() {
+        api('GET', '/admin/api/gitprompt').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data || {};
+            $('agentset-git-commitmsg').value = d.commitmsg || '';
+            $('agentset-git-review').value = d.review || '';
+            gitPromptStateRender(d);
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 来源标记渲染（提交信息/审查报告各自标注 默认/自定义）
+    function gitPromptStateRender(d) {
+        $('agentset-gitprompt-state').textContent =
+            '当前：提交信息 ' + (d.commitmsg_custom ? '自定义' : '内置默认') +
+            '，审查报告 ' + (d.review_custom ? '自定义' : '内置默认');
+    }
+
+    // 保存：服务端内存热更新（下一次 AI 生成立即按新提示词执行）+ 落库重启不丢
+    $('agentset-gitprompt-save').addEventListener('click', function () {
+        var body = {
+            commitmsg: $('agentset-git-commitmsg').value.trim(),
+            review: $('agentset-git-review').value.trim()
+        };
+        api('PUT', '/admin/api/gitprompt', body).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '保存失败');
+                return;
+            }
+            gitPromptStateRender(result.data || {});
+            $('agentset-gitprompt-state').textContent += '（已保存并热生效 ' + new Date().toLocaleTimeString() + '）';
+            showToast('Git 助手提示词已保存并热生效');
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // 恢复默认：清空两栏并按空串保存（服务端删记录回内置默认），确认后执行
+    $('agentset-gitprompt-reset').addEventListener('click', function () {
+        confirmBox('确定恢复内置默认提示词？两栏自定义内容将被清除。', function () {
+            api('PUT', '/admin/api/gitprompt', { commitmsg: '', review: '' }).then(function (result) {
+                if (!result.ok) {
+                    showToast(result.msg || '操作失败');
+                    return;
+                }
+                loadGitPrompts(); // 重新拉取默认全文回填
+                showToast('已恢复内置默认提示词');
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
     });
 
     // atTd 单元格构造辅助（统一 class 与纯文本写入，防注入）

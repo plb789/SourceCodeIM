@@ -481,3 +481,18 @@ type MCPServer struct {
 
 // TableName 指定表名
 func (MCPServer) TableName() string { return "im_mcp_server" }
+
+// SysPrompt 阶段一百零六：系统提示词配置表（admin 后台可配置、保存即热更新，无需重启服务端）。
+// 代码内硬编码提示词降级为默认值：本表有记录且内容非空时优先生效（后台调整属最新意图，重启不丢）；
+// 清空保存即恢复默认（删除记录）。Key 模块唯一标识（如 git_commitmsg=AI 提交信息生成、
+// git_review=AI 代码审查报告），后续其它提示词后台化复用本表归口。
+// 列名 key_name：key 为 MySQL 保留字，显式改名防建表/查询歧义
+type SysPrompt struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Key        string    `gorm:"column:key_name;type:varchar(32);not null;uniqueIndex" json:"key"`
+	Content    string    `gorm:"column:content;type:text;not null" json:"content"` // 完整提示词文本
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (SysPrompt) TableName() string { return "im_sys_prompt" }

@@ -8389,24 +8389,63 @@
     }
 
     // AI 生成提交信息：暂存区 diff 优先（即将提交的内容最有代表性），为空回退全部工作区变更。
-    // 阶段一百零五：流式打字机（TRAE CN 同款）——服务端经 AGENT_EVENT 下发 git_ai_delta 增量实时填入
-    // 提交框，最终响应到达后以清洗后全文校准；生成期间清空原输入，失败恢复原值
-    var wsGitAIStreaming = false; // 生成中标记（delta 事件与请求响应的窗口期判定）
-    function wsGitAIDelta(text) {
-        if (!wsGitAIStreaming) return;
+    // 阶段一百零五：流式打字机（TRAE CN 同款）——服务端经 AGENT_EVENT 下发 git_ai_delta 增量填入
+    // 提交框，最终响应到达后以清洗后全文校准；生成期间清空原输入，失败恢复原值。
+    // 阶段一百零五流畅度修复（TRAE CN 同款）：点击先显示「AI 正在生成」占位，网络增量不再整块直填
+    // （帧大跳字/帧间停顿卡顿），先进缓冲再由 20ms 定时器按积压量步进吐字——积压越多吐越快，
+    // 视觉上始终匀速打字；生成期间输入框只读防误编辑，重试（git_ai_reset）同步清缓冲
+    var wsGitAIStreaming = false;  // 生成中标记（delta 事件与请求响应的窗口期判定）
+    var wsGitAIPending = '';       // 待渲染增量缓冲（网络帧节奏与渲染节奏解耦）
+    var wsGitAITimer = null;       // 打字机渲染定时器（首个增量到达启动，完结/失败停止）
+    var wsGitAIPh = false;         // 「AI 正在生成」占位展示中（首个增量到达时清除）
+
+    // 打字机单帧吐字：按积压量放大步长（约 0.5s 内追平积压），保证任意帧到达节奏下都平滑
+    function wsGitAITick() {
+        if (!wsGitAIPending) return;
         var msg = wsPanel.gitMsg;
-        if (!msg) return;
-        msg.value += text;
+        if (!msg) { wsGitAIPending = ''; return; }
+        var cut = Math.max(2, Math.ceil(wsGitAIPending.length / 25));
+        var cc = wsGitAIPending.charCodeAt(cut - 1);
+        if (cc >= 0xD800 && cc <= 0xDBFF && wsGitAIPending.length > cut) cut += 1; // 代理对防截断
+        if (wsGitAIPh) { // 首个增量到达：清掉「AI 正在生成」占位与置灰样式
+            msg.value = '';
+            msg.classList.remove('ai-ph');
+            wsGitAIPh = false;
+        }
+        msg.value += wsGitAIPending.slice(0, cut);
+        wsGitAIPending = wsGitAIPending.slice(cut);
         if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
     }
+
+    // 停止打字机（成功校准/失败恢复/链条收尾共用）：清定时器与缓冲，恢复输入框可编辑
+    function wsGitAIStopStream() {
+        wsGitAIStreaming = false;
+        if (wsGitAITimer) { clearInterval(wsGitAITimer); wsGitAITimer = null; }
+        wsGitAIPending = '';
+        wsGitAIPh = false;
+        if (wsPanel.gitMsg) wsPanel.gitMsg.classList.remove('ai-ph');
+    }
+
+    function wsGitAIDelta(text) {
+        if (!wsGitAIStreaming || !text) return;
+        wsGitAIPending += text;
+        if (!wsGitAITimer) wsGitAITimer = setInterval(wsGitAITick, 20);
+    }
+
     function wsPanelGitGenMsg(btn) {
         var g = wsPanel.git;
         if (g.aiBusy) return;
         g.aiBusy = true;
         var msg = wsPanel.gitMsg;
         var prev = msg ? msg.value : '';
-        if (msg) { msg.value = ''; if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow(); }
         wsGitAIStreaming = true;
+        if (msg) { // 先显示「AI 正在生成」占位（TRAE CN 同款），置灰斜体 + 只读防生成期间误编辑
+            msg.value = 'AI 正在生成提交信息…';
+            msg.classList.add('ai-ph');
+            msg.readOnly = true;
+            wsGitAIPh = true;
+            if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
+        }
         btn.classList.add('loading');
         var diffTxt = '';
         wsPanelGitReq({ sub: 'diffcached' }).then(function (d) {
@@ -8416,18 +8455,19 @@
             if (!diffTxt.trim()) throw new Error('没有可分析的变更（暂存区与工作区均为空）');
             return wsPanelGitAIReq({ mode: 'commitmsg', diff: diffTxt });
         }).then(function (r) {
-            wsGitAIStreaming = false; // 先停 delta 再校准，防响应文本被增量覆盖
+            wsGitAIStopStream(); // 先停打字机（含残余缓冲）再校准，防响应文本被增量覆盖
             if (wsPanel.gitMsg && r.text) {
                 wsPanel.gitMsg.value = r.text;
                 if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
                 wsPanel.gitMsg.focus();
             }
         }).catch(function (err) {
-            wsGitAIStreaming = false;
+            wsGitAIStopStream();
             if (msg) { msg.value = prev; if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow(); } // 失败恢复原输入
             showToast('AI 提交信息：' + (err && err.message || err));
         }).then(function () {
-            wsGitAIStreaming = false;
+            wsGitAIStopStream();
+            if (msg) msg.readOnly = false;
             g.aiBusy = false;
             btn.classList.remove('loading');
         });
@@ -10392,9 +10432,12 @@
         if (ev && ev.type === 'git_ai_delta') { wsGitAIDelta(ev.text || ''); return; }
         // 阶段一百零五补强：多文件仅标题时服务端自动纠偏重试，重试前清空提交框第一次的残文
         if (ev && ev.type === 'git_ai_reset') {
-            if (wsGitAIStreaming && wsPanel.gitMsg) {
-                wsPanel.gitMsg.value = '';
-                if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
+            if (wsGitAIStreaming) {
+                wsGitAIPending = ''; // 同步清打字机缓冲，防第一次的残余增量重试期间混入
+                if (wsPanel.gitMsg) {
+                    wsPanel.gitMsg.value = '';
+                    if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
+                }
             }
             return;
         }

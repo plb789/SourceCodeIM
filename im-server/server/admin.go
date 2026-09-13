@@ -92,6 +92,9 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/mcp/servers/{id}", s.adminGuard(s.handleAdminMCPDelete))
 	http.HandleFunc("POST /admin/api/mcp/servers/{id}/reconnect", s.adminGuard(s.handleAdminMCPReconnect))
 	http.HandleFunc("POST /admin/api/mcp/test", s.adminGuard(s.handleAdminMCPTest))
+	// 阶段一百零六：Git 助手提示词管理（admin 可配置热更新，DB 值优先于内置默认）
+	http.HandleFunc("GET /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptGet))
+	http.HandleFunc("PUT /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptSave))
 	// 阶段五十一：知识库管理（库 CRUD/文件上传删除/命中测试，实现归口 adminkb.go）
 	http.HandleFunc("GET /admin/api/kb/status", s.adminGuard(s.handleAdminKBStatus))
 	http.HandleFunc("GET /admin/api/kb/list", s.adminGuard(s.handleAdminKBList))
