@@ -385,6 +385,11 @@
 
     // 分类切换归口：导航高亮 + 内容面板显隐
     function settingsShowView(view) {
+        // 阶段一百零五：MCP 仅 PC 端支持（Web/手机端无 desktop 桥），不支持时提示并留在当前分类
+        if (view === 'mcp' && !agentMcpSupported()) {
+            showToast('仅 PC 客户端支持自定义 MCP 服务器');
+            return;
+        }
         settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
         if (view === 'appearance') settingsRenderTheme();
@@ -424,6 +429,8 @@
 
     function settingsClose() {
         settingsMask.classList.add('hidden');
+        // 阶段一百零五：MCP 面板随设置页关闭时同步停止状态轮询（closeMcpPanel 内含轮询清理）
+        closeMcpPanel();
     }
 
     settingsBtn.addEventListener('click', settingsOpen);
@@ -3892,7 +3899,9 @@
     // ===== 阶段九十：我的 MCP 服务器（仅 PC 端；TRAE 同款本机 stdio，工具清单上报服务端注入 Agent） =====
     // 配置与凭据存 PC 主进程 agent_mcp.json（按用户名隔离）；面板仅增删改/测试/展示状态，
     // 工具清单上报归口 reportPcMcpTools（登录/保存后轮询窗口内清单变化即重报，服务端全量覆盖）
-    var agentMcpMask = document.getElementById('agent-mcp-mask');
+    // 阶段一百零五：原弹窗壳 agent-mcp-mask 已废弃（DOM 注释归档于 index.html），面板迁入设置页 settings-view-mcp；
+    // 列表/表单全部 DOM id 平移复用，本区逻辑仅"打开/关闭"两处适配设置页模式
+    var agentMcpPanel = document.getElementById('settings-view-mcp');
     var agentMcpListEl = document.getElementById('agent-mcp-list');
     var agentMcpEditEl = document.getElementById('agent-mcp-edit');
     var agentMcpServers = [];     // 编辑态：本机服务器配置（与主进程存储同构）
@@ -4018,14 +4027,18 @@
             agentMcpLiveStatus = [];
             agentMcpEditEl.classList.add('hidden');
             renderAgentMcpList();
-            agentMcpMask.classList.remove('hidden');
+            // 阶段一百零五：原独立弹窗改为打开设置页并切到 MCP 分类（settingsOpen/settingsShowView
+            // 为函数声明提升，同作用域可直接调用）；标题栏工具栏按钮与设置页导航双入口同归此处
+            settingsOpen();
+            settingsShowView('mcp');
             reportPcMcpTools(); // 打开面板先快照一次状态
             startMcpStatusPoll();
         });
     }
 
     function closeMcpPanel() {
-        agentMcpMask.classList.add('hidden');
+        // 阶段一百零五：原 agentMcpMask 隐藏已废弃——面板显隐归设置页 settingsShowView 状态机；
+        // 关闭设置页时由 settingsClose 统一调用本函数停止状态轮询
         stopMcpStatusPoll();
     }
 
@@ -4109,10 +4122,8 @@
         });
     });
     agentMcpBtn.addEventListener('click', openMcpPanel);
-    document.getElementById('agent-mcp-close').addEventListener('click', closeMcpPanel);
-    agentMcpMask.addEventListener('click', function (e) {
-        if (e.target === agentMcpMask) closeMcpPanel(); // 点遮罩关闭
-    });
+    // 阶段一百零五：原弹窗"关闭"按钮与遮罩点击关闭已随 agent-mcp-mask 废弃（DOM 注释归档），
+    // 面板显隐归设置页状态机，关闭设置页时由 settingsClose 统一停轮询（见设置页区块）
 
     // ===== 阶段九十一：内置浏览区（TRAE CN 同款，仅 PC Electron 壳内启用） =====
     // 阶段九十三（全 DOM 化）：file 标签由主页面同源 iframe 承载，web 标签由主页面 <webview>

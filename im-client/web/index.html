@@ -632,6 +632,11 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.95 6.95 0 0 1-4.9-2.03l-1.42 1.42A8.95 8.95 0 0 0 13 21a9 9 0 0 0 0-18z"/></svg>
                     <span>任务与自动化</span>
                 </button>
+                <!-- 阶段一百零五：MCP 管理（原独立弹窗迁移入设置页，TRAE CN 同款聚合入口；DOM id 全保留，chat.js 逻辑复用） -->
+                <button class="settings-nav-item" data-view="mcp">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm-5 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+                    <span>MCP</span>
+                </button>
                 <button class="settings-nav-item" data-view="about">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
                     <span>关于</span>
@@ -689,6 +694,45 @@
                 <h3 class="settings-subtitle">Agent 任务</h3>
                 <p class="settings-desc">给智能体下发自动化任务（文件整理、代码检查、浏览器操作等），任务排队执行、全程留痕可回溯。</p>
                 <button id="settings-open-taskhist" class="settings-btn">打开任务历史</button>
+            </section>
+            <!-- MCP：本机 stdio 服务器管理（阶段一百零五自独立弹窗迁入；DOM id 全保留，chat.js 逻辑零改动复用；
+                 仅 PC 端 Electron 壳内可用，Web/手机端无 desktop 桥由 agentMcpSupported() 旁路提示） -->
+            <section id="settings-view-mcp" class="settings-view hidden">
+                <h2 class="settings-title">MCP</h2>
+                <div class="agent-ws-tip">配置本机 MCP 服务器（stdio）：保存后在本机拉起子进程并自动发现工具，工具清单上报服务端后 AI Agent 即可调用（调用在本机执行）。支持每服务器一键"测试连接"，凭据仅保存在本机。</div>
+                <div id="agent-mcp-list" class="agent-mcp-list settings-mcp-list"></div>
+                <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
+                <!-- 编辑区（新增/编辑共用，隐藏切换） -->
+                <div id="agent-mcp-edit" class="agent-mcp-edit hidden">
+                    <div class="agent-mcp-field">
+                        <label>服务器名称</label>
+                        <input id="agent-mcp-name" type="text" placeholder="如：filesystem（全局唯一，工具将以 mcp_pc_名称_工具名 注入）">
+                    </div>
+                    <div class="agent-mcp-field">
+                        <label>启动命令</label>
+                        <input id="agent-mcp-command" type="text" placeholder="如：node 或 npx（.cmd/.bat 自动经 cmd 转发）">
+                    </div>
+                    <div class="agent-mcp-field">
+                        <label>命令参数（每行一个）</label>
+                        <textarea id="agent-mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                    </div>
+                    <div class="agent-mcp-field">
+                        <label>环境变量（每行一条 KEY=VALUE）</label>
+                        <textarea id="agent-mcp-env" rows="2" placeholder="API_KEY=xxx"></textarea>
+                    </div>
+                    <label class="agent-mcp-enable-row">
+                        <input id="agent-mcp-enabled" type="checkbox" checked>
+                        启用（保存后自动建连并上报工具清单）
+                    </label>
+                    <div class="agent-mcp-test-row">
+                        <button id="agent-mcp-test" class="kb-create-btn agent-ws-mini-btn">测试连接</button>
+                        <span id="agent-mcp-test-out" class="agent-mcp-test-out"></span>
+                    </div>
+                    <div class="modal-btns">
+                        <button id="agent-mcp-edit-save" class="kb-create-btn">保存服务器</button>
+                        <button id="agent-mcp-edit-cancel" class="modal-btn">取消</button>
+                    </div>
+                </div>
             </section>
             <!-- 关于：应用信息 -->
             <section id="settings-view-about" class="settings-view hidden">
@@ -832,42 +876,44 @@
     </div>
 
     <!-- 阶段九十：我的 MCP 服务器面板（仅 PC 端；用户自定义本机 stdio MCP 服务器，保存后本机建连发现工具，
-         工具清单经 WS msg 67 上报服务端注入 Agent，调用下放本机执行器；凭据仅存本机不上报） -->
+         工具清单经 WS msg 67 上报服务端注入 Agent，调用下放本机执行器；凭据仅存本机不上报）
+         【阶段一百零五迁移归档】面板已迁入全屏设置页 settings-view-mcp（设置页"MCP"分类，TRAE CN 同款聚合），
+         下方原独立弹窗壳废弃注释保留备查；所有表单/列表 DOM id 已平移至设置页，chat.js 逻辑复用 -->
+    <!--
     <div id="agent-mcp-mask" class="modal-mask hidden">
         <div class="modal-box kb-box agent-mcp-box">
             <div class="modal-title">我的 MCP 服务器</div>
             <div class="agent-ws-tip">配置本机 MCP 服务器（stdio）：保存后在本机拉起子进程并自动发现工具，工具清单上报服务端后 AI Agent 即可调用（调用在本机执行）。支持每服务器一键"测试连接"，凭据仅保存在本机。</div>
-            <div id="agent-mcp-list" class="agent-mcp-list"></div>
-            <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
-            <!-- 编辑区（新增/编辑共用，隐藏切换） -->
-            <div id="agent-mcp-edit" class="agent-mcp-edit hidden">
+            <div id="agent-mcp-list-old" class="agent-mcp-list"></div>
+            <button id="agent-mcp-add-old" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
+            <div id="agent-mcp-edit-old" class="agent-mcp-edit hidden">
                 <div class="agent-mcp-field">
                     <label>服务器名称</label>
-                    <input id="agent-mcp-name" type="text" placeholder="如：filesystem（全局唯一，工具将以 mcp_pc_名称_工具名 注入）">
+                    <input id="agent-mcp-name-old" type="text" placeholder="如：filesystem（全局唯一，工具将以 mcp_pc_名称_工具名 注入）">
                 </div>
                 <div class="agent-mcp-field">
                     <label>启动命令</label>
-                    <input id="agent-mcp-command" type="text" placeholder="如：node 或 npx（.cmd/.bat 自动经 cmd 转发）">
+                    <input id="agent-mcp-command-old" type="text" placeholder="如：node 或 npx（.cmd/.bat 自动经 cmd 转发）">
                 </div>
                 <div class="agent-mcp-field">
                     <label>命令参数（每行一个）</label>
-                    <textarea id="agent-mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                    <textarea id="agent-mcp-args-old" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
                 </div>
                 <div class="agent-mcp-field">
                     <label>环境变量（每行一条 KEY=VALUE）</label>
-                    <textarea id="agent-mcp-env" rows="2" placeholder="API_KEY=xxx"></textarea>
+                    <textarea id="agent-mcp-env-old" rows="2" placeholder="API_KEY=xxx"></textarea>
                 </div>
                 <label class="agent-mcp-enable-row">
-                    <input id="agent-mcp-enabled" type="checkbox" checked>
+                    <input id="agent-mcp-enabled-old" type="checkbox" checked>
                     启用（保存后自动建连并上报工具清单）
                 </label>
                 <div class="agent-mcp-test-row">
-                    <button id="agent-mcp-test" class="kb-create-btn agent-ws-mini-btn">测试连接</button>
-                    <span id="agent-mcp-test-out" class="agent-mcp-test-out"></span>
+                    <button id="agent-mcp-test-old" class="kb-create-btn agent-ws-mini-btn">测试连接</button>
+                    <span id="agent-mcp-test-out-old" class="agent-mcp-test-out"></span>
                 </div>
                 <div class="modal-btns">
-                    <button id="agent-mcp-edit-save" class="kb-create-btn">保存服务器</button>
-                    <button id="agent-mcp-edit-cancel" class="modal-btn">取消</button>
+                    <button id="agent-mcp-edit-save-old" class="kb-create-btn">保存服务器</button>
+                    <button id="agent-mcp-edit-cancel-old" class="modal-btn">取消</button>
                 </div>
             </div>
             <div class="modal-btns">
@@ -875,6 +921,7 @@
             </div>
         </div>
     </div>
+    -->
 
     <!-- 阶段四十六：文档在线编辑弹窗（OnlyOffice，自研窗口禁用系统弹窗；标题栏跟随主题色，编辑器经 iframe 挂载） -->
     <div id="doc-editor-mask" class="doc-editor-mask hidden"></div>
