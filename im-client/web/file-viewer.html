@@ -19,113 +19,182 @@
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
     <style>
-        /* 独立页硬编码暗色配色（与主程序浏览区/AI 代码块观感一致；viewer 无 CSS 变量通道） */
+        /* 主题变量：跟随主程序 im_theme（light/dark/system，同源 localStorage 共享）。
+           界面面（顶栏/正文/边框/表格/引用/按钮）随主题切换；代码块面保持深色恒定
+           （主程序 AI 代码块豆包同款 #0d1117，hljs GitHub Dark 双主题通用） */
+        :root {
+            --fv-bg: #f5f5f5;            /* 页面背景（主程序 --bg） */
+            --fv-bar-bg: #fafafa;        /* 顶栏/对比头（主程序 --header-bg） */
+            --fv-panel: #ffffff;         /* 浮层块底（主程序 --panel-bg） */
+            --fv-border: #e0e0e0;        /* 边框（主程序 --border） */
+            --fv-text: #333333;          /* 正文（主程序 --text） */
+            --fv-title: #333333;         /* 标题强调字色 */
+            --fv-text-light: #999999;    /* 次级文字（主程序 --text-light） */
+            --fv-primary: #07c160;       /* 主题色（微信绿，双主题同值） */
+            --fv-hover: #e8e8e8;         /* 悬停底色 */
+            --fv-quote-bg: #f0f0f0;      /* 引用/表头底色 */
+            --fv-inline-bg: #eaeaea;     /* 行内代码底 */
+            --fv-inline-fg: #c7254e;     /* 行内代码字色 */
+            --fv-link: #0366d6;          /* 链接色 */
+            --fv-scroll: #c8c8c8;        /* 滚动条拇指 */
+            --fv-banner-bg: #fdf3d9;     /* 提示横幅底 */
+            --fv-banner-fg: #8a6d1a;     /* 提示横幅字色 */
+            --fv-warn: #b8860b;          /* 脏状态字色 */
+            --fv-ok: #1a7f37;            /* 保存成功字色 */
+            --fv-code-surface: #0d1117;  /* 代码块面（深色恒定，豆包同款） */
+        }
+        [data-theme="dark"] {
+            --fv-bg: #111111;
+            --fv-bar-bg: #1a1a1a;
+            --fv-panel: #1e1e1e;
+            --fv-border: #333333;
+            --fv-text: #e0e0e0;
+            --fv-title: #f0f0f0;
+            --fv-text-light: #8a8a8a;
+            --fv-primary: #07c160;
+            --fv-hover: #2a2a2a;
+            --fv-quote-bg: #2a2a2a;
+            --fv-inline-bg: #2f3035;
+            --fv-inline-fg: #e8bf7a;
+            --fv-link: #6db3f2;
+            --fv-scroll: #4a4b50;
+            --fv-banner-bg: #3a3325;
+            --fv-banner-fg: #e5b567;
+            --fv-warn: #e5b567;
+            --fv-ok: #7ec699;
+            --fv-code-surface: #0d1117;
+        }
+        /* 跟随系统：系统为深色时同 dark 主题（与主程序 style.css 同口径） */
+        @media (prefers-color-scheme: dark) {
+            [data-theme="system"] {
+                --fv-bg: #111111;
+                --fv-bar-bg: #1a1a1a;
+                --fv-panel: #1e1e1e;
+                --fv-border: #333333;
+                --fv-text: #e0e0e0;
+                --fv-title: #f0f0f0;
+                --fv-text-light: #8a8a8a;
+                --fv-primary: #07c160;
+                --fv-hover: #2a2a2a;
+                --fv-quote-bg: #2a2a2a;
+                --fv-inline-bg: #2f3035;
+                --fv-inline-fg: #e8bf7a;
+                --fv-link: #6db3f2;
+                --fv-scroll: #4a4b50;
+                --fv-banner-bg: #3a3325;
+                --fv-banner-fg: #e5b567;
+                --fv-warn: #e5b567;
+                --fv-ok: #7ec699;
+                --fv-code-surface: #0d1117;
+            }
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; }
         body {
             display: flex; flex-direction: column;
-            background: #232428; color: #d4d4d4;
+            background: var(--fv-bg); color: var(--fv-text);
             font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 13px;
             overflow: hidden;
         }
         /* 顶栏：文件名 + 状态 + 操作按钮 */
         #fv-bar {
             flex: none; display: flex; align-items: center; gap: 8px;
-            padding: 7px 12px; border-bottom: 1px solid #36373b; background: #2a2b2f;
+            padding: 7px 12px; border-bottom: 1px solid var(--fv-border); background: var(--fv-bar-bg);
         }
         #fv-name {
             flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            font-size: 13px; font-weight: 600; color: #e8e8e8;
+            font-size: 13px; font-weight: 600; color: var(--fv-title);
         }
-        #fv-status { flex: none; font-size: 12px; color: #8a8b8f; }
-        #fv-status.dirty { color: #e5b567; }
-        #fv-status.saved { color: #7ec699; }
+        #fv-status { flex: none; font-size: 12px; color: var(--fv-text-light); }
+        #fv-status.dirty { color: var(--fv-warn); }
+        #fv-status.saved { color: var(--fv-ok); }
         .fv-btn {
-            flex: none; padding: 4px 14px; border: 1px solid #4a4b50; border-radius: 4px;
-            background: transparent; color: #d4d4d4; font-size: 12px; cursor: pointer;
+            flex: none; padding: 4px 14px; border: 1px solid var(--fv-border); border-radius: 4px;
+            background: transparent; color: var(--fv-text); font-size: 12px; cursor: pointer;
         }
-        .fv-btn:hover { background: #3a3b40; }
-        .fv-btn.primary { background: #4f7ead; border-color: #4f7ead; color: #fff; }
+        .fv-btn:hover { background: var(--fv-hover); }
+        .fv-btn.primary { background: var(--fv-primary); border-color: var(--fv-primary); color: #fff; }
         .fv-btn.primary:hover { filter: brightness(1.1); }
         .fv-btn.hidden { display: none; }
         /* 内容区：整体滚动（顶栏固定） */
         #fv-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
         #fv-body::-webkit-scrollbar { width: 8px; height: 8px; }
         #fv-body::-webkit-scrollbar-track { background: transparent; }
-        #fv-body::-webkit-scrollbar-thumb { background: #4a4b50; border-radius: 4px; }
-        #fv-body::-webkit-scrollbar-thumb:hover { background: #5a5b60; }
-        .fv-hint { padding: 14px 16px; color: #8a8b8f; font-size: 12px; }
+        #fv-body::-webkit-scrollbar-thumb { background: var(--fv-scroll); border-radius: 4px; }
+        #fv-body::-webkit-scrollbar-thumb:hover { filter: brightness(0.85); }
+        .fv-hint { padding: 14px 16px; color: var(--fv-text-light); font-size: 12px; }
         .fv-banner {
             margin: 12px 16px 0; padding: 8px 12px; border-radius: 6px;
-            background: #3a3325; color: #e5b567; font-size: 12px;
+            background: var(--fv-banner-bg); color: var(--fv-banner-fg); font-size: 12px;
         }
-        /* 代码/文本：行号列 + 高亮代码（同字体行高严格对齐，行号 sticky） */
-        .fv-code-wrap { display: flex; align-items: flex-start; min-width: max-content; padding: 10px 0; }
+        /* 代码/文本：行号列 + 高亮代码（同字体行高严格对齐，行号 sticky）。
+           代码面深色恒定（hljs GitHub Dark 调色板双主题通用，豆包同款） */
+        .fv-code-wrap { display: flex; align-items: flex-start; min-width: max-content; padding: 10px 0; background: var(--fv-code-surface); }
         .fv-code-ln {
             position: sticky; left: 0; z-index: 1; flex: none;
             padding: 0 10px 12px; text-align: right; min-width: 46px;
-            background: #232428; color: #63666d; user-select: none;
+            background: var(--fv-code-surface); color: #6e7681; user-select: none;
             font: 12px/1.55 Consolas, "Courier New", monospace; white-space: pre;
-            border-right: 1px solid #36373b;
+            border-right: 1px solid #30363d;
         }
         .fv-code-wrap pre { padding: 0 16px 12px 12px; background: transparent; }
-        .fv-code-wrap code { font: 12px/1.55 Consolas, "Courier New", monospace; background: transparent; }
+        .fv-code-wrap code { font: 12px/1.55 Consolas, "Courier New", monospace; background: transparent; color: #c9d1d9; }
         /* 阶段九十五：编辑态唯一内核 = Monaco（TRAE/VS Code 同款编辑内核）。
            旧 textarea+hljs 双叠层方案因中英混排两套布局引擎字体 fallback 宽度不一致、
            永远存在像素级错位，已整体裁除。Monaco 自渲染自带滚动条（可主题化）。 */
-        #fv-monaco { position: relative; display: none; height: calc(100vh - 46px); min-height: 320px; background: #232428; }
+        #fv-monaco { position: relative; display: none; height: calc(100vh - 46px); min-height: 320px; background: var(--fv-bg); }
         /* md / docx 排版（对齐主程序 ai-md 观感：表格边框/代码块深底/引用线） */
         .fv-md { padding: 16px 20px; line-height: 1.7; font-size: 13.5px; max-width: 980px; }
-        .fv-md h1, .fv-md h2, .fv-md h3, .fv-md h4 { margin: 18px 0 10px; line-height: 1.4; color: #f0f0f0; }
+        .fv-md h1, .fv-md h2, .fv-md h3, .fv-md h4 { margin: 18px 0 10px; line-height: 1.4; color: var(--fv-title); }
         .fv-md h1 { font-size: 22px; } .fv-md h2 { font-size: 18px; } .fv-md h3 { font-size: 15.5px; }
         .fv-md p { margin: 8px 0; }
         .fv-md ul, .fv-md ol { margin: 8px 0; padding-left: 26px; }
         .fv-md li { margin: 3px 0; }
         .fv-md blockquote {
-            margin: 10px 0; padding: 6px 14px; border-left: 3px solid #4f7ead;
-            background: #2a2b2f; color: #a8a9ad; border-radius: 0 6px 6px 0;
+            margin: 10px 0; padding: 6px 14px; border-left: 3px solid var(--fv-primary);
+            background: var(--fv-quote-bg); color: var(--fv-text-light); border-radius: 0 6px 6px 0;
         }
-        .fv-md code { background: #2f3035; border: 1px solid #3d3e43; border-radius: 4px; padding: 1px 6px; font: 12px Consolas, monospace; color: #e8bf7a; }
-        .fv-md pre.fv-md-code { background: #1b1c1f; border: 1px solid #36373b; border-radius: 8px; padding: 12px 14px; overflow: auto; margin: 10px 0; }
-        .fv-md pre.fv-md-code code { background: transparent; border: none; padding: 0; color: #d4d4d4; font: 12px/1.55 Consolas, monospace; }
+        .fv-md code { background: var(--fv-inline-bg); border: 1px solid var(--fv-border); border-radius: 4px; padding: 1px 6px; font: 12px Consolas, monospace; color: var(--fv-inline-fg); }
+        .fv-md pre.fv-md-code { background: var(--fv-code-surface); border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px; overflow: auto; margin: 10px 0; }
+        .fv-md pre.fv-md-code code { background: transparent; border: none; padding: 0; color: #c9d1d9; font: 12px/1.55 Consolas, monospace; }
         .fv-md table { border-collapse: collapse; margin: 10px 0; max-width: 100%; display: block; overflow: auto; }
-        .fv-md th, .fv-md td { border: 1px solid #3d3e43; padding: 6px 12px; font-size: 12.5px; }
-        .fv-md th { background: #2a2b2f; color: #e8e8e8; }
-        .fv-md a { color: #6db3f2; }
-        .fv-md hr { border: none; border-top: 1px solid #3d3e43; margin: 14px 0; }
+        .fv-md th, .fv-md td { border: 1px solid var(--fv-border); padding: 6px 12px; font-size: 12.5px; }
+        .fv-md th { background: var(--fv-quote-bg); color: var(--fv-title); }
+        .fv-md a { color: var(--fv-link); }
+        .fv-md hr { border: none; border-top: 1px solid var(--fv-border); margin: 14px 0; }
         /* xlsx：sheet 切换条 + HTML 表格 */
         .fv-xlsx-tabs { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px 0; }
         .fv-xlsx-chip {
-            padding: 4px 12px; border: 1px solid #3d3e43; border-radius: 12px;
-            font-size: 12px; color: #a8a9ad; cursor: pointer; user-select: none;
+            padding: 4px 12px; border: 1px solid var(--fv-border); border-radius: 12px;
+            font-size: 12px; color: var(--fv-text-light); cursor: pointer; user-select: none;
         }
-        .fv-xlsx-chip:hover { background: #2f3035; }
-        .fv-xlsx-chip.active { background: #4f7ead; border-color: #4f7ead; color: #fff; }
+        .fv-xlsx-chip:hover { background: var(--fv-quote-bg); }
+        .fv-xlsx-chip.active { background: var(--fv-primary); border-color: var(--fv-primary); color: #fff; }
         .fv-xlsx-body { padding: 12px 16px 20px; }
         .fv-xlsx-body table { border-collapse: collapse; }
-        .fv-xlsx-body td { border: 1px solid #3d3e43; padding: 4px 10px; font-size: 12.5px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .fv-xlsx-body tr:first-child td { background: #2a2b2f; color: #e8e8e8; font-weight: 600; }
+        .fv-xlsx-body td { border: 1px solid var(--fv-border); padding: 4px 10px; font-size: 12.5px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fv-xlsx-body tr:first-child td { background: var(--fv-quote-bg); color: var(--fv-title); font-weight: 600; }
         /* 媒体：图片/PDF 居中自适应 */
         .fv-media { display: flex; justify-content: center; padding: 20px; }
         .fv-media img { max-width: 96%; max-height: calc(100vh - 120px); border-radius: 6px; }
         .fv-media embed { width: 96%; height: calc(100vh - 110px); border: none; border-radius: 6px; }
         /* diff 提交详情元信息头 */
         .fv-commit-meta { padding: 14px 20px 0; }
-        .fv-commit-subject { font-size: 14.5px; font-weight: 600; color: #f0f0f0; margin-bottom: 4px; }
-        .fv-commit-info { font-size: 12px; color: #8a8b8f; }
+        .fv-commit-subject { font-size: 14.5px; font-weight: 600; color: var(--fv-title); margin-bottom: 4px; }
+        .fv-commit-info { font-size: 12px; color: var(--fv-text-light); }
         /* 阶段九十六：Monaco diff 对比视图（kind=diff/commit 专用，VS Code 同款对比器） */
         #fv-diff-wrap { flex: 1; min-height: 0; display: none; flex-direction: column; }
         #fv-diff-head {
             flex: none; display: flex; align-items: center; gap: 8px;
-            padding: 7px 12px; border-bottom: 1px solid #36373b; background: #2a2b2f;
+            padding: 7px 12px; border-bottom: 1px solid var(--fv-border); background: var(--fv-bar-bg);
         }
         #fv-diff-info {
             flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            font-size: 12px; color: #8a8b8f;
+            font-size: 12px; color: var(--fv-text-light);
         }
         #fv-diff-info .fv-commit-subject { font-size: 13px; margin-bottom: 2px; }
         #fv-diff-info .fv-commit-info { font-size: 11.5px; }
-        #fv-diff { flex: 1; min-height: 0; background: #232428; }
+        #fv-diff { flex: 1; min-height: 0; background: var(--fv-bg); }
         /* 阶段九十七：红蓝绿 gutter（TRAE CN 同款配色：新增绿条/修改蓝条/删除红块） */
         .fv-btn.danger { border-color: #cf222e; color: #e5534b; }
         .fv-btn.danger:hover { background: rgba(207, 34, 46, 0.15); }
@@ -137,9 +206,9 @@
         /* pptx */
         .fv-pptx { padding: 16px; text-align: center; }
         .fv-pptx-bar { display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 12px; }
-        .fv-pptx-btn { padding: 5px 16px; border: 1px solid #4a4b50; border-radius: 4px; background: #2a2b2f; color: #d4d4d4; font-size: 12px; cursor: pointer; }
-        .fv-pptx-btn:hover { background: #3a3b40; }
-        .fv-pptx-idx { font-size: 12px; color: #8a8b8f; min-width: 64px; }
+        .fv-pptx-btn { padding: 5px 16px; border: 1px solid var(--fv-border); border-radius: 4px; background: var(--fv-panel); color: var(--fv-text); font-size: 12px; cursor: pointer; }
+        .fv-pptx-btn:hover { background: var(--fv-hover); }
+        .fv-pptx-idx { font-size: 12px; color: var(--fv-text-light); min-width: 64px; }
         .fv-pptx-canvas { max-width: 96%; border-radius: 6px; background: #fff; }
     </style>
 </head>
@@ -185,6 +254,31 @@
         var dirtyNow = false;       // 编辑态脏标记（保存按钮显隐/状态栏驱动）
         var suppressDirty = false;  // monacoTakeOver setValue 期间屏蔽手工脏判定
         var fvBase = '';            // gutter 基线（任务文件=任务前内容；普通文件=最近保存内容）
+
+        // ===== 阶段一百零七：主题跟随主程序（同源 localStorage im_theme：light/dark/system） =====
+        // viewer 页与主页面同源（SERVER_URL 静态文件）共享 localStorage：主页面切主题时本页经
+        // storage 事件实时跟随（BrowserView 与同源 iframe 均触发）；system 模式由媒体查询联动。
+        // Monaco 就绪后同步切编辑器主题；代码块面深色恒定不入主题切换（豆包同款）。
+        var fvSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+        function fvThemeRaw() {
+            var t = 'light';
+            try { t = localStorage.getItem('im_theme') || 'light'; } catch (e) {}
+            return t;
+        }
+        function fvThemeDark() {
+            var t = fvThemeRaw();
+            return t === 'dark' || (t === 'system' && fvSchemeQuery.matches);
+        }
+        function fvApplyTheme() {
+            document.documentElement.setAttribute('data-theme', fvThemeRaw());
+            if (monacoReady) { monaco.editor.setTheme(fvThemeDark() ? 'im-dark' : 'im-light'); }
+        }
+        fvApplyTheme();
+        window.addEventListener('storage', function (e) { // 主页面切主题实时跟随（同源跨文档事件）
+            if (!e || e.key === 'im_theme' || e.key === null) fvApplyTheme();
+        });
+        if (fvSchemeQuery.addEventListener) fvSchemeQuery.addEventListener('change', fvApplyTheme);
+        else if (fvSchemeQuery.addListener) fvSchemeQuery.addListener(fvApplyTheme);
 
         // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
         // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
@@ -258,7 +352,7 @@
             monaco.editor.defineTheme('im-dark', {
                 base: 'vs-dark', inherit: true, rules: [],
                 colors: {
-                    'editor.background': '#232428',
+                    'editor.background': '#1e1e1e',
                     'editorLineNumber.foreground': '#6a6b70',
                     'editorLineNumber.activeForeground': '#a8a9ad',
                     'editor.lineHighlightBackground': '#2a2b30',
@@ -266,8 +360,19 @@
                     'editor.selectionBackground': '#50608c'
                 }
             });
+            monaco.editor.defineTheme('im-light', { // 阶段一百零七：浅色主题（跟随主程序 im_theme=light）
+                base: 'vs', inherit: true, rules: [],
+                colors: {
+                    'editor.background': '#ffffff',
+                    'editorLineNumber.foreground': '#b0b0b0',
+                    'editorLineNumber.activeForeground': '#666666',
+                    'editor.lineHighlightBackground': '#f2f2f2',
+                    'editorCursor.foreground': '#333333',
+                    'editor.selectionBackground': '#add6ff'
+                }
+            });
             monacoEditor = monaco.editor.create(monacoBox, {
-                value: '', language: 'plaintext', theme: 'im-dark', automaticLayout: true,
+                value: '', language: 'plaintext', theme: fvThemeDark() ? 'im-dark' : 'im-light', automaticLayout: true,
                 fontSize: 12, lineHeight: 19, fontFamily: 'Consolas, "Courier New", monospace',
                 minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
                 wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true,
@@ -819,9 +924,9 @@
             var parsed = parseUnifiedDiff(text);
             if (parsed.binary || (!parsed.original && !parsed.modified)) { fallback(); return; } // 二进制差异/非 unified 格式
             var lang = MONACO_LANG[diffExtOf(p, text)] || 'plaintext';
-            if (!diffEd) { // 首次渲染时创建，之后复用
+            if (!diffEd) { // 首次渲染时创建，之后复用（主题跟随主程序；后续切换由 monaco.editor.setTheme 全局生效）
                 diffEd = monaco.editor.createDiffEditor(diffBox, {
-                    theme: 'im-dark', readOnly: true, originalEditable: false,
+                    theme: fvThemeDark() ? 'im-dark' : 'im-light', readOnly: true, originalEditable: false,
                     automaticLayout: true, fontSize: 12, lineHeight: 19,
                     fontFamily: 'Consolas, "Courier New", monospace',
                     renderSideBySide: diffSide, renderIndicators: true, diffWordWrap: 'on',
@@ -1050,6 +1155,7 @@
             editing = false;
             draft = '';
             previewLock = false; // 阶段九十七：新 payload 注入重置预览锁（重开文件自动进编辑态）
+            fvApplyTheme(); // 阶段一百零七：注入时同步主题（storage 事件兜底，防跨 BrowserView 边界丢事件）
             document.title = data ? (data.name || data.title || '文件预览') : '文件预览';
             render();
         };
