@@ -12,6 +12,21 @@
     <!-- CSP：仅同源资源 + blob/data 媒体；SheetJS/PPTXjs 内部需 eval，故放开 unsafe-eval -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; font-src 'self' data:">
     <title>文件预览</title>
+    <!-- 阶段一百零九：首帧防白闪——hljs 样式与 5 个大库脚本（highlight/mammoth/jszip/PptxViewJS/xlsx
+         合计数 MB）同步阻塞解析，完整 <style> 又排在它们之后：首次打开（冷缓存）时新文档先以
+         UA 默认白底出现，库全部加载执行完才首绘出主题底色，形成"白闪一下"；二次打开走磁盘缓存
+         毫秒级完成无感。此内联脚本在一切阻塞资源之前同步执行：读同源 localStorage im_theme
+         （与主程序共享）直接给 html 设主题底色并预置 data-theme，首绘即正确主题色 -->
+    <script>
+        (function () {
+            var t = 'light';
+            try { t = localStorage.getItem('im_theme') || 'light'; } catch (e) {}
+            var dark = t === 'dark' || (t === 'system' &&
+                window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.style.background = dark ? '#111111' : '#f5f5f5';
+        })();
+    </script>
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <script src="js/lib/mammoth.browser.min.js?v=1.0"></script>
