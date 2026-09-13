@@ -309,6 +309,9 @@
             chatView.classList.remove('hidden');
             IMSocket.connect(saved.u, saved.p);
         }
+        // 启动防闪揭幕：视图决策完成（有凭据→聊天界面 / 无凭据→登录界面），
+        // 摘除 html.app-booting 显示目标视图，消除"登录页先画出来再被切换"的闪现
+        document.documentElement.classList.remove('app-booting');
     })();
     // 登录持久化：自动登录期间连接失败（服务端未启动/登录被拒后断开），
     // 从乐观显示的聊天界面回退到登录界面（socket.js onclose 且未登录成功时派发该事件）

@@ -473,6 +473,16 @@ html, body {
     }
 }
 
+/* 启动防闪：页面默认渲染登录视图，chat.js（体积大）执行完 autoLogin 乐观切换前
+   登录页会先画出来一闪（强制刷新可见）。html.app-booting 期间两个视图一并隐藏，
+   autoLogin 决策完（有凭据→聊天界面 / 无凭据→登录界面）由 JS 摘除该类揭幕；
+   index.html 头部另有 2.5s 兜底定时器防 chat.js 异常时永远白屏。
+   visibility 而非 display：不触发布局跳动，揭幕无二次回流 */
+.app-booting .login-view,
+.app-booting .chat-view {
+    visibility: hidden;
+}
+
 /* 聊天视图 */
 .chat-view {
     height: 100vh;
