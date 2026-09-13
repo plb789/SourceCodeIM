@@ -177,6 +177,26 @@ type AIMemoryPref struct {
 // TableName 指定表名
 func (AIMemoryPref) TableName() string { return "im_ai_memory_pref" }
 
+// AIRule 用户自定义 AI 行为规则（阶段一百零四，Trae CN 同款"规则"功能）：AI 回答前先读规则并遵守。
+// 两层范围：AgentID=0 用户级全局规则（对该用户全部智能体生效）；AgentID>0 仅该智能体生效。
+// 与记忆的语义差异：记忆=背景参考（向量召回，相关才注入）；规则=硬性约束（全量注入，每问必守）
+type AIRule struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// Username 规则归属用户（仅本人可见可管理；跨用户零泄露）
+	Username string `gorm:"column:username;type:varchar(32);not null;index:idx_rule_user_agent" json:"username"`
+	// AgentID 生效范围：0=用户级全局规则；>0 仅该智能体（智能体删除级联清理）
+	AgentID uint `gorm:"column:agent_id;not null;default:0;index:idx_rule_user_agent" json:"agent_id"`
+	// Content 规则正文（单条硬性约束，如"所有注释必须中文"）
+	Content string `gorm:"column:content;type:varchar(512);not null" json:"content"`
+	// Enabled 启用开关（禁用后不注入不删除，可随时恢复；不用 default 标签——GORM 零值+default
+	// 会从 INSERT 剔除交给 DB 默认值导致 false 落库为 true，阶段五十八实测教训）
+	Enabled    bool      `gorm:"column:enabled" json:"enabled"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 指定表名
+func (AIRule) TableName() string { return "im_ai_rules" }
+
 // AISession AI 多会话（阶段七十一，Trae CN 同款"新建会话"）：用户+智能体 多会话归口表。
 // 消息归属采用消息级盖戳：im_message.ai_session_id 记录所属会话 id，任意会话均可随时续聊
 // （0=默认会话：存量历史与未区分消息归口；本表仅存会话元信息）。

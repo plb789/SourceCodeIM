@@ -42,6 +42,10 @@
             <span class="titlebar-points-icon">⚡</span>
             <span id="titlebar-points-num" class="titlebar-points-num">0</span>
         </div>
+        <!-- 阶段一百零五：标题栏设置按钮（齿轮，TRAE CN 同款位于积分左侧）——点击打开全屏设置页 -->
+        <button id="titlebar-settings" class="titlebar-settings" style="display: none;" data-tip="设置" aria-label="设置">
+            <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        </button>
     </div>
     <!-- 登录视图（阶段四十七：参考图风格左右分栏卡片，主题色跟随现有设定；旧单卡片结构注释保留）
     <div id="login-view" class="login-view">
@@ -600,25 +604,154 @@
         </div>
     </div>
 
-    <!-- 阶段五十八：记忆管理弹窗（用户+智能体 隔离的长期记忆查看/手动新增/删除/清空/开关；自研弹窗禁用系统弹窗） -->
+    <!-- 阶段一百零五：全屏设置页（TRAE CN 同款：铺满全屏、左侧分类导航 + 右侧内容区；自研禁用系统弹窗） -->
+    <div id="settings-mask" class="settings-mask hidden">
+        <aside class="settings-nav">
+            <div class="settings-nav-user">
+                <img id="settings-avatar" class="settings-avatar" alt="头像" style="display: none;">
+                <span id="settings-avatar-ph" class="settings-avatar-ph"></span>
+                <div class="settings-nav-user-info">
+                    <div id="settings-username" class="settings-username"></div>
+                    <div id="settings-points" class="settings-points"></div>
+                </div>
+            </div>
+            <div class="settings-nav-group">
+                <button class="settings-nav-item active" data-view="account">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-3.33 0-10 1.67-10 5v3h20v-3c0-3.33-6.67-5-10-5z"/></svg>
+                    <span>账号</span>
+                </button>
+                <button class="settings-nav-item" data-view="appearance">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.39 5.39 0 0 1 12 3z"/></svg>
+                    <span>外观</span>
+                </button>
+                <button class="settings-nav-item" data-view="rules">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM9 13v2h6v-2H9zm0 4v2h4v-2H9z"/></svg>
+                    <span>规则与记忆</span>
+                </button>
+                <button class="settings-nav-item" data-view="tasks">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.95 6.95 0 0 1-4.9-2.03l-1.42 1.42A8.95 8.95 0 0 0 13 21a9 9 0 0 0 0-18z"/></svg>
+                    <span>任务与自动化</span>
+                </button>
+                <button class="settings-nav-item" data-view="about">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
+                    <span>关于</span>
+                </button>
+            </div>
+        </aside>
+        <main class="settings-content">
+            <!-- 账号：账户信息卡 + 退出登录 -->
+            <section id="settings-view-account" class="settings-view">
+                <h2 class="settings-title">账号</h2>
+                <h3 class="settings-subtitle">账户信息</h3>
+                <div class="settings-card">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">用户名</span>
+                        <span id="settings-account-name" class="settings-card-value"></span>
+                    </div>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">积分余额</span>
+                        <span id="settings-account-points" class="settings-card-value"></span>
+                    </div>
+                </div>
+                <button id="settings-logout" class="settings-danger-btn">退出登录</button>
+            </section>
+            <!-- 外观：主题三选一卡片（与标题栏主题按钮同源 applyTheme） -->
+            <section id="settings-view-appearance" class="settings-view hidden">
+                <h2 class="settings-title">外观</h2>
+                <h3 class="settings-subtitle">主题</h3>
+                <div class="settings-theme-row">
+                    <button class="settings-theme-card" data-theme="light">
+                        <span class="settings-theme-preview preview-light"></span>
+                        <span class="settings-theme-name">浅色</span>
+                    </button>
+                    <button class="settings-theme-card" data-theme="dark">
+                        <span class="settings-theme-preview preview-dark"></span>
+                        <span class="settings-theme-name">深色</span>
+                    </button>
+                    <button class="settings-theme-card" data-theme="system">
+                        <span class="settings-theme-preview preview-system"></span>
+                        <span class="settings-theme-name">跟随系统</span>
+                    </button>
+                </div>
+            </section>
+            <!-- 规则与记忆：聚合入口（弹窗承载管理，此处说明+跳转） -->
+            <section id="settings-view-rules" class="settings-view hidden">
+                <h2 class="settings-title">规则与记忆</h2>
+                <h3 class="settings-subtitle">规则</h3>
+                <p class="settings-desc">规则为硬性约束：AI 回答与 Agent 任务执行前会先逐条对照检查。分「全局」（对全部智能体生效）与「仅本智能体」两层。</p>
+                <h3 class="settings-subtitle">记忆</h3>
+                <p class="settings-desc">记忆为背景参考：AI 在对话中自动记住重要信息，回答相关问题时自然运用。按 账号+智能体 隔离，仅你可见。</p>
+                <button id="settings-open-mem" class="settings-btn">打开规则与记忆管理</button>
+            </section>
+            <!-- 任务与自动化：Agent 任务入口 -->
+            <section id="settings-view-tasks" class="settings-view hidden">
+                <h2 class="settings-title">任务与自动化</h2>
+                <h3 class="settings-subtitle">Agent 任务</h3>
+                <p class="settings-desc">给智能体下发自动化任务（文件整理、代码检查、浏览器操作等），任务排队执行、全程留痕可回溯。</p>
+                <button id="settings-open-taskhist" class="settings-btn">打开任务历史</button>
+            </section>
+            <!-- 关于：应用信息 -->
+            <section id="settings-view-about" class="settings-view hidden">
+                <h2 class="settings-title">关于</h2>
+                <div class="settings-card">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">应用</span>
+                        <span class="settings-card-value">即时通讯平台</span>
+                    </div>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">单位</span>
+                        <span class="settings-card-value">山西梗阳新能源有限公司</span>
+                    </div>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">功能阶段</span>
+                        <span class="settings-card-value">阶段一百零五</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <button id="settings-close" class="settings-close" title="关闭设置">×</button>
+    </div>
+
+    <!-- 阶段五十八：记忆管理弹窗；阶段一百零四改造为「规则与记忆」双页签（TRAE CN 同款：AI 回答前先读规则并遵守；自研弹窗禁用系统弹窗） -->
     <div id="memory-mask" class="modal-mask hidden">
         <div class="modal-box kb-box">
-            <div class="modal-title">记忆管理</div>
+            <div class="modal-title">规则与记忆</div>
             <div id="memory-status" class="kb-status"></div>
-            <div class="memory-switch-row">
-                <label class="memory-switch-label" for="memory-pref">
-                    <span>记住我们的对话要点</span>
-                    <span class="memory-switch-tip">开启后 AI 会在对话中自动记住重要信息（可随时在下方删除）</span>
-                </label>
-                <input type="checkbox" id="memory-pref" class="memory-switch">
+            <!-- 页签栏（默认规则页签） -->
+            <div class="memtabs">
+                <button class="memtab active" data-tab="rules">规则</button>
+                <button class="memtab" data-tab="memory">记忆</button>
             </div>
-            <div id="memory-add-row" class="memory-add-row">
-                <input type="text" id="memory-input" class="modal-input" placeholder="手动添加记忆，如：我喜欢简洁的回答" maxlength="200" autocomplete="off">
-                <button id="memory-add-btn" class="kb-create-btn">添加</button>
+            <!-- 规则页签：用户级全局 + 智能体级两层硬性约束，普通问答与 Agent 任务回答/执行前都会先对照检查 -->
+            <div id="tab-rules">
+                <div class="memory-add-row">
+                    <select id="rule-scope" class="rule-scope">
+                        <option value="agent">仅本智能体</option>
+                        <option value="global">全部智能体（全局）</option>
+                    </select>
+                    <input type="text" id="rule-input" class="modal-input" placeholder="添加规则，如：所有回答使用中文" maxlength="512" autocomplete="off">
+                    <button id="rule-add-btn" class="kb-create-btn">添加</button>
+                </div>
+                <div id="rule-list" class="kb-list"></div>
             </div>
-            <div id="memory-list" class="kb-list"></div>
+            <!-- 记忆页签：原记忆管理内容（开关/手动新增/列表）原样保留 -->
+            <div id="tab-memory" class="hidden">
+                <div class="memory-switch-row">
+                    <label class="memory-switch-label" for="memory-pref">
+                        <span>记住我们的对话要点</span>
+                        <span class="memory-switch-tip">开启后 AI 会在对话中自动记住重要信息（可随时在下方删除）</span>
+                    </label>
+                    <input type="checkbox" id="memory-pref" class="memory-switch">
+                </div>
+                <div id="memory-add-row" class="memory-add-row">
+                    <input type="text" id="memory-input" class="modal-input" placeholder="手动添加记忆，如：我喜欢简洁的回答" maxlength="200" autocomplete="off">
+                    <button id="memory-add-btn" class="kb-create-btn">添加</button>
+                </div>
+                <div id="memory-list" class="kb-list"></div>
+            </div>
             <div class="modal-btns">
-                <button id="memory-clear" class="kb-op-btn memory-clear-btn">清空全部</button>
+                <button id="rule-clear" class="kb-op-btn memory-clear-btn">清空规则</button>
+                <button id="memory-clear" class="kb-op-btn memory-clear-btn hidden">清空全部</button>
                 <button id="memory-close" class="modal-btn">关闭</button>
             </div>
         </div>

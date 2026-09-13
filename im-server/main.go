@@ -87,6 +87,12 @@ func main() {
 	http.HandleFunc("PUT /api/agents/{id}/memory/pref", srv.HandleMemoryPref)
 	http.HandleFunc("DELETE /api/agents/{id}/memory/{mid}", srv.HandleMemoryDelete)
 	http.HandleFunc("DELETE /api/agents/{id}/memory", srv.HandleMemoryClear)
+	// 用户自定义 AI 规则（阶段一百零四：TRAE CN 同款"AI 回答前先看规则"；注入/管理归口 rules.go，鉴权水位与记忆一致）
+	http.HandleFunc("GET /api/agents/{id}/rules", srv.HandleRuleGet)
+	http.HandleFunc("POST /api/agents/{id}/rules", srv.HandleRuleAdd)
+	http.HandleFunc("PUT /api/agents/{id}/rules/{rid}/enabled", srv.HandleRuleEnabled)
+	http.HandleFunc("DELETE /api/agents/{id}/rules/{rid}", srv.HandleRuleDelete)
+	http.HandleFunc("DELETE /api/agents/{id}/rules", srv.HandleRuleClear)
 
 	// 阶段六十四：Agent 任务历史（用户端仅本人任务，鉴权水位与 /api/agents 一致；管理端审计走 adminGuard）
 	http.HandleFunc("GET /api/agent/tasks", srv.HandleAgentTaskList)
@@ -126,6 +132,8 @@ func main() {
 	server.InitKB(cfg)
 	// 阶段五十八：智能体长期记忆初始化（须在 InitKB 之后：向量库实例由 KB 模块创建）
 	server.InitMemory(cfg)
+	// 阶段一百零四：用户自定义 AI 规则初始化（TRAE CN 同款"规则"功能，纯 MySQL 无向量依赖）
+	server.InitRules()
 	// 阶段五十九：智能 Agent 自动化任务初始化（工具调用闭环+权限审批，须在 InitAI 之后复用智能体索引）
 	server.InitAgent(cfg)
 	// 阶段八十八：MCP 客户端初始化（TRAE CN 同款 MCP 能力，服务端归口；须在 DB 就绪后调用）

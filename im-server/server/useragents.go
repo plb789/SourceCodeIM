@@ -243,6 +243,8 @@ func (s *Server) HandleUserAgentDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 阶段五十八：级联清理该智能体的长期记忆（MySQL 行 + 向量集合）
 	memDestroyAgent(rec.ID)
+	// 阶段一百零四：级联清理该智能体的规则（全局规则不受影响）
+	ruleDestroyAgent(rec.ID)
 	logger.Info("用户端：用户 %s 删除个人智能体 %s（id=%d，历史消息保留）", username, rec.Name, rec.ID)
 	s.aiChangeApply("用户端：用户 " + username + " 删除个人智能体 " + rec.Name)
 	adminJSON(w, map[string]interface{}{"deleted": true})

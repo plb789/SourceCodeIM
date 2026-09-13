@@ -824,6 +824,8 @@ func (s *Server) handleAdminAgentDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	// 阶段五十八：级联清理该智能体的长期记忆（MySQL 行 + 向量集合）
 	memDestroyAgent(id)
+	// 阶段一百零四：级联清理该智能体的规则（全局规则不受影响）
+	ruleDestroyAgent(id)
 	s.adminAfterAIChange(fmt.Sprintf("删除智能体 %s", a.Name))
 	adminJSON(w, map[string]interface{}{"deleted": true})
 }

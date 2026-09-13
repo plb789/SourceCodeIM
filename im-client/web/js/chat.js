@@ -370,6 +370,103 @@
     });
     renderThemeBtn(getTheme());
 
+    // ===== 阶段一百零五：全屏设置页（TRAE CN 同款：标题栏齿轮入口，左侧分类导航+右侧内容区） =====
+    var settingsMask = document.getElementById('settings-mask');
+    var settingsBtn = document.getElementById('titlebar-settings');
+    var settingsCloseBtn = document.getElementById('settings-close');
+    var settingsNavItems = document.querySelectorAll('.settings-nav-item');
+    var settingsViews = document.querySelectorAll('.settings-view');
+    // 修订（用户实测反馈：铺满全屏会盖住左侧列表栏）——设置页仅占用主聊天区（浏览区）：
+    // DOM 移入 .main-chat（position:relative 已就绪）配合 CSS absolute 定位，左侧列表保持可见可点
+    var mainChatEl = document.querySelector('.main-chat');
+    if (mainChatEl && settingsMask && settingsMask.parentElement !== mainChatEl) {
+        mainChatEl.appendChild(settingsMask);
+    }
+
+    // 分类切换归口：导航高亮 + 内容面板显隐
+    function settingsShowView(view) {
+        settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
+        settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
+        if (view === 'appearance') settingsRenderTheme();
+    }
+
+    // 主题卡片高亮当前主题（与标题栏主题按钮同源 getTheme）
+    function settingsRenderTheme() {
+        var cur = getTheme();
+        document.querySelectorAll('.settings-theme-card').forEach(function (c) {
+            c.classList.toggle('active', c.dataset.theme === cur);
+        });
+    }
+
+    // 打开设置页：回填账号信息（用户名/头像/积分与标题栏同源，前端零计算），默认账号分类
+    function settingsOpen() {
+        settingsMask.classList.remove('hidden');
+        var name = IMSocket.getUsername() || '';
+        document.getElementById('settings-account-name').textContent = name || '未登录';
+        document.getElementById('settings-username').textContent = name || '未登录';
+        // 头像降级与导航栏同规则：img 默认隐藏，无头像/加载失败时显示首字母占位
+        var av = document.getElementById('settings-avatar');
+        var ph = document.getElementById('settings-avatar-ph');
+        var src = currentAvatarEl && currentAvatarEl.src ? currentAvatarEl.src : '';
+        if (src) {
+            av.src = src; av.style.display = ''; ph.style.display = 'none';
+        } else {
+            av.style.display = 'none'; ph.style.display = '';
+            ph.textContent = name ? name.charAt(0).toUpperCase() : '?';
+        }
+        // 积分与标题栏同源（服务端下发归口 setPointsBalance，前端只读取展示）
+        var pts = titlebarPointsNumEl ? titlebarPointsNumEl.textContent : '';
+        var ptsText = pts ? '⚡ ' + pts : '—';
+        document.getElementById('settings-points').textContent = ptsText;
+        document.getElementById('settings-account-points').textContent = pts ? pts + ' 积分' : '—';
+        settingsShowView('account');
+    }
+
+    function settingsClose() {
+        settingsMask.classList.add('hidden');
+    }
+
+    settingsBtn.addEventListener('click', settingsOpen);
+    settingsCloseBtn.addEventListener('click', settingsClose);
+    settingsNavItems.forEach(function (b) {
+        b.addEventListener('click', function () { settingsShowView(b.dataset.view); });
+    });
+    // 主题卡片点击：应用主题并同步标题栏主题按钮图标（同一 applyTheme 归口，双入口状态一致）
+    document.querySelectorAll('.settings-theme-card').forEach(function (c) {
+        c.addEventListener('click', function () {
+            applyTheme(c.dataset.theme);
+            renderThemeBtn(c.dataset.theme);
+            settingsRenderTheme();
+        });
+    });
+    // 聚合入口：规则与记忆/任务历史（复用现有弹窗，先关设置页避免层级叠置）
+    var settingsOpenMem = document.getElementById('settings-open-mem');
+    if (settingsOpenMem) settingsOpenMem.addEventListener('click', function () {
+        settingsClose();
+        memOpenDialog();
+    });
+    var settingsOpenTask = document.getElementById('settings-open-taskhist');
+    if (settingsOpenTask) settingsOpenTask.addEventListener('click', function () {
+        settingsClose();
+        var tb = document.getElementById('taskhist-btn');
+        if (tb) tb.click();
+    });
+    // 退出登录：与导航栏退出按钮同归口（清凭据+刷新），加二次确认防误触
+    var settingsLogout = document.getElementById('settings-logout');
+    if (settingsLogout) settingsLogout.addEventListener('click', function () {
+        showConfirm('退出登录', '确定退出当前账号？', function () {
+            clearAuth();
+            location.reload();
+        }, '退出');
+    });
+    // Esc 关闭设置页（捕获阶段优先处理：设置页在全屏最顶层，开启时不让 Esc 穿透到下层弹窗）
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !settingsMask.classList.contains('hidden')) {
+            e.stopPropagation();
+            settingsClose();
+        }
+    }, true);
+
     // ===== 头像降级修复：导航栏左上角头像统一入口 =====
     // 原实现：各处直接 currentAvatarEl.src 赋值，新注册账号 avatar 为空时 img 空 src 被浏览器渲染为破图（碎图标）
     var navAvatarFailedUrl = ''; // 记录加载失败的头像地址，避免重复设置同一失效 URL（缓存错误结果）导致空白
@@ -2731,6 +2828,9 @@
             // 先按账号显示（侧栏顶部+PC 标题栏），登录响应解析出昵称后由 syncMyDisplayName() 纠正为"昵称优先"
             syncMyDisplayName();
             titlebarUserEl.classList.remove('hidden');
+            // 阶段一百零五：登录成功显示标题栏设置齿轮（与用户区同生死；点击打开全屏设置页）
+            var settingsEntry = document.getElementById('titlebar-settings');
+            if (settingsEntry) settingsEntry.style.display = '';
             // 头像缺失修复：从登录响应 JSON 中读取服务端下发的自己头像（服务端归口），
             // 同步更新导航栏头像与消息气泡头像数据源
             // 原代码：无 avatar 解析，导航栏头像登录后为空，消息气泡无头像可用
@@ -4695,6 +4795,11 @@
         prog.appendChild(pct);
         card.appendChild(prog);
 
+        // 阶段一百零三：每轮 Token 消耗行（step_tokens 事件驱动实时更新，首轮到达才显示）
+        var costEl = document.createElement('div');
+        costEl.className = 'agent-task-cost hidden';
+        card.appendChild(costEl);
+
         var todoList = document.createElement('div');
         todoList.className = 'agent-todo-list hidden';
         card.appendChild(todoList);
@@ -4711,7 +4816,7 @@
 
         // 阶段七十一：任务卡归属会话盖戳（事件帧 sid 优先，缺省回落当前查看会话），完结气泡/重挂按此归口防串会话
         var stampSess = (typeof sid === 'number') ? sid : (aiViewSession[agent] || 0);
-        var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, todoList: todoList, events: events, tools: {}, toolGroup: null, todoDone: 0, todoTotal: 0, todoRaw: [] };
+        var st = { taskId: taskId, agent: agent, goal: goal || '', sessionId: stampSess, el: div, head: head, statusEl: statusEl, stopBtn: stopBtn, bar: bar, pct: pct, costEl: costEl, todoList: todoList, events: events, tools: {}, toolGroup: null, todoDone: 0, todoTotal: 0, todoRaw: [] };
         agentTaskCards[taskId] = st;
         agentActiveTask[agent] = taskId; // 阶段七十三：进行中任务登记（发送按钮"停止"态数据源）
         updateSendBtnState();
@@ -9993,6 +10098,22 @@
                     addAgentThought(st, '历史对话压缩中…（较早执行记录正在归并为摘要，节省 token 并加速响应）');
                 }
                 break;
+            case 'step_tokens':
+                // 阶段一百零三：每轮 Token 消耗实时行（单行更新不新增行；任务循环每轮全量重发
+                // 上下文，可见每轮增量与累计才能定位消耗烧点——测量先行）
+                if (st.costEl) {
+                    st.costEl.classList.remove('hidden');
+                    st.costEl.innerHTML = '';
+                    var cLabel = document.createElement('span');
+                    cLabel.textContent = '⚡ 第 ' + (ev.round || '?') + ' 轮：提示 ' + (ev.prompt_tokens || 0) +
+                        ' + 生成 ' + (ev.completion_tokens || 0) + '，累计 ';
+                    var cNum = document.createElement('span');
+                    cNum.className = 'cost-num';
+                    cNum.textContent = (ev.total_all || 0) + ' tokens';
+                    st.costEl.appendChild(cLabel);
+                    st.costEl.appendChild(cNum);
+                }
+                break;
             case 'tool_start':
                 agentFinalizeText(st, true); // 流式文本归入"思考过程"折叠块（Trae 同款：出工具即收思考）
                 addAgentTool(st, ev);
@@ -13362,6 +13483,17 @@
     var memoryCloseBtn = document.getElementById('memory-close');
     var memFeatureOk = false; // 服务端功能可用性缓存（总开关关闭/向量降级时隐藏新增区与开关）
 
+    // ===== 阶段一百零四：规则页签（TRAE CN 同款"AI 回答前先看规则"）=====
+    var memTabs = document.querySelectorAll('.memtabs .memtab');
+    var tabRules = document.getElementById('tab-rules');
+    var tabMemory = document.getElementById('tab-memory');
+    var ruleScopeSel = document.getElementById('rule-scope');
+    var ruleInput = document.getElementById('rule-input');
+    var ruleAddBtn = document.getElementById('rule-add-btn');
+    var ruleListEl = document.getElementById('rule-list');
+    var ruleClearBtn = document.getElementById('rule-clear');
+    var memTabCur = 'rules'; // 当前页签（默认规则：弹窗主诉求即规则管理）
+
     // 当前会话智能体的 DB ID（AI_AGENTS 下发归口携带 id；未就绪返回 0）
     function memAgentId() {
         var a = aiAgents.find(function (x) { return x.name === currentChatUser; });
@@ -13375,9 +13507,26 @@
             return;
         }
         memoryMask.classList.remove('hidden');
-        memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（记忆按 账号+智能体 隔离，仅你可见）';
-        memoryListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
-        memLoad();
+        memTabShow(memTabCur); // 阶段一百零四：按当前页签展示并加载（默认规则）
+    }
+
+    // 阶段一百零四：页签切换归口（显隐面板/清空按钮/状态行文案，并加载对应列表）
+    function memTabShow(tab) {
+        memTabCur = tab;
+        memTabs.forEach(function (b) { b.classList.toggle('active', b.dataset.tab === tab); });
+        tabRules.classList.toggle('hidden', tab !== 'rules');
+        tabMemory.classList.toggle('hidden', tab !== 'memory');
+        ruleClearBtn.classList.toggle('hidden', tab !== 'rules');
+        memoryClearBtn.classList.toggle('hidden', tab !== 'memory');
+        if (tab === 'rules') {
+            memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（规则分 全局/本智能体 两层，回答与任务执行前都会先对照检查）';
+            ruleListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+            rulesLoad();
+        } else {
+            memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（记忆按 账号+智能体 隔离，仅你可见）';
+            memoryListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+            memLoad();
+        }
     }
 
     function memCloseDialog() {
@@ -13492,8 +13641,145 @@
             .finally(function () { memoryAddBtn.disabled = false; });
     }
 
+    // ===== 阶段一百零四：规则管理（服务端归口 /api/agents/{id}/rules，注入在问答与 Agent 任务双链路）=====
+
+    // 拉取规则列表（该用户全部规则：全局 + 当前智能体级，含禁用项）
+    function rulesLoad() {
+        var id = memAgentId();
+        if (!id) { memCloseDialog(); return; }
+        fetch('/api/agents/' + id + '/rules?username=' + kbUsername())
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '规则加载失败'); return; }
+                rulesRender(res.data.rules || []);
+            })
+            .catch(function () { showToast('规则加载失败'); });
+    }
+
+    function rulesRender(list) {
+        ruleListEl.innerHTML = '';
+        if (!list.length) {
+            ruleListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无规则，添加一条如"所有回答使用中文"试试' }));
+            return;
+        }
+        list.forEach(function (ru) {
+            var item = document.createElement('div');
+            item.className = 'kb-item';
+
+            var head = document.createElement('div');
+            head.className = 'kb-item-head';
+
+            // 规则正文（单行截断，悬停 title 看全文）
+            var name = document.createElement('span');
+            name.className = 'kb-item-name';
+            name.textContent = ru.content;
+            name.title = ru.content;
+
+            // 范围标签：全局（主题色实底，对该用户全部智能体生效）/ 本智能体（描边）
+            var tag = document.createElement('span');
+            if (ru.agent_id === 0) {
+                tag.className = 'kb-item-tag user';
+                tag.textContent = '全局';
+            } else {
+                tag.className = 'kb-item-tag agent';
+                tag.textContent = '本智能体';
+            }
+
+            // 启用开关（禁用后不注入不删除，可随时恢复）
+            var en = document.createElement('input');
+            en.type = 'checkbox';
+            en.className = 'memory-switch rule-enable';
+            en.checked = !!ru.enabled;
+            en.title = en.checked ? '已启用（点击禁用）' : '已禁用（点击启用）';
+            en.addEventListener('change', function () {
+                var want = en.checked;
+                fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '/enabled?username=' + kbUsername(), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: want })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '保存失败'); en.checked = !want; return; }
+                        showToast(want ? '规则已启用' : '规则已禁用（不删除）');
+                    })
+                    .catch(function () { showToast('保存失败'); en.checked = !want; });
+            });
+
+            var ops = document.createElement('span');
+            ops.className = 'kb-item-ops';
+            var delBtn = document.createElement('button');
+            delBtn.className = 'kb-op-btn';
+            delBtn.textContent = '删除';
+            delBtn.addEventListener('click', function () {
+                fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '?username=' + kbUsername(), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
+                        showToast('规则已删除');
+                        rulesLoad();
+                    })
+                    .catch(function () { showToast('删除失败'); });
+            });
+            ops.appendChild(delBtn);
+
+            head.appendChild(name);
+            head.appendChild(tag);
+            head.appendChild(en);
+            head.appendChild(ops);
+            item.appendChild(head);
+            ruleListEl.appendChild(item);
+        });
+    }
+
+    // 新增规则（scope=agent 仅本智能体 / global 全局）
+    function rulesAdd() {
+        var content = ruleInput.value.trim();
+        if (!content) { showToast('请输入规则内容'); return; }
+        ruleAddBtn.disabled = true;
+        fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: content, scope: ruleScopeSel.value })
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
+                showToast('规则已添加，下轮回答即生效');
+                ruleInput.value = '';
+                rulesLoad();
+            })
+            .catch(function () { showToast('添加失败'); })
+            .finally(function () { ruleAddBtn.disabled = false; });
+    }
+
+    ruleClearBtn.addEventListener('click', function () {
+        var scope = ruleScopeSel.value;
+        var tip = scope === 'global' ? '确定清空你的全部全局规则？此操作不可恢复。' : '确定清空与「' + currentChatUser + '」的全部智能体规则？此操作不可恢复。';
+        showConfirm('清空规则', tip, function () {
+            fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername() + '&scope=' + scope, { method: 'DELETE' })
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (!res.ok) { showToast(res.msg || '清空失败'); return; }
+                    showToast('规则已清空');
+                    rulesLoad();
+                })
+                .catch(function () { showToast('清空失败'); });
+        }, '清空');
+    });
+
     memoryBtn.addEventListener('click', memOpenDialog);
     memoryCloseBtn.addEventListener('click', memCloseDialog);
+    memTabs.forEach(function (b) {
+        b.addEventListener('click', function () { memTabShow(b.dataset.tab); });
+    });
+    ruleAddBtn.addEventListener('click', rulesAdd);
+    ruleInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            rulesAdd();
+        }
+    });
     memoryAddBtn.addEventListener('click', memAdd);
     memoryInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {

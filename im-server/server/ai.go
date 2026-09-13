@@ -66,7 +66,11 @@ var (
 	aiCompressThreshold = 12000 // 历史上下文估算 token 达到该值触发压缩（<=0 禁用）
 	aiCompressKeep      = 6     // 压缩时保留最近原文消息条数，更早历史并入摘要
 	aiCompressScanExtra = 60    // 压缩启用时额外回溯的更早历史条数（原窗口外不再"滑走即丢"）
-	aiCompressMaxOut    = 4000  // 摘要文本字符上限（防摘要本身失控膨胀）
+
+	// 阶段一百零三：压缩摘要调用瘦身——转录段逐条截断（摘要只需要点，全文转录会让压缩调用
+	// 自身烧掉大量 tokens；原始历史仍在库中，需要时可重压）。0=默认 500 字/条，负数=不截断
+	aiCompressSegMaxRunes = 500
+	aiCompressMaxOut      = 4000 // 摘要文本字符上限（防摘要本身失控膨胀）
 	// 阶段八十四：会话摘要缓存（key "sid|user|agent" → 已覆盖到 uptoID 的摘要；服务重启后
 	// 首问触发一次重压缩，属派生缓存可接受；会话清空/删除时同步失效）
 	aiCompressMu    sync.Mutex
@@ -750,6 +754,11 @@ func (s *Server) aiBuildContext(ctx context.Context, username string, agent *AIR
 	if memCtx := memContextForAgent(agent, username, question); memCtx != "" {
 		msgs = append(msgs, aiChatMessage{Role: "system", Content: memCtx})
 	}
+	// 阶段一百零四：规则注入（TRAE CN 同款"AI 回答前先看规则"——用户自定义硬性约束，全量注入不走向量召回；
+	// 时序在记忆之后：同为逐问稳定的注入块，不打穿"系统提示+摘要+历史"的缓存前缀）
+	if ruleCtx := rulesContextForAgent(agent, username); ruleCtx != "" {
+		msgs = append(msgs, aiChatMessage{Role: "system", Content: ruleCtx})
+	}
 	msgs = append(msgs, aiChatMessage{Role: "user", Content: question})
 	// 阶段八十五：组装结果估算日志（"提示占用过多"排查归口——与模型侧 usage 口径有粗估误差，仅供趋势观察）
 	logger.Info("AI 上下文组装（%s/%s/sid=%d）：消息 %d 条，估算 prompt ≈ %d tokens", username, agent.Name, sessionID, len(msgs), aiMsgsEstimateTokens(msgs))
@@ -811,6 +820,13 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 		content := messageSummary(old[i].Content)
 		if content == "" {
 			continue
+		}
+		// 阶段一百零三：转录段瘦身——每条历史先按 rune 截断再进摘要（摘要只需要点，全文转录
+		// 会让压缩调用本身烧掉大量 tokens；原始历史仍在库中可随时重压）
+		if aiCompressSegMaxRunes > 0 {
+			if r := []rune(content); len(r) > aiCompressSegMaxRunes {
+				content = string(r[:aiCompressSegMaxRunes]) + "…（本条已截断）"
+			}
 		}
 		role := "用户"
 		if old[i].FromUser != username {

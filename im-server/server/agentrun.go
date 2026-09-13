@@ -2995,6 +2995,11 @@ func (s *Server) runAgentTask(t *AgentTask) {
 	if expCtx := agentExpContext(t.Agent, t.Username, t.Goal); expCtx != "" {
 		sysContent += "\n\n" + expCtx
 	}
+	// 阶段一百零四：规则注入（TRAE CN 同款"AI 回答前先看规则"——任务执行同样遵守用户自定义规则，
+	// 全局+智能体两层全量拼入系统提示；比记忆更早注入且每任务仅一次，无重复注入开销）
+	if ruleCtx := rulesContextForAgent(t.Agent, t.Username); ruleCtx != "" {
+		sysContent += "\n\n" + ruleCtx
+	}
 	msgs := []aiChatMessage{
 		// 阶段六十一：PC 端在线且用户配置了沙箱白名单时，注入本地授权目录（模型据此可用绝对路径操作用户自选目录）
 		{Role: "system", Content: sysContent},
@@ -3029,12 +3034,25 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			})
 		cancelAsk()
 		// 阶段一百零二：任务全程 Token 累计（每轮模型调用累加；失败轮已产生的消耗同样计入，
-		// 完结时统一落库/随帧下发，completed 再扣积分）
+		// 完结时统一落库/扣积分/随帧下发，completed 再扣积分）
 		t.mu.Lock()
 		t.usageTotal.PromptTokens += u.PromptTokens
 		t.usageTotal.CompletionTokens += u.CompletionTokens
 		t.usageTotal.TotalTokens += u.TotalTokens
+		snap := t.usageTotal
+		round := t.steps + 1 // 阶段一百零三：steps 在轮末自增，+1 得当前轮次（1 起）
 		t.mu.Unlock()
+		// 阶段一百零三：每轮 Token 消耗实时事件——任务循环每轮全量重发上下文，轮次越多消耗越大
+		// （近似平方级），用户可见每轮增量与累计才能定位消耗烧点（TRAE 同款"测量先行"）
+		s.agentEmit(t, "step_tokens", map[string]interface{}{
+			"round":             round,
+			"prompt_tokens":     u.PromptTokens,
+			"completion_tokens": u.CompletionTokens,
+			"total_tokens":      u.TotalTokens,
+			"total_prompt":      snap.PromptTokens,
+			"total_completion":  snap.CompletionTokens,
+			"total_all":         snap.TotalTokens,
+		})
 		if err != nil {
 			s.agentFinish(t, "failed", "", "模型调用失败："+err.Error())
 			return
@@ -3199,6 +3217,8 @@ func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []
 	// 压缩开始先推事件（TRAE 同款"历史对话压缩中"实时提示，摘要期间用户可见进度）
 	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "start", "before": before, "est_tokens": est})
 	// 转录压缩区（跳过 0=system；1=goal 亦纳入转录，摘要需原始目标锚定语义）
+	// 阶段一百零三：转录段瘦身——每条先按 rune 截断再进摘要（摘要只需要点，工具结果全文转录
+	// 会让压缩调用本身烧掉大量 tokens；原始历史仅在本次内存中，保留区轮次不受影响）
 	segs := make([]string, 0, bnd-1)
 	for i := 1; i < bnd; i++ {
 		role := "用户"
@@ -3208,7 +3228,13 @@ func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []
 		case "tool":
 			role = "工具结果(" + msgs[i].Name + ")"
 		}
-		segs = append(segs, role+"："+aiChatMsgText(msgs[i]))
+		text := aiChatMsgText(msgs[i])
+		if aiCompressSegMaxRunes > 0 {
+			if r := []rune(text); len(r) > aiCompressSegMaxRunes {
+				text = string(r[:aiCompressSegMaxRunes]) + "…（本条已截断）"
+			}
+		}
+		segs = append(segs, role+"："+text)
 	}
 	summary := aiCompressSummarize(nil, t.Agent, "", segs)
 	if summary == "" {
