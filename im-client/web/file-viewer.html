@@ -292,6 +292,7 @@
         <div id="fv-diff-head">
             <div id="fv-diff-info"></div>
             <button id="fv-btn-diffmode" class="fv-btn hidden">行内对比</button>
+            <button id="fv-btn-diffscope" class="fv-btn hidden" title="在全文对比与仅显示变更之间切换">仅变更</button>
         </div>
         <div id="fv-diff"></div>
     </div>
@@ -310,8 +311,10 @@
         var diffInfo = document.getElementById('fv-diff-info');
         var diffBox = document.getElementById('fv-diff');
         var btnDiffMode = document.getElementById('fv-btn-diffmode');
+        var btnDiffScope = document.getElementById('fv-btn-diffscope'); // 全文/仅变更切换
         var diffEd = null;          // diff 编辑器实例（复用，不随渲染重建）
         var diffSide = true;        // true=并排 false=行内
+        var diffFull = false;       // 默认仅变更（Monaco 折叠未变更区，展开条可还原）；点「全文」按钮切换
         var diffOrigModel = null, diffModModel = null; // 每次渲染重建并释放旧模型，防泄漏
         var btnKeep = document.getElementById('fv-btn-keep');   // 阶段九十七：任务变更保留/撤销
         var btnRevert = document.getElementById('fv-btn-revert');
@@ -528,6 +531,16 @@
         // （静态代码是整块 hljs 文本+分离行号条，无逐行 DOM；可编辑文件常规都处于 monaco 态）
         window.__fvReveal = function (line) {
             line = parseInt(line, 10) || 1;
+            // diff 视图：定位到右栏（工作树侧，行号与符号扫描侧一致）
+            if (diffWrap.style.display !== 'none' && diffEd) {
+                try {
+                    var med = diffEd.getModifiedEditor();
+                    med.revealLineInCenter(line);
+                    med.setPosition({ lineNumber: line, column: 1 });
+                    med.focus();
+                } catch (e) {}
+                return;
+            }
             if (monacoReady && monacoBox.style.display !== 'none') {
                 try {
                     monacoEditor.revealLineInCenter(line);
@@ -679,6 +692,7 @@
             } else if (data && (data.kind === 'diff' || data.kind === 'commit') && diffWrap.style.display !== 'none') {
                 diffWrap.style.display = 'none';
                 btnDiffMode.classList.add('hidden');
+                btnDiffScope.classList.add('hidden');
                 bodyEl.style.display = '';
             }
             render();
@@ -755,6 +769,7 @@
             monaco.editor.setModelLanguage(monacoEditor.getModel(), monacoLang());
             dirtyNow = false;
             monacoEditor.focus();
+            taskNavAutoPending = true; // 打开/重开文件：首次 gutter 计算出变更块后自动定位到第一处（updateTaskNav 消费）
             scheduleGutter(); // 阶段九十七：进入编辑即按 baseline 画红蓝绿 gutter
         }
         // ===== 阶段九十七：红蓝绿 gutter（TRAE CN 同款：新增绿条/修改蓝条/删除红块） =====
@@ -835,6 +850,7 @@
         // 任务文件块=Agent 改动位置（fvBase=任务前基线）；普通文件=本次未保存编辑（fvBase=最近保存内容）
         var taskChangeBlocks = [];
         var taskNavIdx = 0;
+        var taskNavAutoPending = false; // 一次性标记：monacoTakeOver（打开/重开文件）置位，首次算出变更块后自动定位第一处
         var taskNavEl = document.getElementById('fv-task-nav');
         var taskNavPos = document.getElementById('fv-nav-pos');
         function updateTaskNav(marks, lineCount) {
@@ -847,11 +863,18 @@
                 if (last && l - last.end <= 2) last.end = l;
                 else taskChangeBlocks.push({ start: l, end: l });
             });
+            var autoJump = taskNavAutoPending; // 消费一次性标记：仅打开文件后首次算块时自动定位，编辑防抖重算不抢视口
+            taskNavAutoPending = false;
             if (taskNavEl) {
                 if (taskChangeBlocks.length) {
                     taskNavEl.classList.remove('hidden');
                     if (taskNavIdx >= taskChangeBlocks.length) taskNavIdx = 0;
                     taskNavPos.textContent = (taskNavIdx + 1) + '/' + taskChangeBlocks.length;
+                    if (autoJump && monacoEditor) { // 打开文件即定位到第一处变更（块首行居中），免手动点 ‹ ›
+                        var l0 = taskChangeBlocks[0].start + 1;
+                        monacoEditor.revealLineInCenter(l0);
+                        monacoEditor.setPosition({ lineNumber: l0, column: 1 });
+                    }
                 } else {
                     taskNavEl.classList.add('hidden');
                     taskNavIdx = 0;
@@ -1211,6 +1234,7 @@
             bodyEl.style.display = 'none';
             diffWrap.style.display = 'flex';
             btnDiffMode.classList.remove('hidden');
+            btnDiffScope.classList.remove('hidden');
             diffHeaderInfo(p);
             if (!monacoReady) { // 复用编辑态同一条懒加载通道，就绪后自动渲染
                 if (monacoDead) { // 阶段一百：编辑器加载失败过 → 直接静态渲染兜底，不再循环重试
@@ -1230,6 +1254,7 @@
             var fallback = function () { // 兜底：恢复 bodyEl + 静态渲染
                 diffWrap.style.display = 'none';
                 btnDiffMode.classList.add('hidden');
+                btnDiffScope.classList.add('hidden');
                 bodyEl.style.display = '';
                 renderDiffStatic(text);
             };
@@ -1239,11 +1264,21 @@
             var lang = MONACO_LANG[diffExtOf(p, text)] || 'plaintext';
             if (!diffEd) { // 首次渲染时创建，之后复用（主题跟随主程序；后续切换由 monaco.editor.setTheme 全局生效）
                 diffEd = monaco.editor.createDiffEditor(diffBox, {
-                    theme: fvThemeDark() ? 'im-dark' : 'im-light', readOnly: true, originalEditable: false,
+                    theme: fvThemeDark() ? 'im-dark' : 'im-light', readOnly: true,
+                    // 只读提示换中文（Monaco 默认英文 "Cannot edit in read-only editor"，点/输入时弹出）
+                    readOnlyMessage: { value: '对比视图为只读，如需修改请打开对应文件标签编辑' },
+                    originalEditable: false,
                     automaticLayout: true, fontSize: 12, lineHeight: 19,
                     fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
-                    renderSideBySide: diffSide, renderIndicators: true, diffWordWrap: 'on',
-                    hideUnchangedRegions: { enabled: true, contextLineCount: 3 }, // 折叠未变更区（VS Code 同款）
+                    renderSideBySide: diffSide, renderIndicators: true,
+                    // diffWordWrap 关闭（VS Code diff 同款）：换行会让左右两栏各行换行位置不同，
+                    // 一行占多个视觉行导致两栏错位（须拖宽度才对齐）；不换行则每行恒占一行天然对齐，超宽横向滚动
+                    diffWordWrap: 'off',
+                    // hideUnchangedRegions 的实际生效点在渲染后 updateOptions（见 renderDiffApply）：
+                    // 该实现是响应式的——折叠区由选项值“变化”触发重算，创建时若直接传 enabled=true，
+                    // 首个渲染的同值 updateOptions 是 no-op，区域计算已在无模型时跑过且不再触发（实测不折叠）。
+                    // 创建时固定 false，渲染后按当前模式 updateOptions 产生值变化才可靠
+                    hideUnchangedRegions: { enabled: false },
                     scrollBeyondLastLine: false, minimap: { enabled: false }
                 });
                 // 容器直接用 diffBox（本版 Monaco 的 diff 编辑器对象不暴露 getDomNode，
@@ -1256,13 +1291,26 @@
             diffOrigModel = monaco.editor.createModel(parsed.original, lang);
             diffModModel = monaco.editor.createModel(parsed.modified, lang);
             diffEd.setModel({ original: diffOrigModel, modified: diffModModel });
+            // 本版 Monaco 创建参数里的 hideUnchangedRegions 首开不生效（实测），模型设置后
+            // updateOptions 才可靠（v=118 动态切换实测有效）——每次渲染后按当前模式重申一次
+            diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull, contextLineCount: 3 } });
+            // 阶段一百一十六：diff 符号面包屑——扫工作树侧（modified），行号与右栏一致，
+            // 宿主页地址栏显示 文件名 › ƒ函数（点击经 __fvReveal 跳 diff 右栏对应行，与文件浏览同款）
+            try { viewerBridge().reportSymbols(data.tab_id, fvScanSymbols(parsed.modified, diffExtOf(p, text))); } catch (e) {}
             btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
+            btnDiffScope.textContent = diffFull ? '仅变更' : '全文'; // 按钮文案=点击后的目标视图（与 diffmode 同款语义）
         }
         btnDiffMode.addEventListener('click', function () { // 并排/行内切换（TRAE CN 同款）
             if (!diffEd) return;
             diffSide = !diffSide;
             diffEd.updateOptions({ renderSideBySide: diffSide });
             btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
+        });
+        btnDiffScope.addEventListener('click', function () { // 全文/仅变更切换（diffopen 送全文，折叠纯前端行为）
+            if (!diffEd) return;
+            diffFull = !diffFull;
+            diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull, contextLineCount: 3 } });
+            btnDiffScope.textContent = diffFull ? '仅变更' : '全文';
         });
 
         // ===== 主渲染入口 =====
@@ -1271,6 +1319,7 @@
             monacoBox.style.display = 'none';
             diffWrap.style.display = 'none';
             btnDiffMode.classList.add('hidden');
+            btnDiffScope.classList.add('hidden');
             bodyEl.style.display = '';
             btnEdit.classList.add('hidden');
             btnSave.classList.add('hidden');

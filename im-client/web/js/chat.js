@@ -4442,7 +4442,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=116'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
+        frame.src = 'file-viewer.html?v=123'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -9250,8 +9250,10 @@
         if (e && (e.x === '?' || e.y === '?')) { wsOpenFile(wsProjFsPath(p)); return; }
         if (wsPcViewer()) { // PC：diff 进浏览区标签（阶段九十二）
             var diffKey = 'diff:' + p;
-            var diffTitle = 'diff: ' + p.replace(/^.*[\\/]/, '');
-            wsPanelGitReq({ sub: 'diff', path: p }).then(function (d) {
+            // 工作树对比标题（Trae/VSCode 同款语义）：文件名 +（工作树）后缀，区别于历史版本对比
+            var diffTitle = p.replace(/^.*[\\/]/, '') + '（工作树）';
+            // diffopen：-U100000 全文上下文 diff → 浏览区还原整文件对比（普通 diff 只有变更片段）
+            wsPanelGitReq({ sub: 'diffopen', path: p }).then(function (d) {
                 wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: d.diff || '', meta: { path: p } });
             }).catch(function (err) {
                 var msg = err && err.message || String(err);
@@ -9280,10 +9282,11 @@
         wsPanel.viewEl.classList.remove('hidden');
         var idx = wsPanel.tabOrder.indexOf(key);
         if (idx < 0) wsPanel.tabOrder.push(key);
-        wsPanel.tabs[key] = { name: 'diff: ' + p.replace(/^.*[\\/]/, ''), diffPath: p, loading: true }; // 重开即刷新 diff
+        wsPanel.tabs[key] = { name: p.replace(/^.*[\\/]/, '') + '（工作树）', diffPath: p, loading: true }; // 重开即刷新 diff
         wsPanelActivate(key);
         wsPanelSyncViewCol();
-        wsPanelGitReq({ sub: 'diff', path: p }).then(function (d) {
+        // diffopen：-U100000 全文上下文 diff → 面板 diff 全文渲染（普通 diff 只有变更片段）
+        wsPanelGitReq({ sub: 'diffopen', path: p }).then(function (d) {
             var t = wsPanel.tabs[key];
             if (!t) return;
             t.loading = false;

@@ -362,6 +362,13 @@ func wsGitBuildArgs(r *wsGitReq) ([]string, time.Duration, error) {
 			return nil, 0, errors.New("缺少差异文件路径")
 		}
 		return []string{"diff", "HEAD", "--", r.Path}, 20 * time.Second, nil
+	case "diffopen":
+		// 源代码管理点击变更文件开对比（Trae CN 同款全文对比）：-U100000 上下文覆盖整文件，
+		// hunk 合并为整文件块 → 前端 parseUnifiedDiff 还原出全文 original/modified（普通 diff 只有变更片段）
+		if strings.TrimSpace(r.Path) == "" {
+			return nil, 0, errors.New("缺少差异文件路径")
+		}
+		return []string{"diff", "-U100000", "HEAD", "--", r.Path}, 20 * time.Second, nil
 	case "add":
 		if len(r.Paths) == 0 {
 			return nil, 0, errors.New("缺少暂存目标")
@@ -731,7 +738,7 @@ func wsServerGit(username, content string) *wsFileResult {
 			}
 		}
 		return wsGitResultPack(map[string]interface{}{"sub": "untracked", "files": files})
-	case "diff", "diffhead", "diffcached", "diffrev":
+	case "diff", "diffopen", "diffhead", "diffcached", "diffrev":
 		return wsGitResultPack(map[string]interface{}{"sub": "diff", "diff": out})
 	default:
 		return wsGitResultPack(map[string]interface{}{"sub": r.Sub, "output": strings.TrimSpace(out)})

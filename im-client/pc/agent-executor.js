@@ -1216,6 +1216,9 @@ function fileRevealLevel(username, p) {
 const GIT_SUB_SPEC = {
     status:   { args: ['status', '--porcelain=v1', '-b'], timeout: 20000 },
     diff:     { args: ['diff', 'HEAD', '--'],             timeout: 20000, needPath: true },
+    // diffopen 源代码管理点击变更文件开对比（Trae CN 同款全文对比）：-U100000 让上下文覆盖整文件，
+    // hunk 合并为整文件块 → 前端 parseUnifiedDiff 还原出全文 original/modified（普通 diff 只有变更片段，无全文）
+    diffopen: { args: ['diff', '-U100000', 'HEAD', '--'], timeout: 20000, needPath: true },
     diffhead: { args: ['diff', 'HEAD'],                   timeout: 30000 },
     diffcached: { args: ['diff', '--cached'],             timeout: 30000 },
     diffrev:  { args: ['diff'],                           timeout: 60000, needTarget: true },
@@ -1403,7 +1406,7 @@ function gitOp(username, content) {
     if (spec.needBranch && !String(r.branch || '').trim()) return Promise.resolve({ ok: false, error: '缺少分支名' });
     // add/unstage/discard/commit 分支会重新赋值拼接参数，必须 let（const 重赋值抛 TypeError）
     let args = ['-c', 'core.quotepath=off'].concat(spec.args);
-    if (r.sub === 'diff') args.push(String(r.path));
+    if (r.sub === 'diff' || r.sub === 'diffopen') args.push(String(r.path));
     if (r.sub === 'show') args.push(String(r.path));
     if (r.sub === 'diffrev') args.push(String(r.target) + '...HEAD');
     // discard：staged 变更走 checkout HEAD --（staged 删除/改名旧路径 index 中已不存在，checkout -- 必报 pathspec 不匹配，实测同服务端）
@@ -1546,7 +1549,7 @@ function gitOp(username, content) {
                 resolve({ ok: true, content: JSON.stringify(st) });
                 return;
             }
-            if (r.sub === 'diff' || r.sub === 'diffhead' || r.sub === 'diffcached' || r.sub === 'diffrev') {
+            if (r.sub === 'diff' || r.sub === 'diffopen' || r.sub === 'diffhead' || r.sub === 'diffcached' || r.sub === 'diffrev') {
                 resolve({ ok: true, content: JSON.stringify({ sub: 'diff', diff: outTxt }) });
                 return;
             }

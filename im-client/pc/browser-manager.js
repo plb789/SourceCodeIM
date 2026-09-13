@@ -533,6 +533,8 @@ function openDataTab(payload) {
         if (exist) {
             exist.title = title;
             exist.dataKind = kind;
+            // diff 标签补 relPath：地址栏面包屑按真实路径分段（port_relay › 文件名），与文件浏览同款
+            if (kind === 'diff' && p.meta && p.meta.path) exist.relPath = String(p.meta.path);
             exist.lastPayload = build(exist.id);
             activeId = exist.id;
             if (!panelVisible) setPanel(true);
@@ -545,6 +547,8 @@ function openDataTab(payload) {
     const tab = createTab(null, true, 'file');
     tab.dataKey = dataKey;
     tab.dataKind = kind; // 渲染层标签图标用（diff/commit/md/text）
+    // diff 标签补 relPath：地址栏面包屑按真实路径分段（port_relay › 文件名），与文件浏览同款
+    if (kind === 'diff' && p.meta && p.meta.path) tab.relPath = String(p.meta.path);
     tab.title = title;
     tab.lastPayload = build(tab.id);
     if (!panelVisible) setPanel(true);
