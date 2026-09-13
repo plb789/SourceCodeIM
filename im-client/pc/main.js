@@ -806,7 +806,7 @@ app.whenReady().then(function () {
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=109');
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=111');
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,

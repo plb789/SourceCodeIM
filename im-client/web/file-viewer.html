@@ -241,6 +241,23 @@
         .fv-pptx-btn:hover { background: var(--fv-hover); }
         .fv-pptx-idx { font-size: 12px; color: var(--fv-text-light); min-width: 64px; }
         .fv-pptx-canvas { max-width: 96%; border-radius: 6px; background: #fff; }
+        /* 阶段一百一十：Monaco 右键菜单中文化——自绘菜单（禁用内置英文菜单，符合"禁用系统默认弹窗"规约；
+           配色全走 fv 主题变量，深浅主题自动跟随） */
+        .fv-ctx-menu {
+            position: fixed; z-index: 10000; min-width: 190px;
+            padding: 4px;
+            background: var(--fv-panel); color: var(--fv-text);
+            border: 1px solid var(--fv-border); border-radius: 8px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+            font-size: 12px; user-select: none;
+        }
+        .fv-ctx-item {
+            display: flex; align-items: center; justify-content: space-between; gap: 24px;
+            padding: 6px 12px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+        }
+        .fv-ctx-item:hover { background: var(--fv-hover); }
+        .fv-ctx-key { color: var(--fv-text-light); font-size: 11px; }
+        .fv-ctx-sep { height: 1px; margin: 4px 8px; background: var(--fv-border); }
     </style>
 </head>
 <body>
@@ -310,6 +327,100 @@
         });
         if (fvSchemeQuery.addEventListener) fvSchemeQuery.addEventListener('change', fvApplyTheme);
         else if (fvSchemeQuery.addListener) fvSchemeQuery.addListener(fvApplyTheme);
+
+        // ===== 阶段一百一十：Monaco 右键菜单中文化（开源 Monaco 无中文语言包，内置菜单恒英文） =====
+        // 思路：编辑器容器捕获阶段拦截 contextmenu（preventDefault+stopPropagation，Monaco 内置
+        // 菜单与浏览器默认菜单都不会出现），改弹自绘中文菜单（.fv-ctx-menu，主题变量配色）。
+        // 条目派发：EditorAction（如更改所有匹配项）走 editor.getAction().run()；剪切/复制/粘贴
+        // 在本版本为 MultiCommand 编辑器命令，须走 editor.trigger()（见 fvAttachCtxMenu 内注释）；
+        // 只读 diff 对比视图仅保留复制/全选，剪切/粘贴对只读编辑器无意义
+        var fvCtxMenuEl = null;
+        function fvCloseCtxMenu() {
+            if (!fvCtxMenuEl) return;
+            fvCtxMenuEl.remove();
+            fvCtxMenuEl = null;
+            document.removeEventListener('mousedown', fvCtxOutside, true);
+            document.removeEventListener('keydown', fvCtxEsc, true);
+            window.removeEventListener('blur', fvCloseCtxMenu);
+        }
+        function fvCtxOutside(e) {
+            if (fvCtxMenuEl && !fvCtxMenuEl.contains(e.target)) fvCloseCtxMenu();
+        }
+        function fvCtxEsc(e) { if (e.key === 'Escape') fvCloseCtxMenu(); }
+        function fvShowCtxMenu(x, y, items) {
+            fvCloseCtxMenu();
+            var menu = document.createElement('div');
+            menu.className = 'fv-ctx-menu';
+            items.forEach(function (it) {
+                if (it.sep) {
+                    var s = document.createElement('div');
+                    s.className = 'fv-ctx-sep';
+                    menu.appendChild(s);
+                    return;
+                }
+                var row = document.createElement('div');
+                row.className = 'fv-ctx-item';
+                var t = document.createElement('span');
+                t.textContent = it.label;
+                row.appendChild(t);
+                if (it.key) {
+                    var k = document.createElement('span');
+                    k.className = 'fv-ctx-key';
+                    k.textContent = it.key;
+                    row.appendChild(k);
+                }
+                row.addEventListener('click', function () {
+                    fvCloseCtxMenu();
+                    try { it.run(); } catch (e) {}
+                });
+                menu.appendChild(row);
+            });
+            document.body.appendChild(menu);
+            // 右/下缘防溢出翻转（与主程序自绘菜单同口径）
+            var r = menu.getBoundingClientRect();
+            menu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+            menu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+            fvCtxMenuEl = menu;
+            setTimeout(function () { // 异步挂全局关闭（避开本次右键事件冒泡）
+                document.addEventListener('mousedown', fvCtxOutside, true);
+                document.addEventListener('keydown', fvCtxEsc, true);
+                window.addEventListener('blur', fvCloseCtxMenu);
+            }, 0);
+        }
+        // fvAttachCtxMenu 给编辑器挂中文右键菜单：domOwner 提供容器 DOM（普通编辑器/diff 编辑器
+        // 均有 getDomNode），actEditor 提供命令来源（diff 需用 getModifiedEditor 取内部编辑器）
+        function fvAttachCtxMenu(domOwner, actEditor, readonly) {
+            var dom = domOwner.getDomNode();
+            if (!dom || dom.__fvCtxHooked) return;
+            dom.__fvCtxHooked = true;
+            dom.addEventListener('contextmenu', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var act = function (id) {
+                    try { return actEditor.getAction(id); } catch (err) { return null; }
+                };
+                // 本版本 Monaco 的剪切/复制/粘贴为 MultiCommand（编辑器命令，非 EditorAction），
+                // getAction 取不到（返回 null），须经 editor.trigger 派发（与键位绑定同路径，实测可用）
+                var cmd = function (id) {
+                    return function () { try { actEditor.trigger('fv-ctx-menu', id, null); } catch (e) {} };
+                };
+                var changeAll = readonly ? null : act('editor.action.changeAll');
+                // 注：不提供"命令面板"条目——Monaco QuickAccess 面板本身全英文且无法本地化，
+                // 点开反而又冒英文 UI（快捷键 F1 仍可用）
+                var items = [];
+                if (changeAll) items.push({ label: '更改所有匹配项', key: 'Ctrl+F2', run: function () { changeAll.run(); } });
+                if (items.length) items.push({ sep: true });
+                if (!readonly) items.push({ label: '剪切', key: 'Ctrl+X', run: cmd('editor.action.clipboardCutAction') });
+                items.push({ label: '复制', key: 'Ctrl+C', run: cmd('editor.action.clipboardCopyAction') });
+                if (!readonly) items.push({ label: '粘贴', key: 'Ctrl+V', run: cmd('editor.action.clipboardPasteAction') });
+                items.push({ sep: true });
+                items.push({ label: '全选', key: 'Ctrl+A', run: function () {
+                    var m = actEditor.getModel();
+                    if (m) { actEditor.setSelection(m.getFullModelRange()); actEditor.focus(); }
+                } });
+                fvShowCtxMenu(e.clientX, e.clientY, items);
+            }, true); // 捕获阶段：先于 Monaco 内置 contextmenu 处理器（bubble），拦下即不再弹英文菜单
+        }
 
         // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
         // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
@@ -409,6 +520,7 @@
                 wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true,
                 colorDecorators: true // 阶段九十八：颜色值前色块（悬停弹调色板，Monaco 内置 standaloneColorPicker）
             });
+            fvAttachCtxMenu(monacoEditor, monacoEditor, false); // 阶段一百一十：右键菜单中文化（编辑态全量条目）
             try { // 阶段一百零八：JetBrains Mono webfont 就绪后重测字体度量（防编辑器以回退字体测量造成行宽错位）
                 Promise.all([
                     document.fonts.load('12px "JetBrains Mono IM"'),
@@ -970,6 +1082,7 @@
                     hideUnchangedRegions: { enabled: true, contextLineCount: 3 }, // 折叠未变更区（VS Code 同款）
                     scrollBeyondLastLine: false, minimap: { enabled: false }
                 });
+                fvAttachCtxMenu(diffEd, diffEd.getModifiedEditor(), true); // 阶段一百一十：diff 只读右键（复制/全选）
             }
             if (diffOrigModel) diffOrigModel.dispose();
             if (diffModModel) diffModModel.dispose();

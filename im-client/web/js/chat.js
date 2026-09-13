@@ -4442,7 +4442,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=109'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
+        frame.src = 'file-viewer.html?v=111'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
