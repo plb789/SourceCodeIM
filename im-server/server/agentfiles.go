@@ -954,12 +954,20 @@ func (s *Server) wsServerGitAI(username, content string) *wsFileResult {
 		sys = gitCommitmsgSys(nFiles)
 	}
 	agent := &AIRunAgent{Name: "Git助手", Provider: prov}
-	// 流式增量归口：commitmsg 模式经 AGENT_EVENT 实时下发打字机增量（审查报告走标签页一次性展示，不流式）
+	// 流式增量归口：commitmsg 经 git_ai_delta 实时填提交框（打字机）；review 经 git_review_delta
+	// 推报告标签逐字生成（TRAE CN 同款流式审查，前端同键刷新渲染）。其余模式不流式。
+	evType := ""
+	switch r.Mode {
+	case "commitmsg":
+		evType = "git_ai_delta"
+	case "review":
+		evType = "git_review_delta"
+	}
 	onDelta := func(chunk string) {
-		if r.Mode != "commitmsg" || chunk == "" {
+		if evType == "" || chunk == "" {
 			return
 		}
-		data, _ := json.Marshal(map[string]interface{}{"type": "git_ai_delta", "text": chunk})
+		data, _ := json.Marshal(map[string]interface{}{"type": evType, "text": chunk})
 		msg := protocol.Message{
 			MsgType:   protocol.MsgTypeAgentEvent,
 			FromUser:  "Git助手",

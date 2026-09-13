@@ -8476,17 +8476,24 @@
     }
 
     // 拉取分支列表（审查目标选择用）：本地 + 远端跟踪分支（origin/xxx，服务端 refs/heads+refs/remotes）；
-    // 默认目标优先 main/master，其次首个非当前分支；origin/HEAD 是符号引用不是真分支，全链路排除
+    // 默认目标优先 main/master，其次首个非当前分支；都没有（仓库仅当前分支）时回退
+    // '@worktree' 工作区伪目标（TRAE CN 同款：单分支仓库可审查未提交变更，不再直接拒绝）
+    // origin/HEAD 是符号引用不是真分支，全链路排除
+    var GIT_REVIEW_WORKTREE = '@worktree'; // 工作区伪目标标识（非真实分支名）
+    function wsGitReviewTargetLabel(t) {
+        return t === GIT_REVIEW_WORKTREE ? '工作区（未提交变更）' : t;
+    }
     function wsPanelGitLoadBranches() {
         var g = wsPanel.git;
         wsPanelGitReq({ sub: 'branches' }).then(function (d) {
             g.branches = (d.list || []).filter(function (b) { return !/\/HEAD$/.test(b); });
-            if (g.reviewTarget && g.branches.indexOf(g.reviewTarget) < 0) g.reviewTarget = ''; // 目标分支已失效
+            // 目标分支已失效（伪目标除外）；无有效目标时按偏好选默认，仍无则回退工作区伪目标
+            if (g.reviewTarget && g.reviewTarget !== GIT_REVIEW_WORKTREE && g.branches.indexOf(g.reviewTarget) < 0) g.reviewTarget = '';
             if (!g.reviewTarget) {
                 var pref = ['main', 'master', 'origin/main', 'origin/master'].filter(function (b) {
                     return b !== g.branch && g.branches.indexOf(b) >= 0;
                 });
-                g.reviewTarget = pref[0] || g.branches.filter(function (b) { return b !== g.branch; })[0] || '';
+                g.reviewTarget = pref[0] || g.branches.filter(function (b) { return b !== g.branch; })[0] || GIT_REVIEW_WORKTREE;
             }
         }).catch(function () {
             g.branches = g.branches || [];
@@ -8543,20 +8550,28 @@
         var to = document.createElement('button');
         to.className = 'ws-git-review-branch to';
         to.type = 'button';
-        to.textContent = '⎇ ' + (g.reviewTarget || '选择目标分支');
-        to.title = '审查目标分支（对比 ' + (g.reviewTarget || '…') + '...HEAD 的变更）';
+        var toLabel = g.reviewTarget ? wsGitReviewTargetLabel(g.reviewTarget) : '选择目标分支';
+        to.textContent = '⎇ ' + toLabel;
+        to.title = g.reviewTarget === GIT_REVIEW_WORKTREE
+            ? '审查目标：工作区未提交变更（git diff HEAD）'
+            : '审查目标分支（对比 ' + (g.reviewTarget || '…') + '...HEAD 的变更）';
         to.disabled = g.reviewBusy;
         to.addEventListener('click', function (e) {
             e.stopPropagation();
             if (g.branches === null) { showToast('分支列表加载中，请稍候'); return; }
-            var list = g.branches.filter(function (b) { return b !== g.branch && !/\/HEAD$/.test(b); });
-            if (!list.length) { showToast('当前仓库没有其他分支可对比（本地与远端都只有 ' + (g.branch || '当前分支') + '）；新建分支或拉取远端分支后即可审查'); return; }
-            wsGitMenu(to, list.map(function (b) {
-                return { label: '⎇ ' + b, onclick: function () {
+            // 目标菜单：工作区伪目标恒在首项（TRAE CN 同款，单分支仓库也能审查未提交变更），
+            // 其余可选分支按原口径排除当前分支与 origin/HEAD 符号引用
+            var items = [{ label: '⎇ ' + wsGitReviewTargetLabel(GIT_REVIEW_WORKTREE), onclick: function () {
+                g.reviewTarget = GIT_REVIEW_WORKTREE;
+                wsPanelGitRender();
+            } }];
+            g.branches.filter(function (b) { return b !== g.branch && !/\/HEAD$/.test(b); }).forEach(function (b) {
+                items.push({ label: '⎇ ' + b, onclick: function () {
                     g.reviewTarget = b;
                     wsPanelGitRender();
-                } };
-            }));
+                } });
+            });
+            wsGitMenu(to, items);
         });
         br.appendChild(from);
         br.appendChild(sep);
@@ -8565,7 +8580,37 @@
         return sec;
     }
 
-    // 执行智能体审查：目标分支三点 diff → gitai 生成 Markdown 报告 → 预览标签打开（PC 进浏览区）
+    // ===== 阶段一百零六：审查报告流式反馈（TRAE CN 同款） =====
+    // 点"总结并审查"确认 diff 可审后立即开报告页占位；服务端经 git_review_delta 增量推进，
+    // 前端同键刷新逐字呈现（PC 浏览区标签同 key 复用刷新 / web 面板标签原位重渲染）；
+    // 流式期间 600ms 节流防高频重建，收尾（成功/失败）强制刷新定稿。reviewBusy 单飞无需多路复用
+    var wsReviewStream = null; // 当前审查流 { key, title, target, acc, lastFlush }
+    function wsGitReviewDelta(text) {
+        if (!wsReviewStream || !text) return;
+        wsReviewStream.acc += text;
+        wsReviewStreamFlush(null);
+    }
+    function wsReviewStreamFlush(finalText) {
+        var s = wsReviewStream;
+        if (!s) return;
+        var now = Date.now();
+        if (finalText === null && now - s.lastFlush < 600) return; // 流式节流（收尾定稿强制刷新）
+        s.lastFlush = now;
+        var content = finalText !== null ? finalText : (s.acc || '> ⏳ 正在生成审查报告，请稍候…');
+        if (wsPcViewer()) { // PC：浏览区标签同 key 复用刷新（主进程 openDataTab 重开即刷新）
+            wsOpenData({ key: s.key, kind: 'md', title: s.title, content: content, meta: { target: s.target } });
+            return;
+        }
+        var t = wsPanel.tabs[s.key]; // web：面板报告标签原位重渲染
+        if (t && t.review) {
+            t.loading = false;
+            t.content = content;
+            if (wsPanel.activeTab === s.key) wsPanelRenderTab();
+        }
+    }
+
+    // 执行智能体审查：目标分支三点 diff（或工作区未提交变更）→ gitai 流式生成 Markdown 报告
+    // → 报告标签即时打开并随增量逐字刷新（PC 进浏览区）
     function wsPanelGitDoReview() {
         var g = wsPanel.git;
         if (g.reviewBusy) return;
@@ -8573,32 +8618,41 @@
         g.reviewBusy = true;
         wsPanelGitRender(); // 按钮进入"审查中…"态
         var target = g.reviewTarget;
-        var pcView = wsPcViewer(); // PC：报告进浏览区标签（阶段九十二）
+        var isWt = target === GIT_REVIEW_WORKTREE; // 工作区伪目标：审未提交变更（git diff HEAD），非三点 diff
+        var aiTarget = wsGitReviewTargetLabel(target); // AI 提示词 {target} 注入与报告标题统一用显示名
+        var key = 'review:' + target;
         var diffTxt = '';
-        wsPanelGitReq({ sub: 'diffrev', target: target }).then(function (d) {
+        wsPanelGitReq(isWt ? { sub: 'diffhead' } : { sub: 'diffrev', target: target }).then(function (d) {
             diffTxt = d.diff || '';
-            if (!diffTxt.trim()) throw new Error('当前分支相对 ' + target + ' 没有差异，无需审查');
-            if (pcView) {
-                return wsPanelGitAIReq({ mode: 'review', diff: diffTxt, target: target }).then(function (r) {
-                    wsOpenData({ key: 'review:' + target, kind: 'md', title: '审查报告: ' + target, content: r.text || '（AI 未返回内容）', meta: { target: target } });
-                    showToast('审查报告已生成');
-                });
-            }
-            // 报告标签先占位（loading 态），报告回来后 Markdown 渲染
-            var key = 'review:' + target;
-            wsPanel.viewEl.classList.remove('hidden');
-            if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
-            wsPanel.tabs[key] = { name: '审查报告: ' + target, review: true, isMd: true, reviewTarget: target, content: '', loading: true };
+            var emptyTip = isWt ? '当前没有未提交的变更，无需审查' : '当前分支相对 ' + target + ' 没有差异，无需审查';
+            if (!diffTxt.trim()) throw new Error(emptyTip);
+            // 即时反馈（TRAE CN 同款）：确认可审后立即开报告页占位，后续流式增量同键逐字刷新，不再干等
+            wsReviewStream = { key: key, title: '审查报告: ' + aiTarget, target: target, acc: '', lastFlush: 0 };
             g.lastReviewKey = key;
-            wsPanelActivate(key);
-            wsPanelSyncViewCol();
-            return wsPanelGitAIReq({ mode: 'review', diff: diffTxt, target: target }).then(function (r) {
-                var t = wsPanel.tabs[key];
-                if (t) { t.loading = false; t.content = r.text || '（AI 未返回内容）'; }
-                if (wsPanel.activeTab === key) wsPanelRenderTab();
+            if (wsPcViewer()) {
+                wsReviewStreamFlush(null);
+            } else {
+                wsPanel.viewEl.classList.remove('hidden');
+                if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
+                wsPanel.tabs[key] = { name: '审查报告: ' + aiTarget, review: true, isMd: true, reviewTarget: target, content: '> ⏳ 正在生成审查报告，请稍候…' };
+                wsPanelActivate(key);
+                wsPanelSyncViewCol();
+            }
+            return wsPanelGitAIReq({ mode: 'review', diff: diffTxt, target: aiTarget }).then(function (r) {
+                var text = r.text || '（AI 未返回内容）';
+                if (wsReviewStream) { // 收尾定稿：以服务端清洗后的全文最终渲染一次
+                    wsReviewStream.acc = text;
+                    wsReviewStreamFlush(text);
+                    wsReviewStream = null;
+                }
                 showToast('审查报告已生成');
             });
         }).catch(function (err) {
+            if (wsReviewStream) { // 流中断：已收到的部分落地 + 失败尾注，防报告页停留"审查中"假态
+                var partial = wsReviewStream.acc;
+                wsReviewStreamFlush((partial ? partial + '\n\n' : '') + '> ⚠️ 审查失败：' + (err && err.message || err));
+                wsReviewStream = null;
+            }
             showToast('智能体审查：' + (err && err.message || err));
         }).then(function () {
             g.reviewBusy = false;
@@ -10432,6 +10486,8 @@
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         // 阶段一百零五：AI 提交信息流式增量（无 task_id，不走任务卡分发；生成中打字机填入提交框）
         if (ev && ev.type === 'git_ai_delta') { wsGitAIDelta(ev.text || ''); return; }
+        // 阶段一百零六：审查报告流式增量（TRAE CN 同款逐字生成，锚定当前审查流同键刷新）
+        if (ev && ev.type === 'git_review_delta') { wsGitReviewDelta(ev.text || ''); return; }
         // 阶段一百零五补强：多文件仅标题时服务端自动纠偏重试，重试前清空提交框第一次的残文
         if (ev && ev.type === 'git_ai_reset') {
             if (wsGitAIStreaming) {
