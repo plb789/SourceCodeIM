@@ -19,6 +19,22 @@
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
     <style>
+        /* 阶段一百零八：TRAE CN 同款代码字体 JetBrains Mono（与主程序 style.css 同一套本地 woff2 与
+           'JetBrains Mono IM' 命名约定，中文回退系统字体；viewer 在 web 根目录故路径不带 ../） */
+        @font-face {
+            font-family: 'JetBrains Mono IM';
+            src: url('fonts/JetBrainsMono-400.woff2') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'JetBrains Mono IM';
+            src: url('fonts/JetBrainsMono-500.woff2') format('woff2');
+            font-weight: 500;
+            font-style: normal;
+            font-display: swap;
+        }
         /* 主题变量：跟随主程序 im_theme（light/dark/system，同源 localStorage 共享）。
            界面面（顶栏/正文/边框/表格/引用/按钮）随主题切换；代码块面保持深色恒定
            （主程序 AI 代码块豆包同款 #0d1117，hljs GitHub Dark 双主题通用） */
@@ -134,11 +150,11 @@
             position: sticky; left: 0; z-index: 1; flex: none;
             padding: 0 10px 12px; text-align: right; min-width: 46px;
             background: var(--fv-code-surface); color: #6e7681; user-select: none;
-            font: 12px/1.55 Consolas, "Courier New", monospace; white-space: pre;
+            font: 12px/1.55 "JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace; white-space: pre;
             border-right: 1px solid #30363d;
         }
         .fv-code-wrap pre { padding: 0 16px 12px 12px; background: transparent; }
-        .fv-code-wrap code { font: 12px/1.55 Consolas, "Courier New", monospace; background: transparent; color: #c9d1d9; }
+        .fv-code-wrap code { font: 12px/1.55 "JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace; background: transparent; color: #c9d1d9; }
         /* 阶段九十五：编辑态唯一内核 = Monaco（TRAE/VS Code 同款编辑内核）。
            旧 textarea+hljs 双叠层方案因中英混排两套布局引擎字体 fallback 宽度不一致、
            永远存在像素级错位，已整体裁除。Monaco 自渲染自带滚动条（可主题化）。 */
@@ -154,9 +170,9 @@
             margin: 10px 0; padding: 6px 14px; border-left: 3px solid var(--fv-primary);
             background: var(--fv-quote-bg); color: var(--fv-text-light); border-radius: 0 6px 6px 0;
         }
-        .fv-md code { background: var(--fv-inline-bg); border: 1px solid var(--fv-border); border-radius: 4px; padding: 1px 6px; font: 12px Consolas, monospace; color: var(--fv-inline-fg); }
+        .fv-md code { background: var(--fv-inline-bg); border: 1px solid var(--fv-border); border-radius: 4px; padding: 1px 6px; font: 12px "JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace; color: var(--fv-inline-fg); }
         .fv-md pre.fv-md-code { background: var(--fv-code-surface); border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px; overflow: auto; margin: 10px 0; }
-        .fv-md pre.fv-md-code code { background: transparent; border: none; padding: 0; color: #c9d1d9; font: 12px/1.55 Consolas, monospace; }
+        .fv-md pre.fv-md-code code { background: transparent; border: none; padding: 0; color: #c9d1d9; font: 12px/1.55 "JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace; }
         .fv-md table { border-collapse: collapse; margin: 10px 0; max-width: 100%; display: block; overflow: auto; }
         .fv-md th, .fv-md td { border: 1px solid var(--fv-border); padding: 6px 12px; font-size: 12.5px; }
         .fv-md th { background: var(--fv-quote-bg); color: var(--fv-title); }
@@ -373,11 +389,17 @@
             });
             monacoEditor = monaco.editor.create(monacoBox, {
                 value: '', language: 'plaintext', theme: fvThemeDark() ? 'im-dark' : 'im-light', automaticLayout: true,
-                fontSize: 12, lineHeight: 19, fontFamily: 'Consolas, "Courier New", monospace',
+                fontSize: 12, lineHeight: 19, fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
                 minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
                 wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true,
                 colorDecorators: true // 阶段九十八：颜色值前色块（悬停弹调色板，Monaco 内置 standaloneColorPicker）
             });
+            try { // 阶段一百零八：JetBrains Mono webfont 就绪后重测字体度量（防编辑器以回退字体测量造成行宽错位）
+                Promise.all([
+                    document.fonts.load('12px "JetBrains Mono IM"'),
+                    document.fonts.load('500 12px "JetBrains Mono IM"')
+                ]).then(function () { try { monaco.editor.remeasureFonts(); } catch (e) {} });
+            } catch (e) {}
             monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () { doSave(); });
             monacoEditor.onDidChangeModelContent(function () {
                 if (!suppressDirty) {
@@ -928,7 +950,7 @@
                 diffEd = monaco.editor.createDiffEditor(diffBox, {
                     theme: fvThemeDark() ? 'im-dark' : 'im-light', readOnly: true, originalEditable: false,
                     automaticLayout: true, fontSize: 12, lineHeight: 19,
-                    fontFamily: 'Consolas, "Courier New", monospace',
+                    fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
                     renderSideBySide: diffSide, renderIndicators: true, diffWordWrap: 'on',
                     hideUnchangedRegions: { enabled: true, contextLineCount: 3 }, // 折叠未变更区（VS Code 同款）
                     scrollBeyondLastLine: false, minimap: { enabled: false }
