@@ -166,7 +166,9 @@ ai:
     - name: deepseek
       api_url: "https://api.deepseek.com/v1/chat/completions"
       api_key: "sk-fc5d6832eeaa45738c8cd65dccc5b8d3"
-      model: "deepseek-v4-flash"          # 可选：deepseek-v4-flash / deepseek-v4-flash-vision-exp
+      # 原实现：model: "deepseek-v4-flash"（2026-09-15 实测该模型已从 /models 列表下线，且官方对无效模型名不报错直接挂起，导致 AI 问答无响应）
+      # model: "deepseek-v4-flash"          # 可选：deepseek-v4-flash / deepseek-v4-flash-vision-exp
+      model: "deepseek-flash"             # 2026-09-15 实测 /models 当前可用：deepseek-flash / deepseek-v4-pro
       supports_image: false
     # 智谱 GLM
     - name: zhipu
