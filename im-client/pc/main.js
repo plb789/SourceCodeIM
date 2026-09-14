@@ -792,19 +792,64 @@ ipcMain.handle('mcp:sync-state', function (event, username) {
 const UV_BIN_DIR = path.join(os.homedir(), '.im-mcp', 'bin');
 const UV_X_EXE = path.join(UV_BIN_DIR, 'uvx.exe');
 const UV_ZIP_URL = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';
-let uvInstalling = false; // 防并发安装
+let uvInstalling = false; // 防并发安装（mcp:uv-status 状态回显用）
+let uvInstallPromise = null; // 阶段一百一十九：并发共享同一次安装（spawn 自动触发与面板手动安装共用，只下载一次）
+
+// findLocalUvZip：按序查找本地已有的 uv 工具链 zip（找到即离线解压，不联网）：
+//   1) 开发态构建缓存 <客户端目录>\bundled\uv-runtime.zip（build.bat 首次自动下载缓存）
+//   2) 打包内嵌 <resources>\uv-runtime.zip（build.bat 打包后直拷，随安装包分发）
+// 注意 process.resourcesPath 仅 Electron 运行态存在，纯 Node 调试（测试脚本）下自动跳过
+function findLocalUvZip() {
+    const candidates = [
+        path.join(__dirname, 'bundled', 'uv-runtime.zip'),
+    ];
+    if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'uv-runtime.zip'));
+    for (let i = 0; i < candidates.length; i++) {
+        try { if (fs.existsSync(candidates[i])) return candidates[i]; } catch (e) { }
+    }
+    return null;
+}
+
+// uvEnsureRuntime：确保 uv 工具链就绪（已装直接返回；并发调用共享同一安装 Promise）。
+// 双通道取源（与 node-runtime 同款优先级）：本地 zip 直接解压（离线可用）→ 本地缺失才联网下载。
+// 除面板手动安装（mcp:uv-install）外，同时注入 mcp-manager——uvx 系插件 spawn 预检
+// 解析不到 uvx 时自动触发本函数（与 node-runtime.ensureRuntime 同构），成功后原样重启会话
+function uvEnsureRuntime() {
+    if (fs.existsSync(UV_X_EXE)) return Promise.resolve({ ok: true, installed: true, msg: 'uv 工具链已就绪' });
+    if (uvInstallPromise) return uvInstallPromise;
+    uvInstalling = true;
+    const local = findLocalUvZip();
+    const job = local
+        ? new Promise(function (resolve) { unzipUv(local, resolve, true); }) // 本地 zip 保留复用，解压后不删除
+        : uvDownloadInstall(); // 联网下载到临时文件，解压后清理临时 zip
+    uvInstallPromise = job.then(function (r) {
+        uvInstalling = false;
+        uvInstallPromise = null;
+        return r;
+    }, function (e) {
+        uvInstalling = false;
+        uvInstallPromise = null;
+        return { ok: false, msg: (e && e.message) || '安装失败' };
+    });
+    return uvInstallPromise;
+}
 
 ipcMain.handle('mcp:uv-status', function () {
     return { installed: fs.existsSync(UV_X_EXE), dir: UV_BIN_DIR, installing: uvInstalling };
 });
 
 ipcMain.handle('mcp:uv-install', function () {
-    if (fs.existsSync(UV_X_EXE)) return Promise.resolve({ ok: true, installed: true, msg: 'uv 工具链已安装' });
-    if (uvInstalling) return Promise.resolve({ ok: false, msg: '正在安装中，请稍候' });
-    uvInstalling = true;
-    return uvDownloadInstall().then(function (r) { uvInstalling = false; return r; },
-        function (e) { uvInstalling = false; return { ok: false, msg: (e && e.message) || '安装失败' }; });
+    // 原实现：安装中重复调用直接拒绝（uvInstalling 标记各自为政）——现手动/自动安装共用同一 Promise，等待中调用直接复用结果
+    // if (fs.existsSync(UV_X_EXE)) return Promise.resolve({ ok: true, installed: true, msg: 'uv 工具链已安装' });
+    // if (uvInstalling) return Promise.resolve({ ok: false, msg: '正在安装中，请稍候' });
+    // uvInstalling = true;
+    // return uvDownloadInstall().then(function (r) { uvInstalling = false; return r; },
+    //     function (e) { uvInstalling = false; return { ok: false, msg: (e && e.message) || '安装失败' }; });
+    return uvEnsureRuntime();
 });
+
+// 阶段一百一十九：注入 mcp-manager——uvx 系插件 spawn 预检失败时自动安装 uv 工具链（与 Node 运行时注入同构）
+mcpManager.setUvToolchainInstaller(uvEnsureRuntime);
 
 // 下载（跟随 302 重定向：GitHub release latest 跳对象存储）→ PowerShell Expand-Archive 解压 → 校验 uvx.exe
 function uvDownloadInstall() {
@@ -835,7 +880,7 @@ function uvDownloadInstall() {
     });
 }
 
-function unzipUv(zipPath, resolve) {
+function unzipUv(zipPath, resolve, keepZip) {
     try { fs.mkdirSync(UV_BIN_DIR, { recursive: true }); } catch (e) { }
     // 解压用系统 PowerShell（Windows 内置 Expand-Archive，无第三方依赖）
     // cwd 固定用户主目录：避免继承主进程工作目录（bin），残留时锁死打包部署目录
@@ -845,7 +890,10 @@ function unzipUv(zipPath, resolve) {
     let errOut = '';
     ps.stderr.on('data', function (d) { errOut += d; });
     ps.on('close', function (code) {
-        try { fs.unlinkSync(zipPath); } catch (e) { }
+        // keepZip=true 为内嵌本地 zip 通道（bundled\ / resources\），解压后保留复用不删除；
+        // 下载通道（临时 zip）解压后清理
+        // if (true) { try { fs.unlinkSync(zipPath); } catch (e) { } } // 原实现：无条件删除 zip，本地内嵌 zip 会被误删
+        if (!keepZip) { try { fs.unlinkSync(zipPath); } catch (e) { } }
         if (code === 0 && fs.existsSync(UV_X_EXE)) resolve({ ok: true, msg: 'uv 工具链安装完成' });
         else resolve({ ok: false, msg: '解压失败：' + ((errOut.trim().split('\n')[0]) || ('退出码 ' + code)) });
     });

@@ -52,6 +52,21 @@ if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
     echo 便携 Node 运行时已存在（bundled\ 缓存）
 )
 
+echo [3/5] 准备 uv 工具链（bundled\ 内无 zip 则下载缓存，仅首次约 17MB）...
+rem 阶段一百一十九：内嵌 uv 工具链到安装包（与便携 Node 同款双通道机制，离线可用）——
+rem fetch/sqlite 等 Python 系 MCP 插件依赖 uvx 命令，客户端优先解压本地 zip，缺失时才联网下载
+if not exist "%~dp0bundled\uv-runtime.zip" (
+    if not exist "%~dp0bundled" mkdir "%~dp0bundled"
+    powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile '%~dp0bundled\uv-runtime.zip' -UseBasicParsing"
+    if not exist "%~dp0bundled\uv-runtime.zip" (
+        echo [警告] uv 工具链 zip 下载失败，本次打包将不含内嵌 uv 工具链（客户端联网场景自动降级为在线下载）
+    ) else (
+        echo uv 工具链 zip 已缓存到 bundled\
+    )
+) else (
+    echo uv 工具链 zip 已存在（bundled\ 缓存）
+)
+
 echo [4/5] 打包 win-unpacked...
 call npx electron-builder --win --x64 --dir
 if errorlevel 1 (
@@ -67,6 +82,15 @@ if exist "%RCEDIT%" if exist "%APP_ICON%" (
     echo 设置 exe 图标为 %APP_ICON% ...
     "%RCEDIT%" "%UNPACKED_DIR%\即时通讯.exe" --set-icon "%APP_ICON%"
     if errorlevel 1 echo [警告] exe 图标设置失败，将继续部署（图标保持默认）
+)
+
+rem 阶段一百一十九：uv 工具链 zip 直拷进打包产物 resources\（不走 electron-builder extraResources：
+rem bundled 缺 zip 时 extraResources 会打包报错，直拷仅跳过内嵌、运行时降级在线下载），部署时随 resources 入 bin
+if exist "%~dp0bundled\uv-runtime.zip" (
+    copy /y "%~dp0bundled\uv-runtime.zip" "%UNPACKED_DIR%\resources\uv-runtime.zip" >nul
+    echo uv 工具链 zip 已内嵌到 resources\
+) else (
+    echo [提示] bundled\uv-runtime.zip 不存在，本次打包不含内嵌 uv 工具链（客户端联网场景自动在线下载）
 )
 
 echo [5/5] 部署到 im-client\bin ...

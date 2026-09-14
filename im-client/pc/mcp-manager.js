@@ -47,6 +47,21 @@ function isNodeFamily(command) {
     return ['npx', 'npm', 'pnpm', 'yarn'].indexOf(base) !== -1;
 }
 
+// ===== 阶段一百一十九：uv 工具链自动安装钩子（main.js 注入 uvEnsureRuntime） =====
+// uvx/uv 系（Python 系 MCP 插件 fetch/sqlite 等）spawn 前预检 PATH 解析不到时触发安装器，
+// 成功原样重启会话——与 Node 系钩子（setNodeRuntimeInstaller）同构，并发多会话共享 main.js 内同一安装 Promise
+let uvToolchainInstaller = null; // () => Promise<{ok, msg}>
+
+function setUvToolchainInstaller(fn) {
+    uvToolchainInstaller = typeof fn === 'function' ? fn : null;
+}
+
+// isUvFamily 判断是否 uv 系命令（uvx 运行 Python 系 MCP 服务器插件，uv 为其基础工具）
+function isUvFamily(command) {
+    const base = path.basename(String(command || '').trim()).toLowerCase();
+    return ['uvx', 'uv', 'uvx.exe', 'uv.exe'].indexOf(base) !== -1;
+}
+
 // nodeCmdResolved：检测 Node 系命令在当前 PATH（含便携运行时目录）下能否解析到可执行文件。
 // 原实现：依赖子进程 stderr 出现"不是内部或外部命令"后判装缺失——实测 stderr 异步刷盘晚于 exit
 // 事件，判定时拿不到特征文本，且握手拒绝抢先置 error 产生竞态；改为 spawn 前同步预检，确定性触发
@@ -68,6 +83,7 @@ const CLIENT_INFO = { name: 'im-pc-client', version: '1.0.0' };
 const TOOL_OUT_MAX_CHARS = 8000;          // 与 agent-executor 命令输出限额一致
 const CALL_TIMEOUT_MS = 90 * 1000;        // 单工具调用超时（服务端挂起等待=服务端工具超时+15s，需小于其值）
 const INIT_TIMEOUT_MS = 15 * 1000;        // 握手超时
+const UV_INIT_TIMEOUT_MS = 120 * 1000;    // 阶段一百一十九：uv 系握手超时（uvx 首次拉起插件需联网下载 Python 包+创建临时环境，远超 15s）
 const RUNTIME_INSTALL_WAIT_MS = 180 * 1000; // 便携 Node 自动安装等待上限（下载 35MB + 解压，3 分钟兜底）
 const RESTART_DELAY_MS = 3 * 1000;        // 崩溃重启退避
 const RESTART_MAX = 3;                    // 连续崩溃重启上限（超过置 error 等用户手动重连）
@@ -184,11 +200,40 @@ function autoInstallNode(username, session) {
     return true;
 }
 
+// autoInstallUv：uv 系命令启动失败（系统与工具链目录均无 uvx）时触发 uv 工具链自动安装，
+// 成功后原样重启会话——用户无感知；仅尝试一次（uvInstallTried 标记）防失败循环
+// 返回 true 表示已接管（调用方不再置 error），false 表示无安装器或已尝试过（走原友好报错）
+function autoInstallUv(username, session) {
+    if (session.uvInstallTried || !uvToolchainInstaller) return false;
+    session.uvInstallTried = true;
+    session.status = 'connecting';
+    session.waitRuntimeInstall = true; // testServer 据此动态放宽等待上限（下载 uv zip 远超常规握手 15s）
+    session.statusMsg = '未检测到 uv 工具链，正在自动安装 uv（fetch/sqlite 等 Python 系插件的运行环境，下载视网速需 1-2 分钟）…';
+    uvToolchainInstaller().then(function (r) {
+        if (session.dead) return;
+        if (r && r.ok) {
+            session.statusMsg = 'uv 工具链安装完成，正在连接…';
+            launch(username, session); // 安装成功原样重启：buildEnv 已前置 ~/.im-mcp/bin，uvx 可用
+        } else {
+            session.waitRuntimeInstall = false;
+            session.status = 'error';
+            session.statusMsg = 'uv 工具链自动安装失败：' + ((r && r.msg) || '未知原因') + '（可手动安装 uv 后重试）';
+        }
+    });
+    return true;
+}
+
 function launch(username, session) {
     const cfg = session.cfg;
     // Node 系命令且 PATH 上解析不到（系统未装 + 便携运行时未装）：先自动安装便携运行时再启动。
     // spawn 前同步预检（确定性），成功后 autoInstallNode 内部会原样重启本会话
     if (isNodeFamily(cfg.command) && !nodeCmdResolved(cfg.command) && autoInstallNode(username, session)) return;
+    // uv 系命令同理：PATH（含 ~/.im-mcp/bin 工具链目录）解析不到 uvx/uv 时先自动安装 uv 工具链再启动
+    // （nodeCmdResolved 为通用 PATH 解析预检：按命令名在 buildEnv 的 PATH 目录序列中查找可执行文件）
+    if (isUvFamily(cfg.command) && !nodeCmdResolved(cfg.command) && autoInstallUv(username, session)) return;
+    // uv 系冷启动提示：uvx 第一次拉起插件时需联网下载 Python 包并创建临时虚拟环境，
+    // 耗时可能远超常规握手（包名写错等异常 uvx 会秒退报错，不受此长等待影响）
+    if (isUvFamily(cfg.command)) session.statusMsg = '正在启动 uvx（首次运行需准备 Python 包环境，可能需 1-2 分钟）…';
     let child;
     try {
         // cross-spawn 自动中转（.cmd/.bat/裸 npx 经 cmd /d /s /c，stdio 管道对孙进程同样生效）
@@ -220,6 +265,8 @@ function launch(username, session) {
         if (session.dead) return;
         // Node 系命令 ENOENT（系统与便携运行时均无 node）：先尝试自动安装便携运行时
         if (e && e.code === 'ENOENT' && isNodeFamily(cfg.command) && autoInstallNode(username, session)) return;
+        // uv 系命令 ENOENT（系统与工具链目录均无 uvx）：先尝试自动安装 uv 工具链
+        if (e && e.code === 'ENOENT' && isUvFamily(cfg.command) && autoInstallUv(username, session)) return;
         session.status = 'error';
         session.statusMsg = mcpFriendlySpawnError(cfg.command, e);
     });
@@ -249,15 +296,17 @@ function launch(username, session) {
     });
 
     // 握手：initialize → initialized 通知 → tools/list
+    // 阶段一百一十九：uv 系用放宽的握手超时（uvx 首次运行需下载 Python 包，见 UV_INIT_TIMEOUT_MS）
+    const initTimeoutMs = isUvFamily(cfg.command) ? UV_INIT_TIMEOUT_MS : INIT_TIMEOUT_MS;
     rpc(session, 'initialize', {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
         clientInfo: CLIENT_INFO
-    }, INIT_TIMEOUT_MS).then(function (result) {
+    }, initTimeoutMs).then(function (result) {
         session.serverInfo = (result && result.serverInfo) || {};
         session.protocolVersion = (result && result.protocolVersion) || '';
         notify(session, 'notifications/initialized', {});
-        return rpc(session, 'tools/list', {}, INIT_TIMEOUT_MS);
+        return rpc(session, 'tools/list', {}, initTimeoutMs);
     }).then(function (result) {
         session.tools = normalizeTools(result && result.tools);
         session.status = 'connected';
@@ -542,7 +591,7 @@ function mcpFriendlySpawnError(command, e) {
     if (e && e.code === 'ENOENT') {
         const cmd = String(command || '').trim().toLowerCase();
         if (cmd === 'uvx' || cmd === 'uv' || cmd === 'uvx.exe' || cmd === 'uv.exe') {
-            return '未找到 uvx 命令：fetch/sqlite 等 Python 系插件需先安装 uv 工具链（PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex ，或 winget install astral-sh.uv），安装后重启本客户端';
+            return '未找到 uvx 命令：uv 工具链自动安装未成功（未注入安装器或已尝试失败），请检查网络后重试，或手动安装 uv（PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex ，或 winget install astral-sh.uv）后重启本客户端';
         }
         if (cmd === 'python' || cmd === 'python3' || cmd === 'py') {
             return '未找到 python 命令：请先安装 Python（勾选加入 PATH）后重启本客户端';
@@ -578,8 +627,10 @@ function testServer(cfg) {
     const started = Date.now();
     const username = '\u0000test\u0000' + mcpFnv1aHex8(JSON.stringify(cfg) + ':' + started);
     const session = createSession(username, cfg);
+    // 阶段一百一十九：uv 系等待上限同步放宽（与握手超时同值，覆盖首次运行下载 Python 包的冷启动）
+    const initWaitMs = isUvFamily(cfg.command) ? UV_INIT_TIMEOUT_MS : INIT_TIMEOUT_MS;
     return new Promise(function (resolve) {
-        let deadline = Date.now() + INIT_TIMEOUT_MS;
+        let deadline = Date.now() + initWaitMs;
         (function wait() {
             const s = sessions[key(username, cfg.name)];
             const elapsed = Date.now() - started;
@@ -609,7 +660,7 @@ function testServer(cfg) {
             }
             if (Date.now() > deadline) {
                 disposeSession(s);
-                resolve({ ok: false, msg: '连接超时（' + Math.round(INIT_TIMEOUT_MS / 1000) + 's）' });
+                resolve({ ok: false, msg: '连接超时（' + Math.round(initWaitMs / 1000) + 's）' });
                 return;
             }
             setTimeout(wait, 120);
@@ -622,4 +673,4 @@ function disposeAll() {
     Object.keys(sessions).forEach(function (k) { disposeSession(sessions[k]); });
 }
 
-module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs, setProjectMcp: setProjectMcp, setNodeRuntimeInstaller: setNodeRuntimeInstaller };
+module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs, setProjectMcp: setProjectMcp, setNodeRuntimeInstaller: setNodeRuntimeInstaller, setUvToolchainInstaller: setUvToolchainInstaller };
