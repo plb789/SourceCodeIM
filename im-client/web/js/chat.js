@@ -397,6 +397,19 @@
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
         if (view === 'appearance') settingsRenderTheme();
         if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
+        if (view === 'mcp') {
+            // 阶段一百一十二修正：设置页导航直接进入 MCP 分类时初始化列表并启动状态轮询。
+            // 原渲染只挂在工具栏按钮入口（openMcpPanel）与轮询回调上，导航直进时列表区空白、
+            // 空状态提示也不渲染（表现为卡片内一片空白）。startMcpStatusPoll 幂等（内部先 stop），
+            // 与工具栏按钮双入口互不冲突；mcpGet 失败时兜底渲染空状态，不留白
+            startMcpStatusPoll();
+            window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
+                agentMcpServers = (r && r.servers) || [];
+                renderAgentMcpList();
+            }).catch(function () {
+                renderAgentMcpList();
+            });
+        }
     }
 
     // 主题卡片高亮当前主题（与标题栏主题按钮同源 getTheme）
@@ -4168,6 +4181,8 @@
     var agentMcpServers = [];     // 编辑态：本机服务器配置（与主进程存储同构）
     var agentMcpEditing = -1;     // 当前编辑行索引（-1=新增）
     var agentMcpLiveStatus = [];  // 会话状态快照：[{name,status,status_msg,tool_count}]
+    var agentMcpAllTools = [];    // 阶段一百一十一：全量工具快照 [{server,name,description}]（展开清单数据源）
+    var agentMcpExpanded = {};    // 阶段一百一十一：列表行展开状态（服务器名 → 是否展开）
     var agentMcpLastReport = '';  // 上次上报工具清单指纹（去重，避免重复上报）
     var agentMcpStatusTimer = null; // 面板打开期间的状态轮询
 
@@ -4180,6 +4195,7 @@
     function reportPcMcpTools() {
         if (!agentMcpSupported()) return;
         window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
+            agentMcpAllTools = (st && st.tools) || []; // 阶段一百一十一：同步全量工具快照（展开清单数据源）
             var fingerprint = JSON.stringify((st && st.tools) || []);
             if (fingerprint === agentMcpLastReport) return;
             agentMcpLastReport = fingerprint;
@@ -4206,6 +4222,7 @@
         agentMcpStatusTimer = setInterval(function () {
             window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
                 agentMcpLiveStatus = (st && st.status) || [];
+                agentMcpAllTools = (st && st.tools) || []; // 阶段一百一十一：轮询同步全量工具快照
                 renderAgentMcpList();
             }).catch(function () {});
         }, 1200);
@@ -4221,28 +4238,48 @@
     function renderAgentMcpList() {
         // 阶段一百零五：签名比对防闪烁——面板打开期间 1.2 秒轮询会话状态，每次回调都调本函数，
         // 状态无变化时跳过重建（原实现每次清空重建，MCP 面板开着列表就持续闪烁且悬停态丢失）
-        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus]);
+        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools]);
         if (sig === renderAgentMcpList._sig) return;
         renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
         if (!agentMcpServers.length) {
             var empty = document.createElement('div');
             empty.className = 'agent-mcp-empty';
-            empty.textContent = '尚未配置本机 MCP 服务器';
+            // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
+            empty.innerHTML = '尚未配置本机 MCP 服务器<br>点击右上角「+ 添加」开始：可从插件库一键预填，或手动配置';
             agentMcpListEl.appendChild(empty);
             return;
         }
         agentMcpServers.forEach(function (sv, i) {
+            // 阶段一百一十一：行包裹层——行本体 + 可展开工具清单区（TRAE CN 同款服务器行展开）
+            var wrap = document.createElement('div');
+            wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded[sv.name] ? ' expanded' : '');
             var row = document.createElement('div');
             row.className = 'agent-mcp-server-row';
             var live = null;
             agentMcpLiveStatus.forEach(function (s) { if (s.name === sv.name) live = s; });
-            var dot = document.createElement('span');
-            dot.className = 'mcp-dot ' + (sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
-            dot.title = mcpStatusText(sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
+            var caret = document.createElement('span');
+            caret.className = 'agent-mcp-caret';
+            caret.textContent = agentMcpExpanded[sv.name] ? '▾' : '▸';
+            caret.title = '展开/收起工具清单';
+            caret.addEventListener('click', function () {
+                agentMcpExpanded[sv.name] = !agentMcpExpanded[sv.name];
+                renderAgentMcpList();
+            });
+            // 阶段一百一十二：TRAE CN 同款行布局——徽标 + 两行信息（名称 / 状态灯+状态文字）+ 右侧启用开关
+            var badge = document.createElement('span');
+            badge.className = 'agent-mcp-market-badge';
+            badge.textContent = (sv.name || '?').charAt(0).toUpperCase();
+            var info = document.createElement('div');
+            info.className = 'agent-mcp-server-info';
             var name = document.createElement('span');
             name.className = 'agent-mcp-server-name';
             name.textContent = sv.name;
+            var metaline = document.createElement('div');
+            metaline.className = 'agent-mcp-server-metaline';
+            var dot = document.createElement('span');
+            dot.className = 'mcp-dot ' + (sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
+            dot.title = mcpStatusText(sv.enabled ? ((live && live.status) || 'connecting') : 'disabled');
             var meta = document.createElement('span');
             meta.className = 'agent-mcp-server-meta';
             if (!sv.enabled) {
@@ -4253,14 +4290,22 @@
             } else {
                 meta.textContent = '工具 ' + ((live && live.tool_count) || 0) + ' 个 · ' + mcpStatusText((live && live.status) || 'connecting');
             }
-            var cmd = document.createElement('span');
-            cmd.className = 'agent-mcp-server-cmd';
-            cmd.textContent = sv.command + ' ' + (sv.args || []).join(' ');
-            cmd.title = cmd.textContent;
-            row.appendChild(dot);
-            row.appendChild(name);
-            row.appendChild(meta);
-            row.appendChild(cmd);
+            metaline.appendChild(dot);
+            metaline.appendChild(meta);
+            info.appendChild(name);
+            info.appendChild(metaline);
+            row.appendChild(caret);
+            row.appendChild(badge);
+            row.appendChild(info);
+            // 行内启用开关（TRAE 同款自绘 toggle；启用状态变化立即保存并联动建连/上报）
+            var sw = document.createElement('span');
+            sw.className = 'mcp-switch' + (sv.enabled ? ' on' : '');
+            sw.title = sv.enabled ? '点击停用' : '点击启用';
+            var knob = document.createElement('span');
+            knob.className = 'mcp-switch-knob';
+            sw.appendChild(knob);
+            sw.addEventListener('click', function () { toggleMcpServer(sv, i); });
+            row.appendChild(sw);
             var edit = document.createElement('button');
             edit.className = 'agent-mcp-op';
             edit.textContent = '编辑';
@@ -4282,7 +4327,36 @@
             });
             row.appendChild(edit);
             row.appendChild(del);
-            agentMcpListEl.appendChild(row);
+            wrap.appendChild(row);
+            // 展开区：该服务器当前工具清单（名称 + 描述；数据源全量快照按 server 过滤）
+            if (agentMcpExpanded[sv.name]) {
+                var toolsBox = document.createElement('div');
+                toolsBox.className = 'agent-mcp-tools-box';
+                var tl = agentMcpAllTools.filter(function (t) { return t.server === sv.name; });
+                if (!tl.length) {
+                    var tempty = document.createElement('div');
+                    tempty.className = 'agent-mcp-tool-empty';
+                    tempty.textContent = sv.enabled ? '暂无工具：连接中或服务器未上报工具' : '已停用，启用后可见工具清单';
+                    toolsBox.appendChild(tempty);
+                } else {
+                    tl.forEach(function (t) {
+                        var tr = document.createElement('div');
+                        tr.className = 'agent-mcp-tool-row';
+                        var tn = document.createElement('span');
+                        tn.className = 'agent-mcp-tool-name';
+                        tn.textContent = t.name;
+                        var td = document.createElement('span');
+                        td.className = 'agent-mcp-tool-desc';
+                        td.textContent = t.description || '';
+                        td.title = t.description || '';
+                        tr.appendChild(tn);
+                        tr.appendChild(td);
+                        toolsBox.appendChild(tr);
+                    });
+                }
+                wrap.appendChild(toolsBox);
+            }
+            agentMcpListEl.appendChild(wrap);
         });
     }
 
@@ -4292,6 +4366,8 @@
             agentMcpServers = (r && r.servers) || [];
             agentMcpLiveStatus = [];
             agentMcpEditEl.classList.add('hidden');
+            if (agentMcpAddMenu) agentMcpAddMenu.classList.add('hidden'); // 阶段一百一十一：重置下拉与插件库视图（防上次打开残留）
+            if (agentMcpMarketEl) agentMcpMarketEl.classList.add('hidden');
             renderAgentMcpList();
             // 阶段一百零五：原独立弹窗改为打开设置页并切到 MCP 分类（settingsOpen/settingsShowView
             // 为函数声明提升，同作用域可直接调用）；标题栏工具栏按钮与设置页导航双入口同归此处
@@ -4353,10 +4429,132 @@
         });
     }
 
+    // 阶段一百一十二：行内启用开关——切换后立即保存并联动建连/上报（失败回滚开关状态）
+    function toggleMcpServer(sv, i) {
+        sv.enabled = !sv.enabled;
+        window.desktop.mcpSave({ username: IMSocket.getUsername(), servers: agentMcpServers }).then(function (r) {
+            if (!r || !r.ok) {
+                sv.enabled = !sv.enabled; // 回滚
+                showToast((r && r.msg) || '保存失败');
+                renderAgentMcpList();
+                return;
+            }
+            agentMcpServers = r.servers || agentMcpServers;
+            agentMcpLastReport = '';
+            startPcMcpReportLoop(12);
+            renderAgentMcpList();
+            showToast(sv.enabled ? '已启用「' + sv.name + '」，正在建连并上报工具清单' : '已停用「' + sv.name + '」');
+        });
+    }
+
+    // ===== 阶段一百一十一：TRAE CN 同款"添加 ∨"下拉与插件库 =====
+    // 插件预设：常用官方/社区 MCP 服务器（一键预填现有表单，占位参数由用户修改后保存，
+    // 保存/建连/上报链路完全复用既有逻辑，零新链路）。name 与手动配置同一查重规则
+    var MCP_PLUGIN_PRESETS = [
+        { name: 'filesystem', title: '文件系统访问', desc: 'AI 读写指定目录内的文件（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', 'D:\\workspace'], env: {} },
+        { name: 'fetch', title: '网页抓取', desc: 'AI 联网抓取网页并转为 Markdown（Python 系）', command: 'uvx', args: ['mcp-server-fetch'], env: {} },
+        { name: 'memory', title: '长期记忆', desc: 'AI 跨对话记住要点（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], env: { MEMORY_FILE_PATH: 'D:\\im-memory.json' } },
+        { name: 'mysql', title: 'MySQL 数据库查询', desc: '对 MySQL 执行 SQL 查询（建议只读账号）', command: 'npx', args: ['-y', '@benborla29/mcp-server-mysql'], env: { MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '3306', MYSQL_USER: 'root', MYSQL_PASS: '你的密码', MYSQL_DB: '数据库名' } },
+        { name: 'sqlite', title: 'SQLite 数据库查询', desc: '查询本地 SQLite 数据库文件（Python 系）', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', 'D:\\data\\demo.db'], env: {} },
+        { name: 'postgres', title: 'PostgreSQL 数据库查询', desc: '对 PostgreSQL 执行只读 SQL（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'], env: { POSTGRES_CONNECTION_STRING: 'postgresql://用户:密码@127.0.0.1:5432/数据库名' } },
+        { name: 'github', title: 'GitHub 仓库管理', desc: '管理仓库/Issue/PR（需个人访问令牌）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_你的令牌' } },
+        { name: 'everything', title: '链路测试服务器', desc: '官方演示服务器：验证 MCP 链路与工具调用', command: 'npx', args: ['-y', '@modelcontextprotocol/server-everything'], env: {} }
+    ];
+    var agentMcpAddMenu = document.getElementById('agent-mcp-add-menu');
+    var agentMcpMarketEl = document.getElementById('agent-mcp-market');
+    var agentMcpMarketListEl = document.getElementById('agent-mcp-market-list');
+    // 卡片头刷新按钮：重拉配置 + 重建会话状态 + 同步工具快照（TRAE 同款卡片头刷新）
+    document.getElementById('agent-mcp-refresh').addEventListener('click', function () {
+        window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
+            agentMcpServers = (r && r.servers) || [];
+            renderAgentMcpList();
+        });
+        reportPcMcpTools();
+        showToast('已刷新服务器与工具状态');
+    });
+    function agentMcpAddMenuOutside(ev) {
+        if (!agentMcpAddMenu || agentMcpAddMenu.classList.contains('hidden')) {
+            document.removeEventListener('mousedown', agentMcpAddMenuOutside);
+            return;
+        }
+        if (agentMcpAddMenu.contains(ev.target) || ev.target.closest && ev.target.closest('.agent-mcp-add-btn')) return;
+        agentMcpAddMenu.classList.add('hidden');
+        document.removeEventListener('mousedown', agentMcpAddMenuOutside);
+    }
     document.getElementById('agent-mcp-add').addEventListener('click', function () {
-        if (agentMcpServers.length >= 10) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        if (agentMcpServers.length >= 10 && agentMcpAddMenu.classList.contains('hidden')) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        agentMcpAddMenu.classList.toggle('hidden');
+        if (!agentMcpAddMenu.classList.contains('hidden')) {
+            setTimeout(function () { document.addEventListener('mousedown', agentMcpAddMenuOutside); }, 0);
+        } else {
+            document.removeEventListener('mousedown', agentMcpAddMenuOutside);
+        }
+    });
+    document.getElementById('agent-mcp-add-custom').addEventListener('click', function () {
+        agentMcpAddMenu.classList.add('hidden');
+        agentMcpMarketEl.classList.add('hidden');
         openMcpEdit(-1);
     });
+    document.getElementById('agent-mcp-add-market').addEventListener('click', function () {
+        agentMcpAddMenu.classList.add('hidden');
+        renderMcpMarket();
+        agentMcpMarketEl.classList.remove('hidden');
+    });
+    document.getElementById('agent-mcp-market-back').addEventListener('click', function () {
+        agentMcpMarketEl.classList.add('hidden');
+    });
+    // 插件库卡片渲染（TRAE 市场同款：首字母徽标 + 标题 + 描述 + 命令预览 + 使用按钮）
+    function renderMcpMarket() {
+        agentMcpMarketListEl.innerHTML = '';
+        MCP_PLUGIN_PRESETS.forEach(function (p) {
+            var card = document.createElement('div');
+            card.className = 'agent-mcp-market-card';
+            var badge = document.createElement('span');
+            badge.className = 'agent-mcp-market-badge';
+            badge.textContent = (p.title || p.name).charAt(0).toUpperCase();
+            var info = document.createElement('div');
+            info.className = 'agent-mcp-market-info';
+            var t = document.createElement('div');
+            t.className = 'agent-mcp-market-title';
+            t.textContent = p.title;
+            var d = document.createElement('div');
+            d.className = 'agent-mcp-market-desc';
+            d.textContent = p.desc;
+            var cmd = document.createElement('div');
+            cmd.className = 'agent-mcp-market-cmd';
+            cmd.textContent = p.command + ' ' + (p.args || []).join(' ') + (Object.keys(p.env || {}).length ? '  + 环境变量 x' + Object.keys(p.env).length : '');
+            cmd.title = cmd.textContent;
+            info.appendChild(t);
+            info.appendChild(d);
+            info.appendChild(cmd);
+            var use = document.createElement('button');
+            use.className = 'kb-create-btn agent-mcp-market-use';
+            use.type = 'button';
+            use.textContent = '使用';
+            use.addEventListener('click', function () { useMcpPreset(p); });
+            card.appendChild(badge);
+            card.appendChild(info);
+            card.appendChild(use);
+            agentMcpMarketListEl.appendChild(card);
+        });
+    }
+    // 使用插件：同名查重 → 预填现有编辑表单（占位参数用户自改）→ 保存走既有链路
+    function useMcpPreset(p) {
+        agentMcpAddMenu.classList.add('hidden');
+        agentMcpMarketEl.classList.add('hidden');
+        for (var i = 0; i < agentMcpServers.length; i++) {
+            if (agentMcpServers[i].name === p.name) { showToast('已存在同名服务器「' + p.name + '」，请先删除或手动改名'); return; }
+        }
+        openMcpEdit(-1);
+        document.getElementById('agent-mcp-name').value = p.name;
+        document.getElementById('agent-mcp-command').value = p.command;
+        document.getElementById('agent-mcp-args').value = (p.args || []).join('\n');
+        var envLines = [];
+        Object.keys(p.env || {}).forEach(function (k) { envLines.push(k + '=' + p.env[k]); });
+        document.getElementById('agent-mcp-env').value = envLines.join('\n');
+        showToast('已预填「' + p.title + '」：请修改占位参数（目录/密码等）后保存');
+    }
+
     document.getElementById('agent-mcp-edit-cancel').addEventListener('click', function () {
         agentMcpEditEl.classList.add('hidden');
     });

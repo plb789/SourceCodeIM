@@ -5664,6 +5664,317 @@ html.m #list-panel.list-collapsed {
     cursor: text;
 }
 
+/* ===== 阶段一百一十二：TRAE CN 同款布局——区块标题 + 管理大卡片 + 自绘启用开关 ===== */
+
+.agent-mcp-section-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary, #888);
+    margin: 16px 2px 8px;
+}
+
+.agent-mcp-card {
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 12px;
+    /* 阶段一百一十二修正：去掉 overflow:hidden——它会裁掉卡片头下拉菜单（菜单从此弹出），
+       圆角改由卡片头自行补齐 */
+}
+
+.agent-mcp-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border, #e5e5e5);
+    border-radius: 12px 12px 0 0;
+    background: var(--panel-bg, #fff);
+}
+
+.agent-mcp-card-headinfo { flex: 1; min-width: 0; }
+
+.agent-mcp-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text, #333);
+}
+
+.agent-mcp-card-desc {
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    margin-top: 3px;
+    line-height: 1.5;
+}
+
+.agent-mcp-card-ops {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 卡片头刷新按钮（圆形描边图标钮，TRAE 同款位置） */
+.agent-mcp-refresh-btn {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border, #e5e5e5);
+    background: transparent;
+    border-radius: 8px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.agent-mcp-refresh-btn:hover {
+    color: var(--primary, #07c160);
+    border-color: var(--primary, #07c160);
+}
+
+/* 自绘启用开关（TRAE 同款：off 灰 / on 主题绿，白圆钮滑动过渡；非原生控件，跟随主题） */
+.mcp-switch {
+    flex: none;
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: var(--text-light, #9aa0a6);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    opacity: 0.55;
+}
+
+.mcp-switch.on {
+    background: var(--primary, #07c160);
+    opacity: 1;
+}
+
+.mcp-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: left 0.2s ease;
+}
+
+.mcp-switch.on .mcp-switch-knob { left: 20px; }
+
+/* 行内信息两行布局：名称 / 状态灯+状态文字 */
+.agent-mcp-server-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.agent-mcp-server-metaline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* ===== 阶段一百一十一：TRAE CN 同款"添加 ∨"下拉 + 插件库 + 服务器行展开工具清单 ===== */
+
+/* 添加按钮（保留原 agent-ws-add-btn 主体，叠加下拉箭头布局） */
+.agent-mcp-add-row { position: relative; }
+
+.agent-mcp-add-caret {
+    display: inline-block;
+    margin-left: 2px;
+    font-size: 10px;
+    transform: translateY(-1px);
+}
+
+/* 下拉菜单：面板反色浮层，主题变量着色。
+   阶段一百一十二修正：添加按钮已移至卡片头右上（页面顶部区域），
+   弹出方向改为右对齐向下弹（原向上弹会被视觉误认为消失，且脱离卡片视野） */
+.agent-mcp-add-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 70;
+    min-width: 300px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+    padding: 5px;
+}
+
+.agent-mcp-add-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.agent-mcp-add-item:hover { background: var(--hover, #f2f2f2); }
+
+.agent-mcp-add-item-t {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+}
+
+.agent-mcp-add-item-d {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    margin-top: 2px;
+}
+
+/* 插件库视图（TRAE 市场同款卡片列表） */
+.agent-mcp-market { margin: 4px 12px 12px; }
+
+.agent-mcp-market-back {
+    border: none;
+    background: transparent;
+    color: var(--primary, #07c160);
+    font-size: 12.5px;
+    cursor: pointer;
+    padding: 4px 2px;
+    margin-bottom: 8px;
+    font-family: inherit;
+}
+
+.agent-mcp-market-back:hover { text-decoration: underline; }
+
+.agent-mcp-market-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.agent-mcp-market-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 10px;
+}
+
+.agent-mcp-market-card:hover { border-color: var(--primary, #07c160); }
+
+.agent-mcp-market-badge {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: var(--primary, #07c160);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.agent-mcp-market-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-mcp-market-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+}
+
+.agent-mcp-market-desc {
+    font-size: 11.5px;
+    color: var(--text-secondary, #999);
+    margin-top: 1px;
+}
+
+.agent-mcp-market-cmd {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 10.5px;
+    color: color-mix(in srgb, var(--text, #333) 65%, var(--text-secondary, #999));
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-mcp-market-use {
+    flex-shrink: 0;
+    padding: 5px 16px !important;
+    font-size: 12px !important;
+}
+
+/* 服务器行包裹层与展开工具清单（行首 ▸/▾ 箭头 + 工具名/描述两列） */
+.agent-mcp-server-wrap {
+    border-radius: 8px;
+}
+
+.agent-mcp-server-wrap.expanded { background: var(--hover, #f2f2f2); }
+
+.agent-mcp-caret {
+    flex-shrink: 0;
+    width: 14px;
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    text-align: center;
+    user-select: none;
+}
+
+.agent-mcp-caret:hover { color: var(--primary, #07c160); }
+
+.agent-mcp-tools-box {
+    padding: 4px 12px 10px 58px; /* 左缩进对齐服务器行信息区（caret+badge 之后） */
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.agent-mcp-tool-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 11.5px;
+    line-height: 1.5;
+}
+
+.agent-mcp-tool-name {
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    color: var(--text, #333);
+}
+
+.agent-mcp-tool-desc {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary, #999);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-mcp-tool-empty {
+    font-size: 11.5px;
+    color: var(--text-secondary, #999);
+    font-style: italic;
+}
+
 /* diff 预览标签的面包屑"差异对比"徽标（黑白灰跟随主题） */
 .ws-crumbs-diff {
     flex-shrink: 0;
@@ -7275,16 +7586,14 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-mcp-list {
-    margin-bottom: 10px;
-    border: 1px solid var(--border, #ececec);
-    border-radius: 6px;
+    padding: 4px 10px 8px;
 }
 
 .agent-mcp-server-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
+    gap: 10px;
+    padding: 10px 6px;
     border-bottom: 1px solid var(--border, #ececec);
 }
 
@@ -7325,8 +7634,8 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-mcp-server-name {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 13.5px;
+    font-weight: 700;
     color: var(--text, #333);
     white-space: nowrap;
     overflow: hidden;
@@ -7334,24 +7643,11 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-mcp-server-meta {
-    flex: 1;
-    min-width: 0;
     font-size: 11px;
     color: var(--text-light);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.agent-mcp-server-cmd {
-    font-size: 11px;
-    color: var(--text-secondary, #666);
-    max-width: 150px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    direction: rtl;
-    text-align: left;
 }
 
 .agent-mcp-op {
@@ -7377,14 +7673,15 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-mcp-empty {
-    padding: 16px 0;
+    padding: 22px 0;
     text-align: center;
-    font-size: 12px;
-    color: var(--text-light);
+    font-size: 12.5px;
+    color: var(--text-secondary, #888);
+    line-height: 1.8;
 }
 
 .agent-mcp-edit {
-    margin-top: 10px;
+    margin: 4px 12px 12px;
     padding: 12px;
     border: 1px solid var(--border, #ececec);
     border-radius: 6px;

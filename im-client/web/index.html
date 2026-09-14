@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.21">
+    <link rel="stylesheet" href="css/style.css?v=2.24">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -737,9 +737,37 @@
                     <h2 class="settings-title">MCP</h2>
                     <button id="agent-mcp-help-btn" class="ws-panel-btn agent-mcp-help-btn" type="button" title="使用说明（字段含义 / 开箱即用示例一键照抄）"><svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M5.1 6A2.9 2.9 0 0 1 10.9 6A2.9 2.9 0 0 1 8 8.9L8 10.2" fill="none" stroke="currentColor" stroke-linecap="round" style="stroke-width:1.5"/><circle cx="8" cy="12.7" r="1.15" fill="currentColor" stroke="none"/></svg></button>
                 </div>
-                <div class="agent-ws-tip">配置本机 MCP 服务器（stdio）：保存后在本机拉起子进程并自动发现工具，工具清单上报服务端后 AI Agent 即可调用（调用在本机执行）。支持每服务器一键"测试连接"，凭据仅保存在本机。</div>
-                <div id="agent-mcp-list" class="agent-mcp-list settings-mcp-list"></div>
-                <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
+                <!-- 阶段一百一十二：TRAE CN 同款布局——区块标题 + 管理大卡片（卡片头：标题/描述 + 刷新/添加下拉；卡体内：列表/插件库/编辑区） -->
+                <div class="agent-mcp-section-title">已配置的 MCP Servers</div>
+                <div class="agent-mcp-card">
+                    <div class="agent-mcp-card-head">
+                        <div class="agent-mcp-card-headinfo">
+                            <div class="agent-mcp-card-title">MCP Servers 管理</div>
+                            <div class="agent-mcp-card-desc">管理您已添加的 MCP 服务器，可启用、配置或添加新的工具能力（配置本机 stdio 子进程，凭据仅保存在本机）。</div>
+                        </div>
+                        <div class="agent-mcp-card-ops">
+                            <button id="agent-mcp-refresh" class="agent-mcp-refresh-btn" type="button" title="刷新服务器与工具状态"><svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M13.5 8A5.5 5.5 0 1 1 11.6 3.7" stroke="currentColor" stroke-linecap="round" style="stroke-width:1.6"/><path d="M12.2 1.6l0.3 2.4-2.4 0.3" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" style="stroke-width:1.6"/></svg></button>
+                            <div class="agent-mcp-add-row">
+                                <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn agent-mcp-add-btn">+ 添加 <span class="agent-mcp-add-caret">∨</span></button>
+                                <div id="agent-mcp-add-menu" class="agent-mcp-add-menu hidden">
+                                    <button id="agent-mcp-add-custom" class="agent-mcp-add-item" type="button">
+                                        <span class="agent-mcp-add-item-t">手动配置</span>
+                                        <span class="agent-mcp-add-item-d">自定义命令、参数与环境变量</span>
+                                    </button>
+                                    <button id="agent-mcp-add-market" class="agent-mcp-add-item" type="button">
+                                        <span class="agent-mcp-add-item-t">从插件库添加</span>
+                                        <span class="agent-mcp-add-item-d">常用 MCP 服务器一键预填，改参数即可用</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="agent-mcp-list" class="agent-mcp-list"></div>
+                <!-- 插件库视图（TRAE 市场同款：返回 + 卡片列表，点"使用"预填表单） -->
+                <div id="agent-mcp-market" class="agent-mcp-market hidden">
+                    <button id="agent-mcp-market-back" class="agent-mcp-market-back" type="button">‹ 返回列表</button>
+                    <div id="agent-mcp-market-list" class="agent-mcp-market-list"></div>
+                </div>
                 <!-- 编辑区（新增/编辑共用，隐藏切换） -->
                 <div id="agent-mcp-edit" class="agent-mcp-edit hidden">
                     <div class="agent-mcp-field">
@@ -993,7 +1021,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.7"></script>
+    <script src="js/chat.js?v=3.9"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
