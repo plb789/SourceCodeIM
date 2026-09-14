@@ -90,7 +90,7 @@ function downloadInstall() {
                 }
                 if (resp.statusCode !== 200) { resp.resume(); tryNext(); return; } // 非正常响应换下一个源
                 const out = fs.createWriteStream(tmpZip);
-                out.on('finish', function () { out.close(function () { unzip(tmpZip, resolve); }); });
+                out.on('finish', function () { out.close(function () { unzip(tmpZip, resolve, true); }); }); // 临时 zip 解压后清理（delZip=true）；本地 bundled zip 走 ensureRuntime 的 false 分支保留复用
                 out.on('error', function () { tryNext(); });
                 resp.pipe(out);
             });
