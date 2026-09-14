@@ -679,6 +679,20 @@ const projectMcpLoader = function (username) {
 };
 mcpManager.setProjectMcp(projectMcpEnabledLoad(), projectMcpLoader);
 
+// ===== 阶段一百一十八：便携 Node 运行时（npx/npm 系插件零依赖，TRAE CN 同款 bundled 运行时机制） =====
+// 系统未装 Node 时 mcp-manager spawn npx 失败 → 注入安装器自动下载便携 Node 到 ~/.im-mcp/node → 重试；
+// 本模块归口下载安装（国内镜像优先、官方源兜底），IPC 提供面板手动安装入口（与 uv 工具链同构）
+const nodeRuntime = require('./node-runtime.js');
+mcpManager.setNodeRuntimeInstaller(nodeRuntime.ensureRuntime);
+
+ipcMain.handle('mcp:node-status', function () {
+    return nodeRuntime.status();
+});
+
+ipcMain.handle('mcp:node-install', function () {
+    return nodeRuntime.ensureRuntime();
+});
+
 function projectMcpEnabledLoad() {
     const store = mcpStoreLoad();
     return !(store.__projMcp && store.__projMcp.enabled === false);

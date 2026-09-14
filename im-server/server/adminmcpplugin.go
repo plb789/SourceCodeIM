@@ -70,6 +70,10 @@ var mcpPluginDefaults = []model.MCPPlugin{
 	{Name: "everything", Title: "链路测试服务器", Category: "工具", Sort: 80, Command: "npx",
 		Args:        "-y\n@modelcontextprotocol/server-everything",
 		Description: "官方测试服务器：回显/计数/文件模拟等演示工具，用于验证本机 MCP 链路是否正常（Node 系）。"},
+	{Name: "file-server", Title: "文件服务器检索", Category: "网络", Sort: 90, Command: "npx",
+		Args: "-y\nim-file-server-mcp", NeedsConfig: true,
+		Env:  "FILE_API_URL=http://你的文件服务器地址\nFILE_API_TOKEN=",
+		Description: "连接自有文件服务器 REST API，AI 按关键词检索资料/获取文件内容/分页列出清单（包装器源码见项目 tools/file-server-mcp，发布 npm 包后即可一键安装）。安装时请补填 API 地址与访问令牌。"},
 }
 
 // adminMCPPluginReq 插件编辑请求体（字段与 model 一致，Args/Env 为多行文本原样保存）

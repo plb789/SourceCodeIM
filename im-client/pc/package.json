@@ -14,12 +14,22 @@
   "build": {
     "appId": "com.im.client",
     "productName": "即时通讯",
+    "files": [
+      "!bundled/**"
+    ],
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false
-    }
+    },
+    "extraResources": [
+      {
+        "from": "bundled/node-v24.14.0-win-x64.zip",
+        "to": "node-runtime.zip"
+      }
+    ]
   },
   "dependencies": {
+    "cross-spawn": "^7.0.6",
     "rcedit": "^4.0.1"
   }
 }

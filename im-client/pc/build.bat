@@ -20,7 +20,7 @@ rem 应用图标路径（可配置）：更换新图标只需改这一处，支�
 rem NOTE: keep this icon in sync with main.js tray icon const
 set "APP_ICON=%~dp064.ico"
 
-echo [1/4] 检查 Node 环境...
+echo [1/5] 检查 Node 环境...
 where node >nul 2>nul
 if errorlevel 1 (
     echo [错误] 未检测到 Node.js，请先安装 Node.js 20 或更高版本
@@ -28,7 +28,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/4] 安装依赖（首次较慢，之后秒级）...
+echo [2/5] 安装依赖（首次较慢，之后秒级）...
 call npm install --no-audit --no-fund
 if errorlevel 1 (
     echo [错误] 依赖安装失败，请检查网络后重试
@@ -36,7 +36,23 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/4] 打包 win-unpacked...
+echo [3/5] 准备便携 Node 运行时（bundled\ 内无 zip 则下载缓存，仅首次 34.5MB）...
+rem 阶段一百一十八：内嵌便携 Node 到安装包（TRAE CN 同款 bundled 运行时机制，离线可用）——
+rem electron-builder 经 package.json extraResources 将 zip 复制为 resources\node-runtime.zip，
+rem 客户端 node-runtime.js 优先解压本地 zip，缺失时才联网下载
+if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
+    if not exist "%~dp0bundled" mkdir "%~dp0bundled"
+    powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://registry.npmmirror.com/-/binary/node/v24.14.0/node-v24.14.0-win-x64.zip' -OutFile '%~dp0bundled\node-v24.14.0-win-x64.zip' -UseBasicParsing"
+    if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
+        echo [警告] 便携 Node 运行时下载失败，本次打包将不含内嵌运行时（客户端联网场景自动降级为在线下载）
+    ) else (
+        echo 便携 Node 运行时已缓存到 bundled\
+    )
+) else (
+    echo 便携 Node 运行时已存在（bundled\ 缓存）
+)
+
+echo [4/5] 打包 win-unpacked...
 call npx electron-builder --win --x64 --dir
 if errorlevel 1 (
     echo [错误] 打包失败，请查看上方日志
@@ -53,7 +69,7 @@ if exist "%RCEDIT%" if exist "%APP_ICON%" (
     if errorlevel 1 echo [警告] exe 图标设置失败，将继续部署（图标保持默认）
 )
 
-echo [4/4] 部署到 im-client\bin ...
+echo [5/5] 部署到 im-client\bin ...
 rem 先关闭正在运行的客户端，避免 exe 被占用导致清理失败（进程不存在时静默跳过）
 rem /T 必须加：MCP/Computer Use 子进程继承主进程工作目录（bin），只杀主进程会残留子进程继续锁住 bin
 taskkill /f /t /im im-client.exe >nul 2>nul

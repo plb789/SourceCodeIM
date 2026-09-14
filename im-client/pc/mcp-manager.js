@@ -8,19 +8,59 @@
 // 约束：仅支持 stdio（远程 sse/http 统一走管理端服务端通道）；结果文本 8000 字符封顶（与服务端命令输出同值）
 'use strict';
 
-const { spawn } = require('child_process');
+// cross-spawn（TRAE CN integrations 扩展内嵌同款库，v7.0.6）：替代 child_process.spawn——
+// Windows 下自动识别 .cmd/.bat 与裸 npx/npm 命令，经 cmd /d /s /c 中转并精细转义参数
+// （% ^ & 等 cmd 元字符防护，posix 平台直通无影响）
+const spawn = require('cross-spawn');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
 
 // 阶段一百一十三：PC 端自动安装的 uv 工具链目录（~/.im-mcp/bin，main.js 归口下载安装；
 // spawn 时前置到 PATH 首位，fetch/sqlite 等 Python 系插件不依赖系统 PATH 即可拉起）
 const TOOLCHAIN_BIN = path.join(os.homedir(), '.im-mcp', 'bin');
 
-// buildEnv 构造子进程环境：process.env + 服务器 env + 工具链目录 PATH 前置（系统 PATH 保留在后）
+// 阶段一百一十八：便携 Node 运行时目录（~/.im-mcp/node，node-runtime.js 归口下载安装）。
+// npx/npm 等 Node 系命令解析到系统 PATH 或本目录（便携 node.exe/npx.cmd 均在根），
+// spawn 时同样前置到 PATH——系统未装 Node 的电脑上 npx 系插件零依赖可用（TRAE CN 同款）
+const NODE_RUNTIME_DIR = path.join(os.homedir(), '.im-mcp', 'node');
+
+// buildEnv 构造子进程环境：process.env + 服务器 env + 工具链目录与便携 Node 目录 PATH 前置（系统 PATH 保留在后）
 function buildEnv(extra) {
     const base = Object.assign({}, process.env, extra || {});
-    base.PATH = TOOLCHAIN_BIN + path.delimiter + (base.PATH || process.env.PATH || '');
+    base.PATH = TOOLCHAIN_BIN + path.delimiter + NODE_RUNTIME_DIR + path.delimiter + (base.PATH || process.env.PATH || '');
     return base;
+}
+
+// ===== 阶段一百一十八：Node 系命令自动安装钩子（main.js 注入 node-runtime.ensureRuntime） =====
+// 系统与便携运行时均无 node 时 spawn npx 必失败（ENOENT 或 cmd 内"不是内部或外部命令"），
+// 捕获后触发安装器，成功原样重启会话——用户无感知（并发多会话共享同一安装 Promise）
+let nodeInstaller = null; // () => Promise<{ok, msg}>
+
+function setNodeRuntimeInstaller(fn) {
+    nodeInstaller = typeof fn === 'function' ? fn : null;
+}
+
+// isNodeFamily 判断是否 Node 系命令（实体为 .cmd 批处理，Windows 需 cmd 中转且依赖 node 运行时）
+function isNodeFamily(command) {
+    const base = path.basename(String(command || '').trim()).toLowerCase();
+    return ['npx', 'npm', 'pnpm', 'yarn'].indexOf(base) !== -1;
+}
+
+// nodeCmdResolved：检测 Node 系命令在当前 PATH（含便携运行时目录）下能否解析到可执行文件。
+// 原实现：依赖子进程 stderr 出现"不是内部或外部命令"后判装缺失——实测 stderr 异步刷盘晚于 exit
+// 事件，判定时拿不到特征文本，且握手拒绝抢先置 error 产生竞态；改为 spawn 前同步预检，确定性触发
+function nodeCmdResolved(command) {
+    const dirs = String(buildEnv(null).PATH || '').split(path.delimiter);
+    const base = path.basename(String(command || '').trim()).toLowerCase();
+    const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', ''] : [''];
+    for (let i = 0; i < dirs.length; i++) {
+        if (!dirs[i]) continue;
+        for (let j = 0; j < exts.length; j++) {
+            try { if (fs.existsSync(path.join(dirs[i], base + exts[j]))) return true; } catch (e) { }
+        }
+    }
+    return false;
 }
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -28,6 +68,7 @@ const CLIENT_INFO = { name: 'im-pc-client', version: '1.0.0' };
 const TOOL_OUT_MAX_CHARS = 8000;          // 与 agent-executor 命令输出限额一致
 const CALL_TIMEOUT_MS = 90 * 1000;        // 单工具调用超时（服务端挂起等待=服务端工具超时+15s，需小于其值）
 const INIT_TIMEOUT_MS = 15 * 1000;        // 握手超时
+const RUNTIME_INSTALL_WAIT_MS = 180 * 1000; // 便携 Node 自动安装等待上限（下载 35MB + 解压，3 分钟兜底）
 const RESTART_DELAY_MS = 3 * 1000;        // 崩溃重启退避
 const RESTART_MAX = 3;                    // 连续崩溃重启上限（超过置 error 等用户手动重连）
 const MAX_SERVERS_PER_USER = 10;
@@ -114,27 +155,51 @@ function createSession(username, cfg) {
     return session;
 }
 
+// needsCmdWrap 已移除：原手写 cmd.exe 中转判定升级为 cross-spawn 库（TRAE CN 同款，见文件头说明）——
+// 库内部自动检测 .cmd/.bat/裸命令并中转，参数转义更完备（实测两者生成的 cmd 开关 /d /s /c 完全一致）
+// 原实现：仅按命令字符串后缀 .cmd/.bat 判定——裸命令 npx/npm/pnpm/yarn 不匹配，走直接 spawn，
+// 而这些工具在 Windows 上是 .cmd 批处理文件（无 .exe），CreateProcess 只认 .exe → 必然 ENOENT，
+// 且 Node ≥20 对无 shell 直接 spawn .cmd 返回 EINVAL（安全策略），即使写全路径也跑不起来（两者均已实测复现）
+
+// autoInstallNode：Node 系命令启动失败（系统与便携运行时均无 node）时触发便携 Node 自动安装，
+// 成功后原样重启会话——用户无感知；仅尝试一次（nodeInstallTried 标记）防失败循环
+// 返回 true 表示已接管（调用方不再置 error），false 表示无安装器或已尝试过（走原友好报错）
+function autoInstallNode(username, session) {
+    if (session.nodeInstallTried || !nodeInstaller) return false;
+    session.nodeInstallTried = true;
+    session.status = 'connecting';
+    session.waitRuntimeInstall = true; // testServer 据此动态放宽等待上限（下载 35MB 远超常规握手 15s）
+    session.statusMsg = '未检测到 Node.js，正在自动安装便携运行时（约 35MB，视网速需 1-2 分钟）…';
+    nodeInstaller().then(function (r) {
+        if (session.dead) return;
+        if (r && r.ok) {
+            session.statusMsg = 'Node 运行时安装完成，正在连接…';
+            launch(username, session); // 安装成功原样重启：buildEnv 已前置便携目录，npx 可用
+        } else {
+            session.waitRuntimeInstall = false;
+            session.status = 'error';
+            session.statusMsg = 'Node 运行时自动安装失败：' + ((r && r.msg) || '未知原因') + '（可手动安装 Node.js 后重试）';
+        }
+    });
+    return true;
+}
+
 function launch(username, session) {
     const cfg = session.cfg;
+    // Node 系命令且 PATH 上解析不到（系统未装 + 便携运行时未装）：先自动安装便携运行时再启动。
+    // spawn 前同步预检（确定性），成功后 autoInstallNode 内部会原样重启本会话
+    if (isNodeFamily(cfg.command) && !nodeCmdResolved(cfg.command) && autoInstallNode(username, session)) return;
     let child;
     try {
-        // Windows 下 .cmd/.bat 无法直接 spawn（EINVAL），经 cmd /C 转发（stdio 管道对孙进程同样生效）
+        // cross-spawn 自动中转（.cmd/.bat/裸 npx 经 cmd /d /s /c，stdio 管道对孙进程同样生效）
         // cwd 固定用户主目录：否则子进程继承主进程工作目录（打包部署后的 bin），异常退出残留时
         // 会把 bin 目录锁死导致打包脚本无法清理（实测：目录被当作工作目录时无法删除，哪怕为空）
-        const isScript = /\.(cmd|bat)$/i.test(String(cfg.command || '').trim());
-        child = isScript
-            ? spawn('cmd.exe', ['/C', cfg.command].concat(cfg.args || []), {
-                cwd: os.homedir(), // 原实现：未设置 cwd，子进程继承主进程工作目录
-                env: buildEnv(cfg.env),
-                windowsHide: true,
-                stdio: ['pipe', 'pipe', 'pipe']
-            })
-            : spawn(cfg.command, cfg.args || [], {
-                cwd: os.homedir(), // 原实现：未设置 cwd，子进程继承主进程工作目录
-                env: buildEnv(cfg.env),
-                windowsHide: true,
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
+        child = spawn(cfg.command, cfg.args || [], {
+            cwd: os.homedir(), // 原实现：未设置 cwd，子进程继承主进程工作目录
+            env: buildEnv(cfg.env),
+            windowsHide: true,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
     } catch (e) {
         session.status = 'error';
         session.statusMsg = '启动失败：' + (e.message || e);
@@ -151,6 +216,8 @@ function launch(username, session) {
     });
     child.on('error', function (e) {
         if (session.dead) return;
+        // Node 系命令 ENOENT（系统与便携运行时均无 node）：先尝试自动安装便携运行时
+        if (e && e.code === 'ENOENT' && isNodeFamily(cfg.command) && autoInstallNode(username, session)) return;
         session.status = 'error';
         session.statusMsg = mcpFriendlySpawnError(cfg.command, e);
     });
@@ -168,7 +235,14 @@ function launch(username, session) {
             }, RESTART_DELAY_MS);
         } else {
             session.status = 'error';
-            session.statusMsg = '进程已退出（code=' + code + '）' + (session.restarts >= RESTART_MAX ? '，已达重启上限' : '');
+            // cmd 中转场景下命令不存在（如未装 Node）：错误在 stderr（"不是内部或外部命令"）——
+            // Node 系命令先尝试自动安装便携运行时（npx.cmd 在 cmd 内找不到 node 时以此形态报错）
+            if (/不是内部或外部命令|is not recognized/i.test(session.statusMsg)) {
+                if (isNodeFamily(cfg.command) && autoInstallNode(username, session)) return;
+                session.statusMsg = mcpFriendlySpawnError(cfg.command, { code: 'ENOENT' });
+            } else {
+                session.statusMsg = '进程已退出（code=' + code + '）' + (session.restarts >= RESTART_MAX ? '，已达重启上限' : '');
+            }
         }
     });
 
@@ -464,7 +538,7 @@ function mcpFriendlySpawnError(command, e) {
             return '未找到 python 命令：请先安装 Python（勾选加入 PATH）后重启本客户端';
         }
         if (cmd === 'npx' || cmd === 'node' || cmd === 'npm') {
-            return '未找到 node 命令：请先安装 Node.js 后重启本客户端';
+            return '未找到 node 命令：便携 Node 运行时自动安装未成功（未注入安装器或已尝试失败），请检查网络后重试，或手动安装 Node.js 后重启本客户端';
         }
         return '未找到命令「' + command + '」：请确认已安装并加入系统 PATH，或改用完整路径';
     }
@@ -495,10 +569,14 @@ function testServer(cfg) {
     const username = '\u0000test\u0000' + mcpFnv1aHex8(JSON.stringify(cfg) + ':' + started);
     const session = createSession(username, cfg);
     return new Promise(function (resolve) {
-        const deadline = Date.now() + INIT_TIMEOUT_MS;
+        let deadline = Date.now() + INIT_TIMEOUT_MS;
         (function wait() {
             const s = sessions[key(username, cfg.name)];
             const elapsed = Date.now() - started;
+            // 便携 Node 自动安装期间动态放宽等待上限（下载 35MB 远超常规握手 15s，原实现会误报超时）
+            if (s && s.waitRuntimeInstall && deadline - Date.now() < INIT_TIMEOUT_MS) {
+                deadline = Date.now() + RUNTIME_INSTALL_WAIT_MS;
+            }
             if (!s) { resolve({ ok: false, msg: '测试会话丢失' }); return; }
             if (s.status === 'connected') {
                 const tools = s.tools.map(function (t) { return { name: t.name, description: t.description }; });
@@ -534,4 +612,4 @@ function disposeAll() {
     Object.keys(sessions).forEach(function (k) { disposeSession(sessions[k]); });
 }
 
-module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs, setProjectMcp: setProjectMcp };
+module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs, setProjectMcp: setProjectMcp, setNodeRuntimeInstaller: setNodeRuntimeInstaller };
