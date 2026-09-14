@@ -837,24 +837,24 @@
                         <input id="agent-mcp-command" type="text" placeholder="如：node 或 npx（.cmd/.bat 自动经 cmd 转发）">
                     </div>
                     <div class="agent-mcp-field">
-                        <label>命令参数（每行一个）</label>
-                        <textarea id="agent-mcp-args" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                        <label>命令参数（每行一个；拖动右下角可调高度）</label>
+                        <textarea id="agent-mcp-args" rows="4" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
                     </div>
                     <div class="agent-mcp-field">
-                        <label>环境变量（每行一条 KEY=VALUE）</label>
-                        <textarea id="agent-mcp-env" rows="2" placeholder="API_KEY=xxx"></textarea>
+                        <label>环境变量（每行一条 KEY=VALUE；拖动右下角可调高度）</label>
+                        <textarea id="agent-mcp-env" rows="4" spellcheck="false" placeholder="MYSQL_HOST=127.0.0.1&#10;MYSQL_PASS=******"></textarea>
                     </div>
                     <label class="agent-mcp-enable-row">
                         <input id="agent-mcp-enabled" type="checkbox" checked>
                         启用（保存后自动建连并上报工具清单）
                     </label>
-                    <div class="agent-mcp-test-row">
-                        <button id="agent-mcp-test" class="kb-create-btn agent-ws-mini-btn">测试连接</button>
+                    <!-- 阶段一百一十八：底部操作栏重设计——测试连接（次要描边）/结果文字（占满剩余宽度）/取消/保存（主绿）单行排布，
+                         取代原先"测试行+按钮行"上下两排的松散布局 -->
+                    <div class="agent-mcp-footer">
+                        <button id="agent-mcp-test" class="agent-mcp-test-btn" type="button">测试连接</button>
                         <span id="agent-mcp-test-out" class="agent-mcp-test-out"></span>
-                    </div>
-                    <div class="modal-btns">
-                        <button id="agent-mcp-edit-save" class="kb-create-btn">保存服务器</button>
-                        <button id="agent-mcp-edit-cancel" class="modal-btn">取消</button>
+                        <button id="agent-mcp-edit-cancel" class="modal-btn" type="button">取消</button>
+                        <button id="agent-mcp-edit-save" class="kb-create-btn" type="button">保存服务器</button>
                     </div>
                 </div>
             </section>

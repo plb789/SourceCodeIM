@@ -211,6 +211,8 @@ function launch(username, session) {
     child.stdout.on('data', function (chunk) { onStdout(session, chunk); });
     child.stderr.on('data', function (chunk) {
         // stderr 仅截取尾部用于错误提示（服务器日志，不参与协议）
+        // errTail 独立留存：statusMsg 会被退出处理器覆盖，初始化失败提示需要单独取服务器输出尾部
+        session.errTail = ((session.errTail || '') + String(chunk)).slice(-800);
         const s = session.statusMsg = (session.statusMsg + String(chunk)).slice(-2000);
         void s;
     });
@@ -263,7 +265,15 @@ function launch(username, session) {
         session.restarts = 0;
     }).catch(function (e) {
         session.status = 'error';
-        session.statusMsg = '初始化失败：' + (e.message || e);
+        let msg = '初始化失败：' + (e.message || e);
+        if (/进程已退出/.test(String(msg))) {
+            // 第三方包常静默崩溃（实测如 mysql 类插件数据库认证失败时 stderr 为空）——给出排查方向
+            const tail = String(session.errTail || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean)[0];
+            msg += tail
+                ? '——服务器输出：' + tail.slice(0, 200)
+                : '（无错误输出。常见原因：npm 包名不存在、数据库等外部服务认证失败、端口被占用；可将"启动命令+参数"在终端单独运行查看真实报错）';
+        }
+        session.statusMsg = msg;
         killTree(session);
     });
 }

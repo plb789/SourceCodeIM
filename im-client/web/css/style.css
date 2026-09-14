@@ -7983,6 +7983,13 @@ html.m #list-panel.list-collapsed {
     font-family: inherit;
 }
 
+/* 阶段一百一十八：双文本域（命令参数/环境变量）统一可拖高——显式 min/max 防止缩得过小或撑破容器 */
+.agent-mcp-field textarea {
+    min-height: 76px;
+    max-height: 320px;
+    line-height: 1.6;
+}
+
 .agent-mcp-field input:focus,
 .agent-mcp-field textarea:focus {
     border-color: var(--primary);
@@ -7998,11 +8005,36 @@ html.m #list-panel.list-collapsed {
     cursor: pointer;
 }
 
-.agent-mcp-test-row {
+/* 阶段一百一十八：底部操作栏（重设计）——测试连接（次要描边）/结果文字（占满剩余宽度）/取消/保存（主绿）单行排布 */
+.agent-mcp-footer {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border, #ececec);
+}
+
+.agent-mcp-test-btn {
+    flex-shrink: 0;
+    height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--primary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+.agent-mcp-test-btn:hover {
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.agent-mcp-test-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
 }
 
 .agent-mcp-test-out {
@@ -8012,6 +8044,21 @@ html.m #list-panel.list-collapsed {
     color: var(--text-secondary, #666);
     line-height: 1.5;
     word-break: break-all;
+}
+
+/* 底部栏内取消按钮收回自然宽度并补内边距（.modal-btn 全局 flex:1 会在本行抢占剩余空间，导致中排过宽） */
+.agent-mcp-footer .modal-btn {
+    flex: 0 0 auto;
+    padding: 0 16px;
+}
+
+/* 测试结果着色：成功=主题绿，失败=红（chat.js 按 ok/err 切类） */
+.agent-mcp-test-out.ok {
+    color: var(--primary, #2bb14a);
+}
+
+.agent-mcp-test-out.err {
+    color: var(--danger, #e05252);
 }
 
 /* 触屏列表项加大点击区 */

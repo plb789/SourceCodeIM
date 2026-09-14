@@ -4613,7 +4613,9 @@
         Object.keys(sv.env || {}).forEach(function (k) { envLines.push(k + '=' + sv.env[k]); });
         document.getElementById('agent-mcp-env').value = envLines.join('\n');
         document.getElementById('agent-mcp-enabled').checked = sv.enabled !== false;
-        document.getElementById('agent-mcp-test-out').textContent = '';
+        var testOut = document.getElementById('agent-mcp-test-out');
+        testOut.textContent = '';
+        testOut.classList.remove('ok', 'err'); // 阶段一百一十八：重开编辑表单时清掉上次测试结果的着色
         agentMcpEditEl.classList.remove('hidden');
     }
 
@@ -5044,20 +5046,25 @@
         agentMcpEditEl.classList.add('hidden');
         persistMcpServers();
     });
-    // 测试连接：临时会话验证（不常驻），展示服务信息/工具数/耗时
+    // 测试连接：临时会话验证（不常驻），展示服务信息/工具数/耗时；结果文字按成功/失败着色，测试期间按钮禁用防连点
     document.getElementById('agent-mcp-test').addEventListener('click', function () {
         var out = document.getElementById('agent-mcp-test-out');
+        var btn = this;
         var cfg = collectMcpForm();
-        if (!cfg.name || !cfg.command) { out.textContent = '请先填写服务器名称与启动命令'; return; }
+        if (!cfg.name || !cfg.command) { out.textContent = '请先填写服务器名称与启动命令'; out.classList.add('err'); return; }
+        out.classList.remove('ok', 'err');
         out.textContent = '连接中…';
+        btn.disabled = true;
         window.desktop.mcpTest(cfg).then(function (r) {
-            if (!r || !r.ok) { out.textContent = (r && r.msg) || '连接失败'; return; }
+            if (!r || !r.ok) { out.textContent = (r && r.msg) || '连接失败'; out.classList.add('err'); return; }
             out.textContent = '连接成功：' + (r.server_name || cfg.name) +
                 (r.server_version ? ' v' + r.server_version : '') +
                 '，' + ((r.tools || []).length) + ' 个工具，耗时 ' + (r.elapsed_ms || 0) + 'ms';
+            out.classList.add('ok');
         }).catch(function (e) {
             out.textContent = '测试异常：' + (e && e.message || e);
-        });
+            out.classList.add('err');
+        }).finally(function () { btn.disabled = false; });
     });
     // ===== 阶段一百一十：MCP 设置页 ？号使用说明（源码管理 ？号同款交互） =====
     // 点击 ？按钮弹出分节说明气泡：字段含义 + 开箱即用示例（命令/参数/env 多行配置块带一键复制，
