@@ -137,6 +137,8 @@
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
             else if (item.dataset.view === 'mcp') { loadMCPServers(); startMCPPolling(); }
+            // 阶段一百一十三：进入 MCP 插件库视图拉取插件清单（PC 端插件市场数据源）
+            else if (item.dataset.view === 'mcpplugins') { loadMCPPlugins(); }
             else stopKBPolling();
         });
     });
@@ -2430,6 +2432,145 @@
     }
     $('mcp-add').addEventListener('click', function () { openMCPServerModal(null); });
     $('mcp-refresh').addEventListener('click', function () { loadMCPServers(); });
+
+    // ===== MCP 插件库管理（阶段一百一十三：插件市场清单 CRUD，PC 端设置页"插件市场"数据源） =====
+    var mcpPlugins = [];
+
+    function loadMCPPlugins() {
+        return api('GET', '/admin/api/mcp/plugins').then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); return; }
+            mcpPlugins = (result.data && result.data.plugins) || [];
+            renderMCPPlugins();
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    function renderMCPPlugins() {
+        var box = $('mcpplugins-list');
+        box.innerHTML = '';
+        $('mcpplugins-status').textContent = mcpPlugins.length ? ('共 ' + mcpPlugins.length + ' 个插件') : '';
+        if (!mcpPlugins.length) {
+            var empty = document.createElement('div');
+            empty.className = 'admin-card-empty';
+            empty.textContent = '插件清单为空，点击右上角新增（首次访问服务端会自动播种 8 个内置默认插件）';
+            box.appendChild(empty);
+            return;
+        }
+        mcpPlugins.forEach(function (p) {
+            var card = document.createElement('div');
+            card.className = 'admin-card' + (p.enabled ? '' : ' disabled');
+
+            var main = document.createElement('div');
+            main.className = 'admin-card-main';
+            var name = document.createElement('div');
+            name.className = 'admin-card-name';
+            // 图标链接（阶段一百一十三增补）：有则显示小图标，加载失败自动隐藏降级文字标题
+            if (p.icon) {
+                var ico = document.createElement('img');
+                ico.src = p.icon;
+                ico.className = 'admin-plugin-icon';
+                ico.alt = '';
+                ico.addEventListener('error', function () { ico.remove(); });
+                name.appendChild(ico);
+            }
+            name.appendChild(document.createTextNode(p.title || p.name));
+            var tagN = document.createElement('span');
+            tagN.className = 'admin-card-tag';
+            tagN.textContent = p.name;
+            name.appendChild(tagN);
+            if (p.category) {
+                var tagC = document.createElement('span');
+                tagC.className = 'admin-card-tag';
+                tagC.textContent = p.category;
+                name.appendChild(tagC);
+            }
+            if (p.needs_config) {
+                var tagCf = document.createElement('span');
+                tagCf.className = 'admin-card-tag';
+                tagCf.textContent = '需配置';
+                name.appendChild(tagCf);
+            }
+            if (!p.enabled) {
+                var tagOff = document.createElement('span');
+                tagOff.className = 'admin-card-tag off';
+                tagOff.textContent = '已下架';
+                name.appendChild(tagOff);
+            }
+            var desc = document.createElement('div');
+            desc.className = 'admin-card-desc';
+            desc.textContent = p.description || '-';
+            desc.title = desc.textContent;
+            var cmd = document.createElement('div');
+            cmd.className = 'admin-card-desc';
+            cmd.textContent = p.command + ' ' + String(p.args || '').split('\n').filter(function (s) { return s.trim(); }).join(' ');
+            cmd.title = cmd.textContent;
+            main.appendChild(name);
+            main.appendChild(desc);
+            main.appendChild(cmd);
+            card.appendChild(main);
+
+            var actions = document.createElement('div');
+            actions.className = 'admin-card-actions';
+            function addBtn(text, cls, fn) {
+                var b = document.createElement('button');
+                b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+                b.textContent = text;
+                b.addEventListener('click', fn);
+                actions.appendChild(b);
+            }
+            addBtn('编辑', '', function () { openMCPPluginModal(p); });
+            addBtn('删除', 'danger', function () {
+                confirmBox('确定删除插件「' + (p.title || p.name) + '」？仅删除市场清单，不影响用户已安装的本机配置。', function () {
+                    api('DELETE', '/admin/api/mcp/plugins/' + p.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        loadMCPPlugins();
+                    }).catch(function (e) { showToast(e.message || '网络异常'); });
+                });
+            });
+            card.appendChild(actions);
+            box.appendChild(card);
+        });
+    }
+
+    // 插件编辑弹窗（复用通用编辑弹窗；Args/Env 为多行文本，与 PC 端表单格式一致）
+    function openMCPPluginModal(p) {
+        openEditModal(p ? '编辑插件 - ' + p.name : '新增插件', [
+            { key: 'name', label: '插件名（唯一，安装时作为本机服务器名）', type: 'text', placeholder: '如 mysql' },
+            { key: 'title', label: '展示标题', type: 'text', placeholder: '如 MySQL 数据库查询' },
+            { key: 'category', label: '分类页签', type: 'text', placeholder: '如 数据库 / 网络 / 文件系统 / 工具' },
+            { key: 'description', label: '描述', type: 'textarea', placeholder: '插件功能说明（建议注明 Node 系 / Python 系及安装注意）' },
+            { key: 'command', label: '启动命令', type: 'text', placeholder: 'npx / uvx / node / python' },
+            { key: 'args', label: '命令参数（每行一个）', type: 'textarea', placeholder: '-y\n@benborla29/mcp-server-mysql' },
+            { key: 'env', label: '环境变量模板（每行 KEY=VALUE，占位值由用户安装时补填）', type: 'textarea', placeholder: 'MYSQL_HOST=127.0.0.1\nMYSQL_PASS=你的密码' },
+            { key: 'needs_config', label: '含占位参数（用户安装时打开表单补填）', type: 'checkbox' },
+            { key: 'icon', label: '图标链接（http/https 图片 URL，留空显示首字母徽标）', type: 'text', placeholder: 'https://example.com/logo.png' },
+            { key: 'sort', label: '排序（小在前）', type: 'number', default: 0 },
+            { key: 'enabled', label: '上架（下架后用户端不再展示）', type: 'checkbox', default: true }
+        ], p || {}, function (data) {
+            var payload = {
+                name: String(data.name || '').trim(),
+                title: String(data.title || '').trim(),
+                description: String(data.description || ''),
+                category: String(data.category || '').trim(),
+                command: String(data.command || '').trim(),
+                args: String(data.args || ''),
+                env: String(data.env || ''),
+                needs_config: !!data.needs_config,
+                icon: String(data.icon || '').trim(),
+                sort: parseInt(data.sort, 10) || 0,
+                enabled: !!data.enabled
+            };
+            var req = p ? api('PUT', '/admin/api/mcp/plugins/' + p.id, payload)
+                : api('POST', '/admin/api/mcp/plugins', payload);
+            req.then(function (result) {
+                if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                closeEditModal();
+                showToast('已保存');
+                loadMCPPlugins();
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+    $('mcpplugins-add').addEventListener('click', function () { openMCPPluginModal(null); });
 
     // ===== 工具启停弹窗（per-tool 开关，保存走 PUT 完整配置） =====
     function openMCPToolsModal(sv) {

@@ -389,14 +389,16 @@
     // 分类切换归口：导航高亮 + 内容面板显隐
     function settingsShowView(view) {
         // 阶段一百零五：MCP 仅 PC 端支持（Web/手机端无 desktop 桥），不支持时提示并留在当前分类
-        if (view === 'mcp' && !agentMcpSupported()) {
-            showToast('仅 PC 客户端支持自定义 MCP 服务器');
+        // 阶段一百一十三：插件市场安装同样依赖 desktop 桥（mcpSave/uv 安装），同 PC 限定
+        if ((view === 'mcp' || view === 'market') && !agentMcpSupported()) {
+            showToast('仅 PC 客户端支持该功能');
             return;
         }
         settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
         if (view === 'appearance') settingsRenderTheme();
         if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
+        if (view === 'market') settingsMarketEnter(); // 阶段一百一十三：进入插件市场拉取清单 + uv 状态
         if (view === 'mcp') {
             // 阶段一百一十二修正：设置页导航直接进入 MCP 分类时初始化列表并启动状态轮询。
             // 原渲染只挂在工具栏按钮入口（openMcpPanel）与轮询回调上，导航直进时列表区空白、
@@ -4555,6 +4557,249 @@
         showToast('已预填「' + p.title + '」：请修改占位参数（目录/密码等）后保存');
     }
 
+    // ===== 阶段一百一十三：设置页插件市场（TRAE CN 同款：搜索/分类页签/卡片网格/一键安装） =====
+    // 清单数据源：服务端 /api/mcp/plugins（后台管理 → MCP 插件库维护，服务端归口）；
+    // 拉取失败或为空时回退客户端内置预设（MCP_PLUGIN_PRESETS，按市场条目格式转换）。
+    // 安装语义：写入本机 MCP 配置（mcpSave）并自动建连上报——完全复用既有链路；
+    // 含占位参数的插件（needs_config）转预填表单让用户补填；uvx 系插件缺 uv 工具链时自动下载安装
+    var MCP_MARKET_FALLBACK = MCP_PLUGIN_PRESETS.map(function (p) {
+        // 内置预设转市场条目：args 数组 → 多行文本；env 对象 → KEY=VALUE 多行；needsConfig 手工标记
+        var needs = ['filesystem', 'mysql', 'sqlite', 'postgres', 'github'].indexOf(p.name) !== -1;
+        var envLines = [];
+        Object.keys(p.env || {}).forEach(function (k) { envLines.push(k + '=' + p.env[k]); });
+        return { name: p.name, title: p.title, description: p.desc, category: '', command: p.command,
+            args: (p.args || []).join('\n'), env: envLines.join('\n'), needs_config: needs, icon: '', sort: 0, enabled: true };
+    });
+    var agentMktState = { plugins: [], cat: '全部', kw: '', loaded: false };
+    var agentMktTabsEl = document.getElementById('agent-mkt-tabs');
+    var agentMktGridEl = document.getElementById('agent-mkt-grid');
+    var agentMktUvEl = document.getElementById('agent-mkt-uv');
+
+    function settingsMarketEnter() {
+        // 已加载且本机配置未变化时直接渲染（重进设置页仍刷新清单，拿后台最新维护结果）
+        fetch('/api/mcp/plugins').then(function (r) { return r.json(); }).then(function (j) {
+            var list = (j && j.ok && j.data && j.data.plugins) || [];
+            agentMktState.plugins = list.length ? list : MCP_MARKET_FALLBACK;
+            agentMktState.loaded = true;
+            renderMktPage();
+        }).catch(function () {
+            agentMktState.plugins = MCP_MARKET_FALLBACK; // 服务端不可达/旧版服务端：回退内置预设
+            agentMktState.loaded = true;
+            renderMktPage();
+        });
+        renderMktPage(); // 先按上次数据渲染占位（防闪烁），拉取完成后重绘
+    }
+
+    function mktInstalled(name) {
+        for (var i = 0; i < agentMcpServers.length; i++) {
+            if (agentMcpServers[i].name === name) return true;
+        }
+        return false;
+    }
+
+    function renderMktPage() {
+        if (!agentMktState.plugins.length) return;
+        var kw = agentMktState.kw.trim().toLowerCase();
+        // 分类页签：全部 + 清单中出现过的分类（保持首次出现顺序）
+        var cats = [];
+        agentMktState.plugins.forEach(function (p) {
+            var c = String(p.category || '').trim();
+            if (c && cats.indexOf(c) === -1) cats.push(c);
+        });
+        var tabs = ['全部'].concat(cats);
+        agentMktTabsEl.innerHTML = '';
+        tabs.forEach(function (c) {
+            var t = document.createElement('button');
+            t.type = 'button';
+            t.className = 'agent-mkt-tab' + (agentMktState.cat === c ? ' active' : '');
+            t.textContent = c;
+            t.addEventListener('click', function () {
+                agentMktState.cat = c;
+                renderMktPage();
+            });
+            agentMktTabsEl.appendChild(t);
+        });
+        // 卡片网格：分类 + 关键词（标题/描述/插件名）双重过滤
+        var grid = agentMktGridEl;
+        grid.innerHTML = '';
+        var shown = 0;
+        agentMktState.plugins.forEach(function (p) {
+            var c = String(p.category || '').trim();
+            if (agentMktState.cat !== '全部' && c !== agentMktState.cat) return;
+            if (kw && (p.title + ' ' + p.description + ' ' + p.name).toLowerCase().indexOf(kw) === -1) return;
+            shown++;
+            grid.appendChild(mktCard(p));
+        });
+        if (!shown) {
+            var empty = document.createElement('div');
+            empty.className = 'agent-mkt-empty';
+            empty.textContent = kw ? '没有匹配「' + agentMktState.kw + '」的插件' : '暂无上架插件（后台管理 → MCP 插件库 可上架）';
+            grid.appendChild(empty);
+        }
+        renderMktUvRow();
+    }
+
+    // uv 工具链状态行（有 Python 系插件时展示；未安装提供一键安装）
+    function renderMktUvRow() {
+        var hasPy = false;
+        agentMktState.plugins.forEach(function (p) { if (String(p.command || '').toLowerCase() === 'uvx') hasPy = true; });
+        if (!hasPy || !window.desktop || !window.desktop.mcpUvStatus) { agentMktUvEl.classList.add('hidden'); return; }
+        window.desktop.mcpUvStatus().then(function (st) {
+            if (!st || !st.installed) {
+                agentMktUvEl.classList.remove('hidden');
+                agentMktUvEl.innerHTML = '';
+                var txt = document.createElement('span');
+                txt.className = 'agent-mkt-uv-txt';
+                txt.textContent = '检测到含 Python 系插件（uvx）：本机尚未安装 uv 工具链，安装插件时可自动下载；';
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'kb-create-btn agent-ws-mini-btn';
+                btn.textContent = '立即安装 uv';
+                btn.addEventListener('click', function () { mktInstallUv(btn); });
+                agentMktUvEl.appendChild(txt);
+                agentMktUvEl.appendChild(btn);
+            } else {
+                agentMktUvEl.classList.add('hidden');
+            }
+        }).catch(function () { agentMktUvEl.classList.add('hidden'); });
+    }
+
+    function mktInstallUv(btn) {
+        btn.disabled = true;
+        btn.textContent = '下载安装中…';
+        window.desktop.mcpUvInstall().then(function (r) {
+            btn.disabled = false;
+            btn.textContent = '立即安装 uv';
+            showToast((r && r.msg) || (r && r.ok ? '安装完成' : '安装失败'));
+            if (r && r.ok) renderMktPage();
+        }).catch(function (e) {
+            btn.disabled = false;
+            btn.textContent = '立即安装 uv';
+            showToast('安装异常：' + (e && e.message || e));
+        });
+    }
+
+    // 市场卡片（TRAE 同款：图标徽标 + 标题 + 描述 + 命令预览 + 安装按钮）
+    // 图标优先级（用户偏好归口）：服务端 icon 图片优先，加载失败或未配置降级首字母徽标
+    function mktCard(p) {
+        var card = document.createElement('div');
+        card.className = 'agent-mkt-card';
+        var badge = document.createElement('span');
+        badge.className = 'agent-mkt-badge';
+        var iconUrl = String(p.icon || '').trim();
+        if (iconUrl) {
+            var img = document.createElement('img');
+            img.src = iconUrl;
+            img.alt = '';
+            img.addEventListener('error', function () {
+                // 图标加载失败：降级首字母徽标（保底展示，不留空块）
+                img.remove();
+                badge.textContent = (p.title || p.name).charAt(0).toUpperCase();
+            });
+            badge.appendChild(img);
+        } else {
+            badge.textContent = (p.title || p.name).charAt(0).toUpperCase();
+        }
+        var info = document.createElement('div');
+        info.className = 'agent-mkt-info';
+        var t = document.createElement('div');
+        t.className = 'agent-mkt-title';
+        t.textContent = p.title || p.name;
+        var d = document.createElement('div');
+        d.className = 'agent-mkt-desc';
+        d.textContent = p.description || '';
+        d.title = d.textContent;
+        var argsText = String(p.args || '').split('\n').filter(function (s) { return s.trim(); }).join(' ');
+        var envCount = String(p.env || '').split('\n').filter(function (s) { return s.trim() && s.indexOf('=') > 0; }).length;
+        var cmd = document.createElement('div');
+        cmd.className = 'agent-mkt-cmd';
+        cmd.textContent = p.command + ' ' + argsText + (envCount ? '  + 环境变量 x' + envCount : '');
+        cmd.title = cmd.textContent;
+        info.appendChild(t);
+        info.appendChild(d);
+        info.appendChild(cmd);
+        var act = document.createElement('button');
+        act.type = 'button';
+        act.className = 'kb-create-btn agent-mkt-install';
+        var installed = mktInstalled(p.name);
+        if (installed) {
+            act.textContent = '已安装';
+            act.disabled = true;
+            act.classList.add('installed');
+        } else {
+            act.textContent = '+ 安装';
+            act.addEventListener('click', function () { mktInstall(p, act); });
+        }
+        card.appendChild(badge);
+        card.appendChild(info);
+        card.appendChild(act);
+        return card;
+    }
+
+    // 一键安装：uvx 缺工具链先装 uv → 需配置转预填表单 → 否则直接写本机配置并建连
+    function mktInstall(p, btn) {
+        if (mktInstalled(p.name)) { showToast('已安装'); return; }
+        if (agentMcpServers.length >= 10) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        var doApply = function () {
+            var cfg = mktPluginToCfg(p);
+            if (p.needs_config) {
+                // 含占位参数：预填现有编辑表单（TRAE 同款先配置后启用），占位值用户补填后保存走既有链路
+                settingsShowView('mcp');
+                openMcpEdit(-1);
+                document.getElementById('agent-mcp-name').value = cfg.name;
+                document.getElementById('agent-mcp-command').value = cfg.command;
+                document.getElementById('agent-mcp-args').value = (cfg.args || []).join('\n');
+                var envLines = [];
+                Object.keys(cfg.env || {}).forEach(function (k) { envLines.push(k + '=' + cfg.env[k]); });
+                document.getElementById('agent-mcp-env').value = envLines.join('\n');
+                showToast('「' + (p.title || p.name) + '」已预填：请补全占位参数（密码/目录等）后保存');
+                return;
+            }
+            agentMcpServers.push(cfg);
+            persistMcpServers(); // 保存即自动建连 + 工具清单上报（既有链路归口）
+            showToast('「' + (p.title || p.name) + '」安装成功，正在连接…');
+            renderMktPage();
+        };
+        var cmdLow = String(p.command || '').trim().toLowerCase();
+        if (cmdLow === 'uvx' && window.desktop.mcpUvStatus) {
+            window.desktop.mcpUvStatus().then(function (st) {
+                if (st && st.installed) { doApply(); return; }
+                btn.disabled = true;
+                btn.textContent = '安装工具链…';
+                window.desktop.mcpUvInstall().then(function (r) {
+                    btn.disabled = false;
+                    btn.textContent = '+ 安装';
+                    if (!r || !r.ok) { showToast((r && r.msg) || 'uv 工具链安装失败'); return; }
+                    showToast('uv 工具链就绪，继续安装插件');
+                    doApply();
+                }).catch(function (e) {
+                    btn.disabled = false;
+                    btn.textContent = '+ 安装';
+                    showToast('uv 安装异常：' + (e && e.message || e));
+                });
+            }).catch(function () { doApply(); }); // 状态查询失败不阻塞：走 spawn 报错提示
+            return;
+        }
+        doApply();
+    }
+
+    // 市场条目 → 本机 MCP 配置（args 多行文本 → 数组；env 多行 KEY=VALUE → 对象）
+    function mktPluginToCfg(p) {
+        var args = String(p.args || '').split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+        var env = {};
+        String(p.env || '').split('\n').forEach(function (line) {
+            var i = line.indexOf('=');
+            if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+        });
+        return { name: p.name, command: String(p.command || '').trim(), args: args, env: env, enabled: true };
+    }
+
+    // 市场搜索框（输入即过滤）
+    document.getElementById('agent-mkt-kw').addEventListener('input', function () {
+        agentMktState.kw = this.value || '';
+        if (agentMktState.loaded) renderMktPage();
+    });
+
     document.getElementById('agent-mcp-edit-cancel').addEventListener('click', function () {
         agentMcpEditEl.classList.add('hidden');
     });
@@ -4681,6 +4926,7 @@
         line(s4, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
         line(s4, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
         line(s4, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
+        line(s4, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {

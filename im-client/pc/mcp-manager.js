@@ -9,6 +9,19 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const os = require('os');
+const path = require('path');
+
+// 阶段一百一十三：PC 端自动安装的 uv 工具链目录（~/.im-mcp/bin，main.js 归口下载安装；
+// spawn 时前置到 PATH 首位，fetch/sqlite 等 Python 系插件不依赖系统 PATH 即可拉起）
+const TOOLCHAIN_BIN = path.join(os.homedir(), '.im-mcp', 'bin');
+
+// buildEnv 构造子进程环境：process.env + 服务器 env + 工具链目录 PATH 前置（系统 PATH 保留在后）
+function buildEnv(extra) {
+    const base = Object.assign({}, process.env, extra || {});
+    base.PATH = TOOLCHAIN_BIN + path.delimiter + (base.PATH || process.env.PATH || '');
+    return base;
+}
 
 const PROTOCOL_VERSION = '2024-11-05';
 const CLIENT_INFO = { name: 'im-pc-client', version: '1.0.0' };
@@ -57,12 +70,12 @@ function launch(username, session) {
         const isScript = /\.(cmd|bat)$/i.test(String(cfg.command || '').trim());
         child = isScript
             ? spawn('cmd.exe', ['/C', cfg.command].concat(cfg.args || []), {
-                env: Object.assign({}, process.env, cfg.env || {}),
+                env: buildEnv(cfg.env),
                 windowsHide: true,
                 stdio: ['pipe', 'pipe', 'pipe']
             })
             : spawn(cfg.command, cfg.args || [], {
-                env: Object.assign({}, process.env, cfg.env || {}),
+                env: buildEnv(cfg.env),
                 windowsHide: true,
                 stdio: ['pipe', 'pipe', 'pipe']
             });
@@ -83,7 +96,7 @@ function launch(username, session) {
     child.on('error', function (e) {
         if (session.dead) return;
         session.status = 'error';
-        session.statusMsg = '进程异常：' + (e.message || e);
+        session.statusMsg = mcpFriendlySpawnError(cfg.command, e);
     });
     child.on('exit', function (code) {
         if (session.dead) return;
@@ -360,6 +373,24 @@ function mcpNormalizeRaw(raw) {
     }
     return { name: out, changed: changed };
 }
+// 阶段一百一十二：spawn 失败友好提示——ENOENT = 命令不在系统 PATH，按命令类型给出安装指引
+// （原文案仅回显 "spawn uvx ENOENT"，用户不知道该装什么；其余错误仍原样透传）
+function mcpFriendlySpawnError(command, e) {
+    if (e && e.code === 'ENOENT') {
+        const cmd = String(command || '').trim().toLowerCase();
+        if (cmd === 'uvx' || cmd === 'uv' || cmd === 'uvx.exe' || cmd === 'uv.exe') {
+            return '未找到 uvx 命令：fetch/sqlite 等 Python 系插件需先安装 uv 工具链（PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex ，或 winget install astral-sh.uv），安装后重启本客户端';
+        }
+        if (cmd === 'python' || cmd === 'python3' || cmd === 'py') {
+            return '未找到 python 命令：请先安装 Python（勾选加入 PATH）后重启本客户端';
+        }
+        if (cmd === 'npx' || cmd === 'node' || cmd === 'npm') {
+            return '未找到 node 命令：请先安装 Node.js 后重启本客户端';
+        }
+        return '未找到命令「' + command + '」：请确认已安装并加入系统 PATH，或改用完整路径';
+    }
+    return '进程异常：' + ((e && e.message) || e);
+}
 function mcpFnv1aHex8(s) {
     const buf = Buffer.from(String(s || ''), 'utf8');
     let h = 0x811c9dc5;
@@ -382,7 +413,7 @@ function pcToolKey(serverName, toolName) {
 // testServer：临时会话验证（不常驻），返回 {ok, tools, elapsed_ms, server_name, server_version, protocol_version}
 function testServer(cfg) {
     const started = Date.now();
-    const username = '\u0000test\u0000' + mcpFnv1a(JSON.stringify(cfg) + ':' + started);
+    const username = '\u0000test\u0000' + mcpFnv1aHex8(JSON.stringify(cfg) + ':' + started);
     const session = createSession(username, cfg);
     return new Promise(function (resolve) {
         const deadline = Date.now() + INIT_TIMEOUT_MS;

@@ -92,6 +92,13 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/mcp/servers/{id}", s.adminGuard(s.handleAdminMCPDelete))
 	http.HandleFunc("POST /admin/api/mcp/servers/{id}/reconnect", s.adminGuard(s.handleAdminMCPReconnect))
 	http.HandleFunc("POST /admin/api/mcp/test", s.adminGuard(s.handleAdminMCPTest))
+	// 阶段一百一十三：MCP 插件市场清单管理（admin 维护，PC 端设置页插件市场拉取展示 + 一键安装）
+	http.HandleFunc("GET /admin/api/mcp/plugins", s.adminGuard(s.handleAdminMCPPluginList))
+	http.HandleFunc("POST /admin/api/mcp/plugins", s.adminGuard(s.handleAdminMCPPluginCreate))
+	http.HandleFunc("PUT /admin/api/mcp/plugins/{id}", s.adminGuard(s.handleAdminMCPPluginUpdate))
+	http.HandleFunc("DELETE /admin/api/mcp/plugins/{id}", s.adminGuard(s.handleAdminMCPPluginDelete))
+	// 用户端公开只读拉取（清单为公开目录数据不含凭据；PC 端设置页同源 fetch）
+	http.HandleFunc("GET /api/mcp/plugins", s.handleMCPPluginPublicList)
 	// 阶段一百零六：Git 助手提示词管理（admin 可配置热更新，DB 值优先于内置默认）
 	http.HandleFunc("GET /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptGet))
 	http.HandleFunc("PUT /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptSave))

@@ -482,6 +482,31 @@ type MCPServer struct {
 // TableName 指定表名
 func (MCPServer) TableName() string { return "im_mcp_server" }
 
+// MCPPlugin 阶段一百一十三：MCP 插件市场清单表（admin 后台维护，PC 端设置页插件市场拉取展示 + 一键安装）。
+// 服务端归口：清单由管理员增删改（空表自动播种内置默认插件），客户端拉取后按预设自动写入本机 MCP 配置；
+// Args 换行分隔（每行一个参数）、Env 换行 KEY=VALUE（与 PC 端编辑表单格式一致，安装时原样带入）
+type MCPPlugin struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name        string `gorm:"column:name;type:varchar(64);uniqueIndex;not null" json:"name"` // 唯一名（安装时作为本机 MCP 服务器名，重复安装将被拦截）
+	Title       string `gorm:"column:title;type:varchar(128);default:''" json:"title"`        // 展示标题
+	Description string `gorm:"column:description;type:varchar(512);default:''" json:"description"`
+	Category    string `gorm:"column:category;type:varchar(32);default:''" json:"category"` // 分类页签（文件系统/数据库/网络/工具…）
+	Command     string `gorm:"column:command;type:varchar(128);default:''" json:"command"`  // 启动命令（npx/uvx/node…）
+	Args        string `gorm:"column:args;type:varchar(1024);default:''" json:"args"`       // 命令参数（换行分隔）
+	Env         string `gorm:"column:env;type:varchar(1024);default:''" json:"env"`         // 环境变量模板（换行 KEY=VALUE，占位值由用户安装时补填）
+	// NeedsConfig 含占位参数（密码/令牌/目录）：安装时打开预填表单让用户补填；false=默认参数可直接装完即用
+	NeedsConfig bool `gorm:"column:needs_config;default:false" json:"needs_config"`
+	// Icon 图标链接（http/https 图片 URL，admin 后台配置）；留空降级为首字母徽标（用户偏好：服务端图标优先，无图降级）
+	Icon       string    `gorm:"column:icon;type:varchar(512);default:''" json:"icon"`
+	Sort       int       `gorm:"column:sort;default:0" json:"sort"`          // 展示排序（小在前）
+	Enabled    bool      `gorm:"column:enabled;default:true" json:"enabled"` // 上架状态（下架后用户端拉取不显示）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (MCPPlugin) TableName() string { return "im_mcp_plugin" }
+
 // SysPrompt 阶段一百零六：系统提示词配置表（admin 后台可配置、保存即热更新，无需重启服务端）。
 // 代码内硬编码提示词降级为默认值：本表有记录且内容非空时优先生效（后台调整属最新意图，重启不丢）；
 // 清空保存即恢复默认（删除记录）。Key 模块唯一标识（如 git_commitmsg=AI 提交信息生成、

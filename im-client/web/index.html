@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.24">
+    <link rel="stylesheet" href="css/style.css?v=2.29">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -641,6 +641,11 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm-5 9a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
                     <span>MCP</span>
                 </button>
+                <!-- 阶段一百一十三：插件市场（TRAE CN 同款，清单由后台管理 → MCP 插件库维护，一键安装） -->
+                <button class="settings-nav-item" data-view="market">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zm10 0c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2zM7.16 14h9.68c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1 1 0 0 0 21.31 5H6.21l-.94-2H1v2h3l3.6 7.59-1.35 2.44C5.52 16.37 6.48 18 7.16 18z"/></svg>
+                    <span>插件市场</span>
+                </button>
                 <button class="settings-nav-item" data-view="about">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
                     <span>关于</span>
@@ -799,6 +804,22 @@
                         <button id="agent-mcp-edit-cancel" class="modal-btn">取消</button>
                     </div>
                 </div>
+            </section>
+            <!-- 插件市场（阶段一百一十三：TRAE CN 同款——标题+描述+搜索+分类页签+卡片网格+一键安装；
+                 清单数据源服务端 /api/mcp/plugins（后台管理 → MCP 插件库维护），失败回退客户端内置预设；
+                 安装=自动写入本机 MCP 配置并建连，Python 系插件自动安装 uv 工具链） -->
+            <section id="settings-view-market" class="settings-view hidden">
+                <h2 class="settings-title">插件市场</h2>
+                <p class="agent-mkt-sub">发现并安装 MCP 插件，拓展 AI 助手的工具能力。点击「安装」自动写入本机 MCP 配置并连接；Python 系插件（uvx）会自动安装运行环境。</p>
+                <div class="agent-mkt-toolbar">
+                    <div class="agent-mkt-search">
+                        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                        <input id="agent-mkt-kw" type="text" placeholder="搜索插件" autocomplete="off">
+                    </div>
+                </div>
+                <div id="agent-mkt-tabs" class="agent-mkt-tabs"></div>
+                <div id="agent-mkt-uv" class="agent-mkt-uv hidden"></div>
+                <div id="agent-mkt-grid" class="agent-mkt-grid"></div>
             </section>
             <!-- 关于：应用信息 -->
             <section id="settings-view-about" class="settings-view hidden">
@@ -1021,7 +1042,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.9"></script>
+    <script src="js/chat.js?v=3.11"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

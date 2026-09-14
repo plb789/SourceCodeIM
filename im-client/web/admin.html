@@ -41,6 +41,7 @@
                 <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
                 <button class="admin-nav-item" data-view="agents">AI 智能体</button>
                 <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
+                <button class="admin-nav-item" data-view="mcpplugins">MCP 插件库</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -499,6 +500,17 @@
                 </div>
                 <div id="mcp-server-list" class="admin-cards"></div>
             </section>
+
+            <!-- MCP 插件库管理（阶段一百一十三：TRAE CN 同款插件市场清单归口，PC 端设置页"插件市场"拉取展示） -->
+            <section id="admin-view-mcpplugins" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>MCP 插件库</h2>
+                    <span id="mcpplugins-status" class="admin-view-tip"></span>
+                    <button id="mcpplugins-add" class="admin-btn primary">+ 新增插件</button>
+                </header>
+                <p class="admin-view-tip">插件清单由本页统一维护，PC 端用户在设置 → 插件市场一键安装（自动写入本机 MCP 配置并建连）。环境变量模板中的占位值（密码/令牌/目录）会标记"需配置"，用户安装时补填。删除插件不影响用户已安装的本机配置。</p>
+                <div id="mcpplugins-list" class="admin-cards"></div>
+            </section>
         </main>
     </div>
 
@@ -577,7 +589,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.21"></script>
+    <script src="js/admin.js?v=1.23"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

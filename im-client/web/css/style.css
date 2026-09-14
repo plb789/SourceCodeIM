@@ -5639,6 +5639,178 @@ html.m #list-panel.list-collapsed {
     z-index: 60;
 }
 
+/* ===== 阶段一百一十三：设置页插件市场（TRAE CN 同款：搜索/分类页签/卡片网格/一键安装） ===== */
+/* 市场按钮配色归口（不占用全局 --primary/--active 语义）：
+   浅色主题 = 极浅灰底 + 深字（TRAE 浅色同款淡雅）；深色主题 = 灰黑底 + 白字；跟随系统随之切换 */
+:root {
+    --mkt-btn-bg: var(--header-bg, #fafafa);
+    --mkt-btn-fg: var(--text, #333);
+}
+[data-theme="dark"] {
+    --mkt-btn-bg: var(--active, #383838);
+    --mkt-btn-fg: var(--text, #e0e0e0);
+}
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] {
+        --mkt-btn-bg: var(--active, #383838);
+        --mkt-btn-fg: var(--text, #e0e0e0);
+    }
+}
+
+.agent-mkt-sub { margin: 6px 0 14px; font-size: 12.5px; color: var(--text-secondary, #999); line-height: 1.6; }
+
+.agent-mkt-toolbar { margin-bottom: 12px; }
+
+.agent-mkt-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 280px;
+    max-width: 100%;
+    padding: 7px 12px;
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    background: var(--input-bg, rgba(255, 255, 255, 0.04));
+    color: var(--text-secondary, #999);
+}
+.agent-mkt-search:focus-within { border-color: var(--text-secondary, #999); }
+.agent-mkt-search input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text, #ddd);
+    font-size: 12.5px;
+}
+
+.agent-mkt-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.agent-mkt-tab {
+    padding: 5px 14px;
+    border: 1px solid var(--border, #333);
+    border-radius: 14px;
+    background: transparent;
+    color: var(--text-secondary, #999);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.agent-mkt-tab:hover { color: var(--text, #ddd); border-color: var(--text-secondary, #999); }
+/* 选中页签：TRAE CN 同款按钮配色（--mkt-btn-* 归口，浅色浅底深字/深色灰黑底白字） */
+.agent-mkt-tab.active {
+    background: var(--mkt-btn-bg, #fafafa);
+    border-color: var(--border, #333);
+    color: var(--mkt-btn-fg, #333);
+}
+
+.agent-mkt-uv {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 9px 12px;
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    background: var(--header-bg, #1a1a1a); /* 中性提示条：随主题明暗，不用主题绿 tint */
+    font-size: 12px;
+}
+.agent-mkt-uv-txt { color: var(--text-secondary, #999); }
+/* 「立即安装 uv」按钮覆盖 kb-create-btn 主题绿底：与市场统一 --mkt-btn-* 配色 */
+.agent-mkt-uv .kb-create-btn {
+    background: var(--mkt-btn-bg, #fafafa);
+    color: var(--mkt-btn-fg, #333);
+    border: 1px solid var(--border, #333);
+}
+.agent-mkt-uv .kb-create-btn:hover { filter: brightness(1.25); border-color: var(--text-secondary, #999); }
+
+.agent-mkt-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); /* TRAE 同款双列卡片网格 */
+    gap: 12px;
+}
+.agent-mkt-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--border, #333);
+    border-radius: 12px;
+    background: var(--panel-bg, #222);
+    transition: border-color 0.15s ease;
+}
+.agent-mkt-card:hover { border-color: var(--text-secondary, #999); }
+.agent-mkt-badge {
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--hover, #2a2a2a); /* 徽标底中性化：随主题明暗 */
+    color: var(--text-secondary, #999);
+    font-size: 16px;
+    font-weight: 600;
+    overflow: hidden; /* 图标图片裁切在圆角内 */
+}
+/* 服务端配置的插件图标（阶段一百一十三增补）：铺满徽标块，加载失败由 JS 降级首字母 */
+.agent-mkt-badge img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.agent-mkt-info { flex: 1; min-width: 0; }
+.agent-mkt-title { font-size: 13px; font-weight: 600; color: var(--text, #ddd); }
+.agent-mkt-desc {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2; /* 描述两行截断，卡片等高（TRAE 同款） */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.agent-mkt-cmd {
+    margin-top: 5px;
+    font-size: 11px;
+    color: var(--text-secondary, #999); /* 命令预览中性化：等宽字体已有区分度，不用主题绿 */
+    font-family: Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.agent-mkt-install { flex-shrink: 0; padding: 6px 14px; font-size: 12px; }
+/* 安装按钮：TRAE CN 同款按钮配色（--mkt-btn-* 归口，随主题明暗切换） */
+.agent-mkt-install.kb-create-btn,
+.agent-mkt-install {
+    background: var(--mkt-btn-bg, #fafafa);
+    color: var(--mkt-btn-fg, #333);
+    border: 1px solid var(--border, #333);
+}
+.agent-mkt-install:hover { filter: brightness(1.25); border-color: var(--text-secondary, #999); } /* hover 微亮+边框加深 */
+.agent-mkt-install.installed {
+    opacity: 0.55;
+    cursor: default;
+}
+.agent-mkt-empty {
+    grid-column: 1 / -1;
+    padding: 40px 0;
+    text-align: center;
+    color: var(--text-secondary, #999);
+    font-size: 12.5px;
+}
+
+/* 后台管理：插件卡片标题行小图标（admin → MCP 插件库，加载失败自动隐藏降级） */
+.admin-plugin-icon {
+    width: 18px;
+    height: 18px;
+    margin-right: 6px;
+    border-radius: 4px;
+    object-fit: cover;
+    vertical-align: -3px;
+}
+
 .agent-mcp-help-blk { margin: 3px 0 5px; }
 
 .agent-mcp-help-label {
@@ -5870,7 +6042,7 @@ html.m #list-panel.list-collapsed {
     border-radius: 10px;
 }
 
-.agent-mcp-market-card:hover { border-color: var(--primary, #07c160); }
+.agent-mcp-market-card:hover { border-color: var(--text-secondary, #999); }
 
 .agent-mcp-market-badge {
     flex-shrink: 0;
@@ -5880,8 +6052,8 @@ html.m #list-panel.list-collapsed {
     align-items: center;
     justify-content: center;
     border-radius: 8px;
-    background: var(--primary, #07c160);
-    color: #fff;
+    background: var(--hover, #2a2a2a); /* 徽标中性化：随主题明暗，不用主题绿 */
+    color: var(--text-secondary, #999);
     font-size: 15px;
     font-weight: 700;
 }
@@ -5918,6 +6090,13 @@ html.m #list-panel.list-collapsed {
     padding: 5px 16px !important;
     font-size: 12px !important;
 }
+/* 「使用」按钮覆盖 kb-create-btn 主题绿底：与插件市场统一 --mkt-btn-* 配色 */
+.agent-mcp-market-use.kb-create-btn {
+    background: var(--mkt-btn-bg, #fafafa);
+    color: var(--mkt-btn-fg, #333);
+    border: 1px solid var(--border, #333);
+}
+.agent-mcp-market-use.kb-create-btn:hover { filter: brightness(1.25); border-color: var(--text-secondary, #999); }
 
 /* 服务器行包裹层与展开工具清单（行首 ▸/▾ 箭头 + 工具名/描述两列） */
 .agent-mcp-server-wrap {

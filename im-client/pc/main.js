@@ -5,6 +5,9 @@
 const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const https = require('https');
+const { spawn } = require('child_process');
 const agentExecutor = require('./agent-executor.js');
 // 阶段九十：PC 端用户自定义 MCP 服务器管理器（本地 stdio 常驻会话/工具发现/调用，执行器经 require 直接调用）
 const mcpManager = require('./mcp-manager.js');
@@ -662,6 +665,70 @@ ipcMain.handle('mcp:sync-state', function (event, username) {
     }
     return { tools: mcpManager.listTools(uname), status: mcpManager.status(uname) };
 });
+
+// ===== 阶段一百一十三：uv 工具链自动安装（fetch/sqlite 等 Python 系插件依赖） =====
+// 安装到用户目录 ~/.im-mcp/bin（无需管理员权限、不改系统 PATH），mcp-manager spawn 时
+// 将该目录前置到 PATH 首位；zip 直接取 uv 官方 release（uvx.exe 位于压缩包根目录）
+const UV_BIN_DIR = path.join(os.homedir(), '.im-mcp', 'bin');
+const UV_X_EXE = path.join(UV_BIN_DIR, 'uvx.exe');
+const UV_ZIP_URL = 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';
+let uvInstalling = false; // 防并发安装
+
+ipcMain.handle('mcp:uv-status', function () {
+    return { installed: fs.existsSync(UV_X_EXE), dir: UV_BIN_DIR, installing: uvInstalling };
+});
+
+ipcMain.handle('mcp:uv-install', function () {
+    if (fs.existsSync(UV_X_EXE)) return Promise.resolve({ ok: true, installed: true, msg: 'uv 工具链已安装' });
+    if (uvInstalling) return Promise.resolve({ ok: false, msg: '正在安装中，请稍候' });
+    uvInstalling = true;
+    return uvDownloadInstall().then(function (r) { uvInstalling = false; return r; },
+        function (e) { uvInstalling = false; return { ok: false, msg: (e && e.message) || '安装失败' }; });
+});
+
+// 下载（跟随 302 重定向：GitHub release latest 跳对象存储）→ PowerShell Expand-Archive 解压 → 校验 uvx.exe
+function uvDownloadInstall() {
+    return new Promise(function (resolve) {
+        const tmpZip = path.join(os.tmpdir(), 'im-uv-toolchain.zip');
+        const doGet = function (url, redirectLeft) {
+            if (redirectLeft < 0) { resolve({ ok: false, msg: '下载失败：重定向次数过多' }); return; }
+            const req = https.get(url, { headers: { 'User-Agent': 'im-pc-client' }, timeout: 60000 }, function (resp) {
+                if (resp.statusCode >= 301 && resp.statusCode <= 308 && resp.headers.location) {
+                    resp.resume();
+                    doGet(resp.headers.location, redirectLeft - 1);
+                    return;
+                }
+                if (resp.statusCode !== 200) {
+                    resp.resume();
+                    resolve({ ok: false, msg: '下载失败：HTTP ' + resp.statusCode + '（网络受限时可手动安装 uv 后重启客户端）' });
+                    return;
+                }
+                const out = fs.createWriteStream(tmpZip);
+                out.on('finish', function () { out.close(function () { unzipUv(tmpZip, resolve); }); });
+                out.on('error', function (e) { resolve({ ok: false, msg: '写入临时文件失败：' + e.message }); });
+                resp.pipe(out);
+            });
+            req.on('timeout', function () { req.destroy(new Error('下载超时（60 秒无数据），请检查网络')); });
+            req.on('error', function (e) { resolve({ ok: false, msg: '下载失败：' + e.message }); });
+        };
+        doGet(UV_ZIP_URL, 5);
+    });
+}
+
+function unzipUv(zipPath, resolve) {
+    try { fs.mkdirSync(UV_BIN_DIR, { recursive: true }); } catch (e) { }
+    // 解压用系统 PowerShell（Windows 内置 Expand-Archive，无第三方依赖）
+    const ps = spawn('powershell.exe', ['-NoProfile', '-Command',
+        'Expand-Archive -Force -LiteralPath "' + zipPath + '" -DestinationPath "' + UV_BIN_DIR + '"'], { windowsHide: true });
+    let errOut = '';
+    ps.stderr.on('data', function (d) { errOut += d; });
+    ps.on('close', function (code) {
+        try { fs.unlinkSync(zipPath); } catch (e) { }
+        if (code === 0 && fs.existsSync(UV_X_EXE)) resolve({ ok: true, msg: 'uv 工具链安装完成' });
+        else resolve({ ok: false, msg: '解压失败：' + ((errOut.trim().split('\n')[0]) || ('退出码 ' + code)) });
+    });
+    ps.on('error', function (e) { resolve({ ok: false, msg: '解压启动失败：' + e.message }); });
+}
 
 // 主聊天窗口推送一批更早历史图片：转发查看器窗口（列表头部插入，联动翻页/缩略图）
 ipcMain.on('image:more', function (event, urls) {

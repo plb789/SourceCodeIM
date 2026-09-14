@@ -200,6 +200,13 @@ contextBridge.exposeInMainWorld('desktop', {
     mcpSyncState: function (username) {
         return ipcRenderer.invoke('mcp:sync-state', username);
     },
+    // ===== 阶段一百一十三：uv 工具链自动安装（Python 系插件依赖；状态查询/触发安装） =====
+    mcpUvStatus: function () {
+        return ipcRenderer.invoke('mcp:uv-status');
+    },
+    mcpUvInstall: function () {
+        return ipcRenderer.invoke('mcp:uv-install');
+    },
     // ===== 阶段七十七：自定义标题栏（Electron titleBarOverlay）=====
     // 主题切换时同步原生窗口按钮配色（浅色 #f5f5f5/#333333，深色 #1a1a1a/#e0e0e0，与 style.css --titlebar-* 同值）
     setTitlebarColors: function (color, symbolColor) {
