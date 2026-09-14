@@ -287,5 +287,11 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('browser:file-saved', function (event, info) {
             callback(info);
         });
+    },
+    // ===== 阶段一百三十：本地 LSP 悬停（gopls/clangd/pyright 真实类型推导，TRAE 同构） =====
+    // req = {tab_id, text, line, character}（页面不持有绝对路径，主进程按 tab_id → tab.filePath 归口；
+    // 行列零基 LSP 坐标）。返回 Promise<{markdown, range} | null>，超时/未装服务器返回 null 由 viewer 页回落静态表
+    lspHover: function (req) {
+        return ipcRenderer.invoke('lsp:hover', req || {});
     }
 });

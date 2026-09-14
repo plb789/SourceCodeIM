@@ -356,6 +356,13 @@ ipcMain.on('agent:bg', function (event, req) {
     agentExecutor.requestBg(String((req && req.username) || ''));
 });
 
+// 阶段一百三十：本地 LSP 悬停（gopls/clangd/pyright 真实类型推导）——渲染层 viewer 页经
+// desktop.lspHover 桥接至此，路径按 tab_id → tab.filePath 归口（页面不持有绝对路径），
+// 未装语言服务器/超时/异常一律返回 null，viewer 页回落内置静态文档表
+ipcMain.handle('lsp:hover', function (event, req) {
+    return browserManager.lspHover(req || {});
+});
+
 // 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑 ← 服务端下行 msg 64 桥接）——
 // 与 agent:exec 同款：执行前按请求用户名注入沙箱白名单，路径校验/限额归口 agent-executor.js；
 // 克隆进度多帧：执行器 onProgress 回调 → 'agent:fileop-progress' IPC 推回渲染层（渲染层补 req_id 转发 65 帧到服务端）
@@ -806,7 +813,7 @@ app.whenReady().then(function () {
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=128');
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=129'); // v=129：LSP 悬停优先层（阶段一百三十）
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,
@@ -834,6 +841,7 @@ app.whenReady().then(function () {
 app.on('will-quit', function () {
     globalShortcut.unregisterAll();
     try { mcpManager.disposeAll(); } catch (e) {} // 阶段九十：本机 MCP 服务器进程随应用退出全量回收
+    try { browserManager.lspShutdown(); } catch (e) {} // 阶段一百三十：LSP 语言服务器子进程随应用退出全量回收
 });
 
 app.on('window-all-closed', function () {

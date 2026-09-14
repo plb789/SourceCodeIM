@@ -1178,6 +1178,106 @@
                               : new monaco.Range(position.lineNumber, Math.max(1, open + 1), position.lineNumber, Math.max(2, open + 2));
                 return { range: range, contents: contents };
             }
+            // ===== 阶段一百三十：LSP 悬停优先层（PC 端真语言服务器 gopls/clangd/pyright，TRAE 同构） =====
+            // 链路：Monaco provideHover → 本页（iframe）→ 宿主页 __imViewerHost/desktop 桥 → 主进程
+            // lsp-manager → 语言服务器子进程（stdio JSON-RPC）。800ms 竞速：命中渲染 LSP 真实类型推导
+            // 结果（签名+注释文档 Markdown，含项目内符号精度）；超时/未装服务器/无桥（Web 端浏览器）
+            // 一律 null，回落下方五级静态命中。两层并存互不影响：LSP 是增强，静态表是底线。
+            function fvLspBridge() { // 桥解析：独立查看窗口（viewer-preload）→ 宿主页 __imViewerHost（iframe 场景）→ desktop 兜底
+                try { if (typeof window.imviewer !== 'undefined' && window.imviewer && window.imviewer.lspHover) return window.imviewer; } catch (e) {}
+                try { var h = window.parent && window.parent.__imViewerHost; if (h && h.lspHover) return h; } catch (e) {}
+                try {
+                    var d = (typeof window.desktop !== 'undefined' && window.desktop) || (window.parent && window.parent.desktop) || null;
+                    if (d && d.lspHover) return d;
+                } catch (e) {}
+                return null;
+            }
+            var LSP_LANGS = { go: 1, c: 1, cpp: 1, python: 1 }; // LSP 覆盖语言（JS/TS 用 Monaco 内置 TS 服务，无需 LSP）
+            function fvLspHover(model, position) {
+                var br = fvLspBridge();
+                // 仅真实文件标签（data.kind==='file'）走 LSP：diff/commit/报告无本地文件，静态表接管
+                if (!br || !data || data.kind !== 'file' || !data.tab_id) return Promise.resolve(null);
+                var langId = model.getLanguageId();
+                if (!LSP_LANGS[langId]) return Promise.resolve(null);
+                var req = {
+                    tab_id: data.tab_id,
+                    text: model.getValue(),           // 当前缓冲（含未保存编辑，LSP 侧 didChange 实时同步）
+                    line: position.lineNumber - 1,    // Monaco 一基 → LSP 零基
+                    character: position.column - 1
+                };
+                return Promise.race([
+                    br.lspHover(req).catch(function () { return null; }),
+                    new Promise(function (res) { setTimeout(function () { res(null); }, 800); }) // 竞速时限：TRAE 同款即时反馈
+                ]).then(function (r) {
+                    if (!r || !r.markdown) return null;
+                    var range;
+                    if (r.range && r.range.start && r.range.end) { // LSP 零基 → Monaco 一基
+                        range = new monaco.Range(r.range.start.line + 1, r.range.start.character + 1,
+                                                 r.range.end.line + 1, r.range.end.character + 1);
+                    } else {
+                        var w = model.getWordAtPosition(position);
+                        range = w ? new monaco.Range(position.lineNumber, w.startColumn, position.lineNumber, w.endColumn) : undefined;
+                    }
+                    return { range: range, contents: [{ value: r.markdown }] };
+                });
+            }
+            function fvStaticHover(model, position) { // 五级静态命中（原 provideHover 同步体平移，LSP 未命中时兜底）
+                // getWordAtPosition（非 Until）：Until 只返回悬停点之前的部分词
+                // （悬停 append 中段只得 "app"，永不命中符号表），At 才是包含该列的完整词
+                var word = model.getWordAtPosition(position);
+                var langId = model.getLanguageId();
+                var tables = fvHoverTables(model);
+                var contents = [];
+                // ① Go 内建函数/类型：中文文档卡（TRAE 同构：签名代码块 + 说明）
+                if (word && langId === 'go' && (GO_BUILTINS[word.word] || GO_TYPES[word.word])) {
+                    var gb = GO_BUILTINS[word.word] || GO_TYPES[word.word];
+                    contents.push({ value: '```go\n' + gb.sig + '\n```' });
+                    contents.push({ value: (GO_TYPES[word.word] ? '内建类型\n\n' : '内建函数\n\n') + gb.doc });
+                    return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
+                }
+                // ①b Go 标准库限定名（pkg.Member）：悬停词前紧邻 "pkg." → 查 GO_STDLIB
+                //（fmt.Sprintf / strings.TrimSpace / json.Marshal 等高频调用，TRAE 同款出卡）
+                if (word && langId === 'go' && GO_STDLIB) {
+                    var hoverLine = model.getLineContent(position.lineNumber) || '';
+                    var pkgm = /([A-Za-z_]\w*)\.$/.exec(hoverLine.substring(0, word.startColumn - 1));
+                    if (pkgm && GO_STDLIB[pkgm[1]] && GO_STDLIB[pkgm[1]][word.word]) {
+                        var se = GO_STDLIB[pkgm[1]][word.word];
+                        contents.push({ value: '```go\n' + se.sig + '\n```' });
+                        contents.push({ value: '包 ' + pkgm[1] + ' · 标准库\n\n' + se.doc });
+                        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
+                    }
+                }
+                // ② 本项目函数/类（diff 左右栏各自内容独立扫描）
+                if (word) {
+                    var hits = tables.funcs.filter(function (s) { return s.name === word.word; });
+                    if (hits.length) {
+                        hits.slice(0, 3).forEach(function (s) { // 同名重载最多展示 3 条声明
+                            var raw = (model.getLineContent(s.line) || '').trim();
+                            if (raw.length > 200) raw = raw.substring(0, 200) + '…';
+                            contents.push({ value: '```' + langId + '\n' + raw + '\n```' });
+                            contents.push({ value: (s.kind === 'class' ? '◇ 类' : 'ƒ 函数') + ' · 定义于本项目 · 第 ' + s.line + ' 行' });
+                        });
+                        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
+                    }
+                    // ③ 变量/形参：同名多条取悬停行之前最近的声明（作用域近似）
+                    var vh = tables.vars.filter(function (v) { return v.name === word.word; });
+                    if (vh.length) {
+                        var pick = null;
+                        vh.forEach(function (v) { if (v.line <= position.lineNumber && (!pick || v.line > pick.line)) pick = v; });
+                        if (!pick) pick = vh[0];
+                        contents.push({ value: '```' + langId + '\n' + word.word + (pick.type ? ' ' + pick.type : '') + '\n```' });
+                        contents.push({ value: (pick.kind === 'param' ? '参数' : (pick.kind === 'field' ? '字段' : '变量')) +
+                            (pick.type ? ' · 类型 ' + pick.type : '') +
+                            (pick.owner ? ' · 属于 ' + pick.owner : '') +
+                            ' · 定义于本项目 · 第 ' + pick.line + ' 行' });
+                        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
+                    }
+                }
+                // ④ 实参/逗号/空白悬停：所在调用函数签名卡（word 为空也生效）
+                var call = fvCallHover(model, position, langId, tables);
+                if (call) return call;
+                return null;
+            }
             (function fvRegisterHover() { // 按 MONACO_LANG 的语言去重注册（同一 provider 逻辑覆盖全语言）
                 var seen = {};
                 Object.keys(MONACO_LANG).forEach(function (ext) {
@@ -1186,61 +1286,11 @@
                     seen[lang] = true;
                     monaco.languages.registerHoverProvider(lang, {
                         provideHover: function (model, position) {
-                            // getWordAtPosition（非 Until）：Until 只返回悬停点之前的部分词
-                            // （悬停 append 中段只得 "app"，永不命中符号表），At 才是包含该列的完整词
-                            var word = model.getWordAtPosition(position);
-                            var langId = model.getLanguageId();
-                            var tables = fvHoverTables(model);
-                            var contents = [];
-                            // ① Go 内建函数/类型：中文文档卡（TRAE 同构：签名代码块 + 说明）
-                            if (word && langId === 'go' && (GO_BUILTINS[word.word] || GO_TYPES[word.word])) {
-                                var gb = GO_BUILTINS[word.word] || GO_TYPES[word.word];
-                                contents.push({ value: '```go\n' + gb.sig + '\n```' });
-                                contents.push({ value: (GO_TYPES[word.word] ? '内建类型\n\n' : '内建函数\n\n') + gb.doc });
-                                return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
-                            }
-                            // ①b Go 标准库限定名（pkg.Member）：悬停词前紧邻 "pkg." → 查 GO_STDLIB
-                            //（fmt.Sprintf / strings.TrimSpace / json.Marshal 等高频调用，TRAE 同款出卡）
-                            if (word && langId === 'go' && GO_STDLIB) {
-                                var hoverLine = model.getLineContent(position.lineNumber) || '';
-                                var pkgm = /([A-Za-z_]\w*)\.$/.exec(hoverLine.substring(0, word.startColumn - 1));
-                                if (pkgm && GO_STDLIB[pkgm[1]] && GO_STDLIB[pkgm[1]][word.word]) {
-                                    var se = GO_STDLIB[pkgm[1]][word.word];
-                                    contents.push({ value: '```go\n' + se.sig + '\n```' });
-                                    contents.push({ value: '包 ' + pkgm[1] + ' · 标准库\n\n' + se.doc });
-                                    return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
-                                }
-                            }
-                            // ② 本项目函数/类（diff 左右栏各自内容独立扫描）
-                            if (word) {
-                                var hits = tables.funcs.filter(function (s) { return s.name === word.word; });
-                                if (hits.length) {
-                                    hits.slice(0, 3).forEach(function (s) { // 同名重载最多展示 3 条声明
-                                        var raw = (model.getLineContent(s.line) || '').trim();
-                                        if (raw.length > 200) raw = raw.substring(0, 200) + '…';
-                                        contents.push({ value: '```' + langId + '\n' + raw + '\n```' });
-                                        contents.push({ value: (s.kind === 'class' ? '◇ 类' : 'ƒ 函数') + ' · 定义于本项目 · 第 ' + s.line + ' 行' });
-                                    });
-                                    return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
-                                }
-                                // ③ 变量/形参：同名多条取悬停行之前最近的声明（作用域近似）
-                                var vh = tables.vars.filter(function (v) { return v.name === word.word; });
-                                if (vh.length) {
-                                    var pick = null;
-                                    vh.forEach(function (v) { if (v.line <= position.lineNumber && (!pick || v.line > pick.line)) pick = v; });
-                                    if (!pick) pick = vh[0];
-                                    contents.push({ value: '```' + langId + '\n' + word.word + (pick.type ? ' ' + pick.type : '') + '\n```' });
-                                    contents.push({ value: (pick.kind === 'param' ? '参数' : (pick.kind === 'field' ? '字段' : '变量')) +
-                                        (pick.type ? ' · 类型 ' + pick.type : '') +
-                                        (pick.owner ? ' · 属于 ' + pick.owner : '') +
-                                        ' · 定义于本项目 · 第 ' + pick.line + ' 行' });
-                                    return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
-                                }
-                            }
-                            // ④ 实参/逗号/空白悬停：所在调用函数签名卡（word 为空也生效）
-                            var call = fvCallHover(model, position, langId, tables);
-                            if (call) return call;
-                            return null;
+                            // 阶段一百三十：LSP 优先 → 静态兜底（Promise 链；无桥即 Web 端浏览器，直落静态表）
+                            return fvLspHover(model, position).then(function (lsp) {
+                                if (lsp) return lsp;
+                                return fvStaticHover(model, position);
+                            });
                         }
                     });
                 });

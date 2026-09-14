@@ -81,6 +81,86 @@ func InitMemory(cfg *config.Config) {
 	}
 	logger.Info("智能体长期记忆已启用：top_k=%d，上限=%d 条/用户+智能体，去重阈值=%.2f，提取模型=%s",
 		memTopK, memMaxPerAgent, memDedupThreshold, map[bool]string{true: memExtractUser, false: "智能体当前绑定"}[memExtractUser != ""])
+	// 阶段一百零七：启动时异步补齐降级记忆的向量索引（向量化服务不可用期间落库的记忆仅存 MySQL 文本，
+	// 向量召回永远查不到——表现为记忆列表可见但 AI 问答不注入；不阻塞启动）
+	go memRepairVectors()
+}
+
+// ===== 阶段一百零七：启动时记忆向量补齐 =====
+// 背景：向量化服务不可用期间（如本地 Ollama 未启动），memSaveItem 会降级为仅 MySQL 文本落库
+// （跳过向量索引），此后 memQueryTop 纯向量召回永远查不到这些记忆——表现为记忆列表里看得到、
+// AI 问答却不注入。本逻辑在启动且 embedding 可用时扫描全部记忆，逐条按文档 ID（m<memid>）
+// 检查向量集合，缺失才补写；幂等可重复执行（已存在即跳过），失败仅记日志下次启动重试。
+
+// memRepairVectors 补齐缺失向量索引的记忆（按 agent 分组批量向量化，减少 embedding 请求次数）
+func memRepairVectors() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("记忆向量补齐异常恢复：%v", r)
+		}
+	}()
+	if !kbEmbedEnabled() {
+		return // embedding 未配置，补齐无意义（保存链路同样处于降级态）
+	}
+	var rows []model.AIMemory
+	if err := store.DB.Order("agent_id ASC, id ASC").Find(&rows).Error; err != nil {
+		logger.Warn("记忆向量补齐查询失败：%v", err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	// 按 agent 分组（向量集合按 mem_<agentID> 划分，逐集合检查与补写）
+	groups := make(map[uint][]model.AIMemory)
+	for _, r := range rows {
+		groups[r.AgentID] = append(groups[r.AgentID], r)
+	}
+	repaired := 0
+	for agentID, items := range groups {
+		col, err := memGetCollection(agentID)
+		if err != nil {
+			logger.Warn("记忆向量补齐集合获取失败（agent=%d）：%v", agentID, err)
+			continue
+		}
+		// 逐条按文档 ID 精确判断向量索引是否存在（chromem-go GetByID：不存在返回错误）
+		var missing []model.AIMemory
+		for _, it := range items {
+			if _, err := col.GetByID(context.Background(), fmt.Sprintf("m%d", it.ID)); err == nil {
+				continue // 向量索引已在，跳过（幂等：重启不重复写）
+			}
+			missing = append(missing, it)
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		texts := make([]string, 0, len(missing))
+		for _, it := range missing {
+			texts = append(texts, it.Content)
+		}
+		vecs, err := kbEmbed(texts) // 内部按 batch_size 自动分批请求
+		if err != nil || len(vecs) != len(missing) {
+			logger.Warn("记忆向量补齐向量化失败（agent=%d，待补 %d 条），下次启动重试：%v", agentID, len(missing), err)
+			continue
+		}
+		docs := make([]chromem.Document, 0, len(missing))
+		for i, it := range missing {
+			docs = append(docs, chromem.Document{
+				ID:        fmt.Sprintf("m%d", it.ID),
+				Metadata:  map[string]string{"username": it.Username, "memid": strconv.FormatUint(uint64(it.ID), 10)},
+				Content:   it.Content,
+				Embedding: vecs[i],
+			})
+		}
+		if err := col.AddDocuments(context.Background(), docs, 1); err != nil {
+			logger.Warn("记忆向量补齐写入失败（agent=%d，%d 条）：%v", agentID, len(docs), err)
+			continue
+		}
+		repaired += len(docs)
+		logger.Info("记忆向量补齐完成（agent=%d，补写 %d 条降级记忆）", agentID, len(docs))
+	}
+	if repaired > 0 {
+		logger.Info("记忆向量补齐汇总：共修复 %d 条降级记忆，向量召回恢复可用", repaired)
+	}
 }
 
 // memWorker 提取任务消费者（串行：同一时刻只跑一次提取模型调用，天然限流）

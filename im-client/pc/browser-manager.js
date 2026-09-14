@@ -22,6 +22,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { app, ipcMain, session, webContents, shell } = require('electron');
+const lspManager = require('./lsp-manager.js'); // 阶段一百三十：本地 LSP 悬停（gopls/clangd/pyright 真实类型推导）
 
 // ===== 模块状态 =====
 let mainWindow = null;       // 主窗口引用（init 时注入）
@@ -611,6 +612,21 @@ function taskChangeOp(payload, op) {
     return r;
 }
 
+// lspHover 阶段一百三十：LSP 悬停归口（tab_id → tab.filePath，页面不持有绝对路径，安全边界同 viewerSave）。
+// 仅 file 标签（真实磁盘文件）走 LSP 真实类型推导；diff/commit/报告等数据标签无本地文件，
+// 由前端静态文档表兜底（file-viewer.html 五级命中）。req = {tab_id, text, line, character}
+function lspHover(payload) {
+    const tabId = String((payload && payload.tab_id) || '');
+    const tab = tabs.find(function (t) { return String(t.id) === tabId && t.kind === 'file'; });
+    if (!tab || !tab.filePath) return Promise.resolve(null);
+    return lspManager.hover({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        line: parseInt(payload && payload.line, 10) || 0,
+        character: parseInt(payload && payload.character, 10) || 0
+    });
+}
+
 // ===== Agent 工具实现（agent-executor.js 归口调用，与主进程同上下文） =====
 
 // waitLoaded 等待当前加载结束（timeoutMs 兜底返回，不视为失败——部分站点长连接导致
@@ -1049,5 +1065,7 @@ module.exports = {
     setTaskBackupApi: setTaskBackupApi, // 阶段九十七：任务备份查询/保留/撤销注入
     setViewerUrl: setViewerUrl,
     agentExecute: agentExecute,
-    statePush: statePush
+    statePush: statePush,
+    lspHover: lspHover,         // 阶段一百三十：LSP 悬停归口（main.js ipcMain 'lsp:hover' 调用）
+    lspShutdown: function () { try { lspManager.shutdownAll(); } catch (e) {} } // 阶段一百三十：应用退出全量回收语言服务器子进程
 };

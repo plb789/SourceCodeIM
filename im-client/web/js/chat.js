@@ -4442,7 +4442,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=128'; // 与主页面同源（服务端同源静态页），可直调 contentWindow
+        frame.src = 'file-viewer.html?v=129'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=129：LSP 悬停优先层
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -4490,6 +4490,14 @@
             if (st && st.kind === 'file' && String(st.active_id || '') === String(tabId)) {
                 browserRenderCrumbs(st.url, st);
             }
+        },
+        // 阶段一百三十：LSP 悬停桥接（viewer 页 iframe 无 preload，经宿主 desktop.lspHover 转主进程
+        // lsp-manager 子进程：gopls/clangd/pyright 真实类型推导；未装/超时返回 null 回落静态表）
+        lspHover: function (req) {
+            // 非 PC 端（Web 浏览器/手机 APP 无 desktop 桥）静默返回 null 回落静态表，
+            // 防 window.desktop 不存在时同步 TypeError（catch 拦不住同步抛出）
+            if (!window.desktop || !window.desktop.lspHover) return Promise.resolve(null);
+            return window.desktop.lspHover(req);
         }
     };
 

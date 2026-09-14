@@ -23,5 +23,10 @@ contextBridge.exposeInMainWorld('imviewer', {
     // 阶段九十七：任务变更"撤销"（还原任务前内容，主进程重读盘并重注入 payload 刷新）
     taskRevert: function (tabId) {
         return ipcRenderer.invoke('browser:task-revert', { tab_id: String(tabId || '') });
+    },
+    // 阶段一百三十：本地 LSP 悬停（gopls/clangd/pyright 真实类型推导）——独立查看窗口场景走本桥；
+    // req = {tab_id, text, line, character}，主进程按 tab_id → tab.filePath 归口（页面不持有绝对路径）
+    lspHover: function (req) {
+        return ipcRenderer.invoke('lsp:hover', req || {});
     }
 });
