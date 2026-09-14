@@ -6044,6 +6044,23 @@ html.m #list-panel.list-collapsed {
 
 .agent-mcp-market-card:hover { border-color: var(--text-secondary, #999); }
 
+/* 阶段一百一十五：MCP 列表行首字母徽标（内置行 + 用户插件行专用主题徽标，绿底白字；
+   与市场卡片徽标 market-badge 分离——市场保持中性化，列表行恢复 TRAE 同款主题色辨识度） */
+.agent-mcp-badge {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: var(--primary, #07c160);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
 .agent-mcp-market-badge {
     flex-shrink: 0;
     width: 34px;
@@ -6107,12 +6124,19 @@ html.m #list-panel.list-collapsed {
 
 .agent-mcp-caret {
     flex-shrink: 0;
-    width: 14px;
-    font-size: 10px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    font-size: 15px; /* 阶段一百一十五：三角形加大提升可点性 */
+    line-height: 1;
     color: var(--text-secondary, #999);
     cursor: pointer;
     text-align: center;
     user-select: none;
+    transition: background 0.15s, color 0.15s;
 }
 
 .agent-mcp-caret:hover { color: var(--primary, #07c160); }
@@ -6124,10 +6148,11 @@ html.m #list-panel.list-collapsed {
     gap: 3px;
 }
 
+/* 阶段一百一十五：工具清单两列对齐（TRAE CN 同款）——名称列固定宽度左对齐，说明列统一从同一 X 位置开始 */
 .agent-mcp-tool-row {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(130px, 170px) 1fr;
+    gap: 16px;
     font-size: 11.5px;
     line-height: 1.5;
 }
@@ -6136,7 +6161,12 @@ html.m #list-panel.list-collapsed {
     flex-shrink: 0;
     font-family: 'JetBrains Mono', 'Consolas', monospace;
     font-size: 11px;
+    font-weight: 600;
     color: var(--text, #333);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    justify-self: start;
 }
 
 .agent-mcp-tool-desc {
@@ -7819,6 +7849,20 @@ html.m #list-panel.list-collapsed {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* 阶段一百一十四：内置服务器小标签（TRAE Built-in 同款，中性配色随主题） */
+.agent-mcp-builtin-tag {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--active, #383838);
+    color: var(--text-secondary, #999);
+    flex-shrink: 0;
 }
 
 .agent-mcp-server-meta {

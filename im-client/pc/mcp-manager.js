@@ -32,6 +32,33 @@ const RESTART_DELAY_MS = 3 * 1000;        // 崩溃重启退避
 const RESTART_MAX = 3;                    // 连续崩溃重启上限（超过置 error 等用户手动重连）
 const MAX_SERVERS_PER_USER = 10;
 
+// ===== 阶段一百一十四：内置 Computer Use 服务器（TRAE Built-in 同款：随客户端分发，不占用户配置额） =====
+// 本地 stdio MCP Server（mcp-computer-use.js），让 AI 通过截图+键鼠操作桌面 GUI；可整体启停，不入 agent_mcp.json
+// 运行时用 Electron 自身（process.execPath + ELECTRON_RUN_AS_NODE=1，打包后等效纯 Node）——
+// 不依赖系统 node 命令（打包环境 node 不在 PATH，spawn ENOENT 是内置服务器连接错误的根因）
+const BUILTIN_SERVERS = [
+    {
+        name: 'computer-use',
+        title: 'Computer Use（内置）',
+        description: '让 AI 操作桌面 GUI：截屏查看画面、点击/滚动/拖拽/键入/发送按键、列出与启动应用',
+        command: process.execPath,
+        args: [path.join(__dirname, 'mcp-computer-use.js')],
+        env: { ELECTRON_RUN_AS_NODE: '1' },
+        enabled: true,
+        builtin: true
+    }
+];
+let builtinEnabled = true; // 内置服务器总开关（main.js 经 setBuiltinEnabled 归口，存 mcp store 的 __builtin 键）
+
+function setBuiltinEnabled(v) {
+    builtinEnabled = !!v;
+    return builtinEnabled;
+}
+
+function builtinConfigs() {
+    return builtinEnabled ? BUILTIN_SERVERS.map(function (c) { return Object.assign({}, c); }) : [];
+}
+
 // 会话表：key = username + '\u0000' + serverName → session
 const sessions = {};
 
@@ -239,8 +266,10 @@ function normalizeTools(raw) {
 // ===== 对外 API =====
 
 // setConfig：main.js 在用户保存配置后调用，重建该用户的会话表（停用/删除的立即回收，新增/变更的重建）
+// 阶段一百一十四：内置 Computer Use 不入用户配置文件，在此合并（用户配置删改不影响内置服务器）
 function setConfig(username, servers) {
     const want = {};
+    builtinConfigs().forEach(function (cfg) { want[cfg.name] = cfg; });
     (servers || []).forEach(function (cfg) {
         if (!cfg || !cfg.name || !cfg.enabled) return;
         want[cfg.name] = cfg;
@@ -288,7 +317,7 @@ function listTools(username) {
     return out;
 }
 
-// 状态快照（设置面板刷新用）：[{name, status, statusMsg, toolCount}]
+// 状态快照（设置面板刷新用）：[{name, status, statusMsg, toolCount, builtin}]
 function status(username) {
     const out = [];
     Object.keys(sessions).forEach(function (k) {
@@ -298,7 +327,8 @@ function status(username) {
             name: s.cfg.name,
             status: s.status,
             status_msg: s.statusMsg,
-            tool_count: s.tools.length
+            tool_count: s.tools.length,
+            builtin: s.cfg.builtin === true
         });
     });
     return out;
@@ -324,8 +354,11 @@ function callTool(username, toolKey, params, cfgGetter) {
     if (!hit) {
         // 会话未连上：按服务器名兜底建连后重查（规整算法一致，能查到）
         const serverGuess = rest.slice(0, idx);
-        const cfg = cfgGetter ? cfgGetter(username, serverGuess) : null;
-        if (cfg && cfg.enabled) {
+        let cfg = cfgGetter ? cfgGetter(username, serverGuess) : null;
+        if (!cfg && serverGuess === 'computer-use') {
+            cfg = builtinConfigs().filter(function (c) { return c.name === 'computer-use'; })[0] || null; // 内置服务器不在用户配置，单独兜底
+        }
+        if (cfg && (cfg.enabled || cfg.builtin)) {
             const s = ensureSession(username, cfg);
             if (s.status === 'connected') {
                 s.tools.forEach(function (t) {
@@ -345,6 +378,10 @@ function callTool(username, toolKey, params, cfgGetter) {
         const parts = [];
         ((result && result.content) || []).forEach(function (c) {
             if (c && c.type === 'text' && typeof c.text === 'string') parts.push(c.text);
+            // 阶段一百一十四：ImageContent（Computer Use 截图）转为内联标记——服务端在截断前抽出并注入多模态消息
+            if (c && c.type === 'image' && c.data) {
+                parts.push('[[MCP_IMAGE:data:' + (c.mimeType || 'image/png') + ';base64,' + c.data + ']]');
+            }
         });
         let output = parts.join('\n');
         if (output.length > TOOL_OUT_MAX_CHARS) output = output.slice(0, TOOL_OUT_MAX_CHARS) + '\n…（输出过长已截断）';
@@ -455,4 +492,4 @@ function disposeAll() {
     Object.keys(sessions).forEach(function (k) { disposeSession(sessions[k]); });
 }
 
-module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey };
+module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs };

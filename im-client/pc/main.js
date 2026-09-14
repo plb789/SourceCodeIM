@@ -605,11 +605,34 @@ function mcpCfgGetter(username, serverName) {
 }
 agentExecutor.setMcpCfgGetter(mcpCfgGetter);
 
-// 拉取该用户的 MCP 服务器配置（设置面板回显）
+// 内置 Computer Use 服务器开关（mcp store 的 __builtin 键归口；默认启用，随客户端启动自动拉起）
+function mcpBuiltinEnabledLoad() {
+    const store = mcpStoreLoad();
+    return !(store.__builtin && store.__builtin.enabled === false);
+}
+mcpManager.setBuiltinEnabled(mcpBuiltinEnabledLoad());
+
+// 切换内置服务器开关（保存 + 重建全部用户会话；内置在 setConfig 内部合并）
+ipcMain.handle('mcp:builtin-toggle', function (event, payload) {
+    const enabled = !!(payload && payload.enabled);
+    const store = mcpStoreLoad();
+    store.__builtin = { enabled: enabled };
+    mcpStoreSave(store);
+    mcpManager.setBuiltinEnabled(enabled);
+    // 已登录用户全部重建（登录后首连由 mcp:sync-state 兜底，这里处理在线用户）
+    Object.keys(store).forEach(function (uname) {
+        if (uname === '__builtin') return;
+        const rec = store[uname];
+        if (rec && rec.servers) mcpManager.setConfig(uname, rec.servers);
+    });
+    return { ok: true, enabled: enabled };
+});
+
+// 拉取该用户的 MCP 服务器配置（设置面板回显）；builtinEnabled 供列表渲染内置行
 ipcMain.handle('mcp:get', function (event, username) {
     const store = mcpStoreLoad();
     const rec = store[String(username || '')];
-    return { servers: (rec && rec.servers) || [] };
+    return { servers: (rec && rec.servers) || [], builtinEnabled: mcpBuiltinEnabledLoad() };
 });
 
 // 保存配置（归一化落盘 + 重建常驻会话；工具清单上报由渲染层在会话就绪后经 msg 67 归口）

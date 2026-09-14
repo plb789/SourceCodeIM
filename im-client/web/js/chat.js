@@ -407,6 +407,7 @@
             startMcpStatusPoll();
             window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
                 agentMcpServers = (r && r.servers) || [];
+                agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
                 renderAgentMcpList();
             }).catch(function () {
                 renderAgentMcpList();
@@ -4181,6 +4182,7 @@
     var agentMcpListEl = document.getElementById('agent-mcp-list');
     var agentMcpEditEl = document.getElementById('agent-mcp-edit');
     var agentMcpServers = [];     // 编辑态：本机服务器配置（与主进程存储同构）
+    var agentMcpBuiltinEnabled = true; // 阶段一百一十四：内置 Computer Use 服务器开关（mcpGet 回填，toggle 走专用 IPC）
     var agentMcpEditing = -1;     // 当前编辑行索引（-1=新增）
     var agentMcpLiveStatus = [];  // 会话状态快照：[{name,status,status_msg,tool_count}]
     var agentMcpAllTools = [];    // 阶段一百一十一：全量工具快照 [{server,name,description}]（展开清单数据源）
@@ -4240,11 +4242,11 @@
     function renderAgentMcpList() {
         // 阶段一百零五：签名比对防闪烁——面板打开期间 1.2 秒轮询会话状态，每次回调都调本函数，
         // 状态无变化时跳过重建（原实现每次清空重建，MCP 面板开着列表就持续闪烁且悬停态丢失）
-        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools]);
+        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools, agentMcpBuiltinEnabled]);
         if (sig === renderAgentMcpList._sig) return;
         renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
-        if (!agentMcpServers.length) {
+        if (!agentMcpServers.length && !agentMcpBuiltinEnabled) {
             var empty = document.createElement('div');
             empty.className = 'agent-mcp-empty';
             // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
@@ -4252,6 +4254,101 @@
             agentMcpListEl.appendChild(empty);
             return;
         }
+        // 阶段一百一十四：内置 Computer Use 服务器行（TRAE Built-in 同款——常显首行、开关启停、无编辑/删除）
+        (function () {
+            var wrap = document.createElement('div');
+            wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded['computer-use'] ? ' expanded' : '');
+            var row = document.createElement('div');
+            row.className = 'agent-mcp-server-row';
+            var live = null;
+            agentMcpLiveStatus.forEach(function (s) { if (s.name === 'computer-use') live = s; });
+            var caret = document.createElement('span');
+            caret.className = 'agent-mcp-caret';
+            caret.textContent = agentMcpExpanded['computer-use'] ? '▾' : '▸';
+            caret.title = '展开/收起工具清单';
+            caret.addEventListener('click', function () {
+                agentMcpExpanded['computer-use'] = !agentMcpExpanded['computer-use'];
+                renderAgentMcpList();
+            });
+            var badge = document.createElement('span');
+            badge.className = 'agent-mcp-badge'; // 阶段一百一十五：与用户行同款主题徽标（原 market-badge 中性底与卡片同色，视觉无背景）
+            badge.textContent = 'C';
+            var info = document.createElement('div');
+            info.className = 'agent-mcp-server-info';
+            var name = document.createElement('span');
+            name.className = 'agent-mcp-server-name';
+            name.textContent = 'computer-use';
+            var btag = document.createElement('span');
+            btag.className = 'agent-mcp-builtin-tag';
+            btag.textContent = '内置';
+            name.appendChild(btag);
+            var metaline = document.createElement('div');
+            metaline.className = 'agent-mcp-server-metaline';
+            var dot = document.createElement('span');
+            dot.className = 'mcp-dot ' + (agentMcpBuiltinEnabled ? ((live && live.status) || 'connecting') : 'disabled');
+            dot.title = mcpStatusText(agentMcpBuiltinEnabled ? ((live && live.status) || 'connecting') : 'disabled');
+            var meta = document.createElement('span');
+            meta.className = 'agent-mcp-server-meta';
+            if (!agentMcpBuiltinEnabled) {
+                meta.textContent = '已停用';
+            } else {
+                meta.textContent = '桌面 GUI 操作 · 工具 ' + ((live && live.tool_count) || 0) + ' 个 · ' + mcpStatusText((live && live.status) || 'connecting');
+            }
+            metaline.appendChild(dot);
+            metaline.appendChild(meta);
+            info.appendChild(name);
+            info.appendChild(metaline);
+            row.appendChild(caret);
+            row.appendChild(badge);
+            row.appendChild(info);
+            var sw = document.createElement('span');
+            sw.className = 'mcp-switch' + (agentMcpBuiltinEnabled ? ' on' : '');
+            sw.title = agentMcpBuiltinEnabled ? '点击停用内置服务器' : '点击启用内置服务器';
+            var knob = document.createElement('span');
+            knob.className = 'mcp-switch-knob';
+            sw.appendChild(knob);
+            sw.addEventListener('click', function () {
+                var want = !agentMcpBuiltinEnabled;
+                window.desktop.mcpBuiltinToggle({ enabled: want }).then(function (r) {
+                    if (!r || !r.ok) { showToast((r && r.msg) || '切换失败'); return; }
+                    agentMcpBuiltinEnabled = !!r.enabled;
+                    agentMcpLastReport = ''; // 工具清单变化（内置工具随开关增减），允许重新上报
+                    startPcMcpReportLoop(12);
+                    renderAgentMcpList();
+                    showToast(r.enabled ? '已启用内置 Computer Use，正在建连并上报工具清单' : '已停用内置 Computer Use');
+                });
+            });
+            row.appendChild(sw);
+            wrap.appendChild(row);
+            if (agentMcpExpanded['computer-use']) {
+                var toolsBox = document.createElement('div');
+                toolsBox.className = 'agent-mcp-tools-box';
+                var tl = agentMcpAllTools.filter(function (t) { return t.server === 'computer-use'; });
+                if (!tl.length) {
+                    var tempty = document.createElement('div');
+                    tempty.className = 'agent-mcp-tool-empty';
+                    tempty.textContent = agentMcpBuiltinEnabled ? '暂无工具：连接中' : '已停用，启用后可见工具清单';
+                    toolsBox.appendChild(tempty);
+                } else {
+                    tl.forEach(function (t) {
+                        var tr = document.createElement('div');
+                        tr.className = 'agent-mcp-tool-row';
+                        var tn = document.createElement('span');
+                        tn.className = 'agent-mcp-tool-name';
+                        tn.textContent = t.tool || t.name; // 快照字段为 tool（阶段一百一十一误写 name 致名称列空白）
+                        var td = document.createElement('span');
+                        td.className = 'agent-mcp-tool-desc';
+                        td.textContent = t.description || '';
+                        td.title = t.description || '';
+                        tr.appendChild(tn);
+                        tr.appendChild(td);
+                        toolsBox.appendChild(tr);
+                    });
+                }
+                wrap.appendChild(toolsBox);
+            }
+            agentMcpListEl.appendChild(wrap);
+        })();
         agentMcpServers.forEach(function (sv, i) {
             // 阶段一百一十一：行包裹层——行本体 + 可展开工具清单区（TRAE CN 同款服务器行展开）
             var wrap = document.createElement('div');
@@ -4270,7 +4367,7 @@
             });
             // 阶段一百一十二：TRAE CN 同款行布局——徽标 + 两行信息（名称 / 状态灯+状态文字）+ 右侧启用开关
             var badge = document.createElement('span');
-            badge.className = 'agent-mcp-market-badge';
+            badge.className = 'agent-mcp-badge'; // 阶段一百一十五：与内置行统一用主题徽标（market-badge 中性底与卡片同色，视觉无背景）
             badge.textContent = (sv.name || '?').charAt(0).toUpperCase();
             var info = document.createElement('div');
             info.className = 'agent-mcp-server-info';
@@ -4346,7 +4443,7 @@
                         tr.className = 'agent-mcp-tool-row';
                         var tn = document.createElement('span');
                         tn.className = 'agent-mcp-tool-name';
-                        tn.textContent = t.name;
+                        tn.textContent = t.tool || t.name; // 快照字段为 tool（阶段一百一十一误写 name 致名称列空白）
                         var td = document.createElement('span');
                         td.className = 'agent-mcp-tool-desc';
                         td.textContent = t.description || '';
@@ -4366,6 +4463,7 @@
         if (!agentMcpSupported()) { showToast('仅 PC 客户端支持自定义 MCP 服务器'); return; }
         window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
             agentMcpServers = (r && r.servers) || [];
+            agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
             agentMcpLiveStatus = [];
             agentMcpEditEl.classList.add('hidden');
             if (agentMcpAddMenu) agentMcpAddMenu.classList.add('hidden'); // 阶段一百一十一：重置下拉与插件库视图（防上次打开残留）
@@ -4469,6 +4567,7 @@
     document.getElementById('agent-mcp-refresh').addEventListener('click', function () {
         window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
             agentMcpServers = (r && r.servers) || [];
+            agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
             renderAgentMcpList();
         });
         reportPcMcpTools();
@@ -11192,17 +11291,20 @@
         var prog = block.querySelector('.agent-tool-progress');
         if (prog) prog.remove(); // 阶段一百零九：进度展示随收尾一并清除（✓/✕ 接管）
         var outEl = block.querySelector('.agent-event-output');
+        // 阶段一百一十四：Computer Use 截图以 [[MCP_IMAGE:data:...]] 内联标记随结果下发（图像已注入多模态模型），
+        // 控制台文本区把超长 base64 标记替换为简短占位，避免渲染巨量乱码
+        var outText = String(ev.output || '').replace(/\[\[MCP_IMAGE:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\]\]/g, '📷 [屏幕截图已作为图像附件提供给 AI]');
         // 阶段七十五：run_command 有实时控制台时输出已在控制台流式展示，不再重复灌满详情区
         // （控制台保留完整流与退出码行；无控制台的兜底路径仍走详情区文本）
         if (block.querySelector('.agent-cmd-console')) {
             outEl.classList.add('hidden');
         } else {
-            outEl.textContent = ev.output || '';
+            outEl.textContent = outText;
             outEl.classList.remove('hidden');
         }
         // 阶段六十二：结果摘要行（输出首行常显）——"已编辑 main.go（+1 -1，34 字节）"/"命令已执行 xxx"/错误首行
         // +/-行数着色（git 同款绿/红）：仅带符号数字着色，替换处数/字节数等无符号数字不受影响
-        var firstLine = (ev.output || '').split('\n')[0] || '';
+        var firstLine = outText.split('\n')[0] || '';
         if (firstLine.length > 120) firstLine = firstLine.slice(0, 120) + '…';
         var resultLine = document.createElement('div');
         resultLine.className = 'agent-tool-result' + (ev.ok === false ? ' fail' : '');

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -945,6 +946,16 @@ func mcpCallToolWithProgress(ctx context.Context, serverName, tool string, argum
 	for _, c := range res.Content {
 		if tc, isText := c.(*mcp.TextContent); isText {
 			sb.WriteString(tc.Text)
+			continue
+		}
+		// 阶段一百一十四：ImageContent（Computer Use 截图等）转为内联标记——与 PC 端执行器约定一致，
+		// agentrun 侧在工具结果截断前统一抽出并注入多模态消息
+		if ic, isImage := c.(*mcp.ImageContent); isImage && len(ic.Data) > 0 {
+			mime := ic.MIMEType
+			if mime == "" {
+				mime = "image/png"
+			}
+			sb.WriteString("[[MCP_IMAGE:data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(ic.Data) + "]]")
 			continue
 		}
 		if b, merr := json.Marshal(c); merr == nil {

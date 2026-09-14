@@ -3191,8 +3191,18 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			}
 
 			// tool 结果消息入历史（role=tool + tool_call_id，OpenAI 兼容格式）；
-			// 阶段八十四：超长结果先截断再入模型上下文（前端 tool_result 事件与留痕仍是全量）
-			msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(result), ToolCallID: tc.ID, Name: toolName})
+			// 阶段八十四：超长结果先截断再入模型上下文（前端 tool_result 事件与留痕仍是全量）；
+			// 阶段一百一十四：截图图像（[[MCP_IMAGE:...]] 内联标记，Computer Use 等）在截断前抽出，
+			// 以独立 user 多模态消息紧随注入（OpenAI 兼容 API 的 tool 角色不支持图像内容）
+			clean, images := agentExtractToolImages(result)
+			msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(clean), ToolCallID: tc.ID, Name: toolName})
+			if len(images) > 0 {
+				parts := []aiContentPart{{Type: "text", Text: fmt.Sprintf("工具 %s 返回了 %d 张屏幕截图（base64 已转为图像附件），请结合截图画面与上文工具输出继续完成任务。", toolName, len(images))}}
+				for _, dataURL := range images {
+					parts = append(parts, aiContentPart{Type: "image_url", ImageURL: &aiImageURLField{URL: dataURL}})
+				}
+				msgs = append(msgs, aiChatMessage{Role: "user", Content: parts})
+			}
 		}
 
 		// 步数限制：防模型死循环（阶段八十一：agentMaxSteps 为 atomic，后台热改后运行中任务下一步即按新值判定）
@@ -3202,6 +3212,28 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			return
 		}
 	}
+}
+
+// agentExtractToolImages 阶段一百一十四：从工具结果中抽出 [[MCP_IMAGE:data:...;base64,...]] 内联标记
+// （Computer Use 截图等 ImageContent，由 mcp.go 与 PC 执行器统一转为该标记）。
+// 返回：去除标记并替换为占位说明的文本 + data URL 图像列表（按出现顺序）。
+// 必须在 agentTruncateToolResult 之前调用——base64 体量远超截断上限，混在文本里会被吃掉且污染上下文
+var agentImageMarkRe = regexp.MustCompile(`\[\[MCP_IMAGE:data:(image/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+?)\]\]`)
+
+func agentExtractToolImages(s string) (string, []string) {
+	if !strings.Contains(s, "[[MCP_IMAGE:") {
+		return s, nil
+	}
+	matches := agentImageMarkRe.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return s, nil // 格式异常（如被外层截断打断）保持原样，不误吞内容
+	}
+	images := make([]string, 0, len(matches))
+	for _, m := range matches {
+		images = append(images, "data:"+m[1]+";base64,"+m[2])
+	}
+	clean := agentImageMarkRe.ReplaceAllString(s, "[屏幕截图已作为图像附件注入下一消息]")
+	return clean, images
 }
 
 // agentTruncateToolResult 阶段八十四：工具结果入模型上下文前的字符截断归口——
