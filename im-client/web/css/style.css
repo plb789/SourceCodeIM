@@ -4099,6 +4099,17 @@ html.m #list-panel.list-collapsed {
     color: var(--primary);
 }
 
+/* 阶段一百零九：MCP 工具实时进度（工具行头部，执行中标签右侧；次级色跟随主题） */
+.agent-tool-progress {
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .agent-tool-running .ai-thinking-dots i,
 .agent-task-status .ai-thinking-dots i,
 .agent-stream-head .ai-thinking-dots i {

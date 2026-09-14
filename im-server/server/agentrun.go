@@ -885,8 +885,50 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 		if !ok {
 			return "错误：MCP 工具 " + tool + " 未找到（服务器可能已断开或工具已下线）"
 		}
-		out, err := mcpCallTool(serverName, toolName, params)
+		// 阶段一百零九：取消联动——任务取消时即时中断阻塞中的 CallTool（原实现干等工具
+		// 跑完或超时，最长 tool_timeout_seconds），监视协程 200ms 轮询 Cancelled 触发 cancel
+		ctx, cancel := context.WithTimeout(context.Background(), mcpToolTimeout())
+		defer cancel()
+		watchDone := make(chan struct{})
+		go func() {
+			defer close(watchDone)
+			tick := time.NewTicker(200 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					if t.Cancelled.Load() {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+		// 阶段一百零九：进度透传——服务器 notifications/progress 转发为 tool_progress 事件
+		//（600ms 节流防高频通知刷屏；call_id 归属到具体工具块，前端头部实时显示进度）
+		var lastEmit atomic.Int64
+		onProgress := func(message string, progress, total float64) {
+			now := time.Now().UnixMilli()
+			if now-lastEmit.Load() < 600 {
+				return
+			}
+			lastEmit.Store(now)
+			s.agentEmit(t, "tool_progress", map[string]interface{}{
+				"call_id": callID, "tool": tool,
+				"message": message, "progress": progress, "total": total,
+			})
+		}
+		// 原实现：out, err := mcpCallTool(serverName, toolName, params)（无取消联动/无进度透传）
+		out, err := mcpCallToolWithProgress(ctx, serverName, toolName, params, onProgress)
+		cancel()
+		<-watchDone
 		if err != nil {
+			// 取消联动触发的中断：明确报"任务已取消"（模型上下文与前端语义一致，非工具故障）
+			if t.Cancelled.Load() && ctx.Err() != nil {
+				return "错误：任务已取消，MCP 工具调用中止"
+			}
 			return "错误：" + err.Error()
 		}
 		if out == "" {

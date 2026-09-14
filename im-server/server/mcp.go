@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -411,7 +413,12 @@ func mcpDial(e *mcpClientEntry, rec model.MCPServer) (*mcp.ClientSession, error)
 	)
 	done := make(chan struct{})
 	go func() {
-		cli := mcp.NewClient(&mcp.Implementation{Name: "im-server", Version: "1.0"}, nil)
+		// cli := mcp.NewClient(&mcp.Implementation{Name: "im-server", Version: "1.0"}, nil)
+		// 原实现：第二参 nil（不挂任何通知 handler）。阶段一百零九：挂载进度通知 handler，
+		// 服务器发来的 notifications/progress 按 progressToken 反查转发给调用中的工具（长任务实时进度）
+		cli := mcp.NewClient(&mcp.Implementation{Name: "im-server", Version: "1.0"}, &mcp.ClientOptions{
+			ProgressNotificationHandler: mcpOnProgressNotification,
+		})
 		sess, derr = cli.Connect(ctx, transport, nil)
 		close(done)
 	}()
@@ -672,6 +679,42 @@ func mcpPersistStatus(name, status, msg string) {
 
 // ===== 阶段八十九接入预留：工具注入与调用核心（Agent Loop 对接面） =====
 
+// ===== 阶段一百零八：agent 型 MCP 工具描述增强（防"AI 调用另一个 AI"递归套娃滥用） =====
+// 此类工具本身是完整 Agent（内部自带独立大模型循环并会再次调用工具），本方 Agent 调用它
+// 即形成递归套娃：token 双重消耗、耗时长、返回结果长易被截断进模型上下文（agentTruncateToolResult）。
+// 注入层无法阻止接入，故在工具定义出模型可见的描述上追加调用须知，引导模型仅在
+// 复杂多步编码/调试任务且内置工具不足以完成时才使用
+
+// mcpAgentToolExactNames 已知 agent 型工具名全集（小写完全匹配）
+var mcpAgentToolExactNames = map[string]bool{
+	"agent": true, "agent_run": true, "run_agent": true, "agent_execute": true,
+	"execute_agent": true, "agent_task": true, "task_agent": true, "subagent": true,
+	"spawn_agent": true, "dispatch_agent": true, "ask_agent": true, "delegate_agent": true,
+}
+
+// mcpAgentToolFragments agent 型工具名匹配片段（小写子串命中即认定，
+// 覆盖带前缀/后缀的变体，如 "code_agent_run"、"subagent_manager"）
+var mcpAgentToolFragments = []string{"agent_run", "run_agent", "subagent", "sub_agent", "spawn_agent", "dispatch_agent", "delegate_to_agent"}
+
+// mcpAgentToolGuidance agent 型工具注入时追加的调用须知（原描述保留在前，
+// 模型仍可了解工具本身能力；须知在后约束使用场景与代价）
+const mcpAgentToolGuidance = "【调用须知】该工具内部是一个完整 Agent（自带独立大模型循环并会再次调用工具），调用它等于 AI 调用另一个 AI：token 消耗大、耗时长、返回结果长（超长部分会被截断）。仅当任务为复杂多步编码/调试且内置工具（读文件/搜索/执行命令等）不足以完成时才使用；简单查询、单文件读写、常规检索一律改用内置工具，禁止用本工具替代。"
+
+// mcpEnhanceAgentToolDesc agent 型工具描述增强归口：命中 agent 型命名时在原描述后
+// 追加调用须知；未命中原样返回（服务端与用户本机 MCP 两路注入共用）
+func mcpEnhanceAgentToolDesc(toolName, desc string) string {
+	lower := strings.ToLower(toolName)
+	if mcpAgentToolExactNames[lower] {
+		return desc + mcpAgentToolGuidance
+	}
+	for _, frag := range mcpAgentToolFragments {
+		if strings.Contains(lower, frag) {
+			return desc + mcpAgentToolGuidance
+		}
+	}
+	return desc
+}
+
 // mcpOpenAIToolDefinitions 将全部已连接且启用服务器的未禁用工具转为 OpenAI 兼容
 // function calling 定义（阶段八十九由 agentToolDefinitions() 注入）。
 // 命名空间化命名 mcp_<服务器名>_<工具名> 防跨服务器重名冲突（见 mcpToolKey）
@@ -708,6 +751,8 @@ func mcpOpenAIToolDefinitions() []aiToolDefinition {
 			if desc == "" {
 				desc = "MCP 工具 " + t.Name + "（服务器 " + rec.Name + "）"
 			}
+			// 阶段一百零八：agent 型工具描述增强——命中即追加调用须知防递归套娃滥用
+			desc = mcpEnhanceAgentToolDesc(t.Name, desc)
 			defs = append(defs, aiToolDefinition{
 				Type: "function",
 				Function: map[string]interface{}{
@@ -777,6 +822,8 @@ func (s *Server) mcpPcOpenAIToolDefinitions(username string) []aiToolDefinition 
 		if desc == "" {
 			desc = "本机 MCP 工具 " + t.Tool + "（服务器 " + t.Server + "，经用户电脑本地执行）"
 		}
+		// 阶段一百零八：agent 型工具描述增强——用户本机接入 trae-agent 等同样会递归套娃
+		desc = mcpEnhanceAgentToolDesc(t.Tool, desc)
 		defs = append(defs, aiToolDefinition{
 			Type: "function",
 			Function: map[string]interface{}{
@@ -818,8 +865,47 @@ func mcpRouteToolKey(key string) (serverName, toolName string, ok bool) {
 
 // mcpCallTool 执行 MCP 工具调用（阶段八十九 Agent 工具分发归口接入）。
 // 返回拼接后的文本结果（多段 TextContent 顺序拼接，非文本内容 JSON 兜底序列化）；
-// isError 结果同样以 error 返回（正文附错误文本），与内置工具错误处理同款语义
+// isError 结果同样以 error 返回（正文附错误文本），与内置工具错误处理同款语义。
+// 阶段一百零九：改为无取消联动/无进度透传的兼容入口（测试与既有调用），实现已迁入 mcpCallToolWithProgress
 func mcpCallTool(serverName, tool string, arguments map[string]interface{}) (string, error) {
+	// 原实现：本函数内含全部校验与调用逻辑，已整体迁入 mcpCallToolWithProgress，此处仅保留签名转发；
+	// 超时语义保持不变（context.WithTimeout + mcpToolTimeout，回归检查时补齐——迁移时曾遗漏致测试路径无超时保护）
+	ctx, cancel := context.WithTimeout(context.Background(), mcpToolTimeout())
+	defer cancel()
+	return mcpCallToolWithProgress(ctx, serverName, tool, arguments, nil)
+}
+
+// ===== 阶段一百零九：MCP 工具进度透传与取消联动 =====
+
+// mcpProgressReg 进度回调注册表（progressToken → 回调）：调用前注册、结束后注销；
+// 通知 handler 按 token 反查转发，查不到即忽略（迟到的通知/异常场景静默丢弃）
+var (
+	mcpProgressMu        sync.Mutex
+	mcpProgressCallbacks = map[string]func(message string, progress, total float64){}
+	mcpProgressSeq       atomic.Uint64 // 进度 token 发生器（唯一性归口）
+)
+
+// mcpOnProgressNotification 客户端进度通知 handler（mcpDial 经 ClientOptions 全局挂载）：
+// 按 progressToken 反查调用中的工具调用逐条转发（trae-agent 等长任务工具的中间进度实时可见）
+func mcpOnProgressNotification(_ context.Context, req *mcp.ProgressNotificationClientRequest) {
+	if req == nil || req.Params == nil {
+		return
+	}
+	token := fmt.Sprintf("%v", req.Params.ProgressToken)
+	mcpProgressMu.Lock()
+	cb, ok := mcpProgressCallbacks[token]
+	mcpProgressMu.Unlock()
+	if ok {
+		cb(req.Params.Message, req.Params.Progress, req.Params.Total)
+	}
+}
+
+// mcpCallToolWithProgress 带取消联动与进度透传的 MCP 工具调用归口。
+// ctx 由调用方构建（含超时；Agent 侧随任务取消即时中断阻塞中的 CallTool，不再干等超时）；
+// onProgress 非空时生成唯一 progressToken 写入请求 _meta 并注册回调，服务器发来的
+// notifications/progress 逐条转发（协议约定：仅请求携带 progressToken 时服务器才回报进度）。
+// 校验、结果拼装与错误语义同原 mcpCallTool
+func mcpCallToolWithProgress(ctx context.Context, serverName, tool string, arguments map[string]interface{}, onProgress func(message string, progress, total float64)) (string, error) {
 	mcpMu.Lock()
 	setEnabled := mcpSet.Enabled
 	e, ok := mcpEntries[serverName]
@@ -838,9 +924,20 @@ func mcpCallTool(serverName, tool string, arguments map[string]interface{}) (str
 	if disabled[tool] {
 		return "", fmt.Errorf("工具 %s 已被禁用", tool)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), mcpToolTimeout())
-	defer cancel()
-	res, err := sess.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: arguments})
+	params := &mcp.CallToolParams{Name: tool, Arguments: arguments}
+	if onProgress != nil {
+		token := strconv.FormatUint(mcpProgressSeq.Add(1), 10)
+		mcpProgressMu.Lock()
+		mcpProgressCallbacks[token] = onProgress
+		mcpProgressMu.Unlock()
+		defer func() {
+			mcpProgressMu.Lock()
+			delete(mcpProgressCallbacks, token)
+			mcpProgressMu.Unlock()
+		}()
+		params.Meta = mcp.Meta{"progressToken": token}
+	}
+	res, err := sess.CallTool(ctx, params)
 	if err != nil {
 		return "", err
 	}

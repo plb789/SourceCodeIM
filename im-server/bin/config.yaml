@@ -263,7 +263,7 @@ mcp:
     - "python"
     - "python3"
   connect_timeout_seconds: 30         # 建连（初始化握手）与工具发现超时秒
-  tool_timeout_seconds: 60            # 单次工具调用超时秒
+  tool_timeout_seconds: 300            # 单次工具调用超时秒
   # servers:                          # 种子服务器示例（仅首次启动导入；之后以后台管理配置为准）
   # ===== 生产可用实例（均为官方维护、开箱即用；按需取消注释后重启） =====
   #   - name: filesystem               # 文件系统访问（官方 @modelcontextprotocol/server-filesystem）

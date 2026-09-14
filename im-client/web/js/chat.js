@@ -6179,6 +6179,30 @@
         }
     }
 
+    // 阶段一百零九：MCP 工具进度通知 → 工具块头部实时进度（长任务如 agent_run 不再"盲等"）。
+    // 服务端 600ms 节流下发；按 call_id 精确归属工具块（无 run_command 兜底——MCP 块无控制台元素），
+    // 文本 = 服务器进度描述 + 可算百分比（total>0 时）；tool_result 回填时整块收尾自然覆盖
+    function updateAgentToolProgress(st, ev) {
+        if (!ev.call_id) return;
+        var block = st.events.querySelector('.agent-event.tool[data-call-id="' + ev.call_id + '"]');
+        if (!block) return;
+        var head = block.querySelector('.agent-event-head');
+        if (!head) return;
+        var el = head.querySelector('.agent-tool-progress');
+        if (!el) {
+            el = document.createElement('span');
+            el.className = 'agent-tool-progress';
+            head.appendChild(el);
+        }
+        var text = ev.message || '';
+        if (ev.total > 0 && typeof ev.progress === 'number') {
+            var pct = Math.round(ev.progress / ev.total * 100);
+            if (pct >= 0 && pct <= 100) text += (text ? ' · ' : '') + pct + '%';
+        }
+        el.textContent = text;
+        agentTaskScroll();
+    }
+
     // 进程结束终帧 → 控制台标注退出码/耗时/输出量（仅前端控制台展示，不进模型上下文）
     function finalizeAgentToolExit(st, ev) {
         agentConsoleExit(st, ev); // 底部独立控制台抽屉同步退出码行
@@ -10614,6 +10638,8 @@
         block.classList.add(ev.ok === false ? 'fail' : 'ok');
         var running = block.querySelector('.agent-tool-running');
         if (running) running.remove(); // 结果摘要行（✓/✕）接管执行态展示
+        var prog = block.querySelector('.agent-tool-progress');
+        if (prog) prog.remove(); // 阶段一百零九：进度展示随收尾一并清除（✓/✕ 接管）
         var outEl = block.querySelector('.agent-event-output');
         // 阶段七十五：run_command 有实时控制台时输出已在控制台流式展示，不再重复灌满详情区
         // （控制台保留完整流与退出码行；无控制台的兜底路径仍走详情区文本）
@@ -10787,6 +10813,7 @@
                 wsPanelOnToolResult(ev); // 阶段七十六：文件面板刷新树 + 自动打开生成/修改的文件
                 break;
             case 'tool_output': updateAgentToolOutput(st, ev); break; // 阶段七十五：命令实时输出 → 控制台
+            case 'tool_progress': updateAgentToolProgress(st, ev); break; // 阶段一百零九：MCP 工具进度通知 → 工具块头部实时显示
             case 'tool_exit': finalizeAgentToolExit(st, ev); break;   // 阶段七十五：进程结束 → 退出码/耗时标注
             case 'todo': renderAgentTodo(st, ev); break;
             case 'done':
