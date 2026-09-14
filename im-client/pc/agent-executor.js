@@ -17,6 +17,19 @@ const mcpManager = require('./mcp-manager.js');
 // 阶段九十一：内置浏览器管理器（与主进程共用同一实例——main.js 亦 require 本模块的宿主进程）
 const browserManager = require('./browser-manager.js');
 
+// ===== 阶段一百一十九：Agent 命令执行环境注入（与 mcp-manager.buildEnv 同款前置顺序） =====
+// run_command/交互式 shell 的 PATH 前置 MCP 工具链目录（uv/uvx，fetch/sqlite 等 Python 系插件的
+// 运行环境）与便携 Node 目录（npx/npm/node）——Agent 任务中 AI 可直接执行 Python/Node 系命令
+// （TRAE CN 同层仅注入 rg，本实现覆盖面更全）；系统 PATH 保留在后，前置目录无对应 exe 时不影响系统命令
+const AGENT_TOOLCHAIN_BIN = path.join(os.homedir(), '.im-mcp', 'bin');
+const AGENT_NODE_RUNTIME_DIR = path.join(os.homedir(), '.im-mcp', 'node');
+
+function buildAgentEnv() {
+    const env = Object.assign({}, process.env);
+    env.PATH = AGENT_TOOLCHAIN_BIN + path.delimiter + AGENT_NODE_RUNTIME_DIR + path.delimiter + (env.PATH || process.env.PATH || '');
+    return env;
+}
+
 // 与服务端一致的体积/次数上限
 const READ_MAX_CHARS = 50000;
 const WRITE_MAX_CHARS = 200000;
@@ -772,6 +785,7 @@ function runCommandSync(username, params, done, onFrame) {
     try {
         child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command + ' & echo ' + CMD_DONE_SENTINEL], {
             cwd: ws,
+            env: buildAgentEnv(), // 阶段一百一十九：PATH 前置工具链与便携 Node，任务中可直接执行 uvx/uv/npx 等命令
             windowsHide: true, // 不闪黑色控制台窗口
             stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -1945,6 +1959,7 @@ function termInput(s, cmd, onFrame) {
     try {
         child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + line], {
             cwd: s.cwd,
+            env: buildAgentEnv(), // 阶段一百一十九：交互式 shell 与 run_command 同款，前置工具链 PATH
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe']
         });

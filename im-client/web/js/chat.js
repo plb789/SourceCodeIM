@@ -5167,7 +5167,9 @@
         line(s5, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
         line(s5, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
         line(s5, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
-        line(s5, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
+        // 原实现：提示手动安装 uv（irm/winget）与 Node.js——阶段一百一十九起运行环境全自动，文案过时
+        // line(s5, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
+        line(s5, 'Python 系插件（uvx）与 Node 系插件（npx）的运行环境全自动：客户端内置 uv 工具链与便携 Node（离线 zip 优先，缺失时联网下载），无需手动安装；uvx 首次拉起插件时需联网下载 Python 包（1-2 分钟，之后走缓存秒开），测试连接等待上限已放宽至 2 分钟。');
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {
