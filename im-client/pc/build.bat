@@ -55,22 +55,34 @@ if exist "%RCEDIT%" if exist "%APP_ICON%" (
 
 echo [4/4] 部署到 im-client\bin ...
 rem 先关闭正在运行的客户端，避免 exe 被占用导致清理失败（进程不存在时静默跳过）
-taskkill /f /im im-client.exe >nul 2>nul
+rem /T 必须加：MCP/Computer Use 子进程继承主进程工作目录（bin），只杀主进程会残留子进程继续锁住 bin
+taskkill /f /t /im im-client.exe >nul 2>nul
 rem 删除旧 bin：杀毒软件对新 exe 的瞬时扫描锁可能导致单次删除失败，最多重试 5 次
 set /a TRY=0
 :RETRY_DEL
 if not exist "%BIN_DIR%" goto DEL_OK
 set /a TRY+=1
-if %TRY% gtr 5 (
-    echo [错误] 旧 bin 目录无法删除，请手动关闭 im-client.exe 后重试
-    pause
-    exit /b 1
-)
+if %TRY% gtr 5 goto DEL_CHECK
 timeout /t 1 /nobreak >nul
 rd /s /q "%BIN_DIR%" >nul 2>nul
 goto RETRY_DEL
+:DEL_CHECK
+rem 原实现：重试超限直接报错退出。实测目录删不掉分两种情况：
+rem   1) 仅被其他进程"当前工作目录"锁定（如记事本曾在 bin 下打开过文件）——目录本身删不掉但文件不占用，
+rem      先清空目录内文件再继续部署（xcopy 覆盖写入不受目录锁影响，目录保留不影响使用）
+rem   2) 旧 exe 等文件仍被进程真正占用——文件删不掉、目录非空，强行部署会失败，须报错提醒
+del /f /q "%BIN_DIR%\*" >nul 2>nul
+for /d %%D in ("%BIN_DIR%\*") do rd /s /q "%%D" >nul 2>nul
+dir /b "%BIN_DIR%" 2>nul | findstr . >nul
+if errorlevel 1 (
+    echo [提示] 旧 bin 目录被其他进程的工作目录占用，已清空内容并继续部署（目录保留不影响使用）
+    goto DEL_OK
+)
+echo [错误] 旧 bin 目录内文件被占用无法清理，请关闭 im-client.exe 后重试
+pause
+exit /b 1
 :DEL_OK
-mkdir "%BIN_DIR%"
+if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 xcopy "%UNPACKED_DIR%\*" "%BIN_DIR%\" /e /y /q >nul
 ren "%BIN_DIR%\即时通讯.exe" "im-client.exe"
 if not exist "%BIN_DIR%\im-client.exe" (

@@ -59,6 +59,31 @@ function builtinConfigs() {
     return builtinEnabled ? BUILTIN_SERVERS.map(function (c) { return Object.assign({}, c); }) : [];
 }
 
+// ===== 阶段一百一十六：项目级 MCP（TRAE 同款）——自动从项目根目录 .im/agent_mcp.json 加载 =====
+// loader 由 main.js 注入（读 <userRoot(username)>/.im/agent_mcp.json 解析归一化）；开关状态存 mcp store __projMcp 键
+let projectEnabled = false;
+let projectLoader = null;
+const lastServersByUsername = {}; // 各用户最近一次 setConfig 的用户配置（项目开关切换时按此重建会话）
+
+function setProjectMcp(enabled, loader) {
+    projectEnabled = !!enabled;
+    if (loader) projectLoader = loader;
+    // 全部在线用户重建会话（setConfig 内部自动合并项目级配置）
+    Object.keys(lastServersByUsername).forEach(function (uname) {
+        setConfig(uname, lastServersByUsername[uname]);
+    });
+}
+
+function projectConfigs(username) {
+    if (!projectEnabled || !projectLoader) return [];
+    try {
+        const list = projectLoader(username) || [];
+        return Array.isArray(list) ? list : [];
+    } catch (e) {
+        return []; // 项目文件解析失败静默跳过（status IPC 会给出错误文本供面板显示）
+    }
+}
+
 // 会话表：key = username + '\u0000' + serverName → session
 const sessions = {};
 
@@ -94,14 +119,18 @@ function launch(username, session) {
     let child;
     try {
         // Windows 下 .cmd/.bat 无法直接 spawn（EINVAL），经 cmd /C 转发（stdio 管道对孙进程同样生效）
+        // cwd 固定用户主目录：否则子进程继承主进程工作目录（打包部署后的 bin），异常退出残留时
+        // 会把 bin 目录锁死导致打包脚本无法清理（实测：目录被当作工作目录时无法删除，哪怕为空）
         const isScript = /\.(cmd|bat)$/i.test(String(cfg.command || '').trim());
         child = isScript
             ? spawn('cmd.exe', ['/C', cfg.command].concat(cfg.args || []), {
+                cwd: os.homedir(), // 原实现：未设置 cwd，子进程继承主进程工作目录
                 env: buildEnv(cfg.env),
                 windowsHide: true,
                 stdio: ['pipe', 'pipe', 'pipe']
             })
             : spawn(cfg.command, cfg.args || [], {
+                cwd: os.homedir(), // 原实现：未设置 cwd，子进程继承主进程工作目录
                 env: buildEnv(cfg.env),
                 windowsHide: true,
                 stdio: ['pipe', 'pipe', 'pipe']
@@ -268,8 +297,14 @@ function normalizeTools(raw) {
 // setConfig：main.js 在用户保存配置后调用，重建该用户的会话表（停用/删除的立即回收，新增/变更的重建）
 // 阶段一百一十四：内置 Computer Use 不入用户配置文件，在此合并（用户配置删改不影响内置服务器）
 function setConfig(username, servers) {
+    lastServersByUsername[username] = servers || []; // 阶段一百一十六：留存以便项目开关切换时重建
     const want = {};
     builtinConfigs().forEach(function (cfg) { want[cfg.name] = cfg; });
+    // 阶段一百一十六：项目级配置次优先合并（用户配置后写覆盖同名，与 TRAE 项目级语义一致）
+    projectConfigs(username).forEach(function (cfg) {
+        if (!cfg || !cfg.name) return;
+        want[cfg.name] = cfg;
+    });
     (servers || []).forEach(function (cfg) {
         if (!cfg || !cfg.name || !cfg.enabled) return;
         want[cfg.name] = cfg;
@@ -328,7 +363,8 @@ function status(username) {
             status: s.status,
             status_msg: s.statusMsg,
             tool_count: s.tools.length,
-            builtin: s.cfg.builtin === true
+            builtin: s.cfg.builtin === true,
+            project: s.cfg.project === true // 阶段一百一十六：项目级来源标记（列表行显示「项目」标签）
         });
     });
     return out;
@@ -357,6 +393,12 @@ function callTool(username, toolKey, params, cfgGetter) {
         let cfg = cfgGetter ? cfgGetter(username, serverGuess) : null;
         if (!cfg && serverGuess === 'computer-use') {
             cfg = builtinConfigs().filter(function (c) { return c.name === 'computer-use'; })[0] || null; // 内置服务器不在用户配置，单独兜底
+        }
+        if (!cfg) {
+            // 阶段一百一十六：项目级服务器兜底建连（与内置同思路，按需重读项目文件）
+            projectConfigs(username).forEach(function (c) {
+                if (!cfg && c.name === serverGuess) cfg = c;
+            });
         }
         if (cfg && (cfg.enabled || cfg.builtin)) {
             const s = ensureSession(username, cfg);
@@ -492,4 +534,4 @@ function disposeAll() {
     Object.keys(sessions).forEach(function (k) { disposeSession(sessions[k]); });
 }
 
-module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs };
+module.exports = { setConfig: setConfig, listTools: listTools, callTool: callTool, status: status, testServer: testServer, disposeAll: disposeAll, pcToolKey: pcToolKey, setBuiltinEnabled: setBuiltinEnabled, builtinConfigs: builtinConfigs, setProjectMcp: setProjectMcp };

@@ -2119,5 +2119,6 @@ module.exports = {
     termOp: termOp, // 阶段七十七：控制台本地终端（多标签）
     getTaskBackup: getTaskBackup, // 阶段九十七：任务备份查询（main 注入 browser-manager 供 payload 探测）
     keepTaskChange: keepTaskChange, // 阶段九十七：保留任务变更（接受当前内容并清备份）
-    revertTaskChange: revertTaskChange // 阶段九十七：撤销任务变更（还原任务前字节）
+    revertTaskChange: revertTaskChange, // 阶段九十七：撤销任务变更（还原任务前字节）
+    userRoot: userRoot // 阶段一百一十六：工作区根导出（项目级 MCP 配置归口 <userRoot>/.im/agent_mcp.json）
 };

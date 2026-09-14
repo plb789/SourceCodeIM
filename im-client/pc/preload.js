@@ -211,6 +211,12 @@ contextBridge.exposeInMainWorld('desktop', {
     mcpBuiltinToggle: function (payload) {
         return ipcRenderer.invoke('mcp:builtin-toggle', payload);
     },
+    mcpProjectStatus: function (payload) {
+        return ipcRenderer.invoke('mcp:project-status', payload); // 阶段一百一十六：项目级 MCP 状态（含自动创建 .im/agent_mcp.json）
+    },
+    mcpProjectToggle: function (payload) {
+        return ipcRenderer.invoke('mcp:project-toggle', payload); // 阶段一百一十六：项目级 MCP 开关切换
+    },
     // ===== 阶段七十七：自定义标题栏（Electron titleBarOverlay）=====
     // 主题切换时同步原生窗口按钮配色（浅色 #f5f5f5/#333333，深色 #1a1a1a/#e0e0e0，与 style.css --titlebar-* 同值）
     setTitlebarColors: function (color, symbolColor) {

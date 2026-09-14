@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.33">
+    <link rel="stylesheet" href="css/style.css?v=2.34">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -317,10 +317,13 @@
                     <button id="clear-btn" class="tool-btn" title="清空当前聊天显示">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     </button>
-                    <!-- 阶段五十九：Agent 任务模式开关（仅 AI 智能体会话可用，开启后发送内容作为自动化任务目标） -->
+                    <!-- 阶段五十九：Agent 任务模式开关（仅 AI 智能体会话可用，开启后发送内容作为自动化任务目标）。
+                         阶段一百一十七：图标按 🤖 emoji 造型用单色 SVG 重绘（用户要求颜色跟随主题色——emoji 为固定彩色
+                         字形无法改色，故取其同款天线/方头/圆眼/宽嘴造型以 currentColor 绘制，active 恢复主题绿高亮） -->
                     <button id="agent-mode-btn" class="tool-btn agent-mode-btn hidden" title="Agent 任务模式：输入任务目标，智能体将自主规划并调用工具完成（写文件/命令需审批）">
-                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h3a3 3 0 0 1 3 3v1h.27c.34-.6 .99-1 1.73-1a2 2 0 0 1 0 4c-.74 0-1.39-.4-1.73-1H19v1a3 3 0 0 1-3 3h-3v1.27c.6 .34 1 .99 1 1.73a2 2 0 0 1-4 0c0-.74 .4-1.39 1-1.73V18H8a3 3 0 0 1-3-3v-1h-.27c-.34 .6-.99 1-1.73 1a2 2 0 0 1 0-4c.74 0 1.39 .4 1.73 1H5v-1a3 3 0 0 1 3-3h3V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/></svg>
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M12 3a1.3 1.3 0 1 0 0 2.6 1.3 1.3 0 1 0 0-2.6zM11.5 5.5h1v1.8h-1zM7.5 7.3h9a2.5 2.5 0 0 1 2.5 2.5v7.9a2.5 2.5 0 0 1-2.5 2.5h-9a2.5 2.5 0 0 1-2.5-2.5V9.8a2.5 2.5 0 0 1 2.5-2.5zM5 11.75H3.4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1H5zm14 0h1.6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H19zM9 10.7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3zM8.85 15.7h6.3a.8.8 0 0 1 0 1.6h-6.3a.8.8 0 0 1 0-1.6z"/></svg>
                     </button>
+                    <!-- 阶段一百一十七：Agent 审批模式选择已移至输入区左下角（TRAE CN 同款，见 input-footer） -->
                     <!-- 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启联网搜索时显示，开启后 AI 问答可实时搜索） -->
                     <button id="web-search-btn" class="tool-btn web-search-btn hidden" title="联网搜索：开启后 AI 问答可实时联网查询最新信息（搜索过程与结果条数随回复展示）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
@@ -340,6 +343,12 @@
                 </div>
                 <textarea id="message-input" placeholder="输入消息" rows="3"></textarea>
                 <div class="input-footer">
+                    <!-- 阶段一百一十七：Agent 审批模式选择（TRAE CN 同款盾牌下拉，置于左下角；手动审批/自动审批/完全访问，仅 Agent 任务模式开启时显示）。
+                         悬停提示用 data-tip-text（tooltip.js 自绘气泡归口），禁止原生 title（停留 1-2 秒会叠出系统气泡） -->
+                    <button id="agent-approve-btn" class="tool-btn agent-approve-btn hidden" data-tip-text="审批模式：手动审批（重要操作由你确认）（点击切换）">
+                        <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3zm-1.2 13.5-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6z"/></svg>
+                        <svg class="approve-caret" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4z"/></svg>
+                    </button>
                     <span class="input-hint">Enter 发送 / Ctrl+Enter 换行</span>
                     <button id="send-btn">发送</button>
                 </div>
@@ -347,6 +356,41 @@
 
             <!-- 表情面板（自定义，禁止系统默认弹窗） -->
             <div id="emoji-panel" class="emoji-panel hidden"></div>
+
+            <!-- 阶段一百一十七：Agent 审批模式面板（TRAE CN 同款下拉：手动审批/自动审批/完全访问，自研面板跟随主题色） -->
+            <div id="agent-approve-panel" class="agent-approve-panel hidden">
+                <div class="agent-approve-panel-title">如何批准 Agent 的操作？</div>
+                <div class="agent-approve-item" data-mode="manual">
+                    <span class="agent-approve-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 11.2V6a1.5 1.5 0 0 1 3 0v5h1V4a1.5 1.5 0 0 1 3 0v7h1V5.5a1.5 1.5 0 0 1 3 0V15c0 3.87-3.13 7-7 7-2.4 0-4.52-1.21-5.78-3.05l-3.4-5.4a1.4 1.4 0 0 1 2.37-1.48L7 14.5V11.2z"/></svg>
+                    </span>
+                    <span class="agent-approve-text">
+                        <b>手动审批</b>
+                        <i>重要操作由你确认</i>
+                    </span>
+                    <svg class="agent-approve-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+                </div>
+                <div class="agent-approve-item" data-mode="auto">
+                    <span class="agent-approve-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3zm-1.2 13.5-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6z"/></svg>
+                    </span>
+                    <span class="agent-approve-text">
+                        <b>自动审批</b>
+                        <i>MCP/浏览器等自动放行，命令与文件写删仍需确认</i>
+                    </span>
+                    <svg class="agent-approve-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+                </div>
+                <div class="agent-approve-item" data-mode="full">
+                    <span class="agent-approve-icon full">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M11 21h-1l1-7H7.5c-.88 0-.33-.75-.31-.78C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.4 0 .74.24.9.59.06.13.09.27.09.42L13 21z"/></svg>
+                    </span>
+                    <span class="agent-approve-text">
+                        <b>完全访问</b>
+                        <i>不经审批，直接在本机运行</i>
+                    </span>
+                    <svg class="agent-approve-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+                </div>
+            </div>
 
             <!-- 阶段九十一：内置浏览区面板（TRAE CN 同款，仅 PC Electron 壳启用——chat.js 能力检测后启用交互）。
                  网页内容由主进程 BrowserView 原生渲染并精确贴合 #browser-content 矩形（browser:bounds 上报），
@@ -742,6 +786,15 @@
                     <h2 class="settings-title">MCP</h2>
                     <button id="agent-mcp-help-btn" class="ws-panel-btn agent-mcp-help-btn" type="button" title="使用说明（字段含义 / 开箱即用示例一键照抄）"><svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M5.1 6A2.9 2.9 0 0 1 10.9 6A2.9 2.9 0 0 1 8 8.9L8 10.2" fill="none" stroke="currentColor" stroke-linecap="round" style="stroke-width:1.5"/><circle cx="8" cy="12.7" r="1.15" fill="currentColor" stroke="none"/></svg></button>
                 </div>
+                <!-- 阶段一百一十六：项目级 MCP（TRAE CN 同款）——开关 + 自动创建的 .im/agent_mcp.json 状态回显 -->
+                <div class="agent-mcp-proj-card" id="agent-mcp-proj-card">
+                    <div class="agent-mcp-proj-info">
+                        <div class="agent-mcp-proj-title">启用项目级 MCP</div>
+                        <div class="agent-mcp-proj-desc">允许自动从项目根目录下的 .im/agent_mcp.json 中加载 MCP 配置</div>
+                        <div class="agent-mcp-proj-sub" id="agent-mcp-proj-sub"></div>
+                    </div>
+                    <div class="mcp-switch" id="agent-mcp-proj-switch" title="点击启用/停用项目级 MCP（配置文件不存在时自动创建模板）"><span class="mcp-switch-knob"></span></div>
+                </div>
                 <!-- 阶段一百一十二：TRAE CN 同款布局——区块标题 + 管理大卡片（卡片头：标题/描述 + 刷新/添加下拉；卡体内：列表/插件库/编辑区） -->
                 <div class="agent-mcp-section-title">已配置的 MCP Servers</div>
                 <div class="agent-mcp-card">
@@ -1042,7 +1095,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.12"></script>
+    <script src="js/chat.js?v=3.13"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

@@ -100,6 +100,8 @@
     var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
     var agentMcpBtn = document.getElementById('agent-mcp-btn'); // 阶段九十：我的 MCP 服务器入口（仅 PC 端，本机 stdio 自定义）
+    var agentApproveBtn = document.getElementById('agent-approve-btn'); // 阶段一百一十七：Agent 审批模式盾牌入口（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
+    var agentApprovePanel = document.getElementById('agent-approve-panel'); // 阶段一百一十七：审批模式面板（手动/自动/完全访问）
     var webSearchBtn = document.getElementById('web-search-btn'); // 阶段六十九：普通聊天联网搜索开关（AI 会话且服务端开启时显示）
     var emojiPanel = document.getElementById('emoji-panel');
     var imageInput = document.getElementById('image-input');
@@ -409,6 +411,7 @@
                 agentMcpServers = (r && r.servers) || [];
                 agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
                 renderAgentMcpList();
+                agentMcpProjectRefresh(); // 阶段一百一十六：导航直进 MCP 分类同样回填项目级状态 + 自动创建模板
             }).catch(function () {
                 renderAgentMcpList();
             });
@@ -4051,6 +4054,15 @@
         agentModeBtn.classList.toggle('active', on);
         messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
         updateSendBtnState(); // 阶段七十三：模式切换联动发送按钮停止态（任务执行中开/关任务模式）
+        // 阶段一百一十七：审批模式盾牌仅在 Agent 任务模式开启时显示（审批流只发生在任务执行中；
+        // 普通问答的 MCP 调用走服务端无此审批流），收进 setAgentMode 归口——切会话/开关任务模式一处覆盖
+        var approveVisible = !!(on && currentChatUser && isAIAgent(currentChatUser));
+        agentApproveBtn.classList.toggle('hidden', !approveVisible);
+        if (!approveVisible) {
+            agentApprovePanel.classList.add('hidden'); // 模式关闭时面板若开着一并收起
+        } else {
+            agentApproveUiSync(); // 显示时同步高亮/悬停文案/面板勾选（localStorage 模式可能已变化，原实现 bug：文案停在 HTML 初始值）
+        }
         // 阶段七十六：Agent 模式联动工作区文件面板（开启显示右侧文件树，关闭隐藏只留聊天）
         wsPanelSetVisible(on && !!currentChatUser && isAIAgent(currentChatUser));
     }
@@ -4189,6 +4201,34 @@
     var agentMcpExpanded = {};    // 阶段一百一十一：列表行展开状态（服务器名 → 是否展开）
     var agentMcpLastReport = '';  // 上次上报工具清单指纹（去重，避免重复上报）
     var agentMcpStatusTimer = null; // 面板打开期间的状态轮询
+    // 阶段一百一十六：项目级 MCP 状态（mcpProjectStatus 回填；enabled=开关，count/error=项目文件解析结果）
+    var agentMcpProjectState = { loaded: false, enabled: false, file: '', count: 0, error: '', servers: [] };
+
+    // 拉取项目级 MCP 状态（主进程在此时机自动创建 <工作区根>/.im/agent_mcp.json 模板）
+    function agentMcpProjectRefresh() {
+        if (!agentMcpSupported() || typeof window.desktop.mcpProjectStatus !== 'function') return Promise.resolve();
+        return window.desktop.mcpProjectStatus({ username: IMSocket.getUsername() }).then(function (r) {
+            if (r && r.ok) {
+                agentMcpProjectState = { loaded: true, enabled: !!r.enabled, file: r.file || '', count: r.count || 0, error: r.error || '', servers: r.servers || [] };
+                var sw = document.getElementById('agent-mcp-proj-switch');
+                if (sw) sw.className = 'mcp-switch' + (agentMcpProjectState.enabled ? ' on' : '');
+                var sub = document.getElementById('agent-mcp-proj-sub');
+                if (sub) {
+                    if (agentMcpProjectState.error) {
+                        sub.textContent = '配置解析失败：' + agentMcpProjectState.error; // 解析错误红字提示（文件语法问题）
+                        sub.classList.add('err');
+                    } else if (agentMcpProjectState.enabled) {
+                        sub.textContent = '已加载 ' + agentMcpProjectState.count + ' 个项目服务器 · ' + agentMcpProjectState.file;
+                        sub.classList.remove('err');
+                    } else {
+                        sub.textContent = '';
+                        sub.classList.remove('err');
+                    }
+                }
+                renderAgentMcpList();
+            }
+        }).catch(function () {});
+    }
 
     // 是否支持本机 MCP 配置（仅 PC 端 preload 暴露 mcpGet；Web 端无本机进程概念）
     function agentMcpSupported() {
@@ -4242,11 +4282,12 @@
     function renderAgentMcpList() {
         // 阶段一百零五：签名比对防闪烁——面板打开期间 1.2 秒轮询会话状态，每次回调都调本函数，
         // 状态无变化时跳过重建（原实现每次清空重建，MCP 面板开着列表就持续闪烁且悬停态丢失）
-        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools, agentMcpBuiltinEnabled]);
+        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools, agentMcpBuiltinEnabled, agentMcpProjectState]);
         if (sig === renderAgentMcpList._sig) return;
         renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
-        if (!agentMcpServers.length && !agentMcpBuiltinEnabled) {
+        var projectLive = agentMcpLiveStatus.filter(function (s) { return s.project === true; }); // 阶段一百一十六：项目级会话状态行
+        if (!agentMcpServers.length && !agentMcpBuiltinEnabled && !projectLive.length) {
             var empty = document.createElement('div');
             empty.className = 'agent-mcp-empty';
             // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
@@ -4349,6 +4390,82 @@
             }
             agentMcpListEl.appendChild(wrap);
         })();
+        // 阶段一百一十六：项目级服务器行（来源 .im/agent_mcp.json；tag「项目」，启停在 JSON 文件 enabled 字段，可展开工具清单）
+        projectLive.forEach(function (ps) {
+            var wrap = document.createElement('div');
+            wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded[ps.name] ? ' expanded' : '');
+            var row = document.createElement('div');
+            row.className = 'agent-mcp-server-row';
+            var caret = document.createElement('span');
+            caret.className = 'agent-mcp-caret';
+            caret.textContent = agentMcpExpanded[ps.name] ? '▾' : '▸';
+            caret.title = '展开/收起工具清单';
+            caret.addEventListener('click', function () {
+                agentMcpExpanded[ps.name] = !agentMcpExpanded[ps.name];
+                renderAgentMcpList();
+            });
+            var badge = document.createElement('span');
+            badge.className = 'agent-mcp-badge';
+            badge.textContent = (ps.name || '?').charAt(0).toUpperCase();
+            var info = document.createElement('div');
+            info.className = 'agent-mcp-server-info';
+            var name = document.createElement('span');
+            name.className = 'agent-mcp-server-name';
+            name.textContent = ps.name;
+            var ptag = document.createElement('span');
+            ptag.className = 'agent-mcp-builtin-tag'; // 复用内置小标签样式，文本区分来源
+            ptag.textContent = '项目';
+            name.appendChild(ptag);
+            var metaline = document.createElement('div');
+            metaline.className = 'agent-mcp-server-metaline';
+            var dot = document.createElement('span');
+            dot.className = 'mcp-dot ' + ps.status;
+            dot.title = mcpStatusText(ps.status);
+            var meta = document.createElement('span');
+            meta.className = 'agent-mcp-server-meta';
+            meta.textContent = '项目级 MCP · 工具 ' + (ps.tool_count || 0) + ' 个 · ' + mcpStatusText(ps.status);
+            metaline.appendChild(dot);
+            metaline.appendChild(meta);
+            info.appendChild(name);
+            info.appendChild(metaline);
+            row.appendChild(caret);
+            row.appendChild(badge);
+            row.appendChild(info);
+            var hint = document.createElement('span');
+            hint.className = 'agent-mcp-server-meta';
+            hint.textContent = '配置于 .im/agent_mcp.json';
+            hint.title = '编辑项目根目录下的 .im/agent_mcp.json 可增删项目服务器（enabled:false 可停用）';
+            row.appendChild(hint);
+            wrap.appendChild(row);
+            if (agentMcpExpanded[ps.name]) {
+                var toolsBox = document.createElement('div');
+                toolsBox.className = 'agent-mcp-tools-box';
+                var tl = agentMcpAllTools.filter(function (t) { return t.server === ps.name; });
+                if (!tl.length) {
+                    var tempty = document.createElement('div');
+                    tempty.className = 'agent-mcp-tool-empty';
+                    tempty.textContent = '暂无工具：连接中';
+                    toolsBox.appendChild(tempty);
+                } else {
+                    tl.forEach(function (t) {
+                        var tr = document.createElement('div');
+                        tr.className = 'agent-mcp-tool-row';
+                        var tn = document.createElement('span');
+                        tn.className = 'agent-mcp-tool-name';
+                        tn.textContent = t.tool || t.name;
+                        var td = document.createElement('span');
+                        td.className = 'agent-mcp-tool-desc';
+                        td.textContent = t.description || '';
+                        td.title = t.description || '';
+                        tr.appendChild(tn);
+                        tr.appendChild(td);
+                        toolsBox.appendChild(tr);
+                    });
+                }
+                wrap.appendChild(toolsBox);
+            }
+            agentMcpListEl.appendChild(wrap);
+        });
         agentMcpServers.forEach(function (sv, i) {
             // 阶段一百一十一：行包裹层——行本体 + 可展开工具清单区（TRAE CN 同款服务器行展开）
             var wrap = document.createElement('div');
@@ -4473,6 +4590,7 @@
             // 为函数声明提升，同作用域可直接调用）；标题栏工具栏按钮与设置页导航双入口同归此处
             settingsOpen();
             settingsShowView('mcp');
+            agentMcpProjectRefresh(); // 阶段一百一十六：项目级状态回填 + 自动创建 .im/agent_mcp.json（TRAE「加载项目」时机归口）
             reportPcMcpTools(); // 打开面板先快照一次状态
             startMcpStatusPoll();
         });
@@ -4570,8 +4688,20 @@
             agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
             renderAgentMcpList();
         });
+        agentMcpProjectRefresh(); // 阶段一百一十六：刷新同步项目级状态
         reportPcMcpTools();
         showToast('已刷新服务器与工具状态');
+    });
+    // 阶段一百一十六：项目级 MCP 开关（toggle 走专用 IPC，主进程重建全部用户会话后回填状态）
+    document.getElementById('agent-mcp-proj-switch').addEventListener('click', function () {
+        var want = !agentMcpProjectState.enabled;
+        window.desktop.mcpProjectToggle({ username: IMSocket.getUsername(), enabled: want }).then(function (r) {
+            if (!r || !r.ok) { showToast((r && r.msg) || '切换失败'); return; }
+            showToast(r.enabled ? '已启用项目级 MCP，正在加载 .im/agent_mcp.json' : '已停用项目级 MCP');
+            agentMcpLastReport = ''; // 工具清单可能变化（项目服务器增减），允许重新上报
+            agentMcpProjectRefresh();
+            reportPcMcpTools();
+        }).catch(function (e) { showToast('切换失败：' + (e && e.message || e)); });
     });
     function agentMcpAddMenuOutside(ev) {
         if (!agentMcpAddMenu || agentMcpAddMenu.classList.contains('hidden')) {
@@ -5021,11 +5151,16 @@
         block(s3, '示例 4 · 长期记忆（AI 跨对话记住要点）→ 启动命令', 'npx');
         block(s3, '示例 4 → 命令参数', '-y\n@modelcontextprotocol/server-memory');
         block(s3, '示例 4 → 环境变量（记忆存档文件位置，可不填）', 'MEMORY_FILE_PATH=D:\\im-memory.json');
-        var s4 = sec('④ 使用提示');
-        line(s4, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
-        line(s4, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
-        line(s4, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
-        line(s4, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
+        var s4 = sec('④ 项目级 MCP（.im/agent_mcp.json）');
+        line(s4, '开启「启用项目级 MCP」后，客户端自动从当前项目根目录读取 .im/agent_mcp.json（首次访问自动创建空模板）；该文件可随项目分享给同事，人手一份互不影响。');
+        line(s4, 'JSON 写法：mcpServers 下每个键是服务器名称，值为对象——command（启动命令）、args（参数数组，每项一个字符串）、env（环境变量对象，可省略）、enabled（true/false，可省略默认启用）。');
+        block(s4, '项目级配置完整示例（点「复制」粘贴进 .im/agent_mcp.json 后改成你的）', '{\n    "mcpServers": {\n        "filesystem": {\n            "command": "npx",\n            "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\\\workspace"],\n            "env": {},\n            "enabled": true\n        },\n        "fetch": {\n            "command": "uvx",\n            "args": ["mcp-server-fetch"]\n        }\n    }\n}');
+        line(s4, '同名时用户在「MCP Servers 管理」里配置的优先于项目级；改完 JSON 后点卡片头「刷新」或重新打开设置页即生效（也可 enabled:false 单独停用某项）。');
+        var s5 = sec('⑤ 使用提示');
+        line(s5, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
+        line(s5, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
+        line(s5, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
+        line(s5, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {
@@ -5040,6 +5175,90 @@
     agentMcpBtn.addEventListener('click', openMcpPanel);
     // 阶段一百零五：原弹窗"关闭"按钮与遮罩点击关闭已随 agent-mcp-mask 废弃（DOM 注释归档），
     // 面板显隐归设置页状态机，关闭设置页时由 settingsClose 统一停轮询（见设置页区块）
+
+    // ===== 阶段一百一十七：Agent 审批模式（TRAE CN 同款：手动审批/自动审批/完全访问，输入区左下角盾牌下拉） =====
+    // 背景：MCP（Computer Use）执行中途弹审批卡会抢走键鼠焦点，画面坐标随审批停顿失效导致操作失败。
+    // 模式持久化 localStorage（按用户名隔离），审批决策仍在客户端——自动放行时直接上行 AGENT_APPROVE
+    // （action=approve 原参透传），服务端审批流程/执行轨迹记录不变（记为审批通过），无需服务端改动。
+    var AGENT_APPROVE_LS_KEY = 'im_agent_approve_mode_'; // + 用户名（按账号隔离，换号互不影响）
+    // 自动审批模式下仍需人工确认的高危工具（命令执行与文件写删；delete_file 原本就不可加白逐次确认）
+    var AGENT_MANUAL_TOOLS = { run_command: 1, write_file: 1, edit_file: 1, delete_file: 1 };
+    var AGENT_APPROVE_MODE_DESC = {
+        manual: '手动审批（重要操作由你确认）',
+        auto: '自动审批（MCP/浏览器等自动放行，命令与文件写删仍需确认）',
+        full: '完全访问（不经审批直接运行，请注意风险）'
+    };
+    // agentApproveMode 当前审批模式：缺省手动（与既有行为一致）
+    function agentApproveMode() {
+        try { return localStorage.getItem(AGENT_APPROVE_LS_KEY + IMSocket.getUsername()) || 'manual'; } catch (e) { return 'manual'; }
+    }
+    function agentApproveModeSave(m) {
+        try { localStorage.setItem(AGENT_APPROVE_LS_KEY + IMSocket.getUsername(), m); } catch (e) { }
+        agentApproveUiSync();
+    }
+    // agentAutoApprovable 自动审批模式放行判定：命令执行/文件写删之外全部自动同意（MCP 全部、browser 全部、只读检索类）
+    function agentAutoApprovable(tool) {
+        return !AGENT_MANUAL_TOOLS[String(tool || '')];
+    }
+    // agentApproveUiSync 按钮高亮/悬停文案/面板勾选态归口（切模式与打开面板时刷新）。
+    // 悬停提示写 data-tip-text（tooltip.js 自绘气泡优先读取且不摘除）；严禁回写原生 title——
+    // 原实现 bug：UiSync 每次把 title 写回按钮，tooltip.js 首悬停摘除的原生气泡又回来了，与自绘气泡叠出两个
+    function agentApproveUiSync() {
+        var m = agentApproveMode();
+        agentApproveBtn.classList.toggle('active', m !== 'manual');
+        agentApproveBtn.removeAttribute('title');
+        agentApproveBtn.setAttribute('data-tip-text', '审批模式：' + (AGENT_APPROVE_MODE_DESC[m] || AGENT_APPROVE_MODE_DESC.manual) + '（点击切换）');
+        var items = agentApprovePanel.querySelectorAll('.agent-approve-item');
+        for (var i = 0; i < items.length; i++) {
+            items[i].classList.toggle('selected', items[i].getAttribute('data-mode') === m);
+        }
+    }
+    // agentApprovePanelToggle 面板开合：打开时锚定按钮正上方（同一 offsetParent 内坐标换算，
+    // 浏览区展开/窗口尺寸变化均不错位）。
+    // 原实现 bug：面板 display:none 时先读 offsetParent（为 null）再 getBoundingClientRect 抛
+    // TypeError，导致面板永远打不开（点击盾牌"没有任何反应"）；必须先移除 hidden 再取坐标
+    function agentApprovePanelToggle(show) {
+        var toShow = (typeof show === 'boolean') ? show : agentApprovePanel.classList.contains('hidden');
+        if (toShow) {
+            agentApprovePanel.classList.remove('hidden'); // 先显示才有布局坐标
+            var pr = agentApprovePanel.offsetParent.getBoundingClientRect();
+            var br = agentApproveBtn.getBoundingClientRect();
+            if (br.width > 0 && br.height > 0) {
+                agentApprovePanel.style.left = Math.max(8, br.left - pr.left) + 'px';
+                // 底部行左下角锚定：面板底缘贴按钮顶缘上方 6px（输入区高度可拖拽变化，固定 bottom 会错位）
+                agentApprovePanel.style.bottom = (pr.bottom - br.top + 6) + 'px';
+            } else {
+                // 按钮异常无尺寸（显隐联动未跑等）：退回表情面板同款固定位置，保证面板不出视口
+                agentApprovePanel.style.left = '12px';
+                agentApprovePanel.style.bottom = '180px';
+            }
+            agentApproveUiSync();
+        } else {
+            agentApprovePanel.classList.add('hidden');
+        }
+    }
+    agentApproveBtn.addEventListener('click', function (e) {
+        e.stopPropagation(); // 防触发 document 级"点外关闭"监听（表情面板同款约定）
+        agentApprovePanelToggle();
+    });
+    agentApprovePanel.addEventListener('click', function (e) { e.stopPropagation(); });
+    var approveItems = agentApprovePanel.querySelectorAll('.agent-approve-item');
+    for (var ai = 0; ai < approveItems.length; ai++) {
+        (function (item) {
+            item.addEventListener('click', function () {
+                var m = item.getAttribute('data-mode') || 'manual';
+                agentApproveModeSave(m);
+                agentApprovePanelToggle(false);
+                showToast('Agent 审批模式：' + (AGENT_APPROVE_MODE_DESC[m] || m));
+            });
+        })(approveItems[ai]);
+    }
+    // 点击面板与按钮以外区域关闭（表情面板同款约定）
+    document.addEventListener('click', function (e) {
+        if (!agentApprovePanel.classList.contains('hidden') && !agentApprovePanel.contains(e.target)) {
+            agentApprovePanel.classList.add('hidden');
+        }
+    });
 
     // ===== 阶段九十一：内置浏览区（TRAE CN 同款，仅 PC Electron 壳内启用） =====
     // 阶段九十三（全 DOM 化）：file 标签由主页面同源 iframe 承载，web 标签由主页面 <webview>
@@ -11536,8 +11755,27 @@
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
-        if (currentChatUser !== msg.from_user) return;
         var st = agentTaskCards[ev.task_id];
+        // 阶段一百一十七：审批模式分流——自动审批/完全访问下免卡直接上行同意（原参透传，
+        // 服务端轨迹记为审批通过）；任务卡内补一条免审批流水行（纯展示无交互，不阻断事件流）。
+        // 自动模式仅放行命令执行/文件写删之外的工具（MCP 全部、browser 全部、只读检索类）
+        var approveMode = agentApproveMode();
+        if (approveMode === 'full' || (approveMode === 'auto' && agentAutoApprovable(ev.tool))) {
+            IMSocket.send({
+                msg_type: MSG.AGENT_APPROVE,
+                content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: 'approve', params: ev.params || {} })
+            });
+            if (st) {
+                var autoLine = document.createElement('div');
+                autoLine.className = 'agent-event approve auto-settled';
+                autoLine.textContent = '已自动审批 · ' + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '') +
+                    (approveMode === 'full' ? '（完全访问模式）' : '（自动审批模式）');
+                st.events.appendChild(autoLine);
+                if (currentChatUser === msg.from_user) agentTaskScroll();
+            }
+            return;
+        }
+        if (currentChatUser !== msg.from_user) return;
         if (!st) return;
 
         var block = document.createElement('div');
@@ -12563,6 +12801,7 @@
         agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
         // 阶段九十：我的 MCP 服务器按钮同显隐（仅 PC 端，本机 stdio 自定义）
         agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
+        // 阶段一百一十七：审批模式盾牌显隐归 setAgentMode（上方已调用，仅 Agent 任务模式开启时显示）
         // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；
         // 重新进入该会话时增量会重建气泡继续打字，END 帧保证最终完整）
         for (var sid in aiStreams) {

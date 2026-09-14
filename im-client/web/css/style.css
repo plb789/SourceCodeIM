@@ -3808,6 +3808,14 @@ html.m #list-panel.list-collapsed {
     border-radius: 6px;
 }
 
+/* 原 🤖 emoji 图标字号规则（阶段一百一十七曾短暂使用；emoji 无法改色，已按用户要求换回
+   单色 SVG currentColor 重绘造型，规则保留备用）：
+.agent-mode-btn .emoji-glyph {
+    font-size: 17px;
+    line-height: 1;
+}
+*/
+
 /* ===== 阶段六十九：普通聊天联网搜索（开关高亮 + 回复气泡内搜索行，跟随 --primary 主题色） ===== */
 
 /* 联网搜索开关按钮：active 态主题色高亮（与任务模式开关同款视觉） */
@@ -6043,6 +6051,43 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-mcp-market-card:hover { border-color: var(--text-secondary, #999); }
+
+/* 阶段一百一十六：项目级 MCP 卡片（TRAE CN 同款——管理卡片上方独立区块：标题/描述/状态行 + 开关） */
+.agent-mcp-proj-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+    border: 1px solid var(--border, #333);
+    border-radius: 12px;
+    background: var(--panel-bg, #252525);
+}
+
+.agent-mcp-proj-info { flex: 1; min-width: 0; }
+
+.agent-mcp-proj-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text, #e0e0e0);
+}
+
+.agent-mcp-proj-desc {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary, #999);
+}
+
+.agent-mcp-proj-sub {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: var(--text-secondary, #999);
+    word-break: break-all;
+}
+
+.agent-mcp-proj-sub.err { color: #e05555; } /* 项目文件解析失败红字提示 */
 
 /* 阶段一百一十五：MCP 列表行首字母徽标（内置行 + 用户插件行专用主题徽标，绿底白字；
    与市场卡片徽标 market-badge 分离——市场保持中性化，列表行恢复 TRAE 同款主题色辨识度） */
@@ -10508,4 +10553,109 @@ body.browser-resizing .browser-web-frame {
     height: 100%;
     border: none;
     background: var(--panel-bg);
+}
+
+/* ===== 阶段一百一十七：Agent 审批模式选择（TRAE CN 同款盾牌下拉：手动审批/自动审批/完全访问） =====
+   背景痛点：MCP（Computer Use）执行中途弹审批卡会抢走键鼠焦点，画面坐标随审批停顿失效导致操作失败。
+   样式全部关联现有主题色（--primary/--danger/--panel-bg/--border），明暗主题自动跟随 */
+
+/* 工具栏盾牌按钮：非手动模式下主题色高亮（与任务模式开关同款视觉），小三角随主图标 */
+.agent-approve-btn .approve-caret {
+    margin-left: -3px;
+}
+.agent-approve-btn.active {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    border-radius: 6px;
+}
+
+/* 底部行左下角盾牌按钮（TRAE CN 同款）：.input-footer button 通配规则会给它染成主色发送键，
+   此处还原 tool-btn 幽灵外观；margin-right:auto 把它推到行首（提示文案与发送键保持右侧） */
+.input-footer .agent-approve-btn {
+    margin-right: auto;
+    width: auto;
+    padding: 0 6px;
+    background: none;
+    color: var(--text-light);
+}
+
+/* 下拉面板：与表情面板同骨架（自研面板禁用系统弹窗），锚定左下角按钮正上方
+   （left/bottom 均由 chat.js 按钮坐标动态写入，输入区高度拖拽变化不错位） */
+.agent-approve-panel {
+    position: absolute;
+    bottom: 180px;
+    width: 320px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    padding: 6px;
+    z-index: 96;
+}
+.agent-approve-panel-title {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 6px 8px 8px;
+    user-select: none;
+}
+.agent-approve-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+.agent-approve-item:hover {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.agent-approve-icon {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+}
+/* 完全访问图标底色用警示红（TRAE 同款风险暗示，跟随现有 --danger 变量） */
+.agent-approve-icon.full {
+    background: color-mix(in srgb, var(--danger, #fa5151) 12%, transparent);
+    color: var(--danger, #fa5151);
+}
+.agent-approve-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.agent-approve-text b {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+}
+.agent-approve-text i {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--text-light);
+    line-height: 1.4;
+}
+.agent-approve-check {
+    flex-shrink: 0;
+    color: var(--primary);
+    visibility: hidden; /* 仅选中项显示（.selected 放开） */
+}
+.agent-approve-item.selected .agent-approve-check {
+    visibility: visible;
+}
+
+/* 自动/完全模式下免审批流水行：复用审批事件框，仅一行文字无交互元素 */
+.agent-event.approve.auto-settled {
+    padding: 6px 10px;
+    color: var(--text-light);
+    background: color-mix(in srgb, var(--primary) 6%, transparent);
 }

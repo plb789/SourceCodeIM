@@ -628,6 +628,89 @@ ipcMain.handle('mcp:builtin-toggle', function (event, payload) {
     return { ok: true, enabled: enabled };
 });
 
+// ===== 阶段一百一十六：项目级 MCP（TRAE 同款）——自动从项目根目录 .im/agent_mcp.json 加载 =====
+
+// 项目级 MCP 配置文件路径归口：<工作区根>/.im/agent_mcp.json（工作区根 = 用户自选工作区，未配置回退默认）
+function projectMcpFile(username) {
+    return path.join(agentExecutor.userRoot(String(username || '')), '.im', 'agent_mcp.json');
+}
+
+// 自动创建：加载项目（MCP 面板打开/开关查询）时确保 .im 目录与模板文件存在（UTF-8 无 BOM）
+function ensureProjectMcpFile(username) {
+    const file = projectMcpFile(username);
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        if (!fs.existsSync(file)) {
+            fs.writeFileSync(file, JSON.stringify({ mcpServers: {} }, null, 4), 'utf8');
+        }
+    } catch (e) { void e; }
+    return file;
+}
+
+// 读取并归一化项目级服务器：支持 {"mcpServers":{"名称":{command,args,env,enabled}}} 标准写法（args 字符串也兼容，空格分词）
+function readProjectServers(username) {
+    const file = projectMcpFile(username);
+    let raw;
+    try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { return []; }
+    let data;
+    try { data = JSON.parse(raw); } catch (e) { const err = new Error('JSON 解析失败：' + (e.message || e)); err.projectParseError = true; throw err; }
+    const map = (data && data.mcpServers) || {};
+    const out = [];
+    Object.keys(map).forEach(function (name) {
+        const c = map[name] || {};
+        let args = c.args || [];
+        if (typeof args === 'string') args = args.trim() ? args.trim().split(/\s+/) : [];
+        if (!c.command) return; // 缺 command 视为占位条目，跳过
+        out.push({
+            name: String(name).slice(0, 64),
+            command: String(c.command),
+            args: args.map(String),
+            env: (c.env && typeof c.env === 'object') ? c.env : {},
+            enabled: c.enabled !== false,
+            project: true
+        });
+        if (out.length >= 10) return; // 与用户配置服务器数上限一致
+    });
+    return out;
+}
+
+const projectMcpLoader = function (username) {
+    return readProjectServers(username); // 解析失败经 projectConfigs 静默（错误文本由 status IPC 给面板）
+};
+mcpManager.setProjectMcp(projectMcpEnabledLoad(), projectMcpLoader);
+
+function projectMcpEnabledLoad() {
+    const store = mcpStoreLoad();
+    return !(store.__projMcp && store.__projMcp.enabled === false);
+}
+
+// 项目级 MCP 状态（面板打开即自动创建 .im/agent_mcp.json 并回显解析结果/错误）
+ipcMain.handle('mcp:project-status', function (event, payload) {
+    const username = String((payload && payload.username) || '');
+    if (!username) return { ok: false, msg: '缺少用户名' };
+    const file = ensureProjectMcpFile(username);
+    let servers = [];
+    let error = '';
+    try {
+        servers = readProjectServers(username);
+    } catch (e) {
+        error = (e && e.projectParseError) ? (e.message || String(e)) : '读取失败：' + ((e && e.message) || e);
+    }
+    return { ok: true, enabled: projectMcpEnabledLoad(), file: file, servers: servers, count: servers.length, error: error };
+});
+
+// 项目级开关切换（存 __projMcp + 重建会话；重建在 setProjectMcp 内部按 lastServersByUsername 归口）
+ipcMain.handle('mcp:project-toggle', function (event, payload) {
+    const enabled = !!(payload && payload.enabled);
+    const username = String((payload && payload.username) || '');
+    const store = mcpStoreLoad();
+    store.__projMcp = { enabled: enabled };
+    mcpStoreSave(store);
+    mcpManager.setProjectMcp(enabled, projectMcpLoader);
+    if (username) ensureProjectMcpFile(username); // 关闭再打开也保证模板存在
+    return { ok: true, enabled: enabled };
+});
+
 // 拉取该用户的 MCP 服务器配置（设置面板回显）；builtinEnabled 供列表渲染内置行
 ipcMain.handle('mcp:get', function (event, username) {
     const store = mcpStoreLoad();
@@ -741,8 +824,10 @@ function uvDownloadInstall() {
 function unzipUv(zipPath, resolve) {
     try { fs.mkdirSync(UV_BIN_DIR, { recursive: true }); } catch (e) { }
     // 解压用系统 PowerShell（Windows 内置 Expand-Archive，无第三方依赖）
+    // cwd 固定用户主目录：避免继承主进程工作目录（bin），残留时锁死打包部署目录
     const ps = spawn('powershell.exe', ['-NoProfile', '-Command',
-        'Expand-Archive -Force -LiteralPath "' + zipPath + '" -DestinationPath "' + UV_BIN_DIR + '"'], { windowsHide: true });
+        'Expand-Archive -Force -LiteralPath "' + zipPath + '" -DestinationPath "' + UV_BIN_DIR + '"'],
+        { cwd: os.homedir(), windowsHide: true }); // 原实现：未设置 cwd，子进程继承主进程工作目录
     let errOut = '';
     ps.stderr.on('data', function (d) { errOut += d; });
     ps.on('close', function (code) {
