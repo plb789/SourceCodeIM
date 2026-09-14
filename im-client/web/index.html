@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.17">
+    <link rel="stylesheet" href="css/style.css?v=2.21">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -732,7 +732,11 @@
             <!-- MCP：本机 stdio 服务器管理（阶段一百零五自独立弹窗迁入；DOM id 全保留，chat.js 逻辑零改动复用；
                  仅 PC 端 Electron 壳内可用，Web/手机端无 desktop 桥由 agentMcpSupported() 旁路提示） -->
             <section id="settings-view-mcp" class="settings-view hidden">
-                <h2 class="settings-title">MCP</h2>
+                <!-- 阶段一百一十：标题行 ？号使用说明按钮（源码管理 ？号同款，点击弹出字段说明 + 开箱即用示例） -->
+                <div class="agent-mcp-title-row">
+                    <h2 class="settings-title">MCP</h2>
+                    <button id="agent-mcp-help-btn" class="ws-panel-btn agent-mcp-help-btn" type="button" title="使用说明（字段含义 / 开箱即用示例一键照抄）"><svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M5.1 6A2.9 2.9 0 0 1 10.9 6A2.9 2.9 0 0 1 8 8.9L8 10.2" fill="none" stroke="currentColor" stroke-linecap="round" style="stroke-width:1.5"/><circle cx="8" cy="12.7" r="1.15" fill="currentColor" stroke="none"/></svg></button>
+                </div>
                 <div class="agent-ws-tip">配置本机 MCP 服务器（stdio）：保存后在本机拉起子进程并自动发现工具，工具清单上报服务端后 AI Agent 即可调用（调用在本机执行）。支持每服务器一键"测试连接"，凭据仅保存在本机。</div>
                 <div id="agent-mcp-list" class="agent-mcp-list settings-mcp-list"></div>
                 <button id="agent-mcp-add" class="kb-op-btn agent-ws-add-btn">+ 新增本机 MCP 服务器</button>
@@ -989,7 +993,7 @@
     <script src="js/lib/jszip.min.js?v=3.10"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.6"></script>
+    <script src="js/chat.js?v=3.7"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

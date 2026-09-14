@@ -4387,6 +4387,113 @@
             out.textContent = '测试异常：' + (e && e.message || e);
         });
     });
+    // ===== 阶段一百一十：MCP 设置页 ？号使用说明（源码管理 ？号同款交互） =====
+    // 点击 ？按钮弹出分节说明气泡：字段含义 + 开箱即用示例（命令/参数/env 多行配置块带一键复制，
+    // 用户照抄即可接入 filesystem / fetch / MySQL 查库 / memory 等现成服务器）；再点/外点/Esc 收起
+    function agentMcpHelpOutside(ev) {
+        var el = document.getElementById('settings-view-mcp');
+        var pop = el && el.querySelector('.agent-mcp-help-pop');
+        if (!pop) { document.removeEventListener('mousedown', agentMcpHelpOutside); return; }
+        if (pop.contains(ev.target) || ev.target.closest && ev.target.closest('.agent-mcp-help-btn')) return;
+        pop.remove();
+        document.removeEventListener('mousedown', agentMcpHelpOutside);
+        document.removeEventListener('keydown', agentMcpHelpEsc);
+    }
+    function agentMcpHelpEsc(ev) {
+        var el = document.getElementById('settings-view-mcp');
+        var pop = el && el.querySelector('.agent-mcp-help-pop');
+        if (ev.key === 'Escape' && pop) {
+            pop.remove();
+            document.removeEventListener('mousedown', agentMcpHelpOutside);
+            document.removeEventListener('keydown', agentMcpHelpEsc);
+        }
+    }
+    function agentMcpToggleHelp() {
+        var el = document.getElementById('settings-view-mcp');
+        if (!el) return;
+        var old = el.querySelector('.agent-mcp-help-pop');
+        if (old) {
+            old.remove();
+            document.removeEventListener('mousedown', agentMcpHelpOutside);
+            document.removeEventListener('keydown', agentMcpHelpEsc);
+            return;
+        }
+        var pop = document.createElement('div');
+        pop.className = 'ws-git-help-pop agent-mcp-help-pop';
+        function sec(title) {
+            var s = document.createElement('div');
+            s.className = 'ws-git-help-sec';
+            var h = document.createElement('div');
+            h.className = 'ws-git-help-h';
+            h.textContent = title;
+            s.appendChild(h);
+            pop.appendChild(s);
+            return s;
+        }
+        function line(s, text) {
+            var ln = document.createElement('div');
+            ln.className = 'ws-git-help-line';
+            var tx = document.createElement('span');
+            tx.textContent = text;
+            ln.appendChild(tx);
+            s.appendChild(ln);
+            return ln;
+        }
+        // 多行配置块：块名标签 + pre 展示 + 「复制」一键照抄（复制整段可直接粘进对应输入框）
+        function block(s, label, content) {
+            var b = document.createElement('div');
+            b.className = 'agent-mcp-help-blk';
+            var lb = document.createElement('div');
+            lb.className = 'agent-mcp-help-label';
+            var lt = document.createElement('span');
+            lt.textContent = label;
+            lb.appendChild(lt);
+            var cp = document.createElement('span');
+            cp.className = 'ws-git-help-copy';
+            cp.textContent = '复制';
+            cp.title = '复制全部内容（可直接粘贴）';
+            cp.addEventListener('click', function () { wsGitCopyText(content); });
+            lb.appendChild(cp);
+            b.appendChild(lb);
+            var pre = document.createElement('pre');
+            pre.className = 'agent-mcp-help-pre';
+            pre.textContent = content;
+            b.appendChild(pre);
+            s.appendChild(b);
+        }
+        var s1 = sec('① 工作原理');
+        line(s1, '保存后本机拉起服务器子进程并自动发现工具，清单上报后 AI Agent 即可调用（执行在本机，凭据仅存本机，不会上传）。');
+        var s2 = sec('② 字段怎么填');
+        line(s2, '服务器名称：自定义且唯一，AI 里以 mcp_pc_名称_工具名 显示。');
+        line(s2, '启动命令：npx＝运行 Node 系服务器（最常用）；uvx＝运行 Python 系服务器；node/python＝直接运行本地脚本。');
+        line(s2, '命令参数（每行一个）：-y 表示 npm 包未经安装时自动确认；其后一行是服务器自己的参数（npm 包名、授权目录等）。');
+        line(s2, '环境变量（每行 KEY=VALUE）：服务器的配置项——数据库地址/账号密码/API Key 等都填这里。');
+        var s3 = sec('③ 开箱即用示例（点「复制」逐块照抄）');
+        block(s3, '示例 1 · 文件系统访问（AI 读写指定目录）→ 启动命令', 'npx');
+        block(s3, '示例 1 → 命令参数（每行一个；最后一行改为你要授权的目录）', '-y\n@modelcontextprotocol/server-filesystem\nD:\\workspace');
+        block(s3, '示例 2 · 网页抓取（AI 联网读网页）→ 启动命令', 'uvx');
+        block(s3, '示例 2 → 命令参数', 'mcp-server-fetch');
+        block(s3, '示例 3 · MySQL 数据库查询 → 启动命令', 'npx');
+        block(s3, '示例 3 → 命令参数', '-y\n@benborla29/mcp-server-mysql');
+        block(s3, '示例 3 → 环境变量（每行 KEY=VALUE，改为你的库信息）', 'MYSQL_HOST=127.0.0.1\nMYSQL_PORT=3306\nMYSQL_USER=root\nMYSQL_PASS=你的密码\nMYSQL_DB=数据库名');
+        block(s3, '示例 4 · 长期记忆（AI 跨对话记住要点）→ 启动命令', 'npx');
+        block(s3, '示例 4 → 命令参数', '-y\n@modelcontextprotocol/server-memory');
+        block(s3, '示例 4 → 环境变量（记忆存档文件位置，可不填）', 'MEMORY_FILE_PATH=D:\\im-memory.json');
+        var s4 = sec('④ 使用提示');
+        line(s4, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
+        line(s4, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
+        line(s4, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
+        el.appendChild(pop);
+        if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
+        setTimeout(function () {
+            document.addEventListener('mousedown', agentMcpHelpOutside);
+            document.addEventListener('keydown', agentMcpHelpEsc);
+        }, 0);
+    }
+    // ？图标已内联在 index.html（chat.js 初始化早于 WS_GIT_ICONS 赋值，运行时注入会抛 undefined），
+    // 此处仅绑定事件
+    document.getElementById('agent-mcp-help-btn').addEventListener('click', agentMcpToggleHelp);
+
     agentMcpBtn.addEventListener('click', openMcpPanel);
     // 阶段一百零五：原弹窗"关闭"按钮与遮罩点击关闭已随 agent-mcp-mask 废弃（DOM 注释归档），
     // 面板显隐归设置页状态机，关闭设置页时由 settingsClose 统一停轮询（见设置页区块）

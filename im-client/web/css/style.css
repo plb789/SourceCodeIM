@@ -5614,6 +5614,56 @@ html.m #list-panel.list-collapsed {
 
 .ws-git-help-copy:hover { text-decoration: underline; }
 
+/* 阶段一百一十：MCP 设置页 ？号使用说明气泡——复用源码管理 ws-git-help-* 全套视觉，
+   仅覆盖定位（设置页文档流内左上弹出）与宽度；示例多行配置块（pre + 复制）扩展样式 */
+#settings-view-mcp { position: relative; }
+
+.agent-mcp-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+
+.agent-mcp-title-row .settings-title { margin: 0; }
+
+.agent-mcp-help-btn { color: var(--text-secondary, #999); }
+
+.agent-mcp-help-pop {
+    top: 10px;
+    left: 0;
+    right: auto;
+    width: 660px;
+    max-width: calc(100% - 8px);
+    max-height: 74vh; /* 视口高度归口（父容器自适应高度时百分比解析不可靠），纵向尽量撑高 */
+    z-index: 60;
+}
+
+.agent-mcp-help-blk { margin: 3px 0 5px; }
+
+.agent-mcp-help-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text, #333);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-bottom: 2px;
+}
+
+.agent-mcp-help-pre {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    background: var(--hover, #f2f2f2);
+    color: color-mix(in srgb, var(--text, #333) 65%, var(--text-secondary, #999)); /* 主题主次色混合：深浅主题下均为柔和灰，不再是近白刺眼 */
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    cursor: text;
+}
+
 /* diff 预览标签的面包屑"差异对比"徽标（黑白灰跟随主题） */
 .ws-crumbs-diff {
     flex-shrink: 0;
