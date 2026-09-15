@@ -1,3 +1,4 @@
 # 你要排除的目录（写在这里）
 node_modules/
 dist/
+_toolchain/

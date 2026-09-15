@@ -34,6 +34,10 @@ const aiLimitKey = "im:ai:limit:"
 // aiAskTimeout 单次 AI 问答总超时（长回答场景放宽）
 const aiAskTimeout = 5 * time.Minute
 
+// aiFailoverMaxBackups 阶段一百三十一：模型调用多源兜底的备用源上限
+// （总尝试次数 = 主源 1 次 + 主源快速失败重试 1 次 + 备用源最多 N 次，防全链轮询拖死任务）
+const aiFailoverMaxBackups = 2
+
 // AIRunAgent 运行时 AI 智能体（配置中的 agent + 解析后的 provider 引用）
 type AIRunAgent struct {
 	// ID 数据库记录 ID（阶段五十八：长期记忆按 agent_id 归键，改名不变；内置 mock 兜底智能体无 DB 记录为 0，不做记忆）
@@ -86,6 +90,9 @@ var (
 			ResponseHeaderTimeout: 60 * time.Second,
 		},
 	}
+	// 阶段一百三十一：启用中的模型服务有序列表（DB id 序，reloadAIAgents 原子替换）——
+	// 主源失败时按此顺序取备用源（aiFailoverChain），对话/Agent/压缩/建议等全部模型调用共用
+	aiProviders []*config.AIProviderConfig
 )
 
 // InitAI 阶段四十三：初始化 AI 智能体（服务端归口：API 地址与密钥仅存服务端，客户端不接触）
@@ -196,12 +203,13 @@ func reloadAIAgents() {
 
 	// 提供方索引（值拷贝，与数据库记录解耦，热重载时原子替换）
 	provMap := make(map[string]*config.AIProviderConfig)
+	provOrder := make([]*config.AIProviderConfig, 0, len(provs)) // 阶段一百三十一：备用源有序链（DB id 序）
 	for i := range provs {
 		p := &provs[i]
 		if !p.Enabled {
 			continue
 		}
-		provMap[p.Name] = &config.AIProviderConfig{
+		pm := &config.AIProviderConfig{
 			Name:          p.Name,
 			APIURL:        p.APIURL,
 			APIKey:        p.APIKey,
@@ -209,6 +217,8 @@ func reloadAIAgents() {
 			VisionModel:   p.VisionModel,
 			SupportsImage: p.SupportsImage,
 		}
+		provMap[p.Name] = pm
+		provOrder = append(provOrder, pm)
 	}
 
 	newIndex := make(map[string]*AIRunAgent)
@@ -238,6 +248,7 @@ func reloadAIAgents() {
 	aiMu.Lock()
 	aiAgents = newList
 	aiAgentIndex = newIndex
+	aiProviders = provOrder // 阶段一百三十一：备用源有序链同步热替换
 	aiMu.Unlock()
 	logger.Info("AI 助手加载完成：%d 个智能体，%d 个可用模型服务", len(newList), len(provMap))
 }
@@ -383,26 +394,162 @@ func (s *Server) handleAIStop(c *Client, msg *protocol.Message) {
 	aiStreamStopTrigger(c.username, agent)
 }
 
+// ===== 阶段一百三十一：模型调用多源兜底（自动重试 + 备用源切换）=====
+// 背景：实测 deepseek 服务端建连后流式断流，aiAskTimeout 5 分钟兜底才报"context deadline exceeded"，
+// 单源无重试无备用导致任务整体失败。现归口三层防线：
+//   1. 主源快速失败类错误（4xx/5xx/连接拒绝）同源重试 1 次（秒级代价，覆盖瞬断）
+//   2. 主源超时类错误（断流/卡死，重试只会再等一个完整超时周期）直接切换备用源
+//   3. 备用源按启用 provider 的 DB id 序取用（上限 aiFailoverMaxBackups），每次尝试独立 aiAskTimeout 预算
+// 约束：已产生流式增量的失败不可换源重启（用户已看到部分内容），原样返回错误；用户停止立即终止全链
+
+// aiStreamRes aiStreamChat 多值结果装箱（aiFailoverRun 泛型循环承载）
+type aiStreamRes struct {
+	text  string
+	usage aiUsage
+}
+
+// aiAgentChatRes aiAgentChat 多值结果装箱（aiFailoverRun 泛型循环承载）
+type aiAgentChatRes struct {
+	content string
+	calls   []aiToolCall
+}
+
+// aiAgentStreamRes aiAgentChatStream 多值结果装箱（aiFailoverRun 泛型循环承载）
+type aiAgentStreamRes struct {
+	content  string
+	calls    []aiToolCall
+	streamed bool
+	usage    aiUsage
+}
+
+// aiFailoverChain 构建本次调用的候选源链：主源 → 其余启用 provider（DB id 序，上限 aiFailoverMaxBackups）
+func aiFailoverChain(primary *config.AIProviderConfig) []*config.AIProviderConfig {
+	chain := []*config.AIProviderConfig{primary}
+	aiMu.RLock()
+	defer aiMu.RUnlock()
+	for _, p := range aiProviders {
+		if len(chain) >= 1+aiFailoverMaxBackups {
+			break
+		}
+		if p.Name == primary.Name {
+			continue
+		}
+		chain = append(chain, p)
+	}
+	return chain
+}
+
+// aiIsTimeoutErr 判断是否超时类错误——超时类不在同源重试（主源已卡满一个超时周期，重试只会双倍等待）
+func aiIsTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(msg, "Client.Timeout") ||
+		strings.Contains(strings.ToLower(msg), "timeout")
+}
+
+// aiFailoverRun 多源兜底循环归口：按候选链逐源尝试 attempt，全部失败返回聚合错误。
+// 每次尝试独立 aiAskTimeout 预算（WithoutCancel 剥离父级 deadline，用户停止经看护协程即时透传）；
+// emitted 非空时表示流式已产生增量（不可换源重启），置位后失败原样返回
+func aiFailoverRun[T any](ctx context.Context, agent *AIRunAgent, emitted *bool, attempt func(context.Context, *config.AIProviderConfig) (T, error)) (T, error) {
+	var zero T
+	if agent.Provider == nil {
+		return zero, fmt.Errorf("AI 智能体 %s 未绑定模型服务", agent.Name)
+	}
+	chain := aiFailoverChain(agent.Provider)
+	tried := make([]string, 0, len(chain)+1)
+	var lastErr error
+	for i, p := range chain {
+		res, err := aiAttemptOnce(ctx, p, attempt)
+		if err == nil {
+			if i > 0 {
+				logger.Info("AI 模型调用备用源切换成功（智能体 %s）：主源 %s → 备用源 %s", agent.Name, chain[0].Name, p.Name)
+			}
+			return res, nil
+		}
+		if ctx.Err() != nil {
+			return zero, ctx.Err() // 用户停止或父级取消：立即终止，不再换源
+		}
+		if emitted != nil && *emitted {
+			return zero, err // 已有增量输出：不可换源重启，原样返回
+		}
+		tried = append(tried, p.Name)
+		lastErr = err
+		logger.Warn("AI 模型调用失败（尝试 %d/%d，服务 %s）：%v", i+1, len(chain), p.Name, err)
+		// 主源快速失败（非超时类）同源重试 1 次——瞬断类错误秒级可复现可恢复，重试代价远小于换源
+		if i == 0 && !aiIsTimeoutErr(err) {
+			res, err = aiAttemptOnce(ctx, p, attempt)
+			if err == nil {
+				logger.Info("AI 模型调用同源重试成功（智能体 %s，服务 %s）", agent.Name, p.Name)
+				return res, nil
+			}
+			if ctx.Err() != nil {
+				return zero, ctx.Err()
+			}
+			if emitted != nil && *emitted {
+				return zero, err
+			}
+			tried = append(tried, p.Name+"(重试)")
+			lastErr = err
+			logger.Warn("AI 模型调用同源重试失败（服务 %s）：%v", p.Name, err)
+		}
+	}
+	return zero, fmt.Errorf("已依次尝试模型服务 %s，均失败：%w", strings.Join(tried, "、"), lastErr)
+}
+
+// aiAttemptOnce 单次尝试：独立 aiAskTimeout 超时预算 + 用户停止透传。
+// 父级 ctx 的 deadline 不继承（避免主源断流烧光全部预算后备用源无时间可用），
+// 仅保留取消传播（用户点停止/父级取消时看护协程立即取消本次尝试）
+func aiAttemptOnce[T any](ctx context.Context, p *config.AIProviderConfig, attempt func(context.Context, *config.AIProviderConfig) (T, error)) (T, error) {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), aiAskTimeout)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	defer cancel()
+	return attempt(actx, p)
+}
+
 // aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复
 // 与本次消耗的 Token 统计（stream_options.include_usage 请求归口，兼容服务无该字段时 usage 归零优雅降级）。
-// provider 为 nil 时使用本地 Mock 应答（未配置模型服务的降级路径）
+// provider 为 nil 时使用本地 Mock 应答（未配置模型服务的降级路径）。
+// 原实现：单源直连，失败即整体失败——阶段一百三十一改走 aiFailoverRun 多源兜底，主体下沉为 aiStreamChatAttempt
 func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, onDelta func(string)) (string, aiUsage, error) {
 	if agent.Provider == nil {
 		reply := "我是 " + agent.Name + "（本地演示模式）。服务端尚未配置模型服务，请在 im-server/bin/config.yaml 的 ai 节点配置 providers（api_url/api_key/model）与 agents 后重启服务。"
 		onDelta(reply)
 		return reply, aiUsage{}, nil
 	}
+	emitted := false
+	wrapped := func(delta string) {
+		emitted = true
+		onDelta(delta)
+	}
+	res, err := aiFailoverRun(ctx, agent, &emitted, func(actx context.Context, p *config.AIProviderConfig) (aiStreamRes, error) {
+		return aiStreamChatAttempt(actx, agent, p, msgs, wrapped)
+	})
+	return res.text, res.usage, err
+}
 
+// aiStreamChatAttempt aiStreamChat 主体（流式 SSE 单次调用，显式指定 provider 执行——多源兜底由 aiFailoverRun 归口）
+func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProviderConfig, msgs []aiChatMessage, onDelta func(string)) (aiStreamRes, error) {
 	// 视觉模型自动路由：消息中出现多模态 content 数组（带图提问）且配置了 vision_model 时，
 	// 本次请求自动改用视觉模型，纯文本仍走主模型——同一智能体无需手动切换模型
-	modelName := agent.Provider.Model
+	modelName := p.Model
 	for _, m := range msgs {
 		if _, isText := m.Content.(string); !isText {
-			if agent.Provider.VisionModel != "" {
-				modelName = agent.Provider.VisionModel
+			if p.VisionModel != "" {
+				modelName = p.VisionModel
 				logger.Info("AI 视觉路由：智能体 %s 带图提问，使用视觉模型 %s", agent.Name, modelName)
 			} else {
-				logger.Warn("AI 视觉路由：智能体 %s 带图提问，但模型服务 %s 未配置视觉模型，仍使用主模型 %s（多模态内容可能被模型忽略）", agent.Name, agent.Provider.Name, modelName)
+				logger.Warn("AI 视觉路由：智能体 %s 带图提问，但模型服务 %s 未配置视觉模型，仍使用主模型 %s（多模态内容可能被模型忽略）", agent.Name, p.Name, modelName)
 			}
 			break
 		}
@@ -415,25 +562,25 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 		"stream_options": map[string]interface{}{"include_usage": true},
 	})
 	if err != nil {
-		return "", aiUsage{}, err
+		return aiStreamRes{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(body))
 	if err != nil {
-		return "", aiUsage{}, err
+		return aiStreamRes{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if agent.Provider.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+agent.Provider.APIKey)
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 
 	resp, err := aiHTTP.Do(req)
 	if err != nil {
-		return "", aiUsage{}, err
+		return aiStreamRes{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", aiUsage{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return aiStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
 	// 解析 SSE 流：形如 "data: {...}"，终止帧 "data: [DONE]"；增量取 choices[0].delta.content，
@@ -472,26 +619,35 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return full.String(), usage, err
+		return aiStreamRes{text: full.String(), usage: usage}, err
 	}
 	if full.Len() == 0 {
-		return "", usage, fmt.Errorf("AI 服务未返回内容")
+		return aiStreamRes{text: full.String(), usage: usage}, fmt.Errorf("AI 服务未返回内容")
 	}
-	return full.String(), usage, nil
+	return aiStreamRes{text: full.String(), usage: usage}, nil
 }
 
 // aiAgentChat 阶段五十九：带工具定义的非流式对话调用（Agent Loop 决策专用）。
 // 请求体携带 tools（OpenAI 兼容 function calling 格式），返回助手文本与工具调用请求列表；
 // 未发起工具调用时 toolCalls 为空、content 即最终答复。
 // provider 为 nil 时返回本地 Mock 应答（与聊天链路同款降级提示，Agent 无法执行任务）。
+// 原实现：单源直连，失败即整体失败——阶段一百三十一改走 aiFailoverRun 多源兜底，主体下沉为 aiAgentChatAttempt
 func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition) (string, []aiToolCall, error) {
 	if agent.Provider == nil {
 		reply := "本地演示模式：服务端尚未配置模型服务，智能 Agent 需要 function calling 能力的模型（如 deepseek/glm/gpt 等），请先在服务端配置 providers。"
 		return reply, nil, nil
 	}
+	noEmit := false // 非流式无增量输出，恒不触发"已输出不可换源"分支
+	res, err := aiFailoverRun(ctx, agent, &noEmit, func(actx context.Context, p *config.AIProviderConfig) (aiAgentChatRes, error) {
+		return aiAgentChatAttempt(actx, agent, p, msgs, tools)
+	})
+	return res.content, res.calls, err
+}
 
+// aiAgentChatAttempt aiAgentChat 主体（非流式单次调用，显式指定 provider 执行——多源兜底由 aiFailoverRun 归口）
+func aiAgentChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProviderConfig, msgs []aiChatMessage, tools []aiToolDefinition) (aiAgentChatRes, error) {
 	body := map[string]interface{}{
-		"model":    agent.Provider.Model,
+		"model":    p.Model,
 		"messages": msgs,
 		"stream":   false,
 	}
@@ -502,28 +658,28 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, err
+		return aiAgentChatRes{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(data))
 	if err != nil {
-		return "", nil, err
+		return aiAgentChatRes{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if agent.Provider.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+agent.Provider.APIKey)
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 
 	resp, err := aiHTTP.Do(req)
 	if err != nil {
-		return "", nil, err
+		return aiAgentChatRes{}, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return "", nil, err
+		return aiAgentChatRes{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return aiAgentChatRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
 	var out struct {
@@ -535,13 +691,13 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return "", nil, fmt.Errorf("AI 响应解析失败: %w", err)
+		return aiAgentChatRes{}, fmt.Errorf("AI 响应解析失败: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return "", nil, fmt.Errorf("AI 服务未返回内容")
+		return aiAgentChatRes{}, fmt.Errorf("AI 服务未返回内容")
 	}
 	msg := out.Choices[0].Message
-	return msg.Content, msg.ToolCalls, nil
+	return aiAgentChatRes{content: msg.Content, calls: msg.ToolCalls}, nil
 }
 
 // aiAgentChatStream 阶段六十二：带工具定义的流式对话调用（Agent Loop 专用，Trae CN 同款打字机体验）。
@@ -549,7 +705,8 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 // 工具调用按 index 增量聚合（OpenAI 流式 tool_calls 分片下发），返回累计正文与完整调用列表。
 // streamed 表示本轮是否产生过增量：上游不支持流式/一次性返回时为 false，调用方回退整段事件兼容。
 // 阶段一百零二：返回 usage（usage 随末尾帧下发且该帧 choices 为空，须在 choices 判空前取记），
-// Agent 任务循环据此累计全任务 Token 消耗（完结扣积分/落库/随帧下发）
+// Agent 任务循环据此累计全任务 Token 消耗（完结扣积分/落库/随帧下发）。
+// 原实现：单源直连，失败即整体失败——阶段一百三十一改走 aiFailoverRun 多源兜底，主体下沉为 aiAgentChatStreamAttempt
 func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, tools []aiToolDefinition, onText, onReasoning func(string)) (string, []aiToolCall, bool, aiUsage, error) {
 	if agent.Provider == nil {
 		reply := "本地演示模式：服务端尚未配置模型服务，智能 Agent 需要 function calling 能力的模型（如 deepseek/glm/gpt 等），请先在服务端配置 providers。"
@@ -558,9 +715,31 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 		}
 		return reply, nil, true, aiUsage{}, nil
 	}
+	// emitted：任一可见增量（正文/推理）已回调即置位——该状态下失败不可换源重启（用户已看到部分内容）
+	emitted := false
+	wText, wReason := onText, onReasoning
+	if onText != nil {
+		wText = func(delta string) {
+			emitted = true
+			onText(delta)
+		}
+	}
+	if onReasoning != nil {
+		wReason = func(delta string) {
+			emitted = true
+			onReasoning(delta)
+		}
+	}
+	res, err := aiFailoverRun(ctx, agent, &emitted, func(actx context.Context, p *config.AIProviderConfig) (aiAgentStreamRes, error) {
+		return aiAgentChatStreamAttempt(actx, agent, p, msgs, tools, wText, wReason)
+	})
+	return res.content, res.calls, res.streamed, res.usage, err
+}
 
+// aiAgentChatStreamAttempt aiAgentChatStream 主体（流式+工具定义单次调用，显式指定 provider 执行）
+func aiAgentChatStreamAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProviderConfig, msgs []aiChatMessage, tools []aiToolDefinition, onText, onReasoning func(string)) (aiAgentStreamRes, error) {
 	body := map[string]interface{}{
-		"model":          agent.Provider.Model,
+		"model":          p.Model,
 		"messages":       msgs,
 		"stream":         true,
 		"stream_options": map[string]interface{}{"include_usage": true},
@@ -571,25 +750,25 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, false, aiUsage{}, err
+		return aiAgentStreamRes{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, agent.Provider.APIURL, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(data))
 	if err != nil {
-		return "", nil, false, aiUsage{}, err
+		return aiAgentStreamRes{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if agent.Provider.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+agent.Provider.APIKey)
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 
 	resp, err := aiHTTP.Do(req)
 	if err != nil {
-		return "", nil, false, aiUsage{}, err
+		return aiAgentStreamRes{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return "", nil, false, aiUsage{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return aiAgentStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
 	var content strings.Builder
@@ -673,7 +852,7 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", nil, streamed, usage, err
+		return aiAgentStreamRes{content: content.String(), streamed: streamed, usage: usage}, err
 	}
 
 	var calls []aiToolCall
@@ -689,7 +868,7 @@ func aiAgentChatStream(ctx context.Context, agent *AIRunAgent, msgs []aiChatMess
 		c.Function.Arguments = acc.args.String()
 		calls = append(calls, c)
 	}
-	return content.String(), calls, streamed, usage, nil
+	return aiAgentStreamRes{content: content.String(), calls: calls, streamed: streamed, usage: usage}, nil
 }
 
 // aiBuildContext 组装多轮对话上下文（服务端归口：按 用户+智能体 隔离取最近 N 条历史，他人不可见）

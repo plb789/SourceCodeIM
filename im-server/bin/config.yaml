@@ -68,16 +68,16 @@ ai:
   # 阶段八十四：TRAE 同款历史对话压缩（AI 问答与 Agent 任务共用）——历史上下文估算 token
   # 达到阈值时把较旧部分 LLM 摘要成一条摘要消息注入（最近 N 条保留原文），长会话/长任务
   # 显著降低 token 消耗并加速模型首字响应；AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
-  compress_threshold_tokens: 12000     # 触发阈值（估算 token；负数=禁用压缩）
+  compress_threshold_tokens: 120000     # 触发阈值（估算 token；负数=禁用压缩）
   compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
 
   # 阶段五十一：知识库向量化 embedding 服务（OpenAI 兼容 /embeddings 接口归口）
   # DeepSeek 不提供 embedding API，可接任意兼容服务（硅基流动 bge-m3 / 智谱 embedding-3 / 本地 ollama 等）
   # api_url 为空时知识库功能静默降级（可建库但文件不向量化），不影响聊天与 AI 问答
   embedding:
-    api_url: "http://127.0.0.1:11434/v1/embeddings"                          # OpenAI 兼容 /embeddings 完整地址（示例：https://api.siliconflow.cn/v1/embeddings）；留空=知识库向量化降级关闭；本地 ollama 填 http://127.0.0.1:11434/v1/embeddings（注意是 embeddings 不是 chat/completions）
-    api_key: ""                          # API 密钥（仅存服务端，不下发客户端）
-    model: "nomic-embed-text"                 # 向量模型名（需与 api_url 服务支持的模型一致）免费限流调试可用BAAI/bge-m3模型或本地nomic-embed-text模型
+    api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"                          # OpenAI 兼容 /embeddings 完整地址（示例：https://api.siliconflow.cn/v1/embeddings）；留空=知识库向量化降级关闭；本地 ollama 填 http://127.0.0.1:11434/v1/embeddings（注意是 embeddings 不是 chat/completions）
+    api_key: "sk-ws-H.PHLLPDY.idiZ.MEUCIA9DmFD_P_I9Ut3I_q8id1gFY9FvqQvVQLK5NJd6eeVTAiEAjirtmZtzWHDbBqqOpN3p3LlC8dIvofJrFVDbuSt56OY"                          # API 密钥（仅存服务端，不下发客户端）
+    model: "qwen3.7-text-embedding"                 # 向量模型名（需与 api_url 服务支持的模型一致）免费限流调试可用BAAI/bge-m3模型或本地nomic-embed-text模型
     batch_size: 16                       # 单次请求批量条数
   # 阶段五十一：知识库参数（data_dir 相对路径基于 exe 所在目录解析）
   kb:
