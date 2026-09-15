@@ -1,0 +1,111 @@
+// obfuscate.js - 阶段一百二十三：构建期 JS 混淆打包归口（TRAE CN 同款防线：压缩 + 变量名混淆）
+// 背景：PC 安装包内置网页快照（resources/web-snapshot），前端源码随包明文可见；实测 TRAE CN 的做法
+//       是 workbench 17.8MB 单文件 minify+mangle（明文可读性极低），据此对自研 js 构建期混淆——
+//       esbuild transform 逐文件压缩 + 变量名 mangle，阅读门槛大幅提高。这是"提高逆向门槛"而非
+//       加密（前端代码在浏览器必须明文执行，本质上无法真正加密，TRAE 亦然）。
+//       实测修正：混淆范围限定 web\js\ 子树（26 个自研文件）——web\lib\ 下 101 个第三方库本身
+//       已是 min 压缩形态，重复混淆零收益且有兼容风险（AMD loader 等），原样复制。
+// 关键约束：mangle 只作用于函数内部局部变量（toplevel 默认不动）——跨文件全局函数/全局变量
+//       名全部保留，页面 script 标签按原文件名加载，全局通信零影响，html/css 零适配。
+// 用法：node obfuscate.js（build.bat [5/8] 混淆步骤调用，也可手动执行）
+// 输出：bundled/web-obfuscated（混淆 js + 原样其他资源）+ snapshot-manifest.json（源属性清单）
+//       —— build.bat 快照步骤以 web-obfuscated 为复制源嵌入安装包；
+//       客户端 web-cache.js 打包模式按清单记录的"源文件 size/mtime"与服务端清单比对
+//       （混淆产物自身属性与源不同，不能直接比对），保证出厂快照零下载、服务端更新才增量。
+// 排除规则：static 整段（用户数据+工具链）、zip、隐藏文件——与 web-cache.js walkFiles/服务端清单一致
+
+const esbuild = require('esbuild');
+const fs = require('fs');
+const path = require('path');
+
+const srcRoot = path.resolve(__dirname, '..', 'web');              // 网页源目录
+const outRoot = path.join(__dirname, 'bundled', 'web-obfuscated'); // 混淆输出目录（快照复制源）
+
+// collect 递归收集待处理文件清单（与缓存/服务端清单排除规则对齐）
+function collect(dir, rel, out) {
+    var entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (var i = 0; i < entries.length; i++) {
+        var ent = entries[i];
+        var name = ent.name;
+        if (name.indexOf('.') === 0) continue; // 隐藏文件/目录排除
+        if (name === 'static') continue;       // 用户数据与工具链目录排除
+        if (ent.isDirectory()) {
+            collect(path.join(dir, name), rel ? rel + '/' + name : name, out);
+            continue;
+        }
+        if (/\.zip$/i.test(name)) continue;    // zip 排除
+        out.push({
+            rel: rel ? rel + '/' + name : name,
+            src: path.join(dir, name),
+            out: path.join(outRoot, (rel ? rel + '/' + name : name).replace(/\//g, path.sep)),
+            // 仅 web\js\ 子树的自研代码混淆；lib 第三方库（已是 min 形态）与 html/css 等原样复制
+            isJs: (rel === 'js' || rel.indexOf('js/') === 0) && /\.js$/i.test(name)
+        });
+    }
+}
+
+async function main() {
+    var t0 = Date.now();
+    // 0. 清空输出目录：保证产物纯净无上轮残留（旧文件若残留会随快照入库成为死资源）
+    fs.rmSync(outRoot, { recursive: true, force: true });
+    fs.mkdirSync(outRoot, { recursive: true });
+
+    var files = [];
+    collect(srcRoot, '', files);
+    if (!files.length) throw new Error('源目录为空: ' + srcRoot);
+
+    var manifest = {}; // {相对路径: {s: 源size, t: 源mtimeMs 取整}}——增量同步比对归口
+    var obfCount = 0, copyCount = 0, srcBytes = 0, outBytes = 0;
+
+    // js 逐文件混淆（并行，esbuild 内部 Go 池调度）；其他文件原样复制
+    var tasks = files.map(function (f) {
+        return function () {
+            var st = fs.statSync(f.src);
+            manifest[f.rel] = { s: st.size, t: Math.floor(st.mtimeMs) };
+            fs.mkdirSync(path.dirname(f.out), { recursive: true });
+            if (!f.isJs) {
+                fs.copyFileSync(f.src, f.out);
+                copyCount++;
+                return Promise.resolve();
+            }
+            var code = fs.readFileSync(f.src, 'utf8');
+            return esbuild.transform(code, {
+                minify: true,           // 压缩：去空白换行 + 局部变量名 mangle（toplevel 默认不动→全局名保留）
+                charset: 'utf8',        // 保留中文字符（默认 ascii 会把中文转义为 \uXXXX 使体积膨胀）
+                legalComments: 'none',
+                sourcefile: f.rel,
+                logLevel: 'silent'
+            }).then(function (r) {
+                fs.writeFileSync(f.out, r.code);
+                obfCount++;
+                srcBytes += st.size;
+                outBytes += Buffer.byteLength(r.code, 'utf8');
+            });
+        };
+    });
+
+    var failed = null;
+    var queue = tasks.slice();
+    async function worker() {
+        while (queue.length && !failed) {
+            try { await queue.shift()(); } catch (e) { if (!failed) failed = e; }
+        }
+    }
+    var workers = [];
+    for (var i = 0; i < 8; i++) workers.push(worker());
+    await Promise.all(workers);
+    if (failed) throw failed;
+
+    // 源属性清单：客户端增量同步用它替代快照实扫（混淆产物属性不可用于比对）
+    fs.writeFileSync(path.join(outRoot, 'snapshot-manifest.json'), JSON.stringify(manifest));
+
+    function kb(n) { return (n / 1024).toFixed(1) + 'KB'; }
+    console.log('[混淆] 完成：js 混淆 ' + obfCount + ' 个（' + kb(srcBytes) + ' → ' + kb(outBytes) +
+        '，压缩率 ' + (srcBytes ? Math.round(outBytes / srcBytes * 100) : 0) + '%），原样复制 ' + copyCount +
+        ' 个，清单 ' + Object.keys(manifest).length + ' 条，耗时 ' + (Date.now() - t0) + 'ms');
+}
+
+main().catch(function (e) {
+    console.error('[混淆] 失败:', e && e.message);
+    process.exit(1);
+});

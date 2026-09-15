@@ -13,9 +13,16 @@ const agentExecutor = require('./agent-executor.js');
 const mcpManager = require('./mcp-manager.js');
 // 阶段九十一：内置浏览器管理器（TRAE CN 同款浏览区——多标签页/Agent 工具直调/CDP 端口开关）
 const browserManager = require('./browser-manager.js');
+// 阶段一百二十二：网页资源本地缓存管理器（app:// 协议三级回退 + 启动增量同步 + 旧登录态迁移）
+const webCache = require('./web-cache.js');
 
 let mainWindow = null;
 let tray = null;
+
+// 阶段一百二十二：同 origin http 拦截方案下无需自定义协议注册
+// 原实现（app://local 自定义协议方案）：webCache.registerSchemes() 必须在 app ready 前调用，
+// secure 保住 navigator.clipboard 等 secure context 能力——实测跨协议导航存在 ERR_FAILED(-2)
+// 稳定性问题后整体改为 session.protocol.handle('http') 拦截（origin 不变，无需协议特权）
 
 // 阶段四十五：禁用 Windows Fluent/Overlay 悬浮滚动条特性——新 Chromium 在滚轮滚动时会浮现原生悬浮滚动条，
 // 且该特性无视页面 ::-webkit-scrollbar 自定义样式，与自绘悬浮滑块叠加出现"同一条轨道两条滚动条"。
@@ -66,9 +73,17 @@ function createWindow() {
             // 阶段九十三：浏览区网页标签改用 <webview> 承载（真 Chromium 内核但是 DOM 元素，
             // 与 file 标签 iframe 同层级）——工具提示/弹窗遮罩/分隔线等页面 DOM 不再被原生层遮挡
             webviewTag: true
+            // 阶段一百二十二：同 origin http 拦截方案下以下两项已移除（原 app:// 方案所需）——
+            // additionalArguments 传服务端地址（页面 origin 不再变化，socket.js 按 location 推导即可）；
+            // allowRunningInsecureContent 放开混合内容（http origin 加载 http 外域内容本就不受限）
         }
     });
 
+    // 阶段一百二十二：页面地址恢复为服务端 http 地址（origin 与旧行为完全一致）——
+    // 静态资源由 session.protocol.handle('http') 拦截读本地磁盘（缓存→快照→服务端三级回退），
+    // 页面秒开且零回源；动态请求透传服务端，资源归口不变。
+    // 原实现：mainWindow.loadURL(webCache.pageUrl('/'))（app:// 方案，实测导航稳定性问题后回退）
+    // 更早原实现：mainWindow.loadURL(SERVER_URL)（每个静态资源都经服务端 no-cache 回源校验，页面打开慢）
     mainWindow.loadURL(SERVER_URL);
 
     // 阶段九十二：主窗口固定 100% 缩放——页面缩放（Ctrl+滚轮）会让 CSS px 与 BrowserView
@@ -286,8 +301,11 @@ function ensureViewerWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false
+            // 阶段一百二十二：additionalArguments/allowRunningInsecureContent 已随 app:// 方案移除（origin 不变无需传参）
         }
     });
+    // 阶段一百二十二：图片查看器地址恢复服务端 http（静态资源经 http 拦截读本地，原 app:// 方案已回退）
+    // 更早原实现：viewerWin.loadURL(SERVER_URL + 'image-viewer.html')
     viewerWin.loadURL(SERVER_URL + 'image-viewer.html');
     viewerWin.on('close', function (e) {
         // 关闭改为隐藏复用：保留窗口避免频繁重建（页面内 Esc/关闭按钮走同一隐藏逻辑）
@@ -977,8 +995,11 @@ function ensureTrayPanel() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false
+            // 阶段一百二十二：additionalArguments/allowRunningInsecureContent 已随 app:// 方案移除（origin 不变无需传参）
         }
     });
+    // 阶段一百二十二：托盘面板地址恢复服务端 http（静态资源经 http 拦截读本地，原 app:// 方案已回退）
+    // 更早原实现：panelWin.loadURL(SERVER_URL + 'tray-panel.html')
     panelWin.loadURL(SERVER_URL + 'tray-panel.html');
     // 点击面板外任意处（面板失焦）自动隐藏
     panelWin.on('blur', function () { hideTrayPanel(); });
@@ -1063,13 +1084,20 @@ ipcMain.on('tray:flash', function () {
     }, 300);
 });
 
-app.whenReady().then(function () {
+app.whenReady().then(async function () {
     // 隐藏 Electron 默认应用菜单：File/Edit/View/Window/Help 为开发调试用途（含刷新/DevTools），正式客户端不展示
     // 原实现：未设置应用菜单，Windows 上自动显示 Electron 默认英文菜单
     // Menu.setApplicationMenu(Menu.buildFromTemplate([]));
     Menu.setApplicationMenu(null);
 
+    // 阶段一百二十二：本地缓存初始化 → http 拦截安装 → 窗口创建（内含页面加载）→ 启动增量同步
+    // 拦截必须先于页面加载安装（静态资源命中本地秒开）；sync 内部自带 4s 总超时与全静默兜底，
+    // 服务端离线/超时不阻塞启动（缺失文件运行期透传兜底）。同 origin 方案无需登录态迁移
+    // （原 app:// 方案需 migrateLegacyStorage，实测跨协议导航稳定性问题后整体回退）
+    webCache.init({ serverUrl: SERVER_URL });
+    webCache.installInterceptor();
     createWindow();
+    await webCache.sync();
     createTray();
 
     // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；
@@ -1079,6 +1107,7 @@ app.whenReady().then(function () {
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
+    // 阶段一百二十二：viewer 地址恢复服务端 http（同 origin 下 chat.js 相对路径 iframe 自动命中 http 拦截）
     browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=131'); // v=131：同步渲染改 render 返回即回执（防 rAF 绘制冻结丢回执，与 chat.js iframe src 同步）
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({

@@ -26,7 +26,7 @@ rem Ó¦ÓÃÍ¼±êÂ·¾¶£¨¿ÉÅäÖÃ£©£º¸ü»»ÐÂÍ¼±êÖ»Ðè¸ÄÕâÒ»´¦£¬Ö§³Ö ico/png ÈÎÒâÎÄ¼þÃûÓëÍêÕ
 rem NOTE: keep this icon in sync with main.js tray icon const
 set "APP_ICON=%~dp064.ico"
 
-echo [1/5] ¼ì²é Node »·¾³...
+echo [1/8] ¼ì²é Node »·¾³...
 where node >nul 2>nul
 if errorlevel 1 (
     echo [´íÎó] Î´¼ì²âµ½ Node.js£¬ÇëÏÈ°²×° Node.js 20 »ò¸ü¸ß°æ±¾
@@ -34,7 +34,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/5] °²×°ÒÀÀµ£¨Ê×´Î½ÏÂý£¬Ö®ºóÃë¼¶£©...
+echo [2/8] °²×°ÒÀÀµ£¨Ê×´Î½ÏÂý£¬Ö®ºóÃë¼¶£©...
 call npm install --no-audit --no-fund
 if errorlevel 1 (
     echo [´íÎó] ÒÀÀµ°²×°Ê§°Ü£¬Çë¼ì²éÍøÂçºóÖØÊÔ
@@ -42,7 +42,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [3/5] ×¼±¸±ãÐ¯ Node ÔËÐÐÊ±£¨bundled\ ÄÚÎÞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´Î 34.5MB£©...
+echo [3/8] ×¼±¸±ãÐ¯ Node ÔËÐÐÊ±£¨bundled\ ÄÚÎÞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´Î 34.5MB£©...
 rem ½×¶ÎÒ»°ÙÒ»Ê®°Ë£ºÄÚÇ¶±ãÐ¯ Node µ½°²×°°ü£¨TRAE CN Í¬¿î bundled ÔËÐÐÊ±»úÖÆ£¬ÀëÏß¿ÉÓÃ£©¡ª¡ª
 rem electron-builder ¾­ package.json extraResources ½« zip ¸´ÖÆÎª resources\node-runtime.zip£¬
 rem ¿Í»§¶Ë node-runtime.js ÓÅÏÈ½âÑ¹±¾µØ zip£¬È±Ê§Ê±²ÅÁªÍøÏÂÔØ
@@ -58,7 +58,7 @@ if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
     echo ±ãÐ¯ Node ÔËÐÐÊ±ÒÑ´æÔÚ£¨bundled\ »º´æ£©
 )
 
-echo [3/5] ×¼±¸ uv ¹¤¾ßÁ´£¨bundled\ ÄÚÎÞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´ÎÔ¼ 17MB£©...
+echo [4/8] ×¼±¸ uv ¹¤¾ßÁ´£¨bundled\ ÄÚÎÞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´ÎÔ¼ 17MB£©...
 rem ½×¶ÎÒ»°ÙÒ»Ê®¾Å£ºÄÚÇ¶ uv ¹¤¾ßÁ´µ½°²×°°ü£¨Óë±ãÐ¯ Node Í¬¿îË«Í¨µÀ»úÖÆ£¬ÀëÏß¿ÉÓÃ£©¡ª¡ª
 rem fetch/sqlite µÈ Python Ïµ MCP ²å¼þÒÀÀµ uvx ÃüÁî£¬¿Í»§¶ËÓÅÏÈ½âÑ¹±¾µØ zip£¬È±Ê§Ê±²ÅÁªÍøÏÂÔØ
 if not exist "%~dp0bundled\uv-runtime.zip" (
@@ -73,7 +73,29 @@ if not exist "%~dp0bundled\uv-runtime.zip" (
     echo uv ¹¤¾ßÁ´ zip ÒÑ´æÔÚ£¨bundled\ »º´æ£©
 )
 
-echo [4/5] ´ò°ü win-unpacked...
+echo [5/8] JS »ìÏý´ò°ü£¨TRAE CN Í¬¿î£ºesbuild Ñ¹Ëõ+±äÁ¿Ãû»ìÏý£¬Êä³ö bundled\web-obfuscated£©...
+rem ½×¶ÎÒ»°Ù¶þÊ®Èý£º¶Ô im-client\web\js ×ÔÑÐ´úÂëÖðÎÄ¼þ esbuild transform£¨minify+mangle£¬
+rem ²»¸ÄÄ£¿é½á¹¹ÓëÈ«¾ÖÃû£¬¿çÎÄ¼þÈ«¾ÖÍ¨ÐÅ²»ÊÜÓ°Ïì£©£¬lib µÚÈý·½¿âÓë html/css/Í¼Æ¬µÈÔ­Ñù¸´ÖÆ£»
+rem Í¬Ê±Éú³É snapshot-manifest.json£¨Ô´ÎÄ¼þ size/mtime Çåµ¥£©£¬¿Í»§¶ËÔöÁ¿Í¬²½°´Ô´ÊôÐÔ±È¶Ô£¬
+rem ±£Ö¤³ö³§¿ìÕÕÓë·þÎñ¶ËÇåµ¥Ò»ÖÂ£¨Ê×Æô 0 ÏÂÔØ£©¡£Ê§°Ü¼´ÖÐÖ¹´ò°ü£¨²úÎï²»ÍêÕû²»ÈçÃ÷È·±¨´í£©
+node obfuscate.js
+if errorlevel 1 (
+    echo [ERROR] JS »ìÏýÊ§°Ü£¬Çë¼ì²é obfuscate.js Êä³öÓë im-client\web\js Ô´ÂëÓï·¨
+    pause
+    exit /b 1
+)
+
+echo [6/8] Éú³É PC ¿Í»§¶ËÍøÒ³×ÊÔ´¿ìÕÕ£¨À´×Ô»ìÏý²úÎï web-obfuscated£©...
+rem ½×¶ÎÒ»°Ù¶þÊ®¶þ£º¿ìÕÕ¾­ package.json extraResources Ç¶Èë resources\web-snapshot£¬
+rem ¿Í»§¶Ë http Ð­ÒéÈý¼¶»ØÍË£¨ÔöÁ¿»º´æ - ¿ìÕÕ - ·þÎñ¶Ë´úÀí£©£¬Ê×´ÎÆô¶¯Ò³Ãæ¼´Ãë¿ª¡£
+rem robocopy ÍË³öÂë 0~7 ¾ùÎª³É¹¦£¨1=ÓÐ¸´ÖÆ¡¢3=¸´ÖÆ+Ìø¹ýµÈ£©£¬½ö >=8 ÅÐ¶¨Ê§°Ü
+robocopy "%~dp0bundled\web-obfuscated" "%~dp0bundled\web-snapshot" /MIR /XD static /XF *.zip /NFL /NDL /NJH /NJS /NP
+if errorlevel 8 (
+    echo [ERROR] ÍøÒ³×ÊÔ´¿ìÕÕÉú³ÉÊ§°Ü£¬Çë¼ì²é»ìÏýÊä³ö bundled\web-obfuscated
+    pause
+    exit /b 1
+)
+echo [7/8] ´ò°ü win-unpacked...
 call npx electron-builder --win --x64 --dir
 if errorlevel 1 (
     echo [´íÎó] ´ò°üÊ§°Ü£¬Çë²é¿´ÉÏ·½ÈÕÖ¾
@@ -111,7 +133,7 @@ if exist "%~dp0bundled\uv-runtime.zip" (
     echo [ÌáÊ¾] bundled\uv-runtime.zip ²»´æÔÚ£¬±¾´Î´ò°ü²»º¬ÄÚÇ¶ uv ¹¤¾ßÁ´£¨¿Í»§¶ËÁªÍø³¡¾°×Ô¶¯ÔÚÏßÏÂÔØ£©
 )
 
-echo [5/5] ²¿Êðµ½ im-client\bin ...
+echo [8/8] ²¿Êðµ½ im-client\bin ...
 rem ÏÈ¹Ø±ÕÕýÔÚÔËÐÐµÄ¿Í»§¶Ë£¬±ÜÃâ exe ±»Õ¼ÓÃµ¼ÖÂÇåÀíÊ§°Ü£¨½ø³Ì²»´æÔÚÊ±¾²Ä¬Ìø¹ý£©
 rem /T ±ØÐë¼Ó£ºMCP/Computer Use ×Ó½ø³Ì¼Ì³ÐÖ÷½ø³Ì¹¤×÷Ä¿Â¼£¨bin£©£¬Ö»É±Ö÷½ø³Ì»á²ÐÁô×Ó½ø³Ì¼ÌÐøËø×¡ bin
 taskkill /f /t /im im-client.exe >nul 2>nul

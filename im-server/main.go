@@ -94,6 +94,9 @@ func main() {
 	http.HandleFunc("DELETE /api/agents/{id}/rules/{rid}", srv.HandleRuleDelete)
 	http.HandleFunc("DELETE /api/agents/{id}/rules", srv.HandleRuleClear)
 
+	// 阶段一百二十二：网页资源清单（PC 客户端本地缓存增量更新归口；无鉴权，与静态文件同级水位）
+	http.HandleFunc("GET /api/web-manifest", srv.HandleWebManifest)
+
 	// 阶段六十四：Agent 任务历史（用户端仅本人任务，鉴权水位与 /api/agents 一致；管理端审计走 adminGuard）
 	http.HandleFunc("GET /api/agent/tasks", srv.HandleAgentTaskList)
 	http.HandleFunc("GET /api/agent/task/{task_id}", srv.HandleAgentTaskDetail)

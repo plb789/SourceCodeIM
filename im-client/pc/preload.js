@@ -2,6 +2,9 @@
 // 阶段三十七（第三期）：新增静默抓屏（desktopCapturer）与 Alt+A 全局快捷键结果订阅
 const { contextBridge, ipcRenderer } = require('electron');
 
+// 阶段一百二十二：服务端地址注入已移除（原 app:// 方案经 additionalArguments 传 serverOrigin 供
+// socket.js 拼 ws 地址；同 origin http 拦截方案下 origin 不变，socket.js 按 location 推导即可）
+
 contextBridge.exposeInMainWorld('desktop', {
     platform: process.platform,
     // 阶段六十六：系统桌面通知（Agent 任务完结提醒等场景），转发主进程弹系统通知

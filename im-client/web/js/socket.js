@@ -98,6 +98,8 @@
         // 登录失败提示修复：记录本次连接使用的密码，登录成功后断线自动重连需携带真实密码
         // 原实现：window._lastPassword 从未被赋真实值（恒为空字符串），断线重连用空密码登录必然失败
         window._lastPassword = password || '';
+        // 阶段一百二十二：恢复 location 推导（同 origin http 拦截方案下页面 origin 不变，推导依旧有效；
+        // 原 app://local 方案曾改用 preload 注入的 desktop.serverOrigin，实测导航稳定性问题后回退）
         var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
         var url = proto + location.host + '/ws';
 

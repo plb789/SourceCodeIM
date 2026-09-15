@@ -1,0 +1,3 @@
+# 你要排除的目录（写在这里）
+web-snapshot/
+web-obfuscated/
