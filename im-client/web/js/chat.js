@@ -388,6 +388,167 @@
         mainChatEl.appendChild(settingsMask);
     }
 
+    // ===== 阶段一百二十一：工具链市场（独立页级市场；清单 /api/toolchains，一键下载安装到 ~/.im-mcp/<name>） =====
+    // 与 MCP 插件市场最大区别：非长驻 MCP 服务器，安装=下载→SHA256 校验→解压；安装状态=~/.im-mcp/<name>/bin/gcc.exe 是否存在。
+    // 懒加载兜底保留：不点安装的用户，Agent 任务 run_command gcc 时依旧自动下载（toolchain-manager.ensureCompiler 四级探测）。
+    var agentTcState = { toolchains: [], loaded: false, statusMap: {} };
+    var agentTcGridEl = document.getElementById('agent-tc-grid');
+    var agentTcStatusEl = document.getElementById('agent-tc-status');
+
+    function settingsToolchainEnter() {
+        agentTcState.statusMap = {}; // 阶段一百二十一：重置状态（防上次残留导致卡片状态错乱）
+        // 并行：拉清单 + 查安装状态（含版本号）；阶段一百二十一：清单拉到后补查状态（tcRefreshStatus 依赖 toolchains 非空）
+        fetch('/api/toolchains').then(function (r) { return r.json(); }).then(function (j) {
+            agentTcState.toolchains = (j && j.ok && j.data && j.data.toolchains) || [];
+            agentTcState.loaded = true;
+            renderTcPage();
+            tcRefreshStatus(); // 清单就绪后触发逐卡状态查询（首次进入时序修复）
+        }).catch(function () {
+            agentTcState.toolchains = [];
+            agentTcState.loaded = true;
+            renderTcPage();
+        });
+        tcRefreshStatus(); // 已有清单时（重复进入）直接刷新
+    }
+
+    // 安装状态查询（IPC toolchain:status → toolchain-manager.toolchainStatus；阶段一百二十一：按工具名逐卡查询）
+    function tcRefreshStatus() {
+        if (!window.desktop || !window.desktop.toolchainStatus) { agentTcState.statusMap = {}; return; }
+        var list = agentTcState.toolchains || [];
+        agentTcState.statusMap = agentTcState.statusMap || {};
+        list.forEach(function (tc) {
+            var nm = String(tc.name || 'gcc').trim().toLowerCase();
+            window.desktop.toolchainStatus({ name: nm }).then(function (st) {
+                agentTcState.statusMap[nm] = st || null;
+                renderTcPage();
+            }).catch(function () { agentTcState.statusMap[nm] = null; });
+        });
+    }
+
+    function renderTcPage() {
+        if (!agentTcGridEl) return;
+        var grid = agentTcGridEl;
+        grid.innerHTML = '';
+        var list = agentTcState.toolchains;
+        // 状态行：已装显示版本，未装提示安装；安装中显示进度提示（阶段一百二十一：按工具名归口状态展示）
+        if (agentTcStatusEl) {
+            var sm = agentTcState.statusMap || {};
+            var anyInstalled = Object.keys(sm).some(function (k) { return sm[k] && sm[k].installed; });
+            var anyInstalling = Object.keys(sm).some(function (k) { return sm[k] && sm[k].installing; });
+            if (anyInstalling) {
+                agentTcStatusEl.classList.remove('hidden');
+                agentTcStatusEl.textContent = '正在下载安装工具链，请稍候…';
+            } else if (anyInstalled) {
+                agentTcStatusEl.classList.remove('hidden');
+                agentTcStatusEl.textContent = '部分工具链已安装，Agent 任务可直接调用对应命令';
+            } else {
+                agentTcStatusEl.classList.add('hidden');
+            }
+        }
+        if (!list.length) {
+            var empty = document.createElement('div');
+            empty.className = 'agent-mkt-empty';
+            empty.textContent = agentTcState.loaded ? '暂无上架工具链（后台管理 → 工具链市场 可上架）' : '正在加载…';
+            grid.appendChild(empty);
+            return;
+        }
+        list.forEach(function (tc) { grid.appendChild(tcCard(tc)); });
+    }
+
+    // 工具链卡片（复用市场卡片样式：图标徽标 + 标题 + 描述 + 版本/体积 + 安装按钮；体积感知提示）
+    function tcCard(tc) {
+        var card = document.createElement('div');
+        card.className = 'agent-mkt-card';
+        var badge = document.createElement('span');
+        badge.className = 'agent-mkt-badge';
+        var iconUrl = String(tc.icon || '').trim();
+        if (iconUrl) {
+            var img = document.createElement('img');
+            img.src = iconUrl;
+            img.alt = '';
+            img.addEventListener('error', function () {
+                img.remove();
+                badge.textContent = (tc.title || tc.name).charAt(0).toUpperCase();
+            });
+            badge.appendChild(img);
+        } else {
+            badge.textContent = (tc.title || tc.name).charAt(0).toUpperCase();
+        }
+        var info = document.createElement('div');
+        info.className = 'agent-mkt-info';
+        var t = document.createElement('div');
+        t.className = 'agent-mkt-title';
+        t.textContent = tc.title || tc.name;
+        var d = document.createElement('div');
+        d.className = 'agent-mkt-desc';
+        d.textContent = tc.description || '';
+        d.title = d.textContent;
+        // 元信息行：版本 + 体积 + SHA 校验标识（体积感知，避免用户误点大下载）
+        var meta = document.createElement('div');
+        meta.className = 'agent-mkt-cmd';
+        var metaParts = [];
+        if (tc.version) metaParts.push('v' + tc.version);
+        if (tc.size_mb) metaParts.push('≈' + tc.size_mb + 'MB / 解压后 ' + Math.round(tc.size_mb * 4) + 'MB');
+        if (tc.sha256) metaParts.push('SHA256 校验');
+        meta.textContent = metaParts.join(' · ');
+        meta.title = meta.textContent;
+        info.appendChild(t);
+        info.appendChild(d);
+        info.appendChild(meta);
+        var act = document.createElement('button');
+        act.type = 'button';
+        act.className = 'kb-create-btn agent-mkt-install';
+        var nm = String(tc.name || 'gcc').trim().toLowerCase();
+        var st = (agentTcState.statusMap || {})[nm];
+        var installed = st && st.installed;
+        var installing = st && st.installing;
+        if (installed) {
+            act.textContent = '已安装';
+            act.disabled = true;
+            act.classList.add('installed');
+        } else if (installing) {
+            act.textContent = '安装中…';
+            act.disabled = true;
+        } else if (!String(tc.zip_url || '').trim() && !String(tc.installer_script || '').trim()) {
+            // 阶段一百二十一：系统优先条目（无 zip/安装脚本，如 clang）——无在线安装通道，
+            //   置灰按钮如实提示，避免点击后走 static/<name>.zip 兜底地址必然 404
+            act.textContent = '用系统版';
+            act.disabled = true;
+            act.title = '该工具链使用系统已安装的版本，未提供一键安装包';
+        } else {
+            act.textContent = '+ 安装';
+            act.addEventListener('click', function () { tcInstall(tc, act); });
+        }
+        card.appendChild(badge);
+        card.appendChild(info);
+        card.appendChild(act);
+        return card;
+    }
+
+    // 一键安装：IPC toolchain:install → toolchain-manager.installFromMarket（本地 zip 优先 → 在线下载，SHA256 校验解压）
+    function tcInstall(tc, btn) {
+        if (!window.desktop || !window.desktop.toolchainInstall) {
+            showToast('仅 PC 客户端支持该功能');
+            return;
+        }
+        btn.disabled = true;
+        btn.textContent = '下载安装中…';
+        window.desktop.toolchainInstall({ name: tc.name, zip_url: tc.zip_url, sha256: tc.sha256, installer_script: tc.installer_script }).then(function (r) {
+            btn.disabled = false;
+            if (r && r.ok) {
+                showToast((r && r.msg) || '安装完成');
+                tcRefreshStatus();
+            } else {
+                btn.textContent = '+ 安装';
+                showToast('安装失败：' + ((r && r.msg) || '未知原因'));
+            }
+        }).catch(function (e) {
+            btn.disabled = false;
+            btn.textContent = '+ 安装';
+            showToast('安装异常：' + (e && e.message || e));
+        });
+    }
+
     // 分类切换归口：导航高亮 + 内容面板显隐
     function settingsShowView(view) {
         // 阶段一百零五：MCP 仅 PC 端支持（Web/手机端无 desktop 桥），不支持时提示并留在当前分类
@@ -401,6 +562,7 @@
         if (view === 'appearance') settingsRenderTheme();
         if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
         if (view === 'market') settingsMarketEnter(); // 阶段一百一十三：进入插件市场拉取清单 + uv 状态
+        if (view === 'toolchain') settingsToolchainEnter(); // 阶段一百二十一：进入工具链市场拉取清单 + 安装状态
         if (view === 'mcp') {
             // 阶段一百一十二修正：设置页导航直接进入 MCP 分类时初始化列表并启动状态轮询。
             // 原渲染只挂在工具栏按钮入口（openMcpPanel）与轮询回调上，导航直进时列表区空白、
@@ -5170,6 +5332,7 @@
         // 原实现：提示手动安装 uv（irm/winget）与 Node.js——阶段一百一十九起运行环境全自动，文案过时
         // line(s5, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
         line(s5, 'Python 系插件（uvx）与 Node 系插件（npx）的运行环境全自动：客户端内置 uv 工具链与便携 Node（离线 zip 优先，缺失时联网下载），无需手动安装；uvx 首次拉起插件时需联网下载 Python 包（1-2 分钟，之后走缓存秒开），测试连接等待上限已放宽至 2 分钟。');
+        line(s5, 'Agent 任务的 C/C++ 编译环境同样全自动：系统已装 MSVC/gcc 时直接使用，都没有时首次编译自动下载内置 gcc 裁剪包（约 89MB，之后离线可用），无需手动安装任何编译器。');
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {
@@ -5285,7 +5448,26 @@
     var browserReloadBtn = document.getElementById('browser-reload');
     var browserCrumbsEl = document.getElementById('browser-crumbs');
     var browserGoBtn = document.getElementById('browser-go');
+    var browserProgressEl = document.getElementById('browser-progress');
     var browserLastState = null; // 最近一次主进程推送的浏览区状态（判断文件标签是否已开用）
+
+    // ===== 阶段一百三十一：浏览区文件加载进度条（Trae CN 同款不定态水平滑动）=====
+    // 打开文件/直传内容（diff/提交详情/审查报告）即亮条：覆盖主进程读盘 + viewer 渲染全程；
+    // viewer 渲染完成经 __imViewerHost.reportLoaded 回执收条；15 秒看门狗兜底（回执丢失防长亮）
+    var browserLoadTab = null;   // 正在加载的 file 标签 id（null=未知，如主进程读盘中）
+    var browserLoadTimer = null; // 看门狗定时器
+    function browserProgressStart(tabId) {
+        if (tabId) browserLoadTab = String(tabId);
+        clearTimeout(browserLoadTimer);
+        browserLoadTimer = setTimeout(browserProgressHide, 15000); // 与 viewer Monaco 看门狗同量级兜底
+        browserProgressEl.classList.add('on');
+    }
+    function browserProgressHide() {
+        clearTimeout(browserLoadTimer);
+        browserLoadTimer = null;
+        browserLoadTab = null;
+        browserProgressEl.classList.remove('on');
+    }
 
     function browserSupported() {
         return !!(window.desktop && typeof window.desktop.browserPanel === 'function');
@@ -5320,7 +5502,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=129'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=129：LSP 悬停优先层
+        frame.src = 'file-viewer.html?v=131'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=131：同步渲染 render 返回即回执（浏览区加载进度条）
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -5336,6 +5518,7 @@
             var tabId = String((data && data.tab_id) || '');
             var payload = data && data.payload;
             if (!tabId || !payload) return;
+            browserProgressStart(tabId); // 阶段一百三十一：payload 到达即确认加载态（条已亮则续期看门狗），渲染完成回执收条
             var rec = fileFrameFor(tabId);
             if (rec.ready) fileFramePush(rec, payload);
             else rec.pending = payload;
@@ -5368,6 +5551,11 @@
             if (st && st.kind === 'file' && String(st.active_id || '') === String(tabId)) {
                 browserRenderCrumbs(st.url, st);
             }
+        },
+        // 阶段一百三十一：viewer 渲染完成回执——对应标签正在加载（或不带 id 的兜底回执）即收进度条；
+        // 非当前加载标签的过期回执（如旧解析迟到）忽略，不误收新加载的条
+        reportLoaded: function (tabId) {
+            if (!browserLoadTab || !tabId || String(tabId) === browserLoadTab) browserProgressHide();
         },
         // 阶段一百三十：LSP 悬停桥接（viewer 页 iframe 无 preload，经宿主 desktop.lspHover 转主进程
         // lsp-manager 子进程：gopls/clangd/pyright 真实类型推导；未装/超时返回 null 回落静态表）
@@ -5992,11 +6180,13 @@
         browserLastState = state;
         browserPanelEl.classList.toggle('hidden', !state.visible);
         browserSyncSplit(); // 分栏宽度与聊天列压缩同步（展开/收起/标签变化统一归口）
-        if (!state.visible) return;
+        if (!state.visible) { browserProgressHide(); return; } // 阶段一百三十一：面板收起即收进度条（重开有新加载再亮）
         browserRenderTabs(state);
         // 阶段九十二：DOM viewer 同步——file 标签 iframe 建池/显隐/清理（仅活动 file 标签可见；
         // 网页标签活动时全部隐藏、webview 接管），标签关闭即移除对应 iframe
         var activeFileId = state.kind === 'file' ? String(state.active_id || '') : '';
+        // 阶段一百三十一：加载中标签被切走（用户切标签/关闭）即收条——条只描述当前可见视图的加载
+        if (browserLoadTab && activeFileId !== browserLoadTab) browserProgressHide();
         var alive = {};
         (state.tabs || []).forEach(function (t) { if (t.kind === 'file') alive[t.id] = true; });
         Object.keys(fileFrames).forEach(function (id) {
@@ -10586,9 +10776,13 @@
     // 打开工作区文件（浏览区标签：主进程 safePath 校验读盘；同文件复用标签刷新）
     function wsOpenFile(path, forceReload) {
         if (wsPcViewer()) {
+            browserProgressStart(null); // 阶段一百三十一：点击即亮加载条（主进程读盘期间先给视觉反馈），回执到达后续期
             window.desktop.browserOpenFile({ username: IMSocket.getUsername(), path: path }).then(function (r) {
-                if (r && !r.ok) showToast('浏览区打开失败：' + (r.error || '未知错误'));
+                // 阶段一百三十一修复：此处不再 start——实测 invoke 返回可能晚于回执（复开同步注入时回执先到收条），
+                // 回执后再亮条会卡到看门狗；跟踪归位由 onFileLoad 的 start 承担（主进程先推 file-load 再返回 invoke，时序恒成立）
+                if (r && !r.ok) { browserProgressHide(); showToast('浏览区打开失败：' + (r.error || '未知错误')); }
             }).catch(function (e) {
+                browserProgressHide();
                 showToast('浏览区打开失败：' + (e && e.message || e));
             });
             return;
@@ -10599,9 +10793,12 @@
     // key 相同复用标签刷新（重开即刷新语义）。PC 走浏览区返回 true；Web/手机返回 false 由调用方走原路
     function wsOpenData(payload) {
         if (!wsPcViewer()) return false;
+        browserProgressStart(null); // 阶段一百三十一：点击即亮加载条，viewer 渲染完成回执收条
         window.desktop.browserOpenData(payload).then(function (r) {
-            if (r && !r.ok) showToast('浏览区打开失败：' + (r.error || '未知错误'));
+            // 阶段一百三十一修复：同 wsOpenFile——不再在返回后 start（复开时回执可能已先到收条，回执后再亮条会卡到看门狗）
+            if (r && !r.ok) { browserProgressHide(); showToast('浏览区打开失败：' + (r.error || '未知错误')); }
         }).catch(function (e) {
+            browserProgressHide();
             showToast('浏览区打开失败：' + (e && e.message || e));
         });
         return true;

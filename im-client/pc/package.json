@@ -1,7 +1,14 @@
 {
   "name": "im-client-pc",
   "version": "1.0.0",
-  "description": "即时通讯 PC 桌面客户端（Electron 打包 Web 源码）",
+  "description": "即时通讯 PC 桌面客户端",
+  "author": {
+    "name": "山西梗阳新能源有限公司"
+  },
+  "winExeMeta": {
+    "fileDescription": "即时通讯 PC 桌面客户端",
+    "productName": "即时通讯"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -13,18 +20,26 @@
   },
   "build": {
     "appId": "com.im.client",
-    "productName": "即时通讯",
+    "productName": "im-client",
     "files": [
       "!bundled/**"
     ],
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "extraResources": [
       {
         "from": "bundled/node-v24.14.0-win-x64.zip",
         "to": "node-runtime.zip"
+      },
+      {
+        "from": "bundled/gcc-toolchain.zip",
+        "to": "gcc-toolchain.zip"
+      },
+      {
+        "from": "bundled/uv-runtime.zip",
+        "to": "uv-runtime.zip"
       }
     ]
   },

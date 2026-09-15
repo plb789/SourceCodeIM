@@ -28,8 +28,19 @@ app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentS
 // 等同本机进程完全控制客户端，仅建议开发调试场景开启
 browserManager.setCdpSwitch();
 
+// 阶段一百二十一：显式声明 AppUserModelID（必须在 app ready 之前调用）——
+// Windows 任务管理器"应用"分组名与跳转列表归口按 AUMID 解析；不显式声明时 Electron 默认标识
+// 导致任务管理器分组名显示为 "Electron"（即便 exe 元数据 FileDescription 已是产品名）。
+// 值与 package.json appId 保持一致
+app.setAppUserModelId('com.im.client');
+// 注册 AUMID 显示名：系统按 AUMID 解析应用名时优先查注册表 DisplayName；未注册则回退 exe 文件名
+// （任务栏/任务管理器显示 "im-client.exe"）。HKCU 无需管理员权限，失败静默（名称回退不影响运行）
+try {
+    require('child_process').execFile('reg', ['add', 'HKCU\\Software\\Classes\\AppUserModelId\\com.im.client', '/v', 'DisplayName', '/t', 'REG_SZ', '/d', 'im-client', '/f']);
+} catch (e) { }
+
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://localhost:8888/';
+const SERVER_URL = 'http://127.0.0.1:8888/';
 
 // 应用图标路径（可配置）：托盘图标使用，更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径；
 // 注意与 build.bat 的 APP_ICON 变量（exe 图标）同步修改保持一致
@@ -685,6 +696,14 @@ mcpManager.setProjectMcp(projectMcpEnabledLoad(), projectMcpLoader);
 const nodeRuntime = require('./node-runtime.js');
 mcpManager.setNodeRuntimeInstaller(nodeRuntime.ensureRuntime);
 
+// ===== 阶段一百二十：Agent C/C++ 编译环境管理器（toolchain-manager.js 归口） =====
+// 注入服务端基地址（与登录服务器同源，zip 静态托管于 <WebDir>/static/gcc-toolchain.zip）；
+// Agent 任务 run_command 预检到编译命令时经 toolchain-manager.ensureCompiler 自动准备编译环境
+const compilerManager = require('./toolchain-manager.js');
+compilerManager.setServerBase(SERVER_URL);
+// 阶段一百二十一：后台刷新服务端 ExePaths 声明缓存（按声明定位；失败静默，磁盘缓存/内置注册表兜底）
+compilerManager.toolchainRefreshExePaths();
+
 ipcMain.handle('mcp:node-status', function () {
     return nodeRuntime.status();
 });
@@ -850,6 +869,16 @@ ipcMain.handle('mcp:uv-install', function () {
 
 // 阶段一百一十九：注入 mcp-manager——uvx 系插件 spawn 预检失败时自动安装 uv 工具链（与 Node 运行时注入同构）
 mcpManager.setUvToolchainInstaller(uvEnsureRuntime);
+
+// ===== 阶段一百二十一：工具链市场 IPC（[工具链] 页签一键安装/状态查询，复用 toolchain-manager.js 归口） =====
+ipcMain.handle('toolchain:install', function (event, payload) {
+    const p = payload || {};
+    return compilerManager.installFromMarket(String(p.name || 'gcc'), String(p.zip_url || ''), String(p.sha256 || ''), String(p.installer_script || ''));
+});
+ipcMain.handle('toolchain:status', function (event, payload) {
+    const p = payload || {};
+    return compilerManager.toolchainStatus(String(p.name || 'gcc'));
+});
 
 // 下载（跟随 302 重定向：GitHub release latest 跳对象存储）→ PowerShell Expand-Archive 解压 → 校验 uvx.exe
 function uvDownloadInstall() {
@@ -1050,7 +1079,7 @@ app.whenReady().then(function () {
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=129'); // v=129：LSP 悬停优先层（阶段一百三十）
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=131'); // v=131：同步渲染改 render 返回即回执（防 rAF 绘制冻结丢回执，与 chat.js iframe src 同步）
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,

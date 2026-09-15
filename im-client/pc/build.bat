@@ -1,103 +1,121 @@
 @echo off
-chcp 65001 >nul
+chcp 936 >nul
 setlocal
 rem ============================================
-rem å³æ—¶é€šè®¯ PC ç«¯ä¸€é”®æ‰“åŒ…è„šæœ¬ï¼ˆé˜¶æ®µä¸‰åä¸ƒï¼‰
-rem æµç¨‹ï¼šå…³é—­æ—§è¿›ç¨‹ -> å®‰è£…ä¾èµ– -> electron-builder æ‰“åŒ… -> éƒ¨ç½²åˆ° im-client\bin\
-rem ç”¨æ³•ï¼šåŒå‡»è¿è¡Œï¼Œæˆ–åœ¨ä»»æ„ç›®å½•æ‰§è¡Œæœ¬è„šæœ¬ï¼ˆè·¯å¾„å‡ç›¸å¯¹è„šæœ¬æ‰€åœ¨ç›®å½•ï¼Œæ— ç¡¬ç¼–ç ï¼‰
+rem ¼´Ê±Í¨Ñ¶ PC ¶ËÒ»¼ü´ò°ü½Å±¾£¨½×¶ÎÈıÊ®Æß£©
+rem Á÷³Ì£º¹Ø±Õ¾É½ø³Ì -> °²×°ÒÀÀµ -> electron-builder ´ò°ü -> ²¿Êğµ½ im-client\bin\
+rem ÓÃ·¨£ºË«»÷ÔËĞĞ£¬»òÔÚÈÎÒâÄ¿Â¼Ö´ĞĞ±¾½Å±¾£¨Â·¾¶¾ùÏà¶Ô½Å±¾ËùÔÚÄ¿Â¼£¬ÎŞÓ²±àÂë£©
 rem ============================================
 
 cd /d "%~dp0"
 
-rem npmmirror é•œåƒåŠ é€Ÿï¼ˆelectron ä¸æ‰“åŒ…å·¥å…·äºŒè¿›åˆ¶ä¸‹è½½ï¼‰
+rem npmmirror ¾µÏñ¼ÓËÙ£¨electron Óë´ò°ü¹¤¾ß¶ş½øÖÆÏÂÔØ£©
 set "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/"
 set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
+
+rem ½×¶ÎÒ»°Ù¶şÊ®Ò»£ºelectron-builder »º´æÖØ¶¨Ïòµ½ builder-cache\
+rem Ô­Òò£ºsignAndEditExecutable ¿ªÆôºóĞè winCodeSign ¹¤¾ß°ü£¬Æä¹Ù·½ 7z ÄÚº¬ macOS ·ûºÅÁ´½Ó£¬
+rem Windows ÏÂ 7za ´´½¨·ûºÅÁ´½ÓĞè¹ÜÀíÔ±/¿ª·¢ÕßÄ£Ê½ÌØÈ¨£¬·ñÔò½âÑ¹±Ø°Üµ¼ÖÂÕûÌå´ò°üÊ§°Ü¡£
+rem builder-cache ÎªÔ¤ÖÃ»º´æ£¨winCodeSign ÒÑÌŞ³ı darwin Ä¿Â¼£¬rcedit ½ö Windows ĞèÒª£»nsis ¸´ÓÃ±¾»ú»º´æ£©
+set "ELECTRON_BUILDER_CACHE=%~dp0builder-cache"
 
 set "BIN_DIR=%~dp0..\bin"
 set "UNPACKED_DIR=%~dp0dist\win-unpacked"
 
-rem åº”ç”¨å›¾æ ‡è·¯å¾„ï¼ˆå¯é…ç½®ï¼‰ï¼šæ›´æ¢æ–°å›¾æ ‡åªéœ€æ”¹è¿™ä¸€å¤„ï¼Œæ”¯æŒ ico/png ä»»æ„æ–‡ä»¶åä¸å®Œæ•´è·¯å¾„
+rem Ó¦ÓÃÍ¼±êÂ·¾¶£¨¿ÉÅäÖÃ£©£º¸ü»»ĞÂÍ¼±êÖ»Ğè¸ÄÕâÒ»´¦£¬Ö§³Ö ico/png ÈÎÒâÎÄ¼şÃûÓëÍêÕûÂ·¾¶
 rem NOTE: keep this icon in sync with main.js tray icon const
 set "APP_ICON=%~dp064.ico"
 
-echo [1/5] æ£€æŸ¥ Node ç¯å¢ƒ...
+echo [1/5] ¼ì²é Node »·¾³...
 where node >nul 2>nul
 if errorlevel 1 (
-    echo [é”™è¯¯] æœªæ£€æµ‹åˆ° Node.jsï¼Œè¯·å…ˆå®‰è£… Node.js 20 æˆ–æ›´é«˜ç‰ˆæœ¬
+    echo [´íÎó] Î´¼ì²âµ½ Node.js£¬ÇëÏÈ°²×° Node.js 20 »ò¸ü¸ß°æ±¾
     pause
     exit /b 1
 )
 
-echo [2/5] å®‰è£…ä¾èµ–ï¼ˆé¦–æ¬¡è¾ƒæ…¢ï¼Œä¹‹åç§’çº§ï¼‰...
+echo [2/5] °²×°ÒÀÀµ£¨Ê×´Î½ÏÂı£¬Ö®ºóÃë¼¶£©...
 call npm install --no-audit --no-fund
 if errorlevel 1 (
-    echo [é”™è¯¯] ä¾èµ–å®‰è£…å¤±è´¥ï¼Œè¯·æ£€æŸ¥ç½‘ç»œåé‡è¯•
+    echo [´íÎó] ÒÀÀµ°²×°Ê§°Ü£¬Çë¼ì²éÍøÂçºóÖØÊÔ
     pause
     exit /b 1
 )
 
-echo [3/5] å‡†å¤‡ä¾¿æº Node è¿è¡Œæ—¶ï¼ˆbundled\ å†…æ—  zip åˆ™ä¸‹è½½ç¼“å­˜ï¼Œä»…é¦–æ¬¡ 34.5MBï¼‰...
-rem é˜¶æ®µä¸€ç™¾ä¸€åå…«ï¼šå†…åµŒä¾¿æº Node åˆ°å®‰è£…åŒ…ï¼ˆTRAE CN åŒæ¬¾ bundled è¿è¡Œæ—¶æœºåˆ¶ï¼Œç¦»çº¿å¯ç”¨ï¼‰â€”â€”
-rem electron-builder ç» package.json extraResources å°† zip å¤åˆ¶ä¸º resources\node-runtime.zipï¼Œ
-rem å®¢æˆ·ç«¯ node-runtime.js ä¼˜å…ˆè§£å‹æœ¬åœ° zipï¼Œç¼ºå¤±æ—¶æ‰è”ç½‘ä¸‹è½½
+echo [3/5] ×¼±¸±ãĞ¯ Node ÔËĞĞÊ±£¨bundled\ ÄÚÎŞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´Î 34.5MB£©...
+rem ½×¶ÎÒ»°ÙÒ»Ê®°Ë£ºÄÚÇ¶±ãĞ¯ Node µ½°²×°°ü£¨TRAE CN Í¬¿î bundled ÔËĞĞÊ±»úÖÆ£¬ÀëÏß¿ÉÓÃ£©¡ª¡ª
+rem electron-builder ¾­ package.json extraResources ½« zip ¸´ÖÆÎª resources\node-runtime.zip£¬
+rem ¿Í»§¶Ë node-runtime.js ÓÅÏÈ½âÑ¹±¾µØ zip£¬È±Ê§Ê±²ÅÁªÍøÏÂÔØ
 if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
     if not exist "%~dp0bundled" mkdir "%~dp0bundled"
     powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://registry.npmmirror.com/-/binary/node/v24.14.0/node-v24.14.0-win-x64.zip' -OutFile '%~dp0bundled\node-v24.14.0-win-x64.zip' -UseBasicParsing"
     if not exist "%~dp0bundled\node-v24.14.0-win-x64.zip" (
-        echo [è­¦å‘Š] ä¾¿æº Node è¿è¡Œæ—¶ä¸‹è½½å¤±è´¥ï¼Œæœ¬æ¬¡æ‰“åŒ…å°†ä¸å«å†…åµŒè¿è¡Œæ—¶ï¼ˆå®¢æˆ·ç«¯è”ç½‘åœºæ™¯è‡ªåŠ¨é™çº§ä¸ºåœ¨çº¿ä¸‹è½½ï¼‰
+        echo [¾¯¸æ] ±ãĞ¯ Node ÔËĞĞÊ±ÏÂÔØÊ§°Ü£¬±¾´Î´ò°ü½«²»º¬ÄÚÇ¶ÔËĞĞÊ±£¨¿Í»§¶ËÁªÍø³¡¾°×Ô¶¯½µ¼¶ÎªÔÚÏßÏÂÔØ£©
     ) else (
-        echo ä¾¿æº Node è¿è¡Œæ—¶å·²ç¼“å­˜åˆ° bundled\
+        echo ±ãĞ¯ Node ÔËĞĞÊ±ÒÑ»º´æµ½ bundled\
     )
 ) else (
-    echo ä¾¿æº Node è¿è¡Œæ—¶å·²å­˜åœ¨ï¼ˆbundled\ ç¼“å­˜ï¼‰
+    echo ±ãĞ¯ Node ÔËĞĞÊ±ÒÑ´æÔÚ£¨bundled\ »º´æ£©
 )
 
-echo [3/5] å‡†å¤‡ uv å·¥å…·é“¾ï¼ˆbundled\ å†…æ—  zip åˆ™ä¸‹è½½ç¼“å­˜ï¼Œä»…é¦–æ¬¡çº¦ 17MBï¼‰...
-rem é˜¶æ®µä¸€ç™¾ä¸€åä¹ï¼šå†…åµŒ uv å·¥å…·é“¾åˆ°å®‰è£…åŒ…ï¼ˆä¸ä¾¿æº Node åŒæ¬¾åŒé€šé“æœºåˆ¶ï¼Œç¦»çº¿å¯ç”¨ï¼‰â€”â€”
-rem fetch/sqlite ç­‰ Python ç³» MCP æ’ä»¶ä¾èµ– uvx å‘½ä»¤ï¼Œå®¢æˆ·ç«¯ä¼˜å…ˆè§£å‹æœ¬åœ° zipï¼Œç¼ºå¤±æ—¶æ‰è”ç½‘ä¸‹è½½
+echo [3/5] ×¼±¸ uv ¹¤¾ßÁ´£¨bundled\ ÄÚÎŞ zip ÔòÏÂÔØ»º´æ£¬½öÊ×´ÎÔ¼ 17MB£©...
+rem ½×¶ÎÒ»°ÙÒ»Ê®¾Å£ºÄÚÇ¶ uv ¹¤¾ßÁ´µ½°²×°°ü£¨Óë±ãĞ¯ Node Í¬¿îË«Í¨µÀ»úÖÆ£¬ÀëÏß¿ÉÓÃ£©¡ª¡ª
+rem fetch/sqlite µÈ Python Ïµ MCP ²å¼şÒÀÀµ uvx ÃüÁî£¬¿Í»§¶ËÓÅÏÈ½âÑ¹±¾µØ zip£¬È±Ê§Ê±²ÅÁªÍøÏÂÔØ
 if not exist "%~dp0bundled\uv-runtime.zip" (
     if not exist "%~dp0bundled" mkdir "%~dp0bundled"
     powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile '%~dp0bundled\uv-runtime.zip' -UseBasicParsing"
     if not exist "%~dp0bundled\uv-runtime.zip" (
-        echo [è­¦å‘Š] uv å·¥å…·é“¾ zip ä¸‹è½½å¤±è´¥ï¼Œæœ¬æ¬¡æ‰“åŒ…å°†ä¸å«å†…åµŒ uv å·¥å…·é“¾ï¼ˆå®¢æˆ·ç«¯è”ç½‘åœºæ™¯è‡ªåŠ¨é™çº§ä¸ºåœ¨çº¿ä¸‹è½½ï¼‰
+        echo [¾¯¸æ] uv ¹¤¾ßÁ´ zip ÏÂÔØÊ§°Ü£¬±¾´Î´ò°ü½«²»º¬ÄÚÇ¶ uv ¹¤¾ßÁ´£¨¿Í»§¶ËÁªÍø³¡¾°×Ô¶¯½µ¼¶ÎªÔÚÏßÏÂÔØ£©
     ) else (
-        echo uv å·¥å…·é“¾ zip å·²ç¼“å­˜åˆ° bundled\
+        echo uv ¹¤¾ßÁ´ zip ÒÑ»º´æµ½ bundled\
     )
 ) else (
-    echo uv å·¥å…·é“¾ zip å·²å­˜åœ¨ï¼ˆbundled\ ç¼“å­˜ï¼‰
+    echo uv ¹¤¾ßÁ´ zip ÒÑ´æÔÚ£¨bundled\ »º´æ£©
 )
 
-echo [4/5] æ‰“åŒ… win-unpacked...
+echo [4/5] ´ò°ü win-unpacked...
 call npx electron-builder --win --x64 --dir
 if errorlevel 1 (
-    echo [é”™è¯¯] æ‰“åŒ…å¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šæ–¹æ—¥å¿—
+    echo [´íÎó] ´ò°üÊ§°Ü£¬Çë²é¿´ÉÏ·½ÈÕÖ¾
     pause
     exit /b 1
 )
 
-rem è®¾ç½® exe å›¾æ ‡ï¼šelectron-builder é…ç½®è·³è¿‡ç­¾åæ—¶å›¾æ ‡ç¼–è¾‘ä¸€å¹¶è·³è¿‡ï¼Œä¸”å…¶è¦æ±‚ ico è‡³å°‘ 256pxï¼›
-rem rcedit æ— å°ºå¯¸é™åˆ¶ï¼Œç›´æ¥å¯¹æ‰“åŒ…äº§ç‰©æ”¹å›¾æ ‡ï¼ˆAPP_ICON å­˜åœ¨æ—¶æ‰§è¡Œï¼Œå¤±è´¥ä¸é˜»æ–­éƒ¨ç½²ï¼‰
+rem ÉèÖÃ exe Í¼±ê£ºelectron-builder ÅäÖÃÌø¹ıÇ©ÃûÊ±Í¼±ê±à¼­Ò»²¢Ìø¹ı£¬ÇÒÆäÒªÇó ico ÖÁÉÙ 256px£»
+rem rcedit ÎŞ³ß´çÏŞÖÆ£¬Ö±½Ó¶Ô´ò°ü²úÎï¸ÄÍ¼±ê£¨APP_ICON ´æÔÚÊ±Ö´ĞĞ£¬Ê§°Ü²»×è¶Ï²¿Êğ£©
+rem exe ÃûËæ package.json productName£ºim-client£¨ÏÖ£©/ ¼´Ê±Í¨Ñ¶£¨¾É£©£¬Á½Õß¼æÈİÌ½²â
 set "RCEDIT=%~dp0node_modules\rcedit\bin\rcedit-x64.exe"
-if exist "%RCEDIT%" if exist "%APP_ICON%" (
-    echo è®¾ç½® exe å›¾æ ‡ä¸º %APP_ICON% ...
-    "%RCEDIT%" "%UNPACKED_DIR%\å³æ—¶é€šè®¯.exe" --set-icon "%APP_ICON%"
-    if errorlevel 1 echo [è­¦å‘Š] exe å›¾æ ‡è®¾ç½®å¤±è´¥ï¼Œå°†ç»§ç»­éƒ¨ç½²ï¼ˆå›¾æ ‡ä¿æŒé»˜è®¤ï¼‰
+set "PACKED_EXE=%UNPACKED_DIR%\im-client.exe"
+if not exist "%PACKED_EXE%" set "PACKED_EXE=%UNPACKED_DIR%\¼´Ê±Í¨Ñ¶.exe"
+rem ½×¶ÎÒ»°Ù¶şÊ®Ò»£ºÎÄ¼şËµÃ÷/²úÆ·Ãû³ÆÖĞÎÄ¹é¿Ú¡ª¡ªelectron-builder ´ò°üÊ±°´ productName(=im-client)
+rem ¸²Ğ´ÕâÁ½Ïî£¬´Ë´¦´ò°üºóÒÔ rcedit ¸²Ğ´»ØÖĞÎÄ£»ÖµÈ¡ package.json winExeMeta µ¥Ò»ÊÂÊµÔ´
+rem £¨¹«Ë¾Ãû CompanyName ÓÉ electron-builder °´ author.name ºæ±º£¬ÎŞĞè rcedit£©
+rem Åú´¦Àí¿é¼¶½âÎöÏİÚå£ºÀ¨ºÅ¿éÄÚ %VAR% ÔÚ¿éÈë¿Ú¼´Õ¹¿ª£¬¿éÄÚ set ºóÒıÓÃºãÎª¾ÉÖµ¡ª¡ª
+rem ¹Ê for ÌáÈ¡±ØĞë·ÅÔÚ¿éÍâÖ´ĞĞ£¬rcedit µ÷ÓÃÁôÔÚ¿éÄÚ¶ÁÈ¡ÒÑÍê³ÉµÄ±äÁ¿
+if exist "%RCEDIT%" if exist "%APP_ICON%" if exist "%PACKED_EXE%" (
+    echo ÉèÖÃ exe Í¼±êÓëÔªÊı¾İ ...
+    rem ½×¶ÎÒ»°Ù¶şÊ®Ò»£ºÍ¼±ê + ÎÄ¼şËµÃ÷/²úÆ·Ãû³ÆÒ»²½Íê³É¡£±ØĞë¾­ PowerShell Í¨µÀ£º
+    rem Åú´¦Àí for /f ²¶»ñ node -p Êä³öµÄÊÇ UTF-8 Ô­Ê¼×Ö½Ú£¨Óë chcp ÎŞ¹Ø£©£¬rcedit Ğ´Èë°æ±¾×ÊÔ´ºó
+    rem ×ÊÔ´¹ÜÀíÆ÷°´ GBK ÏÔÊ¾¼´³ÉÂÒÂë£»PowerShell ¶ÁÈ¡ JSON ºóÒÔ .NET Unicode ×Ö·û´®Ö±µ÷ rcedit£¬
+    rem Óë¿ØÖÆÌ¨´úÂëÒ³ÍêÈ«½âñî£¬ÖĞÎÄºãÕıÈ·
+    powershell -NoProfile -Command "$m=(Get-Content -LiteralPath '%~dp0package.json' -Raw -Encoding UTF8 | ConvertFrom-Json).winExeMeta; if(-not $m){exit 2}; & '%RCEDIT%' '%PACKED_EXE%' --set-icon '%APP_ICON%' --set-version-string 'FileDescription' $m.fileDescription --set-version-string 'ProductName' $m.productName; exit $LASTEXITCODE"
+    if errorlevel 1 echo [¾¯¸æ] exe Í¼±ê/ÔªÊı¾İÉèÖÃÊ§°Ü£¬½«¼ÌĞø²¿Êğ£¨±£³ÖÄ¬ÈÏ£©
 )
 
-rem é˜¶æ®µä¸€ç™¾ä¸€åä¹ï¼šuv å·¥å…·é“¾ zip ç›´æ‹·è¿›æ‰“åŒ…äº§ç‰© resources\ï¼ˆä¸èµ° electron-builder extraResourcesï¼š
-rem bundled ç¼º zip æ—¶ extraResources ä¼šæ‰“åŒ…æŠ¥é”™ï¼Œç›´æ‹·ä»…è·³è¿‡å†…åµŒã€è¿è¡Œæ—¶é™çº§åœ¨çº¿ä¸‹è½½ï¼‰ï¼Œéƒ¨ç½²æ—¶éš resources å…¥ bin
+rem ½×¶ÎÒ»°ÙÒ»Ê®¾Å£ºuv ¹¤¾ßÁ´ zip Ö±¿½½ø´ò°ü²úÎï resources\£¨²»×ß electron-builder extraResources£º
+rem bundled È± zip Ê± extraResources »á´ò°ü±¨´í£¬Ö±¿½½öÌø¹ıÄÚÇ¶¡¢ÔËĞĞÊ±½µ¼¶ÔÚÏßÏÂÔØ£©£¬²¿ÊğÊ±Ëæ resources Èë bin
 if exist "%~dp0bundled\uv-runtime.zip" (
     copy /y "%~dp0bundled\uv-runtime.zip" "%UNPACKED_DIR%\resources\uv-runtime.zip" >nul
-    echo uv å·¥å…·é“¾ zip å·²å†…åµŒåˆ° resources\
+    echo uv ¹¤¾ßÁ´ zip ÒÑÄÚÇ¶µ½ resources\
 ) else (
-    echo [æç¤º] bundled\uv-runtime.zip ä¸å­˜åœ¨ï¼Œæœ¬æ¬¡æ‰“åŒ…ä¸å«å†…åµŒ uv å·¥å…·é“¾ï¼ˆå®¢æˆ·ç«¯è”ç½‘åœºæ™¯è‡ªåŠ¨åœ¨çº¿ä¸‹è½½ï¼‰
+    echo [ÌáÊ¾] bundled\uv-runtime.zip ²»´æÔÚ£¬±¾´Î´ò°ü²»º¬ÄÚÇ¶ uv ¹¤¾ßÁ´£¨¿Í»§¶ËÁªÍø³¡¾°×Ô¶¯ÔÚÏßÏÂÔØ£©
 )
 
-echo [5/5] éƒ¨ç½²åˆ° im-client\bin ...
-rem å…ˆå…³é—­æ­£åœ¨è¿è¡Œçš„å®¢æˆ·ç«¯ï¼Œé¿å… exe è¢«å ç”¨å¯¼è‡´æ¸…ç†å¤±è´¥ï¼ˆè¿›ç¨‹ä¸å­˜åœ¨æ—¶é™é»˜è·³è¿‡ï¼‰
-rem /T å¿…é¡»åŠ ï¼šMCP/Computer Use å­è¿›ç¨‹ç»§æ‰¿ä¸»è¿›ç¨‹å·¥ä½œç›®å½•ï¼ˆbinï¼‰ï¼Œåªæ€ä¸»è¿›ç¨‹ä¼šæ®‹ç•™å­è¿›ç¨‹ç»§ç»­é”ä½ bin
+echo [5/5] ²¿Êğµ½ im-client\bin ...
+rem ÏÈ¹Ø±ÕÕıÔÚÔËĞĞµÄ¿Í»§¶Ë£¬±ÜÃâ exe ±»Õ¼ÓÃµ¼ÖÂÇåÀíÊ§°Ü£¨½ø³Ì²»´æÔÚÊ±¾²Ä¬Ìø¹ı£©
+rem /T ±ØĞë¼Ó£ºMCP/Computer Use ×Ó½ø³Ì¼Ì³ĞÖ÷½ø³Ì¹¤×÷Ä¿Â¼£¨bin£©£¬Ö»É±Ö÷½ø³Ì»á²ĞÁô×Ó½ø³Ì¼ÌĞøËø×¡ bin
 taskkill /f /t /im im-client.exe >nul 2>nul
-rem åˆ é™¤æ—§ binï¼šæ€æ¯’è½¯ä»¶å¯¹æ–° exe çš„ç¬æ—¶æ‰«æé”å¯èƒ½å¯¼è‡´å•æ¬¡åˆ é™¤å¤±è´¥ï¼Œæœ€å¤šé‡è¯• 5 æ¬¡
+rem É¾³ı¾É bin£ºÉ±¶¾Èí¼ş¶ÔĞÂ exe µÄË²Ê±É¨ÃèËø¿ÉÄÜµ¼ÖÂµ¥´ÎÉ¾³ıÊ§°Ü£¬×î¶àÖØÊÔ 5 ´Î
 set /a TRY=0
 :RETRY_DEL
 if not exist "%BIN_DIR%" goto DEL_OK
@@ -107,31 +125,32 @@ timeout /t 1 /nobreak >nul
 rd /s /q "%BIN_DIR%" >nul 2>nul
 goto RETRY_DEL
 :DEL_CHECK
-rem åŸå®ç°ï¼šé‡è¯•è¶…é™ç›´æ¥æŠ¥é”™é€€å‡ºã€‚å®æµ‹ç›®å½•åˆ ä¸æ‰åˆ†ä¸¤ç§æƒ…å†µï¼š
-rem   1) ä»…è¢«å…¶ä»–è¿›ç¨‹"å½“å‰å·¥ä½œç›®å½•"é”å®šï¼ˆå¦‚è®°äº‹æœ¬æ›¾åœ¨ bin ä¸‹æ‰“å¼€è¿‡æ–‡ä»¶ï¼‰â€”â€”ç›®å½•æœ¬èº«åˆ ä¸æ‰ä½†æ–‡ä»¶ä¸å ç”¨ï¼Œ
-rem      å…ˆæ¸…ç©ºç›®å½•å†…æ–‡ä»¶å†ç»§ç»­éƒ¨ç½²ï¼ˆxcopy è¦†ç›–å†™å…¥ä¸å—ç›®å½•é”å½±å“ï¼Œç›®å½•ä¿ç•™ä¸å½±å“ä½¿ç”¨ï¼‰
-rem   2) æ—§ exe ç­‰æ–‡ä»¶ä»è¢«è¿›ç¨‹çœŸæ­£å ç”¨â€”â€”æ–‡ä»¶åˆ ä¸æ‰ã€ç›®å½•éç©ºï¼Œå¼ºè¡Œéƒ¨ç½²ä¼šå¤±è´¥ï¼Œé¡»æŠ¥é”™æé†’
+rem Ô­ÊµÏÖ£ºÖØÊÔ³¬ÏŞÖ±½Ó±¨´íÍË³ö¡£Êµ²âÄ¿Â¼É¾²»µô·ÖÁ½ÖÖÇé¿ö£º
+rem   1) ½ö±»ÆäËû½ø³Ì"µ±Ç°¹¤×÷Ä¿Â¼"Ëø¶¨£¨Èç¼ÇÊÂ±¾ÔøÔÚ bin ÏÂ´ò¿ª¹ıÎÄ¼ş£©¡ª¡ªÄ¿Â¼±¾ÉíÉ¾²»µôµ«ÎÄ¼ş²»Õ¼ÓÃ£¬
+rem      ÏÈÇå¿ÕÄ¿Â¼ÄÚÎÄ¼şÔÙ¼ÌĞø²¿Êğ£¨xcopy ¸²¸ÇĞ´Èë²»ÊÜÄ¿Â¼ËøÓ°Ïì£¬Ä¿Â¼±£Áô²»Ó°ÏìÊ¹ÓÃ£©
+rem   2) ¾É exe µÈÎÄ¼şÈÔ±»½ø³ÌÕæÕıÕ¼ÓÃ¡ª¡ªÎÄ¼şÉ¾²»µô¡¢Ä¿Â¼·Ç¿Õ£¬Ç¿ĞĞ²¿Êğ»áÊ§°Ü£¬Ğë±¨´íÌáĞÑ
 del /f /q "%BIN_DIR%\*" >nul 2>nul
 for /d %%D in ("%BIN_DIR%\*") do rd /s /q "%%D" >nul 2>nul
 dir /b "%BIN_DIR%" 2>nul | findstr . >nul
 if errorlevel 1 (
-    echo [æç¤º] æ—§ bin ç›®å½•è¢«å…¶ä»–è¿›ç¨‹çš„å·¥ä½œç›®å½•å ç”¨ï¼Œå·²æ¸…ç©ºå†…å®¹å¹¶ç»§ç»­éƒ¨ç½²ï¼ˆç›®å½•ä¿ç•™ä¸å½±å“ä½¿ç”¨ï¼‰
+    echo [ÌáÊ¾] ¾É bin Ä¿Â¼±»ÆäËû½ø³ÌµÄ¹¤×÷Ä¿Â¼Õ¼ÓÃ£¬ÒÑÇå¿ÕÄÚÈİ²¢¼ÌĞø²¿Êğ£¨Ä¿Â¼±£Áô²»Ó°ÏìÊ¹ÓÃ£©
     goto DEL_OK
 )
-echo [é”™è¯¯] æ—§ bin ç›®å½•å†…æ–‡ä»¶è¢«å ç”¨æ— æ³•æ¸…ç†ï¼Œè¯·å…³é—­ im-client.exe åé‡è¯•
+echo [´íÎó] ¾É bin Ä¿Â¼ÄÚÎÄ¼ş±»Õ¼ÓÃÎŞ·¨ÇåÀí£¬Çë¹Ø±Õ im-client.exe ºóÖØÊÔ
 pause
 exit /b 1
 :DEL_OK
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 xcopy "%UNPACKED_DIR%\*" "%BIN_DIR%\" /e /y /q >nul
-ren "%BIN_DIR%\å³æ—¶é€šè®¯.exe" "im-client.exe"
+rem productName=im-client Ê±²úÎï¿½Èë¼´ im-client.exe£»¾ÉÖĞÎÄ productName ²úÎïĞè¸ÄÃû¼æÈİ
+if exist "%BIN_DIR%\¼´Ê±Í¨Ñ¶.exe" ren "%BIN_DIR%\¼´Ê±Í¨Ñ¶.exe" "im-client.exe"
 if not exist "%BIN_DIR%\im-client.exe" (
-    echo [é”™è¯¯] éƒ¨ç½²å¤±è´¥ï¼Œè¯·æ£€æŸ¥ %BIN_DIR% ç›®å½•
+    echo [´íÎó] ²¿ÊğÊ§°Ü£¬Çë¼ì²é %BIN_DIR% Ä¿Â¼
     pause
     exit /b 1
 )
 
 echo.
-echo [å®Œæˆ] å·²ç”Ÿæˆ im-client\bin\im-client.exeï¼ˆå«æœ€æ–°ä¸»è¿›ç¨‹ä¸ preloadï¼‰
+echo [Íê³É] ÒÑÉú³É im-client\bin\im-client.exe£¨º¬×îĞÂÖ÷½ø³ÌÓë preload£©
 echo.
 pause

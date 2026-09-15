@@ -23,10 +23,26 @@ const browserManager = require('./browser-manager.js');
 // （TRAE CN 同层仅注入 rg，本实现覆盖面更全）；系统 PATH 保留在后，前置目录无对应 exe 时不影响系统命令
 const AGENT_TOOLCHAIN_BIN = path.join(os.homedir(), '.im-mcp', 'bin');
 const AGENT_NODE_RUNTIME_DIR = path.join(os.homedir(), '.im-mcp', 'node');
+// 阶段一百二十：内置 gcc 编译环境目录（~/.im-mcp/gcc，toolchain-manager.js 归口懒加载安装）——
+// PATH 前置后 Agent 任务中可直接执行 gcc/g++/make/gdb 编译调试；MSVC 缓存命中时额外前置 cl 目录
+// 并合并 vcvarsall 提取的编译环境变量（INCLUDE/LIB 等），系统 PATH 保留在后
+const compilerManager = require('./toolchain-manager.js');
+// 阶段一百二十一：【已归口】AGENT_GCC_DIR 仅作参考常量保留，实际 PATH 前置改用 compilerManager.allToolchainBins()
+// （自动扫描 ~/.im-mcp 全部工具链 bin，后台新增 zip 工具链零代码可用）
+const AGENT_GCC_DIR = compilerManager.GCC_BIN_DIR;
 
 function buildAgentEnv() {
     const env = Object.assign({}, process.env);
-    env.PATH = AGENT_TOOLCHAIN_BIN + path.delimiter + AGENT_NODE_RUNTIME_DIR + path.delimiter + (env.PATH || process.env.PATH || '');
+    // 前置顺序：uv 工具链 → 便携 Node → MSVC 编译目录（缓存命中时）→ ~/.im-mcp 全部工具链 bin → 系统 PATH
+    // 阶段一百二十一：自动扫描 ~/.im-mcp 所有子目录的 bin（gcc/go/git/clang/zig…），新 zip 工具链解压后 Agent 自动可用，零代码
+    let prefix = AGENT_TOOLCHAIN_BIN + path.delimiter + AGENT_NODE_RUNTIME_DIR;
+    const clDirs = compilerManager.cachedMsvcClDirs();
+    if (clDirs.length) prefix = prefix + path.delimiter + clDirs.join(path.delimiter);
+    prefix = prefix + path.delimiter + compilerManager.allToolchainBins().join(path.delimiter);
+    env.PATH = prefix + path.delimiter + (env.PATH || process.env.PATH || '');
+    // MSVC 编译环境变量合并（INCLUDE/LIB/LIBPATH 等，不含 PATH——cl 目录已在上面前置）
+    const msvcEnv = compilerManager.cachedMsvcEnv();
+    if (msvcEnv) Object.assign(env, msvcEnv);
     return env;
 }
 
@@ -760,12 +776,78 @@ function requestBg(username) {
     return false;
 }
 
+// 阶段一百二十：编译命令首词提取（按 && 与 & 分段后各取首词——覆盖 "cd dir && gcc ..." 链式命令）
+function compilerCommandHead(command) {
+    const segs = String(command || '').split(/&&|&/);
+    const heads = [];
+    for (let i = 0; i < segs.length; i++) {
+        const tok = segs[i].trim().split(/\s+/)[0];
+        if (tok) heads.push(tok);
+    }
+    return heads;
+}
+
 function runCommandSync(username, params, done, onFrame) {
     const command = String((params && params.command) || '').trim();
     if (!command) {
         done({ ok: false, output: '错误：command 不能为空' });
         return;
     }
+    let timeoutSec = 60; // 与服务端 agentToolTimeout 默认一致
+    const tv = params && params.timeout;
+    if (typeof tv === 'number' && tv > 0) {
+        timeoutSec = Math.min(tv, CMD_TIMEOUT_MAX);
+    }
+    // 阶段一百二十/一百二十一：编译命令预检（懒加载触发编译环境准备）——
+    // 命令任一段首词属于编译命令族（gcc/g++/make/cl 等）且当前 Agent 环境 PATH 解析不到时，
+    // 先 ensureCompiler() 四级探测（系统 MSVC/gcc/clang 零下载优先，均无则本地 zip/在线下载内置 gcc），
+    // 成功后继续执行（buildAgentEnv 重新构造即带上新编译环境）；失败仍原样执行（错误回传模型自纠）。
+    // 已就绪时 ensureCompiler 走 24h 缓存/已装短路，重复编译任务零开销
+    // 阶段一百二十一：多工具链分发——C/C++ 命令（gcc/cl/clang）走 ensureCompiler 四级探测；
+    //   非 C 命令（zig/go/git/rustc/cargo/javac/java）走 ensureTool 按工具名归口检查（系统优先，缺失提示到工具链市场安装）
+    const heads = compilerCommandHead(command);
+    const C_FAMILY = ['gcc', 'g++', 'cc', 'c++', 'cpp', 'make', 'gdb', 'ar', 'ld', 'as', 'cl', 'clang', 'clang++', 'ccache', 'mingw32-make'];
+    const missingC = heads.filter(function (h) {
+        const bare = String(h || '').trim().toLowerCase().replace(/\.(exe|bat|cmd)$/i, '');
+        return C_FAMILY.indexOf(bare) !== -1 && !compilerManager.resolveInPath(h, buildAgentEnv().PATH);
+    });
+    const missingOther = heads.filter(function (h) {
+        const bare = String(h || '').trim().toLowerCase().replace(/\.(exe|bat|cmd)$/i, '');
+        return C_FAMILY.indexOf(bare) === -1 && compilerManager.isCompilerCommand(h) && !compilerManager.resolveInPath(h, buildAgentEnv().PATH);
+    });
+    let startExec;
+    if (missingC.length > 0) {
+        if (typeof onFrame === 'function') {
+            onFrame({ chunk: '未检测到本地编译命令，正在自动准备编译环境（系统 MSVC/gcc 优先，必要时下载内置 gcc 裁剪包约 89MB，视网速需 1-3 分钟）…\n', total_bytes: 0, over: false, final: false, exit_code: 0, duration_ms: 0 });
+        }
+        startExec = compilerManager.ensureCompiler().then(function (r) {
+            if (!r || !r.ok) return '';
+            let note = '【编译环境已就绪】' + r.msg + '\n';
+            // 阶段一百二十一：clang 请求但回落其他编译器（gcc/MSVC）时如实告知——gcc zip 不含 clang.exe，
+            // 不提示则模型仍执行 clang 必失败；gcc 与 clang 命令参数高度兼容，直接替换命令名即可。
+            // 注：clang 出现在 missingC 即代表系统 PATH 也未找到（ensureCompiler 成功必然是 gcc/MSVC 回落，不可能再返回 clang 类型）
+            if (missingC.some(function (h) { return /^clang/.test(String(h || '').trim().toLowerCase()); })) {
+                note += '【提示】未检测到 clang（LLVM），已为你准备 ' + (r.type === 'msvc' ? 'MSVC' : 'gcc')
+                    + '——请将命令中的 clang/clang++ 直接替换为 ' + (r.type === 'msvc' ? 'cl' : 'gcc/g++') + '（参数语法高度兼容）\n';
+            }
+            return note;
+        }, function () { return ''; });
+    } else if (missingOther.length > 0) {
+        if (typeof onFrame === 'function') {
+            onFrame({ chunk: '未检测到 ' + missingOther.join('/') + '，正在检查工具链环境…\n', total_bytes: 0, over: false, final: false, exit_code: 0, duration_ms: 0 });
+        }
+        startExec = compilerManager.ensureTool(missingOther[0]).then(function (r) {
+            return r && r.ok ? '【工具链环境已就绪】' + r.msg + '\n' : (r ? '【工具链未就绪】' + r.msg + '\n' : '');
+        }, function () { return ''; });
+    } else {
+        startExec = Promise.resolve('');
+    }
+    startExec.then(function (prefixNote) { runCommandExec(username, params, done, onFrame, prefixNote); });
+}
+
+// runCommandExec 阶段一百二十：原 runCommandSync 执行主体（预检完成后调用；prefixNote 为编译环境就绪提示，随输出头部回传模型）
+function runCommandExec(username, params, done, onFrame, prefixNote) {
+    const command = String((params && params.command) || '').trim();
     let timeoutSec = 60; // 与服务端 agentToolTimeout 默认一致
     const tv = params && params.timeout;
     if (typeof tv === 'number' && tv > 0) {
@@ -909,7 +991,8 @@ function runCommandSync(username, params, done, onFrame) {
         if (pendingFrame) { pushFrame(pendingFrame, false); pendingFrame = null; }
         exitCode = code;
         pushFrame('', true);
-        let text = fullText;
+        // 阶段一百二十：编译环境就绪提示置于输出头部回传（模型据此知晓可用编译器与语法风格）
+        let text = (prefixNote || '') + fullText;
         if (text.length > CMD_OUT_MAX_CHARS) {
             text = text.slice(0, CMD_OUT_MAX_CHARS) + '\n…（输出过长已截断，共 ' + text.length + ' 字符）';
         }

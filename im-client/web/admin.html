@@ -42,6 +42,7 @@
                 <button class="admin-nav-item" data-view="agents">AI 智能体</button>
                 <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
                 <button class="admin-nav-item" data-view="mcpplugins">MCP 插件库</button>
+                <button class="admin-nav-item" data-view="toolchains">工具链市场</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -510,6 +511,16 @@
                 </header>
                 <p class="admin-view-tip">插件清单由本页统一维护，PC 端用户在设置 → 插件市场一键安装（自动写入本机 MCP 配置并建连）。环境变量模板中的占位值（密码/令牌/目录）会标记"需配置"，用户安装时补填。删除插件不影响用户已安装的本机配置。</p>
                 <div id="mcpplugins-list" class="admin-cards"></div>
+            </section>
+            <!-- 阶段一百二十一：工具链市场（独立页级市场；与 MCP 插件库并列维护，PC 端设置 → 工具链 一键下载安装） -->
+            <section id="admin-view-toolchains" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>工具链市场</h2>
+                    <span id="toolchains-status" class="admin-view-tip"></span>
+                    <button id="toolchains-add" class="admin-btn primary">+ 新增工具链</button>
+                </header>
+                <p class="admin-view-tip">工具链清单由本页统一维护，PC 端用户在设置 → 工具链一键下载安装（SHA256 校验后解压到 ~/.im-mcp/&lt;安装目录&gt;）。区别于 MCP 插件：工具链非长驻进程，安装即下载解压即可用；Agent 任务可直接调用编译命令。删除条目不影响用户本机已安装的目录。</p>
+                <div id="toolchains-list" class="admin-cards"></div>
             </section>
         </main>
     </div>

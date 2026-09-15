@@ -1,0 +1,318 @@
+# IM 服务端核心配置（与《开发文档》5.2 保持一致）
+# 说明：本文件由服务端启动时读取，缺省项自动回退内置默认值
+
+# WebSocket 监听地址
+ws_addr: ":8888"
+# 心跳超时时间（秒）：超过该时间未收到任何消息判定离线
+heartbeat_timeout: 90
+# 心跳发送间隔（秒，客户端侧）
+heartbeat_interval: 30
+# 文件分片大小（字节）
+# 原实现：chunk_size: 4096（4KB 分片在大文件场景产生海量 WS 消息与 Redis 操作，20MB 文件需 5120 片）
+# 阶段三十一：提升至 64KB（base64 后约 87KB，仍在服务端单条消息 1MB 读取上限内），消息数降 16 倍
+chunk_size: 65536
+# 最大在线连接数（阶段三十一起在 HandleWS 实际执行校验，原实现该配置从未生效）
+# 原实现：max_connections: 1000
+max_connections: 10000
+# 单连接发送队列缓冲条数（阶段三十一：文件分片与聊天消息共用队列，过小会溢出丢消息）
+# 原实现：固定 256
+send_queue_size: 1024
+# 大文件直传阈值（字节，阶段三十一）：超过该值走 HTTP 直传链路（服务端流式落盘），WebSocket 仅传信令
+http_upload_threshold: 1048576
+# 单请求直传大小上限（字节）：1MB~20MB 走单请求直传；超过该值走分片直传（阶段三十二）
+max_file_size: 20971520
+# 分片直传单片大小（字节，阶段三十二）：超大文件按该值分片逐片 HTTP 上传（服务端节流推送接收进度）
+upload_chunk_size: 4194304
+# 分片直传文件大小上限（字节，阶段三十二）：超过该值前端直接拒绝发送
+max_direct_size: 2147483648
+# 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
+recall_window: 120
+
+# MySQL 数据源
+mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.50:4716)/im?charset=utf8mb4&parseTime=True&loc=Local"
+# Redis 配置
+redis_addr: "172.16.89.28:4967"
+redis_password: "@PUsmojra9ddma7r"
+redis_db: 2
+
+# 前端静态目录（缺省留空：自动从 exe 所在目录逐级向上查找 im-client/web；相对路径基于 exe 所在目录解析）
+web_dir: ""
+# 阶段二十四：聊天文件持久化存储目录
+# 原实现：upload_dir: "../im-client/web/static/upload"（相对进程工作目录，仅根目录启动时正确）
+# 现改为留空：由服务端基于 web_dir 自动推导（exe 位于 bin 时推导结果为 im-client/web/static/upload）；如需自定义可配置绝对路径
+# upload_dir: "../im-client/web/static/upload"
+# 阶段二十四：聊天文件持久化大小上限（字节，默认 20MB）
+# 阶段三十二：语义调整为"单请求直传上限"，1MB~20MB 走单请求直传，超过走分片直传（上限见 max_direct_size）
+# max_file_size: 20971520
+
+# ============================================================
+# 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存本文件，客户端不接触密钥）
+# providers 为 OpenAI 兼容 chat/completions 接口（可接 DeepSeek/Kimi/智谱/通义/OpenAI 等）
+# agents 为面向用户的智能体，通过 provider 名称绑定模型服务；未配置时内置"AI助手"（本地 Mock 应答）
+# 阶段四十九起：本节仅作首次启动的种子数据（自动迁入数据库），此后以后台管理界面增删改为准（热生效无需重启）
+# ============================================================
+# ============================================================
+# AI 问答配置（服务端归口：密钥仅存本文件；阶段四十九起本节仅作种子数据，运行时以数据库为准）
+# ============================================================
+ai:
+  # 多轮对话携带的历史消息条数（按 用户+智能体 隔离取最近 N 条）
+  # 阶段八十五：上下文按"稳定前缀在前、逐问易变内容在后"组装（系统提示→摘要→历史→知识库/记忆→提问），
+  # 可命中 DeepSeek/GLM/Kimi/硅基流动等服务的隐式前缀缓存（命中部分约 1/10 计费），长会话 prompt 消耗显著降低
+  context_window: 20
+  # 限流：单用户在 limit_window 秒内最多提问 limit_count 次
+  limit_count: 10
+  limit_window: 60
+  # 阶段四十五：文档问答单文档提取文本上限（字符），超出截断后再送模型
+  doc_max_chars: 60000
+
+  # 阶段八十四：TRAE 同款历史对话压缩（AI 问答与 Agent 任务共用）——历史上下文估算 token
+  # 达到阈值时把较旧部分 LLM 摘要成一条摘要消息注入（最近 N 条保留原文），长会话/长任务
+  # 显著降低 token 消耗并加速模型首字响应；AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
+  compress_threshold_tokens: 120000     # 触发阈值（估算 token；负数=禁用压缩）
+  compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
+
+  # 阶段五十一：知识库向量化 embedding 服务（OpenAI 兼容 /embeddings 接口归口）
+  # DeepSeek 不提供 embedding API，可接任意兼容服务（硅基流动 bge-m3 / 智谱 embedding-3 / 本地 ollama 等）
+  # api_url 为空时知识库功能静默降级（可建库但文件不向量化），不影响聊天与 AI 问答
+  embedding:
+    api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"                          # OpenAI 兼容 /embeddings 完整地址（示例：https://api.siliconflow.cn/v1/embeddings）；留空=知识库向量化降级关闭；本地 ollama 填 http://127.0.0.1:11434/v1/embeddings（注意是 embeddings 不是 chat/completions）
+    api_key: "sk-ws-H.PHLLPDY.idiZ.MEUCIA9DmFD_P_I9Ut3I_q8id1gFY9FvqQvVQLK5NJd6eeVTAiEAjirtmZtzWHDbBqqOpN3p3LlC8dIvofJrFVDbuSt56OY"                          # API 密钥（仅存服务端，不下发客户端）
+    model: "qwen3.7-text-embedding"                 # 向量模型名（需与 api_url 服务支持的模型一致）免费限流调试可用BAAI/bge-m3模型或本地nomic-embed-text模型
+    batch_size: 16                       # 单次请求批量条数
+  # 阶段五十一：知识库参数（data_dir 相对路径基于 exe 所在目录解析）
+  kb:
+    chunk_size: 500                      # 切片字符数（按段落聚合，超长段落硬切）
+    chunk_overlap: 50                    # 相邻切片重叠字符数
+    top_k: 3                             # AI 对话单次注入的最大命中条数
+    max_context: 4000                    # 注入参考资料总长上限（字符）
+    # score_threshold: 0.25              # 旧值保留：实测 nomic-embed-text 中文无关文本基线相似度≈0.59，此值形同虚设
+    # score_threshold: 0.62              # 旧值保留：实测部分无关问题（语义词重叠）最高相似度可达 0.67，仍会注入
+    score_threshold: 0.68                # 阶段五十三：按检索调试实测校准（无关问题最高 0.67 被过滤，相关问题首条 0.83 有余量；0=不过滤；可用管理后台「检索调试」继续校准）
+    data_dir: "kb_data"                  # 知识文件与向量库根目录
+
+  # 阶段五十八：智能体长期记忆（按 用户+智能体 隔离；回复后异步提取，提问时向量召回注入 system 上下文）
+  # enabled=false 或 embedding 未配置时全链路静默降级，不影响聊天主链路
+  memory:
+    enabled: true                        # 总开关（关闭后不提取不注入，管理接口仍可查看/删除已存记忆）
+    top_k: 5                             # 每次提问注入的召回记忆条数
+    max_per_agent: 200                   # 每 用户+智能体 记忆条数上限（超出淘汰最旧）
+    dedup_threshold: 0.88                # 去重相似度阈值（实测 12 对样本：同义改写 0.74~0.98、不同记忆 0.59~0.86 区间交叠，取 0.88 零误杀优先；0.74 级轻微改写会漏存为冗余条目，可在记忆弹窗手动删；原 0.85 会误杀、0.68 误杀更多）
+    extract_provider: ""                 # 提取用模型服务名（留空=用智能体当前绑定模型；建议填本地 ollama 零成本）
+
+  # 阶段五十九：智能 Agent 自动化任务（工具调用闭环 + 权限审批，事件流实时推送发起用户）
+  # enabled=false 时 AGENT_RUN 返回明确提示，功能整体关闭
+  # 阶段八十一/八十二：下列参数均可在 管理后台→Agent 设置 热更新（保存即生效+落库重启不丢），
+  # 本文件仅作首次启动的初始默认（后台调整属最新意图，DB 值优先）；workspace_root 不开放后台修改
+  agent:
+    enabled: true                        # 总开关
+    max_steps: 30                        # 单任务最大迭代步数（防模型死循环）
+    tool_timeout_seconds: 60             # run_command 默认超时秒（上限 300）
+    approve_timeout_seconds: 300         # 高危工具审批等待超时秒（超时任务自动失败）
+    auto_write: false                    # write_file 是否免审批（全局开关，默认 false 走审批；内网信任环境可开）
+    auto_commands:                       # run_command 命令前缀白名单（全局：命中自动放行，其余强制审批）
+                                         # 阶段八十三：审批弹窗"同意并加白"为用户个人白名单（按用户隔离，仅本人生效），与本全局名单并行
+      - "dir"
+      - "type"
+      - "ls"
+      - "cat"
+      - "echo"
+      - "go version"
+      - "git status"
+      - "git log"
+      - "git diff"
+      - "node"
+      - "python"
+    workspace_root: ""                   # 工作区根目录（空=exe目录/agent_workspace，按 username 隔离子目录）
+    # 阶段八十四：工具结果入模型上下文的字符上限（read_file/grep/http_request 等工具的超长输出
+    # 保留头 2/3 + 尾 1/3 后再进历史，前端执行控制台与留痕仍显示全量）。0=默认 8000，负数=不截断
+    tool_result_max_chars: 8000
+    # 阶段六十：本地执行器——true 时用户 PC 客户端（Electron）在线，文件/命令工具自动下放到其电脑本地执行，
+    # 文件直接落在用户磁盘（%APPDATA%/即时通讯/agent_workspace/<用户名>/）；
+    # PC 离线或本地执行超时自动回退服务端工作区执行，任务不中断。false 时全部在服务端执行（阶段五十九行为）
+    pc_executor: true
+    # 阶段九十一：内置浏览器工具开关（默认开启，nil 视为 true）——TRAE CN 同款内置浏览区，
+    # browser_* 工具族（navigate/snapshot/click/input/screenshot/eval/tabs/close）经用户 PC 客户端
+    # 的内置浏览器（WebContentsView，与主应用会话隔离）在本地真实执行，可操作 JS 渲染页面与登录态；
+    # 点击/输入/执行脚本需用户审批，打开/快照/截图自动放行；false 时不注入不执行（http_request 等不受影响）。
+    # 注意：依赖 PC 客户端在线（pc_executor 亦为 true 时才下发）
+    pc_browser: true
+    # 阶段六十七：任务队列——每用户同时运行任务数上限（concurrency，0=1）与排队上限（queue_size，0=5）；
+    # 超出并发数的新任务自动排队（FIFO，任务完成/取消后自动派发队首），排队已满时新任务直接拒绝
+    concurrency: 1
+    queue_size: 5
+    # 阶段六十八：http_request 工具——服务端代理 HTTP 请求（调接口/查数据/抓取网页），
+    # GET/HEAD 只读自动放行，POST/PUT/DELETE/PATCH 需用户审批；默认开启，false 时模型工具列表不注入
+    http_enabled: true
+    # 是否允许 http_request 访问内网/回环地址（默认 true 适配内网信任部署）；
+    # false 时在拨号层拦截私网/回环/链路本地 IP（按 DNS 解析后的真实 IP 拦截，域名绕不过），防模型被诱导探测内网
+    http_allow_private: true
+    # 阶段六十八：web_search 联网搜索工具（默认关闭，须配置服务商后开启 enabled=true）
+    # provider 四选一：
+    #   tavily     —— AI 搜索 API（https://tavily.com 注册取 key，需 api_key）
+    #   bocha      —— 博查搜索，国内直连（https://open.bochaai.com 注册取 key，需 api_key）
+    #   searxng    —— 自建元搜索实例（需 endpoint，实例须开启 JSON 输出 format=json）
+    #   duckduckgo —— 免 Key 兜底（国内网络环境通常不可达，建议 tavily/bocha）
+    web_search:
+      enabled: true                        # 开启联网搜索工具（博查，国内直连）
+      provider: "bocha"
+      api_key: "sk-4c76a2a5358143ff84c5ad8fb316ccfc"
+      endpoint: ""                         # bocha 不使用，留空
+
+  # 模型服务列表（可同时配置多个，智能体按 name 绑定）
+  # supports_image: 是否支持图片识别（多模态模型如 glm-4v/qwen-vl/gpt-4o 填 true，
+  # 为 true 时绑定的智能体开放图片提问入口，前端可发图片给模型识别）
+  providers:
+    # DeepSeek
+    - name: deepseek
+      api_url: "https://api.deepseek.com/v1/chat/completions"
+      api_key: "sk-fc5d6832eeaa45738c8cd65dccc5b8d3"
+      # 原实现：model: "deepseek-v4-flash"（2026-09-15 实测该模型已从 /models 列表下线，且官方对无效模型名不报错直接挂起，导致 AI 问答无响应）
+      # model: "deepseek-v4-flash"          # 可选：deepseek-v4-flash / deepseek-v4-flash-vision-exp
+      model: "deepseek-flash"             # 2026-09-15 实测 /models 当前可用：deepseek-flash / deepseek-v4-pro
+      supports_image: false
+    # 智谱 GLM
+    - name: zhipu
+      api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+      api_key: "你的密钥"
+      model: "glm-4-flash"            # 免费额度模型；高端可换 glm-4-plus
+      supports_image: false
+    # 智谱视觉模型（图片识别示例：绑定到智能体后可发图提问）
+    # - name: zhipu-vision
+    #   api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    #   api_key: "你的密钥"
+    #   model: "glm-4v-plus"
+    #   supports_image: true
+    # Kimi (Moonshot)
+    - name: kimi
+      api_url: "https://api.moonshot.cn/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "moonshot-v1-8k"
+    # 通义千问（DashScope 兼容模式）
+    - name: qwen
+      api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "qwen-plus"
+    # OpenAI
+    - name: openai
+      api_url: "https://api.openai.com/v1/chat/completions"
+      api_key: "sk-你的密钥"
+      model: "gpt-4o-mini"
+    # 本地 Ollama（无需密钥，api_key 留空即可）
+    - name: ollama
+      api_url: "http://127.0.0.1:11434/v1/chat/completions"
+      api_key: ""
+      model: "gemma4:26b"
+    # 阶段四十五 E2E 临时：文档导出/问答测试用 provider（实测完毕已停用，需要时取消注释并启动 tmpmock mockdoc）
+    # - name: doc-mock
+    #   api_url: "http://192.168.1.25:19128/v1/chat/completions"
+    #   api_key: "mock-key"
+    #   model: "mock-doc"
+    #   supports_image: true
+
+  # 智能体列表（左侧 AI 图标里可选的聊天助手；provider 未启用时该智能体降级为本地演示应答）
+  agents:
+    - name: "AI助手"                   # 全局唯一，会话列表展示名
+      provider: deepseek               # 绑定上面的 provider name
+      system_prompt: "你是一个即时通讯软件内的智能助手，回答简洁、准确、友好，使用中文回复。"
+      avatar: ""                       # 头像 URL，留空时前端显示 🤖 占位
+    - name: "翻译助手"
+      provider: zhipu
+      system_prompt: "你是一个专业翻译助手：自动检测用户输入的语言，中文译英文、其他语言译中文，仅输出译文，不要解释。"
+      avatar: ""
+    - name: "编程助手"
+      provider: kimi
+      system_prompt: "你是一个资深编程助手，用中文回答技术问题，先给结论再给可运行的代码示例。"
+      avatar: ""
+    - name: "创意写作"
+      provider: qwen
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""
+    - name: "本地测试"
+      provider: ollama
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""
+    # 阶段四十五 E2E 临时：导出测试智能体（配套 doc-mock，实测完毕已停用）
+    # - name: "导出测试"
+    #   provider: doc-mock
+    #   system_prompt: "你是文档生成测试助手。"
+    #   avatar: ""
+
+  # 阶段五十七：用户自建智能体（个人智能体仅归属者可见可对话；模型从下面白名单中选，防费用失控）
+  user_agent:
+    enabled: true                     # 用户自建智能体总开关（false 时用户端整体关闭该功能）
+    providers: ["deepseek", "ollama"] # 用户可选模型服务白名单（须与上面 providers 中已启用的 name 匹配）
+    max_per_user: 10                  # 每人自建数量上限
+    prompt_limit: 2000                # 提示词最大字符数
+
+# ============================================================
+# 阶段八十八：MCP（Model Context Protocol）——TRAE CN 同款 MCP 能力，服务端归口
+# Go 服务端作为 MCP Host 统一管理连接：stdio 在服务端本机拉起子进程，sse/http 直连远程端点；
+# 发现的工具供 AI 问答与智能 Agent 注入调用。服务器配置以 im_mcp_server 表为唯一数据源
+# （后台管理界面增删改热生效），下方 servers 仅首次启动表空时作种子导入
+# ============================================================
+mcp:
+  enabled: true                       # 总开关（false 时断开全部连接，工具不参与 AI 对话，后台配置记录保留）
+  user_enabled: true                  # 用户自建 MCP 总开关（阶段九十：PC 端"我的 MCP 服务器"入口——
+                                      # 用户在自己电脑配置本地 stdio 服务器，工具清单经 msg 67 上报注入
+                                      # Agent，调用经 PC 本地执行器执行，命令/凭据仅存用户本机；
+                                      # false 时本机工具不注入不执行，其他能力不受影响）
+  stdio_whitelist:                    # 用户自建服务器（owner 非空）的 stdio 命令白名单（可执行名比对，
+                                      # 兼容 .exe/.cmd/.bat 后缀；空=用户自建 stdio 全部拒绝。
+                                      # 管理员公共服务器不受限——管理员本就掌控服务端主机）
+    - "npx"
+    - "uvx"
+    - "node"
+    - "python"
+    - "python3"
+  connect_timeout_seconds: 30         # 建连（初始化握手）与工具发现超时秒
+  tool_timeout_seconds: 300            # 单次工具调用超时秒
+  # servers:                          # 种子服务器示例（仅首次启动导入；之后以后台管理配置为准）
+  # ===== 生产可用实例（均为官方维护、开箱即用；按需取消注释后重启） =====
+  #   - name: filesystem               # 文件系统访问（官方 @modelcontextprotocol/server-filesystem）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "D:/workspace", "E:/docs"]
+  #     # 注意：args 末尾的目录列表为允许访问的根目录，务必改成实际业务目录，避免放开整盘
+  #   - name: fetch                    # 网页抓取（官方 mcp-server-fetch，把网页转为 Markdown 供模型阅读）
+  #     transport: stdio
+  #     command: uvx
+  #     args: ["mcp-server-fetch"]
+  #   - name: memory                   # 长期记忆知识图谱（官方 @modelcontextprotocol/server-memory）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-memory"]
+  #     env: { "MEMORY_FILE_PATH": "./data/memory.json" }
+  #   - name: github                   # GitHub 仓库/Issue/PR 操作（官方，需个人访问令牌）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-github"]
+  #     env: { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxx" }
+  #   - name: remote-demo              # 远程 MCP 端点（新版 Streamable HTTP 协议，推荐）
+  #     transport: http
+  #     url: "https://mcp.example.com/mcp"
+  #     headers: { "Authorization": "Bearer xxx" }
+
+# ============================================================
+# 阶段四十九：后台管理
+# admin_users 为管理员用户名白名单：启动时自动将名单内已注册账号标记为管理员角色（im_user.role=1）
+# 管理登录实时比对白名单：未注册账号先用 IM 客户端登录一次自动注册，下次启动自动补标记
+# 管理后台入口：浏览器访问 http://<服务地址>:8888/admin.html
+# ============================================================
+admin_users:
+  - admin
+  - maxtest88
+
+# ============================================================
+# 阶段四十六：OnlyOffice 在线文档编辑（自建 DocumentServer，docx/xlsx/pptx 在线编辑）
+# enabled 为 false 时前端点击文件保持原下载行为（未部署可保持关闭，零影响）
+# 部署步骤见 /docs/开发文档.md 阶段四十六；修改后需重启服务端生效
+# ============================================================
+onlyoffice:
+  # 是否启用在线编辑
+  enabled: false
+  # 浏览器加载编辑器 api.js 的完整地址（DocumentServer 对浏览器可见的地址，Windows 版默认端口 80）
+  api_url: "http://127.0.0.1:80/web-apps/apps/api/documents/api.js"
+  # DocumentServer 回源拉取/保存文档时访问 im-server 的地址（需与 DS 网络互通）
+  server_url: "http://127.0.0.1:8888"
+  # 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
+  jwt_secret: "im-onlyoffice-secret"

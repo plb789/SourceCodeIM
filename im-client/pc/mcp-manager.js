@@ -25,10 +25,17 @@ const TOOLCHAIN_BIN = path.join(os.homedir(), '.im-mcp', 'bin');
 // spawn 时同样前置到 PATH——系统未装 Node 的电脑上 npx 系插件零依赖可用（TRAE CN 同款）
 const NODE_RUNTIME_DIR = path.join(os.homedir(), '.im-mcp', 'node');
 
+// 阶段一百二十：内置 gcc 编译环境目录（~/.im-mcp/gcc/bin，toolchain-manager.js 归口懒加载安装）。
+// 仅前置 PATH（MCP 子进程如需调用 gcc/g++ 时可解析；INCLUDE/LIB 等编译环境变量不注入——MCP 插件无编译场景）
+// 阶段一百二十一：自动扫描 ~/.im-mcp 全部工具链 bin（与 agent-executor buildAgentEnv 同构，后台新增 zip 工具链零代码可用）
+// 阶段一百二十一：按声明定位——工具链 bin 归口 toolchain-manager.allToolchainBins（服务端 ExePaths 声明优先 +
+//   默认探测兜底 + 外部目录探测），MCP 子进程与 Agent 任务环境严格同构，此处不再重复实现
+const compilerManager = require('./toolchain-manager.js');
+
 // buildEnv 构造子进程环境：process.env + 服务器 env + 工具链目录与便携 Node 目录 PATH 前置（系统 PATH 保留在后）
 function buildEnv(extra) {
     const base = Object.assign({}, process.env, extra || {});
-    base.PATH = TOOLCHAIN_BIN + path.delimiter + NODE_RUNTIME_DIR + path.delimiter + (base.PATH || process.env.PATH || '');
+    base.PATH = TOOLCHAIN_BIN + path.delimiter + NODE_RUNTIME_DIR + path.delimiter + compilerManager.allToolchainBins().join(path.delimiter) + path.delimiter + (base.PATH || process.env.PATH || '');
     return base;
 }
 

@@ -99,6 +99,13 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/mcp/plugins/{id}", s.adminGuard(s.handleAdminMCPPluginDelete))
 	// 用户端公开只读拉取（清单为公开目录数据不含凭据；PC 端设置页同源 fetch）
 	http.HandleFunc("GET /api/mcp/plugins", s.handleMCPPluginPublicList)
+	// 阶段一百二十一：工具链市场清单管理（独立页级市场，admin 维护，PC 端设置页 [工具链] 拉取展示 + 一键安装）
+	http.HandleFunc("GET /admin/api/toolchains", s.adminGuard(s.handleAdminToolchainList))
+	http.HandleFunc("POST /admin/api/toolchains", s.adminGuard(s.handleAdminToolchainCreate))
+	http.HandleFunc("PUT /admin/api/toolchains/{id}", s.adminGuard(s.handleAdminToolchainUpdate))
+	http.HandleFunc("DELETE /admin/api/toolchains/{id}", s.adminGuard(s.handleAdminToolchainDelete))
+	// 用户端公开只读拉取（工具链清单为公开目录数据，PC 端设置页 [工具链] 同源 fetch）
+	http.HandleFunc("GET /api/toolchains", s.handleToolchainPublicList)
 	// 阶段一百零六：Git 助手提示词管理（admin 可配置热更新，DB 值优先于内置默认）
 	http.HandleFunc("GET /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptGet))
 	http.HandleFunc("PUT /admin/api/gitprompt", s.adminGuard(s.handleAdminGitPromptSave))

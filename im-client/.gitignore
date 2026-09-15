@@ -1,6 +1,8 @@
 # 你要排除的目录（写在这里）
 bin/
 webbin/
+# electron-builder 缓存重定向（winCodeSign 已剔除 darwin 符号链接；nsis 复用本机缓存，详见 build.bat）
+pc/builder-cache/
 # 手机版 Capacitor 工程本机构建产物与工具链（勿提交）
 app/node_modules/
 app/tools/

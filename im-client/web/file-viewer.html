@@ -1328,6 +1328,7 @@
             registerCssHover(); // 阶段九十八：monaco 就绪后注册选择器特性 hover（monaco 为 AMD 异步全局，顶层注册会崩页面）
             var f = monacoPendingCb; monacoPendingCb = null;
             if (f) f();
+            fvLoaded(); // 阶段一百三十一：Monaco 就绪回执（首个编辑态/diff 标签懒加载收条；无加载时宿主侧无害空操作）
         }
         function monacoFailFallback() { // Monaco 加载失败/超时兜底：内容永远可见（编辑等待中同"取消"路径回落静态预览）
             clearTimeout(monacoFailTimer);
@@ -1344,6 +1345,7 @@
             }
             render();
             setStatus('编辑器加载失败，已切换为预览（可点"编辑"重试）', 'dirty');
+            fvLoaded(); // 阶段一百三十一：失败兜底同为加载完结（回落静态预览已渲染），回执收条
         }
         // ===== 阶段九十八：CSS 选择器特性 hover（TRAE CN 同款：悬停选择器显示应用预览与 (ID, 类, 元素) 特性三元组） =====
         // 注意：registerCssHover 须在 ensureMonaco 的 require 回调内调用（monaco 就绪后），严禁顶层执行
@@ -1581,6 +1583,20 @@
         }
         function hasViewer() { return !!viewerBridge(); }
 
+        // ===== 阶段一百三十一：渲染完成回执（浏览区加载进度条收条依据，Trae CN 同款观感）=====
+        // fvLoadSeq：注入序号——异步渲染（docx/pptx 解析）完成带序号上报，过期回执不上报（防旧解析迟到误收新加载的条）；
+        // fvAsyncRender：本次 render 走了异步通道（Monaco 懒加载/docx/pptx），完成由各异步点上报，
+        // __wsFileLoad 的同步首绘回执跳过（防 Monaco 未就绪时双 rAF 提前收条）
+        var fvLoadSeq = 0;
+        var fvAsyncRender = false;
+        function fvLoaded(seq) { // 渲染完成 → 回执宿主页收进度条（独立查看窗口无宿主桥时静默忽略）
+            if (seq !== undefined && seq !== fvLoadSeq) return; // 过期回执忽略
+            try {
+                var h = window.parent && window.parent.__imViewerHost;
+                if (h && typeof h.reportLoaded === 'function') h.reportLoaded(data && data.tab_id);
+            } catch (e) { /* 跨界访问失败忽略 */ }
+        }
+
         // ===== 精简 Markdown 渲染（标题/列表/表格/引用/行内代码/fenced 代码块，hljs 高亮） =====
         function renderMarkdownInline(s) {
             return esc(s)
@@ -1687,10 +1703,14 @@
             el.className = 'fv-md';
             el.innerHTML = '<p class="fv-hint" style="padding:0">文档解析中…</p>';
             bodyEl.appendChild(el);
+            var seq = fvLoadSeq;   // 阶段一百三十一：捕获注入序号（解析期间若注入新内容，过期回执不上报）
+            fvAsyncRender = true;  // 解析为异步通道，完成由 then/catch 回执收条
             window.mammoth.convertToHtml({ arrayBuffer: buf }).then(function (r) {
                 el.innerHTML = r.value || '<p>（空文档）</p>';
+                fvLoaded(seq);
             }).catch(function (e) {
                 el.innerHTML = '<p class="fv-hint" style="padding:0">解析失败：' + esc(e && e.message || e) + '</p>';
+                fvLoaded(seq);
             });
         }
 
@@ -1757,8 +1777,14 @@
                 };
                 viewer.on('slideChanged', syncIdx);
                 viewer.on('renderComplete', syncIdx);
-                viewer.loadFile(blob).then(function () { syncIdx(); return viewer.render(); }).then(syncIdx).catch(function (e) {
+                var seq = fvLoadSeq;  // 阶段一百三十一：捕获注入序号（渲染期间若注入新内容，过期回执不上报）
+                fvAsyncRender = true; // 幻灯片解析渲染为异步通道，完成由加载链回执收条
+                viewer.loadFile(blob).then(function () { syncIdx(); return viewer.render(); }).then(function () {
+                    syncIdx();
+                    fvLoaded(seq);
+                }).catch(function (e) {
                     idx.textContent = '解析失败：' + (e && e.message || e);
+                    fvLoaded(seq);
                 });
                 btnPrev.addEventListener('click', function () { viewer.previousSlide().then(syncIdx).catch(function () {}); });
                 btnNext.addEventListener('click', function () { viewer.nextSlide().then(syncIdx).catch(function () {}); });
@@ -1890,6 +1916,7 @@
                 }
                 setStatus('对比器加载中…');
                 monacoPendingCb = function () { if (diffWrap.style.display !== 'none') renderDiffApply(data); };
+                fvAsyncRender = true; // 阶段一百三十一：对比器懒加载为异步通道，完成由 monacoBoot/失败兜底回执
                 ensureMonaco();
                 return;
             }
@@ -2058,6 +2085,7 @@
                 monacoBox.style.display = 'block';
                 setStatus('编辑器加载中…');
                 monacoPendingCb = function () { if (editing && monacoBox.style.display === 'block') { monacoTakeOver(draft || (data && data.content) || ''); setStatus(''); } };
+                fvAsyncRender = true; // 阶段一百三十一：Monaco 懒加载为异步通道，完成由 monacoBoot/失败兜底回执
                 ensureMonaco(); // 首次进入编辑才加载 Monaco（本地资源毫秒级），加载完成自动接管
             }
             btnEdit.classList.add('hidden');
@@ -2174,7 +2202,12 @@
             previewLock = false; // 阶段九十七：新 payload 注入重置预览锁（重开文件自动进编辑态）
             fvApplyTheme(); // 阶段一百零七：注入时同步主题（storage 事件兜底，防跨 BrowserView 边界丢事件）
             document.title = data ? (data.name || data.title || '文件预览') : '文件预览';
+            fvLoadSeq++;           // 阶段一百三十一：新注入序号递增（过期异步回执以此判定丢弃）
+            fvAsyncRender = false; // 每次注入重置异步通道标记（render 内走异步会置 true）
             render();
+            // 阶段一百三十一修复：同步渲染 render 返回即回执（DOM 已应用=页面打开完成，符合"只检测页面是否完整打开"）。
+            // 原双 rAF 等首绘依赖窗口实际绘制——窗口被遮挡/最小化时 rAF 冻结回执丢失，条卡到看门狗；立即上报彻底解耦绘制
+            if (!fvAsyncRender) fvLoaded(fvLoadSeq); // 异步通道（Monaco 懒加载/docx/pptx）由各异步完成点自行上报
         };
     })();
     </script>

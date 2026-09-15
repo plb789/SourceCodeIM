@@ -139,6 +139,8 @@
             else if (item.dataset.view === 'mcp') { loadMCPServers(); startMCPPolling(); }
             // 阶段一百一十三：进入 MCP 插件库视图拉取插件清单（PC 端插件市场数据源）
             else if (item.dataset.view === 'mcpplugins') { loadMCPPlugins(); }
+            // 阶段一百二十一：进入工具链市场视图拉取工具链清单（PC 端工具链市场数据源）
+            else if (item.dataset.view === 'toolchains') { loadToolchains(); }
             else stopKBPolling();
         });
     });
@@ -2433,7 +2435,160 @@
     $('mcp-add').addEventListener('click', function () { openMCPServerModal(null); });
     $('mcp-refresh').addEventListener('click', function () { loadMCPServers(); });
 
-    // ===== MCP 插件库管理（阶段一百一十三：插件市场清单 CRUD，PC 端设置页"插件市场"数据源） =====
+    // ===== 阶段一百二十一：工具链市场 CRUD（与 MCP 插件库同构；无 command/args/env，核心是 zip + SHA256 + 安装目录） =====
+    var toolchains = [];
+
+    function loadToolchains() {
+        return api('GET', '/admin/api/toolchains').then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); return; }
+            toolchains = (result.data && result.data.toolchains) || [];
+            renderToolchains();
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    function renderToolchains() {
+        var box = $('toolchains-list');
+        box.innerHTML = '';
+        $('toolchains-status').textContent = toolchains.length ? ('共 ' + toolchains.length + ' 个工具链') : '';
+        if (!toolchains.length) {
+            var empty = document.createElement('div');
+            empty.className = 'admin-card-empty';
+            empty.textContent = '工具链清单为空，点击右上角新增（首次访问服务端会自动播种内置 gcc 工具链）';
+            box.appendChild(empty);
+            return;
+        }
+        toolchains.forEach(function (tc) {
+            var card = document.createElement('div');
+            card.className = 'admin-card' + (tc.enabled ? '' : ' disabled');
+            var main = document.createElement('div');
+            main.className = 'admin-card-main';
+            var name = document.createElement('div');
+            name.className = 'admin-card-name';
+            if (tc.icon) {
+                var ico = document.createElement('img');
+                ico.src = tc.icon;
+                ico.className = 'admin-plugin-icon';
+                ico.alt = '';
+                ico.addEventListener('error', function () { ico.remove(); });
+                name.appendChild(ico);
+            }
+            name.appendChild(document.createTextNode(tc.title || tc.name));
+            var tagN = document.createElement('span');
+            tagN.className = 'admin-card-tag';
+            tagN.textContent = tc.name;
+            name.appendChild(tagN);
+            if (tc.version) {
+                var tagV = document.createElement('span');
+                tagV.className = 'admin-card-tag';
+                tagV.textContent = 'v' + tc.version;
+                name.appendChild(tagV);
+            }
+            if (tc.category) {
+                var tagC = document.createElement('span');
+                tagC.className = 'admin-card-tag';
+                tagC.textContent = tc.category;
+                name.appendChild(tagC);
+            }
+            if (tc.size_mb) {
+                var tagS = document.createElement('span');
+                tagS.className = 'admin-card-tag';
+                tagS.textContent = '≈' + tc.size_mb + 'MB';
+                name.appendChild(tagS);
+            }
+            if (!tc.enabled) {
+                var tagOff = document.createElement('span');
+                tagOff.className = 'admin-card-tag off';
+                tagOff.textContent = '已下架';
+                name.appendChild(tagOff);
+            }
+            var desc = document.createElement('div');
+            desc.className = 'admin-card-desc';
+            desc.textContent = tc.description || '-';
+            desc.title = desc.textContent;
+            var meta = document.createElement('div');
+            meta.className = 'admin-card-desc';
+            // 阶段一百二十一：系统优先条目（无 zip/安装脚本，如 clang）如实标注，不显示 static/<名>.zip 兜底地址（必然 404）
+            meta.textContent = '安装目录 ~/.im-mcp/' + (tc.install_dir || tc.name) + ' · '
+                + (tc.zip_url || tc.installer_script ? (tc.zip_url || ('static/' + tc.name + '.zip')) : '系统组件（无安装包，用系统已装版本）')
+                + (tc.sha256 ? ' · SHA256' : '');
+            meta.title = meta.textContent;
+            main.appendChild(name);
+            main.appendChild(desc);
+            main.appendChild(meta);
+            card.appendChild(main);
+            var ops = document.createElement('div');
+            ops.className = 'admin-card-ops';
+            var btnEdit = document.createElement('button');
+            btnEdit.className = 'admin-btn small';
+            btnEdit.textContent = '编 辑';
+            btnEdit.addEventListener('click', function () { openToolchainModal(tc); });
+            var btnDel = document.createElement('button');
+            btnDel.className = 'admin-btn small danger';
+            btnDel.textContent = '删 除';
+            btnDel.addEventListener('click', function () {
+                confirmBox('确认删除工具链「' + (tc.title || tc.name) + '」？仅删清单条目，不影响用户本机已安装目录。', function () {
+                    api('DELETE', '/admin/api/toolchains/' + tc.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        loadToolchains();
+                    }).catch(function (e) { showToast(e.message || '网络异常'); });
+                });
+            });
+            ops.appendChild(btnEdit);
+            ops.appendChild(btnDel);
+            card.appendChild(ops);
+            box.appendChild(card);
+        });
+    }
+
+    function openToolchainModal(tc) {
+        openEditModal(tc ? '编辑工具链' : '新增工具链', [
+            { key: 'name', label: '工具链名（唯一，安装目录 ~/.im-mcp/<名>，仅限字母数字下划线连字符）', type: 'text', placeholder: 'gcc' },
+            { key: 'title', label: '展示标题', type: 'text', placeholder: 'C/C++ 编译工具链' },
+            { key: 'category', label: '分类页签', type: 'text', placeholder: '编译工具链' },
+            { key: 'version', label: '版本号', type: 'text', placeholder: '16.2.0' },
+            { key: 'description', label: '描述', type: 'textarea', placeholder: '为 Agent 提供 C/C++ 编译能力（gcc/g++/make/gdb/ccache…）' },
+            { key: 'zip_url', label: 'Zip 下载地址（相对路径拼服务端 base，或完整 http/https 外置 CDN；留空默认 static/<名>.zip）', type: 'text', placeholder: 'static/gcc-toolchain.zip' },
+            { key: 'sha256', label: 'SHA256（64 位十六进制，留空不校验不推荐）', type: 'text', placeholder: '24D791013B375E02D7B4725BC2566AB91ED0F877570CB69BC2F57F847BBD271A' },
+            { key: 'size_mb', label: '下载体积（MB，卡片体积感知提示）', type: 'number', default: 0 },
+            { key: 'install_dir', label: '安装目录（相对 ~/.im-mcp，留空默认取工具链名）', type: 'text', placeholder: 'gcc' },
+            { key: 'sub_commands', label: '子命令路由/引导器声明（JSON：值为安装引导标记，如 {"rustc":"rustup"} 表示走 rustup 安装器；注意：声明仅作元数据，客户端无执行期命令重写）', type: 'text', placeholder: '{"rustc":"rustup"}' },
+            { key: 'installer_script', label: '自定义安装脚本（JS async function(ctx)，留空走默认 zip 解压；非 zip 安装如 rustup-init 用脚本解耦）', type: 'textarea', placeholder: 'module.exports = async function(ctx) { await ctx.download(ctx.url, ...); await ctx.spawn(...); return {ok:true}; }' },
+            { key: 'exe_paths', label: 'ExePaths 可执行文件声明（JSON 数组，相对安装目录；支持 "~/" 前缀如 rust 的 ~/.cargo/bin；留空回退客户端默认探测）', type: 'text', placeholder: '["bin/go.exe","bin/gofmt.exe"]' },
+            { key: 'icon', label: '图标链接（http/https 图片 URL，留空显示首字母徽标）', type: 'text', placeholder: 'https://example.com/logo.png' },
+            { key: 'sort', label: '排序（小在前）', type: 'number', default: 0 },
+            { key: 'enabled', label: '上架（下架后用户端不再展示）', type: 'checkbox', default: true }
+        ], tc || {}, function (data) {
+            var payload = {
+                name: String(data.name || '').trim(),
+                title: String(data.title || '').trim(),
+                description: String(data.description || ''),
+                category: String(data.category || '').trim(),
+                version: String(data.version || '').trim(),
+                zip_url: String(data.zip_url || '').trim(),
+                sha256: String(data.sha256 || '').trim(),
+                size_mb: parseInt(data.size_mb, 10) || 0,
+                install_dir: String(data.install_dir || '').trim(),
+                sub_commands: String(data.sub_commands || '').trim(),
+                installer_script: String(data.installer_script || ''),
+                exe_paths: String(data.exe_paths || '').trim(),
+                icon: String(data.icon || '').trim(),
+                sort: parseInt(data.sort, 10) || 0,
+                enabled: !!data.enabled
+            };
+            var req = tc ? api('PUT', '/admin/api/toolchains/' + tc.id, payload)
+                : api('POST', '/admin/api/toolchains', payload);
+            req.then(function (result) {
+                if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                closeEditModal();
+                showToast('已保存');
+                loadToolchains();
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+    $('toolchains-add').addEventListener('click', function () { openToolchainModal(null); });
+
+    // ===== 阶段一百一十三：MCP 插件库管理（阶段一百一十三：插件市场清单 CRUD，PC 端设置页"插件市场"数据源） =====
     var mcpPlugins = [];
 
     function loadMCPPlugins() {

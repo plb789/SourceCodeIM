@@ -207,6 +207,13 @@ contextBridge.exposeInMainWorld('desktop', {
     mcpUvInstall: function () {
         return ipcRenderer.invoke('mcp:uv-install');
     },
+    // ===== 阶段一百二十一：工具链市场（[工具链] 页签一键安装/状态查询；复用 toolchain-manager 三通道下载） =====
+    toolchainInstall: function (payload) {
+        return ipcRenderer.invoke('toolchain:install', payload);
+    },
+    toolchainStatus: function (payload) {
+        return ipcRenderer.invoke('toolchain:status', payload || {});
+    },
     // ===== 阶段一百一十四：内置 Computer Use 开关（payload = {enabled}，返回 Promise<{ok, enabled}>） =====
     mcpBuiltinToggle: function (payload) {
         return ipcRenderer.invoke('mcp:builtin-toggle', payload);
