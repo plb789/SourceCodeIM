@@ -7524,6 +7524,169 @@ html.m #list-panel.list-collapsed {
     color: var(--text-secondary, #999);
 }
 
+/* ===== 阶段一百二十五：AI 向用户提问（TRAE CN 同款） ===== */
+/* 提问子卡片（任务卡内嵌 + 弹窗内同一实例），主题色联动与审批卡同族 */
+.agent-event.ask {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.agent-event.ask .agent-event-head.ask {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary);
+    cursor: default;
+}
+
+.agent-ask-question {
+    padding: 8px 10px 2px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-ask-context {
+    padding: 2px 10px 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-ask-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 10px 2px;
+}
+
+.agent-ask-option {
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+    background: var(--panel-bg, #fff);
+}
+
+.agent-ask-option:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.agent-ask-option.selected {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.agent-ask-option.disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.agent-ask-option-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text, #333);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    word-break: break-word;
+}
+
+.agent-ask-option-badge {
+    flex: none;
+    font-size: 10px;
+    font-weight: normal;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    border-radius: 4px;
+    padding: 1px 6px;
+}
+
+.agent-ask-option-desc {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-ask-free {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 4px;
+}
+
+.agent-ask-free-label {
+    flex: none;
+    font-size: 12px;
+    color: var(--text, #333);
+}
+
+.agent-ask-free-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    background: var(--panel-bg, #fff);
+    color: var(--text, #333);
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.agent-ask-free-input:focus {
+    border-color: var(--primary);
+}
+
+.agent-ask-free-input:disabled {
+    opacity: 0.6;
+}
+
+.agent-ask-free-count {
+    flex: none;
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    min-width: 34px;
+    text-align: right;
+}
+
+.agent-ask-actions {
+    justify-content: flex-end; /* TRAE CN 同款：取消/提交右对齐 */
+    padding-top: 8px;
+}
+
+/* 居中提问弹窗（自绘遮罩，z-index 与全局 .modal-mask 同层基准） */
+.agent-ask-modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modal-in 0.15s ease-out;
+}
+
+.agent-ask-modal-box {
+    width: min(480px, calc(100vw - 40px));
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    background: var(--panel-bg, #fff);
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    animation: modal-in 0.15s ease-out;
+}
+
+/* 弹窗内交互卡去掉自带描边（弹窗本身就是容器） */
+.agent-ask-modal-box .agent-event.ask {
+    border: none;
+}
+
 /* ===== 阶段七十七：文件变更审查条（TRAE CN 同款，颜色全部关联现有主题变量随主题变化） ===== */
 .agent-changes {
     margin-top: 8px;

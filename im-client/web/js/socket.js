@@ -90,7 +90,8 @@
         WS_FILE_RESP: 63,    // 阶段七十六：工作区文件面板响应下行（服务端 → web 前端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
         PC_FILE_REQ: 64,     // 阶段七十六：本地文件操作请求下行（服务端 → PC 渲染进程，仅 PC 端处理，content 为 JSON：{op,req_id,path,content?}）
         PC_FILE_RESP: 65,    // 阶段七十六：本地文件操作结果上行（PC 渲染进程 → 服务端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
-        AGENT_CHANGES: 66    // 阶段七十七：文件变更审查（上行 {task_id,action:"keep"/"revert",path?}；下行全量刷新帧 {task_id,session_id,changes,total_adds,total_dels}）
+        AGENT_CHANGES: 66,   // 阶段七十七：文件变更审查（上行 {task_id,action:"keep"/"revert",path?}；下行全量刷新帧 {task_id,session_id,changes,total_adds,total_dels}）
+        AGENT_ASK: 68        // 阶段一百二十五：Agent 向用户提问的回答上行（TRAE CN 同款，content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；提问本身经 AGENT_EVENT 下发）
     };
 
     function connect(username, password) {

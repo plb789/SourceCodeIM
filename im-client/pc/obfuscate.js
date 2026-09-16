@@ -5,6 +5,10 @@
 //       加密（前端代码在浏览器必须明文执行，本质上无法真正加密，TRAE 亦然）。
 //       实测修正：混淆范围限定 web\js\ 子树（26 个自研文件）——web\lib\ 下 101 个第三方库本身
 //       已是 min 压缩形态，重复混淆零收益且有兼容风险（AMD loader 等），原样复制。
+// 阶段一百二十四：html 注释剥离——快照中 7 个 html 的 <!-- --> 注释（阶段备注/旧结构存档等
+//       160 处约 24.3KB）构建期统一删除，降低可读性与体积；源 web\ 目录不动，仅产物生效。
+//       剥离前实测扫描：无条件注释、无内联 script/style 段内 <!--、无未闭合注释，可安全全删；
+//       剥离实现仍按段切分保护（script/style 段原样），防后续源码新增脚本字符串 <!-- 被误删。
 // 关键约束：mangle 只作用于函数内部局部变量（toplevel 默认不动）——跨文件全局函数/全局变量
 //       名全部保留，页面 script 标签按原文件名加载，全局通信零影响，html/css 零适配。
 // 用法：node obfuscate.js（build.bat [5/8] 混淆步骤调用，也可手动执行）
@@ -38,10 +42,26 @@ function collect(dir, rel, out) {
             rel: rel ? rel + '/' + name : name,
             src: path.join(dir, name),
             out: path.join(outRoot, (rel ? rel + '/' + name : name).replace(/\//g, path.sep)),
-            // 仅 web\js\ 子树的自研代码混淆；lib 第三方库（已是 min 形态）与 html/css 等原样复制
-            isJs: (rel === 'js' || rel.indexOf('js/') === 0) && /\.js$/i.test(name)
+            // 仅 web\js\ 子树的自研代码混淆；lib 第三方库（已是 min 形态）与 css 等原样复制；
+            // html 走注释剥离（阶段一百二十四）
+            isJs: (rel === 'js' || rel.indexOf('js/') === 0) && /\.js$/i.test(name),
+            isHtml: /\.html?$/i.test(name)
         });
     }
+}
+
+// stripHtmlComments 删除 HTML 注释（阶段一百二十四）：按交替段匹配——script/style 段优先整段
+// 匹配并原样返回（段内 <!-- 不被误判为注释），其余 <!-- --> 完整块删除；未闭合注释不匹配
+// 自然保留（宁可漏删不可误删）。实测扫描：现 7 个 html 无条件注释、无段内 <!--、无未闭合。
+function stripHtmlComments(code) {
+    return code.replace(
+        /<script\b[^>]*>[\s\S]*?<\/script>|<style\b[^>]*>[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi,
+        function (m) {
+            var head = m.slice(0, 6).toLowerCase();
+            if (head.indexOf('<scrip') === 0 || head.indexOf('<style') === 0) return m; // 脚本/样式段原样
+            return ''; // HTML 注释删除
+        }
+    );
 }
 
 async function main() {
@@ -55,14 +75,24 @@ async function main() {
     if (!files.length) throw new Error('源目录为空: ' + srcRoot);
 
     var manifest = {}; // {相对路径: {s: 源size, t: 源mtimeMs 取整}}——增量同步比对归口
-    var obfCount = 0, copyCount = 0, srcBytes = 0, outBytes = 0;
+    var obfCount = 0, copyCount = 0, htmlCount = 0, srcBytes = 0, outBytes = 0, htmlBefore = 0, htmlAfter = 0;
 
-    // js 逐文件混淆（并行，esbuild 内部 Go 池调度）；其他文件原样复制
+    // js 逐文件混淆（并行，esbuild 内部 Go 池调度）；html 剥离注释后写入；其他文件原样复制
     var tasks = files.map(function (f) {
         return function () {
             var st = fs.statSync(f.src);
             manifest[f.rel] = { s: st.size, t: Math.floor(st.mtimeMs) };
             fs.mkdirSync(path.dirname(f.out), { recursive: true });
+            if (f.isHtml) {
+                // 阶段一百二十四：html 注释剥离（源目录不动，仅产物生效；编码保持 UTF-8 无 BOM）
+                var raw = fs.readFileSync(f.src, 'utf8');
+                var stripped = stripHtmlComments(raw);
+                fs.writeFileSync(f.out, stripped);
+                htmlCount++;
+                htmlBefore += Buffer.byteLength(raw, 'utf8');
+                htmlAfter += Buffer.byteLength(stripped, 'utf8');
+                return Promise.resolve();
+            }
             if (!f.isJs) {
                 fs.copyFileSync(f.src, f.out);
                 copyCount++;
@@ -101,7 +131,8 @@ async function main() {
 
     function kb(n) { return (n / 1024).toFixed(1) + 'KB'; }
     console.log('[混淆] 完成：js 混淆 ' + obfCount + ' 个（' + kb(srcBytes) + ' → ' + kb(outBytes) +
-        '，压缩率 ' + (srcBytes ? Math.round(outBytes / srcBytes * 100) : 0) + '%），原样复制 ' + copyCount +
+        '，压缩率 ' + (srcBytes ? Math.round(outBytes / srcBytes * 100) : 0) + '%），html 注释剥离 ' +
+        htmlCount + ' 个（' + kb(htmlBefore) + ' → ' + kb(htmlAfter) + '），原样复制 ' + copyCount +
         ' 个，清单 ' + Object.keys(manifest).length + ' 条，耗时 ' + (Date.now() - t0) + 'ms');
 }
 

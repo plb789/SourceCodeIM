@@ -96,6 +96,10 @@ const (
 
 	// 阶段九十：用户自定义本机 MCP 服务器（TRAE 同款本地 stdio，命令/环境变量等凭据仅存用户本机）
 	MsgTypeAgentPcTools = 67 // 上行：PC 渲染进程 → 服务端，本机 MCP 工具清单上报（content 为 JSON：{tools:[{server,tool,description,input_schema}]}，登录后/清单变更时全量覆盖上报）；下行：服务端确认帧（content 为 JSON：{ok:true,count:N}，N=0 表示已清除注入）
+
+	// 阶段一百二十五：Agent 向用户提问（TRAE CN 同款——AI 遇到需要用户判断/需求不明确时暂停提问，
+	// 用户选择选项或自由输入补充后任务继续；提问经 AGENT_EVENT 下发，本类型承载用户答案上行）
+	MsgTypeAgentAsk = 68 // 上行：用户回答（content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；answer=选择选项或自由输入，skip=取消本次回答）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

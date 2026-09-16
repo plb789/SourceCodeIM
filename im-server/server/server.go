@@ -180,6 +180,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleAgentRun(c, msg)
 	case protocol.MsgTypeAgentApprove:
 		s.handleAgentApprove(c, msg)
+	// 阶段一百二十五：Agent 向用户提问的回答上行（TRAE CN 同款，任务挂起等待用户决策后继续）
+	case protocol.MsgTypeAgentAsk:
+		s.handleAgentAsk(c, msg)
 	// 阶段六十：Agent 本地执行器——PC 端回传本地工具执行结果
 	case protocol.MsgTypeAgentExecResp:
 		s.handleAgentExecResp(c, msg)

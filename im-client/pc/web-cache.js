@@ -299,10 +299,22 @@ async function sync() {
 
         // 2. 本地索引 = 缓存清单 + 快照索引（优先源属性清单，混淆产物实扫属性不可比对；
         // 快照只读不入缓存，命中即视为"本地已有"）
+        // 阶段一百三十二修复（用户实测：PC 端 index.html/file-viewer.html 长期陈旧导致浏览区
+        // 打开文件抛错）：原实现直接信任缓存 manifest 记录的属性做差异比对，一旦 manifest 与
+        // 磁盘实际内容脱节（如快照索引占位轮写过 manifest、或下载轮部分成功后清单被覆盖），
+        // 同步会永远跳过这些文件，拦截器又优先读缓存目录，陈旧页面被永久服务——死锁无自愈。
+        // 现改为对缓存目录逐文件 statSync 实测磁盘属性（mtime 取整毫秒对齐服务端精度），
+        // 磁盘缺失或属性与远端不符即判定差异，缓存目录实际内容成为比对唯一事实来源。
         var cached = readManifest();
         var localIdx = {};
         if (cached && cached.files) {
-            cached.files.forEach(function (f) { localIdx[f.p] = { s: f.s, t: f.t }; });
+            cached.files.forEach(function (f) {
+                // 原实现（信任清单，磁盘脱节即死锁）：localIdx[f.p] = { s: f.s, t: f.t };
+                try {
+                    var st = fs.statSync(path.join(cacheDir, f.p));
+                    localIdx[f.p] = { s: st.size, t: Math.floor(st.mtimeMs) };
+                } catch (e) { /* 磁盘无此文件：不占位，交给快照命中或下载补齐 */ }
+            });
         }
         var snapIdx = readSnapshotManifest() || walkFiles(snapshotDir);
         Object.keys(snapIdx).forEach(function (p) {

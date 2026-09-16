@@ -5456,17 +5456,49 @@
     // viewer 渲染完成经 __imViewerHost.reportLoaded 回执收条；15 秒看门狗兜底（回执丢失防长亮）
     var browserLoadTab = null;   // 正在加载的 file 标签 id（null=未知，如主进程读盘中）
     var browserLoadTimer = null; // 看门狗定时器
+    // 阶段一百三十三（用户实测：进度条从未亮起）：PC 本地缓存毫秒级读盘 + file-viewer render()
+    // 后同步回执（fvLoaded），整条加载链在浏览器首帧绘制前走完，opacity 0→1 的 0.15s 渐入从未
+    // 启动——条 add('on') 后未及绘制即 remove，永远不可见。与回执解耦：亮起不足最短展示时长时
+    // 延迟收条，保证快加载也有可感知的一闪；慢加载（网络/大文件）仍由回执实时收条，行为不变。
+    var browserProgressShownAt = 0;      // 本次亮条时刻（最短展示时长计时基准，每次 start 重置）
+    var browserProgressHideTimer = null; // 最短展示延迟收条定时器（null=无挂起）
+    var BROWSER_PROGRESS_MIN_MS = 400;   // 最短展示时长：低于此值肉眼无感（TRAE CN 同款观感）
     function browserProgressStart(tabId) {
         if (tabId) browserLoadTab = String(tabId);
         clearTimeout(browserLoadTimer);
+        // 新一轮加载开始：取消挂起中的延迟收条（否则条会在新加载中途被上一轮的延迟收掉）
+        if (browserProgressHideTimer) { clearTimeout(browserProgressHideTimer); browserProgressHideTimer = null; }
+        browserProgressShownAt = Date.now(); // 重置亮起时刻：延迟收条按最后一次亮起计时
         browserLoadTimer = setTimeout(browserProgressHide, 15000); // 与 viewer Monaco 看门狗同量级兜底
-        browserProgressEl.classList.add('on');
+        // 阶段一百三十二修复（用户实测：PC 端点击源码管理文件浏览区不打开且无任何提示）：
+        // PC 本地缓存 index.html 可能滞后（web-cache 增量同步死锁，见 pc/web-cache.js 同步修复），
+        // 页面缺 #browser-progress 节点时 browserProgressEl 为 null，此处无条件 classList 会抛
+        // TypeError 并中断 wsOpenFile 调用链——browserOpenFile IPC 永远不会执行，表现为点击无反应。
+        // 原代码（无守卫，节点缺失即中断打开文件的主流程）：browserProgressEl.classList.add('on');
+        if (browserProgressEl) browserProgressEl.classList.add('on');
     }
     function browserProgressHide() {
+        // 阶段一百三十三：收条统一走最短展示时长闸门（回执/看门狗/切标签等所有路径共用）。
+        // 原代码（回执到达立即收条，快加载时条在首帧绘制前即被移除，从未可见）：
+        // clearTimeout(browserLoadTimer); browserLoadTimer = null; browserLoadTab = null;
+        // if (browserProgressEl) browserProgressEl.classList.remove('on');
+        if (browserProgressHideTimer) return; // 已有延迟收条挂起，避免重复挂定时器
+        var elapsed = Date.now() - browserProgressShownAt;
+        if (browserProgressShownAt && elapsed < BROWSER_PROGRESS_MIN_MS) {
+            browserProgressHideTimer = setTimeout(browserProgressHideNow, BROWSER_PROGRESS_MIN_MS - elapsed);
+            return;
+        }
+        browserProgressHideNow();
+    }
+    // 真正收条（原 browserProgressHide 逻辑主体）：延迟期满或已亮满最短时长时执行
+    function browserProgressHideNow() {
+        clearTimeout(browserProgressHideTimer);
+        browserProgressHideTimer = null;
         clearTimeout(browserLoadTimer);
         browserLoadTimer = null;
         browserLoadTab = null;
-        browserProgressEl.classList.remove('on');
+        // 原代码（无守卫，节点缺失即抛错并中断状态推送/加载回执后续处理）：browserProgressEl.classList.remove('on');
+        if (browserProgressEl) browserProgressEl.classList.remove('on');
     }
 
     function browserSupported() {
@@ -6547,6 +6579,9 @@
 
     function finishAgentTask(st, text, cls) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
+        // 阶段一百二十五：任务完结即收尾等待中的提问卡（超时/完结后不再可作答；弹窗按任务归属过滤关闭）
+        if (st.pendingAskSettles) agentAskSettlePending(st, '任务已结束，无需再回答');
+        else agentAskModalClose(st.taskId);
         setAgentTaskStatus(st, text, cls);
         st.stopBtn.disabled = true;
         st.stopBtn.textContent = '已结束';
@@ -6601,7 +6636,7 @@
 
     // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
     // 阶段六十八：新增 http_request / web_search 映射；阶段七十四：新增 edit_file/delete_file/list_dir/grep 映射
-    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', edit_file: '编辑文件', delete_file: '删除文件', list_dir: '列目录', grep: '搜索文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索' };
+    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', edit_file: '编辑文件', delete_file: '删除文件', list_dir: '列目录', grep: '搜索文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索', ask_user: '向用户提问' };
 
     function agentToolChipText(tool, params) {
         var p = params || {};
@@ -11840,7 +11875,9 @@
                     st.stopBtn.disabled = false;
                     st.stopBtn.textContent = '取消排队';
                 }
-                else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
+                // else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
+                // 阶段一百二十五：状态事件携带服务端文案（审批="等待用户审批：xx"；提问="等待用户回答：xx"），前端直用缺失省兜底
+                else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, ev.text || '等待审批', 'waiting');
                 else if (ev.status === 'running') {
                     setAgentTaskStatus(st, '执行中', 'running');
                     // 阶段六十七：自队列派发后按钮复位（排队态曾改为"取消排队"）
@@ -11887,6 +11924,8 @@
                 addAgentTool(st, ev);
                 break;
             case 'tool_result':
+                // 阶段一百二十五：ask_user 的 tool_result（回答/跳过/超时收口）到达 → 统一收尾提问卡（防迟到重复作答）
+                if (ev.tool === 'ask_user') agentAskSettlePending(st, ev.output || '本次提问已收尾');
                 fillAgentTool(st, ev);
                 wsPanelOnToolResult(ev); // 阶段七十六：文件面板刷新树 + 自动打开生成/修改的文件
                 break;
@@ -11894,6 +11933,11 @@
             case 'tool_progress': updateAgentToolProgress(st, ev); break; // 阶段一百零九：MCP 工具进度通知 → 工具块头部实时显示
             case 'tool_exit': finalizeAgentToolExit(st, ev); break;   // 阶段七十五：进程结束 → 退出码/耗时标注
             case 'todo': renderAgentTodo(st, ev); break;
+            case 'ask_user':
+                // 阶段一百二十五：AI 向用户提问（TRAE CN 同款"正在向用户提问"）——任务挂起等待回答
+                agentFinalizeText(st, true); // 流式思考先收尾，提问卡紧随其后（对齐 tool_start 收尾节奏）
+                renderAgentAsk(st, ev);
+                break;
             case 'done':
                 st.bar.style.width = '100%';
                 st.pct.textContent = '100%';
@@ -12065,6 +12109,229 @@
             settle('已拒绝，等待 Agent 调整方案');
         });
     });
+
+    // ===== 阶段一百二十五：AI 向用户提问（TRAE CN 同款） =====
+    // 服务端 ask_user 工具下发 ask_user 事件（任务挂起等待回答）。渲染为任务卡内嵌交互卡，
+    // 正在查看该会话时同时弹出居中对话框（TRAE CN 同款）抢注意力；卡与弹窗为同一实例搬移，
+    // 作答状态天然同步。事件不落库不重放，切会话返回后不再重显（与审批卡片同口径）。
+    var agentAskModalEl = null; // 当前打开的提问弹窗根节点（同屏至多一个，后续提问仅落卡防叠窗）
+
+    // agentAskModalClose 关闭提问弹窗：弹窗内交互卡回落任务卡内联位（等待中仍可作答，已收尾则留痕）。
+    // taskKey 可选归属过滤：仅当弹窗内卡片属于该任务时才收（防任务 B 完结误关任务 A 的提问弹窗）
+    function agentAskModalClose(taskKey) {
+        if (!agentAskModalEl) return;
+        var mask = agentAskModalEl;
+        var block = mask.querySelector('.agent-event.ask');
+        if (taskKey && block && block._taskId !== taskKey) return;
+        agentAskModalEl = null;
+        if (block && block._home && document.contains(block._home)) {
+            block._home.appendChild(block);
+        }
+        if (mask._keyHandler) document.removeEventListener('keydown', mask._keyHandler, true);
+        mask.remove();
+    }
+
+    // agentAskSettlePending 收尾该任务全部等待中的提问实例（tool_result 到达/任务完结时归口调用）
+    function agentAskSettlePending(st, tip) {
+        if (st && st.pendingAskSettles) {
+            var list = st.pendingAskSettles;
+            st.pendingAskSettles = null;
+            list.forEach(function (fn) { try { fn(tip); } catch (e) { } });
+        }
+        agentAskModalClose(st && st.taskId); // 弹窗若还开着（超时/完结路径），仅收本任务的，同步关闭并把卡片回落留痕
+    }
+
+    // agentBuildAskBlock 构造提问交互卡（问题 + 选项 + 其他自由输入 + 取消/提交）
+    function agentBuildAskBlock(st, ev) {
+        var block = document.createElement('div');
+        block.className = 'agent-event ask';
+        var head = document.createElement('div');
+        head.className = 'agent-event-head ask';
+        head.textContent = '正在向你提问 · 等待你的回复';
+        var q = document.createElement('div');
+        q.className = 'agent-ask-question';
+        q.textContent = ev.question || '（未提供问题内容）';
+        block.appendChild(head);
+        block.appendChild(q);
+        if (ev.context) {
+            var ctx = document.createElement('div');
+            ctx.className = 'agent-ask-context';
+            ctx.textContent = ev.context;
+            block.appendChild(ctx);
+        }
+        var options = Array.isArray(ev.options) ? ev.options : [];
+        var allowFree = ev.allow_free !== false;
+        var settled = false;
+        var list = null;
+        var selectedLabel = '';
+        var freeInput = null;
+        var freeCount = null;
+
+        // 选项列表（点击选中；推荐项徽标；与自由输入互斥，后操作生效）
+        if (options.length) {
+            list = document.createElement('div');
+            list.className = 'agent-ask-options';
+            options.forEach(function (op, idx) {
+                var item = document.createElement('div');
+                item.className = 'agent-ask-option';
+                var label = document.createElement('div');
+                label.className = 'agent-ask-option-label';
+                label.textContent = op.label || ('选项 ' + (idx + 1));
+                item.appendChild(label);
+                if (op.recommended) {
+                    var badge = document.createElement('span');
+                    badge.className = 'agent-ask-option-badge';
+                    badge.textContent = '推荐';
+                    label.appendChild(badge);
+                }
+                if (op.description) {
+                    var desc = document.createElement('div');
+                    desc.className = 'agent-ask-option-desc';
+                    desc.textContent = op.description;
+                    item.appendChild(desc);
+                }
+                item.addEventListener('click', function () {
+                    if (settled) return;
+                    list.querySelectorAll('.agent-ask-option.selected').forEach(function (el) { el.classList.remove('selected'); });
+                    item.classList.add('selected');
+                    selectedLabel = op.label || ('选项 ' + (idx + 1));
+                    if (freeInput) freeInput.value = '';
+                    if (freeCount) freeCount.textContent = '0/500';
+                });
+                list.appendChild(item);
+            });
+            block.appendChild(list);
+        }
+
+        // "其他"自由输入行（TRAE CN 同款 0/500 计数）
+        if (allowFree) {
+            var freeRow = document.createElement('div');
+            freeRow.className = 'agent-ask-free';
+            var freeLabel = document.createElement('span');
+            freeLabel.className = 'agent-ask-free-label';
+            freeLabel.textContent = '其他';
+            freeInput = document.createElement('input');
+            freeInput.className = 'agent-ask-free-input';
+            freeInput.type = 'text';
+            freeInput.maxLength = 500;
+            freeInput.placeholder = '请输入';
+            freeCount = document.createElement('span');
+            freeCount.className = 'agent-ask-free-count';
+            freeCount.textContent = '0/500';
+            freeInput.addEventListener('input', function () {
+                freeCount.textContent = freeInput.value.length + '/500';
+                if (freeInput.value && list) {
+                    list.querySelectorAll('.agent-ask-option.selected').forEach(function (el) { el.classList.remove('selected'); });
+                    selectedLabel = '';
+                }
+            });
+            // 输入框内 Enter 直接提交（TRAE CN 同款 ↵ 提交；焦点限定弹窗内，不吃聊天输入框的发送键）
+            freeInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' && !e.isComposing) {
+                    e.preventDefault();
+                    submit();
+                }
+            });
+            freeRow.appendChild(freeLabel);
+            freeRow.appendChild(freeInput);
+            freeRow.appendChild(freeCount);
+            block.appendChild(freeRow);
+        }
+
+        // 操作行：取消（跳过回答）+ 提交
+        var actions = document.createElement('div');
+        actions.className = 'agent-approve-actions agent-ask-actions';
+        var noBtn = document.createElement('button');
+        noBtn.className = 'agent-approve-no';
+        noBtn.textContent = '取消';
+        noBtn.title = '取消本次回答，Agent 将按默认方案继续';
+        var okBtn = document.createElement('button');
+        okBtn.className = 'agent-approve-ok';
+        okBtn.textContent = '提交';
+        okBtn.title = '提交回答';
+        actions.appendChild(noBtn);
+        actions.appendChild(okBtn);
+        block.appendChild(actions);
+
+        function settle(tip) {
+            if (settled) return;
+            settled = true;
+            if (list) list.querySelectorAll('.agent-ask-option').forEach(function (el) { el.classList.add('disabled'); });
+            if (freeInput) freeInput.disabled = true;
+            okBtn.disabled = true;
+            noBtn.disabled = true;
+            block.classList.add('settled');
+            var tipEl = document.createElement('div');
+            tipEl.className = 'agent-approve-tip';
+            tipEl.textContent = tip;
+            block.appendChild(tipEl);
+        }
+        block._settle = settle; // 调试兜底；常规收尾走 agentAskSettlePending 归口
+        block._taskId = st.taskId; // 归属任务键（弹窗关闭时按任务过滤，防跨任务误收）
+
+        function send(action, answer) {
+            IMSocket.send({
+                msg_type: MSG.AGENT_ASK,
+                content: JSON.stringify({ task_id: st.taskId, step: ev.step, action: action, answer: answer || '' })
+            });
+        }
+
+        function submit() {
+            if (settled) return;
+            var answer = selectedLabel || (freeInput && freeInput.value.trim()) || '';
+            if (!answer) {
+                showToast('请先选择一个选项，或在"其他"中输入你的回答');
+                return;
+            }
+            send('answer', answer);
+            agentAskSettlePending(st, '已回答：' + answer); // 收尾全部实例（含本卡与弹窗归位）
+        }
+        okBtn.addEventListener('click', submit);
+        noBtn.addEventListener('click', function () {
+            if (settled) return;
+            send('skip');
+            agentAskSettlePending(st, '已取消本次回答，Agent 将按默认方案继续');
+        });
+
+        // 登记到任务卡收尾表（tool_result 到达 / 任务完结时统一收尾）
+        if (!st.pendingAskSettles) st.pendingAskSettles = [];
+        st.pendingAskSettles.push(settle);
+        return block;
+    }
+
+    // renderAgentAsk ask_user 事件渲染归口：任务卡内联交互卡 + 弹居中对话框抢注意力
+    function renderAgentAsk(st, ev) {
+        var block = agentBuildAskBlock(st, ev);
+        block._home = st.events; // 弹窗关闭/收尾后回落位
+        st.events.appendChild(block);
+        agentTaskScroll();
+        // TRAE CN 同款居中对话框（自绘遮罩弹窗；同屏至多一个，后续提问仅落卡）
+        if (!agentAskModalEl) {
+            var mask = document.createElement('div');
+            mask.className = 'agent-ask-modal-mask';
+            var box = document.createElement('div');
+            box.className = 'agent-ask-modal-box';
+            box.appendChild(block); // 交互卡整体搬入弹窗（同一实例，作答状态天然同步）
+            mask.appendChild(box);
+            document.body.appendChild(mask);
+            agentAskModalEl = mask;
+            mask._keyHandler = function (e) {
+                if (e.key === 'Escape') {
+                    // ESC 收起弹窗（模态优先；事件未 stopPropagation，其他面板的 ESC 判断式监听在弹窗未开场景不受影响）
+                    e.preventDefault();
+                    agentAskModalClose(st.taskId); // 仅收起弹窗，问题回落任务卡仍可作答
+                } else if (e.key === 'Enter' && !e.isComposing) {
+                    // Enter 仅焦点在弹窗内才提交：弹窗打开期间用户仍可在聊天输入框打字发消息（不吃聊天发送键）
+                    var ae = document.activeElement;
+                    if (!ae || !block.contains(ae)) return;
+                    e.preventDefault();
+                    var ok = block.querySelector('.agent-approve-ok');
+                    if (ok && !ok.disabled) ok.click();
+                }
+            };
+            document.addEventListener('keydown', mask._keyHandler, true);
+        }
+    }
 
     // ===== 阶段七十七：文件变更审查全量刷新帧（保留/撤销后服务端回推，多端一致） =====
     IMSocket.on(MSG.AGENT_CHANGES, function (msg) {
@@ -15793,7 +16060,8 @@
     // ===== 阶段六十五：执行轨迹渲染 =====
     // thApprovalLabel 审批情况标签文案归口
     function thApprovalLabel(a) {
-        return { none: '免审批', approved: '审批通过', rejected: '用户拒绝', cancelled: '用户取消', timeout: '审批超时' }[a] || a || '—';
+        // 阶段一百二十五：新增 answered（ask_user 用户已回答，中文映射，未知值兜底显示原文）
+        return { none: '免审批', approved: '审批通过', rejected: '用户拒绝', cancelled: '用户取消', timeout: '审批超时', answered: '已回答' }[a] || a || '—';
     }
     // thEnvLabel 执行环境标签文案归口
     function thEnvLabel(e) {

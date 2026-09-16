@@ -130,8 +130,9 @@ type AgentTodoItem struct {
 
 // AgentApproval 审批结果（用户上行投递到等待中的任务）
 type AgentApproval struct {
-	Action string                 // approve / reject / cancel（取消任务时服务端内部投递）
+	Action string                 // approve / reject / cancel（取消任务时服务端内部投递）；阶段一百二十五 ask_user 复用：answer / skip
 	Params map[string]interface{} // 改参放行后的新参数（approve 且非空时替换执行参数）
+	Answer string                 // 阶段一百二十五：ask_user 提问的用户答案（action=answer 时非空：选项 label 或自由输入文本）
 }
 
 // AgentExecResult 阶段六十：PC 本地执行器回传的工具执行结果（handleAgentExecResp 投递到等待中的任务）
@@ -181,6 +182,8 @@ type AgentTask struct {
 	approveCh   chan *AgentApproval   // 容量 1：等待审批时由 handleAgentApprove 投递
 	approveStep string                // 当前等待审批的步骤 key（toolCall.ID，防跨任务/跨步骤错投）
 	approveTool string                // 阶段六十二：当前等待审批的工具名（"同意并加白"按工具分流）
+	askCh       chan *AgentApproval   // 阶段一百二十五：容量 1，等待 ask_user 提问回答时由 handleAgentAsk 投递（与审批同源挂起语义，互不干扰）
+	askStep     string                // 阶段一百二十五：当前等待回答的步骤 key（toolCall.ID，防迟到回答错投）
 	execCh      chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
 	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
 	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
@@ -661,6 +664,33 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 				"required": []string{"command"},
 			},
 		}},
+		// 阶段一百二十五：向用户提问（TRAE CN 同款）——需要用户判断/需求不明确时暂停等待回答
+		{Type: "function", Function: map[string]interface{}{
+			"name":        "ask_user",
+			"description": "向用户提问以获取决策或澄清需求（遇到需要用户判断的问题、多种可行方案需用户选择、或需求不明确需要补充信息时使用）。调用后任务暂停，用户会选择一个选项或自由输入回答，回答将作为结果返回；用户也可能取消本次回答（此时应基于已有信息采用最合理的默认方案继续，不要重复追问）。仅在确有必要时使用，能凭现有信息合理决策的不要打扰用户。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"question": map[string]interface{}{"type": "string", "description": "问题标题（一句话说清需要用户决策什么）"},
+					"context":  map[string]interface{}{"type": "string", "description": "背景补充说明（可选，帮助用户理解决策上下文）"},
+					"options": map[string]interface{}{
+						"type":        "array",
+						"description": "候选选项列表（2-4 个为宜，按推荐度排序）",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"label":       map[string]interface{}{"type": "string", "description": "选项简短文案（动作导向，如\"自动迁移登录态\"）"},
+								"description": map[string]interface{}{"type": "string", "description": "选项详细说明（该方案的做法与影响）"},
+								"recommended": map[string]interface{}{"type": "boolean", "description": "是否为推荐选项"},
+							},
+							"required": []string{"label"},
+						},
+					},
+					"allow_free": map[string]interface{}{"type": "boolean", "description": "是否允许用户跳过选项自由输入其他答案，默认允许"},
+				},
+				"required": []string{"question"},
+			},
+		}},
 	}
 	// 阶段六十八：网络工具（HTTP 请求 + 联网搜索）
 	if agentHttpEnabled.Load() {
@@ -972,7 +1002,8 @@ func agentToolServerOnly(tool string) bool {
 			return true
 		}
 	}
-	return tool == "todo_write" || tool == "http_request" || tool == "web_search"
+	// 阶段一百二十五：ask_user 交互归口在服务端事件流（等待用户回答），与本地执行无关
+	return tool == "todo_write" || tool == "http_request" || tool == "web_search" || tool == "ask_user"
 }
 
 // agentToolEnvHint 阶段六十：tool_start 事件携带的执行环境预判（仅供前端即时展示提示）。
@@ -2665,7 +2696,7 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 	// 阶段七十四：补全 list_dir/grep/edit_file/delete_file
 	toolList := "read_file（读文件，支持 offset/limit 分段）、list_dir（列目录）、grep（按内容搜索文件）、" +
 		"write_file（写文件，需用户审批）、edit_file（精确替换编辑文件，需用户审批）、delete_file（删除文件/目录，需用户审批且不可恢复）、" +
-		"todo_write（任务清单）、run_command（执行命令，白名单外需审批）"
+		"todo_write（任务清单）、run_command（执行命令，白名单外需审批）、ask_user（向用户提问获取决策/澄清需求，用户选择选项或自由输入后继续）"
 	if agentHttpEnabled.Load() {
 		toolList += "、http_request（HTTP 接口调用/网页抓取，非只读方法需审批）"
 	}
@@ -2693,7 +2724,8 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 		"6. 修改既有文件优先 edit_file 精确替换，仅新建文件或整体重写时才用 write_file。\n" +
 		"7. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
 		"8. C/C++ 编译能力：可直接调用 gcc/g++/make 等编译命令，客户端首次使用时会自动准备本地编译环境（系统已有 MSVC/编译器时优先使用，无需任何安装操作；若系统为 MSVC，错误提示会引导改用 cl 语法）。\n" +
-		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。"
+		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。\n" +
+		"10. 遇到需要用户判断/决策的问题（多种可行方案、需求不明确、缺少关键信息且无法自行获取）时，用 ask_user 提问：问题简明扼要，给 2-4 个带说明的候选选项并标出推荐项；一次只问一个最关键的问题，能凭现有信息合理决策的不要打扰用户；用户取消回答时按最合理的默认方案继续，不要重复追问。"
 }
 
 // agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
@@ -2772,11 +2804,20 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 				t.mu.Lock()
 				ch := t.approveCh
 				step := t.approveStep
+				askCh := t.askCh // 阶段一百二十五：提问等待同步唤醒（停止按钮对提问挂起同样生效）
+				askStep := t.askStep
 				t.mu.Unlock()
 				if ch != nil && step != "" {
 					// 唤醒等待中的审批（携带 cancel 标记，状态机内统一收口）
 					select {
 					case ch <- &AgentApproval{Action: "cancel"}:
+					default:
+					}
+				}
+				if askCh != nil && askStep != "" {
+					// 阶段一百二十五：唤醒等待中的提问（取消语义同审批，任务收口为已取消）
+					select {
+					case askCh <- &AgentApproval{Action: "cancel"}:
 					default:
 					}
 				}
@@ -3153,6 +3194,43 @@ func (s *Server) runAgentTask(t *AgentTask) {
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
 			needApprove, reason := agentNeedsApproval(t.Username, toolName, params)
+
+			// 阶段一百二十五：ask_user 向用户提问（TRAE CN 同款）——强制人工应答，
+			// 不走审批/自动放行/白名单体系；提问下发后任务挂起，答案/跳过/取消统一收口
+			if toolName == "ask_user" {
+				// 缺 question 直接回错误结果让模型自纠，不劳烦用户
+				if strings.TrimSpace(agentParamString(params["question"])) == "" {
+					result := "错误：ask_user 缺少 question 参数（要向用户提出的问题文本）"
+					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": false, "output": result, "env": "server"})
+					s.agentStepTrace(t, toolName, params, result, false, "server", "none", time.Since(start).Milliseconds())
+					msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+					continue
+				}
+				action, answer, aerr := s.agentWaitAskUser(t, tc.ID, params)
+				if aerr != nil {
+					// 等待超时：与审批同语义，先留痕再中止任务
+					s.agentStepTrace(t, toolName, params, aerr.Error(), false, "server", "timeout", time.Since(start).Milliseconds())
+					s.agentFinish(t, "failed", "", aerr.Error())
+					return
+				}
+				if action == "cancel" {
+					// 用户停止任务：与审批取消同语义
+					s.agentStepTrace(t, toolName, params, "用户取消了任务", false, "server", "cancelled", time.Since(start).Milliseconds())
+					s.agentFinish(t, "cancelled", "", "用户取消")
+					return
+				}
+				var result string
+				if action == "skip" {
+					result = "用户取消了本次回答（未选择任何选项，也未输入补充）。请基于已有信息采用最合理的默认方案继续推进，不要重复追问。"
+				} else {
+					result = "用户的回答：" + answer
+				}
+				s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": true, "output": result, "env": "server"})
+				s.agentStepTrace(t, toolName, params, result, true, "server", "answered", time.Since(start).Milliseconds())
+				msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+				continue
+			}
+
 			var result string
 			var env string
 			if needApprove {
@@ -3446,6 +3524,115 @@ func (s *Server) handleAgentApprove(c *Client, msg *protocol.Message) {
 	}
 	select {
 	case ch <- &AgentApproval{Action: req.Action, Params: req.Params}:
+	default:
+	}
+}
+
+// agentWaitAskUser 阶段一百二十五：ask_user 提问挂起（TRAE CN 同款"正在向用户提问"）——
+// 下发提问事件，阻塞等待用户上行答案（answer/skip/cancel/超时）。与审批同源：
+// 等待期计入活动任务数、超时复用审批等待秒数；但强人工应答，无自动放行与改参。
+// 返回 (action, 答案, error)；action=answer/skip/cancel
+func (s *Server) agentWaitAskUser(t *AgentTask, callID string, params map[string]interface{}) (string, string, error) {
+	ch := make(chan *AgentApproval, 1)
+	step := callID // 步骤 key：tool_call ID 全局唯一且与本次调用一一对应
+	t.mu.Lock()
+	t.askCh = ch
+	t.askStep = step
+	t.Status = "waiting_approval"
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.askCh = nil
+		t.askStep = ""
+		t.mu.Unlock()
+	}()
+
+	// 参数规整（模型输出容错）：选项仅保留有 label 的条目；无选项时强制允许自由输入（否则用户无话可答）
+	question := agentParamString(params["question"])
+	options := make([]map[string]interface{}, 0, 4)
+	if raw, ok := params["options"].([]interface{}); ok {
+		for _, o := range raw {
+			if m, ok := o.(map[string]interface{}); ok {
+				if label := agentParamString(m["label"]); strings.TrimSpace(label) != "" {
+					options = append(options, m)
+				}
+			}
+		}
+	}
+	allowFree := true
+	if af, ok := params["allow_free"].(bool); ok {
+		allowFree = af
+	}
+	if len(options) == 0 {
+		allowFree = true
+	}
+	payload := map[string]interface{}{
+		"step":       step,
+		"question":   question,
+		"options":    options,
+		"allow_free": allowFree,
+	}
+	if ctx := agentParamString(params["context"]); strings.TrimSpace(ctx) != "" {
+		payload["context"] = ctx
+	}
+	s.agentEmit(t, "ask_user", payload)
+	s.agentSetStatus(t, "waiting_approval", "等待用户回答："+question)
+
+	select {
+	case ap := <-ch:
+		switch ap.Action {
+		case "answer":
+			s.agentSetStatus(t, "running", "用户已回答，继续执行")
+			return "answer", ap.Answer, nil
+		case "skip":
+			s.agentSetStatus(t, "running", "用户跳过回答，继续执行")
+			return "skip", "", nil
+		default: // cancel（用户停止任务时服务端内部投递）
+			return "cancel", "", nil
+		}
+	case <-time.After(time.Duration(agentApproveWait.Load()) * time.Second):
+		return "", "", fmt.Errorf("提问等待超时（%d 秒），任务中止", agentApproveWait.Load())
+	}
+}
+
+// handleAgentAsk 提问回答上行（msg_type=68）：校验发起人与步骤后投递到等待中的任务
+func (s *Server) handleAgentAsk(c *Client, msg *protocol.Message) {
+	var req struct {
+		TaskID string `json:"task_id"`
+		Step   string `json:"step"`
+		Action string `json:"action"` // answer=选择选项/自由输入；skip=取消本次回答
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
+		s.sendError(c, "提问回答格式错误")
+		return
+	}
+	if req.Action != "answer" && req.Action != "skip" {
+		s.sendError(c, "未知的提问回答操作")
+		return
+	}
+	if req.Action == "answer" && strings.TrimSpace(req.Answer) == "" {
+		s.sendError(c, "回答内容不能为空")
+		return
+	}
+	v, ok := agentTasks.Load(req.TaskID)
+	if !ok {
+		s.sendError(c, "任务不存在或已结束")
+		return
+	}
+	t := v.(*AgentTask)
+	if t.Username != c.username { // 仅发起人可回答
+		return
+	}
+	t.mu.Lock()
+	ch := t.askCh
+	step := t.askStep
+	t.mu.Unlock()
+	if ch == nil || step != req.Step { // 非等待态或迟到的回答直接忽略
+		return
+	}
+	select {
+	case ch <- &AgentApproval{Action: req.Action, Answer: req.Answer}:
 	default:
 	}
 }
