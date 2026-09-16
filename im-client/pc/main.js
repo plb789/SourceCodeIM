@@ -133,7 +133,12 @@ function createWindow() {
             nodeIntegration: false,
             // 阶段九十三：浏览区网页标签改用 <webview> 承载（真 Chromium 内核但是 DOM 元素，
             // 与 file 标签 iframe 同层级）——工具提示/弹窗遮罩/分隔线等页面 DOM 不再被原生层遮挡
-            webviewTag: true
+            webviewTag: true,
+            // 阶段一百三十四：启用内置 PDFium 插件——file 标签（file-viewer.html，主窗口同源 iframe）
+            // 的 PDF 预览依赖 <embed type="application/pdf">，Electron 默认不启用导致客户端预览空白；
+            // iframe 继承宿主窗口插件状态，故必须开在主窗口（浏览区 webview 已另行加 plugins=yes）
+            // 原实现：无 plugins 配置
+            plugins: true
             // 阶段一百二十二：同 origin http 拦截方案下以下两项已移除（原 app:// 方案所需）——
             // additionalArguments 传服务端地址（页面 origin 不再变化，socket.js 按 location 推导即可）；
             // allowRunningInsecureContent 放开混合内容（http origin 加载 http 外域内容本就不受限）

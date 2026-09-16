@@ -61,6 +61,7 @@
         CONV_SEARCH_RESP: 32,
         FILE_PERSISTED: 33,
         GROUP_IMAGE: 34, // 阶段二十六：群聊图片消息广播（HTTP 上传落库后服务端下发，content 为 JSON：url/name/size/nonce）
+        GROUP_FILE: 69,  // 阶段一百三十四：群聊文件消息广播（与群图片同链路，content 为 JSON：url/name/size/nonce）
         FRIEND_REQ_LIST: 35,      // 阶段二十九：好友申请列表请求（微信式"新的朋友"归口查询）
         FRIEND_REQ_LIST_RESP: 36, // 阶段二十九：好友申请列表响应（content 为 JSON：list 申请记录 + pending 待处理数量）
         PROFILE_UPDATE: 37, // 阶段三十：个人资料更新（content 为 JSON：nickname/gender/region/signature）

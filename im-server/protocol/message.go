@@ -100,6 +100,8 @@ const (
 	// 阶段一百二十五：Agent 向用户提问（TRAE CN 同款——AI 遇到需要用户判断/需求不明确时暂停提问，
 	// 用户选择选项或自由输入补充后任务继续；提问经 AGENT_EVENT 下发，本类型承载用户答案上行）
 	MsgTypeAgentAsk = 68 // 上行：用户回答（content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；answer=选择选项或自由输入，skip=取消本次回答）
+
+	MsgTypeGroupFile = 69 // 群聊文件消息（阶段一百三十四：HTTP 上传后广播，content 为 JSON：url/name/size/nonce；落库 msg_type=5 与私聊文件同类型，历史渲染零适配）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

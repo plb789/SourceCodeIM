@@ -1356,7 +1356,12 @@
 
     messageList.addEventListener('contextmenu', function (e) {
         var el = e.target.closest('.message');
-        if (!el || !el.getAttribute('data-msg-id')) return;
+        // 阶段一百三十四：文件气泡放宽——无 msg_id（未持久化等）也弹菜单（另存为/转发/复制仅依赖
+        // DOM 的 data-url；撤回/删除/置顶等需 msgId 的项在下方按 msgId 动态隐藏）
+        // 原实现：!el.getAttribute('data-msg-id') 直接 return，文件卡片无 msg_id 时右键无反应
+        if (!el) return;
+        var isFileBubble = !!el.querySelector('.bubble-file[data-url]');
+        if (!el.getAttribute('data-msg-id') && !isFileBubble) return;
         e.preventDefault();
         msgTarget = el;
         var msgId = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
@@ -1367,7 +1372,11 @@
         var isMine = el.getAttribute('data-from') === IMSocket.getUsername();
         var within = Date.now() / 1000 - (parseInt(el.getAttribute('data-ts'), 10) || 0) < win;
         var recallItem = msgMenu.querySelector('[data-action="recall"]');
-        recallItem.style.display = (isMine && within) ? '' : 'none';
+        recallItem.style.display = (msgId > 0 && isMine && within) ? '' : 'none'; // msgId=0（未持久化）无撤回语义
+        // 阶段一百三十四：另存为仅文件消息可用——右键目标气泡含 .bubble-file[data-url] 才显示
+        // null 守卫：防旧版缓存 index.html 无本项时 TypeError 中断整个右键菜单
+        var saveasItem = msgMenu.querySelector('[data-action="saveas"]');
+        if (saveasItem) saveasItem.style.display = isFileBubble ? '' : 'none';
         // 置顶项：当前消息已被置顶时显示"取消置顶"
         // 阶段八十八：只改 .mi-text 文字节点——直接赋 textContent 会连同 SVG 图标一起清掉（实测丢图标根因）
         var pinItem = msgMenu.querySelector('[data-action="pin"]');
@@ -1411,6 +1420,16 @@
                 } else if (action === 'copy') {
                     // 阶段八十八：右键复制——文本取气泡可见文本（含引用块）；图片转 PNG 写剪贴板（降级复制链接）；文件复制文件名
                     copyMsgContent(msgTarget);
+                } else if (action === 'saveas') {
+                    // 阶段一百三十四：文件消息右键另存为——<a download> 在 Electron 会话
+                    // will-download 默认行为即弹出系统"另存为"对话框（文件名预填）
+                    var fb = msgTarget.querySelector('.bubble-file[data-url]');
+                    if (fb) {
+                        var a2 = document.createElement('a');
+                        a2.href = fb.getAttribute('data-url') || '';
+                        a2.download = (fb.querySelector('.file-name') || {}).textContent || 'file';
+                        a2.click();
+                    }
                 } else if (action === 'multi' && msgId) {
                     // 阶段八十七：进入多选模式（复选框 + 底部工具栏，合并转发/逐条转发）
                     enterMultiSelect();
@@ -1579,13 +1598,18 @@
             }).catch(function () { if (!silent) showToast('转发失败：图片获取失败'); });
             return;
         }
-        // 文件消息（群聊不收文件，与发送按钮既有口径一致）
+        // 文件消息（阶段一百三十四：群聊转发放开——重取源文件后走 sendGroupFile，与群文件发送同归口）
         if (bubble && bubble.classList.contains('bubble-file')) {
-            if (target === '') { showToast('群聊暂不支持转发文件'); return; }
             var furl = bubble.getAttribute('data-url') || '';
             if (!furl) { showToast('该消息暂不支持转发'); return; }
             var fnameEl = bubble.querySelector('.file-name');
             fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || '文件').then(function (f) {
+                if (target === '') {
+                    sendGroupFile(f, true).then(function () {
+                        if (!silent) showToast('已转发');
+                    }).catch(function () { if (!silent) showToast('转发失败'); });
+                    return;
+                }
                 sendFileDirect(f, target, true).then(function (res) {
                     if (!silent) showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
                 }).catch(function () { if (!silent) showToast('转发失败'); });
@@ -2435,7 +2459,9 @@
         imageInput.click();
     });
     fileBtn.addEventListener('click', function () {
-        if (currentChatUser === '') { showToast('群聊暂不支持发送文件'); return; }
+        // 阶段一百三十四：群聊文件放开——群聊与私聊同走 HTTP 上传链路（sendGroupFile，对齐群聊图片口径）；
+        // 原实现：群聊视图拦截提示"群聊暂不支持发送文件"
+        // if (currentChatUser === '') { showToast('群聊暂不支持发送文件'); return; }
         // 阶段四十五：AI 会话文件按钮 = 文档问答入口（服务端解析文档文本注入提问，不依赖模型多模态）；
         // 普通私聊仍走分片文件链路
         if (isAIAgent(currentChatUser)) { docInput.click(); return; }
@@ -2452,7 +2478,11 @@
         imageInput.value = '';
     });
     fileInput.addEventListener('change', function () {
-        if (fileInput.files[0]) sendFile(fileInput.files[0]);
+        if (fileInput.files[0]) {
+            // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
+            if (currentChatUser === '') sendGroupFile(fileInput.files[0]);
+            else sendFile(fileInput.files[0]);
+        }
         fileInput.value = '';
     });
     // 阶段四十五：AI 文档问答入口（文件按钮在 AI 会话触发）
@@ -2910,6 +2940,39 @@
         });
     }
 
+    // 阶段一百三十四：群聊文件发送——POST /upload/group/file（与群聊图片同链路，不限文件类型，
+    // 服务端校验危险文件拦截+大小上限）→ 落库 msg_type=5 → 广播 MSG.GROUP_FILE → nonce 回填 msg_id
+    // suppressLocal：转发复用时抑制本地气泡与输入清理（与 sendGroupImage 的 suppressLocal 同语义）
+    function sendGroupFile(file, suppressLocal) {
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        if (file.size > maxFile) { showToast('文件超过大小上限（' + formatSize(maxFile) + '），无法发送'); return; }
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        if (!suppressLocal) {
+            var url = URL.createObjectURL(file);
+            var bubble = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', false); // 群聊文件：显示发送者昵称
+            bubble.setAttribute('data-nonce', nonce);
+        }
+        var fd = new FormData();
+        fd.append('file', file);
+        // 返回 fetch 链：转发路径（suppressLocal）按 Promise 收尾提示；直接发送路径 fire-and-forget 不受影响
+        return fetch('/upload/group/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&nonce=' + encodeURIComponent(nonce), {
+            method: 'POST',
+            body: fd
+        }).then(function (res) {
+            if (!res.ok) {
+                return res.text().then(function (t) {
+                    if (!suppressLocal) showToast('群聊文件发送失败：' + (t || ('HTTP ' + res.status)));
+                    throw new Error(t || ('HTTP ' + res.status));
+                });
+            }
+            if (!suppressLocal) showToast('已发送');
+        }).catch(function (e) {
+            console.warn('群聊文件上传失败:', e);
+            throw e; // 保持 Promise 拒绝语义：转发路径依赖 catch 提示"转发失败"（直接发送路径无接续不受影响）
+        });
+    }
+
     // 阶段四十四：AI 图片提问（图片识别）——POST /upload/ai/image 落盘（服务端不落库），
     // 成功后发送 AI_CHAT 图片信封（{"image":url,"text":附言}），提问由服务端 AI_CHAT 归口统一落库
     // （单条记录同时承载图片与附言，避免图片消息+信封消息重复气泡）。附言取发送时输入框内容（可空，
@@ -3014,6 +3077,28 @@
             }
         }
         var el = appendImageMsg(msg.from_user, meta.url || '', isMine ? 'self' : 'other', false); // 群聊图片广播：显示发送者昵称
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+    });
+
+    // 阶段一百三十四：群聊文件广播（对齐 GROUP_IMAGE 处理口径）：nonce 回填/去重/实时渲染
+    IMSocket.on(MSG.GROUP_FILE, function (msg) {
+        if (currentChatUser !== '') return; // 不在群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return; // msg_id 去重
+        var meta = {};
+        try { meta = JSON.parse(msg.content); } catch (e) {}
+        var isMine = msg.from_user === IMSocket.getUsername();
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        if (isMine && meta.nonce) {
+            // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
+            var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            if (mineEl) {
+                if (msg.msg_id) mineEl.setAttribute('data-msg-id', msg.msg_id);
+                if (msg.timestamp) mineEl.setAttribute('data-ts', msg.timestamp);
+                return;
+            }
+        }
+        var el = appendFileMsg(msg.from_user, meta.name || '未命名文件', formatSize(meta.size || 0), meta.url || '', isMine ? 'self' : 'other', false);
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
     });
@@ -5629,7 +5714,10 @@
         var el = document.createElement('webview');
         el.className = 'browser-web-frame hidden';
         el.setAttribute('partition', 'persist:agent-browser');
-        el.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, nodeIntegration=no');
+        // 阶段一百三十四：plugins=yes 启用 Chromium 内置 PDFium——file-viewer.html 的 PDF 预览
+        // 依赖 <embed type="application/pdf">，Electron 默认不启用 PDF 插件导致客户端预览空白
+        // （浏览器版自带 PDF 查看器不受影响）。原实现：无 plugins 配置
+        el.setAttribute('webpreferences', 'contextIsolation=yes, sandbox=yes, nodeIntegration=no, plugins=yes');
         el.setAttribute('allowpopups', '');
         el.addEventListener('dom-ready', function () {
             var r = webFrames[tabId];
@@ -13811,6 +13899,9 @@
             bubbleFile.appendChild(icon);
             bubbleFile.appendChild(info);
             if (meta.url) {
+                // 阶段一百三十四：历史文件气泡补存 data-url（与实时气泡 L15035 对齐）——
+                // 右键"另存为"需从 DOM 取源地址（点击回调闭包拿不到）
+                bubbleFile.setAttribute('data-url', meta.url);
                 bubbleFile.style.cursor = 'pointer';
                 bubbleFile.addEventListener('click', function () {
                     // 原实现：直接创建 <a download> 触发下载
@@ -14814,14 +14905,22 @@
         docPreviewUrl = url;
         docEditorName = name || '';
         document.getElementById('doc-editor-name').textContent = docEditorName || '文档';
-        var ext = (name ? name.toLowerCase() : url.toLowerCase()).match(/\.(docx|xlsx|pptx)/);
-        var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
-        var type = (ext && ext[1]) || 'docx';
+        var lname = (name || url).toLowerCase();
         var holder = document.getElementById('doc-editor-placeholder');
         holder.innerHTML = '';
         var frame = document.createElement('iframe');
         frame.id = 'doc-preview-iframe';
-        frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url);
+        if (/\.pdf($|\?)/.test(lname)) {
+            // 阶段一百三十四：PDF 预览——iframe 直指 URL 交 Chromium 内置 PDFium 渲染（主窗口
+            // plugins:true 已启用），无需解析页。注意 Android WebView 无内置 PDF 查看器，
+            // 手机端不进本分支（onFileCardClick 已按 Capacitor 环境分流）。原实现：无 PDF 预览
+            frame.src = url;
+        } else {
+            var ext = lname.match(/\.(docx|xlsx|pptx)/);
+            var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
+            var type = (ext && ext[1]) || 'docx';
+            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url);
+        }
         holder.appendChild(frame);
         document.getElementById('doc-editor-mask').classList.remove('hidden');
         document.getElementById('doc-editor-window').classList.remove('hidden');
@@ -14852,6 +14951,13 @@
         if (isEditableDocName(name) && url) {
             // 编辑层要求已持久化（msg_id 存在）且地址为服务端 URL（blob 本地预览地址不送编辑层）
             if (msgId > 0 && url.indexOf('blob:') !== 0 && openDocEditor(msgId, name, url)) return;
+            openDocPreview(url, name);
+            return;
+        }
+        // 阶段一百三十四：PDF 改预览——复用 doc-editor 弹窗壳，iframe 直指 URL 交 Chromium 内置
+        // PDFium 渲染（PC/浏览器）；Android WebView 无内置 PDF 查看器，手机 APP 保持下载行为
+        // 原实现：PDF 与 zip 等一同走下方下载分支
+        if (url && !window.Capacitor && /\.pdf($|\?)/i.test(name || '')) {
             openDocPreview(url, name);
             return;
         }

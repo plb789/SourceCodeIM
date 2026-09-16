@@ -31,6 +31,9 @@
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <script src="js/lib/mammoth.browser.min.js?v=1.0"></script>
     <script src="js/lib/jszip.min.js?v=3.10"></script>
+    <!-- 阶段一百三十四：Chart.js UMD——PptxViewJS 非 AMD 环境从全局取 window.Chart（图表渲染依赖），
+         缺失导致 PPT 预览报 "Chart is required but was not found"；必须在 PptxViewJS 之前加载 -->
+    <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
     <style>

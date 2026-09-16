@@ -547,6 +547,12 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
             复制
         </div>
+        <!-- 阶段一百三十四：文件消息右键另存为（仅文件气泡显示，contextmenu 时按 .bubble-file[data-url] 动态显隐；
+             <a download> 在 Electron 会话 will-download 默认行为即弹出系统"另存为"对话框） -->
+        <div class="menu-item" data-action="saveas">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+            另存为
+        </div>
         <!-- 阶段四十：微信同款消息引用（右键引用 → 输入框上方引用条 → 随下一条消息一起发出） -->
         <div class="menu-item" data-action="quote">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
@@ -1108,6 +1114,9 @@
     <script src="js/lib/mammoth.browser.min.js?v=1.0"></script>
     <!-- 阶段七十六：SheetJS（xlsx 解析，Excel 表格面板预览）+ JSZip/PptxViewJS（pptx Canvas 渲染预览），均本地化 -->
     <script src="js/lib/jszip.min.js?v=3.10"></script>
+    <!-- 阶段一百三十四：Chart.js UMD——PptxViewJS 非 AMD 环境从全局取 window.Chart（图表渲染依赖），
+         缺失导致含图表的 PPT 预览报 "Chart is required but was not found"；必须在 PptxViewJS 之前加载 -->
+    <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
     <script src="js/chat.js?v=3.14"></script>

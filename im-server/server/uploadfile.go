@@ -434,8 +434,8 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 
 	// 广播群聊图片消息给全部在线用户（含发送方，多端同步；发送端本地气泡按 nonce 精确回填 msg_id）
 	notice := &protocol.Message{
-		MsgType:   protocol.MsgTypeGroupImage,
-		FromUser:  username,
+		MsgType:  protocol.MsgTypeGroupImage,
+		FromUser: username,
 		// 阶段八十五：群聊帧携带发送者昵称（服务端归口，与文字群聊帧同规则）
 		FromName:  nicknameOf(username),
 		ToUser:    "",
@@ -463,6 +463,127 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	}
 
 	logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
+}
+
+// HandleGroupFileUpload 阶段一百三十四：群聊文件上传 POST /upload/group/file?username=xxx&nonce=yyy
+// 与群聊图片（HandleGroupImageUpload）同链路，差异仅三点：不限图片扩展名（保留危险文件拦截）、
+// 落库 msg_type=5（文件消息）、广播 MsgTypeGroupFile(69)、会话摘要 [文件]。
+// 群聊历史渲染零适配：历史按 msg_type=4/5 分支渲染，群文件（ToUser 空）与私聊文件同一分支
+func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	nonce := r.URL.Query().Get("nonce") // 客户端本地气泡标识：广播回填 msg_id 按 nonce 精确匹配（与群图片同归口）
+	if username == "" {
+		http.Error(w, "缺少参数", http.StatusBadRequest)
+		return
+	}
+	// 在线校验（与群图片同水位：轻量活性锚点，防离线/不存在用户名被冒用上传）
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		logger.Warn("群聊文件上传拒绝： %s 无活跃连接", username)
+		return
+	}
+
+	// 大小限制（读配置，与群图片/私聊文件同规则）
+	maxSize := int64(20 << 20)
+	if s.cfg.MaxFileSize > 0 {
+		maxSize = int64(s.cfg.MaxFileSize)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+	if err := r.ParseMultipartForm(maxSize); err != nil {
+		http.Error(w, "文件过大或解析失败", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "缺少文件", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// 危险文件拦截（与分片传输/群图片同规则；群文件不限图片扩展名，此为唯一格式防线）
+	if isDangerousFile(header.Filename) {
+		http.Error(w, "禁止传输可执行文件", http.StatusBadRequest)
+		logger.Warn("群聊文件拦截： %s 尝试上传危险文件 %s", username, header.Filename)
+		return
+	}
+
+	// 存储目录（与群图片同推导逻辑）
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
+	}
+
+	// 生成唯一文件名（时间戳+随机串，保留原扩展名；原始文件名存入消息 content）
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	b := make([]byte, 8)
+	rand.Read(b)
+	filename := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), hex.EncodeToString(b), ext)
+
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		http.Error(w, "目录创建失败", http.StatusInternalServerError)
+		return
+	}
+	dst := filepath.Join(dir, filename)
+	out, err := os.Create(dst)
+	if err != nil {
+		http.Error(w, "文件保存失败", http.StatusInternalServerError)
+		return
+	}
+	if _, err := io.Copy(out, file); err != nil {
+		out.Close()
+		http.Error(w, "文件写入失败", http.StatusInternalServerError)
+		return
+	}
+	out.Close()
+
+	url := "/static/upload/" + filename
+
+	// 落库消息：msg_type=5 文件消息，ToUser 为空表示群聊（与群聊文字/图片消息同命名空间）
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
+	record := model.Message{
+		MsgType:  int8(MsgTypeFileSaved),
+		FromUser: username,
+		ToUser:   "",
+		Content:  string(contentBytes),
+	}
+	if err := store.DB.Create(&record).Error; err != nil {
+		http.Error(w, "消息落库失败", http.StatusInternalServerError)
+		return
+	}
+
+	// 广播群聊文件消息给全部在线用户（含发送方多端同步；发送端本地气泡按 nonce 回填 msg_id）
+	notice := &protocol.Message{
+		MsgType:   protocol.MsgTypeGroupFile,
+		FromUser:  username,
+		FromName:  nicknameOf(username),
+		ToUser:    "",
+		Content:   string(contentBytes),
+		MsgID:     record.ID,
+		Timestamp: time.Now().Unix(),
+	}
+	data, _ := json.Marshal(notice)
+	s.hub.Broadcast(data)
+
+	// 群聊离线消息：给所有离线的注册用户入队（与群聊图片行为一致）
+	var usernames []string
+	if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err == nil {
+		for _, name := range usernames {
+			if name != username && !s.isOnline(name) {
+				s.queueOffline(name, notice)
+			}
+		}
+	}
+
+	// 更新所有在线用户的群聊会话摘要为 [文件] 并推送
+	for _, name := range s.hub.Usernames() {
+		s.touchConversation(name, "", "[文件]")
+		s.notifyConvUpdate(name)
+	}
+
+	logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})

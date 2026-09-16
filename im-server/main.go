@@ -56,6 +56,8 @@ func main() {
 	http.HandleFunc("/upload/chunk", srv.HandleChunkUpload)
 	// 群聊图片上传接口（阶段二十六：HTTP 上传落库 + 广播群成员，不走点对点分片协议）
 	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
+	// 群聊文件上传接口（阶段一百三十四：与群图片同链路，不限图片类型，落库 msg_type=5 + 广播 MsgTypeGroupFile）
+	http.HandleFunc("/upload/group/file", srv.HandleGroupFileUpload)
 	// AI 图片提问上传接口（阶段四十四：仅落盘不落库，提问正文由 AI_CHAT 图片信封统一落库）
 	http.HandleFunc("/upload/ai/image", srv.HandleAIImageUpload)
 	// AI 文档问答上传接口（阶段四十五：仅落盘+试解析不落库，提问正文由 AI_CHAT 文档信封统一落库）
