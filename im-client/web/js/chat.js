@@ -12666,6 +12666,16 @@
 
     IMSocket.on(MSG.CONV_LIST, function (msg) {
         try { convList = JSON.parse(msg.content) || []; } catch (e) { convList = []; }
+        // 阶段一百三十四：当前正在查看的会话未读强制归零——正在查看时收到消息前端立即发已读回执
+        // （实时路径 L13106），但服务端"计未读→推 CONV_LIST"先于"收到 READ→清零→再推"，
+        // 竞态窗口内角标闪现（实测 2026-09-16）。本地事实归口：正在查看的会话不存在未读；
+        // READ 到达服务端后下次推送即自动一致。窗口失焦/最小化时不归零（托盘未读提醒需保留服务端计数）。
+        // 原实现：直接渲染服务端 unread（当前会话角标闪现）
+        if (currentChatUser && windowFocused) {
+            for (var ci = 0; ci < convList.length; ci++) {
+                if (convList[ci].target === currentChatUser) convList[ci].unread = 0;
+            }
+        }
         renderConvList();
         // 原实现：仅渲染会话列表，好友列表角标依赖本地 unreadCount，多端已读后不同步
         // 未读数服务端归口：好友列表角标与 会话列表角标 同源渲染服务端未读数
