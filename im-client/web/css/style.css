@@ -9972,6 +9972,8 @@ html.m .ms-actions {
     height: var(--titlebar-h);
     /* 压过全部浮层（全站最高 11000 遮罩），保证任意弹窗状态下标题栏仍可拖动窗口 */
     z-index: 12000;
+    /* 阶段一百三十四：冻结截图期间隐藏（根节点 shot-freeze 类由 screenshot.js freeze 开/关维护）——
+       标题栏压过截图编辑器遮罩(3000)会露出聊天 header，微信/QQ 截图时标题栏同样同步消失 */
     display: flex;
     align-items: center;
     gap: 7px;
@@ -9984,6 +9986,11 @@ html.m .ms-actions {
     user-select: none;
     font-size: 12px;
     line-height: 1;
+}
+
+/* 阶段一百三十四：冻结截图期间隐藏自绘标题栏（screenshot.js freeze 开启时挂根节点类，close 时移除） */
+.pc-titlebar.shot-freeze .app-titlebar {
+    display: none !important;
 }
 
 .pc-titlebar .app-titlebar-logo {

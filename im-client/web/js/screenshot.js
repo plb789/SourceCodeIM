@@ -277,6 +277,10 @@
                 wrapEl.style.height = window.innerHeight + 'px';
                 sel = null; // 冻结态无选区：必须拖拽框选（微信同款）
                 editorEl.classList.add('freeze');
+                // 阶段一百三十四：冻结截图期间隐藏自绘标题栏——标题栏 z-index(12000) 故意压过全部浮层，
+                // 比编辑器遮罩(3000)高，冻结揭幕后顶部会露出聊天 header（实测 2026-09-16）；
+                // 微信/QQ 截图时标题栏同样同步消失。根节点挂 shot-freeze 类，CSS 据此隐藏，close() 时移除
+                document.documentElement.classList.add('shot-freeze');
                 toolbarEl.classList.remove('visible'); // 选区完成后工具栏才出现
                 hintEl.classList.remove('hidden');     // 顶部操作提示：告知拖拽框选
             } else {
@@ -321,6 +325,8 @@
         if (!editorEl) return;
         editorEl.classList.add('hidden');
         editorEl.classList.remove('freeze');
+        // 阶段一百三十四：退出冻结截图恢复自绘标题栏（与 load() freeze 分支的 add 配对）
+        document.documentElement.classList.remove('shot-freeze');
         toolbarEl.classList.remove('visible');
         hideSizeLabel();
         hintEl.classList.add('hidden');

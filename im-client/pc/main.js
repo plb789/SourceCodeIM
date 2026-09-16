@@ -22,7 +22,11 @@ let tray = null;
 // 阶段一百三十四：单实例锁——实测双开（dev 与打包版并存测试）会并发写同一 userData 的
 // HTTP 缓存 LevelDB，锁冲突导致图片响应流中断（查看器黑屏、下载文件损坏，2026-09-16 实测）。
 // 非首实例立即退出；首实例经 second-instance 唤起主窗口（复刻微信"再次启动回到已开窗口"行为）
-if (!app.requestSingleInstanceLock()) {
+// 阶段一百三十四补充：app.quit() 是异步的——第二实例 quit 后 whenReady 仍会触发 createWindow
+// 造成"窗口闪现后消失"（实测 2026-09-16），故用锁标志在 whenReady 回调开头二次守卫
+// 原实现：if (!app.requestSingleInstanceLock()) { app.quit(); } else { ... }
+var singleInstanceAllowed = app.requestSingleInstanceLock();
+if (!singleInstanceAllowed) {
     app.quit();
 } else {
     app.on('second-instance', function () {
@@ -1145,6 +1149,10 @@ ipcMain.on('tray:flash', function () {
 });
 
 app.whenReady().then(async function () {
+    // 阶段一百三十四：单实例锁二次守卫——非首实例 app.quit() 异步执行期间 whenReady 仍会触发，
+    // 不建窗口直接返回（否则第二实例闪现一个窗口后被 quit 杀掉，实测 2026-09-16）
+    // 原实现：无此守卫（窗口闪现根因）
+    if (!singleInstanceAllowed) return;
     // 隐藏 Electron 默认应用菜单：File/Edit/View/Window/Help 为开发调试用途（含刷新/DevTools），正式客户端不展示
     // 原实现：未设置应用菜单，Windows 上自动显示 Electron 默认英文菜单
     // Menu.setApplicationMenu(Menu.buildFromTemplate([]));
