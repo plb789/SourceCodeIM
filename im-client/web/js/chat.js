@@ -338,9 +338,11 @@
     // ===== 阶段七十七：PC 端自定义标题栏（Electron titleBarOverlay）主题同步 =====
     // 仅 Electron 壳内生效（window.desktop.setTitlebarColors 由 preload 注入，浏览器/手机 APP 不存在自动旁路）；
     // 原生窗口按钮底色/符号色必须与 style.css --titlebar-bg/--titlebar-fg、main.js titleBarOverlay 初值一致（三方同值，改动需同步）
+    // 阶段一百三十四：新增 bg——窗口背景填充色与 style.css --bg 同值（最大化/还原重绘空窗期 DWM 填充，
+    // 与页面底色一致则深色主题下闪白不可见，TRAE CN 同款），经 preload 第三参透传主进程 setBackgroundColor
     var TITLEBAR_COLORS = {
-        light: { color: '#f5f5f5', symbolColor: '#333333' },
-        dark: { color: '#1a1a1a', symbolColor: '#e0e0e0' }
+        light: { color: '#f5f5f5', symbolColor: '#333333', bg: '#f5f5f5' },
+        dark: { color: '#1a1a1a', symbolColor: '#e0e0e0', bg: '#111111' }
     };
     // 解析生效主题（system 模式下跟随系统深浅）
     function titlebarIsDark(theme) {
@@ -349,7 +351,8 @@
     function syncTitlebarTheme(theme) {
         if (!(window.desktop && window.desktop.setTitlebarColors)) return;
         var c = TITLEBAR_COLORS[titlebarIsDark(theme) ? 'dark' : 'light'];
-        window.desktop.setTitlebarColors(c.color, c.symbolColor);
+        // 原实现：window.desktop.setTitlebarColors(c.color, c.symbolColor);（未传窗口背景填充色，深色主题最大化/还原闪白）
+        window.desktop.setTitlebarColors(c.color, c.symbolColor, c.bg);
     }
     // 「跟随系统」模式下系统深浅切换时同步标题栏按钮配色（主题变量由 CSS 媒体查询自动生效）
     var titlebarSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -360,6 +363,9 @@
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('im_theme', theme);
         syncTitlebarTheme(theme);
+        // 阶段一百三十四：主题持久化到主进程（userData/im_theme.json）——下次启动窗口背景/按钮初值
+        // 直接按主题深浅创建，消除深色主题下启动早期短暂浅色底；浏览器/手机 APP 无 desktop 桥自动旁路
+        if (window.desktop && window.desktop.syncTheme) window.desktop.syncTheme(theme);
     }
     // 按当前主题刷新按钮图标与悬停提示
     function renderThemeBtn(theme) {

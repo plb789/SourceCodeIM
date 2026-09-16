@@ -229,8 +229,20 @@ contextBridge.exposeInMainWorld('desktop', {
     },
     // ===== 阶段七十七：自定义标题栏（Electron titleBarOverlay）=====
     // 主题切换时同步原生窗口按钮配色（浅色 #f5f5f5/#333333，深色 #1a1a1a/#e0e0e0，与 style.css --titlebar-* 同值）
-    setTitlebarColors: function (color, symbolColor) {
-        return ipcRenderer.invoke('titlebar:overlay', { color: color, symbolColor: symbolColor });
+    // 阶段一百三十四：新增第三参 bg——窗口背景填充色（最大化/还原重绘空窗期 DWM 填充用，深色 #111111/浅色 #f5f5f5，
+    // 与 style.css --bg 同值），主进程据此 setBackgroundColor 消除深色主题闪白（原实现：仅传按钮配色两参）
+    // setTitlebarColors: function (color, symbolColor) {
+    //     return ipcRenderer.invoke('titlebar:overlay', { color: color, symbolColor: symbolColor });
+    // },
+    setTitlebarColors: function (color, symbolColor, bg) {
+        return ipcRenderer.invoke('titlebar:overlay', { color: color, symbolColor: symbolColor, bg: bg });
+    },
+
+    // ===== 阶段一百三十四：主题持久化（主进程可读，深色启动底色根治）=====
+    // 主题变更上报主进程落盘（userData/im_theme.json），下次启动 createWindow 直接按主题深浅设置
+    // 窗口背景/按钮初值，消除深色主题下启动早期短暂浅色底（浏览器/手机 APP 无 desktop 桥自动旁路）
+    syncTheme: function (theme) {
+        return ipcRenderer.send('theme:sync', theme);
     },
 
     // ===== 阶段九十一：内置浏览器（TRAE CN 同款浏览区）=====

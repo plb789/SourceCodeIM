@@ -2,7 +2,7 @@
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -18,6 +18,23 @@ const webCache = require('./web-cache.js');
 
 let mainWindow = null;
 let tray = null;
+
+// 阶段一百三十四：单实例锁——实测双开（dev 与打包版并存测试）会并发写同一 userData 的
+// HTTP 缓存 LevelDB，锁冲突导致图片响应流中断（查看器黑屏、下载文件损坏，2026-09-16 实测）。
+// 非首实例立即退出；首实例经 second-instance 唤起主窗口（复刻微信"再次启动回到已开窗口"行为）
+if (!app.requestSingleInstanceLock()) {
+    app.quit();
+} else {
+    app.on('second-instance', function () {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+}
 
 // 阶段一百二十二：同 origin http 拦截方案下无需自定义协议注册
 // 原实现（app://local 自定义协议方案）：webCache.registerSchemes() 必须在 app ready 前调用，
@@ -54,7 +71,37 @@ const SERVER_URL = 'http://127.0.0.1:8888/';
 // 原实现：createTray 内直接写死 64.ico 文件名
 const APP_ICON = path.join(__dirname, '64.ico');
 
+// ===== 阶段一百三十四：主题持久化（主进程可读，深色启动底色根治）=====
+// 渲染层主题变更时经 theme:sync 上报落盘（userData/im_theme.json），createWindow 创建窗口时读取
+// 初值直接按主题深浅设置 titleBarOverlay/backgroundColor，消除深色主题下启动早期短暂浅色底；
+// 仅存主题枚举（light/dark/system），system 的深浅运行期由渲染层媒体查询 + titlebar:overlay 联动
+const themeFile = path.join(app.getPath('userData'), 'im_theme.json');
+
+function themeStoreLoad() {
+    try {
+        const t = String((JSON.parse(fs.readFileSync(themeFile, 'utf8')) || {}).theme || '');
+        return (t === 'light' || t === 'dark' || t === 'system') ? t : '';
+    } catch (e) { return ''; } // 首启/文件损坏回退空值（窗口按浅色初值创建，渲染层同步后即正确）
+}
+
+function themeStoreSave(theme) {
+    try { fs.writeFileSync(themeFile, JSON.stringify({ theme: theme })); } catch (e) {}
+}
+
+// 渲染层主题变更上报持久化（fire-and-forget；chat.js applyTheme 归口调用，浏览器/手机 APP 自动旁路）
+ipcMain.on('theme:sync', function (event, theme) {
+    var t = String(theme || '');
+    if (t === 'light' || t === 'dark' || t === 'system') themeStoreSave(t);
+});
+
 function createWindow() {
+    // 阶段一百三十四：启动初值按持久化主题解析深浅（原实现：固定浅色初值，深色主题下启动早期
+    // 按钮底色/窗口背景短暂浅色，渲染层 applyTheme 同步后才切深色）；system 模式主进程按
+    // nativeTheme.shouldUseDarkColors 判定，与渲染层媒体查询同源
+    var bootDark = (function () {
+        var t = themeStoreLoad();
+        return t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
+    })();
     mainWindow = new BrowserWindow({
         width: 1100,
         height: 720,
@@ -63,9 +110,19 @@ function createWindow() {
         title: '即时通讯',
         // 阶段七十七：自定义标题栏——隐藏系统标题栏，由网页自绘顶栏（整条可拖动窗口/双击最大化还原），
         // 最小化/最大化/关闭仍用原生 overlay 按钮（保留分屏布局悬停/窗口阴影/边缘缩放），
-        // 按钮底色/符号色随主题经 titlebar:overlay IPC 动态更新（初始浅色，与渲染层首次同步前一致）
+        // 按钮底色/符号色随主题经 titlebar:overlay IPC 动态更新（初值按持久化主题解析，与渲染层首次同步前一致）
         titleBarStyle: 'hidden',
-        titleBarOverlay: { color: '#f5f5f5', symbolColor: '#333333', height: 34 },
+        // 原实现：titleBarOverlay: { color: '#f5f5f5', symbolColor: '#333333', height: 34 },（固定浅色初值，深色主题启动早期按钮短暂浅色）
+        titleBarOverlay: bootDark
+            ? { color: '#1a1a1a', symbolColor: '#e0e0e0', height: 34 }  // 与 chat.js TITLEBAR_COLORS.dark 同值
+            : { color: '#f5f5f5', symbolColor: '#333333', height: 34 }, // 与 chat.js TITLEBAR_COLORS.light 同值
+        // 阶段一百三十四：最大化/还原白屏修复——补设窗口背景填充色。机制：最大化/还原为尺寸突变，
+        // Chromium 丢弃旧帧按新尺寸重绘（整页 re-layout），新帧 present 前 DWM 用窗口 backgroundColor
+        // 填充空窗期；原实现未设置，Electron Windows 默认填充白色，深色主题页底 #111111 下闪白刺眼
+        // （浅色 #f5f5f5 与白接近难察觉，故此前只深色明显）。填充色=页面底色则闪了也看不见（TRAE CN 同款）；
+        // 深浅初值按持久化主题解析（bootDark），运行期经 titlebar:overlay IPC 随按钮配色同步
+        // 原实现（本阶段首次修复）：backgroundColor: '#f5f5f5',（固定浅色，深色主题启动早期短暂浅底）
+        backgroundColor: bootDark ? '#111111' : '#f5f5f5',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
@@ -173,6 +230,9 @@ ipcMain.handle('titlebar:overlay', function (event, colors) {
             color: String(colors.color),
             symbolColor: String(colors.symbolColor || '#333333')
         });
+        // 阶段一百三十四：最大化/还原白屏修复——主题切换时同步窗口背景填充色与页面底色（--bg）一致，
+        // 深色 #111111/浅色 #f5f5f5（与 chat.js TITLEBAR_COLORS.bg 同值）；未传 bg（旧调用方）跳过不影响按钮配色
+        if (colors.bg) win.setBackgroundColor(String(colors.bg));
         return true;
     } catch (e) {
         return false;

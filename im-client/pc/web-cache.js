@@ -183,6 +183,18 @@ function passthrough(req) {
         init.body = req.body; // ReadableStream 直接透传（分片/大文件上传不落内存）
         init.duplex = 'half';
     }
+    // 阶段一百三十四复盘：此前排查"查看器图片黑屏/下载损坏"时加过透传状态码诊断日志，已定性为
+    // 双实例并发写同一 userData 的存储冲突（非本模块缺陷），诊断代码按惯例注释保留并还原原实现
+    // 诊断版（已注释）：
+    // return net.fetch(req, init).then(function (res) {
+    //     var fs = require('fs'); var path = require('path');
+    //     var diagDir = path.join(app.getPath('userData'), 'webcache');
+    //     fs.mkdirSync(diagDir, { recursive: true });
+    //     fs.appendFileSync(path.join(diagDir, 'diag.log'), new Date().toISOString() + ' ' + req.method + ' ' + req.url +
+    //         ' -> ' + res.status + ' | inm=' + (req.headers.get('if-none-match') || '-') +
+    //         ' | ims=' + (req.headers.get('if-modified-since') || '-') + '\n');
+    //     return res;
+    // });
     return net.fetch(req, init);
 }
 
