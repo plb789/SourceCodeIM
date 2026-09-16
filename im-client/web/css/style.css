@@ -10926,9 +10926,11 @@ body.browser-resizing .browser-web-frame {
     background: color-mix(in srgb, var(--primary) 6%, transparent);
 }
 
-/* 阶段一百三十五：通讯录/聊天会话/AI 助手列表与消息区禁止按住左键拖选文字
-   （列表与消息区是操作区不是文本区，微信同款交互；右键复制/代码块复制走剪贴板 API 不依赖选区，不受影响） */
-#conv-list, #user-list, #ai-agent-list, #message-list {
+/* 阶段一百三十五：通讯录/聊天会话/AI 助手列表与聊天区禁止按住左键拖选文字
+   （列表/消息区/聊天头部/输入区脚注均为操作区不是文本区，微信同款交互；
+   右键复制/代码块复制走剪贴板 API 不依赖选区，不受影响；输入框 textarea 保持可选中可编辑） */
+#conv-list, #user-list, #ai-agent-list, #message-list,
+.chat-header, .input-footer {
     user-select: none;
     -webkit-user-select: none;
 }

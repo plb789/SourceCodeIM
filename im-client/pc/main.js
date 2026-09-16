@@ -1258,7 +1258,12 @@ app.whenReady().then(async function () {
     webCache.init({ serverUrl: SERVER_URL });
     webCache.installInterceptor();
     createWindow();
-    await webCache.sync();
+    // 原实现：await webCache.sync();（页面先于同步加载，服务端更新轮窗口停留旧版直至下次重启，用户实测 CSS 更新不生效定位）
+    var syncResult = await webCache.sync();
+    // 阶段一百三十五：同步若有文件变更则刷新主窗口——快速启动设计不变（窗口先显），变更轮自动换新页面
+    if (syncResult && (syncResult.downloaded > 0 || syncResult.removed > 0) && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reload();
+    }
     createTray();
 
     // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；

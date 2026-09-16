@@ -378,8 +378,11 @@ async function sync() {
         fs.renameSync(mtmp, mfp);
 
         console.log('[web-cache] 增量同步完成 version=' + data.version + ' 下载=' + done + ' 清理=' + removed + ' 耗时=' + (Date.now() - t0) + 'ms');
+        // 阶段一百三十五：向调用方回报本轮变更量（主进程据此刷新主窗口，保证更新轮页面即用最新版）
+        return { downloaded: done, removed: removed };
     } catch (e) {
         console.warn('[web-cache] 增量同步跳过（缺失文件运行期代理兜底，不影响启动）:', e && e.message);
+        return null; // 同步失败：不回报变更，主进程不刷新（运行期代理兜底）
     } finally {
         clearTimeout(timer);
     }
