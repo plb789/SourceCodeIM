@@ -21,6 +21,9 @@
     // 登录失败提示修复：登录成功标记——登录成功前连接断开不自动重连，
     // 修复密码错误后服务端关闭连接、前端无条件重连导致"失败→重连→失败"无限循环且每次无提示
     var loginOk = false;
+    // 阶段一百三十五：最近一次服务端 ERROR 帧到达时间——登录拒绝/账号封禁踢出场景
+    // 服务端会先下发 ERROR 帧再立即关连接，onclose 据此区分"服务端拒绝"与"网络断开"
+    var lastRejectAt = 0;
 
     // 消息类型常量
     var MSG = {
@@ -128,6 +131,12 @@
         ws.onclose = function () {
             connected = false;
             stopHeartbeat();
+            // 阶段一百三十五：服务端拒绝登录（账号封禁/注销/密码错误等）先下发 ERROR 帧再立即关连接，
+            // 1 秒内收到过 ERROR 视为服务端拒绝而非网络断开，置 loginOk=false 阻断自动重连
+            // （修复：密码被修改/账号被封禁后重连陷入"拒绝→3 秒重连→拒绝"无限循环）
+            if (Date.now() - lastRejectAt < 1000) {
+                loginOk = false;
+            }
             // 登录失败提示修复：仅登录成功后才自动重连。
             // 登录失败（密码错误等）服务端会下发错误提示并关闭连接，原实现无条件重连会陷入
             // "失败→3秒重连→失败"无限循环且每次都无提示，页面表现为点击登录后毫无反应
@@ -178,6 +187,11 @@
     }
 
     function dispatch(msg) {
+        // 阶段一百三十五：记录 ERROR 帧到达时间（登录拒绝/踢出先发 ERROR 再关连接，
+        // onclose 据此判定为服务端拒绝而非网络断开，阻断自动重连防循环）
+        if (msg.msg_type === MSG.ERROR) {
+            lastRejectAt = Date.now();
+        }
         if (msg.msg_type === MSG.LOGIN_RESP) {
             // 登录失败提示修复：记录登录成功标记（新格式 content 为 JSON result='ok'，旧格式 content 为 'ok' 字符串），
             // 登录成功前连接断开不自动重连

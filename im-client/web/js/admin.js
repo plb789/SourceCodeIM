@@ -131,6 +131,8 @@
             else if (item.dataset.view === 'vecdata') { loadKBStatus(); loadVecKbOptions(); loadVecData(); }
             // 阶段六十四：进入 Agent 任务审计视图拉取任务列表
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
+            // 阶段一百三十四：进入账号管理视图拉取账号列表
+            else if (item.dataset.view === 'accounts') { loadAccounts(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
@@ -2111,6 +2113,224 @@
         }).catch(function (e) {
             showToast(e.message || '导出失败，请重试');
         });
+    });
+
+    // ===== 阶段一百三十四：账号管理（资料修改/密码重置，管理员归口） =====
+    // 数据源复用 GET /admin/api/users（列表已含资料字段）；资料修改 PUT /admin/api/users/{u}/profile、
+    // 密码重置 PUT /admin/api/users/{u}/password；空数据显示"暂无账号"，仅请求出错时显示"加载失败"
+    var accountsAll = [];       // 全量账号（含资料字段）
+    var accountsFiltered = [];  // 搜索过滤后（分页数据源）
+    var accountsPage = 1;       // 当前页（1 起）
+    var ACCOUNTS_PAGE_SIZE = 10;
+    var ACCOUNT_GENDER_TEXT = { 0: '未知', 1: '男', 2: '女' };
+
+    function loadAccounts() {
+        $('accounts-status').textContent = '加载中…';
+        api('GET', '/admin/api/users').then(function (result) {
+            if (!result.ok) {
+                $('accounts-status').textContent = result.msg || '加载失败';
+                showToast(result.msg || '账号列表加载失败');
+                return;
+            }
+            accountsAll = result.data.users || [];
+            $('accounts-status').textContent = '共 ' + accountsAll.length + ' 个账号，更新于 ' + new Date().toLocaleTimeString();
+            applyAccountsFilter();
+        }).catch(function (e) {
+            $('accounts-status').textContent = e.message || '网络异常';
+        });
+    }
+
+    // 搜索实时过滤（用户名/昵称），过滤后回到第一页
+    function applyAccountsFilter() {
+        var kw = ($('accounts-search').value || '').trim().toLowerCase();
+        accountsFiltered = accountsAll.filter(function (u) {
+            if (!kw) return true;
+            return (u.username || '').toLowerCase().indexOf(kw) !== -1 ||
+                   (u.nickname || '').toLowerCase().indexOf(kw) !== -1;
+        });
+        accountsPage = 1;
+        renderAccountsTable();
+    }
+
+    function renderAccountsTable() {
+        var tbody = $('accounts-tbody');
+        var pages = Math.max(1, Math.ceil(accountsFiltered.length / ACCOUNTS_PAGE_SIZE));
+        if (accountsPage > pages) accountsPage = pages;
+        if (!accountsFiltered.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="vec-empty">' +
+                (accountsAll.length ? '暂无匹配账号' : '暂无账号') + '</td></tr>';
+            $('accounts-page-info').textContent = '-';
+            return;
+        }
+        var start = (accountsPage - 1) * ACCOUNTS_PAGE_SIZE;
+        var rows = accountsFiltered.slice(start, start + ACCOUNTS_PAGE_SIZE);
+        var html = '';
+        rows.forEach(function (u) {
+            // 阶段一百三十五：状态列（正常/已封禁，已注销账号不在列表展示；封禁原因悬停提示）
+            var statusCell = u.status === 1
+                ? '<span class="at-badge at-st-failed" title="封禁原因：' + escAttr(u.lock_reason || '未填写') + '">已封禁</span>'
+                : '<span class="points-role-normal">正常</span>';
+            html += '<tr>' +
+                '<td class="points-uid">' + (u.id || '-') + '</td>' +
+                '<td class="points-username">' + escHtml(u.username || '') + '</td>' +
+                '<td>' + escHtml(u.nickname || '') + '</td>' +
+                '<td>' + (u.role === 1 ? '<span class="at-badge at-st-completed">管理员</span>' : '<span class="points-role-normal">普通用户</span>') + '</td>' +
+                '<td>' + statusCell + '</td>' +
+                '<td>' + escHtml(ACCOUNT_GENDER_TEXT[u.gender] || '未知') + '</td>' +
+                '<td>' + escHtml(u.region || '-') + '</td>' +
+                '<td class="plog-detail">' + escHtml(u.signature || '-') + '</td>' +
+                '<td class="points-time">' + escHtml(u.create_time || '-') + '</td>' +
+                '<td><button class="admin-btn small acc-profile-btn" data-username="' + escAttr(u.username || '') + '">编辑资料</button>' +
+                ' <button class="admin-btn small acc-password-btn" data-username="' + escAttr(u.username || '') + '">重置密码</button>' +
+                ' <button class="admin-btn small acc-lock-btn" data-username="' + escAttr(u.username || '') + '">' + (u.status === 1 ? '解锁' : '锁定') + '</button>' +
+                ' <button class="admin-btn small acc-delete-btn" data-username="' + escAttr(u.username || '') + '">删除</button></td>' +
+                '</tr>';
+        });
+        tbody.innerHTML = html;
+        $('accounts-page-info').textContent = '第 ' + accountsPage + ' / ' + pages + ' 页（共 ' + accountsFiltered.length + ' 人）';
+    }
+
+    function findAccount(username) {
+        for (var i = 0; i < accountsAll.length; i++) {
+            if (accountsAll[i].username === username) return accountsAll[i];
+        }
+        return null;
+    }
+
+    // 编辑资料弹窗（性别下拉/签名多行文本；字段留空=清空，与服务端空串覆盖一致；校验失败弹窗保留可改后重存）
+    function openAccountProfileEdit(username) {
+        var u = findAccount(username);
+        if (!u) { showToast('账号数据已过期，请刷新后重试'); return; }
+        openEditModal('编辑资料 - ' + u.username, [
+            { key: 'nickname', label: '昵称', type: 'text', placeholder: '留空则展示用户名', hint: '最长 32 字' },
+            { key: 'gender', label: '性别', type: 'select', options: [
+                { value: 0, label: '未知' },
+                { value: 1, label: '男' },
+                { value: 2, label: '女' }
+            ] },
+            { key: 'region', label: '地区', type: 'text', placeholder: '如：山西 太原', hint: '最长 64 字' },
+            { key: 'signature', label: '个性签名', type: 'textarea', placeholder: '最长 128 字' },
+            { key: 'avatar', label: '头像地址', type: 'text', placeholder: '图片 URL，留空使用首字母徽标', hint: '最长 255 字符' }
+        ], {
+            nickname: u.nickname || '',
+            gender: u.gender || 0,
+            region: u.region || '',
+            signature: u.signature || '',
+            avatar: u.avatar || ''
+        }, function (data) {
+            var body = {
+                nickname: String(data.nickname || '').trim(),
+                gender: Number(data.gender) || 0,
+                region: String(data.region || '').trim(),
+                signature: String(data.signature || '').trim(),
+                avatar: String(data.avatar || '').trim()
+            };
+            if (body.nickname.length > 32) { showToast('昵称不能超过 32 个字'); return; }
+            if (body.region.length > 64) { showToast('地区不能超过 64 个字'); return; }
+            if (body.signature.length > 128) { showToast('个性签名不能超过 128 个字'); return; }
+            if (body.avatar.length > 255) { showToast('头像地址不能超过 255 个字符'); return; }
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/profile', body)
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+                    closeEditModal();
+                    showToast('已保存 ' + u.username + ' 的资料（在线用户实时同步）');
+                    loadAccounts(); // 重拉列表刷新表格（数据以服务端为准）
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 重置密码弹窗：双输入一致性校验（服务端仅要求非空，与注册同口径；在线会话不受影响，下次登录生效）
+    function openAccountPasswordReset(username) {
+        var u = findAccount(username);
+        if (!u) { showToast('账号数据已过期，请刷新后重试'); return; }
+        openEditModal('重置密码 - ' + u.username, [
+            { key: 'password', label: '新密码', type: 'password', placeholder: '请输入新密码' },
+            { key: 'password2', label: '确认新密码', type: 'password', placeholder: '再次输入新密码', hint: '重置后用户下次登录使用新密码，当前在线会话不受影响' }
+        ], {}, function (data) {
+            var p1 = String(data.password || '');
+            var p2 = String(data.password2 || '');
+            if (!p1) { showToast('新密码不能为空'); return; }
+            if (p1 !== p2) { showToast('两次输入的密码不一致'); return; }
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/password', { password: p1 })
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '重置失败'); return; }
+                    closeEditModal();
+                    showToast('已重置 ' + u.username + ' 的密码');
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 锁定/解锁弹窗（阶段一百三十五）：锁定必填封禁原因（用户登录与在线踢出时提示）；
+    // 解锁为恢复性低风险操作，直接执行；已封禁账号按钮显示"解锁"
+    function openAccountLockModal(username) {
+        var u = findAccount(username);
+        if (!u) { showToast('账号数据已过期，请刷新后重试'); return; }
+        if (u.status === 1) {
+            // 解锁：恢复 normal 并清空封禁原因
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/lock', { locked: false })
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '解锁失败'); return; }
+                    showToast('已解锁 ' + u.username + '，该账号可正常登录');
+                    loadAccounts();
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+            return;
+        }
+        openEditModal('锁定账号 - ' + u.username, [
+            { key: 'reason', label: '封禁原因', type: 'textarea', placeholder: '将展示给该用户（登录时提示原因）', hint: '必填，最长 200 字；锁定后该账号全部在线设备立即被踢出' }
+        ], {}, function (data) {
+            var reason = String(data.reason || '').trim();
+            if (!reason) { showToast('封禁原因不能为空'); return; }
+            if (reason.length > 200) { showToast('封禁原因不能超过 200 个字'); return; }
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/lock', { locked: true, reason: reason })
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '锁定失败'); return; }
+                    closeEditModal();
+                    showToast('已锁定 ' + u.username + '，其在线设备已被踢出');
+                    loadAccounts();
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 删除（注销）弹窗（阶段一百三十五）：输入用户名确认（不可逆语义）；软删除，用户名保留防冒用
+    function openAccountDeleteModal(username) {
+        var u = findAccount(username);
+        if (!u) { showToast('账号数据已过期，请刷新后重试'); return; }
+        openEditModal('删除账号 - ' + u.username, [
+            { key: 'confirm', label: '确认删除', type: 'text', placeholder: '请输入用户名 ' + u.username + ' 以确认', hint: '删除后该账号无法登录、列表不再展示（用户名保留防冒用）；该账号在线设备立即被踢出' }
+        ], {}, function (data) {
+            if (String(data.confirm || '').trim() !== u.username) { showToast('输入的用户名不一致，请重新输入'); return; }
+            api('PUT', '/admin/api/users/' + encodeURIComponent(u.username) + '/delete', {})
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                    closeEditModal();
+                    showToast('已删除（注销）账号 ' + u.username);
+                    loadAccounts();
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 表格内"编辑资料"/"重置密码"/"锁定"/"删除"按钮：事件委托（重渲染无需重复绑定）
+    $('accounts-tbody').addEventListener('click', function (e) {
+        var profileBtn = e.target.closest('.acc-profile-btn');
+        if (profileBtn) { openAccountProfileEdit(profileBtn.getAttribute('data-username')); return; }
+        var pwdBtn = e.target.closest('.acc-password-btn');
+        if (pwdBtn) { openAccountPasswordReset(pwdBtn.getAttribute('data-username')); return; }
+        // 阶段一百三十五：锁定封禁（填原因）/解锁、删除注销
+        var lockBtn = e.target.closest('.acc-lock-btn');
+        if (lockBtn) { openAccountLockModal(lockBtn.getAttribute('data-username')); return; }
+        var delBtn = e.target.closest('.acc-delete-btn');
+        if (delBtn) { openAccountDeleteModal(delBtn.getAttribute('data-username')); return; }
+    });
+    // 搜索实时过滤 + 刷新重拉
+    $('accounts-search').addEventListener('input', applyAccountsFilter);
+    $('accounts-refresh').addEventListener('click', loadAccounts);
+    // 分页
+    $('accounts-prev').addEventListener('click', function () {
+        if (accountsPage > 1) { accountsPage--; renderAccountsTable(); }
+    });
+    $('accounts-next').addEventListener('click', function () {
+        var pages = Math.ceil(accountsFiltered.length / ACCOUNTS_PAGE_SIZE);
+        if (accountsPage < pages) { accountsPage++; renderAccountsTable(); }
     });
 
     // ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，服务端归口建连与调用） =====

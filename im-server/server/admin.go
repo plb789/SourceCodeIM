@@ -148,6 +148,12 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/points/logs", s.adminGuard(s.handleAdminPointsLogs))
 	// 阶段七十八：流水 CSV 导出（服务端流式生成，支持与查询一致的过滤条件）
 	http.HandleFunc("GET /admin/api/points/logs/export", s.adminGuard(s.handleAdminPointsLogsExport))
+	// 阶段一百三十四：后台账号管理（资料修改/密码重置，实现归口 adminaccounts.go）
+	http.HandleFunc("PUT /admin/api/users/{username}/profile", s.adminGuard(s.handleAdminUserProfilePut))
+	http.HandleFunc("PUT /admin/api/users/{username}/password", s.adminGuard(s.handleAdminUserPasswordPut))
+	// 阶段一百三十五：账号锁定封禁（含封禁原因）/删除注销（即时踢出在线连接，登录拒绝并提示原因）
+	http.HandleFunc("PUT /admin/api/users/{username}/lock", s.adminGuard(s.handleAdminUserLockPut))
+	http.HandleFunc("PUT /admin/api/users/{username}/delete", s.adminGuard(s.handleAdminUserDeletePut))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====
@@ -532,6 +538,12 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		store.RDB.Expire(ctx, failKey, adminFailWindow)
 		logger.Warn("后台管理登录失败（IP %s，账号 %s）：%v", ip, req.Username, err)
 		adminFail(w, http.StatusUnauthorized, "用户名或密码错误")
+		return
+	}
+	// 阶段一百三十五：账号状态拦截（锁定封禁/已注销的账号不允许登录后台，与 IM 登录同口径提示原因）
+	if rejectMsg := userStatusRejectMsg(user); rejectMsg != "" {
+		logger.Warn("后台管理登录被状态拦截（IP %s，账号 %s）：%s", ip, req.Username, rejectMsg)
+		adminFail(w, http.StatusForbidden, rejectMsg)
 		return
 	}
 	// 管理员身份校验：role=1 或 config.yaml admin_users 白名单（双通道，兼容注册后未重启未标记的场景）

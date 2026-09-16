@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.15">
+    <link rel="stylesheet" href="css/admin.css?v=1.16">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -46,6 +46,7 @@
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
+                <button class="admin-nav-item" data-view="accounts">账号管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
@@ -253,6 +254,48 @@
                     <button id="at-prev" class="admin-btn small">上一页</button>
                     <span id="at-page-info" class="admin-view-tip">-</span>
                     <button id="at-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- 账号管理（阶段一百三十四：资料修改/密码重置，管理员归口） -->
+            <section id="admin-view-accounts" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>账号管理</h2>
+                    <span id="accounts-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">修改任意账号的资料（昵称/性别/地区/签名/头像）、重置密码、锁定封禁与删除注销；用户名为全库引用主键，不支持修改。资料保存后实时推送在线用户多端同步；密码重置后用户下次登录生效；锁定封禁需填写封禁原因，用户登录与在线时均会看到原因并被踢出；删除为注销（软删除），用户名保留防冒用、列表不再展示。</p>
+                <!-- 搜索工具条：实时过滤（用户名/昵称） -->
+                <div class="vec-toolbar">
+                    <input type="text" id="accounts-search" class="admin-input vec-search-input" placeholder="按用户名/昵称搜索（实时过滤）">
+                    <button id="accounts-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 账号表格 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>角色</th>
+                                <th>状态</th>
+                                <th>性别</th>
+                                <th>地区</th>
+                                <th class="vec-th-content">个性签名</th>
+                                <th>注册时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-tbody">
+                            <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="accounts-prev" class="admin-btn small">上一页</button>
+                    <span id="accounts-page-info" class="admin-view-tip">-</span>
+                    <button id="accounts-next" class="admin-btn small">下一页</button>
                 </div>
             </section>
 
@@ -600,7 +643,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.23"></script>
+    <script src="js/admin.js?v=1.25"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

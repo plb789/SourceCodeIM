@@ -23,9 +23,13 @@ import (
 )
 
 // handleAdminUserList GET /admin/api/users 用户列表（用户名/昵称/角色/积分/注册时间）
+// 阶段一百三十四：补充资料字段（性别/地区/签名/头像），后台账号管理视图复用本接口作数据源（积分视图只读所需字段不受影响）
+// 阶段一百三十五：排除已注销账号（软删除用户名继续占用防重新注册继承数据）+ 下发状态/封禁原因
 func (s *Server) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 	var users []model.User
-	if err := store.DB.Select("id", "username", "nickname", "role", "points", "create_time").
+	if err := store.DB.Select("id", "username", "nickname", "role", "points", "create_time",
+		"gender", "region", "signature", "avatar", "status", "lock_reason").
+		Where("status <> ?", model.UserStatusDeleted). // 已注销账号不在列表展示
 		Order("create_time ASC").Find(&users).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "查询用户列表失败")
 		return
@@ -36,6 +40,12 @@ func (s *Server) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 		Nickname   string  `json:"nickname"`
 		Role       int8    `json:"role"`
 		Points     float64 `json:"points"`
+		Gender     int8    `json:"gender"`
+		Region     string  `json:"region"`
+		Signature  string  `json:"signature"`
+		Avatar     string  `json:"avatar"`
+		Status     int8    `json:"status"`
+		LockReason string  `json:"lock_reason"`
 		CreateTime string  `json:"create_time"`
 	}
 	rows := make([]userRow, 0, len(users))
@@ -46,6 +56,12 @@ func (s *Server) handleAdminUserList(w http.ResponseWriter, r *http.Request) {
 			Nickname:   u.Nickname,
 			Role:       u.Role,
 			Points:     u.Points,
+			Gender:     u.Gender,
+			Region:     u.Region,
+			Signature:  u.Signature,
+			Avatar:     u.Avatar,
+			Status:     u.Status,
+			LockReason: u.LockReason,
 			CreateTime: u.CreateTime.Format("2006-01-02 15:04:05"),
 		})
 	}

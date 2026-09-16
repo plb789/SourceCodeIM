@@ -158,8 +158,8 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 	b.OnlineUsers = len(s.hub.Usernames())
 	b.OnlineConns = s.hub.TotalConns()
 
-	// 注册用户与消息统计
-	store.DB.Model(&model.User{}).Count(&b.TotalUsers)
+	// 注册用户与消息统计（阶段一百三十五：排除已注销账号，总数口径=有效账号）
+	store.DB.Model(&model.User{}).Where("status <> ?", model.UserStatusDeleted).Count(&b.TotalUsers)
 	store.DB.Model(&model.Message{}).Count(&b.TotalMsgs)
 	todayStart := time.Now().Truncate(24 * time.Hour)
 	store.DB.Model(&model.Message{}).Where("create_time >= ?", todayStart).Count(&b.TodayMsgs)

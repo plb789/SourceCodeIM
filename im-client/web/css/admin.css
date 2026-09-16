@@ -222,7 +222,10 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
 }
 .admin-view {
     display: none;
-    max-width: 960px;
+    /* 右边距对齐修复：原实现 max-width: 960px 锁死内容列宽，宽屏下右侧大面积留空；
+       现改为占满 .admin-body 可用宽度（内边距由 .admin-body 的 24px 32px 归口） */
+    /* 原代码：max-width: 960px; */
+    max-width: none;
 }
 .admin-view.active {
     display: block;

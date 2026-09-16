@@ -3380,6 +3380,15 @@
             renderAddFriendHint('无该用户');
             return;
         }
+        // 阶段一百三十五：账号封禁/注销提示（登录拒绝与在线踢出同帧同文案）——模态弹窗展示
+        // 封禁原因（管理员填写），比瞬时 toast 更醒目；连接已被服务端关闭，
+        // socket.js 据.ERROR+关闭判定为服务端拒绝后不再自动重连并回退登录界面
+        if (msg.content && (msg.content.indexOf('账号已被管理员封禁') === 0 || msg.content === '账号已注销')) {
+            showToast(msg.content);
+            showConfirm(msg.content.indexOf('账号已被封禁') === 0 ? '账号已被封禁' : '账号已注销',
+                msg.content, null, '我知道了', '关闭');
+            return;
+        }
         showToast(msg.content);
         // 阶段四十三：AI 限流/智能体不存在等失败路径只发 ERROR 无 END 帧，这里同步收起"思考中"指示防空等
         if (aiThinking[currentChatUser]) {

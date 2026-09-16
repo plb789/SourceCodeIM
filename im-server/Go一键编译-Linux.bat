@@ -14,7 +14,7 @@ set GOOS=linux
 if not exist bin-linux mkdir bin-linux
 
 echo [1/1] 正在编译 Linux (%GOARCH%) 版 im-server...
-go build -ldflags "-s -w" -o bin-linux\im-server main.go
+go build -ldflags "-s -w" -o bin\im-server main.go
 if %errorlevel% neq 0 (
     echo 编译失败！请检查上方错误信息。
     pause

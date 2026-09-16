@@ -23,7 +23,18 @@ type User struct {
 	// 列默认值 100：AutoMigrate 加列时存量用户自动补 100，注册逻辑另显式赋值；
 	// 双精度迁移：int → double（AutoMigrate 改列型，存量整数值自动成为浮点值，无需数据修复）
 	Points float64 `gorm:"column:points;type:double;default:100" json:"points"`
+	// 阶段一百三十五：账号状态（后台账号管理：锁定封禁/注销）——AutoMigrate 自动加列，存量用户默认 0 正常
+	Status int8 `gorm:"column:status;type:tinyint;default:0" json:"status"`
+	// LockReason 锁定封禁原因（管理员填写，登录拒绝与在线踢出时提示给用户；解锁/注销时清空）
+	LockReason string `gorm:"column:lock_reason;type:varchar(255);default:''" json:"lock_reason"`
 }
+
+// 用户状态常量（阶段一百三十五：后台账号锁定封禁/注销归口）
+const (
+	UserStatusNormal  int8 = 0 // 正常
+	UserStatusLocked  int8 = 1 // 锁定封禁（登录拒绝并提示 LockReason，在线连接被踢出）
+	UserStatusDeleted int8 = 2 // 已注销（软删除：用户名继续占用防同名重新注册继承旧好友/消息数据，列表不再展示）
+)
 
 // PointsLog 阶段七十八：积分流水（AI 扣分/管理员调整/注册赠送全量审计，后台积分管理面板数据源）
 type PointsLog struct {

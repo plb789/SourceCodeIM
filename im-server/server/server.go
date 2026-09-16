@@ -253,6 +253,13 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		return
 	}
 
+	// 阶段一百三十五：账号状态拦截（锁定封禁/已注销）——仅密码校验通过的存量账号命中
+	// （新注册账号恒为正常态），拒绝原因（含封禁原因）同步下发后关闭连接，前端弹窗提示
+	if rejectMsg := userStatusRejectMsg(user); rejectMsg != "" {
+		c.SendErrorAndClose(rejectMsg)
+		return
+	}
+
 	c.username = user.Username
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
 	// 阶段六十：记录登录设备类型（"pc"=Electron 桌面端）——Agent 本地执行器据此判定工具下发目标
