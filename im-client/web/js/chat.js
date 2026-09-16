@@ -1377,6 +1377,14 @@
         // null 守卫：防旧版缓存 index.html 无本项时 TypeError 中断整个右键菜单
         var saveasItem = msgMenu.querySelector('[data-action="saveas"]');
         if (saveasItem) saveasItem.style.display = isFileBubble ? '' : 'none';
+        // 阶段一百三十四："在线编辑"仅可编辑文档（docx/xlsx）显示——点击文档已统一走预览，
+        // OnlyOffice 编辑由本右键入口按需触发；null 守卫同上（防旧缓存 index.html 无本项）
+        var doceditItem = msgMenu.querySelector('[data-action="docedit"]');
+        if (doceditItem) {
+            var fnEl = isFileBubble ? el.querySelector('.bubble-file .file-name') : null;
+            var fbName = fnEl ? fnEl.textContent : '';
+            doceditItem.style.display = (isFileBubble && isEditableDocName(fbName)) ? '' : 'none';
+        }
         // 置顶项：当前消息已被置顶时显示"取消置顶"
         // 阶段八十八：只改 .mi-text 文字节点——直接赋 textContent 会连同 SVG 图标一起清掉（实测丢图标根因）
         var pinItem = msgMenu.querySelector('[data-action="pin"]');
@@ -1429,6 +1437,17 @@
                         a2.href = fb.getAttribute('data-url') || '';
                         a2.download = (fb.querySelector('.file-name') || {}).textContent || 'file';
                         a2.click();
+                    }
+                } else if (action === 'docedit') {
+                    // 阶段一百三十四："在线编辑"入口——OnlyOffice 编辑层（原点击文档自动进编辑，
+                    // 现改为右键按需触发）。要求已持久化 + 服务端 URL（blob 本地地址不送编辑层）
+                    var fb3 = msgTarget.querySelector('.bubble-file[data-url]');
+                    var u3 = fb3 ? (fb3.getAttribute('data-url') || '') : '';
+                    var nm3 = (fb3 && fb3.querySelector('.file-name') || {}).textContent || '';
+                    if (msgId > 0 && u3 && u3.indexOf('blob:') !== 0) {
+                        if (!openDocEditor(msgId, nm3, u3)) showToast('在线编辑暂不可用');
+                    } else {
+                        showToast('文件处理中，请稍后再试');
                     }
                 } else if (action === 'multi' && msgId) {
                     // 阶段八十七：进入多选模式（复选框 + 底部工具栏，合并转发/逐条转发）
@@ -2744,17 +2763,21 @@
             }
             var start = idx * CHUNK_SIZE;
             var blob = file.slice(start, Math.min(start + CHUNK_SIZE, file.size));
-            var reader = new FileReader();
-            reader.onload = function () {
+            // 原实现：new FileReader().readAsDataURL(blob)——FileReader 已被 PptxViewJS.min.js 覆盖为
+            // 自定义工具类（无 readAsDataURL），调用即抛 TypeError 卡死分片上传，统一改 blobToDataURL
+            blobToDataURL(blob).then(function (dataUrl) {
                 IMSocket.send({
                     msg_type: MSG.FILE, to_user: toUser, file_id: fileId,
                     chunk_index: idx, total_chunks: total,
-                    file_data: reader.result.split(',')[1] // 去掉 data: 前缀，仅保留 base64
+                    file_data: dataUrl.split(',')[1] // 去掉 data: 前缀，仅保留 base64
                 });
                 idx++;
                 next();
-            };
-            reader.readAsDataURL(blob);
+            }).catch(function (e) {
+                console.warn('文件分片读取失败，跳过分片 ' + idx + ':', e);
+                idx++;
+                next(); // 原 onload 链无失败处理（promise 永不 settle 卡死上传）；跳过坏分片保流程
+            });
         }
         next();
     }
@@ -2802,6 +2825,16 @@
         var el = messageList.querySelector('.message[data-file-id="' + msg.file_id + '"]');
         if (el) {
             el.setAttribute('data-msg-id', msg.msg_id);
+            // 阶段一百三十四：文件气泡 data-url 回填服务端地址（分片路径同款）——独立文档查看器
+            // 无法访问主窗口 blob:（2026-09-17 实测白屏+误弹下载框）；content 未带 url 时跳过（兼容旧服务端）
+            try {
+                var pm = JSON.parse(msg.content || '{}');
+                var pFile = el.querySelector('.bubble-file');
+                if (pFile && pm.url) {
+                    var pu = pFile.getAttribute('data-url');
+                    if (!pu || pu.indexOf('blob:') === 0) pFile.setAttribute('data-url', pm.url);
+                }
+            } catch (pe) {}
             // 发送端图片气泡带已读状态元素（接收端无），按对端回填
             var peer = msg.from_user === IMSocket.getUsername() ? (msg.to_user || '') : msg.from_user;
             applyBubbleReadStatus(el, msg.msg_id, peer);
@@ -2831,6 +2864,13 @@
                 var mImg = mineEl.querySelector('.chat-image');
                 if (mImg && meta.url && mImg.getAttribute('src') && mImg.getAttribute('src').indexOf('blob:') === 0) {
                     mImg.setAttribute('src', meta.url);
+                }
+                // 阶段一百三十四：文件气泡 data-url 同款回填（阶段三十八只修了图片，文件遗漏）——
+                // 独立文档查看器（另一页面）无法访问主窗口 blob:，白屏且触发下载弹窗（2026-09-17 实测）
+                var mFile = mineEl.querySelector('.bubble-file');
+                if (mFile && meta.url) {
+                    var fu = mFile.getAttribute('data-url');
+                    if (!fu || fu.indexOf('blob:') === 0) mFile.setAttribute('data-url', meta.url);
                 }
                 // 阶段三十二：分片直传气泡为进度形态，回填后移除进度条/百分比/取消按钮（转为终态文件卡片）
                 var prog = mineEl.querySelector('.file-progress');
@@ -2947,9 +2987,10 @@
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxFile) { showToast('文件超过大小上限（' + formatSize(maxFile) + '），无法发送'); return; }
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        var bubble = null;
         if (!suppressLocal) {
             var url = URL.createObjectURL(file);
-            var bubble = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', false); // 群聊文件：显示发送者昵称
+            bubble = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', false); // 群聊文件：显示发送者昵称
             bubble.setAttribute('data-nonce', nonce);
         }
         var fd = new FormData();
@@ -2966,7 +3007,22 @@
                     throw new Error(t || ('HTTP ' + res.status));
                 });
             }
-            if (!suppressLocal) showToast('已发送');
+            // 阶段一百三十四：上传完成即回填服务端地址与 msg_id（HTTP 响应归口，不依赖广播时序）——
+            // 原实现气泡 data-url 停留 blob:，点击走 blob 跨窗口转换链；GROUP_FILE 广播 nonce 匹配
+            // 保留作多端/时序兜底（响应丢失时仍能回填 msg_id）
+            // 原实现：仅 showToast('已发送')
+            return res.json().catch(function () { return null; }).then(function (data) {
+                if (!suppressLocal) {
+                    showToast('已发送');
+                    try {
+                        if (data && data.url && bubble) {
+                            var bEl = bubble.querySelector('.bubble-file');
+                            if (bEl) bEl.setAttribute('data-url', data.url);
+                        }
+                        if (data && data.msg_id && bubble) bubble.setAttribute('data-msg-id', String(data.msg_id));
+                    } catch (e0) { }
+                }
+            });
         }).catch(function (e) {
             console.warn('群聊文件上传失败:', e);
             throw e; // 保持 Promise 拒绝语义：转发路径依赖 catch 提示"转发失败"（直接发送路径无接续不受影响）
@@ -3095,6 +3151,15 @@
             if (mineEl) {
                 if (msg.msg_id) mineEl.setAttribute('data-msg-id', msg.msg_id);
                 if (msg.timestamp) mineEl.setAttribute('data-ts', msg.timestamp);
+                // 阶段一百三十四：补回填 data-url（HTTP 响应回填为主，此处兜底响应丢失竞态）——
+                // data-url 停留 blob: 会导致点击走跨窗口转换链（blob 对独立查看器不可见）
+                try {
+                    var mFileEl = mineEl.querySelector('.bubble-file');
+                    if (mFileEl && meta.url) {
+                        var mu = mFileEl.getAttribute('data-url');
+                        if (!mu || mu.indexOf('blob:') === 0) mFileEl.setAttribute('data-url', meta.url);
+                    }
+                } catch (e1) { }
                 return;
             }
         }
@@ -14761,13 +14826,10 @@
     // - http(s) 图直接入列（跨窗口可用）
     // - blob: 图（刚发送落库回填前/本地预览）跨窗口加载失败，转 dataURL 后入列（按 DOM 顺序保序）
     function blobToDataUrl(u) {
+        // 原实现：new FileReader().readAsDataURL——FileReader 已被 PptxViewJS.min.js 覆盖（接口不兼容），
+        // 统一改走 blobToDataURL（Response.arrayBuffer + btoa）；失败返回空串（与原 onerror 降级一致）
         return fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
-            return new Promise(function (res) {
-                var fr = new FileReader();
-                fr.onload = function () { res(fr.result); };
-                fr.onerror = function () { res(''); };
-                fr.readAsDataURL(b);
-            });
+            return blobToDataURL(b);
         }).catch(function () { return ''; });
     }
 
@@ -14896,11 +14958,51 @@
         return true;
     }
 
+    // blob → data: URL 转换（跨窗口中转用）：Response.arrayBuffer + 分块 btoa
+    // 原实现用 FileReader.readAsDataURL——PptxViewJS.min.js 把自定义工具类覆盖到 window.FileReader
+    //（接口不兼容，无 readAsDataURL），调用即抛 TypeError 落弹窗兜底（2026-09-17 注入实测复现）
+    function blobToDataURL(b) {
+        return new Response(b).arrayBuffer().then(function (buf) {
+            var bytes = new Uint8Array(buf);
+            var bin = '';
+            var CH = 0x8000; // 分块拼接防 apply 参数上限
+            for (var i = 0; i < bytes.length; i += CH) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+            }
+            return 'data:application/octet-stream;base64,' + btoa(bin);
+        });
+    }
+
     // 打开文档预览弹窗（双层架构·预览层，阶段四十六）：免费纯前端库渲染（零服务端依赖，未部署 OnlyOffice 也可用）
     // docx/xlsx → doc-preview.html（docx-preview + SheetJS）；pptx → pptx-preview.html（PPTXjs）
     // 通过 iframe 隔离：预览库的全局变量（JSZip v2/v3、jQuery、d3）不污染主应用，主应用也无需加载这批库
     function openDocPreview(url, name) {
         if (!url) return;
+        // 阶段一百三十四：PC 端改走独立文档查看器窗口（用户需求：窗体弹窗遮挡聊天页，与图片查看器
+        // 同款新窗口打开，支持置顶/拖动/下载/Esc 关闭）；浏览器与手机 APP 无 desktop 桥，
+        // 落入下方弹窗 fallback（原实现注释保留）。
+        // blob: 场景（FILE_PERSISTED 回执未达就点击/旧气泡未刷新）——blob 跨窗口不可访问（白屏+误弹下载），
+        // 主窗口把 blob 读成自包含 data: URL 中转送独立窗口（data: 跨窗口有效），保持"永远新窗口"体验；
+        // blob 已失效（页面刷新后引用丢失）转换失败，落弹窗兜底（主窗口内 iframe 对 blob 仍有效）
+        if (window.desktop && window.desktop.openDocViewer) {
+            if (url.indexOf('blob:') !== 0) {
+                window.desktop.openDocViewer({ url: url, name: name || '文档' });
+                return;
+            }
+            // blob → data: URL 中转（blobToDataURL：FileReader 已被 PPTXjs 污染不可用）
+            fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+                return blobToDataURL(b);
+            }).then(function (dataUrl) {
+                window.desktop.openDocViewer({ url: dataUrl, name: name || '文档' });
+            }).catch(function () { openDocPreviewFallback(url, name); });
+            return;
+        }
+        openDocPreviewFallback(url, name);
+    }
+
+    // 预览弹窗 fallback（浏览器/手机 APP 及 PC 端 blob 转换失败兜底）——原 openDocPreview 弹窗主体
+    function openDocPreviewFallback(url, name) {
+        // if (!url) return;
         docEditorMode = 'preview';
         docPreviewUrl = url;
         docEditorName = name || '';
@@ -14944,13 +15046,23 @@
     // 可编辑类型 → 编辑层（OnlyOffice 已部署时在线编辑，失败自动落预览层）；预览层免费兜底始终可用
     // 其余类型（pdf/zip/图片等）→ 保持原下载行为
     function onFileCardClick(bubbleEl, msgId, name, url) {
+        // 阶段一百三十四：调用点闭包 url 可能仍是 blob:（发送瞬间旧值），FILE_PERSISTED 已把
+        // DOM data-url 回填为服务端地址——优先取 DOM（独立文档查看器跨窗口无法访问 blob:）
+        if (bubbleEl && bubbleEl.getAttribute) {
+            var domUrl = bubbleEl.getAttribute('data-url');
+            if (domUrl && (!url || url.indexOf('blob:') === 0)) url = domUrl;
+        }
         if (!msgId) {
             var el = bubbleEl && bubbleEl.closest ? bubbleEl.closest('.message') : null;
             msgId = el ? (parseInt(el.getAttribute('data-msg-id'), 10) || 0) : 0;
         }
         if (isEditableDocName(name) && url) {
-            // 编辑层要求已持久化（msg_id 存在）且地址为服务端 URL（blob 本地预览地址不送编辑层）
-            if (msgId > 0 && url.indexOf('blob:') !== 0 && openDocEditor(msgId, name, url)) return;
+            // 阶段一百三十四：点击文档类统一走独立窗口"预览"——OnlyOffice 编辑弹窗遮挡聊天页（用户需求）；
+            // Electron 内核无 Office 渲染引擎，预览由纯前端库（docx-preview/SheetJS/PPTXjs）在独立
+            // doc-viewer 窗口渲染（VS Code/TRAE 同思路）；"在线编辑"入口保留在右键菜单按需触发
+            // 原实现：自动进编辑层（OnlyOffice 已部署时在线编辑，失败自动落预览层）
+            // if (msgId > 0 && url.indexOf('blob:') !== 0 && openDocEditor(msgId, name, url)) return;
+            // openDocPreview(url, name);
             openDocPreview(url, name);
             return;
         }

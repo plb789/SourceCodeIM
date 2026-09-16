@@ -553,6 +553,12 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
             另存为
         </div>
+        <!-- 阶段一百三十四：文档右键"在线编辑"（仅 docx/xlsx 可编辑文档显示）——点击文档改为统一预览
+             后，OnlyOffice 编辑改由本入口按需触发（原点击自动进编辑弹窗的行为已注释保留在 chat.js） -->
+        <div class="menu-item" data-action="docedit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+            在线编辑
+        </div>
         <!-- 阶段四十：微信同款消息引用（右键引用 → 输入框上方引用条 → 随下一条消息一起发出） -->
         <div class="menu-item" data-action="quote">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
@@ -1103,9 +1109,9 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.22"></script>
+    <script src="js/socket.js?v=1.23"></script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
-    <script src="js/screenshot.js?v=1.6"></script>
+    <script src="js/screenshot.js?v=1.7"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
@@ -1119,7 +1125,7 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.14"></script>
+    <script src="js/chat.js?v=3.16"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

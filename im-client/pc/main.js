@@ -2,7 +2,7 @@
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -429,6 +429,94 @@ ipcMain.handle('image:save', async function (event, data) {
 // 查看器请求更早历史图片：转发主聊天窗口（chat.js 走 HISTORY 翻页拉取后回推）
 ipcMain.on('image:need-more', function () {
     if (mainWindow) mainWindow.webContents.send('viewer:need-more');
+});
+
+// ===== 阶段一百三十四：独立文档查看器窗口（用户需求：聊天内文档预览不再窗体弹窗遮挡聊天页，与图片查看器同款新窗口打开） =====
+var docViewerWin = null; // 文档查看器窗口（单例复用：重复打开仅换内容）
+
+function ensureDocViewerWindow() {
+    if (docViewerWin) return docViewerWin;
+    docViewerWin = new BrowserWindow({
+        width: 960,
+        height: 680,
+        minWidth: 520,
+        minHeight: 400,
+        show: false,
+        frame: false,          // 无边框：顶栏自绘（拖动/置顶/下载/关闭），风格与图片查看器统一
+        backgroundColor: '#1e1e1e',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    docViewerWin.loadURL(SERVER_URL + 'doc-viewer.html');
+    docViewerWin.on('close', function (e) {
+        // 关闭改为隐藏复用：保留窗口避免频繁重建（页面内 Esc/关闭按钮走同一隐藏逻辑）
+        if (docViewerWin.isVisible()) {
+            e.preventDefault();
+            docViewerWin.hide();
+        }
+    });
+    docViewerWin.on('closed', function () { docViewerWin = null; });
+    return docViewerWin;
+}
+
+// 打开文档查看器：渲染层推送 {url, name}；相对 URL 归一化为服务端绝对地址（单一归口在主进程，
+// doc-viewer 页内 absUrl 仅对 http/blob 直通兜底）
+ipcMain.on('doc:open', function (event, data) {
+    var win = ensureDocViewerWindow();
+    var u = data && data.url ? String(data.url) : '';
+    if (u && !/^(https?:|blob:|data:)/.test(u)) {
+        u = SERVER_URL + u.replace(/^\//, '');
+    }
+    var payload = { url: u, name: (data && data.name) || '文档' };
+    var show = function () {
+        win.webContents.send('doc:load', payload);
+        win.show();
+        win.focus();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 查看器置顶切换（顶栏图钉按钮）
+ipcMain.on('doc:set-always-on-top', function (event, on) {
+    if (docViewerWin) docViewerWin.setAlwaysOnTop(!!on);
+});
+
+// 查看器隐藏（页面 Esc/关闭按钮，与 close 拦截同逻辑）
+ipcMain.on('doc:close', function () {
+    if (docViewerWin) docViewerWin.hide();
+});
+
+// 查看器下载：主进程 net.fetch 拉流（走 Chromium 网络栈，与页面同源同 cookie）+ 原生保存对话框写盘
+// 仅支持 http(s)/data:——blob: 是主聊天页面的对象地址，另一进程上下文无法访问（前端归口已拦截不送独立窗口）
+ipcMain.handle('doc:save', async function (event, data) {
+    if (!data || !data.url) return false;
+    var u = String(data.url);
+    if (!/^(https?:|data:)/.test(u)) {
+        u = SERVER_URL + u.replace(/^\//, '');
+    }
+    var win = BrowserWindow.fromWebContents(event.sender);
+    var r = await dialog.showSaveDialog(win, {
+        defaultPath: data.name || '文档'
+    });
+    if (r.canceled || !r.filePath) return false;
+    try {
+        var resp = await net.fetch(u);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        var buf = Buffer.from(await resp.arrayBuffer());
+        await fs.promises.writeFile(r.filePath, buf);
+        return true;
+    } catch (e) {
+        console.warn('文档查看器下载失败:', e && e.message);
+        dialog.showErrorBox('保存失败', '文件下载失败：' + (e && e.message ? e.message : '未知错误'));
+        return false;
+    }
 });
 
 // ===== 阶段六十：Agent 本地执行器 =====

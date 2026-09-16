@@ -63,12 +63,23 @@
         }
 
         if (!fileUrl) {
-            showError('缺少文档地址参数');
+            // 无查询参数：等待父窗口（doc-viewer.html）postMessage 推送地址（blob 场景 dataURL 中转）
+            // 阶段一百三十四：独立文档查看器无法访问主聊天页的 blob:，父窗口把 blob 转成自包含
+            // data: URL 后经 message 推入本页渲染；与查询参数二选一，先到先渲染
+            window.addEventListener('message', function (ev) {
+                if (!ev.data || ev.data.type !== 'doc-preview-src' || !ev.data.url) return;
+                renderPptx(ev.data.url);
+            });
         } else {
+            renderPptx(fileUrl);
+        }
+
+        // 渲染归口（查询参数与 postMessage 双入口共用）
+        function renderPptx(u) {
             // PPTXjs：URL 拉取渲染（slideMode 关闭=连续浏览模式；mediaProcess 开启图片/音视频渲染）
             try {
                 $('#pptx-viewer').pptxToHtml({
-                    pptxFileUrl: fileUrl,
+                    pptxFileUrl: u,
                     slideMode: false,
                     keyBoardShortCut: false,
                     mediaProcess: true,

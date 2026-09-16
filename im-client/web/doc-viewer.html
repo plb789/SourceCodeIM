@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>文档查看</title>
+    <style>
+        /* 阶段一百三十四：独立文档查看器窗口页（PC 端聊天内文档预览专用窗口，同图片查看器模式）——
+           无边框自绘深色顶栏（拖动/置顶/下载/关闭），主体 iframe 加载解析页或 PDF 原文。
+           深色固定主题与图片查看器一致（#1e1e1e 沉浸背景） */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #1e1e1e;
+            overflow: hidden;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        /* ===== 顶部工具栏：无边框窗口拖动区（按钮 no-drag），样式对齐 image-viewer ===== */
+        .dv-toolbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            background: rgba(32, 32, 32, 0.98);
+            border-bottom: 1px solid #333;
+            -webkit-app-region: drag;
+            z-index: 10;
+        }
+
+        .dv-btn {
+            -webkit-app-region: no-drag;
+            width: 34px;
+            height: 34px;
+            margin: 0 2px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #cccccc;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dv-btn:hover { background: #3a3a3a; color: #ffffff; }
+
+        .dv-btn.active { background: #07c160; color: #ffffff; }
+
+        .dv-title {
+            flex: 1;
+            margin: 0 10px;
+            color: #e0e0e0;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            -webkit-app-region: no-drag;
+        }
+
+        /* ===== 文档主体：iframe（pdf 直载/解析页）或 pre（文本类页内渲染） ===== */
+        .dv-stage {
+            position: absolute;
+            top: 44px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #ffffff;
+        }
+
+        .dv-stage iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+            background: #ffffff;
+        }
+
+        /* 文本类渲染区：等宽字体 + 深色编辑器风（与主题一致，可复制） */
+        .dv-text {
+            position: absolute;
+            inset: 0;
+            margin: 0;
+            padding: 16px 20px;
+            overflow: auto;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            font-family: Consolas, "JetBrains Mono", monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+            user-select: text;
+            cursor: auto;
+        }
+
+        /* 加载占位 */
+        .dv-loading {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: #888;
+            font-size: 13px;
+            background: #1e1e1e;
+            z-index: 5;
+        }
+        .dv-loading.on { display: flex; }
+    </style>
+</head>
+<body>
+    <div class="dv-toolbar">
+        <div class="dv-title" id="dv-title">文档查看</div>
+        <button class="dv-btn" id="dv-top" title="置顶">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg>
+        </button>
+        <button class="dv-btn" id="dv-save" title="下载">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+        </button>
+        <button class="dv-btn" id="dv-close" title="关闭">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+    </div>
+    <div class="dv-stage" id="dv-stage"></div>
+    <div class="dv-loading" id="dv-loading">加载中…</div>
+    <script>
+        // 阶段一百三十四：独立文档查看器页内逻辑——接收主进程 doc:load 载荷按类型分派渲染
+        (function () {
+            var stage = document.getElementById('dv-stage');
+            var titleEl = document.getElementById('dv-title');
+            var loadingEl = document.getElementById('dv-loading');
+            var topBtn = document.getElementById('dv-top');
+            var isTop = false;
+            var curName = '文档';
+            var curUrl = '';
+
+            // 文本类扩展名（页内 fetch + pre 渲染；csv 亦按文本展示——表格化留给浏览区 file 标签的既有能力）
+            var TEXT_EXTS = ['txt', 'md', 'log', 'json', 'xml', 'csv', 'yml', 'yaml', 'ini', 'conf',
+                'js', 'ts', 'css', 'html', 'htm', 'vue', 'py', 'go', 'java', 'c', 'h', 'cpp', 'hpp',
+                'cs', 'php', 'rb', 'rs', 'sql', 'sh', 'bat', 'ps1', 'lua', 'toml'];
+
+            function extOf(name) {
+                var m = (name || '').toLowerCase().match(/\.([a-z0-9]+)($|\?)/);
+                return m ? m[1] : '';
+            }
+
+            // 绝对 URL 归一化（相对路径补服务端 origin；与图片查看器同口径）
+            function absUrl(u) {
+                if (!u) return '';
+                if (/^(https?:|blob:|data:)/.test(u)) return u;
+                return (window.desktop && window.desktop.serverOrigin ? window.desktop.serverOrigin : '/') + String(u).replace(/^\//, '');
+            }
+
+            // 清空舞台：iframe/pre 全部移除（换文件复用窗口时先卸载旧渲染，停掉解析页脚本）
+            function clearStage() {
+                stage.innerHTML = '';
+            }
+
+            function setLoading(on) {
+                loadingEl.classList.toggle('on', !!on);
+            }
+
+            // 分派渲染
+            function render(url, name) {
+                clearStage();
+                curUrl = url;
+                curName = name || '文档';
+                titleEl.textContent = curName;
+                titleEl.title = curName;
+                var ext = extOf(curUrl || curName);
+                if (ext === 'pdf') {
+                    // PDF：iframe 直指 URL 交 Chromium 内置 PDFium（主窗口 plugins 与本窗口 webPreferences 无关，
+                    // PDF 插件是 Chromium 默认能力，独立窗口无需额外开关）
+                    var f1 = document.createElement('iframe');
+                    f1.src = url;
+                    stage.appendChild(f1);
+                    return;
+                }
+                if (ext === 'docx' || ext === 'xlsx') {
+                    // docx/xlsx：复用现有 doc-preview.html 解析页（docx-preview + SheetJS，iframe 隔离全局变量）。
+                    // data: URL（blob 中转场景）过长不能走查询参数——iframe 无参加载后 postMessage 推入
+                    var f2 = document.createElement('iframe');
+                    if (url.indexOf('data:') === 0) {
+                        f2.src = '/doc-preview.html?type=' + ext;
+                        f2.addEventListener('load', function () {
+                            // postMessage 目标 origin 用本页 origin（解析页与本页同源）
+                            f2.contentWindow.postMessage({ type: 'doc-preview-src', url: url }, location.origin);
+                        });
+                    } else {
+                        f2.src = '/doc-preview.html?type=' + ext + '&url=' + encodeURIComponent(url);
+                    }
+                    stage.appendChild(f2);
+                    return;
+                }
+                if (ext === 'pptx') {
+                    // pptx：复用 pptx-preview.html（PPTXjs；Chart.js 依赖已在页内引入）。data: 同上 postMessage
+                    var f3 = document.createElement('iframe');
+                    if (url.indexOf('data:') === 0) {
+                        f3.src = '/pptx-preview.html';
+                        f3.addEventListener('load', function () {
+                            f3.contentWindow.postMessage({ type: 'doc-preview-src', url: url }, location.origin);
+                        });
+                    } else {
+                        f3.src = '/pptx-preview.html?type=pptx&url=' + encodeURIComponent(url);
+                    }
+                    stage.appendChild(f3);
+                    return;
+                }
+                if (TEXT_EXTS.indexOf(ext) >= 0) {
+                    // 文本/代码类：页内 fetch + pre（二进制嗅探：含 NUL 判定为二进制则提示下载）
+                    setLoading(true);
+                    fetch(url).then(function (r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.arrayBuffer();
+                    }).then(function (buf) {
+                        var bytes = new Uint8Array(buf);
+                        var nul = 0;
+                        for (var i = 0; i < Math.min(bytes.length, 4096); i++) { if (bytes[i] === 0) { nul++; } }
+                        if (nul > 0) {
+                            var warn = document.createElement('div');
+                            warn.className = 'dv-text';
+                            warn.textContent = '该文件为二进制内容，请在工具栏点"下载"后用本地程序打开。';
+                            stage.appendChild(warn);
+                            return;
+                        }
+                        var pre = document.createElement('pre');
+                        pre.className = 'dv-text';
+                        pre.textContent = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+                        stage.appendChild(pre);
+                    }).catch(function (e) {
+                        var err = document.createElement('div');
+                        err.className = 'dv-text';
+                        err.textContent = '加载失败：' + (e && e.message ? e.message : e);
+                        stage.appendChild(err);
+                    }).finally(function () { setLoading(false); });
+                    return;
+                }
+                // 未知类型兜底：iframe 直载（浏览器自行决定能否内嵌展示，多数二进制类型触发下载）
+                var f4 = document.createElement('iframe');
+                f4.src = url;
+                stage.appendChild(f4);
+            }
+
+            // 主进程载荷：{url, name}
+            if (window.desktop && window.desktop.onDocLoad) {
+                window.desktop.onDocLoad(function (data) {
+                    render(absUrl(data && data.url), (data && data.name) || '');
+                });
+            }
+
+            // 置顶切换
+            topBtn.addEventListener('click', function () {
+                isTop = !isTop;
+                topBtn.classList.toggle('active', isTop);
+                if (window.desktop && window.desktop.docSetTop) window.desktop.docSetTop(isTop);
+            });
+
+            // 下载（主进程 fetch + 原生保存对话框；失败由主进程 showErrorBox 提示，取消静默）
+            document.getElementById('dv-save').addEventListener('click', function () {
+                if (!curUrl) return;
+                if (window.desktop && window.desktop.docSave) {
+                    window.desktop.docSave({ url: curUrl, name: curName });
+                }
+            });
+
+            // 关闭（隐藏复用，与图片查看器同口径）
+            function closeWin() {
+                if (window.desktop && window.desktop.docClose) window.desktop.docClose();
+            }
+            document.getElementById('dv-close').addEventListener('click', closeWin);
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') closeWin();
+            });
+        })();
+    </script>
+</body>
+</html>

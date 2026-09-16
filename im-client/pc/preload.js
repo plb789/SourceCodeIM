@@ -250,6 +250,26 @@ contextBridge.exposeInMainWorld('desktop', {
     browserPanel: function (visible) {
         return ipcRenderer.invoke('browser:panel', visible);
     },
+    // ===== 阶段一百三十四：独立文档查看器窗口 =====
+    // 主窗口调用：打开/复用文档查看器窗口并载入 {url, name}（相对 URL 由主进程归一化）
+    openDocViewer: function (payload) {
+        ipcRenderer.send('doc:open', payload);
+    },
+    // 以下四个仅供 doc-viewer.html 页内使用
+    onDocLoad: function (callback) {
+        ipcRenderer.on('doc:load', function (event, data) {
+            callback(data);
+        });
+    },
+    docSetTop: function (on) {
+        ipcRenderer.send('doc:set-always-on-top', !!on);
+    },
+    docClose: function () {
+        ipcRenderer.send('doc:close');
+    },
+    docSave: function (payload) {
+        return ipcRenderer.invoke('doc:save', payload);
+    },
     // 导航操作（action: back/forward/reload/stop/goto；goto 时带 url）
     browserNav: function (action, url) {
         return ipcRenderer.invoke('browser:nav', { action: action, url: url });
