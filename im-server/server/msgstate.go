@@ -261,6 +261,118 @@ func (s *Server) handleDelete(c *Client, msg *protocol.Message) {
 	s.sendError(c, "消息已删除")
 }
 
+// truncateEllipsis 阶段一百三十五：按字符数截断（中文友好），超长追加省略号
+// 与 memory.go truncateRunes（无省略号）区分，避免改动既有调用方行为
+func truncateEllipsis(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// searchRewriteRecords 阶段一百三十五：搜索结果展示文本归口（用户实测反馈：搜索结果出现
+// 合并转发 JSON 原串）。JSON 信封类消息（合并转发/引用/AI 图片/AI 文档）content 为 JSON 原串，
+// LIKE 命中可能落在结构字段（时间戳/url/用户名等）而非用户可见文本，且原串外泄到搜索结果。
+// 此处解析已知信封改写为用户可见的展示文本；关键词未命中任何用户可见文本的消息直接剔除
+// （误命中本就不该出现）。未知 JSON 一律原样保留——那是用户手打的 JSON 文本消息，属可见文本。
+// 仅改写 Content 展示文本，不动 ID/时间等定位字段（搜索结果点击按 msg_id 定位，不受影响）
+func (s *Server) searchRewriteRecords(records []model.Message, keyword string) []model.Message {
+	kw := strings.ToLower(keyword)
+	out := make([]model.Message, 0, len(records))
+	for _, r := range records {
+		content := r.Content
+		if content == "" || content[0] != '{' {
+			out = append(out, r) // 纯文本/数字等非 JSON 消息原样保留
+			continue
+		}
+		// 合并转发信封：{"merged":{"c":N,"i":[{"f":发送者,"t":时间戳,"k":类型,"x":文本摘要}]}}
+		// （与 server.go 会话摘要同款判定：c>0 或 i 非空才算信封）
+		var mergedEnv struct {
+			Merged struct {
+				C int               `json:"c"`
+				I []json.RawMessage `json:"i"`
+			} `json:"merged"`
+		}
+		if err := json.Unmarshal([]byte(content), &mergedEnv); err == nil && (mergedEnv.Merged.C > 0 || len(mergedEnv.Merged.I) > 0) {
+			count := mergedEnv.Merged.C
+			if count == 0 {
+				count = len(mergedEnv.Merged.I)
+			}
+			hitText := ""    // 首个命中的子消息文本（预览价值最高，优先返回）
+			nameHit := false // 仅发送者名命中（搜人名找聊天记录场景）
+			for _, raw := range mergedEnv.Merged.I {
+				var item struct {
+					F string `json:"f"`
+					X string `json:"x"`
+				}
+				if err := json.Unmarshal(raw, &item); err != nil {
+					continue
+				}
+				if hitText == "" && item.X != "" && strings.Contains(strings.ToLower(item.X), kw) {
+					hitText = item.X
+					break
+				}
+				if !nameHit && strings.Contains(strings.ToLower(item.F), kw) {
+					nameHit = true // 不 break：继续找文本命中，文本预览优先于人名命中
+				}
+			}
+			if hitText != "" {
+				r.Content = "[聊天记录] " + truncateEllipsis(hitText, 80)
+			} else if nameHit {
+				r.Content = "[聊天记录] " + strconv.Itoa(count) + "条消息"
+			} else {
+				continue // 关键词仅命中 JSON 结构字段（时间戳/类型标记等），属误命中，剔除
+			}
+			out = append(out, r)
+			continue
+		}
+		// 引用信封：{"quote":{"text":被引用原文,...},"text":回复正文}——气泡两者都显示，任一命中都保留；
+		// 展示回复正文（与客户端 quoteDisplayText 同口径）
+		var quoteEnv struct {
+			Quote json.RawMessage `json:"quote"`
+			Text  string          `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(content), &quoteEnv); err == nil && quoteEnv.Quote != nil && quoteEnv.Text != "" {
+			quoted := ""
+			var q struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(quoteEnv.Quote, &q); err == nil {
+				quoted = q.Text
+			}
+			if strings.Contains(strings.ToLower(quoteEnv.Text), kw) || strings.Contains(strings.ToLower(quoted), kw) {
+				r.Content = quoteEnv.Text
+			} else {
+				continue
+			}
+			out = append(out, r)
+			continue
+		}
+		// AI 图片/文档问答信封：{"image":url,"text":附言} / {"doc":url,"name":文件名,"text":附言}
+		var aiEnv struct {
+			Image string `json:"image"`
+			Doc   string `json:"doc"`
+			Name  string `json:"name"`
+			Text  string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(content), &aiEnv); err == nil && (aiEnv.Image != "" || aiEnv.Doc != "") {
+			switch {
+			case strings.Contains(strings.ToLower(aiEnv.Text), kw):
+				r.Content = aiEnv.Text
+			case aiEnv.Doc != "" && strings.Contains(strings.ToLower(aiEnv.Name), kw):
+				r.Content = "[文档] " + aiEnv.Name // 文档名命中：按会话摘要同款形态展示
+			default:
+				continue // 仅 url 命中属误命中（url 非用户可见语义文本），剔除
+			}
+			out = append(out, r)
+			continue
+		}
+		out = append(out, r) // 其余 JSON：用户手打的 JSON 文本消息，原样保留
+	}
+	return out
+}
+
 // handleSearch 消息关键词搜索：ToUser 为空时搜索全部会话，否则搜索指定会话
 // 搜索范围仅限当前用户可见的消息（排除已撤回与自己删除的）
 func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
@@ -296,6 +408,8 @@ func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
 		s.sendError(c, "搜索失败")
 		return
 	}
+	// 阶段一百三十五：JSON 信封类消息展示文本归口（合并转发原串外泄修复，详见函数注释）
+	records = s.searchRewriteRecords(records, keyword)
 
 	data, _ := json.Marshal(records)
 	resp := protocol.Message{
@@ -344,6 +458,8 @@ func (s *Server) handleConvSearch(c *Client, msg *protocol.Message) {
 		s.sendError(c, "搜索失败")
 		return
 	}
+	// 阶段一百三十五：JSON 信封类消息展示文本归口（合并转发原串外泄修复，详见函数注释）
+	records = s.searchRewriteRecords(records, keyword)
 
 	data, _ := json.Marshal(records)
 	resp := protocol.Message{
