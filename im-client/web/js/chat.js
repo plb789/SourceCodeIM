@@ -13266,9 +13266,15 @@
     var historyPage = 1;     // 当前会话已加载到的最大页码
     var historyHasMore = true;  // 是否还有更早的历史可加载
     var loadingMore = false;    // 翻页请求进行中标记（防止滚动重复触发）
+    var convSwitchTimer = null; // 阶段一百三十四：会话切换渲染期隐藏的兜底定时器（防 HISTORY 响应丢失永久隐藏）
 
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
+        // 阶段一百三十四：同会话重复点击守卫——点击当前已打开的好友卡片会再次执行"清空+挂隐藏类+重拉历史"，
+        // 视图瞬间消失等响应后重现，构成闪烁（实测 2026-09-16 快速连点同一好友必现）。
+        // 微信同款行为：点击当前会话无任何反应。childElementCount 守卫极端空视图场景（如刚清空聊天）仍允许重拉
+        // 原实现：无此守卫（同会话重复点击全量重载）
+        if (user === currentChatUser && messageList.childElementCount > 0) return;
         // 阶段八十七：切换会话强制退出多选模式（多选仅对当前会话有效，跨会话勾选无意义）
         exitMultiSelect();
         // 阶段七十八：离开旧会话前记忆其 Agent 开关（仅 AI 会话）——切回时自动恢复，不用重新打开
@@ -13346,6 +13352,15 @@
         locateState.active = false;
         closeConvSearch();
         messageList.innerHTML = '';
+        // 阶段一百三十四：会话切换渲染期隐藏——旧实现清空后等 HISTORY 响应逐条 append（内容逐步涌现
+        // 跨多帧+网络空窗）构成闪烁；挂类隐藏后批量渲染完毕一次性显示（HISTORY_RESP 归口移除），
+        // 3s 兜底定时器防响应丢失永久隐藏。原实现：messageList.innerHTML = '';
+        messageList.classList.add('conv-switching');
+        if (convSwitchTimer) clearTimeout(convSwitchTimer);
+        convSwitchTimer = setTimeout(function () {
+            convSwitchTimer = null;
+            messageList.classList.remove('conv-switching');
+        }, 3000);
         renderPinBar();
         // 阶段二十七：切换会话重置滚动分页状态（重新从第 1 页加载）
         historyPage = 1;
@@ -13481,6 +13496,13 @@
         aiViewSession[agent] = sid;
         closeAISessionPanel();
         messageList.innerHTML = '';
+        // 阶段一百三十四：AI 会话内切换同样挂渲染期隐藏类（与 openConversation 同口径，防逐步涌现闪烁）
+        messageList.classList.add('conv-switching');
+        if (convSwitchTimer) clearTimeout(convSwitchTimer);
+        convSwitchTimer = setTimeout(function () {
+            convSwitchTimer = null;
+            messageList.classList.remove('conv-switching');
+        }, 3000);
         historyPage = 1;
         historyHasMore = true;
         loadingMore = false;
@@ -13659,6 +13681,15 @@
         if (maxId && currentChatUser !== '') {
             // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: currentChatUser, content: String(maxId) });
             sendReadReceipt(currentChatUser, maxId);
+        }
+
+        // 阶段一百三十四：会话切换渲染完成——一次性显示（与 openConversation/aiSwitchSession 的
+        // conv-switching 挂类配对；隐藏态下逐条 append 不可见，此处移除类避免"内容逐步涌现"闪烁。
+        // 仅首页主分支移除：定位/翻页分支不会处于切换隐藏态，误清反而可能闪现半成品视图）
+        messageList.classList.remove('conv-switching');
+        if (convSwitchTimer) {
+            clearTimeout(convSwitchTimer);
+            convSwitchTimer = null;
         }
     });
 

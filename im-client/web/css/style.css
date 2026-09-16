@@ -921,6 +921,13 @@ html, body {
     padding: 20px;
 }
 
+/* 阶段一百三十四：会话切换渲染期隐藏（chat.js openConversation/aiSwitchSession 挂类，
+   HISTORY_RESP 首页渲染完成后移除）——旧实现清空后逐条 append 跨多帧"内容逐步涌现"+空窗期
+   构成闪烁；隐藏态下批量渲染完毕一次性显示，空窗仅剩与聊天底色一致的纯背景（原位重绘） */
+.message-list.conv-switching {
+    visibility: hidden;
+}
+
 /* 头像缺失修复：消息改为微信风格 flex 布局——头像 + 内容列（昵称/气泡/状态） */
 /* 原代码：
 .message {
