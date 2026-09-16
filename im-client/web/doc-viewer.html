@@ -144,6 +144,21 @@
             var curUrl = '';
             var lastPdfObjUrl = ''; // 阶段一百三十五：data: URL 转 blob 中转的 objectURL（换文件时 revoke 释放）
 
+            // 阶段一百三十五：本地文件选择输入（供 PDF.js viewer 的"打开文件"按钮重定向——
+            // 其原生按钮只按 PDF 解析，选 docx 等文件必然空白；重定向后走本页 render 全类型分发）
+            var dvFileInput = document.createElement('input');
+            dvFileInput.type = 'file';
+            dvFileInput.style.display = 'none';
+            dvFileInput.addEventListener('change', function () {
+                var file = dvFileInput.files && dvFileInput.files[0];
+                dvFileInput.value = ''; // 允许连续选择同一文件
+                if (!file) return;
+                if (lastPdfObjUrl) { URL.revokeObjectURL(lastPdfObjUrl); }
+                lastPdfObjUrl = URL.createObjectURL(file);
+                render(lastPdfObjUrl, file.name); // blob URL 同源，各类型解析页可直接 fetch
+            });
+            document.body.appendChild(dvFileInput);
+
             // 文本类扩展名（页内 fetch + pre 渲染；csv 亦按文本展示——表格化留给浏览区 file 标签的既有能力）
             var TEXT_EXTS = ['txt', 'md', 'log', 'json', 'xml', 'csv', 'yml', 'yaml', 'ini', 'conf',
                 'js', 'ts', 'css', 'html', 'htm', 'vue', 'py', 'go', 'java', 'c', 'h', 'cpp', 'hpp',
@@ -177,13 +192,32 @@
                 curName = name || '文档';
                 titleEl.textContent = curName;
                 titleEl.title = curName;
-                var ext = extOf(curUrl || curName);
+                // 阶段一百三十五：扩展名优先取文件名（本地文件走 blob: URL，其 uuid 无扩展名，
+                // 原实现 curUrl||curName 顺序对 blob URL 提取不到类型，会误走未知类型兜底分支白屏）
+                var ext = extOf(curName) || extOf(curUrl);
                 if (ext === 'pdf') {
                     // PDF：iframe 加载本地 PDF.js 完整 viewer（缩略图/翻页/缩放/打印全保留）
                     // 原实现：iframe 直指 URL 交 Chromium 内置 PDFium——其滚动条/工具栏属内核独立 UI，
                     // 页面 CSS 无法定制，用户要求项目自定义滚动条样式后改用 PDF.js 渲染
                     // 注意：viewer 资源按部署结构相对解析（../build/pdf.worker.js、../web/cmaps/ 等），勿移动目录
                     var f1 = document.createElement('iframe');
+                    f1.addEventListener('load', function () {
+                        // 接管 viewer 的"打开文件"按钮：克隆替换丢掉 PDF.js 原生监听（其只按 PDF 解析，
+                        // 选 docx 等文件必然空白——用户实测反馈），重定向到本页 dvFileInput 走全类型分发
+                        try {
+                            var vdoc = f1.contentDocument;
+                            var ob = vdoc && vdoc.getElementById('openFile');
+                            if (ob && !ob.dataset.dvTakeover) {
+                                var c = ob.cloneNode(true);
+                                c.dataset.dvTakeover = '1';
+                                c.addEventListener('click', function (e) {
+                                    e.preventDefault();
+                                    dvFileInput.click();
+                                });
+                                ob.parentNode.replaceChild(c, ob);
+                            }
+                        } catch (err) { /* 同源访问理论不抛，防御兜底 */ }
+                    });
                     if (url.indexOf('data:') === 0) {
                         // data: URL（blob 中转场景）过长不能走查询参数——先转 blob: URL（同源 viewer 可直接 fetch）
                         if (lastPdfObjUrl) { URL.revokeObjectURL(lastPdfObjUrl); } // 换文件释放旧 blob，防窗口复用累积内存
