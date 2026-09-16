@@ -61,7 +61,9 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            -webkit-app-region: no-drag;
+            /* 阶段一百三十五：标题文字纳入拖动区（原 no-drag 导致按住标题无法移动窗体，用户实测反馈）；
+               无边框窗口 drag 区内文字本无文本选择语义，拖动优先 */
+            -webkit-app-region: drag;
         }
 
         /* ===== 文档主体：iframe（pdf 直载/解析页）或 pre（文本类页内渲染） ===== */
@@ -140,6 +142,7 @@
             var isTop = false;
             var curName = '文档';
             var curUrl = '';
+            var lastPdfObjUrl = ''; // 阶段一百三十五：data: URL 转 blob 中转的 objectURL（换文件时 revoke 释放）
 
             // 文本类扩展名（页内 fetch + pre 渲染；csv 亦按文本展示——表格化留给浏览区 file 标签的既有能力）
             var TEXT_EXTS = ['txt', 'md', 'log', 'json', 'xml', 'csv', 'yml', 'yaml', 'ini', 'conf',
@@ -176,10 +179,21 @@
                 titleEl.title = curName;
                 var ext = extOf(curUrl || curName);
                 if (ext === 'pdf') {
-                    // PDF：iframe 直指 URL 交 Chromium 内置 PDFium（主窗口 plugins 与本窗口 webPreferences 无关，
-                    // PDF 插件是 Chromium 默认能力，独立窗口无需额外开关）
+                    // PDF：iframe 加载本地 PDF.js 完整 viewer（缩略图/翻页/缩放/打印全保留）
+                    // 原实现：iframe 直指 URL 交 Chromium 内置 PDFium——其滚动条/工具栏属内核独立 UI，
+                    // 页面 CSS 无法定制，用户要求项目自定义滚动条样式后改用 PDF.js 渲染
+                    // 注意：viewer 资源按部署结构相对解析（../build/pdf.worker.js、../web/cmaps/ 等），勿移动目录
                     var f1 = document.createElement('iframe');
-                    f1.src = url;
+                    if (url.indexOf('data:') === 0) {
+                        // data: URL（blob 中转场景）过长不能走查询参数——先转 blob: URL（同源 viewer 可直接 fetch）
+                        if (lastPdfObjUrl) { URL.revokeObjectURL(lastPdfObjUrl); } // 换文件释放旧 blob，防窗口复用累积内存
+                        fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+                            lastPdfObjUrl = URL.createObjectURL(b);
+                            f1.src = 'lib/pdfjs/web/viewer.html?file=' + encodeURIComponent(lastPdfObjUrl);
+                        });
+                    } else {
+                        f1.src = 'lib/pdfjs/web/viewer.html?file=' + encodeURIComponent(url);
+                    }
                     stage.appendChild(f1);
                     return;
                 }

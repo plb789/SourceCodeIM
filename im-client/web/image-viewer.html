@@ -64,7 +64,8 @@
             color: #999;
             font-size: 12px;
             margin-right: 8px;
-            -webkit-app-region: no-drag;
+            /* 阶段一百三十五：标题文字纳入拖动区（原 no-drag 导致按住标题文字无法移动窗体，与 doc-viewer 同坑同修） */
+            -webkit-app-region: drag;
         }
 
         /* ===== 图片画布区 ===== */
