@@ -34,6 +34,12 @@
     var winClickTimer = null;  // 单击选窗后的双击判定窗（350ms 内二次点击=双击发送）
     var hoverPending = false;  // 命中查询在途标记（单飞，丢帧无感）
     var hoverLast = 0;         // 悬停查询节流时间戳（40ms ≈ 25fps 跟手且不刷爆 IPC）
+    // ===== 阶段一百三十九：提取文字/屏幕翻译（服务端视觉 OCR + AI 翻译，浮层展示） =====
+    var ocrCardEl = null;      // 结果浮层卡片（自绘，禁止系统弹窗）
+    var ocrTitleEl = null;     // 浮层标题（提取结果/翻译结果/识别中…）
+    var ocrBodyEl = null;      // 浮层内容区（loading/行文本/原文+译文）
+    var ocrCopyBtn = null;     // 复制按钮（_text 挂当前可复制全文）
+    var ocrBusy = false;       // 识别/翻译请求在途标记（防重复点击）
 
     // 随图尺寸自适应的笔触参数（大图笔触更粗，视觉一致）
     var strokeWidth = 4, fontSize = 20, mosaicR = 24;
@@ -47,7 +53,10 @@
         brush: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
         text: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M5 4v3h5.5v13h3V7H19V4z"/></svg>',
         mosaic: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>',
-        undo: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>'
+        undo: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>',
+        // 阶段一百三十九：提取文字（OCR 取景框样式）/ 屏幕翻译（A/文 翻译样式）
+        ocr: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path fill="currentColor" d="M7.4 15l2.8-6.5h1.3L14.3 15h-1.4l-.65-1.6H9.45L8.8 15H7.4zm2.45-2.8h2L10.85 9.7 9.85 12.2zM14.6 15V8.5h4.3v1.2h-2.9v1.6h2.6v1.2h-2.6V15h-1.4z"/></svg>',
+        translate: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>'
     };
 
     // 标注颜色（微信同款：红/黄/蓝/绿/黑）
@@ -84,6 +93,20 @@
         undoBtn.title = '撤销';
         undoBtn.innerHTML = ICONS.undo;
         toolbarEl.appendChild(undoBtn);
+
+        // 阶段一百三十九：提取文字 / 屏幕翻译（动作按钮，非绘制工具——dataset.action 区分，不参与 setTool 激活态）
+        var ocrBtn = document.createElement('button');
+        ocrBtn.className = 'shot-tool';
+        ocrBtn.dataset.action = 'ocr';
+        ocrBtn.title = '提取文字';
+        ocrBtn.innerHTML = ICONS.ocr;
+        toolbarEl.appendChild(ocrBtn);
+        var trBtn = document.createElement('button');
+        trBtn.className = 'shot-tool';
+        trBtn.dataset.action = 'translate';
+        trBtn.title = '屏幕翻译';
+        trBtn.innerHTML = ICONS.translate;
+        toolbarEl.appendChild(trBtn);
 
         // 颜色点
         COLORS.forEach(function (c, i) {
@@ -125,12 +148,50 @@
         winHoverEl = document.createElement('div');
         winHoverEl.className = 'shot-win-hover hidden';
 
+        // 阶段一百三十九：提取文字/屏幕翻译结果浮层（自绘卡片，禁止系统弹窗）
+        ocrCardEl = document.createElement('div');
+        ocrCardEl.className = 'shot-ocr-card hidden';
+        var ocrHead = document.createElement('div');
+        ocrHead.className = 'shot-ocr-head';
+        ocrTitleEl = document.createElement('span');
+        ocrTitleEl.className = 'shot-ocr-title';
+        var ocrClose = document.createElement('button');
+        ocrClose.className = 'shot-ocr-close';
+        ocrClose.textContent = '×';
+        ocrClose.title = '关闭';
+        ocrClose.addEventListener('click', function () { hideOcrCard(); });
+        ocrHead.appendChild(ocrTitleEl);
+        ocrHead.appendChild(ocrClose);
+        ocrBodyEl = document.createElement('div');
+        ocrBodyEl.className = 'shot-ocr-body';
+        var ocrFoot = document.createElement('div');
+        ocrFoot.className = 'shot-ocr-foot';
+        ocrCopyBtn = document.createElement('button');
+        ocrCopyBtn.className = 'shot-btn';
+        ocrCopyBtn.textContent = '复制全部';
+        ocrCopyBtn.addEventListener('click', function () {
+            var txt = ocrCopyBtn._text || '';
+            if (!txt) return;
+            // 项目规则：程序化剪贴板（禁选环境下不依赖选区）
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(txt).then(function () {
+                    ocrCopyBtn.textContent = '已复制';
+                    setTimeout(function () { ocrCopyBtn.textContent = '复制全部'; }, 1200);
+                });
+            }
+        });
+        ocrFoot.appendChild(ocrCopyBtn);
+        ocrCardEl.appendChild(ocrHead);
+        ocrCardEl.appendChild(ocrBodyEl);
+        ocrCardEl.appendChild(ocrFoot);
+
         editorEl.appendChild(wrapEl);
         editorEl.appendChild(toolbarEl);
         editorEl.appendChild(textInputEl);
         editorEl.appendChild(sizeLabel);
         editorEl.appendChild(hintEl);
         editorEl.appendChild(winHoverEl);
+        editorEl.appendChild(ocrCardEl);
 
         // ===== 阶段一百三十九：悬停窗口识别（mousemove 节流 → 主进程 Win32 命中 → 高亮框跟随） =====
         // 仅冻结态 + 选区工具 + 未框选（sel 空）+ 非拖拽中生效；PC 端无 desktop API（浏览器回退）自动跳过
@@ -374,6 +435,7 @@
         // 阶段一百三十四：退出冻结截图恢复自绘标题栏（与 load() freeze 分支的 add 配对）
         document.documentElement.classList.remove('shot-freeze');
         resetWinHover(); // 阶段一百三十九：窗口识别状态清理（判定定时器/缓存/高亮框）
+        hideOcrCard();   // 阶段一百三十九：识别/翻译结果浮层同步收起
         toolbarEl.classList.remove('visible');
         hideSizeLabel();
         hintEl.classList.add('hidden');
@@ -406,6 +468,125 @@
         winSelImg = null;
         winHoverImg = null;
         hideWinHover();
+    }
+
+    // ===== 阶段一百三十九：提取文字/屏幕翻译（服务端视觉 OCR + AI 翻译） =====
+    // 裁剪当前选区为 PNG dataURL（仅底图不含标注层——识别的是屏幕原始内容）
+    function cropSelDataUrl() {
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(sel.w));
+        c.height = Math.max(1, Math.round(sel.h));
+        c.getContext('2d').drawImage(baseCanvas, sel.x, sel.y, sel.w, sel.h, 0, 0, c.width, c.height);
+        return c.toDataURL('image/png');
+    }
+
+    // 浮层 loading 态（withTranslate：true=屏幕翻译，false=提取文字）
+    function showOcrCard(loading, withTranslate) {
+        ocrTitleEl.textContent = loading ? (withTranslate ? '屏幕翻译' : '提取文字') : (withTranslate ? '翻译结果' : '提取结果');
+        ocrBodyEl.innerHTML = '';
+        var tip = document.createElement('div');
+        tip.className = 'shot-ocr-loading';
+        tip.textContent = loading ? (withTranslate ? '识别并翻译中，请稍候…' : '识别中，请稍候…') : '';
+        ocrBodyEl.appendChild(tip);
+        ocrCopyBtn._text = '';
+        ocrCopyBtn.classList.add('hidden');
+        ocrCardEl.classList.remove('hidden');
+    }
+
+    // 浮层结果渲染：translated 为 null 表示纯提取模式（仅原文行）
+    function renderOcrResult(lines, translated) {
+        ocrTitleEl.textContent = translated === null ? '提取结果' : '翻译结果';
+        ocrBodyEl.innerHTML = '';
+        if (!lines.length) {
+            var empty = document.createElement('div');
+            empty.className = 'shot-ocr-empty';
+            empty.textContent = '未识别到文字';
+            ocrBodyEl.appendChild(empty);
+            return;
+        }
+        var full = lines.join('\n');
+        if (translated !== null) {
+            var srcLabel = document.createElement('div');
+            srcLabel.className = 'shot-ocr-label';
+            srcLabel.textContent = '原文';
+            var src = document.createElement('div');
+            src.className = 'shot-ocr-text src';
+            src.textContent = full; // textContent 防 XSS 归口
+            var dstLabel = document.createElement('div');
+            dstLabel.className = 'shot-ocr-label';
+            dstLabel.textContent = '译文';
+            var dst = document.createElement('div');
+            dst.className = 'shot-ocr-text dst';
+            dst.textContent = translated;
+            ocrBodyEl.appendChild(srcLabel);
+            ocrBodyEl.appendChild(src);
+            ocrBodyEl.appendChild(dstLabel);
+            ocrBodyEl.appendChild(dst);
+            ocrCopyBtn._text = translated;
+        } else {
+            var body = document.createElement('div');
+            body.className = 'shot-ocr-text';
+            body.textContent = full;
+            ocrBodyEl.appendChild(body);
+            ocrCopyBtn._text = full;
+        }
+        ocrCopyBtn.classList.remove('hidden');
+    }
+
+    // 浮层错误态（识别/翻译失败统一从浮层出，不弹系统框）
+    function renderOcrError(msg) {
+        ocrTitleEl.textContent = '提示';
+        ocrBodyEl.innerHTML = '';
+        var err = document.createElement('div');
+        err.className = 'shot-ocr-empty';
+        err.textContent = msg;
+        ocrBodyEl.appendChild(err);
+    }
+
+    function hideOcrCard() {
+        if (ocrCardEl) ocrCardEl.classList.add('hidden');
+    }
+
+    // 入口：框选完成后的提取/翻译动作（withTranslate=true 时识别后追加服务端翻译）
+    function runScreenOCR(withTranslate) {
+        if (ocrBusy) return; // 请求在途防重入
+        if (!sel || sel.w < 2 || sel.h < 2) {
+            // 未框选：从浮层出引导提示（交互与结果展示一致，不混用 hintEl）
+            ocrTitleEl.textContent = '提示';
+            ocrBodyEl.innerHTML = '';
+            var tip = document.createElement('div');
+            tip.className = 'shot-ocr-empty';
+            tip.textContent = '请先拖拽框选要识别的文字区域';
+            ocrBodyEl.appendChild(tip);
+            ocrCopyBtn._text = '';
+            ocrCopyBtn.classList.add('hidden');
+            ocrCardEl.classList.remove('hidden');
+            return;
+        }
+        var user = (typeof IMSocket !== 'undefined' && IMSocket.getUsername) ? IMSocket.getUsername() : '';
+        ocrBusy = true;
+        showOcrCard(true, withTranslate);
+        fetch('/api/ocr?username=' + encodeURIComponent(user), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: cropSelDataUrl() })
+        }).then(function (r) { return r.json(); }).then(function (j) {
+            if (!j.ok) throw new Error(j.msg || '识别失败');
+            var lines = (j.data && j.data.lines) || [];
+            if (!withTranslate) { ocrBusy = false; renderOcrResult(lines, null); return null; }
+            if (!lines.length) { ocrBusy = false; renderOcrResult(lines, null); return null; }
+            // 屏幕翻译：OCR 文本 → 服务端 AI 翻译（自动判向：中文→英文，否则→中文）
+            return fetch('/api/translate?username=' + encodeURIComponent(user), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: lines.join('\n') })
+            }).then(function (r2) { return r2.json(); }).then(function (j2) {
+                if (!j2.ok) throw new Error(j2.msg || '翻译失败');
+                renderOcrResult(lines, (j2.data && j2.data.translated) || '');
+            });
+        }).catch(function (e) {
+            renderOcrError((e && e.message) || '请求失败');
+        }).then(function () { ocrBusy = false; });
     }
 
     // ===== 输出：按选区裁剪 底图+标注层 合成 PNG =====
@@ -471,6 +652,9 @@
             var toolBtn = e.target.closest('.shot-tool');
             if (toolBtn) {
                 if (toolBtn.dataset.tool === 'undo') { undo(); return; }
+                // 阶段一百三十九：动作按钮（提取文字/屏幕翻译）不参与 setTool 工具切换
+                if (toolBtn.dataset.action === 'ocr') { runScreenOCR(false); return; }
+                if (toolBtn.dataset.action === 'translate') { runScreenOCR(true); return; }
                 setTool(toolBtn.dataset.tool);
                 return;
             }
@@ -531,6 +715,8 @@
             if (e.detail >= 2) return;
             var pt = toImg(e);
             if (tool === 'select') {
+                // 阶段一百三十九：重新框选时收起识别/翻译结果浮层（框选动作优先级高于浮层展示）
+                hideOcrCard();
                 // 阶段一百三十九：QQ 同款单击选窗——悬停识别到窗口时按下直接按窗口矩形选定，
                 // 出工具栏可继续标注/Enter 发送；350ms 内二次点击由 dblclick 处理为直接发送
                 if (mode === 'freeze' && winHoverEl && !winHoverEl.classList.contains('hidden') && winHoverImg) {
@@ -653,7 +839,12 @@
         // 编辑器快捷键：Esc 取消 / Enter 发送（文字输入框内已 stopPropagation）
         document.addEventListener('keydown', function (e) {
             if (!isOpen()) return;
-            if (e.key === 'Escape') { e.preventDefault(); close(); }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                // 阶段一百三十九：识别/翻译结果浮层打开时 Esc 先关浮层（不退出整个截图）
+                if (ocrCardEl && !ocrCardEl.classList.contains('hidden')) { hideOcrCard(); return; }
+                close();
+            }
             else if (e.key === 'Enter' && !textInputEl.classList.contains('hidden') === false) {
                 // 文字输入框隐藏时 Enter 才触发发送
                 e.preventDefault();
@@ -666,6 +857,8 @@
         document.addEventListener('contextmenu', function (e) {
             if (!isOpen()) return;
             e.preventDefault();
+            // 阶段一百三十九：结果浮层打开时右键先关浮层（层级优先：浮层 > 输入框 > 编辑器）
+            if (ocrCardEl && !ocrCardEl.classList.contains('hidden')) { hideOcrCard(); return; }
             if (!textInputEl.classList.contains('hidden')) { hideTextInput(); return; }
             close();
         });

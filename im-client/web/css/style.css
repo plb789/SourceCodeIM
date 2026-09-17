@@ -2706,6 +2706,121 @@ html, body {
     display: none;
 }
 
+/* 阶段一百三十九：提取文字/屏幕翻译结果浮层（自绘卡片，主题变量跟随深浅色） */
+.shot-editor .shot-ocr-card {
+    position: fixed;
+    z-index: 6;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(520px, 86vw);
+    max-height: 72vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+
+.shot-editor .shot-ocr-card.hidden {
+    display: none;
+}
+
+.shot-editor .shot-ocr-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+
+.shot-editor .shot-ocr-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.shot-editor .shot-ocr-close {
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.shot-editor .shot-ocr-close:hover {
+    background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+.shot-editor .shot-ocr-body {
+    padding: 12px 14px;
+    overflow-y: auto;
+    min-height: 64px;
+}
+
+.shot-editor .shot-ocr-loading {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 13px;
+    text-align: center;
+    padding: 18px 0;
+}
+
+.shot-editor .shot-ocr-empty {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 13px;
+    text-align: center;
+    padding: 14px 0;
+}
+
+.shot-editor .shot-ocr-label {
+    font-size: 12px;
+    color: var(--primary);
+    margin: 6px 0 4px;
+    user-select: none;
+}
+
+.shot-editor .shot-ocr-label:first-child {
+    margin-top: 0;
+}
+
+.shot-editor .shot-ocr-text {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    user-select: text; /* 识别文本必须可选中复制（禁选规则的明文例外） */
+}
+
+.shot-editor .shot-ocr-text.dst {
+    border-color: var(--primary);
+}
+
+.shot-editor .shot-ocr-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+}
+
+.shot-editor .shot-ocr-foot .shot-btn.hidden {
+    display: none;
+}
+
 /* 画布容器：底图/标注层/遮罩层三合一（尺寸由 JS 按视口适配设置） */
 .shot-canvas-wrap {
     position: relative;

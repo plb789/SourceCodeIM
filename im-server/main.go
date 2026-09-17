@@ -73,6 +73,10 @@ func main() {
 	// 用户端个人知识库（阶段五十六：自建/上传/勾选，勾选后对所有智能体对话生效；个人库仅归属者可管理）
 	http.HandleFunc("GET /api/kb", srv.HandleUserKBGet)
 	http.HandleFunc("POST /api/kb", srv.HandleUserKBCreate)
+	// 截图屏幕翻译（阶段一百三十九：OCR 文本服务端归口 AI 翻译，复用已配置智能体上游）
+	http.HandleFunc("POST /api/translate", srv.HandleTranslate)
+	// 截图提取文字（阶段一百三十九：选区图视觉模型 OCR，服务端归口）
+	http.HandleFunc("POST /api/ocr", srv.HandleScreenOCR)
 	http.HandleFunc("PUT /api/kb/select", srv.HandleUserKBSelect)
 	http.HandleFunc("POST /api/kb/file", srv.HandleUserKBFileUpload)
 	http.HandleFunc("GET /api/kb/{id}/files", srv.HandleUserKBFiles)
