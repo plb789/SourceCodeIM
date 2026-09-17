@@ -508,13 +508,21 @@ func aiAttemptOnce[T any](ctx context.Context, p *config.AIProviderConfig, attem
 	go func() {
 		select {
 		case <-ctx.Done():
+			// 阶段一百三十八：取消链路证据日志——用户点停止/任务取消的信号已传播到本次上游调用
+			logger.Info("AI 模型调用中止信号（服务 %s）：检测到用户停止，正在断开上游请求", p.Name)
 			cancel()
 		case <-done:
 		}
 	}()
 	defer close(done)
 	defer cancel()
-	return attempt(actx, p)
+	res, err := attempt(actx, p)
+	// 阶段一百三十八：取消终止确认——父级已取消且本次上下文已中止，证明上游请求真实断开
+	// （actx 超时不算：父级未取消时为正常超时失败，另行按 failed 收口）
+	if ctx.Err() != nil && actx.Err() != nil {
+		logger.Info("AI 模型调用已确认终止（服务 %s）：上游请求已随用户停止断开", p.Name)
+	}
+	return res, err
 }
 
 // aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复

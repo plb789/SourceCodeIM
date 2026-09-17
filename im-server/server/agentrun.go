@@ -2814,6 +2814,7 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 				// 阶段一百三十八：立即中止任务级上下文——当前轮进行中的上游模型调用即刻断开
 				// （原实现要等当前轮自然跑完才在循环检查点退出，期间 tokens 持续无感知消耗）
 				if t.runCancel != nil {
+					logger.Info("Agent 任务取消（任务 %s，用户 %s）：已发出任务级取消信号，正在中止当前轮上游模型调用", t.ID, c.username)
 					t.runCancel()
 				}
 				t.mu.Lock()
@@ -3204,6 +3205,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			// 阶段一百三十八：取消导致的调用中止优先记为"用户取消"（原实现误记"模型调用失败"——
 			// runCtx 取消后本轮 err=context.Canceled，先查取消标记再按失败收口）
 			if t.Cancelled.Load() || t.runCtx.Err() != nil {
+				logger.Info("Agent 任务 %s：当前轮上游调用已确认终止（用户取消收口，共 %d 轮）", t.ID, t.steps)
 				s.agentFinish(t, "cancelled", "", "用户取消")
 				return
 			}
