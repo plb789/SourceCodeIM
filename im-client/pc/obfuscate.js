@@ -21,9 +21,31 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const srcRoot = path.resolve(__dirname, '..', 'web');              // 网页源目录
 const outRoot = path.join(__dirname, 'bundled', 'web-obfuscated'); // 混淆输出目录（快照复制源）
+
+// ===== 阶段一百三十六：加密链路路径归口 =====
+const blobOut = path.join(__dirname, 'web-snapshot.enc');          // 加密快照 blob（pc 根目录，随 app.asar 打包）
+const keyModuleOut = path.join(__dirname, 'secure-key.js');        // 密钥模块（掩码扰乱存储，main.js 运行时还原）
+
+// ===== 阶段一百三十七：主进程模块加密清单（薄启动器方案） =====
+// 这些文件加密为 <name>.enc 随 asar 打包，明文源码经 package.json files 规则排除出安装包；
+// 运行时由 loader.js 重定向钩子解密后内存编译。保留明文：preload.js / viewer-preload.js
+// （渲染桥接无业务逻辑）、mcp-computer-use.js（独立 Node 子进程脚本，无法走解密钩子）
+const MAIN_MODULES = [
+    'main.js',
+    'web-cache.js',
+    'agent-executor.js',
+    'browser-manager.js',
+    'toolchain-manager.js',
+    'mcp-manager.js',
+    'node-runtime.js',
+    'lsp-manager.js'
+];
+const serverCfgPath = path.resolve(__dirname, '..', '..', 'im-server', 'bin', 'config.yaml'); // 密钥同源配置
+const loaderOut = path.join(__dirname, 'loader.min.js'); // 薄启动器压缩产物（package.json main 归口进 asar）
 
 // collect 递归收集待处理文件清单（与缓存/服务端清单排除规则对齐）
 function collect(dir, rel, out) {
@@ -62,6 +84,121 @@ function stripHtmlComments(code) {
             return ''; // HTML 注释删除
         }
     );
+}
+
+// ===== 阶段一百三十六：加密快照 blob + 密钥注入（PC 端安装目录/userData 磁盘零明文） =====
+// 快照以单一加密 blob（web-snapshot.enc）随 app.asar 打包：安装目录不再有明文/混淆快照文件；
+// 密钥与服务端 config.yaml secure_file_key 同源（构建期读取），经随机掩码异或扰乱后生成
+// secure-key.js 打入 asar，源码与产物中均无明文密钥可 grep（运行时 main.js 异或还原）。
+
+// resolveOrCreateKey 读取服务端 config.yaml 的 secure_file_key（64 位 hex）；未配置时生成
+// 随机密钥并回写配置（UTF-8 无 BOM），保证构建链与服务端密文接口密钥天然一致
+function resolveOrCreateKey() {
+    var txt = '';
+    try { txt = fs.readFileSync(serverCfgPath, 'utf8'); } catch (e) { txt = ''; }
+    var m = /secure_file_key:\s*"?([0-9a-fA-F]{64})"?/.exec(txt);
+    if (m) return m[1].toLowerCase();
+    var keyHex = crypto.randomBytes(32).toString('hex');
+    var comment = '\n# 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）\n'
+        + '# 由构建脚本 obfuscate.js 自动生成；留空 = /api/secure-file 停用，PC 端回退明文链路\n'
+        + 'secure_file_key: "' + keyHex + '"\n';
+    var out;
+    if (/^recall_window:[^\n]*$/m.test(txt)) {
+        out = txt.replace(/^recall_window:[^\n]*$/m, function (l) { return l + comment; });
+    } else {
+        out = txt.replace(/\s*$/, '') + '\n' + comment;
+    }
+    fs.writeFileSync(serverCfgPath, out, { encoding: 'utf8' }); // utf8 写入无 BOM
+    console.log('[混淆] 服务端未配置 secure_file_key，已生成并写入 config.yaml');
+    return keyHex;
+}
+
+// sealRaw blob 密文条目（IV12 + 密文 + tag16，无魔数——魔数由 blob 头统一承载，web-cache secureDecryptRaw 对应）
+function sealRaw(plain, key) {
+    var iv = crypto.randomBytes(12); // 每文件独立随机 IV
+    var c = crypto.createCipheriv('aes-256-gcm', key, iv);
+    return Buffer.concat([iv, c.update(plain), c.final(), c.getAuthTag()]);
+}
+
+// sealContainer IMEF1 完整密文容器（魔数5 + IV12 + 密文 + tag16）——主进程 .enc 独立文件用
+// （loader.js decryptContainer 对应；与服务端 securefile.go secureSeal 同格式）
+function sealContainer(plain, key) {
+    var iv = crypto.randomBytes(12); // 每文件独立随机 IV
+    var c = crypto.createCipheriv('aes-256-gcm', key, iv);
+    return Buffer.concat([Buffer.from('IMEF1', 'ascii'), iv, c.update(plain), c.final(), c.getAuthTag()]);
+}
+
+// buildEncryptedBlob 将混淆产物（outRoot）逐文件 AES-256-GCM 加密打包为单一 blob：
+// IMSB1 魔数(5B) + 索引长度 u32LE(4B) + 索引 JSON（{相对路径:{o,l,s,t}}，o/l 相对密文区
+// 起点/长度，s/t 源文件属性供客户端增量比对）+ 密文区（每文件 IV12+密文+tag16）
+function buildEncryptedBlob(manifest, keyHex) {
+    var key = Buffer.from(keyHex, 'hex');
+    var blocks = [];
+    var index = {};
+    var cursor = 0, srcBytes = 0, encBytes = 0;
+    var rels = Object.keys(manifest).sort();
+    for (var i = 0; i < rels.length; i++) {
+        var rel = rels[i];
+        var fp = path.join(outRoot, rel.replace(/\//g, path.sep));
+        var st = fs.statSync(fp);
+        if (!st.isFile()) continue;
+        var enc = sealRaw(fs.readFileSync(fp), key);
+        index[rel] = { o: cursor, l: enc.length, s: manifest[rel].s, t: manifest[rel].t };
+        blocks.push(enc);
+        cursor += enc.length;
+        srcBytes += st.size;
+        encBytes += enc.length;
+    }
+    var idxBuf = Buffer.from(JSON.stringify({ v: 1, files: index }), 'utf8');
+    var head = Buffer.alloc(9);
+    head.write('IMSB1', 0, 'ascii');
+    head.writeUInt32LE(idxBuf.length, 5);
+    fs.writeFileSync(blobOut, Buffer.concat([head, idxBuf].concat(blocks)));
+    return { files: rels.length, srcBytes: srcBytes, encBytes: encBytes, indexLen: idxBuf.length };
+}
+
+// writeSecureKeyModule 生成 secure-key.js：密钥逐字节异或随机掩码后嵌入（掩码每次构建随机，
+// 产物中无可 grep 的明文密钥），main.js 运行时异或还原后注入 web-cache.js 加密链路
+function writeSecureKeyModule(keyHex) {
+    var mask = crypto.randomBytes(32);
+    var key = Buffer.from(keyHex, 'hex');
+    var scr = Buffer.alloc(key.length);
+    for (var i = 0; i < key.length; i++) scr[i] = key[i] ^ mask[i % mask.length];
+    fs.writeFileSync(keyModuleOut,
+        '// 阶段一百三十六：构建期自动生成（obfuscate.js）——前端资源加密密钥（掩码异或扰乱存储），勿手改\n'
+        + 'module.exports={m:"' + mask.toString('hex') + '",k:"' + scr.toString('hex') + '"};\n');
+}
+
+// buildMainModules 阶段一百三十七：主进程业务模块逐文件加密为 <name>.enc（IMEF1 容器，与 web
+// 快照同一密钥），产物落 pc 根随 asar 打包；明文源文件保留在开发机（asar 由 files 规则排除）
+function buildMainModules(keyHex) {
+    var key = Buffer.from(keyHex, 'hex');
+    var srcBytes = 0, encBytes = 0;
+    for (var i = 0; i < MAIN_MODULES.length; i++) {
+        var f = MAIN_MODULES[i];
+        var fp = path.join(__dirname, f);
+        var plain = fs.readFileSync(fp);
+        var enc = sealContainer(plain, key);
+        fs.writeFileSync(path.join(__dirname, f + '.enc'), enc);
+        srcBytes += plain.length;
+        encBytes += enc.length;
+    }
+    return { count: MAIN_MODULES.length, srcBytes: srcBytes, encBytes: encBytes };
+}
+
+// buildLoaderMin 阶段一百三十七：薄启动器构建期压缩（esbuild minify 与 web 层同款：去注释+变量名
+// mangle），产物 loader.min.js 进 asar；开发机 loader.js 源码保留维护，asar 内不再可读实现细节
+async function buildLoaderMin() {
+    var code = fs.readFileSync(path.join(__dirname, 'loader.js'), 'utf8');
+    var r = await esbuild.transform(code, {
+        minify: true,
+        charset: 'utf8',
+        legalComments: 'none',
+        sourcefile: 'loader.js',
+        logLevel: 'silent'
+    });
+    fs.writeFileSync(loaderOut, r.code);
+    return r.code.length;
 }
 
 async function main() {
@@ -129,11 +266,22 @@ async function main() {
     // 源属性清单：客户端增量同步用它替代快照实扫（混淆产物属性不可用于比对）
     fs.writeFileSync(path.join(outRoot, 'snapshot-manifest.json'), JSON.stringify(manifest));
 
+    // ===== 阶段一百三十六：加密快照 blob + 密钥注入 =====
+    var keyHex = resolveOrCreateKey();
+    var blobStat = buildEncryptedBlob(manifest, keyHex);
+    writeSecureKeyModule(keyHex);
+    var mainStat = buildMainModules(keyHex); // 阶段一百三十七：主进程模块加密（薄启动器配套）
+    var loaderLen = await buildLoaderMin(); // 阶段一百三十七：薄启动器压缩（明文入口不可读）
+
     function kb(n) { return (n / 1024).toFixed(1) + 'KB'; }
     console.log('[混淆] 完成：js 混淆 ' + obfCount + ' 个（' + kb(srcBytes) + ' → ' + kb(outBytes) +
         '，压缩率 ' + (srcBytes ? Math.round(outBytes / srcBytes * 100) : 0) + '%），html 注释剥离 ' +
         htmlCount + ' 个（' + kb(htmlBefore) + ' → ' + kb(htmlAfter) + '），原样复制 ' + copyCount +
         ' 个，清单 ' + Object.keys(manifest).length + ' 条，耗时 ' + (Date.now() - t0) + 'ms');
+    console.log('[混淆] 加密快照 blob: ' + blobStat.files + ' 个文件（' + kb(blobStat.srcBytes) + ' → ' +
+        kb(blobStat.encBytes) + '，含索引 ' + kb(blobStat.indexLen) + '）→ web-snapshot.enc；密钥已扰乱注入 secure-key.js');
+    console.log('[混淆] 主进程模块加密: ' + mainStat.count + ' 个（' + kb(mainStat.srcBytes) + ' → ' +
+        kb(mainStat.encBytes) + '）→ loader.js 薄启动器配套；启动器压缩 ' + kb(loaderLen) + ' → loader.min.js');
 }
 
 main().catch(function (e) {

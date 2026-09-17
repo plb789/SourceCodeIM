@@ -99,6 +99,10 @@ func main() {
 	// 阶段一百二十二：网页资源清单（PC 客户端本地缓存增量更新归口；无鉴权，与静态文件同级水位）
 	http.HandleFunc("GET /api/web-manifest", srv.HandleWebManifest)
 
+	// 阶段一百三十六：前端资源密文下发（PC 端磁盘零明文；无鉴权——密文本身即屏障，
+	// 排除规则与清单一致，密钥未配置时 503 由客户端回退明文链路）
+	http.HandleFunc("GET /api/secure-file", srv.HandleSecureFile)
+
 	// 阶段六十四：Agent 任务历史（用户端仅本人任务，鉴权水位与 /api/agents 一致；管理端审计走 adminGuard）
 	http.HandleFunc("GET /api/agent/tasks", srv.HandleAgentTaskList)
 	http.HandleFunc("GET /api/agent/task/{task_id}", srv.HandleAgentTaskDetail)

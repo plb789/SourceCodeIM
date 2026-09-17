@@ -9,3 +9,6 @@ Redis-x64-5.0.14.1/
 *.xlsx
 *.docx
 *.png
+# 阶段一百三十六：PC 加密快照构建产物（obfuscate.js 生成，不入库——blob 体积大且每次构建变化，密钥掩码不随仓库分发）
+im-client/pc/web-snapshot.enc
+im-client/pc/secure-key.js

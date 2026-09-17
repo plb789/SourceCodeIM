@@ -9,7 +9,7 @@
     "fileDescription": "即时通讯 PC 桌面客户端",
     "productName": "即时通讯"
   },
-  "main": "main.js",
+  "main": "loader.min.js",
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --win --x64"
@@ -23,7 +23,20 @@
     "appId": "com.im.client",
     "productName": "im-client",
     "files": [
-      "!bundled/**"
+      "!bundled/**",
+      "!builder-cache/**",
+      "!dist/**",
+      "!loader.js",
+      "!obfuscate.js",
+      "!build.bat",
+      "!main.js",
+      "!web-cache.js",
+      "!agent-executor.js",
+      "!browser-manager.js",
+      "!toolchain-manager.js",
+      "!mcp-manager.js",
+      "!node-runtime.js",
+      "!lsp-manager.js"
     ],
     "win": {
       "target": "nsis",
@@ -41,10 +54,6 @@
       {
         "from": "bundled/uv-runtime.zip",
         "to": "uv-runtime.zip"
-      },
-      {
-        "from": "bundled/web-snapshot",
-        "to": "web-snapshot"
       }
     ]
   },

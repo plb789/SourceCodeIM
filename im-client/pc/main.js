@@ -68,7 +68,34 @@ try {
 } catch (e) { }
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://127.0.0.1:8888/';
+const SERVER_URL = 'http://im.sxgyxny.com/';
+
+// ===== 阶段一百三十六：前端资源加密密钥解析归口 =====
+// 密钥来源优先级：1) 构建期生成的 secure-key.js（obfuscate.js 产出，密钥经随机掩码异或扰乱
+// 后嵌入，随 app.asar 打包——源码/产物中均无明文密钥可 grep）；2) dev 未打包时回退读取服务端
+// config.yaml 的 secure_file_key（与 /api/secure-file 同源，dev 全链路实测用）。
+// IM_SECURE=0 环境变量强制关闭加密链路（回退旧版明文行为，排查问题用）。
+function resolveSecureKey() {
+    if (process.env.IM_SECURE === '0') return '';
+    try {
+        var m = require('./secure-key.js');
+        var mask = Buffer.from(m.m, 'hex');
+        var scr = Buffer.from(m.k, 'hex');
+        var key = Buffer.alloc(scr.length);
+        for (var i = 0; i < scr.length; i++) key[i] = scr[i] ^ mask[i % mask.length];
+        if (key.length === 32) return key.toString('hex');
+    } catch (e) { /* secure-key.js 未生成（未跑构建混淆）：继续 dev 回退 */ }
+    if (!app.isPackaged) {
+        try {
+            // dev 回退：服务端配置同源密钥（路径锚定仓库结构相对推导，不硬编码绝对路径）
+            var cfgPath = path.resolve(__dirname, '..', '..', 'im-server', 'bin', 'config.yaml');
+            var txt = fs.readFileSync(cfgPath, 'utf8');
+            var mm = /secure_file_key:\s*"?([0-9a-fA-F]{64})"?/.exec(txt);
+            if (mm) return mm[1].toLowerCase();
+        } catch (e) { /* 服务端配置不可读：加密链路关闭，明文回退 */ }
+    }
+    return '';
+}
 
 // 应用图标路径（可配置）：托盘图标使用，更换新图标只需改这一处，支持 ico/png 任意文件名与完整路径；
 // 注意与 build.bat 的 APP_ICON 变量（exe 图标）同步修改保持一致
@@ -1255,7 +1282,8 @@ app.whenReady().then(async function () {
     // 拦截必须先于页面加载安装（静态资源命中本地秒开）；sync 内部自带 4s 总超时与全静默兜底，
     // 服务端离线/超时不阻塞启动（缺失文件运行期透传兜底）。同 origin 方案无需登录态迁移
     // （原 app:// 方案需 migrateLegacyStorage，实测跨协议导航稳定性问题后整体回退）
-    webCache.init({ serverUrl: SERVER_URL });
+    // 阶段一百三十六：注入加密密钥（resolveSecureKey 归口）——启用后磁盘只落密文、内存解密
+    webCache.init({ serverUrl: SERVER_URL, secureKey: resolveSecureKey() });
     webCache.installInterceptor();
     createWindow();
     // 原实现：await webCache.sync();（页面先于同步加载，服务端更新轮窗口停留旧版直至下次重启，用户实测 CSS 更新不生效定位）

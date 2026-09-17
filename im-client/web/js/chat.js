@@ -4410,6 +4410,7 @@
     var agentWsPrimaryEl = document.getElementById('agent-ws-primary');
     var agentWsPrimary = ''; // 面板编辑态：主工作区目录（空=默认工作区）
     var agentWsDirs = [];    // 面板编辑态：授权目录列表
+    var agentWsPrimarySaved = ''; // 打开面板时的主工作区快照：保存后对比判断根目录是否切换（切换才需重同步文件面板）
 
     // 是否支持本地工作区配置（仅 PC 端 preload 暴露了 sandbox API；Web 端工作区在服务端，无自选意义）
     function agentWsSupported() {
@@ -4457,6 +4458,7 @@
             cfg = cfg || {};
             agentWsPrimary = cfg.primary || '';
             agentWsDirs = (cfg.dirs || []).slice();
+            agentWsPrimarySaved = agentWsPrimary; // 快照打开时刻的主工作区（保存后对比用）
             agentWsPrimaryEl.textContent = agentWsPrimary || '未设置（使用默认工作区）';
             agentWsPrimaryEl.title = agentWsPrimary || '';
             renderAgentWsDirs();
@@ -4503,6 +4505,16 @@
             if (!r || !r.ok) { showToast((r && r.msg) || '保存失败'); return; }
             agentWsPrimary = r.cfg.primary;
             agentWsDirs = r.cfg.dirs;
+            // 主工作区切换 → 文件面板立即跟随：旧根下打开的标签/展开态/角标全部失效，
+            // 重置后按新根重拉 proj 元数据与文件树（左上角根路径回显随 tree 响应立即更新，无需手动刷新）
+            if (agentWsPrimary !== agentWsPrimarySaved) {
+                agentWsPrimarySaved = agentWsPrimary;
+                Object.keys(wsPanel.tabs).forEach(wsPanelCloseTab);
+                wsPanel.expanded = {};
+                wsPanel.badges = {};
+                wsPanel.root = '';
+                if (wsPanel.aside) wsPanelProjRestore().catch(function () {}); // 面板未创建过=下次打开自然用新根，静默跳过
+            }
             IMSocket.send({
                 msg_type: MSG.AGENT_SANDBOX,
                 content: JSON.stringify({ primary: agentWsPrimary, dirs: agentWsDirs })

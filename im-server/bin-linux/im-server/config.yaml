@@ -28,6 +28,13 @@ max_direct_size: 2147483648
 # 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
 recall_window: 120
 
+# 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
+# 用途：/api/secure-file 密文接口与 PC 端加密快照 web-snapshot.enc 共用同一密钥；
+# 密钥仅存本文件与 PC 构建产物（掩码扰乱后嵌入 secure-key.js），明文不下发不下盘
+# 留空 = 密文接口停用，PC 端自动回退明文链路（功能不受影响，仅无加密）
+# 生成方式（PowerShell）：-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
+secure_file_key: "04295b6cbee2a305b95ed81c52bf47637939dcdd40e4525dc644286a2b107402"
+
 # MySQL 数据源
 mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.50:4716)/im?charset=utf8mb4&parseTime=True&loc=Local"
 # Redis 配置

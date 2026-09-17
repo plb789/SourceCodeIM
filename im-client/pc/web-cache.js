@@ -9,12 +9,23 @@
 //   原行为完全一致，无需任何前端适配与登录态迁移。
 // 实测依据（阶段一百二十二）：本机 Electron 28 下自定义协议 app:// 的页面导航存在稳定性问题
 //   （跨协议导航偶发 ERR_FAILED(-2)），同 origin http 拦截方案经最小实测（拦截/透传/origin 三项）通过。
-// 快照随安装包内置（build.bat robocopy 生成，electron-builder extraResources 嵌入 resources/web-snapshot），
-// 缓存目录只存增量差异（快照只读），首启无需全量下载即可秒开。启动时拉取 /api/web-manifest 清单增量更新。
+// 原实现：快照经 build.bat robocopy 生成 + extraResources 嵌入 resources/web-snapshot（阶段一百三十六起
+// 该步骤已移除——加密快照改由 obfuscate.js 生成 web-snapshot.enc 打入 asar），缓存目录只存增量差异
+// （快照只读），首启无需全量下载即可秒开。启动时拉取 /api/web-manifest 清单增量更新。
+// ===== 阶段一百三十六：前端资源全链路加密（PC 端磁盘零明文归口） =====
+// 密文通道：服务端 /api/secure-file 下发密文容器（IMEF1 魔数 + IV12 + AES-256-GCM 密文+tag16，
+// 定长开销 33 字节），本地只落 <rel>.enc 密文，拦截器内存解密后响应页面——安装目录（内置加密快照
+// blob web-snapshot.enc，随 app.asar 打包）、userData（.enc 缓存）、网络抓包三条通道均无明文。
+// 快照 blob 格式：IMSB1 魔数(5B) + 索引长度(u32LE 4B) + 索引 JSON（相对路径 → {o,l,s,t}：
+// o/l 为密文区内偏移与长度，s/t 为源文件 size/mtime 供增量比对）+ 密文区。
+// 加密链路开关归口 main.js（cfg.secureKey）：生产取构建期 secure-key.js 掩码注入的密钥，
+// dev 回退服务端 config.yaml 的 secure_file_key；IM_SECURE=0 强制关闭回退明文（行为与旧版一致）。
+// 解密自愈：密钥轮换等场景旧密文解密失败时顺延下一级（blob/透传），页面永不因缓存解密失败 500。
 
 const { app, net, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { Readable } = require('stream');
 
 // 增量同步总超时：超时即放行窗口加载（未完成的后台下载中止，缓存保持一致旧版，下次启动重试）
@@ -38,10 +49,25 @@ const DYNAMIC_PREFIXES = [
     '/static/_git_extract/'
 ];
 
+// ===== 阶段一百三十六：加密链路常量（与服务端 securefile.go / 构建期 obfuscate.js 三方一致） =====
+const SECURE_MAGIC = Buffer.from('IMEF1', 'ascii'); // 密文容器魔数
+const SECURE_HEADER_LEN = 17;                       // 容器头：魔数 5 + IV 12
+const SECURE_OVERHEAD = 33;                         // 容器定长开销：5 + 12 + tag 16
+const BLOB_MAGIC = Buffer.from('IMSB1', 'ascii');   // 内置加密快照 blob 魔数
+const BLOB_HEADER_LEN = 9;                          // blob 头：魔数 5 + 索引长度 u32LE 4
+
 let serverUrl = '';   // 服务端根地址（main.js 注入，如 http://127.0.0.1:8888/）
 let serverHost = '';  // 服务端 host（含端口，拦截范围归口：仅该 host 的 http 请求走本地缓存逻辑）
 let cacheDir = '';    // 增量缓存目录（userData/webcache，可写）
-let snapshotDir = ''; // 内置快照目录（打包 resources/web-snapshot；dev 为 ../web，只读）
+let snapshotDir = ''; // 内置明文快照目录（仅明文回退链路使用：dev 为 ../web；打包版自阶段一百三十六起不再内置明文快照，目录不存在时回退全量下载）
+// 阶段一百三十六：加密链路状态
+let secureKey = null;  // 密钥字节（32B）；非空即加密链路启用（磁盘只落密文、内存解密、blob 参与回退）
+let blobFile = '';     // 内置加密快照 blob 路径（pc 根目录 web-snapshot.enc，打包后位于 app.asar 内）
+let blobState = 0;     // blob 加载状态：0=未探测 1=可用 2=不可用（惰性探测，首次访问才加载）
+let blobIndex = null;  // blob 索引 {相对路径: {o,l,s,t}}（o/l 相对密文区，s/t 源属性）
+let blobIdxLen = 0;    // blob 索引区字节长度（密文区起始偏移 = BLOB_HEADER_LEN + blobIdxLen）
+let blobFd = null;     // blob 文件句柄（惰性打开常驻，按区间读取不占整块内存）
+let blobHitLogged = false; // blob 首命中诊断日志标记（每次运行仅记一条，防逐请求刷屏）
 
 // MIME 表：本地文件按扩展名返回类型（net.fetch(file://) 行为不一致，自归口更稳）
 const MIME_MAP = {
@@ -90,7 +116,17 @@ function init(cfg) {
         ? path.join(process.resourcesPath, 'web-snapshot')
         : path.resolve(__dirname, '..', 'web'));
     try { fs.mkdirSync(cacheDir, { recursive: true }); } catch (e) { }
-    console.log('[web-cache] 缓存目录:', cacheDir, '| 快照目录:', snapshotDir);
+    // 阶段一百三十六：加密链路开关（cfg.secureKey 为 64 位 hex；解析归口 main.js）。
+    // 启用后：磁盘只落 <rel>.enc 密文与加密 blob，拦截器内存解密；未启用：行为与旧版明文一致
+    if (cfg && cfg.secureKey && /^[0-9a-fA-F]{64}$/.test(String(cfg.secureKey))) {
+        secureKey = Buffer.from(String(cfg.secureKey), 'hex');
+    } else {
+        secureKey = null;
+    }
+    blobFile = path.join(__dirname, 'web-snapshot.enc'); // 构建期产物（obfuscate.js 生成），随 app.asar 打包
+    blobState = 0; // 重置 blob 探测状态（init 理论上仅调用一次，防御性归零）
+    console.log('[web-cache] 缓存目录:', cacheDir, '| 快照目录:', snapshotDir,
+        '| 加密链路:', secureKey ? '启用（磁盘零明文）' : '关闭（明文回退）');
 }
 
 // installInterceptor app ready 后安装 http 拦截（main.js whenReady 调用，先于任何窗口加载）
@@ -176,6 +212,150 @@ function serveFile(filePath, req) {
     });
 }
 
+// ===== 阶段一百三十六：加密链路核心（密文容器解密 / 加密快照 blob / 内存响应） =====
+
+// secureDecrypt 解密密文容器（IMEF1 + IV12 + GCM sealed），认证失败/格式不符抛异常
+function secureDecrypt(buf) {
+    if (!buf || buf.length <= SECURE_OVERHEAD || !buf.subarray(0, 5).equals(SECURE_MAGIC)) {
+        throw new Error('密文容器格式不符');
+    }
+    var sealed = buf.subarray(SECURE_HEADER_LEN);
+    var d = crypto.createDecipheriv('aes-256-gcm', secureKey, buf.subarray(5, SECURE_HEADER_LEN));
+    d.setAuthTag(sealed.subarray(sealed.length - 16));
+    return Buffer.concat([d.update(sealed.subarray(0, sealed.length - 16)), d.final()]);
+}
+
+// secureDecryptRaw 解密 blob 密文条目（IV12 + GCM sealed，无魔数头——魔数由 blob 头统一承载，
+// 实测修正：条目直接走 secureDecrypt 会因缺 IMEF1 头误判"容器格式不符"而整体回落透传）
+function secureDecryptRaw(buf) {
+    if (!buf || buf.length <= 28) { // 条目定长开销：IV 12 + tag 16
+        throw new Error('blob 密文条目过短');
+    }
+    var sealed = buf.subarray(12);
+    var d = crypto.createDecipheriv('aes-256-gcm', secureKey, buf.subarray(0, 12));
+    d.setAuthTag(sealed.subarray(sealed.length - 16));
+    return Buffer.concat([d.update(sealed.subarray(0, sealed.length - 16)), d.final()]);
+}
+
+// ensureBlob 惰性加载内置加密快照（读取失败标记不可用并降级缓存/透传，不再重复探测）
+// 打包形态 blob 位于 app.asar 内，Electron 主进程 fs 可按句柄读取；按区间读取不占整块内存
+function ensureBlob() {
+    if (blobState !== 0) return blobState === 1;
+    blobState = 2;
+    try {
+        var fd = fs.openSync(blobFile, 'r');
+        var head = Buffer.alloc(BLOB_HEADER_LEN);
+        if (fs.readSync(fd, head, 0, BLOB_HEADER_LEN, 0) !== BLOB_HEADER_LEN) throw new Error('blob 头不完整');
+        if (!head.subarray(0, 5).equals(BLOB_MAGIC)) throw new Error('blob 魔数不符');
+        var idxLen = head.readUInt32LE(5);
+        var idxBuf = Buffer.alloc(idxLen);
+        if (fs.readSync(fd, idxBuf, 0, idxLen, BLOB_HEADER_LEN) !== idxLen) throw new Error('blob 索引不完整');
+        var idx = JSON.parse(idxBuf.toString('utf8')).files || {};
+        blobIndex = idx;
+        blobIdxLen = idxLen;
+        blobFd = fd;
+        blobState = 1;
+        console.log('[web-cache] 内置加密快照已加载: ' + Object.keys(idx).length + ' 个文件');
+    } catch (e) {
+        console.log('[web-cache] 内置加密快照不可用（' + (e && e.message) + '），走加密缓存/透传');
+        if (blobFd !== null) { try { fs.closeSync(blobFd); } catch (e2) { } blobFd = null; }
+        blobIndex = null;
+    }
+    return blobState === 1;
+}
+
+// serveBuffer 内存明文响应：与 serveFile 同款语义（Range/206、no-cache），数据源为解密后的 Buffer
+function serveBuffer(plain, mimeType, req) {
+    var baseHeaders = {
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache' // 与服务端静态服务语义一致：本地解密同样零回源
+    };
+    var range = req.headers.get('range') || '';
+    var m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!m) {
+        baseHeaders['Content-Length'] = String(plain.length);
+        return new Response(plain, { status: 200, headers: baseHeaders });
+    }
+    // Range 解析：与 serveFile 同款三形态（bytes=start-end / start- / -suffix）
+    var start = 0, end = plain.length - 1;
+    if (m[1] === '' && m[2] !== '') {
+        start = Math.max(0, plain.length - parseInt(m[2], 10));
+    } else {
+        start = parseInt(m[1] || '0', 10);
+        if (m[2] !== '') end = Math.min(end, parseInt(m[2], 10));
+    }
+    if (isNaN(start) || isNaN(end) || start > end || start >= plain.length) {
+        return new Response(null, {
+            status: 416,
+            headers: { 'Content-Range': 'bytes */' + plain.length }
+        });
+    }
+    return new Response(plain.subarray(start, end + 1), {
+        status: 206,
+        headers: {
+            'Content-Type': mimeType,
+            'Content-Length': String(end - start + 1),
+            'Content-Range': 'bytes ' + start + '-' + end + '/' + plain.length,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'no-cache'
+        }
+    });
+}
+
+// resolveLocalEnc 加密缓存解析：仅缓存目录，路径追加 .enc 后缀（磁盘零明文归口），越界防护同 resolveLocal
+function resolveLocalEnc(pathname) {
+    var rel;
+    try { rel = decodeURIComponent(pathname); } catch (e) { return null; }
+    if (rel === '/' || rel === '') rel = '/index.html'; // 目录索引归口
+    var fp = path.normalize(path.join(cacheDir, rel + '.enc'));
+    // 越界防护：解析结果必须仍位于缓存目录内（防 %2e%2e 穿越读任意密文文件）
+    if (fp !== cacheDir && fp.indexOf(cacheDir + path.sep) !== 0) return null;
+    try {
+        var st = fs.statSync(fp);
+        if (st.isFile()) return fp;
+    } catch (e) { }
+    return null;
+}
+
+// tryServeEncrypted 读取加密缓存并内存解密响应；解密失败返回 null（调用方顺延 blob/透传——
+// 密钥轮换等场景旧缓存自动降级自愈，页面永不因缓存解密失败 500）
+function tryServeEncrypted(encPath, mimeType, req) {
+    try {
+        var plain = secureDecrypt(fs.readFileSync(encPath));
+        return serveBuffer(plain, mimeType, req);
+    } catch (e) {
+        console.warn('[web-cache] 密文缓存解密失败，顺延快照/透传:', path.basename(encPath), e && e.message);
+        return null;
+    }
+}
+
+// tryServeBlob 从内置加密快照按区间读取并内存解密响应；未命中/不可用/解密失败返回 null
+// 密文区起始 = blob 头 9B + 索引区；条目偏移 o 相对密文区起点（构建期 obfuscate.js 写入）。
+// 注意 blob 索引键为不带前导斜杠的相对路径（与清单/源属性归口一致），查询前需归一
+function tryServeBlob(pathname, req) {
+    if (!ensureBlob()) return null;
+    var rel;
+    try { rel = decodeURIComponent(pathname); } catch (e) { return null; }
+    rel = (rel === '/' || rel === '') ? 'index.html' : rel.replace(/^\/+/, ''); // 目录索引归口 + 去前导斜杠
+    var ent = blobIndex[rel];
+    if (!ent || !ent.l) return null;
+    try {
+        var enc = Buffer.alloc(ent.l);
+        var read = fs.readSync(blobFd, enc, 0, ent.l, BLOB_HEADER_LEN + blobIdxLen + ent.o);
+        if (read !== ent.l) throw new Error('blob 读取不完整 ' + read + '/' + ent.l);
+        var plain = secureDecryptRaw(enc);
+        if (!blobHitLogged) {
+            blobHitLogged = true;
+            console.log('[web-cache] 命中内置加密快照（首次）: ' + rel + '（后续命中不再记录）');
+        }
+        return serveBuffer(plain, mimeOf(rel), req);
+    } catch (e) {
+        console.warn('[web-cache] blob 条目解密失败:', rel, e && e.message);
+        return null;
+    }
+}
+
 // passthrough 原样透传请求到真实网络（bypass 防递归；方法/头/体流式透传，上传 POST 场景依赖）
 function passthrough(req) {
     var init = { bypassCustomProtocolHandlers: true };
@@ -198,7 +378,8 @@ function passthrough(req) {
     return net.fetch(req, init);
 }
 
-// handleRequest 服务端地址请求处理归口：动态前缀透传 → 本地缓存 → 内置快照 → 透传兜底
+// handleRequest 服务端地址请求处理归口：动态前缀透传 → 加密链路（缓存.enc → blob 快照 → 透传兜底）
+//   / 明文链路（缓存 → 快照 → 透传兜底，原实现）
 async function handleRequest(req) {
     try {
         var u = new URL(req.url);
@@ -206,6 +387,19 @@ async function handleRequest(req) {
         if (isDynamicPath(pathname)) {
             return await passthrough(req);
         }
+        // 阶段一百三十六：加密链路——磁盘零明文，内存解密响应
+        if (secureKey) {
+            var encPath = resolveLocalEnc(pathname);
+            if (encPath) {
+                var encResp = tryServeEncrypted(encPath, mimeOf(pathname), req);
+                if (encResp) return encResp; // 解密失败（密钥轮换等）顺延 blob/透传，自愈不 500
+            }
+            var blobResp = tryServeBlob(pathname, req);
+            if (blobResp) return blobResp;
+            // 兜底透传：加密缓存与 blob 均未命中（清单遗漏、工具链 zip 等大文件）——等价旧行为，任何资源不 404
+            return await passthrough(req);
+        }
+        // 原实现（明文三级回退：缓存目录 → 内置快照 → 透传；IM_SECURE=0 / 密钥未配置时保持不变）
         var local = resolveLocal(pathname);
         if (local) {
             return serveFile(local, req);
@@ -287,6 +481,51 @@ async function downloadOne(relPath, info, signal) {
     fs.utimesSync(fp, mt, mt);
 }
 
+// downloadEncOne 阶段一百三十六：下载单个文件的密文容器到缓存（/api/secure-file；tmp+rename
+// 原子替换，回写服务端 mtime 供下次比对）。下载即解密验签（GCM 认证失败判失败，坏包不入缓存），
+// 返回密文长度（写清单 es 供下次磁盘属性比对）
+async function downloadEncOne(relPath, info, signal) {
+    var url = serverUrl.replace(/\/+$/, '') + '/api/secure-file?path=' + encodeURIComponent(relPath);
+    var res = await net.fetch(url, { signal: signal, bypassCustomProtocolHandlers: true });
+    if (!res.ok) throw new Error('下载 ' + relPath + ' 状态 ' + res.status);
+    var buf = Buffer.from(await res.arrayBuffer());
+    // 长度校验：容器定长开销 33 字节（魔数5+IV12+tag16），不符即坏包
+    if (buf.length !== SECURE_OVERHEAD + info.s) {
+        throw new Error('密文长度不符 ' + relPath + ' ' + buf.length + '!=' + (SECURE_OVERHEAD + info.s));
+    }
+    secureDecrypt(buf); // 下载即验签：GCM 认证失败立即中止本轮（缓存保持一致旧版，下次启动重试）
+    var fp = path.join(cacheDir, relPath + '.enc');
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    var tmp = fp + '.tmp';
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, fp);
+    // 回写服务端修改时间：下次启动 mtime 比对才跨启动有效（密文长度 es 另记清单）
+    var mt = new Date(info.t);
+    fs.utimesSync(fp, mt, mt);
+    return buf.length;
+}
+
+// cleanLegacyPlaintext 阶段一百三十六：遍历缓存目录删除非 .enc 文件（加密链路升级自旧明文
+// 缓存版本的一次性清理；manifest.json 保留），保证 userData 磁盘零明文
+function cleanLegacyPlaintext() {
+    var removed = 0;
+    var stack = [''];
+    while (stack.length) {
+        var rel = stack.pop();
+        var dir = rel ? path.join(cacheDir, rel) : cacheDir;
+        var entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+        for (var i = 0; i < entries.length; i++) {
+            var ent = entries[i];
+            var childRel = rel ? rel + '/' + ent.name : ent.name;
+            if (ent.isDirectory()) { stack.push(childRel); continue; }
+            if (ent.name === 'manifest.json' || /\.enc$/i.test(ent.name)) continue;
+            try { fs.unlinkSync(path.join(cacheDir, childRel)); removed++; } catch (e) { }
+        }
+    }
+    if (removed) console.log('[web-cache] 已清理旧版明文缓存 ' + removed + ' 个文件（加密链路一次性升级清理）');
+}
+
 // sync 启动增量同步：拉服务端清单 → 与本地（缓存清单+快照索引）比对 → 仅下载差异
 // 总超时 SYNC_TIMEOUT_MS，超时中止未完成下载（缓存保持一致旧版，下次启动重试）；任何失败静默不阻塞启动
 async function sync() {
@@ -295,6 +534,9 @@ async function sync() {
     var ctrl = new AbortController();
     var timer = setTimeout(function () { ctrl.abort(new Error('同步总超时')); }, SYNC_TIMEOUT_MS);
     try {
+        // 0. 阶段一百三十六：加密链路一次性清理——升级前旧版本可能残留明文缓存文件，统一删除
+        // （仅保留 .enc 密文与 manifest.json），保证 userData 磁盘零明文
+        if (secureKey) cleanLegacyPlaintext();
         // 1. 拉取服务端清单
         var mCtrl = new AbortController();
         var mTimer = setTimeout(function () { mCtrl.abort(); }, MANIFEST_TIMEOUT_MS);
@@ -309,26 +551,43 @@ async function sync() {
         var remote = {};
         (data.files || []).forEach(function (f) { remote[f.p] = { s: f.s, t: f.t }; });
 
-        // 2. 本地索引 = 缓存清单 + 快照索引（优先源属性清单，混淆产物实扫属性不可比对；
-        // 快照只读不入缓存，命中即视为"本地已有"）
+        // 2. 本地索引 = 缓存清单实测磁盘属性 + 快照索引（快照只读不入缓存，命中即视为"本地已有"）
         // 阶段一百三十二修复（用户实测：PC 端 index.html/file-viewer.html 长期陈旧导致浏览区
         // 打开文件抛错）：原实现直接信任缓存 manifest 记录的属性做差异比对，一旦 manifest 与
         // 磁盘实际内容脱节（如快照索引占位轮写过 manifest、或下载轮部分成功后清单被覆盖），
         // 同步会永远跳过这些文件，拦截器又优先读缓存目录，陈旧页面被永久服务——死锁无自愈。
-        // 现改为对缓存目录逐文件 statSync 实测磁盘属性（mtime 取整毫秒对齐服务端精度），
-        // 磁盘缺失或属性与远端不符即判定差异，缓存目录实际内容成为比对唯一事实来源。
+        // 现改为实测磁盘属性（磁盘缺失或属性与远端不符即判定差异，缓存目录实际内容成为比对唯一事实来源）。
+        // 阶段一百三十六：加密链路下缓存文件为 <rel>.enc 密文容器（明文大小不可从磁盘直接得知），
+        // 磁盘实测基于清单记录的"密文长度 es + 下载时回写的服务端 mtime"双比对，脱节/损坏即判差异，
+        // 语义与明文形态等价（唯一事实来源仍是缓存目录实际内容）。
         var cached = readManifest();
+        var oldEs = {}; // 旧清单记录的密文长度（本轮未重下载的条目沿用，供新清单写入）
         var localIdx = {};
         if (cached && cached.files) {
             cached.files.forEach(function (f) {
-                // 原实现（信任清单，磁盘脱节即死锁）：localIdx[f.p] = { s: f.s, t: f.t };
-                try {
-                    var st = fs.statSync(path.join(cacheDir, f.p));
-                    localIdx[f.p] = { s: st.size, t: Math.floor(st.mtimeMs) };
-                } catch (e) { /* 磁盘无此文件：不占位，交给快照命中或下载补齐 */ }
+                if (f.es) oldEs[f.p] = f.es;
+                if (secureKey) {
+                    // 加密链路：实测 <rel>.enc（密文长度与回写 mtime 双比对）
+                    try {
+                        var st = fs.statSync(path.join(cacheDir, f.p + '.enc'));
+                        if (st.size === f.es && Math.floor(st.mtimeMs) === f.t) {
+                            localIdx[f.p] = { s: f.s, t: f.t };
+                        }
+                    } catch (e) { /* 磁盘无此密文文件：不占位，交给快照命中或下载补齐 */ }
+                } else {
+                    // 原实现（明文链路磁盘实测，阶段一百三十二）
+                    try {
+                        var st = fs.statSync(path.join(cacheDir, f.p));
+                        localIdx[f.p] = { s: st.size, t: Math.floor(st.mtimeMs) };
+                    } catch (e) { /* 磁盘无此文件：不占位，交给快照命中或下载补齐 */ }
+                }
             });
         }
-        var snapIdx = readSnapshotManifest() || walkFiles(snapshotDir);
+        // 快照索引：加密链路取内置 blob 索引（构建期记录源属性 s/t）；明文链路取快照源属性
+        // 清单/实扫（原实现）。blob 不可用时快照索引为空，全部差异走密文下载补齐（自愈）
+        var snapIdx = secureKey
+            ? (ensureBlob() ? blobIndex : {})
+            : (readSnapshotManifest() || walkFiles(snapshotDir));
         Object.keys(snapIdx).forEach(function (p) {
             if (!localIdx[p]) localIdx[p] = snapIdx[p];
         });
@@ -344,20 +603,29 @@ async function sync() {
         if (cached && cached.files) {
             cached.files.forEach(function (f) {
                 if (!remote[f.p]) {
-                    try { fs.unlinkSync(path.join(cacheDir, f.p)); removed++; } catch (e) { }
+                    try {
+                        // 阶段一百三十六：加密链路清理 <rel>.enc；原实现（明文）：path.join(cacheDir, f.p)
+                        fs.unlinkSync(path.join(cacheDir, f.p + (secureKey ? '.enc' : '')));
+                        removed++;
+                    } catch (e) { }
                 }
             });
         }
 
         // 4. 并发下载（任何单个失败即中止本轮：缓存保持一致旧版，下次启动重试）
         var done = 0, failed = null;
+        var esMap = {}; // 加密链路：本轮下载实得的密文长度（写清单 es 供下次磁盘属性比对）
         if (todo.length) {
             var queue = todo.slice();
             async function worker() {
                 while (queue.length && !failed) {
                     var p = queue.shift();
                     try {
-                        await downloadOne(p, remote[p], ctrl.signal);
+                        if (secureKey) {
+                            esMap[p] = await downloadEncOne(p, remote[p], ctrl.signal);
+                        } else {
+                            await downloadOne(p, remote[p], ctrl.signal); // 原实现（明文直存）
+                        }
                         done++;
                     } catch (e) {
                         if (!failed) failed = e;
@@ -370,8 +638,14 @@ async function sync() {
             if (failed) throw failed;
         }
 
-        // 5. 写新清单（tmp+rename 原子）：记录全部远端条目，下次启动直接比对
-        var manifest = { version: data.version, files: Object.keys(remote).map(function (p) { return { p: p, s: remote[p].s, t: remote[p].t }; }) };
+        // 5. 写新清单（tmp+rename 原子）：记录全部远端条目，下次启动直接比对；
+        // 加密链路附加密文长度 es（本轮下载实得 / 旧清单沿用），供下次磁盘属性双比对
+        // 原实现：files 仅含 {p,s,t}
+        var manifest = { version: data.version, files: Object.keys(remote).map(function (p) {
+            return secureKey
+                ? { p: p, s: remote[p].s, t: remote[p].t, es: (esMap[p] !== undefined ? esMap[p] : (oldEs[p] || 0)) }
+                : { p: p, s: remote[p].s, t: remote[p].t };
+        }) };
         var mfp = path.join(cacheDir, 'manifest.json');
         var mtmp = mfp + '.tmp';
         fs.writeFileSync(mtmp, JSON.stringify(manifest));

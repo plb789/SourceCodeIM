@@ -21,6 +21,10 @@ type Config struct {
 	MaxConnections int `yaml:"max_connections"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
+	// 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
+	// 留空时 /api/secure-file 密文接口停用（返回 503），PC 端自动回退明文链路
+	// 与 PC 构建期注入密钥（secure-key.js 掩码扰乱）同源，明文仅存本文件不下发
+	SecureFileKey string `yaml:"secure_file_key"`
 	// 前端静态目录（web_dir，缺省时从 exe 所在目录逐级向上查找 im-client/web，相对路径基于 exe 所在目录解析）
 	WebDir string `yaml:"web_dir"`
 	// 阶段二十四：聊天文件持久化存储目录（相对路径基于 exe 所在目录解析，缺省时基于 WebDir 推导，位于前端静态目录内可直接 URL 访问）
