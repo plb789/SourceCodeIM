@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN" class="app-booting">
 <head>
     <meta charset="UTF-8">
@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.37">
+    <link rel="stylesheet" href="css/style.css?v=2.38">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -1113,7 +1113,7 @@
 
     <script src="js/socket.js?v=1.23"></script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
-    <script src="js/screenshot.js?v=1.7"></script>
+    <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
     <script src="js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
@@ -1127,7 +1127,7 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.16"></script>
+    <script src="js/chat.js?v=3.20"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

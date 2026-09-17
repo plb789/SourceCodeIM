@@ -3179,6 +3179,74 @@ html, body {
     gap: 12px;
 }
 
+/* ===== 阶段一百三十九：长截图（滚动拼接）——live 态隐藏聊天 UI + 悬浮小工具条 ===== */
+/* live 态（根节点 shot-live 类由 chat.js 长截图链路开/关）：主窗口已收缩为 300×54 悬浮小条，
+   聊天界面整体隐藏（窗口内只留工具条本体）——同截图冻结隐藏标题栏的根节点类方案 */
+.shot-live .app-titlebar,
+.shot-live .login-view,
+.shot-live .chat-view {
+    display: none !important;
+}
+
+/* 悬浮小工具条：窗口收缩后充满整个窗口（主进程 stitch:begin 定位到选区下方 12px/越界翻转上方） */
+.shot-live-toolbar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 300px;
+    height: 54px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    z-index: 12001; /* 压过自绘标题栏(12000)，收缩过渡期不被顶栏遮挡 */
+}
+
+.shot-live-toolbar.hidden {
+    display: none;
+}
+
+.shot-live-status {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.shot-live-btn {
+    flex: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.shot-live-btn:hover {
+    background: var(--hover);
+}
+
+.shot-live-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.shot-live-btn.primary:hover {
+    opacity: 0.85;
+    background: var(--primary);
+}
+
 /* ===== 阶段四十：消息引用（微信同款：右键引用 → 引用条 → 引用信封随消息发出） ===== */
 /* 气泡内引用块：灰底 + 主题色左边框，文字左摘要、右可选缩略图，点击定位原消息 */
 .msg-quote {

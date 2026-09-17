@@ -3467,6 +3467,26 @@
         }).catch(function () { /* 取失败保持默认文案 */ });
     }
 
+    // 拿全屏屏幕流（录屏/长截图共用）：主进程给屏幕源 id → getUserMedia desktop 源（无系统共享弹窗）
+    function getDesktopStream() {
+        return window.desktop.recSource().then(function (sourceId) {
+            if (!sourceId) throw new Error('未找到屏幕源');
+            var dpr = window.devicePixelRatio || 1;
+            return navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                    mandatory: {
+                        chromeMediaSource: 'desktop',
+                        chromeMediaSourceId: sourceId,
+                        maxWidth: Math.round((window.screen.width || 1920) * dpr),
+                        maxHeight: Math.round((window.screen.height || 1080) * dpr),
+                        maxFrameRate: 30
+                    }
+                }
+            });
+        });
+    }
+
     // 录屏入口：抓屏冻结选区（与截图同链路，"隐藏当前窗口"开关同样生效）
     function startRecordFlow() {
         if (!window.desktop || !window.desktop.captureScreen || !window.desktop.recBegin) {
@@ -3474,6 +3494,7 @@
             return;
         }
         if (!IMSocket.isConnected()) { showToast('请先登录'); return; }
+        if (stitchState.active) { showToast('长截图进行中，请先完成或取消'); return; } // 长截图与录屏互斥（全局快捷键可交叉触发）
         if (recState.active || recState.recorder) { showToast(recShortcutLabel ? '录屏进行中，按 ' + recShortcutLabel + ' 停止' : '录屏进行中'); return; }
         if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
         window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
@@ -3495,22 +3516,7 @@
         recState.snapW = snapW;
         recState.snapH = snapH;
         var beginPromise = window.desktop.recBegin().catch(function () { return false; }); // 退场失败不阻断录制（画面可能带主窗口）
-        window.desktop.recSource().then(function (sourceId) {
-            if (!sourceId) throw new Error('未找到屏幕源');
-            var dpr = window.devicePixelRatio || 1;
-            return navigator.mediaDevices.getUserMedia({
-                audio: false,
-                video: {
-                    mandatory: {
-                        chromeMediaSource: 'desktop',
-                        chromeMediaSourceId: sourceId,
-                        maxWidth: Math.round((window.screen.width || 1920) * dpr),
-                        maxHeight: Math.round((window.screen.height || 1080) * dpr),
-                        maxFrameRate: 30
-                    }
-                }
-            });
-        }).then(function (stream) {
+        getDesktopStream().then(function (stream) {
             recState.stream = stream;
             return beginPromise.then(function () { return stream; }); // 主窗口退场完成后再开播
         }).then(function (stream) {
@@ -3688,6 +3694,411 @@
         sendFile(file);
     }
 
+    // ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 悬浮小工具条 → 屏幕流采样 → 底部条带对齐拼接） =====
+    // 链路：截图冻结选区后点工具栏"长截图"→ stitchBegin 主窗口缩为选区下方悬浮小条（置顶悬浮，
+    // 露出目标应用）→ getUserMedia 屏幕流每 250ms 抓选区帧 → 长图底部 30px 条带（1/2 降采样灰度）
+    // 在新帧自底向上 SSD 搜索对齐点 → 粗对齐命中后 full 域 ±3 行二次精对齐 → 把对齐点以下新内容追加
+    // 到长图 → 滚动过快匹配失败丢帧（toast 节流提示）→ 点"完成"恢复窗口 → 长图进既有编辑器标注/发送
+    var STITCH_INTERVAL = 250;  // 采样间隔 ms（4fps，CPU 占用与滚动跟手度平衡）
+    var STITCH_STRIP = 15;      // 对齐模板高度（1/2 降采样 small 行，= 原始 30 物理像素行）
+    var STITCH_TH = 12;         // 对齐判定阈值（灰度差均值/像素，低于视为匹配成功）
+    var STITCH_STATIC_TH = 2;   // 静止判定阈值（期望位置灰度差均值/像素，闪烁/压缩噪声级即视为未滚动）
+    var STITCH_MAX_H = 16384;   // 长图最大高度（canvas 尺寸防线，到点自动完成）
+    var stitchState = {
+        active: false,     // 长截图进行中（悬浮条显示 + 采样循环运行）
+        stream: null,      // 全屏屏幕流（getUserMedia desktop 源）
+        video: null,       // 播放屏幕流的 video 元素（不进 DOM，仅做绘制源）
+        sel: null, snapW: 0, snapH: 0, // 选区（冻结底图物理像素）与底图尺寸（坐标归口）
+        cx: 0, cy: 0, cw: 0, ch: 0,    // 选区在屏幕流视频帧中的像素矩形（按流分辨率比例换算）
+        work: null, wctx: null,        // 每帧选区裁剪快照画布（匹配/追加统一以它为源，避免同帧撕裂）
+        long: null, lctx: null, longH: 0, // 长图画布与当前累计高度（物理像素；画布按需扩容）
+        tmp: null, tctx: null,         // 降采样临时画布（复用避免每帧新建）
+        strip: null, stripW: 0, stripH: 0, // 底部条带模板（降采样灰度数组）
+        timer: 0,          // 采样定时器句柄
+        busy: false,       // 帧处理在途标记（防重入）
+        finishing: false,  // 完成等待首帧中标记（防等待期重复点击）
+        lastWarn: 0        // 丢帧提示上次时间（toast 节流 2s）
+    };
+    var stitchToolbarEl = null; // 悬浮小工具条单例（状态文本 + 完成 + 取消）
+
+    // 长截图入口（screenshot.js 工具栏"长截图"按钮回调）：主窗口收缩 + 渲染层切 live 态 + 启动拼接
+    function onStitchStart(selImg, snapW, snapH) {
+        if (stitchState.active) return;
+        if (!window.desktop || !window.desktop.stitchBegin) { showToast('长截图仅 PC 端支持'); return; }
+        stitchState.active = true;
+        stitchState.sel = selImg;
+        stitchState.snapW = snapW;
+        stitchState.snapH = snapH;
+        // 1) 主窗口收缩为悬浮小条（先发 IPC：主进程退全屏约百毫秒级，期间冻结画面仍盖住屏幕无跳变；
+        //    失败不阻断——窗口可能残留全屏冻结态，完成/取消时 stitch:finish 兜底恢复）
+        //    成败都显示悬浮条：创建时隐藏防收缩过渡期闪现，IPC 返回后（窗口已收缩）再亮出完成/取消
+        // 2) 渲染层切 live 态：隐藏聊天界面（CSS 根节点 shot-live 类），显示悬浮工具条
+        document.documentElement.classList.add('shot-live');
+        ensureStitchToolbar();
+        updateStitchStatus('准备中…');
+        // 原：stitchBegin 与 getDesktopStream 并行发起——实测缩条过程中建立的流 video 首帧延迟数秒
+        //    （窗口 resize 期间媒体管线初始化停滞，"准备中…"卡住，此时点完成误报"未捕获到内容"，
+        //    不滚动完成场景 2/2 复现；live 态窗口稳定后建流则毫秒级出帧，探帧实证 readyState=4）；
+        //    改为串行：窗口缩条落地后再拿屏幕流（缩条最多约 3s 轮询，捕获开始稍晚可接受）
+        window.desktop.stitchBegin(selImg).catch(function () { /* 完成时统一恢复 */ }).then(function () {
+            if (stitchState.active && stitchToolbarEl) stitchToolbarEl.classList.remove('hidden');
+            return getDesktopStream(); // 3) 拿屏幕流（复用录屏链路）→ video 就绪后启动采样拼接循环
+        }).then(function (stream) {
+            if (!stitchState.active) { // 期间已被取消（Esc）：流直接释放
+                stream.getTracks().forEach(function (t) { t.stop(); });
+                return;
+            }
+            stitchState.stream = stream;
+            var video = document.createElement('video');
+            stitchState.video = video;
+            video.srcObject = stream;
+            video.muted = true;
+            video.playsInline = true;
+            // 原：onloadedmetadata 触发时 readyState 可能为 1（HAVE_METADATA，仅有元数据无帧数据），
+            //     startStitchEngine 首帧 drawImage 按规范抛 InvalidStateError → longH 停留 0 且采样
+            //     定时器未启动 → 点"完成"报"未捕获到内容"；
+            //     改用 onloadeddata（HAVE_CURRENT_DATA）保证首帧 drawImage 必有数据
+            video.onloadeddata = function () {
+                video.play();
+                startStitchEngine();
+            };
+        }).catch(function (e) {
+            showToast('长截图启动失败' + (e && e.message ? '：' + e.message : ''));
+            cancelStitch();
+        });
+    }
+
+    // 悬浮小工具条（单例，自绘禁止系统弹窗）：主窗口收缩为 300×54 后充满整个窗口
+    function ensureStitchToolbar() {
+        if (stitchToolbarEl) return;
+        var bar = document.createElement('div');
+        bar.className = 'shot-live-toolbar hidden';
+        var status = document.createElement('span');
+        status.className = 'shot-live-status';
+        var okBtn = document.createElement('button');
+        okBtn.className = 'shot-live-btn primary';
+        okBtn.textContent = '完成';
+        var noBtn = document.createElement('button');
+        noBtn.className = 'shot-live-btn';
+        noBtn.textContent = '取消';
+        okBtn.addEventListener('click', function () { completeStitch(false); });
+        noBtn.addEventListener('click', cancelStitch);
+        bar.appendChild(status);
+        bar.appendChild(okBtn);
+        bar.appendChild(noBtn);
+        document.body.appendChild(bar);
+        stitchToolbarEl = bar;
+        // Esc 快捷取消（仅 live 态响应；截图编辑器此时已关闭不会抢 Esc 语义）
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && stitchState.active) cancelStitch();
+        });
+    }
+
+    function updateStitchStatus(text) {
+        // 状态同步到独立无边框条窗（主窗口缩条方案 overlay 按钮遮挡工具条已弃用，条窗承载见 main.js createStitchBar）
+        if (window.desktop && window.desktop.stitchBarStatus) window.desktop.stitchBarStatus(text);
+        if (!stitchToolbarEl) return;
+        var el = stitchToolbarEl.querySelector('.shot-live-status');
+        if (el) el.textContent = text;
+    }
+
+    // 条窗按钮动作（完成/取消/Esc）订阅：与主窗口内工具条按钮同链路执行（主窗口隐藏期间由条窗接管交互）
+    if (window.desktop && window.desktop.onStitchBarAction) {
+        window.desktop.onStitchBarAction(function (act) {
+            if (act === 'complete') completeStitch(false);
+            else cancelStitch();
+        });
+    }
+
+    function hideStitchToolbar() {
+        if (stitchToolbarEl) stitchToolbarEl.classList.add('hidden');
+    }
+
+    // 拼接引擎启动：首帧落长图 → 建底部条带模板 → 定时采样
+    function startStitchEngine() {
+        var video = stitchState.video, sel = stitchState.sel;
+        if (!stitchState.active || !video || video.readyState < 2) { // 已取消或帧未就绪：取消直接退出；未就绪延后重进（画布重建幂等，longH 从 0 起算不受影响）
+            if (stitchState.active) setTimeout(startStitchEngine, 50);
+            return;
+        }
+        var fx = video.videoWidth / stitchState.snapW, fy = video.videoHeight / stitchState.snapH; // 底图→流 坐标比例
+        stitchState.cx = Math.round(sel.x * fx);
+        stitchState.cy = Math.round(sel.y * fy);
+        stitchState.cw = Math.max(2, Math.round(sel.w * fx));
+        stitchState.ch = Math.max(2, Math.round(sel.h * fy));
+        var work = document.createElement('canvas');
+        work.width = stitchState.cw;
+        work.height = stitchState.ch;
+        stitchState.work = work;
+        stitchState.wctx = work.getContext('2d', { willReadFrequently: true });
+        var long = document.createElement('canvas');
+        long.width = stitchState.cw;
+        long.height = stitchState.ch; // 动态扩容（ensureStitchCap），不预分配上限防大内存
+        stitchState.long = long;
+        stitchState.lctx = long.getContext('2d');
+        stitchState.longH = 0;
+        var tmp = document.createElement('canvas');
+        stitchState.tmp = tmp;
+        stitchState.tctx = tmp.getContext('2d', { willReadFrequently: true });
+        // 首帧全量入长图并建模板
+        stitchState.wctx.drawImage(video, stitchState.cx, stitchState.cy, stitchState.cw, stitchState.ch, 0, 0, stitchState.cw, stitchState.ch);
+        stitchState.lctx.drawImage(work, 0, 0);
+        stitchState.longH = stitchState.ch;
+        buildStitchStrip();
+        updateStitchStatus('已捕获 ' + stitchState.longH + 'px，滚动页面继续');
+        stitchState.timer = setInterval(stitchTick, STITCH_INTERVAL);
+    }
+
+    // 采样 tick：抓帧 → 对齐 → 追加（busy 防重入；单帧异常不中断循环）
+    function stitchTick() {
+        if (!stitchState.active || stitchState.busy || !stitchState.video || stitchState.video.readyState < 2) return;
+        stitchState.busy = true;
+        try {
+            processStitchFrame();
+        } catch (err) {
+            /* 单帧异常下一帧继续 */
+        } finally {
+            stitchState.busy = false;
+        }
+    }
+
+    function processStitchFrame() {
+        var cw = stitchState.cw, ch = stitchState.ch;
+        // 1) 抓帧落快照（后续匹配/追加统一以快照为源，避免同帧两次 drawImage 画面撕裂）
+        stitchState.wctx.drawImage(stitchState.video, stitchState.cx, stitchState.cy, cw, ch, 0, 0, cw, ch);
+        // 2) 新帧 1/2 降采样灰度
+        var sw = stitchState.stripW, sh = stitchState.stripH; // 模板尺寸（降采样域）
+        var smallW = Math.max(1, cw >> 1), smallH = Math.max(1, ch >> 1);
+        var tmp = stitchState.tmp;
+        tmp.width = smallW;
+        tmp.height = smallH;
+        stitchState.tctx.drawImage(stitchState.work, 0, 0, cw, ch, 0, 0, smallW, smallH);
+        var small = grayOf(stitchState.tctx.getImageData(0, 0, smallW, smallH));
+        var strip = stitchState.strip; // 模板须在静止短路前取值（var 不提升初始化，后置声明会致短路块引用 undefined）
+        // 3a) 静止短路：先比对期望对齐位置（帧底部条带 vs 长图底边模板），差异仅闪烁/压缩噪声级
+        //     即页面未滚动，直接跳过全帧搜索。防误追加：光标闪烁等微小动画使正确位置 SAD 偶发
+        //     劣于上方相似内容，静止帧会被误对齐追加重复条带（实测完成后静置期误增 486px）；
+        //     静止页面（最常见状态）同时省去每帧全帧搜索的 CPU 开销
+        var ty0 = smallH - sh;
+        if (ty0 >= 0) {
+            var sum0 = 0;
+            for (var y0 = 0; y0 < sh; y0++) {
+                var a0 = (ty0 + y0) * smallW, b0 = y0 * sw;
+                for (var x0 = 0; x0 < sw; x0++) {
+                    var d0 = small[a0 + x0] - strip[b0 + x0];
+                    sum0 += d0 < 0 ? -d0 : d0;
+                }
+            }
+            if (sum0 / (sw * sh) < STITCH_STATIC_TH) return; // 页面未滚动，无新内容
+        }
+        // 3) 自底向上搜索模板（模板顶 ty ∈ [0, smallH-sh]）：绝对差和最小者即对齐点
+        var best = Infinity, bestTy = -1;
+        for (var ty = smallH - sh; ty >= 0; ty--) {
+            var sum = 0;
+            for (var y = 0; y < sh; y++) {
+                var a = (ty + y) * smallW, b = y * sw;
+                for (var x = 0; x < sw; x++) {
+                    var d = small[a + x] - strip[b + x];
+                    sum += d < 0 ? -d : d;
+                }
+                if (sum >= best) break; // 早停：已超当前最优，无继续累加意义
+            }
+            if (sum < best) { best = sum; bestTy = ty; }
+        }
+        if (bestTy < 0 || best / (sw * sh) >= STITCH_TH) {
+            warnStitchFast(); // 无重叠/滚动过快：丢帧
+            return;
+        }
+        // 4) 精细二次对齐：full 域粗点 ±3 行内重搜（降采样域 ±2px 量化误差，精对齐消除拼接错位）
+        var alignY = fineStitchAlign(bestTy * 2);
+        if (alignY < 0) { warnStitchFast(); return; }
+        // 5) 追加对齐点以下的新内容（模板行之下 → 选区底边）
+        var stripFull = Math.min(STITCH_STRIP * 2, ch);
+        var addY = alignY + stripFull;
+        var addH = ch - addY;
+        if (addH <= 0) return; // 未滚动：无新内容
+        if (stitchState.longH >= STITCH_MAX_H) { completeStitch(true); return; } // 达上限自动完成
+        if (addH > STITCH_MAX_H - stitchState.longH) addH = STITCH_MAX_H - stitchState.longH;
+        ensureStitchCap(addH);
+        stitchState.lctx.drawImage(stitchState.work, 0, addY, cw, addH, 0, stitchState.longH, cw, addH);
+        stitchState.longH += addH;
+        buildStitchStrip(); // 长图底边更新 → 模板重建（下次对齐以新底边为基准）
+        updateStitchStatus('已捕获 ' + stitchState.longH + 'px，滚动页面继续');
+    }
+
+    // 重建对齐模板：长图底部 STRIP small 行（1/2 降采样灰度）；长图底边随追加更新，模板随之重建
+    function buildStitchStrip() {
+        var cw = stitchState.cw, H = stitchState.longH;
+        var stripFull = Math.min(STITCH_STRIP * 2, H); // 模板原始行数（长图不足 30px 用实际高）
+        var sw = Math.max(1, cw >> 1), sh = Math.max(1, stripFull >> 1);
+        var tmp = stitchState.tmp;
+        tmp.width = sw;
+        tmp.height = sh;
+        stitchState.tctx.drawImage(stitchState.long, 0, H - stripFull, cw, stripFull, 0, 0, sw, sh);
+        stitchState.strip = grayOf(stitchState.tctx.getImageData(0, 0, sw, sh));
+        stitchState.stripW = sw;
+        stitchState.stripH = sh;
+    }
+
+    // 精细二次对齐（full 域）：模板=长图底部 stripFull 行原始分辨率灰度，在粗对齐点 ±3 行内重搜；
+    // 返回模板顶在选区帧中的 full 域 y（<0 = 失败）
+    function fineStitchAlign(coarseY) {
+        var cw = stitchState.cw, ch = stitchState.ch;
+        var stripFull = Math.min(STITCH_STRIP * 2, ch);
+        var tmp = stitchState.tmp;
+        tmp.width = cw;
+        tmp.height = stripFull;
+        stitchState.tctx.drawImage(stitchState.long, 0, stitchState.longH - stripFull, cw, stripFull, 0, 0, cw, stripFull);
+        var tmpl = grayOf(stitchState.tctx.getImageData(0, 0, cw, stripFull));
+        var workGray = grayOf(stitchState.wctx.getImageData(0, 0, cw, ch)); // 整帧原始分辨率灰度
+        var lo = Math.max(0, coarseY - 3), hi = Math.min(ch - stripFull, coarseY + 3);
+        var best = Infinity, bestY = -1;
+        for (var y = lo; y <= hi; y++) {
+            var sum = 0;
+            for (var r = 0; r < stripFull; r++) {
+                var a = (y + r) * cw, b = r * cw;
+                for (var x = 0; x < cw; x++) {
+                    var d = workGray[a + x] - tmpl[b + x];
+                    sum += d < 0 ? -d : d;
+                }
+                if (sum >= best) break;
+            }
+            if (sum < best) { best = sum; bestY = y; }
+        }
+        if (bestY < 0 || best / (cw * stripFull) >= STITCH_TH) return -1;
+        return bestY;
+    }
+
+    // 长图扩容：剩余高度不足本次追加时复制旧内容到 1.5 倍新画布（上限封顶）
+    function ensureStitchCap(addH) {
+        var long = stitchState.long;
+        var need = stitchState.longH + addH;
+        if (need <= long.height) return;
+        var nh = Math.min(Math.max(Math.ceil(long.height * 1.5), need), STITCH_MAX_H);
+        var nc = document.createElement('canvas');
+        nc.width = stitchState.cw;
+        nc.height = nh;
+        nc.getContext('2d').drawImage(long, 0, 0);
+        stitchState.long = nc;
+        stitchState.lctx = nc.getContext('2d');
+    }
+
+    // RGBA → 灰度数组（亮度加权，对光照变化稳健）
+    function grayOf(imgData) {
+        var d = imgData.data, n = d.length >> 2;
+        var out = new Uint8Array(n);
+        for (var i = 0, j = 0; i < n; i++, j += 4) {
+            out[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+        }
+        return out;
+    }
+
+    // 滚动过快提示节流（2s 一条，避免刷屏）
+    function warnStitchFast() {
+        var now = Date.now();
+        if (now - stitchState.lastWarn < 2000) return;
+        stitchState.lastWarn = now;
+        showToast('滚动过快，未对齐的帧已跳过，请放慢滚动');
+    }
+
+    // 完成：停采样 → 长图编码 PNG → 恢复窗口与聊天 UI → 进既有编辑器标注/发送
+    // force=首帧等待超时后的强制收尾（防止递归等待）；auto=达到最大高度自动完成
+    function completeStitch(auto, force) {
+        if (!stitchState.active) return;
+        // 兜底：初始捕获未落图但引擎仍在等首帧（如流建立慢/缩条期间管线延迟），立即收尾会误报
+        // "未捕获到内容"——延迟等待首帧（100ms 轮询，最多 10s），期间重复点击忽略；超时才按失败收尾
+        if (!force && !stitchState.longH && stitchState.video) {
+            if (stitchState.finishing) return; // 等待中重复点击
+            stitchState.finishing = true;
+            updateStitchStatus('捕获中…');
+            var waitStart = Date.now();
+            var wait = setInterval(function () {
+                if (!stitchState.active || stitchState.longH > 0) {
+                    clearInterval(wait);
+                    stitchState.finishing = false;
+                    if (stitchState.active && stitchState.longH > 0) completeStitch(auto, false); // 首帧已落图，正常完成
+                    return;
+                }
+                if (Date.now() - waitStart > 10000) { // 等待超时：强制走失败收尾
+                    clearInterval(wait);
+                    stitchState.finishing = false;
+                    completeStitch(auto, true);
+                }
+            }, 100);
+            return;
+        }
+        stitchState.active = false;
+        stopStitchEngine();
+        updateStitchStatus('生成中…');
+        var longCanvas = stitchState.long;
+        var contentH = stitchState.longH; // 实际内容高度（扩容画布容量可能大于它）
+        stitchState.long = null;
+        stitchState.lctx = null;
+        if (!longCanvas || !longCanvas.width || !contentH) {
+            // 原：先 stitchFinish 后移除 shot-live——主窗口 show 时聊天 UI 仍隐藏（全黑），用户看到黑窗；
+            // 改为先恢复聊天 UI 再 show 主窗口（与 Windows 隐藏窗口退全屏强制显示行为配合无黑窗）
+            document.documentElement.classList.remove('shot-live');
+            hideStitchToolbar();
+            if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
+            showToast('长截图失败：未捕获到内容');
+            return;
+        }
+        // 扩容画布容量 ≥ 内容高度：编码前裁掉未绘制的多余部分，避免长图底部出现透明黑条
+        if (longCanvas.height > contentH) {
+            var trimmed = document.createElement('canvas');
+            trimmed.width = longCanvas.width;
+            trimmed.height = contentH;
+            trimmed.getContext('2d').drawImage(longCanvas, 0, 0);
+            longCanvas = trimmed;
+        }
+        longCanvas.toBlob(function (blob) {
+            // 先移除 shot-live（聊天 UI 复位显示）再 show 主窗口：主窗口恢复时显示正常聊天界面
+            // 而非黑窗（原顺序 stitchFinish 在前，show 时 shot-live 仍在=黑窗闪现）
+            document.documentElement.classList.remove('shot-live');
+            hideStitchToolbar();
+            if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
+            if (!blob || !blob.size) { showToast('长截图失败：编码失败'); return; }
+            // 进既有编辑器（编辑器模式：恢复后的普通窗口内居中展示，标注后走截图发送链路）
+            ScreenshotEditor.open(blob, setPendingShot);
+            if (auto) showToast('已达长图最大高度，已自动完成');
+        }, 'image/png');
+    }
+
+    // 取消：停采样 → 恢复窗口与聊天 UI（长图丢弃）
+    function cancelStitch() {
+        if (!stitchState.active) return;
+        stitchState.active = false;
+        stopStitchEngine();
+        stitchState.long = null;
+        stitchState.lctx = null;
+        // 先恢复聊天 UI 再 show 主窗口（防黑窗闪现，理由同 completeStitch）
+        document.documentElement.classList.remove('shot-live');
+        hideStitchToolbar();
+        if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
+        showToast('已取消长截图');
+    }
+
+    // 停采样循环与屏幕流（完成/取消共用）
+    function stopStitchEngine() {
+        if (stitchState.timer) { clearInterval(stitchState.timer); stitchState.timer = 0; }
+        if (stitchState.stream) stitchState.stream.getTracks().forEach(function (t) { t.stop(); });
+        stitchState.stream = null;
+        stitchState.video = null;
+        stitchState.work = null;
+        stitchState.wctx = null;
+        stitchState.tmp = null;
+        stitchState.tctx = null;
+        stitchState.strip = null;
+        stitchState.busy = false;
+    }
+
+    // 长截图入口挂到截图编辑器（冻结第 5 参回调；仅 PC 桥可用时注入——web 端不注入则工具栏按钮自动隐藏）
+    var _freeze = ScreenshotEditor.freeze.bind(ScreenshotEditor);
+    ScreenshotEditor.freeze = function (blob, confirmCb, onClose, onReady, onStitch) {
+        var cb = onStitch || (window.desktop && window.desktop.stitchBegin ? onStitchStart : null);
+        return _freeze(blob, confirmCb, onClose, onReady, cb);
+    };
+
     // Ctrl+Alt+R 全局快捷键订阅：未录制时触发录屏流程，录制中再按=停止（QQ 同款二段语义）
     if (window.desktop && window.desktop.onGlobalRecord) {
         window.desktop.onGlobalRecord(function (data) {
@@ -3724,6 +4135,7 @@
     if (window.desktop && window.desktop.onGlobalShot) {
         window.desktop.onGlobalShot(function (dataUrl) {
             if (!IMSocket.isConnected()) return; // 未登录不响应
+            if (stitchState.active) return; // 长截图进行中不响应（窗口已是悬浮小条，冻结态冲突）
             if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
             openShotEditor(dataUrlToBlob(dataUrl));
         });

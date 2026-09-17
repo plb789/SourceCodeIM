@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>长截图</title>
+    <style>
+        /* ===== 长截图悬浮小条（独立无边框窗口，QQ 同款承载）：主窗口缩条方案 overlay 按钮遮挡工具条（用户实测反馈），
+             改为主窗口隐藏 + 本条窗显示；样式与主窗口内 .shot-live-toolbar 同源（style.css 3192-3248），变量按主题硬编码
+             （条窗独立页面不加载主样式表，深浅两套与 style.css :root/[data-theme] 变量同值，改动需同步） ===== */
+        :root {
+            --panel-bg: #ffffff;
+            --border: #e0e0e0;
+            --text: #333333;
+            --hover: #f0f0f0;
+            --primary: #07c160;
+        }
+        html.light {
+            --panel-bg: #ffffff;
+            --border: #e0e0e0;
+            --text: #333333;
+            --hover: #f0f0f0;
+            --primary: #07c160;
+        }
+        html:not(.light) {
+            --panel-bg: #1f1f1f;
+            --border: #333333;
+            --text: #d0d0d0;
+            --hover: #2a2a2a;
+            --primary: #07c160;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 300px;
+            height: 54px;
+            overflow: hidden;
+            background: transparent;
+        }
+        .bar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 300px;
+            height: 54px;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+            /* 整条可拖动窗口（QQ 同款小条可拖），按钮区 no-drag 放行点击 */
+            -webkit-app-region: drag;
+            user-select: none;
+        }
+        .status {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12px;
+            color: var(--text);
+        }
+        .btn {
+            flex: none;
+            padding: 6px 14px;
+            font-size: 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            -webkit-app-region: no-drag;
+            font-family: inherit;
+        }
+        .btn:hover { background: var(--hover); }
+        .btn.primary {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+        .btn.primary:hover { opacity: 0.85; background: var(--primary); }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <span class="status">准备中…</span>
+        <button class="btn primary">完成</button>
+        <button class="btn">取消</button>
+    </div>
+    <script src="js/bar.js"></script>
+</body>
+</html>

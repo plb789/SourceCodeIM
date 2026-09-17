@@ -206,6 +206,12 @@ function createWindow() {
     // 内部退全屏 bounds 还原之后触发（实测 exit-freeze handler 里立即/延时恢复都会被还原动作覆盖：
     // 150ms~1.8s 内多次 setBounds 均失效，窗口滞留移出态）；延迟 50ms 双保险躲开还原收尾
     mainWindow.on('leave-full-screen', function () {
+        // 阶段一百三十九：长截图模式——条窗方案下主窗口不参与落位（原 landStitchToolbar 缩条已停用），
+        // 且 stitch:begin 已不在隐藏中退全屏（Windows 隐藏窗口 setFullScreen(false) 会强制显示窗口=黑窗露出，
+        // 用户实测），此处仅吞掉事件防止误走聊天原位恢复
+        if (stitchToolbarBounds) {
+            return;
+        }
         if (!shotSavedBounds) return;
         setTimeout(function () { restoreShotHiddenWindow(true); }, 50);
     });
@@ -484,6 +490,139 @@ ipcMain.on('rec:show', function () {
 // 录制状态同步（渲染层 MediaRecorder 实际 start/stop 时上报，与 rec:begin/rec:show 解耦防竞态）
 ipcMain.on('rec:active', function (e, on) {
     recActive = !!on;
+});
+
+// ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 主窗口缩为悬浮小工具条 → 滚动采样拼接 → 完成回编辑器） =====
+// 链路：冻结截图选区后点工具栏"长截图"→ stitch:begin 退全屏并把窗口收缩为选区下方悬浮小条
+// （保留 screen-saver 置顶，悬浮于目标应用之上，露出滚动内容）→ 渲染层 getUserMedia 屏幕流采样对齐
+// 拼接 → 点"完成"→ stitch:finish 恢复普通窗口（原位/最大化态/层级），长图进既有编辑器标注发送（服务端零改动）
+var stitchToolbarBounds = null; // 悬浮小条目标 bounds（DIP；leave-full-screen 时落地，时序对齐截图原位恢复方案）
+var stitchRestore = null;       // 长截图完成后的主窗口恢复信息 {bounds, maximized, minSize}（接管 shotSavedBounds 职责）
+
+// 落悬浮小条（带还原竞态防御）：Electron 退全屏会异步还原"进全屏前缓存"的 bounds——若进全屏前
+// 窗口是最大化态，还原后仍是最大化，而 setBounds 对最大化窗口不生效（实测），小条永远落不下去
+// 表现为"看不到悬浮条"。轮询确认落地，未落地（maximized/fullScreen）先 unmaximize/退全屏再
+// setBounds，150ms×20 与 restoreShotHiddenWindow 同款重试模式
+// 【已停用】改用独立无边框条窗承载工具条（见 stitch:begin），函数保留备查：
+// 缩条方案实测新问题——Windows titleBarOverlay 的最小化/最大化/关闭按钮绘制在窗口右上角
+// 非客户区，缩条 300×54 后按钮挡住工具条"完成/取消"（用户实测反馈），且 Electron Windows
+// 无运行时隐藏 overlay 按钮的 API（setWindowButtonVisibility 仅 macOS）
+function landStitchToolbar(tries) {
+    if (!stitchToolbarBounds || !mainWindow) return;
+    if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    mainWindow.setBounds(stitchToolbarBounds);
+    var b = mainWindow.getBounds(), t = stitchToolbarBounds;
+    var landed = Math.abs(b.x - t.x) < 2 && Math.abs(b.y - t.y) < 2 && Math.abs(b.width - t.width) < 2 && Math.abs(b.height - t.height) < 2;
+    if (!landed && tries < 20) setTimeout(function () { landStitchToolbar(tries + 1); }, 150);
+}
+
+// ===== 阶段一百三十九：长截图悬浮小条窗口（QQ 同款承载） =====
+// 无边框（frame:false 无任何系统按钮，修复主窗口缩条后 overlay 按钮遮挡完成/取消）、
+// skipTaskbar 不占任务栏、screen-saver 级置顶悬浮于目标应用之上；加载 web/bar.html
+//（状态文本 + 完成 + 取消，跟随主题），经 stitch:bar-status / stitch:bar-action 双向桥接主窗口
+var stitchBarWin = null;
+
+function stitchBarDark() {
+    var t = themeStoreLoad();
+    return t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
+}
+
+function createStitchBar() {
+    closeStitchBar(); // 残留防御：二次进入先关旧条窗
+    var b = stitchToolbarBounds;
+    stitchBarWin = new BrowserWindow({
+        width: b.width,
+        height: b.height,
+        x: b.x,
+        y: b.y,
+        frame: false, // 无边框=无系统按钮（本次修复核心）
+        resizable: false,
+        skipTaskbar: false, // 任务栏显示"长截图"独立图标（新窗体存在证据；主窗口 hide 后任务栏仅剩此图标）
+        show: false,
+        backgroundColor: stitchBarDark() ? '#1a1a1a' : '#f5f5f5',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    stitchBarWin.setAlwaysOnTop(true, 'screen-saver');
+    stitchBarWin.loadURL(SERVER_URL + 'bar.html');
+    stitchBarWin.once('ready-to-show', function () {
+        if (stitchBarWin && !stitchBarWin.isDestroyed()) stitchBarWin.show();
+    });
+    stitchBarWin.on('closed', function () { stitchBarWin = null; });
+}
+
+function closeStitchBar() {
+    if (stitchBarWin && !stitchBarWin.isDestroyed()) stitchBarWin.destroy();
+    stitchBarWin = null;
+}
+
+// 长截图启动：主窗口隐藏 + 独立无边框条窗显示工具条。选区传冻结底图物理像素（=屏幕物理坐标），
+// 按 scaleFactor 换 DIP；小条定位于选区下方 12px（越界翻转上方），横向居中选区并夹紧工作区
+ipcMain.handle('stitch:begin', function (e, selPx) {
+    if (!mainWindow || !selPx) return false;
+    var display = screen.getPrimaryDisplay();
+    var sf = display.scaleFactor || 1;
+    var wa = display.workArea;
+    var w = 300, h = 54; // 与渲染层 .shot-live-toolbar 尺寸一致
+    var sx = selPx.x / sf, sy = selPx.y / sf, sw = selPx.w / sf, sh = selPx.h / sf;
+    var x = Math.round(sx + sw / 2 - w / 2);
+    x = Math.max(wa.x + 8, Math.min(x, wa.x + wa.width - w - 8));
+    var y = Math.round(sy + sh + 12);
+    if (y + h > wa.y + wa.height - 8) y = Math.round(sy - h - 12); // 选区下方放不下：翻转上方
+    stitchToolbarBounds = { x: x, y: y, width: w, height: h };
+    // 原实现：主窗口 landStitchToolbar 缩条为 300×54（stitchRestore 记录恢复态 + setMinimumSize(0,0) 解除
+    // 最小尺寸钳制 + Promise 轮询落地）——三态（全屏/最大化/普通）恢复复杂且 overlay 按钮遮挡工具条
+    // （用户实测反馈，见 landStitchToolbar 注释）；改 QQ 同款承载：
+    // 原：hide 后在隐藏中 setFullScreen(false)——实测 Windows 上对隐藏的全屏窗口退全屏会强制显示
+    // 窗口（Electron 行为）：主窗口以全黑 shot-live 态露出（用户截图实证：黑色大窗+右上 overlay
+    // 按钮+条窗并存，用户误认为工具条仍在主窗体内）。改：全屏态直接 hide（SW_HIDE 不触发退全屏
+    // 行为），全屏态保留至 stitch:finish 时统一退出
+    mainWindow.hide();
+    // 注意：不得清空 shotSavedBounds/shotSavedMaximized——hide-main 模式（"截图时隐藏主窗口"开关）
+    // 下 Alt+A 已把主窗口移出屏幕（captureWithHide 记录原位），完成后必须靠它恢复原位；
+    // 此前在此清空导致恢复链断裂：完成时退全屏还原出屏幕外坐标，show 后窗口留在屏幕外
+    // （任务栏有图标但看不到窗口，用户实测）
+    createStitchBar();
+    return true;
+});
+
+// 长截图结束：关条窗 → 恢复主窗口（完成/取消共用；渲染层随后回编辑器或聊天界面）。
+// 原实现：stitchRestore 恢复 bounds/maximized/minSize（缩条方案）；新方案窗口 hide 前后未动，
+// show 即复原（最大化态由 Electron 记忆），仅退全屏兜底 + 退出置顶
+ipcMain.on('stitch:finish', function () {
+    stitchToolbarBounds = null;
+    closeStitchBar();
+    if (!mainWindow) return;
+    // 退全屏+show：渲染层已先移除 shot-live（聊天界面恢复显示），即使 Windows 上隐藏窗口退全屏
+    // 强制显示窗口，露出的也是正常聊天界面而非黑窗（stitch:begin 已不在 live 开始时退全屏）
+    if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    mainWindow.setAlwaysOnTop(false);
+    if (shotSavedBounds) {
+        // hide-main 模式：Alt+A 时窗口被移出屏幕（shotSavedBounds 记录原位），退全屏后 bounds 仍
+        // 在屏幕外，必须恢复原位再显示，否则"任务栏有图标但看不到窗口"（用户实测）；
+        // 与 exit-freeze 同款 force 恢复（wasMax 内部异步 maximize），重复调用幂等
+        restoreShotHiddenWindow(true);
+        if (!mainWindow.isVisible()) mainWindow.show();
+    } else if (!mainWindow.isVisible()) {
+        mainWindow.show();
+    }
+    mainWindow.focus();
+});
+
+// 长截图状态文本转发：主窗口渲染层 updateStitchStatus → 条窗显示
+ipcMain.on('stitch:bar-status', function (e, text) {
+    if (e.sender !== mainWindow.webContents) return; // 只接受主窗口来源
+    if (stitchBarWin && !stitchBarWin.isDestroyed()) stitchBarWin.webContents.send('stitch:bar-status', String(text || ''));
+});
+
+// 长截图条窗按钮动作：条窗（完成/取消/Esc）→ 主窗口渲染层执行 completeStitch/cancelStitch
+ipcMain.on('stitch:bar-action', function (e, act) {
+    if (!stitchBarWin || e.sender !== stitchBarWin.webContents) return; // 只接受条窗来源
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('stitch:bar-action', act === 'complete' ? 'complete' : 'cancel');
 });
 
 // ===== 阶段一百三十九：QQ 同款窗口识别（冻结截图悬停高亮窗口 + 单击选窗 + 双击截窗） =====

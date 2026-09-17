@@ -150,6 +150,35 @@ contextBridge.exposeInMainWorld('desktop', {
     recShortcut: function () {
         return ipcRenderer.invoke('rec:shortcut');
     },
+    // ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 悬浮小工具条 → 滚动拼接） =====
+    // 长截图启动：主窗口隐藏 + 独立无边框条窗显示工具条（缩条方案 overlay 按钮遮挡工具条，已弃用），selPx = 选区物理像素
+    stitchBegin: function (selPx) {
+        return ipcRenderer.invoke('stitch:begin', selPx);
+    },
+    // 长截图状态文本转发：主窗口渲染层 → 主进程 → 条窗显示（updateStitchStatus 内调用）
+    stitchBarStatus: function (text) {
+        ipcRenderer.send('stitch:bar-status', String(text || ''));
+    },
+    // 长截图条窗按钮动作订阅（主窗口渲染层）：act = 'complete' | 'cancel'
+    onStitchBarAction: function (callback) {
+        ipcRenderer.on('stitch:bar-action', function (event, act) {
+            callback(act);
+        });
+    },
+    // 条窗侧：接收主窗口转发的状态文本
+    onBarStatus: function (callback) {
+        ipcRenderer.on('stitch:bar-status', function (event, text) {
+            callback(text);
+        });
+    },
+    // 条窗侧：按钮动作上报（完成/取消/Esc），主进程转主窗口渲染层执行
+    barAction: function (act) {
+        ipcRenderer.send('stitch:bar-action', act === 'complete' ? 'complete' : 'cancel');
+    },
+    // 长截图结束：主窗口恢复普通聊天窗口（原位/最大化态/层级）
+    stitchFinish: function () {
+        ipcRenderer.send('stitch:finish');
+    },
     // ===== 阶段六十：Agent 本地执行器 =====
     // 渲染进程桥接：服务端下发的本地执行请求转发主进程执行（req = {username, tool, params}）
     // 返回 Promise<{ok, output}>，结果由渲染进程经 WS 回传服务端

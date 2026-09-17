@@ -384,6 +384,11 @@ async function handleRequest(req) {
     try {
         var u = new URL(req.url);
         var pathname = u.pathname;
+        // 目录索引归口须在 mime 推导前完成：'/' 经 path.extname 为空 → octet-stream，
+        // 根文档会被 Chromium 按下载处理（导航被放弃、旧文档滞留 + 弹"另存为"保存框）。
+        // resolveLocalEnc/tryServeBlob 内部各自归一，唯 mimeOf(pathname) 被遗漏（实测根文档
+        // 从加密缓存命中时 content-type=application/octet-stream）
+        if (pathname === '/' || pathname === '') pathname = '/index.html';
         if (isDynamicPath(pathname)) {
             return await passthrough(req);
         }

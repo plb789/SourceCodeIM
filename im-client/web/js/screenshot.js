@@ -46,6 +46,9 @@
     var ocrBodyEl = null;      // 浮层内容区（loading/行文本/原文+译文）
     var ocrCopyBtn = null;     // 复制按钮（_text 挂当前可复制全文）
     var ocrBusy = false;       // 识别/翻译请求在途标记（防重复点击）
+    // ===== 阶段一百三十九：长截图（滚动拼接：冻结选区移交 chat.js 长截图状态机） =====
+    var stitchBtn = null;      // 长截图按钮（仅冻结态且 PC 端可用时显示，编辑器/录屏/浏览器态隐藏）
+    var stitchCb = null;       // 长截图回调 onStitch(sel, snapW, snapH)（chat.js 长截图状态机经 freeze 注入）
 
     // 随图尺寸自适应的笔触参数（大图笔触更粗，视觉一致）
     var strokeWidth = 4, fontSize = 20, mosaicR = 24;
@@ -62,7 +65,9 @@
         undo: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>',
         // 阶段一百三十九：提取文字（OCR 取景框样式）/ 屏幕翻译（A/文 翻译样式）
         ocr: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/><path fill="currentColor" d="M7.4 15l2.8-6.5h1.3L14.3 15h-1.4l-.65-1.6H9.45L8.8 15H7.4zm2.45-2.8h2L10.85 9.7 9.85 12.2zM14.6 15V8.5h4.3v1.2h-2.9v1.6h2.6v1.2h-2.6V15h-1.4z"/></svg>',
-        translate: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>'
+        translate: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>',
+        // 阶段一百三十九：长截图（屏幕区域 + 向下滚动箭头）
+        stitch: '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 3h16v10H4z"/><path fill="currentColor" d="M11 8h2v7.2l2.1-2.1 1.4 1.4-4.5 4.5-4.5-4.5 1.4-1.4 2.1 2.1z"/></svg>'
     };
 
     // 标注颜色（微信同款：红/黄/蓝/绿/黑）
@@ -113,6 +118,13 @@
         trBtn.title = '屏幕翻译';
         trBtn.innerHTML = ICONS.translate;
         toolbarEl.appendChild(trBtn);
+        // 阶段一百三十九：长截图（滚动拼接）——动作按钮，dataset.action 区分；仅 PC 冻结态显示（load 里控制显隐）
+        stitchBtn = document.createElement('button');
+        stitchBtn.className = 'shot-tool';
+        stitchBtn.dataset.action = 'stitch';
+        stitchBtn.title = '长截图';
+        stitchBtn.innerHTML = ICONS.stitch;
+        toolbarEl.appendChild(stitchBtn);
 
         // 颜色点
         COLORS.forEach(function (c, i) {
@@ -372,9 +384,10 @@
     // 阶段三十八：第四参 onReady——冻结画面首帧绘制完成回调（PC 端用于"编辑器就绪后再揭幕"，消除聊天界面闪现）
     var onCloseCb = null; // 冻结模式关闭回调（一次性，close 时消费）
     var onReadyCb = null; // 冻结画面就绪回调（一次性，首帧绘制后消费）
-    function freeze(blob, confirmCb, onClose, onReady) {
+    function freeze(blob, confirmCb, onClose, onReady, onStitch) {
         onCloseCb = onClose || null;
         onReadyCb = onReady || null;
+        stitchCb = onStitch || null; // 阶段一百三十九：长截图回调（null=入口不可用，工具栏按钮隐藏）
         load(blob, confirmCb, 'freeze');
     }
 
@@ -423,10 +436,31 @@
         if (recSizeEl && sel) recSizeEl.textContent = Math.round(sel.w) + '×' + Math.round(sel.h);
     }
 
+    // 阶段一百三十九：伪冻结 cover 布局（freeze/record 共用）。
+    // 竞态修复：主进程 setFullScreen(true) 异步生效，渲染层 load 时视口可能还是旧尺寸
+    // （实测：连续截图时画布按旧视口 1100×722 布局，底图未铺满全屏），故监听 resize 重算——
+    // 仅未起选区时重算（起选区后重算会让选区与图坐标错位）
+    function layoutFreezeCover() {
+        scale = Math.max(window.innerWidth / imgW, window.innerHeight / imgH);
+        var cw = Math.round(imgW * scale), ch = Math.round(imgH * scale);
+        var ox = Math.round((window.innerWidth - cw) / 2), oy = Math.round((window.innerHeight - ch) / 2);
+        [baseCanvas, drawCanvas, maskCanvas].forEach(function (c) {
+            c.style.width = cw + 'px';
+            c.style.height = ch + 'px';
+            c.style.left = ox + 'px';
+            c.style.top = oy + 'px';
+        });
+        wrapEl.style.width = window.innerWidth + 'px';
+        wrapEl.style.height = window.innerHeight + 'px';
+    }
+    window.addEventListener('resize', function () {
+        if ((mode === 'freeze' || mode === 'record') && !sel && editorEl && !editorEl.classList.contains('hidden')) layoutFreezeCover();
+    });
+
     function load(blob, confirmCb, m) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
-        if (m !== 'freeze' && m !== 'record') { onCloseCb = null; onReadyCb = null; } // 编辑器模式无冻结回调（record 的 onReady 由 freezeVideo 注入）
+        if (m !== 'freeze' && m !== 'record') { onCloseCb = null; onReadyCb = null; stitchCb = null; } // 编辑器模式无冻结回调（record 的 onReady 由 freezeVideo 注入；长截图回调仅冻结态有效）
         imgUrl = URL.createObjectURL(blob);
         var image = new Image();
         image.onload = function () {
@@ -445,17 +479,7 @@
             mode = m;
             if (mode === 'freeze' || mode === 'record') {
                 // 伪冻结：cover 铺满视口（居中，溢出部分裁剪），贴近"屏幕被冻结"的观感
-                scale = Math.max(window.innerWidth / imgW, window.innerHeight / imgH);
-                var cw = Math.round(imgW * scale), ch = Math.round(imgH * scale);
-                var ox = Math.round((window.innerWidth - cw) / 2), oy = Math.round((window.innerHeight - ch) / 2);
-                [baseCanvas, drawCanvas, maskCanvas].forEach(function (c) {
-                    c.style.width = cw + 'px';
-                    c.style.height = ch + 'px';
-                    c.style.left = ox + 'px';
-                    c.style.top = oy + 'px';
-                });
-                wrapEl.style.width = window.innerWidth + 'px';
-                wrapEl.style.height = window.innerHeight + 'px';
+                layoutFreezeCover();
                 sel = null; // 冻结态无选区：必须拖拽框选（微信同款）
                 editorEl.classList.add('freeze');
                 // 阶段一百三十四：冻结截图期间隐藏自绘标题栏——标题栏 z-index(12000) 故意压过全部浮层，
@@ -467,6 +491,8 @@
                 recCountEl.classList.add('hidden');    // 阶段一百三十九：倒计时层复位隐藏
                 hintEl.textContent = mode === 'record' ? '拖拽框选录屏区域 · Esc 取消' : '拖拽框选截图区域 · Enter 发送 · Esc 取消';
                 hintEl.classList.remove('hidden');     // 顶部操作提示：告知拖拽框选
+                // 阶段一百三十九：长截图按钮仅 PC 冻结态显示（录屏/浏览器无 stitchCb 时隐藏）
+                if (stitchBtn) stitchBtn.classList.toggle('hidden', !(mode === 'freeze' && stitchCb));
             } else {
                 // 编辑器模式：contain 居中缩放（与第一期一致）
                 var maxW = window.innerWidth * 0.9;
@@ -483,6 +509,7 @@
                 sel = { x: 0, y: 0, w: imgW, h: imgH }; // 默认全图选区（粘贴后可直接发送）
                 editorEl.classList.remove('freeze');
                 hintEl.classList.add('hidden'); // 编辑器模式无冻结提示
+                if (stitchBtn) stitchBtn.classList.add('hidden'); // 阶段一百三十九：长截图仅冻结态可用
             }
             bctx.drawImage(img, 0, 0);
             dctx.clearRect(0, 0, imgW, imgH);
@@ -505,8 +532,8 @@
         image.src = imgUrl;
     }
 
-    function close() {
-        if (!editorEl) return;
+    // 编辑器 UI 复位（close/closeSilent 共用）：隐藏浮层、清状态；不触发任何回调
+    function resetEditorUI() {
         editorEl.classList.add('hidden');
         editorEl.classList.remove('freeze');
         // 阶段一百三十四：退出冻结截图恢复自绘标题栏（与 load() freeze 分支的 add 配对）
@@ -521,16 +548,23 @@
         hideTextInput();
         undoStack = [];
         sel = null;
-        // 阶段一百三十九：录屏模式关闭语义分流——倒计时已结束（录制已启动）只做清理；
-        // 选区阶段取消（Esc/取消按钮）触发 onCancel 交渲染层退出冻结态
-        var recCancelCb = null;
-        if (mode === 'record') {
-            if (!recStarted && recHandlers && recHandlers.onCancel) recCancelCb = recHandlers.onCancel;
-            recHandlers = null;
-        }
         mode = 'editor';
         img = null;
         if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = ''; }
+        stitchCb = null;
+    }
+
+    function close() {
+        if (!editorEl) return;
+        var wasRecord = (mode === 'record'); // 复位前捕获模式（resetEditorUI 会把 mode 归位 editor）
+        resetEditorUI();
+        // 阶段一百三十九：录屏模式关闭语义分流——倒计时已结束（录制已启动）只做清理；
+        // 选区阶段取消（Esc/取消按钮）触发 onCancel 交渲染层退出冻结态
+        var recCancelCb = null;
+        if (wasRecord) {
+            if (!recStarted && recHandlers && recHandlers.onCancel) recCancelCb = recHandlers.onCancel;
+            recHandlers = null;
+        }
         // 阶段三十八：冻结模式关闭回调（发送/取消/Esc 关闭统一触发，PC 端通知主进程退出全屏冻结）
         if (onCloseCb) {
             var cb = onCloseCb;
@@ -538,6 +572,34 @@
             cb();
         }
         if (recCancelCb) recCancelCb();
+    }
+
+    // 阶段一百三十九：静默关闭（长截图移交专用）——仅复位编辑器 UI，不触发 onClose/recCancel 回调：
+    // 主进程冻结态由长截图链路接管（窗口收缩为悬浮小条而非退全屏恢复，exit-freeze 语义不适用）
+    function closeSilent() {
+        if (!editorEl) return;
+        resetEditorUI();
+    }
+
+    // ===== 阶段一百三十九：长截图入口 =====
+    // 冻结选区完成后点"长截图"：校验选区 → 静默关闭编辑器 → 回调 chat.js 长截图状态机
+    // （主进程 stitch:begin 把窗口收缩为选区下方悬浮小条，渲染层抓屏幕流做滚动对齐拼接）
+    var STITCH_MIN_W = 60;   // 选区最小宽（过窄无对齐特征）
+    var STITCH_MIN_H = 100;  // 选区最小高（底部条带对齐模板需要足够高度）
+    function startStitch() {
+        if (mode !== 'freeze' || !sel || !stitchCb) return;
+        if (sel.w < STITCH_MIN_W || sel.h < STITCH_MIN_H) {
+            // 选区过小：提示后保留编辑器现状（不关闭），用户可重新框选
+            hintEl.textContent = '选区太小，无法长截图（请框选更高的区域）';
+            hintEl.classList.remove('hidden');
+            return;
+        }
+        var s = { x: Math.round(sel.x), y: Math.round(sel.y), w: Math.round(sel.w), h: Math.round(sel.h) };
+        var snapW = imgW, snapH = imgH; // 冻结底图=全屏快照物理分辨率（选区坐标归口）
+        // 先缓存回调再关闭：closeSilent 会清 stitchCb（close 清回调的坑，录屏同款）
+        var cb = stitchCb;
+        closeSilent();
+        if (cb) cb(s, snapW, snapH);
     }
 
     function isOpen() {
@@ -739,9 +801,10 @@
             var toolBtn = e.target.closest('.shot-tool');
             if (toolBtn) {
                 if (toolBtn.dataset.tool === 'undo') { undo(); return; }
-                // 阶段一百三十九：动作按钮（提取文字/屏幕翻译）不参与 setTool 工具切换
+                // 阶段一百三十九：动作按钮（提取文字/屏幕翻译/长截图）不参与 setTool 工具切换
                 if (toolBtn.dataset.action === 'ocr') { runScreenOCR(false); return; }
                 if (toolBtn.dataset.action === 'translate') { runScreenOCR(true); return; }
+                if (toolBtn.dataset.action === 'stitch') { startStitch(); return; }
                 setTool(toolBtn.dataset.tool);
                 return;
             }
