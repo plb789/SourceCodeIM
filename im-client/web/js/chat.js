@@ -4058,10 +4058,33 @@
             hideStitchToolbar();
             if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
             if (!blob || !blob.size) { showToast('长截图失败：编码失败'); return; }
-            // 进既有编辑器（编辑器模式：恢复后的普通窗口内居中展示，标注后走截图发送链路）
-            ScreenshotEditor.open(blob, setPendingShot);
+            // 原实现：ScreenshotEditor.open(blob, setPendingShot);（主窗口内编辑器画布无法拖动平移看长图，用户实测反馈）
+            // 改：长图直接进输入框待发送条（点发送才真正发出）+ 图片浏览器独立窗口打开查看
+            // （查看器支持拖拽平移/滚轮缩放/双击适应与 1:1，见 image-viewer.js 画布交互段）
+            setPendingShot(blob);
+            if (window.desktop && window.desktop.openImageViewer) {
+                stitchBlobToDataUrl(blob, function (dataUrl) {
+                    if (window.desktop && window.desktop.openImageViewer) {
+                        window.desktop.openImageViewer({ url: dataUrl, list: [dataUrl], index: 0 });
+                    }
+                });
+            }
             if (auto) showToast('已达长图最大高度，已自动完成');
         }, 'image/png');
+    }
+
+    // 长图 blob → dataURL（图片查看器为独立渲染进程，objectURL 不跨窗口；经 arrayBuffer+btoa 分块转换，
+    // 不用 FileReader——PptxViewJS 对 window.FileReader 的污染是全局永久的）
+    function stitchBlobToDataUrl(blob, cb) {
+        blob.arrayBuffer().then(function (buf) {
+            var bytes = new Uint8Array(buf);
+            var bin = '';
+            var CH = 0x8000; // 分块拼接防 String.fromCharCode.apply 栈溢出
+            for (var i = 0; i < bytes.length; i += CH) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+            }
+            cb('data:image/png;base64,' + btoa(bin));
+        }).catch(function () { cb(null); });
     }
 
     // 取消：停采样 → 恢复窗口与聊天 UI（长图丢弃）
