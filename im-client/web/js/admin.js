@@ -2008,7 +2008,7 @@
         }
         if (!u) { showToast('用户数据已过期，请刷新后重试'); return; }
         openEditModal('调整积分 - ' + u.username + (u.nickname && u.nickname !== u.username ? '（' + u.nickname + '）' : ''), [
-            { key: 'points', label: '积分余额', type: 'number', placeholder: '非负数，最多 2 位小数', hint: '绝对值设置（充值直接填新余额，支持小数），保存立即生效；AI 问答按 1000 tokens = 1 积分折算扣除' }
+            { key: 'points', label: '积分余额', type: 'number', placeholder: '非负数，最多 2 位小数', hint: '绝对值设置（充值直接填新余额，支持小数），保存立即生效；AI 扣费按"AI 计费设置"生效模式执行（按量：1000 tokens=1 积分 / 按次：每次调用固定积分）' }
         ], { points: u.points || 0 }, function (data) {
             // 双精度：允许最多 2 位小数（如 12.5 / 0.88），服务端归口再次四舍五入到 2 位
             var raw = String(data.points).trim();

@@ -241,6 +241,9 @@ type AgentTaskRecord struct {
 	// ElapsedMs 任务执行耗时毫秒（阶段一百三十八）：StartAt（实际开始执行）到完结的时长，
 	// 完结落库并随 done/error/cancelled 帧、任务列表接口下发，前端展示"耗时 X 分 Y 秒"（TRAE CN 同款）
 	ElapsedMs int64 `gorm:"column:elapsed_ms;not null;default:0" json:"elapsed_ms"`
+	// PointsCost 任务全程实际扣费积分累计（阶段一百三十八）：每轮即时扣费时累加，完结落库并随
+	// 任务列表接口下发（历史卡/重放卡展示"扣 N 积分"，无论按量/按次模式均为真实扣费精确值）
+	PointsCost float64 `gorm:"column:points_cost;not null;default:0" json:"points_cost"`
 	// ReplyMsgID 完结通知消息 ID（阶段七十）：前端重进会话时以答复气泡为锚点内联重放任务卡，执行过程历史可见
 	ReplyMsgID uint `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
 	// SessionID 归属 AI 会话（阶段七十一）：任务回显落库时按当前生效会话盖戳，任务卡重放按会话区间过滤防串会话

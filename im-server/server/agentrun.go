@@ -2945,7 +2945,7 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		}
 		t.mu.Unlock()
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
-			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs})
+			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs, "points_cost": pointsCost})
 		// 阶段六十六：任务完结通知落库（会话流留档+未读归口：切走会话/最小化/离线后经历史与角标可靠感知）
 		// completed 落最终答复（修复事件流不落库、重登后最终答复丢失）；failed/cancelled 落简短通知；
 		// cancelled 由用户本人现场操作触发，is_read=true 不产生未读提醒
@@ -3064,7 +3064,7 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 				"total_tokens":      usage.TotalTokens,
-				"elapsed_ms":        elapsedMs, // 阶段一百三十八：耗时随帧下发（失败也显示耗时）
+				"elapsed_ms":        elapsedMs,  // 阶段一百三十八：耗时随帧下发（失败也显示耗时）
 				"points_cost":       pointsCost, // 阶段一百三十八：实际扣费积分随帧下发（失败也显示扣了多少）
 			}
 			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
@@ -3122,13 +3122,17 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
 		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
+		// 阶段一百三十八：正文增量经泄漏过滤器（模型幻觉输出的工具调用标记整行拦截，思考流不过滤）
+		agentLeak := &aiLeakFilter{out: func(delta string) {
+			s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
+		}}
 		content, toolCalls, streamed, u, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,
-			func(delta string) {
-				s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
-			},
+			agentLeak.write,
 			func(delta string) {
 				s.agentEmit(t, "thought_delta", map[string]interface{}{"text": delta})
 			})
+		agentLeak.flush()
+		content = aiSanitizeToolLeak(content) // 结果层兜底净化（全泄漏→友好提示）
 		cancelAsk()
 		// 阶段一百零二：任务全程 Token 累计（每轮模型调用累加；失败轮已产生的消耗同样计入，
 		// 完结时统一落库/扣积分/随帧下发，completed 再扣积分）
@@ -3164,7 +3168,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				t.pointsCost += cost // 阶段一百三十八：累计本任务实际扣费（完结随帧下发，前端按此展示"扣 N 积分"）
 				t.mu.Unlock()
 				stepPayload["points_balance"] = balance
-				stepPayload["points_cost"] = cost     // 阶段一百三十八：该轮实际扣费（前端 percall 模式轮次行展示"扣 N 积分"）
+				stepPayload["points_cost"] = cost // 阶段一百三十八：该轮实际扣费（前端 percall 模式轮次行展示"扣 N 积分"）
 				stepPayload["billing_mode"] = billingMode
 				logger.Info("Agent 第 %d 轮积分扣除（任务 %s，用户 %s，- %.3f 积分，%d tokens，余额 %.3f，模式 %s）", round, t.ID, t.Username, cost, u.TotalTokens, balance, billingMode)
 				// 积分流水审计（Agent 单轮扣除，操作人 system；type 与完结扣 ai_agent_deduct 区分；描述按模式区分）
@@ -3734,7 +3738,8 @@ func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
 			"error":        truncateRunes(r.Error, 200),
 			"status":       r.Status,
 			"steps":        r.Steps,
-			"elapsed_ms":   r.ElapsedMs, // 阶段一百三十八：耗时随任务列表下发（重放卡 meta 展示）
+			"elapsed_ms":   r.ElapsedMs,  // 阶段一百三十八：耗时随任务列表下发（重放卡 meta 展示）
+			"points_cost":  r.PointsCost, // 阶段一百三十八：实际扣费积分随任务列表下发（历史卡/重放卡 meta 展示）
 			"reply_msg_id": r.ReplyMsgID,
 			"session_id":   r.SessionID,
 			"create_time":  r.CreateTime,

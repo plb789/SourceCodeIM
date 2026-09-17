@@ -4349,8 +4349,10 @@
         // 阶段七十三：停止且无已生成内容（"思考中"阶段停止，无气泡无落库）：无帧可补
         if (msg.remark === 'stopped' && !msg.content && !msg.msg_id) return;
         if (currentChatUser === msg.from_user) {
+            // 阶段一百三十八：END 降级整段渲染同样透传计费口径（流式收尾失败走此兜底路径，与 finishStream 同口径）
             appendMessage(msg.from_user, msg.content, 'other', msg.msg_id, msg.timestamp, true, false,
-                { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 });
+                { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 },
+                { cost: msg.points_cost, mode: msg.billing_mode });
             if (msg.msg_id) sendReadReceipt(msg.from_user, msg.msg_id);
         }
     });
@@ -7088,9 +7090,10 @@
 
         var meta = document.createElement('div');
         meta.className = 'taskhist-meta';
-        // 阶段一百三十八：重放卡 meta 附耗时（服务端 elapsed_ms 归口下发；旧记录无该值不显示）
+        // 阶段一百三十八：重放卡 meta 附耗时与实际扣费积分（服务端归口下发；旧记录无该值不显示）
         meta.textContent = (t.steps || 0) + ' 步' +
             (t.elapsed_ms > 0 ? ' · 耗时 ' + agentElapsedText(t.elapsed_ms) : '') +
+            (t.points_cost > 0 ? ' · 扣 ' + t.points_cost + ' 积分' : '') +
             ' · ' + thFormatTime(t.update_time || t.create_time);
         card.appendChild(meta);
 
@@ -12240,9 +12243,10 @@
                     if (st.sessionId === (aiViewSession[st.agent] || 0)) {
                         // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
                         // 阶段一百零二：透传全任务 Token 消耗（答复气泡操作栏 ⚡ 标注，与普通回复同口径）
-                        // 阶段一百三十八：透传计费口径（step_tokens 记忆的 billing，percall 时操作栏显示扣费积分）
+                        // 阶段一百三十八：透传计费口径——done 帧 points_cost 为全任务扣费累计（权威值，
+                        // 多轮任务=Σ单轮），st.billingCost 仅为末轮单次值只作旧服务端兜底，优先级不可颠倒
                         appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true, false, st.tokens,
-                            { cost: st.billingCost != null ? st.billingCost : ev.points_cost, mode: st.billingMode });
+                            { cost: ev.points_cost != null ? ev.points_cost : st.billingCost, mode: st.billingMode });
                         // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
                         if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
                     }
@@ -16414,10 +16418,12 @@
             head.appendChild(goal);
             card.appendChild(head);
 
-            // 元信息行：智能体 · N 步 · 发起时间（结束态展示最近活动时间）
+            // 元信息行：智能体 · N 步 · 扣 N 积分（阶段一百三十八，旧记录无该值不显示） · 发起时间
             var meta = document.createElement('div');
             meta.className = 'taskhist-meta';
-            meta.textContent = t.agent_name + ' · ' + (t.steps || 0) + ' 步 · ' + thFormatTime(t.update_time || t.create_time);
+            meta.textContent = t.agent_name + ' · ' + (t.steps || 0) + ' 步' +
+                (t.points_cost > 0 ? ' · 扣 ' + t.points_cost + ' 积分' : '') +
+                ' · ' + thFormatTime(t.update_time || t.create_time);
             card.appendChild(meta);
 
             // 详情容器（展开时懒加载全文）

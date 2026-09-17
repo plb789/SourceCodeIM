@@ -627,6 +627,97 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 	return aiStreamRes{text: full.String(), usage: usage}, nil
 }
 
+// ===== 阶段一百三十八：工具调用标记泄漏拦截（服务端归口） =====
+// 背景：上游模型在"未提供工具定义"的纯文本问答端点上，遇到工具型请求（如"打开浏览器…"）时，
+// 会凭训练记忆幻觉输出文本形式的工具调用协议标记（如 <|DSML|invoke ...> 厂商内部协议），
+// 服务端原样透传导致用户看到原始调用 XML。
+// 防线一（流式）：aiLeakFilter 行缓冲过滤增量——含标记的整行不推送不落库；
+// 防线二（结果）：aiSanitizeToolLeak 静态净化返回正文——全泄漏时替换为友好提示。
+// 思考流（reasoning）不过滤：模型推理过程中"想调工具"属于合理过程展示。
+
+// aiIsToolLeakLine 判断一行是否为泄漏的工具调用标记行（含尖括号 + dsml 协议名，大小写不敏感；
+// 仅匹配"尖括号+dsml"组合，正常讨论 DSML 字样的纯文本不受影响）
+func aiIsToolLeakLine(line string) bool {
+	if !strings.Contains(line, "<") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(line), "dsml")
+}
+
+// aiLeakFilter 流式增量泄漏过滤器：按行缓冲放行（泄漏标记可能跨增量分片，逐字符放行无法拦截）；
+// 超长无换行且不含 '<' 的缓冲直接放行（不可能是未闭合标记），避免长正文被憋到结束才显示
+type aiLeakFilter struct {
+	buf     string
+	out     func(string)
+	blocked bool // 是否拦截过泄漏内容（诊断用）
+}
+
+func (f *aiLeakFilter) write(s string) {
+	f.buf += s
+	// 快路径：缓冲不含 '<' 时不可能是标记，整段即时放行（普通正文零延迟，打字机体验不变）
+	if !strings.Contains(f.buf, "<") {
+		if f.buf != "" {
+			f.out(f.buf)
+			f.buf = ""
+		}
+		return
+	}
+	// 慢路径：含 '<' 可能为标记起始，按行放行（标记行以换行收尾；正常含尖括号内容如代码仅延迟一行）
+	for {
+		idx := strings.IndexByte(f.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := f.buf[:idx+1]
+		if aiIsToolLeakLine(line) {
+			f.blocked = true
+		} else {
+			f.out(line)
+		}
+		f.buf = f.buf[idx+1:]
+	}
+	if len(f.buf) > 4096 && !strings.Contains(f.buf, "<") {
+		f.out(f.buf)
+		f.buf = ""
+	}
+}
+
+// flush 流结束时放行尾部残余（经泄漏检测）
+func (f *aiLeakFilter) flush() {
+	if f.buf != "" {
+		if aiIsToolLeakLine(f.buf) {
+			f.blocked = true
+		} else {
+			f.out(f.buf)
+		}
+		f.buf = ""
+	}
+}
+
+// aiToolLeakNotice 全文均为工具调用标记（剔除后无有效内容）时下发的友好提示
+const aiToolLeakNotice = "（模型尝试调用工具，但当前会话未开启联网/工具功能，系统已自动拦截该内容。如需联网搜索或工具操作，请开启输入框的联网开关后重试）"
+
+// aiSanitizeToolLeak 结果层兜底净化：剔除正文中泄漏的工具调用标记行；
+// 全文均为标记时替换为友好提示。流式过滤后的内容再过一遍幂等无害（双保险）
+func aiSanitizeToolLeak(content string) string {
+	if !strings.Contains(strings.ToLower(content), "dsml") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	keep := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if aiIsToolLeakLine(line) {
+			continue
+		}
+		keep = append(keep, line)
+	}
+	cleaned := strings.TrimSpace(strings.Join(keep, "\n"))
+	if cleaned == "" {
+		return aiToolLeakNotice
+	}
+	return cleaned
+}
+
 // aiAgentChat 阶段五十九：带工具定义的非流式对话调用（Agent Loop 决策专用）。
 // 请求体携带 tools（OpenAI 兼容 function calling 格式），返回助手文本与工具调用请求列表；
 // 未发起工具调用时 toolCalls 为空、content 即最终答复。
@@ -1427,7 +1518,8 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		// 已推送增量累计（服务端侧留档口径）：正常完成时与 aiStreamChat 返回值一致；
 		// 用户停止（context.Canceled）时按它落库已生成部分（联网搜索循环链路自身不返回部分内容）
 		var pushed strings.Builder
-		pushDelta := func(delta string) {
+		// 阶段一百三十八：流式增量经泄漏过滤器（含工具调用标记的整行不推送不落库）
+		leak := &aiLeakFilter{out: func(delta string) {
 			pushed.WriteString(delta)
 			chunk := protocol.Message{
 				MsgType:   protocol.MsgTypeAIStream,
@@ -1441,7 +1533,8 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			data, _ := json.Marshal(chunk)
 			// 推送增量到用户全部在线连接（多端同步打字机效果）
 			s.sendToUser(c.username, data)
-		}
+		}}
+		pushDelta := leak.write
 		var full string
 		var usage aiUsage
 		var err error
@@ -1450,6 +1543,13 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			full, usage, err = s.aiChatLoopWithSearch(askCtx, agent, c.username, chatMsgs, streamID, pushDelta)
 		} else {
 			full, usage, err = aiStreamChat(askCtx, agent, chatMsgs, pushDelta)
+		}
+		// 阶段一百三十八：流结束放行过滤器尾部残余（最后一段常无换行，不放行会丢内容），
+		// 并对返回正文做结果层兜底净化（全泄漏→友好提示；泄漏时留痕日志便于排查上游模型行为）
+		leak.flush()
+		full = aiSanitizeToolLeak(full)
+		if leak.blocked {
+			logger.Info("AI 问答拦截工具调用标记泄漏（用户 %s，智能体 %s，联网=%v）", c.username, agent.Name, useSearch)
 		}
 		if err != nil {
 			// 阶段七十三：用户主动停止（Trae 同款）——已生成部分落库留档（无则不落库），
