@@ -3061,6 +3061,124 @@ html, body {
     opacity: 0.9;
 }
 
+/* ===== 阶段一百三十九：QQ 同款录屏（录屏工具栏 / 3-2-1 倒计时 / 菜单快捷键 / 视频气泡 / 录屏预览浮层） ===== */
+/* 录屏工具栏：与标注工具栏同视觉，选区完成后出现（与工具栏互斥显示） */
+.shot-rec-toolbar {
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.shot-rec-toolbar.hidden {
+    display: none;
+}
+
+.shot-rec-size {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.shot-btn.rec-start {
+    background: #07c160; /* 微信绿：录制开始动作色（功能性固定色） */
+    border-color: #07c160;
+    color: #fff;
+}
+
+.shot-btn.rec-start:hover {
+    opacity: 0.9;
+}
+
+/* 录屏倒计时层：大数字居中，pop 动画缩放跳动 */
+.shot-rec-count {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 120px;
+    font-weight: 700;
+    color: #07c160;
+    text-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    z-index: 3100;
+}
+
+.shot-rec-count.hidden {
+    display: none;
+}
+
+.shot-rec-count.pop {
+    animation: shot-rec-pop 1s ease-out;
+}
+
+@keyframes shot-rec-pop {
+    0% { transform: translate(-50%, -50%) scale(1.6); opacity: 0.2; }
+    30% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0.85; }
+}
+
+/* 截图选项菜单快捷键提示（录屏 Ctrl+Alt+R） */
+.shot-menu-key {
+    margin-left: auto;
+    padding-left: 24px;
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+/* 视频消息气泡：内联播放（微信同款），视频区圆角与气泡一致 */
+.bubble-video {
+    padding: 6px !important; /* 视频气泡内边距小于文件卡片（视频画面占主体） */
+}
+
+.bubble-video-el {
+    display: block;
+    max-width: 300px;
+    max-height: 220px;
+    border-radius: 6px;
+    background: #000;
+}
+
+/* 录屏预览浮层（复用截图预览浮层视觉：深色遮罩 + 内容居中 + 按钮） */
+.rec-preview-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 3200;
+    background: rgba(0, 0, 0, 0.78); /* 预览压暗层（功能性，不随主题） */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+}
+
+.rec-preview-mask.hidden {
+    display: none;
+}
+
+.rec-preview-video {
+    max-width: 86vw;
+    max-height: 70vh;
+    border-radius: 8px;
+    background: #000;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.rec-preview-info {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.rec-preview-bar {
+    display: flex;
+    gap: 12px;
+}
+
 /* ===== 阶段四十：消息引用（微信同款：右键引用 → 引用条 → 引用信封随消息发出） ===== */
 /* 气泡内引用块：灰底 + 主题色左边框，文字左摘要、右可选缩略图，点击定位原消息 */
 .msg-quote {

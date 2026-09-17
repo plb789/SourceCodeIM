@@ -25,7 +25,13 @@
     var mosaicCanvas = null;   // 马赛克底图（原图降采样再放大，像素块效果）
     var onConfirm = null;      // 确认回调：function(blob)
     var imgUrl = '';           // 底图 blob URL（关闭时释放）
-    var mode = 'editor';       // 当前模式：editor（编辑器）/freeze（伪冻结遮罩，第二期）
+    var mode = 'editor';       // 当前模式：editor（编辑器）/freeze（伪冻结遮罩，第二期）/record（录屏选区，阶段一百三十九）
+    // ===== 阶段一百三十九：QQ 同款录屏（选区复用冻结交互，工具栏切换为 开始录制/取消） =====
+    var recToolbarEl = null;   // 录屏工具栏（尺寸+开始录制+取消，与标注工具栏互斥显示）
+    var recSizeEl = null;      // 录屏选区尺寸显示（"1280×720"）
+    var recCountEl = null;     // 3-2-1 倒计时层（大数字居中，冻结画面上）
+    var recHandlers = null;    // 录屏回调 { onStart(sel), onCancel() }（渲染层注入）
+    var recStarted = false;    // 倒计时结束录制已启动标记（关闭时区分 取消/启动 两种语义）
     var sizeLabel = null;      // 选区尺寸标签（伪冻结模式：拖拽时实时显示 宽×高）
     // ===== 阶段一百三十九：QQ 同款窗口识别（悬停高亮 + 单击选窗 + 双击截窗） =====
     var winHoverEl = null;     // 悬停窗口高亮框（QQ 同款红色焦点框，pointer-events:none 不挡操作）
@@ -148,6 +154,27 @@
         winHoverEl = document.createElement('div');
         winHoverEl.className = 'shot-win-hover hidden';
 
+        // 阶段一百三十九：录屏工具栏（选区完成后出现，与标注工具栏互斥；开始录制为绿色主按钮）
+        recToolbarEl = document.createElement('div');
+        recToolbarEl.className = 'shot-rec-toolbar hidden';
+        recSizeEl = document.createElement('span');
+        recSizeEl.className = 'shot-rec-size';
+        var recStartBtn = document.createElement('button');
+        recStartBtn.className = 'shot-btn rec-start';
+        recStartBtn.textContent = '开始录制';
+        var recCancelBtn = document.createElement('button');
+        recCancelBtn.className = 'shot-btn';
+        recCancelBtn.textContent = '取消';
+        recStartBtn.addEventListener('click', function () { startRecCountdown(); });
+        recCancelBtn.addEventListener('click', function () { close(); });
+        recToolbarEl.appendChild(recSizeEl);
+        recToolbarEl.appendChild(recStartBtn);
+        recToolbarEl.appendChild(recCancelBtn);
+
+        // 阶段一百三十九：录屏倒计时层（3-2-1 大数字居中，冻结画面之上，期间不可操作）
+        recCountEl = document.createElement('div');
+        recCountEl.className = 'shot-rec-count hidden';
+
         // 阶段一百三十九：提取文字/屏幕翻译结果浮层（自绘卡片，禁止系统弹窗）
         ocrCardEl = document.createElement('div');
         ocrCardEl.className = 'shot-ocr-card hidden';
@@ -191,12 +218,14 @@
         editorEl.appendChild(sizeLabel);
         editorEl.appendChild(hintEl);
         editorEl.appendChild(winHoverEl);
+        editorEl.appendChild(recToolbarEl); // 阶段一百三十九：录屏工具栏（与标注工具栏互斥显示）
+        editorEl.appendChild(recCountEl);   // 阶段一百三十九：录屏倒计时层
         editorEl.appendChild(ocrCardEl);
 
         // ===== 阶段一百三十九：悬停窗口识别（mousemove 节流 → 主进程 Win32 命中 → 高亮框跟随） =====
         // 仅冻结态 + 选区工具 + 未框选（sel 空）+ 非拖拽中生效；PC 端无 desktop API（浏览器回退）自动跳过
         document.addEventListener('mousemove', function (e) {
-            if (!isOpen() || mode !== 'freeze' || tool !== 'select' || drawing || sel) { hideWinHover(); return; }
+            if (!isOpen() || (mode !== 'freeze' && mode !== 'record') || tool !== 'select' || drawing || sel) { hideWinHover(); return; }
             if (!window.desktop || !window.desktop.shotWindowAt) return;
             var now = Date.now();
             if (now - hoverLast < 40 || hoverPending) return; // 节流 + 单飞
@@ -207,7 +236,7 @@
             window.desktop.shotWindowAt(Math.round(e.clientX * dpr), Math.round(e.clientY * dpr)).then(function (r) {
                 hoverPending = false;
                 // 响应回来时状态可能已变（关闭/开始框选/已选定）：一并作废
-                if (!isOpen() || mode !== 'freeze' || drawing || sel) { hideWinHover(); return; }
+                if (!isOpen() || (mode !== 'freeze' && mode !== 'record') || drawing || sel) { hideWinHover(); return; }
                 if (!r) { hideWinHover(); winHoverImg = null; return; }
                 var cr = drawCanvas.getBoundingClientRect();
                 // 窗口物理矩形 → 逻辑视口坐标 → 定位高亮框；换算图像坐标缓存（供单击/双击选窗裁剪）
@@ -319,7 +348,7 @@
 
     // 更新选区尺寸标签：显示 宽×高，位置跟随选区右下角（伪冻结模式，微信同款）
     function updateSizeLabel() {
-        if (!sel || mode !== 'freeze' || sel.w < 4 || sel.h < 4) { hideSizeLabel(); return; }
+        if (!sel || (mode !== 'freeze' && mode !== 'record') || sel.w < 4 || sel.h < 4) { hideSizeLabel(); return; }
         var rect = wrapEl.getBoundingClientRect();
         var px = rect.left + (sel.x + sel.w) * scale;  // 选区右下角屏幕坐标
         var py = rect.top + (sel.y + sel.h) * scale;
@@ -349,10 +378,55 @@
         load(blob, confirmCb, 'freeze');
     }
 
+    // ===== 阶段一百三十九：QQ 同款录屏选区（选区交互与冻结截图完全同构，工具栏换录屏版） =====
+    // handlers = { onStart(sel), onCancel() }：onStart 在 3-2-1 倒计时结束、编辑器自动关闭后触发
+    // （渲染层接手：主窗口退场 → 拿屏幕流 → 裁剪选区录制）；onCancel 在选区阶段取消（Esc/取消按钮）时触发
+    function freezeVideo(blob, handlers, onReady) {
+        recHandlers = handlers || null;
+        recStarted = false;
+        onCloseCb = null;
+        onReadyCb = onReady || null;
+        load(blob, null, 'record');
+    }
+
+    // 录屏倒计时：点"开始录制"后 3-2-1 每秒一跳（大数字冻结画面居中），结束自动关闭编辑器并回调 onStart
+    function startRecCountdown() {
+        if (!sel || sel.w < 2 || sel.h < 2) return;
+        recToolbarEl.classList.add('hidden');
+        var n = 3;
+        var tick = function () {
+            if (n > 0) {
+                recCountEl.textContent = n;
+                recCountEl.classList.remove('hidden');
+                // 重启动画（同一元素连续数字缩放跳动）
+                recCountEl.classList.remove('pop');
+                void recCountEl.offsetWidth;
+                recCountEl.classList.add('pop');
+                n--;
+                setTimeout(tick, 1000);
+                return;
+            }
+            recCountEl.classList.add('hidden');
+            recStarted = true; // 关闭语义切换：此后 close 不再触发 onCancel
+            var s = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
+            var snapW = imgW, snapH = imgH; // 冻结底图=全屏快照物理分辨率（选区坐标归口，屏幕流裁剪按此换算）
+            // 先缓存回调再关闭：close() 会清空 recHandlers，关闭后再读恒为 null（实测踩坑）
+            var startCb = recHandlers && recHandlers.onStart ? recHandlers.onStart : null;
+            close();
+            if (startCb) startCb(s, snapW, snapH);
+        };
+        tick();
+    }
+
+    // 录屏选区尺寸文本刷新（选区完成/重新框选时同步）
+    function updateRecSize() {
+        if (recSizeEl && sel) recSizeEl.textContent = Math.round(sel.w) + '×' + Math.round(sel.h);
+    }
+
     function load(blob, confirmCb, m) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
-        if (m !== 'freeze') { onCloseCb = null; onReadyCb = null; } // 编辑器模式无冻结回调
+        if (m !== 'freeze' && m !== 'record') { onCloseCb = null; onReadyCb = null; } // 编辑器模式无冻结回调（record 的 onReady 由 freezeVideo 注入）
         imgUrl = URL.createObjectURL(blob);
         var image = new Image();
         image.onload = function () {
@@ -369,7 +443,7 @@
                 c.height = imgH;
             });
             mode = m;
-            if (mode === 'freeze') {
+            if (mode === 'freeze' || mode === 'record') {
                 // 伪冻结：cover 铺满视口（居中，溢出部分裁剪），贴近"屏幕被冻结"的观感
                 scale = Math.max(window.innerWidth / imgW, window.innerHeight / imgH);
                 var cw = Math.round(imgW * scale), ch = Math.round(imgH * scale);
@@ -389,6 +463,9 @@
                 // 微信/QQ 截图时标题栏同样同步消失。根节点挂 shot-freeze 类，CSS 据此隐藏，close() 时移除
                 document.documentElement.classList.add('shot-freeze');
                 toolbarEl.classList.remove('visible'); // 选区完成后工具栏才出现
+                recToolbarEl.classList.add('hidden');  // 阶段一百三十九：录屏工具栏复位隐藏
+                recCountEl.classList.add('hidden');    // 阶段一百三十九：倒计时层复位隐藏
+                hintEl.textContent = mode === 'record' ? '拖拽框选录屏区域 · Esc 取消' : '拖拽框选截图区域 · Enter 发送 · Esc 取消';
                 hintEl.classList.remove('hidden');     // 顶部操作提示：告知拖拽框选
             } else {
                 // 编辑器模式：contain 居中缩放（与第一期一致）
@@ -437,11 +514,20 @@
         resetWinHover(); // 阶段一百三十九：窗口识别状态清理（判定定时器/缓存/高亮框）
         hideOcrCard();   // 阶段一百三十九：识别/翻译结果浮层同步收起
         toolbarEl.classList.remove('visible');
+        recToolbarEl.classList.add('hidden'); // 阶段一百三十九：录屏工具栏收起
+        recCountEl.classList.add('hidden');   // 阶段一百三十九：倒计时层收起（倒计时中途取消兜底）
         hideSizeLabel();
         hintEl.classList.add('hidden');
         hideTextInput();
         undoStack = [];
         sel = null;
+        // 阶段一百三十九：录屏模式关闭语义分流——倒计时已结束（录制已启动）只做清理；
+        // 选区阶段取消（Esc/取消按钮）触发 onCancel 交渲染层退出冻结态
+        var recCancelCb = null;
+        if (mode === 'record') {
+            if (!recStarted && recHandlers && recHandlers.onCancel) recCancelCb = recHandlers.onCancel;
+            recHandlers = null;
+        }
         mode = 'editor';
         img = null;
         if (imgUrl) { URL.revokeObjectURL(imgUrl); imgUrl = ''; }
@@ -451,6 +537,7 @@
             onCloseCb = null;
             cb();
         }
+        if (recCancelCb) recCancelCb();
     }
 
     function isOpen() {
@@ -719,14 +806,15 @@
                 hideOcrCard();
                 // 阶段一百三十九：QQ 同款单击选窗——悬停识别到窗口时按下直接按窗口矩形选定，
                 // 出工具栏可继续标注/Enter 发送；350ms 内二次点击由 dblclick 处理为直接发送
-                if (mode === 'freeze' && winHoverEl && !winHoverEl.classList.contains('hidden') && winHoverImg) {
+                if ((mode === 'freeze' || mode === 'record') && winHoverEl && !winHoverEl.classList.contains('hidden') && winHoverImg) {
                     sel = { x: winHoverImg.x, y: winHoverImg.y, w: winHoverImg.w, h: winHoverImg.h };
                     winSelImg = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
                     winHoverImg = null;
                     hideWinHover();
                     drawMask();
                     hintEl.classList.add('hidden');
-                    toolbarEl.classList.add('visible');
+                    if (mode === 'record') { updateRecSize(); recToolbarEl.classList.remove('hidden'); } // 录屏：录屏工具栏出现
+                    else toolbarEl.classList.add('visible');
                     updateSizeLabel();
                     if (winClickTimer) clearTimeout(winClickTimer);
                     winClickTimer = setTimeout(function () { winClickTimer = null; }, 350); // 双击判定窗（超时=单纯单击，选区保留可编辑）
@@ -735,8 +823,9 @@
                 // 选区工具：允许在空选区（冻结态）下直接拖拽框选
                 drawing = true;
                 sx = pt.x; sy = pt.y;
-                if (mode === 'freeze') {
+                if (mode === 'freeze' || mode === 'record') {
                     toolbarEl.classList.remove('visible'); // 重新框选期间隐藏工具栏
+                    recToolbarEl.classList.add('hidden');  // 阶段一百三十九：重新框选期间隐藏录屏工具栏
                     hideSizeLabel();
                     hintEl.classList.add('hidden'); // 开始框选即收起操作提示
                 }
@@ -772,7 +861,7 @@
                     w: Math.abs(pt.x - sx), h: Math.abs(pt.y - sy)
                 };
                 drawMask();
-                if (mode === 'freeze') updateSizeLabel(); // 拖拽期间实时显示尺寸（微信同款）
+                if (mode === 'freeze' || mode === 'record') updateSizeLabel(); // 拖拽期间实时显示尺寸（微信同款）
             } else if (tool === 'rect' || tool === 'ellipse' || tool === 'arrow') {
                 dctx.putImageData(strokeSnapshot, 0, 0);
                 withSelClip(function () {
@@ -794,10 +883,15 @@
         });
 
         document.addEventListener('mouseup', function () {
-            // 冻结态选区完成：工具栏出现（微信同款），尺寸标签保持显示
-            if (drawing && mode === 'freeze' && tool === 'select' && sel && sel.w > 4 && sel.h > 4) {
-                toolbarEl.classList.add('visible');
-                updateSizeLabel();
+            // 冻结态选区完成：工具栏出现（微信同款），尺寸标签保持显示；录屏模式切换录屏工具栏
+            if (drawing && (mode === 'freeze' || mode === 'record') && tool === 'select' && sel && sel.w > 4 && sel.h > 4) {
+                if (mode === 'record') {
+                    updateRecSize();
+                    recToolbarEl.classList.remove('hidden');
+                } else {
+                    toolbarEl.classList.add('visible');
+                    updateSizeLabel();
+                }
             }
             drawing = false;
             strokeSnapshot = null;
@@ -813,6 +907,19 @@
         wrapEl.addEventListener('dblclick', function (e) {
             // 阶段三十八修复：阻止双击原生选词（否则双击处文字被选中，观感异常）
             e.preventDefault();
+            // 阶段一百三十九：录屏模式双击不发送——双击选窗仅选定窗口矩形出录屏工具栏，双击选区内无动作
+            if (mode === 'record') {
+                if (tool === 'select' && winClickTimer != null && winSelImg) {
+                    clearTimeout(winClickTimer);
+                    winClickTimer = null;
+                    sel = { x: winSelImg.x, y: winSelImg.y, w: winSelImg.w, h: winSelImg.h };
+                    winSelImg = null;
+                    drawMask();
+                    updateRecSize();
+                    recToolbarEl.classList.remove('hidden');
+                }
+                return;
+            }
             // 阶段一百三十九：QQ 同款双击截窗——单击选窗后的双击判定窗内二次点击，直接按窗口矩形
             // 完成截图发送（与"双击选区内发送"同语义）；winSelImg 仅为选窗缓存，普通框选不受影响
             if (tool === 'select' && winClickTimer != null && winSelImg) {
@@ -845,8 +952,8 @@
                 if (ocrCardEl && !ocrCardEl.classList.contains('hidden')) { hideOcrCard(); return; }
                 close();
             }
-            else if (e.key === 'Enter' && !textInputEl.classList.contains('hidden') === false) {
-                // 文字输入框隐藏时 Enter 才触发发送
+            else if (e.key === 'Enter' && !textInputEl.classList.contains('hidden') === false && mode !== 'record') {
+                // 文字输入框隐藏时 Enter 才触发发送（录屏模式 Enter 无发送语义，避免误触截图发送）
                 e.preventDefault();
                 output();
             }
@@ -894,6 +1001,7 @@
     window.ScreenshotEditor = {
         open: open,
         freeze: freeze,
+        freezeVideo: freezeVideo, // 阶段一百三十九：QQ 同款录屏选区（选区交互复用冻结态，倒计时后回调 onStart）
         close: close,
         isOpen: isOpen
     };

@@ -437,6 +437,55 @@ ipcMain.on('shot:hide-main-set', function (e, on) {
     shotHideMain = !!on;
 });
 
+// ===== 阶段一百三十九：QQ 同款录屏（Ctrl+Alt+R 全局快捷键 / 截图按钮菜单入口） =====
+// 录制链路：冻结选区（复用截图选区交互）→ 3-2-1 倒计时 → rec:begin 主窗口退场（退全屏恢复原位+hide，
+// 屏幕完全露出）→ 渲染层 getUserMedia 拿屏幕流（rec:source 给源 id）→ canvas 实时裁剪选区 → MediaRecorder
+// 录 webm → Ctrl+Alt+R 停止 → rec:show 窗口归位 → 预览浮层确认发送（走既有文件消息链路，服务端零改动）
+var recActive = false; // 录制进行中标志（全局快捷键据此切换 开始/停止 语义）
+
+// 录制启动：主窗口退场。先退全屏（leave-full-screen 事件自动恢复截图隐藏期的原位），等全屏态
+// 结束后 hide——desktopCapturer 屏幕流不含已隐藏窗口，录制画面干净；系统通知告知停止方式
+// （主窗口已隐藏，屏幕上无自绘 UI 可承载"录制中"提示）
+ipcMain.handle('rec:begin', async function () {
+    if (!mainWindow) return false;
+    recActive = true;
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.setFullScreen(false);
+    var tries = 0;
+    while (mainWindow.isFullScreen() && tries++ < 20) {
+        await new Promise(function (r) { setTimeout(r, 100); });
+    }
+    mainWindow.hide();
+    showNotification('录屏已开始', '按 Ctrl+Alt+R 停止录屏');
+    return true;
+});
+
+// 屏幕源 id（渲染层 getUserMedia 的 chromeMediaSourceId；只取 id 用 1x1 缩略图加速）
+ipcMain.handle('rec:source', function () {
+    var display = screen.getPrimaryDisplay();
+    return desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } }).then(function (sources) {
+        var src = null;
+        for (var i = 0; i < sources.length; i++) {
+            if (sources[i].display_id === String(display.id)) { src = sources[i]; break; }
+        }
+        if (!src && sources.length) src = sources[0];
+        return src ? src.id : '';
+    });
+});
+
+// 录制结束：主窗口归位（show 自动带出隐藏期窗口；全屏已在 rec:begin 退出，恢复普通窗口）
+ipcMain.on('rec:show', function () {
+    recActive = false;
+    if (!mainWindow) return;
+    mainWindow.show();
+    mainWindow.focus();
+});
+
+// 录制状态同步（渲染层 MediaRecorder 实际 start/stop 时上报，与 rec:begin/rec:show 解耦防竞态）
+ipcMain.on('rec:active', function (e, on) {
+    recActive = !!on;
+});
+
 // ===== 阶段一百三十九：QQ 同款窗口识别（冻结截图悬停高亮窗口 + 单击选窗 + 双击截窗） =====
 // 命中测试用 PowerShell 常驻子进程做 Win32 调用（WindowFromPoint+GA_ROOT+GetWindowRect）——
 // 零 npm 原生依赖：esbuild bundle 与 electron-builder 打包链路不引入 .node 模块（koffi 类方案
@@ -1485,6 +1534,27 @@ app.whenReady().then(async function () {
         // 原实现：抓屏后 send('shot:global-result') 推送渲染层打开编辑器（与 prepare 链路重复）
     });
     if (!shortcutOk) console.warn('Alt+A 全局快捷键注册失败（可能被其他应用占用）');
+
+    // 阶段一百三十九：录屏全局快捷键（QQ 同款二段语义）——未录制时触发录屏流程，录制中再按=停止；
+    // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
+    // 两个都失败仅告警（截图按钮下拉菜单"录屏"项仍可用），实际生效键位经 rec:shortcut 供菜单文案同步
+    var recShortcutLabel = 'Ctrl+Alt+R';
+    var recHotkeyHandler = function () {
+        if (!mainWindow) return;
+        mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
+    };
+    var recShortcutOk = globalShortcut.register('Control+Alt+R', recHotkeyHandler);
+    if (!recShortcutOk) {
+        recShortcutLabel = 'Ctrl+Shift+R';
+        recShortcutOk = globalShortcut.register('Control+Shift+R', recHotkeyHandler);
+    }
+    if (!recShortcutOk) {
+        recShortcutLabel = '';
+        console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
+    }
+
+    // 阶段一百三十九：实际生效的录屏快捷键标签（空串=无全局键，仅菜单入口），菜单/toast 文案同步用
+    ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
 
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

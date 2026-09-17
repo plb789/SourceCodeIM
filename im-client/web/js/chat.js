@@ -2528,6 +2528,11 @@
         return /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
     }
 
+    // 阶段一百三十九：视频文件判定（录屏 webm 与常见视频扩展名，聊天内视频气泡内联渲染）
+    function isVideoName(name) {
+        return /\.(mp4|webm|mov|m4v|mkv|avi)$/i.test(name || '');
+    }
+
     function formatSize(bytes) {
         if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + 'MB';
         if (bytes >= 1024) return (bytes / 1024).toFixed(1) + 'K';
@@ -3337,6 +3342,24 @@
             shotMenuClose();
         });
         menu.appendChild(item);
+        // 阶段一百三十九：QQ 同款录屏入口（全局快捷键同效，键位随主进程实际注册动态显示；仅 PC 端有 desktop 桥时显示）
+        if (window.desktop && window.desktop.recBegin) {
+            var recItem = document.createElement('div');
+            recItem.className = 'shot-menu-item';
+            var recLabel = document.createElement('span');
+            recLabel.textContent = '录屏';
+            var recKey = document.createElement('span');
+            recKey.className = 'shot-menu-key';
+            recKey.textContent = recShortcutLabel; // 主进程实际注册的键位（回退后显示 Ctrl+Shift+R，无全局键时隐藏）
+            if (!recShortcutLabel) recKey.style.display = 'none';
+            recItem.appendChild(recLabel);
+            recItem.appendChild(recKey);
+            recItem.addEventListener('click', function () {
+                shotMenuClose();
+                startRecordFlow();
+            });
+            menu.appendChild(recItem);
+        }
         document.body.appendChild(menu);
         // 定位：截图按钮下方（右对齐按钮右缘，越出视口底部翻转到上方）
         var rect = screenshotBtn.getBoundingClientRect();
@@ -3416,6 +3439,265 @@
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) { sendAIImage(shot); return; }
         if (currentChatUser === '') sendGroupImage(shot);
         else sendFile(shot);
+    }
+
+    // ===== 阶段一百三十九：QQ 同款录屏（冻结选区 → 3-2-1 倒计时 → 主窗口退场 → 选区裁剪录制 → Ctrl+Alt+R 停止 → 预览发送） =====
+    // 技术链路：主进程 desktopCapturer 给屏幕源 id → 渲染层 getUserMedia 拿全屏流 → video 播放
+    // → rAF 把选区区域 drawImage 到选区尺寸 canvas（实时裁剪，零后期处理）→ canvas.captureStream(30)
+    // → MediaRecorder 录 webm（vp9 优先 vp8 回退）→ 停止后组装 blob → 预览浮层确认 → 既有文件消息链路发送（服务端零改动）
+    var recState = {
+        active: false,   // MediaRecorder 已在录（Ctrl+Alt+R 停止语义判定依据）
+        stream: null,    // 全屏屏幕流（getUserMedia desktop 源）
+        video: null,     // 播放屏幕流的 video 元素（不进 DOM，仅做绘制源）
+        canvas: null,    // 选区尺寸裁剪画布（captureStream 数据源）
+        raf: 0,          // 裁剪绘制循环句柄
+        recorder: null,  // MediaRecorder 实例
+        chunks: [],      // 录制数据块（1s 一片，防单个 blob 峰值过大）
+        sel: null,       // 录制选区（冻结底图坐标=屏幕物理像素）
+        snapW: 0, snapH: 0, // 冻结底图尺寸（选区坐标归口，屏幕流分辨率不一致时按比例换算）
+        startedAt: 0,    // 录制开始时间戳（时长统计）
+        maxTimer: 0      // 最长录制时长保护定时器
+    };
+    var REC_MAX_MS = 10 * 60 * 1000; // 最长录制 10 分钟（内存防线，到点自动停止）
+    // 实际生效的录屏全局快捷键（QQ 同款 Ctrl+Alt+R；被其他程序占用时主进程自动回退 Ctrl+Shift+R，启动时同步实际键位）
+    var recShortcutLabel = 'Ctrl+Alt+R';
+    if (window.desktop && window.desktop.recShortcut) {
+        window.desktop.recShortcut().then(function (label) {
+            if (typeof label === 'string') recShortcutLabel = label;
+        }).catch(function () { /* 取失败保持默认文案 */ });
+    }
+
+    // 录屏入口：抓屏冻结选区（与截图同链路，"隐藏当前窗口"开关同样生效）
+    function startRecordFlow() {
+        if (!window.desktop || !window.desktop.captureScreen || !window.desktop.recBegin) {
+            showToast('录屏仅 PC 端支持');
+            return;
+        }
+        if (!IMSocket.isConnected()) { showToast('请先登录'); return; }
+        if (recState.active || recState.recorder) { showToast(recShortcutLabel ? '录屏进行中，按 ' + recShortcutLabel + ' 停止' : '录屏进行中'); return; }
+        if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
+        window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
+            var blob = dataUrlToBlob(dataUrl);
+            if (!blob) { showToast('录屏启动失败'); return; }
+            // 冻结选区（录屏模式）：选区完成后出录屏工具栏，倒计时结束回调 onStart；选区阶段取消回调 onCancel
+            ScreenshotEditor.freezeVideo(blob, {
+                onStart: onRecAreaStart,
+                onCancel: function () {
+                    if (window.desktop && window.desktop.exitFreeze) window.desktop.exitFreeze();
+                }
+            });
+        }).catch(function () { showToast('录屏启动失败'); });
+    }
+
+    // 倒计时结束：主窗口退场 → 拿屏幕流 → 启动裁剪录制（退场完成前不进录制，窗口残影不入镜）
+    function onRecAreaStart(selImg, snapW, snapH) {
+        recState.sel = selImg;
+        recState.snapW = snapW;
+        recState.snapH = snapH;
+        var beginPromise = window.desktop.recBegin().catch(function () { return false; }); // 退场失败不阻断录制（画面可能带主窗口）
+        window.desktop.recSource().then(function (sourceId) {
+            if (!sourceId) throw new Error('未找到屏幕源');
+            var dpr = window.devicePixelRatio || 1;
+            return navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                    mandatory: {
+                        chromeMediaSource: 'desktop',
+                        chromeMediaSourceId: sourceId,
+                        maxWidth: Math.round((window.screen.width || 1920) * dpr),
+                        maxHeight: Math.round((window.screen.height || 1080) * dpr),
+                        maxFrameRate: 30
+                    }
+                }
+            });
+        }).then(function (stream) {
+            recState.stream = stream;
+            return beginPromise.then(function () { return stream; }); // 主窗口退场完成后再开播
+        }).then(function (stream) {
+            var video = document.createElement('video');
+            recState.video = video;
+            video.srcObject = stream;
+            video.muted = true;
+            video.playsInline = true;
+            video.onloadedmetadata = function () {
+                video.play();
+                startRecRecorder();
+            };
+        }).catch(function (e) {
+            showToast('录屏启动失败' + (e && e.message ? '：' + e.message : ''));
+            recCleanup();
+            window.desktop.recShow();
+        });
+    }
+
+    // 裁剪录制启动：选区坐标（冻结底图物理像素）按屏幕流实际分辨率比例换算后实时绘制
+    function startRecRecorder() {
+        var video = recState.video, sel = recState.sel;
+        var fx = video.videoWidth / recState.snapW, fy = video.videoHeight / recState.snapH;
+        var cx = Math.round(sel.x * fx), cy = Math.round(sel.y * fy);
+        var cw = Math.max(2, Math.round(sel.w * fx)), ch = Math.max(2, Math.round(sel.h * fy));
+        var canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        recState.canvas = canvas;
+        var ctx = canvas.getContext('2d');
+        var draw = function () {
+            if (!recState.recorder) return;
+            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+            recState.raf = requestAnimationFrame(draw);
+        };
+        var cstream = canvas.captureStream(30);
+        var mime = 'video/webm;codecs=vp9';
+        if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
+        if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
+        var recorder = new MediaRecorder(cstream, { mimeType: mime, videoBitsPerSecond: 2500000 });
+        recState.recorder = recorder;
+        recState.chunks = [];
+        recorder.ondataavailable = function (e) {
+            if (e.data && e.data.size) recState.chunks.push(e.data);
+        };
+        recorder.onstop = onRecStopped;
+        recorder.start(1000); // 1s 一片：长时间录制内存分段，防单 blob 峰值
+        recState.active = true;
+        recState.startedAt = Date.now();
+        if (window.desktop.recActive) window.desktop.recActive(true);
+        draw();
+        // 最长时长保护：到点自动停止（内存防线）
+        recState.maxTimer = setTimeout(function () {
+            if (recState.active) {
+                stopRecording();
+                showToast('已达最长录制时长（10 分钟），已自动停止');
+            }
+        }, REC_MAX_MS);
+    }
+
+    // 停止录制（Ctrl+Alt+R 全局快捷键 / 菜单 / 最长时长保护共用）
+    function stopRecording() {
+        if (!recState.active || !recState.recorder) return;
+        recState.active = false;
+        clearTimeout(recState.maxTimer);
+        if (window.desktop.recActive) window.desktop.recActive(false);
+        try { recState.recorder.stop(); } catch (e) { onRecStopped(); }
+    }
+
+    // 录制结束：释放流与循环 → 组装 blob → 主窗口归位 → 预览浮层确认
+    function onRecStopped() {
+        if (recState.raf) cancelAnimationFrame(recState.raf);
+        if (recState.stream) recState.stream.getTracks().forEach(function (t) { t.stop(); });
+        var blob = new Blob(recState.chunks, { type: 'video/webm' });
+        var durationMs = Date.now() - recState.startedAt;
+        recState.chunks = [];
+        recState.recorder = null;
+        recState.video = null;
+        recState.canvas = null;
+        recState.stream = null;
+        recState.raf = 0;
+        window.desktop.recShow();
+        if (!blob.size) { showToast('录屏数据为空'); return; }
+        showRecPreview(blob, durationMs);
+    }
+
+    // 启动失败清理（退场/建流任一环节异常：释放半途资源并回到聊天界面）
+    function recCleanup() {
+        if (recState.raf) cancelAnimationFrame(recState.raf);
+        if (recState.stream) recState.stream.getTracks().forEach(function (t) { t.stop(); });
+        if (recState.recorder && recState.recorder.state !== 'inactive') {
+            try { recState.recorder.stop(); } catch (e) { /* 已停止 */ }
+        }
+        recState.active = false;
+        clearTimeout(recState.maxTimer);
+        if (window.desktop.recActive) window.desktop.recActive(false);
+        recState.chunks = [];
+        recState.recorder = null;
+        recState.video = null;
+        recState.canvas = null;
+        recState.stream = null;
+        recState.raf = 0;
+    }
+
+    // 录屏预览浮层（自绘，禁止系统弹窗）：video 播放 + 时长/大小/目标会话 + 发送/取消
+    var recPreviewMask = null;
+    function showRecPreview(blob, durationMs) {
+        if (!recPreviewMask) {
+            recPreviewMask = document.createElement('div');
+            recPreviewMask.className = 'rec-preview-mask hidden';
+            var v = document.createElement('video');
+            v.className = 'rec-preview-video';
+            v.controls = true;
+            var info = document.createElement('div');
+            info.className = 'rec-preview-info';
+            var bar = document.createElement('div');
+            bar.className = 'rec-preview-bar';
+            var sendBtn = document.createElement('button');
+            sendBtn.className = 'shot-preview-btn primary';
+            sendBtn.textContent = '发送';
+            var closeBtn = document.createElement('button');
+            closeBtn.className = 'shot-preview-btn';
+            closeBtn.textContent = '取消';
+            bar.appendChild(sendBtn);
+            bar.appendChild(closeBtn);
+            recPreviewMask.appendChild(v);
+            recPreviewMask.appendChild(info);
+            recPreviewMask.appendChild(bar);
+            document.body.appendChild(recPreviewMask);
+            closeBtn.addEventListener('click', hideRecPreview);
+            recPreviewMask.addEventListener('click', function (e) {
+                if (e.target === recPreviewMask) hideRecPreview(); // 仅点遮罩空白处关闭（点视频/按钮不关）
+            });
+            sendBtn.addEventListener('click', function () {
+                var b = recPreviewMask._blob;
+                hideRecPreview();
+                if (!b) return;
+                sendRecordFile(b);
+                messageInput.focus();
+            });
+            // Esc 快捷关闭（仅预览可见时响应）
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && recPreviewMask && !recPreviewMask.classList.contains('hidden')) hideRecPreview();
+            });
+        }
+        var pv = recPreviewMask.querySelector('.rec-preview-video');
+        if (pv.src && pv.src.indexOf('blob:') === 0) URL.revokeObjectURL(pv.src);
+        pv.src = URL.createObjectURL(blob);
+        var mins = Math.floor(durationMs / 60000), secs = Math.floor((durationMs % 60000) / 1000);
+        var target = currentChatUser === '' ? '当前群聊' : senderDisplayName(currentChatUser);
+        recPreviewMask.querySelector('.rec-preview-info').textContent =
+            '录屏视频 · ' + mins + '分' + secs + '秒 · ' + formatSize(blob.size) + ' · 发送到：' + target;
+        recPreviewMask._blob = blob;
+        recPreviewMask.classList.remove('hidden');
+    }
+
+    function hideRecPreview() {
+        if (!recPreviewMask) return;
+        var pv = recPreviewMask.querySelector('.rec-preview-video');
+        pv.pause();
+        if (pv.src && pv.src.indexOf('blob:') === 0) URL.revokeObjectURL(pv.src);
+        pv.src = '';
+        recPreviewMask._blob = null;
+        recPreviewMask.classList.add('hidden');
+    }
+
+    // 录屏发送：群聊走群文件链路，私聊（含 AI 会话）走既有文件分片/直传分流（服务端零改动）
+    function sendRecordFile(blob) {
+        var d = new Date();
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        var name = '录屏_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
+            pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.webm';
+        var file = new File([blob], name, { type: 'video/webm' });
+        if (currentChatUser === '') { sendGroupFile(file); return; }
+        sendFile(file);
+    }
+
+    // Ctrl+Alt+R 全局快捷键订阅：未录制时触发录屏流程，录制中再按=停止（QQ 同款二段语义）
+    if (window.desktop && window.desktop.onGlobalRecord) {
+        window.desktop.onGlobalRecord(function (data) {
+            if (!data || !IMSocket.isConnected()) return;
+            if (data.action === 'stop') {
+                if (recState.active) stopRecording();
+                return;
+            }
+            startRecordFlow();
+        });
     }
 
     // ===== 阶段三十四：Ctrl+V 粘贴剪贴板截图（微信式：截图后直接粘贴发送） =====
@@ -15531,6 +15813,8 @@
 
     // 文件消息渲染（文件卡片：图标 + 文件名 + 大小，点击下载）
     function appendFileMsg(fromUser, name, sizeText, url, type, isPrivate) {
+        // 阶段一百三十九：视频文件统一分流视频气泡（内联播放），其余保持文件卡片渲染
+        if (isVideoName(name)) return appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate);
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 撤回能力前提：气泡携带发送者与时间戳（撤回菜单"本人发送+窗口时间内"判断依赖此属性）
@@ -15575,6 +15859,52 @@
         // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称
         // 原实现：body.appendChild(nameEl);
         // body.appendChild(nameEl);
+        if (!isPrivate) body.appendChild(nameEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+
+    // ===== 阶段一百三十九：视频消息气泡（内联 video 播放 + 文件名/大小行；微信同款观感） =====
+    // 气泡复用 bubble-file 类名并带 data-url：右键"另存为"按 .bubble-file[data-url] 判定，视频同享；
+    // 由 appendFileMsg 开头按 isVideoName 统一分流（本地发送/接收/历史加载/转发全链路自动生效）
+    function appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        // 撤回能力前提：气泡携带发送者与时间戳（与文件消息一致）
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
+        var nameEl = document.createElement('div');
+        nameEl.className = 'message-name';
+        nameEl.textContent = senderDisplayName(fromUser);
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-file bubble-video';
+        var video = document.createElement('video');
+        video.className = 'bubble-video-el';
+        if (url) video.src = url;
+        video.controls = true;
+        video.preload = 'metadata';
+        video.playsInline = true;
+        var info = document.createElement('div');
+        info.className = 'file-info';
+        var fileName = document.createElement('div');
+        fileName.className = 'file-name';
+        fileName.textContent = name;
+        var fileSize = document.createElement('div');
+        fileSize.className = 'file-size';
+        fileSize.textContent = sizeText;
+        info.appendChild(fileName);
+        info.appendChild(fileSize);
+        bubble.appendChild(video);
+        bubble.appendChild(info);
+        if (url) {
+            bubble.setAttribute('data-url', url);
+        }
+        var body = document.createElement('div');
+        body.className = 'message-body';
         if (!isPrivate) body.appendChild(nameEl);
         body.appendChild(bubble);
         div.appendChild(getAvatarEl(fromUser));

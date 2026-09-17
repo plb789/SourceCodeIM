@@ -123,6 +123,33 @@ contextBridge.exposeInMainWorld('desktop', {
     shotReady: function () {
         ipcRenderer.send('shot:ready');
     },
+    // ===== 阶段一百三十九：QQ 同款录屏（Ctrl+Alt+R / 截图菜单入口） =====
+    // 录制启动主窗口退场：退全屏恢复原位（leave-full-screen 链路）+ 隐藏窗口，返回 Promise
+    recBegin: function () {
+        return ipcRenderer.invoke('rec:begin');
+    },
+    // 屏幕源 id（主进程 desktopCapturer 匹配主屏，渲染层 getUserMedia desktop 流用）
+    recSource: function () {
+        return ipcRenderer.invoke('rec:source');
+    },
+    // 录制结束主窗口归位（show + focus）
+    recShow: function () {
+        ipcRenderer.send('rec:show');
+    },
+    // 录制状态同步（主进程按此切换 Ctrl+Alt+R 的 开始/停止 语义）
+    recActive: function (on) {
+        ipcRenderer.send('rec:active', !!on);
+    },
+    // Ctrl+Alt+R 全局快捷键订阅（data = {action:'start'|'stop'}）
+    onGlobalRecord: function (callback) {
+        ipcRenderer.on('rec:global-ctrl', function (event, data) {
+            callback(data);
+        });
+    },
+    // 实际生效的录屏快捷键标签（Ctrl+Alt+R / 回退 Ctrl+Shift+R / 空串=无全局键），菜单与 toast 文案同步用
+    recShortcut: function () {
+        return ipcRenderer.invoke('rec:shortcut');
+    },
     // ===== 阶段六十：Agent 本地执行器 =====
     // 渲染进程桥接：服务端下发的本地执行请求转发主进程执行（req = {username, tool, params}）
     // 返回 Promise<{ok, output}>，结果由渲染进程经 WS 回传服务端
