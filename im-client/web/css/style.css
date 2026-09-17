@@ -1181,6 +1181,72 @@ html, body {
     transition: background 0.15s, color 0.15s;
 }
 
+/* ===== 阶段一百三十九：截图按钮 QQ 同款两段式（主区域截图 + 下拉箭头弹"隐藏当前窗口"选项） =====
+   箭头占按钮右侧窄条（9px 命中区略放宽到 12px 提升可点性），悬浮随按钮同色加亮 */
+#screenshot-btn .shot-caret {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 24px;
+    margin-left: -2px;
+    border-radius: 3px;
+    color: var(--text-light);
+    opacity: 0.75;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+#screenshot-btn .shot-caret:hover {
+    opacity: 1;
+    background: var(--hover, rgba(0, 0, 0, 0.08));
+}
+
+/* 截图选项菜单（自绘弹层，禁止系统默认菜单；跟随主题色） */
+#shot-menu {
+    position: fixed;
+    z-index: 260;
+    min-width: 176px;
+    padding: 5px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, .14));
+}
+
+#shot-menu .shot-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 10px;
+    border-radius: 5px;
+    font-size: 13px;
+    color: var(--text, #333);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+}
+
+#shot-menu .shot-menu-item:hover {
+    background: var(--hover, rgba(0, 0, 0, 0.06));
+}
+
+/* QQ 同款圆形选中点：未选空心圆、选中实心主题色圆 */
+#shot-menu .shot-menu-dot {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-light, #999);
+    box-sizing: border-box;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+#shot-menu .shot-menu-dot.on {
+    border-color: var(--primary, #07c160);
+    background: var(--primary, #07c160);
+    box-shadow: inset 0 0 0 2.5px var(--panel-bg, #fff); /* 内环留白（QQ 选中点样式） */
+}
+
 .tool-btn:hover {
     background: var(--hover);
     color: var(--text);
@@ -2622,6 +2688,18 @@ html, body {
     /* 阶段三十八修复：禁用编辑器内原生文字选择——防止框选拖拽时工具栏"取消/发送"文字被选中（蓝色高亮） */
     user-select: none;
     -webkit-user-select: none;
+}
+
+/* ===== 阶段一百三十九：QQ 同款悬停窗口高亮框（窗口识别：悬停高亮/单击选窗/双击截窗） =====
+   fixed 定位按视口坐标由 JS 直接定位（画布 cover 铺满时视口=截图区域）；红框白衬双层边观感
+   与 QQ 一致，pointer-events:none 不挡画布拖拽；z-index 压过画布与遮罩、低于工具栏 */
+.shot-editor .shot-win-hover {
+    position: fixed;
+    z-index: 5;
+    border: 2px solid #fa5151; /* 微信红（功能性识别色，与标注默认色同源） */
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 0 0 1px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    border-radius: 2px;
 }
 
 .shot-editor.hidden {

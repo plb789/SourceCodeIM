@@ -202,6 +202,14 @@ function createWindow() {
         }
     });
 
+    // 阶段一百三十九：退出全屏完成后恢复"移出屏幕隐藏"的窗口原位——leave-full-screen 在 Electron
+    // 内部退全屏 bounds 还原之后触发（实测 exit-freeze handler 里立即/延时恢复都会被还原动作覆盖：
+    // 150ms~1.8s 内多次 setBounds 均失效，窗口滞留移出态）；延迟 50ms 双保险躲开还原收尾
+    mainWindow.on('leave-full-screen', function () {
+        if (!shotSavedBounds) return;
+        setTimeout(function () { restoreShotHiddenWindow(true); }, 50);
+    });
+
     // 最小化到托盘而非退出
     mainWindow.on('close', function (event) {
         if (!app.isQuitting) {
@@ -306,15 +314,60 @@ function captureScreen(useJpeg) {
 // 优化1：setOpacity(0) 代替 hide——即时生效无动画且不引起任务栏闪动
 // 优化2（就绪后揭幕）：抓屏完成时窗口仍保持全透明，先把快照推给渲染层加载冻结编辑器（此时用户看的仍是桌面），
 //       编辑器首帧绘制就绪（shot:ready）后再透明度归位——揭幕即冻结画面，消除"聊天界面闪现"，桌面暴露期大幅缩短
-async function captureWithHide() {
-    var wasVisible = mainWindow && mainWindow.isVisible();
-    if (mainWindow && !wasVisible) {
-        // 托盘驻留（窗口隐藏）：维持隐藏，抓屏后由 show 带出
-    } else if (mainWindow) {
-        mainWindow.setOpacity(0); // 即时全透明（窗口仍占位，无 hide/show 动画与任务栏闪动）
+// 阶段一百三十九：隐藏主窗口画面改为可选（QQ 同款"隐藏当前窗口"开关，用户需求）——
+//       截图按钮下拉菜单切换，经 shot:hide-main-set 同步到本变量；Alt+A 全局截图无参走本变量，
+//       按钮截图显式传参。默认 true 保持既有行为（阶段三十八上线即为隐藏）；false 时窗口画面
+//       保留在快照中（QQ 未勾选"隐藏当前窗口"的观感）
+var shotHideMain = true;
+// 阶段一百三十九：隐藏窗口截图的原窗口位置记录（移出屏幕方案，exitFreeze 时恢复原位）
+var shotSavedBounds = null;
+var shotSavedMaximized = false;
+var shotRestoreTries = 0; // 恢复重试计数（setFullScreen(false) 状态转换异步，isFullScreen 滞后返回 true 需重试）
+// 恢复隐藏窗口截图前的窗口原位（抓屏失败路径立即恢复；exit-freeze 路径 force 先恢复再退全屏）
+// force=true：跳过全屏检查立即 setBounds——exit-freeze 中必须先恢复再 setFullScreen(false)，
+// 因为 Electron 退出全屏会自动还原"进入全屏前"的 bounds（=移出屏幕态），若先退全屏后恢复，
+// 还原动作与恢复动作竞态（实测还原后执行，窗口滞留屏幕外）；先恢复则全屏退出还原的即原位
+function restoreShotHiddenWindow(force) {
+    if (!shotSavedBounds || !mainWindow) return;
+    if (!force && mainWindow.isFullScreen()) {
+        // setFullScreen(false) 状态转换异步（isFullScreen 短暂滞后 true），150ms 轮询重试（上限 20 次）
+        if (shotRestoreTries++ < 20) setTimeout(function () { restoreShotHiddenWindow(false); }, 150);
+        return;
     }
-    // Windows 合成器输出"无本窗口"新帧需要一小段时间，抓早了仍可能拍到本窗口（150ms 为实测安全值）
-    await new Promise(function (r) { setTimeout(r, 150); });
+    shotRestoreTries = 0;
+    var b = shotSavedBounds;
+    var wasMax = shotSavedMaximized;
+    shotSavedBounds = null;
+    shotSavedMaximized = false;
+    mainWindow.setBounds(b);
+    if (wasMax) {
+        // 最大化原态：等全屏退出完成后恢复最大化（全屏未退出时 maximize 无效）
+        var tries = 0;
+        (function doMax() {
+            if (mainWindow.isFullScreen()) { if (tries++ < 20) setTimeout(doMax, 150); return; }
+            mainWindow.maximize();
+        })();
+    }
+}
+async function captureWithHide(hideMain) {
+    var needHide = (hideMain === undefined) ? shotHideMain : !!hideMain;
+    var wasVisible = mainWindow && mainWindow.isVisible();
+    if (needHide) {
+        if (mainWindow && !wasVisible) {
+            // 托盘驻留（窗口隐藏）：维持隐藏，抓屏后由 show 带出
+        } else if (mainWindow) {
+            // 原实现：mainWindow.setOpacity(0); // 即时全透明（Electron 44 实测失效：Win32 探针确认
+            // WS_EX_LAYERED 未生效、GetLayeredWindowAttributes=false，GDI/DXGI 抓屏均仍拍到主窗口，
+            // "截图时隐藏当前窗口"开关形同虚设）——改移出屏幕方案：setBounds 瞬时无动画、任务栏无
+            // 闪动、抓屏画面不含本窗口；原位由抓屏失败分支或 exit-freeze（编辑器关闭）恢复
+            shotSavedMaximized = mainWindow.isMaximized();
+            shotSavedBounds = mainWindow.getBounds();
+            mainWindow.unmaximize(); // 最大化态下 setBounds 不生效，先还原再移出
+            mainWindow.setBounds({ x: -(shotSavedBounds.width + 400), y: shotSavedBounds.y, width: shotSavedBounds.width, height: shotSavedBounds.height });
+        }
+        // Windows 合成器输出"无本窗口"新帧需要一小段时间，抓早了仍可能拍到本窗口（150ms 为实测安全值）
+        await new Promise(function (r) { setTimeout(r, 150); });
+    }
     var dataUrl = null;
     try {
         // JPEG 质量 90：比 PNG 编码快数倍（1080p 省 50~200ms），预览/编辑画质足够；
@@ -327,19 +380,19 @@ async function captureWithHide() {
         // 抓屏失败：立即恢复正常窗口（编辑器打不开，退回聊天界面）
         if (mainWindow) {
             if (!wasVisible) mainWindow.show();
-            mainWindow.setOpacity(1);
+            restoreShotHiddenWindow(); // 原实现：mainWindow.setOpacity(1);（随 setOpacity 方案废弃，改恢复移出屏幕前的原位）
             mainWindow.focus();
         }
         return null;
     }
-    // 先切全屏+置顶（窗口仍全透明，用户无感知），渲染层视口即为全屏尺寸，编辑器按全屏铺满
+    // 先切全屏+置顶（窗口已移出屏幕，用户无感知），渲染层视口即为全屏尺寸，编辑器按全屏铺满
     mainWindow.setFullScreen(true);
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
     if (!wasVisible) mainWindow.show();
-    // 推送渲染层预备冻结编辑器（解码+画布绘制在窗口透明期间后台完成）
+    // 推送渲染层预备冻结编辑器（解码+画布绘制在窗口移出屏幕期间后台完成）
     var readyPromise = new Promise(function (resolve) {
         var settled = false;
-        // 超时保护：渲染层异常（解码失败/脚本错误）时 1.2s 后强制揭幕，避免窗口永远透明卡死
+        // 超时保护：渲染层异常（解码失败/脚本错误）时 1.2s 后强制揭幕，避免窗口永远卡死
         shotReadyWaiter = function () {
             if (settled) return;
             settled = true;
@@ -350,6 +403,7 @@ async function captureWithHide() {
     mainWindow.webContents.send('shot:prepare', dataUrl);
     await readyPromise;
     // 编辑器就绪（或超时兜底）：揭幕——用户看到的第一帧就是全屏冻结画面
+    // （窗口位置原位恢复延迟到 exit-freeze：此刻仍是全屏冻结态，提前恢复会露出聊天界面）
     mainWindow.setOpacity(1);
     mainWindow.focus();
     return dataUrl;
@@ -371,11 +425,116 @@ ipcMain.on('shot:ready', function () {
 ipcMain.on('shot:exit-freeze', function () {
     if (!mainWindow) return;
     mainWindow.setAlwaysOnTop(false);
+    // 阶段一百三十九：窗口原位恢复改由 leave-full-screen 事件完成（时序安全）——此处只发起退全屏；
+    // 原实现：handler 内立即/重试恢复（实测均被 Electron 退全屏的延迟 bounds 还原覆盖，窗口滞留屏幕外）
     mainWindow.setFullScreen(false);
+    shotPickerScheduleStop(); // 窗口识别服务延迟回收（30s 内再次截图复用进程，不反复起停）
 });
 
-ipcMain.handle('shot:capture', function () {
-    return captureWithHide();
+// 阶段一百三十九：渲染层同步"截图时隐藏主窗口画面"开关（截图按钮下拉菜单切换；
+// Alt+A 全局截图路径无显式参数，统一读本变量）
+ipcMain.on('shot:hide-main-set', function (e, on) {
+    shotHideMain = !!on;
+});
+
+// ===== 阶段一百三十九：QQ 同款窗口识别（冻结截图悬停高亮窗口 + 单击选窗 + 双击截窗） =====
+// 命中测试用 PowerShell 常驻子进程做 Win32 调用（WindowFromPoint+GA_ROOT+GetWindowRect）——
+// 零 npm 原生依赖：esbuild bundle 与 electron-builder 打包链路不引入 .node 模块（koffi 类方案
+// 打包配置风险高）。按行协议：输入 "x,y"（物理屏幕坐标）→ 输出 "l,t,r,b"（窗口物理矩形）或
+// "none"；stdin 断开子进程自动退出（父进程崩溃不残留）。本应用自身窗口按 pid 排除——Electron
+// 全部窗口同 pid，冻结编辑器全屏置顶时悬停不会命中自己。逻辑详见 shot-window-picker.ps1
+// （ps1 刻意保持纯 ASCII：Windows PowerShell 5.1 对无 BOM 的 UTF-8 中文注释按 ANSI 解析会乱码）
+var shotPickerProc = null;       // PowerShell 命中服务子进程（懒启动，截图期间存活）
+var shotPickerReady = false;     // 子进程就绪标记（Add-Type 编译约 0.5~1s，就绪前查询直接放弃）
+var shotPickerWaiter = null;     // 在途查询回调（单飞：mousemove 高频，丢帧无感，防响应错位）
+function shotPickerEnsure() {
+    if (shotPickerProc) return;
+    try {
+        var path = require('path');
+        // 打包态 ps1 在 asar 内子进程读不到，asarUnpack 后取 app.asar.unpacked 同名文件（开发态无 asar 不替换）
+        var ps1 = path.join(__dirname, 'shot-window-picker.ps1').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+        shotPickerProc = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, String(process.pid)], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        shotPickerReady = false;
+        var buf = '';
+        shotPickerProc.stdout.on('data', function (d) {
+            buf += d.toString();
+            var idx;
+            while ((idx = buf.indexOf('\n')) >= 0) {
+                var line = buf.slice(0, idx).trim();
+                buf = buf.slice(idx + 1);
+                if (!line) continue;
+                if (line === 'ready') { shotPickerReady = true; continue; }
+                if (shotPickerWaiter) {
+                    var w = shotPickerWaiter;
+                    shotPickerWaiter = null;
+                    w(line);
+                }
+            }
+        });
+        shotPickerProc.on('exit', function () {
+            shotPickerProc = null;
+            shotPickerReady = false;
+            shotPickerWaiter = null;
+        });
+    } catch (err) {
+        console.warn('窗口识别服务启动失败:', err);
+        shotPickerProc = null;
+    }
+}
+function shotPickerStop() {
+    if (!shotPickerProc) return;
+    try { shotPickerProc.stdin.end(); } catch (err) { /* stdin 已断开视为退出中 */ }
+    var p = shotPickerProc;
+    setTimeout(function () { try { p.kill(); } catch (err) { /* 已退出 */ } }, 500); // 兜底强杀（正常 stdin 断开自退）
+    shotPickerProc = null;
+    shotPickerReady = false;
+    shotPickerWaiter = null;
+}
+var shotPickerIdleTimer = null; // 编辑器关闭后延迟回收（频繁截图不反复起停 PowerShell）
+function shotPickerScheduleStop() {
+    if (shotPickerIdleTimer) clearTimeout(shotPickerIdleTimer);
+    shotPickerIdleTimer = setTimeout(function () {
+        shotPickerIdleTimer = null;
+        shotPickerStop();
+    }, 30000);
+}
+function shotPickerQuery(x, y) {
+    return new Promise(function (resolve) {
+        if (!shotPickerProc) shotPickerEnsure();
+        // 未就绪 / 上一查询在途：直接放弃本次（渲染层 mousemove 节流后自然重查）
+        if (!shotPickerProc || !shotPickerReady || shotPickerWaiter) { resolve(null); return; }
+        var done = false;
+        shotPickerWaiter = function (line) {
+            shotPickerWaiter = null;
+            if (done) return;
+            done = true;
+            if (!line || line === 'none') { resolve(null); return; }
+            var n = line.split(',').map(Number);
+            if (n.length !== 4 || n.some(isNaN)) { resolve(null); return; }
+            resolve({ left: n[0], top: n[1], right: n[2], bottom: n[3] });
+        };
+        try { shotPickerProc.stdin.write(x + ',' + y + '\n'); } catch (err) {
+            shotPickerWaiter = null;
+            resolve(null);
+            return;
+        }
+        setTimeout(function () {
+            if (done) return;
+            done = true;
+            shotPickerWaiter = null;
+            resolve(null); // 响应超时（子进程异常），渲染层按无窗口处理
+        }, 400);
+    });
+}
+
+ipcMain.handle('shot:window-at', function (e, x, y) {
+    return shotPickerQuery(Math.round(x), Math.round(y));
+});
+
+ipcMain.handle('shot:capture', function (e, hideMain) {
+    shotPickerEnsure(); // 抓屏即预热命中服务（Add-Type 编译耗时，提前到用户悬停前完成）
+    if (shotPickerIdleTimer) { clearTimeout(shotPickerIdleTimer); shotPickerIdleTimer = null; } // 取消延迟回收
+    return captureWithHide(hideMain);
     // 原实现：直接抓屏（主窗口未隐藏，聊天窗口会挡住想要截取的屏幕内容）
     // return captureScreen();
 });
@@ -1337,6 +1496,7 @@ app.on('will-quit', function () {
     globalShortcut.unregisterAll();
     try { mcpManager.disposeAll(); } catch (e) {} // 阶段九十：本机 MCP 服务器进程随应用退出全量回收
     try { browserManager.lspShutdown(); } catch (e) {} // 阶段一百三十：LSP 语言服务器子进程随应用退出全量回收
+    shotPickerStop(); // 阶段一百三十九：窗口识别命中服务随应用退出回收（stdin 断开子进程自退，此为主动清理）
 });
 
 app.on('window-all-closed', function () {

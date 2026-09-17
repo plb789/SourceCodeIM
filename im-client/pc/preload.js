@@ -12,8 +12,20 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.send('notify', { title: title, body: body });
     },
     // 阶段三十七（第三期）：静默抓屏（无系统共享弹窗），返回 PNG dataURL（Promise）
-    captureScreen: function () {
-        return ipcRenderer.invoke('shot:capture');
+    // 阶段一百三十九：可选参数 hideMain——截图时是否隐藏主窗口画面（QQ 同款"隐藏当前窗口"
+    // 开关，undefined 时主进程走自身状态，Alt+A 全局截图同源）
+    captureScreen: function (hideMain) {
+        return ipcRenderer.invoke('shot:capture', hideMain);
+    },
+    // 阶段一百三十九：渲染层同步"截图时隐藏主窗口画面"开关到主进程（截图按钮下拉菜单切换；
+    // 同步后 Alt+A 全局截图行为一致，避免两入口状态分叉）
+    setShotHideMain: function (on) {
+        ipcRenderer.send('shot:hide-main-set', on);
+    },
+    // 阶段一百三十九：QQ 同款窗口识别——冻结截图悬停命中测试（x,y 传物理屏幕坐标，
+    // 返回 {left,top,right,bottom} 窗口物理矩形或 null；主进程 PowerShell 子进程 Win32 查询）
+    shotWindowAt: function (x, y) {
+        return ipcRenderer.invoke('shot:window-at', x, y);
     },
     // 阶段三十七（第三期）：Alt+A 全局快捷键抓屏结果订阅（主进程推送 PNG dataURL）
     onGlobalShot: function (callback) {

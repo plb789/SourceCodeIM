@@ -22,6 +22,9 @@
   "build": {
     "appId": "com.im.client",
     "productName": "im-client",
+    "asarUnpack": [
+      "shot-window-picker.ps1"
+    ],
     "files": [
       "!bundled/**",
       "!builder-cache/**",

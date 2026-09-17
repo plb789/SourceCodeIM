@@ -3299,13 +3299,70 @@
         });
     }
 
-    screenshotBtn.addEventListener('click', function () {
+    // ===== 阶段一百三十九：截图时隐藏主窗口画面开关（QQ 同款"隐藏当前窗口"选项） =====
+    // 主进程 captureWithHide 原本无条件透明化主窗口再抓屏（阶段三十八），现改可选：
+    // 截图按钮右侧下拉箭头弹自绘菜单（禁止系统默认弹窗），圆点勾选持久化 localStorage，
+    // 并同步主进程（shot:hide-main-set）——Alt+A 全局截图与按钮截图共用一份状态
+    var shotHideMainPref = localStorage.getItem('shot_hide_main') !== '0'; // 默认隐藏（保持阶段三十八上线以来的行为）
+    function shotHideMainSync() {
+        if (window.desktop && window.desktop.setShotHideMain) window.desktop.setShotHideMain(shotHideMainPref);
+    }
+    shotHideMainSync(); // 启动即同步（主进程重启后变量复位，渲染层状态为准）
+    var shotMenuEl = null; // 截图选项菜单单例（点击外部/Esc 关闭）
+    function shotMenuClose() {
+        if (shotMenuEl) { shotMenuEl.remove(); shotMenuEl = null; }
+        document.removeEventListener('mousedown', shotMenuOutside, true);
+    }
+    function shotMenuOutside(e) {
+        if (shotMenuEl && !shotMenuEl.contains(e.target) && !screenshotBtn.contains(e.target)) shotMenuClose();
+    }
+    function shotMenuOpen() {
+        if (shotMenuEl) { shotMenuClose(); return; } // 再点箭头=收起（开关菜单）
+        var menu = document.createElement('div');
+        menu.id = 'shot-menu';
+        var item = document.createElement('div');
+        item.className = 'shot-menu-item';
+        var dot = document.createElement('span');
+        dot.className = 'shot-menu-dot' + (shotHideMainPref ? ' on' : ''); // QQ 同款圆形选中点
+        var label = document.createElement('span');
+        label.textContent = '截图时隐藏当前窗口';
+        item.appendChild(dot);
+        item.appendChild(label);
+        item.addEventListener('click', function () {
+            shotHideMainPref = !shotHideMainPref;
+            localStorage.setItem('shot_hide_main', shotHideMainPref ? '1' : '0');
+            shotHideMainSync();
+            dot.classList.toggle('on', shotHideMainPref);
+            showToast(shotHideMainPref ? '已开启：截图时隐藏主窗口' : '已关闭：截图时保留主窗口');
+            shotMenuClose();
+        });
+        menu.appendChild(item);
+        document.body.appendChild(menu);
+        // 定位：截图按钮下方（右对齐按钮右缘，越出视口底部翻转到上方）
+        var rect = screenshotBtn.getBoundingClientRect();
+        var mw = menu.offsetWidth, mh = menu.offsetHeight;
+        var left = Math.min(Math.max(8, rect.right - mw), window.innerWidth - mw - 8);
+        var top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+        shotMenuEl = menu;
+        document.addEventListener('mousedown', shotMenuOutside, true); // 捕获阶段抢在外部点击前关闭
+    }
+
+    screenshotBtn.addEventListener('click', function (ev) {
         this.blur(); // 移除按钮焦点（避免退出截图后按钮残留焦点框高亮）
+        // 阶段一百三十九：QQ 同款两段式——点箭头区弹选项菜单（不触发截图），点主区域正常截图
+        if (ev.target.closest && ev.target.closest('.shot-caret')) {
+            shotMenuOpen();
+            return;
+        }
         // 原实现：群聊视图拦截提示"群聊暂不支持发送截图"，阶段二十六放开——截图即图片，走群聊 HTTP 上传链路
         // if (currentChatUser === '') { showToast('群聊暂不支持发送截图'); return; }
         // 阶段三十七（第三期）：PC 端 Electron 走主进程静默抓屏（desktopCapturer，不弹系统共享选择框）
+        // 阶段一百三十九：透传"隐藏主窗口"开关（QQ 同款，箭头菜单切换；undefined 走主进程自身状态）
         if (window.desktop && window.desktop.captureScreen) {
-            window.desktop.captureScreen().then(function (dataUrl) {
+            window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
                 openShotEditor(dataUrlToBlob(dataUrl));
             }).catch(function () {
                 showToast('截图失败');

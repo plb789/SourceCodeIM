@@ -27,6 +27,13 @@
     var imgUrl = '';           // 底图 blob URL（关闭时释放）
     var mode = 'editor';       // 当前模式：editor（编辑器）/freeze（伪冻结遮罩，第二期）
     var sizeLabel = null;      // 选区尺寸标签（伪冻结模式：拖拽时实时显示 宽×高）
+    // ===== 阶段一百三十九：QQ 同款窗口识别（悬停高亮 + 单击选窗 + 双击截窗） =====
+    var winHoverEl = null;     // 悬停窗口高亮框（QQ 同款红色焦点框，pointer-events:none 不挡操作）
+    var winHoverImg = null;    // 当前悬停窗口矩形（图像坐标 {x,y,w,h}，null=未识别到）
+    var winSelImg = null;      // 单击选窗时的窗口矩形缓存（供双击发送用）
+    var winClickTimer = null;  // 单击选窗后的双击判定窗（350ms 内二次点击=双击发送）
+    var hoverPending = false;  // 命中查询在途标记（单飞，丢帧无感）
+    var hoverLast = 0;         // 悬停查询节流时间戳（40ms ≈ 25fps 跟手且不刷爆 IPC）
 
     // 随图尺寸自适应的笔触参数（大图笔触更粗，视觉一致）
     var strokeWidth = 4, fontSize = 20, mosaicR = 24;
@@ -114,11 +121,50 @@
         hintEl.className = 'shot-hint hidden';
         hintEl.textContent = '拖拽框选截图区域 · Enter 发送 · Esc 取消';
 
+        // 阶段一百三十九：悬停窗口高亮框（QQ 同款）——置顶于画布之上但不挡鼠标事件
+        winHoverEl = document.createElement('div');
+        winHoverEl.className = 'shot-win-hover hidden';
+
         editorEl.appendChild(wrapEl);
         editorEl.appendChild(toolbarEl);
         editorEl.appendChild(textInputEl);
         editorEl.appendChild(sizeLabel);
         editorEl.appendChild(hintEl);
+        editorEl.appendChild(winHoverEl);
+
+        // ===== 阶段一百三十九：悬停窗口识别（mousemove 节流 → 主进程 Win32 命中 → 高亮框跟随） =====
+        // 仅冻结态 + 选区工具 + 未框选（sel 空）+ 非拖拽中生效；PC 端无 desktop API（浏览器回退）自动跳过
+        document.addEventListener('mousemove', function (e) {
+            if (!isOpen() || mode !== 'freeze' || tool !== 'select' || drawing || sel) { hideWinHover(); return; }
+            if (!window.desktop || !window.desktop.shotWindowAt) return;
+            var now = Date.now();
+            if (now - hoverLast < 40 || hoverPending) return; // 节流 + 单飞
+            hoverLast = now;
+            hoverPending = true;
+            var dpr = window.devicePixelRatio || 1;
+            // 视口全屏=主屏逻辑坐标：物理屏幕坐标 = 逻辑 × devicePixelRatio
+            window.desktop.shotWindowAt(Math.round(e.clientX * dpr), Math.round(e.clientY * dpr)).then(function (r) {
+                hoverPending = false;
+                // 响应回来时状态可能已变（关闭/开始框选/已选定）：一并作废
+                if (!isOpen() || mode !== 'freeze' || drawing || sel) { hideWinHover(); return; }
+                if (!r) { hideWinHover(); winHoverImg = null; return; }
+                var cr = drawCanvas.getBoundingClientRect();
+                // 窗口物理矩形 → 逻辑视口坐标 → 定位高亮框；换算图像坐标缓存（供单击/双击选窗裁剪）
+                var vx = r.left / dpr, vy = r.top / dpr;
+                var vw = (r.right - r.left) / dpr, vh = (r.bottom - r.top) / dpr;
+                winHoverEl.style.left = vx + 'px';
+                winHoverEl.style.top = vy + 'px';
+                winHoverEl.style.width = vw + 'px';
+                winHoverEl.style.height = vh + 'px';
+                winHoverEl.classList.remove('hidden');
+                winHoverImg = {
+                    x: (vx - cr.left) / scale,
+                    y: (vy - cr.top) / scale,
+                    w: vw / scale,
+                    h: vh / scale
+                };
+            }).catch(function () { hoverPending = false; });
+        });
         document.body.appendChild(editorEl);
 
         bctx = baseCanvas.getContext('2d');
@@ -327,6 +373,7 @@
         editorEl.classList.remove('freeze');
         // 阶段一百三十四：退出冻结截图恢复自绘标题栏（与 load() freeze 分支的 add 配对）
         document.documentElement.classList.remove('shot-freeze');
+        resetWinHover(); // 阶段一百三十九：窗口识别状态清理（判定定时器/缓存/高亮框）
         toolbarEl.classList.remove('visible');
         hideSizeLabel();
         hintEl.classList.add('hidden');
@@ -346,6 +393,19 @@
 
     function isOpen() {
         return !!editorEl && !editorEl.classList.contains('hidden');
+    }
+
+    // 阶段一百三十九：隐藏悬停窗口高亮框（QQ 同款窗口识别配套）
+    function hideWinHover() {
+        if (winHoverEl) winHoverEl.classList.add('hidden');
+    }
+
+    // 阶段一百三十九：窗口识别相关状态清理（编辑器关闭 / 冻结底图重载时调用）
+    function resetWinHover() {
+        if (winClickTimer) { clearTimeout(winClickTimer); winClickTimer = null; }
+        winSelImg = null;
+        winHoverImg = null;
+        hideWinHover();
     }
 
     // ===== 输出：按选区裁剪 底图+标注层 合成 PNG =====
@@ -471,6 +531,21 @@
             if (e.detail >= 2) return;
             var pt = toImg(e);
             if (tool === 'select') {
+                // 阶段一百三十九：QQ 同款单击选窗——悬停识别到窗口时按下直接按窗口矩形选定，
+                // 出工具栏可继续标注/Enter 发送；350ms 内二次点击由 dblclick 处理为直接发送
+                if (mode === 'freeze' && winHoverEl && !winHoverEl.classList.contains('hidden') && winHoverImg) {
+                    sel = { x: winHoverImg.x, y: winHoverImg.y, w: winHoverImg.w, h: winHoverImg.h };
+                    winSelImg = { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
+                    winHoverImg = null;
+                    hideWinHover();
+                    drawMask();
+                    hintEl.classList.add('hidden');
+                    toolbarEl.classList.add('visible');
+                    updateSizeLabel();
+                    if (winClickTimer) clearTimeout(winClickTimer);
+                    winClickTimer = setTimeout(function () { winClickTimer = null; }, 350); // 双击判定窗（超时=单纯单击，选区保留可编辑）
+                    return;
+                }
                 // 选区工具：允许在空选区（冻结态）下直接拖拽框选
                 drawing = true;
                 sx = pt.x; sy = pt.y;
@@ -552,6 +627,17 @@
         wrapEl.addEventListener('dblclick', function (e) {
             // 阶段三十八修复：阻止双击原生选词（否则双击处文字被选中，观感异常）
             e.preventDefault();
+            // 阶段一百三十九：QQ 同款双击截窗——单击选窗后的双击判定窗内二次点击，直接按窗口矩形
+            // 完成截图发送（与"双击选区内发送"同语义）；winSelImg 仅为选窗缓存，普通框选不受影响
+            if (tool === 'select' && winClickTimer != null && winSelImg) {
+                clearTimeout(winClickTimer);
+                winClickTimer = null;
+                sel = { x: winSelImg.x, y: winSelImg.y, w: winSelImg.w, h: winSelImg.h };
+                winSelImg = null;
+                drawMask();
+                output();
+                return;
+            }
             if (tool !== 'select' || !sel || sel.w < 2 || sel.h < 2) return;
             var pt = toImg(e);
             if (pt.x >= sel.x && pt.x <= sel.x + sel.w && pt.y >= sel.y && pt.y <= sel.y + sel.h) output();
@@ -573,6 +659,15 @@
                 e.preventDefault();
                 output();
             }
+        });
+
+        // 阶段一百三十九：QQ 同款右键退出截图（与 Esc 同效果）——必须阻止系统默认右键菜单；
+        // 文字输入框打开时右键先收起输入框（与 Esc 在输入框内的语义一致，不直接退出整个截图）
+        document.addEventListener('contextmenu', function (e) {
+            if (!isOpen()) return;
+            e.preventDefault();
+            if (!textInputEl.classList.contains('hidden')) { hideTextInput(); return; }
+            close();
         });
     }
 
