@@ -188,14 +188,21 @@ type AgentTask struct {
 	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
 	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
 	runBgStep   string                // 转后台通道归属步骤（toolCall.ID，防错投）
-	steps       int
-	StartAt     time.Time         // 阶段一百三十八：实际开始执行时刻（直接启动/队列派发时赋值），完结时算耗时随帧下发
-	stepSeq     int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
-	changeSeq   int               // 阶段七十七：变更快照序号（备份文件命名去重）
-	changes     []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
-	usageTotal  aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/随帧下发）
-	pointsCost  float64           // 阶段一百三十八：任务全程实际扣除积分累计（每轮即时扣时累加，mu 保护；完结随帧下发供前端精确展示）
-	endOnce     sync.Once
+	// 阶段一百三十八：任务级取消上下文——修复"用户停止后当前轮模型调用继续烧上游 tokens"问题。
+	// 原实现每轮 askCtx 派生自 context.Background()，取消信号传不到进行中的调用，当前轮要跑完
+	// （叠加多源重试最长可达数倍 aiAskTimeout）才在循环回顶检查点退出；现每轮 askCtx 派生自
+	// runCtx，取消归口调用 runCancel() 即刻中止当前轮上游请求，tokens 立即停耗。
+	// 创建后只读访问无需锁；agentFinish endOnce 内统一 runCancel 防上下文泄漏
+	runCtx     context.Context
+	runCancel  context.CancelFunc
+	steps      int
+	StartAt    time.Time         // 阶段一百三十八：实际开始执行时刻（直接启动/队列派发时赋值），完结时算耗时随帧下发
+	stepSeq    int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
+	changeSeq  int               // 阶段七十七：变更快照序号（备份文件命名去重）
+	changes    []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
+	usageTotal aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/随帧下发）
+	pointsCost float64           // 阶段一百三十八：任务全程实际扣除积分累计（每轮即时扣时累加，mu 保护；完结随帧下发供前端精确展示）
+	endOnce    sync.Once
 }
 
 // 任务注册表（taskID → task；含近期结束任务用于取消竞态兜底，定期清理防泄漏）
@@ -2804,6 +2811,11 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 					return
 				}
 				t.Cancelled.Store(true)
+				// 阶段一百三十八：立即中止任务级上下文——当前轮进行中的上游模型调用即刻断开
+				// （原实现要等当前轮自然跑完才在循环检查点退出，期间 tokens 持续无感知消耗）
+				if t.runCancel != nil {
+					t.runCancel()
+				}
 				t.mu.Lock()
 				ch := t.approveCh
 				step := t.approveStep
@@ -2877,6 +2889,8 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		Goal:      goal,
 		SessionID: sid, // 阶段七十一：任务全程会话归属（事件流/答复/任务记录同源）
 	}
+	// 阶段一百三十八：任务级取消上下文（直接启动与排队派发共用；agentFinish 统一 runCancel 防泄漏）
+	t.runCtx, t.runCancel = context.WithCancel(context.Background())
 	if active < int(agentConcurrency.Load()) {
 		// 有空位：直接启动（阶段五十九原路径）
 		t.Status = "running"
@@ -2944,6 +2958,10 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 			}
 		}
 		t.mu.Unlock()
+		// 阶段一百三十八：任务完结统一释放任务级取消上下文（防 context 泄漏；幂等）
+		if t.runCancel != nil {
+			t.runCancel()
+		}
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
 			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs, "points_cost": pointsCost})
 		// 阶段六十六：任务完结通知落库（会话流留档+未读归口：切走会话/最小化/离线后经历史与角标可靠感知）
@@ -3119,7 +3137,9 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// LLM 摘要归并（assistant+tool 配对永不拆分），Recent 轮保留原文；事件流实时提示前端
 		msgs = s.agentCompressTaskHistory(t, msgs)
 
-		askCtx, cancelAsk := context.WithTimeout(context.Background(), aiAskTimeout)
+		// 阶段一百三十八：每轮超时上下文派生自任务级 runCtx（原 context.Background()）——
+		// 用户停止任务时取消归口调 runCancel()，当前轮进行中的上游调用立即中止，tokens 即刻停耗
+		askCtx, cancelAsk := context.WithTimeout(t.runCtx, aiAskTimeout)
 		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
 		// 阶段一百三十八：正文增量经泄漏过滤器（模型幻觉输出的工具调用标记整行拦截，思考流不过滤）
@@ -3181,6 +3201,12 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		}
 		s.agentEmit(t, "step_tokens", stepPayload)
 		if err != nil {
+			// 阶段一百三十八：取消导致的调用中止优先记为"用户取消"（原实现误记"模型调用失败"——
+			// runCtx 取消后本轮 err=context.Canceled，先查取消标记再按失败收口）
+			if t.Cancelled.Load() || t.runCtx.Err() != nil {
+				s.agentFinish(t, "cancelled", "", "用户取消")
+				return
+			}
 			s.agentFinish(t, "failed", "", "模型调用失败："+err.Error())
 			return
 		}

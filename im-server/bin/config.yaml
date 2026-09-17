@@ -85,7 +85,7 @@ ai:
   # 阶段八十四：TRAE 同款历史对话压缩（AI 问答与 Agent 任务共用）——历史上下文估算 token
   # 达到阈值时把较旧部分 LLM 摘要成一条摘要消息注入（最近 N 条保留原文），长会话/长任务
   # 显著降低 token 消耗并加速模型首字响应；AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
-  compress_threshold_tokens: 120000     # 触发阈值（估算 token；负数=禁用压缩）
+  compress_threshold_tokens: 12000     # 触发阈值（估算 token；负数=禁用压缩）
   compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
 
   # 阶段五十一：知识库向量化 embedding 服务（OpenAI 兼容 /embeddings 接口归口）

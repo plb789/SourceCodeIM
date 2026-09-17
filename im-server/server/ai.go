@@ -1154,6 +1154,8 @@ func aiCompressSummarize(ctx context.Context, agent *AIRunAgent, prevSummary str
 		logger.Error("AI 历史压缩摘要生成失败: %v", err)
 		return ""
 	}
+	// 阶段一百三十八：摘要同样净化泄漏标记（摘要进模型上下文，防标记污染后续问答质量）
+	out = aiSanitizeToolLeak(out)
 	out = strings.TrimSpace(out)
 	if out == "" {
 		return ""
@@ -1851,6 +1853,8 @@ func (s *Server) handleGroupAI(c *Client, msg *protocol.Message) {
 			logger.Error("群聊 AI 应答失败（用户 %s）：%v", c.username, err)
 			return
 		}
+		// 阶段一百三十八：群聊整段回复同样净化工具调用标记泄漏（群内可见，服务端归口拦截）
+		reply = aiSanitizeToolLeak(reply)
 		reply = "@" + c.username + " " + reply
 
 		record := model.Message{

@@ -5,6 +5,7 @@ package server
 // 工具注册（schema 注入与服务端专属标记，防误下发 PC 本地执行器）。
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ func askTestTask(s *Server, username string) *AgentTask {
 		Goal:     "测试提问链路",
 		Status:   "running",
 	}
+	// 阶段一百三十八：对齐生产创建归口（handleAgentRun）初始化任务级取消上下文，
+	// 防止测试路径触达 runCtx 相关逻辑时空指针
+	tk.runCtx, tk.runCancel = context.WithCancel(context.Background())
 	// handleAgentAsk 按任务注册表归口查找（生产由 handleAgentRun 登记），测试桩需显式注册
 	agentTasks.Store(tk.ID, tk)
 	return tk
