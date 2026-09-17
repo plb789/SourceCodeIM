@@ -1529,17 +1529,23 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		// 无 usage 按最低 1 积分），余额钳制非负；
 		// 扣后余额随结束帧下发，PC 端标题栏 ⚡ 积分实时刷新（服务端归口，客户端不做任何积分计算）；
 		// 指针携带：扣分成功才置值（余额为 0 也会下发），nil=扣分失败时前端保持旧值
-		cost := aiPointsCost(usage.TotalTokens)
+		// 阶段一百三十八：扣费走计费归口（config.yaml ai_billing.mode 热更双模式）——
+		// usage=按量（1000 tokens=1 积分）/ percall=按次固定积分（TRAE CN 同款），口径详见 server/aibilling.go
+		cost := aiChargeCost(usage.TotalTokens)
+		billingMode := aiBillingMode() // 随帧标注（前端展示口径跟随：percall 显示扣费积分，usage 显示 tokens 明细）
 		var balancePtr *float64
 		if balance, err := userPointsDeduct(c.username, cost); err != nil {
 			// 扣分失败不阻断回复展示（回复已落库），仅记日志便于对账
 			logger.Error("积分扣除失败（用户 %s，消耗 %d tokens）：%v", c.username, usage.TotalTokens, err)
 		} else {
 			balancePtr = &balance
-			logger.Info("积分扣除（用户 %s，- %.3f 积分，%d tokens，余额 %.3f）", c.username, cost, usage.TotalTokens, balance)
-			// 阶段七十八：流水审计（AI 问答扣除，操作人 system）
-			recordPointsLog(c.username, -cost, balance, "ai_deduct", "system",
-				fmt.Sprintf("AI 问答（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", agent.Name, usage.TotalTokens))
+			logger.Info("积分扣除（用户 %s，- %.3f 积分，%d tokens，余额 %.3f，模式 %s）", c.username, cost, usage.TotalTokens, balance, billingMode)
+			// 阶段七十八：流水审计（AI 问答扣除，操作人 system；描述按计费模式区分便于对账）
+			desc := fmt.Sprintf("AI 问答（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", agent.Name, usage.TotalTokens)
+			if billingMode == "percall" {
+				desc = fmt.Sprintf("AI 问答（智能体 %s）单次调用，按次计费固定扣 %.3f 积分（TRAE CN 同款，与 token 数无关）", agent.Name, cost)
+			}
+			recordPointsLog(c.username, -cost, balance, "ai_deduct", "system", desc)
 		}
 
 		endMsg := protocol.Message{
@@ -1554,6 +1560,8 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			CompletionTokens: usage.CompletionTokens,
 			TotalTokens:      usage.TotalTokens,
 			PointsBalance:    balancePtr, // 阶段七十八：扣后余额（nil=扣分失败，前端保持旧值）
+			PointsCost:       &cost,      // 阶段一百三十八：本次实际扣费积分（服务端归口折算，前端只展示）
+			BillingMode:      billingMode,
 			Timestamp:        time.Now().Unix(),
 		}
 		data, _ := json.Marshal(endMsg)

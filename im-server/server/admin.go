@@ -141,6 +141,10 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsGet))
 	http.HandleFunc("PUT /admin/api/agent/settings", s.adminGuard(s.handleAdminAgentSettingsSave))
 
+	// 阶段一百三十八：AI 计费模式设置（usage 按量 / percall 按次 TRAE CN 同款；保存即生效 + 落库重启不丢）
+	http.HandleFunc("GET /admin/api/billing/settings", s.adminGuard(s.handleAdminBillingSettingsGet))
+	http.HandleFunc("PUT /admin/api/billing/settings", s.adminGuard(s.handleAdminBillingSettingsSave))
+
 	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
 	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))
 	http.HandleFunc("PUT /admin/api/users/{username}/points", s.adminGuard(s.handleAdminUserPointsPut))

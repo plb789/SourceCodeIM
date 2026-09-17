@@ -189,10 +189,12 @@ type AgentTask struct {
 	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
 	runBgStep   string                // 转后台通道归属步骤（toolCall.ID，防错投）
 	steps       int
+	StartAt     time.Time         // 阶段一百三十八：实际开始执行时刻（直接启动/队列派发时赋值），完结时算耗时随帧下发
 	stepSeq     int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
 	changeSeq   int               // 阶段七十七：变更快照序号（备份文件命名去重）
 	changes     []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
-	usageTotal  aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/扣积分/随帧下发）
+	usageTotal  aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/随帧下发）
+	pointsCost  float64           // 阶段一百三十八：任务全程实际扣除积分累计（每轮即时扣时累加，mu 保护；完结随帧下发供前端精确展示）
 	endOnce     sync.Once
 }
 
@@ -241,6 +243,7 @@ func (s *Server) agentDispatchNext(username string) {
 		queued = queued[1:]
 		head.mu.Lock()
 		head.Status = "running"
+		head.StartAt = time.Now() // 阶段一百三十八：执行计时起点（耗时统计归口）
 		head.mu.Unlock()
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", head.ID).Update("status", "running")
 	}
@@ -2877,6 +2880,7 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	if active < int(agentConcurrency.Load()) {
 		// 有空位：直接启动（阶段五十九原路径）
 		t.Status = "running"
+		t.StartAt = time.Now() // 阶段一百三十八：执行计时起点（耗时统计归口；任务未暴露无并发，直赋安全）
 		agentTasks.Store(t.ID, t)
 		agentQueueMu.Unlock()
 
@@ -2929,10 +2933,19 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 	t.endOnce.Do(func() {
 		t.mu.Lock()
 		t.Status = status
-		usage := t.usageTotal // 阶段一百零二：快照全任务 Token 累计（落库/扣积分/随帧下发）
+		usage := t.usageTotal      // 阶段一百零二：快照全任务 Token 累计（落库/随帧下发）
+		pointsCost := t.pointsCost // 阶段一百三十八：快照全任务实际扣费积分累计（随完结帧下发）
+		// 阶段一百三十八：任务耗时快照（StartAt→完结毫秒；零值兜底 0，前端不显示），落库并随完结帧下发
+		var elapsedMs int64
+		if !t.StartAt.IsZero() {
+			elapsedMs = time.Since(t.StartAt).Milliseconds()
+			if elapsedMs < 0 {
+				elapsedMs = 0
+			}
+		}
 		t.mu.Unlock()
 		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
-			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps})
+			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs})
 		// 阶段六十六：任务完结通知落库（会话流留档+未读归口：切走会话/最小化/离线后经历史与角标可靠感知）
 		// completed 落最终答复（修复事件流不落库、重登后最终答复丢失）；failed/cancelled 落简短通知；
 		// cancelled 由用户本人现场操作触发，is_read=true 不产生未读提醒
@@ -2978,22 +2991,8 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		}
 		switch status {
 		case "completed":
-			// 阶段一百零二：任务完成扣积分（与普通问答同口径：按 1000 tokens = 1 积分折算，失败/取消不扣）；
-			// 扣后余额随 done 帧下发，前端标题栏 ⚡ 积分实时刷新（服务端归口，客户端不做任何积分计算）
-			cost := aiPointsCost(usage.TotalTokens)
-			var balancePtr *float64
-			if usage.TotalTokens > 0 {
-				if balance, derr := userPointsDeduct(t.Username, cost); derr != nil {
-					// 扣分失败不阻断任务收尾（答复已落库），仅记日志便于对账
-					logger.Error("Agent 任务积分扣除失败（任务 %s，用户 %s，消耗 %d tokens）：%v", t.ID, t.Username, usage.TotalTokens, derr)
-				} else {
-					balancePtr = &balance
-					logger.Info("Agent 任务积分扣除（任务 %s，用户 %s，- %.3f 积分，%d tokens，余额 %.3f）", t.ID, t.Username, cost, usage.TotalTokens, balance)
-					// 积分流水审计（Agent 任务扣除，操作人 system）
-					recordPointsLog(t.Username, -cost, balance, "ai_agent_deduct", "system",
-						fmt.Sprintf("Agent 任务（智能体 %s，%d 步）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", t.Agent.Name, t.steps, usage.TotalTokens))
-				}
-			}
+			// 阶段一百三十八：积分已改每轮即时扣除（见任务循环 step_tokens 归口，按单轮实际消耗扣，
+			// 总额不变），完结时不再按全任务总 tokens 扣（防重复扣费）；仅查询当前余额随帧下发刷新标题栏
 			// 阶段七十七：完结统计文件变更（done/error/cancelled 均携带——中途取消的脏改也可撤销）
 			changes := s.agentFinalizeChanges(t)
 			donePayload := map[string]interface{}{
@@ -3002,9 +3001,15 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 				"total_tokens":      usage.TotalTokens,
+				// 阶段一百三十八：任务耗时随帧下发（前端展示"耗时 X 分 Y 秒"，TRAE CN 同款）
+				"elapsed_ms": elapsedMs,
+				// 阶段一百三十八：全任务实际扣费积分随帧下发（前端状态行展示"扣 N 积分"，每轮单扣精确合计）
+				"points_cost": pointsCost,
 			}
-			if balancePtr != nil {
-				donePayload["points_balance"] = *balancePtr
+			if balance, berr := userPoints(t.Username); berr == nil {
+				donePayload["points_balance"] = balance
+			} else {
+				logger.Error("Agent 完结查询余额失败（任务 %s，用户 %s）：%v", t.ID, t.Username, berr)
 			}
 			if len(changes) > 0 {
 				donePayload["changes"] = changes
@@ -3045,6 +3050,8 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 				"total_tokens":      usage.TotalTokens,
+				"elapsed_ms":        elapsedMs,  // 阶段一百三十八：耗时随帧下发（取消也显示耗时）
+				"points_cost":       pointsCost, // 阶段一百三十八：实际扣费积分随帧下发（取消也显示扣了多少）
 			}
 			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
 				cancelPayload["changes"] = changes
@@ -3057,6 +3064,8 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 				"prompt_tokens":     usage.PromptTokens,
 				"completion_tokens": usage.CompletionTokens,
 				"total_tokens":      usage.TotalTokens,
+				"elapsed_ms":        elapsedMs, // 阶段一百三十八：耗时随帧下发（失败也显示耗时）
+				"points_cost":       pointsCost, // 阶段一百三十八：实际扣费积分随帧下发（失败也显示扣了多少）
 			}
 			if changes := s.agentFinalizeChanges(t); len(changes) > 0 {
 				errPayload["changes"] = changes
@@ -3132,7 +3141,10 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		t.mu.Unlock()
 		// 阶段一百零三：每轮 Token 消耗实时事件——任务循环每轮全量重发上下文，轮次越多消耗越大
 		// （近似平方级），用户可见每轮增量与累计才能定位消耗烧点（TRAE 同款"测量先行"）
-		s.agentEmit(t, "step_tokens", map[string]interface{}{
+		// 阶段一百三十八：积分改每轮即时扣除（用户要求，原完结时按全任务总 tokens 一次扣）——
+		// 总额不变（Σ单轮=总数），但扣费流水逐轮可见、与每轮真实消耗一一对应，消除"完结虚扣"观感；
+		// 失败轮已产生消耗同样扣（u 零值天然跳过），与累计口径一致防漏扣；扣后余额随帧刷新标题栏 ⚡
+		stepPayload := map[string]interface{}{
 			"round":             round,
 			"prompt_tokens":     u.PromptTokens,
 			"completion_tokens": u.CompletionTokens,
@@ -3140,7 +3152,30 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			"total_prompt":      snap.PromptTokens,
 			"total_completion":  snap.CompletionTokens,
 			"total_all":         snap.TotalTokens,
-		})
+		}
+		if u.TotalTokens > 0 {
+			// 阶段一百三十八：扣费走计费归口（usage=按量 / percall=按次固定积分，config.yaml 热更）
+			cost := aiChargeCost(u.TotalTokens)
+			billingMode := aiBillingMode()
+			if balance, derr := userPointsDeduct(t.Username, cost); derr != nil {
+				logger.Error("Agent 第 %d 轮积分扣除失败（任务 %s，用户 %s，%d tokens）：%v", round, t.ID, t.Username, u.TotalTokens, derr)
+			} else {
+				t.mu.Lock()
+				t.pointsCost += cost // 阶段一百三十八：累计本任务实际扣费（完结随帧下发，前端按此展示"扣 N 积分"）
+				t.mu.Unlock()
+				stepPayload["points_balance"] = balance
+				stepPayload["points_cost"] = cost     // 阶段一百三十八：该轮实际扣费（前端 percall 模式轮次行展示"扣 N 积分"）
+				stepPayload["billing_mode"] = billingMode
+				logger.Info("Agent 第 %d 轮积分扣除（任务 %s，用户 %s，- %.3f 积分，%d tokens，余额 %.3f，模式 %s）", round, t.ID, t.Username, cost, u.TotalTokens, balance, billingMode)
+				// 积分流水审计（Agent 单轮扣除，操作人 system；type 与完结扣 ai_agent_deduct 区分；描述按模式区分）
+				desc := fmt.Sprintf("Agent 任务第 %d 轮（智能体 %s）消耗 %d tokens，按 1000 tokens = 1 积分折算（保留 3 位小数）", round, t.Agent.Name, u.TotalTokens)
+				if billingMode == "percall" {
+					desc = fmt.Sprintf("Agent 任务第 %d 轮（智能体 %s）单次调用，按次计费固定扣 %.3f 积分（TRAE CN 同款，与 token 数无关）", round, t.Agent.Name, cost)
+				}
+				recordPointsLog(t.Username, -cost, balance, "ai_agent_round", "system", desc)
+			}
+		}
+		s.agentEmit(t, "step_tokens", stepPayload)
 		if err != nil {
 			s.agentFinish(t, "failed", "", "模型调用失败："+err.Error())
 			return
@@ -3699,6 +3734,7 @@ func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
 			"error":        truncateRunes(r.Error, 200),
 			"status":       r.Status,
 			"steps":        r.Steps,
+			"elapsed_ms":   r.ElapsedMs, // 阶段一百三十八：耗时随任务列表下发（重放卡 meta 展示）
 			"reply_msg_id": r.ReplyMsgID,
 			"session_id":   r.SessionID,
 			"create_time":  r.CreateTime,

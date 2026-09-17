@@ -945,8 +945,27 @@ html, body {
 
 /* AI 回复行放宽到 90%：宽表格/代码块等宽内容按需扩大展示范围（inline-block 收缩特性，
    短内容仍紧凑贴合不拉伸）；用户消息保持 70%（微信同款） */
+/* 阶段一百三十八修复：90% 与右缘对齐线取小——用户气泡右缘=列宽减头像占位 46px（自己头像
+   在右），而 90% 盒从左侧起算，窄窗口（内容区<460px）时 0.9W>W-46，AI 长气泡右缘会超出
+   用户气泡右边界（用户实测截图）；min() 取小后任何窗口宽都不超出，宽窗口仍保持 90% 观感 */
 .message.ai {
-    max-width: 90%;
+    max-width: min(90%, calc(100% - 46px));
+}
+
+/* 阶段一百三十八：Agent 模式隐藏双头像腾宽——消息列表挂 agent-mode 类（setAgentMode 归口，
+   会话切换/开关任务模式统一覆盖），AI 头像与自己头像 display:none，内容列 flex 自动占满行宽；
+   普通聊天与普通 AI 问答会话不受影响 */
+#message-list.agent-mode .msg-avatar {
+    display: none;
+}
+/* 阶段一百三十八：Agent 模式头像已隐藏，消息行上限放宽到 100%——双头像占位腾出后用户
+   气泡右缘=列宽，AI 行 100% 右缘与之精确对齐（此前 100% 的"超出"正是头像占位 46px 所致）；
+   气泡保持 inline-block 收缩（短内容紧凑不强行撑满），内容列同步解除 46px 预留 */
+#message-list.agent-mode .message {
+    max-width: 100%;
+}
+#message-list.agent-mode .message-body {
+    max-width: 100%;
 }
 
 /* 头像缺失修复：自己消息行反转，头像贴右侧、内容列在其左（微信同款） */
@@ -3902,10 +3921,27 @@ html.m #list-panel.list-collapsed {
 
 .agent-task-status {
     flex-shrink: 0;
+    /* 阶段一百三十八修复：长状态文本（如"等待用户回答：…"）nowrap+shrink:0 原本不可收缩，
+       会把停止按钮与自身挤出任务卡右缘（用户实测截图）；60% 上限内省略截断，全文经 title 悬停查看 */
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 10px;
     white-space: nowrap;
+}
+
+/* 阶段一百三十八：任务耗时标注（TRAE CN 同款"耗时 X 分 Y 秒"）——中性次级色跟随主题变量；
+   常规位于每轮消耗行行尾（margin-left:auto 右对齐，原"累计 N tokens"位置，用户指定） */
+.agent-task-elapsed {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+}
+.agent-task-cost .agent-task-elapsed {
+    margin-left: auto;
 }
 
 .agent-task-status.running {
@@ -4226,7 +4262,10 @@ html.m #list-panel.list-collapsed {
     line-height: 1.6;
     max-height: 240px;
     overflow-y: auto;
-    scrollbar-width: thin;
+    /* 阶段一百三十八修复：thin 会在元素级覆盖全局 * { scrollbar-width: none }，Chromium 的
+       Win11 Fluent 原生条又无视 ::-webkit-scrollbar 归零，导致思考/正文区漏出系统默认滚动条；
+       改回 none 后纵向滑块由 createAgentEventBody 统一挂自绘悬浮滑块（osb）承担 */
+    scrollbar-width: none;
 }
 
 .agent-event-args,

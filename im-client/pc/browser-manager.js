@@ -67,6 +67,119 @@ function cfgSave(cfg) {
     try { fs.writeFileSync(cfgFile(), JSON.stringify(cfg, null, 2), 'utf8'); } catch (e) { /* 只读盘等异常静默 */ }
 }
 
+// ===== 阶段一百三十八：浏览区状态持久化（2026-09-17 用户反馈"浏览区开着且有文件预览，
+// 退出客户端重新登录后浏览区消失，必须手动重开"） =====
+// 根因：panelVisible/tabs 均为主进程内存态，进程退出即丢，重启后内存默认收起且标签清空。
+// 现结构化状态随每次 statePush 落盘 userData/browser-panel.json，窗口首帧加载完成后恢复：
+//   - 面板显隐：按落盘值还原
+//   - web 标签：按 URL 重建（网页重新加载，登录态由 persist:agent-browser 持久分区保留）
+//   - 磁盘文件标签：按 用户名+相对路径 走 openFileTab 既有链路重读盘最新内容
+//   - diff/审查报告等直传数据标签（dataKey）：内容为内存派生态无法忠实重建，不恢复（重开即可）
+//   - 未保存的编辑（dirty）随重启丢弃，恢复为磁盘最新内容（宁丢编辑不写脏数据）
+const stateFile = () => path.join(app.getPath('userData'), 'browser-panel.json');
+let restoring = false;        // 恢复期标记：openFileTab 跳过 setPanel(true) 强制开面板（显隐以落盘值为准）+ persistState 暂停落盘（防中间态覆盖）
+let stateRestored = false;    // 是否已完成过落盘状态恢复（幂等守卫：did-finish-load 与沙箱就绪通知双入口）
+let restorePending = [];      // 恢复失败的 file 标签键（多为沙箱未注入导致路径解析失败）——登录后沙箱就绪时重试，落盘时并入防丢
+
+// tabRestoreKey 标签的可恢复身份键（落盘与恢复匹配共用）：web=URL；磁盘文件=用户名+相对路径；
+// 空白页/直传数据标签返回空（不落盘不恢复）
+function tabRestoreKey(t) {
+    if (!t) return '';
+    if (t.kind === 'web') return (t.url && t.url !== 'about:blank') ? ('web|' + t.url) : '';
+    if (t.kind === 'file' && t.username && t.relPath && !t.dataKey) return 'file|' + t.username + '|' + t.relPath;
+    return '';
+}
+
+// persistState 浏览区结构化状态落盘（statePush 尾部调用，数据量小：每标签一条短键）
+function persistState() {
+    if (restoring) return; // 阶段一百三十八修复：恢复期不落盘——实测 2026-09-17 恢复失败时（空标签+兜底空白页）
+                           // statePush 会把空态写回覆盖原完整落盘，标签数据彻底丢失（浏览区在、标签没了）
+    const list = tabs.map(tabRestoreKey).filter(function (k) { return !!k; });
+    // 待重试项并入落盘：恢复失败的标签不因落盘刷新而丢失（沙箱就绪后重试，见 notifySandboxReady）
+    restorePending.forEach(function (k) { if (list.indexOf(k) < 0) list.push(k); });
+    const act = tabs.find(function (t) { return t.id === activeId; });
+    try {
+        fs.writeFileSync(stateFile(), JSON.stringify({
+            visible: panelVisible,
+            active_key: tabRestoreKey(act),
+            tabs: list
+        }), 'utf8');
+    } catch (e) { /* 只读盘等异常静默（不影响浏览区功能） */ }
+}
+
+// restoreSavedState 恢复落盘状态（init 的 did-finish-load 首次触发时调用，幂等）。
+// web 标签直接建标签（statePush 后渲染层按 URL 建 webview）；文件标签逐个 openFileTab 重读盘
+// （payload 未就绪时渲染层 pending 暂存，既有链路无缝衔接）；最后按 active_key 纠正活动标签
+// （openFileTab 逐个激活会停在最后一个，须回置为退出时的活动页）。
+// 阶段一百三十八修复：此时尚未登录，用户自选工作区（沙箱 primary）未注入执行器，相对路径
+// 被解析到默认工作区导致 file 恢复失败——失败项记入 restorePending 待重试（登录后沙箱就绪
+// 时由 notifySandboxReady 重试），不再静默丢失
+function restoreSavedState() {
+    if (stateRestored) return; // 幂等：did-finish-load 与沙箱就绪通知双入口，只恢复一次
+    stateRestored = true;
+    let saved = null;
+    try {
+        const v = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+        if (v && typeof v === 'object' && Array.isArray(v.tabs)) saved = v;
+    } catch (e) { /* 首次无持久化文件或损坏：按无状态处理 */ }
+    if (!saved) return;
+    panelVisible = !!saved.visible;
+    restoring = true;
+    try {
+        saved.tabs.forEach(function (key) {
+            if (typeof key !== 'string' || !key) return;
+            if (key.indexOf('web|') === 0) {
+                const u = key.slice(4);
+                if (urlAllowed(u)) createTab(u, false);
+            } else if (key.indexOf('file|') === 0) {
+                const rest = key.slice(5);
+                const sep = rest.indexOf('|');
+                if (sep > 0) {
+                    const r = openFileTab(rest.slice(0, sep), rest.slice(sep + 1)); // 重读盘最新内容
+                    if (!r || !r.ok) restorePending.push(key); // 失败（沙箱未注入/文件缺失）：待重试不丢标签
+                }
+            }
+        });
+        if (typeof saved.active_key === 'string' && saved.active_key) {
+            const act = tabs.find(function (t) { return tabRestoreKey(t) === saved.active_key; });
+            if (act) activeId = act.id;
+        }
+    } finally {
+        restoring = false;
+    }
+    // 面板按落盘值是开的但没有任何可显示标签（既无恢复成功的标签也无待重试项）：
+    // 视为面板收起——原实现补一张空白页占位，实测 2026-09-17 用户反馈"聊天区变窄右边空一半"
+    // （about:blank 白页撑住右侧半屏，观感即空白）。收起后聊天区恢复全宽，下次用户打开
+    // 浏览区时由 setPanel(true) 常规补空白页（空白页不入落盘清单，状态自洽）
+    if (panelVisible && tabs.length === 0 && restorePending.length === 0) panelVisible = false;
+    statePush(); // 恢复完成统一推送一次（此时 restoring 已复位，persistState 随尾部落盘含待重试项）
+}
+
+// notifySandboxReady 沙箱就绪通知（main.js 在渲染层登录后首次 sandbox:get 时调用）：
+// 重试 restorePending 里恢复失败的 file 标签——此时该用户自选工作区已注入执行器，
+// 相对路径可正确解析到原工作区，标签得以恢复；仍失败（文件被删等）保留待下次
+function notifySandboxReady(username) {
+    if (!stateRestored) { restoreSavedState(); return; } // 页面尚未走完恢复（理论不达）：先全量恢复
+    if (!restorePending.length) return;
+    const retry = restorePending.slice();
+    restorePending = [];
+    restoring = true; // 重试同属恢复期：不强制开面板、不中途落盘
+    try {
+        retry.forEach(function (key) {
+            if (typeof key !== 'string' || key.indexOf('file|') !== 0) return;
+            const rest = key.slice(5);
+            const sep = rest.indexOf('|');
+            const u = sep > 0 ? rest.slice(0, sep) : '';
+            if (!u || (username && u !== String(username))) { restorePending.push(key); return; } // 非当前登录用户：沙箱未注入，留待其后
+            const r = openFileTab(u, sep > 0 ? rest.slice(sep + 1) : '');
+            if (!r || !r.ok) restorePending.push(key); // 仍失败：保留待重试（落盘时并入，不丢标签）
+        });
+    } finally {
+        restoring = false;
+    }
+    statePush(); // 推送恢复结果（persistState 随尾部落盘，待重试项并入）
+}
+
 // setCdpSwitch 阶段九十一：CDP 远程调试端口启动参数（必须在 app ready 前调用——
 // Chromium 仅在启动时读取 remote-debugging-port）。端口绑 127.0.0.1（Chromium 默认行为），
 // 开启后等同任何本机进程可完全控制客户端，配置注释需提示风险
@@ -264,6 +377,7 @@ function statePush() {
         can_forward: canForward,
         cdp_port: cdpPort
     });
+    persistState(); // 阶段一百三十八：状态变更即落盘（statePush 是所有状态变更的统一出口）
 }
 
 // ===== 面板显隐与用户操作（渲染层 IPC 入口在 init 注册） =====
@@ -496,7 +610,8 @@ function openFileTab(username, relPath) {
         existing.filePath = r.abs;
         existing.lastPayload = Object.assign(r.payload, { tab_id: existing.id });
         activeId = existing.id;
-        if (!panelVisible) setPanel(true);
+        // 原实现：if (!panelVisible) setPanel(true); 阶段一百三十八恢复期不强制开面板（显隐以落盘值为准）
+        if (!panelVisible && !restoring) setPanel(true);
         fileLoadPush(existing); // 重开即刷新：重读的最新内容重新推送 DOM viewer
         statePush();
         return { ok: true, tab_id: existing.id };
@@ -509,7 +624,9 @@ function openFileTab(username, relPath) {
     tab.dirty = false;
     tab.title = r.payload.name;
     tab.lastPayload = Object.assign(r.payload, { tab_id: tab.id });
-    if (!panelVisible) setPanel(true); // setPanel 内含状态推送
+    // 原实现：if (!panelVisible) setPanel(true); // setPanel 内含状态推送
+    // 阶段一百三十八恢复期不强制开面板（显隐以落盘值为准，恢复尾统一 statePush）
+    if (!panelVisible && !restoring) setPanel(true);
     fileLoadPush(tab); // payload 推给渲染层 iframe（未就绪时渲染层暂存）
     statePush();
     return { ok: true, tab_id: tab.id };
@@ -1037,7 +1154,26 @@ function init(win) {
             statePush();
         }
     });
-    win.webContents.on('did-finish-load', statePush);
+    // 阶段一百三十八：渲染层 file iframe 就绪补拉 payload——页面刷新/退出重登后 iframe 重建，
+    // 主进程 lastPayload 仍在但不再主动推送，原实现活动文件标签空白须重开文件；就绪即补拉重投
+    ipcMain.handle('browser:file-reload', function (event, payload) {
+        const id = String((payload && payload.tab_id) || payload || '');
+        const tab = tabs.find(function (t) { return t.id === id && t.kind === 'file'; });
+        fileLoadPush(tab || null); // 标签已关/无 payload 时内部静默返回
+        return { ok: true };
+    });
+    // 原实现：win.webContents.on('did-finish-load', statePush);
+    // 阶段一百三十八：首次页面加载完成后先恢复落盘的浏览区状态（面板显隐+标签重建）再推送——
+    // 重启后内存默认收起且标签清空，直接 statePush 推的是空态，浏览区永远消失；后续每次页面
+    // 加载（退出登录刷新等）维持原行为仅重推状态（内存态还在，iframe 由渲染层按状态重建）。
+    // 幂等守卫在 restoreSavedState 内部（沙箱就绪通知入口共用，见 notifySandboxReady）
+    win.webContents.on('did-finish-load', function () {
+        if (!stateRestored) {
+            restoreSavedState();
+        } else {
+            statePush();
+        }
+    });
 }
 
 // setPathGuard 注入路径校验函数（main.js 传入 agentExecutor.safePath——browser-manager 不可
@@ -1066,6 +1202,7 @@ module.exports = {
     setViewerUrl: setViewerUrl,
     agentExecute: agentExecute,
     statePush: statePush,
+    notifySandboxReady: notifySandboxReady, // 阶段一百三十八：沙箱就绪通知（main.js 登录后 sandbox:get 时调）——重试待恢复文件标签
     lspHover: lspHover,         // 阶段一百三十：LSP 悬停归口（main.js ipcMain 'lsp:hover' 调用）
     lspShutdown: function () { try { lspManager.shutdownAll(); } catch (e) {} } // 阶段一百三十：应用退出全量回收语言服务器子进程
 };

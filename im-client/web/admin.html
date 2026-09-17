@@ -48,6 +48,7 @@
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
+                <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -526,6 +527,33 @@
                 <div class="agentset-actions">
                     <button id="agentset-save" class="admin-btn primary">保存全部设置</button>
                     <span id="agentset-tip" class="admin-view-tip"></span>
+                </div>
+            </section>
+
+            <!-- AI 计费模式设置（阶段一百三十八：usage 按量 / percall 按次 TRAE CN 同款；保存即热生效+落库重启不丢） -->
+            <section id="admin-view-billing" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 计费设置</h2>
+                    <span id="billing-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">AI 问答与 Agent 任务的积分扣费模式。保存后立即热生效（下一次模型调用即按新模式扣费），无需重启服务端；设置持久化保存，重启后保持。客户端气泡/任务卡展示口径自动跟随。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">计费模式</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="usage" checked> 按量计费（1000 tokens = 1 积分，按当次实际消耗折算，上下文越长单次扣费越多）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="percall"> 按次计费（TRAE CN 同款：每次模型调用固定扣费，与 token 数无关，上下文膨胀由平台吸收）</label>
+                    </div>
+                    <div class="agentset-row" id="billing-cost-row">
+                        <label class="agentset-label" for="billing-percall-cost" title="仅按次计费模式生效；每次 AI 问答 / Agent 每轮迭代扣该固定积分">按次计费单价（积分/次）</label>
+                        <input type="number" id="billing-percall-cost" class="admin-input agentset-num" min="0.001" max="1000" step="0.001">
+                        <span class="agentset-range">0.001~1000</span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="billing-save" class="admin-btn primary">保存计费设置</button>
+                    <span id="billing-source-tip" class="agentset-sub-tip"></span>
                 </div>
             </section>
 

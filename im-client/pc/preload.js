@@ -318,6 +318,11 @@ contextBridge.exposeInMainWorld('desktop', {
     browserViewerDirty: function (tabId, dirty) {
         ipcRenderer.send('browser:viewer-dirty', { tab_id: String(tabId || ''), dirty: !!dirty });
     },
+    // 阶段一百三十八：file iframe 就绪补拉 payload（页面刷新/重登后 iframe 重建，
+    // 主进程按 tab_id 重推 lastPayload，修复活动文件标签空白须重开文件的问题）
+    browserFileReload: function (tabId) {
+        return ipcRenderer.invoke('browser:file-reload', { tab_id: String(tabId || '') });
+    },
     // ===== 阶段一百：任务变更保留/撤销（viewer 页"任务已修改"条按钮桥接——此前缺失导致按钮点击无反应） =====
     // 保留变更：接受当前磁盘内容（主进程删备份+清索引）
     browserTaskKeep: function (tabId) {

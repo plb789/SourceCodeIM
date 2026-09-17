@@ -209,6 +209,11 @@
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
                 }
+                // 阶段一百三十八：接收服务端计费模式（usage 按量 / percall 按次 TRAE CN 同款）与按次单价——
+                // 标题栏 ⚡ 积分悬停提示按模式显示对应扣费口径；归口 chat.js 的 window.applyTitlebarBillingTip
+                if (info && info.billing_mode && typeof window.applyTitlebarBillingTip === 'function') {
+                    window.applyTitlebarBillingTip(info.billing_mode, info.percall_cost);
+                }
                 // 阶段三十一：接收服务端下发的分片大小与大文件直传阈值（服务端归口）
                 if (info && info.chunk_size > 0) {
                     chunkSize = info.chunk_size;

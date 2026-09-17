@@ -68,7 +68,7 @@ try {
 } catch (e) { }
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:8888/';
 
 // ===== 阶段一百三十六：前端资源加密密钥解析归口 =====
 // 密钥来源优先级：1) 构建期生成的 secure-key.js（obfuscate.js 产出，密钥经随机掩码异或扰乱
@@ -725,7 +725,13 @@ function sandboxNormalize(cfg) {
 
 // 渲染层拉取当前用户沙箱配置
 ipcMain.handle('sandbox:get', function (event, username) {
-    return sandboxStore[String(username || '')] || { primary: '', dirs: [] };
+    const uname = String(username || '');
+    // 阶段一百三十八：登录后首个沙箱查询即注入执行器（幂等，agent:exec 每次也会再注入），
+    // 并通知浏览区重试待恢复的文件标签——页面首帧加载时的恢复早于登录，自选工作区
+    // （沙箱 primary）未注入导致相对路径解析失败、标签恢复失败（实测 2026-09-17）
+    agentExecutor.setSandbox(uname, sandboxStore[uname] || null);
+    browserManager.notifySandboxReady(uname);
+    return sandboxStore[uname] || { primary: '', dirs: [] };
 });
 
 // 渲染层保存沙箱配置（校验裁剪后持久化 + 返回归一化结果；上报服务端由渲染层归口）

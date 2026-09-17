@@ -133,6 +133,12 @@ type Message struct {
 	// 阶段七十八：扣分后剩余 AI 积分（服务端归口，仅 AI 问答成功结束帧携带，客户端标题栏实时刷新）。
 	// 用指针：余额恰为 0 时也要下发（值类型 + omitempty 会把 0 丢掉导致前端不刷新），nil=本次未扣分/扣分失败
 	PointsBalance *float64 `json:"points_balance,omitempty"` // 阶段七十八：AI 问答扣后余额（双精度，nil=扣分失败前端保持旧值）
+	// 阶段一百三十八：本次实际扣除积分（服务端计费归口折算后的真实扣费，客户端零计算只展示）。
+	// 用指针：0 扣费也下发区分"未扣"，nil=扣分失败/旧服务端；AI_STREAM_END 帧与 Agent step_tokens 事件携带
+	PointsCost *float64 `json:"points_cost,omitempty"`
+	// 阶段一百三十八：计费模式随帧标注（"usage"=按量 1000 tokens=1 积分 | "percall"=按次固定积分，TRAE CN 同款），
+	// 前端按模式切换展示口径（tokens 明细 / 扣费积分）；config.yaml ai_billing.mode 热更后新帧自动携带新模式
+	BillingMode string `json:"billing_mode,omitempty"`
 	// 已读状态（随私聊回显帧下发：AI 提问回显为 true——AI 会话无回执语义，服务端落库即视为已读；
 	// 普通私聊回显为 false 保持既有回执链路）
 	IsRead bool `json:"is_read,omitempty"`

@@ -51,6 +51,20 @@
     // 阶段七十八：标题栏 AI 积分（TRAE CN 同款，⚡ + 余额数字，服务端归口下发，前端不做任何积分计算）
     var titlebarPointsEl = document.getElementById('titlebar-points');
     var titlebarPointsNumEl = document.getElementById('titlebar-points-num');
+
+    // ===== 阶段一百三十八：标题栏 ⚡ 积分悬停提示按计费模式切换（socket.js 登录帧与 chat.js 扣费帧共同归口至此） =====
+    // usage=按量（1000 tokens=1 积分）/ percall=按次（TRAE CN 同款固定扣费）；后台热更后随登录帧/扣费帧自动刷新
+    window.applyTitlebarBillingTip = function (mode, percallCost) {
+        if (!titlebarPointsEl) return;
+        if (mode === 'percall') {
+            var c = (percallCost != null && percallCost > 0) ? percallCost : 0.01;
+            titlebarPointsEl.setAttribute('data-tip',
+                '按次计费 每轮固定扣 ' + c + ' 积分 ；问答失败或中断不扣分');
+        } else {
+            titlebarPointsEl.setAttribute('data-tip',
+                '每 1000 tokens 消耗 1 积分（精确折算）；问答失败或中断不扣分');
+        }
+    };
     var avatarFileEl = document.getElementById('avatar-file');
 
     // ===== 阶段三十：个人资料面板元素（微信式右侧滑出，点击自己头像打开） =====
@@ -3697,9 +3711,25 @@
         // 此前 isAIAgent() 全部返回 false 导致 AI 头像降级为首字母——就绪后刷新会话列表与
         // 当前智能体会话，头像统一回正为 🤖/配置图片
         renderConvList();
-        if (currentChatUser && isAIAgent(currentChatUser)) {
-            openConversation(currentChatUser);
-        }
+        // 阶段一百三十七修复：智能体列表就绪后即时修正当前会话按钮显隐（登录自动恢复场景
+        // openConversation 先于本列表执行，按钮曾因 isAIAgent=false 被隐藏）
+        // 原实现：重入 openConversation 修正——被阶段一百三十四同会话守卫拦截（历史已渲染时
+        // 提前 return），显隐块不执行，按钮保持隐藏直到用户切换会话
+        // if (currentChatUser && isAIAgent(currentChatUser)) {
+        //     openConversation(currentChatUser);
+        // }
+        if (currentChatUser) syncAgentUiForConversation(currentChatUser);
+        // 阶段一百三十八修复：智能体列表晚到补标消息行 ai 类——登录自动恢复会话时历史渲染
+        // 早于本列表下发，isAIAgent(fromUser) 必为 false，AI 回复行缺 ai 标记导致气泡保持
+        // 70% 收缩未撑满（用户实测"普通 AI 100% 了，Agent 模式不是"）；列表就绪后按行
+        // data-from 补标，与头像回正/按钮修正同一时序兜底归口。排除思考中行（气泡保持紧凑）
+        (function () {
+            var rows = messageList.querySelectorAll('.message.other:not(.ai):not(.ai-thinking)');
+            for (var i = 0; i < rows.length; i++) {
+                var from = rows[i].getAttribute('data-from');
+                if (from && isAIAgent(from)) rows[i].classList.add('ai');
+            }
+        })();
         // 当前正停留在智能体会话时，刷新标题区（头像/名称就绪）
         updateChatTitle();
     });
@@ -3866,11 +3896,19 @@
     // fullText 为回复 Markdown 原文（复制原文，渲染样式不带出）
     // 阶段四十五：表格回复追加「导出 Excel/Word」——服务端归口转档（POST /export/ai/excel|word，
     // 服务端取回复原文解析转 xlsx 并以文件消息回发会话），msgId 缺失（流式未回填完）时不显示
-    // tokens 为本次回复 Token 消耗（服务端 usage 归口，{total,prompt,completion}），无数据不显示
-    function buildAIActionBar(agent, fullText, msgId, tokens) {
+    // tokens 为本次回复 Token 消耗（服务端 usage 归口，{total,prompt,completion}），无数据不显示；
+    // 阶段一百三十八：billingCost=本次实际扣费积分、billingMode=计费模式（服务端随结束帧下发）——
+    // percall（按次计费，TRAE CN 同款）时展示"⚡ N 积分"（与 token 数无关），usage 或旧消息保持 tokens 展示
+    function buildAIActionBar(agent, fullText, msgId, tokens, billingCost, billingMode) {
         var bar = document.createElement('div');
         bar.className = 'ai-actions';
-        if (tokens && tokens.total > 0) {
+        if (billingMode === 'percall' && billingCost != null && billingCost > 0) {
+            var pc = document.createElement('span');
+            pc.className = 'ai-token-info';
+            pc.title = '按次计费（TRAE CN 同款）：单次调用固定扣 ' + billingCost + ' 积分，与 token 数无关' + (tokens && tokens.total > 0 ? '；本次消耗 ' + tokens.total + ' tokens 仅供参考' : '');
+            pc.textContent = '⚡ ' + billingCost + ' 积分';
+            bar.appendChild(pc);
+        } else if (tokens && tokens.total > 0) {
             var tk = document.createElement('span');
             tk.className = 'ai-token-info';
             tk.title = '提示 ' + tokens.prompt + ' + 生成 ' + tokens.completion + ' = 共 ' + tokens.total + ' Tokens';
@@ -4162,7 +4200,7 @@
         // Token 消耗标注随操作栏渲染（服务端 usage 归口，随结束帧下发）
         var bodyEl = st.el.querySelector('.message-body');
         if (bodyEl && !bodyEl.querySelector('.ai-actions')) {
-            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown, st.finalId, st.tokens));
+            bodyEl.appendChild(buildAIActionBar(st.agent, st.shown, st.finalId, st.tokens, st.billingCost, st.billingMode));
         }
         if (st.finalId) st.el.setAttribute('data-msg-id', st.finalId);
         var agent = st.el.getAttribute('data-from');
@@ -4297,8 +4335,13 @@
             st.done = true;
             st.finalId = msg.msg_id || 0;
             if (msg.remark === 'stopped') st.stopped = true; // 阶段七十三：用户停止，收尾时留痕
-            // Token 消耗随结束帧下发（服务端 usage 归口），收尾时渲染到操作栏
+            // Token 消耗随结束帧下发（服务端 usage 归口），收尾时渲染到操作栏；
+            // 阶段一百三十八：本次扣费积分与计费模式随帧下发，percall 模式操作栏展示"⚡ N 积分"
             st.tokens = { total: msg.total_tokens || 0, prompt: msg.prompt_tokens || 0, completion: msg.completion_tokens || 0 };
+            st.billingCost = msg.points_cost;
+            st.billingMode = msg.billing_mode || '';
+            // 阶段一百三十八：扣费帧实时携带计费模式——同步刷新标题栏 ⚡ 悬停提示（后台热更后无需重登）
+            if (msg.billing_mode) window.applyTitlebarBillingTip(msg.billing_mode, msg.points_cost);
             ensureStreamTimer(st);
             return;
         }
@@ -4379,6 +4422,10 @@
     function setAgentMode(on) {
         agentMode = on;
         agentModeBtn.classList.toggle('active', on);
+        // 阶段一百三十八：Agent 模式隐藏双头像（AI 头像与自己头像）给聊天内容腾宽——挂
+        // agent-mode 标记类于消息列表归口，CSS 统一隐藏头像并放宽对齐线；会话切换经本函数
+        // 归口（openConversation 切普通会话传 false），类自动摘除头像恢复
+        messageList.classList.toggle('agent-mode', !!(on && currentChatUser && isAIAgent(currentChatUser)));
         messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
         updateSendBtnState(); // 阶段七十三：模式切换联动发送按钮停止态（任务执行中开/关任务模式）
         // 阶段一百一十七：审批模式盾牌仅在 Agent 任务模式开启时显示（审批流只发生在任务执行中；
@@ -5717,6 +5764,11 @@
             if (!r) return;
             r.ready = true;
             if (r.pending) { fileFramePush(r, r.pending); r.pending = null; } // 早于 load 到达的 payload 补投
+            // 阶段一百三十八：无待投 payload 时向主进程补拉一次——页面刷新/退出重登后 iframe 重建，
+            // 主进程 lastPayload 仍在但原实现不再推送，活动文件标签空白须重开文件（实测 2026-09-17）
+            else if (window.desktop && typeof window.desktop.browserFileReload === 'function') {
+                window.desktop.browserFileReload(tabId);
+            }
         });
         browserContentEl.appendChild(frame);
         return (fileFrames[tabId] = { frame: frame, ready: false, pending: null });
@@ -6392,7 +6444,16 @@
         browserLastState = state;
         browserPanelEl.classList.toggle('hidden', !state.visible);
         browserSyncSplit(); // 分栏宽度与聊天列压缩同步（展开/收起/标签变化统一归口）
-        if (!state.visible) { browserProgressHide(); return; } // 阶段一百三十一：面板收起即收进度条（重开有新加载再亮）
+        if (!state.visible) {
+            // 阶段一百三十八自愈（2026-09-17 用户反馈"面板收起后聊天内容仍只有约六成宽"）：
+            // 收起瞬间一并清掉 browserApplySplit 设置的内联宽度（hidden 下虽 display:none，
+            // 残留宽度在类名/样式竞态下可能重新参与布局），并延迟复检一次分栏清理——
+            // 兜底一切异步回调（RO/resize 防抖）在 hidden 应用后又跑展开分支的时序竞态，
+            // 保证聊天列恢复全宽
+            browserPanelEl.style.width = '';
+            setTimeout(browserSyncSplit, 300);
+            browserProgressHide(); return; // 阶段一百三十一：面板收起即收进度条（重开有新加载再亮）
+        }
         browserRenderTabs(state);
         // 阶段九十二：DOM viewer 同步——file 标签 iframe 建池/显隐/清理（仅活动 file 标签可见；
         // 网页标签活动时全部隐藏、webview 接管），标签关闭即移除对应 iframe
@@ -6748,21 +6809,47 @@
 
     function setAgentTaskStatus(st, text, cls) {
         st.statusEl.textContent = text;
+        st.statusEl.title = text; // 阶段一百三十八：长状态文本 CSS 截断省略后悬停可见全文
         if (cls === 'running') st.statusEl.appendChild(agentDotsEl()); // 执行中：附跳动三点（其他状态仅文字）
         st.statusEl.className = 'agent-task-status ' + (cls || 'running');
     }
 
-    // 阶段一百零二：任务卡状态行的 Token 消耗标注（与气泡操作栏 ⚡ 格式一致；0=上游未返回 usage 不显示）
-    function agentTokensTag(tokens) {
-        return tokens && tokens.total > 0 ? '（⚡ ' + tokens.total + ' tokens）' : '';
+    // 阶段一百三十八：任务卡完结状态行标注改显示扣费积分（用户要求，原 tokens 数）——
+    // 优先用服务端每轮实际扣费精确累计 points_cost；旧任务/缺省按 total/1000 折算兜底（同服务端公式）；
+    // 0=未产生扣费不显示
+    function agentTokensTag(tokens, pointsCost) {
+        var v = (pointsCost != null && pointsCost > 0) ? pointsCost :
+            (tokens && tokens.total > 0 ? parseFloat((tokens.total / 1000).toFixed(3)) : 0);
+        return v > 0 ? '（⚡ 扣 ' + v + ' 积分）' : '';
     }
 
-    function finishAgentTask(st, text, cls) {
+    // 阶段一百三十八：任务耗时格式化（TRAE CN 同款）——不足 1 分钟显示"X 秒"，超过显示"X 分 Y 秒"
+    function agentElapsedText(ms) {
+        var s = Math.round((ms || 0) / 1000);
+        if (s < 60) return s + ' 秒';
+        return Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒';
+    }
+
+    function finishAgentTask(st, text, cls, elapsedMs) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
         // 阶段一百二十五：任务完结即收尾等待中的提问卡（超时/完结后不再可作答；弹窗按任务归属过滤关闭）
         if (st.pendingAskSettles) agentAskSettlePending(st, '任务已结束，无需再回答');
         else agentAskModalClose(st.taskId);
         setAgentTaskStatus(st, text, cls);
+        // 阶段一百三十八：任务耗时标注（TRAE CN 同款）——服务端 StartAt→完结毫秒归口，0/缺省不显示；
+        // 位置按用户指定放在每轮消耗行行尾（原"累计 N tokens"处）：无消耗行时补建该行，行内槽位
+        // 缺失（未收到过 step_tokens 帧）则建槽；重复完结经 _elapsed 存在性/覆盖写天然幂等
+        if (elapsedMs > 0 && st.costEl) {
+            if (!st.costEl._elapsed) {
+                st.costEl._label = st.costEl._label || document.createElement('span');
+                st.costEl._elapsed = document.createElement('span');
+                st.costEl._elapsed.className = 'agent-task-elapsed';
+                if (!st.costEl._label.parentNode) st.costEl.appendChild(st.costEl._label);
+                st.costEl.appendChild(st.costEl._elapsed);
+            }
+            st.costEl._elapsed.textContent = '耗时 ' + agentElapsedText(elapsedMs);
+            st.costEl.classList.remove('hidden');
+        }
         st.stopBtn.disabled = true;
         st.stopBtn.textContent = '已结束';
         // 阶段七十三：任务完结即清进行中标记（当前会话发送按钮"停止"态复位）
@@ -6808,6 +6895,7 @@
         bodyEl.className = 'agent-event-body ai-md';
         bodyEl.innerHTML = renderAIMarkdown(text || '');
         initAIMdHScroll(bodyEl); // 宽表格/代码块挂横向自绘滑块（思考文本一次性渲染，DOM 已稳定）
+        if (window._osbInit) window._osbInit(bodyEl); // 阶段一百三十八：纵向限高区挂自绘悬浮滑块（原生 Fluent 条已在 CSS 禁用）
         block.appendChild(head);
         block.appendChild(bodyEl);
         st.events.appendChild(block);
@@ -6866,6 +6954,7 @@
             cursor.className = 'ai-stream-cursor';
             bodyEl.appendChild(span);
             bodyEl.appendChild(cursor);
+            if (window._osbInit) window._osbInit(bodyEl); // 阶段一百三十八：流式正文限高区挂自绘悬浮滑块（追加自动同步）
             block.appendChild(head);
             block.appendChild(bodyEl);
             st.events.appendChild(block);
@@ -6999,7 +7088,10 @@
 
         var meta = document.createElement('div');
         meta.className = 'taskhist-meta';
-        meta.textContent = (t.steps || 0) + ' 步 · ' + thFormatTime(t.update_time || t.create_time);
+        // 阶段一百三十八：重放卡 meta 附耗时（服务端 elapsed_ms 归口下发；旧记录无该值不显示）
+        meta.textContent = (t.steps || 0) + ' 步' +
+            (t.elapsed_ms > 0 ? ' · 耗时 ' + agentElapsedText(t.elapsed_ms) : '') +
+            ' · ' + thFormatTime(t.update_time || t.create_time);
         card.appendChild(meta);
 
         var detail = document.createElement('div');
@@ -12069,7 +12161,7 @@
                     collapseAgentCard(st);
                     agentFinalizeText(st, true);
                     // 阶段一百零二：取消不扣积分，已消耗 Token 标注到任务卡
-                    finishAgentTask(st, '已取消' + agentTokensTag({ total: ev.total_tokens || 0 }), 'cancelled');
+                    finishAgentTask(st, '已取消' + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'cancelled', ev.elapsed_ms);
                     // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
                     if (ev.msg_id) appendMessage(msg.from_user, '任务已取消', 'other', ev.msg_id, msg.timestamp, true);
                 }
@@ -12084,19 +12176,28 @@
                 }
                 break;
             case 'step_tokens':
-                // 阶段一百零三：每轮 Token 消耗实时行（单行更新不新增行；任务循环每轮全量重发
-                // 上下文，可见每轮增量与累计才能定位消耗烧点——测量先行）
+                // 阶段一百零三：每轮 Token 消耗实时行（单行更新不新增行）；阶段一百三十八：去掉
+                // "累计 N tokens"尾巴（完结数意义不大），行尾固定耗时槽位——任务完结后"耗时 X 分 Y 秒"
+                // 显示在该位置（用户指定，TRAE CN 观感）。首到达建行结构，后续轮次仅更新 label 文本
                 if (st.costEl) {
                     st.costEl.classList.remove('hidden');
-                    st.costEl.innerHTML = '';
-                    var cLabel = document.createElement('span');
-                    cLabel.textContent = '⚡ 第 ' + (ev.round || '?') + ' 轮：提示 ' + (ev.prompt_tokens || 0) +
-                        ' + 生成 ' + (ev.completion_tokens || 0) + '，累计 ';
-                    var cNum = document.createElement('span');
-                    cNum.className = 'cost-num';
-                    cNum.textContent = (ev.total_all || 0) + ' tokens';
-                    st.costEl.appendChild(cLabel);
-                    st.costEl.appendChild(cNum);
+                    if (!st.costEl._label) {
+                        st.costEl._label = document.createElement('span');
+                        st.costEl._elapsed = document.createElement('span');
+                        st.costEl._elapsed.className = 'agent-task-elapsed';
+                        st.costEl.appendChild(st.costEl._label);
+                        st.costEl.appendChild(st.costEl._elapsed);
+                    }
+                    st.costEl._label.textContent = '⚡ 第 ' + (ev.round || '?') + ' 轮：提示 ' + (ev.prompt_tokens || 0) +
+                        ' + 生成 ' + (ev.completion_tokens || 0) +
+                        (ev.billing_mode === 'percall' && ev.points_cost != null && ev.points_cost > 0
+                            ? '，扣 ' + ev.points_cost + ' 积分' : '');
+                    // 阶段一百三十八：计费模式与该轮扣费记录到任务态——完结答复气泡操作栏沿用同一口径
+                    if (ev.billing_mode) {
+                        st.billingMode = ev.billing_mode;
+                        window.applyTitlebarBillingTip(ev.billing_mode, ev.points_cost); // 同步刷新标题栏悬停提示
+                    }
+                    if (ev.points_cost != null) st.billingCost = ev.points_cost;
                 }
                 break;
             case 'tool_start':
@@ -12125,7 +12226,7 @@
                 st.tokens = { total: ev.total_tokens || 0, prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0 };
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
                 collapseAgentCard(st);
-                finishAgentTask(st, '已完成' + agentTokensTag(st.tokens), 'done');
+                finishAgentTask(st, '已完成' + agentTokensTag(st.tokens, ev.points_cost), 'done', ev.elapsed_ms);
                 // 阶段七十七：文件变更审查条（TRAE CN 同款，撤销/保留归口）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
@@ -12139,7 +12240,9 @@
                     if (st.sessionId === (aiViewSession[st.agent] || 0)) {
                         // 阶段六十六：事件携带落库 msg_id（气泡关联库记录，撤回/引用/操作栏正常）
                         // 阶段一百零二：透传全任务 Token 消耗（答复气泡操作栏 ⚡ 标注，与普通回复同口径）
-                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true, false, st.tokens);
+                        // 阶段一百三十八：透传计费口径（step_tokens 记忆的 billing，percall 时操作栏显示扣费积分）
+                        appendMessage(st.agent, ev.result, 'other', ev.msg_id || 0, msg.timestamp, true, false, st.tokens,
+                            { cost: st.billingCost != null ? st.billingCost : ev.points_cost, mode: st.billingMode });
                         // 阶段六十六：正查看该会话时完结消息视为已读（不留假未读角标）
                         if (ev.msg_id) sendReadReceipt(msg.from_user, ev.msg_id);
                     }
@@ -12150,7 +12253,7 @@
             case 'error':
                 agentFinalizeText(st, true);
                 // 阶段一百零二：失败不扣积分，已消耗 Token 标注到任务卡
-                finishAgentTask(st, '失败' + agentTokensTag({ total: ev.total_tokens || 0 }), 'failed');
+                finishAgentTask(st, '失败' + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'failed', ev.elapsed_ms);
                 // 阶段七十七：失败同样结算变更（已落盘的脏改可撤销）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
@@ -13443,6 +13546,30 @@
     var loadingMore = false;    // 翻页请求进行中标记（防止滚动重复触发）
     var convSwitchTimer = null; // 阶段一百三十四：会话切换渲染期隐藏的兜底定时器（防 HISTORY 响应丢失永久隐藏）
 
+    // 阶段一百三十七修复（2026-09-17 用户反馈"重新登录后 AI 输入框上方按钮消失，切换会话再切回才恢复"）：
+    // 会话内 AI 按钮显隐（Agent 模式/联网搜索/工作区/MCP/审批盾牌）归口本函数。
+    // 原实现为 openConversation 内联块，判定依据 isAIAgent()；登录自动恢复会话路径下
+    // openConversation 执行时 AI_AGENTS 列表尚未返回（请求在其后才发出），isAIAgent 必为
+    // false，按钮全部被隐藏；列表返回后原实现靠重入 openConversation 修正，但阶段一百三十
+    // 四的同会话守卫（历史已渲染时提前 return）导致显隐块不再执行，按钮保持隐藏。
+    // 现 openConversation 与 AI_AGENTS 就绪处理器各自调用本函数，列表就绪即可即时修正
+    // 当前会话按钮显隐与 Agent 开关记忆，不再依赖被守卫拦截的重入
+    function syncAgentUiForConversation(user) {
+        // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用
+        // 阶段七十八：AI 会话恢复该会话记忆的开关状态；普通好友会话强制关闭（Agent 仅对 AI 有意义）
+        var targetIsAgent = !!(user && isAIAgent(user));
+        setAgentMode(targetIsAgent ? !!agentModeByUser[user] : false);
+        agentModeBtn.classList.toggle('hidden', !targetIsAgent);
+        // 阶段六十九：联网搜索开关仅 AI 智能体会话且服务端开启时显示（开关状态跨会话保持）
+        webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
+        // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
+        agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
+        // 阶段九十：我的 MCP 服务器按钮同显隐（仅 PC 端，本机 stdio 自定义）
+        agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
+        // 阶段一百一十七：审批模式盾牌显隐归 setAgentMode（上方已调用，仅 Agent 任务模式开启时显示）
+        return targetIsAgent; // 阶段一百三十八修复：openConversation 后续控制台恢复逻辑仍需该判定值（回归：注释声明后未声明变量抛 ReferenceError 中断切换会话）
+    }
+
     // 切换会话：设置目标、清空显示、加载历史
     function openConversation(user) {
         // 阶段一百三十四：同会话重复点击守卫——点击当前已打开的好友卡片会再次执行"清空+挂隐藏类+重拉历史"，
@@ -13459,18 +13586,19 @@
             agentConsoleOpenByUser[currentChatUser] = agentConsole.open; // 控制台开合状态同样按会话记忆
         }
         currentChatUser = user;
-        // 阶段五十九：Agent 任务模式按钮仅 AI 智能体会话可用
-        // 阶段七十八：AI 会话恢复该会话记忆的开关状态；普通好友会话强制关闭（Agent 仅对 AI 有意义）
-        var targetIsAgent = !!(user && isAIAgent(user));
-        setAgentMode(targetIsAgent ? !!agentModeByUser[user] : false);
-        agentModeBtn.classList.toggle('hidden', !targetIsAgent);
-        // 阶段六十九：联网搜索开关仅 AI 智能体会话且服务端开启时显示（开关状态跨会话保持）
-        webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
-        // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
-        agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
-        // 阶段九十：我的 MCP 服务器按钮同显隐（仅 PC 端，本机 stdio 自定义）
-        agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
-        // 阶段一百一十七：审批模式盾牌显隐归 setAgentMode（上方已调用，仅 Agent 任务模式开启时显示）
+        // 阶段一百三十七：按钮显隐归口 syncAgentUiForConversation（登录自动恢复时智能体列表未就绪，
+        // 需在 AI_AGENTS 返回后二次修正，抽函数避免两处重复维护）
+        // 原实现：内联判定（智能体列表未返回时 isAIAgent 恒为 false，按钮被隐藏且列表就绪后无法修正）
+        // var targetIsAgent = !!(user && isAIAgent(user));
+        // setAgentMode(targetIsAgent ? !!agentModeByUser[user] : false);
+        // agentModeBtn.classList.toggle('hidden', !targetIsAgent);
+        // webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
+        // agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
+        // agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
+        // 阶段一百三十八修复：接收归口函数返回的 targetIsAgent——下方控制台恢复逻辑
+        // `if (targetIsAgent && agentMode && ...)` 仍引用该值，原替换漏了返回值导致
+        // 未声明变量 ReferenceError，openConversation 中断（切换好友点击无效回归）
+        var targetIsAgent = syncAgentUiForConversation(user);
         // 阶段四十三：切换会话丢弃进行中的 AI 流式气泡（DOM 已随 messageList 清空，回复落库后历史可见；
         // 重新进入该会话时增量会重建气泡继续打字，END 帧保证最终完整）
         for (var sid in aiStreams) {
@@ -14589,7 +14717,8 @@
 
     // 构建消息元素（返回 DOM 节点，不插入列表）：供实时消息与历史消息渲染复用
     // tokens 可选：AI 回复的 Token 消耗（服务端 usage 归口，历史加载/END 降级路径透传给操作栏）
-    function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
+    // billing 可选：{cost,mode} 计费口径（阶段一百三十八，Agent 完结答复气泡透传；缺省按 tokens 展示）
+    function createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens, billing) {
         var div = document.createElement('div');
         // ai 标记：AI 智能体消息行放宽 max-width（宽表格/代码块按需扩大展示范围；普通用户消息保持 70%）
         div.className = 'message ' + type + (isAIAgent(fromUser) ? ' ai' : '');
@@ -14773,7 +14902,8 @@
         // 阶段六十二修复：透传 tokens（历史响应含 prompt/completion/total_tokens，此前构建操作栏漏传第 4 参，
         // 刷新浏览器/重新登录后 AI 回复只剩操作栏、Token 消耗标注消失）
         if (isAIAgent(fromUser)) {
-            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId, tokens));
+            // 阶段一百三十八：透传计费口径（percall 时操作栏显示"⚡ N 积分"，否则 tokens）
+            body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId, tokens, billing && billing.cost, billing && billing.mode));
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
@@ -14784,7 +14914,9 @@
 
     // 实时消息：构建元素后追加到列表末尾并滚动到底部
     // tokens 可选：AI 回复 Token 消耗（END 降级整段渲染路径透传）
-    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens) {
+    // 阶段一百三十八：新增可选第 9 参 billing={cost,mode}（Agent 完结答复气泡透传计费口径；
+    // 历史加载不传 → 操作栏按 tokens 展示，与落库数据一致）
+    function appendMessage(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens, billing) {
         // 阶段七十一：新会话首条消息上屏时移除空态引导
         var emptyTip = messageList.querySelector('.ai-session-empty');
         if (emptyTip) emptyTip.remove();
@@ -14813,7 +14945,7 @@
         // }
         // messageList.appendChild(div);
         // messageList.scrollTop = messageList.scrollHeight;
-        var div = createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens);
+        var div = createMessageEl(fromUser, content, type, msgId, timestamp, showReadStatus, isRead, tokens, billing);
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }

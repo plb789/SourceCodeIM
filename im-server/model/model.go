@@ -238,6 +238,9 @@ type AgentTaskRecord struct {
 	Result    string `gorm:"column:result;type:text" json:"result"`                           // 最终答复（完成时）
 	Error     string `gorm:"column:error;type:text" json:"error"`                             // 失败/取消原因
 	Steps     int    `gorm:"column:steps;not null;default:0" json:"steps"`                    // 实际迭代步数
+	// ElapsedMs 任务执行耗时毫秒（阶段一百三十八）：StartAt（实际开始执行）到完结的时长，
+	// 完结落库并随 done/error/cancelled 帧、任务列表接口下发，前端展示"耗时 X 分 Y 秒"（TRAE CN 同款）
+	ElapsedMs int64 `gorm:"column:elapsed_ms;not null;default:0" json:"elapsed_ms"`
 	// ReplyMsgID 完结通知消息 ID（阶段七十）：前端重进会话时以答复气泡为锚点内联重放任务卡，执行过程历史可见
 	ReplyMsgID uint `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
 	// SessionID 归属 AI 会话（阶段七十一）：任务回显落库时按当前生效会话盖戳，任务卡重放按会话区间过滤防串会话

@@ -135,6 +135,8 @@
             else if (item.dataset.view === 'accounts') { loadAccounts(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
+            // 阶段一百三十八：进入 AI 计费设置视图拉取当前生效计费配置
+            else if (item.dataset.view === 'billing') { loadBillingSettings(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1390,6 +1392,56 @@
             $('agentset-status').textContent = '';
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     }
+
+    // ===== AI 计费设置（阶段一百三十八：usage 按量 / percall 按次 TRAE CN 同款；保存即热生效） =====
+
+    // 单价行显隐联动：仅按次计费时需要配置单价
+    function billingCostRowSync() {
+        var percall = document.querySelector('input[name="billing-mode"][value="percall"]').checked;
+        $('billing-cost-row').style.display = percall ? '' : 'none';
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="billing-mode"]'), function (r) {
+        r.addEventListener('change', billingCostRowSync);
+    });
+
+    // 读取当前生效计费配置回填表单（含来源标注：后台设置=DB 真源 / config=config.yaml 初始默认）
+    function loadBillingSettings() {
+        api('GET', '/admin/api/billing/settings').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            var mode = d.mode === 'percall' ? 'percall' : 'usage';
+            document.querySelector('input[name="billing-mode"][value="' + mode + '"]').checked = true;
+            $('billing-percall-cost').value = d.percall_cost;
+            billingCostRowSync();
+            $('billing-source-tip').textContent = d.source === 'override' ? '当前值来源：后台设置（持久化）' : '当前值来源：config.yaml 初始默认（后台保存后转为持久化）';
+            $('billing-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 保存：服务端落库 + 内存直更（下一次模型调用即按新模式扣费，无需重启）
+    $('billing-save').addEventListener('click', function () {
+        var mode = document.querySelector('input[name="billing-mode"]:checked').value;
+        var body = { mode: mode };
+        if (mode === 'percall') {
+            var cost = parseFloat($('billing-percall-cost').value);
+            if (!(cost > 0)) {
+                showToast('请输入有效的按次计费单价');
+                return;
+            }
+            body.percall_cost = cost;
+        }
+        api('PUT', '/admin/api/billing/settings', body).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '保存失败');
+                return;
+            }
+            showToast('计费设置已保存并热生效');
+            loadBillingSettings(); // 回读刷新来源标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
 
     function agentSetAddCmd() {
         var input = $('agentset-cmd-input');
