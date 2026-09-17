@@ -137,6 +137,8 @@
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
             // 阶段一百三十八：进入 AI 计费设置视图拉取当前生效计费配置
             else if (item.dataset.view === 'billing') { loadBillingSettings(); }
+            // 阶段一百三十九：进入历史压缩设置视图拉取当前生效压缩配置
+            else if (item.dataset.view === 'compress') { loadCompressSettings(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1440,6 +1442,53 @@
             }
             showToast('计费设置已保存并热生效');
             loadBillingSettings(); // 回读刷新来源标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // ===== 阶段一百三十九：历史压缩方式设置（tokens 估算 / kb 字节双口径可选，保存即热生效）=====
+    // 与计费设置同款交互：单选切换显示对应阈值行；保存落库 + 服务端内存直更，下一轮模型调用即生效
+    function compressModeRowSync() {
+        var kb = document.querySelector('input[name="compress-mode"]:checked').value === 'kb';
+        $('compress-kb-row').style.display = kb ? '' : 'none';
+        $('compress-tokens-row').style.display = kb ? 'none' : '';
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="compress-mode"]'), function (r) {
+        r.addEventListener('change', compressModeRowSync);
+    });
+
+    // 读取当前生效压缩配置回填表单（含来源标注：后台设置=DB 真源 / config=config.yaml 初始默认）
+    function loadCompressSettings() {
+        api('GET', '/admin/api/compress/settings').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            var mode = d.mode === 'tokens' ? 'tokens' : 'kb';
+            document.querySelector('input[name="compress-mode"][value="' + mode + '"]').checked = true;
+            $('compress-kb').value = d.kb;
+            $('compress-tokens').value = d.tokens;
+            compressModeRowSync();
+            $('compress-source-tip').textContent = d.source === 'override' ? '当前值来源：后台设置（持久化）' : '当前值来源：config.yaml 初始默认（后台保存后转为持久化）';
+            $('compress-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 保存：两个阈值一并提交（隐藏行的已加载值原样回传，切换口径不丢对方修改）；
+    // 服务端落库 + 内存直更（执行中的任务下一轮模型调用即按新口径判断，无需重启）
+    $('compress-save').addEventListener('click', function () {
+        var mode = document.querySelector('input[name="compress-mode"]:checked').value;
+        var kb = parseInt($('compress-kb').value, 10);
+        var tk = parseInt($('compress-tokens').value, 10);
+        if (!(kb > 0)) { showToast('请输入有效的 KB 阈值'); return; }
+        if (!(tk > 0)) { showToast('请输入有效的 Token 阈值'); return; }
+        api('PUT', '/admin/api/compress/settings', { mode: mode, tokens: tk, kb: kb }).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '保存失败');
+                return;
+            }
+            showToast('压缩设置已保存并热生效');
+            loadCompressSettings(); // 回读刷新来源标注
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 

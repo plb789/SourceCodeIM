@@ -49,6 +49,7 @@
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
+                <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -554,6 +555,38 @@
                 <div class="agentset-actions">
                     <button id="billing-save" class="admin-btn primary">保存计费设置</button>
                     <span id="billing-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            <!-- 历史压缩方式设置（阶段一百三十九：tokens 估算 / kb 字节双口径可选 TRAE CN 同款；保存即热生效+落库重启不丢） -->
+            <section id="admin-view-compress" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>历史压缩设置</h2>
+                    <span id="compress-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">Agent 任务长上下文自动压缩的触发口径：上下文达到阈值时把较早完整工具轮 LLM 摘要归并（最近若干轮保留原文），显著降低 token 消耗并加速响应。保存后立即热生效（对执行中的任务下一轮即按新口径判断），无需重启服务端；设置持久化保存，重启后保持。任务卡右下角"上下文占用环"展示口径自动跟随。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">压缩触发口径</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="kb" checked> KB 字节口径（TRAE CN 状态栏同款：上下文累计 UTF-8 字节数达阈值触发，中英混排直观可预期）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="tokens"> 估算 token 口径（CJK≈1 字符 1 token、其余≈4 字符 1 token 粗估，达阈值触发）</label>
+                    </div>
+                    <div class="agentset-row" id="compress-kb-row">
+                        <label class="agentset-label" for="compress-kb" title="KB 字节口径触发阈值；200KB 中文约 6.8 万 token，请结合所用模型上下文窗口调整">KB 阈值（KB）</label>
+                        <input type="number" id="compress-kb" class="admin-input agentset-num" min="1" max="1048576" step="1">
+                        <span class="agentset-range">1~1048576</span>
+                    </div>
+                    <div class="agentset-row" id="compress-tokens-row">
+                        <label class="agentset-label" for="compress-tokens" title="估算 token 口径触发阈值">Token 阈值（估算）</label>
+                        <input type="number" id="compress-tokens" class="admin-input agentset-num" min="1000" max="10000000" step="1000">
+                        <span class="agentset-range">1000~10000000</span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="compress-save" class="admin-btn primary">保存压缩设置</button>
+                    <span id="compress-source-tip" class="agentset-sub-tip"></span>
                 </div>
             </section>
 

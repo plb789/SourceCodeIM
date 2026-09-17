@@ -3169,6 +3169,8 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// 阶段一百三十八：积分改每轮即时扣除（用户要求，原完结时按全任务总 tokens 一次扣）——
 		// 总额不变（Σ单轮=总数），但扣费流水逐轮可见、与每轮真实消耗一一对应，消除"完结虚扣"观感；
 		// 失败轮已产生消耗同样扣（u 零值天然跳过），与累计口径一致防漏扣；扣后余额随帧刷新标题栏 ⚡
+		// 阶段一百三十九：随帧携带本轮实际上下文字节数与阈值（TRAE CN 同款任务卡右下角
+		// "◔ 30%" 上下文占用环）——msgs 已过压缩归口，即本轮真实发送量；禁用压缩时不下发
 		stepPayload := map[string]interface{}{
 			"round":             round,
 			"prompt_tokens":     u.PromptTokens,
@@ -3177,6 +3179,22 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			"total_prompt":      snap.PromptTokens,
 			"total_completion":  snap.CompletionTokens,
 			"total_all":         snap.TotalTokens,
+		}
+		// 原实现：随帧携带本轮上下文字节数（阶段一百三十九上半，固定 KB 口径）
+		// if aiCompressThresholdKB > 0 {
+		// 	stepPayload["context_bytes"] = aiMsgsBytes(msgs)
+		// 	stepPayload["context_max_bytes"] = aiCompressThresholdKB * 1024
+		// }
+		// 阶段一百三十九：随帧携带本轮占用/阈值/口径（后台所选口径归一——TRAE CN 同款任务卡
+		// 右下角"◔ 30%"上下文占用环）——msgs 已过压缩归口，即本轮真实发送量
+		if cfgC := aiCompressCfgGet(); cfgC.Mode == "tokens" {
+			stepPayload["context_used"] = aiMsgsEstimateTokens(msgs)
+			stepPayload["context_max"] = cfgC.Tokens
+			stepPayload["context_mode"] = "tokens"
+		} else {
+			stepPayload["context_used"] = aiMsgsBytes(msgs)
+			stepPayload["context_max"] = cfgC.KB * 1024
+			stepPayload["context_mode"] = "kb"
 		}
 		if u.TotalTokens > 0 {
 			// 阶段一百三十八：扣费走计费归口（usage=按量 / percall=按次固定积分，config.yaml 热更）
@@ -3425,12 +3443,37 @@ func agentCompressBoundary(msgs []aiChatMessage, keepTurns int) int {
 // 完整工具轮 LLM 摘要成一条 user 消息（旧摘要文本也在转录内，天然增量合并），最近
 // agentCompressKeepTurns 轮保留原文。摘要失败时若未超 3 倍阈值则本轮跳过（下轮重试），
 // 超 3 倍则紧急截断（弃旧轮+省略声明）防"上下文超长"直接压死任务
+// 阶段一百三十九：触发口径后台可选（admin 后台保存即热生效）——tokens 估算 / kb 字节（TRAE CN
+// 状态栏同款）双口径，归口 aicompresscfg.go（aiCompressCfgGet）；仅 Agent 任务生效，
+// AI 问答压缩仍走 aiCompressThreshold token 判据（aiCompressHistory）
 func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []aiChatMessage {
-	if aiCompressThreshold <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {
+	// 原实现：token 判据（阶段八十四，AI 问答与 Agent 任务共用 aiCompressThreshold）
+	// if aiCompressThreshold <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {
+	// 	return msgs
+	// }
+	// if aiMsgsEstimateTokens(msgs) < aiCompressThreshold {
+	// 	return msgs
+	// }
+	// 原实现：KB 判据（阶段一百三十九上半，config.yaml compress_threshold_kb 静态阈值）
+	// if aiCompressThresholdKB <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {
+	// 	return msgs
+	// }
+	// if aiMsgsBytes(msgs) < aiCompressThresholdKB*1024 {
+	// 	return msgs // 未达 KB 阈值：本轮上下文原样全发
+	// }
+	// 阶段一百三十九：压缩口径后台可选（admin 后台 tokens/kb 双口径，保存即热生效无需重启）
+	cfg := aiCompressCfgGet()
+	used, maxV := 0, 0
+	if cfg.Mode == "tokens" {
+		used, maxV = aiMsgsEstimateTokens(msgs), cfg.Tokens
+	} else {
+		used, maxV = aiMsgsBytes(msgs), cfg.KB*1024
+	}
+	if maxV <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {
 		return msgs
 	}
-	if aiMsgsEstimateTokens(msgs) < aiCompressThreshold {
-		return msgs
+	if used < maxV {
+		return msgs // 未达阈值：本轮上下文原样全发
 	}
 	bnd := agentCompressBoundary(msgs, agentCompressKeepTurns)
 	if bnd <= 2 {
@@ -3438,8 +3481,10 @@ func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []
 	}
 	before := len(msgs)
 	est := aiMsgsEstimateTokens(msgs)
+	totalBytes := aiMsgsBytes(msgs)
 	// 压缩开始先推事件（TRAE 同款"历史对话压缩中"实时提示，摘要期间用户可见进度）
-	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "start", "before": before, "est_tokens": est})
+	// 阶段一百三十九：随帧携带当前占用 used/阈值 max/口径 mode（前端任务卡上下文占用环即时升到峰值）
+	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "start", "before": before, "est_tokens": est, "used": used, "max": maxV, "mode": cfg.Mode})
 	// 转录压缩区（跳过 0=system；1=goal 亦纳入转录，摘要需原始目标锚定语义）
 	// 阶段一百零三：转录段瘦身——每条先按 rune 截断再进摘要（摘要只需要点，工具结果全文转录
 	// 会让压缩调用本身烧掉大量 tokens；原始历史仅在本次内存中，保留区轮次不受影响）
@@ -3462,7 +3507,11 @@ func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []
 	}
 	summary := aiCompressSummarize(nil, t.Agent, "", segs)
 	if summary == "" {
-		if est < aiCompressThreshold*3 {
+		// 原实现：token 口径 3 倍兜底（阶段八十四）
+		// if est < aiCompressThreshold*3 {
+		// 原实现：KB 口径 3 倍兜底（阶段一百三十九上半）
+		// if totalBytes < aiCompressThresholdKB*1024*3 {
+		if used < maxV*3 { // 阶段一百三十九：按当前口径 3 倍兜底
 			return msgs // 瞬时失败：本轮维持全量，下轮重试
 		}
 		// 溢出紧急截断：不再调 LLM，直接弃旧轮留声明，任务保命优先
@@ -3477,8 +3526,18 @@ func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []
 	out = append(out, msgs[0], msgs[1],
 		aiChatMessage{Role: "user", Content: "[前序执行历史摘要（较早工具轮已压缩归并）]\n" + summary})
 	out = append(out, msgs[bnd:]...)
-	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "done", "before": before, "after": len(out), "est_tokens": aiMsgsEstimateTokens(out)})
-	logger.Info("Agent 任务 %s 历史压缩：%d→%d 条（估算 token %d→%d）", t.ID, before, len(out), est, aiMsgsEstimateTokens(out))
+	// 阶段一百三十九：done 帧携带压缩后占用（同口径）/阈值/口径（前端任务卡上下文占用环即时回落）
+	afterUsed := totalBytes
+	if cfg.Mode == "tokens" {
+		afterUsed = aiMsgsEstimateTokens(out)
+	} else {
+		afterUsed = aiMsgsBytes(out)
+	}
+	s.agentEmit(t, "history_compress", map[string]interface{}{"phase": "done", "before": before, "after": len(out),
+		"est_tokens": aiMsgsEstimateTokens(out), "used": afterUsed, "max": maxV, "mode": cfg.Mode})
+	// 阶段一百三十九：日志带口径与阈值（token 仅作参考趋势）
+	logger.Info("Agent 任务 %s 历史压缩（%s 口径阈值 %d）：%d→%d 条（%.1fKB→%.1fKB，估算 token %d→%d）", t.ID, cfg.Mode, maxV,
+		before, len(out), float64(totalBytes)/1024, float64(aiMsgsBytes(out))/1024, est, aiMsgsEstimateTokens(out))
 	return out
 }
 

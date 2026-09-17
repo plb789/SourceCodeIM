@@ -70,6 +70,9 @@ var (
 	aiCompressThreshold = 12000 // 历史上下文估算 token 达到该值触发压缩（<=0 禁用）
 	aiCompressKeep      = 6     // 压缩时保留最近原文消息条数，更早历史并入摘要
 	aiCompressScanExtra = 60    // 压缩启用时额外回溯的更早历史条数（原窗口外不再"滑走即丢"）
+	// 阶段一百三十九：Agent 任务上下文压缩阈值改 KB 口径（与 TRAE CN 状态栏同款，UTF-8 字节计）——
+	// 仅作用于 Agent 任务循环，AI 问答仍用上面的 token 阈值；KB 判据对中英混排上下文更直观可预期
+	aiCompressThresholdKB = 200 // 任务上下文累计字节达到该 KB 值触发压缩（<=0 禁用 Agent 压缩）
 
 	// 阶段一百零三：压缩摘要调用瘦身——转录段逐条截断（摘要只需要点，全文转录会让压缩调用
 	// 自身烧掉大量 tokens；原始历史仍在库中，需要时可重压）。0=默认 500 字/条，负数=不截断
@@ -129,6 +132,12 @@ func InitAI(cfg *config.Config) {
 	}
 	if cfg.AI.CompressKeepMessages > 0 {
 		aiCompressKeep = cfg.AI.CompressKeepMessages
+	}
+	// 阶段一百三十九：Agent 任务压缩阈值 KB 口径兜底（0=默认 200，负数=禁用 Agent 压缩；仅 Agent 任务生效）
+	if cfg.AI.CompressThresholdKB > 0 {
+		aiCompressThresholdKB = cfg.AI.CompressThresholdKB
+	} else if cfg.AI.CompressThresholdKB < 0 {
+		aiCompressThresholdKB = -1
 	}
 	// 阶段五十七：用户自建智能体配置（config 归口，启动时加载；白名单/上限均有兜底默认值）
 	aiUserEnabled = cfg.AI.UserAgent.Enabled
@@ -546,6 +555,31 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 	return res.text, res.usage, err
 }
 
+// aiUpstreamErrBody 上游非 200 响应体错误归一：上游服务（OpenAI 风格网关等）返回 JSON 错误体
+// （如 {"error":{"message":"该令牌额度已用尽 (request id: ...)","type":"one_api_error"}}），
+// 原实现把 JSON 原文拼进错误串直出前端（Agent 任务卡"失败原因"显示 JSON，用户实测反馈）。
+// 提取可读信息归一：error.message → message → 原样文本兜底（截断损坏/非 JSON 均不影响展示）
+func aiUpstreamErrBody(status int, body []byte) error {
+	text := strings.TrimSpace(string(body))
+	var probe struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &probe) == nil {
+		if probe.Error.Message != "" {
+			text = strings.TrimSpace(probe.Error.Message)
+		} else if probe.Message != "" {
+			text = strings.TrimSpace(probe.Message)
+		}
+	}
+	if text == "" {
+		text = "（无响应体）"
+	}
+	return fmt.Errorf("AI 服务返回 %d: %s", status, text)
+}
+
 // aiStreamChatAttempt aiStreamChat 主体（流式 SSE 单次调用，显式指定 provider 执行——多源兜底由 aiFailoverRun 归口）
 func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProviderConfig, msgs []aiChatMessage, onDelta func(string)) (aiStreamRes, error) {
 	// 视觉模型自动路由：消息中出现多模态 content 数组（带图提问）且配置了 vision_model 时，
@@ -587,8 +621,11 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return aiStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		// 阶段一百三十九：JSON 错误体原文直出改 aiUpstreamErrBody 归一提取（原实现保留备查）
+		// snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// return aiStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 2048)) // 512→2048：错误 JSON 含 request id 等长文本，读取过短会截断致解析失败走原样兜底
+		return aiStreamRes{}, aiUpstreamErrBody(resp.StatusCode, snippet)
 	}
 
 	// 解析 SSE 流：形如 "data: {...}"，终止帧 "data: [DONE]"；增量取 choices[0].delta.content，
@@ -778,7 +815,9 @@ func aiAgentChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProv
 		return aiAgentChatRes{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return aiAgentChatRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		// 阶段一百三十九：JSON 错误体原文直出改 aiUpstreamErrBody 归一提取（原实现保留备查）
+		// return aiAgentChatRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return aiAgentChatRes{}, aiUpstreamErrBody(resp.StatusCode, raw)
 	}
 
 	var out struct {
@@ -867,7 +906,9 @@ func aiAgentChatStreamAttempt(ctx context.Context, agent *AIRunAgent, p *config.
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return aiAgentStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		// 阶段一百三十九：JSON 错误体原文直出改 aiUpstreamErrBody 归一提取（原实现保留备查）
+		// return aiAgentStreamRes{}, fmt.Errorf("AI 服务返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return aiAgentStreamRes{}, aiUpstreamErrBody(resp.StatusCode, raw)
 	}
 
 	var content strings.Builder
@@ -1222,6 +1263,16 @@ func aiMsgsEstimateTokens(msgs []aiChatMessage) int {
 	total := 0
 	for i := range msgs {
 		total += aiEstimateTokens(msgs[i].Role) + aiEstimateTokens(aiChatMsgText(msgs[i]))
+	}
+	return total
+}
+
+// aiMsgsBytes 阶段一百三十九：一组消息的 UTF-8 字节统计（role 标签一并计入）——
+// Agent 任务压缩触发判据（与 TRAE CN 的 KB 口径同源：len 得到的是 UTF-8 编码字节数）
+func aiMsgsBytes(msgs []aiChatMessage) int {
+	total := 0
+	for i := range msgs {
+		total += len(msgs[i].Role) + len(aiChatMsgText(msgs[i]))
 	}
 	return total
 }

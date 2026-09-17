@@ -72,11 +72,17 @@ ai:
   # 阶段四十五：文档问答单文档提取文本上限（字符），超出截断后再送模型
   doc_max_chars: 60000
 
-  # 阶段八十四：TRAE 同款历史对话压缩（AI 问答与 Agent 任务共用）——历史上下文估算 token
-  # 达到阈值时把较旧部分 LLM 摘要成一条摘要消息注入（最近 N 条保留原文），长会话/长任务
-  # 显著降低 token 消耗并加速模型首字响应；AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
-  compress_threshold_tokens: 120000     # 触发阈值（估算 token；负数=禁用压缩）
+  # 阶段八十四：TRAE 同款历史对话压缩——历史上下文超阈值时把较旧部分 LLM 摘要成一条摘要消息
+  # 注入（最近 N 条保留原文），长会话/长任务显著降低 token 消耗并加速模型首字响应；
+  # AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
+  # 阶段一百三十九：口径拆分——Agent 任务改 KB 判据（见 compress_threshold_kb），
+  # compress_threshold_tokens 仅对 AI 问答生效
+  compress_threshold_tokens: 120000     # AI 问答触发阈值（估算 token；负数=禁用 AI 问答压缩）
   compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
+  # 阶段一百三十九：Agent 任务上下文压缩阈值（KB 口径，与 TRAE CN 状态栏同款，UTF-8 字节计）——
+  # 任务循环上下文累计达到该值时把较早完整工具轮 LLM 摘要归并（最近 N 轮保留原文）；
+  # 200KB 中文约 6.8 万 token，请结合所用模型上下文窗口调整；负数=禁用 Agent 任务压缩
+  compress_threshold_kb: 200
 
   # 阶段五十一：知识库向量化 embedding 服务（OpenAI 兼容 /embeddings 接口归口）
   # DeepSeek 不提供 embedding API，可接任意兼容服务（硅基流动 bge-m3 / 智谱 embedding-3 / 本地 ollama 等）

@@ -3727,9 +3727,42 @@
             var rows = messageList.querySelectorAll('.message.other:not(.ai):not(.ai-thinking)');
             for (var i = 0; i < rows.length; i++) {
                 var from = rows[i].getAttribute('data-from');
-                if (from && isAIAgent(from)) rows[i].classList.add('ai');
+                if (from && isAIAgent(from)) {
+                    rows[i].classList.add('ai');
+                    // 阶段一百三十九：补挂 AI 操作栏（复制/积分消耗/导出/重新生成等）——同一竞态的
+                    // 数据补挂：历史渲染时 isAIAgent=false 未挂操作栏且 Markdown 降级纯文本，
+                    // 此处按渲染时缓存的参数（__aiMsgData）补建；防重：已有操作栏的行跳过
+                    var d = rows[i].__aiMsgData;
+                    if (d) {
+                        // 补 Markdown 渲染（竞态时正文曾按纯文本直出降级，quoteBlock 引用块不动）：
+                        // 竞态分支 bubble.textContent 直出无 .msg-text 子元素，需补建结构后渲染
+                        var md = rows[i].querySelector('.msg-text');
+                        var bub = rows[i].querySelector('.message-bubble');
+                        if (bub && !md) {
+                            md = document.createElement('div');
+                            md.className = 'msg-text';
+                            bub.textContent = ''; // 清空降级的纯文本直出
+                            bub.appendChild(md);
+                        }
+                        if (md && !md.classList.contains('ai-md')) {
+                            md.classList.add('ai-md');
+                            md.innerHTML = renderAIMarkdown(d.content);
+                        }
+                        if (!rows[i].querySelector('.ai-actions')) {
+                            var bodyEl = rows[i].querySelector('.message-body');
+                            if (bodyEl) bodyEl.appendChild(buildAIActionBar(d.from, d.content, d.msgId, d.tokens, d.billing && d.billing.cost, d.billing && d.billing.mode));
+                        }
+                        initAIMdHScroll(rows[i]); // Markdown 补渲染后宽表格/代码块挂横向自绘滑块
+                    }
+                }
             }
         })();
+        // 阶段一百三十九修复：任务卡重放补调——登录自动恢复场景实测（CDP 抓帧）智能体列表
+        // （msg_type=42）晚于历史响应（msg_type=11）约 1ms，历史渲染归口 agentReplayTasks()
+        // 因 isAIAgent=false 被跳过且永不补调，重登后任务卡不显示（与头像/按钮/气泡标记同一
+        // 竞态的最后一环）。列表就绪后按当前会话补调（重放内部按 DB 归口+插卡查重，幂等安全）；
+        // 列表先到（正常时序）时历史未渲染，本次补调插不上锚点自然返回，后续历史归口正常触发
+        if (currentChatUser && isAIAgent(currentChatUser)) agentReplayTasks();
         // 当前正停留在智能体会话时，刷新标题区（头像/名称就绪）
         updateChatTitle();
     });
@@ -6832,6 +6865,54 @@
         return Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒';
     }
 
+    // 阶段一百三十九：任务卡上下文占用环（TRAE CN 同款右下角"◔ 30%"）——
+    // 服务端 step_tokens 帧每轮携带 context_bytes/context_max_bytes，history_compress 帧压缩前后即时升峰/回落；
+    // SVG 环形进度自绘（禁用系统默认样式），底环/文字跟随主题中性色，进度弧用主题色，高占用分档警示
+    function agentCtxRingEnsure(st) {
+        if (st.costEl._ctxRing) return st.costEl._ctxRing;
+        var wrap = document.createElement('span');
+        wrap.className = 'agent-task-ctx';
+        wrap.title = '上下文占用（达阈值自动触发历史压缩归并）';
+        var NS = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 36 36');
+        var mk = function (cls) {
+            var c = document.createElementNS(NS, 'circle');
+            c.setAttribute('cx', '18'); c.setAttribute('cy', '18'); c.setAttribute('r', '15.5');
+            c.setAttribute('class', cls);
+            return c;
+        };
+        var bg = mk('ctx-bg');
+        var fg = mk('ctx-fg');
+        var C = 2 * Math.PI * 15.5; // 周长≈97.39，dashoffset=周长×(1-占比) 实现环形进度
+        fg.setAttribute('stroke-dasharray', C.toFixed(2));
+        fg.setAttribute('stroke-dashoffset', C.toFixed(2));
+        fg.setAttribute('transform', 'rotate(-90 18 18)');
+        var pct = document.createElement('span');
+        pct.className = 'agent-task-ctx-pct';
+        pct.textContent = '0%';
+        svg.appendChild(bg); svg.appendChild(fg);
+        wrap.appendChild(svg); wrap.appendChild(pct);
+        st.costEl._ctxRing = wrap; st.costEl._ctxRingFg = fg; st.costEl._ctxRingPct = pct;
+        return wrap;
+    }
+
+    // 阶段一百三十九：占用环更新归口——占比截断 0~100%，常驻消耗行行尾（末位自纠）；
+    // ≥80% 橙色、≥95% 红色分档警示；阈值/占用/口径均由服务端随帧下发（mode=tokens 估算 / kb 字节），前端不硬编码
+    function agentCtxRingUpdate(st, used, max, mode) {
+        if (!st || !st.costEl || !(max > 0) || used == null) return;
+        var pct = Math.max(0, Math.min(100, Math.round(used / max * 100)));
+        var wrap = agentCtxRingEnsure(st);
+        if (st.costEl.lastElementChild !== wrap) st.costEl.appendChild(wrap); // 耗时槽位后插入仍保持最右
+        var C = 2 * Math.PI * 15.5;
+        st.costEl._ctxRingFg.setAttribute('stroke-dashoffset', (C * (1 - pct / 100)).toFixed(2));
+        st.costEl._ctxRingPct.textContent = pct + '%';
+        wrap.title = '上下文占用（' + (mode === 'tokens' ? '估算 token' : 'KB 字节') + '口径，达阈值自动触发历史压缩归并）';
+        st.costEl._ctxRingFg.classList.toggle('ctx-warn', pct >= 80 && pct < 95);
+        st.costEl._ctxRingFg.classList.toggle('ctx-danger', pct >= 95);
+        st.costEl.classList.remove('hidden');
+    }
+
     function finishAgentTask(st, text, cls, elapsedMs) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
         // 阶段一百二十五：任务完结即收尾等待中的提问卡（超时/完结后不再可作答；弹窗按任务归属过滤关闭）
@@ -7047,7 +7128,10 @@
                     if (st && st.sessionId === (aiViewSession[agent] || 0)) {
                         messageList.appendChild(st.el);
                     } else if (!st) {
-                        messageList.appendChild(agentBuildReplayCard(agent, t));
+                        // 阶段一百三十九：静态卡查重（智能体列表晚到补调与历史归口先后触发防重复挂卡）
+                        if (!messageList.querySelector('.message[data-task-id="' + t.task_id + '"]')) {
+                            messageList.appendChild(agentBuildReplayCard(agent, t));
+                        }
                     }
                     // 阶段七十三：重放发现的进行中任务登记（当前会话发送按钮"停止"态恢复）
                     agentActiveTask[agent] = t.task_id;
@@ -7070,6 +7154,7 @@
     function agentBuildReplayCard(agent, t) {
         var row = document.createElement('div');
         row.className = 'message other ai'; // ai 标记：重放卡行同宽放宽
+        row.dataset.taskId = t.task_id; // 阶段一百三十九：按任务查重标记（智能体列表晚到补调防重复插卡）
         var body = document.createElement('div');
         body.className = 'message-body';
         var card = document.createElement('div');
@@ -7116,19 +7201,40 @@
                     if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
                     var d = res.data || {};
                     detail.innerHTML = '';
-                    function row(label, text) {
+                    // 阶段一百三十九：最终总结改 Markdown 渲染——模型输出含 **加粗**/反引号/表格等
+                    // 标记，纯文本直出导致标记原样漏出（用户实测"任务卡里的消息不是 Markdown 格式"）；
+                    // 任务目标/失败原因/取消说明仍纯文本（用户输入与系统信息无需渲染）
+                    // 原实现：row 无 md 参数，所有正文 bod.textContent 纯文本直出
+                    // function row(label, text) {
+                    //     if (!text) return;
+                    //     var lab = document.createElement('div');
+                    //     lab.className = 'taskhist-d-label';
+                    //     lab.textContent = label;
+                    //     var bod = document.createElement('div');
+                    //     bod.className = 'taskhist-d-body';
+                    //     bod.textContent = text;
+                    //     detail.appendChild(lab);
+                    //     detail.appendChild(bod);
+                    // }
+                    function row(label, text, md) {
                         if (!text) return;
                         var lab = document.createElement('div');
                         lab.className = 'taskhist-d-label';
                         lab.textContent = label;
                         var bod = document.createElement('div');
                         bod.className = 'taskhist-d-body';
-                        bod.textContent = text;
+                        if (md) {
+                            bod.classList.add('ai-md'); // 复用 AI Markdown 全套样式（.ai-md 前缀不限定父容器）
+                            bod.innerHTML = renderAIMarkdown(text); // 自带整体转义防注入
+                            initAIMdHScroll(bod); // 宽表格/代码块挂横向自绘滑块
+                        } else {
+                            bod.textContent = text;
+                        }
                         detail.appendChild(lab);
                         detail.appendChild(bod);
                     }
                     row('任务目标', d.goal);
-                    if (d.status === 'completed') row('最终总结', d.result);
+                    if (d.status === 'completed') row('最终总结', d.result, true);
                     if (d.status === 'failed') row('失败原因', d.error);
                     if (d.status === 'cancelled') row('取消说明', d.error);
                     // 阶段七十七：文件变更审查条（历史任务 pending 可操作，kept/reverted 只读徽标）
@@ -7149,8 +7255,10 @@
         return row;
     }
 
-    // agentInsertReplayCard 重放卡插入完结答复气泡之前（reply_msg_id 锚点；气泡不在已加载窗口则不插，翻页兜底走任务历史）
+    // agentInsertReplayCard 重放卡插入完结答复气泡之前（reply_msg_id 锚点；气泡不在已加载窗口则不插，翻页兜底走任务历史）。
+    // 阶段一百三十九：按 data-task-id 查重——智能体列表晚到补调与历史归口可能先后触发，防同一任务卡重复插入
     function agentInsertReplayCard(agent, t) {
+        if (messageList.querySelector('.message[data-task-id="' + t.task_id + '"]')) return;
         var anchor = messageList.querySelector('.message[data-msg-id="' + t.reply_msg_id + '"]');
         if (!anchor) return;
         messageList.insertBefore(agentBuildReplayCard(agent, t), anchor);
@@ -12176,6 +12284,11 @@
                 // start=压缩开始提示，done=完成（完成不重复上屏，避免思考区出现两条）
                 if (!ev.phase || ev.phase === 'start') {
                     addAgentThought(st, '历史对话压缩中…（较早执行记录正在归并为摘要，节省 token 并加速响应）');
+                    // 阶段一百三十九：占用环即时升到压缩前峰值（占用/阈值/口径随帧下发，前端不硬编码）
+                    if (ev.used != null) agentCtxRingUpdate(st, ev.used, ev.max, ev.mode);
+                } else if (ev.phase === 'done') {
+                    // 阶段一百三十九：压缩完成后占用环即时回落（TRAE 同款压缩后上下文明显缩小观感）
+                    if (ev.used != null) agentCtxRingUpdate(st, ev.used, ev.max, ev.mode);
                 }
                 break;
             case 'step_tokens':
@@ -12201,6 +12314,10 @@
                         window.applyTitlebarBillingTip(ev.billing_mode, ev.points_cost); // 同步刷新标题栏悬停提示
                     }
                     if (ev.points_cost != null) st.billingCost = ev.points_cost;
+                    // 阶段一百三十九：TRAE CN 同款上下文占用环——每轮随帧刷新（本轮已过压缩归口的真实发送量，口径随帧标注）
+                    if (ev.context_used != null && ev.context_max > 0) {
+                        agentCtxRingUpdate(st, ev.context_used, ev.context_max, ev.context_mode);
+                    }
                 }
                 break;
             case 'tool_start':
@@ -14908,6 +15025,12 @@
         if (isAIAgent(fromUser)) {
             // 阶段一百三十八：透传计费口径（percall 时操作栏显示"⚡ N 积分"，否则 tokens）
             body.appendChild(buildAIActionBar(fromUser, envelope ? envelope.text : content, msgId, tokens, billing && billing.cost, billing && billing.mode));
+        } else {
+            // 阶段一百三十九：智能体列表晚到竞态兜底数据源——登录自动恢复场景历史渲染早于
+            // msg_type=42 下发，此时 isAIAgent=false 走本分支（Markdown 也会降级为纯文本渲染，
+            // 由列表就绪归口统一补挂）。把操作栏构建参数缓存到行 expando（引用不拷贝），
+            // 供 AI_AGENTS 就绪归口判定 isAIAgent=true 后补挂操作栏（复制/积分/导出/重新生成）
+            div.__aiMsgData = { from: fromUser, content: envelope ? envelope.text : content, msgId: msgId, tokens: tokens, billing: billing };
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
@@ -16453,20 +16576,38 @@
                         if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
                         var d = res.data || {};
                         detail.innerHTML = '';
-                        // 详情行构造辅助：标签 + pre-wrap 正文（保留换行）
-                        function row(label, text) {
+                        // 详情行构造辅助：标签 + 正文（与重放卡详情同款：最终总结 Markdown 渲染，其余纯文本）
+                        // 原实现：row 无 md 参数，所有正文 body.textContent 纯文本直出
+                        // function row(label, text) {
+                        //     if (!text) return;
+                        //     var lab = document.createElement('div');
+                        //     lab.className = 'taskhist-d-label';
+                        //     lab.textContent = label;
+                        //     var body = document.createElement('div');
+                        //     body.className = 'taskhist-d-body';
+                        //     body.textContent = text;
+                        //     detail.appendChild(lab);
+                        //     detail.appendChild(body);
+                        // }
+                        function row(label, text, md) {
                             if (!text) return;
                             var lab = document.createElement('div');
                             lab.className = 'taskhist-d-label';
                             lab.textContent = label;
                             var body = document.createElement('div');
                             body.className = 'taskhist-d-body';
-                            body.textContent = text;
+                            if (md) {
+                                body.classList.add('ai-md'); // 复用 AI Markdown 全套样式
+                                body.innerHTML = renderAIMarkdown(text); // 自带整体转义防注入
+                                initAIMdHScroll(body); // 宽表格/代码块挂横向自绘滑块
+                            } else {
+                                body.textContent = text;
+                            }
                             detail.appendChild(lab);
                             detail.appendChild(body);
                         }
                         row('任务目标', d.goal);
-                        if (d.status === 'completed') row('最终总结', d.result);
+                        if (d.status === 'completed') row('最终总结', d.result, true);
                         if (d.status === 'failed') row('失败原因', d.error);
                         if (d.status === 'cancelled') row('取消说明', d.error);
                         // 阶段六十五：详情渲染完成后追加执行轨迹区块（在详情回调内触发，避免 innerHTML 清空竞态）
@@ -16490,6 +16631,113 @@
     // thEnvLabel 执行环境标签文案归口
     function thEnvLabel(e) {
         return e === 'pc' ? '本地执行' : '服务端';
+    }
+    // thStepParamsObj 步骤参数 JSON 解析归口：落库参数截断 1000 字，截断会导致 JSON 不完整，
+    // 解析失败返回 null 由调用方兜底原样展示（与美化后展示互不影响）
+    function thStepParamsObj(paramsText) {
+        try {
+            var o = JSON.parse(paramsText);
+            return (o && typeof o === 'object') ? o : null;
+        } catch (e) { return null; }
+    }
+    // thStepParamSummary 步骤参数中文摘要归口：按工具类型提取关键字段转自然语言动作描述
+    // （原实现：'参数：' + 原始 JSON 串直出——执行查询/修改/删除等操作时显示 JSON 格式不友好，
+    // 用户实测反馈）。字段缺失自然跳过；截断致解析失败或未识别工具回退 JSON 美化，仍失败原样
+    function thStepParamSummary(tool, paramsText) {
+        var o = thStepParamsObj(paramsText);
+        if (!o) return paramsText; // 截断损坏的 JSON：原样展示（title 悬停可看全文）
+        var p = function (k) { return typeof o[k] === 'string' ? o[k] : ''; };
+        var path = p('path') || p('dir');
+        var brief = function (s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
+        var line = '';
+        switch (tool) {
+            case 'read_file': line = '读取文件 ' + path; break;
+            case 'write_file': line = '写入文件 ' + path + (o.content ? '（' + String(o.content).split('\n').length + ' 行）' : ''); break;
+            case 'edit_file': line = '编辑文件 ' + path + (p('old_string') ? '（替换「' + brief(p('old_string'), 40) + '」→「' + brief(p('new_string'), 40) + '」）' : ''); break;
+            case 'delete_file': line = '删除文件/目录 ' + path; break;
+            case 'list_dir': line = '列出目录 ' + (path || '工作区根目录'); break;
+            case 'grep': line = '搜索「' + brief(p('pattern'), 60) + '」' + (p('include') ? '（匹配 ' + p('include') + '）' : ''); break;
+            case 'todo_write': line = '更新任务清单'; break;
+            case 'run_command': line = '执行命令：' + brief(p('command'), 120); break;
+            case 'web_search': line = '联网搜索「' + brief(p('query'), 60) + '」'; break;
+            case 'http_request': line = '发起 HTTP ' + (p('method') || 'GET') + ' 请求：' + brief(p('url'), 80); break;
+            case 'ask_user': line = '向用户提问：' + brief(p('question'), 80); break;
+            default:
+                if (tool.indexOf('browser_') === 0) {
+                    // 内置浏览器工具中文标签（与服务端 agentBrowserLabel 同语义）
+                    var bl = {
+                        browser_navigate: '内置浏览器打开页面',
+                        browser_snapshot: '获取页面结构',
+                        browser_screenshot: '页面截图',
+                        browser_tabs: '管理浏览器标签页',
+                        browser_close: '关闭页面',
+                        browser_click: '点击页面元素',
+                        browser_input: '页面输入内容',
+                        browser_eval: '执行页面脚本'
+                    }[tool] || ('内置浏览器操作 ' + tool);
+                    line = bl + (p('url') ? '：' + brief(p('url'), 80) : '') + (p('selector') ? ' ' + brief(p('selector'), 40) : '') + (p('text') ? '「' + brief(p('text'), 40) + '」' : '');
+                } else if (tool.indexOf('mcp_pc_') === 0) {
+                    line = '调用本机 MCP 工具 ' + tool.slice(7);
+                } else if (tool.indexOf('mcp_') === 0) {
+                    line = '调用 MCP 工具 ' + tool.slice(4);
+                } else {
+                    line = JSON.stringify(o, null, 2); // 未识别工具：JSON 美化兜底（缩进两格可读）
+                }
+        }
+        return line;
+    }
+    // thStepResultText 结果展示归口：结果多为工具回传文本（本身可读），MCP 等工具可能回传
+    // JSON 串——能完整解析为对象则美化缩进，否则原样（截断损坏的 JSON 不强行美化）
+    function thStepResultText(resultText) {
+        var o = thStepParamsObj(resultText);
+        return o ? JSON.stringify(o, null, 2) : resultText;
+    }
+    // ===== 阶段一百三十九：执行轨迹结果全文悬浮卡（MCP ? 帮助同款自绘视觉） =====
+    // 原实现悬停用原生 title 直出全文（样式不可控、JSON 未格式化显示乱，用户实测反馈）；
+    // 改为悬停 150ms 后浮现自绘卡片：结果全文（JSON 已美化缩进）等宽展示、超长自绘滚动条查看，
+    // 移出 200ms 后关闭（进卡内可选中复制全文）。同屏单例互斥；卡片挂任务历史弹窗 mask 内
+    // （fixed 定位不受 mask overflow 裁剪，弹窗关闭随 mask display:none 一并隐藏不留残影）
+    var thHoverCardEl = null;      // 当前悬浮卡单例
+    var thHoverShowTimer = null;   // 悬停浮现防抖（防鼠标掠过误弹）
+    var thHoverHideTimer = null;   // 移出关闭防抖（给移入卡内复制留时间窗）
+    function thStepHoverCardRemove() {
+        if (thHoverShowTimer) { clearTimeout(thHoverShowTimer); thHoverShowTimer = null; }
+        if (thHoverCardEl) { thHoverCardEl.remove(); thHoverCardEl = null; }
+    }
+    function thStepHoverCard(target, text) {
+        target.addEventListener('mouseenter', function () {
+            if (thHoverHideTimer) { clearTimeout(thHoverHideTimer); thHoverHideTimer = null; }
+            if (thHoverShowTimer) clearTimeout(thHoverShowTimer);
+            thHoverShowTimer = setTimeout(function () {
+                thStepHoverCardRemove();
+                var mask = document.getElementById('taskhist-mask');
+                if (!mask) return;
+                var card = document.createElement('div');
+                card.className = 'th-hover-card';
+                var pre = document.createElement('pre');
+                pre.textContent = text;
+                card.appendChild(pre);
+                mask.appendChild(card);
+                // 定位：默认目标行下方 8px，越出视口底部翻转到上方；左右夹紧留 16px 边距
+                var rect = target.getBoundingClientRect();
+                var cw = Math.min(560, window.innerWidth - 32);
+                var ch = Math.min(320, Math.round(window.innerHeight * 0.6));
+                var left = Math.min(Math.max(16, rect.left), window.innerWidth - cw - 16);
+                var top = rect.bottom + 8;
+                if (top + ch > window.innerHeight - 16) top = Math.max(16, rect.top - ch - 8);
+                card.style.left = left + 'px';
+                card.style.top = top + 'px';
+                if (window._osbInit) window._osbInit(card); // 全局原生滚动条已禁用，超长内容挂自绘滑块
+                thHoverCardEl = card;
+                card.addEventListener('mouseenter', function () { if (thHoverHideTimer) { clearTimeout(thHoverHideTimer); thHoverHideTimer = null; } });
+                card.addEventListener('mouseleave', thStepHoverCardRemove);
+            }, 150);
+        });
+        target.addEventListener('mouseleave', function () {
+            if (thHoverShowTimer) { clearTimeout(thHoverShowTimer); thHoverShowTimer = null; }
+            if (thHoverHideTimer) clearTimeout(thHoverHideTimer);
+            thHoverHideTimer = setTimeout(thStepHoverCardRemove, 200);
+        });
     }
     // thLoadSteps 执行轨迹拉取与渲染：每步工具调用时间线（序号/工具/环境/审批/耗时 + 参数结果摘要）
     // 调用时机由任务详情回调触发（详情渲染完成后追加，避免并行竞态清空）
@@ -16527,18 +16775,24 @@
                     meta.textContent = thEnvLabel(s.env) + ' · ' + thApprovalLabel(s.approval) + ' · ' + (s.duration_ms || 0) + 'ms';
                     head.appendChild(meta);
                     item.appendChild(head);
+                    // 阶段一百三十九：参数转中文动作摘要（查询/修改/删除等操作不再显示 JSON 格式）；
+                    // 原实现悬停 title 直出原始 JSON 串（用户实测悬停气泡仍是 JSON），摘要 3 行内可读
+                    // 后悬停气泡取消；原实现保留备查：
+                    // p.title = s.params; // 悬停看全文（服务端已截断）
                     if (s.params) {
                         var p = document.createElement('div');
                         p.className = 'th-step-body';
-                        p.textContent = '参数：' + s.params;
-                        p.title = s.params; // 悬停看全文（服务端已截断）
+                        p.textContent = '参数：' + thStepParamSummary(s.tool, s.params);
                         item.appendChild(p);
                     }
                     if (s.result) {
                         var rEl = document.createElement('div');
                         rEl.className = 'th-step-body';
-                        rEl.textContent = (s.ok ? '结果：' : '错误：') + s.result;
-                        rEl.title = s.result;
+                        rEl.textContent = (s.ok ? '结果：' : '错误：') + thStepResultText(s.result);
+                        // 悬停原生 title 换自绘格式化悬浮卡（MCP ? 帮助同款视觉）：JSON 已美化缩进、
+                        // 全文等宽展示可复制；原实现 title 直出原始串显示乱，保留备查：
+                        // rEl.title = thStepResultText(s.result);
+                        thStepHoverCard(rEl, thStepResultText(s.result));
                         item.appendChild(rEl);
                     }
                     box.appendChild(item);

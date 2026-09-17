@@ -235,6 +235,10 @@ type AIConfig struct {
 	CompressThresholdTokens int `yaml:"compress_threshold_tokens"`
 	// 阶段八十四：压缩时保留最近原文消息条数（0=默认 6），更早历史并入摘要；摘要按会话缓存增量合并
 	CompressKeepMessages int `yaml:"compress_keep_messages"`
+	// 阶段一百三十九：Agent 任务上下文压缩触发阈值（KB，UTF-8 字节口径，与 TRAE CN 状态栏同款；
+	// 任务循环上下文累计达到该值触发 LLM 摘要压缩）。仅作用于 Agent 任务，AI 问答仍用 compress_threshold_tokens。
+	// 0=默认 200，负数=禁用 Agent 任务压缩
+	CompressThresholdKB int `yaml:"compress_threshold_kb"`
 }
 
 // Default 返回默认配置，与《开发文档》5.2 核心配置参数保持一致

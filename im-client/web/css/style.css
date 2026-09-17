@@ -1355,7 +1355,12 @@ html, body {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    min-width: 200px;
+    /* 阶段一百三十九修复：固定 200px 在窄聊天区（浏览区开启压缩聊天区）撑破 70% 行盒——
+       气泡被 min-width 顶住无法收缩，右缘反超头像右缘（实测穿过头像列 25px，群聊文件消息
+       截图）。min(200px,100%)：宽盒保持 200px 观感不变，窄盒收缩到可用宽，文件名 break-all
+       换行、file-info flex 收缩兜底；全局 border-box 下百分比含 padding 不再溢出。
+       原代码：min-width: 200px; */
+    min-width: min(200px, 100%);
     cursor: default;
 }
 
@@ -4040,6 +4045,53 @@ html.m #list-panel.list-collapsed {
     font-weight: 600;
 }
 
+/* 阶段一百三十九：任务卡上下文占用环（TRAE CN 同款右下角"◔ 30%"）——SVG 自绘环形进度
+   （禁用系统默认样式），常驻消耗行行尾；底环/文字跟随主题中性色变量，进度弧用主题色，
+   ≥80% 转橙、≥95% 转红分档警示（阈值与占比均由服务端随帧下发，前端不硬编码口径） */
+.agent-task-ctx {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 2px;
+    cursor: default;
+}
+
+.agent-task-ctx svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+}
+
+.agent-task-ctx circle {
+    fill: none;
+    stroke-width: 5;
+}
+
+.agent-task-ctx .ctx-bg {
+    stroke: var(--hover, #f0f0f0);
+}
+
+.agent-task-ctx .ctx-fg {
+    stroke: var(--primary);
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.4s ease, stroke 0.2s;
+}
+
+.agent-task-ctx .ctx-fg.ctx-warn {
+    stroke: #e6a23c;
+}
+
+.agent-task-ctx .ctx-fg.ctx-danger {
+    stroke: #f56c6c;
+}
+
+.agent-task-ctx-pct {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+}
+
 /* 任务清单（todo_write 全量重绘） */
 .agent-todo-list {
     border-top: 1px dashed var(--border, #e8e8e8);
@@ -5900,6 +5952,34 @@ html.m #list-panel.list-collapsed {
     white-space: pre-wrap;
     word-break: break-all;
     cursor: text;
+}
+
+/* ===== 阶段一百三十九：执行轨迹结果全文悬浮卡（MCP ? 帮助同款视觉，fixed 定位跟随目标行） =====
+   挂任务历史弹窗 mask 内、JS 控制显隐；等宽格式化文本（JSON 美化缩进），超长滚动查看 */
+.th-hover-card {
+    position: fixed;
+    z-index: 300;
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(320px, 60vh);
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, .14));
+    text-align: left;
+}
+
+.th-hover-card pre {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 11px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text, #333);
+    line-height: 1.6;
+    cursor: text;
+    user-select: text; /* 全文可选中复制（覆盖任务卡禁选范围） */
 }
 
 /* ===== 阶段一百一十二：TRAE CN 同款布局——区块标题 + 管理大卡片 + 自绘启用开关 ===== */
@@ -8991,6 +9071,12 @@ html.m .ms-actions {
     white-space: pre-wrap;
     word-break: break-word;
     line-height: 1.6;
+}
+
+/* 阶段一百三十九：任务详情正文 Markdown 渲染时关闭 pre-wrap——换行已由 renderAIMarkdown
+   转为 <br>，保留 pre-wrap 会把源码残余换行叠加显示成双倍行距；代码块内部自有 pre 语义不受影响 */
+.taskhist-d-body.ai-md {
+    white-space: normal;
 }
 
 /* ===== 阶段六十五：任务详情执行轨迹（每步工具调用时间线，主题色变量关联） ===== */
