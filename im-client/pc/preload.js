@@ -179,6 +179,65 @@ contextBridge.exposeInMainWorld('desktop', {
     stitchFinish: function () {
         ipcRenderer.send('stitch:finish');
     },
+    // ===== 阶段一百四十：截图编辑器独立窗口（主窗口 + 编辑器窗口共用本 preload） =====
+    // 主窗口侧：请求打开独立编辑器窗口（data = {dataUrl, mode:'freeze'|'open'|'record', callback}）
+    openEditor: function (data) {
+        ipcRenderer.send('editor:open', data);
+    },
+    // 主窗口侧：编辑器确认完成回传（data = {dataUrl, callback}，按 callback 分发待发送条/直接发送）
+    onEditorDone: function (callback) {
+        ipcRenderer.on('editor:done', function (event, data) {
+            callback(data);
+        });
+    },
+    // 主窗口侧：编辑器取消/关窗通知（清残留焦点等收尾）
+    onEditorCancel: function (callback) {
+        ipcRenderer.on('editor:cancel', function () {
+            callback();
+        });
+    },
+    // 主窗口侧：长截图移交（data = {sel, snapW, snapH}，选区为冻结底图物理像素）
+    onEditorStitch: function (callback) {
+        ipcRenderer.on('editor:stitch', function (event, data) {
+            callback(data);
+        });
+    },
+    // 主窗口侧：录屏选区启动（倒计时结束，data = {sel, snapW, snapH}）
+    onEditorRecStart: function (callback) {
+        ipcRenderer.on('editor:rec-start', function (event, data) {
+            callback(data);
+        });
+    },
+    // 编辑器窗口侧：接收编辑任务（data = {dataUrl, mode, callback}）
+    onEditorLoad: function (callback) {
+        ipcRenderer.on('editor:load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 编辑器窗口侧：首帧就绪（主进程据此显示全屏冻结窗口，避免底色闪现）
+    editorReady: function () {
+        ipcRenderer.send('editor:ready');
+    },
+    // 编辑器窗口侧：确认完成（dataUrl 为选区裁剪结果）
+    editorDone: function (dataUrl) {
+        ipcRenderer.send('editor:done', { dataUrl: dataUrl });
+    },
+    // 编辑器窗口侧：取消/关闭（主进程恢复主窗口）
+    editorCancel: function () {
+        ipcRenderer.send('editor:cancel');
+    },
+    // 图片查看器侧：编辑并发送（查看器抓图转 dataURL 后请求打开 open 模式编辑器，确认直接发当前会话）
+    viewerEdit: function (data) {
+        ipcRenderer.send('viewer:edit', data);
+    },
+    // 编辑器窗口侧：长截图移交（sel 为冻结底图物理像素选区，snapW/snapH 为底图物理分辨率）
+    editorStitch: function (sel, snapW, snapH) {
+        ipcRenderer.send('editor:stitch', { sel: sel, snapW: snapW, snapH: snapH });
+    },
+    // 编辑器窗口侧：录屏倒计时结束（主进程隐藏编辑器并转主窗口启动录制）
+    editorRecStart: function (sel, snapW, snapH) {
+        ipcRenderer.send('editor:rec-start', { sel: sel, snapW: snapW, snapH: snapH });
+    },
     // ===== 阶段六十：Agent 本地执行器 =====
     // 渲染进程桥接：服务端下发的本地执行请求转发主进程执行（req = {username, tool, params}）
     // 返回 Promise<{ok, output}>，结果由渲染进程经 WS 回传服务端

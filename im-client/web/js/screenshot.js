@@ -375,8 +375,10 @@
     }
 
     // ===== 打开编辑器（编辑器模式：居中缩放，默认全图选区） =====
-    function open(blob, confirmCb) {
-        load(blob, confirmCb, 'editor');
+    // 阶段一百四十：第三参 onClose——编辑器模式取消回调（独立窗口承载后取消/Esc 需通知主进程藏窗，
+    // 缺省 null 兼容浏览器主窗体内嵌回退路径：close 仅清 DOM，无窗口概念）
+    function open(blob, confirmCb, onClose) {
+        load(blob, confirmCb, 'editor', onClose);
     }
 
     // ===== 打开伪冻结遮罩（第二期：画面铺满视口、空选区，拖拽框选后工具栏出现） =====
@@ -457,10 +459,10 @@
         if ((mode === 'freeze' || mode === 'record') && !sel && editorEl && !editorEl.classList.contains('hidden')) layoutFreezeCover();
     });
 
-    function load(blob, confirmCb, m) {
+    function load(blob, confirmCb, m, onClose) {
         if (!editorEl) build();
         onConfirm = confirmCb || null;
-        if (m !== 'freeze' && m !== 'record') { onCloseCb = null; onReadyCb = null; stitchCb = null; } // 编辑器模式无冻结回调（record 的 onReady 由 freezeVideo 注入；长截图回调仅冻结态有效）
+        if (m !== 'freeze' && m !== 'record') { onCloseCb = onClose || null; onReadyCb = null; stitchCb = null; } // 编辑器模式：取消回调由调用方注入（独立窗口承载后取消需通知主进程藏窗，实测踩坑：置 null 会让取消/Esc 只清画布不关窗口）；record 的 onReady 由 freezeVideo 注入；长截图回调仅冻结态有效
         imgUrl = URL.createObjectURL(blob);
         var image = new Image();
         image.onload = function () {

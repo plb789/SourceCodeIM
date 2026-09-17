@@ -165,7 +165,12 @@ function createWindow() {
             // 的 PDF 预览依赖 <embed type="application/pdf">，Electron 默认不启用导致客户端预览空白；
             // iframe 继承宿主窗口插件状态，故必须开在主窗口（浏览区 webview 已另行加 plugins=yes）
             // 原实现：无 plugins 配置
-            plugins: true
+            plugins: true,
+            // 阶段一百四十：禁后台节流——录屏链路 rec:begin 会 hide 主窗口（露屏录制），隐藏窗口
+            // 默认节流会停掉 requestAnimationFrame，裁剪绘制循环（rAF 驱动 canvas→captureStream）
+            // 随之零帧，录出的 webm 只有文件头（size 非空）无法播放（实测：预览浮层黑屏点播放无反应）；
+            // 禁用后隐藏窗口 rAF 照跑录制正常。副作用仅主窗口隐藏期间定时器/渲染不节流，聊天页常驻可接受
+            backgroundThrottling: false
             // 阶段一百二十二：同 origin http 拦截方案下以下两项已移除（原 app:// 方案所需）——
             // additionalArguments 传服务端地址（页面 origin 不再变化，socket.js 按 location 推导即可）；
             // allowRunningInsecureContent 放开混合内容（http origin 加载 http 外域内容本就不受限）
@@ -333,11 +338,13 @@ var shotRestoreTries = 0; // 恢复重试计数（setFullScreen(false) 状态转
 // force=true：跳过全屏检查立即 setBounds——exit-freeze 中必须先恢复再 setFullScreen(false)，
 // 因为 Electron 退出全屏会自动还原"进入全屏前"的 bounds（=移出屏幕态），若先退全屏后恢复，
 // 还原动作与恢复动作竞态（实测还原后执行，窗口滞留屏幕外）；先恢复则全屏退出还原的即原位
-function restoreShotHiddenWindow(force) {
+// keepHidden=true：仅恢复边界不重新最大化——隐藏态 maximize 会强制带出窗口（Electron 行为），
+// 录制期间主窗口必须保持隐藏，录屏归位（recShow）按恢复的原位边界显示即可
+function restoreShotHiddenWindow(force, keepHidden) {
     if (!shotSavedBounds || !mainWindow) return;
     if (!force && mainWindow.isFullScreen()) {
         // setFullScreen(false) 状态转换异步（isFullScreen 短暂滞后 true），150ms 轮询重试（上限 20 次）
-        if (shotRestoreTries++ < 20) setTimeout(function () { restoreShotHiddenWindow(false); }, 150);
+        if (shotRestoreTries++ < 20) setTimeout(function () { restoreShotHiddenWindow(false, keepHidden); }, 150);
         return;
     }
     shotRestoreTries = 0;
@@ -346,7 +353,7 @@ function restoreShotHiddenWindow(force) {
     shotSavedBounds = null;
     shotSavedMaximized = false;
     mainWindow.setBounds(b);
-    if (wasMax) {
+    if (wasMax && !keepHidden) {
         // 最大化原态：等全屏退出完成后恢复最大化（全屏未退出时 maximize 无效）
         var tries = 0;
         (function doMax() {
@@ -357,6 +364,9 @@ function restoreShotHiddenWindow(force) {
 }
 async function captureWithHide(hideMain) {
     var needHide = (hideMain === undefined) ? shotHideMain : !!hideMain;
+    // 编辑器窗口打开中直接拒绝（防 Alt+A 连按覆盖 shotSavedBounds 原位记录——编辑器打开期间主窗口
+    // 已处于"移出屏幕+原位已记录"态，再走一遍隐藏逻辑会把屏幕外坐标当原位存下来，编辑器关闭后窗口找不回）
+    if (editorWin && !editorWin.isDestroyed() && editorWin.isVisible()) return null;
     var wasVisible = mainWindow && mainWindow.isVisible();
     if (needHide) {
         if (mainWindow && !wasVisible) {
@@ -391,33 +401,17 @@ async function captureWithHide(hideMain) {
         }
         return null;
     }
-    // 先切全屏+置顶（窗口已移出屏幕，用户无感知），渲染层视口即为全屏尺寸，编辑器按全屏铺满
-    mainWindow.setFullScreen(true);
-    mainWindow.setAlwaysOnTop(true, 'screen-saver');
-    if (!wasVisible) mainWindow.show();
-    // 推送渲染层预备冻结编辑器（解码+画布绘制在窗口移出屏幕期间后台完成）
-    var readyPromise = new Promise(function (resolve) {
-        var settled = false;
-        // 超时保护：渲染层异常（解码失败/脚本错误）时 1.2s 后强制揭幕，避免窗口永远卡死
-        shotReadyWaiter = function () {
-            if (settled) return;
-            settled = true;
-            resolve();
-        };
-        setTimeout(function () { shotReadyWaiter && shotReadyWaiter(); }, 1200);
-    });
-    mainWindow.webContents.send('shot:prepare', dataUrl);
-    await readyPromise;
-    // 编辑器就绪（或超时兜底）：揭幕——用户看到的第一帧就是全屏冻结画面
-    // （窗口位置原位恢复延迟到 exit-freeze：此刻仍是全屏冻结态，提前恢复会露出聊天界面）
-    mainWindow.setOpacity(1);
-    mainWindow.focus();
+    // 阶段一百四十：编辑器独立窗口化——抓屏成功后主窗口保持隐藏（移出屏幕态），由渲染层经 editor:open
+    // 打开独立编辑器窗口全屏展示冻结画面；主窗口恢复延迟到编辑器完成/取消（hideEditorAndRestore，
+    // hide-main 模式走 shotSavedBounds 原位恢复）
+    // 原实现：主窗口 setFullScreen(true)+screen-saver 置顶 → shot:prepare 推渲染层预加载主窗体内
+    //         冻结编辑器 → shot:ready 就绪后 setOpacity(1) 揭幕（编辑器嵌在主窗体内，已随独立窗口化废弃）
     return dataUrl;
-    // 原实现：mainWindow.hide() + 300ms 延时（用户反馈屏幕空窗闪烁明显，且 hide/show 引起任务栏闪动）
-    // 第二版：抓屏成功立即 setOpacity(1)（揭幕时窗口内容还是聊天界面，编辑器稍后才盖上——双重闪烁）
 }
 
 // 冻结编辑器就绪信号（渲染层首帧绘制完成回调，消费 shotReadyWaiter 解除揭幕等待）
+// 阶段一百四十：编辑器独立窗口化后主窗体内冻结编辑器已废弃，shot:prepare/shot:ready 不再收发，
+// 处理器保留兜底（渲染层旧缓存页面在 sync 更新前仍可能上报，幂等无副作用）
 let shotReadyWaiter = null;
 ipcMain.on('shot:ready', function () {
     if (shotReadyWaiter) {
@@ -803,6 +797,179 @@ ipcMain.handle('image:save', async function (event, data) {
 // 查看器请求更早历史图片：转发主聊天窗口（chat.js 走 HISTORY 翻页拉取后回推）
 ipcMain.on('image:need-more', function () {
     if (mainWindow) mainWindow.webContents.send('viewer:need-more');
+});
+
+// ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====
+// 独立 BrowserWindow 单例复用：freeze/record 模式全屏+screen-saver 置顶展示冻结画面（主窗口保持隐藏，
+// 编辑器关闭时恢复），open 模式 900×640 居中窗口式编辑；页面 editor.html + editor-page.js 桥接
+// ScreenshotEditor（screenshot.js 零改动复用），完成/取消/长截图移交/录屏启动经 IPC 回主窗口分发
+var editorWin = null;        // 编辑器窗口（单例复用：重复打开仅换内容）
+var editorReadyTimer = null; // 首帧就绪显示兜底定时器（页面异常时 1.5s 强制显示，避免永久黑屏）
+var editorPending = null;    // 当前编辑任务 {mode, callback}（完成回传时确定分发类型）
+
+function editorWinDark() {
+    var t = themeStoreLoad();
+    return t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
+}
+
+function ensureEditorWindow() {
+    if (editorWin) return editorWin;
+    editorWin = new BrowserWindow({
+        width: 900,
+        height: 640,
+        minWidth: 480,
+        minHeight: 360,
+        show: false,
+        frame: false, // 无边框：freeze/record 画面铺满整窗无系统按钮（全屏冻结态同 QQ 截图）；open 模式编辑器画布居中
+        backgroundColor: editorWinDark() ? '#111111' : '#f5f5f5',
+        title: '截图编辑',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    editorWin.loadURL(SERVER_URL + 'editor.html');
+    editorWin.on('close', function (e) {
+        if (app.isQuitting) return; // 托盘退出流程：放行销毁
+        // 关闭按钮/Alt+F4 转取消语义：freeze 期间主窗口隐藏，仅藏编辑器会让聊天窗口找不回
+        // （直接关窗=放弃本次截图，与 Esc/取消同路径恢复主窗口）
+        e.preventDefault();
+        if (editorWin.isVisible()) hideEditorAndRestore(true);
+    });
+    editorWin.on('closed', function () { editorWin = null; });
+    return editorWin;
+}
+
+// 编辑器收尾（完成/取消/关窗共用）：藏编辑器 → 恢复主窗口 → 回收窗口识别服务
+// notifyCancel=true 时通知主窗口渲染层清残留焦点（确认完成路径由 editor:done 分发，不重复通知）
+function hideEditorAndRestore(notifyCancel) {
+    if (editorReadyTimer) { clearTimeout(editorReadyTimer); editorReadyTimer = null; }
+    if (editorWin && !editorWin.isDestroyed()) {
+        editorWin.setAlwaysOnTop(false);
+        editorWin.hide();
+    }
+    editorPending = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (shotSavedBounds) {
+            // hide-main 模式：抓屏时主窗口被移出屏幕（shotSavedBounds 记录原位），恢复原位再显示
+            //（与 stitch:finish 同款 force 恢复；wasMax 的 maximize 在内部异步完成）
+            restoreShotHiddenWindow(true);
+            if (!mainWindow.isVisible()) mainWindow.show();
+        } else if (!mainWindow.isVisible()) {
+            // 托盘驻留（窗口原隐藏）抓屏路径：编辑器关闭带出主窗口
+            mainWindow.show();
+        }
+        mainWindow.focus();
+    }
+    shotPickerScheduleStop();
+    if (notifyCancel && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('editor:cancel');
+    }
+}
+
+// 启动编辑任务（editor:open 与 viewer:edit 共用主体；sender 校验在各 ipcMain.on 入口归口）
+// data = {dataUrl, mode:'freeze'|'open'|'record', callback:'pending'|'sendFile'}
+function startEditorTask(data) {
+    if (!data || !data.dataUrl) return;
+    var mode = data.mode || 'freeze';
+    editorPending = { mode: mode, callback: data.callback || 'pending' };
+    var win = ensureEditorWindow();
+    var freezeLike = (mode === 'freeze' || mode === 'record');
+    // 形态切换（复用窗口可能上次是另一模式）：freeze/record 全屏+置顶盖满屏幕，open 普通居中窗
+    if (freezeLike) {
+        if (!win.isFullScreen()) win.setFullScreen(true);
+        win.setAlwaysOnTop(true, 'screen-saver');
+    } else {
+        win.setAlwaysOnTop(false);
+        if (win.isFullScreen()) win.setFullScreen(false);
+        var wa = screen.getPrimaryDisplay().workArea;
+        win.setBounds({ x: Math.round(wa.x + (wa.width - 900) / 2), y: Math.round(wa.y + (wa.height - 640) / 2), width: 900, height: 640 });
+    }
+    var send = function () {
+        if (!editorWin || editorWin.isDestroyed()) return;
+        editorWin.webContents.send('editor:load', { dataUrl: data.dataUrl, mode: mode, callback: editorPending ? editorPending.callback : 'pending' });
+    };
+    var reveal = function () {
+        if (editorWin && !editorWin.isDestroyed() && !editorWin.isVisible()) { editorWin.show(); editorWin.focus(); }
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', function () { send(); if (!freezeLike) reveal(); });
+    } else {
+        send();
+        if (!freezeLike) reveal();
+    }
+    if (freezeLike) {
+        // freeze/record 等编辑器首帧就绪（editor:ready）再显示——揭幕即冻结画面；先见底色再出图的
+        // 闪屏在全屏冻结观感上格外刺眼，1.5s 超时兜底（页面异常时强制显示，不至于永久黑屏）
+        if (editorReadyTimer) clearTimeout(editorReadyTimer);
+        editorReadyTimer = setTimeout(function () { editorReadyTimer = null; reveal(); }, 1500);
+    }
+}
+
+ipcMain.on('editor:open', function (e, data) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return; // 只接受主窗口来源
+    startEditorTask(data);
+});
+
+// 阶段一百四十：图片查看器"编辑并发送"入口——查看器抓取当前图转 dataURL 后经此打开 open 模式编辑器
+//（callback=sendFile：确认即经主窗口 sendScreenshotFile 发到当前会话；sender 校验只认查看器窗口）
+ipcMain.on('viewer:edit', function (e, data) {
+    if (!viewerWin || e.sender !== viewerWin.webContents) return;
+    if (editorWin && !editorWin.isDestroyed() && editorWin.isVisible()) return; // 编辑器已打开防重入
+    startEditorTask({ dataUrl: data.dataUrl, mode: 'open', callback: 'sendFile' });
+});
+
+// 编辑器首帧就绪（editor-page.js 冻结画面绘制完成回调）：显示全屏窗口（清超时兜底）
+ipcMain.on('editor:ready', function (e) {
+    if (!editorWin || e.sender !== editorWin.webContents) return;
+    if (editorReadyTimer) { clearTimeout(editorReadyTimer); editorReadyTimer = null; }
+    if (!editorWin.isVisible()) { editorWin.show(); editorWin.focus(); }
+});
+
+// 编辑器确认完成：藏编辑器恢复主窗口 → 按任务记录的 callback 类型回传主窗口分发
+//（pending=裁剪图进待发送条；sendFile=直接走发送链路）
+ipcMain.on('editor:done', function (e, payload) {
+    if (!editorWin || e.sender !== editorWin.webContents) return;
+    var cbType = editorPending ? editorPending.callback : (payload && payload.callback) || 'pending';
+    hideEditorAndRestore(false);
+    // 无条件转发（dataUrl 为空串也转发）：渲染层回调入口先清 busy 再校验数据，
+    // 丢转发会让 editorWinBusy 永久置真、后续截图入口全被拦（实测踩坑）
+    if (mainWindow && !mainWindow.isDestroyed() && payload) {
+        mainWindow.webContents.send('editor:done', { dataUrl: (payload && payload.dataUrl) || '', callback: cbType });
+    }
+});
+
+// 编辑器取消/关窗：恢复主窗口 + 通知渲染层清残留焦点
+ipcMain.on('editor:cancel', function (e) {
+    if (!editorWin || e.sender !== editorWin.webContents) return;
+    hideEditorAndRestore(true);
+});
+
+// 编辑器长截图移交：藏编辑器（主窗口保持隐藏，条窗与抓流拼接状态机接管）→ 选区转主窗口长截图状态机；
+// 完成/取消由长截图既有链路收尾（stitch:finish 恢复主窗口，含 hide-main 的 shotSavedBounds 原位恢复）
+ipcMain.on('editor:stitch', function (e, data) {
+    if (!editorWin || e.sender !== editorWin.webContents) return;
+    if (editorReadyTimer) { clearTimeout(editorReadyTimer); editorReadyTimer = null; }
+    if (editorWin && !editorWin.isDestroyed()) { editorWin.setAlwaysOnTop(false); editorWin.hide(); }
+    editorPending = null;
+    if (mainWindow && !mainWindow.isDestroyed() && data && data.sel) {
+        mainWindow.webContents.send('editor:stitch', data);
+    }
+});
+
+// 编辑器录屏选区启动（3-2-1 倒计时结束）：藏编辑器 → 恢复主窗口原位（不显示）→ 转主窗口录屏链路。
+// 原位必须恢复：录制期间主窗口保持隐藏，不移回原位则 recShow 归位时窗口仍在屏幕外
+//（"任务栏有图标但看不到窗口"）；keepHidden 跳过 maximize（隐藏态 maximize 会强制带出窗口）
+ipcMain.on('editor:rec-start', function (e, data) {
+    if (!editorWin || e.sender !== editorWin.webContents) return;
+    if (editorReadyTimer) { clearTimeout(editorReadyTimer); editorReadyTimer = null; }
+    if (editorWin && !editorWin.isDestroyed()) { editorWin.setAlwaysOnTop(false); editorWin.hide(); }
+    editorPending = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        restoreShotHiddenWindow(true, true);
+        mainWindow.webContents.send('editor:rec-start', data);
+    }
 });
 
 // ===== 阶段一百三十四：独立文档查看器窗口（用户需求：聊天内文档预览不再窗体弹窗遮挡聊天页，与图片查看器同款新窗口打开） =====

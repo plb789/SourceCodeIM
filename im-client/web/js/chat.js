@@ -3270,39 +3270,21 @@
         }
     }
 
-    // 抓屏结果统一进入冻结截图编辑器（QQ 同款全屏冻结）
-    // prepared=true：主进程在窗口透明期间推送快照（shot:prepare），编辑器就绪后需通知揭幕（shotReady）
-    function openShotEditor(blob, prepared) {
-        if (!blob) {
-            showToast('截图失败');
-            if (prepared && window.desktop) {
-                // 失败兜底：主进程已切全屏冻结态，必须退出全屏（否则卡在全屏聊天界面挡住任务栏）+ 揭幕恢复透明度
-                // 原实现：仅 shotReady 揭幕（全屏态残留，用户反馈"程序全屏显示连任务栏都挡住"）
-                if (window.desktop.exitFreeze) window.desktop.exitFreeze();
-                if (window.desktop.shotReady) window.desktop.shotReady();
-            }
-            return;
-        }
-        // 阶段三十八：QQ 同款全屏冻结截图——PC 端主窗口已被主进程置为全屏+置顶（透明期间预加载），
-        // freeze 模式画面铺满视口（视觉=屏幕被冻结画面覆盖），拖拽框选 → 工具栏标注 → 完成；
-        // 编辑完成/取消后 onClose 退出全屏冻结，截图进输入框待发送区（点发送才真正发出）
-        // 原实现：ScreenshotEditor.open(blob, sendScreenshotFile);（窗口式居中缩放，用户反馈"像在程序里打开图片"而非 QQ 截图）
-        ScreenshotEditor.freeze(blob, setPendingShot, function () {
-            if (window.desktop && window.desktop.exitFreeze) window.desktop.exitFreeze();
-            // Esc/取消退出后清掉残留焦点（用户反馈：退出截图后截图按钮残留黄色焦点框）
-            if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-        }, function () {
-            // 首帧绘制就绪：通知主进程揭幕（透明度归位，第一帧即冻结画面，无聊天界面闪现）
-            if (prepared && window.desktop && window.desktop.shotReady) window.desktop.shotReady();
-        });
+    // ===== 阶段一百四十：截图编辑器独立窗口化 =====
+    // 编辑器从主窗体迁出为独立 BrowserWindow（与图片查看器/长截图条窗同款方案，用户需求）：
+    // 抓屏结果 dataURL 经 editor:open 送独立编辑器窗口（freeze 模式全屏冻结展示），主窗口保持隐藏；
+    // 完成后主进程按发起时记录的回调类型回传（editor:done → pending=进待发送条），取消只清焦点
+    // 原实现：ScreenshotEditor.freeze 嵌主窗体内全屏冻结（依赖主进程切全屏+揭幕时序，已废弃）
+    var editorWinBusy = false; // 独立编辑器窗口打开中（原 ScreenshotEditor.isOpen() 只能读主窗体内编辑器，独立窗口化后改本端标记）
+    function openShotEditor(dataUrl) {
+        if (!dataUrl) { showToast('截图失败'); return; }
+        if (!window.desktop || !window.desktop.openEditor) { showToast('截图失败'); return; }
+        editorWinBusy = true;
+        window.desktop.openEditor({ dataUrl: dataUrl, mode: 'freeze', callback: 'pending' });
     }
 
-    // 主进程抓屏完成推送（窗口透明期间预加载冻结编辑器，就绪后主进程才揭幕——闪烁最小化）
-    if (window.desktop && window.desktop.onShotPrepare) {
-        window.desktop.onShotPrepare(function (dataUrl) {
-            openShotEditor(dataUrlToBlob(dataUrl), true);
-        });
-    }
+    // 原实现：主进程抓屏完成推送 shot:prepare 预加载主窗体内冻结编辑器（就绪后揭幕）——
+    // 编辑器独立窗口化后主进程不再推送，抓屏结果由上方 openShotEditor 经 editor:open 直送独立编辑器窗口
 
     // ===== 阶段一百三十九：截图时隐藏主窗口画面开关（QQ 同款"隐藏当前窗口"选项） =====
     // 主进程 captureWithHide 原本无条件透明化主窗口再抓屏（阶段三十八），现改可选：
@@ -3386,7 +3368,7 @@
         // 阶段一百三十九：透传"隐藏主窗口"开关（QQ 同款，箭头菜单切换；undefined 走主进程自身状态）
         if (window.desktop && window.desktop.captureScreen) {
             window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
-                openShotEditor(dataUrlToBlob(dataUrl));
+                openShotEditor(dataUrl); // 阶段一百四十：dataURL 直送独立编辑器窗口（原 dataUrlToBlob 后主窗体内开编辑器）
             }).catch(function () {
                 showToast('截图失败');
             });
@@ -3496,17 +3478,14 @@
         if (!IMSocket.isConnected()) { showToast('请先登录'); return; }
         if (stitchState.active) { showToast('长截图进行中，请先完成或取消'); return; } // 长截图与录屏互斥（全局快捷键可交叉触发）
         if (recState.active || recState.recorder) { showToast(recShortcutLabel ? '录屏进行中，按 ' + recShortcutLabel + ' 停止' : '录屏进行中'); return; }
-        if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
+        if (editorWinBusy) return; // 独立编辑器窗口打开中不重复进入（原 ScreenshotEditor.isOpen() 检查独立窗口化后失效）
         window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
-            var blob = dataUrlToBlob(dataUrl);
-            if (!blob) { showToast('录屏启动失败'); return; }
-            // 冻结选区（录屏模式）：选区完成后出录屏工具栏，倒计时结束回调 onStart；选区阶段取消回调 onCancel
-            ScreenshotEditor.freezeVideo(blob, {
-                onStart: onRecAreaStart,
-                onCancel: function () {
-                    if (window.desktop && window.desktop.exitFreeze) window.desktop.exitFreeze();
-                }
-            });
+            if (!dataUrl) { showToast('录屏启动失败'); return; }
+            // 冻结选区移入独立编辑器窗口（record 模式，选区交互与冻结截图同款）：3-2-1 倒计时结束经
+            // editor:rec-start 回主窗口启动录制；选区阶段取消走 editor:cancel 恢复主窗口
+            // 原实现：ScreenshotEditor.freezeVideo 嵌主窗体内（依赖主进程切全屏+揭幕，已随独立窗口化废弃）
+            editorWinBusy = true;
+            window.desktop.openEditor({ dataUrl: dataUrl, mode: 'record', callback: '' });
         }).catch(function () { showToast('录屏启动失败'); });
     }
 
@@ -4115,12 +4094,8 @@
         stitchState.busy = false;
     }
 
-    // 长截图入口挂到截图编辑器（冻结第 5 参回调；仅 PC 桥可用时注入——web 端不注入则工具栏按钮自动隐藏）
-    var _freeze = ScreenshotEditor.freeze.bind(ScreenshotEditor);
-    ScreenshotEditor.freeze = function (blob, confirmCb, onClose, onReady, onStitch) {
-        var cb = onStitch || (window.desktop && window.desktop.stitchBegin ? onStitchStart : null);
-        return _freeze(blob, confirmCb, onClose, onReady, cb);
-    };
+    // 原实现：ScreenshotEditor.freeze 包装注入长截图回调 onStitchStart（编辑器嵌主窗体时期）——
+    // 编辑器独立窗口化后 freeze 在 editor.html 内调用，长截图经 editor:stitch 回主窗口分发（见下方订阅）
 
     // Ctrl+Alt+R 全局快捷键订阅：未录制时触发录屏流程，录制中再按=停止（QQ 同款二段语义）
     if (window.desktop && window.desktop.onGlobalRecord) {
@@ -4139,7 +4114,7 @@
     document.addEventListener('paste', function (e) {
         if (!IMSocket.isConnected()) return; // 未登录不拦截
         if (chatView.classList.contains('hidden')) return; // 登录页不拦截
-        if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
+        if (editorWinBusy) return; // 独立编辑器窗口打开中不重复进入（原 ScreenshotEditor.isOpen() 检查独立窗口化后失效）
         var items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
         for (var i = 0; i < items.length; i++) {
@@ -4147,7 +4122,18 @@
                 var file = items[i].getAsFile();
                 if (!file) return;
                 e.preventDefault(); // 阻止图片按默认行为插入输入框
-                ScreenshotEditor.open(file, sendScreenshotFile);
+                if (window.desktop && window.desktop.openEditor) {
+                    // PC 端：图片直送独立编辑器窗口（open 编辑器模式，默认全图选区，确认后直接发送）。
+                    // dataURL 前缀统一标 PNG（stitchBlobToDataUrl 复用）——Image 解码按内容嗅探，mime 标注不影响显示
+                    editorWinBusy = true;
+                    stitchBlobToDataUrl(file, function (dataUrl) {
+                        if (!dataUrl) { editorWinBusy = false; showToast('截图失败'); return; }
+                        window.desktop.openEditor({ dataUrl: dataUrl, mode: 'open', callback: 'sendFile' });
+                    });
+                } else {
+                    // 浏览器回退：主窗体内编辑器（独立窗口链路不可用）
+                    ScreenshotEditor.open(file, sendScreenshotFile);
+                }
                 return;
             }
         }
@@ -4159,8 +4145,45 @@
         window.desktop.onGlobalShot(function (dataUrl) {
             if (!IMSocket.isConnected()) return; // 未登录不响应
             if (stitchState.active) return; // 长截图进行中不响应（窗口已是悬浮小条，冻结态冲突）
-            if (window.ScreenshotEditor && ScreenshotEditor.isOpen()) return; // 编辑器已打开不重复进入
-            openShotEditor(dataUrlToBlob(dataUrl));
+            if (editorWinBusy) return; // 独立编辑器窗口打开中不重复进入
+            openShotEditor(dataUrl); // 阶段一百四十：dataURL 直送独立编辑器窗口（原 dataUrlToBlob 后主窗体内开编辑器）
+        });
+    }
+
+    // ===== 阶段一百四十：独立编辑器窗口回接（完成/取消/长截图移交/录屏启动，经主进程转发） =====
+    if (window.desktop && window.desktop.onEditorDone) {
+        window.desktop.onEditorDone(function (data) {
+            editorWinBusy = false;
+            if (!data || !data.dataUrl) return;
+            var blob = dataUrlToBlob(data.dataUrl);
+            if (data.callback === 'sendFile') {
+                // open 编辑器模式（粘贴/浏览器截图回退链路）：确认即发送（群聊 HTTP 上传/私聊分流在函数内归口）
+                if (blob) sendScreenshotFile(blob);
+            } else {
+                // freeze 冻结模式：裁剪图进输入框待发送条（点发送才真正发出；blob 为空时 setPendingShot 自行忽略）
+                setPendingShot(blob);
+            }
+        });
+    }
+    if (window.desktop && window.desktop.onEditorCancel) {
+        window.desktop.onEditorCancel(function () {
+            editorWinBusy = false;
+            // Esc/取消退出后清掉残留焦点（用户反馈：退出截图后截图按钮残留黄色焦点框）
+            if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        });
+    }
+    if (window.desktop && window.desktop.onEditorStitch) {
+        window.desktop.onEditorStitch(function (data) {
+            if (!data || !data.sel) return;
+            // 长截图状态机接管（条窗+屏幕流滚动拼接链路不变；stitch:finish 恢复主窗口）
+            onStitchStart(data.sel, data.snapW, data.snapH);
+        });
+    }
+    if (window.desktop && window.desktop.onEditorRecStart) {
+        window.desktop.onEditorRecStart(function (data) {
+            if (!data || !data.sel) return;
+            // 录屏链路接管（主窗口退场→屏幕流→裁剪录制不变；editor:rec-start 时主进程已恢复窗口原位）
+            onRecAreaStart(data.sel, data.snapW, data.snapH);
         });
     }
 
@@ -16323,18 +16346,9 @@
         video.controls = true;
         video.preload = 'metadata';
         video.playsInline = true;
-        var info = document.createElement('div');
-        info.className = 'file-info';
-        var fileName = document.createElement('div');
-        fileName.className = 'file-name';
-        fileName.textContent = name;
-        var fileSize = document.createElement('div');
-        fileSize.className = 'file-size';
-        fileSize.textContent = sizeText;
-        info.appendChild(fileName);
-        info.appendChild(fileSize);
+        // 阶段一百四十：去掉文件名/大小信息区（用户需求：视频+文件名同显冗余，微信同款只显示视频）；
+        // 气泡仍带 bubble-file 类与 data-url——右键"另存为"入口保留，"在线编辑"因 file-name 缺失自动隐藏
         bubble.appendChild(video);
-        bubble.appendChild(info);
         if (url) {
             bubble.setAttribute('data-url', url);
         }

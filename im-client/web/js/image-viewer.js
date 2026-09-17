@@ -193,6 +193,34 @@
         }
     }
 
+    // ===== 阶段一百四十：编辑并发送（复用独立截图编辑器 open 模式，确认后经主窗口既有链路发到当前会话） =====
+    // 链路：查看器 fetch 当前图 → blob → 分块 btoa 转 dataURL（禁 FileReader——PptxViewJS 全局污染规避）
+    // → desktop.viewerEdit → 主进程复用编辑器窗口（callback=sendFile）；旋转/缩放仅为查看变换，编辑取原图
+    // GIF 动图编辑基于 canvas 会丢动画，禁用入口；Web 浏览器端无独立编辑器窗口，按钮隐藏
+    var btnEdit = document.getElementById('btnEdit');
+    if (!(window.desktop && window.desktop.viewerEdit)) {
+        btnEdit.style.display = 'none';
+    } else {
+        var editBusy = false; // 抓图转码在途防重入
+        btnEdit.addEventListener('click', function () {
+            if (editBusy || !img.src || !img.naturalWidth) return;
+            editBusy = true;
+            fetch(list[index], { cache: 'no-store' }).then(function (r) { return r.blob(); }).then(function (blob) {
+                if (blob.type === 'image/gif') { editBusy = false; btnEdit.title = 'GIF 动图暂不支持编辑'; return; }
+                return blob.arrayBuffer().then(function (buf) {
+                    var bytes = new Uint8Array(buf);
+                    var bin = '';
+                    var CH = 0x8000;
+                    for (var i = 0; i < bytes.length; i += CH) {
+                        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+                    }
+                    window.desktop.viewerEdit({ dataUrl: 'data:' + blob.type + ';base64,' + btoa(bin) });
+                    editBusy = false;
+                });
+            }).catch(function () { editBusy = false; });
+        });
+    }
+
     // ===== 画布交互：滚轮缩放 / 拖拽平移 / 双击切换适应与 1:1 =====
     stage.addEventListener('wheel', function (e) {
         e.preventDefault();
