@@ -128,6 +128,9 @@ const (
 	MsgTypeGroupKickResp    = 81 // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}；成功后被踢者收 77 action=kick，其余成员收 73 刷新）
 	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群涉及转让/解散归二期）
 	MsgTypeGroupQuitResp    = 83 // 下行：退群回执（content 为 JSON：{ok, group_id, err?}；成功后退群者收 77 action=leave，其余成员收 73 刷新）
+
+	// 阶段一百四十四：公司公告与动态（后台发布归口 + 客户端微信式阅读）
+	MsgTypeAnnouncementPush = 84 // 下行：公告发布实时推送（content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入列表头）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

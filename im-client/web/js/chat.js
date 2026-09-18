@@ -4468,6 +4468,8 @@
             } catch (e) {}
             // 阶段四十三：登录成功后拉取 AI 智能体列表（刷新自动重登/断线重连均会走 LOGIN_RESP，服务端配置归口）
             requestAIAgents();
+            // 阶段一百四十四：登录后拉取公告未读数补红点（离线期间发布的公告不依赖 WS 推送）
+            annRefreshUnread();
             // 阶段六十一：登录成功后自动上报本机沙箱白名单（服务端仅内存保存，重启即丢失；
             // PC 重启/断线重连均走 LOGIN_RESP，从主进程本地持久化拉取后重新上报，保证 Agent 任务随时可用授权目录）
             if (agentWsSupported()) {
@@ -4617,9 +4619,376 @@
             convListEl.classList.toggle('hidden', tabName !== 'chat');
             friendsPanel.classList.toggle('hidden', tabName !== 'friends');
             aiPanel.classList.toggle('hidden', tabName !== 'ai');
+            // 阶段一百四十四：公告面板纳入互斥切换，首次进入时拉取列表（排序服务端归口：置顶+时间）
+            if (annPanelEl) annPanelEl.classList.toggle('hidden', tabName !== 'announcement');
+            if (tabName === 'announcement') annLoadList();
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
+    });
+
+    // ===== 阶段一百四十四：公告与动态（公司公告/新闻动态/红头文件） =====
+    // 阶段一百四十四二期改版（微信通讯录式）：左侧 3 个分类卡牌（头像+名称+分类未读角标），
+    // 点击卡牌在右侧聊天区集中显示该分类全部公告卡片流，点卡片进详情弹层。
+    // 服务端归口：/api/announcements*（口径同 /api/kb：username 参数标识当前用户），
+    // 分类未读数由服务端聚合计算（unread 接口 by_category），已读/签收服务端落库多端一致；
+    // 详情正文为后台富文本经服务端白名单消毒后的可信 HTML，卡牌标题/摘要等纯文本一律 annEsc 转义
+    var annPanelEl = document.getElementById('announcement-panel');
+    var annStreamEl = document.getElementById('ann-stream');
+    var annStreamTitle = document.getElementById('ann-stream-title');
+    var annStreamIcon = document.getElementById('ann-stream-icon');
+    var annStreamList = document.getElementById('ann-stream-list');
+    var annStreamCloseBtn = document.getElementById('ann-stream-close');
+    var navAnnBadge = document.getElementById('nav-ann-badge');
+    var annDetailMask = document.getElementById('ann-detail-mask');
+    var annDetailCat = document.getElementById('ann-detail-cat');
+    var annDetailTitle = document.getElementById('ann-detail-title');
+    var annDetailMeta = document.getElementById('ann-detail-meta');
+    var annDetailContent = document.getElementById('ann-detail-content');
+    var annDetailAtts = document.getElementById('ann-detail-atts');
+    var annConfirmBtn = document.getElementById('ann-confirm-btn');
+    var annDetailCloseBtn = document.getElementById('ann-detail-close');
+    var annOpenLinkBtn = document.getElementById('ann-open-link-btn');
+    // 公告流覆盖层 DOM 移入主聊天区（与设置页同款 absolute 覆盖，左侧列表保持可见可点）
+    if (annStreamEl && mainChatEl && annStreamEl.parentElement !== mainChatEl) {
+        mainChatEl.appendChild(annStreamEl);
+    }
+    var annItems = [];                 // 公告列表缓存（服务端已按 置顶+发布时间 排序归口下发）
+    var annCurCat = '';                // 当前打开的公告流分类（空=未打开）
+    var annUnreadByCat = {};           // 分类未读数（服务端归口下发：{notice,news,red}）
+    var annCatNames = { notice: '公告', news: '动态', red: '红头文件' };
+    var annCatIcons = { notice: '📢', news: '📰', red: '🧧' };
+
+    // 纯文本转义（公告模块动态字段渲染归口）
+    function annEsc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // 红点角标渲染归口：分类角标（左侧卡牌，>99 显示 99+）+ 导航总角标（公告图标）
+    function annRenderBadge() {
+        var total = 0;
+        Object.keys(annUnreadByCat).forEach(function (c) { total += annUnreadByCat[c] || 0; });
+        ['notice', 'news', 'red'].forEach(function (c) {
+            var el = document.getElementById('ann-badge-' + c);
+            if (!el) return;
+            var n = annUnreadByCat[c] || 0;
+            if (n > 0) {
+                el.textContent = n > 99 ? '99+' : String(n);
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+                el.textContent = '';
+            }
+        });
+        if (navAnnBadge) {
+            if (total > 0) {
+                navAnnBadge.textContent = total > 99 ? '99+' : String(total);
+                navAnnBadge.classList.remove('hidden');
+            } else {
+                navAnnBadge.classList.add('hidden');
+                navAnnBadge.textContent = '';
+            }
+        }
+    }
+
+    // 未读数拉取（登录后补红点；离线期间发布的公告不依赖 WS 推送；分类聚合服务端归口）
+    function annRefreshUnread() {
+        fetch('/api/announcements/unread?username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (r) { return r.json(); })
+            .then(function (resp) {
+                var d = resp && resp.data;
+                if (d && d.by_category) {
+                    annUnreadByCat = d.by_category;
+                    annRenderBadge();
+                }
+            }).catch(function () {});
+    }
+
+    // 公告列表拉取（仅已发布；排序服务端归口：置顶在前 + 发布时间倒序；拉完联动角标与打开中的卡片流）
+    function annLoadList() {
+        fetch('/api/announcements?username=' + encodeURIComponent(IMSocket.getUsername()) + '&size=50')
+            .then(function (r) { return r.json(); })
+            .then(function (resp) {
+                var d = resp && resp.data;
+                if (!d) return;
+                annItems = d.list || [];
+                annRenderBadge();
+                if (annCurCat) annRenderStream();
+            }).catch(function () {
+                if (annCurCat && annStreamList) annStreamList.innerHTML = '<div class="ann-empty">加载失败</div>';
+            });
+    }
+
+    // 公告时间显示：当天 时:分 / 一天内 昨天 / 更早 月-日（微信列表同款口径）
+    function annFormatTime(t) {
+        if (!t) return '';
+        var d = new Date(t);
+        if (isNaN(d.getTime())) return '';
+        var now = new Date();
+        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        if (d.toDateString() === now.toDateString()) return pad(d.getHours()) + ':' + pad(d.getMinutes());
+        var yest = new Date(now.getTime() - 86400000);
+        if (d.toDateString() === yest.toDateString()) return '昨天';
+        return pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    // 类型角标归口：doc=文档（附件为主）/ link=链接（内置浏览器查看）；html 无角标
+    function annTypeTag(ct) {
+        if (ct === 'doc') return '<span class="ann-type-tag t-doc">文档</span>';
+        if (ct === 'link') return '<span class="ann-type-tag t-link">链接</span>';
+        return '';
+    }
+
+    // 卡片流渲染（右侧聊天区集中显示该分类全部公告；卡牌样式服务端归口 card_style：
+    // standard 微信标准卡 / cover-left 左文右封面 / cover-top 大图卡 / compact 紧凑条目；
+    // 无封面图自动回退标准卡；置顶卡角标高亮 + 未读红点加粗 + 已读弱化）
+    function annRenderStream() {
+        if (!annStreamList) return;
+        var list = annItems.filter(function (a) { return a.category === annCurCat; });
+        if (!list.length) {
+            annStreamList.innerHTML = '<div class="ann-empty">暂无' + (annCatNames[annCurCat] || '公告') + '</div>';
+            return;
+        }
+        var html = '';
+        list.forEach(function (a) {
+            var style = a.card_style || 'standard';
+            // 封面布局归口：cover-left/standard 有封面 → 左文右图；cover-top 有封面 → 大图卡；
+            // 无封面或 compact 一律标准/紧凑布局（上传了封面就必然可见）
+            if (style === 'cover-top' && !a.cover) style = 'standard';
+            if ((style === 'cover-left' || style === 'standard') && a.cover) style = 'cover-left';
+            html += '<div class="ann-card s-' + style + (a.read ? ' read' : '') + (a.stick ? ' stick' : '') + '" data-ann-id="' + a.id + '" data-ann-type="' + annEsc(a.content_type || 'html') + '">'
+                + (a.stick ? '<span class="ann-stick-corner">置顶</span>' : '')
+                + (style === 'cover-top' && a.cover ? '<div class="ann-card-cover"><img src="' + annEsc(a.cover) + '" alt="" loading="lazy"></div>' : '')
+                + '<div class="ann-card-body">'
+                + '<div class="ann-card-title">' + annEsc(a.title) + annTypeTag(a.content_type)
+                + (!a.read ? '<span class="ann-unread-dot"></span>' : '') + '</div>'
+                + (style !== 'compact' && a.digest ? '<div class="ann-card-digest">' + annEsc(a.digest) + '</div>' : '')
+                + '<div class="ann-card-foot">'
+                + '<span class="ann-card-meta">' + annEsc(a.publisher || '') + (a.publisher ? ' · ' : '') + annEsc(annFormatTime(a.publish_time)) + '</span>'
+                + (a.require_confirm ? '<span class="ann-confirm-tag' + (a.confirmed ? ' done' : '') + '">' + (a.confirmed ? '已签收' : '待签收') + '</span>' : '')
+                + (a.read ? '<span class="ann-read-tag">已读</span>' : '')
+                + '</div>'
+                + '</div>'
+                + (style === 'cover-left' && a.cover ? '<div class="ann-card-cover"><img src="' + annEsc(a.cover) + '" alt="" loading="lazy"></div>' : '')
+                + '</div>';
+        });
+        annStreamList.innerHTML = html;
+    }
+
+    // 打开分类卡片流（覆盖聊天区，左侧公告面板保持可见；切换分类直接重渲染）
+    function annOpenStream(cat) {
+        if (!annStreamEl || !annCatNames[cat]) return;
+        annCurCat = cat;
+        annStreamTitle.textContent = annCatNames[cat];
+        annStreamIcon.textContent = annCatIcons[cat] || '📢';
+        annStreamList.innerHTML = '<div class="ann-empty">加载中…</div>';
+        annStreamEl.classList.remove('hidden');
+        annLoadList();
+    }
+
+    // 关闭公告卡片流（返回聊天）
+    function annCloseStream() {
+        annCurCat = '';
+        if (annStreamEl) annStreamEl.classList.add('hidden');
+    }
+
+    // 左侧分类卡牌点击（事件委托）
+    if (annPanelEl) {
+        annPanelEl.addEventListener('click', function (e) {
+            var entry = e.target.closest('.ann-cat-entry');
+            if (entry) annOpenStream(entry.dataset.annCat);
+        });
+    }
+    if (annStreamCloseBtn) annStreamCloseBtn.addEventListener('click', annCloseStream);
+
+    // 公告详情打开（GET 详情即服务端记已读；正文渲染信任服务端消毒后的 HTML，
+    // 附件点击走 openDocPreview 统一预览链路：PDF 直指 / docx-xlsx / pptx 纯前端渲染）
+    function annOpenDetail(id) {
+        fetch('/api/announcements/' + id + '?username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (r) { return r.json(); })
+            .then(function (resp) {
+                var d = resp && resp.data;
+                if (!d) { showToast('公告不存在或已撤回'); return; }
+                annApplyReadSync(d);
+                annShowDetail(d);
+            }).catch(function () { showToast('加载失败'); });
+    }
+
+    // 详情弹层内容渲染归口（html/doc 通用；doc 型以附件列表为主）
+    function annShowDetail(d) {
+        annDetailCat.textContent = annCatNames[d.category] || '公告';
+        annDetailCat.className = 'ann-cat-tag cat-' + annEsc(d.category);
+        annDetailTitle.textContent = d.title;
+        var meta = [];
+        if (d.publisher) meta.push('发布：' + d.publisher);
+        if (d.publish_time) meta.push(new Date(d.publish_time).toLocaleString());
+        annDetailMeta.textContent = meta.join(' · ');
+        annDetailContent.innerHTML = d.content_html || '';
+        annDetailContent.scrollTop = 0;
+        if (d.attachments && d.attachments.length) {
+            var html = '<div class="ann-atts-title">附件（' + d.attachments.length + '）</div>';
+            d.attachments.forEach(function (at) {
+                html += '<div class="ann-att-item" data-att-url="' + annEsc(at.url) + '" data-att-name="' + annEsc(at.name) + '">'
+                    + '<span class="ann-att-icon">'
+                    + '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm7 1.5L18.5 9H13V3.5zM8 12h8v1.5H8V12zm0 4h8v1.5H8V16z"/></svg>'
+                    + '</span>'
+                    + '<span class="ann-att-name">' + annEsc(at.name) + '</span>'
+                    + '<span class="ann-att-size">' + formatSize(at.size || 0) + '</span>'
+                    + '</div>';
+            });
+            annDetailAtts.innerHTML = html;
+            annDetailAtts.classList.remove('hidden');
+        } else {
+            annDetailAtts.innerHTML = '';
+            annDetailAtts.classList.add('hidden');
+        }
+        // 链接型：显示"打开链接"按钮（打开方式后台已归口配置：内置浏览器/系统浏览器）
+        if (d.content_type === 'link' && d.external_url) {
+            annDetailContent.innerHTML = '<div class="ann-link-hint">本公告为链接型，点击下方按钮打开查看</div>';
+            annOpenLinkBtn.dataset.annUrl = d.external_url;
+            annOpenLinkBtn.dataset.annInBrowser = d.open_in_browser ? '1' : '0';
+            annOpenLinkBtn.classList.remove('hidden');
+        } else {
+            annOpenLinkBtn.classList.add('hidden');
+        }
+        // 红头文件签收：未签收才显示按钮（幂等提交，签收位服务端归口）
+        if (d.require_confirm && !d.confirmed) {
+            annConfirmBtn.dataset.annId = d.id;
+            annConfirmBtn.classList.remove('hidden');
+        } else {
+            annConfirmBtn.classList.add('hidden');
+        }
+        annDetailMask.classList.remove('hidden');
+    }
+
+    // 已读联动归口：服务端详情接口已记已读，本地同步分类未读与缓存标记（免二次拉取）
+    function annApplyReadSync(d) {
+        annItems.forEach(function (a) {
+            if (a.id === d.id && !a.read) {
+                a.read = true;
+                var n = annUnreadByCat[d.category] || 0;
+                if (n > 0) annUnreadByCat[d.category] = n - 1;
+            }
+        });
+        annRenderBadge();
+        if (annCurCat) annRenderStream();
+    }
+
+    // doc/link 型打开动作归口：详情接口顺带记已读（与 html 型同链路），
+    // doc → 直开第一个附件预览（无附件回退详情弹层）；link → 按 open_in_browser 打开方式归口
+    function annOpenDetailAndAct(id, ct) {
+        fetch('/api/announcements/' + id + '?username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (r) { return r.json(); })
+            .then(function (resp) {
+                var d = resp && resp.data;
+                if (!d) { showToast('公告不存在或已撤回'); return; }
+                annApplyReadSync(d);
+                if (ct === 'doc') {
+                    var at = (d.attachments || [])[0];
+                    if (at) {
+                        openDocPreview(at.url, at.name);
+                    } else {
+                        annShowDetail(d);
+                        showToast('该公告暂无附件');
+                    }
+                } else {
+                    annOpenLink(d);
+                }
+            }).catch(function () { showToast('加载失败'); });
+    }
+
+    // 链接型公告打开方式归口（后台 open_in_browser 配置驱动）：
+    // PC + 独立窗体 → 主进程新建/复用独立 BrowserWindow 打开网址（单例，重复点击仅导航+聚焦）；
+    // PC + 未勾选 → 系统默认浏览器；浏览器版/手机端 → 新窗口
+    function annOpenLink(d) {
+        var url = d.external_url;
+        if (!url) { showToast('链接地址为空'); return; }
+        var isPC = !!(window.desktop && typeof window.desktop.openAnnLink === 'function');
+        if (isPC && d.open_in_browser) {
+            window.desktop.openAnnLink(url).catch(function () { window.open(url, '_blank'); });
+        } else if (isPC) {
+            window.desktop.browserTabsOp('open-external', '', url);
+        } else {
+            window.open(url, '_blank');
+        }
+    }
+
+    // 卡片流点击（事件委托）：doc/link 型走直开动作（附件预览/浏览器打开），html 型进详情弹层
+    if (annStreamList) {
+        annStreamList.addEventListener('click', function (e) {
+            var card = e.target.closest('.ann-card');
+            if (!card) return;
+            var ct = card.dataset.annType;
+            if (ct === 'doc' || ct === 'link') {
+                annOpenDetailAndAct(card.dataset.annId, ct);
+            } else {
+                annOpenDetail(card.dataset.annId);
+            }
+        });
+    }
+
+    // 附件点击：聊天文件统一预览链路（PC 端独立窗口；浏览器/手机弹窗 fallback）
+    if (annDetailAtts) {
+        annDetailAtts.addEventListener('click', function (e) {
+            var item = e.target.closest('.ann-att-item');
+            if (item) openDocPreview(item.dataset.attUrl, item.dataset.attName);
+        });
+    }
+
+    // 红头文件签收（幂等）：成功后隐藏按钮 + 卡片流签收态刷新
+    if (annConfirmBtn) {
+        annConfirmBtn.addEventListener('click', function () {
+            var id = annConfirmBtn.dataset.annId;
+            if (!id) return;
+            fetch('/api/announcements/' + id + '/confirm?username=' + encodeURIComponent(IMSocket.getUsername()), { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function (resp) {
+                    if (resp && resp.ok) {
+                        annConfirmBtn.classList.add('hidden');
+                        showToast('签收成功');
+                        annItems.forEach(function (a) { if (String(a.id) === String(id)) a.confirmed = true; });
+                        if (annCurCat) annRenderStream();
+                    } else {
+                        showToast((resp && resp.msg) || '签收失败');
+                    }
+                }).catch(function () { showToast('签收失败'); });
+        });
+    }
+
+    // 详情关闭（按钮 + 遮罩点击）
+    if (annDetailCloseBtn) {
+        annDetailCloseBtn.addEventListener('click', function () {
+            annDetailMask.classList.add('hidden');
+        });
+    }
+    // 链接型"打开链接"按钮（详情弹层内；URL 与打开方式由 annShowDetail 写入 dataset）
+    if (annOpenLinkBtn) {
+        annOpenLinkBtn.addEventListener('click', function () {
+            var url = this.dataset.annUrl;
+            if (!url) return;
+            annOpenLink({ external_url: url, open_in_browser: this.dataset.annInBrowser === '1' });
+        });
+    }
+    if (annDetailMask) {
+        annDetailMask.addEventListener('click', function (e) {
+            if (e.target === annDetailMask) annDetailMask.classList.add('hidden');
+        });
+    }
+
+    // Esc 关闭公告卡片流（详情弹层打开时优先由其遮罩逻辑处理，此处仅收流）
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && annCurCat && annDetailMask.classList.contains('hidden')) {
+            annCloseStream();
+        }
+    });
+
+    // 实时推送（WS 84）：新公告发布 → 重拉列表（角标按分类刷新）+ 当前分类流实时出现 + Toast 提醒
+    IMSocket.on(MSG.ANNOUNCEMENT_PUSH, function (msg) {
+        var data = null;
+        try { data = JSON.parse(msg.content); } catch (e) {}
+        if (data && data.title) showToast('新' + (annCatNames[data.category] || '公告') + '：' + data.title);
+        annLoadList();
     });
 
     // ===== 阶段四十三：AI 问答（智能体列表 / 流式打字机渲染） =====
@@ -15206,6 +15575,8 @@
         // 视图瞬间消失等响应后重现，构成闪烁（实测 2026-09-16 快速连点同一好友必现）。
         // 微信同款行为：点击当前会话无任何反应。childElementCount 守卫极端空视图场景（如刚清空聊天）仍允许重拉
         // 原实现：无此守卫（同会话重复点击全量重载）
+        // 阶段一百四十四二期：公告卡片流打开时点击会话视为"返回聊天"（含同会话重复点击，须先于下方 return）
+        if (annCurCat) annCloseStream();
         if (user === currentChatUser && messageList.childElementCount > 0) return;
         // 阶段八十七：切换会话强制退出多选模式（多选仅对当前会话有效，跨会话勾选无意义）
         exitMultiSelect();

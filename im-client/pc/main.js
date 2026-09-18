@@ -2,7 +2,7 @@
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net, session } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net, session, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1044,6 +1044,44 @@ ipcMain.on('doc:set-always-on-top', function (event, on) {
 // 查看器隐藏（页面 Esc/关闭按钮，与 close 拦截同逻辑）
 ipcMain.on('doc:close', function () {
     if (docViewerWin) docViewerWin.hide();
+});
+
+// ===== 阶段一百四十四三期：公告链接型独立窗体（用户需求：链接型公告在新独立窗体打开网站，不经浏览区分栏） =====
+// 单例复用：重复点击仅导航换址 + 聚焦，不堆窗口；仅放行 http/https（服务端归口已校验，此处兜底）
+var annLinkWin = null;
+
+ipcMain.handle('ann:open-link', function (event, url) {
+    var u = String(url || '');
+    if (!/^https?:\/\//i.test(u)) return false;
+    if (!annLinkWin || annLinkWin.isDestroyed()) {
+        annLinkWin = new BrowserWindow({
+            width: 1200,
+            height: 820,
+            minWidth: 520,
+            minHeight: 400,
+            show: false,
+            autoHideMenuBar: true, // 网页窗体隐藏菜单栏（Alt 唤出），观感干净
+            webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true
+            }
+        });
+        annLinkWin.on('closed', function () { annLinkWin = null; });
+        // 页面 window.open/target=_blank 一律转系统默认浏览器（独立窗体内不养子标签）
+        annLinkWin.webContents.setWindowOpenHandler(function (details) {
+            if (/^https?:\/\//i.test(details.url || '')) shell.openExternal(details.url);
+            return { action: 'deny' };
+        });
+    }
+    annLinkWin.loadURL(u).catch(function () { /* 加载失败由窗口错误页呈现 */ });
+    annLinkWin.once('ready-to-show', function () {
+        if (annLinkWin && !annLinkWin.isDestroyed()) {
+            annLinkWin.show();
+            annLinkWin.focus();
+        }
+    });
+    return true;
 });
 
 // 查看器下载：主进程 net.fetch 拉流（走 Chromium 网络栈，与页面同源同 cookie）+ 原生保存对话框写盘

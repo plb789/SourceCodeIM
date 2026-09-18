@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.38">
+    <link rel="stylesheet" href="css/style.css?v=2.41">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -140,6 +140,11 @@
                     <!-- 阶段二十九：通讯录图标红点角标（有待处理好友申请时显示，微信同款） -->
                     <span id="nav-friends-badge" class="nav-badge hidden"></span>
                 </div>
+                <!-- 阶段一百四十四：公告与动态入口（公司公告/新闻动态/红头文件，后台发布归口，实时推送亮红点） -->
+                <div class="nav-icon sidebar-tab" data-tab="announcement" title="公告">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M18 11v2h4v-2h-4zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4zM4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9H4zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.02 1.5-3.34z"/></svg>
+                    <span id="nav-ann-badge" class="nav-badge hidden"></span>
+                </div>
             </div>
             <div class="nav-bottom">
                 <button id="add-friend-btn" class="nav-btn" title="添加好友">
@@ -207,6 +212,26 @@
                     <span id="ua-entry-badge" class="new-friends-badge hidden"></span>
                 </div>
                 <ul id="ai-agent-list" class="user-list"></ul>
+            </div>
+
+            <!-- 阶段一百四十四二期：公告与动态面板改微信通讯录式——3 个分类卡牌（头像+名称+分类未读角标），
+                 点击卡牌在右侧聊天区集中显示该分类全部公告卡片流（服务端归口分类未读数） -->
+            <div id="announcement-panel" class="friends-panel hidden">
+                <div class="new-friends-entry ann-cat-entry" data-ann-cat="notice" title="公司公告">
+                    <span class="new-friends-icon ann-cat-avatar av-notice">📢</span>
+                    <span class="new-friends-text">公告</span>
+                    <span id="ann-badge-notice" class="new-friends-badge hidden"></span>
+                </div>
+                <div class="new-friends-entry ann-cat-entry" data-ann-cat="news" title="新闻动态">
+                    <span class="new-friends-icon ann-cat-avatar av-news">📰</span>
+                    <span class="new-friends-text">动态</span>
+                    <span id="ann-badge-news" class="new-friends-badge hidden"></span>
+                </div>
+                <div class="new-friends-entry ann-cat-entry" data-ann-cat="red" title="红头文件">
+                    <span class="new-friends-icon ann-cat-avatar av-red">🧧</span>
+                    <span class="new-friends-text">红头文件</span>
+                    <span id="ann-badge-red" class="new-friends-badge hidden"></span>
+                </div>
             </div>
 
             <!-- 搜索结果面板：置于侧栏层，聊天/好友两个Tab下均可展示 -->
@@ -1256,10 +1281,40 @@
         </div>
     </div>
 
+    <!-- 阶段一百四十四二期：公告分类卡片流（点击左侧公告分类入口后覆盖聊天区显示，"返回聊天"/Esc/切换会话关闭；
+         DOM 由 chat.js 移入 .main-chat 与设置页同款 absolute 覆盖，左侧列表保持可见） -->
+    <div id="ann-stream" class="ann-stream hidden">
+        <div class="ann-stream-head">
+            <span id="ann-stream-icon" class="ann-stream-icon">📢</span>
+            <span id="ann-stream-title" class="ann-stream-title">公告</span>
+            <button id="ann-stream-close" class="ann-stream-close">返回聊天</button>
+        </div>
+        <div id="ann-stream-list" class="ann-stream-list"></div>
+    </div>
+
+    <!-- 阶段一百四十四：公告详情弹层（微信式阅读页：分类标签+标题+发布信息+富文本正文+附件在线预览；红头文件需签收） -->
+    <div id="ann-detail-mask" class="modal-mask hidden">
+        <div class="modal-box ann-detail-box">
+            <div class="ann-detail-head">
+                <span id="ann-detail-cat" class="ann-cat-tag"></span>
+                <div id="ann-detail-title" class="ann-detail-title">公告标题</div>
+                <div id="ann-detail-meta" class="ann-detail-meta"></div>
+            </div>
+            <div id="ann-detail-content" class="ann-detail-content"></div>
+            <div id="ann-detail-atts" class="ann-detail-atts hidden"></div>
+            <div class="modal-btns">
+                <!-- 阶段一百四十四三期：链接型公告打开按钮（打开方式后台归口配置） -->
+                <button id="ann-open-link-btn" class="kb-create-btn hidden">打开链接</button>
+                <button id="ann-confirm-btn" class="kb-create-btn hidden">确认已读</button>
+                <button id="ann-detail-close" class="modal-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.25"></script>
+    <script src="js/socket.js?v=1.26"></script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
@@ -1275,7 +1330,7 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.22"></script>
+    <script src="js/chat.js?v=3.26"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

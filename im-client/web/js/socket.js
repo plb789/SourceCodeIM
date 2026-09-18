@@ -111,7 +111,8 @@
         GROUP_KICK: 80,          // 上行：移出成员（content 为 JSON：{group_id, member:"u2"}，仅群主）
         GROUP_KICK_RESP: 81,     // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}）
         GROUP_QUIT: 82,          // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退）
-        GROUP_QUIT_RESP: 83      // 下行：退群回执（content 为 JSON：{ok, group_id, err?}）
+        GROUP_QUIT_RESP: 83,     // 下行：退群回执（content 为 JSON：{ok, group_id, err?}）
+        ANNOUNCEMENT_PUSH: 84    // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
     };
 
     function connect(username, password) {

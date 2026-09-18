@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.16">
+    <link rel="stylesheet" href="css/admin.css?v=1.18">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -47,6 +47,7 @@
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
+                <button class="admin-nav-item" data-view="announcements">公告管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
@@ -626,6 +627,61 @@
                 <p class="admin-view-tip">工具链清单由本页统一维护，PC 端用户在设置 → 工具链一键下载安装（SHA256 校验后解压到 ~/.im-mcp/&lt;安装目录&gt;）。区别于 MCP 插件：工具链非长驻进程，安装即下载解压即可用；Agent 任务可直接调用编译命令。删除条目不影响用户本机已安装的目录。</p>
                 <div id="toolchains-list" class="admin-cards"></div>
             </section>
+
+            <!-- 公告管理（阶段一百四十四：公司公告/动态/红头文件发布归口，发布后 WS 实时推送客户端红点） -->
+            <section id="admin-view-announcements" class="admin-view">
+            <header class="admin-view-head">
+                <h2>公告管理</h2>
+                <span id="ann-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">公司公告、新闻动态与红头文件的统一发布入口：支持富文本正文与多附件（PDF/Word/表格/图片），发布后在线用户实时收到红点提醒，离线用户登录后补红点。红头文件可开启签收（用户须点击"已确认"，此处可查签收名单）。正文保存时服务端自动做安全消毒。</p>
+            <!-- 工具条：分类/状态筛选 + 标题搜索 + 新建 -->
+            <div class="vec-toolbar">
+                <select id="ann-filter-category" class="admin-input">
+                    <option value="">全部分类</option>
+                    <option value="notice">公告</option>
+                    <option value="news">动态</option>
+                    <option value="red">红头文件</option>
+                </select>
+                <select id="ann-filter-status" class="admin-input">
+                    <option value="">全部状态</option>
+                    <option value="0">草稿</option>
+                    <option value="1">已发布</option>
+                    <option value="2">已撤回</option>
+                </select>
+                <input type="text" id="ann-search" class="admin-input vec-search-input" placeholder="按标题搜索">
+                <button id="ann-refresh" class="admin-btn small">刷新</button>
+                <button id="ann-create" class="admin-btn small primary">新建公告</button>
+            </div>
+            <!-- 公告表格 -->
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>标题</th>
+                            <th>分类</th>
+                            <th>状态</th>
+                            <th>附件</th>
+                            <th>已读</th>
+                            <th>签收</th>
+                            <th>发布人</th>
+                            <th>发布时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ann-tbody">
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- 分页条 -->
+            <div class="vec-pager">
+                <button id="ann-prev" class="admin-btn small">上一页</button>
+                <span id="ann-page-info" class="admin-view-tip">-</span>
+                <button id="ann-next" class="admin-btn small">下一页</button>
+            </div>
+            </section>
         </main>
     </div>
 
@@ -677,6 +733,112 @@
         </div>
     </div>
 
+    <!-- 公告编辑弹窗（阶段一百四十四：富文本正文 + 多附件；保存时服务端白名单消毒） -->
+    <div id="ann-modal-mask" class="modal-mask hidden">
+        <div class="modal-box ann-modal-box">
+            <div id="ann-modal-title" class="modal-title">新建公告</div>
+            <div class="ann-modal-body">
+                <div class="ann-form-row">
+                    <input id="ann-title" class="admin-input ann-title-input" placeholder="标题（必填）" maxlength="128">
+                    <select id="ann-category" class="admin-input ann-cat-input">
+                        <option value="notice">公告</option>
+                        <option value="news">动态</option>
+                        <option value="red">红头文件</option>
+                    </select>
+                </div>
+                <input id="ann-digest" class="admin-input" placeholder="摘要（列表页展示，可空）" maxlength="255">
+                <div class="ann-form-row">
+                    <label class="ann-check"><input type="checkbox" id="ann-stick"> 置顶</label>
+                    <label class="ann-check"><input type="checkbox" id="ann-confirm"> 需签收（红头文件）</label>
+                    <select id="ann-content-type" class="admin-input ann-cat-input" title="正文类型：富文本页在线渲染 / 文档型以附件为主 / 链接型用内置浏览器打开">
+                        <option value="html">富文本页</option>
+                        <option value="doc">文档型</option>
+                        <option value="link">链接型</option>
+                    </select>
+                    <select id="ann-card-style" class="admin-input ann-cat-input" title="卡牌样式：阅读端卡片流按此样式渲染">
+                        <option value="standard">标准卡</option>
+                        <option value="cover-left">左文右图</option>
+                        <option value="cover-top">大图卡</option>
+                        <option value="compact">紧凑条目</option>
+                    </select>
+                </div>
+                <!-- 封面行：直接上传封面图（复用公告附件上传链路），回填 URL 并预览 -->
+                <div class="ann-form-row ann-cover-row">
+                    <button id="ann-cover-btn" class="admin-btn small" type="button">上传封面</button>
+                    <input type="file" id="ann-cover-file" accept="image/*" class="hidden">
+                    <input id="ann-cover" class="admin-input ann-cover-input" placeholder="封面图 URL（可空，上传后自动回填）">
+                    <img id="ann-cover-preview" class="ann-cover-preview hidden" alt="封面预览">
+                </div>
+                <!-- 链接型设置（content-type=link 时显示）：目标地址 + 打开方式 -->
+                <div id="ann-link-row" class="ann-form-row hidden">
+                    <input id="ann-external-url" class="admin-input" placeholder="链接地址（必填，http:// 或 https://）">
+                    <label class="ann-check"><input type="checkbox" id="ann-open-browser" checked> 应用内独立窗体打开</label>
+                </div>
+                <!-- 富文本工具条（contenteditable + execCommand，内部使用零依赖） -->
+                <div class="ann-toolbar">
+                    <button type="button" class="ann-tool-btn" data-cmd="bold" title="加粗"><b>B</b></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="italic" title="斜体"><i>I</i></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="underline" title="下划线"><u>U</u></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertUnorderedList" title="无序列表">•&nbsp;列表</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertOrderedList" title="有序列表">1.&nbsp;列表</button>
+                    <button type="button" class="ann-tool-btn" data-block="h2" title="小标题">标题</button>
+                    <button type="button" class="ann-tool-btn" data-block="blockquote" title="引用">引用</button>
+                    <button type="button" class="ann-tool-btn" data-block="p" title="正文段落">正文</button>
+                    <!-- 阶段一百四十四三期：字号/颜色/对齐/分割线/表格 -->
+                    <select id="ann-font-size" class="ann-tool-select" title="字号">
+                        <option value="">字号</option>
+                        <option value="2">小</option>
+                        <option value="3">标准</option>
+                        <option value="4">大</option>
+                        <option value="5">特大</option>
+                    </select>
+                    <input type="color" id="ann-fore-color" class="ann-tool-color" value="#333333" title="文字颜色">
+                    <input type="color" id="ann-bg-color" class="ann-tool-color" value="#ffe9a8" title="文字背景色">
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyLeft" title="左对齐">⬅</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyCenter" title="居中">⬌</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyRight" title="右对齐">➡</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertHorizontalRule" title="分割线">—</button>
+                    <button type="button" class="ann-tool-btn" id="ann-insert-table" title="插入 3×3 表格">表格</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="removeFormat" title="清除格式">清除格式</button>
+                    <button type="button" class="ann-tool-btn" id="ann-insert-image" title="插入图片（正文内嵌）">插入图片</button>
+                    <button type="button" class="ann-tool-btn" id="ann-html-toggle" title="切换 HTML 源码编辑（保存时仍经服务端消毒）">源码</button>
+                </div>
+                <div id="ann-editor" class="ann-editor" contenteditable="true"></div>
+                <textarea id="ann-html-source" class="ann-editor ann-html-source hidden" spellcheck="false" placeholder="直接编辑 HTML 源码…（保存时服务端白名单消毒，脚本/事件属性/危险链接会被剔除）"></textarea>
+                <!-- 附件区 -->
+                <div class="ann-form-row ann-attach-row">
+                    <button id="ann-attach-btn" class="admin-btn small" type="button">添加附件</button>
+                    <input type="file" id="ann-attach-file" multiple class="hidden">
+                    <span class="admin-view-tip">支持 PDF/Word/Excel/PPT/TXT/CSV/图片，单文件 20MB 内，阅读端在线预览</span>
+                </div>
+                <ul id="ann-attach-list" class="ann-attach-list"></ul>
+            </div>
+            <div class="modal-btns">
+                <button id="ann-save-draft" class="modal-btn">存为草稿</button>
+                <button id="ann-save-publish" class="modal-btn primary">保存并发布</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 公告已读/签收名单弹窗（红头文件签收统计） -->
+    <div id="ann-reads-mask" class="modal-mask hidden">
+        <div class="modal-box ann-reads-box">
+            <div id="ann-reads-title" class="modal-title"></div>
+            <div class="vec-table-wrap ann-reads-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr><th>用户</th><th>已确认</th><th>阅读时间</th></tr>
+                    </thead>
+                    <tbody id="ann-reads-tbody"></tbody>
+                </table>
+            </div>
+            <div class="modal-btns">
+                <button id="ann-reads-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 切片查看弹窗（阶段五十二：查看文件已入库的切片内容与字数） -->
     <div id="admin-chunks-mask" class="modal-mask hidden">
         <div class="modal-box admin-chunks-box">
@@ -704,7 +866,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.25"></script>
+    <script src="js/admin.js?v=1.27"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

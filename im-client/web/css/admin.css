@@ -1349,3 +1349,240 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
 .agentset-gitprompt-actions {
     margin-top: 6px;
 }
+
+/* ===== 阶段一百四十四：公告管理（富文本编辑弹窗 + 已读签收弹窗） ===== */
+.ann-modal-box {
+    width: min(880px, 94vw);
+}
+.ann-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 64vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.ann-form-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.ann-title-input {
+    flex: 1;
+    min-width: 240px;
+}
+.ann-cat-input {
+    width: 130px;
+    flex: none;
+}
+.ann-cover-input {
+    flex: 1;
+    min-width: 240px;
+}
+.ann-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+.ann-toolbar {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.ann-tool-btn {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+.ann-tool-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+/* 阶段一百四十四三期：工具条新控件（字号下拉/颜色选择）+ 源码模式态 + 封面预览 + 源码编辑区 */
+.ann-tool-select {
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    padding: 0 4px;
+    cursor: pointer;
+}
+.ann-tool-select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+.ann-tool-color {
+    width: 28px;
+    height: 28px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    cursor: pointer;
+}
+.ann-tool-btn.on {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+.ann-html-source {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    white-space: pre;
+    resize: vertical;
+    min-height: 220px;
+}
+.ann-cover-row {
+    align-items: center;
+}
+.ann-cover-preview {
+    width: 72px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.ann-editor {
+    min-height: 220px;
+    max-height: 42vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--search-bg);
+    color: var(--text);
+    line-height: 1.75;
+    font-size: 14px;
+    outline: none;
+    text-align: left;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.ann-editor:focus {
+    border-color: var(--primary);
+}
+.ann-editor:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-light);
+    pointer-events: none;
+}
+.ann-editor img {
+    max-width: 100%;
+    border-radius: 6px;
+}
+.ann-editor h2 {
+    font-size: 18px;
+    margin: 8px 0;
+}
+.ann-editor blockquote {
+    border-left: 3px solid var(--primary);
+    padding: 4px 12px;
+    margin: 8px 0;
+    color: var(--text-light);
+    background: var(--search-bg);
+    border-radius: 0 6px 6px 0;
+}
+.ann-editor ul, .ann-editor ol {
+    padding-left: 24px;
+}
+.ann-editor a {
+    color: var(--primary);
+}
+.ann-attach-row {
+    justify-content: flex-start;
+}
+.ann-attach-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ann-attach-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text);
+}
+.ann-attach-item .ann-attach-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ann-attach-item .ann-attach-size {
+    color: var(--text-light);
+    font-size: 12px;
+    flex: none;
+}
+.ann-attach-item .ann-attach-del {
+    border: none;
+    background: none;
+    color: var(--danger, #fa5151);
+    cursor: pointer;
+    font-size: 12px;
+    flex: none;
+}
+.ann-reads-box {
+    width: min(560px, 92vw);
+}
+.ann-reads-wrap {
+    max-height: 50vh;
+}
+.ann-status-dot {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+.ann-status-published {
+    color: var(--primary, #07c160);
+    background: color-mix(in srgb, var(--primary, #07c160) 12%, transparent);
+}
+.ann-status-draft {
+    color: var(--text-light);
+    background: color-mix(in srgb, var(--text-light) 14%, transparent);
+}
+.ann-status-withdrawn {
+    color: #ff976a;
+    background: rgba(255, 151, 106, 0.14);
+}
+.ann-cat-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+.ann-cat-notice {
+    color: #1485ee;
+    background: rgba(20, 133, 238, 0.12);
+}
+.ann-cat-news {
+    color: #8c8c8c;
+    background: rgba(140, 140, 140, 0.14);
+}
+.ann-cat-red {
+    color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 12%, transparent);
+}

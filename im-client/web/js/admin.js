@@ -147,6 +147,8 @@
             else if (item.dataset.view === 'mcpplugins') { loadMCPPlugins(); }
             // 阶段一百二十一：进入工具链市场视图拉取工具链清单（PC 端工具链市场数据源）
             else if (item.dataset.view === 'toolchains') { loadToolchains(); }
+            // 阶段一百四十四：进入公告管理视图拉取公告列表
+            else if (item.dataset.view === 'announcements') { annLoadList(); }
             else stopKBPolling();
         });
     });
@@ -3201,4 +3203,453 @@
         }
         next(0);
     });
+
+    // ===== 阶段一百四十四：公告管理（公司公告/动态/红头文件发布归口） =====
+    var annPage = 1;
+    var annTotal = 0;
+    var annEditingId = 0;              // 0=新建，>0=编辑中的公告 ID
+    var annAttachItems = [];           // 编辑中的附件列表 [{name,url,size}]
+
+    var ANN_STATUS_TEXT = { 0: '草稿', 1: '已发布', 2: '已撤回' };
+    var ANN_CAT_TEXT = { notice: '公告', news: '动态', red: '红头文件' };
+
+    // 文件大小格式化（列表/附件条共用）
+    function annFormatSize(n) {
+        if (!n || n < 1024) return (n || 0) + ' B';
+        if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+        return (n / 1048576).toFixed(1) + ' MB';
+    }
+
+    // ===== 列表 =====
+    function annLoadList() {
+        $('ann-status').textContent = '加载中…';
+        var qs = '?page=' + annPage + '&size=20';
+        var category = $('ann-filter-category').value;
+        var status = $('ann-filter-status').value;
+        var kw = $('ann-search').value.trim();
+        if (category) qs += '&category=' + category;
+        if (status !== '') qs += '&status=' + status;
+        if (kw) qs += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/admin/api/announcements' + qs).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); $('ann-status').textContent = '加载失败'; return; }
+            annTotal = result.data.total || 0;
+            $('ann-status').textContent = '共 ' + annTotal + ' 条';
+            $('ann-page-info').textContent = '第 ' + annPage + ' 页 / 共 ' + Math.max(1, Math.ceil(annTotal / 20)) + ' 页';
+            annRenderList(result.data.list || []);
+        }).catch(function (e) { $('ann-status').textContent = '加载失败'; showToast(e.message || '网络异常'); });
+    }
+
+    function annRenderList(list) {
+        var tbody = $('ann-tbody');
+        tbody.innerHTML = '';
+        if (!list.length) {
+            var tr = document.createElement('tr');
+            var td = document.createElement('td');
+            td.colSpan = 10;
+            td.className = 'vec-empty';
+            td.textContent = '暂无公告';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+        list.forEach(function (a) {
+            var tr = document.createElement('tr');
+            // ID
+            var tdId = document.createElement('td'); tdId.textContent = a.id; tr.appendChild(tdId);
+            // 标题（置顶加标记）
+            var tdTitle = document.createElement('td');
+            tdTitle.textContent = (a.stick ? '[置顶] ' : '') + a.title;
+            tdTitle.title = a.digest || a.title;
+            tdTitle.style.maxWidth = '260px';
+            tdTitle.style.overflow = 'hidden';
+            tdTitle.style.textOverflow = 'ellipsis';
+            tdTitle.style.whiteSpace = 'nowrap';
+            tr.appendChild(tdTitle);
+            // 分类
+            var tdCat = document.createElement('td');
+            var cat = document.createElement('span');
+            cat.className = 'ann-cat-tag ann-cat-' + a.category;
+            cat.textContent = ANN_CAT_TEXT[a.category] || a.category;
+            tdCat.appendChild(cat);
+            tr.appendChild(tdCat);
+            // 状态
+            var tdSt = document.createElement('td');
+            var st = document.createElement('span');
+            st.className = 'ann-status-dot ann-status-' + (a.status === 1 ? 'published' : a.status === 0 ? 'draft' : 'withdrawn');
+            st.textContent = ANN_STATUS_TEXT[a.status] || a.status;
+            tdSt.appendChild(st);
+            tr.appendChild(tdSt);
+            // 附件/已读/签收
+            var tdAtt = document.createElement('td'); tdAtt.textContent = a.attach_count || 0; tr.appendChild(tdAtt);
+            var tdRead = document.createElement('td'); tdRead.textContent = a.read_count || 0; tr.appendChild(tdRead);
+            var tdConf = document.createElement('td'); tdConf.textContent = a.require_confirm ? (a.confirm_count || 0) : '—'; tr.appendChild(tdConf);
+            // 发布人/时间
+            var tdPub = document.createElement('td'); tdPub.textContent = a.publisher || '—'; tr.appendChild(tdPub);
+            var tdTime = document.createElement('td');
+            tdTime.textContent = a.publish_time && a.publish_time.indexOf && a.publish_time.indexOf('0001-') !== 0
+                ? String(a.publish_time).replace('T', ' ').slice(0, 16) : '—';
+            tr.appendChild(tdTime);
+            // 操作
+            var tdOp = document.createElement('td');
+            function opBtn(text, cls, fn) {
+                var b = document.createElement('button');
+                b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+                b.textContent = text;
+                b.addEventListener('click', fn);
+                return b;
+            }
+            tdOp.appendChild(opBtn('编辑', '', function () { annOpenEditor(a.id); }));
+            if (a.status !== 1) {
+                tdOp.appendChild(opBtn('发布', 'primary', function () {
+                    api('POST', '/admin/api/announcements/' + a.id + '/publish').then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '发布失败'); return; }
+                        showToast('已发布，在线用户已收到提醒');
+                        annLoadList();
+                    });
+                }));
+            }
+            if (a.status === 1) {
+                tdOp.appendChild(opBtn('撤回', '', function () {
+                    confirmBox('撤回后用户端立即不可见，确定撤回「' + a.title + '」？', function () {
+                        api('POST', '/admin/api/announcements/' + a.id + '/withdraw').then(function (result) {
+                            if (!result.ok) { showToast(result.msg || '撤回失败'); return; }
+                            showToast('已撤回');
+                            annLoadList();
+                        });
+                    });
+                }));
+            }
+            tdOp.appendChild(opBtn('已读名单', '', function () { annOpenReads(a.id, a.title); }));
+            tdOp.appendChild(opBtn('删除', '', function () {
+                confirmBox('删除后数据不可恢复（含已读记录），确定删除「' + a.title + '」？', function () {
+                    api('DELETE', '/admin/api/announcements/' + a.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        annLoadList();
+                    });
+                });
+            }));
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ===== 编辑弹窗 =====
+    // 阶段一百四十四三期：正文类型（html/doc/link）/卡牌样式/封面上传/链接设置联动
+    function annOpenEditor(id) {
+        annEditingId = id || 0;
+        annAttachItems = [];
+        $('ann-modal-title').textContent = id ? '编辑公告' : '新建公告';
+        $('ann-title').value = '';
+        $('ann-category').value = 'notice';
+        $('ann-digest').value = '';
+        $('ann-stick').checked = false;
+        $('ann-confirm').checked = false;
+        $('ann-cover').value = '';
+        $('ann-cover-preview').classList.add('hidden');
+        $('ann-content-type').value = 'html';
+        $('ann-card-style').value = 'standard';
+        $('ann-external-url').value = '';
+        $('ann-open-browser').checked = true;
+        var editor = $('ann-editor');
+        editor.innerHTML = '';
+        editor.setAttribute('data-placeholder', '输入正文…支持加粗/标题/引用/列表，可插入图片');
+        $('ann-html-source').value = '';
+        annSyncHtmlToggle(false); // 每次打开回到可视编辑态
+        annApplyTypeUI();
+        annRenderAttachList();
+        $('ann-modal-mask').classList.remove('hidden');
+        if (id) {
+            // 编辑回填：正文与附件从详情接口取（列表不携带正文，避免分页载荷过大）
+            api('GET', '/admin/api/announcements/' + id).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '加载失败'); return; }
+                var a = result.data.announcement || {};
+                $('ann-title').value = a.title || '';
+                $('ann-category').value = a.category || 'notice';
+                $('ann-digest').value = a.digest || '';
+                $('ann-stick').checked = !!a.stick;
+                $('ann-confirm').checked = !!a.require_confirm;
+                $('ann-cover').value = a.cover || '';
+                annRenderCoverPreview(a.cover || '');
+                $('ann-content-type').value = a.content_type || 'html';
+                $('ann-card-style').value = a.card_style || 'standard';
+                $('ann-external-url').value = a.external_url || '';
+                $('ann-open-browser').checked = a.open_in_browser !== false;
+                $('ann-editor').innerHTML = a.content_html || '';
+                annApplyTypeUI();
+                annAttachItems = (result.data.attachments || []).map(function (t) {
+                    return { name: t.name, url: t.url, size: t.size };
+                });
+                annRenderAttachList();
+            }).catch(function (e) { showToast(e.message || '网络异常'); });
+        }
+    }
+
+    // 封面预览归口（URL 变化统一走这里；空值隐藏）
+    function annRenderCoverPreview(url) {
+        var img = $('ann-cover-preview');
+        if (url) {
+            img.src = url;
+            img.classList.remove('hidden');
+        } else {
+            img.removeAttribute('src');
+            img.classList.add('hidden');
+        }
+    }
+
+    // 正文类型联动：html=富文本编辑器 / doc=文档型（以附件为主，正文可空）/ link=链接地址+打开方式
+    function annApplyTypeUI() {
+        var t = $('ann-content-type').value;
+        var isLink = t === 'link';
+        var isHtml = t === 'html';
+        $('ann-link-row').classList.toggle('hidden', !isLink);
+        // html 型下编辑区显隐还受源码模式影响（annHtmlMode=true 时 editor 隐藏、textarea 显示），避免两者同时可见
+        $('ann-editor').classList.toggle('hidden', !isHtml || annHtmlMode);
+        document.querySelector('.ann-modal-box .ann-toolbar').classList.toggle('hidden', !isHtml);
+        $('ann-html-source').classList.toggle('hidden', !isHtml || !annHtmlMode);
+        var editor = $('ann-editor');
+        editor.setAttribute('data-placeholder', isHtml
+            ? '输入正文…支持加粗/标题/引用/列表，可插入图片'
+            : (isLink ? '' : '文档型公告以附件为主，正文可留空'));
+    }
+
+    // 源码/可视模式切换归口（双向同步：可视→源码取 innerHTML；源码→可视回填 innerHTML）
+    var annHtmlMode = false;
+    function annSyncHtmlToggle(on) {
+        annHtmlMode = !!on;
+        var editor = $('ann-editor');
+        var src = $('ann-html-source');
+        if (annHtmlMode) {
+            src.value = editor.innerHTML;
+            editor.classList.add('hidden');
+            src.classList.remove('hidden');
+        } else {
+            editor.innerHTML = src.value;
+            src.classList.add('hidden');
+            editor.classList.remove('hidden');
+        }
+        $('ann-html-toggle').classList.toggle('on', annHtmlMode);
+        // 非富文本类型时工具条/编辑区整体由 annApplyTypeUI 控制显隐，这里仅在 html 型下生效
+        if ($('ann-content-type').value === 'html') {
+            src.classList.toggle('hidden', !annHtmlMode);
+            editor.classList.toggle('hidden', annHtmlMode);
+        }
+    }
+
+    function annRenderAttachList() {
+        var ul = $('ann-attach-list');
+        ul.innerHTML = '';
+        annAttachItems.forEach(function (at, idx) {
+            var li = document.createElement('li');
+            li.className = 'ann-attach-item';
+            var name = document.createElement('span');
+            name.className = 'ann-attach-name';
+            name.textContent = at.name;
+            name.title = at.name;
+            var size = document.createElement('span');
+            size.className = 'ann-attach-size';
+            size.textContent = annFormatSize(at.size);
+            var del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'ann-attach-del';
+            del.textContent = '移除';
+            del.addEventListener('click', function () {
+                annAttachItems.splice(idx, 1);
+                annRenderAttachList();
+            });
+            li.appendChild(name);
+            li.appendChild(size);
+            li.appendChild(del);
+            ul.appendChild(li);
+        });
+    }
+
+    // 附件上传（FormData 走管理端专用端点；逐个串行防竞态）
+    function annUploadFile(file) {
+        var fd = new FormData();
+        fd.append('file', file);
+        return fetch('/admin/api/announcement/attach', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd
+        }).then(function (resp) {
+            return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+        });
+    }
+
+    // 保存归口（publish=true 表示"保存并发布"；编辑态发布走幂等 publish 端点触发实时推送）
+    // 阶段一百四十四三期：提交前从当前编辑态取正文（源码模式取 textarea），link 型服务端校验 http(s)
+    function annSave(publish) {
+        var title = $('ann-title').value.trim();
+        if (!title) { showToast('请填写标题'); return; }
+        var contentType = $('ann-content-type').value;
+        var externalUrl = $('ann-external-url').value.trim();
+        if (contentType === 'link' && !/^https?:\/\//i.test(externalUrl)) {
+            showToast('链接型公告请填写 http:// 或 https:// 地址');
+            return;
+        }
+        if (annHtmlMode) annSyncHtmlToggle(false); // 源码模式切回可视（textarea 内容回填 editor）
+        var payload = {
+            title: title,
+            category: $('ann-category').value,
+            cover: $('ann-cover').value.trim(),
+            digest: $('ann-digest').value.trim(),
+            content_html: $('ann-editor').innerHTML,
+            content_type: contentType,
+            card_style: $('ann-card-style').value,
+            external_url: externalUrl,
+            open_in_browser: $('ann-open-browser').checked,
+            stick: $('ann-stick').checked,
+            require_confirm: $('ann-confirm').checked,
+            attachments: annAttachItems,
+            status: publish ? 1 : 0
+        };
+        var req;
+        if (annEditingId) {
+            req = api('PUT', '/admin/api/announcements/' + annEditingId, payload).then(function (result) {
+                if (!result.ok) return result;
+                if (publish) {
+                    return api('POST', '/admin/api/announcements/' + annEditingId + '/publish');
+                }
+                return result;
+            });
+        } else {
+            req = api('POST', '/admin/api/announcements', payload);
+        }
+        req.then(function (result) {
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            $('ann-modal-mask').classList.add('hidden');
+            showToast(publish ? '已发布，在线用户已收到提醒' : '已保存草稿');
+            annLoadList();
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // ===== 已读/签收名单弹窗 =====
+    function annOpenReads(id, title) {
+        $('ann-reads-title').textContent = '已读名单 - ' + title;
+        var tbody = $('ann-reads-tbody');
+        tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">加载中…</td></tr>';
+        $('ann-reads-mask').classList.remove('hidden');
+        api('GET', '/admin/api/announcements/' + id + '/reads').then(function (result) {
+            if (!result.ok) { tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">' + (result.msg || '加载失败') + '</td></tr>'; return; }
+            var reads = result.data.reads || [];
+            tbody.innerHTML = '';
+            if (!reads.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">暂无人阅读</td></tr>';
+                return;
+            }
+            reads.forEach(function (rd) {
+                var tr = document.createElement('tr');
+                var tdU = document.createElement('td'); tdU.textContent = rd.username; tr.appendChild(tdU);
+                var tdC = document.createElement('td'); tdC.textContent = rd.confirmed ? '已确认' : '—'; tr.appendChild(tdC);
+                var tdT = document.createElement('td'); tdT.textContent = String(rd.create_time || '').replace('T', ' ').slice(0, 19); tr.appendChild(tdT);
+                tbody.appendChild(tr);
+            });
+        }).catch(function () { tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">加载失败</td></tr>'; });
+    }
+
+    // ===== 事件绑定 =====
+    $('ann-create').addEventListener('click', function () { annOpenEditor(0); });
+    $('ann-refresh').addEventListener('click', function () { annLoadList(); });
+    $('ann-search').addEventListener('input', function () { annPage = 1; annLoadList(); });
+    $('ann-filter-category').addEventListener('change', function () { annPage = 1; annLoadList(); });
+    $('ann-filter-status').addEventListener('change', function () { annPage = 1; annLoadList(); });
+    $('ann-prev').addEventListener('click', function () { if (annPage > 1) { annPage--; annLoadList(); } });
+    $('ann-next').addEventListener('click', function () { if (annPage * 20 < annTotal) { annPage++; annLoadList(); } });
+    $('ann-modal-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    $('ann-save-draft').addEventListener('click', function () { annSave(false); });
+    $('ann-save-publish').addEventListener('click', function () { annSave(true); });
+
+    // 富文本工具条（execCommand 零依赖；data-block 走 formatBlock 段落格式）
+    document.querySelectorAll('.ann-tool-btn[data-cmd]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            document.execCommand(btn.getAttribute('data-cmd'), false, null);
+            $('ann-editor').focus();
+        });
+    });
+    document.querySelectorAll('.ann-tool-btn[data-block]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            document.execCommand('formatBlock', false, '<' + btn.getAttribute('data-block') + '>');
+            $('ann-editor').focus();
+        });
+    });
+    // 插入图片：选择文件 → 上传 → insertImage 到光标处
+    $('ann-insert-image').addEventListener('click', function () { $('ann-image-file').click(); });
+    $('ann-attach-btn').addEventListener('click', function () { $('ann-attach-file').click(); });
+    function annHandleFilePicked(input, isImage) {
+        var files = Array.prototype.slice.call(input.files || []);
+        if (!files.length) return;
+        var busy = false;
+        function next(i) {
+            if (i >= files.length) { input.value = ''; return; }
+            annUploadFile(files[i]).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '上传失败'); return next(i + 1); }
+                if (isImage) {
+                    document.execCommand('insertImage', false, result.data.url);
+                } else {
+                    annAttachItems.push({ name: result.data.name, url: result.data.url, size: result.data.size });
+                    annRenderAttachList();
+                }
+                next(i + 1);
+            }).catch(function () { showToast('网络异常'); next(i + 1); });
+        }
+        next(0);
+        if (busy === false) busy = true; // 串行标记仅防重复点击提示，逻辑上逐个收口
+    }
+    $('ann-attach-file').addEventListener('change', function () { annHandleFilePicked(this, false); });
+    var imgInput = document.createElement('input');
+    imgInput.type = 'file';
+    imgInput.accept = 'image/*';
+    imgInput.id = 'ann-image-file';
+    imgInput.className = 'hidden';
+    imgInput.addEventListener('change', function () { annHandleFilePicked(this, true); });
+    $('ann-modal-mask').querySelector('.ann-modal-box').appendChild(imgInput);
+    // 阶段一百四十四三期：字号/颜色/表格/源码切换/封面上传/正文类型联动
+    $('ann-font-size').addEventListener('change', function () {
+        if (!this.value) return;
+        document.execCommand('fontSize', false, this.value);
+        this.value = '';
+        $('ann-editor').focus();
+    });
+    $('ann-fore-color').addEventListener('change', function () {
+        document.execCommand('foreColor', false, this.value);
+        $('ann-editor').focus();
+    });
+    $('ann-bg-color').addEventListener('change', function () {
+        document.execCommand('hiliteColor', false, this.value);
+        $('ann-editor').focus();
+    });
+    // 插入 3×3 表格（insertHTML 经消毒白名单保留 table/tr/td）
+    $('ann-insert-table').addEventListener('click', function () {
+        var html = '<table style="width:100%;border-collapse:collapse"><tbody>';
+        for (var r = 0; r < 3; r++) {
+            html += '<tr>';
+            for (var c = 0; c < 3; c++) {
+                html += '<td style="border:1px solid #ccc;padding:6px 10px">&nbsp;</td>';
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table><p><br></p>';
+        document.execCommand('insertHTML', false, html);
+        $('ann-editor').focus();
+    });
+    $('ann-html-toggle').addEventListener('click', function () { annSyncHtmlToggle(!annHtmlMode); });
+    $('ann-content-type').addEventListener('change', annApplyTypeUI);
+    // 封面上传：复用公告附件上传端点（图片扩展白名单内），回填 URL + 预览
+    $('ann-cover-btn').addEventListener('click', function () { $('ann-cover-file').click(); });
+    $('ann-cover-file').addEventListener('change', function () {
+        var file = (this.files || [])[0];
+        this.value = '';
+        if (!file) return;
+        annUploadFile(file).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '封面上传失败'); return; }
+            $('ann-cover').value = result.data.url;
+            annRenderCoverPreview(result.data.url);
+            showToast('封面已上传');
+        }).catch(function () { showToast('网络异常'); });
+    });
+    $('ann-cover').addEventListener('change', function () { annRenderCoverPreview(this.value.trim()); });
+    $('ann-reads-close').addEventListener('click', function () { $('ann-reads-mask').classList.add('hidden'); });
 })();

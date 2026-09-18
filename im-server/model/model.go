@@ -51,14 +51,14 @@ type PointsLog struct {
 // CallLog 通话话单表 im_call_log（阶段一百四十一：音视频通话归口，服务端数据归口——
 // 通话结束/中断/超时/拒绝均由服务端写话单，客户端零计算只展示）
 type CallLog struct {
-	ID      uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	CallID  string `gorm:"column:call_id;type:varchar(64);index" json:"call_id"`
-	Caller  string `gorm:"column:caller;type:varchar(32);index" json:"caller"`  // 主叫
-	Callee  string `gorm:"column:callee;type:varchar(32);index" json:"callee"`  // 被叫
-	CallType string `gorm:"column:call_type;type:varchar(8)" json:"call_type"` // audio 语音 / video 视频
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	CallID   string `gorm:"column:call_id;type:varchar(64);index" json:"call_id"`
+	Caller   string `gorm:"column:caller;type:varchar(32);index" json:"caller"` // 主叫
+	Callee   string `gorm:"column:callee;type:varchar(32);index" json:"callee"` // 被叫
+	CallType string `gorm:"column:call_type;type:varchar(8)" json:"call_type"`  // audio 语音 / video 视频
 	// Status 通话结果：completed 已接通（含时长）/ rejected 被叫拒绝 / canceled 主叫取消 / missed 无人接听 / busy 对方忙
-	Status   string    `gorm:"column:status;type:varchar(16)" json:"status"`
-	Duration int       `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
+	Status     string    `gorm:"column:status;type:varchar(16)" json:"status"`
+	Duration   int       `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
 }
 
@@ -555,3 +555,75 @@ type SysPrompt struct {
 
 // TableName 指定表名
 func (SysPrompt) TableName() string { return "im_sys_prompt" }
+
+// ===== 公司公告与动态（一期：后台发布归口 + 客户端微信式阅读 + 红点实时提醒） =====
+
+// 公告分类常量（客户端与服务端同口径）
+const (
+	AnnCategoryNotice = "notice" // 公告
+	AnnCategoryNews   = "news"   // 动态
+	AnnCategoryRed    = "red"    // 红头文件
+)
+
+// 公告状态常量
+const (
+	AnnStatusDraft     int8 = 0 // 草稿（仅后台可见）
+	AnnStatusPublished int8 = 1 // 已发布（客户端可见）
+	AnnStatusWithdrawn int8 = 2 // 已撤回（客户端不可见，保留数据）
+)
+
+// Announcement 公告主表 im_announcement
+type Announcement struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Title    string `gorm:"column:title;type:varchar(128);not null" json:"title"`
+	Category string `gorm:"column:category;type:varchar(16);default:'notice';index" json:"category"` // notice/news/red
+	Cover    string `gorm:"column:cover;type:varchar(255);default:''" json:"cover"`                  // 封面图 URL（空则列表回退分类图标）
+	Digest   string `gorm:"column:digest;type:varchar(255);default:''" json:"digest"`                // 摘要（列表页展示）
+	// ContentHTML 富文本正文（后台编辑器产出，服务端白名单消毒后入库，客户端只渲染可信 HTML）
+	ContentHTML string `gorm:"column:content_html;type:longtext" json:"content_html"`
+	Status      int8   `gorm:"column:status;type:tinyint;default:0;index" json:"status"` // 0草稿 1已发布 2已撤回
+	// ContentType 正文类型归口：html=富文本页（在线渲染消毒后 HTML）/ doc=文档型（以附件为主，详情直开文档预览）/ link=链接型（external_url 内置浏览器查看）
+	ContentType string `gorm:"column:content_type;type:varchar(8);default:'html'" json:"content_type"`
+	// CardStyle 卡牌样式归口（后台每篇可选，客户端按预设样式集渲染）：standard=微信标准卡 / cover-left=左文右封面 / cover-top=大图卡 / compact=紧凑条目
+	CardStyle string `gorm:"column:card_style;type:varchar(16);default:'standard'" json:"card_style"`
+	// ExternalURL 链接型公告目标地址（content_type=link 时生效；仅 http/https，服务端校验）
+	ExternalURL string `gorm:"column:external_url;type:varchar(512);default:''" json:"external_url"`
+	// OpenInBrowser 链接型打开方式：true=PC 内置浏览器浏览区打开（浏览器版/手机端 fallback 弹窗）/ false=系统外部打开
+	OpenInBrowser bool `gorm:"column:open_in_browser;default:true" json:"open_in_browser"`
+	// RequireConfirm 红头文件签收开关：true 时用户详情页需点击"已确认"，后台可看签收统计
+	RequireConfirm bool      `gorm:"column:require_confirm;default:false" json:"require_confirm"`
+	Stick          bool      `gorm:"column:stick;default:false" json:"stick"` // 置顶（列表最前）
+	Publisher      string    `gorm:"column:publisher;type:varchar(32);default:''" json:"publisher"`
+	PublishTime    time.Time `gorm:"column:publish_time" json:"publish_time"`
+	CreateTime     time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime     time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (Announcement) TableName() string { return "im_announcement" }
+
+// AnnouncementAttachment 公告附件表 im_announcement_attach（一篇公告多附件：pdf/word/表格/图片等）
+// URL 复用聊天静态资源约定（/static/upload/ann_xxx.ext），预览复用 file-viewer 链路
+type AnnouncementAttachment struct {
+	ID             uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	AnnouncementID uint   `gorm:"column:announcement_id;index" json:"announcement_id"`
+	Name           string `gorm:"column:name;type:varchar(255);not null" json:"name"` // 原始文件名（展示用）
+	URL            string `gorm:"column:url;type:varchar(255);not null" json:"url"`   // 静态资源 URL
+	Size           int64  `gorm:"column:size;type:bigint;default:0" json:"size"`
+	SortID         int    `gorm:"column:sort_id;default:0" json:"sort_id"` // 附件排序（小在前）
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (AnnouncementAttachment) TableName() string { return "im_announcement_attach" }
+
+// AnnouncementRead 公告已读/签收记录表 im_announcement_read（服务端归口统计，多端一致）
+type AnnouncementRead struct {
+	ID             uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	AnnouncementID uint      `gorm:"column:announcement_id;uniqueIndex:idx_ann_read" json:"announcement_id"`
+	Username       string    `gorm:"column:username;type:varchar(32);uniqueIndex:idx_ann_read" json:"username"`
+	Confirmed      bool      `gorm:"column:confirmed;default:false" json:"confirmed"` // 红头文件签收标记
+	CreateTime     time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (AnnouncementRead) TableName() string { return "im_announcement_read" }

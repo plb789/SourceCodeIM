@@ -382,6 +382,11 @@ contextBridge.exposeInMainWorld('desktop', {
     openDocViewer: function (payload) {
         ipcRenderer.send('doc:open', payload);
     },
+    // ===== 阶段一百四十四三期：公告链接型独立窗体 =====
+    // 主窗口调用：新建/复用独立 BrowserWindow 打开 http(s) 网址（单例复用，重复点击仅导航+聚焦）
+    openAnnLink: function (url) {
+        return ipcRenderer.invoke('ann:open-link', url);
+    },
     // 以下四个仅供 doc-viewer.html 页内使用
     onDocLoad: function (callback) {
         ipcRenderer.on('doc:load', function (event, data) {

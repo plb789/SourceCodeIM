@@ -156,6 +156,8 @@ func main() {
 	server.InitMCP(cfg)
 	// 阶段四十九：后台管理路由（管理员登录 + AI 模型服务/智能体管理热更新）
 	server.RegisterAdminRoutes(srv)
+	// 阶段一百四十四：公司公告与动态路由（后台发布管理 + 用户端阅读/已读归口）
+	server.RegisterAnnouncementRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）
 	server.StartAdminUploadScanner(cfg.UploadDir)
 	// 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；turn.enabled=false 时静默不启动）
