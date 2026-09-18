@@ -96,7 +96,15 @@
         PC_FILE_RESP: 65,    // 阶段七十六：本地文件操作结果上行（PC 渲染进程 → 服务端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
         AGENT_CHANGES: 66,   // 阶段七十七：文件变更审查（上行 {task_id,action:"keep"/"revert",path?}；下行全量刷新帧 {task_id,session_id,changes,total_adds,total_dels}）
         AGENT_ASK: 68,       // 阶段一百二十五：Agent 向用户提问的回答上行（TRAE CN 同款，content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；提问本身经 AGENT_EVENT 下发）
-        CALL_SIGNAL: 70      // 阶段一百四十一：音视频通话信令（双向，content 为 JSON：{action,call_id,call_type?,sdp?,candidate?,reason?}；话单由服务端归口落库）
+        CALL_SIGNAL: 70,     // 阶段一百四十一：音视频通话信令（双向，content 为 JSON：{action,call_id,call_type?,sdp?,candidate?,reason?}；话单由服务端归口落库）
+        // 阶段一百四十二：微信同款多群聊信令（新群会话目标编码 to_user='g'+群ID；群内收发复用 1/34/69，仅 to_user 携带群编码）
+        GROUP_CREATE: 71,        // 上行：建群（content 为 JSON：{name, members:["u1","u2"]}，成员选自好友）
+        GROUP_CREATE_RESP: 72,   // 下行：建群回执（content 为 JSON：{group_id, name, members, create_time}；群信息本体以 73 全量同步归口）
+        GROUP_LIST_SYNC: 73,     // 下行：群列表全量同步（content 为 JSON：{groups:[{group_id,name,avatar,owner,member_count,members,create_time}]}；登录+变更推送，前端维护 groupMap）
+        GROUP_INVITE: 74,        // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，仅群主可邀请）
+        GROUP_INVITE_NOTICE: 75, // 下行：群邀请通知（被邀请人收，content 为 JSON：{invite_id, group_id, name, from_user, from_name, member_count}；离线登录补推同帧）
+        GROUP_INVITE_RESP: 76,   // 上行：邀请响应（content 为 JSON：{invite_id, accept:true/false}）
+        GROUP_MEMBER_NOTICE: 77  // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join"/"reject", users, member_count}；join 同时作邀请人同意回执，reject 仅邀请人收）
     };
 
     function connect(username, password) {

@@ -337,13 +337,16 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})
 }
 
-// HandleGroupImageUpload 群聊图片上传：POST /upload/group/image?username=xxx&nonce=yyy（阶段二十六）
+// HandleGroupImageUpload 群聊图片上传：POST /upload/group/image?username=xxx&nonce=yyy[&group=gN]（阶段二十六）
 // 群聊不走分片协议（分片协议为点对点设计，im_file 为收发双方模型），改走 HTTP 上传：
-// 校验图片格式 → 保存文件 → 落库 im_message（msg_type=4，ToUser 为空表示群聊）
+// 校验图片格式 → 保存文件 → 落库 im_message（msg_type=4，ToUser 为空表示全局群，'gN' 表示多群聊）
 // → 广播 MsgTypeGroupImage 给全部在线用户（含发送方多端同步）→ 离线用户入队 → 会话摘要更新
+// 阶段一百四十二：新增可选 group 参数——空=全局群原路径不变；'gN'=多群聊按成员定向广播
 func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	nonce := r.URL.Query().Get("nonce") // 客户端生成的本地气泡标识：广播回填 msg_id 时按 nonce 精确匹配，杜绝并发发送错位
+	// 阶段一百四十二：多群聊作用域（空=全局群，'gN'=指定群；向后兼容不带参调用）
+	groupParam := r.URL.Query().Get("group")
 	if username == "" {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
 		return
@@ -354,6 +357,16 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
 		logger.Warn("群聊图片上传拒绝： %s 无活跃连接", username)
 		return
+	}
+	// 阶段一百四十二：多群聊校验（群存在 + 上传者是成员）
+	if _, errMsg := resolveGroupUploadScope(groupParam, username); errMsg != "" {
+		http.Error(w, errMsg, http.StatusForbidden)
+		return
+	}
+	// 消息归属：多群聊 to_user=gN；全局群保持空串（原实现：恒为空串）
+	toUser := ""
+	if groupParam != "" {
+		toUser = groupParam
 	}
 
 	// 大小限制（读配置，缺省 20MB，与私聊文件传输同规则）
@@ -418,13 +431,13 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 
 	url := "/static/upload/" + filename
 
-	// 落库消息：msg_type=4 图片消息，ToUser 为空表示群聊（与群聊文字消息同命名空间）
+	// 落库消息：msg_type=4 图片消息，ToUser 为空表示全局群、'gN' 表示多群聊（与群聊文字消息同命名空间）
 	// nonce 写入 content 随广播下发：发送端本地气泡按 nonce 精确回填 msg_id（历史渲染不依赖该字段）
 	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
 	record := model.Message{
 		MsgType:  int8(MsgTypeImageSaved),
 		FromUser: username,
-		ToUser:   "",
+		ToUser:   toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:  string(contentBytes),
 	}
 	if err := store.DB.Create(&record).Error; err != nil {
@@ -438,10 +451,19 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 		FromUser: username,
 		// 阶段八十五：群聊帧携带发送者昵称（服务端归口，与文字群聊帧同规则）
 		FromName:  nicknameOf(username),
-		ToUser:    "",
+		ToUser:    toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:   string(contentBytes),
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
+	}
+	// 阶段一百四十二：多群聊按成员定向广播（含离线入队与会话摘要）；原实现：hub.Broadcast 全员广播
+	if toUser != "" {
+		s.broadcastGroupMediaNotice(notice, "[图片]")
+
+		logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
+		return
 	}
 	data, _ := json.Marshal(notice)
 	s.hub.Broadcast(data)
@@ -468,13 +490,16 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
 }
 
-// HandleGroupFileUpload 阶段一百三十四：群聊文件上传 POST /upload/group/file?username=xxx&nonce=yyy
+// HandleGroupFileUpload 阶段一百三十四：群聊文件上传 POST /upload/group/file?username=xxx&nonce=yyy[&group=gN]
 // 与群聊图片（HandleGroupImageUpload）同链路，差异仅三点：不限图片扩展名（保留危险文件拦截）、
 // 落库 msg_type=5（文件消息）、广播 MsgTypeGroupFile(69)、会话摘要 [文件]。
 // 群聊历史渲染零适配：历史按 msg_type=4/5 分支渲染，群文件（ToUser 空）与私聊文件同一分支
+// 阶段一百四十二：新增可选 group 参数——空=全局群原路径不变；'gN'=多群聊按成员定向广播
 func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	nonce := r.URL.Query().Get("nonce") // 客户端本地气泡标识：广播回填 msg_id 按 nonce 精确匹配（与群图片同归口）
+	// 阶段一百四十二：多群聊作用域（空=全局群，'gN'=指定群；向后兼容不带参调用）
+	groupParam := r.URL.Query().Get("group")
 	if username == "" {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
 		return
@@ -484,6 +509,16 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
 		logger.Warn("群聊文件上传拒绝： %s 无活跃连接", username)
 		return
+	}
+	// 阶段一百四十二：多群聊校验（群存在 + 上传者是成员）
+	if _, errMsg := resolveGroupUploadScope(groupParam, username); errMsg != "" {
+		http.Error(w, errMsg, http.StatusForbidden)
+		return
+	}
+	// 消息归属：多群聊 to_user=gN；全局群保持空串（原实现：恒为空串）
+	toUser := ""
+	if groupParam != "" {
+		toUser = groupParam
 	}
 
 	// 大小限制（读配置，与群图片/私聊文件同规则）
@@ -541,12 +576,12 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 
 	url := "/static/upload/" + filename
 
-	// 落库消息：msg_type=5 文件消息，ToUser 为空表示群聊（与群聊文字/图片消息同命名空间）
+	// 落库消息：msg_type=5 文件消息，ToUser 为空表示全局群、'gN' 表示多群聊（与群聊文字/图片消息同命名空间）
 	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
 	record := model.Message{
 		MsgType:  int8(MsgTypeFileSaved),
 		FromUser: username,
-		ToUser:   "",
+		ToUser:   toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:  string(contentBytes),
 	}
 	if err := store.DB.Create(&record).Error; err != nil {
@@ -559,10 +594,19 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		MsgType:   protocol.MsgTypeGroupFile,
 		FromUser:  username,
 		FromName:  nicknameOf(username),
-		ToUser:    "",
+		ToUser:    toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:   string(contentBytes),
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
+	}
+	// 阶段一百四十二：多群聊按成员定向广播（含离线入队与会话摘要）；原实现：hub.Broadcast 全员广播
+	if toUser != "" {
+		s.broadcastGroupMediaNotice(notice, "[文件]")
+
+		logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
+		return
 	}
 	data, _ := json.Marshal(notice)
 	s.hub.Broadcast(data)

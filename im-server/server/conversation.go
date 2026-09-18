@@ -124,14 +124,17 @@ func (s *Server) handleConvPin(c *Client, msg *protocol.Message) {
 	s.pushConvList(c)
 }
 
-// convMessageQuery 构建指定会话的消息范围查询（target 为空表示群聊）
+// convMessageQuery 构建指定会话的消息范围查询（target 为空表示全局群；'gN' 表示多群聊会话）
 func convMessageQuery(userID, target string) *gorm.DB {
 	query := store.DB.Model(&model.Message{})
-	if target == "" {
+	// 阶段一百四十二：多群聊归口——target='gN' 与全局群同走群消息分支（原写死的 '' 参数化，
+	// 全局群传空串行为不变）；原实现：仅 target == '' 分支
+	_, isGroup := isGroupTarget(target)
+	if target == "" || isGroup {
 		// 群聊：全部群消息
 		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：return query.Where("msg_type = ?", 1)
-		return query.Where("msg_type IN ? AND to_user = ''", []int{1, 4})
+		return query.Where("msg_type IN ? AND to_user = ?", []int{1, 4}, target)
 	}
 	// 私聊：双方互发的消息
 	return query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",

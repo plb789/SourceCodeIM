@@ -109,6 +109,18 @@ const (
 	//   hangup（任一方→对方，接通后挂断）/ offer / answer / candidate（WebRTC 媒体协商中继帧）；
 	//   服务端自生成：error（呼叫被拒：离线/忙/非 PC 端）/ timeout（响铃 60s 无应答）/ dismiss（同账号其他设备撤下来电弹条）
 	MsgTypeCallSignal = 70
+
+	// 阶段一百四十二：微信同款多群聊信令（一期：建群 + 邀请 + 多群收发）。
+	// 新群会话目标编码 to_user='g'+群ID（如 g1）；群内收发消息复用现有 1（GROUP_CHAT 文字）/
+	// 34（GROUP_IMAGE 图片）/ 69（GROUP_FILE 文件），仅 to_user 携带群编码，不新增消息类型；
+	// 全局群 to_user='' 语义不变
+	MsgTypeGroupCreate       = 71 // 上行：建群（content 为 JSON：{name, members:["u1","u2"]}，成员选自好友列表，不含自己）
+	MsgTypeGroupCreateResp   = 72 // 下行：建群回执（content 为 JSON：{group_id, name, members, create_time}；群信息本体以 73 全量同步归口）
+	MsgTypeGroupListSync     = 73 // 下行：群列表全量同步（content 为 JSON：{groups:[{group_id,name,avatar,owner,member_count,members:[{username,name,role,avatar}],create_time}]}；登录推送+成员/信息变更时向相关用户推送，前端据此维护 groupMap）
+	MsgTypeGroupInvite       = 74 // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，仅群主可邀请；被邀请人须非成员且无在途邀请）
+	MsgTypeGroupInviteNotice = 75 // 下行：群邀请通知（被邀请人收，content 为 JSON：{invite_id, group_id, name, from_user, from_name, member_count}；离线登录补推同帧）
+	MsgTypeGroupInviteResp   = 76 // 上行：邀请响应（content 为 JSON：{invite_id, accept:true/false}；仅被邀请人可响应且 Status=0 在途邀请有效）
+	MsgTypeGroupMemberNotice = 77 // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join", users:[{username,name,role}], member_count}；action=join 时同时作为邀请结果回执发给邀请人复用一帧）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -1503,25 +1503,34 @@
         msgMenu.classList.add('hidden');
     });
 
-    // ===== 阶段八十六：消息转发（微信同款：右键转发 → 目标选择弹窗 → 确认发送） =====
+    // ===== 阶段八十六：消息转发（微信同款双栏目标选择：左栏搜索勾选多目标 → 右栏已选头像网格 + 内容预览 → 发送） =====
     var fwdMask = document.getElementById('fwd-mask');
     var fwdSearch = document.getElementById('fwd-search');
     var fwdList = document.getElementById('fwd-list');
+    var fwdSelListEl = document.getElementById('fwd-sel-list'); // 右栏已选头像网格
+    var fwdCount = document.getElementById('fwd-count');        // 右栏"已选择N个目标"计数
+    var fwdPreview = document.getElementById('fwd-preview');    // 右栏待转发内容预览卡片
     var fwdCancel = document.getElementById('fwd-cancel');
+    var fwdSendBtn = document.getElementById('fwd-send');       // 确认发送（替代原单目标确认弹窗）
     var fwdPendingEl = null; // 待转发的消息元素（弹窗关闭即释放）
     // 阶段八十七：转发模式——single 单条（默认）｜merge 多选合并｜multi 多选逐条
     var fwdMode = 'single';
+    var fwdTargets = []; // 已选转发目标（用户名 / 'gN' / '' 群聊），按选择顺序（微信同款）
 
     function openForwardPicker(el) {
         fwdPendingEl = el || null; // 多选模式不携带单条元素（阶段八十七）
         fwdSearch.value = '';
+        fwdTargets = [];
         renderForwardList('');
+        renderFwdSelected();
+        renderFwdPreview();
         fwdMask.classList.remove('hidden');
     }
 
     function closeForwardPicker() {
         fwdMask.classList.add('hidden');
         fwdPendingEl = null;
+        fwdTargets = [];
     }
     fwdCancel.addEventListener('click', closeForwardPicker);
     fwdMask.addEventListener('click', function (e) {
@@ -1531,12 +1540,152 @@
         renderForwardList(fwdSearch.value.trim().toLowerCase());
     });
 
+    // 目标信息解析（群聊/多群/好友）：名称 + 副标题 + 头像占位
+    function fwdTargetInfo(t) {
+        if (t === '') return { name: '群聊', sub: '群内所有成员可见', ph: '群' };
+        if (isGroupTarget(t)) {
+            var g = groupOfId(groupIdFromTarget(t));
+            return { name: (g && g.name) || '群聊', sub: ((g ? g.member_count : 0) || 0) + '名成员', ph: '群' };
+        }
+        var f = null;
+        for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === t) { f = friendList[i]; break; } }
+        return { name: f ? ((f.remark || '').trim() || (nickCache[t] || '').trim() || t) : t, sub: t, avatar: f ? f.avatar : null, ph: t };
+    }
+
+    // 右栏已选目标渲染：横向头像网格（头像 + 名字 + 右上角 × 移除）；空态显示引导文案
+    function renderFwdSelected() {
+        fwdCount.textContent = fwdTargets.length ? ('已选择' + fwdTargets.length + '个目标') : '';
+        fwdSelListEl.innerHTML = '';
+        fwdSendBtn.disabled = fwdTargets.length < 1;
+        fwdSelListEl.classList.toggle('fwd-sel-grid', fwdTargets.length > 0);
+        if (!fwdTargets.length) {
+            fwdSelListEl.innerHTML = '<div class="grp-empty">在左侧选择要发送的联系人</div>';
+            return;
+        }
+        fwdTargets.forEach(function (t) {
+            var info = fwdTargetInfo(t);
+            var cell = document.createElement('div');
+            cell.className = 'fwd-sel-cell';
+            if (info.avatar) {
+                var av = document.createElement('img');
+                av.src = info.avatar;
+                cell.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'grp-sel-ph';
+                ph.textContent = info.ph || (info.name || '?').charAt(0).toUpperCase();
+                cell.appendChild(ph);
+            }
+            var nm = document.createElement('div');
+            nm.className = 'fwd-sel-cell-name';
+            nm.textContent = info.name;
+            cell.appendChild(nm);
+            var x = document.createElement('button');
+            x.className = 'fwd-sel-x';
+            x.type = 'button';
+            x.textContent = '×';
+            x.title = '移除';
+            x.addEventListener('click', function () { toggleFwdTarget(t, false); });
+            cell.appendChild(x);
+            fwdSelListEl.appendChild(cell);
+        });
+    }
+
+    // 目标勾选切换（左栏勾选 / 右栏移除共用），同步两侧与发送按钮态
+    function toggleFwdTarget(t, on) {
+        if (on) {
+            if (fwdTargets.indexOf(t) >= 0) return;
+            fwdTargets.push(t);
+        } else {
+            fwdTargets = fwdTargets.filter(function (x) { return x !== t; });
+        }
+        fwdSendBtn.disabled = fwdTargets.length < 1;
+        var row = null;
+        try { row = fwdList.querySelector('.fwd-item[data-target="' + CSS.escape(t) + '"]'); } catch (e) { row = null; }
+        if (row) row.classList.toggle('picked', fwdTargets.indexOf(t) >= 0);
+        else renderForwardList(fwdSearch.value.trim().toLowerCase());
+        renderFwdSelected();
+    }
+
+    // 待转发内容预览卡片（微信同款气泡缩样）：单条/多选时在右栏底部展示
+    function renderFwdPreview() {
+        var el = fwdPendingEl;
+        fwdPreview.classList.add('hidden');
+        if (!el) return; // 多选模式（fwdPendingEl 为 null）不预览，或无可预览内容
+        var bubble = el.querySelector('.message-bubble');
+        var img = bubble ? bubble.querySelector('.chat-image') : null;
+        if (img && img.getAttribute('src')) {
+            fwdPreview.innerHTML = '';
+            var im = document.createElement('img');
+            im.src = img.getAttribute('src');
+            var pinfo = document.createElement('div');
+            pinfo.className = 'fwd-preview-info';
+            var nm = document.createElement('div');
+            nm.className = 'fwd-preview-name';
+            nm.textContent = '图片';
+            pinfo.appendChild(nm);
+            fwdPreview.appendChild(im);
+            fwdPreview.appendChild(pinfo);
+            fwdPreview.classList.remove('hidden');
+            return;
+        }
+        if (bubble && bubble.classList.contains('bubble-file')) {
+            var furl = bubble.getAttribute('data-url') || '';
+            if (furl) {
+                fwdPreview.innerHTML = '';
+                var fnEl = bubble.querySelector('.file-name');
+                var szEl = bubble.querySelector('.file-size');
+                var badge = document.createElement('div');
+                badge.className = 'fwd-preview-badge';
+                var fname = (fnEl && fnEl.textContent) || '文件';
+                badge.textContent = fname.split('.').pop().slice(-4).toUpperCase() || '文件';
+                var info = document.createElement('div');
+                info.className = 'fwd-preview-info';
+                var fnn = document.createElement('div');
+                fnn.className = 'fwd-preview-name';
+                fnn.textContent = fname;
+                var fsub = document.createElement('div');
+                fsub.className = 'fwd-preview-sub';
+                fsub.textContent = (szEl && szEl.textContent) || '';
+                info.appendChild(fnn);
+                info.appendChild(fsub);
+                fwdPreview.appendChild(badge);
+                fwdPreview.appendChild(info);
+                fwdPreview.classList.remove('hidden');
+                return;
+            }
+        }
+        var raw = el.getAttribute('data-raw');
+        var tx = bubble ? bubble.querySelector('.msg-text') : null;
+        var text = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
+        if (!text) return;
+        fwdPreview.innerHTML = '';
+        var badge2 = document.createElement('div');
+        badge2.className = 'fwd-preview-badge';
+        badge2.textContent = '文本';
+        var info2 = document.createElement('div');
+        info2.className = 'fwd-preview-info';
+        var tn = document.createElement('div');
+        tn.className = 'fwd-preview-name';
+        tn.textContent = text;
+        info2.appendChild(tn);
+        fwdPreview.appendChild(badge2);
+        fwdPreview.appendChild(info2);
+        fwdPreview.classList.remove('hidden');
+    }
+
     // 目标列表：群聊置顶 + 好友（排除 AI 智能体会话，在线优先同通讯录排序），按备注/昵称/账号关键字过滤
     function renderForwardList(kw) {
         fwdList.innerHTML = '';
         var items = [];
         if (!kw || '群聊'.indexOf(kw) >= 0 || 'group'.indexOf(kw) >= 0) {
             items.push({ target: '', name: '群聊', sub: '群内所有成员可见', ph: '群' });
+        }
+        // 阶段一百四十二：多群会话作为转发目标（按群名过滤，成员数副标题，与全局群同置顶）
+        for (var gid in groupMap) {
+            var g = groupMap[gid];
+            if (kw && (g.name || '').toLowerCase().indexOf(kw) < 0) continue;
+            items.push({ target: 'g' + g.group_id, name: g.name || '群聊', sub: (g.member_count || 0) + '名成员', ph: '群', online: true });
         }
         for (var i = 0; i < friendList.length; i++) {
             var f = friendList[i];
@@ -1546,7 +1695,7 @@
             items.push({ target: f.username, name: disp, sub: f.username + (f.online ? ' · 在线' : ''), avatar: f.avatar, online: f.online });
         }
         if (!items.length) {
-            fwdList.innerHTML = '<div class="fwd-empty">无匹配联系人</div>';
+            fwdList.innerHTML = '<div class="grp-empty">无匹配联系人</div>';
             return;
         }
         items.sort(function (a, b) { // 在线优先（群聊项视为恒在线置顶）
@@ -1555,6 +1704,8 @@
         items.forEach(function (it) {
             var item = document.createElement('div');
             item.className = 'fwd-item';
+            item.setAttribute('data-target', it.target);
+            if (fwdTargets.indexOf(it.target) >= 0) item.classList.add('picked');
             if (it.avatar) {
                 var av = document.createElement('img');
                 av.className = 'fwd-avatar';
@@ -1578,28 +1729,32 @@
             info.appendChild(sub);
             item.appendChild(info);
             item.addEventListener('click', function () {
-                var el = fwdPendingEl; // 闭包先捕获，弹窗关闭会清空引用
-                var mode = fwdMode;
-                closeForwardPicker();
-                if (mode === 'merge') {
-                    // 阶段八十七：多选合并转发——多条打包为一条"聊天记录"信封消息
-                    showConfirm('合并转发', '将选中的 ' + multiSelectedCount() + ' 条消息合并转发给「' + it.name + '」？', function () {
-                        sendMergedForward(it.target);
-                    }, '发送');
-                } else if (mode === 'multi') {
-                    // 阶段八十七：逐条转发——按时间顺序逐条原样转发
-                    showConfirm('逐条转发', '将选中的 ' + multiSelectedCount() + ' 条消息逐条转发给「' + it.name + '」？', function () {
-                        sendMultiForward(it.target);
-                    }, '发送');
-                } else {
-                    showConfirm('转发', '转发给「' + it.name + '」？', function () {
-                        doForward(el, it.target);
-                    }, '发送');
-                }
+                toggleFwdTarget(it.target, fwdTargets.indexOf(it.target) < 0); // 点击 toggle 勾选（预览仅随待转发内容，不随目标变化）
             });
             fwdList.appendChild(item);
         });
     }
+
+    // 确认发送：按已选目标循环执行（single 单条 / merge 合并 / multi 逐条），微信同款勾选确认式
+    // exitMultiSelect 统一归口（sendMergedForward/sendMultiForward 已移除内部退出，多目标循环可重采）
+    fwdSendBtn.addEventListener('click', function () {
+        var targets = fwdTargets.slice();
+        var el = fwdPendingEl; // 闭包先捕获（closeForwardPicker 会清空引用）
+        var mode = fwdMode;
+        if (!targets.length) return;
+        closeForwardPicker();
+        if (mode === 'merge') {
+            // 阶段八十七：多选合并转发——多条打包为一条"聊天记录"信封消息逐目标发送
+            targets.forEach(function (t) { sendMergedForward(t, true); });
+        } else if (mode === 'multi') {
+            // 阶段八十七：逐条转发——按时间顺序逐条原样转发
+            targets.forEach(function (t) { sendMultiForward(t, true); });
+        } else {
+            targets.forEach(function (t) { doForward(el, t, targets.length > 1); });
+        }
+        exitMultiSelect(); // 多选入口打开时归位多选态（幂等，右键单选转发无副作用）
+        showToast(targets.length > 1 ? ('已转发给' + targets.length + '个目标') : '已转发');
+    });
 
     // 从消息源地址（服务端 URL / 本地 blob / dataURL）重取内容构造 File，复用既有上传链路
     function fetchSrcAsFile(src, fallbackName) {
@@ -1620,8 +1775,9 @@
         var img = bubble ? bubble.querySelector('.chat-image') : null;
         if (img && img.getAttribute('src')) {
             fetchSrcAsFile(img.getAttribute('src'), 'image.png').then(function (f) {
-                if (target === '') {
-                    sendGroupImage(f, true);
+                // 阶段一百四十二：多群泛化——群目标（旧全局群/多群）统一走群图片直传（group 参数携带目标群）
+                if (target === '' || isGroupTarget(target)) {
+                    sendGroupImage(f, true, target);
                     if (!silent) showToast('已转发');
                 } else {
                     sendFileDirect(f, target, true).then(function (res) {
@@ -1637,8 +1793,9 @@
             if (!furl) { showToast('该消息暂不支持转发'); return; }
             var fnameEl = bubble.querySelector('.file-name');
             fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || '文件').then(function (f) {
-                if (target === '') {
-                    sendGroupFile(f, true).then(function () {
+                // 阶段一百四十二：多群泛化——群目标统一走群文件直传（group 参数携带目标群）
+                if (target === '' || isGroupTarget(target)) {
+                    sendGroupFile(f, true, target).then(function () {
                         if (!silent) showToast('已转发');
                     }).catch(function () { if (!silent) showToast('转发失败'); });
                     return;
@@ -1654,7 +1811,7 @@
         var tx = bubble ? bubble.querySelector('.msg-text') : null;
         var content = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
         if (!content) { showToast('该消息不支持转发'); return; }
-        var m = { msg_type: target === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+        var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
         if (target !== '') m.to_user = target;
         if (IMSocket.send(m)) { if (!silent) showToast('已转发'); } else showToast('转发失败');
     }
@@ -1932,23 +2089,23 @@
         return { payload: payload, items: items, skipped: skipped };
     }
 
-    function sendMergedForward(target) {
+    // silent：转发弹窗多目标循环调用时静默成功提示（失败提示保留），exitMultiSelect 由调用方归口（支持多目标循环重采）
+    function sendMergedForward(target, silent) {
         var built = buildMergedPayload();
         if (built.err) { showToast(built.err); return; }
-        var m = { msg_type: target === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
+        var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
         if (target !== '') m.to_user = target;
         if (!IMSocket.send(m)) { showToast('转发失败'); return; }
-        exitMultiSelect();
-        showToast(built.skipped ? ('已转发（' + built.skipped + '条未完成上传的消息已跳过）') : '已转发');
+        if (!silent) showToast(built.skipped ? ('已转发（' + built.skipped + '条未完成上传的消息已跳过）') : '已转发');
     }
 
-    function sendMultiForward(target) {
+    // silent：转发弹窗多目标循环调用时静默成功提示；exitMultiSelect 由调用方归口
+    function sendMultiForward(target, silent) {
         var els = multiSelectedEls();
         if (!els.length) { showToast('选中的消息暂不支持转发'); return; }
         var n = els.length;
         els.forEach(function (el) { doForward(el, target, true); }); // 静默逐条（异步上传各自进行）
-        exitMultiSelect();
-        showToast('已逐条转发 ' + n + ' 条消息');
+        if (!silent) showToast('已逐条转发 ' + n + ' 条消息');
     }
 
     // 合并信封解析：仅识别 {"merged":{c,i:[...]}} 结构，普通 JSON 文本不受影响
@@ -2355,7 +2512,8 @@
             // 阶段六十九：联网搜索开关开启时经 remark 上行（服务端归口校验配置，未开启时降级普通问答）
             if (webSearchOn && webSearchAvailable) msg.remark = 'web_search';
         } else {
-            msg = { msg_type: currentChatUser === '' ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+            // 阶段一百四十二：多群泛化——群会话（旧全局群/多群 'gN'）统一走 GROUP_CHAT，多群携带 to_user='gN'
+            msg = { msg_type: (currentChatUser === '' || isGroupTarget(currentChatUser)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
             if (currentChatUser !== '') msg.to_user = currentChatUser;
         }
         // 阶段四十：引用发送——content 换成引用信封 JSON（服务端归口解析会话摘要），发送后清引用条
@@ -2390,8 +2548,9 @@
         messageInput.focus();
     }
     messageInput.addEventListener('input', function () {
-        // 阶段四十三：AI 会话无输入状态语义（对方非真实用户），跳过 TYPING 推送
-        if (currentChatUser !== '' && !isAIAgent(currentChatUser)) {
+        // 阶段四十三：AI 会话无输入状态语义（对方非真实用户），跳过 TYPING 推送；
+        // 阶段一百四十二：群会话同样无输入状态语义（多人群聊不显示"对方正在输入"）
+        if (currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser)) {
             IMSocket.send({ msg_type: MSG.TYPING, to_user: currentChatUser });
         }
     });
@@ -2504,7 +2663,8 @@
         if (imageInput.files[0]) {
             // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
             // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
-            if (currentChatUser === '') sendGroupImage(imageInput.files[0]);
+            // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）
+            if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
             else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
             else sendFile(imageInput.files[0]);
         }
@@ -2513,7 +2673,8 @@
     fileInput.addEventListener('change', function () {
         if (fileInput.files[0]) {
             // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
-            if (currentChatUser === '') sendGroupFile(fileInput.files[0]);
+            // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）
+            if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
             else sendFile(fileInput.files[0]);
         }
         fileInput.value = '';
@@ -2975,7 +3136,7 @@
     // → 服务端广播 MSG.GROUP_IMAGE（含 msg_id）→ 发送端按 nonce 精确回填 msg_id，其余用户实时渲染
     // suppressLocal：转发场景（阶段八十六）抑制本地回显气泡——目标会话非当前窗口，本地渲染会污染当前视图；
     // 服务端广播回来后由 GROUP_IMAGE 处理器按 currentChatUser 归口渲染（目标群聊打开时正常上屏，未打开仅记未读）
-    function sendGroupImage(file, suppressLocal) {
+    function sendGroupImage(file, suppressLocal, groupTarget) {
         if (!isImageName(file.name)) { showToast('群聊仅支持发送图片'); return; }
         // nonce：本地气泡唯一标识，广播回填 msg_id 时精确匹配（对齐 FILE_PERSISTED 按 file_id 匹配的归口思路，并发发送不错位）
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -2986,8 +3147,11 @@
         }
         var fd = new FormData();
         fd.append('file', file);
+        // 阶段一百四十二：多群泛化——group 参数携带目标群（旧全局群为空不追加，服务端按群落库广播）
+        var grp = groupTarget || (isGroupTarget(currentChatUser) ? currentChatUser : '');
         fetch('/upload/group/image?username=' + encodeURIComponent(IMSocket.getUsername()) +
-              '&nonce=' + encodeURIComponent(nonce), {
+              '&nonce=' + encodeURIComponent(nonce) +
+              (grp ? '&group=' + encodeURIComponent(grp) : ''), {
             method: 'POST',
             body: fd
         }).then(function (res) {
@@ -3002,7 +3166,7 @@
     // 阶段一百三十四：群聊文件发送——POST /upload/group/file（与群聊图片同链路，不限文件类型，
     // 服务端校验危险文件拦截+大小上限）→ 落库 msg_type=5 → 广播 MSG.GROUP_FILE → nonce 回填 msg_id
     // suppressLocal：转发复用时抑制本地气泡与输入清理（与 sendGroupImage 的 suppressLocal 同语义）
-    function sendGroupFile(file, suppressLocal) {
+    function sendGroupFile(file, suppressLocal, groupTarget) {
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxFile) { showToast('文件超过大小上限（' + formatSize(maxFile) + '），无法发送'); return; }
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -3014,9 +3178,12 @@
         }
         var fd = new FormData();
         fd.append('file', file);
+        // 阶段一百四十二：多群泛化——group 参数携带目标群（旧全局群为空不追加，服务端按群落库广播）
+        var grp = groupTarget || (isGroupTarget(currentChatUser) ? currentChatUser : '');
         // 返回 fetch 链：转发路径（suppressLocal）按 Promise 收尾提示；直接发送路径 fire-and-forget 不受影响
         return fetch('/upload/group/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
-              '&nonce=' + encodeURIComponent(nonce), {
+              '&nonce=' + encodeURIComponent(nonce) +
+              (grp ? '&group=' + encodeURIComponent(grp) : ''), {
             method: 'POST',
             body: fd
         }).then(function (res) {
@@ -3131,7 +3298,8 @@
 
     // 群聊图片广播：发送端本地气泡按 nonce 回填 msg_id（撤回/删除/置顶能力前提），其余用户实时渲染
     IMSocket.on(MSG.GROUP_IMAGE, function (msg) {
-        if (currentChatUser !== '') return; // 不在群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
+        // 阶段一百四十二：多群泛化——按会话归属匹配（旧全局群广播 to_user 空 / 多群 to_user='gN'）
+        if ((msg.to_user || '') !== currentChatUser) return; // 不在对应群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
         // msg_id 去重（并发加固）：多端重复广播、离线补发与广播重叠、
         // 发送端切会话后返回群聊（历史已渲染该图）等场景，防止重复气泡
         // 原实现：无去重，重复投递会渲染重复图片气泡
@@ -3158,7 +3326,8 @@
 
     // 阶段一百三十四：群聊文件广播（对齐 GROUP_IMAGE 处理口径）：nonce 回填/去重/实时渲染
     IMSocket.on(MSG.GROUP_FILE, function (msg) {
-        if (currentChatUser !== '') return; // 不在群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
+        // 阶段一百四十二：多群泛化——按会话归属匹配（旧全局群广播 to_user 空 / 多群 to_user='gN'）
+        if ((msg.to_user || '') !== currentChatUser) return; // 不在对应群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
         if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return; // msg_id 去重
         var meta = {};
         try { meta = JSON.parse(msg.content); } catch (e) {}
@@ -3419,7 +3588,8 @@
         // AI 智能体会话：截图同样走 AI 图片识别链路（/upload/ai/image + AI_CHAT 信封），
         // 与图片按钮一致；原实现直走通用文件链路，AI 不响应文件消息导致截图提问无应答
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) { sendAIImage(shot); return; }
-        if (currentChatUser === '') sendGroupImage(shot);
+        // 阶段一百四十二：多群泛化——多群会话截图同走群图片直传（group 参数归口）
+        if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupImage(shot);
         else sendFile(shot);
     }
 
@@ -3669,7 +3839,8 @@
         var name = '录屏_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
             pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.webm';
         var file = new File([blob], name, { type: 'video/webm' });
-        if (currentChatUser === '') { sendGroupFile(file); return; }
+        // 阶段一百四十二：多群泛化——多群会话录屏同走群文件直传（group 参数归口）
+        if (currentChatUser === '' || isGroupTarget(currentChatUser)) { sendGroupFile(file); return; }
         sendFile(file);
     }
 
@@ -13996,10 +14167,11 @@
             return;
         }
         convList.forEach(function (cv) {
-            var isGroup = cv.target === '';
+            // 阶段一百四十二：多群泛化——多群会话（'gN'）与旧全局群同按群聊口径渲染
+            var isGroup = cv.target === '' || isGroupTarget(cv.target);
             // 原实现：var convName = isGroup ? '群聊' : cv.target; 会话列表只显示用户名，通讯录修改备注后不同步
             // 修复：与通讯录/聊天标题同口径——好友备注优先显示，无备注回退用户名
-            var convName = isGroup ? '群聊' : cv.target;
+            var convName = isGroup ? (cv.target === '' ? '群聊' : groupNameOf(cv.target)) : cv.target;
             if (!isGroup) {
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
                 if (convFriend && convFriend.remark) convName = convFriend.remark;
@@ -14016,7 +14188,8 @@
             var avatar = document.createElement('div');
             avatar.className = 'conv-avatar';
             // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
-            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : convName.charAt(0).toUpperCase();
+            // 阶段一百四十二：多群会话无头像时回退"群"字占位（旧全局群仍走 convName 首字）
+            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : (isGroup && cv.target !== '' ? '群' : convName.charAt(0).toUpperCase());
             if (avatarUrl) {
                 var avatarImg = document.createElement('img');
                 avatarImg.src = avatarUrl;
@@ -14193,12 +14366,14 @@
             }
         });
         if (newFriendsPanel.classList.contains('hidden')) return; // 面板未打开时仅更新角标
-        renderFriendReqList(data.list || []);
+        renderNewFriendsPanel(); // 阶段一百四十二：好友申请 + 群邀请合并渲染入口
     });
 
     // 渲染"新的朋友"申请列表（头像/用户名/验证消息/时间/状态或同意拒绝按钮）
+    // 阶段一百四十二：合并渲染群邀请（groupInvites 缓存，仅展示待处理条目）
     function renderFriendReqList(list) {
-        if (!list.length) {
+        lastFriendReqData = list; // 缓存最近一次好友申请数据（群邀请变动时合并重渲染）
+        if (!list.length && !groupInvites.length) {
             newFriendsListEl.innerHTML = '<div class="new-friends-empty">暂无好友申请</div>';
             return;
         }
@@ -14224,9 +14399,34 @@
                 + '<div class="req-msg">' + (r.message || '请求添加你为好友') + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
                 + '<div class="req-actions">' + right + '</div></div>';
         });
+        // 阶段一百四十二：群邀请行（同 req-item 结构，头像用"群"字占位，status 仅保留待处理故恒显双按钮）
+        groupInvites.forEach(function (r) {
+            var timeStr = r.create_time ? new Date(r.create_time * 1000).toLocaleString() : '';
+            html += '<div class="req-item">'
+                + '<div class="avatar placeholder">群</div>'
+                + '<div class="req-info"><div class="req-name">' + (r.from_name || r.from_user || '?') + '</div>'
+                + '<div class="req-msg">邀请你加入群聊「' + (r.name || '群聊') + '」' + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
+                + '<div class="req-actions">'
+                + '<button class="req-btn primary" data-grp-invite="' + r.invite_id + '" data-grp-act="agree">同意</button>'
+                + '<button class="req-btn" data-grp-invite="' + r.invite_id + '" data-grp-act="reject">拒绝</button>'
+                + '</div></div>';
+        });
         newFriendsListEl.innerHTML = html;
         newFriendsListEl.querySelectorAll('.req-btn').forEach(function (btn) {
             btn.addEventListener('click', function () {
+                // 阶段一百四十二：群邀请同意/拒绝（76 响应帧，服务端归口后经 73/77 同步状态）
+                var gid = this.getAttribute('data-grp-invite');
+                if (gid !== null) {
+                    var act = this.getAttribute('data-grp-act');
+                    IMSocket.send({
+                        msg_type: MSG.GROUP_INVITE_RESP,
+                        content: JSON.stringify({ invite_id: Number(gid), accept: act === 'agree' })
+                    });
+                    // 本地先行移除该邀请（服务端同步与 toast 随后到达，避免重复展示）
+                    groupInvites = groupInvites.filter(function (x) { return String(x.invite_id) !== gid; });
+                    renderNewFriendsPanel();
+                    return;
+                }
                 IMSocket.send({
                     msg_type: MSG.FRIEND_REQUEST_RESP,
                     to_user: this.getAttribute('data-req-from'),
@@ -14256,6 +14456,278 @@
         showToast(msg.from_user + (msg.content === 'agree' ? ' 已同意你的好友申请' : ' 已拒绝你的好友申请'));
     });
 
+    // ===== 阶段一百四十二：多群聊一期（微信同款建群/邀请/多群收发，群数据 73 服务端归口） =====
+    // 群状态归口：groupMap 由 GROUP_LIST_SYNC(73) 全量下发维护（登录同步 + 变更后重推）；
+    // groupInvites 缓存待处理群邀请（GROUP_INVITE_NOTICE(75) 推送），处理完成后经 77 移除
+    var groupMap = {};        // group_id -> {group_id,name,avatar,owner,member_count,members,create_time}
+    var groupInvites = [];    // 待处理群邀请缓存（invite_id 去重）
+    var lastFriendReqData = null; // 好友申请列表最近一次数据（群邀请合并渲染复用）
+
+    // 会话目标判定：'gN' 形式为多群会话（旧全局群 target 为 ''，不受影响零回归）
+    function isGroupTarget(t) { return !!t && /^g[0-9]+$/.test(String(t)); }
+    function groupIdFromTarget(t) { return parseInt(String(t).slice(1), 10) || 0; }
+    function groupOfId(gid) { return groupMap[String(gid)] || null; }
+    function groupNameOf(t) { var g = groupOfId(groupIdFromTarget(t)); return (g && g.name) ? g.name : '群聊'; }
+    function isGroupOwner(t) { var g = groupOfId(groupIdFromTarget(t)); return !!g && g.owner === IMSocket.getUsername(); }
+
+    // "新的朋友"面板统一渲染入口：好友申请（41 列表）+ 群邀请（75 缓存）合并
+    function renderNewFriendsPanel() {
+        renderFriendReqList(lastFriendReqData || []);
+    }
+
+    // 群列表同步：服务端归口全量下发，重建映射后刷新会话列表/通讯录/标题各处渲染
+    IMSocket.on(MSG.GROUP_LIST_SYNC, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data || !data.groups) return;
+        var nm = {};
+        data.groups.forEach(function (g) { nm[String(g.group_id)] = g; });
+        groupMap = nm;
+        renderConvList();
+        renderFriendList();
+        updateChatTitle();
+    });
+
+    // 建群响应：提示（群条目随后经 73 全量同步上列表）
+    IMSocket.on(MSG.GROUP_CREATE_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        showToast('已创建群聊「' + (data.name || '群聊') + '」');
+    });
+
+    // 群邀请通知：缓存待处理邀请；"新的朋友"面板打开时同步合并渲染
+    IMSocket.on(MSG.GROUP_INVITE_NOTICE, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data || !data.invite_id) return;
+        for (var i = 0; i < groupInvites.length; i++) {
+            if (groupInvites[i].invite_id === data.invite_id) return; // msg_id 去重（离线补推/重复广播）
+        }
+        groupInvites.push(data);
+        showToast((data.from_name || data.from_user || '有人') + ' 邀请你加入群聊「' + (data.name || '群聊') + '」');
+        if (!newFriendsPanel.classList.contains('hidden')) renderNewFriendsPanel();
+    });
+
+    // 群成员变更通知：create=建群成功 / join=入群成功 / reject=邀请被拒（仅自己名义回执）
+    // 带 invite_id 的通知（join/reject）同步从待处理缓存移除该邀请
+    IMSocket.on(MSG.GROUP_MEMBER_NOTICE, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (data.action === 'create') {
+            showToast('已创建群聊');
+        } else if (data.action === 'join') {
+            showToast('你已加入群聊「' + (data.name || '群聊') + '」');
+        } else if (data.action === 'reject') {
+            if (msg.from_user !== IMSocket.getUsername()) return; // 只收服务端以自己名义推送的拒绝回执
+            showToast((data.from_name || '对方') + ' 已拒绝你的邀请');
+        }
+        if (data.invite_id) {
+            var remain = groupInvites.filter(function (x) { return x.invite_id !== data.invite_id; });
+            if (remain.length !== groupInvites.length) {
+                groupInvites = remain;
+                if (!newFriendsPanel.classList.contains('hidden')) renderNewFriendsPanel();
+            }
+        }
+    });
+
+    // ===== 建群/邀请成员多选弹窗（微信 PC 同款双栏布局：左栏候选列表/右栏已选列表，自研弹窗禁用系统弹窗） =====
+    // mode=create：发起群聊（显示群名输入框，至少选 1 人发 71）/ mode=invite：邀请入群（发 74）
+    var grpMask = document.getElementById('grp-mask');
+    var grpTitle = document.getElementById('grp-title');
+    var grpName = document.getElementById('grp-name');
+    var grpSearch = document.getElementById('grp-search');
+    var grpListEl = document.getElementById('grp-list');
+    var grpSelListEl = document.getElementById('grp-sel-list'); // 右栏已选联系人列表
+    var grpCount = document.getElementById('grp-count');        // 右栏"已选择N个联系人"计数
+    var grpOk = document.getElementById('grp-ok');
+    var grpCancel = document.getElementById('grp-cancel');
+    var grpMode = 'create'; // 当前弹窗模式
+    var grpTargetGroup = 0; // invite 模式的目标群 ID
+    var grpSelected = {};   // 已勾选好友集合 username -> true
+    var grpSelOrder = [];   // 已选顺序（右栏按选择先后排列，微信同款）
+
+    function openGroupPicker(mode, groupId) {
+        grpMode = mode;
+        grpTargetGroup = groupId || 0;
+        grpSelected = {};
+        grpSelOrder = [];
+        grpTitle.textContent = mode === 'create' ? '发起群聊' : '邀请成员';
+        grpName.classList.toggle('hidden', mode !== 'create'); // 邀请模式隐藏群名输入框
+        if (mode === 'create') grpName.value = '';
+        grpSearch.value = '';
+        grpOk.disabled = true;
+        grpMask.classList.remove('hidden');
+        renderGroupPickList('');
+        renderGrpSelected();
+    }
+
+    function closeGroupPicker() {
+        grpMask.classList.add('hidden');
+        grpSelected = {};
+        grpSelOrder = [];
+    }
+
+    // 右栏已选列表渲染：头像 + 昵称 + × 移除按钮；计数"已选择N个联系人"（微信同款）
+    function renderGrpSelected() {
+        grpCount.textContent = grpSelOrder.length ? ('已选择' + grpSelOrder.length + '个联系人') : '';
+        if (!grpSelOrder.length) {
+            grpSelListEl.innerHTML = '<div class="grp-empty">' + (grpMode === 'create' ? '在左侧选择联系人' : '在左侧选择要邀请的好友') + '</div>';
+            return;
+        }
+        grpSelListEl.innerHTML = '';
+        grpSelOrder.forEach(function (u) {
+            var f = null;
+            for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === u) { f = friendList[i]; break; } }
+            var disp = f ? ((f.remark || '').trim() || (nickCache[u] || '').trim() || u) : u;
+            var item = document.createElement('div');
+            item.className = 'grp-sel-item';
+            if (f && f.avatar) {
+                var av = document.createElement('img');
+                av.src = f.avatar;
+                item.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'grp-sel-ph';
+                ph.textContent = (disp || '?').charAt(0).toUpperCase();
+                item.appendChild(ph);
+            }
+            var nm = document.createElement('div');
+            nm.className = 'grp-sel-name';
+            nm.textContent = disp;
+            item.appendChild(nm);
+            var x = document.createElement('button');
+            x.className = 'grp-sel-x';
+            x.type = 'button';
+            x.textContent = '×';
+            x.title = '移除';
+            x.addEventListener('click', function () {
+                toggleGrpPick(u, false); // 右栏移除与左栏取消勾选同源，双向同步
+            });
+            item.appendChild(x);
+            grpSelListEl.appendChild(item);
+        });
+    }
+
+    // 勾选状态切换（左栏点击勾选 / 右栏 × 移除共用），双向同步两侧列表与完成按钮态
+    function toggleGrpPick(u, on) {
+        if (on) {
+            if (grpSelected[u]) return;
+            grpSelected[u] = true;
+            grpSelOrder.push(u);
+        } else {
+            if (!grpSelected[u]) return;
+            delete grpSelected[u];
+            grpSelOrder = grpSelOrder.filter(function (x) { return x !== u; });
+        }
+        grpOk.disabled = grpSelOrder.length < 1;
+        // 同步左栏勾选框（仅翻勾选态保留滚动位置；特殊字符用户名选择器失败时降级全量重渲染）
+        var row = null;
+        try { row = grpListEl.querySelector('.grp-item[data-user="' + CSS.escape(u) + '"]'); } catch (e) { row = null; }
+        if (row) row.classList.toggle('picked', !!grpSelected[u]);
+        else renderGroupPickList(grpSearch.value.trim().toLowerCase());
+        renderGrpSelected();
+    }
+
+    // 候选渲染（左栏）：仅好友（排除 AI 智能体）；invite 模式排除已在群内成员（服务端会拒绝，前端先行过滤）；
+    // 微信同款按显示名首字符分组（节头取首字符，localeCompare 中文拼音序），圆形勾选框多选
+    function renderGroupPickList(kw) {
+        kw = (kw || '').toLowerCase();
+        grpListEl.innerHTML = '';
+        var inGroup = {};
+        if (grpMode === 'invite') {
+            var g = groupOfId(grpTargetGroup);
+            if (g && g.members) g.members.forEach(function (u) { inGroup[u] = true; });
+        }
+        var cands = [];
+        friendList.forEach(function (f) {
+            if (isAIAgent(f.username)) return;
+            if (inGroup[f.username]) return;
+            var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
+            if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) return;
+            cands.push({ f: f, disp: disp });
+        });
+        cands.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
+        if (!cands.length) {
+            grpListEl.innerHTML = '<div class="grp-empty">' + (kw ? '无匹配联系人' : '无可选好友') + '</div>';
+            return;
+        }
+        var lastLetter = null;
+        cands.forEach(function (c) {
+            var letter = (c.disp.charAt(0) || '#').toUpperCase();
+            if (letter !== lastLetter) {
+                lastLetter = letter;
+                var hd = document.createElement('div');
+                hd.className = 'grp-letter';
+                hd.textContent = letter;
+                grpListEl.appendChild(hd);
+            }
+            var item = document.createElement('div');
+            item.className = 'grp-item';
+            item.setAttribute('data-user', c.f.username);
+            if (grpSelected[c.f.username]) item.classList.add('picked');
+            var chk = document.createElement('span');
+            chk.className = 'grp-check';
+            chk.textContent = '✓';
+            item.appendChild(chk);
+            if (c.f.avatar) {
+                var av = document.createElement('img');
+                av.className = 'fwd-avatar';
+                av.src = c.f.avatar;
+                item.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'fwd-avatar-ph';
+                ph.textContent = (c.disp || '?').charAt(0).toUpperCase();
+                item.appendChild(ph);
+            }
+            var nm = document.createElement('div');
+            nm.className = 'fwd-name';
+            nm.textContent = c.disp;
+            item.appendChild(nm);
+            item.addEventListener('click', function () {
+                toggleGrpPick(c.f.username, !grpSelected[c.f.username]);
+            });
+            grpListEl.appendChild(item);
+        });
+    }
+
+    grpOk.addEventListener('click', function () {
+        var keys = grpSelOrder.slice(); // 按右栏已选顺序提交（与展示一致）
+        if (keys.length < 1) return;
+        if (grpMode === 'create') {
+            IMSocket.send({
+                msg_type: MSG.GROUP_CREATE,
+                content: JSON.stringify({ name: (grpName.value || '').trim(), members: keys })
+            });
+        } else {
+            IMSocket.send({
+                msg_type: MSG.GROUP_INVITE,
+                content: JSON.stringify({ group_id: grpTargetGroup, members: keys })
+            });
+        }
+        closeGroupPicker();
+    });
+    grpCancel.addEventListener('click', closeGroupPicker);
+    grpMask.addEventListener('click', function (e) {
+        if (e.target === grpMask) closeGroupPicker(); // 点遮罩关闭（未提交无副作用）
+    });
+    grpSearch.addEventListener('input', function () {
+        renderGroupPickList(grpSearch.value.trim().toLowerCase());
+    });
+
+    // 入口绑定：好友面板"发起群聊" + 群会话标题栏"邀请成员"（仅群主可见，显隐归口 updateChatTitle）
+    var grpCreateEntry = document.getElementById('grp-create-entry');
+    if (grpCreateEntry) grpCreateEntry.addEventListener('click', function () {
+        openGroupPicker('create', 0);
+    });
+    var grpInviteBtn = document.getElementById('grp-invite-btn');
+    if (grpInviteBtn) grpInviteBtn.addEventListener('click', function () {
+        if (!isGroupTarget(currentChatUser)) return;
+        openGroupPicker('invite', groupIdFromTarget(currentChatUser));
+    });
+
     // 上下线通知：更新好友在线状态
     IMSocket.on(MSG.ONLINE, function (msg) {
         var f = friendList.find(function (x) { return x.username === msg.from_user; });
@@ -14268,7 +14740,9 @@
         }
         // 阶段二十七：归属校验——上下线提示仅群聊视图显示全部成员，私聊视图仅显示会话对方，
         // 原实现：无校验，任何人的上下线提示都渲染进当前打开的无关会话，切换会话后提示消失（串窗）
-        if (currentChatUser !== '' && msg.from_user !== currentChatUser) return;
+        // 阶段一百四十二：多群泛化——全局群/多群会话视图均显示全部成员上下线
+        var grpConv = currentChatUser === '' || isGroupTarget(currentChatUser);
+        if (!grpConv && msg.from_user !== currentChatUser) return;
         appendSystem(msg.from_user + (msg.content === 'online' ? ' 上线了' : ' 下线了'));
     });
 
@@ -14276,7 +14750,8 @@
     IMSocket.on(MSG.GROUP_CHAT, function (msg) {
         // 阶段二十七：归属校验——群聊消息仅在群聊视图渲染（与 GROUP_IMAGE 处理口径一致），
         // 原实现：无校验，私聊视图打开时收到的群聊消息被串入当前窗口，切换会话后"消失"
-        if (currentChatUser !== '') return;
+        // 阶段一百四十二：多群泛化——旧全局群广播 to_user 为空，多群广播 to_user='gN'，统一按会话归属匹配
+        if ((msg.to_user || '') !== currentChatUser) return;
         // 阶段八十五：先合并服务端下发的发送者昵称（服务端归口），再渲染名称标签（备注→昵称→账号）
         if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
         var isMine = msg.from_user === IMSocket.getUsername();
@@ -14901,7 +15376,7 @@
         records.forEach(function (r) {
             if (r.from_user !== IMSocket.getUsername() && r.id > maxId) maxId = r.id;
         });
-        if (maxId && currentChatUser !== '') {
+        if (maxId && currentChatUser !== '' && !isGroupTarget(currentChatUser)) {
             // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: currentChatUser, content: String(maxId) });
             sendReadReceipt(currentChatUser, maxId);
         }
@@ -14932,8 +15407,8 @@
             return;
         }
         var ts = Math.floor(new Date(r.create_time).getTime() / 1000) || 0;
-        // 私聊消息显示已读/未读状态，群聊不显示
-        var isPrivate = !!r.to_user;
+        // 私聊消息显示已读/未读状态，群聊不显示（阶段一百四十二：多群 'gN' 会话同按群聊口径）
+        var isPrivate = !!r.to_user && !isGroupTarget(r.to_user);
         // 原实现：仅按服务端 is_read 渲染；对方已读回执可能先于会话打开到达（当时未在会话内被丢弃），
         // 现叠加本地已读水位即时应用：自己发送的私聊消息若已被读到更大 ID 则直接显示"已读"
         var wm = (isMine && isPrivate) ? (readWatermark[r.to_user] || 0) : 0;
@@ -15469,6 +15944,14 @@
     function renderFriendList() {
         var html = '<li class="user-item group-item' + (currentChatUser === '' ? ' active' : '') + '" data-user="">群聊</li>';
 
+        // 阶段一百四十二：多群会话条目（按群 ID 升序，点击进入群会话；条目文本式，无头像/右键菜单）
+        var gids = Object.keys(groupMap).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
+        gids.forEach(function (gk) {
+            var g = groupMap[gk];
+            html += '<li class="user-item group-item' + (currentChatUser === 'g' + g.group_id ? ' active' : '') + '" data-user="g' + g.group_id + '">'
+                + (g.name || '群聊') + '（' + (g.member_count || 0) + '人）</li>';
+        });
+
         // 在线好友在前，离线在后
         var sorted = friendList.slice().sort(function (a, b) {
             return (b.online ? 1 : 0) - (a.online ? 1 : 0);
@@ -15499,18 +15982,18 @@
             item.addEventListener('click', function () {
                 openConversation(this.getAttribute('data-user'));
             });
-            // 阶段三十：点击好友列表头像弹出微信式资料卡（群聊条目除外）
+            // 阶段三十：点击好友列表头像弹出微信式资料卡（群聊条目除外；多群条目文本式无 .avatar 节点，防御性排除）
             var target = item.getAttribute('data-user');
             var avatarNode = item.querySelector('.avatar');
-            if (target && avatarNode) {
+            if (target && avatarNode && !isGroupTarget(target)) {
                 avatarNode.style.cursor = 'pointer';
                 avatarNode.addEventListener('click', function (e) {
                     e.stopPropagation(); // 阻止触发整行的打开会话
                     openFriendCard(target);
                 });
             }
-            // 好友右键菜单（群聊不显示）
-            if (target !== '') {
+            // 好友右键菜单（群聊条目不显示；阶段一百四十二：多群条目同排除）
+            if (target !== '' && !isGroupTarget(target)) {
                 item.addEventListener('contextmenu', function (e) {
                     e.preventDefault();
                     menuTarget = target;
@@ -15698,6 +16181,11 @@
         if (currentChatUser === '') {
             chatTitle.textContent = '群聊';
             chatStatus.textContent = '';
+        } else if (isGroupTarget(currentChatUser)) {
+            // 阶段一百四十二：多群会话标题（群名 + 成员数，服务端 73 归口；无数据降级"群聊"）
+            var grp = groupOfId(groupIdFromTarget(currentChatUser));
+            chatTitle.textContent = grp ? (grp.name || '群聊') : '群聊';
+            chatStatus.textContent = grp ? ((grp.member_count || 0) + '人') : '';
         } else if (isAIAgent(currentChatUser)) {
             // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
             chatTitle.textContent = currentChatUser;
@@ -15721,9 +16209,12 @@
         // 阶段一百四十一：语音/视频通话按钮显隐——仅 PC 端私聊真实用户会话显示
         //（AI 会话/群聊隐藏；Web/手机端无 desktop 桥恒隐藏，被叫能力由服务端 hub.HasPC 归口判定）
         var callSupported = !!(window.desktop && window.desktop.callOpen);
-        var callVisible = callSupported && currentChatUser !== '' && !isAIAgent(currentChatUser);
+        var callVisible = callSupported && currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser);
         if (voiceCallBtn) voiceCallBtn.classList.toggle('hidden', !callVisible);
         if (videoCallBtn) videoCallBtn.classList.toggle('hidden', !callVisible);
+        // 阶段一百四十二：邀请成员按钮显隐——仅群主在多群会话中可见
+        var grpInvBtn = document.getElementById('grp-invite-btn');
+        if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !(isGroupTarget(currentChatUser) && isGroupOwner(currentChatUser)));
     }
 
     // ===== 消息渲染 =====
@@ -18069,10 +18560,14 @@
         // 面板初始带 hidden 但 DOM 常驻，启动时可直接注册，滚轮/悬停行为与其余面板一致）
         // 阶段一百零五：追加设置页规则/记忆列表 #settings-rule-list/#settings-mem-list
         // （同坑：TRAE 版设置页直管列表，DOM 静态常驻但未注册导致限高可滚却不显示滑块，2026-09-13 用户反馈）
-        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list']
+        // 阶段一百四十二：追加 .fwd-list（弹窗限高列表公共类：转发 #fwd-list / 发起群聊与邀请 #grp-list
+        // 共用；用 class 选择器命中全部实例，DOM 静态常驻于 hidden 弹窗内，启动时直接注册，
+        // 打开后悬停浮现自绘滑块，与新 friends-list 同模式；initOsb 幂等防重复挂载）
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list']
             .forEach(function (sel) {
-                var el = document.querySelector(sel);
-                if (el) initOsb(el);
+                // 阶段一百四十二：querySelectorAll 全量挂载——querySelector 只命中首个实例，
+                // 会漏掉同选择器的后续元素（如 .fwd-list 同时存在于转发 #fwd-list 与建群/邀请 #grp-list）
+                document.querySelectorAll(sel).forEach(function (el) { initOsb(el); });
             });
         // 阶段七十六：暴露给动态创建的滚动容器挂自绘滑块（Agent 工作区文件树/预览区/编辑 textarea）
         window._osbInit = initOsb;

@@ -220,6 +220,13 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段一百四十一：音视频通话信令（invite/accept/reject/cancel/hangup + WebRTC 媒体中继，话单服务端归口）
 	case protocol.MsgTypeCallSignal:
 		s.HandleCallSignal(c, msg)
+	// 阶段一百四十二：微信同款多群聊信令（建群 / 邀请入群 / 邀请响应）
+	case protocol.MsgTypeGroupCreate:
+		s.handleGroupCreate(c, msg)
+	case protocol.MsgTypeGroupInvite:
+		s.handleGroupInvite(c, msg)
+	case protocol.MsgTypeGroupInviteResp:
+		s.handleGroupInviteResp(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -302,6 +309,10 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	s.pushPendingRequests(c)
 	s.pushBlacklist(c)
 	s.ensureGroupConv(user.Username)
+	// 阶段一百四十二：登录推送群列表全量同步（前端 groupMap 归口）+ 补推登录前待处理的群邀请
+	// （与好友申请 pushPendingRequests 同款防重复策略：仅补推登录前存在的邀请）
+	s.sendGroupListSync(user.Username)
+	s.pushPendingGroupInvites(c)
 	s.pushConvList(c)
 	s.pushPinList(c)
 	// 阶段七十二：补推与我相关的未处理永久删除审批卡片（离线审批不丢失）
@@ -391,6 +402,13 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	if word, ok := containsSensitive(msg.Content); ok {
 		s.sendError(c, "消息包含敏感词，已拦截")
 		logger.Warn("敏感词拦截：%s 群聊消息包含 '%s'", c.username, word)
+		return
+	}
+
+	// 阶段一百四十二：多群聊分流——to_user='gN' 走群成员定向广播（前置分流，不进全局群 @AI 唤醒分支）；
+	// 原实现：无多群分流，to_user 恒为空
+	if groupID, ok := isGroupTarget(msg.ToUser); ok {
+		s.handleMultiGroupChat(c, msg, groupID)
 		return
 	}
 
@@ -630,13 +648,17 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		query = query.Where("id NOT IN ?", delIDs)
 	}
 
-	if msg.ToUser == "" {
+	// 阶段一百四十二：多群聊历史归口——to_user='gN' 按群过滤（原写死的 '' 参数化，全局群传空串行为不变）；
+	// 原实现：仅支持全局群 to_user = ''
+	_, isGroup := isGroupTarget(msg.ToUser)
+	if msg.ToUser == "" || isGroup {
 		// 群聊历史
 		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：query.Where("msg_type = ?", 1)
 		// 阶段一百三十五：纳入群聊文件消息(5)——sendGroupFile 落库 msg_type=5 且 to_user 为空，
 		// 原查询只含 (1,4) 导致群聊文件实时广播可见、重新登录后历史查询丢失（用户实测反馈）
-		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 5})
+		// 阶段一百四十二：to_user 参数化——''=全局群，'gN'=指定群
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"regexp"
 	"strings"
 
 	"im-server/model"
@@ -22,14 +23,21 @@ var ErrUserNotFound = errors.New("用户名不存在")
 // ErrEmptyUsername 用户名为空
 var ErrEmptyUsername = errors.New("用户名不能为空")
 
-// ErrEmptyPassword 密码为空
+// ErrEmptyPassword 密码不能为空
 var ErrEmptyPassword = errors.New("密码不能为空")
+
+// ErrReservedUsername 保留字用户名（阶段一百四十二：'g'+数字 形式为群聊会话专用编码，
+// 注册占用会造成用户会话与群会话目标歧义，故拒绝注册；存量用户不受影响，群 target 解析只查 im_group 表）
+var ErrReservedUsername = errors.New("该用户名不可用")
+
+// reservedUsernameRe 保留字用户名规则：g 开头跟纯数字（如 g1、g123），与群会话 target 编码 'g'+群ID 同形
+var reservedUsernameRe = regexp.MustCompile(`^g[0-9]+$`)
 
 // isAuthBusinessError 判定登录/注册链路的业务校验错误（可直接下发客户端展示）：
 // 底层依赖错误（MySQL/Redis 连接异常等，如 invalid connection）不属于业务错误，
 // 由调用方统一下发通用中文提示，完整错误仅记日志，避免英文底层错误暴露给客户端
 func isAuthBusinessError(err error) bool {
-	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword
+	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername
 }
 
 // hashPassword 密码加密（SHA256）
@@ -46,6 +54,11 @@ func registerUser(username, password string) (*model.User, error) {
 	}
 	if password == "" {
 		return nil, ErrEmptyPassword
+	}
+	// 阶段一百四十二：保留字拦截——'g'+数字 形式与群聊会话 target 编码同形，拒绝注册
+	// 原实现：无保留字校验，用户可注册 g1 造成用户会话与群会话目标歧义
+	if reservedUsernameRe.MatchString(username) {
+		return nil, ErrReservedUsername
 	}
 
 	var count int64

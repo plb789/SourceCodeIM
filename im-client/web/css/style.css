@@ -2245,7 +2245,7 @@ html, body {
     color: var(--text);
 }
 
-/* 申请列表容器：复用全局自定义滚动条 */
+/* 申请列表容器：走启动时统一挂载的自绘悬浮滑块（.osb-thumb，悬停浮现可拖拽），原生条保持全局禁用 */
 .new-friends-list {
     max-height: 320px;
     overflow-y: auto;
@@ -8930,7 +8930,7 @@ html.m #friend-menu {
 
 .fwd-list {
     max-height: 300px;
-    overflow-y: auto;
+    overflow-y: auto; /* 弹窗列表走自绘悬浮滑块（启动时统一注册，见 chat.js initOsb 挂载列表），原生条保持全局禁用 */
     margin: 10px 0 2px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -8952,6 +8952,389 @@ html.m #friend-menu {
 
 .fwd-item:hover {
     background: var(--hover);
+}
+
+/* 阶段一百四十二：建群/邀请多选弹窗勾选态（左侧主色条 + 主色对勾角标，跟随主题色变化） */
+.fwd-item.picked {
+    background: var(--hover);
+    box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.fwd-item.picked::after {
+    content: '✓';
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary);
+    color: #fff;
+    font-size: 12px;
+    border-radius: 50%;
+    margin-left: 4px;
+}
+
+/* ===== 阶段一百四十二：建群/邀请弹窗微信 PC 同款双栏布局（左候选右已选，主题变量归口） ===== */
+.grp-box {
+    width: 720px;
+    max-width: 92vw;
+    height: 560px;
+    max-height: 88vh;
+    padding: 0;
+    overflow: hidden;
+}
+
+.grp-cols {
+    display: flex;
+    height: 100%;
+}
+
+/* 左栏：群名输入 + 圆角搜索框 + 字母分组候选列表 */
+.grp-left {
+    flex: 1.15;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+    border-right: 1px solid var(--border);
+}
+
+.grp-name-input {
+    margin-bottom: 10px;
+}
+
+.grp-search-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.grp-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-light);
+    pointer-events: none;
+}
+
+.grp-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 10px 7px 32px;
+    border: none;
+    border-radius: 6px;
+    background: var(--hover);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+.grp-search-input::placeholder {
+    color: var(--text-light);
+}
+
+/* 候选列表：去掉 fwd-list 的描边/外距/限高，撑满左栏剩余高度贴底（自绘悬浮滑块沿用） */
+.grp-cand-list {
+    flex: 1;
+    min-height: 0;
+    max-height: none; /* 覆盖 .fwd-list 的 max-height:300px——双栏内改由 flex 分配高度，否则列表卡在 300px 导致底部空白 */
+    margin: 8px 0 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
+/* 候选行：圆形勾选框 + 头像 + 昵称 */
+.grp-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.grp-item:hover {
+    background: var(--hover);
+}
+
+.grp-check {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    border: 1.5px solid var(--text-light);
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+    font-size: 12px;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.grp-item.picked .grp-check {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* 字母分节头（微信同款按首字符分组） */
+.grp-letter {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 8px 8px 4px;
+}
+
+/* 右栏：标题 + 计数 + 已选列表 + 底部按钮 */
+.grp-right {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+}
+
+.grp-right-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.grp-right-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.grp-count {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: nowrap;
+}
+
+/* 已选列表：去 fwd-list 描边/限高，撑满右栏剩余高度使底部按钮贴底（自绘悬浮滑块沿用） */
+.grp-sel-list {
+    flex: 1;
+    min-height: 0;
+    max-height: none; /* 覆盖 .fwd-list 的 max-height:300px——否则列表卡在 300px，取消/完成按钮上方留白不贴底 */
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+}
+
+.grp-sel-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.grp-sel-item:hover {
+    background: var(--hover);
+}
+
+.grp-sel-ph {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.grp-sel-item img {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    object-fit: cover;
+}
+
+.grp-sel-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 移除按钮：灰色 × 圆钮，hover 高亮 */
+.grp-sel-x {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.grp-sel-x:hover {
+    background: var(--danger, #e64340);
+    color: #fff;
+}
+
+.grp-empty {
+    text-align: center;
+    color: var(--text-light);
+    font-size: 13px;
+    padding: 26px 0;
+}
+
+.grp-btns {
+    justify-content: center;
+    padding-top: 10px;
+    flex-shrink: 0;
+}
+
+/* ===== 阶段一百四十二：转发弹窗微信同款扩展（已选头像网格 + 待转发内容预览卡片，复用 grp 双栏骨架） ===== */
+/* 已选区：微信同款横向头像网格（头像 + 名字 + 右上角移除圆点） */
+.fwd-sel-grid {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-content: flex-start;
+}
+
+.fwd-sel-cell {
+    position: relative;
+    width: 56px;
+    text-align: center;
+}
+
+.fwd-sel-cell img,
+.fwd-sel-cell .grp-sel-ph {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+.fwd-sel-cell .grp-sel-ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    font-size: 16px;
+}
+
+.fwd-sel-cell-name {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 移除圆点：微信同款头像右上角小 ×，hover 高亮 */
+.fwd-sel-x {
+    position: absolute;
+    top: -5px;
+    right: 4px;
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.fwd-sel-x:hover {
+    background: var(--danger, #e64340);
+    color: #fff;
+}
+
+/* 待转发内容预览卡片：微信同款消息气泡缩样（文字摘要/文件名 + 类型标识），贴底与按钮同区 */
+.fwd-preview {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-bg);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    max-width: 100%;
+}
+
+.fwd-preview.hidden {
+    display: none;
+}
+
+.fwd-preview img {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    object-fit: cover;
+}
+
+/* 文件/聊天记录类型标识块：圆角色块内放扩展名/类型缩写 */
+.fwd-preview-badge {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fwd-preview-info {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+}
+
+.fwd-preview-name {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+}
+
+.fwd-preview-sub {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 2px;
 }
 
 .fwd-avatar {
