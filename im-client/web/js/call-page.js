@@ -365,7 +365,7 @@
         btnMute.classList.remove('active'); btnCam.classList.remove('active');
         btnMute.classList.remove('dev-off'); btnCam.classList.remove('dev-off');
         btnMute.disabled = false; btnCam.disabled = false; btnShare.disabled = false;
-        btnMute.title = '静音'; btnCam.title = '关闭摄像头';
+        btnMute.title = '静音'; btnCam.title = '关闭摄像头'; btnShare.title = '共享屏幕';
         document.body.classList.remove('cam-off', 'cam-dead');
         elMask.classList.remove('visible');
     }

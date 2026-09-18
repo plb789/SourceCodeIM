@@ -9211,10 +9211,14 @@ html.m #friend-menu {
 .meet-box {
     width: 380px;
     height: 520px;
+    display: flex; /* 单栏未经 .grp-cols 包裹（无 height:100% 的 flex 父级），改由弹窗自身分配高度：
+                      否则栏体高度塌陷/溢出，底部按钮不贴底或被 overflow 裁掉 */
 }
 
 .meet-single {
     border-right: none;
+    flex: 1;         /* 撑满 meet-box（原 flex:1.15 在 block 父级无效） */
+    min-height: 0;   /* 允许候选列表 flex 收缩，窗口矮（max-height:88vh）时按钮仍贴底 */
 }
 
 .meet-single .grp-right-head {
