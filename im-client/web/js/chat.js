@@ -16304,21 +16304,232 @@
     if (voiceCallBtn) voiceCallBtn.addEventListener('click', function () { startCall('audio'); });
     if (videoCallBtn) videoCallBtn.addEventListener('click', function () { startCall('video'); });
 
+    // ===== 阶段一百四十四：群内多人音视频会议（Mesh 架构 3-8 人，一期 PC 端） =====
+    // 职责划分：本模块只做"发起入口 + 选人弹窗 + 信令桥接"——
+    //   1. 发起入口：群会话工具栏"会议"按钮 → 选人弹窗 → callOpen({meet:true}) 开会议窗 → meet_invite 上行
+    //   2. 入会/拒绝：沿用响铃条（meet 文案），接受后开会议窗回 meet_accept，服务端下发 room_info 建 Mesh
+    //   3. 会中邀请：会议窗经主进程桥 meetInviteAsk 回流本窗口弹同款选人弹窗，上行 meet_invite（服务端识别
+    //      已有房间走追加邀请路径）；已在会成员由会议窗回传过滤
+    // 媒体面全部在会议窗（call-page.js Mesh 建连 + 桌面共享），本模块不解析 SDP
+    var meetBtn = document.getElementById('meet-btn');
+    var meetMask = document.getElementById('meet-mask');
+    var meetTitle = document.getElementById('meet-title');
+    var meetSearch = document.getElementById('meet-search');
+    var meetListEl = document.getElementById('meet-list');
+    var meetCount = document.getElementById('meet-count');
+    var meetAudioBtn = document.getElementById('meet-ok-audio');
+    var meetVideoBtn = document.getElementById('meet-ok-video');
+    var meetCancelBtn = document.getElementById('meet-cancel');
+    var meetPickMode = 'create'; // create=发起会议 / invite=会中邀请
+    var meetPickSel = {};        // 已勾选成员 username -> true
+    var meetPickOrder = [];      // 已勾选顺序（提交按此顺序）
+    var meetPickTask = null;     // invite 模式任务数据（会议窗经主进程桥回传：{call_id, call_type, group_id, members}）
+
+    // 会议人数上限：服务端 meetMaxMembers=8 含发起人；create 可选 7 人，invite 按会议余量动态收紧
+    function meetPickLimit() {
+        if (meetPickMode !== 'invite' || !meetPickTask) return 7;
+        return Math.max(0, 8 - ((meetPickTask.members || []).length + 1));
+    }
+
+    // 打开会议选人弹窗（群成员多选，微信同款；invite 模式过滤已在会成员，仅一个"邀请"按钮）
+    function openMeetPicker(mode, task) {
+        if (!meetMask) return;
+        meetPickMode = mode;
+        meetPickTask = task || null;
+        meetPickSel = {};
+        meetPickOrder = [];
+        meetTitle.textContent = mode === 'create' ? '发起会议' : '邀请成员加入会议';
+        meetAudioBtn.classList.toggle('hidden', mode !== 'create');
+        meetVideoBtn.textContent = mode === 'create' ? '视频会议' : '邀请';
+        meetSearch.value = '';
+        meetMask.classList.remove('hidden');
+        renderMeetPickList('');
+    }
+
+    function closeMeetPicker() {
+        meetMask.classList.add('hidden');
+        meetPickSel = {};
+        meetPickOrder = [];
+        meetPickTask = null;
+    }
+
+    function updateMeetBtns() {
+        var n = meetPickOrder.length;
+        var disabled = n < 1 || n > meetPickLimit();
+        meetAudioBtn.disabled = disabled;
+        meetVideoBtn.disabled = disabled;
+        meetCount.textContent = n ? '已选择' + n + '个成员' : '';
+    }
+
+    // 勾选切换（超员拦截：Mesh 架构每人上行 N-1 路，控制规模保流畅）
+    function toggleMeetPick(u, on) {
+        if (on) {
+            if (meetPickSel[u]) return;
+            if (meetPickOrder.length >= meetPickLimit()) {
+                showToast('会议成员最多 8 人（含发起人）');
+                return;
+            }
+            meetPickSel[u] = true;
+            meetPickOrder.push(u);
+        } else {
+            if (!meetPickSel[u]) return;
+            delete meetPickSel[u];
+            meetPickOrder = meetPickOrder.filter(function (x) { return x !== u; });
+        }
+        // 同步列表勾选态（仅翻勾选态保留滚动位置；选择器失败时降级全量重渲染）
+        var row = null;
+        try { row = meetListEl.querySelector('.grp-item[data-user="' + CSS.escape(u) + '"]'); } catch (e) { row = null; }
+        if (row) row.classList.toggle('picked', !!meetPickSel[u]);
+        else renderMeetPickList(meetSearch.value.trim().toLowerCase());
+        updateMeetBtns();
+    }
+
+    // 候选渲染（复用建群弹窗 grp-item/grp-check 样式）：群成员列表排除自己；invite 模式排除已在会成员
+    function renderMeetPickList(kw) {
+        kw = (kw || '').toLowerCase();
+        meetListEl.innerHTML = '';
+        var gid = (meetPickMode === 'invite' && meetPickTask) ? meetPickTask.group_id : groupIdFromTarget(currentChatUser);
+        var g = groupOfId(gid);
+        if (!g) { meetListEl.innerHTML = '<div class="grp-empty">群数据加载中</div>'; updateMeetBtns(); return; }
+        var inMeet = {};
+        if (meetPickMode === 'invite' && meetPickTask) {
+            (meetPickTask.members || []).forEach(function (u) { inMeet[u] = true; });
+        }
+        var me = IMSocket.getUsername();
+        var cands = [];
+        (g.members || []).forEach(function (m) {
+            var u = m.username || m; // 73 members 为资料对象数组（兼容旧字符串形态）
+            if (u === me || inMeet[u]) return;
+            var disp = m.name || u;
+            if (kw && disp.toLowerCase().indexOf(kw) < 0 && String(u).toLowerCase().indexOf(kw) < 0) return;
+            cands.push({ u: u, disp: disp, avatar: m.avatar || '' });
+        });
+        cands.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
+        if (!cands.length) {
+            meetListEl.innerHTML = '<div class="grp-empty">' + (kw ? '无匹配成员' : '无可邀请的群成员') + '</div>';
+            updateMeetBtns();
+            return;
+        }
+        cands.forEach(function (c) {
+            var item = document.createElement('div');
+            item.className = 'grp-item';
+            item.setAttribute('data-user', c.u);
+            if (meetPickSel[c.u]) item.classList.add('picked');
+            var chk = document.createElement('span');
+            chk.className = 'grp-check';
+            chk.textContent = '✓';
+            item.appendChild(chk);
+            if (c.avatar) {
+                var av = document.createElement('img');
+                av.className = 'fwd-avatar';
+                av.src = c.avatar;
+                item.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'fwd-avatar-ph';
+                ph.textContent = (c.disp || '?').charAt(0).toUpperCase();
+                item.appendChild(ph);
+            }
+            var nm = document.createElement('div');
+            nm.className = 'fwd-name';
+            nm.textContent = c.disp;
+            item.appendChild(nm);
+            item.addEventListener('click', function () { toggleMeetPick(c.u, !meetPickSel[c.u]); });
+            meetListEl.appendChild(item);
+        });
+        updateMeetBtns();
+    }
+
+    // 发起会议（选人确认）：先开会议窗（等待态）再上行 meet_invite，服务端校验失败经 error 帧收口会议窗
+    function startMeet(callType, members) {
+        if (!window.desktop || !window.desktop.callOpen) { showToast('会议仅 PC 端支持'); return; }
+        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
+        if (pendingRing) { showToast('有来电待处理'); return; }
+        var gid = groupIdFromTarget(currentChatUser);
+        var callId = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        callOpenId = callId;
+        window.desktop.callOpen({
+            role: 'caller', meet: true, call_id: callId, group_id: gid,
+            meet_title: groupNameOf(currentChatUser),
+            self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+            call_type: callType
+        });
+        // 会议信令无单一对端（to_user 留空），成员归属由服务端房间归口
+        callSignalSend('', { action: 'meet_invite', call_id: callId, call_type: callType, group_id: gid, members: members });
+    }
+
+    if (meetAudioBtn) meetAudioBtn.addEventListener('click', function () {
+        if (meetPickMode !== 'create' || !meetPickOrder.length) return;
+        var members = meetPickOrder.slice();
+        closeMeetPicker();
+        startMeet('audio', members);
+    });
+    if (meetVideoBtn) meetVideoBtn.addEventListener('click', function () {
+        if (!meetPickOrder.length) return;
+        if (meetPickMode === 'create') {
+            var members = meetPickOrder.slice();
+            closeMeetPicker();
+            startMeet('video', members);
+            return;
+        }
+        // 会中邀请：复用 meet_invite 信令（服务端识别已有房间走追加邀请），会议窗经 meet_join/room_info 增量建连
+        var t = meetPickTask;
+        var members2 = meetPickOrder.slice();
+        closeMeetPicker();
+        if (t) callSignalSend('', { action: 'meet_invite', call_id: t.call_id, call_type: t.call_type, group_id: t.group_id, members: members2 });
+    });
+    if (meetCancelBtn) meetCancelBtn.addEventListener('click', closeMeetPicker);
+    if (meetMask) meetMask.addEventListener('click', function (e) {
+        if (e.target === meetMask) closeMeetPicker(); // 点遮罩关闭（未提交无副作用）
+    });
+    if (meetSearch) meetSearch.addEventListener('input', function () {
+        renderMeetPickList(meetSearch.value.trim().toLowerCase());
+    });
+    if (meetBtn) meetBtn.addEventListener('click', function () {
+        if (!isGroupTarget(currentChatUser)) return;
+        openMeetPicker('create', null);
+    });
+    // 主进程桥：会议窗"邀请成员"回流主窗口弹选人弹窗（会中追加邀请；非当前会议窗的请求忽略）
+    if (window.desktop && window.desktop.onMeetInviteAsk) {
+        window.desktop.onMeetInviteAsk(function (task) {
+            if (!task || !task.call_id || callOpenId !== task.call_id) return;
+            if (groupOfId(task.group_id)) openMeetPicker('invite', task);
+        });
+    }
+
     // 主进程桥：通话窗/响铃条上行信令 → WS（frame 为完整协议帧）
     if (window.desktop && window.desktop.onCallSend) {
         window.desktop.onCallSend(function (frame) { IMSocket.send(frame); });
     }
-    // 主进程桥：响铃条按钮动作（接受 → 关铃开通话窗；拒绝 → 回 reject 信令）
+    // 主进程桥：响铃条按钮动作（接受 → 关铃开通话窗；拒绝 → 回 reject/meet_decline 信令）
     if (window.desktop && window.desktop.onCallRingAction) {
         window.desktop.onCallRingAction(function (data) {
             if (!data || !pendingRing) return;
             if (data.action === 'decline') {
-                callSignalSend(pendingRing.from, { action: 'reject', call_id: pendingRing.call_id, reason: 'declined' });
+                // 会议来电：回 meet_decline（房间制，服务端归口通知发起人）；1v1 维持 reject
+                if (pendingRing.meet) {
+                    callSignalSend('', { action: 'meet_decline', call_id: pendingRing.call_id });
+                } else {
+                    callSignalSend(pendingRing.from, { action: 'reject', call_id: pendingRing.call_id, reason: 'declined' });
+                }
                 callClearRing();
             } else if (data.action === 'accept') {
                 var r = pendingRing;
                 callClearRing();
                 callOpenId = r.call_id;
+                if (r.meet) {
+                    // 阶段一百四十四：会议入会——开会议窗（宫格等待态）→ meet_accept 上行，
+                    // 服务端下发 room_info（全员资料）后对每个成员等 offer 应答建 Mesh
+                    window.desktop.callOpen({
+                        role: 'callee', meet: true, call_id: r.call_id, group_id: r.group_id,
+                        meet_title: groupNameOf('g' + (r.group_id || 0)),
+                        self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+                        call_type: r.call_type,
+                        ice_servers: r.ice || [] // meet_invite 帧注入的 ICE 配置透传给会议窗（buildPC 用）
+                    });
+                    callSignalSend('', { action: 'meet_accept', call_id: r.call_id });
+                    return;
+                }
                 window.desktop.callOpen({
                     role: 'callee', call_id: r.call_id, peer: r.from,
                     peer_name: callPeerName(r.from), peer_avatar: getAvatarUrl(r.from),
@@ -16345,6 +16556,28 @@
             // 超时同时清本端来电态（60s 无人接听后允许下一次呼叫，否则 pendingRing 残留恒"忙"）
             if (p.action === 'timeout' && pendingRing && pendingRing.call_id === p.call_id) callClearRing();
             if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg);
+            return;
+        }
+        if (p.action === 'meet_invite') {
+            // 阶段一百四十四：会议邀请来电（含发起/追加邀请两路，服务端逐人转发）
+            if (msg.from_user === me) return; // 多端回显防御
+            if (!window.desktop || !window.desktop.callOpen) return; // Web/手机端无会议能力（服务端 HasPC 已拦截）
+            // 本端忙（通话中/会议中/已有来电）：自动拒绝（服务端忙判已拦，双保险）
+            if (callOpenId || pendingRing) {
+                callSignalSend('', { action: 'meet_decline', call_id: p.call_id });
+                return;
+            }
+            pendingRing = {
+                call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio',
+                meet: true, group_id: p.group_id || 0,
+                ice: Array.isArray(p.ice) ? p.ice : [] // 服务端注入的 ICE 配置（入会后 buildPC 用）
+            };
+            window.desktop.callRing({
+                call_id: p.call_id, from: msg.from_user,
+                from_name: p.from_name || callPeerName(msg.from_user), from_avatar: getAvatarUrl(msg.from_user),
+                call_type: pendingRing.call_type,
+                meet: true, group_id: pendingRing.group_id // 响铃条按 meet 标记显示会议文案
+            });
             return;
         }
         if (p.action === 'invite') {
@@ -16395,20 +16628,23 @@
         return null;
     }
 
-    // 通话气泡文案（按视角映射，微信同款：主叫/被叫看到不同描述）
+    // 通话气泡文案（按视角映射，微信同款：主叫/被叫看到不同描述；meet 标记会议语义）
     function callBubbleText(env, isCaller) {
-        var typeLabel = env.call === 'video' ? '视频通话' : '语音通话';
+        var isMeet = !!env.meet;
+        var typeLabel = isMeet
+            ? (env.call === 'video' ? '视频会议' : '语音会议')
+            : (env.call === 'video' ? '视频通话' : '语音通话');
         if (env.status === 'completed') {
             var dur = env.duration || 0;
             var mm = Math.floor(dur / 60), ss = dur % 60;
-            return '通话时长 ' + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+            return (isMeet ? '会议时长 ' : '通话时长 ') + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
         }
         var d;
-        if (env.status === 'canceled') d = isCaller ? '已取消' : '对方已取消';
+        if (env.status === 'canceled') d = isMeet ? (isCaller ? '已取消' : '会议已取消') : (isCaller ? '已取消' : '对方已取消');
         else if (env.status === 'rejected') d = isCaller ? '对方已拒绝' : '已拒绝';
         else if (env.status === 'missed') d = isCaller ? '无人接听' : '未接听';
         else if (env.status === 'busy') d = isCaller ? '对方忙' : '未接听（忙线）';
-        else d = '通话记录';
+        else d = isMeet ? '会议记录' : '通话记录';
         return typeLabel + '：' + d;
     }
 
@@ -16450,6 +16686,9 @@
         var callVisible = callSupported && currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser);
         if (voiceCallBtn) voiceCallBtn.classList.toggle('hidden', !callVisible);
         if (videoCallBtn) videoCallBtn.classList.toggle('hidden', !callVisible);
+        // 阶段一百四十四：群会议按钮显隐——仅 PC 端群会话显示（一期会议从群发起；
+        // Web/手机端无 desktop 桥恒隐藏，被邀能力由服务端 hub.HasPC 归口判定）
+        if (meetBtn) meetBtn.classList.toggle('hidden', !(callSupported && currentChatUser !== '' && isGroupTarget(currentChatUser)));
         // 阶段一百四十二：邀请成员按钮显隐——仅群主在多群会话中可见
         var grpInvBtn = document.getElementById('grp-invite-btn');
         if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !(isGroupTarget(currentChatUser) && isGroupOwner(currentChatUser)));

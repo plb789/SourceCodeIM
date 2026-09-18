@@ -542,6 +542,17 @@ contextBridge.exposeInMainWorld('desktop', {
     callClose: function () {
         ipcRenderer.send('call:close');
     },
+    // ===== 阶段一百四十四：会议（会中邀请桥，主窗口/会议窗 两方共用） =====
+    // 会议窗侧：请求主窗口弹选人弹窗（data = {call_id, call_type, group_id, members:[已在会账号]}）
+    meetInviteAsk: function (data) {
+        ipcRenderer.send('meet:invite-ask', data);
+    },
+    // 主窗口侧订阅：会议窗邀请请求（chat.js 弹会议选人弹窗，归口上行 meet_invite）
+    onMeetInviteAsk: function (callback) {
+        ipcRenderer.on('meet:invite-ask', function (event, data) {
+            callback(data);
+        });
+    },
     // —— 响铃条侧（call-ring.js）——
     // 接收来电信息
     onRingShow: function (callback) {

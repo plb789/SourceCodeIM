@@ -9206,6 +9206,21 @@ html.m #friend-menu {
     flex-shrink: 0;
 }
 
+/* ===== 阶段一百四十四：会议选人弹窗（复用建群弹窗 grp-item/grp-check 样式，单栏布局） =====
+   create=发起会议（语音/视频/取消三按钮） / invite=会中邀请（单"邀请"按钮）；上限 8 人含发起人 */
+.meet-box {
+    width: 380px;
+    height: 520px;
+}
+
+.meet-single {
+    border-right: none;
+}
+
+.meet-single .grp-right-head {
+    margin-bottom: 10px;
+}
+
 /* ===== 阶段一百四十二：转发弹窗微信同款扩展（已选头像网格 + 待转发内容预览卡片，复用 grp 双栏骨架） ===== */
 /* 已选区：微信同款横向头像网格（头像 + 名字 + 右上角移除圆点） */
 .fwd-sel-grid {

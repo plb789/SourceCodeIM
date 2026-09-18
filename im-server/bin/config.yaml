@@ -343,7 +343,7 @@ onlyoffice:
 # 使用前提：im-server 部署在公网 IP 服务器上，安全组放行 port(UDP+TCP) 与 min_port~max_port(UDP)
 # 客户端接入二期实现（iceServers 填 turn:<public_ip>:<port>，建议经信令下发凭证）
 turn:
-  enabled: false
+  enabled: true
   # 中继对外报告的 IP：NAT 后部署必填公网 IP；单公网 IP 直挂可留空（自动取本机非回环 IPv4）
   public_ip: ""
   # STUN/TURN 监听端口（UDP+TCP 双栈，coturn 同款默认 3478）

@@ -109,6 +109,22 @@ func (s *Server) unregister(c *Client) {
 	data, _ := json.Marshal(msg)
 	s.hub.Broadcast(data)
 	logger.Info("用户 %s 下线", c.username)
+
+	// 通话/会议状态离线收口：响铃/通话/会议中掉线若不收口，忙态与房间残留，
+	// 重连后被服务端恒判"忙"（无法再发起/被邀）。hangup 未命中 1v1 会话时自动回落
+	// 会议退出（meetLeave），两种状态均全收口（余员通知 + 清忙 + 空会解散落话单）
+	callOfflineCleanup(s, c.username)
+}
+
+// callOfflineCleanup 用户最后连接离线时的通话状态归口清理（callUserBusy 全覆盖 1v1 与会议）
+func callOfflineCleanup(s *Server, username string) {
+	callMu.RLock()
+	callID, busy := callUserBusy[username]
+	callMu.RUnlock()
+	if !busy {
+		return
+	}
+	s.callHangup(nil, nil, username, &callSignalPayload{Action: "hangup", CallID: callID})
 }
 
 // handleMessage 消息分发

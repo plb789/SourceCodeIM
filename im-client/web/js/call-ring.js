@@ -72,7 +72,10 @@
     }
     function fillProfile() {
         elName.textContent = cur.from_name || cur.from || '';
-        elDesc.textContent = cur.call_type === 'video' ? '邀请你视频通话' : '邀请你语音通话';
+        // 会议来电（阶段一百四十四）：meet 标记显示会议文案，图标按类型仍切听筒/摄像头
+        elDesc.textContent = cur.meet
+            ? (cur.call_type === 'video' ? '邀请你加入视频会议' : '邀请你加入语音会议')
+            : (cur.call_type === 'video' ? '邀请你视频通话' : '邀请你语音通话');
         // 接听钮图标按类型切换：语音=听筒 / 视频=摄像头
         icoAudio.classList.toggle('hidden', cur.call_type === 'video');
         icoVideo.classList.toggle('hidden', cur.call_type !== 'video');

@@ -2,7 +2,7 @@
 // 阶段三十七（第三期）：desktopCapturer 静默抓屏 + Alt+A 全局快捷键（微信同款），截图不再弹系统共享选择框
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net, session } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1084,13 +1084,15 @@ var ringWin = null;       // 响铃条（单例：同时刻仅一场来电，服
 var ringPending = null;   // 当前来电信息 {call_id, from, from_name, from_avatar, call_type}
 var callWindowCloseArmed = false; // 关窗放行标记（页面挂断信令收口后 callClose 才真正销毁）
 
-// 通话窗尺寸按类型分形态：语音竖版小窗（微信同款），视频横版大窗（远端画面铺满）
-function callWindowSize(callType) {
+// 通话窗尺寸按类型分形态：语音竖版小窗（微信同款），视频横版大窗（远端画面铺满）；
+// 会议形态（阶段一百四十四）：视频会议 1100×700 宫格大窗 / 语音会议 420×620 竖版窗
+function callWindowSize(callType, isMeet) {
+    if (isMeet) return callType === 'video' ? { width: 1100, height: 700 } : { width: 420, height: 620 };
     return callType === 'video' ? { width: 860, height: 620 } : { width: 360, height: 560 };
 }
 
-function ensureCallWindow(callType) {
-    var size = callWindowSize(callType);
+function ensureCallWindow(callType, isMeet) {
+    var size = callWindowSize(callType, isMeet);
     if (callWin && !callWin.isDestroyed()) {
         // 复用窗口切换形态（语音/视频互切场景）
         var b = callWin.getBounds();
@@ -1134,12 +1136,20 @@ ipcMain.on('call:open', function (e, data) {
     if (!mainWindow || e.sender !== mainWindow.webContents) return; // 只接受主窗口来源
     if (!data || !data.call_id) return;
     callWindowCloseArmed = false;
-    var win = ensureCallWindow(data.call_type);
+    var win = ensureCallWindow(data.call_type, !!data.meet); // meet 标记会议形态（宫格大窗/竖版窗）
     var show = function () {
         if (!callWin || callWin.isDestroyed()) return;
         callWin.webContents.send('call:load', data);
         callWin.show();
         callWin.focus();
+        // 窗口就绪回放缓冲信令（call:load 之后 flush：监听器/任务数据均已就绪，按到达序回放）
+        if (callSigQueue.length) {
+            var q = callSigQueue;
+            callSigQueue = [];
+            q.forEach(function (f) {
+                if (callWin && !callWin.isDestroyed()) callWin.webContents.send('call:signal', f);
+            });
+        }
     };
     if (win.webContents.isLoading()) {
         win.webContents.once('did-finish-load', show);
@@ -1152,6 +1162,7 @@ ipcMain.on('call:open', function (e, data) {
 ipcMain.on('call:close', function (e) {
     if (!callWin || e.sender !== callWin.webContents) return;
     callWindowCloseArmed = true;
+    callSigQueue = []; // 通话收口清缓冲（防残留帧串场）
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('call:closed');
     }
@@ -1238,10 +1249,20 @@ ipcMain.on('call:ring-action', function (e, data) {
     }
 });
 
-// 信令桥（主窗口 → 通话窗/响铃条）：chat.js 收到 70 帧后原样转发，各窗口按 call_id 自行过滤
+// 信令桥（主窗口 → 通话窗/响铃条）：chat.js 收到 70 帧后原样转发，各窗口按 call_id 自行过滤。
+// 阶段一百四十四修复：会议 room_info 由被叫上行 meet_accept 后服务端秒回，早于通话窗加载完成
+//（直发即丢，随后 offer 因对端成员表为空也被丢，双方永久互等）——窗口加载期间帧入队，
+// call:open 就绪回放（call:load 之后 flush 保序：room_info 先于 offer/answer/candidate 语义不变）
+var callSigQueue = [];
 ipcMain.on('call:signal-in', function (e, frame) {
     if (!mainWindow || e.sender !== mainWindow.webContents) return;
-    if (callWin && !callWin.isDestroyed()) callWin.webContents.send('call:signal', frame);
+    if (callWin && !callWin.isDestroyed()) {
+        if (callWin.webContents.isLoading()) {
+            callSigQueue.push(frame); // 窗口加载中：缓冲待就绪回放
+        } else {
+            callWin.webContents.send('call:signal', frame);
+        }
+    }
     if (ringWin && !ringWin.isDestroyed() && ringWin.isVisible()) ringWin.webContents.send('call:signal', frame);
 });
 
@@ -1252,6 +1273,32 @@ ipcMain.on('call:send', function (e, frame) {
     if (!fromCall && !fromRing) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('call:send', frame);
+    }
+});
+
+// ===== 阶段一百四十四：会议桌面共享（getDisplayMedia 放行） =====
+// Electron 下渲染层 getDisplayMedia 默认被拒，须注册 display-media 请求处理器静默放行主屏
+//（一期共享整屏不弹选择器，微信同款一键共享；sources 顺序首项即主屏）
+// 注意：session.defaultSession 仅在 app ready 后可访问（顶层访问抛
+// "Session can only be received when app is ready" 且主进程启动即崩），故注册归口 whenReady 回调
+function registerDisplayMediaHandler() {
+    session.defaultSession.setDisplayMediaRequestHandler(function (options, callback) {
+        desktopCapturer.getSources({ types: ['screen'] }).then(function (sources) {
+            if (!sources.length) { callback({}); return; }
+            callback({ source: sources[0] });
+        }).catch(function () { callback({}); });
+    });
+}
+
+// 会中邀请桥（阶段一百四十四）：会议窗"邀请成员"→ 主窗口弹选人弹窗
+//（chat.js 归口上行 meet_invite；主窗口最小化/托盘时唤起聚焦，保证用户看到弹窗）
+ipcMain.on('meet:invite-ask', function (e, data) {
+    if (!callWin || e.sender !== callWin.webContents) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.send('meet:invite-ask', data);
     }
 });
 
@@ -1998,6 +2045,7 @@ app.whenReady().then(async function () {
     // 服务端离线/超时不阻塞启动（缺失文件运行期透传兜底）。同 origin 方案无需登录态迁移
     // （原 app:// 方案需 migrateLegacyStorage，实测跨协议导航稳定性问题后整体回退）
     // 阶段一百三十六：注入加密密钥（resolveSecureKey 归口）——启用后磁盘只落密文、内存解密
+    registerDisplayMediaHandler(); // 阶段一百四十四：会议桌面共享放行（session 须 ready 后注册）
     webCache.init({
         serverUrl: SERVER_URL,
         secureKey: resolveSecureKey(),

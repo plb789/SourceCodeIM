@@ -53,9 +53,11 @@ var (
 )
 
 // callSignalPayload 信令 content 公共字段（轻解析归口：仅取 action/call_id，媒体字段原样中继不解析）
+// Target 阶段一百四十四：会议模式下媒体帧（offer/answer/candidate）的定向接收方（Mesh 全员互连需逐对转发）
 type callSignalPayload struct {
 	Action string `json:"action"`
 	CallID string `json:"call_id"`
+	Target string `json:"target"`
 }
 
 // callEnvelope 通话信封（im_message content，聊天记录气泡数据源，视角文案由前端渲染）
@@ -90,6 +92,13 @@ func (s *Server) HandleCallSignal(c *Client, msg *protocol.Message) {
 		s.callHangup(c, msg, from, &p)
 	case "offer", "answer", "candidate":
 		s.callRelayMedia(c, msg, from, &p)
+	// 阶段一百四十四：多人会议动作族（房间制归口 server/meet.go）
+	case "meet_invite":
+		s.handleMeetInvite(c, msg, from, &p)
+	case "meet_accept":
+		s.handleMeetAccept(from, &p)
+	case "meet_decline":
+		s.handleMeetDecline(from, &p)
 	default:
 		s.sendError(c, "未知通话信令")
 	}
@@ -286,10 +295,12 @@ func (s *Server) callCancel(c *Client, msg *protocol.Message, from string, p *ca
 	s.callFinish(sess, "canceled", true)
 }
 
-// callHangup 接通后任一方挂断（写"已接通"话单含时长）
+// callHangup 接通后任一方挂断（写"已接通"话单含时长）；未命中 1v1 会话时回落会议退出（阶段一百四十四）
 func (s *Server) callHangup(c *Client, msg *protocol.Message, from string, p *callSignalPayload) {
 	sess := callSessionOf(p.CallID)
 	if sess == nil {
+		// 阶段一百四十四：非 1v1 会话按会议房间处理（成员退出/解散归口 meet.go）
+		s.meetLeave(from, p)
 		return
 	}
 	callMu.RLock()
@@ -301,10 +312,12 @@ func (s *Server) callHangup(c *Client, msg *protocol.Message, from string, p *ca
 	s.callFinish(sess, "completed", true)
 }
 
-// callRelayMedia 媒体协商中继（offer/answer/candidate）：仅校验会话存在与参与者身份，content 原样透传
+// callRelayMedia 媒体协商中继（offer/answer/candidate）：仅校验会话存在与参与者身份，content 原样透传；
+// 未命中 1v1 会话时回落会议房间定向转发（阶段一百四十四：content.target 指定接收方）
 func (s *Server) callRelayMedia(c *Client, msg *protocol.Message, from string, p *callSignalPayload) {
 	sess := callSessionOf(p.CallID)
 	if sess == nil {
+		s.meetRelayMedia(from, p, msg.Content)
 		return
 	}
 	callMu.RLock()

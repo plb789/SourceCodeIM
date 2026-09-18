@@ -330,6 +330,10 @@
                     <button id="video-call-btn" class="tool-btn hidden" title="视频通话">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
                     </button>
+                    <!-- 阶段一百四十四：群会议按钮（仅 PC 端群会话显示，chat.js 显隐归口；Mesh 多人音视频 + PC 桌面共享） -->
+                    <button id="meet-btn" class="tool-btn hidden" title="发起会议">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M16 11a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm-7 1a2.5 2.5 0 1 0-2.5-2.5A2.5 2.5 0 0 0 9 12zm7 1c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4zm-7 1.08c-1.29.31-4 1.02-4 2.92v2H1v-2c0-2.05 3.4-3.4 6-3.92z"/></svg>
+                    </button>
                     <button id="screenshot-btn" class="tool-btn" title="截图发送">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 3h-2.18A3 3 0 0 0 12 1a3 3 0 0 0-2.82 2H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-5 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm6 16H5V5h2v2h10V5h2v14zM12 8a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
                         <!-- 阶段一百三十九：QQ 同款下拉箭头（点主区域截图，点箭头弹"隐藏当前窗口"选项菜单） -->
@@ -756,6 +760,30 @@
                         <button id="grp-cancel" class="modal-btn">取消</button>
                         <button id="grp-ok" class="modal-btn primary" disabled>完成</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段一百四十四：发起会议/会中邀请选人弹窗（单栏群成员多选，复用建群弹窗 grp-item/grp-check 样式与
+         modal 体系，自研弹窗禁用系统弹窗；create=底部"取消/语音会议/视频会议"，invite=单"邀请"按钮；
+         上限 8 人含发起人，超员由前端先行拦截、服务端归口兜底） -->
+    <div id="meet-mask" class="modal-mask hidden">
+        <div class="modal-box grp-box meet-box">
+            <div class="grp-left meet-single">
+                <div class="grp-right-head">
+                    <span id="meet-title" class="grp-right-title">发起会议</span>
+                    <span id="meet-count" class="grp-count"></span>
+                </div>
+                <div class="grp-search-wrap">
+                    <svg class="grp-search-icon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                    <input type="text" id="meet-search" class="grp-search-input" placeholder="搜索群成员" autocomplete="off">
+                </div>
+                <div id="meet-list" class="fwd-list grp-cand-list"></div>
+                <div class="modal-btns grp-btns">
+                    <button id="meet-cancel" class="modal-btn">取消</button>
+                    <button id="meet-ok-audio" class="modal-btn" disabled>语音会议</button>
+                    <button id="meet-ok-video" class="modal-btn primary" disabled>视频会议</button>
                 </div>
             </div>
         </div>
