@@ -63,6 +63,13 @@ let snapshotDir = ''; // 内置明文快照目录（仅明文回退链路使用�
 // 阶段一百三十六：加密链路状态
 let secureKey = null;  // 密钥字节（32B）；非空即加密链路启用（磁盘只落密文、内存解密、blob 参与回退）
 let blobFile = '';     // 内置加密快照 blob 路径（pc 根目录 web-snapshot.enc，打包后位于 app.asar 内）
+// 阶段一百四十：同步失败自愈重试——全量差异下载"单文件失败即整轮作废"（防半新半旧），原先失败
+// 只能等下次重启：部署后 cacheDir 旧副本（命中优先于内置新快照）持续遮蔽新版页面，"时好时坏"根因。
+// 失败后定时重跑 sync，成功即止；间隔指数退避 30s→5min 封顶；变更轮经 onSyncedCb 通知 main.js 刷主窗
+var onSyncedCb = null;     // 同步成功且变更回调（init 注入）
+var retryTimer = null;     // 重试延迟器（防叠）
+var retryDelay = 30000;    // 当前重试间隔（指数退避）
+var RETRY_MAX_MS = 300000; // 重试间隔封顶 5 分钟
 let blobState = 0;     // blob 加载状态：0=未探测 1=可用 2=不可用（惰性探测，首次访问才加载）
 let blobIndex = null;  // blob 索引 {相对路径: {o,l,s,t}}（o/l 相对密文区，s/t 源属性）
 let blobIdxLen = 0;    // blob 索引区字节长度（密文区起始偏移 = BLOB_HEADER_LEN + blobIdxLen）
@@ -107,6 +114,8 @@ function mimeOf(filePath) {
 
 // init 注入服务端地址并解析缓存/快照目录（app ready 后、窗口加载前调用）
 // cfg.snapshotDir 可选覆盖快照目录（首启同步实测等场景用；默认按运行形态自动归口）
+// cfg.onSynced 可选回调 function(result)——每轮同步成功且发生变更时触发（启动轮/重试轮共用，
+// main.js 据此刷新主窗口，保证更新轮页面即用最新版）
 function init(cfg) {
     serverUrl = String((cfg && cfg.serverUrl) || '');
     try { serverHost = new URL(serverUrl).host; } catch (e) { serverHost = ''; }
@@ -123,6 +132,8 @@ function init(cfg) {
     } else {
         secureKey = null;
     }
+    // 阶段一百四十：同步成功变更回调注入（重试轮自愈后同样触发，main.js reload 主窗口换新页面）
+    if (typeof (cfg && cfg.onSynced) === 'function') onSyncedCb = cfg.onSynced;
     blobFile = path.join(__dirname, 'web-snapshot.enc'); // 构建期产物（obfuscate.js 生成），随 app.asar 打包
     blobState = 0; // 重置 blob 探测状态（init 理论上仅调用一次，防御性归零）
     console.log('[web-cache] 缓存目录:', cacheDir, '| 快照目录:', snapshotDir,
@@ -657,14 +668,34 @@ async function sync() {
         fs.renameSync(mtmp, mfp);
 
         console.log('[web-cache] 增量同步完成 version=' + data.version + ' 下载=' + done + ' 清理=' + removed + ' 耗时=' + (Date.now() - t0) + 'ms');
-        // 阶段一百三十五：向调用方回报本轮变更量（主进程据此刷新主窗口，保证更新轮页面即用最新版）
-        return { downloaded: done, removed: removed };
+        retryDelay = 30000; // 成功复位退避（下轮失败从 30s 重新起步）
+        // 阶段一百三十五：向调用方回报本轮变更量；阶段一百四十：经回调归口通知 main.js 刷主窗
+        //（启动轮与重试轮共用同一出口，重试自愈后页面同样自动换新）
+        var result = { downloaded: done, removed: removed };
+        if (typeof onSyncedCb === 'function' && (done > 0 || removed > 0)) {
+            try { onSyncedCb(result); } catch (e) { console.warn('[web-cache] onSynced 回调失败:', e && e.message); }
+        }
+        return result;
     } catch (e) {
         console.warn('[web-cache] 增量同步跳过（缺失文件运行期代理兜底，不影响启动）:', e && e.message);
-        return null; // 同步失败：不回报变更，主进程不刷新（运行期代理兜底）
+        scheduleSyncRetry(e && e.message);
+        return null; // 同步失败：不回报变更，主进程不刷新（运行期代理兜底 + 定时重试自愈）
     } finally {
         clearTimeout(timer);
     }
+}
+
+// scheduleSyncRetry 失败重试调度（阶段一百四十）：指数退避 30s→5min，成功即止；防叠（timer 在途不重排）
+function scheduleSyncRetry(reason) {
+    if (!serverUrl || retryTimer) return;
+    retryTimer = setTimeout(function () {
+        retryTimer = null;
+        sync().then(function (r) {
+            if (!r) scheduleSyncRetry('重试轮仍未成功'); // r=null：catch 内已再调度；此处兜底防御
+        });
+    }, retryDelay);
+    console.log('[web-cache] ' + Math.round(retryDelay / 1000) + 's 后重试增量同步（' + reason + '）');
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
 }
 
 module.exports = {

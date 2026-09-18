@@ -102,6 +102,13 @@ const (
 	MsgTypeAgentAsk = 68 // 上行：用户回答（content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；answer=选择选项或自由输入，skip=取消本次回答）
 
 	MsgTypeGroupFile = 69 // 群聊文件消息（阶段一百三十四：HTTP 上传后广播，content 为 JSON：url/name/size/nonce；落库 msg_type=5 与私聊文件同类型，历史渲染零适配）
+
+	// 阶段一百四十一：音视频通话信令（第一期 PC↔PC 1v1，媒体走 WebRTC P2P 直连，服务端仅转发信令）
+	// content 为 JSON：{action, call_id, call_type?, sdp?, candidate?, reason?}，action 取值：
+	//   invite（主叫→被叫）/ accept（被叫→主叫）/ reject（被叫→主叫）/ cancel（主叫→被叫，响铃期放弃）/
+	//   hangup（任一方→对方，接通后挂断）/ offer / answer / candidate（WebRTC 媒体协商中继帧）；
+	//   服务端自生成：error（呼叫被拒：离线/忙/非 PC 端）/ timeout（响铃 60s 无应答）/ dismiss（同账号其他设备撤下来电弹条）
+	MsgTypeCallSignal = 70
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

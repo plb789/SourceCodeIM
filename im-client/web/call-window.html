@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>通话</title>
+    <style>
+        /* ===== 阶段一百四十一：通话窗（微信同款深色沉浸式，自绘控制条，无边框拖动区在顶部） =====
+           形态：audio=竖版小窗（头像+状态+控制条） / video=横版大窗（远端画面铺满+本地画中画+控制条）
+           主题说明：通话界面与微信一致为固定深色沉浸（不受明暗主题切换影响），强调色取主题绿 #07c160 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #161819;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            color: #ffffff;
+        }
+
+        /* 顶部拖动条（无边框窗口移动区） */
+        .cw-drag {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 36px;
+            -webkit-app-region: drag;
+            z-index: 30;
+        }
+
+        /* ===== 语音模式视图 ===== */
+        .cw-audio {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            /* 微信语音通话同款深色渐变背景 */
+            background: radial-gradient(ellipse at 50% 30%, #2a3038 0%, #161819 70%);
+        }
+        body.mode-video .cw-audio { display: none; }
+
+        .cw-avatar-wrap {
+            margin-top: 92px;
+            width: 96px;
+            height: 96px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: #3a4048;
+            flex-shrink: 0;
+        }
+        .cw-avatar {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        /* 头像占位（无头像时显示首字母） */
+        .cw-avatar-ph {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: #dfe3e8;
+            background: #4a5568;
+        }
+
+        .cw-name {
+            margin-top: 18px;
+            font-size: 20px;
+            font-weight: 500;
+            max-width: 88%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .cw-status {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #9aa3ad;
+        }
+        .cw-status.ended { color: #e6a23c; }
+
+        /* ===== 视频模式视图 ===== */
+        .cw-remote {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000000;
+            display: none;
+        }
+        body.mode-video .cw-remote { display: block; }
+        /* 语音模式的远端声音出口（隐藏元素持续播放） */
+        #cwRemoteAudio { display: none; }
+
+        .cw-video-top {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 14px;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+            -webkit-app-region: drag;
+            z-index: 20;
+        }
+        body.mode-video .cw-video-top { display: flex; }
+        .cw-video-top .cw-vname { font-size: 15px; font-weight: 500; }
+        .cw-video-top .cw-vstatus { font-size: 12px; color: #c8cdd3; }
+        .cw-video-top.ended .cw-vstatus { color: #e6a23c; }
+
+        /* 本地画中画（视频模式右上角，微信同款） */
+        .cw-local {
+            position: fixed;
+            top: 48px;
+            right: 12px;
+            width: 108px;
+            height: 162px;
+            border-radius: 8px;
+            object-fit: cover;
+            background: #101214;
+            border: 1px solid rgba(255,255,255,0.14);
+            z-index: 21;
+            display: none;
+        }
+        body.mode-video .cw-local { display: block; }
+        body.mode-video.cam-off .cw-local { display: none; }
+
+        /* ===== 底部控制条（自绘，微信同款圆形按钮） ===== */
+        .cw-controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 96px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 42px;
+            background: linear-gradient(to top, rgba(0,0,0,0.5), transparent);
+            z-index: 25;
+        }
+        .cw-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            background: rgba(255,255,255,0.16);
+            transition: background 0.15s;
+            outline: none;
+            padding: 0;
+        }
+        .cw-btn:hover { background: rgba(255,255,255,0.26); }
+        .cw-btn.active { background: #ffffff; color: #161819; }
+        .cw-btn.danger {
+            background: #fa5151;
+            width: 58px;
+            height: 58px;
+        }
+        .cw-btn.danger:hover { background: #e64340; }
+        .cw-btn.hidden { display: none; }
+
+        /* 结束收尾遮罩提示 */
+        .cw-mask {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 40;
+        }
+        .cw-mask.visible { display: flex; }
+        .cw-mask span {
+            background: rgba(0,0,0,0.72);
+            color: #ffffff;
+            font-size: 14px;
+            padding: 10px 22px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body class="mode-audio">
+    <div class="cw-drag"></div>
+
+    <!-- 语音模式：头像 + 昵称 + 状态 + 控制条 -->
+    <div class="cw-audio">
+        <div class="cw-avatar-wrap" id="cwAvatarWrap"></div>
+        <div class="cw-name" id="cwName"></div>
+        <div class="cw-status" id="cwStatus"></div>
+    </div>
+
+    <!-- 视频模式：远端铺满 + 顶部信息条 + 本地画中画 -->
+    <video id="cwRemote" class="cw-remote" autoplay playsinline></video>
+    <div class="cw-video-top" id="cwVideoTop">
+        <span class="cw-vname" id="cwVName"></span>
+        <span class="cw-vstatus" id="cwVStatus"></span>
+    </div>
+    <video id="cwLocal" class="cw-local" autoplay playsinline muted></video>
+    <!-- 语音模式远端声音出口 -->
+    <audio id="cwRemoteAudio" autoplay></audio>
+
+    <!-- 底部控制条：静音 / 摄像头（视频模式）/ 挂断 -->
+    <div class="cw-controls">
+        <button class="cw-btn" id="btnMute" title="静音">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+        </button>
+        <button class="cw-btn hidden" id="btnCam" title="关闭摄像头">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+        </button>
+        <button class="cw-btn danger" id="btnHangup" title="挂断">
+            <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+    </div>
+
+    <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
+
+    <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow 承载） -->
+    <script src="js/call-page.js?v=1"></script>
+</body>
+</html>

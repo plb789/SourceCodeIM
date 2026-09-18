@@ -217,6 +217,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handlePurgeResp(c, msg)
 	case protocol.MsgTypeAISessionDel:
 		s.handleAISessionDel(c, msg)
+	// 阶段一百四十一：音视频通话信令（invite/accept/reject/cancel/hangup + WebRTC 媒体中继，话单服务端归口）
+	case protocol.MsgTypeCallSignal:
+		s.HandleCallSignal(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}

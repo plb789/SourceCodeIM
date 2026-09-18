@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>来电提醒</title>
+    <style>
+        /* ===== 阶段一百四十一：来电响铃条（微信同款顶部小条，独立 BrowserWindow 承载） =====
+           形态：372×100 深色条（头像 + 昵称 + 邀请文案 + 拒绝/接听圆钮），整条可拖动，按钮 no-drag
+           主题说明：固定深色沉浸（与通话窗一致），接听钮取主题绿 #07c160 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #222629;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            color: #ffffff;
+        }
+
+        .rg-bar {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0 14px;
+            -webkit-app-region: drag;
+            cursor: default;
+        }
+
+        .rg-avatar {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: #3a4048;
+            flex-shrink: 0;
+        }
+
+        .rg-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* 头像占位（无头像时显示首字母） */
+        .rg-avatar-ph {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            color: #dfe3e8;
+            background: #4a5568;
+        }
+
+        .rg-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .rg-name {
+            font-size: 15px;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .rg-desc {
+            margin-top: 3px;
+            font-size: 12px;
+            color: #9aa3ad;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 拒绝/接听圆钮（微信同款：左红右绿） */
+        .rg-btn {
+            -webkit-app-region: no-drag;
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            outline: none;
+            padding: 0;
+            flex-shrink: 0;
+            transition: filter 0.12s;
+        }
+
+        .rg-btn:hover { filter: brightness(1.12); }
+        .rg-btn:active { filter: brightness(0.92); }
+
+        .rg-decline { background: #fa5151; }
+        .rg-decline:hover { background: #e64340; filter: none; }
+
+        .rg-accept { background: #07c160; }
+        .rg-accept:hover { background: #06ad56; filter: none; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="rg-bar">
+        <div class="rg-avatar" id="rgAvatar"></div>
+        <div class="rg-info">
+            <div class="rg-name" id="rgName"></div>
+            <div class="rg-desc" id="rgDesc">邀请你语音通话</div>
+        </div>
+        <button class="rg-btn rg-decline" id="btnDecline" title="拒绝">
+            <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+        <button class="rg-btn rg-accept" id="btnAccept" title="接听">
+            <svg id="icoAudio" viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+            <svg id="icoVideo" viewBox="0 0 24 24" width="19" height="19" class="hidden"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+        </button>
+    </div>
+
+    <!-- 响铃条逻辑（振铃音 + 按钮动作上报 + 超时/取消自收口） -->
+    <script src="js/call-ring.js?v=1"></script>
+</body>
+</html>

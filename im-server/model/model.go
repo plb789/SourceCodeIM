@@ -48,6 +48,23 @@ type PointsLog struct {
 	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
 }
 
+// CallLog 通话话单表 im_call_log（阶段一百四十一：音视频通话归口，服务端数据归口——
+// 通话结束/中断/超时/拒绝均由服务端写话单，客户端零计算只展示）
+type CallLog struct {
+	ID      uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	CallID  string `gorm:"column:call_id;type:varchar(64);index" json:"call_id"`
+	Caller  string `gorm:"column:caller;type:varchar(32);index" json:"caller"`  // 主叫
+	Callee  string `gorm:"column:callee;type:varchar(32);index" json:"callee"`  // 被叫
+	CallType string `gorm:"column:call_type;type:varchar(8)" json:"call_type"` // audio 语音 / video 视频
+	// Status 通话结果：completed 已接通（含时长）/ rejected 被叫拒绝 / canceled 主叫取消 / missed 无人接听 / busy 对方忙
+	Status   string    `gorm:"column:status;type:varchar(16)" json:"status"`
+	Duration int       `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (CallLog) TableName() string { return "im_call_log" }
+
 // TableName 表名沿用 im_ 前缀约定（GORM 默认复数命名不符合本项目规范，显式指定）
 func (PointsLog) TableName() string { return "im_points_log" }
 

@@ -4174,6 +4174,7 @@
     }
     if (window.desktop && window.desktop.onEditorStitch) {
         window.desktop.onEditorStitch(function (data) {
+            editorWinBusy = false; // 移交即解除占用（实测踩坑：长截图后未重置，之后粘贴/截图全被 editorWinBusy 拦成"无反应"）
             if (!data || !data.sel) return;
             // 长截图状态机接管（条窗+屏幕流滚动拼接链路不变；stitch:finish 恢复主窗口）
             onStitchStart(data.sel, data.snapW, data.snapH);
@@ -4181,6 +4182,7 @@
     }
     if (window.desktop && window.desktop.onEditorRecStart) {
         window.desktop.onEditorRecStart(function (data) {
+            editorWinBusy = false; // 移交即解除占用（同 stitch：录屏移交后 busy 残留会拦死后续截图/粘贴）
             if (!data || !data.sel) return;
             // 录屏链路接管（主窗口退场→屏幕流→裁剪录制不变；editor:rec-start 时主进程已恢复窗口原位）
             onRecAreaStart(data.sel, data.snapW, data.snapH);
@@ -15534,6 +15536,160 @@
         return !!onlineUsers[u];
     }
 
+    // ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
+    // 职责划分：本模块只做"信令桥接 + 呼叫入口 + 通话气泡渲染"——
+    //   1. 呼叫入口：工具栏语音/视频按钮 → 打开独立通话窗（主进程 callOpen）→ 发 invite 信令
+    //   2. 信令桥接：WS（msg_type=70）↔ 主进程 ↔ 通话窗/响铃条（WebRTC 媒体协商帧原样中继，本端不解析 SDP）
+    //   3. 来电响铃：invite 下发经主进程弹响铃条（微信同款顶部小条），接受后转开通话窗
+    //   4. 话单展示：服务端归口落库通话信封消息（{"type":"call",...}），渲染为通话气泡（视角文案）
+    // 媒体面全部在通话窗（call-page.js，getUserMedia + RTCPeerConnection P2P 直连）
+    var voiceCallBtn = document.getElementById('voice-call-btn');
+    var videoCallBtn = document.getElementById('video-call-btn');
+    var callOpenId = '';     // 本端进行中的通话 call_id（空=无通话窗）
+    var pendingRing = null;  // 来电待处理（{call_id, from, call_type}）
+
+    // 通话信令上行（统一入口：msg_type=70 + content JSON）
+    function callSignalSend(toUser, obj) {
+        IMSocket.send({ msg_type: MSG.CALL_SIGNAL, to_user: toUser, content: JSON.stringify(obj) });
+    }
+
+    // 清下来电弹条（本地状态 + 主进程隐藏响铃窗）
+    function callClearRing() {
+        pendingRing = null;
+        if (window.desktop && window.desktop.callRingHide) window.desktop.callRingHide();
+    }
+
+    // 通话对象展示名（备注→昵称→账号，与气泡/会话列表同源）
+    function callPeerName(u) {
+        var n = senderDisplayName(u);
+        return n || u;
+    }
+
+    // 发起通话（工具栏按钮入口，callType: audio/video）
+    function startCall(callType) {
+        if (!window.desktop || !window.desktop.callOpen) { showToast('音视频通话仅 PC 端支持'); return; }
+        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
+        if (pendingRing) { showToast('有来电待处理'); return; }
+        if (currentChatUser === '' || isAIAgent(currentChatUser)) return;
+        var callId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        callOpenId = callId;
+        // 先开窗（等待态 UI）再发 invite；服务端校验失败经 error 帧回抛给通话窗展示
+        window.desktop.callOpen({
+            role: 'caller', call_id: callId, peer: currentChatUser,
+            peer_name: callPeerName(currentChatUser), peer_avatar: getAvatarUrl(currentChatUser),
+            self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+            call_type: callType
+        });
+        callSignalSend(currentChatUser, { action: 'invite', call_id: callId, call_type: callType });
+    }
+
+    if (voiceCallBtn) voiceCallBtn.addEventListener('click', function () { startCall('audio'); });
+    if (videoCallBtn) videoCallBtn.addEventListener('click', function () { startCall('video'); });
+
+    // 主进程桥：通话窗/响铃条上行信令 → WS（frame 为完整协议帧）
+    if (window.desktop && window.desktop.onCallSend) {
+        window.desktop.onCallSend(function (frame) { IMSocket.send(frame); });
+    }
+    // 主进程桥：响铃条按钮动作（接受 → 关铃开通话窗；拒绝 → 回 reject 信令）
+    if (window.desktop && window.desktop.onCallRingAction) {
+        window.desktop.onCallRingAction(function (data) {
+            if (!data || !pendingRing) return;
+            if (data.action === 'decline') {
+                callSignalSend(pendingRing.from, { action: 'reject', call_id: pendingRing.call_id, reason: 'declined' });
+                callClearRing();
+            } else if (data.action === 'accept') {
+                var r = pendingRing;
+                callClearRing();
+                callOpenId = r.call_id;
+                window.desktop.callOpen({
+                    role: 'callee', call_id: r.call_id, peer: r.from,
+                    peer_name: callPeerName(r.from), peer_avatar: getAvatarUrl(r.from),
+                    self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+                    call_type: r.call_type
+                });
+            }
+        });
+    }
+    // 主进程桥：通话窗已关闭（挂断/异常收口），清本端通话态
+    if (window.desktop && window.desktop.onCallClosed) {
+        window.desktop.onCallClosed(function () { callOpenId = ''; });
+    }
+
+    // 通话信令分发（msg_type=70）
+    IMSocket.on(MSG.CALL_SIGNAL, function (msg) {
+        var p;
+        try { p = JSON.parse(msg.content); } catch (e) { return; }
+        if (!p || !p.action) return;
+        var me = IMSocket.getUsername();
+        // 服务端归口帧（error/timeout）：转发给通话窗/响铃条展示
+        if (p.action === 'error' || p.action === 'timeout') {
+            // 超时同时清本端来电态（60s 无人接听后允许下一次呼叫，否则 pendingRing 残留恒"忙"）
+            if (p.action === 'timeout' && pendingRing && pendingRing.call_id === p.call_id) callClearRing();
+            if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg);
+            return;
+        }
+        if (p.action === 'invite') {
+            if (msg.from_user === me) return; // 多端回显防御（服务端不回显 invite）
+            // Web/手机端无音视频能力：静默忽略（纯 Web 被叫场景服务端 HasPC 已拦截呼叫；
+            // PC+Web 同账号同挂时若在此自动拒绝，会抢在 PC 端人工接听前触发服务端收口，导致永远无法呼通）
+            if (!window.desktop || !window.desktop.callOpen) return;
+            // 本端忙（通话中/已有来电）：自动拒接（服务端忙判已拦，双保险）
+            if (callOpenId || pendingRing) {
+                callSignalSend(msg.from_user, { action: 'reject', call_id: p.call_id, reason: 'busy' });
+                return;
+            }
+            pendingRing = { call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio' };
+            window.desktop.callRing({
+                call_id: p.call_id, from: msg.from_user,
+                from_name: callPeerName(msg.from_user), from_avatar: getAvatarUrl(msg.from_user),
+                call_type: pendingRing.call_type
+            });
+            return;
+        }
+        if (p.action === 'dismiss') {
+            // 同账号其他设备已接听：撤下本端响铃条
+            if (pendingRing && pendingRing.call_id === p.call_id) callClearRing();
+            return;
+        }
+        if (p.action === 'cancel') {
+            // 主叫响铃期取消：关铃 + 转发响铃条（若有）做收尾提示
+            if (pendingRing && pendingRing.call_id === p.call_id) callClearRing();
+            if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg);
+            return;
+        }
+        // 其余（accept/reject/offer/answer/candidate/hangup）：本端有通话窗则中继
+        if (callOpenId && window.desktop && window.desktop.callSignalIn) {
+            window.desktop.callSignalIn(msg);
+        }
+    });
+
+    // 通话信封解析（服务端落库归口：{"type":"call","call":"audio|video","status":...,"duration":...}）
+    function parseCallEnvelope(content) {
+        if (!content || content.charAt(0) !== '{') return null;
+        try {
+            var p = JSON.parse(content);
+            if (p && p.type === 'call' && (p.call === 'audio' || p.call === 'video')) return p;
+        } catch (e) {}
+        return null;
+    }
+
+    // 通话气泡文案（按视角映射，微信同款：主叫/被叫看到不同描述）
+    function callBubbleText(env, isCaller) {
+        var typeLabel = env.call === 'video' ? '视频通话' : '语音通话';
+        if (env.status === 'completed') {
+            var dur = env.duration || 0;
+            var mm = Math.floor(dur / 60), ss = dur % 60;
+            return '通话时长 ' + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+        }
+        var d;
+        if (env.status === 'canceled') d = isCaller ? '已取消' : '对方已取消';
+        else if (env.status === 'rejected') d = isCaller ? '对方已拒绝' : '已拒绝';
+        else if (env.status === 'missed') d = isCaller ? '无人接听' : '未接听';
+        else if (env.status === 'busy') d = isCaller ? '对方忙' : '未接听（忙线）';
+        else d = '通话记录';
+        return typeLabel + '：' + d;
+    }
+
     function updateChatTitle() {
         if (currentChatUser === '') {
             chatTitle.textContent = '群聊';
@@ -15558,6 +15714,12 @@
             aiSessionBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
             if (aiSessionBtn.classList.contains('hidden')) closeAISessionPanel();
         }
+        // 阶段一百四十一：语音/视频通话按钮显隐——仅 PC 端私聊真实用户会话显示
+        //（AI 会话/群聊隐藏；Web/手机端无 desktop 桥恒隐藏，被叫能力由服务端 hub.HasPC 归口判定）
+        var callSupported = !!(window.desktop && window.desktop.callOpen);
+        var callVisible = callSupported && currentChatUser !== '' && !isAIAgent(currentChatUser);
+        if (voiceCallBtn) voiceCallBtn.classList.toggle('hidden', !callVisible);
+        if (videoCallBtn) videoCallBtn.classList.toggle('hidden', !callVisible);
     }
 
     // ===== 消息渲染 =====
@@ -15661,10 +15823,26 @@
         // 阶段四十五：AI 文档问答信封（{"doc":url,"name":文件名,"text":附言}）渲染为文件卡片 + 附言
         // 阶段八十七：合并转发信封（{"merged":{c:条数,i:[{f:发送者,k:类型,...}]}}）渲染为"聊天记录"卡片气泡
         var mergedEnv = parseMergedEnvelope(content);
-        var aiDocEnv = mergedEnv ? null : ((type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null);
-        var aiImgEnv = (mergedEnv || aiDocEnv) ? null : ((!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null);
-        var envelope = (aiDocEnv || aiImgEnv || mergedEnv) ? null : parseQuoteEnvelope(content);
-        if (mergedEnv) {
+        // 阶段一百四十一：通话信封优先（服务端归口落库的通话记录消息，渲染为微信同款通话气泡）
+        var callEnv = parseCallEnvelope(content);
+        var aiDocEnv = (mergedEnv || callEnv) ? null : ((type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null);
+        var aiImgEnv = (mergedEnv || callEnv || aiDocEnv) ? null : ((!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null);
+        var envelope = (aiDocEnv || aiImgEnv || mergedEnv || callEnv) ? null : parseQuoteEnvelope(content);
+        if (callEnv) {
+            // 微信同款通话气泡：类型图标 + 视角文案（未接听图标红色，微信同款）
+            bubble.classList.add('msg-call-bubble');
+            var callIcon = document.createElement('span');
+            callIcon.className = 'msg-call-icon' + (callEnv.status === 'missed' ? ' missed' : '');
+            callIcon.innerHTML = callEnv.call === 'video'
+                ? '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>'
+                : '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24 11.36 11.36 0 0 0 3.57.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1 11.36 11.36 0 0 0 .57 3.57 1 1 0 0 1-.25 1.02z"/></svg>';
+            bubble.appendChild(callIcon);
+            var callText = document.createElement('span');
+            callText.className = 'msg-call-text';
+            // 信封 from_user 恒为主叫（服务端落库归口），按"我是否主叫"映射视角文案
+            callText.textContent = callBubbleText(callEnv, fromUser === IMSocket.getUsername());
+            bubble.appendChild(callText);
+        } else if (mergedEnv) {
             // 微信"聊天记录"卡片：标题 + 参与人摘要 + 条数，点击打开详情弹窗（openMergedDetail）
             bubble.classList.add('merged-bubble');
             var mTitle = document.createElement('div');

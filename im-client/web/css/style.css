@@ -11443,3 +11443,31 @@ body.browser-resizing .browser-web-frame {
 #conv-list img, #user-list img, #ai-agent-list img, #message-list img, #settings-mask img {
     -webkit-user-drag: none;
 }
+
+/* ===== 阶段一百四十一：通话记录气泡（微信同款：类型图标 + 视角文案，未接听图标红色） ===== */
+.msg-call-bubble {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 150px;
+}
+.msg-call-bubble .msg-call-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--primary);
+    flex-shrink: 0;
+}
+.msg-call-bubble .msg-call-icon.missed {
+    background: color-mix(in srgb, #e64340 14%, transparent);
+    color: #e64340;
+}
+.msg-call-bubble .msg-call-text {
+    font-size: 14px;
+    color: var(--text);
+    white-space: nowrap;
+}

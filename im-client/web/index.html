@@ -311,6 +311,14 @@
                     <button id="file-btn" class="tool-btn" title="发送文件">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16v10z"/></svg>
                     </button>
+                    <!-- 阶段一百四十一：语音/视频通话按钮（仅 PC 端私聊真实用户会话显示，chat.js 能力检测控制显隐；
+                         Web/手机端隐藏——第一期通话仅 PC↔PC，媒体走 WebRTC P2P） -->
+                    <button id="voice-call-btn" class="tool-btn hidden" title="语音通话">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24 11.36 11.36 0 0 0 3.57.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1 11.36 11.36 0 0 0 .57 3.57 1 1 0 0 1-.25 1.02z"/></svg>
+                    </button>
+                    <button id="video-call-btn" class="tool-btn hidden" title="视频通话">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+                    </button>
                     <button id="screenshot-btn" class="tool-btn" title="截图发送">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 3h-2.18A3 3 0 0 0 12 1a3 3 0 0 0-2.82 2H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-5 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm6 16H5V5h2v2h10V5h2v14zM12 8a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
                         <!-- 阶段一百三十九：QQ 同款下拉箭头（点主区域截图，点箭头弹"隐藏当前窗口"选项菜单） -->

@@ -19,6 +19,18 @@ const webCache = require('./web-cache.js');
 let mainWindow = null;
 let tray = null;
 
+// 阶段一百四十一：--user-data-dir 启动参数支持（双开实测/多账号并行场景）——必须在单实例锁请求前
+// 重定向 Electron userData（localStorage/IndexedDB/HTTP 缓存全量隔离）。原实现仅传 Chromium 开关，
+// Electron 层 userData 仍指向默认目录，双开并发写同一 LevelDB 实测导致后写进程崩溃退出
+(function () {
+    var a = process.argv.find(function (x) { return x.indexOf('--user-data-dir=') === 0; });
+    if (!a) return;
+    var p = a.substring('--user-data-dir='.length).trim();
+    if (!p) return;
+    try { fs.mkdirSync(p, { recursive: true }); } catch (e) { }
+    app.setPath('userData', p);
+})();
+
 // 阶段一百三十四：单实例锁——实测双开（dev 与打包版并存测试）会并发写同一 userData 的
 // HTTP 缓存 LevelDB，锁冲突导致图片响应流中断（查看器黑屏、下载文件损坏，2026-09-16 实测）。
 // 非首实例立即退出；首实例经 second-instance 唤起主窗口（复刻微信"再次启动回到已开窗口"行为）
@@ -1060,6 +1072,189 @@ ipcMain.handle('doc:save', async function (event, data) {
     }
 });
 
+// ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
+// 两个独立 BrowserWindow（禁止主窗体内嵌弹层，与图片查看器/截图编辑器同方案）：
+//   1. 通话窗 callWin：主/被叫共用，承载 WebRTC 媒体面（getUserMedia + RTCPeerConnection P2P 直连），
+//      语音 360×560 / 视频 860×620 两种形态，挂断信令收口后自行 callClose
+//   2. 响铃条 ringWin：被叫来电顶部小条（微信同款），接受/拒绝/超时收口
+// 信令桥：主窗口 chat.js 持有 WS，信令经 IPC 三段桥接（chat.js ↔ 主进程 ↔ 通话窗/响铃条），
+// 媒体协商帧原样中继不解析；话单/状态归口服务端（im_call_log + im_message 通话信封）
+var callWin = null;       // 通话窗（单例：同一时刻仅一场通话）
+var ringWin = null;       // 响铃条（单例：同时刻仅一场来电，服务端忙判已拦截并发呼叫）
+var ringPending = null;   // 当前来电信息 {call_id, from, from_name, from_avatar, call_type}
+var callWindowCloseArmed = false; // 关窗放行标记（页面挂断信令收口后 callClose 才真正销毁）
+
+// 通话窗尺寸按类型分形态：语音竖版小窗（微信同款），视频横版大窗（远端画面铺满）
+function callWindowSize(callType) {
+    return callType === 'video' ? { width: 860, height: 620 } : { width: 360, height: 560 };
+}
+
+function ensureCallWindow(callType) {
+    var size = callWindowSize(callType);
+    if (callWin && !callWin.isDestroyed()) {
+        // 复用窗口切换形态（语音/视频互切场景）
+        var b = callWin.getBounds();
+        if (b.width !== size.width || b.height !== size.height) {
+            var wa = screen.getPrimaryDisplay().workArea;
+            callWin.setBounds({ x: Math.round(wa.x + (wa.width - size.width) / 2), y: Math.round(wa.y + (wa.height - size.height) / 2), width: size.width, height: size.height });
+        }
+        return callWin;
+    }
+    callWin = new BrowserWindow({
+        width: size.width,
+        height: size.height,
+        show: false,
+        frame: false,          // 无边框自绘（微信通话界面同款：深色沉浸 + 自绘控制条）
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        backgroundColor: '#161819',
+        title: '通话',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
+    callWin.loadURL(SERVER_URL + 'call-window.html');
+    callWin.on('close', function (e) {
+        if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
+        // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，
+        // 直接销毁会让对端一直等待（信令不发对端 UI 卡"通话中"）
+        e.preventDefault();
+        if (callWin && !callWin.isDestroyed()) callWin.webContents.send('call:window-close');
+    });
+    callWin.on('closed', function () { callWin = null; });
+    return callWin;
+}
+
+// 打开通话窗（主窗口渲染层 chat.js 发起/被叫接听共用入口）
+ipcMain.on('call:open', function (e, data) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return; // 只接受主窗口来源
+    if (!data || !data.call_id) return;
+    callWindowCloseArmed = false;
+    var win = ensureCallWindow(data.call_type);
+    var show = function () {
+        if (!callWin || callWin.isDestroyed()) return;
+        callWin.webContents.send('call:load', data);
+        callWin.show();
+        callWin.focus();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 通话窗关闭收口（页面挂断信令已发出后调用）：销毁窗口并通知主窗口清通话态
+ipcMain.on('call:close', function (e) {
+    if (!callWin || e.sender !== callWin.webContents) return;
+    callWindowCloseArmed = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('call:closed');
+    }
+    if (!callWin.isDestroyed()) callWin.destroy();
+    callWin = null;
+});
+
+// ===== 响铃条（被叫来电顶部小条，微信同款） =====
+function ensureRingWindow() {
+    if (ringWin && !ringWin.isDestroyed()) return ringWin;
+    ringWin = new BrowserWindow({
+        width: 372,
+        height: 100,
+        show: false,
+        frame: false,
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+        backgroundColor: '#222629',
+        title: '来电提醒',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    // 顶部右侧贴边（微信来电弹条位置）：主屏工作区右上角内缩 16px
+    ringWin.loadURL(SERVER_URL + 'call-ring.html');
+    ringWin.setPositionAtRight = function () {
+        var wa = screen.getPrimaryDisplay().workArea;
+        ringWin.setPosition(wa.x + wa.width - 372 - 16, wa.y + 16);
+    };
+    ringWin.on('close', function (e) {
+        if (app.isQuitting) return;
+        // 关闭转隐藏：来电继续响铃（服务端 60s 超时归口收尾），不自动替用户拒接
+        e.preventDefault();
+        ringWin.hide();
+    });
+    ringWin.on('closed', function () { ringWin = null; });
+    return ringWin;
+}
+
+// 来电响铃（主窗口渲染层收到 invite 后转发）
+ipcMain.on('call:ring', function (e, data) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    if (!data || !data.call_id) return;
+    ringPending = data;
+    var win = ensureRingWindow();
+    var show = function () {
+        if (!ringWin || ringWin.isDestroyed()) return;
+        ringWin.webContents.send('call:ring:show', data);
+        ringWin.setPositionAtRight();
+        // showInactive：弹条不抢主窗口焦点（微信同款，正在打字不被打断）
+        ringWin.showInactive();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 隐藏响铃条（接听/拒绝/超时/对端取消/其他设备已接；主窗口渲染层与响铃条页面均可触发）
+ipcMain.on('call:ring-hide', function (e) {
+    var fromMain = mainWindow && e.sender === mainWindow.webContents;
+    var fromRing = ringWin && e.sender === ringWin.webContents;
+    if (!fromMain && !fromRing) return;
+    ringPending = null;
+    if (ringWin && !ringWin.isDestroyed()) {
+        // 停铃通知先于 hide（窗口隐藏后渲染层无法自感知，合成铃声会继续循环）
+        ringWin.webContents.send('call:ring:stop');
+        ringWin.hide();
+    }
+});
+
+// 响铃条按钮动作（accept/decline）→ 主窗口渲染层（chat.js 归口发 reject 信令/开通话窗）
+ipcMain.on('call:ring-action', function (e, data) {
+    if (!ringWin || e.sender !== ringWin.webContents) return;
+    if (ringWin && !ringWin.isDestroyed()) ringWin.hide();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('call:ring-action', data);
+    }
+});
+
+// 信令桥（主窗口 → 通话窗/响铃条）：chat.js 收到 70 帧后原样转发，各窗口按 call_id 自行过滤
+ipcMain.on('call:signal-in', function (e, frame) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    if (callWin && !callWin.isDestroyed()) callWin.webContents.send('call:signal', frame);
+    if (ringWin && !ringWin.isDestroyed() && ringWin.isVisible()) ringWin.webContents.send('call:signal', frame);
+});
+
+// 信令桥（通话窗/响铃条 → 主窗口）：上行信令由 chat.js 经 WS 发出（frame 为完整协议帧）
+ipcMain.on('call:send', function (e, frame) {
+    var fromCall = callWin && e.sender === callWin.webContents;
+    var fromRing = ringWin && e.sender === ringWin.webContents;
+    if (!fromCall && !fromRing) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('call:send', frame);
+    }
+});
+
 // ===== 阶段六十：Agent 本地执行器 =====
 // 服务端 Agent 状态机经 WS → 渲染进程（chat.js 桥接）→ 本 IPC → 本地执行文件/命令 → 结果原路回传服务端。
 // 工作区：userData/agent_workspace/<用户名>/（与微信文件同级的用户数据目录，按用户名隔离）；
@@ -1803,15 +1998,19 @@ app.whenReady().then(async function () {
     // 服务端离线/超时不阻塞启动（缺失文件运行期透传兜底）。同 origin 方案无需登录态迁移
     // （原 app:// 方案需 migrateLegacyStorage，实测跨协议导航稳定性问题后整体回退）
     // 阶段一百三十六：注入加密密钥（resolveSecureKey 归口）——启用后磁盘只落密文、内存解密
-    webCache.init({ serverUrl: SERVER_URL, secureKey: resolveSecureKey() });
+    webCache.init({
+        serverUrl: SERVER_URL,
+        secureKey: resolveSecureKey(),
+        // 阶段一百四十：同步变更刷新主窗口（启动轮/失败重试轮共用出口——重试自愈成功后页面同样自动换新）
+        onSynced: function (r) {
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+        }
+    });
     webCache.installInterceptor();
     createWindow();
-    // 原实现：await webCache.sync();（页面先于同步加载，服务端更新轮窗口停留旧版直至下次重启，用户实测 CSS 更新不生效定位）
+    // 阶段一百四十：同步失败不再死等下次重启（原先 cacheDir 旧副本遮蔽内置新快照、页面时好时坏根因）
+    // ——失败后 web-cache 内部定时重试（30s 起指数退避封顶 5 分钟），自愈成功经 onSynced 刷新主窗口
     var syncResult = await webCache.sync();
-    // 阶段一百三十五：同步若有文件变更则刷新主窗口——快速启动设计不变（窗口先显），变更轮自动换新页面
-    if (syncResult && (syncResult.downloaded > 0 || syncResult.removed > 0) && mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.reload();
-    }
     createTray();
 
     // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；

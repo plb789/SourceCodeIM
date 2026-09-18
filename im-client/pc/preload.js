@@ -479,6 +479,90 @@ contextBridge.exposeInMainWorld('desktop', {
             callback(info);
         });
     },
+    // ===== 阶段一百四十一：音视频通话（主窗口 / 通话窗 / 响铃条 三方共用本 preload） =====
+    // —— 主窗口侧（chat.js）——
+    // 打开/复用通话窗（data = {role:'caller'|'callee', call_id, peer, peer_name, peer_avatar, self_name, self_avatar, call_type}）
+    callOpen: function (data) {
+        ipcRenderer.send('call:open', data);
+    },
+    // 来电弹响铃条（data = {call_id, from, from_name, from_avatar, call_type}）
+    callRing: function (data) {
+        ipcRenderer.send('call:ring', data);
+    },
+    // 隐藏响铃条（接听/拒绝/超时/对端取消/其他设备已接）
+    callRingHide: function () {
+        ipcRenderer.send('call:ring-hide');
+    },
+    // 下行信令转发（主窗口 → 主进程 → 通话窗/响铃条，frame 为完整协议帧）
+    callSignalIn: function (frame) {
+        ipcRenderer.send('call:signal-in', frame);
+    },
+    // 主窗口订阅：通话窗/响铃条上行信令（chat.js 经 WS 发出）
+    onCallSend: function (callback) {
+        ipcRenderer.on('call:send', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // 主窗口订阅：响铃条按钮动作（data = {action:'accept'|'decline', call_id}）
+    onCallRingAction: function (callback) {
+        ipcRenderer.on('call:ring-action', function (event, data) {
+            callback(data);
+        });
+    },
+    // 主窗口订阅：通话窗已关闭（清本端通话态）
+    onCallClosed: function (callback) {
+        ipcRenderer.on('call:closed', function () {
+            callback();
+        });
+    },
+    // —— 通话窗侧（call-page.js）——
+    // 接收通话任务（data 同 callOpen）
+    onCallLoad: function (callback) {
+        ipcRenderer.on('call:load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 接收下行信令（frame 为完整协议帧，页面按 call_id/action 自行过滤）
+    onCallSignal: function (callback) {
+        ipcRenderer.on('call:signal', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // 窗体关闭转挂断语义（Alt+F4/点关闭 → 页面收口挂断信令后自行 callClose）
+    onCallWindowClose: function (callback) {
+        ipcRenderer.on('call:window-close', function () {
+            callback();
+        });
+    },
+    // 上行信令（frame 为完整协议帧，主进程转主窗口经 WS 发出）
+    callSend: function (frame) {
+        ipcRenderer.send('call:send', frame);
+    },
+    // 页面收口完成：销毁通话窗（挂断信令已发出）
+    callClose: function () {
+        ipcRenderer.send('call:close');
+    },
+    // —— 响铃条侧（call-ring.js）——
+    // 接收来电信息
+    onRingShow: function (callback) {
+        ipcRenderer.on('call:ring:show', function (event, data) {
+            callback(data);
+        });
+    },
+    // 按钮/超时动作上报（data = {action:'accept'|'decline', call_id}）
+    callRingAction: function (data) {
+        ipcRenderer.send('call:ring-action', data);
+    },
+    // 响铃条自隐藏（超时/对端取消/其他设备已接，无需主窗口发信令）
+    callRingSelfHide: function () {
+        ipcRenderer.send('call:ring-hide');
+    },
+    // 响铃停止通知（主进程隐藏响铃条时推送：窗口 hide 后渲染层无法自感知，页面据此停铃重置）
+    onRingStop: function (callback) {
+        ipcRenderer.on('call:ring:stop', function () {
+            callback();
+        });
+    },
     // ===== 阶段一百三十：本地 LSP 悬停（gopls/clangd/pyright 真实类型推导，TRAE 同构） =====
     // req = {tab_id, text, line, character}（页面不持有绝对路径，主进程按 tab_id → tab.filePath 归口；
     // 行列零基 LSP 坐标）。返回 Promise<{markdown, range} | null>，超时/未装服务器返回 null 由 viewer 页回落静态表

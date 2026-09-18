@@ -103,6 +103,9 @@ func main() {
 	// 阶段一百二十二：网页资源清单（PC 客户端本地缓存增量更新归口；无鉴权，与静态文件同级水位）
 	http.HandleFunc("GET /api/web-manifest", srv.HandleWebManifest)
 
+	// 阶段一百四十一：通话话单查询（本人相关话单分页倒序，鉴权水位与 /api/kb 一致）
+	http.HandleFunc("GET /api/call/logs", srv.HandleCallLogs)
+
 	// 阶段一百三十六：前端资源密文下发（PC 端磁盘零明文；无鉴权——密文本身即屏障，
 	// 排除规则与清单一致，密钥未配置时 503 由客户端回退明文链路）
 	http.HandleFunc("GET /api/secure-file", srv.HandleSecureFile)
