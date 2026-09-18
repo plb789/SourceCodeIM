@@ -59,6 +59,28 @@ type Config struct {
 
 	// 阶段四十六：OnlyOffice 在线文档编辑配置（服务端归口：JWT 密钥仅存 config.yaml，不下发客户端）
 	OnlyOffice OnlyOfficeConfig `yaml:"onlyoffice"`
+
+	// 阶段一百四十二：内置 TURN/STUN 中继服务（server/turn.go，音视频通话 P2P 打洞失败时的媒体中继兜底）
+	Turn TurnConfig `yaml:"turn"`
+}
+
+// TurnConfig 阶段一百四十二：TURN/STUN 中继配置节（基于 pion/turn，与 im-server 同进程零额外部署）
+// 使用前提：im-server 部署在公网 IP 服务器上，防火墙/安全组放行 port(UDP+TCP) 与 min_port~max_port(UDP)
+type TurnConfig struct {
+	// Enabled 总开关（默认 false 不启动，零开销零回归）
+	Enabled bool `yaml:"enabled"`
+	// PublicIP 中继对外报告的 IP（NAT 后部署必填公网 IP；缺省回退本机首个非回环 IPv4，仅适配单公网 IP 直挂）
+	PublicIP string `yaml:"public_ip"`
+	// Port STUN/TURN 监听端口（0=3478，UDP+TCP 双栈）
+	Port int `yaml:"port"`
+	// Realm 凭证域（0=im-server；参与长期凭证 MD5 计算，客户端配置需一致）
+	Realm string `yaml:"realm"`
+	// Username/Password 长期凭证账号（RFC 5766；仅允许该账号 Allocation，缺一启动报错）
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	// MinPort/MaxPort 媒体中继 UDP 端口段（0=49160-49200，需放行安全组）
+	MinPort int `yaml:"min_port"`
+	MaxPort int `yaml:"max_port"`
 }
 
 // OnlyOfficeConfig OnlyOffice Document Server 对接配置（自建 Windows/Docker 版）

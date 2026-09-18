@@ -23,7 +23,8 @@
         muted: false,        // 麦克风静音
         camOff: false,       // 摄像头关闭（视频模式）
         ended: false,        // 收口标记（防重复收口）
-        pendingCands: []     // 远端描述未就绪前的 ICE 候选缓冲（乱序到达）
+        pendingCands: [],    // 远端描述未就绪前的 ICE 候选缓冲（乱序到达）
+        iceServers: []       // 服务端经信令下发的 stun/turn 配置（阶段一百四十二二期；未启用为空数组纯 P2P）
     };
     var timerId = null;      // 通话时长计时器
     var watchdogId = null;   // 看门狗（协商超时/断网收口）
@@ -135,8 +136,10 @@
     }
 
     function buildPC() {
-        // P2P 直连：第一期不配 ICE servers（同网段/公网直连场景，后续按需加 coturn）
-        var pc = new RTCPeerConnection();
+        // ICE 配置：服务端经信令下发 iceServers（stun/turn）时走打洞+中继兜底；
+        // 未下发（turn.enabled=false）为空配置纯 P2P 直连（同网段/公网直连场景）
+        var conf = st.iceServers && st.iceServers.length ? { iceServers: st.iceServers } : null;
+        var pc = new RTCPeerConnection(conf);
         st.local.getTracks().forEach(function (t) { pc.addTrack(t, st.local); });
         pc.ontrack = function (e) {
             if (!e.streams || !e.streams.length) return;
@@ -193,6 +196,27 @@
         updateDuration();
         if (timerId) clearInterval(timerId);
         timerId = setInterval(updateDuration, 1000);
+        logSelectedPair();
+    }
+
+    // ===== 媒体链路归口日志（排障：打印最终选中候选对的类型——host/srflx/relay，一眼判断是否走 TURN 中继） =====
+    function logSelectedPair() {
+        if (!st.pc || !st.pc.getStats) return;
+        st.pc.getStats(null).then(function (stats) {
+            var cands = {};
+            var selPair = null;
+            stats.forEach(function (r) {
+                if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands[r.id] = r;
+                if (r.type === 'candidate-pair' && r.state === 'succeeded' &&
+                    (r.selected || r.nominated) && !selPair) selPair = r;
+            });
+            if (!selPair) return;
+            var lc = cands[selPair.localCandidateId], rc = cands[selPair.remoteCandidateId];
+            if (!lc || !rc) return;
+            var relayed = lc.candidateType === 'relay' || rc.candidateType === 'relay';
+            console.log('[通话] 媒体链路: 本端 ' + lc.candidateType + ' ↔ 对端 ' + rc.candidateType +
+                (relayed ? '（TURN 中继）' : '（P2P 直连）'));
+        }).catch(function () { });
     }
 
     // ===== 收口（清资源 + 遮罩提示 + 延迟关窗；信令已在调用前发出） =====
@@ -232,6 +256,7 @@
         try { if (st.local) st.local.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
         st.local = null; st.remote = null;
         st.pendingCands = [];
+        st.iceServers = [];
         st.state = 'idle';
         st.startedAt = 0;
         st.muted = false; st.camOff = false; st.ended = false;
@@ -284,6 +309,8 @@
             case 'accept':
                 // 主叫：被叫已接受，停回铃进入协商
                 if (st.role !== 'caller' || st.state !== 'waiting') return;
+                // 服务端在 accept 帧注入的 ICE 配置（buildPC 前生效，二期 TURN 接入主叫路径）
+                if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
                 toneStop();
                 st.state = 'connecting';
                 setStatusText('正在建立连接…');
@@ -341,6 +368,8 @@
         st.peerName = data.peer_name || st.peer;
         st.peerAvatar = data.peer_avatar || '';
         st.callType = data.call_type === 'video' ? 'video' : 'audio';
+        // 被叫路径：invite 帧注入的 ICE 配置经响铃条/主窗口随 payload 透传（服务端归口下发）
+        if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = st.callType === 'video' ? 'mode-video' : 'mode-audio';
         fillProfile();
         setStatusText(st.role === 'caller' ? '等待对方接受邀请…' : '正在接听…');

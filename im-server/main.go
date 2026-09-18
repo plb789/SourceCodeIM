@@ -158,6 +158,11 @@ func main() {
 	server.RegisterAdminRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）
 	server.StartAdminUploadScanner(cfg.UploadDir)
+	// 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；turn.enabled=false 时静默不启动）
+	if err := server.StartTURN(cfg); err != nil {
+		logger.Error("%v", err)
+		os.Exit(1)
+	}
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

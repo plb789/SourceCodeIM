@@ -15605,7 +15605,8 @@
                     role: 'callee', call_id: r.call_id, peer: r.from,
                     peer_name: callPeerName(r.from), peer_avatar: getAvatarUrl(r.from),
                     self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
-                    call_type: r.call_type
+                    call_type: r.call_type,
+                    ice_servers: r.ice || [] // invite 帧注入的 ICE 配置透传给通话窗（被叫 buildPC 用）
                 });
             }
         });
@@ -15638,7 +15639,10 @@
                 callSignalSend(msg.from_user, { action: 'reject', call_id: p.call_id, reason: 'busy' });
                 return;
             }
-            pendingRing = { call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio' };
+            pendingRing = {
+                call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio',
+                ice: Array.isArray(p.ice) ? p.ice : [] // 服务端注入的 ICE 配置（TURN 启用时下发，二期）
+            };
             window.desktop.callRing({
                 call_id: p.call_id, from: msg.from_user,
                 from_name: callPeerName(msg.from_user), from_avatar: getAvatarUrl(msg.from_user),

@@ -339,3 +339,20 @@ onlyoffice:
   server_url: "http://127.0.0.1:8888"
   # 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
   jwt_secret: "im-onlyoffice-secret"
+# 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；默认关闭零开销）
+# 使用前提：im-server 部署在公网 IP 服务器上，安全组放行 port(UDP+TCP) 与 min_port~max_port(UDP)
+# 客户端接入二期实现（iceServers 填 turn:<public_ip>:<port>，建议经信令下发凭证）
+turn:
+  enabled: false
+  # 中继对外报告的 IP：NAT 后部署必填公网 IP；单公网 IP 直挂可留空（自动取本机非回环 IPv4）
+  public_ip: ""
+  # STUN/TURN 监听端口（UDP+TCP 双栈，coturn 同款默认 3478）
+  port: 3478
+  # 凭证域（参与长期凭证 MD5 计算）
+  realm: "im-server"
+  # 长期凭证账号（RFC 5766，仅允许该账号分配中继）
+  username: "imcall"
+  password: "im-turn-secret"
+  # 媒体中继 UDP 端口段（需放行安全组）
+  min_port: 49160
+  max_port: 49200

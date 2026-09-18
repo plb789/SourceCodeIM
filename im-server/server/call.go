@@ -135,6 +135,25 @@ func callSessionOf(callID string) *callSession {
 	return callSessions[callID]
 }
 
+// callInjectICE 阶段一百四十二二期：invite/accept 转发帧注入服务端 ICE 配置（stun/turn 条目）
+// TURN 未启用返回原 content（纯 P2P 直连模式，客户端零改动兼容）；凭证归口 config.yaml，不信任客户端传值
+func callInjectICE(content string) string {
+	ice := TurnICEServers()
+	if ice == nil {
+		return content
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &m); err != nil {
+		return content // 轻解析原则：非 JSON content 原样中继不拦
+	}
+	m["ice"] = ice
+	b, err := json.Marshal(m)
+	if err != nil {
+		return content
+	}
+	return string(b)
+}
+
 // callInvite 主叫发起呼叫
 func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *callSignalPayload) {
 	var body struct {
@@ -214,8 +233,8 @@ func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *ca
 	})
 
 	logger.Info("通话发起：%s → %s（%s，call_id=%s）", from, callee, body.CallType, sess.ID)
-	// 信令转发给被叫（from_user 强制主叫，防伪造）
-	s.callForward(from, callee, msg.Content)
+	// 信令转发给被叫（from_user 强制主叫，防伪造）；TURN 启用时服务端注入 iceServers（二期）
+	s.callForward(from, callee, callInjectICE(msg.Content))
 }
 
 // callAccept 被叫接受（响铃中才有效；接通后进入媒体协商，话单时长从此刻起算）
@@ -240,7 +259,8 @@ func (s *Server) callAccept(c *Client, msg *protocol.Message, from string, p *ca
 	// 同账号其他设备撤下来电弹条（多端同时响铃，一台接受即收口）
 	dismiss, _ := json.Marshal(map[string]string{"action": "dismiss", "call_id": sess.ID})
 	s.callForwardByUser("dismiss", sess.Callee, string(dismiss))
-	s.callForward(from, peer, msg.Content)
+	// accept 转发主叫：TURN 启用时服务端注入 iceServers（主叫在 buildPC 前收到）
+	s.callForward(from, peer, callInjectICE(msg.Content))
 }
 
 // callReject 被叫拒绝（响铃中有效；写"已拒绝"话单）
