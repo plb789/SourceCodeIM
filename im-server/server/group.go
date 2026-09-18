@@ -132,6 +132,7 @@ type GroupInfo struct {
 	Name        string            `json:"name"`
 	Avatar      string            `json:"avatar"`
 	Owner       string            `json:"owner"`
+	Announce    string            `json:"announce"` // 阶段一百四十三：群公告（群设置面板展示）
 	MemberCount int               `json:"member_count"`
 	Members     []GroupMemberInfo `json:"members"`
 	CreateTime  int64             `json:"create_time"`
@@ -175,6 +176,7 @@ func buildGroupInfos(groupIDs []uint) []GroupInfo {
 			Name:        g.Name,
 			Avatar:      g.Avatar,
 			Owner:       g.OwnerID,
+			Announce:    g.Announce,
 			MemberCount: len(memberInfos),
 			Members:     memberInfos,
 			CreateTime:  g.CreateTime.Unix(),
@@ -211,9 +213,10 @@ func (s *Server) notifyGroupListSync(usernames []string) {
 // groupMemberNoticePayload 77 成员变更通知载荷
 type groupMemberNoticePayload struct {
 	GroupID     uint              `json:"group_id"`
-	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）
+	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）/ kick=被移出群聊 / leave=已退出群聊（阶段一百四十三）
 	Users       []GroupMemberInfo `json:"users,omitempty"` // action=join 时为新成员；action=reject 时为被拒绝对象
 	MemberCount int               `json:"member_count"`
+	Name        string            `json:"name,omitempty"` // 阶段一百四十三：群名（kick/leave 提示语归口服务端下发，避免前端离线期数据缺失）
 }
 
 // pushGroupMemberNotice 向成员集合推送 77 成员变更通知
@@ -532,6 +535,185 @@ func (s *Server) pushPendingGroupInvites(c *Client) {
 	if len(invites) > 0 {
 		logger.Info("用户 %s 登录补推 %d 条待处理群邀请", c.username, len(invites))
 	}
+}
+
+// ===== 阶段一百四十三：群设置面板（微信同款：群资料查看 + 群主管理） =====
+// groupSettingPayload 78 设置载荷（name/announce 均可选，至少一项非空才生效）
+type groupSettingPayload struct {
+	GroupID  uint   `json:"group_id"`
+	Name     string `json:"name"`
+	Announce string `json:"announce"`
+}
+
+// sendGroupOkResp 通用群操作回执（79/81/83 同构：ok + group_id + err）
+func (s *Server) sendGroupOkResp(c *Client, msgType int, groupID uint, ok bool, errMsg string) {
+	content, _ := json.Marshal(map[string]interface{}{
+		"ok":       ok,
+		"group_id": groupID,
+		"err":      errMsg,
+	})
+	data, _ := json.Marshal(&protocol.Message{
+		MsgType:   msgType,
+		ToUser:    c.username,
+		Content:   string(content),
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(c.username, data)
+}
+
+// handleGroupSetting 处理群设置修改（78，仅群主）：群名/公告校验（长度+敏感词，与建群同口径）→
+// 更新写库 → 回执 79 + 全群 73 同步归口刷新（前端 groupMap/标题/设置面板自动更新）
+func (s *Server) handleGroupSetting(c *Client, msg *protocol.Message) {
+	var p groupSettingPayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID != c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "仅群主可修改群设置")
+		return
+	}
+	name := strings.TrimSpace(p.Name)
+	announce := strings.TrimSpace(p.Announce)
+	if name == "" && announce == "" {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "没有需要修改的内容")
+		return
+	}
+	updates := map[string]interface{}{}
+	if name != "" && name != group.Name {
+		// 群名长度按字符截取（与建群同口径，限 20 字符）+ 敏感词过滤
+		if runes := []rune(name); len(runes) > 20 {
+			name = string(runes[:20])
+		}
+		if word, ok := containsSensitive(name); ok {
+			s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "群名称包含敏感词")
+			logger.Warn("敏感词拦截：%s 改群名包含 '%s'", c.username, word)
+			return
+		}
+		updates["name"] = name
+	}
+	if announce != group.Announce {
+		// 公告按字符限 300（varchar(1024) 字节上限留余量）+ 敏感词过滤（空公告=清除，放行）
+		if runes := []rune(announce); len(runes) > 300 {
+			announce = string(runes[:300])
+		}
+		if announce != "" {
+			if word, ok := containsSensitive(announce); ok {
+				s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "群公告包含敏感词")
+				logger.Warn("敏感词拦截：%s 群公告包含 '%s'", c.username, word)
+				return
+			}
+		}
+		updates["announce"] = announce
+	}
+	if len(updates) > 0 {
+		if err := store.DB.Model(&model.Group{}).Where("id = ?", group.ID).Updates(updates).Error; err != nil {
+			s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, group.ID, false, "保存失败，请稍后重试")
+			logger.Error("群设置写库失败：群 %d %v", group.ID, err)
+			return
+		}
+		logger.Info("群设置变更：群 %d「%s」操作人 %s 字段 %v", group.ID, group.Name, c.username, updates)
+	}
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, group.ID, true, "")
+	// 全群 73 同步归口（含操作者全部在线连接），前端据此刷新群名/标题/设置面板
+	s.notifyGroupListSync(getGroupMemberIDs(group.ID))
+}
+
+// groupKickPayload 80 踢人载荷
+type groupKickPayload struct {
+	GroupID uint   `json:"group_id"`
+	Member  string `json:"member"`
+}
+
+// handleGroupKick 处理移出成员（80，仅群主）：校验目标在群且非自己 → 删成员行 + 删其会话行
+// （防重新登录残留）→ 回执 81 + 被踢者推 77 kick（含群名，客户端清会话并提示）+ 其余成员 73 同步刷新
+func (s *Server) handleGroupKick(c *Client, msg *protocol.Message) {
+	var p groupKickPayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	p.Member = strings.TrimSpace(p.Member)
+	if p.Member == "" {
+		s.sendError(c, "请选择要移出的成员")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID != c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "仅群主可移出成员")
+		return
+	}
+	if p.Member == c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "不能移出自己")
+		return
+	}
+	res := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, p.Member).Delete(&model.GroupMember{})
+	if res.Error != nil || res.RowsAffected == 0 {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "该用户不是群成员")
+		return
+	}
+	// 被踢者会话行删除（target=gN）
+	target := groupTargetOf(p.GroupID)
+	store.DB.Where("user_id = ? AND target = ?", p.Member, target).Delete(&model.Conversation{})
+	logger.Info("移出群成员：群 %d「%s」%s 被 %s 移出", p.GroupID, group.Name, p.Member, c.username)
+
+	// 被踢者收 77 kick（带群名）；其余成员（含操作者多端）走 73 同步归口
+	s.pushGroupMemberNotice([]string{p.Member}, groupMemberNoticePayload{
+		GroupID: p.GroupID,
+		Action:  "kick",
+		Name:    group.Name,
+	})
+	s.notifyGroupListSync(getGroupMemberIDs(p.GroupID))
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, true, "")
+}
+
+// groupQuitPayload 82 退群载荷
+type groupQuitPayload struct {
+	GroupID uint `json:"group_id"`
+}
+
+// handleGroupQuit 处理退出群聊（82）：一期群主不可退（转让/解散归二期），普通成员退群 →
+// 删成员行 + 删自己的会话行 → 回执 83 + 退群者推 77 leave + 其余成员 73 同步刷新
+func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
+	var p groupQuitPayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID == c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, false, "群主暂不支持退出群聊（转让/解散功能规划中）")
+		return
+	}
+	res := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, c.username).Delete(&model.GroupMember{})
+	if res.Error != nil || res.RowsAffected == 0 {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, false, "你不是群成员")
+		return
+	}
+	target := groupTargetOf(p.GroupID)
+	store.DB.Where("user_id = ? AND target = ?", c.username, target).Delete(&model.Conversation{})
+	logger.Info("退出群聊：群 %d「%s」成员 %s 退群", p.GroupID, group.Name, c.username)
+
+	s.pushGroupMemberNotice([]string{c.username}, groupMemberNoticePayload{
+		GroupID: p.GroupID,
+		Action:  "leave",
+		Name:    group.Name,
+	})
+	s.notifyGroupListSync(getGroupMemberIDs(p.GroupID))
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, true, "")
 }
 
 // handleMultiGroupChat 阶段一百四十二：多群聊消息广播并持久化（to_user='gN'，由 handleGroupChat 开头分流进入；

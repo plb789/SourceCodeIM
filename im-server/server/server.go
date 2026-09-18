@@ -227,6 +227,13 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleGroupInvite(c, msg)
 	case protocol.MsgTypeGroupInviteResp:
 		s.handleGroupInviteResp(c, msg)
+	// 阶段一百四十三：群设置面板信令（群设置修改 / 移出成员 / 退出群聊）
+	case protocol.MsgTypeGroupSetting:
+		s.handleGroupSetting(c, msg)
+	case protocol.MsgTypeGroupKick:
+		s.handleGroupKick(c, msg)
+	case protocol.MsgTypeGroupQuit:
+		s.handleGroupQuit(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}

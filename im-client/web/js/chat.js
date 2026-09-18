@@ -2185,7 +2185,7 @@
             } else if (it.k === 'file' && it.u) {
                 var fc = document.createElement('div');
                 fc.className = 'md-file';
-                fc.title = '点击下载';
+                fc.title = '点击预览 / 下载';
                 var fn = document.createElement('span');
                 fn.className = 'md-file-name';
                 fn.textContent = it.n || '文件';
@@ -2194,7 +2194,12 @@
                 fs.textContent = it.s || '';
                 fc.appendChild(fn);
                 fc.appendChild(fs);
-                fc.addEventListener('click', function () { window.open(it.u, '_blank'); });
+                // 修复：原 window.open(it.u, '_blank') 在 Electron 里默认新开一个 im-client-pc 窗口
+                // 加载文件 URL（PDF 恰好被内置 PDFium 渲染成"能预览"的假象；xlsx/docx 等无法渲染
+                // 又触发下载，出现"空窗口+下载窗口"两个窗口）——改走普通文件卡片同款统一入口
+                // onFileCardClick：docx/xlsx/pptx/PDF 独立文档查看器预览，其余格式直接下载
+                //（无 msg_id/bubble 上下文传 null/0，预览与下载分支均不依赖）
+                fc.addEventListener('click', function () { onFileCardClick(null, 0, it.n, it.u); });
                 main.appendChild(fc);
             } else {
                 var tx = document.createElement('div');
@@ -14486,6 +14491,8 @@
         renderConvList();
         renderFriendList();
         updateChatTitle();
+        // 群设置面板开着时同步重渲染（群名/公告/成员变更实时归位）
+        if (gsetGroupID && !gsetPanel.classList.contains('hidden')) renderGroupSetting();
     });
 
     // 建群响应：提示（群条目随后经 73 全量同步上列表）
@@ -14522,6 +14529,12 @@
         } else if (data.action === 'reject') {
             if (msg.from_user !== IMSocket.getUsername()) return; // 只收服务端以自己名义推送的拒绝回执
             showToast((data.from_name || '对方') + ' 已拒绝你的邀请');
+        } else if (data.action === 'kick') {
+            // 阶段一百四十三：被移出群聊——本地清理归口（含群名服务端下发）
+            removeGroupLocal(data.group_id, '你已被移出群聊「' + (data.name || '群聊') + '」');
+        } else if (data.action === 'leave') {
+            // 阶段一百四十三：自己退群成功的清理通知
+            removeGroupLocal(data.group_id, '已退出群聊「' + (data.name || '群聊') + '」');
         }
         if (data.invite_id) {
             var remain = groupInvites.filter(function (x) { return x.invite_id !== data.invite_id; });
@@ -14530,6 +14543,228 @@
                 if (!newFriendsPanel.classList.contains('hidden')) renderNewFriendsPanel();
             }
         }
+    });
+
+    // ===== 阶段一百四十三：群设置面板（微信同款：成员网格 + 群资料 + 群主管理）
+    // 面板本体复用个人资料面板右侧滑出结构（profile-panel/profile-mask），点击群会话标题打开 =====
+    var gsetMask = document.getElementById('gset-mask');
+    var gsetPanel = document.getElementById('gset-panel');
+    var gsetMSearch = document.getElementById('gset-msearch');
+    var gsetMembersEl = document.getElementById('gset-members');
+    var gsetMore = document.getElementById('gset-more');
+    var gsetName = document.getElementById('gset-name');
+    var gsetNameRow = document.getElementById('gset-name-row');
+    var gsetNameEditBtn = document.getElementById('gset-name-edit');
+    var gsetNameEditRow = document.getElementById('gset-name-edit-row');
+    var gsetNameInput = document.getElementById('gset-name-input');
+    var gsetAnnounce = document.getElementById('gset-announce');
+    var gsetAnnounceRow = document.getElementById('gset-announce-row');
+    var gsetAnnounceBtn = document.getElementById('gset-announce-btn');
+    var gsetAnnounceEditRow = document.getElementById('gset-announce-edit-row');
+    var gsetAnnounceInput = document.getElementById('gset-announce-input');
+    var gsetQuit = document.getElementById('gset-quit');
+    var gsetQuitTip = document.getElementById('gset-quit-tip');
+    var gsetGroupID = 0; // 当前面板打开的群 ID
+
+    // 被移出/退群后的本地清理归口（77 kick/leave）：删 groupMap 条目与本地会话缓存，
+    // 若正打开该群会话则切回默认会话；设置面板开着则一并关闭
+    function removeGroupLocal(groupID, tip) {
+        var target = 'g' + groupID;
+        delete groupMap[groupID];
+        convList = convList.filter(function (cv) { return cv.target !== target; });
+        if (gsetGroupID === groupID) closeGroupSetting();
+        showToast(tip);
+        if (currentChatUser === target) openConversation('');
+        renderConvList();
+        renderFriendList();
+        updateChatTitle();
+    }
+
+    // 打开群设置面板（群会话标题点击入口；右侧滑出，与个人资料面板同款）
+    function openGroupSetting(groupID) {
+        var g = groupOfId(groupID);
+        if (!g) return;
+        gsetGroupID = groupID;
+        gsetMSearch.value = '';
+        gsetMembersEl.classList.remove('expanded');
+        exitGsetEdit(); // 归位行内编辑态
+        renderGroupSetting();
+        gsetMask.classList.remove('hidden');
+        gsetPanel.classList.remove('hidden');
+    }
+
+    function closeGroupSetting() {
+        gsetMask.classList.add('hidden');
+        gsetPanel.classList.add('hidden');
+        gsetGroupID = 0;
+    }
+    document.getElementById('gset-close').addEventListener('click', closeGroupSetting);
+
+    // 归位行内编辑态（显示只读行，隐藏编辑行）
+    function exitGsetEdit() {
+        gsetNameRow.classList.remove('hidden');
+        gsetNameEditRow.classList.add('hidden');
+        gsetAnnounceRow.classList.remove('hidden');
+        gsetAnnounceEditRow.classList.add('hidden');
+    }
+
+    // 面板渲染：成员网格（搜索过滤/查看全部/群主添加入口）+ 群名/公告回显 + 群主管理入口显隐；
+    // 数据源 groupMap（73 同步归口，members 已含昵称/头像/角色），73 到达时面板开着会自动重渲染
+    function renderGroupSetting() {
+        var g = groupOfId(gsetGroupID);
+        if (!g) { closeGroupSetting(); return; }
+        var owner = isGroupOwner('g' + g.group_id);
+        var kw = gsetMSearch.value.trim().toLowerCase();
+        gsetName.textContent = g.name || '群聊';
+        gsetAnnounce.textContent = g.announce || '暂无群公告';
+        gsetAnnounce.classList.toggle('gset-empty-announce', !g.announce);
+        // 管理入口显隐（仅群主）
+        gsetNameEditBtn.classList.toggle('hidden', !owner);
+        gsetAnnounceBtn.classList.toggle('hidden', !owner);
+        gsetQuitTip.classList.toggle('hidden', !owner);
+        gsetQuit.classList.toggle('hidden', owner);
+        // 成员网格（群主排前；搜索按昵称/账号过滤）
+        var members = (g.members || []).slice();
+        members.sort(function (a, b) { return (a.role || 2) - (b.role || 2); });
+        var shown = members.filter(function (m) {
+            var nm = (m.name || m.username || '');
+            return !kw || nm.toLowerCase().indexOf(kw) >= 0 || (m.username || '').toLowerCase().indexOf(kw) >= 0;
+        });
+        gsetMembersEl.innerHTML = '';
+        shown.forEach(function (m) {
+            var nm = (m.name || m.username || '?');
+            var isMe = m.username === IMSocket.getUsername();
+            var cell = document.createElement('div');
+            cell.className = 'gset-member';
+            cell.title = (isMe ? nm + '（我）' : nm) + (m.role === 1 ? ' · 群主' : '');
+            if (m.avatar) {
+                var av = document.createElement('img');
+                av.src = m.avatar;
+                cell.appendChild(av);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'grp-sel-ph';
+                ph.textContent = (nm || '?').charAt(0).toUpperCase();
+                cell.appendChild(ph);
+            }
+            var lbl = document.createElement('div');
+            lbl.className = 'gset-member-name';
+            lbl.textContent = isMe ? '我' : nm;
+            cell.appendChild(lbl);
+            cell.addEventListener('click', function () {
+                // 群主点击普通成员 → 确认后移出（自研确认弹窗）；群主/自己点击无操作
+                if (!owner || m.role === 1 || isMe) return;
+                showConfirm('移出成员', '将「' + nm + '」移出群聊「' + (g.name || '群聊') + '」？', function () {
+                    IMSocket.send({ msg_type: MSG.GROUP_KICK, content: JSON.stringify({ group_id: gsetGroupID, member: m.username }) });
+                }, '移出');
+            });
+            gsetMembersEl.appendChild(cell);
+        });
+        // 群主"添加"格子 → 复用邀请成员弹窗（过滤已在群成员）
+        if (owner) {
+            var add = document.createElement('div');
+            add.className = 'gset-add';
+            add.title = '添加成员';
+            var addBox = document.createElement('div');
+            addBox.className = 'gset-add-box';
+            addBox.textContent = '+';
+            var addName = document.createElement('div');
+            addName.className = 'gset-add-name';
+            addName.textContent = '添加';
+            add.appendChild(addBox);
+            add.appendChild(addName);
+            add.addEventListener('click', function () { openGroupPicker('invite', gsetGroupID); });
+            gsetMembersEl.appendChild(add);
+        }
+        // 溢出时显示"查看全部成员"（展开后按钮切换为"收起"）
+        var overflow = gsetMembersEl.scrollHeight > gsetMembersEl.clientHeight + 2;
+        var expanded = gsetMembersEl.classList.contains('expanded');
+        gsetMore.classList.toggle('hidden', !(overflow || expanded));
+        gsetMore.textContent = expanded ? '收起' : '查看全部成员';
+    }
+
+    // 群名行内编辑：显示编辑行并预填当前群名
+    gsetNameEditBtn.addEventListener('click', function () {
+        var g = groupOfId(gsetGroupID);
+        if (!g) return;
+        gsetNameRow.classList.add('hidden');
+        gsetNameEditRow.classList.remove('hidden');
+        gsetNameInput.value = g.name || '';
+        gsetNameInput.focus();
+    });
+    document.getElementById('gset-name-cancel').addEventListener('click', exitGsetEdit);
+    document.getElementById('gset-name-save').addEventListener('click', function () {
+        var name = gsetNameInput.value.trim();
+        if (!name) { showToast('群名称不能为空'); return; }
+        IMSocket.send({ msg_type: MSG.GROUP_SETTING, content: JSON.stringify({ group_id: gsetGroupID, name: name }) });
+    });
+
+    // 公告行内编辑（textarea，最多 300 字与maxlength/服务端口径一致）
+    gsetAnnounceBtn.addEventListener('click', function () {
+        var g = groupOfId(gsetGroupID);
+        if (!g) return;
+        gsetAnnounceRow.classList.add('hidden');
+        gsetAnnounceEditRow.classList.remove('hidden');
+        gsetAnnounceInput.value = g.announce || '';
+        gsetAnnounceInput.focus();
+    });
+    document.getElementById('gset-announce-cancel').addEventListener('click', exitGsetEdit);
+    document.getElementById('gset-announce-save').addEventListener('click', function () {
+        IMSocket.send({ msg_type: MSG.GROUP_SETTING, content: JSON.stringify({ group_id: gsetGroupID, announce: gsetAnnounceInput.value.trim() }) });
+    });
+
+    // 退出群聊（普通成员）：确认后发 82；成功路径本地清理由 77 leave 归口
+    gsetQuit.addEventListener('click', function () {
+        var g = groupOfId(gsetGroupID);
+        if (!g) return;
+        showConfirm('退出群聊', '退出后将删除该群会话，确定退出群聊「' + (g.name || '群聊') + '」？', function () {
+            IMSocket.send({ msg_type: MSG.GROUP_QUIT, content: JSON.stringify({ group_id: gsetGroupID }) });
+        }, '退出');
+    });
+
+    // 成员搜索过滤
+    gsetMSearch.addEventListener('input', renderGroupSetting);
+
+    // 查看全部成员 / 收起
+    gsetMore.addEventListener('click', function () {
+        var expanded = gsetMembersEl.classList.toggle('expanded');
+        gsetMore.textContent = expanded ? '收起' : '查看全部成员';
+    });
+
+    // 遮罩点击关闭
+    gsetMask.addEventListener('click', function (e) {
+        if (e.target === gsetMask) closeGroupSetting();
+    });
+
+    // 79 设置回执：成功后全群 73 同步自动刷新面板，此处归位编辑态并提示
+    IMSocket.on(MSG.GROUP_SETTING_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (!data.ok) { showToast(data.err || '保存失败'); return; }
+        exitGsetEdit();
+        showToast('已保存');
+    });
+
+    // 81 踢人回执（成功后其余成员走 73 刷新、被踢者走 77 kick 清理）
+    IMSocket.on(MSG.GROUP_KICK_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        showToast(data.ok ? '已移出群聊' : (data.err || '操作失败'));
+    });
+
+    // 83 退群回执（仅失败提示；成功清理由 77 leave 归口）
+    IMSocket.on(MSG.GROUP_QUIT_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (!data.ok) showToast(data.err || '操作失败');
+    });
+
+    // 群会话标题点击 → 打开群设置面板（微信同款点群名进设置）
+    chatTitle.addEventListener('click', function () {
+        if (isGroupTarget(currentChatUser)) openGroupSetting(groupIdFromTarget(currentChatUser));
     });
 
     // ===== 建群/邀请成员多选弹窗（微信 PC 同款双栏布局：左栏候选列表/右栏已选列表，自研弹窗禁用系统弹窗） =====
@@ -14638,7 +14873,7 @@
         var inGroup = {};
         if (grpMode === 'invite') {
             var g = groupOfId(grpTargetGroup);
-            if (g && g.members) g.members.forEach(function (u) { inGroup[u] = true; });
+            if (g && g.members) g.members.forEach(function (m) { inGroup[m.username || m] = true; }); // 73 members 为资料对象数组（兼容旧字符串形态）
         }
         var cands = [];
         friendList.forEach(function (f) {
@@ -16183,9 +16418,10 @@
             chatStatus.textContent = '';
         } else if (isGroupTarget(currentChatUser)) {
             // 阶段一百四十二：多群会话标题（群名 + 成员数，服务端 73 归口；无数据降级"群聊"）
+            // 阶段一百四十三：标题可点击进入群设置面板（微信同款点群名进设置）
             var grp = groupOfId(groupIdFromTarget(currentChatUser));
-            chatTitle.textContent = grp ? (grp.name || '群聊') : '群聊';
-            chatStatus.textContent = grp ? ((grp.member_count || 0) + '人') : '';
+            chatTitle.textContent = grp ? ((grp.name || '群聊') + '（' + (grp.member_count || 0) + '）') : '群聊';
+            chatStatus.textContent = '';
         } else if (isAIAgent(currentChatUser)) {
             // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
             chatTitle.textContent = currentChatUser;
@@ -16195,6 +16431,8 @@
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
             chatStatus.textContent = isPeerOnline(currentChatUser) ? '在线' : '离线';
         }
+        // 阶段一百四十三：群会话标题显示手型光标（可点击进群设置）
+        chatTitle.classList.toggle('grp-clickable', isGroupTarget(currentChatUser));
         // 阶段五十八：记忆管理按钮仅 AI 智能体会话显示（群聊/普通用户会话隐藏）
         memoryBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
         // 阶段六十四：任务历史按钮同口径显隐（与记忆按钮一致，仅 AI 智能体会话显示）
@@ -18563,6 +18801,8 @@
         // 阶段一百四十二：追加 .fwd-list（弹窗限高列表公共类：转发 #fwd-list / 发起群聊与邀请 #grp-list
         // 共用；用 class 选择器命中全部实例，DOM 静态常驻于 hidden 弹窗内，启动时直接注册，
         // 打开后悬停浮现自绘滑块，与新 friends-list 同模式；initOsb 幂等防重复挂载）
+        // 阶段一百四十三：追加 .gset-box（群设置面板整体滚动容器）——后改 profile-panel 同款右侧滑出，
+        // 滚动区 #gset-content 挂 .profile-content 类，由上方 '.profile-content' 选择器直接命中，无需单独注册
         ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list']
             .forEach(function (sel) {
                 // 阶段一百四十二：querySelectorAll 全量挂载——querySelector 只命中首个实例，

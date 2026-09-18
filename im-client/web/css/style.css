@@ -9337,6 +9337,238 @@ html.m #friend-menu {
     margin-top: 2px;
 }
 
+/* ===== 阶段一百四十三：群设置面板（微信同款：成员网格 + 群名称/公告 + 退出群聊，主题变量归口）
+   面板本体复用个人资料面板右侧滑出结构（.profile-panel/.profile-mask/.profile-content），此处仅内容样式 ===== */
+.gset-search-wrap {
+    margin: 4px 0 12px;
+}
+
+/* 成员网格：微信同款头像格子，默认限高两行，点"查看全部成员"展开 */
+.gset-members {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 10px;
+    max-height: 124px;
+    overflow: hidden;
+}
+
+.gset-members.expanded {
+    max-height: none;
+}
+
+.gset-member {
+    width: 56px;
+    text-align: center;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 2px 0;
+}
+
+.gset-member:hover {
+    background: var(--hover);
+}
+
+.gset-member img,
+.gset-member .grp-sel-ph {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    object-fit: cover;
+}
+
+.gset-member .grp-sel-ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    font-size: 16px;
+}
+
+.gset-member-name {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 群主专属"添加"格子：虚线边框 + 号，点击复用邀请成员弹窗 */
+.gset-add {
+    width: 56px;
+    text-align: center;
+    cursor: pointer;
+    padding: 2px 0;
+}
+
+.gset-add-box {
+    width: 40px;
+    height: 40px;
+    margin: 0 auto;
+    border: 1px dashed var(--text-light);
+    border-radius: 8px;
+    color: var(--text-light);
+    font-size: 22px;
+    line-height: 38px;
+    box-sizing: border-box;
+}
+
+.gset-add:hover .gset-add-box {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.gset-add-name {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 4px;
+}
+
+.gset-more {
+    display: block;
+    margin: 10px auto 0;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.gset-more:hover {
+    color: var(--primary);
+}
+
+/* 信息分节：微信同款浅分隔线 */
+.gset-section {
+    padding: 12px 0 4px;
+    margin-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.gset-label {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-bottom: 6px;
+}
+
+.gset-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.gset-value {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.gset-announce-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.gset-link {
+    flex-shrink: 0;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.gset-link:hover {
+    opacity: 0.85;
+}
+
+/* 行内编辑态 */
+.gset-edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.gset-name-input {
+    flex: 1;
+    margin: 0;
+}
+
+.gset-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 96px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--hover);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+}
+
+.gset-textarea:focus {
+    border-color: var(--primary);
+}
+
+.gset-edit-btns {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
+/* 底部退出区：微信同款红字按钮居中（右侧面板窄幅形态） */
+.gset-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 0 6px;
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.gset-quit-btn {
+    border: none;
+    background: transparent;
+    color: var(--danger, #e64340);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 12px;
+}
+
+.gset-quit-btn:hover {
+    opacity: 0.85;
+}
+
+.gset-quit-tip {
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+/* 空公告弱化显示（与有内容区分） */
+.gset-value.gset-empty-announce {
+    color: var(--text-light);
+}
+
+/* 群会话标题可点击进设置面板：手型光标 + hover 提示 */
+.grp-clickable {
+    cursor: pointer;
+}
+
+.grp-clickable:hover {
+    opacity: 0.85;
+}
+
 .fwd-avatar {
     width: 36px;
     height: 36px;

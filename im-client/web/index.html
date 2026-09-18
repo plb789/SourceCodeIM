@@ -648,6 +648,56 @@
         </div>
     </div>
 
+    <!-- 阶段一百四十三：群设置面板（微信同款：成员网格（搜索/查看全部/添加）+ 群名称（群主可改）+
+         群公告（群主可编辑，最多 300 字）+ 退出群聊；数据归口 73 同步，操作走 78/80/82 信令；
+         复用个人资料面板同款右侧滑出结构（profile-panel/profile-mask/profile-content），
+         内容区滚动直接命中已挂载的自绘悬浮滑块；自研面板禁用系统弹窗） -->
+    <div id="gset-mask" class="profile-mask hidden"></div>
+    <div id="gset-panel" class="profile-panel hidden">
+        <div class="profile-header">
+            <span class="profile-title">群聊设置</span>
+            <button id="gset-close" class="profile-close" title="关闭">×</button>
+        </div>
+        <div id="gset-content" class="profile-content">
+            <div class="grp-search-wrap gset-search-wrap">
+                <svg class="grp-search-icon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                <input type="text" id="gset-msearch" class="grp-search-input" placeholder="搜索群成员" autocomplete="off">
+            </div>
+            <div id="gset-members" class="gset-members"></div>
+            <button id="gset-more" class="gset-more hidden">查看全部成员</button>
+            <div class="gset-section">
+                <div class="gset-label">群名称</div>
+                <div id="gset-name-row" class="gset-row">
+                    <span id="gset-name" class="gset-value"></span>
+                    <button id="gset-name-edit" class="gset-link hidden">修改</button>
+                </div>
+                <div id="gset-name-edit-row" class="gset-edit-row hidden">
+                    <input type="text" id="gset-name-input" class="modal-input gset-name-input" maxlength="20" placeholder="输入新的群名称" autocomplete="off">
+                    <button id="gset-name-save" class="modal-btn primary">保存</button>
+                    <button id="gset-name-cancel" class="modal-btn">取消</button>
+                </div>
+            </div>
+            <div class="gset-section">
+                <div class="gset-label">群公告</div>
+                <div id="gset-announce-row" class="gset-row">
+                    <div id="gset-announce" class="gset-value gset-announce-text"></div>
+                    <button id="gset-announce-btn" class="gset-link hidden">编辑</button>
+                </div>
+                <div id="gset-announce-edit-row" class="hidden">
+                    <textarea id="gset-announce-input" class="gset-textarea" maxlength="300" placeholder="输入群公告（300 字以内）"></textarea>
+                    <div class="gset-edit-btns">
+                        <button id="gset-announce-save" class="modal-btn primary">保存</button>
+                        <button id="gset-announce-cancel" class="modal-btn">取消</button>
+                    </div>
+                </div>
+            </div>
+            <div class="gset-bottom">
+                <button id="gset-quit" class="gset-quit-btn hidden">退出群聊</button>
+                <span id="gset-quit-tip" class="gset-quit-tip hidden">群主暂不支持退出群聊（转让/解散功能规划中）</span>
+            </div>
+        </div>
+    </div>
+
     <!-- 阶段八十六：消息转发目标选择弹窗（微信 PC 同款双栏布局：左栏 = 圆角搜索框 + 群聊/好友
          勾选候选列表；右栏 = "发送给" + 已选头像网格 + 待转发内容预览卡片 + 发送/取消；
          复用 grp 双栏样式与自绘悬浮滑块，自研弹窗禁用系统弹窗；single/merge/multi 三模式共用） -->
@@ -1181,7 +1231,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.24"></script>
+    <script src="js/socket.js?v=1.25"></script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
@@ -1197,7 +1247,7 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.21"></script>
+    <script src="js/chat.js?v=3.22"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

@@ -12,6 +12,7 @@ type Group struct {
 	Name       string    `gorm:"column:name;type:varchar(64);not null" json:"name"`   // 群名称
 	OwnerID    string    `gorm:"column:owner_id;type:varchar(32);not null" json:"owner_id"` // 群主用户名
 	Avatar     string    `gorm:"column:avatar;type:varchar(255);default:''" json:"avatar"`  // 群头像（一期为空走前端默认头像，二期支持上传）
+	Announce   string    `gorm:"column:announce;type:varchar(1024);default:''" json:"announce"` // 阶段一百四十三：群公告（仅群主可编辑，全员可见）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 

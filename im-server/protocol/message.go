@@ -120,7 +120,14 @@ const (
 	MsgTypeGroupInvite       = 74 // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，仅群主可邀请；被邀请人须非成员且无在途邀请）
 	MsgTypeGroupInviteNotice = 75 // 下行：群邀请通知（被邀请人收，content 为 JSON：{invite_id, group_id, name, from_user, from_name, member_count}；离线登录补推同帧）
 	MsgTypeGroupInviteResp   = 76 // 上行：邀请响应（content 为 JSON：{invite_id, accept:true/false}；仅被邀请人可响应且 Status=0 在途邀请有效）
-	MsgTypeGroupMemberNotice = 77 // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join", users:[{username,name,role}], member_count}；action=join 时同时作为邀请结果回执发给邀请人复用一帧）
+	MsgTypeGroupMemberNotice = 77 // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join"/"reject"/"kick"/"leave", users, member_count, name}；action=join 时同时作为邀请结果回执发给邀请人复用一帧；kick/leave 阶段一百四十三：被移出/退群者的客户端据此移除会话）
+	// ===== 阶段一百四十三：群设置面板（微信同款：群资料查看 + 群主管理），数据变更统一以 73 全量同步归口 =====
+	MsgTypeGroupSetting     = 78 // 上行：修改群设置（content 为 JSON：{group_id, name?, announce?}，仅群主可改；name/announce 均可选，至少一项）
+	MsgTypeGroupSettingResp = 79 // 下行：设置回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 73 刷新，面板据此提示）
+	MsgTypeGroupKick        = 80 // 上行：移出成员（content 为 JSON：{group_id, member:"u2"}，仅群主；不可移出自己）
+	MsgTypeGroupKickResp    = 81 // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}；成功后被踢者收 77 action=kick，其余成员收 73 刷新）
+	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群涉及转让/解散归二期）
+	MsgTypeGroupQuitResp    = 83 // 下行：退群回执（content 为 JSON：{ok, group_id, err?}；成功后退群者收 77 action=leave，其余成员收 73 刷新）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
