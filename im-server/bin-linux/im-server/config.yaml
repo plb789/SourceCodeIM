@@ -28,6 +28,16 @@ max_direct_size: 2147483648
 # 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
 recall_window: 120
 
+# 阶段一百三十八：AI 计费模式（热更：修改保存后下一次模型调用即生效，无需重启服务端）
+# mode 两种可选：
+#   usage   = 按量计费（原模式）：按当次实际消耗折算，1000 tokens = 1 积分（上下文越长单次扣费越多）
+#   percall = 按次计费（TRAE CN 同款）：每次模型调用固定扣 percall_cost 积分，与 token 数无关
+ai_billing:
+  mode: usage
+  # 按次计费单次扣费（积分）：仅 mode=percall 时生效
+  percall_cost: 0.01
+
+
 # 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
 # 用途：/api/secure-file 密文接口与 PC 端加密快照 web-snapshot.enc 共用同一密钥；
 # 密钥仅存本文件与 PC 构建产物（掩码扰乱后嵌入 secure-key.js），明文不下发不下盘
@@ -77,7 +87,7 @@ ai:
   # AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
   # 阶段一百三十九：口径拆分——Agent 任务改 KB 判据（见 compress_threshold_kb），
   # compress_threshold_tokens 仅对 AI 问答生效
-  compress_threshold_tokens: 120000     # AI 问答触发阈值（估算 token；负数=禁用 AI 问答压缩）
+  compress_threshold_tokens: 12000     # AI 问答触发阈值（估算 token；负数=禁用 AI 问答压缩）
   compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
   # 阶段一百三十九：Agent 任务上下文压缩阈值（KB 口径，与 TRAE CN 状态栏同款，UTF-8 字节计）——
   # 任务循环上下文累计达到该值时把较早完整工具轮 LLM 摘要归并（最近 N 轮保留原文）；
@@ -329,3 +339,20 @@ onlyoffice:
   server_url: "http://127.0.0.1:8888"
   # 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
   jwt_secret: "im-onlyoffice-secret"
+# 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；默认关闭零开销）
+# 使用前提：im-server 部署在公网 IP 服务器上，安全组放行 port(UDP+TCP) 与 min_port~max_port(UDP)
+# 客户端接入二期实现（iceServers 填 turn:<public_ip>:<port>，建议经信令下发凭证）
+turn:
+  enabled: false
+  # 中继对外报告的 IP：NAT 后部署必填公网 IP；单公网 IP 直挂可留空（自动取本机非回环 IPv4）
+  public_ip: ""
+  # STUN/TURN 监听端口（UDP+TCP 双栈，coturn 同款默认 3478）
+  port: 3478
+  # 凭证域（参与长期凭证 MD5 计算）
+  realm: "im-server"
+  # 长期凭证账号（RFC 5766，仅允许该账号分配中继）
+  username: "imcall"
+  password: "im-turn-secret"
+  # 媒体中继 UDP 端口段（需放行安全组）
+  min_port: 49160
+  max_port: 49200
