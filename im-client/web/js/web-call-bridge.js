@@ -57,7 +57,10 @@
         '.wcb-ring-btn:active{filter:brightness(.92);}' +
         '.wcb-ring-decline{background:#fa5151;}.wcb-ring-decline:hover{background:#e64340;filter:none;}' +
         '.wcb-ring-accept{background:#07c160;}.wcb-ring-accept:hover{background:#06ad56;filter:none;}' +
-        '.wcb-ring-btn.hidden{display:none;}';
+        '.wcb-ring-btn.hidden{display:none;}' +
+        /* 阶段一百四十五：通话窗拖动把手（浏览器 iframe 吞鼠标事件，-webkit-app-region 失效，
+           以父页透明条覆盖 iframe 顶部拖动区实现按住移动；对齐 PC 端拖顶部移动窗口的体验） */
+        '.wcb-drag{position:fixed;height:36px;z-index:100001;cursor:move;user-select:none;-webkit-user-select:none;}';
     document.head.appendChild(css);
 
     // ===== 通话窗承载 =====
@@ -65,6 +68,56 @@
         if (!callFrame) return;
         callFrame.style.width = s.w + 'px';
         callFrame.style.height = s.h + 'px';
+        syncDragBar(); // 尺寸变化后拖动把手跟随（复用窗口切换形态场景）
+    }
+
+    // ===== 阶段一百四十五：通话窗拖动（把手覆盖 iframe 顶部 36px 拖动区） =====
+    var dragBar = null; // 拖动把手 DOM（iframe 兄弟层，事件归父页处理）
+    function ensureDragBar() {
+        if (dragBar || !document.body) return;
+        dragBar = document.createElement('div');
+        dragBar.className = 'wcb-drag';
+        dragBar.addEventListener('mousedown', function (e) {
+            // 仅左键拖动；起点把 iframe 从"transform 居中"切到显式 left/top（此后自由定位）
+            if (e.button !== 0 || !callFrame) return;
+            e.preventDefault();
+            var r = callFrame.getBoundingClientRect();
+            // 原实现：.wcb-frame 以 left/top:50% + translate(-50%,-50%) 居中；拖动起手固定为像素定位
+            callFrame.style.left = r.left + 'px';
+            callFrame.style.top = r.top + 'px';
+            callFrame.style.transform = 'none';
+            var ox = e.clientX - r.left, oy = e.clientY - r.top;
+            function onMove(ev) {
+                if (!callFrame) return;
+                var w = callFrame.offsetWidth, h = callFrame.offsetHeight;
+                // 边界约束：水平至少留 48px 在视口内、顶边不越出（防拖丢找不回）
+                var nl = Math.max(48 - w, Math.min(ev.clientX - ox, window.innerWidth - 48));
+                var nt = Math.max(0, Math.min(ev.clientY - oy, window.innerHeight - 48));
+                callFrame.style.left = nl + 'px';
+                callFrame.style.top = nt + 'px';
+                syncDragBar();
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+        document.body.appendChild(dragBar);
+        syncDragBar();
+    }
+    function syncDragBar() {
+        if (!dragBar || !callFrame) return;
+        var r = callFrame.getBoundingClientRect();
+        dragBar.style.left = r.left + 'px';
+        dragBar.style.top = r.top + 'px';
+        dragBar.style.width = r.width + 'px';
+        dragBar.style.height = '36px';
+    }
+    function removeDragBar() {
+        if (dragBar && dragBar.parentNode) dragBar.parentNode.removeChild(dragBar);
+        dragBar = null;
     }
 
     function postToFrame(msg) {
@@ -98,11 +151,13 @@
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
         applyFrameSize(s);
+        ensureDragBar(); // 通话窗拖动把手（阶段一百四十五）
     }
 
     function closeCallFrame() {
         if (callFrame && callFrame.parentNode) callFrame.parentNode.removeChild(callFrame);
         callFrame = null;
+        removeDragBar(); // 拖动把手随窗销毁
         frameReady = false;
         pendingLoad = null;
         sigQueue = [];
