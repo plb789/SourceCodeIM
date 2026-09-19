@@ -19,13 +19,15 @@ const (
 	// from packets of other protocols when STUN is multiplexed with those
 	// other protocols on the same Port.
 	//
-	// The magic cookie field MUST contain the fixed value 0x2112A44E in
+	// The magic cookie field MUST contain the fixed value 0x2112A442 in
 	// network byte order.
 	//
 	// Defined in "STUN Message Structure", section 6.
-	// 本地修正：上游 v3.1.7 误写为 0x2112A442（与 RFC 5389 及浏览器/coturn 全不兼容），
-	// 修正为标准值 0x2112A44E（go.mod replace 指向本目录，勿删）
-	magicCookie         = 0x2112A44E
+	// 2026-09-20 实测修正：此前误将本值改为 0x2112A44E，导致服务端丢弃所有真实客户端
+	// （Edge/libwebrtc、libjuice、Twilio、Wireshark 实测均使用 0x2112A442，即 RFC 5389 第 6 节标准值，
+	// 上游 v3.1.7 官方库原值即为 0x2112A442，从未有 bug），现恢复为 0x2112A442。
+	// 旧值注释保留：0x2112A44E（错误值，曾导致真实客户端跨网通话 ICE 失败）
+	magicCookie         = 0x2112A442
 	attributeHeaderSize = 4
 	messageHeaderSize   = 20
 

@@ -18,10 +18,11 @@ require (
 	gorm.io/gorm v1.31.2
 )
 
-// 本地修正副本：上游 pion/stun v3 magicCookie 误写为 0x2112A442（RFC 5389 标准为
-// 0x2112A44E），导致 TURN 服务拒收所有标准客户端 STUN/TURN 包（浏览器全不兼容）。
-// 修正副本见 third_party/pion-stun，勿删除
-replace github.com/pion/stun/v3 => ./third_party/pion-stun
+// 2026-09-20 实测澄清：上游 pion/stun v3.1.7 的 magicCookie=0x2112A442 一直正确
+// （RFC 5389 第 6 节标准值；Edge/libjuice/Twilio/Wireshark 实测均使用该值），
+// 此前"上游误写"的判断属于误诊，本地修正副本反而导致服务端丢弃所有真实客户端。
+// 现恢复使用官方库，replace 已注释保留：
+// replace github.com/pion/stun/v3 => ./third_party/pion-stun
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
