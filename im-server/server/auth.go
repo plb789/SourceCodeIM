@@ -30,6 +30,10 @@ var ErrEmptyPassword = errors.New("密码不能为空")
 // 注册占用会造成用户会话与群会话目标歧义，故拒绝注册；存量用户不受影响，群 target 解析只查 im_group 表）
 var ErrReservedUsername = errors.New("该用户名不可用")
 
+// ErrNeedRegister 阶段一四五：登录自动注册关闭（register_enabled=false）后，
+// 账号不存在不再静默注册，改为提示引导用户前往独立注册页注册
+var ErrNeedRegister = errors.New("该账号不存在，请先注册账号")
+
 // reservedUsernameRe 保留字用户名规则：g 开头跟纯数字（如 g1、g123），与群会话 target 编码 'g'+群ID 同形
 var reservedUsernameRe = regexp.MustCompile(`^g[0-9]+$`)
 
@@ -37,7 +41,7 @@ var reservedUsernameRe = regexp.MustCompile(`^g[0-9]+$`)
 // 底层依赖错误（MySQL/Redis 连接异常等，如 invalid connection）不属于业务错误，
 // 由调用方统一下发通用中文提示，完整错误仅记日志，避免英文底层错误暴露给客户端
 func isAuthBusinessError(err error) bool {
-	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername
+	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername || err == ErrNeedRegister
 }
 
 // hashPassword 密码加密（SHA256）

@@ -80,7 +80,7 @@ try {
 } catch (e) { }
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://127.0.0.1:8888/';
+const SERVER_URL = 'http://192.168.1.25:8888/';
 
 // ===== 阶段一百三十六：前端资源加密密钥解析归口 =====
 // 密钥来源优先级：1) 构建期生成的 secure-key.js（obfuscate.js 产出，密钥经随机掩码异或扰乱

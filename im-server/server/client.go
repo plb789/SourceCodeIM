@@ -103,8 +103,10 @@ func (c *Client) readPump() {
 			return
 		}
 
-		// 未登录前只接受登录消息
-		if c.username == "" && msg.MsgType != protocol.MsgTypeLogin {
+		// 未登录前只接受登录与注册消息（阶段一四五：注册收口独立注册页，
+		// 注册页为未登录短连接，须放行 REGISTER 信令）
+		// 原代码：if c.username == "" && msg.MsgType != protocol.MsgTypeLogin {
+		if c.username == "" && msg.MsgType != protocol.MsgTypeLogin && msg.MsgType != protocol.MsgTypeRegister {
 			c.server.sendError(c, "请先登录")
 			continue
 		}

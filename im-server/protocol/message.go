@@ -131,6 +131,9 @@ const (
 
 	// 阶段一百四十四：公司公告与动态（后台发布归口 + 客户端微信式阅读）
 	MsgTypeAnnouncementPush = 84 // 下行：公告发布实时推送（content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入列表头）
+
+	// 阶段一四五：独立注册页信令（双向同类型，注册页短连接使用，不影响主聊天连接）
+	MsgTypeRegister = 85 // 上行：注册请求（from_user=用户名，content=密码）；下行：注册结果（content="ok" 或错误提示文本）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

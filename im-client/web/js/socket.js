@@ -112,7 +112,8 @@
         GROUP_KICK_RESP: 81,     // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}）
         GROUP_QUIT: 82,          // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退）
         GROUP_QUIT_RESP: 83,     // 下行：退群回执（content 为 JSON：{ok, group_id, err?}）
-        ANNOUNCEMENT_PUSH: 84    // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
+        ANNOUNCEMENT_PUSH: 84,   // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
+        REGISTER: 85             // 阶段一四五：独立注册页注册信令（双向同类型，上行注册请求；下行 content="ok" 或错误提示）
     };
 
     function connect(username, password) {
@@ -178,6 +179,43 @@
             return true;
         }
         return false;
+    }
+
+    // 阶段一四五：独立注册通道（注册页专用短连接，与主聊天 connect 全程隔离）
+    // 建连后发送 REGISTER 信令（from_user=用户名，content=密码），
+    // 服务端回执 content="ok" 或错误提示文本后即关闭连接；onResult(ok, text) 回调必达
+    function register(username, password, onResult) {
+        var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var url = proto + location.host + '/ws';
+        var regWs = new WebSocket(url);
+        var settled = false;
+        var done = function (ok, text) {
+            if (settled) return;
+            settled = true;
+            try { regWs.close(); } catch (e) {}
+            if (typeof onResult === 'function') onResult(ok, text || '');
+        };
+        regWs.onopen = function () {
+            regWs.send(JSON.stringify({
+                msg_type: MSG.REGISTER,
+                from_user: username,
+                content: password
+            }));
+        };
+        regWs.onmessage = function (e) {
+            var msg;
+            try { msg = JSON.parse(e.data); } catch (err) { return; }
+            if (msg.msg_type !== MSG.REGISTER && msg.msg_type !== MSG.ERROR) return;
+            done(msg.content === 'ok', msg.content !== 'ok' ? msg.content : '注册成功');
+        };
+        regWs.onclose = function () {
+            // 服务端拒绝注册时先发错误帧再关连接，onmessage 已回执；
+            // 未收到任何帧即断开视为网络/服务异常
+            done(false, '注册服务连接异常，请稍后重试');
+        };
+        regWs.onerror = function () {
+            done(false, '注册服务连接异常，请稍后重试');
+        };
     }
 
     function startHeartbeat() {
@@ -310,6 +348,7 @@
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
+        register: register,
         send: send,
         on: on,
         isConnected: isConnected,

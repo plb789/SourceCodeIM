@@ -21,6 +21,11 @@ type Config struct {
 	MaxConnections int `yaml:"max_connections"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
+	// 阶段一四五：注册开关（后台 config.yaml 归口）
+	// true  = 登录时账号不存在自动注册（保留"首次登录即注册"默认行为），独立注册页亦可正常注册
+	// false = 登录不再自动注册，账号不存在时提示"该账号不存在，请先注册账号"引导用户前往注册页；
+	//         独立注册页（register.html）始终可用，注册链路经 REGISTER 信令显式完成
+	RegisterEnabled bool `yaml:"register_enabled"`
 	// 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
 	// 留空时 /api/secure-file 密文接口停用（返回 503），PC 端自动回退明文链路
 	// 与 PC 构建期注入密钥（secure-key.js 掩码扰乱）同源，明文仅存本文件不下发
@@ -276,6 +281,9 @@ func Default() *Config {
 		// 阶段三十一：提升至 10000，并在 HandleWS 中实际执行校验（原配置项从未被使用）
 		MaxConnections: 10000,
 		RecallWindow:   120,
+		// 阶段一四五：注册开关默认开启（与历史"首次登录即注册"行为一致，存量部署零回归；
+		// 需要收紧为"仅显式注册"时在 config.yaml 中置 false）
+		RegisterEnabled: true,
 		// 原实现：UploadDir: "../im-client/web/static/upload"（相对进程工作目录，从 bin 目录双击 exe 启动会失效）
 		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
 		UploadDir:   "",

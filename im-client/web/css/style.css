@@ -386,8 +386,10 @@ html, body {
     color: var(--primary);
 }
 
-/* 登录按钮（主色归口） */
-#login-btn {
+/* 登录/注册按钮（主色归口；阶段一四五：注册页按钮复用同款主色样式，与登录按钮完全一致）
+   原代码：#login-btn { ... }（仅登录按钮命中，注册按钮 #register-btn 回退浏览器默认样式） */
+#login-btn,
+#register-btn {
     width: 100%;
     height: 46px;
     margin-top: 10px;
@@ -401,12 +403,20 @@ html, body {
     transition: filter 0.15s;
 }
 
-#login-btn:hover {
+#login-btn:hover,
+#register-btn:hover {
     filter: brightness(0.94);
 }
 
-#login-btn:active {
+#login-btn:active,
+#register-btn:active {
     filter: brightness(0.88);
+}
+
+/* 阶段一四五：注册提交中禁用态（防重复提交期间视觉反馈） */
+#register-btn:disabled {
+    filter: brightness(0.8);
+    cursor: not-allowed;
 }
 
 .login-hint {
@@ -414,6 +424,18 @@ html, body {
     color: var(--text-light);
     text-align: center;
     margin-top: 14px;
+}
+
+/* 阶段一四五：登录页注册入口链接（跟随主题色） */
+.login-reg-link {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.login-reg-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 /* 右侧底部版权（参考图页脚） */

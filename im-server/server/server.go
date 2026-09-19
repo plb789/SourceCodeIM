@@ -250,6 +250,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleGroupKick(c, msg)
 	case protocol.MsgTypeGroupQuit:
 		s.handleGroupQuit(c, msg)
+	// 阶段一四五：独立注册页注册信令（注册页短连接，注册成功/失败均回执后由客户端自行断开）
+	case protocol.MsgTypeRegister:
+		s.handleRegister(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -260,14 +263,20 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	username := msg.FromUser
 	password := msg.Content
 
-	// 用户名不存在则自动注册，存在则校验密码
-	// 登录失败提示修复：原实现 verifyUser 对"用户不存在"与"密码错误"返回同一错误（ErrInvalidLogin），
-	// 密码错误也会进入注册分支，最终提示误导性的"用户名已存在"
-	// 现改为仅用户不存在（ErrUserNotFound）时尝试自动注册，密码错误直接提示"用户名或密码错误"
+	// 登录注册开关改造（阶段一四五）：
+	// 原实现：用户不存在（ErrUserNotFound）时无条件自动注册，"首次登录即注册"
+	// 现改为受后台 config.yaml 注册开关 register_enabled 控制：
+	//   true  = 保留自动注册默认行为（存量部署零回归）
+	//   false = 不再自动注册，提示"该账号不存在，请先注册账号"引导用户前往独立注册页
 	user, err := verifyUser(username, password)
 	if err == ErrUserNotFound {
-		// 尝试注册
-		user, err = registerUser(username, password)
+		if s.cfg.RegisterEnabled {
+			// 注册开关开启：尝试注册
+			user, err = registerUser(username, password)
+		} else {
+			// 注册开关关闭：登录链路不做静默注册，明确提示需先注册账号
+			err = ErrNeedRegister
+		}
 	}
 	if err != nil {
 		// 登录失败提示修复：原实现 sendError 走发送队列异步写出后立即 Close，
@@ -343,6 +352,33 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 阶段十四增强：登录补发对端已读水位，重连/重登后本地"已读"显示即时恢复（多端同步）
 	s.pushReadWatermarks(c)
 	logger.Info("用户 %s 上线", user.Username)
+}
+
+// handleRegister 阶段一四五：独立注册页注册信令处理（msg_type=85 双向同类型）
+// 上行：from_user=用户名，content=密码；下行：content="ok" 或业务错误提示文本
+// 说明：注册页为短连接，注册成功不在此登录（客户端保存凭据后跳转 index.html 走正式登录链路），
+// 失败时同步写错误后关闭连接（与 handleLogin 错误同模式，防异步队列竞态导致提示丢失）
+func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
+	user, err := registerUser(msg.FromUser, msg.Content)
+	if err != nil {
+		// 错误分级：仅业务校验错误（用户名已存在/密码不能为空等）原样下发；
+		// 底层依赖错误统一下发通用中文提示，完整错误记日志排查
+		userErrMsg := err.Error()
+		if !isAuthBusinessError(err) {
+			logger.Error("注册底层依赖异常: %v", err)
+			userErrMsg = "注册服务暂不可用，请稍后重试"
+		}
+		c.SendErrorAndClose(userErrMsg)
+		return
+	}
+	// 注册成功：回执 ok（不登录不建会话），连接交由客户端自行断开
+	resp := protocol.Message{
+		MsgType: protocol.MsgTypeRegister,
+		Content: "ok",
+	}
+	data, _ := json.Marshal(resp)
+	c.send(data)
+	logger.Info("用户 %s 注册成功（独立注册页）", user.Username)
 }
 
 // handleHeartbeat 处理心跳，续期 Redis 在线缓存

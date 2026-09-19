@@ -19,7 +19,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.41">
+    <link rel="stylesheet" href="css/style.css?v=2.43">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -108,7 +108,10 @@
                     </button>
                 </div>
                 <button id="login-btn">登 录</button>
-                <p class="login-hint">首次登录将自动注册</p>
+                <!-- 阶段一四五：注册收口独立注册页——原"首次登录将自动注册"提示保留注释，
+                     服务端 register_enabled=true 时登录仍会自动注册，false 时提示"请先注册账号"引导至此 -->
+                <!-- <p class="login-hint">首次登录将自动注册</p> -->
+                <p class="login-hint">没有账号？<a class="login-reg-link" href="register.html">注册账号</a></p>
                 <p class="login-form-foot">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
             </div>
         </div>
@@ -1314,7 +1317,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.26"></script>
+    <script src="js/socket.js?v=1.27"></script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
