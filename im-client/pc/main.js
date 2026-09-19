@@ -80,7 +80,7 @@ try {
 } catch (e) { }
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://192.168.1.25:8888/';
+const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron

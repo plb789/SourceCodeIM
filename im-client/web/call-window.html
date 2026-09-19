@@ -330,7 +330,10 @@
             background: #101214;
             z-index: 1;
         }
-        .meet-top { display: none; }
+        /* 原实现：.meet-top { display: none; } —— meetTop 复用 cw-video-top 样式类，
+           特异性低于 body.mode-video .cw-video-top，导致 1对1 视频下"多人会议"信息条误显示盖住对方名称；
+           修复：排除会议模式后强制隐藏（同特异性但源码在后，稳定压过 L114 显示规则） */
+        body:not(.mode-meet) .meet-top { display: none; }
         body.mode-meet .meet-top { display: flex; }
     </style>
 </head>
