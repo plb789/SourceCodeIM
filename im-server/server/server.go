@@ -117,6 +117,11 @@ func (s *Server) unregister(c *Client) {
 }
 
 // callOfflineCleanup 用户最后连接离线时的通话状态归口清理（callUserBusy 全覆盖 1v1 与会议）
+// 阶段一百四十七修复：切网场景信令 WS 闪断（数秒后重连）≠ 媒体断线（媒体走 TURN/UDP 与信令独立），
+// 原实现对通话中会话立即收口，误杀切网自愈中的通话（WS 回来会话已删，无法恢复）。
+// 现策略：响铃中仍立即收口（对方在等，宽限无意义）；通话中走 30s 宽限——期间用户任一连接重连上线
+// 即取消收口（媒体由客户端 ICE restart 自动恢复），超时未回按原逻辑收口（忙态不残留）。
+// 会议收口路径保持原立即收口（会议 Mesh 恢复复杂度高，本期不动）
 func callOfflineCleanup(s *Server, username string) {
 	callMu.RLock()
 	callID, busy := callUserBusy[username]
@@ -124,7 +129,44 @@ func callOfflineCleanup(s *Server, username string) {
 	if !busy {
 		return
 	}
+	sess := callSessionOf(callID)
+	if sess != nil && sess.State == callStateActive {
+		callMu.Lock()
+		if sess.offlineTimer == nil { // 幂等：宽限定时器已在跑不重复起（多连接闪断场景）
+			logger.Info("通话 %s：用户 %s 信令断开，%v 内重连自动恢复通话", callID, username, callOfflineGrace)
+			sess.offlineTimer = time.AfterFunc(callOfflineGrace, func() {
+				callMu.Lock()
+				if cur, ok := callSessions[callID]; !ok || cur != sess { // 会话已被其他路径收口：空转
+					callMu.Unlock()
+					return
+				}
+				sess.offlineTimer = nil
+				callMu.Unlock()
+				logger.Info("通话 %s：用户 %s 宽限期未重连，自动收口", callID, username)
+				s.callHangup(nil, nil, username, &callSignalPayload{Action: "hangup", CallID: callID})
+			})
+		}
+		callMu.Unlock()
+		return
+	}
 	s.callHangup(nil, nil, username, &callSignalPayload{Action: "hangup", CallID: callID})
+}
+
+// callCancelOfflineHangup 用户重连上线时取消其活跃通话的下线宽限收口（宽限期内回来 = 通话继续）；
+// 媒体面由客户端 ICE restart 自动恢复，服务端只需不收口
+func callCancelOfflineHangup(username string) {
+	callMu.Lock()
+	for id, sess := range callSessions {
+		if sess.State != callStateActive || (sess.Caller != username && sess.Callee != username) {
+			continue
+		}
+		if sess.offlineTimer != nil {
+			sess.offlineTimer.Stop()
+			sess.offlineTimer = nil
+			logger.Info("通话 %s：用户 %s 宽限期内重连，通话继续", id, username)
+		}
+	}
+	callMu.Unlock()
 }
 
 // handleMessage 消息分发
@@ -351,6 +393,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	s.pushPendingPurges(c)
 	// 阶段十四增强：登录补发对端已读水位，重连/重登后本地"已读"显示即时恢复（多端同步）
 	s.pushReadWatermarks(c)
+	// 阶段一百四十七：登录重连取消其活跃通话的下线宽限收口（切网闪断回来，通话继续）
+	callCancelOfflineHangup(user.Username)
 	logger.Info("用户 %s 上线", user.Username)
 }
 

@@ -38,6 +38,7 @@
             </div>
             <nav class="admin-nav">
                 <button class="admin-nav-item active" data-view="dashboard">性能仪表盘</button>
+                <button class="admin-nav-item" data-view="calllogs">通话统计</button>
                 <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
                 <button class="admin-nav-item" data-view="agents">AI 智能体</button>
                 <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
@@ -111,7 +112,61 @@
                     <div class="dash-card"><span class="dash-card-label">MySQL 连接池</span><span class="dash-card-value sm" id="dash-mysql">-</span></div>
                     <div class="dash-card"><span class="dash-card-label">Redis 延迟</span><span class="dash-card-value sm" id="dash-redis">-</span></div>
                 </div>
+                <!-- 阶段一百四十七：通话链路统计（P2P 直连率即打洞成功率，TURN 中继为打洞失败兜底） -->
+                <h3 class="dash-subtitle">通话链路统计</h3>
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">今日通话</span><span class="dash-card-value sm" id="dash-calls-today">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">话单总数</span><span class="dash-card-value sm" id="dash-calls-total">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">P2P 直连</span><span class="dash-card-value sm" id="dash-calls-p2p">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">TURN 中继</span><span class="dash-card-value sm" id="dash-calls-relay">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">直连率</span><span class="dash-card-value sm" id="dash-calls-rate">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">链路未统计</span><span class="dash-card-value sm" id="dash-calls-unknown">-</span></div>
+                </div>
                 <p class="admin-view-tip" id="dash-meta"></p>
+            </section>
+
+            <!-- 阶段一百四十七：通话统计（全量话单 + 链路类型筛选） -->
+            <section id="admin-view-calllogs" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>通话统计</h2>
+                    <span id="calllogs-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">媒体链路由客户端挂断时采样上报（服务端白名单归口）：P2P 直连=打洞成功，TURN 中继=打洞失败兜底转发；未统计=旧客户端或未接通话单。</p>
+                <!-- 筛选工具条：链路类型筛选 + 刷新 -->
+                <div class="vec-toolbar">
+                    <select id="calllogs-link-filter" class="admin-input vec-select" title="按媒体链路筛选">
+                        <option value="">全部链路</option>
+                        <option value="p2p">P2P 直连</option>
+                        <option value="relay">TURN 中继</option>
+                        <option value="none">未统计</option>
+                    </select>
+                    <button id="calllogs-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 全宽表格：时间/主叫/被叫/类型/状态/时长/链路 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>主叫</th>
+                                <th>被叫</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>时长</th>
+                                <th>媒体链路</th>
+                            </tr>
+                        </thead>
+                        <tbody id="calllogs-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="calllogs-prev" class="admin-btn small">上一页</button>
+                    <span id="calllogs-page-info" class="admin-view-tip">-</span>
+                    <button id="calllogs-next" class="admin-btn small">下一页</button>
+                </div>
             </section>
 
             <!-- AI 模型服务管理 -->
@@ -963,7 +1018,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.29"></script>
+    <script src="js/admin.js?v=1.30"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

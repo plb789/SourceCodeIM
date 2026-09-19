@@ -75,6 +75,8 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/logout", s.adminGuard(s.handleAdminLogout))
 	// 阶段五十：性能仪表盘指标
 	http.HandleFunc("GET /admin/api/metrics", s.adminGuard(s.handleAdminMetrics))
+	// 阶段一百四十七：管理端通话话单查询（含链路类型筛选，通话统计视图数据源）
+	http.HandleFunc("GET /admin/api/calllogs", s.adminGuard(s.HandleAdminCallLogs))
 	// AI 模型服务管理
 	http.HandleFunc("GET /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderList))
 	http.HandleFunc("POST /admin/api/ai/providers", s.adminGuard(s.handleAdminProviderCreate))

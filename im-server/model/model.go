@@ -57,8 +57,11 @@ type CallLog struct {
 	Callee   string `gorm:"column:callee;type:varchar(32);index" json:"callee"` // 被叫
 	CallType string `gorm:"column:call_type;type:varchar(8)" json:"call_type"`  // audio 语音 / video 视频
 	// Status 通话结果：completed 已接通（含时长）/ rejected 被叫拒绝 / canceled 主叫取消 / missed 无人接听 / busy 对方忙
-	Status     string    `gorm:"column:status;type:varchar(16)" json:"status"`
-	Duration   int       `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
+	Status   string `gorm:"column:status;type:varchar(16)" json:"status"`
+	Duration int    `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
+	// LinkType 媒体链路类型（阶段一百四十七话单统计：p2p 直连 / relay TURN 中继兜底；未接通或旧客户端未上报为空）
+	// 客户端挂断前 getStats 采样随 hangup 信令上报，服务端白名单归口（AutoMigrate 自动加列）
+	LinkType   string    `gorm:"column:link_type;type:varchar(8);default:''" json:"link_type"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
 }
 

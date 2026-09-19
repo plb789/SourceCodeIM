@@ -47,6 +47,21 @@ func TurnICEServers() []map[string]interface{} {
 	}
 }
 
+// relayGenObserved 中继地址生成器可观测包装（内嵌端口段生成器，行为零改动）
+// 目的：pion 默认日志级别不输出分配成功事件，中继分配归口在此打中文日志——
+// 服务端运维据此判断"是否真的有通话走了中继兜底"（无分配记录=所有通话均 P2P 直连成功，属正常）
+type relayGenObserved struct {
+	*turn.RelayAddressGeneratorPortRange
+}
+
+func (g *relayGenObserved) AllocatePacketConn(network string, requestedPort int) (net.PacketConn, net.Addr, error) {
+	conn, addr, err := g.RelayAddressGeneratorPortRange.AllocatePacketConn(network, requestedPort)
+	if err == nil {
+		logger.Info("[TURN 中继] 分配中继端口 %s（network=%s，打洞失败兜底会话）", addr.String(), network)
+	}
+	return conn, addr, err
+}
+
 // StartTURN 启动内置 TURN/STUN 服务（main.go 归口调用）
 // enabled=false 时静默返回；关键配置缺失返回错误（避免"看起来启用了实际在空转"的静默失败）
 func StartTURN(cfg *config.Config) error {
@@ -151,15 +166,16 @@ func StartTURN(cfg *config.Config) error {
 			_ = udpListener.Close()
 			return nil, fmt.Errorf("TURN TCP 监听失败 %s: %w", turnAddr, err)
 		}
-		// 中继地址生成器各 listener 独立实例——pion 约定 generator 含分配状态不可共享
-		newGen := func() *turn.RelayAddressGeneratorPortRange {
-			return &turn.RelayAddressGeneratorPortRange{
-				RelayAddress: relay,      // 对外报告的中继 IP
+		// 中继地址生成器各 listener 独立实例——pion 约定 generator 含分配状态不可共享；
+		// 外层 relayGenObserved 包装归口分配可观测日志（不影响端口段分配行为）
+		newGen := func() *relayGenObserved {
+			return &relayGenObserved{RelayAddressGeneratorPortRange: &turn.RelayAddressGeneratorPortRange{
+				RelayAddress: relay,     // 对外报告的中继 IP
 				Address:      "0.0.0.0", // 中继端口实际 bind 地址
 				MinPort:      uint16(minPort),
 				MaxPort:      uint16(maxPort),
 				MaxRetries:   10,
-			}
+			}}
 		}
 		// 驻留后台：TURN 服务在 pion 内部 goroutine 中运行，随进程生命周期存活
 		// （srv.AllocationCount() 可用于后续性能仪表盘指标，二期接入）

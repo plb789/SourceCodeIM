@@ -34,16 +34,23 @@ const (
 // callRingTimeout 响铃超时（60s 无人接听服务端自动结束，主/被叫两端同步收口）
 const callRingTimeout = 60 * time.Second
 
+// callOfflineGrace 通话中对端信令断开的下线宽限期（阶段一百四十七）：切网场景信令 WS 闪断（数秒后重连）
+// ≠ 媒体断线（媒体走 TURN/UDP 与信令独立），宽限期内重连则通话自动恢复（媒体由客户端 ICE restart 兜底）；
+// 取 30s 与客户端 disconnected 看门狗对齐，双方同窗口内放弃
+const callOfflineGrace = 30 * time.Second
+
 // callSession 通话会话（内存态，重启即清空——话单已落库不丢历史）
 type callSession struct {
-	ID       string
-	Caller   string
-	Callee   string
-	CallType string // audio / video
-	State    int8
-	StartAt  time.Time   // 呼叫发起时间
-	AcceptAt time.Time   // 接通时间（计时长起点）
-	timer    *time.Timer // 响铃超时定时器（accept/finish 时停止）
+	ID           string
+	Caller       string
+	Callee       string
+	CallType     string // audio / video
+	State        int8
+	StartAt      time.Time   // 呼叫发起时间
+	AcceptAt     time.Time   // 接通时间（计时长起点）
+	LinkType     string      // 媒体链路类型（挂断方上报：p2p/relay，话单统计归口）
+	timer        *time.Timer // 响铃超时定时器（accept/finish 时停止）
+	offlineTimer *time.Timer // 阶段一百四十七：对端全下线宽限收口定时器（重连上线时取消）
 }
 
 var (
@@ -297,7 +304,7 @@ func (s *Server) callCancel(c *Client, msg *protocol.Message, from string, p *ca
 	s.callFinish(sess, "canceled", true, from)
 }
 
-// callHangup 接通后任一方挂断（写"已接通"话单含时长）；未命中 1v1 会话时回落会议退出（阶段一百四十四）
+// callHangup 接通后任一方挂断（写"已接通"话单含时长 + 链路类型）；未命中 1v1 会话时回落会议退出（阶段一百四十四）
 func (s *Server) callHangup(c *Client, msg *protocol.Message, from string, p *callSignalPayload) {
 	sess := callSessionOf(p.CallID)
 	if sess == nil {
@@ -305,9 +312,25 @@ func (s *Server) callHangup(c *Client, msg *protocol.Message, from string, p *ca
 		s.meetLeave(from, p)
 		return
 	}
-	callMu.RLock()
+	// 链路类型上报（话单统计归口）：客户端挂断前 getStats 采样最终选中候选对随挂断信令上报；
+	// 服务端白名单归口（仅 p2p/relay，其他值一律置空），旧客户端未上报自然为空；
+	// msg 可能为 nil——callOfflineCleanup 断网下线收口路径不构造信令帧（此时无采样，置空）
+	var hb struct {
+		LinkType string `json:"link_type"`
+	}
+	if msg != nil {
+		_ = json.Unmarshal([]byte(msg.Content), &hb)
+	}
+	link := hb.LinkType
+	if link != "p2p" && link != "relay" {
+		link = ""
+	}
+	callMu.Lock()
 	isParty := (sess.Caller == from || sess.Callee == from) && sess.State == callStateActive
-	callMu.RUnlock()
+	if isParty {
+		sess.LinkType = link
+	}
+	callMu.Unlock()
 	if !isParty {
 		return
 	}
@@ -391,6 +414,7 @@ func (s *Server) callFinish(sess *callSession, status string, notify bool, sende
 		CallType: sess.CallType,
 		Status:   status,
 		Duration: duration,
+		LinkType: sess.LinkType, // 媒体链路类型（仅接通挂断有值：p2p/relay，其余场景为空）
 	}
 	if err := store.DB.Create(&record).Error; err != nil {
 		logger.Error("话单落库失败（call_id=%s）：%v", sess.ID, err)
@@ -500,4 +524,41 @@ func (s *Server) HandleCallLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "list": list, "total": total, "page": page, "page_size": pageSize})
+}
+
+// HandleAdminCallLogs 阶段一百四十七：管理端话单查询（adminGuard 鉴权，路由注册 admin.go）
+// GET /admin/api/calllogs?page=&page_size=&link_type=——服务端数据归口，全量话单（含链路类型）分页下发；
+// link_type 筛选：p2p / relay / none（未统计，旧客户端或未接通话单），缺省=全部
+func (s *Server) HandleAdminCallLogs(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	q := store.DB.Model(&model.CallLog{})
+	switch r.URL.Query().Get("link_type") {
+	case "p2p":
+		q = q.Where("link_type = ?", "p2p")
+	case "relay":
+		q = q.Where("link_type = ?", "relay")
+	case "none":
+		q = q.Where("link_type = '' OR link_type IS NULL")
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询话单失败")
+		return
+	}
+	var list []model.CallLog
+	if err := q.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&list).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询话单失败")
+		return
+	}
+	if list == nil {
+		list = []model.CallLog{}
+	}
+	adminJSON(w, map[string]interface{}{"ok": true, "list": list, "total": total, "page": page, "page_size": pageSize})
 }

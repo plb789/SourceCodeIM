@@ -149,6 +149,8 @@
             else if (item.dataset.view === 'toolchains') { loadToolchains(); }
             // 阶段一百四十四：进入公告管理视图拉取公告列表
             else if (item.dataset.view === 'announcements') { annLoadList(); }
+            // 阶段一百四十七：进入通话统计视图拉取话单列表（重置到第一页）
+            else if (item.dataset.view === 'calllogs') { calllogsPage = 1; loadCallLogs(); }
             // 阶段一百四十五：进入工作台管理视图拉取应用清单
             else if (item.dataset.view === 'workbench') { wbLoadList(); }
             else stopKBPolling();
@@ -1907,6 +1909,15 @@
             $('dash-ai-count').textContent = 'AI 智能体 ' + biz.ai_agents + ' / 服务 ' + biz.ai_providers;
             $('dash-upload-size').textContent = biz.upload_size_mb.toFixed(1) + ' MB';
             $('dash-upload-files').textContent = '文件数 ' + biz.upload_files;
+            // 阶段一百四十七：通话链路统计卡片（直连率=P2P 直连占已接通比例，链路未知=旧客户端/未接通）
+            $('dash-calls-today').textContent = biz.today_calls;
+            $('dash-calls-total').textContent = biz.total_calls;
+            $('dash-calls-p2p').textContent = biz.call_p2p;
+            $('dash-calls-relay').textContent = biz.call_relay;
+            var unknown = biz.call_completed - biz.call_p2p - biz.call_relay;
+            $('dash-calls-unknown').textContent = unknown > 0 ? unknown : 0;
+            $('dash-calls-rate').textContent = biz.call_completed > 0 ?
+                (biz.call_p2p * 100 / biz.call_completed).toFixed(1) + '%' : '-';
             // 运行环境小卡片
             $('dash-heap').textContent = sys.heap_alloc_mb.toFixed(1) + ' MB';
             $('dash-goroutines').textContent = sys.goroutines;
@@ -1946,6 +1957,79 @@
     function stopDashboardPolling() {
         if (dashTimer) { clearInterval(dashTimer); dashTimer = null; }
     }
+
+    // ===== 阶段一百四十七：通话统计（全量话单 + 链路类型筛选，数据源 /admin/api/calllogs） =====
+    // 空数据显示"暂无话单"，仅请求出错时显示"加载失败"（用户偏好归口）
+    var CALLLOGS_PAGE_SIZE = 20;
+    var calllogsPage = 1;
+    var calllogsTotalPages = 1; // 最近一次查询的总页数（next 翻页边界）
+
+    // 话单文案映射（服务端归口状态/链路枚举，前端仅展示格式化）
+    function callStatusText(s) {
+        return { completed: '已接通', rejected: '已拒绝', canceled: '已取消', missed: '无人接听', busy: '对方忙' }[s] || s || '-';
+    }
+    function callLinkText(lt) {
+        if (lt === 'p2p') return 'P2P 直连';
+        if (lt === 'relay') return 'TURN 中继';
+        return '未统计';
+    }
+    function callTypeText(t) {
+        return { audio: '语音', video: '视频' }[t] || t || '-';
+    }
+    // 时长格式化：秒 → mm:ss / hh:mm:ss
+    function callDurText(sec) {
+        sec = Number(sec) || 0;
+        var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+        function p(n) { return n < 10 ? '0' + n : '' + n; }
+        return h > 0 ? p(h) + ':' + p(m) + ':' + p(s) : p(m) + ':' + p(s);
+    }
+
+    function loadCallLogs() {
+        if (!getToken()) return;
+        var filter = $('calllogs-link-filter').value || '';
+        $('calllogs-status').textContent = '加载中…';
+        api('GET', '/admin/api/calllogs?page=' + calllogsPage + '&page_size=' + CALLLOGS_PAGE_SIZE +
+            (filter ? '&link_type=' + filter : '')).then(function (result) {
+            if (!result.ok) {
+                $('calllogs-status').textContent = result.msg || '加载失败';
+                return;
+            }
+            var rows = result.list || [];
+            if (!rows.length) {
+                $('calllogs-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">暂无话单</td></tr>';
+                $('calllogs-page-info').textContent = '共 0 条';
+                $('calllogs-status').textContent = '更新于 ' + nowHMS();
+                return;
+            }
+            var html = '';
+            rows.forEach(function (r) {
+                var t = r.create_time ? new Date(r.create_time).toLocaleString('zh-CN', { hour12: false }) : '-';
+                html += '<tr>' +
+                    '<td>' + t + '</td>' +
+                    '<td>' + (r.caller || '-') + '</td>' +
+                    '<td>' + (r.callee || '-') + '</td>' +
+                    '<td>' + callTypeText(r.call_type) + '</td>' +
+                    '<td>' + callStatusText(r.status) + '</td>' +
+                    '<td>' + (r.status === 'completed' ? callDurText(r.duration) : '-') + '</td>' +
+                    '<td>' + callLinkText(r.link_type) + '</td>' +
+                    '</tr>';
+            });
+            $('calllogs-tbody').innerHTML = html;
+            calllogsTotalPages = Math.max(1, Math.ceil(result.total / CALLLOGS_PAGE_SIZE));
+            $('calllogs-page-info').textContent = '共 ' + result.total + ' 条 · 第 ' + result.page + ' / ' + calllogsTotalPages + ' 页';
+            $('calllogs-status').textContent = '更新于 ' + nowHMS();
+        }).catch(function () {
+            $('calllogs-status').textContent = '加载失败';
+        });
+    }
+    $('calllogs-refresh').addEventListener('click', function () { calllogsPage = 1; loadCallLogs(); });
+    $('calllogs-link-filter').addEventListener('change', function () { calllogsPage = 1; loadCallLogs(); });
+    $('calllogs-prev').addEventListener('click', function () {
+        if (calllogsPage > 1) { calllogsPage--; loadCallLogs(); }
+    });
+    $('calllogs-next').addEventListener('click', function () {
+        if (calllogsPage < calllogsTotalPages) { calllogsPage++; loadCallLogs(); }
+    });
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     if (getToken()) {

@@ -101,6 +101,12 @@ type adminMetricsBusiness struct {
 	UploadScanAt int64           `json:"upload_scan_at"` // 最近扫描时间戳
 	AIProviders  int64           `json:"ai_providers"`   // 模型服务数
 	AIAgents     int64           `json:"ai_agents"`      // 启用中智能体数
+	// 阶段一百四十七：通话链路统计（话单服务端归口，管理员仪表盘直读）
+	TotalCalls    int64 `json:"total_calls"`    // 话单总数（含未接通）
+	TodayCalls    int64 `json:"today_calls"`    // 今日话单数
+	CallCompleted int64 `json:"call_completed"` // 已接通话单数
+	CallP2P       int64 `json:"call_p2p"`       // P2P 直连话单数（已接通中客户端上报 link_type=p2p）
+	CallRelay     int64 `json:"call_relay"`     // TURN 中继话单数（已接通中客户端上报 link_type=relay）
 }
 
 type adminHourStat struct {
@@ -187,6 +193,14 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 	// AI 配置规模
 	store.DB.Model(&model.AIProvider{}).Count(&b.AIProviders)
 	store.DB.Model(&model.AIAgent{}).Where("enabled = ?", true).Count(&b.AIAgents)
+
+	// 阶段一百四十七：通话链路统计（管理员仪表盘直读，低频接口 SQL count 可接受；
+	// 链路未知数前端按 已接通 - p2p - relay 自算，服务端不下发冗余字段）
+	store.DB.Model(&model.CallLog{}).Count(&b.TotalCalls)
+	store.DB.Model(&model.CallLog{}).Where("create_time >= ?", todayStart).Count(&b.TodayCalls)
+	store.DB.Model(&model.CallLog{}).Where("status = ?", "completed").Count(&b.CallCompleted)
+	store.DB.Model(&model.CallLog{}).Where("status = ? AND link_type = ?", "completed", "p2p").Count(&b.CallP2P)
+	store.DB.Model(&model.CallLog{}).Where("status = ? AND link_type = ?", "completed", "relay").Count(&b.CallRelay)
 
 	return b
 }

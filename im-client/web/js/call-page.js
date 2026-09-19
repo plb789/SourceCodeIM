@@ -58,6 +58,13 @@
         micUnavailable: false, // 麦克风不可用（设备故障降级标记，通信不阻断）
         camUnavailable: false, // 摄像头不可用（设备故障降级标记，通信不阻断）
         ended: false,        // 收口标记（防重复收口）
+        needRestart: false,  // 阶段一百四十七：ICE restart 意图标记（主叫断网置位，connected 恢复清除）
+        // ===== 阶段一百四十七：restart 恢复期状态（connected 恢复/收口/重置全清） =====
+        iceRestartActive: false, // restart 恢复期开关（主叫断网置位/被叫收 restart offer 置位）
+        restartOffer: null,      // 主叫同轮 restart 复用的 offer（防每轮新 ufrag 致被叫反复重建）
+        restartCands: [],        // restart 期本端新收集候选缓存（断线窗口丢失帧由重发兜底）
+        lastRestartOffer: '',    // 被叫幂等：上一轮收到的 restart offer sdp（重复 offer 只重发既有 answer）
+        lastRestartAnswer: null, // 被叫幂等：上轮 restart 的 answer（随重复 offer 重发）
         pendingCands: [],    // 远端描述未就绪前的 ICE 候选缓冲（乱序到达）
         iceServers: [],      // 服务端经信令下发的 stun/turn 配置（阶段一百四十二二期；未启用为空数组纯 P2P）
         // ===== 阶段一百四十四：多人会议（Mesh 全员互连） =====
@@ -68,6 +75,12 @@
     };
     var timerId = null;      // 通话时长计时器
     var watchdogId = null;   // 看门狗（协商超时/断网收口）
+    // ===== 阶段一百四十七：ICE restart 断网自动重连（1v1） =====
+    // 断网（connectionState=disconnected）后主叫单点发起 restart 重协商，被叫纯应答（role 仲裁防双端 offer 冲突）；
+    // 重试循环每 3s 重发 restart offer：断网期间信令 WS 同断时帧丢失，socket.js 3s 自动重连重登后重试帧自然送达，
+    // 无需宿主桥通知信令恢复；restart 也救不回时看门狗 15s 兜底收口，行为与既有逻辑一致
+    var restartTimer = null;      // restart 重试循环句柄（3s 间隔重发 offer 直至恢复/收口）
+    var restartFirstTimer = null; // 首次 restart 延迟句柄（2s 给短暂抖动自愈窗口）
 
     // ===== DOM =====
     var $ = function (id) { return document.getElementById(id); };
@@ -266,26 +279,35 @@
         };
         pc.onicecandidate = function (e) {
             if (!e.candidate) return;
-            send('candidate', {
-                candidate: {
-                    candidate: e.candidate.candidate,
-                    sdpMid: e.candidate.sdpMid,
-                    sdpMLineIndex: e.candidate.sdpMLineIndex
-                }
-            });
+            // 阶段一百四十七：restart 期间新收集的候选进缓存——切网断线窗口内 candidate 帧会丢失，
+            // WS 重连后由重试循环/被叫应答路径全量重发，保证 ICE 配对候选齐全
+            var c = { candidate: e.candidate.candidate, sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex };
+            if (st.iceRestartActive) cacheRestartCand(c);
+            send('candidate', { candidate: c });
         };
         pc.onconnectionstatechange = function () {
             if (st.ended || !st.pc) return;
             var s = st.pc.connectionState;
             if (s === 'connected') {
+                // 阶段一百四十七：断网自愈/restart 恢复清理——原实现 setActive 因 state 已是 active 直接 return，
+                // 看门狗不清导致断网自愈后 15s 仍误收口"网络连接中断"；此处无条件清看门狗并停 restart 重试
+                clearWatchdog();
+                stopRestartLoop();
+                clearRestartState(); // restart 恢复期状态全清（候选缓存/复用 offer/幂等标记）
                 setActive();
             } else if (s === 'failed' || s === 'closed') {
                 // 协商失败/连接关闭：通知对端并收口（对端有看门狗兜底）
                 send('hangup', {});
                 finish('连接已断开');
             } else if (s === 'disconnected') {
-                // 网络抖动可能自愈：15s 未恢复再收口，不立即挂断
-                armWatchdog(15000);
+                // 阶段一百四十七：断网先走 ICE restart 自动重连（主叫单点发起）；
+                // 看门狗 30s（与服务端下线宽限对齐）：网络抖动可能自愈/WS 闪断后重连恢复，未恢复再收口，不立即挂断
+                st.needRestart = (st.role === 'caller' && !st.meet); // 会议 Mesh 多路 restart 复杂，本期仅 1v1
+                if (st.needRestart) {
+                    st.iceRestartActive = true; // 本端 restart 期新候选进缓存（重发兜底）
+                    startRestartLoop();
+                }
+                armWatchdog(30000);
             }
         };
         st.pc = pc;
@@ -299,6 +321,60 @@
             try { st.pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { }
         });
         st.pendingCands = [];
+    }
+
+    // ===== 阶段一百四十七：ICE restart 断网自动重连（1v1，主叫单点发起） =====
+    // 停重试循环（connected 恢复/收口/状态重置时调用）
+    function stopRestartLoop() {
+        if (restartTimer) { clearInterval(restartTimer); restartTimer = null; }
+        if (restartFirstTimer) { clearTimeout(restartFirstTimer); restartFirstTimer = null; }
+    }
+    // restart 期候选缓存（按 candidate 串去重；重复 addIceCandidate 对端亦无害）
+    function cacheRestartCand(c) {
+        for (var i = 0; i < st.restartCands.length; i++) {
+            if (st.restartCands[i].candidate === c.candidate) return;
+        }
+        st.restartCands.push(c);
+    }
+    // 全量重发 restart 期候选（主叫随每轮 offer 重发 / 被叫随 answer 重发；对端重复 add 静默忽略）
+    function flushRestartCands() {
+        st.restartCands.forEach(function (c) {
+            send('candidate', { candidate: c });
+        });
+    }
+    // 清干净 restart 恢复期状态（connected 恢复/收口/重置）
+    function clearRestartState() {
+        st.iceRestartActive = false;
+        st.needRestart = false;
+        st.restartOffer = null;
+        st.restartCands = [];
+        st.lastRestartOffer = '';
+        st.lastRestartAnswer = null;
+    }
+    // 单轮 restart 重试：同轮复用同一 offer（restartIce 生成新 ufrag 只做一次，防被叫反复重建），
+    // 每轮重发 offer + 已收集候选——断网期间 WS 同断丢帧，socket.js 3s 自动重连后重试帧自然送达
+    function tryIceRestart() {
+        if (st.ended || !st.pc || !st.needRestart) return;
+        if (st.pc.connectionState === 'connected') { stopRestartLoop(); return; } // 已自愈
+        if (st.restartOffer) {
+            send('offer', { sdp: st.restartOffer }); // 同轮重发
+            flushRestartCands();
+            return;
+        }
+        try { st.pc.restartIce(); } catch (e) { return; }
+        st.pc.createOffer({ iceRestart: true }).then(function (off) {
+            return st.pc.setLocalDescription(off).then(function () {
+                st.restartOffer = { type: off.type, sdp: off.sdp }; // 本轮定格，重试循环复用
+                send('offer', { sdp: st.restartOffer });
+                flushRestartCands();
+            });
+        }).catch(function () { }); // 单次失败静默，重试循环/看门狗兜底
+    }
+    // 启动重试循环：2s 首发短暂抖动自愈窗口，此后每 3s 重发（断网期间 WS 同断，重连后重试帧自然送达）
+    function startRestartLoop() {
+        stopRestartLoop();
+        restartFirstTimer = setTimeout(tryIceRestart, 2000);
+        restartTimer = setInterval(tryIceRestart, 3000);
     }
 
     function setActive() {
@@ -333,6 +409,30 @@
         }).catch(function () { });
     }
 
+    // ===== 链路类型采样（话单统计归口：挂断前 getStats 取最终选中候选对，p2p 直连 / relay 中继； =====
+    // 超时/失败返回空串不阻塞挂断收口，服务端白名单归口，旧客户端未上报自然为空）
+    function collectLinkType(cb) {
+        var done = false;
+        var fin = function (v) { if (!done) { done = true; cb(v || ''); } };
+        var to = setTimeout(function () { fin(''); }, 500);
+        try {
+            if (!st.pc || !st.pc.getStats) { clearTimeout(to); return fin(''); }
+            st.pc.getStats(null).then(function (stats) {
+                var cands = {}, selPair = null;
+                stats.forEach(function (r) {
+                    if (r.type === 'local-candidate' || r.type === 'remote-candidate') cands[r.id] = r;
+                    if (r.type === 'candidate-pair' && r.state === 'succeeded' &&
+                        (r.selected || r.nominated) && !selPair) selPair = r;
+                });
+                if (!selPair) { clearTimeout(to); return fin(''); }
+                var lc = cands[selPair.localCandidateId], rc = cands[selPair.remoteCandidateId];
+                if (!lc || !rc) { clearTimeout(to); return fin(''); }
+                clearTimeout(to);
+                fin((lc.candidateType === 'relay' || rc.candidateType === 'relay') ? 'relay' : 'p2p');
+            }).catch(function () { clearTimeout(to); fin(''); });
+        } catch (e) { clearTimeout(to); fin(''); }
+    }
+
     // ===== 收口（清资源 + 遮罩提示 + 延迟关窗；信令已在调用前发出） =====
     function finish(reason) {
         if (st.ended) return;
@@ -341,6 +441,8 @@
         toneStop();
         if (timerId) { clearInterval(timerId); timerId = null; }
         clearWatchdog();
+        stopRestartLoop();   // 阶段一百四十七：收口停 restart 重试循环
+        clearRestartState(); // 阶段一百四十七：收口清 restart 恢复期状态
         try { if (st.pc) st.pc.close(); } catch (e) { }
         st.pc = null;
         // 阶段一百四十四：会议收口清理（逐成员关连接 + 停共享流）
@@ -371,9 +473,13 @@
             return;
         }
         // 响铃期取消（微信"已取消"话单语义）；接通后为挂断
-        if (st.state === 'waiting') send('cancel', {});
-        else send('hangup', {});
-        finish('通话已结束');
+        if (st.state === 'waiting') { send('cancel', {}); finish('通话已结束'); return; }
+        // 话单链路类型归口：挂断前采样最终选中候选对（最长 500ms，不阻塞收口体验）随挂断信令上报
+        collectLinkType(function (link) {
+            if (st.ended) return; // 连点守卫：首次回调已收口则跳过
+            send('hangup', { link_type: link });
+            finish('通话已结束');
+        });
     }
 
     // ===== 状态重置（窗口复用换场时清干净上一场资源） =====
@@ -381,6 +487,8 @@
         toneStop();
         if (timerId) { clearInterval(timerId); timerId = null; }
         clearWatchdog();
+        stopRestartLoop();   // 阶段一百四十七：换场重置停 restart 重试循环
+        clearRestartState(); // 阶段一百四十七：换场重置清 restart 恢复期状态
         try { if (st.pc) st.pc.close(); } catch (e) { }
         st.pc = null;
         // 阶段一百四十四：会议连接与共享状态清理
@@ -431,17 +539,37 @@
     }
     function calleeAnswerOffer(p) {
         // 被叫：收到 offer → setRemote → answer
-        clearWatchdog();
+        // 阶段一百四十七：active 态收 offer = 主叫 ICE restart 恢复（首协商为 connecting）；
+        // restart 期保持看门狗兜底（恢复失败 15s 收口），处理失败不误挂断交由看门狗/failed 兜底
+        var isRestart = (st.state === 'active');
+        // 被叫幂等：主叫重试循环会重发同一 offer（sdp 相同）——只重发既有 answer + 候选缓存，
+        // 不重复 setRemote/createAnswer（防本地 ICE 反复重建导致永不稳定）
+        if (isRestart && p.sdp && p.sdp.sdp === st.lastRestartOffer) {
+            if (st.lastRestartAnswer) send('answer', { sdp: st.lastRestartAnswer });
+            flushRestartCands();
+            return;
+        }
+        if (!isRestart) clearWatchdog();
         var pc = st.pc;
         pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
+            if (isRestart) {
+                st.iceRestartActive = true;  // 本端 restart 期新候选进缓存（随 answer 重发兜底）
+                st.lastRestartOffer = p.sdp.sdp; // 记录本轮 offer（重复帧幂等判定）
+            }
             flushCands();
             return pc.createAnswer();
         }).then(function (ans) {
             return pc.setLocalDescription(ans).then(function () { return ans; });
         }).then(function (ans) {
             if (st.ended) return;
-            send('answer', { sdp: { type: ans.type, sdp: ans.sdp } });
+            var answerSdp = { type: ans.type, sdp: ans.sdp };
+            send('answer', { sdp: answerSdp });
+            if (isRestart) {
+                st.lastRestartAnswer = answerSdp; // 留作重复 offer 的幂等重发
+                flushRestartCands();
+            }
         }).catch(function () {
+            if (isRestart) return; // restart 乱序 offer 处理失败：静默，交由重试/看门狗兜底
             send('hangup', {});
             finish('建立连接失败');
         });
@@ -852,10 +980,11 @@
                 break;
             case 'answer':
                 if (st.role !== 'caller' || !st.pc) return;
-                if (st.state !== 'connecting') return;
+                // 阶段一百四十七：active 态收 answer = ICE restart 恢复应答（首协商为 connecting）
+                if (st.state !== 'connecting' && st.state !== 'active') return;
                 st.pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
                     flushCands();
-                }).catch(function () { });
+                }).catch(function () { }); // restart 期间乱序 answer 静默忽略，重试循环/看门狗兜底
                 break;
             case 'candidate':
                 if (!p.candidate || !st.pc) return;
