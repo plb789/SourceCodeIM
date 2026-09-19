@@ -149,6 +149,8 @@
             else if (item.dataset.view === 'toolchains') { loadToolchains(); }
             // 阶段一百四十四：进入公告管理视图拉取公告列表
             else if (item.dataset.view === 'announcements') { annLoadList(); }
+            // 阶段一百四十五：进入工作台管理视图拉取应用清单
+            else if (item.dataset.view === 'workbench') { wbLoadList(); }
             else stopKBPolling();
         });
     });
@@ -3652,4 +3654,213 @@
     });
     $('ann-cover').addEventListener('change', function () { annRenderCoverPreview(this.value.trim()); });
     $('ann-reads-close').addEventListener('click', function () { $('ann-reads-mask').classList.add('hidden'); });
+
+    // ===== 阶段一百四十五：工作台管理（企业办公应用统一入口，后台维护网站清单） =====
+    var wbPage = 1;
+    var wbTotal = 0;
+    var wbEditingId = 0; // 0=新建，>0=编辑中的应用 ID
+
+    var WB_CAT_TEXT = { office: '办公应用', biz: '业务系统', hr: '人事行政', it: 'IT服务', other: '其他' };
+    var WB_MODE_TEXT = { embed: '内置浏览器', window: '内置窗体', system: '系统浏览器' };
+
+    // ===== 列表 =====
+    function wbLoadList() {
+        $('wb-status').textContent = '加载中…';
+        var qs = '?page=' + wbPage + '&size=50';
+        var category = $('wb-filter-category').value;
+        var status = $('wb-filter-status').value;
+        var kw = $('wb-search').value.trim();
+        if (category) qs += '&category=' + category;
+        if (status !== '') qs += '&status=' + status;
+        if (kw) qs += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/admin/api/workbench' + qs).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); $('wb-status').textContent = '加载失败'; return; }
+            wbTotal = result.data.total || 0;
+            $('wb-status').textContent = '共 ' + wbTotal + ' 条';
+            $('wb-page-info').textContent = '第 ' + wbPage + ' 页 / 共 ' + Math.max(1, Math.ceil(wbTotal / 50)) + ' 页';
+            wbRenderList(result.data.list || []);
+        }).catch(function (e) { $('wb-status').textContent = '加载失败'; showToast(e.message || '网络异常'); });
+    }
+
+    function wbRenderList(list) {
+        var tbody = $('wb-tbody');
+        tbody.innerHTML = '';
+        if (!list.length) {
+            var tr = document.createElement('tr');
+            var td = document.createElement('td');
+            td.colSpan = 9;
+            td.className = 'vec-empty';
+            td.textContent = '暂无应用，点击"新建应用"添加公司内部办公网站';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+            return;
+        }
+        list.forEach(function (a) {
+            var tr = document.createElement('tr');
+            // ID
+            var tdId = document.createElement('td'); tdId.textContent = a.id; tr.appendChild(tdId);
+            // 图标（有图标显示小图，无则名称首字占位）
+            var tdIcon = document.createElement('td');
+            if (a.icon) {
+                var img = document.createElement('img');
+                img.src = a.icon;
+                img.className = 'wb-list-icon';
+                tdIcon.appendChild(img);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'wb-list-icon wb-list-icon-ph';
+                ph.textContent = (a.name || '?').charAt(0).toUpperCase();
+                tdIcon.appendChild(ph);
+            }
+            tr.appendChild(tdIcon);
+            // 名称（备注悬浮提示）
+            var tdName = document.createElement('td');
+            tdName.textContent = a.name;
+            tdName.title = a.remark || a.name;
+            tr.appendChild(tdName);
+            // 分类
+            var tdCat = document.createElement('td');
+            tdCat.textContent = WB_CAT_TEXT[a.category] || a.category;
+            tr.appendChild(tdCat);
+            // 地址（超长省略，悬浮看全文）
+            var tdUrl = document.createElement('td');
+            tdUrl.textContent = a.url;
+            tdUrl.title = a.url;
+            tdUrl.className = 'wb-url-cell';
+            tr.appendChild(tdUrl);
+            // 打开方式
+            var tdMode = document.createElement('td');
+            tdMode.textContent = WB_MODE_TEXT[a.open_mode] || a.open_mode;
+            tr.appendChild(tdMode);
+            // 排序
+            var tdSort = document.createElement('td'); tdSort.textContent = a.sort_order; tr.appendChild(tdSort);
+            // 状态
+            var tdSt = document.createElement('td');
+            var st = document.createElement('span');
+            st.className = 'ann-status-dot ' + (a.status === 1 ? 'ann-status-published' : 'ann-status-draft');
+            st.textContent = a.status === 1 ? '启用' : '禁用';
+            tdSt.appendChild(st);
+            tr.appendChild(tdSt);
+            // 操作
+            var tdOp = document.createElement('td');
+            function opBtn(text, cls, fn) {
+                var b = document.createElement('button');
+                b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+                b.textContent = text;
+                b.addEventListener('click', fn);
+                return b;
+            }
+            tdOp.appendChild(opBtn('编辑', '', function () { wbOpenEditor(a); }));
+            tdOp.appendChild(opBtn(a.status === 1 ? '禁用' : '启用', '', function () {
+                a.status = a.status === 1 ? 0 : 1;
+                api('PUT', '/admin/api/workbench/' + a.id, a).then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                    showToast(a.status === 1 ? '已启用' : '已禁用');
+                    wbLoadList();
+                }).catch(function () { showToast('网络异常'); });
+            }));
+            tdOp.appendChild(opBtn('删除', '', function () {
+                confirmBox('删除后客户端工作台立即不可见，确定删除「' + a.name + '」？', function () {
+                    api('DELETE', '/admin/api/workbench/' + a.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        wbLoadList();
+                    }).catch(function () { showToast('网络异常'); });
+                });
+            }));
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ===== 编辑弹窗 =====
+    function wbOpenEditor(a) {
+        wbEditingId = a ? (a.id || 0) : 0;
+        $('wb-modal-title').textContent = wbEditingId ? '编辑应用' : '新建应用';
+        $('wb-name').value = a ? a.name : '';
+        $('wb-category').value = a ? a.category : 'office';
+        $('wb-url').value = a ? a.url : '';
+        $('wb-icon').value = a ? a.icon : '';
+        wbRenderIconPreview(a ? a.icon : '');
+        $('wb-open-mode').value = a ? a.open_mode : 'embed'; // 新建默认内置浏览器（PC 浏览区面板新标签，体验最顺）
+        $('wb-sort').value = a ? a.sort_order : 0;
+        $('wb-enabled').checked = a ? a.status === 1 : true;
+        $('wb-remark').value = a ? a.remark : '';
+        $('wb-modal-mask').classList.remove('hidden');
+    }
+
+    // 图标预览（有 URL 显示图，无则隐藏）
+    function wbRenderIconPreview(url) {
+        var img = $('wb-icon-preview');
+        if (url) {
+            img.src = url;
+            img.classList.remove('hidden');
+        } else {
+            img.classList.add('hidden');
+        }
+    }
+
+    // ===== 保存归口 =====
+    function wbSave() {
+        var name = $('wb-name').value.trim();
+        var url = $('wb-url').value.trim();
+        if (!name) { showToast('请填写应用名称'); return; }
+        if (!/^https?:\/\//i.test(url)) {
+            showToast('地址请以 http:// 或 https:// 开头');
+            return;
+        }
+        var payload = {
+            name: name,
+            url: url,
+            icon: $('wb-icon').value.trim(),
+            category: $('wb-category').value,
+            open_mode: $('wb-open-mode').value,
+            sort_order: parseInt($('wb-sort').value, 10) || 0,
+            status: $('wb-enabled').checked ? 1 : 0,
+            remark: $('wb-remark').value.trim()
+        };
+        var req = wbEditingId
+            ? api('PUT', '/admin/api/workbench/' + wbEditingId, payload)
+            : api('POST', '/admin/api/workbench', payload);
+        req.then(function (result) {
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            $('wb-modal-mask').classList.add('hidden');
+            showToast('已保存');
+            wbLoadList();
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // ===== 事件绑定 =====
+    $('wb-create').addEventListener('click', function () { wbOpenEditor(null); });
+    $('wb-refresh').addEventListener('click', function () { wbLoadList(); });
+    $('wb-search').addEventListener('input', function () { wbPage = 1; wbLoadList(); });
+    $('wb-filter-category').addEventListener('change', function () { wbPage = 1; wbLoadList(); });
+    $('wb-filter-status').addEventListener('change', function () { wbPage = 1; wbLoadList(); });
+    $('wb-prev').addEventListener('click', function () { if (wbPage > 1) { wbPage--; wbLoadList(); } });
+    $('wb-next').addEventListener('click', function () { if (wbPage * 50 < wbTotal) { wbPage++; wbLoadList(); } });
+    $('wb-modal-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    $('wb-modal-cancel').addEventListener('click', function () { $('wb-modal-mask').classList.add('hidden'); });
+    $('wb-modal-ok').addEventListener('click', wbSave);
+    // 图标上传（FormData 走工作台专用端点，回填 URL 并预览）
+    $('wb-icon-btn').addEventListener('click', function () { $('wb-icon-file').click(); });
+    $('wb-icon-file').addEventListener('change', function () {
+        var file = (this.files || [])[0];
+        this.value = '';
+        if (!file) return;
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/admin/api/workbench/icon', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd
+        }).then(function (resp) {
+            return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+        }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '图标上传失败'); return; }
+            $('wb-icon').value = result.data.url;
+            wbRenderIconPreview(result.data.url);
+            showToast('图标已上传');
+        }).catch(function () { showToast('网络异常'); });
+    });
+    $('wb-icon').addEventListener('change', function () { wbRenderIconPreview(this.value.trim()); });
 })();

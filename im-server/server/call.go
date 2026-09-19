@@ -8,8 +8,8 @@ package server
 //   3. 话单落库：im_call_log 话单 + im_message 通话信封消息（聊天记录零适配即可见通话记录，
 //      content 为 JSON {"type":"call",...}，前端按视角渲染文案）
 //   4. 媒体面零参与：WebRTC P2P 直连（第一期不部署 STUN/TURN），服务端只中继 SDP/ICE 信令
-// 鉴权水位：与私聊一致（登录连接 + 黑名单拦截）；Web 端不可发起（无 media 能力，由前端隐藏入口），
-// 被叫无 PC 端在线时服务端直接拒绝呼叫（hub.HasPC 判定）
+// 鉴权水位：与私聊一致（登录连接 + 黑名单拦截）；WEB 端通话上线后可发起（前端 web-call-bridge 桥承载，
+// 手机端仍由前端隐藏入口），被叫无可通话端在线时服务端直接拒绝呼叫（hub.HasCall 判定：PC 端或 WEB 端）
 
 import (
 	"encoding/json"
@@ -199,7 +199,9 @@ func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *ca
 		return
 	}
 	// 第一期仅 PC 端支持通话（Web/手机端无音视频能力）
-	if !s.hub.HasPC(callee) {
+	// 原代码：if !s.hub.HasPC(callee) {
+	// 阶段一百四十五：WEB 端（浏览器）通话上线，被叫能力改归口 HasCall（PC 端或 WEB 端在线均可接听，手机端仍不支持）
+	if !s.hub.HasCall(callee) {
 		s.callSendError(from, p.CallID, "对方当前设备不支持音视频通话")
 		return
 	}

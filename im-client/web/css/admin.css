@@ -1586,3 +1586,59 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     color: var(--danger, #fa5151);
     background: color-mix(in srgb, var(--danger, #fa5151) 12%, transparent);
 }
+
+/* ===== 阶段一百四十五：工作台管理（应用清单表格 + 编辑弹窗） ===== */
+.wb-list-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    display: inline-block;
+    vertical-align: middle;
+}
+.wb-list-icon-ph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--primary, #07c160) 14%, transparent);
+    color: var(--primary, #07c160);
+    font-size: 14px;
+    font-weight: 600;
+    user-select: none;
+}
+.wb-url-cell {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wb-modal-box {
+    width: min(560px, 94vw);
+}
+.wb-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 64vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.wb-modal-body .admin-input {
+    flex: 1;
+    min-width: 200px;
+}
+.wb-cat-input {
+    flex: none !important;
+    width: 140px;
+    min-width: 140px !important;
+}
+.wb-sort-input {
+    flex: none !important;
+    width: 110px;
+    min-width: 110px !important;
+}
+.wb-icon-input {
+    flex: 1;
+    min-width: 200px;
+}

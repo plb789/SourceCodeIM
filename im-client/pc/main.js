@@ -82,6 +82,22 @@ try {
 // 服务端地址（默认本地）
 const SERVER_URL = 'http://192.168.1.25:8888/';
 
+// ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
+// SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
+// 同样生效——该 origin 下 navigator.mediaDevices 为 undefined（getUserMedia 仅 HTTPS/localhost 可用），
+// 通话窗会降级提示"浏览器需 HTTPS 或 localhost 访问方可通话"。此处将该 origin 显式注册为受信任
+// 安全上下文（Chromium 官方开关 chrome://flags 同款，必须在 app ready 前注入），PC 端媒体能力与
+// localhost 部署完全对齐；服务端升级 HTTPS 后此开关自动失效（仅 http 且非本地地址才注册）
+// 原代码：无此兜底，非 localhost 的 http 部署时 PC 端通话不可用
+(function () {
+    try {
+        var su = new URL(SERVER_URL);
+        if (su.protocol === 'http:' && su.hostname !== 'localhost' && su.hostname !== '127.0.0.1' && su.hostname !== '[::1]') {
+            app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', su.origin);
+        }
+    } catch (e) { /* SERVER_URL 解析失败：维持默认行为 */ }
+})();
+
 // ===== 阶段一百三十六：前端资源加密密钥解析归口 =====
 // 密钥来源优先级：1) 构建期生成的 secure-key.js（obfuscate.js 产出，密钥经随机掩码异或扰乱
 // 后嵌入，随 app.asar 打包——源码/产物中均无明文密钥可 grep）；2) dev 未打包时回退读取服务端

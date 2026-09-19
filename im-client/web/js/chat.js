@@ -4622,6 +4622,9 @@
             // 阶段一百四十四：公告面板纳入互斥切换，首次进入时拉取列表（排序服务端归口：置顶+时间）
             if (annPanelEl) annPanelEl.classList.toggle('hidden', tabName !== 'announcement');
             if (tabName === 'announcement') annLoadList();
+            // 阶段一百四十五：工作台面板纳入互斥切换，首次进入拉取列表，此后每次进入静默刷新（原位重绘不闪屏）
+            if (wbPanelEl) wbPanelEl.classList.toggle('hidden', tabName !== 'workbench');
+            if (tabName === 'workbench') wbLoadList(wbLoaded);
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
@@ -4989,6 +4992,128 @@
         try { data = JSON.parse(msg.content); } catch (e) {}
         if (data && data.title) showToast('新' + (annCatNames[data.category] || '公告') + '：' + data.title);
         annLoadList();
+    });
+
+    // ===== 阶段一百四十五：工作台（企业办公应用统一入口，钉钉工作台同款） =====
+    // 服务端归口：/api/workbench 下发启用清单（sort_order 小在前，无用户态），
+    // 后台增删改查后客户端进入面板即拉最新。分类分组渲染（固定枚举顺序），
+    // 图标优先服务端图片（加载失败降级名称首字，同头像降级约定）；
+    // 打开方式按端能力映射：PC 内置浏览器=主界面浏览区面板新标签（newtab+goto，同聊天输入框上方
+    // 内置浏览器按钮）/ 内置窗体=独立 BrowserWindow / 系统浏览器=browserTabsOp 外开，
+    // 浏览器版新标签；手机端 WebView 同窗跳转（mobile.js window.open 覆盖规则自动生效）。
+    var wbPanelEl = document.getElementById('workbench-panel');
+    var wbListEl = document.getElementById('wb-app-list');
+    var wbLoaded = false; // 懒加载标记：首次进入面板拉取，此后每次进入静默刷新（原位重绘不闪屏）
+    var wbCatOrder = ['office', 'biz', 'hr', 'it', 'other'];
+    var wbCatNames = { office: '办公应用', biz: '业务系统', hr: '人事行政', it: 'IT服务', other: '其他' };
+
+    function wbLoadList(silent) {
+        if (!wbListEl) return;
+        if (!silent) wbListEl.innerHTML = '<div class="wb-empty">加载中…</div>';
+        fetch('/api/workbench')
+            .then(function (r) { return r.json(); })
+            .then(function (resp) {
+                if (!resp || !resp.ok) {
+                    // 仅真实请求失败提示加载失败；空数据态走下方"暂无应用"
+                    wbListEl.innerHTML = '<div class="wb-empty">加载失败</div>';
+                    return;
+                }
+                var list = resp.data && resp.data.list || [];
+                if (!list.length) {
+                    wbListEl.innerHTML = '<div class="wb-empty">暂无应用</div>';
+                    return;
+                }
+                wbRenderList(list);
+                wbLoaded = true;
+            })
+            .catch(function () { if (!silent) wbListEl.innerHTML = '<div class="wb-empty">加载失败</div>'; });
+    }
+
+    // 分类分组渲染：固定枚举顺序，仅渲染非空分组；名称/备注一律 textContent 转义（服务端已消毒，双保险）
+    function wbRenderList(list) {
+        var byCat = {};
+        list.forEach(function (a) {
+            var c = wbCatNames[a.category] ? a.category : 'other';
+            (byCat[c] = byCat[c] || []).push(a);
+        });
+        wbListEl.innerHTML = '';
+        wbCatOrder.forEach(function (cat) {
+            var apps = byCat[cat];
+            if (!apps || !apps.length) return;
+            var group = document.createElement('div');
+            group.className = 'wb-cat-group';
+            var title = document.createElement('div');
+            title.className = 'wb-cat-title';
+            title.textContent = wbCatNames[cat];
+            group.appendChild(title);
+            var grid = document.createElement('div');
+            grid.className = 'wb-app-grid';
+            apps.forEach(function (a) {
+                var item = document.createElement('div');
+                item.className = 'wb-app-item';
+                item.dataset.wbUrl = a.url;
+                item.dataset.wbMode = a.open_mode === 'system' ? 'system' : 'window';
+                if (a.remark) item.title = a.remark;
+                var icon = document.createElement('span');
+                icon.className = 'wb-app-icon';
+                if (a.icon) {
+                    var img = document.createElement('img');
+                    img.src = a.icon;
+                    img.alt = a.name;
+                    // 图标降级：图片加载失败时切换名称首字占位（同头像降级约定）
+                    img.addEventListener('error', function () {
+                        icon.classList.add('ph');
+                        icon.textContent = (a.name || '?').charAt(0).toUpperCase();
+                    });
+                    icon.appendChild(img);
+                } else {
+                    icon.classList.add('ph');
+                    icon.textContent = (a.name || '?').charAt(0).toUpperCase();
+                }
+                item.appendChild(icon);
+                var name = document.createElement('span');
+                name.className = 'wb-app-name';
+                name.textContent = a.name;
+                item.appendChild(name);
+                grid.appendChild(item);
+            });
+            group.appendChild(grid);
+            wbListEl.appendChild(group);
+        });
+    }
+
+    // 应用点击（事件委托）：按后台配置的打开方式归口打开
+    if (wbListEl) {
+        wbListEl.addEventListener('click', function (e) {
+            var item = e.target.closest('.wb-app-item');
+            if (!item || !item.dataset.wbUrl) return;
+            var url = item.dataset.wbUrl;
+            var isPC = !!(window.desktop && typeof window.desktop.openAnnLink === 'function');
+            var hasNav = !!(window.desktop && typeof window.desktop.browserNav === 'function');
+            if (item.dataset.wbMode === 'system' && isPC && typeof window.desktop.browserTabsOp === 'function') {
+                window.desktop.browserTabsOp('open-external', '', url); // 系统默认浏览器
+            } else if (item.dataset.wbMode === 'embed' && hasNav) {
+                // 内置浏览器：与聊天输入框上方内置浏览器按钮同一浏览区面板——
+                // 新建标签（面板未展开时主进程自动展开）后 goto 加载网址；
+                // webview 未就绪由主进程 queuedNav 兜底，网址 http/https 已服务端归口校验
+                window.desktop.browserNav('newtab', '').then(function () {
+                    return window.desktop.browserNav('goto', url);
+                }).catch(function () { window.open(url, '_blank'); });
+            } else if (isPC) {
+                window.desktop.openAnnLink(url).catch(function () { window.open(url, '_blank'); }); // 内置独立窗体
+            } else {
+                window.open(url, '_blank'); // 浏览器版新标签；手机端被 mobile.js 覆盖为 WebView 同窗跳转
+            }
+        });
+    }
+
+    // Esc 退出工作台 Tab 回聊天（与公告卡片流同款交互约定）
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && wbPanelEl && !wbPanelEl.classList.contains('hidden') &&
+            annDetailMask.classList.contains('hidden')) {
+            var chatTab = document.querySelector('.sidebar-tab[data-tab="chat"]');
+            if (chatTab) chatTab.click();
+        }
     });
 
     // ===== 阶段四十三：AI 问答（智能体列表 / 流式打字机渲染） =====
@@ -14726,6 +14851,9 @@
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
+        // 阶段一百四十六修复：响应必须先缓存申请列表（原实现未存 lastFriendReqData，
+        // 渲染永远拿到初始 null，导致"角标显示待处理数但列表空白"）
+        lastFriendReqData = data.list || [];
         var pending = data.pending || 0;
         // 双角标同步：通讯录导航图标（微信同款）与好友面板"新的朋友"入口条
         var badgeText = pending > 0 ? (pending > 99 ? '99+' : String(pending)) : '';

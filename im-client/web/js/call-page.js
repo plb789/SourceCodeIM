@@ -5,7 +5,40 @@
    状态机：idle → waiting（主叫响铃）→ connecting（媒体协商）→ active（通话中）→ ended */
 (function () {
     'use strict';
-    var d = window.desktop || {};
+    // 桥归口：PC 端走 preload 注入（IPC 三段桥，独立 BrowserWindow 承载）；
+    // 阶段一百四十五：WEB 端浏览器在同源 iframe 内（父页 web-call-bridge.js 承载）经 postMessage 桥通信，
+    // 接口语义与 PC preload 完全一致（onCallLoad/onCallSignal/callSend/callClose/meetInviteAsk）
+    var d = window.desktop || (window.parent !== window ? iframeBridge() : {});
+
+    // ===== WEB 端浏览器 iframe 桥（父页对接，消息协议见 web-call-bridge.js 头注） =====
+    function iframeBridge() {
+        var post = function (msg) {
+            msg.src = 'web-call-page';
+            try { window.parent.postMessage(msg, location.origin); } catch (e) { }
+        };
+        var onLoad = null;     // 通话任务回调（call:load）
+        var onMsg = null;      // 下行信令回调（call:signal）
+        var onCloseReq = null; // 窗体关闭转挂断（浏览器场景保留通道）
+        window.addEventListener('message', function (ev) {
+            if (ev.origin !== location.origin) return;
+            var m = ev.data;
+            if (!m || m.src !== 'web-call-bridge') return;
+            if (m.t === 'call:load' && onLoad) onLoad(m.data);
+            else if (m.t === 'call:signal' && onMsg) onMsg(m.frame);
+            else if (m.t === 'call:window-close' && onCloseReq) onCloseReq();
+        });
+        // 握手：脚本就绪即上报（父页收到后才投递通话任务/回放缓冲信令，防动态 iframe
+        // about:blank 阶段 load 事件误触发导致的任务丢失）
+        post({ t: 'call:page-ready' });
+        return {
+            onCallLoad: function (cb) { onLoad = cb; },
+            onCallSignal: function (cb) { onMsg = cb; },
+            onCallWindowClose: function (cb) { onCloseReq = cb; },
+            callSend: function (frame) { post({ t: 'call:send', frame: frame }); },
+            callClose: function () { post({ t: 'call:close' }); },
+            meetInviteAsk: function (data) { post({ t: 'meet:invite-ask', data: data }); }
+        };
+    }
 
     // ===== 会话状态 =====
     var st = {
@@ -143,8 +176,19 @@
     // 设备降级探测（QQ/微信同款语义：设备不可用只降级不阻断通信）：
     // 按通话类型完整请求 → 失败则逐项降级（仅音频 / 仅视频）→ 全部不可用则无媒体加入（仅接收），
     // 失败项打 UI 标记（按钮置灰斜线 + 无视频占位），信令/建连/接收对端媒体一律照常
+    // 原代码：直接 return navigator.mediaDevices.getUserMedia(cons);
+    // 阶段一百四十五：非安全上下文（浏览器 http 非 localhost 访问）下 navigator.mediaDevices 为 undefined，
+    // 同步抛 TypeError 会中断 getMediaDegrade 链路导致通话窗卡"等待"态；改为显式拒绝走既有降级路径
     function gumTry(cons) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            return Promise.reject(new Error('insecure-context'));
+        }
         return navigator.mediaDevices.getUserMedia(cons);
+    }
+
+    // 非安全上下文检测（getUserMedia 浏览器强约束：仅 HTTPS 或 localhost 可用）
+    function mediaInsecure() {
+        return !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
     }
     function getMediaDegrade() {
         var wantVideo = st.callType === 'video';
@@ -880,9 +924,10 @@
                 armWatchdog(10000); // 接听看门狗：对端已取消等竞态下迟迟无 offer 自收口
             }
             // 降级提示（一次性；后续状态/计时文案覆盖）
-            if (st.micUnavailable && st.camUnavailable) setStatusText('麦克风/摄像头不可用');
+            // 阶段一百四十五：非安全上下文（http 非 localhost）时补充浏览器硬约束说明（getUserMedia 不可用的根因）
+            if (st.micUnavailable && st.camUnavailable) setStatusText(mediaInsecure() ? '浏览器需 HTTPS 或 localhost 访问方可通话' : '麦克风/摄像头不可用');
             else if (st.camUnavailable) setStatusText('摄像头不可用');
-            else if (st.micUnavailable) setStatusText('麦克风不可用');
+            else if (st.micUnavailable) setStatusText(mediaInsecure() ? '浏览器需 HTTPS 或 localhost 访问方可通话' : '麦克风不可用');
         });
     });
 

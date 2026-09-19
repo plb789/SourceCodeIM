@@ -131,7 +131,9 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 			skipped = append(skipped, m+"（不在群内）")
 			continue
 		}
-		if s.hub.Count(m) == 0 || !s.hub.HasPC(m) {
+		// 原代码：if s.hub.Count(m) == 0 || !s.hub.HasPC(m) {
+		// 阶段一百四十五：WEB 端会议上线，成员可邀能力改归口 HasCall（PC 端或 WEB 端均可入会）
+		if s.hub.Count(m) == 0 || !s.hub.HasCall(m) {
 			skipped = append(skipped, nicknameOf(m)+"（当前设备不支持）")
 			continue
 		}
@@ -223,7 +225,9 @@ func (s *Server) meetInviteMore(from string, p *callSignalPayload, members []str
 			skipped = append(skipped, m+"（不在群内）")
 			continue
 		}
-		if s.hub.Count(m) == 0 || !s.hub.HasPC(m) {
+		// 原代码：if s.hub.Count(m) == 0 || !s.hub.HasPC(m) {
+		// 阶段一百四十五：WEB 端会议上线，会中邀请能力改归口 HasCall（PC 端或 WEB 端均可入会）
+		if s.hub.Count(m) == 0 || !s.hub.HasCall(m) {
 			skipped = append(skipped, nicknameOf(m)+"（当前设备不支持）")
 			continue
 		}

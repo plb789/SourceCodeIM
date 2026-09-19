@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.18">
+    <link rel="stylesheet" href="css/admin.css?v=1.19">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -48,6 +48,7 @@
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
                 <button class="admin-nav-item" data-view="announcements">公告管理</button>
+                <button class="admin-nav-item" data-view="workbench">工作台管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
@@ -682,6 +683,61 @@
                 <button id="ann-next" class="admin-btn small">下一页</button>
             </div>
             </section>
+
+            <!-- 工作台管理（阶段一百四十五：企业办公应用统一入口，后台维护网站清单，客户端宫格导航） -->
+            <section id="admin-view-workbench" class="admin-view">
+            <header class="admin-view-head">
+                <h2>工作台管理</h2>
+                <span id="wb-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">企业内部办公网站的统一导航入口（钉钉工作台同款）：此处维护的应用清单实时下发到聊天端左侧"工作台"面板，点击即可打开对应系统。地址仅支持 http/https；图标可上传图片（不传则显示名称首字）；打开方式可选内置窗体或系统默认浏览器；排序值越小越靠前。</p>
+            <!-- 工具条：分类/状态筛选 + 关键词搜索 + 新建 -->
+            <div class="vec-toolbar">
+                <select id="wb-filter-category" class="admin-input">
+                    <option value="">全部分类</option>
+                    <option value="office">办公应用</option>
+                    <option value="biz">业务系统</option>
+                    <option value="hr">人事行政</option>
+                    <option value="it">IT服务</option>
+                    <option value="other">其他</option>
+                </select>
+                <select id="wb-filter-status" class="admin-input">
+                    <option value="">全部状态</option>
+                    <option value="1">启用</option>
+                    <option value="0">禁用</option>
+                </select>
+                <input type="text" id="wb-search" class="admin-input vec-search-input" placeholder="按名称/地址搜索">
+                <button id="wb-refresh" class="admin-btn small">刷新</button>
+                <button id="wb-create" class="admin-btn small primary">新建应用</button>
+            </div>
+            <!-- 应用表格 -->
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>图标</th>
+                            <th>名称</th>
+                            <th>分类</th>
+                            <th>地址</th>
+                            <th>打开方式</th>
+                            <th>排序</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wb-tbody">
+                        <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- 分页条 -->
+            <div class="vec-pager">
+                <button id="wb-prev" class="admin-btn small">上一页</button>
+                <span id="wb-page-info" class="admin-view-tip">-</span>
+                <button id="wb-next" class="admin-btn small">下一页</button>
+            </div>
+            </section>
         </main>
     </div>
 
@@ -850,6 +906,47 @@
         </div>
     </div>
 
+    <!-- 工作台应用编辑弹窗（阶段一百四十五：名称/地址/图标上传/分类/打开方式/排序/启停） -->
+    <div id="wb-modal-mask" class="modal-mask hidden">
+        <div class="modal-box wb-modal-box">
+            <div id="wb-modal-title" class="modal-title">新建应用</div>
+            <div class="wb-modal-body">
+                <div class="ann-form-row">
+                    <input id="wb-name" class="admin-input" placeholder="应用名称（必填，如：OA办公）" maxlength="64">
+                    <select id="wb-category" class="admin-input wb-cat-input">
+                        <option value="office">办公应用</option>
+                        <option value="biz">业务系统</option>
+                        <option value="hr">人事行政</option>
+                        <option value="it">IT服务</option>
+                        <option value="other">其他</option>
+                    </select>
+                </div>
+                <input id="wb-url" class="admin-input" placeholder="网站地址（必填，http:// 或 https:// 开头）" maxlength="512">
+                <!-- 图标行：上传图标（复用管理端上传链路），回填 URL 并预览；不传则客户端显示名称首字 -->
+                <div class="ann-form-row">
+                    <button id="wb-icon-btn" class="admin-btn small" type="button">上传图标</button>
+                    <input type="file" id="wb-icon-file" accept="image/*" class="hidden">
+                    <input id="wb-icon" class="admin-input wb-icon-input" placeholder="图标 URL（可空，上传后自动回填）">
+                    <img id="wb-icon-preview" class="ann-cover-preview hidden" alt="图标预览">
+                </div>
+                <div class="ann-form-row">
+                    <select id="wb-open-mode" class="admin-input wb-cat-input" title="内置浏览器：主界面浏览区面板新标签打开；内置窗体：聊天端独立窗口打开；系统浏览器：调用系统默认浏览器">
+                        <option value="embed">内置浏览器打开</option>
+                        <option value="window">内置窗体打开</option>
+                        <option value="system">系统浏览器打开</option>
+                    </select>
+                    <input id="wb-sort" type="number" class="admin-input wb-sort-input" placeholder="排序值" value="0">
+                    <label class="ann-check"><input type="checkbox" id="wb-enabled" checked> 启用</label>
+                </div>
+                <input id="wb-remark" class="admin-input" placeholder="备注（可空，鼠标悬浮提示用）" maxlength="255">
+            </div>
+            <div class="modal-btns">
+                <button id="wb-modal-cancel" class="modal-btn">取消</button>
+                <button id="wb-modal-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Agent 任务详情弹窗（阶段六十四：目标/总结/失败原因全文，pre-wrap 保留换行） -->
     <div id="admin-atdetail-mask" class="modal-mask hidden">
         <div class="modal-box admin-chunks-box">
@@ -866,7 +963,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.27"></script>
+    <script src="js/admin.js?v=1.29"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

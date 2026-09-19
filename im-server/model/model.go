@@ -627,3 +627,33 @@ type AnnouncementRead struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (AnnouncementRead) TableName() string { return "im_announcement_read" }
+
+// ===== 阶段一百四十五：工作台（企业办公应用统一入口，后台维护网站清单，客户端宫格导航，钉钉工作台同款） =====
+
+// WorkbenchAppStatus 工作台应用状态
+const (
+	WbStatusDisabled int8 = 0 // 禁用（客户端不可见）
+	WbStatusEnabled  int8 = 1 // 启用（客户端可见）
+)
+
+// WorkbenchApp 工作台应用表 im_workbench_app（后台增删改查，客户端只读启用项）
+type WorkbenchApp struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Name string `gorm:"column:name;type:varchar(64);not null" json:"name"`    // 应用名称（如"OA办公"）
+	URL  string `gorm:"column:url;type:varchar(512);not null" json:"url"`     // 网站地址（仅 http/https，服务端校验）
+	Icon string `gorm:"column:icon;type:varchar(255);default:''" json:"icon"` // 图标图片 URL（空则客户端回退名称首字占位）
+	// Category 分类归口（固定枚举，客户端按预设图标/文案渲染）：office=办公应用 / biz=业务系统 / hr=人事行政 / it=IT服务 / other=其他
+	Category string `gorm:"column:category;type:varchar(16);default:'office';index" json:"category"`
+	// OpenMode 打开方式归口：embed=内置浏览器（PC 主界面浏览区面板新标签）/ window=内置窗体（PC 独立 BrowserWindow）/ system=系统默认浏览器
+	OpenMode  string `gorm:"column:open_mode;type:varchar(8);default:'window'" json:"open_mode"`
+	SortOrder int    `gorm:"column:sort_order;default:0" json:"sort_order"` // 排序（小在前）
+	// Status 0禁用 1启用；默认值必须为 0：default:1 会让 GORM Create 省略零值字段落成默认值 1（禁用保存后反被启用的零值陷阱，同公告表 default:0 约定）
+	Status     int8      `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
+	Remark     string    `gorm:"column:remark;type:varchar(255);default:''" json:"remark"`
+	Creator    string    `gorm:"column:creator;type:varchar(32);default:''" json:"creator"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (WorkbenchApp) TableName() string { return "im_workbench_app" }

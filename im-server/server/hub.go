@@ -101,6 +101,20 @@ func (h *Hub) HasPC(username string) bool {
 	return false
 }
 
+// HasCall 阶段一百四十五：该用户是否存在支持音视频通话的端在线连接——通话/会议被叫能力归口判定。
+// WEB 端（浏览器，platform="web"）通话功能上线后与 PC 端（platform="pc"）同具 WebRTC 通话能力；
+// 手机端（platform 空）暂不支持。多端同账号在线时任一可通话连接在线即视为可呼叫
+func (h *Hub) HasCall(username string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients[username] {
+		if c.platform == "pc" || c.platform == "web" {
+			return true
+		}
+	}
+	return false
+}
+
 // Usernames 返回所有在线用户名（去重，任一连接在线即在线）
 func (h *Hub) Usernames() []string {
 	h.mu.RLock()

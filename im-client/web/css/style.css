@@ -4196,10 +4196,20 @@ html.m .nav-rail .current-avatar {
     height: 30px;
 }
 
-html.m .nav-icons {
+/* 阶段一百四十五：工作台入口使底栏图标增至 5 个，固定 gap 在窄屏溢出，
+   改为占满剩余空间弹性均分（原实现注释保留，回退时直接换回） */
+/* html.m .nav-icons {
     flex-direction: row;
     gap: 36px;
     margin-top: 0;
+} */
+html.m .nav-icons {
+    flex-direction: row;
+    gap: 0;
+    margin-top: 0;
+    flex: 1;
+    min-width: 0;
+    justify-content: space-evenly;
 }
 
 /* 竖条指示在横排布局下改为图标主题色高亮（active 已有 color: var(--primary)） */
@@ -12533,4 +12543,97 @@ body.browser-resizing .browser-web-frame {
     font-size: 11px;
     color: var(--text-light);
     flex-shrink: 0;
+}
+
+/* ===== 阶段一百四十五：工作台面板（企业办公应用宫格，分类分组 + 图标 + 名称，钉钉工作台同款） ===== */
+.wb-app-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 14px 16px;
+}
+/* 空态/加载态 */
+.wb-empty {
+    padding: 48px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+/* 分类分组 */
+.wb-cat-group {
+    margin-bottom: 14px;
+}
+.wb-cat-title {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 6px 2px 8px;
+    user-select: none;
+}
+/* 应用宫格：自适应列宽，窄屏自动减列 */
+.wb-app-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    gap: 8px 4px;
+}
+.wb-app-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 4px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+    user-select: none;
+}
+.wb-app-item:hover {
+    background: var(--hover);
+}
+.wb-app-item:active {
+    background: var(--hover);
+    opacity: 0.85;
+}
+/* 应用图标：服务端图片优先；.ph 为名称首字占位（跟随主题色，同头像降级约定） */
+.wb-app-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.wb-app-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.wb-app-icon.ph {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--primary);
+    font-size: 18px;
+    font-weight: 600;
+}
+.wb-app-name {
+    max-width: 100%;
+    font-size: 12px;
+    color: var(--text);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 移动端适配（html.m，微信手机版同款宫格密度） */
+html.m .wb-app-list {
+    padding: 10px 10px calc(20px + env(safe-area-inset-bottom, 0px));
+}
+html.m .wb-app-grid {
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+}
+html.m .wb-app-icon {
+    width: 48px;
+    height: 48px;
 }

@@ -132,7 +132,10 @@
             connected = true;
             // 发送登录消息（阶段六十：PC 端 Electron preload 暴露 window.desktop，据此上报设备类型，
             // 服务端 Agent 本地执行器按 platform=pc 判定文件/命令工具下发目标；Web/手机端为空走服务端执行）
-            send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: window.desktop ? 'pc' : '' });
+            // 原代码：platform: window.desktop ? 'pc' : ''
+            // 阶段一百四十五：WEB 端浏览器通话桥上线后 window.desktop 同样存在，经 __webCallBridge 标记区分——
+            // 浏览器上报 'web'（服务端通话/会议被叫能力改归口 HasCall），Electron PC 端仍报 'pc'，手机端无桥报空
+            send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: window.desktop ? (window.__webCallBridge ? 'web' : 'pc') : '' });
             // 启动心跳
             startHeartbeat();
         };

@@ -6,6 +6,10 @@
     <title>即时通讯</title>
     <!-- 手机版 APP 壳引导（Capacitor 专用）：浏览器环境自动跳过，详见文件头注释 -->
     <script src="js/app-shell.js?v=1.0"></script>
+    <!-- 阶段一百四十五：WEB 端浏览器通话桥——纯浏览器环境以页内形态承载音视频通话（iframe 通话窗 + 页内响铃条），
+         仅向 window.desktop 注入通话相关方法（PC 端 preload 已注入则整脚本旁路；手机端 Capacitor 恒旁路），
+         须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
+    <script src="js/web-call-bridge.js?v=1.0"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
     <script src="js/mobile.js?v=1.2"></script>
     <!-- 阶段七十七：PC 端自定义标题栏引导——仅 Electron 壳内启用（浏览器/手机 APP 无 desktop 桥自动旁路），
@@ -19,7 +23,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.43">
+    <link rel="stylesheet" href="css/style.css?v=2.44">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -148,6 +152,10 @@
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M18 11v2h4v-2h-4zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4zM4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9H4zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.02 1.5-3.34z"/></svg>
                     <span id="nav-ann-badge" class="nav-badge hidden"></span>
                 </div>
+                <!-- 阶段一百四十五：工作台入口（企业办公应用统一导航，后台维护网站清单，钉钉工作台同款） -->
+                <div class="nav-icon sidebar-tab" data-tab="workbench" title="工作台">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
+                </div>
             </div>
             <div class="nav-bottom">
                 <button id="add-friend-btn" class="nav-btn" title="添加好友">
@@ -235,6 +243,12 @@
                     <span class="new-friends-text">红头文件</span>
                     <span id="ann-badge-red" class="new-friends-badge hidden"></span>
                 </div>
+            </div>
+
+            <!-- 阶段一百四十五：工作台面板（企业办公应用宫格，服务端归口下发清单，点击打开对应网站；
+                 按分类分组渲染，图标优先服务端图片、缺失回退名称首字，同头像降级约定） -->
+            <div id="workbench-panel" class="friends-panel hidden">
+                <div id="wb-app-list" class="wb-app-list"></div>
             </div>
 
             <!-- 搜索结果面板：置于侧栏层，聊天/好友两个Tab下均可展示 -->
@@ -1333,7 +1347,7 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.26"></script>
+    <script src="js/chat.js?v=3.28"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
