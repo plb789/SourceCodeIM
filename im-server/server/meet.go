@@ -384,12 +384,18 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 	meetMu.Lock()
 	room, ok := meetRooms[p.CallID]
 	if !ok {
+		// 原代码：直接 return（房间已解散时不清忙）。
+		// 修复：并发挂断场景下，房间已被先到者的 meetDismiss 删除，最后到达的 hangup
+		// 若不清理自身忙标记会永久残留，后续发起 1v1 恒提示"你正在通话中"
+		delete(callUserBusy, from)
 		meetMu.Unlock()
 		return
 	}
 	inMeet := room.Members[from]
 	invited := room.Invited[from]
 	if !inMeet && !invited {
+		// 原代码：直接 return。补兜底清理（幂等）：重复退出信令不残留忙态
+		delete(callUserBusy, from)
 		meetMu.Unlock()
 		return
 	}
@@ -426,7 +432,11 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 		s.callForward(from, m, string(finishB))
 	}
 
-	if len(rest) == 0 {
+	// 原代码：仅 len(rest)==0 解散。
+	// 修复：余员前端在"会议只剩自己"时收到上方 hangup 帧即自动收口关窗，且不会再补发
+	// 退出信令——若服务端不解散，房间将永久滞留最后成员，其 busy 标记残留，
+	// 此后发起 1v1 恒提示"你正在通话中"。rest==1 时同步解散并清忙（收口帧已发给余员）
+	if len(rest) <= 1 {
 		duration := 0
 		if !started.IsZero() {
 			duration = int(time.Since(started).Seconds())
