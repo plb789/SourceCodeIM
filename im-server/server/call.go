@@ -280,7 +280,7 @@ func (s *Server) callReject(c *Client, msg *protocol.Message, from string, p *ca
 	if sess == nil || sess.Callee != from || sess.State != callStateRinging {
 		return
 	}
-	s.callFinish(sess, "rejected", true)
+	s.callFinish(sess, "rejected", true, from)
 }
 
 // callCancel 主叫响铃期放弃（等价微信"已取消"；写"已取消"话单）
@@ -294,7 +294,7 @@ func (s *Server) callCancel(c *Client, msg *protocol.Message, from string, p *ca
 		s.callHangup(c, msg, from, p)
 		return
 	}
-	s.callFinish(sess, "canceled", true)
+	s.callFinish(sess, "canceled", true, from)
 }
 
 // callHangup 接通后任一方挂断（写"已接通"话单含时长）；未命中 1v1 会话时回落会议退出（阶段一百四十四）
@@ -311,7 +311,7 @@ func (s *Server) callHangup(c *Client, msg *protocol.Message, from string, p *ca
 	if !isParty {
 		return
 	}
-	s.callFinish(sess, "completed", true)
+	s.callFinish(sess, "completed", true, from)
 }
 
 // callRelayMedia 媒体协商中继（offer/answer/candidate）：仅校验会话存在与参与者身份，content 原样透传；
@@ -338,7 +338,10 @@ func (s *Server) callRelayMedia(c *Client, msg *protocol.Message, from string, p
 // callFinish 通话收口归口：清状态 → 转发结束信令 → 写话单 + 通话信封消息（双方会话可见）
 // notify=true 时向对方转发结束信令（reject/cancel/hangup 由客户端发起，content 已带语义；
 // timeout 由服务端发起，构造 timeout 帧同时通知双方）
-func (s *Server) callFinish(sess *callSession, status string, notify bool) {
+// 阶段一百四十五修复：sender 变参显式传入真实发起者（reject/cancel/hangup 调用处传 from）。
+// 原实现对 completed 恒以"被叫为发起者"推导转发目标（发给主叫）——主叫挂断时结束信令
+// 发给了主叫自己，被叫收不到（只能等 ICE 断开兜底，画面滞留约 15 秒才提示"连接已断开"）
+func (s *Server) callFinish(sess *callSession, status string, notify bool, sender ...string) {
 	callMu.Lock()
 	if cur, ok := callSessions[sess.ID]; !ok || cur != sess {
 		callMu.Unlock()
@@ -360,6 +363,8 @@ func (s *Server) callFinish(sess *callSession, status string, notify bool) {
 
 	// 对端通知：客户端发起的结束信令（reject/cancel/hangup）原样转发给对方；
 	// 服务端超时则向双方构造 timeout 帧
+	// 原实现：from 由 status 推导（completed 恒为被叫）——主叫挂断时转发目标错成主叫自己；
+	// 修复：调用处显式传入真实发起者 sender[0]，推导逻辑保留作未传时的兜底
 	if notify {
 		if status == "missed" {
 			timeout, _ := json.Marshal(map[string]string{"action": "timeout", "call_id": sess.ID})
@@ -369,6 +374,10 @@ func (s *Server) callFinish(sess *callSession, status string, notify bool) {
 			from := sess.Callee
 			if status == "canceled" {
 				from = sess.Caller
+			}
+			// 原代码：无 sender 推导即转发；修复后真实发起者优先（变参可选，missed 等服务端归口不传）
+			if len(sender) > 0 && sender[0] != "" {
+				from = sender[0]
 			}
 			s.callForward(from, peerOf(sess, from), mapFinishContent(status, sess.ID))
 		}
