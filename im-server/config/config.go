@@ -74,8 +74,14 @@ type Config struct {
 type TurnConfig struct {
 	// Enabled 总开关（默认 false 不启动，零开销零回归）
 	Enabled bool `yaml:"enabled"`
-	// PublicIP 中继对外报告的 IP（NAT 后部署必填公网 IP；缺省回退本机首个非回环 IPv4，仅适配单公网 IP 直挂）
+	// PublicIP 中继对外报告的 IP 或域名（NAT 后部署必填；阶段一百四十五支持域名——启动时
+	// DNS 解析取首个 IPv4，解析失败启动报错；缺省回退本机首个非回环 IPv4，仅适配单公网 IP 直挂。
+	// 注意多机集群不能共享轮询域名——中继会话绑定具体机器，每台须配独立域名或直接填 IP）
 	PublicIP string `yaml:"public_ip"`
+	// RecheckSec 域名巡检间隔秒（阶段一百四十五：public_ip 为域名时定期重解析，当前中继 IP
+	// 被上游 DNS 活跃检测剔除后自动重建 TURN 服务切换到可用 IP，零重启跟随线路故障；
+	// 0/缺省=30；public_ip 直接填 IP 时无巡检本值不参与）
+	RecheckSec int `yaml:"ip_recheck_sec"`
 	// Port STUN/TURN 监听端口（0=3478，UDP+TCP 双栈）
 	Port int `yaml:"port"`
 	// Realm 凭证域（0=im-server；参与长期凭证 MD5 计算，客户端配置需一致）

@@ -52,11 +52,11 @@ ai_billing:
 secure_file_key: "04295b6cbee2a305b95ed81c52bf47637939dcdd40e4525dc644286a2b107402"
 
 # MySQL 数据源
-mysql_dsn: "root:root@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=Local"
+mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.50:4716)/im?charset=utf8mb4&parseTime=True&loc=Local"
 # Redis 配置
-redis_addr: "127.0.0.1:6379"
-redis_password: ""
-redis_db: 0
+redis_addr: "172.16.89.28:4967"
+redis_password: "@PUsmojra9ddma7r"
+redis_db: 2
 
 # 前端静态目录（缺省留空：自动从 exe 所在目录逐级向上查找 im-client/web；相对路径基于 exe 所在目录解析）
 web_dir: ""
@@ -357,7 +357,7 @@ turn:
   # 注意：多机集群不能共享同一轮询域名（中继会话绑定具体机器），每台须配独立域名或直接填 IP
   # 阶段一百四十五：域名巡检自动跟随——当前中继 IP 被上游活跃检测剔除后自动重建 TURN 服务
   # 切换到可用 IP，零重启；0/缺省=30 秒；public_ip 直接填 IP 时无巡检本值不参与
-  public_ip: "192.168.1.25"
+  public_ip: "gtm-cn-v3m4l8t2w01.sxgyxny.com.cn"
   # 域名巡检间隔秒（0/缺省=30）
   ip_recheck_sec: 30
   # STUN/TURN 监听端口（UDP+TCP 双栈，coturn 同款默认 3478）

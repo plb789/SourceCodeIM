@@ -14,6 +14,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/pion/logging"
 	"github.com/pion/turn/v4"
@@ -74,12 +75,40 @@ func StartTURN(cfg *config.Config) error {
 	if t.Username == "" || t.Password == "" {
 		return fmt.Errorf("TURN 已启用但 turn.username/turn.password 未配置（config.yaml turn 节）")
 	}
+	// 巡检间隔归口：public_ip 为域名时生效（未配置/0 用默认 30 秒；IP 直填无巡检，值不参与）
+	recheckSec := t.RecheckSec
+	if recheckSec <= 0 {
+		recheckSec = 30
+	}
 
 	// 中继对外地址：优先显式配置 public_ip（NAT 后部署必须填公网 IP，
 	// XOR-RELAYED-ADDRESS 里报告的是这个地址，客户端据此向中继端口发媒体流）；
+	// 阶段一百四十五：public_ip 支持域名——解析取首个 IPv4 作为中继地址（单机多出口/多线 IP
+	// 场景任一出口均可达时等效；注意：多机集群不能共享同一轮询域名——中继会话绑定具体机器，
+	// 客户端必须直连实际分配中继的那台，须每台机器配置解析到自身 IP 的独立域名或直接填 IP）；
 	// 未配置时回退本机首个非回环非链路本地的 IPv4（实测多网卡机器会命中 169.254.* 虚拟网卡，
 	// 故显式排除；仍可能命中 VMware 等虚拟网段，多网卡环境建议一律显式配置 public_ip）
 	relayIP := net.ParseIP(t.PublicIP)
+	// isDomainCfg 标记 public_ip 为域名（非 IP 字面量且非空）——域名场景启动巡检 goroutine
+	// 跟随上游 DNS 活跃检测做线路故障自动切换（turnRecheckLoop）
+	isDomainCfg := relayIP == nil && t.PublicIP != ""
+	if isDomainCfg {
+		// 域名解析归口：显式配置了域名（ParseIP 失败且非空）时经 DNS 解析取首个 IPv4；
+		// 解析失败/无 A 记录直接报错退出（不静默回退本机地址，避免配置看似生效实际错位）
+		addrs, err := net.LookupIP(t.PublicIP)
+		if err == nil {
+			for _, ip := range addrs {
+				if ip.To4() != nil {
+					relayIP = ip
+					break
+				}
+			}
+		}
+		if relayIP == nil {
+			return fmt.Errorf("TURN public_ip %s 无法解析出 IPv4 地址（检查域名 A 记录与本机 DNS）", t.PublicIP)
+		}
+		logger.Info("TURN public_ip 为域名 %s，解析为中继地址 %s（巡检间隔 %d 秒，线路故障自动切换无需重启）", t.PublicIP, relayIP.String(), recheckSec)
+	}
 	if relayIP == nil {
 		addrs, err := net.InterfaceAddrs()
 		if err == nil {
@@ -107,57 +136,151 @@ func StartTURN(cfg *config.Config) error {
 		return h[:], true
 	}
 
-	// STUN/TURN 监听端口（UDP + TCP 双栈，coturn 同款默认；
-	// 中继地址生成器各 listener 独立实例——pion 约定 generator 含分配状态不可共享）
+	// STUN/TURN 监听端口（UDP + TCP 双栈，coturn 同款默认）
 	turnAddr := fmt.Sprintf("0.0.0.0:%d", port)
-	udpListener, err := net.ListenPacket("udp4", turnAddr)
-	if err != nil {
-		return fmt.Errorf("TURN UDP 监听失败 %s: %w", turnAddr, err)
-	}
-	tcpListener, err := net.Listen("tcp4", turnAddr)
-	if err != nil {
-		_ = udpListener.Close()
-		return fmt.Errorf("TURN TCP 监听失败 %s: %w", turnAddr, err)
-	}
 
-	newGen := func() *turn.RelayAddressGeneratorPortRange {
-		return &turn.RelayAddressGeneratorPortRange{
-			RelayAddress: relayIP,   // 对外报告的中继 IP（public_ip）
-			Address:      "0.0.0.0", // 中继端口实际 bind 地址
-			MinPort:      uint16(minPort),
-			MaxPort:      uint16(maxPort),
-			MaxRetries:   10,
+	// buildTURN 组装指定中继 IP 的监听与服务（归口函数：启动与故障切换重建共用；
+	// 重建时先关旧释放 3478 端口再建新，无端口冲突）
+	buildTURN := func(relay net.IP) (func(), error) {
+		udpListener, err := net.ListenPacket("udp4", turnAddr)
+		if err != nil {
+			return nil, fmt.Errorf("TURN UDP 监听失败 %s: %w", turnAddr, err)
 		}
+		tcpListener, err := net.Listen("tcp4", turnAddr)
+		if err != nil {
+			_ = udpListener.Close()
+			return nil, fmt.Errorf("TURN TCP 监听失败 %s: %w", turnAddr, err)
+		}
+		// 中继地址生成器各 listener 独立实例——pion 约定 generator 含分配状态不可共享
+		newGen := func() *turn.RelayAddressGeneratorPortRange {
+			return &turn.RelayAddressGeneratorPortRange{
+				RelayAddress: relay,      // 对外报告的中继 IP
+				Address:      "0.0.0.0", // 中继端口实际 bind 地址
+				MinPort:      uint16(minPort),
+				MaxPort:      uint16(maxPort),
+				MaxRetries:   10,
+			}
+		}
+		// 驻留后台：TURN 服务在 pion 内部 goroutine 中运行，随进程生命周期存活
+		// （srv.AllocationCount() 可用于后续性能仪表盘指标，二期接入）
+		srv, err := turn.NewServer(turn.ServerConfig{
+			Realm:       realm,
+			AuthHandler: auth,
+			// pion 默认日志工厂（输出到 stdout 与服务端日志同流；自定义降噪二期再做）
+			LoggerFactory: logging.NewDefaultLoggerFactory(),
+			PacketConnConfigs: []turn.PacketConnConfig{
+				{PacketConn: udpListener, RelayAddressGenerator: newGen()},
+			},
+			ListenerConfigs: []turn.ListenerConfig{
+				{Listener: tcpListener, RelayAddressGenerator: newGen()},
+			},
+		})
+		if err != nil {
+			_ = udpListener.Close()
+			_ = tcpListener.Close()
+			return nil, fmt.Errorf("TURN 服务启动失败: %w", err)
+		}
+		// 关闭归口：pion Server 收尾（清理存量 Allocation）+ 双监听释放
+		return func() {
+			_ = srv.Close()
+			_ = tcpListener.Close()
+			_ = udpListener.Close()
+		}, nil
 	}
 
-	// 驻留后台：TURN 服务在 pion 内部 goroutine 中运行，随进程生命周期存活
-	// （无需优雅关闭钩子——进程退出时端口句柄由内核回收，与 HTTP 监听同生命周期；
-	// srv.AllocationCount() 可用于后续性能仪表盘指标，二期接入）
-	if _, err = turn.NewServer(turn.ServerConfig{
-		Realm:       realm,
-		AuthHandler: auth,
-		// pion 默认日志工厂（输出到 stdout 与服务端日志同流；自定义降噪二期再做）
-		LoggerFactory: logging.NewDefaultLoggerFactory(),
-		PacketConnConfigs: []turn.PacketConnConfig{
-			{PacketConn: udpListener, RelayAddressGenerator: newGen()},
-		},
-		ListenerConfigs: []turn.ListenerConfig{
-			{Listener: tcpListener, RelayAddressGenerator: newGen()},
-		},
-	}); err != nil {
-		_ = udpListener.Close()
-		_ = tcpListener.Close()
-		return fmt.Errorf("TURN 服务启动失败: %w", err)
+	closeTURN, err := buildTURN(relayIP)
+	if err != nil {
+		return err
 	}
 
-	logger.Info("TURN/STUN 中继服务已启动: udp+tcp %s | realm=%s | user=%s | 中继地址 %s | 端口段 %d-%d",
-		turnAddr, realm, t.Username, relayIP.String(), minPort, maxPort)
+	// iceServers 下发地址归口：显式配置 public_ip（IP 或域名）时原样下发——域名场景客户端
+	// 自行解析，DNS 活跃检测故障转移与运营商三线优选在客户端侧实时生效（多线同机映射部署
+	// 的核心收益）；XOR-RELAYED-ADDRESS 中继报告为启动时解析的 IP 字面量（STUN 协议要求），
+	// 服务端侧由巡检 goroutine（turnRecheckLoop）跟随上游活跃检测自动切换，无需重启。
+	// 未配置 public_ip 时下发回退解析的本机地址
+	turnHost := t.PublicIP
+	if turnHost == "" {
+		turnHost = relayIP.String()
+	}
+
+	logger.Info("TURN/STUN 中继服务已启动: udp+tcp %s | realm=%s | user=%s | 中继地址 %s | iceServers 下发地址 %s | 端口段 %d-%d",
+		turnAddr, realm, t.Username, relayIP.String(), turnHost, minPort, maxPort)
+
+	// ===== 阶段一百四十五：域名线路故障自动跟随（多线路域名 + 上游活跃检测场景，零重启切换） =====
+	// public_ip 为域名时驻留巡检 goroutine：当前中继 IP 不在解析结果中（线路被剔除/故障）→
+	// 自动重建 TURN 服务切换到解析结果首个可用 IPv4；三线路全部健康时解析结果恒含当前 IP
+	// （轮询顺序变化不触发重建，杜绝抖动）。代价：重建终止存量中继 Allocation——正在经中继
+	// 兜底的通话媒体中断（客户端按断网收口），但线路故障时这些通话本已不可达，重建保证
+	// 后续新通话立即使用存活线路
+	if isDomainCfg {
+		go turnRecheckLoop(t.PublicIP, time.Duration(recheckSec)*time.Second, relayIP, buildTURN, closeTURN)
+	}
 
 	// 运行时快照归口：启动成功后 invite/accept 信令即可下发 iceServers（callInjectICE）
 	turnRuntime.enabled = true
-	turnRuntime.host = relayIP.String()
+	turnRuntime.host = turnHost
 	turnRuntime.port = port
 	turnRuntime.username = t.Username
 	turnRuntime.password = t.Password
 	return nil
+}
+
+// selectRelayIP 中继地址切换判定（纯函数，单测归口）
+// 返回：期望中继 IP 与是否需要切换。
+//   - cur 仍在解析结果（健康集合）中 → 维持现状（多 A 记录轮询顺序变化不重建，杜绝抖动）
+//   - cur 不在其中（该线路被上游活跃检测剔除/故障）→ 切到解析结果首个 IPv4
+//   - 解析结果无 IPv4 → 维持现状（保留当前可用地址，不误切）
+func selectRelayIP(cur net.IP, ips []net.IP) (net.IP, bool) {
+	var first4 net.IP
+	found := false
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			if first4 == nil {
+				first4 = v4
+			}
+			if v4.Equal(cur) {
+				found = true
+			}
+		}
+	}
+	if first4 == nil || found {
+		return cur, false
+	}
+	return first4, true
+}
+
+// turnRecheckLoop 域名中继地址巡检循环（阶段一百四十五：线路故障自动跟随，零重启切换）
+// 说明：ticker 单协程串行执行，重建不存在并发进入；域名解析失败仅告警保留现状（不误切）；
+// 重建失败置不健康标记，下一轮巡检重试直至成功（期间 TURN 服务不可用，错误日志归口）
+func turnRecheckLoop(domain string, interval time.Duration, initRelay net.IP, build func(net.IP) (func(), error), closeOld func()) {
+	cur := initRelay
+	closeFn := closeOld
+	healthy := true
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		ips, err := net.LookupIP(domain)
+		if err != nil {
+			logger.Warn("TURN 中继地址巡检：域名 %s 解析失败（保留当前中继地址 %s）", domain, cur.String())
+			continue
+		}
+		desired, needSwitch := selectRelayIP(cur, ips)
+		if !needSwitch && healthy {
+			continue // 当前线路健康且服务正常：维持现状（多记录轮询顺序变化不重建）
+		}
+		if !needSwitch {
+			desired = cur // 切换判定为维持：healthy=false 时按当前 IP 重试重建
+		}
+		closeFn()
+		newClose, berr := build(desired)
+		if berr != nil {
+			healthy = false
+			logger.Error("TURN 中继地址切换失败（目标 %s）：%v（下一轮巡检重试，期间 TURN 服务不可用）", desired.String(), berr)
+			continue
+		}
+		logger.Info("TURN 中继地址已自动切换：%s -> %s（域名 %s 线路故障跟随，无需重启服务端）", cur.String(), desired.String(), domain)
+		cur = desired
+		closeFn = newClose
+		healthy = true
+	}
 }

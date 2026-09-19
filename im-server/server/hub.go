@@ -20,26 +20,52 @@ func NewHub() *Hub {
 	}
 }
 
-// Add 新连接加入在线列表（多端共存，不踢旧连接）
-// 原实现：重复登录时踢掉旧连接（单设备在线），现改为连接集合支持多设备
-//
-//	if old, ok := h.clients[c.username]; ok {
-//		old.Close()
-//	}
-//
-// h.clients[c.username] = c
+// Add 新连接加入在线列表
+// 原实现：连接集合多端共存不踢旧连接——同账号同端（PC 对 PC）重复登录产生多连接并存，
+// 违背"同端单实例"预期（跨端多开 PC+WEB 才是多端共存的正确语义）
+// 阶段一百四十五：同端互踢——同账号同 platform（PC↔PC / WEB↔WEB / 手机↔手机）仅保留最新连接，
+// 跨端（PC+WEB+手机）继续多端共存；被踢旧连接下发提示后关闭（客户端弹窗回登录页，不自动重连，
+// 复用封禁踢出同款链路 SendErrorAndClose），网络抖动重连/页面刷新场景新连接自然接管旧半死连接
 func (h *Hub) Add(c *Client) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	set, ok := h.clients[c.username]
 	if !ok {
 		set = make(map[*Client]bool)
 		h.clients[c.username] = set
 	}
-	set[c] = true
-	if len(set) > 1 {
-		logger.Info("用户 %s 新设备接入，当前在线连接数 %d", c.username, len(set))
+	// 同端互踢：锁内收集同 platform 旧连接并移出集合，锁外发提示并关闭（SendErrorAndClose
+	// 同步写后触发 readPump 退出 → unregister → Remove 再取锁，持锁调用会死锁，必须锁外执行）
+	var kicked []*Client
+	for old := range set {
+		if old != c && old.platform == c.platform {
+			kicked = append(kicked, old)
+			delete(set, old)
+		}
 	}
+	set[c] = true
+	total := len(set)
+	h.mu.Unlock()
+	// 被踢提示（platformName 归口端型中文命名，日志与提示语一致）
+	for _, old := range kicked {
+		logger.Info("同端互踢：用户 %s 的 %s 端旧连接被新登录替换", c.username, platformName(c.platform))
+		old.SendErrorAndClose("您的账号已在其他" + platformName(c.platform) + "设备上登录，本设备已下线")
+	}
+	if total > 1 {
+		logger.Info("用户 %s 新设备接入，当前在线连接数 %d", c.username, total)
+	}
+}
+
+// platformName 端型中文名（互踢提示与日志归口；未知值原样返回便于排查）
+func platformName(p string) string {
+	switch p {
+	case "pc":
+		return "PC"
+	case "web":
+		return "WEB"
+	case "":
+		return "手机"
+	}
+	return p
 }
 
 // Remove 移除指定连接（按连接移除，避免误删同用户其他设备），返回该用户剩余连接数
