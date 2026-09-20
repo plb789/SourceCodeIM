@@ -1994,7 +1994,9 @@
                 $('calllogs-status').textContent = result.msg || '加载失败';
                 return;
             }
-            var rows = result.list || [];
+            // 管理接口信封约定：业务数据在 result.data（与其他 admin 接口一致，原误按顶层读取致恒显"暂无话单"）
+            var d = result.data || {};
+            var rows = d.list || [];
             if (!rows.length) {
                 $('calllogs-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">暂无话单</td></tr>';
                 $('calllogs-page-info').textContent = '共 0 条';
@@ -2015,8 +2017,8 @@
                     '</tr>';
             });
             $('calllogs-tbody').innerHTML = html;
-            calllogsTotalPages = Math.max(1, Math.ceil(result.total / CALLLOGS_PAGE_SIZE));
-            $('calllogs-page-info').textContent = '共 ' + result.total + ' 条 · 第 ' + result.page + ' / ' + calllogsTotalPages + ' 页';
+            calllogsTotalPages = Math.max(1, Math.ceil((d.total || 0) / CALLLOGS_PAGE_SIZE));
+            $('calllogs-page-info').textContent = '共 ' + (d.total || 0) + ' 条 · 第 ' + (d.page || 1) + ' / ' + calllogsTotalPages + ' 页';
             $('calllogs-status').textContent = '更新于 ' + nowHMS();
         }).catch(function () {
             $('calllogs-status').textContent = '加载失败';
