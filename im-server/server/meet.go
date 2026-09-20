@@ -10,6 +10,9 @@ package server
 //   4. 话单落库：房间解散（最后一人离开/全员拒绝）时写 im_call_log + 群聊会议信封消息
 // 建连方向规则（防 offer 冲突 glare）：已在会成员 → 新加入成员单向发 offer，新成员只应答；
 // 加入时间即全序，同帧到达顺序天然满足。
+// 阶段一百四十八：Mesh 断网恢复——客户端按 pair 原 offer 方向做成员级 ICE restart（offerer 单点发起，
+// answerer 幂等应答）；服务端会议成员信令断开走 meetOfflineGrace 宽限（同 1v1 callOfflineGrace 模式）：
+// 期间重连自动取消收口，超时未回按 meetLeave 移出（响铃中被邀人仍立即收口）。
 
 import (
 	"encoding/json"
@@ -27,6 +30,11 @@ import (
 // meetMaxMembers 会议成员上限（含发起人；Mesh 架构每人上行 N-1 路，控制规模保流畅）
 const meetMaxMembers = 8
 
+// meetOfflineGrace 阶段一百四十八：会议成员信令断开的下线宽限期。切网场景信令 WS 闪断（数秒后重连）
+// ≠ 媒体断线（媒体走 TURN/UDP 与信令独立），宽限期内重连则参会自动恢复（媒体由客户端成员级
+// ICE restart 兜底）；取 30s 与 1v1 callOfflineGrace 及客户端成员看门狗对齐
+const meetOfflineGrace = 30 * time.Second
+
 // meetRoom 会议房间（内存态，与 1v1 callSession 同源生命周期：重启即清空，话单已落库不丢历史）
 type meetRoom struct {
 	ID       string
@@ -36,6 +44,8 @@ type meetRoom struct {
 	Members  map[string]bool // 已入会成员（含发起人）
 	Invited  map[string]bool // 已邀请响铃中（accept/decline 后移除）
 	Started  time.Time       // 首人入会时间（话单计时长起点）
+	// offlineTimers 阶段一百四十八：成员断网宽限收口定时器（username → timer；重连上线/退出/解散时清理）
+	offlineTimers map[string]*time.Timer
 }
 
 var (
@@ -402,6 +412,13 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 	delete(room.Members, from)
 	delete(room.Invited, from)
 	delete(callUserBusy, from)
+	// 阶段一百四十八：成员退出时停其断网宽限定时器（防定时器滞留误触发/泄漏）
+	if room.offlineTimers != nil {
+		if t, ok := room.offlineTimers[from]; ok && t != nil {
+			t.Stop()
+			delete(room.offlineTimers, from)
+		}
+	}
 	rest := make([]string, 0, len(room.Members))
 	for m := range room.Members {
 		rest = append(rest, m)
@@ -460,6 +477,13 @@ func (s *Server) meetDismiss(room *meetRoom, status string, duration int) {
 	for m := range room.Invited {
 		delete(callUserBusy, m)
 	}
+	// 阶段一百四十八：解散时停全部成员断网宽限定时器（防定时器滞留触发空收口）
+	for _, t := range room.offlineTimers {
+		if t != nil {
+			t.Stop()
+		}
+	}
+	room.offlineTimers = nil
 	callType := room.CallType
 	caller := room.Caller
 	groupID := room.GroupID
@@ -519,4 +543,62 @@ func (s *Server) meetDismiss(room *meetRoom, status string, duration int) {
 		}
 	}
 	logger.Info("会议解散：%s（%s，%s，时长 %ds，%d 人）", room.ID, callType, status, duration, memberCount)
+}
+
+// meetArmOfflineGrace 阶段一百四十八：会议成员信令断开的宽限安排（返回 true=已安排宽限，调用方不再立即收口）。
+// 仅已入会成员走宽限（切网自愈窗口）；响铃中被邀人返回 false 走立即收口（对方在等，宽限无意义，同 1v1 响铃语义）
+func (s *Server) meetArmOfflineGrace(room *meetRoom, username string) bool {
+	meetMu.RLock()
+	inMeet := room.Members[username]
+	meetMu.RUnlock()
+	if !inMeet {
+		return false
+	}
+	meetMu.Lock()
+	if room.offlineTimers == nil {
+		room.offlineTimers = map[string]*time.Timer{}
+	}
+	if room.offlineTimers[username] == nil { // 幂等：定时器已在跑不重复起（多连接闪断场景）
+		logger.Info("会议 %s：用户 %s 信令断开，%v 内重连自动恢复参会", room.ID, username, meetOfflineGrace)
+		room.offlineTimers[username] = time.AfterFunc(meetOfflineGrace, func() {
+			meetMu.Lock()
+			if cur, ok := meetRooms[room.ID]; !ok || cur != room { // 房间已被其他路径解散：空转
+				meetMu.Unlock()
+				return
+			}
+			delete(room.offlineTimers, username)
+			still := room.Members[username]
+			meetMu.Unlock()
+			if !still { // 已被其他路径移出（主动退出/解散）：空转
+				return
+			}
+			// 竞态防线：定时器触发与重连取消（Stop）赛跑的毫秒级窗口内，hub 已有活跃连接
+			// 视为已重连成功（登录路径即将/已经取消宽限），不收口
+			if s.hub.Count(username) > 0 {
+				logger.Info("会议 %s：用户 %s 定时器触发时已重连，取消移出", room.ID, username)
+				return
+			}
+			logger.Info("会议 %s：用户 %s 宽限期未重连，自动移出会议", room.ID, username)
+			s.meetLeave(username, &callSignalPayload{Action: "hangup", CallID: room.ID})
+		})
+	}
+	meetMu.Unlock()
+	return true
+}
+
+// meetCancelOfflineHangup 阶段一百四十八：用户重连上线时取消其所在会议房间的断网宽限收口
+//（宽限期内回来 = 会议继续；媒体面由客户端成员级 ICE restart 自动恢复，服务端只需不收口）
+func meetCancelOfflineHangup(username string) {
+	meetMu.Lock()
+	for _, room := range meetRooms {
+		if !room.Members[username] || room.offlineTimers == nil {
+			continue
+		}
+		if t, ok := room.offlineTimers[username]; ok && t != nil {
+			t.Stop()
+			delete(room.offlineTimers, username)
+			logger.Info("会议 %s：用户 %s 宽限期内重连，会议继续", room.ID, username)
+		}
+	}
+	meetMu.Unlock()
 }

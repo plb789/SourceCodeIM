@@ -121,7 +121,9 @@ func (s *Server) unregister(c *Client) {
 // 原实现对通话中会话立即收口，误杀切网自愈中的通话（WS 回来会话已删，无法恢复）。
 // 现策略：响铃中仍立即收口（对方在等，宽限无意义）；通话中走 30s 宽限——期间用户任一连接重连上线
 // 即取消收口（媒体由客户端 ICE restart 自动恢复），超时未回按原逻辑收口（忙态不残留）。
-// 会议收口路径保持原立即收口（会议 Mesh 恢复复杂度高，本期不动）
+// 原说明：会议收口路径保持原立即收口（会议 Mesh 恢复复杂度高，本期不动）。
+// 阶段一百四十八：会议已入会成员同样走 30s 宽限（meetArmOfflineGrace，媒体由客户端成员级
+// ICE restart 自动恢复），超时未回按 meetLeave 移出；响铃中被邀人仍立即收口
 func callOfflineCleanup(s *Server, username string) {
 	callMu.RLock()
 	callID, busy := callUserBusy[username]
@@ -147,6 +149,11 @@ func callOfflineCleanup(s *Server, username string) {
 			})
 		}
 		callMu.Unlock()
+		return
+	}
+	// 阶段一百四十八：会议房间（1v1 会话表未命中）——已入会成员走宽限，其余立即收口
+	// 原代码：直接 callHangup（落 meetLeave 立即收口，切网成员被误移出会议）
+	if room := meetRoomOf(callID); room != nil && s.meetArmOfflineGrace(room, username) {
 		return
 	}
 	s.callHangup(nil, nil, username, &callSignalPayload{Action: "hangup", CallID: callID})
@@ -395,6 +402,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	s.pushReadWatermarks(c)
 	// 阶段一百四十七：登录重连取消其活跃通话的下线宽限收口（切网闪断回来，通话继续）
 	callCancelOfflineHangup(user.Username)
+	// 阶段一百四十八：登录重连取消其所在会议房间的断网宽限收口（切网闪断回来，会议继续）
+	meetCancelOfflineHangup(user.Username)
 	logger.Info("用户 %s 上线", user.Username)
 }
 

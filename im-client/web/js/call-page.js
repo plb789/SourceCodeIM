@@ -2,7 +2,10 @@
    职责：媒体面归口——getUserMedia + RTCPeerConnection（P2P 直连，第一期不部署 STUN/TURN）。
    信令经 preload 桥（callSend/onCallSignal）与主窗口 WS 中继，本页不直接持有 socket；
    话单/状态归口服务端（im_call_log + im_message 通话信封），本页只负责媒体与 UI。
-   状态机：idle → waiting（主叫响铃）→ connecting（媒体协商）→ active（通话中）→ ended */
+   状态机：idle → waiting（主叫响铃）→ connecting（媒体协商）→ active（通话中）→ ended
+   阶段一百四十七：1v1 ICE restart 断网自动重连（主叫单点发起 + 服务端 30s 下线宽限）；
+   阶段一百四十八：会议 Mesh 成员级断网恢复（每对连接沿用原 offer 方向，offerer 单点发起
+   restart，answerer 幂等应答；成员级 30s 看门狗只移除断网成员，会议不整体收口） */
 (function () {
     'use strict';
     // 桥归口：PC 端走 preload 注入（IPC 三段桥，独立 BrowserWindow 承载）；
@@ -71,7 +74,11 @@
         meet: false,         // 会议模式开关（true 时 1v1 单人视图逻辑不参与）
         groupId: 0,          // 发起群（会中邀请时回传主窗口定位群成员范围）
         meetTitle: '',       // 会议标题（群名，主窗口下发）
-        members: {}          // username -> {name, avatar, pc, stream, pendingCands, muted}（Mesh 每成员一条连接）
+        // username -> {name, avatar, pc, stream, pendingCands, muted,
+        //   asOfferer, needRestart, iceRestartActive, restartOffer, restartCands,
+        //   lastRestartOffer, lastRestartAnswer, watchdog, restartTimer, restartFirstTimer}
+        // （Mesh 每成员一条连接；asOfferer/restart 系列为一百四十八成员级断网恢复状态）
+        members: {}
     };
     var timerId = null;      // 通话时长计时器
     var watchdogId = null;   // 看门狗（协商超时/断网收口）
@@ -445,8 +452,10 @@
         clearRestartState(); // 阶段一百四十七：收口清 restart 恢复期状态
         try { if (st.pc) st.pc.close(); } catch (e) { }
         st.pc = null;
-        // 阶段一百四十四：会议收口清理（逐成员关连接 + 停共享流）
+        // 阶段一百四十四：会议收口清理（逐成员清恢复状态 + 关连接 + 停共享流）
         for (var mu in st.members) {
+            clearMeetWatchdog(mu);   // 阶段一百四十八：清成员级断网看门狗
+            stopMeetRestartLoop(mu); // 阶段一百四十八：停成员级 restart 重试循环
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
         st.members = {};
@@ -491,8 +500,10 @@
         clearRestartState(); // 阶段一百四十七：换场重置清 restart 恢复期状态
         try { if (st.pc) st.pc.close(); } catch (e) { }
         st.pc = null;
-        // 阶段一百四十四：会议连接与共享状态清理
+        // 阶段一百四十四：会议连接与共享状态清理（逐成员清恢复状态 + 关连接）
         for (var mu in st.members) {
+            clearMeetWatchdog(mu);   // 阶段一百四十八：清成员级断网看门狗
+            stopMeetRestartLoop(mu); // 阶段一百四十八：停成员级 restart 重试循环
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
         st.members = {};
@@ -744,6 +755,9 @@
         var conf = st.iceServers && st.iceServers.length ? { iceServers: st.iceServers } : null;
         var pc = new RTCPeerConnection(conf);
         m.pc = pc;
+        // 阶段一百四十八：记录本 pair 的 offer 方向（建连方向规则：已在会成员→新成员单向发 offer；
+        // 断网恢复沿用同方向——offerer 单点发起 restart，answerer 只应答，防双端 offer 冲突）
+        m.asOfferer = !!asOfferer;
         pc.ontrack = function (e) {
             if (!e.streams || !e.streams.length) return;
             m.stream = e.streams[0];
@@ -759,19 +773,36 @@
         };
         pc.onicecandidate = function (e) {
             if (!e.candidate) return;
-            send('candidate', {
-                candidate: {
-                    candidate: e.candidate.candidate,
-                    sdpMid: e.candidate.sdpMid,
-                    sdpMLineIndex: e.candidate.sdpMLineIndex
-                }
-            }, peer);
+            // 阶段一百四十八：restart 期新收集候选进成员级缓存——断线窗口内 candidate 帧丢失，
+            // WS 重连后由重试循环/应答路径全量重发，保证 ICE 配对候选齐全（与 1v1 同款）
+            var cand = {
+                candidate: e.candidate.candidate,
+                sdpMid: e.candidate.sdpMid,
+                sdpMLineIndex: e.candidate.sdpMLineIndex
+            };
+            if (m.iceRestartActive) cacheMeetRestartCand(peer, cand);
+            send('candidate', { candidate: cand }, peer);
         };
         pc.onconnectionstatechange = function () {
             if (st.ended || m.pc !== pc) return;
             var s = pc.connectionState;
-            if (s === 'connected') meetMaybeActive();
-            else if (s === 'failed' || s === 'closed') meetDropMember(peer);
+            if (s === 'connected') {
+                // 阶段一百四十八：断网自愈/restart 恢复清理（成员级状态全清 + 看门狗解除）
+                meetPairRecovered(peer);
+            } else if (s === 'failed' || s === 'closed') {
+                meetDropMember(peer);
+            } else if (s === 'disconnected') {
+                // 原代码：无 disconnected 分支（断网即靠 failed 兜底移除成员，短暂切网直接散会）。
+                // 阶段一百四十八：断网先走成员级 ICE restart 自动重连（pair 内 offerer 单点发起）；
+                // 成员看门狗 30s（与服务端会议下线宽限对齐）：网络抖动可能自愈/WS 闪断重连恢复，
+                // 超时未恢复再移除该成员，会议不整体收口
+                if (m.asOfferer) {
+                    m.needRestart = true;
+                    m.iceRestartActive = true; // 本端 restart 期新候选进缓存（重发兜底）
+                    startMeetRestartLoop(peer);
+                }
+                armMeetWatchdog(peer, 30000);
+            }
         };
         onLocalReady(function () {
             if (st.ended || m.pc !== pc) return;
@@ -801,22 +832,127 @@
         m.pendingCands = [];
     }
 
+    // ===== 阶段一百四十八：会议 ICE restart 断网自动重连（Mesh 成员级，每对连接独立） =====
+    // 仲裁：沿用 Mesh 建连方向规则——pair 内 offerer 单点发起 restart，answerer 纯应答（幂等），
+    // 与 1v1「主叫单点发起」同构，天然防双端 offer 冲突；成员级状态全挂 st.members[peer]，
+    // 与 1v1 全局 st.restart* 状态互不干扰（会议模式 1v1 状态恒空置）
+    // 停该成员的 restart 重试循环（pair 连通恢复/成员移除/收口时调用）
+    function stopMeetRestartLoop(peer) {
+        var m = st.members[peer];
+        if (!m) return;
+        if (m.restartTimer) { clearInterval(m.restartTimer); m.restartTimer = null; }
+        if (m.restartFirstTimer) { clearTimeout(m.restartFirstTimer); m.restartFirstTimer = null; }
+    }
+    // restart 期候选缓存（按 candidate 串去重；重复 addIceCandidate 对端亦无害）
+    function cacheMeetRestartCand(peer, c) {
+        var m = st.members[peer];
+        if (!m) return;
+        for (var i = 0; i < m.restartCands.length; i++) {
+            if (m.restartCands[i].candidate === c.candidate) return;
+        }
+        m.restartCands.push(c);
+    }
+    // 全量重发该成员 restart 期候选（offerer 随每轮 offer 重发 / answerer 随 answer 重发）
+    function flushMeetRestartCands(peer) {
+        var m = st.members[peer];
+        if (!m) return;
+        m.restartCands.forEach(function (c) {
+            send('candidate', { candidate: c }, peer);
+        });
+    }
+    // 清干净该成员 restart 恢复期状态（pair 恢复/移除/收口时调用）
+    function clearMeetRestartState(peer) {
+        var m = st.members[peer];
+        if (!m) return;
+        m.iceRestartActive = false;
+        m.needRestart = false;
+        m.restartOffer = null;
+        m.restartCands = [];
+        m.lastRestartOffer = '';
+        m.lastRestartAnswer = null;
+    }
+    // 单轮 restart 重试（对单个成员）：同轮复用同一 offer（restartIce 新 ufrag 只做一次，
+    // 防对端反复重建），每轮重发 offer + 已收集候选——断网期间 WS 同断丢帧，socket.js 3s
+    // 自动重连后重试帧自然送达（与 1v1 tryIceRestart 同构）
+    function tryMeetIceRestart(peer) {
+        var m = st.members[peer];
+        if (st.ended || !m || !m.pc || !m.needRestart) { stopMeetRestartLoop(peer); return; }
+        if (m.pc.connectionState === 'connected') { meetPairRecovered(peer); return; } // 已自愈
+        if (m.restartOffer) {
+            send('offer', { sdp: m.restartOffer }, peer); // 同轮重发
+            flushMeetRestartCands(peer);
+            return;
+        }
+        try { m.pc.restartIce(); } catch (e) { return; }
+        m.pc.createOffer({ iceRestart: true }).then(function (off) {
+            return m.pc.setLocalDescription(off).then(function () { return off; });
+        }).then(function (off) {
+            var mm = st.members[peer];
+            if (st.ended || !mm || mm !== m) return; // 异步期间成员被移除：丢弃
+            m.restartOffer = { type: off.type, sdp: off.sdp }; // 本轮定格，重试循环复用
+            send('offer', { sdp: m.restartOffer }, peer);
+            flushMeetRestartCands(peer);
+        }).catch(function () { }); // 单次失败静默，重试循环/看门狗兜底
+    }
+    // 启动成员级重试循环：2s 首发短暂抖动自愈窗口，此后每 3s 重发（与 1v1 startRestartLoop 同构）
+    function startMeetRestartLoop(peer) {
+        stopMeetRestartLoop(peer);
+        var m = st.members[peer];
+        if (!m) return;
+        m.restartFirstTimer = setTimeout(function () { tryMeetIceRestart(peer); }, 2000);
+        m.restartTimer = setInterval(function () { tryMeetIceRestart(peer); }, 3000);
+    }
+    // 成员级断网看门狗：30s 未恢复仅本地移除该成员（服务端宽限超时同步移出兜底），
+    // 会议不整体收口，其余成员继续开会——与 1v1 看门狗收口整个通话不同
+    function armMeetWatchdog(peer, ms) {
+        var m = st.members[peer];
+        if (!m) return;
+        clearMeetWatchdog(peer);
+        m.watchdog = setTimeout(function () {
+            if (st.ended) return;
+            var mm = st.members[peer];
+            if (!mm) return;
+            if (mm.pc && mm.pc.connectionState === 'connected') return; // 已恢复
+            meetDropMember(peer);
+        }, ms);
+    }
+    function clearMeetWatchdog(peer) {
+        var m = st.members[peer];
+        if (m && m.watchdog) { clearTimeout(m.watchdog); m.watchdog = null; }
+    }
+    // pair 连通恢复：清看门狗 + 停重试 + 清 restart 状态 + 计时激活
+    function meetPairRecovered(peer) {
+        clearMeetWatchdog(peer);
+        stopMeetRestartLoop(peer);
+        clearMeetRestartState(peer);
+        meetMaybeActive();
+    }
+
     // 任一成员连通即进入 active 开始计时（会议语义：有人在会即计时，话单以服务端为准）
     function meetMaybeActive() {
         if (st.state === 'active' || st.ended) return;
         setActive();
     }
 
-    // 成员离开：关连接 + 移 tile；全员走光则收口
+    // 成员离开：清成员级恢复状态 + 关连接 + 移 tile；全员走光则补退房信令后收口
     function meetDropMember(peer) {
         var m = st.members[peer];
         if (!m) return;
+        clearMeetWatchdog(peer);   // 阶段一百四十八：清成员级断网看门狗
+        stopMeetRestartLoop(peer); // 阶段一百四十八：停成员级 restart 重试循环
         try { if (m.pc) m.pc.close(); } catch (e) { }
         delete st.members[peer];
         renderMeetGrid();
         var any = false;
         for (var k in st.members) { any = true; break; }
-        if (!any) finish('会议已结束');
+        if (!any) {
+            // 原代码：直接 finish（不发退房信令）。
+            // 阶段一百四十八：成员级看门狗/failed 触发全员走光时，服务端可能尚不知本端要退出
+            //（对端 WS 仍在时服务端不会收口房间）——补发退房信令防房间滞留本端忙态；
+            // hangup 帧对服务端 meetLeave 幂等无害（房间已解散时仅清忙标记）
+            send('hangup', {});
+            finish('会议已结束');
+        }
     }
 
     // 会议信令处理（onSignal 顶部分流；frame.from_user 为对端账号，媒体帧按其路由到对应 pc）
@@ -828,7 +964,13 @@
                 if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
                 (p.members || []).forEach(function (mi) {
                     if (mi && mi.username && !st.members[mi.username]) {
-                        st.members[mi.username] = { name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false };
+                        st.members[mi.username] = {
+                            name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false,
+                            // 阶段一百四十八：成员级断网恢复状态初始化（restart 系列缺省会导致缓存/幂等判空报错）
+                            asOfferer: false, needRestart: false, iceRestartActive: false,
+                            restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
+                            watchdog: null, restartTimer: null, restartFirstTimer: null
+                        };
                     }
                 });
                 st.state = 'connecting';
@@ -846,16 +988,35 @@
                 if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
                 var mi = p.member || {};
                 if (!mi.username || st.members[mi.username]) break;
-                st.members[mi.username] = { name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false };
+                st.members[mi.username] = {
+                    name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false,
+                    // 阶段一百四十八：成员级断网恢复状态初始化（同 room_info）
+                    asOfferer: false, needRestart: false, iceRestartActive: false,
+                    restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
+                    watchdog: null, restartTimer: null, restartFirstTimer: null
+                };
                 renderMeetGrid();
                 meetConnect(mi.username, true);
                 break;
             case 'offer': {
                 var m = st.members[from];
                 if (!m || !m.pc) break;
+                // 阶段一百四十八：restart 幂等——offer 方重试循环重发同一 offer（sdp 相同）时
+                // 只重发既有 answer + 候选缓存，不重复 setRemote/createAnswer（防本地 ICE 反复重建）
+                if (m.lastRestartOffer && p.sdp && p.sdp.sdp === m.lastRestartOffer) {
+                    if (m.lastRestartAnswer) send('answer', { sdp: m.lastRestartAnswer }, from);
+                    flushMeetRestartCands(from);
+                    break;
+                }
+                // 阶段一百四十八：已持有远端描述时再收 offer = 对端 ICE restart（首协商为首次到达）
+                var isRestart = !!(m.pc.remoteDescription && m.pc.remoteDescription.type);
                 var pcOffer = m.pc;
                 pcOffer.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
                     flushMeetCands(from);
+                    if (isRestart) {
+                        m.iceRestartActive = true;      // 本端 restart 期新候选进缓存（随 answer 重发兜底）
+                        m.lastRestartOffer = p.sdp.sdp; // 记录本轮 offer（重复帧幂等判定）
+                    }
                     // 应答也需本地轨道在 pc 上（getUserMedia 未就绪则延后），否则 answer 空 m 行
                     onLocalReady(function () {
                         if (st.ended || m.pc !== pcOffer) return;
@@ -863,7 +1024,13 @@
                         pcOffer.createAnswer().then(function (ans) {
                             return pcOffer.setLocalDescription(ans).then(function () { return ans; });
                         }).then(function (ans) {
-                            if (!st.ended) send('answer', { sdp: { type: ans.type, sdp: ans.sdp } }, from);
+                            if (st.ended) return;
+                            var answerSdp = { type: ans.type, sdp: ans.sdp };
+                            send('answer', { sdp: answerSdp }, from);
+                            if (isRestart) {
+                                m.lastRestartAnswer = answerSdp; // 留作重复 offer 的幂等重发
+                                flushMeetRestartCands(from);
+                            }
                         }).catch(function () { });
                     });
                 }).catch(function () { });
@@ -872,6 +1039,9 @@
             case 'answer': {
                 var m2 = st.members[from];
                 if (!m2 || !m2.pc) break;
+                // 阶段一百四十八：已连通且协商稳定时到达的迟到 answer 静默忽略
+                //（restart 恢复后对端幂等重发/重试循环滞后帧，stable 态重复 setRemote 会报错）
+                if (m2.pc.connectionState === 'connected' && m2.pc.signalingState === 'stable') break;
                 m2.pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
                     flushMeetCands(from);
                 }).catch(function () { });
