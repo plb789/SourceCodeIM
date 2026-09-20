@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>启动中</title>
+    <!-- 阶段一百五十四：微信同款启动闪屏——主窗口页面加载完成前的过渡画面 -->
+    <!-- 形态：无边框窗口 + 底色随主题（与主窗口 backgroundColor 同源）+ 应用 logo 居中淡入 -->
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* 底色由 JS 按持久化主题/系统深浅写入 html.data-boot（与主窗口 backgroundColor 同值，切换无缝） */
+        html[data-boot="dark"] body { background: #111111; }
+        html[data-boot="light"] body { background: #f5f5f5; }
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            cursor: default;
+        }
+        .splash-logo {
+            width: 104px;
+            height: 104px;
+            border-radius: 22px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+            /* 淡入：微信启动图 logo 渐显节奏 */
+            opacity: 0;
+            animation: splashIn 0.6s ease 0.1s forwards;
+        }
+        html[data-boot="dark"] .splash-logo { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55); }
+        .splash-name {
+            margin-top: 18px;
+            font-family: 'Microsoft YaHei', sans-serif;
+            font-size: 15px;
+            letter-spacing: 4px;
+            opacity: 0;
+            animation: splashIn 0.6s ease 0.35s forwards;
+        }
+        html[data-boot="dark"] .splash-name { color: #9a9a9a; }
+        html[data-boot="light"] .splash-name { color: #8a8a8a; }
+        @keyframes splashIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 应用 logo：与 PC 端托盘/任务栏图标同源（web/img/64.ico，静态资源本地拦截秒开） -->
+    <img class="splash-logo" src="img/64.ico" alt="">
+    <div class="splash-name">即时通讯</div>
+    <script>
+        // 主题底色判定（与主进程 bootDark 同语义）：持久化偏好优先，无偏好跟随系统深浅；
+        // 判定错位仅一瞬底色差异，主窗口 reveal 后即被覆盖
+        (function () {
+            var dark = false;
+            try {
+                var t = localStorage.getItem('im_theme');
+                if (t === 'dark') dark = true;
+                else if (t === '' || t === 'system' || t === null) {
+                    dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                }
+            } catch (eBoot) {
+                dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            }
+            document.documentElement.setAttribute('data-boot', dark ? 'dark' : 'light');
+        })();
+    </script>
+</body>
+</html>

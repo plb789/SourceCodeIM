@@ -17,6 +17,11 @@ const browserManager = require('./browser-manager.js');
 const webCache = require('./web-cache.js');
 
 let mainWindow = null;
+// 阶段一百五十四：微信同款启动闪屏——主窗口 show:false 不再创建即显示（原实现：窗口创建即显示，
+// 页面加载完成前露出 backgroundColor 灰黑底，用户实测反馈"启动前显示灰黑色"）；先弹无边框 logo
+// 闪屏窗，主窗口 did-finish-load（静态资源本地拦截秒开）后关闭闪屏并显示主窗口，8 秒兜底强制切换
+let splashWin = null;
+let splashClosed = false;
 let tray = null;
 
 // 阶段一百四十一：--user-data-dir 启动参数支持（双开实测/多账号并行场景）——必须在单实例锁请求前
@@ -153,23 +158,96 @@ ipcMain.on('theme:sync', function (event, theme) {
     if (t === 'light' || t === 'dark' || t === 'system') themeStoreSave(t);
 });
 
+// 阶段一百五十四：启动主题深浅判定提为模块级（createWindow 与启动闪屏 createSplash 共用同一判定源，
+// 保证闪屏底色与主窗口 backgroundColor 恒同值无缝）——原判定逻辑在 createWindow 内部
+var bootDarkCache = null;
+function resolveBootDark() {
+    if (bootDarkCache !== null) return bootDarkCache;
+    var t = themeStoreLoad();
+    // 阶段一百五十一补丁：无持久化偏好（首启/文件缺失）原实现恒浅色初值——改为跟随系统深浅
+    //（与渲染层首绘引导、chat.js getTheme 默认 system 三方一致，深色系统首启窗口底不再浅色）
+    if (t === '') t = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+    bootDarkCache = t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
+    return bootDarkCache;
+}
+
+// 阶段一百五十四：启动闪屏提前创建——双击启动后 whenReady 触发即建窗（早于 webCache/主窗口），
+// 内容用 data URL 全内联（HTML/CSS/logo base64 一体，免导航免图片请求）；
+// 阶段一百五十五：show:false + ready-to-show 后再显示（初始化期间不显示窗口，用户追问确认），
+// 静态直出无入场动画——窗口出现即完整 logo 卡片，空窗期连窗口都不存在；
+// 底色由主进程按 resolveBootDark() 写死（与主窗口 backgroundColor 同源），运行时不再判定主题
+// 原实现：闪屏经 http 拦截加载 splash.html，导航初始化期间露出灰黑背景色（用户实测图1）
+function createSplash() {
+    if (splashClosed) return;
+    var dark = resolveBootDark();
+    var bg = dark ? '#111111' : '#f5f5f5';
+    var logoB64 = '';
+    try {
+        logoB64 = fs.readFileSync(path.join(__dirname, '64.ico')).toString('base64');
+    } catch (eLogo) { }
+    var nameColor = dark ? '#9a9a9a' : '#8a8a8a';
+    var shadowColor = dark ? '0 6px 24px rgba(0, 0, 0, 0.55)' : '0 6px 24px rgba(0, 0, 0, 0.18)';
+    // HTML 全内联：logo 以 data:image/x-icon 嵌入（Chromium 原生渲染 ico），无任何外部资源。
+    // 阶段一百五十五：不使用入场动画——窗口隐藏期间渲染被节流，若带 opacity:0 起始动画，
+    // show 瞬间最新已绘制帧仍是全透明（实测捕获为纯底色空窗）；静态直出后隐藏期绘制帧即完整卡片，
+    // ready-to-show 后显示则第一帧就是 logo 完整呈现
+    var splashHtml = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
+        + '* { margin:0; padding:0; box-sizing:border-box; }'
+        + 'body { width:100vw; height:100vh; overflow:hidden; background:' + bg + ';'
+        + ' display:flex; flex-direction:column; align-items:center; justify-content:center;'
+        + ' user-select:none; cursor:default; }'
+        + '.splash-logo { width:104px; height:104px; border-radius:22px; box-shadow:' + shadowColor + '; }'
+        + '.splash-name { margin-top:18px; font-family:\'Microsoft YaHei\',sans-serif; font-size:15px;'
+        + ' letter-spacing:4px; color:' + nameColor + '; }'
+        + '</style></head><body>'
+        + '<img class="splash-logo" src="data:image/x-icon;base64,' + logoB64 + '" alt="">'
+        + '<div class="splash-name">即时通讯</div>'
+        + '</body></html>';
+    splashWin = new BrowserWindow({
+        width: 300,
+        height: 380,
+        frame: false,          // 无边框：纯 logo 卡片（微信启动图同款形态）
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        skipTaskbar: true,     // 不进任务栏（过渡窗口，避免任务栏图标闪现）
+        center: true,
+        show: false,           // 阶段一百五十五：初始化期间不显示窗口（用户追问确认）——ready-to-show 后再显示，
+                               // 空窗期连窗口都不存在，窗口出现即完整 logo 卡片
+        backgroundColor: bg,   // 显示前底色与闪屏内容底色一致（个别异常场景提前显示也无跳变）
+        webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    // 阶段一百五十五：ready-to-show = 渲染进程完成首帧绘制，此刻显示窗口则第一帧即完整 logo 卡片
+    splashWin.once('ready-to-show', function () {
+        if (splashWin && !splashWin.isDestroyed() && !splashWin.isVisible()) splashWin.show();
+    });
+    // 兜底：个别环境 ready-to-show 不触发（GPU 异常/绘制被禁）时强制显示，保证闪屏不缺席；
+    // 即便未绘制完成也仅显示同色底（backgroundColor），不会出现白/黑跳变
+    setTimeout(function () {
+        if (splashWin && !splashWin.isDestroyed() && !splashWin.isVisible()) splashWin.show();
+    }, 1200);
+    splashWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(splashHtml));
+    splashWin.on('closed', function () { splashWin = null; });
+}
+
 function createWindow() {
     // 阶段一百三十四：启动初值按持久化主题解析深浅（原实现：固定浅色初值，深色主题下启动早期
     // 按钮底色/窗口背景短暂浅色，渲染层 applyTheme 同步后才切深色）；system 模式主进程按
     // nativeTheme.shouldUseDarkColors 判定，与渲染层媒体查询同源
-    var bootDark = (function () {
-        var t = themeStoreLoad();
-        // 阶段一百五十一补丁：无持久化偏好（首启/文件缺失）原实现恒浅色初值——改为跟随系统深浅
-        //（与渲染层首绘引导、chat.js getTheme 默认 system 三方一致，深色系统首启窗口底不再浅色）
-        if (t === '') t = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
-        return t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
-    })();
+    // 阶段一百五十四：判定逻辑提为模块级 resolveBootDark()（启动闪屏 createSplash 共用同一判定源）
+    var bootDark = resolveBootDark();
     mainWindow = new BrowserWindow({
         width: 1100,
         height: 720,
         minWidth: 800,
         minHeight: 560,
         title: '即时通讯',
+        // 阶段一百五十四：启动闪屏配套——主窗口延迟到页面加载完成后显示（did-finish-load 回调），
+        // 加载期由 splash 闪屏窗覆盖（原实现：创建即显示，加载期露出灰黑背景色）
+        show: false,
         // 阶段七十七：自定义标题栏——隐藏系统标题栏，由网页自绘顶栏（整条可拖动窗口/双击最大化还原），
         // 最小化/最大化/关闭仍用原生 overlay 按钮（保留分屏布局悬停/窗口阴影/边缘缩放），
         // 按钮底色/符号色随主题经 titlebar:overlay IPC 动态更新（初值按持久化主题解析，与渲染层首次同步前一致）
@@ -214,6 +292,22 @@ function createWindow() {
     // 原实现：mainWindow.loadURL(webCache.pageUrl('/'))（app:// 方案，实测导航稳定性问题后回退）
     // 更早原实现：mainWindow.loadURL(SERVER_URL)（每个静态资源都经服务端 no-cache 回源校验，页面打开慢）
     mainWindow.loadURL(SERVER_URL);
+
+    // 阶段一百五十四：启动闪屏已提前至 whenReady 最前（createSplash，data URL 加载零导航开销——
+    // 原实现：闪屏在 createWindow 内经 http 拦截加载 splash.html，导航期间露出灰黑背景色，即
+    // 用户反馈的"双击启动先看到灰黑色"）；此处仅归口主窗口显示时机
+    // 8 秒兜底：网络/拦截异常导致加载卡住时强制进入主窗口（闪屏永挂比无窗更糟）
+    var revealMainWindow = function () {
+        if (splashClosed) return;
+        splashClosed = true;
+        if (splashWin) {
+            try { splashWin.close(); } catch (eSplash) { }
+            splashWin = null;
+        }
+        if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
+    };
+    mainWindow.webContents.once('did-finish-load', revealMainWindow);
+    setTimeout(revealMainWindow, 8000);
 
     // 阶段九十二：主窗口固定 100% 缩放——页面缩放（Ctrl+滚轮）会让 CSS px 与 BrowserView
     // bounds（DIP）刻度错位（原生视图盖住分隔线/相邻 UI），且 Chromium 可能在会话配置里
@@ -2150,6 +2244,10 @@ app.whenReady().then(async function () {
     // 原实现：未设置应用菜单，Windows 上自动显示 Electron 默认英文菜单
     // Menu.setApplicationMenu(Menu.buildFromTemplate([]));
     Menu.setApplicationMenu(null);
+
+    // 阶段一百五十四：启动闪屏最先创建（早于 webCache 初始化与主窗口）——双击启动后最快露出
+    // logo 卡片，消除原"灰黑空窗"（用户实测反馈）；data URL 加载零导航开销，见 createSplash
+    createSplash();
 
     // 阶段一百二十二：本地缓存初始化 → http 拦截安装 → 窗口创建（内含页面加载）→ 启动增量同步
     // 拦截必须先于页面加载安装（静态资源命中本地秒开）；sync 内部自带 4s 总超时与全静默兜底，
