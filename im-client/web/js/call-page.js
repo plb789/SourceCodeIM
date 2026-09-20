@@ -646,8 +646,10 @@
             st.camUnavailable = st.callType === 'video' && !r.cam;
             applyMediaMarks();
             renderMeetStage(); // 无媒体也渲染（自己 tile 出"无视频可用"占位/语音 tile 出头像）；阶段一百五十一舞台布局归口
-            // 阶段一百五十一补丁：设备可用性广播（麦克风/摄像头是否可用全员可见；服务端落快照供中途入会者补发）
-            if (st.meet) send('meet_media', { mic: !st.micUnavailable, cam: !st.camUnavailable });
+            // 阶段一百五十一补丁：媒体有效状态广播（麦克风/摄像头「可用且未关闭」全员可见；
+            // 服务端落快照供中途入会者补发）——track 事件对接收端 enabled=false 不可靠（实测不触发），
+            // 手动切换与设备可用性统一走显式信令归口
+            if (st.meet) send('meet_media', { mic: !st.micUnavailable && !st.muted, cam: !st.camUnavailable && !st.camOff });
             // 门闩放行：无媒体也照常建连（offer 经 attachLocalMedia 补 recvonly 收发器），设备状态不阻断会议
             if (!localReady) {
                 localReady = true;
@@ -1273,12 +1275,15 @@
                 break;
             case 'meet_media':
                 // 阶段一百五十一补丁：成员设备可用性广播（frame.from_user=上报者）——
-                // 麦克风/摄像头是否可用全员可见；重建 tile 即显叉麦/叉摄（服务端落快照供中途入会者补发）
+                // 麦克风/摄像头是否可用全员可见；服务端落快照供中途入会者补发。
+                // 原代码：renderMeetStage() 整格重渲——视频元素销毁重建致远端画面闪黑；
+                // 改为原位切换标记类（与本地 refreshSelfMarks 同款，媒体元素不动零闪烁）
                 var mmu = st.members[from];
                 if (!mmu) break;
                 mmu.micOk = p.mic !== false;
                 mmu.camOk = p.cam !== false;
-                renderMeetStage();
+                markTileMuted(from, !!mmu.muted);
+                markTileCam(from);
                 break;
             case 'error':
                 // 服务端归口错误帧（reason 为中文文案）：全员拒绝/60s 无人接听自动解散等场景收口会议窗
@@ -1534,7 +1539,9 @@
         st.local.getAudioTracks().forEach(function (t) { t.enabled = !st.muted; });
         btnMute.classList.toggle('active', st.muted);
         btnMute.title = st.muted ? '取消静音' : '静音';
-        refreshSelfMarks(); // 阶段一百五十一补丁：自己 tile 同步叉麦标记
+        refreshSelfMarks(); // 自己 tile 同步叉麦标记
+        // 阶段一百五十一补丁：静音/关摄状态走显式信令归口（接收端 track 事件对 enabled=false 不可靠）
+        if (st.meet) send('meet_media', { mic: !st.micUnavailable && !st.muted, cam: !st.camUnavailable && !st.camOff });
     });
     btnCam.addEventListener('click', function () {
         if (st.ended || !st.local) return;
@@ -1543,7 +1550,9 @@
         btnCam.classList.toggle('active', st.camOff);
         btnCam.title = st.camOff ? '开启摄像头' : '关闭摄像头';
         document.body.classList.toggle('cam-off', st.camOff);
-        refreshSelfMarks(); // 阶段一百五十一补丁：自己 tile 同步叉摄标记
+        refreshSelfMarks(); // 自己 tile 同步叉摄标记
+        // 阶段一百五十一补丁：关摄/静音状态走显式信令归口（接收端 track 事件对 enabled=false 不可靠）
+        if (st.meet) send('meet_media', { mic: !st.micUnavailable && !st.muted, cam: !st.camUnavailable && !st.camOff });
     });
     btnHangup.addEventListener('click', function () { doHangup(); });
     // 阶段一百四十四：会议控制（共享屏幕 / 会中邀请）
