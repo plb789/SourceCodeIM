@@ -12732,6 +12732,12 @@ html.m .wb-app-icon {
     font-weight: 700;
     font-family: "STKaiti", "KaiTi", serif;
 }
+/* 微信同款红包信封图标（SVG）：尺寸随圆形徽标缩放，手机端徽标尺寸不同也自适应 */
+.rp-icon svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
 .rp-text {
     min-width: 0;
     flex: 1;

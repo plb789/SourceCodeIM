@@ -19586,7 +19586,12 @@
         top.className = 'rp-top';
         var icon = document.createElement('div');
         icon.className = 'rp-icon';
-        icon.textContent = '錢';
+        // 微信同款红包信封图标（红信封 + 金色封口弧与封扣），替代原"錢"字楷体图标
+        icon.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true">' +
+            '<rect x="12" y="8" width="24" height="32" rx="3.5" fill="#e85d3f"/>' +
+            '<path d="M12 16 Q24 25 36 16" stroke="#f8d49a" stroke-width="3" fill="none" stroke-linecap="round"/>' +
+            '<ellipse cx="24" cy="19.5" rx="3" ry="2.4" fill="#f8d49a"/>' +
+            '</svg>';
         var text = document.createElement('div');
         text.className = 'rp-text';
         var greet = document.createElement('div');
