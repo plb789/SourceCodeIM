@@ -826,6 +826,19 @@
                 // 应答方：轨道先挂上（幂等，远端 offer 到达后 m 行自动映射，answer 带上我的媒体）
                 attachLocalMedia(pc, false);
             }
+            // 阶段一百四十九：共享中途建连的新成员同步共享画面——attachLocalMedia 恒挂 st.local
+            // 摄像头轨，而共享 replaceTrack 只作用于建连时已存在的成员连接；新成员入会/会中邀请/
+            // 宽限踢出后被重新邀请建连时，不在此补挂则对方只能看到摄像头画面而非共享内容
+            if (sharing && screenStream) {
+                var sv = screenStream.getVideoTracks()[0];
+                if (sv) {
+                    pc.getSenders().forEach(function (sd) {
+                        if (sd.track && sd.track.kind === 'video') {
+                            try { sd.replaceTrack(sv); } catch (e) { }
+                        }
+                    });
+                }
+            }
             renderMeetGrid();
         });
         renderMeetGrid();
@@ -1148,7 +1161,13 @@
             btnCam.disabled = true; // 共享期间禁摄像头开关（同一视频轨道）
             var tile = $('meetGrid').querySelector('div.meet-tile[data-user="self"] video');
             if (tile) tile.srcObject = ss; // 本地预览切共享画面
-        }).catch(function () { });
+        }).catch(function (e) {
+            // 阶段一百四十九：失败可见化（原静默吞错——点击无反应用户无从判断）
+            var msg = '屏幕共享不可用';
+            if (e && e.name === 'NotAllowedError') msg = '屏幕共享未授权（浏览器拒绝或已取消）';
+            else if (e && e.name === 'NotSupportedError') msg = '当前环境不支持屏幕共享';
+            setMeetStatus(msg);
+        });
     }
 
     // ===== 信令下行（帧为完整协议帧：{msg_type, from_user, to_user, content}） =====
