@@ -134,6 +134,12 @@ const (
 
 	// 阶段一四五：独立注册页信令（双向同类型，注册页短连接使用，不影响主聊天连接）
 	MsgTypeRegister = 85 // 上行：注册请求（from_user=用户名，content=密码）；下行：注册结果（content="ok" 或错误提示文本）
+
+	// ===== 阶段一百五十四：积分红包（微信同款，积分归口服务端计算） =====
+	MsgTypeRedPacket        = 86 // 红包消息（与普通消息同链路落库转发，content 为 JSON：{rp:{id,type,count,amount,greeting,status,claimed_count,claimed_amount,my_amount}}；msg_type 落库 86，历史渲染按类型出红包气泡）
+	MsgTypeRedPacketOpen    = 87 // 上行：打开红包（content 为 JSON：{packet_id}）；下行同帧：领取结果（content 为 JSON：{ok,packet_id,amount?,balance?,err?}，ok=true 顺带携带红包详情供打开即显）
+	MsgTypeRedPacketSync    = 88 // 下行：红包状态同步（领取/领完/过期退回后向会话双方或全群在线成员广播，content 为 JSON：{packet_id,status,claimed_count,count,claimed_amount,remaining_amount,msg_id,to_user,group_id}；卡片原位刷新）
+	MsgTypeRedPacketDetail  = 89 // 上行：红包详情查询（content 为 JSON：{packet_id}）；下行同帧：领取明细（content 为 JSON：{ok,packet_id,type,total_amount,count,status,greeting,from_user,expire_time,list:[{username,name,amount,claim_time}]}）
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

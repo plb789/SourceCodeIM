@@ -167,6 +167,8 @@ func main() {
 		logger.Error("%v", err)
 		os.Exit(1)
 	}
+	// 阶段一百五十四：积分红包 24 小时过期退回后台扫描（未领完红包剩余积分自动退回发送者）
+	server.StartRedPacketRefundLoop()
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

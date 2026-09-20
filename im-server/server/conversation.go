@@ -69,10 +69,11 @@ func (s *Server) pushConvList(c *Client) {
 			// 阶段十四增强：排除自己已删除的消息（删除仅对自己生效，不可见消息不应计入未读）
 			// 原实现：仅排除已撤回，删除未读消息后角标不减，与"删除仅对自己生效"语义矛盾
 			// 阶段二十四：图片消息(4)与文件消息(5)同样计入未读
+			// 阶段一百五十四：红包消息(86)计入未读（微信同款：收到红包角标 +1）
 			store.DB.Model(&model.Message{}).
 				Where("msg_type IN ? AND from_user = ? AND to_user = ? AND is_read = ? AND recalled = ?"+
 					" AND id NOT IN (SELECT msg_id FROM im_msg_delete WHERE user_id = ?)",
-					[]int{2, 4, 5}, cv.Target, c.username, false, false, c.username).
+					[]int{2, 4, 5, 86}, cv.Target, c.username, false, false, c.username).
 				Count(&unread)
 		}
 		// 阶段四十补充：读取侧摘要归口自愈——历史引用消息曾把 JSON 原串直存进群聊摘要，
@@ -134,11 +135,13 @@ func convMessageQuery(userID, target string) *gorm.DB {
 		// 群聊：全部群消息
 		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：return query.Where("msg_type = ?", 1)
-		return query.Where("msg_type IN ? AND to_user = ?", []int{1, 4}, target)
+		// 阶段一百五十四：纳入红包消息(86)——清空会话时红包卡片一并从视图清除
+		return query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86}, target)
 	}
 	// 私聊：双方互发的消息
-	return query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-		2, userID, target, target, userID)
+	// 阶段一百五十四：纳入红包消息(86)，语义同群聊分支
+	return query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
+		[]int{2, 86}, userID, target, target, userID)
 }
 
 // markConvRead 清空指定私聊会话未读：对方发给我的未读消息标记为已读，并同步提升已读回执水位

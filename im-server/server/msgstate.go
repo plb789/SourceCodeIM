@@ -110,6 +110,11 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 		s.sendError(c, "只能撤回自己发送的消息")
 		return
 	}
+	// 阶段一百五十四：红包消息禁止撤回（积分已扣减且可能已被领取，撤回语义与资金一致性问题归口为不支持）
+	if record.MsgType == int8(protocol.MsgTypeRedPacket) {
+		s.sendError(c, "红包消息不支持撤回")
+		return
+	}
 	// 撤回时间窗口从配置文件读取（recall_window，单位秒）
 	if time.Since(record.CreateTime) > time.Duration(s.cfg.RecallWindow)*time.Second {
 		s.sendError(c, "超过撤回时间限制的消息无法撤回")
@@ -170,13 +175,15 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		// 阶段二十六：纳入群聊图片消息(4)——撤回群聊图片后摘要应重算为最新可见的图片/文字消息；
 		// 需限定 to_user 为空，私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：query = query.Where("msg_type = ?", 1)
-		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4})
+		// 阶段一百五十四：纳入红包消息(86)——红包不可撤回但可作为"最新可见消息"，撤回旧消息时摘要应重算为红包摘要
+		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 86})
 		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
 	} else {
 		// 私聊会话：双方互发消息，摘要更新双方
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，撤回文字后摘要应重算为最新的图片/文件消息摘要
+		// 阶段一百五十四：纳入红包消息(86)，语义同群聊分支
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
+			[]int{2, 4, 5, 86}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
 		users = []string{record.FromUser, record.ToUser}
 	}
 	var latest model.Message
@@ -204,6 +211,10 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 			summary = "[图片]"
 		case 5:
 			summary = "[文件]"
+		case 86:
+			// 阶段一百五十四：红包信封归口——撤回中间消息且最新可见消息为红包时，
+			// 摘要显示"[红包] 祝福语"，复用 messageSummary 与正常会话摘要链路同口径，防 JSON 原串外泄
+			summary = messageSummary(latest.Content)
 		}
 		if len(summary) > 200 {
 			// 阶段六十六同源修复：按字符截断（原字节截断会切碎中文多字节字符，MySQL 拒绝无效 UTF-8）
@@ -244,7 +255,9 @@ func (s *Server) handleDelete(c *Client, msg *protocol.Message) {
 	// 阶段十五增强：提取消息查询结果复用，删除联动置顶需按消息归属会话校验置顶记录
 	var record model.Message
 	recordErr := store.DB.First(&record, msg.MsgID).Error
-	if recordErr == nil && record.MsgType == 2 && record.ToUser == c.username && !record.IsRead {
+	// 阶段一百五十四：未读联动扩为文字/图片/文件/红包——未读数已把这四类计入角标，
+	// 删除未读消息时若不联动刷新，角标会残留到下次会话列表推送才消失
+	if recordErr == nil && (record.MsgType == 2 || record.MsgType == 4 || record.MsgType == 5 || record.MsgType == 86) && record.ToUser == c.username && !record.IsRead {
 		s.notifyConvUpdate(c.username)
 	}
 	// 阶段十五增强：置顶者删除置顶消息时联动取消置顶并同步（对齐撤回联动，服务端归口）

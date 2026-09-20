@@ -27,13 +27,23 @@ type Server struct {
 	uploadMu       sync.RWMutex
 }
 
+// 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
+var defaultServerRef *Server
+
+// defaultServer 获取服务端实例（未初始化返回 nil，调用方自行判空）
+func defaultServer() *Server {
+	return defaultServerRef
+}
+
 // NewServer 创建服务端实例
 func NewServer(cfg *config.Config) *Server {
-	return &Server{
+	s := &Server{
 		cfg:            cfg,
 		hub:            NewHub(),
 		uploadSessions: make(map[string]*directUploadSession),
 	}
+	defaultServerRef = s
+	return s
 }
 
 // HandleWS 处理新连接
@@ -218,6 +228,13 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段二十九：好友申请列表查询（微信式"新的朋友"归口）
 	case protocol.MsgTypeFriendReqList:
 		s.handleFriendReqList(c, msg)
+	// 阶段一百五十四：积分红包（发送/打开/详情查询；88 状态同步为纯下行帧无上行分支）
+	case protocol.MsgTypeRedPacket:
+		s.handleRedPacketSend(c, msg)
+	case protocol.MsgTypeRedPacketOpen:
+		s.handleRedPacketOpen(c, msg)
+	case protocol.MsgTypeRedPacketDetail:
+		s.handleRedPacketDetail(c, msg)
 	case protocol.MsgTypeFriendDelete:
 		s.handleFriendDelete(c, msg)
 	case protocol.MsgTypeBlacklist:
@@ -488,6 +505,15 @@ func messageSummary(content string) string {
 			count = len(mergedEnv.Merged.I)
 		}
 		return "[聊天记录] " + strconv.Itoa(count) + "条消息"
+	}
+	// 阶段一百五十四：红包信封归口——会话摘要显示"[红包] 祝福语"，JSON 原串不外泄
+	var rpEnv struct {
+		RP struct {
+			Greeting string `json:"greeting"`
+		} `json:"rp"`
+	}
+	if err := json.Unmarshal([]byte(content), &rpEnv); err == nil && rpEnv.RP.Greeting != "" {
+		return "[红包] " + rpEnv.RP.Greeting
 	}
 	return content
 }
@@ -770,12 +796,14 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段一百三十五：纳入群聊文件消息(5)——sendGroupFile 落库 msg_type=5 且 to_user 为空，
 		// 原查询只含 (1,4) 导致群聊文件实时广播可见、重新登录后历史查询丢失（用户实测反馈）
 		// 阶段一百四十二：to_user 参数化——''=全局群，'gN'=指定群
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5}, msg.ToUser)
+		// 阶段一百五十四：纳入群红包消息(86)——群红包实时广播可见、重新登录后历史查询丢失
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
+		// 阶段一百五十四：纳入红包消息(86)——红包卡片历史渲染（信封 JSON 同走持久化消息链路）
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）

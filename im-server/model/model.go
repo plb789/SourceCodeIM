@@ -660,3 +660,62 @@ type WorkbenchApp struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (WorkbenchApp) TableName() string { return "im_workbench_app" }
+
+// ===== 阶段一百五十四：积分红包（微信同款红包，积分归口） =====
+// 设计归口：金额计算/拆分/扣减/退回全部服务端完成，客户端仅展示；
+// 金额双精度沿用 AI 积分口径（3 位小数），拆分用毫单位整数（amount*1000）避免浮点误差
+
+// 红包类型常量
+const (
+	RedPacketTypeNormal string = "normal" // 普通红包（等额拆分，单聊单份/群聊等额 N 份）
+	RedPacketTypeLucky  string = "lucky"  // 拼手气红包（两倍均值法随机拆分，仅群聊）
+)
+
+// 红包状态常量
+const (
+	RedPacketStatusActive   int8 = 0 // 领取中
+	RedPacketStatusFinished int8 = 1 // 已领完
+	RedPacketStatusExpired  int8 = 2 // 已过期（剩余积分已退回发送者）
+)
+
+// RedPacket 红包主表 im_red_packet
+type RedPacket struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// FromUser 发送者；ToUser 私聊接收者（群红包为空）；GroupID 群红包归属群（私聊为 0）
+	FromUser string `gorm:"column:from_user;type:varchar(32);index" json:"from_user"`
+	ToUser   string `gorm:"column:to_user;type:varchar(32);default:''" json:"to_user"`
+	GroupID  uint   `gorm:"column:group_id;default:0" json:"group_id"`
+	// Type 红包类型：normal 普通 / lucky 拼手气
+	Type string `gorm:"column:type;type:varchar(8);default:'normal'" json:"type"`
+	// Greeting 祝福语（微信同款"恭喜发财，大吉大利"默认可改）
+	Greeting string `gorm:"column:greeting;type:varchar(64);default:''" json:"greeting"`
+	// TotalAmount 总金额（双精度 3 位小数）；Count 红包份数（单聊恒 1）
+	TotalAmount float64 `gorm:"column:total_amount;type:double;not null" json:"total_amount"`
+	Count       int     `gorm:"column:count;default:1" json:"count"`
+	// RemainingAmount/RemainingCount 剩余金额与份数（领取原子递减，行锁归口防超领）
+	RemainingAmount float64 `gorm:"column:remaining_amount;type:double;not null" json:"remaining_amount"`
+	RemainingCount  int     `gorm:"column:remaining_count;not null" json:"remaining_count"`
+	// Status 0领取中 1已领完 2已过期（过期退回完成）
+	Status int8 `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
+	// MsgID 关联聊天消息（会话内定位红包气泡，详情/状态同步用）
+	MsgID uint `gorm:"column:msg_id;default:0" json:"msg_id"`
+	// ExpireTime 过期时间（创建 + 24h；退回定时器扫描依据）
+	ExpireTime time.Time `gorm:"column:expire_time;index" json:"expire_time"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RedPacket) TableName() string { return "im_red_packet" }
+
+// RedPacketClaim 红包领取明细表 im_red_packet_claim
+// uniqueIndex(packet_id,username)：同一红包同一用户仅可领取一次（数据库层兜底防并发重复领取）
+type RedPacketClaim struct {
+	ID       uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	PacketID uint      `gorm:"column:packet_id;uniqueIndex:idx_rp_claim" json:"packet_id"`
+	Username string    `gorm:"column:username;type:varchar(32);uniqueIndex:idx_rp_claim" json:"username"`
+	Amount   float64   `gorm:"column:amount;type:double;not null" json:"amount"` // 领到的金额（双精度 3 位小数）
+	ClaimTime time.Time `gorm:"column:claim_time;autoCreateTime" json:"claim_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RedPacketClaim) TableName() string { return "im_red_packet_claim" }

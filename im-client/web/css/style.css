@@ -12691,3 +12691,514 @@ html.m .wb-app-icon {
     width: 48px;
     height: 48px;
 }
+
+/* ===== 阶段一百五十四：积分红包（微信同款，语义橙色卡片深浅主题通用；弹窗壳走主题变量） ===== */
+
+/* 聊天内红包卡片（微信同款橙色渐变，白字；不随主题变色——红包语义色固定） */
+.message-bubble.bubble-redpacket {
+    width: 218px;
+    padding: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: linear-gradient(160deg, #f7a44c 0%, #f2873b 78%, #ea7a30 100%);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(234, 122, 48, 0.28);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.message-bubble.bubble-redpacket:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(234, 122, 48, 0.4);
+}
+.rp-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 12px 10px;
+}
+.rp-icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #fbe3b6;
+    color: #f07020;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+    font-weight: 700;
+    font-family: "STKaiti", "KaiTi", serif;
+}
+.rp-text {
+    min-width: 0;
+    flex: 1;
+}
+.rp-greeting {
+    font-size: 14px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rp-status {
+    margin-top: 3px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rp-type-tag {
+    padding: 5px 12px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(140, 52, 8, 0.22);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* 已领完/已过期态：卡片降饱和（微信同款灰化提示） */
+.bubble-redpacket.rp-done {
+    filter: saturate(0.35) brightness(0.92);
+}
+.bubble-redpacket.rp-done:hover {
+    transform: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* 关闭按钮（发红包/详情弹窗共用） */
+.rp-close {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+.rp-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+/* 发红包弹窗（微信同款米黄卡片；弹窗壳走主题变量保证深浅色可读） */
+.rp-send-box {
+    width: 320px;
+    max-width: calc(100vw - 40px);
+    background: var(--panel-bg);
+    border-radius: 14px;
+    box-shadow: var(--shadow-pop);
+    padding: 14px 18px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.rp-send-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.rp-send-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+.rp-send-type {
+    display: flex;
+    background: var(--hover);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 3px;
+}
+.rp-type-item {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 13px;
+    padding: 6px 0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.rp-type-item.active {
+    background: var(--panel-bg);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.rp-send-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #fdf3e3;
+    border: 1px solid #f3d9a8;
+    border-radius: 10px;
+    padding: 10px 14px;
+}
+[data-theme="dark"] .rp-send-row,
+[data-theme="dark"] .rp-send-greet-row {
+    background: rgba(247, 164, 76, 0.10);
+    border-color: rgba(247, 164, 76, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] .rp-send-row,
+    [data-theme="system"] .rp-send-greet-row {
+        background: rgba(247, 164, 76, 0.10);
+        border-color: rgba(247, 164, 76, 0.28);
+    }
+}
+.rp-send-unit {
+    color: #f08c1e;
+    font-size: 20px;
+    font-weight: 700;
+}
+.rp-send-amount {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 20px;
+    color: var(--text);
+    text-align: right;
+}
+.rp-send-amount::placeholder {
+    color: var(--text-light);
+    opacity: 0.6;
+}
+.rp-send-suffix {
+    color: var(--text-light);
+    font-size: 13px;
+}
+.rp-send-count-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.rp-send-label {
+    color: var(--text-light);
+    font-size: 13px;
+}
+.rp-send-count {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 14px;
+    padding: 7px 10px;
+    outline: none;
+    text-align: right;
+}
+.rp-send-count:focus {
+    border-color: var(--primary);
+}
+.rp-send-greet-row {
+    background: #fdf3e3;
+    border: 1px solid #f3d9a8;
+    border-radius: 10px;
+    padding: 2px 6px;
+}
+.rp-send-greeting {
+    width: 100%;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: #b06a2c;
+    font-size: 13px;
+    padding: 8px;
+}
+.rp-send-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-light);
+    min-height: 16px;
+}
+.rp-send-err {
+    color: #e64340;
+}
+.rp-send-ok {
+    border: none;
+    border-radius: 10px;
+    padding: 11px 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, #f7a44c, #ee7d2f);
+    cursor: pointer;
+    transition: filter 0.15s;
+}
+.rp-send-ok:hover {
+    filter: brightness(1.06);
+}
+.rp-send-ok:disabled {
+    filter: grayscale(0.5) brightness(0.95);
+    cursor: not-allowed;
+}
+
+/* 开红包遮罩（微信同款全屏红包封面：红底金字大圆"開"） */
+.rp-open-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 2400;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: rp-fade-in 0.18s ease;
+}
+@keyframes rp-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.rp-open-close {
+    position: absolute;
+    top: 18px;
+    right: 22px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+}
+.rp-open-close:hover {
+    color: #fff;
+}
+.rp-open-card {
+    width: 320px;
+    max-width: calc(100vw - 40px);
+    background: linear-gradient(170deg, #d5504a 0%, #c23a34 60%, #a92c27 100%);
+    border-radius: 14px;
+    padding: 26px 22px 24px;
+    color: #fff;
+    text-align: center;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    animation: rp-pop-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes rp-pop-in {
+    from { transform: scale(0.82); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+.rp-open-head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.rp-open-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.18);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 600;
+}
+.rp-open-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.rp-open-name {
+    font-size: 15px;
+    opacity: 0.95;
+}
+.rp-open-greeting {
+    font-size: 13px;
+    opacity: 0.8;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rp-open-idle {
+    padding: 26px 0 6px;
+    display: flex;
+    justify-content: center;
+}
+.rp-open-btn {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(180deg, #fbe3b6, #f4c877);
+    color: #b8460f;
+    font-size: 30px;
+    font-weight: 700;
+    font-family: "STKaiti", "KaiTi", serif;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), inset 0 -3px 0 rgba(184, 70, 15, 0.25);
+    transition: transform 0.15s ease;
+    animation: rp-breathe 1.6s ease-in-out infinite;
+}
+@keyframes rp-breathe {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+}
+.rp-open-btn:hover {
+    animation-play-state: paused;
+    transform: scale(1.08);
+}
+.rp-open-btn:disabled {
+    filter: grayscale(0.4);
+    cursor: wait;
+    animation: none;
+}
+.rp-open-result {
+    padding: 18px 0 8px;
+}
+.rp-open-amount {
+    font-size: 30px;
+    font-weight: 700;
+    color: #fbe3b6;
+}
+.rp-open-tip {
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 0.85;
+}
+.rp-open-detail {
+    margin-top: 16px;
+    border: none;
+    background: transparent;
+    color: #fbe3b6;
+    font-size: 13px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    opacity: 0.92;
+}
+.rp-open-detail:hover {
+    opacity: 1;
+}
+
+/* 红包详情弹窗（领取列表；壳走主题变量，列表挂自绘悬浮滑块） */
+.rp-detail-box {
+    width: 340px;
+    max-width: calc(100vw - 40px);
+    background: var(--panel-bg);
+    border-radius: 14px;
+    box-shadow: var(--shadow-pop);
+    padding: 14px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: min(70vh, 560px);
+}
+.rp-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.rp-detail-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+}
+.rp-detail-summary {
+    background: linear-gradient(160deg, #f7a44c 0%, #ea7a30 100%);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: #fff;
+}
+.rp-detail-greeting {
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rp-detail-stat {
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.9;
+}
+.rp-detail-list {
+    overflow-y: auto;
+    min-height: 60px;
+    flex: 1;
+}
+.rp-detail-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 2px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.rp-detail-item:last-child {
+    border-bottom: none;
+}
+.rp-detail-item.mine {
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    border-radius: 8px;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+.rp-detail-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: var(--placeholder-bg);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.rp-detail-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.rp-detail-info {
+    flex: 1;
+    min-width: 0;
+}
+.rp-detail-name {
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rp-detail-time {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-light);
+}
+.rp-detail-amount {
+    color: #ee7d2f;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.rp-detail-empty {
+    padding: 26px 0;
+    text-align: center;
+    color: var(--text-light);
+    font-size: 13px;
+}
+
+/* 手机端适配（html.m，微信手机版同款） */
+html.m .message-bubble.bubble-redpacket {
+    width: 200px;
+}
+html.m .rp-open-card {
+    width: 300px;
+}
+html.m .rp-send-box,
+html.m .rp-detail-box {
+    max-width: calc(100vw - 32px);
+}

@@ -1390,8 +1390,11 @@
         var win = (IMSocket.getRecallWindow ? IMSocket.getRecallWindow() : 120) - 10;
         var isMine = el.getAttribute('data-from') === IMSocket.getUsername();
         var within = Date.now() / 1000 - (parseInt(el.getAttribute('data-ts'), 10) || 0) < win;
+        // 阶段一百五十四：红包卡片（86）无撤回/置顶/转发语义——撤回服务端拦截、置顶类型不符、
+        // 转发会把红包信封原串发给他人导致资金语义错乱；仅保留删除/复制
+        var isRpBubble = !!el.querySelector('.bubble-redpacket');
         var recallItem = msgMenu.querySelector('[data-action="recall"]');
-        recallItem.style.display = (msgId > 0 && isMine && within) ? '' : 'none'; // msgId=0（未持久化）无撤回语义
+        recallItem.style.display = (msgId > 0 && isMine && within && !isRpBubble) ? '' : 'none'; // msgId=0（未持久化）无撤回语义
         // 阶段一百三十四：另存为仅文件消息可用——右键目标气泡含 .bubble-file[data-url] 才显示
         // null 守卫：防旧版缓存 index.html 无本项时 TypeError 中断整个右键菜单
         var saveasItem = msgMenu.querySelector('[data-action="saveas"]');
@@ -1407,9 +1410,14 @@
         // 置顶项：当前消息已被置顶时显示"取消置顶"
         // 阶段八十八：只改 .mi-text 文字节点——直接赋 textContent 会连同 SVG 图标一起清掉（实测丢图标根因）
         var pinItem = msgMenu.querySelector('[data-action="pin"]');
+        // 阶段一百五十四：红包卡片不支持置顶（服务端仅允许文字消息置顶），隐藏入口避免误导报错
+        pinItem.style.display = isRpBubble ? 'none' : '';
         var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
         var p = pinInfo[currentChatUser];
         pinLabel.textContent = (p && p.msg_id && p.msg_id === msgId) ? '取消置顶' : '置顶';
+        // 阶段一百五十四：转发项对红包卡片隐藏（微信同款：红包不可转发）
+        var fwdItem = msgMenu.querySelector('[data-action="forward"]');
+        if (fwdItem) fwdItem.style.display = isRpBubble ? 'none' : '';
         msgMenu.style.top = e.clientY + 'px';
         msgMenu.style.left = e.clientX + 'px';
         msgMenu.classList.remove('hidden');
@@ -1854,8 +1862,9 @@
         messageList.classList.add('multi-select'); // 阶段八十八：复选框列样式归口（悬停手型 + 自消息行放宽对齐）
         updateMsCount();
         // 为可选中消息（有 msg_id）插入复选框；系统提示/撤回提示等无 id 消息自然排除
+        // 阶段一百五十四：红包卡片排除——微信同款红包不可合并转发，防止信封 JSON 原串外泄
         messageList.querySelectorAll('.message[data-msg-id]').forEach(function (el) {
-            if (el.querySelector('.ms-check')) return;
+            if (el.querySelector('.ms-check') || el.querySelector('.bubble-redpacket')) return;
             var ck = document.createElement('span');
             ck.className = 'ms-check';
             el.appendChild(ck);
@@ -1890,7 +1899,9 @@
         if (!row) return;
         var id = row.getAttribute('data-msg-id');
         // 多选模式期间新到达的消息无复选框，首次勾选时补插（与既有消息视觉一致）
+        // 阶段一百五十四：红包卡片不补插（不可合并转发，与进入多选时的排除口径一致）
         if (!row.querySelector('.ms-check')) {
+            if (row.querySelector('.bubble-redpacket')) return;
             var ck = document.createElement('span');
             ck.className = 'ms-check';
             row.appendChild(ck);
@@ -16152,6 +16163,50 @@
         // 现叠加本地已读水位即时应用：自己发送的私聊消息若已被读到更大 ID 则直接显示"已读"
         var wm = (isMine && isPrivate) ? (readWatermark[r.to_user] || 0) : 0;
         var isRead = r.is_read || (wm >= r.id);
+        // 阶段一百五十四：红包消息(86)历史持久化渲染（content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
+        if (r.msg_type === 86) {
+            var rpEnv = null;
+            try { rpEnv = JSON.parse(r.content); } catch (e) { rpEnv = null; }
+            if (rpEnv && rpEnv.rp && rpEnv.rp.id) {
+                var rpDiv = rpBuildBubbleEl(r.from_user, rpEnv.rp, isMine ? 'self' : 'other', isPrivate);
+                // 元数据与文字/图片消息同口径：消息 ID/发送者/时间戳（供已读回执与定位使用）
+                if (r.id) rpDiv.setAttribute('data-msg-id', r.id);
+                rpDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(rpDiv, beforeEl);
+                } else {
+                    messageList.appendChild(rpDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                // 自己发送的私聊红包：历史渲染补齐已读/未读初始态（实时链路由 87 回执维护）
+                if (isMine && isPrivate) {
+                    var rpSt = rpDiv.querySelector('.msg-status');
+                    if (rpSt) {
+                        rpSt.setAttribute('data-msg-id', r.id);
+                        rpSt.textContent = isRead ? '已读' : '未读';
+                    }
+                }
+                // 状态自愈：缓存命中直接原位刷新；未查询过的红包静默查详情兜底（去重防查询风暴）
+                if (rpStatusCache[rpEnv.rp.id]) {
+                    rpRefreshBubble(rpEnv.rp.id);
+                } else if (!rpQueriedPackets[rpEnv.rp.id]) {
+                    rpQueriedPackets[rpEnv.rp.id] = true;
+                    rpQueryDetail(rpEnv.rp.id, function (d) { rpHandleDetail(d, false); });
+                }
+                return;
+            }
+            // 信封异常降级为系统提示，避免渲染成原始 JSON 串
+            var rpTip = document.createElement('div');
+            rpTip.className = 'system-tip';
+            rpTip.textContent = '[红包]';
+            if (beforeEl) {
+                messageList.insertBefore(rpTip, beforeEl);
+            } else {
+                messageList.appendChild(rpTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         // 阶段二十四：图片消息(4)/文件消息(5)持久化渲染（content 为 JSON：url/name/size）
         if (r.msg_type === 4 || r.msg_type === 5) {
             // 贴底快照在插入前采样：向上补插历史（beforeEl）不参与滚底；追加场景按当前是否贴底决定
@@ -17277,6 +17332,9 @@
         // 阶段一百四十二：邀请成员按钮显隐——仅群主在多群会话中可见
         var grpInvBtn = document.getElementById('grp-invite-btn');
         if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !(isGroupTarget(currentChatUser) && isGroupOwner(currentChatUser)));
+        // 阶段一百五十四：红包按钮显隐——私聊真实用户与群聊显示，AI 智能体会话隐藏（微信同款收发红包入口）
+        var rpBtn = document.getElementById('redpacket-btn');
+        if (rpBtn) rpBtn.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser)));
     }
 
     // ===== 消息渲染 =====
@@ -19387,6 +19445,410 @@
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && !taskhistMask.classList.contains('hidden')) taskhistCloseDialog();
     });
+
+    // ===== 阶段一百五十四：积分红包（微信同款，服务端金额归口，前端仅展示与交互） =====
+    // 信令：86 红包消息（实时+历史渲染）/ 87 领取结果与发送回执（act 区分）/ 88 状态同步 / 89 详情查询
+    var redpacketBtn = document.getElementById('redpacket-btn');
+    var rpSendMask = document.getElementById('rp-send-mask');
+    var rpSendClose = document.getElementById('rp-send-close');
+    var rpSendTypeEl = document.getElementById('rp-send-type');
+    var rpTypeNormalBtn = document.getElementById('rp-type-normal');
+    var rpTypeLuckyBtn = document.getElementById('rp-type-lucky');
+    var rpSendAmount = document.getElementById('rp-send-amount');
+    var rpSendCountRow = document.getElementById('rp-send-count-row');
+    var rpSendCount = document.getElementById('rp-send-count');
+    var rpSendGreeting = document.getElementById('rp-send-greeting');
+    var rpSendBalance = document.getElementById('rp-send-balance');
+    var rpSendErr = document.getElementById('rp-send-err');
+    var rpSendOk = document.getElementById('rp-send-ok');
+    var rpOpenMask = document.getElementById('rp-open-mask');
+    var rpOpenClose = document.getElementById('rp-open-close');
+    var rpOpenAvatar = document.getElementById('rp-open-avatar');
+    var rpOpenName = document.getElementById('rp-open-name');
+    var rpOpenGreeting = document.getElementById('rp-open-greeting');
+    var rpOpenIdle = document.getElementById('rp-open-idle');
+    var rpOpenBtn = document.getElementById('rp-open-btn');
+    var rpOpenResult = document.getElementById('rp-open-result');
+    var rpOpenAmount = document.getElementById('rp-open-amount');
+    var rpOpenDetailBtn = document.getElementById('rp-open-detail');
+    var rpDetailMask = document.getElementById('rp-detail-mask');
+    var rpDetailClose = document.getElementById('rp-detail-close');
+    var rpDetailGreeting = document.getElementById('rp-detail-greeting');
+    var rpDetailStat = document.getElementById('rp-detail-stat');
+    var rpDetailList = document.getElementById('rp-detail-list');
+
+    var rpSendType = 'normal';    // 发送类型（群聊可切：normal 普通 / lucky 拼手气）
+    var rpOpenCtx = null;         // 当前开红包上下文 {packetId, fromUser}
+    var rpDetailCbs = {};         // 89 详情响应回调表（packet_id → cb）：历史渲染会批量并发查询，
+                                  // 单回调变量会被后续查询覆盖导致响应错配丢弃，故按红包 ID 归口分派
+    var rpQueriedPackets = {};    // 会话级去重：已静默查询过详情的红包（历史渲染状态兜底）
+    var rpMyClaims = {};          // packet_id -> 本端已领金额（88 同步不带领取人，卡片"已存入"状态归口）
+    var rpStatusCache = {};       // packet_id -> {status, claimed_count}（88 同步 + 详情响应缓存，历史渲染兜底）
+
+    // 积分展示格式化：最多 3 位小数去尾零（与积分体系双精度口径一致，95 → "95"，4.506 → "4.506"）
+    function rpFmt(n) {
+        var v = Number(n) || 0;
+        return String(Math.round(v * 1000) / 1000);
+    }
+    // 当前已知余额（服务端归口下发，前端不计算）：读标题栏 ⚡ 积分文本
+    function rpBalanceText() {
+        var t = titlebarPointsNumEl ? titlebarPointsNumEl.textContent : '';
+        return t && t !== '—' ? t : null;
+    }
+
+    // ---- 发红包弹窗 ----
+    function rpOpenSendDialog() {
+        var isGroup = isGroupTarget(currentChatUser);
+        rpSendTypeEl.classList.toggle('hidden', !isGroup);
+        rpSendCountRow.classList.toggle('hidden', !isGroup);
+        if (!isGroup) rpSendType = 'normal';
+        rpTypeNormalBtn.classList.toggle('active', rpSendType === 'normal');
+        rpTypeLuckyBtn.classList.toggle('active', rpSendType === 'lucky');
+        rpSendAmount.value = '';
+        rpSendErr.textContent = '';
+        var bal = rpBalanceText();
+        rpSendBalance.textContent = bal ? ('余额 ' + bal + ' 积分') : '余额获取中…';
+        rpSendMask.classList.remove('hidden');
+        setTimeout(function () { rpSendAmount.focus(); }, 50);
+    }
+    function rpCloseSendDialog() {
+        rpSendMask.classList.add('hidden');
+    }
+    rpTypeNormalBtn.addEventListener('click', function () {
+        rpSendType = 'normal';
+        rpTypeNormalBtn.classList.add('active');
+        rpTypeLuckyBtn.classList.remove('active');
+    });
+    rpTypeLuckyBtn.addEventListener('click', function () {
+        rpSendType = 'lucky';
+        rpTypeLuckyBtn.classList.add('active');
+        rpTypeNormalBtn.classList.remove('active');
+    });
+    rpSendClose.addEventListener('click', rpCloseSendDialog);
+    rpSendMask.addEventListener('click', function (e) { if (e.target === rpSendMask) rpCloseSendDialog(); });
+    rpSendAmount.addEventListener('keydown', function (e) { if (e.key === 'Enter') rpSendOk.click(); });
+    rpSendCount.addEventListener('keydown', function (e) { if (e.key === 'Enter') rpSendOk.click(); });
+    rpSendOk.addEventListener('click', function () {
+        var amount = parseFloat(rpSendAmount.value.trim());
+        if (!(amount > 0)) { rpSendErr.textContent = '请输入正确的金额'; return; }
+        var isGroup = isGroupTarget(currentChatUser);
+        var count = 1;
+        if (isGroup) {
+            count = parseInt(rpSendCount.value, 10) || 0;
+            if (count < 1 || count > 100) { rpSendErr.textContent = '红包个数为 1-100'; return; }
+            if (Math.round(amount * 1000) < count) { rpSendErr.textContent = '每份至少 0.001 积分'; return; }
+        }
+        rpSendErr.textContent = '';
+        IMSocket.send({
+            msg_type: MSG.RED_PACKET,
+            to_user: currentChatUser,
+            content: JSON.stringify({
+                amount: amount,
+                count: count,
+                type: isGroup ? rpSendType : 'normal',
+                greeting: rpSendGreeting.value.trim()
+            })
+        });
+        rpCloseSendDialog();
+    });
+
+    // ---- 红包卡片渲染（实时与历史共用构建器；状态文案按本端视角归口） ----
+    function rpStatusTextOf(status, fromSelf) {
+        if (Number(status) === 2) return '已过期';
+        if (rpMyClaims[rpCurId] != null) return '已存入积分余额';
+        if (Number(status) === 1) return '已领取完毕';
+        return fromSelf ? '等待领取' : '领取红包';
+    }
+    var rpCurId = 0; // rpStatusTextOf 临时上下文（构建/刷新时先赋值）
+
+    function rpApplyBubbleState(bubble, rp, fromSelf) {
+        var status = rpStatusCache[rp.id] ? rpStatusCache[rp.id].status : Number(rp.status || 0);
+        rpCurId = rp.id;
+        var stEl = bubble.querySelector('.rp-status');
+        if (stEl) stEl.textContent = rpStatusTextOf(status, fromSelf);
+        bubble.classList.toggle('rp-done', Number(status) !== 0 && rpMyClaims[rp.id] == null);
+    }
+
+    function rpBuildBubbleEl(fromUser, rp, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-rp-id', rp.id);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称（与文字/图片消息同规则）
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-redpacket';
+        bubble.setAttribute('data-rp-id', rp.id);
+        var top = document.createElement('div');
+        top.className = 'rp-top';
+        var icon = document.createElement('div');
+        icon.className = 'rp-icon';
+        icon.textContent = '錢';
+        var text = document.createElement('div');
+        text.className = 'rp-text';
+        var greet = document.createElement('div');
+        greet.className = 'rp-greeting';
+        greet.textContent = rp.greeting || '恭喜发财，大吉大利';
+        var status = document.createElement('div');
+        status.className = 'rp-status';
+        text.appendChild(greet);
+        text.appendChild(status);
+        top.appendChild(icon);
+        top.appendChild(text);
+        var tag = document.createElement('div');
+        tag.className = 'rp-type-tag';
+        tag.textContent = rp.type === 'lucky' ? ('拼手气红包 · 共 ' + rp.count + ' 个') : ('积分红包 · 共 ' + rpFmt(rp.amount) + ' 积分');
+        bubble.appendChild(top);
+        bubble.appendChild(tag);
+        rpApplyBubbleState(bubble, rp, type === 'self');
+        bubble.addEventListener('click', function () { rpCardClick(rp.id); });
+        body.appendChild(bubble);
+        // 自己发送的私聊红包同样显示已读/未读状态（与文字/图片消息一致）
+        if (type === 'self' && isPrivate) {
+            var st = document.createElement('div');
+            st.className = 'msg-status';
+            st.setAttribute('data-msg-id', '');
+            st.textContent = '未读';
+            body.appendChild(st);
+        }
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+
+    function rpAppendBubble(fromUser, rp, type, isPrivate) {
+        var div = rpBuildBubbleEl(fromUser, rp, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+
+    // 卡片状态原位刷新（88 同步/详情响应后调用；不重绘不闪动，仅改文案与类）
+    function rpRefreshBubble(packetId) {
+        var bubbles = messageList.querySelectorAll('.bubble-redpacket[data-rp-id="' + packetId + '"]');
+        bubbles.forEach(function (b) {
+            var cached = rpStatusCache[packetId] || {};
+            rpCurId = packetId;
+            var stEl = b.querySelector('.rp-status');
+            if (stEl) stEl.textContent = rpStatusTextOf(cached.status, b.closest('.message').classList.contains('self'));
+            b.classList.toggle('rp-done', Number(cached.status) !== 0 && rpMyClaims[packetId] == null);
+        });
+    }
+
+    // ---- 点击卡片：先查详情再分流（可领→开红包页；已领/领完/过期/自己发的→详情页） ----
+    function rpQueryDetail(packetId, cb) {
+        rpDetailCbs[packetId] = cb;
+        IMSocket.send({ msg_type: MSG.RED_PACKET_DETAIL, content: JSON.stringify({ packet_id: packetId }) });
+        // 8 秒无响应兜底解除（断线场景避免回调悬挂）
+        setTimeout(function () {
+            if (rpDetailCbs[packetId] === cb) delete rpDetailCbs[packetId];
+        }, 8000);
+    }
+    function rpCardClick(packetId) {
+        rpQueriedPackets[packetId] = true;
+        rpQueryDetail(packetId, function (d) { rpHandleDetail(d, true); });
+    }
+
+    // 详情响应归口：更新缓存与本端领取记录 → 刷新卡片 → 按"是否可领"分流开红包页/详情页
+    function rpHandleDetail(d, interactive) {
+        if (!d || !d.ok) {
+            if (interactive) showToast((d && d.err) || '无法查看红包');
+            return;
+        }
+        rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
+        var myClaim = null;
+        (d.list || []).forEach(function (it) {
+            if (it.username === IMSocket.getUsername()) myClaim = it;
+        });
+        if (myClaim) rpMyClaims[d.packet_id] = myClaim.amount;
+        rpRefreshBubble(d.packet_id);
+        var canClaim = Number(d.status) === 0 && !myClaim &&
+            (d.group_id > 0 || d.to_user === IMSocket.getUsername());
+        // 静默查询（历史渲染兜底）仅刷新卡片状态不弹窗；点击触发（interactive=true）才分流弹窗
+        if (!interactive) return;
+        if (canClaim) {
+            rpShowOpenDialog(d);
+        } else {
+            rpShowDetailDialog(d);
+        }
+    }
+
+    // ---- 开红包遮罩（微信同款：头像+昵称+祝福语+大圆"開"） ----
+    function rpFillOpenHead(d) {
+        rpOpenName.textContent = d.from_name || d.from_user || '';
+        rpOpenGreeting.textContent = d.greeting || '恭喜发财，大吉大利';
+        rpOpenAvatar.innerHTML = '';
+        var av = getAvatarUrl(d.from_user);
+        if (av) {
+            var img = document.createElement('img');
+            img.src = av;
+            rpOpenAvatar.appendChild(img);
+        } else {
+            rpOpenAvatar.textContent = (d.from_user || '?').charAt(0).toUpperCase();
+        }
+    }
+    function rpShowOpenDialog(d) {
+        rpOpenCtx = { packetId: d.packet_id, fromUser: d.from_user };
+        rpFillOpenHead(d);
+        rpOpenIdle.classList.remove('hidden');
+        rpOpenResult.classList.add('hidden');
+        rpOpenBtn.disabled = false;
+        rpOpenMask.classList.remove('hidden');
+    }
+    function rpCloseOpenDialog() {
+        rpOpenMask.classList.add('hidden');
+        rpOpenCtx = null;
+    }
+    rpOpenClose.addEventListener('click', rpCloseOpenDialog);
+    rpOpenBtn.addEventListener('click', function () {
+        if (!rpOpenCtx) return;
+        rpOpenBtn.disabled = true; // 领取中防重复点击（响应/错误回执后恢复）
+        IMSocket.send({ msg_type: MSG.RED_PACKET_OPEN, content: JSON.stringify({ packet_id: rpOpenCtx.packetId }) });
+    });
+
+    // ---- 红包详情弹窗（领取列表，自己高亮；列表挂自绘悬浮滑块） ----
+    function rpShowDetailDialog(d) {
+        rpDetailGreeting.textContent = d.greeting || '恭喜发财，大吉大利';
+        var stat;
+        if (Number(d.status) === 2) {
+            stat = '已过期，未领完的 ' + rpFmt(d.remaining_amount) + ' 积分已退回';
+        } else {
+            stat = rpFmt(d.claimed_count || 0) + '/' + d.count + ' 个，共 ' + rpFmt(d.claimed_amount || 0) + ' 积分';
+            if (Number(d.status) === 1) stat += '，已领取完毕';
+        }
+        rpDetailStat.textContent = stat;
+        rpDetailList.innerHTML = '';
+        var list = d.list || [];
+        if (!list.length) {
+            var empty = document.createElement('div');
+            empty.className = 'rp-detail-empty';
+            empty.textContent = Number(d.status) === 2 ? '红包已过期，无人领取' : '暂无人领取';
+            rpDetailList.appendChild(empty);
+        } else {
+            list.forEach(function (it) {
+                var item = document.createElement('div');
+                item.className = 'rp-detail-item' + (it.username === IMSocket.getUsername() ? ' mine' : '');
+                var av = document.createElement('div');
+                av.className = 'rp-detail-avatar';
+                var avUrl = getAvatarUrl(it.username);
+                if (avUrl) {
+                    var img = document.createElement('img');
+                    img.src = avUrl;
+                    av.appendChild(img);
+                } else {
+                    av.textContent = (it.name || it.username || '?').charAt(0).toUpperCase();
+                }
+                var info = document.createElement('div');
+                info.className = 'rp-detail-info';
+                var name = document.createElement('div');
+                name.className = 'rp-detail-name';
+                name.textContent = (it.name || it.username) + (it.username === IMSocket.getUsername() ? '（我）' : '');
+                var time = document.createElement('div');
+                time.className = 'rp-detail-time';
+                time.textContent = it.claim_time || '';
+                info.appendChild(name);
+                info.appendChild(time);
+                var amt = document.createElement('div');
+                amt.className = 'rp-detail-amount';
+                amt.textContent = rpFmt(it.amount) + ' 积分';
+                item.appendChild(av);
+                item.appendChild(info);
+                item.appendChild(amt);
+                rpDetailList.appendChild(item);
+            });
+        }
+        rpOpenMask.classList.add('hidden'); // 结果页跳详情时收起开红包遮罩
+        rpDetailMask.classList.remove('hidden');
+        if (window._osbInit) window._osbInit(rpDetailList); // 自绘悬浮滑块（原生条已全局禁用）
+    }
+    function rpCloseDetailDialog() {
+        rpDetailMask.classList.add('hidden');
+    }
+    rpDetailClose.addEventListener('click', rpCloseDetailDialog);
+    rpDetailMask.addEventListener('click', function (e) { if (e.target === rpDetailMask) rpCloseDetailDialog(); });
+    rpOpenDetailBtn.addEventListener('click', function () {
+        if (!rpOpenCtx) return;
+        rpQueryDetail(rpOpenCtx.packetId, function (d) { rpHandleDetail(d, false); });
+    });
+    // Esc 关闭红包弹窗（后打开的优先）
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        if (!rpOpenMask.classList.contains('hidden')) rpCloseOpenDialog();
+        else if (!rpDetailMask.classList.contains('hidden')) rpCloseDetailDialog();
+        else if (!rpSendMask.classList.contains('hidden')) rpCloseSendDialog();
+    });
+
+    // ---- 信令处理 ----
+    // 86 红包消息实时渲染（与群聊图片同口径：会话归属匹配 + msg_id 去重 + 服务端昵称合并）
+    IMSocket.on(MSG.RED_PACKET, function (msg) {
+        // 会话归属归一（与 PRIVATE handler 同口径）：我发的→to_user；对方发的→from_user
+        // 原实现：直接比对 to_user，对方发来的私聊红包 to_user 是自己，恒不匹配当前会话导致实时不渲染
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var target = isMine0 ? (msg.to_user || '') : (msg.from_user || '');
+        if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var meta = {};
+        try { meta = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        var rp = meta.rp;
+        if (!rp || !rp.id) return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = rpAppendBubble(msg.from_user, rp, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+    });
+
+    // 87 下行归口（act 区分）：send=发送回执（余额联动）/ open=领取结果 / detail=详情响应
+    IMSocket.on(MSG.RED_PACKET_OPEN, function (msg) {
+        var d = {};
+        try { d = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (d.act === 'send') {
+            // 发送回执：仅发送者收，刷新标题栏余额（服务端扣款归口，前端零计算）
+            if (d.ok && d.balance != null) setPointsBalance(d.balance);
+            return;
+        }
+        if (d.act === 'open') {
+            rpOpenBtn.disabled = false;
+            if (!d.ok) { showToast(d.err || '领取失败'); return; }
+            if (d.balance != null) setPointsBalance(d.balance);
+            rpMyClaims[d.packet_id] = d.amount;
+            rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
+            rpOpenIdle.classList.add('hidden');
+            rpOpenResult.classList.remove('hidden');
+            rpOpenAmount.textContent = rpFmt(d.amount) + ' 积分';
+            rpRefreshBubble(d.packet_id); // 自己的卡片状态同步（已存入积分余额）
+            return;
+        }
+        if (d.act === 'detail') {
+            // 按红包 ID 分派回调（历史渲染批量并发查询与点击查询共用归口）
+            var cb = rpDetailCbs[d.packet_id];
+            if (cb) {
+                delete rpDetailCbs[d.packet_id];
+                cb(d);
+            }
+        }
+    });
+
+    // 88 状态同步：领取/领完/过期退回后卡片原位刷新（缓存供后续历史渲染兜底）
+    IMSocket.on(MSG.RED_PACKET_SYNC, function (msg) {
+        var d = {};
+        try { d = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (!d.packet_id) return;
+        rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
+        rpRefreshBubble(d.packet_id);
+    });
+
+    // 红包按钮点击（显隐归口 updateChatTitle：私聊真实用户与群聊显示，AI 智能体会话隐藏）
+    if (redpacketBtn) redpacketBtn.addEventListener('click', rpOpenSendDialog);
+
+    // ===== 阶段一百五十四：红包历史渲染挂钩（在 renderHistoryRecord 内按 msg_type=86 分流，见上方定义处） =====
+
 
     // ===== 阶段四十四：滚动条悬停显隐（微信设置页同款：默认隐藏，悬停滚动容器浮现，移出立即隐藏） =====
     // 纯 CSS :hover 在 Chromium 滚动条伪元素上存在滞留（拖动滑块后移出/快速划过时 hover 不重算，滑块不消失），

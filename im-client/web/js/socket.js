@@ -113,7 +113,12 @@
         GROUP_QUIT: 82,          // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退）
         GROUP_QUIT_RESP: 83,     // 下行：退群回执（content 为 JSON：{ok, group_id, err?}）
         ANNOUNCEMENT_PUSH: 84,   // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
-        REGISTER: 85             // 阶段一四五：独立注册页注册信令（双向同类型，上行注册请求；下行 content="ok" 或错误提示）
+        REGISTER: 85,            // 阶段一四五：独立注册页注册信令（双向同类型，上行注册请求；下行 content="ok" 或错误提示）
+        // ===== 阶段一百五十四：积分红包（微信同款，金额计算/拆分/扣减/退回全部服务端归口） =====
+        RED_PACKET: 86,          // 红包消息（与普通消息同链路落库转发，content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
+        RED_PACKET_OPEN: 87,     // 双向：上行打开红包 {packet_id}；下行结果按 act 区分（send=发送回执含余额 / open=领取结果含详情 / detail=详情响应）
+        RED_PACKET_SYNC: 88,     // 下行：红包状态同步（领取/领完/过期退回后广播，content 为 JSON：{packet_id,status,claimed_count,...,msg_id}；卡片原位刷新）
+        RED_PACKET_DETAIL: 89    // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
     };
 
     function connect(username, password) {
