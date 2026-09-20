@@ -109,6 +109,9 @@ func (s *Server) HandleCallSignal(c *Client, msg *protocol.Message) {
 	// 阶段一百五十一：会议共享状态广播（腾讯会议同款主舞台布局归口：全员一致视图）
 	case "meet_share":
 		s.handleMeetShare(from, msg, &p)
+	// 阶段一百五十二：加入会议——用户输入 9 位会议号直接入会（工具栏下拉"加入会议"入口）
+	case "meet_join_no":
+		s.handleMeetJoinNo(from, msg, &p)
 	// 阶段一百五十一补丁：会议设备可用性广播（麦克风/摄像头是否可用全员可见）
 	case "meet_media":
 		s.handleMeetMedia(from, msg, &p)

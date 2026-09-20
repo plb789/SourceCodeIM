@@ -17,6 +17,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +46,7 @@ type meetRoom struct {
 	Caller   string          // 发起人（退出不结束会议，微信同款）
 	CallType string          // audio / video
 	GroupID  uint            // 发起群（0=无群关联，一期恒从群发起）
+	MeetNo   string          // 阶段一百五十二：9 位数字会议号（建房时服务端生成，加入会议凭此号查房入会）
 	Members  map[string]bool // 已入会成员（含发起人）
 	Invited  map[string]bool // 已邀请响铃中（accept/decline 后移除）
 	Started  time.Time       // 首人入会时间（话单计时长起点）
@@ -171,7 +173,10 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 		}
 		invitees = append(invitees, m)
 	}
-	if len(invitees) == 0 {
+	// 阶段一百五十二：创建等待模式（members 为空：工具栏下拉"创建会议"不选人直接建房，
+	// 创建人进会等待后经会议窗"邀请成员"再加人）——邀请模式下被邀者全部不可用仍报错；
+	// 等待模式放行空邀请名单（会议成立标记见下方建房段 Started 置位）
+	if len(body.Members) > 0 && len(invitees) == 0 {
 		meetMu.Unlock()
 		reason := "可邀请的成员均不可用"
 		if len(skipped) > 0 {
@@ -199,7 +204,26 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 	for _, m := range invitees {
 		room.Invited[m] = true
 	}
+	// 阶段一百五十二：创建等待模式会议成立标记——创建人已入会即置 Started
+	// （ringTimeout 守卫见 Started 非零即空转，等待期不被 60s 误解散；话单计时长起点同语义）
+	if len(body.Members) == 0 {
+		room.Started = time.Now()
+	}
 	meetRooms[room.ID] = room
+	// 阶段一百五十二：生成 9 位数字会议号（锁内生成并查重，冲突重试；加入会议凭此号入会）
+	for i := 0; i < 5 && room.MeetNo == ""; i++ {
+		no := fmt.Sprintf("%d", 100000000+rand.Intn(900000000))
+		dup := false
+		for _, r := range meetRooms {
+			if r.MeetNo == no {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			room.MeetNo = no
+		}
+	}
 	callUserBusy[from] = room.ID
 	for _, m := range invitees {
 		callUserBusy[m] = room.ID
@@ -208,30 +232,41 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 
 	// 阶段一百五十：60s 无人接听超时兜底（1v1 callRingTimeout 同款语义）——期间任一人 accept 即取消；
 	// 超时自动解散复用 meetDismiss cancel 通知链路（响铃中被邀人撤下来电卡片）+ 发起人会议窗 error 收口。
-	// 原代码：无响铃超时，发起人不结束会议且被邀人不接不拒时响铃卡片永久残留
-	room.ringTimer = time.AfterFunc(meetRingTimeout, func() {
-		meetMu.Lock()
-		cur, ok := meetRooms[room.ID]
-		if !ok || cur != room || !room.Started.IsZero() { // 房间已解散或已有人入会：空转
+	// 原代码：无响铃超时，发起人不结束会议且被邀人不接不拒时响铃卡片永久残留。
+	// 阶段一百五十二：仅邀请模式（members 非空）起响铃超时——创建等待模式无响铃，创建人等待期不被误解散
+	if len(invitees) > 0 {
+		room.ringTimer = time.AfterFunc(meetRingTimeout, func() {
+			meetMu.Lock()
+			cur, ok := meetRooms[room.ID]
+			if !ok || cur != room || !room.Started.IsZero() { // 房间已解散或已有人入会：空转
+				meetMu.Unlock()
+				return
+			}
+			caller := room.Caller
 			meetMu.Unlock()
-			return
-		}
-		caller := room.Caller
-		meetMu.Unlock()
-		logger.Info("会议 %s：%v 无人接听，自动解散", room.ID, meetRingTimeout)
-		s.meetDismiss(room, "missed", 0)
-		// 发起人会议窗收口（全员拒绝解散同款 error 帧；会议窗 error 分支 finish 显示原因后关窗）
-		errB, _ := json.Marshal(map[string]string{"action": "error", "call_id": room.ID, "reason": "无人接听，会议已取消"})
-		s.callForward(caller, caller, string(errB))
-	})
+			logger.Info("会议 %s：%v 无人接听，自动解散", room.ID, meetRingTimeout)
+			s.meetDismiss(room, "missed", 0)
+			// 发起人会议窗收口（全员拒绝解散同款 error 帧；会议窗 error 分支 finish 显示原因后关窗）
+			errB, _ := json.Marshal(map[string]string{"action": "error", "call_id": room.ID, "reason": "无人接听，会议已取消"})
+			s.callForward(caller, caller, string(errB))
+		})
+	}
 
-	// 逐被邀人转发 meet_invite（from=发起人；带发起人显示名 + 群ID；注入 ICE 配置）
+	// 阶段一百五十二：向发起人下发会议号（创建人会议窗展示"会议号 xxx"并可复制转发；
+	// call_id 关联会议窗，窗内 meet_no 动作更新展示。窗口可能尚在加载——PC/WEB 信令缓冲队列兜底）
+	if room.MeetNo != "" {
+		noB, _ := json.Marshal(map[string]interface{}{"action": "meet_no", "call_id": room.ID, "meet_no": room.MeetNo})
+		s.callForward(from, from, string(noB))
+	}
+
+	// 逐被邀人转发 meet_invite（from=发起人；带发起人显示名 + 群ID + 会议号；注入 ICE 配置）
 	for _, m := range invitees {
 		content, _ := json.Marshal(map[string]interface{}{
 			"action":    "meet_invite",
 			"call_id":   room.ID,
 			"call_type": room.CallType,
 			"group_id":  room.GroupID,
+			"meet_no":   room.MeetNo,
 			"from_name": nicknameOf(from),
 			"ice":       TurnICEServers(),
 		})
@@ -307,15 +342,17 @@ func (s *Server) meetInviteMore(from string, p *callSignalPayload, members []str
 	}
 	callType := room.CallType
 	realGroup := room.GroupID
+	realMeetNo := room.MeetNo // 阶段一百五十二：会议号随追加邀请下发（被邀人 accept 后会议窗展示）
 	meetMu.Unlock()
 
-	// 逐新成员转发 meet_invite（from=邀请人；带邀请人显示名 + 群ID；注入 ICE 配置）
+	// 逐新成员转发 meet_invite（from=邀请人；带邀请人显示名 + 群ID + 会议号；注入 ICE 配置）
 	for _, m := range invitees {
 		content, _ := json.Marshal(map[string]interface{}{
 			"action":    "meet_invite",
 			"call_id":   p.CallID,
 			"call_type": callType,
 			"group_id":  realGroup,
+			"meet_no":   realMeetNo,
 			"from_name": nicknameOf(from),
 			"ice":       TurnICEServers(),
 		})
@@ -393,6 +430,9 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 		"caller":    caller,
 		"members":   infos,
 		"ice":       TurnICEServers(),
+		// 阶段一百五十二：会议号随 room_info 下发（会议窗展示）；group_id 供加入会议者定位群名开窗
+		"meet_no":  room.MeetNo,
+		"group_id": room.GroupID,
 	})
 	s.callForward(from, from, string(ri))
 	// 阶段一百五十一补丁：向新人补发当前共享快照（在 room_info 之后发出，同一 WS 顺序到达——
@@ -416,6 +456,140 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 		s.callForward(mu, from, string(mc))
 	}
 	logger.Info("会议入会：%s 加入房间 %s（当前 %d 人）", from, p.CallID, len(members))
+}
+
+// handleMeetJoinNo 阶段一百五十二：加入会议——用户输入 9 位会议号直接加入进行中的会议
+// （工具栏会议下拉"加入会议"入口；不经邀请响铃。权限归口：群会议要求加入者在会关联群内，
+// 与邀请链路的群成员校验同语义）。上行 content：{action:'meet_join_no', meet_no}；
+// 成功后 joiner 收 room_info（含 meet_no/group_id）由主窗口开会议窗，在会成员收 meet_join 自动加 tile，
+// 共享/设备可用性快照按阶段一百五十一机制补发；响铃期加入视为会议成立（停响铃超时定时器）
+func (s *Server) handleMeetJoinNo(from string, msg *protocol.Message, p *callSignalPayload) {
+	var body struct {
+		MeetNo string `json:"meet_no"`
+	}
+	_ = json.Unmarshal([]byte(msg.Content), &body)
+	body.MeetNo = strings.TrimSpace(body.MeetNo)
+	if body.MeetNo == "" {
+		s.callSendError(from, "", "请输入会议号")
+		return
+	}
+	meetMu.Lock()
+	var room *meetRoom
+	for _, r := range meetRooms {
+		if r.MeetNo == body.MeetNo {
+			room = r
+			break
+		}
+	}
+	if room == nil {
+		meetMu.Unlock()
+		s.callSendError(from, "", "会议不存在或已结束")
+		return
+	}
+	if _, busy := callUserBusy[from]; busy {
+		meetMu.Unlock()
+		s.callSendError(from, "", "你正在通话中")
+		return
+	}
+	if room.Members[from] {
+		meetMu.Unlock()
+		s.callSendError(from, "", "你已在会议中")
+		return
+	}
+	if room.GroupID > 0 && !isGroupMember(room.GroupID, from) {
+		meetMu.Unlock()
+		s.callSendError(from, "", "你不在该会议关联的群聊中")
+		return
+	}
+	// 设备能力校验（与邀请链路同归口 HasCall：PC/WEB 均可入会；手机端一期不支持）
+	if s.hub.Count(from) == 0 || !s.hub.HasCall(from) {
+		meetMu.Unlock()
+		s.callSendError(from, "", "当前设备不支持加入会议")
+		return
+	}
+	delete(room.Invited, from) // 响铃期加入场景：先移出邀请名单
+	room.Members[from] = true
+	callUserBusy[from] = room.ID
+	if room.Started.IsZero() {
+		room.Started = time.Now()
+	}
+	if room.ringTimer != nil {
+		room.ringTimer.Stop()
+		room.ringTimer = nil
+	}
+	// 名单/快照（锁内取，锁外发信令防死锁：callForward 内部另持 hub 锁——handleMeetAccept 同款）
+	// 注意：joiner 上行只有 meet_no 无 call_id（p.CallID 为空），下行帧一律用房间 ID 归口
+	roomID := room.ID
+	members := make([]string, 0, len(room.Members))
+	for m := range room.Members {
+		members = append(members, m)
+	}
+	callType := room.CallType
+	caller := room.Caller
+	groupID := room.GroupID
+	meetNo := room.MeetNo
+	sharers := make([]string, 0, len(room.Sharing))
+	for sh := range room.Sharing {
+		sharers = append(sharers, sh)
+	}
+	media := make(map[string]meetMediaState, len(room.Media))
+	for mu, ms := range room.Media {
+		media[mu] = ms
+	}
+	meetMu.Unlock()
+
+	// 已在会成员收 meet_join（from=新人；ice 注入同 accept——首个 meet_join 向发起人下发中继配置）
+	joinInfo := meetInfoOf(from)
+	for _, m := range members {
+		if m == from {
+			continue
+		}
+		content, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_join",
+			"call_id": roomID,
+			"member":  joinInfo,
+			"ice":     TurnICEServers(),
+		})
+		s.callForward(from, m, string(content))
+	}
+	// joiner 收 room_info（meet_no 供会议窗展示会议号；group_id 供主窗口解析群名开窗）
+	infos := make([]meetMemberInfo, 0, len(members))
+	for _, m := range members {
+		if m == from {
+			continue
+		}
+		infos = append(infos, meetInfoOf(m))
+	}
+	ri, _ := json.Marshal(map[string]interface{}{
+		"action":    "room_info",
+		"call_id":   roomID,
+		"call_type": callType,
+		"caller":    caller,
+		"members":   infos,
+		"ice":       TurnICEServers(),
+		"meet_no":   meetNo,
+		"group_id":  groupID,
+	})
+	s.callForward(from, from, string(ri))
+	// 共享/设备可用性快照补发（room_info 之后同一 WS 顺序到达——accept 同款）
+	for _, sh := range sharers {
+		sc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_share",
+			"call_id": roomID,
+			"on":      true,
+		})
+		s.callForward(sh, from, string(sc))
+	}
+	for mu, ms := range media {
+		mc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_media",
+			"call_id": roomID,
+			"mic":     ms.Mic,
+			"cam":     ms.Cam,
+		})
+		s.callForward(mu, from, string(mc))
+	}
+	logger.Info("会议加入：%s 凭会议号 %s 加入房间 %s（当前 %d 人）", from, meetNo, roomID, len(members))
 }
 
 // handleMeetDecline 被邀人拒绝：移出邀请名单 + 通知发起人；全员拒绝时解散房间

@@ -16955,6 +16955,7 @@
         window.desktop.callOpen({
             role: 'caller', meet: true, call_id: callId, group_id: gid,
             meet_title: groupNameOf(currentChatUser),
+            meet_wait: members.length === 0, // 阶段一百五十二：创建等待模式（不选人直进会等待）——会议房非呼叫态，不播回铃音
             self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
             call_type: callType
         });
@@ -16989,8 +16990,66 @@
     if (meetSearch) meetSearch.addEventListener('input', function () {
         renderMeetPickList(meetSearch.value.trim().toLowerCase());
     });
-    if (meetBtn) meetBtn.addEventListener('click', function () {
+    // ===== 阶段一百五十二：会议入口下拉菜单（QQ 截图选项菜单同款自绘弹层，禁止系统默认弹窗） =====
+    // 「创建会议」不选人直接入会等待（服务端等待模式建房置 Started，不被 60s 响铃超时误解散；
+    // 进会后可经会议窗"邀请成员"按钮再加人）；「加入会议」输入 9 位会议号直接入会
+    // （meet_join_no 上行，服务端查房校验后 room_info 回包由下方信令分发拦截开窗）
+    var meetMenuEl = null; // 会议入口菜单单例（点击外部/Esc 关闭）
+    function meetMenuClose() {
+        if (meetMenuEl) { meetMenuEl.remove(); meetMenuEl = null; }
+        document.removeEventListener('mousedown', meetMenuOutside, true);
+    }
+    function meetMenuOutside(e) {
+        if (meetMenuEl && !meetMenuEl.contains(e.target) && !meetBtn.contains(e.target)) meetMenuClose();
+    }
+    function meetMenuOpen() {
+        if (meetMenuEl) { meetMenuClose(); return; } // 再点小三角=收起（开关菜单）
+        var menu = document.createElement('div');
+        menu.id = 'meet-menu';
+        var items = [
+            { label: '创建会议', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>', run: function () { meetMenuClose(); startMeet('video', []); } },
+            { label: '加入会议', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>', run: function () { meetMenuClose(); joinMeetByNo(); } }
+        ];
+        items.forEach(function (it) {
+            var el = document.createElement('div');
+            el.className = 'meet-menu-item';
+            el.innerHTML = it.icon;
+            var label = document.createElement('span');
+            label.textContent = it.label;
+            el.appendChild(label);
+            el.addEventListener('click', it.run);
+            menu.appendChild(el);
+        });
+        document.body.appendChild(menu);
+        // 定位：会议按钮下方（左对齐按钮左缘，越出视口底部翻转到上方）
+        var rect = meetBtn.getBoundingClientRect();
+        var mw = menu.offsetWidth, mh = menu.offsetHeight;
+        var left = Math.min(Math.max(8, rect.left), window.innerWidth - mw - 8);
+        var top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+        meetMenuEl = menu;
+        document.addEventListener('mousedown', meetMenuOutside, true); // 捕获阶段抢在外部点击前关闭
+    }
+    // 加入会议：忙态前置检查（与发起会议同语义）→ 自定义输入弹窗收会议号 → 校验后上行
+    // 校验失败/会议不存在等错误经服务端 error 帧回包，由信令分发 toast 兜底（此时本端无会议窗）
+    function joinMeetByNo() {
+        if (!window.desktop || !window.desktop.callOpen) { showToast('会议仅 PC 端支持'); return; }
+        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
+        if (pendingRing) { showToast('有来电待处理'); return; }
+        showPrompt('加入会议', '请输入 9 位会议号', function (val) {
+            if (!/^\d{9}$/.test(val)) { showToast('会议号需为 9 位数字'); return; }
+            callSignalSend('', { action: 'meet_join_no', meet_no: val });
+        });
+    }
+    if (meetBtn) meetBtn.addEventListener('click', function (ev) {
         if (!isGroupTarget(currentChatUser)) return;
+        // 阶段一百五十二：QQ 截图同款两段式——点小三角区弹会议入口菜单（不触发选人），点主区域保持原选人发起
+        if (ev.target.closest && ev.target.closest('.meet-caret')) {
+            meetMenuOpen();
+            return;
+        }
         openMeetPicker('create', null);
     });
     // 主进程桥：会议窗"邀请成员"回流主窗口弹选人弹窗（会中追加邀请；非当前会议窗的请求忽略）
@@ -17027,6 +17086,7 @@
                     window.desktop.callOpen({
                         role: 'callee', meet: true, call_id: r.call_id, group_id: r.group_id,
                         meet_title: groupNameOf('g' + (r.group_id || 0)),
+                        meet_no: r.meet_no || '', // 阶段一百五十二：会议号透传会议窗顶部展示
                         self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
                         call_type: r.call_type,
                         ice_servers: r.ice || [] // meet_invite 帧注入的 ICE 配置透传给会议窗（buildPC 用）
@@ -17059,6 +17119,9 @@
         if (p.action === 'error' || p.action === 'timeout') {
             // 超时同时清本端来电态（60s 无人接听后允许下一次呼叫，否则 pendingRing 残留恒"忙"）
             if (p.action === 'timeout' && pendingRing && pendingRing.call_id === p.call_id) callClearRing();
+            // 阶段一百五十二：无通话窗且无来电时的 error（加入会议校验失败等场景）此前被静默丢弃，补 toast 兜底；
+            // 有窗时窗内 error 分支已收口展示，有来电时响铃条语义优先，均不重复弹
+            if (!callOpenId && !pendingRing && p.reason) showToast(p.reason);
             if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg);
             return;
         }
@@ -17074,6 +17137,7 @@
             pendingRing = {
                 call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio',
                 meet: true, group_id: p.group_id || 0,
+                meet_no: p.meet_no || '', // 阶段一百五十二：会议号随邀请帧透传（入会后会议窗顶部展示，可复制转发）
                 ice: Array.isArray(p.ice) ? p.ice : [] // 服务端注入的 ICE 配置（入会后 buildPC 用）
             };
             window.desktop.callRing({
@@ -17114,6 +17178,23 @@
             // 主叫响铃期取消：关铃 + 转发响铃条（若有）做收尾提示
             if (pendingRing && pendingRing.call_id === p.call_id) callClearRing();
             if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg);
+            return;
+        }
+        // 阶段一百五十二：加入会议回包——room_info 仅在 meet_accept / meet_join_no 后下发；
+        // 凭会议号加入时本端尚无通话窗（callOpenId 为空），在此拦截开会议窗再转发，
+        // 窗内沿用 room_info 建连链路（accept 入会路径 callOpenId 已先行置位，仍走下方通用中继）
+        if (p.action === 'room_info' && !callOpenId) {
+            if (!window.desktop || !window.desktop.callOpen) return; // Web/手机端无会议能力
+            callOpenId = p.call_id; // 开窗即占线（与 accept 链路同语义，后续信令走通用中继）
+            window.desktop.callOpen({
+                role: 'callee', meet: true, call_id: p.call_id, group_id: p.group_id || 0,
+                meet_title: groupNameOf('g' + (p.group_id || 0)),
+                meet_no: p.meet_no || '', // 会议号透传会议窗顶部展示
+                self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+                call_type: p.call_type === 'video' ? 'video' : 'audio',
+                ice_servers: Array.isArray(p.ice) ? p.ice : [] // room_info 注入的 ICE 配置透传会议窗
+            });
+            if (window.desktop && window.desktop.callSignalIn) window.desktop.callSignalIn(msg); // room_info 转发窗内建连
             return;
         }
         // 其余（accept/reject/offer/answer/candidate/hangup）：本端有通话窗则中继

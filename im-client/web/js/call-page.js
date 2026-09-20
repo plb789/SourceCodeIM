@@ -628,11 +628,13 @@
         st.callType = data.call_type === 'video' ? 'video' : 'audio';
         st.groupId = data.group_id || 0;
         st.meetTitle = data.meet_title || '多人会议';
+        st.meetNo = data.meet_no || ''; // 阶段一百五十二：会议号（服务端建房生成，顶部徽标展示，点击复制）
         st.selfName = data.self_name || '我';
         st.selfAvatar = data.self_avatar || '';
         if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = 'mode-meet ' + (st.callType === 'video' ? 'mode-video' : 'mode-audio');
         $('meetTitle').textContent = st.meetTitle;
+        meetNoShow(); // 会议号徽标显隐（无号隐藏：旧房间/信令未到的瞬间）
         // 会议控制条显隐：视频会议显摄像头/共享屏幕，语音会议仅静音；邀请成员会议恒显（1v1 保持原样）
         if (st.callType === 'video') {
             btnCam.classList.remove('hidden');
@@ -662,7 +664,9 @@
             }
             if (st.role === 'caller') {
                 st.state = 'waiting';
-                toneStart(); // 主叫回铃音（等待成员加入）
+                // 阶段一百五十二：创建等待模式（meet_wait，不选人直进会等待）不播回铃音——
+                // 回铃音是"正在呼叫"语义，会议房静默等待，加入提示靠顶部会议号徽标与邀请按钮
+                if (!data.meet_wait) toneStart();
             } else {
                 st.state = 'connecting'; // 被叫等 room_info 后与各成员协商
             }
@@ -675,6 +679,53 @@
 
     function setMeetStatus(text) {
         $('meetStatus').textContent = text;
+    }
+
+    // ===== 阶段一百五十二：会议号徽标（顶部信息条；显隐归口 + 点击复制转发邀请） =====
+    var meetNoFlashTimer = null;
+    function meetNoShow() {
+        var el = $('meetNo');
+        if (!el) return;
+        if (st.meetNo) {
+            el.textContent = '会议号 ' + st.meetNo;
+            el.classList.remove('hidden');
+        } else {
+            el.classList.add('hidden');
+        }
+    }
+    // 复制成功反馈：徽标文字临时切"已复制"（会议窗无 toast 体系，原位轻提示不打断会议）
+    function flashMeetNoCopied() {
+        var el = $('meetNo');
+        if (!el || !st.meetNo) return;
+        el.textContent = '已复制';
+        if (meetNoFlashTimer) clearTimeout(meetNoFlashTimer);
+        meetNoFlashTimer = setTimeout(function () {
+            meetNoFlashTimer = null;
+            meetNoShow();
+        }, 1200);
+    }
+    function copyMeetNo() {
+        if (!st.meetNo) return;
+        var no = st.meetNo;
+        // 回退方案：clipboard API 不可用时（file:// 等 secure context 缺失）走隐藏 textarea + execCommand
+        function fallback() {
+            try {
+                var ta = document.createElement('textarea');
+                ta.value = no;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                flashMeetNoCopied();
+            } catch (e) { }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(no).then(flashMeetNoCopied, fallback);
+        } else {
+            fallback();
+        }
     }
 
     // 宫格渲染：自己 tile + 全员 tile（按人数自动分列；视频 tile=画面 / 语音 tile=头像）
@@ -1150,6 +1201,8 @@
             case 'room_info':
                 // 新入会成员收：全员资料（服务端已排除自己），逐人建 pc 等 offer
                 if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
+                // 阶段一百五十二：凭会议号加入时 room_info 携带会议号（callOpen 已带则此处幂等跳过）
+                if (p.meet_no && !st.meetNo) { st.meetNo = p.meet_no; meetNoShow(); }
                 (p.members || []).forEach(function (mi) {
                     if (mi && mi.username && !st.members[mi.username]) {
                         st.members[mi.username] = {
@@ -1288,6 +1341,14 @@
                 mmu.camOk = p.cam !== false;
                 markTileMuted(from, !!mmu.muted);
                 markTileCam(from);
+                break;
+            case 'meet_no':
+                // 阶段一百五十二：创建人收服务端生成的会议号（建房后下发，窗口可能尚在加载——
+                // 桥层信令缓冲兜底）——顶部徽标原位更新展示
+                if (p.meet_no && st.meetNo !== p.meet_no) {
+                    st.meetNo = p.meet_no;
+                    meetNoShow();
+                }
                 break;
             case 'error':
                 // 服务端归口错误帧（reason 为中文文案）：全员拒绝/60s 无人接听自动解散等场景收口会议窗
@@ -1578,6 +1639,9 @@
         btnMeetMin.style.display = '';
         btnMeetMin.addEventListener('click', function () { window.desktop.callMinimize(); });
     }
+    // 阶段一百五十二：会议号徽标点击复制（clipboard API 优先，secure context 缺失回退 execCommand）
+    var meetNoEl = $('meetNo');
+    if (meetNoEl) meetNoEl.addEventListener('click', copyMeetNo);
     btnInvite.addEventListener('click', function () {
         // 请求主窗口弹群成员选择弹窗（已在会成员一并回传供过滤，重复邀请由服务端归口跳过）
         if (st.ended || !st.meet) return;

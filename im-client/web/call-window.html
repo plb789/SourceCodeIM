@@ -322,6 +322,24 @@
             -webkit-app-region: no-drag; /* 从拖拽区豁免（组内空隙也放行点击） */
         }
         .meet-top .meet-fs:hover { background: rgba(255, 255, 255, 0.22); color: #ffffff; }
+        /* 阶段一百五十二：会议号徽标（顶部信息条内，描边胶囊样式，点击复制；从拖拽区豁免恢复点击） */
+        .meet-top .meet-no {
+            flex-shrink: 0;
+            margin-left: 10px;
+            padding: 1px 9px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 10px;
+            font-size: 12px;
+            line-height: 18px;
+            color: #dfe3e8;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            -webkit-app-region: no-drag; /* 从拖拽区豁免（可点击复制） */
+            transition: background 0.15s, color 0.15s;
+        }
+        .meet-top .meet-no:hover { background: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        .meet-top .meet-no.hidden { display: none; }
         .meet-grid {
             width: 100%;
             height: 100%;
@@ -460,6 +478,9 @@
     <div class="cw-video-top meet-top" id="meetTop">
         <span class="cw-vname" id="meetTitle">多人会议</span>
         <span class="cw-vstatus" id="meetStatus"></span>
+        <!-- 阶段一百五十二：会议号徽标（服务端建房生成，9 位数字；点击复制便于转发邀请；
+             创建等待模式/邀请模式/凭号加入三链路均展示，无号时隐藏） -->
+        <span class="meet-no hidden" id="meetNo" title="点击复制会议号"></span>
         <div class="meet-actions">
             <button class="meet-fs" id="btnMeetMin" title="最小化" style="display:none">
                 <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
@@ -492,6 +513,6 @@
     <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=15"></script>
+    <script src="js/call-page.js?v=16"></script>
 </body>
 </html>
