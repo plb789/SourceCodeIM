@@ -15536,6 +15536,12 @@
         // 原实现：else if (!isMine) { unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1; renderFriendList(); }
         // 未读数服务端归口：服务端收到私聊会 notifyConvUpdate 推送 CONV_LIST（含未读数）到本端全部连接，
         // 前端 CONV_LIST 处理中统一渲染会话列表与好友列表角标，本地不再自计数
+        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——仅他人发来的消息且
+        //（非当前查看会话 || 页面后台）才响；正盯着会话看时微信不响；AI 智能体回复无提示音
+        if (!isMine && !isAIAgent(msg.from_user) &&
+            (document.hidden || currentChatUser !== relevantUser)) {
+            rpPlayMsgSound();
+        }
     });
 
     // ===== 已读回执：更新自己发送消息的已读状态 =====
@@ -19896,6 +19902,38 @@
         osc.connect(g); g.connect(master);
         osc.start(t0 + 0.78); osc.stop(t0 + 1.1);
     }
+    // 好友消息提示音（微信同款"滴-嘟"上扬双音）：B5→E6 短促清脆，总长约 0.25 秒
+    function rpPlayMsgSound() {
+        var ctx = rpGetAudioCtx();
+        if (!ctx) return;
+        var t0 = ctx.currentTime + 0.02;
+        // [基频, 起始偏移, 时长, 音量]：两音上扬 + 2x 泛音增厚（清脆不刺耳）
+        [[988, 0, 0.09, 0.13], [1319, 0.09, 0.16, 0.15]].forEach(function (n) {
+            [[1, 1], [2, 0.3]].forEach(function (p) {
+                var osc = ctx.createOscillator();
+                var g = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = n[0] * p[0];
+                g.gain.setValueAtTime(0.0001, t0 + n[1]);
+                g.gain.exponentialRampToValueAtTime(n[3] * p[1], t0 + n[1] + 0.008);
+                g.gain.exponentialRampToValueAtTime(0.0001, t0 + n[1] + n[2]);
+                osc.connect(g); g.connect(ctx.destination);
+                osc.start(t0 + n[1]); osc.stop(t0 + n[1] + n[2] + 0.02);
+            });
+        });
+    }
+    // 消息提示音为被动接收（无用户手势），AudioContext 需首次交互解锁：
+    // 登录后任意点击/按键即预创建并 resume（一次性，触发后移除监听，后续红包音效同享）
+    var rpSoundUnlocked = false;
+    function rpUnlockSound() {
+        if (rpSoundUnlocked) return;
+        rpSoundUnlocked = true;
+        rpGetAudioCtx();
+        document.removeEventListener('pointerdown', rpUnlockSound, true);
+        document.removeEventListener('keydown', rpUnlockSound, true);
+    }
+    document.addEventListener('pointerdown', rpUnlockSound, true);
+    document.addEventListener('keydown', rpUnlockSound, true);
     // 收红包音效：上行两音"叮-咚"（比普通消息音更轻快醒目，红包专属提示）
     function rpPlayReceiveSound() {
         var ctx = rpGetAudioCtx();
