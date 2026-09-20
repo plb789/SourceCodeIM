@@ -1171,7 +1171,9 @@ function ensureCallWindow(callType, isMeet) {
         frame: false,          // 无边框自绘（微信通话界面同款：深色沉浸 + 自绘控制条）
         resizable: !!isMeet,   // 原代码：resizable: false——阶段一百五十一会议窗可拉伸（1v1 仍固定）
         maximizable: !!isMeet, // 原代码：maximizable: false——会议窗支持最大化
-        fullscreenable: false,
+        // 阶段一百五十一补丁：fullscreenable 原为 false——会禁用页面 Fullscreen API 请求
+        //（全屏按钮/双击全屏点击无效的根因），会议窗放开，1v1 保持不可全屏
+        fullscreenable: !!isMeet,
         backgroundColor: '#161819',
         title: '通话',
         webPreferences: {
@@ -1183,7 +1185,7 @@ function ensureCallWindow(callType, isMeet) {
     callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
     // 阶段一百五十一补丁：加载带版本号查询串防 HTTP 缓存（会议窗页面从服务器加载，
     // 无参数时 Chromium 可能命中旧缓存导致新布局不生效；与 WEB 端 web-call-bridge.js 保持一致）
-    callWin.loadURL(SERVER_URL + 'call-window.html?v=1519');
+    callWin.loadURL(SERVER_URL + 'call-window.html?v=1521');
     callWin.on('close', function (e) {
         if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，
@@ -1347,6 +1349,12 @@ ipcMain.on('call:send', function (e, frame) {
 ipcMain.on('call:share-protect', function (e, on) {
     var w = BrowserWindow.fromWebContents(e.sender);
     if (w && !w.isDestroyed()) w.setContentProtection(!!on);
+});
+
+// 阶段一百五十一补丁：会议窗最小化（Electron 无边框窗无系统按钮，页面自绘按钮经此最小化到任务栏）
+ipcMain.on('call:minimize', function (e) {
+    var w = BrowserWindow.fromWebContents(e.sender);
+    if (w && !w.isDestroyed()) w.minimize();
 });
 
 // ===== 阶段一百四十四：会议桌面共享（getDisplayMedia 放行） =====

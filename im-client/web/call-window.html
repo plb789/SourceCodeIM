@@ -298,7 +298,6 @@
         }
         /* 顶部全屏按钮（腾讯会议同款右上角；hover 提亮） */
         .meet-top .meet-fs {
-            margin-left: auto;
             -webkit-app-region: no-drag; /* 阶段一百五十一补丁：从拖拽区豁免，恢复点击（Electron 无边框窗） */
             background: rgba(255, 255, 255, 0.12);
             border: none;
@@ -312,6 +311,15 @@
             cursor: pointer;
             padding: 0;
             flex-shrink: 0;
+        }
+        /* 阶段一百五十一补丁：右侧按钮组（组整体推右缘——组内按钮 display:none 显隐不影响组定位；
+         * 原 auto 挂在最小化按钮上，WEB 端该按钮隐藏后全屏按钮会脱离右缘） */
+        .meet-top .meet-actions {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            -webkit-app-region: no-drag; /* 从拖拽区豁免（组内空隙也放行点击） */
         }
         .meet-top .meet-fs:hover { background: rgba(255, 255, 255, 0.22); color: #ffffff; }
         .meet-grid {
@@ -452,9 +460,14 @@
     <div class="cw-video-top meet-top" id="meetTop">
         <span class="cw-vname" id="meetTitle">多人会议</span>
         <span class="cw-vstatus" id="meetStatus"></span>
-        <button class="meet-fs" id="btnMeetFs" title="全屏">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-        </button>
+        <div class="meet-actions">
+            <button class="meet-fs" id="btnMeetMin" title="最小化" style="display:none">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
+            </button>
+            <button class="meet-fs" id="btnMeetFs" title="全屏">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+        </div>
     </div>
 
     <!-- 底部控制条：静音 / 摄像头（视频）/ 共享屏幕（视频会议）/ 邀请成员（会议）/ 挂断 -->
@@ -479,6 +492,6 @@
     <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=13"></script>
+    <script src="js/call-page.js?v=15"></script>
 </body>
 </html>

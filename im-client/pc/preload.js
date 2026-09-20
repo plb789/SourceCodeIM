@@ -548,6 +548,10 @@ contextBridge.exposeInMainWorld('desktop', {
     setShareProtected: function (on) {
         ipcRenderer.send('call:share-protect', !!on);
     },
+    // 阶段一百五十一补丁：会议窗最小化到任务栏（无边框窗页面自绘按钮）
+    callMinimize: function () {
+        ipcRenderer.send('call:minimize');
+    },
     // 页面收口完成：销毁通话窗（挂断信令已发出）
     callClose: function () {
         ipcRenderer.send('call:close');

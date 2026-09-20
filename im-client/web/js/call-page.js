@@ -1572,6 +1572,12 @@
     var btnMeetFs = $('btnMeetFs');
     if (btnMeetFs) btnMeetFs.addEventListener('click', toggleMeetFullscreen);
     $('meetWrap').addEventListener('dblclick', toggleMeetFullscreen);
+    // 阶段一百五十一补丁：最小化按钮（仅 PC 端显示；HTML 默认 display:none，有 desktop 能力才亮出）
+    var btnMeetMin = $('btnMeetMin');
+    if (btnMeetMin && window.desktop && window.desktop.callMinimize) {
+        btnMeetMin.style.display = '';
+        btnMeetMin.addEventListener('click', function () { window.desktop.callMinimize(); });
+    }
     btnInvite.addEventListener('click', function () {
         // 请求主窗口弹群成员选择弹窗（已在会成员一并回传供过滤，重复邀请由服务端归口跳过）
         if (st.ended || !st.meet) return;
