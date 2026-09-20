@@ -4,6 +4,40 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>即时通讯</title>
+    <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
+         读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
+         （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
+         style.css 默认浅色先画，chat.js 体积大 applyTheme 后到；截图特征 = 深色 overlay 按钮 + 浅色内容）。
+         无偏好/读取失败跟随系统深浅（与 chat.js getTheme 默认值联动改 system，首绘与套色一致零翻转）；
+         浏览器/手机 APP 同源页面同款受益 -->
+    <script>
+        (function () {
+            var t = '';
+            try { t = localStorage.getItem('im_theme') || ''; } catch (e) { t = ''; }
+            if (t !== 'light' && t !== 'dark' && t !== 'system') t = 'system';
+            var dark = t === 'dark' || (t === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.setAttribute('data-theme', t);
+            // 首绘底色按深浅定死（app-booting 隐藏视图期间看到的即主题底色）；chat.js applyTheme 后清除内联值交还 CSS 变量接管
+            document.documentElement.style.background = dark ? '#111111' : '#f5f5f5';
+            // 阶段一百五十一补丁：启动阶段上报（chat.js 1MB+ 下载期间页面无任何反馈，splash 状态文字给出真实阶段）
+            window.bootStage = function (txt) { var el = document.getElementById('bootStatus'); if (el) el.textContent = txt; };
+        })();
+    </script>
+    <!-- 启动 splash 样式内联（不依赖 style.css 加载完成；主题色按 data-theme 显式声明——
+         data-theme 由上方引导脚本先于渲染挂好）。淡出时机挂现有 app-booting 类：
+         chat.js 就绪摘类或 2.5s 兜底揭幕时自动淡出，chat.js 零改动 -->
+    <style>
+        .boot-splash{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#f5f5f5;transition:opacity .28s ease .08s,visibility .28s ease .08s;user-select:none;}
+        html[data-theme="dark"] .boot-splash{background:#111111;}
+        html:not(.app-booting) .boot-splash{opacity:0;visibility:hidden;pointer-events:none;}
+        .boot-splash-logo{width:64px;height:64px;border-radius:16px;background:#07c160;display:flex;align-items:center;justify-content:center;color:#ffffff;box-shadow:0 8px 24px rgba(7,193,96,0.25);}
+        .boot-splash-name{font-size:15px;font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#333333;}
+        html[data-theme="dark"] .boot-splash-name{color:#dfe3e8;}
+        .boot-splash-ring{width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(7,193,96,0.18);border-top-color:#07c160;animation:bootSpin .8s linear infinite;}
+        @keyframes bootSpin{to{transform:rotate(360deg);}}
+        .boot-splash-status{font-size:12px;color:#999999;}
+        html[data-theme="dark"] .boot-splash-status{color:#7a828c;}
+    </style>
     <!-- 手机版 APP 壳引导（Capacitor 专用）：浏览器环境自动跳过，详见文件头注释 -->
     <script src="js/app-shell.js?v=1.0"></script>
     <!-- 阶段一百四十五：WEB 端浏览器通话桥——纯浏览器环境以页内形态承载音视频通话（iframe 通话窗 + 页内响铃条），
@@ -28,6 +62,15 @@
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
 <body>
+    <!-- 阶段一百五十一补丁：启动加载动画（微信同款 splash：logo + 转圈 + 阶段状态文字）。
+         显隐归口现有 app-booting 类（chat.js 就绪摘类/2.5s 兜底揭幕时淡出），阶段文字经
+         window.bootStage 由脚本标签间的内联上报更新（真实执行阶段，非伪造进度条） -->
+    <div id="bootSplash" class="boot-splash">
+        <div class="boot-splash-logo"><svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 3C6.48 3 2 6.94 2 11.8c0 2.62 1.34 4.97 3.5 6.59-.13 1.06-.56 2.12-1.25 2.92-.2.24-.03.61.29.61 1.63 0 3.11-.62 4.23-1.45 1.02.28 2.11.43 3.23.43 5.52 0 10-3.94 10-8.8S17.52 3 12 3z"/></svg></div>
+        <div class="boot-splash-name">即时通讯</div>
+        <div class="boot-splash-ring"></div>
+        <div class="boot-splash-status" id="bootStatus">正在加载资源…</div>
+    </div>
     <!-- 阶段七十七：PC 端自定义标题栏（隐藏系统标题栏后自绘顶栏）：整条可拖动窗口/双击最大化还原，
          右侧最小化/最大化/关闭为系统原生 overlay 按钮（配色随主题经 IPC 同步）；
          默认不显示，仅 index.html 头部引导脚本给根节点挂 pc-titlebar 类（Electron 壳内）时由 CSS 启用 -->
@@ -1332,6 +1375,7 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="js/socket.js?v=1.27"></script>
+    <script>if (window.bootStage) bootStage('基础模块已就绪，正在加载功能组件…');</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
@@ -1347,7 +1391,8 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.28"></script>
+    <script src="js/chat.js?v=3.29"></script>
+    <script>if (window.bootStage) bootStage('正在初始化会话…');</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

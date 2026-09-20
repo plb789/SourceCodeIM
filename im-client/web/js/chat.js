@@ -348,7 +348,9 @@
         dark: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.39 5.39 0 0 1 12 3z"/></svg>',
         system: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>'
     };
-    function getTheme() { return localStorage.getItem('im_theme') || 'light'; }
+    // 原实现：return localStorage.getItem('im_theme') || 'light';（无偏好恒浅色——阶段一百五十一补丁改为
+    // 跟随系统，与 index.html 主题首绘引导同值，深色系统用户首启不再先浅后深闪屏）
+    function getTheme() { return localStorage.getItem('im_theme') || 'system'; }
     // ===== 阶段七十七：PC 端自定义标题栏（Electron titleBarOverlay）主题同步 =====
     // 仅 Electron 壳内生效（window.desktop.setTitlebarColors 由 preload 注入，浏览器/手机 APP 不存在自动旁路）；
     // 原生窗口按钮底色/符号色必须与 style.css --titlebar-bg/--titlebar-fg、main.js titleBarOverlay 初值一致（三方同值，改动需同步）
@@ -375,6 +377,9 @@
     else if (titlebarSchemeQuery.addListener) titlebarSchemeQuery.addListener(titlebarSchemeHandler);
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
+        // 阶段一百五十一补丁：清除 index.html 首绘引导写入的内联根背景（此后底色由 CSS 变量随 data-theme 接管，
+        // 运行期切主题即时生效，内联值滞留会致 overscroll 边缘露出旧主题色）
+        document.documentElement.style.background = '';
         localStorage.setItem('im_theme', theme);
         syncTitlebarTheme(theme);
         // 阶段一百三十四：主题持久化到主进程（userData/im_theme.json）——下次启动窗口背景/按钮初值

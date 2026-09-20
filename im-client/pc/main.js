@@ -159,6 +159,9 @@ function createWindow() {
     // nativeTheme.shouldUseDarkColors 判定，与渲染层媒体查询同源
     var bootDark = (function () {
         var t = themeStoreLoad();
+        // 阶段一百五十一补丁：无持久化偏好（首启/文件缺失）原实现恒浅色初值——改为跟随系统深浅
+        //（与渲染层首绘引导、chat.js getTheme 默认 system 三方一致，深色系统首启窗口底不再浅色）
+        if (t === '') t = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
         return t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
     })();
     mainWindow = new BrowserWindow({
