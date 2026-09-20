@@ -76,8 +76,9 @@
         meetTitle: '',       // 会议标题（群名，主窗口下发）
         // username -> {name, avatar, pc, stream, pendingCands, muted,
         //   asOfferer, needRestart, iceRestartActive, restartOffer, restartCands,
-        //   lastRestartOffer, lastRestartAnswer, watchdog, restartTimer, restartFirstTimer}
-        // （Mesh 每成员一条连接；asOfferer/restart 系列为一百四十八成员级断网恢复状态）
+        //   lastRestartOffer, lastRestartAnswer, lost, restartTimer, restartFirstTimer, giveupTimer}
+        // （Mesh 每成员一条连接；asOfferer/restart 系列为一百四十八成员级断网恢复状态，
+        //   lost=连接中断 UI 标记，giveupTimer=60s 放弃阈值兜底）
         members: {}
     };
     var timerId = null;      // 通话时长计时器
@@ -454,7 +455,7 @@
         st.pc = null;
         // 阶段一百四十四：会议收口清理（逐成员清恢复状态 + 关连接 + 停共享流）
         for (var mu in st.members) {
-            clearMeetWatchdog(mu);   // 阶段一百四十八：清成员级断网看门狗
+            clearMeetGiveup(mu);     // 阶段一百四十八：清成员级放弃阈值
             stopMeetRestartLoop(mu); // 阶段一百四十八：停成员级 restart 重试循环
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
@@ -502,7 +503,7 @@
         st.pc = null;
         // 阶段一百四十四：会议连接与共享状态清理（逐成员清恢复状态 + 关连接）
         for (var mu in st.members) {
-            clearMeetWatchdog(mu);   // 阶段一百四十八：清成员级断网看门狗
+            clearMeetGiveup(mu);     // 阶段一百四十八：清成员级放弃阈值
             stopMeetRestartLoop(mu); // 阶段一百四十八：停成员级 restart 重试循环
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
@@ -720,6 +721,11 @@
         var nm = document.createElement('div');
         nm.className = 'mt-name';
         nm.textContent = name + (isSelf ? '（我）' : '');
+        // 阶段一百四十八：连接中断标记（成员级 lost=true 显示「连接中断」，恢复自动清除）
+        if (user !== 'self' && st.members[user] && st.members[user].lost) {
+            tile.classList.add('lost');
+            nm.textContent += '（连接中断）';
+        }
         tile.appendChild(nm);
         var mic = document.createElement('span');
         mic.className = 'mt-mic';
@@ -787,21 +793,23 @@
             if (st.ended || m.pc !== pc) return;
             var s = pc.connectionState;
             if (s === 'connected') {
-                // 阶段一百四十八：断网自愈/restart 恢复清理（成员级状态全清 + 看门狗解除）
+                // 阶段一百四十八：断网自愈/restart 恢复清理（成员级状态全清）
                 meetPairRecovered(peer);
-            } else if (s === 'failed' || s === 'closed') {
-                meetDropMember(peer);
-            } else if (s === 'disconnected') {
-                // 原代码：无 disconnected 分支（断网即靠 failed 兜底移除成员，短暂切网直接散会）。
-                // 阶段一百四十八：断网先走成员级 ICE restart 自动重连（pair 内 offerer 单点发起）；
-                // 成员看门狗 30s（与服务端会议下线宽限对齐）：网络抖动可能自愈/WS 闪断重连恢复，
-                // 超时未恢复再移除该成员，会议不整体收口
+            } else if (s === 'closed') {
+                // closed 仅由本地主动 close 触发（drop/finish/换场），无需处理
+            } else if (s === 'failed' || s === 'disconnected') {
+                // 原代码：failed/closed → meetDropMember（媒体彻底失败即移除成员，2 人会议全员走光
+                // 连带补发退房信令触发服务端解散，线上实测媒体断开 30s 即散会——可恢复的抖动变硬断开）。
+                // 阶段一百四十八修正（成员移除归口服务端）：断网/失败立即标记 tile「连接中断」，
+                // offerer 持续 restart 重试（WS 通则信令通，对端网络恢复即自动续上）；
+                // 60s 放弃阈值兜底信令收口丢失场景（见 armMeetGiveup 注释）
+                markMeetLost(peer, true);
+                armMeetGiveup(peer);
                 if (m.asOfferer) {
                     m.needRestart = true;
                     m.iceRestartActive = true; // 本端 restart 期新候选进缓存（重发兜底）
                     startMeetRestartLoop(peer);
                 }
-                armMeetWatchdog(peer, 30000);
             }
         };
         onLocalReady(function () {
@@ -902,27 +910,46 @@
         m.restartFirstTimer = setTimeout(function () { tryMeetIceRestart(peer); }, 2000);
         m.restartTimer = setInterval(function () { tryMeetIceRestart(peer); }, 3000);
     }
-    // 成员级断网看门狗：30s 未恢复仅本地移除该成员（服务端宽限超时同步移出兜底），
-    // 会议不整体收口，其余成员继续开会——与 1v1 看门狗收口整个通话不同
-    function armMeetWatchdog(peer, ms) {
+    // 成员连接中断标记：tile 名字条显示「连接中断」，恢复连通自动清除。
+    // 原代码：armMeetWatchdog 30s 看门狗超时 meetDropMember 移除成员（线上实测媒体断开即散会，
+    // 可恢复抖动被误杀）——修正为 60s 放弃阈值（见 armMeetGiveup）
+    function markMeetLost(peer, lost) {
         var m = st.members[peer];
         if (!m) return;
-        clearMeetWatchdog(peer);
-        m.watchdog = setTimeout(function () {
+        var changed = m.lost !== !!lost;
+        m.lost = !!lost;
+        if (changed) renderMeetGrid();
+    }
+    function clearMeetLost(peer) {
+        markMeetLost(peer, false);
+    }
+    // 阶段一百四十八兜底：成员级放弃阈值（60s，服务端 WS 宽限 30s 的 2 倍）。
+    // 原代码：30s 即 drop（误解散）；纯「永不 drop」也不行——若对端挂断信令在 WS 断线窗口丢失，
+    // 对端窗已关不会重发，本端媒体永久断但 WS 在会一直 restart 无果，房间滞留双方忙标记
+    //（重新发起提示"忙碌中"）。现权衡：60s 内能恢复就恢复（网络抖动/切网场景全覆盖；
+    // 对端 WS 断时服务端 30s 即踢出→本端收 hangup 帧走不到这里），60s 仍不通视为对端
+    // 信令层已死/收口帧丢失，drop 该成员兜底（全走光时补发退房信令清忙）
+    var meetRestartGiveupMs = 60000;
+    function armMeetGiveup(peer) {
+        var m = st.members[peer];
+        if (!m) return;
+        clearMeetGiveup(peer);
+        m.giveupTimer = setTimeout(function () {
             if (st.ended) return;
             var mm = st.members[peer];
             if (!mm) return;
             if (mm.pc && mm.pc.connectionState === 'connected') return; // 已恢复
             meetDropMember(peer);
-        }, ms);
+        }, meetRestartGiveupMs);
     }
-    function clearMeetWatchdog(peer) {
+    function clearMeetGiveup(peer) {
         var m = st.members[peer];
-        if (m && m.watchdog) { clearTimeout(m.watchdog); m.watchdog = null; }
+        if (m && m.giveupTimer) { clearTimeout(m.giveupTimer); m.giveupTimer = null; }
     }
-    // pair 连通恢复：清看门狗 + 停重试 + 清 restart 状态 + 计时激活
+    // pair 连通恢复：清中断标记 + 清放弃阈值 + 停重试 + 清 restart 状态 + 计时激活
     function meetPairRecovered(peer) {
-        clearMeetWatchdog(peer);
+        clearMeetGiveup(peer);
+        clearMeetLost(peer);
         stopMeetRestartLoop(peer);
         clearMeetRestartState(peer);
         meetMaybeActive();
@@ -938,7 +965,7 @@
     function meetDropMember(peer) {
         var m = st.members[peer];
         if (!m) return;
-        clearMeetWatchdog(peer);   // 阶段一百四十八：清成员级断网看门狗
+        clearMeetGiveup(peer);     // 阶段一百四十八：清成员级放弃阈值
         stopMeetRestartLoop(peer); // 阶段一百四十八：停成员级 restart 重试循环
         try { if (m.pc) m.pc.close(); } catch (e) { }
         delete st.members[peer];
@@ -968,8 +995,8 @@
                             name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false,
                             // 阶段一百四十八：成员级断网恢复状态初始化（restart 系列缺省会导致缓存/幂等判空报错）
                             asOfferer: false, needRestart: false, iceRestartActive: false,
-                            restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
-                            watchdog: null, restartTimer: null, restartFirstTimer: null
+                            lost: false, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
+                            restartTimer: null, restartFirstTimer: null, giveupTimer: null
                         };
                     }
                 });
@@ -993,7 +1020,7 @@
                     // 阶段一百四十八：成员级断网恢复状态初始化（同 room_info）
                     asOfferer: false, needRestart: false, iceRestartActive: false,
                     restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
-                    watchdog: null, restartTimer: null, restartFirstTimer: null
+                    lost: false, restartTimer: null, restartFirstTimer: null, giveupTimer: null
                 };
                 renderMeetGrid();
                 meetConnect(mi.username, true);

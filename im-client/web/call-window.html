@@ -318,6 +318,9 @@
             z-index: 2;
         }
         .meet-tile.muted .mt-mic { display: block; }
+        /* 阶段一百四十八：连接中断成员 tile（红色描边 + 名字条警示色，恢复自动移除标记） */
+        .meet-tile.lost { outline: 2px solid rgba(250, 81, 81, 0.85); outline-offset: -2px; }
+        .meet-tile.lost .mt-name { color: #ff8f8f; }
         /* 摄像头不可用：tile 内"无视频可用"占位 */
         .meet-tile .no-video-ph {
             position: absolute;

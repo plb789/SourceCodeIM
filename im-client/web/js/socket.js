@@ -221,14 +221,35 @@
         };
     }
 
+    // ===== 阶段一百四十九：心跳改由 Web Worker 定时驱动（后台标签保活） =====
+    // 原代码：主线程 setInterval 30s 心跳。Chrome 对隐藏约 5 分钟后的标签页启用密集节流
+    //（intensive throttling），定时器被强制合并到约 1 分钟一次——心跳实际间隔被拉长到与
+    // CDN WS 空闲超时（60s）压线，稍有抖动即超：CDN 掐 WS → 服务端广播下线 → 被节流的重连
+    // 约 1 分钟后才完成 → 广播上线，好友侧即看到账号反复"下线/上线"（账号实际从未退出登录）。
+    // Worker 内定时器不受页面可见性节流影响，后台/最小化标签心跳依旧稳定 30s
+    var heartbeatWorker = null;
     function startHeartbeat() {
         stopHeartbeat();
+        try {
+            var code = 'var t=null;onmessage=function(e){' +
+                'if(e.data==="start"){if(!t)t=setInterval(function(){postMessage("tick")},30000)}' +
+                'else if(e.data==="stop"){if(t){clearInterval(t);t=null}}};';
+            heartbeatWorker = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+            heartbeatWorker.onmessage = function () { send({ msg_type: MSG.HEARTBEAT }); };
+            heartbeatWorker.postMessage('start');
+            return;
+        } catch (e) { }
+        // Worker 创建失败（file:// 等受限环境）：降级主线程定时器（后台节流风险回到原状，前台使用不受影响）
         heartbeatTimer = setInterval(function () {
             send({ msg_type: MSG.HEARTBEAT });
         }, 30000); // 30s 心跳
     }
 
     function stopHeartbeat() {
+        if (heartbeatWorker) {
+            try { heartbeatWorker.postMessage('stop'); heartbeatWorker.terminate(); } catch (e) { }
+            heartbeatWorker = null;
+        }
         if (heartbeatTimer) {
             clearInterval(heartbeatTimer);
             heartbeatTimer = null;
@@ -244,6 +265,17 @@
             }
         }, 3000); // 3s 后重连
     }
+
+    // 阶段一百四十九：回前台立即恢复防线——后台节流期间若 WS 已被掐断，回到页面瞬间
+    // 立即补发心跳/触发重连（不等被节流拉长的重连定时器），缩短"回到页面仍显示离线"的窗口
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible' || !loginOk) return;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            send({ msg_type: MSG.HEARTBEAT });
+        } else if (!connected) {
+            scheduleReconnect();
+        }
+    });
 
     function dispatch(msg) {
         // 阶段一百三十五：记录 ERROR 帧到达时间（登录拒绝/踢出先发 ERROR 再关连接，
