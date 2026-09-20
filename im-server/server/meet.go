@@ -592,6 +592,73 @@ func (s *Server) handleMeetJoinNo(from string, msg *protocol.Message, p *callSig
 	logger.Info("会议加入：%s 凭会议号 %s 加入房间 %s（当前 %d 人）", from, meetNo, roomID, len(members))
 }
 
+// meetMemberAskInfo 阶段一百五十三：会议窗邀请面板成员条目（昵称头像服务端归口下发 + 可邀状态）
+type meetMemberAskInfo struct {
+	Username  string `json:"username"`
+	Name      string `json:"name"`       // 昵称（空昵称前端降级显示账号）
+	Avatar    string `json:"avatar"`     // 头像（空则前端降级首字母）
+	Online    bool   `json:"online"`     // 信令在线
+	CallOK    bool   `json:"call_ok"`    // 设备可入会（PC 端或 WEB 端）
+	Busy      bool   `json:"busy"`       // 正在通话/会议中
+	InMeeting bool   `json:"in_meeting"` // 已在本会议（在会或响铃中，不可重复邀请）
+}
+
+// handleMeetMembersAsk 阶段一百五十三：会议窗内邀请面板拉取群成员名单（含可邀状态归口）。
+// 会议窗「邀请成员」按钮直发本信令，不再经主窗口选人弹窗（避免弹窗被会议窗遮挡来回切窗）。
+// 上行 content：{action:'meet_members_ask', call_id}；下行 meet_members_list
+// {call_id, members:[meetMemberAskInfo...]}，前端按状态置灰不可选项。
+// 注意：本动作一律不回 error 帧——会议窗 error 分支会 finish 收口整窗，拉取失败只能
+// 静默回空名单（前端显示"暂无可邀请的成员"），绝不误关会议窗
+func (s *Server) handleMeetMembersAsk(from string, msg *protocol.Message, p *callSignalPayload) {
+	if p.CallID == "" {
+		return
+	}
+	emptyOut, _ := json.Marshal(map[string]interface{}{"action": "meet_members_list", "call_id": p.CallID, "members": []meetMemberAskInfo{}})
+	meetMu.RLock()
+	room, ok := meetRooms[p.CallID]
+	if !ok || !room.Members[from] || room.GroupID == 0 {
+		// 房间不存在/非在会成员/无群关联：回空名单兜底（空名单前端显示"暂无可邀请的成员"）
+		meetMu.RUnlock()
+		s.callForward(from, from, string(emptyOut))
+		return
+	}
+	// 名单/状态快照（锁内取：Invited/Members/callUserBusy 均归 meetMu 守卫；锁外查库与 hub 防持锁慢路径）
+	inMeet := make(map[string]bool, len(room.Members)+len(room.Invited))
+	for m := range room.Members {
+		inMeet[m] = true
+	}
+	for m := range room.Invited {
+		inMeet[m] = true
+	}
+	busySet := make(map[string]bool, len(callUserBusy))
+	for m := range callUserBusy {
+		busySet[m] = true
+	}
+	groupID := room.GroupID
+	meetMu.RUnlock()
+
+	ids := getGroupMemberIDs(groupID)
+	list := make([]meetMemberAskInfo, 0, len(ids))
+	for _, id := range ids {
+		if id == from {
+			continue // 排除自己（发起邀请者本人已在会）
+		}
+		info := meetInfoOf(id)
+		list = append(list, meetMemberAskInfo{
+			Username:  info.Username,
+			Name:      info.Name,
+			Avatar:    info.Avatar,
+			Online:    s.hub.Count(id) > 0,
+			CallOK:    s.hub.HasCall(id),
+			Busy:      busySet[id],
+			InMeeting: inMeet[id],
+		})
+	}
+	out, _ := json.Marshal(map[string]interface{}{"action": "meet_members_list", "call_id": p.CallID, "members": list})
+	s.callForward(from, from, string(out))
+	logger.Info("会议邀请名单：%s 于会议 %s 拉取群%d成员（列表 %d 人）", from, p.CallID, groupID, len(list))
+}
+
 // handleMeetDecline 被邀人拒绝：移出邀请名单 + 通知发起人；全员拒绝时解散房间
 func (s *Server) handleMeetDecline(from string, p *callSignalPayload) {
 	meetMu.Lock()

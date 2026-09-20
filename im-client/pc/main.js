@@ -1188,7 +1188,7 @@ function ensureCallWindow(callType, isMeet) {
     callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
     // 阶段一百五十一补丁：加载带版本号查询串防 HTTP 缓存（会议窗页面从服务器加载，
     // 无参数时 Chromium 可能命中旧缓存导致新布局不生效；与 WEB 端 web-call-bridge.js 保持一致）
-    callWin.loadURL(SERVER_URL + 'call-window.html?v=1522');
+    callWin.loadURL(SERVER_URL + 'call-window.html?v=1523');
     callWin.on('close', function (e) {
         if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，

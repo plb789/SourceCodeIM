@@ -464,6 +464,7 @@
         if (st.ended) return;
         st.ended = true;
         st.state = 'ended';
+        closeInvitePanel(); // 阶段一百五十三：会议收口同步关邀请面板（防面板滞留遮挡收口遮罩）
         toneStop();
         if (timerId) { clearInterval(timerId); timerId = null; }
         clearWatchdog();
@@ -726,6 +727,95 @@
         } else {
             fallback();
         }
+    }
+
+    // ===== 阶段一百五十三：会议窗内邀请成员面板（独立于主窗口选人弹窗，不再来回切窗） =====
+    // 名单走 meet_members_ask 服务端归口（在线/设备/忙/已在会状态一并下发，前端只展示）；
+    // 邀请动作复用 meet_invite 追加邀请链路（服务端 meetInviteMore 同校验，反馈走既有 meet_skipped）
+    var inviteOpen = false;
+    var inviteMembers = [];  // 服务端下发的全量名单
+    var inviteSelected = {}; // username -> true 勾选集合
+    function openInvitePanel() {
+        if (st.ended || !st.meet) return;
+        inviteOpen = true;
+        inviteMembers = [];
+        inviteSelected = {};
+        $('inviteMask').classList.remove('hidden');
+        var search = $('inviteSearch');
+        search.value = '';
+        search.disabled = true; // 名单未到前禁搜索（防误以为无成员）
+        $('inviteCount').textContent = '已选 0 人';
+        $('btnInviteConfirm').classList.add('disabled');
+        $('inviteList').innerHTML = '<div class="invite-empty">正在获取成员列表…</div>';
+        send('meet_members_ask', {}); // send 自带 call_id，服务端按房间归口回 meet_members_list
+    }
+    function closeInvitePanel() {
+        inviteOpen = false;
+        inviteMembers = [];
+        inviteSelected = {};
+        var mask = $('inviteMask');
+        if (mask) mask.classList.add('hidden');
+    }
+    function renderInviteList() {
+        var box = $('inviteList');
+        var kw = $('inviteSearch').value.trim().toLowerCase();
+        var rows = [];
+        for (var i = 0; i < inviteMembers.length; i++) {
+            var m = inviteMembers[i];
+            if (kw && (m.name || '').toLowerCase().indexOf(kw) < 0 && (m.username || '').toLowerCase().indexOf(kw) < 0) continue;
+            rows.push(m);
+        }
+        box.innerHTML = '';
+        if (!rows.length) {
+            // 查无数据显示"暂无"语义（区分搜索无结果与名单为空），不用"加载失败"
+            box.innerHTML = '<div class="invite-empty">' + (inviteMembers.length ? '未找到匹配成员' : '暂无可邀请的成员') + '</div>';
+            return;
+        }
+        rows.forEach(function (m) {
+            var invitable = !!m.online && !!m.call_ok && !m.busy && !m.in_meeting;
+            var row = document.createElement('div');
+            row.className = 'invite-row' + (inviteSelected[m.username] ? ' sel' : '') + (invitable ? '' : ' disabled');
+            // 头像：服务端下发的图片优先，空则降级昵称/账号首字符
+            var av = document.createElement('div');
+            av.className = 'invite-avatar';
+            if (m.avatar) {
+                var img = document.createElement('img');
+                img.src = m.avatar;
+                av.appendChild(img);
+            } else {
+                av.textContent = (m.name || m.username || '?').charAt(0);
+            }
+            var info = document.createElement('div');
+            info.className = 'invite-info';
+            var nm = document.createElement('div');
+            nm.className = 'invite-name';
+            nm.textContent = m.name || m.username;
+            var stt = document.createElement('div');
+            stt.className = 'invite-status' + (invitable ? ' ok' : '');
+            stt.textContent = !m.online ? '离线' : (!m.call_ok ? '设备不支持' : (m.in_meeting ? '会议中' : (m.busy ? '通话中' : '可邀请')));
+            info.appendChild(nm);
+            info.appendChild(stt);
+            var chk = document.createElement('span');
+            chk.className = 'invite-check';
+            row.appendChild(av);
+            row.appendChild(info);
+            row.appendChild(chk);
+            if (invitable) {
+                row.addEventListener('click', function () {
+                    if (inviteSelected[m.username]) delete inviteSelected[m.username];
+                    else inviteSelected[m.username] = true;
+                    row.classList.toggle('sel', !!inviteSelected[m.username]);
+                    updateInviteFoot();
+                });
+            }
+            box.appendChild(row);
+        });
+    }
+    function updateInviteFoot() {
+        var n = 0;
+        for (var k in inviteSelected) n++;
+        $('inviteCount').textContent = '已选 ' + n + ' 人';
+        $('btnInviteConfirm').classList.toggle('disabled', n === 0);
     }
 
     // 宫格渲染：自己 tile + 全员 tile（按人数自动分列；视频 tile=画面 / 语音 tile=头像）
@@ -1342,6 +1432,13 @@
                 markTileMuted(from, !!mmu.muted);
                 markTileCam(from);
                 break;
+            case 'meet_members_list':
+                // 阶段一百五十三：会议窗内邀请面板名单回包（面板开着才渲染；晚到/已关面板忽略）
+                if (!inviteOpen) break;
+                inviteMembers = Array.isArray(p.members) ? p.members : [];
+                $('inviteSearch').disabled = false;
+                renderInviteList();
+                break;
             case 'meet_no':
                 // 阶段一百五十二：创建人收服务端生成的会议号（建房后下发，窗口可能尚在加载——
                 // 桥层信令缓冲兜底）——顶部徽标原位更新展示
@@ -1643,15 +1740,36 @@
     var meetNoEl = $('meetNo');
     if (meetNoEl) meetNoEl.addEventListener('click', copyMeetNo);
     btnInvite.addEventListener('click', function () {
-        // 请求主窗口弹群成员选择弹窗（已在会成员一并回传供过滤，重复邀请由服务端归口跳过）
-        if (st.ended || !st.meet) return;
-        var names = [];
-        for (var u in st.members) names.push(u);
-        if (d.meetInviteAsk) {
-            d.meetInviteAsk({
-                call_id: st.callId, call_type: st.callType,
-                group_id: st.groupId, members: names
-            });
-        }
+        // 阶段一百五十三：会议窗内直接弹邀请面板（原经主进程桥跳主窗口选人弹窗，
+        // 弹窗被会议窗遮挡需来回切窗；现面板独立内嵌，名单/状态服务端归口）
+        openInvitePanel();
+    });
+    // 阶段一百五十三：邀请面板交互（关闭钮/取消/遮罩点击/搜索过滤/Esc/确认邀请）
+    var btnInviteCloseEl = $('btnInviteClose');
+    if (btnInviteCloseEl) btnInviteCloseEl.addEventListener('click', closeInvitePanel);
+    var btnInviteCancelEl = $('btnInviteCancel');
+    if (btnInviteCancelEl) btnInviteCancelEl.addEventListener('click', closeInvitePanel);
+    var inviteMaskEl = $('inviteMask');
+    if (inviteMaskEl) inviteMaskEl.addEventListener('mousedown', function (e) {
+        if (e.target === inviteMaskEl) closeInvitePanel(); // 点遮罩关闭（点面板本身不关）
+    });
+    var inviteSearchEl = $('inviteSearch');
+    if (inviteSearchEl) inviteSearchEl.addEventListener('input', function () {
+        if (inviteOpen) renderInviteList();
+    });
+    var btnInviteConfirmEl = $('btnInviteConfirm');
+    if (btnInviteConfirmEl) btnInviteConfirmEl.addEventListener('click', function () {
+        var picked = [];
+        for (var u in inviteSelected) picked.push(u);
+        if (st.ended || !picked.length) return;
+        // 复用 meet_invite 追加邀请链路（服务端按 call_id 识别已有房间走 meetInviteMore，
+        // send 自带 call_id；新成员 accept 后经 meet_join/room_info 增量建连，反馈走 meet_skipped）
+        send('meet_invite', { call_type: st.callType, group_id: st.groupId, members: picked });
+        closeInvitePanel();
+        setMeetStatus('邀请已发送，等待成员加入…');
+    });
+    // Esc 关面板（会议窗无既有 keydown 监听，此处唯一入口；优先于其他 Esc 语义）
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && inviteOpen) closeInvitePanel();
     });
 })();
