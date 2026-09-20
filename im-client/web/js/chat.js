@@ -1418,6 +1418,10 @@
         // 阶段一百五十四：转发项对红包卡片隐藏（微信同款：红包不可转发）
         var fwdItem = msgMenu.querySelector('[data-action="forward"]');
         if (fwdItem) fwdItem.style.display = isRpBubble ? 'none' : '';
+        // 遗漏修复：引用项对红包卡片隐藏（微信同款红包无引用语义；且红包气泡无 .msg-text，
+        // 引用摘要会取到信封原串或怪异拼接文本随下一条消息外泄）
+        var quoteItem = msgMenu.querySelector('[data-action="quote"]');
+        if (quoteItem) quoteItem.style.display = isRpBubble ? 'none' : '';
         msgMenu.style.top = e.clientY + 'px';
         msgMenu.style.left = e.clientX + 'px';
         msgMenu.classList.remove('hidden');
@@ -16178,14 +16182,6 @@
                     messageList.appendChild(rpDiv);
                     messageList.scrollTop = messageList.scrollHeight;
                 }
-                // 自己发送的私聊红包：历史渲染补齐已读/未读初始态（实时链路由 87 回执维护）
-                if (isMine && isPrivate) {
-                    var rpSt = rpDiv.querySelector('.msg-status');
-                    if (rpSt) {
-                        rpSt.setAttribute('data-msg-id', r.id);
-                        rpSt.textContent = isRead ? '已读' : '未读';
-                    }
-                }
                 // 状态自愈：缓存命中直接原位刷新；未查询过的红包静默查详情兜底（去重防查询风暴）
                 if (rpStatusCache[rpEnv.rp.id]) {
                     rpRefreshBubble(rpEnv.rp.id);
@@ -19610,14 +19606,8 @@
         rpApplyBubbleState(bubble, rp, type === 'self');
         bubble.addEventListener('click', function () { rpCardClick(rp.id); });
         body.appendChild(bubble);
-        // 自己发送的私聊红包同样显示已读/未读状态（与文字/图片消息一致）
-        if (type === 'self' && isPrivate) {
-            var st = document.createElement('div');
-            st.className = 'msg-status';
-            st.setAttribute('data-msg-id', '');
-            st.textContent = '未读';
-            body.appendChild(st);
-        }
+        // 阶段一百五十四修复：红包卡片不显示已读/未读——微信同款红包无已读概念，
+        // 领取状态以卡片内状态文字为准（"已领取完毕/等待领取"），叠加"未读"角标会误导发送者以为红包未被领取
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
         return div;
@@ -19775,7 +19765,10 @@
     rpDetailMask.addEventListener('click', function (e) { if (e.target === rpDetailMask) rpCloseDetailDialog(); });
     rpOpenDetailBtn.addEventListener('click', function () {
         if (!rpOpenCtx) return;
-        rpQueryDetail(rpOpenCtx.packetId, function (d) { rpHandleDetail(d, false); });
+        // 阶段一百五十四修复：必须传 interactive=true——原传 false 走静默模式，
+        // rpHandleDetail 只刷新卡片缓存即返回，导致领取结果页"查看领取详情"点击后查询成功也不弹详情窗；
+        // 已领取场景 canClaim 恒为 false（rpMyClaims 已记录 + 详情名单含自己），必然分流到详情页
+        rpQueryDetail(rpOpenCtx.packetId, function (d) { rpHandleDetail(d, true); });
     });
     // Esc 关闭红包弹窗（后打开的优先）
     document.addEventListener('keydown', function (e) {
@@ -19788,10 +19781,13 @@
     // ---- 信令处理 ----
     // 86 红包消息实时渲染（与群聊图片同口径：会话归属匹配 + msg_id 去重 + 服务端昵称合并）
     IMSocket.on(MSG.RED_PACKET, function (msg) {
-        // 会话归属归一（与 PRIVATE handler 同口径）：我发的→to_user；对方发的→from_user
-        // 原实现：直接比对 to_user，对方发来的私聊红包 to_user 是自己，恒不匹配当前会话导致实时不渲染
+        // 会话归属归一：群红包按 to_user（'gN'）匹配（与 GROUP handler 同口径）；
+        // 私聊我发的→to_user、对方发的→from_user（与 PRIVATE handler 同口径）
+        // 遗漏修复：原实现仅抄私聊口径，群里收到他人红包时 target 误取发送者用户名，
+        // 与群视图 currentChatUser='gN' 恒不匹配导致群红包实时不渲染（切会话经历史才可见）
         var isMine0 = msg.from_user === IMSocket.getUsername();
-        var target = isMine0 ? (msg.to_user || '') : (msg.from_user || '');
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
         if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
         if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
         var meta = {};

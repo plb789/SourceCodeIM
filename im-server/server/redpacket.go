@@ -27,8 +27,8 @@ import (
 
 // 红包业务参数（微信同款口径，积分场景换算）
 const (
-	redPacketMaxCount    = 100    // 单个红包最大份数（微信同款上限 100）
-	redPacketMaxAmount   = 50000.0 // 单个红包最大积分（防误操作；积分量级远大于微信金额，放宽上限）
+	redPacketMaxCount    = 100            // 单个红包最大份数（微信同款上限 100）
+	redPacketMaxAmount   = 50000.0        // 单个红包最大积分（防误操作；积分量级远大于微信金额，放宽上限）
 	redPacketExpireAfter = 24 * time.Hour // 未领完过期时长（过期剩余积分退回发送者）
 	redPacketRefundTick  = time.Minute    // 过期退回扫描周期
 )
@@ -58,6 +58,11 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 	}
 	if msg.ToUser == "" {
 		s.sendError(c, "红包缺少接收方")
+		return
+	}
+	// 不能给自己发红包（微信同款语义：私聊会话无自身入口，自发自收无资金意义）
+	if msg.ToUser == c.username {
+		s.sendError(c, "不能给自己发送红包")
 		return
 	}
 	// AI 智能体目标拦截（智能体无积分账户，不能收红包）
@@ -122,6 +127,13 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 		// 私聊收件人须为真实注册用户（用户不存在时积分查询报错）
 		s.sendError(c, "对方不存在，无法发送红包")
 		return
+	}
+
+	// 私聊红包归一：单聊恒为普通红包 1 份（微信同款，拼手气/多份为群聊专属语义）
+	// 遗漏修复：异常客户端发私聊 count=N 红包时收件人仅能领 1 份，其余份数滞留 24 小时过期退回
+	if groupID == 0 {
+		p.Count = 1
+		p.Type = model.RedPacketTypeNormal
 	}
 
 	// 严格扣款（余额不足直接失败）：原子 UPDATE 带 points>=? 守卫，并发安全
@@ -305,8 +317,8 @@ func (s *Server) handleRedPacketOpen(c *Client, msg *protocol.Message) {
 			if upper < 1 {
 				upper = 1
 			}
-			claimMilli = rand.Int63n(upper) + 1                       // [1, upper] 闭区间
-			maxLeave := remainMilli - int64(pkt.RemainingCount-1)     // 给其余人各留至少 1 毫
+			claimMilli = rand.Int63n(upper) + 1                   // [1, upper] 闭区间
+			maxLeave := remainMilli - int64(pkt.RemainingCount-1) // 给其余人各留至少 1 毫
 			if claimMilli > maxLeave {
 				claimMilli = maxLeave
 			}
@@ -423,22 +435,22 @@ func redpacketDetailPayload(pkt *model.RedPacket) map[string]interface{} {
 		})
 	}
 	return map[string]interface{}{
-		"packet_id":      pkt.ID,
-		"type":           pkt.Type,
-		"count":          pkt.Count,
-		"total_amount":   pkt.TotalAmount,
-		"greeting":       pkt.Greeting,
-		"from_user":      pkt.FromUser,
-		"from_name":      displayNameOf(pkt.FromUser),
-		"to_user":        pkt.ToUser,
-		"group_id":       pkt.GroupID,
-		"status":         pkt.Status,
-		"claimed_count":  pkt.Count - pkt.RemainingCount,
-		"claimed_amount": claimedSum,
+		"packet_id":        pkt.ID,
+		"type":             pkt.Type,
+		"count":            pkt.Count,
+		"total_amount":     pkt.TotalAmount,
+		"greeting":         pkt.Greeting,
+		"from_user":        pkt.FromUser,
+		"from_name":        displayNameOf(pkt.FromUser),
+		"to_user":          pkt.ToUser,
+		"group_id":         pkt.GroupID,
+		"status":           pkt.Status,
+		"claimed_count":    pkt.Count - pkt.RemainingCount,
+		"claimed_amount":   claimedSum,
 		"remaining_amount": pkt.RemainingAmount,
-		"expire_time":    pkt.ExpireTime.Format("2006-01-02 15:04:05"),
-		"msg_id":         pkt.MsgID,
-		"list":           list,
+		"expire_time":      pkt.ExpireTime.Format("2006-01-02 15:04:05"),
+		"msg_id":           pkt.MsgID,
+		"list":             list,
 	}
 }
 

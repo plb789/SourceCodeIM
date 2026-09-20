@@ -12694,8 +12694,10 @@ html.m .wb-app-icon {
 
 /* ===== 阶段一百五十四：积分红包（微信同款，语义橙色卡片深浅主题通用；弹窗壳走主题变量） ===== */
 
-/* 聊天内红包卡片（微信同款橙色渐变，白字；不随主题变色——红包语义色固定） */
-.message-bubble.bubble-redpacket {
+/* 聊天内红包卡片（微信同款橙色渐变，白字；不随主题变色——红包语义色固定）
+   阶段一百五十四修复：升级选择器特异性——.message.self/.other .message-bubble（0,3,0）的
+   主题气泡背景会覆盖本规则（0,2,0）的橙色渐变，实测深色主题下卡片显示为绿色气泡背景 */
+.message .message-bubble.bubble-redpacket {
     width: 218px;
     padding: 0;
     border-radius: 10px;
@@ -12706,7 +12708,7 @@ html.m .wb-app-icon {
     box-shadow: 0 2px 8px rgba(234, 122, 48, 0.28);
     transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
-.message-bubble.bubble-redpacket:hover {
+.message .message-bubble.bubble-redpacket:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 14px rgba(234, 122, 48, 0.4);
 }
@@ -12759,10 +12761,10 @@ html.m .wb-app-icon {
     text-overflow: ellipsis;
 }
 /* 已领完/已过期态：卡片降饱和（微信同款灰化提示） */
-.bubble-redpacket.rp-done {
+.message .bubble-redpacket.rp-done {
     filter: saturate(0.35) brightness(0.92);
 }
-.bubble-redpacket.rp-done:hover {
+.message .bubble-redpacket.rp-done:hover {
     transform: none;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
