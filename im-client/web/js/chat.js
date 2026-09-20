@@ -3095,8 +3095,14 @@
             if (progEl) progEl.remove();
         }
         // 归属校验（与 GROUP_IMAGE 口径一致）：私聊仅在对应会话视图渲染，不在窗口时依赖会话摘要/历史归口
-        var peer = isMine ? msg.to_user : msg.from_user;
-        if (currentChatUser !== peer) return;
+        // 阶段一百五十四：私聊图片/文件（直传路径）提示音——挂在归属 return 之前，非当前会话/窗口不可见/失焦都响；
+        // 自己发的不响（!isMine 时归属会话恒为 msg.from_user，直接取用避免引用下方未声明的 peer）
+        // 分片路径由 FILE handler 组装完成处同口径响铃
+        if (!isMine && (document.hidden || window.__pcWindowMinimized === true || currentChatUser !== msg.from_user)) {
+            rpPlayMsgSound();
+        }
+        var peer2 = isMine ? msg.to_user : msg.from_user;
+        if (currentChatUser !== peer2) return;
         var mediaEl;
         if (isImageName(meta.name || '')) {
             mediaEl = appendImageMsg(msg.from_user, meta.url, isMine ? 'self' : 'other', true);
@@ -3323,6 +3329,11 @@
 
     // 群聊图片广播：发送端本地气泡按 nonce 回填 msg_id（撤回/删除/置顶能力前提），其余用户实时渲染
     IMSocket.on(MSG.GROUP_IMAGE, function (msg) {
+        // 阶段一百五十四：群图片提示音（与群文字同口径，挂在归属 return 之前——非当前群也要响）
+        if (msg.from_user !== IMSocket.getUsername() &&
+            (document.hidden || window.__pcWindowMinimized === true || (msg.to_user || '') !== currentChatUser)) {
+            rpPlayMsgSound();
+        }
         // 阶段一百四十二：多群泛化——按会话归属匹配（旧全局群广播 to_user 空 / 多群 to_user='gN'）
         if ((msg.to_user || '') !== currentChatUser) return; // 不在对应群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
         // msg_id 去重（并发加固）：多端重复广播、离线补发与广播重叠、
@@ -3351,6 +3362,11 @@
 
     // 阶段一百三十四：群聊文件广播（对齐 GROUP_IMAGE 处理口径）：nonce 回填/去重/实时渲染
     IMSocket.on(MSG.GROUP_FILE, function (msg) {
+        // 阶段一百五十四：群文件提示音（与群文字/群图片同口径，挂在归属 return 之前——非当前群也要响）
+        if (msg.from_user !== IMSocket.getUsername() &&
+            (document.hidden || window.__pcWindowMinimized === true || (msg.to_user || '') !== currentChatUser)) {
+            rpPlayMsgSound();
+        }
         // 阶段一百四十二：多群泛化——按会话归属匹配（旧全局群广播 to_user 空 / 多群 to_user='gN'）
         if ((msg.to_user || '') !== currentChatUser) return; // 不在对应群聊视图：不渲染（会话摘要已由服务端 CONV_LIST 归口推送）
         if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return; // msg_id 去重
@@ -3424,6 +3440,11 @@
             var blob = new Blob(parts);
             var url = URL.createObjectURL(blob);
             var visibleUser = currentChatUser === msg.from_user;
+            // 阶段一百五十四：私聊文件/图片（分片路径）提示音——组装完成即响（恒为接收方，FILE handler 已排除自己发的），
+            // 与直传路径同口径：窗口不可见/失焦/非当前会话都响
+            if (document.hidden || window.__pcWindowMinimized === true || !visibleUser) {
+                rpPlayMsgSound();
+            }
             var mediaEl = null;
             if (isImageName(buf.name)) {
                 if (visibleUser) mediaEl = appendImageMsg(msg.from_user, url, 'other', true); // 点对点文件传输：私聊不显示昵称
@@ -15521,6 +15542,12 @@
 
     // 群聊/私聊消息
     IMSocket.on(MSG.GROUP_CHAT, function (msg) {
+        // 阶段一百五十四：群消息提示音（与私聊同口径，挂在归属 return 之前——非当前群也要响）
+        // 聚焦+正看该群不响；失焦/最小化/非当前群都响；自己发的群消息不响
+        if (msg.from_user !== IMSocket.getUsername() &&
+            (document.hidden || window.__pcWindowMinimized === true || (msg.to_user || '') !== currentChatUser)) {
+            rpPlayMsgSound();
+        }
         // 阶段二十七：归属校验——群聊消息仅在群聊视图渲染（与 GROUP_IMAGE 处理口径一致），
         // 原实现：无校验，私聊视图打开时收到的群聊消息被串入当前窗口，切换会话后"消失"
         // 阶段一百四十二：多群泛化——旧全局群广播 to_user 为空，多群广播 to_user='gN'，统一按会话归属匹配
@@ -15557,12 +15584,11 @@
         // 原实现：else if (!isMine) { unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1; renderFriendList(); }
         // 未读数服务端归口：服务端收到私聊会 notifyConvUpdate 推送 CONV_LIST（含未读数）到本端全部连接，
         // 前端 CONV_LIST 处理中统一渲染会话列表与好友列表角标，本地不再自计数
-        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——微信完整行为拆解：
-        // 角标按"窗口可见性"判定（可见即无角标，L14558）；提示音按"窗口聚焦"判定——
-        // 聚焦+当前会话（正盯着）不响；失焦（哪怕窗口可见）/最小化/非当前会话都响（提醒用户切回，
-        // 防止"不响+不闪=漏消息"）。自己发的不响；AI 智能体回复不响
+        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——语义以用户实测裁决为准：
+        // 窗口可见+正看当前会话=正在看 → 完全静默（不响不闪，消息内容就在眼前）；
+        // 仅窗口不可见（最小化/托盘化/切后台）或非当前会话时响。自己发的不响；AI 智能体回复不响
         if (!isMine && !isAIAgent(msg.from_user) &&
-            (document.hidden || window.__pcWindowMinimized === true || !windowFocused || currentChatUser !== relevantUser)) {
+            (document.hidden || window.__pcWindowMinimized === true || currentChatUser !== relevantUser)) {
             rpPlayMsgSound();
         }
     });
@@ -19999,7 +20025,7 @@
         // 收红包音效：规则与好友消息提示音同口径（含失焦判定）——他人发来的红包在（非当前查看会话 ||
         // 窗口不可见 || 窗口失焦）时响"叮-咚"；正盯着当前会话看时不响（微信同款）。判断须在归属 return 之前：
         // 原实现"仅当前会话必响"挂在 return 之后，最小化/切后台收红包听不到提示（遗漏修复）
-        if (!isMine0 && (document.hidden || window.__pcWindowMinimized === true || !windowFocused || target !== currentChatUser)) {
+        if (!isMine0 && (document.hidden || window.__pcWindowMinimized === true || target !== currentChatUser)) {
             rpPlayReceiveSound();
         }
         if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
