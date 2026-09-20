@@ -488,7 +488,22 @@ func (s *Server) meetDismiss(room *meetRoom, status string, duration int) {
 	caller := room.Caller
 	groupID := room.GroupID
 	memberCount := len(room.Members)
+	// 快照响铃中被邀人（锁外定向转发用；解散后这些人的前端来电卡片仍显示，需通知撤下）
+	invited := make([]string, 0, len(room.Invited))
+	for m := range room.Invited {
+		invited = append(invited, m)
+	}
 	meetMu.Unlock()
+
+	// 阶段一百四十九：响铃中被邀人收取消信令（1v1 cancel 同款语义）——发起人挂断/会议解散时
+	// 被邀人前端经既有 cancel 分支撤下来电响铃条；原代码仅发群信封不清被邀人来电态，
+	// pendingRing 残留致响铃条永久显示且自动拒绝后续一切来电（会议+1v1）
+	if len(invited) > 0 {
+		cancelB, _ := json.Marshal(map[string]string{"action": "cancel", "call_id": room.ID})
+		for _, m := range invited {
+			s.callForward(caller, m, string(cancelB))
+		}
+	}
 
 	// 话单落库（Callee 存会议人数摘要，话单查询页直接可读）
 	record := model.CallLog{

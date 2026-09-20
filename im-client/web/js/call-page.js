@@ -241,8 +241,10 @@
         btnCam.disabled = st.camUnavailable;
         if (st.camUnavailable) btnCam.title = '摄像头不可用';
         if (btnShare && !btnShare.classList.contains('hidden')) {
-            btnShare.disabled = st.camUnavailable; // 共享屏幕依赖视频轨道发送
-            if (st.camUnavailable) btnShare.title = '摄像头不可用，无法共享屏幕';
+            // 原代码：btnShare.disabled = st.camUnavailable; title='摄像头不可用，无法共享屏幕'
+            // 阶段一百四十九：无摄像头不再禁共享（video m 行 sendrecv 空轨占位，共享零重协商）
+            btnShare.disabled = false;
+            btnShare.title = '共享屏幕';
         }
         document.body.classList.toggle('cam-dead', st.camUnavailable);
     }
@@ -266,7 +268,15 @@
         }
         if (transceiversIfNeeded) {
             if (!hasAudio) pc.addTransceiver('audio', { direction: 'recvonly' });
-            if (st.callType === 'video' && !hasVideo) pc.addTransceiver('video', { direction: 'recvonly' });
+            // 原代码：if (st.callType === 'video' && !hasVideo) pc.addTransceiver('video', { direction: 'recvonly' });
+            // 阶段一百四十九：无摄像头建连改为 sendrecv 空轨占位——recvonly 方向下共享屏幕即使
+            // replaceTrack 塞入轨道也发不出去（方向限制），改方向又要触发全房重协商；sendrecv 空轨
+            // 的 m 行同样保证 SDP 完整（ICE 不受影响），共享时向该空发送器塞屏幕轨零重协商。
+            // streams:[new MediaStream()] 预挂流：offer 生成 a=msid 行——否则共享塞轨后对端收到的
+            // RTP 无 msid 关联，ontrack 事件 e.streams 为空被前端丢弃（共享画面丢失根因）
+            if (st.callType === 'video' && !hasVideo) {
+                pc._videoPlaceholder = pc.addTransceiver('video', { direction: 'sendrecv', streams: [new MediaStream()] }).sender;
+            }
         }
     }
 
@@ -277,8 +287,15 @@
         var pc = new RTCPeerConnection(conf);
         attachLocalMedia(pc, true);
         pc.ontrack = function (e) {
-            if (!e.streams || !e.streams.length) return;
-            st.remote = e.streams[0];
+            // 原代码：if (!e.streams || !e.streams.length) return;
+            // 阶段一百四十九：空 msid 轨兜底（对端 RTP 无 msid 时 e.streams 为空，原直接丢画面）——
+            // 复用已有 remote 流把轨加进去，避免 audio/video 各自兜底互相覆盖
+            if (e.streams && e.streams.length) {
+                st.remote = e.streams[0];
+            } else {
+                if (!st.remote) st.remote = new MediaStream();
+                if (!st.remote.getTracks().some(function (t) { return t.id === e.track.id; })) st.remote.addTrack(e.track);
+            }
             // 视频模式出画面（cwRemote），语音模式出声音（cwRemoteAudio）
             var el = st.callType === 'video' ? $('cwRemote') : $('cwRemoteAudio');
             el.srcObject = st.remote;
@@ -663,8 +680,8 @@
         var w = 'calc((100% - ' + ((cols - 1) * gap) + 'px) / ' + cols + ')';
         var rows = Math.ceil(n / cols);
         var h = 'calc((100% - ' + ((Math.min(rows, cols) - 1) * gap) + 'px) / ' + Math.ceil(n / cols) + ')';
-        // 自己 tile（本地预览 muted 防啸叫）
-        grid.appendChild(buildMeetTile('self', st.selfName || '我', st.selfAvatar || '', st.local, true, w, h));
+        // 自己 tile（本地预览 muted 防啸叫）；共享中预览切屏幕画面（原恒 st.local）
+        grid.appendChild(buildMeetTile('self', st.selfName || '我', st.selfAvatar || '', (sharing && screenStream) ? screenStream : st.local, true, w, h));
         users.forEach(function (u) {
             var m = st.members[u];
             grid.appendChild(buildMeetTile(u, m.name, m.avatar, m.stream, false, w, h));
@@ -685,7 +702,8 @@
             if (stream) v.srcObject = stream;
             tile.appendChild(v);
             // 摄像头不可用：本地画面出"无视频可用"占位（通信不阻断，仅此一处标记）
-            if (isSelf && st.camUnavailable) {
+            // 原代码：if (isSelf && st.camUnavailable)——共享中预览的是屏幕画面，占位不得残留盖住预览
+            if (isSelf && st.camUnavailable && !(sharing && screenStream)) {
                 var ph = document.createElement('div');
                 ph.className = 'no-video-ph';
                 ph.textContent = '无视频可用';
@@ -765,11 +783,18 @@
         // 断网恢复沿用同方向——offerer 单点发起 restart，answerer 只应答，防双端 offer 冲突）
         m.asOfferer = !!asOfferer;
         pc.ontrack = function (e) {
-            if (!e.streams || !e.streams.length) return;
-            m.stream = e.streams[0];
+            // 原代码：if (!e.streams || !e.streams.length) return;
+            // 阶段一百四十九：空 msid 轨兜底（无摄像头共享占位场景对端 RTP 无 msid 时 e.streams
+            // 为空，原直接丢画面）——复用成员已有流把轨加进去，避免多 track 各自兜底互相覆盖
+            if (e.streams && e.streams.length) {
+                m.stream = e.streams[0];
+            } else {
+                if (!m.stream) m.stream = new MediaStream();
+                if (!m.stream.getTracks().some(function (t) { return t.id === e.track.id; })) m.stream.addTrack(e.track);
+            }
             attachMeetStream(peer, m);
             // 远端麦克风状态联动（track muted 事件由接收端同步）
-            var at = e.streams[0].getAudioTracks()[0];
+            var at = m.stream.getAudioTracks()[0];
             if (at) {
                 var sync = function () { m.muted = !!at.muted; markTileMuted(peer, m.muted); };
                 at.onmute = sync;
@@ -828,17 +853,10 @@
             }
             // 阶段一百四十九：共享中途建连的新成员同步共享画面——attachLocalMedia 恒挂 st.local
             // 摄像头轨，而共享 replaceTrack 只作用于建连时已存在的成员连接；新成员入会/会中邀请/
-            // 宽限踢出后被重新邀请建连时，不在此补挂则对方只能看到摄像头画面而非共享内容
-            if (sharing && screenStream) {
-                var sv = screenStream.getVideoTracks()[0];
-                if (sv) {
-                    pc.getSenders().forEach(function (sd) {
-                        if (sd.track && sd.track.kind === 'video') {
-                            try { sd.replaceTrack(sv); } catch (e) { }
-                        }
-                    });
-                }
-            }
+            // 宽限踢出后被重新邀请建连时，不在此补挂则对方只能看到摄像头画面而非共享内容。
+            // 原代码：内联 forEach 只认 sd.track 非空的 sender，漏掉无摄像头的空轨占位
+            // （placeholder sender 无轨）——统一收口到 syncShareToPc（占位也作为替换目标）
+            syncShareToPc(pc);
             renderMeetGrid();
         });
         renderMeetGrid();
@@ -1061,6 +1079,11 @@
                     onLocalReady(function () {
                         if (st.ended || m.pc !== pcOffer) return;
                         attachLocalMedia(pcOffer, false); // 幂等挂轨（应答方不加收发器，m 行由 offer 映射）
+                        // 阶段一百四十九：应答方无摄像头时按 offer SDP 的 m 行序补挂共享占位
+                        // （transceiversIfNeeded=false 不走 addTransceiver 分支，_videoPlaceholder
+                        // 此前从未挂上——共享时找不到替换目标，replaceTrack 静默未执行，对端看不到画面）
+                        bindVideoShareTarget(pcOffer, p.sdp.sdp);
+                        syncShareToPc(pcOffer); // 共享中则把屏幕轨补挂到该占位（新加入即见共享）
                         pcOffer.createAnswer().then(function (ans) {
                             return pcOffer.setLocalDescription(ans).then(function () { return ans; });
                         }).then(function (ans) {
@@ -1115,22 +1138,85 @@
     // 语音会议无视频轨道不开放（避免 addTrack 触发全房重协商冲突）
     var sharing = false;
     var screenStream = null;
+    // 阶段一百四十九：定位某成员 pc 的视频发送目标（共享轨替换处）——优先已有 video 轨的 sender
+    //（摄像头/已共享），其次建连/应答时挂的空轨占位（无摄像头场景）
+    function videoShareTargetOf(pc) {
+        var target = null;
+        pc.getSenders().forEach(function (sd) {
+            if (!target && sd.track && sd.track.kind === 'video') target = sd;
+        });
+        return target || pc._videoPlaceholder || null;
+    }
+    // 阶段一百四十九：黑帧占位轨（全局单 canvas 惰性创建，captureStream(0) 手动 requestFrame
+    // 仅出一帧——持续带宽≈0）。用途：被邀人（answerer）无摄像头时给 video 收发器塞占位，
+    // 使 answer 的 m=video 变为 sendrecv+msid（对端协商期即建立流关联），共享时 replaceTrack
+    // 换屏轨同 sender 零重协商、SSRC 连续切换
+    var _phCanvas = null;
+    function makePlaceholderVideoTrack() {
+        try {
+            if (!_phCanvas) {
+                _phCanvas = document.createElement('canvas');
+                _phCanvas.width = 2;
+                _phCanvas.height = 2;
+                _phCanvas.getContext('2d').fillStyle = '#000';
+                _phCanvas.getContext('2d').fillRect(0, 0, 2, 2);
+            }
+            var t = _phCanvas.captureStream(0).getVideoTracks()[0];
+            if (t.requestFrame) t.requestFrame();
+            return t;
+        } catch (e) { return null; }
+    }
+    // 阶段一百四十九：被邀人（answerer）无摄像头时挂共享占位——answer 的 m 行由 offer 映射，
+    // 不经过 addTransceiver 路径（占位只在 offerer 建连时挂）；按 offer SDP 的 m 行序定位 video
+    // 收发器，其 sender 即共享轨替换目标（getTransceivers 顺序与 SDP m 行顺序一致）。
+    // 原代码：仅挂 sender 不动方向——实测 Chrome 对 setRemoteDescription(offer) 自动创建的
+    // 收发器初始 direction=recvonly（本端此刻无发送轨），answer 为 recvonly 无 msid，事后
+    // replaceTrack 塞屏轨方向不允许发送、对端也无流关联（被邀人共享对端看不到根因）
+    function bindVideoShareTarget(pc, offerSdp) {
+        if (!pc || pc._videoPlaceholder) return;
+        if (pc.getSenders().some(function (sd) { return sd.track && sd.track.kind === 'video'; })) return;
+        if (!offerSdp) return;
+        var mLines = offerSdp.split('\r\n').filter(function (l) { return l.indexOf('m=') === 0; });
+        for (var i = 0; i < mLines.length; i++) {
+            if (mLines[i].indexOf('m=video') === 0 && pc.getTransceivers()[i]) {
+                var tr = pc.getTransceivers()[i];
+                tr.direction = 'sendrecv'; // 方向升级：recvonly 不允许发送（实测对照 W 场景失败）
+                var phTrack = makePlaceholderVideoTrack(); // 占位轨：answer 即带 msid 建立对端流关联
+                if (phTrack) {
+                    try { tr.sender.replaceTrack(phTrack); } catch (e) { }
+                }
+                pc._videoPlaceholder = tr.sender;
+                return;
+            }
+        }
+    }
+    // 阶段一百四十九：共享中向指定成员 pc 同步屏幕轨（新成员建连/被邀人占位挂好后补挂）
+    function syncShareToPc(pc) {
+        if (!sharing || !screenStream || !pc) return;
+        var target = videoShareTargetOf(pc);
+        if (!target) return;
+        var sv = screenStream.getVideoTracks()[0];
+        if (sv) {
+            try { target.replaceTrack(sv); } catch (e) { }
+        }
+    }
     function meetReplaceVideoTrack(track) {
         for (var u in st.members) {
             var m = st.members[u];
             if (!m || !m.pc) continue;
-            m.pc.getSenders().forEach(function (sd) {
-                if (sd.track && sd.track.kind === 'video') {
-                    try { sd.replaceTrack(track); } catch (e) { }
-                }
-            });
+            var target = videoShareTargetOf(m.pc);
+            if (target) {
+                try { target.replaceTrack(track); } catch (e) { }
+            }
         }
     }
     function stopMeetShare() {
         if (!sharing) return;
         sharing = false;
         var camTrack = st.local ? st.local.getVideoTracks()[0] : null;
-        meetReplaceVideoTrack(camTrack || null);
+        // 原代码：meetReplaceVideoTrack(camTrack || null)——无摄像头停止共享后对端画面定格
+        // 在屏轨最后一帧；改塞回黑帧占位（对端回到明确的黑屏，与未共享时一致）
+        meetReplaceVideoTrack(camTrack || makePlaceholderVideoTrack());
         if (screenStream) {
             try { screenStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
             screenStream = null;
@@ -1138,13 +1224,14 @@
         btnShare.classList.remove('active');
         btnShare.title = '共享屏幕';
         btnCam.disabled = false;
-        // 本地预览切回摄像头
-        var tile = $('meetGrid').querySelector('div.meet-tile[data-user="self"] video');
-        if (tile && st.local) tile.srcObject = st.local;
+        // 本地预览切回摄像头（原手动改 srcObject——占位元素残留盖住预览，统一重绘解决）
+        renderMeetGrid();
     }
     function toggleMeetShare() {
-        // 共享屏幕依赖视频轨道发送（replaceTrack 换轨）；摄像头不可用/无视频轨时不可共享
-        if (st.ended || !st.local || !st.local.getVideoTracks().length) return;
+        // 原代码：if (st.ended || !st.local || !st.local.getVideoTracks().length) return;
+        // 阶段一百四十九：无摄像头也可共享屏幕（video m 行 sendrecv 空轨占位，共享时塞屏轨
+        // 零重协商）——前置只拦会议收口与语音会议（语音无 video m 行，共享需全房重协商不开放）
+        if (st.ended || st.callType !== 'video') return;
         if (sharing) { stopMeetShare(); return; }
         navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }).then(function (ss) {
             if (st.ended) {
@@ -1159,8 +1246,9 @@
             btnShare.classList.add('active');
             btnShare.title = '停止共享';
             btnCam.disabled = true; // 共享期间禁摄像头开关（同一视频轨道）
-            var tile = $('meetGrid').querySelector('div.meet-tile[data-user="self"] video');
-            if (tile) tile.srcObject = ss; // 本地预览切共享画面
+            // 本地预览切共享画面（原手动改 srcObject——无摄像头时"无视频可用"占位残留盖住预览，
+            // 统一走 renderMeetGrid 重绘：self tile 流参数与占位显隐一次到位）
+            renderMeetGrid();
         }).catch(function (e) {
             // 阶段一百四十九：失败可见化（原静默吞错——点击无反应用户无从判断）
             var msg = '屏幕共享不可用';
