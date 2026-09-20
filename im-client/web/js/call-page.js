@@ -646,6 +646,8 @@
             st.camUnavailable = st.callType === 'video' && !r.cam;
             applyMediaMarks();
             renderMeetStage(); // 无媒体也渲染（自己 tile 出"无视频可用"占位/语音 tile 出头像）；阶段一百五十一舞台布局归口
+            // 阶段一百五十一补丁：设备可用性广播（麦克风/摄像头是否可用全员可见；服务端落快照供中途入会者补发）
+            if (st.meet) send('meet_media', { mic: !st.micUnavailable, cam: !st.camUnavailable });
             // 门闩放行：无媒体也照常建连（offer 经 attachLocalMedia 补 recvonly 收发器），设备状态不阻断会议
             if (!localReady) {
                 localReady = true;
@@ -828,9 +830,17 @@
         var mic = document.createElement('span');
         mic.className = 'mt-mic';
         mic.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>';
-        if (user !== 'self' && st.members[user] && st.members[user].muted) tile.classList.add('muted');
+        // 阶段一百五十一补丁：设备可用性全员可见——远端由 meet_media 信令归口（micOk/camOk），
+        // 麦克风不可用同款叉麦标记；摄像头不可用加叉摄标记（本端直接读 st 状态）
+        var mm = st.members[user]; // self 无成员记录（mm=undefined），本端状态走 st 直接判断
+        if (user !== 'self' && mm && (mm.muted || !mm.micOk)) tile.classList.add('muted');
         if (user === 'self' && st.micUnavailable) tile.classList.add('muted'); // 麦克风不可用同款叉麦标记
+        if (user === 'self' ? st.camUnavailable : !!(mm && !mm.camOk)) tile.classList.add('cam-dead');
         tile.appendChild(mic);
+        var cami = document.createElement('span');
+        cami.className = 'mt-cam';
+        cami.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27 4.73 6H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.21 0 .39-.08.54-.18L19.73 21 21 19.73 3.27 2z"/></svg>';
+        tile.appendChild(cami);
         return tile;
     }
 
@@ -848,7 +858,10 @@
 
     function markTileMuted(user, muted) {
         var tile = $('meetGrid').querySelector('div.meet-tile[data-user="' + user + '"]');
-        if (tile) tile.classList.toggle('muted', !!muted);
+        if (!tile) return;
+        // 阶段一百五十一补丁：设备不可用同样维持叉麦（track.muted 解除不覆盖不可用标记）
+        var mm = st.members[user];
+        tile.classList.toggle('muted', !!muted || !!(mm && !mm.micOk));
     }
 
     // 与成员建连（asOfferer=我方发 offer；false 时只建 pc 等对方 offer 应答）
@@ -1103,7 +1116,7 @@
                 (p.members || []).forEach(function (mi) {
                     if (mi && mi.username && !st.members[mi.username]) {
                         st.members[mi.username] = {
-                            name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false,
+                            name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false, micOk: true, camOk: true,
                             // 阶段一百四十八：成员级断网恢复状态初始化（restart 系列缺省会导致缓存/幂等判空报错）
                             asOfferer: false, needRestart: false, iceRestartActive: false,
                             lost: false, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
@@ -1133,7 +1146,8 @@
                     asOfferer: false, needRestart: false, iceRestartActive: false,
                     restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
                     lost: false, restartTimer: null, restartFirstTimer: null, giveupTimer: null,
-                    sharing: false // 阶段一百五十一：该成员正在共享屏幕（meet_share 信令归口，主舞台布局依据）
+                    sharing: false, // 阶段一百五十一：该成员正在共享屏幕（meet_share 信令归口，主舞台布局依据）
+                    micOk: true, camOk: true // 阶段一百五十一补丁：设备可用性（meet_media 信令归口；缺省视为可用防误显叉麦叉摄）
                 };
                 renderMeetStage(); // 阶段一百五十一：舞台布局归口
                 meetConnect(mi.username, true);
@@ -1224,6 +1238,15 @@
                 } else if (st.stageUser === from) {
                     st.stageUser = '';
                 }
+                renderMeetStage();
+                break;
+            case 'meet_media':
+                // 阶段一百五十一补丁：成员设备可用性广播（frame.from_user=上报者）——
+                // 麦克风/摄像头是否可用全员可见；重建 tile 即显叉麦/叉摄（服务端落快照供中途入会者补发）
+                var mmu = st.members[from];
+                if (!mmu) break;
+                mmu.micOk = p.mic !== false;
+                mmu.camOk = p.cam !== false;
                 renderMeetStage();
                 break;
             case 'error':

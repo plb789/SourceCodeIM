@@ -384,6 +384,16 @@
             z-index: 2;
         }
         .meet-tile.muted .mt-mic { display: block; }
+        /* 阶段一百五十一补丁：摄像头不可用叉摄标记（叉麦左侧并排；meet_media 信令全员可见） */
+        .meet-tile .mt-cam {
+            position: absolute;
+            top: 6px;
+            right: 32px;
+            color: #fa5151;
+            display: none;
+            z-index: 2;
+        }
+        .meet-tile.cam-dead .mt-cam { display: block; }
         /* 阶段一百四十八：连接中断成员 tile（红色描边 + 名字条警示色，恢复自动移除标记） */
         .meet-tile.lost { outline: 2px solid rgba(250, 81, 81, 0.85); outline-offset: -2px; }
         .meet-tile.lost .mt-name { color: #ff8f8f; }
@@ -469,6 +479,6 @@
     <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=5"></script>
+    <script src="js/call-page.js?v=7"></script>
 </body>
 </html>

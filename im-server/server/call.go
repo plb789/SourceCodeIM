@@ -109,6 +109,9 @@ func (s *Server) HandleCallSignal(c *Client, msg *protocol.Message) {
 	// 阶段一百五十一：会议共享状态广播（腾讯会议同款主舞台布局归口：全员一致视图）
 	case "meet_share":
 		s.handleMeetShare(from, msg, &p)
+	// 阶段一百五十一补丁：会议设备可用性广播（麦克风/摄像头是否可用全员可见）
+	case "meet_media":
+		s.handleMeetMedia(from, msg, &p)
 	default:
 		s.sendError(c, "未知通话信令")
 	}

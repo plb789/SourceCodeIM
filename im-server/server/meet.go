@@ -55,6 +55,9 @@ type meetRoom struct {
 	// Sharing 阶段一百五十一补丁：正在共享屏幕的成员表（username → true）——meet_share 广播只发
 	// 在会成员，中途入会者收不到入会前开始的共享广播；入会时按此快照向新人补发，保证舞台布局全员一致
 	Sharing map[string]bool
+	// Media 阶段一百五十一补丁：成员设备可用性快照（username → mic/cam 是否可用）——
+	// meet_media 上报落表，中途入会者按快照补发，保证「叉麦/叉摄」状态全员一致可见
+	Media map[string]meetMediaState
 }
 
 var (
@@ -67,6 +70,12 @@ type meetMemberInfo struct {
 	Username string `json:"username"`
 	Name     string `json:"name"` // 昵称（空昵称前端降级显示账号）
 	Avatar   string `json:"avatar"`
+}
+
+// meetMediaState 阶段一百五十一补丁：成员设备可用性（麦克风/摄像头是否可用；不可用仅降级不阻断通信）
+type meetMediaState struct {
+	Mic bool `json:"mic"`
+	Cam bool `json:"cam"`
 }
 
 // meetInfoOf 单成员资料归口（会议邀请为低频路径，直查不缓存）
@@ -185,6 +194,7 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 		Members:  map[string]bool{from: true},
 		Invited:  map[string]bool{},
 		Sharing:  map[string]bool{},
+		Media:    map[string]meetMediaState{},
 	}
 	for _, m := range invitees {
 		room.Invited[m] = true
@@ -346,6 +356,11 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 	for sh := range room.Sharing {
 		sharers = append(sharers, sh)
 	}
+	// 阶段一百五十一补丁：设备可用性快照（锁内取）——中途入会者补发叉麦/叉摄状态
+	media := make(map[string]meetMediaState, len(room.Media))
+	for mu, ms := range room.Media {
+		media[mu] = ms
+	}
 	meetMu.Unlock()
 
 	// 已在会成员收 meet_join（from=新人），各自向新人发 offer（建连方向规则）
@@ -389,6 +404,16 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 			"on":      true,
 		})
 		s.callForward(sh, from, string(sc))
+	}
+	// 阶段一百五十一补丁：向新人补发全员设备可用性（room_info 之后同 WS 顺序；from_user=状态归属者）
+	for mu, ms := range media {
+		mc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_media",
+			"call_id": p.CallID,
+			"mic":     ms.Mic,
+			"cam":     ms.Cam,
+		})
+		s.callForward(mu, from, string(mc))
 	}
 	logger.Info("会议入会：%s 加入房间 %s（当前 %d 人）", from, p.CallID, len(members))
 }
@@ -465,6 +490,43 @@ func (s *Server) handleMeetShare(from string, msg *protocol.Message, p *callSign
 	}
 }
 
+// handleMeetMedia 阶段一百五十一补丁：会议设备可用性广播（上行 {action:'meet_media', call_id, mic, cam}）。
+// 校验发送者是房间成员后，把麦克风/摄像头可用状态转发给房间内其他成员（from_user=上报者），
+// 同时落房间快照供中途入会者补发——设备不可用此前仅本端可见，全员可见后远端 tile 显示叉麦/叉摄
+func (s *Server) handleMeetMedia(from string, msg *protocol.Message, p *callSignalPayload) {
+	var body struct {
+		Mic bool `json:"mic"`
+		Cam bool `json:"cam"`
+	}
+	_ = json.Unmarshal([]byte(msg.Content), &body)
+	meetMu.Lock()
+	room, ok := meetRooms[p.CallID]
+	if !ok || !room.Members[from] {
+		meetMu.Unlock()
+		return // 非房间成员/房间已解散：静默丢弃
+	}
+	if room.Media == nil {
+		room.Media = map[string]meetMediaState{} // 兼容旧房间的惰性初始化
+	}
+	room.Media[from] = meetMediaState{Mic: body.Mic, Cam: body.Cam}
+	others := make([]string, 0, len(room.Members))
+	for m := range room.Members {
+		if m != from {
+			others = append(others, m)
+		}
+	}
+	meetMu.Unlock()
+	content, _ := json.Marshal(map[string]interface{}{
+		"action":  "meet_media",
+		"call_id": p.CallID,
+		"mic":     body.Mic,
+		"cam":     body.Cam,
+	})
+	for _, m := range others {
+		s.callForward(from, m, string(content))
+	}
+}
+
 // meetRelayMedia 会议媒体信令定向转发：content.target 指定接收方，双方均为房间成员才放行
 func (s *Server) meetRelayMedia(from string, p *callSignalPayload, content string) {
 	room := meetRoomOf(p.CallID)
@@ -502,6 +564,7 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 	}
 	delete(room.Members, from)
 	delete(room.Sharing, from) // 阶段一百五十一补丁：退出清共享快照（防滞留致后续入会者收到失效共享标记）
+	delete(room.Media, from)   // 阶段一百五十一补丁：退出清设备可用性快照
 	delete(room.Invited, from)
 	delete(callUserBusy, from)
 	// 阶段一百四十八：成员退出时停其断网宽限定时器（防定时器滞留误触发/泄漏）
