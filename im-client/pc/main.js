@@ -268,6 +268,22 @@ function createWindow() {
     mainWindow.on('focus', function () {
         mainWindow.flashFrame(false);
     });
+
+    // 阶段一百五十四：窗口最小化/还原/隐藏/显示状态推送——页面据此判定"窗口不可见"播好友消息提示音。
+    // 背景：Electron Windows 默认禁用原生遮挡计算（CalculateNativeWinOcclusion），窗口最小化后
+    // document.hidden 恒为 false，页面层无法感知窗口不可见（WEB 浏览器原生 occlusion 会置 hidden，
+    // 故 WEB 端最小化有音效而 PC 端没有）；改由原生窗口事件可靠传递，托盘化 hide() 场景一并覆盖
+    function pushWinState() {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        var invisible = mainWindow.isMinimized() || !mainWindow.isVisible();
+        mainWindow.webContents.send('pc:win-state', { minimized: invisible });
+    }
+    mainWindow.on('minimize', pushWinState);
+    mainWindow.on('restore', pushWinState);
+    mainWindow.on('hide', pushWinState);
+    mainWindow.on('show', pushWinState);
+    // 页面加载完成后推送当前状态兜底（页面启动时窗口可能已处于最小化/隐藏）
+    mainWindow.webContents.on('did-finish-load', pushWinState);
 }
 
 function createTray() {

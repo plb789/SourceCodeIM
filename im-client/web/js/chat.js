@@ -14547,9 +14547,13 @@
         // 阶段一百三十四：当前正在查看的会话未读强制归零——正在查看时收到消息前端立即发已读回执
         // （实时路径 L13106），但服务端"计未读→推 CONV_LIST"先于"收到 READ→清零→再推"，
         // 竞态窗口内角标闪现（实测 2026-09-16）。本地事实归口：正在查看的会话不存在未读；
-        // READ 到达服务端后下次推送即自动一致。窗口失焦/最小化时不归零（托盘未读提醒需保留服务端计数）。
-        // 原实现：直接渲染服务端 unread（当前会话角标闪现）
-        if (currentChatUser && windowFocused) {
+        // READ 到达服务端后下次推送即自动一致。
+        // 阶段一百五十四修复：归零条件由"窗口聚焦（windowFocused）"改为"窗口可见"——
+        // 原条件窗口失焦但可见时（焦点在别的窗口）不归零，当前会话角标仍闪现（用户实测反馈）。
+        // 微信同款语义：会话正被查看就不应有角标。窗口可见判定 = !document.hidden（WEB 最小化/切标签）
+        // && !__pcWindowMinimized（PC 端 Electron 原生窗口事件，最小化/托盘化）；
+        // 窗口不可见时不归零——托盘未读提醒需保留服务端计数（原设计意图不变）
+        if (currentChatUser && !document.hidden && window.__pcWindowMinimized !== true) {
             for (var ci = 0; ci < convList.length; ci++) {
                 if (convList[ci].target === currentChatUser) convList[ci].unread = 0;
             }
@@ -15536,10 +15540,12 @@
         // 原实现：else if (!isMine) { unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1; renderFriendList(); }
         // 未读数服务端归口：服务端收到私聊会 notifyConvUpdate 推送 CONV_LIST（含未读数）到本端全部连接，
         // 前端 CONV_LIST 处理中统一渲染会话列表与好友列表角标，本地不再自计数
-        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——仅他人发来的消息且
-        //（非当前查看会话 || 页面后台）才响；正盯着会话看时微信不响；AI 智能体回复无提示音
+        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——微信完整行为：前台正盯着看
+        //（当前会话且窗口可见）不响；最小化/托盘化/切后台收消息都响。窗口不可见判定：
+        // document.hidden（WEB 浏览器最小化/切标签生效）+ window.__pcWindowMinimized（PC 端
+        // Electron 原生窗口事件，最小化/托盘化均可靠）；自己发的不响；AI 智能体回复不响
         if (!isMine && !isAIAgent(msg.from_user) &&
-            (document.hidden || currentChatUser !== relevantUser)) {
+            (document.hidden || window.__pcWindowMinimized === true || currentChatUser !== relevantUser)) {
             rpPlayMsgSound();
         }
     });
@@ -19934,6 +19940,13 @@
     }
     document.addEventListener('pointerdown', rpUnlockSound, true);
     document.addEventListener('keydown', rpUnlockSound, true);
+    // PC 端窗口最小化/隐藏标志（Electron preload 原生窗口事件推送；WEB 端无 desktop 桥不影响）——
+    // Electron Windows 禁用原生遮挡计算，最小化后 document.hidden 恒为 false，需原生事件补位
+    if (window.desktop && window.desktop.onWinState) {
+        window.desktop.onWinState(function (data) {
+            window.__pcWindowMinimized = !!(data && data.minimized);
+        });
+    }
     // 收红包音效：上行两音"叮-咚"（比普通消息音更轻快醒目，红包专属提示）
     function rpPlayReceiveSound() {
         var ctx = rpGetAudioCtx();
@@ -19966,6 +19979,12 @@
         var isMine0 = msg.from_user === IMSocket.getUsername();
         var to0 = msg.to_user || '';
         var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        // 收红包音效：规则与好友消息提示音同口径——他人发来的红包在（非当前查看会话 || 窗口不可见）时
+        // 响"叮-咚"；正盯着当前会话看时不响（微信同款）。判断须在归属 return 之前：
+        // 原实现"仅当前会话必响"挂在 return 之后，最小化/切后台收红包听不到提示（遗漏修复）
+        if (!isMine0 && (document.hidden || window.__pcWindowMinimized === true || target !== currentChatUser)) {
+            rpPlayReceiveSound();
+        }
         if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
         if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
         var meta = {};
@@ -19976,8 +19995,12 @@
         var el = rpAppendBubble(msg.from_user, rp, isMine0 ? 'self' : 'other', !isGroupTarget(target));
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
-        // 收红包音效：仅他人发来的红包播提示音（自己发的红包微信无音效；历史渲染不走此处不播）
-        if (!isMine0) rpPlayReceiveSound();
+        // 阶段一百五十四修复：红包到达当前会话时补发已读回执（PRIVATE handler 同口径）——
+        // 原遗漏导致服务端 is_read 恒 false，会话未读角标持续显示（红包已在眼前仍不清零）；
+        // 仅私聊需回执（群无未读角标，群帧 to_user='gN' 发回执服务端也无效果）
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
     });
 
     // 87 下行归口（act 区分）：send=发送回执（余额联动）/ open=领取结果 / detail=详情响应

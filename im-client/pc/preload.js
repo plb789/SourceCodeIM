@@ -41,6 +41,13 @@ contextBridge.exposeInMainWorld('desktop', {
     flashTray: function () {
         ipcRenderer.send('tray:flash');
     },
+    // 阶段一百五十四：窗口最小化/隐藏状态订阅（主进程 minimize/restore/hide/show 与页面加载完成时推送）
+    // Electron Windows 禁用原生遮挡计算后 document.hidden 恒为 false，页面消息提示音据此判定窗口不可见
+    onWinState: function (callback) {
+        ipcRenderer.on('pc:win-state', function (event, data) {
+            callback(data);
+        });
+    },
     // ===== 阶段三十七（第四期·增强）：托盘悬停预览面板（面板页与主窗口共用本 preload） =====
     // 面板页拉取当前未读明细（兜底，正常由主进程显示前推送）
     getTrayUnread: function () {
