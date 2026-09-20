@@ -14569,6 +14569,7 @@
     // ===== 阶段三十七（第四期）：PC 端托盘未读提醒（微信同款：新消息闪动 + 悬停未读数 + 图标数字角标） =====
     var trayBaseIcon = null;  // 托盘底图（懒加载，与 PC 端托盘/exe 同源图标，由 web/img/64.ico 静态提供）
     var lastTrayTotal = -1;   // 上次上报的未读总数（-1 表示从未上报，首次必上报以初始化托盘状态）
+    var rpNotifyLastTs = 0;   // 阶段一百五十四：上次系统通知时间戳（托盘化/失焦新消息通知 4 秒节流）
     var windowFocused = true; // 窗口聚焦状态（Electron 窗口失焦但可见时 document.hidden 仍为 false，需 focus/blur 辅助判断）
 
     window.addEventListener('focus', function () { windowFocused = true; });
@@ -14649,6 +14650,22 @@
         // 新消息且窗口未聚焦/被隐藏 → 托盘闪动；聚焦状态下仅更新角标，不打扰
         if (increased && (document.hidden || !windowFocused)) {
             window.desktop.flashTray();
+        }
+        // 阶段一百五十四：托盘化/失焦收新消息弹系统通知（微信同款）——悬停托盘虽有预览面板，
+        // 但不悬停时用户不知道"谁发的消息"。通知标题=发送者名称，正文=最新消息摘要（服务端归口，
+        // 含 [图片]/[文件]/[红包] 各类型），点击通知聚焦主窗口（Windows 通知中心行为）。
+        // 4 秒节流：连续消息合并（防通知中心堆叠轰炸），完整未读明细悬停托盘面板可见。
+        // 归口在 updateTrayBadge（CONV_LIST 驱动）单点实现，全消息类型覆盖；WEB 端 desktop 桩
+        // 无 notify 方法自动跳过，不受影响
+        if (increased && (document.hidden || window.__pcWindowMinimized === true || !windowFocused) && list.length) {
+            var ntNow = Date.now();
+            if (ntNow - (rpNotifyLastTs || 0) > 4000) {
+                rpNotifyLastTs = ntNow;
+                if (window.desktop && window.desktop.notify) {
+                    var nf = list[0]; // convList 按最后活跃倒序，首条即最新消息来源
+                    window.desktop.notify(nf.name, nf.last || '发来新消息');
+                }
+            }
         }
         return total;
     }
@@ -15540,12 +15557,12 @@
         // 原实现：else if (!isMine) { unreadCount[relevantUser] = (unreadCount[relevantUser] || 0) + 1; renderFriendList(); }
         // 未读数服务端归口：服务端收到私聊会 notifyConvUpdate 推送 CONV_LIST（含未读数）到本端全部连接，
         // 前端 CONV_LIST 处理中统一渲染会话列表与好友列表角标，本地不再自计数
-        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——微信完整行为：前台正盯着看
-        //（当前会话且窗口可见）不响；最小化/托盘化/切后台收消息都响。窗口不可见判定：
-        // document.hidden（WEB 浏览器最小化/切标签生效）+ window.__pcWindowMinimized（PC 端
-        // Electron 原生窗口事件，最小化/托盘化均可靠）；自己发的不响；AI 智能体回复不响
+        // 阶段一百五十四：好友消息提示音（微信同款"滴-嘟"双音）——微信完整行为拆解：
+        // 角标按"窗口可见性"判定（可见即无角标，L14558）；提示音按"窗口聚焦"判定——
+        // 聚焦+当前会话（正盯着）不响；失焦（哪怕窗口可见）/最小化/非当前会话都响（提醒用户切回，
+        // 防止"不响+不闪=漏消息"）。自己发的不响；AI 智能体回复不响
         if (!isMine && !isAIAgent(msg.from_user) &&
-            (document.hidden || window.__pcWindowMinimized === true || currentChatUser !== relevantUser)) {
+            (document.hidden || window.__pcWindowMinimized === true || !windowFocused || currentChatUser !== relevantUser)) {
             rpPlayMsgSound();
         }
     });
@@ -19979,10 +19996,10 @@
         var isMine0 = msg.from_user === IMSocket.getUsername();
         var to0 = msg.to_user || '';
         var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
-        // 收红包音效：规则与好友消息提示音同口径——他人发来的红包在（非当前查看会话 || 窗口不可见）时
-        // 响"叮-咚"；正盯着当前会话看时不响（微信同款）。判断须在归属 return 之前：
+        // 收红包音效：规则与好友消息提示音同口径（含失焦判定）——他人发来的红包在（非当前查看会话 ||
+        // 窗口不可见 || 窗口失焦）时响"叮-咚"；正盯着当前会话看时不响（微信同款）。判断须在归属 return 之前：
         // 原实现"仅当前会话必响"挂在 return 之后，最小化/切后台收红包听不到提示（遗漏修复）
-        if (!isMine0 && (document.hidden || window.__pcWindowMinimized === true || target !== currentChatUser)) {
+        if (!isMine0 && (document.hidden || window.__pcWindowMinimized === true || !windowFocused || target !== currentChatUser)) {
             rpPlayReceiveSound();
         }
         if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
