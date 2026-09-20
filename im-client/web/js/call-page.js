@@ -834,8 +834,8 @@
         // 麦克风不可用同款叉麦标记；摄像头不可用加叉摄标记（本端直接读 st 状态）
         var mm = st.members[user]; // self 无成员记录（mm=undefined），本端状态走 st 直接判断
         if (user !== 'self' && mm && (mm.muted || !mm.micOk)) tile.classList.add('muted');
-        if (user === 'self' && st.micUnavailable) tile.classList.add('muted'); // 麦克风不可用同款叉麦标记
-        if (user === 'self' ? st.camUnavailable : !!(mm && !mm.camOk)) tile.classList.add('cam-dead');
+        if (user === 'self' && (st.micUnavailable || st.muted)) tile.classList.add('muted'); // 叉麦：设备不可用或手动静音
+        if (user === 'self' ? (st.camUnavailable || st.camOff) : !!(mm && (!mm.camOk || mm.camMuted))) tile.classList.add('cam-dead'); // 叉摄：设备不可用或手动关摄
         tile.appendChild(mic);
         var cami = document.createElement('span');
         cami.className = 'mt-cam';
@@ -857,11 +857,33 @@
     }
 
     function markTileMuted(user, muted) {
-        var tile = $('meetGrid').querySelector('div.meet-tile[data-user="' + user + '"]');
-        if (!tile) return;
-        // 阶段一百五十一补丁：设备不可用同样维持叉麦（track.muted 解除不覆盖不可用标记）
+        // 阶段一百五十一补丁：全量刷该成员所有 tile（宫格+缩略图+主舞台），设备不可用维持叉麦
         var mm = st.members[user];
-        tile.classList.toggle('muted', !!muted || !!(mm && !mm.micOk));
+        var off = !!muted || !!(mm && !mm.micOk);
+        document.querySelectorAll('div.meet-tile[data-user="' + user + '"]').forEach(function (tile) {
+            tile.classList.toggle('muted', off);
+        });
+    }
+
+    // markTileCam 阶段一百五十一补丁：远端 tile 叉摄联动（camMuted=手动关摄 track 事件；camOk=设备可用性 meet_media）
+    function markTileCam(user) {
+        var mm = st.members[user];
+        if (!mm) return;
+        var off = !!mm.camMuted || !mm.camOk;
+        document.querySelectorAll('div.meet-tile[data-user="' + user + '"]').forEach(function (tile) {
+            tile.classList.toggle('cam-dead', off);
+        });
+    }
+
+    // refreshSelfMarks 阶段一百五十一补丁：手动静音/关摄后同步自己 tile 标记（远端走 track 事件，本端直接读 st 状态）
+    function refreshSelfMarks() {
+        if (!st.meet) return;
+        var micOff = st.micUnavailable || st.muted;
+        var camOff = st.camUnavailable || st.camOff;
+        document.querySelectorAll('div.meet-tile[data-user="self"]').forEach(function (tile) {
+            tile.classList.toggle('muted', micOff);
+            tile.classList.toggle('cam-dead', camOff);
+        });
     }
 
     // 与成员建连（asOfferer=我方发 offer；false 时只建 pc 等对方 offer 应答）
@@ -893,6 +915,15 @@
                 at.onmute = sync;
                 at.onunmute = sync;
                 sync();
+            }
+            // 阶段一百五十一补丁：远端摄像头状态联动（手动关摄 → 发送端 enabled=false → 接收端视频轨
+            // mute 事件，与音轨同款机制；设备不可用走 meet_media 信令归口，两机制互补）
+            var vt = m.stream.getVideoTracks()[0];
+            if (vt) {
+                var vsync = function () { m.camMuted = !!vt.muted; markTileCam(peer); };
+                vt.onmute = vsync;
+                vt.onunmute = vsync;
+                vsync();
             }
         };
         pc.onicecandidate = function (e) {
@@ -1116,7 +1147,7 @@
                 (p.members || []).forEach(function (mi) {
                     if (mi && mi.username && !st.members[mi.username]) {
                         st.members[mi.username] = {
-                            name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false, micOk: true, camOk: true,
+                            name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false, micOk: true, camOk: true, camMuted: false,
                             // 阶段一百四十八：成员级断网恢复状态初始化（restart 系列缺省会导致缓存/幂等判空报错）
                             asOfferer: false, needRestart: false, iceRestartActive: false,
                             lost: false, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
@@ -1147,7 +1178,7 @@
                     restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
                     lost: false, restartTimer: null, restartFirstTimer: null, giveupTimer: null,
                     sharing: false, // 阶段一百五十一：该成员正在共享屏幕（meet_share 信令归口，主舞台布局依据）
-                    micOk: true, camOk: true // 阶段一百五十一补丁：设备可用性（meet_media 信令归口；缺省视为可用防误显叉麦叉摄）
+                    micOk: true, camOk: true, camMuted: false // 阶段一百五十一补丁：设备可用性（meet_media 信令归口；缺省视为可用防误显叉麦叉摄）
                 };
                 renderMeetStage(); // 阶段一百五十一：舞台布局归口
                 meetConnect(mi.username, true);
@@ -1503,6 +1534,7 @@
         st.local.getAudioTracks().forEach(function (t) { t.enabled = !st.muted; });
         btnMute.classList.toggle('active', st.muted);
         btnMute.title = st.muted ? '取消静音' : '静音';
+        refreshSelfMarks(); // 阶段一百五十一补丁：自己 tile 同步叉麦标记
     });
     btnCam.addEventListener('click', function () {
         if (st.ended || !st.local) return;
@@ -1511,6 +1543,7 @@
         btnCam.classList.toggle('active', st.camOff);
         btnCam.title = st.camOff ? '开启摄像头' : '关闭摄像头';
         document.body.classList.toggle('cam-off', st.camOff);
+        refreshSelfMarks(); // 阶段一百五十一补丁：自己 tile 同步叉摄标记
     });
     btnHangup.addEventListener('click', function () { doHangup(); });
     // 阶段一百四十四：会议控制（共享屏幕 / 会中邀请）
