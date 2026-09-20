@@ -19846,7 +19846,7 @@
         // 采样已就绪：直接播放
         if (rpCoinsBuffer) { rpPlayCoinsSample(ctx); return; }
         // 首次异步加载：成功后缓存并播放，失败降级合成版（当前用备选采样 handle_coins_2）
-        fetch('assets/sound/rp_coins_2.ogg')
+        fetch('assets/sound/rp_coins.ogg')
             .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
             .then(function (ab) { return ctx.decodeAudioData(ab); })
             .then(function (buf) { rpCoinsBuffer = buf; rpPlayCoinsSample(ctx); })
