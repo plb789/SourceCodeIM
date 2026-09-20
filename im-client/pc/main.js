@@ -1139,30 +1139,38 @@ var ringPending = null;   // 当前来电信息 {call_id, from, from_name, from_
 var callWindowCloseArmed = false; // 关窗放行标记（页面挂断信令收口后 callClose 才真正销毁）
 
 // 通话窗尺寸按类型分形态：语音竖版小窗（微信同款），视频横版大窗（远端画面铺满）；
-// 会议形态（阶段一百四十四）：视频会议 1100×700 宫格大窗 / 语音会议 420×620 竖版窗
+// 会议形态（阶段一百四十四）：视频会议舞台大窗 / 语音会议 420×620 竖版窗。
+// 阶段一百五十一：视频会议 1100×700 → 1280×800（腾讯会议同款共享主舞台需要大画面，原尺寸共享内容看不清）
 function callWindowSize(callType, isMeet) {
-    if (isMeet) return callType === 'video' ? { width: 1100, height: 700 } : { width: 420, height: 620 };
+    // 阶段一百五十一补丁：会议视频默认 1366×860（原 1280×800），主舞台更宽；ensureCallWindow 仍按工作区收敛
+    if (isMeet) return callType === 'video' ? { width: 1366, height: 860 } : { width: 420, height: 620 };
     return callType === 'video' ? { width: 860, height: 620 } : { width: 360, height: 560 };
 }
 
 function ensureCallWindow(callType, isMeet) {
     var size = callWindowSize(callType, isMeet);
+    // 阶段一百五十一：尺寸按屏幕工作区收敛（小屏笔记本防溢出）
+    var wa0 = screen.getPrimaryDisplay().workArea;
+    var w0 = Math.min(size.width, wa0.width), h0 = Math.min(size.height, wa0.height);
     if (callWin && !callWin.isDestroyed()) {
         // 复用窗口切换形态（语音/视频互切场景）
+        // 阶段一百五十一：会议窗可拉伸/最大化（腾讯会议同款），1v1 保持微信同款固定窗
+        callWin.setResizable(!!isMeet);
+        callWin.setMaximizable(!!isMeet);
         var b = callWin.getBounds();
-        if (b.width !== size.width || b.height !== size.height) {
+        if (b.width !== w0 || b.height !== h0) {
             var wa = screen.getPrimaryDisplay().workArea;
-            callWin.setBounds({ x: Math.round(wa.x + (wa.width - size.width) / 2), y: Math.round(wa.y + (wa.height - size.height) / 2), width: size.width, height: size.height });
+            callWin.setBounds({ x: Math.round(wa.x + (wa.width - w0) / 2), y: Math.round(wa.y + (wa.height - h0) / 2), width: w0, height: h0 });
         }
         return callWin;
     }
     callWin = new BrowserWindow({
-        width: size.width,
-        height: size.height,
+        width: w0,
+        height: h0,
         show: false,
         frame: false,          // 无边框自绘（微信通话界面同款：深色沉浸 + 自绘控制条）
-        resizable: false,
-        maximizable: false,
+        resizable: !!isMeet,   // 原代码：resizable: false——阶段一百五十一会议窗可拉伸（1v1 仍固定）
+        maximizable: !!isMeet, // 原代码：maximizable: false——会议窗支持最大化
         fullscreenable: false,
         backgroundColor: '#161819',
         title: '通话',
@@ -1173,7 +1181,9 @@ function ensureCallWindow(callType, isMeet) {
         }
     });
     callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
-    callWin.loadURL(SERVER_URL + 'call-window.html');
+    // 阶段一百五十一补丁：加载带版本号查询串防 HTTP 缓存（会议窗页面从服务器加载，
+    // 无参数时 Chromium 可能命中旧缓存导致新布局不生效；与 WEB 端 web-call-bridge.js 的 ?v=1512 保持一致）
+    callWin.loadURL(SERVER_URL + 'call-window.html?v=1512');
     callWin.on('close', function (e) {
         if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，

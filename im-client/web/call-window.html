@@ -247,7 +247,73 @@
             padding: 44px 12px 12px;
             box-sizing: border-box;
         }
-        body.mode-meet .meet-wrap { display: block; }
+        body.mode-meet .meet-wrap { display: flex; } /* 原代码：display:block——阶段一百五十一舞台布局改双列 flex */
+        /* ===== 阶段一百五十一：腾讯会议同款舞台布局 =====
+           共享时主舞台（#stageBox：contain 大区域）占满剩余宽度，右侧 #meetSide 竖排缩略图列
+           （全员，点击切换主画面，选中白色描边——本窗强调色归口 .cw-btn.active 白）；
+           无人共享回退宫格（#meetGrid）。缩略图列滚动条为项目自绘样式（同 admin.css 细圆角悬浮滑块，
+           透明轨道，禁系统默认滚动条） */
+        .meet-main { flex: 1; min-width: 0; height: 100%; position: relative; }
+        .meet-stage-box { display: none; width: 100%; height: 100%; }
+        .meet-side {
+            width: 176px;
+            margin-left: 10px;
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        .meet-thumb {
+            width: 100%;
+            height: 99px; /* 16:9 等比缩略 */
+            flex-shrink: 0;
+            position: relative;
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: 10px;
+            box-sizing: border-box;
+        }
+        .meet-thumb.active { border-color: rgba(255, 255, 255, 0.9); }
+        .meet-thumb:hover { border-color: rgba(255, 255, 255, 0.4); }
+        .meet-thumb .meet-tile { width: 100%; height: 100%; }
+        .meet-side::-webkit-scrollbar { width: 8px; }
+        .meet-side::-webkit-scrollbar-track { background: transparent; }
+        .meet-side::-webkit-scrollbar-thumb {
+            background: rgba(138, 138, 138, 0.55);
+            border-radius: 5px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .meet-side::-webkit-scrollbar-thumb:hover { background-color: rgba(179, 179, 179, 0.8); }
+        /* 阶段一百五十一补丁：窄窗自适应——窗口越窄缩略图列越窄，宽度让给主舞台（共享画面更大）；
+           缩略图高度按 16:9 等比随列宽缩小 */
+        @media (max-width: 1100px) {
+            .meet-side { width: 140px; }
+            .meet-thumb { height: 77px; }
+        }
+        @media (max-width: 800px) {
+            .meet-side { width: 112px; margin-left: 8px; }
+            .meet-thumb { height: 61px; }
+        }
+        /* 顶部全屏按钮（腾讯会议同款右上角；hover 提亮） */
+        .meet-top .meet-fs {
+            margin-left: auto;
+            -webkit-app-region: no-drag; /* 阶段一百五十一补丁：从拖拽区豁免，恢复点击（Electron 无边框窗） */
+            background: rgba(255, 255, 255, 0.12);
+            border: none;
+            border-radius: 6px;
+            color: #dfe3e8;
+            width: 28px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            padding: 0;
+            flex-shrink: 0;
+        }
+        .meet-top .meet-fs:hover { background: rgba(255, 255, 255, 0.22); color: #ffffff; }
         .meet-grid {
             width: 100%;
             height: 100%;
@@ -337,7 +403,10 @@
            特异性低于 body.mode-video .cw-video-top，导致 1对1 视频下"多人会议"信息条误显示盖住对方名称；
            修复：排除会议模式后强制隐藏（同特异性但源码在后，稳定压过 L114 显示规则） */
         body:not(.mode-meet) .meet-top { display: none; }
-        body.mode-meet .meet-top { display: flex; }
+        /* 原代码：body.mode-meet .meet-top { display: flex; } —— 阶段一百五十一补丁加 z-index:31：
+           .cw-drag（z-index:30）盖在顶部 36px 吞掉拖拽事件，全屏按钮（y≈10~34 在带内）点不到；
+           meet-top 抬到其上后窗口拖拽由 meet-top（复用 .cw-video-top 自带 -webkit-app-region:drag）继续承担 */
+        body.mode-meet .meet-top { display: flex; z-index: 31; }
     </style>
 </head>
 <body class="mode-audio">
@@ -361,13 +430,21 @@
     <!-- 语音模式远端声音出口 -->
     <audio id="cwRemoteAudio" autoplay></audio>
 
-    <!-- 阶段一百四十四：多人会议视图（宫格 + 顶部信息条；mode-meet 时单人视图隐藏） -->
+    <!-- 阶段一百四十四：多人会议视图（宫格 + 顶部信息条；mode-meet 时单人视图隐藏）
+         阶段一百五十一：腾讯会议同款双列布局——#meetMain（宫格/主舞台二选一）+ #meetSide 缩略图列 -->
     <div class="meet-wrap" id="meetWrap">
-        <div class="meet-grid" id="meetGrid"></div>
+        <div class="meet-main" id="meetMain">
+            <div class="meet-grid" id="meetGrid"></div>
+            <div class="meet-stage-box" id="stageBox"></div>
+        </div>
+        <div class="meet-side" id="meetSide"></div>
     </div>
     <div class="cw-video-top meet-top" id="meetTop">
         <span class="cw-vname" id="meetTitle">多人会议</span>
         <span class="cw-vstatus" id="meetStatus"></span>
+        <button class="meet-fs" id="btnMeetFs" title="全屏">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        </button>
     </div>
 
     <!-- 底部控制条：静音 / 摄像头（视频）/ 共享屏幕（视频会议）/ 邀请成员（会议）/ 挂断 -->
@@ -392,6 +469,6 @@
     <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=4"></script>
+    <script src="js/call-page.js?v=5"></script>
 </body>
 </html>

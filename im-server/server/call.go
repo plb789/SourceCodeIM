@@ -106,6 +106,9 @@ func (s *Server) HandleCallSignal(c *Client, msg *protocol.Message) {
 		s.handleMeetAccept(from, &p)
 	case "meet_decline":
 		s.handleMeetDecline(from, &p)
+	// 阶段一百五十一：会议共享状态广播（腾讯会议同款主舞台布局归口：全员一致视图）
+	case "meet_share":
+		s.handleMeetShare(from, msg, &p)
 	default:
 		s.sendError(c, "未知通话信令")
 	}

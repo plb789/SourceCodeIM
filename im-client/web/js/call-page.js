@@ -72,6 +72,7 @@
         iceServers: [],      // 服务端经信令下发的 stun/turn 配置（阶段一百四十二二期；未启用为空数组纯 P2P）
         // ===== 阶段一百四十四：多人会议（Mesh 全员互连） =====
         meet: false,         // 会议模式开关（true 时 1v1 单人视图逻辑不参与）
+        stageUser: '',       // 阶段一百五十一：主舞台目标（'self'/成员账号；空=宫格模式，腾讯会议同款布局）
         groupId: 0,          // 发起群（会中邀请时回传主窗口定位群成员范围）
         meetTitle: '',       // 会议标题（群名，主窗口下发）
         // username -> {name, avatar, pc, stream, pendingCands, muted,
@@ -644,7 +645,7 @@
             st.micUnavailable = !r.mic;
             st.camUnavailable = st.callType === 'video' && !r.cam;
             applyMediaMarks();
-            renderMeetGrid(); // 无媒体也渲染（自己 tile 出"无视频可用"占位/语音 tile 出头像）
+            renderMeetStage(); // 无媒体也渲染（自己 tile 出"无视频可用"占位/语音 tile 出头像）；阶段一百五十一舞台布局归口
             // 门闩放行：无媒体也照常建连（offer 经 attachLocalMedia 补 recvonly 收发器），设备状态不阻断会议
             if (!localReady) {
                 localReady = true;
@@ -688,7 +689,85 @@
         });
     }
 
-    function buildMeetTile(user, name, avatar, stream, isSelf, w, h) {
+    // ===== 阶段一百五十一：腾讯会议同款舞台布局 =====
+    // 双模式渲染入口：无人共享 → 宫格（renderMeetGrid 原样）；有人共享 → 主舞台大区域 + 右侧缩略图列。
+    // 成员增减/媒体到达/静音/中断/共享开关等任何变化统一走本入口，保证舞台与宫格同步刷新
+    function renderMeetStage() {
+        var side = $('meetSide');
+        var stageBox = $('stageBox');
+        var sharers = [];
+        if (sharing && screenStream) sharers.push('self');
+        for (var u in st.members) {
+            if (st.members[u].sharing) sharers.push(u);
+        }
+        if (!sharers.length) {
+            // 宫格模式：舞台目标清空 + 缩略图列隐藏
+            st.stageUser = '';
+            side.style.display = 'none';
+            side.innerHTML = '';
+            stageBox.style.display = 'none';
+            stageBox.innerHTML = '';
+            $('meetGrid').style.display = 'flex';
+            renderMeetGrid();
+            return;
+        }
+        // 舞台目标失效（其共享已停止）：回退最新共享者；仍有效则保持（手动切换不被抢回）
+        if (sharers.indexOf(st.stageUser) < 0) st.stageUser = sharers[sharers.length - 1];
+        $('meetGrid').style.display = 'none';
+        side.style.display = 'flex';
+        stageBox.style.display = 'block';
+        stageBox.innerHTML = '';
+        var su = st.stageUser;
+        var si = meetUserOf(su);
+        var stageTile = buildMeetTile(su, si.name, si.avatar, stageStreamOf(su), su === 'self', '100%', '100%', false);
+        stageTile.classList.add('meet-stage');
+        stageBox.appendChild(stageTile);
+        // 右侧缩略图：自己 + 全员（silent 静音防双重混音；点击切换主舞台）
+        side.innerHTML = '';
+        var thumbs = ['self'];
+        for (var u2 in st.members) thumbs.push(u2);
+        thumbs.forEach(function (tu) {
+            var ti = meetUserOf(tu);
+            var th = document.createElement('div');
+            th.className = 'meet-thumb' + (tu === su ? ' active' : '');
+            th.title = '点击切换主画面';
+            th.appendChild(buildMeetTile(tu, ti.name, ti.avatar, stageStreamOf(tu), tu === 'self', '100%', '100%', true));
+            th.onclick = function () {
+                if (st.stageUser !== tu) {
+                    st.stageUser = tu;
+                    renderMeetStage();
+                }
+            };
+            side.appendChild(th);
+        });
+    }
+
+    // 成员显示信息归口（'self'=自己，其余查成员表）
+    function meetUserOf(u) {
+        if (u === 'self') return { name: st.selfName || '我', avatar: st.selfAvatar || '' };
+        var m = st.members[u];
+        return m ? { name: m.name || u, avatar: m.avatar || '' } : { name: u, avatar: '' };
+    }
+
+    // 成员当前媒体流归口（自己共享中预览屏幕画面；远端共享时其流即屏幕轨——replaceTrack 换轨同源）
+    function stageStreamOf(u) {
+        if (u === 'self') return (sharing && screenStream) ? screenStream : st.local;
+        var m = st.members[u];
+        return m ? m.stream : null;
+    }
+
+    // 全屏切换（腾讯会议同款：右上角按钮/双击画面，Esc 退出；WEB 端 iframe 需 allow fullscreen 授权）
+    function toggleMeetFullscreen() {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(function () { });
+        }
+    }
+
+    // silent：缩略图专用静音（阶段一百五十一舞台布局——同一成员流在主舞台已有一路发声，
+    // 缩略图再挂非静音媒体元素会双重混音回声）
+    function buildMeetTile(user, name, avatar, stream, isSelf, w, h, silent) {
         var tile = document.createElement('div');
         tile.className = 'meet-tile';
         tile.style.width = w;
@@ -698,7 +777,7 @@
             var v = document.createElement('video');
             v.autoplay = true;
             v.playsInline = true;
-            if (isSelf) v.muted = true;
+            if (isSelf || silent) v.muted = true; // 原：if (isSelf) v.muted = true
             if (stream) v.srcObject = stream;
             tile.appendChild(v);
             // 摄像头不可用：本地画面出"无视频可用"占位（通信不阻断，仅此一处标记）
@@ -731,6 +810,7 @@
             if (stream) {
                 var a = document.createElement('audio');
                 a.autoplay = true;
+                if (silent) a.muted = true; // 缩略图静音（同视频分支，防双重混音）
                 a.srcObject = stream;
                 tile.appendChild(a);
             }
@@ -857,9 +937,9 @@
             // 原代码：内联 forEach 只认 sd.track 非空的 sender，漏掉无摄像头的空轨占位
             // （placeholder sender 无轨）——统一收口到 syncShareToPc（占位也作为替换目标）
             syncShareToPc(pc);
-            renderMeetGrid();
+            renderMeetStage(); // 阶段一百五十一：舞台布局归口（原 renderMeetGrid 仅宫格）
         });
-        renderMeetGrid();
+        renderMeetStage();
     }
 
     function flushMeetCands(peer) {
@@ -949,7 +1029,7 @@
         if (!m) return;
         var changed = m.lost !== !!lost;
         m.lost = !!lost;
-        if (changed) renderMeetGrid();
+        if (changed) renderMeetStage(); // 阶段一百五十一：舞台布局归口
     }
     function clearMeetLost(peer) {
         markMeetLost(peer, false);
@@ -1000,7 +1080,7 @@
         stopMeetRestartLoop(peer); // 阶段一百四十八：停成员级 restart 重试循环
         try { if (m.pc) m.pc.close(); } catch (e) { }
         delete st.members[peer];
-        renderMeetGrid();
+        renderMeetStage(); // 阶段一百五十一：舞台布局归口（缩略图列同步移除该成员）
         var any = false;
         for (var k in st.members) { any = true; break; }
         if (!any) {
@@ -1027,14 +1107,15 @@
                             // 阶段一百四十八：成员级断网恢复状态初始化（restart 系列缺省会导致缓存/幂等判空报错）
                             asOfferer: false, needRestart: false, iceRestartActive: false,
                             lost: false, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
-                            restartTimer: null, restartFirstTimer: null, giveupTimer: null
+                            restartTimer: null, restartFirstTimer: null, giveupTimer: null,
+                            sharing: false // 阶段一百五十一：该成员正在共享屏幕（meet_share 信令归口，主舞台布局依据）
                         };
                     }
                 });
                 st.state = 'connecting';
                 toneStop();
                 setMeetStatus('正在建立连接…');
-                renderMeetGrid();
+                renderMeetStage(); // 阶段一百五十一：舞台布局归口
                 // 修复：应答方也必须有 pc 才能处理 offer（此前漏建，offer 到达时被 !m.pc 丢弃，
                 // 双方永久互等卡"等待成员加入"）；asOfferer=false 仅建 pc 不发 offer，幂等安全
                 for (var ru in st.members) {
@@ -1051,9 +1132,10 @@
                     // 阶段一百四十八：成员级断网恢复状态初始化（同 room_info）
                     asOfferer: false, needRestart: false, iceRestartActive: false,
                     restartOffer: null, restartCands: [], lastRestartOffer: '', lastRestartAnswer: null,
-                    lost: false, restartTimer: null, restartFirstTimer: null, giveupTimer: null
+                    lost: false, restartTimer: null, restartFirstTimer: null, giveupTimer: null,
+                    sharing: false // 阶段一百五十一：该成员正在共享屏幕（meet_share 信令归口，主舞台布局依据）
                 };
-                renderMeetGrid();
+                renderMeetStage(); // 阶段一百五十一：舞台布局归口
                 meetConnect(mi.username, true);
                 break;
             case 'offer': {
@@ -1129,6 +1211,20 @@
                 break;
             case 'meet_skipped':
                 setMeetStatus('部分成员无法加入：' + (p.names || []).join('、'));
+                break;
+            case 'meet_share':
+                // 阶段一百五十一：成员共享状态广播（frame.from_user=共享者，服务端转发其他成员）——
+                // 主舞台布局归口：开启则抢占舞台，关闭则由 renderMeetStage 回退宫格/下一共享者
+                var msu = st.members[from];
+                if (!msu) break;
+                msu.sharing = !!p.on;
+                if (p.on) {
+                    st.stageUser = from;
+                    setMeetStatus((msu.name || from) + ' 正在共享屏幕');
+                } else if (st.stageUser === from) {
+                    st.stageUser = '';
+                }
+                renderMeetStage();
                 break;
             case 'error':
                 // 服务端归口错误帧（reason 为中文文案）：全员拒绝/60s 无人接听自动解散等场景收口会议窗
@@ -1230,7 +1326,9 @@
         btnShare.title = '共享屏幕';
         btnCam.disabled = false;
         // 本地预览切回摄像头（原手动改 srcObject——占位元素残留盖住预览，统一重绘解决）
-        renderMeetGrid();
+        // 阶段一百五十一：广播共享关闭（服务端转发其他成员撤主舞台）+ 舞台布局归口（原 renderMeetGrid 仅宫格）
+        if (st.meet) send('meet_share', { on: false });
+        renderMeetStage();
     }
     function toggleMeetShare() {
         // 原代码：if (st.ended || !st.local || !st.local.getVideoTracks().length) return;
@@ -1252,8 +1350,11 @@
             btnShare.title = '停止共享';
             btnCam.disabled = true; // 共享期间禁摄像头开关（同一视频轨道）
             // 本地预览切共享画面（原手动改 srcObject——无摄像头时"无视频可用"占位残留盖住预览，
-            // 统一走 renderMeetGrid 重绘：self tile 流参数与占位显隐一次到位）
-            renderMeetGrid();
+            // 统一走重绘：self tile 流参数与占位显隐一次到位）
+            // 阶段一百五十一：广播共享开启（全员一致视图，服务端转发其他成员）+ 自己抢占主舞台
+            if (st.meet) send('meet_share', { on: true });
+            st.stageUser = 'self';
+            renderMeetStage();
         }).catch(function (e) {
             // 阶段一百四十九：失败可见化（原静默吞错——点击无反应用户无从判断）
             var msg = '屏幕共享不可用';
@@ -1391,6 +1492,10 @@
     btnHangup.addEventListener('click', function () { doHangup(); });
     // 阶段一百四十四：会议控制（共享屏幕 / 会中邀请）
     btnShare.addEventListener('click', function () { toggleMeetShare(); });
+    // 阶段一百五十一：腾讯会议同款全屏（右上角按钮 / 双击画面切换，Esc 退出）
+    var btnMeetFs = $('btnMeetFs');
+    if (btnMeetFs) btnMeetFs.addEventListener('click', toggleMeetFullscreen);
+    $('meetWrap').addEventListener('dblclick', toggleMeetFullscreen);
     btnInvite.addEventListener('click', function () {
         // 请求主窗口弹群成员选择弹窗（已在会成员一并回传供过滤，重复邀请由服务端归口跳过）
         if (st.ended || !st.meet) return;

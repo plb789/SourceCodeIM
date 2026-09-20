@@ -52,6 +52,9 @@ type meetRoom struct {
 	offlineTimers map[string]*time.Timer
 	// ringTimer 阶段一百五十：响铃超时定时器（任一人 accept 或解散时停止；防无人接听时忙态与响铃卡片永久残留）
 	ringTimer *time.Timer
+	// Sharing 阶段一百五十一补丁：正在共享屏幕的成员表（username → true）——meet_share 广播只发
+	// 在会成员，中途入会者收不到入会前开始的共享广播；入会时按此快照向新人补发，保证舞台布局全员一致
+	Sharing map[string]bool
 }
 
 var (
@@ -181,6 +184,7 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 		GroupID:  body.GroupID,
 		Members:  map[string]bool{from: true},
 		Invited:  map[string]bool{},
+		Sharing:  map[string]bool{},
 	}
 	for _, m := range invitees {
 		room.Invited[m] = true
@@ -336,6 +340,12 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 	}
 	callType := room.CallType
 	caller := room.Caller
+	// 阶段一百五十一补丁：共享快照（锁内取名单）——中途入会者补发用，
+	// meet_share 开启广播只发在会成员，晚到者收不到，需按快照补齐
+	sharers := make([]string, 0, len(room.Sharing))
+	for sh := range room.Sharing {
+		sharers = append(sharers, sh)
+	}
 	meetMu.Unlock()
 
 	// 已在会成员收 meet_join（from=新人），各自向新人发 offer（建连方向规则）
@@ -370,6 +380,16 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 		"ice":       TurnICEServers(),
 	})
 	s.callForward(from, from, string(ri))
+	// 阶段一百五十一补丁：向新人补发当前共享快照（在 room_info 之后发出，同一 WS 顺序到达——
+	// 前端先建成员再标记 sharing，直接进主舞台布局，与同时入会场景一致；from_user=共享者）
+	for _, sh := range sharers {
+		sc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_share",
+			"call_id": p.CallID,
+			"on":      true,
+		})
+		s.callForward(sh, from, string(sc))
+	}
 	logger.Info("会议入会：%s 加入房间 %s（当前 %d 人）", from, p.CallID, len(members))
 }
 
@@ -402,6 +422,47 @@ func (s *Server) handleMeetDecline(from string, p *callSignalPayload) {
 		s.callForward(from, caller, string(errB))
 	}
 	logger.Info("会议拒绝：%s 拒绝房间 %s", from, p.CallID)
+}
+
+// handleMeetShare 阶段一百五十一：会议共享状态广播（上行 {action:'meet_share', call_id, on:true/false}）。
+// 校验发送者是房间成员后，把共享开/关状态转发给房间内其他所有成员（from_user=共享者）——
+// 前端据此把共享画面切主舞台大区域、参会者切右侧缩略图（腾讯会议同款布局的全员一致视图）
+func (s *Server) handleMeetShare(from string, msg *protocol.Message, p *callSignalPayload) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	_ = json.Unmarshal([]byte(msg.Content), &body)
+	// 原代码：meetMu.RLock() 只读转发——阶段一百五十一补丁升级写锁：共享状态落房间快照
+	// （Sharing 表），新成员入会时补发，解决中途加入者收不到入会前共享广播、退回宫格布局的问题
+	meetMu.Lock()
+	room, ok := meetRooms[p.CallID]
+	if !ok || !room.Members[from] {
+		meetMu.Unlock()
+		return // 非房间成员/房间已解散：静默丢弃
+	}
+	if room.Sharing == nil {
+		room.Sharing = map[string]bool{} // 兼容旧房间的惰性初始化
+	}
+	if body.On {
+		room.Sharing[from] = true
+	} else {
+		delete(room.Sharing, from)
+	}
+	others := make([]string, 0, len(room.Members))
+	for m := range room.Members {
+		if m != from {
+			others = append(others, m)
+		}
+	}
+	meetMu.Unlock()
+	content, _ := json.Marshal(map[string]interface{}{
+		"action":  "meet_share",
+		"call_id": p.CallID,
+		"on":      body.On,
+	})
+	for _, m := range others {
+		s.callForward(from, m, string(content))
+	}
 }
 
 // meetRelayMedia 会议媒体信令定向转发：content.target 指定接收方，双方均为房间成员才放行
@@ -440,6 +501,7 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 		return
 	}
 	delete(room.Members, from)
+	delete(room.Sharing, from) // 阶段一百五十一补丁：退出清共享快照（防滞留致后续入会者收到失效共享标记）
 	delete(room.Invited, from)
 	delete(callUserBusy, from)
 	// 阶段一百四十八：成员退出时停其断网宽限定时器（防定时器滞留误触发/泄漏）

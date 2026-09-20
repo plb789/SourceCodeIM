@@ -28,7 +28,12 @@
 
     // 通话窗尺寸按类型分形态（与 PC main.js callWindowSize 完全同款：语音竖版小窗/视频横版大窗/会议宫格）
     function frameSize(callType, isMeet) {
-        if (isMeet) return callType === 'video' ? { w: 1100, h: 700 } : { w: 420, h: 620 };
+        // 阶段一百五十一：会议视频 1100×700 → 1366×860（腾讯会议同款共享主舞台需要大画面，原 1280×800），
+        // 并按视口收敛（浏览器弹层不超出可视区，边距 40→24 再让一档给画面）；语音会议与 1v1 各形态不变
+        if (isMeet) {
+            if (callType !== 'video') return { w: 420, h: 620 };
+            return { w: Math.min(1366, window.innerWidth - 24), h: Math.min(860, window.innerHeight - 24) };
+        }
         return callType === 'video' ? { w: 860, h: 620 } : { w: 360, h: 560 };
     }
 
@@ -112,7 +117,9 @@
         var r = callFrame.getBoundingClientRect();
         dragBar.style.left = r.left + 'px';
         dragBar.style.top = r.top + 'px';
-        dragBar.style.width = r.width + 'px';
+        // 阶段一百五十一补丁：右侧预留 56px 不铺把手——会议窗右上角全屏按钮位于顶部 36px 拖拽带内，
+        // 把手是父页透明层会吞掉 iframe 内点击；让位后按钮可点（拖窗仍可用其余顶部区域）
+        dragBar.style.width = Math.max(0, r.width - 56) + 'px';
         dragBar.style.height = '36px';
     }
     function removeDragBar() {
@@ -145,8 +152,10 @@
         callFrame = document.createElement('iframe');
         callFrame.className = 'wcb-frame';
         // iframe 权限策略：媒体设备 + 共享屏幕（同源默认 self，显式声明稳妥）
-        callFrame.allow = 'microphone; camera; display-capture';
-        callFrame.src = 'call-window.html';
+        // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
+        callFrame.allow = 'microphone; camera; display-capture; fullscreen';
+        // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS 改动浏览器端立即生效）
+        callFrame.src = 'call-window.html?v=1512';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
