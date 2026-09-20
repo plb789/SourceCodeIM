@@ -543,6 +543,11 @@ contextBridge.exposeInMainWorld('desktop', {
     callSend: function (frame) {
         ipcRenderer.send('call:send', frame);
     },
+    // 阶段一百五十一补丁：会议共享期间窗口内容保护开关（防"窗口套窗口"递归画面，
+    // 走 Windows WDA_EXCLUDEFROMCAPTURE——捕获 API 看不到本窗口但本地正常显示）
+    setShareProtected: function (on) {
+        ipcRenderer.send('call:share-protect', !!on);
+    },
     // 页面收口完成：销毁通话窗（挂断信令已发出）
     callClose: function () {
         ipcRenderer.send('call:close');

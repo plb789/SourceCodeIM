@@ -155,7 +155,7 @@
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
         // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS/JS 改动浏览器端立即生效）
-        callFrame.src = 'call-window.html?v=1516';
+        callFrame.src = 'call-window.html?v=1519';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);

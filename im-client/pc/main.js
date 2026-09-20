@@ -1183,7 +1183,7 @@ function ensureCallWindow(callType, isMeet) {
     callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
     // 阶段一百五十一补丁：加载带版本号查询串防 HTTP 缓存（会议窗页面从服务器加载，
     // 无参数时 Chromium 可能命中旧缓存导致新布局不生效；与 WEB 端 web-call-bridge.js 保持一致）
-    callWin.loadURL(SERVER_URL + 'call-window.html?v=1516');
+    callWin.loadURL(SERVER_URL + 'call-window.html?v=1519');
     callWin.on('close', function (e) {
         if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，
@@ -1340,16 +1340,36 @@ ipcMain.on('call:send', function (e, frame) {
     }
 });
 
+// ===== 阶段一百五十一补丁：会议共享期间窗口内容保护（防"窗口套窗口"递归画面） =====
+// 共享源为整个主屏时，悬浮其上的会议窗会进入共享画面形成递归；setContentProtection(true)
+// 走 Windows WDA_EXCLUDEFROMCAPTURE——捕获类 API（getDisplayMedia/desktopCapturer/系统截图）
+// 看不到本窗口，窗口本地正常显示（腾讯会议同款）。共享结束或窗口销毁自动恢复
+ipcMain.on('call:share-protect', function (e, on) {
+    var w = BrowserWindow.fromWebContents(e.sender);
+    if (w && !w.isDestroyed()) w.setContentProtection(!!on);
+});
+
 // ===== 阶段一百四十四：会议桌面共享（getDisplayMedia 放行） =====
 // Electron 下渲染层 getDisplayMedia 默认被拒，须注册 display-media 请求处理器静默放行主屏
 //（一期共享整屏不弹选择器，微信同款一键共享；sources 顺序首项即主屏）
 // 注意：session.defaultSession 仅在 app ready 后可访问（顶层访问抛
 // "Session can only be received when app is ready" 且主进程启动即崩），故注册归口 whenReady 回调
 function registerDisplayMediaHandler() {
+    // 阶段一百五十一补丁：权限显式归口放行——display-capture 权限请求/检查无 handler 时
+    // 新版 Electron 可能走默认拒绝路径（WEB 端浏览器正常而 PC 报「屏幕共享不可用」的嫌疑之一）；
+    // 其余权限维持既有默认放行行为不变
+    session.defaultSession.setPermissionRequestHandler(function (wc, permission, callback) {
+        callback(true); // 原行为：无 handler 时默认放行——显式归口保持一致
+    });
+    session.defaultSession.setPermissionCheckHandler(function (wc, permission) {
+        return true; // 原行为：无 handler 时默认放行——显式归口保持一致
+    });
     session.defaultSession.setDisplayMediaRequestHandler(function (options, callback) {
         desktopCapturer.getSources({ types: ['screen'] }).then(function (sources) {
             if (!sources.length) { callback({}); return; }
-            callback({ source: sources[0] });
+            // 阶段一百五十一补丁：callback 键名改为官方文档形态 video（原 callback({ source })
+            // 在新版 Electron 中为无效载荷，getDisplayMedia 被拒报「屏幕共享不可用」）
+            callback({ video: sources[0] }); // 原代码：callback({ source: sources[0] })
         }).catch(function () { callback({}); });
     });
 }

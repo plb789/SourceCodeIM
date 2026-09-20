@@ -478,6 +478,8 @@
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
         st.members = {};
+        // 阶段一百五十一补丁：收口解除内容保护（共享中挂断未走 stopMeetShare 时防保护残留）
+        if (window.desktop && window.desktop.setShareProtected) window.desktop.setShareProtected(false);
         sharing = false;
         if (screenStream) {
             try { screenStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
@@ -526,6 +528,8 @@
             try { if (st.members[mu].pc) st.members[mu].pc.close(); } catch (e) { }
         }
         st.members = {};
+        // 阶段一百五十一补丁：换场解除内容保护（共享中未走 stopMeetShare 直接换场时防保护残留）
+        if (window.desktop && window.desktop.setShareProtected) window.desktop.setShareProtected(false);
         sharing = false;
         if (screenStream) {
             try { screenStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
@@ -1373,6 +1377,8 @@
     function stopMeetShare() {
         if (!sharing) return;
         sharing = false;
+        // 阶段一百五十一补丁：共享结束解除本窗内容保护（窗口恢复可被捕获/截图）
+        if (window.desktop && window.desktop.setShareProtected) window.desktop.setShareProtected(false);
         var camTrack = st.local ? st.local.getVideoTracks()[0] : null;
         // 原代码：meetReplaceVideoTrack(camTrack || null)——无摄像头停止共享后对端画面定格
         // 在屏轨最后一帧；改塞回黑帧占位（对端回到明确的黑屏，与未共享时一致）
@@ -1402,6 +1408,9 @@
             }
             screenStream = ss;
             sharing = true;
+            // 阶段一百五十一补丁：共享期间本窗内容保护（防"窗口套窗口"递归画面；
+            // WDA_EXCLUDEFROMCAPTURE——捕获画面不含会议窗但本地正常显示；仅 PC 端有此能力）
+            if (window.desktop && window.desktop.setShareProtected) window.desktop.setShareProtected(true);
             var vt = ss.getVideoTracks()[0];
             meetReplaceVideoTrack(vt);
             vt.onended = function () { stopMeetShare(); }; // 用户点系统停止条自动收
@@ -1416,9 +1425,11 @@
             renderMeetStage();
         }).catch(function (e) {
             // 阶段一百四十九：失败可见化（原静默吞错——点击无反应用户无从判断）
+            // 阶段一百五十一补丁：兜底文案附带错误名（PC 端排障定位）
             var msg = '屏幕共享不可用';
             if (e && e.name === 'NotAllowedError') msg = '屏幕共享未授权（浏览器拒绝或已取消）';
             else if (e && e.name === 'NotSupportedError') msg = '当前环境不支持屏幕共享';
+            else if (e && (e.name || e.message)) msg = '屏幕共享不可用（' + (e.name || e.message) + '）';
             setMeetStatus(msg);
         });
     }
