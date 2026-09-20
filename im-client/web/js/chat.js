@@ -19704,6 +19704,7 @@
     rpOpenClose.addEventListener('click', rpCloseOpenDialog);
     rpOpenBtn.addEventListener('click', function () {
         if (!rpOpenCtx) return;
+        rpGetAudioCtx(); // 用户手势内预解锁 AudioContext（领取回执为异步帧，届时不可再解锁）
         rpOpenBtn.disabled = true; // 领取中防重复点击（响应/错误回执后恢复）
         IMSocket.send({ msg_type: MSG.RED_PACKET_OPEN, content: JSON.stringify({ packet_id: rpOpenCtx.packetId }) });
     });
@@ -19783,6 +19784,140 @@
         else if (!rpSendMask.classList.contains('hidden')) rpCloseSendDialog();
     });
 
+    // ---- 红包音效（WebAudio 合成，零资源文件：微信同款"开红包"硬币声与"收红包"提示音） ----
+    var rpAudioCtx = null;
+    function rpGetAudioCtx() {
+        try {
+            if (!rpAudioCtx) rpAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (rpAudioCtx.state === 'suspended') rpAudioCtx.resume();
+        } catch (e) { return null; }
+        return rpAudioCtx;
+    }
+    // 合成混响脉冲响应：预延迟 15ms + 指数衰减立体声噪声（模拟金币落入钱袋的小空间反射，零资源文件）
+    function rpMakeReverbIR(ctx, seconds, decay) {
+        var len = Math.floor(ctx.sampleRate * seconds);
+        var preDelay = Math.floor(ctx.sampleRate * 0.015); // 预延迟：直达声与反射声分离，回响更清晰
+        var buf = ctx.createBuffer(2, len, ctx.sampleRate);
+        for (var ch = 0; ch < 2; ch++) {
+            var d = buf.getChannelData(ch);
+            for (var i = 0; i < len; i++) {
+                d[i] = i < preDelay ? 0 : (Math.random() * 2 - 1) * Math.pow(1 - (i - preDelay) / (len - preDelay), decay);
+            }
+        }
+        return buf;
+    }
+    // 单枚金币"铃"：明亮高频铃音 + 不谐和泛音（1x/1.5x/2.7x）+ 4kHz 瞬态噪声，速衰清脆
+    // out：输出节点（金币雨总线，干湿混合后出声）
+    function rpGoldCoin(ctx, when, freq, vol, out) {
+        // 瞬态撞击声：4ms 白噪声经 4kHz 高通，模拟金币碰撞起始的"嗒"
+        var nLen = Math.floor(ctx.sampleRate * 0.004);
+        var buf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+        var ch = buf.getChannelData(0);
+        for (var i = 0; i < nLen; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+        var src = ctx.createBufferSource();
+        src.buffer = buf;
+        var hp = ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.value = 4000;
+        var ng = ctx.createGain();
+        ng.gain.value = vol * 0.8;
+        src.connect(hp); hp.connect(ng); ng.connect(out);
+        src.start(when);
+        // 铃音泛音簇：随机微失谐避免机械感，70ms 速衰
+        [[1, 1], [1.5, 0.55], [2.7, 0.24]].forEach(function (p) {
+            var osc = ctx.createOscillator();
+            var g = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq * p[0] * (0.98 + Math.random() * 0.04);
+            g.gain.setValueAtTime(0.0001, when);
+            g.gain.exponentialRampToValueAtTime(vol * p[1], when + 0.003);
+            g.gain.exponentialRampToValueAtTime(0.0001, when + 0.07);
+            osc.connect(g); g.connect(out);
+            osc.start(when); osc.stop(when + 0.09);
+        });
+    }
+    // 金币雨采样缓存（Kenney CC0 采样 handle_coins，首次加载解码后复用，避免重复请求）
+    var rpCoinsBuffer = null;
+    // 开红包音效：优先播放真实金币采样（assets/sound/rp_coins.ogg，Kenney RPG Audio，CC0 许可）——
+    // 真实采样的碰撞质感远超程序合成；采样加载/解码失败时降级为合成金币雨
+    function rpPlayOpenSound() {
+        var ctx = rpGetAudioCtx();
+        if (!ctx) return;
+        // 采样已就绪：直接播放
+        if (rpCoinsBuffer) { rpPlayCoinsSample(ctx); return; }
+        // 首次异步加载：成功后缓存并播放，失败降级合成版（当前用备选采样 handle_coins_2）
+        fetch('assets/sound/rp_coins_2.ogg')
+            .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
+            .then(function (ab) { return ctx.decodeAudioData(ab); })
+            .then(function (buf) { rpCoinsBuffer = buf; rpPlayCoinsSample(ctx); })
+            .catch(function () { rpPlayOpenSynth(ctx); });
+    }
+    // 播放金币采样：增益 0.9（采样自身动态已调好，不再叠加混响）
+    function rpPlayCoinsSample(ctx) {
+        var src = ctx.createBufferSource();
+        src.buffer = rpCoinsBuffer;
+        var g = ctx.createGain();
+        g.gain.value = 0.9;
+        src.connect(g); g.connect(ctx.destination);
+        src.start();
+    }
+    // 合成金币雨（降级方案）：14 枚金币先密后疏哗啦落下 + 尾部落定收口 + 卷积混响
+    function rpPlayOpenSynth(ctx) {
+        var ctx = rpGetAudioCtx();
+        if (!ctx) return;
+        var t0 = ctx.currentTime + 0.02;
+        // 混响总线：干声（0.75）保清脆；湿声经卷积后叠低通（钱袋布料吸收高频，回响偏暗偏闷出"袋内感"）
+        var master = ctx.createGain();
+        var dry = ctx.createGain(); dry.gain.value = 0.75;
+        var wet = ctx.createGain(); wet.gain.value = 0.6;
+        var conv = ctx.createConvolver();
+        conv.buffer = rpMakeReverbIR(ctx, 1.4, 3.2);
+        var lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 1200; // 回响只留低频：厚布袋闷嗡感（1200=厚布袋 / 1800=薄布袋）
+        lp.Q.value = 0.5;
+        master.connect(dry); dry.connect(ctx.destination);
+        master.connect(conv); conv.connect(lp); lp.connect(wet); wet.connect(ctx.destination);
+        // 先密后疏时间轴（前 200ms 密集 8 枚，之后渐疏 6 枚，重力感）
+        var marks = [0, 0.03, 0.06, 0.10, 0.13, 0.16, 0.20, 0.24, 0.30, 0.37, 0.44, 0.52, 0.60, 0.68];
+        marks.forEach(function (m) {
+            rpGoldCoin(ctx, t0 + m + Math.random() * 0.012, 4800 + Math.random() * 2400, 0.05 + Math.random() * 0.07, master);
+        });
+        // 尾部落定：0.76s 一枚稍大的落定铃 + 低频闷响（钱袋触地感，配合低通回响加强袋内低频嗡）
+        rpGoldCoin(ctx, t0 + 0.76, 3200, 0.13, master);
+        var osc = ctx.createOscillator();
+        var g = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(190, t0 + 0.78);
+        osc.frequency.exponentialRampToValueAtTime(85, t0 + 0.95);
+        g.gain.setValueAtTime(0.0001, t0 + 0.78);
+        g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.82);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.08);
+        osc.connect(g); g.connect(master);
+        osc.start(t0 + 0.78); osc.stop(t0 + 1.1);
+    }
+    // 收红包音效：上行两音"叮-咚"（比普通消息音更轻快醒目，红包专属提示）
+    function rpPlayReceiveSound() {
+        var ctx = rpGetAudioCtx();
+        if (!ctx) return;
+        var t0 = ctx.currentTime + 0.02;
+        // [频率, 起始偏移, 时长]：830Hz 短音 + 1245Hz 长音（上行小六度听感）
+        [[830, 0, 0.1], [1245, 0.09, 0.17]].forEach(function (n) {
+            [1, 2].forEach(function (mult, i) {
+                var osc = ctx.createOscillator();
+                var g = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = n[0] * mult;
+                var v = i === 0 ? 0.14 : 0.05; // 2 倍频低音量润音色
+                g.gain.setValueAtTime(0.0001, t0 + n[1]);
+                g.gain.exponentialRampToValueAtTime(v, t0 + n[1] + 0.012);
+                g.gain.exponentialRampToValueAtTime(0.0001, t0 + n[1] + n[2]);
+                osc.connect(g); g.connect(ctx.destination);
+                osc.start(t0 + n[1]); osc.stop(t0 + n[1] + n[2] + 0.02);
+            });
+        });
+    }
+
     // ---- 信令处理 ----
     // 86 红包消息实时渲染（与群聊图片同口径：会话归属匹配 + msg_id 去重 + 服务端昵称合并）
     IMSocket.on(MSG.RED_PACKET, function (msg) {
@@ -19803,6 +19938,8 @@
         var el = rpAppendBubble(msg.from_user, rp, isMine0 ? 'self' : 'other', !isGroupTarget(target));
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        // 收红包音效：仅他人发来的红包播提示音（自己发的红包微信无音效；历史渲染不走此处不播）
+        if (!isMine0) rpPlayReceiveSound();
     });
 
     // 87 下行归口（act 区分）：send=发送回执（余额联动）/ open=领取结果 / detail=详情响应
@@ -19817,6 +19954,7 @@
         if (d.act === 'open') {
             rpOpenBtn.disabled = false;
             if (!d.ok) { showToast(d.err || '领取失败'); return; }
+            rpPlayOpenSound(); // 领取成功：微信同款硬币落袋声（ctx 已在"開"点击手势中解锁）
             if (d.balance != null) setPointsBalance(d.balance);
             rpMyClaims[d.packet_id] = d.amount;
             rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
