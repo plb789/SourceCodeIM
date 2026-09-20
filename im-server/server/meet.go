@@ -35,6 +35,10 @@ const meetMaxMembers = 8
 // ICE restart 兜底）；取 30s 与 1v1 callOfflineGrace 及客户端成员看门狗对齐
 const meetOfflineGrace = 30 * time.Second
 
+// meetRingTimeout 阶段一百五十：会议邀请响铃超时——60s 内无人 accept 自动解散（1v1 callRingTimeout
+// 同款兜底）。否则发起人会议窗一直开着不点结束、被邀人不接不拒时，被邀人响铃卡片永久残留且双方忙态不释放
+const meetRingTimeout = 60 * time.Second
+
 // meetRoom 会议房间（内存态，与 1v1 callSession 同源生命周期：重启即清空，话单已落库不丢历史）
 type meetRoom struct {
 	ID       string
@@ -46,6 +50,8 @@ type meetRoom struct {
 	Started  time.Time       // 首人入会时间（话单计时长起点）
 	// offlineTimers 阶段一百四十八：成员断网宽限收口定时器（username → timer；重连上线/退出/解散时清理）
 	offlineTimers map[string]*time.Timer
+	// ringTimer 阶段一百五十：响铃超时定时器（任一人 accept 或解散时停止；防无人接听时忙态与响铃卡片永久残留）
+	ringTimer *time.Timer
 }
 
 var (
@@ -186,6 +192,25 @@ func (s *Server) handleMeetInvite(c *Client, msg *protocol.Message, from string,
 	}
 	meetMu.Unlock()
 
+	// 阶段一百五十：60s 无人接听超时兜底（1v1 callRingTimeout 同款语义）——期间任一人 accept 即取消；
+	// 超时自动解散复用 meetDismiss cancel 通知链路（响铃中被邀人撤下来电卡片）+ 发起人会议窗 error 收口。
+	// 原代码：无响铃超时，发起人不结束会议且被邀人不接不拒时响铃卡片永久残留
+	room.ringTimer = time.AfterFunc(meetRingTimeout, func() {
+		meetMu.Lock()
+		cur, ok := meetRooms[room.ID]
+		if !ok || cur != room || !room.Started.IsZero() { // 房间已解散或已有人入会：空转
+			meetMu.Unlock()
+			return
+		}
+		caller := room.Caller
+		meetMu.Unlock()
+		logger.Info("会议 %s：%v 无人接听，自动解散", room.ID, meetRingTimeout)
+		s.meetDismiss(room, "missed", 0)
+		// 发起人会议窗收口（全员拒绝解散同款 error 帧；会议窗 error 分支 finish 显示原因后关窗）
+		errB, _ := json.Marshal(map[string]string{"action": "error", "call_id": room.ID, "reason": "无人接听，会议已取消"})
+		s.callForward(caller, caller, string(errB))
+	})
+
 	// 逐被邀人转发 meet_invite（from=发起人；带发起人显示名 + 群ID；注入 ICE 配置）
 	for _, m := range invitees {
 		content, _ := json.Marshal(map[string]interface{}{
@@ -298,6 +323,11 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 	callUserBusy[from] = room.ID
 	if room.Started.IsZero() {
 		room.Started = time.Now()
+	}
+	// 阶段一百五十：任一人入会即取消响铃超时（会议已成立；后续余员响铃由发起人手动收口）
+	if room.ringTimer != nil {
+		room.ringTimer.Stop()
+		room.ringTimer = nil
 	}
 	// 快照广播名单（锁内取，锁外发信令防死锁：callForward 内部另持 hub 锁）
 	members := make([]string, 0, len(room.Members))
@@ -484,6 +514,11 @@ func (s *Server) meetDismiss(room *meetRoom, status string, duration int) {
 		}
 	}
 	room.offlineTimers = nil
+	// 阶段一百五十：解散时停响铃超时定时器（回调内已有房间守卫，此处显式停止防滞留）
+	if room.ringTimer != nil {
+		room.ringTimer.Stop()
+		room.ringTimer = nil
+	}
 	callType := room.CallType
 	caller := room.Caller
 	groupID := room.GroupID
@@ -602,7 +637,7 @@ func (s *Server) meetArmOfflineGrace(room *meetRoom, username string) bool {
 }
 
 // meetCancelOfflineHangup 阶段一百四十八：用户重连上线时取消其所在会议房间的断网宽限收口
-//（宽限期内回来 = 会议继续；媒体面由客户端成员级 ICE restart 自动恢复，服务端只需不收口）
+// （宽限期内回来 = 会议继续；媒体面由客户端成员级 ICE restart 自动恢复，服务端只需不收口）
 func meetCancelOfflineHangup(username string) {
 	meetMu.Lock()
 	for _, room := range meetRooms {

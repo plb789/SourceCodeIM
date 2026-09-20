@@ -1130,6 +1130,11 @@
             case 'meet_skipped':
                 setMeetStatus('部分成员无法加入：' + (p.names || []).join('、'));
                 break;
+            case 'error':
+                // 服务端归口错误帧（reason 为中文文案）：全员拒绝/60s 无人接听自动解散等场景收口会议窗
+                // 原代码：无此分支——error 帧经会议分流进入本 switch 后被静默忽略，发起人会议窗滞留不关
+                finish(p.reason || '会议已结束');
+                break;
         }
     }
 
