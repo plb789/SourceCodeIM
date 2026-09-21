@@ -2200,7 +2200,7 @@
             var dn = senderDisplayName(it.f);
             if (dn && names.indexOf(dn) < 0) names.push(dn);
         });
-        parties.textContent = names.join('、') + '：' + (env.c || (env.i || []).length) + I18N.t('条消息');
+        parties.textContent = names.join('、') + I18N.t('：') + (env.c || (env.i || []).length) + I18N.t('条消息');
         detail.innerHTML = '';
         var items = env.i || [];
         if (!items.length) {
@@ -2473,7 +2473,7 @@
                 else bar.insertBefore(quoteBarEl, bar.firstChild);
             }
         }
-        quoteBarEl.querySelector('.quote-bar-info').textContent = I18N.t('引用 ') + (q.from || '') + '：' + (q.text || '');
+        quoteBarEl.querySelector('.quote-bar-info').textContent = I18N.t('引用 ') + (q.from || '') + I18N.t('：') + (q.text || '');
         quoteBarEl.classList.remove('hidden');
     }
 
@@ -3771,7 +3771,7 @@
                 startRecRecorder();
             };
         }).catch(function (e) {
-            showToast(I18N.t('录屏启动失败') + (e && e.message ? '：' + e.message : ''));
+            showToast(I18N.t('录屏启动失败') + (e && e.message ? I18N.t('：') + e.message : ''));
             recCleanup();
             window.desktop.recShow();
         });
@@ -4005,7 +4005,7 @@
                 startStitchEngine();
             };
         }).catch(function (e) {
-            showToast(I18N.t('长截图启动失败') + (e && e.message ? '：' + e.message : ''));
+            showToast(I18N.t('长截图启动失败') + (e && e.message ? I18N.t('：') + e.message : ''));
             cancelStitch();
         });
     }
@@ -5077,7 +5077,7 @@
     IMSocket.on(MSG.ANNOUNCEMENT_PUSH, function (msg) {
         var data = null;
         try { data = JSON.parse(msg.content); } catch (e) {}
-        if (data && data.title) showToast(I18N.t('新') + (annCatNames[data.category] || I18N.t('公告')) + '：' + data.title);
+        if (data && data.title) showToast(I18N.t('新') + (annCatNames[data.category] || I18N.t('公告')) + I18N.t('：') + data.title);
         annLoadList();
     });
 
@@ -13951,7 +13951,7 @@
         if (!document.hidden && currentChatUser === msg.from_user) return; // 正盯着该会话，任务卡片即通知
         var goal = (st && st.goal) ? String(st.goal) : '';
         if (goal.length > 20) goal = goal.slice(0, 20) + '…';
-        var body = I18N.t('任务') + statusText + (goal ? '：' + goal : '');
+        var body = I18N.t('任务') + statusText + (goal ? I18N.t('：') + goal : '');
         if (window.desktop && typeof window.desktop.notify === 'function') {
             window.desktop.notify(I18N.t('Agent 任务'), body);
         } else {
@@ -16601,7 +16601,7 @@
     function renderPinBar() {
         var info = pinInfo[currentChatUser];
         if (info && info.msg_id) {
-            pinBarUser.textContent = info.from_user + '：';
+            pinBarUser.textContent = info.from_user + I18N.t('：');
             pinBarText.textContent = info.content;
             pinBar.classList.remove('hidden');
         } else {
@@ -17396,7 +17396,7 @@
         else if (env.status === 'missed') d = isCaller ? I18N.t('无人接听') : I18N.t('未接听');
         else if (env.status === 'busy') d = isCaller ? I18N.t('对方忙') : I18N.t('未接听（忙线）');
         else d = isMeet ? I18N.t('会议记录') : I18N.t('通话记录');
-        return typeLabel + '：' + d;
+        return typeLabel + I18N.t('：') + d;
     }
 
     // ===== 阶段一百五十五：QQ 同款远程协助（一期 PC↔PC 完整互控） =====
@@ -17917,7 +17917,7 @@
             });
             var mSub = document.createElement('div');
             mSub.className = 'merged-sub';
-            mSub.textContent = mNames.join('、') + '：' + (mergedEnv.c || (mergedEnv.i || []).length) + I18N.t('条消息');
+            mSub.textContent = mNames.join('、') + I18N.t('：') + (mergedEnv.c || (mergedEnv.i || []).length) + I18N.t('条消息');
             bubble.appendChild(mSub);
             // 详情数据注册缓存（信封可能超过 data-raw 的 64KB 上限，DOM 属性不可靠，走运行时缓存）
             var mergeKey = 'mk' + Date.now() + '_' + (mergedSeq++);
@@ -17983,7 +17983,7 @@
             // 阶段八十五：来源按展示名解析（备注→昵称→账号），群聊/私聊引用一致
             var qLabel = document.createElement('span');
             qLabel.className = 'msg-quote-text';
-            qLabel.textContent = I18N.t('引用 ') + (senderDisplayName(q.from) || '') + '：' + (q.text || '');
+            qLabel.textContent = I18N.t('引用 ') + (senderDisplayName(q.from) || '') + I18N.t('：') + (q.text || '');
             quoteBlock.appendChild(qLabel);
             // 图片引用：引用块内嵌真实缩略图（加载失败退化为纯"[图片]"文字）
             if (q.url) {
@@ -19750,7 +19750,7 @@
                         browser_input: I18N.t('页面输入内容'),
                         browser_eval: I18N.t('执行页面脚本')
                     }[tool] || (I18N.t('内置浏览器操作 ') + tool);
-                    line = bl + (p('url') ? '：' + brief(p('url'), 80) : '') + (p('selector') ? ' ' + brief(p('selector'), 40) : '') + (p('text') ? '「' + brief(p('text'), 40) + '」' : '');
+                    line = bl + (p('url') ? I18N.t('：') + brief(p('url'), 80) : '') + (p('selector') ? ' ' + brief(p('selector'), 40) : '') + (p('text') ? '「' + brief(p('text'), 40) + '」' : '');
                 } else if (tool.indexOf('mcp_pc_') === 0) {
                     line = I18N.t('调用本机 MCP 工具 ') + tool.slice(7);
                 } else if (tool.indexOf('mcp_') === 0) {
