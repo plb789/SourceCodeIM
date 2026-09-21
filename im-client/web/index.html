@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="js/i18n.js?v=1.4"></script>
+    <script src="js/i18n.js?v=2.1"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.48">
+    <link rel="stylesheet" href="css/style.css?v=2.53">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -1009,6 +1009,11 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36A5.39 5.39 0 0 1 12 3z"/></svg>
                     <span>外观</span>
                 </button>
+                <!-- 阶段一百五十七：网络分类（用户反馈：好友文件直传属网络行为而非 UI，从外观迁出独立成页） -->
+                <button class="settings-nav-item" data-view="network">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm7.93 9h-3.98a15.65 15.65 0 0 0-1.38-6.03A8.02 8.02 0 0 1 19.93 11zM12 4.04c.83 1.2 1.87 3.46 2.22 6.96h-4.44c.35-3.5 1.39-5.76 2.22-6.96zM4.07 13h3.98c.15 2.26.62 4.29 1.38 6.03A8.02 8.02 0 0 1 4.07 13zm3.98-2H4.07a8.02 8.02 0 0 1 5.36-6.03A15.65 15.65 0 0 0 8.05 11zM12 19.96c-.83-1.2-1.87-3.46-2.22-6.96h4.44c-.35 3.5-1.39 5.76-2.22 6.96zm2.57-.93c.76-1.74 1.23-3.77 1.38-6.03h3.98a8.02 8.02 0 0 1-5.36 6.03z"/></svg>
+                    <span>网络</span>
+                </button>
                 <button class="settings-nav-item" data-view="rules">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM9 13v2h6v-2H9zm0 4v2h4v-2H9z"/></svg>
                     <span>规则与记忆</span>
@@ -1084,6 +1089,64 @@
                         <span class="settings-lang-name">English</span>
                     </button>
                 </div>
+                <!-- 原代码（阶段一百五十七迁移）：好友文件直传开关原置于外观"文件"小节，
+                     用户反馈该开关属网络行为而非 UI 外观，迁至独立"网络"分类（settings-view-network），
+                     DOM id（settings-file-p2p）与 chat.js 绑定逻辑全保留零改动
+                <h3 class="settings-subtitle">文件</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">好友文件直传</div>
+                            <div class="settings-card-desc">好友间大文件优先点对点直传，不经服务器；失败自动回退原链路。</div>
+                        </div>
+                        <input id="settings-file-p2p" type="checkbox" class="memory-switch" checked>
+                    </div>
+                </div>
+                -->
+            </section>
+            <!-- 阶段一百五十七：网络（好友文件直传本端开关；关闭后本端不发起、入站 probe 自动忽略，
+                 对端自动回退原链路。原位于外观"文件"小节，用户反馈属网络行为迁出独立成页） -->
+            <section id="settings-view-network" class="settings-view hidden">
+                <h2 class="settings-title">网络</h2>
+                <h3 class="settings-subtitle">文件传输</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">好友文件直传</div>
+                            <div class="settings-card-desc">好友间大文件优先点对点直传，不经服务器；失败自动回退原链路。</div>
+                        </div>
+                        <input id="settings-file-p2p" type="checkbox" class="slide-switch" checked>
+                    </div>
+                </div>
+                <h3 class="settings-subtitle">接收文件缓存</h3>
+                <!-- 阶段一百五十九：接收端本地缓存双开关（用户需求：刷新后文件卡片不失效、可再次另存为/预览） -->
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">本地缓存</div>
+                            <div class="settings-card-desc">接收完成的文件缓存到浏览器本地库（IndexedDB），刷新后历史卡片仍可另存为或预览；总大小超 500MB 自动清理最旧记录。</div>
+                        </div>
+                        <input id="settings-p2p-idb-cache" type="checkbox" class="slide-switch" checked>
+                    </div>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">自动落盘</div>
+                            <div class="settings-card-desc">接收完成即写入本地磁盘缓存目录（仅 PC 客户端生效）；刷新或重启后文件永久保留，不依赖本地缓存开关。</div>
+                        </div>
+                        <input id="settings-p2p-disk-save" type="checkbox" class="slide-switch" checked>
+                    </div>
+                    <!-- 阶段一百五十九补：落盘路径行（仅 PC 客户端显示，JS 控制显隐；原生目录选择修改，主进程持久化） -->
+                    <div id="settings-p2p-disk-path" class="settings-disk-path" style="display:none;">
+                        <div id="settings-p2p-disk-path-text" class="settings-disk-path-text"></div>
+                        <button id="settings-p2p-disk-pick" class="settings-disk-path-btn">修改</button>
+                        <button id="settings-p2p-disk-reset" class="settings-disk-path-btn" style="display:none;">恢复默认</button>
+                    </div>
+                </div>
+                <!-- 阶段一百五十九补：手动清理按钮（自绘确认弹窗 → 引擎 cacheClear 双清 IndexedDB+磁盘） -->
+                <p class="settings-desc">清理浏览器本地缓存与 PC 端磁盘缓存目录中的接收文件；清理后历史文件卡片将无法再另存为或预览。</p>
+                <button id="settings-p2p-cache-clear" class="settings-btn">缓存清理</button>
             </section>
             <!-- 规则与记忆：阶段一百零五重做为 TRAE CN 同款页内直管布局（卡片+范围页签+创建按钮+空态指引；
                  规则卡片按 全局/仅本智能体 页签分列，记忆卡片带头部总开关；API 与旧弹窗同归口） -->
@@ -1472,7 +1535,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="js/socket.js?v=1.27"></script>
+    <script src="js/socket.js?v=1.28"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
@@ -1492,7 +1555,9 @@
     <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
     <script src="js/remote-engine.js?v=1.0"></script>
-    <script src="js/chat.js?v=3.66"></script>
+    <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
+    <script src="js/p2p-file.js?v=1.5"></script>
+    <script src="js/chat.js?v=3.72"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>

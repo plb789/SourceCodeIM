@@ -96,6 +96,31 @@ contextBridge.exposeInMainWorld('desktop', {
     saveViewerImage: function (data) {
         return ipcRenderer.invoke('image:save', data);
     },
+    // 阶段一百五十九：P2P 接收文件静默落盘（data = {username, msg_id, name, buf(ArrayBuffer)}，
+    // 主进程写 %APPDATA%/<应用名>/received_files/<账号>/<消息ID>_<文件名>，返回 {ok, path}）
+    saveP2PFile: function (data) {
+        return ipcRenderer.invoke('p2pfile:save', data);
+    },
+    // 阶段一百五十九：读取 P2P 本地缓存文件（data = {username, msg_id, name}，返回 {ok, buf(Uint8Array), size, name}）
+    readP2PFile: function (data) {
+        return ipcRenderer.invoke('p2pfile:read', data);
+    },
+    // 阶段一百五十九补：清空 P2P 磁盘缓存目录（data = {username}，返回 {ok, count}）
+    clearP2PFiles: function (data) {
+        return ipcRenderer.invoke('p2pfile:clear', data);
+    },
+    // 阶段一百五十九补：查询落盘目录（data = {username}，返回 {ok, dir, custom}）
+    getP2PDir: function (data) {
+        return ipcRenderer.invoke('p2pfile:getDir', data);
+    },
+    // 阶段一百五十九补：设置自定义落盘目录（data = {dir, username}，dir 空串=恢复默认，返回 {ok, dir, custom, err?}）
+    setP2PDir: function (data) {
+        return ipcRenderer.invoke('p2pfile:setDir', data);
+    },
+    // 阶段一百五十九补：弹出原生目录选择对话框（返回 {ok, dir?}）
+    pickP2PDir: function () {
+        return ipcRenderer.invoke('p2pfile:pickDir');
+    },
     // 查看器请求更早历史图片（查看器 → 主窗口拉取 → 主进程回推 viewer:more）
     viewerNeedMore: function () {
         ipcRenderer.send('image:need-more');

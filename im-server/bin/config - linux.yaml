@@ -21,6 +21,9 @@ send_queue_size: 1024
 http_upload_threshold: 1048576
 # 单请求直传大小上限（字节）：1MB~20MB 走单请求直传；超过该值走分片直传（阶段三十二）
 max_file_size: 20971520
+# 群聊文件大小上限（字节，阶段一百五十七）：群聊文件独立于 max_file_size，默认 20MB；
+# 群聊文件走 /upload/group/file 链路（服务端 MaxBytesReader 强制截断 + 前端发送前校验），调整后需重启服务端生效
+group_file_max_size: 20971520
 # 分片直传单片大小（字节，阶段三十二）：超大文件按该值分片逐片 HTTP 上传（服务端节流推送接收进度）
 upload_chunk_size: 4194304
 # 分片直传文件大小上限（字节，阶段三十二）：超过该值前端直接拒绝发送
@@ -370,3 +373,14 @@ turn:
   # 媒体中继 UDP 端口段（需放行安全组）
   min_port: 49160
   max_port: 49200
+
+# 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
+file_p2p:
+  enabled: true            # 总开关：false 时全部文件走现有链路（客户端 probe 一律回 probe_fail(disabled)）
+  threshold: 1048576       # 大于该字节数（1MB）且私聊才尝试 P2P；小文件 WS 分片更快更简单
+  negotiate_timeout: 10    # 客户端协商超时秒（ICE failed/超时自动回退 HTTP 链路）
+  chunk_size: 16384        # DataChannel 分片字节
+  high_water: 8388608      # 发送缓冲高水位（暂停读文件）
+  low_water: 1048576       # 发送缓冲低水位（恢复读文件）
+  archive: false           # 直传完成后发送方是否异步归档副本到服务端（false 历史仅元信息）
+  max_per_user: 3          # 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail）

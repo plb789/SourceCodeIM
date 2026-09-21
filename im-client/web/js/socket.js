@@ -16,6 +16,18 @@
     var maxFileSize = 20971520;      // 单请求直传上限（20MB），超过走分片直传
     var uploadChunkSize = 4194304;   // 分片直传单片大小（4MB）
     var maxDirectSize = 2147483648;  // 分片直传文件大小上限（2GB），超过直接拒绝
+    // 阶段一百五十七：群聊文件大小上限（服务端归口下发，独立于私聊 max_file_size；兜底值与服务端默认一致）
+    var groupFileMaxSize = 20971520; // 群聊文件上限（20MB）
+    // 阶段一百五十六：好友文件 P2P 直传决策参数（服务端归口下发，兜底默认值与服务端 config.yaml 一致）
+    var p2pCfg = {
+        enabled: true,          // 服务端总开关（false 时全部文件走现有链路）
+        threshold: 1048576,     // 大于该字节数且私聊才尝试 P2P
+        negotiateTimeout: 10,   // 协商超时秒
+        chunkSize: 16384,       // DataChannel 分片字节
+        highWater: 8388608,     // 发送缓冲高水位
+        lowWater: 1048576,      // 发送缓冲低水位
+        archive: false          // 归档开关
+    };
     var messageHandlers = {}; // msg_type -> handler 函数数组
     var connected = false;
     // 登录失败提示修复：登录成功标记——登录成功前连接断开不自动重连，
@@ -119,7 +131,8 @@
         RED_PACKET_OPEN: 87,     // 双向：上行打开红包 {packet_id}；下行结果按 act 区分（send=发送回执含余额 / open=领取结果含详情 / detail=详情响应）
         RED_PACKET_SYNC: 88,     // 下行：红包状态同步（领取/领完/过期退回后广播，content 为 JSON：{packet_id,status,claimed_count,...,msg_id}；卡片原位刷新）
         RED_PACKET_DETAIL: 89,   // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
-        REMOTE_SIGNAL: 90        // 阶段一百五十五：QQ 同款远程协助信令（双向，content 为 JSON：{action,session_id,mode?,grant?,sdp?,candidate?,reason?}；好友强校验，话单由服务端归口落库）
+        REMOTE_SIGNAL: 90,       // 阶段一百五十五：QQ 同款远程协助信令（双向，content 为 JSON：{action,session_id,mode?,grant?,sdp?,candidate?,reason?}；好友强校验，话单由服务端归口落库）
+        FILE_P2P_SIGNAL: 91      // 阶段一百五十六：好友文件 P2P 直传信令（双向，content 为 JSON：{action,transfer_id,name?,size?,mime?,sha256?,reason?,sdp?,candidate?,platform?,nonce?}；服务端仅转发信令+归口判定，文件字节点对点直传）
     };
 
     function connect(username, password) {
@@ -327,8 +340,28 @@
                 if (info && info.max_direct_size > 0) {
                     maxDirectSize = info.max_direct_size;
                 }
+                // 阶段一百五十七：接收群聊文件大小上限（服务端归口，群文件独立于私聊 max_file_size）
+                if (info && info.group_file_max_size > 0) {
+                    groupFileMaxSize = info.group_file_max_size;
+                }
+                // 阶段一百五十六：接收文件直传决策参数（服务端归口，客户端零硬编码）并注入 P2P 引擎
+                if (info && info.file_p2p_threshold > 0) p2pCfg.threshold = info.file_p2p_threshold;
+                if (info && info.file_p2p_negotiate_timeout > 0) p2pCfg.negotiateTimeout = info.file_p2p_negotiate_timeout;
+                if (info && info.file_p2p_chunk_size > 0) p2pCfg.chunkSize = info.file_p2p_chunk_size;
+                if (info && info.file_p2p_high_water > 0) p2pCfg.highWater = info.file_p2p_high_water;
+                if (info && info.file_p2p_low_water > 0) p2pCfg.lowWater = info.file_p2p_low_water;
+                if (info) {
+                    p2pCfg.enabled = !!info.file_p2p_enabled;
+                    p2pCfg.archive = !!info.file_p2p_archive;
+                }
+                if (window.P2PFile && window.P2PFile.config) window.P2PFile.config(p2pCfg);
             } catch (e) {}
             window._lastPassword = window._lastPassword || '';
+        }
+        // 阶段一百五十六：文件直传信令分流到 P2P 引擎（协商/数据面处理；
+        // 气泡 UI 由 chat.js 自行注册 91 处理器，两侧职责解耦）
+        if (msg.msg_type === 91 && window.P2PFile && window.P2PFile.onSignal) {
+            window.P2PFile.onSignal(msg);
         }
         var handlers = messageHandlers[msg.msg_type];
         if (handlers) {
@@ -386,6 +419,16 @@
         return maxDirectSize;
     }
 
+    // 阶段一百五十七：获取服务端下发的群聊文件大小上限（字节），sendGroupFile 发送前校验用
+    function getGroupFileMaxSize() {
+        return groupFileMaxSize;
+    }
+
+    // 阶段一百五十六：获取文件直传决策参数（服务端归口下发，chat.js 分流判定用）
+    function getP2PConfig() {
+        return p2pCfg;
+    }
+
     window.IMSocket = {
         MSG: MSG,
         connect: connect,
@@ -401,6 +444,8 @@
         getMaxFileSize: getMaxFileSize,
         getUploadChunkSize: getUploadChunkSize,
         getMaxDirectSize: getMaxDirectSize,
+        getGroupFileMaxSize: getGroupFileMaxSize,
+        getP2PConfig: getP2PConfig,
         stopHeartbeat: stopHeartbeat
     };
 })();

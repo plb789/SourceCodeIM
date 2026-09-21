@@ -521,10 +521,12 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		toUser = groupParam
 	}
 
-	// 大小限制（读配置，与群图片/私聊文件同规则）
+	// 大小限制（阶段一百五十七：群聊文件独立上限 group_file_max_size 归口——原与私聊 max_file_size
+	// 共用一个参数，私聊直传上限调整会联动群聊；现解耦为独立配置，默认 20MB，见 config.yaml）
+	// 原代码：maxSize := int64(20 << 20); if s.cfg.MaxFileSize > 0 { maxSize = int64(s.cfg.MaxFileSize) }
 	maxSize := int64(20 << 20)
-	if s.cfg.MaxFileSize > 0 {
-		maxSize = int64(s.cfg.MaxFileSize)
+	if s.cfg.GroupFileMaxSize > 0 {
+		maxSize = s.cfg.GroupFileMaxSize
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
 	if err := r.ParseMultipartForm(maxSize); err != nil {

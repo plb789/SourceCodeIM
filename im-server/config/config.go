@@ -36,6 +36,8 @@ type Config struct {
 	UploadDir string `yaml:"upload_dir"`
 	// 阶段二十四：聊天文件持久化大小上限（字节）
 	MaxFileSize int `yaml:"max_file_size"`
+	// 阶段一百五十七：群聊文件大小上限（字节，独立于 max_file_size——私聊单请求直传上限调整不联动群聊；默认 20MB）
+	GroupFileMaxSize int64 `yaml:"group_file_max_size"`
 	// 阶段三十一：单连接发送队列缓冲条数（文件分片与聊天消息共用，过小会挤爆队列导致丢消息）
 	SendQueueSize int `yaml:"send_queue_size"`
 	// 阶段三十一：大文件直传阈值（字节）：文件超过该值走 HTTP 直传链路，WebSocket 仅传信令，避免海量分片占用连接
@@ -67,6 +69,29 @@ type Config struct {
 
 	// 阶段一百四十二：内置 TURN/STUN 中继服务（server/turn.go，音视频通话 P2P 打洞失败时的媒体中继兜底）
 	Turn TurnConfig `yaml:"turn"`
+
+	// 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
+	FileP2P FileP2PConfig `yaml:"file_p2p"`
+}
+
+// FileP2PConfig 阶段一百五十六：好友文件 P2P 直传配置节（信令经服务端归口转发，文件字节点对点不过服务器）
+type FileP2PConfig struct {
+	// Enabled 总开关：false 时全部文件走现有链路（客户端 probe 一律回 probe_fail(disabled)）
+	Enabled bool `yaml:"enabled"`
+	// Threshold 大于该字节数且私聊才尝试 P2P；小文件 WS 分片更快更简单
+	Threshold int64 `yaml:"threshold"`
+	// NegotiateTimeout 客户端协商超时秒（ICE failed/超时自动回退 HTTP 链路；服务端随登录响应下发）
+	NegotiateTimeout int `yaml:"negotiate_timeout"`
+	// ChunkSize DataChannel 分片字节（16KB 跨浏览器稳妥，随登录响应下发）
+	ChunkSize int `yaml:"chunk_size"`
+	// HighWater 发送缓冲高水位字节（bufferedAmount 超过后暂停读文件）
+	HighWater int `yaml:"high_water"`
+	// LowWater 发送缓冲低水位字节（bufferedAmountLowThreshold 回调恢复读取）
+	LowWater int `yaml:"low_water"`
+	// Archive 直传完成后发送方是否异步归档副本到服务端（false 历史仅元信息，url 为空）
+	Archive bool `yaml:"archive"`
+	// MaxPerUser 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail(busy)）
+	MaxPerUser int `yaml:"max_per_user"`
 }
 
 // TurnConfig 阶段一百四十二：TURN/STUN 中继配置节（基于 pion/turn，与 im-server 同进程零额外部署）
@@ -294,6 +319,8 @@ func Default() *Config {
 		// 现改为留空，由 Load 基于 WebDir 推导（锚定 exe 所在目录，任意目录启动均正确）
 		UploadDir:   "",
 		MaxFileSize: 20 << 20, // 20MB
+		// 阶段一百五十七：群聊文件大小上限独立默认值（20MB，与 max_file_size 解耦）
+		GroupFileMaxSize: 20 << 20,
 		// 阶段三十一：发送队列缓冲 1024 条（原实现固定 256，大文件分片易溢出丢消息）
 		SendQueueSize: 1024,
 		// 阶段三十一：大文件直传阈值 1MB，超过走 HTTP 直传（io.Copy 流式落盘），绕开分片链路
@@ -315,6 +342,19 @@ func Default() *Config {
 
 		// 阶段八十八：MCP 默认开启（未配置服务器时空转零开销；超时由 server/mcp.go 兜底）
 		MCP: MCPConfig{Enabled: true},
+
+		// 阶段一百五十六：好友文件 P2P 直传默认参数（与 config.yaml file_p2p 节注释一致；
+		// 任一环节失败客户端自动回退现有 HTTP 链路，开启零回归）
+		FileP2P: FileP2PConfig{
+			Enabled:          true,
+			Threshold:        1 << 20, // 1MB
+			NegotiateTimeout: 10,
+			ChunkSize:        16384,   // 16KB
+			HighWater:        8 << 20, // 8MB
+			LowWater:         1 << 20, // 1MB
+			Archive:          false,
+			MaxPerUser:       3,
+		},
 	}
 }
 
@@ -354,6 +394,10 @@ func Load() *Config {
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = 20 << 20
+	}
+	// 阶段一百五十七：群聊文件大小上限兜底（配置缺省或非法时回退默认值 20MB）
+	if cfg.GroupFileMaxSize <= 0 {
+		cfg.GroupFileMaxSize = 20 << 20
 	}
 	// 阶段三十一：发送队列缓冲兜底（过小会导致高并发下丢消息）
 	if cfg.SendQueueSize <= 0 {
@@ -424,6 +468,29 @@ func Load() *Config {
 	// 阶段四十六：OnlyOffice 配置兜底——声明启用但参数残缺时强制关闭（避免启动后编辑器静默失败）
 	if cfg.OnlyOffice.Enabled && (cfg.OnlyOffice.APIURL == "" || cfg.OnlyOffice.ServerURL == "" || cfg.OnlyOffice.JWTSecret == "") {
 		cfg.OnlyOffice.Enabled = false
+	}
+	// 阶段一百五十六：好友文件 P2P 直传参数兜底（配置缺省或非法时回退默认值）
+	if cfg.FileP2P.Threshold <= 0 {
+		cfg.FileP2P.Threshold = 1 << 20
+	}
+	if cfg.FileP2P.NegotiateTimeout <= 0 {
+		cfg.FileP2P.NegotiateTimeout = 10
+	}
+	if cfg.FileP2P.ChunkSize <= 0 {
+		cfg.FileP2P.ChunkSize = 16384
+	}
+	if cfg.FileP2P.HighWater <= 0 {
+		cfg.FileP2P.HighWater = 8 << 20
+	}
+	if cfg.FileP2P.LowWater <= 0 {
+		cfg.FileP2P.LowWater = 1 << 20
+	}
+	if cfg.FileP2P.LowWater >= cfg.FileP2P.HighWater {
+		// 低水位须低于高水位，否则背压恢复逻辑失效
+		cfg.FileP2P.LowWater = cfg.FileP2P.HighWater / 8
+	}
+	if cfg.FileP2P.MaxPerUser <= 0 {
+		cfg.FileP2P.MaxPerUser = 3
 	}
 	return cfg
 }

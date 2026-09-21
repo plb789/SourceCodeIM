@@ -307,6 +307,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段一百五十五：QQ 同款远程协助信令（invite/accept/reject/cancel/disconnect + WebRTC 媒体中继，好友强校验，话单服务端归口）
 	case protocol.MsgTypeRemoteSignal:
 		s.HandleRemoteSignal(c, msg)
+	// 阶段一百五十六：好友文件 P2P 直传信令（probe/accept/协商中继/done 落库归口，好友强校验，文件字节点对点不过服务器）
+	case protocol.MsgTypeFileP2PSignal:
+		s.HandleFileP2PSignal(c, msg)
 	// 阶段一百四十二：微信同款多群聊信令（建群 / 邀请入群 / 邀请响应）
 	case protocol.MsgTypeGroupCreate:
 		s.handleGroupCreate(c, msg)
@@ -901,6 +904,19 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		"max_file_size":     s.cfg.MaxFileSize,
 		"upload_chunk_size": s.cfg.UploadChunkSize,
 		"max_direct_size":   s.cfg.MaxDirectSize,
+		// 阶段一百五十七：下发群聊文件大小上限（服务端归口，群文件独立于私聊 max_file_size，
+		// 前端发送前校验用，客户端零硬编码）
+		"group_file_max_size": s.cfg.GroupFileMaxSize,
+		// 阶段一百五十六：下发好友文件 P2P 直传决策与传输参数（服务端归口，客户端零硬编码：
+		// enabled/threshold 分流判定，negotiate_timeout/chunk_size/high_water/low_water DataChannel
+		// 传输面参数，archive 归档开关）
+		"file_p2p_enabled":           s.cfg.FileP2P.Enabled,
+		"file_p2p_threshold":         s.cfg.FileP2P.Threshold,
+		"file_p2p_negotiate_timeout": s.cfg.FileP2P.NegotiateTimeout,
+		"file_p2p_chunk_size":        s.cfg.FileP2P.ChunkSize,
+		"file_p2p_high_water":        s.cfg.FileP2P.HighWater,
+		"file_p2p_low_water":         s.cfg.FileP2P.LowWater,
+		"file_p2p_archive":           s.cfg.FileP2P.Archive,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
 		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）

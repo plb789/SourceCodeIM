@@ -1241,6 +1241,94 @@ ipcMain.handle('doc:save', async function (event, data) {
     }
 });
 
+// ===== 阶段一百五十九：P2P 接收文件本地缓存（微信同款静默落盘，设置-网络"接收文件自动落盘"开关归口） =====
+// 目录：%APPDATA%/<应用名>/received_files/<账号>/<消息ID>_<文件名>；渲染层不传路径防目录穿越，
+// 主进程按 username/msg_id/name 三字段拼接并消毒后写入；读取按同样规则拼路径（写入读取幂等一致）
+// 阶段一百五十九补：自定义落盘根目录（p2p-disk-config.json 持久化；空=默认 received_files；
+// 自定义目录下仍按 <账号>/<消息ID>_<文件名> 组织，变更后旧文件不迁移）
+var P2P_CACHE_ROOT = path.join(app.getPath('userData'), 'received_files');
+var P2P_DISK_CFG_PATH = path.join(app.getPath('userData'), 'p2p-disk-config.json');
+var p2pCustomDir = '';
+function loadP2pDiskCfg() {
+    try { p2pCustomDir = String(JSON.parse(fs.readFileSync(P2P_DISK_CFG_PATH, 'utf8')).customDir || ''); } catch (e) { p2pCustomDir = ''; }
+    if (p2pCustomDir && !path.isAbsolute(p2pCustomDir)) p2pCustomDir = '';
+}
+function saveP2pDiskCfg() {
+    try { fs.writeFileSync(P2P_DISK_CFG_PATH, JSON.stringify({ customDir: p2pCustomDir }), 'utf8'); } catch (e) {}
+}
+loadP2pDiskCfg();
+function p2pDiskRoot() { return p2pCustomDir || P2P_CACHE_ROOT; }
+function p2pCachePathOf(username, msgId, name) {
+    var safeUser = String(username || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+    var safeName = String(name || 'file').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+    return path.join(p2pDiskRoot(), safeUser, String(msgId) + '_' + safeName);
+}
+ipcMain.handle('p2pfile:save', async function (event, data) {
+    try {
+        if (!data || !data.buf || !data.msg_id) return { ok: false };
+        var pSave = p2pCachePathOf(data.username, data.msg_id, data.name);
+        await fs.promises.mkdir(path.dirname(pSave), { recursive: true });
+        await fs.promises.writeFile(pSave, Buffer.from(data.buf));
+        return { ok: true, path: pSave };
+    } catch (e) {
+        console.warn('P2P 接收文件落盘失败:', e && e.message);
+        return { ok: false };
+    }
+});
+ipcMain.handle('p2pfile:read', async function (event, data) {
+    try {
+        if (!data || !data.msg_id) return { ok: false };
+        var pRead = p2pCachePathOf(data.username, data.msg_id, data.name);
+        var buf = await fs.promises.readFile(pRead);
+        return { ok: true, buf: buf, size: buf.length, name: path.basename(pRead) };
+    } catch (e) {
+        return { ok: false };
+    }
+});
+// 阶段一百五十九补：手动清理磁盘缓存目录（设置-网络"缓存清理"按钮；仅清当前账号目录下的文件）
+ipcMain.handle('p2pfile:clear', async function (event, data) {
+    try {
+        var user = String((data && data.username) || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+        var dir = path.join(p2pDiskRoot(), user);
+        var names = await fs.promises.readdir(dir).catch(function () { return []; });
+        for (var i = 0; i < names.length; i++) {
+            await fs.promises.unlink(path.join(dir, names[i])).catch(function () {});
+        }
+        return { ok: true, count: names.length };
+    } catch (e) {
+        console.warn('P2P 磁盘缓存清理失败:', e && e.message);
+        return { ok: false };
+    }
+});
+// 阶段一百五十九补：查询当前落盘目录（设置-网络路径行显示；dir 为当前账号完整目录）
+ipcMain.handle('p2pfile:getDir', async function (event, data) {
+    var user = String((data && data.username) || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+    return { ok: true, dir: path.join(p2pDiskRoot(), user), custom: !!p2pCustomDir };
+});
+// 阶段一百五十九补：设置自定义落盘目录（dir 为空串=恢复默认；先试建目录校验可写再持久化）
+ipcMain.handle('p2pfile:setDir', async function (event, data) {
+    try {
+        var dir = String((data && data.dir) || '').trim();
+        if (dir) {
+            if (!path.isAbsolute(dir)) return { ok: false, err: '路径必须是绝对路径' };
+            await fs.promises.mkdir(path.join(dir, 'write-test'), { recursive: true });
+            await fs.promises.rmdir(path.join(dir, 'write-test')).catch(function () {});
+        }
+        p2pCustomDir = dir;
+        saveP2pDiskCfg();
+        var user = String((data && data.username) || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
+        return { ok: true, dir: path.join(p2pDiskRoot(), user), custom: !!p2pCustomDir };
+    } catch (e) {
+        return { ok: false, err: '目录不可写' };
+    }
+});
+// 阶段一百五十九补：弹出原生目录选择对话框（微信同款"修改存储位置"交互）
+ipcMain.handle('p2pfile:pickDir', async function () {
+    var r = await dialog.showOpenDialog({ title: '选择接收文件保存目录', properties: ['openDirectory', 'createDirectory'] });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { ok: false };
+    return { ok: true, dir: r.filePaths[0] };
+});
+
 // ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
 // 两个独立 BrowserWindow（禁止主窗体内嵌弹层，与图片查看器/截图编辑器同方案）：
 //   1. 通话窗 callWin：主/被叫共用，承载 WebRTC 媒体面（getUserMedia + RTCPeerConnection P2P 直连），

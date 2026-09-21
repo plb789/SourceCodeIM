@@ -987,6 +987,91 @@
             .catch(function () { showToast(I18N.t('保存失败')); sMemPref.checked = !want; });
     });
 
+    // 阶段一百五十六：好友文件直传本端开关（localStorage 持久化；关闭后本端不发起、入站 probe 自动忽略，
+    // 对端由协商超时自动回退现有链路；默认开启）
+    var sP2p = document.getElementById('settings-file-p2p');
+    if (sP2p) {
+        try { sP2p.checked = localStorage.getItem('im_file_p2p') !== '0'; } catch (eP2p) { sP2p.checked = true; }
+        sP2p.addEventListener('change', function () {
+            try { localStorage.setItem('im_file_p2p', sP2p.checked ? '1' : '0'); } catch (eP2p2) {}
+            showToast(sP2p.checked ? I18N.t('已开启好友文件直传') : I18N.t('已关闭好友文件直传'));
+        });
+    }
+
+    // 阶段一百五十九：接收文件本地缓存双开关（用户反馈默认值：自动落盘开、本地缓存关；
+    // 写入/读回归口 p2p-file.js cacheReceived/cacheGet）
+    // ① IndexedDB 缓存：WEB/PC 通吃（im_p2p_idb_cache，默认关，存 '1' 才开）——刷新后历史卡片仍可另存为/预览，LRU 500MB 自动清理
+    var sIdb = document.getElementById('settings-p2p-idb-cache');
+    if (sIdb) {
+        try { sIdb.checked = localStorage.getItem('im_p2p_idb_cache') === '1'; } catch (eIdb) { sIdb.checked = false; }
+        sIdb.addEventListener('change', function () {
+            try { localStorage.setItem('im_p2p_idb_cache', sIdb.checked ? '1' : '0'); } catch (eIdb2) {}
+            showToast(sIdb.checked ? I18N.t('已开启接收文件本地缓存') : I18N.t('已关闭接收文件本地缓存'));
+        });
+    }
+    // ② PC 端自动落盘（im_p2p_disk_save，默认开）：接收完成即写磁盘缓存目录，永久保留；
+    //    仅 PC 客户端生效（web 端无 desktop.saveP2PFile 桥，开关状态保存但引擎侧静默跳过）
+    var sDisk = document.getElementById('settings-p2p-disk-save');
+    if (sDisk) {
+        try { sDisk.checked = localStorage.getItem('im_p2p_disk_save') !== '0'; } catch (eDsk) { sDisk.checked = true; }
+        sDisk.addEventListener('change', function () {
+            try { localStorage.setItem('im_p2p_disk_save', sDisk.checked ? '1' : '0'); } catch (eDsk2) {}
+            showToast(sDisk.checked ? I18N.t('已开启接收文件自动落盘') : I18N.t('已关闭接收文件自动落盘'));
+        });
+    }
+    // 阶段一百五十九补：落盘路径行（仅 PC 客户端显示——web 端无磁盘概念）；
+    // 修改=原生目录选择对话框（微信同款），主进程 p2p-disk-config.json 持久化，旧文件不迁移
+    var dPathRow = document.getElementById('settings-p2p-disk-path');
+    var dPathText = document.getElementById('settings-p2p-disk-path-text');
+    var dPathPick = document.getElementById('settings-p2p-disk-pick');
+    var dPathReset = document.getElementById('settings-p2p-disk-reset');
+    function refreshP2pDiskPath() {
+        if (!dPathRow || !window.desktop || !window.desktop.getP2PDir) { if (dPathRow) dPathRow.style.display = 'none'; return; }
+        window.desktop.getP2PDir({ username: (IMSocket.getUsername && IMSocket.getUsername()) || '' }).then(function (r) {
+            if (!r || !r.ok) { dPathRow.style.display = 'none'; return; }
+            dPathText.textContent = r.dir;
+            dPathText.title = r.dir;
+            dPathReset.style.display = r.custom ? '' : 'none';
+            dPathRow.style.display = '';
+        }).catch(function () { dPathRow.style.display = 'none'; });
+    }
+    if (dPathRow) {
+        refreshP2pDiskPath();
+        if (dPathPick) {
+            dPathPick.addEventListener('click', function () {
+                if (!window.desktop || !window.desktop.pickP2PDir) return;
+                window.desktop.pickP2PDir().then(function (r) {
+                    if (!r || !r.ok) return; // 用户取消选择
+                    window.desktop.setP2PDir({ dir: r.dir, username: (IMSocket.getUsername && IMSocket.getUsername()) || '' }).then(function (r2) {
+                        if (r2 && r2.ok) { showToast(I18N.t('接收文件保存目录已修改')); refreshP2pDiskPath(); }
+                        else showToast(I18N.t(r2 && r2.err ? r2.err : '目录不可写'));
+                    }).catch(function () { showToast(I18N.t('目录不可写')); });
+                }).catch(function () {});
+            });
+        }
+        if (dPathReset) {
+            dPathReset.addEventListener('click', function () {
+                if (!window.desktop || !window.desktop.setP2PDir) return;
+                window.desktop.setP2PDir({ dir: '', username: (IMSocket.getUsername && IMSocket.getUsername()) || '' }).then(function (r2) {
+                    if (r2 && r2.ok) { showToast(I18N.t('已恢复默认保存目录')); refreshP2pDiskPath(); }
+                }).catch(function () {});
+            });
+        }
+    }
+    // 阶段一百五十九补：缓存清理按钮（自绘确认弹窗，禁用系统弹窗；确认后引擎 cacheClear 双清
+    // IndexedDB + PC 磁盘缓存目录，web 端无桥仅清 IDB；toast 反馈结果）
+    var sClear = document.getElementById('settings-p2p-cache-clear');
+    if (sClear) {
+        sClear.addEventListener('click', function () {
+            showConfirm(I18N.t('缓存清理'), I18N.t('确定清除全部接收文件缓存？清理后历史文件卡片将无法再另存为或预览。'), function () {
+                if (!window.P2PFile || !P2PFile.cacheClear) { showToast(I18N.t('缓存清理失败')); return; }
+                P2PFile.cacheClear().then(function (r) {
+                    showToast(r && r.idb === false ? I18N.t('缓存清理失败') : I18N.t('接收文件缓存已清理'));
+                }).catch(function () { showToast(I18N.t('缓存清理失败')); });
+            });
+        });
+    }
+
     // ===== 头像降级修复：导航栏左上角头像统一入口 =====
     // 原实现：各处直接 currentAvatarEl.src 赋值，新注册账号 avatar 为空时 img 空 src 被浏览器渲染为破图（碎图标）
     var navAvatarFailedUrl = ''; // 记录加载失败的头像地址，避免重复设置同一失效 URL（缓存错误结果）导致空白
@@ -2784,6 +2869,17 @@
             showToast(I18N.t('文件超过大小上限（') + formatSize(maxDirect) + I18N.t('），无法发送'));
             return;
         }
+        // ===== 阶段一百五十六：好友文件 P2P 直传分流（大文件优先点对点，失败无缝回退现有链路） =====
+        // 决策参数服务端归口（登录响应 file_p2p_* 下发）；仅私聊生效；图片/视频排除
+        // （内联渲染链路依赖服务端 url）；群聊/小文件/关闭开关/环境不支持一律走原有三层分流（原逻辑零改动）
+        var p2p = (IMSocket.getP2PConfig && IMSocket.getP2PConfig()) || null;
+        if (p2p && p2p.enabled && file.size > (p2p.threshold || 1048576) &&
+            currentChatUser !== '' && !isGroupTarget(currentChatUser) &&
+            !isImageName(file.name) && !isVideoName(file.name) &&
+            window.P2PFile && P2PFile.available() && P2PFile.localEnabled()) {
+            sendFileP2P(file, currentChatUser);
+            return;
+        }
         if (file.size > maxFile) {
             sendFileChunked(file);
             return;
@@ -2854,10 +2950,11 @@
     // 流程：本地立即渲染进度气泡（可取消）→ XHR 逐片 POST /upload/chunk（raw body，upload.onprogress 回显整体进度）
     // → 服务端按片落盘并节流推送 FILE_PROGRESS（接收方"发送中 xx%"）→ 收齐合并落库推送 FILE_PERSISTED 回填 msg_id
     // 原实现：fetch 单请求直传无进度事件，超大文件发送方无进度、接收方无感知、失败需整文件重传
-    function sendFileChunked(file) {
+    // 阶段一百五十六：新增 toUserOverride（P2P 回退复用——用户已切走会话时仍发往原目标，与 sendFileDirect 同语义）
+    function sendFileChunked(file, toUserOverride) {
         var chunkSize = (IMSocket.getUploadChunkSize && IMSocket.getUploadChunkSize()) || 4194304;
         var total = Math.max(1, Math.ceil(file.size / chunkSize));
-        var toUser = currentChatUser;
+        var toUser = toUserOverride || currentChatUser;
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         var uploadId = 'u' + Date.now() + '_' + Math.random().toString(36).slice(2);
         // 本地立即渲染进度气泡（发送方带取消按钮；blob URL 供发送完成前点击预览，落库后由 FILE_PERSISTED 归口）
@@ -3208,6 +3305,192 @@
         }
     });
 
+    // ===== 阶段一百五十六：好友文件直传 UI 归口（传输面由 p2p-file.js 处理，此处只管气泡） =====
+    // probe：接收方建"接收中"进度气泡（引擎已自动 accept，微信同款"在线即收"不打扰用户）
+    // accept：发送方建"上传中"进度气泡（probe 阶段失败不建气泡，回退无闪烁）
+    // done_ack：双方按 nonce 回填 msg_id 转正式文件卡片（带"直传"角标，同 FILE_PERSISTED 归口模式）
+    // abort：双方移除气泡；对端主动中止时 Toast 提示（同 FILE_CANCEL 口径）
+    var p2pPending = {}; // nonce -> {file, toUser}（发送方 accept 建气泡 / 回退重发 / done_ack 共用）
+    function sendFileP2P(file, toUser) {
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        p2pPending[nonce] = { file: file, toUser: toUser };
+        P2PFile.send(file, toUser, nonce).then(function (r) {
+            var info = p2pPending[nonce];
+            delete p2pPending[nonce];
+            if (r && r.ok) return; // 完成：气泡终态由 done_ack 服务端归口回填
+            // 用户主动取消：气泡已由取消按钮移除，引擎已发 abort 同步对端，不重发
+            if (r && r.reason === 'canceled') return;
+            // 回退现有链路（设计 §7 回退矩阵）：移除直传气泡，按大小走原分流（进度从零继续，无感切换）
+            var el = messageList.querySelector('.message[data-nonce="' + nonce + '"]');
+            if (el) el.remove();
+            if (info) {
+                var maxFile2 = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+                if (file.size > maxFile2) sendFileChunked(file, info.toUser);
+                else sendFileDirect(file, info.toUser);
+            }
+        });
+    }
+
+    // 进度气泡"直传"角标（区分 P2P 直传与服务器中转文件，样式跟随主题色）
+    function addP2PBadge(bubbleEl) {
+        if (!bubbleEl || bubbleEl.querySelector('.file-p2p-badge')) return;
+        var b = document.createElement('div');
+        b.className = 'file-p2p-badge';
+        b.textContent = I18N.t('直传');
+        bubbleEl.appendChild(b);
+    }
+
+    // 发送方气泡取消按钮（取消 = abort 信令 + 引擎停传，对端气泡经 91 abort 帧同步移除）
+    function bindP2PCancel(el, nonce) {
+        var btn = el.querySelector('.file-progress-cancel');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+            el.remove();
+            if (window.P2PFile) P2PFile.cancelByNonce(nonce);
+        });
+    }
+
+    // 阶段一百五十八：接收方"另存为"归口右键菜单——完成卡片带 data-url（内存 blob），右键
+    // "另存为"按 .bubble-file[data-url] 判定天然可用（L1455 菜单显隐 + saveas 分支同一 <a download> 归口），
+    // 卡片上不再重复放置另存为按钮（用户反馈：右键现成有此功能）
+    // function addP2PSaveBtn(bf, url, name) {
+    //     if (bf.querySelector('.file-save-btn')) return; // 幂等（saved/done_ack 双入口复用同一按钮）
+    //     var info = bf.querySelector('.file-info');
+    //     if (!info) return;
+    //     var btn = document.createElement('div');
+    //     btn.className = 'file-save-btn';
+    //     btn.textContent = I18N.t('另存为');
+    //     btn.addEventListener('click', function (eSave) {
+    //         eSave.stopPropagation();
+    //         // 与右键"另存为"同一 <a download> 归口：Electron will-download 默认弹系统保存对话框（文件名预填）
+    //         var aSave = document.createElement('a');
+    //         aSave.href = url;
+    //         aSave.download = name || 'file';
+    //         aSave.click();
+    //     });
+    //     info.appendChild(btn);
+    // }
+
+    // 进度气泡 → 终态文件卡片（移除进度条/取消按钮，补"直传"角标与点击行为；done_ack/saved 阶段幂等复用）
+    function finishP2PBubble(el, bf) {
+        var prog = el.querySelector('.file-progress');
+        if (prog) prog.remove();
+        var ptxt = el.querySelector('.file-progress-text');
+        if (ptxt) ptxt.remove();
+        var pcancel = el.querySelector('.file-progress-cancel');
+        if (pcancel) pcancel.remove();
+        el.classList.remove('upload-failed');
+        if (!bf) return;
+        addP2PBadge(bf);
+        var url = bf.getAttribute('data-url') || '';
+        if (!url) return;
+        // 点击行为：发送方本地 blob / 接收方内存 blob → 下载或独立窗口预览（与服务器文件卡片同体验）
+        var nameEl2 = bf.querySelector('.file-name');
+        var name2 = nameEl2 ? nameEl2.textContent : 'file';
+        var msgId2 = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
+        bf.style.cursor = 'pointer';
+        bf.onclick = function () { onFileCardClick(bf, msgId2, name2, url); };
+        // 阶段一百五十八：接收方保存入口收口右键菜单"另存为"（原引擎自动弹框已移除），
+        // 卡片按钮方案已废弃（原代码见上方注释归档），发送方/接收方卡片点击行为保持一致
+        // if (!el.classList.contains('self')) addP2PSaveBtn(bf, url, name2);
+    }
+
+    // P2P 引擎进度回调（引擎侧已节流 ~120ms；气泡按 nonce 精确定位，不在窗口时静默跳过）
+    P2PFile.onProgress = function (info) {
+        var el = messageList.querySelector('.message[data-nonce="' + info.nonce + '"]');
+        if (!el) return;
+        var bar = el.querySelector('.file-progress-inner');
+        if (bar) bar.style.width = Math.floor(info.percent) + '%';
+        var txt = el.querySelector('.file-progress-text');
+        if (!txt) return;
+        if (info.phase === 'negotiating') { txt.textContent = I18N.t('直传连接中'); return; }
+        if (info.phase === 'sent') {
+            // 阶段一百五十八文案修正：sent 为数据面终态——发送方"已发送"，接收方应显示"接收完成"
+            // 原代码：if (info.phase === 'sent') { txt.textContent = I18N.t('已发送'); return; }
+            txt.textContent = el.classList.contains('self') ? I18N.t('已发送') : I18N.t('接收完成');
+            return;
+        }
+        if (info.phase === 'saved') {
+            // 接收方 blob 组装完成：回填内存地址与点击行为（done_ack 先到时补齐数据面）
+            var bf3 = el.querySelector('.bubble-file');
+            if (bf3 && info.url) {
+                bf3.setAttribute('data-url', info.url);
+                finishP2PBubble(el, bf3);
+            }
+            return;
+        }
+        var base = el.classList.contains('self') ? I18N.t('上传中 ') : I18N.t('接收中 ');
+        var spd = info.speed > 0 ? ' · ' + formatSize(info.speed) + '/s' : '';
+        txt.textContent = base + Math.floor(info.percent) + '%' + spd + ' · ' + I18N.t('直传');
+    };
+
+    IMSocket.on(MSG.FILE_P2P_SIGNAL, function (msg) {
+        var meta = {};
+        try { meta = JSON.parse(msg.content || '{}'); } catch (e) { return; }
+        var nonce = meta.nonce || '';
+        if (meta.action === 'probe') {
+            // 接收方：建"接收中"进度气泡（归属校验：私聊仅对应会话视图渲染；不在窗口时传输后台进行，历史归口）
+            if (currentChatUser !== msg.from_user) return;
+            if (!nonce || messageList.querySelector('.message[data-nonce="' + nonce + '"]')) return; // 去重（多端竞态）
+            var rp = appendProgressBubble(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), 'other', true, '', nonce, false);
+            rp.setAttribute('data-p2p-id', meta.transfer_id || '');
+            rp.setAttribute('data-p2p-peer', msg.from_user);
+            addP2PBadge(rp.querySelector('.bubble-file')); // 阶段一百五十六（UI）：接收中气泡也带"直传"角标（统一加在 bubble-file 内，完成态去重复用）
+            // 阶段一百五十八：接收方初始文案"等待接收"（微信同款）——appendProgressBubble 默认
+            // "上传中 0%" 为发送方文案，接收方在数据通道建立前（negotiating/receiving 到达前）显示
+            var rtxt = rp.querySelector('.file-progress-text');
+            if (rtxt) rtxt.textContent = I18N.t('等待接收');
+            return;
+        }
+        if (meta.action === 'accept') {
+            // 发送方：锁定接收端，建"上传中"进度气泡（probe 阶段失败不建气泡，回退无闪烁）
+            var pend = p2pPending[nonce];
+            if (!pend) return;
+            var sp = appendProgressBubble(IMSocket.getUsername(), pend.file.name, formatSize(pend.file.size), 'self', true, '', nonce, true);
+            sp.setAttribute('data-p2p-id', meta.transfer_id || '');
+            sp.setAttribute('data-p2p-peer', pend.toUser);
+            // blob 地址供完成前点击预览（落库后 data-url 仍为本地文件，点击下载/预览同体验）
+            try { sp.querySelector('.bubble-file').setAttribute('data-url', URL.createObjectURL(pend.file)); } catch (e4) {}
+            bindP2PCancel(sp, nonce);
+            addP2PBadge(sp.querySelector('.bubble-file')); // 阶段一百五十六（UI）：上传中气泡也带"直传"角标（统一加在 bubble-file 内，完成态去重复用）
+            // SDP/ICE 协商期提示（引擎 accept 处理先于本 UI 归口执行，此处补显协商中状态）
+            var ntxt = sp.querySelector('.file-progress-text');
+            if (ntxt) ntxt.textContent = I18N.t('直传连接中');
+            return;
+        }
+        if (meta.action === 'done_ack') {
+            // 双方：按 nonce 回填 msg_id 转正式文件卡片（done_ack 为服务端归口系统帧，from_user 为空）
+            var el = messageList.querySelector('.message[data-nonce="' + nonce + '"]');
+            if (!el || !meta.msg_id) return;
+            el.setAttribute('data-msg-id', meta.msg_id);
+            // 阶段一百五十九：接收端本地缓存写入（IndexedDB/PC 磁盘按设置页双开关；发送端无接收 blob，引擎判空跳过）
+            if (window.P2PFile && P2PFile.cacheReceived) P2PFile.cacheReceived(nonce, meta.msg_id);
+            // 接收方：回填内存 blob 地址（引擎组装完成前 done_ack 先到时由 saved 阶段补齐）
+            var recvUrl = P2PFile.receivedURL(nonce);
+            var bf = el.querySelector('.bubble-file');
+            if (bf && recvUrl) bf.setAttribute('data-url', recvUrl);
+            finishP2PBubble(el, bf);
+            // 已读状态回填（发送端）+ 接收端正在查看会话时自动回执（与 FILE_PERSISTED 同口径）
+            var peer = el.getAttribute('data-p2p-peer') || el.getAttribute('data-from') || '';
+            applyBubbleReadStatus(el, meta.msg_id, peer);
+            if (!el.classList.contains('self') && currentChatUser === peer) {
+                sendReadReceipt(peer, meta.msg_id);
+            }
+            return;
+        }
+        if (meta.action === 'abort') {
+            // 双方：移除进度气泡（含 engine abort(already_accepted) 多端竞态收口——静默移除不提示）
+            var ab = messageList.querySelector('.message[data-nonce="' + nonce + '"]') ||
+                (meta.transfer_id ? messageList.querySelector('.message[data-p2p-id="' + meta.transfer_id + '"]') : null);
+            if (ab) ab.remove();
+            if (msg.from_user && msg.from_user !== IMSocket.getUsername() && meta.reason !== 'already_accepted') {
+                showToast(I18N.t('对方取消了文件发送'));
+            }
+            return;
+        }
+        // probe_fail：发送方 UI 无需处理（气泡未建，引擎 resolve 后 sendFileP2P 直接回退现有链路）
+    });
+
     // ===== 阶段二十六：群聊图片发送（HTTP 上传 + 服务端广播，不走点对点分片协议） =====
     // 流程：本地立即渲染（blob 预览 + nonce 标识）→ POST /upload/group/image → 服务端落库
     // → 服务端广播 MSG.GROUP_IMAGE（含 msg_id）→ 发送端按 nonce 精确回填 msg_id，其余用户实时渲染
@@ -3244,8 +3527,12 @@
     // 服务端校验危险文件拦截+大小上限）→ 落库 msg_type=5 → 广播 MSG.GROUP_FILE → nonce 回填 msg_id
     // suppressLocal：转发复用时抑制本地气泡与输入清理（与 sendGroupImage 的 suppressLocal 同语义）
     function sendGroupFile(file, suppressLocal, groupTarget) {
-        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
-        if (file.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
+        // 阶段一百五十七：群聊文件大小上限独立归口（group_file_max_size 服务端登录响应下发，
+        // 与私聊单请求直传上限 max_file_size 解耦——私聊调整不联动群聊）
+        // 原代码：var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        //         if (file.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
+        var maxFile = (IMSocket.getGroupFileMaxSize && IMSocket.getGroupFileMaxSize()) || 20971520;
+        if (file.size > maxFile) { showToast(I18N.t('群聊文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         var bubble = null;
         if (!suppressLocal) {
@@ -16413,6 +16700,28 @@
                     // 阶段四十六：docx/xlsx/pptx 点击在线编辑（msg_id 取历史消息 r.id），其余类型保持下载
                     onFileCardClick(bubbleFile, r.id, meta.name, meta.url);
                 });
+                if (meta.p2p) addP2PBadge(bubbleFile); // 直传归档副本：带"直传"角标区分
+            } else if (meta.p2p) {
+                // 阶段一百五十六：直传文件历史卡片（不经服务器 url 恒空，点击提示；带"直传"角标）
+                addP2PBadge(bubbleFile);
+                bubbleFile.style.cursor = 'pointer';
+                // 阶段一百五十九：本地缓存命中回填（IndexedDB/PC 磁盘），恢复"另存为"/预览能力
+                if (window.P2PFile && P2PFile.cacheGet) {
+                    P2PFile.cacheGet(r.id, meta.name).then(function (hit) {
+                        if (!hit || !hit.url) {
+                            bubbleFile.addEventListener('click', function () {
+                                showToast(I18N.t('直传文件不保存到服务器，如需留存请发送方开启归档'));
+                            });
+                            return;
+                        }
+                        bubbleFile.setAttribute('data-url', hit.url);
+                        bubbleFile.onclick = function () { onFileCardClick(bubbleFile, r.id, hit.name, hit.url); };
+                    });
+                } else {
+                    bubbleFile.addEventListener('click', function () {
+                        showToast(I18N.t('直传文件不保存到服务器，如需留存请发送方开启归档'));
+                    });
+                }
             }
             body.appendChild(bubbleFile);
         }

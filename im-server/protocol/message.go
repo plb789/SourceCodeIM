@@ -151,6 +151,15 @@ const (
 	//   dismiss（同账号其他设备撤下弹窗）/ ended（对端全下线 30s 宽限收口）
 	// 控制事件不走信令：WebRTC DataChannel 点对点直传（鼠标/键盘注入事件），服务端零参与
 	MsgTypeRemoteSignal = 90
+
+	// ===== 阶段一百五十六：好友文件 P2P 直传信令（WebRTC DataChannel，服务端仅转发信令 + 归口判定） =====
+	// content 为 JSON：{action, transfer_id, name?, size?, mime?, sha256?, reason?, sdp?, candidate?, platform?, nonce?}
+	// action 取值：
+	//   probe（发送方→服务端→接收方全部在线端）/ accept（接收方→发送方，先到先得服务端归口唯一赢家）/
+	//   probe_fail（服务端→发送方：reason=offline/disabled/forbidden/toobig/busy 等拒因）/ abort（任一方→对方，服务端生成兜底）/
+	//   offer / answer / candidate（WebRTC 协商中继帧，服务端注入 ice 后转发，复用 callInjectICE）/
+	//   done（双方→服务端，传输完成元信息归口落库）/ done_ack（服务端→双方，落库回执回填 msg_id）
+	MsgTypeFileP2PSignal = 91
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

@@ -1611,6 +1611,42 @@ html, body {
     color: var(--danger, #fa5151);
 }
 
+/* 阶段一百五十六：文件卡片"直传"角标（P2P 直传与服务器中转区分，跟随主题色） */
+.file-p2p-badge {
+    flex-shrink: 0;
+    align-self: center;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 8px;
+    color: #fff;
+    background: var(--primary);
+    opacity: 0.9;
+    user-select: none;
+    white-space: nowrap;
+}
+
+/* 阶段一百五十八：接收方文件卡片"另存为"按钮样式——按钮方案已废弃（用户反馈右键现成有
+   "另存为"功能，卡片按钮重复；保存入口收口右键菜单，chat.js addP2PSaveBtn 已注释归档） */
+/*.file-save-btn {
+    margin-top: 8px;
+    align-self: flex-start;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 16px;
+    border-radius: 4px;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.file-save-btn:hover {
+    color: #fff;
+    background: var(--primary);
+}*/
+
 /* 黑名单分组（跟随主题色） */
 .blacklist-title {
     font-size: 12px;
@@ -10674,17 +10710,102 @@ html.m .ms-actions {
 .settings-btn {
     margin-top: 14px;
     padding: 8px 18px;
-    border: 1px solid var(--primary);
+    border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
     border-radius: 8px;
-    background: none;
+    /* 原代码：background: none; 用户反馈纯描边在深色主题下单调，改主题色淡底（跟随主题色变化） */
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
     color: var(--primary);
     font-size: 13px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background 0.15s, border-color 0.15s;
 }
 
 .settings-btn:hover {
-    background: color-mix(in srgb, var(--primary) 10%, transparent);
+    background: color-mix(in srgb, var(--primary) 24%, transparent);
+    border-color: var(--primary);
+}
+
+/* 阶段一百五十九补：自动落盘路径行（仅 PC 客户端显示，跟随主题变量） */
+.settings-disk-path {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0 12px;
+    border-top: 1px solid var(--border, #e5e5e5);
+}
+
+.settings-disk-path-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-secondary, #888);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* 长路径省略头部、保留尾部可见（尾段更有辨识度） */
+    text-align: left;
+}
+
+.settings-disk-path-btn {
+    flex-shrink: 0;
+    padding: 3px 12px;
+    border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+    border-radius: 6px;
+    /* 原代码：background: none; 与 settings-btn 同步主题色淡底 */
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.settings-disk-path-btn:hover {
+    background: color-mix(in srgb, var(--primary) 24%, transparent);
+    border-color: var(--primary);
+}
+
+/* 阶段一百五十九补：自绘滑块开关（微信同款，替代网络页原生勾选框；跟随主题色，关闭态用边框色） */
+.slide-switch {
+    flex: none;
+    appearance: none;
+    -webkit-appearance: none;
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: var(--border, #ccc);
+    position: relative;
+    cursor: pointer;
+    outline: none;
+    transition: background 0.2s;
+    margin: 0;
+}
+
+.slide-switch::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: transform 0.2s;
+}
+
+.slide-switch:checked {
+    background: var(--primary);
+}
+
+.slide-switch:checked::before {
+    transform: translateX(18px);
+}
+
+.slide-switch:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
 }
 
 /* 危险按钮（退出登录） */
