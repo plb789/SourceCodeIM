@@ -19,6 +19,7 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
+    var PACK_VER = '1.1';                           // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
 
@@ -37,7 +38,7 @@
     function loadSync(file) {
         try {
             var xhr = new XMLHttpRequest();
-            xhr.open('GET', 'i18n/' + file, false);
+            xhr.open('GET', 'i18n/' + file + '?v=' + PACK_VER, false);
             xhr.send(null);
             if ((xhr.status === 200 || xhr.status === 0) && xhr.responseText) {
                 var obj = JSON.parse(xhr.responseText);
@@ -117,6 +118,22 @@
         if (vT !== null) document.title = vT;
     }
 
+    // ---------- 服务端文本翻译（tr：服务端下发的提示文本统一在此翻译） ----------
+    // 服务端 sendError 等下发的提示文本以"中文原文即 key"归口（服务端零改动），此处做与
+    // apply() 同思路的全等反查：trim 后恰好命中 zh 基准包 key 才替换为英文包对应值；
+    // 未命中（拼接句/含 %s 格式串/动态内容/用户消息）一律原样返回，杜绝误替换。
+    // zh 模式零开销直返（页面原文即中文）。
+    function tr(text) {
+        if (text === null || text === undefined) return text;
+        var s = String(text);
+        if (lang === BASE) return s;
+        var zh = packs.zh || {};
+        var en = packs[lang] || {};
+        var key = s.trim();
+        if (!key || zh[key] === undefined) return s;
+        return en[key] !== undefined ? en[key] : s;
+    }
+
     // ---------- 语言切换（保存偏好后刷新页面；storage 广播其他同源窗口跟随刷新） ----------
     function fire() {
         document.documentElement.setAttribute('data-lang', lang);
@@ -155,6 +172,7 @@
     // ---------- 导出 ----------
     window.I18N = {
         t: t,
+        tr: tr,
         apply: apply,
         setLang: setLang,
         getLang: function () { return lang; },

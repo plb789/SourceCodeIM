@@ -174,9 +174,11 @@
     }
 
     // 确认弹窗：title 标题、text 内容、onOk 确定回调、okText 确定按钮文字（默认"确定"）、cancelText 取消按钮文字（默认"取消"）
+    // 入口统一 I18N.tr：服务端下发的文本（res.msg/ERROR content 等）按"中文原文即 key"反查翻译，
+    // 未命中（拼接句/动态内容）原样返回，杜绝误替换
     function showConfirm(title, text, onOk, okText, cancelText) {
-        modalTitle.textContent = title;
-        modalText.textContent = text;
+        modalTitle.textContent = I18N.tr(title);   // 原实现：modalTitle.textContent = title;
+        modalText.textContent = I18N.tr(text);     // 原实现：modalText.textContent = text;
         modalText.classList.remove('hidden');
         modalInput.classList.add('hidden');
         modalOk.textContent = okText || I18N.t('确定');
@@ -190,14 +192,14 @@
     // 用于"清空显示（云端保留）/ 永久删除（不可恢复）"类二选一场景；extra 为 null 时退化为单选确认；
     // onCancel 可选取消回调（阶段一百五十五：远程协助弹窗取消=立即发拒绝信令，不传行为不变）
     function showChoice(title, text, primaryText, onPrimary, extra, onCancel) {
-        modalTitle.textContent = title;
-        modalText.textContent = text;
+        modalTitle.textContent = I18N.tr(title);   // 入口统一服务端文本翻译（同 showConfirm）
+        modalText.textContent = I18N.tr(text);
         modalText.classList.remove('hidden');
         modalInput.classList.add('hidden');
         modalOk.textContent = primaryText;
         modalOkCallback = onPrimary;
         if (extra) {
-            modalExtra.textContent = extra.text;
+            modalExtra.textContent = I18N.tr(extra.text);
             modalExtraCallback = extra.cb;
             modalExtra.classList.remove('hidden');
         } else {
@@ -213,12 +215,12 @@
     // 输入弹窗：title 标题、placeholder 输入框占位提示、onOk 确定回调（参数为输入值）
     function showPrompt(title, placeholder, onOk, prefill) {
         if (typeof prefill !== 'string') prefill = '';
-        modalTitle.textContent = title;
+        modalTitle.textContent = I18N.tr(title);   // 入口统一服务端文本翻译（同 showConfirm）
         modalText.textContent = '';
         modalText.classList.add('hidden');
         modalInput.classList.remove('hidden');
         modalInput.value = prefill; // 预填（如修改远程地址时带入当前地址），不传则保持空输入
-        modalInput.placeholder = placeholder || '';
+        modalInput.placeholder = I18N.tr(placeholder || '');
         modalOk.textContent = I18N.t('确定');
         modalExtra.classList.add('hidden'); // 输入弹窗无第二动作
         modalOkCallback = function () {
@@ -261,8 +263,10 @@
     });
 
     // Toast 轻提示：2.5 秒后自动消失
+    // 入口统一 I18N.tr：服务端 sendError 下发的提示文本（"中文原文即 key"归口）按语言包
+    // 全等反查翻译；未命中（拼接句/动态内容/用户消息）原样返回，杜绝误替换
     function showToast(text) {
-        toastEl.textContent = text;
+        toastEl.textContent = I18N.tr(text);   // 原实现：toastEl.textContent = text;
         toastEl.classList.remove('hidden');
         clearTimeout(toastTimer);
         toastTimer = setTimeout(function () {
@@ -18108,7 +18112,7 @@
     function appendSystem(text) {
         var div = document.createElement('div');
         div.className = 'system-tip';
-        div.textContent = text;
+        div.textContent = I18N.tr(text);   // 入口统一服务端文本翻译（同 showToast，系统通知类服务端文本按 key 反查）
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }
