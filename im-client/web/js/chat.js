@@ -17560,6 +17560,9 @@
         var me = IMSocket.getUsername();
         // 服务端归口帧（error/timeout/ended）：toast 提示 + 本端收口
         if (p.action === 'error' || p.action === 'timeout' || p.action === 'ended') {
+            // 下行转发观看窗（对端下线/超时收口同样要终结观看窗，防其卡媒体层检测误报"网络不稳定"；
+            // 观看窗按 session_id 自过滤，观看窗未开时 IPC 空转无害）
+            if (window.desktop && window.desktop.remoteSignalIn) window.desktop.remoteSignalIn(msg);
             var isMySession = (remoteOpenId && p.session_id === remoteOpenId) || (remotePendingInvite && remotePendingInvite.session_id === p.session_id);
             if (p.action === 'error' && !isMySession) {
                 // 无在途会话的 error（校验拒绝等）：直接 toast（发起前收口，无窗可展示）
@@ -17656,6 +17659,10 @@
             return;
         }
         if (p.action === 'disconnect') {
+            // 下行转发观看窗（修复：主窗口 remoteEndLocal 里的 remoteClose IPC 仅观看窗自身有效——
+            // 主进程校验 e.sender，主窗口发不出去；此前观看窗收不到断开信令，只能靠媒体层 1~5s
+            // 感知触发"网络不稳定"提示 + 30s 看门狗才收口。转发后观看窗 finish 归口毫秒级关窗）
+            if (window.desktop && window.desktop.remoteSignalIn) window.desktop.remoteSignalIn(msg);
             if (remoteOpenId && p.session_id === remoteOpenId) {
                 showToast('对方已断开远程协助');
                 remoteEndLocal();

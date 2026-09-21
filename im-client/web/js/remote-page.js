@@ -151,8 +151,11 @@
             if (!st.pc || !st.pc.remoteDescription) { st.pendingCands.push(p.candidate); return; }
             try { st.pc.addIceCandidate(new RTCIceCandidate(p.candidate)); } catch (e) { }
         } else if (p.action === 'disconnect') {
-            // 对端主动断开（主窗口通常先行关窗，此处兜底）
+            // 对端主动断开（chat.js 下行转发归口，毫秒级收口）
             finish('对方已断开协助', false);
+        } else if (p.action === 'ended' || p.action === 'timeout') {
+            // 服务端归口收口（对端下线宽限 30s / 60s 未响应）：观看窗同步终结，防卡媒体层检测
+            finish(p.reason || (p.action === 'timeout' ? '对方未响应，协助已取消' : '对方已断线，协助结束'), false);
         }
     }
 
