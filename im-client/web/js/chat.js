@@ -2200,7 +2200,7 @@
             var dn = senderDisplayName(it.f);
             if (dn && names.indexOf(dn) < 0) names.push(dn);
         });
-        parties.textContent = names.join('、') + I18N.t('：') + (env.c || (env.i || []).length) + I18N.t('条消息');
+        parties.textContent = names.join(I18N.t('、')) + I18N.t('：') + (env.c || (env.i || []).length) + I18N.t('条消息');
         detail.innerHTML = '';
         var items = env.i || [];
         if (!items.length) {
@@ -7036,7 +7036,7 @@
             if (!r || !r.ok) { out.textContent = (r && r.msg) || I18N.t('连接失败'); out.classList.add('err'); return; }
             out.textContent = I18N.t('连接成功：') + (r.server_name || cfg.name) +
                 (r.server_version ? ' v' + r.server_version : '') +
-                '，' + ((r.tools || []).length) + I18N.t(' 个工具，耗时 ') + (r.elapsed_ms || 0) + 'ms';
+                I18N.t('，') + ((r.tools || []).length) + I18N.t(' 个工具，耗时 ') + (r.elapsed_ms || 0) + 'ms';
             out.classList.add('ok');
         }).catch(function (e) {
             out.textContent = I18N.t('测试异常：') + (e && e.message || e);
@@ -9114,7 +9114,7 @@
         if (g.w > 0) parts.push(I18N.t('已编辑 ') + g.w + I18N.t(' 个文件'));
         if (g.c > 0) parts.push(I18N.t('执行 ') + g.c + I18N.t(' 条命令'));
         if (!parts.length) parts.push(I18N.t('执行操作'));
-        g.head.textContent = parts.join('，');
+        g.head.textContent = parts.join(I18N.t('，'));
         var cnt = document.createElement('span');
         cnt.className = 'agent-tool-group-count';
         cnt.textContent = (g.w + g.c) + I18N.t(' 项');
@@ -12190,7 +12190,7 @@
                 dl.className = 'wc-del';
                 dl.textContent = (c.del || 0) + I18N.t(' 行删除(-)');
                 st.appendChild(ins);
-                st.appendChild(document.createTextNode('，'));
+                st.appendChild(document.createTextNode(I18N.t('，')));
                 st.appendChild(dl);
                 card.appendChild(st);
             }
@@ -17917,7 +17917,7 @@
             });
             var mSub = document.createElement('div');
             mSub.className = 'merged-sub';
-            mSub.textContent = mNames.join('、') + I18N.t('：') + (mergedEnv.c || (mergedEnv.i || []).length) + I18N.t('条消息');
+            mSub.textContent = mNames.join(I18N.t('、')) + I18N.t('：') + (mergedEnv.c || (mergedEnv.i || []).length) + I18N.t('条消息');
             bubble.appendChild(mSub);
             // 详情数据注册缓存（信封可能超过 data-raw 的 64KB 上限，DOM 属性不可靠，走运行时缓存）
             var mergeKey = 'mk' + Date.now() + '_' + (mergedSeq++);
