@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>远程协助</title>
+    <style>
+        /* ===== 阶段一百五十五：被控端协助悬浮条（QQ 同款：贴顶居中小条 + 断开按钮）
+           主进程 setContentProtection(true) 防入镜（共享画面看不到本条，本地正常显示）；
+           showInactive 不抢焦点（被控端正在操作自己的电脑，弹条不能打断输入） */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+        .bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            height: 52px;
+            margin: 6px 8px;
+            padding: 0 8px 0 16px;
+            box-sizing: border-box;
+            border-radius: 12px;
+            background: #222629;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #07c160;
+            flex-shrink: 0;
+        }
+        .bar-text {
+            flex: 1;
+            min-width: 0;
+            font-size: 13px;
+            color: #ffffff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .bar-quit {
+            height: 30px;
+            padding: 0 16px;
+            border: none;
+            border-radius: 15px;
+            background: #fa5151;
+            color: #ffffff;
+            font-size: 13px;
+            cursor: pointer;
+            outline: none;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .bar-quit:hover { background: #e64340; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <span class="dot"></span>
+        <span class="bar-text" id="barText">远程协助进行中</span>
+        <button class="bar-quit" id="barQuit">断开</button>
+    </div>
+    <script>
+        // 悬浮条数据加载 + 断开按钮（信令归口主窗口 chat.js：disconnect 收口后统一关条/关引擎）
+        (function () {
+            var d = window.desktop || {};
+            if (d.onRemoteBarLoad) d.onRemoteBarLoad(function (data) {
+                var name = (data && (data.peer_name || data.peer)) || '对方';
+                var ctrl = data && data.grant === 'control';
+                document.getElementById('barText').textContent =
+                    name + (ctrl ? ' 正在控制你的电脑' : ' 正在观看你的屏幕');
+            });
+            document.getElementById('barQuit').addEventListener('click', function () {
+                if (d.remoteBarDisconnect) d.remoteBarDisconnect();
+            });
+        })();
+    </script>
+</body>
+</html>

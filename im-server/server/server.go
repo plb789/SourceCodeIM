@@ -124,6 +124,8 @@ func (s *Server) unregister(c *Client) {
 	// 重连后被服务端恒判"忙"（无法再发起/被邀）。hangup 未命中 1v1 会话时自动回落
 	// 会议退出（meetLeave），两种状态均全收口（余员通知 + 清忙 + 空会解散落话单）
 	callOfflineCleanup(s, c.username)
+	// 阶段一百五十五：远程协助状态离线收口（等待响应立即收口；协助中 30s 宽限，重连自动恢复）
+	remoteOfflineCleanup(s, c.username)
 }
 
 // callOfflineCleanup 用户最后连接离线时的通话状态归口清理（callUserBusy 全覆盖 1v1 与会议）
@@ -302,6 +304,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段一百四十一：音视频通话信令（invite/accept/reject/cancel/hangup + WebRTC 媒体中继，话单服务端归口）
 	case protocol.MsgTypeCallSignal:
 		s.HandleCallSignal(c, msg)
+	// 阶段一百五十五：QQ 同款远程协助信令（invite/accept/reject/cancel/disconnect + WebRTC 媒体中继，好友强校验，话单服务端归口）
+	case protocol.MsgTypeRemoteSignal:
+		s.HandleRemoteSignal(c, msg)
 	// 阶段一百四十二：微信同款多群聊信令（建群 / 邀请入群 / 邀请响应）
 	case protocol.MsgTypeGroupCreate:
 		s.handleGroupCreate(c, msg)
@@ -421,6 +426,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	callCancelOfflineHangup(user.Username)
 	// 阶段一百四十八：登录重连取消其所在会议房间的断网宽限收口（切网闪断回来，会议继续）
 	meetCancelOfflineHangup(user.Username)
+	// 阶段一百五十五：登录重连取消其活跃远程协助的下线宽限收口（切网闪断回来，协助继续）
+	remoteCancelOfflineGrace(user.Username)
 	logger.Info("用户 %s 上线", user.Username)
 }
 

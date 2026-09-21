@@ -23,7 +23,8 @@
     "appId": "com.im.client",
     "productName": "im-client",
     "asarUnpack": [
-      "shot-window-picker.ps1"
+      "shot-window-picker.ps1",
+      "remote-sendinput.ps1"
     ],
     "files": [
       "!bundled/**",
@@ -39,7 +40,8 @@
       "!toolchain-manager.js",
       "!mcp-manager.js",
       "!node-runtime.js",
-      "!lsp-manager.js"
+      "!lsp-manager.js",
+      "!remote-input.js"
     ],
     "win": {
       "target": "nsis",

@@ -68,6 +68,25 @@ type CallLog struct {
 // TableName 表名沿用 im_ 前缀约定
 func (CallLog) TableName() string { return "im_call_log" }
 
+// RemoteLog 阶段一百五十五：远程协助话单（QQ 同款远程协助，服务端数据归口）
+// 仅落话单不写聊天信封消息——远程协助不产生聊天气泡，历史可查即可
+type RemoteLog struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	SessionID string `gorm:"column:session_id;type:varchar(64);index" json:"session_id"`
+	Requester string `gorm:"column:requester;type:varchar(32);index" json:"requester"` // 请求发起人
+	Peer      string `gorm:"column:peer;type:varchar(32);index" json:"peer"`           // 对方
+	Mode      string `gorm:"column:mode;type:varchar(8)" json:"mode"`                  // control 请求控制对方 / assist 请求对方协助
+	// AuthMode 最终授权（列名规避 MySQL 8 保留字 grant）：control 允许操作 / view 仅观看；未接通为空
+	AuthMode string `gorm:"column:auth_mode;type:varchar(8);default:''" json:"auth_mode"`
+	// Status 协助结果：connected 已接通（含时长）/ rejected 被控方拒绝 / canceled 请求方取消 / missed 无人响应
+	Status     string    `gorm:"column:status;type:varchar(16)" json:"status"`
+	Duration   int       `gorm:"column:duration;default:0" json:"duration"` // 接通时长（秒，未接通为 0）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RemoteLog) TableName() string { return "im_remote_log" }
+
 // TableName 表名沿用 im_ 前缀约定（GORM 默认复数命名不符合本项目规范，显式指定）
 func (PointsLog) TableName() string { return "im_points_log" }
 

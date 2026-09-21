@@ -140,6 +140,17 @@ const (
 	MsgTypeRedPacketOpen    = 87 // 上行：打开红包（content 为 JSON：{packet_id}）；下行同帧：领取结果（content 为 JSON：{ok,packet_id,amount?,balance?,err?}，ok=true 顺带携带红包详情供打开即显）
 	MsgTypeRedPacketSync    = 88 // 下行：红包状态同步（领取/领完/过期退回后向会话双方或全群在线成员广播，content 为 JSON：{packet_id,status,claimed_count,count,claimed_amount,remaining_amount,msg_id,to_user,group_id}；卡片原位刷新）
 	MsgTypeRedPacketDetail  = 89 // 上行：红包详情查询（content 为 JSON：{packet_id}）；下行同帧：领取明细（content 为 JSON：{ok,packet_id,type,total_amount,count,status,greeting,from_user,expire_time,list:[{username,name,amount,claim_time}]}）
+
+	// ===== 阶段一百五十五：QQ 同款远程协助（一期 PC↔PC 完整互控，媒体走 WebRTC P2P 直连，服务端仅转发信令） =====
+	// content 为 JSON：{action, session_id, mode?, grant?, sdp?, candidate?, reason?}，action 取值：
+	//   invite（请求方→被控方，mode=control 请求控制对方 / mode=assist 请求对方协助）/
+	//   accept（被控方→控制方，grant=control 允许操作 / grant=view 仅观看，screen={w,h} 主屏分辨率）/
+	//   reject（被控方→请求方）/ cancel（请求方→被控方，响应前放弃）/ disconnect（会话中任一方断开）/
+	//   offer / answer / candidate（WebRTC 媒体协商中继帧）；
+	//   服务端自生成：error（校验拒绝：非好友/离线/忙/非 PC 端）/ timeout（60s 无响应）/
+	//   dismiss（同账号其他设备撤下弹窗）/ ended（对端全下线 30s 宽限收口）
+	// 控制事件不走信令：WebRTC DataChannel 点对点直传（鼠标/键盘注入事件），服务端零参与
+	MsgTypeRemoteSignal = 90
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

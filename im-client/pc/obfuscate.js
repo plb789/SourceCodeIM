@@ -42,7 +42,8 @@ const MAIN_MODULES = [
     'toolchain-manager.js',
     'mcp-manager.js',
     'node-runtime.js',
-    'lsp-manager.js'
+    'lsp-manager.js',
+    'remote-input.js'
 ];
 const serverCfgPath = path.resolve(__dirname, '..', '..', 'im-server', 'bin', 'config.yaml'); // 密钥同源配置
 const loaderOut = path.join(__dirname, 'loader.min.js'); // 薄启动器压缩产物（package.json main 归口进 asar）

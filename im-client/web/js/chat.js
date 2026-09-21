@@ -163,12 +163,14 @@
     var toastTimer = null;
     var modalOkCallback = null; // 当前弹窗确定按钮回调
     var modalExtraCallback = null; // 第二动作按钮回调
+    var modalCancelCallback = null; // 取消按钮回调（可选；远程协助弹窗取消=拒绝信令，其余弹窗不传行为不变）
 
     // 关闭弹窗
     function closeModal() {
         modalMask.classList.add('hidden');
         modalOkCallback = null;
         modalExtraCallback = null;
+        modalCancelCallback = null; // 统一清理（"确定"/第二动作路径也清，防残留回调被下次取消误触发）
     }
 
     // 确认弹窗：title 标题、text 内容、onOk 确定回调、okText 确定按钮文字（默认"确定"）、cancelText 取消按钮文字（默认"取消"）
@@ -185,8 +187,9 @@
     }
 
     // 阶段七十二：双选项弹窗——主选项（绿色 primary）+ 可选危险选项（红色）+ 取消。
-    // 用于"清空显示（云端保留）/ 永久删除（不可恢复）"类二选一场景；extra 为 null 时退化为单选确认
-    function showChoice(title, text, primaryText, onPrimary, extra) {
+    // 用于"清空显示（云端保留）/ 永久删除（不可恢复）"类二选一场景；extra 为 null 时退化为单选确认；
+    // onCancel 可选取消回调（阶段一百五十五：远程协助弹窗取消=立即发拒绝信令，不传行为不变）
+    function showChoice(title, text, primaryText, onPrimary, extra, onCancel) {
         modalTitle.textContent = title;
         modalText.textContent = text;
         modalText.classList.remove('hidden');
@@ -202,6 +205,7 @@
             modalExtraCallback = null;
             modalExtra.classList.add('hidden');
         }
+        modalCancelCallback = typeof onCancel === 'function' ? onCancel : null;
         modalCancel.textContent = '取消';
         modalMask.classList.remove('hidden');
     }
@@ -236,7 +240,12 @@
         closeModal();
         if (cb) cb();
     });
-    modalCancel.addEventListener('click', closeModal);
+    // 取消按钮：可选回调（先取后清，与确定/第二动作同构；仅按钮触发，Esc 静默关闭走超时兜底）
+    modalCancel.addEventListener('click', function () {
+        var cb = modalCancelCallback;
+        closeModal();
+        if (cb) cb();
+    });
     // 点击遮罩不关闭，避免误操作丢失确认；支持回车确认、Esc 取消
     modalInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); modalOk.click(); }
@@ -290,6 +299,24 @@
         if (!username) { showToast('请输入用户名'); return; }
         if (!password) { showToast('请输入密码'); return; }
         IMSocket.connect(username, password);
+    }
+
+    // 阶段一百五十五：远程协助被控端引擎初始化——注入信令上行回调
+    //（引擎 offer/answer/candidate 经此发往对端；chat.js 下行分支再原样喂回引擎）
+    // onStop：被控端主动停止共享（浏览器停止共享条）或媒体自保失败时归口发 disconnect 并收口
+    //（engine.stop() 内 wasActive 守卫保证 remoteEndLocal 二次 stop 不再触发本回调，无递归）
+    if (window.RemoteEngine) {
+        window.RemoteEngine.init({
+            send: function (obj) {
+                if (remotePeerUser) remoteSignalSend(remotePeerUser, obj);
+            },
+            onStop: function () {
+                if (remoteRole === 'sharer' && remoteOpenId && remotePeerUser) {
+                    remoteSignalSend(remotePeerUser, { action: 'disconnect', session_id: remoteOpenId, reason: 'sharer-stop' });
+                }
+                remoteEndLocal();
+            }
+        });
     }
 
     // ===== 退出 =====
@@ -17339,6 +17366,329 @@
         return typeLabel + '：' + d;
     }
 
+    // ===== 阶段一百五十五：QQ 同款远程协助（一期 PC↔PC 完整互控） =====
+    // 职责划分：本模块只做"发起入口 + 信令收发 + 授权弹窗 + 端内桥接"——
+    //   1. 发起入口：工具栏"远程协助"按钮（PC 端好友私聊显示）→ 下拉两项（请求控制对方电脑 / 请求对方协助）
+    //   2. 授权弹窗：被控端收 invite 弹自绘三选项弹窗（接受并允许操作 / 仅观看 / 取消=拒绝）+ WebAudio 响铃
+    //   3. 被控端：accept 后开悬浮条（desktop.remoteBarOpen）+ RemoteEngine.startSharer 共享屏幕（remote-engine.js）
+    //   4. 控制端：收 accept 后 desktop.remoteOpen 开观看窗（remote-window.html），输入事件窗内捕获直发
+    //   5. 信令桥接：被控端 offer/answer/candidate 直接交 RemoteEngine（引擎在主窗口）；
+    //      控制端窗内信令经主进程 remoteSignalIn 桥回流上行，下行转发观看窗
+    // 媒体面：屏幕流走 WebRTC P2P 视频轨，鼠标键盘控制事件走 DataChannel 点对点直传（服务端零参与）
+    var remoteBtn = document.getElementById('remote-btn');
+    var remoteOpenId = '';          // 本端进行中的协助 session_id（空=无会话）
+    var remoteRole = '';            // 本端角色：controller 控制方 / sharer 被控方
+    var remoteGrant = '';           // 本端视角最终授权（accept 落定：control 允许操作 / view 仅观看）
+    var remotePeerUser = '';        // 协助对方用户名（收口提示与信令上行用）
+    var remotePendingInvite = null; // 来协助邀请待处理（{session_id, from, mode}）
+    var remoteRingTimer = null;     // 60s 本地兜底计时器（服务端 timeout 归口前的双保险）
+    var remoteRingActx = null, remoteRingInterval = null;
+    var remoteMenuEl = null;        // 远程协助入口菜单单例（点击外部关闭）
+
+    // 远程协助信令上行（统一入口：msg_type=90 + content JSON）
+    function remoteSignalSend(toUser, obj) {
+        IMSocket.send({ msg_type: MSG.REMOTE_SIGNAL, to_user: toUser, content: JSON.stringify(obj) });
+    }
+
+    // 是否真实好友（远程协助仅限好友之间；群聊/AI 会话/陌生人无入口）
+    function isFriendName(u) {
+        return !!friendList.find(function (x) { return x.username === u; });
+    }
+
+    // 协助响铃提示音（WebAudio 双音序列，与通话响铃同参数，零资源文件依赖）
+    function remoteRingStart() {
+        remoteRingStop();
+        try {
+            if (!remoteRingActx) remoteRingActx = new (window.AudioContext || window.webkitAudioContext)();
+            if (remoteRingActx.state === 'suspended') remoteRingActx.resume();
+            var beep = function () {
+                var t0 = remoteRingActx.currentTime;
+                [[880, 0, 0.16], [660, 0.2, 0.42]].forEach(function (seg) {
+                    var o = remoteRingActx.createOscillator();
+                    var g = remoteRingActx.createGain();
+                    o.frequency.value = seg[0];
+                    g.gain.setValueAtTime(0.0001, t0 + seg[1]);
+                    g.gain.exponentialRampToValueAtTime(0.16, t0 + seg[1] + 0.02);
+                    g.gain.exponentialRampToValueAtTime(0.0001, t0 + seg[1] + seg[2]);
+                    o.connect(g); g.connect(remoteRingActx.destination);
+                    o.start(t0 + seg[1]);
+                    o.stop(t0 + seg[1] + seg[2] + 0.02);
+                });
+            };
+            beep();
+            remoteRingInterval = setInterval(beep, 2200);
+        } catch (e) { }
+    }
+    function remoteRingStop() {
+        if (remoteRingInterval) { clearInterval(remoteRingInterval); remoteRingInterval = null; }
+    }
+
+    // 清掉待处理邀请弹窗（响铃停止 + 兜底计时器 + 状态复位；弹窗本体由用户点击或 closeModal 收口）
+    function remoteClearInvite() {
+        remoteRingStop();
+        if (remoteRingTimer) { clearTimeout(remoteRingTimer); remoteRingTimer = null; }
+        remotePendingInvite = null;
+    }
+
+    // 本端收口（任一侧断开/拒绝/超时/错误时调用）：停引擎、关悬浮条/观看窗、清状态
+    function remoteEndLocal() {
+        remoteClearInvite();
+        if (window.RemoteEngine) window.RemoteEngine.stop();
+        if (window.desktop && window.desktop.remoteBarClose) window.desktop.remoteBarClose();
+        if (window.desktop && window.desktop.remoteClose) window.desktop.remoteClose();
+        remoteOpenId = '';
+        remoteRole = '';
+        remoteGrant = '';
+        remotePeerUser = '';
+    }
+
+    // 发起远程协助（mode=control 请求控制对方 / assist 请求对方协助；请求方角色由此定）
+    function startRemoteAssist(mode) {
+        if (!window.desktop || !window.desktop.remoteInputSend) { showToast('远程协助仅 PC 端支持'); return; }
+        if (remoteOpenId) { showToast('正在远程协助中，请先断开'); return; }
+        if (remotePendingInvite) { showToast('有远程协助请求待处理'); return; }
+        if (callOpenId || pendingRing) { showToast('正在通话中，无法发起'); return; }
+        if (currentChatUser === '' || isAIAgent(currentChatUser) || isGroupTarget(currentChatUser)) return;
+        if (!isFriendName(currentChatUser)) { showToast('仅好友之间可发起远程协助'); return; }
+        if (!isPeerOnline(currentChatUser)) { showToast('对方不在线'); return; }
+        var sessionId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        remoteOpenId = sessionId;
+        remoteRole = mode === 'assist' ? 'sharer' : 'controller';
+        remotePeerUser = currentChatUser;
+        remoteSignalSend(currentChatUser, {
+            action: 'invite', session_id: sessionId, mode: mode,
+            from_name: callPeerName(IMSocket.getUsername()), from_avatar: getAvatarUrl(IMSocket.getUsername())
+        });
+        showToast(mode === 'assist' ? '已发送协助请求，等待对方接受' : '已发送控制请求，等待对方接受');
+    }
+
+    // 被邀请方接受（按 invite 模式定角色，QQ 同款语义）：
+    // control=对方请求控制我 → 我是被控方（sharer）：发 accept(grant 由我选) + 悬浮条 + 共享引擎
+    // assist=对方请求我协助 → 我是控制方（controller）：发 accept(grant=control) + 本地直接开观看窗，
+    //        等发起方收 accept 回执后起共享流（offer 后至，观看窗等待 + remoteSigQueue 缓冲兜底）
+    function remoteAcceptInvite(grant) {
+        var inv = remotePendingInvite;
+        if (!inv) return;
+        remoteClearInvite();
+        remoteOpenId = inv.session_id;
+        remotePeerUser = inv.from;
+        if (inv.mode === 'assist') {
+            remoteRole = 'controller';
+            remoteGrant = 'control';
+            remoteSignalSend(inv.from, { action: 'accept', session_id: inv.session_id, grant: 'control' });
+            if (window.desktop && window.desktop.remoteOpen) {
+                window.desktop.remoteOpen({
+                    session_id: inv.session_id, peer: inv.from,
+                    peer_name: callPeerName(inv.from),
+                    grant: 'control', screen: null
+                });
+            }
+            return;
+        }
+        remoteRole = 'sharer';
+        remoteGrant = grant;
+        // 先回 accept 信令（服务端转发控制方），再起本地共享面
+        // screen：被控端主屏物理分辨率（CSS 像素 × DPR；仅控制端 UI 提示用，注入坐标走归一化不依赖此值）
+        var dpr = window.devicePixelRatio || 1;
+        remoteSignalSend(inv.from, {
+            action: 'accept', session_id: inv.session_id, grant: grant,
+            screen: { w: Math.round(screen.width * dpr), h: Math.round(screen.height * dpr) }
+        });
+        // 悬浮条提示（防入镜：主进程 setContentProtection）+ 屏幕共享引擎（getDisplayMedia + DataChannel）
+        if (window.desktop && window.desktop.remoteBarOpen) {
+            window.desktop.remoteBarOpen({ peer: inv.from, peer_name: callPeerName(inv.from), grant: grant });
+        }
+        if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: inv.session_id, grant: grant });
+    }
+
+    // 被控端拒绝邀请
+    function remoteRejectInvite(reason) {
+        var inv = remotePendingInvite;
+        if (!inv) return;
+        remoteClearInvite();
+        remoteSignalSend(inv.from, { action: 'reject', session_id: inv.session_id, reason: reason || 'declined' });
+    }
+
+    // 下拉菜单（两选项：请求控制对方电脑 / 请求对方协助；QQ 同款入口语义）
+    function remoteMenuClose() {
+        if (remoteMenuEl) { remoteMenuEl.remove(); remoteMenuEl = null; }
+        document.removeEventListener('mousedown', remoteMenuOutside, true);
+    }
+    function remoteMenuOutside(e) {
+        if (remoteMenuEl && !remoteMenuEl.contains(e.target) && !remoteBtn.contains(e.target)) remoteMenuClose();
+    }
+    function remoteMenuOpen() {
+        if (remoteMenuEl) { remoteMenuClose(); return; } // 再点=收起（开关菜单）
+        var menu = document.createElement('div');
+        menu.id = 'remote-menu';
+        var items = [
+            { label: '请求控制对方电脑', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 3H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h7v2H8v2h8v-2h-2v-2h7a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 13H4V5h16v11z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('control'); } },
+            { label: '请求对方协助（对方可控制我的电脑）', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-2h2zm0-4h-2V7h2z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('assist'); } }
+        ];
+        items.forEach(function (it) {
+            var el = document.createElement('div');
+            el.className = 'meet-menu-item';
+            el.innerHTML = it.icon;
+            var label = document.createElement('span');
+            label.textContent = it.label;
+            el.appendChild(label);
+            el.addEventListener('click', it.run);
+            menu.appendChild(el);
+        });
+        document.body.appendChild(menu);
+        // 定位：按钮下方（左对齐按钮左缘，越出视口底部翻转到上方；与会议菜单同策略）
+        var rect = remoteBtn.getBoundingClientRect();
+        var mw = menu.offsetWidth, mh = menu.offsetHeight;
+        var left = Math.min(Math.max(8, rect.left), window.innerWidth - mw - 8);
+        var top = rect.bottom + 6;
+        if (top + mh > window.innerHeight - 8) top = Math.max(8, rect.top - mh - 6);
+        menu.style.left = left + 'px';
+        menu.style.top = top + 'px';
+        remoteMenuEl = menu;
+        document.addEventListener('mousedown', remoteMenuOutside, true); // 捕获阶段抢在外部点击前关闭
+    }
+    if (remoteBtn) remoteBtn.addEventListener('click', function (ev) {
+        if (currentChatUser === '' || isAIAgent(currentChatUser) || isGroupTarget(currentChatUser)) return;
+        remoteMenuOpen();
+    });
+
+    // ===== 远程协助信令下行分发（msg_type=90） =====
+    IMSocket.on(MSG.REMOTE_SIGNAL, function (msg) {
+        var p;
+        try { p = JSON.parse(msg.content); } catch (e) { return; }
+        if (!p || !p.action) return;
+        var me = IMSocket.getUsername();
+        // 服务端归口帧（error/timeout/ended）：toast 提示 + 本端收口
+        if (p.action === 'error' || p.action === 'timeout' || p.action === 'ended') {
+            var isMySession = (remoteOpenId && p.session_id === remoteOpenId) || (remotePendingInvite && remotePendingInvite.session_id === p.session_id);
+            if (p.action === 'error' && !isMySession) {
+                // 无在途会话的 error（校验拒绝等）：直接 toast（发起前收口，无窗可展示）
+                if (p.reason) showToast(p.reason);
+                return;
+            }
+            if (isMySession && p.reason) showToast(p.reason);
+            else if (isMySession && p.action === 'timeout') showToast('对方未响应，远程协助已取消');
+            else if (isMySession && p.action === 'ended') showToast('对方已断线，远程协助结束');
+            if (isMySession) remoteEndLocal();
+            return;
+        }
+        if (p.action === 'invite') {
+            // 多端回显防御（服务端不回显 invite）
+            if (msg.from_user === me) return;
+            // Web/手机端无协助能力：静默忽略（纯 Web 被邀场景服务端 HasPC 已拦截）
+            if (!window.desktop || !window.desktop.remoteInputSend) return;
+            // 本端忙（协助中/通话中/已有邀请）：自动拒绝（服务端忙判已拦，双保险）
+            if (remoteOpenId || remotePendingInvite || callOpenId || pendingRing) {
+                remoteSignalSend(msg.from_user, { action: 'reject', session_id: p.session_id, reason: 'busy' });
+                return;
+            }
+            remotePendingInvite = { session_id: p.session_id, from: msg.from_user, mode: p.mode === 'assist' ? 'assist' : 'control' };
+            remoteRingStart();
+            // 60s 本地兜底（服务端 timeout 归口，此为信令丢失场景双保险）
+            remoteRingTimer = setTimeout(function () {
+                if (remotePendingInvite && remotePendingInvite.session_id === p.session_id) {
+                    remoteClearInvite();
+                    showToast('请求已超时');
+                }
+            }, 60000);
+            // 自绘弹窗：control=三选项（接受并允许操作/仅观看/取消=拒绝）
+            // assist=两选项（接受即获得操作权去协助对方，"仅观看"无协助语义）
+            // 取消按钮=立即发 reject（此前取消仅关弹窗，发起方需干等 60s 超时）
+            if (remotePendingInvite.mode === 'assist') {
+                showChoice('远程协助', '对方请求你协助（接受后你可以操作对方的电脑）。是否接受？', '接受', function () {
+                    remoteAcceptInvite('control');
+                }, null, function () { remoteRejectInvite('declined'); });
+            } else {
+                showChoice('远程协助', '对方请求控制你的电脑。是否允许？\n接受后对方可查看你的屏幕实时画面', '接受并允许操作', function () {
+                    remoteAcceptInvite('control');
+                }, { text: '仅观看', cb: function () { remoteAcceptInvite('view'); } }, function () { remoteRejectInvite('declined'); });
+            }
+            return;
+        }
+        if (p.action === 'accept') {
+            if (remoteOpenId !== p.session_id) return;
+            if (remoteRole === 'controller') {
+                // 控制方收 accept（control 模式发起人）：开观看窗（独立 BrowserWindow，观看 + 输入控制）
+                remoteGrant = p.grant === 'control' ? 'control' : 'view';
+                if (window.desktop && window.desktop.remoteOpen) {
+                    window.desktop.remoteOpen({
+                        session_id: p.session_id, peer: remotePeerUser,
+                        peer_name: callPeerName(remotePeerUser),
+                        grant: remoteGrant,
+                        screen: p.screen || null
+                    });
+                }
+            } else if (remoteRole === 'sharer') {
+                // 被协助方收 accept（assist 模式发起人）：开悬浮条 + 起共享流（offer 发往对方观看窗；
+                // grant=control：对方协助必带操作权，DataChannel 据此放行注入事件）
+                remoteGrant = 'control';
+                if (window.desktop && window.desktop.remoteBarOpen) {
+                    window.desktop.remoteBarOpen({ peer: remotePeerUser, peer_name: callPeerName(remotePeerUser), grant: 'control' });
+                }
+                if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: p.session_id, grant: 'control' });
+            }
+            return;
+        }
+        if (p.action === 'reject') {
+            if (remoteOpenId && p.session_id === remoteOpenId) {
+                showToast(p.reason === 'busy' ? '对方忙，无法远程协助' : '对方拒绝了远程协助');
+                remoteEndLocal();
+            }
+            return;
+        }
+        if (p.action === 'cancel') {
+            // 请求方响应前取消（本端是待响应侧则清理；控制方发 invite 后取消不经过本端）
+            if (remoteOpenId && p.session_id === remoteOpenId) remoteEndLocal();
+            return;
+        }
+        if (p.action === 'dismiss') {
+            // 同账号其他设备已接受：撤下本端邀请弹窗
+            if (remotePendingInvite && remotePendingInvite.session_id === p.session_id) remoteClearInvite();
+            return;
+        }
+        if (p.action === 'offer' || p.action === 'answer' || p.action === 'candidate') {
+            // 被控端引擎在主窗口：直接喂引擎；控制端引擎在观看窗：经主进程桥转发
+            if (remoteRole === 'sharer' && window.RemoteEngine) {
+                window.RemoteEngine.handleSignal(p, msg.from_user);
+            } else if (remoteRole === 'controller' && window.desktop && window.desktop.remoteSignalIn) {
+                window.desktop.remoteSignalIn(msg);
+            }
+            return;
+        }
+        if (p.action === 'disconnect') {
+            if (remoteOpenId && p.session_id === remoteOpenId) {
+                showToast('对方已断开远程协助');
+                remoteEndLocal();
+            }
+            return;
+        }
+    });
+
+    // 主进程桥：悬浮条"断开"按钮 → 本端发 disconnect 信令收口（被控端主动断开入口）
+    if (window.desktop && window.desktop.onRemoteBarAction) {
+        window.desktop.onRemoteBarAction(function (data) {
+            if (!data || data.action !== 'disconnect' || !remoteOpenId) return;
+            remoteSignalSend(remotePeerUser, { action: 'disconnect', session_id: remoteOpenId, reason: 'bar' });
+            remoteEndLocal();
+        });
+    }
+    // 主进程桥：观看窗（控制端）上行信令 → WS（frame 为完整协议帧）；窗内断开动作一并收口
+    if (window.desktop && window.desktop.onRemoteSend) {
+        window.desktop.onRemoteSend(function (frame) {
+            try {
+                var c = JSON.parse(frame.content);
+                if (c && (c.action === 'disconnect')) {
+                    if (remoteOpenId && c.session_id === remoteOpenId) remoteEndLocal();
+                }
+            } catch (e) { }
+            IMSocket.send(frame);
+        });
+    }
+    // 主进程桥：观看窗已关闭（页内断开收口完成）——幂等清本端协助态
+    if (window.desktop && window.desktop.onRemoteClosed) {
+        window.desktop.onRemoteClosed(function () { remoteEndLocal(); });
+    }
+
     function updateChatTitle() {
         if (currentChatUser === '') {
             chatTitle.textContent = '群聊';
@@ -17380,6 +17730,11 @@
         // 阶段一百四十四：群会议按钮显隐——仅 PC 端群会话显示（一期会议从群发起；
         // Web/手机端无 desktop 桥恒隐藏，被邀能力由服务端 hub.HasPC 归口判定）
         if (meetBtn) meetBtn.classList.toggle('hidden', !(callSupported && currentChatUser !== '' && isGroupTarget(currentChatUser)));
+        // 阶段一百五十五：远程协助按钮显隐——仅 PC 端好友私聊显示（desktop.remoteInputSend 为 PC 端专有桥；
+        // AI 会话/群聊/非好友隐藏；Web/手机端恒隐藏。好友校验服务端 isFriend 归口，此处为入口预检）
+        var remoteSupported = !!(window.desktop && window.desktop.remoteInputSend);
+        var remoteVisible = remoteSupported && currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser) && isFriendName(currentChatUser);
+        if (remoteBtn) remoteBtn.classList.toggle('hidden', !remoteVisible);
         // 阶段一百四十二：邀请成员按钮显隐——仅群主在多群会话中可见
         var grpInvBtn = document.getElementById('grp-invite-btn');
         if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !(isGroupTarget(currentChatUser) && isGroupOwner(currentChatUser)));

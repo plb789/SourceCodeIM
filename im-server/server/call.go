@@ -225,6 +225,12 @@ func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *ca
 		return
 	}
 
+	// 与远程协助双向忙互斥（阶段一百五十五）：协助中不可再通话（不在 callMu 锁内查询防死锁）
+	if remoteUserBusyAny(from, callee) {
+		s.callSendError(from, p.CallID, "对方忙，请稍后再试")
+		return
+	}
+
 	callMu.Lock()
 	// 双方忙判定（响铃中/通话中均算忙）
 	if _, busy := callUserBusy[from]; busy {

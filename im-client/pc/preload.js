@@ -563,6 +563,85 @@ contextBridge.exposeInMainWorld('desktop', {
     callClose: function () {
         ipcRenderer.send('call:close');
     },
+    // ===== 阶段一百五十五：远程协助（主窗口 / 观看窗 两方共用本 preload） =====
+    // —— 主窗口侧（chat.js）——
+    // 打开/复用观看窗（data = {session_id, peer, peer_name, grant, screen:{w,h}}）
+    remoteOpen: function (data) {
+        ipcRenderer.send('remote:open', data);
+    },
+    // 下行媒体信令转发（主窗口 → 主进程 → 观看窗，frame 为完整协议帧；加载期间主进程缓冲回放）
+    remoteSignalIn: function (frame) {
+        ipcRenderer.send('remote:signal-in', frame);
+    },
+    // 主窗口订阅：观看窗上行信令（chat.js 经 WS 发出）
+    onRemoteSend: function (callback) {
+        ipcRenderer.on('remote:send', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // 主窗口订阅：观看窗已关闭（清本端协助态）
+    onRemoteClosed: function (callback) {
+        ipcRenderer.on('remote:closed', function () {
+            callback();
+        });
+    },
+    // —— 观看窗侧（remote-page.js）——
+    // 接收协助任务（data 同 remoteOpen）
+    onRemoteLoad: function (callback) {
+        ipcRenderer.on('remote:load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 接收下行信令（frame 为完整协议帧，页面按 session_id/action 自行过滤）
+    onRemoteSignal: function (callback) {
+        ipcRenderer.on('remote:signal', function (event, frame) {
+            callback(frame);
+        });
+    },
+    // 窗体关闭转断开语义（Alt+F4/点关闭 → 页面收口 disconnect 信令后自行 remoteClose）
+    onRemoteClose: function (callback) {
+        ipcRenderer.on('remote:window-close', function () {
+            callback();
+        });
+    },
+    // 上行信令（frame 为完整协议帧，主进程转主窗口经 WS 发出）
+    remoteSend: function (frame) {
+        ipcRenderer.send('remote:send', frame);
+    },
+    // 页面收口完成：销毁观看窗（disconnect 信令已发出）
+    remoteClose: function () {
+        ipcRenderer.send('remote:close');
+    },
+    // 被控端：输入注入事件上行（DataChannel 收到的鼠标/键盘事件 → 主进程 PowerShell SendInput；
+    // grant=view 时 remote-engine.js 已丢弃，此处仅透传）
+    remoteInputSend: function (evt) {
+        ipcRenderer.send('remote:input', evt);
+    },
+    // —— 被控端悬浮条侧（remote-bar.html / 主窗口 chat.js 三方共用）——
+    // 打开/复用悬浮条（data = {peer, peer_name, grant}）
+    remoteBarOpen: function (data) {
+        ipcRenderer.send('remote:bar-open', data);
+    },
+    // 关闭悬浮条（remoteEndLocal 收口归口）
+    remoteBarClose: function () {
+        ipcRenderer.send('remote:bar-close');
+    },
+    // 悬浮条侧：接收条数据（对方名 + 模式文案）
+    onRemoteBarLoad: function (callback) {
+        ipcRenderer.on('remote:bar-load', function (event, data) {
+            callback(data);
+        });
+    },
+    // 悬浮条断开按钮上行（主进程转主窗口）
+    remoteBarDisconnect: function () {
+        ipcRenderer.send('remote:bar-disconnect');
+    },
+    // 主窗口订阅：悬浮条按钮动作（data = {action:'disconnect'}）
+    onRemoteBarAction: function (callback) {
+        ipcRenderer.on('remote:bar-action', function (event, data) {
+            callback(data);
+        });
+    },
     // ===== 阶段一百四十四：会议（会中邀请桥，主窗口/会议窗 两方共用） =====
     // 会议窗侧：请求主窗口弹选人弹窗（data = {call_id, call_type, group_id, members:[已在会账号]}）
     meetInviteAsk: function (data) {

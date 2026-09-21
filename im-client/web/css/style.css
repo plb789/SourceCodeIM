@@ -1301,7 +1301,8 @@ html, body {
     box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, .14));
 }
 
-#meet-menu .meet-menu-item {
+#meet-menu .meet-menu-item,
+#remote-menu .meet-menu-item {
     display: flex;
     align-items: center;
     gap: 9px;
@@ -1314,13 +1315,47 @@ html, body {
     transition: background 0.12s;
 }
 
-#meet-menu .meet-menu-item:hover {
+#meet-menu .meet-menu-item:hover,
+#remote-menu .meet-menu-item:hover {
     background: var(--hover, rgba(0, 0, 0, 0.06));
 }
 
-#meet-menu .meet-menu-item svg {
+#meet-menu .meet-menu-item svg,
+#remote-menu .meet-menu-item svg {
     flex-shrink: 0;
     color: var(--text-light, #999);
+}
+
+/* ===== 阶段一百五十五：远程协助按钮同款两段式（主区域/小三角均弹两选项菜单；QQ 同款入口） =====
+   箭头样式与会议按钮 meet-caret 同源，悬浮随按钮同色加亮 */
+#remote-btn .remote-caret {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 24px;
+    margin-left: -2px;
+    border-radius: 3px;
+    color: var(--text-light);
+    opacity: 0.75;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+#remote-btn .remote-caret:hover {
+    opacity: 1;
+    background: var(--hover, rgba(0, 0, 0, 0.08));
+}
+
+/* 远程协助入口菜单（自绘弹层，禁止系统默认菜单；跟随主题色，复用 meet-menu-item 项样式） */
+#remote-menu {
+    position: fixed;
+    z-index: 260;
+    min-width: 232px;
+    padding: 5px;
+    background: var(--panel-bg, #fff);
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, .14));
 }
 
 .tool-btn:hover {

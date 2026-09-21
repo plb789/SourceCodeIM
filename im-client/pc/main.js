@@ -15,6 +15,8 @@ const mcpManager = require('./mcp-manager.js');
 const browserManager = require('./browser-manager.js');
 // 阶段一百二十二：网页资源本地缓存管理器（app:// 协议三级回退 + 启动增量同步 + 旧登录态迁移）
 const webCache = require('./web-cache.js');
+// 阶段一百五十五：远程协助被控端输入注入管理器（PowerShell SendInput 常驻工作进程）
+const remoteInput = require('./remote-input.js');
 
 let mainWindow = null;
 // 阶段一百五十四：微信同款启动闪屏——主窗口 show:false 不再创建即显示（原实现：窗口创建即显示，
@@ -1455,6 +1457,216 @@ ipcMain.on('call:send', function (e, frame) {
     }
 });
 
+// ===== 阶段一百五十五：远程协助观看窗（控制端，QQ 同款深色沉浸） =====
+// 控制端观看窗独立 BrowserWindow 承载（照 ensureCallWindow 模式）：渲染被控端屏幕流 + 输入控制；
+// 无音频轨，可拉伸/最大化/全屏（QQ 同款观看体验）；close 转断开语义（与通话窗同构）
+var remoteWin = null;
+var remoteWindowCloseArmed = false; // 页面已收口标记（放行销毁）
+var remoteSigQueue = [];            // 观看窗加载中的下行信令缓冲（offer 先于窗口就绪到达）
+
+function remoteWindowSize() {
+    // 默认 1024×640，按主屏工作区收敛（小屏防溢出）
+    var wa = screen.getPrimaryDisplay().workArea;
+    return { width: Math.min(1024, wa.width), height: Math.min(640, wa.height) };
+}
+
+function ensureRemoteWindow() {
+    if (remoteWin && !remoteWin.isDestroyed()) return remoteWin;
+    var size = remoteWindowSize();
+    remoteWin = new BrowserWindow({
+        width: size.width,
+        height: size.height,
+        minWidth: 640,
+        minHeight: 420,
+        show: false,
+        frame: false,          // 无边框自绘（深色沉浸 + 自绘控制条）
+        backgroundColor: '#161819',
+        title: '远程协助',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    remoteWin.loadURL(SERVER_URL + 'remote-window.html?v=1551');
+    remoteWin.on('close', function (e) {
+        if (app.isQuitting || remoteWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
+        // Alt+F4/点关闭转断开语义：通知页面走 disconnect 信令收口后自行 remoteClose，
+        // 直接销毁会让被控端一直等待（信令不发对端 UI 卡"协助中"）
+        e.preventDefault();
+        if (remoteWin && !remoteWin.isDestroyed()) remoteWin.webContents.send('remote:window-close');
+    });
+    remoteWin.on('closed', function () { remoteWin = null; remoteHotkeyResume(); }); // 异常销毁兜底恢复快捷键（幂等）
+    return remoteWin;
+}
+
+// 打开观看窗（主窗口 chat.js 收 accept 后调用）
+ipcMain.on('remote:open', function (e, data) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return; // 只接受主窗口来源
+    if (!data || !data.session_id) return;
+    remoteWindowCloseArmed = false;
+    // grant=control：控制期间挂起本机全局快捷键（Alt+A/录屏键让路给对方电脑，断开自动恢复）
+    if (data.grant === 'control') remoteHotkeySuspend();
+    var win = ensureRemoteWindow();
+    var show = function () {
+        if (!remoteWin || remoteWin.isDestroyed()) return;
+        remoteWin.webContents.send('remote:load', data);
+        remoteWin.show();
+        remoteWin.focus();
+        // 窗口就绪回放缓冲信令（remote:load 之后 flush：监听器/任务数据均已就绪，按到达序回放）
+        if (remoteSigQueue.length) {
+            var q = remoteSigQueue;
+            remoteSigQueue = [];
+            q.forEach(function (f) {
+                if (remoteWin && !remoteWin.isDestroyed()) remoteWin.webContents.send('remote:signal', f);
+            });
+        }
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 观看窗关闭收口（页面 disconnect 信令已发出后调用）：销毁窗口并通知主窗口清协助态
+ipcMain.on('remote:close', function (e) {
+    if (!remoteWin || e.sender !== remoteWin.webContents) return;
+    remoteWindowCloseArmed = true;
+    remoteSigQueue = []; // 协助收口清缓冲（防残留帧串场）
+    remoteHotkeyResume(); // 恢复本机全局快捷键（幂等，'closed' 兜底再触发无副作用）
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('remote:closed');
+    }
+    if (!remoteWin.isDestroyed()) remoteWin.destroy();
+    remoteWin = null;
+});
+
+// 信令桥（主窗口 → 观看窗）：chat.js 收到 90 媒体帧后原样转发，观看窗按 session_id 自行过滤。
+// 被控端 accept 后立即起 offer，早于观看窗加载完成（直发即丢，双方永久互等）——
+// 窗口加载期间帧入队，remote:open 就绪回放（remote:load 之后 flush 保序）
+ipcMain.on('remote:signal-in', function (e, frame) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    if (remoteWin && !remoteWin.isDestroyed()) {
+        if (remoteWin.webContents.isLoading()) {
+            remoteSigQueue.push(frame); // 窗口加载中：缓冲待就绪回放
+        } else {
+            remoteWin.webContents.send('remote:signal', frame);
+        }
+    }
+});
+
+// 信令桥（观看窗 → 主窗口）：上行信令由 chat.js 经 WS 发出（frame 为完整协议帧）
+ipcMain.on('remote:send', function (e, frame) {
+    if (!remoteWin || e.sender !== remoteWin.webContents) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('remote:send', frame);
+    }
+});
+
+// 输入注入桥（被控端主窗口 remote-engine.js DataChannel 桥 → 主进程 PowerShell SendInput）：
+// 只接受主窗口来源（引擎归口主窗口，grant=view 的丢弃已在前端双保险拦截）
+ipcMain.on('remote:input', function (e, evt) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    remoteInput.dispatch(evt);
+});
+
+// ===== 阶段一百五十五：被控端协助悬浮条（QQ 同款：贴顶居中小条 + 断开按钮） =====
+var remoteBarWin = null;
+function ensureRemoteBar() {
+    if (remoteBarWin && !remoteBarWin.isDestroyed()) return remoteBarWin;
+    remoteBarWin = new BrowserWindow({
+        width: 348,
+        height: 64,
+        show: false,
+        frame: false,
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+        backgroundColor: '#00000000',
+        transparent: true, // 圆角阴影条（背景透明，条本体自绘圆角）
+        title: '远程协助',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    remoteBarWin.setAlwaysOnTop(true, 'screen-saver'); // 悬浮于多数窗口之上
+    // 防入镜：共享源为整屏时悬浮条会进入共享画面（控制端看到"窗口套窗口"递归），
+    // setContentProtection 走 WDA_EXCLUDEFROMCAPTURE——捕获 API 看不到本条，本地正常显示
+    remoteBarWin.setContentProtection(true);
+    remoteBarWin.loadURL(SERVER_URL + 'remote-bar.html?v=1551');
+    remoteBarWin.on('closed', function () { remoteBarWin = null; });
+    return remoteBarWin;
+}
+
+// 打开悬浮条（主窗口 chat.js remoteAcceptInvite 调用；data = {peer, peer_name, grant}）
+ipcMain.on('remote:bar-open', function (e, data) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    var win = ensureRemoteBar();
+    var show = function () {
+        if (!remoteBarWin || remoteBarWin.isDestroyed()) return;
+        remoteBarWin.webContents.send('remote:bar-load', data);
+        // 贴主屏工作区顶部居中；showInactive 不抢焦点（被控端正在操作自己的电脑，弹条不能打断输入）
+        var wa = screen.getPrimaryDisplay().workArea;
+        var b = remoteBarWin.getBounds();
+        remoteBarWin.setPosition(Math.round(wa.x + (wa.width - b.width) / 2), wa.y + 8);
+        remoteBarWin.showInactive();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 关闭悬浮条（chat.js remoteEndLocal 收口归口；主窗口来源或条自身销毁均可触发）
+ipcMain.on('remote:bar-close', function (e) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    if (remoteBarWin && !remoteBarWin.isDestroyed()) remoteBarWin.destroy();
+    remoteBarWin = null;
+});
+
+// 悬浮条"断开"按钮 → 主窗口 chat.js 发 disconnect 信令收口（信令归口主窗口，收口统一关条）
+ipcMain.on('remote:bar-disconnect', function (e) {
+    if (!remoteBarWin || e.sender !== remoteBarWin.webContents) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('remote:bar-action', { action: 'disconnect' });
+    }
+});
+
+// ===== 阶段一百五十五：全局快捷键挂起/恢复（QQ 同款语义） =====
+// 控制端正在操作对方电脑时，本机 Alt+A/录屏键应让路——用户按键意图是发给对方电脑而非本机截图；
+// 观看窗开启（grant=control）即挂起，关闭/异常销毁即恢复（幂等，重复恢复无副作用）
+var remoteHotkeySuspended = false;
+var recShortcutKey = ''; // 实际注册成功的录屏键位（Ctrl+Alt+R 或回退 Ctrl+Shift+R；空=未注册全局键）
+function remoteHotkeySuspend() {
+    if (remoteHotkeySuspended) return;
+    remoteHotkeySuspended = true;
+    try { globalShortcut.unregister('Alt+A'); } catch (e) { }
+    if (recShortcutKey) { try { globalShortcut.unregister(recShortcutKey); } catch (e) { } }
+}
+function remoteHotkeyResume() {
+    if (!remoteHotkeySuspended) return;
+    remoteHotkeySuspended = false;
+    try {
+        globalShortcut.register('Alt+A', function () {
+            captureWithHide().catch(function (err) { console.warn('Alt+A 全局截图失败:', err); });
+        });
+    } catch (e) { }
+    if (recShortcutKey) {
+        try {
+            globalShortcut.register(recShortcutKey, function () {
+                if (!mainWindow) return;
+                mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
+            });
+        } catch (e) { }
+    }
+}
+
 // ===== 阶段一百五十一补丁：会议共享期间窗口内容保护（防"窗口套窗口"递归画面） =====
 // 共享源为整个主屏时，悬浮其上的会议窗会进入共享画面形成递归；setContentProtection(true)
 // 走 Windows WDA_EXCLUDEFROMCAPTURE——捕获类 API（getDisplayMedia/desktopCapturer/系统截图）
@@ -2301,6 +2513,7 @@ app.whenReady().then(async function () {
     // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
     // 两个都失败仅告警（截图按钮下拉菜单"录屏"项仍可用），实际生效键位经 rec:shortcut 供菜单文案同步
     var recShortcutLabel = 'Ctrl+Alt+R';
+    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
     var recHotkeyHandler = function () {
         if (!mainWindow) return;
         mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
@@ -2308,10 +2521,12 @@ app.whenReady().then(async function () {
     var recShortcutOk = globalShortcut.register('Control+Alt+R', recHotkeyHandler);
     if (!recShortcutOk) {
         recShortcutLabel = 'Ctrl+Shift+R';
+        recShortcutKey = 'Control+Shift+R';
         recShortcutOk = globalShortcut.register('Control+Shift+R', recHotkeyHandler);
     }
     if (!recShortcutOk) {
         recShortcutLabel = '';
+        recShortcutKey = '';
         console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
     }
 
@@ -2329,6 +2544,7 @@ app.on('will-quit', function () {
     try { mcpManager.disposeAll(); } catch (e) {} // 阶段九十：本机 MCP 服务器进程随应用退出全量回收
     try { browserManager.lspShutdown(); } catch (e) {} // 阶段一百三十：LSP 语言服务器子进程随应用退出全量回收
     shotPickerStop(); // 阶段一百三十九：窗口识别命中服务随应用退出回收（stdin 断开子进程自退，此为主动清理）
+    try { remoteInput.stop(); } catch (e) {} // 阶段一百五十五：远程协助输入注入服务随应用退出回收（同 shotPicker 惯例）
 });
 
 app.on('window-all-closed', function () {

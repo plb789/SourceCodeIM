@@ -427,6 +427,13 @@
                         <!-- 阶段一百五十二：下拉小三角（与截图按钮 shot-caret 同结构；chat.js 点击分流） -->
                         <span class="meet-caret"><svg viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg></span>
                     </button>
+                    <!-- 阶段一百五十五：QQ 同款远程协助按钮（仅 PC 端好友私聊显示，chat.js 显隐归口；
+                         屏幕共享走 WebRTC P2P、鼠标键盘控制事件走 DataChannel，好友强校验服务端归口） -->
+                    <button id="remote-btn" class="tool-btn hidden" title="远程协助">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21 3H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h7v2H8v2h8v-2h-2v-2h7a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 13H4V5h16v11z"/><path fill="currentColor" d="M10.7 13.9l.5-1.4 3.1-1.2-2.9-1.6.5-1.4-4.2 2z"/></svg>
+                        <!-- 下拉小三角（与 meet-caret 同结构；chat.js 点击分流弹两选项菜单） -->
+                        <span class="remote-caret"><svg viewBox="0 0 24 24" width="9" height="9"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg></span>
+                    </button>
                     <button id="screenshot-btn" class="tool-btn" title="截图发送">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17 3h-2.18A3 3 0 0 0 12 1a3 3 0 0 0-2.82 2H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-5 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm6 16H5V5h2v2h10V5h2v14zM12 8a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
                         <!-- 阶段一百三十九：QQ 同款下拉箭头（点主区域截图，点箭头弹"隐藏当前窗口"选项菜单） -->
@@ -1468,7 +1475,10 @@
     <script src="js/lib/Chart.min.js?v=4.4.9"></script>
     <script src="js/lib/PptxViewJS.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=0.20"></script>
-    <script src="js/chat.js?v=3.59"></script>
+    <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
+         先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
+    <script src="js/remote-engine.js?v=1.0"></script>
+    <script src="js/chat.js?v=3.60"></script>
     <script>if (window.bootStage) bootStage('正在初始化会话…');</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>

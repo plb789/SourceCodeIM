@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>远程协助</title>
+    <style>
+        /* ===== 阶段一百五十五：远程协助观看窗（QQ 同款深色沉浸式，自绘控制条，无边框拖动区在顶部）
+           形态：远端屏幕画面铺满（object-fit:contain 保画面完整不裁切）+ 顶部信息条 + 底部控制条
+           主题说明：协助界面为固定深色沉浸（不受明暗主题切换影响），强调色取主题绿 #07c160 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #161819;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            color: #ffffff;
+        }
+
+        /* 顶部拖动条（无边框窗口移动区；控制模式下层不拦截鼠标——事件需透传到下方鼠标捕获层） */
+        .rw-drag {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 40px;
+            -webkit-app-region: drag;
+            z-index: 30;
+        }
+        body.grant-control .rw-drag { -webkit-app-region: no-drag; }
+
+        /* 远端画面（contain 保画面完整：letterbox 黑边区域不误触发越界坐标） */
+        #rwRemote {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000000;
+        }
+        /* 观看模式：远端画面上禁止右键菜单（画面内容非本端交互目标） */
+        body.grant-view #rwRemote { pointer-events: none; }
+
+        /* ===== 顶部信息条（对方名 + 模式标签 + 分辨率） ===== */
+        .rw-top {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 9px 14px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+            z-index: 20;
+            pointer-events: none;
+        }
+        .rw-top .rw-name { font-size: 15px; font-weight: 500; }
+        .rw-top .rw-mode {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 9px;
+            background: rgba(7, 193, 96, 0.22);
+            color: #4ed88a;
+        }
+        .rw-top .rw-screen { font-size: 12px; color: #9aa3ad; }
+        .rw-top.ended .rw-mode { background: rgba(230, 162, 60, 0.2); color: #e6a23c; }
+
+        /* ===== 底部控制条（自绘，圆形按钮；hover 浮现避免遮挡画面） ===== */
+        .rw-controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 84px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 38px;
+            background: linear-gradient(to top, rgba(0,0,0,0.5), transparent);
+            z-index: 25;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        body:hover .rw-controls, .rw-controls.keep { opacity: 1; }
+        .rw-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            background: rgba(255,255,255,0.16);
+            transition: background 0.15s;
+            outline: none;
+            padding: 0;
+        }
+        .rw-btn:hover { background: rgba(255,255,255,0.26); }
+        .rw-btn.danger { background: #fa5151; width: 56px; height: 56px; }
+        .rw-btn.danger:hover { background: #e64340; }
+
+        /* 结束收尾遮罩提示 */
+        .rw-mask {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 40;
+        }
+        .rw-mask.visible { display: flex; }
+        .rw-mask span {
+            background: rgba(0,0,0,0.72);
+            color: #ffffff;
+            font-size: 14px;
+            padding: 10px 22px;
+            border-radius: 8px;
+        }
+
+        /* ===== 断开确认弹窗（自绘，禁用系统弹窗） ===== */
+        .rw-confirm {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+        }
+        .rw-confirm.visible { display: flex; }
+        .rw-confirm .rw-cbox {
+            background: #23262a;
+            border-radius: 12px;
+            padding: 22px 26px 18px;
+            width: 280px;
+            text-align: center;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+        }
+        .rw-confirm .rw-ctext { font-size: 14px; margin-bottom: 18px; }
+        .rw-confirm .rw-cbtns { display: flex; gap: 12px; }
+        .rw-confirm .rw-cbtn {
+            flex: 1;
+            height: 36px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            outline: none;
+        }
+        .rw-confirm .rw-cbtn.main { background: #07c160; color: #fff; }
+        .rw-confirm .rw-cbtn.main:hover { background: #06ad56; }
+        .rw-confirm .rw-cbtn.sub { background: rgba(255,255,255,0.12); color: #fff; }
+        .rw-confirm .rw-cbtn.sub:hover { background: rgba(255,255,255,0.2); }
+    </style>
+</head>
+<body>
+    <video id="rwRemote" autoplay playsinline muted></video>
+    <div class="rw-drag"></div>
+    <div class="rw-top" id="rwTop">
+        <span class="rw-name" id="rwName">远程协助</span>
+        <span class="rw-mode" id="rwMode">连接中</span>
+        <span class="rw-screen" id="rwScreen"></span>
+    </div>
+    <div class="rw-controls" id="rwControls">
+        <button class="rw-btn" id="btnFull" title="全屏">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        </button>
+        <button class="rw-btn danger" id="btnHangup" title="断开远程协助">
+            <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+    </div>
+    <div class="rw-mask" id="rwMask"><span id="rwMaskText"></span></div>
+    <div class="rw-confirm" id="rwConfirm">
+        <div class="rw-cbox">
+            <div class="rw-ctext">确定断开远程协助吗？</div>
+            <div class="rw-cbtns">
+                <button class="rw-cbtn sub" id="rwCanc">取消</button>
+                <button class="rw-cbtn main" id="rwOk">断开</button>
+            </div>
+        </div>
+    </div>
+    <script src="js/remote-page.js?v=1.0"></script>
+</body>
+</html>

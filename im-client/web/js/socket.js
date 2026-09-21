@@ -118,7 +118,8 @@
         RED_PACKET: 86,          // 红包消息（与普通消息同链路落库转发，content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
         RED_PACKET_OPEN: 87,     // 双向：上行打开红包 {packet_id}；下行结果按 act 区分（send=发送回执含余额 / open=领取结果含详情 / detail=详情响应）
         RED_PACKET_SYNC: 88,     // 下行：红包状态同步（领取/领完/过期退回后广播，content 为 JSON：{packet_id,status,claimed_count,...,msg_id}；卡片原位刷新）
-        RED_PACKET_DETAIL: 89    // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
+        RED_PACKET_DETAIL: 89,   // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
+        REMOTE_SIGNAL: 90        // 阶段一百五十五：QQ 同款远程协助信令（双向，content 为 JSON：{action,session_id,mode?,grant?,sdp?,candidate?,reason?}；好友强校验，话单由服务端归口落库）
     };
 
     function connect(username, password) {
