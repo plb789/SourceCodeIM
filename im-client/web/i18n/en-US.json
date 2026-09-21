@@ -1438,5 +1438,11 @@
   "分片缺少文件标识": "Chunk is missing a file identifier",
   "对方接收队列已满，文件传输中断，请重新发送": "Recipient queue is full; transfer interrupted, please resend",
   "查询历史记录失败": "Failed to load history",
-  "仅发送方可取消上传": "Only the sender can cancel the upload"
+  "仅发送方可取消上传": "Only the sender can cancel the upload",
+  "[消息已撤回]": "[Message recalled]",
+  "[链接]": "[Link]",
+  "[语音]": "[Voice]",
+  "[视频]": "[Video]",
+  "[文件]": "[File]",
+  "[文档]": "[Document]"
 }

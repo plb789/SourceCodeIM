@@ -14825,7 +14825,11 @@
             headRow.appendChild(timeEl);
             var msgRow = document.createElement('div');
             msgRow.className = 'conv-msg';
-            msgRow.textContent = cv.last_msg;
+            // 阶段一百五十五修正（i18n 补漏）：会话摘要为服务端存库文本，英文模式下按语言包
+            // 全等反查翻译纯静态短语（[图片]/[文件]/[消息已撤回] 等）；带动态后缀的摘要
+            // （如"[图片] 附言"、"[红包] 祝福语"）不命中整句回退原样，杜绝误替换。
+            // 原实现：msgRow.textContent = cv.last_msg;
+            msgRow.textContent = I18N.tr(cv.last_msg);
             main.appendChild(headRow);
             main.appendChild(msgRow);
 

@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="js/i18n.js?v=1.1"></script>
+    <script src="js/i18n.js?v=1.2"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -1492,7 +1492,7 @@
     <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
     <script src="js/remote-engine.js?v=1.0"></script>
-    <script src="js/chat.js?v=3.63"></script>
+    <script src="js/chat.js?v=3.64"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
