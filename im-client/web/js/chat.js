@@ -59,10 +59,10 @@
         if (mode === 'percall') {
             var c = (percallCost != null && percallCost > 0) ? percallCost : 0.01;
             titlebarPointsEl.setAttribute('data-tip',
-                '按次计费 每轮固定扣 ' + c + ' 积分 ；问答失败或中断不扣分');
+                I18N.t('按次计费 每轮固定扣 ') + c + I18N.t(' 积分 ；问答失败或中断不扣分'));
         } else {
             titlebarPointsEl.setAttribute('data-tip',
-                '每 1000 tokens 消耗 1 积分（精确折算）；问答失败或中断不扣分');
+                I18N.t('每 1000 tokens 消耗 1 积分（精确折算）；问答失败或中断不扣分'));
         }
     };
     var avatarFileEl = document.getElementById('avatar-file');
@@ -179,8 +179,8 @@
         modalText.textContent = text;
         modalText.classList.remove('hidden');
         modalInput.classList.add('hidden');
-        modalOk.textContent = okText || '确定';
-        modalCancel.textContent = cancelText || '取消';
+        modalOk.textContent = okText || I18N.t('确定');
+        modalCancel.textContent = cancelText || I18N.t('取消');
         modalExtra.classList.add('hidden'); // 常规确认无第二动作
         modalOkCallback = onOk;
         modalMask.classList.remove('hidden');
@@ -206,7 +206,7 @@
             modalExtra.classList.add('hidden');
         }
         modalCancelCallback = typeof onCancel === 'function' ? onCancel : null;
-        modalCancel.textContent = '取消';
+        modalCancel.textContent = I18N.t('取消');
         modalMask.classList.remove('hidden');
     }
 
@@ -219,7 +219,7 @@
         modalInput.classList.remove('hidden');
         modalInput.value = prefill; // 预填（如修改远程地址时带入当前地址），不传则保持空输入
         modalInput.placeholder = placeholder || '';
-        modalOk.textContent = '确定';
+        modalOk.textContent = I18N.t('确定');
         modalExtra.classList.add('hidden'); // 输入弹窗无第二动作
         modalOkCallback = function () {
             var val = modalInput.value.trim();
@@ -289,15 +289,15 @@
             loginPassword.type = show ? 'text' : 'password';
             loginEyeShow.classList.toggle('hidden', show);
             loginEyeHide.classList.toggle('hidden', !show);
-            loginEye.title = show ? '隐藏密码' : '显示密码';
+            loginEye.title = show ? I18N.t('隐藏密码') : I18N.t('显示密码');
         });
     }
     function doLogin() {
         var username = loginUsername.value.trim();
         var password = loginPassword.value;
         // UI 规范修复：原代码 alert('请输入用户名') 为系统默认弹窗，违反"禁止使用系统默认弹窗"规则，改用页面内 Toast
-        if (!username) { showToast('请输入用户名'); return; }
-        if (!password) { showToast('请输入密码'); return; }
+        if (!username) { showToast(I18N.t('请输入用户名')); return; }
+        if (!password) { showToast(I18N.t('请输入密码')); return; }
         IMSocket.connect(username, password);
     }
 
@@ -365,7 +365,7 @@
 
     // ===== 主题切换 =====
     var themes = ['light', 'dark', 'system'];
-    var themeNames = { light: '浅色', dark: '深色', system: '跟随系统' };
+    var themeNames = { light: I18N.t('浅色'), dark: I18N.t('深色'), system: I18N.t('跟随系统') };
     // 主题按钮改为图标显示（与聊天/通讯录图标同风格 SVG，跟随主题色）：
     // 浅色=太阳图标 深色=月亮图标 跟随系统=显示器图标，主题名称通过 title 悬停提示展示
     // 原实现：themeBtn.textContent = '主题·' + themeNames[next] 文字按钮，已注释保留备用
@@ -416,7 +416,7 @@
     // 按当前主题刷新按钮图标与悬停提示
     function renderThemeBtn(theme) {
         themeBtn.innerHTML = themeIcons[theme];
-        themeBtn.title = '主题·' + themeNames[theme];
+        themeBtn.title = I18N.t('主题·') + themeNames[theme];
     }
     applyTheme(getTheme());
     themeBtn.addEventListener('click', function () {
@@ -489,10 +489,10 @@
             var anyInstalling = Object.keys(sm).some(function (k) { return sm[k] && sm[k].installing; });
             if (anyInstalling) {
                 agentTcStatusEl.classList.remove('hidden');
-                agentTcStatusEl.textContent = '正在下载安装工具链，请稍候…';
+                agentTcStatusEl.textContent = I18N.t('正在下载安装工具链，请稍候…');
             } else if (anyInstalled) {
                 agentTcStatusEl.classList.remove('hidden');
-                agentTcStatusEl.textContent = '部分工具链已安装，Agent 任务可直接调用对应命令';
+                agentTcStatusEl.textContent = I18N.t('部分工具链已安装，Agent 任务可直接调用对应命令');
             } else {
                 agentTcStatusEl.classList.add('hidden');
             }
@@ -500,7 +500,7 @@
         if (!list.length) {
             var empty = document.createElement('div');
             empty.className = 'agent-mkt-empty';
-            empty.textContent = agentTcState.loaded ? '暂无上架工具链（后台管理 → 工具链市场 可上架）' : '正在加载…';
+            empty.textContent = agentTcState.loaded ? I18N.t('暂无上架工具链（后台管理 → 工具链市场 可上架）') : I18N.t('正在加载…');
             grid.appendChild(empty);
             return;
         }
@@ -540,8 +540,8 @@
         meta.className = 'agent-mkt-cmd';
         var metaParts = [];
         if (tc.version) metaParts.push('v' + tc.version);
-        if (tc.size_mb) metaParts.push('≈' + tc.size_mb + 'MB / 解压后 ' + Math.round(tc.size_mb * 4) + 'MB');
-        if (tc.sha256) metaParts.push('SHA256 校验');
+        if (tc.size_mb) metaParts.push('≈' + tc.size_mb + I18N.t('MB / 解压后 ') + Math.round(tc.size_mb * 4) + 'MB');
+        if (tc.sha256) metaParts.push(I18N.t('SHA256 校验'));
         meta.textContent = metaParts.join(' · ');
         meta.title = meta.textContent;
         info.appendChild(t);
@@ -555,20 +555,20 @@
         var installed = st && st.installed;
         var installing = st && st.installing;
         if (installed) {
-            act.textContent = '已安装';
+            act.textContent = I18N.t('已安装');
             act.disabled = true;
             act.classList.add('installed');
         } else if (installing) {
-            act.textContent = '安装中…';
+            act.textContent = I18N.t('安装中…');
             act.disabled = true;
         } else if (!String(tc.zip_url || '').trim() && !String(tc.installer_script || '').trim()) {
             // 阶段一百二十一：系统优先条目（无 zip/安装脚本，如 clang）——无在线安装通道，
             //   置灰按钮如实提示，避免点击后走 static/<name>.zip 兜底地址必然 404
-            act.textContent = '用系统版';
+            act.textContent = I18N.t('用系统版');
             act.disabled = true;
-            act.title = '该工具链使用系统已安装的版本，未提供一键安装包';
+            act.title = I18N.t('该工具链使用系统已安装的版本，未提供一键安装包');
         } else {
-            act.textContent = '+ 安装';
+            act.textContent = I18N.t('+ 安装');
             act.addEventListener('click', function () { tcInstall(tc, act); });
         }
         card.appendChild(badge);
@@ -580,24 +580,24 @@
     // 一键安装：IPC toolchain:install → toolchain-manager.installFromMarket（本地 zip 优先 → 在线下载，SHA256 校验解压）
     function tcInstall(tc, btn) {
         if (!window.desktop || !window.desktop.toolchainInstall) {
-            showToast('仅 PC 客户端支持该功能');
+            showToast(I18N.t('仅 PC 客户端支持该功能'));
             return;
         }
         btn.disabled = true;
-        btn.textContent = '下载安装中…';
+        btn.textContent = I18N.t('下载安装中…');
         window.desktop.toolchainInstall({ name: tc.name, zip_url: tc.zip_url, sha256: tc.sha256, installer_script: tc.installer_script }).then(function (r) {
             btn.disabled = false;
             if (r && r.ok) {
-                showToast((r && r.msg) || '安装完成');
+                showToast((r && r.msg) || I18N.t('安装完成'));
                 tcRefreshStatus();
             } else {
-                btn.textContent = '+ 安装';
-                showToast('安装失败：' + ((r && r.msg) || '未知原因'));
+                btn.textContent = I18N.t('+ 安装');
+                showToast(I18N.t('安装失败：') + ((r && r.msg) || I18N.t('未知原因')));
             }
         }).catch(function (e) {
             btn.disabled = false;
-            btn.textContent = '+ 安装';
-            showToast('安装异常：' + (e && e.message || e));
+            btn.textContent = I18N.t('+ 安装');
+            showToast(I18N.t('安装异常：') + (e && e.message || e));
         });
     }
 
@@ -606,12 +606,12 @@
         // 阶段一百零五：MCP 仅 PC 端支持（Web/手机端无 desktop 桥），不支持时提示并留在当前分类
         // 阶段一百一十三：插件市场安装同样依赖 desktop 桥（mcpSave/uv 安装），同 PC 限定
         if ((view === 'mcp' || view === 'market') && !agentMcpSupported()) {
-            showToast('仅 PC 客户端支持该功能');
+            showToast(I18N.t('仅 PC 客户端支持该功能'));
             return;
         }
         settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
-        if (view === 'appearance') settingsRenderTheme();
+        if (view === 'appearance') { settingsRenderTheme(); settingsRenderLang(); }
         if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
         if (view === 'market') settingsMarketEnter(); // 阶段一百一十三：进入插件市场拉取清单 + uv 状态
         if (view === 'toolchain') settingsToolchainEnter(); // 阶段一百二十一：进入工具链市场拉取清单 + 安装状态
@@ -640,12 +640,20 @@
         });
     }
 
+    // 语言卡片高亮当前语言（I18N.getLang 同源；切换走 I18N.setLang 保存偏好后整页刷新）
+    function settingsRenderLang() {
+        var cur = I18N.getLang();
+        document.querySelectorAll('.settings-lang-card').forEach(function (c) {
+            c.classList.toggle('active', c.dataset.lang === cur);
+        });
+    }
+
     // 打开设置页：回填账号信息（用户名/头像/积分与标题栏同源，前端零计算），默认账号分类
     function settingsOpen() {
         settingsMask.classList.remove('hidden');
         var name = IMSocket.getUsername() || '';
-        document.getElementById('settings-account-name').textContent = name || '未登录';
-        document.getElementById('settings-username').textContent = name || '未登录';
+        document.getElementById('settings-account-name').textContent = name || I18N.t('未登录');
+        document.getElementById('settings-username').textContent = name || I18N.t('未登录');
         // 头像降级与导航栏同规则：img 默认隐藏，无头像/加载失败时显示首字母占位
         var av = document.getElementById('settings-avatar');
         var ph = document.getElementById('settings-avatar-ph');
@@ -660,7 +668,7 @@
         var pts = titlebarPointsNumEl ? titlebarPointsNumEl.textContent : '';
         var ptsText = pts ? '⚡ ' + pts : '—';
         document.getElementById('settings-points').textContent = ptsText;
-        document.getElementById('settings-account-points').textContent = pts ? pts + ' 积分' : '—';
+        document.getElementById('settings-account-points').textContent = pts ? pts + I18N.t(' 积分') : '—';
         settingsShowView('account');
     }
 
@@ -683,6 +691,13 @@
             settingsRenderTheme();
         });
     });
+    // 语言卡片点击：I18N.setLang 保存偏好后整页刷新（同步语言包保证重载后首绘即新语言，
+    // app-booting 遮罩无闪烁；点击当前语言自动忽略不刷新）
+    document.querySelectorAll('.settings-lang-card').forEach(function (c) {
+        c.addEventListener('click', function () {
+            I18N.setLang(c.dataset.lang);
+        });
+    });
     // 聚合入口：任务历史（复用现有弹窗，先关设置页避免层级叠置）
     // 【阶段一百零五修订】"打开规则与记忆管理"按钮已随页内直管改造移除（原弹窗与 memory-btn 入口保留可用）
     var settingsOpenTask = document.getElementById('settings-open-taskhist');
@@ -694,10 +709,10 @@
     // 退出登录：与导航栏退出按钮同归口（清凭据+刷新），加二次确认防误触
     var settingsLogout = document.getElementById('settings-logout');
     if (settingsLogout) settingsLogout.addEventListener('click', function () {
-        showConfirm('退出登录', '确定退出当前账号？', function () {
+        showConfirm(I18N.t('退出登录'), I18N.t('确定退出当前账号？'), function () {
             clearAuth();
             location.reload();
-        }, '退出');
+        }, I18N.t('退出'));
     });
     // Esc 关闭设置页（捕获阶段优先处理：设置页在全屏最顶层，开启时不让 Esc 穿透到下层弹窗）
     document.addEventListener('keydown', function (e) {
@@ -735,8 +750,8 @@
             if (pref) { pref.disabled = true; pref.checked = false; }
             var row = document.getElementById('settings-mem-create-row');
             if (row) row.classList.add('hidden');
-            settingsEmptyAt('settings-rule-list', '请先选择智能体', '在左侧会话列表选择一个 AI 智能体后再管理规则');
-            settingsEmptyAt('settings-mem-list', '请先选择智能体', '在左侧会话列表选择一个 AI 智能体后再管理记忆');
+            settingsEmptyAt('settings-rule-list', I18N.t('请先选择智能体'), I18N.t('在左侧会话列表选择一个 AI 智能体后再管理规则'));
+            settingsEmptyAt('settings-mem-list', I18N.t('请先选择智能体'), I18N.t('在左侧会话列表选择一个 AI 智能体后再管理记忆'));
             return;
         }
         if (pref) pref.disabled = false;
@@ -749,15 +764,15 @@
     // 规则列表：全量拉取后按页签范围过滤（全局=agent_id 0 / 仅本智能体=当前会话智能体 id）
     function sRulesLoad(silent) {
         var listEl = document.getElementById('settings-rule-list');
-        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
         fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '规则加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('规则加载失败')); return; }
                 settingsRulesData = res.data.rules || [];
                 sRulesRender();
             })
-            .catch(function () { showToast('规则加载失败'); });
+            .catch(function () { showToast(I18N.t('规则加载失败')); });
     }
 
     function sRulesRender() {
@@ -766,7 +781,7 @@
         var scopeId = settingsRuleScope === 'global' ? 0 : memAgentId();
         var list = settingsRulesData.filter(function (ru) { return (ru.agent_id || 0) === scopeId; });
         if (!list.length) {
-            settingsEmptyAt('settings-rule-list', '暂无规则', '点击右上角「+ 创建」以添加你的第一个规则');
+            settingsEmptyAt('settings-rule-list', I18N.t('暂无规则'), I18N.t('点击右上角「+ 创建」以添加你的第一个规则'));
             return;
         }
         listEl.innerHTML = '';
@@ -782,7 +797,7 @@
             en.type = 'checkbox';
             en.className = 'memory-switch';
             en.checked = !!ru.enabled;
-            en.title = en.checked ? '已启用（点击禁用）' : '已禁用（点击启用）';
+            en.title = en.checked ? I18N.t('已启用（点击禁用）') : I18N.t('已禁用（点击启用）');
             en.addEventListener('change', function () {
                 var want = en.checked;
                 fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '/enabled?username=' + kbUsername(), {
@@ -792,24 +807,24 @@
                 })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '保存失败'); en.checked = !want; return; }
+                        if (!res.ok) { showToast(res.msg || I18N.t('保存失败')); en.checked = !want; return; }
                         ru.enabled = want;
-                        showToast(want ? '规则已启用' : '规则已禁用（不删除）');
+                        showToast(want ? I18N.t('规则已启用') : I18N.t('规则已禁用（不删除）'));
                     })
-                    .catch(function () { showToast('保存失败'); en.checked = !want; });
+                    .catch(function () { showToast(I18N.t('保存失败')); en.checked = !want; });
             });
             var del = document.createElement('button');
             del.className = 'kb-op-btn';
-            del.textContent = '删除';
+            del.textContent = I18N.t('删除');
             del.addEventListener('click', function () {
                 fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('规则已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('规则已删除'));
                         sRulesLoad();
                     })
-                    .catch(function () { showToast('删除失败'); });
+                    .catch(function () { showToast(I18N.t('删除失败')); });
             });
             item.appendChild(content);
             item.appendChild(en);
@@ -822,7 +837,7 @@
     function sRulesAdd() {
         var input = document.getElementById('settings-rule-input');
         var content = (input.value || '').trim();
-        if (!content) { showToast('请输入规则内容'); return; }
+        if (!content) { showToast(I18N.t('请输入规则内容')); return; }
         fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -830,22 +845,22 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
-                showToast('规则已添加，下轮回答即生效');
+                if (!res.ok) { showToast(res.msg || I18N.t('添加失败')); return; }
+                showToast(I18N.t('规则已添加，下轮回答即生效'));
                 input.value = '';
                 sRulesLoad();
             })
-            .catch(function () { showToast('添加失败'); });
+            .catch(function () { showToast(I18N.t('添加失败')); });
     }
 
     // 记忆：列表+总开关（feature 未配置时禁用开关并提示）+添加+单条删除（silent 同规则列表）
     function sMemLoad(silent) {
         var listEl = document.getElementById('settings-mem-list');
-        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        if (!silent && listEl) listEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
         fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '记忆加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('记忆加载失败')); return; }
                 var featureOk = !!res.data.feature;
                 var pref = document.getElementById('settings-mem-pref');
                 if (pref) { pref.checked = !!res.data.pref; pref.disabled = !featureOk; }
@@ -853,14 +868,14 @@
                 if (memRow) memRow.classList.toggle('hidden', !featureOk);
                 sMemRender(res.data.memories || []);
             })
-            .catch(function () { showToast('记忆加载失败'); });
+            .catch(function () { showToast(I18N.t('记忆加载失败')); });
     }
 
     function sMemRender(list) {
         var listEl = document.getElementById('settings-mem-list');
         if (!listEl) return;
         if (!list.length) {
-            settingsEmptyAt('settings-mem-list', '暂无记忆', '聊几句或手动添加一条试试');
+            settingsEmptyAt('settings-mem-list', I18N.t('暂无记忆'), I18N.t('聊几句或手动添加一条试试'));
             return;
         }
         listEl.innerHTML = '';
@@ -875,26 +890,26 @@
             var tag = document.createElement('span');
             if (m.source === 'manual') {
                 tag.className = 'kb-item-tag user';
-                tag.textContent = '手动';
+                tag.textContent = I18N.t('手动');
             } else if (m.source === 'agent') {
                 tag.className = 'kb-item-tag agent';
-                tag.textContent = '任务';
+                tag.textContent = I18N.t('任务');
             } else {
                 tag.className = 'kb-item-tag public';
-                tag.textContent = '自动';
+                tag.textContent = I18N.t('自动');
             }
             var del = document.createElement('button');
             del.className = 'kb-op-btn';
-            del.textContent = '删除';
+            del.textContent = I18N.t('删除');
             del.addEventListener('click', function () {
                 fetch('/api/agents/' + memAgentId() + '/memory/' + m.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('记忆已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('记忆已删除'));
                         sMemLoad();
                     })
-                    .catch(function () { showToast('删除失败'); });
+                    .catch(function () { showToast(I18N.t('删除失败')); });
             });
             item.appendChild(content);
             item.appendChild(tag);
@@ -907,7 +922,7 @@
     function sMemAdd() {
         var input = document.getElementById('settings-mem-input');
         var content = (input.value || '').trim();
-        if (!content) { showToast('请输入记忆内容'); return; }
+        if (!content) { showToast(I18N.t('请输入记忆内容')); return; }
         fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -915,12 +930,12 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
-                showToast('记忆已添加');
+                if (!res.ok) { showToast(res.msg || I18N.t('添加失败')); return; }
+                showToast(I18N.t('记忆已添加'));
                 input.value = '';
                 sMemLoad();
             })
-            .catch(function () { showToast('添加失败'); });
+            .catch(function () { showToast(I18N.t('添加失败')); });
     }
 
     // 设置页规则与记忆交互绑定
@@ -962,10 +977,10 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '保存失败'); sMemPref.checked = !want; return; }
-                showToast(want ? '已开启记忆' : '已关闭记忆（已存记忆保留）');
+                if (!res.ok) { showToast(res.msg || I18N.t('保存失败')); sMemPref.checked = !want; return; }
+                showToast(want ? I18N.t('已开启记忆') : I18N.t('已关闭记忆（已存记忆保留）'));
             })
-            .catch(function () { showToast('保存失败'); sMemPref.checked = !want; });
+            .catch(function () { showToast(I18N.t('保存失败')); sMemPref.checked = !want; });
     });
 
     // ===== 头像降级修复：导航栏左上角头像统一入口 =====
@@ -1063,7 +1078,7 @@
                   setProfileAvatar(data.avatar);
               }
               else if (data.error) showToast(data.error);
-          }).catch(function () { showToast('头像上传失败'); });
+          }).catch(function () { showToast(I18N.t('头像上传失败')); });
         avatarFileEl.value = '';
     });
 
@@ -1161,7 +1176,7 @@
         if (addFriendQuery && info.username === addFriendQuery) {
             addFriendQuery = null;
             if (info.is_friend) {
-                renderAddFriendHint('该用户已是你的好友'); // 已是好友：仅提示，"确定"保持禁用（服务端同样会拒绝重复申请）
+                renderAddFriendHint(I18N.t('该用户已是你的好友')); // 已是好友：仅提示，"确定"保持禁用（服务端同样会拒绝重复申请）
             } else {
                 renderAddFriendItem(info);
             }
@@ -1178,7 +1193,7 @@
         }
         friendCardTarget = username;
         friendCardAvatar.src = getAvatarUrl(username) || '';
-        friendCardName.textContent = '加载中...';
+        friendCardName.textContent = I18N.t('加载中...');
         friendCardGender.textContent = '';
         friendCardGender.className = 'friend-card-gender';
         friendCardUsername.textContent = username;
@@ -1209,8 +1224,8 @@
             friendCardGender.className = 'friend-card-gender';
         }
         friendCardAvatar.src = info.avatar || '';
-        friendCardRegion.textContent = info.region || '暂无';
-        friendCardSignature.textContent = info.signature || '暂无';
+        friendCardRegion.textContent = info.region || I18N.t('暂无');
+        friendCardSignature.textContent = info.signature || I18N.t('暂无');
         // 仅好友可设置备注（非好友隐藏按钮，服务端同样归口校验）
         friendCardRemarkBtn.classList.toggle('hidden', !info.is_friend);
     }
@@ -1236,7 +1251,7 @@
     friendCardRemarkBtn.addEventListener('click', function () {
         var target = friendCardTarget;
         if (!target) return;
-        showPrompt('设置备注', '请输入好友备注名', function (remark) {
+        showPrompt(I18N.t('设置备注'), I18N.t('请输入好友备注名'), function (remark) {
             IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: target, remark: remark });
         });
     });
@@ -1308,7 +1323,7 @@
         mainName.textContent = info.nickname || info.username; // 主名：昵称优先（同通讯录备注/昵称优先规则）
         var subName = document.createElement('div');
         subName.className = 'add-friend-sub';
-        subName.textContent = '用户名：' + info.username;
+        subName.textContent = I18N.t('用户名：') + info.username;
         nameBox.appendChild(mainName);
         nameBox.appendChild(subName);
         item.appendChild(nameBox);
@@ -1335,11 +1350,11 @@
         }
         if (name === IMSocket.getUsername()) {
             addFriendQuery = null;
-            renderAddFriendHint('不能添加自己为好友');
+            renderAddFriendHint(I18N.t('不能添加自己为好友'));
             return;
         }
         addFriendQuery = name;
-        renderAddFriendHint('搜索中...');
+        renderAddFriendHint(I18N.t('搜索中...'));
         IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: name });
     }
 
@@ -1356,7 +1371,7 @@
     // 确定：向点选的用户发送好友申请（成功提示走服务端回执"好友申请已发送成功"）
     addFriendOk.addEventListener('click', function () {
         if (!addFriendFound) return;
-        IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: addFriendFound.username, content: '请求添加你为好友' });
+        IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: addFriendFound.username, content: I18N.t('请求添加你为好友') });
         closeAddFriendDialog();
     });
     // 原实现：showPrompt 直接发送申请，不校验用户是否存在
@@ -1376,16 +1391,16 @@
             var action = this.getAttribute('data-action');
             if (action === 'delete') {
                 // 删除好友需二次确认，删除后双向解除好友关系
-                showConfirm('删除好友', '确定删除好友 "' + menuTarget + '" 吗？删除后需重新添加。', function () {
+                showConfirm(I18N.t('删除好友'), I18N.t('确定删除好友 "') + menuTarget + I18N.t('" 吗？删除后需重新添加。'), function () {
                     IMSocket.send({ msg_type: MSG.FRIEND_DELETE, to_user: menuTarget });
-                }, '删除');
+                }, I18N.t('删除'));
             } else if (action === 'block') {
                 // 拉黑需二次确认，拉黑后双向解除好友关系并禁止私聊
-                showConfirm('拉黑好友', '确定将 "' + menuTarget + '" 加入黑名单吗？双方将解除好友关系且无法私聊。', function () {
+                showConfirm(I18N.t('拉黑好友'), I18N.t('确定将 "') + menuTarget + I18N.t('" 加入黑名单吗？双方将解除好友关系且无法私聊。'), function () {
                     IMSocket.send({ msg_type: MSG.BLACKLIST, to_user: menuTarget, content: 'block' });
-                }, '拉黑');
+                }, I18N.t('拉黑'));
             } else if (action === 'remark') {
-                showPrompt('设置备注', '请输入好友备注名', function (remark) {
+                showPrompt(I18N.t('设置备注'), I18N.t('请输入好友备注名'), function (remark) {
                     IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: menuTarget, remark: remark });
                 });
             }
@@ -1441,7 +1456,7 @@
         pinItem.style.display = isRpBubble ? 'none' : '';
         var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
         var p = pinInfo[currentChatUser];
-        pinLabel.textContent = (p && p.msg_id && p.msg_id === msgId) ? '取消置顶' : '置顶';
+        pinLabel.textContent = (p && p.msg_id && p.msg_id === msgId) ? I18N.t('取消置顶') : I18N.t('置顶');
         // 阶段一百五十四：转发项对红包卡片隐藏（微信同款：红包不可转发）
         var fwdItem = msgMenu.querySelector('[data-action="forward"]');
         if (fwdItem) fwdItem.style.display = isRpBubble ? 'none' : '';
@@ -1465,10 +1480,10 @@
                 } else if (action === 'del' && msgId) {
                     // 删除：仅从自己的聊天窗口移除，云端对对方仍可见
                     var el = msgTarget;
-                    showConfirm('删除消息', '确定删除这条消息吗？仅从你的聊天窗口移除。', function () {
+                    showConfirm(I18N.t('删除消息'), I18N.t('确定删除这条消息吗？仅从你的聊天窗口移除。'), function () {
                         IMSocket.send({ msg_type: MSG.DELETE, msg_id: msgId });
                         el.remove();
-                    }, '删除');
+                    }, I18N.t('删除'));
                 } else if (action === 'pin' && msgId) {
                     // 置顶/取消置顶：服务端归口并同步双方，每个会话仅一条置顶
                     var p = pinInfo[currentChatUser];
@@ -1503,9 +1518,9 @@
                     var u3 = fb3 ? (fb3.getAttribute('data-url') || '') : '';
                     var nm3 = (fb3 && fb3.querySelector('.file-name') || {}).textContent || '';
                     if (msgId > 0 && u3 && u3.indexOf('blob:') !== 0) {
-                        if (!openDocEditor(msgId, nm3, u3)) showToast('在线编辑暂不可用');
+                        if (!openDocEditor(msgId, nm3, u3)) showToast(I18N.t('在线编辑暂不可用'));
                     } else {
-                        showToast('文件处理中，请稍后再试');
+                        showToast(I18N.t('文件处理中，请稍后再试'));
                     }
                 } else if (action === 'multi' && msgId) {
                     // 阶段八十七：进入多选模式（复选框 + 底部工具栏，合并转发/逐条转发）
@@ -1522,11 +1537,11 @@
                         if (qSrc.indexOf('blob:') === 0) {
                             // 原实现：图片引用仅存"[图片]"文字摘要，无真实图片内容
                             blobToDataUrl(qSrc).then(function (d) {
-                                setQuoteTarget({ msg_id: msgId, from: qFrom, text: '[图片]', url: d || '' });
+                                setQuoteTarget({ msg_id: msgId, from: qFrom, text: I18N.t('[图片]'), url: d || '' });
                                 messageInput.focus();
                             });
                         } else {
-                            setQuoteTarget({ msg_id: msgId, from: qFrom, text: '[图片]', url: qSrc });
+                            setQuoteTarget({ msg_id: msgId, from: qFrom, text: I18N.t('[图片]'), url: qSrc });
                             messageInput.focus();
                         }
                     } else if (qBubble) {
@@ -1586,10 +1601,10 @@
 
     // 目标信息解析（群聊/多群/好友）：名称 + 副标题 + 头像占位
     function fwdTargetInfo(t) {
-        if (t === '') return { name: '群聊', sub: '群内所有成员可见', ph: '群' };
+        if (t === '') return { name: I18N.t('群聊'), sub: I18N.t('群内所有成员可见'), ph: I18N.t('群') };
         if (isGroupTarget(t)) {
             var g = groupOfId(groupIdFromTarget(t));
-            return { name: (g && g.name) || '群聊', sub: ((g ? g.member_count : 0) || 0) + '名成员', ph: '群' };
+            return { name: (g && g.name) || I18N.t('群聊'), sub: ((g ? g.member_count : 0) || 0) + I18N.t('名成员'), ph: I18N.t('群') };
         }
         var f = null;
         for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === t) { f = friendList[i]; break; } }
@@ -1598,12 +1613,12 @@
 
     // 右栏已选目标渲染：横向头像网格（头像 + 名字 + 右上角 × 移除）；空态显示引导文案
     function renderFwdSelected() {
-        fwdCount.textContent = fwdTargets.length ? ('已选择' + fwdTargets.length + '个目标') : '';
+        fwdCount.textContent = fwdTargets.length ? (I18N.t('已选择') + fwdTargets.length + I18N.t('个目标')) : '';
         fwdSelListEl.innerHTML = '';
         fwdSendBtn.disabled = fwdTargets.length < 1;
         fwdSelListEl.classList.toggle('fwd-sel-grid', fwdTargets.length > 0);
         if (!fwdTargets.length) {
-            fwdSelListEl.innerHTML = '<div class="grp-empty">在左侧选择要发送的联系人</div>';
+            fwdSelListEl.innerHTML = '<div class="grp-empty">' + I18N.t('在左侧选择要发送的联系人') + '</div>';
             return;
         }
         fwdTargets.forEach(function (t) {
@@ -1628,7 +1643,7 @@
             x.className = 'fwd-sel-x';
             x.type = 'button';
             x.textContent = '×';
-            x.title = '移除';
+            x.title = I18N.t('移除');
             x.addEventListener('click', function () { toggleFwdTarget(t, false); });
             cell.appendChild(x);
             fwdSelListEl.appendChild(cell);
@@ -1666,7 +1681,7 @@
             pinfo.className = 'fwd-preview-info';
             var nm = document.createElement('div');
             nm.className = 'fwd-preview-name';
-            nm.textContent = '图片';
+            nm.textContent = I18N.t('图片');
             pinfo.appendChild(nm);
             fwdPreview.appendChild(im);
             fwdPreview.appendChild(pinfo);
@@ -1681,8 +1696,8 @@
                 var szEl = bubble.querySelector('.file-size');
                 var badge = document.createElement('div');
                 badge.className = 'fwd-preview-badge';
-                var fname = (fnEl && fnEl.textContent) || '文件';
-                badge.textContent = fname.split('.').pop().slice(-4).toUpperCase() || '文件';
+                var fname = (fnEl && fnEl.textContent) || I18N.t('文件');
+                badge.textContent = fname.split('.').pop().slice(-4).toUpperCase() || I18N.t('文件');
                 var info = document.createElement('div');
                 info.className = 'fwd-preview-info';
                 var fnn = document.createElement('div');
@@ -1706,7 +1721,7 @@
         fwdPreview.innerHTML = '';
         var badge2 = document.createElement('div');
         badge2.className = 'fwd-preview-badge';
-        badge2.textContent = '文本';
+        badge2.textContent = I18N.t('文本');
         var info2 = document.createElement('div');
         info2.className = 'fwd-preview-info';
         var tn = document.createElement('div');
@@ -1722,24 +1737,24 @@
     function renderForwardList(kw) {
         fwdList.innerHTML = '';
         var items = [];
-        if (!kw || '群聊'.indexOf(kw) >= 0 || 'group'.indexOf(kw) >= 0) {
-            items.push({ target: '', name: '群聊', sub: '群内所有成员可见', ph: '群' });
+        if (!kw || I18N.t('群聊').indexOf(kw) >= 0 || 'group'.indexOf(kw) >= 0) {
+            items.push({ target: '', name: I18N.t('群聊'), sub: I18N.t('群内所有成员可见'), ph: I18N.t('群') });
         }
         // 阶段一百四十二：多群会话作为转发目标（按群名过滤，成员数副标题，与全局群同置顶）
         for (var gid in groupMap) {
             var g = groupMap[gid];
             if (kw && (g.name || '').toLowerCase().indexOf(kw) < 0) continue;
-            items.push({ target: 'g' + g.group_id, name: g.name || '群聊', sub: (g.member_count || 0) + '名成员', ph: '群', online: true });
+            items.push({ target: 'g' + g.group_id, name: g.name || I18N.t('群聊'), sub: (g.member_count || 0) + I18N.t('名成员'), ph: I18N.t('群'), online: true });
         }
         for (var i = 0; i < friendList.length; i++) {
             var f = friendList[i];
             if (isAIAgent(f.username)) continue; // AI 智能体会话不作为转发目标（微信无此语义）
             var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
             if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) continue;
-            items.push({ target: f.username, name: disp, sub: f.username + (f.online ? ' · 在线' : ''), avatar: f.avatar, online: f.online });
+            items.push({ target: f.username, name: disp, sub: f.username + (f.online ? I18N.t(' · 在线') : ''), avatar: f.avatar, online: f.online });
         }
         if (!items.length) {
-            fwdList.innerHTML = '<div class="grp-empty">无匹配联系人</div>';
+            fwdList.innerHTML = '<div class="grp-empty">' + I18N.t('无匹配联系人') + '</div>';
             return;
         }
         items.sort(function (a, b) { // 在线优先（群聊项视为恒在线置顶）
@@ -1797,7 +1812,7 @@
             targets.forEach(function (t) { doForward(el, t, targets.length > 1); });
         }
         exitMultiSelect(); // 多选入口打开时归位多选态（幂等，右键单选转发无副作用）
-        showToast(targets.length > 1 ? ('已转发给' + targets.length + '个目标') : '已转发');
+        showToast(targets.length > 1 ? (I18N.t('已转发给') + targets.length + I18N.t('个目标')) : I18N.t('已转发'));
     });
 
     // 从消息源地址（服务端 URL / 本地 blob / dataURL）重取内容构造 File，复用既有上传链路
@@ -1806,7 +1821,7 @@
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.blob();
         }).then(function (b) {
-            return new File([b], fallbackName || '文件', { type: b.type || 'application/octet-stream' });
+            return new File([b], fallbackName || I18N.t('文件'), { type: b.type || 'application/octet-stream' });
         });
     }
 
@@ -1822,42 +1837,42 @@
                 // 阶段一百四十二：多群泛化——群目标（旧全局群/多群）统一走群图片直传（group 参数携带目标群）
                 if (target === '' || isGroupTarget(target)) {
                     sendGroupImage(f, true, target);
-                    if (!silent) showToast('已转发');
+                    if (!silent) showToast(I18N.t('已转发'));
                 } else {
                     sendFileDirect(f, target, true).then(function (res) {
-                        if (!silent) showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
-                    }).catch(function () { if (!silent) showToast('转发失败'); });
+                        if (!silent) showToast(res && res.ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                    }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
                 }
-            }).catch(function () { if (!silent) showToast('转发失败：图片获取失败'); });
+            }).catch(function () { if (!silent) showToast(I18N.t('转发失败：图片获取失败')); });
             return;
         }
         // 文件消息（阶段一百三十四：群聊转发放开——重取源文件后走 sendGroupFile，与群文件发送同归口）
         if (bubble && bubble.classList.contains('bubble-file')) {
             var furl = bubble.getAttribute('data-url') || '';
-            if (!furl) { showToast('该消息暂不支持转发'); return; }
+            if (!furl) { showToast(I18N.t('该消息暂不支持转发')); return; }
             var fnameEl = bubble.querySelector('.file-name');
-            fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || '文件').then(function (f) {
+            fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || I18N.t('文件')).then(function (f) {
                 // 阶段一百四十二：多群泛化——群目标统一走群文件直传（group 参数携带目标群）
                 if (target === '' || isGroupTarget(target)) {
                     sendGroupFile(f, true, target).then(function () {
-                        if (!silent) showToast('已转发');
-                    }).catch(function () { if (!silent) showToast('转发失败'); });
+                        if (!silent) showToast(I18N.t('已转发'));
+                    }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
                     return;
                 }
                 sendFileDirect(f, target, true).then(function (res) {
-                    if (!silent) showToast(res && res.ok ? '已转发' : '转发失败（HTTP ' + (res ? res.status : '网络') + '）');
-                }).catch(function () { if (!silent) showToast('转发失败'); });
-            }).catch(function () { if (!silent) showToast('转发失败：文件获取失败'); });
+                    if (!silent) showToast(res && res.ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
+            }).catch(function () { if (!silent) showToast(I18N.t('转发失败：文件获取失败')); });
             return;
         }
         // 文本 / 引用信封 / AI 文本：原始 content 原样重发（引用块完整保真），降级取正文可见文本
         var raw = el.getAttribute('data-raw');
         var tx = bubble ? bubble.querySelector('.msg-text') : null;
         var content = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
-        if (!content) { showToast('该消息不支持转发'); return; }
+        if (!content) { showToast(I18N.t('该消息不支持转发')); return; }
         var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
         if (target !== '') m.to_user = target;
-        if (IMSocket.send(m)) { if (!silent) showToast('已转发'); } else showToast('转发失败');
+        if (IMSocket.send(m)) { if (!silent) showToast(I18N.t('已转发')); } else showToast(I18N.t('转发失败'));
     }
 
     // ===== 阶段八十七：多选合并转发（微信同款：复选框勾选 → 工具栏合并/逐条转发） =====
@@ -1883,7 +1898,7 @@
         if (multiSelectMode) return;
         // AI 会话消息为问答流，合并转发语义不适用（群聊 currentChatUser==='' 是多选主场景，放行）
         if (isAIAgent(currentChatUser)) {
-            showToast('AI 会话暂不支持多选转发');
+            showToast(I18N.t('AI 会话暂不支持多选转发'));
             return;
         }
         multiSelectMode = true;
@@ -1915,7 +1930,7 @@
 
     function updateMsCount() {
         var n = multiSelectedCount();
-        msCountEl.textContent = '已选 ' + n + ' 条';
+        msCountEl.textContent = I18N.t('已选 ') + n + I18N.t(' 条');
         msMergeBtn.disabled = msSingleBtn.disabled = n === 0;
         // 阶段八十八：保存到电脑/复制/删除同样需有选中项才可用
         msSaveBtn.disabled = msCopyBtn.disabled = msDelBtn.disabled = n === 0;
@@ -1980,7 +1995,7 @@
                 item.k = 'file';
                 item.u = bubble.getAttribute('data-url') || '';
                 var fnEl = bubble.querySelector('.file-name');
-                item.n = (fnEl && fnEl.textContent) || '文件';
+                item.n = (fnEl && fnEl.textContent) || I18N.t('文件');
             } else {
                 var tx = bubble.querySelector('.msg-text');
                 var text = ((tx ? tx.textContent : (bubble.textContent || '')) || '').trim();
@@ -2021,7 +2036,7 @@
     // 保存到电脑：图片/文件逐个下载，文本消息汇总为 txt（仅存在文本消息时生成）
     msSaveBtn.addEventListener('click', function () {
         var items = collectSelectedItems();
-        if (!items.length) { showToast('选中的消息暂无可保存的内容'); return; }
+        if (!items.length) { showToast(I18N.t('选中的消息暂无可保存的内容')); return; }
         var delay = 0;
         var fileCount = 0;
         var lines = [];
@@ -2047,23 +2062,23 @@
             var blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
             var a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = '聊天记录_' + stamp + '.txt';
+            a.download = I18N.t('聊天记录_') + stamp + '.txt';
             a.click();
             fileCount++;
         }
         exitMultiSelect();
-        showToast('已保存 ' + fileCount + ' 个文件到下载目录');
+        showToast(I18N.t('已保存 ') + fileCount + I18N.t(' 个文件到下载目录'));
     });
 
     // 复制：文本原文 + 图片/文件占位，带发送者与时间头（微信合并复制同款格式）
     msCopyBtn.addEventListener('click', function () {
         var items = collectSelectedItems();
-        if (!items.length) { showToast('选中的消息暂无可复制的内容'); return; }
+        if (!items.length) { showToast(I18N.t('选中的消息暂无可复制的内容')); return; }
         var lines = items.map(function (it) {
             var name = senderDisplayName(it.f) || it.f || '';
             var time = fmtSelTime(it.t);
             var head = name + (time ? ' ' + time : '');
-            var body = it.k === 'image' ? '[图片]' : (it.k === 'file' ? '[文件] ' + (it.n || '') : (it.x || ''));
+            var body = it.k === 'image' ? I18N.t('[图片]') : (it.k === 'file' ? I18N.t('[文件] ') + (it.n || '') : (it.x || ''));
             return head + '\n' + body;
         });
         copyTextToClipboard(lines.join('\n\n'));
@@ -2073,16 +2088,16 @@
     msDelBtn.addEventListener('click', function () {
         var els = multiSelectedEls();
         var n = els.length;
-        if (!n) { showToast('未选中任何消息'); return; }
-        showConfirm('删除消息', '确定删除选中的 ' + n + ' 条消息吗？仅从你的聊天窗口移除。', function () {
+        if (!n) { showToast(I18N.t('未选中任何消息')); return; }
+        showConfirm(I18N.t('删除消息'), I18N.t('确定删除选中的 ') + n + I18N.t(' 条消息吗？仅从你的聊天窗口移除。'), function () {
             els.forEach(function (el) {
                 var id = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
                 if (id) IMSocket.send({ msg_type: MSG.DELETE, msg_id: id });
                 el.remove();
             });
             exitMultiSelect();
-            showToast('已删除 ' + n + ' 条消息');
-        }, '删除');
+            showToast(I18N.t('已删除 ') + n + I18N.t(' 条消息'));
+        }, I18N.t('删除'));
     });
 
     // 从 DOM 顺序重采选中元素（列表顺序即时间顺序，跨页选中的历史消息仅取当前窗口内存在的）
@@ -2118,7 +2133,7 @@
                 item.k = 'file';
                 item.u = furl;
                 var fnEl = bubble.querySelector('.file-name');
-                item.n = (fnEl && fnEl.textContent) || '文件';
+                item.n = (fnEl && fnEl.textContent) || I18N.t('文件');
                 var fsEl = bubble.querySelector('.file-size');
                 item.s = (fsEl && fsEl.textContent) || '';
             } else {
@@ -2130,9 +2145,9 @@
             }
             items.push(item);
         });
-        if (!items.length) return { err: '选中的消息暂不支持合并转发' };
+        if (!items.length) return { err: I18N.t('选中的消息暂不支持合并转发') };
         var payload = JSON.stringify({ merged: { c: items.length, i: items } });
-        if (payload.length > 48000) return { err: '合并内容过大，请减少勾选条数' };
+        if (payload.length > 48000) return { err: I18N.t('合并内容过大，请减少勾选条数') };
         return { payload: payload, items: items, skipped: skipped };
     }
 
@@ -2142,17 +2157,17 @@
         if (built.err) { showToast(built.err); return; }
         var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
         if (target !== '') m.to_user = target;
-        if (!IMSocket.send(m)) { showToast('转发失败'); return; }
-        if (!silent) showToast(built.skipped ? ('已转发（' + built.skipped + '条未完成上传的消息已跳过）') : '已转发');
+        if (!IMSocket.send(m)) { showToast(I18N.t('转发失败')); return; }
+        if (!silent) showToast(built.skipped ? (I18N.t('已转发（') + built.skipped + I18N.t('条未完成上传的消息已跳过）')) : I18N.t('已转发'));
     }
 
     // silent：转发弹窗多目标循环调用时静默成功提示；exitMultiSelect 由调用方归口
     function sendMultiForward(target, silent) {
         var els = multiSelectedEls();
-        if (!els.length) { showToast('选中的消息暂不支持转发'); return; }
+        if (!els.length) { showToast(I18N.t('选中的消息暂不支持转发')); return; }
         var n = els.length;
         els.forEach(function (el) { doForward(el, target, true); }); // 静默逐条（异步上传各自进行）
-        if (!silent) showToast('已逐条转发 ' + n + ' 条消息');
+        if (!silent) showToast(I18N.t('已逐条转发 ') + n + I18N.t(' 条消息'));
     }
 
     // 合并信封解析：仅识别 {"merged":{c,i:[...]}} 结构，普通 JSON 文本不受影响
@@ -2172,7 +2187,7 @@
         var mask = document.getElementById('merged-mask');
         var parties = document.getElementById('merged-parties');
         var detail = document.getElementById('merged-detail');
-        if (!env) { showToast('详情已过期，请重新打开会话'); return; }
+        if (!env) { showToast(I18N.t('详情已过期，请重新打开会话')); return; }
         // 阶段八十八：原生滚动条全局隐藏（style.css ::-webkit-scrollbar 归零 + scrollbar-width:none），
         // 详情列表须挂自绘悬浮滑块否则滚动时无任何滚动条指示；initOsb 幂等（el._osb 防重复）
         if (window._osbInit) window._osbInit(detail);
@@ -2181,11 +2196,11 @@
             var dn = senderDisplayName(it.f);
             if (dn && names.indexOf(dn) < 0) names.push(dn);
         });
-        parties.textContent = names.join('、') + '：' + (env.c || (env.i || []).length) + '条消息';
+        parties.textContent = names.join('、') + '：' + (env.c || (env.i || []).length) + I18N.t('条消息');
         detail.innerHTML = '';
         var items = env.i || [];
         if (!items.length) {
-            detail.innerHTML = '<div class="md-empty">暂无内容</div>';
+            detail.innerHTML = '<div class="md-empty">' + I18N.t('暂无内容') + '</div>';
         }
         items.forEach(function (it) {
             var row = document.createElement('div');
@@ -2232,10 +2247,10 @@
             } else if (it.k === 'file' && it.u) {
                 var fc = document.createElement('div');
                 fc.className = 'md-file';
-                fc.title = '点击预览 / 下载';
+                fc.title = I18N.t('点击预览 / 下载');
                 var fn = document.createElement('span');
                 fn.className = 'md-file-name';
-                fn.textContent = it.n || '文件';
+                fn.textContent = it.n || I18N.t('文件');
                 var fs = document.createElement('span');
                 fs.className = 'md-file-size';
                 fs.textContent = it.s || '';
@@ -2314,7 +2329,7 @@
         var del = document.createElement('button');
         del.className = 'pending-shot-del';
         del.textContent = '×';
-        del.title = '移除截图';
+        del.title = I18N.t('移除截图');
         del.addEventListener('click', function () {
             var idx = pendingShots.indexOf(item);
             if (idx >= 0) pendingShots.splice(idx, 1);
@@ -2379,10 +2394,10 @@
             bar.className = 'shot-preview-bar';
             var sendBtn = document.createElement('button');
             sendBtn.className = 'shot-preview-btn primary';
-            sendBtn.textContent = '发送此图';
+            sendBtn.textContent = I18N.t('发送此图');
             var closeBtn = document.createElement('button');
             closeBtn.className = 'shot-preview-btn';
-            closeBtn.textContent = '关闭';
+            closeBtn.textContent = I18N.t('关闭');
             bar.appendChild(sendBtn);
             bar.appendChild(closeBtn);
             shotPreviewMask.appendChild(img);
@@ -2441,7 +2456,7 @@
             var del = document.createElement('button');
             del.className = 'quote-bar-del';
             del.textContent = '×';
-            del.title = '取消引用';
+            del.title = I18N.t('取消引用');
             del.addEventListener('click', function () { clearQuoteTarget(); messageInput.focus(); });
             quoteBarEl.appendChild(info);
             quoteBarEl.appendChild(del);
@@ -2454,7 +2469,7 @@
                 else bar.insertBefore(quoteBarEl, bar.firstChild);
             }
         }
-        quoteBarEl.querySelector('.quote-bar-info').textContent = '引用 ' + (q.from || '') + '：' + (q.text || '');
+        quoteBarEl.querySelector('.quote-bar-info').textContent = I18N.t('引用 ') + (q.from || '') + '：' + (q.text || '');
         quoteBarEl.classList.remove('hidden');
     }
 
@@ -2696,7 +2711,7 @@
         // 阶段四十四：AI 会话走图片识别链路——仅支持图片的智能体（配置归口）可发图
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
             if (!aiAgentSupportsImage(currentChatUser)) {
-                showToast('该助手不支持图片识别');
+                showToast(I18N.t('该助手不支持图片识别'));
                 return;
             }
         }
@@ -2762,7 +2777,7 @@
         var maxDirect = (IMSocket.getMaxDirectSize && IMSocket.getMaxDirectSize()) || 2147483648;
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxDirect) {
-            showToast('文件超过大小上限（' + formatSize(maxDirect) + '），无法发送');
+            showToast(I18N.t('文件超过大小上限（') + formatSize(maxDirect) + I18N.t('），无法发送'));
             return;
         }
         if (file.size > maxFile) {
@@ -2851,12 +2866,12 @@
             var bar = bubble.querySelector('.file-progress-inner');
             var txt = bubble.querySelector('.file-progress-text');
             if (bar) bar.style.width = pct + '%';
-            if (txt) txt.textContent = '上传中 ' + pct + '%';
+            if (txt) txt.textContent = I18N.t('上传中 ') + pct + '%';
         }
         function failUpload(errText) {
             bubble.classList.add('upload-failed');
             var txt = bubble.querySelector('.file-progress-text');
-            if (txt) txt.textContent = '上传失败';
+            if (txt) txt.textContent = I18N.t('上传失败');
             delete activeChunkUploads[uploadId];
             showToast(errText);
         }
@@ -2887,16 +2902,16 @@
                     var bar = bubble.querySelector('.file-progress-inner');
                     var txt = bubble.querySelector('.file-progress-text');
                     if (bar) bar.style.width = '100%';
-                    if (txt) txt.textContent = '已发送';
+                    if (txt) txt.textContent = I18N.t('已发送');
                     delete activeChunkUploads[uploadId];
                 } else {
                     // 上传被服务端拒绝（超限/拉黑/未在线/取消等）：进度条置失败态，本地气泡保留供确认
-                    failUpload('文件上传失败：' + (xhr.responseText || ('HTTP ' + xhr.status)));
+                    failUpload(I18N.t('文件上传失败：') + (xhr.responseText || ('HTTP ' + xhr.status)));
                 }
             };
             xhr.onerror = function () {
                 if (state.cancelled) return;
-                failUpload('文件上传失败：网络错误');
+                failUpload(I18N.t('文件上传失败：网络错误'));
             };
             xhr.send(blob);
         }
@@ -2953,7 +2968,7 @@
         progress.appendChild(bar);
         var txt = document.createElement('div');
         txt.className = 'file-progress-text';
-        txt.textContent = '上传中 0%';
+        txt.textContent = I18N.t('上传中 0%');
         info.appendChild(progress);
         info.appendChild(txt);
         bubble.appendChild(icon);
@@ -2962,7 +2977,7 @@
             var cancel = document.createElement('div');
             cancel.className = 'file-progress-cancel';
             cancel.textContent = '×';
-            cancel.title = '取消发送';
+            cancel.title = I18N.t('取消发送');
             bubble.appendChild(cancel);
         }
         // 头像 + 内容列微信风格结构（与 appendFileMsg 一致）
@@ -3047,7 +3062,7 @@
         if (!st) return;
         st.setAttribute('data-msg-id', msgId);
         var read = (readWatermark[peer] || 0) >= msgId;
-        st.textContent = read ? '已读' : '未读';
+        st.textContent = read ? I18N.t('已读') : I18N.t('未读');
         if (read) st.classList.add('read');
     }
 
@@ -3134,7 +3149,7 @@
         if (isImageName(meta.name || '')) {
             mediaEl = appendImageMsg(msg.from_user, meta.url, isMine ? 'self' : 'other', true);
         } else {
-            mediaEl = appendFileMsg(msg.from_user, meta.name || '未命名文件', formatSize(meta.size || 0), meta.url, isMine ? 'self' : 'other', true);
+            mediaEl = appendFileMsg(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), meta.url, isMine ? 'self' : 'other', true);
         }
         mediaEl.setAttribute('data-msg-id', msg.msg_id);
         mediaEl.setAttribute('data-file-id', msg.file_id);
@@ -3162,14 +3177,14 @@
         }
         if (!el) {
             // 首次进度：创建接收方进度气泡（无取消按钮）
-            el = appendProgressBubble(msg.from_user, meta.file_name || '文件', formatSize(meta.file_size || 0), isMine ? 'self' : 'other', peer !== '', meta.upload_id, meta.nonce || '', false);
+            el = appendProgressBubble(msg.from_user, meta.file_name || I18N.t('文件'), formatSize(meta.file_size || 0), isMine ? 'self' : 'other', peer !== '', meta.upload_id, meta.nonce || '', false);
         }
         var ratio = meta.total > 0 ? Math.min(1, meta.received / meta.total) : 0;
         var pct = Math.floor(ratio * 100);
         var bar = el.querySelector('.file-progress-inner');
         if (bar) bar.style.width = pct + '%';
         var txt = el.querySelector('.file-progress-text');
-        if (txt) txt.textContent = (el.classList.contains('self') ? '上传中 ' : '接收中 ') + pct + '%';
+        if (txt) txt.textContent = (el.classList.contains('self') ? I18N.t('上传中 ') : I18N.t('接收中 ')) + pct + '%';
     });
 
     // 阶段三十二：上传取消同步——双方移除进度气泡，接收方 Toast 提示（发送方多端静默移除）
@@ -3185,7 +3200,7 @@
         }
         if (el) el.remove();
         if (msg.from_user !== IMSocket.getUsername()) {
-            showToast('对方取消了文件发送');
+            showToast(I18N.t('对方取消了文件发送'));
         }
     });
 
@@ -3195,7 +3210,7 @@
     // suppressLocal：转发场景（阶段八十六）抑制本地回显气泡——目标会话非当前窗口，本地渲染会污染当前视图；
     // 服务端广播回来后由 GROUP_IMAGE 处理器按 currentChatUser 归口渲染（目标群聊打开时正常上屏，未打开仅记未读）
     function sendGroupImage(file, suppressLocal, groupTarget) {
-        if (!isImageName(file.name)) { showToast('群聊仅支持发送图片'); return; }
+        if (!isImageName(file.name)) { showToast(I18N.t('群聊仅支持发送图片')); return; }
         // nonce：本地气泡唯一标识，广播回填 msg_id 时精确匹配（对齐 FILE_PERSISTED 按 file_id 匹配的归口思路，并发发送不错位）
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         if (!suppressLocal) {
@@ -3226,7 +3241,7 @@
     // suppressLocal：转发复用时抑制本地气泡与输入清理（与 sendGroupImage 的 suppressLocal 同语义）
     function sendGroupFile(file, suppressLocal, groupTarget) {
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
-        if (file.size > maxFile) { showToast('文件超过大小上限（' + formatSize(maxFile) + '），无法发送'); return; }
+        if (file.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + I18N.t('），无法发送')); return; }
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         var bubble = null;
         if (!suppressLocal) {
@@ -3247,7 +3262,7 @@
         }).then(function (res) {
             if (!res.ok) {
                 return res.text().then(function (t) {
-                    if (!suppressLocal) showToast('群聊文件发送失败：' + (t || ('HTTP ' + res.status)));
+                    if (!suppressLocal) showToast(I18N.t('群聊文件发送失败：') + (t || ('HTTP ' + res.status)));
                     throw new Error(t || ('HTTP ' + res.status));
                 });
             }
@@ -3257,7 +3272,7 @@
             // 原实现：仅 showToast('已发送')
             return res.json().catch(function () { return null; }).then(function (data) {
                 if (!suppressLocal) {
-                    showToast('已发送');
+                    showToast(I18N.t('已发送'));
                     try {
                         if (data && data.url && bubble) {
                             var bEl = bubble.querySelector('.bubble-file');
@@ -3283,9 +3298,9 @@
     function sendAIImage(file, noteText) {
         var agent = currentChatUser;
         if (!agent || !isAIAgent(agent)) return;
-        if (!isImageName(file.name)) { showToast('仅支持发送图片文件'); return; }
+        if (!isImageName(file.name)) { showToast(I18N.t('仅支持发送图片文件')); return; }
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
-        if (file.size > maxFile) { showToast('图片超过大小上限（' + formatSize(maxFile) + '）'); return; }
+        if (file.size > maxFile) { showToast(I18N.t('图片超过大小上限（') + formatSize(maxFile) + '）'); return; }
         var note = (noteText !== undefined && noteText !== null) ? String(noteText) : messageInput.value.trim();
         var bubble = appendImageMsg(IMSocket.getUsername(), URL.createObjectURL(file), 'self', true);
         var fd = new FormData();
@@ -3300,19 +3315,19 @@
             }
             return res.json();
         }).then(function (data) {
-            if (!data || !data.url) throw new Error('上传响应缺少图片地址');
+            if (!data || !data.url) throw new Error(I18N.t('上传响应缺少图片地址'));
             var envelope = JSON.stringify({ image: data.url, text: note });
             // 记录提问原文（重新生成按信封原样重发，服务端重新读图，口径与首次发送一致）
-            lastAIQuestion[agent] = { raw: envelope, text: note || '[图片]' };
+            lastAIQuestion[agent] = { raw: envelope, text: note || I18N.t('[图片]') };
             bubble.remove(); // 回显渲染最终气泡，移除本地预览防重复
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（图片已存档，可重新发）
             if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
-                throw new Error('消息发送失败');
+                throw new Error(I18N.t('消息发送失败'));
             }
             messageInput.value = '';
         }).catch(function (e) {
             bubble.remove(); // 上传/发送失败：移除本地预览气泡（服务端无记录，避免幽灵气泡）
-            showToast('图片发送失败：' + (e.message || e));
+            showToast(I18N.t('图片发送失败：') + (e.message || e));
         });
     }
 
@@ -3323,11 +3338,11 @@
     function sendAIDoc(file) {
         var agent = currentChatUser;
         if (!agent || !isAIAgent(agent)) return;
-        if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(file.name)) { showToast('仅支持 docx/xlsx/xlsm/csv/md/txt 文档'); return; }
+        if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(file.name)) { showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt 文档')); return; }
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
-        if (file.size > maxFile) { showToast('文档超过大小上限（' + formatSize(maxFile) + '）'); return; }
+        if (file.size > maxFile) { showToast(I18N.t('文档超过大小上限（') + formatSize(maxFile) + '）'); return; }
         var note = messageInput.value.trim();
-        showToast('正在上传文档…');
+        showToast(I18N.t('正在上传文档…'));
         var fd = new FormData();
         fd.append('file', file);
         fetch('/upload/ai/doc?username=' + encodeURIComponent(IMSocket.getUsername()) +
@@ -3340,17 +3355,17 @@
             }
             return res.json();
         }).then(function (data) {
-            if (!data || !data.url) throw new Error('上传响应缺少文档地址');
+            if (!data || !data.url) throw new Error(I18N.t('上传响应缺少文档地址'));
             var envelope = JSON.stringify({ doc: data.url, name: file.name, text: note });
             // 记录提问原文（重新生成按信封原样重发，服务端重新解析文档，口径与首次发送一致）
-            lastAIQuestion[agent] = { raw: envelope, text: note ? '[文档] ' + file.name + ' ' + note : '[文档] ' + file.name };
+            lastAIQuestion[agent] = { raw: envelope, text: note ? I18N.t('[文档] ') + file.name + ' ' + note : I18N.t('[文档] ') + file.name };
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（文档已存档，可重新发）
             if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
-                throw new Error('消息发送失败');
+                throw new Error(I18N.t('消息发送失败'));
             }
             messageInput.value = '';
         }).catch(function (e) {
-            showToast('文档发送失败：' + (e.message || e));
+            showToast(I18N.t('文档发送失败：') + (e.message || e));
         });
     }
 
@@ -3419,7 +3434,7 @@
                 return;
             }
         }
-        var el = appendFileMsg(msg.from_user, meta.name || '未命名文件', formatSize(meta.size || 0), meta.url || '', isMine ? 'self' : 'other', false);
+        var el = appendFileMsg(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), meta.url || '', isMine ? 'self' : 'other', false);
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
     });
@@ -3519,8 +3534,8 @@
     // 原实现：ScreenshotEditor.freeze 嵌主窗体内全屏冻结（依赖主进程切全屏+揭幕时序，已废弃）
     var editorWinBusy = false; // 独立编辑器窗口打开中（原 ScreenshotEditor.isOpen() 只能读主窗体内编辑器，独立窗口化后改本端标记）
     function openShotEditor(dataUrl) {
-        if (!dataUrl) { showToast('截图失败'); return; }
-        if (!window.desktop || !window.desktop.openEditor) { showToast('截图失败'); return; }
+        if (!dataUrl) { showToast(I18N.t('截图失败')); return; }
+        if (!window.desktop || !window.desktop.openEditor) { showToast(I18N.t('截图失败')); return; }
         editorWinBusy = true;
         window.desktop.openEditor({ dataUrl: dataUrl, mode: 'freeze', callback: 'pending' });
     }
@@ -3554,7 +3569,7 @@
         var dot = document.createElement('span');
         dot.className = 'shot-menu-dot' + (shotHideMainPref ? ' on' : ''); // QQ 同款圆形选中点
         var label = document.createElement('span');
-        label.textContent = '截图时隐藏当前窗口';
+        label.textContent = I18N.t('截图时隐藏当前窗口');
         item.appendChild(dot);
         item.appendChild(label);
         item.addEventListener('click', function () {
@@ -3562,7 +3577,7 @@
             localStorage.setItem('shot_hide_main', shotHideMainPref ? '1' : '0');
             shotHideMainSync();
             dot.classList.toggle('on', shotHideMainPref);
-            showToast(shotHideMainPref ? '已开启：截图时隐藏主窗口' : '已关闭：截图时保留主窗口');
+            showToast(shotHideMainPref ? I18N.t('已开启：截图时隐藏主窗口') : I18N.t('已关闭：截图时保留主窗口'));
             shotMenuClose();
         });
         menu.appendChild(item);
@@ -3571,7 +3586,7 @@
             var recItem = document.createElement('div');
             recItem.className = 'shot-menu-item';
             var recLabel = document.createElement('span');
-            recLabel.textContent = '录屏';
+            recLabel.textContent = I18N.t('录屏');
             var recKey = document.createElement('span');
             recKey.className = 'shot-menu-key';
             recKey.textContent = recShortcutLabel; // 主进程实际注册的键位（回退后显示 Ctrl+Shift+R，无全局键时隐藏）
@@ -3612,13 +3627,13 @@
             window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
                 openShotEditor(dataUrl); // 阶段一百四十：dataURL 直送独立编辑器窗口（原 dataUrlToBlob 后主窗体内开编辑器）
             }).catch(function () {
-                showToast('截图失败');
+                showToast(I18N.t('截图失败'));
             });
             return;
         }
         // 原实现：浏览器 getDisplayMedia 抓屏（需系统共享弹窗人工选择；PC 端已被静默抓屏替代，此为浏览器回退路径）
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-            showToast('当前环境不支持截图，请使用 PC 端');
+            showToast(I18N.t('当前环境不支持截图，请使用 PC 端'));
             return;
         }
         navigator.mediaDevices.getDisplayMedia({ video: true }).then(function (stream) {
@@ -3646,18 +3661,18 @@
                 // freeze 伪冻结遮罩保留为备选入口（window.ScreenshotEditor.freeze 接口不变，需要时换回即可）
                 // ScreenshotEditor.freeze(blob, sendScreenshotFile);
                 canvas.toBlob(function (blob) {
-                    if (!blob) { showToast('截图失败'); return; }
+                    if (!blob) { showToast(I18N.t('截图失败')); return; }
                     ScreenshotEditor.open(blob, sendScreenshotFile);
                 }, 'image/png');
             };
         }).catch(function () {
-            showToast('已取消截图');
+            showToast(I18N.t('已取消截图'));
         });
     });
 
     // ===== 阶段三十五：截图编辑器确认后的统一发送入口（群聊走 HTTP 上传链路，私聊走分片/直传分流） =====
     function sendScreenshotFile(blob) {
-        var shot = new File([blob], '截图_' + Date.now() + '.png', { type: 'image/png' });
+        var shot = new File([blob], I18N.t('截图_') + Date.now() + '.png', { type: 'image/png' });
         // AI 智能体会话：截图同样走 AI 图片识别链路（/upload/ai/image + AI_CHAT 信封），
         // 与图片按钮一致；原实现直走通用文件链路，AI 不响应文件消息导致截图提问无应答
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) { sendAIImage(shot); return; }
@@ -3695,7 +3710,7 @@
     // 拿全屏屏幕流（录屏/长截图共用）：主进程给屏幕源 id → getUserMedia desktop 源（无系统共享弹窗）
     function getDesktopStream() {
         return window.desktop.recSource().then(function (sourceId) {
-            if (!sourceId) throw new Error('未找到屏幕源');
+            if (!sourceId) throw new Error(I18N.t('未找到屏幕源'));
             var dpr = window.devicePixelRatio || 1;
             return navigator.mediaDevices.getUserMedia({
                 audio: false,
@@ -3715,21 +3730,21 @@
     // 录屏入口：抓屏冻结选区（与截图同链路，"隐藏当前窗口"开关同样生效）
     function startRecordFlow() {
         if (!window.desktop || !window.desktop.captureScreen || !window.desktop.recBegin) {
-            showToast('录屏仅 PC 端支持');
+            showToast(I18N.t('录屏仅 PC 端支持'));
             return;
         }
-        if (!IMSocket.isConnected()) { showToast('请先登录'); return; }
-        if (stitchState.active) { showToast('长截图进行中，请先完成或取消'); return; } // 长截图与录屏互斥（全局快捷键可交叉触发）
-        if (recState.active || recState.recorder) { showToast(recShortcutLabel ? '录屏进行中，按 ' + recShortcutLabel + ' 停止' : '录屏进行中'); return; }
+        if (!IMSocket.isConnected()) { showToast(I18N.t('请先登录')); return; }
+        if (stitchState.active) { showToast(I18N.t('长截图进行中，请先完成或取消')); return; } // 长截图与录屏互斥（全局快捷键可交叉触发）
+        if (recState.active || recState.recorder) { showToast(recShortcutLabel ? I18N.t('录屏进行中，按 ') + recShortcutLabel + I18N.t(' 停止') : I18N.t('录屏进行中')); return; }
         if (editorWinBusy) return; // 独立编辑器窗口打开中不重复进入（原 ScreenshotEditor.isOpen() 检查独立窗口化后失效）
         window.desktop.captureScreen(shotHideMainPref).then(function (dataUrl) {
-            if (!dataUrl) { showToast('录屏启动失败'); return; }
+            if (!dataUrl) { showToast(I18N.t('录屏启动失败')); return; }
             // 冻结选区移入独立编辑器窗口（record 模式，选区交互与冻结截图同款）：3-2-1 倒计时结束经
             // editor:rec-start 回主窗口启动录制；选区阶段取消走 editor:cancel 恢复主窗口
             // 原实现：ScreenshotEditor.freezeVideo 嵌主窗体内（依赖主进程切全屏+揭幕，已随独立窗口化废弃）
             editorWinBusy = true;
             window.desktop.openEditor({ dataUrl: dataUrl, mode: 'record', callback: '' });
-        }).catch(function () { showToast('录屏启动失败'); });
+        }).catch(function () { showToast(I18N.t('录屏启动失败')); });
     }
 
     // 倒计时结束：主窗口退场 → 拿屏幕流 → 启动裁剪录制（退场完成前不进录制，窗口残影不入镜）
@@ -3752,7 +3767,7 @@
                 startRecRecorder();
             };
         }).catch(function (e) {
-            showToast('录屏启动失败' + (e && e.message ? '：' + e.message : ''));
+            showToast(I18N.t('录屏启动失败') + (e && e.message ? '：' + e.message : ''));
             recCleanup();
             window.desktop.recShow();
         });
@@ -3794,7 +3809,7 @@
         recState.maxTimer = setTimeout(function () {
             if (recState.active) {
                 stopRecording();
-                showToast('已达最长录制时长（10 分钟），已自动停止');
+                showToast(I18N.t('已达最长录制时长（10 分钟），已自动停止'));
             }
         }, REC_MAX_MS);
     }
@@ -3821,7 +3836,7 @@
         recState.stream = null;
         recState.raf = 0;
         window.desktop.recShow();
-        if (!blob.size) { showToast('录屏数据为空'); return; }
+        if (!blob.size) { showToast(I18N.t('录屏数据为空')); return; }
         showRecPreview(blob, durationMs);
     }
 
@@ -3858,10 +3873,10 @@
             bar.className = 'rec-preview-bar';
             var sendBtn = document.createElement('button');
             sendBtn.className = 'shot-preview-btn primary';
-            sendBtn.textContent = '发送';
+            sendBtn.textContent = I18N.t('发送');
             var closeBtn = document.createElement('button');
             closeBtn.className = 'shot-preview-btn';
-            closeBtn.textContent = '取消';
+            closeBtn.textContent = I18N.t('取消');
             bar.appendChild(sendBtn);
             bar.appendChild(closeBtn);
             recPreviewMask.appendChild(v);
@@ -3888,9 +3903,9 @@
         if (pv.src && pv.src.indexOf('blob:') === 0) URL.revokeObjectURL(pv.src);
         pv.src = URL.createObjectURL(blob);
         var mins = Math.floor(durationMs / 60000), secs = Math.floor((durationMs % 60000) / 1000);
-        var target = currentChatUser === '' ? '当前群聊' : senderDisplayName(currentChatUser);
+        var target = currentChatUser === '' ? I18N.t('当前群聊') : senderDisplayName(currentChatUser);
         recPreviewMask.querySelector('.rec-preview-info').textContent =
-            '录屏视频 · ' + mins + '分' + secs + '秒 · ' + formatSize(blob.size) + ' · 发送到：' + target;
+            I18N.t('录屏视频 · ') + mins + I18N.t('分') + secs + I18N.t('秒 · ') + formatSize(blob.size) + I18N.t(' · 发送到：') + target;
         recPreviewMask._blob = blob;
         recPreviewMask.classList.remove('hidden');
     }
@@ -3909,7 +3924,7 @@
     function sendRecordFile(blob) {
         var d = new Date();
         var pad = function (n) { return (n < 10 ? '0' : '') + n; };
-        var name = '录屏_' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
+        var name = I18N.t('录屏_') + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
             pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.webm';
         var file = new File([blob], name, { type: 'video/webm' });
         // 阶段一百四十二：多群泛化——多群会话录屏同走群文件直传（group 参数归口）
@@ -3947,7 +3962,7 @@
     // 长截图入口（screenshot.js 工具栏"长截图"按钮回调）：主窗口收缩 + 渲染层切 live 态 + 启动拼接
     function onStitchStart(selImg, snapW, snapH) {
         if (stitchState.active) return;
-        if (!window.desktop || !window.desktop.stitchBegin) { showToast('长截图仅 PC 端支持'); return; }
+        if (!window.desktop || !window.desktop.stitchBegin) { showToast(I18N.t('长截图仅 PC 端支持')); return; }
         stitchState.active = true;
         stitchState.sel = selImg;
         stitchState.snapW = snapW;
@@ -3958,7 +3973,7 @@
         // 2) 渲染层切 live 态：隐藏聊天界面（CSS 根节点 shot-live 类），显示悬浮工具条
         document.documentElement.classList.add('shot-live');
         ensureStitchToolbar();
-        updateStitchStatus('准备中…');
+        updateStitchStatus(I18N.t('准备中…'));
         // 原：stitchBegin 与 getDesktopStream 并行发起——实测缩条过程中建立的流 video 首帧延迟数秒
         //    （窗口 resize 期间媒体管线初始化停滞，"准备中…"卡住，此时点完成误报"未捕获到内容"，
         //    不滚动完成场景 2/2 复现；live 态窗口稳定后建流则毫秒级出帧，探帧实证 readyState=4）；
@@ -3986,7 +4001,7 @@
                 startStitchEngine();
             };
         }).catch(function (e) {
-            showToast('长截图启动失败' + (e && e.message ? '：' + e.message : ''));
+            showToast(I18N.t('长截图启动失败') + (e && e.message ? '：' + e.message : ''));
             cancelStitch();
         });
     }
@@ -4000,10 +4015,10 @@
         status.className = 'shot-live-status';
         var okBtn = document.createElement('button');
         okBtn.className = 'shot-live-btn primary';
-        okBtn.textContent = '完成';
+        okBtn.textContent = I18N.t('完成');
         var noBtn = document.createElement('button');
         noBtn.className = 'shot-live-btn';
-        noBtn.textContent = '取消';
+        noBtn.textContent = I18N.t('取消');
         okBtn.addEventListener('click', function () { completeStitch(false); });
         noBtn.addEventListener('click', cancelStitch);
         bar.appendChild(status);
@@ -4068,7 +4083,7 @@
         stitchState.lctx.drawImage(work, 0, 0);
         stitchState.longH = stitchState.ch;
         buildStitchStrip();
-        updateStitchStatus('已捕获 ' + stitchState.longH + 'px，滚动页面继续');
+        updateStitchStatus(I18N.t('已捕获 ') + stitchState.longH + I18N.t('px，滚动页面继续'));
         stitchState.timer = setInterval(stitchTick, STITCH_INTERVAL);
     }
 
@@ -4146,7 +4161,7 @@
         stitchState.lctx.drawImage(stitchState.work, 0, addY, cw, addH, 0, stitchState.longH, cw, addH);
         stitchState.longH += addH;
         buildStitchStrip(); // 长图底边更新 → 模板重建（下次对齐以新底边为基准）
-        updateStitchStatus('已捕获 ' + stitchState.longH + 'px，滚动页面继续');
+        updateStitchStatus(I18N.t('已捕获 ') + stitchState.longH + I18N.t('px，滚动页面继续'));
     }
 
     // 重建对齐模板：长图底部 STRIP small 行（1/2 降采样灰度）；长图底边随追加更新，模板随之重建
@@ -4221,7 +4236,7 @@
         var now = Date.now();
         if (now - stitchState.lastWarn < 2000) return;
         stitchState.lastWarn = now;
-        showToast('滚动过快，未对齐的帧已跳过，请放慢滚动');
+        showToast(I18N.t('滚动过快，未对齐的帧已跳过，请放慢滚动'));
     }
 
     // 完成：停采样 → 长图编码 PNG → 恢复窗口与聊天 UI → 进既有编辑器标注/发送
@@ -4233,7 +4248,7 @@
         if (!force && !stitchState.longH && stitchState.video) {
             if (stitchState.finishing) return; // 等待中重复点击
             stitchState.finishing = true;
-            updateStitchStatus('捕获中…');
+            updateStitchStatus(I18N.t('捕获中…'));
             var waitStart = Date.now();
             var wait = setInterval(function () {
                 if (!stitchState.active || stitchState.longH > 0) {
@@ -4252,7 +4267,7 @@
         }
         stitchState.active = false;
         stopStitchEngine();
-        updateStitchStatus('生成中…');
+        updateStitchStatus(I18N.t('生成中…'));
         var longCanvas = stitchState.long;
         var contentH = stitchState.longH; // 实际内容高度（扩容画布容量可能大于它）
         stitchState.long = null;
@@ -4263,7 +4278,7 @@
             document.documentElement.classList.remove('shot-live');
             hideStitchToolbar();
             if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
-            showToast('长截图失败：未捕获到内容');
+            showToast(I18N.t('长截图失败：未捕获到内容'));
             return;
         }
         // 扩容画布容量 ≥ 内容高度：编码前裁掉未绘制的多余部分，避免长图底部出现透明黑条
@@ -4280,7 +4295,7 @@
             document.documentElement.classList.remove('shot-live');
             hideStitchToolbar();
             if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
-            if (!blob || !blob.size) { showToast('长截图失败：编码失败'); return; }
+            if (!blob || !blob.size) { showToast(I18N.t('长截图失败：编码失败')); return; }
             // 原实现：ScreenshotEditor.open(blob, setPendingShot);（主窗口内编辑器画布无法拖动平移看长图，用户实测反馈）
             // 改：长图直接进输入框待发送条（点发送才真正发出）+ 图片浏览器独立窗口打开查看
             // （查看器支持拖拽平移/滚轮缩放/双击适应与 1:1，见 image-viewer.js 画布交互段）
@@ -4292,7 +4307,7 @@
                     }
                 });
             }
-            if (auto) showToast('已达长图最大高度，已自动完成');
+            if (auto) showToast(I18N.t('已达长图最大高度，已自动完成'));
         }, 'image/png');
     }
 
@@ -4321,7 +4336,7 @@
         document.documentElement.classList.remove('shot-live');
         hideStitchToolbar();
         if (window.desktop && window.desktop.stitchFinish) window.desktop.stitchFinish();
-        showToast('已取消长截图');
+        showToast(I18N.t('已取消长截图'));
     }
 
     // 停采样循环与屏幕流（完成/取消共用）
@@ -4371,7 +4386,7 @@
                     // dataURL 前缀统一标 PNG（stitchBlobToDataUrl 复用）——Image 解码按内容嗅探，mime 标注不影响显示
                     editorWinBusy = true;
                     stitchBlobToDataUrl(file, function (dataUrl) {
-                        if (!dataUrl) { editorWinBusy = false; showToast('截图失败'); return; }
+                        if (!dataUrl) { editorWinBusy = false; showToast(I18N.t('截图失败')); return; }
                         window.desktop.openEditor({ dataUrl: dataUrl, mode: 'open', callback: 'sendFile' });
                     });
                 } else {
@@ -4440,16 +4455,16 @@
         // 阶段七十二：清空聊天双选项——清空显示（服务端写删除表，本端不再加载，云端保留）/ 永久删除（物理删除云端记录，不可恢复）。
         // 原实现仅清本地视图不写删除表，刷新或重开会话后历史原样回来，清空形同虚设
         // 永久删除仅私聊与 AI 会话提供（群聊消息影响全员，仅提供清空显示）；AI 会话永久删除范围为当前查看会话
-        showChoice('清空聊天',
-            '仅清空本端显示，云端记录保留且不再加载；私聊永久删除需对方同意后执行，AI 会话可直接删除当前会话。',
-            '云端保留',
+        showChoice(I18N.t('清空聊天'),
+            I18N.t('仅清空本端显示，云端记录保留且不再加载；私聊永久删除需对方同意后执行，AI 会话可直接删除当前会话。'),
+            I18N.t('云端保留'),
             function () {
                 IMSocket.send({ msg_type: MSG.CONV_CLEAR, to_user: currentChatUser });
                 messageList.innerHTML = '';
-                appendSystem('聊天显示已清空（云端记录保留）');
+                appendSystem(I18N.t('聊天显示已清空（云端记录保留）'));
             },
             isGroup ? null : {
-                text: isAI ? '永久删除' : '申请删除双方记录',
+                text: isAI ? I18N.t('永久删除') : I18N.t('申请删除双方记录'),
                 cb: function () {
                     if (isAI) {
                         // AI 会话：自己的数据自己删，无需审批
@@ -4465,7 +4480,7 @@
                         historyHasMore = true;
                         loadingMore = false;
                         loadHistory();
-                        appendSystem('当前会话已从云端永久删除');
+                        appendSystem(I18N.t('当前会话已从云端永久删除'));
                     } else {
                         // 私聊走双方审批流：服务端落申请单并推审批卡片，对方同意才物理删除申请前的记录
                         IMSocket.send({ msg_type: MSG.PURGE_APPLY, to_user: currentChatUser });
@@ -4559,7 +4574,7 @@
             clearAuth();
             loginView.classList.remove('hidden');
             chatView.classList.add('hidden');
-            showToast('登录失败：' + msg.content);
+            showToast(I18N.t('登录失败：') + msg.content);
         }
     });
 
@@ -4592,7 +4607,7 @@
         // 修复记录：此分支曾因同文件并行编辑相互覆盖而丢失，导致查无此人时一直停在"搜索中..."且无提示
         if (addFriendQuery && !addFriendMask.classList.contains('hidden') && msg.content === '用户不存在') {
             addFriendQuery = null;
-            renderAddFriendHint('无该用户');
+            renderAddFriendHint(I18N.t('无该用户'));
             return;
         }
         // 阶段一百三十五：账号封禁/注销提示（登录拒绝与在线踢出同帧同文案）——模态弹窗展示
@@ -4600,8 +4615,8 @@
         // socket.js 据.ERROR+关闭判定为服务端拒绝后不再自动重连并回退登录界面
         if (msg.content && (msg.content.indexOf('账号已被管理员封禁') === 0 || msg.content === '账号已注销')) {
             showToast(msg.content);
-            showConfirm(msg.content.indexOf('账号已被封禁') === 0 ? '账号已被封禁' : '账号已注销',
-                msg.content, null, '我知道了', '关闭');
+            showConfirm(msg.content.indexOf('账号已被封禁') === 0 ? I18N.t('账号已被封禁') : I18N.t('账号已注销'),
+                msg.content, null, I18N.t('我知道了'), I18N.t('关闭'));
             return;
         }
         showToast(msg.content);
@@ -4640,7 +4655,7 @@
         group.id = 'blacklist-group';
         var title = document.createElement('div');
         title.className = 'blacklist-title';
-        title.textContent = '黑名单 (' + blockedList.length + ')';
+        title.textContent = I18N.t('黑名单 (') + blockedList.length + ')';
         title.addEventListener('click', function () {
             blacklistExpanded = !blacklistExpanded;
             renderBlacklist();
@@ -4656,12 +4671,12 @@
                 name.textContent = b.username;
                 var unblockBtn = document.createElement('span');
                 unblockBtn.className = 'unblock-btn';
-                unblockBtn.textContent = '移出';
+                unblockBtn.textContent = I18N.t('移出');
                 unblockBtn.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    showConfirm('移出黑名单', '确定将 "' + b.username + '" 移出黑名单吗？移出后可重新添加好友。', function () {
+                    showConfirm(I18N.t('移出黑名单'), I18N.t('确定将 "') + b.username + I18N.t('" 移出黑名单吗？移出后可重新添加好友。'), function () {
                         IMSocket.send({ msg_type: MSG.BLACKLIST, to_user: b.username, content: 'unblock' });
-                    }, '移出');
+                    }, I18N.t('移出'));
                 });
                 item.appendChild(name);
                 item.appendChild(unblockBtn);
@@ -4670,7 +4685,7 @@
             if (blockedList.length === 0) {
                 var empty = document.createElement('div');
                 empty.className = 'blacklist-empty';
-                empty.textContent = '暂无黑名单用户';
+                empty.textContent = I18N.t('暂无黑名单用户');
                 group.appendChild(empty);
             }
         }
@@ -4727,7 +4742,7 @@
     var annItems = [];                 // 公告列表缓存（服务端已按 置顶+发布时间 排序归口下发）
     var annCurCat = '';                // 当前打开的公告流分类（空=未打开）
     var annUnreadByCat = {};           // 分类未读数（服务端归口下发：{notice,news,red}）
-    var annCatNames = { notice: '公告', news: '动态', red: '红头文件' };
+    var annCatNames = { notice: I18N.t('公告'), news: I18N.t('动态'), red: I18N.t('红头文件') };
     var annCatIcons = { notice: '📢', news: '📰', red: '🧧' };
 
     // 纯文本转义（公告模块动态字段渲染归口）
@@ -4787,7 +4802,7 @@
                 annRenderBadge();
                 if (annCurCat) annRenderStream();
             }).catch(function () {
-                if (annCurCat && annStreamList) annStreamList.innerHTML = '<div class="ann-empty">加载失败</div>';
+                if (annCurCat && annStreamList) annStreamList.innerHTML = '<div class="ann-empty">' + I18N.t('加载失败') + '</div>';
             });
     }
 
@@ -4800,14 +4815,14 @@
         var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
         if (d.toDateString() === now.toDateString()) return pad(d.getHours()) + ':' + pad(d.getMinutes());
         var yest = new Date(now.getTime() - 86400000);
-        if (d.toDateString() === yest.toDateString()) return '昨天';
+        if (d.toDateString() === yest.toDateString()) return I18N.t('昨天');
         return pad(d.getMonth() + 1) + '-' + pad(d.getDate());
     }
 
     // 类型角标归口：doc=文档（附件为主）/ link=链接（内置浏览器查看）；html 无角标
     function annTypeTag(ct) {
-        if (ct === 'doc') return '<span class="ann-type-tag t-doc">文档</span>';
-        if (ct === 'link') return '<span class="ann-type-tag t-link">链接</span>';
+        if (ct === 'doc') return '<span class="ann-type-tag t-doc">' + I18N.t('文档') + '</span>';
+        if (ct === 'link') return '<span class="ann-type-tag t-link">' + I18N.t('链接') + '</span>';
         return '';
     }
 
@@ -4818,7 +4833,7 @@
         if (!annStreamList) return;
         var list = annItems.filter(function (a) { return a.category === annCurCat; });
         if (!list.length) {
-            annStreamList.innerHTML = '<div class="ann-empty">暂无' + (annCatNames[annCurCat] || '公告') + '</div>';
+            annStreamList.innerHTML = '<div class="ann-empty">' + I18N.t('暂无') + (annCatNames[annCurCat] || I18N.t('公告')) + '</div>';
             return;
         }
         var html = '';
@@ -4829,7 +4844,7 @@
             if (style === 'cover-top' && !a.cover) style = 'standard';
             if ((style === 'cover-left' || style === 'standard') && a.cover) style = 'cover-left';
             html += '<div class="ann-card s-' + style + (a.read ? ' read' : '') + (a.stick ? ' stick' : '') + '" data-ann-id="' + a.id + '" data-ann-type="' + annEsc(a.content_type || 'html') + '">'
-                + (a.stick ? '<span class="ann-stick-corner">置顶</span>' : '')
+                + (a.stick ? '<span class="ann-stick-corner">' + I18N.t('置顶') + '</span>' : '')
                 + (style === 'cover-top' && a.cover ? '<div class="ann-card-cover"><img src="' + annEsc(a.cover) + '" alt="" loading="lazy"></div>' : '')
                 + '<div class="ann-card-body">'
                 + '<div class="ann-card-title">' + annEsc(a.title) + annTypeTag(a.content_type)
@@ -4837,8 +4852,8 @@
                 + (style !== 'compact' && a.digest ? '<div class="ann-card-digest">' + annEsc(a.digest) + '</div>' : '')
                 + '<div class="ann-card-foot">'
                 + '<span class="ann-card-meta">' + annEsc(a.publisher || '') + (a.publisher ? ' · ' : '') + annEsc(annFormatTime(a.publish_time)) + '</span>'
-                + (a.require_confirm ? '<span class="ann-confirm-tag' + (a.confirmed ? ' done' : '') + '">' + (a.confirmed ? '已签收' : '待签收') + '</span>' : '')
-                + (a.read ? '<span class="ann-read-tag">已读</span>' : '')
+                + (a.require_confirm ? '<span class="ann-confirm-tag' + (a.confirmed ? ' done' : '') + '">' + (a.confirmed ? I18N.t('已签收') : I18N.t('待签收')) + '</span>' : '')
+                + (a.read ? '<span class="ann-read-tag">' + I18N.t('已读') + '</span>' : '')
                 + '</div>'
                 + '</div>'
                 + (style === 'cover-left' && a.cover ? '<div class="ann-card-cover"><img src="' + annEsc(a.cover) + '" alt="" loading="lazy"></div>' : '')
@@ -4853,7 +4868,7 @@
         annCurCat = cat;
         annStreamTitle.textContent = annCatNames[cat];
         annStreamIcon.textContent = annCatIcons[cat] || '📢';
-        annStreamList.innerHTML = '<div class="ann-empty">加载中…</div>';
+        annStreamList.innerHTML = '<div class="ann-empty">' + I18N.t('加载中…') + '</div>';
         annStreamEl.classList.remove('hidden');
         annLoadList();
     }
@@ -4880,25 +4895,25 @@
             .then(function (r) { return r.json(); })
             .then(function (resp) {
                 var d = resp && resp.data;
-                if (!d) { showToast('公告不存在或已撤回'); return; }
+                if (!d) { showToast(I18N.t('公告不存在或已撤回')); return; }
                 annApplyReadSync(d);
                 annShowDetail(d);
-            }).catch(function () { showToast('加载失败'); });
+            }).catch(function () { showToast(I18N.t('加载失败')); });
     }
 
     // 详情弹层内容渲染归口（html/doc 通用；doc 型以附件列表为主）
     function annShowDetail(d) {
-        annDetailCat.textContent = annCatNames[d.category] || '公告';
+        annDetailCat.textContent = annCatNames[d.category] || I18N.t('公告');
         annDetailCat.className = 'ann-cat-tag cat-' + annEsc(d.category);
         annDetailTitle.textContent = d.title;
         var meta = [];
-        if (d.publisher) meta.push('发布：' + d.publisher);
+        if (d.publisher) meta.push(I18N.t('发布：') + d.publisher);
         if (d.publish_time) meta.push(new Date(d.publish_time).toLocaleString());
         annDetailMeta.textContent = meta.join(' · ');
         annDetailContent.innerHTML = d.content_html || '';
         annDetailContent.scrollTop = 0;
         if (d.attachments && d.attachments.length) {
-            var html = '<div class="ann-atts-title">附件（' + d.attachments.length + '）</div>';
+            var html = '<div class="ann-atts-title">' + I18N.t('附件（') + d.attachments.length + '）</div>';
             d.attachments.forEach(function (at) {
                 html += '<div class="ann-att-item" data-att-url="' + annEsc(at.url) + '" data-att-name="' + annEsc(at.name) + '">'
                     + '<span class="ann-att-icon">'
@@ -4916,7 +4931,7 @@
         }
         // 链接型：显示"打开链接"按钮（打开方式后台已归口配置：内置浏览器/系统浏览器）
         if (d.content_type === 'link' && d.external_url) {
-            annDetailContent.innerHTML = '<div class="ann-link-hint">本公告为链接型，点击下方按钮打开查看</div>';
+            annDetailContent.innerHTML = '<div class="ann-link-hint">' + I18N.t('本公告为链接型，点击下方按钮打开查看') + '</div>';
             annOpenLinkBtn.dataset.annUrl = d.external_url;
             annOpenLinkBtn.dataset.annInBrowser = d.open_in_browser ? '1' : '0';
             annOpenLinkBtn.classList.remove('hidden');
@@ -4953,7 +4968,7 @@
             .then(function (r) { return r.json(); })
             .then(function (resp) {
                 var d = resp && resp.data;
-                if (!d) { showToast('公告不存在或已撤回'); return; }
+                if (!d) { showToast(I18N.t('公告不存在或已撤回')); return; }
                 annApplyReadSync(d);
                 if (ct === 'doc') {
                     var at = (d.attachments || [])[0];
@@ -4961,12 +4976,12 @@
                         openDocPreview(at.url, at.name);
                     } else {
                         annShowDetail(d);
-                        showToast('该公告暂无附件');
+                        showToast(I18N.t('该公告暂无附件'));
                     }
                 } else {
                     annOpenLink(d);
                 }
-            }).catch(function () { showToast('加载失败'); });
+            }).catch(function () { showToast(I18N.t('加载失败')); });
     }
 
     // 链接型公告打开方式归口（后台 open_in_browser 配置驱动）：
@@ -4974,7 +4989,7 @@
     // PC + 未勾选 → 系统默认浏览器；浏览器版/手机端 → 新窗口
     function annOpenLink(d) {
         var url = d.external_url;
-        if (!url) { showToast('链接地址为空'); return; }
+        if (!url) { showToast(I18N.t('链接地址为空')); return; }
         var isPC = !!(window.desktop && typeof window.desktop.openAnnLink === 'function');
         if (isPC && d.open_in_browser) {
             window.desktop.openAnnLink(url).catch(function () { window.open(url, '_blank'); });
@@ -5017,13 +5032,13 @@
                 .then(function (resp) {
                     if (resp && resp.ok) {
                         annConfirmBtn.classList.add('hidden');
-                        showToast('签收成功');
+                        showToast(I18N.t('签收成功'));
                         annItems.forEach(function (a) { if (String(a.id) === String(id)) a.confirmed = true; });
                         if (annCurCat) annRenderStream();
                     } else {
-                        showToast((resp && resp.msg) || '签收失败');
+                        showToast((resp && resp.msg) || I18N.t('签收失败'));
                     }
-                }).catch(function () { showToast('签收失败'); });
+                }).catch(function () { showToast(I18N.t('签收失败')); });
         });
     }
 
@@ -5058,7 +5073,7 @@
     IMSocket.on(MSG.ANNOUNCEMENT_PUSH, function (msg) {
         var data = null;
         try { data = JSON.parse(msg.content); } catch (e) {}
-        if (data && data.title) showToast('新' + (annCatNames[data.category] || '公告') + '：' + data.title);
+        if (data && data.title) showToast(I18N.t('新') + (annCatNames[data.category] || I18N.t('公告')) + '：' + data.title);
         annLoadList();
     });
 
@@ -5073,28 +5088,28 @@
     var wbListEl = document.getElementById('wb-app-list');
     var wbLoaded = false; // 懒加载标记：首次进入面板拉取，此后每次进入静默刷新（原位重绘不闪屏）
     var wbCatOrder = ['office', 'biz', 'hr', 'it', 'other'];
-    var wbCatNames = { office: '办公应用', biz: '业务系统', hr: '人事行政', it: 'IT服务', other: '其他' };
+    var wbCatNames = { office: I18N.t('办公应用'), biz: I18N.t('业务系统'), hr: I18N.t('人事行政'), it: I18N.t('IT服务'), other: I18N.t('其他') };
 
     function wbLoadList(silent) {
         if (!wbListEl) return;
-        if (!silent) wbListEl.innerHTML = '<div class="wb-empty">加载中…</div>';
+        if (!silent) wbListEl.innerHTML = '<div class="wb-empty">' + I18N.t('加载中…') + '</div>';
         fetch('/api/workbench')
             .then(function (r) { return r.json(); })
             .then(function (resp) {
                 if (!resp || !resp.ok) {
                     // 仅真实请求失败提示加载失败；空数据态走下方"暂无应用"
-                    wbListEl.innerHTML = '<div class="wb-empty">加载失败</div>';
+                    wbListEl.innerHTML = '<div class="wb-empty">' + I18N.t('加载失败') + '</div>';
                     return;
                 }
                 var list = resp.data && resp.data.list || [];
                 if (!list.length) {
-                    wbListEl.innerHTML = '<div class="wb-empty">暂无应用</div>';
+                    wbListEl.innerHTML = '<div class="wb-empty">' + I18N.t('暂无应用') + '</div>';
                     return;
                 }
                 wbRenderList(list);
                 wbLoaded = true;
             })
-            .catch(function () { if (!silent) wbListEl.innerHTML = '<div class="wb-empty">加载失败</div>'; });
+            .catch(function () { if (!silent) wbListEl.innerHTML = '<div class="wb-empty">' + I18N.t('加载失败') + '</div>'; });
     }
 
     // 分类分组渲染：固定枚举顺序，仅渲染非空分组；名称/备注一律 textContent 转义（服务端已消毒，双保险）
@@ -5216,10 +5231,10 @@
             ((agentMode && agentActiveTask[currentChatUser]) || aiAgentGenerating(currentChatUser));
         if (stopping) {
             sendBtn.classList.add('stopping');
-            sendBtn.innerHTML = '<span class="stop-icon"></span>停止';
+            sendBtn.innerHTML = '<span class="stop-icon">' + '</span>' + I18N.t('停止');
         } else {
             sendBtn.classList.remove('stopping');
-            sendBtn.textContent = '发送';
+            sendBtn.textContent = I18N.t('发送');
         }
     }
 
@@ -5310,7 +5325,7 @@
         if (!aiAgents.length) {
             var empty = document.createElement('li');
             empty.className = 'ai-agent-empty';
-            empty.textContent = '暂无可用的 AI 助手';
+            empty.textContent = I18N.t('暂无可用的 AI 助手');
             aiAgentList.appendChild(empty);
             return;
         }
@@ -5344,13 +5359,13 @@
             if (a.owner) {
                 var ownerTag = document.createElement('span');
                 ownerTag.className = 'ai-agent-owner-tag';
-                ownerTag.textContent = '个人';
+                ownerTag.textContent = I18N.t('个人');
                 name.appendChild(ownerTag);
             }
             var model = document.createElement('div');
             model.className = 'ai-agent-model';
             // 阶段四十四：图片识别能力标记（服务端配置归口下发，true 时该助手可收图）
-            model.textContent = (a.model || '智能助手') + (a.image ? ' · 支持图片' : '');
+            model.textContent = (a.model || I18N.t('智能助手')) + (a.image ? I18N.t(' · 支持图片') : '');
             info.appendChild(name);
             info.appendChild(model);
 
@@ -5378,7 +5393,7 @@
         bubble.className = 'message-bubble ai-thinking-bubble';
         var label = document.createElement('span');
         label.className = 'ai-thinking-text';
-        label.textContent = '思考中';
+        label.textContent = I18N.t('思考中');
         var dots = document.createElement('span');
         dots.className = 'ai-thinking-dots';
         for (var i = 0; i < 3; i++) {
@@ -5413,11 +5428,11 @@
             ta.style.opacity = '0';
             document.body.appendChild(ta);
             ta.select();
-            try { document.execCommand('copy'); showToast('已复制'); } catch (e) { showToast('复制失败'); }
+            try { document.execCommand('copy'); showToast(I18N.t('已复制')); } catch (e) { showToast(I18N.t('复制失败')); }
             ta.remove();
         }
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(function () { showToast('已复制'); }).catch(fallback);
+            navigator.clipboard.writeText(text).then(function () { showToast(I18N.t('已复制')); }).catch(fallback);
         } else {
             fallback();
         }
@@ -5427,16 +5442,16 @@
     // 按气泡类型分发：图片→canvas 转 PNG 写剪贴板；文件→复制文件名；其余→复制可见文本（含引用块）
     function copyMsgContent(el) {
         var bubble = el.querySelector('.message-bubble');
-        if (!bubble) { showToast('该消息不支持复制'); return; }
+        if (!bubble) { showToast(I18N.t('该消息不支持复制')); return; }
         var img = bubble.querySelector('.chat-image');
         if (img && img.getAttribute('src')) { copyImageToClipboard(img.getAttribute('src')); return; }
         if (bubble.classList.contains('bubble-file')) {
             var fnEl = bubble.querySelector('.file-name');
-            copyTextToClipboard((fnEl && fnEl.textContent) || '文件');
+            copyTextToClipboard((fnEl && fnEl.textContent) || I18N.t('文件'));
             return;
         }
         var text = (bubble.innerText || bubble.textContent || '').trim();
-        if (!text) { showToast('该消息不支持复制'); return; }
+        if (!text) { showToast(I18N.t('该消息不支持复制')); return; }
         copyTextToClipboard(text);
     }
 
@@ -5453,12 +5468,12 @@
                 cv.toBlob(function (blob) {
                     if (!blob || !navigator.clipboard || !window.ClipboardItem) { copyTextToClipboard(url); return; }
                     navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-                        .then(function () { showToast('图片已复制'); })
+                        .then(function () { showToast(I18N.t('图片已复制')); })
                         .catch(function () { copyTextToClipboard(url); });
                 }, 'image/png');
             } catch (e) { copyTextToClipboard(url); }
         };
-        img.onerror = function () { showToast('图片加载失败，无法复制'); };
+        img.onerror = function () { showToast(I18N.t('图片加载失败，无法复制')); };
         img.src = url;
     }
 
@@ -5475,13 +5490,13 @@
         if (billingMode === 'percall' && billingCost != null && billingCost > 0) {
             var pc = document.createElement('span');
             pc.className = 'ai-token-info';
-            pc.title = '按次计费（TRAE CN 同款）：单次调用固定扣 ' + billingCost + ' 积分，与 token 数无关' + (tokens && tokens.total > 0 ? '；本次消耗 ' + tokens.total + ' tokens 仅供参考' : '');
-            pc.textContent = '⚡ ' + billingCost + ' 积分';
+            pc.title = I18N.t('按次计费（TRAE CN 同款）：单次调用固定扣 ') + billingCost + I18N.t(' 积分，与 token 数无关') + (tokens && tokens.total > 0 ? I18N.t('；本次消耗 ') + tokens.total + I18N.t(' tokens 仅供参考') : '');
+            pc.textContent = '⚡ ' + billingCost + I18N.t(' 积分');
             bar.appendChild(pc);
         } else if (tokens && tokens.total > 0) {
             var tk = document.createElement('span');
             tk.className = 'ai-token-info';
-            tk.title = '提示 ' + tokens.prompt + ' + 生成 ' + tokens.completion + ' = 共 ' + tokens.total + ' Tokens';
+            tk.title = I18N.t('提示 ') + tokens.prompt + I18N.t(' + 生成 ') + tokens.completion + I18N.t(' = 共 ') + tokens.total + ' Tokens';
             tk.textContent = '⚡ ' + tokens.total + ' tokens';
             bar.appendChild(tk);
         }
@@ -5505,26 +5520,26 @@
             });
             bar.appendChild(b);
         }
-        addBtn('复制', ICONS.copy, function () { copyTextToClipboard(fullText); });
+        addBtn(I18N.t('复制'), ICONS.copy, function () { copyTextToClipboard(fullText); });
         // 重新生成：原样重发最近一次提问（含引用信封原文，服务端解析口径与首次发送一致；
         // 阶段六十九：按当前联网开关状态随行 remark，与服务端配置双重归口）
-        addBtn('重新生成', ICONS.redo, function () {
+        addBtn(I18N.t('重新生成'), ICONS.redo, function () {
             var q = lastAIQuestion[agent];
-            if (!q || !q.raw) { showToast('暂无原始提问，无法重新生成'); return; }
+            if (!q || !q.raw) { showToast(I18N.t('暂无原始提问，无法重新生成')); return; }
             var regen = { msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw, session_id: aiViewSession[agent] || 0 };
             if (webSearchOn && webSearchAvailable) regen.remark = 'web_search';
             IMSocket.send(regen);
         });
         // 编辑提问：提问正文回填输入框，修改后自行发送
-        addBtn('编辑提问', ICONS.edit, function () {
+        addBtn(I18N.t('编辑提问'), ICONS.edit, function () {
             var q = lastAIQuestion[agent];
-            if (!q || !q.text) { showToast('暂无原始提问'); return; }
+            if (!q || !q.text) { showToast(I18N.t('暂无原始提问')); return; }
             messageInput.value = q.text;
             messageInput.focus();
         });
         // 阶段四十五：Markdown 表格 → 导出 Excel（服务端归口转档，文件消息回发会话）
         if (msgId && detectMarkdownTable(fullText)) {
-            addBtn('导出 Excel', ICONS.excel, function () { exportAIDocument(msgId, 'excel'); });
+            addBtn(I18N.t('导出 Excel'), ICONS.excel, function () { exportAIDocument(msgId, 'excel'); });
         }
         // 原：Word 导出与 Excel 共用表格检测条件，纯文字回复无导出入口，用户感知"无法生成 Word"
         // if (msgId && detectMarkdownTable(fullText)) {
@@ -5533,11 +5548,11 @@
         // }
         // Word 导出支持标题/段落/列表/引用/表格（aiParseMarkdownBlocks 归口），任何非空回复均可导出
         if (msgId) {
-            addBtn('导出 Word', ICONS.word, function () { exportAIDocument(msgId, 'word'); });
+            addBtn(I18N.t('导出 Word'), ICONS.word, function () { exportAIDocument(msgId, 'word'); });
         }
         // 阶段四十五：标题/要点结构 → 生成 PPT（前端 pptxgenjs 本地生成，直传回会话）
         if (detectMarkdownSlides(fullText)) {
-            addBtn('生成 PPT', ICONS.ppt, function () { generateAIPpt(agent, fullText); });
+            addBtn(I18N.t('生成 PPT'), ICONS.ppt, function () { generateAIPpt(agent, fullText); });
         }
         return bar;
     }
@@ -5555,17 +5570,17 @@
     // 阶段四十五：导出 AI 文档（excel→xlsx / word→docx），成功后文件消息由服务端推送回会话
     function exportAIDocument(msgId, format) {
         var url = format === 'word' ? '/export/ai/word' : '/export/ai/excel';
-        showToast('正在生成' + (format === 'word' ? ' Word' : ' Excel') + '…');
+        showToast(I18N.t('正在生成') + (format === 'word' ? ' Word' : ' Excel') + '…');
         fetch(url + '?msg_id=' + encodeURIComponent(msgId) + '&username=' + encodeURIComponent(IMSocket.getUsername()), {
             method: 'POST'
         }).then(function (res) {
             if (!res.ok) return res.text().then(function (t) { throw new Error(t || ('HTTP ' + res.status)); });
             return res.json();
         }).then(function (data) {
-            if (data && data.url) showToast('已生成，文件已发送到会话');
-            else throw new Error('响应缺少文件地址');
+            if (data && data.url) showToast(I18N.t('已生成，文件已发送到会话'));
+            else throw new Error(I18N.t('响应缺少文件地址'));
         }).catch(function (e) {
-            showToast('导出失败：' + (e.message || e));
+            showToast(I18N.t('导出失败：') + (e.message || e));
         });
     }
 
@@ -5611,7 +5626,7 @@
             } else if (/^#{2,4}\s+\S/.test(t)) {
                 newSlide(t.replace(/^#{2,4}\s+/, ''));
             } else if (/^\s*\|.+\|\s*$/.test(t) && i + 1 < lines.length && /^\s*\|[\s:|\-]+\|\s*$/.test(lines[i + 1].trim())) {
-                var target = cur || (newSlide(slides.length ? slides[slides.length - 1].title : '数据表格'), slides[slides.length - 1]);
+                var target = cur || (newSlide(slides.length ? slides[slides.length - 1].title : I18N.t('数据表格')), slides[slides.length - 1]);
                 var rows = [];
                 var j = i;
                 for (; j < lines.length; j++) {
@@ -5623,10 +5638,10 @@
                 if (rows.length) target.table = rows;
                 i = j - 1;
             } else if (/^[-*]\s+\S/.test(t) || /^\d+\.\s+\S/.test(t)) {
-                if (!cur) newSlide(slides.length ? slides[slides.length - 1].title : '内容');
+                if (!cur) newSlide(slides.length ? slides[slides.length - 1].title : I18N.t('内容'));
                 cur.items.push(t.replace(/^([-*]|\d+\.)\s+/, ''));
             } else if (t) {
-                if (!cur) newSlide('内容');
+                if (!cur) newSlide(I18N.t('内容'));
                 cur.items.push(t);
             }
         }
@@ -5636,10 +5651,10 @@
     // 阶段四十五：AI 回复生成 PPT（前端 pptxgenjs 本地转档 → 复用 /upload/file 直传回会话，
     // 本地气泡 + 服务端落库 + FILE_PERSISTED 回填 msg_id 全走既有链路）
     function generateAIPpt(agent, text) {
-        if (typeof PptxGenJS === 'undefined') { showToast('PPT 组件未加载，请刷新重试'); return; }
+        if (typeof PptxGenJS === 'undefined') { showToast(I18N.t('PPT 组件未加载，请刷新重试')); return; }
         var slides = parseMarkdownSlides(text);
-        if (!slides.length) { showToast('没有可生成演示文稿的内容'); return; }
-        showToast('正在生成 PPT…');
+        if (!slides.length) { showToast(I18N.t('没有可生成演示文稿的内容')); return; }
+        showToast(I18N.t('正在生成 PPT…'));
         try {
             var pptx = new PptxGenJS();
             pptx.layout = 'LAYOUT_16x9';
@@ -5649,7 +5664,7 @@
                 if (s.cover) {
                     slide.background = { color: PRIMARY };
                     slide.addText(s.title, { x: 0.5, y: 2.0, w: 9, h: 1.2, fontSize: 30, bold: true, color: 'FFFFFF', align: 'center' });
-                    slide.addText('AI 生成 · ' + agent, { x: 0.5, y: 3.2, w: 9, h: 0.4, fontSize: 13, color: 'CFE8DB', align: 'center' });
+                    slide.addText(I18N.t('AI 生成 · ') + agent, { x: 0.5, y: 3.2, w: 9, h: 0.4, fontSize: 13, color: 'CFE8DB', align: 'center' });
                     return;
                 }
                 slide.addText(s.title, { x: 0.5, y: 0.3, w: 9, h: 0.7, fontSize: 23, bold: true, color: PRIMARY });
@@ -5673,15 +5688,15 @@
                 }
             });
             pptx.write({ outputType: 'blob' }).then(function (blob) {
-                if (currentChatUser !== agent) { showToast('已切离会话，PPT 未发送'); return; }
-                var file = new File([blob], 'AI演示_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+                if (currentChatUser !== agent) { showToast(I18N.t('已切离会话，PPT 未发送')); return; }
+                var file = new File([blob], I18N.t('AI演示_') + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
                 sendFileDirect(file); // 直传链路：本地气泡 + 落库 + FILE_PERSISTED 回填
-                showToast('PPT 已生成并发送到会话');
+                showToast(I18N.t('PPT 已生成并发送到会话'));
             }).catch(function (e) {
-                showToast('PPT 生成失败：' + (e.message || e));
+                showToast(I18N.t('PPT 生成失败：') + (e.message || e));
             });
         } catch (e) {
-            showToast('PPT 生成失败：' + (e.message || e));
+            showToast(I18N.t('PPT 生成失败：') + (e.message || e));
         }
     }
 
@@ -5701,7 +5716,7 @@
     function applyListCollapsed(c) {
         listPanel.classList.toggle('list-collapsed', c);
         listToggleBtn.classList.toggle('collapsed', c);
-        listToggleBtn.title = c ? '展开列表' : '折叠列表';
+        listToggleBtn.title = c ? I18N.t('展开列表') : I18N.t('折叠列表');
     }
     try {
         applyListCollapsed(localStorage.getItem('im_list_collapsed') === '1');
@@ -5779,7 +5794,7 @@
         if (st.stopped && bodyEl && !bodyEl.querySelector('.ai-stopped-note')) {
             var note = document.createElement('span');
             note.className = 'ai-stopped-note';
-            note.textContent = '已停止生成';
+            note.textContent = I18N.t('已停止生成');
             bodyEl.appendChild(note);
         }
         if (st.finalId) sendReadReceipt(agent, st.finalId);
@@ -5855,9 +5870,9 @@
         var label = document.createElement('span');
         label.className = 'ai-search-label';
         if (meta.ok) {
-            label.textContent = '联网搜索：' + (meta.query || '') + '（' + (meta.results || 0) + ' 条结果）';
+            label.textContent = I18N.t('联网搜索：') + (meta.query || '') + '（' + (meta.results || 0) + I18N.t(' 条结果）');
         } else {
-            label.textContent = '联网搜索：' + (meta.query || '') + '（失败，已基于已有知识作答）';
+            label.textContent = I18N.t('联网搜索：') + (meta.query || '') + I18N.t('（失败，已基于已有知识作答）');
         }
         row.appendChild(icon);
         row.appendChild(label);
@@ -5883,7 +5898,7 @@
         icon.appendChild(path);
         var label = document.createElement('span');
         label.className = 'ai-search-label';
-        label.textContent = '历史对话压缩中…（较早记录正在归并为摘要以提升响应速度）';
+        label.textContent = I18N.t('历史对话压缩中…（较早记录正在归并为摘要以提升响应速度）');
         row.appendChild(icon);
         row.appendChild(label);
         bubble.insertBefore(row, st.textEl); // 正文上方，压缩完成后保留为过程留痕
@@ -5944,7 +5959,7 @@
             chip.className = 'ai-suggest-chip';
             chip.type = 'button';
             chip.textContent = q;
-            chip.title = '点击发送：' + q;
+            chip.title = I18N.t('点击发送：') + q;
             chip.addEventListener('click', function () {
                 if (currentChatUser !== agent || !isAIAgent(agent)) return; // 已切走会话则不发送
                 messageInput.value = q;
@@ -5988,7 +6003,7 @@
         if (!currentChatUser || !isAIAgent(currentChatUser) || !webSearchAvailable) return;
         webSearchOn = !webSearchOn;
         webSearchBtn.classList.toggle('active', webSearchOn);
-        showToast(webSearchOn ? '已开启联网搜索，AI 问答可实时查询最新信息' : '已关闭联网搜索');
+        showToast(webSearchOn ? I18N.t('已开启联网搜索，AI 问答可实时查询最新信息') : I18N.t('已关闭联网搜索'));
     });
 
     function setAgentMode(on) {
@@ -5998,7 +6013,7 @@
         // agent-mode 标记类于消息列表归口，CSS 统一隐藏头像并放宽对齐线；会话切换经本函数
         // 归口（openConversation 切普通会话传 false），类自动摘除头像恢复
         messageList.classList.toggle('agent-mode', !!(on && currentChatUser && isAIAgent(currentChatUser)));
-        messageInput.placeholder = on ? '描述任务目标，Agent 将规划步骤并调用工具自动执行' : '输入消息';
+        messageInput.placeholder = on ? I18N.t('描述任务目标，Agent 将规划步骤并调用工具自动执行') : I18N.t('输入消息');
         updateSendBtnState(); // 阶段七十三：模式切换联动发送按钮停止态（任务执行中开/关任务模式）
         // 阶段一百一十七：审批模式盾牌仅在 Agent 任务模式开启时显示（审批流只发生在任务执行中；
         // 普通问答的 MCP 调用走服务端无此审批流），收进 setAgentMode 归口——切会话/开关任务模式一处覆盖
@@ -6042,7 +6057,7 @@
         if (!agentWsDirs.length) {
             var empty = document.createElement('div');
             empty.className = 'agent-ws-empty';
-            empty.textContent = '尚未授权任何目录（Agent 仅能操作主工作区内的相对路径）';
+            empty.textContent = I18N.t('尚未授权任何目录（Agent 仅能操作主工作区内的相对路径）');
             agentWsDirsEl.appendChild(empty);
             return;
         }
@@ -6055,12 +6070,12 @@
             p.title = d;
             var del = document.createElement('button');
             del.className = 'agent-ws-dir-del';
-            del.title = '移除该目录';
+            del.title = I18N.t('移除该目录');
             del.textContent = '×';
             del.addEventListener('click', function () {
                 agentWsDirs.splice(i, 1);
                 if (agentWsPrimary && agentWsDirs.indexOf(agentWsPrimary) < 0) agentWsPrimary = ''; // 主工作区被移除则回退默认工作区
-                agentWsPrimaryEl.textContent = agentWsPrimary || '未设置（使用默认工作区）';
+                agentWsPrimaryEl.textContent = agentWsPrimary || I18N.t('未设置（使用默认工作区）');
                 agentWsPrimaryEl.title = agentWsPrimary || '';
                 renderAgentWsDirs();
             });
@@ -6072,13 +6087,13 @@
 
     // 打开面板：先从主进程拉取当前用户已保存配置填充编辑态
     function openAgentWsPanel() {
-        if (!agentWsSupported()) { showToast('仅 PC 客户端支持自定义工作区'); return; }
+        if (!agentWsSupported()) { showToast(I18N.t('仅 PC 客户端支持自定义工作区')); return; }
         window.desktop.sandboxGet(IMSocket.getUsername()).then(function (cfg) {
             cfg = cfg || {};
             agentWsPrimary = cfg.primary || '';
             agentWsDirs = (cfg.dirs || []).slice();
             agentWsPrimarySaved = agentWsPrimary; // 快照打开时刻的主工作区（保存后对比用）
-            agentWsPrimaryEl.textContent = agentWsPrimary || '未设置（使用默认工作区）';
+            agentWsPrimaryEl.textContent = agentWsPrimary || I18N.t('未设置（使用默认工作区）');
             agentWsPrimaryEl.title = agentWsPrimary || '';
             renderAgentWsDirs();
             agentWsMask.classList.remove('hidden');
@@ -6095,7 +6110,7 @@
 
     // 选择主工作区：原生目录对话框；主工作区自动并入授权目录（相对路径落盘依赖它，保存端也强制归一化）
     document.getElementById('agent-ws-pick').addEventListener('click', function () {
-        window.desktop.sandboxChoose('选择主工作区文件夹').then(function (dir) {
+        window.desktop.sandboxChoose(I18N.t('选择主工作区文件夹')).then(function (dir) {
             if (!dir) return;
             agentWsPrimary = dir;
             if (agentWsDirs.indexOf(dir) < 0) agentWsDirs.unshift(dir);
@@ -6107,7 +6122,7 @@
 
     // 添加授权目录（重复选择去重；上限由主进程归一化裁剪）
     document.getElementById('agent-ws-add').addEventListener('click', function () {
-        window.desktop.sandboxChoose('选择授权目录').then(function (dir) {
+        window.desktop.sandboxChoose(I18N.t('选择授权目录')).then(function (dir) {
             if (!dir) return;
             if (agentWsDirs.indexOf(dir) < 0) {
                 agentWsDirs.push(dir);
@@ -6121,7 +6136,7 @@
         var dirs = agentWsDirs.slice();
         if (agentWsPrimary && dirs.indexOf(agentWsPrimary) < 0) dirs.unshift(agentWsPrimary);
         window.desktop.sandboxSave({ username: IMSocket.getUsername(), primary: agentWsPrimary, dirs: dirs }).then(function (r) {
-            if (!r || !r.ok) { showToast((r && r.msg) || '保存失败'); return; }
+            if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('保存失败')); return; }
             agentWsPrimary = r.cfg.primary;
             agentWsDirs = r.cfg.dirs;
             // 主工作区切换 → 文件面板立即跟随：旧根下打开的标签/展开态/角标全部失效，
@@ -6139,7 +6154,7 @@
                 content: JSON.stringify({ primary: agentWsPrimary, dirs: agentWsDirs })
             });
             agentWsMask.classList.add('hidden');
-            showToast('工作区配置已保存');
+            showToast(I18N.t('工作区配置已保存'));
         });
     });
 
@@ -6173,10 +6188,10 @@
                 var sub = document.getElementById('agent-mcp-proj-sub');
                 if (sub) {
                     if (agentMcpProjectState.error) {
-                        sub.textContent = '配置解析失败：' + agentMcpProjectState.error; // 解析错误红字提示（文件语法问题）
+                        sub.textContent = I18N.t('配置解析失败：') + agentMcpProjectState.error; // 解析错误红字提示（文件语法问题）
                         sub.classList.add('err');
                     } else if (agentMcpProjectState.enabled) {
-                        sub.textContent = '已加载 ' + agentMcpProjectState.count + ' 个项目服务器 · ' + agentMcpProjectState.file;
+                        sub.textContent = I18N.t('已加载 ') + agentMcpProjectState.count + I18N.t(' 个项目服务器 · ') + agentMcpProjectState.file;
                         sub.classList.remove('err');
                     } else {
                         sub.textContent = '';
@@ -6234,7 +6249,7 @@
     }
 
     function mcpStatusText(s) {
-        return { connected: '已连接', connecting: '连接中', error: '错误', disabled: '已停用' }[s] || s || '未连接';
+        return { connected: I18N.t('已连接'), connecting: I18N.t('连接中'), error: I18N.t('错误'), disabled: I18N.t('已停用') }[s] || s || I18N.t('未连接');
     }
 
     function renderAgentMcpList() {
@@ -6249,7 +6264,7 @@
             var empty = document.createElement('div');
             empty.className = 'agent-mcp-empty';
             // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
-            empty.innerHTML = '尚未配置本机 MCP 服务器<br>点击右上角「+ 添加」开始：可从插件库一键预填，或手动配置';
+            empty.innerHTML = I18N.t('尚未配置本机 MCP 服务器') + '<br>' + I18N.t('点击右上角「+ 添加」开始：可从插件库一键预填，或手动配置');
             agentMcpListEl.appendChild(empty);
             return;
         }
@@ -6264,7 +6279,7 @@
             var caret = document.createElement('span');
             caret.className = 'agent-mcp-caret';
             caret.textContent = agentMcpExpanded['computer-use'] ? '▾' : '▸';
-            caret.title = '展开/收起工具清单';
+            caret.title = I18N.t('展开/收起工具清单');
             caret.addEventListener('click', function () {
                 agentMcpExpanded['computer-use'] = !agentMcpExpanded['computer-use'];
                 renderAgentMcpList();
@@ -6279,7 +6294,7 @@
             name.textContent = 'computer-use';
             var btag = document.createElement('span');
             btag.className = 'agent-mcp-builtin-tag';
-            btag.textContent = '内置';
+            btag.textContent = I18N.t('内置');
             name.appendChild(btag);
             var metaline = document.createElement('div');
             metaline.className = 'agent-mcp-server-metaline';
@@ -6289,9 +6304,9 @@
             var meta = document.createElement('span');
             meta.className = 'agent-mcp-server-meta';
             if (!agentMcpBuiltinEnabled) {
-                meta.textContent = '已停用';
+                meta.textContent = I18N.t('已停用');
             } else {
-                meta.textContent = '桌面 GUI 操作 · 工具 ' + ((live && live.tool_count) || 0) + ' 个 · ' + mcpStatusText((live && live.status) || 'connecting');
+                meta.textContent = I18N.t('桌面 GUI 操作 · 工具 ') + ((live && live.tool_count) || 0) + I18N.t(' 个 · ') + mcpStatusText((live && live.status) || 'connecting');
             }
             metaline.appendChild(dot);
             metaline.appendChild(meta);
@@ -6302,19 +6317,19 @@
             row.appendChild(info);
             var sw = document.createElement('span');
             sw.className = 'mcp-switch' + (agentMcpBuiltinEnabled ? ' on' : '');
-            sw.title = agentMcpBuiltinEnabled ? '点击停用内置服务器' : '点击启用内置服务器';
+            sw.title = agentMcpBuiltinEnabled ? I18N.t('点击停用内置服务器') : I18N.t('点击启用内置服务器');
             var knob = document.createElement('span');
             knob.className = 'mcp-switch-knob';
             sw.appendChild(knob);
             sw.addEventListener('click', function () {
                 var want = !agentMcpBuiltinEnabled;
                 window.desktop.mcpBuiltinToggle({ enabled: want }).then(function (r) {
-                    if (!r || !r.ok) { showToast((r && r.msg) || '切换失败'); return; }
+                    if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('切换失败')); return; }
                     agentMcpBuiltinEnabled = !!r.enabled;
                     agentMcpLastReport = ''; // 工具清单变化（内置工具随开关增减），允许重新上报
                     startPcMcpReportLoop(12);
                     renderAgentMcpList();
-                    showToast(r.enabled ? '已启用内置 Computer Use，正在建连并上报工具清单' : '已停用内置 Computer Use');
+                    showToast(r.enabled ? I18N.t('已启用内置 Computer Use，正在建连并上报工具清单') : I18N.t('已停用内置 Computer Use'));
                 });
             });
             row.appendChild(sw);
@@ -6326,7 +6341,7 @@
                 if (!tl.length) {
                     var tempty = document.createElement('div');
                     tempty.className = 'agent-mcp-tool-empty';
-                    tempty.textContent = agentMcpBuiltinEnabled ? '暂无工具：连接中' : '已停用，启用后可见工具清单';
+                    tempty.textContent = agentMcpBuiltinEnabled ? I18N.t('暂无工具：连接中') : I18N.t('已停用，启用后可见工具清单');
                     toolsBox.appendChild(tempty);
                 } else {
                     tl.forEach(function (t) {
@@ -6357,7 +6372,7 @@
             var caret = document.createElement('span');
             caret.className = 'agent-mcp-caret';
             caret.textContent = agentMcpExpanded[ps.name] ? '▾' : '▸';
-            caret.title = '展开/收起工具清单';
+            caret.title = I18N.t('展开/收起工具清单');
             caret.addEventListener('click', function () {
                 agentMcpExpanded[ps.name] = !agentMcpExpanded[ps.name];
                 renderAgentMcpList();
@@ -6372,7 +6387,7 @@
             name.textContent = ps.name;
             var ptag = document.createElement('span');
             ptag.className = 'agent-mcp-builtin-tag'; // 复用内置小标签样式，文本区分来源
-            ptag.textContent = '项目';
+            ptag.textContent = I18N.t('项目');
             name.appendChild(ptag);
             var metaline = document.createElement('div');
             metaline.className = 'agent-mcp-server-metaline';
@@ -6381,7 +6396,7 @@
             dot.title = mcpStatusText(ps.status);
             var meta = document.createElement('span');
             meta.className = 'agent-mcp-server-meta';
-            meta.textContent = '项目级 MCP · 工具 ' + (ps.tool_count || 0) + ' 个 · ' + mcpStatusText(ps.status);
+            meta.textContent = I18N.t('项目级 MCP · 工具 ') + (ps.tool_count || 0) + I18N.t(' 个 · ') + mcpStatusText(ps.status);
             metaline.appendChild(dot);
             metaline.appendChild(meta);
             info.appendChild(name);
@@ -6391,8 +6406,8 @@
             row.appendChild(info);
             var hint = document.createElement('span');
             hint.className = 'agent-mcp-server-meta';
-            hint.textContent = '配置于 .im/agent_mcp.json';
-            hint.title = '编辑项目根目录下的 .im/agent_mcp.json 可增删项目服务器（enabled:false 可停用）';
+            hint.textContent = I18N.t('配置于 .im/agent_mcp.json');
+            hint.title = I18N.t('编辑项目根目录下的 .im/agent_mcp.json 可增删项目服务器（enabled:false 可停用）');
             row.appendChild(hint);
             wrap.appendChild(row);
             if (agentMcpExpanded[ps.name]) {
@@ -6402,7 +6417,7 @@
                 if (!tl.length) {
                     var tempty = document.createElement('div');
                     tempty.className = 'agent-mcp-tool-empty';
-                    tempty.textContent = '暂无工具：连接中';
+                    tempty.textContent = I18N.t('暂无工具：连接中');
                     toolsBox.appendChild(tempty);
                 } else {
                     tl.forEach(function (t) {
@@ -6435,7 +6450,7 @@
             var caret = document.createElement('span');
             caret.className = 'agent-mcp-caret';
             caret.textContent = agentMcpExpanded[sv.name] ? '▾' : '▸';
-            caret.title = '展开/收起工具清单';
+            caret.title = I18N.t('展开/收起工具清单');
             caret.addEventListener('click', function () {
                 agentMcpExpanded[sv.name] = !agentMcpExpanded[sv.name];
                 renderAgentMcpList();
@@ -6457,12 +6472,12 @@
             var meta = document.createElement('span');
             meta.className = 'agent-mcp-server-meta';
             if (!sv.enabled) {
-                meta.textContent = '已停用';
+                meta.textContent = I18N.t('已停用');
             } else if (live && live.status === 'error' && live.status_msg) {
                 meta.textContent = live.status_msg;
                 meta.title = live.status_msg;
             } else {
-                meta.textContent = '工具 ' + ((live && live.tool_count) || 0) + ' 个 · ' + mcpStatusText((live && live.status) || 'connecting');
+                meta.textContent = I18N.t('工具 ') + ((live && live.tool_count) || 0) + I18N.t(' 个 · ') + mcpStatusText((live && live.status) || 'connecting');
             }
             metaline.appendChild(dot);
             metaline.appendChild(meta);
@@ -6474,7 +6489,7 @@
             // 行内启用开关（TRAE 同款自绘 toggle；启用状态变化立即保存并联动建连/上报）
             var sw = document.createElement('span');
             sw.className = 'mcp-switch' + (sv.enabled ? ' on' : '');
-            sw.title = sv.enabled ? '点击停用' : '点击启用';
+            sw.title = sv.enabled ? I18N.t('点击停用') : I18N.t('点击启用');
             var knob = document.createElement('span');
             knob.className = 'mcp-switch-knob';
             sw.appendChild(knob);
@@ -6482,20 +6497,20 @@
             row.appendChild(sw);
             var edit = document.createElement('button');
             edit.className = 'agent-mcp-op';
-            edit.textContent = '编辑';
+            edit.textContent = I18N.t('编辑');
             edit.addEventListener('click', function () { openMcpEdit(i); });
             var del = document.createElement('button');
             del.className = 'agent-mcp-op danger';
-            del.textContent = '删除';
+            del.textContent = I18N.t('删除');
             del.addEventListener('click', function () {
-                showConfirm('删除 MCP 服务器', '确定删除「' + sv.name + '」吗？本机进程将立即停止并回收。', function () {
+                showConfirm(I18N.t('删除 MCP 服务器'), I18N.t('确定删除「') + sv.name + I18N.t('」吗？本机进程将立即停止并回收。'), function () {
                     window.desktop.mcpDel({ username: IMSocket.getUsername(), name: sv.name }).then(function (r) {
-                        if (!r || !r.ok) { showToast((r && r.msg) || '删除失败'); return; }
+                        if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('删除失败')); return; }
                         agentMcpServers.splice(i, 1);
                         agentMcpLastReport = ''; // 允许重新上报（含工具减少后的清单）
                         startPcMcpReportLoop(8);
                         renderAgentMcpList();
-                        showToast('已删除并停止本机进程');
+                        showToast(I18N.t('已删除并停止本机进程'));
                     });
                 });
             });
@@ -6510,7 +6525,7 @@
                 if (!tl.length) {
                     var tempty = document.createElement('div');
                     tempty.className = 'agent-mcp-tool-empty';
-                    tempty.textContent = sv.enabled ? '暂无工具：连接中或服务器未上报工具' : '已停用，启用后可见工具清单';
+                    tempty.textContent = sv.enabled ? I18N.t('暂无工具：连接中或服务器未上报工具') : I18N.t('已停用，启用后可见工具清单');
                     toolsBox.appendChild(tempty);
                 } else {
                     tl.forEach(function (t) {
@@ -6535,7 +6550,7 @@
     }
 
     function openMcpPanel() {
-        if (!agentMcpSupported()) { showToast('仅 PC 客户端支持自定义 MCP 服务器'); return; }
+        if (!agentMcpSupported()) { showToast(I18N.t('仅 PC 客户端支持自定义 MCP 服务器')); return; }
         window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
             agentMcpServers = (r && r.servers) || [];
             agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
@@ -6598,12 +6613,12 @@
     // 持久化归口：保存 → 本机会话重建 → 清指纹重报工具清单
     function persistMcpServers() {
         window.desktop.mcpSave({ username: IMSocket.getUsername(), servers: agentMcpServers }).then(function (r) {
-            if (!r || !r.ok) { showToast((r && r.msg) || '保存失败'); return; }
+            if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('保存失败')); return; }
             agentMcpServers = r.servers || agentMcpServers;
             agentMcpLastReport = '';
             startPcMcpReportLoop(12); // 建连窗口内清单稳定后自动完成上报
             renderAgentMcpList();
-            showToast('已保存，正在建连并上报工具清单');
+            showToast(I18N.t('已保存，正在建连并上报工具清单'));
         });
     }
 
@@ -6613,7 +6628,7 @@
         window.desktop.mcpSave({ username: IMSocket.getUsername(), servers: agentMcpServers }).then(function (r) {
             if (!r || !r.ok) {
                 sv.enabled = !sv.enabled; // 回滚
-                showToast((r && r.msg) || '保存失败');
+                showToast((r && r.msg) || I18N.t('保存失败'));
                 renderAgentMcpList();
                 return;
             }
@@ -6621,7 +6636,7 @@
             agentMcpLastReport = '';
             startPcMcpReportLoop(12);
             renderAgentMcpList();
-            showToast(sv.enabled ? '已启用「' + sv.name + '」，正在建连并上报工具清单' : '已停用「' + sv.name + '」');
+            showToast(sv.enabled ? I18N.t('已启用「') + sv.name + I18N.t('」，正在建连并上报工具清单') : I18N.t('已停用「') + sv.name + '」');
         });
     }
 
@@ -6629,14 +6644,14 @@
     // 插件预设：常用官方/社区 MCP 服务器（一键预填现有表单，占位参数由用户修改后保存，
     // 保存/建连/上报链路完全复用既有逻辑，零新链路）。name 与手动配置同一查重规则
     var MCP_PLUGIN_PRESETS = [
-        { name: 'filesystem', title: '文件系统访问', desc: 'AI 读写指定目录内的文件（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', 'D:\\workspace'], env: {} },
-        { name: 'fetch', title: '网页抓取', desc: 'AI 联网抓取网页并转为 Markdown（Python 系）', command: 'uvx', args: ['mcp-server-fetch'], env: {} },
-        { name: 'memory', title: '长期记忆', desc: 'AI 跨对话记住要点（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], env: { MEMORY_FILE_PATH: 'D:\\im-memory.json' } },
-        { name: 'mysql', title: 'MySQL 数据库查询', desc: '对 MySQL 执行 SQL 查询（建议只读账号）', command: 'npx', args: ['-y', '@benborla29/mcp-server-mysql'], env: { MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '3306', MYSQL_USER: 'root', MYSQL_PASS: '你的密码', MYSQL_DB: '数据库名' } },
-        { name: 'sqlite', title: 'SQLite 数据库查询', desc: '查询本地 SQLite 数据库文件（Python 系）', command: 'uvx', args: ['mcp-server-sqlite', '--db-path', 'D:\\data\\demo.db'], env: {} },
-        { name: 'postgres', title: 'PostgreSQL 数据库查询', desc: '对 PostgreSQL 执行只读 SQL（官方服务器）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'], env: { POSTGRES_CONNECTION_STRING: 'postgresql://用户:密码@127.0.0.1:5432/数据库名' } },
-        { name: 'github', title: 'GitHub 仓库管理', desc: '管理仓库/Issue/PR（需个人访问令牌）', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_你的令牌' } },
-        { name: 'everything', title: '链路测试服务器', desc: '官方演示服务器：验证 MCP 链路与工具调用', command: 'npx', args: ['-y', '@modelcontextprotocol/server-everything'], env: {} }
+        { name: 'filesystem', title: I18N.t('文件系统访问'), desc: I18N.t('AI 读写指定目录内的文件（官方服务器）'), command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', 'D:\\workspace'], env: {} },
+        { name: 'fetch', title: I18N.t('网页抓取'), desc: I18N.t('AI 联网抓取网页并转为 Markdown（Python 系）'), command: 'uvx', args: ['mcp-server-fetch'], env: {} },
+        { name: 'memory', title: I18N.t('长期记忆'), desc: I18N.t('AI 跨对话记住要点（官方服务器）'), command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], env: { MEMORY_FILE_PATH: 'D:\\im-memory.json' } },
+        { name: 'mysql', title: I18N.t('MySQL 数据库查询'), desc: I18N.t('对 MySQL 执行 SQL 查询（建议只读账号）'), command: 'npx', args: ['-y', '@benborla29/mcp-server-mysql'], env: { MYSQL_HOST: '127.0.0.1', MYSQL_PORT: '3306', MYSQL_USER: 'root', MYSQL_PASS: I18N.t('你的密码'), MYSQL_DB: I18N.t('数据库名') } },
+        { name: 'sqlite', title: I18N.t('SQLite 数据库查询'), desc: I18N.t('查询本地 SQLite 数据库文件（Python 系）'), command: 'uvx', args: ['mcp-server-sqlite', '--db-path', 'D:\\data\\demo.db'], env: {} },
+        { name: 'postgres', title: I18N.t('PostgreSQL 数据库查询'), desc: I18N.t('对 PostgreSQL 执行只读 SQL（官方服务器）'), command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres'], env: { POSTGRES_CONNECTION_STRING: I18N.t('postgresql://用户:密码@127.0.0.1:5432/数据库名') } },
+        { name: 'github', title: I18N.t('GitHub 仓库管理'), desc: I18N.t('管理仓库/Issue/PR（需个人访问令牌）'), command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], env: { GITHUB_PERSONAL_ACCESS_TOKEN: I18N.t('ghp_你的令牌') } },
+        { name: 'everything', title: I18N.t('链路测试服务器'), desc: I18N.t('官方演示服务器：验证 MCP 链路与工具调用'), command: 'npx', args: ['-y', '@modelcontextprotocol/server-everything'], env: {} }
     ];
     var agentMcpAddMenu = document.getElementById('agent-mcp-add-menu');
     var agentMcpMarketEl = document.getElementById('agent-mcp-market');
@@ -6650,18 +6665,18 @@
         });
         agentMcpProjectRefresh(); // 阶段一百一十六：刷新同步项目级状态
         reportPcMcpTools();
-        showToast('已刷新服务器与工具状态');
+        showToast(I18N.t('已刷新服务器与工具状态'));
     });
     // 阶段一百一十六：项目级 MCP 开关（toggle 走专用 IPC，主进程重建全部用户会话后回填状态）
     document.getElementById('agent-mcp-proj-switch').addEventListener('click', function () {
         var want = !agentMcpProjectState.enabled;
         window.desktop.mcpProjectToggle({ username: IMSocket.getUsername(), enabled: want }).then(function (r) {
-            if (!r || !r.ok) { showToast((r && r.msg) || '切换失败'); return; }
-            showToast(r.enabled ? '已启用项目级 MCP，正在加载 .im/agent_mcp.json' : '已停用项目级 MCP');
+            if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('切换失败')); return; }
+            showToast(r.enabled ? I18N.t('已启用项目级 MCP，正在加载 .im/agent_mcp.json') : I18N.t('已停用项目级 MCP'));
             agentMcpLastReport = ''; // 工具清单可能变化（项目服务器增减），允许重新上报
             agentMcpProjectRefresh();
             reportPcMcpTools();
-        }).catch(function (e) { showToast('切换失败：' + (e && e.message || e)); });
+        }).catch(function (e) { showToast(I18N.t('切换失败：') + (e && e.message || e)); });
     });
     function agentMcpAddMenuOutside(ev) {
         if (!agentMcpAddMenu || agentMcpAddMenu.classList.contains('hidden')) {
@@ -6673,7 +6688,7 @@
         document.removeEventListener('mousedown', agentMcpAddMenuOutside);
     }
     document.getElementById('agent-mcp-add').addEventListener('click', function () {
-        if (agentMcpServers.length >= 10 && agentMcpAddMenu.classList.contains('hidden')) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        if (agentMcpServers.length >= 10 && agentMcpAddMenu.classList.contains('hidden')) { showToast(I18N.t('最多配置 10 个本机 MCP 服务器')); return; }
         agentMcpAddMenu.classList.toggle('hidden');
         if (!agentMcpAddMenu.classList.contains('hidden')) {
             setTimeout(function () { document.addEventListener('mousedown', agentMcpAddMenuOutside); }, 0);
@@ -6713,7 +6728,7 @@
             d.textContent = p.desc;
             var cmd = document.createElement('div');
             cmd.className = 'agent-mcp-market-cmd';
-            cmd.textContent = p.command + ' ' + (p.args || []).join(' ') + (Object.keys(p.env || {}).length ? '  + 环境变量 x' + Object.keys(p.env).length : '');
+            cmd.textContent = p.command + ' ' + (p.args || []).join(' ') + (Object.keys(p.env || {}).length ? I18N.t('  + 环境变量 x') + Object.keys(p.env).length : '');
             cmd.title = cmd.textContent;
             info.appendChild(t);
             info.appendChild(d);
@@ -6721,7 +6736,7 @@
             var use = document.createElement('button');
             use.className = 'kb-create-btn agent-mcp-market-use';
             use.type = 'button';
-            use.textContent = '使用';
+            use.textContent = I18N.t('使用');
             use.addEventListener('click', function () { useMcpPreset(p); });
             card.appendChild(badge);
             card.appendChild(info);
@@ -6734,7 +6749,7 @@
         agentMcpAddMenu.classList.add('hidden');
         agentMcpMarketEl.classList.add('hidden');
         for (var i = 0; i < agentMcpServers.length; i++) {
-            if (agentMcpServers[i].name === p.name) { showToast('已存在同名服务器「' + p.name + '」，请先删除或手动改名'); return; }
+            if (agentMcpServers[i].name === p.name) { showToast(I18N.t('已存在同名服务器「') + p.name + I18N.t('」，请先删除或手动改名')); return; }
         }
         openMcpEdit(-1);
         document.getElementById('agent-mcp-name').value = p.name;
@@ -6743,7 +6758,7 @@
         var envLines = [];
         Object.keys(p.env || {}).forEach(function (k) { envLines.push(k + '=' + p.env[k]); });
         document.getElementById('agent-mcp-env').value = envLines.join('\n');
-        showToast('已预填「' + p.title + '」：请修改占位参数（目录/密码等）后保存');
+        showToast(I18N.t('已预填「') + p.title + I18N.t('」：请修改占位参数（目录/密码等）后保存'));
     }
 
     // ===== 阶段一百一十三：设置页插件市场（TRAE CN 同款：搜索/分类页签/卡片网格/一键安装） =====
@@ -6759,7 +6774,7 @@
         return { name: p.name, title: p.title, description: p.desc, category: '', command: p.command,
             args: (p.args || []).join('\n'), env: envLines.join('\n'), needs_config: needs, icon: '', sort: 0, enabled: true };
     });
-    var agentMktState = { plugins: [], cat: '全部', kw: '', loaded: false };
+    var agentMktState = { plugins: [], cat: I18N.t('全部'), kw: '', loaded: false };
     var agentMktTabsEl = document.getElementById('agent-mkt-tabs');
     var agentMktGridEl = document.getElementById('agent-mkt-grid');
     var agentMktUvEl = document.getElementById('agent-mkt-uv');
@@ -6795,7 +6810,7 @@
             var c = String(p.category || '').trim();
             if (c && cats.indexOf(c) === -1) cats.push(c);
         });
-        var tabs = ['全部'].concat(cats);
+        var tabs = [I18N.t('全部')].concat(cats);
         agentMktTabsEl.innerHTML = '';
         tabs.forEach(function (c) {
             var t = document.createElement('button');
@@ -6814,7 +6829,7 @@
         var shown = 0;
         agentMktState.plugins.forEach(function (p) {
             var c = String(p.category || '').trim();
-            if (agentMktState.cat !== '全部' && c !== agentMktState.cat) return;
+            if (agentMktState.cat !== I18N.t('全部') && c !== agentMktState.cat) return;
             if (kw && (p.title + ' ' + p.description + ' ' + p.name).toLowerCase().indexOf(kw) === -1) return;
             shown++;
             grid.appendChild(mktCard(p));
@@ -6822,7 +6837,7 @@
         if (!shown) {
             var empty = document.createElement('div');
             empty.className = 'agent-mkt-empty';
-            empty.textContent = kw ? '没有匹配「' + agentMktState.kw + '」的插件' : '暂无上架插件（后台管理 → MCP 插件库 可上架）';
+            empty.textContent = kw ? I18N.t('没有匹配「') + agentMktState.kw + I18N.t('」的插件') : I18N.t('暂无上架插件（后台管理 → MCP 插件库 可上架）');
             grid.appendChild(empty);
         }
         renderMktUvRow();
@@ -6839,11 +6854,11 @@
                 agentMktUvEl.innerHTML = '';
                 var txt = document.createElement('span');
                 txt.className = 'agent-mkt-uv-txt';
-                txt.textContent = '检测到含 Python 系插件（uvx）：本机尚未安装 uv 工具链，安装插件时可自动下载；';
+                txt.textContent = I18N.t('检测到含 Python 系插件（uvx）：本机尚未安装 uv 工具链，安装插件时可自动下载；');
                 var btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'kb-create-btn agent-ws-mini-btn';
-                btn.textContent = '立即安装 uv';
+                btn.textContent = I18N.t('立即安装 uv');
                 btn.addEventListener('click', function () { mktInstallUv(btn); });
                 agentMktUvEl.appendChild(txt);
                 agentMktUvEl.appendChild(btn);
@@ -6855,16 +6870,16 @@
 
     function mktInstallUv(btn) {
         btn.disabled = true;
-        btn.textContent = '下载安装中…';
+        btn.textContent = I18N.t('下载安装中…');
         window.desktop.mcpUvInstall().then(function (r) {
             btn.disabled = false;
-            btn.textContent = '立即安装 uv';
-            showToast((r && r.msg) || (r && r.ok ? '安装完成' : '安装失败'));
+            btn.textContent = I18N.t('立即安装 uv');
+            showToast((r && r.msg) || (r && r.ok ? I18N.t('安装完成') : I18N.t('安装失败')));
             if (r && r.ok) renderMktPage();
         }).catch(function (e) {
             btn.disabled = false;
-            btn.textContent = '立即安装 uv';
-            showToast('安装异常：' + (e && e.message || e));
+            btn.textContent = I18N.t('立即安装 uv');
+            showToast(I18N.t('安装异常：') + (e && e.message || e));
         });
     }
 
@@ -6902,7 +6917,7 @@
         var envCount = String(p.env || '').split('\n').filter(function (s) { return s.trim() && s.indexOf('=') > 0; }).length;
         var cmd = document.createElement('div');
         cmd.className = 'agent-mkt-cmd';
-        cmd.textContent = p.command + ' ' + argsText + (envCount ? '  + 环境变量 x' + envCount : '');
+        cmd.textContent = p.command + ' ' + argsText + (envCount ? I18N.t('  + 环境变量 x') + envCount : '');
         cmd.title = cmd.textContent;
         info.appendChild(t);
         info.appendChild(d);
@@ -6912,11 +6927,11 @@
         act.className = 'kb-create-btn agent-mkt-install';
         var installed = mktInstalled(p.name);
         if (installed) {
-            act.textContent = '已安装';
+            act.textContent = I18N.t('已安装');
             act.disabled = true;
             act.classList.add('installed');
         } else {
-            act.textContent = '+ 安装';
+            act.textContent = I18N.t('+ 安装');
             act.addEventListener('click', function () { mktInstall(p, act); });
         }
         card.appendChild(badge);
@@ -6927,8 +6942,8 @@
 
     // 一键安装：uvx 缺工具链先装 uv → 需配置转预填表单 → 否则直接写本机配置并建连
     function mktInstall(p, btn) {
-        if (mktInstalled(p.name)) { showToast('已安装'); return; }
-        if (agentMcpServers.length >= 10) { showToast('最多配置 10 个本机 MCP 服务器'); return; }
+        if (mktInstalled(p.name)) { showToast(I18N.t('已安装')); return; }
+        if (agentMcpServers.length >= 10) { showToast(I18N.t('最多配置 10 个本机 MCP 服务器')); return; }
         var doApply = function () {
             var cfg = mktPluginToCfg(p);
             if (p.needs_config) {
@@ -6941,12 +6956,12 @@
                 var envLines = [];
                 Object.keys(cfg.env || {}).forEach(function (k) { envLines.push(k + '=' + cfg.env[k]); });
                 document.getElementById('agent-mcp-env').value = envLines.join('\n');
-                showToast('「' + (p.title || p.name) + '」已预填：请补全占位参数（密码/目录等）后保存');
+                showToast('「' + (p.title || p.name) + I18N.t('」已预填：请补全占位参数（密码/目录等）后保存'));
                 return;
             }
             agentMcpServers.push(cfg);
             persistMcpServers(); // 保存即自动建连 + 工具清单上报（既有链路归口）
-            showToast('「' + (p.title || p.name) + '」安装成功，正在连接…');
+            showToast('「' + (p.title || p.name) + I18N.t('」安装成功，正在连接…'));
             renderMktPage();
         };
         var cmdLow = String(p.command || '').trim().toLowerCase();
@@ -6954,17 +6969,17 @@
             window.desktop.mcpUvStatus().then(function (st) {
                 if (st && st.installed) { doApply(); return; }
                 btn.disabled = true;
-                btn.textContent = '安装工具链…';
+                btn.textContent = I18N.t('安装工具链…');
                 window.desktop.mcpUvInstall().then(function (r) {
                     btn.disabled = false;
-                    btn.textContent = '+ 安装';
-                    if (!r || !r.ok) { showToast((r && r.msg) || 'uv 工具链安装失败'); return; }
-                    showToast('uv 工具链就绪，继续安装插件');
+                    btn.textContent = I18N.t('+ 安装');
+                    if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('uv 工具链安装失败')); return; }
+                    showToast(I18N.t('uv 工具链就绪，继续安装插件'));
                     doApply();
                 }).catch(function (e) {
                     btn.disabled = false;
-                    btn.textContent = '+ 安装';
-                    showToast('uv 安装异常：' + (e && e.message || e));
+                    btn.textContent = I18N.t('+ 安装');
+                    showToast(I18N.t('uv 安装异常：') + (e && e.message || e));
                 });
             }).catch(function () { doApply(); }); // 状态查询失败不阻塞：走 spawn 报错提示
             return;
@@ -6994,10 +7009,10 @@
     });
     document.getElementById('agent-mcp-edit-save').addEventListener('click', function () {
         var cfg = collectMcpForm();
-        if (!cfg.name || !/^[0-9A-Za-z_\-\u4e00-\u9fa5]{1,64}$/.test(cfg.name)) { showToast('服务器名称需为 1-64 位中文/字母/数字/中划线/下划线'); return; }
-        if (!cfg.command) { showToast('启动命令不能为空'); return; }
+        if (!cfg.name || !/^[0-9A-Za-z_\-\u4e00-\u9fa5]{1,64}$/.test(cfg.name)) { showToast(I18N.t('服务器名称需为 1-64 位中文/字母/数字/中划线/下划线')); return; }
+        if (!cfg.command) { showToast(I18N.t('启动命令不能为空')); return; }
         for (var i = 0; i < agentMcpServers.length; i++) {
-            if (i !== agentMcpEditing && agentMcpServers[i].name === cfg.name) { showToast('服务器名称已存在'); return; }
+            if (i !== agentMcpEditing && agentMcpServers[i].name === cfg.name) { showToast(I18N.t('服务器名称已存在')); return; }
         }
         if (agentMcpEditing >= 0) agentMcpServers[agentMcpEditing] = cfg;
         else agentMcpServers.push(cfg);
@@ -7009,18 +7024,18 @@
         var out = document.getElementById('agent-mcp-test-out');
         var btn = this;
         var cfg = collectMcpForm();
-        if (!cfg.name || !cfg.command) { out.textContent = '请先填写服务器名称与启动命令'; out.classList.add('err'); return; }
+        if (!cfg.name || !cfg.command) { out.textContent = I18N.t('请先填写服务器名称与启动命令'); out.classList.add('err'); return; }
         out.classList.remove('ok', 'err');
-        out.textContent = '连接中…';
+        out.textContent = I18N.t('连接中…');
         btn.disabled = true;
         window.desktop.mcpTest(cfg).then(function (r) {
-            if (!r || !r.ok) { out.textContent = (r && r.msg) || '连接失败'; out.classList.add('err'); return; }
-            out.textContent = '连接成功：' + (r.server_name || cfg.name) +
+            if (!r || !r.ok) { out.textContent = (r && r.msg) || I18N.t('连接失败'); out.classList.add('err'); return; }
+            out.textContent = I18N.t('连接成功：') + (r.server_name || cfg.name) +
                 (r.server_version ? ' v' + r.server_version : '') +
-                '，' + ((r.tools || []).length) + ' 个工具，耗时 ' + (r.elapsed_ms || 0) + 'ms';
+                '，' + ((r.tools || []).length) + I18N.t(' 个工具，耗时 ') + (r.elapsed_ms || 0) + 'ms';
             out.classList.add('ok');
         }).catch(function (e) {
-            out.textContent = '测试异常：' + (e && e.message || e);
+            out.textContent = I18N.t('测试异常：') + (e && e.message || e);
             out.classList.add('err');
         }).finally(function () { btn.disabled = false; });
     });
@@ -7087,8 +7102,8 @@
             lb.appendChild(lt);
             var cp = document.createElement('span');
             cp.className = 'ws-git-help-copy';
-            cp.textContent = '复制';
-            cp.title = '复制全部内容（可直接粘贴）';
+            cp.textContent = I18N.t('复制');
+            cp.title = I18N.t('复制全部内容（可直接粘贴）');
             cp.addEventListener('click', function () { wsGitCopyText(content); });
             lb.appendChild(cp);
             b.appendChild(lb);
@@ -7098,37 +7113,37 @@
             b.appendChild(pre);
             s.appendChild(b);
         }
-        var s1 = sec('① 工作原理');
-        line(s1, '保存后本机拉起服务器子进程并自动发现工具，清单上报后 AI Agent 即可调用（执行在本机，凭据仅存本机，不会上传）。');
-        var s2 = sec('② 字段怎么填');
-        line(s2, '服务器名称：自定义且唯一，AI 里以 mcp_pc_名称_工具名 显示。');
-        line(s2, '启动命令：npx＝运行 Node 系服务器（最常用）；uvx＝运行 Python 系服务器；node/python＝直接运行本地脚本。');
-        line(s2, '命令参数（每行一个）：-y 表示 npm 包未经安装时自动确认；其后一行是服务器自己的参数（npm 包名、授权目录等）。');
-        line(s2, '环境变量（每行 KEY=VALUE）：服务器的配置项——数据库地址/账号密码/API Key 等都填这里。');
-        var s3 = sec('③ 开箱即用示例（点「复制」逐块照抄）');
-        block(s3, '示例 1 · 文件系统访问（AI 读写指定目录）→ 启动命令', 'npx');
-        block(s3, '示例 1 → 命令参数（每行一个；最后一行改为你要授权的目录）', '-y\n@modelcontextprotocol/server-filesystem\nD:\\workspace');
-        block(s3, '示例 2 · 网页抓取（AI 联网读网页）→ 启动命令', 'uvx');
-        block(s3, '示例 2 → 命令参数', 'mcp-server-fetch');
-        block(s3, '示例 3 · MySQL 数据库查询 → 启动命令', 'npx');
-        block(s3, '示例 3 → 命令参数', '-y\n@benborla29/mcp-server-mysql');
-        block(s3, '示例 3 → 环境变量（每行 KEY=VALUE，改为你的库信息）', 'MYSQL_HOST=127.0.0.1\nMYSQL_PORT=3306\nMYSQL_USER=root\nMYSQL_PASS=你的密码\nMYSQL_DB=数据库名');
-        block(s3, '示例 4 · 长期记忆（AI 跨对话记住要点）→ 启动命令', 'npx');
-        block(s3, '示例 4 → 命令参数', '-y\n@modelcontextprotocol/server-memory');
-        block(s3, '示例 4 → 环境变量（记忆存档文件位置，可不填）', 'MEMORY_FILE_PATH=D:\\im-memory.json');
-        var s4 = sec('④ 项目级 MCP（.im/agent_mcp.json）');
-        line(s4, '开启「启用项目级 MCP」后，客户端自动从当前项目根目录读取 .im/agent_mcp.json（首次访问自动创建空模板）；该文件可随项目分享给同事，人手一份互不影响。');
-        line(s4, 'JSON 写法：mcpServers 下每个键是服务器名称，值为对象——command（启动命令）、args（参数数组，每项一个字符串）、env（环境变量对象，可省略）、enabled（true/false，可省略默认启用）。');
-        block(s4, '项目级配置完整示例（点「复制」粘贴进 .im/agent_mcp.json 后改成你的）', '{\n    "mcpServers": {\n        "filesystem": {\n            "command": "npx",\n            "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\\\workspace"],\n            "env": {},\n            "enabled": true\n        },\n        "fetch": {\n            "command": "uvx",\n            "args": ["mcp-server-fetch"]\n        }\n    }\n}');
-        line(s4, '同名时用户在「MCP Servers 管理」里配置的优先于项目级；改完 JSON 后点卡片头「刷新」或重新打开设置页即生效（也可 enabled:false 单独停用某项）。');
-        var s5 = sec('⑤ 使用提示');
-        line(s5, '填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。');
-        line(s5, '数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。');
-        line(s5, '填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。');
+        var s1 = sec(I18N.t('① 工作原理'));
+        line(s1, I18N.t('保存后本机拉起服务器子进程并自动发现工具，清单上报后 AI Agent 即可调用（执行在本机，凭据仅存本机，不会上传）。'));
+        var s2 = sec(I18N.t('② 字段怎么填'));
+        line(s2, I18N.t('服务器名称：自定义且唯一，AI 里以 mcp_pc_名称_工具名 显示。'));
+        line(s2, I18N.t('启动命令：npx＝运行 Node 系服务器（最常用）；uvx＝运行 Python 系服务器；node/python＝直接运行本地脚本。'));
+        line(s2, I18N.t('命令参数（每行一个）：-y 表示 npm 包未经安装时自动确认；其后一行是服务器自己的参数（npm 包名、授权目录等）。'));
+        line(s2, I18N.t('环境变量（每行 KEY=VALUE）：服务器的配置项——数据库地址/账号密码/API Key 等都填这里。'));
+        var s3 = sec(I18N.t('③ 开箱即用示例（点「复制」逐块照抄）'));
+        block(s3, I18N.t('示例 1 · 文件系统访问（AI 读写指定目录）→ 启动命令'), 'npx');
+        block(s3, I18N.t('示例 1 → 命令参数（每行一个；最后一行改为你要授权的目录）'), '-y\n@modelcontextprotocol/server-filesystem\nD:\\workspace');
+        block(s3, I18N.t('示例 2 · 网页抓取（AI 联网读网页）→ 启动命令'), 'uvx');
+        block(s3, I18N.t('示例 2 → 命令参数'), 'mcp-server-fetch');
+        block(s3, I18N.t('示例 3 · MySQL 数据库查询 → 启动命令'), 'npx');
+        block(s3, I18N.t('示例 3 → 命令参数'), '-y\n@benborla29/mcp-server-mysql');
+        block(s3, I18N.t('示例 3 → 环境变量（每行 KEY=VALUE，改为你的库信息）'), I18N.t('MYSQL_HOST=127.0.0.1\nMYSQL_PORT=3306\nMYSQL_USER=root\nMYSQL_PASS=你的密码\nMYSQL_DB=数据库名'));
+        block(s3, I18N.t('示例 4 · 长期记忆（AI 跨对话记住要点）→ 启动命令'), 'npx');
+        block(s3, I18N.t('示例 4 → 命令参数'), '-y\n@modelcontextprotocol/server-memory');
+        block(s3, I18N.t('示例 4 → 环境变量（记忆存档文件位置，可不填）'), 'MEMORY_FILE_PATH=D:\\im-memory.json');
+        var s4 = sec(I18N.t('④ 项目级 MCP（.im/agent_mcp.json）'));
+        line(s4, I18N.t('开启「启用项目级 MCP」后，客户端自动从当前项目根目录读取 .im/agent_mcp.json（首次访问自动创建空模板）；该文件可随项目分享给同事，人手一份互不影响。'));
+        line(s4, I18N.t('JSON 写法：mcpServers 下每个键是服务器名称，值为对象——command（启动命令）、args（参数数组，每项一个字符串）、env（环境变量对象，可省略）、enabled（true/false，可省略默认启用）。'));
+        block(s4, I18N.t('项目级配置完整示例（点「复制」粘贴进 .im/agent_mcp.json 后改成你的）'), '{\n    "mcpServers": {\n        "filesystem": {\n            "command": "npx",\n            "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:\\\\workspace"],\n            "env": {},\n            "enabled": true\n        },\n        "fetch": {\n            "command": "uvx",\n            "args": ["mcp-server-fetch"]\n        }\n    }\n}');
+        line(s4, I18N.t('同名时用户在「MCP Servers 管理」里配置的优先于项目级；改完 JSON 后点卡片头「刷新」或重新打开设置页即生效（也可 enabled:false 单独停用某项）。'));
+        var s5 = sec(I18N.t('⑤ 使用提示'));
+        line(s5, I18N.t('填完先点「测试连接」，显示"连接成功：N 个工具"即配置正确；保存后列表出现绿点即建连成功。'));
+        line(s5, I18N.t('数据库等敏感服务器建议用只读账号；每次 AI 调用都有审批确认弹窗。'));
+        line(s5, I18N.t('填错命令/参数时服务器起不来，列表状态会显示「错误」及原因。'));
         // 原实现：提示手动安装 uv（irm/winget）与 Node.js——阶段一百一十九起运行环境全自动，文案过时
         // line(s5, 'Python 系插件（启动命令 uvx，如网页抓取/SQLite）需先安装 uv 工具链：PowerShell 执行 irm https://astral.sh/uv/install.ps1 | iex（或 winget install astral-sh.uv），安装后重启客户端；Node 系插件（npx）需 Node.js。');
-        line(s5, 'Python 系插件（uvx）与 Node 系插件（npx）的运行环境全自动：客户端内置 uv 工具链与便携 Node（离线 zip 优先，缺失时联网下载），无需手动安装；uvx 首次拉起插件时需联网下载 Python 包（1-2 分钟，之后走缓存秒开），测试连接等待上限已放宽至 2 分钟。');
-        line(s5, 'Agent 任务的 C/C++ 编译环境同样全自动：系统已装 MSVC/gcc 时直接使用，都没有时首次编译自动下载内置 gcc 裁剪包（约 89MB，之后离线可用），无需手动安装任何编译器。');
+        line(s5, I18N.t('Python 系插件（uvx）与 Node 系插件（npx）的运行环境全自动：客户端内置 uv 工具链与便携 Node（离线 zip 优先，缺失时联网下载），无需手动安装；uvx 首次拉起插件时需联网下载 Python 包（1-2 分钟，之后走缓存秒开），测试连接等待上限已放宽至 2 分钟。'));
+        line(s5, I18N.t('Agent 任务的 C/C++ 编译环境同样全自动：系统已装 MSVC/gcc 时直接使用，都没有时首次编译自动下载内置 gcc 裁剪包（约 89MB，之后离线可用），无需手动安装任何编译器。'));
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {
@@ -7152,9 +7167,9 @@
     // 自动审批模式下仍需人工确认的高危工具（命令执行与文件写删；delete_file 原本就不可加白逐次确认）
     var AGENT_MANUAL_TOOLS = { run_command: 1, write_file: 1, edit_file: 1, delete_file: 1 };
     var AGENT_APPROVE_MODE_DESC = {
-        manual: '手动审批（重要操作由你确认）',
-        auto: '自动审批（MCP/浏览器等自动放行，命令与文件写删仍需确认）',
-        full: '完全访问（不经审批直接运行，请注意风险）'
+        manual: I18N.t('手动审批（重要操作由你确认）'),
+        auto: I18N.t('自动审批（MCP/浏览器等自动放行，命令与文件写删仍需确认）'),
+        full: I18N.t('完全访问（不经审批直接运行，请注意风险）')
     };
     // agentApproveMode 当前审批模式：缺省手动（与既有行为一致）
     function agentApproveMode() {
@@ -7175,7 +7190,7 @@
         var m = agentApproveMode();
         agentApproveBtn.classList.toggle('active', m !== 'manual');
         agentApproveBtn.removeAttribute('title');
-        agentApproveBtn.setAttribute('data-tip-text', '审批模式：' + (AGENT_APPROVE_MODE_DESC[m] || AGENT_APPROVE_MODE_DESC.manual) + '（点击切换）');
+        agentApproveBtn.setAttribute('data-tip-text', I18N.t('审批模式：') + (AGENT_APPROVE_MODE_DESC[m] || AGENT_APPROVE_MODE_DESC.manual) + I18N.t('（点击切换）'));
         var items = agentApprovePanel.querySelectorAll('.agent-approve-item');
         for (var i = 0; i < items.length; i++) {
             items[i].classList.toggle('selected', items[i].getAttribute('data-mode') === m);
@@ -7217,7 +7232,7 @@
                 var m = item.getAttribute('data-mode') || 'manual';
                 agentApproveModeSave(m);
                 agentApprovePanelToggle(false);
-                showToast('Agent 审批模式：' + (AGENT_APPROVE_MODE_DESC[m] || m));
+                showToast(I18N.t('Agent 审批模式：') + (AGENT_APPROVE_MODE_DESC[m] || m));
             });
         })(approveItems[ai]);
     }
@@ -7624,7 +7639,7 @@
         menu.className = 'bc-sym-menu';
         var head = document.createElement('div');
         head.className = 'bc-sym-menu-head';
-        head.textContent = '符号（' + syms.length + ' 个）';
+        head.textContent = I18N.t('符号（') + syms.length + I18N.t(' 个）');
         menu.appendChild(head);
         var list = document.createElement('div');
         list.className = 'bc-sym-menu-list';
@@ -7641,7 +7656,7 @@
                 var item = document.createElement('div');
                 item.className = 'bc-sym-menu-item';
                 item.style.paddingLeft = (10 + s.depth * 14) + 'px';
-                item.title = (s.kind === 'class' ? '类 ' : '函数 ') + s.name + '（第 ' + s.line + ' 行）';
+                item.title = (s.kind === 'class' ? I18N.t('类 ') : I18N.t('函数 ')) + s.name + I18N.t('（第 ') + s.line + I18N.t(' 行）');
                 var tri = document.createElement('span');
                 tri.className = 'tri' + (s.hasKids ? '' : ' leaf');
                 if (s.hasKids) {
@@ -7700,7 +7715,7 @@
     function browserRenderCrumbs(relPath, st) {
         browserCrumbsEl.innerHTML = '';
         var parts = String(relPath || '').split(/[\\/]+/).filter(function (s) { return !!s; });
-        if (!parts.length) parts = ['文件预览'];
+        if (!parts.length) parts = [I18N.t('文件预览')];
         var tab = null;
         if (st && st.kind === 'file') {
             (st.tabs || []).forEach(function (t) {
@@ -7740,7 +7755,7 @@
             browserCrumbsEl.appendChild(sep);
             var seg = document.createElement('span');
             seg.className = 'bc-seg bc-sym';
-            seg.title = (s.kind === 'class' ? '类 ' : '函数 ') + s.name + '（第 ' + s.line + ' 行，点击跳转）';
+            seg.title = (s.kind === 'class' ? I18N.t('类 ') : I18N.t('函数 ')) + s.name + I18N.t('（第 ') + s.line + I18N.t(' 行，点击跳转）');
             var ico = document.createElement('span');
             ico.className = 'bc-sym-ico ' + (s.kind === 'class' ? 'cls' : 'fn');
             ico.textContent = s.kind === 'class' ? '◇' : 'ƒ';
@@ -7763,7 +7778,7 @@
                 var more = document.createElement('span');
                 more.className = 'bc-seg bc-more';
                 more.textContent = '…';
-                more.title = '查看全部 ' + syms.length + ' 个符号';
+                more.title = I18N.t('查看全部 ') + syms.length + I18N.t(' 个符号');
                 more.addEventListener('click', function (ev) {
                     ev.stopPropagation();
                     if (bcSymMenuEl && bcSymAnchor === more) { bcCloseSymMenu(); return; } // 再点一次收起
@@ -7876,7 +7891,7 @@
             var chip = document.createElement('div');
             chip.className = 'browser-tab' + (t.id === state.active_id ? ' active' : '') + (isFile ? ' is-file' : '') + (t.dirty ? ' dirty' : '') + (t.pinned ? ' pinned' : '');
             // 阶段九十四：悬停 tooltip 显示完整路径（TRAE 同款）——文件标签显绝对路径，网页标签仍显标题
-            chip.title = isFile ? (t.file_path || t.file_name || t.title || '') : (t.title || '(无标题)');
+            chip.title = isFile ? (t.file_path || t.file_name || t.title || '') : (t.title || I18N.t('(无标题)'));
             if (t.pinned) { // 阶段九十四：固定标签——锁形小图标（防误关，批量关闭跳过，菜单可取消固定）
                 var pin = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 pin.setAttribute('viewBox', '0 0 24 24');
@@ -7895,11 +7910,11 @@
             }
             var title = document.createElement('span');
             title.className = 'browser-tab-title';
-            title.textContent = t.title || '(无标题)';
+            title.textContent = t.title || I18N.t('(无标题)');
             chip.appendChild(title);
             var close = document.createElement('span');
             close.className = 'browser-icon-btn browser-tab-close';
-            close.title = '关闭标签页';
+            close.title = I18N.t('关闭标签页');
             close.textContent = t.dirty ? '●' : '×';
             if (t.pinned) close.classList.add('hidden'); // 固定标签不显示关闭按钮（防误关）
             if (t.dirty) { // 未保存圆点：悬停时切回 × 供关闭（TRAE 同款）
@@ -7944,36 +7959,36 @@
         all.forEach(function (x, i) { if (x.id === t.id) idx = i; });
         var isFile = t.kind === 'file';
         var items = [
-            { label: '关闭', fn: function () { window.desktop.browserCloseTab(t.id); } },
-            { label: '关闭其他', fn: function () { window.desktop.browserTabsOp('close-others', t.id); } },
-            { label: '关闭右侧标签页', disabled: idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('close-right', t.id); } },
-            { label: '全部关闭', fn: function () { window.desktop.browserTabsOp('close-all', ''); } },
+            { label: I18N.t('关闭'), fn: function () { window.desktop.browserCloseTab(t.id); } },
+            { label: I18N.t('关闭其他'), fn: function () { window.desktop.browserTabsOp('close-others', t.id); } },
+            { label: I18N.t('关闭右侧标签页'), disabled: idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('close-right', t.id); } },
+            { label: I18N.t('全部关闭'), fn: function () { window.desktop.browserTabsOp('close-all', ''); } },
             { sep: true },
-            { label: isFile ? '复制路径' : '复制网址', fn: function () {
+            { label: isFile ? I18N.t('复制路径') : I18N.t('复制网址'), fn: function () {
                 var txt = isFile ? (t.file_path || t.file_name || '') : (t.url || ''); // 优先绝对路径（file_name 兜底，不再回落到标题避免复制成文件名）
                 if (!txt) return;
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(txt).then(function () { showToast('已复制'); }, function () {});
+                    navigator.clipboard.writeText(txt).then(function () { showToast(I18N.t('已复制')); }, function () {});
                 }
             } }
         ];
         if (!isFile && t.url && /^https?:\/\//i.test(t.url)) {
-            items.push({ label: '在系统浏览器打开', fn: function () { // 阶段九十四：结果回执——失败 toast 具体原因（禁止静默无反应）
+            items.push({ label: I18N.t('在系统浏览器打开'), fn: function () { // 阶段九十四：结果回执——失败 toast 具体原因（禁止静默无反应）
                 window.desktop.browserTabsOp('open-external', '', t.url).then(function (r) {
-                    if (!r || !r.ok) showToast('打开失败：主进程拒绝该地址');
+                    if (!r || !r.ok) showToast(I18N.t('打开失败：主进程拒绝该地址'));
                 }).catch(function (err) {
-                    showToast('打开失败：' + (err && err.message ? err.message : 'IPC 异常'));
+                    showToast(I18N.t('打开失败：') + (err && err.message ? err.message : I18N.t('IPC 异常')));
                 });
             } });
         }
         if (isFile && t.file_path) {
-            items.push({ label: '打开文件所在目录', fn: function () { window.desktop.browserTabsOp('show-in-folder', t.id); } }); // 阶段九十四：TRAE"在文件资源管理器中显示"同款
+            items.push({ label: I18N.t('打开文件所在目录'), fn: function () { window.desktop.browserTabsOp('show-in-folder', t.id); } }); // 阶段九十四：TRAE"在文件资源管理器中显示"同款
         }
         items.push({ sep: true });
-        items.push({ label: t.pinned ? '取消固定' : '固定标签', fn: function () { window.desktop.browserTabsOp('pin', t.id); } });
+        items.push({ label: t.pinned ? I18N.t('取消固定') : I18N.t('固定标签'), fn: function () { window.desktop.browserTabsOp('pin', t.id); } });
         items.push({ sep: true });
-        items.push({ label: '左移标签', disabled: t.pinned || idx <= 0, fn: function () { window.desktop.browserTabsOp('move', t.id, 'left'); } });
-        items.push({ label: '右移标签', disabled: t.pinned || idx < 0 || idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('move', t.id, 'right'); } });
+        items.push({ label: I18N.t('左移标签'), disabled: t.pinned || idx <= 0, fn: function () { window.desktop.browserTabsOp('move', t.id, 'left'); } });
+        items.push({ label: I18N.t('右移标签'), disabled: t.pinned || idx < 0 || idx >= all.length - 1, fn: function () { window.desktop.browserTabsOp('move', t.id, 'right'); } });
         // 动态构建菜单 DOM（复用 .friend-menu 主题样式容器）
         var menu = document.createElement('div');
         menu.className = 'friend-menu browser-tab-menu';
@@ -8146,22 +8161,22 @@
         head.className = 'agent-task-head';
         var title = document.createElement('span');
         title.className = 'agent-task-title';
-        title.textContent = '任务';
+        title.textContent = I18N.t('任务');
         var goalEl = document.createElement('span');
         goalEl.className = 'agent-task-goal';
         goalEl.textContent = goal || '';
         goalEl.title = goal || '';
         var statusEl = document.createElement('span');
         statusEl.className = 'agent-task-status running';
-        statusEl.textContent = '执行中';
+        statusEl.textContent = I18N.t('执行中');
         var stopBtn = document.createElement('button');
         stopBtn.className = 'agent-task-stop';
-        stopBtn.textContent = '停止';
+        stopBtn.textContent = I18N.t('停止');
         stopBtn.addEventListener('click', function () {
             if (stopBtn.disabled) return;
             IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: taskId, action: 'cancel' }) });
             stopBtn.disabled = true;
-            stopBtn.textContent = '取消中…';
+            stopBtn.textContent = I18N.t('取消中…');
         });
         head.appendChild(title);
         head.appendChild(goalEl);
@@ -8234,12 +8249,12 @@
         var taskTab = document.createElement('span');
         taskTab.className = 'agent-dock-tab task';
         taskTab.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.75" y="2" width="10.5" height="12.5" rx="1.5"/><path d="M5.25 1.5h5.5v2h-5.5z"/><path d="M5.5 8.2l1.8 1.8 3.4-3.6"/></svg>';
-        taskTab.title = '任务进度';
+        taskTab.title = I18N.t('任务进度');
         var chTab = document.createElement('span');
         chTab.className = 'agent-dock-tab changes';
         // 文件差异图标：文档折角 + 上加号下减号（git diff 同款语义）
         chTab.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 1.5H4.5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5z"/><path d="M9 1.5V5h3.5"/><path d="M8 6.8v3.4M6.3 8.5h3.4"/><path d="M6.3 12h3.4"/></svg>';
-        chTab.title = '文件变更待审查';
+        chTab.title = I18N.t('文件变更待审查');
         tabs.appendChild(taskTab);
         tabs.appendChild(chTab);
         var text = document.createElement('span');
@@ -8341,14 +8356,14 @@
         d.taskTab.classList.toggle('active', d.active === 'task');
         d.chTab.classList.toggle('active', d.active === 'changes');
         if (d.active === 'task') {
-            d.text.textContent = taskSt.goal || '任务执行中';
+            d.text.textContent = taskSt.goal || I18N.t('任务执行中');
             d.text.title = taskSt.goal || '';
-            d.metaTask.textContent = (taskSt.todoDone || 0) + '/' + (taskSt.todoTotal || 0) + ' 个任务已完成';
+            d.metaTask.textContent = (taskSt.todoDone || 0) + '/' + (taskSt.todoTotal || 0) + I18N.t(' 个任务已完成');
             d.metaTask.classList.remove('hidden');
             d.metaChanges.classList.add('hidden');
         } else {
-            d.text.textContent = ch.pending + ' 个文件待审查';
-            d.text.title = '仅统计服务端工作区变更；撤销将还原文件到任务前内容';
+            d.text.textContent = ch.pending + I18N.t(' 个文件待审查');
+            d.text.title = I18N.t('仅统计服务端工作区变更；撤销将还原文件到任务前内容');
             d.metaChA.textContent = '+' + ch.totalAdds;
             d.metaChD.textContent = '-' + ch.totalDels;
             d.metaTask.classList.add('hidden');
@@ -8392,14 +8407,14 @@
     function agentTokensTag(tokens, pointsCost) {
         var v = (pointsCost != null && pointsCost > 0) ? pointsCost :
             (tokens && tokens.total > 0 ? parseFloat((tokens.total / 1000).toFixed(3)) : 0);
-        return v > 0 ? '（⚡ 扣 ' + v + ' 积分）' : '';
+        return v > 0 ? I18N.t('（⚡ 扣 ') + v + I18N.t(' 积分）') : '';
     }
 
     // 阶段一百三十八：任务耗时格式化（TRAE CN 同款）——不足 1 分钟显示"X 秒"，超过显示"X 分 Y 秒"
     function agentElapsedText(ms) {
         var s = Math.round((ms || 0) / 1000);
-        if (s < 60) return s + ' 秒';
-        return Math.floor(s / 60) + ' 分 ' + (s % 60) + ' 秒';
+        if (s < 60) return s + I18N.t(' 秒');
+        return Math.floor(s / 60) + I18N.t(' 分 ') + (s % 60) + I18N.t(' 秒');
     }
 
     // 阶段一百三十九：任务卡上下文占用环（TRAE CN 同款右下角"◔ 30%"）——
@@ -8409,7 +8424,7 @@
         if (st.costEl._ctxRing) return st.costEl._ctxRing;
         var wrap = document.createElement('span');
         wrap.className = 'agent-task-ctx';
-        wrap.title = '上下文占用（达阈值自动触发历史压缩归并）';
+        wrap.title = I18N.t('上下文占用（达阈值自动触发历史压缩归并）');
         var NS = 'http://www.w3.org/2000/svg';
         var svg = document.createElementNS(NS, 'svg');
         svg.setAttribute('viewBox', '0 0 36 36');
@@ -8444,7 +8459,7 @@
         var C = 2 * Math.PI * 15.5;
         st.costEl._ctxRingFg.setAttribute('stroke-dashoffset', (C * (1 - pct / 100)).toFixed(2));
         st.costEl._ctxRingPct.textContent = pct + '%';
-        wrap.title = '上下文占用（' + (mode === 'tokens' ? '估算 token' : 'KB 字节') + '口径，达阈值自动触发历史压缩归并）';
+        wrap.title = I18N.t('上下文占用（') + (mode === 'tokens' ? I18N.t('估算 token') : I18N.t('KB 字节')) + I18N.t('口径，达阈值自动触发历史压缩归并）');
         st.costEl._ctxRingFg.classList.toggle('ctx-warn', pct >= 80 && pct < 95);
         st.costEl._ctxRingFg.classList.toggle('ctx-danger', pct >= 95);
         st.costEl.classList.remove('hidden');
@@ -8453,7 +8468,7 @@
     function finishAgentTask(st, text, cls, elapsedMs) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
         // 阶段一百二十五：任务完结即收尾等待中的提问卡（超时/完结后不再可作答；弹窗按任务归属过滤关闭）
-        if (st.pendingAskSettles) agentAskSettlePending(st, '任务已结束，无需再回答');
+        if (st.pendingAskSettles) agentAskSettlePending(st, I18N.t('任务已结束，无需再回答'));
         else agentAskModalClose(st.taskId);
         setAgentTaskStatus(st, text, cls);
         // 阶段一百三十八：任务耗时标注（TRAE CN 同款）——服务端 StartAt→完结毫秒归口，0/缺省不显示；
@@ -8467,11 +8482,11 @@
                 if (!st.costEl._label.parentNode) st.costEl.appendChild(st.costEl._label);
                 st.costEl.appendChild(st.costEl._elapsed);
             }
-            st.costEl._elapsed.textContent = '耗时 ' + agentElapsedText(elapsedMs);
+            st.costEl._elapsed.textContent = I18N.t('耗时 ') + agentElapsedText(elapsedMs);
             st.costEl.classList.remove('hidden');
         }
         st.stopBtn.disabled = true;
-        st.stopBtn.textContent = '已结束';
+        st.stopBtn.textContent = I18N.t('已结束');
         // 阶段七十三：任务完结即清进行中标记（当前会话发送按钮"停止"态复位）
         if (agentActiveTask[st.agent] === st.taskId) {
             delete agentActiveTask[st.agent];
@@ -8509,7 +8524,7 @@
         block.className = 'agent-event thought';
         var head = document.createElement('div');
         head.className = 'agent-event-head';
-        head.textContent = '思考';
+        head.textContent = I18N.t('思考');
         head.addEventListener('click', function () { block.classList.toggle('collapsed'); });
         var bodyEl = document.createElement('div');
         bodyEl.className = 'agent-event-body ai-md';
@@ -8524,7 +8539,7 @@
 
     // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
     // 阶段六十八：新增 http_request / web_search 映射；阶段七十四：新增 edit_file/delete_file/list_dir/grep 映射
-    var AGENT_TOOL_TITLE = { read_file: '读取文件', write_file: '写入文件', edit_file: '编辑文件', delete_file: '删除文件', list_dir: '列目录', grep: '搜索文件', run_command: '执行命令', todo_write: '更新任务清单', http_request: 'HTTP 请求', web_search: '联网搜索', ask_user: '向用户提问' };
+    var AGENT_TOOL_TITLE = { read_file: I18N.t('读取文件'), write_file: I18N.t('写入文件'), edit_file: I18N.t('编辑文件'), delete_file: I18N.t('删除文件'), list_dir: I18N.t('列目录'), grep: I18N.t('搜索文件'), run_command: I18N.t('执行命令'), todo_write: I18N.t('更新任务清单'), http_request: I18N.t('HTTP 请求'), web_search: I18N.t('联网搜索'), ask_user: I18N.t('向用户提问') };
 
     function agentToolChipText(tool, params) {
         var p = params || {};
@@ -8540,7 +8555,7 @@
         if (tool === 'web_search') return String(p.query || '');
         if (tool === 'todo_write') {
             var n = Object.prototype.toString.call(p.todos) === '[object Array]' ? p.todos.length : 0;
-            return n ? n + ' 项任务' : '';
+            return n ? n + I18N.t(' 项任务') : '';
         }
         return '';
     }
@@ -8564,7 +8579,7 @@
             block.className = 'agent-event textstream';
             var head = document.createElement('div');
             head.className = 'agent-stream-head';
-            head.textContent = '思考中';
+            head.textContent = I18N.t('思考中');
             head.appendChild(agentDotsEl()); // 动态三点：正在生成，非卡住
             var bodyEl = document.createElement('div');
             bodyEl.className = 'agent-event-body ai-md';
@@ -8609,7 +8624,7 @@
         initAIMdHScroll(cur.el); // 收尾后 DOM 稳定，宽表格/代码块挂横向自绘滑块
         if (asThought) {
             cur.el.classList.add('thought');
-            cur.head.textContent = '思考过程';
+            cur.head.textContent = I18N.t('思考过程');
             cur.head.addEventListener('click', function () { cur.el.classList.toggle('collapsed'); });
             cur.el.classList.add('collapsed');
         } else {
@@ -8704,7 +8719,7 @@
         badge.textContent = thStateLabel(t.status);
         var goal = document.createElement('span');
         goal.className = 'taskhist-goal';
-        goal.textContent = t.goal || '(无目标)';
+        goal.textContent = t.goal || I18N.t('(无目标)');
         goal.title = t.goal || '';
         head.appendChild(badge);
         head.appendChild(goal);
@@ -8713,9 +8728,9 @@
         var meta = document.createElement('div');
         meta.className = 'taskhist-meta';
         // 阶段一百三十八：重放卡 meta 附耗时与实际扣费积分（服务端归口下发；旧记录无该值不显示）
-        meta.textContent = (t.steps || 0) + ' 步' +
-            (t.elapsed_ms > 0 ? ' · 耗时 ' + agentElapsedText(t.elapsed_ms) : '') +
-            (t.points_cost > 0 ? ' · 扣 ' + t.points_cost + ' 积分' : '') +
+        meta.textContent = (t.steps || 0) + I18N.t(' 步') +
+            (t.elapsed_ms > 0 ? I18N.t(' · 耗时 ') + agentElapsedText(t.elapsed_ms) : '') +
+            (t.points_cost > 0 ? I18N.t(' · 扣 ') + t.points_cost + I18N.t(' 积分') : '') +
             ' · ' + thFormatTime(t.update_time || t.create_time);
         card.appendChild(meta);
 
@@ -8731,11 +8746,11 @@
             }
             card.classList.add('expanded');
             detail.classList.remove('hidden');
-            detail.textContent = '加载详情…';
+            detail.textContent = I18N.t('加载详情…');
             fetch('/api/agent/task/' + encodeURIComponent(t.task_id) + '?username=' + encodeURIComponent(kbUsername()))
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
+                    if (!res.ok) { detail.textContent = res.msg || I18N.t('详情加载失败'); return; }
                     var d = res.data || {};
                     detail.innerHTML = '';
                     // 阶段一百三十九：最终总结改 Markdown 渲染——模型输出含 **加粗**/反引号/表格等
@@ -8770,10 +8785,10 @@
                         detail.appendChild(lab);
                         detail.appendChild(bod);
                     }
-                    row('任务目标', d.goal);
-                    if (d.status === 'completed') row('最终总结', d.result, true);
-                    if (d.status === 'failed') row('失败原因', d.error);
-                    if (d.status === 'cancelled') row('取消说明', d.error);
+                    row(I18N.t('任务目标'), d.goal);
+                    if (d.status === 'completed') row(I18N.t('最终总结'), d.result, true);
+                    if (d.status === 'failed') row(I18N.t('失败原因'), d.error);
+                    if (d.status === 'cancelled') row(I18N.t('取消说明'), d.error);
                     // 阶段七十七：文件变更审查条（历史任务 pending 可操作，kept/reverted 只读徽标）
                     if (d.changes && d.changes.length) {
                         var chBox = agentBuildChangesBox(t.task_id, d.changes);
@@ -8783,7 +8798,7 @@
                     }
                     thLoadSteps(detail, t.task_id); // 执行轨迹懒加载（与任务历史弹窗同链路）
                 })
-                .catch(function () { detail.textContent = '详情加载失败'; });
+                .catch(function () { detail.textContent = I18N.t('详情加载失败'); });
         });
 
         body.appendChild(card);
@@ -8845,7 +8860,7 @@
             var ico = document.createElement('span');
             ico.className = 'agent-changes-ico k-' + (c.kind || 'modify');
             ico.textContent = c.kind === 'create' ? 'A' : (c.kind === 'delete' ? 'D' : 'M');
-            ico.title = c.kind === 'create' ? '新建' : (c.kind === 'delete' ? '删除' : '修改');
+            ico.title = c.kind === 'create' ? I18N.t('新建') : (c.kind === 'delete' ? I18N.t('删除') : I18N.t('修改'));
             var names = splitChangePath(c.path);
             var nameEl = document.createElement('span');
             nameEl.className = 'agent-changes-name';
@@ -8867,15 +8882,15 @@
             var badge = document.createElement('span');
             badge.className = 'agent-changes-badge ' + st;
             if (st === 'kept') {
-                badge.textContent = '已保留';
+                badge.textContent = I18N.t('已保留');
             } else if (st === 'reverted') {
-                badge.textContent = '已撤销';
+                badge.textContent = I18N.t('已撤销');
             } else {
-                badge.textContent = '待审查';
+                badge.textContent = I18N.t('待审查');
                 var rv = document.createElement('button');
                 rv.className = 'agent-changes-revert';
-                rv.textContent = '撤销';
-                rv.title = '还原该文件到任务前内容';
+                rv.textContent = I18N.t('撤销');
+                rv.title = I18N.t('还原该文件到任务前内容');
                 rv.addEventListener('click', function (e) {
                     e.stopPropagation();
                     if (rv.disabled) return;
@@ -8904,12 +8919,12 @@
             actions.className = 'agent-changes-actions';
             var label = document.createElement('span');
             label.className = 'agent-changes-pending';
-            label.textContent = pending + ' 个文件待审查';
+            label.textContent = pending + I18N.t(' 个文件待审查');
             var btns = document.createElement('div');
             btns.className = 'agent-changes-btns';
             var revertAll = document.createElement('button');
             revertAll.className = 'agent-approve-no';
-            revertAll.textContent = '全部撤销';
+            revertAll.textContent = I18N.t('全部撤销');
             revertAll.addEventListener('click', function () {
                 if (revertAll.disabled) return;
                 revertAll.disabled = true;
@@ -8918,7 +8933,7 @@
             });
             var keepAll = document.createElement('button');
             keepAll.className = 'agent-approve-ok';
-            keepAll.textContent = '全部保留';
+            keepAll.textContent = I18N.t('全部保留');
             keepAll.addEventListener('click', function () {
                 if (keepAll.disabled) return;
                 revertAll.disabled = true;
@@ -8950,14 +8965,14 @@
         var box = document.createElement('div');
         box.className = 'agent-changes';
         box.dataset.changesTask = taskId; // 66 帧全量刷新定位标记（live 卡与重放卡共用，按 task_id 扫描重建）
-        box.title = '仅统计服务端工作区变更；撤销将还原该文件到任务前内容';
+        box.title = I18N.t('仅统计服务端工作区变更；撤销将还原该文件到任务前内容');
 
         // 折叠汇总头：N 个文件已更改  +X -Y（默认收起，点击展开逐文件）
         var head = document.createElement('div');
         head.className = 'agent-changes-head';
         var cnt = document.createElement('span');
         cnt.className = 'agent-changes-cnt';
-        cnt.textContent = list.length + ' 个文件已更改';
+        cnt.textContent = list.length + I18N.t(' 个文件已更改');
         var stat = document.createElement('span');
         stat.className = 'agent-changes-stat';
         var addEl = document.createElement('span');
@@ -9015,7 +9030,7 @@
         var title = document.createElement('span');
         title.className = 'agent-tool-title';
         // 阶段八十九：MCP 工具服务端下发人类可读展示名（label="MCP · 服务器 / 工具"），命名空间 key 不可反解
-        title.textContent = ev.label || AGENT_TOOL_TITLE[ev.tool] || ('工具 · ' + (ev.tool || ''));
+        title.textContent = ev.label || AGENT_TOOL_TITLE[ev.tool] || (I18N.t('工具 · ') + (ev.tool || ''));
         head.appendChild(title);
         var chip = agentToolChipText(ev.tool, ev.params);
         if (chip) {
@@ -9030,7 +9045,7 @@
         // 阶段六十二：执行中动态指示（"执行中"文字 + 跳动三点），命令/本地执行耗时时表明未卡住
         var running = document.createElement('span');
         running.className = 'agent-tool-running';
-        running.textContent = '执行中';
+        running.textContent = I18N.t('执行中');
         running.appendChild(agentDotsEl());
         head.appendChild(running);
         var argsEl = document.createElement('pre');
@@ -9092,13 +9107,13 @@
     // 分组汇总标题："已编辑 N 个文件，执行 M 条命令"（含项数角标，点击组头展开/收起）
     function updateAgentGroupHead(g) {
         var parts = [];
-        if (g.w > 0) parts.push('已编辑 ' + g.w + ' 个文件');
-        if (g.c > 0) parts.push('执行 ' + g.c + ' 条命令');
-        if (!parts.length) parts.push('执行操作');
+        if (g.w > 0) parts.push(I18N.t('已编辑 ') + g.w + I18N.t(' 个文件'));
+        if (g.c > 0) parts.push(I18N.t('执行 ') + g.c + I18N.t(' 条命令'));
+        if (!parts.length) parts.push(I18N.t('执行操作'));
         g.head.textContent = parts.join('，');
         var cnt = document.createElement('span');
         cnt.className = 'agent-tool-group-count';
-        cnt.textContent = (g.w + g.c) + ' 项';
+        cnt.textContent = (g.w + g.c) + I18N.t(' 项');
         g.head.appendChild(cnt);
     }
 
@@ -9106,7 +9121,7 @@
     function buildAgentEnvTag(env) {
         var tag = document.createElement('span');
         tag.className = 'agent-env-tag' + (env === 'pc' ? ' pc' : '');
-        tag.textContent = env === 'pc' ? '本地执行' : '服务端执行';
+        tag.textContent = env === 'pc' ? I18N.t('本地执行') : I18N.t('服务端执行');
         return tag;
     }
 
@@ -9125,13 +9140,13 @@
         var bgBtn = document.createElement('button');
         bgBtn.className = 'agent-tool-bgbtn hidden';
         bgBtn.type = 'button';
-        bgBtn.textContent = '转后台';
-        bgBtn.title = '命令转入后台继续执行，对话不再等待（输出仍在控制台实时展示）';
+        bgBtn.textContent = I18N.t('转后台');
+        bgBtn.title = I18N.t('命令转入后台继续执行，对话不再等待（输出仍在控制台实时展示）');
         bgBtn.addEventListener('click', function () {
             if (bgBtn.disabled) return;
             IMSocket.send({ msg_type: MSG.AGENT_BG, content: JSON.stringify({ task_id: st.taskId, step: callId }) });
             bgBtn.disabled = true;
-            bgBtn.textContent = '已转后台';
+            bgBtn.textContent = I18N.t('已转后台');
         });
         block.querySelector('.agent-event-head').appendChild(bgBtn);
         block._bgBtn = bgBtn;
@@ -9145,13 +9160,13 @@
             var secSpan = document.createElement('span');
             secSpan.className = 'agent-tool-elapsed';
             running.textContent = '';
-            secSpan.textContent = '执行中';
+            secSpan.textContent = I18N.t('执行中');
             running.appendChild(secSpan);
             if (dots) running.appendChild(dots);
             var t0 = Date.now();
             block._elapsedTimer = setInterval(function () {
                 if (!running.isConnected) { clearInterval(block._elapsedTimer); return; }
-                secSpan.textContent = '执行中 · ' + Math.round((Date.now() - t0) / 1000) + 's';
+                secSpan.textContent = I18N.t('执行中 · ') + Math.round((Date.now() - t0) / 1000) + 's';
             }, 1000);
         }
     }
@@ -9194,7 +9209,7 @@
         }
         if (ev.over && !block._overTip) {
             block._overTip = true;
-            pre.appendChild(document.createTextNode('\n…（输出已达实时展示上限，后续增量不再下发，结束后按上限汇总）\n'));
+            pre.appendChild(document.createTextNode(I18N.t('\n…（输出已达实时展示上限，后续增量不再下发，结束后按上限汇总）\n')));
         }
         if (stick) {
             pre.scrollTop = pre.scrollHeight;
@@ -9236,11 +9251,11 @@
         if (!pre || block._exitShown) return;
         block._exitShown = true;
         var dur = ev.duration_ms || 0;
-        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + I18N.t(' 秒') : dur + I18N.t(' 毫秒');
         var line = document.createElement('div');
         line.className = 'agent-cmd-console-exit' + (ev.exit_code ? ' fail' : '');
-        line.textContent = '— 进程已退出 · 退出码 ' + (ev.exit_code || 0) + ' · 耗时 ' + durText +
-            (ev.total_bytes ? ' · 输出 ' + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
+        line.textContent = I18N.t('— 进程已退出 · 退出码 ') + (ev.exit_code || 0) + I18N.t(' · 耗时 ') + durText +
+            (ev.total_bytes ? I18N.t(' · 输出 ') + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
         pre.parentNode.appendChild(line);
         pre.scrollTop = pre.scrollHeight;
     }
@@ -9291,7 +9306,7 @@
         var clearBtn = document.createElement('button');
         clearBtn.className = 'agent-console-btn';
         clearBtn.type = 'button';
-        clearBtn.textContent = '清空';
+        clearBtn.textContent = I18N.t('清空');
         clearBtn.addEventListener('click', function () {
             var t = agentConsoleTabActive();
             if (t) t.bodyEl.textContent = '';
@@ -9300,7 +9315,7 @@
         closeBtn.className = 'agent-console-btn';
         closeBtn.type = 'button';
         closeBtn.textContent = '✕';
-        closeBtn.title = '收起控制台';
+        closeBtn.title = I18N.t('收起控制台');
         closeBtn.addEventListener('click', function () { agentConsoleToggle(false); });
         head.appendChild(tabsEl);
         head.appendChild(cmd);
@@ -9322,13 +9337,13 @@
         inputEl.className = 'agent-console-input';
         inputEl.type = 'text';
         inputEl.spellcheck = false;
-        inputEl.placeholder = '输入命令，回车执行（↑↓ 翻历史）';
+        inputEl.placeholder = I18N.t('输入命令，回车执行（↑↓ 翻历史）');
         inputEl.addEventListener('keydown', agentConsoleTermKey);
         var stopBtn = document.createElement('button');
         stopBtn.className = 'agent-console-stop';
         stopBtn.type = 'button';
         stopBtn.textContent = '■';
-        stopBtn.title = '停止当前命令';
+        stopBtn.title = I18N.t('停止当前命令');
         stopBtn.disabled = true;
         stopBtn.addEventListener('click', function () {
             var t = agentConsoleTabActive();
@@ -9345,7 +9360,7 @@
         var chip = document.createElement('button');
         chip.className = 'agent-console-chip hidden';
         chip.type = 'button';
-        chip.textContent = '▤ 打开控制台';
+        chip.textContent = I18N.t('▤ 打开控制台');
         chip.addEventListener('click', function () { agentConsoleToggle(true); });
         chipHost.insertBefore(chip, chipBefore); // 浮标固定聊天区输入框上方
         agentConsole.root = root;
@@ -9357,7 +9372,7 @@
         agentConsole.promptEl = promptEl;
         agentConsole.inputEl = inputEl;
         agentConsole.stopBtn = stopBtn;
-        agentConsole.tabs = [{ id: '__task__', kind: 'task', name: '任务输出', bodyEl: body, fixed: true, running: false, cwd: '' }];
+        agentConsole.tabs = [{ id: '__task__', kind: 'task', name: I18N.t('任务输出'), bodyEl: body, fixed: true, running: false, cwd: '' }];
         agentConsole.active = '__task__';
         // 本地终端帧路由（执行器输出/退出帧 → 对应标签；仅 PC 端有此桥）
         if (window.desktop && window.desktop.onTermEvent) {
@@ -9391,7 +9406,7 @@
                 var x = document.createElement('span');
                 x.className = 'agent-console-tab-x';
                 x.textContent = '✕';
-                x.title = '关闭终端';
+                x.title = I18N.t('关闭终端');
                 x.addEventListener('click', function (e) { e.stopPropagation(); agentConsoleTermClose(t.id); });
                 el.appendChild(x);
             }
@@ -9402,7 +9417,7 @@
         add.className = 'agent-console-tab-add';
         add.type = 'button';
         add.textContent = '+';
-        add.title = (window.desktop && window.desktop.termOp) ? '新建终端' : '新建终端（仅 PC 客户端支持本地执行）';
+        add.title = (window.desktop && window.desktop.termOp) ? I18N.t('新建终端') : I18N.t('新建终端（仅 PC 客户端支持本地执行）');
         add.addEventListener('click', agentConsoleTermCreate);
         bar.appendChild(add);
         // SSH 连接入口（仅 PC 端本地终端可用时显示）：快连弹窗 → 终端托管 ssh 会话
@@ -9414,7 +9429,7 @@
             sshBtn.style.width = 'auto';
             sshBtn.style.padding = '0 7px';
             sshBtn.style.fontSize = '10px';
-            sshBtn.title = '连接远程主机（SSH）';
+            sshBtn.title = I18N.t('连接远程主机（SSH）');
             sshBtn.addEventListener('click', agentConsoleSshDlg);
             bar.appendChild(sshBtn);
         }
@@ -9441,7 +9456,7 @@
         var id = 'term' + (++agentConsole.seq) + '_' + (Date.now() % 100000);
         var bodyEl = document.createElement('div');
         bodyEl.className = 'agent-console-body hidden';
-        var tab = { id: id, kind: 'term', name: '终端 ' + agentConsole.seq, bodyEl: bodyEl, cwd: '', running: false, hist: [], histIdx: -1, stick: true };
+        var tab = { id: id, kind: 'term', name: I18N.t('终端 ') + agentConsole.seq, bodyEl: bodyEl, cwd: '', running: false, hist: [], histIdx: -1, stick: true };
         bodyEl.addEventListener('scroll', function () {
             tab.stick = bodyEl.scrollTop + bodyEl.clientHeight >= bodyEl.scrollHeight - 40;
         });
@@ -9450,7 +9465,7 @@
         agentConsole.tabs.push(tab);
         agentConsoleSwitchTab(id);
         if (!(window.desktop && window.desktop.termOp)) {
-            agentConsoleTermAppend(tab, '✕ 本地终端仅 PC 客户端支持（浏览器端无本地执行能力）。\r\n');
+            agentConsoleTermAppend(tab, I18N.t('✕ 本地终端仅 PC 客户端支持（浏览器端无本地执行能力）。\r\n'));
             return;
         }
         window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'open', term_id: id }).then(function (res) {
@@ -9459,10 +9474,10 @@
                 agentConsoleTermAppend(tab, tab.cwd + '>\r\n');
                 if (agentConsole.active === id) agentConsole.promptEl.textContent = tab.cwd + '>';
             } else {
-                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || '终端打开失败') + '\r\n');
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || I18N.t('终端打开失败')) + '\r\n');
             }
         }).catch(function () {
-            agentConsoleTermAppend(tab, '✕ 终端打开失败（本地桥异常）。\r\n');
+            agentConsoleTermAppend(tab, I18N.t('✕ 终端打开失败（本地桥异常）。\r\n'));
         });
     }
 
@@ -9478,12 +9493,12 @@
         dlg.className = 'ws-proj-dlg';
         var ttl = document.createElement('div');
         ttl.className = 'ws-proj-dlg-t';
-        ttl.textContent = '连接远程主机（SSH）';
+        ttl.textContent = I18N.t('连接远程主机（SSH）');
         dlg.appendChild(ttl);
         var fields = [
-            { key: 'host', label: '主机（IP 或域名）', ph: '如 192.168.1.10', type: 'text' },
-            { key: 'port', label: '端口（默认 22）', ph: '22', type: 'text' },
-            { key: 'user', label: '用户名（可留空）', ph: '如 root', type: 'text' }
+            { key: 'host', label: I18N.t('主机（IP 或域名）'), ph: I18N.t('如 192.168.1.10'), type: 'text' },
+            { key: 'port', label: I18N.t('端口（默认 22）'), ph: '22', type: 'text' },
+            { key: 'user', label: I18N.t('用户名（可留空）'), ph: I18N.t('如 root'), type: 'text' }
         ];
         var inputs = {};
         var bookEl = null;
@@ -9512,11 +9527,11 @@
         var cancel = document.createElement('button');
         cancel.className = 'ws-panel-btn';
         cancel.type = 'button';
-        cancel.textContent = '取消';
+        cancel.textContent = I18N.t('取消');
         var ok = document.createElement('button');
         ok.className = 'ws-panel-btn primary';
         ok.type = 'button';
-        ok.textContent = '连接';
+        ok.textContent = I18N.t('连接');
         btnRow.appendChild(cancel);
         btnRow.appendChild(ok);
         dlg.appendChild(btnRow);
@@ -9544,7 +9559,7 @@
                 var del = document.createElement('span');
                 del.textContent = '✕';
                 del.style.cssText = 'color:#d1242f;cursor:pointer;flex-shrink:0;padding:0 2px;';
-                del.title = '删除此快连';
+                del.title = I18N.t('删除此快连');
                 del.addEventListener('click', function (e) {
                     e.stopPropagation();
                     window.desktop.sshDel({ host: it.host, user: it.user || '', port: it.port || 22 }).then(function () { row.remove(); }).catch(function () {});
@@ -9573,12 +9588,12 @@
             var port = parseInt(inputs.port.value, 10) || 22;
             var user = inputs.user.value.trim();
             if (!host) {
-                errEl.textContent = '主机不能为空';
+                errEl.textContent = I18N.t('主机不能为空');
                 errEl.classList.remove('hidden');
                 return;
             }
             if (inputs.port.value.trim() && (!/^\d+$/.test(inputs.port.value.trim()) || port < 1 || port > 65535)) {
-                errEl.textContent = '端口需为 1-65535 的数字';
+                errEl.textContent = I18N.t('端口需为 1-65535 的数字');
                 errEl.classList.remove('hidden');
                 return;
             }
@@ -9605,13 +9620,13 @@
         agentConsole.root.insertBefore(bodyEl, agentConsole.inputWrap);
         agentConsole.tabs.push(tab);
         agentConsoleSwitchTab(id);
-        agentConsoleTermAppend(tab, '正在连接 ' + label + (port !== 22 ? ':' + port : '') + '…（首次连接自动接受主机指纹；密码/密钥口令在远端提示后输入）\r\n');
+        agentConsoleTermAppend(tab, I18N.t('正在连接 ') + label + (port !== 22 ? ':' + port : '') + I18N.t('…（首次连接自动接受主机指纹；密码/密钥口令在远端提示后输入）\r\n'));
         window.desktop.termOp({ username: IMSocket.getUsername() || '', action: 'ssh', term_id: id, host: host, port: port, user: user }).then(function (res) {
             if (!res || res.ok !== true) {
-                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || 'SSH 连接失败') + '\r\n');
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || I18N.t('SSH 连接失败')) + '\r\n');
             }
         }).catch(function () {
-            agentConsoleTermAppend(tab, '✕ SSH 连接失败（本地桥异常）。\r\n');
+            agentConsoleTermAppend(tab, I18N.t('✕ SSH 连接失败（本地桥异常）。\r\n'));
         });
     }
 
@@ -9661,11 +9676,11 @@
         if (f.type === 'exit') {
             tab.running = false;
             var dur = f.duration_ms || 0;
-            var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+            var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + I18N.t(' 秒') : dur + I18N.t(' 毫秒');
             if (f.ssh) { // SSH 会话退出（exit 命令/连接断开）：区分文案，提示符恢复就绪态
-                agentConsoleTermAppend(tab, 'SSH 连接已关闭' + (f.exit_code ? '（退出码 ' + f.exit_code + '）' : '') + '\r\n');
+                agentConsoleTermAppend(tab, I18N.t('SSH 连接已关闭') + (f.exit_code ? I18N.t('（退出码 ') + f.exit_code + '）' : '') + '\r\n');
             } else {
-                agentConsoleTermAppend(tab, '进程已结束，退出码 ' + (f.exit_code || 0) + '，耗时 ' + durText + (f.over ? '（输出超限已截断）' : '') + '\r\n');
+                agentConsoleTermAppend(tab, I18N.t('进程已结束，退出码 ') + (f.exit_code || 0) + I18N.t('，耗时 ') + durText + (f.over ? I18N.t('（输出超限已截断）') : '') + '\r\n');
             }
             tab.cwd = String(f.cwd || tab.cwd || '');
             if (agentConsole.active === tab.id) {
@@ -9698,7 +9713,7 @@
         var cmd = agentConsole.inputEl.value.replace(/\s+$/, '');
         if (!cmd || tab.running) return;
         if (!(window.desktop && window.desktop.termOp)) {
-            agentConsoleTermAppend(tab, '✕ 本地终端仅 PC 客户端支持。\r\n');
+            agentConsoleTermAppend(tab, I18N.t('✕ 本地终端仅 PC 客户端支持。\r\n'));
             return;
         }
         tab.hist.push(cmd);
@@ -9711,7 +9726,7 @@
             if (res && res.ok === false) { // 执行器拒绝（上一条未结束/会话失效）
                 tab.running = false;
                 agentConsole.stopBtn.disabled = true;
-                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || '命令被拒绝') + '\r\n');
+                agentConsoleTermAppend(tab, '✕ ' + ((res && res.error) || I18N.t('命令被拒绝')) + '\r\n');
             } else if (res && (res.sync || res.cwd)) { // cd/切盘等本地记账命令：无 exit 帧，这里同步解除运行态并更新提示符
                 // 兼容判断：新执行器返回 sync 标记；旧执行器（未重启主进程）cd 也只带 cwd 回来——
                 // 两条路径都无 exit 帧，若不在此解除运行态，tab.running 永久卡死后续命令全部被吞
@@ -9725,7 +9740,7 @@
         }).catch(function () {
             tab.running = false;
             agentConsole.stopBtn.disabled = true;
-            agentConsoleTermAppend(tab, '✕ 命令执行异常（本地桥）。\r\n');
+            agentConsoleTermAppend(tab, I18N.t('✕ 命令执行异常（本地桥）。\r\n'));
         });
     }
 
@@ -9737,7 +9752,7 @@
         // "⋯"菜单里的控制台项同步：开=高亮"收起控制台"，关="打开控制台"（图标不动，仅文字切换）
         if (wsPanel.conItem) {
             var conTxt = wsPanel.conItem.querySelector('.ws-more-txt');
-            if (conTxt) conTxt.textContent = open ? '收起控制台' : '打开控制台';
+            if (conTxt) conTxt.textContent = open ? I18N.t('收起控制台') : I18N.t('打开控制台');
             wsPanel.conItem.classList.toggle('active', open);
         }
         if (open) {
@@ -9788,7 +9803,7 @@
         }
         if (ev.over && !agentConsole.overTip) {
             agentConsole.overTip = true;
-            agentConsole.body.appendChild(document.createTextNode('\n…（输出已达实时展示上限，后续增量不再下发）\n'));
+            agentConsole.body.appendChild(document.createTextNode(I18N.t('\n…（输出已达实时展示上限，后续增量不再下发）\n')));
         }
         agentConsoleShowHint();
         if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
@@ -9798,11 +9813,11 @@
     function agentConsoleExit(st, ev) {
         if (!agentConsole.root || !agentConsole.taskId || agentConsole.taskId !== st.taskId) return;
         var dur = ev.duration_ms || 0;
-        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + ' 秒' : dur + ' 毫秒';
+        var durText = dur >= 1000 ? (dur / 1000).toFixed(1) + I18N.t(' 秒') : dur + I18N.t(' 毫秒');
         var line = document.createElement('div');
         line.className = 'agent-console-line-exit' + (ev.exit_code ? ' fail' : '');
-        line.textContent = '— 进程已退出 · 退出码 ' + (ev.exit_code || 0) + ' · 耗时 ' + durText +
-            (ev.total_bytes ? ' · 输出 ' + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
+        line.textContent = I18N.t('— 进程已退出 · 退出码 ') + (ev.exit_code || 0) + I18N.t(' · 耗时 ') + durText +
+            (ev.total_bytes ? I18N.t(' · 输出 ') + Math.max(1, Math.round(ev.total_bytes / 102.4) / 10) + ' KB' : '');
         agentConsole.body.appendChild(line);
         if (agentConsole.stick) agentConsole.body.scrollTop = agentConsole.body.scrollHeight;
     }
@@ -9993,14 +10008,14 @@
         head.className = 'ws-panel-head';
         var title = document.createElement('span');
         title.className = 'ws-panel-title';
-        title.textContent = '工作区';
+        title.textContent = I18N.t('工作区');
         wsPanel.rootEl = document.createElement('span');
         wsPanel.rootEl.className = 'ws-panel-root';
         var refreshBtn = document.createElement('button');
         refreshBtn.className = 'ws-panel-btn ws-refresh-btn';
         refreshBtn.type = 'button';
         refreshBtn.innerHTML = wsGitIco('refresh'); // TRAE CN 同款 codicon 刷新图标（与源代码管理头部统一）
-        refreshBtn.title = '重新加载文件树';
+        refreshBtn.title = I18N.t('重新加载文件树');
         refreshBtn.addEventListener('click', function () { wsPanelRefreshTree(); });
         // 头部"更多操作"（⋯）下拉菜单（阶段七十七，自绘浮层不用系统弹窗）：低频操作统一收纳，
         // 以后新按钮直接往 wsMoreItems 里加一项即可，不再撑爆头部
@@ -10010,7 +10025,7 @@
         moreBtn.className = 'ws-panel-btn ws-more-btn';
         moreBtn.type = 'button';
         moreBtn.textContent = '···';
-        moreBtn.title = '更多操作';
+        moreBtn.title = I18N.t('更多操作');
         var menu = document.createElement('div');
         menu.className = 'ws-more-menu hidden';
         var conItem = document.createElement('div');
@@ -10021,7 +10036,7 @@
         conIco.textContent = '▤';
         var conTxt = document.createElement('span');
         conTxt.className = 'ws-more-txt';
-        conTxt.textContent = '打开控制台';
+        conTxt.textContent = I18N.t('打开控制台');
         conItem.appendChild(conIco);
         conItem.appendChild(conTxt);
         conItem.addEventListener('click', function () {
@@ -10051,7 +10066,7 @@
         projBtn.className = 'ws-panel-btn ws-proj-btn';
         projBtn.type = 'button';
         projBtn.textContent = '▾';
-        projBtn.title = '切换项目 / 克隆 Git 仓库';
+        projBtn.title = I18N.t('切换项目 / 克隆 Git 仓库');
         projBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             wsPanelProjMenu(projBtn);
@@ -10071,10 +10086,10 @@
         nav.className = 'ws-nav-tabs';
         var navFile = document.createElement('div');
         navFile.className = 'ws-nav-tab active';
-        navFile.textContent = '文件';
+        navFile.textContent = I18N.t('文件');
         var navGit = document.createElement('div');
         navGit.className = 'ws-nav-tab';
-        navGit.textContent = '源代码管理';
+        navGit.textContent = I18N.t('源代码管理');
         nav.appendChild(navFile);
         nav.appendChild(navGit);
         navFile.addEventListener('click', function () { wsPanelGitSetMode(false); });
@@ -10102,7 +10117,7 @@
         // 左分隔条：拖拽调整树宽（贴树分栏右缘的悬浮热区，hover 显主题色竖线）
         var splitL = document.createElement('div');
         splitL.className = 'ws-splitter';
-        splitL.title = '拖拽调整宽度';
+        splitL.title = I18N.t('拖拽调整宽度');
         colTree.appendChild(splitL);
         // 中分栏：文件预览/编辑（Trae CN 同款标签页 + 内容区，多文件并存切换）
         wsPanel.viewEl = document.createElement('div');
@@ -10119,23 +10134,23 @@
         wsPanel.btnEdit = document.createElement('button');
         wsPanel.btnEdit.className = 'ws-panel-btn';
         wsPanel.btnEdit.type = 'button';
-        wsPanel.btnEdit.textContent = '编辑';
+        wsPanel.btnEdit.textContent = I18N.t('编辑');
         wsPanel.btnEdit.addEventListener('click', wsPanelStartEdit);
         wsPanel.btnSave = document.createElement('button');
         wsPanel.btnSave.className = 'ws-panel-btn primary';
         wsPanel.btnSave.type = 'button';
-        wsPanel.btnSave.textContent = '保存';
+        wsPanel.btnSave.textContent = I18N.t('保存');
         wsPanel.btnSave.addEventListener('click', wsPanelSave);
         wsPanel.btnCancel = document.createElement('button');
         wsPanel.btnCancel.className = 'ws-panel-btn';
         wsPanel.btnCancel.type = 'button';
-        wsPanel.btnCancel.textContent = '取消';
+        wsPanel.btnCancel.textContent = I18N.t('取消');
         wsPanel.btnCancel.addEventListener('click', function () { if (wsPanel.activeTab) wsPanelOpen(wsPanel.activeTab, true); });
         var btnClose = document.createElement('button');
         btnClose.className = 'ws-panel-btn';
         btnClose.type = 'button';
         btnClose.textContent = '×';
-        btnClose.title = '关闭当前标签';
+        btnClose.title = I18N.t('关闭当前标签');
         btnClose.addEventListener('click', function () { if (wsPanel.activeTab) wsPanelCloseTab(wsPanel.activeTab); });
         viewHead.appendChild(wsPanel.tabBarEl);
         viewHead.appendChild(wsPanel.btnEdit);
@@ -10153,7 +10168,7 @@
         // 右分隔条：拖拽调整预览宽（贴中栏右缘，罩全栏高度；中栏显隐由 wsPanelSyncViewCol 统一同步）
         var splitR = document.createElement('div');
         splitR.className = 'ws-splitter';
-        splitR.title = '拖拽调整宽度';
+        splitR.title = I18N.t('拖拽调整宽度');
         wsPanel.colView.appendChild(splitR);
         wsPanel.colView.appendChild(wsPanel.viewEl);
         // 阶段七十六：文件树与预览区挂自绘悬浮滑块（全局系统滚动条已禁用，动态容器须显式注册）
@@ -10205,7 +10220,7 @@
             if (!p) return;
             clearTimeout(p.timer);
             delete wsPanel.pending[ev.req_id];
-            if (ev.ok) p.resolve(ev); else p.reject(new Error(ev.error || '操作失败'));
+            if (ev.ok) p.resolve(ev); else p.reject(new Error(ev.error || I18N.t('操作失败')));
         });
         return true;
     }
@@ -10297,7 +10312,7 @@
         } else {
             wsPanel.rootEl.textContent = wsPanel.root;
         }
-        wsPanel.rootEl.title = wsPanel.proj ? ('当前项目：' + wsPanel.proj) : wsPanel.root;
+        wsPanel.rootEl.title = wsPanel.proj ? (I18N.t('当前项目：') + wsPanel.proj) : wsPanel.root;
     }
 
     // 切换当前项目：proj_open 落库 → 清空所有预览标签（旧项目路径失效）→ 重建树 → git 面板刷新
@@ -10315,7 +10330,7 @@
             wsPanelRefreshTree();
             if (wsPanel.git.mode) wsPanelGitRefresh();
         }).catch(function (err) {
-            showToast('切换失败：' + (err && err.message || err));
+            showToast(I18N.t('切换失败：') + (err && err.message || err));
         });
     }
 
@@ -10345,7 +10360,7 @@
         ci.textContent = '⤓';
         var ct = document.createElement('span');
         ct.className = 'ws-more-txt';
-        ct.textContent = '克隆 Git 仓库';
+        ct.textContent = I18N.t('克隆 Git 仓库');
         cloneItem.appendChild(ci);
         cloneItem.appendChild(ct);
         cloneItem.addEventListener('click', function () {
@@ -10362,7 +10377,7 @@
             ri.textContent = '⌂';
             var rt = document.createElement('span');
             rt.className = 'ws-more-txt';
-            rt.textContent = '工作区根';
+            rt.textContent = I18N.t('工作区根');
             rootItem.appendChild(ri);
             rootItem.appendChild(rt);
             rootItem.addEventListener('click', function () {
@@ -10374,11 +10389,11 @@
         // 项目列表标题（有项目才显示）
         var sec = document.createElement('div');
         sec.className = 'ws-proj-sec';
-        sec.textContent = '项目';
+        sec.textContent = I18N.t('项目');
         menu.appendChild(sec);
         var listWrap = document.createElement('div');
         listWrap.className = 'ws-proj-list';
-        listWrap.textContent = '加载中…';
+        listWrap.textContent = I18N.t('加载中…');
         menu.appendChild(listWrap);
         document.body.appendChild(menu);
         // 定位：.ws-more-menu 的 absolute top:calc(100%+4px) 只适配 .ws-more 内嵌锚点；
@@ -10407,7 +10422,7 @@
             if (!list.length) {
                 var empty = document.createElement('div');
                 empty.className = 'ws-proj-empty';
-                empty.textContent = '暂无项目，克隆一个仓库试试';
+                empty.textContent = I18N.t('暂无项目，克隆一个仓库试试');
                 listWrap.appendChild(empty);
                 return;
             }
@@ -10441,7 +10456,7 @@
                 listWrap.textContent = '';
                 var err = document.createElement('div');
                 err.className = 'ws-proj-empty';
-                err.textContent = '项目列表加载失败';
+                err.textContent = I18N.t('项目列表加载失败');
                 listWrap.appendChild(err);
             }
         });
@@ -10460,12 +10475,12 @@
         dlg.className = 'ws-proj-dlg';
         var ttl = document.createElement('div');
         ttl.className = 'ws-proj-dlg-t';
-        ttl.textContent = '克隆 Git 仓库';
+        ttl.textContent = I18N.t('克隆 Git 仓库');
         dlg.appendChild(ttl);
         var fields = [
-            { key: 'url', label: '仓库地址', ph: 'https://github.com/用户名/仓库名.git', type: 'text' },
-            { key: 'name', label: '目录名（留空自动取地址尾段）', ph: '如 my-repo', type: 'text' },
-            { key: 'token', label: '访问 Token（私有仓库选填，不落盘）', ph: 'ghp_xxxxxxxx', type: 'password' }
+            { key: 'url', label: I18N.t('仓库地址'), ph: I18N.t('https://github.com/用户名/仓库名.git'), type: 'text' },
+            { key: 'name', label: I18N.t('目录名（留空自动取地址尾段）'), ph: I18N.t('如 my-repo'), type: 'text' },
+            { key: 'token', label: I18N.t('访问 Token（私有仓库选填，不落盘）'), ph: 'ghp_xxxxxxxx', type: 'password' }
         ];
         var inputs = {};
         var recentsEl = null;
@@ -10497,7 +10512,7 @@
             rememberChk.type = 'checkbox';
             rememberChk.checked = true;
             var rememberTxt = document.createElement('span');
-            rememberTxt.textContent = '记住此站点的 Token（本机加密保存）';
+            rememberTxt.textContent = I18N.t('记住此站点的 Token（本机加密保存）');
             rememberRow.appendChild(rememberChk);
             rememberRow.appendChild(rememberTxt);
             dlg.appendChild(rememberRow);
@@ -10523,15 +10538,15 @@
         var cancel = document.createElement('button');
         cancel.className = 'ws-panel-btn';
         cancel.type = 'button';
-        cancel.textContent = '取消';
+        cancel.textContent = I18N.t('取消');
         var ok = document.createElement('button');
         ok.className = 'ws-panel-btn primary';
         ok.type = 'button';
-        ok.textContent = '克隆';
+        ok.textContent = I18N.t('克隆');
         var stopBtn = document.createElement('button');
         stopBtn.className = 'ws-panel-btn danger';
         stopBtn.type = 'button';
-        stopBtn.textContent = '取消克隆';
+        stopBtn.textContent = I18N.t('取消克隆');
         stopBtn.style.display = 'none';
         btnRow.appendChild(cancel);
         btnRow.appendChild(stopBtn);
@@ -10569,12 +10584,12 @@
             var extra = [];
             if (ev.speed) extra.push(ev.speed);
             var sentTxt = fmtBytes(ev.sent);
-            if (sentTxt) extra.push('已接收 ' + sentTxt);
+            if (sentTxt) extra.push(I18N.t('已接收 ') + sentTxt);
             stageEl.innerHTML = '';
             var b = document.createElement('b');
             b.textContent = (ev.pct || 0) + '%';
             stageEl.appendChild(b);
-            stageEl.appendChild(document.createTextNode(' ' + (ev.stage || '克隆中') + (extra.length ? ' · ' + extra.join(' · ') : '')));
+            stageEl.appendChild(document.createTextNode(' ' + (ev.stage || I18N.t('克隆中')) + (extra.length ? ' · ' + extra.join(' · ') : '')));
         };
 
         // 最近克隆列表渲染（拉取失败静默——列表属增强体验）
@@ -10628,47 +10643,47 @@
             canceled = true;
             wsPanelReq('proj_clone_cancel', '', JSON.stringify({ target: cloneReqId }), 10000).catch(function () {});
             close();
-            showToast('正在取消克隆…');
+            showToast(I18N.t('正在取消克隆…'));
         });
         ok.addEventListener('click', function () {
             var url = inputs.url.value.trim();
             var name = inputs.name.value.trim();
             var token = inputs.token.value.trim();
             if (!/^(https?:\/\/|git@|ssh:\/\/)[^\s'"`]+$/.test(url)) {
-                errEl.textContent = '仓库地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符';
+                errEl.textContent = I18N.t('仓库地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符');
                 errEl.classList.remove('hidden');
                 return;
             }
             if (name && (name.length > 100 || /[\\/]/.test(name) || name.indexOf('..') >= 0 || name.indexOf(':') >= 0)) {
-                errEl.textContent = '目录名不合法（不含路径分隔符与 ..）';
+                errEl.textContent = I18N.t('目录名不合法（不含路径分隔符与 ..）');
                 errEl.classList.remove('hidden');
                 return;
             }
             errEl.classList.add('hidden');
             ok.disabled = true;
-            ok.textContent = '克隆中…';
+            ok.textContent = I18N.t('克隆中…');
             cancel.style.display = 'none';
             stopBtn.style.display = '';
             prog.classList.add('on');
             fill.style.width = '2%';
             stageEl.innerHTML = '';
-            stageEl.appendChild(document.createTextNode('正在连接仓库…'));
+            stageEl.appendChild(document.createTextNode(I18N.t('正在连接仓库…')));
             var req = wsPanelReq('proj_clone', '', JSON.stringify({ url: url, name: name, token: token }), 620000);
             cloneReqId = req.reqId;
             req.then(function (res) {
-                if (!res.ok) throw new Error(res.error || '克隆失败');
+                if (!res.ok) throw new Error(res.error || I18N.t('克隆失败'));
                 if (isPC && rememberChk) {
                     window.desktop.tokenSet(hostOf(url), rememberChk.checked ? token : '').catch(function () {});
                 }
                 close();
-                showToast('克隆完成');
+                showToast(I18N.t('克隆完成'));
                 var newName = name || url.slice(url.lastIndexOf('/') + 1).replace(/\.git$/, '');
                 wsPanelProjSwitch(newName); // 克隆成功自动切换到新项目（TRAE 同款体验）
             }).catch(function (err) {
                 var msg = err && err.message || String(err);
                 close();
-                if (canceled || msg === '已取消') { showToast('克隆已取消'); return; }
-                showToast('克隆失败：' + msg.split('\n')[0].slice(0, 80));
+                if (canceled || msg === '已取消') { showToast(I18N.t('克隆已取消')); return; }
+                showToast(I18N.t('克隆失败：') + msg.split('\n')[0].slice(0, 80));
                 // 复开弹窗回填原值与错误，便于修正重试
                 wsPanelProjCloneDlg();
                 var dlg2 = document.getElementById('ws-proj-dlg');
@@ -10690,14 +10705,14 @@
     // 面板请求归口（tree/read/save/git…），req_id 归属 + 超时（默认 20 秒；git push/pull 网络操作传更长）。
     // reqId 挂在返回 Promise 上（p.reqId），克隆取消按钮等场景需拿到 target
     function wsPanelReq(op, path, content, timeoutMs) {
-        if (!wsPanelEnsure()) return Promise.reject(new Error('面板未就绪'));
+        if (!wsPanelEnsure()) return Promise.reject(new Error(I18N.t('面板未就绪')));
         var reqId = 'fp' + (++wsPanel.reqSeq) + '_' + Date.now();
         var p = new Promise(function (resolve, reject) {
             var rec = {
                 resolve: resolve, reject: reject,
                 timer: setTimeout(function () {
                     delete wsPanel.pending[reqId];
-                    reject(new Error('请求超时'));
+                    reject(new Error(I18N.t('请求超时')));
                 }, timeoutMs || 20000)
             };
             wsPanel.pending[reqId] = rec;
@@ -10710,7 +10725,7 @@
             if (!okSend) {
                 clearTimeout(rec.timer);
                 delete wsPanel.pending[reqId];
-                reject(new Error('连接不可用'));
+                reject(new Error(I18N.t('连接不可用')));
             }
         });
         p.reqId = reqId;
@@ -10746,9 +10761,9 @@
         }
         var isNet = payload.sub === 'push' || payload.sub === 'pushu' || payload.sub === 'pull';
         return wsPanelReq('git', '', JSON.stringify(payload), timeoutMs || (isNet ? 125000 : 25000)).then(function (res) {
-            if (!res.ok) throw new Error(res.error || 'git 操作失败');
+            if (!res.ok) throw new Error(res.error || I18N.t('git 操作失败'));
             var data;
-            try { data = JSON.parse(res.content || '{}'); } catch (e) { throw new Error('git 响应解析失败'); }
+            try { data = JSON.parse(res.content || '{}'); } catch (e) { throw new Error(I18N.t('git 响应解析失败')); }
             if (data.error) throw new Error(data.error);
             return data;
         });
@@ -10843,7 +10858,7 @@
             // git status 把整个未跟踪目录折叠为 "dir/"——展开成目录内的具体文件后再渲染
             return wsPanelGitExpandUntracked();
         }).catch(function (err) {
-            showToast('源代码管理：' + (err && err.message || err));
+            showToast(I18N.t('源代码管理：') + (err && err.message || err));
         }).then(function () {
             g.busy = false;
             wsPanelGitRender();
@@ -10853,10 +10868,10 @@
     // 关联远程仓库弹窗：自绘输入框收集远程地址；URL 非法时 toast 提示并携带上次输入重弹。
     // prefill 为输入框预填值（修改远程地址时带入当前地址，选中即可改）
     function wsPromptRemoteUrl(onOk, lastUrl, prefill) {
-        showPrompt('关联远程仓库', lastUrl || 'https://github.com/用户名/仓库名.git', function (url) {
+        showPrompt(I18N.t('关联远程仓库'), lastUrl || I18N.t('https://github.com/用户名/仓库名.git'), function (url) {
             // 除协议与无空白外，额外拒绝反引号/引号（从文档示例复制时易夹带的脏字符，会导致 remote URL 存脏数据）
             if (!/^(https?:\/\/|git@|ssh:\/\/)[^\s'"`]+$/.test(url)) {
-                showToast('地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符');
+                showToast(I18N.t('地址需以 https:// 、git@ 或 ssh:// 开头，不含空格与引号类字符'));
                 wsPromptRemoteUrl(onOk, null, url); // 非法重弹：带上刚输入的值便于就地修正
                 return;
             }
@@ -10868,7 +10883,7 @@
     function wsPanelGitRemoteDlg() {
         var edit = function (cur) {
             wsPromptRemoteUrl(function (url) {
-                wsPanelGitAct({ sub: 'remoteseturl', target: url }, '远程地址已更新');
+                wsPanelGitAct({ sub: 'remoteseturl', target: url }, I18N.t('远程地址已更新'));
             }, null, cur);
         };
         wsPanelGitReq({ sub: 'remoteurl' }).then(function (d) {
@@ -10898,10 +10913,10 @@
             // 仓库未关联远程地址：弹自绘输入框收集 URL → remoteadd → pushu 首推（面板内闭环，免去终端命令）
             if ((payload.sub === 'push' || payload.sub === 'pushu') && /No configured push destination/i.test(msg)) {
                 wsPanel.git.busy = false;
-                if (wsPanel.git.noCommits) { showToast('请先提交至少一次，再关联远程推送'); return; }
+                if (wsPanel.git.noCommits) { showToast(I18N.t('请先提交至少一次，再关联远程推送')); return; }
                 wsPromptRemoteUrl(function (url) {
                     wsPanelGitAct({ sub: 'remoteadd', target: url }).then(function () {
-                        return wsPanelGitAct({ sub: 'pushu', branch: wsPanel.git.branch }, doneTip || '远程已关联，推送成功');
+                        return wsPanelGitAct({ sub: 'pushu', branch: wsPanel.git.branch }, doneTip || I18N.t('远程已关联，推送成功'));
                     }).catch(function () {}); // 失败细节已由内层 toast 提示
                 });
                 return;
@@ -10911,7 +10926,7 @@
                 wsPanel.git.busy = false; // 先释放，递归调用才能过 busy guard（同 no-upstream/无 remote 分支）
                 return wsPanelGitAct({ sub: 'remoteseturl', target: payload.target }, doneTip);
             }
-            showToast('操作失败：' + msg);
+            showToast(I18N.t('操作失败：') + msg);
         }).then(function () {
             wsGitProgress(false); // 进度条随操作完结隐藏（成功/失败同口径）
             wsPanel.git.busy = false;
@@ -10961,7 +10976,7 @@
         nm.className = 'ws-git-name';
         var li = clean.lastIndexOf('/');
         nm.textContent = (isDir ? '📁 ' : '') + (li >= 0 ? clean.slice(li + 1) : clean);
-        nm.title = isDir ? p + '（未跟踪目录）' : p;
+        nm.title = isDir ? p + I18N.t('（未跟踪目录）') : p;
         var dirPart = document.createElement('span');
         dirPart.className = 'ws-git-dir';
         dirPart.textContent = li >= 0 ? clean.slice(0, li + 1) : '';
@@ -10974,7 +10989,7 @@
             var un = document.createElement('span');
             un.className = 'ws-git-act';
             un.textContent = '−';
-            un.title = '取消暂存';
+            un.title = I18N.t('取消暂存');
             un.addEventListener('click', function (ev) { ev.stopPropagation(); wsPanelGitAct({ sub: 'unstage', paths: [p] }); });
             acts.appendChild(un);
             // 已暂存变更的放弃：从 HEAD 恢复（staged=discard 语义，checkout HEAD --）。
@@ -10983,12 +10998,12 @@
                 var sdis = document.createElement('span');
                 sdis.className = 'ws-git-act danger';
                 sdis.textContent = '↩';
-                sdis.title = '放弃已暂存的修改（不可恢复）';
+                sdis.title = I18N.t('放弃已暂存的修改（不可恢复）');
                 sdis.addEventListener('click', function (ev) {
                     ev.stopPropagation();
-                    showConfirm('放弃修改', '确定放弃「' + p + '」的暂存修改吗？将恢复为上次提交的内容，不可恢复。', function () {
+                    showConfirm(I18N.t('放弃修改'), I18N.t('确定放弃「') + p + I18N.t('」的暂存修改吗？将恢复为上次提交的内容，不可恢复。'), function () {
                         wsPanelGitAct({ sub: 'discard', paths: [p], staged: true });
-                    }, '放弃');
+                    }, I18N.t('放弃'));
                 });
                 acts.appendChild(sdis);
             }
@@ -10996,19 +11011,19 @@
             var ad = document.createElement('span');
             ad.className = 'ws-git-act';
             ad.textContent = '+';
-            ad.title = '暂存';
+            ad.title = I18N.t('暂存');
             ad.addEventListener('click', function (ev) { ev.stopPropagation(); wsPanelGitAct({ sub: 'add', paths: [p] }); });
             acts.appendChild(ad);
             if (e.x !== '?' && e.y !== '?') { // 未跟踪文件无"放弃"概念（放弃=删除，走文件树右键）
                 var dis = document.createElement('span');
                 dis.className = 'ws-git-act danger';
                 dis.textContent = '↩';
-                dis.title = '放弃修改（不可恢复）';
+                dis.title = I18N.t('放弃修改（不可恢复）');
                 dis.addEventListener('click', function (ev) {
                     ev.stopPropagation();
-                    showConfirm('放弃修改', '确定放弃「' + p + '」的全部修改吗？将恢复为上次提交的内容，不可恢复。', function () {
+                    showConfirm(I18N.t('放弃修改'), I18N.t('确定放弃「') + p + I18N.t('」的全部修改吗？将恢复为上次提交的内容，不可恢复。'), function () {
                         wsPanelGitAct({ sub: 'discard', paths: [p] });
-                    }, '放弃');
+                    }, I18N.t('放弃'));
                 });
                 acts.appendChild(dis);
             }
@@ -11030,7 +11045,7 @@
         if (!list.length) {
             var empty = document.createElement('div');
             empty.className = 'ws-git-empty';
-            empty.textContent = '（无）';
+            empty.textContent = I18N.t('（无）');
             sec.appendChild(empty);
             return sec;
         }
@@ -11047,11 +11062,11 @@
             ta.style.opacity = '0';
             document.body.appendChild(ta);
             ta.select();
-            try { document.execCommand('copy'); showToast('已复制'); } catch (e) { showToast('复制失败'); }
+            try { document.execCommand('copy'); showToast(I18N.t('已复制')); } catch (e) { showToast(I18N.t('复制失败')); }
             document.body.removeChild(ta);
         }
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(t).then(function () { showToast('已复制'); }, fallback);
+            navigator.clipboard.writeText(t).then(function () { showToast(I18N.t('已复制')); }, fallback);
         } else fallback();
     }
 
@@ -11106,29 +11121,29 @@
                 ln.appendChild(cd);
                 var cp = document.createElement('span');
                 cp.className = 'ws-git-help-copy';
-                cp.textContent = '复制';
-                cp.title = '复制命令';
+                cp.textContent = I18N.t('复制');
+                cp.title = I18N.t('复制命令');
                 cp.addEventListener('click', function () { wsGitCopyText(cmd); });
                 ln.appendChild(cp);
             }
             s.appendChild(ln);
             return ln;
         }
-        var s1 = sec('① 配置 git 身份（首次提交前，全局一次）');
-        line(s1, '', 'git config --global user.name "你的名字"');
-        line(s1, '', 'git config --global user.email "你的邮箱@example.com"');
-        var s2 = sec('② 连接远程仓库（三选一）');
-        line(s2, '推送到新建空仓库（先去平台建仓库拿地址）：', '');
-        line(s2, '', 'git remote add origin https://github.com/用户名/仓库名.git');
-        line(s2, '然后在本面板：暂存 → 提交 → ⬆ 推送（自动建立跟踪）', '');
-        line(s2, '拉取远程已有项目（克隆到工作区子目录）：', '');
-        line(s2, '', 'git clone https://github.com/用户名/仓库名.git');
-        line(s2, '工作区本就是 git 仓库（含 .git）：无需配置，面板自动识别', '');
-        var s3 = sec('③ 推送/拉取鉴权');
-        line(s3, 'HTTPS：推送时密码填平台生成的 Token（GitHub/Gitee → 设置 → 开发者设置 → 令牌），Windows 会记住凭据', '');
-        line(s3, 'SSH：ssh-keygen 生成密钥，公钥贴到平台，remote 换 git@github.com:用户名/仓库名.git', '');
-        var s4 = sec('提示');
-        line(s4, '以上命令在「控制台」终端执行（当前目录即工作区根）。', '');
+        var s1 = sec(I18N.t('① 配置 git 身份（首次提交前，全局一次）'));
+        line(s1, '', I18N.t('git config --global user.name "你的名字"'));
+        line(s1, '', I18N.t('git config --global user.email "你的邮箱@example.com"'));
+        var s2 = sec(I18N.t('② 连接远程仓库（三选一）'));
+        line(s2, I18N.t('推送到新建空仓库（先去平台建仓库拿地址）：'), '');
+        line(s2, '', I18N.t('git remote add origin https://github.com/用户名/仓库名.git'));
+        line(s2, I18N.t('然后在本面板：暂存 → 提交 → ⬆ 推送（自动建立跟踪）'), '');
+        line(s2, I18N.t('拉取远程已有项目（克隆到工作区子目录）：'), '');
+        line(s2, '', I18N.t('git clone https://github.com/用户名/仓库名.git'));
+        line(s2, I18N.t('工作区本就是 git 仓库（含 .git）：无需配置，面板自动识别'), '');
+        var s3 = sec(I18N.t('③ 推送/拉取鉴权'));
+        line(s3, I18N.t('HTTPS：推送时密码填平台生成的 Token（GitHub/Gitee → 设置 → 开发者设置 → 令牌），Windows 会记住凭据'), '');
+        line(s3, I18N.t('SSH：ssh-keygen 生成密钥，公钥贴到平台，remote 换 git@github.com:用户名/仓库名.git'), '');
+        var s4 = sec(I18N.t('提示'));
+        line(s4, I18N.t('以上命令在「控制台」终端执行（当前目录即工作区根）。'), '');
         el.appendChild(pop);
         if (window._osbInit) window._osbInit(pop); // 全局滚动条已禁用，超长气泡内容挂自绘滑块
         setTimeout(function () {
@@ -11163,26 +11178,26 @@
         head.className = 'ws-git-head';
         var ttl = document.createElement('span');
         ttl.className = 'ws-git-title';
-        ttl.textContent = '源代码管理';
+        ttl.textContent = I18N.t('源代码管理');
         head.appendChild(ttl);
         if (g.repo && g.loaded) {
             var pullB = document.createElement('button');
             pullB.className = 'ws-panel-btn';
             pullB.type = 'button';
             pullB.innerHTML = wsGitIco('repo-pull'); // TRAE CN 同款 codicon 拉取图标
-            pullB.title = '拉取（pull）';
-            pullB.addEventListener('click', function () { wsPanelGitAct({ sub: 'pull' }, '已拉取'); });
+            pullB.title = I18N.t('拉取（pull）');
+            pullB.addEventListener('click', function () { wsPanelGitAct({ sub: 'pull' }, I18N.t('已拉取')); });
             var pushB = document.createElement('button');
             pushB.className = 'ws-panel-btn';
             pushB.type = 'button';
             pushB.innerHTML = wsGitIco('repo-push'); // TRAE CN 同款 codicon 推送图标
-            pushB.title = '推送（push）';
-            pushB.addEventListener('click', function () { wsPanelGitAct({ sub: 'push' }, '已推送'); });
+            pushB.title = I18N.t('推送（push）');
+            pushB.addEventListener('click', function () { wsPanelGitAct({ sub: 'push' }, I18N.t('已推送')); });
             var rmB = document.createElement('button');
             rmB.className = 'ws-panel-btn';
             rmB.type = 'button';
             rmB.innerHTML = wsGitIco('arrow-swap'); // TRAE CN 同款 codicon ⇄ 交换箭头（上→下←，与拉取/推送同粗细）
-            rmB.title = '远程仓库地址（查看/修改）';
+            rmB.title = I18N.t('远程仓库地址（查看/修改）');
             rmB.addEventListener('click', wsPanelGitRemoteDlg);
             head.appendChild(pullB);
             head.appendChild(pushB);
@@ -11192,14 +11207,14 @@
         helpB.className = 'ws-panel-btn ws-git-help-btn';
         helpB.type = 'button';
         helpB.innerHTML = wsGitIco('question'); // 自绘裸「?」矢量图标（与其它按钮同粗细，圆点小尺寸下清晰）
-        helpB.title = '配置帮助（身份 / 远程仓库 / 鉴权）';
+        helpB.title = I18N.t('配置帮助（身份 / 远程仓库 / 鉴权）');
         helpB.addEventListener('click', function () { wsPanelGitToggleHelp(); });
         head.appendChild(helpB);
         var refB = document.createElement('button');
         refB.className = 'ws-panel-btn ws-refresh-btn';
         refB.type = 'button';
         refB.innerHTML = wsGitIco('refresh'); // TRAE CN 同款 codicon 刷新图标
-        refB.title = '刷新状态';
+        refB.title = I18N.t('刷新状态');
         refB.addEventListener('click', function () { wsPanelGitRefresh(); });
         head.appendChild(refB);
         el.appendChild(head);
@@ -11211,13 +11226,13 @@
         if (!g.repo) {
             var hint = document.createElement('div');
             hint.className = 'ws-git-norepo';
-            hint.textContent = '当前工作区还不是 Git 仓库。';
+            hint.textContent = I18N.t('当前工作区还不是 Git 仓库。');
             var initB = document.createElement('button');
             initB.className = 'ws-git-init';
             initB.type = 'button';
-            initB.textContent = '初始化仓库';
+            initB.textContent = I18N.t('初始化仓库');
             initB.addEventListener('click', function () {
-                wsPanelGitAct({ sub: 'init' }, '已初始化 Git 仓库');
+                wsPanelGitAct({ sub: 'init' }, I18N.t('已初始化 Git 仓库'));
             });
             el.appendChild(hint);
             el.appendChild(initB);
@@ -11226,7 +11241,7 @@
         if (!g.loaded) {
             var loading = document.createElement('div');
             loading.className = 'ws-panel-hint';
-            loading.textContent = '加载中…';
+            loading.textContent = I18N.t('加载中…');
             el.appendChild(loading);
             return;
         }
@@ -11235,14 +11250,14 @@
         br.className = 'ws-git-branch';
         var brName = document.createElement('span');
         brName.className = 'ws-git-branch-name';
-        brName.textContent = '⎇ ' + (g.branch || '(无分支)');
+        brName.textContent = '⎇ ' + (g.branch || I18N.t('(无分支)'));
         if (g.upstream) brName.title = g.branch + ' → ' + g.upstream;
         br.appendChild(brName);
         if (g.ahead > 0 || g.behind > 0) {
             var ab = document.createElement('span');
             ab.className = 'ws-git-ab';
             ab.textContent = (g.ahead ? '↑' + g.ahead : '') + (g.behind ? ' ↓' + g.behind : '');
-            ab.title = '领先 ' + g.ahead + ' 个提交，落后 ' + g.behind + ' 个提交';
+            ab.title = I18N.t('领先 ') + g.ahead + I18N.t(' 个提交，落后 ') + g.behind + I18N.t(' 个提交');
             br.appendChild(ab);
         }
         el.appendChild(br);
@@ -11250,7 +11265,7 @@
         if (g.noCommits) {
             var nc = document.createElement('div');
             nc.className = 'ws-git-nocommits';
-            nc.textContent = '尚无任何提交——完成首次「提交」后，分支 ' + (g.branch || 'master') + ' 即创建。';
+            nc.textContent = I18N.t('尚无任何提交——完成首次「提交」后，分支 ') + (g.branch || 'master') + I18N.t(' 即创建。');
             el.appendChild(nc);
         }
         // 提交框（Trae CN 同款单行紧凑框）：✦ AI 生成 + ▾ 菜单内嵌右侧；单行起步、多行内容自动增高
@@ -11261,8 +11276,8 @@
         msg.rows = 1;
         // 阶段一百零五：占位缩短为单行（原"提交变更内容（Ctrl+Enter 提交）"在窄面板折行，
         // 撑高输入框两倍；完整提示移入 title），高度上限 96→64px（约 3 行，TRAE CN 同款紧凑）
-        msg.placeholder = '提交信息';
-        msg.title = '提交变更内容，Ctrl+Enter 提交';
+        msg.placeholder = I18N.t('提交信息');
+        msg.title = I18N.t('提交变更内容，Ctrl+Enter 提交');
         msg.value = wsPanel.gitMsg && wsPanel.gitMsg.value || ''; // 重渲染保留输入
         wsPanel.gitMsg = msg;
         // 自动增高：单行起步（Trae CN 同款高度），换行内容多时最高撑到 3 行左右
@@ -11276,19 +11291,19 @@
         aiB.className = 'ws-git-ai-btn';
         aiB.type = 'button';
         aiB.textContent = '✦';
-        aiB.title = 'AI 生成提交信息（根据代码变更自动填写）';
+        aiB.title = I18N.t('AI 生成提交信息（根据代码变更自动填写）');
         aiB.addEventListener('click', function () { wsPanelGitGenMsg(aiB); });
         var mArr = document.createElement('button');
         mArr.className = 'ws-git-msg-arrow';
         mArr.type = 'button';
         mArr.textContent = '▾';
-        mArr.title = '更多';
+        mArr.title = I18N.t('更多');
         mArr.addEventListener('click', function (e) {
             e.stopPropagation();
             wsGitMenu(mArr, [
-                { label: 'AI 生成提交信息', onclick: function () { wsPanelGitGenMsg(aiB); } },
-                { label: '使用上次提交信息', title: '预填上一次提交的信息', onclick: wsPanelGitPrefillHead },
-                { label: '清空', onclick: function () { msg.value = ''; growMsg(); msg.focus(); } }
+                { label: I18N.t('AI 生成提交信息'), onclick: function () { wsPanelGitGenMsg(aiB); } },
+                { label: I18N.t('使用上次提交信息'), title: I18N.t('预填上一次提交的信息'), onclick: wsPanelGitPrefillHead },
+                { label: I18N.t('清空'), onclick: function () { msg.value = ''; growMsg(); msg.focus(); } }
             ]);
         });
         msgWrap.appendChild(msg);
@@ -11305,8 +11320,8 @@
         var commitB = document.createElement('button');
         commitB.className = 'ws-git-commit' + (g.amend ? ' amend' : '');
         commitB.type = 'button';
-        commitB.textContent = g.amend ? '✓ 修改上次提交' : (g.staged.length ? '✓ 提交' : (g.changes.length ? '✓ 提交全部更改' : '✓ 提交'));
-        commitB.title = '提交（Ctrl+Enter）';
+        commitB.textContent = g.amend ? I18N.t('✓ 修改上次提交') : (g.staged.length ? I18N.t('✓ 提交') : (g.changes.length ? I18N.t('✓ 提交全部更改') : I18N.t('✓ 提交')));
+        commitB.title = I18N.t('提交（Ctrl+Enter）');
         commitB.disabled = g.busy;
         commitB.addEventListener('click', function () { wsPanelGitDoCommit(); });
         wsPanel.gitCommitBtn = commitB;
@@ -11314,14 +11329,14 @@
         arrowB.className = 'ws-git-commit-arrow';
         arrowB.type = 'button';
         arrowB.textContent = '▾';
-        arrowB.title = '更多提交方式';
+        arrowB.title = I18N.t('更多提交方式');
         arrowB.disabled = g.busy;
         arrowB.addEventListener('click', function (e) {
             e.stopPropagation();
             wsGitMenu(arrowB, [
-                { label: '提交', onclick: function () { wsPanelGitDoCommit(); } },
-                { label: '提交并推送', onclick: function () { wsPanelGitDoCommit(true); } },
-                { label: g.amend ? '取消修改模式' : '修改上次提交（amend）', title: '将暂存的更改并入上一次提交并覆盖其信息', onclick: wsPanelGitToggleAmend }
+                { label: I18N.t('提交'), onclick: function () { wsPanelGitDoCommit(); } },
+                { label: I18N.t('提交并推送'), onclick: function () { wsPanelGitDoCommit(true); } },
+                { label: g.amend ? I18N.t('取消修改模式') : I18N.t('修改上次提交（amend）'), title: I18N.t('将暂存的更改并入上一次提交并覆盖其信息'), onclick: wsPanelGitToggleAmend }
             ]);
         });
         commitRow.appendChild(commitB);
@@ -11331,16 +11346,16 @@
         if (g.amend) {
             var am = document.createElement('div');
             am.className = 'ws-git-amend-tip';
-            am.textContent = '× 修改模式：提交将覆盖上一次提交（点击取消）';
-            am.title = '取消修改模式';
+            am.textContent = I18N.t('× 修改模式：提交将覆盖上一次提交（点击取消）');
+            am.title = I18N.t('取消修改模式');
             am.addEventListener('click', function () { wsPanelGitToggleAmend(); });
             el.appendChild(am);
         }
         // 变更主体：文件列表独立滚动区（文件多时自身滚动，不把审查区顶走）
         var body = document.createElement('div');
         body.className = 'ws-git-body';
-        body.appendChild(wsGitSection('暂存的更改', g.staged, 'staged'));
-        body.appendChild(wsGitSection('更改', g.changes, 'changes'));
+        body.appendChild(wsGitSection(I18N.t('暂存的更改'), g.staged, 'staged'));
+        body.appendChild(wsGitSection(I18N.t('更改'), g.changes, 'changes'));
         wsPanel.gitBody = body;
         el.appendChild(body);
         // 拖拽条×2（输入区同款交互）各自独立：① 文件区下方→调智能体审查高度 ② 审查与历史之间→仅调提交历史高度
@@ -11448,10 +11463,10 @@
         }
         var drag2 = document.createElement('div');
         drag2.className = 'ws-git-dragbar';
-        drag2.title = '拖拽调整提交历史高度';
+        drag2.title = I18N.t('拖拽调整提交历史高度');
         var drag = document.createElement('div');
         drag.className = 'ws-git-dragbar';
-        drag.title = '拖拽调整智能体审查高度';
+        drag.title = I18N.t('拖拽调整智能体审查高度');
         bindGitDrag(drag, 'review');
         bindGitDrag(drag2, 'log');
         bottom.appendChild(reviewSec);
@@ -11496,7 +11511,7 @@
                 if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
             }
         }).catch(function (err) {
-            showToast('读取上次提交信息失败：' + (err && err.message || err));
+            showToast(I18N.t('读取上次提交信息失败：') + (err && err.message || err));
         });
     }
 
@@ -11519,7 +11534,7 @@
                 }
             }
             g.amend = true;
-            showToast('已进入修改模式：提交将覆盖上一次提交');
+            showToast(I18N.t('已进入修改模式：提交将覆盖上一次提交'));
         } else {
             g.amend = false;
         }
@@ -11531,22 +11546,22 @@
         var g = wsPanel.git;
         if (g.busy) return;
         // 阶段一百零五：AI 生成流式中禁止提交（框内是未完成的打字机文本，防误提交半截信息）
-        if (g.aiBusy || wsGitAIStreaming) { showToast('AI 正在生成提交信息，请稍候'); return; }
+        if (g.aiBusy || wsGitAIStreaming) { showToast(I18N.t('AI 正在生成提交信息，请稍候')); return; }
         var msg = wsPanel.gitMsg;
         var text = (msg && msg.value || '').trim();
-        if (!text) { showToast(g.amend ? '请填写修改后的提交信息' : '请填写提交信息'); if (msg) msg.focus(); return; }
+        if (!text) { showToast(g.amend ? I18N.t('请填写修改后的提交信息') : I18N.t('请填写提交信息')); if (msg) msg.focus(); return; }
         if (!g.amend && !g.staged.length && g.changes.length) {
-            showConfirm('提交', '没有已暂存的更改，要提交全部更改吗？', function () {
+            showConfirm(I18N.t('提交'), I18N.t('没有已暂存的更改，要提交全部更改吗？'), function () {
                 if (g.busy) return;
                 var paths = g.changes.map(function (e) { return e.p; });
                 g.busy = true; // add→commit 两跳串行期间挡住并发点击
                 wsPanelGitReq({ sub: 'add', paths: paths })
                     .then(function () { return wsPanelGitCommitCore(text, andPush); })
                     .catch(function (err) {
-                        showToast('提交失败：' + (err && err.message || err));
+                        showToast(I18N.t('提交失败：') + (err && err.message || err));
                     })
                     .then(function () { g.busy = false; wsPanelGitRefresh(); });
-            }, '提交全部');
+            }, I18N.t('提交全部'));
             return;
         }
         g.busy = true;
@@ -11564,20 +11579,20 @@
             if (wsPanel.gitMsg) wsPanel.gitMsg.value = '';
             if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow();
             g.amend = false;
-            showToast(wasAmend ? '已修改上一次提交' : '已提交');
+            showToast(wasAmend ? I18N.t('已修改上一次提交') : I18N.t('已提交'));
             if (!andPush) return null;
-            showToast('推送中…');
+            showToast(I18N.t('推送中…'));
             return wsPanelGitReq({ sub: 'push' }).then(function () {
-                showToast('已提交并推送');
+                showToast(I18N.t('已提交并推送'));
             }).catch(function (err) {
                 // push 无上游分支：自动改用 -u origin <branch> 兜底重推一次（TRAE 同款首次推送体验）
                 if (/no upstream|上游/.test(err && err.message || '')) {
-                    return wsPanelGitReq({ sub: 'pushu', branch: g.branch }).then(function () { showToast('已提交并推送'); });
+                    return wsPanelGitReq({ sub: 'pushu', branch: g.branch }).then(function () { showToast(I18N.t('已提交并推送')); });
                 }
                 throw err;
             });
         }).catch(function (err) {
-            showToast((andPush ? '提交/推送失败：' : '提交失败：') + (err && err.message || err));
+            showToast((andPush ? I18N.t('提交/推送失败：') : I18N.t('提交失败：')) + (err && err.message || err));
         });
     }
 
@@ -11588,9 +11603,9 @@
     function wsPanelGitAIReq(payload, timeoutMs) {
         // 服务端 AI 调用上限 150s，前端等待放宽到 170s
         return wsPanelReq('gitai', '', JSON.stringify(payload), timeoutMs || 170000).then(function (res) {
-            if (!res.ok) throw new Error(res.error || 'AI 请求失败');
+            if (!res.ok) throw new Error(res.error || I18N.t('AI 请求失败'));
             var data;
-            try { data = JSON.parse(res.content || '{}'); } catch (e) { throw new Error('AI 响应解析失败'); }
+            try { data = JSON.parse(res.content || '{}'); } catch (e) { throw new Error(I18N.t('AI 响应解析失败')); }
             if (data.error) throw new Error(data.error);
             return data;
         });
@@ -11691,7 +11706,7 @@
         var prev = msg ? msg.value : '';
         wsGitAIStreaming = true;
         if (msg) { // 先显示「AI 正在生成」占位（TRAE CN 同款），置灰斜体 + 只读防生成期间误编辑
-            msg.value = 'AI 正在生成提交信息…';
+            msg.value = I18N.t('AI 正在生成提交信息…');
             msg.classList.add('ai-ph');
             msg.readOnly = true;
             wsGitAIPh = true;
@@ -11703,7 +11718,7 @@
             diffTxt = d.diff || '';
             if (!diffTxt.trim()) return wsPanelGitReq({ sub: 'diffhead' }).then(function (d2) { diffTxt = d2.diff || ''; });
         }).then(function () {
-            if (!diffTxt.trim()) throw new Error('没有可分析的变更（暂存区与工作区均为空）');
+            if (!diffTxt.trim()) throw new Error(I18N.t('没有可分析的变更（暂存区与工作区均为空）'));
             return wsPanelGitAIReq({ mode: 'commitmsg', diff: diffTxt });
         }).then(function (r) {
             wsGitAIStopStream(); // 先停打字机（含残余缓冲）再校准，防响应文本被增量覆盖
@@ -11715,7 +11730,7 @@
         }).catch(function (err) {
             wsGitAIStopStream();
             if (msg) { msg.value = prev; if (wsPanel.gitMsgGrow) wsPanel.gitMsgGrow(); } // 失败恢复原输入
-            showToast('AI 提交信息：' + (err && err.message || err));
+            showToast(I18N.t('AI 提交信息：') + (err && err.message || err));
         }).then(function () {
             wsGitAIStopStream();
             if (msg) msg.readOnly = false;
@@ -11730,7 +11745,7 @@
     // origin/HEAD 是符号引用不是真分支，全链路排除
     var GIT_REVIEW_WORKTREE = '@worktree'; // 工作区伪目标标识（非真实分支名）
     function wsGitReviewTargetLabel(t) {
-        return t === GIT_REVIEW_WORKTREE ? '工作区（未提交变更）' : t;
+        return t === GIT_REVIEW_WORKTREE ? I18N.t('工作区（未提交变更）') : t;
     }
     function wsPanelGitLoadBranches() {
         var g = wsPanel.git;
@@ -11753,7 +11768,7 @@
     function wsGitReviewSection(g) {
         var sec = document.createElement('div');
         sec.className = 'ws-git-review';
-        sec.appendChild(wsGitSecHeader('智能体审查', null, g.reviewCollapsed, function () {
+        sec.appendChild(wsGitSecHeader(I18N.t('智能体审查'), null, g.reviewCollapsed, function () {
             g.reviewCollapsed = !g.reviewCollapsed;
             wsPanelGitRender();
         }));
@@ -11763,20 +11778,20 @@
         var btn = document.createElement('button');
         btn.className = 'ws-git-review-btn';
         btn.type = 'button';
-        btn.textContent = g.reviewBusy ? '审查中…' : '总结并审查';
-        btn.title = 'AI 审查当前分支相对目标分支的变更，生成审查报告';
+        btn.textContent = g.reviewBusy ? I18N.t('审查中…') : I18N.t('总结并审查');
+        btn.title = I18N.t('AI 审查当前分支相对目标分支的变更，生成审查报告');
         btn.disabled = !!g.reviewBusy;
         btn.addEventListener('click', function () { wsPanelGitDoReview(); });
         var arr = document.createElement('button');
         arr.className = 'ws-git-review-arrow';
         arr.type = 'button';
         arr.textContent = '▾';
-        arr.title = '更多';
+        arr.title = I18N.t('更多');
         arr.addEventListener('click', function (e) {
             e.stopPropagation();
-            var items = [{ label: '总结并审查', onclick: function () { wsPanelGitDoReview(); } }];
+            var items = [{ label: I18N.t('总结并审查'), onclick: function () { wsPanelGitDoReview(); } }];
             if (g.lastReviewKey && wsPanel.tabs[g.lastReviewKey]) {
-                items.push({ label: '查看上次报告', onclick: function () {
+                items.push({ label: I18N.t('查看上次报告'), onclick: function () {
                     wsPanel.viewEl.classList.remove('hidden');
                     wsPanelActivate(g.lastReviewKey);
                     wsPanelSyncViewCol();
@@ -11792,22 +11807,22 @@
         br.className = 'ws-git-review-branches';
         var from = document.createElement('span');
         from.className = 'ws-git-review-branch';
-        from.textContent = '⎇ ' + (g.branch || '(无分支)');
+        from.textContent = '⎇ ' + (g.branch || I18N.t('(无分支)'));
         var sep = document.createElement('span');
         sep.className = 'ws-git-review-sep';
         sep.textContent = '→';
         var to = document.createElement('button');
         to.className = 'ws-git-review-branch to';
         to.type = 'button';
-        var toLabel = g.reviewTarget ? wsGitReviewTargetLabel(g.reviewTarget) : '选择目标分支';
+        var toLabel = g.reviewTarget ? wsGitReviewTargetLabel(g.reviewTarget) : I18N.t('选择目标分支');
         to.textContent = '⎇ ' + toLabel;
         to.title = g.reviewTarget === GIT_REVIEW_WORKTREE
-            ? '审查目标：工作区未提交变更（git diff HEAD）'
-            : '审查目标分支（对比 ' + (g.reviewTarget || '…') + '...HEAD 的变更）';
+            ? I18N.t('审查目标：工作区未提交变更（git diff HEAD）')
+            : I18N.t('审查目标分支（对比 ') + (g.reviewTarget || '…') + I18N.t('...HEAD 的变更）');
         to.disabled = g.reviewBusy;
         to.addEventListener('click', function (e) {
             e.stopPropagation();
-            if (g.branches === null) { showToast('分支列表加载中，请稍候'); return; }
+            if (g.branches === null) { showToast(I18N.t('分支列表加载中，请稍候')); return; }
             // 目标菜单：工作区伪目标恒在首项（TRAE CN 同款，单分支仓库也能审查未提交变更），
             // 其余可选分支按原口径排除当前分支与 origin/HEAD 符号引用
             var items = [{ label: '⎇ ' + wsGitReviewTargetLabel(GIT_REVIEW_WORKTREE), onclick: function () {
@@ -11845,7 +11860,7 @@
         var now = Date.now();
         if (finalText === null && now - s.lastFlush < 600) return; // 流式节流（收尾定稿强制刷新）
         s.lastFlush = now;
-        var content = finalText !== null ? finalText : (s.acc || '> ⏳ 正在生成审查报告，请稍候…');
+        var content = finalText !== null ? finalText : (s.acc || I18N.t('> ⏳ 正在生成审查报告，请稍候…'));
         if (wsPcViewer()) { // PC：浏览区标签同 key 复用刷新（主进程 openDataTab 重开即刷新）
             wsOpenData({ key: s.key, kind: 'md', title: s.title, content: content, meta: { target: s.target } });
             return;
@@ -11863,7 +11878,7 @@
     function wsPanelGitDoReview() {
         var g = wsPanel.git;
         if (g.reviewBusy) return;
-        if (!g.reviewTarget) { showToast('请先选择审查目标分支'); return; }
+        if (!g.reviewTarget) { showToast(I18N.t('请先选择审查目标分支')); return; }
         g.reviewBusy = true;
         wsPanelGitRender(); // 按钮进入"审查中…"态
         var target = g.reviewTarget;
@@ -11873,36 +11888,36 @@
         var diffTxt = '';
         wsPanelGitReq(isWt ? { sub: 'diffhead' } : { sub: 'diffrev', target: target }).then(function (d) {
             diffTxt = d.diff || '';
-            var emptyTip = isWt ? '当前没有未提交的变更，无需审查' : '当前分支相对 ' + target + ' 没有差异，无需审查';
+            var emptyTip = isWt ? I18N.t('当前没有未提交的变更，无需审查') : I18N.t('当前分支相对 ') + target + I18N.t(' 没有差异，无需审查');
             if (!diffTxt.trim()) throw new Error(emptyTip);
             // 即时反馈（TRAE CN 同款）：确认可审后立即开报告页占位，后续流式增量同键逐字刷新，不再干等
-            wsReviewStream = { key: key, title: '审查报告: ' + aiTarget, target: target, acc: '', lastFlush: 0 };
+            wsReviewStream = { key: key, title: I18N.t('审查报告: ') + aiTarget, target: target, acc: '', lastFlush: 0 };
             g.lastReviewKey = key;
             if (wsPcViewer()) {
                 wsReviewStreamFlush(null);
             } else {
                 wsPanel.viewEl.classList.remove('hidden');
                 if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
-                wsPanel.tabs[key] = { name: '审查报告: ' + aiTarget, review: true, isMd: true, reviewTarget: target, content: '> ⏳ 正在生成审查报告，请稍候…' };
+                wsPanel.tabs[key] = { name: I18N.t('审查报告: ') + aiTarget, review: true, isMd: true, reviewTarget: target, content: I18N.t('> ⏳ 正在生成审查报告，请稍候…') };
                 wsPanelActivate(key);
                 wsPanelSyncViewCol();
             }
             return wsPanelGitAIReq({ mode: 'review', diff: diffTxt, target: aiTarget }).then(function (r) {
-                var text = r.text || '（AI 未返回内容）';
+                var text = r.text || I18N.t('（AI 未返回内容）');
                 if (wsReviewStream) { // 收尾定稿：以服务端清洗后的全文最终渲染一次
                     wsReviewStream.acc = text;
                     wsReviewStreamFlush(text);
                     wsReviewStream = null;
                 }
-                showToast('审查报告已生成');
+                showToast(I18N.t('审查报告已生成'));
             });
         }).catch(function (err) {
             if (wsReviewStream) { // 流中断：已收到的部分落地 + 失败尾注，防报告页停留"审查中"假态
                 var partial = wsReviewStream.acc;
-                wsReviewStreamFlush((partial ? partial + '\n\n' : '') + '> ⚠️ 审查失败：' + (err && err.message || err));
+                wsReviewStreamFlush((partial ? partial + '\n\n' : '') + I18N.t('> ⚠️ 审查失败：') + (err && err.message || err));
                 wsReviewStream = null;
             }
-            showToast('智能体审查：' + (err && err.message || err));
+            showToast(I18N.t('智能体审查：') + (err && err.message || err));
         }).then(function () {
             g.reviewBusy = false;
             if (wsPanel.git.mode) wsPanelGitRender();
@@ -11965,7 +11980,7 @@
         var el = wsPanel.gitEl;
         var sec = el && el.querySelector('.ws-git-log');
         var moreEl = sec && sec.querySelector('.ws-git-log-more');
-        if (moreEl) moreEl.textContent = '加载中…';
+        if (moreEl) moreEl.textContent = I18N.t('加载中…');
         wsPanelGitReq({ sub: 'log', branch: g.branch, skip: g.log.length }).then(function (d) {
             if (g.log === null) return; // 加载期间 status 刷新已重置历史（首页重拉中），丢弃本页
             g.logHasMore = !!d.has_more;
@@ -11975,7 +11990,7 @@
             if (sec2) { // 原位追加：新行插到分页指示行前，指示文案随 has_more 更新
                 var m = sec2.querySelector('.ws-git-log-more');
                 (d.commits || []).forEach(function (c) { sec2.insertBefore(wsGitLogRow(g, c), m || null); });
-                if (m) m.textContent = g.logHasMore ? '上滑加载更多' : '已全部加载';
+                if (m) m.textContent = g.logHasMore ? I18N.t('上滑加载更多') : I18N.t('已全部加载');
                 if (sec2._osbUpdate) sec2._osbUpdate(); // 内容增高后同步滑块长度/位置
                 // 元素签名同步追加后的全量数据：保持「元素._logSig == 当前渲染数据签名」不变量——
                 // 否则签名停在第一页，之后刷新即使数据完全一致也会误判变化整区替换（历史区滚动位置丢失）
@@ -11986,7 +12001,7 @@
         }).catch(function () {
             var el3 = wsPanel.gitEl;
             var m3 = el3 && el3.querySelector('.ws-git-log-more');
-            if (m3) m3.textContent = '上滑加载更多'; // 失败不终止分页：再次滚到底可重试
+            if (m3) m3.textContent = I18N.t('上滑加载更多'); // 失败不终止分页：再次滚到底可重试
         }).then(function () {
             g.logBusy = false;
         });
@@ -11996,7 +12011,7 @@
     function wsGitLogSection(g) {
         var sec = document.createElement('div');
         sec.className = 'ws-git-log';
-        sec.appendChild(wsGitSecHeader('提交历史', g.log && g.log.length ? g.log.length : null, g.logCollapsed, function () {
+        sec.appendChild(wsGitSecHeader(I18N.t('提交历史'), g.log && g.log.length ? g.log.length : null, g.logCollapsed, function () {
             g.logCollapsed = !g.logCollapsed;
             wsPanelGitRender();
         }));
@@ -12004,14 +12019,14 @@
         if (!g.log) {
             var ld = document.createElement('div');
             ld.className = 'ws-git-empty';
-            ld.textContent = '加载中…';
+            ld.textContent = I18N.t('加载中…');
             sec.appendChild(ld);
             return sec;
         }
         if (!g.log.length) {
             var empty = document.createElement('div');
             empty.className = 'ws-git-empty';
-            empty.textContent = '（暂无提交）';
+            empty.textContent = I18N.t('（暂无提交）');
             sec.appendChild(empty);
             return sec;
         }
@@ -12020,7 +12035,7 @@
         if (g.logHasMore || g.log.length >= 30) {
             var more = document.createElement('div');
             more.className = 'ws-git-log-more';
-            more.textContent = g.logHasMore ? '上滑加载更多' : '已全部加载';
+            more.textContent = g.logHasMore ? I18N.t('上滑加载更多') : I18N.t('已全部加载');
             sec.appendChild(more);
         }
         sec.addEventListener('scroll', function () { // 距底 60px 内触发加载（logBusy 防重复触发）
@@ -12060,7 +12075,7 @@
             var cl = document.createElement('span');
             cl.className = 'ws-git-log-un';
             cl.textContent = '☁';
-            cl.title = '未推送';
+            cl.title = I18N.t('未推送');
             head.appendChild(cl);
         }
         item.appendChild(head);
@@ -12098,7 +12113,7 @@
         if (c.fm) { // 大提交截断提示（服务端每提交限 200 文件防 JSON 膨胀）
             var fm = document.createElement('div');
             fm.className = 'ws-git-log-file fm-more';
-            fm.textContent = '文件过多，仅显示前 200 个';
+            fm.textContent = I18N.t('文件过多，仅显示前 200 个');
             box.appendChild(fm);
         }
         item.appendChild(box);
@@ -12163,13 +12178,13 @@
                 var st = document.createElement('div');
                 st.className = 'wc-stat';
                 var n = c.n != null ? c.n : (c.files || []).length;
-                st.appendChild(document.createTextNode('已更改 ' + n + ' 个文件，'));
+                st.appendChild(document.createTextNode(I18N.t('已更改 ') + n + I18N.t(' 个文件，')));
                 var ins = document.createElement('span');
                 ins.className = 'wc-ins';
-                ins.textContent = (c.ins || 0) + ' 行插入(+)';
+                ins.textContent = (c.ins || 0) + I18N.t(' 行插入(+)');
                 var dl = document.createElement('span');
                 dl.className = 'wc-del';
-                dl.textContent = (c.del || 0) + ' 行删除(-)';
+                dl.textContent = (c.del || 0) + I18N.t(' 行删除(-)');
                 st.appendChild(ins);
                 st.appendChild(document.createTextNode('，'));
                 st.appendChild(dl);
@@ -12181,9 +12196,9 @@
             cd.textContent = c.sh || (c.h || '').slice(0, 7);
             var cp = document.createElement('button');
             cp.type = 'button';
-            cp.textContent = '复制 hash';
+            cp.textContent = I18N.t('复制 hash');
             cp.addEventListener('click', function () {
-                navigator.clipboard.writeText(c.h || '').then(function () { showToast('已复制提交 hash'); }, function () { showToast('复制失败'); });
+                navigator.clipboard.writeText(c.h || '').then(function () { showToast(I18N.t('已复制提交 hash')); }, function () { showToast(I18N.t('复制失败')); });
             });
             hr.appendChild(cd);
             hr.appendChild(cp);
@@ -12211,10 +12226,10 @@
     // 相对时间（详情卡用，TRAE CN 同款）：刚刚/N 分钟前/N 小时前/N 天前/日期
     function wsGitRelTime(at) {
         var diff = Date.now() - (at || 0) * 1000;
-        if (diff < 60e3) return '刚刚';
-        if (diff < 3600e3) return Math.floor(diff / 60e3) + ' 分钟前';
-        if (diff < 86400e3) return Math.floor(diff / 3600e3) + ' 小时前';
-        if (diff < 7 * 86400e3) return Math.floor(diff / 86400e3) + ' 天前';
+        if (diff < 60e3) return I18N.t('刚刚');
+        if (diff < 3600e3) return Math.floor(diff / 60e3) + I18N.t(' 分钟前');
+        if (diff < 86400e3) return Math.floor(diff / 3600e3) + I18N.t(' 小时前');
+        if (diff < 7 * 86400e3) return Math.floor(diff / 86400e3) + I18N.t(' 天前');
         return wsGitAbsTime(at);
     }
 
@@ -12222,7 +12237,7 @@
     function wsGitAbsTime(at) {
         var d = new Date((at || 0) * 1000);
         function p(n) { return (n < 10 ? '0' : '') + n; }
-        return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+        return d.getFullYear() + I18N.t('年') + (d.getMonth() + 1) + I18N.t('月') + d.getDate() + I18N.t('日 ') + p(d.getHours()) + ':' + p(d.getMinutes());
     }
 
     // 文件语言短徽标（TRAE CN 同款风格：JS/TS/GO/MD/#…），未知扩展名显示占位点
@@ -12239,15 +12254,15 @@
         var key = 'cfile:' + c.h + ':' + p;
         if (wsPcViewer()) { // PC：提交单文件 diff 进浏览区标签（阶段九十二）
             wsPanelGitReq({ sub: 'show', path: c.h, file: p }).then(function (d) {
-                wsOpenData({ key: key, kind: 'commit', title: '提交: ' + sh + ' · ' + p.replace(/^.*[\\/]/, ''), content: d.diff || '', meta: d.meta || {} });
+                wsOpenData({ key: key, kind: 'commit', title: I18N.t('提交: ') + sh + ' · ' + p.replace(/^.*[\\/]/, ''), content: d.diff || '', meta: d.meta || {} });
             }).catch(function (err) {
-                showToast('提交详情获取失败：' + (err && err.message || err));
+                showToast(I18N.t('提交详情获取失败：') + (err && err.message || err));
             });
             return;
         }
         wsPanel.viewEl.classList.remove('hidden');
         if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
-        wsPanel.tabs[key] = { name: '提交: ' + sh + ' · ' + p.replace(/^.*[\\/]/, ''), commitView: true, diffPath: sh, loading: true }; // 重开即刷新
+        wsPanel.tabs[key] = { name: I18N.t('提交: ') + sh + ' · ' + p.replace(/^.*[\\/]/, ''), commitView: true, diffPath: sh, loading: true }; // 重开即刷新
         wsPanelActivate(key);
         wsPanelSyncViewCol();
         wsPanelGitReq({ sub: 'show', path: c.h, file: p }).then(function (d) {
@@ -12272,15 +12287,15 @@
         var key = 'show:' + c.h;
         if (wsPcViewer()) { // PC：提交详情进浏览区标签（阶段九十二）
             wsPanelGitReq({ sub: 'show', path: c.h }).then(function (d) {
-                wsOpenData({ key: key, kind: 'commit', title: '提交: ' + sh, content: d.diff || '', meta: d.meta || {} });
+                wsOpenData({ key: key, kind: 'commit', title: I18N.t('提交: ') + sh, content: d.diff || '', meta: d.meta || {} });
             }).catch(function (err) {
-                showToast('提交详情获取失败：' + (err && err.message || err));
+                showToast(I18N.t('提交详情获取失败：') + (err && err.message || err));
             });
             return;
         }
         wsPanel.viewEl.classList.remove('hidden');
         if (wsPanel.tabOrder.indexOf(key) < 0) wsPanel.tabOrder.push(key);
-        wsPanel.tabs[key] = { name: '提交: ' + sh, commitView: true, diffPath: sh, loading: true }; // 重开即刷新
+        wsPanel.tabs[key] = { name: I18N.t('提交: ') + sh, commitView: true, diffPath: sh, loading: true }; // 重开即刷新
         wsPanelActivate(key);
         wsPanelSyncViewCol();
         wsPanelGitReq({ sub: 'show', path: c.h }).then(function (d) {
@@ -12306,7 +12321,7 @@
         if (wsPcViewer()) { // PC：diff 进浏览区标签（阶段九十二）
             var diffKey = 'diff:' + p;
             // 工作树对比标题（Trae/VSCode 同款语义）：文件名 +（工作树）后缀，区别于历史版本对比
-            var diffTitle = p.replace(/^.*[\\/]/, '') + '（工作树）';
+            var diffTitle = p.replace(/^.*[\\/]/, '') + I18N.t('（工作树）');
             // diffopen：-U100000 全文上下文 diff → 浏览区还原整文件对比（普通 diff 只有变更片段）
             wsPanelGitReq({ sub: 'diffopen', path: p }).then(function (d) {
                 wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: d.diff || '', meta: { path: p } });
@@ -12315,7 +12330,7 @@
                 // 仓库已 init 但尚无任何提交（HEAD 不存在）：以"整文件新增"为对比基线（Trae/VSCode 同款语义）
                 if (/bad revision 'HEAD'/i.test(msg)) {
                     wsPanelReq('read', wsProjFsPath(p)).then(function (res) {
-                        if (res.binary) { showToast('仓库尚未有任何提交，二进制文件暂无对比基线'); return; }
+                        if (res.binary) { showToast(I18N.t('仓库尚未有任何提交，二进制文件暂无对比基线')); return; }
                         var lines = (res.content || '').split('\n');
                         if (lines.length && lines[lines.length - 1] === '') lines.pop(); // 去掉结尾换行产生的空串
                         var pseudo = ['diff --git a/' + p + ' b/' + p, '--- /dev/null', '+++ b/' + p,
@@ -12323,13 +12338,13 @@
                         lines.forEach(function (l) { pseudo.push('+' + l); });
                         wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: pseudo.join('\n'), meta: { path: p } });
                     }).catch(function () {
-                        showToast('仓库尚未有任何提交，暂无对比基线');
+                        showToast(I18N.t('仓库尚未有任何提交，暂无对比基线'));
                     });
                     return;
                 }
                 // 非 git 仓库：友好提示，不暴露 git 原始报错
-                if (/not a git repository/i.test(msg)) msg = '当前工作区不是 Git 仓库，无法对比差异';
-                showToast('diff 获取失败：' + msg);
+                if (/not a git repository/i.test(msg)) msg = I18N.t('当前工作区不是 Git 仓库，无法对比差异');
+                showToast(I18N.t('diff 获取失败：') + msg);
             });
             return;
         }
@@ -12337,7 +12352,7 @@
         wsPanel.viewEl.classList.remove('hidden');
         var idx = wsPanel.tabOrder.indexOf(key);
         if (idx < 0) wsPanel.tabOrder.push(key);
-        wsPanel.tabs[key] = { name: p.replace(/^.*[\\/]/, '') + '（工作树）', diffPath: p, loading: true }; // 重开即刷新 diff
+        wsPanel.tabs[key] = { name: p.replace(/^.*[\\/]/, '') + I18N.t('（工作树）'), diffPath: p, loading: true }; // 重开即刷新 diff
         wsPanelActivate(key);
         wsPanelSyncViewCol();
         // diffopen：-U100000 全文上下文 diff → 面板 diff 全文渲染（普通 diff 只有变更片段）
@@ -12357,7 +12372,7 @@
                     var tt = wsPanel.tabs[key];
                     if (!tt) return;
                     tt.loading = false;
-                    if (res.binary) { tt.error = '仓库尚未有任何提交，二进制文件暂无对比基线'; }
+                    if (res.binary) { tt.error = I18N.t('仓库尚未有任何提交，二进制文件暂无对比基线'); }
                     else {
                         var lines = (res.content || '').split('\n');
                         if (lines.length && lines[lines.length - 1] === '') lines.pop(); // 去掉结尾换行产生的空串
@@ -12371,13 +12386,13 @@
                     var tt = wsPanel.tabs[key];
                     if (!tt) return;
                     tt.loading = false;
-                    tt.error = '仓库尚未有任何提交，暂无对比基线';
+                    tt.error = I18N.t('仓库尚未有任何提交，暂无对比基线');
                     if (wsPanel.activeTab === key) wsPanelRenderTab();
                 });
                 return;
             }
             // 非 git 仓库：友好提示，不暴露 git 原始报错
-            if (/not a git repository/i.test(msg)) msg = '当前工作区不是 Git 仓库，无法对比差异';
+            if (/not a git repository/i.test(msg)) msg = I18N.t('当前工作区不是 Git 仓库，无法对比差异');
             t.loading = false;
             t.error = msg;
             if (wsPanel.activeTab === key) wsPanelRenderTab();
@@ -12448,7 +12463,7 @@
         container.textContent = '';
         var loading = document.createElement('div');
         loading.className = 'ws-panel-hint';
-        loading.textContent = '加载中…';
+        loading.textContent = I18N.t('加载中…');
         container.appendChild(loading);
         wsPanelReq('tree', path).then(function (res) {
             if (path === (wsPanel.proj || '') && wsPanel.rootEl) {
@@ -12459,7 +12474,7 @@
             if (!res.entries || !res.entries.length) {
                 var empty = document.createElement('div');
                 empty.className = 'ws-panel-hint';
-                empty.textContent = '（空目录）';
+                empty.textContent = I18N.t('（空目录）');
                 container.appendChild(empty);
                 return;
             }
@@ -12470,7 +12485,7 @@
             container.textContent = '';
             var tip = document.createElement('div');
             tip.className = 'ws-panel-hint';
-            tip.textContent = '加载失败：' + (err && err.message || err);
+            tip.textContent = I18N.t('加载失败：') + (err && err.message || err);
             container.appendChild(tip);
         });
     }
@@ -12484,7 +12499,7 @@
         row.className = 'ws-row ' + (en.dir ? 'dir' : 'file');
         var head = document.createElement('div');
         head.className = 'ws-row-head';
-        head.title = en.name + (en.dir ? '' : '（' + (en.size || 0) + ' 字节）');
+        head.title = en.name + (en.dir ? '' : '（' + (en.size || 0) + I18N.t(' 字节）'));
         var arrow = document.createElement('span');
         arrow.className = 'ws-row-arrow';
         arrow.textContent = en.dir ? '▸' : '';
@@ -12666,36 +12681,36 @@
         // 请求封装：失败 toast（错误信息由 PC 执行器/服务端归口返回，前端只透传）
         var req = function (op, p, content, done) {
             wsPanelReq(op, p, content).then(function (r) {
-                if (!r.ok) { showToast(r.error || '操作失败'); return; }
+                if (!r.ok) { showToast(r.error || I18N.t('操作失败')); return; }
                 if (done) done();
-            }).catch(function (err) { showToast('操作失败：' + (err && err.message || err)); });
+            }).catch(function (err) { showToast(I18N.t('操作失败：') + (err && err.message || err)); });
         };
-        var name = path.replace(/^.*[\\/]/, '') || '工作区根目录';
+        var name = path.replace(/^.*[\\/]/, '') || I18N.t('工作区根目录');
         var parent = path.indexOf('/') >= 0 ? path.slice(0, path.lastIndexOf('/')) : '';
 
-        if (!isDir) add('📄', '打开', function () { wsOpenFile(path); }); // PC 进浏览区标签，Web/手机走 wsPanel
+        if (!isDir) add('📄', I18N.t('打开'), function () { wsOpenFile(path); }); // PC 进浏览区标签，Web/手机走 wsPanel
         // 打开所在目录/复制路径需具体目标（文件或目录），树空白区右键（path=''）无意义不显示
-        if (path) add('📂', '打开所在目录', function () { req('reveal', path, ''); });
-        if (path) add('🔗', '复制路径', function () {
+        if (path) add('📂', I18N.t('打开所在目录'), function () { req('reveal', path, ''); });
+        if (path) add('🔗', I18N.t('复制路径'), function () {
             var full = path ? (wsPanel.root ? wsPanel.root.replace(/[\\/]+$/, '') + '/' + path : path) : (wsPanel.root || '');
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(full).then(function () { showToast('路径已复制'); }, function () { showToast('复制失败'); });
-            } else showToast('当前环境不支持复制');
+                navigator.clipboard.writeText(full).then(function () { showToast(I18N.t('路径已复制')); }, function () { showToast(I18N.t('复制失败')); });
+            } else showToast(I18N.t('当前环境不支持复制'));
         });
         if (isDir) {
-            add('📄', '新建文件', function () {
-                showPrompt('新建文件', '位于 ' + name, function (val) {
+            add('📄', I18N.t('新建文件'), function () {
+                showPrompt(I18N.t('新建文件'), I18N.t('位于 ') + name, function (val) {
                     req('newfile', path, val, function () { wsPanelExpandAndRefresh(path); });
                 });
             });
-            add('📁', '新建文件夹', function () {
-                showPrompt('新建文件夹', '位于 ' + name, function (val) {
+            add('📁', I18N.t('新建文件夹'), function () {
+                showPrompt(I18N.t('新建文件夹'), I18N.t('位于 ') + name, function (val) {
                     req('newdir', path, val, function () { wsPanelExpandAndRefresh(path); });
                 });
             });
         }
-        if (path) add('✏️', '重命名', function () {
-            showPrompt('重命名', '当前：' + name, function (val) {
+        if (path) add('✏️', I18N.t('重命名'), function () {
+            showPrompt(I18N.t('重命名'), I18N.t('当前：') + name, function (val) {
                 req('rename', path, val, function () {
                     var newKey = parent ? parent + '/' + val : val;
                     wsPanelForgetKey(path);   // 旧键失效：关旧标签清缓存
@@ -12704,9 +12719,9 @@
                 });
             });
         });
-        if (path) add('🗑', '删除', function () {
-            showConfirm('删除' + (isDir ? '目录' : '文件'),
-                '确定删除「' + name + '」吗？' + (isDir ? '目录内全部内容将被删除，' : '') + '该操作不可恢复。',
+        if (path) add('🗑', I18N.t('删除'), function () {
+            showConfirm(I18N.t('删除') + (isDir ? I18N.t('目录') : I18N.t('文件')),
+                I18N.t('确定删除「') + name + I18N.t('」吗？') + (isDir ? I18N.t('目录内全部内容将被删除，') : '') + I18N.t('该操作不可恢复。'),
                 function () {
                     req('delete', path, '', function () {
                         wsPanelForgetKey(path);
@@ -12714,7 +12729,7 @@
                     });
                 });
         }, true);
-        if (isDir) add('🔄', '刷新', function () { wsPanelRefreshDir(path); });
+        if (isDir) add('🔄', I18N.t('刷新'), function () { wsPanelRefreshDir(path); });
 
         // 先渲染测尺寸再钳位，防视口下缘/右缘溢出
         m.classList.remove('hidden');
@@ -12735,10 +12750,10 @@
             window.desktop.browserOpenFile({ username: IMSocket.getUsername(), path: path }).then(function (r) {
                 // 阶段一百三十一修复：此处不再 start——实测 invoke 返回可能晚于回执（复开同步注入时回执先到收条），
                 // 回执后再亮条会卡到看门狗；跟踪归位由 onFileLoad 的 start 承担（主进程先推 file-load 再返回 invoke，时序恒成立）
-                if (r && !r.ok) { browserProgressHide(); showToast('浏览区打开失败：' + (r.error || '未知错误')); }
+                if (r && !r.ok) { browserProgressHide(); showToast(I18N.t('浏览区打开失败：') + (r.error || I18N.t('未知错误'))); }
             }).catch(function (e) {
                 browserProgressHide();
-                showToast('浏览区打开失败：' + (e && e.message || e));
+                showToast(I18N.t('浏览区打开失败：') + (e && e.message || e));
             });
             return;
         }
@@ -12751,10 +12766,10 @@
         browserProgressStart(null); // 阶段一百三十一：点击即亮加载条，viewer 渲染完成回执收条
         window.desktop.browserOpenData(payload).then(function (r) {
             // 阶段一百三十一修复：同 wsOpenFile——不再在返回后 start（复开时回执可能已先到收条，回执后再亮条会卡到看门狗）
-            if (r && !r.ok) { browserProgressHide(); showToast('浏览区打开失败：' + (r.error || '未知错误')); }
+            if (r && !r.ok) { browserProgressHide(); showToast(I18N.t('浏览区打开失败：') + (r.error || I18N.t('未知错误'))); }
         }).catch(function (e) {
             browserProgressHide();
-            showToast('浏览区打开失败：' + (e && e.message || e));
+            showToast(I18N.t('浏览区打开失败：') + (e && e.message || e));
         });
         return true;
     }
@@ -12827,13 +12842,13 @@
             var t = wsPanel.tabs[path];
             if (!t) return;
             t.loading = false;
-            t.error = (err && err.message || err) || '读取失败';
+            t.error = (err && err.message || err) || I18N.t('读取失败');
             if (wsPanel.activeTab === path) wsPanelRenderTab();
         };
         if (window.desktop && window.desktop.workspaceOp) {
             window.desktop.workspaceOp({ username: IMSocket.getUsername(), op: 'readb', path: path }).then(function (r) {
                 if (r && r.ok) done(r.content);
-                else fail(new Error((r && r.error) || '读取失败'));
+                else fail(new Error((r && r.error) || I18N.t('读取失败')));
             }).catch(fail);
             return;
         }
@@ -12891,7 +12906,7 @@
             var x = document.createElement('span');
             x.className = 'ws-tab-close';
             x.textContent = '×';
-            x.title = '关闭';
+            x.title = I18N.t('关闭');
             x.addEventListener('click', function (e) { e.stopPropagation(); wsPanelCloseTab(p); });
             tab.appendChild(nm);
             tab.appendChild(x);
@@ -12921,9 +12936,9 @@
         // 标签类型徽标：审查报告 / 提交详情 / 差异对比（普通 diff 标签）
         wsPanel.crumbsEl.textContent = '';
         var badgeText = '';
-        if (t.review) badgeText = '审查报告';
-        else if (t.commitMeta) badgeText = '提交详情';
-        else if (t.diffPath) badgeText = '差异对比';
+        if (t.review) badgeText = I18N.t('审查报告');
+        else if (t.commitMeta) badgeText = I18N.t('提交详情');
+        else if (t.diffPath) badgeText = I18N.t('差异对比');
         if (badgeText) {
             var dbadge = document.createElement('span');
             dbadge.className = 'ws-crumbs-diff';
@@ -13035,27 +13050,27 @@
         if (t.truncated) {
             var tip = document.createElement('div');
             tip.className = 'ws-panel-hint';
-            tip.textContent = '— 文件较大，仅显示前 512KB，编辑保存将覆盖全文，请注意 —';
+            tip.textContent = I18N.t('— 文件较大，仅显示前 512KB，编辑保存将覆盖全文，请注意 —');
             wsPanel.viewBody.appendChild(tip);
         }
         if (t.loading) {
             var hint = document.createElement('div');
             hint.className = 'ws-panel-hint';
-            hint.textContent = '加载中…';
+            hint.textContent = I18N.t('加载中…');
             wsPanel.viewBody.appendChild(hint);
             return;
         }
         if (t.error) {
             var errTip = document.createElement('div');
             errTip.className = 'ws-panel-hint';
-            errTip.textContent = '读取失败：' + t.error;
+            errTip.textContent = I18N.t('读取失败：') + t.error;
             wsPanel.viewBody.appendChild(errTip);
             return;
         }
         if (t.binary) {
             var binTip = document.createElement('div');
             binTip.className = 'ws-panel-hint';
-            binTip.textContent = '二进制文件暂不支持面板预览';
+            binTip.textContent = I18N.t('二进制文件暂不支持面板预览');
             wsPanel.viewBody.appendChild(binTip);
             return;
         }
@@ -13093,7 +13108,7 @@
             if (!t.diffText) {
                 var noDiff = document.createElement('div');
                 noDiff.className = 'ws-panel-hint';
-                noDiff.textContent = '— 无差异（文件与上次提交一致，或仅有暂存区外的格式变化）—';
+                noDiff.textContent = I18N.t('— 无差异（文件与上次提交一致，或仅有暂存区外的格式变化）—');
                 wsPanel.viewBody.appendChild(noDiff);
             }
             return;
@@ -13110,37 +13125,37 @@
             wsPanel.btnEdit.classList.add('hidden'); // docx 只读，隐藏编辑按钮（防源码标签切来时残留）
             var docTip = document.createElement('div');
             docTip.className = 'ws-panel-hint';
-            docTip.textContent = 'Word 文档预览（只读）';
+            docTip.textContent = I18N.t('Word 文档预览（只读）');
             wsPanel.viewBody.appendChild(docTip);
             if (!t.docHtml) {
                 if (typeof mammoth === 'undefined') {
                     var noLib = document.createElement('div');
                     noLib.className = 'ws-panel-hint';
-                    noLib.textContent = '文档组件未加载，无法预览';
+                    noLib.textContent = I18N.t('文档组件未加载，无法预览');
                     wsPanel.viewBody.appendChild(noLib);
                     return;
                 }
                 if (!t.b64) {
                     var noData = document.createElement('div');
                     noData.className = 'ws-panel-hint';
-                    noData.textContent = '文档数据为空';
+                    noData.textContent = I18N.t('文档数据为空');
                     wsPanel.viewBody.appendChild(noData);
                     return;
                 }
                 var parsing = document.createElement('div');
                 parsing.className = 'ws-panel-hint';
-                parsing.textContent = '文档解析中…';
+                parsing.textContent = I18N.t('文档解析中…');
                 wsPanel.viewBody.appendChild(parsing);
                 (function (p) {
                     mammoth.convertToHtml({ arrayBuffer: wsB64ToBuf(t.b64) }).then(function (r) {
                         var tt = wsPanel.tabs[p];
                         if (!tt) return;
-                        tt.docHtml = (r && r.value) || '<p>（空文档）</p>';
+                        tt.docHtml = (r && r.value) || '<p>' + I18N.t('（空文档）') + '</p>';
                         if (wsPanel.activeTab === p) wsPanelRenderTab();
                     }).catch(function (e) {
                         var tt = wsPanel.tabs[p];
                         if (!tt) return;
-                        tt.docHtml = '<p>解析失败：' + (e && e.message || e) + '</p>';
+                        tt.docHtml = '<p>' + I18N.t('解析失败：') + (e && e.message || e) + '</p>';
                         if (wsPanel.activeTab === p) wsPanelRenderTab();
                     });
                 })(path);
@@ -13156,19 +13171,19 @@
             wsPanel.btnEdit.classList.add('hidden');
             var xlsxTip = document.createElement('div');
             xlsxTip.className = 'ws-panel-hint';
-            xlsxTip.textContent = 'Excel 表格预览（只读）';
+            xlsxTip.textContent = I18N.t('Excel 表格预览（只读）');
             wsPanel.viewBody.appendChild(xlsxTip);
             if (typeof XLSX === 'undefined') {
                 var noX = document.createElement('div');
                 noX.className = 'ws-panel-hint';
-                noX.textContent = '表格组件未加载，无法预览';
+                noX.textContent = I18N.t('表格组件未加载，无法预览');
                 wsPanel.viewBody.appendChild(noX);
                 return;
             }
             if (!t.b64) {
                 var noXd = document.createElement('div');
                 noXd.className = 'ws-panel-hint';
-                noXd.textContent = '文件数据为空';
+                noXd.textContent = I18N.t('文件数据为空');
                 wsPanel.viewBody.appendChild(noXd);
                 return;
             }
@@ -13177,7 +13192,7 @@
                 catch (e) {
                     var badX = document.createElement('div');
                     badX.className = 'ws-panel-hint';
-                    badX.textContent = '解析失败：' + (e && e.message || e);
+                    badX.textContent = I18N.t('解析失败：') + (e && e.message || e);
                     wsPanel.viewBody.appendChild(badX);
                     return;
                 }
@@ -13186,7 +13201,7 @@
             if (!names.length) {
                 var emptyX = document.createElement('div');
                 emptyX.className = 'ws-panel-hint';
-                emptyX.textContent = '（空工作簿）';
+                emptyX.textContent = I18N.t('（空工作簿）');
                 wsPanel.viewBody.appendChild(emptyX);
                 return;
             }
@@ -13197,7 +13212,7 @@
                 var chip = document.createElement('span');
                 chip.className = 'ws-xlsx-chip' + (si === t.sheetIdx ? ' active' : '');
                 chip.textContent = nm;
-                chip.title = '切换到 ' + nm;
+                chip.title = I18N.t('切换到 ') + nm;
                 (function (idx) {
                     chip.addEventListener('click', function () {
                         var tt = wsPanel.tabs[path];
@@ -13213,9 +13228,9 @@
             xbody.className = 'ws-view-md ai-md ws-xlsx-body';
             try {
                 var wsObj = t.wb.Sheets[names[t.sheetIdx]];
-                xbody.innerHTML = XLSX.utils.sheet_to_html(wsObj, { header: '', footer: '' }) || '<p>（空表）</p>';
+                xbody.innerHTML = XLSX.utils.sheet_to_html(wsObj, { header: '', footer: '' }) || '<p>' + I18N.t('（空表）') + '</p>';
             } catch (e2) {
-                xbody.innerHTML = '<p>渲染失败：' + (e2 && e2.message || e2) + '</p>';
+                xbody.innerHTML = '<p>' + I18N.t('渲染失败：') + (e2 && e2.message || e2) + '</p>';
             }
             wsPanel.viewBody.appendChild(xbody);
             return;
@@ -13224,19 +13239,19 @@
             wsPanel.btnEdit.classList.add('hidden');
             var pptTip = document.createElement('div');
             pptTip.className = 'ws-panel-hint';
-            pptTip.textContent = 'PPT 幻灯片预览（只读）';
+            pptTip.textContent = I18N.t('PPT 幻灯片预览（只读）');
             wsPanel.viewBody.appendChild(pptTip);
             if (typeof PptxViewJS === 'undefined' || typeof JSZip === 'undefined') {
                 var noP = document.createElement('div');
                 noP.className = 'ws-panel-hint';
-                noP.textContent = '幻灯片组件未加载，无法预览';
+                noP.textContent = I18N.t('幻灯片组件未加载，无法预览');
                 wsPanel.viewBody.appendChild(noP);
                 return;
             }
             if (!t.b64) {
                 var noPd = document.createElement('div');
                 noPd.className = 'ws-panel-hint';
-                noPd.textContent = '文件数据为空';
+                noPd.textContent = I18N.t('文件数据为空');
                 wsPanel.viewBody.appendChild(noPd);
                 return;
             }
@@ -13246,13 +13261,13 @@
             pptBar.className = 'ws-pptx-bar';
             var btnPrev = document.createElement('button');
             btnPrev.className = 'ws-pptx-btn';
-            btnPrev.textContent = '‹ 上一页';
+            btnPrev.textContent = I18N.t('‹ 上一页');
             var pptIdx = document.createElement('span');
             pptIdx.className = 'ws-pptx-idx';
-            pptIdx.textContent = '加载中…';
+            pptIdx.textContent = I18N.t('加载中…');
             var btnNext = document.createElement('button');
             btnNext.className = 'ws-pptx-btn';
-            btnNext.textContent = '下一页 ›';
+            btnNext.textContent = I18N.t('下一页 ›');
             pptBar.appendChild(btnPrev);
             pptBar.appendChild(pptIdx);
             pptBar.appendChild(btnNext);
@@ -13276,12 +13291,12 @@
                         syncIdx();
                         return viewer.render();
                     }).then(syncIdx).catch(function (e) {
-                        pptIdx.textContent = '解析失败：' + (e && e.message || e);
+                        pptIdx.textContent = I18N.t('解析失败：') + (e && e.message || e);
                     });
                     btnPrev.addEventListener('click', function () { viewer.previousSlide().then(syncIdx).catch(function () {}); });
                     btnNext.addEventListener('click', function () { viewer.nextSlide().then(syncIdx).catch(function () {}); });
                 } catch (e) {
-                    pptIdx.textContent = '加载失败：' + (e && e.message || e);
+                    pptIdx.textContent = I18N.t('加载失败：') + (e && e.message || e);
                 }
             })(path);
             return;
@@ -13515,7 +13530,7 @@
             }
             var meta = document.createElement('div');
             meta.className = 'ws-hover-tip-meta';
-            meta.textContent = '第 ' + (def.line + 1) + ' 行定义' + (def.file && def.file !== path ? ' · ' + wsBaseName(def.file) : '') + ' · 点击跳转';
+            meta.textContent = I18N.t('第 ') + (def.line + 1) + I18N.t(' 行定义') + (def.file && def.file !== path ? ' · ' + wsBaseName(def.file) : '') + I18N.t(' · 点击跳转');
             tip.appendChild(sig);
             if (def.doc) tip.appendChild(doc);
             tip.appendChild(meta);
@@ -13595,7 +13610,7 @@
                         dTip.className = 'ws-hover-tip ws-diff-tip';
                         var h = document.createElement('div');
                         h.className = 'ws-diff-tip-head';
-                        h.textContent = '删除了 ' + g.lines.length + ' 行 · 点击查看差异对比';
+                        h.textContent = I18N.t('删除了 ') + g.lines.length + I18N.t(' 行 · 点击查看差异对比');
                         dTip.appendChild(h);
                         var dp = document.createElement('pre');
                         dp.className = 'ws-diff-tip-pre';
@@ -13639,7 +13654,7 @@
         wsPanel.btnSave.disabled = true;
         wsPanelReq('save', path, content).then(function () {
             wsPanel.btnSave.disabled = false;
-            showToast('已保存：' + path.replace(/^.*[\\/]/, ''));
+            showToast(I18N.t('已保存：') + path.replace(/^.*[\\/]/, ''));
             delete wsPanel.badges[path];
             t.content = content;
             delete t.draft;
@@ -13651,7 +13666,7 @@
             wsPanelRefreshTree();
         }).catch(function (err) {
             wsPanel.btnSave.disabled = false;
-            showToast('保存失败：' + (err && err.message || err));
+            showToast(I18N.t('保存失败：') + (err && err.message || err));
         });
     }
 
@@ -13673,7 +13688,7 @@
         var outEl = block.querySelector('.agent-event-output');
         // 阶段一百一十四：Computer Use 截图以 [[MCP_IMAGE:data:...]] 内联标记随结果下发（图像已注入多模态模型），
         // 控制台文本区把超长 base64 标记替换为简短占位，避免渲染巨量乱码
-        var outText = String(ev.output || '').replace(/\[\[MCP_IMAGE:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\]\]/g, '📷 [屏幕截图已作为图像附件提供给 AI]');
+        var outText = String(ev.output || '').replace(/\[\[MCP_IMAGE:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\]\]/g, I18N.t('📷 [屏幕截图已作为图像附件提供给 AI]'));
         // 阶段七十五：run_command 有实时控制台时输出已在控制台流式展示，不再重复灌满详情区
         // （控制台保留完整流与退出码行；无控制台的兜底路径仍走详情区文本）
         if (block.querySelector('.agent-cmd-console')) {
@@ -13777,7 +13792,7 @@
         // 阶段六十六：完结事件不依赖当前会话——切走会话/最小化后也要弹系统级提醒
         // （会话角标与摘要由服务端完结消息落库联动归口，此处补即时可感知；当前会话路径由 switch 内 agentTaskNotify 覆盖）
         if ((ev.type === 'done' || ev.type === 'error') && currentChatUser !== msg.from_user) {
-            agentTaskNotify(msg, st, ev.type === 'done' ? '已完成' : '执行失败');
+            agentTaskNotify(msg, st, ev.type === 'done' ? I18N.t('已完成') : I18N.t('执行失败'));
             return;
         }
         if (currentChatUser !== msg.from_user) return; // 仅当前会话实时渲染
@@ -13791,27 +13806,27 @@
             case 'status':
                 if (ev.status === 'queued') {
                     // 阶段六十七：排队中（含位次前移更新），按钮转"取消排队"
-                    setAgentTaskStatus(st, '排队中 · 第 ' + (ev.position || 1) + ' 位', 'queued');
+                    setAgentTaskStatus(st, I18N.t('排队中 · 第 ') + (ev.position || 1) + I18N.t(' 位'), 'queued');
                     st.stopBtn.disabled = false;
-                    st.stopBtn.textContent = '取消排队';
+                    st.stopBtn.textContent = I18N.t('取消排队');
                 }
                 // else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, '等待审批', 'waiting');
                 // 阶段一百二十五：状态事件携带服务端文案（审批="等待用户审批：xx"；提问="等待用户回答：xx"），前端直用缺失省兜底
-                else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, ev.text || '等待审批', 'waiting');
+                else if (ev.status === 'waiting_approval') setAgentTaskStatus(st, ev.text || I18N.t('等待审批'), 'waiting');
                 else if (ev.status === 'running') {
-                    setAgentTaskStatus(st, '执行中', 'running');
+                    setAgentTaskStatus(st, I18N.t('执行中'), 'running');
                     // 阶段六十七：自队列派发后按钮复位（排队态曾改为"取消排队"）
                     st.stopBtn.disabled = false;
-                    st.stopBtn.textContent = '停止';
+                    st.stopBtn.textContent = I18N.t('停止');
                 }
                 else if (ev.status === 'cancelled') {
                     // 阶段七十：取消同样折叠执行过程（与完成态观感一致，点击卡头可回看）
                     collapseAgentCard(st);
                     agentFinalizeText(st, true);
                     // 阶段一百零二：取消不扣积分，已消耗 Token 标注到任务卡
-                    finishAgentTask(st, '已取消' + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'cancelled', ev.elapsed_ms);
+                    finishAgentTask(st, I18N.t('已取消') + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'cancelled', ev.elapsed_ms);
                     // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
-                    if (ev.msg_id) appendMessage(msg.from_user, '任务已取消', 'other', ev.msg_id, msg.timestamp, true);
+                    if (ev.msg_id) appendMessage(msg.from_user, I18N.t('任务已取消'), 'other', ev.msg_id, msg.timestamp, true);
                 }
                 break;
             case 'thought': addAgentThought(st, ev.text); break;
@@ -13820,7 +13835,7 @@
                 // 阶段八十四：TRAE 同款"历史对话压缩中"——长任务上下文自动瘦身（较早已完成工具轮归并为摘要）；
                 // start=压缩开始提示，done=完成（完成不重复上屏，避免思考区出现两条）
                 if (!ev.phase || ev.phase === 'start') {
-                    addAgentThought(st, '历史对话压缩中…（较早执行记录正在归并为摘要，节省 token 并加速响应）');
+                    addAgentThought(st, I18N.t('历史对话压缩中…（较早执行记录正在归并为摘要，节省 token 并加速响应）'));
                     // 阶段一百三十九：占用环即时升到压缩前峰值（占用/阈值/口径随帧下发，前端不硬编码）
                     if (ev.used != null) agentCtxRingUpdate(st, ev.used, ev.max, ev.mode);
                 } else if (ev.phase === 'done') {
@@ -13841,10 +13856,10 @@
                         st.costEl.appendChild(st.costEl._label);
                         st.costEl.appendChild(st.costEl._elapsed);
                     }
-                    st.costEl._label.textContent = '⚡ 第 ' + (ev.round || '?') + ' 轮：提示 ' + (ev.prompt_tokens || 0) +
-                        ' + 生成 ' + (ev.completion_tokens || 0) +
+                    st.costEl._label.textContent = I18N.t('⚡ 第 ') + (ev.round || '?') + I18N.t(' 轮：提示 ') + (ev.prompt_tokens || 0) +
+                        I18N.t(' + 生成 ') + (ev.completion_tokens || 0) +
                         (ev.billing_mode === 'percall' && ev.points_cost != null && ev.points_cost > 0
-                            ? '，扣 ' + ev.points_cost + ' 积分' : '');
+                            ? I18N.t('，扣 ') + ev.points_cost + I18N.t(' 积分') : '');
                     // 阶段一百三十八：计费模式与该轮扣费记录到任务态——完结答复气泡操作栏沿用同一口径
                     if (ev.billing_mode) {
                         st.billingMode = ev.billing_mode;
@@ -13863,7 +13878,7 @@
                 break;
             case 'tool_result':
                 // 阶段一百二十五：ask_user 的 tool_result（回答/跳过/超时收口）到达 → 统一收尾提问卡（防迟到重复作答）
-                if (ev.tool === 'ask_user') agentAskSettlePending(st, ev.output || '本次提问已收尾');
+                if (ev.tool === 'ask_user') agentAskSettlePending(st, ev.output || I18N.t('本次提问已收尾'));
                 fillAgentTool(st, ev);
                 wsPanelOnToolResult(ev); // 阶段七十六：文件面板刷新树 + 自动打开生成/修改的文件
                 break;
@@ -13883,7 +13898,7 @@
                 st.tokens = { total: ev.total_tokens || 0, prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0 };
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
                 collapseAgentCard(st);
-                finishAgentTask(st, '已完成' + agentTokensTag(st.tokens, ev.points_cost), 'done', ev.elapsed_ms);
+                finishAgentTask(st, I18N.t('已完成') + agentTokensTag(st.tokens, ev.points_cost), 'done', ev.elapsed_ms);
                 // 阶段七十七：文件变更审查条（TRAE CN 同款，撤销/保留归口）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
@@ -13906,22 +13921,22 @@
                     }
                 }
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
-                agentTaskNotify(msg, st, '已完成');
+                agentTaskNotify(msg, st, I18N.t('已完成'));
                 break;
             case 'error':
                 agentFinalizeText(st, true);
                 // 阶段一百零二：失败不扣积分，已消耗 Token 标注到任务卡
-                finishAgentTask(st, '失败' + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'failed', ev.elapsed_ms);
+                finishAgentTask(st, I18N.t('失败') + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'failed', ev.elapsed_ms);
                 // 阶段七十七：失败同样结算变更（已落盘的脏改可撤销）
                 if (ev.changes && ev.changes.length) agentRenderChanges(st, ev.changes);
                 agentConsoleTaskEnd(); // 阶段七十五（增强）：任务完结收"打开控制台"浮标
-                showToast(ev.message || '任务执行失败');
+                showToast(ev.message || I18N.t('任务执行失败'));
                 // 阶段六十六：失败通知气泡实时渲染（内容与服务端落库留档一致），并已读归口
                 if (ev.msg_id) {
-                    appendMessage(msg.from_user, '任务执行失败：' + (ev.message || '未知原因'), 'other', ev.msg_id, msg.timestamp, true);
+                    appendMessage(msg.from_user, I18N.t('任务执行失败：') + (ev.message || I18N.t('未知原因')), 'other', ev.msg_id, msg.timestamp, true);
                     sendReadReceipt(msg.from_user, ev.msg_id);
                 }
-                agentTaskNotify(msg, st, '执行失败');
+                agentTaskNotify(msg, st, I18N.t('执行失败'));
                 break;
         }
     });
@@ -13932,9 +13947,9 @@
         if (!document.hidden && currentChatUser === msg.from_user) return; // 正盯着该会话，任务卡片即通知
         var goal = (st && st.goal) ? String(st.goal) : '';
         if (goal.length > 20) goal = goal.slice(0, 20) + '…';
-        var body = '任务' + statusText + (goal ? '：' + goal : '');
+        var body = I18N.t('任务') + statusText + (goal ? '：' + goal : '');
         if (window.desktop && typeof window.desktop.notify === 'function') {
-            window.desktop.notify('Agent 任务', body);
+            window.desktop.notify(I18N.t('Agent 任务'), body);
         } else {
             showToast(body);
         }
@@ -13959,8 +13974,8 @@
             if (st) {
                 var autoLine = document.createElement('div');
                 autoLine.className = 'agent-event approve auto-settled';
-                autoLine.textContent = '已自动审批 · ' + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '') +
-                    (approveMode === 'full' ? '（完全访问模式）' : '（自动审批模式）');
+                autoLine.textContent = I18N.t('已自动审批 · ') + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '') +
+                    (approveMode === 'full' ? I18N.t('（完全访问模式）') : I18N.t('（自动审批模式）'));
                 st.events.appendChild(autoLine);
                 if (currentChatUser === msg.from_user) agentTaskScroll();
             }
@@ -13973,10 +13988,10 @@
         block.className = 'agent-event approve';
         var head = document.createElement('div');
         head.className = 'agent-event-head approve';
-        head.textContent = '需要审批 · ' + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '');
+        head.textContent = I18N.t('需要审批 · ') + (ev.label || AGENT_TOOL_TITLE[ev.tool] || ev.tool || '');
         var reason = document.createElement('div');
         reason.className = 'agent-approve-reason';
-        reason.textContent = ev.reason || '该操作需要确认';
+        reason.textContent = ev.reason || I18N.t('该操作需要确认');
         var editor = document.createElement('textarea');
         editor.className = 'agent-approve-params';
         editor.rows = 4;
@@ -13985,18 +14000,18 @@
         actions.className = 'agent-approve-actions';
         var okBtn = document.createElement('button');
         okBtn.className = 'agent-approve-ok';
-        okBtn.textContent = '同意执行';
+        okBtn.textContent = I18N.t('同意执行');
         // 阶段六十二：同意并加入白名单——run_command 放行该命令首词（链式命令除外），write_file 开启写文件免审批，
         // 服务端 DB 持久化，重启不丢；后续同类操作不再弹审批。
         // 阶段七十四：edit_file 共用写文件免审批；delete_file 不可加白（不可恢复操作逐次确认），不显示加白按钮
         var wlBtn = document.createElement('button');
         wlBtn.className = 'agent-approve-wl';
-        wlBtn.textContent = '同意并加白';
-        wlBtn.title = (ev.tool === 'write_file' || ev.tool === 'edit_file') ? '同意本次，且之后的写/编辑文件操作不再需要审批'
-            : '同意本次，且之后以相同命令开头的操作不再需要审批（链式命令除外）';
+        wlBtn.textContent = I18N.t('同意并加白');
+        wlBtn.title = (ev.tool === 'write_file' || ev.tool === 'edit_file') ? I18N.t('同意本次，且之后的写/编辑文件操作不再需要审批')
+            : I18N.t('同意本次，且之后以相同命令开头的操作不再需要审批（链式命令除外）');
         var noBtn = document.createElement('button');
         noBtn.className = 'agent-approve-no';
-        noBtn.textContent = '拒绝';
+        noBtn.textContent = I18N.t('拒绝');
         actions.appendChild(okBtn);
         // 阶段八十九：MCP 工具无命令前缀/写文件白名单语义（服务端 whitelist 分支无副作用），不显示加白按钮
         if (ev.tool !== 'delete_file' && String(ev.tool || '').indexOf('mcp_') !== 0) actions.appendChild(wlBtn);
@@ -14023,7 +14038,7 @@
         function sendApprove(action, doneText) {
             var params = null;
             try { params = JSON.parse(editor.value); } catch (e) {
-                showToast('参数 JSON 格式错误，请修正后再同意');
+                showToast(I18N.t('参数 JSON 格式错误，请修正后再同意'));
                 return;
             }
             IMSocket.send({
@@ -14035,11 +14050,11 @@
 
         okBtn.addEventListener('click', function () {
             if (okBtn.disabled) return;
-            sendApprove('approve', '已同意');
+            sendApprove('approve', I18N.t('已同意'));
         });
         wlBtn.addEventListener('click', function () {
             if (wlBtn.disabled) return;
-            sendApprove('whitelist', '已同意并加入白名单，同类操作后续不再提示');
+            sendApprove('whitelist', I18N.t('已同意并加入白名单，同类操作后续不再提示'));
         });
         noBtn.addEventListener('click', function () {
             if (noBtn.disabled) return;
@@ -14047,7 +14062,7 @@
                 msg_type: MSG.AGENT_APPROVE,
                 content: JSON.stringify({ task_id: ev.task_id, step: ev.step, action: 'reject' })
             });
-            settle('已拒绝，等待 Agent 调整方案');
+            settle(I18N.t('已拒绝，等待 Agent 调整方案'));
         });
     });
 
@@ -14088,10 +14103,10 @@
         block.className = 'agent-event ask';
         var head = document.createElement('div');
         head.className = 'agent-event-head ask';
-        head.textContent = '正在向你提问 · 等待你的回复';
+        head.textContent = I18N.t('正在向你提问 · 等待你的回复');
         var q = document.createElement('div');
         q.className = 'agent-ask-question';
-        q.textContent = ev.question || '（未提供问题内容）';
+        q.textContent = ev.question || I18N.t('（未提供问题内容）');
         block.appendChild(head);
         block.appendChild(q);
         if (ev.context) {
@@ -14117,12 +14132,12 @@
                 item.className = 'agent-ask-option';
                 var label = document.createElement('div');
                 label.className = 'agent-ask-option-label';
-                label.textContent = op.label || ('选项 ' + (idx + 1));
+                label.textContent = op.label || (I18N.t('选项 ') + (idx + 1));
                 item.appendChild(label);
                 if (op.recommended) {
                     var badge = document.createElement('span');
                     badge.className = 'agent-ask-option-badge';
-                    badge.textContent = '推荐';
+                    badge.textContent = I18N.t('推荐');
                     label.appendChild(badge);
                 }
                 if (op.description) {
@@ -14135,7 +14150,7 @@
                     if (settled) return;
                     list.querySelectorAll('.agent-ask-option.selected').forEach(function (el) { el.classList.remove('selected'); });
                     item.classList.add('selected');
-                    selectedLabel = op.label || ('选项 ' + (idx + 1));
+                    selectedLabel = op.label || (I18N.t('选项 ') + (idx + 1));
                     if (freeInput) freeInput.value = '';
                     if (freeCount) freeCount.textContent = '0/500';
                 });
@@ -14150,12 +14165,12 @@
             freeRow.className = 'agent-ask-free';
             var freeLabel = document.createElement('span');
             freeLabel.className = 'agent-ask-free-label';
-            freeLabel.textContent = '其他';
+            freeLabel.textContent = I18N.t('其他');
             freeInput = document.createElement('input');
             freeInput.className = 'agent-ask-free-input';
             freeInput.type = 'text';
             freeInput.maxLength = 500;
-            freeInput.placeholder = '请输入';
+            freeInput.placeholder = I18N.t('请输入');
             freeCount = document.createElement('span');
             freeCount.className = 'agent-ask-free-count';
             freeCount.textContent = '0/500';
@@ -14184,12 +14199,12 @@
         actions.className = 'agent-approve-actions agent-ask-actions';
         var noBtn = document.createElement('button');
         noBtn.className = 'agent-approve-no';
-        noBtn.textContent = '取消';
-        noBtn.title = '取消本次回答，Agent 将按默认方案继续';
+        noBtn.textContent = I18N.t('取消');
+        noBtn.title = I18N.t('取消本次回答，Agent 将按默认方案继续');
         var okBtn = document.createElement('button');
         okBtn.className = 'agent-approve-ok';
-        okBtn.textContent = '提交';
-        okBtn.title = '提交回答';
+        okBtn.textContent = I18N.t('提交');
+        okBtn.title = I18N.t('提交回答');
         actions.appendChild(noBtn);
         actions.appendChild(okBtn);
         block.appendChild(actions);
@@ -14221,17 +14236,17 @@
             if (settled) return;
             var answer = selectedLabel || (freeInput && freeInput.value.trim()) || '';
             if (!answer) {
-                showToast('请先选择一个选项，或在"其他"中输入你的回答');
+                showToast(I18N.t('请先选择一个选项，或在"其他"中输入你的回答'));
                 return;
             }
             send('answer', answer);
-            agentAskSettlePending(st, '已回答：' + answer); // 收尾全部实例（含本卡与弹窗归位）
+            agentAskSettlePending(st, I18N.t('已回答：') + answer); // 收尾全部实例（含本卡与弹窗归位）
         }
         okBtn.addEventListener('click', submit);
         noBtn.addEventListener('click', function () {
             if (settled) return;
             send('skip');
-            agentAskSettlePending(st, '已取消本次回答，Agent 将按默认方案继续');
+            agentAskSettlePending(st, I18N.t('已取消本次回答，Agent 将按默认方案继续'));
         });
 
         // 登记到任务卡收尾表（tool_result 到达 / 任务完结时统一收尾）
@@ -14359,7 +14374,7 @@
                     from_user: IMSocket.getUsername(),
                     content: JSON.stringify({
                         task_id: ev.task_id, step: ev.step, ok: false,
-                        output: '错误：本地执行器异常 ' + (err && err.message || err)
+                        output: I18N.t('错误：本地执行器异常 ') + (err && err.message || err)
                     })
                 });
             });
@@ -14377,7 +14392,7 @@
             if (msg.to_user !== IMSocket.getUsername()) return;
             var ev;
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
-            if (ev && ev.ok) showToast('本机 MCP 工具已上报（' + (ev.count || 0) + ' 个）');
+            if (ev && ev.ok) showToast(I18N.t('本机 MCP 工具已上报（') + (ev.count || 0) + I18N.t(' 个）'));
         });
         // 阶段七十六：工作区文件面板本地操作桥（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
         IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
@@ -14402,7 +14417,7 @@
                 IMSocket.send({
                     msg_type: MSG.PC_FILE_RESP,
                     from_user: IMSocket.getUsername(),
-                    content: JSON.stringify({ op: ev.op, req_id: ev.req_id, ok: false, error: '本地文件操作异常 ' + (err && err.message || err) })
+                    content: JSON.stringify({ op: ev.op, req_id: ev.req_id, ok: false, error: I18N.t('本地文件操作异常 ') + (err && err.message || err) })
                 });
             });
         });
@@ -14451,8 +14466,8 @@
         }
         return '<div class="ai-code-block">'
             + '<div class="ai-code-head">'
-            + '<span class="ai-code-lang">' + (displayLang || '代码') + '</span>'
-            + '<span class="ai-code-copy" title="复制代码">'
+            + '<span class="ai-code-lang">' + (displayLang || I18N.t('代码')) + '</span>'
+            + I18N.t('<span class="ai-code-copy" title="复制代码">')
             + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>'
             + '</span></div>'
             + '<pre class="ai-md-pre"><code class="hljs">' + highlighted + '</code></pre>'
@@ -14669,7 +14684,7 @@
             if (cv.unread <= 0) return;
             total += cv.unread;
             // 会话名与列表同口径：群聊/好友备注优先，无备注回退用户名
-            var name = cv.target === '' ? '群聊' : cv.target;
+            var name = cv.target === '' ? I18N.t('群聊') : cv.target;
             if (cv.target !== '') {
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
                 if (convFriend && convFriend.remark) name = convFriend.remark;
@@ -14711,7 +14726,7 @@
                 rpNotifyLastTs = ntNow;
                 if (window.desktop && window.desktop.notify) {
                     var nf = list[0]; // convList 按最后活跃倒序，首条即最新消息来源
-                    window.desktop.notify(nf.name, nf.last || '发来新消息');
+                    window.desktop.notify(nf.name, nf.last || I18N.t('发来新消息'));
                 }
             }
         }
@@ -14750,7 +14765,7 @@
         if (convList.length === 0) {
             var empty = document.createElement('li');
             empty.className = 'conv-empty';
-            empty.textContent = '暂无会话，去好友页添加好友开始聊天吧';
+            empty.textContent = I18N.t('暂无会话，去好友页添加好友开始聊天吧');
             convListEl.appendChild(empty);
             return;
         }
@@ -14759,7 +14774,7 @@
             var isGroup = cv.target === '' || isGroupTarget(cv.target);
             // 原实现：var convName = isGroup ? '群聊' : cv.target; 会话列表只显示用户名，通讯录修改备注后不同步
             // 修复：与通讯录/聊天标题同口径——好友备注优先显示，无备注回退用户名
-            var convName = isGroup ? (cv.target === '' ? '群聊' : groupNameOf(cv.target)) : cv.target;
+            var convName = isGroup ? (cv.target === '' ? I18N.t('群聊') : groupNameOf(cv.target)) : cv.target;
             if (!isGroup) {
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
                 if (convFriend && convFriend.remark) convName = convFriend.remark;
@@ -14777,7 +14792,7 @@
             avatar.className = 'conv-avatar';
             // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
             // 阶段一百四十二：多群会话无头像时回退"群"字占位（旧全局群仍走 convName 首字）
-            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : (isGroup && cv.target !== '' ? '群' : convName.charAt(0).toUpperCase());
+            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : (isGroup && cv.target !== '' ? I18N.t('群') : convName.charAt(0).toUpperCase());
             if (avatarUrl) {
                 var avatarImg = document.createElement('img');
                 avatarImg.src = avatarUrl;
@@ -14833,7 +14848,7 @@
                 var pinItem = convMenu.querySelector('[data-action="pin"]');
                 // 阶段八十八：只改 .mi-text 文字节点，防止 textContent 连同 SVG 图标一起清掉（与消息菜单同坑同修）
                 var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
-                pinLabel.textContent = cv.pinned ? '取消置顶' : '置顶聊天';
+                pinLabel.textContent = cv.pinned ? I18N.t('取消置顶') : I18N.t('置顶聊天');
                 // 设置备注项仅好友可见（群聊/陌生人无备注概念），右键时动态显隐
                 var remarkItem = convMenu.querySelector('[data-action="remark"]');
                 var convIsFriend = friendList.some(function (x) { return x.username === cv.target; });
@@ -14849,7 +14864,17 @@
     // 会话右键菜单：置顶/清空/删除
     var convMenu = document.getElementById('conv-menu');
     convMenu.querySelector('[data-action="pin"]').addEventListener('click', function () {
-        var pin = this.textContent === '置顶聊天';
+        // 阶段一百五十二修正（i18n 回归实测发现的老 bug）：原比较 this.textContent === I18N.t('置顶聊天')
+        // 因菜单项含 SVG 图标与 HTML 缩进空白，全等永远失败——点击"置顶聊天"实际发送 unpin，置顶功能失效
+        // （迁移前后中文模式同样失败，与 i18n 无关）。改用会话数据状态判断（与消息菜单 pin 的
+        // pinInfo 状态判断同模式），渲染处 L14851 与本处同源于 cv.pinned，中英文模式均正确。
+        // 原实现：var pin = this.textContent === I18N.t('置顶聊天');
+        // 更早实现：var pin = this.textContent === '置顶聊天';
+        var cvItem = null;
+        for (var i = 0; i < convList.length; i++) {
+            if (convList[i].target === convTarget) { cvItem = convList[i]; break; }
+        }
+        var pin = !(cvItem && cvItem.pinned);
         IMSocket.send({
             msg_type: MSG.CONV_PIN,
             to_user: convTarget,
@@ -14862,31 +14887,31 @@
         convMenu.classList.add('hidden');
         var isFriend = friendList.some(function (x) { return x.username === convTarget; });
         if (!isFriend) {
-            showToast('仅好友可设置备注');
+            showToast(I18N.t('仅好友可设置备注'));
             return;
         }
-        showPrompt('设置备注', '请输入好友备注名', function (remark) {
+        showPrompt(I18N.t('设置备注'), I18N.t('请输入好友备注名'), function (remark) {
             IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: convTarget, remark: remark });
         });
     });
     // 清空聊天记录：服务端将消息标记为当前用户已删除（云端记录保留），本地同步清空当前视图
     convMenu.querySelector('[data-action="clear"]').addEventListener('click', function () {
         convMenu.classList.add('hidden');
-        var name = convTarget === '' ? '群聊' : convTarget;
-        showConfirm('清空聊天记录', '确定清空与 ' + name + ' 的全部聊天记录吗？', function () {
+        var name = convTarget === '' ? I18N.t('群聊') : convTarget;
+        showConfirm(I18N.t('清空聊天记录'), I18N.t('确定清空与 ') + name + I18N.t(' 的全部聊天记录吗？'), function () {
             IMSocket.send({ msg_type: MSG.CONV_CLEAR, to_user: convTarget });
             // 当前正在查看该会话时，同步清空聊天窗口显示
             if (convTarget === currentChatUser) {
                 messageList.innerHTML = '';
-                appendSystem('聊天记录已清空');
+                appendSystem(I18N.t('聊天记录已清空'));
             }
         });
     });
     // 删除会话：从列表移除（云端记录保留），若正在查看则切回群聊
     convMenu.querySelector('[data-action="delete"]').addEventListener('click', function () {
         convMenu.classList.add('hidden');
-        var name = convTarget === '' ? '群聊' : convTarget;
-        showConfirm('删除会话', '确定删除与 ' + name + ' 的会话吗？聊天记录将保留在云端。', function () {
+        var name = convTarget === '' ? I18N.t('群聊') : convTarget;
+        showConfirm(I18N.t('删除会话'), I18N.t('确定删除与 ') + name + I18N.t(' 的会话吗？聊天记录将保留在云端。'), function () {
             var isCurrent = convTarget === currentChatUser;
             IMSocket.send({ msg_type: MSG.CONV_DELETE, to_user: convTarget });
             // 正在查看被删除的会话时，切回群聊
@@ -14923,7 +14948,7 @@
             processedRequests[msg.msg_id] = true;
         }
         // 微信式轻提醒：Toast 提示 + "新的朋友"红点角标，申请进入列表随时可处理，不再弹确认框
-        showToast(msg.from_user + ' 请求添加你为好友');
+        showToast(msg.from_user + I18N.t(' 请求添加你为好友'));
         refreshFriendReqList();
     });
 
@@ -14965,7 +14990,7 @@
     function renderFriendReqList(list) {
         lastFriendReqData = list; // 缓存最近一次好友申请数据（群邀请变动时合并重渲染）
         if (!list.length && !groupInvites.length) {
-            newFriendsListEl.innerHTML = '<div class="new-friends-empty">暂无好友申请</div>';
+            newFriendsListEl.innerHTML = '<div class="new-friends-empty">' + I18N.t('暂无好友申请') + '</div>';
             return;
         }
         var html = '';
@@ -14977,29 +15002,29 @@
                 : '<div class="avatar placeholder">' + (r.from_user || '?').charAt(0).toUpperCase() + '</div>';
             var right = '';
             if (r.status === 0) {
-                right = '<button class="req-btn primary" data-req-from="' + r.from_user + '" data-req-act="agree">同意</button>'
-                      + '<button class="req-btn" data-req-from="' + r.from_user + '" data-req-act="reject">拒绝</button>';
+                right = '<button class="req-btn primary" data-req-from="' + r.from_user + I18N.t('" data-req-act="agree">同意') + '</button>'
+                      + '<button class="req-btn" data-req-from="' + r.from_user + I18N.t('" data-req-act="reject">拒绝') + '</button>';
             } else if (r.status === 1) {
-                right = '<span class="req-status">已同意</span>';
+                right = '<span class="req-status">' + I18N.t('已同意') + '</span>';
             } else {
-                right = '<span class="req-status">已拒绝</span>';
+                right = '<span class="req-status">' + I18N.t('已拒绝') + '</span>';
             }
             var timeStr = r.create_time ? new Date(r.create_time * 1000).toLocaleString() : '';
             html += '<div class="req-item">' + avatarHtml
                 + '<div class="req-info"><div class="req-name">' + r.from_user + '</div>'
-                + '<div class="req-msg">' + (r.message || '请求添加你为好友') + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
+                + '<div class="req-msg">' + (r.message || I18N.t('请求添加你为好友')) + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
                 + '<div class="req-actions">' + right + '</div></div>';
         });
         // 阶段一百四十二：群邀请行（同 req-item 结构，头像用"群"字占位，status 仅保留待处理故恒显双按钮）
         groupInvites.forEach(function (r) {
             var timeStr = r.create_time ? new Date(r.create_time * 1000).toLocaleString() : '';
             html += '<div class="req-item">'
-                + '<div class="avatar placeholder">群</div>'
+                + '<div class="avatar placeholder">' + I18N.t('群') + '</div>'
                 + '<div class="req-info"><div class="req-name">' + (r.from_name || r.from_user || '?') + '</div>'
-                + '<div class="req-msg">邀请你加入群聊「' + (r.name || '群聊') + '」' + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
+                + '<div class="req-msg">' + I18N.t('邀请你加入群聊「') + (r.name || I18N.t('群聊')) + '」' + (timeStr ? ' · ' + timeStr : '') + '</div></div>'
                 + '<div class="req-actions">'
-                + '<button class="req-btn primary" data-grp-invite="' + r.invite_id + '" data-grp-act="agree">同意</button>'
-                + '<button class="req-btn" data-grp-invite="' + r.invite_id + '" data-grp-act="reject">拒绝</button>'
+                + '<button class="req-btn primary" data-grp-invite="' + r.invite_id + I18N.t('" data-grp-act="agree">同意') + '</button>'
+                + '<button class="req-btn" data-grp-invite="' + r.invite_id + I18N.t('" data-grp-act="reject">拒绝') + '</button>'
                 + '</div></div>';
         });
         newFriendsListEl.innerHTML = html;
@@ -15034,7 +15059,7 @@
         var friendsTab = document.querySelector('.sidebar-tab[data-tab="friends"]');
         if (friendsTab && !friendsTab.classList.contains('active')) friendsTab.click();
         newFriendsPanel.classList.remove('hidden');
-        newFriendsListEl.innerHTML = '<div class="new-friends-empty">加载中...</div>';
+        newFriendsListEl.innerHTML = '<div class="new-friends-empty">' + I18N.t('加载中...') + '</div>';
         IMSocket.send({ msg_type: MSG.FRIEND_REQ_LIST });
     });
     newFriendsClose.addEventListener('click', function () {
@@ -15044,7 +15069,7 @@
     // 申请方收到处理结果同步：微信式"对方已同意/拒绝你的好友申请"提示（多端同步由服务端归口推送）
     IMSocket.on(MSG.FRIEND_REQUEST_RESP, function (msg) {
         if (msg.from_user === IMSocket.getUsername()) return; // 过滤本端回显
-        showToast(msg.from_user + (msg.content === 'agree' ? ' 已同意你的好友申请' : ' 已拒绝你的好友申请'));
+        showToast(msg.from_user + (msg.content === 'agree' ? I18N.t(' 已同意你的好友申请') : I18N.t(' 已拒绝你的好友申请')));
     });
 
     // ===== 阶段一百四十二：多群聊一期（微信同款建群/邀请/多群收发，群数据 73 服务端归口） =====
@@ -15058,7 +15083,7 @@
     function isGroupTarget(t) { return !!t && /^g[0-9]+$/.test(String(t)); }
     function groupIdFromTarget(t) { return parseInt(String(t).slice(1), 10) || 0; }
     function groupOfId(gid) { return groupMap[String(gid)] || null; }
-    function groupNameOf(t) { var g = groupOfId(groupIdFromTarget(t)); return (g && g.name) ? g.name : '群聊'; }
+    function groupNameOf(t) { var g = groupOfId(groupIdFromTarget(t)); return (g && g.name) ? g.name : I18N.t('群聊'); }
     function isGroupOwner(t) { var g = groupOfId(groupIdFromTarget(t)); return !!g && g.owner === IMSocket.getUsername(); }
 
     // "新的朋友"面板统一渲染入口：好友申请（41 列表）+ 群邀请（75 缓存）合并
@@ -15086,7 +15111,7 @@
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
-        showToast('已创建群聊「' + (data.name || '群聊') + '」');
+        showToast(I18N.t('已创建群聊「') + (data.name || I18N.t('群聊')) + '」');
     });
 
     // 群邀请通知：缓存待处理邀请；"新的朋友"面板打开时同步合并渲染
@@ -15098,7 +15123,7 @@
             if (groupInvites[i].invite_id === data.invite_id) return; // msg_id 去重（离线补推/重复广播）
         }
         groupInvites.push(data);
-        showToast((data.from_name || data.from_user || '有人') + ' 邀请你加入群聊「' + (data.name || '群聊') + '」');
+        showToast((data.from_name || data.from_user || I18N.t('有人')) + I18N.t(' 邀请你加入群聊「') + (data.name || I18N.t('群聊')) + '」');
         if (!newFriendsPanel.classList.contains('hidden')) renderNewFriendsPanel();
     });
 
@@ -15109,18 +15134,18 @@
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
         if (data.action === 'create') {
-            showToast('已创建群聊');
+            showToast(I18N.t('已创建群聊'));
         } else if (data.action === 'join') {
-            showToast('你已加入群聊「' + (data.name || '群聊') + '」');
+            showToast(I18N.t('你已加入群聊「') + (data.name || I18N.t('群聊')) + '」');
         } else if (data.action === 'reject') {
             if (msg.from_user !== IMSocket.getUsername()) return; // 只收服务端以自己名义推送的拒绝回执
-            showToast((data.from_name || '对方') + ' 已拒绝你的邀请');
+            showToast((data.from_name || I18N.t('对方')) + I18N.t(' 已拒绝你的邀请'));
         } else if (data.action === 'kick') {
             // 阶段一百四十三：被移出群聊——本地清理归口（含群名服务端下发）
-            removeGroupLocal(data.group_id, '你已被移出群聊「' + (data.name || '群聊') + '」');
+            removeGroupLocal(data.group_id, I18N.t('你已被移出群聊「') + (data.name || I18N.t('群聊')) + '」');
         } else if (data.action === 'leave') {
             // 阶段一百四十三：自己退群成功的清理通知
-            removeGroupLocal(data.group_id, '已退出群聊「' + (data.name || '群聊') + '」');
+            removeGroupLocal(data.group_id, I18N.t('已退出群聊「') + (data.name || I18N.t('群聊')) + '」');
         }
         if (data.invite_id) {
             var remain = groupInvites.filter(function (x) { return x.invite_id !== data.invite_id; });
@@ -15201,8 +15226,8 @@
         if (!g) { closeGroupSetting(); return; }
         var owner = isGroupOwner('g' + g.group_id);
         var kw = gsetMSearch.value.trim().toLowerCase();
-        gsetName.textContent = g.name || '群聊';
-        gsetAnnounce.textContent = g.announce || '暂无群公告';
+        gsetName.textContent = g.name || I18N.t('群聊');
+        gsetAnnounce.textContent = g.announce || I18N.t('暂无群公告');
         gsetAnnounce.classList.toggle('gset-empty-announce', !g.announce);
         // 管理入口显隐（仅群主）
         gsetNameEditBtn.classList.toggle('hidden', !owner);
@@ -15222,7 +15247,7 @@
             var isMe = m.username === IMSocket.getUsername();
             var cell = document.createElement('div');
             cell.className = 'gset-member';
-            cell.title = (isMe ? nm + '（我）' : nm) + (m.role === 1 ? ' · 群主' : '');
+            cell.title = (isMe ? nm + I18N.t('（我）') : nm) + (m.role === 1 ? I18N.t(' · 群主') : '');
             if (m.avatar) {
                 var av = document.createElement('img');
                 av.src = m.avatar;
@@ -15235,14 +15260,14 @@
             }
             var lbl = document.createElement('div');
             lbl.className = 'gset-member-name';
-            lbl.textContent = isMe ? '我' : nm;
+            lbl.textContent = isMe ? I18N.t('我') : nm;
             cell.appendChild(lbl);
             cell.addEventListener('click', function () {
                 // 群主点击普通成员 → 确认后移出（自研确认弹窗）；群主/自己点击无操作
                 if (!owner || m.role === 1 || isMe) return;
-                showConfirm('移出成员', '将「' + nm + '」移出群聊「' + (g.name || '群聊') + '」？', function () {
+                showConfirm(I18N.t('移出成员'), I18N.t('将「') + nm + I18N.t('」移出群聊「') + (g.name || I18N.t('群聊')) + '」？', function () {
                     IMSocket.send({ msg_type: MSG.GROUP_KICK, content: JSON.stringify({ group_id: gsetGroupID, member: m.username }) });
-                }, '移出');
+                }, I18N.t('移出'));
             });
             gsetMembersEl.appendChild(cell);
         });
@@ -15250,13 +15275,13 @@
         if (owner) {
             var add = document.createElement('div');
             add.className = 'gset-add';
-            add.title = '添加成员';
+            add.title = I18N.t('添加成员');
             var addBox = document.createElement('div');
             addBox.className = 'gset-add-box';
             addBox.textContent = '+';
             var addName = document.createElement('div');
             addName.className = 'gset-add-name';
-            addName.textContent = '添加';
+            addName.textContent = I18N.t('添加');
             add.appendChild(addBox);
             add.appendChild(addName);
             add.addEventListener('click', function () { openGroupPicker('invite', gsetGroupID); });
@@ -15266,7 +15291,7 @@
         var overflow = gsetMembersEl.scrollHeight > gsetMembersEl.clientHeight + 2;
         var expanded = gsetMembersEl.classList.contains('expanded');
         gsetMore.classList.toggle('hidden', !(overflow || expanded));
-        gsetMore.textContent = expanded ? '收起' : '查看全部成员';
+        gsetMore.textContent = expanded ? I18N.t('收起') : I18N.t('查看全部成员');
     }
 
     // 群名行内编辑：显示编辑行并预填当前群名
@@ -15281,7 +15306,7 @@
     document.getElementById('gset-name-cancel').addEventListener('click', exitGsetEdit);
     document.getElementById('gset-name-save').addEventListener('click', function () {
         var name = gsetNameInput.value.trim();
-        if (!name) { showToast('群名称不能为空'); return; }
+        if (!name) { showToast(I18N.t('群名称不能为空')); return; }
         IMSocket.send({ msg_type: MSG.GROUP_SETTING, content: JSON.stringify({ group_id: gsetGroupID, name: name }) });
     });
 
@@ -15303,9 +15328,9 @@
     gsetQuit.addEventListener('click', function () {
         var g = groupOfId(gsetGroupID);
         if (!g) return;
-        showConfirm('退出群聊', '退出后将删除该群会话，确定退出群聊「' + (g.name || '群聊') + '」？', function () {
+        showConfirm(I18N.t('退出群聊'), I18N.t('退出后将删除该群会话，确定退出群聊「') + (g.name || I18N.t('群聊')) + '」？', function () {
             IMSocket.send({ msg_type: MSG.GROUP_QUIT, content: JSON.stringify({ group_id: gsetGroupID }) });
-        }, '退出');
+        }, I18N.t('退出'));
     });
 
     // 成员搜索过滤
@@ -15314,7 +15339,7 @@
     // 查看全部成员 / 收起
     gsetMore.addEventListener('click', function () {
         var expanded = gsetMembersEl.classList.toggle('expanded');
-        gsetMore.textContent = expanded ? '收起' : '查看全部成员';
+        gsetMore.textContent = expanded ? I18N.t('收起') : I18N.t('查看全部成员');
     });
 
     // 遮罩点击关闭
@@ -15327,9 +15352,9 @@
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
-        if (!data.ok) { showToast(data.err || '保存失败'); return; }
+        if (!data.ok) { showToast(data.err || I18N.t('保存失败')); return; }
         exitGsetEdit();
-        showToast('已保存');
+        showToast(I18N.t('已保存'));
     });
 
     // 81 踢人回执（成功后其余成员走 73 刷新、被踢者走 77 kick 清理）
@@ -15337,7 +15362,7 @@
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
-        showToast(data.ok ? '已移出群聊' : (data.err || '操作失败'));
+        showToast(data.ok ? I18N.t('已移出群聊') : (data.err || I18N.t('操作失败')));
     });
 
     // 83 退群回执（仅失败提示；成功清理由 77 leave 归口）
@@ -15345,7 +15370,7 @@
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;
-        if (!data.ok) showToast(data.err || '操作失败');
+        if (!data.ok) showToast(data.err || I18N.t('操作失败'));
     });
 
     // 群会话标题点击 → 打开群设置面板（微信同款点群名进设置）
@@ -15374,7 +15399,7 @@
         grpTargetGroup = groupId || 0;
         grpSelected = {};
         grpSelOrder = [];
-        grpTitle.textContent = mode === 'create' ? '发起群聊' : '邀请成员';
+        grpTitle.textContent = mode === 'create' ? I18N.t('发起群聊') : I18N.t('邀请成员');
         grpName.classList.toggle('hidden', mode !== 'create'); // 邀请模式隐藏群名输入框
         if (mode === 'create') grpName.value = '';
         grpSearch.value = '';
@@ -15392,9 +15417,9 @@
 
     // 右栏已选列表渲染：头像 + 昵称 + × 移除按钮；计数"已选择N个联系人"（微信同款）
     function renderGrpSelected() {
-        grpCount.textContent = grpSelOrder.length ? ('已选择' + grpSelOrder.length + '个联系人') : '';
+        grpCount.textContent = grpSelOrder.length ? (I18N.t('已选择') + grpSelOrder.length + I18N.t('个联系人')) : '';
         if (!grpSelOrder.length) {
-            grpSelListEl.innerHTML = '<div class="grp-empty">' + (grpMode === 'create' ? '在左侧选择联系人' : '在左侧选择要邀请的好友') + '</div>';
+            grpSelListEl.innerHTML = '<div class="grp-empty">' + (grpMode === 'create' ? I18N.t('在左侧选择联系人') : I18N.t('在左侧选择要邀请的好友')) + '</div>';
             return;
         }
         grpSelListEl.innerHTML = '';
@@ -15422,7 +15447,7 @@
             x.className = 'grp-sel-x';
             x.type = 'button';
             x.textContent = '×';
-            x.title = '移除';
+            x.title = I18N.t('移除');
             x.addEventListener('click', function () {
                 toggleGrpPick(u, false); // 右栏移除与左栏取消勾选同源，双向同步
             });
@@ -15471,7 +15496,7 @@
         });
         cands.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
         if (!cands.length) {
-            grpListEl.innerHTML = '<div class="grp-empty">' + (kw ? '无匹配联系人' : '无可选好友') + '</div>';
+            grpListEl.innerHTML = '<div class="grp-empty">' + (kw ? I18N.t('无匹配联系人') : I18N.t('无可选好友')) + '</div>';
             return;
         }
         var lastLetter = null;
@@ -15564,7 +15589,7 @@
         // 阶段一百四十二：多群泛化——全局群/多群会话视图均显示全部成员上下线
         var grpConv = currentChatUser === '' || isGroupTarget(currentChatUser);
         if (!grpConv && msg.from_user !== currentChatUser) return;
-        appendSystem(msg.from_user + (msg.content === 'online' ? ' 上线了' : ' 下线了'));
+        appendSystem(msg.from_user + (msg.content === 'online' ? I18N.t(' 上线了') : I18N.t(' 下线了')));
     });
 
     // 群聊/私聊消息
@@ -15646,7 +15671,7 @@
         messageList.querySelectorAll('.msg-status').forEach(function (el) {
             var id = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
             if (id && id <= lastID) {
-                el.textContent = '已读';
+                el.textContent = I18N.t('已读');
                 el.classList.add('read');
             }
         });
@@ -15686,18 +15711,18 @@
         var text = '', actions = null;
         if (p.status === 0) {
             if (isSender) {
-                text = '已向对方发送删除申请，等待对方处理';
+                text = I18N.t('已向对方发送删除申请，等待对方处理');
             } else {
-                text = '对方申请彻底删除你们双方的聊天记录（申请前的消息），是否同意？';
+                text = I18N.t('对方申请彻底删除你们双方的聊天记录（申请前的消息），是否同意？');
                 actions = [
-                    { text: '同意删除', cls: 'purge-btn-agree', act: 'agree' },
-                    { text: '拒绝', cls: 'purge-btn-reject', act: 'reject' }
+                    { text: I18N.t('同意删除'), cls: 'purge-btn-agree', act: 'agree' },
+                    { text: I18N.t('拒绝'), cls: 'purge-btn-reject', act: 'reject' }
                 ];
             }
         } else if (p.status === 1) {
-            text = isSender ? '对方已同意删除申请，双方聊天记录已彻底删除' : '已同意删除申请，双方聊天记录已彻底删除';
+            text = isSender ? I18N.t('对方已同意删除申请，双方聊天记录已彻底删除') : I18N.t('已同意删除申请，双方聊天记录已彻底删除');
         } else {
-            text = isSender ? '对方拒绝了你的删除申请，聊天记录保留' : '已拒绝删除申请，聊天记录保留';
+            text = isSender ? I18N.t('对方拒绝了你的删除申请，聊天记录保留') : I18N.t('已拒绝删除申请，聊天记录保留');
         }
         var card = document.createElement('div');
         card.className = 'msg-purge-card';
@@ -15716,7 +15741,7 @@
                 btn.addEventListener('click', function () {
                     // 点击即锁按钮防重复提交，终态以服务端 57 帧归口回推（拒绝/同意后卡片原位更新）
                     bar.querySelectorAll('.purge-btn').forEach(function (b) { b.disabled = true; });
-                    tip.textContent = '处理中…';
+                    tip.textContent = I18N.t('处理中…');
                     IMSocket.send({ msg_type: MSG.PURGE_RESP, to_user: p.from_user, msg_id: p.apply_id, content: a.act });
                 });
                 bar.appendChild(btn);
@@ -15749,7 +15774,7 @@
             owner = (msg.from_user === IMSocket.getUsername()) ? msg.to_user : msg.from_user;
         }
         if (owner !== currentChatUser) return; // 非当前查看会话的撤回：仅服务端落库与 CONV_LIST 同步，本地不渲染
-        var tip = msg.from_user === IMSocket.getUsername() ? '你撤回了一条消息' : senderDisplayName(msg.from_user) + ' 撤回了一条消息';
+        var tip = msg.from_user === IMSocket.getUsername() ? I18N.t('你撤回了一条消息') : senderDisplayName(msg.from_user) + I18N.t(' 撤回了一条消息');
         var el = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
         if (el) {
             var tipEl = document.createElement('div');
@@ -15935,7 +15960,7 @@
     function aiSessionDisplayList(agent) {
         var st = aiSessions[agent];
         if (st && st.list.length) return st.list;
-        return [{ id: 0, title: '默认会话', first_msg_id: 0, create_time: 0 }];
+        return [{ id: 0, title: I18N.t('默认会话'), first_msg_id: 0, create_time: 0 }];
     }
 
     function aiSessionExists(agent, sid) {
@@ -15979,40 +16004,40 @@
             main.className = 'ai-session-item-main';
             var t = document.createElement('div');
             t.className = 'ai-session-item-title';
-            t.textContent = s.title || '未命名会话';
+            t.textContent = s.title || I18N.t('未命名会话');
             var tm = document.createElement('div');
             tm.className = 'ai-session-item-time';
-            tm.textContent = s.create_time ? thFormatTime(s.create_time * 1000) : '全部历史'; // create_time 为 Unix 秒（任务历史 API 为毫秒，thFormatTime 归一口径）
+            tm.textContent = s.create_time ? thFormatTime(s.create_time * 1000) : I18N.t('全部历史'); // create_time 为 Unix 秒（任务历史 API 为毫秒，thFormatTime 归一口径）
             main.appendChild(t);
             main.appendChild(tm);
             item.appendChild(main);
             // 阶段七十二：清空按钮（扫帚图标，真删除消息，所有会话含默认会话均有——默认会话堆积的唯一消化入口）
             var clr = document.createElement('button');
             clr.className = 'ai-session-item-del ai-session-item-clear';
-            clr.title = '清空会话（彻底删除消息，不可恢复）';
+            clr.title = I18N.t('清空会话（彻底删除消息，不可恢复）');
             // 扫帚 SVG：柄=描边斜线，帚头=实心大梯形（实心比描边在 18px 下辨识度高），与垃圾桶图标区分度最高；currentColor 随悬停变红
             clr.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path d="M20 4 L12.6 11.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="M11.2 10.2 L13.8 12.8 L10.6 20 L3.2 12.8 Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
             clr.addEventListener('click', function (e) {
                 e.stopPropagation();
                 var isDefault = s.id === 0;
-                var name = isDefault ? '默认会话' : '「' + (s.title || '未命名会话') + '」';
-                showConfirm('清空会话', '将彻底删除' + name + '的全部消息与任务记录，此操作不可恢复。确定清空吗？', function () {
+                var name = isDefault ? I18N.t('默认会话') : '「' + (s.title || I18N.t('未命名会话')) + '」';
+                showConfirm(I18N.t('清空会话'), I18N.t('将彻底删除') + name + I18N.t('的全部消息与任务记录，此操作不可恢复。确定清空吗？'), function () {
                     aiClearPending = { agent: agent, sid: s.id }; // 列表回执（清空完成后下发）到达时按此刷新当前查看视图
                     IMSocket.send({ msg_type: MSG.AI_SESSION_DEL, to_user: agent, session_id: s.id, clear: true });
-                }, '清空');
+                }, I18N.t('清空'));
             });
             item.appendChild(clr);
             if (s.id > 0) { // 虚拟默认会话（id=0）不可删除，仅可清空
                 var del = document.createElement('button');
                 del.className = 'ai-session-item-del';
-                del.title = '删除会话';
+                del.title = I18N.t('删除会话');
                 // 阶段七十二：删除按钮改垃圾桶图标（与"清空聊天"按钮同款 SVG，currentColor 随悬停变红；15px 保证小面板下可辨识）
                 del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
                 del.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    showConfirm('删除会话', '删除后该会话消息将并入默认会话展示，确定删除「' + (s.title || '未命名会话') + '」吗？', function () {
+                    showConfirm(I18N.t('删除会话'), I18N.t('删除后该会话消息将并入默认会话展示，确定删除「') + (s.title || I18N.t('未命名会话')) + I18N.t('」吗？'), function () {
                         IMSocket.send({ msg_type: MSG.AI_SESSION_DEL, to_user: agent, session_id: s.id });
-                    }, '删除');
+                    }, I18N.t('删除'));
                 });
                 item.appendChild(del);
             }
@@ -16106,7 +16131,7 @@
         if (messageList.querySelector('.ai-session-empty')) return;
         var d = document.createElement('div');
         d.className = 'ai-session-empty';
-        d.textContent = '开始新的对话吧，直接输入提问，或开启 Agent 模式派发任务';
+        d.textContent = I18N.t('开始新的对话吧，直接输入提问，或开启 Agent 模式派发任务');
         messageList.appendChild(d);
     }
 
@@ -16233,7 +16258,7 @@
         if (r.recalled) {
             var tip = document.createElement('div');
             tip.className = 'system-tip';
-            tip.textContent = (isMine ? '你' : senderDisplayName(r.from_user)) + ' 撤回了一条消息';
+            tip.textContent = (isMine ? I18N.t('你') : senderDisplayName(r.from_user)) + I18N.t(' 撤回了一条消息');
             if (beforeEl) {
                 messageList.insertBefore(tip, beforeEl);
             } else {
@@ -16276,7 +16301,7 @@
             // 信封异常降级为系统提示，避免渲染成原始 JSON 串
             var rpTip = document.createElement('div');
             rpTip.className = 'system-tip';
-            rpTip.textContent = '[红包]';
+            rpTip.textContent = I18N.t('[红包]');
             if (beforeEl) {
                 messageList.insertBefore(rpTip, beforeEl);
             } else {
@@ -16362,7 +16387,7 @@
             info.className = 'file-info';
             var fileName = document.createElement('div');
             fileName.className = 'file-name';
-            fileName.textContent = meta.name || '未命名文件';
+            fileName.textContent = meta.name || I18N.t('未命名文件');
             var fileSize = document.createElement('div');
             fileSize.className = 'file-size';
             fileSize.textContent = formatSize(meta.size || 0);
@@ -16388,7 +16413,7 @@
             var status = document.createElement('div');
             status.className = 'msg-status' + (isRead ? ' read' : '');
             status.setAttribute('data-msg-id', r.id);
-            status.textContent = isRead ? '已读' : '未读';
+            status.textContent = isRead ? I18N.t('已读') : I18N.t('未读');
             body.appendChild(status);
         }
         // 头像缺失修复：头像在左（他人）/右（自己）
@@ -16410,7 +16435,7 @@
             locateState.active = false;
             historyHasMore = false; // 阶段二十七：服务端已无更早记录，滚动翻页同步停止
             // 历史接口排除已撤回与自己删除的消息：置顶条定位翻完仍无，多为原消息已被自己删除或已撤回
-            showToast(locateState.src === 'pin' ? '原消息已删除或不可见' : '未找到该消息');
+            showToast(locateState.src === 'pin' ? I18N.t('原消息已删除或不可见') : I18N.t('未找到该消息'));
             return;
         }
         // 返回条数不足一页：说明已翻到最早记录，滚动翻页同步停止
@@ -16433,7 +16458,7 @@
         locateState.page++;
         if (locateState.page > locateState.maxPage) {
             locateState.active = false;
-            showToast(locateState.src === 'pin' ? '原消息超出可加载范围，未能定位' : '未找到该消息（超出可加载范围）');
+            showToast(locateState.src === 'pin' ? I18N.t('原消息超出可加载范围，未能定位') : I18N.t('未找到该消息（超出可加载范围）'));
             return;
         }
         var msg = { msg_type: MSG.HISTORY, page: locateState.page, page_size: PAGE_SIZE };
@@ -16502,7 +16527,7 @@
         // 结果数量提示 / 空结果提示（复用空态样式）
         var tip = document.createElement('div');
         tip.className = 'conv-result-empty';
-        tip.textContent = records.length ? ('搜索结果（' + records.length + ' 条）') : '暂无匹配的聊天记录';
+        tip.textContent = records.length ? (I18N.t('搜索结果（') + records.length + I18N.t(' 条）')) : I18N.t('暂无匹配的聊天记录');
         convSearchResults.appendChild(tip);
 
         // 服务端按 ID 倒序返回，界面按时间正序展示
@@ -16513,7 +16538,7 @@
             var head = document.createElement('div');
             head.className = 'conv-result-head';
             var who = document.createElement('span');
-            who.textContent = isMine ? '我' : r.from_user;
+            who.textContent = isMine ? I18N.t('我') : r.from_user;
             var when = document.createElement('span');
             when.textContent = formatTime(new Date(r.create_time).getTime());
             head.appendChild(who);
@@ -16662,7 +16687,7 @@
         if (f.username) {
             var subEl = document.createElement('div');
             subEl.className = 'search-contact-sub';
-            subEl.textContent = f.username + (f.online ? ' · 在线' : '');
+            subEl.textContent = f.username + (f.online ? I18N.t(' · 在线') : '');
             main.appendChild(subEl);
         }
         item.appendChild(avatar);
@@ -16692,12 +16717,12 @@
         var contacts = filterContacts(keyword);
         var contactTitle = document.createElement('div');
         contactTitle.className = 'search-title';
-        contactTitle.textContent = '联系人 (' + contacts.length + ')';
+        contactTitle.textContent = I18N.t('联系人 (') + contacts.length + ')';
         searchPanel.appendChild(contactTitle);
         if (contacts.length === 0) {
             var emptyContact = document.createElement('div');
             emptyContact.className = 'search-empty';
-            emptyContact.textContent = '暂无匹配的联系人';
+            emptyContact.textContent = I18N.t('暂无匹配的联系人');
             searchPanel.appendChild(emptyContact);
         } else {
             contacts.forEach(function (f) {
@@ -16708,12 +16733,12 @@
         // 群聊分区：会话列表存在群聊会话（target 为空）且关键词与「群聊」匹配时展示
         // 原实现：搜索面板仅展示聊天记录，无联系人/群聊分区
         var hasGroupConv = convList.some(function (cv) { return cv.target === ''; });
-        if (hasGroupConv && '群聊'.indexOf(keyword) !== -1) {
+        if (hasGroupConv && I18N.t('群聊').indexOf(keyword) !== -1) {
             var groupTitle = document.createElement('div');
             groupTitle.className = 'search-title';
-            groupTitle.textContent = '群聊';
+            groupTitle.textContent = I18N.t('群聊');
             searchPanel.appendChild(groupTitle);
-            searchPanel.appendChild(buildContactItem({ username: '', remark: '群聊', online: false }));
+            searchPanel.appendChild(buildContactItem({ username: '', remark: I18N.t('群聊'), online: false }));
         }
 
         // 聊天记录分区：回车/放大镜触发服务端搜索（MSG.SEARCH）后展示，未搜索时给出操作提示
@@ -16721,20 +16746,20 @@
         msgTitle.className = 'search-title';
         searchPanel.appendChild(msgTitle);
         if (lastSearchRecords === null) {
-            msgTitle.textContent = '聊天记录（回车搜索）';
+            msgTitle.textContent = I18N.t('聊天记录（回车搜索）');
         } else {
-            msgTitle.textContent = '聊天记录 (' + lastSearchRecords.length + ')';
+            msgTitle.textContent = I18N.t('聊天记录 (') + lastSearchRecords.length + ')';
             if (lastSearchRecords.length === 0) {
                 var empty = document.createElement('div');
                 empty.className = 'search-empty';
-                empty.textContent = '暂无匹配的聊天记录';
+                empty.textContent = I18N.t('暂无匹配的聊天记录');
                 searchPanel.appendChild(empty);
             }
             lastSearchRecords.forEach(function (r) {
                 var isGroup = !r.to_user;
                 // 私聊会话对象：自己发送则是收件人，否则是发件人
                 var partner = isGroup ? '' : (r.from_user === IMSocket.getUsername() ? r.to_user : r.from_user);
-                var convName = isGroup ? '群聊' : partner;
+                var convName = isGroup ? I18N.t('群聊') : partner;
                 var item = document.createElement('div');
                 item.className = 'search-item';
                 var head = document.createElement('div');
@@ -16806,7 +16831,7 @@
     // 输入状态提示
     IMSocket.on(MSG.TYPING, function (msg) {
         if (msg.from_user === currentChatUser) {
-            chatStatus.textContent = '对方正在输入...';
+            chatStatus.textContent = I18N.t('对方正在输入...');
             clearTimeout(window._typingTimer);
             window._typingTimer = setTimeout(updateChatTitle, 2000);
         }
@@ -16814,14 +16839,14 @@
 
     // ===== 好友列表渲染 =====
     function renderFriendList() {
-        var html = '<li class="user-item group-item' + (currentChatUser === '' ? ' active' : '') + '" data-user="">群聊</li>';
+        var html = '<li class="user-item group-item' + (currentChatUser === '' ? ' active' : '') + I18N.t('" data-user="">群聊') + '</li>';
 
         // 阶段一百四十二：多群会话条目（按群 ID 升序，点击进入群会话；条目文本式，无头像/右键菜单）
         var gids = Object.keys(groupMap).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
         gids.forEach(function (gk) {
             var g = groupMap[gk];
             html += '<li class="user-item group-item' + (currentChatUser === 'g' + g.group_id ? ' active' : '') + '" data-user="g' + g.group_id + '">'
-                + (g.name || '群聊') + '（' + (g.member_count || 0) + '人）</li>';
+                + (g.name || I18N.t('群聊')) + '（' + (g.member_count || 0) + I18N.t('人）') + '</li>';
         });
 
         // 在线好友在前，离线在后
@@ -16922,9 +16947,9 @@
 
     // 发起通话（工具栏按钮入口，callType: audio/video）
     function startCall(callType) {
-        if (!window.desktop || !window.desktop.callOpen) { showToast('音视频通话仅 PC 端支持'); return; }
-        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
-        if (pendingRing) { showToast('有来电待处理'); return; }
+        if (!window.desktop || !window.desktop.callOpen) { showToast(I18N.t('音视频通话仅 PC 端支持')); return; }
+        if (callOpenId) { showToast(I18N.t('正在通话中，请先挂断')); return; }
+        if (pendingRing) { showToast(I18N.t('有来电待处理')); return; }
         if (currentChatUser === '' || isAIAgent(currentChatUser)) return;
         var callId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         callOpenId = callId;
@@ -16975,9 +17000,9 @@
         meetPickTask = task || null;
         meetPickSel = {};
         meetPickOrder = [];
-        meetTitle.textContent = mode === 'create' ? '发起会议' : '邀请成员加入会议';
+        meetTitle.textContent = mode === 'create' ? I18N.t('发起会议') : I18N.t('邀请成员加入会议');
         meetAudioBtn.classList.toggle('hidden', mode !== 'create');
-        meetVideoBtn.textContent = mode === 'create' ? '视频会议' : '邀请';
+        meetVideoBtn.textContent = mode === 'create' ? I18N.t('视频会议') : I18N.t('邀请');
         meetSearch.value = '';
         meetMask.classList.remove('hidden');
         renderMeetPickList('');
@@ -16995,7 +17020,7 @@
         var disabled = n < 1 || n > meetPickLimit();
         meetAudioBtn.disabled = disabled;
         meetVideoBtn.disabled = disabled;
-        meetCount.textContent = n ? '已选择' + n + '个成员' : '';
+        meetCount.textContent = n ? I18N.t('已选择') + n + I18N.t('个成员') : '';
     }
 
     // 勾选切换（超员拦截：Mesh 架构每人上行 N-1 路，控制规模保流畅）
@@ -17003,7 +17028,7 @@
         if (on) {
             if (meetPickSel[u]) return;
             if (meetPickOrder.length >= meetPickLimit()) {
-                showToast('会议成员最多 8 人（含发起人）');
+                showToast(I18N.t('会议成员最多 8 人（含发起人）'));
                 return;
             }
             meetPickSel[u] = true;
@@ -17027,7 +17052,7 @@
         meetListEl.innerHTML = '';
         var gid = (meetPickMode === 'invite' && meetPickTask) ? meetPickTask.group_id : groupIdFromTarget(currentChatUser);
         var g = groupOfId(gid);
-        if (!g) { meetListEl.innerHTML = '<div class="grp-empty">群数据加载中</div>'; updateMeetBtns(); return; }
+        if (!g) { meetListEl.innerHTML = '<div class="grp-empty">' + I18N.t('群数据加载中') + '</div>'; updateMeetBtns(); return; }
         var inMeet = {};
         if (meetPickMode === 'invite' && meetPickTask) {
             (meetPickTask.members || []).forEach(function (u) { inMeet[u] = true; });
@@ -17043,7 +17068,7 @@
         });
         cands.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
         if (!cands.length) {
-            meetListEl.innerHTML = '<div class="grp-empty">' + (kw ? '无匹配成员' : '无可邀请的群成员') + '</div>';
+            meetListEl.innerHTML = '<div class="grp-empty">' + (kw ? I18N.t('无匹配成员') : I18N.t('无可邀请的群成员')) + '</div>';
             updateMeetBtns();
             return;
         }
@@ -17079,9 +17104,9 @@
 
     // 发起会议（选人确认）：先开会议窗（等待态）再上行 meet_invite，服务端校验失败经 error 帧收口会议窗
     function startMeet(callType, members) {
-        if (!window.desktop || !window.desktop.callOpen) { showToast('会议仅 PC 端支持'); return; }
-        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
-        if (pendingRing) { showToast('有来电待处理'); return; }
+        if (!window.desktop || !window.desktop.callOpen) { showToast(I18N.t('会议仅 PC 端支持')); return; }
+        if (callOpenId) { showToast(I18N.t('正在通话中，请先挂断')); return; }
+        if (pendingRing) { showToast(I18N.t('有来电待处理')); return; }
         var gid = groupIdFromTarget(currentChatUser);
         var callId = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         callOpenId = callId;
@@ -17140,8 +17165,8 @@
         var menu = document.createElement('div');
         menu.id = 'meet-menu';
         var items = [
-            { label: '创建会议', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>', run: function () { meetMenuClose(); startMeet('video', []); } },
-            { label: '加入会议', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>', run: function () { meetMenuClose(); joinMeetByNo(); } }
+            { label: I18N.t('创建会议'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>', run: function () { meetMenuClose(); startMeet('video', []); } },
+            { label: I18N.t('加入会议'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>', run: function () { meetMenuClose(); joinMeetByNo(); } }
         ];
         items.forEach(function (it) {
             var el = document.createElement('div');
@@ -17168,11 +17193,11 @@
     // 加入会议：忙态前置检查（与发起会议同语义）→ 自定义输入弹窗收会议号 → 校验后上行
     // 校验失败/会议不存在等错误经服务端 error 帧回包，由信令分发 toast 兜底（此时本端无会议窗）
     function joinMeetByNo() {
-        if (!window.desktop || !window.desktop.callOpen) { showToast('会议仅 PC 端支持'); return; }
-        if (callOpenId) { showToast('正在通话中，请先挂断'); return; }
-        if (pendingRing) { showToast('有来电待处理'); return; }
-        showPrompt('加入会议', '请输入 9 位会议号', function (val) {
-            if (!/^\d{9}$/.test(val)) { showToast('会议号需为 9 位数字'); return; }
+        if (!window.desktop || !window.desktop.callOpen) { showToast(I18N.t('会议仅 PC 端支持')); return; }
+        if (callOpenId) { showToast(I18N.t('正在通话中，请先挂断')); return; }
+        if (pendingRing) { showToast(I18N.t('有来电待处理')); return; }
+        showPrompt(I18N.t('加入会议'), I18N.t('请输入 9 位会议号'), function (val) {
+            if (!/^\d{9}$/.test(val)) { showToast(I18N.t('会议号需为 9 位数字')); return; }
             callSignalSend('', { action: 'meet_join_no', meet_no: val });
         });
     }
@@ -17350,19 +17375,19 @@
     function callBubbleText(env, isCaller) {
         var isMeet = !!env.meet;
         var typeLabel = isMeet
-            ? (env.call === 'video' ? '视频会议' : '语音会议')
-            : (env.call === 'video' ? '视频通话' : '语音通话');
+            ? (env.call === 'video' ? I18N.t('视频会议') : I18N.t('语音会议'))
+            : (env.call === 'video' ? I18N.t('视频通话') : I18N.t('语音通话'));
         if (env.status === 'completed') {
             var dur = env.duration || 0;
             var mm = Math.floor(dur / 60), ss = dur % 60;
-            return (isMeet ? '会议时长 ' : '通话时长 ') + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+            return (isMeet ? I18N.t('会议时长 ') : I18N.t('通话时长 ')) + (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
         }
         var d;
-        if (env.status === 'canceled') d = isMeet ? (isCaller ? '已取消' : '会议已取消') : (isCaller ? '已取消' : '对方已取消');
-        else if (env.status === 'rejected') d = isCaller ? '对方已拒绝' : '已拒绝';
-        else if (env.status === 'missed') d = isCaller ? '无人接听' : '未接听';
-        else if (env.status === 'busy') d = isCaller ? '对方忙' : '未接听（忙线）';
-        else d = isMeet ? '会议记录' : '通话记录';
+        if (env.status === 'canceled') d = isMeet ? (isCaller ? I18N.t('已取消') : I18N.t('会议已取消')) : (isCaller ? I18N.t('已取消') : I18N.t('对方已取消'));
+        else if (env.status === 'rejected') d = isCaller ? I18N.t('对方已拒绝') : I18N.t('已拒绝');
+        else if (env.status === 'missed') d = isCaller ? I18N.t('无人接听') : I18N.t('未接听');
+        else if (env.status === 'busy') d = isCaller ? I18N.t('对方忙') : I18N.t('未接听（忙线）');
+        else d = isMeet ? I18N.t('会议记录') : I18N.t('通话记录');
         return typeLabel + '：' + d;
     }
 
@@ -17444,13 +17469,13 @@
 
     // 发起远程协助（mode=control 请求控制对方 / assist 请求对方协助；请求方角色由此定）
     function startRemoteAssist(mode) {
-        if (!window.desktop || !window.desktop.remoteInputSend) { showToast('远程协助仅 PC 端支持'); return; }
-        if (remoteOpenId) { showToast('正在远程协助中，请先断开'); return; }
-        if (remotePendingInvite) { showToast('有远程协助请求待处理'); return; }
-        if (callOpenId || pendingRing) { showToast('正在通话中，无法发起'); return; }
+        if (!window.desktop || !window.desktop.remoteInputSend) { showToast(I18N.t('远程协助仅 PC 端支持')); return; }
+        if (remoteOpenId) { showToast(I18N.t('正在远程协助中，请先断开')); return; }
+        if (remotePendingInvite) { showToast(I18N.t('有远程协助请求待处理')); return; }
+        if (callOpenId || pendingRing) { showToast(I18N.t('正在通话中，无法发起')); return; }
         if (currentChatUser === '' || isAIAgent(currentChatUser) || isGroupTarget(currentChatUser)) return;
-        if (!isFriendName(currentChatUser)) { showToast('仅好友之间可发起远程协助'); return; }
-        if (!isPeerOnline(currentChatUser)) { showToast('对方不在线'); return; }
+        if (!isFriendName(currentChatUser)) { showToast(I18N.t('仅好友之间可发起远程协助')); return; }
+        if (!isPeerOnline(currentChatUser)) { showToast(I18N.t('对方不在线')); return; }
         var sessionId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         remoteOpenId = sessionId;
         remoteRole = mode === 'assist' ? 'sharer' : 'controller';
@@ -17459,7 +17484,7 @@
             action: 'invite', session_id: sessionId, mode: mode,
             from_name: callPeerName(IMSocket.getUsername()), from_avatar: getAvatarUrl(IMSocket.getUsername())
         });
-        showToast(mode === 'assist' ? '已发送协助请求，等待对方接受' : '已发送控制请求，等待对方接受');
+        showToast(mode === 'assist' ? I18N.t('已发送协助请求，等待对方接受') : I18N.t('已发送控制请求，等待对方接受'));
     }
 
     // 被邀请方接受（按 invite 模式定角色，QQ 同款语义）：
@@ -17522,8 +17547,8 @@
         var menu = document.createElement('div');
         menu.id = 'remote-menu';
         var items = [
-            { label: '请求控制对方电脑', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 3H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h7v2H8v2h8v-2h-2v-2h7a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 13H4V5h16v11z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('control'); } },
-            { label: '请求对方协助（对方可控制我的电脑）', icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-2h2zm0-4h-2V7h2z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('assist'); } }
+            { label: I18N.t('请求控制对方电脑'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M21 3H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h7v2H8v2h8v-2h-2v-2h7a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 13H4V5h16v11z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('control'); } },
+            { label: I18N.t('请求对方协助（对方可控制我的电脑）'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-2h2zm0-4h-2V7h2z"/></svg>', run: function () { remoteMenuClose(); startRemoteAssist('assist'); } }
         ];
         items.forEach(function (it) {
             var el = document.createElement('div');
@@ -17570,8 +17595,8 @@
                 return;
             }
             if (isMySession && p.reason) showToast(p.reason);
-            else if (isMySession && p.action === 'timeout') showToast('对方未响应，远程协助已取消');
-            else if (isMySession && p.action === 'ended') showToast('对方已断线，远程协助结束');
+            else if (isMySession && p.action === 'timeout') showToast(I18N.t('对方未响应，远程协助已取消'));
+            else if (isMySession && p.action === 'ended') showToast(I18N.t('对方已断线，远程协助结束'));
             if (isMySession) remoteEndLocal();
             return;
         }
@@ -17591,20 +17616,20 @@
             remoteRingTimer = setTimeout(function () {
                 if (remotePendingInvite && remotePendingInvite.session_id === p.session_id) {
                     remoteClearInvite();
-                    showToast('请求已超时');
+                    showToast(I18N.t('请求已超时'));
                 }
             }, 60000);
             // 自绘弹窗：control=三选项（接受并允许操作/仅观看/取消=拒绝）
             // assist=两选项（接受即获得操作权去协助对方，"仅观看"无协助语义）
             // 取消按钮=立即发 reject（此前取消仅关弹窗，发起方需干等 60s 超时）
             if (remotePendingInvite.mode === 'assist') {
-                showChoice('远程协助', '对方请求你协助（接受后你可以操作对方的电脑）。是否接受？', '接受', function () {
+                showChoice(I18N.t('远程协助'), I18N.t('对方请求你协助（接受后你可以操作对方的电脑）。是否接受？'), I18N.t('接受'), function () {
                     remoteAcceptInvite('control');
                 }, null, function () { remoteRejectInvite('declined'); });
             } else {
-                showChoice('远程协助', '对方请求控制你的电脑。是否允许？\n接受后对方可查看你的屏幕实时画面', '接受并允许操作', function () {
+                showChoice(I18N.t('远程协助'), I18N.t('对方请求控制你的电脑。是否允许？\n接受后对方可查看你的屏幕实时画面'), I18N.t('接受并允许操作'), function () {
                     remoteAcceptInvite('control');
-                }, { text: '仅观看', cb: function () { remoteAcceptInvite('view'); } }, function () { remoteRejectInvite('declined'); });
+                }, { text: I18N.t('仅观看'), cb: function () { remoteAcceptInvite('view'); } }, function () { remoteRejectInvite('declined'); });
             }
             return;
         }
@@ -17634,7 +17659,7 @@
         }
         if (p.action === 'reject') {
             if (remoteOpenId && p.session_id === remoteOpenId) {
-                showToast(p.reason === 'busy' ? '对方忙，无法远程协助' : '对方拒绝了远程协助');
+                showToast(p.reason === 'busy' ? I18N.t('对方忙，无法远程协助') : I18N.t('对方拒绝了远程协助'));
                 remoteEndLocal();
             }
             return;
@@ -17664,7 +17689,7 @@
             // 感知触发"网络不稳定"提示 + 30s 看门狗才收口。转发后观看窗 finish 归口毫秒级关窗）
             if (window.desktop && window.desktop.remoteSignalIn) window.desktop.remoteSignalIn(msg);
             if (remoteOpenId && p.session_id === remoteOpenId) {
-                showToast('对方已断开远程协助');
+                showToast(I18N.t('对方已断开远程协助'));
                 remoteEndLocal();
             }
             return;
@@ -17698,22 +17723,22 @@
 
     function updateChatTitle() {
         if (currentChatUser === '') {
-            chatTitle.textContent = '群聊';
+            chatTitle.textContent = I18N.t('群聊');
             chatStatus.textContent = '';
         } else if (isGroupTarget(currentChatUser)) {
             // 阶段一百四十二：多群会话标题（群名 + 成员数，服务端 73 归口；无数据降级"群聊"）
             // 阶段一百四十三：标题可点击进入群设置面板（微信同款点群名进设置）
             var grp = groupOfId(groupIdFromTarget(currentChatUser));
-            chatTitle.textContent = grp ? ((grp.name || '群聊') + '（' + (grp.member_count || 0) + '）') : '群聊';
+            chatTitle.textContent = grp ? ((grp.name || I18N.t('群聊')) + '（' + (grp.member_count || 0) + '）') : I18N.t('群聊');
             chatStatus.textContent = '';
         } else if (isAIAgent(currentChatUser)) {
             // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
             chatTitle.textContent = currentChatUser;
-            chatStatus.textContent = 'AI 助手';
+            chatStatus.textContent = I18N.t('AI 助手');
         } else {
             var f = friendList.find(function (x) { return x.username === currentChatUser; });
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
-            chatStatus.textContent = isPeerOnline(currentChatUser) ? '在线' : '离线';
+            chatStatus.textContent = isPeerOnline(currentChatUser) ? I18N.t('在线') : I18N.t('离线');
         }
         // 阶段一百四十三：群会话标题显示手型光标（可点击进群设置）
         chatTitle.classList.toggle('grp-clickable', isGroupTarget(currentChatUser));
@@ -17875,7 +17900,7 @@
             bubble.classList.add('merged-bubble');
             var mTitle = document.createElement('div');
             mTitle.className = 'merged-title';
-            mTitle.textContent = '聊天记录';
+            mTitle.textContent = I18N.t('聊天记录');
             bubble.appendChild(mTitle);
             var mNames = [];
             (mergedEnv.i || []).forEach(function (it) {
@@ -17884,7 +17909,7 @@
             });
             var mSub = document.createElement('div');
             mSub.className = 'merged-sub';
-            mSub.textContent = mNames.join('、') + '：' + (mergedEnv.c || (mergedEnv.i || []).length) + '条消息';
+            mSub.textContent = mNames.join('、') + '：' + (mergedEnv.c || (mergedEnv.i || []).length) + I18N.t('条消息');
             bubble.appendChild(mSub);
             // 详情数据注册缓存（信封可能超过 data-raw 的 64KB 上限，DOM 属性不可靠，走运行时缓存）
             var mergeKey = 'mk' + Date.now() + '_' + (mergedSeq++);
@@ -17905,10 +17930,10 @@
             docInfo.className = 'msg-doc-info';
             var docName = document.createElement('div');
             docName.className = 'msg-doc-name';
-            docName.textContent = aiDocEnv.name || '未命名文档';
+            docName.textContent = aiDocEnv.name || I18N.t('未命名文档');
             var docSub = document.createElement('div');
             docSub.className = 'msg-doc-sub';
-            docSub.textContent = '点击查看文档';
+            docSub.textContent = I18N.t('点击查看文档');
             docInfo.appendChild(docName);
             docInfo.appendChild(docSub);
             docCard.appendChild(docIcon);
@@ -17950,7 +17975,7 @@
             // 阶段八十五：来源按展示名解析（备注→昵称→账号），群聊/私聊引用一致
             var qLabel = document.createElement('span');
             qLabel.className = 'msg-quote-text';
-            qLabel.textContent = '引用 ' + (senderDisplayName(q.from) || '') + '：' + (q.text || '');
+            qLabel.textContent = I18N.t('引用 ') + (senderDisplayName(q.from) || '') + '：' + (q.text || '');
             quoteBlock.appendChild(qLabel);
             // 图片引用：引用块内嵌真实缩略图（加载失败退化为纯"[图片]"文字）
             if (q.url) {
@@ -18018,7 +18043,7 @@
             var status = document.createElement('div');
             status.className = 'msg-status' + (isRead ? ' read' : '');
             status.setAttribute('data-msg-id', msgId);
-            status.textContent = isRead ? '已读' : '未读';
+            status.textContent = isRead ? I18N.t('已读') : I18N.t('未读');
             body.appendChild(status);
         }
         // 阶段四十三：AI 智能体回复（历史加载/END 降级整段渲染）气泡下追加操作栏（流式路径在 finishStream 追加）
@@ -18190,16 +18215,16 @@
         fetch('/doc/editor?msg_id=' + msgId + '&username=' + encodeURIComponent(IMSocket.getUsername()))
             .then(function (res) {
                 return res.json().then(function (data) {
-                    if (!res.ok) throw new Error((data && data.error) || '在线编辑不可用');
+                    if (!res.ok) throw new Error((data && data.error) || I18N.t('在线编辑不可用'));
                     return data;
                 });
             })
             .then(function (data) {
-                if (!data.config || !data.api_url) throw new Error('编辑器配置缺失');
+                if (!data.config || !data.api_url) throw new Error(I18N.t('编辑器配置缺失'));
                 docEditorMode = 'edit';
                 docEditorMsgId = msgId;
                 docEditorName = name || '';
-                document.getElementById('doc-editor-name').textContent = docEditorName || '文档';
+                document.getElementById('doc-editor-name').textContent = docEditorName || I18N.t('文档');
                 document.getElementById('doc-editor-mask').classList.remove('hidden');
                 document.getElementById('doc-editor-window').classList.remove('hidden');
                 ensureDocsAPI(data.api_url, function (ok) {
@@ -18207,7 +18232,7 @@
                         // 编辑器脚本加载失败：回退预览层（原实现：提示后直接下载）
                         closeDocEditor();
                         if (fallbackUrl) { openDocPreview(fallbackUrl, docEditorName); return; }
-                        showToast('编辑器加载失败，已改为下载');
+                        showToast(I18N.t('编辑器加载失败，已改为下载'));
                         triggerDocDownload(msgId, docEditorName);
                         return;
                     }
@@ -18218,7 +18243,7 @@
                     } catch (e) {
                         closeDocEditor();
                         if (fallbackUrl) { openDocPreview(fallbackUrl, docEditorName); return; }
-                        showToast('编辑器启动失败，已改为下载');
+                        showToast(I18N.t('编辑器启动失败，已改为下载'));
                         triggerDocDownload(msgId, docEditorName);
                     }
                 });
@@ -18226,7 +18251,7 @@
             .catch(function () {
                 // 未启用 OnlyOffice（403）/网络异常：静默回退预览层（免费纯前端渲染，始终可用）
                 if (fallbackUrl) { openDocPreview(fallbackUrl, name); return; }
-                showToast('在线编辑不可用');
+                showToast(I18N.t('在线编辑不可用'));
                 triggerDocDownload(msgId, name);
             });
         return true;
@@ -18260,14 +18285,14 @@
         // blob 已失效（页面刷新后引用丢失）转换失败，落弹窗兜底（主窗口内 iframe 对 blob 仍有效）
         if (window.desktop && window.desktop.openDocViewer) {
             if (url.indexOf('blob:') !== 0) {
-                window.desktop.openDocViewer({ url: url, name: name || '文档' });
+                window.desktop.openDocViewer({ url: url, name: name || I18N.t('文档') });
                 return;
             }
             // blob → data: URL 中转（blobToDataURL：FileReader 已被 PPTXjs 污染不可用）
             fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
                 return blobToDataURL(b);
             }).then(function (dataUrl) {
-                window.desktop.openDocViewer({ url: dataUrl, name: name || '文档' });
+                window.desktop.openDocViewer({ url: dataUrl, name: name || I18N.t('文档') });
             }).catch(function () { openDocPreviewFallback(url, name); });
             return;
         }
@@ -18280,7 +18305,7 @@
         docEditorMode = 'preview';
         docPreviewUrl = url;
         docEditorName = name || '';
-        document.getElementById('doc-editor-name').textContent = docEditorName || '文档';
+        document.getElementById('doc-editor-name').textContent = docEditorName || I18N.t('文档');
         var lname = (name || url).toLowerCase();
         var holder = document.getElementById('doc-editor-placeholder');
         holder.innerHTML = '';
@@ -18465,7 +18490,7 @@
             var imgStatus = document.createElement('div');
             imgStatus.className = 'msg-status';
             imgStatus.setAttribute('data-msg-id', '');
-            imgStatus.textContent = '未读';
+            imgStatus.textContent = I18N.t('未读');
             body.appendChild(imgStatus);
         }
         div.appendChild(getAvatarEl(fromUser));
@@ -18615,11 +18640,11 @@
         fetch('/api/kb?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '知识库加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('知识库加载失败')); return; }
                 kbData = res.data;
                 kbRender();
             })
-            .catch(function () { showToast('知识库加载失败'); });
+            .catch(function () { showToast(I18N.t('知识库加载失败')); });
     }
 
     // 轮询 tick：仅刷新展开中的文件面板（processing 状态变化由重渲染反映）
@@ -18652,14 +18677,14 @@
         kbRender._sig = ksig;
         // 状态行：勾选语义 + embedding 通道提示（未配置时可建库但不可向量化，服务端归口下发）
         kbStatusEl.innerHTML = kbData.embed_enabled
-            ? '勾选的知识库对所有 AI 助手对话生效，命中参考资料自动注入（每问前 ' + kbData.top_k + ' 条）。向量模型：' + (kbData.model || '-')
-            : '<span class="kb-status-off">embedding 服务未配置：可建库与上传，文件暂无法向量化检索（需管理员在 config.yaml 配置 ai.embedding）</span>';
+            ? I18N.t('勾选的知识库对所有 AI 助手对话生效，命中参考资料自动注入（每问前 ') + kbData.top_k + I18N.t(' 条）。向量模型：') + (kbData.model || '-')
+            : '<span class="kb-status-off">' + I18N.t('embedding 服务未配置：可建库与上传，文件暂无法向量化检索（需管理员在 config.yaml 配置 ai.embedding）') + '</span>';
         // 库列表
         kbListEl.innerHTML = '';
         if (!kbData.kbs || !kbData.kbs.length) {
             var empty = document.createElement('div');
             empty.className = 'kb-empty';
-            empty.textContent = '暂无知识库，可在上方新建个人知识库';
+            empty.textContent = I18N.t('暂无知识库，可在上方新建个人知识库');
             kbListEl.appendChild(empty);
         } else {
             kbData.kbs.forEach(function (kb) {
@@ -18688,7 +18713,7 @@
         check.type = 'checkbox';
         check.className = 'kb-item-check';
         check.checked = !!kb.selected;
-        check.title = '勾选后该知识库对所有 AI 助手对话生效';
+        check.title = I18N.t('勾选后该知识库对所有 AI 助手对话生效');
         check.addEventListener('change', function () {
             kbToggleSelect(kb.id, check.checked);
         });
@@ -18700,18 +18725,18 @@
 
         var tag = document.createElement('span');
         tag.className = 'kb-item-tag ' + kb.scope;
-        tag.textContent = kb.scope === 'user' ? '个人' : '公共';
+        tag.textContent = kb.scope === 'user' ? I18N.t('个人') : I18N.t('公共');
 
         var meta = document.createElement('span');
         meta.className = 'kb-item-meta';
-        meta.textContent = kb.file_count + ' 文件 / ' + kb.chunk_count + ' 切片';
+        meta.textContent = kb.file_count + I18N.t(' 文件 / ') + kb.chunk_count + I18N.t(' 切片');
 
         var ops = document.createElement('span');
         ops.className = 'kb-item-ops';
         // 文件面板展开/收起（公共库同样可查看文件列表，仅个人库可管理）
         var filesBtn = document.createElement('button');
         filesBtn.className = 'kb-op-btn';
-        filesBtn.textContent = kbExpanded[kb.id] ? '收起' : '文件';
+        filesBtn.textContent = kbExpanded[kb.id] ? I18N.t('收起') : I18N.t('文件');
         filesBtn.addEventListener('click', function () {
             kbExpanded[kb.id] = !kbExpanded[kb.id];
             kbRender();
@@ -18721,20 +18746,20 @@
         if (kb.scope === 'user') {
             var delBtn = document.createElement('button');
             delBtn.className = 'kb-op-btn';
-            delBtn.textContent = '删除';
+            delBtn.textContent = I18N.t('删除');
             delBtn.addEventListener('click', function () {
-                showConfirm('删除知识库', '确定删除个人知识库「' + kb.name + '」？库内所有文件与向量将同步清理。', function () {
+                showConfirm(I18N.t('删除知识库'), I18N.t('确定删除个人知识库「') + kb.name + I18N.t('」？库内所有文件与向量将同步清理。'), function () {
                     fetch('/api/kb/' + kb.id + '?username=' + kbUsername(), { method: 'DELETE' })
                         .then(function (r) { return r.json(); })
                         .then(function (res) {
-                            if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                            showToast('知识库已删除');
+                            if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                            showToast(I18N.t('知识库已删除'));
                             delete kbFilesCache[kb.id];
                             delete kbExpanded[kb.id];
                             kbLoadData();
                         })
-                        .catch(function () { showToast('删除失败'); });
-                }, '删除');
+                        .catch(function () { showToast(I18N.t('删除失败')); });
+                }, I18N.t('删除'));
             });
             ops.appendChild(delBtn);
         }
@@ -18759,10 +18784,10 @@
             fp.className = 'kb-files';
             var files = kbFilesCache[kb.id];
             if (files === null || files === undefined) {
-                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '加载中…' }));
+                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('加载中…') }));
                 kbLoadFiles(kb.id);
             } else if (!files.length) {
-                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无文件，点击下方按钮上传' }));
+                fp.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无文件，点击下方按钮上传') }));
             } else {
                 files.forEach(function (f) {
                     fp.appendChild(kbRenderFileRow(kb.id, f));
@@ -18774,7 +18799,7 @@
                 upRow.className = 'kb-upload-row';
                 var upBtn = document.createElement('button');
                 upBtn.className = 'kb-upload-btn';
-                upBtn.textContent = '上传文件（docx / xlsx / xlsm / csv / md / txt）';
+                upBtn.textContent = I18N.t('上传文件（docx / xlsx / xlsm / csv / md / txt）');
                 upBtn.addEventListener('click', function () {
                     kbUploadFiles(kb.id);
                 });
@@ -18792,26 +18817,26 @@
         var fn = document.createElement('span');
         fn.className = 'kb-file-name';
         fn.textContent = f.name;
-        fn.title = f.name + (f.status === 'failed' && f.error ? '（失败原因：' + f.error + '）' : '');
+        fn.title = f.name + (f.status === 'failed' && f.error ? I18N.t('（失败原因：') + f.error + '）' : '');
         var st = document.createElement('span');
         st.className = 'kb-file-status ' + f.status;
-        st.textContent = f.status === 'processing' ? '处理中' : (f.status === 'ready' ? '可检索' : '失败');
+        st.textContent = f.status === 'processing' ? I18N.t('处理中') : (f.status === 'ready' ? I18N.t('可检索') : I18N.t('失败'));
         var del = document.createElement('button');
         del.className = 'kb-file-del';
         del.textContent = '×';
-        del.title = '删除文件';
+        del.title = I18N.t('删除文件');
         del.addEventListener('click', function () {
-            showConfirm('删除文件', '确定删除「' + f.name + '」？该文件的向量将同步清理。', function () {
+            showConfirm(I18N.t('删除文件'), I18N.t('确定删除「') + f.name + I18N.t('」？该文件的向量将同步清理。'), function () {
                 fetch('/api/kb/file/' + f.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('文件已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('文件已删除'));
                         delete kbFilesCache[kbId];
                         kbLoadData();
                     })
-                    .catch(function () { showToast('删除失败'); });
-            }, '删除');
+                    .catch(function () { showToast(I18N.t('删除失败')); });
+            }, I18N.t('删除'));
         });
         row.appendChild(fn);
         row.appendChild(st);
@@ -18844,18 +18869,18 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '保存勾选失败'); kbRender(); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('保存勾选失败')); kbRender(); return; }
                 // 本地同步勾选态（服务端已归口，避免整表重查）
                 kbData.kbs.forEach(function (k) { k.selected = next.indexOf(k.id) !== -1; });
                 kbRender();
             })
-            .catch(function () { showToast('保存勾选失败'); kbRender(); });
+            .catch(function () { showToast(I18N.t('保存勾选失败')); kbRender(); });
     }
 
     // 新建个人知识库
     function kbCreate() {
         var name = kbNewName.value.trim();
-        if (!name) { showToast('请输入知识库名称'); return; }
+        if (!name) { showToast(I18N.t('请输入知识库名称')); return; }
         kbCreateBtn.disabled = true;
         fetch('/api/kb?username=' + kbUsername(), {
             method: 'POST',
@@ -18864,12 +18889,12 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '新建失败'); return; }
-                showToast('知识库「' + name + '」已创建');
+                if (!res.ok) { showToast(res.msg || I18N.t('新建失败')); return; }
+                showToast(I18N.t('知识库「') + name + I18N.t('」已创建'));
                 kbNewName.value = '';
                 kbLoadData();
             })
-            .catch(function () { showToast('新建失败'); })
+            .catch(function () { showToast(I18N.t('新建失败')); })
             .finally(function () { kbCreateBtn.disabled = false; });
     }
     kbCreateBtn.addEventListener('click', kbCreate);
@@ -18892,7 +18917,7 @@
             var i = 0;
             (function next() {
                 if (i >= files.length) {
-                    showToast('上传完成，向量化处理中');
+                    showToast(I18N.t('上传完成，向量化处理中'));
                     delete kbFilesCache[kbId];
                     kbLoadData();
                     return;
@@ -18902,12 +18927,12 @@
                 fetch('/api/kb/file?username=' + kbUsername() + '&kb_id=' + kbId, { method: 'POST', body: fd })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) showToast(res.msg || '上传失败：' + files[i].name);
+                        if (!res.ok) showToast(res.msg || I18N.t('上传失败：') + files[i].name);
                         i++;
                         next();
                     })
                     .catch(function () {
-                        showToast('上传失败：' + files[i].name);
+                        showToast(I18N.t('上传失败：') + files[i].name);
                         i++;
                         next();
                     });
@@ -18957,26 +18982,26 @@
         fetch('/api/agents?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '智能体加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('智能体加载失败')); return; }
                 uaData = res.data;
                 uaRender();
             })
-            .catch(function () { showToast('智能体加载失败'); });
+            .catch(function () { showToast(I18N.t('智能体加载失败')); });
     }
 
     function uaRender() {
         if (!uaData) return;
         // 功能关闭：隐藏表单，仅提示（服务端归口 ai.user_agent.enabled）
         if (!uaData.enabled) {
-            uaStatusEl.innerHTML = '<span class="kb-status-off">管理员未开放自建智能体功能（config.yaml ai.user_agent.enabled）</span>';
+            uaStatusEl.innerHTML = '<span class="kb-status-off">' + I18N.t('管理员未开放自建智能体功能（config.yaml ai.user_agent.enabled）') + '</span>';
             uaForm.classList.add('hidden');
             uaListEl.innerHTML = '';
             uaEntryBadge.classList.add('hidden');
             return;
         }
         uaForm.classList.remove('hidden');
-        uaStatusEl.textContent = '自建智能体仅自己可见可对话，模型范围由管理员圈定（' +
-            (uaData.mine ? uaData.mine.length : 0) + '/' + uaData.max_per_user + ' 个）';
+        uaStatusEl.textContent = I18N.t('自建智能体仅自己可见可对话，模型范围由管理员圈定（') +
+            (uaData.mine ? uaData.mine.length : 0) + '/' + uaData.max_per_user + I18N.t(' 个）');
         // 模型下拉（白名单归口下发：名称 + 模型名，不含密钥；保留当前已选项）
         var cur = uaProviderSel.value;
         uaProviderSel.innerHTML = '';
@@ -18992,7 +19017,7 @@
         // 我的智能体列表
         uaListEl.innerHTML = '';
         if (!uaData.mine || !uaData.mine.length) {
-            uaListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无自建智能体，在上方填写名称与提示词即可创建' }));
+            uaListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无自建智能体，在上方填写名称与提示词即可创建') }));
         } else {
             uaData.mine.forEach(function (a) {
                 uaListEl.appendChild(uaRenderItem(a));
@@ -19022,7 +19047,7 @@
 
         var tag = document.createElement('span');
         tag.className = 'kb-item-tag user';
-        tag.textContent = a.enabled ? '启用中' : '已停用';
+        tag.textContent = a.enabled ? I18N.t('启用中') : I18N.t('已停用');
 
         var meta = document.createElement('span');
         meta.className = 'kb-item-meta';
@@ -19032,26 +19057,26 @@
         ops.className = 'kb-item-ops';
         var editBtn = document.createElement('button');
         editBtn.className = 'kb-op-btn';
-        editBtn.textContent = '编辑';
+        editBtn.textContent = I18N.t('编辑');
         editBtn.addEventListener('click', function () {
             uaBeginEdit(a);
         });
         ops.appendChild(editBtn);
         var delBtn = document.createElement('button');
         delBtn.className = 'kb-op-btn';
-        delBtn.textContent = '删除';
+        delBtn.textContent = I18N.t('删除');
         delBtn.addEventListener('click', function () {
-            showConfirm('删除智能体', '确定删除个人智能体「' + a.name + '」？历史聊天记录保留，仅不可再对话。', function () {
+            showConfirm(I18N.t('删除智能体'), I18N.t('确定删除个人智能体「') + a.name + I18N.t('」？历史聊天记录保留，仅不可再对话。'), function () {
                 fetch('/api/agents/' + a.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('智能体已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('智能体已删除'));
                         if (uaEditingId === a.id) uaResetForm();
                         uaLoad();
                     })
-                    .catch(function () { showToast('删除失败'); });
-            }, '删除');
+                    .catch(function () { showToast(I18N.t('删除失败')); });
+            }, I18N.t('删除'));
         });
         ops.appendChild(delBtn);
 
@@ -19078,7 +19103,7 @@
         uaAvatarInput.value = a.avatar && !aiAvatarIsUrl(a.avatar) ? a.avatar : '';
         uaProviderSel.value = a.provider;
         uaPromptInput.value = a.system_prompt || '';
-        uaSaveBtn.textContent = '保存修改';
+        uaSaveBtn.textContent = I18N.t('保存修改');
         uaCancelBtn.classList.remove('hidden');
         uaNameInput.focus();
     }
@@ -19089,14 +19114,14 @@
         uaNameInput.value = '';
         uaAvatarInput.value = '';
         uaPromptInput.value = '';
-        uaSaveBtn.textContent = '新建';
+        uaSaveBtn.textContent = I18N.t('新建');
         uaCancelBtn.classList.add('hidden');
     }
 
     // 新建/保存（服务端校验归口：名称唯一/长度/数量上限/模型白名单，失败提示服务端消息）
     function uaSave() {
         var name = uaNameInput.value.trim();
-        if (!name) { showToast('请填写智能体名称'); return; }
+        if (!name) { showToast(I18N.t('请填写智能体名称')); return; }
         var body = {
             name: name,
             avatar: uaAvatarInput.value.trim(),
@@ -19113,12 +19138,12 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || (isEdit ? '保存失败' : '新建失败')); return; }
-                showToast(isEdit ? '智能体已更新' : '智能体「' + name + '」已创建');
+                if (!res.ok) { showToast(res.msg || (isEdit ? I18N.t('保存失败') : I18N.t('新建失败'))); return; }
+                showToast(isEdit ? I18N.t('智能体已更新') : I18N.t('智能体「') + name + I18N.t('」已创建'));
                 uaResetForm();
                 uaLoad();
             })
-            .catch(function () { showToast(isEdit ? '保存失败' : '新建失败'); })
+            .catch(function () { showToast(isEdit ? I18N.t('保存失败') : I18N.t('新建失败')); })
             .finally(function () { uaSaveBtn.disabled = false; });
     }
     uaSaveBtn.addEventListener('click', uaSave);
@@ -19164,7 +19189,7 @@
     function memOpenDialog() {
         if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
         if (!memAgentId()) {
-            showToast('智能体信息未就绪，请稍后重试');
+            showToast(I18N.t('智能体信息未就绪，请稍后重试'));
             return;
         }
         memoryMask.classList.remove('hidden');
@@ -19180,12 +19205,12 @@
         ruleClearBtn.classList.toggle('hidden', tab !== 'rules');
         memoryClearBtn.classList.toggle('hidden', tab !== 'memory');
         if (tab === 'rules') {
-            memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（规则分 全局/本智能体 两层，回答与任务执行前都会先对照检查）';
-            ruleListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+            memoryStatusEl.textContent = I18N.t('当前智能体：') + currentChatUser + I18N.t('（规则分 全局/本智能体 两层，回答与任务执行前都会先对照检查）');
+            ruleListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
             rulesLoad();
         } else {
-            memoryStatusEl.textContent = '当前智能体：' + currentChatUser + '（记忆按 账号+智能体 隔离，仅你可见）';
-            memoryListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+            memoryStatusEl.textContent = I18N.t('当前智能体：') + currentChatUser + I18N.t('（记忆按 账号+智能体 隔离，仅你可见）');
+            memoryListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
             memLoad();
         }
     }
@@ -19201,7 +19226,7 @@
         fetch('/api/agents/' + id + '/memory?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '记忆加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('记忆加载失败')); return; }
                 memFeatureOk = !!res.data.feature;
                 memoryPrefInput.checked = !!res.data.pref;
                 memoryPrefInput.disabled = !memFeatureOk;
@@ -19209,13 +19234,13 @@
                 memoryClearBtn.classList.toggle('hidden', !(res.data.memories || []).length);
                 memRender(res.data.memories || []);
             })
-            .catch(function () { showToast('记忆加载失败'); });
+            .catch(function () { showToast(I18N.t('记忆加载失败')); });
     }
 
     function memRender(list) {
         memoryListEl.innerHTML = '';
         if (!list.length) {
-            memoryListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无记忆，聊几句或手动添加一条试试' }));
+            memoryListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无记忆，聊几句或手动添加一条试试') }));
             return;
         }
         list.forEach(function (m) {
@@ -19236,13 +19261,13 @@
             var tag = document.createElement('span');
             if (m.source === 'manual') {
                 tag.className = 'kb-item-tag user';
-                tag.textContent = '手动';
+                tag.textContent = I18N.t('手动');
             } else if (m.source === 'agent') {
                 tag.className = 'kb-item-tag agent';
-                tag.textContent = '任务';
+                tag.textContent = I18N.t('任务');
             } else {
                 tag.className = 'kb-item-tag public';
-                tag.textContent = '自动';
+                tag.textContent = I18N.t('自动');
             }
 
             var meta = document.createElement('span');
@@ -19253,16 +19278,16 @@
             ops.className = 'kb-item-ops';
             var delBtn = document.createElement('button');
             delBtn.className = 'kb-op-btn';
-            delBtn.textContent = '删除';
+            delBtn.textContent = I18N.t('删除');
             delBtn.addEventListener('click', function () {
                 fetch('/api/agents/' + memAgentId() + '/memory/' + m.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('记忆已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('记忆已删除'));
                         memLoad();
                     })
-                    .catch(function () { showToast('删除失败'); });
+                    .catch(function () { showToast(I18N.t('删除失败')); });
             });
             ops.appendChild(delBtn);
 
@@ -19284,7 +19309,7 @@
     // 手动新增记忆（服务端同样走去重归口，重复内容会提示已存在）
     function memAdd() {
         var content = memoryInput.value.trim();
-        if (!content) { showToast('请输入记忆内容'); return; }
+        if (!content) { showToast(I18N.t('请输入记忆内容')); return; }
         memoryAddBtn.disabled = true;
         fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), {
             method: 'POST',
@@ -19293,12 +19318,12 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
-                showToast('记忆已添加');
+                if (!res.ok) { showToast(res.msg || I18N.t('添加失败')); return; }
+                showToast(I18N.t('记忆已添加'));
                 memoryInput.value = '';
                 memLoad();
             })
-            .catch(function () { showToast('添加失败'); })
+            .catch(function () { showToast(I18N.t('添加失败')); })
             .finally(function () { memoryAddBtn.disabled = false; });
     }
 
@@ -19311,16 +19336,16 @@
         fetch('/api/agents/' + id + '/rules?username=' + kbUsername())
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '规则加载失败'); return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('规则加载失败')); return; }
                 rulesRender(res.data.rules || []);
             })
-            .catch(function () { showToast('规则加载失败'); });
+            .catch(function () { showToast(I18N.t('规则加载失败')); });
     }
 
     function rulesRender(list) {
         ruleListEl.innerHTML = '';
         if (!list.length) {
-            ruleListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无规则，添加一条如"所有回答使用中文"试试' }));
+            ruleListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无规则，添加一条如"所有回答使用中文"试试') }));
             return;
         }
         list.forEach(function (ru) {
@@ -19340,10 +19365,10 @@
             var tag = document.createElement('span');
             if (ru.agent_id === 0) {
                 tag.className = 'kb-item-tag user';
-                tag.textContent = '全局';
+                tag.textContent = I18N.t('全局');
             } else {
                 tag.className = 'kb-item-tag agent';
-                tag.textContent = '本智能体';
+                tag.textContent = I18N.t('本智能体');
             }
 
             // 启用开关（禁用后不注入不删除，可随时恢复）
@@ -19351,7 +19376,7 @@
             en.type = 'checkbox';
             en.className = 'memory-switch rule-enable';
             en.checked = !!ru.enabled;
-            en.title = en.checked ? '已启用（点击禁用）' : '已禁用（点击启用）';
+            en.title = en.checked ? I18N.t('已启用（点击禁用）') : I18N.t('已禁用（点击启用）');
             en.addEventListener('change', function () {
                 var want = en.checked;
                 fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '/enabled?username=' + kbUsername(), {
@@ -19361,26 +19386,26 @@
                 })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '保存失败'); en.checked = !want; return; }
-                        showToast(want ? '规则已启用' : '规则已禁用（不删除）');
+                        if (!res.ok) { showToast(res.msg || I18N.t('保存失败')); en.checked = !want; return; }
+                        showToast(want ? I18N.t('规则已启用') : I18N.t('规则已禁用（不删除）'));
                     })
-                    .catch(function () { showToast('保存失败'); en.checked = !want; });
+                    .catch(function () { showToast(I18N.t('保存失败')); en.checked = !want; });
             });
 
             var ops = document.createElement('span');
             ops.className = 'kb-item-ops';
             var delBtn = document.createElement('button');
             delBtn.className = 'kb-op-btn';
-            delBtn.textContent = '删除';
+            delBtn.textContent = I18N.t('删除');
             delBtn.addEventListener('click', function () {
                 fetch('/api/agents/' + memAgentId() + '/rules/' + ru.id + '?username=' + kbUsername(), { method: 'DELETE' })
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { showToast(res.msg || '删除失败'); return; }
-                        showToast('规则已删除');
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('规则已删除'));
                         rulesLoad();
                     })
-                    .catch(function () { showToast('删除失败'); });
+                    .catch(function () { showToast(I18N.t('删除失败')); });
             });
             ops.appendChild(delBtn);
 
@@ -19396,7 +19421,7 @@
     // 新增规则（scope=agent 仅本智能体 / global 全局）
     function rulesAdd() {
         var content = ruleInput.value.trim();
-        if (!content) { showToast('请输入规则内容'); return; }
+        if (!content) { showToast(I18N.t('请输入规则内容')); return; }
         ruleAddBtn.disabled = true;
         fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername(), {
             method: 'POST',
@@ -19405,28 +19430,28 @@
         })
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '添加失败'); return; }
-                showToast('规则已添加，下轮回答即生效');
+                if (!res.ok) { showToast(res.msg || I18N.t('添加失败')); return; }
+                showToast(I18N.t('规则已添加，下轮回答即生效'));
                 ruleInput.value = '';
                 rulesLoad();
             })
-            .catch(function () { showToast('添加失败'); })
+            .catch(function () { showToast(I18N.t('添加失败')); })
             .finally(function () { ruleAddBtn.disabled = false; });
     }
 
     ruleClearBtn.addEventListener('click', function () {
         var scope = ruleScopeSel.value;
-        var tip = scope === 'global' ? '确定清空你的全部全局规则？此操作不可恢复。' : '确定清空与「' + currentChatUser + '」的全部智能体规则？此操作不可恢复。';
-        showConfirm('清空规则', tip, function () {
+        var tip = scope === 'global' ? I18N.t('确定清空你的全部全局规则？此操作不可恢复。') : I18N.t('确定清空与「') + currentChatUser + I18N.t('」的全部智能体规则？此操作不可恢复。');
+        showConfirm(I18N.t('清空规则'), tip, function () {
             fetch('/api/agents/' + memAgentId() + '/rules?username=' + kbUsername() + '&scope=' + scope, { method: 'DELETE' })
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    if (!res.ok) { showToast(res.msg || '清空失败'); return; }
-                    showToast('规则已清空');
+                    if (!res.ok) { showToast(res.msg || I18N.t('清空失败')); return; }
+                    showToast(I18N.t('规则已清空'));
                     rulesLoad();
                 })
-                .catch(function () { showToast('清空失败'); });
-        }, '清空');
+                .catch(function () { showToast(I18N.t('清空失败')); });
+        }, I18N.t('清空'));
     });
 
     memoryBtn.addEventListener('click', memOpenDialog);
@@ -19449,16 +19474,16 @@
         }
     });
     memoryClearBtn.addEventListener('click', function () {
-        showConfirm('清空记忆', '确定清空与「' + currentChatUser + '」的全部记忆？此操作不可恢复。', function () {
+        showConfirm(I18N.t('清空记忆'), I18N.t('确定清空与「') + currentChatUser + I18N.t('」的全部记忆？此操作不可恢复。'), function () {
             fetch('/api/agents/' + memAgentId() + '/memory?username=' + kbUsername(), { method: 'DELETE' })
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    if (!res.ok) { showToast(res.msg || '清空失败'); return; }
-                    showToast('记忆已清空');
+                    if (!res.ok) { showToast(res.msg || I18N.t('清空失败')); return; }
+                    showToast(I18N.t('记忆已清空'));
                     memLoad();
                 })
-                .catch(function () { showToast('清空失败'); });
-        }, '清空');
+                .catch(function () { showToast(I18N.t('清空失败')); });
+        }, I18N.t('清空'));
     });
     // 用户级开关（关闭后不再自动提取与注入召回，已存记忆保留；失败回滚勾选态）
     memoryPrefInput.addEventListener('change', function () {
@@ -19471,14 +19496,14 @@
             .then(function (r) { return r.json(); })
             .then(function (res) {
                 if (!res.ok) {
-                    showToast(res.msg || '保存失败');
+                    showToast(res.msg || I18N.t('保存失败'));
                     memoryPrefInput.checked = !want;
                     return;
                 }
-                showToast(want ? '已开启记忆' : '已关闭记忆（已存记忆保留）');
+                showToast(want ? I18N.t('已开启记忆') : I18N.t('已关闭记忆（已存记忆保留）'));
             })
             .catch(function () {
-                showToast('保存失败');
+                showToast(I18N.t('保存失败'));
                 memoryPrefInput.checked = !want;
             });
     });
@@ -19506,7 +19531,7 @@
 
     // thStateLabel 状态中文标签映射（queued 排队中/running 运行中/completed 已完成/failed 失败/cancelled 已取消）
     function thStateLabel(s) {
-        return { queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', cancelled: '已取消' }[s] || s;
+        return { queued: I18N.t('排队中'), running: I18N.t('运行中'), completed: I18N.t('已完成'), failed: I18N.t('失败'), cancelled: I18N.t('已取消') }[s] || s;
     }
 
     // thFormatTime 时间展示归口：yyyy-MM-dd HH:mm
@@ -19520,8 +19545,8 @@
     function taskhistOpenDialog() {
         if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
         taskhistMask.classList.remove('hidden');
-        taskhistStatusEl.textContent = '当前智能体：' + currentChatUser + '（任务历史仅本人可见）';
-        taskhistListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        taskhistStatusEl.textContent = I18N.t('当前智能体：') + currentChatUser + I18N.t('（任务历史仅本人可见）');
+        taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
         thPage = 1;
         thStatus = '';
         // 重置筛选 chips 到"全部"
@@ -19540,20 +19565,20 @@
         var url = '/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) +
             '&page=' + thPage + '&size=' + TH_SIZE;
         if (thStatus) url += '&status=' + encodeURIComponent(thStatus);
-        taskhistListEl.innerHTML = '<div class="kb-empty">加载中…</div>';
+        taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
         fetch(url)
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { showToast(res.msg || '加载失败'); taskhistListEl.innerHTML = '<div class="kb-empty">加载失败</div>'; return; }
+                if (!res.ok) { showToast(res.msg || I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; return; }
                 thTotal = res.data.total || 0;
                 var pages = Math.max(1, Math.ceil(thTotal / TH_SIZE));
                 if (thPage > pages) { thPage = pages; taskhistLoad(); return; } // 筛选后页码越界兜底
                 taskhistRender(res.data.tasks || []);
-                taskhistPageInfo.textContent = thTotal ? ('共 ' + thTotal + ' 条 · 第 ' + thPage + ' / ' + pages + ' 页') : '暂无任务';
+                taskhistPageInfo.textContent = thTotal ? (I18N.t('共 ') + thTotal + I18N.t(' 条 · 第 ') + thPage + ' / ' + pages + I18N.t(' 页')) : I18N.t('暂无任务');
                 taskhistPrev.disabled = thPage <= 1;
                 taskhistNext.disabled = thPage >= pages;
             })
-            .catch(function () { showToast('加载失败'); taskhistListEl.innerHTML = '<div class="kb-empty">加载失败</div>'; });
+            .catch(function () { showToast(I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; });
     }
 
     // taskhistRender 任务卡渲染：状态徽标 + 目标摘要 + 元信息；点击卡片展开/收起全文详情
@@ -19561,7 +19586,7 @@
     function taskhistRender(tasks) {
         taskhistListEl.innerHTML = '';
         if (!tasks.length) {
-            taskhistListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: '暂无任务' }));
+            taskhistListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无任务') }));
             return;
         }
         tasks.forEach(function (t) {
@@ -19577,7 +19602,7 @@
             // 目标摘要（单行截断，悬停 title 看列表截断文本）
             var goal = document.createElement('span');
             goal.className = 'taskhist-goal';
-            goal.textContent = t.goal || '(无目标)';
+            goal.textContent = t.goal || I18N.t('(无目标)');
             goal.title = t.goal || '';
             head.appendChild(badge);
             head.appendChild(goal);
@@ -19586,8 +19611,8 @@
             // 元信息行：智能体 · N 步 · 扣 N 积分（阶段一百三十八，旧记录无该值不显示） · 发起时间
             var meta = document.createElement('div');
             meta.className = 'taskhist-meta';
-            meta.textContent = t.agent_name + ' · ' + (t.steps || 0) + ' 步' +
-                (t.points_cost > 0 ? ' · 扣 ' + t.points_cost + ' 积分' : '') +
+            meta.textContent = t.agent_name + ' · ' + (t.steps || 0) + I18N.t(' 步') +
+                (t.points_cost > 0 ? I18N.t(' · 扣 ') + t.points_cost + I18N.t(' 积分') : '') +
                 ' · ' + thFormatTime(t.update_time || t.create_time);
             card.appendChild(meta);
 
@@ -19611,11 +19636,11 @@
                 card.classList.add('expanded');
                 thExpandId = t.task_id;
                 detail.classList.remove('hidden');
-                detail.textContent = '加载详情…';
+                detail.textContent = I18N.t('加载详情…');
                 fetch('/api/agent/task/' + encodeURIComponent(t.task_id) + '?username=' + encodeURIComponent(kbUsername()))
                     .then(function (r) { return r.json(); })
                     .then(function (res) {
-                        if (!res.ok) { detail.textContent = res.msg || '详情加载失败'; return; }
+                        if (!res.ok) { detail.textContent = res.msg || I18N.t('详情加载失败'); return; }
                         var d = res.data || {};
                         detail.innerHTML = '';
                         // 详情行构造辅助：标签 + 正文（与重放卡详情同款：最终总结 Markdown 渲染，其余纯文本）
@@ -19648,14 +19673,14 @@
                             detail.appendChild(lab);
                             detail.appendChild(body);
                         }
-                        row('任务目标', d.goal);
-                        if (d.status === 'completed') row('最终总结', d.result, true);
-                        if (d.status === 'failed') row('失败原因', d.error);
-                        if (d.status === 'cancelled') row('取消说明', d.error);
+                        row(I18N.t('任务目标'), d.goal);
+                        if (d.status === 'completed') row(I18N.t('最终总结'), d.result, true);
+                        if (d.status === 'failed') row(I18N.t('失败原因'), d.error);
+                        if (d.status === 'cancelled') row(I18N.t('取消说明'), d.error);
                         // 阶段六十五：详情渲染完成后追加执行轨迹区块（在详情回调内触发，避免 innerHTML 清空竞态）
                         thLoadSteps(detail, t.task_id);
                     })
-                    .catch(function () { detail.textContent = '详情加载失败'; });
+                    .catch(function () { detail.textContent = I18N.t('详情加载失败'); });
             });
             taskhistListEl.appendChild(card);
         });
@@ -19668,11 +19693,11 @@
     // thApprovalLabel 审批情况标签文案归口
     function thApprovalLabel(a) {
         // 阶段一百二十五：新增 answered（ask_user 用户已回答，中文映射，未知值兜底显示原文）
-        return { none: '免审批', approved: '审批通过', rejected: '用户拒绝', cancelled: '用户取消', timeout: '审批超时', answered: '已回答' }[a] || a || '—';
+        return { none: I18N.t('免审批'), approved: I18N.t('审批通过'), rejected: I18N.t('用户拒绝'), cancelled: I18N.t('用户取消'), timeout: I18N.t('审批超时'), answered: I18N.t('已回答') }[a] || a || '—';
     }
     // thEnvLabel 执行环境标签文案归口
     function thEnvLabel(e) {
-        return e === 'pc' ? '本地执行' : '服务端';
+        return e === 'pc' ? I18N.t('本地执行') : I18N.t('服务端');
     }
     // thStepParamsObj 步骤参数 JSON 解析归口：落库参数截断 1000 字，截断会导致 JSON 不完整，
     // 解析失败返回 null 由调用方兜底原样展示（与美化后展示互不影响）
@@ -19693,35 +19718,35 @@
         var brief = function (s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; };
         var line = '';
         switch (tool) {
-            case 'read_file': line = '读取文件 ' + path; break;
-            case 'write_file': line = '写入文件 ' + path + (o.content ? '（' + String(o.content).split('\n').length + ' 行）' : ''); break;
-            case 'edit_file': line = '编辑文件 ' + path + (p('old_string') ? '（替换「' + brief(p('old_string'), 40) + '」→「' + brief(p('new_string'), 40) + '」）' : ''); break;
-            case 'delete_file': line = '删除文件/目录 ' + path; break;
-            case 'list_dir': line = '列出目录 ' + (path || '工作区根目录'); break;
-            case 'grep': line = '搜索「' + brief(p('pattern'), 60) + '」' + (p('include') ? '（匹配 ' + p('include') + '）' : ''); break;
-            case 'todo_write': line = '更新任务清单'; break;
-            case 'run_command': line = '执行命令：' + brief(p('command'), 120); break;
-            case 'web_search': line = '联网搜索「' + brief(p('query'), 60) + '」'; break;
-            case 'http_request': line = '发起 HTTP ' + (p('method') || 'GET') + ' 请求：' + brief(p('url'), 80); break;
-            case 'ask_user': line = '向用户提问：' + brief(p('question'), 80); break;
+            case 'read_file': line = I18N.t('读取文件 ') + path; break;
+            case 'write_file': line = I18N.t('写入文件 ') + path + (o.content ? '（' + String(o.content).split('\n').length + I18N.t(' 行）') : ''); break;
+            case 'edit_file': line = I18N.t('编辑文件 ') + path + (p('old_string') ? I18N.t('（替换「') + brief(p('old_string'), 40) + '」→「' + brief(p('new_string'), 40) + '」）' : ''); break;
+            case 'delete_file': line = I18N.t('删除文件/目录 ') + path; break;
+            case 'list_dir': line = I18N.t('列出目录 ') + (path || I18N.t('工作区根目录')); break;
+            case 'grep': line = I18N.t('搜索「') + brief(p('pattern'), 60) + '」' + (p('include') ? I18N.t('（匹配 ') + p('include') + '）' : ''); break;
+            case 'todo_write': line = I18N.t('更新任务清单'); break;
+            case 'run_command': line = I18N.t('执行命令：') + brief(p('command'), 120); break;
+            case 'web_search': line = I18N.t('联网搜索「') + brief(p('query'), 60) + '」'; break;
+            case 'http_request': line = I18N.t('发起 HTTP ') + (p('method') || 'GET') + I18N.t(' 请求：') + brief(p('url'), 80); break;
+            case 'ask_user': line = I18N.t('向用户提问：') + brief(p('question'), 80); break;
             default:
                 if (tool.indexOf('browser_') === 0) {
                     // 内置浏览器工具中文标签（与服务端 agentBrowserLabel 同语义）
                     var bl = {
-                        browser_navigate: '内置浏览器打开页面',
-                        browser_snapshot: '获取页面结构',
-                        browser_screenshot: '页面截图',
-                        browser_tabs: '管理浏览器标签页',
-                        browser_close: '关闭页面',
-                        browser_click: '点击页面元素',
-                        browser_input: '页面输入内容',
-                        browser_eval: '执行页面脚本'
-                    }[tool] || ('内置浏览器操作 ' + tool);
+                        browser_navigate: I18N.t('内置浏览器打开页面'),
+                        browser_snapshot: I18N.t('获取页面结构'),
+                        browser_screenshot: I18N.t('页面截图'),
+                        browser_tabs: I18N.t('管理浏览器标签页'),
+                        browser_close: I18N.t('关闭页面'),
+                        browser_click: I18N.t('点击页面元素'),
+                        browser_input: I18N.t('页面输入内容'),
+                        browser_eval: I18N.t('执行页面脚本')
+                    }[tool] || (I18N.t('内置浏览器操作 ') + tool);
                     line = bl + (p('url') ? '：' + brief(p('url'), 80) : '') + (p('selector') ? ' ' + brief(p('selector'), 40) : '') + (p('text') ? '「' + brief(p('text'), 40) + '」' : '');
                 } else if (tool.indexOf('mcp_pc_') === 0) {
-                    line = '调用本机 MCP 工具 ' + tool.slice(7);
+                    line = I18N.t('调用本机 MCP 工具 ') + tool.slice(7);
                 } else if (tool.indexOf('mcp_') === 0) {
-                    line = '调用 MCP 工具 ' + tool.slice(4);
+                    line = I18N.t('调用 MCP 工具 ') + tool.slice(4);
                 } else {
                     line = JSON.stringify(o, null, 2); // 未识别工具：JSON 美化兜底（缩进两格可读）
                 }
@@ -19786,17 +19811,17 @@
     function thLoadSteps(detail, taskID) {
         var box = document.createElement('div');
         box.className = 'th-steps';
-        box.textContent = '执行轨迹加载中…';
+        box.textContent = I18N.t('执行轨迹加载中…');
         detail.appendChild(box);
         fetch('/api/agent/task/' + encodeURIComponent(taskID) + '/steps?username=' + encodeURIComponent(kbUsername()))
             .then(function (r) { return r.json(); })
             .then(function (res) {
-                if (!res.ok) { box.textContent = res.msg || '执行轨迹加载失败'; return; }
+                if (!res.ok) { box.textContent = res.msg || I18N.t('执行轨迹加载失败'); return; }
                 var steps = res.data.steps || [];
                 box.innerHTML = '';
                 var title = document.createElement('div');
                 title.className = 'th-steps-title';
-                title.textContent = steps.length ? ('执行轨迹（' + steps.length + ' 步）') : '执行轨迹（无工具调用）';
+                title.textContent = steps.length ? (I18N.t('执行轨迹（') + steps.length + I18N.t(' 步）')) : I18N.t('执行轨迹（无工具调用）');
                 box.appendChild(title);
                 steps.forEach(function (s) {
                     var item = document.createElement('div');
@@ -19824,13 +19849,13 @@
                     if (s.params) {
                         var p = document.createElement('div');
                         p.className = 'th-step-body';
-                        p.textContent = '参数：' + thStepParamSummary(s.tool, s.params);
+                        p.textContent = I18N.t('参数：') + thStepParamSummary(s.tool, s.params);
                         item.appendChild(p);
                     }
                     if (s.result) {
                         var rEl = document.createElement('div');
                         rEl.className = 'th-step-body';
-                        rEl.textContent = (s.ok ? '结果：' : '错误：') + thStepResultText(s.result);
+                        rEl.textContent = (s.ok ? I18N.t('结果：') : I18N.t('错误：')) + thStepResultText(s.result);
                         // 悬停原生 title 换自绘格式化悬浮卡（MCP ? 帮助同款视觉）：JSON 已美化缩进、
                         // 全文等宽展示可复制；原实现 title 直出原始串显示乱，保留备查：
                         // rEl.title = thStepResultText(s.result);
@@ -19840,7 +19865,7 @@
                     box.appendChild(item);
                 });
             })
-            .catch(function () { box.textContent = '执行轨迹加载失败'; });
+            .catch(function () { box.textContent = I18N.t('执行轨迹加载失败'); });
     }
 
     taskhistPrev.addEventListener('click', function () { if (thPage > 1) { thPage--; taskhistLoad(); } });
@@ -19920,7 +19945,7 @@
         rpSendAmount.value = '';
         rpSendErr.textContent = '';
         var bal = rpBalanceText();
-        rpSendBalance.textContent = bal ? ('余额 ' + bal + ' 积分') : '余额获取中…';
+        rpSendBalance.textContent = bal ? (I18N.t('余额 ') + bal + I18N.t(' 积分')) : I18N.t('余额获取中…');
         rpSendMask.classList.remove('hidden');
         setTimeout(function () { rpSendAmount.focus(); }, 50);
     }
@@ -19943,13 +19968,13 @@
     rpSendCount.addEventListener('keydown', function (e) { if (e.key === 'Enter') rpSendOk.click(); });
     rpSendOk.addEventListener('click', function () {
         var amount = parseFloat(rpSendAmount.value.trim());
-        if (!(amount > 0)) { rpSendErr.textContent = '请输入正确的金额'; return; }
+        if (!(amount > 0)) { rpSendErr.textContent = I18N.t('请输入正确的金额'); return; }
         var isGroup = isGroupTarget(currentChatUser);
         var count = 1;
         if (isGroup) {
             count = parseInt(rpSendCount.value, 10) || 0;
-            if (count < 1 || count > 100) { rpSendErr.textContent = '红包个数为 1-100'; return; }
-            if (Math.round(amount * 1000) < count) { rpSendErr.textContent = '每份至少 0.001 积分'; return; }
+            if (count < 1 || count > 100) { rpSendErr.textContent = I18N.t('红包个数为 1-100'); return; }
+            if (Math.round(amount * 1000) < count) { rpSendErr.textContent = I18N.t('每份至少 0.001 积分'); return; }
         }
         rpSendErr.textContent = '';
         IMSocket.send({
@@ -19967,10 +19992,10 @@
 
     // ---- 红包卡片渲染（实时与历史共用构建器；状态文案按本端视角归口） ----
     function rpStatusTextOf(status, fromSelf) {
-        if (Number(status) === 2) return '已过期';
-        if (rpMyClaims[rpCurId] != null) return '已存入积分余额';
-        if (Number(status) === 1) return '已领取完毕';
-        return fromSelf ? '等待领取' : '领取红包';
+        if (Number(status) === 2) return I18N.t('已过期');
+        if (rpMyClaims[rpCurId] != null) return I18N.t('已存入积分余额');
+        if (Number(status) === 1) return I18N.t('已领取完毕');
+        return fromSelf ? I18N.t('等待领取') : I18N.t('领取红包');
     }
     var rpCurId = 0; // rpStatusTextOf 临时上下文（构建/刷新时先赋值）
 
@@ -20013,7 +20038,7 @@
         text.className = 'rp-text';
         var greet = document.createElement('div');
         greet.className = 'rp-greeting';
-        greet.textContent = rp.greeting || '恭喜发财，大吉大利';
+        greet.textContent = rp.greeting || I18N.t('恭喜发财，大吉大利');
         var status = document.createElement('div');
         status.className = 'rp-status';
         text.appendChild(greet);
@@ -20022,7 +20047,7 @@
         top.appendChild(text);
         var tag = document.createElement('div');
         tag.className = 'rp-type-tag';
-        tag.textContent = rp.type === 'lucky' ? ('拼手气红包 · 共 ' + rp.count + ' 个') : ('积分红包 · 共 ' + rpFmt(rp.amount) + ' 积分');
+        tag.textContent = rp.type === 'lucky' ? (I18N.t('拼手气红包 · 共 ') + rp.count + I18N.t(' 个')) : (I18N.t('积分红包 · 共 ') + rpFmt(rp.amount) + I18N.t(' 积分'));
         bubble.appendChild(top);
         bubble.appendChild(tag);
         rpApplyBubbleState(bubble, rp, type === 'self');
@@ -20071,7 +20096,7 @@
     // 详情响应归口：更新缓存与本端领取记录 → 刷新卡片 → 按"是否可领"分流开红包页/详情页
     function rpHandleDetail(d, interactive) {
         if (!d || !d.ok) {
-            if (interactive) showToast((d && d.err) || '无法查看红包');
+            if (interactive) showToast((d && d.err) || I18N.t('无法查看红包'));
             return;
         }
         rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
@@ -20095,7 +20120,7 @@
     // ---- 开红包遮罩（微信同款：头像+昵称+祝福语+大圆"開"） ----
     function rpFillOpenHead(d) {
         rpOpenName.textContent = d.from_name || d.from_user || '';
-        rpOpenGreeting.textContent = d.greeting || '恭喜发财，大吉大利';
+        rpOpenGreeting.textContent = d.greeting || I18N.t('恭喜发财，大吉大利');
         rpOpenAvatar.innerHTML = '';
         var av = getAvatarUrl(d.from_user);
         if (av) {
@@ -20128,13 +20153,13 @@
 
     // ---- 红包详情弹窗（领取列表，自己高亮；列表挂自绘悬浮滑块） ----
     function rpShowDetailDialog(d) {
-        rpDetailGreeting.textContent = d.greeting || '恭喜发财，大吉大利';
+        rpDetailGreeting.textContent = d.greeting || I18N.t('恭喜发财，大吉大利');
         var stat;
         if (Number(d.status) === 2) {
-            stat = '已过期，未领完的 ' + rpFmt(d.remaining_amount) + ' 积分已退回';
+            stat = I18N.t('已过期，未领完的 ') + rpFmt(d.remaining_amount) + I18N.t(' 积分已退回');
         } else {
-            stat = rpFmt(d.claimed_count || 0) + '/' + d.count + ' 个，共 ' + rpFmt(d.claimed_amount || 0) + ' 积分';
-            if (Number(d.status) === 1) stat += '，已领取完毕';
+            stat = rpFmt(d.claimed_count || 0) + '/' + d.count + I18N.t(' 个，共 ') + rpFmt(d.claimed_amount || 0) + I18N.t(' 积分');
+            if (Number(d.status) === 1) stat += I18N.t('，已领取完毕');
         }
         rpDetailStat.textContent = stat;
         rpDetailList.innerHTML = '';
@@ -20142,7 +20167,7 @@
         if (!list.length) {
             var empty = document.createElement('div');
             empty.className = 'rp-detail-empty';
-            empty.textContent = Number(d.status) === 2 ? '红包已过期，无人领取' : '暂无人领取';
+            empty.textContent = Number(d.status) === 2 ? I18N.t('红包已过期，无人领取') : I18N.t('暂无人领取');
             rpDetailList.appendChild(empty);
         } else {
             list.forEach(function (it) {
@@ -20162,7 +20187,7 @@
                 info.className = 'rp-detail-info';
                 var name = document.createElement('div');
                 name.className = 'rp-detail-name';
-                name.textContent = (it.name || it.username) + (it.username === IMSocket.getUsername() ? '（我）' : '');
+                name.textContent = (it.name || it.username) + (it.username === IMSocket.getUsername() ? I18N.t('（我）') : '');
                 var time = document.createElement('div');
                 time.className = 'rp-detail-time';
                 time.textContent = it.claim_time || '';
@@ -20170,7 +20195,7 @@
                 info.appendChild(time);
                 var amt = document.createElement('div');
                 amt.className = 'rp-detail-amount';
-                amt.textContent = rpFmt(it.amount) + ' 积分';
+                amt.textContent = rpFmt(it.amount) + I18N.t(' 积分');
                 item.appendChild(av);
                 item.appendChild(info);
                 item.appendChild(amt);
@@ -20419,14 +20444,14 @@
         }
         if (d.act === 'open') {
             rpOpenBtn.disabled = false;
-            if (!d.ok) { showToast(d.err || '领取失败'); return; }
+            if (!d.ok) { showToast(d.err || I18N.t('领取失败')); return; }
             rpPlayOpenSound(); // 领取成功：微信同款硬币落袋声（ctx 已在"開"点击手势中解锁）
             if (d.balance != null) setPointsBalance(d.balance);
             rpMyClaims[d.packet_id] = d.amount;
             rpStatusCache[d.packet_id] = { status: d.status, claimed_count: d.claimed_count, claimed_amount: d.claimed_amount };
             rpOpenIdle.classList.add('hidden');
             rpOpenResult.classList.remove('hidden');
-            rpOpenAmount.textContent = rpFmt(d.amount) + ' 积分';
+            rpOpenAmount.textContent = rpFmt(d.amount) + I18N.t(' 积分');
             rpRefreshBubble(d.packet_id); // 自己的卡片状态同步（已存入积分余额）
             return;
         }

@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>即时通讯</title>
+    <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
+         保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
+    <script src="js/i18n.js?v=1.0"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -57,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.47">
+    <link rel="stylesheet" href="css/style.css?v=2.48">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -1070,6 +1073,17 @@
                         <span class="settings-theme-name">跟随系统</span>
                     </button>
                 </div>
+                <h3 class="settings-subtitle">语言</h3>
+                <div class="settings-theme-row">
+                    <button class="settings-lang-card" data-lang="zh">
+                        <span class="settings-lang-preview">中</span>
+                        <span class="settings-lang-name">中文</span>
+                    </button>
+                    <button class="settings-lang-card" data-lang="en">
+                        <span class="settings-lang-preview">EN</span>
+                        <span class="settings-lang-name">English</span>
+                    </button>
+                </div>
             </section>
             <!-- 规则与记忆：阶段一百零五重做为 TRAE CN 同款页内直管布局（卡片+范围页签+创建按钮+空态指引；
                  规则卡片按 全局/仅本智能体 页签分列，记忆卡片带头部总开关；API 与旧弹窗同归口） -->
@@ -1459,7 +1473,7 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="js/socket.js?v=1.27"></script>
-    <script>if (window.bootStage) bootStage('基础模块已就绪，正在加载功能组件…');</script>
+    <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="js/screenshot.js?v=1.9"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
@@ -1478,8 +1492,8 @@
     <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
     <script src="js/remote-engine.js?v=1.0"></script>
-    <script src="js/chat.js?v=3.60"></script>
-    <script>if (window.bootStage) bootStage('正在初始化会话…');</script>
+    <script src="js/chat.js?v=3.62"></script>
+    <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

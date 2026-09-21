@@ -10756,6 +10756,47 @@ html.m .ms-actions {
     text-align: center;
 }
 
+/* 语言二选一卡片（复用主题卡骨架，预览区为语言标识字符，跟随主题色变量） */
+.settings-lang-card {
+    width: 148px;
+    border: 2px solid var(--border, #e5e5e5);
+    border-radius: 10px;
+    background: var(--header-bg);
+    padding: 10px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color 0.15s;
+}
+
+.settings-lang-card:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border, #e5e5e5));
+}
+
+.settings-lang-card.active {
+    border-color: var(--primary);
+}
+
+.settings-lang-preview {
+    height: 74px;
+    border-radius: 6px;
+    border: 1px solid var(--border, #e5e5e5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg, #f7f7f7);
+}
+
+.settings-lang-name {
+    font-size: 12px;
+    color: var(--text);
+    text-align: center;
+}
+
 /* 右上角关闭按钮 */
 .settings-close {
     position: absolute;
