@@ -3558,6 +3558,24 @@
         if (isMine && meta.nonce) {
             var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
             if (mineEl) {
+                // 阶段一百六十：视频文件完成回填升级为内联视频气泡（微信同款可点击播放）——
+                // 进度气泡为通用文件卡片形态，就地转终态会绕过 appendFileMsg 的视频分流，
+                // 视频显示为文件卡片无法内联播放（重拉历史才恢复视频卡片的不一致）；
+                // 图片气泡走 appendImageMsg 独立路径不受影响，普通文件维持就地转终态（原位重绘无闪烁）
+                var upName = (mineEl.querySelector('.file-name') || {}).textContent || '';
+                if (meta.url && isVideoName(upName)) {
+                    var nv = appendVideoMsg(IMSocket.getUsername(), upName, (mineEl.querySelector('.file-size') || {}).textContent || '', meta.url, 'self', true);
+                    nv.setAttribute('data-msg-id', msg.msg_id);
+                    nv.setAttribute('data-file-id', msg.file_id);
+                    if (meta.nonce) nv.setAttribute('data-nonce', meta.nonce);
+                    var oldTs = mineEl.getAttribute('data-ts');
+                    if (oldTs) nv.setAttribute('data-ts', oldTs);
+                    applyBubbleReadStatus(nv, msg.msg_id, msg.to_user || '');
+                    // 原位替换（先插到旧气泡位置再移除，避免跳到列表末尾）
+                    if (mineEl.parentNode) mineEl.parentNode.insertBefore(nv, mineEl);
+                    mineEl.remove();
+                    return;
+                }
                 mineEl.setAttribute('data-msg-id', msg.msg_id);
                 mineEl.setAttribute('data-file-id', msg.file_id);
                 applyBubbleReadStatus(mineEl, msg.msg_id, msg.to_user || '');
@@ -3574,6 +3592,13 @@
                 if (mFile && meta.url) {
                     var fu = mFile.getAttribute('data-url');
                     if (!fu || fu.indexOf('blob:') === 0) mFile.setAttribute('data-url', meta.url);
+                }
+                // 阶段一百六十：视频气泡 video.src 同款回填（sendFileDirect 本地以 blob 预览渲染，
+                // 原实现只回填了图片 img.src 与文件 data-url，video.src 停留 blob: 跨会话/查看器失效）
+                var mVid = mineEl.querySelector('video.bubble-video-el');
+                if (mVid && meta.url && mVid.getAttribute('src') && mVid.getAttribute('src').indexOf('blob:') === 0) {
+                    mVid.setAttribute('src', meta.url);
+                    try { mVid.load(); } catch (eV) { } // src 变更后重载元数据
                 }
                 // 阶段三十二：分片直传气泡为进度形态，回填后移除进度条/百分比/取消按钮（转为终态文件卡片）
                 var prog = mineEl.querySelector('.file-progress');
