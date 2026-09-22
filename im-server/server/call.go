@@ -118,6 +118,9 @@ func (s *Server) HandleCallSignal(c *Client, msg *protocol.Message) {
 	// 阶段一百五十一补丁：会议设备可用性广播（麦克风/摄像头是否可用全员可见）
 	case "meet_media":
 		s.handleMeetMedia(from, msg, &p)
+	// 会议录制状态广播（「正在录制」提示归口；录制本体为客户端本地写盘，服务端零媒体参与）
+	case "meet_record":
+		s.handleMeetRecord(from, msg, &p)
 	default:
 		s.sendError(c, "未知通话信令")
 	}

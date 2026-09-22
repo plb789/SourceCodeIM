@@ -639,6 +639,55 @@ ipcMain.on('rec:active', function (e, on) {
     recActive = !!on;
 });
 
+// ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地，服务端零媒体参与） =====
+// 链路：渲染层点录制 → rec:meet-start 弹原生保存对话框（默认 视频/IM会议录制/会议录制_群名_时间.webm）
+// → MediaRecorder 1s 分片经 rec:meet-write 实时落盘（异常退出/崩溃也不丢已录内容）→ 停止 rec:meet-end 收口
+var meetRecFile = null; // 当前录制写流（会议窗单例单会话；重复 start 前先收口上一场）
+var meetRecPath = '';
+
+ipcMain.handle('rec:meet-start', async function (event, data) {
+    if (meetRecFile) { try { meetRecFile.end(); } catch (e) { } meetRecFile = null; }
+    var win = BrowserWindow.fromWebContents(event.sender);
+    var dir;
+    try { dir = app.getPath('videos'); } catch (e) { dir = app.getPath('home'); }
+    dir = path.join(dir, 'IM会议录制');
+    try { await fs.promises.mkdir(dir, { recursive: true }); } catch (e) { }
+    var r = await dialog.showSaveDialog(win, {
+        defaultPath: path.join(dir, (data && data.name) || '会议录制.webm'),
+        filters: [{ name: 'WebM 录像', extensions: ['webm'] }]
+    });
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+    try {
+        meetRecFile = fs.createWriteStream(r.filePath, { flags: 'w' });
+        meetRecPath = r.filePath;
+        return { ok: true, path: r.filePath };
+    } catch (e) {
+        return { ok: false, err: String(e && e.message || e) };
+    }
+});
+
+// 分片落盘（1s 一片 Uint8Array 直写；写流自带缓冲，高频 IPC 性能无忧）
+ipcMain.handle('rec:meet-write', function (event, chunk) {
+    if (!meetRecFile) return { ok: false };
+    try {
+        meetRecFile.write(Buffer.from(chunk));
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, err: String(e && e.message || e) };
+    }
+});
+
+// 收口：关写流并返回最终路径（渲染层提示保存位置；窗口崩溃后主进程仍可完成写盘）
+ipcMain.handle('rec:meet-end', function () {
+    var p = meetRecPath;
+    if (meetRecFile) {
+        var f = meetRecFile;
+        meetRecFile = null;
+        try { f.end(); } catch (e) { }
+    }
+    return { ok: true, path: p };
+});
+
 // ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 主窗口缩为悬浮小工具条 → 滚动采样拼接 → 完成回编辑器） =====
 // 链路：冻结截图选区后点工具栏"长截图"→ stitch:begin 退全屏并把窗口收缩为选区下方悬浮小条
 // （保留 screen-saver 置顶，悬浮于目标应用之上，露出滚动内容）→ 渲染层 getUserMedia 屏幕流采样对齐
@@ -1398,7 +1447,7 @@ function ensureCallWindow(callType, isMeet) {
     callWin.setAlwaysOnTop(true, 'floating'); // 通话期间悬浮（微信同款，可手动失焦继续通话）
     // 阶段一百五十一补丁：加载带版本号查询串防 HTTP 缓存（会议窗页面从服务器加载，
     // 无参数时 Chromium 可能命中旧缓存导致新布局不生效；与 WEB 端 web-call-bridge.js 保持一致）
-    callWin.loadURL(SERVER_URL + 'call-window.html?v=1523');
+    callWin.loadURL(SERVER_URL + 'call-window.html?v=1524');
     callWin.on('close', function (e) {
         if (app.isQuitting || callWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // 点窗体关闭（Alt+F4 等）转挂断语义：通知页面走挂断信令收口后自行 callClose，
@@ -2544,6 +2593,10 @@ ipcMain.on('tray:flash', function () {
         }
     }, 300);
 });
+
+// 阶段一百五十三补丁：自动播放策略常开——防无手势场景（会议窗加载即采集）麦克风轨道被
+// Chromium 以 muted 降级授予（track.muted=true 设备级静音，通话与录制均无声，社区标准解法）
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 app.whenReady().then(async function () {
     // 阶段一百三十四：单实例锁二次守卫——非首实例 app.quit() 异步执行期间 whenReady 仍会触发，

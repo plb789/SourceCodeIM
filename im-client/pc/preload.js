@@ -182,6 +182,19 @@ contextBridge.exposeInMainWorld('desktop', {
     recShortcut: function () {
         return ipcRenderer.invoke('rec:shortcut');
     },
+    // ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地） =====
+    // 开始录制：主进程弹保存对话框（data = {name: 默认文件名}），返回 {ok, path?, canceled?, err?}
+    recMeetStart: function (data) {
+        return ipcRenderer.invoke('rec:meet-start', data);
+    },
+    // 分片落盘（chunk: Uint8Array，MediaRecorder 1s 一片实时写，异常退出不丢已录内容）
+    recMeetWrite: function (chunk) {
+        return ipcRenderer.invoke('rec:meet-write', chunk);
+    },
+    // 收口录制：关写流，返回 {ok, path}
+    recMeetEnd: function () {
+        return ipcRenderer.invoke('rec:meet-end');
+    },
     // ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 悬浮小工具条 → 滚动拼接） =====
     // 长截图启动：主窗口隐藏 + 独立无边框条窗显示工具条（缩条方案 overlay 按钮遮挡工具条，已弃用），selPx = 选区物理像素
     stitchBegin: function (selPx) {

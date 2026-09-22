@@ -60,6 +60,10 @@ type meetRoom struct {
 	// Media 阶段一百五十一补丁：成员设备可用性快照（username → mic/cam 是否可用）——
 	// meet_media 上报落表，中途入会者按快照补发，保证「叉麦/叉摄」状态全员一致可见
 	Media map[string]meetMediaState
+	// Recording 会议录制状态快照（username → true 正在录制）——录制为纯客户端行为
+	// （本地 MediaRecorder 写盘，服务端零媒体参与），服务端只归口状态可见性：
+	// meet_record 广播发在会成员，中途入会者按快照补发，保证「正在录制」提示全员一致
+	Recording map[string]bool
 }
 
 var (
@@ -398,6 +402,11 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 	for mu, ms := range room.Media {
 		media[mu] = ms
 	}
+	// 录制状态快照（锁内取）——中途入会者补发「正在录制」提示
+	recorders := make([]string, 0, len(room.Recording))
+	for ru := range room.Recording {
+		recorders = append(recorders, ru)
+	}
 	meetMu.Unlock()
 
 	// 已在会成员收 meet_join（from=新人），各自向新人发 offer（建连方向规则）
@@ -454,6 +463,15 @@ func (s *Server) handleMeetAccept(from string, p *callSignalPayload) {
 			"cam":     ms.Cam,
 		})
 		s.callForward(mu, from, string(mc))
+	}
+	// 向新人补发录制状态（room_info 之后同 WS 顺序；from_user=录制者，前端显示「正在录制」徽标）
+	for _, ru := range recorders {
+		rc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_record",
+			"call_id": p.CallID,
+			"on":      true,
+		})
+		s.callForward(ru, from, string(rc))
 	}
 	logger.Info("会议入会：%s 加入房间 %s（当前 %d 人）", from, p.CallID, len(members))
 }
@@ -536,6 +554,11 @@ func (s *Server) handleMeetJoinNo(from string, msg *protocol.Message, p *callSig
 	for mu, ms := range room.Media {
 		media[mu] = ms
 	}
+	// 录制状态快照（锁内取）——中途入会者补发「正在录制」提示
+	recorders := make([]string, 0, len(room.Recording))
+	for ru := range room.Recording {
+		recorders = append(recorders, ru)
+	}
 	meetMu.Unlock()
 
 	// 已在会成员收 meet_join（from=新人；ice 注入同 accept——首个 meet_join 向发起人下发中继配置）
@@ -588,6 +611,15 @@ func (s *Server) handleMeetJoinNo(from string, msg *protocol.Message, p *callSig
 			"cam":     ms.Cam,
 		})
 		s.callForward(mu, from, string(mc))
+	}
+	// 向新人补发录制状态（room_info 之后同 WS 顺序；from_user=录制者，前端显示「正在录制」徽标）
+	for _, ru := range recorders {
+		rc, _ := json.Marshal(map[string]interface{}{
+			"action":  "meet_record",
+			"call_id": roomID,
+			"on":      true,
+		})
+		s.callForward(ru, from, string(rc))
 	}
 	logger.Info("会议加入：%s 凭会议号 %s 加入房间 %s（当前 %d 人）", from, meetNo, roomID, len(members))
 }
@@ -768,6 +800,46 @@ func (s *Server) handleMeetMedia(from string, msg *protocol.Message, p *callSign
 	}
 }
 
+// handleMeetRecord 会议录制状态广播（上行 {action:'meet_record', call_id, on:true/false}）。
+// 校验发送者是房间成员后，把录制开/关状态转发给房间内其他成员（from_user=录制者），
+// 同时落房间快照供中途入会者补发——录制本体为纯客户端行为（MediaRecorder 本地写盘，
+// 服务端零媒体参与），服务端只归口状态可见性（腾讯会议同款「正在录制」提示，参会知情）
+func (s *Server) handleMeetRecord(from string, msg *protocol.Message, p *callSignalPayload) {
+	var body struct {
+		On bool `json:"on"`
+	}
+	_ = json.Unmarshal([]byte(msg.Content), &body)
+	meetMu.Lock()
+	room, ok := meetRooms[p.CallID]
+	if !ok || !room.Members[from] {
+		meetMu.Unlock()
+		return // 非房间成员/房间已解散：静默丢弃
+	}
+	if room.Recording == nil {
+		room.Recording = map[string]bool{} // 兼容旧房间的惰性初始化
+	}
+	if body.On {
+		room.Recording[from] = true
+	} else {
+		delete(room.Recording, from)
+	}
+	others := make([]string, 0, len(room.Members))
+	for m := range room.Members {
+		if m != from {
+			others = append(others, m)
+		}
+	}
+	meetMu.Unlock()
+	content, _ := json.Marshal(map[string]interface{}{
+		"action":  "meet_record",
+		"call_id": p.CallID,
+		"on":      body.On,
+	})
+	for _, m := range others {
+		s.callForward(from, m, string(content))
+	}
+}
+
 // meetRelayMedia 会议媒体信令定向转发：content.target 指定接收方，双方均为房间成员才放行
 func (s *Server) meetRelayMedia(from string, p *callSignalPayload, content string) {
 	room := meetRoomOf(p.CallID)
@@ -804,8 +876,9 @@ func (s *Server) meetLeave(from string, p *callSignalPayload) {
 		return
 	}
 	delete(room.Members, from)
-	delete(room.Sharing, from) // 阶段一百五十一补丁：退出清共享快照（防滞留致后续入会者收到失效共享标记）
-	delete(room.Media, from)   // 阶段一百五十一补丁：退出清设备可用性快照
+	delete(room.Sharing, from)   // 阶段一百五十一补丁：退出清共享快照（防滞留致后续入会者收到失效共享标记）
+	delete(room.Media, from)     // 阶段一百五十一补丁：退出清设备可用性快照
+	delete(room.Recording, from) // 退出清录制快照（录制者已离会，后续入会者不再收到其「正在录制」补发）
 	delete(room.Invited, from)
 	delete(callUserBusy, from)
 	// 阶段一百四十八：成员退出时停其断网宽限定时器（防定时器滞留误触发/泄漏）

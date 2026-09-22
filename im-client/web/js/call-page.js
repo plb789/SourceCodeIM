@@ -97,6 +97,7 @@
     var elVName = $('cwVName'), elVStatus = $('cwVStatus');
     var elAvatarWrap = $('cwAvatarWrap'), elMask = $('cwMask'), elMaskText = $('cwMaskText');
     var btnMute = $('btnMute'), btnCam = $('btnCam'), btnHangup = $('btnHangup');
+    var btnRecord = $('btnRecord'); // 会议录制（腾讯会议同款本地录制；PC 端专属，会议模式亮出）
 
     // ===== 提示音（WebAudio 合成，零资源文件：450Hz 回铃音，响 1s 停 2s 循环） =====
     var actx = null, toneOsc = null, toneTimer = null;
@@ -464,6 +465,7 @@
         if (st.ended) return;
         st.ended = true;
         st.state = 'ended';
+        stopMeetRecording(); // 会议录制随收口自动停并保存（写盘异步由主进程完成，关窗不丢数据）
         closeInvitePanel(); // 阶段一百五十三：会议收口同步关邀请面板（防面板滞留遮挡收口遮罩）
         toneStop();
         if (timerId) { clearInterval(timerId); timerId = null; }
@@ -538,8 +540,12 @@
         }
         btnShare.classList.remove('active');
         btnCam.disabled = false;
+        stopMeetRecording(); // 换场兜底：上一场录制未停则停并保存（写盘异步由主进程完成）
+        recRemote = {};      // 换场清他人录制状态表（徽标随下场 meet_record 广播重建）
+        recBadgeRefresh();
         btnInvite.classList.add('hidden');
         btnShare.classList.add('hidden');
+        if (btnRecord) { btnRecord.classList.add('hidden'); btnRecord.classList.remove('rec-on'); btnRecord.title = '开始录制'; }
         try { if (st.local) st.local.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
         st.local = null; st.remote = null;
         st.pendingCands = [];
@@ -642,6 +648,8 @@
             btnShare.classList.remove('hidden');
         }
         btnInvite.classList.remove('hidden');
+        // 会议录制按钮（语音/视频会议均可录——语音=纯录音；仅 PC 端亮出，WEB 端 iframe 桥无写盘 IPC）
+        if (btnRecord && window.desktop && window.desktop.recMeetStart) btnRecord.classList.remove('hidden');
         $('meetStatus').textContent = st.role === 'caller' ? '等待成员加入…' : '正在加入会议…';
         getMediaDegrade().then(function (r) {
             if (st.ended) {
@@ -651,6 +659,35 @@
             st.local = r.stream;
             st.micUnavailable = !r.mic;
             st.camUnavailable = st.callType === 'video' && !r.cam;
+            // 设备级静音自愈：muted=true（Windows 声音设置里麦克风设备被静音）时自动重取 2 次；
+            // 重取成功需同时替换已建立连接的音频发送器（门闩放行早于重取完成，sender 持有旧静音轨，
+            // 只换 st.local 会出现"录制有声但对端仍听静音"的不一致）；仍静音则明确提示用户检查系统，
+            // 避免通话/录制无声问题静默发生（实测根因：Intel 智音阵列在系统设备层被静音）
+            if (r.stream && r.stream.getAudioTracks().length && r.stream.getAudioTracks()[0].muted) {
+                var micTries = 2;
+                var micSwapSenders = function (nt) {
+                    for (var mu in st.members) {
+                        var mpc = st.members[mu] && st.members[mu].pc;
+                        if (!mpc) continue;
+                        mpc.getSenders().forEach(function (sd) {
+                            if (sd.track && sd.track.kind === 'audio') { try { sd.replaceTrack(nt); } catch (e) { } }
+                        });
+                    }
+                };
+                var micRetry = function () {
+                    var cur = st.local.getAudioTracks()[0];
+                    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (ns) {
+                        var nt = ns.getAudioTracks()[0];
+                        var still = !nt || nt.muted;
+                        if (cur) { try { cur.stop(); } catch (e) { } st.local.removeTrack(cur); }
+                        if (nt) st.local.addTrack(nt);
+                        if (!still) micSwapSenders(nt); // 录制混音由 recSyncAudio 1s 内自动重挂新轨
+                        if (still && micTries-- > 0) setTimeout(micRetry, 600);
+                        else if (still) setMeetStatus('麦克风被系统静音：请检查 Windows 声音设置（输入设备静音状态）');
+                    }).catch(function () { if (micTries-- > 0) setTimeout(micRetry, 600); });
+                };
+                setTimeout(micRetry, 400);
+            }
             applyMediaMarks();
             renderMeetStage(); // 无媒体也渲染（自己 tile 出"无视频可用"占位/语音 tile 出头像）；阶段一百五十一舞台布局归口
             // 阶段一百五十一补丁：媒体有效状态广播（麦克风/摄像头「可用且未关闭」全员可见；
@@ -728,6 +765,244 @@
             fallback();
         }
     }
+
+    // ===== 会议录制（腾讯会议同款本地录制：文件只保存本地，服务端零媒体参与） =====
+    // 链路：点录制 → desktop.recMeetStart 弹保存对话框定保存路径 → WebAudio 混音（本地+全员）
+    // + canvas 画面合成（视频会议，15fps 复刻宫格/主舞台布局）→ MediaRecorder 1s 分片 →
+    // desktop.recMeetWrite 实时写盘（异常退出不丢已录内容）→ 停止/挂断 desktop.recMeetEnd 收口。
+    // 录制视角=本端所见（布局与混音），成员增减/共享切换自动跟随；录制状态经 meet_record
+    // 信令归口广播（服务端落快照供中途入会者补发），全员「正在录制」知情提示。仅 PC 端
+    // （渲染层需 preload 注入 recMeet* IPC，WEB 端 iframe 桥无此能力不亮按钮）
+    var rec = {
+        active: false,   // 录制进行中
+        recorder: null,  // MediaRecorder 实例
+        ctx: null,       // 混音 AudioContext（独立于提示音 actx，防提示音混入录制）
+        dest: null,      // MediaStreamAudioDestinationNode（混音输出口；不连扬声器无回放无啸叫）
+        sources: {},     // user → {src, trackId} 已接入混音的源表（1s 定时同步成员增减/流替换）
+        syncTimer: null, // 混音源同步定时器
+        canvas: null,    // 画面合成画布（视频会议 1280×720）
+        drawTimer: null, // 画面绘制定时器（≈15fps）
+        startedAt: 0     // 录制起始时刻（徽标计时）
+    };
+    var recRemote = {};  // 正在录制的其他成员表（username → true，meet_record 广播归口）
+    var recBadgeTimer = null; // 徽标时长计时器
+
+    // 混音源同步：本地流 + 各成员远端流（成员退出/断流自动摘除，迟到建连自动补挂）
+    function recSyncAudio() {
+        if (!rec.active || !rec.ctx || !rec.dest) return;
+        // 兜底：AudioContext 意外挂起（窗口后台节流等）自动恢复，防混音静音
+        if (rec.ctx.state !== 'running') { try { rec.ctx.resume(); } catch (e) { } }
+        var want = {};
+        if (st.local && st.local.getAudioTracks().length) want['self'] = st.local.getAudioTracks()[0];
+        for (var u in st.members) {
+            var s = st.members[u].stream;
+            if (s && s.getAudioTracks().length) want[u] = s.getAudioTracks()[0];
+        }
+        for (var k in rec.sources) {
+            var ent = rec.sources[k];
+            if (!want[k] || want[k].id !== ent.trackId) {
+                try { ent.src.disconnect(); } catch (e) { }
+                delete rec.sources[k];
+            }
+        }
+        for (var k2 in want) {
+            if (!rec.sources[k2]) {
+                try {
+                    var src = rec.ctx.createMediaStreamSource(new MediaStream([want[k2]]));
+                    src.connect(rec.dest);
+                    rec.sources[k2] = { src: src, trackId: want[k2].id };
+                } catch (e) { }
+            }
+        }
+    }
+
+    // cover 绘制（同 CSS object-fit:cover 语义：等比缩放居中裁剪铺满目标矩形）
+    function recDrawCover(ctx, video, x, y, w, h) {
+        try {
+            var vw = video.videoWidth, vh = video.videoHeight;
+            if (!vw || !vh) return;
+            var s = Math.max(w / vw, h / vh), dw = vw * s, dh = vh * s;
+            ctx.drawImage(video, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+        } catch (e) { }
+    }
+
+    // tile 名字条（半透明底 + 白字，底部居左；与页面 mt-name 同语义）
+    function recDrawName(ctx, name, x, y, w, h) {
+        var th = 24;
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(x, y + h - th, w, th);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '13px sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(name || '').slice(0, 24), x + 8, y + h - th / 2);
+    }
+
+    // 画面合成帧（视频会议）：无人共享=宫格（复刻 renderMeetGrid 行列公式）；共享中=
+    // 共享屏幕内容全屏铺满（腾讯会议同款：只录共享内容，不录右侧成员缩略列避免遮挡）
+    function recDrawFrame() {
+        var cv = rec.canvas;
+        if (!cv) return;
+        var ctx = cv.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high'; // 高质量缩放（共享文字/小画面缩放更锐利）
+        ctx.fillStyle = '#161819';
+        ctx.fillRect(0, 0, cv.width, cv.height);
+        var gap = 10;
+        var sharers = [];
+        if (sharing && screenStream) sharers.push('self');
+        for (var u in st.members) { if (st.members[u].sharing) sharers.push(u); }
+        if (sharers.length) {
+            var stageTile = $('stageBox').querySelector('div.meet-tile');
+            if (stageTile) {
+                var sv = stageTile.querySelector('video');
+                if (sv) recDrawCover(ctx, sv, 0, 0, cv.width, cv.height);
+                var su = meetUserOf(st.stageUser);
+                recDrawName(ctx, (su.name || '') + (st.stageUser === 'self' ? '（我）' : '') + '（共享屏幕）', 0, 0, cv.width, cv.height);
+            }
+            return;
+        }
+        // 宫格：tile 渲染序=自己+成员序（renderMeetGrid 同序），尺寸公式一致
+        var tiles = $('meetGrid').querySelectorAll('div.meet-tile');
+        var cnt = tiles.length;
+        if (!cnt) return;
+        var cols = Math.ceil(Math.sqrt(cnt));
+        var w = (cv.width - (cols - 1) * gap) / cols;
+        var rows = Math.ceil(cnt / cols);
+        var h = (cv.height - (rows - 1) * gap) / rows;
+        for (var j = 0; j < cnt; j++) {
+            var x = (j % cols) * (w + gap), y = Math.floor(j / cols) * (h + gap);
+            var v2 = tiles[j].querySelector('video');
+            var u2 = tiles[j].getAttribute('data-user');
+            var ui = meetUserOf(u2);
+            if (v2) recDrawCover(ctx, v2, x, y, w, h);
+            recDrawName(ctx, (ui.name || '') + (u2 === 'self' ? '（我）' : ''), x, y, w, h);
+        }
+    }
+
+    // 录制徽标归口：本端录制优先（带时长），否则显示他人录制者名（meet_record 广播/快照补发）
+    function recBadgeRefresh() {
+        var el = $('recBadge');
+        if (!el) return;
+        var who = '';
+        if (rec.active) {
+            var s = Math.floor((Date.now() - rec.startedAt) / 1000);
+            function p2(n) { return (n < 10 ? '0' : '') + n; }
+            who = '录制中 ' + p2(Math.floor(s / 60)) + ':' + p2(s % 60);
+        } else {
+            for (var u in recRemote) {
+                var m = st.members[u];
+                who = (m ? (m.name || u) : u) + ' 录制中';
+                break;
+            }
+        }
+        if (who) {
+            el.textContent = who;
+            el.classList.remove('hidden');
+        } else {
+            el.classList.add('hidden');
+        }
+    }
+
+    // MediaRecorder 组流：视频会议=canvas 视频轨+混音轨；语音会议=纯混音轨（opus）。
+    // 清晰度归口：1080p/30fps + 显式 8Mbps 视频码率（不设则 Chromium 默认低码率致画面糊），
+    // 编码器 vp9 优先（同码率画质优于 vp8）不支持回退 vp8
+    function recBuildStream() {
+        var tracks = [];
+        if (st.callType === 'video') {
+            rec.canvas = document.createElement('canvas');
+            rec.canvas.width = 1920;
+            rec.canvas.height = 1080;
+            tracks = tracks.concat(rec.canvas.captureStream(30).getVideoTracks());
+        }
+        var at = rec.dest ? rec.dest.stream.getAudioTracks() : [];
+        if (at.length) tracks = tracks.concat(at);
+        rec.stream = new MediaStream(tracks);
+        var mime = 'audio/webm;codecs=opus';
+        if (st.callType === 'video') {
+            var cands = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'];
+            for (var i = 0; i < cands.length; i++) {
+                try { if (MediaRecorder.isTypeSupported(cands[i])) { mime = cands[i]; break; } } catch (e) { }
+            }
+        }
+        var opts = { videoBitsPerSecond: 8000000, audioBitsPerSecond: 128000 };
+        try { if (MediaRecorder.isTypeSupported(mime)) opts.mimeType = mime; } catch (e) { }
+        rec.recorder = new MediaRecorder(rec.stream, opts);
+        rec.recorder.ondataavailable = function (ev) {
+            if (!ev.data || !ev.data.size) return;
+            ev.data.arrayBuffer().then(function (buf) {
+                if (window.desktop && window.desktop.recMeetWrite) window.desktop.recMeetWrite(new Uint8Array(buf));
+            }).catch(function () { });
+        };
+        rec.recorder.onstop = recOnRecorderStop;
+    }
+
+    // 收口写流（onstop 触发；最后分片 arrayBuffer→IPC 异步在途，延迟 300ms 再关写流防尾帧截断）
+    function recOnRecorderStop() {
+        setTimeout(function () {
+            if (window.desktop && window.desktop.recMeetEnd) {
+                window.desktop.recMeetEnd().then(function (r) {
+                    if (r && r.ok && r.path && !st.ended) setMeetStatus('录制已保存：' + r.path);
+                });
+            }
+            try { if (rec.ctx) rec.ctx.close(); } catch (e) { }
+            rec.ctx = null; rec.dest = null; rec.sources = {};
+            rec.recorder = null; rec.stream = null; rec.canvas = null;
+        }, 300);
+    }
+
+    async function startMeetRecording() {
+        if (rec.active || st.ended || !st.meet) return;
+        if (!window.desktop || !window.desktop.recMeetStart) return; // WEB 端无 IPC 不启用
+        // 混音 AudioContext 在保存对话框前创建：native 弹窗会打断手势上下文（浏览器环境手势
+        // 缺失会导致 AudioContext 挂起且 resume 失败），提前创建 + 失败路径复用，防御更稳
+        if (!rec.ctx) {
+            rec.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            rec.dest = rec.ctx.createMediaStreamDestination();
+        }
+        if (rec.ctx.state === 'suspended') rec.ctx.resume();
+        function p2(n) { return (n < 10 ? '0' : '') + n; }
+        var d = new Date();
+        var ts = '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '_' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
+        var r;
+        try {
+            r = await window.desktop.recMeetStart({ name: '会议录制_' + (st.meetTitle || st.meetNo || '会议') + '_' + ts + '.webm' });
+        } catch (e) { return; }
+        if (!r || !r.ok) return; // 用户取消保存对话框/写盘失败：不开始录制（ctx 留作下次点击复用）
+        if (st.ended) { // 对话框停留期间会议已收口：不空跑起录，立即收掉刚建的写流防残留坏文件
+            try { window.desktop.recMeetEnd(); } catch (e) { }
+            return;
+        }
+        recBuildStream();
+        rec.recorder.start(1000); // 1s 分片实时落盘
+        rec.active = true;
+        rec.startedAt = Date.now();
+        recSyncAudio();
+        rec.syncTimer = setInterval(recSyncAudio, 1000);
+        if (st.callType === 'video') rec.drawTimer = setInterval(recDrawFrame, 33); // 30fps（与 captureStream 对齐）
+        recBadgeTimer = setInterval(recBadgeRefresh, 1000);
+        if (btnRecord) {
+            btnRecord.classList.add('rec-on');
+            btnRecord.title = '停止录制';
+        }
+        recBadgeRefresh();
+        send('meet_record', { on: true }); // 全员广播（服务端落快照，中途入会者补发）
+    }
+
+    function stopMeetRecording() {
+        if (!rec.active) return;
+        rec.active = false;
+        if (rec.syncTimer) { clearInterval(rec.syncTimer); rec.syncTimer = null; }
+        if (rec.drawTimer) { clearInterval(rec.drawTimer); rec.drawTimer = null; }
+        if (recBadgeTimer) { clearInterval(recBadgeTimer); recBadgeTimer = null; }
+        if (btnRecord) {
+            btnRecord.classList.remove('rec-on');
+            btnRecord.title = '开始录制';
+        }
+        recBadgeRefresh();
+        try { rec.recorder.stop(); } catch (e) { recOnRecorderStop(); } // onstop→延迟收口写流
+        send('meet_record', { on: false });
+    }
+
 
     // ===== 阶段一百五十三：会议窗内邀请成员面板（独立于主窗口选人弹窗，不再来回切窗） =====
     // 名单走 meet_members_ask 服务端归口（在线/设备/忙/已在会状态一并下发，前端只展示）；
@@ -1271,6 +1546,7 @@
         stopMeetRestartLoop(peer); // 阶段一百四十八：停成员级 restart 重试循环
         try { if (m.pc) m.pc.close(); } catch (e) { }
         delete st.members[peer];
+        if (recRemote[peer]) { delete recRemote[peer]; recBadgeRefresh(); } // 退出清其录制状态（防徽标滞留「XX 录制中」）
         renderMeetStage(); // 阶段一百五十一：舞台布局归口（缩略图列同步移除该成员）
         var any = false;
         for (var k in st.members) { any = true; break; }
@@ -1431,6 +1707,15 @@
                 mmu.camOk = p.cam !== false;
                 markTileMuted(from, !!mmu.muted);
                 markTileCam(from);
+                break;
+            case 'meet_record':
+                // 会议录制状态广播（frame.from_user=录制者）：全员「正在录制」知情提示（腾讯会议同款）；
+                // 服务端落快照供中途入会者补发（on 快照/补发共用本入口）
+                if (p.on) recRemote[from] = true;
+                else delete recRemote[from];
+                var rru = st.members[from];
+                if (p.on && rru) setMeetStatus((rru.name || from) + ' 开始录制会议');
+                recBadgeRefresh();
                 break;
             case 'meet_members_list':
                 // 阶段一百五十三：会议窗内邀请面板名单回包（面板开着才渲染；晚到/已关面板忽略）
@@ -1726,6 +2011,11 @@
     btnHangup.addEventListener('click', function () { doHangup(); });
     // 阶段一百四十四：会议控制（共享屏幕 / 会中邀请）
     btnShare.addEventListener('click', function () { toggleMeetShare(); });
+    // 会议录制（腾讯会议同款本地录制）：开=弹保存对话框后起录，停=收口写盘；挂断自动停并保存
+    if (btnRecord) btnRecord.addEventListener('click', function () {
+        if (rec.active) stopMeetRecording();
+        else startMeetRecording();
+    });
     // 阶段一百五十一：腾讯会议同款全屏（右上角按钮 / 双击画面切换，Esc 退出）
     var btnMeetFs = $('btnMeetFs');
     if (btnMeetFs) btnMeetFs.addEventListener('click', toggleMeetFullscreen);
