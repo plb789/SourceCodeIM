@@ -3599,7 +3599,21 @@
         if (!isMine && (document.hidden || window.__pcWindowMinimized === true || currentChatUser !== msg.from_user)) {
             rpPlayMsgSound();
         }
+        // 阶段一百六十：接收端非当前会话本地未读 +1（直传路径文件不入服务端未读统计口径时兜底，
+        // 与小文件分片路径 FILE handler 同款乐观计数；服务端 CONV_LIST 归口推送到达时覆盖，幂等安全）——
+        // 原缺陷：好友未停留在会话视图时完成后无任何列表反馈（仅响铃），只能切走再切回靠历史拉取发现
         var peer2 = isMine ? msg.to_user : msg.from_user;
+        if (!isMine && currentChatUser !== peer2) {
+            var fconv2 = null;
+            for (var fj = 0; fj < convList.length; fj++) {
+                if (convList[fj].target === peer2) { fconv2 = convList[fj]; break; }
+            }
+            if (fconv2) {
+                fconv2.unread = (fconv2.unread || 0) + 1;
+                renderConvList();
+                renderFriendList();
+            }
+        }
         if (currentChatUser !== peer2) return;
         var mediaEl;
         if (isImageName(meta.name || '')) {
@@ -3662,13 +3676,21 @@
 
     // ===== 阶段一百五十六：好友文件直传 UI 归口（传输面由 p2p-file.js 处理，此处只管气泡） =====
     // probe：接收方建"接收中"进度气泡（引擎已自动 accept，微信同款"在线即收"不打扰用户）
-    // accept：发送方建"上传中"进度气泡（probe 阶段失败不建气泡，回退无闪烁）
+    // accept：发送方气泡已在 probe 阶段提前建立（点击即有反馈），此处仅补连接属性与防重兜底
     // done_ack：双方按 nonce 回填 msg_id 转正式文件卡片（带"直传"角标，同 FILE_PERSISTED 归口模式）
     // abort：双方移除气泡；对端主动中止时 Toast 提示（同 FILE_CANCEL 口径）
     var p2pPending = {}; // nonce -> {file, toUser}（发送方 accept 建气泡 / 回退重发 / done_ack 共用）
     function sendFileP2P(file, toUser) {
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
         p2pPending[nonce] = { file: file, toUser: toUser };
+        // 阶段一百六十：气泡提前到 probe 阶段（点击即建"直传连接中"，发送即刻有反馈）——
+        // 原实现气泡在 accept 到达才建，首次协商失败走 10s 超时回退，期间发送方零反馈"等气泡"；
+        // 回退分支统一 el.remove() 后由原链路重建（进度从零，体验连续）
+        var nb = appendProgressBubble(IMSocket.getUsername(), file.name, formatSize(file.size), 'self', true, '', nonce, true);
+        nb.setAttribute('data-p2p-peer', toUser);
+        try { nb.querySelector('.bubble-file').setAttribute('data-url', URL.createObjectURL(file)); } catch (eN) {}
+        bindP2PCancel(nb, nonce);
+        addP2PBadge(nb.querySelector('.bubble-file'));
         P2PFile.send(file, toUser, nonce).then(function (r) {
             var info = p2pPending[nonce];
             delete p2pPending[nonce];
@@ -3798,16 +3820,19 @@
             return;
         }
         if (meta.action === 'accept') {
-            // 发送方：锁定接收端，建"上传中"进度气泡（probe 阶段失败不建气泡，回退无闪烁）
+            // 发送方：锁定接收端（气泡已在 sendFileP2P probe 阶段提前建立，此处防重只补属性）；
+            // 兼容容错：气泡缺失（异常路径）时补建
             var pend = p2pPending[nonce];
             if (!pend) return;
-            var sp = appendProgressBubble(IMSocket.getUsername(), pend.file.name, formatSize(pend.file.size), 'self', true, '', nonce, true);
+            var sp = messageList.querySelector('.message[data-nonce="' + nonce + '"]');
+            if (!sp) {
+                sp = appendProgressBubble(IMSocket.getUsername(), pend.file.name, formatSize(pend.file.size), 'self', true, '', nonce, true);
+                try { sp.querySelector('.bubble-file').setAttribute('data-url', URL.createObjectURL(pend.file)); } catch (e4) {}
+                bindP2PCancel(sp, nonce);
+                addP2PBadge(sp.querySelector('.bubble-file')); // 阶段一百五十六（UI）：上传中气泡也带"直传"角标（统一加在 bubble-file 内，完成态去重复用）
+            }
             sp.setAttribute('data-p2p-id', meta.transfer_id || '');
             sp.setAttribute('data-p2p-peer', pend.toUser);
-            // blob 地址供完成前点击预览（落库后 data-url 仍为本地文件，点击下载/预览同体验）
-            try { sp.querySelector('.bubble-file').setAttribute('data-url', URL.createObjectURL(pend.file)); } catch (e4) {}
-            bindP2PCancel(sp, nonce);
-            addP2PBadge(sp.querySelector('.bubble-file')); // 阶段一百五十六（UI）：上传中气泡也带"直传"角标（统一加在 bubble-file 内，完成态去重复用）
             // SDP/ICE 协商期提示（引擎 accept 处理先于本 UI 归口执行，此处补显协商中状态）
             var ntxt = sp.querySelector('.file-progress-text');
             if (ntxt) ntxt.textContent = I18N.t('直传连接中');
