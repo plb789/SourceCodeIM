@@ -2,4 +2,6 @@
 node_modules/
 dist/
 _toolchain/
+user-data-t1/
+user-data-t2/
 *.enc
