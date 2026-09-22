@@ -3468,9 +3468,19 @@ html, body {
     flex-shrink: 0;
 }
 
-/* 引用消息正文（.message-bubble 的 pre-wrap 自动继承，多行回复正常分行） */
+/* 引用消息正文（.message-bubble 的 pre-wrap 自动继承，多行回复正常分行）
+   阶段一百六十三：文本正文开明文选中例外（微信同款）——覆盖阶段一百三十五 #message-list
+   整区禁选：文本消息/AI 回复/引用块正文可按住拖选、双击选词复制，悬停显示 text 光标；
+   消息区其余元素（昵称/时间戳/按钮/气泡边距）仍保持整区禁选防误选；选中后按住拖仍走
+   chat.js dragstart 归口转发到输入框（选中后拖=转发，未选中按住拖=原生拖选）；
+   注：曾试过 user-select:contain（选区夹紧）——Chromium 规范传播下祖先链存在 none 时
+   contain 的 used value 被压成 none（实测 computed=none），纯 CSS 不可行；拖选不越界
+   （拉到输入框/搜索框不带入文字）由 chat.js selectionchange 选区钳制归口实现 */
 .msg-text {
     word-break: break-word;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
 }
 
 /* 输入区上方引用条（样式与截图待发送条同风格：面板色圆角条 + 圆形 × 按钮） */
@@ -12404,6 +12414,16 @@ body.browser-resizing .browser-web-frame {
 .chat-header, .input-footer, #settings-mask {
     user-select: none;
     -webkit-user-select: none;
+}
+/* 阶段一百六十三补：拖选钳制期临时禁选消息区外一切文本（chat.js 从消息区按下鼠标挂
+   body.text-clamping 类，mouseup/失焦/拖拽开始即移除）——拖选进行中浏览器每帧原生重建
+   选区（焦点跟鼠标），拉到输入框/搜索框即越界重建，与 JS 选区钳制拉锯产生选区色闪烁；
+   钳制期把消息区外全部禁选后原生选区焦点落不进禁选区域，选区天然留在消息区内，无拉锯
+   无闪烁；类仅存在于"从消息区发起的拖选"期间，输入框/搜索框自身拖选（起点不在消息区）
+   不挂类完全不受影响 */
+body.text-clamping :not(#message-list):not(#message-list *) {
+    user-select: none !important;
+    -webkit-user-select: none !important;
 }
 /* 列表/消息区/设置页内头像与图片禁止原生拖拽（防按住拖出半透明 ghost 拖影） */
 #conv-list img, #user-list img, #ai-agent-list img, #message-list img, #settings-mask img {

@@ -2951,6 +2951,10 @@
     // ===== 阶段一百六十二：聊天区消息拖拽（图片/文件气泡按住左键拖到输入框 = 单条转发）=====
     // 图片 img 原生可拖；文件卡片是 div 默认不可拖——mousedown 委托前置补 draggable（mousedown
     // 恒先于 dragstart，幂等设置，一处监听覆盖实时/历史/P2P 全部动态文件卡片）
+    // 阶段一百六十三改：文本气泡（.msg-text）回归原生可拖选（微信同款：单击按住拖=选中文本，
+    // 选中后拖=拖拽转发）——不再 mousedown 补 draggable（draggable 元素按住拖永远是拖拽，
+    // 会抢占原生拖选导致无法选中；dragstart 保留 isText 接管，文本气泡只有存在选区时才会
+    // 触发 dragstart，此时接管为消息转发，无选区的按住拖即原生拖选）
     messageList.addEventListener('mousedown', function (e) {
         var fb = e.target.closest ? e.target.closest('.bubble-file[data-url]') : null;
         if (fb && !fb.hasAttribute('draggable')) fb.setAttribute('draggable', 'true');
@@ -2959,8 +2963,10 @@
         var item = e.target.closest ? e.target.closest('.message') : null;
         var isImg = e.target.classList && e.target.classList.contains('chat-image');
         var isFile = e.target.closest ? e.target.closest('.bubble-file[data-url]') : null;
-        // 非图片/文件消息（文本等）不接管——保留原生"选中文本拖拽"行为
-        if (!item || (!isImg && !isFile)) { draggingMsgEl = null; return; }
+        var isText = e.target.closest ? e.target.closest('.msg-text') : null;
+        // 图片/文件原生/接管拖拽转发；文本气泡仅存在选区拖动时触发 dragstart（微信同款：
+        // 选中后拖=转发该消息，未选中按住拖=原生拖选选择文本）
+        if (!item || (!isImg && !isFile && !isText)) { draggingMsgEl = null; return; }
         draggingMsgEl = item;
         try { e.dataTransfer.setData('text/plain', ''); } catch (eDs) { } // 兼容必须有数据才可拖的内核
         if (e.dataTransfer.effectAllowed) e.dataTransfer.effectAllowed = 'copy';
@@ -3045,9 +3051,27 @@
                 } else if (act === 'copy') {
                     document.execCommand('copy');
                 } else if (act === 'paste') {
-                    // 剪贴板读取归口：navigator.clipboard.readText（https/localhost secure context 可用，
-                    // Electron https origin 同样适用）→ 失败回退 execCommand('paste')（部分内核可用）→
-                    // 再失败 toast 引导 Ctrl+V；insertText 方式插入可保留撤销栈（Ctrl+Z 可撤，微信同款顺滑）
+                    // 阶段一百六十三补：粘贴归口升级支持图片（修复：右键复制图片后粘贴无反应——
+                    // 原 readText 只能读文本，剪贴板是图片时返回空串静默返回）。
+                    // navigator.clipboard.read() 拿全部类型：image/* 走与 Ctrl+V（阶段三十四）完全
+                    // 同构的编辑器归口（PC 端 openEditor / 浏览器 ScreenshotEditor），text/plain 走
+                    // insertText 文本链路；read 不可用时回退 readText → execCommand('paste') → toast
+                    var pasteImageFile = function (blob) {
+                        // 与 Ctrl+V 监听同构：编辑器占用中不重复进入（editorWinBusy 语义一致）
+                        if (editorWinBusy) { showToast(I18N.t('编辑器打开中')); return; }
+                        if (!blob || blob.size === 0) return;
+                        var mime = blob.type || 'image/png';
+                        var f = new File([blob], 'clipboard.' + (mime.split('/')[1] || 'png'), { type: mime });
+                        if (window.desktop && window.desktop.openEditor) {
+                            editorWinBusy = true;
+                            stitchBlobToDataUrl(f, function (dataUrl) {
+                                if (!dataUrl) { editorWinBusy = false; showToast(I18N.t('截图失败')); return; }
+                                window.desktop.openEditor({ dataUrl: dataUrl, mode: 'open', callback: 'sendFile' });
+                            });
+                        } else {
+                            ScreenshotEditor.open(f, sendScreenshotFile);
+                        }
+                    };
                     var doInsert = function (txt) {
                         if (!txt) return;
                         el.focus();
@@ -3060,13 +3084,49 @@
                             el.dispatchEvent(new Event('input', { bubbles: true })); // 触发既有 input 监听（字数统计等）
                         }
                     };
-                    if (navigator.clipboard && navigator.clipboard.readText) {
+                    if (navigator.clipboard && navigator.clipboard.read) {
+                        navigator.clipboard.read().then(function (ciArr) {
+                            var i2, ci, types2, txtBlob;
+                            for (i2 = 0; i2 < (ciArr || []).length; i2++) {
+                                ci = ciArr[i2];
+                                types2 = (ci.types || []);
+                                for (var j2 = 0; j2 < types2.length; j2++) {
+                                    if (types2[j2].indexOf('image/') === 0) {
+                                        ci.getType(types2[j2]).then(pasteImageFile).catch(function () { showToast(I18N.t('粘贴失败，请使用 Ctrl+V')); });
+                                        return; // 图片优先（微信同款：剪贴板有图粘图）
+                                    }
+                                }
+                            }
+                            // 无图片：取 text/plain 文本项（blob.text() 解码，避免 readText 二次权限查询）
+                            for (i2 = 0; i2 < (ciArr || []).length; i2++) {
+                                ci = ciArr[i2];
+                                if ((ci.types || []).indexOf('text/plain') !== -1) {
+                                    ci.getType('text/plain').then(function (tb) { return tb.text(); }).then(function (txt) {
+                                        el.focus(); doInsert(txt);
+                                    }).catch(function () { showToast(I18N.t('粘贴失败，请使用 Ctrl+V')); });
+                                    return;
+                                }
+                            }
+                            txtBlob = null; // 剪贴板为空：静默（微信同款无可粘内容时无动作）
+                        }).catch(function () {
+                            // read 不可用（权限拒绝/旧内核）：回退 readText 文本链路
+                            el.focus();
+                            if (navigator.clipboard && navigator.clipboard.readText) {
+                                navigator.clipboard.readText().then(doInsert).catch(function () {
+                                    el.focus();
+                                    if (!document.execCommand('paste')) showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
+                                });
+                            } else if (!document.execCommand('paste')) {
+                                showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
+                            }
+                        });
+                    } else if (navigator.clipboard && navigator.clipboard.readText) {
                         navigator.clipboard.readText().then(doInsert).catch(function () {
                             el.focus();
                             if (!document.execCommand('paste')) showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
                         });
-                    } else {
-                        if (!document.execCommand('paste')) showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
+                    } else if (!document.execCommand('paste')) {
+                        showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
                     }
                 } else if (act === 'selectall') {
                     if (el.select) el.select();
@@ -3083,6 +3143,57 @@
         }, true);
         window.addEventListener('blur', iMenuHide);
         window.addEventListener('wheel', iMenuHide, true);
+    })();
+
+    // ===== 阶段一百六十三补：拖选越界钳制（微信同款不越界）=====
+    // 背景：文本正文（.msg-text）放开可选后，从消息区拖选拉到输入框/搜索框会把那里的文字
+    // 一起选中（原生选择跨容器连续）。CSS user-select:contain 在祖先禁选链（#message-list=
+    // none）上会被规范传播压成 none（实测 computed=none）不可行——改为 selectionchange 归口
+    // 钳制：选区起点在消息区而终点拉出消息区时，立即把选区收缩回起点所在的正文容器内；
+    // 输入框/搜索框自身的拖选（起点不在消息区）完全不受影响；终点仍在消息区（含跨消息连选）放行
+    (function () {
+        var clipList = document.getElementById('message-list');
+        if (!clipList) return;
+        document.addEventListener('selectionchange', function () {
+            var sel = window.getSelection();
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+            var anchor = sel.anchorNode;
+            if (!anchor || !clipList.contains(anchor)) return; // 起点不在消息区：放行
+            var focus = sel.focusNode;
+            if (focus && clipList.contains(focus)) return;     // 终点仍在消息区：放行
+            // 收缩到起点所在的正文容器（.msg-text）边界内
+            var tx = anchor.nodeType === 1
+                ? anchor.closest('.msg-text')
+                : (anchor.parentElement ? anchor.parentElement.closest('.msg-text') : null);
+            if (!tx) return;
+            try {
+                var r = document.createRange();
+                r.setStart(anchor, sel.anchorOffset);
+                // 方向判定：越界终点在正文之后=向后拖（夹到正文末尾），在之前=向前拖（夹到正文开头）
+                var pos = focus ? tx.compareDocumentPosition(focus) : 0;
+                if (pos & Node.DOCUMENT_POSITION_FOLLOWING) r.setEnd(tx, tx.childNodes.length);
+                else r.setEnd(tx, 0);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            } catch (eClip) { /* 钳制异常不影响页面 */ }
+        });
+        // 阶段一百六十三补：拖选期间临时禁选消息区外一切文本（消除选区闪烁）——按住拖选时
+        // 浏览器每帧原生重建选区（焦点跟鼠标，拉到输入框即越界重建），selectionchange 钳制
+        // 随即收回，两者拉锯表现为选区色闪烁；钳制期间给 body 挂 text-clamping 类，CSS 归口
+        // 把消息区外全部元素禁选（原生选区焦点落不进禁选区域）→ 选区天然留在消息区内，
+        // 无越界重建无拉锯无闪烁；mouse 按下起点在消息区才挂类，输入框/搜索框自身拖选不受影响
+        document.addEventListener('mousedown', function (e) {
+            var t = e.target;
+            if (t && t.closest && t.closest('#message-list') && !document.body.classList.contains('text-clamping')) {
+                document.body.classList.add('text-clamping');
+            }
+        }, true);
+        var clipRelease = function () {
+            if (document.body.classList.contains('text-clamping')) document.body.classList.remove('text-clamping');
+        };
+        window.addEventListener('mouseup', clipRelease, true);
+        window.addEventListener('blur', clipRelease);
+        window.addEventListener('dragstart', clipRelease, true); // 拖选转消息瞬间释放（拖拽期无选择语义）
     })();
 
     function isImageName(name) {
@@ -18610,7 +18721,15 @@
             bubble.appendChild(mdDiv);
         } else {
             // 原实现：bubble.textContent = content;（普通文本消息直出）
-            bubble.textContent = content;
+            // 阶段一百六十三：普通文本消息正文统一 .msg-text 包裹——此前正文直接写在 .message-bubble
+            // 上，继承整区禁选（user-select:none）导致自己和好友的文本无法选中（AI 消息/引用回复
+            // 有 .msg-text 所以能选，微信同款例外只覆盖到 .msg-text）；包裹后 style.css 明文例外
+            // 生效（可拖选+悬停 text 光标），纯文本直出防 XSS 语义不变（仍为 textContent 赋值）；
+            // pre-wrap/break-all/字号行高均为继承属性，布局与原先一致（AI 消息同构先例）
+            var plainDiv = document.createElement('div');
+            plainDiv.className = 'msg-text';
+            plainDiv.textContent = content;
+            bubble.appendChild(plainDiv);
         }
         // 头像缺失修复：改为微信风格结构——头像 + 内容列（昵称/气泡/状态），
         // 头像在左（他人）/右（自己），由 CSS flex 与 flex-direction:row-reverse 控制
