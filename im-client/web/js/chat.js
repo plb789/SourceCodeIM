@@ -17077,6 +17077,39 @@
             bubbleImg.appendChild(img);
             body.appendChild(bubbleImg);
         } else {
+            // 阶段一百六十：视频消息历史渲染统一视频气泡（内联可播放，与实时渲染形态一致）——
+            // 原实现：历史文件分支自拼 DOM 未走 appendFileMsg 的视频分流，刷新/重登录后视频
+            // 退化为文件卡片无法内联播放（与实时形态不一致，用户实测反馈）；
+            // 过期视频仍走下方文件卡片（灰显+已过期角标，本体已被服务端清理，避免 404 视频元素）
+            var vName = meta.name || I18N.t('未命名文件');
+            var vExpired = false;
+            if (meta.url) {
+                var retenV = (IMSocket.getFileRetentionDays && IMSocket.getFileRetentionDays()) || 0;
+                if (retenV > 0 && r.create_time && !meta.p2p) {
+                    var vct = new Date(String(r.create_time).replace(' ', 'T'));
+                    if (!isNaN(vct.getTime()) && (Date.now() - vct.getTime()) > retenV * 86400000) vExpired = true;
+                }
+            }
+            if (isVideoName(vName) && meta.url && !vExpired) {
+                // 构建模式（buildOnly）：不插入不滚底，返回元素由 renderHistoryRecord 统一插入
+                // （与图片/文件卡片分支同流程；此函数作用域无 beforeEl，直接引用会 ReferenceError
+                // 中断整个历史渲染循环——后续消息全部不显示，2026-09-22 实测教训）
+                var vidDiv = appendVideoMsg(r.from_user, vName, formatSize(meta.size || 0), meta.url, type, isPrivate, { buildOnly: true });
+                if (r.id) vidDiv.setAttribute('data-msg-id', r.id);
+                if (ts) vidDiv.setAttribute('data-ts', ts); // 覆盖 appendVideoMsg 的当前时间为消息时间（撤回/定位口径一致）
+                // 自己发送的私聊消息显示已读/未读状态（与文件卡片同口径，body 由返回的根节点查找）
+                if (isMine && isPrivate && r.id) {
+                    var vb = vidDiv.querySelector('.message-body');
+                    if (vb) {
+                        var vst = document.createElement('div');
+                        vst.className = 'msg-status' + (isRead ? ' read' : '');
+                        vst.setAttribute('data-msg-id', r.id);
+                        vst.textContent = isRead ? I18N.t('已读') : I18N.t('未读');
+                        vb.appendChild(vst);
+                    }
+                }
+                return vidDiv;
+            }
             // 文件消息：文件卡片（图标+文件名+大小），点击下载
             var bubbleFile = document.createElement('div');
             bubbleFile.className = 'message-bubble bubble-file';
@@ -19321,7 +19354,7 @@
     // ===== 阶段一百三十九：视频消息气泡（内联 video 播放 + 文件名/大小行；微信同款观感） =====
     // 气泡复用 bubble-file 类名并带 data-url：右键"另存为"按 .bubble-file[data-url] 判定，视频同享；
     // 由 appendFileMsg 开头按 isVideoName 统一分流（本地发送/接收/历史加载/转发全链路自动生效）
-    function appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate) {
+    function appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate, opts) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
         // 撤回能力前提：气泡携带发送者与时间戳（与文件消息一致）
@@ -19350,8 +19383,18 @@
         body.appendChild(bubble);
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
-        messageList.appendChild(div);
-        messageList.scrollTop = messageList.scrollHeight;
+        // 构建模式：仅构建返回，不插入不滚底（历史渲染统一由调用方插入，与图片/文件卡片同流程）
+        if (opts && opts.buildOnly) {
+            return div;
+        }
+        // 阶段一百六十：历史渲染复用支持（opts.beforeEl 向上补插不滚底；实时/追加场景行为不变）——
+        // 原实现固定 appendChild+无条件滚底，仅服务实时渲染，历史分支无法复用（会插错位置+误滚底）
+        if (opts && opts.beforeEl) {
+            messageList.insertBefore(div, opts.beforeEl);
+        } else {
+            messageList.appendChild(div);
+            if (!opts || opts.stickBottom) messageList.scrollTop = messageList.scrollHeight;
+        }
         return div;
     }
 
