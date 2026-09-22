@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -714,4 +715,79 @@ func (s *Server) HandleAIImageUpload(w http.ResponseWriter, r *http.Request) {
 	logger.Info("AI 图片提问上传: %s -> %s, %s (%d 字节), url=%s", username, toAgent, header.Filename, header.Size, url)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"url": url})
+}
+
+// ===== 阶段一百六十：服务器聊天文件定期清理（用户需求：默认保存 7 天过期删除，避免长期占用服务器空间） =====
+// 范围：static/upload 目录（私聊/群聊文件与 AI 文件）；图片扩展名文件排除（图片消息点击行为不同，
+// 过期破图体验差，第一期只清理文件类）；头像在 static/avatar 独立目录天然不涉及；
+// 只删文件本体不删 im_message 记录——前端按 create_time+保留期灰显卡片并提示"文件已过期"（微信同款）；
+// 保留期读配置 file_retention_days（默认 7，-1=永不清理）；启动时先执行一次，之后每 6 小时扫描一轮
+
+// uploadImageExts 图片扩展名集合（清理时跳过，图片消息永存）
+var uploadImageExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".bmp": true, ".svg": true, ".ico": true,
+}
+
+// uploadCleanupNameRe 标准聊天上传物文件名白名单（安全审查加固，阶段一百六十）：
+// 格式固定为 纳秒时间戳_16位hex随机.扩展（uploadfile.go 保存归口生成）——
+// 只允许删除匹配该命名的文件；功能前缀文件（ann_ 群公告附件 / wb_ 工作台文件 / 未来新增前缀）
+// 与任何未知命名一律跳过，从根上杜绝误删长期内容文件
+var uploadCleanupNameRe = regexp.MustCompile(`^\d{15,}_[0-9a-f]{16}\.[^.]+$`)
+
+// StartFileCleanupLoop 启动文件定期清理后台任务（main.go 启动时调用，单协程）
+func StartFileCleanupLoop(uploadDir string, retentionDays int) {
+	if retentionDays < 0 {
+		logger.Info("文件定期清理未启用（file_retention_days=%d，永不清理）", retentionDays)
+		return
+	}
+	go func() {
+		fileCleanupOnce(uploadDir, retentionDays) // 启动先执行一次（重启即触发，便于配置调整后尽快生效）
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			fileCleanupOnce(uploadDir, retentionDays)
+		}
+	}()
+	logger.Info("文件定期清理已启动（保留 %d 天，目录 %s，每 6 小时扫描一轮）", retentionDays, uploadDir)
+}
+
+// fileCleanupOnce 扫描上传目录删除超期文件（图片扩展跳过；删除失败仅记日志不中断）
+func fileCleanupOnce(dir string, days int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		logger.Warn("文件清理扫描失败（目录 %s）: %v", dir, err)
+		return
+	}
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	removed := 0
+	var freedBytes int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue // 子目录（含分片临时目录 tmp_chunks）永不递归、永不删除
+		}
+		if uploadImageExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			continue // 图片消息永存
+		}
+		// 安全审查加固（阶段一百六十）：白名单模式——仅标准聊天上传物命名允许清理，
+		// ann_ 公告附件 / wb_ 工作台文件等前缀功能文件与未知命名一律免疫
+		if !uploadCleanupNameRe.MatchString(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // 未超保留期
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
+			logger.Warn("过期文件删除失败: %s, %v", e.Name(), err)
+			continue
+		}
+		removed++
+		freedBytes += info.Size()
+	}
+	if removed > 0 {
+		logger.Info("文件定期清理完成: 删除 %d 个过期文件，释放 %.1f MB", removed, float64(freedBytes)/1048576)
+	}
 }

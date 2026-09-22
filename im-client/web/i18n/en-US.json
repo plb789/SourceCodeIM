@@ -1150,6 +1150,8 @@
   "已恢复默认保存目录": "Default save directory restored",
   "目录不可写": "Directory is not writable",
   "路径必须是绝对路径": "Path must be absolute",
+  "文件已过期": "File has expired",
+  "已过期": "Expired",
   "安全接入": "Secure access",
   "山西梗阳新能源有限公司": "Shanxi Gengyang New Energy Co., Ltd.",
   "账号登录": "Account sign-in",

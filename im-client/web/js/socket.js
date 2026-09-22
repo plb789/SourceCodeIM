@@ -18,6 +18,8 @@
     var maxDirectSize = 2147483648;  // 分片直传文件大小上限（2GB），超过直接拒绝
     // 阶段一百五十七：群聊文件大小上限（服务端归口下发，独立于私聊 max_file_size；兜底值与服务端默认一致）
     var groupFileMaxSize = 20971520; // 群聊文件上限（20MB）
+    // 阶段一百六十：服务器文件保留天数（服务端归口下发；默认 7，-1=永不清理；前端历史渲染过期标记用）
+    var fileRetentionDays = 7;
     // 阶段一百五十六：好友文件 P2P 直传决策参数（服务端归口下发，兜底默认值与服务端 config.yaml 一致）
     var p2pCfg = {
         enabled: true,          // 服务端总开关（false 时全部文件走现有链路）
@@ -344,6 +346,10 @@
                 if (info && info.group_file_max_size > 0) {
                     groupFileMaxSize = info.group_file_max_size;
                 }
+                // 阶段一百六十：接收文件保留天数（服务端归口；负数=永不清理，前端仅对 >0 做过期标记）
+                if (info && typeof info.file_retention_days === 'number') {
+                    fileRetentionDays = info.file_retention_days;
+                }
                 // 阶段一百五十六：接收文件直传决策参数（服务端归口，客户端零硬编码）并注入 P2P 引擎
                 if (info && info.file_p2p_threshold > 0) p2pCfg.threshold = info.file_p2p_threshold;
                 if (info && info.file_p2p_negotiate_timeout > 0) p2pCfg.negotiateTimeout = info.file_p2p_negotiate_timeout;
@@ -424,6 +430,11 @@
         return groupFileMaxSize;
     }
 
+    // 阶段一百六十：获取服务端下发的文件保留天数（前端历史渲染过期标记用；负数=永不清理）
+    function getFileRetentionDays() {
+        return fileRetentionDays;
+    }
+
     // 阶段一百五十六：获取文件直传决策参数（服务端归口下发，chat.js 分流判定用）
     function getP2PConfig() {
         return p2pCfg;
@@ -445,6 +456,7 @@
         getUploadChunkSize: getUploadChunkSize,
         getMaxDirectSize: getMaxDirectSize,
         getGroupFileMaxSize: getGroupFileMaxSize,
+        getFileRetentionDays: getFileRetentionDays,
         getP2PConfig: getP2PConfig,
         stopHeartbeat: stopHeartbeat
     };

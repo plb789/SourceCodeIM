@@ -16691,9 +16691,33 @@
             bubbleFile.appendChild(icon);
             bubbleFile.appendChild(info);
             if (meta.url) {
-                // 阶段一百三十四：历史文件气泡补存 data-url（与实时气泡 L15035 对齐）——
-                // 右键"另存为"需从 DOM 取源地址（点击回调闭包拿不到）
-                bubbleFile.setAttribute('data-url', meta.url);
+                // 阶段一百六十：服务器文件保留期过期判断（file_retention_days 登录响应下发，服务端归口）——
+                // create_time 超过保留期的文件卡片灰显+「已过期」角标，点击仅提示（文件本体已被服务端
+                // 定期清理删除，消息记录永存，微信同款"文件已过期"）；保留期<=0（永不清理）不标记；
+                // meta.p2p 直传消息永不标记（归档副本过期被删后接收端仍有本地缓存兜底，缓存优先可打开，
+                // 无缓存走既有"不保存到服务器"提示，与服务器清理无关）；
+                // 时间解析用空格转 T（Chromium 两种都认，转 T 兼容性最稳）
+                var reten = (IMSocket.getFileRetentionDays && IMSocket.getFileRetentionDays()) || 0;
+                var fileExpired = false;
+                if (reten > 0 && r.create_time && !meta.p2p) {
+                    var fct = new Date(String(r.create_time).replace(' ', 'T'));
+                    if (!isNaN(fct.getTime()) && (Date.now() - fct.getTime()) > reten * 86400000) {
+                        fileExpired = true;
+                    }
+                }
+                // 过期卡片不回填 data-url：右键菜单按 .bubble-file[data-url] 判定，
+                // 不回填即右键无"另存为"项——避免另存已被服务端删除的文件得到 404 下载失败（审查遗漏修复）
+                if (!fileExpired) {
+                    // 阶段一百三十四：历史文件气泡补存 data-url（与实时气泡 L15035 对齐）——
+                    // 右键"另存为"需从 DOM 取源地址（点击回调闭包拿不到）
+                    bubbleFile.setAttribute('data-url', meta.url);
+                } else {
+                    bubbleFile.classList.add('file-expired');
+                    var expTag = document.createElement('div');
+                    expTag.className = 'file-expired-tag';
+                    expTag.textContent = I18N.t('已过期');
+                    bubbleFile.appendChild(expTag);
+                }
                 bubbleFile.style.cursor = 'pointer';
                 bubbleFile.addEventListener('click', function () {
                     // 原实现：直接创建 <a download> 触发下载
@@ -18662,6 +18686,13 @@
     // 可编辑类型 → 编辑层（OnlyOffice 已部署时在线编辑，失败自动落预览层）；预览层免费兜底始终可用
     // 其余类型（pdf/zip/图片等）→ 保持原下载行为
     function onFileCardClick(bubbleEl, msgId, name, url) {
+        // 阶段一百六十：过期文件拦截（微信同款）——历史渲染已按服务端保留期标记 file-expired 的卡片，
+        // 文件本体已被服务端定期清理删除，点击仅提示不再打开/下载；P2P 直传卡片永不加该标记
+        // （接收端本地缓存不受服务器清理影响，缓存命中仍可打开——缓存优先）
+        if (bubbleEl && bubbleEl.classList && bubbleEl.classList.contains('file-expired')) {
+            showToast(I18N.t('文件已过期'));
+            return;
+        }
         // 阶段一百三十四：调用点闭包 url 可能仍是 blob:（发送瞬间旧值），FILE_PERSISTED 已把
         // DOM data-url 回填为服务端地址——优先取 DOM（独立文档查看器跨窗口无法访问 blob:）
         if (bubbleEl && bubbleEl.getAttribute) {

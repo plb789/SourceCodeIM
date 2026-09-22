@@ -169,6 +169,13 @@ func main() {
 	}
 	// 阶段一百五十四：积分红包 24 小时过期退回后台扫描（未领完红包剩余积分自动退回发送者）
 	server.StartRedPacketRefundLoop()
+	// 阶段一百六十：聊天文件定期清理（static/upload 超期文件物理删除，默认保留 7 天，-1 永不清理；
+	// 目录兜底逻辑与 uploadfile.go 一致：UploadDir 缺省时基于 WebDir 推导）
+	cleanupDir := cfg.UploadDir
+	if cleanupDir == "" {
+		cleanupDir = filepath.Join(cfg.WebDir, "static", "upload")
+	}
+	server.StartFileCleanupLoop(cleanupDir, cfg.FileRetentionDays)
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

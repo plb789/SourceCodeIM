@@ -907,6 +907,9 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		// 阶段一百五十七：下发群聊文件大小上限（服务端归口，群文件独立于私聊 max_file_size，
 		// 前端发送前校验用，客户端零硬编码）
 		"group_file_max_size": s.cfg.GroupFileMaxSize,
+		// 阶段一百六十：下发文件保留天数（服务端归口，前端历史渲染按 create_time+保留期灰显过期卡片；
+		// 负数=永不清理，前端仅对 >0 做过期标记）
+		"file_retention_days": s.cfg.FileRetentionDays,
 		// 阶段一百五十六：下发好友文件 P2P 直传决策与传输参数（服务端归口，客户端零硬编码：
 		// enabled/threshold 分流判定，negotiate_timeout/chunk_size/high_water/low_water DataChannel
 		// 传输面参数，archive 归档开关）

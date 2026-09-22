@@ -10808,6 +10808,22 @@ html.m .ms-actions {
     opacity: 0.5;
 }
 
+/* 阶段一百六十：过期文件卡片（服务端定期清理后，微信同款灰显+「已过期」角标，跟随主题变量） */
+.bubble-file.file-expired {
+    opacity: 0.55;
+}
+
+.file-expired-tag {
+    flex: none;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--border, #e5e5e5);
+    color: var(--text-secondary, #888);
+    font-size: 11px;
+    align-self: center;
+}
+
 /* 危险按钮（退出登录） */
 .settings-danger-btn {
     margin-top: 22px;

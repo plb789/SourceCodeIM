@@ -38,6 +38,9 @@ type Config struct {
 	MaxFileSize int `yaml:"max_file_size"`
 	// 阶段一百五十七：群聊文件大小上限（字节，独立于 max_file_size——私聊单请求直传上限调整不联动群聊；默认 20MB）
 	GroupFileMaxSize int64 `yaml:"group_file_max_size"`
+	// 阶段一百六十：服务器文件保留天数（static/upload 下的聊天文件超期物理删除，避免长期占用磁盘；
+	// 默认 7 天，配 -1 表示永不清理；消息记录不删，前端按 create_time+保留期提示"文件已过期"）
+	FileRetentionDays int `yaml:"file_retention_days"`
 	// 阶段三十一：单连接发送队列缓冲条数（文件分片与聊天消息共用，过小会挤爆队列导致丢消息）
 	SendQueueSize int `yaml:"send_queue_size"`
 	// 阶段三十一：大文件直传阈值（字节）：文件超过该值走 HTTP 直传链路，WebSocket 仅传信令，避免海量分片占用连接
@@ -398,6 +401,11 @@ func Load() *Config {
 	// 阶段一百五十七：群聊文件大小上限兜底（配置缺省或非法时回退默认值 20MB）
 	if cfg.GroupFileMaxSize <= 0 {
 		cfg.GroupFileMaxSize = 20 << 20
+	}
+	// 阶段一百六十：文件保留天数兜底（yaml 未配置该键时为零值，此处填充默认 7 天；显式配 -1=永不清理，
+	// 负数不做兜底直接生效；修改后需重启服务端）
+	if cfg.FileRetentionDays == 0 {
+		cfg.FileRetentionDays = 7
 	}
 	// 阶段三十一：发送队列缓冲兜底（过小会导致高并发下丢消息）
 	if cfg.SendQueueSize <= 0 {
