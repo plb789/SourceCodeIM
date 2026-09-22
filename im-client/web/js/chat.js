@@ -2841,6 +2841,250 @@
         docInput.value = '';
     });
 
+    // ===== 阶段一百六十一：文件拖拽发送（微信同款）+ 拖拽默认行为全局兜底 =====
+    // 背景：渲染层此前完全没有拖拽处理，PC Electron 里把文件拖到窗口时 Chromium 会把拖入
+    // 文件当页面导航处理（file:// 加载 zip 等不可渲染文件→系统报错框/空白新窗），浏览器版
+    // 同样会整页打开文件——window 级一律对文件拖拽 preventDefault 兜底；只拦 Files 类型，
+    // textarea 内文本拖拽粘贴不受影响
+    function dragHasFiles(e) {
+        if (!e.dataTransfer) return false;
+        var types = e.dataTransfer.types || [];
+        for (var i = 0; i < types.length; i++) {
+            if (String(types[i]).toLowerCase() === 'files') return true;
+        }
+        return false;
+    }
+    window.addEventListener('dragover', function (e) {
+        if (dragHasFiles(e)) e.preventDefault();
+    });
+    window.addEventListener('drop', function (e) {
+        if (dragHasFiles(e)) e.preventDefault();
+    });
+
+    // 输入区拖拽发送：拖入悬停高亮整个输入区（样式见 .input-bar.drag-over），松手按会话类型
+    // 分派——群聊按扩展名分图片/文件直传，AI 会话分图片识别/文档问答，普通私聊统一走分片
+    // 文件链路；分派归口与上方工具栏按钮 change 监听完全一致（sendFile/sendGroupXxx/sendAIXxx）
+    // 阶段一百六十二：聊天区消息拖入输入框 = 单条转发到当前会话（微信同款）——draggingMsgEl
+    // 记录拖拽起点的消息元素，drop 时走 doForward 归口（图片/文件重取后直传、文本原样重发）
+    // inputBarEl 复用上方多选转发段声明（同一元素，避免重复声明）
+    var dragDepth = 0; // dragenter/dragleave 嵌套计数（在子元素间移动会成对触发，归零才算真正离区）
+    var draggingMsgEl = null; // 阶段一百六十二：当前拖拽中的消息元素（.message），dragend/取消时清空
+    if (inputBarEl) {
+        inputBarEl.addEventListener('dragenter', function (e) {
+            if (!dragHasFiles(e) && !draggingMsgEl) return;
+            e.preventDefault();
+            dragDepth++;
+            // 提示文案经 data-drag-tip 交给 CSS ::before 渲染（i18n 归口，I18N 语言包切换后生效）；
+            // 消息拖拽显示转发文案，外部文件拖入显示发送文案
+            inputBarEl.setAttribute('data-drag-tip', draggingMsgEl ? I18N.t('松开转发到当前会话') : I18N.t('松开发送文件'));
+            inputBarEl.classList.add('drag-over');
+        });
+        inputBarEl.addEventListener('dragover', function (e) {
+            if (!dragHasFiles(e) && !draggingMsgEl) return;
+            e.preventDefault(); // Chromium 要求 dragover 阻止默认后目标才可接收 drop
+        });
+        inputBarEl.addEventListener('dragleave', function () {
+            dragDepth--;
+            if (dragDepth <= 0) {
+                dragDepth = 0;
+                inputBarEl.classList.remove('drag-over');
+            }
+        });
+        inputBarEl.addEventListener('drop', function (e) {
+            // 阶段一百六十二：消息拖入优先判定——单条转发到当前会话（doForward 归口自带"已转发"提示）；
+            // isConnected 校验防边缘残留（拖拽中源消息被撤回/删除导致 DOM 移除、dragend 未冒泡到
+            // messageList 时 draggingMsgEl 残留，若不校验会误把后续文本拖放当转发）
+            if (draggingMsgEl) {
+                e.preventDefault();
+                var fwdEl = draggingMsgEl;
+                draggingMsgEl = null;
+                dragDepth = 0;
+                inputBarEl.classList.remove('drag-over');
+                if (!fwdEl.isConnected) return; // 源消息已不在文档中，静默丢弃
+                if (currentChatUser === '') {
+                    showToast(I18N.t('请先选择一个聊天'));
+                    return;
+                }
+                // 与多选转发同口径：AI 会话问答流不适用转发语义
+                if (isAIAgent(currentChatUser)) {
+                    showToast(I18N.t('AI 会话暂不支持转发'));
+                    return;
+                }
+                doForward(fwdEl, currentChatUser);
+                return;
+            }
+            if (!dragHasFiles(e)) return;
+            e.preventDefault();
+            dragDepth = 0;
+            inputBarEl.classList.remove('drag-over');
+            var files = (e.dataTransfer && e.dataTransfer.files) || [];
+            var file = files[0];
+            if (!file) return;
+            // 目录拖入判定：File 对象无类型且零字节（普通 0 字节文件极罕见），提示不支持
+            if (file.size === 0 && !file.type) {
+                showToast(I18N.t('暂不支持发送文件夹'));
+                return;
+            }
+            if (currentChatUser === '') {
+                showToast(I18N.t('请先选择一个聊天'));
+                return;
+            }
+            // 多文件拖入：发送链路按单文件设计（工具栏文件选择框未开 multiple），只取第一个
+            if (files.length > 1) showToast(I18N.t('一次只能拖入一个文件'));
+            if (isGroupTarget(currentChatUser)) {
+                if (isImageName(file.name)) sendGroupImage(file);
+                else sendGroupFile(file);
+            } else if (isAIAgent(currentChatUser)) {
+                if (isImageName(file.name)) {
+                    if (!aiAgentSupportsImage(currentChatUser)) {
+                        showToast(I18N.t('该助手不支持图片识别'));
+                        return;
+                    }
+                    sendAIImage(file);
+                } else sendAIDoc(file);
+            } else {
+                sendFile(file);
+            }
+        });
+    }
+
+    // ===== 阶段一百六十二：聊天区消息拖拽（图片/文件气泡按住左键拖到输入框 = 单条转发）=====
+    // 图片 img 原生可拖；文件卡片是 div 默认不可拖——mousedown 委托前置补 draggable（mousedown
+    // 恒先于 dragstart，幂等设置，一处监听覆盖实时/历史/P2P 全部动态文件卡片）
+    messageList.addEventListener('mousedown', function (e) {
+        var fb = e.target.closest ? e.target.closest('.bubble-file[data-url]') : null;
+        if (fb && !fb.hasAttribute('draggable')) fb.setAttribute('draggable', 'true');
+    }, true);
+    messageList.addEventListener('dragstart', function (e) {
+        var item = e.target.closest ? e.target.closest('.message') : null;
+        var isImg = e.target.classList && e.target.classList.contains('chat-image');
+        var isFile = e.target.closest ? e.target.closest('.bubble-file[data-url]') : null;
+        // 非图片/文件消息（文本等）不接管——保留原生"选中文本拖拽"行为
+        if (!item || (!isImg && !isFile)) { draggingMsgEl = null; return; }
+        draggingMsgEl = item;
+        try { e.dataTransfer.setData('text/plain', ''); } catch (eDs) { } // 兼容必须有数据才可拖的内核
+        if (e.dataTransfer.effectAllowed) e.dataTransfer.effectAllowed = 'copy';
+    });
+    messageList.addEventListener('dragend', function () {
+        // drop 已消费即清空；拖拽取消/拖出窗口松手也在此复位，并兜底清掉输入区高亮
+        draggingMsgEl = null;
+        if (inputBarEl) {
+            dragDepth = 0;
+            inputBarEl.classList.remove('drag-over');
+        }
+    });
+    // window 级兜底复位：拖拽中源消息被撤回/删除（DOM 移除）时 dragend 不再冒泡到 messageList，
+    // window 捕获仍能收到——防止 draggingMsgEl 残留导致后续文本拖放被误判为消息转发
+    window.addEventListener('dragend', function () {
+        if (!draggingMsgEl) return;
+        draggingMsgEl = null;
+        if (inputBarEl) {
+            dragDepth = 0;
+            inputBarEl.classList.remove('drag-over');
+        }
+    }, true);
+
+    // ===== 阶段一百六十三：输入框自绘右键菜单（剪切/复制/粘贴/全选，微信同款）=====
+    // 背景：PC 端 Menu.setApplicationMenu(null)（阶段九十三刷新快捷键改造）清掉了 Electron 默认
+    // 编辑上下文菜单——所有输入框右键无任何菜单（实测仅聚焦效果）；WEB 端是浏览器原生菜单但
+    // 与全站自绘体系不统一。统一改为自绘：DOM 为 index.html #input-menu，样式复用 .friend-menu
+    // （主题变量，跟随主题色）；document 捕获阶段委托，只接管输入框（input/textarea），其余区域
+    // （消息/会话右键菜单等）不受影响
+    (function () {
+        var iMenu = document.getElementById('input-menu');
+        if (!iMenu) return;
+        var iMenuTarget = null; // 当前右键的输入框元素
+        var iMenuHasSel = function (el) {
+            // 选区判定：start!==end 且选中文本非空（中文输入法组合态 selectionStart 可能异常，取实际文本兜底）
+            return el.selectionStart !== el.selectionEnd &&
+                String(el.value || '').slice(el.selectionStart, el.selectionEnd).length > 0;
+        };
+        var iMenuHide = function () {
+            iMenu.classList.add('hidden');
+            iMenuTarget = null;
+        };
+        document.addEventListener('contextmenu', function (e) {
+            var t = e.target;
+            var el = t && t.closest ? t.closest('input[type=text], input[type=search], input[type=password], input:not([type]), textarea') : null;
+            if (!el || el.disabled) {
+                if (!iMenu.classList.contains('hidden')) iMenuHide();
+                return; // 非输入框：不接管，既有右键菜单（消息/会话等）照常
+            }
+            e.preventDefault();
+            iMenuTarget = el;
+            // 菜单项按上下文裁剪：剪切/复制需有选区（password 框不给剪切/复制防明文泄漏）；
+            // 粘贴/剪切需非只读；全选需有内容
+            var sel = iMenuHasSel(el);
+            var isPwd = el.type === 'password';
+            var ro = el.readOnly;
+            var itCut = iMenu.querySelector('[data-action="cut"]');
+            var itCopy = iMenu.querySelector('[data-action="copy"]');
+            var itPaste = iMenu.querySelector('[data-action="paste"]');
+            var itSel = iMenu.querySelector('[data-action="selectall"]');
+            if (itCut) itCut.style.display = (sel && !ro && !isPwd) ? '' : 'none';
+            if (itCopy) itCopy.style.display = (sel && !isPwd) ? '' : 'none';
+            if (itPaste) itPaste.style.display = ro ? 'none' : '';
+            if (itSel) itSel.style.display = String(el.value || '').length ? '' : 'none';
+            // 定位：先显示再量尺寸做边界翻转（防右键在屏幕右/下边缘时菜单出屏）
+            iMenu.classList.remove('hidden');
+            var mx = Math.min(e.clientX, window.innerWidth - iMenu.offsetWidth - 8);
+            var my = Math.min(e.clientY, window.innerHeight - iMenu.offsetHeight - 8);
+            iMenu.style.left = Math.max(4, mx) + 'px';
+            iMenu.style.top = Math.max(4, my) + 'px';
+        }, true); // 捕获阶段：输入框归属优先判定（消息/会话右键委托均非输入框区域，互不冲突）
+        iMenu.addEventListener('click', function (e) {
+            var item = e.target.closest ? e.target.closest('.menu-item') : null;
+            var el = iMenuTarget;
+            iMenuHide();
+            if (!item || !el) return;
+            var act = item.getAttribute('data-action');
+            el.focus(); // 焦点回输入框（execCommand 与后续键入都需要）
+            try {
+                if (act === 'cut') {
+                    document.execCommand('cut'); // 用户激活内 textarea/input 剪切允许，同步进撤销栈
+                } else if (act === 'copy') {
+                    document.execCommand('copy');
+                } else if (act === 'paste') {
+                    // 剪贴板读取归口：navigator.clipboard.readText（https/localhost secure context 可用，
+                    // Electron https origin 同样适用）→ 失败回退 execCommand('paste')（部分内核可用）→
+                    // 再失败 toast 引导 Ctrl+V；insertText 方式插入可保留撤销栈（Ctrl+Z 可撤，微信同款顺滑）
+                    var doInsert = function (txt) {
+                        if (!txt) return;
+                        el.focus();
+                        if (!document.execCommand('insertText', false, txt)) {
+                            // insertText 不可用时按选区替换兜底（无撤销栈，仅在异常内核出现）
+                            var s = el.selectionStart, epos = el.selectionEnd;
+                            el.value = String(el.value || '').slice(0, s) + txt + String(el.value || '').slice(epos);
+                            var np = s + txt.length;
+                            el.setSelectionRange(np, np);
+                            el.dispatchEvent(new Event('input', { bubbles: true })); // 触发既有 input 监听（字数统计等）
+                        }
+                    };
+                    if (navigator.clipboard && navigator.clipboard.readText) {
+                        navigator.clipboard.readText().then(doInsert).catch(function () {
+                            el.focus();
+                            if (!document.execCommand('paste')) showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
+                        });
+                    } else {
+                        if (!document.execCommand('paste')) showToast(I18N.t('粘贴失败，请使用 Ctrl+V'));
+                    }
+                } else if (act === 'selectall') {
+                    if (el.select) el.select();
+                    else el.setSelectionRange(0, String(el.value || '').length);
+                }
+            } catch (eMenu) { /* 菜单动作异常不中断页面 */ }
+        });
+        // 关闭时机：点击菜单外 / Esc / 页面滚动 / 窗口失焦（与消息右键菜单同款体验）
+        document.addEventListener('mousedown', function (e) {
+            if (!iMenu.classList.contains('hidden') && !iMenu.contains(e.target)) iMenuHide();
+        }, true);
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && !iMenu.classList.contains('hidden')) iMenuHide();
+        }, true);
+        window.addEventListener('blur', iMenuHide);
+        window.addEventListener('wheel', iMenuHide, true);
+    })();
+
     function isImageName(name) {
         return /\.(jpe?g|png|gif|webp|bmp)$/i.test(name);
     }

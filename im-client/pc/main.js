@@ -316,6 +316,16 @@ function createWindow() {
     // 持久化过非 1 缩放（如 0.9），启动归一；配合渲染层禁用缩放入口（chat.js wheel/keydown）
     mainWindow.webContents.setZoomFactor(1);
 
+    // 阶段一百六十一：拖拽导航兜底——渲染层未拦下的文件拖放会让窗口导航到 file:// 文件
+    // （zip 等不可渲染文件弹系统报错框/空白窗口，实例：拖 bin.zip 入聊天框弹出系统报错+空白窗）。
+    // 主窗口禁止离开当前 origin 的页面内导航（file:// 一律拦截）；同源跳转保留（app-shell 兼容）；
+    // Ctrl+R/F5 刷新走 reload 不经过 will-navigate，不受影响
+    mainWindow.webContents.on('will-navigate', function (eNav, navUrl) {
+        var pageOrigin = '';
+        try { pageOrigin = mainWindow.webContents.getURL().split('/').slice(0, 3).join('/'); } catch (eOrigin) { }
+        if (pageOrigin && String(navUrl || '').indexOf(pageOrigin) !== 0) eNav.preventDefault();
+    });
+
     // 阶段九十三：主窗口刷新快捷键——Menu.setApplicationMenu(null) 后默认刷新键全部失效，
     // 页面（css/js）发版后只能重启客户端才能拿到新版（实例：列表折叠按钮定位修复后 PC 端
     // 始终加载旧样式，用户误以为修复无效）。注册：Ctrl+R / F5 = reload（回源校验，配合

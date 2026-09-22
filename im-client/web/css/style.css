@@ -1408,6 +1408,39 @@ html, body {
     opacity: 0.88;
 }
 
+/* 阶段一百六十一：输入区文件拖拽高亮（微信同款——拖入悬停显示主题色虚线框+遮罩提示），
+   覆盖层 pointer-events:none 不拦截鼠标事件（否则 dragleave 在覆盖层上乱跳），颜色跟随主题变量 */
+.input-bar {
+    position: relative;
+}
+
+.input-bar.drag-over::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    border: 2px dashed var(--primary);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    pointer-events: none;
+}
+
+.input-bar.drag-over::before {
+    content: attr(data-drag-tip);
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 7;
+    padding: 6px 16px;
+    border-radius: 999px;
+    background: var(--panel-bg, #fff);
+    color: var(--primary);
+    font-size: 13px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+    pointer-events: none;
+}
+
 /* 阶段七十三：发送按钮"停止"态（Trae 同款）——问答生成中/任务执行中显示，背景仍跟随主题色 */
 #send-btn .stop-icon {
     display: inline-block;
