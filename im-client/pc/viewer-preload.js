@@ -28,5 +28,35 @@ contextBridge.exposeInMainWorld('imviewer', {
     // req = {tab_id, text, line, character}，主进程按 tab_id → tab.filePath 归口（页面不持有绝对路径）
     lspHover: function (req) {
         return ipcRenderer.invoke('lsp:hover', req || {});
+    },
+    // ===== 阶段一百五十九：浏览区断点调试（独立查看窗口场景桥；语义与主窗口 desktop.debugXxx 一致） =====
+    debugStart: function (tabId, path) {
+        return ipcRenderer.invoke('debug:start', { tab_id: String(tabId || ''), path: String(path || '') });
+    },
+    debugStop: function () {
+        return ipcRenderer.invoke('debug:stop');
+    },
+    debugCmd: function (op, arg) {
+        return ipcRenderer.invoke('debug:cmd', { op: String(op || ''), arg: arg });
+    },
+    debugSetBreakpoints: function (tabId, path, lines) {
+        return ipcRenderer.invoke('debug:set-breakpoints', { tab_id: String(tabId || ''), path: String(path || ''), lines: lines || [] });
+    },
+    debugBreakpointsGet: function (tabId, path) {
+        return ipcRenderer.invoke('debug:breakpoints-get', { tab_id: String(tabId || ''), path: String(path || '') });
+    },
+    debugState: function (tabId) {
+        return ipcRenderer.invoke('debug:state', { tab_id: String(tabId || '') });
+    },
+    debugBootstrapPython: function (tabId) {
+        return ipcRenderer.invoke('debug:bootstrap-python', { tab_id: String(tabId || '') });
+    },
+    debugBootstrapCpp: function (tabId) {
+        return ipcRenderer.invoke('debug:bootstrap-cpp', { tab_id: String(tabId || '') });
+    },
+    onDebugEvent: function (callback) {
+        ipcRenderer.on('debug:event', function (event, data) {
+            callback(data);
+        });
     }
 });

@@ -515,6 +515,41 @@ contextBridge.exposeInMainWorld('desktop', {
             callback(data);
         });
     },
+    // ===== 阶段一百五十九：浏览区断点调试（TRAE CN 同款；主进程 debug-manager DAP 客户端归口） =====
+    // 目标文件只认 {tab_id + path(工作区相对路径)}，绝对路径由主进程 pathGuard 归口，页面不持有
+    debugStart: function (tabId, path) {
+        return ipcRenderer.invoke('debug:start', { tab_id: String(tabId || ''), path: String(path || '') });
+    },
+    debugStop: function () {
+        return ipcRenderer.invoke('debug:stop');
+    },
+    // 调试控制/查询：op = continue|next|stepIn|stepOut|pause|threads|stackTrace|scopes|variables|evaluate|restart
+    debugCmd: function (op, arg) {
+        return ipcRenderer.invoke('debug:cmd', { op: String(op || ''), arg: arg });
+    },
+    debugSetBreakpoints: function (tabId, path, lines) {
+        return ipcRenderer.invoke('debug:set-breakpoints', { tab_id: String(tabId || ''), path: String(path || ''), lines: lines || [] });
+    },
+    debugBreakpointsGet: function (tabId, path) {
+        return ipcRenderer.invoke('debug:breakpoints-get', { tab_id: String(tabId || ''), path: String(path || '') });
+    },
+    debugState: function (tabId) {
+        return ipcRenderer.invoke('debug:state', { tab_id: String(tabId || '') });
+    },
+    // 一键引导：创建调试专用 venv 并安装 debugpy（缺 Python3 时经 uv 自动下载托管 Python）；tab_id 用于进度事件归口转发
+    debugBootstrapPython: function (tabId) {
+        return ipcRenderer.invoke('debug:bootstrap-python', { tab_id: String(tabId || '') });
+    },
+    // 一键引导（C/C++）：gcc/gdb 缺失时经内置工具链 ensureGcc 安装（bundled zip 优先，联网兜底）
+    debugBootstrapCpp: function (tabId) {
+        return ipcRenderer.invoke('debug:bootstrap-cpp', { tab_id: String(tabId || '') });
+    },
+    // 调试事件推送（主进程 → 渲染层：{tab_id, type: status|stopped|continued|output|terminated|breakpoints}）
+    onDebugEvent: function (callback) {
+        ipcRenderer.on('debug:event', function (event, data) {
+            callback(data);
+        });
+    },
     // 阶段九十三：分栏拖拽已无需主进程配合（web 标签同样由 DOM webview 承载，
     // 拖拽期以 CSS pointer-events 屏蔽 guest 鼠标，见 style.css browser-resizing）
     // ===== 阶段九十三：web 标签 <webview> 就绪上报 =====

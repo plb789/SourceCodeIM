@@ -22,9 +22,14 @@
   "build": {
     "appId": "com.im.client",
     "productName": "im-client",
+    "npmRebuild": false,
     "asarUnpack": [
       "shot-window-picker.ps1",
-      "remote-sendinput.ps1"
+      "remote-sendinput.ps1",
+      "node_modules/cdt-gdb-adapter/**",
+      "node_modules/@vscode/debugadapter/**",
+      "node_modules/@vscode/debugprotocol/**",
+      "node_modules/async-mutex/**"
     ],
     "files": [
       "!bundled/**",
@@ -41,7 +46,8 @@
       "!mcp-manager.js",
       "!node-runtime.js",
       "!lsp-manager.js",
-      "!remote-input.js"
+      "!remote-input.js",
+      "!debug-manager.js"
     ],
     "win": {
       "target": "nsis",
@@ -63,6 +69,7 @@
     ]
   },
   "dependencies": {
+    "cdt-gdb-adapter": "^1.10.0",
     "cross-spawn": "^7.0.6",
     "rcedit": "^4.0.1"
   }

@@ -327,12 +327,20 @@ function fileLoadPush(tab) {
     mainWindow.webContents.send('browser:file-load', { tab_id: tab.id, payload: tab.lastPayload });
 }
 
+// setTabCloseHook 注入 file 标签关闭钩子（main.js 传入 debug-manager 联动；防循环依赖不直接 require）
+let tabCloseHook = null;
+function setTabCloseHook(fn) { tabCloseHook = typeof fn === 'function' ? fn : null; }
+
 // destroyTab 关闭并销毁标签页（file/web 均无原生视图：仅清状态，渲染层经 statePush
 // 移除对应 iframe/webview 元素，元素移除即销毁 guest）
 function destroyTab(tab) {
     const i = tabs.indexOf(tab);
     if (i < 0) return;
     tabs.splice(i, 1);
+    // 阶段一百五十九：file 标签关闭钩子（main.js 注入）——被调试文件标签关闭时联动停止调试会话
+    if (tab.kind === 'file' && tabCloseHook) {
+        try { tabCloseHook(tab.id); } catch (e) { /* 钩子异常不阻断关标签 */ }
+    }
 }
 
 // activeTab 当前活动标签页
@@ -362,6 +370,7 @@ function statePush() {
                 file_path: t.kind === 'file' ? (t.filePath || '') : '', // 阶段九十四：绝对路径（悬停 tooltip + 打开所在目录）
                 ext: t.kind === 'file' && t.relPath ? path.extname(t.relPath).replace('.', '').toLowerCase() : '',
                 data_kind: t.kind === 'file' ? (t.dataKind || '') : '',
+                data_key: t.kind === 'file' ? (t.dataKey || '') : '', // 直传标签键（diff:<path> 等）：渲染层按键识别已开标签（放弃修改后原位刷新工作树 diff）
                 favicon: t.kind === 'web' ? (t.favicon || '') : '',
                 dirty: !!t.dirty,
                 pinned: !!t.pinned
@@ -673,6 +682,15 @@ function openDataTab(payload) {
     fileLoadPush(tab);
     statePush();
     return { ok: true, tab_id: tab.id };
+}
+
+// findFileTabInfo 按 tab_id 归口 file 标签信息（阶段一百五十九：debug:start/set-breakpoints
+// 目标解析入口——渲染层只持有 tab_id+relPath，username/绝对路径由本模块与 pathGuard 归口）
+function findFileTabInfo(tabId) {
+    const tab = tabs.find(function (t) { return t.id === String(tabId || '') && t.kind === 'file'; });
+    if (!tab) return { ok: false, error: '标签不存在或已关闭' };
+    if (!tab.username || !tab.relPath) return { ok: false, error: '该标签不是工作区文件' };
+    return { ok: true, username: tab.username, relPath: tab.relPath };
 }
 
 // viewerSave viewer 页保存归口：路径只认 tab.filePath（页面仅传内容，杜绝任意路径写），
@@ -1200,6 +1218,8 @@ module.exports = {
     setPathGuard: setPathGuard,
     setTaskBackupApi: setTaskBackupApi, // 阶段九十七：任务备份查询/保留/撤销注入
     setViewerUrl: setViewerUrl,
+    findFileTabInfo: findFileTabInfo, // 阶段一百五十九：file 标签信息归口（debug IPC 目标解析）
+    setTabCloseHook: setTabCloseHook, // 阶段一百五十九：file 标签关闭联动钩子（调试会话随关停）
     agentExecute: agentExecute,
     statePush: statePush,
     notifySandboxReady: notifySandboxReady, // 阶段一百三十八：沙箱就绪通知（main.js 登录后 sandbox:get 时调）——重试待恢复文件标签

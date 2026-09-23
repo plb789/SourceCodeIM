@@ -8465,7 +8465,7 @@ html.m #list-panel.list-collapsed {
     border-top: 1px solid color-mix(in srgb, var(--border, #e0e0e0) 55%, transparent);
 }
 
-/* git 同款字母标：A=新建绿 M=修改蓝 D=删除红 */
+/* git 同款字母标：A=新建绿 M=修改蓝 D=删除红（阶段一百五十八：三色与浏览区 gutter git 语义对齐） */
 .agent-changes-ico {
     flex: none;
     width: 16px;
@@ -8479,18 +8479,18 @@ html.m #list-panel.list-collapsed {
 }
 
 .agent-changes-ico.k-create {
-    color: #22a05a;
-    background: color-mix(in srgb, #22a05a 14%, transparent);
+    color: #2da44e;
+    background: color-mix(in srgb, #2da44e 14%, transparent);
 }
 
 .agent-changes-ico.k-modify {
-    color: #3a7bd5;
-    background: color-mix(in srgb, #3a7bd5 14%, transparent);
+    color: #316dca;
+    background: color-mix(in srgb, #316dca 14%, transparent);
 }
 
 .agent-changes-ico.k-delete {
-    color: #d4553f;
-    background: color-mix(in srgb, #d4553f 14%, transparent);
+    color: #cf222e;
+    background: color-mix(in srgb, #cf222e 14%, transparent);
 }
 
 .agent-changes-name {
@@ -8541,6 +8541,33 @@ html.m #list-panel.list-collapsed {
 
 .agent-changes-badge.kept {
     color: #22a05a;
+}
+
+/* 阶段一百五十八：说明行（TRAE CN 同款逐文件下方意图描述）。
+   有说明时行转两行网格：上行 ico+文件名+目录+统计+徽标，下行说明整行；
+   无说明行保持原 flex 布局（.has-desc 由 chat.js 按需添加，避免空行多出 row-gap） */
+.agent-changes-row.has-desc {
+    display: grid;
+    grid-template-columns: auto auto 1fr auto auto;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 3px;
+}
+
+.agent-changes-desc {
+    grid-column: 1 / -1;
+    color: var(--text-light, #999);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 22px; /* 对齐上行文件名（16px ico + 6px gap） */
+}
+
+.agent-changes-row.st-kept .agent-changes-desc,
+.agent-changes-row.st-reverted .agent-changes-desc {
+    opacity: 0.55; /* 保留/撤销后的历史说明置灰 */
 }
 
 /* 逐文件撤销小按钮（描边弱化，不抢底栏主按钮层级） */
@@ -11736,6 +11763,10 @@ html.m .ms-actions {
     z-index: 1600;
     display: flex;
     flex-direction: column;
+    /* v=2.61：拖拽分栏后右缘 border-right 偶发消失（用户实测：松手后一直不见，重拖/切窗重绘才恢复；
+       同构复现页四场景均无溢出，排除布局计算，定性为 border 与 webview 合成层的边界缝隙丢画）——
+       translateZ(0) 提升面板为独立合成层，border 与自身内容同层合成，不再与 webview 层拼缝 */
+    transform: translateZ(0);
     background: var(--panel-bg);
     border-right: 1px solid var(--border);
 }
@@ -11780,7 +11811,9 @@ html.m .ms-actions {
     top: 0;
     bottom: 0;
     width: 1px;
-    background: transparent;
+    /* v=2.61：线常显（与面板 border-right 视觉融合为一条）——border 若因合成丢画由本元素兜底；
+       悬停/拖拽仍切主题色高亮 */
+    background: var(--border);
     transition: background 0.15s ease;
 }
 

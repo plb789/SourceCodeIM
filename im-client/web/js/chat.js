@@ -8041,7 +8041,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=131'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=131：同步渲染 render 返回即回执（浏览区加载进度条）
+        frame.src = 'file-viewer.html?v=142'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=142：断点悬停空心红点提示（TRAE CN 同款），与 pc/main.js setViewerUrl 同步
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -8064,8 +8064,33 @@
             if (!tabId || !payload) return;
             browserProgressStart(tabId); // 阶段一百三十一：payload 到达即确认加载态（条已亮则续期看门狗），渲染完成回执收条
             var rec = fileFrameFor(tabId);
+            // 阶段一百五十八：文本文件注入 AI 修改说明（TRAE 同款悬停浮层/gutter/diff 头数据源）——
+            // 按归一路径取 agentFileExpl；无记录不注入（保留/撤销后重推的 payload 自然还原为普通文件）
+            if (payload.kind === 'file' && payload.mime === 'text' && payload.path) {
+                rec.path = payload.path; // 记录标签路径：保留/撤销成功后定向清除说明
+                var expl = agentExplGet(payload.path);
+                if (expl) {
+                    payload.explanation = expl.text;
+                    payload.adds = expl.adds;
+                    payload.dels = expl.dels;
+                    payload.change_kind = expl.kind;
+                }
+            }
             if (rec.ready) fileFramePush(rec, payload);
             else rec.pending = payload;
+        });
+    }
+
+    // 阶段一百五十九：调试事件转发——主进程 debug:event → 当前 file 标签 viewer iframe
+    // （DAP 事件驱动：status/stopped/continued/output/terminated/breakpoints，无轮询）
+    if (browserSupported() && typeof window.desktop.onDebugEvent === 'function') {
+        window.desktop.onDebugEvent(function (d) {
+            var tabId = String((d && d.tab_id) || '');
+            if (!tabId) return;
+            var rec = fileFrames[tabId];
+            if (rec && rec.ready) {
+                try { rec.frame.contentWindow.__wsDebugEvent(d); } catch (e) { /* 页面未就绪忽略 */ }
+            }
         });
     }
 
@@ -8079,11 +8104,18 @@
             window.desktop.browserViewerDirty(tabId, dirty);
         },
         // 阶段一百：任务变更保留/撤销桥接（此前缺失导致 viewer 页按钮点击抛 TypeError 无反应）
+        // 阶段一百五十八：成功后按标签路径清除说明（66 帧到达前本地先行，避免重推 payload 仍带说明）
         taskKeep: function (tabId) {
-            return window.desktop.browserTaskKeep(tabId);
+            return window.desktop.browserTaskKeep(tabId).then(function (r) {
+                if (r && r.ok !== false) agentExplDropByTab(tabId);
+                return r;
+            });
         },
         taskRevert: function (tabId) {
-            return window.desktop.browserTaskRevert(tabId);
+            return window.desktop.browserTaskRevert(tabId).then(function (r) {
+                if (r && r.ok !== false) agentExplDropByTab(tabId);
+                return r;
+            });
         },
         // 阶段一百一十：viewer 推送代码符号（TRAE CN 同款符号面包屑）——存于 frame 记录，
         // 若为当前活动 file 标签则立即刷新面包屑（符号段可点击，经 __fvReveal 跳转编辑器行）
@@ -8166,6 +8198,25 @@
         if (w < BROWSER_SPLIT_MIN_PANEL) w = Math.min(BROWSER_SPLIT_MIN_PANEL, totalW);
         return Math.round(w);
     }
+    // 主区可用宽（browserSyncSplit 与分栏拖拽共用）：不能读 mc.clientWidth——padding-left 随
+    // 分栏写大后把 main-chat 的 border box 撑到大于容器（padding 属于 border box，flex 压不掉），
+    // clientWidth 被钉死在历史最大值：拖右时钳制失效、面板右缘（含分隔线）溢出可视区被裁
+    //（实测往右拖线消失、往左拖缩回重现），拖拽振荡同理。改为宿主宽减流内兄弟实占宽，
+    // 与 mc 自身 padding 彻底解耦
+    function browserHostWidth(mc) {
+        var host = mc.parentElement;
+        var totalW = host ? host.clientWidth : mc.clientWidth;
+        if (host) {
+            for (var k = 0; k < host.children.length; k++) {
+                var sib = host.children[k];
+                if (sib === mc) continue;
+                var sp = getComputedStyle(sib);
+                if (sp.position === 'absolute' || sp.position === 'fixed') continue;
+                totalW -= sib.offsetWidth;
+            }
+        }
+        return totalW;
+    }
     function browserApplySplit(w, collapsed) {
         w = Math.round(w);
         var mc = browserPanelEl.parentElement;
@@ -8193,21 +8244,11 @@
             mc.classList.remove('browser-chat-collapsed');
             return;
         }
-        // 主区可用宽不能读 mc.clientWidth——收起态 padding-left 即面板宽，窗口缩小时旧 padding
+        // 主区可用宽不能读 mc.clientWidth——padding-left 即面板宽，窗口缩小时旧 padding
         // 会把 main-chat 的 border box 撑到大于容器（padding 属于 border box，flex 压不掉），
         // clientWidth 被钉死在历史最大值，重算输入=输出永远卡死（实例：最大化后还原，浏览区
         // 仍为最大化宽度超出视口被裁）。改为：父容器宽减去流内兄弟实占宽，与自身 padding 无关。
-        var host = mc.parentElement;
-        var totalW = host ? host.clientWidth : mc.clientWidth;
-        if (host) {
-            for (var k = 0; k < host.children.length; k++) {
-                var sib = host.children[k];
-                if (sib === mc) continue;
-                var sp = getComputedStyle(sib);
-                if (sp.position === 'absolute' || sp.position === 'fixed') continue;
-                totalW -= sib.offsetWidth;
-            }
-        }
+        var totalW = browserHostWidth(mc);
         var collapsed = false;
         try { collapsed = localStorage.getItem(BROWSER_SPLIT_COLLAPSED_KEY) === '1'; } catch (e) {}
         var saved = parseInt(localStorage.getItem(BROWSER_SPLIT_KEY), 10);
@@ -8247,6 +8288,7 @@
             dragging = false;
             sp.classList.remove('dragging');
             document.body.classList.remove('browser-resizing');
+            browserQueueSyncSplit(); // v=3.86：松手重算宿主宽重写面板宽——拖拽中任何瞬时读数偏差写入的宽度在松手时归位（兼修右缘线偶发消失后的残留坏值）
         }
         sp.addEventListener('mousedown', function (e) {
             if (browserPanelEl.classList.contains('hidden')) return;
@@ -8260,7 +8302,7 @@
         window.addEventListener('mousemove', function (e) {
             if (!dragging) return;
             var mc = browserPanelEl.parentElement;
-            var totalW = mc.clientWidth;
+            var totalW = browserHostWidth(mc); // 同 browserSyncSplit 口径：clientWidth 会被拖拽中的 padding 撑虚，钳制失效致分隔线溢出被裁
             var target = startW + (e.clientX - startX);
             if (!browserChatCollapsed && totalW - target < BROWSER_SPLIT_COLLAPSE_AT) {
                 browserApplySplit(totalW, true); // 展开态压过收起线 → 吸附收起
@@ -9003,6 +9045,7 @@
     // agentDockSetChanges 待审查变更状态归口：done/error/cancelled 事件、下行 66 刷新帧、历史任务详情重放三路共用。
     // pending 清零即摘除该智能体条目；仅当前查看的智能体变化时才刷新停靠栏（其他会话静默登记，切回时呈现）
     function agentDockSetChanges(agent, taskId, changes) {
+        agentExplSyncFromChanges(changes); // 阶段一百五十八：说明归集（done/error/66 帧/重放卡/列表补调共用）
         var list = (changes || []).filter(function (c) { return c && c.path; });
         if (!agent || !list.length) return;
         var totalAdds = 0, totalDels = 0, pending = 0;
@@ -9600,6 +9643,18 @@
             row.appendChild(dirEl);
             row.appendChild(dstat);
             row.appendChild(badge);
+            // 阶段一百五十八：说明行（TRAE CN 同款逐文件下方灰色意图描述）。服务端 explanation 归口优先，
+            // pending 且服务端未回填时回退 agentFileExpl（tool_start 实时喂入）；kept/reverted 行只认服务端字段。
+            // 空不建节点；两行网格布局见 style.css .agent-changes-row / .agent-changes-desc
+            var explText = c.explanation || (st === 'pending' ? (agentExplGet(c.path) || {}).text || '' : '');
+            if (explText) {
+                row.classList.add('has-desc'); // 两行网格布局（style.css .agent-changes-row.has-desc）
+                var desc = document.createElement('div');
+                desc.className = 'agent-changes-desc';
+                desc.textContent = explText;
+                desc.title = explText;
+                row.appendChild(desc);
+            }
             // 点击行打开工作区预览（面板可见时；强制重读磁盘最新）。PC 端改道浏览区标签（阶段九十二）
             row.addEventListener('click', function (e) {
                 e.stopPropagation(); // 阻断冒泡：避免触发外层任务卡折叠切换
@@ -9763,7 +9818,13 @@
         // 阶段七十六：文件面板角标（write_file=新 / edit_file=改），工具结果到达后刷新树并自动打开
         // delete_file 同记路径（结果到达后删行/关标签），但不打角标
         if ((ev.tool === 'write_file' || ev.tool === 'edit_file' || ev.tool === 'delete_file') && ev.params && ev.params.path) {
-            if (ev.tool !== 'delete_file') wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
+            if (ev.tool !== 'delete_file') {
+                wsPanelTouchPath(ev.params.path, ev.tool === 'write_file' ? 'new' : 'mod');
+                // 阶段一百五十八：tool_start 实时喂说明（早于 done 归集，打开文件即见；done 时以服务端统计刷新）
+                agentExplSet(ev.params.path, ev.params.explanation, 0, 0, ev.tool === 'write_file' ? 'create' : 'modify');
+            } else {
+                agentExplDrop(ev.params.path); // 删除工具：清除旧说明（文件已不存在无浮层语义）
+            }
             wsPanel.lastToolPath[ev.tool] = ev.params.path; // 记路径：tool_result 不带 params，按工具名取回刷新预览
         }
         // 参数默认折叠（Trae 同款简洁行），点击标题展开/收起
@@ -10548,6 +10609,67 @@
     //（highlight.js 本地库，cpp/go/js/py 等常用语言），可切编辑模式手动修改保存回磁盘；
     // write_file/edit_file 工具执行后自动刷新树、打"新/改"角标并自动打开该文件。
     // 文件操作经服务端归口（msg 62/63）：PC 在线落到用户本地磁盘（沙箱白名单校验），离线回退服务端工作区。
+
+    // ===== 阶段一百五十八：AI 修改说明归口（TRAE CN 同款悬停变更浮层 / diff 头部数据源）=====
+    // agentFileExpl：归一路径 → { text 说明, adds, dels, kind, ts }。key 取 wsPanelNormalizeKey 归一后小写，
+    // 与浏览区 file 标签 relPath、git diff meta.path、变更列表 path 同一口径。
+    // last-wins：同路径多轮修改覆盖为最近一次说明；kept/reverted/删除即清除（保留后不再提示"AI 修改"）。
+    var agentFileExpl = {};
+
+    // agentExplSet 覆盖式写入说明（空路径不存；说明截断 1024 与服务端口径一致）
+    function agentExplSet(p, text, adds, dels, kind) {
+        var key = wsPanelNormalizeKey(p);
+        if (key === null || key === undefined) return;
+        agentFileExpl[key.toLowerCase()] = {
+            text: String(text || '').slice(0, 1024),
+            adds: adds || 0, dels: dels || 0,
+            kind: kind || '', ts: Date.now()
+        };
+    }
+
+    // agentExplDrop 清除说明（保留/撤销/删除后调用；无记录静默）
+    function agentExplDrop(p) {
+        var key = wsPanelNormalizeKey(p);
+        if (key === null || key === undefined) return;
+        delete agentFileExpl[key.toLowerCase()];
+    }
+
+    // agentExplDropByTab 按浏览区标签 id 清除说明（file 标签 rec.path 由 onFileLoad 记录）
+    function agentExplDropByTab(tabId) {
+        var rec = fileFrames[tabId];
+        if (rec && rec.path) agentExplDrop(rec.path);
+    }
+
+    // agentExplGet 读取说明记录（无则 null）
+    function agentExplGet(p) {
+        var key = wsPanelNormalizeKey(p);
+        if (key === null || key === undefined) return null;
+        return agentFileExpl[key.toLowerCase()] || null;
+    }
+
+    // agentExplMeta diff 标签 meta 用紧凑视图（无记录返回 null，前端降级）
+    function agentExplMeta(p) {
+        var e = agentExplGet(p);
+        return e ? { text: e.text, adds: e.adds, dels: e.dels, kind: e.kind } : null;
+    }
+
+    // agentExplSyncFromChanges 变更集 → 说明归集（done/error 经 agentRenderChanges、下行 66 帧、
+    // 历史重放卡、智能体列表补调四路共用入口 agentDockSetChanges）：pending 保留/刷新说明
+    //（服务端 agentChangeView 已带 explanation；旧服务端无字段时保住 tool_start 实时喂入的文本），
+    // kept/reverted/delete 清除。
+    function agentExplSyncFromChanges(changes) {
+        (changes || []).forEach(function (c) {
+            if (!c || !c.path) return;
+            if (c.status !== 'pending' || c.kind === 'delete') { agentExplDrop(c.path); return; }
+            var cur = agentExplGet(c.path);
+            agentExplSet(c.path,
+                c.explanation || (cur ? cur.text : ''),
+                (c.adds != null ? c.adds : (cur ? cur.adds : 0)),
+                (c.dels != null ? c.dels : (cur ? cur.dels : 0)),
+                c.kind || (cur ? cur.kind : ''));
+        });
+    }
+
     var wsPanel = {
         aside: null, treeEl: null, viewEl: null, viewBody: null, viewName: null, rootEl: null,
         btnEdit: null, btnSave: null, btnCancel: null, ta: null,
@@ -11598,6 +11720,49 @@
             payload.sub === 'pushu' || payload.sub === 'pull';
         if (longOp) wsGitProgress(true);
         return wsPanelGitReq(payload).then(function () {
+            // 阶段一百四十一：git 操作落地后原位刷新已开的工作树 diff 标签——diff 标签是打开时
+            // 的内容快照，discard（还原工作树）/commit（未提交差异清空）/pull（远程覆盖工作树）
+            // 都会让已开标签陈旧，实测用户"放弃修改"后标签仍挂旧红绿对比被误判为没生效。
+            // discard 按放弃的 paths 精确刷，commit/pull 无 paths 语义全刷；add/unstage/push 等
+            // index/远程操作不影响 diff HEAD 对比内容，不刷。PC 端按主进程 dataKey（'diff:'+路径）
+            // 识别浏览区已开标签，Web 端按 wsPanel.tabs 键；重拉 diffopen 同键复用即原位刷新，
+            // 未打开的文件不新开标签
+            if (payload.sub === 'discard' || payload.sub === 'commit' || payload.sub === 'pull') {
+                var scope = payload.sub === 'discard'
+                    ? (payload.paths || []).map(function (p) { return 'diff:' + p; })
+                    : null;
+                var hit = function (k) { return scope ? scope.indexOf(k) >= 0 : k.indexOf('diff:') === 0; };
+                (browserLastState.tabs || []).forEach(function (t) { // PC：浏览区标签（主进程 dataKey）
+                    if (t.kind !== 'file' || t.dirty) return; // dirty 标签保留用户编辑态，不自动覆盖
+                    if (t.data_key) { // 直传内容标签：工作树 diff（'diff:'+路径）按操作语义刷新
+                        if (!hit(t.data_key)) return;
+                        var dp = t.data_key.slice(5); // 剥 'diff:' 前缀还原路径
+                        if (dp) wsPanelGitOpenDiff(dp);
+                        return;
+                    }
+                    // 普通文件标签：discard（工作树还原）/pull（远程覆盖）后磁盘内容已变，
+                    // 走 browserOpenFile 复用标签重读磁盘（重开即刷新语义）；commit 不改磁盘不刷。
+                    // 路径口径换算：git 变更路径相对仓库根（proj 子仓库时如 portrelay.cpp），
+                    // 文件标签 relPath 相对工作区根（如 port_relay/portrelay.cpp），须经 wsProjFsPath
+                    // 补 proj 前缀后再比对，否则全等匹配恒失败、刷新永不触发（实测踩坑）
+                    if (payload.sub !== 'commit' && t.file_name &&
+                        (scope ? payload.paths.some(function (gp) { return wsProjFsPath(String(gp)) === t.file_name; }) : true)) {
+                        wsOpenFile(t.file_name);
+                    }
+                });
+                if (!browserLastState) { // Web：面板标签（PC 端 diff 进浏览区，不在 wsPanel.tabs）
+                    Object.keys(wsPanel.tabs).forEach(function (k) {
+                        var t = wsPanel.tabs[k];
+                        if (!t) return;
+                        if (t.diffPath) { // 工作树 diff 标签
+                            if (hit(k)) wsPanelGitOpenDiff(t.diffPath);
+                        } else if (payload.sub !== 'commit' && k.indexOf('review:') !== 0 && k.indexOf('diff:') !== 0 && t.draft === undefined &&
+                            (scope ? payload.paths.some(function (gp) { return wsProjFsPath(String(gp)) === k; }) : true)) {
+                            wsPanelOpen(k, true); // 普通文件标签：无草稿才重读（有草稿保留编辑态）
+                        }
+                    });
+                }
+            }
             if (doneTip) showToast(doneTip);
         }).catch(function (err) {
             var msg = err && err.message || String(err);
@@ -13020,7 +13185,7 @@
             var diffTitle = p.replace(/^.*[\\/]/, '') + I18N.t('（工作树）');
             // diffopen：-U100000 全文上下文 diff → 浏览区还原整文件对比（普通 diff 只有变更片段）
             wsPanelGitReq({ sub: 'diffopen', path: p }).then(function (d) {
-                wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: d.diff || '', meta: { path: p } });
+                wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: d.diff || '', meta: { path: p, expl: agentExplMeta(p) } });
             }).catch(function (err) {
                 var msg = err && err.message || String(err);
                 // 仓库已 init 但尚无任何提交（HEAD 不存在）：以"整文件新增"为对比基线（Trae/VSCode 同款语义）
@@ -13032,7 +13197,7 @@
                         var pseudo = ['diff --git a/' + p + ' b/' + p, '--- /dev/null', '+++ b/' + p,
                             '@@ -0,0 +1,' + lines.length + ' @@'];
                         lines.forEach(function (l) { pseudo.push('+' + l); });
-                        wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: pseudo.join('\n'), meta: { path: p } });
+                        wsOpenData({ key: diffKey, kind: 'diff', title: diffTitle, content: pseudo.join('\n'), meta: { path: p, expl: agentExplMeta(p) } });
                     }).catch(function () {
                         showToast(I18N.t('仓库尚未有任何提交，暂无对比基线'));
                     });

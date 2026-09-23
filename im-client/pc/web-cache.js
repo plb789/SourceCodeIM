@@ -604,8 +604,20 @@ async function sync() {
         var snapIdx = secureKey
             ? (ensureBlob() ? blobIndex : {})
             : (readSnapshotManifest() || walkFiles(snapshotDir));
+        // 阶段一百四十一修复（用户实测：PC 端 diff 视图无红绿着色，file-viewer.html 陈旧缓存死锁）：
+        // 原实现快照索引命中即视为"本地已有"——但拦截器三级回退中缓存目录优先于快照，磁盘若残留
+        // 属性与清单脱节的陈旧缓存（如清单 es 记为 0 而磁盘密文长度非 0），快照 s/t 恰与远端一致时
+        // 增量同步判定"无差异"跳过下载，陈旧缓存被永久遮蔽（新代码永不下发）。现改为：磁盘已有该
+        // 文件缓存但未通过清单实测比对（localIdx 未收录）时，不以快照命中自证，强制纳入差异下载
+        // 覆盖，下载后磁盘内容与清单属性重新对齐（自愈）；磁盘确无缓存时快照命中依旧生效（拦截器
+        // 走快照本就是最新内容，不产生多余下载）。
         Object.keys(snapIdx).forEach(function (p) {
-            if (!localIdx[p]) localIdx[p] = snapIdx[p];
+            if (localIdx[p]) return;
+            try {
+                fs.statSync(path.join(cacheDir, p + (secureKey ? '.enc' : '')));
+                return; // 磁盘有缓存文件但清单对不上：来源不明（陈旧/半写），强制走下载覆盖，不以快照遮掩
+            } catch (e) { }
+            localIdx[p] = snapIdx[p];
         });
 
         // 3. 差异计算：远端有而本地无（或 size/mtime 不符）的才下载

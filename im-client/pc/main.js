@@ -13,6 +13,8 @@ const agentExecutor = require('./agent-executor.js');
 const mcpManager = require('./mcp-manager.js');
 // 阶段九十一：内置浏览器管理器（TRAE CN 同款浏览区——多标签页/Agent 工具直调/CDP 端口开关）
 const browserManager = require('./browser-manager.js');
+// 阶段一百五十九：浏览区断点调试管理器（TRAE CN 同款真调试——DAP 客户端归口，Python debugpy 适配）
+const debugManager = require('./debug-manager.js');
 // 阶段一百二十二：网页资源本地缓存管理器（app:// 协议三级回退 + 启动增量同步 + 旧登录态迁移）
 const webCache = require('./web-cache.js');
 // 阶段一百五十五：远程协助被控端输入注入管理器（PowerShell SendInput 常驻工作进程）
@@ -87,7 +89,7 @@ try {
 } catch (e) { }
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'https://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:8888/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1899,6 +1901,54 @@ ipcMain.handle('lsp:hover', function (event, req) {
     return browserManager.lspHover(req || {});
 });
 
+// ===== 阶段一百五十九：浏览区断点调试 IPC 归口（file-viewer 页 ⇄ debug-manager DAP 客户端） =====
+// 目标文件只认 {tab_id + relPath}：tab 信息由 browserManager.findFileTabInfo 归口，
+// 绝对路径经 pathGuard（agentExecutor.safePath）解析，渲染层全程不持有绝对路径
+function debugResolveTab(req) {
+    const tabId = String((req && req.tab_id) || '');
+    const relPath = String((req && req.path) || '');
+    const info = browserManager.findFileTabInfo(tabId);
+    if (!info.ok) return info;
+    if (!relPath || String(info.relPath) !== relPath) return { ok: false, error: '文件与标签不匹配' };
+    return { ok: true, username: info.username, relPath: relPath };
+}
+
+ipcMain.handle('debug:start', function (event, req) {
+    const r = debugResolveTab(req);
+    if (!r.ok) return r;
+    return debugManager.start({ tab_id: String((req && req.tab_id) || ''), username: r.username, relPath: r.relPath });
+});
+ipcMain.handle('debug:stop', function () {
+    return debugManager.stop();
+});
+ipcMain.handle('debug:cmd', function (event, req) {
+    return debugManager.cmd((req && req.op) || '', (req && req.arg));
+});
+ipcMain.handle('debug:set-breakpoints', function (event, req) {
+    const r = debugResolveTab(req);
+    if (!r.ok) return r;
+    const g = agentExecutor.safePath(r.username, r.relPath);
+    if (g.err) return { ok: false, error: '路径被拒绝：' + g.err };
+    return debugManager.setBreakpoints(g.full, (req && req.lines) || []);
+});
+ipcMain.handle('debug:breakpoints-get', function (event, req) {
+    const r = debugResolveTab(req);
+    if (!r.ok) return r;
+    const g = agentExecutor.safePath(r.username, r.relPath);
+    if (g.err) return { ok: true, lines: [] };
+    return debugManager.breakpointsFor(g.full);
+});
+ipcMain.handle('debug:state', function (event, req) {
+    return debugManager.state((req && req.tab_id) || '');
+});
+ipcMain.handle('debug:bootstrap-python', function (event, req) {
+    return debugManager.bootstrapPython((req && req.tab_id) || '');
+});
+// 阶段一百六十一：C/C++ 调试环境一键引导（gcc/gdb 缺失 → 内置工具链 ensureGcc，本地 zip 优先联网兜底）
+ipcMain.handle('debug:bootstrap-cpp', function (event, req) {
+    return debugManager.bootstrapCpp((req && req.tab_id) || '');
+});
+
 // 阶段七十六：工作区文件面板操作（web 右侧文件树/预览/编辑 ← 服务端下行 msg 64 桥接）——
 // 与 agent:exec 同款：执行前按请求用户名注入沙箱白名单，路径校验/限额归口 agent-executor.js；
 // 克隆进度多帧：执行器 onProgress 回调 → 'agent:fileop-progress' IPC 推回渲染层（渲染层补 req_id 转发 65 帧到服务端）
@@ -2641,12 +2691,29 @@ app.whenReady().then(async function () {
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
     // 阶段一百二十二：viewer 地址恢复服务端 http（同 origin 下 chat.js 相对路径 iframe 自动命中 http 拦截）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=131'); // v=131：同步渲染改 render 返回即回执（防 rAF 绘制冻结丢回执，与 chat.js iframe src 同步）
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=142'); // v=142：断点悬停提示（TRAE CN 同款：鼠标经过行号显空心红点），与 chat.js iframe src 同步防缓存
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,
         keep: agentExecutor.keepTaskChange,
         revert: agentExecutor.revertTaskChange
+    });
+
+    // 阶段一百五十九：断点调试管理器注入（路径校验复用 safePath；PATH 环境复用 buildAgentEnv——
+    // uv/python/工具链解析与 Agent 命令同口径；事件经 webContents.send 推渲染层转发 viewer iframe）
+    debugManager.setPathGuard(agentExecutor.safePath);
+    debugManager.setAgentEnvFn(agentExecutor.buildAgentEnv);
+    // 阶段一百六十一：C/C++ 调试 gcc/gdb 缺失时经 toolchainManager.ensureGcc 一键引导内置工具链
+    debugManager.setToolchainFn(compilerManager.ensureGcc);
+    debugManager.setEventSink(function (payload) {
+        // 广播到所有窗口：主窗口 chat.js 按 tab_id 转发对应 iframe；独立查看窗口 viewer-preload 订阅后自行按 tab_id 过滤
+        BrowserWindow.getAllWindows().forEach(function (win) {
+            if (!win.isDestroyed()) { try { win.webContents.send('debug:event', payload); } catch (e) {} }
+        });
+    });
+    // 被调试文件标签关闭 → 联动停止调试会话（杀 debugpy 进程树，防孤儿进程）
+    browserManager.setTabCloseHook(function (tabId) {
+        try { debugManager.onTabClosed(tabId); } catch (e) {}
     });
 
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
@@ -2694,6 +2761,7 @@ app.on('will-quit', function () {
     globalShortcut.unregisterAll();
     try { mcpManager.disposeAll(); } catch (e) {} // 阶段九十：本机 MCP 服务器进程随应用退出全量回收
     try { browserManager.lspShutdown(); } catch (e) {} // 阶段一百三十：LSP 语言服务器子进程随应用退出全量回收
+    try { debugManager.shutdown(); } catch (e) {} // 阶段一百五十九：调试会话（debugpy/适配器子进程）随应用退出回收
     shotPickerStop(); // 阶段一百三十九：窗口识别命中服务随应用退出回收（stdin 断开子进程自退，此为主动清理）
     try { remoteInput.stop(); } catch (e) {} // 阶段一百五十五：远程协助输入注入服务随应用退出回收（同 shotPicker 惯例）
 });

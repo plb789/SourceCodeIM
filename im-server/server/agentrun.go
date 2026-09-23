@@ -146,13 +146,14 @@ type AgentExecResult struct {
 // 文件在用户磁盘，服务端读不到内容——统计由执行器按任务前备份计算上报，服务端免重算；
 // 撤销时把 Backup/Local 原样下发执行器还原字节（Kind=create 删除任务中新建的文件）
 type agentPCChange struct {
-	Path    string `json:"path"`    // 展示路径（正斜杠）
-	Local   string `json:"local"`   // 文件本地绝对路径
-	Kind    string `json:"kind"`    // create/modify/delete（首触行语义）
-	Adds    int    `json:"adds"`    // 相对任务前内容的累计新增行数
-	Dels    int    `json:"dels"`    // 相对任务前内容的累计删除行数
-	Backup  string `json:"backup"`  // 本地备份文件绝对路径（create 为空）
-	Deleted bool   `json:"deleted"` // 操作后文件已不存在
+	Path        string `json:"path"`        // 展示路径（正斜杠）
+	Local       string `json:"local"`       // 文件本地绝对路径
+	Kind        string `json:"kind"`        // create/modify/delete（首触行语义）
+	Adds        int    `json:"adds"`        // 相对任务前内容的累计新增行数
+	Dels        int    `json:"dels"`        // 相对任务前内容的累计删除行数
+	Backup      string `json:"backup"`      // 本地备份文件绝对路径（create 为空）
+	Deleted     bool   `json:"deleted"`     // 操作后文件已不存在
+	Explanation string `json:"explanation"` // AI 修改说明（工具 explanation 参数透传，同路径取最近一次）
 }
 
 // pcRevertWait 阶段八十：撤销本地变更的回传等待器（步骤键归口防错投，异步不阻塞审查上行）
@@ -583,9 +584,10 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 			"parameters": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"path":    map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
-					"content": map[string]interface{}{"type": "string", "description": "写入的完整文本内容"},
-					"mode":    map[string]interface{}{"type": "string", "enum": []string{"overwrite", "append"}, "description": "写入模式，默认 overwrite"},
+					"path":        map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
+					"content":     map[string]interface{}{"type": "string", "description": "写入的完整文本内容"},
+					"mode":        map[string]interface{}{"type": "string", "enum": []string{"overwrite", "append"}, "description": "写入模式，默认 overwrite"},
+					"explanation": map[string]interface{}{"type": "string", "description": "用一句中文简述本次写入的意图（面向用户的修改说明，展示在变更浮层与审查列表），如：修复聊天窗口滚动条不跟随主题的问题"},
 				},
 				"required": []string{"path", "content"},
 			},
@@ -600,6 +602,7 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 					"old_string":  map[string]interface{}{"type": "string", "description": "要被替换的精确原文（须与文件内容逐字一致，含缩进换行）"},
 					"new_string":  map[string]interface{}{"type": "string", "description": "替换后的新文本（传空串即删除该段）"},
 					"replace_all": map[string]interface{}{"type": "boolean", "description": "目标文本多处匹配时是否全部替换，默认 false（要求唯一匹配）"},
+					"explanation": map[string]interface{}{"type": "string", "description": "用一句中文简述本次替换的意图（面向用户的修改说明，展示在变更浮层与审查列表）"},
 				},
 				"required": []string{"path", "old_string", "new_string"},
 			},
@@ -610,8 +613,9 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 			"parameters": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"path":      map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
-					"recursive": map[string]interface{}{"type": "boolean", "description": "目录递归删除（删非空目录必传 true），删除文件时忽略"},
+					"path":        map[string]interface{}{"type": "string", "description": "工作区内相对路径，或授权目录内的绝对路径"},
+					"recursive":   map[string]interface{}{"type": "boolean", "description": "目录递归删除（删非空目录必传 true），删除文件时忽略"},
+					"explanation": map[string]interface{}{"type": "string", "description": "用一句中文简述本次删除的原因（面向用户的修改说明，展示在变更浮层与审查列表）"},
 				},
 				"required": []string{"path"},
 			},
@@ -1615,7 +1619,7 @@ func agentToolWriteFile(t *AgentTask, params map[string]interface{}) string {
 	if bak == "" {
 		kind = "create"
 	}
-	agentRecordChange(t, agentRelPath(username, full), kind, bak)
+	agentRecordChange(t, agentRelPath(username, full), kind, bak, agentParamString(params["explanation"]))
 	verb := "写入"
 	if mode == "append" {
 		verb = "追加"
@@ -1682,7 +1686,7 @@ func agentToolEditFile(t *AgentTask, params map[string]interface{}) string {
 		return "错误：写入失败 " + err.Error()
 	}
 	if bak != "" {
-		agentRecordChange(t, agentRelPath(username, full), "modify", bak) // 阶段七十七：登记变更
+		agentRecordChange(t, agentRelPath(username, full), "modify", bak, agentParamString(params["explanation"])) // 阶段七十七：登记变更
 	}
 	add, del := agentLineDiffStat(text, newText)
 	return fmt.Sprintf("已编辑 %s（+%d -%d，替换 %d 处）", path, add, del, count)
@@ -1736,7 +1740,7 @@ func agentToolDeleteFile(t *AgentTask, params map[string]interface{}) string {
 		}
 		for i, p := range snapFiles {
 			if baks[i] != "" {
-				agentRecordChange(t, agentRelPath(username, p), "delete", baks[i])
+				agentRecordChange(t, agentRelPath(username, p), "delete", baks[i], agentParamString(params["explanation"]))
 			}
 		}
 		return fmt.Sprintf("已删除目录 %s/（递归，含 %d 个条目）", path, n)
@@ -1746,7 +1750,7 @@ func agentToolDeleteFile(t *AgentTask, params map[string]interface{}) string {
 		return "错误：删除失败 " + err.Error()
 	}
 	if bak != "" {
-		agentRecordChange(t, agentRelPath(username, full), "delete", bak) // 阶段七十七：登记变更
+		agentRecordChange(t, agentRelPath(username, full), "delete", bak, agentParamString(params["explanation"])) // 阶段七十七：登记变更
 	}
 	return fmt.Sprintf("已删除文件 %s（%d 字节）", path, info.Size())
 }
@@ -1979,19 +1983,21 @@ func agentLineDiffStat(oldContent, newContent string) (int, int) {
 
 // agentChangeRec 任务内文件变更内存态（t.mu 保护；同路径首触保留最早 before，任务级累积 diff）
 type agentChangeRec struct {
-	Path   string // 工作区相对路径（正斜杠）
-	Kind   string // create/modify/delete（首触语义：原不存在=create，否则 modify/delete）
-	Backup string // 首触备份绝对路径（create 首触为空——任务前文件不存在）
-	Env    string // 阶段八十：server=服务端工作区（完结统一 diff 统计）/ pc=用户本地（统计执行器上报，免重算）
+	Path        string // 工作区相对路径（正斜杠）
+	Kind        string // create/modify/delete（首触语义：原不存在=create，否则 modify/delete）
+	Backup      string // 首触备份绝对路径（create 首触为空——任务前文件不存在）
+	Env         string // 阶段八十：server=服务端工作区（完结统一 diff 统计）/ pc=用户本地（统计执行器上报，免重算）
+	Explanation string // AI 修改说明（同路径重复触碰取最近一次，供前端变更浮层/审查列表展示）
 }
 
 // agentChangeView 下发视图（done/error 事件与下行 66 刷新帧共用）
 type agentChangeView struct {
-	Path   string `json:"path"`
-	Kind   string `json:"kind"`
-	Adds   int    `json:"adds"`
-	Dels   int    `json:"dels"`
-	Status string `json:"status"`
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	Adds        int    `json:"adds"`
+	Dels        int    `json:"dels"`
+	Status      string `json:"status"`
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // agentRelPath 工作区内绝对路径 → 相对路径（正斜杠，记录表与前端展示归口）；解析失败回退文件名
@@ -2044,25 +2050,37 @@ func agentSnapshotBefore(t *AgentTask, full string) string {
 }
 
 // agentRecordChange 变更登记：锁内写内存归口（同路径去重，首触为准），锁外落库（status=pending）。
-// 落库失败仅记日志（撤销链路以内存+DB 双归口，重启后靠 DB 重放）
-func agentRecordChange(t *AgentTask, rel, kind, backup string) {
+// 落库失败仅记日志（撤销链路以内存+DB 双归口，重启后靠 DB 重放）。
+// explanation：AI 修改说明——同路径重复触碰时 Kind/Backup 不动（撤销语义依赖首触），仅回写最新说明（last-wins）
+func agentRecordChange(t *AgentTask, rel, kind, backup, explanation string) {
+	if len([]rune(explanation)) > 1024 {
+		explanation = string([]rune(explanation)[:1024]) // 防滥用截断，与 DB 列宽对齐
+	}
 	t.mu.Lock()
-	dup := false
+	var dup *agentChangeRec
 	for _, r := range t.changes {
 		if r.Path == rel {
-			dup = true
+			dup = r
 			break
 		}
 	}
-	if !dup {
-		t.changes = append(t.changes, &agentChangeRec{Path: rel, Kind: kind, Backup: backup})
+	if dup == nil {
+		rec := &agentChangeRec{Path: rel, Kind: kind, Backup: backup, Explanation: explanation}
+		t.changes = append(t.changes, rec)
 	}
 	t.mu.Unlock()
-	if dup {
+	if dup != nil {
+		// 同路径重复触碰：仅回写最新说明（空串不覆盖，防模型某次漏传清掉旧说明）
+		if explanation != "" {
+			dup.Explanation = explanation
+			store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, rel).
+				Updates(map[string]interface{}{"explanation": explanation})
+		}
 		return
 	}
 	if err := store.DB.Create(&model.AgentChangeRecord{
-		TaskID: t.ID, Username: t.Username, Path: rel, Kind: kind, BackupFile: backup, Status: "pending",
+		TaskID: t.ID, Username: t.Username, Path: rel, Kind: kind, BackupFile: backup,
+		Explanation: explanation, Status: "pending",
 	}).Error; err != nil {
 		logger.Error("Agent 变更登记落库失败（任务 %s，%s）：%v", t.ID, rel, err)
 	}
@@ -2079,15 +2097,17 @@ func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
 			continue
 		}
 		t.mu.Lock()
-		dup := false
+		var dup *agentChangeRec
 		for _, r := range t.changes {
 			if r.Path == ch.Path {
-				dup = true
+				dup = r
 				break
 			}
 		}
-		if !dup {
-			t.changes = append(t.changes, &agentChangeRec{Path: ch.Path, Kind: ch.Kind, Backup: ch.Backup, Env: "pc"})
+		if dup == nil {
+			t.changes = append(t.changes, &agentChangeRec{Path: ch.Path, Kind: ch.Kind, Backup: ch.Backup, Env: "pc", Explanation: ch.Explanation})
+		} else if ch.Explanation != "" {
+			dup.Explanation = ch.Explanation // 说明 last-wins（与 agentRecordChange 同口径）
 		}
 		t.mu.Unlock()
 		if ch.Deleted && ch.Kind == "create" {
@@ -2096,17 +2116,21 @@ func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
 			changed = true
 			continue
 		}
-		if dup {
-			// 同路径重复触碰：回写最新累计行数（首触 kind/备份不变，撤销仍还原任务前状态）
+		if dup != nil {
+			// 同路径重复触碰：回写最新累计行数与说明（首触 kind/备份不变，撤销仍还原任务前状态）
+			updates := map[string]interface{}{"adds": ch.Adds, "dels": ch.Dels}
+			if ch.Explanation != "" {
+				updates["explanation"] = ch.Explanation
+			}
 			store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, ch.Path).
-				Updates(map[string]interface{}{"adds": ch.Adds, "dels": ch.Dels})
+				Updates(updates)
 			changed = true
 			continue
 		}
 		if err := store.DB.Create(&model.AgentChangeRecord{
 			TaskID: t.ID, Username: t.Username, Path: ch.Path, Kind: ch.Kind,
 			Adds: ch.Adds, Dels: ch.Dels, BackupFile: ch.Backup, LocalPath: ch.Local,
-			Env: "pc", Status: "pending",
+			Env: "pc", Status: "pending", Explanation: ch.Explanation,
 		}).Error; err != nil {
 			logger.Error("Agent 本地变更登记落库失败（任务 %s，%s）：%v", t.ID, ch.Path, err)
 			continue
@@ -2138,7 +2162,7 @@ func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
 			if err := store.DB.Where("task_id = ? AND path = ?", t.ID, r.Path).First(&row).Error; err != nil {
 				continue
 			}
-			views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: row.Adds, Dels: row.Dels, Status: row.Status})
+			views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: row.Adds, Dels: row.Dels, Status: row.Status, Explanation: row.Explanation})
 			continue
 		}
 		full, err := agentSafePath(t.Username, r.Path)
@@ -2170,7 +2194,7 @@ func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
 		}
 		store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, r.Path).
 			Updates(map[string]interface{}{"adds": adds, "dels": dels})
-		views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: adds, Dels: dels, Status: "pending"})
+		views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: adds, Dels: dels, Status: "pending", Explanation: r.Explanation})
 	}
 	if len(views) == 0 {
 		return nil
@@ -2191,7 +2215,7 @@ func (s *Server) agentChangesPush(username, taskID string) {
 	changes := make([]agentChangeView, 0, len(rows))
 	totalAdds, totalDels := 0, 0
 	for _, r := range rows {
-		changes = append(changes, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: r.Adds, Dels: r.Dels, Status: r.Status})
+		changes = append(changes, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: r.Adds, Dels: r.Dels, Status: r.Status, Explanation: r.Explanation})
 		totalAdds += r.Adds
 		totalDels += r.Dels
 	}
@@ -2732,6 +2756,7 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 		pathRule + "\n" +
 		"5. 浏览目录结构用 list_dir；定位内容先 grep 搜索再 read_file 按需分段（offset/limit）读取，避免整读大文件。\n" +
 		"6. 修改既有文件优先 edit_file 精确替换，仅新建文件或整体重写时才用 write_file。\n" +
+		"6a. 调用 write_file/edit_file/delete_file 时必须在 explanation 字段用一句中文说明本次修改意图（面向用户的变更说明，将展示在变更浮层与审查列表中，帮助用户决定保留或撤销）。\n" +
 		"7. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
 		"8. C/C++ 编译能力：可直接调用 gcc/g++/make 等编译命令，客户端首次使用时会自动准备本地编译环境（系统已有 MSVC/编译器时优先使用，无需任何安装操作；若系统为 MSVC，错误提示会引导改用 cl 语法）。\n" +
 		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。\n" +

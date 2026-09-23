@@ -9,8 +9,11 @@
          md/diff/审查报告渲染 + 文本编辑保存（经 viewer-preload 窄桥，路径由主进程归口）。
          Web/手机端用户不会导航到本页（无入口），imviewer 桥不存在时编辑按钮自动隐藏 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- CSP：仅同源资源 + blob/data 媒体；SheetJS/PPTXjs 内部需 eval，故放开 unsafe-eval -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; font-src 'self' data:">
+    <!-- CSP：仅同源资源 + blob/data 媒体；SheetJS/PPTXjs 内部需 eval，故放开 unsafe-eval；
+         worker-src 'self' blob: 必须放行——Monaco 新版 defaultWorkerFactory 一律用 URL.createObjectURL(blob)
+         创建 Worker，diff 计算（computeDiff）跑在 editorWorker 里，blob: 被拦则 diff 行级红绿装饰
+         与"仅变更"折叠全部静默失效（实测无报错，仅控制台 worker 警告），样式看着像普通双栏文本 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; font-src 'self' data:">
     <title>文件预览</title>
     <!-- 阶段一百零九：首帧防白闪——hljs 样式与 5 个大库脚本（highlight/mammoth/jszip/PptxViewJS/xlsx
          合计数 MB）同步阻塞解析，完整 <style> 又排在它们之后：首次打开（冷缓存）时新文档先以
@@ -229,13 +232,14 @@
         #fv-diff-info .fv-commit-subject { font-size: 13px; margin-bottom: 2px; }
         #fv-diff-info .fv-commit-info { font-size: 11.5px; }
         #fv-diff { flex: 1; min-height: 0; background: var(--fv-bg); }
-        /* 阶段九十七：红蓝绿 gutter（TRAE CN 同款配色：新增绿条/修改蓝条/删除红块） */
+        /* 阶段九十七：红蓝绿 gutter（TRAE CN 同款配色：新增绿条/修改蓝条/删除红块）
+           阶段一百五十八：色条收窄 2.5px+圆角（::before 绘制，border-left 无法圆角），三色保持 git 语义不随主题翻转 */
         .fv-btn.danger { border-color: #cf222e; color: #e5534b; }
         .fv-btn.danger:hover { background: rgba(207, 34, 46, 0.15); }
-        .fv-g-add, .fv-g-mod { margin-left: 4px; border-left: 3px solid; }
-        .fv-g-add { border-left-color: #2da44e; }
-        .fv-g-mod { border-left-color: #316dca; }
-        .fv-g-del { position: relative; }
+        .fv-g-add, .fv-g-mod, .fv-g-del { position: relative; }
+        .fv-g-add::before, .fv-g-mod::before { content: ''; position: absolute; left: 4px; top: 2px; bottom: 2px; width: 2.5px; border-radius: 2px; }
+        .fv-g-add::before { background: #2da44e; }
+        .fv-g-mod::before { background: #316dca; }
         .fv-g-del::before { content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 9px; height: 3px; background: #cf222e; border-radius: 2px; }
         /* 阶段一百一十一：变更整行背景（TRAE CN 同款：新增绿底/修改蓝底）+ 变更导航胶囊 */
         .fv-tl-add { background: rgba(46, 160, 67, 0.16); }
@@ -273,6 +277,133 @@
         .fv-ctx-item:hover { background: var(--fv-hover); }
         .fv-ctx-key { color: var(--fv-text-light); font-size: 11px; }
         .fv-ctx-sep { height: 1px; margin: 4px 8px; background: var(--fv-border); }
+        /* ===== 阶段一百五十八：AI 修改说明悬停浮层（TRAE CN 同款）=====
+           自绘绝对定位 DOM（非 Monaco overlayWidget）：触发区在 gutter、含回滚按钮交互、不受编辑器 overflow 裁剪；
+           配色全走 --fv-* 双主题变量自动跟随；徽标三色与 gutter git 语义一致（新增绿/修改蓝/删除红） */
+        #fv-ai-pop {
+            position: fixed; z-index: 10001; max-width: 420px;
+            padding: 10px 12px; border: 1px solid var(--fv-border); border-radius: 8px;
+            background: var(--fv-panel); color: var(--fv-text);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+            font-size: 12px; line-height: 1.5; user-select: none; display: none;
+        }
+        #fv-ai-pop.show { display: block; }
+        #fv-ai-pop .fv-ai-pop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        #fv-ai-pop .fv-ai-pop-lines { margin-left: auto; color: var(--fv-text-light); font-size: 11px; white-space: nowrap; }
+        .fv-ai-badge { flex: none; display: inline-flex; align-items: center; height: 16px; padding: 0 7px; border-radius: 8px; font-size: 11px; font-weight: 600; }
+        .fv-ai-badge.b-add { background: rgba(46, 160, 67, 0.16); color: #2da44e; }
+        .fv-ai-badge.b-mod { background: rgba(56, 139, 253, 0.16); color: #3f8cff; }
+        .fv-ai-badge.b-del { background: rgba(207, 34, 46, 0.14); color: #e5534b; }
+        .fv-add { color: #2da44e; }
+        .fv-del { color: #e5534b; }
+        #fv-ai-pop .fv-ai-pop-stat { font-size: 11px; display: inline-flex; gap: 6px; white-space: nowrap; }
+        #fv-ai-pop .fv-ai-pop-text { max-height: 96px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+        #fv-ai-pop .fv-ai-pop-text::-webkit-scrollbar { width: 6px; }
+        #fv-ai-pop .fv-ai-pop-text::-webkit-scrollbar-track { background: transparent; }
+        #fv-ai-pop .fv-ai-pop-text::-webkit-scrollbar-thumb { background: var(--fv-scroll); border-radius: 3px; }
+        #fv-ai-pop .fv-ai-pop-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
+        #fv-ai-pop .fv-ai-pop-arrow {
+            position: absolute; width: 10px; height: 10px; transform: rotate(45deg);
+            background: var(--fv-panel); border-left: 1px solid var(--fv-border); border-top: 1px solid var(--fv-border);
+            pointer-events: none;
+        }
+        .fv-tl-hover { background: rgba(128, 128, 128, 0.10); }
+        /* diff 头部 AI 说明行 + 统计徽标（TRAE CN 同款：变更文件 diff 预览头部展示修改意图） */
+        .fv-diff-expl { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--fv-text); }
+        .fv-diff-expl .fv-expl-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fv-diff-stat { display: inline-flex; gap: 6px; font-size: 11px; white-space: nowrap; }
+        /* ===== 阶段一百五十九：断点调试 UI（TRAE CN 同款）=====
+           gutter 断点红圈（Monaco glyphMargin 装饰）/ 暂停行高亮 / 顶栏控制条 / 底部调试面板；
+           配色全走 --fv-* 主题变量，语义色与 gutter git 语义一致（红=断点，黄=暂停行） */
+        .monaco-editor .glyph-margin-widgets .cgmr,
+        .monaco-editor .margin-view-overlays .cgmr { cursor: pointer; }
+        .monaco-editor .margin-view-overlays .line-numbers { cursor: pointer; } /* v=142：行号悬停显空心断点提示，光标同步 pointer（TRAE CN 同款） */
+        .fv-bp-dot::before {
+            content: ''; display: block; width: 11px; height: 11px; margin: 5px 0 0 9px;
+            border-radius: 50%; background: #e5534b; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+        }
+        /* TRAE CN 同款：悬停行号/glyph 槽时该行显空心红点（提示可点击打断点；已打断点的行不叠加） */
+        .fv-bp-hover-dot::before {
+            content: ''; display: block; width: 11px; height: 11px; margin: 5px 0 0 9px;
+            border-radius: 50%; border: 1.5px solid rgba(229, 83, 75, 0.7); box-sizing: border-box;
+            background: transparent;
+        }
+        .fv-dbg-line-hl { background: rgba(229, 181, 103, 0.20); }
+        .fv-dbg-line-arrow::before {
+            content: ''; display: block; width: 0; height: 0; margin: 4px 0 0 9px;
+            border-top: 6.5px solid transparent; border-bottom: 6.5px solid transparent;
+            border-left: 11px solid #e5b567; /* VS Code 同款暂停行黄箭头 */
+        }
+        #fv-dbg-ctrl { flex: none; display: flex; align-items: center; gap: 5px; padding-left: 6px; border-left: 1px solid var(--fv-border); }
+        #fv-dbg-ctrl.hidden { display: none; }
+        .fv-dbg-btn {
+            flex: none; width: 26px; height: 24px; padding: 0; text-align: center; line-height: 22px;
+            border: 1px solid var(--fv-border); border-radius: 4px; background: transparent;
+            color: var(--fv-text); font-size: 13px; cursor: pointer; user-select: none;
+        }
+        .fv-dbg-btn:hover { background: var(--fv-hover); }
+        .fv-dbg-btn:disabled { opacity: 0.45; cursor: default; }
+        .fv-dbg-btn.hidden { display: none; }
+        #fv-dbg-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #9e9e9e; }
+        #fv-dbg-dot.starting, #fv-dbg-dot.running { background: #2da44e; }
+        #fv-dbg-dot.paused { background: #e5b567; }
+        #fv-dbg-dot.ended { background: #8a8a8a; }
+        /* 底部调试面板（变量/调用堆栈/断点/控制台 四栏页签，TRAE CN 同款布局） */
+        #fv-dbg-panel {
+            flex: none; height: 240px; display: none; flex-direction: column;
+            border-top: 1px solid var(--fv-border); background: var(--fv-panel);
+        }
+        #fv-dbg-panel.open { display: flex; }
+        #fv-dbg-tabs {
+            flex: none; display: flex; align-items: center; gap: 2px; padding: 0 8px;
+            height: 30px; border-bottom: 1px solid var(--fv-border); user-select: none;
+        }
+        .fv-dbg-tab {
+            padding: 0 12px; height: 100%; line-height: 30px; font-size: 12px;
+            color: var(--fv-text-light); cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .fv-dbg-tab:hover { color: var(--fv-text); }
+        .fv-dbg-tab.active { color: var(--fv-primary); border-bottom-color: var(--fv-primary); }
+        #fv-dbp-spacer { flex: 1; }
+        .fv-dbp-act { padding: 0 8px; font-size: 12px; color: var(--fv-text-light); cursor: pointer; line-height: 30px; }
+        .fv-dbp-act:hover { color: var(--fv-text); }
+        #fv-dbg-banner {
+            flex: none; display: none; align-items: center; gap: 10px;
+            margin: 6px 8px 0; padding: 6px 10px; border-radius: 6px;
+            background: var(--fv-banner-bg); color: var(--fv-banner-fg); font-size: 12px;
+        }
+        #fv-dbg-banner.show { display: flex; }
+        #fv-dbg-panes { flex: 1; min-height: 0; position: relative; }
+        .fv-dbg-pane {
+            position: absolute; inset: 0; overflow: auto; padding: 6px 4px;
+            font: 12px/1.7 "JetBrains Mono IM", "Cascadia Code", Consolas, monospace;
+        }
+        .fv-dbg-pane.hidden { display: none; }
+        .fv-dbg-pane::-webkit-scrollbar { width: 8px; height: 8px; }
+        .fv-dbg-pane::-webkit-scrollbar-track { background: transparent; }
+        .fv-dbg-pane::-webkit-scrollbar-thumb { background: var(--fv-scroll); border-radius: 4px; }
+        .fv-dbg-pane::-webkit-scrollbar-thumb:hover { filter: brightness(0.85); }
+        /* 变量树节点 */
+        .fv-dbg-node { display: flex; align-items: baseline; gap: 6px; padding: 0 8px; white-space: pre; }
+        .fv-dbg-node:hover { background: var(--fv-hover); }
+        .fv-dbg-twist { flex: none; width: 14px; text-align: center; color: var(--fv-text-light); cursor: pointer; user-select: none; }
+        .fv-dbg-twist.leaf { visibility: hidden; }
+        .fv-dbg-name { color: #b392f0; }
+        .fv-dbg-val { color: var(--fv-text); word-break: break-all; white-space: pre-wrap; }
+        .fv-dbg-type { color: var(--fv-text-light); font-size: 11px; }
+        /* 调用堆栈/断点行 */
+        .fv-dbg-row { display: flex; align-items: center; gap: 8px; padding: 0 10px; cursor: pointer; }
+        .fv-dbg-row:hover { background: var(--fv-hover); }
+        .fv-dbg-row.active { background: var(--fv-quote-bg); }
+        .fv-dbg-row .fn { color: var(--fv-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fv-dbg-row .loc { color: var(--fv-text-light); font-size: 11px; flex: none; }
+        .fv-dbg-row .rm { flex: none; color: var(--fv-text-light); font-size: 13px; padding: 0 4px; border-radius: 3px; }
+        .fv-dbg-row .rm:hover { color: #e5534b; background: rgba(207, 34, 46, 0.12); }
+        /* 控制台输出 */
+        #fv-dbg-out { white-space: pre-wrap; word-break: break-all; }
+        #fv-dbg-out .err { color: #e5534b; }
+        #fv-dbg-out .dbg { color: var(--fv-text-light); }
     </style>
 </head>
 <body>
@@ -289,6 +420,18 @@
             <span id="fv-nav-pos">1/1</span>
             <button id="fv-nav-next" class="fv-nav-btn" title="下一处变更">›</button>
         </div>
+        <!-- 阶段一百五十九：调试控制条（TRAE CN 同款：状态灯 + 继续/单步/步入/步出/重启/停止；仅支持调试的语言显示） -->
+        <div id="fv-dbg-ctrl" class="hidden">
+            <span id="fv-dbg-dot" title="调试状态"></span>
+            <button id="fv-dbg-start" class="fv-btn primary hidden">调试</button>
+            <button id="fv-dbg-continue" class="fv-dbg-btn hidden" title="继续 (F5)">▶</button>
+            <button id="fv-dbg-pause" class="fv-dbg-btn hidden" title="暂停">⏸</button>
+            <button id="fv-dbg-next" class="fv-dbg-btn hidden" title="单步跳过 (F10)">↷</button>
+            <button id="fv-dbg-stepin" class="fv-dbg-btn hidden" title="单步进入 (F11)">↴</button>
+            <button id="fv-dbg-stepout" class="fv-dbg-btn hidden" title="单步跳出 (Shift+F11)">↰</button>
+            <button id="fv-dbg-restart" class="fv-dbg-btn hidden" title="重启调试">⟳</button>
+            <button id="fv-dbg-stop" class="fv-dbg-btn hidden" title="停止调试">⏹</button>
+        </div>
     </div>
     <div id="fv-body"></div>
     <div id="fv-diff-wrap">
@@ -300,6 +443,41 @@
         <div id="fv-diff"></div>
     </div>
     <div id="fv-monaco"></div>
+    <!-- 阶段一百五十九：底部调试面板（变量/调用堆栈/断点/控制台；默认隐藏，启动调试或暂停时展开） -->
+    <div id="fv-dbg-panel">
+        <div id="fv-dbg-banner">
+            <span id="fv-dbg-banner-text"></span>
+            <button id="fv-dbg-banner-btn" class="fv-btn primary">一键安装</button>
+        </div>
+        <div id="fv-dbg-tabs">
+            <span class="fv-dbg-tab active" data-pane="fv-dbg-vars">变量</span>
+            <span class="fv-dbg-tab" data-pane="fv-dbg-stack">调用堆栈</span>
+            <span class="fv-dbg-tab" data-pane="fv-dbg-bps">断点</span>
+            <span class="fv-dbg-tab" data-pane="fv-dbg-out">控制台</span>
+            <span id="fv-dbp-spacer"></span>
+            <span id="fv-dbp-clear" class="fv-dbp-act" title="清空控制台">清空</span>
+            <span id="fv-dbp-close" class="fv-dbp-act" title="收起面板">×</span>
+        </div>
+        <div id="fv-dbg-panes">
+            <div id="fv-dbg-vars" class="fv-dbg-pane"><div class="fv-hint">未暂停（变量在程序暂停时展示）</div></div>
+            <div id="fv-dbg-stack" class="fv-dbg-pane hidden"></div>
+            <div id="fv-dbg-bps" class="fv-dbg-pane hidden"></div>
+            <div id="fv-dbg-out" class="fv-dbg-pane hidden"></div>
+        </div>
+    </div>
+    <!-- 阶段一百五十八：AI 修改说明悬停浮层（自绘无系统弹窗；默认隐藏，悬停行号旁变更色条时弹出） -->
+    <div id="fv-ai-pop">
+        <div class="fv-ai-pop-arrow" id="fv-ai-pop-arrow"></div>
+        <div class="fv-ai-pop-head">
+            <span class="fv-ai-badge b-mod" id="fv-ai-pop-badge">AI 修改</span>
+            <span class="fv-ai-pop-stat" id="fv-ai-pop-stat"></span>
+            <span class="fv-ai-pop-lines" id="fv-ai-pop-lines"></span>
+        </div>
+        <div class="fv-ai-pop-text" id="fv-ai-pop-text"></div>
+        <div class="fv-ai-pop-foot">
+            <button id="fv-ai-pop-revert" class="fv-btn hidden">回滚此文件</button>
+        </div>
+    </div>
     <script src="/lib/monaco/min/vs/loader.js"></script>
     <script>
     (function () {
@@ -1300,12 +1478,46 @@
             })();
             monacoEditor = monaco.editor.create(monacoBox, {
                 value: '', language: 'plaintext', theme: fvThemeDark() ? 'im-dark' : 'im-light', automaticLayout: true,
-                fontSize: 12, lineHeight: 19, fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
+                fontSize: 14, lineHeight: 21, fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace', // TRAE CN 同款：14px/21（1.5 倍行高）+ 400 正常字重
                 minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'line',
                 wordWrap: 'on', tabSize: 4, insertSpaces: true, lineNumbers: 'on', folding: true,
+                glyphMargin: true, // 阶段一百五十九：断点红圈宿主区（行号左侧空白，点击切换断点）
                 colorDecorators: true // 阶段九十八：颜色值前色块（悬停弹调色板，Monaco 内置 standaloneColorPicker）
             });
             fvAttachCtxMenu(monacoEditor, monacoEditor, false); // 阶段一百一十：右键菜单中文化（编辑态全量条目）
+            fvAttachAiPop(monacoEditor); // 阶段一百五十八：变更行悬停浮层（行号旁色条触发，AI 说明+统计+回滚）
+            monacoEditor.onMouseDown(function (e) { // 阶段一百五十九：行号槽断点红圈点击切换（TRAE CN 同款交互）
+                try {
+                    // 阶段D 修复：Monaco 0.52 AMD 版运行时未导出 MouseTargetType 枚举（探针实测 monaco.MouseTargetType===undefined），
+                    // 原引用直接抛 TypeError 被本层 catch 吞掉——点击断点永远静默无效。mtt() 按内部枚举值兜底（GLYPH=2）
+                    if (!e || !e.target || e.target.type !== mtt('GUTTER_GLYPH_MARGIN', 2)) return;
+                    if (!e.target.position) return;
+                    dbgToggleBp(e.target.position.lineNumber);
+                } catch (err) {}
+            });
+            // v=142：TRAE CN 同款悬停提示——鼠标经过行号/行号左槽时，该行 glyph margin 显空心红点（已打断点的行不叠加），移开即消
+            monacoEditor.onMouseMove(function (e) {
+                var line = 0;
+                if (e && e.target && e.target.position &&
+                    (e.target.type === mtt('GUTTER_GLYPH_MARGIN', 2) || e.target.type === mtt('GUTTER_LINE_NUMBERS', 3))) {
+                    line = e.target.position.lineNumber;
+                }
+                dbgRenderHoverDot(line);
+            });
+            monacoEditor.onMouseLeave(function () { dbgRenderHoverDot(0); });
+            // 阶段一百五十九：调试快捷键（F5 继续/启动，F10 单步跳过，F11 步入，Shift+F11 步出——VS Code 同键位）
+            monacoEditor.addCommand(monaco.KeyCode.F5, function () {
+                if (dbg.status === 'paused') dbgStep('continue');
+                else if (!dbg.status || dbg.status === 'ended') dbgStart();
+            });
+            monacoEditor.addCommand(monaco.KeyCode.F10, function () { if (dbg.status === 'paused') dbgStep('next'); });
+            monacoEditor.addCommand(monaco.KeyCode.F11, function () { if (dbg.status === 'paused') dbgStep('stepIn'); });
+            monacoEditor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F11, function () { if (dbg.status === 'paused') dbgStep('stepOut'); });
+            // 阶段一百五十九：调试悬停求值提供者（暂停时悬停变量即显值；与 LSP/静态层合并展示，未暂停返回 null 零开销）
+            // 阶段D：三语言全覆盖——Monaco 语言 id（python/javascript/typescript/c/cpp）逐一注册，dbgLangOfExt 的调试路由名与此无关
+            ['python', 'javascript', 'typescript', 'c', 'cpp'].forEach(function (lang) {
+                monaco.languages.registerHoverProvider(lang, { provideHover: dbgHoverEval });
+            });
             try { // 阶段一百零八：JetBrains Mono webfont 就绪后重测字体度量（防编辑器以回退字体测量造成行宽错位）
                 Promise.all([
                     document.fonts.load('12px "JetBrains Mono IM"'),
@@ -1423,6 +1635,7 @@
             monacoEditor.focus();
             taskNavAutoPending = true; // 打开/重开文件：首次 gutter 计算出变更块后自动定位到第一处（updateTaskNav 消费）
             scheduleGutter(); // 阶段九十七：进入编辑即按 baseline 画红蓝绿 gutter
+            dbgRenderBps(); dbgRenderPause(); // 阶段一百五十九：接管新模型后重画断点红圈/暂停行（装饰随模型）
         }
         // ===== 阶段九十七：红蓝绿 gutter（TRAE CN 同款：新增绿条/修改蓝条/删除红块） =====
         // Monaco standalone 无内置 git gutter（VS Code 由 git 扩展提供），自实现 baseline 行级
@@ -1431,6 +1644,7 @@
         var gutterCol = null;       // Monaco decorations collection（复用）
         var gutterDecoIds = [];     // 旧版 API 兜底
         var GUTTER_CORE_MAX = 1200; // 裁剪后核心区单侧行数上限（1200² DP ≈ 5.8MB 可控）
+        var lastGutterMarks = null; // 阶段一百五十八：最近一次分类结果（悬停浮层徽标按行归类用）
         function lcsAlign(a, b) { // 返回递增 [[ai,bi]] 行对齐对
             var n = a.length, m = b.length, w = m + 1;
             var dp = new Uint32Array((n + 1) * w);
@@ -1476,8 +1690,10 @@
             gutterTimer = null;
             if (!monacoReady || !monacoEditor) return;
             var model = monacoEditor.getModel();
-            if (!model || monacoBox.style.display === 'none') return;
+            if (!model || monacoBox.style.display === 'none') { lastGutterMarks = null; return; }
             var marks = computeGutterMarks(fvBase, model.getValue());
+            lastGutterMarks = marks; // 阶段一百五十八：浮层归类数据源同步刷新
+            if (typeof aiPopHoverCol !== 'undefined' && aiPopHoverCol) aiPopHoverCol.clear(); // 重算后旧高亮失效即清
             var lineCount = model.getLineCount();
             var decos = [];
             function push(l0, cls, wholeCls) {
@@ -1546,6 +1762,129 @@
             if (gutterTimer) clearTimeout(gutterTimer);
             gutterTimer = setTimeout(applyGutter, 250);
         }
+        // ===== 阶段一百五十八：变更行悬停浮层（TRAE CN 同款：悬停行号旁色条显示 AI 修改说明+统计+回滚）=====
+        // 触发区=行号旁色条（GUTTER_LINE_DECORATIONS/GLYPH_MARGIN/LINE_NUMBERS）命中变更块；不选"悬停行内容"
+        // 触发——避免与 LSP/静态 hover provider 叠冲突。自绘浮层（无系统弹窗），边缘翻转复用 fvShowCtxMenu 公式。
+        var aiPopEl = document.getElementById('fv-ai-pop');
+        var aiPopBadge = document.getElementById('fv-ai-pop-badge');
+        var aiPopStat = document.getElementById('fv-ai-pop-stat');
+        var aiPopLines = document.getElementById('fv-ai-pop-lines');
+        var aiPopText = document.getElementById('fv-ai-pop-text');
+        var aiPopRevert = document.getElementById('fv-ai-pop-revert');
+        var aiPopArrow = document.getElementById('fv-ai-pop-arrow');
+        var aiPopShowTimer = null, aiPopHideTimer = null;
+        var aiPopBlock = null;    // 当前浮层对应的变更块 {start,end}（0 基行号）
+        var aiPopHoverCol = null; // 悬停块整行淡高亮装饰（fv-tl-hover），关闭即清
+
+        function fvAiPopHide() {
+            if (aiPopShowTimer) { clearTimeout(aiPopShowTimer); aiPopShowTimer = null; }
+            if (aiPopHideTimer) { clearTimeout(aiPopHideTimer); aiPopHideTimer = null; }
+            if (aiPopEl) aiPopEl.classList.remove('show');
+            aiPopBlock = null;
+            if (aiPopHoverCol) aiPopHoverCol.clear();
+        }
+
+        function fvAiPopHideSoon() { // 延时隐藏：给鼠标移入浮层留窗口（移入即取消，浮层不消失）
+            if (aiPopShowTimer) { clearTimeout(aiPopShowTimer); aiPopShowTimer = null; }
+            if (aiPopHideTimer) clearTimeout(aiPopHideTimer);
+            aiPopHideTimer = setTimeout(fvAiPopHide, 150);
+        }
+
+        function fvAiPopLineKind(l0) { // 行归类：优先精确命中分类集合，块内合并行按修改蓝兜底
+            var m = lastGutterMarks;
+            if (!m) return 'mod';
+            if (m.added.indexOf(l0) >= 0) return 'add';
+            if (m.modified.indexOf(l0) >= 0) return 'mod';
+            if (m.deleted.indexOf(l0) >= 0) return 'del';
+            return 'mod';
+        }
+
+        function fvAiPopFill(l0) { // 内容组装：徽标（行归类）+统计（服务端优先，就地计算兜底）+行号范围+说明
+            var kind = fvAiPopLineKind(l0);
+            aiPopBadge.className = 'fv-ai-badge ' + (kind === 'add' ? 'b-add' : (kind === 'del' ? 'b-del' : 'b-mod'));
+            var isTask = !!(data && data.task_modified); // 任务文件=AI 改动；普通文件=本地未保存编辑（文案区分，不冒充 AI）
+            aiPopBadge.textContent = isTask
+                ? (kind === 'add' ? 'AI 新增' : (kind === 'del' ? 'AI 删除' : 'AI 修改'))
+                : (kind === 'add' ? '新增' : (kind === 'del' ? '删除' : '修改'));
+            var adds = (data && data.adds != null) ? data.adds : (lastGutterMarks ? lastGutterMarks.added.length : 0);
+            var dels = (data && data.dels != null) ? data.dels : (lastGutterMarks ? lastGutterMarks.deleted.length : 0);
+            aiPopStat.innerHTML = '';
+            if (adds || dels) {
+                var sa = document.createElement('span'); sa.className = 'fv-add'; sa.textContent = '+' + adds;
+                var sd = document.createElement('span'); sd.className = 'fv-del'; sd.textContent = '-' + dels;
+                aiPopStat.appendChild(sa); aiPopStat.appendChild(sd);
+            }
+            var b = aiPopBlock || { start: l0, end: l0 };
+            aiPopLines.textContent = b.start === b.end ? ('第 ' + (b.start + 1) + ' 行') : ('第 ' + (b.start + 1) + ' - ' + (b.end + 1) + ' 行');
+            aiPopText.textContent = isTask ? ((data && data.explanation) || '本次 AI 修改') : '与最近保存内容存在差异（本地未保存编辑）'; // 说明空降级（旧服务端/存量任务兼容）
+            // 回滚按钮：与顶栏撤销同门槛（任务文件+桥在+未 dirty）；dirty 时置灰提示先保存
+            var can = !!(data && data.task_modified && hasViewer() && !dirtyNow);
+            aiPopRevert.classList.toggle('hidden', !can);
+            aiPopRevert.disabled = !can;
+            aiPopRevert.title = can ? '还原该文件到任务前内容（需二次确认）' : (dirtyNow ? '请先保存或撤销未保存编辑' : '');
+        }
+
+        function fvAiPopShow(e, block) { // 定位：鼠标 +14px 偏移，边缘翻转（fvShowCtxMenu 同公式）；锚定不跟随（稳定可点）
+            aiPopBlock = block;
+            fvAiPopFill(block.start);
+            if (!aiPopEl) return;
+            if (monacoReady && monacoEditor) { // 命中块整行淡高亮（关闭/重算即清）
+                if (!aiPopHoverCol && monacoEditor.createDecorationsCollection) aiPopHoverCol = monacoEditor.createDecorationsCollection();
+                if (aiPopHoverCol) {
+                    aiPopHoverCol.set([{ range: new monaco.Range(block.start + 1, 1, block.end + 1, 1), options: { isWholeLine: true, className: 'fv-tl-hover' } }]);
+                }
+            }
+            aiPopEl.classList.add('show');
+            var r = aiPopEl.getBoundingClientRect();
+            var px = e.event.posx, py = e.event.posy;
+            var x = Math.max(8, Math.min(px + 14, window.innerWidth - r.width - 8));
+            var y = Math.max(8, Math.min(py + 16, window.innerHeight - r.height - 8));
+            aiPopEl.style.left = x + 'px';
+            aiPopEl.style.top = y + 'px';
+            if (aiPopArrow) { // 小箭头指向鼠标（限制在浮层宽度内）
+                var ax = Math.max(6, Math.min(px - x, r.width - 18));
+                aiPopArrow.style.left = ax + 'px';
+                aiPopArrow.style.top = '-5px';
+            }
+        }
+
+        function fvAttachAiPop(ed) { // 编辑器就绪后挂一次；taskChangeBlocks/lastGutterMarks 事件时取最新
+            if (!aiPopEl || !aiPopRevert) return;
+            ed.onMouseMove(function (e) {
+                if (!monacoReady || !monacoEditor) return;
+                if (e.event && (e.event.buttons & 1)) { fvAiPopHide(); return; } // 左键按下（拖选）跳过
+                var t = e.target;
+                // 阶段D 修复：同断点点击——MouseTargetType 运行时未导出，mtt() 兜底（LINE_DECORATIONS=4/GLYPH=2/LINE_NUMBERS=3）
+                var inGutter = t && (t.type === mtt('GUTTER_LINE_DECORATIONS', 4) ||
+                                     t.type === mtt('GUTTER_GLYPH_MARGIN', 2) ||
+                                     t.type === mtt('GUTTER_LINE_NUMBERS', 3));
+                var block = null;
+                if (inGutter && t.position && taskChangeBlocks.length) {
+                    var l0 = t.position.lineNumber - 1;
+                    for (var i = 0; i < taskChangeBlocks.length; i++) {
+                        if (l0 >= taskChangeBlocks[i].start && l0 <= taskChangeBlocks[i].end) { block = taskChangeBlocks[i]; break; }
+                    }
+                }
+                if (block) {
+                    if (aiPopHideTimer) { clearTimeout(aiPopHideTimer); aiPopHideTimer = null; }
+                    if (aiPopEl.classList.contains('show')) { // 已显示：换块才重建（定位不随鼠标抖动）
+                        if (block !== aiPopBlock) {
+                            if (aiPopShowTimer) clearTimeout(aiPopShowTimer);
+                            aiPopShowTimer = setTimeout(function () { aiPopShowTimer = null; fvAiPopShow(e, block); }, 60);
+                        }
+                    } else { // 未显示：延时 150ms 防划过误弹
+                        if (aiPopShowTimer) clearTimeout(aiPopShowTimer);
+                        aiPopShowTimer = setTimeout(function () { aiPopShowTimer = null; fvAiPopShow(e, block); }, 150);
+                    }
+                } else if (aiPopEl.classList.contains('show') || aiPopShowTimer) {
+                    fvAiPopHideSoon();
+                }
+            });
+            ed.onMouseLeave(function () { if (aiPopEl.classList.contains('show') || aiPopShowTimer) fvAiPopHideSoon(); });
+            aiPopEl.addEventListener('mouseenter', function () { if (aiPopHideTimer) { clearTimeout(aiPopHideTimer); aiPopHideTimer = null; } }); // 移入浮层不消失
+            aiPopEl.addEventListener('mouseleave', function () { fvAiPopHideSoon(); });
+            aiPopRevert.addEventListener('click', function () { fvTaskRevertFlow(aiPopRevert); }); // 与顶栏撤销共用 armed 二次确认
+        }
         var data = null;      // 当前 payload（刷新重注入覆盖）
         var editing = false;  // 编辑态
         var draft = '';       // 编辑草稿（保存成功前不入库；切标签 BrowserView 不销毁天然保留）
@@ -1567,6 +1906,13 @@
         function esc(s) {
             return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        // 阶段D：MouseTargetType 本地解析——Monaco 0.52 AMD 版运行时未导出该枚举（iframe 探针实测
+        // monaco.MouseTargetType===undefined），直接引用即抛 TypeError。按 0.52 内部枚举值兜底：
+        // GUTTER_GLYPH_MARGIN=2 / GUTTER_LINE_NUMBERS=3 / GUTTER_LINE_DECORATIONS=4（editor.main.js 提取）；未来版本恢复导出则优先运行时值
+        function mtt(name, fb) {
+            try { var t = monaco.MouseTargetType; if (t && t[name] != null) return t[name]; } catch (e) { }
+            return fb;
         }
         function b64ToBuf(b64) {
             var bin = atob(String(b64 || ''));
@@ -1904,6 +2250,32 @@
                 }
             } else if (p.meta && p.meta.path) {
                 diffInfo.textContent = '文件：' + p.meta.path;
+                // 阶段一百五十八：AI 说明行 + 统计徽标（变更审查条点击进入 diff 预览时经 meta 透传，无则不建节点）
+                var ex = p.meta.expl;
+                if (ex && (ex.text || ex.adds || ex.dels)) {
+                    var row = document.createElement('div');
+                    row.className = 'fv-diff-expl';
+                    var b = document.createElement('span');
+                    b.className = 'fv-ai-badge ' + (ex.kind === 'create' ? 'b-add' : 'b-mod');
+                    b.textContent = 'AI';
+                    row.appendChild(b);
+                    if (ex.text) {
+                        var tx = document.createElement('span');
+                        tx.className = 'fv-expl-text';
+                        tx.textContent = ex.text;
+                        tx.title = ex.text;
+                        row.appendChild(tx);
+                    }
+                    if (ex.adds || ex.dels) {
+                        var stt = document.createElement('span');
+                        stt.className = 'fv-diff-stat';
+                        var sa = document.createElement('span'); sa.className = 'fv-add'; sa.textContent = '+' + (ex.adds || 0);
+                        var sd = document.createElement('span'); sd.className = 'fv-del'; sd.textContent = '-' + (ex.dels || 0);
+                        stt.appendChild(sa); stt.appendChild(sd);
+                        row.appendChild(stt);
+                    }
+                    diffInfo.appendChild(row);
+                }
             }
         }
         function renderDiffView(p) { // diff/commit 渲染入口（bodyEl 隐藏，diff 视图接管）
@@ -1945,7 +2317,7 @@
                     // 只读提示换中文（Monaco 默认英文 "Cannot edit in read-only editor"，点/输入时弹出）
                     readOnlyMessage: { value: '对比视图为只读，如需修改请打开对应文件标签编辑' },
                     originalEditable: false,
-                    automaticLayout: true, fontSize: 12, lineHeight: 19,
+                    automaticLayout: true, fontSize: 14, lineHeight: 21, // TRAE CN 同款：14px/21（1.5 倍行高）
                     fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
                     renderSideBySide: diffSide, renderIndicators: true,
                     // diffWordWrap 关闭（VS Code diff 同款）：换行会让左右两栏各行换行位置不同，
@@ -1969,8 +2341,10 @@
             diffModModel = monaco.editor.createModel(parsed.modified, lang);
             diffEd.setModel({ original: diffOrigModel, modified: diffModModel });
             // 本版 Monaco 创建参数里的 hideUnchangedRegions 首开不生效（实测），模型设置后
-            // updateOptions 才可靠（v=118 动态切换实测有效）——每次渲染后按当前模式重申一次
-            diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull, contextLineCount: 3 } });
+            // updateOptions 才可靠（v=118 动态切换实测有效）——每次渲染后按当前模式重申一次。
+            // 无差异（两侧全等，如放弃修改后的伪 diff 全上下文）强制全文：仅变更模式下
+            // 全文件都是未变更区会被整体折叠成一条展开条，反而什么都看不到
+            diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull && parsed.original !== parsed.modified, contextLineCount: 3 } });
             // 阶段一百一十六：diff 符号面包屑——扫工作树侧（modified），行号与右栏一致，
             // 宿主页地址栏显示 文件名 › ƒ函数（点击经 __fvReveal 跳 diff 右栏对应行，与文件浏览同款）
             try { viewerBridge().reportSymbols(data.tab_id, fvScanSymbols(parsed.modified, diffExtOf(p, text))); } catch (e) {}
@@ -1989,6 +2363,504 @@
             diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull, contextLineCount: 3 } });
             btnDiffScope.textContent = diffFull ? '仅变更' : '全文';
         });
+
+        // ===== 阶段一百五十九：断点调试（TRAE CN 同款；主进程 debug-manager DAP 客户端归口） =====
+        // 交互：行号槽 glyphMargin 点击切换断点红圈；顶栏控制条 继续/单步/步入/步出/重启/停止；
+        // 暂停行黄箭头+行背景；底部面板 变量树（懒加载）/调用堆栈/断点/控制台；悬停变量求值；F5/F10/F11。
+        // 事件全由主进程 debug:event 推送（经宿主 chat.js 转发 __wsDebugEvent），无轮询。
+        var dbgEl = {
+            ctrl: document.getElementById('fv-dbg-ctrl'),
+            dot: document.getElementById('fv-dbg-dot'),
+            start: document.getElementById('fv-dbg-start'),
+            pause: document.getElementById('fv-dbg-pause'),
+            cont: document.getElementById('fv-dbg-continue'),
+            next: document.getElementById('fv-dbg-next'),
+            stepin: document.getElementById('fv-dbg-stepin'),
+            stepout: document.getElementById('fv-dbg-stepout'),
+            restart: document.getElementById('fv-dbg-restart'),
+            stop: document.getElementById('fv-dbg-stop'),
+            panel: document.getElementById('fv-dbg-panel'),
+            banner: document.getElementById('fv-dbg-banner'),
+            bannerText: document.getElementById('fv-dbg-banner-text'),
+            bannerBtn: document.getElementById('fv-dbg-banner-btn'),
+            vars: document.getElementById('fv-dbg-vars'),
+            stack: document.getElementById('fv-dbg-stack'),
+            bps: document.getElementById('fv-dbg-bps'),
+            out: document.getElementById('fv-dbg-out'),
+            clear: document.getElementById('fv-dbp-clear'),
+            close: document.getElementById('fv-dbp-close')
+        };
+        var dbg = {
+            status: '',        // '' | starting | running | paused | ended（本标签会话状态，事件按 tab_id 路由）
+            bps: [],           // 本文件断点行号（1 基）
+            pauseLine: 0,      // 当前暂停行（0=无）
+            threadId: 0, frameId: 0,
+            frames: [],
+            bpCol: null, pauseCol: null,  // Monaco 装饰集合（断点红圈/暂停行）
+            bootstrapping: false
+        };
+        function dbgBridge() { // 调试桥：独立查看窗口 imviewer → 宿主页 desktop（iframe 同源）→ 本页 desktop 兜底
+            try { if (typeof window.imviewer !== 'undefined' && window.imviewer && window.imviewer.debugStart) return window.imviewer; } catch (e) {}
+            try {
+                var d = (typeof window.desktop !== 'undefined' && window.desktop) || (window.parent && window.parent.desktop) || null;
+                if (d && d.debugStart) return d;
+            } catch (e) {}
+            return null;
+        }
+        function dbgLangOfExt(ext) { // 语言路由（Python/Node；C/C++ cdt-gdb-adapter）
+            var e = String(ext || '').toLowerCase();
+            if (e === 'py' || e === 'pyw') return 'python';
+            if (e === 'js' || e === 'mjs' || e === 'cjs' || e === 'ts') return 'node';
+            if (e === 'c' || e === 'cpp' || e === 'cc' || e === 'cxx') return 'cpp';
+            return '';
+        }
+        function dbgSupported() {
+            return !!(data && data.kind === 'file' && data.mime === 'text' && dbgLangOfExt(data.ext) && dbgBridge());
+        }
+        // ---- 面板开合与页签 ----
+        function dbgOpenPanel(focusVars) {
+            dbgEl.panel.classList.add('open');
+            monacoBox.style.height = 'calc(100vh - 46px - 240px)'; // 编辑器让位面板（automaticLayout 自适应）
+            if (focusVars) dbgSwitchPane('fv-dbg-vars');
+        }
+        function dbgClosePanel() {
+            dbgEl.panel.classList.remove('open');
+            monacoBox.style.height = ''; // 恢复整高
+        }
+        function dbgSwitchPane(id) {
+            var tabs = dbgEl.panel.querySelectorAll('.fv-dbg-tab');
+            for (var i = 0; i < tabs.length; i++) {
+                if (tabs[i].classList) tabs[i].classList.toggle('active', tabs[i].getAttribute('data-pane') === id);
+            }
+            dbgEl.vars.classList.toggle('hidden', id !== 'fv-dbg-vars');
+            dbgEl.stack.classList.toggle('hidden', id !== 'fv-dbg-stack');
+            dbgEl.bps.classList.toggle('hidden', id !== 'fv-dbg-bps');
+            dbgEl.out.classList.toggle('hidden', id !== 'fv-dbg-out');
+        }
+        function dbgShowBanner(text) {
+            dbgEl.bannerText.textContent = text;
+            dbgEl.banner.classList.add('show');
+        }
+        function dbgHideBanner() { dbgEl.banner.classList.remove('show'); }
+        // ---- 控制条状态 ----
+        function dbgUpdateBar() {
+            if (!dbgSupported()) { dbgEl.ctrl.classList.add('hidden'); return; }
+            dbgEl.ctrl.classList.remove('hidden');
+            var st = dbg.status;
+            dbgEl.dot.className = st || '';
+            dbgEl.dot.title = st === 'starting' ? '调试启动中' : st === 'running' ? '程序运行中' : st === 'paused' ? '已暂停' : st === 'ended' ? '调试已结束' : '未在调试';
+            var showStart = !st || st === 'ended';
+            dbgEl.start.classList.toggle('hidden', !showStart);
+            dbgEl.start.textContent = st === 'ended' ? '重新调试' : '调试';
+            dbgEl.cont.classList.toggle('hidden', st !== 'paused');
+            dbgEl.pause.classList.toggle('hidden', !(st === 'running' || st === 'starting'));
+            dbgEl.next.classList.toggle('hidden', st !== 'paused');
+            dbgEl.stepin.classList.toggle('hidden', st !== 'paused');
+            dbgEl.stepout.classList.toggle('hidden', st !== 'paused');
+            dbgEl.restart.classList.toggle('hidden', !(st === 'running' || st === 'paused'));
+            dbgEl.stop.classList.toggle('hidden', !st || st === 'ended');
+        }
+        // ---- 断点装饰（红圈）与暂停行装饰（黄箭头+行背景） ----
+        function dbgRenderBps() {
+            if (!monacoReady || !monacoEditor || !monacoEditor.createDecorationsCollection) return;
+            var model = monacoEditor.getModel();
+            if (!model) return;
+            if (!dbg.bpCol) dbg.bpCol = monacoEditor.createDecorationsCollection();
+            var lineCount = model.getLineCount();
+            var decos = dbg.bps.filter(function (l) { return l >= 1 && l <= lineCount; }).map(function (l) {
+                return { range: new monaco.Range(l, 1, l, 1), options: { glyphMarginClassName: 'fv-bp-dot', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } };
+            });
+            dbg.bpCol.set(decos);
+            // v=142：断点增删后同步悬停提示（刚打断点的行实心接管，空心即刻消失；force 跳过同行去重）
+            dbgRenderHoverDot(dbg.hoverLine || 0, true);
+        }
+        // ---- v=142：TRAE CN 同款悬停空心红点（可打断点提示） ----
+        function dbgRenderHoverDot(line, force) {
+            if (!monacoReady || !monacoEditor || !monacoEditor.createDecorationsCollection) return;
+            if (!dbgSupported()) line = 0; // 非调试语言/无桥不显示（与断点交互守卫一致）
+            if (!force && line === (dbg.hoverLine || 0) && dbg.hoverCol) return; // 行未变零重绘
+            dbg.hoverLine = line;
+            if (!dbg.hoverCol) dbg.hoverCol = monacoEditor.createDecorationsCollection();
+            dbg.hoverCol.set(line && dbg.bps.indexOf(line) < 0 ? [{
+                range: new monaco.Range(line, 1, line, 1),
+                options: { glyphMarginClassName: 'fv-bp-hover-dot', stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges }
+            }] : []);
+        }
+        function dbgRenderPause() {
+            if (!monacoReady || !monacoEditor || !monacoEditor.createDecorationsCollection) return;
+            if (!dbg.pauseCol) dbg.pauseCol = monacoEditor.createDecorationsCollection();
+            if (!dbg.pauseLine) { dbg.pauseCol.set([]); return; }
+            dbg.pauseCol.set([
+                { range: new monaco.Range(dbg.pauseLine, 1, dbg.pauseLine, 1), options: { isWholeLine: true, className: 'fv-dbg-line-hl' } },
+                { range: new monaco.Range(dbg.pauseLine, 1, dbg.pauseLine, 1), options: { glyphMarginClassName: 'fv-dbg-line-arrow' } }
+            ]);
+            try { monacoEditor.revealLineInCenter(dbg.pauseLine); } catch (e) {}
+        }
+        function dbgClearPause() {
+            dbg.pauseLine = 0;
+            if (dbg.pauseCol) dbg.pauseCol.set([]);
+        }
+        // 断点增删（行号槽点击）：先本地画圈，主进程归口持久化+运行中同步适配器（verified 行号回推再校准）
+        function dbgToggleBp(line) {
+            if (!dbgSupported()) return;
+            var i = dbg.bps.indexOf(line);
+            if (i >= 0) dbg.bps.splice(i, 1); else dbg.bps.push(line);
+            dbgRenderBps(); dbgRenderBpsPane();
+            dbgBridge().debugSetBreakpoints(data.tab_id, data.path, dbg.bps).then(function (r) {
+                if (r && r.ok && r.lines) {
+                    dbg.bps = r.lines.slice().sort(function (a, b) { return a - b; });
+                    dbgRenderBps(); dbgRenderBpsPane();
+                } else if (r && !r.ok) {
+                    setStatus('断点设置失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                }
+            }).catch(function (e) { setStatus('断点设置失败：' + (e && e.message || e), 'dirty'); });
+        }
+        // ---- 调试动作 ----
+        function dbgStart() {
+            var api = dbgBridge();
+            if (!api || !data || dbg.status === 'starting') return;
+            dbg.status = 'starting'; dbgUpdateBar();
+            dbgOpenPanel(true); dbgHideBanner();
+            dbgAppendOut('dbg', '正在启动调试会话…\n');
+            api.debugStart(data.tab_id, data.path).then(function (r) {
+                if (r && r.ok) {
+                    dbg.status = 'running'; dbgUpdateBar();
+                    if (r.breakpoints) { dbg.bps = r.breakpoints.slice().sort(function (a, b) { return a - b; }); dbgRenderBps(); dbgRenderBpsPane(); }
+                } else if (r && r.code === 'no_python_env') {
+                    dbg.status = ''; dbgUpdateBar();
+                    dbgShowBanner('未检测到可用的 Python 3 + debugpy（' + (r.detail || '') + '）。点击"一键安装"自动创建调试环境（首次约 1-3 分钟）。');
+                } else if (r && r.code === 'no_gcc_env') {
+                    dbg.status = ''; dbgUpdateBar();
+                    dbgShowBanner('未检测到 gcc/gdb（' + (r.detail || '') + '）。点击"一键安装"自动准备内置编译工具链（首次约需数分钟）。');
+                } else {
+                    dbg.status = ''; dbgUpdateBar();
+                    dbgAppendOut('stderr', '调试启动失败：' + ((r && r.error) || '未知错误') + '\n');
+                }
+            }).catch(function (e) {
+                dbg.status = ''; dbgUpdateBar();
+                dbgAppendOut('stderr', '调试启动失败：' + (e && e.message || e) + '\n');
+            });
+        }
+        function dbgStep(op) { // continue/pause/next/stepIn/stepOut（状态变化由事件回推，这里只发令）
+            var api = dbgBridge();
+            if (!api || !dbg.status || dbg.status === 'ended' || dbg.status === 'starting') return;
+            api.debugCmd(op).then(function (r) {
+                if (!r || !r.ok) dbgAppendOut('stderr', (op === 'pause' ? '暂停' : '单步') + '失败：' + ((r && r.error) || '') + '\n');
+            }).catch(function (e) { dbgAppendOut('stderr', '操作失败：' + (e && e.message || e) + '\n'); });
+        }
+        function dbgRestart() {
+            var api = dbgBridge();
+            if (!api || !dbg.status || dbg.status === 'starting') return;
+            dbg.status = 'starting'; dbgClearPause(); dbgUpdateBar();
+            api.debugCmd('restart').then(function (r) {
+                if (!r || !r.ok) dbgAppendOut('stderr', '重启失败：' + ((r && r.error) || '') + '\n');
+            });
+        }
+        function dbgStop() {
+            var api = dbgBridge();
+            if (!api) return;
+            api.debugStop().catch(function (e) { dbgAppendOut('stderr', '停止失败：' + (e && e.message || e) + '\n'); });
+        }
+        function dbgBootstrap() { // 一键安装调试环境（Python：uv 托管 Py + debugpy；C/C++：内置 gcc 工具链）
+            var api = dbgBridge();
+            if (!api || dbg.bootstrapping) return;
+            dbg.bootstrapping = true;
+            dbgEl.bannerBtn.disabled = true; dbgEl.bannerBtn.textContent = '安装中…';
+            dbgOpenPanel(false); dbgSwitchPane('fv-dbg-out');
+            var lang = dbgLangOfExt(data && data.ext);
+            var boot = (lang === 'cpp' && api.debugBootstrapCpp) ? api.debugBootstrapCpp(data.tab_id) : api.debugBootstrapPython(data.tab_id);
+            dbgAppendOut('dbg', '开始安装调试环境（进度见下方输出）…\n');
+            boot.then(function (r) {
+                dbg.bootstrapping = false;
+                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = '一键安装';
+                if (r && r.ok) {
+                    dbgHideBanner();
+                    dbgAppendOut('dbg', '调试环境已就绪，点击"调试"重新启动。\n');
+                    dbgUpdateBar();
+                } else {
+                    dbgAppendOut('stderr', '调试环境安装失败：' + ((r && r.error) || '未知错误') + '\n');
+                }
+            }).catch(function (e) {
+                dbg.bootstrapping = false;
+                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = '一键安装';
+                dbgAppendOut('stderr', '调试环境安装失败：' + (e && e.message || e) + '\n');
+            });
+        }
+        // ---- 控制台输出 ----
+        function dbgAppendOut(cat, text) {
+            if (!text) return;
+            var span = document.createElement('span');
+            if (cat === 'stderr') span.className = 'err';
+            else if (cat === 'dbg') span.className = 'dbg';
+            span.textContent = text;
+            dbgEl.out.appendChild(span);
+            while (dbgEl.out.childNodes.length > 1000) dbgEl.out.removeChild(dbgEl.out.firstChild); // 上限裁剪防长会话内存膨胀
+            dbgEl.out.scrollTop = dbgEl.out.scrollHeight;
+        }
+        // ---- 暂停刷新：调用堆栈 + 暂停行高亮 + 变量树 ----
+        function dbgFrameInThisFile(absFile) {
+            if (!data || !absFile) return false;
+            var rel = String(data.path || '').replace(/\//g, '\\').toLowerCase();
+            var f = String(absFile).replace(/\//g, '\\').toLowerCase();
+            return rel && f.slice(-rel.length) === rel;
+        }
+        function dbgPauseRefresh() {
+            var api = dbgBridge();
+            dbgUpdateBar();
+            dbgOpenPanel(true);
+            if (!api) return;
+            api.debugCmd('stackTrace').then(function (r) {
+                if (!r || !r.ok) { dbg.frames = []; dbgRenderStackPane(); return; }
+                dbg.frames = r.frames || [];
+                dbg.frameId = dbg.frames.length ? dbg.frames[0].id : 0;
+                var f0 = dbg.frames[0];
+                dbg.pauseLine = (f0 && dbgFrameInThisFile(f0.file)) ? f0.line : 0; // 顶帧不在本文件（如库内部）不高亮
+                dbgRenderPause(); dbgRenderStackPane(); dbgRebuildVars(); dbgRenderBpsPane();
+            }).catch(function (e) { dbgAppendOut('stderr', '获取堆栈失败：' + (e && e.message || e) + '\n'); });
+        }
+        function dbgRenderStackPane() {
+            dbgEl.stack.innerHTML = '';
+            if (!dbg.frames.length) {
+                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = '无调用堆栈';
+                dbgEl.stack.appendChild(h); return;
+            }
+            dbg.frames.forEach(function (f, idx) {
+                var row = document.createElement('div');
+                row.className = 'fv-dbg-row' + (idx === 0 ? ' active' : '');
+                var fn = document.createElement('span'); fn.className = 'fn'; fn.textContent = f.name || '(匿名)';
+                fn.title = f.name || '';
+                var loc = document.createElement('span'); loc.className = 'loc';
+                loc.textContent = (f.name2 || f.file.split(/[\\/]/).pop() || '') + ':' + f.line;
+                row.appendChild(fn); row.appendChild(loc);
+                row.addEventListener('click', function () { // 切帧：变量面板跟随所选帧
+                    dbg.frameId = f.id;
+                    var rows = dbgEl.stack.querySelectorAll('.fv-dbg-row');
+                    for (var i = 0; i < rows.length; i++) rows[i].classList.remove('active');
+                    row.classList.add('active');
+                    dbgRebuildVars();
+                });
+                dbgEl.stack.appendChild(row);
+            });
+        }
+        // ---- 变量树（DAP variablesReference 懒加载子节点，TRAE CN 同款交互） ----
+        function dbgSetVarsHint(text) {
+            dbgEl.vars.innerHTML = '';
+            var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = text;
+            dbgEl.vars.appendChild(h);
+        }
+        function dbgRebuildVars() {
+            var api = dbgBridge();
+            if (!api) return;
+            if (dbg.status !== 'paused') { dbgSetVarsHint(dbg.status === 'running' ? '运行中…' : dbg.status === 'starting' ? '启动中…' : '未暂停（变量在程序暂停时展示）'); return; }
+            dbgEl.vars.innerHTML = '';
+            api.debugCmd('scopes', dbg.frameId).then(function (r) {
+                if (!r || !r.ok) { dbgSetVarsHint('作用域获取失败'); return; }
+                var scopes = r.scopes || [];
+                if (!scopes.length) { dbgSetVarsHint('当前帧无作用域'); return; }
+                scopes.forEach(function (sc) {
+                    var autoOpen = sc.name !== 'Globals'; // 局部/参数默认展开，全局折叠
+                    dbgEl.vars.appendChild(dbgVarNode({ name: sc.name, value: '', type: '', ref: sc.variablesReference }, autoOpen, 0));
+                });
+            }).catch(function (e) { dbgSetVarsHint('作用域获取失败：' + (e && e.message || e)); });
+        }
+        function dbgVarNode(v, expand, depth) {
+            var wrap = document.createElement('div');
+            var row = document.createElement('div'); row.className = 'fv-dbg-node';
+            var tw = document.createElement('span');
+            tw.className = 'fv-dbg-twist' + (v.ref ? '' : ' leaf');
+            tw.textContent = '▸';
+            var nm = document.createElement('span'); nm.className = 'fv-dbg-name'; nm.textContent = v.name;
+            row.appendChild(tw); row.appendChild(nm);
+            if (v.value) {
+                var val = document.createElement('span'); val.className = 'fv-dbg-val';
+                var s = String(v.value);
+                val.textContent = '= ' + (s.length > 300 ? s.slice(0, 300) + '…' : s);
+                val.title = s;
+                row.appendChild(val);
+            }
+            if (v.type) {
+                var tp = document.createElement('span'); tp.className = 'fv-dbg-type'; tp.textContent = v.type;
+                row.appendChild(tp);
+            }
+            wrap.appendChild(row);
+            if (!v.ref) return wrap;
+            var kids = document.createElement('div'); kids.className = 'fv-dbg-kids'; kids.style.display = 'none';
+            if (depth < 6) kids.style.paddingLeft = '14px';
+            wrap.appendChild(kids);
+            var loaded = false, open = false;
+            function setOpen(o) {
+                open = o;
+                tw.textContent = o ? '▾' : '▸';
+                kids.style.display = o ? '' : 'none';
+                if (o && !loaded) {
+                    loaded = true;
+                    dbgBridge().debugCmd('variables', v.ref).then(function (r) {
+                        kids.innerHTML = '';
+                        var list = (r && r.variables) || [];
+                        if (!list.length) {
+                            var e2 = document.createElement('div'); e2.className = 'fv-dbg-node';
+                            e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">（空）</span>';
+                            kids.appendChild(e2); return;
+                        }
+                        list.forEach(function (cv) { kids.appendChild(dbgVarNode(cv, false, depth + 1)); });
+                    }).catch(function (e) {
+                        kids.innerHTML = '';
+                        var e2 = document.createElement('div'); e2.className = 'fv-dbg-node';
+                        e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">获取失败</span>';
+                        kids.appendChild(e2);
+                    });
+                }
+            }
+            tw.addEventListener('click', function () { setOpen(!open); });
+            if (expand) setOpen(true);
+            return wrap;
+        }
+        // ---- 断点列表 pane ----
+        function dbgRenderBpsPane() {
+            dbgEl.bps.innerHTML = '';
+            if (!dbg.bps.length) {
+                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = '无断点（点击编辑器行号左侧空白处添加）';
+                dbgEl.bps.appendChild(h); return;
+            }
+            dbg.bps.forEach(function (l) {
+                var row = document.createElement('div'); row.className = 'fv-dbg-row';
+                var dot = document.createElement('span');
+                dot.style.cssText = 'flex:none;width:9px;height:9px;border-radius:50%;background:#e5534b;';
+                var fn = document.createElement('span'); fn.className = 'fn';
+                fn.textContent = (data ? (data.name || data.path) : '') + ' : ' + l;
+                var loc = document.createElement('span'); loc.className = 'loc'; loc.textContent = '第 ' + l + ' 行';
+                var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = '删除断点';
+                rm.addEventListener('click', function (e) { e.stopPropagation(); dbgToggleBp(l); });
+                row.appendChild(dot); row.appendChild(fn); row.appendChild(loc); row.appendChild(rm);
+                row.addEventListener('click', function () {
+                    if (monacoReady && monacoBox.style.display !== 'none') {
+                        try { monacoEditor.revealLineInCenter(l); monacoEditor.setPosition({ lineNumber: l, column: 1 }); monacoEditor.focus(); } catch (e2) {}
+                    }
+                });
+                dbgEl.bps.appendChild(row);
+            });
+        }
+        // ---- 悬停变量求值（暂停时；LSP/静态悬停之上第一优先层） ----
+        function dbgExprAt(model, position) { // 光标词 + 向左扩展点号链（a.b.c → 最多 4 段）
+            var word = model.getWordAtPosition(position);
+            if (!word) return '';
+            var line = model.getLineContent(position.lineNumber) || '';
+            var expr = word.word;
+            var i = word.startColumn - 2; // 词首左侧字符（0 基）
+            for (var seg = 0; seg < 3; seg++) {
+                while (i >= 0 && /[\w$]/.test(line.charAt(i))) { expr = line.charAt(i) + expr; i--; }
+                if (i >= 0 && line.charAt(i) === '.') { expr = '.' + expr; i--; } else break;
+            }
+            return expr;
+        }
+        function dbgHoverEval(model, position) {
+            if (dbg.status !== 'paused' || !dbg.frameId) return Promise.resolve(null);
+            var expr = dbgExprAt(model, position);
+            if (!expr) return Promise.resolve(null);
+            var api = dbgBridge();
+            if (!api) return Promise.resolve(null);
+            return Promise.race([
+                api.debugCmd('evaluate', { expr: expr, frameId: dbg.frameId, context: 'hover' }).catch(function () { return null; }),
+                new Promise(function (res) { setTimeout(function () { res(null); }, 800); })
+            ]).then(function (r) {
+                if (!r || !r.ok) return null;
+                var val = String(r.result != null ? r.result : '');
+                var md = '**' + expr + '**';
+                if (r.type) md += '  \n`' + r.type + '`';
+                md += '  \n```' + dbgLangOfExt(data && data.ext) + '\n' + (val.length > 800 ? val.slice(0, 800) + '…' : val) + '\n```';
+                var w = model.getWordAtPosition(position);
+                var range = w ? new monaco.Range(position.lineNumber, w.startColumn, position.lineNumber, w.endColumn) : undefined;
+                return { range: range, contents: [{ value: md }] };
+            });
+        }
+        // ---- 载入/事件入口 ----
+        function dbgOnPayload() { // __wsFileLoad 注入新文件后同步：重置状态 → 拉持久化断点 + 会话状态恢复
+            dbg.status = ''; dbg.bps = []; dbg.pauseLine = 0; dbg.frames = []; dbg.frameId = 0; dbg.threadId = 0;
+            dbgClearPause(); dbgRenderBps(); dbgRenderBpsPane(); dbgHideBanner();
+            dbgUpdateBar();
+            if (!dbgSupported()) { dbgClosePanel(); return; }
+            var api = dbgBridge();
+            // 独立查看窗口（viewer-preload 桥）事件订阅：主进程广播 debug:event 到所有窗口，
+            // 本页按自身 tab_id 过滤（iframe 场景由宿主 chat.js 过滤转发，不经此处）
+            if (typeof window.imviewer !== 'undefined' && window.imviewer && window.imviewer.onDebugEvent && !window.__dbgEvBound) {
+                window.__dbgEvBound = true;
+                window.imviewer.onDebugEvent(function (d) {
+                    if (!d) return;
+                    if (data && data.tab_id && d.tab_id && String(d.tab_id) !== String(data.tab_id)) return;
+                    try { window.__wsDebugEvent(d); } catch (e) { /* 渲染异常不影响会话 */ }
+                });
+            }
+            api.debugBreakpointsGet(data.tab_id, data.path).then(function (r) {
+                if (r && r.ok && r.lines && r.lines.length) {
+                    dbg.bps = r.lines.slice().sort(function (a, b) { return a - b; });
+                    dbgRenderBps(); dbgRenderBpsPane();
+                }
+            }).catch(function () {});
+            api.debugState(data.tab_id).then(function (r) {
+                if (r && r.active) { // 会话存活（payload 重推/重登刷新场景）：恢复控制条与暂停态
+                    dbg.status = r.status || 'running';
+                    if (r.breakpoints && r.breakpoints.length) {
+                        dbg.bps = r.breakpoints.slice().sort(function (a, b) { return a - b; });
+                        dbgRenderBps(); dbgRenderBpsPane();
+                    }
+                    dbgUpdateBar();
+                    if (dbg.status === 'paused') dbgPauseRefresh();
+                    else dbgOpenPanel(false);
+                }
+            }).catch(function () {});
+        }
+        window.__wsDebugEvent = function (d) { // 主进程 debug:event 入口（宿主 chat.js 按 tab_id 转发）
+            if (!d) return;
+            switch (d.type) {
+                case 'status':
+                    dbg.status = d.status || '';
+                    dbgUpdateBar();
+                    break;
+                case 'stopped':
+                    dbg.status = 'paused';
+                    dbg.threadId = d.threadId || 0;
+                    dbgAppendOut('dbg', '已暂停' + (d.reason === 'breakpoint' ? '于断点' : d.reason === 'step' ? '（单步）' : d.reason === 'pause' ? '（手动暂停）' : '') + '\n');
+                    dbgPauseRefresh();
+                    break;
+                case 'continued':
+                    dbg.status = 'running';
+                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint('运行中…');
+                    break;
+                case 'output':
+                    dbgAppendOut(d.category || 'stdout', d.text || '');
+                    break;
+                case 'terminated':
+                    dbg.status = 'ended';
+                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint('调试已结束');
+                    dbgAppendOut('dbg', '调试会话已结束\n');
+                    break;
+                case 'breakpoints':
+                    if (d.lines) {
+                        dbg.bps = d.lines.slice().sort(function (a, b) { return a - b; });
+                        dbgRenderBps(); dbgRenderBpsPane();
+                    }
+                    break;
+            }
+        };
+        (function dbgInit() { // 一次性事件绑定
+            dbgEl.start.addEventListener('click', dbgStart);
+            dbgEl.cont.addEventListener('click', function () { dbgStep('continue'); });
+            dbgEl.pause.addEventListener('click', function () { dbgStep('pause'); });
+            dbgEl.next.addEventListener('click', function () { dbgStep('next'); });
+            dbgEl.stepin.addEventListener('click', function () { dbgStep('stepIn'); });
+            dbgEl.stepout.addEventListener('click', function () { dbgStep('stepOut'); });
+            dbgEl.restart.addEventListener('click', dbgRestart);
+            dbgEl.stop.addEventListener('click', dbgStop);
+            dbgEl.close.addEventListener('click', dbgClosePanel);
+            dbgEl.clear.addEventListener('click', function () { dbgEl.out.innerHTML = ''; });
+            dbgEl.bannerBtn.addEventListener('click', dbgBootstrap);
+            var tabs = dbgEl.panel.querySelectorAll('.fv-dbg-tab');
+            for (var i = 0; i < tabs.length; i++) {
+                (function (t) {
+                    t.addEventListener('click', function () { dbgSwitchPane(t.getAttribute('data-pane')); });
+                })(tabs[i]);
+            }
+        })();
 
         // ===== 主渲染入口 =====
         function render() {
@@ -2064,14 +2936,18 @@
                     btnEdit.classList.remove('hidden');
                 }
             }
-            if (editing) { // 编辑态：dirty 优先，任务修改次之
-                setStatus(dirtyNow ? '已修改（未保存）' : (p.task_modified ? '任务已修改，可保留或撤销' : ''), (dirtyNow || p.task_modified) ? 'dirty' : '');
+            if (editing) { // 编辑态：dirty 优先，任务修改次之（有 AI 说明时缩短为"AI 已修改"，悬停顶栏看全文）
+                statusEl.title = (!dirtyNow && p.task_modified && p.explanation) ? p.explanation : '';
+                setStatus(dirtyNow ? '已修改（未保存）' : (p.task_modified ? (p.explanation ? 'AI 已修改' : '任务已修改，可保留或撤销') : ''), (dirtyNow || p.task_modified) ? 'dirty' : '');
             } else if (p.editable) {
-                setStatus(p.task_modified ? '任务已修改，可保留或撤销' : '', p.task_modified ? 'dirty' : '');
+                statusEl.title = (p.task_modified && p.explanation) ? p.explanation : '';
+                setStatus(p.task_modified ? (p.explanation ? 'AI 已修改' : '任务已修改，可保留或撤销') : '', p.task_modified ? 'dirty' : '');
             } else {
+                statusEl.title = '';
                 setStatus('只读', '');
             }
             updateTaskButtons(); // 预览/编辑态统一收口（预览态任务文件也可保留/撤销）
+            dbgUpdateBar(); // 阶段一百五十九：调试控制条显隐随 payload（语言/桥/会话状态归口）
         }
 
         // ===== 编辑态 =====
@@ -2142,34 +3018,45 @@
                 setStatus('保留失败：' + (e && e.message || e), 'dirty');
             });
         });
-        var revertArmed = false; // 撤销二次确认（会丢弃任务改动与未保存编辑，防误触）
-        btnRevert.addEventListener('click', function () {
+        // ===== 阶段一百五十八：撤销任务变更公共流程（顶栏按钮与悬停浮层共用 armed 二次确认）=====
+        var revertArmed = false, revertArmTimer = null;
+        function fvRevertReset() { // 复位确认态（顶栏与浮层按钮同步恢复文案）
+            revertArmed = false;
+            if (revertArmTimer) { clearTimeout(revertArmTimer); revertArmTimer = null; }
+            btnRevert.textContent = '撤销变更';
+            btnRevert.classList.remove('danger');
+            aiPopRevert.textContent = '回滚此文件';
+            aiPopRevert.classList.remove('danger');
+        }
+        // fromPop=浮层按钮元素（顶栏撤销传 null）；二次确认 3 秒未确认自动复位防误触
+        function fvTaskRevertFlow(fromPop) {
             if (!data || !data.task_modified || !hasViewer()) return;
+            if (fromPop && dirtyNow) { setStatus('请先保存或撤销未保存编辑', 'dirty'); return; } // 浮层入口：dirty 由保存接管
             if (!revertArmed) {
                 revertArmed = true;
                 btnRevert.textContent = '确认撤销？';
                 btnRevert.classList.add('danger');
-                setTimeout(function () {
-                    revertArmed = false;
-                    btnRevert.textContent = '撤销变更';
-                    btnRevert.classList.remove('danger');
-                }, 3000);
+                if (fromPop) { fromPop.textContent = '确认回滚？'; fromPop.classList.add('danger'); }
+                revertArmTimer = setTimeout(fvRevertReset, 3000);
                 return;
             }
-            revertArmed = false;
-            btnRevert.textContent = '撤销变更';
-            btnRevert.classList.remove('danger');
+            fvRevertReset();
             btnRevert.disabled = true;
+            if (fromPop) fromPop.disabled = true;
             draft = ''; // 撤销即丢弃未保存编辑与任务改动，主进程重读盘重注入后回到任务前内容
             viewerBridge().taskRevert(data.tab_id).then(function (r) {
                 btnRevert.disabled = false;
+                if (fromPop) fromPop.disabled = false;
+                fvAiPopHide(); // 回滚发起即收浮层（payload 重推后全量刷新）
                 if (r && r.ok) { /* 主进程重读盘并重注入 payload → __wsFileLoad 全量刷新 */ }
                 else setStatus('撤销失败：' + ((r && r.error) || '未知错误'), 'dirty');
             }).catch(function (e) {
                 btnRevert.disabled = false;
+                if (fromPop) fromPop.disabled = false;
                 setStatus('撤销失败：' + (e && e.message || e), 'dirty');
             });
-        });
+        }
+        btnRevert.addEventListener('click', function () { fvTaskRevertFlow(null); });
         function doSave() {
             if (!data || !hasViewer()) return;
             var content = (monacoReady && monacoBox.style.display === 'block') ? monacoEditor.getValue() : (draft || (data && data.content) || '');
@@ -2208,6 +3095,8 @@
             fvLoadSeq++;           // 阶段一百三十一：新注入序号递增（过期异步回执以此判定丢弃）
             fvAsyncRender = false; // 每次注入重置异步通道标记（render 内走异步会置 true）
             render();
+            // 阶段一百五十九：调试状态同步（断点持久化恢复 + 会话存活恢复；仅 PC 桥存在时生效）
+            try { dbgOnPayload(); } catch (e) { /* 桥异常不影响渲染 */ }
             // 阶段一百三十一修复：同步渲染 render 返回即回执（DOM 已应用=页面打开完成，符合"只检测页面是否完整打开"）。
             // 原双 rAF 等首绘依赖窗口实际绘制——窗口被遮挡/最小化时 rAF 冻结回执丢失，条卡到看门狗；立即上报彻底解耦绘制
             if (!fvAsyncRender) fvLoaded(fvLoadSeq); // 异步通道（Monaco 懒加载/docx/pptx）由各异步完成点自行上报

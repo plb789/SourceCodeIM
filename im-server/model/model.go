@@ -353,6 +353,7 @@ type AgentChangeRecord struct {
 	Env        string    `gorm:"column:env;type:varchar(8);not null;default:server" json:"env"`   // 阶段八十：归属环境 server=服务端工作区 / pc=用户本地磁盘（撤销需下发执行器）
 	LocalPath  string    `gorm:"column:local_path;type:varchar(512)" json:"local_path"`           // 阶段八十：pc 环境文件本地绝对路径（撤销下发执行器还原用）
 	Status     string    `gorm:"column:status;type:varchar(12);not null;default:pending" json:"status"`
+	Explanation string   `gorm:"column:explanation;type:varchar(1024)" json:"explanation"` // AI 修改说明（工具 explanation 参数，同路径重复触碰取最近一次）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }

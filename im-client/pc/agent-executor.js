@@ -346,8 +346,9 @@ function pcDiffStat(backup, curText) {
     return { adds: lineDiffStat(before, curText), dels: lineDiffStat(curText, before) };
 }
 
-// 变更上报组装：kind=首触行语义（任务前已存在→opKind，不存在→create）；deleted=操作后文件已不在
-function pcReport(taskId, rel, full, backup, opKind, curText, deleted) {
+// 变更上报组装：kind=首触行语义（任务前已存在→opKind，不存在→create）；deleted=操作后文件已不在；
+// explanation=AI 修改说明（工具参数透传，同路径重复上报由服务端 last-wins 归口）
+function pcReport(taskId, rel, full, backup, opKind, curText, deleted, explanation) {
     if (!taskId) return null;
     const stat = pcDiffStat(backup, curText);
     return {
@@ -357,7 +358,8 @@ function pcReport(taskId, rel, full, backup, opKind, curText, deleted) {
         adds: stat.adds,
         dels: stat.dels,
         backup: backup,
-        deleted: !!deleted
+        deleted: !!deleted,
+        explanation: String(explanation || '').slice(0, 1024)
     };
 }
 
@@ -436,7 +438,7 @@ function writeFileSync(taskId, username, params) {
     if (taskId) {
         try { curText = decodeOutput(fs.readFileSync(full)); } catch (e) { curText = content; }
     }
-    const change = pcReport(taskId, rel, full, bak, 'modify', curText, false);
+    const change = pcReport(taskId, rel, full, bak, 'modify', curText, false, params && params.explanation);
     const verb = mode === 'append' ? '追加' : '写入';
     const res = { ok: true, output: '已' + verb + ' ' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）' };
     if (change) res.changes = [change];
@@ -484,7 +486,7 @@ function editFileSync(taskId, username, params) {
     const del = lineDiffStat(newText, text);
     const res = { ok: true, output: '已编辑 ' + p + '（+' + add + ' -' + del + '，替换 ' + count + ' 处）' };
     // 阶段八十：变更审查上报——统计口径与摘要行不同（摘要=本次替换 diff；上报=任务前原始内容整体 diff）
-    const change = pcReport(taskId, rel, full, bak, 'modify', newText, false);
+    const change = pcReport(taskId, rel, full, bak, 'modify', newText, false, params && params.explanation);
     if (change) res.changes = [change];
     return res;
 }
@@ -539,7 +541,7 @@ function deleteFileSync(taskId, username, params) {
         }
         if (taskId) {
             snap.forEach(function (f, i) {
-                if (backs[i]) changes.push(pcReport(taskId, rel + '/' + f.rel, f.full, backs[i], 'delete', '', true));
+                if (backs[i]) changes.push(pcReport(taskId, rel + '/' + f.rel, f.full, backs[i], 'delete', '', true, params && params.explanation));
             });
         }
         const res = { ok: true, output: '已删除目录 ' + p + '/（递归，含 ' + n + ' 个条目）' };
@@ -553,7 +555,7 @@ function deleteFileSync(taskId, username, params) {
         return { ok: false, output: '错误：删除失败 ' + (e.message || e) };
     }
     const res = { ok: true, output: '已删除文件 ' + p + '（' + stat.size + ' 字节）' };
-    const change = pcReport(taskId, rel, full, bak, 'delete', '', true);
+    const change = pcReport(taskId, rel, full, bak, 'delete', '', true, params && params.explanation);
     if (change) res.changes = [change];
     return res;
 }
@@ -1524,8 +1526,15 @@ function gitOp(username, content) {
                 maxBuffer: 4 * 1024 * 1024, windowsHide: true,
                 env: gitEnv.env
             }, function (err, stdout, stderr) {
+                // stderr 归口（同主回调修复）：调用方（log 解析/discard 重试 output）均为机器解析，
+                // 成功时 stderr 只可能是提示/噪音（如 CRLF warning 混入 log 逐行解析），只取 stdout；
+                // 失败时拼接供 gitErrorHint 归口错误提示
                 let buf;
-                try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
+                try {
+                    buf = err
+                        ? Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')])
+                        : Buffer.from(stdout || '');
+                }
                 catch (e) { buf = Buffer.alloc(0); }
                 res2({ err: err, text: decodeOutput(buf) });
             });
@@ -1600,8 +1609,17 @@ function gitOp(username, content) {
             maxBuffer: 4 * 1024 * 1024, windowsHide: true,
             env: gitEnv.env
         }, function (err, stdout, stderr) {
+            // stderr 归口修复（用户实测：diff 正文混入 "warning: ... LF will be replaced by CRLF" 行，
+            // 破坏对比视图逐行对齐）：机器解析型 sub（diff/show/status/branches/untracked）成功时
+            // stderr 只可能是 warning 类噪音，只取 stdout 保证输出纯净；操作型 sub（checkout/commit
+            // 等用户提示走 stderr）与失败路径（fatal/hint 归口 gitErrorHint）维持 stdout+stderr 拼接
+            const pureStdout = ['diff', 'diffopen', 'diffhead', 'diffcached', 'diffrev', 'show', 'status', 'branches', 'untracked'].indexOf(r.sub) >= 0;
             let buf;
-            try { buf = Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]); }
+            try {
+                buf = (!err && pureStdout)
+                    ? Buffer.from(stdout || '')
+                    : Buffer.concat([Buffer.from(stdout || ''), Buffer.from(stderr || '')]);
+            }
             catch (e) { buf = Buffer.alloc(0); }
             const outTxt = decodeOutput(buf);
             if (err && err.code === 'ENOENT') {
@@ -1644,6 +1662,25 @@ function gitOp(username, content) {
                 const st = gitStatusParse(outTxt);
                 st.sub = 'status'; st.repo = true;
                 resolve({ ok: true, content: JSON.stringify(st) });
+                return;
+            }
+            if (r.sub === 'diffopen' && !String(outTxt || '').trim()) {
+                // 工作树无差异（放弃修改/提交后重开对比）：TRAE CN 同款显示两侧全文件一致——
+                // git diff 空输出时读工作树文件全文，构造纯上下文行伪 unified diff 复用现有
+                // diff 渲染链路（Monaco 两侧同内容无红绿）；读取失败回退空串走静态提示。
+                // r.path 为项目内相对路径（前端已剥 proj 前缀），经 safePath 防穿越后读盘
+                let pseudo = '';
+                try {
+                    const fp = safePath(username, (projName ? projName + '/' : '') + String(r.path));
+                    if (!fp.err && fs.existsSync(fp.full) && fs.statSync(fp.full).isFile()) {
+                        const lines = fs.readFileSync(fp.full, 'utf8').split('\n');
+                        const rel = String(r.path);
+                        pseudo = 'diff --git a/' + rel + ' b/' + rel + '\n--- a/' + rel + '\n+++ b/' + rel
+                            + '\n@@ -1,' + lines.length + ' +1,' + lines.length + ' @@\n'
+                            + lines.map(function (l) { return ' ' + l; }).join('\n');
+                    }
+                } catch (e) { pseudo = ''; }
+                resolve({ ok: true, content: JSON.stringify({ sub: 'diff', diff: pseudo }) });
                 return;
             }
             if (r.sub === 'diff' || r.sub === 'diffopen' || r.sub === 'diffhead' || r.sub === 'diffcached' || r.sub === 'diffrev') {
@@ -2218,5 +2255,6 @@ module.exports = {
     getTaskBackup: getTaskBackup, // 阶段九十七：任务备份查询（main 注入 browser-manager 供 payload 探测）
     keepTaskChange: keepTaskChange, // 阶段九十七：保留任务变更（接受当前内容并清备份）
     revertTaskChange: revertTaskChange, // 阶段九十七：撤销任务变更（还原任务前字节）
-    userRoot: userRoot // 阶段一百一十六：工作区根导出（项目级 MCP 配置归口 <userRoot>/.im/agent_mcp.json）
+    userRoot: userRoot, // 阶段一百一十六：工作区根导出（项目级 MCP 配置归口 <userRoot>/.im/agent_mcp.json）
+    buildAgentEnv: buildAgentEnv // 阶段一百五十九：Agent PATH 环境导出（debug-manager 调试子进程同口径工具链解析）
 };
