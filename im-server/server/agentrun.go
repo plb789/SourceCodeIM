@@ -3229,7 +3229,9 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				logger.Error("Agent 第 %d 轮积分扣除失败（任务 %s，用户 %s，%d tokens）：%v", round, t.ID, t.Username, u.TotalTokens, derr)
 			} else {
 				t.mu.Lock()
-				t.pointsCost += cost // 阶段一百三十八：累计本任务实际扣费（完结随帧下发，前端按此展示"扣 N 积分"）
+				// 阶段一百六十二：累加后归一 3 位小数——float64 多轮直接累加产生二进制误差长尾
+				// （如 10 轮 0.011 累计得 0.10999999999999999），逐轮归一保证完结下发值干净
+				t.pointsCost = aiPointsRound3(t.pointsCost + cost)
 				t.mu.Unlock()
 				stepPayload["points_balance"] = balance
 				stepPayload["points_cost"] = cost // 阶段一百三十八：该轮实际扣费（前端 percall 模式轮次行展示"扣 N 积分"）
@@ -3850,8 +3852,8 @@ func agentTaskBrief(rows []model.AgentTaskRecord) []map[string]interface{} {
 			"error":        truncateRunes(r.Error, 200),
 			"status":       r.Status,
 			"steps":        r.Steps,
-			"elapsed_ms":   r.ElapsedMs,  // 阶段一百三十八：耗时随任务列表下发（重放卡 meta 展示）
-			"points_cost":  r.PointsCost, // 阶段一百三十八：实际扣费积分随任务列表下发（历史卡/重放卡 meta 展示）
+			"elapsed_ms":   r.ElapsedMs,                  // 阶段一百三十八：耗时随任务列表下发（重放卡 meta 展示）
+			"points_cost":  aiPointsRound3(r.PointsCost), // 阶段一百三十八：实际扣费积分随任务列表下发；一百六十二：归一 3 位（存量记录可能带历史 double 误差长尾）
 			"reply_msg_id": r.ReplyMsgID,
 			"session_id":   r.SessionID,
 			"create_time":  r.CreateTime,

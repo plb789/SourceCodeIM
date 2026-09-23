@@ -363,6 +363,26 @@ function pcReport(taskId, rel, full, backup, opKind, curText, deleted, explanati
     };
 }
 
+// ===== 阶段一百六十二：AI 写盘即时感知回调（TRAE CN 同款：编辑完成浏览区已打开标签实时更新+跳转改动行） =====
+// 写盘工具（write_file/edit_file）落盘成功后回调 main.js 注入的钩子 → browser-manager 按路径刷新
+// 已打开标签（静默重绘 + 活动标签跳转到改动行）。防循环依赖同 taskBackupApi 注入模式
+let fileChangedCb = null;
+function setFileChangedCb(fn) { fileChangedCb = (typeof fn === 'function') ? fn : null; }
+function notifyFileChanged(full, info) {
+    if (!fileChangedCb) return;
+    try { fileChangedCb(full, info || {}); } catch (e) { /* 回调异常不影响工具结果 */ }
+}
+// 首差异行（1-based；完全相同返回 0）：旧文 vs 新文从头逐行比，前缀相同但长度不同（纯追加/删除）取分叉点
+function firstDiffLine(a, b) {
+    const al = String(a || '').split('\n');
+    const bl = String(b || '').split('\n');
+    const n = Math.min(al.length, bl.length);
+    for (let i = 0; i < n; i++) {
+        if (al[i] !== bl[i]) return i + 1;
+    }
+    return al.length !== bl.length ? n + 1 : 0;
+}
+
 // 撤销本地变更（服务端审查操作下行）：create→删除任务中新建的文件；modify/delete→还原任务前字节
 function revertChangesSync(username, params) {
     const list = (params && params.changes) || [];
@@ -442,6 +462,15 @@ function writeFileSync(taskId, username, params) {
     const verb = mode === 'append' ? '追加' : '写入';
     const res = { ok: true, output: '已' + verb + ' ' + p + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）' };
     if (change) res.changes = [change];
+    // 阶段一百六十二：浏览区已打开该文件 → 即时刷新+跳转改动行（append 跳追加接续行；overwrite 跳首差异行）
+    if (bak) {
+        let before = '';
+        try { before = decodeOutput(fs.readFileSync(bak)); } catch (e) { before = ''; }
+        const line = mode === 'append' ? Math.max(1, before.split('\n').length) : (firstDiffLine(before, curText) || 1);
+        notifyFileChanged(full, { line: line, rel: rel });
+    } else {
+        notifyFileChanged(full, { line: 1, rel: rel }); // 新建文件（任务前不存在）跳首行
+    }
     return res;
 }
 
@@ -488,6 +517,9 @@ function editFileSync(taskId, username, params) {
     // 阶段八十：变更审查上报——统计口径与摘要行不同（摘要=本次替换 diff；上报=任务前原始内容整体 diff）
     const change = pcReport(taskId, rel, full, bak, 'modify', newText, false, params && params.explanation);
     if (change) res.changes = [change];
+    // 阶段一百六十二：浏览区已打开该文件 → 即时刷新+跳转改动行（old_string 首处起始行，replace_all 亦定位首处）
+    const eidx = text.indexOf(oldStr);
+    notifyFileChanged(full, { line: eidx < 0 ? 1 : text.slice(0, eidx).split('\n').length, rel: rel });
     return res;
 }
 
@@ -2256,5 +2288,6 @@ module.exports = {
     keepTaskChange: keepTaskChange, // 阶段九十七：保留任务变更（接受当前内容并清备份）
     revertTaskChange: revertTaskChange, // 阶段九十七：撤销任务变更（还原任务前字节）
     userRoot: userRoot, // 阶段一百一十六：工作区根导出（项目级 MCP 配置归口 <userRoot>/.im/agent_mcp.json）
-    buildAgentEnv: buildAgentEnv // 阶段一百五十九：Agent PATH 环境导出（debug-manager 调试子进程同口径工具链解析）
+    buildAgentEnv: buildAgentEnv, // 阶段一百五十九：Agent PATH 环境导出（debug-manager 调试子进程同口径工具链解析）
+    setFileChangedCb: setFileChangedCb // 阶段一百六十二：AI 写盘即时感知回调注入（main.js → browser-manager 刷新已打开标签）
 };

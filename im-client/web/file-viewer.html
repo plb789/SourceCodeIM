@@ -318,6 +318,8 @@
         .monaco-editor .glyph-margin-widgets .cgmr,
         .monaco-editor .margin-view-overlays .cgmr { cursor: pointer; }
         .monaco-editor .margin-view-overlays .line-numbers { cursor: pointer; } /* v=142：行号悬停显空心断点提示，光标同步 pointer（TRAE CN 同款） */
+        .fv-reveal-flash { animation: fvRevealFlash 1.8s ease-out forwards; } /* v=143：AI 改码定位闪烁（整行主题色淡底 1.8s 淡出，TRAE CN 同款） */
+        @keyframes fvRevealFlash { 0% { background: color-mix(in srgb, var(--primary) 24%, transparent); } 100% { background: transparent; } }
         .fv-bp-dot::before {
             content: ''; display: block; width: 11px; height: 11px; margin: 5px 0 0 9px;
             border-radius: 50%; background: #e5534b; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
@@ -821,7 +823,7 @@
         }
         // 宿主页面包屑符号点击跳转：编辑态 monaco 精确居中定位；静态预览按行号比例近似滚动
         // （静态代码是整块 hljs 文本+分离行号条，无逐行 DOM；可编辑文件常规都处于 monaco 态）
-        window.__fvReveal = function (line) {
+        window.__fvReveal = function (line, flash) {
             line = parseInt(line, 10) || 1;
             // diff 视图：定位到右栏（工作树侧，行号与符号扫描侧一致）
             if (diffWrap.style.display !== 'none' && diffEd) {
@@ -838,6 +840,8 @@
                     monacoEditor.revealLineInCenter(line);
                     monacoEditor.setPosition({ lineNumber: line, column: 1 });
                     monacoEditor.focus();
+                    // v=143：AI 改码定位闪烁高亮（TRAE CN 同款）——变更行整行主题色淡底 1.8s 淡出
+                    if (flash) fvFlashLine(line);
                 } catch (e) {}
                 return;
             }
@@ -849,6 +853,25 @@
                 bodyEl.scrollTop = Math.max(0, wrap.offsetTop + (line - 1) * lnH - bodyEl.clientHeight / 2);
             }
         };
+        // v=143：变更行闪烁装饰（payload.reveal_line 定位用；面包屑符号跳转不传 flash 不闪烁）
+        var fvFlashDecos = [];
+        function fvFlashLine(line) {
+            try {
+                var model = monacoEditor.getModel();
+                if (!model) return;
+                var ln = Math.max(1, Math.min(line, model.getLineCount()));
+                fvFlashDecos = monacoEditor.deltaDecorations(fvFlashDecos, [{
+                    range: new monaco.Range(ln, 1, ln, model.getLineMaxColumn(ln)),
+                    options: { isWholeLine: true, className: 'fv-reveal-flash' }
+                }]);
+                clearTimeout(fvFlashDecos._t);
+                fvFlashDecos._t = setTimeout(function () {
+                    try { fvFlashDecos = monacoEditor.deltaDecorations(fvFlashDecos, []); } catch (e) {}
+                }, 1800);
+            } catch (e) {}
+        }
+        // v=143：AI 改码定位挂起（Monaco 懒加载未就绪时存住，就绪回调统一执行；每次注入覆盖）
+        var fvPendingReveal = 0;
 
         // ===== Monaco Editor（TRAE CN / VS Code 同款编辑内核，编辑态唯一内核）=====
         // 旧 textarea+hljs 叠层在中英混排下两套布局引擎字体 fallback 宽度不一致，永远存在像素级错位，已整体裁除；
@@ -1543,6 +1566,11 @@
             registerCssHover(); // 阶段九十八：monaco 就绪后注册选择器特性 hover（monaco 为 AMD 异步全局，顶层注册会崩页面）
             var f = monacoPendingCb; monacoPendingCb = null;
             if (f) f();
+            // v=143：注入时挂起的 AI 改码定位（Monaco 懒加载窗口期内到达）——就绪即跳转+闪烁
+            if (fvPendingReveal > 0) {
+                var _rl = fvPendingReveal; fvPendingReveal = 0;
+                try { window.__fvReveal(_rl, true); } catch (e) {}
+            }
             fvLoaded(); // 阶段一百三十一：Monaco 就绪回执（首个编辑态/diff 标签懒加载收条；无加载时宿主侧无害空操作）
         }
         function monacoFailFallback() { // Monaco 加载失败/超时兜底：内容永远可见（编辑等待中同"取消"路径回落静态预览）
@@ -3100,6 +3128,13 @@
             // 阶段一百三十一修复：同步渲染 render 返回即回执（DOM 已应用=页面打开完成，符合"只检测页面是否完整打开"）。
             // 原双 rAF 等首绘依赖窗口实际绘制——窗口被遮挡/最小化时 rAF 冻结回执丢失，条卡到看门狗；立即上报彻底解耦绘制
             if (!fvAsyncRender) fvLoaded(fvLoadSeq); // 异步通道（Monaco 懒加载/docx/pptx）由各异步完成点自行上报
+            // v=143：AI 改码定位（payload.reveal_line，主进程写盘钩子仅对活动标签携带）——编辑器已就绪立即
+            // 跳转+闪烁；懒加载窗口期存 fvPendingReveal 由就绪回调执行；静默重绘保滚动与此共存（reveal 显式优先）
+            fvPendingReveal = parseInt(data && data.reveal_line, 10) || 0;
+            if (fvPendingReveal > 0 && monacoReady) {
+                var _rl0 = fvPendingReveal; fvPendingReveal = 0;
+                try { window.__fvReveal(_rl0, true); } catch (e) {}
+            }
         };
     })();
     </script>

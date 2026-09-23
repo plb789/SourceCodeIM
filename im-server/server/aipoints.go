@@ -23,12 +23,19 @@ import (
 // aiPointsPerUnit 每 1000 tokens 折算 1 积分
 const aiPointsPerUnit = 1000
 
+// aiPointsRound3 积分数值归一（3 位小数）：所有扣费累加/余额运算后统一调用——
+// float64 二进制表示无法精确表达 0.11 等十进制小数，多轮累加误差长尾（如 0.10999999999999999）
+// 经 Round 归一后 Go JSON 序列化输出最短十进制表示，客户端恒见干净 3 位值（阶段一百六十二）
+func aiPointsRound3(v float64) float64 {
+	return math.Round(v*1000) / 1000
+}
+
 // aiPointsCost 按 Token 消耗计算积分消耗（tokens/1000 保留 3 位小数；tokens<=0 时按 1 积分兜底）
 func aiPointsCost(totalTokens int) float64 {
 	if totalTokens <= 0 {
 		return 1
 	}
-	return math.Round(float64(totalTokens)/float64(aiPointsPerUnit)*1000) / 1000
+	return aiPointsRound3(float64(totalTokens) / float64(aiPointsPerUnit))
 }
 
 // userPoints 查询用户当前积分余额（用户不存在返回错误）
@@ -42,6 +49,7 @@ func userPoints(username string) (float64, error) {
 
 // userPointsDeduct 扣除积分并返回扣后余额：
 // 原子 UPDATE 钳制非负（points-cost 与 0 取大），余额不足时扣到 0 为止；
+// SQL 端 ROUND(points-?,3) 归一——DB double 减法会保留二进制误差长尾，每笔落库即归一（阶段一百六十二）；
 // 影响行数为 0 视为用户不存在
 func userPointsDeduct(username string, cost float64) (float64, error) {
 	if cost < 0 {
@@ -49,7 +57,7 @@ func userPointsDeduct(username string, cost float64) (float64, error) {
 	}
 	res := store.DB.Model(&model.User{}).
 		Where("username = ?", username).
-		Update("points", gorm.Expr("GREATEST(points - ?, 0)", cost))
+		Update("points", gorm.Expr("GREATEST(ROUND(points - ?, 3), 0)", cost))
 	if res.Error != nil {
 		return 0, res.Error
 	}

@@ -183,7 +183,7 @@ func aiBillingSource() string {
 func aiChargeCost(totalTokens int) float64 {
 	cfg := aiBillingGet()
 	if cfg.Mode == "percall" {
-		return cfg.PercallCost
+		return aiPointsRound3(cfg.PercallCost) // 管理员设置值防御性归一（阶段一百六十二）
 	}
 	return aiPointsCost(totalTokens)
 }

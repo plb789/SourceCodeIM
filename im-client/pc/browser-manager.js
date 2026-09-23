@@ -402,8 +402,60 @@ function selectTab(tabId) {
     const tab = tabs.find(function (t) { return t.id === String(tabId || ''); });
     if (!tab) return false;
     activeId = tab.id;
+    refreshFileTab(tab); // 阶段一百六十二：切回 file 标签时感知外部变更（AI 任务/命令改盘），变了即原位重推
     statePush();
     return true;
+}
+
+// ===== 阶段一百六十二：文件外部变更感知刷新（TRAE CN 同款语义） =====
+// AI 任务期间文件可能经编辑工具或 shell 命令（git checkout 等）被改动磁盘——已打开的 file 标签
+// 内容仍停在打开时刻。归口此处读盘比对，变了则原位重推（viewer 同 tab_id 静默重绘，滚动/悬停保持）。
+// 有未保存编辑（dirty）的标签不覆盖（不动用户工作区）；直传标签（diff/md/text）无磁盘文件跳过
+function refreshFileTab(t, info) {
+    if (!t || t.kind !== 'file' || !t.username || !t.relPath || t.dataKey || t.dirty) return false;
+    const r = readFilePayload(t.username, t.relPath);
+    if (!r.ok) return false;
+    const fresh = Object.assign(r.payload, { tab_id: t.id });
+    const old = t.lastPayload || {};
+    if (fresh.content === old.content && (fresh.b64 || '') === (old.b64 || '')) return false; // 磁盘未变
+    t.title = fresh.name;
+    t.filePath = r.abs;
+    t.lastPayload = fresh;
+    // 阶段一百六十二：活动标签 + AI 写盘钩子带行号 → 推送副本携带跳转定位（TRAE CN 同款：编辑完成即跳改动行
+    // + 闪烁高亮）。reveal_line 只进推送副本不进 lastPayload——防持久化/恢复重放时残留重复跳转
+    const line = info && parseInt(info.line, 10) > 0 ? parseInt(info.line, 10) : 0;
+    if (line > 0 && t.id === activeId) {
+        fileLoadPush({ id: t.id, kind: 'file', lastPayload: Object.assign({}, fresh, { reveal_line: line }) });
+    } else {
+        fileLoadPush(t); // 后台标签静默刷新（切回时 gutter 红蓝绿色条已就位，不抢滚动位置）
+    }
+    return true;
+}
+// refreshFileTabByPath 按磁盘绝对路径刷新匹配的已打开标签（agent-executor 写盘钩子归口；
+// 路径归一同备份索引：分隔符/大小写不敏感，Windows NTFS 不区分）
+function refreshFileTabByPath(fullPath, info) {
+    const key = String(fullPath || '').replace(/\\/g, '/').toLowerCase();
+    let n = 0;
+    tabs.forEach(function (t) {
+        if (t.kind === 'file' && String(t.filePath || '').replace(/\\/g, '/').toLowerCase() === key) {
+            if (refreshFileTab(t, info)) n++;
+        }
+    });
+    if (n) statePush();
+    // 阶段一百六十二闭环：通知渲染层刷新已开的工作树 diff 页签（diff 内容由渲染层生成，file 标签已由
+    // 上方直刷不重复）。path=工作区根相对路径（agent 写盘处自带 rel），用户手动保存（file-save 归口）
+    // 同事件同口径——diff 页签跟随磁盘实际，AI 改码/手动编辑实时跟手
+    const rel = info && String(info.rel || '');
+    if (rel && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('browser:file-saved', { path: rel });
+    }
+    return { ok: true, refreshed: n };
+}
+function refreshOpenFileTabs() {
+    let n = 0;
+    tabs.forEach(function (t) { if (refreshFileTab(t)) n++; });
+    if (n) statePush();
+    return { ok: true, refreshed: n };
 }
 
 // ===== 阶段九十四：标签右键菜单操作（关闭其他/右侧/全部、移动、固定切换、系统浏览器打开） =====
@@ -1164,6 +1216,10 @@ function init(win) {
     ipcMain.handle('browser:task-revert', function (event, payload) {
         return taskChangeOp(payload, 'revert');
     });
+    // 阶段一百六十二：外部变更感知刷新——渲染层任务完结钩子调用，已打开 file 标签读盘比对静默更新
+    ipcMain.handle('browser:refresh-file-tabs', function () {
+        return refreshOpenFileTabs();
+    });
     // viewer 页脏标记（编辑未保存）→ tab 栏圆点提示
     ipcMain.on('browser:viewer-dirty', function (event, payload) {
         const tab = tabs.find(function (t) { return t.id === String((payload && payload.tab_id) || '') && t.kind === 'file'; });
@@ -1217,6 +1273,7 @@ module.exports = {
     setCdpSwitch: setCdpSwitch,
     setPathGuard: setPathGuard,
     setTaskBackupApi: setTaskBackupApi, // 阶段九十七：任务备份查询/保留/撤销注入
+    refreshFileTabByPath: refreshFileTabByPath, // 阶段一百六十二：AI 写盘钩子按路径刷新已打开标签（实时更新+跳转改动行）
     setViewerUrl: setViewerUrl,
     findFileTabInfo: findFileTabInfo, // 阶段一百五十九：file 标签信息归口（debug IPC 目标解析）
     setTabCloseHook: setTabCloseHook, // 阶段一百五十九：file 标签关闭联动钩子（调试会话随关停）

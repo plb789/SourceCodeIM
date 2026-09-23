@@ -8041,7 +8041,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=142'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=142：断点悬停空心红点提示（TRAE CN 同款），与 pc/main.js setViewerUrl 同步
+        frame.src = 'file-viewer.html?v=143'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=143：AI 改码即时更新+跳转改动行，与 pc/main.js setViewerUrl 同步
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -8844,7 +8844,19 @@
         window.desktop.onBrowserState(browserApplyState);
         // 阶段九十二：浏览区文件标签保存写盘 → 刷新工作区树（角标/状态对齐磁盘实际）
         if (typeof window.desktop.onFileSaved === 'function') {
-            window.desktop.onFileSaved(function () { wsPanelRefreshTree(); });
+            window.desktop.onFileSaved(function (info) {
+                wsPanelRefreshTree();
+                // 阶段一百六十二：磁盘写盘 → 已开工作树 diff 页签原位刷新（AI 改码/任务还原/手动保存实时跟手；
+                // diff 内容由渲染层生成，主进程只发事件）。path 为工作区根相对路径，diff 标签键是 git 口径
+                // （相对仓库根），经 wsProjFsPath 补 proj 前缀比对（与 L11758 实测踩坑同口径）；重开同键即刷新
+                var p = info && info.path;
+                if (!p || !wsPcViewer() || !browserLastState) return;
+                (browserLastState.tabs || []).forEach(function (t) {
+                    if (t.kind !== 'file' || !t.data_key || String(t.data_key).indexOf('diff:') !== 0) return;
+                    var gp = String(t.data_key).slice(5);
+                    if (gp && wsProjFsPath(gp) === p) wsPanelGitOpenDiff(gp);
+                });
+            });
         }
         // 尺寸变化跟随（分栏拖拽/侧栏折叠/窗口缩放改变浏览区宽度 → 分栏宽度与聊天列压缩重算；
         // iframe/webview 尺寸由 CSS 自动跟随，无需额外上报）
@@ -9234,6 +9246,17 @@
         // 阶段七十九：任务结束收"任务"页签（卡片内已完成状态接管）；若该任务有待审查变更，
         // 停靠栏自动切换到"文件变更"页签（TRAE CN 同款：任务完成后待审查条顶到输入区上方）
         agentDockSync();
+        // 阶段一百六十二：任务完结即刷新浏览区已打开文件标签（外部变更感知，TRAE CN 同款）——
+        // 任务期间文件可能经编辑工具或 shell 命令（git checkout 等）被改盘，标签内容停在打开时刻；
+        // 主进程归口读盘比对，变了才原位重推（有未保存编辑的标签不覆盖）。节流 500ms 合并批量完结
+        if (window.desktop && typeof window.desktop.browserRefreshFileTabs === 'function') {
+            if (!finishAgentTask._rfTimer) {
+                finishAgentTask._rfTimer = setTimeout(function () {
+                    finishAgentTask._rfTimer = null;
+                    try { window.desktop.browserRefreshFileTabs(); } catch (e) { /* 桥异常忽略 */ }
+                }, 500);
+            }
+        }
     }
 
     // collapseAgentCard 阶段七十：任务完结卡片折叠归口——执行过程（思考/工具/清单）整体收起，

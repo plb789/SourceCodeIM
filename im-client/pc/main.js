@@ -2691,12 +2691,17 @@ app.whenReady().then(async function () {
     browserManager.setPathGuard(agentExecutor.safePath);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
     // 阶段一百二十二：viewer 地址恢复服务端 http（同 origin 下 chat.js 相对路径 iframe 自动命中 http 拦截）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=142'); // v=142：断点悬停提示（TRAE CN 同款：鼠标经过行号显空心红点），与 chat.js iframe src 同步防缓存
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=143'); // v=143：AI 改码即时更新+跳转改动行+闪烁高亮（TRAE CN 同款），与 chat.js iframe src 同步防缓存
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,
         keep: agentExecutor.keepTaskChange,
         revert: agentExecutor.revertTaskChange
+    });
+    // 阶段一百六十二：AI 写盘即时感知（TRAE CN 同款）——write_file/edit_file 落盘成功 → 已打开该文件的
+    // 浏览区标签实时静默更新；活动标签跳转到改动行并闪烁高亮，后台标签出色条不抢滚动
+    agentExecutor.setFileChangedCb(function (full, info) {
+        try { browserManager.refreshFileTabByPath(full, info); } catch (e) { /* 刷新异常不影响工具执行 */ }
     });
 
     // 阶段一百五十九：断点调试管理器注入（路径校验复用 safePath；PATH 环境复用 buildAgentEnv——

@@ -508,7 +508,7 @@ func (s *Server) sendRedPacketReceipt(username string, payload map[string]interf
 func userPointsDeductStrict(username string, cost float64) (float64, error) {
 	res := store.DB.Model(&model.User{}).
 		Where("username = ? AND points >= ?", username, cost).
-		Update("points", gorm.Expr("points - ?", cost))
+		Update("points", gorm.Expr("ROUND(points - ?, 3)", cost)) // 阶段一百六十二：落库归一 3 位（double 减法误差长尾）
 	if res.Error != nil {
 		return 0, res.Error
 	}
@@ -527,7 +527,7 @@ func userPointsDeductStrict(username string, cost float64) (float64, error) {
 func userPointsAdd(username string, amount float64) (float64, error) {
 	res := store.DB.Model(&model.User{}).
 		Where("username = ?", username).
-		Update("points", gorm.Expr("points + ?", amount))
+		Update("points", gorm.Expr("ROUND(points + ?, 3)", amount)) // 阶段一百六十二：落库归一 3 位（double 加法误差长尾）
 	if res.Error != nil {
 		return 0, res.Error
 	}

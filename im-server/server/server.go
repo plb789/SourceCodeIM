@@ -929,8 +929,9 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 			"region":    user.Region,
 			"signature": user.Signature,
 		},
-		// 阶段七十八：下发 AI 积分余额（PC 端标题栏 ⚡ 积分显示数据源，服务端归口）
-		"points": user.Points,
+		// 阶段七十八：下发 AI 积分余额（PC 端标题栏 ⚡ 积分显示数据源，服务端归口）；
+		// 阶段一百六十二：下发前归一 3 位——存量余额可能带历史 double 误差长尾
+		"points": aiPointsRound3(user.Points),
 		// 阶段一百三十八：下发当前计费模式与按次单价（标题栏 ⚡ 悬停提示按模式显示对应扣费口径；
 		// 后台热更后重登/重连即取新模式，运行中扣费帧也会实时携带新模式刷新）
 		"billing_mode": aiBillingMode(),

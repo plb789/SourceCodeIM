@@ -509,6 +509,10 @@ contextBridge.exposeInMainWorld('desktop', {
     browserTaskRevert: function (tabId) {
         return ipcRenderer.invoke('browser:task-revert', { tab_id: String(tabId || '') });
     },
+    // 阶段一百六十二：外部变更感知刷新（任务完结钩子调用）——已打开 file 标签读盘比对静默更新
+    browserRefreshFileTabs: function () {
+        return ipcRenderer.invoke('browser:refresh-file-tabs');
+    },
     // 订阅 file 标签 payload 推送（主进程 → 渲染层：{tab_id, payload}，iframe 分发）
     onFileLoad: function (callback) {
         ipcRenderer.on('browser:file-load', function (event, data) {
