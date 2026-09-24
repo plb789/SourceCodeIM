@@ -137,6 +137,15 @@ func main() {
 	// 复用陈旧甚至损坏的缓存副本（实例：登录界面改版后 PC 端仍加载旧样式，且 ?v= 版本号被并行会话
 	// 回退时彻底失效）。原先仅靠 ?v= 手动 bump，现服务端归口兜底。
 	fileServer := http.FileServer(http.Dir(cfg.WebDir))
+	// 网盘分享站内链接入口 /s/<code>（Go 1.22 具体路径优先于 "/"）：
+	// 原实现：http.ServeFile(w, r, filepath.Join(cfg.WebDir, "index.html"))（回完整前端，登录态恢复后由
+	//         前端解析 pathname 弹分享详情，校验归口分享 API）
+	// 现改为独立分享页 share.html（百度网盘同款）：免登录查看/下载（凭 code+extract 校验归口分享 API），
+	// 保存到网盘在页面内自绘登录面板建立 WS 会话后调用（driveCheckUser 在线水位归口不变）
+	http.HandleFunc("GET /s/{code}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFile(w, r, filepath.Join(cfg.WebDir, "share.html"))
+	})
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 原实现：仅对 HTML 入口禁用缓存（css/js 走浏览器启发式缓存，存在陈旧缓存风险）
 		// if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
@@ -171,6 +180,8 @@ func main() {
 	server.RegisterWorkbenchRoutes(srv)
 	// 网盘路由（个人云盘：元数据 MySQL + 文件本体 MinIO/本地双后端，全部操作服务端归口代理）
 	server.RegisterDriveRoutes(srv)
+	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）
+	server.RegisterDriveShareRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）
 	server.StartAdminUploadScanner(cfg.UploadDir)
 	// 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；turn.enabled=false 时静默不启动）

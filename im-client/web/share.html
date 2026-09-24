@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>文件分享 - 网盘</title>
+    <!-- 主题首绘引导（仿 index.html：读 im_theme 立即挂 data-theme 并定死根背景，防主题闪烁；
+         light/dark/system 三态与主程序同口径，变量归口 css/style.css 的 :root 与 [data-theme] 块） -->
+    <script>
+        (function () {
+            var t = '';
+            try { t = localStorage.getItem('im_theme') || ''; } catch (e) { t = ''; }
+            if (t !== 'light' && t !== 'dark' && t !== 'system') t = 'system';
+            var dark = t === 'dark' || (t === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.style.background = dark ? '#111111' : '#f5f5f5';
+        })();
+    </script>
+    <!-- 变量源：复用主程序全局样式（主题变量/基础 reset，register.html 同款先例）；
+         页面专属样式归口 css/share.css。注意：本页经 /s/<code> 深层路径服务，
+         静态资源必须根绝对路径（相对路径在深层路径下 404） -->
+    <link rel="stylesheet" href="/css/style.css?v=2.65">
+    <link rel="stylesheet" href="/css/share.css?v=1.0">
+    <!-- WebSocket 登录引擎（自含协议，独立于主应用 chat.js 可单独加载；
+         保存到我的网盘需服务端 WS 在线水位校验，登录归口复用同一套 LOGIN 协议） -->
+    <script src="/js/socket.js?v=1.31"></script>
+</head>
+<body>
+    <!-- ===== 顶栏（百度网盘分享页同款：左 logo，右用户区） ===== -->
+    <header class="sp-topbar">
+        <div class="sp-logo">
+            <span class="sp-logo-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/></svg>
+            </span>
+            <span class="sp-logo-text">网盘</span>
+        </div>
+        <div class="sp-user" id="sp-user">
+            <!-- 未登录：登录按钮 / 已登录：用户名 + 退出（share-page.js 按态渲染） -->
+            <button class="sp-login-entry hidden" id="sp-login-entry">登录</button>
+            <span class="sp-user-name hidden" id="sp-user-name"></span>
+            <button class="sp-logout hidden" id="sp-logout">退出</button>
+        </div>
+    </header>
+
+    <!-- ===== 主体：中央分享卡片 ===== -->
+    <main class="sp-main">
+        <div class="sp-card" id="sp-card">
+            <!-- 文件图标（按类型着色，share.css 色板类） -->
+            <div class="sp-icon k-file" id="sp-icon"></div>
+            <!-- 文件名（长名单行省略，hover 展开由 title 提示） -->
+            <div class="sp-name" id="sp-name">正在获取分享信息…</div>
+            <!-- 元信息：大小 · 分享人 · 有效期 -->
+            <div class="sp-meta" id="sp-meta"></div>
+            <!-- 提取码行（need_extract 时显示） -->
+            <div class="sp-extract-row hidden" id="sp-extract-row">
+                <div class="sp-extract-tip">此分享需要提取码</div>
+                <div class="sp-extract-line">
+                    <input class="sp-extract-input" id="sp-extract-input" maxlength="4" placeholder="请输入 4 位提取码" autocomplete="off">
+                    <button class="sp-btn sp-btn-primary sp-extract-btn" id="sp-extract-btn">提取文件</button>
+                </div>
+                <div class="sp-extract-err hidden" id="sp-extract-err"></div>
+            </div>
+            <!-- 操作按钮行（提取通过后显示） -->
+            <div class="sp-btn-row hidden" id="sp-btn-row">
+                <button class="sp-btn sp-btn-primary" id="sp-download-btn">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                    下载
+                </button>
+                <button class="sp-btn sp-btn-ghost" id="sp-save-btn">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                    保存到我的网盘
+                </button>
+            </div>
+        </div>
+        <!-- 失效态（已取消/已过期/文件已删除/分享不存在） -->
+        <div class="sp-invalid hidden" id="sp-invalid">
+            <div class="sp-invalid-icon">
+                <svg viewBox="0 0 24 24" width="64" height="64"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            </div>
+            <div class="sp-invalid-text" id="sp-invalid-text">分享不存在或已失效</div>
+        </div>
+    </main>
+
+    <footer class="sp-footer">本页面由站内网盘分享生成 · 下载与查看无需登录，保存到网盘需登录账号</footer>
+
+    <!-- ===== 自绘登录浮层（禁系统弹窗；保存到我的网盘的登录引导） ===== -->
+    <div class="sp-login-mask hidden" id="sp-login-mask">
+        <div class="sp-login-box">
+            <button class="sp-login-close" id="sp-login-close" title="关闭">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="sp-login-title">登录后保存到我的网盘</div>
+            <input class="sp-login-input" id="sp-login-username" placeholder="账号" autocomplete="username">
+            <input class="sp-login-input" id="sp-login-password" type="password" placeholder="密码" autocomplete="current-password">
+            <div class="sp-login-err hidden" id="sp-login-err"></div>
+            <button class="sp-btn sp-btn-primary sp-login-btn" id="sp-login-ok">登 录</button>
+        </div>
+    </div>
+
+    <!-- 自绘 toast（2.5s 自灭，复用主程序交互规范） -->
+    <div class="sp-toast hidden" id="sp-toast"></div>
+
+    <script src="/js/share-page.js?v=1.1"></script>
+</body>
+</html>

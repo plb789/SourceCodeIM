@@ -14086,3 +14086,442 @@ html.m .drive-uploads {
     bottom: 10px;
     width: calc(100% - 20px);
 }
+
+/* ===== 网盘二期：文件分享（分享弹窗/分享管理/分享详情/聊天卡片气泡）
+   颜色全部关联现有主题变量随主题变化；滚动区走全局自绘悬浮滑块（drive.js _osbInit 注册） ===== */
+
+/* ---- 聊天内分享卡片气泡（92 帧；主题色语义卡，与红包橙卡同布局语言） ---- */
+.message .message-bubble.bubble-ds-card {
+    width: 232px;
+    padding: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: linear-gradient(155deg,
+            color-mix(in srgb, var(--primary) 16%, var(--panel-bg)) 0%,
+            var(--panel-bg) 62%);
+    border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--border));
+    color: var(--text);
+    cursor: pointer;
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 16%, transparent);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.message .message-bubble.bubble-ds-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 26%, transparent);
+}
+.ds-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 12px 10px;
+}
+.ds-icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.ds-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+}
+.ds-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ds-meta {
+    font-size: 11px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ds-tag {
+    border-top: 1px solid var(--border);
+    padding: 6px 12px;
+    font-size: 10px;
+    color: var(--text-light);
+    letter-spacing: 0.5px;
+}
+html.m .message .message-bubble.bubble-ds-card {
+    width: 200px;
+}
+
+/* ---- 分享弹窗 / 分享详情（.modal-mask/.modal-box 公共壳内） ---- */
+.ds-box {
+    width: 380px;
+    text-align: left;
+}
+.ds-box-tall {
+    width: 440px;
+}
+html.m .ds-box {
+    width: min(92vw, 380px);
+}
+html.m .ds-box-tall {
+    width: min(92vw, 440px);
+}
+/* 文件摘要条（分享弹窗与详情弹窗共用：图标+名称+元信息） */
+.ds-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--hover);
+    border-radius: 10px;
+    margin-bottom: 12px;
+}
+.ds-file-icon {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--panel-bg);
+    box-shadow: inset 0 0 0 1px var(--border);
+}
+.ds-file-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    flex: 1;
+}
+.ds-file-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ds-file-meta {
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* 双页签（发给好友/群 | 生成链接），分段器样式 */
+.ds-tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--hover);
+    border-radius: 8px;
+    padding: 3px;
+    margin-bottom: 12px;
+}
+.ds-tab {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 7px 0;
+    border-radius: 6px;
+    transition: all 0.15s;
+}
+.ds-tab:hover {
+    color: var(--text);
+}
+.ds-tab.active {
+    background: var(--panel-bg);
+    color: var(--primary);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+.ds-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.ds-contact-search {
+    width: 100%;
+    flex-shrink: 0;
+}
+/* 选人列表（限高滚动区，自绘悬浮滑块） */
+.ds-contact-list {
+    height: 250px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    position: relative;
+}
+.ds-sec-title {
+    font-size: 11px;
+    color: var(--text-light);
+    padding: 6px 8px 3px;
+    user-select: none;
+}
+.ds-contact-empty {
+    padding: 56px 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-light);
+}
+.ds-contact-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.ds-pane-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+}
+.ds-pick-count {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-right: auto;
+}
+/* 选项行（有效期四档 / 提取码开关 / 详情提取码输入） */
+.ds-opt-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.ds-opt-label {
+    width: 48px;
+    flex-shrink: 0;
+    font-size: 13px;
+    color: var(--text);
+}
+.ds-expire-group {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+}
+.ds-expire {
+    flex: 1;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text-light);
+    font-size: 12px;
+    padding: 6px 0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.ds-expire:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+.ds-expire.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+    font-weight: 600;
+}
+/* 滑块开关（用户偏好 slider 式开关；跟随主题色） */
+.ds-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.ds-switch input {
+    display: none;
+}
+.ds-switch-slider {
+    position: absolute;
+    inset: 0;
+    border-radius: 11px;
+    background: var(--text-light);
+    opacity: 0.55;
+    transition: all 0.2s ease;
+}
+.ds-switch-slider::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: left 0.2s ease;
+}
+.ds-switch input:checked + .ds-switch-slider {
+    background: var(--primary);
+    opacity: 1;
+}
+.ds-switch input:checked + .ds-switch-slider::before {
+    left: 20px;
+}
+.ds-opt-hint {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: auto;
+    text-align: right;
+}
+/* 链接结果区（创建成功后展示，可复制） */
+.ds-link-result {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 2px;
+    padding: 10px 12px;
+    background: var(--hover);
+    border-radius: 8px;
+}
+.ds-link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.ds-link-label {
+    font-size: 11px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.ds-link-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: all;
+    cursor: text;
+}
+.ds-link-code {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: var(--text);
+    user-select: all;
+}
+.ds-mini-btn {
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    padding: 3px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+.ds-mini-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+/* 提取码输入（详情弹窗：4 位大写，宽字距） */
+.dsd-extract-input {
+    width: 130px;
+    flex-shrink: 0;
+    text-align: center;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+/* 失效提示条（取消/过期/源删除三态归口文案） */
+.dsd-invalid {
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: color-mix(in srgb, #e64340 10%, transparent);
+    color: #e64340;
+    font-size: 13px;
+    text-align: center;
+}
+
+/* ---- 分享管理列表（我发出的） ---- */
+.dsm-list {
+    max-height: 400px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    position: relative;
+}
+.dsm-empty {
+    padding: 56px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+.dsm-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    transition: background 0.12s;
+}
+.dsm-row:hover {
+    background: var(--hover);
+}
+.dsm-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.dsm-name {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dsm-meta {
+    font-size: 11px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dsm-status {
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.dsm-status.ok {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.dsm-status.bad {
+    color: var(--text-light);
+    background: var(--hover);
+}
+.dsm-cancel {
+    border: none;
+    background: transparent;
+    color: #e64340;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.dsm-cancel:hover {
+    background: color-mix(in srgb, #e64340 12%, transparent);
+}
+html.m .dsm-list {
+    max-height: 56vh;
+}

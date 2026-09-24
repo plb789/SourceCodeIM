@@ -160,6 +160,10 @@ const (
 	//   offer / answer / candidate（WebRTC 协商中继帧，服务端注入 ice 后转发，复用 callInjectICE）/
 	//   done（双方→服务端，传输完成元信息归口落库）/ done_ack（服务端→双方，落库回执回填 msg_id）
 	MsgTypeFileP2PSignal = 91
+
+	// ===== 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}） =====
+	// 与红包(86)同链路：服务端落库转发（私聊双方/群成员定向），历史按类型渲染卡片气泡，点击弹分享详情（保存/下载）
+	MsgTypeDriveShare = 92
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

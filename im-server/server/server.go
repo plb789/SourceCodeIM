@@ -807,13 +807,15 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 原查询只含 (1,4) 导致群聊文件实时广播可见、重新登录后历史查询丢失（用户实测反馈）
 		// 阶段一百四十二：to_user 参数化——''=全局群，'gN'=指定群
 		// 阶段一百五十四：纳入群红包消息(86)——群红包实时广播可见、重新登录后历史查询丢失
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86}, msg.ToUser)
+		// 网盘二期：纳入网盘分享卡片(92)——卡片同走持久化链路，实时可见、历史同样可见
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
 		// 阶段一百五十四：纳入红包消息(86)——红包卡片历史渲染（信封 JSON 同走持久化消息链路）
+		// 网盘二期：纳入网盘分享卡片(92)——同 86 口径，卡片历史渲染归口 renderHistoryRecord
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86, 92}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）

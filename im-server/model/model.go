@@ -342,20 +342,20 @@ func (AgentStepRecord) TableName() string { return "im_agent_step" }
 // 任务完结时统一统计增删行数；撤销即按 Kind 还原/删除文件，保留即弃备份。
 // Status: pending=待审查 kept=已保留 reverted=已撤销
 type AgentChangeRecord struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	TaskID     string    `gorm:"column:task_id;type:varchar(40);not null;index" json:"task_id"`
-	Username   string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户（撤销上行归属校验）
-	Path       string    `gorm:"column:path;type:varchar(512);not null" json:"path"`              // 工作区相对路径（正斜杠）
-	Kind       string    `gorm:"column:kind;type:varchar(8);not null" json:"kind"`                // create/modify/delete
-	Adds       int       `gorm:"column:adds;not null;default:0" json:"adds"`                      // 新增行数（完结时统计回写）
-	Dels       int       `gorm:"column:dels;not null;default:0" json:"dels"`                      // 删除行数（完结时统计回写）
-	BackupFile string    `gorm:"column:backup_file;type:varchar(512)" json:"backup_file"`         // 改前内容备份文件绝对路径（create 为空）
-	Env        string    `gorm:"column:env;type:varchar(8);not null;default:server" json:"env"`   // 阶段八十：归属环境 server=服务端工作区 / pc=用户本地磁盘（撤销需下发执行器）
-	LocalPath  string    `gorm:"column:local_path;type:varchar(512)" json:"local_path"`           // 阶段八十：pc 环境文件本地绝对路径（撤销下发执行器还原用）
-	Status     string    `gorm:"column:status;type:varchar(12);not null;default:pending" json:"status"`
-	Explanation string   `gorm:"column:explanation;type:varchar(1024)" json:"explanation"` // AI 修改说明（工具 explanation 参数，同路径重复触碰取最近一次）
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
-	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	ID          uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	TaskID      string    `gorm:"column:task_id;type:varchar(40);not null;index" json:"task_id"`
+	Username    string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 发起用户（撤销上行归属校验）
+	Path        string    `gorm:"column:path;type:varchar(512);not null" json:"path"`              // 工作区相对路径（正斜杠）
+	Kind        string    `gorm:"column:kind;type:varchar(8);not null" json:"kind"`                // create/modify/delete
+	Adds        int       `gorm:"column:adds;not null;default:0" json:"adds"`                      // 新增行数（完结时统计回写）
+	Dels        int       `gorm:"column:dels;not null;default:0" json:"dels"`                      // 删除行数（完结时统计回写）
+	BackupFile  string    `gorm:"column:backup_file;type:varchar(512)" json:"backup_file"`         // 改前内容备份文件绝对路径（create 为空）
+	Env         string    `gorm:"column:env;type:varchar(8);not null;default:server" json:"env"`   // 阶段八十：归属环境 server=服务端工作区 / pc=用户本地磁盘（撤销需下发执行器）
+	LocalPath   string    `gorm:"column:local_path;type:varchar(512)" json:"local_path"`           // 阶段八十：pc 环境文件本地绝对路径（撤销下发执行器还原用）
+	Status      string    `gorm:"column:status;type:varchar(12);not null;default:pending" json:"status"`
+	Explanation string    `gorm:"column:explanation;type:varchar(1024)" json:"explanation"` // AI 修改说明（工具 explanation 参数，同路径重复触碰取最近一次）
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 指定表名
@@ -689,19 +689,43 @@ func (WorkbenchApp) TableName() string { return "im_workbench_app" }
 type DriveFile struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 	// Owner 归属用户；ParentID 父目录 ID（0=根目录）——owner+parent 联合索引支撑目录树查询
-	Owner    string `gorm:"column:owner;type:varchar(32);not null;index:idx_drive_owner_parent" json:"owner"`
-	ParentID uint   `gorm:"column:parent_id;default:0;index:idx_drive_owner_parent" json:"parent_id"`
-	Name     string `gorm:"column:name;type:varchar(255);not null" json:"name"` // 名称（文件含扩展名；目录纯名称）
-	IsDir    bool   `gorm:"column:is_dir;default:false" json:"is_dir"`
-	Size     int64  `gorm:"column:size;default:0" json:"size"`                  // 文件大小（字节；目录恒 0，配额按文件累加）
-	ObjectKey string `gorm:"column:object_key;type:varchar(512);default:''" json:"object_key"` // 文件本体对象 key（目录为空）
-	MimeType  string `gorm:"column:mime_type;type:varchar(128);default:''" json:"mime_type"`   // MIME（按扩展名归口，前端图标/预览用）
+	Owner      string    `gorm:"column:owner;type:varchar(32);not null;index:idx_drive_owner_parent" json:"owner"`
+	ParentID   uint      `gorm:"column:parent_id;default:0;index:idx_drive_owner_parent" json:"parent_id"`
+	Name       string    `gorm:"column:name;type:varchar(255);not null" json:"name"` // 名称（文件含扩展名；目录纯名称）
+	IsDir      bool      `gorm:"column:is_dir;default:false" json:"is_dir"`
+	Size       int64     `gorm:"column:size;default:0" json:"size"`                                // 文件大小（字节；目录恒 0，配额按文件累加）
+	ObjectKey  string    `gorm:"column:object_key;type:varchar(512);default:''" json:"object_key"` // 文件本体对象 key（目录为空）
+	MimeType   string    `gorm:"column:mime_type;type:varchar(128);default:''" json:"mime_type"`   // MIME（按扩展名归口，前端图标/预览用）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
 func (DriveFile) TableName() string { return "im_drive_file" }
+
+// DriveShare 网盘分享表 im_drive_share（网盘二期：好友/群卡片 + 站内链接双模式分享）
+// 设计归口：分享状态（取消/过期/源文件删除）全部服务端归口计算，客户端只展示；
+// FileName/IsDir/Size 为创建时快照——分享管理列表不随源文件改名/删除而失真
+type DriveShare struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// ShareCode 站内链接码（纳秒+随机串，全局唯一，/s/<code> 访问入口）
+	ShareCode string `gorm:"column:share_code;type:varchar(40);uniqueIndex;not null" json:"share_code"`
+	Owner     string `gorm:"column:owner;type:varchar(32);not null;index" json:"owner"` // 分享者
+	FileID    uint   `gorm:"column:file_id;not null" json:"file_id"`                    // 源文件记录 ID（保存/下载时按 owner+id 现查，确保实时有效）
+	FileName  string `gorm:"column:file_name;type:varchar(255)" json:"file_name"`       // 快照：文件名
+	IsDir     bool   `gorm:"column:is_dir;default:false" json:"is_dir"`                 // 快照：是否目录
+	Size      int64  `gorm:"column:size;default:0" json:"size"`                         // 快照：大小（目录 0）
+	// ExtractCode 提取码（4 位，卡片模式为空即无需提取码；链接模式可选开启）
+	ExtractCode string `gorm:"column:extract_code;type:varchar(8);default:''" json:"extract_code"`
+	// ExpireAt 过期时间 Unix 秒（0=永久有效）
+	ExpireAt   int64     `gorm:"column:expire_at;default:0" json:"expire_at"`
+	Canceled   bool      `gorm:"column:canceled;default:false" json:"canceled"` // 分享者取消（链接与卡片立即失效）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (DriveShare) TableName() string { return "im_drive_share" }
 
 // ===== 阶段一百五十四：积分红包（微信同款红包，积分归口） =====
 // 设计归口：金额计算/拆分/扣减/退回全部服务端完成，客户端仅展示；
@@ -752,10 +776,10 @@ func (RedPacket) TableName() string { return "im_red_packet" }
 // RedPacketClaim 红包领取明细表 im_red_packet_claim
 // uniqueIndex(packet_id,username)：同一红包同一用户仅可领取一次（数据库层兜底防并发重复领取）
 type RedPacketClaim struct {
-	ID       uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	PacketID uint      `gorm:"column:packet_id;uniqueIndex:idx_rp_claim" json:"packet_id"`
-	Username string    `gorm:"column:username;type:varchar(32);uniqueIndex:idx_rp_claim" json:"username"`
-	Amount   float64   `gorm:"column:amount;type:double;not null" json:"amount"` // 领到的金额（双精度 3 位小数）
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	PacketID  uint      `gorm:"column:packet_id;uniqueIndex:idx_rp_claim" json:"packet_id"`
+	Username  string    `gorm:"column:username;type:varchar(32);uniqueIndex:idx_rp_claim" json:"username"`
+	Amount    float64   `gorm:"column:amount;type:double;not null" json:"amount"` // 领到的金额（双精度 3 位小数）
 	ClaimTime time.Time `gorm:"column:claim_time;autoCreateTime" json:"claim_time"`
 }
 

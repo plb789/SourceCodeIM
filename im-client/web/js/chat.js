@@ -5238,6 +5238,7 @@
             } catch (e) {}
             loginView.classList.add('hidden');
             chatView.classList.remove('hidden');
+            dsConsumePendingShareLink(); // /s/<code> 站内分享链接：登录成功即弹分享详情（一次性）
             // 登录持久化联动：自动恢复上次选中的会话（含群聊），并自动加载其聊天记录，
             // 解决刷新后聊天内容为空、必须重新点击聊天对象才能显示的问题
             // 原实现：登录成功后停留在默认空界面
@@ -5411,6 +5412,9 @@
             if (window.IMDrive) {
                 if (tabName === 'drive') window.IMDrive.open();
                 else if (window.IMDrive.isOpen()) window.IMDrive.close();
+            } else if (tabName === 'drive') {
+                // 兜底：页面刚加载脚本未就绪时点击（IMDrive 未定义），延迟重试避免首次点击无响应
+                setTimeout(function () { if (window.IMDrive) window.IMDrive.open(); }, 300);
             }
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
@@ -17273,6 +17277,34 @@
         // 现叠加本地已读水位即时应用：自己发送的私聊消息若已被读到更大 ID 则直接显示"已读"
         var wm = (isMine && isPrivate) ? (readWatermark[r.to_user] || 0) : 0;
         var isRead = r.is_read || (wm >= r.id);
+        // 网盘分享卡片(92)历史持久化渲染（content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}）
+        if (r.msg_type === 92) {
+            var dsEnv = null;
+            try { dsEnv = JSON.parse(r.content); } catch (e) { dsEnv = null; }
+            if (dsEnv && dsEnv.share && dsEnv.share.code) {
+                var dsDiv = dsBuildBubbleEl(r.from_user, dsEnv.share, isMine ? 'self' : 'other', isPrivate);
+                if (r.id) dsDiv.setAttribute('data-msg-id', r.id);
+                dsDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(dsDiv, beforeEl);
+                } else {
+                    messageList.appendChild(dsDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            // 信封异常降级为系统提示，避免渲染成原始 JSON 串
+            var dsTip = document.createElement('div');
+            dsTip.className = 'system-tip';
+            dsTip.textContent = I18N.t('[网盘分享]');
+            if (beforeEl) {
+                messageList.insertBefore(dsTip, beforeEl);
+            } else {
+                messageList.appendChild(dsTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         // 阶段一百五十四：红包消息(86)历史持久化渲染（content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
         if (r.msg_type === 86) {
             var rpEnv = null;
@@ -21533,6 +21565,107 @@
         }
     });
 
+    // ===== 网盘分享卡片（92，网盘二期）：气泡渲染 + 点击弹详情（保存/下载归口 drive.js） =====
+    // 大小格式化（卡片 meta 行展示；与 drive.js fmtSize 同口径的本地实现，避免跨模块时序依赖）
+    function dsFmtSize(n) {
+        if (n == null) return '';
+        if (n < 1024) return n + ' B';
+        var units = ['KB', 'MB', 'GB', 'TB'], v = n, i = -1;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return v.toFixed(v >= 100 ? 0 : 1) + ' ' + units[i];
+    }
+    function dsBuildBubbleEl(fromUser, card, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称（与文字/图片消息同规则）
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-ds-card';
+        var top = document.createElement('div');
+        top.className = 'ds-top';
+        var icon = document.createElement('div');
+        icon.className = 'ds-icon';
+        // 网盘云朵图标（与网盘页 logo 同款 SVG，主题色着色）
+        icon.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></svg>';
+        var text = document.createElement('div');
+        text.className = 'ds-text';
+        var nm = document.createElement('div');
+        nm.className = 'ds-name';
+        nm.textContent = card.name || I18N.t('未命名文件');
+        nm.title = nm.textContent;
+        var meta = document.createElement('div');
+        meta.className = 'ds-meta';
+        var metaBits = [];
+        metaBits.push(card.is_dir ? I18N.t('文件夹') : dsFmtSize(card.size));
+        if (card.has_extract) metaBits.push(I18N.t('需提取码'));
+        meta.textContent = metaBits.join(' · ');
+        text.appendChild(nm);
+        text.appendChild(meta);
+        top.appendChild(icon);
+        top.appendChild(text);
+        var tag = document.createElement('div');
+        tag.className = 'ds-tag';
+        tag.textContent = I18N.t('IM 网盘 · 文件分享');
+        bubble.appendChild(top);
+        bubble.appendChild(tag);
+        bubble.addEventListener('click', function () {
+            // 详情弹窗/保存/下载归口 drive.js（未加载时提示，PC/WEB 均随主包加载正常可用）
+            if (window.IMDrive && window.IMDrive.showShareCard) window.IMDrive.showShareCard(card);
+            else showToast(I18N.t('网盘模块加载中，请稍后重试'));
+        });
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+    function dsAppendBubble(fromUser, card, type, isPrivate) {
+        var div = dsBuildBubbleEl(fromUser, card, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+    // 92 分享卡片实时渲染（与红包同口径：会话归属归一 + msg_id 去重 + 服务端昵称合并 + 私聊已读回执）
+    IMSocket.on(MSG.DRIVE_SHARE, function (msg) {
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        if (target !== currentChatUser) return; // 不在对应会话视图：不渲染（会话摘要已由服务端归口推送）
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var meta = {};
+        try { meta = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        var card = meta.share;
+        if (!card || !card.code) return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = dsAppendBubble(msg.from_user, card, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
+    });
+
+    // 站内分享链接归口：/s/<code> 打开的页面，登录成功后自动弹分享详情（一次性消费后清理地址栏，
+    // 刷新不再重弹；详情/保存/下载仍归口 drive.js 校验与展示）
+    // 【已废弃·独立分享页阶段】/s/<code> 服务端已改回独立页 share.html（免登录查看/下载），
+    // 本函数不再被触达（路径不进主应用）；保留备查——若服务端回滚 /s/ 路由到 index.html 可直接复用
+    function dsConsumePendingShareLink() {
+        var m = (location.pathname || '').match(/^\/s\/([A-Za-z0-9]{6,40})$/);
+        if (!m) return;
+        var code = m[1];
+        try { history.replaceState(null, '', '/'); } catch (e) {}
+        setTimeout(function () {
+            if (window.IMDrive && window.IMDrive.showShareLink) window.IMDrive.showShareLink(code);
+        }, 600); // 等自动恢复会话等初始化落定后再弹，避免与首屏渲染抢焦点
+    }
+
     // 87 下行归口（act 区分）：send=发送回执（余额联动）/ open=领取结果 / detail=详情响应
     IMSocket.on(MSG.RED_PACKET_OPEN, function (msg) {
         var d = {};
@@ -21864,4 +21997,12 @@
         document.addEventListener('transitionend', osbOnTransition, true);
         document.addEventListener('transitioncancel', osbOnTransition, true);
     })();
+
+    // 联系人数据源只读暴露（网盘分享弹窗选人归口消费：好友列表/群列表/展示名解析，
+    // 避免 drive.js 侧重复维护一份好友数据造成双源不一致）
+    window.IMContacts = {
+        friends: function () { return friendList || []; },
+        groups: function () { return groupMap || {}; },
+        displayNameOf: senderDisplayName
+    };
 })();

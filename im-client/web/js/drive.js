@@ -39,6 +39,43 @@
     var usageEl = document.getElementById('drive-usage');
     var usageFill = document.getElementById('drive-usage-fill');
     var usageText = document.getElementById('drive-usage-text');
+    // 分享模块（二期：分享弹窗/分享管理/分享详情 三自绘弹层）
+    var dsManageBtn = document.getElementById('drive-share-manage-btn');
+    var dsMask = document.getElementById('ds-mask');
+    var dsFileIcon = document.getElementById('ds-file-icon');
+    var dsFileName = document.getElementById('ds-file-name');
+    var dsFileMeta = document.getElementById('ds-file-meta');
+    var dsTabChat = document.getElementById('ds-tab-chat');
+    var dsTabLink = document.getElementById('ds-tab-link');
+    var dsPaneChat = document.getElementById('ds-pane-chat');
+    var dsPaneLink = document.getElementById('ds-pane-link');
+    var dsContactSearch = document.getElementById('ds-contact-search');
+    var dsContactList = document.getElementById('ds-contact-list');
+    var dsPickCount = document.getElementById('ds-pick-count');
+    var dsSendBtn = document.getElementById('ds-send-btn');
+    var dsExpireGroup = document.getElementById('ds-expire-group');
+    var dsWithCode = document.getElementById('ds-with-code');
+    var dsGenBtn = document.getElementById('ds-gen-btn');
+    var dsLinkResult = document.getElementById('ds-link-result');
+    var dsLinkText = document.getElementById('ds-link-text');
+    var dsLinkCode = document.getElementById('ds-link-code');
+    var dsCodeRow = document.getElementById('ds-code-row');
+    var dsCopyBtn = document.getElementById('ds-copy-btn');
+    var dsmMask = document.getElementById('dsm-mask');
+    var dsmList = document.getElementById('dsm-list');
+    var dsmEmpty = document.getElementById('dsm-empty');
+    var dsdMask = document.getElementById('dsd-mask');
+    var dsdTitle = document.getElementById('dsd-title');
+    var dsdIcon = document.getElementById('dsd-icon');
+    var dsdName = document.getElementById('dsd-name');
+    var dsdMeta = document.getElementById('dsd-meta');
+    var dsdExtractRow = document.getElementById('dsd-extract-row');
+    var dsdExtract = document.getElementById('dsd-extract');
+    var dsdExtractOk = document.getElementById('dsd-extract-ok');
+    var dsdInvalid = document.getElementById('dsd-invalid');
+    var dsdCancelBtn = document.getElementById('dsd-cancel');
+    var dsdDownBtn = document.getElementById('dsd-down-btn');
+    var dsdSaveBtn = document.getElementById('dsd-save-btn');
 
     // ===== 状态 =====
     var inited = false;      // 一次性初始化标记（DOM 移入/事件绑定/滚动条注册）
@@ -181,7 +218,8 @@
     // 文件类别归口（图标渲染：目录/图片/视频/音频/压缩包/文档/表格/PDF/通用）
     function kindOf(item) {
         if (item.is_dir) return 'dir';
-        var ext = (item.name.split('.').pop() || '').toLowerCase();
+        // 兼容分享记录（file_name）/网盘文件与卡片信封（name）两种字段归口
+        var ext = ((item.name || item.file_name || '').split('.').pop() || '').toLowerCase();
         if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) >= 0) return 'img';
         if (['mp4', 'avi', 'mkv', 'mov', 'flv', 'wmv'].indexOf(ext) >= 0) return 'video';
         if (['mp3', 'wav', 'flac', 'ogg', 'm4a'].indexOf(ext) >= 0) return 'audio';
@@ -241,6 +279,7 @@
             '  <div class="drive-cell-size">' + (it.is_dir ? '-' : fmtSize(it.size)) + '</div>' +
             '  <div class="drive-cell-time">' + fmtTime(it.update_time || it.create_time) + '</div>' +
             '  <div class="drive-cell-actions">' +
+            '    <button class="drive-act" data-act="share" title="分享"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg></button>' +
             (it.is_dir ? '' : '    <button class="drive-act" data-act="download" title="下载"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>') +
             '    <button class="drive-act" data-act="rename" title="重命名"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>' +
             '    <button class="drive-act drive-act-danger" data-act="delete" title="删除"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>' +
@@ -365,6 +404,7 @@
                     if (act === 'download') downloadItem(it);
                     else if (act === 'rename') renameItem(it);
                     else if (act === 'delete') deleteItem(it);
+                    else if (act === 'share') openShareDialog(it);
                 });
             });
         });
@@ -584,7 +624,8 @@
         var ctrl = new AbortController();
         t.abort = ctrl;
         var sample = makeSampler();
-        fetch('/api/drive/download?username=' + encodeURIComponent(u()) + '&id=' + t.id, { signal: ctrl.signal })
+        // 下载地址归口：默认本人网盘下载；分享详情下载经 t.url（share/download，凭分享码+提取码）
+        fetch(t.url || ('/api/drive/download?username=' + encodeURIComponent(u()) + '&id=' + t.id), { signal: ctrl.signal })
             .then(function (res) {
                 if (!res.ok) {
                     // 服务端错误归口：解析 error 文本直显（404/401/配额等）
@@ -647,6 +688,368 @@
             .then(function () { done(); }, function () { done(); });
     }
 
+    // ===== 分享模块（二期：发给好友/群卡片 + 生成站内链接；状态归口服务端，客户端零计算） =====
+    var dsCurItem = null;   // 分享弹窗当前条目
+    var dsSelUsers = {};    // 已勾选好友 username -> true
+    var dsSelGroups = {};   // 已勾选群 'g'+id -> true
+    var dsExpireDays = 0;   // 链接有效期档位（0永久/1/7/30）
+    var dsCurCode = '';     // 详情弹窗当前分享码
+    var dsdInfo = null;     // 详情弹窗当前分享信息（服务端 info 归口返回）
+
+    function dsIconCls(it) { return 'ds-file-icon drive-icon k-' + kindOf(it); }
+    function dsExpireText(ts) {
+        if (!ts) return '永久有效';
+        var d = new Date(ts * 1000);
+        function p(n) { return n < 10 ? '0' + n : '' + n; }
+        return '有效期至 ' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+    // 网盘弹层互斥显隐归口（分享弹窗/分享管理/分享详情；mask 点击与 Esc 统一走此收口）
+    function closeDsMasks() {
+        if (dsMask) dsMask.classList.add('hidden');
+        if (dsmMask) dsmMask.classList.add('hidden');
+        if (dsdMask) dsdMask.classList.add('hidden');
+    }
+    function anyDsMaskOpen() {
+        return (dsMask && !dsMask.classList.contains('hidden')) ||
+            (dsmMask && !dsmMask.classList.contains('hidden')) ||
+            (dsdMask && !dsdMask.classList.contains('hidden'));
+    }
+    // 复制归口（clipboard API 失败回退 execCommand，Electron/HTTP 环境均可用）
+    function dsCopyText(text, okTip) {
+        var done = function () { toast(okTip || '已复制'); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done, function () { dsCopyFallback(text, done); });
+        } else {
+            dsCopyFallback(text, done);
+        }
+    }
+    function dsCopyFallback(text, done) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) { toast('复制失败，请手动复制'); }
+        ta.remove();
+    }
+
+    // ---- 分享弹窗（双 tab） ----
+    function openShareDialog(it) {
+        if (!dsMask) return;
+        closeDsMasks();
+        dsCurItem = it;
+        dsSelUsers = {};
+        dsSelGroups = {};
+        dsExpireDays = 0;
+        dsFileIcon.innerHTML = ICONS[kindOf(it)];
+        dsFileIcon.className = dsIconCls(it);
+        dsFileName.textContent = it.name;
+        dsFileMeta.textContent = (it.is_dir ? '文件夹' : fmtSize(it.size));
+        dsContactSearch.value = '';
+        dsLinkResult.classList.add('hidden');
+        dsGenBtn.disabled = false;
+        dsExpireGroup.querySelectorAll('.ds-expire').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-days') === '0');
+        });
+        dsWithCode.checked = false;
+        dsShowTab('chat');
+        dsRenderContacts();
+        dsMask.classList.remove('hidden');
+    }
+    function dsShowTab(tab) {
+        dsTabChat.classList.toggle('active', tab === 'chat');
+        dsTabLink.classList.toggle('active', tab === 'link');
+        dsPaneChat.classList.toggle('hidden', tab !== 'chat');
+        dsPaneLink.classList.toggle('hidden', tab !== 'link');
+    }
+    // 联系人候选渲染（群聊/好友分区；数据源 chat.js 暴露的 IMContacts 只读归口，双源一致）
+    function dsRenderContacts() {
+        var kw = (dsContactSearch.value || '').trim().toLowerCase();
+        dsContactList.innerHTML = '';
+        var added = 0;
+        var groups = window.IMContacts ? window.IMContacts.groups() : {};
+        var gids = [];
+        for (var gid in groups) gids.push(gid);
+        gids.sort(function (a, b) {
+            return String(groups[a].name || '').localeCompare(String(groups[b].name || ''), 'zh');
+        });
+        var sec = null;
+        gids.forEach(function (gid) {
+            var g = groups[gid] || {};
+            var disp = g.name || ('群聊' + gid);
+            if (kw && disp.toLowerCase().indexOf(kw) < 0) return;
+            if (!sec) { sec = dsSecTitle('群聊'); }
+            dsContactList.appendChild(dsContactRow({
+                type: 'g', key: 'g' + gid, disp: disp, avatar: g.avatar || '', count: g.member_count || 0
+            }));
+            added++;
+        });
+        sec = null;
+        var friends = (window.IMContacts ? window.IMContacts.friends() : []) || [];
+        var fs = [];
+        friends.forEach(function (f) {
+            var disp = (f.remark || '').trim() || f.username || '';
+            if (kw && disp.toLowerCase().indexOf(kw) < 0 && String(f.username || '').toLowerCase().indexOf(kw) < 0) return;
+            fs.push({ u: f.username, disp: disp, avatar: f.avatar || '', online: !!f.online });
+        });
+        fs.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
+        fs.forEach(function (f) {
+            if (!sec) { sec = dsSecTitle('好友'); }
+            dsContactList.appendChild(dsContactRow({ type: 'u', key: f.u, disp: f.disp, avatar: f.avatar }));
+            added++;
+        });
+        if (!added) {
+            dsContactList.innerHTML = '<div class="ds-contact-empty">' +
+                (kw ? '无匹配联系人' : '暂无可分享的好友或群聊') + '</div>';
+        }
+        dsUpdatePickCount();
+    }
+    function dsSecTitle(text) {
+        var el = document.createElement('div');
+        el.className = 'ds-sec-title';
+        el.textContent = text;
+        return el;
+    }
+    function dsContactRow(opt) {
+        var picked = opt.type === 'g' ? !!dsSelGroups[opt.key] : !!dsSelUsers[opt.key];
+        var el = document.createElement('div');
+        el.className = 'grp-item' + (picked ? ' picked' : '');
+        var chk = document.createElement('span');
+        chk.className = 'grp-check';
+        chk.textContent = '✓';
+        el.appendChild(chk);
+        if (opt.avatar) {
+            var av = document.createElement('img');
+            av.className = 'fwd-avatar';
+            av.src = opt.avatar;
+            el.appendChild(av);
+        } else {
+            var ph = document.createElement('span');
+            ph.className = 'fwd-avatar-ph';
+            ph.textContent = (opt.disp || '?').charAt(0).toUpperCase();
+            el.appendChild(ph);
+        }
+        var nm = document.createElement('div');
+        nm.className = 'fwd-name';
+        nm.textContent = opt.disp;
+        el.appendChild(nm);
+        if (opt.type === 'g' && opt.count) {
+            var ct = document.createElement('span');
+            ct.className = 'ds-contact-count';
+            ct.textContent = opt.count + '人';
+            el.appendChild(ct);
+        }
+        el.addEventListener('click', function () {
+            var nowPicked;
+            if (opt.type === 'g') {
+                nowPicked = !dsSelGroups[opt.key];
+                if (nowPicked) dsSelGroups[opt.key] = true; else delete dsSelGroups[opt.key];
+            } else {
+                nowPicked = !dsSelUsers[opt.key];
+                if (nowPicked) dsSelUsers[opt.key] = true; else delete dsSelUsers[opt.key];
+            }
+            el.classList.toggle('picked', nowPicked);
+            dsUpdatePickCount();
+        });
+        return el;
+    }
+    function dsUpdatePickCount() {
+        var n = Object.keys(dsSelUsers).length + Object.keys(dsSelGroups).length;
+        dsPickCount.textContent = n ? '已选择 ' + n + ' 位联系人' : '';
+        dsSendBtn.disabled = n === 0;
+    }
+    function dsSendToContacts() {
+        if (!dsCurItem) return;
+        dsSendBtn.disabled = true;
+        apiPost('share/create', {
+            username: u(), file_id: dsCurItem.id, expire_days: 0, with_code: false,
+            to_users: Object.keys(dsSelUsers), to_groups: Object.keys(dsSelGroups)
+        }, function (err, data) {
+            dsSendBtn.disabled = false;
+            if (err) { toast(err.message); return; }
+            closeDsMasks();
+            toast('已分享给 ' + (data.delivered || 0) + ' 位联系人');
+        });
+    }
+    function dsGenLink() {
+        if (!dsCurItem) return;
+        dsGenBtn.disabled = true;
+        apiPost('share/create', {
+            username: u(), file_id: dsCurItem.id, expire_days: dsExpireDays,
+            with_code: dsWithCode.checked, to_users: [], to_groups: []
+        }, function (err, data) {
+            dsGenBtn.disabled = false;
+            if (err) { toast(err.message); return; }
+            dsLinkText.textContent = location.origin + (data.url || ('/s/' + (data.share && data.share.code)));
+            var code = data.extract_code; // 服务端顶层回传（仅创建响应一次性可见，share 结构不含）
+            dsLinkCode.textContent = code || '';
+            dsCodeRow.classList.toggle('hidden', !code);
+            dsLinkResult.classList.remove('hidden');
+            toast('链接已创建');
+        });
+    }
+
+    // ---- 分享管理（我发出的） ----
+    function openShareManage() {
+        closeDsMasks();
+        if (!dsmMask) return;
+        dsmList.innerHTML = '<div class="dsm-empty">加载中…</div>';
+        dsmEmpty.classList.add('hidden');
+        dsmMask.classList.remove('hidden');
+        apiJSON('/api/drive/share/list?username=' + encodeURIComponent(u()), null, function (err, data) {
+            if (err) { toast(err.message); dsmList.innerHTML = ''; dsmEmpty.textContent = err.message; dsmEmpty.classList.remove('hidden'); return; }
+            renderShareManage((data && data.items) || []);
+        });
+    }
+    function renderShareManage(items) {
+        dsmList.innerHTML = '';
+        dsmEmpty.classList.toggle('hidden', items.length > 0);
+        if (!items.length) { dsmEmpty.textContent = '暂无分享记录'; return; }
+        items.forEach(function (sh) {
+            var row = document.createElement('div');
+            row.className = 'dsm-row';
+            var icon = document.createElement('span');
+            icon.className = dsIconCls(sh);
+            icon.innerHTML = ICONS[kindOf(sh)] || ICONS.file;
+            var info = document.createElement('div');
+            info.className = 'dsm-info';
+            var nm = document.createElement('div');
+            nm.className = 'dsm-name';
+            nm.textContent = sh.file_name;
+            nm.title = nm.textContent;
+            var meta = document.createElement('div');
+            meta.className = 'dsm-meta';
+            var metaBits = [(sh.is_dir ? '文件夹' : fmtSize(sh.size)), dsExpireText(sh.expire_at)];
+            if (sh.has_extract) metaBits.push('提取码');
+            meta.textContent = metaBits.join(' · ');
+            info.appendChild(nm);
+            info.appendChild(meta);
+            var status = document.createElement('span');
+            var ok = sh.status === 'valid';
+            status.className = 'dsm-status ' + (ok ? 'ok' : 'bad');
+            status.textContent = ok ? '分享中' : (sh.valid_msg || '已失效');
+            var cancelBtn = document.createElement('button');
+            cancelBtn.className = 'dsm-cancel';
+            cancelBtn.textContent = '取消分享';
+            cancelBtn.addEventListener('click', function () {
+                driveConfirm('取消分享',
+                    '取消后链接与已发送的分享卡片将立即失效，确定取消分享“' + sh.file_name + '”吗？',
+                    function () {
+                        apiPost('share/cancel', { username: u(), id: sh.id }, function (err2) {
+                            if (err2) { toast(err2.message); return; }
+                            toast('分享已取消');
+                            openShareManage(); // 原位刷新状态
+                        });
+                    });
+            });
+            row.appendChild(icon);
+            row.appendChild(info);
+            row.appendChild(status);
+            if (ok) row.appendChild(cancelBtn);
+            dsmList.appendChild(row);
+        });
+    }
+
+    // ---- 分享详情（卡片气泡/站内链接点击进入） ----
+    // 卡片点击入口（chat.js 92 气泡归口调用）：card 为信封 share 对象（含提取码标记等快照）
+    function showShareCard(card) {
+        if (!dsdMask || !card || !card.code) return;
+        init(); // 卡片直达可能早于网盘页打开（init 含按钮事件绑定，幂等）
+        closeDsMasks();
+        dsdMask.classList.remove('hidden');
+        dsdTitle.textContent = '文件分享';
+        dsCurCode = card.code;
+        dsdInfo = null;
+        dsdIcon.innerHTML = ICONS[kindOf(card)] || ICONS.file;
+        dsdIcon.className = dsIconCls(card);
+        dsdName.textContent = card.name || '未命名文件';
+        dsdMeta.textContent = (card.is_dir ? '文件夹' : fmtSize(card.size)) +
+            ' · ' + (card.from_name || card.from || '') + ' 分享' + (card.has_extract ? ' · 需提取码' : '');
+        dsdInvalid.classList.add('hidden');
+        dsdSaveBtn.classList.add('hidden');
+        dsdDownBtn.classList.add('hidden');
+        dsdExtract.value = '';
+        if (card.has_extract) {
+            dsdExtractRow.classList.remove('hidden');
+            setTimeout(function () { dsdExtract.focus(); }, 60);
+        } else {
+            dsdExtractRow.classList.add('hidden');
+            dsFetchShareInfo();
+        }
+    }
+    // 站内链接入口（/s/<code> 登录后归口调用）：仅知分享码，需提取码时服务端引导展示输入行
+    function showShareLink(code) {
+        if (!dsdMask || !code) return;
+        init(); // 链接直达不经过网盘页 open()，须先补事件绑定（幂等）
+        closeDsMasks();
+        dsdMask.classList.remove('hidden');
+        dsdTitle.textContent = '文件分享';
+        dsCurCode = code;
+        dsdInfo = null;
+        dsdIcon.innerHTML = ICONS.file;
+        dsdIcon.className = 'ds-file-icon drive-icon';
+        dsdName.textContent = '正在获取分享信息…';
+        dsdMeta.textContent = '';
+        dsdInvalid.classList.add('hidden');
+        dsdSaveBtn.classList.add('hidden');
+        dsdDownBtn.classList.add('hidden');
+        dsdExtractRow.classList.add('hidden');
+        dsdExtract.value = '';
+        dsFetchShareInfo();
+    }
+    function dsFetchShareInfo() {
+        apiJSON('/api/drive/share/info?code=' + encodeURIComponent(dsCurCode) +
+            '&extract=' + encodeURIComponent(dsdExtract.value.trim()), null, function (err, data) {
+            if (err) {
+                if (data && data.need_extract) {
+                    // 需要提取码：展示输入行引导（错误文案由输入行上方名称区提示）
+                    dsdExtractRow.classList.remove('hidden');
+                    dsdInvalid.classList.add('hidden');
+                    dsdName.textContent = err.message || '请输入提取码';
+                    dsdMeta.textContent = '';
+                    setTimeout(function () { dsdExtract.focus(); dsdExtract.select(); }, 60);
+                } else {
+                    dsdInvalid.textContent = err.message || '分享已失效';
+                    dsdInvalid.classList.remove('hidden');
+                }
+                return;
+            }
+            var sh = data.share;
+            dsdInfo = sh;
+            dsdIcon.innerHTML = ICONS[kindOf(sh)] || ICONS.file;
+            dsdIcon.className = dsIconCls(sh);
+            dsdName.textContent = sh.file_name;
+            dsdMeta.textContent = (sh.is_dir ? '文件夹' : fmtSize(sh.size)) + ' · ' + dsExpireText(sh.expire_at) +
+                (sh.has_extract ? ' · 需提取码' : '');
+            dsdInvalid.classList.add('hidden');
+            dsdSaveBtn.classList.remove('hidden');
+            dsdDownBtn.classList.toggle('hidden', !!sh.is_dir);
+        });
+    }
+    function dsSaveToMyDrive() {
+        apiPost('share/save', {
+            username: u(), code: dsCurCode, extract: dsdExtract.value.trim(), parent_id: 0
+        }, function (err, data) {
+            if (err) { toast(err.message); return; }
+            toast('已保存到我的网盘（' + (data.saved || 0) + ' 项）');
+            closeDsMasks();
+            if (visible) refreshAfterOp(); // 网盘页打开时原位刷新列表
+            loadUsage();
+        });
+    }
+    function dsDownloadViaShare() {
+        if (!dsdInfo) return;
+        downQueue.push(makeTask({
+            kind: 'down', name: dsdInfo.file_name, size: dsdInfo.size || 0,
+            url: '/api/drive/share/download?code=' + encodeURIComponent(dsCurCode) +
+                '&extract=' + encodeURIComponent(dsdExtract.value.trim())
+        }));
+        renderTransfers();
+        pumpDown();
+        closeDsMasks();
+    }
+
     // ===== 打开/关闭（Tab 切换联动归口，chat.js 调用） =====
     function init() {
         if (inited) return;
@@ -704,6 +1107,45 @@
             if (searchMode) { searchMode = false; searchSeq++; loadList(); }
             searchInput.focus();
         });
+        // ===== 分享模块事件绑定（二期） =====
+        dsTabChat.addEventListener('click', function () { dsShowTab('chat'); });
+        dsTabLink.addEventListener('click', function () { dsShowTab('link'); });
+        dsContactSearch.addEventListener('input', dsRenderContacts);
+        dsSendBtn.addEventListener('click', dsSendToContacts);
+        dsExpireGroup.querySelectorAll('.ds-expire').forEach(function (b) {
+            b.addEventListener('click', function () {
+                dsExpireDays = parseInt(b.getAttribute('data-days'), 10) || 0;
+                dsExpireGroup.querySelectorAll('.ds-expire').forEach(function (x) {
+                    x.classList.toggle('active', x === b);
+                });
+            });
+        });
+        dsGenBtn.addEventListener('click', dsGenLink);
+        dsCopyBtn.addEventListener('click', function () {
+            var text = dsLinkText.textContent;
+            var code = dsLinkCode.textContent;
+            if (code && dsCodeRow && !dsCodeRow.classList.contains('hidden')) {
+                text += ' 提取码:' + code; // 有提取码时一并复制（百度网盘同款文案合并）
+            }
+            dsCopyText(text, '链接已复制');
+        });
+        dsdExtractOk.addEventListener('click', dsFetchShareInfo);
+        // 提取码输入自动转大写（所见即所发；服务端比对亦不区分大小写兜底）
+        dsdExtract.addEventListener('input', function () {
+            var v = dsdExtract.value.toUpperCase();
+            if (v !== dsdExtract.value) dsdExtract.value = v;
+        });
+        dsdExtract.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); dsFetchShareInfo(); }
+        });
+        dsdSaveBtn.addEventListener('click', dsSaveToMyDrive);
+        dsdDownBtn.addEventListener('click', dsDownloadViaShare);
+        dsdCancelBtn.addEventListener('click', closeDsMasks);
+        [dsMask, dsmMask, dsdMask].forEach(function (m) {
+            if (!m) return;
+            m.addEventListener('click', function (e) { if (e.target === m) closeDsMasks(); });
+        });
+        if (dsManageBtn) dsManageBtn.addEventListener('click', openShareManage);
         // 左侧"我的文件"入口：回根目录并刷新
         driveEntry.addEventListener('click', function () {
             if (searchMode) clearSearchUI();
@@ -741,9 +1183,12 @@
                 pump();
             });
         }
-        // Esc 关闭（仅本页面可见时；自绘弹窗打开时优先关弹窗，其次退出搜索态，最后关页面）
+        // Esc 关闭：网盘分享弹层全局优先（分享详情可从聊天气泡打开，不依赖网盘页可见）；
+        // 其次本页面自绘弹窗 → 退出搜索态 → 关页面
         document.addEventListener('keydown', function (e) {
-            if (e.key !== 'Escape' || !visible) return;
+            if (e.key !== 'Escape') return;
+            if (anyDsMaskOpen()) { closeDsMasks(); return; }
+            if (!visible) return;
             if (maskEl && !maskEl.classList.contains('hidden')) { closeModal(); return; }
             if (searchMode) { clearSearchUI(); searchSeq++; loadList(); return; }
             close();
@@ -753,6 +1198,9 @@
             window._osbInit(listEl);
             window._osbInit(uploadItemsEl); // 上传列表限高滚动区同款悬浮滑块
             window._osbInit(downItemsEl);   // 下载列表同款
+            // 网盘分享弹窗滚动区同款悬浮滑块（禁系统滚动条归口）
+            if (dsContactList) window._osbInit(dsContactList); // 分享选人列表
+            if (dsmList) window._osbInit(dsmList);             // 分享管理列表
         }
     }
     function open() {
@@ -772,6 +1220,9 @@
     }
     function isOpen() { return visible; }
 
-    // 暴露给 chat.js Tab 切换联动（网盘 Tab 进入时 open，切走时 close）
-    window.IMDrive = { open: open, close: close, isOpen: isOpen };
+    // 暴露给 chat.js：Tab 切换联动（open/close/isOpen）+ 分享详情归口（92 卡片气泡点击 / /s/<code> 链接登录后调用）
+    window.IMDrive = {
+        open: open, close: close, isOpen: isOpen,
+        showShareCard: showShareCard, showShareLink: showShareLink
+    };
 })();

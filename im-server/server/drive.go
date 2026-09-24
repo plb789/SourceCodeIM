@@ -332,8 +332,15 @@ func (s *Server) handleDriveDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	store.DB.Where("id IN ?", ids).Delete(&model.DriveFile{})
 	// 文件本体清理（幂等；失败不阻断——元数据已删，孤儿对象不影响功能正确性）
+	// 零拷贝保护归口：分享保存指向同一 object_key 不复制本体，物理删除前必须确认
+	// 已无任何其他记录（未被级联删除的）引用同一 key，否则只删记录保留对象，防受让方悬空
 	if st := store.GetObjectStore(); st != nil {
 		for _, key := range fileKeys {
+			var refCnt int64
+			store.DB.Model(&model.DriveFile{}).Where("object_key = ? AND id NOT IN ?", key, ids).Count(&refCnt)
+			if refCnt > 0 {
+				continue // 对象仍被其他记录引用（分享受让副本等），跳过物理删除
+			}
 			if err := st.Delete(key); err != nil {
 				logger.Warn("网盘对象删除失败（孤儿对象）: %s, %v", key, err)
 			}
@@ -462,6 +469,11 @@ func (s *Server) handleDriveDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "目录不支持下载", http.StatusBadRequest)
 		return
 	}
+	s.serveDriveFile(w, r, rec)
+}
+
+// serveDriveFile 文件下发归口（本人下载与分享下载共用：校验后传记录即可，两种存储后端统一在此收口）
+func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *model.DriveFile) {
 	st := store.GetObjectStore()
 	if st == nil {
 		http.Error(w, "存储后端未就绪", http.StatusInternalServerError)

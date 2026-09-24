@@ -1,0 +1,386 @@
+/* ===== 网盘分享独立页（百度网盘同款布局，/s/<code> 落地页） =====
+   主题归口：全部颜色引用 css/style.css 既有变量（--primary/--panel-bg/--text 等），
+   data-theme=light/dark 自动跟随（system 由 style.css 媒体查询块接管），本文件零颜色硬编码 */
+
+html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+}
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ===== 顶栏 ===== */
+.sp-topbar {
+    height: 56px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+}
+.sp-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}
+.sp-logo-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-logo-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+}
+.sp-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.sp-login-entry {
+    border: 1px solid var(--primary);
+    background: transparent;
+    color: var(--primary);
+    font-size: 13px;
+    padding: 5px 16px;
+    border-radius: 15px;
+    cursor: pointer;
+}
+.sp-login-entry:hover {
+    background: var(--primary);
+    color: #ffffff;
+}
+.sp-user-name {
+    font-size: 13px;
+    color: var(--text);
+}
+.sp-logout {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 6px;
+}
+.sp-logout:hover {
+    color: var(--primary);
+}
+
+/* ===== 主体：居中卡片 ===== */
+.sp-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+}
+.sp-card {
+    width: 460px;
+    max-width: 100%;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 36px 32px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-sizing: border-box;
+}
+.sp-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+.sp-icon svg {
+    width: 40px;
+    height: 40px;
+}
+/* 图标色板（与 drive.js 列表图标同语义：文件夹黄/图片绿/视频蓝/音频紫/其余主题灰绿） */
+.sp-icon.k-dir    { background: rgba(245, 166, 35, 0.15); color: #f5a623; }
+.sp-icon.k-img    { background: rgba(7, 193, 96, 0.12);  color: var(--primary); }
+.sp-icon.k-video  { background: rgba(64, 128, 255, 0.12); color: #4080ff; }
+.sp-icon.k-audio  { background: rgba(155, 81, 224, 0.12); color: #9b51e0; }
+.sp-icon.k-zip,
+.sp-icon.k-doc,
+.sp-icon.k-sheet,
+.sp-icon.k-pdf,
+.sp-icon.k-txt,
+.sp-icon.k-file   { background: rgba(7, 193, 96, 0.10);  color: var(--primary); }
+
+.sp-name {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+}
+.sp-meta {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+/* ===== 提取码行 ===== */
+.sp-extract-row {
+    width: 100%;
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.sp-extract-row.hidden { display: none; }
+.sp-extract-tip {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+.sp-extract-line {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 320px;
+}
+.sp-extract-input {
+    flex: 1;
+    min-width: 0;
+    height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 15px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    padding: 0 12px;
+    box-sizing: border-box;
+    outline: none;
+}
+.sp-extract-input:focus {
+    border-color: var(--primary);
+}
+.sp-extract-input::placeholder {
+    letter-spacing: 0;
+    color: var(--text-light);
+}
+.sp-extract-btn {
+    flex: none;
+}
+.sp-extract-err {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #e5534b;
+}
+
+/* ===== 操作按钮行 ===== */
+.sp-btn-row {
+    width: 100%;
+    margin-top: 26px;
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+}
+.sp-btn-row.hidden { display: none; }
+.sp-btn {
+    height: 40px;
+    min-width: 132px;
+    border-radius: 20px;
+    font-size: 14px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid transparent;
+    transition: opacity 0.15s ease;
+}
+.sp-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+.sp-btn-primary {
+    background: var(--primary);
+    color: #ffffff;
+}
+.sp-btn-primary:hover:not(:disabled) {
+    opacity: 0.88;
+}
+.sp-btn-ghost {
+    background: transparent;
+    border-color: var(--primary);
+    color: var(--primary);
+}
+.sp-btn-ghost:hover:not(:disabled) {
+    background: rgba(7, 193, 96, 0.08);
+}
+
+/* ===== 失效态 ===== */
+.sp-invalid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 48px 24px;
+}
+.sp-invalid.hidden { display: none; }
+.sp-invalid-icon {
+    color: var(--text-light);
+    opacity: 0.6;
+}
+.sp-invalid-text {
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+/* ===== 自绘登录浮层 ===== */
+.sp-login-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.sp-login-mask.hidden { display: none; }
+.sp-login-box {
+    position: relative;
+    width: 340px;
+    max-width: calc(100vw - 32px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 28px 26px 24px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+.sp-login-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+    margin-bottom: 20px;
+}
+.sp-login-input {
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 14px;
+    padding: 0 12px;
+    box-sizing: border-box;
+    outline: none;
+    margin-bottom: 12px;
+}
+.sp-login-input:focus {
+    border-color: var(--primary);
+}
+.sp-login-err {
+    font-size: 12px;
+    color: #e5534b;
+    margin-bottom: 10px;
+}
+.sp-login-err.hidden { display: none; }
+.sp-login-btn {
+    width: 100%;
+    border-radius: 8px;
+    min-width: 0;
+}
+.sp-login-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-login-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+/* ===== 自绘 toast ===== */
+.sp-toast {
+    position: fixed;
+    left: 50%;
+    top: 72px;
+    transform: translateX(-50%);
+    background: var(--primary);
+    color: #ffffff;
+    font-size: 13px;
+    padding: 9px 20px;
+    border-radius: 18px;
+    box-shadow: var(--shadow-soft);
+    z-index: 1200;
+    max-width: 80vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-toast.hidden { display: none; }
+
+/* ===== 页脚 ===== */
+.sp-footer {
+    flex: none;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 18px 0 22px;
+    user-select: none;
+}
+
+/* ===== 手机宽度响应式（百度网盘移动分享页同款单列布局） ===== */
+@media (max-width: 520px) {
+    .sp-topbar {
+        padding: 0 16px;
+    }
+    .sp-card {
+        padding: 28px 20px 24px;
+        border-radius: 10px;
+    }
+    .sp-btn-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .sp-btn {
+        min-width: 0;
+        width: 100%;
+    }
+    .sp-extract-line {
+        max-width: none;
+    }
+}

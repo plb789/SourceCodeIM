@@ -56,6 +56,7 @@ func (h *Hub) Add(c *Client) {
 }
 
 // platformName 端型中文名（互踢提示与日志归口；未知值原样返回便于排查）
+// 独立分享页阶段：'share'=网盘分享页（socket.js /s/ 路径上报，与主应用各端跨端共存不互踢）
 func platformName(p string) string {
 	switch p {
 	case "pc":
@@ -64,6 +65,8 @@ func platformName(p string) string {
 		return "WEB"
 	case "":
 		return "手机"
+	case "share":
+		return "分享页"
 	}
 	return p
 }

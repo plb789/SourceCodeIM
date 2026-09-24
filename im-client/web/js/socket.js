@@ -134,7 +134,8 @@
         RED_PACKET_SYNC: 88,     // 下行：红包状态同步（领取/领完/过期退回后广播，content 为 JSON：{packet_id,status,claimed_count,...,msg_id}；卡片原位刷新）
         RED_PACKET_DETAIL: 89,   // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
         REMOTE_SIGNAL: 90,       // 阶段一百五十五：QQ 同款远程协助信令（双向，content 为 JSON：{action,session_id,mode?,grant?,sdp?,candidate?,reason?}；好友强校验，话单由服务端归口落库）
-        FILE_P2P_SIGNAL: 91      // 阶段一百五十六：好友文件 P2P 直传信令（双向，content 为 JSON：{action,transfer_id,name?,size?,mime?,sha256?,reason?,sdp?,candidate?,platform?,nonce?}；服务端仅转发信令+归口判定，文件字节点对点直传）
+        FILE_P2P_SIGNAL: 91,     // 阶段一百五十六：好友文件 P2P 直传信令（双向，content 为 JSON：{action,transfer_id,name?,size?,mime?,sha256?,reason?,sdp?,candidate?,platform?,nonce?}；服务端仅转发信令+归口判定，文件字节点对点直传）
+        DRIVE_SHARE: 92          // 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}；点击弹详情保存/下载）
     };
 
     function connect(username, password) {
@@ -156,7 +157,12 @@
             // 原代码：platform: window.desktop ? 'pc' : ''
             // 阶段一百四十五：WEB 端浏览器通话桥上线后 window.desktop 同样存在，经 __webCallBridge 标记区分——
             // 浏览器上报 'web'（服务端通话/会议被叫能力改归口 HasCall），Electron PC 端仍报 'pc'，手机端无桥报空
-            send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: window.desktop ? (window.__webCallBridge ? 'web' : 'pc') : '' });
+            // 独立分享页阶段：/s/ 分享页上报独立端型 'share'，与主应用（'pc'/'web'/''）跨端共存——
+            // 原实现分享页与浏览器主应用同为 '' 端被服务端同端互踢（hub.go platform 相等即踢），
+            // 用户开分享链接会把正在使用的主应用踢下线且双方自动重连互相反踢形成循环
+            var _loginPlatform = window.desktop ? (window.__webCallBridge ? 'web' : 'pc')
+                : (location.pathname.indexOf('/s/') === 0 ? 'share' : '');
+            send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: _loginPlatform });
             // 启动心跳
             startHeartbeat();
         };
