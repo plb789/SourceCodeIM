@@ -14708,6 +14708,69 @@ html.m .dsm-list {
     color: #d86a6a;
     border-color: #d86a6a;
 }
+/* 目录选择弹窗（移动/复制到：面包屑导航 + 仅目录列表 + 底部新建文件夹/取消/确定；全部主题变量归口） */
+.drive-pick-box {
+    width: 420px;
+    max-width: 92vw;
+    text-align: left;
+}
+.drive-pick-crumbs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+    white-space: nowrap;
+}
+.drive-pick-list {
+    height: 260px;
+    overflow-y: auto;
+    margin: 6px 0;
+    padding: 2px 0;
+    position: relative;
+}
+.drive-pick-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.drive-pick-row:hover {
+    background: var(--hover);
+}
+.drive-pick-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.drive-pick-arrow {
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.drive-pick-empty {
+    text-align: center;
+    color: var(--text-light);
+    font-size: 13px;
+    padding: 48px 0;
+}
+.drive-pick-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+.drive-pick-flex {
+    flex: 1;
+}
 .drive-batch-danger:hover {
     background: rgba(216, 106, 106, 0.08);
 }

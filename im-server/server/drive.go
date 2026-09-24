@@ -94,6 +94,9 @@ func RegisterDriveRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/rename", s.handleDriveRename)
 	http.HandleFunc("POST /api/drive/delete", s.handleDriveDelete)
 	http.HandleFunc("POST /api/drive/delete_batch", s.handleDriveDeleteBatch)
+	// 移动/复制（网盘三期）：username 在 JSON 体内（处理器内 driveCheckUser 归口校验，同 delete 水位）
+	http.HandleFunc("POST /api/drive/move", s.handleDriveMove)
+	http.HandleFunc("POST /api/drive/copy", s.handleDriveCopy)
 	http.HandleFunc("POST /api/drive/upload", s.guardDrive(s.handleDriveUpload))
 	http.HandleFunc("GET /api/drive/download", s.guardDrive(s.handleDriveDownload))
 	// 大文件链路（网盘二期）：MD5 秒传 + 分片上传 + 断点续传——username 走查询参数统一 guardDrive 包装；
@@ -388,6 +391,219 @@ func (s *Server) handleDriveDeleteBatch(w http.ResponseWriter, r *http.Request) 
 	logger.Info("网盘批量删除: %s 请求 %d 项, 删除 %d 条记录", body.Username, len(body.IDs), deleted)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": deleted})
+}
+
+// ===== 移动/复制（网盘三期：批量移动/复制到指定目录，百度网盘同款） =====
+// 存储归口：复制文件只浅拷贝记录行（object_key/md5/mime/size 原样复用，对象本体零拷贝零新增
+// 存储开销——彻底删除的引用计数已按 Unscoped 全表归口，副本存活则对象必存活）；目录 BFS 递归
+// 复制整棵子树新建记录并重挂父子链，子文件同样浅拷贝
+
+// driveMoveCopyReq 移动/复制请求体（JSON）
+type driveMoveCopyReq struct {
+	Username string `json:"username"`
+	IDs      []uint `json:"ids"`
+	TargetID uint   `json:"target_id"` // 目标目录 id（0=我的文件根目录）
+}
+
+// driveMoveCopyGuard 移动/复制公共校验归口：参数 → driveCheckUser → 单批上限 → 目标目录存在
+// 且为本人目录（0=根目录放行）→ 逐项归属收集（不存在的 id 跳过不阻断整批，批量删除同水位）。
+// 返回 recs（归属命中记录）、dirSet（其中目录 id 集合，防环用）、请求体；校验失败已直接写响应返回 false
+func (s *Server) driveMoveCopyGuard(w http.ResponseWriter, r *http.Request) ([]*model.DriveFile, map[uint]bool, *driveMoveCopyReq, bool) {
+	var body driveMoveCopyReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || len(body.IDs) == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return nil, nil, nil, false
+	}
+	if len(body.IDs) > 200 {
+		driveFail(w, http.StatusBadRequest, "单次最多操作 200 项")
+		return nil, nil, nil, false
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return nil, nil, nil, false
+	}
+	if body.TargetID > 0 {
+		tgt, err := s.driveOwnFile(body.TargetID, body.Username)
+		if err != nil || !tgt.IsDir {
+			driveFail(w, http.StatusNotFound, "目标目录不存在")
+			return nil, nil, nil, false
+		}
+	}
+	recs := make([]*model.DriveFile, 0, len(body.IDs))
+	dirSet := make(map[uint]bool, len(body.IDs))
+	for _, id := range body.IDs {
+		rec, err := s.driveOwnFile(id, body.Username)
+		if err != nil {
+			continue // 单条不存在/越权 id 跳过，不阻断整批
+		}
+		recs = append(recs, rec)
+		if rec.IsDir {
+			dirSet[rec.ID] = true
+		}
+	}
+	if len(recs) == 0 {
+		driveFail(w, http.StatusNotFound, "所选文件不存在")
+		return nil, nil, nil, false
+	}
+	return recs, dirSet, &body, true
+}
+
+// driveCycleHit 防环归口：从 target 沿 parent_id 向上找祖先链（owner 条件贯穿杜绝跨用户链路），
+// 命中 dirSet（被移动/复制的目录 id 集合）= 目标为其中目录自身或其子孙，落位将成环
+func (s *Server) driveCycleHit(username string, target uint, dirSet map[uint]bool) bool {
+	cur := target
+	for i := 0; i < 64 && cur != 0; i++ {
+		if dirSet[cur] {
+			return true
+		}
+		var rec model.DriveFile
+		if err := store.DB.Select("parent_id").Where("id = ? AND owner = ?", cur, username).First(&rec).Error; err != nil {
+			return false // 断链兜底：数据异常不误伤正常操作
+		}
+		cur = rec.ParentID
+	}
+	return false
+}
+
+// handleDriveMove 移动 POST /api/drive/move {username, ids:[], target_id}
+// 防环（目标不得为被移动目录自身或其子孙）→ 逐项落位：跨目录时目标同名自动改名
+// （name(n).ext，复用回收站恢复策略归口；同父移动为原位无操作）。返回 {moved, renamed}
+func (s *Server) handleDriveMove(w http.ResponseWriter, r *http.Request) {
+	recs, dirSet, body, ok := s.driveMoveCopyGuard(w, r)
+	if !ok {
+		return
+	}
+	if body.TargetID > 0 && s.driveCycleHit(body.Username, body.TargetID, dirSet) {
+		driveFail(w, http.StatusBadRequest, "不能移动到自身或其子文件夹内")
+		return
+	}
+	moved, renamed := 0, 0
+	for _, rec := range recs {
+		name := rec.Name
+		if rec.ParentID != body.TargetID {
+			// 跨目录落位才查同名（目录与文件统一命名空间；同父名本就唯一）
+			var cnt int64
+			store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ? AND id != ?",
+				body.Username, body.TargetID, rec.Name, rec.ID).Count(&cnt)
+			if cnt > 0 {
+				name = driveRestoreName(body.Username, body.TargetID, rec.Name, rec.IsDir)
+				renamed++
+			}
+		}
+		if err := store.DB.Model(&model.DriveFile{}).Where("id = ? AND owner = ?", rec.ID, body.Username).
+			Updates(map[string]interface{}{"parent_id": body.TargetID, "name": name}).Error; err != nil {
+			continue
+		}
+		moved++
+	}
+	logger.Info("网盘移动: %s 请求 %d 项 -> parent=%d, 成功 %d, 改名 %d", body.Username, len(body.IDs), body.TargetID, moved, renamed)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"moved": moved, "renamed": renamed})
+}
+
+// driveSubtreeSize 目录子树文件字节总和（BFS 收集子孙目录 id 后一次聚合查询；限深 64 防环兜底）
+func (s *Server) driveSubtreeSize(username string, dirID uint) int64 {
+	dirIDs := []uint{dirID}
+	frontier := []uint{dirID}
+	for depth := 0; depth < 64 && len(frontier) > 0; depth++ {
+		var next []uint
+		store.DB.Model(&model.DriveFile{}).Where("owner = ? AND is_dir = ? AND parent_id IN ?",
+			username, true, frontier).Pluck("id", &next)
+		dirIDs = append(dirIDs, next...)
+		frontier = next
+	}
+	var total struct{ Total int64 }
+	store.DB.Model(&model.DriveFile{}).Select("COALESCE(SUM(size),0) AS total").
+		Where("owner = ? AND is_dir = ? AND parent_id IN ?", username, false, dirIDs).Scan(&total)
+	return total.Total
+}
+
+// handleDriveCopy 复制 POST /api/drive/copy {username, ids:[], target_id}
+// 校验链：公共归口 → 防环（同移动）→ 配额服务端聚合校验（待复制文件字节总和+已用 vs 配额，
+// 与上传同水位）；落位：目标同名自动改名 → 文件浅拷贝记录行 / 目录新建后 BFS 递归复制子树。
+// 返回 {copied, renamed}
+func (s *Server) handleDriveCopy(w http.ResponseWriter, r *http.Request) {
+	recs, dirSet, body, ok := s.driveMoveCopyGuard(w, r)
+	if !ok {
+		return
+	}
+	if body.TargetID > 0 && s.driveCycleHit(body.Username, body.TargetID, dirSet) {
+		driveFail(w, http.StatusBadRequest, "不能复制到自身或其子文件夹内")
+		return
+	}
+	// 配额校验（复制产生同体积新记录）
+	var need int64
+	for _, rec := range recs {
+		if rec.IsDir {
+			need += s.driveSubtreeSize(body.Username, rec.ID)
+		} else {
+			need += rec.Size
+		}
+	}
+	if need > 0 {
+		var used struct{ Total int64 }
+		store.DB.Model(&model.DriveFile{}).Select("COALESCE(SUM(size),0) AS total").
+			Where("owner = ? AND is_dir = ?", body.Username, false).Scan(&used)
+		if used.Total+need > s.cfg.Drive.QuotaBytes {
+			driveFail(w, http.StatusForbidden, "网盘空间不足，复制失败")
+			return
+		}
+	}
+	copied, renamed := 0, 0
+	for _, rec := range recs {
+		name := rec.Name
+		var cnt int64
+		store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+			body.Username, body.TargetID, rec.Name).Count(&cnt)
+		if cnt > 0 {
+			name = driveRestoreName(body.Username, body.TargetID, rec.Name, rec.IsDir)
+			renamed++
+		}
+		nrec := model.DriveFile{Owner: body.Username, ParentID: body.TargetID, Name: name, IsDir: rec.IsDir,
+			Size: rec.Size, ObjectKey: rec.ObjectKey, MimeType: rec.MimeType, MD5: rec.MD5}
+		if err := store.DB.Create(&nrec).Error; err != nil {
+			continue
+		}
+		copied++
+		if rec.IsDir {
+			copied += s.driveCopySubtree(body.Username, rec.ID, nrec.ID)
+		}
+	}
+	logger.Info("网盘复制: %s 请求 %d 项 -> parent=%d, 新建 %d, 顶层改名 %d", body.Username, len(body.IDs), body.TargetID, copied, renamed)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"copied": copied, "renamed": renamed})
+}
+
+// driveCopySubtree BFS 递归复制 srcID 目录整棵子树重挂到 newParentID 下（子文件同样浅拷贝记录
+// 行复用对象本体；子项落新建目录名必不冲突无需改名；限量 5000 条防异常数据拖垮服务端）
+func (s *Server) driveCopySubtree(username string, srcID uint, newParentID uint) int {
+	type copyNode struct{ src, parent uint }
+	queue := []copyNode{{srcID, newParentID}}
+	n := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		var children []model.DriveFile
+		if err := store.DB.Where("owner = ? AND parent_id = ?", username, cur.src).
+			Order("is_dir DESC, name ASC").Find(&children).Error; err != nil {
+			break
+		}
+		for _, ch := range children {
+			if n >= 5000 {
+				return n
+			}
+			nrec := model.DriveFile{Owner: username, ParentID: cur.parent, Name: ch.Name, IsDir: ch.IsDir,
+				Size: ch.Size, ObjectKey: ch.ObjectKey, MimeType: ch.MimeType, MD5: ch.MD5}
+			if err := store.DB.Create(&nrec).Error; err != nil {
+				continue
+			}
+			n++
+			if ch.IsDir {
+				queue = append(queue, copyNode{ch.ID, nrec.ID})
+			}
+		}
+	}
+	return n
 }
 
 // ===== 回收站（网盘二期：删除=移入回收站，可恢复/彻底删除/清空，数据归口服务端） =====

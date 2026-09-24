@@ -41,6 +41,8 @@
     var batchCountEl = document.getElementById('drive-batch-count');
     var batchSelAllBtn = document.getElementById('drive-batch-selall');
     var batchDownBtn = document.getElementById('drive-batch-download');
+    var batchMoveBtn = document.getElementById('drive-batch-move');
+    var batchCopyBtn = document.getElementById('drive-batch-copy');
     var batchDelBtn = document.getElementById('drive-batch-delete');
     var batchCancelBtn = document.getElementById('drive-batch-cancel');
     // 回收站（二期：工具栏入口 + 回收站操作条 + 时间列表头）
@@ -516,12 +518,14 @@
         if (chk) chk.classList.toggle('checked', on);
         updateBatchBar();
     }
-    // 批量操作条归口（计数 + 按钮可用态：0 选中时下载/删除置灰）
+    // 批量操作条归口（计数 + 按钮可用态：0 选中时下载/移动/复制/删除置灰）
     function updateBatchBar() {
         var n = 0;
         for (var k in selSet) n++;
         batchCountEl.textContent = T('已选 {n} 项', { n: n });
         batchDownBtn.classList.toggle('disabled', n === 0);
+        batchMoveBtn.classList.toggle('disabled', n === 0);
+        batchCopyBtn.classList.toggle('disabled', n === 0);
         batchDelBtn.classList.toggle('disabled', n === 0);
     }
     // 全选/取消全选（再点一次取消；目录/文件均可选，目录不可下载仅可删除）
@@ -571,6 +575,121 @@
                     loadUsage();
                 });
             });
+    }
+
+    // ===== 目录选择弹窗（移动/复制到；百度网盘同款：面包屑导航 + 仅目录列表 + 弹窗内新建文件夹） =====
+    var pickMask = null;   // 弹窗壳（懒创建复用，样式与主弹窗同源自绘）
+    var pickState = null;  // {mode:'move'|'copy', ids:[], cur:当前目录id, crumbs:[{id,name}]}
+    function ensurePickModal() {
+        if (pickMask) return;
+        pickMask = document.createElement('div');
+        pickMask.className = 'modal-mask hidden';
+        pickMask.innerHTML =
+            '<div class="modal-box drive-pick-box">' +
+            '  <div class="modal-title" id="drive-pick-title"></div>' +
+            '  <div class="drive-pick-crumbs" id="drive-pick-crumbs"></div>' +
+            '  <div class="drive-pick-list" id="drive-pick-list"></div>' +
+            '  <div class="drive-pick-foot">' +
+            '    <button class="drive-tb-btn" id="drive-pick-mkdir">' + T('新建文件夹') + '</button>' +
+            '    <span class="drive-pick-flex"></span>' +
+            '    <button class="modal-btn" id="drive-pick-cancel">' + T('取消') + '</button>' +
+            '    <button class="modal-btn drive-modal-ok" id="drive-pick-ok">' + T('确定') + '</button>' +
+            '  </div>' +
+            '</div>';
+        document.body.appendChild(pickMask);
+        pickMask.addEventListener('click', function (e) { if (e.target === pickMask) closePickModal(); });
+        document.getElementById('drive-pick-cancel').addEventListener('click', closePickModal);
+        document.getElementById('drive-pick-ok').addEventListener('click', function () {
+            if (!pickState) return;
+            var mode = pickState.mode, ids = pickState.ids, target = pickState.cur;
+            closePickModal();
+            doMoveCopy(mode, ids, target);
+        });
+        document.getElementById('drive-pick-mkdir').addEventListener('click', function () {
+            if (!pickState) return;
+            drivePrompt(T('新建文件夹'), T('输入文件夹名称'), '', function (val) {
+                if (!pickState) return;
+                apiPost('mkdir', { username: u(), parent_id: pickState.cur, name: val }, function (err) {
+                    if (err) { toast(TR(err.message)); return; }
+                    toast(T('创建成功'));
+                    pickLoadDir(pickState.cur, pickState.crumbs); // 弹窗内目录列表原位刷新
+                });
+            });
+        });
+        if (window._osbInit) window._osbInit(document.getElementById('drive-pick-list')); // 自绘悬浮滑块归口
+    }
+    function closePickModal() {
+        if (!pickMask) return;
+        pickMask.classList.add('hidden');
+        pickState = null;
+    }
+    // 打开目录选择弹窗（mode='move'|'copy'；选中集合快照进弹窗，操作期间列表变化不受影响）
+    function openPickModal(mode) {
+        if (!selMode || trashMode) return; // 函数口双保险（回收站态批量条已隐藏）
+        var ids = [];
+        for (var k in selSet) ids.push(parseInt(k, 10));
+        if (!ids.length) { toast(T('请先选择文件')); return; }
+        ensurePickModal();
+        pickState = { mode: mode, ids: ids, cur: 0, crumbs: [{ id: 0, name: T('我的文件') }] };
+        document.getElementById('drive-pick-title').textContent = mode === 'move' ? T('移动到') : T('复制到');
+        pickMask.classList.remove('hidden');
+        pickLoadDir(0, pickState.crumbs);
+    }
+    // 弹窗内目录装载归口（进目录/面包屑回跳/新建后刷新共用；仅列目录，文件不参与选择）
+    function pickLoadDir(parentID, crumbs) {
+        if (!pickState) return;
+        pickState.cur = parentID;
+        pickState.crumbs = crumbs;
+        var plist = document.getElementById('drive-pick-list');
+        var pcrumbs = document.getElementById('drive-pick-crumbs');
+        // 面包屑（主列表同款样式：上级可点回跳）
+        var html = '';
+        for (var i = 0; i < crumbs.length; i++) {
+            if (i > 0) html += '<span class="drive-crumb-sep">/</span>';
+            if (i === crumbs.length - 1) html += '<span class="drive-crumb-cur">' + esc(crumbs[i].name) + '</span>';
+            else html += '<span class="drive-crumb" data-idx="' + i + '">' + esc(crumbs[i].name) + '</span>';
+        }
+        pcrumbs.innerHTML = html;
+        pcrumbs.querySelectorAll('.drive-crumb').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var idx = parseInt(el.getAttribute('data-idx'), 10);
+                pickLoadDir(crumbs[idx].id, crumbs.slice(0, idx + 1));
+            });
+        });
+        plist.innerHTML = '<div class="drive-pick-empty">' + T('加载中...') + '</div>';
+        apiJSON('/api/drive/list?username=' + encodeURIComponent(u()) + '&parent_id=' + parentID, null, function (err, data) {
+            if (err || !pickState) { if (err && pickState) toast(TR(err.message)); return; }
+            var dirs = [];
+            var its = (data && data.items) || [];
+            for (var i = 0; i < its.length; i++) if (its[i].is_dir) dirs.push(its[i]);
+            var rows = '';
+            for (var j = 0; j < dirs.length; j++) {
+                rows += '<div class="drive-pick-row" data-id="' + dirs[j].id + '" data-name="' + esc(dirs[j].name) + '">' +
+                    '<span class="drive-icon k-dir">' + ICONS.dir + '</span>' +
+                    '<span class="drive-pick-name" title="' + esc(dirs[j].name) + '">' + esc(dirs[j].name) + '</span>' +
+                    '<svg viewBox="0 0 24 24" width="14" height="14" class="drive-pick-arrow"><path fill="currentColor" d="M9.29 6.71a1 1 0 0 0 0 1.41L13.17 12l-3.88 3.88a1 1 0 1 0 1.41 1.41l4.59-4.59a1 1 0 0 0 0-1.41L10.7 6.7a1 1 0 0 0-1.41.01z"/></svg>' +
+                    '</div>';
+            }
+            if (!dirs.length) rows = '<div class="drive-pick-empty">' + T('此文件夹为空') + '</div>';
+            plist.innerHTML = rows; // MutationObserver 感知内容重建自绘滑块自刷新
+            plist.querySelectorAll('.drive-pick-row').forEach(function (el) {
+                el.addEventListener('click', function () {
+                    var did = parseInt(el.getAttribute('data-id'), 10);
+                    pickLoadDir(did, pickState.crumbs.concat([{ id: did, name: el.getAttribute('data-name') }]));
+                });
+            });
+        });
+    }
+    // 移动/复制请求归口（目录选择弹窗确定后调用；成功退出多选并原位刷新列表，复制顺带刷容量条）
+    function doMoveCopy(mode, ids, targetID) {
+        apiPost(mode, { username: u(), ids: ids, target_id: targetID }, function (err, data) {
+            if (err) { toast(TR(err.message)); return; }
+            var n = (data && (mode === 'move' ? data.moved : data.copied)) || 0;
+            toast(mode === 'move' ? T('已移动 {n} 项', { n: n }) : T('已复制 {n} 项', { n: n }));
+            exitSelectMode();
+            refreshAfterOp();
+            if (mode === 'copy') loadUsage();
+        });
     }
 
     // ===== 回收站（网盘二期：删除=移入回收站，可恢复/彻底删除/清空；数据归口服务端） =====
@@ -1544,6 +1663,8 @@
         selectBtn.addEventListener('click', function () { selMode ? exitSelectMode() : enterSelectMode(); });
         batchSelAllBtn.addEventListener('click', toggleSelectAll);
         batchDownBtn.addEventListener('click', batchDownload);
+        batchMoveBtn.addEventListener('click', function () { openPickModal('move'); });
+        batchCopyBtn.addEventListener('click', function () { openPickModal('copy'); });
         batchDelBtn.addEventListener('click', batchDelete);
         batchCancelBtn.addEventListener('click', exitSelectMode);
         // ===== 回收站事件绑定（进入/退出 + 清空） =====
@@ -1686,6 +1807,7 @@
             if (pvMask && !pvMask.classList.contains('hidden')) { closeViewer(); return; }
             if (!visible) return;
             if (maskEl && !maskEl.classList.contains('hidden')) { closeModal(); return; }
+            if (pickMask && !pickMask.classList.contains('hidden')) { closePickModal(); return; } // Esc 逐级：先关弹窗内输入弹窗，再关目录选择弹窗
             if (selMode) { exitSelectMode(); return; } // Esc 逐级退出：弹窗→多选→回收站→搜索→页面
             if (trashMode) { exitTrash(); return; }
             if (searchMode) { clearSearchUI(); searchSeq++; loadList(); return; }

@@ -1650,5 +1650,16 @@
   "回收站已清空": "Recycle bin emptied",
   "共 {n} 项": "{n} item(s) in total",
   "删除时间": "Deleted at",
-  "删除后可在回收站找回。": "Can be restored from Recycle Bin after deletion."
+  "删除后可在回收站找回。": "Can be restored from Recycle Bin after deletion.",
+  "移动到": "Move to",
+  "复制到": "Copy to",
+  "已移动 {n} 项": "Moved {n} item(s)",
+  "已复制 {n} 项": "Copied {n} item(s)",
+  "此文件夹为空": "This folder is empty",
+  "请先选择文件": "Select items first",
+  "单次最多操作 200 项": "Up to 200 items per operation",
+  "所选文件不存在": "Selected items not found",
+  "不能移动到自身或其子文件夹内": "Cannot move into itself or its subfolder",
+  "不能复制到自身或其子文件夹内": "Cannot copy into itself or its subfolder",
+  "网盘空间不足，复制失败": "Not enough drive space; copy failed"
 }
