@@ -90,6 +90,9 @@ type DriveConfig struct {
 	QuotaBytes int64 `yaml:"quota_bytes"`
 	// Storage 存储后端选择：auto（默认，MinIO 已配置即用 MinIO，否则本地磁盘）/ minio / local
 	Storage string `yaml:"storage"`
+	// ChunkSize 分片上传单片大小（字节，0=8MB 默认；init 响应下发前端，客户端零猜测）。
+	// 网盘二期大文件链路：MD5 秒传 + 分片上传 + 断点续传，分片临时落本地磁盘，complete 时流式合并
+	ChunkSize int64 `yaml:"chunk_size"`
 	// LocalDir 本地存储根目录（空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
 	LocalDir string `yaml:"local_dir"`
 	// Minio MinIO 连接配置（endpoint+access_key 非空即视为已配置）
@@ -393,6 +396,7 @@ func Default() *Config {
 			MaxFileSize: 500 << 20, // 单文件上限 500MB
 			QuotaBytes:  10 << 30,  // 每用户配额 10GB
 			Storage:     "auto",
+			ChunkSize:   8 << 20, // 分片单片 8MB（网盘二期大文件链路）
 		},
 	}
 }
@@ -542,6 +546,13 @@ func Load() *Config {
 	}
 	if cfg.Drive.QuotaBytes == 0 {
 		cfg.Drive.QuotaBytes = 10 << 30 // -1=不限配额，负数不做兜底直接生效
+	}
+	// 分片单片大小兜底（0=8MB；上限 64MB——单片过大会放大失败重传粒度与内存峰值）
+	if cfg.Drive.ChunkSize <= 0 {
+		cfg.Drive.ChunkSize = 8 << 20
+	}
+	if cfg.Drive.ChunkSize > 64<<20 {
+		cfg.Drive.ChunkSize = 64 << 20
 	}
 	if cfg.Drive.LocalDir != "" {
 		cfg.Drive.LocalDir = resolvePath(cfg.Drive.LocalDir)

@@ -400,9 +400,12 @@ drive:
   # 存储后端：auto（默认）= MinIO 四项配置齐全即用 MinIO，否则降级本地磁盘；
   # minio = 强制 MinIO；local = 强制本地磁盘（目录 exe所在目录/drive_data，可用 local_dir 自定义）
   storage: "auto"
+  # 分片上传单片大小（字节，0=8MB，上限 64MB；网盘二期大文件链路：MD5 秒传 + 分片上传 +
+  # 断点续传，单片大小随 init 响应下发前端；修改后需重启服务端生效）
+  chunk_size: 8388608
   # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
   minio:
-    endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
+    endpoint: ""                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
     access_key: "RgdSF4IAuMrXJWAPC63T"               # 访问账号（仅存本文件，不下发客户端）
     secret_key: "v8IWwSMg3z419p2LbeRwl6SFY44idgOWAiaWXxO5"               # 访问密钥（仅存本文件，不下发客户端）
     bucket: "im-drive"           # 桶名（不存在启动时自动创建）

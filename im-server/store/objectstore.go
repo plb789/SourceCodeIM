@@ -40,6 +40,13 @@ type ObjectStore interface {
 // objectStore 进程级单例（InitDrive 归口创建，网盘模块读用）
 var objectStore ObjectStore
 
+// driveTmpDir 分片上传临时目录（InitDriveStore 归口设定：local 后端跟随存储根目录，
+// minio 后端落 exe目录/drive_data/up_tmp——分片临时盘独立于对象存储后端，始终本地磁盘）
+var driveTmpDir string
+
+// DriveTmpDir 获取分片上传临时根目录（drive.go 分片上传/会话 GC 共用）
+func DriveTmpDir() string { return driveTmpDir }
+
 // GetObjectStore 获取网盘存储后端单例
 func GetObjectStore() ObjectStore { return objectStore }
 
@@ -75,6 +82,15 @@ func InitDriveStore(cfg *config.Config) error {
 		logger.Info("网盘存储后端: 本地磁盘 (%s)", dir)
 	default:
 		return fmt.Errorf("未知网盘存储类型 drive.storage: %s（可选 auto/minio/local）", mode)
+	}
+	// 分片上传临时目录归口设定（local 跟随存储根目录；minio 落 exe目录/drive_data/up_tmp）
+	if mode == "local" {
+		driveTmpDir = filepath.Join(objectStore.(*localStore).root, "up_tmp")
+	} else {
+		driveTmpDir = filepath.Join(exeDirOrDot(), "drive_data", "up_tmp")
+	}
+	if err := os.MkdirAll(driveTmpDir, os.ModePerm); err != nil {
+		return fmt.Errorf("分片临时目录创建失败: %w", err)
 	}
 	return nil
 }

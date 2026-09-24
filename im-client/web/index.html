@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=2.8"></script>
+    <script src="/js/i18n.js?v=3.0"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -1570,6 +1570,8 @@
             <button id="drive-mkdir-btn" class="drive-tb-btn">+ 新建文件夹</button>
             <button id="drive-upload-btn" class="drive-tb-btn drive-tb-primary">上传文件</button>
             <button id="drive-share-manage-btn" class="drive-tb-btn">分享管理</button>
+            <button id="drive-select-btn" class="drive-tb-btn">多选</button>
+            <button id="drive-trash-btn" class="drive-tb-btn">回收站</button>
             <!-- 搜索框（百度网盘同款：文件名模糊搜索全盘，防抖 300ms） -->
             <div class="drive-search-box">
                 <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
@@ -1578,10 +1580,25 @@
             </div>
             <span id="drive-storage-tag" class="drive-storage-tag hidden"></span>
         </div>
+        <!-- 批量操作条（多选模式：计数 + 全选/批量下载/批量删除/取消；操作后退出多选） -->
+        <div id="drive-batch-bar" class="drive-batch-bar hidden">
+            <span id="drive-batch-count" class="drive-batch-count">已选 0 项</span>
+            <span class="drive-batch-flex"></span>
+            <button id="drive-batch-selall" class="drive-tb-btn">全选</button>
+            <button id="drive-batch-download" class="drive-tb-btn">批量下载</button>
+            <button id="drive-batch-delete" class="drive-tb-btn drive-batch-danger">批量删除</button>
+            <button id="drive-batch-cancel" class="drive-tb-btn">取消</button>
+        </div>
+        <!-- 回收站操作条（回收站模式：计数 + 清空；新建/上传/多选/搜索在回收站模式隐藏） -->
+        <div id="drive-trash-bar" class="drive-batch-bar hidden">
+            <span id="drive-trash-count" class="drive-batch-count">共 0 项</span>
+            <span class="drive-batch-flex"></span>
+            <button id="drive-trash-clear" class="drive-tb-btn drive-batch-danger">清空回收站</button>
+        </div>
         <div class="drive-columns">
             <span>文件名</span>
             <span>大小</span>
-            <span>修改时间</span>
+            <span id="drive-col-time">修改时间</span>
             <span></span>
         </div>
         <div id="drive-file-list" class="drive-file-list">
@@ -1747,8 +1764,10 @@
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.5"></script>
     <script src="/js/chat.js?v=3.97"></script>
-    <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动） -->
-    <script src="/js/drive.js?v=2.3"></script>
+    <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
+         md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
+    <script src="/js/md5.js?v=1.0"></script>
+    <script src="/js/drive.js?v=2.7"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="/js/tooltip.js?v=1.0"></script>

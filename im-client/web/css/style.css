@@ -14643,3 +14643,91 @@ html.m .dsm-list {
     font-size: 13px;
     color: var(--text-secondary);
 }
+
+/* ===== 网盘批量操作（多选模式：行首自绘勾选框 + 顶部批量操作条，全部主题变量跟随主题色） ===== */
+/* 工具栏"多选"入口激活态 */
+#drive-select-btn.active {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+/* 行首自绘勾选框（原生 checkbox 禁用归口：纯 span+SVG，选中态主题色填充白勾） */
+.drive-check {
+    display: none;
+    width: 17px;
+    height: 17px;
+    border: 1.5px solid var(--text-light);
+    border-radius: 4px;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: transparent;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.drive-view.selecting .drive-check {
+    display: inline-flex;
+}
+.drive-check.checked {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+/* 多选模式：隐藏行尾动作按钮（分享/下载/重命名/删除），行点击归口勾选 */
+.drive-view.selecting .drive-cell-actions {
+    display: none;
+}
+.drive-row.selected {
+    background: var(--hover);
+}
+/* 顶部批量操作条（计数 + 全选/批量下载/批量删除/取消） */
+.drive-batch-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.drive-batch-flex {
+    flex: 1;
+}
+.drive-batch-count {
+    font-size: 13px;
+    color: var(--text);
+}
+.drive-batch-bar .drive-tb-btn {
+    font-size: 12px;
+    padding: 5px 12px;
+}
+.drive-batch-bar .disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+.drive-batch-danger {
+    color: #d86a6a;
+    border-color: #d86a6a;
+}
+.drive-batch-danger:hover {
+    background: rgba(216, 106, 106, 0.08);
+}
+/* ===== 网盘回收站（二期）：模式互斥显隐 + 按钮态（全部主题变量，跟随主题色变化） ===== */
+/* 回收站态：隐藏新建/上传/多选/搜索（函数口另有双保险守卫） */
+.drive-view.trash-mode #drive-mkdir-btn,
+.drive-view.trash-mode #drive-upload-btn,
+.drive-view.trash-mode #drive-select-btn,
+.drive-view.trash-mode .drive-search-box {
+    display: none;
+}
+/* 工具栏回收站入口激活态（与多选按钮同款主题色描边） */
+#drive-trash-btn.active {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+/* 回收站行恢复按钮主题色（彻底删除沿用 .drive-act-danger 危险色） */
+.drive-act-restore {
+    color: var(--primary);
+}
+.drive-act-restore:hover {
+    background: var(--active);
+}

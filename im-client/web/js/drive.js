@@ -6,8 +6,10 @@
 //  3. 交互约束（项目规则）：全部弹窗自绘（.modal-mask/.modal-box 复用，禁系统弹窗）；
 //     滚动条用全局自绘悬浮滑块（chat.js _osbInit 注册，加载顺序在 chat.js 之后）
 //  4. 传输面板（百度网盘同款）：右下角浮层 上传/下载双 tab 列表，逐项进度条+大小+速度+剩余时间+取消；
-//     上传 XHR FormData 直传（服务端流式落 MinIO/本地），下载 fetch 流式归口（MinIO 走 302 预签名
-//     直连已实测暴露 CORS+Content-Length，本地后端同源），均串行队列，完成自动刷新
+//     上传统一走大文件链路（网盘二期）：本地 Web Worker 分块算 MD5 → init 秒传判定/断点续传
+//     → 逐片 POST → complete 合并（秒传命中零传输，取消保留服务端会话下次自动续传）；
+//     下载 fetch 流式归口（MinIO 走 302 预签名直连已实测暴露 CORS+Content-Length，本地后端同源），
+//     均串行队列，完成自动刷新
 //  5. 主题：全部颜色走 CSS 变量（--primary/--panel-bg/--border 等），跟随主题色变化
 
 (function () {
@@ -33,6 +35,20 @@
     var dropMask = document.getElementById('drive-drop-mask');
     var searchInput = document.getElementById('drive-search');
     var searchClearBtn = document.getElementById('drive-search-clear');
+    // 批量操作（多选模式：工具栏入口 + 顶部批量操作条）
+    var selectBtn = document.getElementById('drive-select-btn');
+    var batchBar = document.getElementById('drive-batch-bar');
+    var batchCountEl = document.getElementById('drive-batch-count');
+    var batchSelAllBtn = document.getElementById('drive-batch-selall');
+    var batchDownBtn = document.getElementById('drive-batch-download');
+    var batchDelBtn = document.getElementById('drive-batch-delete');
+    var batchCancelBtn = document.getElementById('drive-batch-cancel');
+    // 回收站（二期：工具栏入口 + 回收站操作条 + 时间列表头）
+    var trashBtn = document.getElementById('drive-trash-btn');
+    var trashBar = document.getElementById('drive-trash-bar');
+    var trashCountEl = document.getElementById('drive-trash-count');
+    var trashClearBtn = document.getElementById('drive-trash-clear');
+    var colTimeEl = document.getElementById('drive-col-time');
     var mainChatEl = document.querySelector('.main-chat');
     // 左侧网盘面板（我的文件入口 + 容量概览）
     var driveEntry = document.getElementById('drive-entry-root');
@@ -87,6 +103,9 @@
     var searchMode = false;  // 搜索结果态（true=列表显示全盘搜索结果；进入目录/清空即退出）
     var searchTimer = 0;     // 输入防抖定时器
     var searchSeq = 0;       // 搜索请求序号（丢弃过期响应，防慢请求乱序覆盖）
+    var selMode = false;     // 多选模式（批量下载/删除；进入目录/搜索/关闭页面退出）
+    var selSet = {};         // 已选 id 集合（id→true）
+    var trashMode = false;   // 回收站模式（列表显示回收站项；恢复/彻底删除/清空；互斥多选/搜索）
 
     function u() { return (window.IMSocket && IMSocket.getUsername()) || ''; }
     // i18n 归口（key=中文原文渐进式迁移）：T=动态文案带参翻译，TR=服务端下发文本全等反查（未命中原样返回）
@@ -268,11 +287,13 @@
     }
 
     // 行模板归口（目录列表与搜索结果共用；showPath=true 时名称下方追加"所在位置"小字路径）
+    // 多选模式行首带自绘勾选框（显隐由 .drive-view.selecting CSS 归口，选中态随 selSet）
     function rowHtml(it, showPath) {
         var kind = kindOf(it);
         var loc = it.path || T('我的文件');
-        return '<div class="drive-row' + (it.is_dir ? ' is-dir' : '') + '" data-id="' + it.id + '">' +
+        return '<div class="drive-row' + (it.is_dir ? ' is-dir' : '') + (selSet[it.id] ? ' selected' : '') + '" data-id="' + it.id + '">' +
             '  <div class="drive-cell-name">' +
+            '    <span class="drive-check' + (selSet[it.id] ? ' checked' : '') + '"><svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></span>' +
             '    <span class="drive-icon k-' + kind + '">' + ICONS[kind] + '</span>' +
             '    <div class="drive-name-wrap">' +
             '      <span class="drive-name" title="' + esc(it.name) + '">' + esc(it.name) + '</span>' +
@@ -354,6 +375,7 @@
     // ===== 搜索（百度网盘同款：全盘文件名模糊匹配，输入防抖 300ms） =====
     // 清空搜索 UI（不触发列表刷新；刷新由调用方决定——进入目录自身 loadList）
     function clearSearchUI() {
+        exitSelectMode(); // 搜索态退出连带退出多选（多选不跨视图保留）
         searchMode = false;
         searchInput.value = '';
         searchClearBtn.classList.add('hidden');
@@ -361,11 +383,13 @@
     }
     // doSearch 全盘搜索（seq 序号守卫：仅采纳最新请求结果，防乱序覆盖）
     function doSearch(kw) {
+        if (trashMode) return; // 回收站态禁用搜索（搜索框已隐藏，函数口双保险）
         var seq = ++searchSeq;
         apiJSON('/api/drive/search?username=' + encodeURIComponent(u()) + '&keyword=' + encodeURIComponent(kw), null, function (err, data) {
             if (seq !== searchSeq) return;
             if (err) { toast(err.message); return; }
             searchMode = true;
+            exitSelectMode(); // 搜索结果重渲染连带退出多选
             renderSearchList((data && data.items) || []);
         });
     }
@@ -376,6 +400,7 @@
     }
 
     function enterDir(id, name, isBack) {
+        exitSelectMode(); // 切换目录退出多选（多选不跨目录保留）
         if (searchMode) clearSearchUI(); // 搜索结果点击目录 → 进入该目录并退出搜索态
         curParent = id;
         if (isBack) {
@@ -395,9 +420,11 @@
             var it = null;
             for (var i = 0; i < itemsCache.length; i++) if (itemsCache[i].id === id) { it = itemsCache[i]; break; }
             if (!it) return;
-            // 目录整行点击进入；可预览文件整行点击在线预览（百度网盘同款，动作按钮事件独立冒泡）
+            // 多选模式：整行点击=切换选中（勾选框为纯展示，点击由行归口）；
+            // 常规模式：目录整行点击进入，可预览文件整行点击在线预览（动作按钮事件独立冒泡）
             row.addEventListener('click', function (e) {
                 if (e.target.closest('.drive-act')) return; // 动作按钮不触发进入
+                if (selMode) { toggleSel(it.id, row); return; }
                 if (it.is_dir) enterDir(it.id, it.name);
                 else if (canPreviewName(it.name)) openDriveViewer(it);
             });
@@ -433,7 +460,7 @@
     }
     function deleteItem(it) {
         driveConfirm(it.is_dir ? T('删除文件夹') : T('删除文件'),
-            T('确定删除 "{v}" 吗？', { v: it.name }) + (it.is_dir ? T('文件夹内全部内容将一并删除，') : '') + T('此操作不可恢复。'),
+            T('确定删除 "{v}" 吗？', { v: it.name }) + (it.is_dir ? T('文件夹内全部内容将一并删除，') : '') + T('删除后可在回收站找回。'),
             function () {
                 apiPost('delete', { username: u(), id: it.id }, function (err) {
                     if (err) { toast(TR(err.message)); return; }
@@ -444,6 +471,7 @@
             });
     }
     function mkdir() {
+        if (trashMode) return; // 回收站态禁用（按钮已隐藏，函数口双保险）
         drivePrompt(T('新建文件夹'), T('输入文件夹名称'), '', function (val) {
             apiPost('mkdir', { username: u(), parent_id: curParent, name: val }, function (err) {
                 if (err) { toast(TR(err.message)); return; }
@@ -453,6 +481,207 @@
         });
     }
 
+    // ===== 批量操作（多选模式：勾选 → 批量下载/删除；操作后退出多选，微信风格） =====
+    // 多选行重建（进入/退出多选原位重绘行：勾选框随 selMode 显隐，选中态随 selSet）
+    function rerenderRows() {
+        var rowsHtml = '';
+        for (var i = 0; i < itemsCache.length; i++) rowsHtml += rowHtml(itemsCache[i], searchMode);
+        rebuildRows(rowsHtml, searchMode ? T('未找到匹配的文件') : T('暂无文件'));
+        bindRowEvents();
+    }
+    function enterSelectMode() {
+        selMode = true;
+        selSet = {};
+        view.classList.add('selecting');
+        selectBtn.classList.add('active');
+        batchBar.classList.remove('hidden');
+        updateBatchBar();
+        rerenderRows();
+    }
+    function exitSelectMode() {
+        if (!selMode) return;
+        selMode = false;
+        selSet = {};
+        view.classList.remove('selecting');
+        selectBtn.classList.remove('active');
+        batchBar.classList.add('hidden');
+        rerenderRows();
+    }
+    // 行点击切换选中（行与勾选框同步；计数条实时刷新）
+    function toggleSel(id, row) {
+        var on = !selSet[id];
+        if (on) selSet[id] = true; else delete selSet[id];
+        row.classList.toggle('selected', on);
+        var chk = row.querySelector('.drive-check');
+        if (chk) chk.classList.toggle('checked', on);
+        updateBatchBar();
+    }
+    // 批量操作条归口（计数 + 按钮可用态：0 选中时下载/删除置灰）
+    function updateBatchBar() {
+        var n = 0;
+        for (var k in selSet) n++;
+        batchCountEl.textContent = T('已选 {n} 项', { n: n });
+        batchDownBtn.classList.toggle('disabled', n === 0);
+        batchDelBtn.classList.toggle('disabled', n === 0);
+    }
+    // 全选/取消全选（再点一次取消；目录/文件均可选，目录不可下载仅可删除）
+    function toggleSelectAll() {
+        var all = itemsCache.length > 0;
+        for (var i = 0; i < itemsCache.length; i++) if (!selSet[itemsCache[i].id]) { all = false; break; }
+        selSet = {};
+        if (!all) for (var j = 0; j < itemsCache.length; j++) selSet[itemsCache[j].id] = true;
+        listEl.querySelectorAll('.drive-row').forEach(function (row) {
+            var id = parseInt(row.getAttribute('data-id'), 10);
+            row.classList.toggle('selected', !!selSet[id]);
+            var chk = row.querySelector('.drive-check');
+            if (chk) chk.classList.toggle('checked', !!selSet[id]);
+        });
+        updateBatchBar();
+    }
+    // 批量下载：选区内文件逐个入队（串行下载泵天然顺序执行），目录跳过
+    function batchDownload() {
+        var ids = selSet, n = 0;
+        for (var i = 0; i < itemsCache.length; i++) {
+            var it = itemsCache[i];
+            if (!ids[it.id] || it.is_dir) continue;
+            downloadItem(it);
+            n++;
+        }
+        if (n === 0) { toast(T('所选项目均不支持下载')); return; }
+        toast(T('已开始下载 {n} 个文件', { n: n }));
+        exitSelectMode();
+    }
+    // 批量删除：确认弹窗（含目录级联提示）→ delete_batch → 刷新+容量+退出多选
+    function batchDelete() {
+        var ids = [];
+        for (var k in selSet) ids.push(parseInt(k, 10));
+        if (!ids.length) return;
+        var hasDir = false;
+        for (var i = 0; i < itemsCache.length; i++) {
+            if (selSet[itemsCache[i].id] && itemsCache[i].is_dir) { hasDir = true; break; }
+        }
+        driveConfirm(T('批量删除'),
+            T('确定删除选中的 {n} 项吗？', { n: ids.length }) + (hasDir ? T('文件夹内全部内容将一并删除，') : '') + T('删除后可在回收站找回。'),
+            function () {
+                apiPost('delete_batch', { username: u(), ids: ids }, function (err) {
+                    if (err) { toast(TR(err.message)); return; }
+                    toast(T('已删除 {n} 项', { n: ids.length }));
+                    exitSelectMode();
+                    refreshAfterOp();
+                    loadUsage();
+                });
+            });
+    }
+
+    // ===== 回收站（网盘二期：删除=移入回收站，可恢复/彻底删除/清空；数据归口服务端） =====
+    // 模式互斥：回收站态下多选/搜索/新建/上传/拖拽上传禁用（UI 隐藏 + 函数口双保险）；
+    // 行为只保留恢复/彻底删除，行不可进入/预览（对象仍存活，但归口回收站管理语义）
+    function enterTrash() {
+        clearSearchUI(); // 回收站态连带退出搜索/多选（多选不跨视图保留）
+        trashMode = true;
+        view.classList.add('trash-mode');
+        trashBtn.classList.add('active');
+        trashBar.classList.remove('hidden');
+        // 面包屑切"回收站"当前位置（crumbs 保留原路径，退出回收站经 loadList 原位重建）
+        breadcrumbEl.innerHTML = '<span class="drive-crumb-cur">' + T('回收站') + '</span>';
+        loadTrash();
+    }
+    // 纯 UI 复位（不刷新列表，刷新归口由调用方决定：退出回列表 / 重开页面重置）
+    function resetTrashUI() {
+        trashMode = false;
+        view.classList.remove('trash-mode');
+        trashBtn.classList.remove('active');
+        trashBar.classList.add('hidden');
+        colTimeEl.textContent = T('修改时间');
+    }
+    function exitTrash() {
+        if (!trashMode) return;
+        resetTrashUI();
+        loadList(); // 回当前目录（恢复/删除操作可能已变更数据）
+    }
+    function loadTrash() {
+        apiJSON('/api/drive/trash/list?username=' + encodeURIComponent(u()), null, function (err, data) {
+            if (err) { toast(err.message); return; }
+            renderTrashList((data && data.items) || []);
+        });
+    }
+    // 回收站行模板（复用 .drive-row 结构：名称+所在位置小字 / 大小 / 删除时间 / 恢复+彻底删除）
+    function trashRowHtml(it) {
+        var kind = kindOf(it);
+        var loc = it.path || T('我的文件');
+        return '<div class="drive-row' + (it.is_dir ? ' is-dir' : '') + '" data-id="' + it.id + '">' +
+            '  <div class="drive-cell-name">' +
+            '    <span class="drive-icon k-' + kind + '">' + ICONS[kind] + '</span>' +
+            '    <div class="drive-name-wrap">' +
+            '      <span class="drive-name" title="' + esc(it.name) + '">' + esc(it.name) + '</span>' +
+            '      <span class="drive-row-path" title="' + esc(loc) + '">' + T('所在位置：{v}', { v: esc(loc) }) + '</span>' +
+            '    </div>' +
+            '  </div>' +
+            '  <div class="drive-cell-size">' + (it.is_dir ? '-' : fmtSize(it.size)) + '</div>' +
+            '  <div class="drive-cell-time">' + fmtTime(it.deleted_at) + '</div>' +
+            '  <div class="drive-cell-actions">' +
+            '    <button class="drive-act drive-act-restore" data-act="restore" title="' + T('恢复') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M13 3c-4.97 0-9.01 4.03-9.01 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9z"/></svg></button>' +
+            '    <button class="drive-act drive-act-danger" data-act="purge" title="' + T('彻底删除') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>' +
+            '  </div>' +
+            '</div>';
+    }
+    function renderTrashList(items) {
+        itemsCache = items;
+        var rowsHtml = '';
+        for (var i = 0; i < itemsCache.length; i++) rowsHtml += trashRowHtml(itemsCache[i]);
+        rebuildRows(rowsHtml, T('回收站为空'));
+        bindTrashRowEvents();
+        colTimeEl.textContent = T('删除时间');
+        trashCountEl.textContent = T('共 {n} 项', { n: itemsCache.length });
+    }
+    // 回收站行事件（仅动作按钮；行本体不可进入/预览）
+    function bindTrashRowEvents() {
+        listEl.querySelectorAll('.drive-row').forEach(function (row) {
+            var id = parseInt(row.getAttribute('data-id'), 10);
+            var it = null;
+            for (var i = 0; i < itemsCache.length; i++) if (itemsCache[i].id === id) { it = itemsCache[i]; break; }
+            if (!it) return;
+            row.querySelectorAll('.drive-act').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    var act = btn.getAttribute('data-act');
+                    if (act === 'restore') restoreItem(it);
+                    else if (act === 'purge') purgeItem(it);
+                });
+            });
+        });
+    }
+    function restoreItem(it) {
+        apiPost('trash/restore', { username: u(), ids: [it.id] }, function (err) {
+            if (err) { toast(TR(err.message)); return; }
+            toast(T('已恢复'));
+            loadTrash();
+            loadUsage(); // 回收站项不占容量，恢复后重新计入
+        });
+    }
+    function purgeItem(it) {
+        driveConfirm(T('彻底删除'),
+            T('确定彻底删除 "{v}" 吗？', { v: it.name }) + T('此操作不可恢复。'),
+            function () {
+                apiPost('trash/delete', { username: u(), ids: [it.id] }, function (err) {
+                    if (err) { toast(TR(err.message)); return; }
+                    toast(T('已永久删除'));
+                    loadTrash();
+                });
+            });
+    }
+    function clearTrash() {
+        driveConfirm(T('清空回收站'),
+            T('确定清空回收站吗？回收站内全部内容将永久删除，') + T('此操作不可恢复。'),
+            function () {
+                apiPost('trash/clear', { username: u() }, function (err) {
+                    if (err) { toast(TR(err.message)); return; }
+                    toast(T('回收站已清空'));
+                    loadTrash();
+                });
+            });
+    }
+
     // ===== 传输面板（百度网盘同款：上传/下载双 tab 列表，逐项进度/速度/剩余时间/取消） =====
     var upQueue = [];        // 上传任务
     var downQueue = [];      // 下载任务
@@ -460,11 +689,13 @@
     var downRunning = false;
     var curTTab = 'up';      // 当前展示 tab：'up' | 'down'
     // 任务对象统一字段：kind('up'|'down') name size loaded pct speed state('wait'|'run'|'ok'|'fail') errMsg + xhr/abort
+    // 上传扩展：phase('hash'校验|'up'传片) worker(md5 Worker) md5 instant(秒传) onCancel(取消归口)
     function makeTask(o) {
         return {
             kind: o.kind || 'up', name: o.name || '', size: o.size || 0, id: o.id || 0,
             file: o.file || null, loaded: 0, pct: 0, speed: 0,
-            state: 'wait', errMsg: '', xhr: null, abort: null, el: null
+            state: 'wait', errMsg: '', xhr: null, abort: null, el: null,
+            phase: '', worker: null, md5: '', instant: false, onCancel: null
         };
     }
     // 面板显隐 + 双队列渲染 + tab 徽标归口
@@ -502,10 +733,12 @@
             t.stateEl = row.querySelector('.drive-up-status');
             t.extraEl = row.querySelector('.drive-up-extra');
             t.cancelEl = row.querySelector('.drive-up-cancel');
-            // 取消：传输中点 × 中止（上传 abort XHR / 下载 abort fetch），取消按失败留痕"已取消"
+            // 取消：传输中点 × 中止（上传经 onCancel 归口：校验阶段 terminate Worker / 传片阶段
+            // abort XHR，取消按失败留痕"已取消"；服务端会话保留，下次同文件自动断点续传）
             t.cancelEl.addEventListener('click', function (tt) {
                 return function () {
                     if (tt.state !== 'run') return;
+                    if (tt.onCancel) { tt.onCancel(); return; }
                     if (tt.abort) tt.abort.abort();
                     if (tt.xhr) tt.xhr.abort();
                 };
@@ -527,17 +760,22 @@
             t.stateEl.textContent = T(up ? '等待上传' : '等待下载');
             t.extraEl.textContent = t.size ? fmtSize(t.size) : '';
         } else if (t.state === 'run') {
-            t.stateEl.textContent = T(up ? '上传中 {v}' : '下载中 {v}', { v: t.size ? t.pct + '%' : sizeText });
-            var remain = t.speed > 0 && t.size ? (t.size - t.loaded) / t.speed : Infinity;
-            var extras = [];
-            if (t.size) extras.push(sizeText);
-            var sp = fmtSpeed(t.speed);
-            if (sp) extras.push(sp);
-            var rm = fmtRemain(remain);
-            if (rm) extras.push(rm);
-            t.extraEl.textContent = extras.join(' · ');
+            if (t.phase === 'hash') { // 大文件链路阶段一：本地 MD5 校验
+                t.stateEl.textContent = T('校验中 {v}', { v: t.pct + '%' });
+                t.extraEl.textContent = t.size ? (fmtSize(t.loaded) + ' / ' + fmtSize(t.size)) : '';
+            } else {
+                t.stateEl.textContent = T(up ? '上传中 {v}' : '下载中 {v}', { v: t.size ? t.pct + '%' : sizeText });
+                var remain = t.speed > 0 && t.size ? (t.size - t.loaded) / t.speed : Infinity;
+                var extras = [];
+                if (t.size) extras.push(sizeText);
+                var sp = fmtSpeed(t.speed);
+                if (sp) extras.push(sp);
+                var rm = fmtRemain(remain);
+                if (rm) extras.push(rm);
+                t.extraEl.textContent = extras.join(' · ');
+            }
         } else if (t.state === 'ok') {
-            t.stateEl.textContent = T(up ? '上传完成' : '下载完成');
+            t.stateEl.textContent = T(t.instant ? '秒传成功' : (up ? '上传完成' : '下载完成'));
             t.extraEl.textContent = t.size ? fmtSize(t.size) : '';
         } else {
             t.stateEl.textContent = T(up ? '上传失败：{v}' : '下载失败：{v}', { v: t.errMsg ? TR(t.errMsg) : T('未知错误') });
@@ -576,51 +814,210 @@
             return ema;
         };
     }
+    // ===== 大文件链路（网盘二期）：本地 MD5 → init（秒传判定/断点续传）→ 逐片上传 → complete 合并 =====
+    // MD5 在 Web Worker 分块计算（Worker 内 FileReaderSync 读块，主线程零卡顿），Worker 不可用
+    // 自动回退主线程分块（setTimeout 让出事件循环）。秒传命中零传输直接完成；断点续传跳过服务端
+    // 已收分片；取消仅中断传输、保留服务端会话（下次同文件自动续传），孤儿会话由服务端 72h TTL 清理
+    // Worker 实现注意（实测教训）：blob Worker 内 importScripts 相对路径解析报 invalid URL，故经
+    // fetch 把 md5.js 源码内联进 Worker blob；主线程 FileReader.readAsArrayBuffer 在部分环境缺失，
+    // 统一优先 Blob.arrayBuffer() 读取；首消息 5s 无响应兜底回退主线程（Worker 静默失败场景）
+    var MD5_WORKER_LOGIC =
+        "self.onmessage = function (e) {" +
+        "  var f = e.data.file, chunk = e.data.chunk;" +
+        "  var md = MD5Stream.create(), off = 0;" +
+        "  var sync = (typeof FileReaderSync !== 'undefined') ? new FileReaderSync() : null;" +
+        "  var step = function () {" +
+        "    if (off >= f.size) { self.postMessage({ hex: md.hex() }); return; }" +
+        "    var end = Math.min(off + chunk, f.size);" +
+        "    var fin = function (buf) { md.update(new Uint8Array(buf)); off = end; self.postMessage({ progress: off }); step(); };" +
+        "    if (sync) { fin(sync.readAsArrayBuffer(f.slice(off, end))); }" +
+        "    else { f.slice(off, end).arrayBuffer().then(fin, function () { self.postMessage({ error: 'read' }); }); }" +
+        "  };" +
+        "  step();" +
+        "};";
+
+    // md5.js 源码缓存：undefined=未拉取 ''=拉取失败（后续全走主线程回退）
+    var md5Src;
+
+    // 本地分块 MD5 计算（进度按已校验字节回报；返回 Worker 供取消 terminate，回退路径返回 null）
+    function computeMD5(file, onProgress, cb) {
+        if (md5Src === undefined) {
+            fetch(location.origin + '/js/md5.js').then(function (r) {
+                return r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status));
+            }).then(function (src) {
+                md5Src = src;
+                startWorkerMD5(file, onProgress, cb);
+            }, function () {
+                md5Src = '';
+                mainThreadMD5(file, onProgress, cb);
+            });
+            return null;
+        }
+        if (md5Src === '') { mainThreadMD5(file, onProgress, cb); return null; }
+        return startWorkerMD5(file, onProgress, cb);
+    }
+    // Worker 启动归口（md5.js 源码已就绪）：错误/静默均自动回退主线程，回调恰好一次由 finished 守卫
+    function startWorkerMD5(file, onProgress, cb) {
+        try {
+            var w = new Worker(URL.createObjectURL(new Blob([md5Src + '\n' + MD5_WORKER_LOGIC], { type: 'text/javascript' })));
+            var fell = false; // 已回退主线程标记（丢弃 Worker 残余消息，防双回调）
+            var guard = setTimeout(function () { // 首消息 5s 无响应兜底
+                if (fell) return;
+                fell = true;
+                w.terminate();
+                mainThreadMD5(file, onProgress, cb);
+            }, 5000);
+            w.onerror = function () {
+                if (fell) return;
+                fell = true;
+                clearTimeout(guard);
+                w.terminate();
+                mainThreadMD5(file, onProgress, cb);
+            };
+            w.onmessage = function (e) {
+                if (fell) return;
+                clearTimeout(guard); // 任意消息到达即证明 Worker 存活
+                var d = e.data;
+                if (d.error) { w.terminate(); cb(null, 'read'); return; }
+                if (d.progress !== undefined) { onProgress(d.progress); return; }
+                if (d.hex) { w.terminate(); cb(d.hex); }
+            };
+            w.postMessage({ file: file, chunk: 4 << 20 });
+            return w;
+        } catch (e) {
+            mainThreadMD5(file, onProgress, cb);
+            return null;
+        }
+    }
+    // 读块归口：优先 Blob.arrayBuffer()（Promise 化），缺失时回退 FileReader.readAsArrayBuffer
+    function readBuf(blob) {
+        if (blob.arrayBuffer) return blob.arrayBuffer();
+        return new Promise(function (res, rej) {
+            try {
+                var fr = new FileReader();
+                fr.onload = function () { res(fr.result); };
+                fr.onerror = function () { rej(new Error('read')); };
+                fr.readAsArrayBuffer(blob);
+            } catch (e) { rej(e); }
+        });
+    }
+    // 主线程回退：分块读取 + setTimeout 让出事件循环（防大文件卡 UI）
+    function mainThreadMD5(file, onProgress, cb) {
+        if (!window.MD5Stream) { cb(null, 'no-md5'); return; }
+        var md = MD5Stream.create(), off = 0, chunk = 4 << 20;
+        (function step() {
+            if (off >= file.size) { cb(md.hex()); return; }
+            var end = Math.min(off + chunk, file.size);
+            readBuf(file.slice(off, end)).then(function (buf) {
+                md.update(new Uint8Array(buf));
+                off = end;
+                onProgress(off);
+                setTimeout(step, 0);
+            }, function () { cb(null, 'read'); });
+        })();
+    }
+
     function uploadOne(t, done) {
         t.state = 'run';
+        t.phase = 'hash';
         updateTaskUI(t);
-        var fd = new FormData();
-        fd.append('file', t.file, t.file.name);
-        var xhr = new XMLHttpRequest();
-        t.xhr = xhr;
+        var finished = false;
+        // 终态归口：done 恰好调用一次（Worker/XHR/回调竞态统一在此收口），失败路径兜底回收 Worker
+        function finish() {
+            if (finished) return;
+            finished = true;
+            if (t.worker) { t.worker.terminate(); t.worker = null; }
+            t.xhr = null;
+            t.onCancel = null;
+            updateTaskUI(t);
+            renderTransfers();
+            done();
+        }
+        function fail(msg) { t.state = 'fail'; t.errMsg = msg; finish(); }
+        // 取消归口：校验阶段直接终态（Worker 由 finish 回收）；传片阶段 abort XHR（onabort 走 fail）
+        t.onCancel = function () {
+            if (finished) return;
+            if (t.xhr) { t.xhr.abort(); return; }
+            fail('已取消');
+        };
         var sample = makeSampler();
-        xhr.open('POST', '/api/drive/upload?username=' + encodeURIComponent(u()) + '&parent_id=' + curParent);
-        xhr.upload.onprogress = function (e) {
-            if (!e.lengthComputable) return;
-            t.loaded = e.loaded;
-            t.size = e.total;
-            t.pct = Math.round(e.loaded * 100 / e.total);
-            t.speed = sample(e.loaded);
+        function setProgress(loaded) {
+            t.loaded = Math.min(loaded, t.size);
+            t.pct = t.size ? Math.round(t.loaded * 100 / t.size) : 100;
+            t.speed = sample(t.loaded);
             updateTaskUI(t);
-        };
-        xhr.onload = function () {
-            var errMsg = null;
-            if (xhr.status >= 200 && xhr.status < 300) {
-                t.state = 'ok'; t.pct = 100; t.loaded = t.size;
-            } else {
-                t.state = 'fail';
-                try { errMsg = JSON.parse(xhr.responseText).error; } catch (e) { /* 纯文本错误兜底 */ }
-                if (!errMsg) errMsg = 'HTTP ' + xhr.status;
-            }
-            t.errMsg = errMsg;
+        }
+        // 阶段一：本地分块 MD5（秒传判定与服务端 complete 复核共用指纹）
+        t.worker = computeMD5(t.file, function (loaded) { if (!finished) setProgress(loaded); }, function (hex, err) {
+            if (finished) return;
+            if (err || !hex) { fail('文件校验失败'); return; }
+            t.md5 = hex;
+            t.phase = 'up';
+            t.loaded = 0;
             updateTaskUI(t);
-            renderTransfers();
-            if (t.state === 'ok') { refreshAfterOp(); loadUsage(); }
-            done();
-        };
-        xhr.onerror = function () {
-            t.state = 'fail'; t.errMsg = '网络异常';
-            updateTaskUI(t);
-            renderTransfers();
-            done();
-        };
-        xhr.onabort = function () {
-            t.state = 'fail'; t.errMsg = '已取消';
-            updateTaskUI(t);
-            renderTransfers();
-            done();
-        };
-        xhr.send(fd);
+            // 阶段二：init——服务端秒传判定/断点会话复用（chunk_size 服务端下发，客户端零猜测）
+            apiPost('upload/init?username=' + encodeURIComponent(u()), {
+                name: t.file.name, size: t.file.size, md5: hex, parent_id: curParent
+            }, function (err2, data) {
+                if (finished) return;
+                if (err2) { fail(err2.message); return; }
+                if (data.instant) { // 秒传命中：零字节传输直接完成
+                    t.state = 'ok';
+                    t.instant = true;
+                    t.pct = 100;
+                    t.loaded = t.size;
+                    finish();
+                    refreshAfterOp();
+                    loadUsage();
+                    return;
+                }
+                sendChunks(t, data, finish, fail, setProgress);
+            });
+        });
+        updateTaskUI(t);
+    }
+    // 阶段三/四：逐片串行上传（raw blob 直发省内存）+ complete 合并；跳过服务端已收分片（断点续传）
+    function sendChunks(t, info, finish, fail, setProgress) {
+        var skip = {}, i;
+        for (i = 0; i < info.uploaded.length; i++) skip[info.uploaded[i]] = true;
+        var idx = 0;
+        function nextChunk() {
+            while (idx < info.chunk_total && skip[idx]) idx++;
+            if (idx >= info.chunk_total) { doComplete(); return; }
+            var cur = idx++;
+            var start = cur * info.chunk_size;
+            var blob = t.file.slice(start, Math.min(start + info.chunk_size, t.file.size));
+            var xhr = new XMLHttpRequest();
+            t.xhr = xhr;
+            xhr.open('POST', '/api/drive/upload/chunk?username=' + encodeURIComponent(u()) +
+                '&session_id=' + encodeURIComponent(info.session_id) + '&index=' + cur);
+            xhr.upload.onprogress = function (e) { setProgress(start + e.loaded); };
+            xhr.onload = function () {
+                t.xhr = null;
+                if (xhr.status >= 200 && xhr.status < 300) { nextChunk(); return; }
+                var msg = null;
+                try { msg = JSON.parse(xhr.responseText).error; } catch (e) { /* 纯文本错误兜底 */ }
+                fail(msg || ('HTTP ' + xhr.status));
+            };
+            xhr.onerror = function () { t.xhr = null; fail('网络异常'); };
+            xhr.onabort = function () { t.xhr = null; fail('已取消'); };
+            xhr.send(blob);
+        }
+        function doComplete() {
+            setProgress(t.size);
+            apiPost('upload/complete?username=' + encodeURIComponent(u()), {
+                session_id: info.session_id, name: t.file.name, parent_id: curParent
+            }, function (err) {
+                if (err) { fail(err.message); return; }
+                t.state = 'ok';
+                t.pct = 100;
+                t.loaded = t.size;
+                finish();
+                refreshAfterOp();
+                loadUsage();
+            });
+        }
+        nextChunk();
     }
     function downloadOne(t, done) {
         t.state = 'run';
@@ -1143,6 +1540,15 @@
         closeBtn.addEventListener('click', close);
         mkdirBtn.addEventListener('click', mkdir);
         uploadBtn.addEventListener('click', function () { fileInput.click(); });
+        // ===== 批量操作事件绑定（多选模式） =====
+        selectBtn.addEventListener('click', function () { selMode ? exitSelectMode() : enterSelectMode(); });
+        batchSelAllBtn.addEventListener('click', toggleSelectAll);
+        batchDownBtn.addEventListener('click', batchDownload);
+        batchDelBtn.addEventListener('click', batchDelete);
+        batchCancelBtn.addEventListener('click', exitSelectMode);
+        // ===== 回收站事件绑定（进入/退出 + 清空） =====
+        trashBtn.addEventListener('click', function () { trashMode ? exitTrash() : enterTrash(); });
+        trashClearBtn.addEventListener('click', clearTrash);
         fileInput.addEventListener('change', function () {
             for (var i = 0; i < fileInput.files.length; i++) {
                 upQueue.push(makeTask({ kind: 'up', name: fileInput.files[i].name, size: fileInput.files[i].size, file: fileInput.files[i] }));
@@ -1173,11 +1579,13 @@
         });
         // 搜索框（百度网盘同款）：输入防抖 300ms 全盘搜索；清空按钮恢复当前目录列表
         searchInput.addEventListener('input', function () {
+            if (trashMode) return; // 回收站态搜索框已隐藏，键盘事件兜底拦截
             var kw = searchInput.value.trim();
             searchClearBtn.classList.toggle('hidden', !kw);
             clearTimeout(searchTimer);
             if (!kw) {
                 // 清空即退出搜索态，恢复当前目录列表
+                exitSelectMode();
                 searchMode = false;
                 searchSeq++; // 作废在途搜索响应
                 loadList();
@@ -1188,7 +1596,7 @@
         searchClearBtn.addEventListener('click', function () {
             searchInput.value = '';
             searchClearBtn.classList.add('hidden');
-            if (searchMode) { searchMode = false; searchSeq++; loadList(); }
+            if (searchMode) { exitSelectMode(); searchMode = false; searchSeq++; loadList(); }
             searchInput.focus();
         });
         // ===== 分享模块事件绑定（二期） =====
@@ -1230,8 +1638,9 @@
             m.addEventListener('click', function (e) { if (e.target === m) closeDsMasks(); });
         });
         if (dsManageBtn) dsManageBtn.addEventListener('click', openShareManage);
-        // 左侧"我的文件"入口：回根目录并刷新
+        // 左侧"我的文件"入口：退出回收站回根目录并刷新
         driveEntry.addEventListener('click', function () {
+            if (trashMode) resetTrashUI();
             if (searchMode) clearSearchUI();
             curParent = 0;
             crumbs = [{ id: 0, name: T('我的文件') }];
@@ -1242,6 +1651,7 @@
         var dragDepth = 0;
         if (dropMask) {
             view.addEventListener('dragenter', function (e) {
+                if (trashMode) return; // 回收站态禁用拖拽上传
                 e.preventDefault();
                 dragDepth++;
                 dropMask.classList.remove('hidden');
@@ -1255,9 +1665,10 @@
                 if (dragDepth <= 0) { dragDepth = 0; dropMask.classList.add('hidden'); }
             });
             view.addEventListener('drop', function (e) {
-                e.preventDefault();
+                e.preventDefault(); // 回收站态同样拦截默认行为（防浏览器打开拖入文件），仅不入队
                 dragDepth = 0;
                 dropMask.classList.add('hidden');
+                if (trashMode) return; // 回收站态禁用拖拽上传
                 var files = e.dataTransfer && e.dataTransfer.files;
                 if (!files || !files.length) return;
                 for (var i = 0; i < files.length; i++) {
@@ -1275,6 +1686,8 @@
             if (pvMask && !pvMask.classList.contains('hidden')) { closeViewer(); return; }
             if (!visible) return;
             if (maskEl && !maskEl.classList.contains('hidden')) { closeModal(); return; }
+            if (selMode) { exitSelectMode(); return; } // Esc 逐级退出：弹窗→多选→回收站→搜索→页面
+            if (trashMode) { exitTrash(); return; }
             if (searchMode) { clearSearchUI(); searchSeq++; loadList(); return; }
             close();
         });
@@ -1293,6 +1706,8 @@
         if (!visible) {
             visible = true;
             view.classList.remove('hidden');
+            if (trashMode) resetTrashUI(); // 重开页面重置回收站态（纯 UI 复位，列表刷新归口下方 loadList）
+            exitSelectMode(); // 重开页面重置多选态
             clearSearchUI(); // 重开页面重置搜索态（与目录/面包屑一并归位）
             crumbs = [{ id: 0, name: T('我的文件') }];
             curParent = 0;

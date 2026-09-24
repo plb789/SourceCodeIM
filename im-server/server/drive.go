@@ -15,6 +15,7 @@ package server
 //     static/upload 目录，清理白名单正则天然免疫
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -22,8 +23,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -90,8 +93,22 @@ func RegisterDriveRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/mkdir", s.handleDriveMkdir)
 	http.HandleFunc("POST /api/drive/rename", s.handleDriveRename)
 	http.HandleFunc("POST /api/drive/delete", s.handleDriveDelete)
+	http.HandleFunc("POST /api/drive/delete_batch", s.handleDriveDeleteBatch)
 	http.HandleFunc("POST /api/drive/upload", s.guardDrive(s.handleDriveUpload))
 	http.HandleFunc("GET /api/drive/download", s.guardDrive(s.handleDriveDownload))
+	// 大文件链路（网盘二期）：MD5 秒传 + 分片上传 + 断点续传——username 走查询参数统一 guardDrive 包装；
+	// 分片会话持久 MySQL（重启不丢断点），分片本体落本地临时盘，complete 流式合并进对象存储
+	http.HandleFunc("POST /api/drive/upload/init", s.guardDrive(s.handleDriveUploadInit))
+	http.HandleFunc("POST /api/drive/upload/chunk", s.guardDrive(s.handleDriveUploadChunk))
+	http.HandleFunc("POST /api/drive/upload/complete", s.guardDrive(s.handleDriveUploadComplete))
+	// 回收站（网盘二期）：list 走查询参数统一 guardDrive 包装；restore/delete/clear 的
+	// username 在 JSON 体内（处理器内 driveCheckUser 归口校验，同 delete 水位）
+	http.HandleFunc("GET /api/drive/trash/list", s.guardDrive(s.handleDriveTrashList))
+	http.HandleFunc("POST /api/drive/trash/restore", s.handleDriveTrashRestore)
+	http.HandleFunc("POST /api/drive/trash/delete", s.handleDriveTrashDelete)
+	http.HandleFunc("POST /api/drive/trash/clear", s.handleDriveTrashClear)
+	// 分片会话定时 GC（断点续传孤儿数据归口：启动清一次 + 每 6 小时一轮）
+	s.startDriveUploadGC()
 }
 
 // guardDrive 网盘接口统一包装：总开关/用户名/在线校验归口（通过后才进具体处理器）
@@ -291,9 +308,36 @@ func (s *Server) handleDriveRename(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"item": *rec})
 }
 
+// driveDeleteOne 单条删除归口（单删/批量删共用）：BFS 收集子孙 id（含自身）后整棵移入
+// 回收站（软删除）；返回移入回收站的记录条数（含级联子孙）
+func (s *Server) driveDeleteOne(username string, root *model.DriveFile) int {
+	// BFS 收集子孙 id（含自身）；owner 条件贯穿每层，杜绝跨用户越权
+	ids := []uint{root.ID}
+	frontier := []uint{root.ID}
+	for len(frontier) > 0 {
+		var children []model.DriveFile
+		if err := store.DB.Where("owner = ? AND parent_id IN ?", username, frontier).Find(&children).Error; err != nil {
+			break
+		}
+		frontier = frontier[:0]
+		for _, c := range children {
+			ids = append(ids, c.ID)
+			frontier = append(frontier, c.ID)
+		}
+	}
+	// 软删除归口：整棵子树统一 deleted_at 时间戳（回收站顶层项按删除时间倒序展示）；
+	// 文件本体对象保留（恢复零成本），彻底删除（trash/delete、trash/clear）时才物理清理
+	if err := store.DB.Model(&model.DriveFile{}).Where("id IN ?", ids).
+		Update("deleted_at", time.Now()).Error; err != nil {
+		logger.Warn("网盘移入回收站失败: %s id=%d, %v", username, root.ID, err)
+		return 0
+	}
+	logger.Info("网盘移入回收站: %s id=%d (%s), 级联 %d 项", username, root.ID, root.Name, len(ids))
+	return len(ids)
+}
+
 // handleDriveDelete 删除 POST /api/drive/delete {username,id}
-// 目录递归删除全部子孙（BFS 收集后事务清行、逐个清对象；对象删除失败仅记日志不阻断——
-// 孤儿对象可由后续清理任务回收，元数据为准）
+// 目录递归移入回收站（BFS 收集整棵子树后统一软删除；对象本体保留，彻底删除时才物理清理）
 func (s *Server) handleDriveDelete(w http.ResponseWriter, r *http.Request) {
 	var body driveItemReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || body.ID == 0 {
@@ -309,18 +353,73 @@ func (s *Server) handleDriveDelete(w http.ResponseWriter, r *http.Request) {
 		driveFail(w, http.StatusNotFound, "文件不存在")
 		return
 	}
-	// BFS 收集子孙 id（含自身）；owner 条件贯穿每层，杜绝跨用户越权
-	ids := []uint{root.ID}
-	frontier := []uint{root.ID}
-	var fileKeys []string
+	n := s.driveDeleteOne(body.Username, root)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": n})
+}
+
+// driveBatchReq 批量操作请求体
+type driveBatchReq struct {
+	Username string `json:"username"`
+	IDs      []uint `json:"ids"`
+}
+
+// handleDriveDeleteBatch 批量删除 POST /api/drive/delete_batch {username, ids:[]}
+// 循环复用单条删除归口（目录级联/零拷贝保护同水位）；不存在的 id 跳过不阻断整批，
+// 返回实际删除记录数（含级联子孙）
+func (s *Server) handleDriveDeleteBatch(w http.ResponseWriter, r *http.Request) {
+	var body driveBatchReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || len(body.IDs) == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	deleted := 0
+	for _, id := range body.IDs {
+		root, err := s.driveOwnFile(id, body.Username)
+		if err != nil {
+			continue // 单条不存在/越权 id 跳过，不阻断整批
+		}
+		deleted += s.driveDeleteOne(body.Username, root)
+	}
+	logger.Info("网盘批量删除: %s 请求 %d 项, 删除 %d 条记录", body.Username, len(body.IDs), deleted)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": deleted})
+}
+
+// ===== 回收站（网盘二期：删除=移入回收站，可恢复/彻底删除/清空，数据归口服务端） =====
+// 查询铁律：回收站内行对普通查询不可见（GORM 软删自动过滤），本区块全部经 Unscoped 归口；
+// 对象本体在移入回收站时不清理（恢复零成本），仅在彻底删除/清空时按零拷贝保护物理清理
+
+// driveTrashItem 回收站列表项（服务端归口拼装：原位置路径 + 删除时间，前端零计算；
+// 独立出参结构避免 gorm.DeletedAt 直接序列化，删除时间以标准 time 输出）
+type driveTrashItem struct {
+	ID         uint      `json:"id"`
+	Name       string    `json:"name"`
+	IsDir      bool      `json:"is_dir"`
+	Size       int64     `json:"size"`
+	MimeType   string    `json:"mime_type"`
+	CreateTime time.Time `json:"create_time"`
+	UpdateTime time.Time `json:"update_time"`
+	DeletedAt  time.Time `json:"deleted_at"`
+	Path       string    `json:"path"` // 原位置（"我的文件 / a / b"，祖先链服务端拼好）
+}
+
+// driveTrashSubtree BFS 收集回收站软删子树（含自身；Unscoped 查询——软删行普通查询不可见；
+// 仅收集 deleted_at 非空的子孙且 owner 贯穿每层杜绝跨用户越权；顺带收集文件对象 key 供彻底删除清理）
+func driveTrashSubtree(root *model.DriveFile) (ids []uint, fileKeys []string) {
+	ids = []uint{root.ID}
 	if !root.IsDir && root.ObjectKey != "" {
 		fileKeys = append(fileKeys, root.ObjectKey)
 	}
+	frontier := []uint{root.ID}
 	for len(frontier) > 0 {
 		var children []model.DriveFile
-		if err := store.DB.Where("owner = ? AND parent_id IN ?", body.Username, frontier).Find(&children).Error; err != nil {
-			break
-		}
+		store.DB.Unscoped().Where("owner = ? AND parent_id IN ? AND deleted_at IS NOT NULL",
+			root.Owner, frontier).Find(&children)
 		frontier = frontier[:0]
 		for _, c := range children {
 			ids = append(ids, c.ID)
@@ -330,23 +429,224 @@ func (s *Server) handleDriveDelete(w http.ResponseWriter, r *http.Request) {
 			frontier = append(frontier, c.ID)
 		}
 	}
-	store.DB.Where("id IN ?", ids).Delete(&model.DriveFile{})
-	// 文件本体清理（幂等；失败不阻断——元数据已删，孤儿对象不影响功能正确性）
-	// 零拷贝保护归口：分享保存指向同一 object_key 不复制本体，物理删除前必须确认
-	// 已无任何其他记录（未被级联删除的）引用同一 key，否则只删记录保留对象，防受让方悬空
-	if st := store.GetObjectStore(); st != nil {
-		for _, key := range fileKeys {
-			var refCnt int64
-			store.DB.Model(&model.DriveFile{}).Where("object_key = ? AND id NOT IN ?", key, ids).Count(&refCnt)
-			if refCnt > 0 {
-				continue // 对象仍被其他记录引用（分享受让副本等），跳过物理删除
-			}
-			if err := st.Delete(key); err != nil {
-				logger.Warn("网盘对象删除失败（孤儿对象）: %s, %v", key, err)
-			}
+	return ids, fileKeys
+}
+
+// drivePurgeObjects 彻底删除后的对象本体清理归口（幂等；失败仅记日志不阻断——孤儿对象不影响
+// 功能正确性）。零拷贝保护：引用计数 Unscoped 全表统计（软删记录同样占用对象——仍在回收站
+// 或分享受让副本恢复后仍需对象存活），排除本批 ids 防自引用误判；同 key 去重防重复物理删
+func (s *Server) drivePurgeObjects(ids []uint, fileKeys []string) int {
+	st := store.GetObjectStore()
+	if st == nil || len(fileKeys) == 0 {
+		return 0
+	}
+	purged := 0
+	seen := make(map[string]bool, len(fileKeys))
+	for _, key := range fileKeys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		var refCnt int64
+		store.DB.Unscoped().Model(&model.DriveFile{}).Where("object_key = ? AND id NOT IN ?", key, ids).Count(&refCnt)
+		if refCnt > 0 {
+			continue // 对象仍被其他记录引用（回收站其他项/分享受让副本等），保留
+		}
+		if err := st.Delete(key); err != nil {
+			logger.Warn("网盘对象删除失败（孤儿对象）: %s, %v", key, err)
+			continue
+		}
+		purged++
+	}
+	return purged
+}
+
+// handleDriveTrashList 回收站列表 GET /api/drive/trash/list?username=xxx
+// 仅展示顶层项（父目录同样在回收站的子项跟随父级整体恢复/删除，不单列）；按删除时间倒序
+func (s *Server) handleDriveTrashList(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var trashed []model.DriveFile
+	if err := store.DB.Unscoped().Where("owner = ? AND deleted_at IS NOT NULL", username).
+		Order("deleted_at DESC, is_dir DESC, name ASC").Find(&trashed).Error; err != nil {
+		driveFail(w, http.StatusInternalServerError, "查询失败")
+		return
+	}
+	trashSet := make(map[uint]bool, len(trashed))
+	for _, t := range trashed {
+		trashSet[t.ID] = true
+	}
+	// 该用户全量目录映射（Unscoped 含软删目录）：原位置路径拼链归口（复用 search 的 driveBuildPath）
+	var dirs []model.DriveFile
+	store.DB.Unscoped().Where("owner = ? AND is_dir = ?", username, true).Find(&dirs)
+	dirMap := make(map[uint]model.DriveFile, len(dirs))
+	for _, d := range dirs {
+		dirMap[d.ID] = d
+	}
+	out := make([]driveTrashItem, 0, len(trashed))
+	for _, it := range trashed {
+		if it.ParentID != 0 && trashSet[it.ParentID] {
+			continue // 父目录也在回收站 → 非顶层项，跟随父级整体恢复/删除
+		}
+		out = append(out, driveTrashItem{
+			ID: it.ID, Name: it.Name, IsDir: it.IsDir, Size: it.Size, MimeType: it.MimeType,
+			CreateTime: it.CreateTime, UpdateTime: it.UpdateTime,
+			DeletedAt: it.DeletedAt.Time, Path: driveBuildPath(dirMap, it.ParentID),
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"items": out})
+}
+
+// driveRestoreName 恢复落位同名冲突自动改名归口：文件 name(n).ext / 目录 name(n)，
+// n 从 1 递增直至当前目录无冲突（普通查询只统计存活记录，回收站项不占名）
+func driveRestoreName(owner string, parentID uint, name string, isDir bool) string {
+	base, ext := name, ""
+	if !isDir {
+		if e := filepath.Ext(name); e != "" {
+			base, ext = strings.TrimSuffix(name, e), e
 		}
 	}
-	logger.Info("网盘删除: %s id=%d (%s), 级联 %d 项, 对象 %d 个", body.Username, root.ID, root.Name, len(ids), len(fileKeys))
+	// 候选名防超长：预留 "(9999)" 与扩展名后仍超 255 rune 则截短 base（列宽 varchar(255)）
+	maxBase := 255 - len([]rune(ext)) - 6
+	if rb := []rune(base); len(rb) > maxBase {
+		base = string(rb[:maxBase])
+	}
+	for n := 1; ; n++ {
+		cand := fmt.Sprintf("%s(%d)%s", base, n, ext)
+		var cnt int64
+		store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+			owner, parentID, cand).Count(&cnt)
+		if cnt == 0 {
+			return cand
+		}
+	}
+}
+
+// handleDriveTrashRestore 回收站恢复 POST /api/drive/trash/restore {username, ids:[]}
+// 顶层项整棵软删子树统一恢复：父目录存活原位放回（同名自动改名），父目录已物理缺失移根兜底；
+// 父目录仍在回收站的请求项跳过（恢复父级即整棵带回），杜绝悬空引用
+func (s *Server) handleDriveTrashRestore(w http.ResponseWriter, r *http.Request) {
+	var body driveBatchReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || len(body.IDs) == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	restored := 0
+	for _, id := range body.IDs {
+		var root model.DriveFile
+		// Unscoped 查：须为本人在回收站的记录（存活记录/他人记录一律跳过）
+		if err := store.DB.Unscoped().Where("id = ? AND owner = ? AND deleted_at IS NOT NULL", id, body.Username).
+			First(&root).Error; err != nil {
+			continue
+		}
+		// 父目录状态归口：0=根放行；存活=原位恢复；在回收站=跳过；已物理缺失=移根兜底
+		targetParent := root.ParentID
+		if root.ParentID > 0 {
+			var parent model.DriveFile
+			if err := store.DB.Unscoped().Where("id = ?", root.ParentID).First(&parent).Error; err != nil {
+				targetParent = 0
+			} else if parent.DeletedAt.Valid {
+				continue
+			}
+		}
+		// 顶层项落位修正（同名冲突自动改名 / 移根）：UpdateColumn 不触发 hooks 不误改 update_time
+		patch := map[string]interface{}{}
+		if targetParent != root.ParentID {
+			patch["parent_id"] = targetParent
+		}
+		var cnt int64
+		store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+			body.Username, targetParent, root.Name).Count(&cnt)
+		if cnt > 0 {
+			patch["name"] = driveRestoreName(body.Username, targetParent, root.Name, root.IsDir)
+		}
+		if len(patch) > 0 {
+			store.DB.Unscoped().Model(&root).UpdateColumns(patch)
+		}
+		// 整棵软删子树恢复：deleted_at 置 NULL（Unscoped 绕过软删过滤条件直达软删行）
+		ids, _ := driveTrashSubtree(&root)
+		if err := store.DB.Unscoped().Model(&model.DriveFile{}).Where("id IN ?", ids).
+			UpdateColumn("deleted_at", nil).Error; err != nil {
+			continue
+		}
+		restored++
+		logger.Info("网盘回收站恢复: %s id=%d (%s), 整树 %d 项", body.Username, root.ID, root.Name, len(ids))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"restored": restored})
+}
+
+// handleDriveTrashDelete 彻底删除 POST /api/drive/trash/delete {username, ids:[]}
+// 顶层项整棵物理删除：清行后按零拷贝保护清理对象本体；父级仍在回收站的请求项跳过（删父级联整棵）
+func (s *Server) handleDriveTrashDelete(w http.ResponseWriter, r *http.Request) {
+	var body driveBatchReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || len(body.IDs) == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	deleted := 0
+	for _, id := range body.IDs {
+		var root model.DriveFile
+		// Unscoped 查：须为本人在回收站的记录（已恢复/已彻底删/非本人一律跳过）
+		if err := store.DB.Unscoped().Where("id = ? AND owner = ? AND deleted_at IS NOT NULL", id, body.Username).
+			First(&root).Error; err != nil {
+			continue
+		}
+		if root.ParentID > 0 {
+			var parent model.DriveFile
+			if err := store.DB.Unscoped().Where("id = ?", root.ParentID).First(&parent).Error; err == nil && parent.DeletedAt.Valid {
+				continue // 父也在回收站 → 跟随父级级联处理，不重复统计
+			}
+		}
+		ids, fileKeys := driveTrashSubtree(&root)
+		store.DB.Unscoped().Where("id IN ?", ids).Delete(&model.DriveFile{})
+		s.drivePurgeObjects(ids, fileKeys)
+		deleted++
+		logger.Info("网盘回收站彻底删除: %s id=%d (%s), 整树 %d 项", body.Username, root.ID, root.Name, len(ids))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": deleted})
+}
+
+// handleDriveTrashClear 清空回收站 POST /api/drive/trash/clear {username}
+// 该用户全部软删项物理删除（记录间父子必同态：软删子树整体圈定即全部回收站内容），
+// 对象本体按零拷贝保护清理
+func (s *Server) handleDriveTrashClear(w http.ResponseWriter, r *http.Request) {
+	var body driveBatchReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	var all []model.DriveFile
+	store.DB.Unscoped().Where("owner = ? AND deleted_at IS NOT NULL", body.Username).Find(&all)
+	if len(all) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"deleted": 0})
+		return
+	}
+	ids := make([]uint, 0, len(all))
+	fileKeys := make([]string, 0, len(all))
+	for _, it := range all {
+		ids = append(ids, it.ID)
+		if !it.IsDir && it.ObjectKey != "" {
+			fileKeys = append(fileKeys, it.ObjectKey)
+		}
+	}
+	store.DB.Unscoped().Where("id IN ?", ids).Delete(&model.DriveFile{})
+	purged := s.drivePurgeObjects(ids, fileKeys)
+	logger.Info("网盘清空回收站: %s, 清除 %d 条记录, 对象 %d 个", body.Username, len(ids), purged)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": len(ids)})
 }
@@ -432,6 +732,7 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 		Size:      header.Size,
 		ObjectKey: key,
 		MimeType:  driveMimeOf(name),
+		MD5:       driveValidMD5(r.FormValue("md5")), // 客户端可带指纹（网盘前端统一分片链路，此为兼容位）
 	}
 	if err := store.DB.Create(&rec).Error; err != nil {
 		st.Delete(key) // 兜底清理孤儿对象
@@ -441,6 +742,375 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 	logger.Info("网盘上传: %s -> parent=%d, %s (%d 字节), key=%s, 后端=%s", username, parentID, name, header.Size, key, st.Kind())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"item": rec})
+}
+
+// ===== 大文件链路（网盘二期）：MD5 秒传 + 分片上传 + 断点续传 =====
+// 设计归口：
+//  1. 秒传：init 按 owner+md5+size 命中本人历史对象（im_drive_file.md5 索引）→ 复用 object_key
+//     直接建记录免传文件本体（drivePurgeObjects 引用计数归口天然支持共享对象，彻底删除零误删）
+//  2. 断点续传：会话持久 MySQL（服务重启不丢断点），单片落盘成功即更新已传索引 JSON；
+//     同 owner+md5+size 再次 init 自动复用会话并返回已传分片列表，前端跳过已传片
+//  3. 分片本体落本地临时盘 up_tmp/<session_id>/<index>.part（独立于对象存储后端，不进
+//     static/upload 清理范围），complete 时 MultiReader 流式合并进对象存储（TeeReader 顺路
+//     复核 MD5，防伪造指纹占坑与传输损坏），随后会话与分片一并清理
+//  4. 安全校验沿用水位：guardDrive 在线校验 + owner 隔离 + 名称消毒 + 会话码白名单（防路径
+//     注入）+ 单片限长 + 配额 init/complete 双校验
+
+// driveMD5Re MD5 指纹白名单（32 位 hex）
+var driveMD5Re = regexp.MustCompile(`^[0-9a-fA-F]{32}$`)
+
+// driveSessionIDRe 会话码白名单（服务端生成格式 纳秒_16hex；临时目录拼装防路径注入）
+var driveSessionIDRe = regexp.MustCompile(`^[0-9]{19}_[0-9a-f]{16}$`)
+
+// driveUploadSessionTTL 断点续传会话保留时长（超期会话连同分片目录被定时 GC 清理）
+const driveUploadSessionTTL = 72 * time.Hour
+
+// driveValidMD5 指纹消毒归口：非 32 位 hex 一律返回空串（合法值统一小写）
+func driveValidMD5(s string) string {
+	if driveMD5Re.MatchString(s) {
+		return strings.ToLower(s)
+	}
+	return ""
+}
+
+// driveParseUploaded 解析已传分片索引 JSON 数组（空串/脏数据容错为空切片）
+func driveParseUploaded(s string) []int {
+	var arr []int
+	if s != "" {
+		_ = json.Unmarshal([]byte(s), &arr)
+	}
+	return arr
+}
+
+// handleDriveUploadInit 上传初始化 POST /api/drive/upload/init?username=xxx
+// body {name,size,md5,parent_id}；响应二选一：
+//   - 秒传命中：{instant:true, item}（复用历史 object_key，免传文件本体）
+//   - 需传本体：{instant:false, session_id, chunk_size, chunk_total, uploaded:[已传分片索引]}
+//
+// 校验顺序：指纹/大小/名称消毒 → 目标目录存在 → 同名拦截 → 配额 → 秒传 → 断点会话复用 → 新建会话
+func (s *Server) handleDriveUploadInit(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		Name     string `json:"name"`
+		Size     int64  `json:"size"`
+		MD5      string `json:"md5"`
+		ParentID uint   `json:"parent_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	md5hex := driveValidMD5(body.MD5)
+	if md5hex == "" {
+		driveFail(w, http.StatusBadRequest, "文件指纹缺失")
+		return
+	}
+	if body.Size < 0 || body.Size > s.cfg.Drive.MaxFileSize {
+		driveFail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("单文件上限 %d MB", s.cfg.Drive.MaxFileSize>>20))
+		return
+	}
+	name, ok := driveValidName(body.Name)
+	if !ok {
+		driveFail(w, http.StatusBadRequest, "文件名不合法")
+		return
+	}
+	if body.ParentID > 0 {
+		if _, err := s.driveOwnFile(body.ParentID, username); err != nil {
+			driveFail(w, http.StatusNotFound, "目标目录不存在")
+			return
+		}
+	}
+	// 同名拦截（complete 为权威校验，此处前置拦截给用户即时反馈）
+	var cnt int64
+	store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+		username, body.ParentID, name).Count(&cnt)
+	if cnt > 0 {
+		driveFail(w, http.StatusConflict, "同名文件或文件夹已存在")
+		return
+	}
+	// 配额校验（服务端归口；quota=-1 不限）
+	if quota := s.cfg.Drive.QuotaBytes; quota >= 0 {
+		var used struct{ Total int64 }
+		store.DB.Model(&model.DriveFile{}).Select("COALESCE(SUM(size),0) AS total").
+			Where("owner = ? AND is_dir = ?", username, false).Scan(&used)
+		if used.Total+body.Size > quota {
+			driveFail(w, http.StatusRequestEntityTooLarge, "网盘空间不足，请清理后再上传")
+			return
+		}
+	}
+	st := store.GetObjectStore()
+	if st == nil {
+		driveFail(w, http.StatusInternalServerError, "存储后端未就绪")
+		return
+	}
+	// 秒传：本人历史对象命中即复用 object_key（零字节传输，秒级完成）
+	var hit model.DriveFile
+	if err := store.DB.Where("owner = ? AND md5 = ? AND size = ? AND object_key != ''",
+		username, md5hex, body.Size).Order("create_time ASC").First(&hit).Error; err == nil {
+		rec := model.DriveFile{
+			Owner: username, ParentID: body.ParentID, Name: name, Size: body.Size,
+			ObjectKey: hit.ObjectKey, MimeType: driveMimeOf(name), MD5: md5hex,
+		}
+		if err := store.DB.Create(&rec).Error; err != nil {
+			driveFail(w, http.StatusInternalServerError, "记录创建失败")
+			return
+		}
+		logger.Info("网盘秒传: %s -> parent=%d, %s (%d 字节), 复用 key=%s", username, body.ParentID, name, body.Size, hit.ObjectKey)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"instant": true, "item": rec})
+		return
+	}
+	// 断点续传：本人同指纹未完成会话直接复用（chunk_size 取会话快照，跨配置变更仍一致）
+	var sess model.DriveUploadSession
+	if err := store.DB.Where("owner = ? AND md5 = ? AND size = ?", username, md5hex, body.Size).
+		Order("update_time DESC").First(&sess).Error; err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"instant": false, "session_id": sess.SessionID,
+			"chunk_size": sess.ChunkSize, "chunk_total": sess.ChunkTotal,
+			"uploaded": driveParseUploaded(sess.Uploaded),
+		})
+		return
+	}
+	// 新建会话（chunk_total = ceil(size/chunk_size)；空文件 0 片 complete 直通）
+	chunkSize := s.cfg.Drive.ChunkSize
+	total := (body.Size + chunkSize - 1) / chunkSize
+	b := make([]byte, 8)
+	rand.Read(b)
+	sess = model.DriveUploadSession{
+		SessionID:  fmt.Sprintf("%d_%s", time.Now().UnixNano(), hex.EncodeToString(b)),
+		Owner:      username,
+		Size:       body.Size,
+		MD5:        md5hex,
+		ChunkSize:  chunkSize,
+		ChunkTotal: int(total),
+		Uploaded:   "[]",
+	}
+	if err := store.DB.Create(&sess).Error; err != nil {
+		driveFail(w, http.StatusInternalServerError, "会话创建失败")
+		return
+	}
+	logger.Info("网盘分片会话创建: %s, %s (%d 字节), %d 片 x %d 字节, session=%s",
+		username, name, body.Size, total, chunkSize, sess.SessionID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"instant": false, "session_id": sess.SessionID,
+		"chunk_size": chunkSize, "chunk_total": sess.ChunkTotal,
+		"uploaded": []int{},
+	})
+}
+
+// handleDriveUploadChunk 上传单片 POST /api/drive/upload/chunk?username=&session_id=&index=
+// raw body 流式落临时盘（os.Create 截断写，重试重传天然幂等）；成功后更新会话已传索引；
+// 已传分片重复上传直接应答成功（断网重试/请求重放安全）
+func (s *Server) handleDriveUploadChunk(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	sid := r.URL.Query().Get("session_id")
+	if !driveSessionIDRe.MatchString(sid) {
+		driveFail(w, http.StatusBadRequest, "非法会话")
+		return
+	}
+	idx, err := strconv.Atoi(r.URL.Query().Get("index"))
+	if err != nil {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	var sess model.DriveUploadSession
+	if err := store.DB.Where("session_id = ? AND owner = ?", sid, username).First(&sess).Error; err != nil {
+		driveFail(w, http.StatusNotFound, "上传会话不存在")
+		return
+	}
+	if idx < 0 || idx >= sess.ChunkTotal {
+		driveFail(w, http.StatusBadRequest, "分片序号越界")
+		return
+	}
+	set := map[int]bool{}
+	for _, v := range driveParseUploaded(sess.Uploaded) {
+		set[v] = true
+	}
+	if !set[idx] {
+		// 单片限长（chunk_size + 1MB 余量防异常超发；超限在 io.Copy 阶段报错统一拒绝）
+		r.Body = http.MaxBytesReader(w, r.Body, sess.ChunkSize+1<<20)
+		if err := driveWriteChunk(sid, idx, r.Body); err != nil {
+			logger.Warn("网盘分片写入失败: %s[%d]: %v", sid, idx, err)
+			driveFail(w, http.StatusBadRequest, "分片写入失败")
+			return
+		}
+		// 已传索引落库（自动刷新 update_time 续命 TTL）
+		set[idx] = true
+		arr := make([]int, 0, len(set))
+		for v := range set {
+			arr = append(arr, v)
+		}
+		sort.Ints(arr)
+		buf, _ := json.Marshal(arr)
+		if err := store.DB.Model(&sess).Update("uploaded", string(buf)).Error; err != nil {
+			logger.Warn("网盘分片索引更新失败: %s[%d]: %v", sid, idx, err)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "uploaded_count": len(set)})
+}
+
+// driveWriteChunk 单片落临时盘归口（路径经会话码白名单消毒，防路径注入）
+func driveWriteChunk(sid string, idx int, rd io.Reader) error {
+	p := filepath.Join(store.DriveTmpDir(), sid, fmt.Sprintf("%d.part", idx))
+	if err := os.MkdirAll(filepath.Dir(p), os.ModePerm); err != nil {
+		return err
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, rd)
+	return err
+}
+
+// handleDriveUploadComplete 完成合并 POST /api/drive/upload/complete?username=xxx
+// body {session_id,name,parent_id}（重传场景以 complete 提交的目录/名称为准）
+// 全片齐套 → 配额/同名权威校验 → MultiReader 流式合并进对象存储（TeeReader 复核 MD5）→ 落库
+// → 会话与分片目录一并清理；MD5 不符视为数据损坏，对象/会话/分片全作废要求重传
+func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		SessionID string `json:"session_id"`
+		Name      string `json:"name"`
+		ParentID  uint   `json:"parent_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !driveSessionIDRe.MatchString(body.SessionID) {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	var sess model.DriveUploadSession
+	if err := store.DB.Where("session_id = ? AND owner = ?", body.SessionID, username).First(&sess).Error; err != nil {
+		driveFail(w, http.StatusNotFound, "上传会话不存在")
+		return
+	}
+	// 全片齐套校验
+	set := map[int]bool{}
+	for _, v := range driveParseUploaded(sess.Uploaded) {
+		set[v] = true
+	}
+	for i := 0; i < sess.ChunkTotal; i++ {
+		if !set[i] {
+			driveFail(w, http.StatusBadRequest, fmt.Sprintf("分片不完整（缺 %d/%d 片）", sess.ChunkTotal-len(set), sess.ChunkTotal))
+			return
+		}
+	}
+	name, ok := driveValidName(body.Name)
+	if !ok {
+		driveFail(w, http.StatusBadRequest, "文件名不合法")
+		return
+	}
+	if body.ParentID > 0 {
+		if _, err := s.driveOwnFile(body.ParentID, username); err != nil {
+			driveFail(w, http.StatusNotFound, "目标目录不存在")
+			return
+		}
+	}
+	// 同名拦截（权威校验：init 之后目标目录可能已新增同名项）
+	var cnt int64
+	store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+		username, body.ParentID, name).Count(&cnt)
+	if cnt > 0 {
+		driveFail(w, http.StatusConflict, "同名文件或文件夹已存在")
+		return
+	}
+	// 配额权威校验（init 后占用可能变化；失败保留会话与分片，清理空间后重传同文件自动续传直通 complete）
+	if quota := s.cfg.Drive.QuotaBytes; quota >= 0 {
+		var used struct{ Total int64 }
+		store.DB.Model(&model.DriveFile{}).Select("COALESCE(SUM(size),0) AS total").
+			Where("owner = ? AND is_dir = ?", username, false).Scan(&used)
+		if used.Total+sess.Size > quota {
+			driveFail(w, http.StatusRequestEntityTooLarge, "网盘空间不足，请清理后再上传")
+			return
+		}
+	}
+	st := store.GetObjectStore()
+	if st == nil {
+		driveFail(w, http.StatusInternalServerError, "存储后端未就绪")
+		return
+	}
+	// 合并流：按 index 顺序打开全部分片 MultiReader 串接，TeeReader 边写边算 MD5（零二次读盘）
+	files := make([]*os.File, 0, sess.ChunkTotal)
+	readers := make([]io.Reader, 0, sess.ChunkTotal)
+	cleanup := false
+	defer func() {
+		for _, f := range files {
+			f.Close()
+		}
+		// 句柄全部关闭后再删分片目录：Windows 下先删会因句柄占用静默失败残留孤儿目录
+		if cleanup {
+			s.driveAbortSession(&sess)
+		}
+	}()
+	for i := 0; i < sess.ChunkTotal; i++ {
+		f, err := os.Open(filepath.Join(store.DriveTmpDir(), sess.SessionID, fmt.Sprintf("%d.part", i)))
+		if err != nil {
+			driveFail(w, http.StatusInternalServerError, "分片读取失败，请重新上传")
+			return
+		}
+		files = append(files, f)
+		readers = append(readers, f)
+	}
+	ext := strings.ToLower(filepath.Ext(name))
+	b := make([]byte, 8)
+	rand.Read(b)
+	key := fmt.Sprintf("drive/u/%s/%d_%s%s", username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
+	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": name})
+	h := md5.New()
+	if err := st.Put(r.Context(), key, io.TeeReader(io.MultiReader(readers...), h), sess.Size, dispo); err != nil {
+		st.Delete(key) // 兜底清理半写对象
+		driveFail(w, http.StatusInternalServerError, "文件保存失败")
+		return
+	}
+	// MD5 复核不符 = 传输损坏/指纹伪造：对象、会话、分片全作废
+	if hex.EncodeToString(h.Sum(nil)) != sess.MD5 {
+		st.Delete(key)
+		cleanup = true // 分片目录随 defer（句柄关闭后）清理
+		logger.Warn("网盘分片合并 MD5 不符: %s, %s, session=%s", username, name, sess.SessionID)
+		driveFail(w, http.StatusBadRequest, "文件校验失败，请重新上传")
+		return
+	}
+	rec := model.DriveFile{
+		Owner: username, ParentID: body.ParentID, Name: name, Size: sess.Size,
+		ObjectKey: key, MimeType: driveMimeOf(name), MD5: sess.MD5,
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		st.Delete(key) // 兜底清理孤儿对象
+		driveFail(w, http.StatusInternalServerError, "记录创建失败")
+		return
+	}
+	cleanup = true // 会话行与分片目录随 defer（句柄关闭后）一并清理
+	logger.Info("网盘分片上传完成: %s -> parent=%d, %s (%d 字节, %d 片), key=%s, 后端=%s",
+		username, body.ParentID, name, sess.Size, sess.ChunkTotal, key, st.Kind())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"item": rec})
+}
+
+// driveAbortSession 会话作废归口：删会话行 + 删分片目录（均幂等；GC 与 complete 共用）
+func (s *Server) driveAbortSession(sess *model.DriveUploadSession) {
+	store.DB.Delete(sess) // 模型无 DeletedAt 字段=物理删
+	os.RemoveAll(filepath.Join(store.DriveTmpDir(), sess.SessionID))
+}
+
+// startDriveUploadGC 分片会话定时 GC：启动即清一次，此后每 6 小时一轮；
+// 超 TTL 未更新的会话连同分片目录清理（断网/取消/放弃上传的孤儿数据归口）
+func (s *Server) startDriveUploadGC() {
+	go func() {
+		for {
+			var stale []model.DriveUploadSession
+			store.DB.Where("update_time < ?", time.Now().Add(-driveUploadSessionTTL)).Find(&stale)
+			for i := range stale {
+				s.driveAbortSession(&stale[i])
+			}
+			if len(stale) > 0 {
+				logger.Info("网盘分片会话 GC: 清理 %d 个超期会话", len(stale))
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
 }
 
 // driveMimeOf 按扩展名归口 MIME（前端图标/预览用；未知回退二进制流）

@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // User 用户信息表 im_user
 type User struct {
@@ -689,15 +693,22 @@ func (WorkbenchApp) TableName() string { return "im_workbench_app" }
 type DriveFile struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 	// Owner 归属用户；ParentID 父目录 ID（0=根目录）——owner+parent 联合索引支撑目录树查询
-	Owner      string    `gorm:"column:owner;type:varchar(32);not null;index:idx_drive_owner_parent" json:"owner"`
-	ParentID   uint      `gorm:"column:parent_id;default:0;index:idx_drive_owner_parent" json:"parent_id"`
-	Name       string    `gorm:"column:name;type:varchar(255);not null" json:"name"` // 名称（文件含扩展名；目录纯名称）
-	IsDir      bool      `gorm:"column:is_dir;default:false" json:"is_dir"`
-	Size       int64     `gorm:"column:size;default:0" json:"size"`                                // 文件大小（字节；目录恒 0，配额按文件累加）
-	ObjectKey  string    `gorm:"column:object_key;type:varchar(512);default:''" json:"object_key"` // 文件本体对象 key（目录为空）
-	MimeType   string    `gorm:"column:mime_type;type:varchar(128);default:''" json:"mime_type"`   // MIME（按扩展名归口，前端图标/预览用）
+	Owner     string `gorm:"column:owner;type:varchar(32);not null;index:idx_drive_owner_parent" json:"owner"`
+	ParentID  uint   `gorm:"column:parent_id;default:0;index:idx_drive_owner_parent" json:"parent_id"`
+	Name      string `gorm:"column:name;type:varchar(255);not null" json:"name"` // 名称（文件含扩展名；目录纯名称）
+	IsDir     bool   `gorm:"column:is_dir;default:false" json:"is_dir"`
+	Size      int64  `gorm:"column:size;default:0" json:"size"`                                // 文件大小（字节；目录恒 0，配额按文件累加）
+	ObjectKey string `gorm:"column:object_key;type:varchar(512);default:''" json:"object_key"` // 文件本体对象 key（目录为空）
+	MimeType  string `gorm:"column:mime_type;type:varchar(128);default:''" json:"mime_type"`   // MIME（按扩展名归口，前端图标/预览用）
+	// MD5 全文件指纹（网盘二期秒传归口：owner+md5+size 命中即复用 object_key 免传文件本体；
+	// 仅分片链路与带 md5 的直传写入，存量记录为空不参与秒传；索引支撑秒传查询）
+	MD5        string    `gorm:"column:md5;type:varchar(32);index;default:''" json:"md5"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	// DeletedAt 软删除标记（回收站归口：网盘删除=移入回收站）——GORM 约定字段，全项目普通查询
+	// 自动追加 deleted_at IS NULL（列表/搜索/配额/分享源校验/同名查重全自动排除回收站项）；
+	// 回收站管理（列表/恢复/彻底删除）经 Unscoped 查询归口，彻底删除才物理清行
+	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at" json:"-"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
@@ -731,6 +742,28 @@ type DriveShare struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (DriveShare) TableName() string { return "im_drive_share" }
+
+// DriveUploadSession 网盘分片上传会话表 im_drive_upload_session（网盘二期：大文件分片 + 断点续传）
+// 设计归口：会话持久化 MySQL（服务重启不丢断点），已传分片索引 JSON 数组落库（单片成功即更新），
+// 分片本体落本地磁盘临时目录（up_tmp/<session_id>/<index>.part），complete 流式合并进对象存储；
+// 超期会话（driveUploadSessionTTL）由服务端定时 GC 连同分片目录一并清理
+type DriveUploadSession struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// SessionID 会话码（纳秒+随机串，全局唯一；断点续传凭 owner+md5+size 复查复用）
+	SessionID  string `gorm:"column:session_id;type:varchar(64);uniqueIndex;not null" json:"session_id"`
+	Owner      string `gorm:"column:owner;type:varchar(32);not null;index" json:"owner"` // 归属用户（隔离归口）
+	Size       int64  `gorm:"column:size;not null" json:"size"`                          // 全文件大小（字节）
+	MD5        string `gorm:"column:md5;type:varchar(32);not null" json:"md5"`           // 客户端声明的全文件 MD5（complete 时流式复核）
+	ChunkSize  int64  `gorm:"column:chunk_size;not null" json:"chunk_size"`              // 单片大小（init 时快照，会话生命周期内恒定）
+	ChunkTotal int    `gorm:"column:chunk_total;not null" json:"chunk_total"`            // 分片总数 = ceil(size/chunk_size)
+	// Uploaded 已传分片索引 JSON 数组（如 [0,1,3]；单片落盘成功后更新；断点续传随 init 返回）
+	Uploaded   string    `gorm:"column:uploaded;type:text" json:"uploaded"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (DriveUploadSession) TableName() string { return "im_drive_upload_session" }
 
 // ===== 阶段一百五十四：积分红包（微信同款红包，积分归口） =====
 // 设计归口：金额计算/拆分/扣减/退回全部服务端完成，客户端仅展示；
