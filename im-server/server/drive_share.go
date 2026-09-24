@@ -16,15 +16,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"im-server/logger"
 	"im-server/model"
 	"im-server/protocol"
 	"im-server/store"
+
+	"gorm.io/gorm"
 )
 
 // RegisterDriveShareRoutes 注册网盘分享路由（main.go 调用归口；Go 1.22+ 方法+路径模式）
@@ -35,6 +39,34 @@ func RegisterDriveShareRoutes(s *Server) {
 	http.HandleFunc("GET /api/drive/share/info", s.handleDriveShareInfo)
 	http.HandleFunc("POST /api/drive/share/save", s.handleDriveShareSave)
 	http.HandleFunc("GET /api/drive/share/download", s.handleDriveShareDownload)
+}
+
+// StartShareCleanupLoop 启动过期分享记录清理后台任务（main.go 启动时调用，单协程）
+// 只清理"已过期"记录（expire_at>0 且过期超过 30 天——留痕期过后删除，防表无限膨胀）；
+// 已取消记录永久留痕（分享管理列表展示归口，注释同 handleDriveShareCancel）
+func StartShareCleanupLoop() {
+	go func() {
+		shareCleanupOnce() // 启动先执行一次（与文件清理同款节奏）
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			shareCleanupOnce()
+		}
+	}()
+	logger.Info("过期分享清理已启动（过期留痕 30 天后删除记录，每 6 小时扫描一轮）")
+}
+
+// shareCleanupOnce 单轮清理：删除过期超 30 天的分享记录（记录删除不影响源文件/副本数据）
+func shareCleanupOnce() {
+	cutoff := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	res := store.DB.Where("expire_at > 0 AND expire_at < ?", cutoff).Delete(&model.DriveShare{})
+	if res.Error != nil {
+		logger.Warn("过期分享清理失败: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		logger.Info("过期分享清理: 删除 %d 条过期记录", res.RowsAffected)
+	}
 }
 
 // driveExtractAlphabet 提取码字符集（去 0O1I 等易混淆字符，4 位 8.3 亿组合）
@@ -55,6 +87,116 @@ func driveGenShareCode() string {
 	b := make([]byte, 8)
 	rand.Read(b)
 	return strconv.FormatInt(time.Now().UnixNano(), 36) + hex.EncodeToString(b)
+}
+
+// ===== 提取码防暴力（服务端内存归口，覆盖 info/download/save 三个凭提取码访问的接口） =====
+// 同一来源 IP 对同一分享码连续错 5 次 → 锁定 10 分钟（锁定内直接拒绝，不再比对提取码）；
+// 校验成功即清零。内存态重启清零可接受（防暴力而非审计；4 位码 8.3 亿组合，重启清零不构成可利用绕过）。
+// 来源仅取 RemoteAddr（X-Forwarded-For 可伪造不可作为限流依据；若未来加反向代理应在其层加限速）
+const (
+	shareExtractMaxFails   = 5
+	shareExtractLockMillis = int64(10 * 60 * 1000)
+)
+
+// shareExtractState 单个 code|ip 维度的连续错误与锁定状态
+type shareExtractState struct {
+	fails     int
+	lockUntil int64 // UnixMilli，0=未锁定
+}
+
+var (
+	shareExtractMu    sync.Mutex
+	shareExtractFails = map[string]*shareExtractState{}
+)
+
+// driveShareExtractKey 限流 key 归口：分享码|来源IP
+func driveShareExtractKey(code, ip string) string { return code + "|" + ip }
+
+// driveShareExtractLocked 提取码锁定检查：true=锁定中（应直接拒绝尝试）
+func driveShareExtractLocked(code, ip string) bool {
+	shareExtractMu.Lock()
+	defer shareExtractMu.Unlock()
+	st := shareExtractFails[driveShareExtractKey(code, ip)]
+	return st != nil && st.lockUntil > time.Now().UnixMilli()
+}
+
+// driveShareExtractFail 记录一次提取码错误；达到上限即落锁并写日志
+func driveShareExtractFail(code, ip string) {
+	shareExtractMu.Lock()
+	defer shareExtractMu.Unlock()
+	// 惰性清理：条目超 1 万条时全量清已过期（count 清零+锁定过期）条目，防 map 无界膨胀
+	if len(shareExtractFails) > 10000 {
+		now := time.Now().UnixMilli()
+		for k, v := range shareExtractFails {
+			if v.lockUntil <= now && v.fails == 0 {
+				delete(shareExtractFails, k)
+			}
+		}
+	}
+	key := driveShareExtractKey(code, ip)
+	st := shareExtractFails[key]
+	if st == nil {
+		st = &shareExtractState{}
+		shareExtractFails[key] = st
+	}
+	st.fails++
+	if st.fails >= shareExtractMaxFails {
+		st.lockUntil = time.Now().UnixMilli() + shareExtractLockMillis
+		st.fails = 0
+		logger.Warn("网盘分享提取码防暴力: code=%s ip=%s 连续错误%d次，锁定%d分钟", code, ip, shareExtractMaxFails, shareExtractLockMillis/60000)
+	}
+}
+
+// driveShareExtractReset 提取码校验成功清零（区分于落锁：清零不删条目保留锁定状态语义）
+func driveShareExtractReset(code, ip string) {
+	shareExtractMu.Lock()
+	defer shareExtractMu.Unlock()
+	if st := shareExtractFails[driveShareExtractKey(code, ip)]; st != nil {
+		st.fails = 0
+	}
+}
+
+// ===== 分享统计（服务端归口原子计数，客户端只展示） =====
+// 浏览 = info 成功查看（提取码通过后才计，打开页/刷新即一次浏览，百度网盘同款语义）；
+// 下载 = download 非 preview 成功下发，60 秒同 code|ip 去重（浏览器 Range 分片/断点续传会把
+// 一次下载拆成多次请求，不去重会虚增；预览走 preview=1 不计下载，视频拖进度条不污染计数）；
+// 保存 = save 成功（按动作计 1 次，返回的 saved 为保存条目数，两者语义独立）。
+// 计数失败仅告警不影响主流程；UpdateColumn 原子自增防读改写竞态。
+
+// driveShareBump 指定计数字段原子自增
+func driveShareBump(id uint, field string) {
+	if err := store.DB.Model(&model.DriveShare{}).Where("id = ?", id).
+		UpdateColumn(field, gorm.Expr(field+" + 1")).Error; err != nil {
+		logger.Warn("网盘分享统计更新失败: id=%d %s %v", id, field, err)
+	}
+}
+
+// shareDlWindowMillis 下载计数去重窗口（同 code|ip 窗口内多次请求只计 1 次）
+const shareDlWindowMillis = int64(60 * 1000)
+
+var (
+	shareDlMu   sync.Mutex
+	shareDlSeen = map[string]int64{} // code|ip -> 最近计数 UnixMilli
+)
+
+// driveShareDlShouldCount 下载是否应计数（窗口内首次 true；超 1 万条惰性清理过期项防膨胀）
+func driveShareDlShouldCount(code, ip string) bool {
+	shareDlMu.Lock()
+	defer shareDlMu.Unlock()
+	now := time.Now().UnixMilli()
+	if len(shareDlSeen) > 10000 {
+		for k, ts := range shareDlSeen {
+			if now-ts > shareDlWindowMillis {
+				delete(shareDlSeen, k)
+			}
+		}
+	}
+	key := code + "|" + ip
+	if ts, ok := shareDlSeen[key]; ok && now-ts < shareDlWindowMillis {
+		return false
+	}
+	shareDlSeen[key] = now
+	return true
 }
 
 // driveShareInvalidReason 分享有效性归口校验（空串=有效；否则返回用户可读失效原因）
@@ -85,6 +227,10 @@ type driveShareClient struct {
 	Status    string `json:"status"`      // valid/canceled/expired/deleted（列表与管理页归口展示）
 	ValidMsg  string `json:"valid_msg"`   // 失效原因（status != valid 时携带）
 	ShareLink string `json:"share_link"`  // 站内链接路径 /s/<code>（列表/详情共用）
+	// 分享统计（服务端归口计数，info/list 响应共用；管理列表与分享页展示）
+	ViewCount     int64 `json:"view_count"`
+	DownloadCount int64 `json:"download_count"`
+	SaveCount     int64 `json:"save_count"`
 }
 
 func driveShareToClient(s *Server, sh *model.DriveShare, withStatus bool) driveShareClient {
@@ -93,6 +239,7 @@ func driveShareToClient(s *Server, sh *model.DriveShare, withStatus bool) driveS
 		Size: sh.Size, From: sh.Owner, HasCode: sh.ExtractCode != "",
 		ExpireAt:  sh.ExpireAt,
 		ShareLink: "/s/" + sh.ShareCode,
+		ViewCount: sh.ViewCount, DownloadCount: sh.DownloadCount, SaveCount: sh.SaveCount,
 	}
 	if withStatus {
 		if r := s.driveShareInvalidReason(sh); r != "" {
@@ -305,8 +452,10 @@ func (s *Server) handleDriveShareCancel(w http.ResponseWriter, r *http.Request) 
 
 // driveShareLoadAndCheck 分享访问凭据校验归口（详情/保存/下载共用）：
 // 按 share_code 查记录 → 有效性三态校验 → 提取码校验（need=true 表示前端应弹出输入框）；
+// 提取码防暴力归口接入（同一 IP 同一 code 连续错 5 次锁 10 分钟，成功清零）；
 // 返回 (分享记录, 错误文本, HTTP 状态码, 需要提取码)
-func (s *Server) driveShareLoadAndCheck(code, extract string) (*model.DriveShare, string, int, bool) {
+// 原签名：func (s *Server) driveShareLoadAndCheck(code, extract string) (*model.DriveShare, string, int, bool)
+func (s *Server) driveShareLoadAndCheck(r *http.Request, code, extract string) (*model.DriveShare, string, int, bool) {
 	code = strings.TrimSpace(code)
 	if code == "" || len(code) > 40 {
 		return nil, "分享不存在或已失效", http.StatusNotFound, false
@@ -319,14 +468,24 @@ func (s *Server) driveShareLoadAndCheck(code, extract string) (*model.DriveShare
 		return nil, reason, http.StatusForbidden, false
 	}
 	if sh.ExtractCode != "" {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		// 锁定内直接拒绝（不比对提取码，防绕过计数继续枚举）；need=true 让前端输入行展示原因
+		if driveShareExtractLocked(code, ip) {
+			return nil, "提取码错误次数过多，请稍后再试", http.StatusTooManyRequests, true
+		}
 		if strings.TrimSpace(extract) == "" {
 			return nil, "请输入提取码", http.StatusUnauthorized, true
 		}
 		// 提取码比对不区分大小写（百度网盘同款语义，用户输入 8zkl/8ZKL 均应通过）
 		// if strings.TrimSpace(extract) != sh.ExtractCode {
 		if !strings.EqualFold(strings.TrimSpace(extract), sh.ExtractCode) {
+			driveShareExtractFail(code, ip)
 			return nil, "提取码错误", http.StatusUnauthorized, true
 		}
+		driveShareExtractReset(code, ip)
 	}
 	return &sh, "", 0, false
 }
@@ -334,13 +493,16 @@ func (s *Server) driveShareLoadAndCheck(code, extract string) (*model.DriveShare
 // handleDriveShareInfo 分享详情 GET /api/drive/share/info?code=xxx&extract=yyyy
 // 凭 分享码+提取码 访问（无需登录态，百度网盘同款链接语义）；仅回卡片展示字段，不泄露路径
 func (s *Server) handleDriveShareInfo(w http.ResponseWriter, r *http.Request) {
-	sh, errMsg, code, need := s.driveShareLoadAndCheck(r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
+	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
 	if errMsg != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": errMsg, "need_extract": need})
 		return
 	}
+	// 浏览计数归口：info 成功查看即 +1（提取码分享需通过提取码后才会走到这里；响应即含本次，打开页立见）
+	driveShareBump(sh.ID, "view_count")
+	sh.ViewCount++ // bump 只落库，内存快照同步 +1 保证响应即含本次
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"share": driveShareToClient(s, sh, false)})
 }
@@ -363,7 +525,7 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 		driveFail(w, http.StatusUnauthorized, msg)
 		return
 	}
-	sh, errMsg, code, need := s.driveShareLoadAndCheck(body.Code, body.Extract)
+	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, body.Code, body.Extract)
 	if errMsg != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
@@ -447,6 +609,7 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 		saved++
 	}
 	logger.Info("网盘分享保存: %s <- %s code=%s, 保存 %d 项 (parent=%d)", body.Username, sh.Owner, sh.ShareCode, saved, body.ParentID)
+	driveShareBump(sh.ID, "save_count") // 保存计数归口：成功保存即 +1（按动作计，条目数另由 saved 体现）
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"saved": saved})
 }
@@ -454,7 +617,7 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 // handleDriveShareDownload 分享下载 GET /api/drive/share/download?code=xxx&extract=yyyy
 // 校验分享有效后复用 serveDriveFile 下发链路（MinIO 302 预签名 / 本地流式，与本人下载同款）
 func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request) {
-	sh, errMsg, code, need := s.driveShareLoadAndCheck(r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
+	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
 	if errMsg != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
@@ -470,5 +633,18 @@ func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request
 		http.Error(w, "文件夹不支持下载", http.StatusBadRequest)
 		return
 	}
-	s.serveDriveFile(w, r, rec)
+	// preview=1 时以 inline 方式下发（分享页在线预览：img/video/pdf/文本标签内联渲染）
+	if r.URL.Query().Get("preview") == "1" {
+		s.serveDriveFile(w, r, rec, true)
+		return
+	}
+	// 下载计数归口：非预览成功下发 +1；60 秒同 code|ip 去重（Range 分片/断点续传不虚增）
+	ip := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = h
+	}
+	if driveShareDlShouldCount(sh.ShareCode, ip) {
+		driveShareBump(sh.ID, "download_count")
+	}
+	s.serveDriveFile(w, r, rec, false)
 }

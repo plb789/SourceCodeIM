@@ -144,6 +144,14 @@ body {
     color: var(--text-secondary);
     text-align: center;
 }
+/* 分享统计行（浏览/下载/保存，服务端归口计数；弱化展示） */
+.sp-stats {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+}
+.sp-stats.hidden { display: none; }
 
 /* ===== 提取码行 ===== */
 .sp-extract-row {
@@ -331,6 +339,124 @@ body {
 .sp-login-close:hover {
     background: var(--hover);
     color: var(--text);
+}
+
+/* ===== 自绘预览浮层（百度网盘分享页同款：全屏遮罩+头栏+内联渲染区） ===== */
+.sp-viewer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100; /* 登录浮层(1000) 之上、toast(1200) 之下 */
+    padding: 20px;
+    box-sizing: border-box;
+}
+.sp-viewer-mask.hidden { display: none; }
+.sp-viewer-box {
+    width: min(920px, 100%);
+    height: min(86vh, 760px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.sp-viewer-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+}
+.sp-viewer-title {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-viewer-close {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-viewer-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.sp-viewer-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 12px;
+    box-sizing: border-box;
+}
+/* 图片：自适应缩放（预览区深色底衬托透明图） */
+.sp-viewer-body img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* PDF：iframe 铺满内容区 */
+.sp-viewer-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* 视频/音频：原生控件居中 */
+.sp-viewer-body video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 6px;
+    background: #1e1e1e;
+    outline: none;
+}
+.sp-viewer-body audio {
+    width: min(520px, 100%);
+}
+/* 文本：等宽字体滚动区（UTF-8 明示，防中文乱码） */
+.sp-viewer-body pre {
+    align-self: stretch;
+    flex: 1;
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: Consolas, 'JetBrains Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow: auto;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.sp-viewer-loading {
+    font-size: 13px;
+    color: var(--text-secondary);
 }
 
 /* ===== 自绘 toast ===== */

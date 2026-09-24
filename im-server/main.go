@@ -198,6 +198,8 @@ func main() {
 		cleanupDir = filepath.Join(cfg.WebDir, "static", "upload")
 	}
 	server.StartFileCleanupLoop(cleanupDir, cfg.FileRetentionDays)
+	// 网盘分享：过期分享记录定期清理（过期留痕 30 天后删除记录，已取消记录永久留痕）
+	server.StartShareCleanupLoop()
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
 	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {

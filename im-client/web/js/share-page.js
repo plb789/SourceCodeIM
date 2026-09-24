@@ -5,6 +5,8 @@
 //     同一套 LOGIN 协议建立会话（与主应用共享 localStorage['im_auth'] 凭据）
 //  3. 失效文案（已取消/已过期/文件已删除/不存在）全部服务端返回，本页零判断
 //  4. 全部弹层自绘（禁系统弹窗），主题变量归口 css/style.css（data-theme 跟随主程序设置）
+//  5. 文案 i18n 归口 js/i18n.js（key 即中文原文）：静态文本由 apply() 首绘反查替换，
+//     动态文本统一 T()（带参占位），服务端下发文本统一 TR() 全等反查，未归口回退中文
 
 (function () {
     'use strict';
@@ -13,13 +15,20 @@
     var m = (location.pathname || '').match(/^\/s\/([A-Za-z0-9]{6,40})$/);
     var code = m ? m[1] : '';
 
+    // ===== 文案翻译归口（i18n.js 未加载时优雅回退原文；T=动态文本/带参，TR=服务端文本反查） =====
+    function T(key, params) { return window.I18N ? I18N.t(key, params) : key; }
+    function TR(text) { return window.I18N ? I18N.tr(text) : text; }
+
     // ===== DOM 引用 =====
     function $(id) { return document.getElementById(id); }
     var loginEntry = $('sp-login-entry'), userNameEl = $('sp-user-name'), logoutBtn = $('sp-logout');
-    var iconEl = $('sp-icon'), nameEl = $('sp-name'), metaEl = $('sp-meta');
+    var iconEl = $('sp-icon'), nameEl = $('sp-name'), metaEl = $('sp-meta'), statsEl = $('sp-stats');
     var extractRow = $('sp-extract-row'), extractInput = $('sp-extract-input'),
         extractBtn = $('sp-extract-btn'), extractErr = $('sp-extract-err');
-    var btnRow = $('sp-btn-row'), downloadBtn = $('sp-download-btn'), saveBtn = $('sp-save-btn');
+    var btnRow = $('sp-btn-row'), downloadBtn = $('sp-download-btn'), saveBtn = $('sp-save-btn'),
+        previewBtn = $('sp-preview-btn');
+    var viewerMask = $('sp-viewer-mask'), viewerTitle = $('sp-viewer-title'),
+        viewerBody = $('sp-viewer-body'), viewerClose = $('sp-viewer-close');
     var invalidEl = $('sp-invalid'), invalidText = $('sp-invalid-text');
     var loginMask = $('sp-login-mask'), loginClose = $('sp-login-close'),
         loginUser = $('sp-login-username'), loginPass = $('sp-login-password'),
@@ -79,13 +88,13 @@
     function apiJSON(url, opts, cb) {
         fetch(url, opts).then(function (res) {
             res.json().then(function (data) {
-                if (!res.ok) cb(new Error(data.error || ('请求失败(' + res.status + ')')), data);
+                if (!res.ok) cb(new Error(data.error || T('请求失败({n})', { n: res.status })), data);
                 else cb(null, data);
             }, function () {
-                cb(new Error('请求失败(' + res.status + ')'));
+                cb(new Error(T('请求失败({n})', { n: res.status })));
             });
         }, function () {
-            cb(new Error('网络异常，请稍后重试'));
+            cb(new Error(T('网络异常，请稍后重试')));
         });
     }
 
@@ -98,10 +107,10 @@
         return (n / 1073741824).toFixed(2) + ' GB';
     }
     function expireText(ts) {
-        if (!ts) return '永久有效';
+        if (!ts) return T('永久有效');
         var d = new Date(ts * 1000);
         var pad = function (x) { return x < 10 ? '0' + x : '' + x; };
-        return '有效期至 ' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        return T('有效期至 {d}', { d: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) });
     }
     function toast(text) {
         toastEl.textContent = text;
@@ -117,22 +126,106 @@
     // ===== 视图切换 =====
     function showInvalid(text) {
         $('sp-card').classList.add('hidden');
-        invalidText.textContent = text || '分享不存在或已失效';
+        invalidText.textContent = text || T('分享不存在或已失效');
         invalidEl.classList.remove('hidden');
     }
     function renderShare(sh) {
         invalidEl.classList.add('hidden');
         iconEl.className = 'sp-icon k-' + kindOf(sh);
         iconEl.innerHTML = ICONS[kindOf(sh)] || ICONS.file;
-        nameEl.textContent = sh.file_name || '未命名文件';
+        nameEl.textContent = sh.file_name || T('未命名文件');
         nameEl.title = sh.file_name || '';
-        metaEl.textContent = (sh.is_dir ? '文件夹' : fmtSize(sh.size)) +
-            ' · ' + (sh.from || '') + ' 分享 · ' + expireText(sh.expire_at) +
+        metaEl.textContent = (sh.is_dir ? T('文件夹') : fmtSize(sh.size)) +
+            ' · ' + T('{u} 分享', { u: sh.from || '' }) + ' · ' + expireText(sh.expire_at) +
             (sh.has_extract ? '' : '');
+        // 分享统计（服务端归口计数，本行只展示；响应即含本次浏览）
+        statsEl.textContent = T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' +
+            T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 });
+        statsEl.classList.remove('hidden');
         extractRow.classList.add('hidden');
         btnRow.classList.remove('hidden');
         downloadBtn.classList.toggle('hidden', !!sh.is_dir); // 文件夹不支持下载（服务端同款限制）
+        // 在线预览按钮：仅文件且浏览器原生可渲染的类型显示（img 全系/video 仅 mp4|webm/audio 全系/pdf/文本类）
+        previewBtn.classList.toggle('hidden', !!sh.is_dir || !canPreviewName(sh.file_name || ''));
     }
+
+    // ===== 在线预览（百度网盘分享页同款：凭 分享码+提取码 inline 下发，本页内联渲染） =====
+    // 浏览器原生可渲染的类型归口（avi/mkv/mov/flv/wmv 等原生 <video> 不支持，不显示预览按钮）
+    function canPreviewName(name) {
+        var ext = ((name || '').split('.').pop() || '').toLowerCase();
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) >= 0) return true;   // 图片
+        if (['mp4', 'webm'].indexOf(ext) >= 0) return true;                                        // 视频（原生可播）
+        if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].indexOf(ext) >= 0) return true;                   // 音频
+        if (ext === 'pdf') return true;                                                            // PDF（iframe 内建阅读器）
+        if (['txt', 'md', 'log', 'json'].indexOf(ext) >= 0) return true;                           // 文本
+        return false;
+    }
+    // 分享文件下发 URL 归口（下载与预览共用；preview=1 服务端改 inline 下发）
+    function shareFileUrl(preview) {
+        return '/api/drive/share/download?code=' + encodeURIComponent(code) +
+            '&extract=' + encodeURIComponent(extract) + (preview ? '&preview=1' : '');
+    }
+    function openViewer() {
+        if (!shareInfo) return;
+        var name = shareInfo.file_name || '';
+        var kind = kindOf(shareInfo);
+        var url = shareFileUrl(true);
+        viewerTitle.textContent = name + ' · ' + T('在线预览');
+        viewerBody.innerHTML = '<div class="sp-viewer-loading">' + T('正在加载预览…') + '</div>';
+        viewerMask.classList.remove('hidden');
+        if (kind === 'img') {
+            viewerBody.innerHTML = '';
+            var img = document.createElement('img');
+            img.alt = name;
+            img.src = url;
+            viewerBody.appendChild(img);
+        } else if (kind === 'pdf') {
+            viewerBody.innerHTML = '';
+            var frame = document.createElement('iframe');
+            frame.src = url;
+            viewerBody.appendChild(frame);
+        } else if (kind === 'video') {
+            viewerBody.innerHTML = '';
+            var video = document.createElement('video');
+            video.controls = true;
+            video.autoplay = true;
+            video.src = url;
+            viewerBody.appendChild(video);
+        } else if (kind === 'audio') {
+            viewerBody.innerHTML = '';
+            var audio = document.createElement('audio');
+            audio.controls = true;
+            audio.autoplay = true;
+            audio.src = url;
+            viewerBody.appendChild(audio);
+        } else {
+            // 文本类：拉取后 <pre> 直显（2MB 截断提示，防超大文本卡渲染）
+            fetch(url).then(function (res) {
+                if (!res.ok) throw new Error(T('预览加载失败({n})', { n: res.status }));
+                return res.text();
+            }, function () { throw new Error(T('网络异常，请稍后重试')); }).then(function (text) {
+                if (text.length > 2 * 1024 * 1024) text = text.slice(0, 2 * 1024 * 1024) + '\n\n…' + T('内容过大，仅预览前 2MB，请下载查看全文');
+                var pre = document.createElement('pre');
+                pre.textContent = text; // textContent 防 XSS
+                viewerBody.innerHTML = '';
+                viewerBody.appendChild(pre);
+            }, function (err) {
+                viewerBody.innerHTML = '<div class="sp-viewer-loading"></div>';
+                viewerBody.firstChild.textContent = err.message || T('预览加载失败');
+            });
+        }
+    }
+    function closeViewer() {
+        viewerMask.classList.add('hidden');
+        viewerBody.innerHTML = ''; // 清空内容区：视频/音频随之停止播放
+    }
+    previewBtn.addEventListener('click', openViewer);
+    viewerClose.addEventListener('click', closeViewer);
+    viewerMask.addEventListener('click', function (e) { if (e.target === viewerMask) closeViewer(); });
+    document.addEventListener('keydown', function (e) {
+        // Esc 仅在预览层打开时接管（不影响提取码输入等场景）
+        if (e.key === 'Escape' && !viewerMask.classList.contains('hidden')) closeViewer();
+    });
 
     // ===== 分享信息获取（info 免登录归口；need_extract 引导提取码行） =====
     function fetchInfo(ex) {
@@ -143,13 +236,14 @@
                     // 需要提取码：显示输入行（错误文案如"提取码错误"显示在输入行下方）
                     $('sp-card').classList.remove('hidden');
                     invalidEl.classList.add('hidden');
-                    nameEl.textContent = '加密分享';
-                    metaEl.textContent = '输入提取码后查看和下载文件';
+                    nameEl.textContent = T('加密分享');
+                    metaEl.textContent = T('输入提取码后查看和下载文件');
+                    statsEl.classList.add('hidden'); // 提取前无统计数据
                     extractRow.classList.remove('hidden');
-                    if (ex) showError(extractErr, err.message || '提取码错误');
+                    if (ex) showError(extractErr, TR(err.message) || T('提取码错误'));
                     setTimeout(function () { extractInput.focus(); extractInput.select(); }, 60);
                 } else {
-                    showInvalid(err.message);
+                    showInvalid(TR(err.message));
                 }
                 return;
             }
@@ -162,7 +256,7 @@
     // ===== 下载（免登录：浏览器原生下载，本地流式/MinIO 302 均带 attachment） =====
     downloadBtn.addEventListener('click', function () {
         if (!code) return;
-        toast('开始下载…');
+        toast(T('开始下载…'));
         location.href = '/api/drive/share/download?code=' + encodeURIComponent(code) +
             '&extract=' + encodeURIComponent(extract);
     });
@@ -179,17 +273,17 @@
         }, function (err, data) {
             saveBtn.disabled = false;
             if (err) {
-                var msg = err.message || '保存失败';
-                if (msg.indexOf('未在线') >= 0) {
+                var raw = err.message || '';
+                if (raw.indexOf('未在线') >= 0) { // 在线水位判定用未翻译原文（翻译后关键词失效）
                     // 在线水位失效（密码被改/被踢下线）：引导重新登录后自动补发
                     authed = false;
                     openLoginPanel(true);
                     return;
                 }
-                toast(msg);
+                toast(TR(raw) || T('保存失败'));
                 return;
             }
-            toast('已保存到我的网盘（共 ' + (data && data.saved || 0) + ' 项）');
+            toast(T('已保存到我的网盘（共 {n} 项）', { n: data && data.saved || 0 }));
         });
     }
     saveBtn.addEventListener('click', function () {
@@ -200,7 +294,7 @@
             // 已有凭据：连接中，登录成功后自动补发保存
             pendingSave = true;
             saveBtn.disabled = true;
-            toast('正在连接，登录成功后自动保存…');
+            toast(T('正在连接，登录成功后自动保存…'));
             connectWS(saved.u, saved.p, false);
         } else {
             openLoginPanel(true);
@@ -225,9 +319,9 @@
     loginMask.addEventListener('click', function (e) { if (e.target === loginMask) closeLoginPanel(); });
     function submitLogin() {
         var u = loginUser.value.trim(), p = loginPass.value;
-        if (!u || !p) { showError(loginErr, '请输入账号和密码'); return; }
+        if (!u || !p) { showError(loginErr, T('请输入账号和密码')); return; }
         loginOkBtn.disabled = true;
-        showError(loginErr, '正在登录…');
+        showError(loginErr, T('正在登录…'));
         loginErr.classList.remove('hidden');
         connectWS(u, p, true);
     }
@@ -262,7 +356,7 @@
     // ===== WebSocket 登录归口（复用 socket.js 协议；保存动作依赖服务端 WS 在线水位） =====
     function connectWS(u, p, fromPanel) {
         autoConnFailSilent = !fromPanel;
-        if (!window.IMSocket) { onLoginFail(fromPanel, '连接组件加载失败'); return; }
+        if (!window.IMSocket) { onLoginFail(fromPanel, T('连接组件加载失败')); return; }
         IMSocket.connect(u, p);
     }
     function onLoginOk(u, p) {
@@ -283,9 +377,9 @@
         renderUser('');
         saveBtn.disabled = false;
         if (fromPanel || !loginMask.classList.contains('hidden')) {
-            showError(loginErr, text || '登录失败，请检查账号密码');
+            showError(loginErr, TR(text) || T('登录失败，请检查账号密码'));
         } else {
-            toast(text || '登录状态已失效');
+            toast(TR(text) || T('登录状态已失效'));
         }
     }
 
@@ -305,7 +399,7 @@
         });
         IMSocket.on(IMSocket.MSG.ERROR, function (msg) {
             lastRejectText = (msg && msg.content) || '';
-            if (!loginMask.classList.contains('hidden')) showError(loginErr, lastRejectText || '登录失败，请检查账号密码');
+            if (!loginMask.classList.contains('hidden')) showError(loginErr, TR(lastRejectText) || T('登录失败，请检查账号密码'));
         });
         window.addEventListener('im_connect_failed', function () {
             // 同端互踢识别（hub.go 归口文案"您的账号已在其他XX设备上登录，本设备已下线"）：
@@ -316,12 +410,12 @@
                 lastRejectText = '';
                 saveBtn.disabled = false;
                 renderUser('');
-                toast('账号已在其他设备登录，本页已下线');
+                toast(T('账号已在其他设备登录，本页已下线'));
                 return;
             }
             // 服务端拒绝判定与 socket.js 同款：ERROR 帧后紧连 close（1 秒窗口）= 凭据问题清凭据；纯网络失败保留
             var rejected = !!lastRejectText;
-            onLoginFail(!loginMask.classList.contains('hidden'), lastRejectText || '连接失败，请稍后重试', !rejected);
+            onLoginFail(!loginMask.classList.contains('hidden'), lastRejectText || T('连接失败，请稍后重试'), !rejected);
             lastRejectText = '';
         });
     }
@@ -337,13 +431,13 @@
     });
     extractBtn.addEventListener('click', function () {
         var v = extractInput.value.trim();
-        if (!v) { showError(extractErr, '请输入提取码'); return; }
+        if (!v) { showError(extractErr, T('请输入提取码')); return; }
         fetchInfo(v);
     });
 
     // ===== 启动 =====
     (function boot() {
-        if (!code) { showInvalid('链接无效'); return; }
+        if (!code) { showInvalid(T('链接无效')); return; }
         fetchInfo('');
         var saved = getAuth();
         if (saved && saved.u && saved.p) {

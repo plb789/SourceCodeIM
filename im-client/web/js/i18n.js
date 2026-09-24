@@ -19,9 +19,21 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
-    var PACK_VER = '2.5';                           // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON）
+    var PACK_VER = '2.8';                           // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
+
+    // 资源根路径归口：页面可能经深层路径服务（如 /s/<code> 网盘分享页），相对路径
+    // 'i18n/...' 会解析到深层目录下 404；以本脚本真实 URL 推导站点根（脚本引入
+    // 统一为 /js/i18n.js，根绝对路径），根路径页面行为与原相对路径完全一致
+    var ROOT = (function () {
+        try {
+            if (document.currentScript && document.currentScript.src) {
+                return document.currentScript.src.replace(/[?#].*$/, '').replace(/js\/i18n\.js$/, '');
+            }
+        } catch (e) { /* 异常回退空串=相对路径（根路径页面不受影响） */ }
+        return '';
+    })();
 
     // ---------- 偏好检测：已保存 > 浏览器语言（zh 开头中文，否则英文） ----------
     function detect() {
@@ -38,7 +50,7 @@
     function loadSync(file) {
         try {
             var xhr = new XMLHttpRequest();
-            xhr.open('GET', 'i18n/' + file + '?v=' + PACK_VER, false);
+            xhr.open('GET', ROOT + 'i18n/' + file + '?v=' + PACK_VER, false);
             xhr.send(null);
             if ((xhr.status === 200 || xhr.status === 0) && xhr.responseText) {
                 var obj = JSON.parse(xhr.responseText);

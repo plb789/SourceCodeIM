@@ -469,11 +469,13 @@ func (s *Server) handleDriveDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "目录不支持下载", http.StatusBadRequest)
 		return
 	}
-	s.serveDriveFile(w, r, rec)
+	s.serveDriveFile(w, r, rec, false)
 }
 
 // serveDriveFile 文件下发归口（本人下载与分享下载共用：校验后传记录即可，两种存储后端统一在此收口）
-func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *model.DriveFile) {
+// inline=true 时以 Content-Disposition:inline 下发（分享页在线预览用，浏览器直接渲染而非另存）；
+// 原签名：func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *model.DriveFile)
+func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *model.DriveFile, inline bool) {
 	st := store.GetObjectStore()
 	if st == nil {
 		http.Error(w, "存储后端未就绪", http.StatusInternalServerError)
@@ -493,8 +495,13 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 		return
 	}
 	defer rc.Close()
-	// 中文文件名 RFC 5987 编码（filename* 兜底 filename，浏览器/Electron 另存为均正确显示）
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": rec.Name}))
+	// 中文文件名 RFC 5987 编码（filename* 兜底 filename，浏览器/Electron 另存为均正确显示）；
+	// inline=预览直显（img/video/pdf 标签内联渲染），attachment=另存为下载
+	disp := "attachment"
+	if inline {
+		disp = "inline"
+	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disp, map[string]string{"filename": rec.Name}))
 	if seeker, ok := rc.(io.ReadSeeker); ok {
 		http.ServeContent(w, r, rec.Name, rec.UpdateTime, seeker)
 		return

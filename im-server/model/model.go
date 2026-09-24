@@ -718,10 +718,15 @@ type DriveShare struct {
 	// ExtractCode 提取码（4 位，卡片模式为空即无需提取码；链接模式可选开启）
 	ExtractCode string `gorm:"column:extract_code;type:varchar(8);default:''" json:"extract_code"`
 	// ExpireAt 过期时间 Unix 秒（0=永久有效）
-	ExpireAt   int64     `gorm:"column:expire_at;default:0" json:"expire_at"`
-	Canceled   bool      `gorm:"column:canceled;default:false" json:"canceled"` // 分享者取消（链接与卡片立即失效）
-	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
-	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+	ExpireAt int64 `gorm:"column:expire_at;default:0" json:"expire_at"`
+	Canceled bool  `gorm:"column:canceled;default:false" json:"canceled"` // 分享者取消（链接与卡片立即失效）
+	// 分享统计（服务端归口原子计数：浏览=info 成功查看；下载=download 非预览成功下发（60s 同源去重）；
+	// 保存=save 成功。AutoMigrate 自动加列，存量记录默认 0）
+	ViewCount     int64     `gorm:"column:view_count;default:0" json:"view_count"`
+	DownloadCount int64     `gorm:"column:download_count;default:0" json:"download_count"`
+	SaveCount     int64     `gorm:"column:save_count;default:0" json:"save_count"`
+	CreateTime    time.Time `gorm:"column:create_time;autoCreateTime;index" json:"create_time"`
+	UpdateTime    time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 表名沿用 im_ 前缀约定
