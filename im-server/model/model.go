@@ -681,6 +681,28 @@ type WorkbenchApp struct {
 // TableName 表名沿用 im_ 前缀约定
 func (WorkbenchApp) TableName() string { return "im_workbench_app" }
 
+// ===== 网盘（百度网盘同款个人云盘，服务端统一数据归口） =====
+// 元数据与文件本体解耦：本表只存目录树与元信息，文件本体经 store.ObjectStore 抽象层
+// 落 MinIO（storage=minio/auto+已配置）或本地磁盘 drive_data（降级），客户端不接触凭据
+
+// DriveFile 网盘文件表 im_drive_file（目录树用 parent_id 层级：0=根目录）
+type DriveFile struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// Owner 归属用户；ParentID 父目录 ID（0=根目录）——owner+parent 联合索引支撑目录树查询
+	Owner    string `gorm:"column:owner;type:varchar(32);not null;index:idx_drive_owner_parent" json:"owner"`
+	ParentID uint   `gorm:"column:parent_id;default:0;index:idx_drive_owner_parent" json:"parent_id"`
+	Name     string `gorm:"column:name;type:varchar(255);not null" json:"name"` // 名称（文件含扩展名；目录纯名称）
+	IsDir    bool   `gorm:"column:is_dir;default:false" json:"is_dir"`
+	Size     int64  `gorm:"column:size;default:0" json:"size"`                  // 文件大小（字节；目录恒 0，配额按文件累加）
+	ObjectKey string `gorm:"column:object_key;type:varchar(512);default:''" json:"object_key"` // 文件本体对象 key（目录为空）
+	MimeType  string `gorm:"column:mime_type;type:varchar(128);default:''" json:"mime_type"`   // MIME（按扩展名归口，前端图标/预览用）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (DriveFile) TableName() string { return "im_drive_file" }
+
 // ===== 阶段一百五十四：积分红包（微信同款红包，积分归口） =====
 // 设计归口：金额计算/拆分/扣减/退回全部服务端完成，客户端仅展示；
 // 金额双精度沿用 AI 积分口径（3 位小数），拆分用毫单位整数（amount*1000）避免浮点误差

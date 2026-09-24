@@ -75,6 +75,34 @@ type Config struct {
 
 	// 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
 	FileP2P FileP2PConfig `yaml:"file_p2p"`
+
+	// 网盘配置（百度网盘同款个人云盘：元数据 MySQL + 文件本体经 store.ObjectStore 落 MinIO/本地双后端）
+	Drive DriveConfig `yaml:"drive"`
+}
+
+// DriveConfig 网盘配置节
+type DriveConfig struct {
+	// Enabled 总开关（false 时客户端入口隐藏，接口返回明确提示）
+	Enabled bool `yaml:"enabled"`
+	// MaxFileSize 单文件上传上限（字节，0=500MB）
+	MaxFileSize int64 `yaml:"max_file_size"`
+	// QuotaBytes 每用户容量配额（字节，0=10GB，-1 不限；服务端归口校验，上传前聚合校验）
+	QuotaBytes int64 `yaml:"quota_bytes"`
+	// Storage 存储后端选择：auto（默认，MinIO 已配置即用 MinIO，否则本地磁盘）/ minio / local
+	Storage string `yaml:"storage"`
+	// LocalDir 本地存储根目录（空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
+	LocalDir string `yaml:"local_dir"`
+	// Minio MinIO 连接配置（endpoint+access_key 非空即视为已配置）
+	Minio MinioConfig `yaml:"minio"`
+}
+
+// MinioConfig MinIO 对象存储连接配置
+type MinioConfig struct {
+	Endpoint  string `yaml:"endpoint"`   // 如 127.0.0.1:9000（不带 http:// 前缀）
+	AccessKey string `yaml:"access_key"` // 访问账号（仅存服务端，不下发客户端）
+	SecretKey string `yaml:"secret_key"` // 访问密钥（仅存服务端，不下发客户端）
+	Bucket    string `yaml:"bucket"`     // 桶名（不存在自动创建；空=im-drive）
+	UseSSL    bool   `yaml:"use_ssl"`    // 是否 HTTPS
 }
 
 // FileP2PConfig 阶段一百五十六：好友文件 P2P 直传配置节（信令经服务端归口转发，文件字节点对点不过服务器）
@@ -358,6 +386,14 @@ func Default() *Config {
 			Archive:          false,
 			MaxPerUser:       3,
 		},
+
+		// 网盘默认参数（默认启用；未配置 MinIO 时自动降级本地磁盘，功能开箱可用）
+		Drive: DriveConfig{
+			Enabled:     true,
+			MaxFileSize: 500 << 20, // 单文件上限 500MB
+			QuotaBytes:  10 << 30,  // 每用户配额 10GB
+			Storage:     "auto",
+		},
 	}
 }
 
@@ -499,6 +535,16 @@ func Load() *Config {
 	}
 	if cfg.FileP2P.MaxPerUser <= 0 {
 		cfg.FileP2P.MaxPerUser = 3
+	}
+	// 网盘配置兜底（单文件上限/配额/storage 合法性/本地目录锚定 exe 解析）
+	if cfg.Drive.MaxFileSize <= 0 {
+		cfg.Drive.MaxFileSize = 500 << 20
+	}
+	if cfg.Drive.QuotaBytes == 0 {
+		cfg.Drive.QuotaBytes = 10 << 30 // -1=不限配额，负数不做兜底直接生效
+	}
+	if cfg.Drive.LocalDir != "" {
+		cfg.Drive.LocalDir = resolvePath(cfg.Drive.LocalDir)
 	}
 	return cfg
 }

@@ -13564,3 +13564,525 @@ html.m .rp-send-box,
 html.m .rp-detail-box {
     max-width: calc(100vw - 32px);
 }
+
+/* ===== 网盘（百度网盘同款个人云盘：覆盖右侧聊天区，公告流/设置页同款 absolute 方案；
+   全部颜色走主题变量跟随主题色变化，滚动条走全局自绘悬浮滑块） ===== */
+/* 左侧面板：我的文件入口图标底色（主题绿）与容量概览条 */
+.drive-entry-avatar {
+    color: #fff;
+    background: var(--primary);
+}
+.drive-usage {
+    margin: 4px 14px 10px;
+    padding: 10px 12px;
+    background: var(--panel-bg);
+    border-radius: 10px;
+}
+.drive-usage-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--hover);
+    overflow: hidden;
+}
+.drive-usage-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: var(--primary);
+    transition: width 0.3s ease;
+}
+.drive-usage-fill.drive-usage-warn {
+    background: #e6a23c;
+}
+.drive-usage-text {
+    margin-top: 7px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+/* 网盘页面容器（覆盖主聊天区，层级低于设置页 1640，页面内可正常打开设置） */
+.drive-view {
+    position: absolute;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    flex-direction: column;
+    background: var(--chat-bg);
+}
+.drive-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+    flex-shrink: 0;
+}
+.drive-logo {
+    color: var(--primary);
+    display: flex;
+    align-items: center;
+}
+.drive-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--text);
+    flex-shrink: 0;
+}
+/* 面包屑（目录路径导航，上级可点回跳） */
+.drive-breadcrumb {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.drive-crumb {
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.drive-crumb:hover {
+    text-decoration: underline;
+}
+.drive-crumb-sep {
+    color: var(--text-light);
+    font-size: 12px;
+    flex-shrink: 0;
+}
+.drive-crumb-cur {
+    color: var(--text);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* 工具栏（新建文件夹/上传/存储后端标签） */
+.drive-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    flex-shrink: 0;
+}
+.drive-tb-btn {
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.drive-tb-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+.drive-tb-btn.drive-tb-primary {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+}
+.drive-tb-btn.drive-tb-primary:hover {
+    opacity: 0.88;
+}
+.drive-storage-tag {
+    margin-left: 0; /* 右推归口由 .drive-search-box 的 auto margin 承担（双 auto 会平分空间致漂移） */
+    font-size: 12px;
+    color: var(--text-light);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+}
+/* 搜索框（百度网盘同款：全盘文件名模糊搜索；聚焦主题色描边，清空按钮随内容显隐） */
+.drive-search-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    border-radius: 8px;
+    padding: 0 8px;
+    height: 32px;
+    width: 220px;
+    transition: border-color 0.15s;
+}
+.drive-search-box:focus-within {
+    border-color: var(--primary);
+}
+.drive-search-box > svg {
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.drive-search-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+}
+.drive-search-input::placeholder {
+    color: var(--text-light);
+}
+.drive-search-clear {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: color 0.15s;
+}
+.drive-search-clear:hover {
+    color: var(--primary);
+}
+/* 搜索结果行"所在位置"路径小字（名称下方，淡色省略；仅搜索态渲染） */
+.drive-name-wrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.drive-row-path {
+    font-size: 11px;
+    color: var(--text-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+/* 列头（与行同网格：名称自适应 / 大小 110px / 时间 170px / 操作 120px） */
+.drive-columns,
+.drive-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 110px 170px 120px;
+    align-items: center;
+    gap: 10px;
+}
+.drive-columns {
+    padding: 6px 20px;
+    font-size: 12px;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    user-select: none;
+}
+/* 文件列表滚动区（自绘悬浮滑块由 drive.js 注册 _osbInit 归口） */
+.drive-file-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 20px 16px;
+    position: relative;
+}
+.drive-row {
+    padding: 9px 12px;
+    border-radius: 8px;
+    cursor: default;
+    transition: background 0.12s;
+}
+.drive-row:hover {
+    background: var(--hover);
+}
+.drive-row.is-dir {
+    cursor: pointer;
+}
+.drive-cell-name {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+.drive-name {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.drive-cell-size,
+.drive-cell-time {
+    font-size: 13px;
+    color: var(--text-light);
+}
+/* 类别图标色板（跟随主题外的固定功能色，低饱和度） */
+.drive-icon {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+.drive-icon.k-dir { color: #e8b339; }
+.drive-icon.k-img { color: #52b788; }
+.drive-icon.k-video { color: #5a9bd8; }
+.drive-icon.k-audio { color: #9d7bd8; }
+.drive-icon.k-zip { color: #d89a6a; }
+.drive-icon.k-doc { color: #5a9bd8; }
+.drive-icon.k-sheet { color: #52b788; }
+.drive-icon.k-pdf { color: #d86a6a; }
+.drive-icon.k-txt { color: var(--text-light); }
+.drive-icon.k-file { color: var(--text-light); }
+/* 行内操作按钮（悬停浮现，下载/重命名/删除） */
+.drive-cell-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.drive-row:hover .drive-cell-actions {
+    opacity: 1;
+}
+.drive-act {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    transition: all 0.15s;
+}
+.drive-act:hover {
+    background: var(--active);
+    color: var(--primary);
+}
+.drive-act.drive-act-danger:hover {
+    color: #e64340;
+}
+/* 空态（查询无数据展示"暂无文件"，不展示加载失败） */
+.drive-empty {
+    padding: 64px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-light);
+}
+/* 上传队列面板（右下角浮层，逐项进度条） */
+.drive-uploads {
+    position: absolute;
+    right: 20px;
+    bottom: 20px;
+    width: 340px;
+    max-height: 320px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    z-index: 1650;
+    overflow: hidden;
+}
+.drive-uploads-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.drive-uploads-clear {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+.drive-uploads-clear:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+/* 传输面板 tab（上传/下载互斥切换，徽标=进行中数量，主题色跟随） */
+.drive-up-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.drive-up-tab {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 3px 10px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.drive-up-tab:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.drive-up-tab.active {
+    background: var(--hover);
+    color: var(--primary);
+}
+.drive-tab-count {
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+}
+.drive-upload-items {
+    overflow-y: auto;
+    padding: 8px 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.drive-up-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+/* 任务行首行：名称 + 取消按钮（传输中浮现） */
+.drive-up-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.drive-up-top .drive-up-name {
+    flex: 1;
+    min-width: 0;
+}
+.drive-up-cancel {
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    flex-shrink: 0;
+}
+.drive-up-cancel:hover {
+    background: var(--hover);
+    color: #e64340;
+}
+/* 元信息行：状态（左） + 大小/速度/剩余（右） */
+.drive-up-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.drive-up-name {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.drive-up-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--hover);
+    overflow: hidden;
+}
+.drive-up-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: var(--primary);
+    transition: width 0.2s ease;
+}
+.drive-up-status {
+    font-size: 11px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.drive-up-extra {
+    font-size: 11px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+}
+.drive-up-item.is-ok .drive-up-status {
+    color: var(--primary);
+}
+.drive-up-item.is-fail .drive-up-status {
+    color: #e64340;
+}
+/* 拖拽上传遮罩（半透明主题色浮层，中央虚线框提示） */
+.drive-drop-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 1620;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--panel-bg) 82%, transparent);
+    backdrop-filter: blur(2px);
+    border-radius: inherit;
+}
+.drive-drop-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 36px 56px;
+    border: 2px dashed var(--primary);
+    border-radius: 14px;
+    color: var(--primary);
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop);
+    pointer-events: none; /* 遮罩内部不截获拖拽事件，保证 dragleave/drop 计数稳定 */
+}
+.drive-drop-text {
+    font-size: 15px;
+    font-weight: 600;
+}
+/* 网盘自绘弹窗（.modal-mask/.modal-box 公共壳，输入弹窗加宽） */
+.drive-modal-box {
+    width: 340px;
+    text-align: left;
+}
+.drive-modal-ok {
+    background: var(--primary);
+    color: #fff;
+}
+/* 手机端适配（html.m）：列宽压缩、工具栏收紧 */
+html.m .drive-columns,
+html.m .drive-row {
+    grid-template-columns: minmax(0, 1fr) 80px 130px 96px;
+}
+html.m .drive-toolbar {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+}
+html.m .drive-search-box {
+    width: 100%;
+    margin-left: 0;
+    order: 3; /* 手机端搜索框独占一行（按钮行下方） */
+}
+html.m .drive-file-list,
+html.m .drive-head {
+    padding-left: 12px;
+    padding-right: 12px;
+}
+html.m .drive-uploads {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100% - 20px);
+}

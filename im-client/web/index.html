@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="css/style.css?v=2.61">
+    <link rel="stylesheet" href="css/style.css?v=2.64">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="css/hljs-github-dark.css?v=11.9">
 </head>
@@ -202,6 +202,10 @@
                 <div class="nav-icon sidebar-tab" data-tab="workbench" title="工作台">
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
                 </div>
+                <!-- 网盘入口（百度网盘同款个人云盘：点击在右侧聊天区打开网盘页面，文件经服务端归口落 MinIO/本地双后端） -->
+                <div class="nav-icon sidebar-tab" data-tab="drive" title="网盘">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0 1 22 15c0 1.65-1.35 3-3 3z"/></svg>
+                </div>
             </div>
             <div class="nav-bottom">
                 <button id="add-friend-btn" class="nav-btn" title="添加好友">
@@ -295,6 +299,20 @@
                  按分类分组渲染，图标优先服务端图片、缺失回退名称首字，同头像降级约定） -->
             <div id="workbench-panel" class="friends-panel hidden">
                 <div id="wb-app-list" class="wb-app-list"></div>
+            </div>
+
+            <!-- 网盘面板（我的文件入口 + 容量概览；数据服务端归口 /api/drive/list，点击入口在右侧聊天区打开网盘页面） -->
+            <div id="drive-panel" class="friends-panel hidden">
+                <div id="drive-entry-root" class="new-friends-entry" title="我的文件">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0 1 22 15c0 1.65-1.35 3-3 3z"/></svg>
+                    </span>
+                    <span class="new-friends-text">我的文件</span>
+                </div>
+                <div id="drive-usage" class="drive-usage hidden">
+                    <div class="drive-usage-bar"><div id="drive-usage-fill" class="drive-usage-fill"></div></div>
+                    <div id="drive-usage-text" class="drive-usage-text"></div>
+                </div>
             </div>
 
             <!-- 搜索结果面板：置于侧栏层，聊天/好友两个Tab下均可展示 -->
@@ -1537,6 +1555,59 @@
         <div id="ann-stream-list" class="ann-stream-list"></div>
     </div>
 
+    <!-- 网盘页面（百度网盘同款：覆盖右侧聊天区，左侧列表保持可见；DOM 由 drive.js 移入 .main-chat，
+         与公告流/设置页同款 absolute 覆盖；全部操作在页面内完成：目录浏览/上传/下载/重命名/删除/新建文件夹） -->
+    <div id="drive-view" class="drive-view hidden">
+        <div class="drive-head">
+            <span class="drive-logo">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0 1 22 15c0 1.65-1.35 3-3 3z"/></svg>
+            </span>
+            <span class="drive-title">网盘</span>
+            <div id="drive-breadcrumb" class="drive-breadcrumb"></div>
+            <button id="drive-close" class="ann-stream-close">返回聊天</button>
+        </div>
+        <div class="drive-toolbar">
+            <button id="drive-mkdir-btn" class="drive-tb-btn">+ 新建文件夹</button>
+            <button id="drive-upload-btn" class="drive-tb-btn drive-tb-primary">上传文件</button>
+            <!-- 搜索框（百度网盘同款：文件名模糊搜索全盘，防抖 300ms） -->
+            <div class="drive-search-box">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                <input id="drive-search" class="drive-search-input" placeholder="搜索网盘内文件" maxlength="64">
+                <button id="drive-search-clear" class="drive-search-clear hidden" title="清空"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+            </div>
+            <span id="drive-storage-tag" class="drive-storage-tag hidden"></span>
+        </div>
+        <div class="drive-columns">
+            <span>文件名</span>
+            <span>大小</span>
+            <span>修改时间</span>
+            <span></span>
+        </div>
+        <div id="drive-file-list" class="drive-file-list">
+            <div id="drive-empty" class="drive-empty hidden">暂无文件</div>
+        </div>
+        <!-- 拖拽上传遮罩（拖文件入网盘页面时浮现，松手上传到当前目录） -->
+        <div id="drive-drop-mask" class="drive-drop-mask hidden">
+            <div class="drive-drop-box">
+                <svg viewBox="0 0 24 24" width="42" height="42"><path fill="currentColor" d="M19 13v5c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2v-5H2l10-9 10 9h-3zM11 5v7h2V5h2l-3-3-3 3h3z"/></svg>
+                <div class="drive-drop-text">松开鼠标，上传到当前目录</div>
+            </div>
+        </div>
+        <!-- 传输面板（百度网盘同款：上传/下载双列表 tab，逐项进度条+速度+剩余时间） -->
+        <div id="drive-uploads" class="drive-uploads hidden">
+            <div class="drive-uploads-head">
+                <div class="drive-up-tabs">
+                    <button class="drive-up-tab active" data-ttab="up">上传<span id="drive-tab-up-count" class="drive-tab-count hidden"></span></button>
+                    <button class="drive-up-tab" data-ttab="down">下载<span id="drive-tab-down-count" class="drive-tab-count hidden"></span></button>
+                </div>
+                <button id="drive-uploads-clear" class="drive-uploads-clear">清空已完成</button>
+            </div>
+            <div id="drive-upload-items" class="drive-upload-items"></div>
+            <div id="drive-down-items" class="drive-upload-items hidden"></div>
+        </div>
+        <input type="file" id="drive-file-input" multiple class="hidden">
+    </div>
+
     <!-- 阶段一百四十四：公告详情弹层（微信式阅读页：分类标签+标题+发布信息+富文本正文+附件在线预览；红头文件需签收） -->
     <div id="ann-detail-mask" class="modal-mask hidden">
         <div class="modal-box ann-detail-box">
@@ -1582,6 +1653,8 @@
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="js/p2p-file.js?v=1.5"></script>
     <script src="js/chat.js?v=3.95"></script>
+    <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动） -->
+    <script src="js/drive.js?v=1.4"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>

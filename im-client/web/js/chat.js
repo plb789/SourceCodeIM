@@ -5404,6 +5404,14 @@
             // 阶段一百四十五：工作台面板纳入互斥切换，首次进入拉取列表，此后每次进入静默刷新（原位重绘不闪屏）
             if (wbPanelEl) wbPanelEl.classList.toggle('hidden', tabName !== 'workbench');
             if (tabName === 'workbench') wbLoadList(wbLoaded);
+            // 网盘面板纳入互斥切换；进入网盘 Tab 时右侧聊天区打开网盘页面（公告流/设置页同款覆盖层），
+            // 切走时关闭（IMDrive 由 drive.js 暴露，加载顺序在 chat.js 之后，open 内部幂等）
+            var drivePanelEl = document.getElementById('drive-panel');
+            if (drivePanelEl) drivePanelEl.classList.toggle('hidden', tabName !== 'drive');
+            if (window.IMDrive) {
+                if (tabName === 'drive') window.IMDrive.open();
+                else if (window.IMDrive.isOpen()) window.IMDrive.close();
+            }
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
