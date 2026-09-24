@@ -14525,3 +14525,121 @@ html.m .ds-box-tall {
 html.m .dsm-list {
     max-height: 56vh;
 }
+
+/* ===== 网盘内在线预览浮层（分享页 sp-viewer 同款结构；全部主题变量归口） ===== */
+.drive-viewer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000; /* 与 modal-mask 同层：盖过网盘视图与传输面板（1650） */
+    padding: 20px;
+    box-sizing: border-box;
+}
+.drive-viewer-mask.hidden { display: none; }
+.drive-viewer-box {
+    width: min(920px, 100%);
+    height: min(86vh, 760px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.drive-viewer-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+}
+.drive-viewer-title {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.drive-viewer-close {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.drive-viewer-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.drive-viewer-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 12px;
+    box-sizing: border-box;
+}
+/* 图片：自适应缩放（预览区深色底衬托透明图） */
+.drive-viewer-body img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* PDF：iframe 铺满内容区 */
+.drive-viewer-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* 视频/音频：原生控件居中 */
+.drive-viewer-body video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 6px;
+    background: #1e1e1e;
+    outline: none;
+}
+.drive-viewer-body audio {
+    width: min(520px, 100%);
+}
+/* 文本：等宽字体滚动区（textContent 注入防 XSS；滚动条走全局自绘悬浮滑块） */
+.drive-viewer-body pre {
+    align-self: stretch;
+    flex: 1;
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: Consolas, 'JetBrains Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow: auto;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.drive-viewer-loading {
+    font-size: 13px;
+    color: var(--text-secondary);
+}

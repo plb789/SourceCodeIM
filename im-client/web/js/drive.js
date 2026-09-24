@@ -395,10 +395,11 @@
             var it = null;
             for (var i = 0; i < itemsCache.length; i++) if (itemsCache[i].id === id) { it = itemsCache[i]; break; }
             if (!it) return;
-            // 目录整行点击进入（文件夹/文件操作按钮事件独立冒泡）
+            // 目录整行点击进入；可预览文件整行点击在线预览（百度网盘同款，动作按钮事件独立冒泡）
             row.addEventListener('click', function (e) {
                 if (e.target.closest('.drive-act')) return; // 动作按钮不触发进入
                 if (it.is_dir) enterDir(it.id, it.name);
+                else if (canPreviewName(it.name)) openDriveViewer(it);
             });
             row.querySelectorAll('.drive-act').forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
@@ -689,6 +690,83 @@
                 renderTransfers();
             })
             .then(function () { done(); }, function () { done(); });
+    }
+
+    // ===== 网盘内在线预览（分享页同款：preview=1 服务端 inline 下发，页面内自绘浮层渲染） =====
+    // 浏览器原生可渲染的类型归口（avi/mkv/mov/flv/wmv 原生 <video> 不支持，不进入预览照常走下载）
+    function canPreviewName(name) {
+        var ext = ((name || '').split('.').pop() || '').toLowerCase();
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) >= 0) return 'img';
+        if (['mp4', 'webm'].indexOf(ext) >= 0) return 'video';
+        if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].indexOf(ext) >= 0) return 'audio';
+        if (ext === 'pdf') return 'pdf';
+        if (['txt', 'md', 'log', 'json'].indexOf(ext) >= 0) return 'txt';
+        return '';
+    }
+    // 文件下发 URL 归口（预览加 preview=1 → 服务端 Content-Disposition:inline；下载与预览共用鉴权）
+    function driveFileUrl(it, preview) {
+        return '/api/drive/download?username=' + encodeURIComponent(u()) + '&id=' + it.id + (preview ? '&preview=1' : '');
+    }
+    // 预览浮层（懒建一次；z-index 2000 与 modal-mask 同层，盖过网盘视图与传输面板 1650）
+    var pvMask = null, pvTitle = null, pvBody = null;
+    function ensureViewer() {
+        if (pvMask) return;
+        pvMask = document.createElement('div');
+        pvMask.className = 'drive-viewer-mask hidden';
+        pvMask.innerHTML =
+            '<div class="drive-viewer-box">' +
+            '  <div class="drive-viewer-head">' +
+            '    <div class="drive-viewer-title"></div>' +
+            '    <button class="drive-viewer-close" title="' + T('关闭') + '"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' +
+            '  </div>' +
+            '  <div class="drive-viewer-body"></div>' +
+            '</div>';
+        document.body.appendChild(pvMask);
+        pvTitle = pvMask.querySelector('.drive-viewer-title');
+        pvBody = pvMask.querySelector('.drive-viewer-body');
+        pvMask.querySelector('.drive-viewer-close').addEventListener('click', closeViewer);
+        pvMask.addEventListener('click', function (e) { if (e.target === pvMask) closeViewer(); });
+    }
+    function closeViewer() {
+        if (!pvMask) return;
+        pvMask.classList.add('hidden');
+        pvBody.innerHTML = ''; // 清空内容区：视频/音频随之停止播放
+    }
+    function openDriveViewer(it) {
+        ensureViewer();
+        var name = it.name || '';
+        var kind = canPreviewName(name);
+        var url = driveFileUrl(it, true);
+        pvTitle.textContent = name + ' · ' + T('在线预览');
+        pvBody.innerHTML = '<div class="drive-viewer-loading">' + T('正在加载预览…') + '</div>';
+        pvMask.classList.remove('hidden');
+        if (kind === 'img' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+            // 原生标签内联渲染（img 自适应缩放 / pdf iframe 内建阅读器 / 视频/音频原生控件自动播放）
+            pvBody.innerHTML = '';
+            var tag = document.createElement(kind === 'img' ? 'img' : (kind === 'pdf' ? 'iframe' : kind));
+            if (kind === 'img') tag.alt = name;
+            if (kind === 'video' || kind === 'audio') { tag.controls = true; tag.autoplay = true; }
+            tag.src = url;
+            pvBody.appendChild(tag);
+        } else {
+            // 文本类：拉取后 <pre> 直显（2MB 截断提示，textContent 防 XSS；迟到响应丢弃防旧内容覆盖新开预览）
+            fetch(url).then(function (res) {
+                if (!res.ok) throw new Error(T('预览加载失败({n})', { n: res.status }));
+                return res.text();
+            }, function () { throw new Error(T('网络异常，请稍后重试')); }).then(function (text) {
+                if (pvMask.classList.contains('hidden')) return;
+                if (text.length > 2 * 1024 * 1024) text = text.slice(0, 2 * 1024 * 1024) + '\n\n…' + T('内容过大，仅预览前 2MB，请下载查看全文');
+                pvBody.innerHTML = '';
+                var pre = document.createElement('pre');
+                pre.textContent = text;
+                pvBody.appendChild(pre);
+                if (window._osbInit) window._osbInit(pre); // 文本滚动区自绘悬浮滑块（禁系统滚动条归口）
+            }, function (err) {
+                if (pvMask.classList.contains('hidden')) return;
+                pvBody.innerHTML = '<div class="drive-viewer-loading"></div>';
+                pvBody.firstChild.textContent = err.message || T('预览加载失败');
+            });
+        }
     }
 
     // ===== 分享模块（二期：发给好友/群卡片 + 生成站内链接；状态归口服务端，客户端零计算） =====
@@ -1190,10 +1268,11 @@
             });
         }
         // Esc 关闭：网盘分享弹层全局优先（分享详情可从聊天气泡打开，不依赖网盘页可见）；
-        // 其次本页面自绘弹窗 → 退出搜索态 → 关页面
+        // 其次预览浮层 → 本页面自绘弹窗 → 退出搜索态 → 关页面
         document.addEventListener('keydown', function (e) {
             if (e.key !== 'Escape') return;
             if (anyDsMaskOpen()) { closeDsMasks(); return; }
+            if (pvMask && !pvMask.classList.contains('hidden')) { closeViewer(); return; }
             if (!visible) return;
             if (maskEl && !maskEl.classList.contains('hidden')) { closeModal(); return; }
             if (searchMode) { clearSearchUI(); searchSeq++; loadList(); return; }

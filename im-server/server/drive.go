@@ -469,7 +469,8 @@ func (s *Server) handleDriveDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "目录不支持下载", http.StatusBadRequest)
 		return
 	}
-	s.serveDriveFile(w, r, rec, false)
+	// preview=1 时 inline 下发（网盘内在线预览：img/video/audio/pdf 标签内联渲染、文本 fetch 直显）
+	s.serveDriveFile(w, r, rec, r.URL.Query().Get("preview") == "1")
 }
 
 // serveDriveFile 文件下发归口（本人下载与分享下载共用：校验后传记录即可，两种存储后端统一在此收口）
