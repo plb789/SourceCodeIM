@@ -1064,6 +1064,12 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 		if result, ok := s.agentWaitLocalExec(t, callID, tool, params); ok {
 			return result, "pc"
 		}
+		// 阶段一百六十三（2026-09-24）：任务已取消时禁止回退服务端执行——原实现回传超时/取消后
+		// 仍会在服务端把该工具跑一遍（已取消的任务还继续产生副作用与耗时），且本地执行等待本身
+		// 无取消联动，取消后要干等整个工具超时窗口才返回，是"取消中…"长时间不收口的卡点之一
+		if t.Cancelled.Load() {
+			return "错误：任务已取消，本地执行已中止", "pc"
+		}
 		// 回传超时（PC 掉线/异常）：回退服务端工作区执行
 		// 注：若 PC 已实际执行但回传丢失，回退可能重复执行一次（write_file 幂等覆盖、命令重跑），
 		// 与既有工具超时语义一致，保证任务闭环优先
@@ -1154,6 +1160,13 @@ func (s *Server) agentWaitLocalExec(t *AgentTask, step, tool string, params map[
 	}
 	deadline := time.Now().Add(wait)
 	bgSent := false // 阶段七十五：转后台请求转发幂等标记（重复点击只转发一次）
+	// 阶段一百六十三（2026-09-24）：取消联动——任务取消（runCtx 终止）时立即中止等待，
+	// 不再干等整个工具超时窗口（原实现 select 只等回传/转后台/超时三路，是"取消中…"
+	// 长时间不收口的卡点之一；nil 通道在 select 中永不触发，兼容无 runCtx 的构造路径）
+	var cancelDone <-chan struct{}
+	if t.runCtx != nil {
+		cancelDone = t.runCtx.Done()
+	}
 	for {
 		d := time.Until(deadline)
 		if d <= 0 {
@@ -1174,6 +1187,9 @@ func (s *Server) agentWaitLocalExec(t *AgentTask, step, tool string, params map[
 			// 原样转发转后台请求给 PC 渲染层（桥接到本地执行器，立即回传"已转入后台"）
 			bgData, _ := json.Marshal(map[string]interface{}{"task_id": t.ID, "step": step})
 			s.sendToUser(t.Username, mustAgentMsg(protocol.MsgTypeAgentBg, t, string(bgData)))
+		case <-cancelDone:
+			timer.Stop()
+			return "", false
 		case <-timer.C:
 			return "", false
 		}
@@ -2862,7 +2878,39 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 					default:
 					}
 				}
+				// 阶段一百六十三（2026-09-24）：取消强制收口看门狗——修复"点停止后卡片永远停在
+				// 取消中…，重启客户端也无效"问题。取消信号依赖状态机循环在检查点自行退出，若循环
+				// 阻塞在无取消联动的调用上（上游流挂死/工具调用卡住/本地执行回传丢失等）则永远收不了口。
+				// 看门狗 500ms 轮询任务状态，5 秒仍未终结即强制 agentFinish（endOnce 幂等，正常收口
+				// 先到则本强制调用自动退化为空操作）；强收后并发名额提前释放，阻塞中的旧循环体最终
+				// 仍会按既有超时自行退出（其收尾调用被 endOnce 抑制，无重复落库/重复推送副作用）
+				go func(taskID string) {
+					for i := 0; i < 10; i++ {
+						time.Sleep(500 * time.Millisecond)
+						if cur, ok := agentTasks.Load(taskID); !ok {
+							return // 任务已被清理（正常完结路径），无需强制
+						} else {
+							cur.(*AgentTask).mu.Lock()
+							done := cur.(*AgentTask).Status == "completed" || cur.(*AgentTask).Status == "failed" || cur.(*AgentTask).Status == "cancelled"
+							cur.(*AgentTask).mu.Unlock()
+							if done {
+								return
+							}
+						}
+					}
+					if cur, ok := agentTasks.Load(taskID); ok {
+						ft := cur.(*AgentTask)
+						logger.Warn("Agent 任务 %s（用户 %s）：取消信号发出 5 秒仍未收口，状态机疑似阻塞，看门狗强制收口为已取消", ft.ID, ft.Username)
+						s.agentFinish(ft, "cancelled", "", "用户取消")
+					}
+				}(t.ID)
 			}
+		} else if s.agentCancelOrphanRow(req.TaskID, c.username) {
+			// 阶段一百六十三（2026-09-24）：幻影进行态兜底——任务不在内存注册表（完结落库更新失败/
+			// 注册表被清理等遗留）但 DB 仍挂 running/queued 时，取消请求原本静默丢弃，客户端
+			// "取消中…"永远无法收口、重启客户端后重放依旧进行态且永不可停止。此处兜底取消该行
+			// 并推送收口帧，保证停止按钮对任何任务都有效
+			logger.Warn("Agent 任务 %s（用户 %s）：不在运行注册表，已按幻影进行态兜底取消", req.TaskID, c.username)
 		}
 		return
 	}
@@ -2988,8 +3036,12 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		if t.runCancel != nil {
 			t.runCancel()
 		}
-		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
-			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs, "points_cost": pointsCost})
+		// 阶段一百六十三（2026-09-24）：完结落库失败必须留痕——原实现静默忽略错误，落库失败会让
+		// DB 永久挂 running 幻影行（客户端重放显示进行态且永不可停止），此处至少留日志可追溯
+		if err := store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
+			Updates(map[string]interface{}{"status": status, "result": result, "error": errMsg, "steps": t.steps, "elapsed_ms": elapsedMs, "points_cost": pointsCost}).Error; err != nil {
+			logger.Error("Agent 任务完结状态落库失败（任务 %s，状态 %s）：%v", t.ID, status, err)
+		}
 		// 阶段六十六：任务完结通知落库（会话流留档+未读归口：切走会话/最小化/离线后经历史与角标可靠感知）
 		// completed 落最终答复（修复事件流不落库、重登后最终答复丢失）；failed/cancelled 落简短通知；
 		// cancelled 由用户本人现场操作触发，is_read=true 不产生未读提醒
@@ -3120,6 +3172,57 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		// 阶段六十七：任务释放并发名额后派发归口——队首排队任务自动启动（活动数达上限时为空操作）
 		s.agentDispatchNext(t.Username)
 	})
+}
+
+// agentCancelOrphanRow 阶段一百六十三（2026-09-24）：幻影进行态取消兜底——任务不在内存注册表
+// 但 DB 仍挂 queued/running 时的取消归口（原实现取消分支静默丢弃，客户端"取消中…"永不收口，
+// 重启客户端重放依旧进行态且永不可停止）。仅本人可取消；落库 cancelled + "任务已取消"通知留档
+// （is_read=true 本人操作无未读，与 agentFinish cancelled 路径同口径），随后推送 status=cancelled
+// 收口帧（前端据此复位任务卡与发送按钮）。返回是否命中幻影行（未命中=无需兜底提示）
+func (s *Server) agentCancelOrphanRow(taskID, username string) bool {
+	var rec model.AgentTaskRecord
+	if err := store.DB.Where("task_id = ? AND username = ?", taskID, username).First(&rec).Error; err != nil {
+		return false
+	}
+	if rec.Status != "queued" && rec.Status != "running" {
+		return false
+	}
+	if err := store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", taskID).
+		Updates(map[string]interface{}{"status": "cancelled", "error": "任务已取消"}).Error; err != nil {
+		logger.Error("Agent 幻影任务取消落库失败（任务 %s，用户 %s）：%v", taskID, username, err)
+	}
+	reply := model.Message{
+		MsgType:     2,
+		FromUser:    rec.AgentName,
+		ToUser:      username,
+		Content:     "任务已取消",
+		IsRead:      true,
+		AISessionID: rec.SessionID,
+	}
+	var msgID uint
+	if err := store.DB.Create(&reply).Error; err == nil {
+		msgID = reply.ID
+		store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", taskID).Update("reply_msg_id", msgID)
+	} else {
+		logger.Error("Agent 幻影任务取消通知落库失败（任务 %s）：%v", taskID, err)
+	}
+	s.touchConversation(username, rec.AgentName, messageSummary("任务已取消"))
+	s.notifyConvUpdate(username)
+	payload := map[string]interface{}{
+		"type": "status", "status": "cancelled", "text": "任务已取消",
+		"task_id": taskID, "session_id": rec.SessionID, "msg_id": msgID,
+		"total_tokens": 0, "elapsed_ms": 0, "points_cost": 0,
+	}
+	data, _ := json.Marshal(payload)
+	out, _ := json.Marshal(protocol.Message{
+		MsgType:   protocol.MsgTypeAgentEvent,
+		FromUser:  rec.AgentName,
+		ToUser:    username,
+		Content:   string(data),
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(username, out)
+	return true
 }
 
 // runAgentTask Agent Loop 状态机：模型决策 → 工具调用（含审批挂起）→ 循环迭代 → 最终答复

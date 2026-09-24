@@ -2312,16 +2312,66 @@ html, body {
     height: 0 !important;
 }
 
-/* 现代标准属性兜底：Chromium 的 Win11 Fluent 悬浮滚动条会无视 ::-webkit-scrollbar 宽度归零，
-   滚轮滚动时浮现原生悬浮条造成"同轨道双滚动条"；scrollbar-width:none 可彻底禁用（含 Fluent），
-   自绘滑块为普通 DOM 元素不受影响 */
-* {
-    scrollbar-width: none;
-}
+/* 现代标准属性兜底说明：禁条由上方 ::-webkit-scrollbar { width:0 !important } 的 legacy
+   渲染路径承担（有 webkit 伪元素规则即锁定 legacy，Win11 Fluent 不参与）。不再用
+   * { scrollbar-width: none }——该标准属性一旦显式存在（即使 auto）就强制 standard 渲染
+   并使全部 ::-webkit-scrollbar 自定义失效，任务卡片占位条（2026-09-24）无法定制 */
 
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* ===== 任务卡片滚动区占位滚动条（2026-09-24 用户实测决定弃用悬浮滑块） =====
+   事件块参数/结果/思考正文详情、气泡内宽表格与代码块（ai-md-pre/ai-md-table-wrap）都是
+   滚动根（#message-list）内的限高子容器，滚动中其 rect 下部会滑出滚动根可视区（该区域被
+   悬浮输入框遮挡），而悬浮滑块是 body 层不被中间层裁剪——即使做了最近裁剪祖先轨道夹紧，
+   嵌套 overflow:hidden 的卡片内层 rect 同样延伸到输入框背后，夹不干净。
+   改占位滚动条：条画在容器内部被 overflow 裁剪，物理上不可能越界，一劳永逸。
+   颜色全部关联主题变量，明暗三态自动跟随。!important 对位压过全局归零规则（legacy 路径） */
+.agent-event-args::-webkit-scrollbar,
+.agent-event-output::-webkit-scrollbar,
+.agent-event-body::-webkit-scrollbar,
+.agent-cmd-console-pre::-webkit-scrollbar,
+.ai-md .ai-md-pre::-webkit-scrollbar,
+.ai-md .ai-md-table-wrap::-webkit-scrollbar,
+.agent-task-dock-panel::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+}
+.agent-event-args::-webkit-scrollbar-thumb,
+.agent-event-output::-webkit-scrollbar-thumb,
+.agent-event-body::-webkit-scrollbar-thumb,
+.agent-cmd-console-pre::-webkit-scrollbar-thumb,
+.ai-md .ai-md-pre::-webkit-scrollbar-thumb,
+.ai-md .ai-md-table-wrap::-webkit-scrollbar-thumb,
+.agent-task-dock-panel::-webkit-scrollbar-thumb {
+    background: var(--text-secondary, #999999);
+    border-radius: 4px;
+}
+.agent-event-args::-webkit-scrollbar-thumb:hover,
+.agent-event-output::-webkit-scrollbar-thumb:hover,
+.agent-event-body::-webkit-scrollbar-thumb:hover,
+.agent-cmd-console-pre::-webkit-scrollbar-thumb:hover,
+.ai-md .ai-md-pre::-webkit-scrollbar-thumb:hover,
+.ai-md .ai-md-table-wrap::-webkit-scrollbar-thumb:hover,
+.agent-task-dock-panel::-webkit-scrollbar-thumb:hover {
+    background: var(--text, #666666);
+}
+.agent-event-args::-webkit-scrollbar-track,
+.agent-event-output::-webkit-scrollbar-track,
+.agent-event-body::-webkit-scrollbar-track,
+.agent-cmd-console-pre::-webkit-scrollbar-track,
+.ai-md .ai-md-pre::-webkit-scrollbar-track,
+.ai-md .ai-md-table-wrap::-webkit-scrollbar-track,
+.agent-event-args::-webkit-scrollbar-corner,
+.agent-event-output::-webkit-scrollbar-corner,
+.agent-event-body::-webkit-scrollbar-corner,
+.agent-cmd-console-pre::-webkit-scrollbar-corner,
+.ai-md .ai-md-pre::-webkit-scrollbar-corner,
+.ai-md .ai-md-table-wrap::-webkit-scrollbar-corner,
+.agent-task-dock-panel::-webkit-scrollbar-corner {
     background: transparent;
 }
 
@@ -4893,10 +4943,10 @@ html.m #list-panel.list-collapsed {
     line-height: 1.6;
     max-height: 240px;
     overflow-y: auto;
-    /* 阶段一百三十八修复：thin 会在元素级覆盖全局 * { scrollbar-width: none }，Chromium 的
-       Win11 Fluent 原生条又无视 ::-webkit-scrollbar 归零，导致思考/正文区漏出系统默认滚动条；
-       改回 none 后纵向滑块由 createAgentEventBody 统一挂自绘悬浮滑块（osb）承担 */
-    scrollbar-width: none;
+    /* 纵向滚动条走占位样式（上方任务卡片占位滚动条规则组，2026-09-24）：原 osb 悬浮滑块
+       会被最近裁剪祖先 .agent-event（overflow:hidden）的越界 rect 夹不干净，画到输入框上；
+       此处禁止再加 scrollbar-width:none——显式标准属性强制 standard 渲染，会让 ::-webkit-scrollbar
+       占位条整体失效（条消失） */
 }
 
 .agent-event-args,
@@ -4910,10 +4960,9 @@ html.m #list-panel.list-collapsed {
     word-break: break-all;
     max-height: 200px;
     overflow-y: auto;
-    /* thin 会在元素级覆盖全局 * { scrollbar-width: none }，Chromium 的 Win11 Fluent 原生条
-       无视 ::-webkit-scrollbar 归零导致漏出系统默认滚动条（同 .agent-event-body 修复）；
-       改 none 后滑块由创建处统一挂自绘悬浮滑块（osb）承担 */
-    scrollbar-width: none;
+    /* 纵向滚动条走占位样式（上方任务卡片占位滚动条规则组，2026-09-24）：osb 悬浮滑块已弃用。
+       此处禁止再加 scrollbar-width:none——显式标准属性强制 standard 渲染，会让 ::-webkit-scrollbar
+       占位条整体失效（此前占位条不出条即此因，2026-09-24 实测修正） */
     background: color-mix(in srgb, var(--hover, #f7f7f7) 60%, transparent);
 }
 

@@ -6000,7 +6000,6 @@
                             var bodyEl = rows[i].querySelector('.message-body');
                             if (bodyEl) bodyEl.appendChild(buildAIActionBar(d.from, d.content, d.msgId, d.tokens, d.billing && d.billing.cost, d.billing && d.billing.mode));
                         }
-                        initAIMdHScroll(rows[i]); // Markdown 补渲染后宽表格/代码块挂横向自绘滑块
                     }
                 }
             }
@@ -6475,7 +6474,6 @@
         st.cursorEl.remove();
         // 最终态兜底渲染一次 Markdown（done 时 pending 可能为空，tick 内不再触发渲染）
         st.textEl.innerHTML = renderAIMarkdown(st.shown);
-        initAIMdHScroll(st.textEl); // 收尾后 DOM 稳定，宽表格/代码块挂横向自绘滑块
         // 阶段四十三：回复完成后追加操作栏（复制/重新生成/编辑提问，豆包同款）
         // 阶段四十五：表格回复追加导出按钮（服务端归口转档，msg_id 用于取回复原文）
         // Token 消耗标注随操作栏渲染（服务端 usage 归口，随结束帧下发）
@@ -8997,6 +8995,24 @@
             IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: taskId, action: 'cancel' }) });
             stopBtn.disabled = true;
             stopBtn.textContent = I18N.t('取消中…');
+            // 阶段一百六十三（2026-09-24）：取消收口兜底——修复"点停止后永远停在'取消中…'，
+            // 重启客户端也一样"问题。服务端收口帧丢失/状态机阻塞时原实现无任何反馈，按钮永久
+            // 失效：每 8 秒重发一次取消（最多 3 次，服务端幂等收口），仍无完结则恢复按钮可再次
+            // 点击，保证停止操作永不死锁。正常收口由 finishAgentTask 清理本定时器
+            var tries = 0;
+            if (st.cancelRetryTimer) clearInterval(st.cancelRetryTimer);
+            st.cancelRetryTimer = setInterval(function () {
+                if (st.finished) { clearInterval(st.cancelRetryTimer); st.cancelRetryTimer = null; return; }
+                tries++;
+                if (tries <= 3) {
+                    IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: taskId, action: 'cancel' }) });
+                } else {
+                    clearInterval(st.cancelRetryTimer);
+                    st.cancelRetryTimer = null;
+                    stopBtn.disabled = false;
+                    stopBtn.textContent = I18N.t('停止');
+                }
+            }, 8000);
         });
         head.appendChild(title);
         head.appendChild(goalEl);
@@ -9116,7 +9132,7 @@
         var parent = inputBar.parentNode;
         parent.insertBefore(panel, inputBar);
         parent.insertBefore(root, panel);
-        if (window._osbInit) window._osbInit(panel); // 限高 260px 清单镜像：挂自绘悬浮滑块（原生条全局禁用）
+        // 限高 260px 清单镜像：滚动条走占位样式（CSS 任务卡片占位滚动条规则组），osb 悬浮滑块已弃用
         agentDock = {
             root: root, taskTab: taskTab, chTab: chTab, text: text,
             metaTask: metaTask, metaChanges: metaChanges, metaChA: metaChA, metaChD: metaChD,
@@ -9289,6 +9305,11 @@
 
     function finishAgentTask(st, text, cls, elapsedMs) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
+        // 阶段一百六十三：任务完结即清"取消中…"兜底重试定时器（防完结后仍重发取消/复位按钮）
+        if (st.cancelRetryTimer) {
+            clearInterval(st.cancelRetryTimer);
+            st.cancelRetryTimer = null;
+        }
         // 阶段一百二十五：任务完结即收尾等待中的提问卡（超时/完结后不再可作答；弹窗按任务归属过滤关闭）
         if (st.pendingAskSettles) agentAskSettlePending(st, I18N.t('任务已结束，无需再回答'));
         else agentAskModalClose(st.taskId);
@@ -9362,8 +9383,8 @@
         var bodyEl = document.createElement('div');
         bodyEl.className = 'agent-event-body ai-md';
         bodyEl.innerHTML = renderAIMarkdown(text || '');
-        initAIMdHScroll(bodyEl); // 宽表格/代码块挂横向自绘滑块（思考文本一次性渲染，DOM 已稳定）
-        if (window._osbInit) window._osbInit(bodyEl); // 阶段一百三十八：纵向限高区挂自绘悬浮滑块（原生 Fluent 条已在 CSS 禁用）
+        // 思考正文纵向滚动条与内部宽表格/代码块横向滚动条均走占位样式（CSS 任务卡片占位滚动条规则组）：
+        // osb/initOsbH 悬浮滑块在此类滚动根内嵌限高容器上会越界画到悬浮输入框区域（body 层不被裁剪），已弃用
         block.appendChild(head);
         block.appendChild(bodyEl);
         st.events.appendChild(block);
@@ -9422,7 +9443,7 @@
             cursor.className = 'ai-stream-cursor';
             bodyEl.appendChild(span);
             bodyEl.appendChild(cursor);
-            if (window._osbInit) window._osbInit(bodyEl); // 阶段一百三十八：流式正文限高区挂自绘悬浮滑块（追加自动同步）
+            // 流式正文纵向滚动条走占位样式（CSS 任务卡片占位滚动条规则组）：悬浮滑块越界画到输入框上，已弃用
             block.appendChild(head);
             block.appendChild(bodyEl);
             st.events.appendChild(block);
@@ -9454,7 +9475,6 @@
         st.curText = null;
         if (!cur.shown.trim()) { cur.el.remove(); return false; }
         cur.textEl.innerHTML = renderAIMarkdown(cur.shown);
-        initAIMdHScroll(cur.el); // 收尾后 DOM 稳定，宽表格/代码块挂横向自绘滑块
         if (asThought) {
             cur.el.classList.add('thought');
             cur.head.textContent = I18N.t('思考过程');
@@ -9508,14 +9528,24 @@
                         }
                         return;
                     }
-                    // 运行中/排队：内存实时卡重挂续播（后续事件继续上屏）；无内存卡（他端发起）按 DB 快照渲染静态卡
-                    // 会话归属双保险：内存卡盖戳校验 + 服务端 session_id 过滤，他端/跨会话任务不进当前视图
+                    // 运行中/排队：内存实时卡重挂续播（后续事件继续上屏）；无内存卡（重新登录）且属当前
+                    // 查看会话（服务端重放已按 session 归口过滤，此处双保险校验）时创建实时执行卡续播：
+                    // 建卡即"执行中"+停止可用（createAgentTaskCard 初始态），后续事件按 task_id 命中内存卡
+                    // 正常上屏/收口。原实现渲染静态重放卡：后续实时事件因无内存卡被全部丢弃
+                    // （AGENT_EVENT 分发 if(!st) return），卡片永远停在"执行中"快照——无进度无事件流、
+                    // 取消后也无任何 UI 反馈（完结收口仅对内存卡生效），用户实测
+                    // "重新登录后任务卡不是执行样式、点停止无反应"（2026-09-24）。
+                    // 静态重放卡保留给跨会话进行中任务（只读回看语义，不进实时续播）
                     if (st && st.sessionId === (aiViewSession[agent] || 0)) {
                         messageList.appendChild(st.el);
                     } else if (!st) {
-                        // 阶段一百三十九：静态卡查重（智能体列表晚到补调与历史归口先后触发防重复挂卡）
+                        // 阶段一百三十九：查重（智能体列表晚到补调与历史归口先后触发防重复挂卡）
                         if (!messageList.querySelector('.message[data-task-id="' + t.task_id + '"]')) {
-                            messageList.appendChild(agentBuildReplayCard(agent, t));
+                            if ((t.session_id || 0) === (aiViewSession[agent] || 0)) {
+                                createAgentTaskCard(agent, t.task_id, t.goal, t.session_id);
+                            } else {
+                                messageList.appendChild(agentBuildReplayCard(agent, t));
+                            }
                         }
                     }
                     // 阶段七十三：重放发现的进行中任务登记（当前会话发送按钮"停止"态恢复）
@@ -9611,7 +9641,6 @@
                         if (md) {
                             bod.classList.add('ai-md'); // 复用 AI Markdown 全套样式（.ai-md 前缀不限定父容器）
                             bod.innerHTML = renderAIMarkdown(text); // 自带整体转义防注入
-                            initAIMdHScroll(bod); // 宽表格/代码块挂横向自绘滑块
                         } else {
                             bod.textContent = text;
                         }
@@ -9895,14 +9924,18 @@
         head.appendChild(running);
         var argsEl = document.createElement('pre');
         argsEl.className = 'agent-event-args';
-        argsEl.textContent = JSON.stringify(ev.params || {}, null, 2);
+        // 参数详情用中文动作摘要（TRAE CN 同款语义化展示，与任务历史弹窗执行轨迹 thStepParamSummary 同一归口）；
+        // write_file/edit_file 全文 content 的 JSON 转义不可读，摘要行只显示路径+行数/替换片段；
+        // 未识别工具（MCP 未知）在摘要函数内仍 JSON 美化兜底
+        argsEl.textContent = thStepParamSummary(ev.tool, JSON.stringify(ev.params || {}));
         var outEl = document.createElement('pre');
         outEl.className = 'agent-event-output hidden';
         block.appendChild(head);
-        block.appendChild(argsEl);
+        // todo_write 参数即任务清单原文（与卡顶清单 UI、结果摘要行逐字重复），不渲染 JSON 详情（TRAE 同款简洁）
+        if (ev.tool !== 'todo_write') block.appendChild(argsEl);
         block.appendChild(outEl);
-        // 参数/结果详情限高 200px 可滚：原生 Fluent 条已在 CSS 禁用（thin 漏条修复），挂自绘悬浮滑块
-        if (window._osbInit) { window._osbInit(argsEl); window._osbInit(outEl); }
+        // 参数/结果详情滚动条走占位样式（CSS 任务卡片占位滚动条规则组）：
+        // osb 悬浮滑块在此类滚动根内嵌限高容器上会越界到悬浮输入框区域（body 层不被裁剪），已弃用
         block.setAttribute('data-tool', ev.tool || ''); // 阶段六十二：回填匹配键（标题已中文化，不再含原始工具名）
         if (ev.call_id) block.setAttribute('data-call-id', ev.call_id); // 阶段七十五：控制台输出/转后台按步骤精确归属
         // 阶段七十五：run_command 实时控制台 + 转后台按钮（Trae 同款——输出流式可见不再"盲等"，
@@ -9990,7 +10023,7 @@
         con.appendChild(pre);
         var outEl = block.querySelector('.agent-event-output');
         block.insertBefore(con, outEl); // 控制台位于参数详情与结果详情之间
-        if (window._osbInit) window._osbInit(pre); // 输出区限高流式滚动：挂自绘悬浮滑块（原生条已禁）
+        // 输出区滚动条走占位样式（CSS 任务卡片占位滚动条规则组），osb 悬浮滑块越界问题已弃用
         var bgBtn = document.createElement('button');
         bgBtn.className = 'agent-tool-bgbtn hidden';
         bgBtn.type = 'button';
@@ -14649,10 +14682,13 @@
         var outText = String(ev.output || '').replace(/\[\[MCP_IMAGE:data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\]\]/g, I18N.t('📷 [屏幕截图已作为图像附件提供给 AI]'));
         // 阶段七十五：run_command 有实时控制台时输出已在控制台流式展示，不再重复灌满详情区
         // （控制台保留完整流与退出码行；无控制台的兜底路径仍走详情区文本）
-        if (block.querySelector('.agent-cmd-console')) {
+        // todo_write 结果与摘要行（✓ 任务清单已更新…）逐字重复，同样不再展示
+        if (block.querySelector('.agent-cmd-console') || block.getAttribute('data-tool') === 'todo_write') {
             outEl.classList.add('hidden');
         } else {
-            outEl.textContent = outText;
+            // MCP 等工具可能回传 JSON 串：能完整解析为对象则美化缩进（对齐任务历史轨迹 thStepResultText
+            // 同一归口），否则原样直出（内置工具结果多为多行文本，不受影响）
+            outEl.textContent = thStepResultText(outText);
             outEl.classList.remove('hidden');
         }
         // 阶段六十二：结果摘要行（输出首行常显）——"已编辑 main.go（+1 -1，34 字节）"/"命令已执行 xxx"/错误首行
@@ -15545,19 +15581,12 @@
         return esc;
     }
 
-    // AI Markdown 内横向滚动容器（宽表格/代码块）挂横向自绘悬浮滑块：
-    // 原生滚动条已全局隐藏（scrollbar-width:none），气泡夹紧后超宽表格转为内部横滚，
-    // 无滑块则横向溢出内容不可见也不可拖（仅 Shift+滚轮可用）；复用阶段四十五横向版滑块
-    // （悬停浮现、可拖拽，微信同款）。仅在稳定态调用（流式收尾/历史加载）——
-    // 打字机期间每 30ms 整体重建 innerHTML，逐元素挂 Observer/滑块会随重建泄漏
-    function initAIMdHScroll(root) {
-        if (!window._osbInitH || !root || !root.querySelectorAll) return;
-        var wraps = root.querySelectorAll('.ai-md-table-wrap:not([data-osb-h]), .ai-md-pre:not([data-osb-h])');
-        for (var i = 0; i < wraps.length; i++) {
-            wraps[i].setAttribute('data-osb-h', '1'); // 防重复挂载标记
-            window._osbInitH(wraps[i]);
-        }
-    }
+    // AI Markdown 内宽表格/代码块的横向滚动条（2026-09-24 改占位样式）：
+    // 原在此处给 .ai-md-table-wrap/.ai-md-pre 挂横向自绘悬浮滑块（initOsbH），但这类容器是
+    // 滚动根（#message-list）内嵌限高子容器，滚动中 rect 下部滑出可视区后，body 层悬浮滑块
+    // 不被中间层裁剪，会直接画到悬浮输入框上（用户实测截图）。已随任务卡片滚动区一并迁入
+    // CSS 占位滚动条规则组（style.css .ai-md .ai-md-pre/.ai-md-table-wrap），条画在容器内部
+    // 被 overflow 裁剪，物理上不可能越界，此函数与 initOsbH 挂钩全部移除
 
     // ===== 最近会话列表（服务端归口：最后消息/未读数/置顶） =====
     // 原实现：var convList = []; 声明于此，阶段十一提前至文件顶部（好友列表角标同源读取服务端未读数）
@@ -19111,8 +19140,6 @@
         }
         div.appendChild(getAvatarEl(fromUser));
         div.appendChild(body);
-        // AI 回复（历史加载/END 降级整段渲染）DOM 稳定后，宽表格/代码块挂横向自绘滑块
-        if (isAIAgent(fromUser)) initAIMdHScroll(div);
         return div;
     }
 
@@ -20732,7 +20759,6 @@
                             if (md) {
                                 body.classList.add('ai-md'); // 复用 AI Markdown 全套样式
                                 body.innerHTML = renderAIMarkdown(text); // 自带整体转义防注入
-                                initAIMdHScroll(body); // 宽表格/代码块挂横向自绘滑块
                             } else {
                                 body.textContent = text;
                             }
@@ -21631,12 +21657,33 @@
                 if (rect.height === 0) {
                     thumb.style.display = 'none'; return;
                 }
+                // 轨道可视夹紧：宿主是滚动根内的限高子容器（如消息内代码预览块）时，滚动中其 rect
+                // 下部会滑出滚动根（#message-list）可视区——该区域视觉上被悬浮输入框遮挡，而滑块
+                // 是 body 悬浮层不被中间层裁剪，按宿主 rect 直画会越界盖到输入框上。取宿主 rect
+                // 与最近视觉裁剪祖先（overflow 非 visible）客户区的交集作为轨道，交集过窄则隐藏
+                var trackTop = rect.top, trackBottom = rect.bottom;
+                for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+                    var ov = getComputedStyle(p).overflowY;
+                    if (ov === 'auto' || ov === 'scroll' || ov === 'hidden' || ov === 'clip') {
+                        var pr = p.getBoundingClientRect();
+                        if (pr.top > trackTop) trackTop = pr.top;
+                        if (pr.bottom < trackBottom) trackBottom = pr.bottom;
+                        break; // 最近裁剪祖先即为视觉边界（更外层裁剪只会更小，取最近已足够）
+                    }
+                }
+                if (trackBottom - trackTop < 40) {
+                    thumb.style.display = 'none'; return; // 宿主几乎完全滚出可视区：不显示
+                }
                 thumb.style.display = 'block';
                 var h = Math.max(30, Math.round(ch * ch / sh)); // 滑块最小 30px，内容越多越短
+                if (h > trackBottom - trackTop - 4) h = Math.max(12, Math.round(trackBottom - trackTop - 4)); // 轨道被裁剪时滑块随轨道缩短
                 var maxTop = ch - h - 2; // 上下各留 2px 边距
                 var viewTop = 2 + Math.round(st / Math.max(1, sh - ch) * (maxTop - 2));
+                var topPx = Math.round(rect.top + viewTop);
+                if (topPx + h > trackBottom) topPx = Math.round(trackBottom - h); // 底部越界：夹回可视轨道
+                if (topPx < trackTop) topPx = Math.round(trackTop);               // 顶部越界：夹回可视轨道
                 thumb.style.height = h + 'px';
-                thumb.style.top = Math.round(rect.top + viewTop) + 'px';
+                thumb.style.top = topPx + 'px';
                 thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
             }
             // 时长制多帧复查：按墙钟时长（默认 600ms）逐帧重测。帧数制（18 帧）在高刷屏
