@@ -21,7 +21,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 let pathGuard = null;   // main.js 注入 agentExecutor.safePath：{full, ws} | {err}
 let agentEnv = null;    // main.js 注入 agentExecutor.buildAgentEnv（PATH 前置工具链：uv/node/gcc）
@@ -42,7 +42,8 @@ let session = null;
 
 function isActive() { return !!session && session.status !== 'ended'; }
 
-// ===== 断点持久化（userData/debug_breakpoints.json：absPath(小写) → [行号]） =====
+// ===== 断点持久化（userData/debug_breakpoints.json：absPath(小写) → [{line, condition?, logMessage?}]） =====
+// 阶段一百六十四：支持条件断点/日志点——持久化存对象数组；旧版 number[] 读取时兼容归一
 function bpFile() {
     try { return path.join(app.getPath('userData'), 'debug_breakpoints.json'); } catch (e) { return null; }
 }
@@ -56,18 +57,56 @@ function bpSaveAll(store) {
     if (!f) return;
     try { fs.writeFileSync(f, JSON.stringify(store)); } catch (e) { /* 只读盘静默 */ }
 }
-function bpSet(abs, lines) {
+// 输入归一：number 行号或 {line, condition?, logMessage?} 对象 → 干净对象数组（行号去零去重）
+function normBpLines(lines) {
+    const seen = {};
+    const out = [];
+    (lines || []).forEach(function (it) {
+        const obj = (it && typeof it === 'object') ? it : { line: it };
+        const l = parseInt(obj.line, 10) || 0;
+        if (l <= 0 || seen[l]) return;
+        seen[l] = 1;
+        const rec = { line: l };
+        const cond = String(obj.condition || '').trim();
+        const log = String(obj.logMessage || '').trim();
+        if (cond) rec.condition = cond.substring(0, 500);
+        if (log) rec.logMessage = log.substring(0, 500);
+        out.push(rec);
+    });
+    return out;
+}
+function bpSet(abs, bps) {
     const store = bpLoadAll();
     const key = String(abs || '').toLowerCase();
     if (!key) return;
-    if (lines && lines.length) store[key] = lines.map(function (n) { return parseInt(n, 10) || 0; }).filter(function (n) { return n > 0; });
+    const clean = normBpLines(bps);
+    if (clean.length) store[key] = clean;
     else delete store[key];
     bpSaveAll(store);
 }
 function bpGet(abs) {
     const store = bpLoadAll();
-    return (store[String(abs || '').toLowerCase()] || []).slice();
+    // 旧格式（number[]）读取兼容归一为对象数组
+    return normBpLines(store[String(abs || '').toLowerCase()] || []);
 }
+// 持久化对象数组 → DAP setBreakpoints 参数（condition/logMessage 透传；无则省略字段）
+function toDapBps(bps) {
+    return (bps || []).map(function (bp) {
+        const d = { line: bp.line };
+        if (bp.condition) d.condition = bp.condition;
+        if (bp.logMessage) d.logMessage = bp.logMessage;
+        return d;
+    });
+}
+// verified 行号校准：适配器回推真实行号后按行号回填元数据（condition/logMessage 不丢；
+// 无一命中时维持原数组，防误清）
+function reverifyBps(bps, verifiedLines) {
+    const set = {};
+    (verifiedLines || []).forEach(function (l) { set[parseInt(l, 10)] = 1; });
+    const kept = (bps || []).filter(function (bp) { return set[bp.line]; });
+    return kept.length ? kept : bps;
+}
+function bpLineNums(bps) { return (bps || []).map(function (bp) { return bp.line; }); }
 
 // ===== DAP 客户端（精简实现，覆盖调试闭环所需 ~15 种消息） =====
 function DapClient() {
@@ -343,7 +382,7 @@ function ensureDebugpyInVenv(evTabId) {
     });
 }
 
-// ===== 语言路由（按扩展名；Python→debugpy，Node→V8 Inspector 直连，C/C++→cdt-gdb-adapter） =====
+// ===== 语言路由（按扩展名；Python→debugpy，Node→V8 Inspector 直连，C/C++→cdt-gdb-adapter，Go→dlv dap） =====
 function langOfExt(ext) {
     const e = String(ext || '').toLowerCase();
     if (e === 'py' || e === 'pyw') return 'python';
@@ -351,6 +390,8 @@ function langOfExt(ext) {
     if (e === 'js' || e === 'mjs' || e === 'cjs' || e === 'ts') return 'node';
     // C/C++：源文件先编译（gcc -g）再调试；h/hpp 头文件无独立编译语义不支持
     if (e === 'c' || e === 'cpp' || e === 'cc' || e === 'cxx') return 'cpp';
+    // Go：dlv dap（stdio DAP），delve 自管编译（program 所在包，go.mod 定位）
+    if (e === 'go') return 'go';
     return '';
 }
 
@@ -368,7 +409,7 @@ function start(req) {
     const cwd = g.ws;
     const ext = path.extname(abs).replace('.', '');
     const lang = langOfExt(ext);
-    if (!lang) return Promise.resolve({ ok: false, error: '暂不支持调试 .' + ext + ' 文件（当前支持 .py / .js / .ts / .mjs / .cjs / .c / .cpp / .cc / .cxx）' });
+    if (!lang) return Promise.resolve({ ok: false, error: '暂不支持调试 .' + ext + ' 文件（当前支持 .py / .js / .ts / .mjs / .cjs / .c / .cpp / .cc / .cxx / .go）' });
     if (!fs.existsSync(abs)) return Promise.resolve({ ok: false, error: '文件不存在，请先保存' });
 
     if (session) { try { stopInternal(session); } catch (e) {} session = null; }
@@ -393,13 +434,14 @@ function start(req) {
     const begin = (lang === 'python') ? startPython(sess, say, setStatus)
         : (lang === 'node') ? startNode(sess, say, setStatus)
         : (lang === 'cpp') ? startCpp(sess, say, setStatus)
+        : (lang === 'go') ? startGo(sess, say, setStatus)
         : Promise.resolve({ ok: false, error: '适配器未配置' });
     return begin.then(function (r) {
         if (!r || !r.ok) {
             if (session === sess) { stopInternal(sess); session = null; }
             return r || { ok: false, error: '启动失败' };
         }
-        return { ok: true, lang: lang, breakpoints: sess.bpLines };
+        return { ok: true, lang: lang, breakpoints: bpLineNums(sess.bpLines), bps: sess.bpLines };
     }, function (e) {
         if (session === sess) { try { stopInternal(sess); } catch (e2) {} session = null; }
         return { ok: false, error: (e && e.message) || '启动失败' };
@@ -487,12 +529,12 @@ function startPython(sess, say, setStatus) {
                         // initialized 事件后按 DAP 规约下发断点 + configurationDone，程序开跑
                         return dap.request('setBreakpoints', {
                             source: { path: sess.abs, name: path.basename(sess.abs) },
-                            breakpoints: sess.bpLines.map(function (l) { return { line: l }; }),
+                            breakpoints: toDapBps(sess.bpLines),
                             sourceModified: false
                         }).then(function (rb) {
                             const verified = ((rb && rb.breakpoints) || []).map(function (b) { return b.line; });
-                            sess.bpLines = verified.length ? verified : sess.bpLines;
-                            pushEvent({ tab_id: sess.tab_id, type: 'breakpoints', lines: sess.bpLines });
+                            sess.bpLines = reverifyBps(sess.bpLines, verified);
+                            pushEvent({ tab_id: sess.tab_id, type: 'breakpoints', lines: bpLineNums(sess.bpLines) });
                             return dap.request('configurationDone', {});
                         }).then(function () {
                             setStatus('running');
@@ -524,6 +566,144 @@ function startPython(sess, say, setStatus) {
             const info = e.resolveFail || {};
             // 缺 debugpy / 缺 Py3 均返回结构化错误，前端弹一键引导条
             return { ok: false, code: 'no_python_env', detail: info.err || '未找到可用的 Python 3 + debugpy' };
+        }
+        return { ok: false, error: (e && e.message) || '启动失败' };
+    });
+}
+
+// ===== Go：dlv dap（TCP DAP，delve 原生 DAP 服务器——headless TCP，无 stdio 模式） =====
+// dlv 探测：PATH → %GOPATH%\bin\dlv.exe（go install 装到 GOPATH\bin，该目录常不在 PATH——同 gopls 特例）
+function resolveDlv() {
+    return new Promise(function (resolve) {
+        execFile('where', ['dlv'], { timeout: 5000, windowsHide: true }, function (err, stdout) {
+            if (!err && stdout) {
+                const first = String(stdout).split(/\r?\n/)[0].trim();
+                if (first) return resolve({ ok: true, exe: first });
+            }
+            execFile('go', ['env', 'GOPATH'], { timeout: 5000, windowsHide: true }, function (err2, stdout2) {
+                if (!err2 && stdout2) {
+                    const cand = path.join(String(stdout2).trim(), 'bin', 'dlv.exe');
+                    try { if (fs.existsSync(cand)) return resolve({ ok: true, exe: cand }); } catch (e) {}
+                }
+                resolve({ ok: false, err: '未检测到 dlv（delve）。请安装：go install github.com/go-delve/delve/cmd/dlv@latest' });
+            });
+        });
+    });
+}
+
+function startGo(sess, say, setStatus) {
+    return resolveDlv().then(function (d) {
+        if (!d.ok) {
+            const e = new Error('go_resolve');
+            e.resolveFail = d;
+            throw e;
+        }
+        if (session !== sess) return { ok: false }; // 启动期间被新会话顶掉
+        say('调试环境：delve（' + d.exe + '）\n');
+        // dlv dap 是 headless TCP 服务器（实测 --help：无 stdio 模式，与 cdt-gdb-adapter 不同）——
+        // 选空闲端口 spawn `dlv dap --listen`，重试连接后 initialize/launch（同 startPython 模板结构）
+        return pickPort().then(function (port) {
+            if (session !== sess) return { ok: false };
+            sess.port = port;
+            say('$ dlv dap --listen 127.0.0.1:' + port + '\n');
+            let child;
+            try {
+                child = spawn(d.exe, ['dap', '--listen', '127.0.0.1:' + port], {
+                    cwd: path.dirname(sess.abs), // 文件所在目录（go.mod 所在包根），dlv 编译定位（program 相对路径按此解析）
+                    env: Object.assign({}, agentEnv ? agentEnv() : process.env),
+                    windowsHide: true,
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+            } catch (e) { return { ok: false, error: '启动 dlv 失败：' + (e.message || e) }; }
+            sess.child = child;
+            let stderrBuf = '';
+            child.stderr.on('data', function (d2) {
+                stderrBuf += d2.toString('utf8');
+                if (stderrBuf.length > 4000) stderrBuf = stderrBuf.slice(-4000);
+            });
+            child.on('close', function (code) {
+                if (session === sess && sess.status !== 'ended') {
+                    if (!sess.dap && code !== 0 && stderrBuf) say(stderrBuf, 'stderr'); // 启动失败原因可见
+                    setStatus('ended');
+                    pushEvent({ tab_id: sess.tab_id, type: 'terminated', exit_code: code });
+                }
+                sess.child = null;
+            });
+            // 连接重试（dlv 监听就绪需要片刻）。DAP 规约：launch 在 initialize 应答后、initialized
+            // 事件前发出；delve 收到 launch 才编译并启动目标进程（首次编译耗时，竞速超时放宽 30s）。
+            // launch 应答时序不定（可能晚于 initialized），绝不 await 它再发后续请求——同 startPython 的 attach 模式
+            const tryConnect = function (left) {
+                if (session !== sess) return Promise.resolve({ ok: false });
+                const dap = new DapClient();
+                return dap.connect(port, '127.0.0.1').then(function () {
+                    if (session !== sess) { dap.destroy(); return { ok: false }; }
+                    sess.dap = dap;
+                    attachDapHandlers(sess, say, setStatus);
+                    const launched = new Promise(function (resolve) {
+                        sess.onInitialized = function () { resolve(true); };
+                    });
+                    return dap.request('initialize', {
+                        adapterID: 'go', clientID: 'im-client',
+                        linesStartAt1: true, columnsStartAt1: true, pathFormat: 'path',
+                        supportsVariableType: true, supportsVariableHovering: true,
+                        supportsEvaluateForHovers: true, locale: 'zh-cn'
+                    }).then(function () {
+                        let launchErr = null;
+                        dap.request('launch', {
+                            request: 'launch', type: 'go', name: 'debug',
+                            mode: 'debug',
+                            program: sess.abs, // 单文件：delve 取其所在包目录编译
+                            cwd: path.dirname(sess.abs)
+                        }).catch(function (e) { launchErr = e; });
+                        return Promise.race([
+                            launched,
+                            new Promise(function (res) { setTimeout(function () { res(false); }, 30000); })
+                        ]).then(function (ok) {
+                            if (!ok) throw (launchErr || new Error('等待 dlv 初始化超时（30s）'));
+                        });
+                    }).then(function () {
+                        if (session !== sess) return { ok: false };
+                        // initialized 事件后按 DAP 规约下发断点 + configurationDone，程序开跑
+                        return dap.request('setBreakpoints', {
+                            source: { path: sess.abs, name: path.basename(sess.abs) },
+                            breakpoints: toDapBps(sess.bpLines),
+                            sourceModified: false
+                        }).then(function (rb) {
+                            const verified = ((rb && rb.breakpoints) || []).map(function (b) { return b.line; });
+                            sess.bpLines = reverifyBps(sess.bpLines, verified);
+                            pushEvent({ tab_id: sess.tab_id, type: 'breakpoints', lines: bpLineNums(sess.bpLines) });
+                            return dap.request('configurationDone', {});
+                        }).then(function () {
+                            setStatus('running');
+                            say('调试会话已启动（程序运行中）\n');
+                            return { ok: true };
+                        });
+                    }).catch(function (e) {
+                        // 协议层失败（已连上）：销毁会话并杀 dlv（连带目标进程），不重试
+                        dap.destroy();
+                        if (session !== sess) return { ok: false };
+                        return { ok: false, error: '调试会话启动失败：' + ((e && e.message) || e) };
+                    });
+                }).catch(function (e) {
+                    // 连接失败（dlv 未就绪）：目标进程还活着，延迟后重试
+                    try { dap.destroy(); } catch (e2) { /* 未连接过 */ }
+                    if (session !== sess) return { ok: false };
+                    if (left <= 0) {
+                        return { ok: false, error: '连接 dlv 失败：' + ((e && e.message) || e) };
+                    }
+                    return new Promise(function (res) {
+                        setTimeout(function () { res(); }, 400);
+                    }).then(function () { return tryConnect(left - 1); });
+                });
+            };
+            return tryConnect(30); // 30 次 × 400ms ≈ 12s
+        });
+    }).catch(function (e) {
+        if (e && e.message === 'go_resolve') {
+            const info = e.resolveFail || {};
+            const detail = info.err || '未检测到 dlv（delve）';
+            // 结构化 code 供前端引导条；error 兜底保证旧前端也能显示原因
+            return { ok: false, code: 'no_go_env', detail: detail, error: detail };
         }
         return { ok: false, error: (e && e.message) || '启动失败' };
     });
@@ -661,12 +841,12 @@ function launchCppAdapter(sess, say, setStatus, exePath, gdbPath) {
             // initialized 后按 DAP 规约下发断点 + configurationDone（内部触发 -exec-run，程序开跑）
             return dap.request('setBreakpoints', {
                 source: { path: sess.abs, name: path.basename(sess.abs) },
-                breakpoints: sess.bpLines.map(function (l) { return { line: l }; }),
+                breakpoints: toDapBps(sess.bpLines),
                 sourceModified: false
             }).then(function (rb) {
                 const verified = ((rb && rb.breakpoints) || []).map(function (b) { return b.line; });
-                sess.bpLines = verified.length ? verified : sess.bpLines;
-                pushEvent({ tab_id: sess.tab_id, type: 'breakpoints', lines: sess.bpLines });
+                sess.bpLines = reverifyBps(sess.bpLines, verified);
+                pushEvent({ tab_id: sess.tab_id, type: 'breakpoints', lines: bpLineNums(sess.bpLines) });
                 return dap.request('configurationDone', {});
             });
         }).then(function () {
@@ -820,11 +1000,11 @@ function startNode(sess, say, setStatus) {
                         .then(function () { return inspectorSend(sess, 'Debugger.enable', { maxScriptsCacheSize: 1e7 }, 8000); })
                         .then(function () {
                             if (session !== sess || !fileUrl) return;
-                            return Promise.all(sess.bpLines.map(function (l) {
+                            return Promise.all(sess.bpLines.map(function (bp) {
                                 return inspectorSend(sess, 'Debugger.setBreakpointByUrl', {
-                                    lineNumber: l - 1, url: fileUrl, columnNumber: 0, condition: ''
+                                    lineNumber: bp.line - 1, url: fileUrl, columnNumber: 0, condition: bp.condition || ''
                                 }, 8000).then(function (r) {
-                                    if (r && r.breakpointId) sess.nodeBps.set(r.breakpointId, { line: l });
+                                    if (r && r.breakpointId) sess.nodeBps.set(r.breakpointId, { line: bp.line });
                                 }).catch(function () { /* 单个断点失败不影响会话 */ });
                             }));
                         })
@@ -1249,9 +1429,11 @@ function cmd(op, arg) {
 }
 
 // ===== 断点设置（UI 行号槽点击；未调试时只写持久化，调试中同步适配器） =====
-// req = {abs 已由 main 归口解析, lines}
+// req = {abs 已由 main 归口解析, lines}；lines 兼容 number[] 与 [{line, condition?, logMessage?}]
+// （阶段一百六十四：条件断点/日志点——DAP 路 condition/logMessage 透传；Node V8 Inspector 仅
+// 支持 condition（logMessage 为 VS Code 上层实现，此处丢弃）；verified 行号回推保持 number[] 兼容）
 function setBreakpoints(abs, lines) {
-    const clean = (lines || []).map(function (n) { return parseInt(n, 10) || 0; }).filter(function (n) { return n > 0; });
+    const clean = normBpLines(lines);
     bpSet(abs, clean);
     if (session && session.abs && String(session.abs).toLowerCase() === String(abs).toLowerCase()) {
         const sess = session;
@@ -1265,13 +1447,13 @@ function setBreakpoints(abs, lines) {
             });
             return Promise.all(removes).then(function () {
                 sess.nodeBps = new Map();
-                return Promise.all(clean.map(function (l) {
+                return Promise.all(clean.map(function (bp) {
                     return inspectorSend(sess, 'Debugger.setBreakpointByUrl', {
-                        lineNumber: l - 1, url: fileUrl, columnNumber: 0, condition: ''
+                        lineNumber: bp.line - 1, url: fileUrl, columnNumber: 0, condition: bp.condition || ''
                     }).then(function (r) {
-                        if (r && r.breakpointId) sess.nodeBps.set(r.breakpointId, { line: l });
-                        return l;
-                    }).catch(function () { return l; });
+                        if (r && r.breakpointId) sess.nodeBps.set(r.breakpointId, { line: bp.line });
+                        return bp.line;
+                    }).catch(function () { return bp.line; });
                 }));
             }).then(function (kept) {
                 return { ok: true, lines: kept };
@@ -1282,7 +1464,12 @@ function setBreakpoints(abs, lines) {
         if (sess.dap) {
             return sess.dap.request('setBreakpoints', {
                 source: { path: session.abs, name: path.basename(session.abs) },
-                breakpoints: clean.map(function (l) { return { line: l }; }),
+                breakpoints: clean.map(function (bp) {
+                    const d = { line: bp.line };
+                    if (bp.condition) d.condition = bp.condition;
+                    if (bp.logMessage) d.logMessage = bp.logMessage;
+                    return d;
+                }),
                 sourceModified: false
             }).then(function (rb) {
                 const verified = ((rb && rb.breakpoints) || []).map(function (b) { return b.line; });
@@ -1293,18 +1480,24 @@ function setBreakpoints(abs, lines) {
             });
         }
     }
-    return Promise.resolve({ ok: true, lines: clean });
+    return Promise.resolve({ ok: true, lines: clean.map(function (bp) { return bp.line; }) });
 }
 
 // ===== 查询（前端打开文件/刷新时同步状态与断点） =====
+// lines 保持 number[] 兼容旧前端；bps 为对象数组（含条件/日志点元数据，阶段一百六十四）
 function state(tabId) {
+    const bps = !session ? [] : bpGet(session.abs);
     if (!session || String(session.tab_id) !== String(tabId || '')) {
-        return { ok: true, active: false, status: '', breakpoints: [] };
+        return { ok: true, active: false, status: '', breakpoints: [], bps: [] };
     }
-    return { ok: true, active: true, status: session.status, breakpoints: bpGet(session.abs) };
+    return {
+        ok: true, active: true, status: session.status,
+        breakpoints: bps.map(function (b) { return b.line; }), bps: bps
+    };
 }
 function breakpointsFor(abs) {
-    return { ok: true, lines: bpGet(abs) };
+    const bps = bpGet(abs);
+    return { ok: true, lines: bps.map(function (b) { return b.line; }), bps: bps };
 }
 
 function shutdown() {

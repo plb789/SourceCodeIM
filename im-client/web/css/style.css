@@ -4910,7 +4910,10 @@ html.m #list-panel.list-collapsed {
     word-break: break-all;
     max-height: 200px;
     overflow-y: auto;
-    scrollbar-width: thin;
+    /* thin 会在元素级覆盖全局 * { scrollbar-width: none }，Chromium 的 Win11 Fluent 原生条
+       无视 ::-webkit-scrollbar 归零导致漏出系统默认滚动条（同 .agent-event-body 修复）；
+       改 none 后滑块由创建处统一挂自绘悬浮滑块（osb）承担 */
+    scrollbar-width: none;
     background: color-mix(in srgb, var(--hover, #f7f7f7) 60%, transparent);
 }
 
@@ -8674,7 +8677,8 @@ html.m #list-panel.list-collapsed {
 .agent-ws-dirs {
     max-height: 180px;
     overflow-y: auto;
-    scrollbar-width: thin; /* 输入区/事件流同款细滚动条（全局原生条已禁用，这里局部细条可点击拖动） */
+    /* thin 会元素级覆盖全局禁条规则漏出 Fluent 原生条，改 none 走自绘悬浮滑块（打开面板时挂载） */
+    scrollbar-width: none;
     border: 1px solid var(--border, #ececec);
     border-radius: 4px;
     margin-bottom: 8px;
@@ -8738,12 +8742,14 @@ html.m #list-panel.list-collapsed {
     width: 100%;
 }
 
-/* ===== 阶段九十：我的 MCP 服务器面板（仅 PC 端，全部复用现有主题变量，明暗三态自动跟随） ===== */
+/* ===== 阶段九十：我的 MCP 服务器面板（仅 PC 端，全部复用现有主题变量，明暗三态自动跟随） =====
+   注：原 agent-mcp-box 弹窗壳已废弃（面板迁入设置页 settings-view-mcp），规则保留仅归档；
+   thin 同样会漏 Fluent 原生条，归零与全局禁条规则对齐 */
 .agent-mcp-box {
     width: 560px;
     max-height: 78vh;
     overflow-y: auto;
-    scrollbar-width: thin; /* 与工作区面板同款局部细滚动条（全局原生条已禁用） */
+    scrollbar-width: none;
 }
 
 .agent-mcp-list {

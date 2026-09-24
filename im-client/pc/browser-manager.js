@@ -49,6 +49,7 @@ const BIN_MAX = 2 * 1024 * 1024;
 // 二进制扩展名清单（命中即走 base64 通道；未命中再查 NUL 字节兜底）
 const BINARY_EXTS = ['docx', 'docm', 'xlsx', 'xlsm', 'pptx', 'pptm', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'zip', '7z', 'rar', 'gz', 'tgz', 'tar', 'exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'class', 'jar', 'woff', 'woff2', 'ttf', 'eot', 'otf', 'mp3', 'wav', 'flac', 'mp4', 'avi', 'mov', 'mkv', 'psd', 'ai', 'sketch', 'apk'];
 let pathGuard = null;  // main.js 注入 agentExecutor.safePath（browser-manager 不可反向 require，防循环依赖）
+let wsRootFn = null;   // main.js 注入 agentExecutor.userRoot（用户主工作区根，LSP 跳转 rel 口径归一用）
 let taskBackupApi = null; // 阶段九十七：main.js 注入任务备份查询/保留/撤销（agentExecutor.getTaskBackup 等）
 let viewerUrl = '';    // main.js 注入 SERVER_URL + 'file-viewer.html'
 
@@ -664,7 +665,12 @@ function openFileTab(username, relPath) {
     const rel = String(relPath || '').trim();
     if (!u || !rel) return { ok: false, error: '参数缺失（username/path）' };
     const r = readFilePayload(u, rel);
-    if (!r.ok) return { ok: false, error: r.error };
+    if (!r.ok) {
+        // 阶段一百六十五：失败落日志（此前静默 {ok:false}，LSP 跳转失败等上游无从排查根因）。
+        // 恢复期失败是常态（沙箱未注入，notifySandboxReady 会重试兜底），降噪不打
+        if (!restoring) console.log('[浏览区] 打开文件失败 user=' + u + ' rel=' + rel + ' err=' + (r.error || ''));
+        return { ok: false, error: r.error };
+    }
     const existing = tabs.find(function (t) { return t.kind === 'file' && t.username === u && t.relPath === rel; });
     if (existing) {
         existing.title = r.payload.name;
@@ -811,6 +817,117 @@ function lspHover(payload) {
         text: String(payload && payload.text != null ? payload.text : ''),
         line: parseInt(payload && payload.line, 10) || 0,
         character: parseInt(payload && payload.character, 10) || 0
+    });
+}
+
+// ===== 阶段一百六十三：LSP 补全/跳转定义/诊断/文档同步（与 lspHover 同归口模式）=====
+function lspComplete(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.completion({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        line: parseInt(payload && payload.line, 10) || 0,
+        character: parseInt(payload && payload.character, 10) || 0
+    });
+}
+function lspDefinition(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.definition({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        line: parseInt(payload && payload.line, 10) || 0,
+        character: parseInt(payload && payload.character, 10) || 0
+    }).then(function (hits) {
+        if (!Array.isArray(hits)) return hits;
+        // 阶段一百六十五：rel 口径归一为用户工作区根（lsp 原值相对 LSP 项目根，嵌套项目跳转错位）
+        hits.forEach(function (h) { if (h && h.path) h.rel = wsRelFor(tab.username, String(h.path), String(h.rel || '')); });
+        return hits;
+    });
+}
+function lspTouch(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve({ ok: false });
+    return lspManager.touchDoc({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : '')
+    });
+}
+function lspDiagnosticsGet(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return null;
+    return lspManager.getDiagnostics(tab.filePath);
+}
+// ===== 阶段一百六十四：格式化/快速修复/引用/重命名/文档符号（与 lspComplete 同归口模式）=====
+function lspFormat(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.formatting({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : '')
+    });
+}
+function lspCodeAction(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.codeAction({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        range: (payload && payload.range) || null,
+        diagnostics: Array.isArray(payload && payload.diagnostics) ? payload.diagnostics : []
+    });
+}
+function lspReferences(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.references({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        line: parseInt(payload && payload.line, 10) || 0,
+        character: parseInt(payload && payload.character, 10) || 0
+    }).then(function (refs) {
+        if (!Array.isArray(refs)) return refs;
+        // 阶段一百六十五：rel 口径归一为用户工作区根（浮层点击跳转走 __wsDefJump 同链路）
+        refs.forEach(function (h) { if (h && h.path) h.rel = wsRelFor(tab.username, String(h.path), String(h.rel || '')); });
+        return refs;
+    });
+}
+function lspRename(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.rename({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : ''),
+        line: parseInt(payload && payload.line, 10) || 0,
+        character: parseInt(payload && payload.character, 10) || 0,
+        newName: String((payload && payload.newName) || '')
+    });
+}
+function lspDocumentSymbol(payload) {
+    const tab = findFileTab(payload);
+    if (!tab) return Promise.resolve(null);
+    return lspManager.documentSymbol({
+        filePath: tab.filePath,
+        text: String(payload && payload.text != null ? payload.text : '')
+    });
+}
+function findFileTab(payload) {
+    const tabId = String((payload && payload.tab_id) || '');
+    const tab = tabs.find(function (t) { return String(t.id) === tabId && t.kind === 'file'; });
+    return (tab && tab.filePath) ? tab : null;
+}
+// 诊断推送归口（lsp-manager publishDiagnostics → 已打开的匹配标签 → 渲染层 Monaco markers）：
+// 路径归一同 refreshFileTabByPath（分隔符/大小写不敏感）；未打开的文件不推送（渲染层无对应 iframe）
+function lspDiagNotify(n) {
+    if (!n || !n.filePath) return;
+    const key = String(n.filePath).replace(/\\/g, '/').toLowerCase();
+    tabs.forEach(function (t) {
+        if (t.kind === 'file' && String(t.filePath || '').replace(/\\/g, '/').toLowerCase() === key) {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('lsp:diagnostics', { tab_id: t.id, diags: n.diags || [] });
+            }
+        }
     });
 }
 
@@ -1256,6 +1373,29 @@ function setPathGuard(fn) {
     pathGuard = typeof fn === 'function' ? fn : null;
 }
 
+// setWsRootFn 注入用户工作区根函数（main.js 传入 agentExecutor.userRoot）
+function setWsRootFn(fn) {
+    wsRootFn = typeof fn === 'function' ? fn : null;
+}
+
+// wsRelFor 阶段一百六十五：LSP 位置结果 rel 口径归一（定义跳转/查找引用出口统一走此换算）。
+// lsp-manager 返回的 rel 相对 LSP 工作区根（go.mod/pyproject.toml 等项目标记所在目录），而
+// browserOpenFile/safePath 期望工作区相对路径（相对用户主工作区根）——嵌套项目场景两根不一致
+//（实测：工作区根 E:\SourceCode2026，LSP 根 E:\SourceCode2026\cheshi\lspdemo，gopls 返回
+// rel='util/util.go' 被解析到 E:\SourceCode2026\util\util.go 不存在，跳转静默失败）。
+// 出口统一把绝对路径换算为相对用户主工作区根：工作区外（'..' 开头/跨盘）rel 归空由前端忽略；
+// 未注入/换算异常回落 lsp 原值（单文件模式 LSP 根=文件目录，原行为语义）
+function wsRelFor(username, abs, lspRel) {
+    if (!wsRootFn) return lspRel;
+    try {
+        const ws = String(wsRootFn(username) || '');
+        if (!ws) return lspRel;
+        let rel = path.relative(ws, abs).replace(/\\/g, '/');
+        if (!rel || rel.indexOf('..') === 0 || path.isAbsolute(rel)) return ''; // 工作区外/根自身
+        return rel;
+    } catch (e) { return lspRel; }
+}
+
 // setTaskBackupApi 注入任务备份查询/保留/撤销（阶段九十七，main.js 传入 agentExecutor 三个 helper——
 // browser-manager 不可反向 require agent-executor，会循环依赖）
 function setTaskBackupApi(api) {
@@ -1272,8 +1412,19 @@ module.exports = {
     init: init,
     setCdpSwitch: setCdpSwitch,
     setPathGuard: setPathGuard,
+    setWsRootFn: setWsRootFn, // 阶段一百六十五：用户工作区根注入（LSP 跳转 rel 口径归一）
     setTaskBackupApi: setTaskBackupApi, // 阶段九十七：任务备份查询/保留/撤销注入
     refreshFileTabByPath: refreshFileTabByPath, // 阶段一百六十二：AI 写盘钩子按路径刷新已打开标签（实时更新+跳转改动行）
+    lspComplete: lspComplete,         // 阶段一百六十三：LSP 补全归口
+    lspDefinition: lspDefinition,     // 阶段一百六十三：跳转定义归口
+    lspTouch: lspTouch,               // 阶段一百六十三：文档同步钩子（触发诊断推送）
+    lspDiagnosticsGet: lspDiagnosticsGet, // 阶段一百六十三：诊断缓存查询
+    lspFormat: lspFormat,             // 阶段一百六十四：格式化归口
+    lspCodeAction: lspCodeAction,     // 阶段一百六十四：快速修复归口
+    lspReferences: lspReferences,     // 阶段一百六十四：查找引用归口
+    lspRename: lspRename,             // 阶段一百六十四：重命名符号归口
+    lspDocumentSymbol: lspDocumentSymbol, // 阶段一百六十四：文件内符号归口
+    lspDiagNotify: lspDiagNotify,     // 阶段一百六十三：诊断推送归口转发
     setViewerUrl: setViewerUrl,
     findFileTabInfo: findFileTabInfo, // 阶段一百五十九：file 标签信息归口（debug IPC 目标解析）
     setTabCloseHook: setTabCloseHook, // 阶段一百五十九：file 标签关闭联动钩子（调试会话随关停）

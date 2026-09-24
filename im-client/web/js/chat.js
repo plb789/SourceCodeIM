@@ -6792,6 +6792,7 @@
             agentWsPrimaryEl.textContent = agentWsPrimary || I18N.t('未设置（使用默认工作区）');
             agentWsPrimaryEl.title = agentWsPrimary || '';
             renderAgentWsDirs();
+            if (window._osbInit) window._osbInit(agentWsDirsEl); // 授权目录限高列表：挂自绘悬浮滑块（打开时挂，晚于 osb 定义）
             agentWsMask.classList.remove('hidden');
         });
     }
@@ -8041,7 +8042,7 @@
         frame.className = 'browser-file-frame hidden';
         // viewer 地址带版本参数防 iframe HTTP 缓存命中旧版（阶段一百零九：与 pc/main.js
         // setViewerUrl 的版本号保持一致，页面逻辑更新后两处同步改）
-        frame.src = 'file-viewer.html?v=143'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=143：AI 改码即时更新+跳转改动行，与 pc/main.js setViewerUrl 同步
+        frame.src = 'file-viewer.html?v=153'; // 与主页面同源（服务端同源静态页），可直调 contentWindow；v=153：修复调试面板多层 pane 叠加，与 pc/main.js setViewerUrl 同步
         frame.addEventListener('load', function () {
             var r = fileFrames[tabId];
             if (!r) return;
@@ -8074,6 +8075,12 @@
                     payload.adds = expl.adds;
                     payload.dels = expl.dels;
                     payload.change_kind = expl.kind;
+                }
+                // 阶段一百六十三：定义跳转挂起注入——刚被 __wsDefJump 打开的目标文件带跳转行
+                // （复用 v=143 reveal_line 定位链路：渲染后跳到定义处并闪烁）
+                if (fvDefReveal.path && fvDefReveal.path === payload.path) {
+                    payload.reveal_line = fvDefReveal.line;
+                    fvDefReveal = { path: null, line: 0 };
                 }
             }
             if (rec.ready) fileFramePush(rec, payload);
@@ -8140,8 +8147,71 @@
             // 防 window.desktop 不存在时同步 TypeError（catch 拦不住同步抛出）
             if (!window.desktop || !window.desktop.lspHover) return Promise.resolve(null);
             return window.desktop.lspHover(req);
+        },
+        // ===== 阶段一百六十三：LSP 补全/跳转定义/文档同步/诊断查询（同 lspHover 转发模式）=====
+        lspComplete: function (req) {
+            if (!window.desktop || !window.desktop.lspComplete) return Promise.resolve(null);
+            return window.desktop.lspComplete(req);
+        },
+        lspDefinition: function (req) {
+            if (!window.desktop || !window.desktop.lspDefinition) return Promise.resolve(null);
+            return window.desktop.lspDefinition(req);
+        },
+        lspTouch: function (tabId, text) {
+            if (!window.desktop || !window.desktop.lspTouch) return Promise.resolve({ ok: false });
+            return window.desktop.lspTouch(tabId, text);
+        },
+        lspDiagnosticsGet: function (tabId) {
+            if (!window.desktop || !window.desktop.lspDiagnostics) return Promise.resolve(null);
+            return window.desktop.lspDiagnostics(tabId);
+        },
+        // ===== 阶段一百六十四：格式化/快速修复/引用/重命名/文档符号（同 lspComplete 转发模式）=====
+        lspFormat: function (req) {
+            if (!window.desktop || !window.desktop.lspFormat) return Promise.resolve(null);
+            return window.desktop.lspFormat(req);
+        },
+        lspCodeAction: function (req) {
+            if (!window.desktop || !window.desktop.lspCodeAction) return Promise.resolve(null);
+            return window.desktop.lspCodeAction(req);
+        },
+        lspReferences: function (req) {
+            if (!window.desktop || !window.desktop.lspReferences) return Promise.resolve(null);
+            return window.desktop.lspReferences(req);
+        },
+        lspRename: function (req) {
+            if (!window.desktop || !window.desktop.lspRename) return Promise.resolve(null);
+            return window.desktop.lspRename(req);
+        },
+        lspDocumentSymbol: function (req) {
+            if (!window.desktop || !window.desktop.lspDocumentSymbol) return Promise.resolve(null);
+            return window.desktop.lspDocumentSymbol(req);
         }
     };
+
+    // 阶段一百六十三：LSP 诊断推送转发——主进程 publishDiagnostics → 对应 viewer iframe
+    // （file-viewer __wsLspDiags 设 Monaco markers 红黄波浪线；事件按 tab_id 路由）
+    if (browserSupported() && typeof window.desktop.onLspDiagnostics === 'function') {
+        window.desktop.onLspDiagnostics(function (d) {
+            var tabId = String((d && d.tab_id) || '');
+            var rec = fileFrames[tabId];
+            if (rec && rec.ready) {
+                try { rec.frame.contentWindow.__wsLspDiags(d); } catch (e) { /* 页面未就绪忽略 */ }
+            }
+        });
+    }
+
+    // 阶段一百六十三：LSP 跳转定义（viewer iframe → 宿主归口）——统一复用 browserOpenFile：
+    // 同文件已有标签（含后台标签）走 openFileTab existing 分支复用+激活到前台，fileLoad 转发点
+    // 按 fvDefReveal 注入 reveal_line 完成定位+闪烁（复用 v=143 链路）；跨文件新开标签同链路。
+    // 原同文件分支直接 __fvReveal 定位后台 iframe：不切前台且 iframe 未就绪时异常被吞，表现为
+    // 跳转无反应（实测 2026-09-23：util.go 后台标签命中此分支，F12/Alt+F12/引用点击全部无感）
+    var fvDefReveal = { path: null, line: 0 };
+    window.addEventListener('message', function (ev) {
+        var d = ev.data || {};
+        if (d.type !== '__wsDefJump' || !d.path) return;
+        fvDefReveal = { path: d.path, line: parseInt(d.line, 10) || 1 };
+        try { window.desktop.browserOpenFile({ username: IMSocket.getUsername(), path: d.path }); } catch (e) { /* 桥异常忽略 */ }
+    });
 
     // ===== 阶段九十三（全 DOM 化）：web 标签由主页面 <webview> 承载 =====
     // 真 Chromium 内核但属页面 DOM（与 file iframe 同层级）：工具提示/弹窗遮罩/分隔线等
@@ -9046,6 +9116,7 @@
         var parent = inputBar.parentNode;
         parent.insertBefore(panel, inputBar);
         parent.insertBefore(root, panel);
+        if (window._osbInit) window._osbInit(panel); // 限高 260px 清单镜像：挂自绘悬浮滑块（原生条全局禁用）
         agentDock = {
             root: root, taskTab: taskTab, chTab: chTab, text: text,
             metaTask: metaTask, metaChanges: metaChanges, metaChA: metaChA, metaChD: metaChD,
@@ -9830,6 +9901,8 @@
         block.appendChild(head);
         block.appendChild(argsEl);
         block.appendChild(outEl);
+        // 参数/结果详情限高 200px 可滚：原生 Fluent 条已在 CSS 禁用（thin 漏条修复），挂自绘悬浮滑块
+        if (window._osbInit) { window._osbInit(argsEl); window._osbInit(outEl); }
         block.setAttribute('data-tool', ev.tool || ''); // 阶段六十二：回填匹配键（标题已中文化，不再含原始工具名）
         if (ev.call_id) block.setAttribute('data-call-id', ev.call_id); // 阶段七十五：控制台输出/转后台按步骤精确归属
         // 阶段七十五：run_command 实时控制台 + 转后台按钮（Trae 同款——输出流式可见不再"盲等"，
@@ -9917,6 +9990,7 @@
         con.appendChild(pre);
         var outEl = block.querySelector('.agent-event-output');
         block.insertBefore(con, outEl); // 控制台位于参数详情与结果详情之间
+        if (window._osbInit) window._osbInit(pre); // 输出区限高流式滚动：挂自绘悬浮滑块（原生条已禁）
         var bgBtn = document.createElement('button');
         bgBtn.className = 'agent-tool-bgbtn hidden';
         bgBtn.type = 'button';

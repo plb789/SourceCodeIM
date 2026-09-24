@@ -20,6 +20,18 @@ const webCache = require('./web-cache.js');
 // 阶段一百五十五：远程协助被控端输入注入管理器（PowerShell SendInput 常驻工作进程）
 const remoteInput = require('./remote-input.js');
 
+// 阶段一百六十四：主进程全局异常兜底——未捕获异常/未处理 Promise 拒绝一律记日志，不弹模态框
+// （原实现：Electron 默认对 uncaughtException 弹 showErrorBox 模态对话框。实测 LSP 语言服务器
+// 子进程先死后对已关闭管道写入，异步 EPIPE error 事件无人监听顶穿主进程，反复弹框阻塞事件循环，
+// 造成浏览区 IPC 超时"编辑器加载失败"降级、悬停/补全/诊断等 LSP 功能集体失效。兜底后异常仅进
+// 日志可查，主进程不再被模态框卡死；管道级防护见 lsp-manager.js 流 error 监听）
+process.on('uncaughtException', function (err) {
+    console.error('[主进程] 未捕获异常:', (err && err.stack) || err);
+});
+process.on('unhandledRejection', function (reason) {
+    console.error('[主进程] 未处理 Promise 拒绝:', (reason && (reason.stack || reason.message)) || reason);
+});
+
 let mainWindow = null;
 // 阶段一百五十四：微信同款启动闪屏——主窗口 show:false 不再创建即显示（原实现：窗口创建即显示，
 // 页面加载完成前露出 backgroundColor 灰黑底，用户实测反馈"启动前显示灰黑色"）；先弹无边框 logo
@@ -1901,6 +1913,37 @@ ipcMain.handle('lsp:hover', function (event, req) {
     return browserManager.lspHover(req || {});
 });
 
+// ===== 阶段一百六十三：LSP 补全/跳转定义/文档同步/诊断查询（与 lsp:hover 同归口模式）=====
+ipcMain.handle('lsp:complete', function (event, req) {
+    return browserManager.lspComplete(req || {});
+});
+ipcMain.handle('lsp:definition', function (event, req) {
+    return browserManager.lspDefinition(req || {});
+});
+ipcMain.handle('lsp:touch', function (event, req) {
+    return browserManager.lspTouch(req || {});
+});
+ipcMain.handle('lsp:diagnostics-get', function (event, req) {
+    return browserManager.lspDiagnosticsGet(req || {});
+});
+
+// ===== 阶段一百六十四：格式化/快速修复/引用/重命名/文档符号（与 lsp:complete 同归口模式）=====
+ipcMain.handle('lsp:format', function (event, req) {
+    return browserManager.lspFormat(req || {});
+});
+ipcMain.handle('lsp:code-action', function (event, req) {
+    return browserManager.lspCodeAction(req || {});
+});
+ipcMain.handle('lsp:references', function (event, req) {
+    return browserManager.lspReferences(req || {});
+});
+ipcMain.handle('lsp:rename', function (event, req) {
+    return browserManager.lspRename(req || {});
+});
+ipcMain.handle('lsp:document-symbol', function (event, req) {
+    return browserManager.lspDocumentSymbol(req || {});
+});
+
 // ===== 阶段一百五十九：浏览区断点调试 IPC 归口（file-viewer 页 ⇄ debug-manager DAP 客户端） =====
 // 目标文件只认 {tab_id + relPath}：tab 信息由 browserManager.findFileTabInfo 归口，
 // 绝对路径经 pathGuard（agentExecutor.safePath）解析，渲染层全程不持有绝对路径
@@ -2689,9 +2732,11 @@ app.whenReady().then(async function () {
     // 阶段九十二：文件查看标签依赖注入——路径校验复用 agentExecutor.safePath（防循环依赖改注入），
     // viewer 页地址随服务端 web 目录同源分发（SERVER_URL + file-viewer.html）
     browserManager.setPathGuard(agentExecutor.safePath);
+    // 阶段一百六十五：LSP 跳转定义/查找引用 rel 口径归一依赖（用户工作区根，嵌套项目 LSP 根≠工作区根）
+    browserManager.setWsRootFn(agentExecutor.userRoot);
     // 阶段一百零九：viewer 页加版本参数防 iframe HTTP 缓存命中旧版（页面逻辑更新后改此版本号即可）
     // 阶段一百二十二：viewer 地址恢复服务端 http（同 origin 下 chat.js 相对路径 iframe 自动命中 http 拦截）
-    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=143'); // v=143：AI 改码即时更新+跳转改动行+闪烁高亮（TRAE CN 同款），与 chat.js iframe src 同步防缓存
+    browserManager.setViewerUrl(SERVER_URL + 'file-viewer.html?v=153'); // v=153：修复调试面板多层 pane 叠加（hidden 被内联 flex 压过），与 chat.js iframe src 同步防缓存
     // 阶段九十七：任务备份查询/保留/撤销注入（browser-manager 不可反向 require agent-executor，防循环依赖）
     browserManager.setTaskBackupApi({
         get: agentExecutor.getTaskBackup,
@@ -2703,6 +2748,13 @@ app.whenReady().then(async function () {
     agentExecutor.setFileChangedCb(function (full, info) {
         try { browserManager.refreshFileTabByPath(full, info); } catch (e) { /* 刷新异常不影响工具执行 */ }
     });
+    // 阶段一百六十三：LSP 诊断推送归口（publishDiagnostics → 已打开标签 → 渲染层 Monaco 波浪线）
+    try {
+        const lspManager = require('./lsp-manager.js');
+        lspManager.setNotifyFn(function (n) {
+            try { browserManager.lspDiagNotify(n); } catch (e) { /* 转发异常静默 */ }
+        });
+    } catch (e) { /* lsp-manager 加载异常不影响主流程 */ }
 
     // 阶段一百五十九：断点调试管理器注入（路径校验复用 safePath；PATH 环境复用 buildAgentEnv——
     // uv/python/工具链解析与 Agent 命令同口径；事件经 webContents.send 推渲染层转发 viewer iframe）

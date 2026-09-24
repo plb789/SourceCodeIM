@@ -513,6 +513,40 @@ contextBridge.exposeInMainWorld('desktop', {
     browserRefreshFileTabs: function () {
         return ipcRenderer.invoke('browser:refresh-file-tabs');
     },
+    // ===== 阶段一百六十三：LSP 补全/跳转定义/文档同步/诊断（与 lspHover 同窄桥口径）=====
+    lspComplete: function (req) {
+        return ipcRenderer.invoke('lsp:complete', req || {});
+    },
+    lspDefinition: function (req) {
+        return ipcRenderer.invoke('lsp:definition', req || {});
+    },
+    lspTouch: function (tabId, text) {
+        return ipcRenderer.invoke('lsp:touch', { tab_id: String(tabId || ''), text: String(text || '') });
+    },
+    lspDiagnostics: function (tabId) {
+        return ipcRenderer.invoke('lsp:diagnostics-get', { tab_id: String(tabId || '') });
+    },
+    // ===== 阶段一百六十四：格式化/快速修复/引用/重命名/文档符号（与 lspComplete 同窄桥口径）=====
+    lspFormat: function (req) {
+        return ipcRenderer.invoke('lsp:format', req || {});
+    },
+    lspCodeAction: function (req) {
+        return ipcRenderer.invoke('lsp:code-action', req || {});
+    },
+    lspReferences: function (req) {
+        return ipcRenderer.invoke('lsp:references', req || {});
+    },
+    lspRename: function (req) {
+        return ipcRenderer.invoke('lsp:rename', req || {});
+    },
+    lspDocumentSymbol: function (req) {
+        return ipcRenderer.invoke('lsp:document-symbol', req || {});
+    },
+    onLspDiagnostics: function (callback) {
+        ipcRenderer.on('lsp:diagnostics', function (event, data) {
+            callback(data);
+        });
+    },
     // 订阅 file 标签 payload 推送（主进程 → 渲染层：{tab_id, payload}，iframe 分发）
     onFileLoad: function (callback) {
         ipcRenderer.on('browser:file-load', function (event, data) {

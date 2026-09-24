@@ -96,6 +96,33 @@ Debug Adapter: debugpy(Python) / @vscode/js-debug-debugadapter(Node) / cdt-gdb-a
 - 控制台 REPL 输入求值不在阶段D 计划内，未实现（当前为输出型：stdout/stderr/调试事件透传）
 - 打包回归：main.js.enc / web-snapshot.enc 重出，bin\im-client.exe 刷新
 
+## 阶段一百六十三实施记录：LSP 补全/诊断/跳转定义（2026-09-23 完成，TRAE CN 同款）
+
+**架构分层**（复用悬停桥链路）：file-viewer（iframe 无 preload）→ `__imViewerHost`（chat.js）→ `window.desktop`（preload.js）→ IPC → main.js → browser-manager 按 tab 归口 → lsp-manager 子进程（gopls/clangd/pyright，stdio JSON-RPC）。独立查看窗口（viewer-preload）未加新桥，LSP 功能静默回落（克制）。
+
+**lsp-manager.js（主进程）**：
+- `prepare(req, timeoutMs, noDeadlineWait)` 通用管线：探测→实例→等就绪→syncDoc→ctx；hover/completion/definition 共用。**deadline 计入 waitReady 等待**（实测踩坑：冷启动等就绪 6.7s 不受 800ms 预算约束，前端弹陈旧补全）；requestLsp 过期预检不发废请求
+- `touchDoc` 用 `prepare(req, 30000, true)`——等就绪不受请求预算约束（冷启动期 didOpen 仍发出，诊断推送异步到达）；编辑防抖 1200ms 由前端触发
+- `completion`：归一 {items:[{label,kind(LSP 1-25 原值),detail,insertText,sortText,documentation}]}，上限 300；`definition`：归一 [{path,rel,line,column}]（1 基），上限 20；`normDiags`：LSP 零基→1 基、severity 1-4 保留
+- 诊断 push 模式：publishDiagnostics → `inst.diags` 缓存 + `diagNotifyFn` → browser-manager `lspDiagNotify` 按 tab.filePath 归一匹配（分隔符/大小写不敏感）→ `lsp:diagnostics` → chat.js 按 tab_id 路由 viewer iframe `__wsLspDiags`
+- **uriKey 归一（实测踩坑）**：`pathToFileURL('e:/x')` 保持小写盘符，gopls 回显统一大写 `E:`——docs/diags/getDiagnostics 缓存 key 不归一则推送写入与查询错位（推送回调正常触发但 getDiagnostics 返回 null）
+- **rel 跨盘归空（实测踩坑）**：Windows `path.relative('e:\x','c:\y')` 返回绝对路径——GOROOT 定义跳转 rel 不以 `..` 开头漏过滤；归一条件加 `path.isAbsolute(rel)`
+- 前端 provider 加 `fvLspRace` 竞速（completion 800ms / definition 1200ms）双保险：主进程预算含冷启动等就绪期，超时立即回落 Monaco 内置词补全
+
+**file-viewer.html（v=144）**：
+- registerCompletionProvider（go/c/cpp/python，triggerCharacters `['.',':','"','/','@','<']`）；LSP CompletionItemKind 1-25 与 Monaco 数值同源直传，无需映射表；snippet 文本（`$1/${1:..}`）标 InsertAsSnippet
+- registerDefinitionProvider：取首个命中 → postMessage `__wsDefJump {path: rel, line}` → 宿主接管（同文件 `__fvReveal` 跳转+闪烁；跨文件 `browserOpenFile` 打开新标签走 reveal_line 注入链路）；前端防御 rel 空/`..`/盘符绝对路径
+- `__wsLspDiags`：setModelMarkers（severity 1→Error/2→Warning/3→Info/4→Hint，MarkerSeverity 8/4/2/1），行列越界夹取，全量替换含清空
+- onDidChangeModelContent 挂 1200ms 防抖 lspTouch；`__wsFileLoad` 尾部（Monaco 就绪 + file 标签）拉 `lspDiagnosticsGet` 恢复 markers（fvLoadSeq 过期防护）
+
+**chat.js（v=3.89）/ main.js / preload.js**：__imViewerHost 四成员（lspComplete/lspDefinition/lspTouch/lspDiagnosticsGet）、onLspDiagnostics 转发、__wsDefJump 监听 + fvDefReveal 挂起注入（fileLoad 时配 payload.path 注入 reveal_line）；main.js 4 个 IPC handler + setNotifyFn 注入 + v=144
+
+**模块级冒烟（真实 gopls v0.23.0，%TEMP% 免写盘 didOpen）ALL_OK 六项**：
+- completion(math.) → Round kind=3 "func(x float64) float64" 含完整文档；工作区跳转 rel=server/redpacket.go L508；GOROOT（C:\GO\src\math\floor.go L83）跨盘 rel 置空；坏内容（虚拟 didChange 不写盘）`undefined: __undefinedSym999` sev=1 缓存命中；恢复后 Error 清零（hint 级风格提示 25 条属 gopls 正常输出）；hover 回归 209 字符
+- **测试方法论踩坑**：Grep 行号（权威）与 Read offset 显示行号差 1，行号错位导致请求打在注释行——gopls 对注释位置返回作用域补全 8 项是正确行为，勿误判为缺陷；定位手段=脚本内 findIndex 动态定位
+- 探测结果：gopls 可用（GOPATH 补探命中）；clangd/pyright 本机未装，C/C++/Python 静默回落（设计：LSP 是增强，静态表/内置补全是底线）
+- 启动冒烟：客户端 5 进程 307MB 存活正常；产物：全部 .enc 12:23:53 + exe 12:24 + 快照含 fvRegisterLspProviders/__wsDefJump/v=144/v=3.89
+
 **用户实测反馈修复：断点红圈点击失效（2026-09-23，v=141）**：
 - 症状：浏览区 Monaco 编辑态点击行号左侧 glyph margin 无反应，断点红圈无法添加
 - **根因（iframe 探针实测）**：Monaco 0.52 AMD 版运行时**未导出 `monaco.MouseTargetType` 枚举**（探针输出 `MouseTargetType=MISSING`）——断点点击处理器 `e.target.type !== monaco.MouseTargetType.GUTTER_GLYPH_MARGIN` 对 undefined 取属性抛 TypeError，被处理器自身 try-catch **静默吞掉**，点击永远无效。同模式引用还有 AI 变更浮层的 gutter 判定（三枚举），一并失效
@@ -113,3 +140,56 @@ Debug Adapter: debugpy(Python) / @vscode/js-debug-debugadapter(Node) / cdt-gdb-a
 - CDP 探针全过：悬停显空心(n=1)/断点行不叠加(n=0)/移开消失(n=0)/点击加圈(n=3)/再点移除(n=2)；另发现 glyph 装饰 DOM 创建为异步渲染，断言等待需 ≥800ms（500ms 会偶发少计）
 - 探针固化 `C:\Users\AW\.cache\dbg_test\iframe_fv_probe\`（main.js 为 CDP 驱动版；host.html 提供 payload 注入与 __q 断言入口）
 **v=143 撤回（2026-09-23）**：行号区右侧细边线（TRAE CN 分隔线）实装后由用户手动撤回——决定不加此线，版本号已同步回 v=142 并重打包。悬停空心红点（v=142）保留。
+
+**用户实测反馈修复：打开工作区文件内容区纯黑空白（2026-09-23，v=144 修复）**：
+- 症状：LSP 上线后浏览区点击工作区文件——标签/面包屑/文件头按钮正常，**内容区纯黑**：无 .monaco-editor DOM、无"编辑器加载中…"、无静态预览
+- **根因（Electron 探针决定性复现，console 直接报出）**：`Uncaught TypeError: monaco.languages.registerCompletionProvider is not a function`（file-viewer.html:1557）——**Monaco 正确 API 名为 `registerCompletionItemProvider`**（0.52 editor.main.js 实测存在前者缺失后者），provider 注册 IIFE 在 monacoBoot 内抛异常中断 → `monaco.editor.create` 永不执行 → monacoBox 空 div 黑屏；且 monacoBoot 开头已 `clearTimeout(monacoFailTimer)` 清掉 15 秒看门狗 → 无静态预览兜底 → 永久黑屏
+- 排查弯路（记教训）：browser_use 报告 `globalDefine has already been declared` + "editor.main.js 两次请求（首次 CDN）"——实测均为其代理环境干扰（globalDefine 真身是 editor.main.js 内嵌 loader 的 const，本页单次执行不冲突；全项目 Grep 零 CDN），**结论须交叉验证**；HTML 结构/script 配对/git diff 均完好排除
+- 探针方法论：BrowserWindow 直接 loadURL(file-viewer.html) + 注入 `window.imviewer = new Proxy({}, {get:()=>()=>{}})` 桩（viewerBridge 优先检测它）→ 注入 __wsFileLoad 真实 payload → 自动进编辑态触发 ensureMonaco → 12 秒后断言 `.monaco-editor` DOM + 收集 console-message 全量。webRequest 过滤可同时验证 Monaco 资源网络面
+- **修复**：API 名改正 + LSP 注册 IIFE 整体 try/catch 兜底（`console.error('LSP provider 注册失败（不影响编辑器本体）')`）——provider 属增强功能，注册异常绝不能中断 monacoBoot（与 cssMode/tsMode defaults 的 try/catch 风格一致）
+- 验证：探针复跑 monacoDOM=true、monacoBoxChildren=2、go.js/workerMain/codicon 全链加载、console 零报错；Grep 确认全文 5 处 register* API 名均正确（Hover×3/CompletionItem/Definition）
+- **无需重打包**：file-viewer.html 走服务端实时 serve（web_dir 留空向上找源目录，`Cache-Control: no-cache` 协商缓存 + Last-Modified 已更新），用户重开文件标签即生效；版本号保持 v=144
+
+**LSP 三件套真实客户端实测（2026-09-23，computer_use 子代理两轮 + 主进程日志）**：
+- 测试环境：`E:\SourceCode2026\cheshi\lspdemo\`（自包含 Go 模块：go.mod + main.go 调 util.Add/math.Round/fmt.Println + util/util.go）；gopls v0.23.0（GOPATH `C:\Users\AW\go\bin`，PATH 补探命中）
+- **实测结论：三件套全过**——黑屏修复后编辑器正常渲染；补全（fmt. → Println 弹出带签名）；诊断（undefinedSym999 → 红波浪线 → 撤销后消失）；跳转定义（F12 → 新标签 util.go 定位 func Add 行）；切标签诊断恢复正常
+- **lsp-manager 六处修复生效确认**：首轮实测前重打包（uriKey/deadline/touchDoc 等修复仅在源文件冒烟过，未进 13:02 客户端进程）
+- **首轮三项"失败"均为测试伪影（主进程 dbgLog 日志实锤）**：
+  1. F12 首次报 "No definition found" = 子代理 Ctrl+F 定位失效，光标落在 `fmt.Println` 行（L13 C16）——gopls 对字面量返回 null 是正确行为；位置对时（L11 C17）definition 立即命中 util.go L4
+  2. 补全"未弹出" = 子代理合成输入方式未触发 Monaco suggest（第二轮日志 [bm-lspComplete] 到达主进程证明链路通；首轮 UI 实测已 PASS）
+  3. import "lspdemo/util" 红线 = 编辑会话中的快照期诊断截图——第二轮全程实测 didOpen 后 77ms 推 count=0，此后一直零诊断无红线；独立探针（复刻 initialize/didOpen/definition 全链）亦零诊断 + definition 命中
+- **排查方法沉淀**：主进程 dbgLog 三段式（IPC 归口 browser-manager 入口 / lsp-manager prepare / publishDiagnostics 推送）+ 独立 node 探针复刻链路对照，一次定位"功能正常 vs 测试伪影"；子代理 UI 自动化结论必须与主进程日志交叉验证（输入方式、截图时机都会产生伪影）
+- 测试文件 `lspdemo\` 保留在工作区供后续回归；临时探针 `gopls-probe.js` 与调试日志已清理；日志代码三处移除后重打包干净版
+
+## 阶段一百六十四实施记录：TRAE CN 编辑体验补齐——条件/日志断点 + Watch/REPL + LSP 增强（2026-09-23 完成）
+
+**背景**：对照 TRAE CN 浏览区/代码编辑器功能面盘点缺口，用户确认"第一+第二梯队"10 项全做。零基↔1 基行列转换、WorkspaceEdit 两形态兼容、禁系统弹窗（自绘浮层）、服务端/主进程数据归口四大原则贯穿。
+
+**梯队一（编辑体验）**：
+- **格式化 Shift+Alt+F**：`registerDocumentFormattingEditProvider`（go/c/cpp/python）→ lsp-manager `textDocument/formatting`（prepare 3000ms，options tabSize:4/insertSpaces:true）→ normTextEdit 归一 1 基；前端映射 Monaco TextEdit 数组，走内置 `editor.action.formatDocument`（diff 预览确认交互复用官方）；JS/TS 用 TS 服务内置 format
+- **粘性滚动 stickyScroll**：`editor.create` options 加 `stickyScroll:{enabled:true, maxEditorLineCount:3}`（滚动时作用域头钉顶）
+- **右侧滚动条错误色标**：overview ruler——阶段一百六十三诊断上线后 Monaco 默认 overviewRuler 已随 markers 自动标红（setModelMarkers 隐含落 ruler decoration），无需额外代码（实测确认）
+- **快速修复 Ctrl+.**：`registerCodeActionProvider` + 内置 `editor.action.quickFix` 灯泡交互；diagnostics 从 context.markers 取（Monaco MarkerSeverity 8/4/2/1 → LSP 1/2/3/4 映射 SEV2LSP），1 基传主进程由 lsp-manager 回转零基；`only:['quickfix']`，只取携带 edit.changes 的项（command 型需 executeCommand 二次往返，丢弃），上限 20；**主进程 codeAction 补 uri→path/rel 归一**（与 rename 同构），前端按 rel 过滤只应用当前文件修复（standalone 无多文档实例，跨文件修复本版丢弃）
+- **查找引用 Shift+F12**：LSP 语言（go/c/cpp/python）走 `textDocument/references`（includeDeclaration:true，上限 50）→ **自绘快速浮层列表**（standalone peek 跨文件 uri 无内容不可靠的既定决策）；非 LSP 语言回落内置 `editor.action.goToReferences`（TS 服务自带）；浮层点击 → `__wsDefJump` 宿主链路（同文件 reveal+闪烁/跨文件新标签）
+
+**梯队二（导航+调试）**：
+- **Peek 定义 Alt+F12**：LSP 语言拉 `lspDefinition`（复用跳转定义请求）→ 单一可靠定义直接跳（工作区外 rel 空/`..`/盘符绝对路径过滤同 definition provider 规则）→ 多命中浮层列表挑选；JS/TS 回落内置 `editor.action.peekDefinition`
+- **重命名 F2**：`registerRenameProvider` → `textDocument/rename`（newName ≤200 校验；changes/documentChanges 两形态兼容，pyright 用后者）→ 本文件 edits 交给内置 rename 输入框（Monaco 自绘 widget，非系统弹窗）；跨文件计数 setStatus 提示（"重命名涉及另外 N 个文件"）；JS/TS 用 TS 服务内置重命名
+- **文件内符号 Ctrl+Shift+O**：`registerDocumentSymbolProvider`（DocumentSymbol 树递归展平 children 前缀 A.B + SymbolInformation location 两形态兼容，depth<5 上限 300）→ 内置 `editor.action.quickOutline` 浮层；LSP 未命中/超时/无桥回落 `fvScanSymbols` 静态扫描（JS/TS 同源）
+- **条件/日志断点（Shift+点击 + 双击断点列表行编辑）**：
+  - 交互：Shift+点击 glyph 槽 → 自绘输入条（select 类型 + input + 确定/取消，编辑器行右侧定位）；行上无断点先创建（语义由确定时落定）；表达式留空还原普通断点；dbgRenderBpsPane 徽标 [条件]/[日志] + 双击编辑；dbgClosePanel 时收起输入条
+  - 形态：普通=红圆、条件=红圆+白环（fv-bp-dot-cond）、日志点=红菱形 rotate 45deg（fv-bp-log）；glyphMarginHoverMessage tooltip 显表达式
+  - 数据双轨兼容：前端 `dbg.bps`（number[]，全链路兼容）+ `dbg.bpMeta`（行号→{condition,logMessage}）分离；下发 `dbgPushBps` 组对象数组 [{line,condition?,logMessage?}]，verified 行号回推后清孤儿元数据；主进程 debug-manager 断点持久化改存对象数组（normBpLines 归一、500 字符截断、旧 number[] 兼容读取），DAP setBreakpoints 三路透传（未调试只持久化/Node condition 透传 logMessage 丢弃/**V8 Inspector 不支持 logMessage**（js-debug 上层实现）故前端对 .js 隐藏日志点选项/DAP condition+logMessage 全透传）；start 应答/breakpointsFor/state 均补 bps 对象数组 + breakpoints number[] 兼容双输出
+  - `dbgMetaSync(list)` 统一恢复入口：对象数组→双轨（dbgStart/dbgOnPayload 的 debugBreakpointsGet/debugState 三处接入，r.bps 优先 r.lines 兜底）
+- **Watch 监视 + REPL 调试控制台**：
+  - 调试面板新增"监视"页签：dbg.watch 字符串数组（≤20），`dbgRenderWatch` 复用 dbgVarNode（evaluate context:'watch'，variablesReference 懒加载子树）；dbgPauseRefresh 尾部 dbgRefreshWatches；空态提示"下方输入后回车添加"
+  - REPL：控制台 pane 底部 `> 输入行`（#fv-dbg-repl），回车 → evaluate context:'repl'（暂停时带 frameId 可访问局部变量）→ 输出回显控制台；主进程 evaluate 补 context 透传
+  - 事件绑定：bpEditor Enter/Escape/确定/取消 + 类型切换换 placeholder、watchInput 回车、replInput 回车、监视页签切入时渲染
+
+**桥链路（第五、六批 IPC）**：lsp-manager 新增 formatting/codeAction/references/rename/documentSymbol 五请求（module.exports 同步）→ browser-manager 五个归口函数（findFileTab(payload) → lspManager.xxx({filePath, text, ...})，与 lspComplete 同模式）→ main.js 5 个 ipcMain.handle（lsp:format/code-action/references/rename/document-symbol）→ preload.js 五成员 → chat.js __imViewerHost 五成员 → file-viewer providers/commands。evaluate context 透传（debug-manager 请求体直传）
+
+**版本与构建**：file-viewer.html v=144 → v=145（chat.js iframe src 与 pc/main.js setViewerUrl 两处同步）；index.html chat.js?v=3.89 → 3.90；obfuscate.js 36 文件 658ms 通过 → electron-builder --dir 重打包 → bin\im-client.exe 15:23 部署 → 启动冒烟 5 进程存活正常
+
+**实测验证与已知边界**：
+- 六文件 node --check / esbuild transform / 内嵌 JS new Function 三重语法校验全过
+- 已知边界（诚实标注）：①跨文件重命名/快速修复仅提示不自动应用（standalone 单文档实例，多文件编辑需逐文件重做）②Node 调试日志点不受支持（V8 Inspector 能力边界，UI 已隐藏选项）③clangd/pyright 未安装环境引用/Peek/格式化静默回落（静态扫描/内置服务兜底，LSP 是增强不是底线）
