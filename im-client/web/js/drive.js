@@ -45,20 +45,24 @@
     var batchCopyBtn = document.getElementById('drive-batch-copy');
     var batchDelBtn = document.getElementById('drive-batch-delete');
     var batchCancelBtn = document.getElementById('drive-batch-cancel');
-    // 回收站（二期：工具栏入口 + 回收站操作条 + 时间列表头）
-    var trashBtn = document.getElementById('drive-trash-btn');
+    // 右键菜单（复用全站 .friend-menu 样式；打开时搬移 body 级防祖先 overflow 裁剪）
+    var ctxMenu = document.getElementById('drive-menu');
+    var ctxTarget = null; // 右键目标条目（null=空白处，粘贴目标=当前目录）
+    var clip = null;      // 剪贴板 {mode:'copy'|'move', ids:[]}（右键复制/移动归口；移动粘贴后清空，复制粘贴后保留可多次粘贴）
+    // 回收站（二期：回收站操作条 + 时间列表头；v2.21 入口上移左侧列表，工具栏按钮移除）
     var trashBar = document.getElementById('drive-trash-bar');
     var trashCountEl = document.getElementById('drive-trash-count');
     var trashClearBtn = document.getElementById('drive-trash-clear');
     var colTimeEl = document.getElementById('drive-col-time');
     var mainChatEl = document.querySelector('.main-chat');
-    // 左侧网盘面板（我的文件入口 + 容量概览）
+    // 左侧网盘面板（我的文件/分享管理/回收站 三入口 + 容量概览；v2.21 分享管理/回收站入口上移至此）
     var driveEntry = document.getElementById('drive-entry-root');
+    var shareEntry = document.getElementById('drive-entry-share');
+    var trashEntry = document.getElementById('drive-entry-trash');
     var usageEl = document.getElementById('drive-usage');
     var usageFill = document.getElementById('drive-usage-fill');
     var usageText = document.getElementById('drive-usage-text');
-    // 分享模块（二期：分享弹窗/分享管理/分享详情 三自绘弹层）
-    var dsManageBtn = document.getElementById('drive-share-manage-btn');
+    // 分享模块（二期：分享弹窗/分享详情 弹层；v2.21 分享管理弹窗 dsm 移除，改 shareMode 页面内显示）
     var dsMask = document.getElementById('ds-mask');
     var dsFileIcon = document.getElementById('ds-file-icon');
     var dsFileName = document.getElementById('ds-file-name');
@@ -79,9 +83,10 @@
     var dsLinkCode = document.getElementById('ds-link-code');
     var dsCodeRow = document.getElementById('ds-code-row');
     var dsCopyBtn = document.getElementById('ds-copy-btn');
-    var dsmMask = document.getElementById('dsm-mask');
-    var dsmList = document.getElementById('dsm-list');
-    var dsmEmpty = document.getElementById('dsm-empty');
+    // v2.21 分享管理页面（shareMode）：操作条 refs（列表复用主列表区 listEl）
+    var shareBar = document.getElementById('drive-share-bar');
+    var shareCountEl = document.getElementById('drive-share-count');
+    var shareBackBtn = document.getElementById('drive-share-back');
     var dsdMask = document.getElementById('dsd-mask');
     var dsdTitle = document.getElementById('dsd-title');
     var dsdIcon = document.getElementById('dsd-icon');
@@ -108,6 +113,7 @@
     var selMode = false;     // 多选模式（批量下载/删除；进入目录/搜索/关闭页面退出）
     var selSet = {};         // 已选 id 集合（id→true）
     var trashMode = false;   // 回收站模式（列表显示回收站项；恢复/彻底删除/清空；互斥多选/搜索）
+    var shareMode = false;   // v2.21 分享管理模式（右侧页面内显示我发出的分享；互斥回收站/多选/搜索）
 
     function u() { return (window.IMSocket && IMSocket.getUsername()) || ''; }
     // i18n 归口（key=中文原文渐进式迁移）：T=动态文案带参翻译，TR=服务端下发文本全等反查（未命中原样返回）
@@ -385,7 +391,7 @@
     }
     // doSearch 全盘搜索（seq 序号守卫：仅采纳最新请求结果，防乱序覆盖）
     function doSearch(kw) {
-        if (trashMode) return; // 回收站态禁用搜索（搜索框已隐藏，函数口双保险）
+        if (trashMode || shareMode) return; // 回收站/分享页态禁用搜索（搜索框已隐藏，函数口双保险）
         var seq = ++searchSeq;
         apiJSON('/api/drive/search?username=' + encodeURIComponent(u()) + '&keyword=' + encodeURIComponent(kw), null, function (err, data) {
             if (seq !== searchSeq) return;
@@ -473,7 +479,7 @@
             });
     }
     function mkdir() {
-        if (trashMode) return; // 回收站态禁用（按钮已隐藏，函数口双保险）
+        if (trashMode || shareMode) return; // 回收站/分享页态禁用（按钮已隐藏，函数口双保险）
         drivePrompt(T('新建文件夹'), T('输入文件夹名称'), '', function (val) {
             apiPost('mkdir', { username: u(), parent_id: curParent, name: val }, function (err) {
                 if (err) { toast(TR(err.message)); return; }
@@ -625,7 +631,7 @@
     }
     // 打开目录选择弹窗（mode='move'|'copy'；选中集合快照进弹窗，操作期间列表变化不受影响）
     function openPickModal(mode) {
-        if (!selMode || trashMode) return; // 函数口双保险（回收站态批量条已隐藏）
+        if (!selMode || trashMode || shareMode) return; // 函数口双保险（回收站/分享页态批量条已隐藏）
         var ids = [];
         for (var k in selSet) ids.push(parseInt(k, 10));
         if (!ids.length) { toast(T('请先选择文件')); return; }
@@ -697,9 +703,10 @@
     // 行为只保留恢复/彻底删除，行不可进入/预览（对象仍存活，但归口回收站管理语义）
     function enterTrash() {
         clearSearchUI(); // 回收站态连带退出搜索/多选（多选不跨视图保留）
+        if (shareMode) resetShareUI(); // v2.21 模式互斥：分享页 → 回收站
         trashMode = true;
         view.classList.add('trash-mode');
-        trashBtn.classList.add('active');
+        trashEntry.classList.add('active');
         trashBar.classList.remove('hidden');
         // 面包屑切"回收站"当前位置（crumbs 保留原路径，退出回收站经 loadList 原位重建）
         breadcrumbEl.innerHTML = '<span class="drive-crumb-cur">' + T('回收站') + '</span>';
@@ -709,7 +716,7 @@
     function resetTrashUI() {
         trashMode = false;
         view.classList.remove('trash-mode');
-        trashBtn.classList.remove('active');
+        trashEntry.classList.remove('active');
         trashBar.classList.add('hidden');
         colTimeEl.textContent = T('修改时间');
     }
@@ -1300,15 +1307,13 @@
         function p(n) { return n < 10 ? '0' + n : '' + n; }
         return T('有效期至 {d}', { d: d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) });
     }
-    // 网盘弹层互斥显隐归口（分享弹窗/分享管理/分享详情；mask 点击与 Esc 统一走此收口）
+    // 网盘弹层互斥显隐归口（分享弹窗/分享详情；mask 点击与 Esc 统一走此收口）
     function closeDsMasks() {
         if (dsMask) dsMask.classList.add('hidden');
-        if (dsmMask) dsmMask.classList.add('hidden');
         if (dsdMask) dsdMask.classList.add('hidden');
     }
     function anyDsMaskOpen() {
         return (dsMask && !dsMask.classList.contains('hidden')) ||
-            (dsmMask && !dsmMask.classList.contains('hidden')) ||
             (dsdMask && !dsdMask.classList.contains('hidden'));
     }
     // 复制归口（clipboard API 失败回退 execCommand，Electron/HTTP 环境均可用）
@@ -1488,66 +1493,96 @@
     }
 
     // ---- 分享管理（我发出的） ----
-    function openShareManage() {
-        closeDsMasks();
-        if (!dsmMask) return;
-        dsmList.innerHTML = '<div class="dsm-empty">' + T('加载中…') + '</div>';
-        dsmEmpty.classList.add('hidden');
-        dsmMask.classList.remove('hidden');
+    // ---- 分享管理（v2.21 页面化：入口上移左侧列表，列表在网盘页面内显示，不再弹窗） ----
+    // 模式互斥同回收站：shareMode 下多选/搜索/新建/上传禁用（UI 隐藏 + 函数口双保险）；
+    // 行为仅取消分享（取消后链接与卡片立即失效，服务端归口）
+    function enterShare() {
+        clearSearchUI(); // 分享页态连带退出搜索/多选
+        if (trashMode) resetTrashUI(); // 模式互斥：回收站 → 分享页
+        shareMode = true;
+        view.classList.add('share-mode');
+        shareEntry.classList.add('active');
+        shareBar.classList.remove('hidden');
+        breadcrumbEl.innerHTML = '<span class="drive-crumb-cur">' + T('分享管理') + '</span>';
+        loadShareList();
+    }
+    // 纯 UI 复位（不刷新列表，刷新归口由调用方决定）
+    function resetShareUI() {
+        shareMode = false;
+        view.classList.remove('share-mode');
+        shareEntry.classList.remove('active');
+        shareBar.classList.add('hidden');
+        colTimeEl.textContent = T('修改时间');
+    }
+    function exitShare() {
+        if (!shareMode) return;
+        resetShareUI();
+        loadList(); // 回当前目录
+    }
+    function loadShareList() {
         apiJSON('/api/drive/share/list?username=' + encodeURIComponent(u()), null, function (err, data) {
-            if (err) { toast(TR(err.message)); dsmList.innerHTML = ''; dsmEmpty.textContent = TR(err.message); dsmEmpty.classList.remove('hidden'); return; }
-            renderShareManage((data && data.items) || []);
+            if (err) { toast(TR(err.message)); return; }
+            renderSharePage((data && data.items) || []);
         });
     }
-    function renderShareManage(items) {
-        dsmList.innerHTML = '';
-        dsmEmpty.classList.toggle('hidden', items.length > 0);
-        if (!items.length) { dsmEmpty.textContent = T('暂无分享记录'); return; }
-        items.forEach(function (sh) {
-            var row = document.createElement('div');
-            row.className = 'dsm-row';
-            var icon = document.createElement('span');
-            icon.className = dsIconCls(sh);
-            icon.innerHTML = ICONS[kindOf(sh)] || ICONS.file;
-            var info = document.createElement('div');
-            info.className = 'dsm-info';
-            var nm = document.createElement('div');
-            nm.className = 'dsm-name';
-            nm.textContent = sh.file_name;
-            nm.title = nm.textContent;
-            var meta = document.createElement('div');
-            meta.className = 'dsm-meta';
-            var metaBits = [(sh.is_dir ? T('文件夹') : fmtSize(sh.size)), dsExpireText(sh.expire_at)];
-            if (sh.has_extract) metaBits.push(T('提取码'));
-            // 分享统计（服务端归口计数：浏览/下载/保存，词条与分享页共用）
-            metaBits.push(T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' + T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 }));
-            meta.textContent = metaBits.join(' · ');
-            info.appendChild(nm);
-            info.appendChild(meta);
-            var status = document.createElement('span');
-            var ok = sh.status === 'valid';
-            status.className = 'dsm-status ' + (ok ? 'ok' : 'bad');
-            status.textContent = ok ? T('分享中') : (TR(sh.valid_msg) || T('已失效'));
-            var cancelBtn = document.createElement('button');
-            cancelBtn.className = 'dsm-cancel';
-            cancelBtn.textContent = T('取消分享');
-            cancelBtn.addEventListener('click', function () {
-                driveConfirm(T('取消分享'),
-                    T('取消后链接与已发送的分享卡片将立即失效，确定取消分享“{v}”吗？', { v: sh.file_name }),
-                    function () {
-                        apiPost('share/cancel', { username: u(), id: sh.id }, function (err2) {
-                            if (err2) { toast(TR(err2.message)); return; }
-                            toast(T('分享已取消'));
-                            openShareManage(); // 原位刷新状态
-                        });
-                    });
+    // 分享行模板（复用 .drive-row 四列结构对齐回收站行：名称+统计小字 / 大小 / 到期时间 / 取消分享）
+    function shareRowHtml(sh) {
+        var kind = kindOf(sh);
+        var ok = sh.status === 'valid';
+        var metaBits = [(sh.is_dir ? T('文件夹') : fmtSize(sh.size)), dsExpireText(sh.expire_at)];
+        if (sh.has_extract) metaBits.push(T('提取码'));
+        // 分享统计（服务端归口计数：浏览/下载/保存，词条与弹窗版共用）
+        metaBits.push(T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' + T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 }));
+        var status = ok ? T('分享中') : (TR(sh.valid_msg) || T('已失效'));
+        return '<div class="drive-row drive-share-row' + (sh.is_dir ? ' is-dir' : '') + '" data-id="' + sh.id + '">' +
+            '  <div class="drive-cell-name">' +
+            '    <span class="drive-icon k-' + kind + '">' + ICONS[kind] + '</span>' +
+            '    <div class="drive-name-wrap">' +
+            '      <span class="drive-name" title="' + esc(sh.file_name) + '">' + esc(sh.file_name) + '</span>' +
+            '      <span class="drive-row-path" title="' + esc(metaBits.join(' · ')) + '">' + esc(metaBits.join(' · ')) + '</span>' +
+            '    </div>' +
+            '  </div>' +
+            '  <div class="drive-cell-size">' + (sh.is_dir ? '-' : fmtSize(sh.size)) + '</div>' +
+            '  <div class="drive-cell-time">' + fmtTime(sh.expire_at) + '</div>' +
+            '  <div class="drive-cell-actions">' +
+            '    <span class="dsm-status ' + (ok ? 'ok' : 'bad') + '">' + esc(status) + '</span>' +
+            (ok ? '    <button class="drive-act drive-act-danger" data-act="unshare" title="' + T('取消分享') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' : '') +
+            '  </div>' +
+            '</div>';
+    }
+    function renderSharePage(items) {
+        itemsCache = items;
+        var rowsHtml = '';
+        for (var i = 0; i < itemsCache.length; i++) rowsHtml += shareRowHtml(itemsCache[i]);
+        rebuildRows(rowsHtml, T('暂无分享记录'));
+        bindShareRowEvents();
+        colTimeEl.textContent = T('到期时间');
+        shareCountEl.textContent = T('共 {n} 条分享', { n: itemsCache.length });
+    }
+    function bindShareRowEvents() {
+        listEl.querySelectorAll('.drive-row').forEach(function (row) {
+            var id = parseInt(row.getAttribute('data-id'), 10);
+            var it = null;
+            for (var i = 0; i < itemsCache.length; i++) if (itemsCache[i].id === id) { it = itemsCache[i]; break; }
+            if (!it) return;
+            row.querySelectorAll('.drive-act').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (btn.getAttribute('data-act') === 'unshare') cancelShare(it);
+                });
             });
-            row.appendChild(icon);
-            row.appendChild(info);
-            row.appendChild(status);
-            if (ok) row.appendChild(cancelBtn);
-            dsmList.appendChild(row);
         });
+    }
+    function cancelShare(it) {
+        driveConfirm(T('取消分享'),
+            T('取消后链接与已发送的分享卡片将立即失效，确定取消分享“{v}”吗？', { v: it.file_name }),
+            function () {
+                apiPost('share/cancel', { username: u(), id: it.id }, function (err2) {
+                    if (err2) { toast(TR(err2.message)); return; }
+                    toast(T('分享已取消'));
+                    loadShareList(); // 原位刷新状态
+                });
+            });
     }
 
     // ---- 分享详情（卡片气泡/站内链接点击进入） ----
@@ -1654,6 +1689,7 @@
     function init() {
         if (inited) return;
         inited = true;
+        console.log('[网盘] 脚本 v2.21 已加载（分享管理/回收站入口上移左侧列表）；若右键无菜单请按 Ctrl+F5 强刷后重试'); // 版本判定归口：用户 F12 一眼确认所跑版本
         // DOM 移入主聊天区（公告流/设置页同款 absolute 覆盖，左侧列表保持可见）
         if (mainChatEl && view.parentElement !== mainChatEl) mainChatEl.appendChild(view);
         closeBtn.addEventListener('click', close);
@@ -1667,9 +1703,163 @@
         batchCopyBtn.addEventListener('click', function () { openPickModal('copy'); });
         batchDelBtn.addEventListener('click', batchDelete);
         batchCancelBtn.addEventListener('click', exitSelectMode);
-        // ===== 回收站事件绑定（进入/退出 + 清空） =====
-        trashBtn.addEventListener('click', function () { trashMode ? exitTrash() : enterTrash(); });
+        // ===== 右键菜单（微信/百度网盘同款语义：右键未选中行=选区收拢为该行单项操作；
+        // 右键已选中行=保持现选区批量操作。回收站/搜索态禁用——回收站行已有恢复/彻底删除专属按钮，
+        // 搜索结果跨目录混排单项语义易混淆） =====
+        if (ctxMenu && ctxMenu.parentElement !== document.body) document.body.appendChild(ctxMenu); // body 级防 overflow 裁剪
+        function hideCtxMenu() {
+            if (ctxMenu) ctxMenu.classList.add('hidden');
+            // 清除右键目标行高亮（v2.18：菜单关闭归口统一清除，含点击别处/滚动/Esc/菜单动作各关闭路径）
+            listEl.querySelectorAll('.drive-row.ctx-target').forEach(function (r) { r.classList.remove('ctx-target'); });
+        }
+        // ===== 右键统一处理（强制弹出归口）：mousedown/contextmenu 双通道 + document 捕获三重冗余，
+        // 任一通道被浏览器扩展（鼠标手势等）拦截仍能弹菜单；150ms 内同坐标视为同一次操作只弹一次
+        var lastCtxKey = '';
+        var lastCtxTime = 0;
+        function ctxDebounce(e) { // 双通道去重：返回 true=重复触发（调用方已拦原生菜单，不再重复弹）
+            var k = e.clientX + ':' + e.clientY;
+            var now = Date.now();
+            if (k === lastCtxKey && now - lastCtxTime < 150) { lastCtxTime = now; return true; }
+            lastCtxKey = k; lastCtxTime = now;
+            return false;
+        }
+        function handleDriveCtx(e) {
+            if (trashMode || shareMode || searchMode || !ctxMenu) return; // ctxMenu 缺失（缓存错位）或回收站/分享页/搜索态放行系统菜单
+            var row = e.target.closest('.drive-row');
+            if (!row) {
+                // 空白处右键：仅「文件列表容器内」的空白接管（弹目录级菜单：新建/上传/刷新/全选/粘贴）。
+                // v2.20 收窄接管范围——此前接管整个网盘视图，导致搜索框右键粘贴文本变成文件粘贴、
+                // 工具栏按钮上右键也弹菜单；搜索框/按钮/面板其余空白放行系统菜单（搜索框走 chat.js 输入框右键菜单）
+                if (!e.target.closest || !e.target.closest('#drive-file-list')) return;
+                e.preventDefault(); // 接管：拦原生菜单（幂等命中也须拦，防双通道第二次放行原生菜单）
+                if (ctxDebounce(e)) return;
+                showCtxMenu(null, e.clientX, e.clientY);
+                return;
+            }
+            e.preventDefault(); // 拦截系统菜单归口自绘（幂等命中时同样只拦不重弹）
+            if (ctxDebounce(e)) return;
+            var id = parseInt(row.getAttribute('data-id'), 10);
+            var it = null;
+            for (var i = 0; i < itemsCache.length; i++) if (itemsCache[i].id === id) { it = itemsCache[i]; break; }
+            if (!it) return;
+            // 选区语义（v2.17）：右键不开启多选态——用户反馈：右键自动进勾选模式后左键无法进入文件夹。
+            // - 非多选态：仅弹菜单，复制/移动/删除等动作作用于右键行本身（不勾选、不改页面状态）
+            // - 多选态：右键已选行=保持选区（批量动作）；右键未选行=收拢为该行（资源管理器语义）
+            if (selMode && !selSet[id]) {
+                selSet = {};
+                selSet[id] = true;
+                listEl.querySelectorAll('.drive-row').forEach(function (r) {
+                    var rid = parseInt(r.getAttribute('data-id'), 10);
+                    var on = !!selSet[rid];
+                    r.classList.toggle('selected', on);
+                    var chk = r.querySelector('.drive-check');
+                    if (chk) chk.classList.toggle('checked', on);
+                });
+                updateBatchBar();
+            }
+            showCtxMenu(it, e.clientX, e.clientY); // 内部先清旧高亮（换目标不残留）
+            row.classList.add('ctx-target'); // v2.18：菜单弹出期间高亮目标行（动作作用行可视化，hideCtxMenu 统一清除）
+        }
+        listEl.addEventListener('contextmenu', handleDriveCtx); // 通道一：标准冒泡（保留防回归）
+        // 通道二：右键按下（mousedown）立即弹——contextmenu 事件被扩展吞掉时的生命线，且观感同 Windows 桌面
+        listEl.addEventListener('mousedown', function (e) {
+            if (e.button !== 2) return;
+            handleDriveCtx(e);
+        }, true);
+        // 通道三：document 捕获阶段 contextmenu——事件在冒泡链中途被 stopPropagation 时仍可达
+        document.addEventListener('contextmenu', function (e) {
+            if (!ctxMenu || !view || !view.contains(e.target)) return;
+            handleDriveCtx(e);
+        }, true);
+        // 菜单显隐归口（it=null=空白处：仅粘贴，目标=当前目录；粘贴项仅剪贴板非空且目标为目录时显示）
+        function showCtxMenu(it, x, y) {
+            // 清除旧目标行高亮（换目标/切空白不残留；本行新高亮由调用方在弹菜单后 add）
+            listEl.querySelectorAll('.drive-row.ctx-target').forEach(function (r) { r.classList.remove('ctx-target'); });
+            ctxTarget = it;
+            var n = 0;
+            if (it) for (var k in selSet) n++;
+            var multi = !!it && n > 1;          // 多选区仅保留复制/移动/粘贴/删除批量语义
+            var hasClip = !!(clip && clip.ids.length);
+            var vis = {
+                mkdirnew: !it,        // 目录级菜单项：仅空白处右键显示
+                uploadnew: !it,
+                refreshlist: !it,
+                selectall: true,      // 全选：文件行/空白菜单共用
+                clipcut: !!it,
+                clipcopy: !!it,
+                clippaste: hasClip,   // 文件行也可粘贴（目标=所在目录）；空白处=当前目录
+                delete: !!it,
+                download: !!it && !it.is_dir && !multi,
+                share: !!it && !multi
+            };
+            for (var act in vis) {
+                var mi = ctxMenu.querySelector('[data-action="' + act + '"]');
+                if (mi) mi.style.display = vis[act] ? '' : 'none'; // null 守卫：缓存错位（新 JS+旧 HTML 缺菜单项）时不崩、菜单仍可弹
+            }
+            ctxMenu.classList.remove('hidden');
+            ctxMenu.style.top = y + 'px';
+            ctxMenu.style.left = x + 'px';
+        }
+        // 菜单项动作归口（粘贴复用 doMoveCopy 归口：toast+退出多选+原位刷新+复制刷容量；delete 按选区规模分发单删/批删）
+        ctxMenu.querySelectorAll('.menu-item').forEach(function (item) {
+            item.addEventListener('click', function () {
+                var act = item.getAttribute('data-action');
+                var it = ctxTarget;
+                hideCtxMenu();
+                if (act === 'clippaste') {
+                    // 粘贴：右键目录=粘贴进该目录；文件行/空白处=粘贴到当前目录
+                    if (!clip || !clip.ids.length) return;
+                    var target = (it && it.is_dir) ? it.id : curParent;
+                    var mode = clip.mode;
+                    var ids = clip.ids;
+                    if (mode === 'move') clip = null; // 移动粘贴即失效（一次性质），复制保留可多次粘贴
+                    doMoveCopy(mode, ids, target);
+                    return;
+                }
+                // 全选：文件行/空白菜单共用（进入多选态并勾选当前列表全部行）
+                if (act === 'selectall') {
+                    if (!selMode) enterSelectMode();
+                    itemsCache.forEach(function (x) { selSet[x.id] = true; });
+                    listEl.querySelectorAll('.drive-row').forEach(function (r) {
+                        var rid = parseInt(r.getAttribute('data-id'), 10);
+                        if (selSet[rid]) {
+                            r.classList.add('selected');
+                            var chk = r.querySelector('.drive-check');
+                            if (chk) chk.classList.add('checked');
+                        }
+                    });
+                    updateBatchBar();
+                    return;
+                }
+                // 目录级菜单动作（仅空白处右键显示）：新建文件夹/上传文件/刷新列表
+                if (act === 'mkdirnew') { mkdir(); return; }
+                if (act === 'uploadnew') { fileInput.click(); return; }
+                if (act === 'refreshlist') { loadList(); return; }
+                if (!it) return; // 空白处菜单仅粘贴语义
+                var n = 0;
+                for (var k in selSet) n++;
+                if (act === 'clipcopy' || act === 'clipcut') {
+                    // 复制/移动入剪贴板：多选态=作用于选区；非多选态=作用于右键行本身
+                    var ids = [];
+                    for (var k2 in selSet) ids.push(parseInt(k2, 10));
+                    if (!ids.length && it) ids = [it.id];
+                    if (!ids.length) return;
+                    clip = { mode: act === 'clipcopy' ? 'copy' : 'move', ids: ids };
+                    toast(act === 'clipcopy' ? T('已复制到剪贴板') : T('已移动到剪贴板'));
+                } else if (act === 'share') {
+                    openShareDialog(it);
+                } else if (act === 'download') {
+                    downloadItem(it);
+                } else if (act === 'delete') {
+                    if (n > 1) batchDelete(); else deleteItem(it);
+                }
+            });
+        });
+        document.addEventListener('click', hideCtxMenu); // 点击别处关闭（msg-menu 同款归口）
+        listEl.addEventListener('scroll', hideCtxMenu, true); // 列表滚动关闭防菜单悬空
+        // ===== 回收站/分享页事件绑定（v2.21：入口上移左侧列表，工具栏按钮移除） =====
         trashClearBtn.addEventListener('click', clearTrash);
+        shareBackBtn.addEventListener('click', exitShare);
         fileInput.addEventListener('change', function () {
             for (var i = 0; i < fileInput.files.length; i++) {
                 upQueue.push(makeTask({ kind: 'up', name: fileInput.files[i].name, size: fileInput.files[i].size, file: fileInput.files[i] }));
@@ -1700,7 +1890,7 @@
         });
         // 搜索框（百度网盘同款）：输入防抖 300ms 全盘搜索；清空按钮恢复当前目录列表
         searchInput.addEventListener('input', function () {
-            if (trashMode) return; // 回收站态搜索框已隐藏，键盘事件兜底拦截
+            if (trashMode || shareMode) return; // 回收站/分享页态搜索框已隐藏，键盘事件兜底拦截
             var kw = searchInput.value.trim();
             searchClearBtn.classList.toggle('hidden', !kw);
             clearTimeout(searchTimer);
@@ -1754,25 +1944,35 @@
         dsdSaveBtn.addEventListener('click', dsSaveToMyDrive);
         dsdDownBtn.addEventListener('click', dsDownloadViaShare);
         dsdCancelBtn.addEventListener('click', closeDsMasks);
-        [dsMask, dsmMask, dsdMask].forEach(function (m) {
+        [dsMask, dsdMask].forEach(function (m) {
             if (!m) return;
             m.addEventListener('click', function (e) { if (e.target === m) closeDsMasks(); });
         });
-        if (dsManageBtn) dsManageBtn.addEventListener('click', openShareManage);
-        // 左侧"我的文件"入口：退出回收站回根目录并刷新
+        // 左侧"我的文件"入口：退出回收站/分享页回根目录并刷新
         driveEntry.addEventListener('click', function () {
             if (trashMode) resetTrashUI();
+            if (shareMode) resetShareUI();
             if (searchMode) clearSearchUI();
             curParent = 0;
             crumbs = [{ id: 0, name: T('我的文件') }];
             loadList();
+        });
+        // 左侧"分享管理"入口（v2.21）：开页面进分享模式（互斥回收站）；页面未开则先开
+        shareEntry.addEventListener('click', function () {
+            if (!visible) open();
+            enterShare();
+        });
+        // 左侧"回收站"入口（v2.21）：开页面进回收站模式（互斥分享页）；页面未开则先开
+        trashEntry.addEventListener('click', function () {
+            if (!visible) open();
+            enterTrash();
         });
         // 拖拽上传（百度网盘同款）：拖文件入网盘页面浮出遮罩，松手入队上传到当前目录；
         // 计数器法防子元素间 dragleave 抖动（dragenter++/dragleave--，归零收遮罩）
         var dragDepth = 0;
         if (dropMask) {
             view.addEventListener('dragenter', function (e) {
-                if (trashMode) return; // 回收站态禁用拖拽上传
+                if (trashMode || shareMode) return; // 回收站/分享页态禁用拖拽上传
                 e.preventDefault();
                 dragDepth++;
                 dropMask.classList.remove('hidden');
@@ -1789,7 +1989,7 @@
                 e.preventDefault(); // 回收站态同样拦截默认行为（防浏览器打开拖入文件），仅不入队
                 dragDepth = 0;
                 dropMask.classList.add('hidden');
-                if (trashMode) return; // 回收站态禁用拖拽上传
+                if (trashMode || shareMode) return; // 回收站/分享页态禁用拖拽上传
                 var files = e.dataTransfer && e.dataTransfer.files;
                 if (!files || !files.length) return;
                 for (var i = 0; i < files.length; i++) {
@@ -1806,10 +2006,12 @@
             if (anyDsMaskOpen()) { closeDsMasks(); return; }
             if (pvMask && !pvMask.classList.contains('hidden')) { closeViewer(); return; }
             if (!visible) return;
+            if (ctxMenu && !ctxMenu.classList.contains('hidden')) { hideCtxMenu(); return; } // Esc 逐级：右键菜单最先关（归口 hideCtxMenu 同步清目标行高亮）
             if (maskEl && !maskEl.classList.contains('hidden')) { closeModal(); return; }
             if (pickMask && !pickMask.classList.contains('hidden')) { closePickModal(); return; } // Esc 逐级：先关弹窗内输入弹窗，再关目录选择弹窗
             if (selMode) { exitSelectMode(); return; } // Esc 逐级退出：弹窗→多选→回收站→搜索→页面
             if (trashMode) { exitTrash(); return; }
+            if (shareMode) { exitShare(); return; } // v2.21 Esc 逐级：分享页在回收站之后退出
             if (searchMode) { clearSearchUI(); searchSeq++; loadList(); return; }
             close();
         });
@@ -1820,7 +2022,6 @@
             window._osbInit(downItemsEl);   // 下载列表同款
             // 网盘分享弹窗滚动区同款悬浮滑块（禁系统滚动条归口）
             if (dsContactList) window._osbInit(dsContactList); // 分享选人列表
-            if (dsmList) window._osbInit(dsmList);             // 分享管理列表
         }
     }
     function open() {
@@ -1829,6 +2030,7 @@
             visible = true;
             view.classList.remove('hidden');
             if (trashMode) resetTrashUI(); // 重开页面重置回收站态（纯 UI 复位，列表刷新归口下方 loadList）
+            if (shareMode) resetShareUI(); // v2.21 重开页面重置分享页态
             exitSelectMode(); // 重开页面重置多选态
             clearSearchUI(); // 重开页面重置搜索态（与目录/面包屑一并归位）
             crumbs = [{ id: 0, name: T('我的文件') }];

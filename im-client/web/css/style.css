@@ -14680,6 +14680,10 @@ html.m .dsm-list {
 .drive-row.selected {
     background: var(--hover);
 }
+/* v2.18 右键菜单目标行高亮：菜单弹出期间标识动作作用行（与多选选中态同色；hideCtxMenu 统一清除） */
+.drive-row.ctx-target {
+    background: var(--hover);
+}
 /* 顶部批量操作条（计数 + 全选/批量下载/批量删除/取消） */
 .drive-batch-bar {
     display: flex;
@@ -14775,17 +14779,30 @@ html.m .dsm-list {
     background: rgba(216, 106, 106, 0.08);
 }
 /* ===== 网盘回收站（二期）：模式互斥显隐 + 按钮态（全部主题变量，跟随主题色变化） ===== */
-/* 回收站态：隐藏新建/上传/多选/搜索（函数口另有双保险守卫） */
+/* 回收站/分享页态：隐藏新建/上传/多选/搜索（函数口另有双保险守卫；v2.21 加分享页模式） */
 .drive-view.trash-mode #drive-mkdir-btn,
 .drive-view.trash-mode #drive-upload-btn,
 .drive-view.trash-mode #drive-select-btn,
-.drive-view.trash-mode .drive-search-box {
+.drive-view.trash-mode .drive-search-box,
+.drive-view.share-mode #drive-mkdir-btn,
+.drive-view.share-mode #drive-upload-btn,
+.drive-view.share-mode #drive-select-btn,
+.drive-view.share-mode .drive-search-box {
     display: none;
 }
-/* 工具栏回收站入口激活态（与多选按钮同款主题色描边） */
-#drive-trash-btn.active {
+/* v2.21 左侧网盘入口激活态（我的文件/分享管理/回收站 三入口同款主题色高亮） */
+#drive-panel .new-friends-entry.active {
+    background: var(--hover);
+}
+#drive-panel .new-friends-entry.active .new-friends-text {
     color: var(--primary);
-    border-color: var(--primary);
+    font-weight: 600;
+}
+/* v2.21 分享页行：动作区常显（状态徽章+取消分享按钮是行内主信息，非 hover 临时操作） */
+.drive-share-row .drive-cell-actions {
+    opacity: 1;
+    gap: 6px;
+    align-items: center;
 }
 /* 回收站行恢复按钮主题色（彻底删除沿用 .drive-act-danger 危险色） */
 .drive-act-restore {

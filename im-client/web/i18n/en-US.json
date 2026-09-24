@@ -1661,5 +1661,8 @@
   "所选文件不存在": "Selected items not found",
   "不能移动到自身或其子文件夹内": "Cannot move into itself or its subfolder",
   "不能复制到自身或其子文件夹内": "Cannot copy into itself or its subfolder",
-  "网盘空间不足，复制失败": "Not enough drive space; copy failed"
+  "网盘空间不足，复制失败": "Not enough drive space; copy failed",
+  "预览": "Preview",
+  "已复制到剪贴板": "Copied to clipboard",
+  "已移动到剪贴板": "Moved to clipboard"
 }
