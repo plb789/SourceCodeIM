@@ -1704,5 +1704,14 @@
   "安装未完成": "Installation not completed",
   "挂载密码尚未获取": "Mount password not loaded yet",
   "挂载密码已复制": "Mount password copied",
-  "本地盘符挂载仅 PC 客户端支持；WEB 端可查看挂载密码，供 RaiDrive 等第三方 WebDAV 客户端手动挂载。": "Local drive mapping is PC-only; the web client can view the mount password for third-party WebDAV clients such as RaiDrive."
+  "本地盘符挂载仅 PC 客户端支持；WEB 端可查看挂载密码，供 RaiDrive 等第三方 WebDAV 客户端手动挂载。": "Local drive mapping is PC-only; the web client can view the mount password for third-party WebDAV clients such as RaiDrive.",
+  "保存到网盘": "Save to Drive",
+  "已保存到网盘": "Saved to Drive",
+  "保存失败，请稍后再试": "Save failed. Please try again later",
+  "文件已过期或已被清理，无法保存": "The file has expired or been cleaned up and cannot be saved",
+  "网盘空间不足，请清理后再保存": "Not enough Drive space. Please free up space and try again",
+  "该消息不支持转存": "This message cannot be saved to Drive",
+  "仅消息参与方可保存": "Only message participants can save this file",
+  "该文件不支持转存": "This file cannot be saved to Drive",
+  "文件地址不合法": "Invalid file location"
 }

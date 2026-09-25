@@ -408,7 +408,7 @@ drive:
     endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
     public_endpoint: "minio.sxgyxny.com"      # 外网客户端直连下载地址（内外网分流：服务端 API 读写走上面内网
                                                    # endpoint，预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同）
-    public_ssl: false            # 外网直连地址是否 HTTPS（上 HTTPS 后改 true）
+    public_ssl: true             # 外网直连地址是否 HTTPS（CDN 443 已配证书并实测回源正常；https 才能避免浏览器 Mixed Content 拦截下载）
     access_key: "RgdSF4IAuMrXJWAPC63T"               # 访问账号（仅存本文件，不下发客户端）
     secret_key: "v8IWwSMg3z419p2LbeRwl6SFY44idgOWAiaWXxO5"               # 访问密钥（仅存本文件，不下发客户端）
     bucket: "im-drive"           # 桶名（不存在启动时自动创建）

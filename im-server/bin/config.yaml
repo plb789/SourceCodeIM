@@ -405,7 +405,7 @@ drive:
   chunk_size: 8388608
   # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
   minio:
-    endpoint: "minio.sxgyxny.com:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
+    endpoint: ""                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
     public_endpoint: ""          # 外网客户端直连下载地址（内外网分流：服务端 API 读写走 endpoint，
                                  # 预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同——
                                  # 本机不在 MinIO 内网，读写与下载同走公网域名，无需配置）

@@ -1679,6 +1679,15 @@
         // null 守卫：防旧版缓存 index.html 无本项时 TypeError 中断整个右键菜单
         var saveasItem = msgMenu.querySelector('[data-action="saveas"]');
         if (saveasItem) saveasItem.style.display = isFileBubble ? '' : 'none';
+        // 阶段一百六十六："保存到网盘"仅服务端持久化文件可用——需 msg_id（接口按消息归口）且
+        // data-url 以 /static/upload/ 开头（P2P 直传 blob/data 地址服务端无本体，入口直接隐藏）；
+        // null 守卫同上（防旧版缓存 index.html 无本项）
+        var drivesaveItem = msgMenu.querySelector('[data-action="drivesave"]');
+        if (drivesaveItem) {
+            var dFb = isFileBubble ? el.querySelector('.bubble-file[data-url]') : null;
+            var dUrl = dFb ? (dFb.getAttribute('data-url') || '') : '';
+            drivesaveItem.style.display = (msgId > 0 && dUrl.indexOf('/static/upload/') === 0) ? '' : 'none';
+        }
         // 阶段一百三十四："在线编辑"仅可编辑文档（docx/xlsx）显示——点击文档已统一走预览，
         // OnlyOffice 编辑由本右键入口按需触发；null 守卫同上（防旧缓存 index.html 无本项）
         var doceditItem = msgMenu.querySelector('[data-action="docedit"]');
@@ -1749,6 +1758,20 @@
                         a2.download = (fb.querySelector('.file-name') || {}).textContent || 'file';
                         a2.click();
                     }
+                } else if (action === 'drivesave') {
+                    // 阶段一百六十六：聊天文件转存网盘——服务端把 static/upload 本体转入网盘对象
+                    // 存储（客户端零上传），建"我的网盘"根目录记录（同名自动改名）；
+                    // P2P 文件入口已隐藏，此处服务端归口兜底拒绝
+                    fetch('/api/drive/chat/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username: IMSocket.getUsername(), msg_id: msgId })
+                    }).then(function (res) {
+                        res.json().then(function (data) {
+                            if (!res.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }
+                            showToast(I18N.t('已保存到网盘') + '：' + ((data.item && data.item.name) || ''));
+                        }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
+                    }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
                 } else if (action === 'docedit') {
                     // 阶段一百三十四："在线编辑"入口——OnlyOffice 编辑层（原点击文档自动进编辑，
                     // 现改为右键按需触发）。要求已持久化 + 服务端 URL（blob 本地地址不送编辑层）

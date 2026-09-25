@@ -712,6 +712,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
             另存为
         </div>
+        <!-- 阶段一百六十六：文件消息右键"保存到网盘"（仅服务端持久化文件显示——contextmenu 按
+             data-url 以 /static/upload/ 开头动态显隐；P2P 直传文件服务端无本体不开放）。
+             服务端把聊天文件本体转入网盘对象存储建根目录记录（零上传），转存即长期保存
+             （与聊天文件 7 天定期清理互补） -->
+        <div class="menu-item" data-action="drivesave">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>
+            保存到网盘
+        </div>
         <!-- 阶段一百三十四：文档右键"在线编辑"（仅 docx/xlsx 可编辑文档显示）——点击文档改为统一预览
              后，OnlyOffice 编辑改由本入口按需触发（原点击自动进编辑弹窗的行为已注释保留在 chat.js） -->
         <div class="menu-item" data-action="docedit">

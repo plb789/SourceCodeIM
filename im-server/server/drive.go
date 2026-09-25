@@ -110,6 +110,8 @@ func RegisterDriveRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/trash/restore", s.handleDriveTrashRestore)
 	http.HandleFunc("POST /api/drive/trash/delete", s.handleDriveTrashDelete)
 	http.HandleFunc("POST /api/drive/trash/clear", s.handleDriveTrashClear)
+	// 聊天文件转存网盘（"保存到我的网盘"）：username/msg_id 在 JSON 体内，处理器内 driveCheckUser 归口
+	http.HandleFunc("POST /api/drive/chat/save", s.handleDriveChatSave)
 	// 分片会话定时 GC（断点续传孤儿数据归口：启动清一次 + 每 6 小时一轮）
 	s.startDriveUploadGC()
 }
@@ -1395,4 +1397,156 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 	}
 	w.Header().Set("Content-Type", rec.MimeType)
 	io.Copy(w, rc)
+}
+
+// ===== 聊天文件转存网盘（"保存到我的网盘"，入口：聊天文件气泡右键菜单） =====
+// 服务端把 static/upload 的聊天文件本体经 ObjectStore.Put 转入网盘对象存储（全新 object_key，
+// 与聊天上传物彻底隔离），建 im_drive_file 根目录记录——客户端零上传零复制，一次请求完成。
+// 与聊天文件定期清理（file_retention_days，uploadfile.go 归口）互补：转存即长期保存。
+// P2P 直传文件（服务端无本体，content 无服务端 URL）不开放此能力（客户端不显示入口，服务端同归口拒绝）
+
+// driveChatSaveReq 聊天文件转存请求体
+type driveChatSaveReq struct {
+	Username string `json:"username"`
+	MsgID    uint   `json:"msg_id"`
+}
+
+// handleDriveChatSave 聊天文件转存网盘 POST /api/drive/chat/save {username, msg_id}
+// 归口校验：在线水位 → 消息存在 → 仅图片(4)/文件(5)且未撤回 → 参与方权限（单聊限收发双方 /
+// 全局群放行 / 多群聊 gN 校验成员）→ URL 必须 /static/upload/ 前缀（P2P blob、外链拒绝，防路径穿越）
+// → 本体存在（过期已清理则明确提示）→ 配额 → 转存建档（根目录同名自动改名，轻量一键语义）
+func (s *Server) handleDriveChatSave(w http.ResponseWriter, r *http.Request) {
+	var body driveChatSaveReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || body.MsgID == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	var m model.Message
+	if err := store.DB.First(&m, body.MsgID).Error; err != nil {
+		driveFail(w, http.StatusNotFound, "消息不存在")
+		return
+	}
+	if m.Recalled || (m.MsgType != MsgTypeImageSaved && m.MsgType != MsgTypeFileSaved) {
+		driveFail(w, http.StatusBadRequest, "该消息不支持转存")
+		return
+	}
+	// 参与方归口：单聊（to 为普通用户名）限收发双方；多群聊（'gN'）复用群上传成员校验；
+	// 全局群（to 为空）消息全员可见，放行（与群聊历史可见性同水位）
+	if m.ToUser != "" {
+		if _, isGroup := isGroupTarget(m.ToUser); isGroup {
+			if _, errMsg := resolveGroupUploadScope(m.ToUser, body.Username); errMsg != "" {
+				driveFail(w, http.StatusForbidden, errMsg)
+				return
+			}
+		} else if m.FromUser != body.Username && m.ToUser != body.Username {
+			driveFail(w, http.StatusForbidden, "仅消息参与方可保存")
+			return
+		}
+	}
+	var meta persistedMsgContent
+	if err := json.Unmarshal([]byte(m.Content), &meta); err != nil || meta.URL == "" {
+		driveFail(w, http.StatusBadRequest, "该消息不支持转存")
+		return
+	}
+	// URL 归口：仅服务端 static/upload 聊天文件可转存（P2P 直传的 blob/data 地址、任何外链一律拒绝）；
+	// base 经 filepath.Base 提取并复核，杜绝路径穿越
+	if !strings.HasPrefix(meta.URL, "/static/upload/") || strings.Contains(meta.URL, "..") {
+		driveFail(w, http.StatusBadRequest, "该文件不支持转存")
+		return
+	}
+	base := filepath.Base(meta.URL)
+	if base == "" || base == "." || base == "/" || !strings.HasPrefix(meta.URL, "/static/upload/"+base) {
+		driveFail(w, http.StatusBadRequest, "文件地址不合法")
+		return
+	}
+	// 本体存在性：聊天文件按保留期定期清理，已清理则明确提示（消息记录仍在，气泡灰显同语义）
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
+	}
+	src, err := os.Open(filepath.Join(dir, base))
+	if err != nil {
+		driveFail(w, http.StatusNotFound, "文件已过期或已被清理，无法保存")
+		return
+	}
+	defer src.Close()
+	fi, err := src.Stat()
+	if err != nil || fi.IsDir() {
+		driveFail(w, http.StatusNotFound, "文件已过期或已被清理，无法保存")
+		return
+	}
+
+	// 配额校验（与上传同水位：quota=-1 不限）
+	if quota := s.cfg.Drive.QuotaBytes; quota >= 0 {
+		var used struct{ Total int64 }
+		store.DB.Model(&model.DriveFile{}).Select("COALESCE(SUM(size),0) AS total").
+			Where("owner = ? AND is_dir = ?", body.Username, false).Scan(&used)
+		if used.Total+fi.Size() > quota {
+			driveFail(w, http.StatusRequestEntityTooLarge, "网盘空间不足，请清理后再保存")
+			return
+		}
+	}
+
+	st := store.GetObjectStore()
+	if st == nil {
+		driveFail(w, http.StatusInternalServerError, "存储后端未就绪")
+		return
+	}
+
+	// 保存名：消息 content 的原始文件名优先（消毒失败退化用存储文件名），根目录同名自动改名
+	// name(n).ext——"保存到网盘"是轻量一键动作，同名静默改名比报错更符合直觉（回收站恢复同语义）
+	name, ok := driveValidName(meta.Name)
+	if !ok {
+		if name, ok = driveValidName(base); !ok {
+			driveFail(w, http.StatusBadRequest, "文件名不合法")
+			return
+		}
+	}
+	var finalName string
+	for i := 0; ; i++ {
+		candidate := name
+		if i > 0 {
+			ext := filepath.Ext(name)
+			candidate = fmt.Sprintf("%s(%d)%s", strings.TrimSuffix(name, ext), i, ext)
+		}
+		var cnt int64
+		store.DB.Model(&model.DriveFile{}).
+			Where("owner = ? AND parent_id = 0 AND name = ?", body.Username, candidate).Count(&cnt)
+		if cnt == 0 {
+			finalName = candidate
+			break
+		}
+	}
+
+	// 对象 key 与网盘上传同款命名：drive/u/<owner>/<纳秒>_<16hex><ext>（独立本体，与聊天上传物零关联）
+	ext := strings.ToLower(filepath.Ext(finalName))
+	b := make([]byte, 8)
+	rand.Read(b)
+	key := fmt.Sprintf("drive/u/%s/%d_%s%s", body.Username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
+	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": finalName})
+	if err := st.Put(r.Context(), key, src, fi.Size(), dispo); err != nil {
+		logger.Warn("聊天文件转存网盘失败: %s msg=%d %v", body.Username, m.ID, err)
+		driveFail(w, http.StatusInternalServerError, "保存失败")
+		return
+	}
+	rec := model.DriveFile{
+		Owner:     body.Username,
+		ParentID:  0,
+		Name:      finalName,
+		Size:      fi.Size(),
+		ObjectKey: key,
+		MimeType:  driveMimeOf(finalName),
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		st.Delete(key) // 兜底清理孤儿对象（与上传归口同款）
+		driveFail(w, http.StatusInternalServerError, "记录创建失败")
+		return
+	}
+	logger.Info("聊天文件转存网盘: %s msg=%d, %s (%d 字节), key=%s, 后端=%s", body.Username, m.ID, finalName, fi.Size(), key, st.Kind())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "item": rec})
 }
