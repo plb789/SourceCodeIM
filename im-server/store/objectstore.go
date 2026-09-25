@@ -188,8 +188,9 @@ func (s *localStore) Kind() string { return "local" }
 // ===== MinIO 后端 =====
 
 type minioStore struct {
-	client *minio.Client
-	bucket string
+	client    *minio.Client
+	pubClient *minio.Client // 外网直连 client（仅 Presign 用；nil=内外网同地址，与 client 相同）
+	bucket    string
 }
 
 func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
@@ -200,6 +201,19 @@ func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 内外网分流（可选）：public_endpoint 配置外网域名时，预签名下载 URL 用它生成给外网客户端，
+	// 服务端 API 读写仍走内网 endpoint（快且稳，不绕公网）；不配则两者同地址，单网部署零配置
+	var pubClient *minio.Client
+	if pub := cfg.PublicEndpoint; pub != "" && pub != cfg.Endpoint {
+		pubClient, err = minio.New(pub, &minio.Options{
+			Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+			Secure: cfg.PublicUseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("外网直连地址初始化失败: %w", err)
+		}
+		logger.Info("MinIO 内外网分流: 服务端读写=%s 外网下载=%s", cfg.Endpoint, pub)
+	}
 	bucket := cfg.Bucket
 	if bucket == "" {
 		bucket = "im-drive"
@@ -207,7 +221,7 @@ func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// 桶不存在自动创建（私有读写），免手工初始化部署
-	exists, err := client.BucketExists(ctx, bucket)
+	exists, err := minioBucketExists(ctx, client, bucket)
 	if err != nil {
 		return nil, fmt.Errorf("MinIO 连接失败（检查 endpoint/网络）: %w", err)
 	}
@@ -217,7 +231,7 @@ func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
 		}
 		logger.Info("MinIO 桶 %s 不存在，已自动创建", bucket)
 	}
-	return &minioStore{client: client, bucket: bucket}, nil
+	return &minioStore{client: client, pubClient: pubClient, bucket: bucket}, nil
 }
 
 func (s *minioStore) Put(ctx context.Context, key string, r io.Reader, size int64, dispo string) error {
@@ -252,9 +266,13 @@ func (s *minioStore) Delete(key string) error {
 }
 
 // Presign 生成短时效 GET 预签名地址（下载 302 跳转直连 MinIO，省服务端带宽；
-// 前提：客户端网络可达 MinIO endpoint——内网部署天然满足）
+// 内外网分流时 URL 用外网域名生成（客户端可达），服务端读写仍走内网 endpoint）
 func (s *minioStore) Presign(key string, expiry time.Duration) (string, error) {
-	u, err := s.client.PresignedGetObject(context.Background(), s.bucket, key, expiry, url.Values{})
+	cli := s.client
+	if s.pubClient != nil {
+		cli = s.pubClient
+	}
+	u, err := cli.PresignedGetObject(context.Background(), s.bucket, key, expiry, url.Values{})
 	if err != nil {
 		return "", err
 	}
@@ -262,3 +280,21 @@ func (s *minioStore) Presign(key string, expiry time.Duration) (string, error) {
 }
 
 func (s *minioStore) Kind() string { return "minio" }
+
+// minioBucketExists 桶存在性探测（ListObjects 而非 BucketExists/HEAD）
+// 实测（2026-09-25 公网链路 GTM+宝塔反代+MinIO）：同一密钥 ListBuckets/ListObjects/PutObject/
+// RemoveObject 全部放行，唯独 HEAD /bucket 稳定 Access Denied（内网直连同动作正常）——两条链路
+// 在 HEAD 动作上行为不一致，启动探测卡死在第一步。ListObjects(MaxKeys=1) 与 HEAD 功能等价：
+// 不存在的桶返回 NoSuchBucket，存在则正常返回（空桶迭代器无错结束），且已实测全链路放行
+func minioBucketExists(ctx context.Context, client *minio.Client, bucket string) (bool, error) {
+	for o := range client.ListObjects(ctx, bucket, minio.ListObjectsOptions{MaxKeys: 1}) {
+		if o.Err != nil {
+			if minio.ToErrorResponse(o.Err).Code == "NoSuchBucket" {
+				return false, nil
+			}
+			return false, o.Err
+		}
+		return true, nil // 拿到任一对象 = 桶存在
+	}
+	return true, nil // 空桶：迭代器无错自然结束 = 桶存在
+}

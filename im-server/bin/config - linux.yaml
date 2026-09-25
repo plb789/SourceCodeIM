@@ -406,12 +406,15 @@ drive:
   # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
   minio:
     endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
+    public_endpoint: "minio.sxgyxny.com"      # 外网客户端直连下载地址（内外网分流：服务端 API 读写走上面内网
+                                                   # endpoint，预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同）
+    public_ssl: false            # 外网直连地址是否 HTTPS（上 HTTPS 后改 true）
     access_key: "RgdSF4IAuMrXJWAPC63T"               # 访问账号（仅存本文件，不下发客户端）
     secret_key: "v8IWwSMg3z419p2LbeRwl6SFY44idgOWAiaWXxO5"               # 访问密钥（仅存本文件，不下发客户端）
     bucket: "im-drive"           # 桶名（不存在启动时自动创建）
     use_ssl: false               # MinIO 是否 HTTPS
     # 下载链路说明：MinIO 后端下载为 302 跳 30 分钟短时效预签名地址（客户端直连 MinIO 下载，
-    # 省服务端带宽），需保证客户端网络可达 endpoint；MinIO 不可达时服务端自动回退流式代理
+    # 省服务端带宽），URL 域名取 public_endpoint（内外网分流）否则取 endpoint；MinIO 不可达时服务端自动回退流式代理
     # 本地部署 MinIO 参考（Windows 单文件免安装）：
     #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
     #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"

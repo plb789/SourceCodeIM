@@ -114,6 +114,10 @@ type MinioConfig struct {
 	SecretKey string `yaml:"secret_key"` // 访问密钥（仅存服务端，不下发客户端）
 	Bucket    string `yaml:"bucket"`     // 桶名（不存在自动创建；空=im-drive）
 	UseSSL    bool   `yaml:"use_ssl"`    // 是否 HTTPS
+	// PublicEndpoint 外网客户端直连下载地址（内外网分流：服务端 API 读写走内网 endpoint，
+	// 预签名 302 下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同，单网部署零配置）
+	PublicEndpoint string `yaml:"public_endpoint"`
+	PublicUseSSL   bool   `yaml:"public_ssl"` // 外网直连地址是否 HTTPS
 }
 
 // FileP2PConfig 阶段一百五十六：好友文件 P2P 直传配置节（信令经服务端归口转发，文件字节点对点不过服务器）
