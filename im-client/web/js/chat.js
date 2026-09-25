@@ -17541,6 +17541,7 @@
             var img = document.createElement('img');
             img.className = 'chat-image';
             img.src = meta.url || '';
+            attachImageFallback(img);
             // 图片显示一半修复（与实时渲染一致）：按调用方插入前的贴底快照决定加载撑高后是否滚底
             // 原实现：load 回调内实时 isNearBottom() 判定——列表已被撑高导致误判，已废弃
             // img.addEventListener('load', function () {
@@ -19216,6 +19217,7 @@
             qImg.className = 'chat-image';
             qImg.src = aiImgEnv.image;
             qImg.alt = '';
+            attachImageFallback(qImg);
             qImg.addEventListener('click', function () {
                 openImageViewer(aiImgEnv.image); // 与聊天图片一致走图片查看器
             });
@@ -19713,6 +19715,38 @@
         }
     };
 
+    // 图片降级占位：加载失败（链接失效/网络断开/文件过期）时以主题化占位图替代浏览器默认碎图标，
+    // 点击占位图可重试加载（网络恢复后无需重新打开会话），重试成功自动恢复图片显示
+    function attachImageFallback(img) {
+        var ph = null;
+        function showFallback() {
+            if (ph) return; // 已降级（重试再次失败防重复插入）
+            img.style.display = 'none';
+            ph = document.createElement('div');
+            ph.className = 'chat-image-fallback';
+            ph.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>'
+                + '<span>' + I18N.t('图片无法加载') + '</span>'
+                + '<span class="chat-image-fallback-retry">' + I18N.t('点击重试') + '</span>';
+            ph.addEventListener('click', function () {
+                if (!ph) return;
+                ph.remove();
+                ph = null;
+                img.style.display = '';
+                var src = img.getAttribute('src');
+                if (src) img.src = src; // 重新赋值触发重载；仍失败会再次进入 showFallback
+            });
+            if (img.parentNode) img.parentNode.insertBefore(ph, img);
+        }
+        img.addEventListener('error', showFallback);
+        img.addEventListener('load', function () {
+            if (ph) {
+                ph.remove();
+                ph = null;
+                img.style.display = ''; // 恢复显示（src 被重新赋值/外部修复后自动还原）
+            }
+        });
+    }
+
     function appendImageMsg(fromUser, url, type, isPrivate) {
         // 贴底状态必须在插入前快照：原实现 load 时再判 isNearBottom()，此时图片已把列表撑高
         // （gap 瞬间≈图片高度>80px 容差），会被误判为"翻历史中"而放弃滚底，导致图片仍只显示一半
@@ -19732,6 +19766,7 @@
         var img = document.createElement('img');
         img.className = 'chat-image';
         img.src = url;
+        attachImageFallback(img);
         // 图片显示一半修复：图片异步加载完成前高度为 0，插入后立即滚底会停在半截；
         // 加载完成后按"插入前贴底快照"决定是否再次滚底（stick 在插入前采样，不受加载撑高影响）
         // 原实现：load 回调内实时 isNearBottom() 判定——此时列表已被撑高导致误判，已废弃

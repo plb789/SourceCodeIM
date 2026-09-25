@@ -1513,6 +1513,40 @@ html, body {
     display: block;
 }
 
+/* 图片加载失败降级占位（主题自适应，替代浏览器默认碎图标；点击可重试加载） */
+.chat-image-fallback {
+    width: 140px;
+    height: 92px;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    background: var(--hover);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    line-height: 1.4; /* 恢复 .bubble-image 的 line-height:0，避免文字与图标重叠 */
+    user-select: none;
+}
+
+.chat-image-fallback svg {
+    width: 26px;
+    height: 26px;
+    color: var(--text-light);
+    opacity: 0.85;
+}
+
+.chat-image-fallback span {
+    font-size: 12px;
+    color: var(--text-light);
+}
+
+.chat-image-fallback .chat-image-fallback-retry {
+    font-size: 11px;
+    opacity: 0.75;
+}
+
 /* 阶段四十五：AI 文档问答卡片（微信文件卡片风格，主题色归口） */
 .msg-doc-card {
     display: inline-flex;
