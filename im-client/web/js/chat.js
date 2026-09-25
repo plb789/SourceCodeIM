@@ -1769,6 +1769,11 @@
                     }).then(function (res) {
                         res.json().then(function (data) {
                             if (!res.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }
+                            // 黑名单隔离改名：服务端以 .im 名落库时随响应附带提示
+                            if (data.renamed) {
+                                showToast(I18N.t('为安全考虑，已自动改名为 {v} 保存', { v: (data.item && data.item.name) || '' }));
+                                return;
+                            }
                             showToast(I18N.t('已保存到网盘') + '：' + ((data.item && data.item.name) || ''));
                         }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
                     }, function () { showToast(I18N.t('保存失败，请稍后再试')); });

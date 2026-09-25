@@ -3,11 +3,14 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 
 	"im-server/config"
 	"im-server/logger"
@@ -23,7 +26,16 @@ func InitMySQL(cfg *config.Config) error {
 		return err
 	}
 
-	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
+	// GORM 日志降噪：RecordNotFound 是业务正常分支（挂载盘探测文件/用户是否存在等高频路径），
+	// 默认配置会打红字误导排查（实测：资源管理器粘贴前 PROPFIND 探测不存在文件每次刷红字）。
+	// 官方正规配置 IgnoreRecordNotFoundError=true——真正的 SQL 执行错误仍照常输出
+	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{
+		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
+			SlowThreshold:             500 * time.Millisecond,
+			IgnoreRecordNotFoundError: true,
+			LogLevel:                  gormlogger.Warn,
+		}),
+	})
 	if err != nil {
 		return fmt.Errorf("连接 MySQL 失败: %w", err)
 	}
@@ -84,9 +96,11 @@ func ensureDatabase(dsn string) error {
 		return nil
 	}
 
-	// 去除数据库名，连接服务器本身
+	// 去除数据库名，连接服务器本身（ensureDatabase 短连接仅建库，静默 not-found 噪音同上）
 	cfg.DBName = ""
-	db, err := gorm.Open(mysql.Open(cfg.FormatDSN()), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(cfg.FormatDSN()), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
 	if err != nil {
 		return fmt.Errorf("连接 MySQL 失败: %w", err)
 	}

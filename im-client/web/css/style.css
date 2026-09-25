@@ -14708,6 +14708,36 @@ html.m .dsm-list {
     user-select: text;
     -webkit-user-select: text;
 }
+/* Office 文档预览滚动容器（网盘浮层/分享页共用：office-preview.js 归口；
+   灰底滚筒 + 内部各自排版——docx 白底文档页(ws-view-docx)/表格(ws-xlsx-body)/PPT 画布(ws-pptx)） */
+.office-view-scroll {
+    align-self: stretch;
+    flex: 1;
+    overflow: auto;
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+/* 渲染提示行（加载中/解析失败/截断提示；网盘浮层与分享页共用中性样式） */
+.office-view-hint {
+    padding: 24px 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+/* 表格预览：标签条与表体在滚筒内的留白（聊天面板样式类直接复用） */
+.office-view-scroll .ws-xlsx-tabs {
+    padding: 8px 10px 0;
+    background: var(--bg, #fff);
+}
+.office-view-scroll .ws-xlsx-body {
+    padding: 10px 14px 14px;
+    background: var(--bg, #fff);
+    min-height: 100%;
+    box-sizing: border-box;
+}
 .drive-viewer-loading {
     font-size: 13px;
     color: var(--text-secondary);

@@ -1511,6 +1511,9 @@
             $('drive-blockexts').value = d.exts || '';
             $('drive-default-tip').textContent = '内置默认黑名单：' + d.default;
             $('drive-elf').checked = !!d.elf;
+            // 处置方式回显（rename=隔离改名 .im 默认 / deny=直接拦截）
+            var mode = d.mode === 'deny' ? 'drive-mode-deny' : 'drive-mode-rename';
+            document.getElementById(mode).checked = true;
             $('drive-source-tip').textContent = d.source === 'override' ? (d.is_default ? '当前值来源：后台已设为内置默认（持久化）' : '当前值来源：后台设置（持久化）') : '当前值来源：config.yaml 初始默认（后台保存后转为持久化）';
             $('drive-status').textContent = '';
         }).catch(function (e) { showToast(e.message || '网络异常'); });
@@ -1519,7 +1522,8 @@
     // 保存：空串=恢复内置默认黑名单；服务端逐项校验归一后落库 + 内存直更（挂载盘与网页上传同时生效）
     $('drive-save').addEventListener('click', function () {
         var raw = $('drive-blockexts').value.trim();
-        api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked }).then(function (result) {
+        var mode = $('drive-mode-deny').checked ? 'deny' : 'rename';
+        api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked, mode: mode }).then(function (result) {
             if (!result.ok) {
                 showToast(result.msg || '保存失败');
                 return;

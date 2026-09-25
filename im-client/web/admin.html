@@ -654,7 +654,7 @@
                     <h2>网盘设置</h2>
                     <span id="drive-status" class="admin-view-tip"></span>
                 </header>
-                <p class="admin-view-tip">网盘上传扩展名黑名单：命中黑名单的文件禁止经网盘上传或挂载盘（WebDAV）写入，服务端直接拒绝并落告警日志。保存后立即热生效（网页上传与挂载盘同时生效，无需重启服务端）；设置持久化保存，重启后保持。留空表示使用内置默认黑名单；设值则完全覆盖默认（不会追加）。</p>
+                <p class="admin-view-tip">网盘上传扩展名黑名单：命中黑名单的文件按处置模式处理（默认自动加 .im 隔离保存；或直接拒绝），覆盖网页上传与挂载盘（WebDAV）写入。保存后立即热生效（无需重启服务端）；设置持久化保存，重启后保持。留空表示使用内置默认黑名单；设值则完全覆盖默认（不会追加）。</p>
                 <div class="agentset-group">
                     <h3 class="agentset-group-title">上传扩展名黑名单</h3>
                     <div class="agentset-row">
@@ -665,7 +665,15 @@
                         <span class="agentset-sub-tip" id="drive-default-tip"></span>
                     </div>
                     <div class="agentset-row">
-                        <label class="agentset-switch-label"><input type="checkbox" id="drive-elf"> ELF 魔数检测（拦截改名的 Linux 可执行文件：Linux 二进制没有固定扩展名，按文件头内容判定，关闭后仅靠扩展名黑名单）</label>
+                        <span class="agentset-label">处置方式</span>
+                        <label class="agentset-switch-label"><input type="radio" name="drive-block-mode" id="drive-mode-rename" value="rename"> 自动加 .im 隔离保存（推荐：用户传 123.exe 服务端保存为 123.exe.im，MinIO 对象名同步加 .im，文件不可直接执行，改名前无需打扰用户）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-label"></span>
+                        <label class="agentset-switch-label"><input type="radio" name="drive-block-mode" id="drive-mode-deny" value="deny"> 直接拦截拒绝上传（命中即 403 拒绝并落告警日志）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="drive-elf"> ELF 魔数检测（识别改名的 Linux 可执行文件：Linux 二进制没有固定扩展名，按文件头内容判定，命中同样按处置方式处理，关闭后仅靠扩展名黑名单）</label>
                     </div>
                 </div>
                 <div class="agentset-actions">

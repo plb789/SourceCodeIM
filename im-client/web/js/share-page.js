@@ -158,6 +158,7 @@
         if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].indexOf(ext) >= 0) return true;                   // 音频
         if (ext === 'pdf') return true;                                                            // PDF（iframe 内建阅读器）
         if (['txt', 'md', 'log', 'json'].indexOf(ext) >= 0) return true;                           // 文本
+        if (window.OfficePreview && OfficePreview.kindOf(name)) return true;                       // Office（docx/表格/pptx 归口共享渲染）
         return false;
     }
     // 分享文件下发 URL 归口（下载与预览共用；preview=1 服务端改 inline 下发）
@@ -173,7 +174,10 @@
         viewerTitle.textContent = name + ' · ' + T('在线预览');
         viewerBody.innerHTML = '<div class="sp-viewer-loading">' + T('正在加载预览…') + '</div>';
         viewerMask.classList.remove('hidden');
-        if (kind === 'img') {
+        if (window.OfficePreview && OfficePreview.kindOf(name)) {
+            // Office 文档（docx/xls/xlsx/csv/pptx）：归口 OfficePreview 共享渲染（缺库自动懒加载）
+            OfficePreview.render(url, name, viewerBody, T);
+        } else if (kind === 'img') {
             viewerBody.innerHTML = '';
             var img = document.createElement('img');
             img.alt = name;

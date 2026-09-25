@@ -25,14 +25,20 @@ import (
 // ObjectStore 网盘文件本体存储接口（Put 流式写入 / Open 读取 / Delete 删除 / Presign 预签名下载地址）
 type ObjectStore interface {
 	// Put 流式写入对象（size 为已知大小时传正值，未知传 -1；dispo 为下载 Content-Disposition
-	// 原始文件名头——MinIO 预签名直连下载时回带该头，浏览器另存为显示原始文件名；本地后端忽略）
-	Put(ctx context.Context, key string, r io.Reader, size int64, dispo string) error
+	// 原始文件名头——MinIO 预签名直连下载时回带该头，浏览器另存为显示原始文件名；本地后端忽略；
+	// ctype 为对象 Content-Type 元数据（按扩展名 driveMimeOf 归口）——写死 octet-stream 会让
+	// 预签名直连预览被浏览器强制下载（octet-stream 不嗅探），历史对象靠签名覆盖兜底）
+	Put(ctx context.Context, key string, r io.Reader, size int64, dispo string, ctype string) error
 	// Open 打开对象读取流（本地后端返回 *os.File 支持 Seek，可走 http.ServeContent 断点续传）
 	Open(key string) (io.ReadCloser, int64, error)
 	// Delete 删除对象（对象不存在视为成功，幂等）
 	Delete(key string) error
-	// Presign 生成短时效下载地址（本地后端不支持，返回错误——下载走服务端流式代理）
-	Presign(key string, expiry time.Duration) (string, error)
+	// Presign 生成短时效下载地址（本地后端不支持，返回错误——下载走服务端流式代理）；
+	// dispo 非空时签名内嵌 response-content-disposition 覆盖参数（预览 inline 直显归口）；
+	// ctype 非空时签名内嵌 response-content-type 覆盖参数——对象元数据是上传时写死的
+	// octet-stream（历史对象无法回填），浏览器对 octet-stream 一律强制下载（inline 也弹保存框），
+	// 预览直显必须同时覆盖真实 Content-Type
+	Presign(key string, expiry time.Duration, dispo string, ctype string) (string, error)
 	// Kind 后端类型标识（日志与启动信息用）：minio / local
 	Kind() string
 }
@@ -134,7 +140,7 @@ func (s *localStore) safeLocalPath(key string) (string, error) {
 	return p, nil
 }
 
-func (s *localStore) Put(_ context.Context, key string, r io.Reader, _ int64, _ string) error {
+func (s *localStore) Put(_ context.Context, key string, r io.Reader, _ int64, _ string, _ string) error {
 	p, err := s.safeLocalPath(key)
 	if err != nil {
 		return err
@@ -179,7 +185,7 @@ func (s *localStore) Delete(key string) error {
 	return nil
 }
 
-func (s *localStore) Presign(_ string, _ time.Duration) (string, error) {
+func (s *localStore) Presign(_ string, _ time.Duration, _ string, _ string) (string, error) {
 	return "", fmt.Errorf("本地存储不支持预签名")
 }
 
@@ -234,9 +240,12 @@ func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
 	return &minioStore{client: client, pubClient: pubClient, bucket: bucket}, nil
 }
 
-func (s *minioStore) Put(ctx context.Context, key string, r io.Reader, size int64, dispo string) error {
+func (s *minioStore) Put(ctx context.Context, key string, r io.Reader, size int64, dispo string, ctype string) error {
 	sz := size
-	opts := minio.PutObjectOptions{ContentType: "application/octet-stream"}
+	if ctype == "" {
+		ctype = "application/octet-stream"
+	}
+	opts := minio.PutObjectOptions{ContentType: ctype}
 	if dispo != "" {
 		// 对象级 Content-Disposition：预签名直连下载时浏览器另存为显示原始文件名
 		opts.ContentDisposition = dispo
@@ -266,13 +275,26 @@ func (s *minioStore) Delete(key string) error {
 }
 
 // Presign 生成短时效 GET 预签名地址（下载 302 跳转直连 MinIO，省服务端带宽；
-// 内外网分流时 URL 用外网域名生成（客户端可达），服务端读写仍走内网 endpoint）
-func (s *minioStore) Presign(key string, expiry time.Duration) (string, error) {
+// 内外网分流时 URL 用外网域名生成（客户端可达），服务端读写仍走内网 endpoint）；
+// dispo 非空时签名内嵌 response-content-disposition 覆盖参数——对象元数据的 attachment
+// 是上传时写入的，预览直显必须靠签名参数覆盖，否则浏览器弹另存为框无法内联渲染；
+// ctype 非空时同步覆盖 response-content-type（对象元数据 octet-stream 会被浏览器强制下载）
+func (s *minioStore) Presign(key string, expiry time.Duration, dispo string, ctype string) (string, error) {
 	cli := s.client
 	if s.pubClient != nil {
 		cli = s.pubClient
 	}
-	u, err := cli.PresignedGetObject(context.Background(), s.bucket, key, expiry, url.Values{})
+	var params url.Values
+	if dispo != "" {
+		params = url.Values{"response-content-disposition": []string{dispo}}
+	}
+	if ctype != "" {
+		if params == nil {
+			params = url.Values{}
+		}
+		params.Set("response-content-type", ctype)
+	}
+	u, err := cli.PresignedGetObject(context.Background(), s.bucket, key, expiry, params)
 	if err != nil {
 		return "", err
 	}

@@ -888,20 +888,22 @@ var driveDefaultBlockExts = []string{
 }
 
 var (
-	driveBlockMu     sync.Mutex
-	driveBlockMap    map[string]bool // 当前生效黑名单（driveBlockMu 保护，懒解析）
-	driveBlockRaw    string          // 当前生效原始串（""=内置默认；后台展示与热更归一）
-	driveElfOn       bool            // ELF 魔数检测开关（默认开；扩展名黑名单挡不住改名 ELF）
-	driveBlockInited bool
-	driveBlockOvKnow bool
-	driveElfOvKnow   bool
-	driveBlockOvDone bool
+	driveBlockMu      sync.Mutex
+	driveBlockMap     map[string]bool // 当前生效黑名单（driveBlockMu 保护，懒解析）
+	driveBlockRaw     string          // 当前生效原始串（""=内置默认；后台展示与热更归一）
+	driveElfOn        bool            // ELF 魔数检测开关（默认开；扩展名黑名单挡不住改名 ELF）
+	driveModeIsRename bool            // 黑名单处置模式：true=自动加 .im 隔离保存（默认，人性化）；false=直接拦截 403
+	driveBlockInited  bool
+	driveBlockOvKnow  bool
+	driveElfOvKnow    bool
+	driveBlockOvDone  bool
 )
 
 // 后台设置在 DB 的 kind（复用 AgentWhitelist 全局 kv 行，username=""，与历史压缩设置同款归口）
 const (
 	driveBlockKind = "drive_block_exts"
 	driveElfKind   = "drive_block_elf"
+	driveModeKind  = "drive_block_mode" // 处置模式：rename=隔离改名 .im / deny=拦截 403
 )
 
 // driveParseBlockExts 解析逗号分隔扩展名串为 map（大小写归一、自动补前导点）；空串/全非法 → 内置默认
@@ -931,13 +933,14 @@ func (s *Server) driveBlockInitLocked() {
 		return
 	}
 	driveBlockInited = true
-	driveElfOn = true // 默认开启 ELF 检测
+	driveElfOn = true        // 默认开启 ELF 检测
+	driveModeIsRename = true // 默认隔离改名模式（比直接 403 更人性化，文件本体仍隔离不可执行）
 	driveBlockRaw = strings.TrimSpace(s.cfg.Drive.BlockExts)
 	driveBlockMap = driveParseBlockExts(driveBlockRaw)
 	if !driveBlockOvDone {
 		driveBlockOvDone = true
 		var rows []model.AgentWhitelist
-		if err := store.DB.Where("kind IN ? AND username = ?", []string{driveBlockKind, driveElfKind}, "").Find(&rows).Error; err == nil {
+		if err := store.DB.Where("kind IN ? AND username = ?", []string{driveBlockKind, driveElfKind, driveModeKind}, "").Find(&rows).Error; err == nil {
 			for _, r := range rows {
 				switch r.Kind {
 				case driveBlockKind:
@@ -947,6 +950,8 @@ func (s *Server) driveBlockInitLocked() {
 				case driveElfKind:
 					driveElfOn = r.Value != "0"
 					driveElfOvKnow = true
+				case driveModeKind:
+					driveModeIsRename = r.Value != "deny"
 				}
 			}
 		}
@@ -969,20 +974,21 @@ var elfMagic = []byte{0x7f, 'E', 'L', 'F'}
 var errDriveElfBlocked = errors.New("禁止上传 Linux 可执行文件(ELF)")
 
 // driveWrapElf ELF 魔数检测包装（所有进网盘的写入流归口）：开启时预读头 4 字节判定，
-// 命中返回 errDriveElfBlocked（对象存储零写入）；未命中把已读头拼回流原样透传（io.MultiReader，零拷贝）
-func driveWrapElf(r io.Reader, on bool) (io.Reader, error) {
+// 命中返回 elfHit=true（调用方按处置模式决定拦截或隔离改名；改名续存时需把已读头拼回流）；
+// 未命中把已读头拼回流原样透传（io.MultiReader，零拷贝）
+func driveWrapElf(r io.Reader, on bool) (src io.Reader, elfHit bool, err error) {
 	if !on {
-		return r, nil
+		return r, false, nil
 	}
 	head := make([]byte, 4)
 	n, err := io.ReadFull(r, head)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return nil, err // 读头 IO 故障按原错误上抛（上游归口提示）
+		return nil, false, err // 读头 IO 故障按原错误上抛（上游归口提示）
 	}
 	if n == 4 && bytes.Equal(head, elfMagic) {
-		return nil, errDriveElfBlocked
+		return nil, true, errDriveElfBlocked
 	}
-	return io.MultiReader(bytes.NewReader(head[:n]), r), nil
+	return io.MultiReader(bytes.NewReader(head[:n]), r), false, nil
 }
 
 // driveSetBlockElf 后台保存 ELF 开关：DB 落库 + 内存直更（保存即生效）
@@ -1005,6 +1011,75 @@ func (s *Server) driveSetBlockElf(on bool) error {
 	driveElfOn = on
 	driveElfOvKnow = true
 	return nil
+}
+
+// driveBlockRename 当前黑名单处置模式（true=命中自动加 .im 隔离保存；false=直接拦截 403）
+func (s *Server) driveBlockRename() bool {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	return driveModeIsRename
+}
+
+// driveSetBlockMode 后台保存处置模式：DB 落库（重启不丢）+ 内存直更（保存即生效）
+func (s *Server) driveSetBlockMode(rename bool) error {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	val := "rename"
+	if !rename {
+		val = "deny"
+	}
+	// 全局 kv 行 upsert（自写带检查版本，需真实错误返回，与 driveSetBlockExts 同款）
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ? AND username = ?", driveModeKind, "").First(&row).Error; err == nil {
+		if err := store.DB.Model(&row).Update("value", val).Error; err != nil {
+			return err
+		}
+	} else if err := store.DB.Create(&model.AgentWhitelist{Kind: driveModeKind, Value: val}).Error; err != nil {
+		return err
+	}
+	driveModeIsRename = rename
+	return nil
+}
+
+// driveBlockSuffix 隔离改名后缀（.im 项目自留后缀——原 .bak 会被部分防火墙/安全软件按"备份文件"
+// 规则拦截下载，用户实测 2026-09-26，改用 .im 跳过拦截；黑名单文件本身仍不可执行，隔离语义不变）
+const driveBlockSuffix = ".im"
+
+// driveBlockStripSuffix 剥隔离后缀还原原名（新旧后缀双兼容：.im 当前 / .bak 历史数据；无后缀原样返回）
+func driveBlockStripSuffix(name string) string {
+	l := strings.ToLower(name)
+	if strings.HasSuffix(l, driveBlockSuffix) {
+		return name[:len(name)-len(driveBlockSuffix)]
+	}
+	if strings.HasSuffix(l, ".bak") {
+		return name[:len(name)-len(".bak")]
+	}
+	return name
+}
+
+// driveBlockAlreadyIsolated 隔离产物判定：剥后缀后命中黑名单才算（防"123.exe.im 覆盖写再叠一层"，
+// 双后缀兼容历史 .bak；单纯以 .im 结尾的普通文件不误判——剥后缀不命中黑名单即非隔离产物）
+func (s *Server) driveBlockAlreadyIsolated(name string) bool {
+	base := driveBlockStripSuffix(name)
+	return base != name && s.driveUploadBlocked(base) != ""
+}
+
+// driveBlockApply 黑名单命中处置归口（扩展名与 ELF 命中共用，直传/分片/转存三链路统一）：
+// deny 模式写 403 响应返回 false；rename 模式把文件名追加 .im 隔离（写回 *name，隔离产物不叠加）
+// 返回 true 并落审计日志。denyMsg 为拦截模式的响应文案；logCtx 携带用户与链路标注
+func (s *Server) driveBlockApply(w http.ResponseWriter, name *string, denyMsg, logCtx string) bool {
+	if !s.driveBlockRename() {
+		driveFail(w, http.StatusForbidden, denyMsg)
+		return false
+	}
+	old := *name
+	if !s.driveBlockAlreadyIsolated(old) {
+		*name = old + driveBlockSuffix
+	}
+	logger.Info("网盘黑名单隔离改名(%s): %s -> %s", logCtx, old, *name)
+	return true
 }
 
 // driveBlockExts 当前生效黑名单 map（调用点归口；懒初始化后直读缓存，热更由 driveSetBlockExts 原地替换）
@@ -1088,10 +1163,13 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
 		return
 	}
-	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：可执行/脚本文件禁止入库
+	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：deny=403；rename=自动加 .im 隔离保存
+	renamed := false
 	if ext := s.driveUploadBlocked(name); ext != "" {
-		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
-		return
+		if !s.driveBlockApply(w, &name, "禁止上传 "+ext+" 文件", username+" 直传") {
+			return
+		}
+		renamed = true
 	}
 
 	// 配额聚合校验（服务端归口；quota=-1 不限）：现有占用 + 本次上传 > 配额 → 拒绝
@@ -1120,25 +1198,33 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 对象 key 服务端生成：drive/u/<owner>/<纳秒>_<16hex><ext>（纳秒_16hex 命名与聊天上传物同款，
+	// ELF 魔数检测（Linux 可执行无强制扩展名，改名绕过扩展名黑名单的兜底）
+	src, elfHit, werr := driveWrapElf(file, s.driveBlockElf())
+	if werr != nil {
+		if !elfHit { // 读头 IO 故障（非 ELF 命中）按原口径上抛
+			driveFail(w, http.StatusForbidden, werr.Error())
+			return
+		}
+		if !s.driveBlockApply(w, &name, werr.Error(), username+" 直传(ELF)") {
+			return
+		}
+		renamed = true
+		// 已读的 ELF 头拼回流，隔离改名后文件本体完整保存（.im 隔离不可执行）
+		src = io.MultiReader(bytes.NewReader(elfMagic), file)
+	}
+
+	// 对象 key 服务端生成（隔离改名判定之后，尾部扩展名跟随 .im，MinIO 对象名同样以 .im 隔离）：
+	// drive/u/<owner>/<纳秒>_<16hex><ext>（纳秒_16hex 命名与聊天上传物同款，
 	// 天然避开本地清理白名单正则的语义重叠；对象 key 与 static/upload 完全隔离）
 	ext := strings.ToLower(filepath.Ext(name))
 	b := make([]byte, 8)
 	rand.Read(b)
 	key := fmt.Sprintf("drive/u/%s/%d_%s%s", username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
 
-	// 对象级 Content-Disposition（原始文件名随对象存储，MinIO 预签名直连下载另存为显示原文件名）
+	// 对象级 Content-Disposition（隔离改名后文件名随对象存储，下载另存为显示 .im 名）
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": name})
 
-	// ELF 魔数检测（Linux 可执行无强制扩展名，改名绕过扩展名黑名单的兜底；Put 前 403，对象存储零写入）
-	src, werr := driveWrapElf(file, s.driveBlockElf())
-	if werr != nil {
-		logger.Warn("网盘上传黑名单拦截: %s, %s (ELF)", username, name)
-		driveFail(w, http.StatusForbidden, werr.Error())
-		return
-	}
-
-	if err := st.Put(r.Context(), key, src, header.Size, dispo); err != nil {
+	if err := st.Put(r.Context(), key, src, header.Size, dispo, driveMimeOf(name)); err != nil {
 		driveFail(w, http.StatusInternalServerError, "文件保存失败")
 		return
 	}
@@ -1159,7 +1245,12 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.Info("网盘上传: %s -> parent=%d, %s (%d 字节), key=%s, 后端=%s", username, parentID, name, header.Size, key, st.Kind())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"item": rec})
+	resp := map[string]interface{}{"item": rec}
+	if renamed {
+		resp["renamed"] = true
+		resp["message"] = fmt.Sprintf("为安全考虑，已自动改名为 %s 保存", name)
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // ===== 大文件链路（网盘二期）：MD5 秒传 + 分片上传 + 断点续传 =====
@@ -1232,10 +1323,12 @@ func (s *Server) handleDriveUploadInit(w http.ResponseWriter, r *http.Request) {
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
 		return
 	}
-	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：前置拦截给用户即时反馈
+	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：deny=403 前置拦截给用户即时反馈；
+	// rename=改名 .im 后续流程（秒传记录/complete 权威校验均以改名后名字落库，口径一致）
 	if ext := s.driveUploadBlocked(name); ext != "" {
-		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
-		return
+		if !s.driveBlockApply(w, &name, "禁止上传 "+ext+" 文件", username+" 分片init") {
+			return
+		}
 	}
 	if body.ParentID > 0 {
 		if _, err := s.driveOwnFile(body.ParentID, username); err != nil {
@@ -1266,7 +1359,7 @@ func (s *Server) handleDriveUploadInit(w http.ResponseWriter, r *http.Request) {
 		driveFail(w, http.StatusInternalServerError, "存储后端未就绪")
 		return
 	}
-	// 秒传：本人历史对象命中即复用 object_key（零字节传输，秒级完成）
+	// 秒传：本人历史对象命中即复用 object_key（零字节传输，秒级完成；黑名单文件以 .im 名建记录隔离）
 	var hit model.DriveFile
 	if err := store.DB.Where("owner = ? AND md5 = ? AND size = ? AND object_key != ''",
 		username, md5hex, body.Size).Order("create_time ASC").First(&hit).Error; err == nil {
@@ -1280,7 +1373,12 @@ func (s *Server) handleDriveUploadInit(w http.ResponseWriter, r *http.Request) {
 		}
 		logger.Info("网盘秒传: %s -> parent=%d, %s (%d 字节), 复用 key=%s", username, body.ParentID, name, body.Size, hit.ObjectKey)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"instant": true, "item": rec})
+		resp := map[string]interface{}{"instant": true, "item": rec}
+		if s.driveBlockAlreadyIsolated(name) { // 秒传复用黑名单历史对象：响应带改名提示（.im/.bak 双后缀兼容）
+			resp["renamed"] = true
+			resp["message"] = fmt.Sprintf("为安全考虑，已自动改名为 %s 保存", name)
+		}
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 	// 断点续传：本人同指纹未完成会话直接复用（chunk_size 取会话快照，跨配置变更仍一致）
@@ -1426,10 +1524,13 @@ func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Reques
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
 		return
 	}
-	// 扩展名黑名单归口（权威校验：防 init 后改名/绕过；与挂载盘 WebDAV 同拦）
+	// 扩展名黑名单归口（权威校验：防 init 后改名/绕过；deny=403，rename=隔离改名 .im）
+	renamed := false
 	if ext := s.driveUploadBlocked(name); ext != "" {
-		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
-		return
+		if !s.driveBlockApply(w, &name, "禁止上传 "+ext+" 文件", username+" 分片") {
+			return
+		}
+		renamed = true
 	}
 	if body.ParentID > 0 {
 		if _, err := s.driveOwnFile(body.ParentID, username); err != nil {
@@ -1482,21 +1583,29 @@ func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Reques
 		files = append(files, f)
 		readers = append(readers, f)
 	}
+	// ELF 魔数检测：第一分片头 4 字节判定（改名绕过扩展名黑名单的兜底）
+	merged, elfHit, werr := driveWrapElf(io.MultiReader(readers...), s.driveBlockElf())
+	if werr != nil {
+		cleanup = true // 分片目录随 defer（句柄关闭后）清理
+		if !elfHit {   // 读分片头 IO 故障（非 ELF 命中）按原口径上抛
+			driveFail(w, http.StatusForbidden, werr.Error())
+			return
+		}
+		if !s.driveBlockApply(w, &name, werr.Error(), username+" 分片(ELF)") {
+			return
+		}
+		renamed = true
+		// 已读的 ELF 头拼回流，隔离改名后文件本体完整保存（.im 隔离不可执行）
+		merged = io.MultiReader(bytes.NewReader(elfMagic), io.MultiReader(readers...))
+	}
+	// 对象 key 与 dispo 在隔离改名判定后生成（尾部扩展名跟随 .im，MinIO 对象名同样以 .im 隔离）
 	ext := strings.ToLower(filepath.Ext(name))
 	b := make([]byte, 8)
 	rand.Read(b)
 	key := fmt.Sprintf("drive/u/%s/%d_%s%s", username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": name})
 	h := md5.New()
-	// ELF 魔数检测：第一分片头 4 字节判定（改名绕过扩展名黑名单的兜底；Put 前拦截）
-	merged, werr := driveWrapElf(io.MultiReader(readers...), s.driveBlockElf())
-	if werr != nil {
-		cleanup = true // 分片目录随 defer（句柄关闭后）清理
-		logger.Warn("网盘分片上传黑名单拦截: %s, %s (ELF), session=%s", username, name, sess.SessionID)
-		driveFail(w, http.StatusForbidden, werr.Error())
-		return
-	}
-	if err := st.Put(r.Context(), key, io.TeeReader(merged, h), sess.Size, dispo); err != nil {
+	if err := st.Put(r.Context(), key, io.TeeReader(merged, h), sess.Size, dispo, driveMimeOf(name)); err != nil {
 		st.Delete(key) // 兜底清理半写对象
 		driveFail(w, http.StatusInternalServerError, "文件保存失败")
 		return
@@ -1522,7 +1631,12 @@ func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Reques
 	logger.Info("网盘分片上传完成: %s -> parent=%d, %s (%d 字节, %d 片), key=%s, 后端=%s",
 		username, body.ParentID, name, sess.Size, sess.ChunkTotal, key, st.Kind())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"item": rec})
+	resp := map[string]interface{}{"item": rec}
+	if renamed {
+		resp["renamed"] = true
+		resp["message"] = fmt.Sprintf("为安全考虑，已自动改名为 %s 保存", name)
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // driveAbortSession 会话作废归口：删会话行 + 删分片目录（均幂等；GC 与 complete 共用）
@@ -1590,7 +1704,31 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 	}
 	// MinIO 后端优先预签名直连（客户端不可达 MinIO 时自动回退服务端流式代理，两种部署形态都通）
 	if st.Kind() == "minio" {
-		if url, err := st.Presign(rec.ObjectKey, 30*time.Minute); err == nil {
+		// 下发形态归口：inline=预览直显（img/video/pdf 标签内联渲染），attachment=另存为下载；
+		// 中文文件名 RFC 5987 编码（filename* 兜底 filename，浏览器/Electron 另存为均正确显示）。
+		// 预签名必须带 response-content-disposition 覆盖参数——对象元数据的 attachment 是上传时写入的
+		// （实测：预览 iframe 打开 302 后弹"另存为"框无法内联渲染，截图实锤），签名覆盖是唯一正解；
+		// 同时覆盖 response-content-type：对象元数据 ContentType 上传时写死 octet-stream（历史对象
+		// 无法回填），浏览器对 octet-stream 一律强制下载（inline 也弹保存框，实测 2026-09-26 截图），
+		// 必须覆盖为记录落库时的真实 MIME（上传时按扩展名 driveMimeOf 归档，空则按名重推）
+		disp := "attachment"
+		if inline {
+			disp = "inline"
+		}
+		dispo := mime.FormatMediaType(disp, map[string]string{"filename": rec.Name})
+		ct := rec.MimeType
+		if ct == "" || ct == "application/octet-stream" {
+			ct = driveMimeOf(rec.Name)
+		}
+		if url, err := st.Presign(rec.ObjectKey, 30*time.Minute, dispo, ct); err == nil {
+			// CORS：fetch 规范要求 cors 模式下跨域重定向的 302 响应本身通过 CORS check
+			// （实测：缺失时浏览器报 TypeError: Failed to fetch，预签名直连全挂）；
+			// 回显请求 Origin 并加 Vary（无 cookie 凭据下载，回显比 * 更收敛）；
+			// 第二跳 MinIO/CDN 的 CORS 头由 MinIO 内置策略回显，已实测放行
+			if origin := r.Header.Get("Origin"); origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
 			http.Redirect(w, r, url, http.StatusFound)
 			return
 		}
@@ -1602,8 +1740,7 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 		return
 	}
 	defer rc.Close()
-	// 中文文件名 RFC 5987 编码（filename* 兜底 filename，浏览器/Electron 另存为均正确显示）；
-	// inline=预览直显（img/video/pdf 标签内联渲染），attachment=另存为下载
+	// 本地后端流式下发：自动支持 Range 断点续传（ServeContent），dispo 归口同 302 分支
 	disp := "attachment"
 	if inline {
 		disp = "inline"
@@ -1724,6 +1861,15 @@ func (s *Server) handleDriveChatSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// 黑名单归口（与网盘上传同拦：扩展名 + ELF 魔数）——聊天文件转存进网盘后即长期保存，同等高危防护。
+	// 扩展名检查在同名改名循环之前（.im 名参与唯一性候选，避免改名后撞 123.exe.im 同名）
+	renamed := false
+	if e := s.driveUploadBlocked(name); e != "" {
+		if !s.driveBlockApply(w, &name, "禁止保存 "+e+" 文件", body.Username+" 转存") {
+			return
+		}
+		renamed = true
+	}
 	var finalName string
 	for i := 0; ; i++ {
 		candidate := name
@@ -1739,25 +1885,29 @@ func (s *Server) handleDriveChatSave(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// ELF 魔数检测（无扩展名 Linux 可执行的兜底；命中按处置模式拦截或隔离改名）
+	src2, elfHit, werr := driveWrapElf(src, s.driveBlockElf())
+	if werr != nil {
+		if !elfHit { // 读头 IO 故障（非 ELF 命中）按原口径上抛
+			driveFail(w, http.StatusForbidden, werr.Error())
+			return
+		}
+		if !s.driveBlockApply(w, &finalName, werr.Error(), body.Username+" 转存(ELF)") {
+			return
+		}
+		renamed = true
+		// 已读的 ELF 头拼回流，隔离改名后文件本体完整保存（.im 隔离不可执行）
+		src2 = io.MultiReader(bytes.NewReader(elfMagic), src)
+	}
 
-	// 对象 key 与网盘上传同款命名：drive/u/<owner>/<纳秒>_<16hex><ext>（独立本体，与聊天上传物零关联）
+	// 对象 key 与网盘上传同款命名：drive/u/<owner>/<纳秒>_<16hex><ext>（独立本体，与聊天上传物零关联；
+	// 隔离改名判定后生成，尾部扩展名跟随 .im，MinIO 对象名同样以 .im 隔离）
 	ext := strings.ToLower(filepath.Ext(finalName))
 	b := make([]byte, 8)
 	rand.Read(b)
 	key := fmt.Sprintf("drive/u/%s/%d_%s%s", body.Username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": finalName})
-	// 黑名单归口（与网盘上传同拦：扩展名 + ELF 魔数）——聊天文件转存进网盘后即长期保存，同等高危防护
-	if e := s.driveUploadBlocked(finalName); e != "" {
-		driveFail(w, http.StatusForbidden, "禁止保存 "+e+" 文件")
-		return
-	}
-	src2, werr := driveWrapElf(src, s.driveBlockElf())
-	if werr != nil {
-		logger.Warn("聊天文件转存黑名单拦截: %s msg=%d (ELF)", body.Username, m.ID)
-		driveFail(w, http.StatusForbidden, werr.Error())
-		return
-	}
-	if err := st.Put(r.Context(), key, src2, fi.Size(), dispo); err != nil {
+	if err := st.Put(r.Context(), key, src2, fi.Size(), dispo, driveMimeOf(finalName)); err != nil {
 		logger.Warn("聊天文件转存网盘失败: %s msg=%d %v", body.Username, m.ID, err)
 		driveFail(w, http.StatusInternalServerError, "保存失败")
 		return
@@ -1777,5 +1927,10 @@ func (s *Server) handleDriveChatSave(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.Info("聊天文件转存网盘: %s msg=%d, %s (%d 字节), key=%s, 后端=%s", body.Username, m.ID, finalName, fi.Size(), key, st.Kind())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "item": rec})
+	resp := map[string]interface{}{"ok": true, "item": rec}
+	if renamed {
+		resp["renamed"] = true
+		resp["message"] = fmt.Sprintf("为安全考虑，已自动改名为 %s 保存", finalName)
+	}
+	json.NewEncoder(w).Encode(resp)
 }

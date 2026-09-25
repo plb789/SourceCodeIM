@@ -126,23 +126,38 @@ func (d *davServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		d.unauthorized(w)
 		return
 	}
-	// 写操作目标名黑名单校验（挂载盘禁传可执行文件，归口同网盘 API 上传 driveUploadBlocked）：
+	// 写操作目标名黑名单校验（挂载盘与网盘 API 上传共用归口 driveUploadBlocked）：
 	// PUT/POST 目标在 URL path（URL 路径分隔符恒为 /，用 path.Base 而非 filepath.Base）；
-	// COPY/MOVE 的目标在 Destination 头——挂载盘内移动/复制生成 .exe 同样拦截
+	// COPY/MOVE 的目标在 Destination 头——挂载盘内移动/复制生成 .exe 同样管控。
+	// deny=403 拦截；rename=自动追加 .im 隔离保存（改写目标名，后续 leaf/key/记录名全自动跟随，
+	// 挂载盘无交互提示通道，隔离结果以文件名变化直观呈现）
 	switch r.Method {
 	case "PUT", "POST":
 		if ext := d.s.driveUploadBlocked(path.Base(r.URL.Path)); ext != "" {
-			logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, r.URL.Path)
-			http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
-			return
+			if !d.s.driveBlockRename() {
+				logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, r.URL.Path)
+				http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
+				return
+			}
+			if !d.s.driveBlockAlreadyIsolated(path.Base(r.URL.Path)) {
+				logger.Info("网盘挂载上传黑名单隔离改名: user=%s, %s -> %s", user, r.URL.Path, r.URL.Path+driveBlockSuffix)
+				r.URL.Path += driveBlockSuffix
+			}
 		}
 	case "COPY", "MOVE":
 		if dst := r.Header.Get("Destination"); dst != "" {
 			if du, err := url.Parse(dst); err == nil {
 				if ext := d.s.driveUploadBlocked(path.Base(du.Path)); ext != "" {
-					logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, du.Path)
-					http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
-					return
+					if !d.s.driveBlockRename() {
+						logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, du.Path)
+						http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
+						return
+					}
+					if !d.s.driveBlockAlreadyIsolated(path.Base(du.Path)) {
+						logger.Info("网盘挂载上传黑名单隔离改名: user=%s, %s -> %s", user, du.Path, du.Path+driveBlockSuffix)
+						du.Path += driveBlockSuffix
+						r.Header.Set("Destination", du.String())
+					}
 				}
 			}
 		}
@@ -168,8 +183,10 @@ func (d *davServer) handlerFor(user string) *webdav.Handler {
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(req *http.Request, err error) {
 			// x/net/webdav 的 Logger 对每个请求都会回调（成功请求 err 为 nil），
-			// 不过滤会造成海量 "<nil>" 误报（实测：正常挂载即刷屏），仅真实错误落日志
-			if err == nil {
+			// 不过滤会造成海量 "<nil>" 误报（实测：正常挂载即刷屏），仅真实错误落日志。
+			// 另外 ErrNotExist（404 探测）是挂载盘常规业务——资源管理器粘贴前先 PROPFIND
+			// 探测目标是否存在、下载已删文件等，均属预期，静默避免误导排查
+			if err == nil || errors.Is(err, os.ErrNotExist) {
 				return
 			}
 			logger.Warn("网盘挂载协议错误: %v, path=%s", err, req.URL.Path)
@@ -584,9 +601,11 @@ type davWriteFile struct {
 	leaf     string
 	done     bool
 	// ELF 魔数检测状态（Linux 可执行无强制扩展名，扩展名黑名单挡不住改名 ELF）：
-	// elfHead 非 nil 且 len<4 时仍在收集头字节，攒满 4 字节判定命中即断流；
-	// aborted 置位后 Close 不再转正落库（半写临时文件由 defer os.Remove 兜底清理）
+	// elfHead 非 nil 且 len<4 时仍在收集头字节，攒满 4 字节判定；
+	// deny 模式命中即断流（aborted 置位，Close 不转正落库，半写临时文件由 defer os.Remove 兜底清理）；
+	// rename 模式命中标记 elfHit 不断流继续写，Close 时 leaf 追加 .im 隔离转正
 	elfHead []byte
+	elfHit  bool
 	aborted bool
 }
 
@@ -619,9 +638,14 @@ func (f *davWriteFile) Write(p []byte) (int, error) {
 			f.elfHead = append(f.elfHead, p[:need]...)
 		}
 		if len(f.elfHead) == 4 && bytes.Equal(f.elfHead, elfMagic) {
-			f.aborted = true
-			logger.Warn("网盘挂载上传黑名单拦截: %s, %s (ELF)", f.fs.user, f.leaf)
-			return 0, errDriveElfBlocked // 断流：x/net/webdav 对 Copy/Close 错误统一映射 405，PUT 失败
+			if !f.fs.s.driveBlockRename() {
+				f.aborted = true
+				logger.Warn("网盘挂载上传黑名单拦截: %s, %s (ELF)", f.fs.user, f.leaf)
+				return 0, errDriveElfBlocked // 断流：x/net/webdav 对 Copy/Close 错误统一映射 405，PUT 失败
+			}
+			// 隔离改名模式：不断流继续写（文件完整落临时盘），Close 时 leaf 追加 .im 隔离转正
+			f.elfHit = true
+			f.elfHead = nil
 		}
 	}
 	n, err := f.tmp.Write(p)
@@ -644,6 +668,12 @@ func (f *davWriteFile) Close() error {
 	defer os.Remove(f.tmp.Name()) // 临时文件全路径兜底清理
 	if f.aborted {
 		return errDriveElfBlocked // ELF 拦截断流：不转正不落库（与 Write 返回错误同口径）
+	}
+	// 隔离改名模式 ELF 命中：leaf 追加 .im 后转正（key/dispo/记录名/Mime 全自动跟随，
+	// 隔离产物不叠加（.im/.bak 双后缀兼容）；挂载盘无提示通道，隔离结果以文件名变化直观呈现）
+	if f.elfHit && !f.fs.s.driveBlockAlreadyIsolated(f.leaf) {
+		logger.Info("网盘挂载上传黑名单隔离改名: user=%s, %s -> %s (ELF)", f.fs.user, f.leaf, f.leaf+driveBlockSuffix)
+		f.leaf += driveBlockSuffix
 	}
 	fi, err := f.tmp.Stat()
 	if err != nil {
@@ -673,7 +703,7 @@ func (f *davWriteFile) Close() error {
 		return err
 	}
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": f.leaf})
-	if err := st.Put(context.Background(), key, f.tmp, size, dispo); err != nil {
+	if err := st.Put(context.Background(), key, f.tmp, size, dispo, driveMimeOf(f.leaf)); err != nil {
 		return err
 	}
 	if f.exist != nil {

@@ -450,9 +450,24 @@
     }
 
     // ===== 操作 =====
-    function downloadItem(it) {
-        // 下载归口页面内 fetch 流式（百度网盘同款传输列表：进度/速度/剩余时间可视）
-        downQueue.push(makeTask({ name: it.name, size: it.size || 0, id: it.id, kind: 'down' }));
+    function downloadItem(it, silent) {
+        // 下载入队归口（silent=批量下载等无手势场景，跳过保存框直接内存 Blob 方式）
+        enqueueDownload(makeTask({ name: it.name, size: it.size || 0, id: it.id, kind: 'down' }), silent);
+    }
+    // 下载入口归口：File System Access API（Chromium/Edge）可用且单文件点击时，先在用户手势内
+    // 弹系统保存框选定位置，入队后流式写盘（边下边写，进度即真实写盘进度）；
+    // 不支持/批量/用户取消 → 回退内存 Blob 方式（100% 后触发浏览器落盘，同款体验不变）
+    function enqueueDownload(task, silent) {
+        if (!silent && window.showSaveFilePicker) {
+            window.showSaveFilePicker({ suggestedName: task.name }).then(function (handle) {
+                task.handle = handle;
+                downQueue.push(task);
+                renderTransfers();
+                pumpDown();
+            }, function () { }); // 用户取消/环境拒绝（无手势等）：静默不下载
+            return;
+        }
+        downQueue.push(task);
         renderTransfers();
         pumpDown();
     }
@@ -554,7 +569,7 @@
         for (var i = 0; i < itemsCache.length; i++) {
             var it = itemsCache[i];
             if (!ids[it.id] || it.is_dir) continue;
-            downloadItem(it);
+            downloadItem(it, true); // silent：批量不逐个弹保存框，回退内存 Blob 方式
             n++;
         }
         if (n === 0) { toast(T('所选项目均不支持下载')); return; }
@@ -1092,6 +1107,10 @@
                     t.instant = true;
                     t.pct = 100;
                     t.loaded = t.size;
+                    // 黑名单隔离改名提示（服务端以 .im 名落库时随响应附带 message）
+                    if (data.renamed && data.message) {
+                        toast(T('为安全考虑，已自动改名为 {v} 保存', { v: (data.item && data.item.name) || t.file.name }));
+                    }
                     finish();
                     refreshAfterOp();
                     loadUsage();
@@ -1133,11 +1152,15 @@
             setProgress(t.size);
             apiPost('upload/complete?username=' + encodeURIComponent(u()), {
                 session_id: info.session_id, name: t.file.name, parent_id: curParent
-            }, function (err) {
+            }, function (err, data) {
                 if (err) { fail(err.message); return; }
                 t.state = 'ok';
                 t.pct = 100;
                 t.loaded = t.size;
+                // 黑名单隔离改名提示（服务端以 .im 名落库时随响应附带 message）
+                if (data && data.renamed && data.message) {
+                    toast(T('为安全考虑，已自动改名为 {v} 保存', { v: (data.item && data.item.name) || t.file.name }));
+                }
                 finish();
                 refreshAfterOp();
                 loadUsage();
@@ -1152,7 +1175,68 @@
         t.abort = ctrl;
         var sample = makeSampler();
         // 下载地址归口：默认本人网盘下载；分享详情下载经 t.url（share/download，凭分享码+提取码）
-        fetch(t.url || ('/api/drive/download?username=' + encodeURIComponent(u()) + '&id=' + t.id), { signal: ctrl.signal })
+        var url = t.url || ('/api/drive/download?username=' + encodeURIComponent(u()) + '&id=' + t.id);
+        function fail(err) {
+            if (err && err.name === 'AbortError') { t.state = 'fail'; t.errMsg = T('已取消'); }
+            else { t.state = 'fail'; t.errMsg = (err && err.message) || T('网络异常'); }
+            updateTaskUI(t);
+            renderTransfers();
+        }
+        // File System Access API 分支（保存框已在前置弹窗选定位置）：流式写盘，边下边写真实进度；
+        // 中断/失败 abort 清理临时文件不留半文件。进度即写盘进度，完成即文件就绪（无 100% 后才弹框）
+        if (t.handle) {
+            var wref = null;
+            fetch(url, { signal: ctrl.signal }).then(function (res) {
+                if (!res.ok) {
+                    return res.json().catch(function () { return {}; }).then(function (d) {
+                        throw new Error(d.error || ('HTTP ' + res.status));
+                    });
+                }
+                var total = parseInt(res.headers.get('content-length'), 10) || t.size || 0;
+                function tick(loaded) {
+                    t.loaded = loaded;
+                    if (total) t.pct = Math.min(100, Math.round(loaded * 100 / total));
+                    t.speed = sample(loaded);
+                    updateTaskUI(t);
+                }
+                return t.handle.createWritable().then(function (w) {
+                    wref = w;
+                    // res.body 极端环境缺失兜底：整体 blob 一次写入（无逐块进度）
+                    if (!res.body) {
+                        return res.blob().then(function (b) { t.size = b.size; return w.write(b); }).then(function () {
+                            return w.close().then(function () {
+                                t.state = 'ok'; t.pct = 100; t.loaded = t.size;
+                                updateTaskUI(t);
+                                renderTransfers();
+                            });
+                        });
+                    }
+                    var reader = res.body.getReader();
+                    var received = 0;
+                    function pump() {
+                        return reader.read().then(function (r) {
+                            if (r.done) {
+                                return w.close().then(function () {
+                                    t.state = 'ok'; t.pct = 100; t.loaded = total || received;
+                                    updateTaskUI(t);
+                                    renderTransfers();
+                                });
+                            }
+                            received += r.value.length;
+                            tick(received);
+                            return w.write(r.value).then(pump);
+                        });
+                    }
+                    return pump();
+                });
+            }).catch(function (err) {
+                if (wref) { try { wref.abort(); } catch (e) { } } // 删除半写临时文件
+                fail(err);
+            }).then(function () { done(); }, function () { done(); });
+            return;
+        }
+        // 回退分支：内存 Blob 方式（批量下载/旧浏览器；fetch 全量后 a.click() 落盘）
+        fetch(url, { signal: ctrl.signal })
             .then(function (res) {
                 if (!res.ok) {
                     // 服务端错误归口：解析 error 文本直显（404/401/配额等）
@@ -1206,17 +1290,13 @@
                 }
                 return pump();
             })
-            .catch(function (err) {
-                if (err && err.name === 'AbortError') { t.state = 'fail'; t.errMsg = '已取消'; }
-                else { t.state = 'fail'; t.errMsg = (err && err.message) || '网络异常'; }
-                updateTaskUI(t);
-                renderTransfers();
-            })
+            .catch(fail)
             .then(function () { done(); }, function () { done(); });
     }
 
     // ===== 网盘内在线预览（分享页同款：preview=1 服务端 inline 下发，页面内自绘浮层渲染） =====
     // 浏览器原生可渲染的类型归口（avi/mkv/mov/flv/wmv 原生 <video> 不支持，不进入预览照常走下载）
+    // Office 文档（docx/表格/pptx）归口 OfficePreview 共享渲染（聊天工作台同款三库，office-preview.js）
     function canPreviewName(name) {
         var ext = ((name || '').split('.').pop() || '').toLowerCase();
         if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].indexOf(ext) >= 0) return 'img';
@@ -1224,6 +1304,7 @@
         if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].indexOf(ext) >= 0) return 'audio';
         if (ext === 'pdf') return 'pdf';
         if (['txt', 'md', 'log', 'json'].indexOf(ext) >= 0) return 'txt';
+        if (window.OfficePreview && OfficePreview.kindOf(name)) return 'office';
         return '';
     }
     // 文件下发 URL 归口（预览加 preview=1 → 服务端 Content-Disposition:inline；下载与预览共用鉴权）
@@ -1263,7 +1344,10 @@
         pvTitle.textContent = name + ' · ' + T('在线预览');
         pvBody.innerHTML = '<div class="drive-viewer-loading">' + T('正在加载预览…') + '</div>';
         pvMask.classList.remove('hidden');
-        if (kind === 'img' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+        if (kind === 'office') {
+            // Office 文档（docx/xls/xlsx/csv/pptx）：归口 OfficePreview 共享渲染（缺库自动懒加载）
+            OfficePreview.render(url, name, pvBody, T);
+        } else if (kind === 'img' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
             // 原生标签内联渲染（img 自适应缩放 / pdf iframe 内建阅读器 / 视频/音频原生控件自动播放）
             pvBody.innerHTML = '';
             var tag = document.createElement(kind === 'img' ? 'img' : (kind === 'pdf' ? 'iframe' : kind));
@@ -1691,13 +1775,12 @@
     }
     function dsDownloadViaShare() {
         if (!dsdInfo) return;
-        downQueue.push(makeTask({
+        // 走下载入队归口：Chromium 手势内先弹保存框流式写盘，其余环境回退内存 Blob（与网盘内下载同款体验）
+        enqueueDownload(makeTask({
             kind: 'down', name: dsdInfo.file_name, size: dsdInfo.size || 0,
             url: '/api/drive/share/download?code=' + encodeURIComponent(dsCurCode) +
                 '&extract=' + encodeURIComponent(dsdExtract.value.trim())
-        }));
-        renderTransfers();
-        pumpDown();
+        }), false);
         closeDsMasks();
     }
 
@@ -1705,7 +1788,7 @@
     function init() {
         if (inited) return;
         inited = true;
-        console.log('[网盘] 脚本 v2.21 已加载（分享管理/回收站入口上移左侧列表）；若右键无菜单请按 Ctrl+F5 强刷后重试'); // 版本判定归口：用户 F12 一眼确认所跑版本
+        console.log('[网盘] 脚本 v2.23 已加载（下载先弹保存框流式写盘/批量静默；PDF+Office 文档在线预览）；若右键无菜单请按 Ctrl+F5 强刷后重试'); // 版本判定归口：用户 F12 一眼确认所跑版本
         // DOM 移入主聊天区（公告流/设置页同款 absolute 覆盖，左侧列表保持可见）
         if (mainChatEl && view.parentElement !== mainChatEl) mainChatEl.appendChild(view);
         closeBtn.addEventListener('click', close);
