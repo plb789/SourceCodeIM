@@ -36,6 +36,7 @@ func RegisterDriveShareRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/share/create", s.handleDriveShareCreate)
 	http.HandleFunc("GET /api/drive/share/list", s.guardDrive(s.handleDriveShareList))
 	http.HandleFunc("POST /api/drive/share/cancel", s.handleDriveShareCancel)
+	http.HandleFunc("POST /api/drive/share/delete", s.handleDriveShareDelete)
 	http.HandleFunc("GET /api/drive/share/info", s.handleDriveShareInfo)
 	http.HandleFunc("POST /api/drive/share/save", s.handleDriveShareSave)
 	http.HandleFunc("GET /api/drive/share/download", s.handleDriveShareDownload)
@@ -43,7 +44,7 @@ func RegisterDriveShareRoutes(s *Server) {
 
 // StartShareCleanupLoop 启动过期分享记录清理后台任务（main.go 启动时调用，单协程）
 // 只清理"已过期"记录（expire_at>0 且过期超过 30 天——留痕期过后删除，防表无限膨胀）；
-// 已取消记录永久留痕（分享管理列表展示归口，注释同 handleDriveShareCancel）
+// 已取消记录不自动清理（分享者可在分享管理里手动删除记录，注释同 handleDriveShareCancel）
 func StartShareCleanupLoop() {
 	go func() {
 		shareCleanupOnce() // 启动先执行一次（与文件清理同款节奏）
@@ -429,6 +430,7 @@ func (s *Server) handleDriveShareList(w http.ResponseWriter, r *http.Request) {
 
 // handleDriveShareCancel 取消分享 POST /api/drive/share/cancel {username,id}
 // 软删除（Canceled=true）：链接与已投递卡片点击详情立即失效，管理列表保留留痕
+// （不自动清理，分享者可在分享管理里对已取消记录手动删除，见 handleDriveShareDelete）
 func (s *Server) handleDriveShareCancel(w http.ResponseWriter, r *http.Request) {
 	var body driveItemReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || body.ID == 0 {
@@ -446,6 +448,38 @@ func (s *Server) handleDriveShareCancel(w http.ResponseWriter, r *http.Request) 
 	}
 	store.DB.Model(&sh).Update("canceled", true)
 	logger.Info("网盘分享取消: %s share=%d code=%s", body.Username, sh.ID, sh.ShareCode)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// handleDriveShareDelete 删除失效分享的留痕记录 POST /api/drive/share/delete {username,id}
+// 仅允许删除已失效记录（已取消/已过期/源文件已删除——分享已永久不可用，留痕失去意义）；
+// 生效中的分享不支持删（须先取消）。物理删除 im_drive_share 行，纯记录操作——
+// 源文件、副本引用、对象存储分毫不动
+func (s *Server) handleDriveShareDelete(w http.ResponseWriter, r *http.Request) {
+	var body driveItemReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" || body.ID == 0 {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if msg := s.driveCheckUser(body.Username); msg != "" {
+		driveFail(w, http.StatusUnauthorized, msg)
+		return
+	}
+	var sh model.DriveShare
+	if err := store.DB.Where("id = ? AND owner = ?", body.ID, body.Username).First(&sh).Error; err != nil {
+		driveFail(w, http.StatusNotFound, "分享不存在")
+		return
+	}
+	if r := s.driveShareInvalidReason(&sh); r == "" {
+		driveFail(w, http.StatusBadRequest, "分享生效中，请先取消分享后再删除记录")
+		return
+	}
+	if err := store.DB.Delete(&sh).Error; err != nil {
+		driveFail(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	logger.Info("网盘分享记录删除: %s share=%d code=%s", body.Username, sh.ID, sh.ShareCode)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }

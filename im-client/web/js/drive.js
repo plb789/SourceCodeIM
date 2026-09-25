@@ -1534,6 +1534,8 @@
         // 分享统计（服务端归口计数：浏览/下载/保存，词条与弹窗版共用）
         metaBits.push(T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' + T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 }));
         var status = ok ? T('分享中') : (TR(sh.valid_msg) || T('已失效'));
+        // 失效记录（已取消/已过期/文件已删除）均可手动删除留痕；分享中的须先取消（服务端归口同规则）
+        var delBtn = ok ? '' : '    <button class="drive-act drive-act-danger" data-act="delshare" title="' + T('删除记录') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>';
         return '<div class="drive-row drive-share-row' + (sh.is_dir ? ' is-dir' : '') + '" data-id="' + sh.id + '">' +
             '  <div class="drive-cell-name">' +
             '    <span class="drive-icon k-' + kind + '">' + ICONS[kind] + '</span>' +
@@ -1547,6 +1549,7 @@
             '  <div class="drive-cell-actions">' +
             '    <span class="dsm-status ' + (ok ? 'ok' : 'bad') + '">' + esc(status) + '</span>' +
             (ok ? '    <button class="drive-act drive-act-danger" data-act="unshare" title="' + T('取消分享') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' : '') +
+            delBtn +
             '  </div>' +
             '</div>';
     }
@@ -1569,6 +1572,7 @@
                 btn.addEventListener('click', function (e) {
                     e.stopPropagation();
                     if (btn.getAttribute('data-act') === 'unshare') cancelShare(it);
+                    else if (btn.getAttribute('data-act') === 'delshare') deleteShareRecord(it);
                 });
             });
         });
@@ -1581,6 +1585,18 @@
                     if (err2) { toast(TR(err2.message)); return; }
                     toast(T('分享已取消'));
                     loadShareList(); // 原位刷新状态
+                });
+            });
+    }
+    // 删除失效分享的留痕记录（纯记录操作，文件本体与副本引用不受影响；服务端归口校验仅失效记录可删）
+    function deleteShareRecord(it) {
+        driveConfirm(T('删除分享记录'),
+            T('将删除“{v}”的这条分享留痕记录，文件本身不受影响，确定删除吗？', { v: it.file_name }),
+            function () {
+                apiPost('share/delete', { username: u(), id: it.id }, function (err2) {
+                    if (err2) { toast(TR(err2.message)); return; }
+                    toast(T('记录已删除'));
+                    loadShareList(); // 原位移除该行
                 });
             });
     }
