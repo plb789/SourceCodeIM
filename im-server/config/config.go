@@ -93,6 +93,10 @@ type DriveConfig struct {
 	// ChunkSize 分片上传单片大小（字节，0=8MB 默认；init 响应下发前端，客户端零猜测）。
 	// 网盘二期大文件链路：MD5 秒传 + 分片上传 + 断点续传，分片临时落本地磁盘，complete 时流式合并
 	ChunkSize int64 `yaml:"chunk_size"`
+	// BlockExts 上传扩展名黑名单（逗号分隔，如 ".exe,.msi"；留空=内置默认黑名单：
+	// exe/msi/com/scr/cpl/hta/dll/lnk/bat/cmd/vbs/vbe/ps1/psm1/reg）。
+	// 网盘 API 上传与挂载盘 WebDAV 写入统一归口拦截，防可执行文件入库传播
+	BlockExts string `yaml:"block_exts"`
 	// LocalDir 本地存储根目录（空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
 	LocalDir string `yaml:"local_dir"`
 	// Minio MinIO 连接配置（endpoint+access_key 非空即视为已配置）

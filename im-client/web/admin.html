@@ -53,6 +53,7 @@
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
+                <button class="admin-nav-item" data-view="drive">网盘设置</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -644,6 +645,32 @@
                 <div class="agentset-actions">
                     <button id="compress-save" class="admin-btn primary">保存压缩设置</button>
                     <span id="compress-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            <!-- 阶段一百六十六：网盘设置（上传扩展名黑名单热更，归口 drive.go driveBlockExts） -->
+            <section id="admin-view-drive" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>网盘设置</h2>
+                    <span id="drive-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">网盘上传扩展名黑名单：命中黑名单的文件禁止经网盘上传或挂载盘（WebDAV）写入，服务端直接拒绝并落告警日志。保存后立即热生效（网页上传与挂载盘同时生效，无需重启服务端）；设置持久化保存，重启后保持。留空表示使用内置默认黑名单；设值则完全覆盖默认（不会追加）。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">上传扩展名黑名单</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="drive-blockexts" title="逗号分隔的扩展名列表，如 .exe,.msi；留空=内置默认黑名单；设值则完全覆盖默认">黑名单扩展名</label>
+                        <input type="text" id="drive-blockexts" class="admin-input" style="flex:1" placeholder="留空=内置默认黑名单，如 .exe,.msi,.bat">
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-sub-tip" id="drive-default-tip"></span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="drive-elf"> ELF 魔数检测（拦截改名的 Linux 可执行文件：Linux 二进制没有固定扩展名，按文件头内容判定，关闭后仅靠扩展名黑名单）</label>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="drive-save" class="admin-btn primary">保存黑名单</button>
+                    <span id="drive-source-tip" class="agentset-sub-tip"></span>
                 </div>
             </section>
 

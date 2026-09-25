@@ -139,6 +139,7 @@
             else if (item.dataset.view === 'billing') { loadBillingSettings(); }
             // 阶段一百三十九：进入历史压缩设置视图拉取当前生效压缩配置
             else if (item.dataset.view === 'compress') { loadCompressSettings(); }
+            else if (item.dataset.view === 'drive') { loadDriveBlockExts(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1495,6 +1496,36 @@
             }
             showToast('压缩设置已保存并热生效');
             loadCompressSettings(); // 回读刷新来源标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // ===== 网盘设置：上传扩展名黑名单（阶段一百六十六，保存即热生效 + 持久化） =====
+    // 读取当前生效黑名单回填表单（含内置默认值提示与来源标注）
+    function loadDriveBlockExts() {
+        api('GET', '/admin/api/drive/blockexts').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            $('drive-blockexts').value = d.exts || '';
+            $('drive-default-tip').textContent = '内置默认黑名单：' + d.default;
+            $('drive-elf').checked = !!d.elf;
+            $('drive-source-tip').textContent = d.source === 'override' ? (d.is_default ? '当前值来源：后台已设为内置默认（持久化）' : '当前值来源：后台设置（持久化）') : '当前值来源：config.yaml 初始默认（后台保存后转为持久化）';
+            $('drive-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 保存：空串=恢复内置默认黑名单；服务端逐项校验归一后落库 + 内存直更（挂载盘与网页上传同时生效）
+    $('drive-save').addEventListener('click', function () {
+        var raw = $('drive-blockexts').value.trim();
+        api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked }).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '保存失败');
+                return;
+            }
+            showToast('上传黑名单已保存并热生效');
+            loadDriveBlockExts(); // 回读刷新归一值与来源标注
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 

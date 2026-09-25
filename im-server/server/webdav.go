@@ -15,6 +15,7 @@ package server
 //  5. 路由：/dav/ 前缀（main.go 注册归口），映射地址 http://<host>:<port>/dav
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -27,7 +28,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,6 +125,27 @@ func (d *davServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond) // 防爆破固定延迟
 		d.unauthorized(w)
 		return
+	}
+	// 写操作目标名黑名单校验（挂载盘禁传可执行文件，归口同网盘 API 上传 driveUploadBlocked）：
+	// PUT/POST 目标在 URL path（URL 路径分隔符恒为 /，用 path.Base 而非 filepath.Base）；
+	// COPY/MOVE 的目标在 Destination 头——挂载盘内移动/复制生成 .exe 同样拦截
+	switch r.Method {
+	case "PUT", "POST":
+		if ext := d.s.driveUploadBlocked(path.Base(r.URL.Path)); ext != "" {
+			logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, r.URL.Path)
+			http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
+			return
+		}
+	case "COPY", "MOVE":
+		if dst := r.Header.Get("Destination"); dst != "" {
+			if du, err := url.Parse(dst); err == nil {
+				if ext := d.s.driveUploadBlocked(path.Base(du.Path)); ext != "" {
+					logger.Warn("网盘挂载上传黑名单拦截: user=%s, %s, %s", user, r.Method, du.Path)
+					http.Error(w, "禁止上传 "+ext+" 文件", http.StatusForbidden)
+					return
+				}
+			}
+		}
 	}
 	d.handlerFor(user).ServeHTTP(w, r)
 }
@@ -306,7 +330,8 @@ func (f *davFS) OpenFile(_ context.Context, name string, flag int, _ os.FileMode
 		if err == nil && rec != davRootSentinel && !rec.IsDir {
 			exist = rec // 覆盖写目标（PUT 语义=整文件替换）
 		}
-		return &davWriteFile{fs: f, tmp: tmp, exist: exist, parentID: parentID, leaf: leaf}, nil
+		return &davWriteFile{fs: f, tmp: tmp, exist: exist, parentID: parentID, leaf: leaf,
+			elfHead: davElfHeadInit(f.s)}, nil
 	}
 	// 读路径：目录 → 枚举器；文件 → 对象流
 	if rec == davRootSentinel || rec.IsDir {
@@ -558,6 +583,19 @@ type davWriteFile struct {
 	parentID uint
 	leaf     string
 	done     bool
+	// ELF 魔数检测状态（Linux 可执行无强制扩展名，扩展名黑名单挡不住改名 ELF）：
+	// elfHead 非 nil 且 len<4 时仍在收集头字节，攒满 4 字节判定命中即断流；
+	// aborted 置位后 Close 不再转正落库（半写临时文件由 defer os.Remove 兜底清理）
+	elfHead []byte
+	aborted bool
+}
+
+// davElfHeadInit ELF 检测启用时返回空收集器（nil=未启用零开销直通）
+func davElfHeadInit(s *Server) []byte {
+	if s.driveBlockElf() {
+		return []byte{}
+	}
+	return nil
 }
 
 func (f *davWriteFile) Read([]byte) (int, error)                  { return 0, os.ErrInvalid }
@@ -572,6 +610,20 @@ func (f *davWriteFile) Stat() (os.FileInfo, error) {
 }
 
 func (f *davWriteFile) Write(p []byte) (int, error) {
+	// ELF 头收集判定：首块写入即含文件头（rclone/资源管理器写块远大于 4 字节，一轮即判定）
+	if f.elfHead != nil && len(f.elfHead) < 4 {
+		need := 4 - len(f.elfHead)
+		if need > len(p) {
+			f.elfHead = append(f.elfHead, p...)
+		} else {
+			f.elfHead = append(f.elfHead, p[:need]...)
+		}
+		if len(f.elfHead) == 4 && bytes.Equal(f.elfHead, elfMagic) {
+			f.aborted = true
+			logger.Warn("网盘挂载上传黑名单拦截: %s, %s (ELF)", f.fs.user, f.leaf)
+			return 0, errDriveElfBlocked // 断流：x/net/webdav 对 Copy/Close 错误统一映射 405，PUT 失败
+		}
+	}
 	n, err := f.tmp.Write(p)
 	// 单文件上限边写边拦（超限即断流，客户端立即可见失败，不再白传全量）
 	if err == nil && n > 0 {
@@ -590,6 +642,9 @@ func (f *davWriteFile) Close() error {
 	}
 	f.done = true
 	defer os.Remove(f.tmp.Name()) // 临时文件全路径兜底清理
+	if f.aborted {
+		return errDriveElfBlocked // ELF 拦截断流：不转正不落库（与 Write 返回错误同口径）
+	}
 	fi, err := f.tmp.Stat()
 	if err != nil {
 		return err

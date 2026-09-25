@@ -150,6 +150,9 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百三十九：历史压缩方式设置（tokens 估算 / kb 字节双口径可选；保存即生效 + 落库重启不丢）
 	http.HandleFunc("GET /admin/api/compress/settings", s.adminGuard(s.handleAdminCompressSettingsGet))
 	http.HandleFunc("PUT /admin/api/compress/settings", s.adminGuard(s.handleAdminCompressSettingsSave))
+	// 阶段一百六十六：网盘上传扩展名黑名单热更设置（黑名单归口 drive.go）
+	http.HandleFunc("GET /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsGet))
+	http.HandleFunc("PUT /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsSave))
 
 	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
 	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))

@@ -15,10 +15,12 @@ package server
 //     static/upload 目录，清理白名单正则天然免疫
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -29,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"im-server/logger"
@@ -869,6 +872,190 @@ func (s *Server) handleDriveTrashClear(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"deleted": len(ids)})
 }
 
+// ===== 上传扩展名黑名单（网盘 API 上传与挂载盘 WebDAV 写入统一归口，防可执行文件入库传播） =====
+// 来源优先级（与历史压缩设置 aicompresscfg.go 同款架构）：
+//  1. 后台管理设置（DB 落库 AgentWhitelist 全局 kv 行，保存即生效 + 重启不丢）
+//  2. config.yaml drive.block_exts 启动加载值作初始默认（空=内置默认黑名单）
+//
+// 默认黑名单覆盖 Windows + Linux 可执行/安装/脚本/动态库高危扩展（.sh/.deb 等可后台自行增删；
+// .js/.jar/.apk 等常见正当类型不拦，误伤面大）
+var driveDefaultBlockExts = []string{
+	// Windows：可执行 / 安装包 / 控制面板 / 脚本 / 动态库 / 注册表
+	".exe", ".msi", ".com", ".scr", ".cpl", ".hta", ".dll", ".lnk",
+	".bat", ".cmd", ".vbs", ".vbe", ".ps1", ".psm1", ".reg",
+	// Linux / 跨平台：脚本 / 二进制分发 / 安装包 / 内核模块 / 动态库
+	".sh", ".bin", ".run", ".elf", ".deb", ".rpm", ".appimage", ".so", ".ko",
+}
+
+var (
+	driveBlockMu     sync.Mutex
+	driveBlockMap    map[string]bool // 当前生效黑名单（driveBlockMu 保护，懒解析）
+	driveBlockRaw    string          // 当前生效原始串（""=内置默认；后台展示与热更归一）
+	driveElfOn       bool            // ELF 魔数检测开关（默认开；扩展名黑名单挡不住改名 ELF）
+	driveBlockInited bool
+	driveBlockOvKnow bool
+	driveElfOvKnow   bool
+	driveBlockOvDone bool
+)
+
+// 后台设置在 DB 的 kind（复用 AgentWhitelist 全局 kv 行，username=""，与历史压缩设置同款归口）
+const (
+	driveBlockKind = "drive_block_exts"
+	driveElfKind   = "drive_block_elf"
+)
+
+// driveParseBlockExts 解析逗号分隔扩展名串为 map（大小写归一、自动补前导点）；空串/全非法 → 内置默认
+func driveParseBlockExts(raw string) map[string]bool {
+	m := map[string]bool{}
+	if raw = strings.TrimSpace(raw); raw != "" {
+		for _, e := range strings.Split(raw, ",") {
+			if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+				if !strings.HasPrefix(e, ".") {
+					e = "." + e
+				}
+				m[e] = true
+			}
+		}
+	}
+	if len(m) == 0 {
+		for _, e := range driveDefaultBlockExts {
+			m[e] = true
+		}
+	}
+	return m
+}
+
+// driveBlockInitLocked 黑名单与 ELF 开关初始化（持锁调用）：yaml 启动值打底 → DB 后台覆盖值优先（懒加载一次）
+func (s *Server) driveBlockInitLocked() {
+	if driveBlockInited {
+		return
+	}
+	driveBlockInited = true
+	driveElfOn = true // 默认开启 ELF 检测
+	driveBlockRaw = strings.TrimSpace(s.cfg.Drive.BlockExts)
+	driveBlockMap = driveParseBlockExts(driveBlockRaw)
+	if !driveBlockOvDone {
+		driveBlockOvDone = true
+		var rows []model.AgentWhitelist
+		if err := store.DB.Where("kind IN ? AND username = ?", []string{driveBlockKind, driveElfKind}, "").Find(&rows).Error; err == nil {
+			for _, r := range rows {
+				switch r.Kind {
+				case driveBlockKind:
+					driveBlockRaw = strings.TrimSpace(r.Value)
+					driveBlockMap = driveParseBlockExts(driveBlockRaw)
+					driveBlockOvKnow = true
+				case driveElfKind:
+					driveElfOn = r.Value != "0"
+					driveElfOvKnow = true
+				}
+			}
+		}
+	}
+}
+
+// driveBlockElf 当前 ELF 魔数检测开关（与黑名单同锁同初始化归口）
+func (s *Server) driveBlockElf() bool {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	return driveElfOn
+}
+
+// ELF 魔数（Linux 可执行标准文件头；Linux 二进制无强制扩展名，改名后扩展名黑名单失效，
+// 唯一可靠识别手段是文件头内容判定）
+var elfMagic = []byte{0x7f, 'E', 'L', 'F'}
+
+// errDriveElfBlocked ELF 检测命中错误（直传/分片/转存归口提示；挂载盘走 davWriteFile.Write 断流）
+var errDriveElfBlocked = errors.New("禁止上传 Linux 可执行文件(ELF)")
+
+// driveWrapElf ELF 魔数检测包装（所有进网盘的写入流归口）：开启时预读头 4 字节判定，
+// 命中返回 errDriveElfBlocked（对象存储零写入）；未命中把已读头拼回流原样透传（io.MultiReader，零拷贝）
+func driveWrapElf(r io.Reader, on bool) (io.Reader, error) {
+	if !on {
+		return r, nil
+	}
+	head := make([]byte, 4)
+	n, err := io.ReadFull(r, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err // 读头 IO 故障按原错误上抛（上游归口提示）
+	}
+	if n == 4 && bytes.Equal(head, elfMagic) {
+		return nil, errDriveElfBlocked
+	}
+	return io.MultiReader(bytes.NewReader(head[:n]), r), nil
+}
+
+// driveSetBlockElf 后台保存 ELF 开关：DB 落库 + 内存直更（保存即生效）
+func (s *Server) driveSetBlockElf(on bool) error {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	val := "1"
+	if !on {
+		val = "0"
+	}
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ? AND username = ?", driveElfKind, "").First(&row).Error; err == nil {
+		if err := store.DB.Model(&row).Update("value", val).Error; err != nil {
+			return err
+		}
+	} else if err := store.DB.Create(&model.AgentWhitelist{Kind: driveElfKind, Value: val}).Error; err != nil {
+		return err
+	}
+	driveElfOn = on
+	driveElfOvKnow = true
+	return nil
+}
+
+// driveBlockExts 当前生效黑名单 map（调用点归口；懒初始化后直读缓存，热更由 driveSetBlockExts 原地替换）
+func (s *Server) driveBlockExts() map[string]bool {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	return driveBlockMap
+}
+
+// driveBlockExtsSnapshot 当前生效原始串与来源（后台管理 GET 展示归口）
+func (s *Server) driveBlockExtsSnapshot() (raw, source string) {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	if driveBlockOvKnow {
+		return driveBlockRaw, "override"
+	}
+	return driveBlockRaw, "config"
+}
+
+// driveSetBlockExts 后台保存归口：DB 落库（重启不丢）+ 内存直更（保存即生效，无需重启）。
+// DB 写失败返回错误且内存不更（避免重启后回退造成"看似保存成功"，与 AI 计费设置同策略）
+func (s *Server) driveSetBlockExts(norm string) error {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	// 全局 kv 行 upsert（agentSettingRowUpsert 吞错误，此处需真实错误返回，自写带检查版本）
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ? AND username = ?", driveBlockKind, "").First(&row).Error; err == nil {
+		if err := store.DB.Model(&row).Update("value", norm).Error; err != nil {
+			return err
+		}
+	} else if err := store.DB.Create(&model.AgentWhitelist{Kind: driveBlockKind, Value: norm}).Error; err != nil {
+		return err
+	}
+	driveBlockRaw = norm
+	driveBlockMap = driveParseBlockExts(norm)
+	driveBlockOvKnow = true
+	return nil
+}
+
+// driveUploadBlocked 文件名黑名单校验（挂载盘与 API 上传共用）：命中返回扩展名，空串=放行（无扩展名放行）
+func (s *Server) driveUploadBlocked(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext != "" && s.driveBlockExts()[ext] {
+		return ext
+	}
+	return ""
+}
+
 // handleDriveUpload 上传 POST /api/drive/upload?username=xxx&parent_id=0（multipart 字段 file）
 // 流式链路：MaxBytesReader 限额 → FormFile（>32MB 自动落临时盘文件，不占内存）→ 配额聚合校验
 // → 流式写对象存储 → 落库元数据；失败路径兜底清理孤儿对象
@@ -899,6 +1086,11 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 	name, ok := driveValidName(header.Filename)
 	if !ok {
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
+		return
+	}
+	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：可执行/脚本文件禁止入库
+	if ext := s.driveUploadBlocked(name); ext != "" {
+		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
 		return
 	}
 
@@ -938,7 +1130,15 @@ func (s *Server) handleDriveUpload(w http.ResponseWriter, r *http.Request) {
 	// 对象级 Content-Disposition（原始文件名随对象存储，MinIO 预签名直连下载另存为显示原文件名）
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": name})
 
-	if err := st.Put(r.Context(), key, file, header.Size, dispo); err != nil {
+	// ELF 魔数检测（Linux 可执行无强制扩展名，改名绕过扩展名黑名单的兜底；Put 前 403，对象存储零写入）
+	src, werr := driveWrapElf(file, s.driveBlockElf())
+	if werr != nil {
+		logger.Warn("网盘上传黑名单拦截: %s, %s (ELF)", username, name)
+		driveFail(w, http.StatusForbidden, werr.Error())
+		return
+	}
+
+	if err := st.Put(r.Context(), key, src, header.Size, dispo); err != nil {
 		driveFail(w, http.StatusInternalServerError, "文件保存失败")
 		return
 	}
@@ -1030,6 +1230,11 @@ func (s *Server) handleDriveUploadInit(w http.ResponseWriter, r *http.Request) {
 	name, ok := driveValidName(body.Name)
 	if !ok {
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
+		return
+	}
+	// 扩展名黑名单归口（与挂载盘 WebDAV 同拦）：前置拦截给用户即时反馈
+	if ext := s.driveUploadBlocked(name); ext != "" {
+		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
 		return
 	}
 	if body.ParentID > 0 {
@@ -1221,6 +1426,11 @@ func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Reques
 		driveFail(w, http.StatusBadRequest, "文件名不合法")
 		return
 	}
+	// 扩展名黑名单归口（权威校验：防 init 后改名/绕过；与挂载盘 WebDAV 同拦）
+	if ext := s.driveUploadBlocked(name); ext != "" {
+		driveFail(w, http.StatusForbidden, "禁止上传 "+ext+" 文件")
+		return
+	}
 	if body.ParentID > 0 {
 		if _, err := s.driveOwnFile(body.ParentID, username); err != nil {
 			driveFail(w, http.StatusNotFound, "目标目录不存在")
@@ -1278,7 +1488,15 @@ func (s *Server) handleDriveUploadComplete(w http.ResponseWriter, r *http.Reques
 	key := fmt.Sprintf("drive/u/%s/%d_%s%s", username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": name})
 	h := md5.New()
-	if err := st.Put(r.Context(), key, io.TeeReader(io.MultiReader(readers...), h), sess.Size, dispo); err != nil {
+	// ELF 魔数检测：第一分片头 4 字节判定（改名绕过扩展名黑名单的兜底；Put 前拦截）
+	merged, werr := driveWrapElf(io.MultiReader(readers...), s.driveBlockElf())
+	if werr != nil {
+		cleanup = true // 分片目录随 defer（句柄关闭后）清理
+		logger.Warn("网盘分片上传黑名单拦截: %s, %s (ELF), session=%s", username, name, sess.SessionID)
+		driveFail(w, http.StatusForbidden, werr.Error())
+		return
+	}
+	if err := st.Put(r.Context(), key, io.TeeReader(merged, h), sess.Size, dispo); err != nil {
 		st.Delete(key) // 兜底清理半写对象
 		driveFail(w, http.StatusInternalServerError, "文件保存失败")
 		return
@@ -1528,7 +1746,18 @@ func (s *Server) handleDriveChatSave(w http.ResponseWriter, r *http.Request) {
 	rand.Read(b)
 	key := fmt.Sprintf("drive/u/%s/%d_%s%s", body.Username, time.Now().UnixNano(), hex.EncodeToString(b), ext)
 	dispo := mime.FormatMediaType("attachment", map[string]string{"filename": finalName})
-	if err := st.Put(r.Context(), key, src, fi.Size(), dispo); err != nil {
+	// 黑名单归口（与网盘上传同拦：扩展名 + ELF 魔数）——聊天文件转存进网盘后即长期保存，同等高危防护
+	if e := s.driveUploadBlocked(finalName); e != "" {
+		driveFail(w, http.StatusForbidden, "禁止保存 "+e+" 文件")
+		return
+	}
+	src2, werr := driveWrapElf(src, s.driveBlockElf())
+	if werr != nil {
+		logger.Warn("聊天文件转存黑名单拦截: %s msg=%d (ELF)", body.Username, m.ID)
+		driveFail(w, http.StatusForbidden, werr.Error())
+		return
+	}
+	if err := st.Put(r.Context(), key, src2, fi.Size(), dispo); err != nil {
 		logger.Warn("聊天文件转存网盘失败: %s msg=%d %v", body.Username, m.ID, err)
 		driveFail(w, http.StatusInternalServerError, "保存失败")
 		return

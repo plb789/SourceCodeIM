@@ -404,6 +404,10 @@ drive:
   # 断点续传，单片大小随 init 响应下发前端；修改后需重启服务端生效）
   chunk_size: 8388608
   # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
+  # 上传扩展名黑名单（逗号分隔；挂载盘 WebDAV 与网盘上传统一拦截，命中返回 403）。
+  # 留空=内置默认黑名单：exe/msi/com/scr/cpl/hta/dll/lnk/bat/cmd/vbs/vbe/ps1/psm1/reg；
+  # 设值则完全覆盖默认（如只拦 exe 填 ".exe"）；修改后需重启服务端生效
+  # block_exts: ""
   minio:
     endpoint: ""                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
     public_endpoint: ""          # 外网客户端直连下载地址（内外网分流：服务端 API 读写走 endpoint，
