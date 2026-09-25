@@ -2,7 +2,7 @@
 # 说明：本文件由服务端启动时读取，缺省项自动回退内置默认值
 
 # WebSocket 监听地址
-ws_addr: ":2087"
+ws_addr: ":8888"
 # 心跳超时时间（秒）：超过该时间未收到任何消息判定离线
 heartbeat_timeout: 90
 # 心跳发送间隔（秒，客户端侧）
@@ -388,3 +388,30 @@ file_p2p:
   low_water: 1048576       # 发送缓冲低水位（恢复读文件）
   archive: false           # 直传完成后发送方是否异步归档副本到服务端（false 历史仅元信息）
   max_per_user: 3          # 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail）
+
+# ============================================================
+# 网盘（百度网盘同款个人云盘：元数据 MySQL im_drive_file + 文件本体经服务端归口
+# 落 MinIO 或本地磁盘；客户端永不接触 MinIO 凭据，全部操作经 /api/drive/* 代理）
+# ============================================================
+drive:
+  enabled: true                  # 总开关（false 时客户端入口隐藏，接口统一拒绝）
+  max_file_size: 524288000       # 单文件上传上限（字节，默认 500MB）
+  quota_bytes: 10737418240       # 每用户容量配额（字节，默认 10GB；-1 表示不限）
+  # 存储后端：auto（默认）= MinIO 四项配置齐全即用 MinIO，否则降级本地磁盘；
+  # minio = 强制 MinIO；local = 强制本地磁盘（目录 exe所在目录/drive_data，可用 local_dir 自定义）
+  storage: "auto"
+  # 分片上传单片大小（字节，0=8MB，上限 64MB；网盘二期大文件链路：MD5 秒传 + 分片上传 +
+  # 断点续传，单片大小随 init 响应下发前端；修改后需重启服务端生效）
+  chunk_size: 8388608
+  # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
+  minio:
+    endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
+    access_key: "RgdSF4IAuMrXJWAPC63T"               # 访问账号（仅存本文件，不下发客户端）
+    secret_key: "v8IWwSMg3z419p2LbeRwl6SFY44idgOWAiaWXxO5"               # 访问密钥（仅存本文件，不下发客户端）
+    bucket: "im-drive"           # 桶名（不存在启动时自动创建）
+    use_ssl: false               # MinIO 是否 HTTPS
+    # 下载链路说明：MinIO 后端下载为 302 跳 30 分钟短时效预签名地址（客户端直连 MinIO 下载，
+    # 省服务端带宽），需保证客户端网络可达 endpoint；MinIO 不可达时服务端自动回退流式代理
+    # 本地部署 MinIO 参考（Windows 单文件免安装）：
+    #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
+    #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"

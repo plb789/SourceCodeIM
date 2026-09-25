@@ -47,6 +47,13 @@ func (s *Server) HandleWebManifest(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(name, ".") {
 			return nil
 		}
+		// 阶段一百六十五修复：与 HandleSecureFile 排除规则对齐——zip 绝不下发（securefile 对
+		// .zip 一律 404），清单若收录会造成"清单有、下载必 404"，加密链路增量同步"单文件失败
+		// 即整轮作废"而永久瘫痪（实测 web.zip 触发：PC 端所有前端更新无法下发）。zip 属打包
+		// 产物非页面资源，从清单根上排除，明文/加密双通道规则完全一致。
+		if strings.HasSuffix(name, ".zip") {
+			return nil
+		}
 		rel, rerr := filepath.Rel(root, path)
 		if rerr != nil {
 			return nil

@@ -10933,6 +10933,36 @@ html.m .ms-actions {
     opacity: 0.5;
 }
 
+/* 阶段一百六十五：网盘挂载盘符下拉（跟随主题变量，自绘箭头与设置页卡片观感一致） */
+.settings-dav-letter-select {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: none;
+    min-width: 96px;
+    padding: 6px 26px 6px 12px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+    background: var(--header-bg, #f7f7f7) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23888'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 8px center / 14px;
+    color: var(--text-primary, #333);
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+}
+
+.settings-dav-letter-select:focus {
+    border-color: var(--primary, #07c160);
+}
+
+/* 阶段一百六十五：挂载密码展示（等宽字体防误读，窄容器自动省略，悬停 title 看全量） */
+.settings-dav-pass-text {
+    font-family: Consolas, Menlo, monospace;
+    letter-spacing: 0.4px;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* 阶段一百六十：过期文件卡片（服务端定期清理后，微信同款灰显+「已过期」角标，跟随主题变量） */
 .bubble-file.file-expired {
     opacity: 0.55;

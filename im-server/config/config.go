@@ -97,6 +97,14 @@ type DriveConfig struct {
 	LocalDir string `yaml:"local_dir"`
 	// Minio MinIO 连接配置（endpoint+access_key 非空即视为已配置）
 	Minio MinioConfig `yaml:"minio"`
+	// WebDav 网盘挂载（WebDAV 协议层，阿里云盘企业版挂载盘同原理：Windows net use 映射成本地盘符）
+	WebDav WebDavConfig `yaml:"webdav"`
+}
+
+// WebDavConfig 网盘挂载配置节（/dav/ 路由，FileSystem 桥接 drive 存储归口禁止旁路）
+type WebDavConfig struct {
+	// Enabled 挂载服务开关（false 时不注册 /dav/ 路由，客户端设置页显示未启用）
+	Enabled bool `yaml:"enabled"`
 }
 
 // MinioConfig MinIO 对象存储连接配置
@@ -396,7 +404,8 @@ func Default() *Config {
 			MaxFileSize: 500 << 20, // 单文件上限 500MB
 			QuotaBytes:  10 << 30,  // 每用户配额 10GB
 			Storage:     "auto",
-			ChunkSize:   8 << 20, // 分片单片 8MB（网盘二期大文件链路）
+			ChunkSize:   8 << 20,                     // 分片单片 8MB（网盘二期大文件链路）
+			WebDav:      WebDavConfig{Enabled: true}, // 挂载服务默认随网盘开启（不启用时 yaml 置 false）
 		},
 	}
 }

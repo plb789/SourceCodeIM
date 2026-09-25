@@ -1402,6 +1402,177 @@ ipcMain.handle('p2pfile:pickDir', async function () {
     return { ok: true, dir: r.filePaths[0] };
 });
 
+// ===== 阶段一百六十五：网盘挂载（WinFsp + rclone 引擎，阿里云盘挂载盘同原理） =====
+// 把网盘空间映射成本地盘符（"我的电脑"直接可见、可读写）：rclone 以 WebDAV 模式挂载服务端 /dav/，
+// 数据与 /api/drive/* 完全同源（同配额/同回收站/同对象存储）。归口：
+//   1. 引擎：bundled\rclone.exe（免编译单文件）+ WinFsp 运行时（未装时 bundled\winfsp.msi 静默安装，UAC 提权）
+//   2. 凭据：渲染层经 /api/drive/webdav/info 取"挂载密码"（服务端按密码哈希派生，非登录密码）→ IPC 下发，
+//      rclone.conf 落 userData\davmount\（用户目录隔离，凭据不进代码不进仓库；obscure 为 rclone 标准混淆非加密）
+//   3. 进程：单例 rclone mount 进程（更换账号自动重写配置重挂），进程退出即卸载（WinFsp 自动清理盘符；
+//      vfs-write-back 1s 尽量收敛终止瞬间未回传窗口，缓存目录残留的脏文件重挂后由 rclone 自愈续传）
+//   4. 状态：state.json 持久化 {letter, username, enabled}，客户端启动延迟自动重挂（无需重新输凭据）
+var DAV_DIR = path.join(app.getPath('userData'), 'davmount');
+var DAV_CONF = path.join(DAV_DIR, 'rclone.conf');
+var DAV_STATE = path.join(DAV_DIR, 'state.json');
+var DAV_CACHE = path.join(DAV_DIR, 'cache');
+var DAV_LOG = path.join(DAV_DIR, 'rclone.log');
+// 双通道定位 bundled 引擎文件（与 findLocalUvZip 同构）：开发态 __dirname\bundled\，
+// 打包态 extraResources 复制到 <resources>\（asar 内无法 spawn exe，故不走 files 规则）
+function davBundledFile(name) {
+    var candidates = [path.join(__dirname, 'bundled', name)];
+    if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, name));
+    for (var i = 0; i < candidates.length; i++) {
+        try { if (fs.existsSync(candidates[i])) return candidates[i]; } catch (e) { }
+    }
+    return candidates[0]; // 均缺失时返回开发态路径（状态展示 engineReady=false 交给 UI 提示）
+}
+var davProc = null; // rclone mount 进程单例
+
+function davStateLoad() {
+    try { return JSON.parse(fs.readFileSync(DAV_STATE, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function davStateSave(st) {
+    try { fs.mkdirSync(DAV_DIR, { recursive: true }); fs.writeFileSync(DAV_STATE, JSON.stringify(st), 'utf8'); } catch (e) { }
+}
+// WinFsp 安装检测：注册表 InstallDir 归口（WinFsp 安装器写入，路径含空格故整行截取），常见默认路径兜底
+function davWinfspInstalled() {
+    try {
+        var out = require('child_process').execSync(
+            'reg query "HKLM\\SOFTWARE\\WOW6432Node\\WinFsp" /v InstallDir', { windowsHide: true }).toString();
+        var m = out.match(/InstallDir\s+REG(?:_EXPAND)?_SZ\s+(.+)/);
+        if (m && m[1]) return fs.existsSync(path.join(m[1].trim(), 'bin', 'winfsp-x64.dll'));
+    } catch (e) { }
+    return fs.existsSync('C:\\Program Files (x86)\\WinFsp\\bin\\winfsp-x64.dll');
+}
+// 盘符枚举（C..Z；A/B 系统保留；accessSync 探测占用）
+function davDriveLetters() {
+    var used = [], free = [];
+    for (var i = 67; i <= 90; i++) {
+        var L = String.fromCharCode(i), occupied = false;
+        try { fs.accessSync(L + ':\\'); occupied = true; } catch (e) { }
+        if (occupied) used.push(L); else free.push(L);
+    }
+    return { used: used, free: free };
+}
+// rclone 配置写盘归口（每次挂载按当前账号重写，换账号凭据自动跟随）
+function davConfWrite(username, davPassword) {
+    fs.mkdirSync(DAV_DIR, { recursive: true });
+    var obscure = String(require('child_process').execFileSync(davBundledFile('rclone.exe'), ['obscure', davPassword], { windowsHide: true })).trim();
+    var conf = '[imdrive]\r\ntype = webdav\r\nurl = ' + SERVER_URL.replace(/\/+$/, '') + '/dav\r\nvendor = other\r\nuser = '
+        + username + '\r\npass = ' + obscure + '\r\n';
+    fs.writeFileSync(DAV_CONF, conf, 'utf8');
+}
+// mount 参数归口（挂载与开机重挂共用；dir-cache-time 5s 兜目录新鲜度，vfs-write-back 1s 收敛终止丢失窗口）
+function davMountArgs(letter) {
+    return ['mount', 'imdrive:', letter + ':',
+        '--config', DAV_CONF,
+        '--volname', 'IM网盘',
+        '--vfs-cache-mode', 'writes',
+        '--vfs-write-back', '1s',
+        '--cache-dir', DAV_CACHE,
+        '--dir-cache-time', '5s',
+        '--log-file', DAV_LOG, '-v'];
+}
+function davSpawnMount(letter) {
+    try { fs.mkdirSync(DAV_CACHE, { recursive: true }); } catch (e) { }
+    // 日志超 5MB 清零重写（防长期膨胀；rclone 自身持有句柄前删除安全）
+    try { if (fs.existsSync(DAV_LOG) && fs.statSync(DAV_LOG).size > 5 * 1024 * 1024) fs.unlinkSync(DAV_LOG); } catch (e) { }
+    var proc = require('child_process').spawn(davBundledFile('rclone.exe'), davMountArgs(letter), { windowsHide: true, stdio: 'ignore' });
+    proc.on('exit', function () { if (davProc === proc) davProc = null; });
+    davProc = proc;
+    return proc;
+}
+function davStopProc() {
+    if (davProc && davProc.exitCode === null) { try { davProc.kill(); } catch (e) { } }
+    davProc = null;
+}
+function davSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+// 状态查询（设置页轮询归口）：WinFsp/引擎/盘符占用/当前挂载态一次回齐
+ipcMain.handle('dav:status', function () {
+    var st = davStateLoad();
+    var mounted = false, letter = '';
+    if (davProc && davProc.exitCode === null) {
+        try { fs.accessSync((st.letter || '?') + ':\\'); mounted = true; letter = st.letter; } catch (e) { davProc = null; }
+    }
+    return {
+        ok: true,
+        winfsp: davWinfspInstalled(),
+        engineReady: fs.existsSync(davBundledFile('rclone.exe')),
+        msiReady: fs.existsSync(davBundledFile('winfsp.msi')),
+        mounted: mounted, letter: letter,
+        enabled: !!st.enabled, username: st.username || '',
+        letters: davDriveLetters()
+    };
+});
+
+// 挂载（渲染层传当前账号+挂载密码+盘符；服务端 /dav/ 鉴权失败时 rclone 会话内 401，
+// 盘符仍挂上但读写报错——渲染层发起前已保证凭据取自 info 接口，正常路径不命中）
+ipcMain.handle('dav:mount', async function (event, data) {
+    try {
+        var username = String((data && data.username) || '').trim();
+        var davPassword = String((data && data.dav_password) || '');
+        var letter = String((data && data.letter) || 'Z').toUpperCase().replace(/[^A-Z]/g, '');
+        if (!username || !davPassword) return { ok: false, err: '缺少挂载凭据' };
+        if (!/^[D-Z]$/.test(letter)) return { ok: false, err: '盘符无效' };
+        if (!fs.existsSync(davBundledFile('rclone.exe'))) return { ok: false, err: '挂载引擎缺失（rclone.exe）' };
+        if (!davWinfspInstalled()) return { ok: false, err: 'WinFsp 运行时未安装' };
+        var wasOurs = davStateLoad().letter || '';
+        davStopProc();
+        if (wasOurs) await davSleep(800); // 旧实例卸载收尾（WinFsp 盘符释放异步）
+        try { fs.accessSync(letter + ':\\'); return { ok: false, err: '盘符 ' + letter + ' 已被占用' }; } catch (e) { }
+        davConfWrite(username, davPassword);
+        var proc = davSpawnMount(letter);
+        var deadline = Date.now() + 12000; // WinFsp 建联一般 1~3 秒；超时兜底
+        while (Date.now() < deadline) {
+            if (proc.exitCode !== null) { davProc = null; return { ok: false, err: '挂载失败（引擎启动异常，详见 rclone 日志）' }; }
+            try { fs.accessSync(letter + ':\\'); davStateSave({ enabled: true, letter: letter, username: username }); return { ok: true, letter: letter }; } catch (e) { }
+            await davSleep(300);
+        }
+        davStopProc();
+        return { ok: false, err: '挂载超时，请检查服务端可达' };
+    } catch (e) {
+        return { ok: false, err: '挂载异常：' + (e && e.message || e) };
+    }
+});
+
+// 卸载（kill 即卸载，WinFsp 进程退出自动清理盘符——本机已实测盘符即时消失）
+ipcMain.handle('dav:unmount', async function () {
+    var st = davStateLoad();
+    davStopProc();
+    var deadline = Date.now() + 5000;
+    while (st.letter && Date.now() < deadline) {
+        try { fs.accessSync(st.letter + ':\\'); await davSleep(250); } catch (e) { break; }
+    }
+    st.enabled = false;
+    davStateSave(st);
+    return { ok: true };
+});
+
+// WinFsp 静默安装（bundled\winfsp.msi；msiexec /qn 需管理员，PowerShell RunAs 触发 UAC 由用户确认）
+ipcMain.handle('dav:winfsp-install', function () {
+    if (davWinfspInstalled()) return { ok: true, already: true };
+    if (!fs.existsSync(davBundledFile('winfsp.msi'))) return { ok: false, err: 'WinFsp 安装包缺失' };
+    try {
+        require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
+            'Start-Process msiexec -Verb RunAs -Wait -ArgumentList "/i `"" + davBundledFile("winfsp.msi") + "`" /qn /norestart"'], { windowsHide: true, timeout: 180000 });
+        return davWinfspInstalled() ? { ok: true } : { ok: false, err: '安装后未检测到 WinFsp 组件' };
+    } catch (e) {
+        return { ok: false, err: '安装未完成（可能已取消授权或需要管理员权限）' };
+    }
+});
+
+// 客户端启动自动重挂（延迟 5 秒避开启动高峰；凭据复用既有 rclone.conf 无需重新获取；
+// 服务端未就绪时挂载仍成立，服务端恢复后读写自动可用；修改过登录密码的用户重新开关一次即可刷新凭据）
+setTimeout(function () {
+    var st = davStateLoad();
+    if (!st.enabled || !st.letter || !fs.existsSync(DAV_CONF)) return;
+    if (!davWinfspInstalled() || !fs.existsSync(davBundledFile('rclone.exe'))) return;
+    try { fs.accessSync(st.letter + ':\\'); return; } catch (e) { } // 盘符已被他占则放弃
+    davSpawnMount(st.letter);
+    console.log('[网盘挂载] 已自动恢复:', st.letter + ':', '(' + (st.username || '') + ')');
+}, 5000);
+
 // ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
 // 两个独立 BrowserWindow（禁止主窗体内嵌弹层，与图片查看器/截图编辑器同方案）：
 //   1. 通话窗 callWin：主/被叫共用，承载 WebRTC 媒体面（getUserMedia + RTCPeerConnection P2P 直连），

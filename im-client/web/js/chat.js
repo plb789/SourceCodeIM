@@ -619,6 +619,7 @@
         if (view === 'rules') settingsRulesEnter(); // 阶段一百零五：TRAE 同款页内直管，进入即加载
         if (view === 'market') settingsMarketEnter(); // 阶段一百一十三：进入插件市场拉取清单 + uv 状态
         if (view === 'toolchain') settingsToolchainEnter(); // 阶段一百二十一：进入工具链市场拉取清单 + 安装状态
+        if (view === 'drivemount') settingsDavEnter(); // 阶段一百六十五：进入网盘挂载拉取引擎/挂载状态 + 挂载密码
         if (view === 'mcp') {
             // 阶段一百一十二修正：设置页导航直接进入 MCP 分类时初始化列表并启动状态轮询。
             // 原渲染只挂在工具栏按钮入口（openMcpPanel）与轮询回调上，导航直进时列表区空白、
@@ -1069,6 +1070,154 @@
                     showToast(r && r.idb === false ? I18N.t('缓存清理失败') : I18N.t('接收文件缓存已清理'));
                 }).catch(function () { showToast(I18N.t('缓存清理失败')); });
             });
+        });
+    }
+
+    // ===== 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理） =====
+    // 仅 PC 端可挂载（web 端无本地盘概念，仅展示挂载密码与说明）；挂载凭据归口 /api/drive/webdav/info
+    // （guardDrive 在线水位），主进程 dav:* IPC 负责引擎与进程，本层只做 UI 状态与交互
+    var davMountSwitch = document.getElementById('settings-dav-mount');
+    var davStateDesc = document.getElementById('settings-dav-state-desc');
+    var davLetterRow = document.getElementById('settings-dav-letter-row');
+    var davLetterSel = document.getElementById('settings-dav-letter');
+    var davLetterHint = document.getElementById('settings-dav-letter-hint');
+    var davWinfspCard = document.getElementById('settings-dav-winfsp-card');
+    var davWinfspState = document.getElementById('settings-dav-winfsp-state');
+    var davWinfspBtn = document.getElementById('settings-dav-winfsp-install');
+    var davWinfspDesc = document.getElementById('settings-dav-winfsp-desc');
+    var davPassEl = document.getElementById('settings-dav-pass');
+    var davPassCopy = document.getElementById('settings-dav-pass-copy');
+    var davPassVal = '';  // 当前账号挂载密码（info 接口缓存，复制/挂载共用）
+    var davBusy = false;  // 挂载/卸载进行中防抖（rclone 建联秒级，防连点重复 spawn）
+    function davIsPC() { return !!(window.desktop && window.desktop.getDavStatus); }
+    // 挂载凭据拉取（guardDrive 在线水位；失败置空，复制/挂载按钮各自兜底提示）
+    function davFetchPass() {
+        return fetch('/api/drive/webdav/info?username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                davPassVal = (j && j.dav_password) || '';
+                davPassEl.textContent = davPassVal || '—';
+                davPassEl.title = davPassVal || '';
+            })
+            .catch(function () { davPassVal = ''; davPassEl.textContent = '—'; });
+    }
+    // 状态刷新归口（进入分类/操作完成后调用）：PC 拉主进程状态，WEB 走纯说明形态
+    function davRefresh() {
+        if (!davPassEl) return;
+        if (!davIsPC()) {
+            davMountSwitch.disabled = true;
+            davMountSwitch.checked = false;
+            davStateDesc.textContent = I18N.t('本地盘符挂载仅 PC 客户端支持；WEB 端可查看挂载密码，供 RaiDrive 等第三方 WebDAV 客户端手动挂载。');
+            if (davLetterRow) davLetterRow.style.display = 'none';
+            if (davWinfspCard) davWinfspCard.style.display = 'none';
+            davFetchPass();
+            return;
+        }
+        window.desktop.getDavStatus().then(function (st) {
+            if (!st || !st.ok) return;
+            if (davWinfspCard) davWinfspCard.style.display = '';
+            davWinfspState.textContent = st.winfsp ? I18N.t('已安装') : I18N.t('未安装');
+            davWinfspState.style.color = st.winfsp ? '' : '#d93026';
+            if (davWinfspBtn) davWinfspBtn.style.display = st.winfsp ? 'none' : '';
+            if (davWinfspDesc) {
+                // 降级提示三分支：已装隐藏描述 / 未装且无安装包=提示重装客户端 / 未装=常规安装说明
+                if (st.winfsp) { davWinfspDesc.style.display = 'none'; }
+                else if (!st.msiReady) { davWinfspDesc.style.display = ''; davWinfspDesc.textContent = I18N.t('安装包缺失，请重新安装客户端后再试。'); }
+                else { davWinfspDesc.style.display = ''; davWinfspDesc.textContent = I18N.t('挂载功能依赖 WinFsp 虚拟磁盘组件（微软签名，仅首次需要安装，安装时需系统授权）。'); }
+            }
+            davMountSwitch.disabled = davBusy || !st.engineReady || !st.winfsp;
+            davMountSwitch.checked = !!st.mounted;
+            davStateDesc.textContent = st.mounted
+                ? I18N.t('已挂载到 ') + st.letter + I18N.t(': 盘（账号 ') + (st.username || '') + I18N.t('），打开"我的电脑"即可访问网盘。')
+                : (!st.engineReady
+                    ? I18N.t('挂载引擎缺失，请重新安装客户端后再使用挂载功能。')
+                    : (!st.winfsp
+                        ? I18N.t('挂载组件未就绪，请先安装 WinFsp 组件。')
+                        : I18N.t('开启后"我的电脑"将出现网盘盘符，可直接双击读写网盘文件；数据与网盘页面完全同源，删除自动进入网盘回收站。')));
+            if (davLetterRow) {
+                // 盘符下拉：可用盘符优先；当前挂载中隐藏选择行（卸载后才可更换）
+                var free = (st.letters && st.letters.free) || [];
+                var opts = '', hasCur = false;
+                for (var i = 0; i < free.length; i++) {
+                    if (st.letter === free[i]) hasCur = true;
+                    opts += '<option value="' + free[i] + '">' + I18N.t('{L}: 盘', { L: free[i] }) + '</option>';
+                }
+                if (st.letter && !hasCur) opts = '<option value="' + st.letter + '">' + I18N.t('{L}: 盘', { L: st.letter }) + '</option>' + opts;
+                davLetterSel.innerHTML = opts;
+                if (st.letter) davLetterSel.value = st.letter;
+                davLetterRow.style.display = st.mounted ? 'none' : '';
+                if (davLetterHint) davLetterHint.textContent = st.mounted ? I18N.t('卸载后可更换盘符') : '';
+            }
+            davFetchPass();
+        }).catch(function () { });
+    }
+    // 进入分类即刷新（settingsShowView 钩子调用；声明提升可被上方函数引用）
+    function settingsDavEnter() { davRefresh(); }
+    if (davMountSwitch) {
+        // 开关：开=先取挂载凭据再下发主进程挂载；关=卸载盘符
+        davMountSwitch.addEventListener('change', function () {
+            if (davBusy) { davMountSwitch.checked = !davMountSwitch.checked; return; }
+            var turnOn = davMountSwitch.checked;
+            if (!davIsPC()) { davMountSwitch.checked = false; return; }
+            davBusy = true;
+            davMountSwitch.disabled = true;
+            var finish = function () { davBusy = false; davRefresh(); };
+            if (turnOn) {
+                davFetchPass().then(function () {
+                    if (!davPassVal) { showToast(I18N.t('获取挂载凭据失败，请确认已登录且网盘可用')); finish(); return; }
+                    return window.desktop.davMount({
+                        username: IMSocket.getUsername(),
+                        dav_password: davPassVal,
+                        letter: (davLetterSel && davLetterSel.value) || 'Z'
+                    }).then(function (r) {
+                        if (r && r.ok) showToast(I18N.t('网盘已挂载为本地磁盘 ') + r.letter + ':');
+                        else showToast(I18N.t(r && r.err ? r.err : '挂载失败'));
+                    });
+                }).catch(function () { showToast(I18N.t('挂载异常')); finish(); return; }).then(finish);
+            } else {
+                window.desktop.davUnmount().then(function () {
+                    showToast(I18N.t('已卸载网盘盘符'));
+                    finish();
+                }).catch(function () { finish(); });
+            }
+        });
+    }
+    // WinFsp 一键安装（bundled\winfsp.msi 静默安装，UAC 授权弹窗由系统弹出；完成后刷新状态）
+    if (davWinfspBtn) {
+        davWinfspBtn.addEventListener('click', function () {
+            if (!davIsPC() || davWinfspBtn.disabled) return;
+            davWinfspBtn.disabled = true;
+            davWinfspBtn.textContent = I18N.t('正在安装…');
+            window.desktop.davWinfspInstall().then(function (r) {
+                davWinfspBtn.disabled = false;
+                davWinfspBtn.textContent = I18N.t('安装 WinFsp 组件');
+                if (r && r.ok) showToast(I18N.t('WinFsp 组件已安装'));
+                else showToast(I18N.t(r && r.err ? r.err : '安装未完成'));
+                davRefresh();
+            }).catch(function () {
+                davWinfspBtn.disabled = false;
+                davWinfspBtn.textContent = I18N.t('安装 WinFsp 组件');
+            });
+        });
+    }
+    // 复制挂载密码（本机挂载/第三方 WebDAV 客户端凭据）
+    if (davPassCopy) {
+        davPassCopy.addEventListener('click', function () {
+            if (!davPassVal) { showToast(I18N.t('挂载密码尚未获取')); return; }
+            var done = function () { showToast(I18N.t('挂载密码已复制')); };
+            var fallback = function () {
+                var ta = document.createElement('textarea');
+                ta.value = davPassVal;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); done(); } catch (e) { showToast(I18N.t('复制失败')); }
+                document.body.removeChild(ta);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(davPassVal).then(done, fallback);
+            } else fallback();
         });
     }
 

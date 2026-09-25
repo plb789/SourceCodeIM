@@ -1069,6 +1069,11 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm7.93 9h-3.98a15.65 15.65 0 0 0-1.38-6.03A8.02 8.02 0 0 1 19.93 11zM12 4.04c.83 1.2 1.87 3.46 2.22 6.96h-4.44c.35-3.5 1.39-5.76 2.22-6.96zM4.07 13h3.98c.15 2.26.62 4.29 1.38 6.03A8.02 8.02 0 0 1 4.07 13zm3.98-2H4.07a8.02 8.02 0 0 1 5.36-6.03A15.65 15.65 0 0 0 8.05 11zM12 19.96c-.83-1.2-1.87-3.46-2.22-6.96h4.44c-.35 3.5-1.39 5.76-2.22 6.96zm2.57-.93c.76-1.74 1.23-3.77 1.38-6.03h3.98a8.02 8.02 0 0 1-5.36 6.03z"/></svg>
                     <span>网络</span>
                 </button>
+                <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理；仅 PC 端可挂载） -->
+                <button class="settings-nav-item" data-view="drivemount">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4zm0 2h16v10H4V7zm2 2v2h12V9H6zm0 4v2h6v-2H6zm9.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>
+                    <span>网盘挂载</span>
+                </button>
                 <button class="settings-nav-item" data-view="rules">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM9 13v2h6v-2H9zm0 4v2h4v-2H9z"/></svg>
                     <span>规则与记忆</span>
@@ -1202,6 +1207,45 @@
                 <!-- 阶段一百五十九补：手动清理按钮（自绘确认弹窗 → 引擎 cacheClear 双清 IndexedDB+磁盘） -->
                 <p class="settings-desc">清理浏览器本地缓存与 PC 端磁盘缓存目录中的接收文件；清理后历史文件卡片将无法再另存为或预览。</p>
                 <button id="settings-p2p-cache-clear" class="settings-btn">缓存清理</button>
+            </section>
+            <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 把网盘映射成本地盘符，阿里云盘挂载盘同原理；
+                 PC 端显示完整控件，WEB 端无本地盘概念仅展示挂载密码与说明） -->
+            <section id="settings-view-drivemount" class="settings-view hidden">
+                <h2 class="settings-title">网盘挂载</h2>
+                <h3 class="settings-subtitle">本地磁盘映射</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">挂载为本地磁盘</div>
+                            <div class="settings-card-desc" id="settings-dav-state-desc">开启后"我的电脑"将出现网盘盘符，可直接双击读写网盘文件；数据与网盘页面完全同源，删除自动进入网盘回收站。</div>
+                        </div>
+                        <input id="settings-dav-mount" type="checkbox" class="slide-switch">
+                    </div>
+                    <!-- 盘符选择行（仅 PC 端显示，JS 控制显隐；仅列出未占用盘符 + 当前挂载盘符） -->
+                    <div id="settings-dav-letter-row" class="settings-disk-path" style="display:none;">
+                        <span class="settings-card-label">盘符</span>
+                        <select id="settings-dav-letter" class="settings-dav-letter-select"></select>
+                        <span id="settings-dav-letter-hint" class="settings-disk-path-text"></span>
+                    </div>
+                </div>
+                <h3 class="settings-subtitle">运行环境</h3>
+                <div class="settings-card" id="settings-dav-winfsp-card">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">WinFsp 组件</span>
+                        <span id="settings-dav-winfsp-state" class="settings-card-value">检测中…</span>
+                    </div>
+                    <button id="settings-dav-winfsp-install" class="settings-btn" style="display:none;">安装 WinFsp 组件</button>
+                    <p class="settings-desc" id="settings-dav-winfsp-desc">挂载功能依赖 WinFsp 虚拟磁盘组件（微软签名，仅首次需要安装，安装时需系统授权）。</p>
+                </div>
+                <h3 class="settings-subtitle">挂载密码</h3>
+                <div class="settings-card">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">当前账号挂载密码</span>
+                        <span id="settings-dav-pass" class="settings-card-value settings-dav-pass-text">—</span>
+                    </div>
+                    <button id="settings-dav-pass-copy" class="settings-btn">复制密码</button>
+                </div>
+                <p class="settings-desc">挂载密码由服务端按账号自动派生（非登录密码），专供本机挂载网盘使用；修改登录密码后自动失效，重新关闭再开启挂载即可。WEB 端仅展示密码与说明，本地盘符挂载仅 PC 客户端支持。</p>
             </section>
             <!-- 规则与记忆：阶段一百零五重做为 TRAE CN 同款页内直管布局（卡片+范围页签+创建按钮+空态指引；
                  规则卡片按 全局/仅本智能体 页签分列，记忆卡片带头部总开关；API 与旧弹窗同归口） -->

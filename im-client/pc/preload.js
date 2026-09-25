@@ -121,6 +121,23 @@ contextBridge.exposeInMainWorld('desktop', {
     pickP2PDir: function () {
         return ipcRenderer.invoke('p2pfile:pickDir');
     },
+    // ===== 阶段一百六十五：网盘挂载（WinFsp+rclone 盘符映射，阿里云盘挂载盘同原理；仅 PC 端生效）=====
+    // 状态查询（返回 {ok, winfsp, engineReady, msiReady, mounted, letter, enabled, username, letters:{used,free}}）
+    getDavStatus: function () {
+        return ipcRenderer.invoke('dav:status');
+    },
+    // 挂载为本地盘符（data = {username, dav_password, letter}，返回 {ok, letter?} 或 {ok:false, err}）
+    davMount: function (data) {
+        return ipcRenderer.invoke('dav:mount', data);
+    },
+    // 卸载盘符（返回 {ok}）
+    davUnmount: function () {
+        return ipcRenderer.invoke('dav:unmount');
+    },
+    // WinFsp 组件静默安装（UAC 提权由用户确认，返回 {ok} 或 {ok:false, err}）
+    davWinfspInstall: function () {
+        return ipcRenderer.invoke('dav:winfsp-install');
+    },
     // 查看器请求更早历史图片（查看器 → 主窗口拉取 → 主进程回推 viewer:more）
     viewerNeedMore: function () {
         ipcRenderer.send('image:need-more');

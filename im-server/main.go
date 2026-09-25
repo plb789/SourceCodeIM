@@ -182,6 +182,9 @@ func main() {
 	server.RegisterDriveRoutes(srv)
 	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）
 	server.RegisterDriveShareRoutes(srv)
+	// 网盘挂载路由（WebDAV /dav/：资源管理器 net use 映射本地盘符，与 /api/drive 同一存储归口；
+	// drive.enabled + drive.webdav.enabled 双开关，未启用静默不注册）
+	server.RegisterWebDavRoutes(srv)
 	// 阶段五十：性能仪表盘——上传目录后台定时扫描（指标接口只读缓存，避免轮询 walk 目录）
 	server.StartAdminUploadScanner(cfg.UploadDir)
 	// 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；turn.enabled=false 时静默不启动）

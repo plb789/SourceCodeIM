@@ -65,6 +65,14 @@
       {
         "from": "bundled/uv-runtime.zip",
         "to": "uv-runtime.zip"
+      },
+      {
+        "from": "bundled/rclone.exe",
+        "to": "rclone.exe"
+      },
+      {
+        "from": "bundled/winfsp.msi",
+        "to": "winfsp.msi"
       }
     ]
   },
