@@ -10166,6 +10166,11 @@ html.m .ms-actions {
     cursor: pointer;
 }
 
+/* 合并转发详情内图片降级占位：与 .md-img 的 margin-top 对齐，尺寸适配 160px 内容宽 */
+.md-main .chat-image-fallback {
+    margin-top: 4px;
+}
+
 .md-file {
     display: inline-flex;
     align-items: center;

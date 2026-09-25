@@ -2472,6 +2472,7 @@
                 var im = document.createElement('img');
                 im.className = 'md-img';
                 im.src = it.u;
+                attachImageFallback(im); // 合并转发详情内图片同样降级占位（原实现失败即浏览器碎图标）
                 // 阶段八十七：点击查看大图——查看列表限定在该条合并记录内的图片（微信详情内翻页语义）
                 im.style.cursor = 'pointer';
                 im.addEventListener('click', function () {
