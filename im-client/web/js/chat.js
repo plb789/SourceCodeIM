@@ -1682,11 +1682,18 @@
         // 阶段一百六十六："保存到网盘"仅服务端持久化文件可用——需 msg_id（接口按消息归口）且
         // data-url 以 /static/upload/ 开头（P2P 直传 blob/data 地址服务端无本体，入口直接隐藏）；
         // null 守卫同上（防旧版缓存 index.html 无本项）
+        // 阶段一百六十八：P2P 直传文件（blob:/data:）也开放入口——服务端无本体走前端上传兜底
+        // （fetch 本机 blob → multipart 直传网盘），服务端文件仍走零上传接口
         var drivesaveItem = msgMenu.querySelector('[data-action="drivesave"]');
         if (drivesaveItem) {
             var dFb = isFileBubble ? el.querySelector('.bubble-file[data-url]') : null;
             var dUrl = dFb ? (dFb.getAttribute('data-url') || '') : '';
-            drivesaveItem.style.display = (msgId > 0 && dUrl.indexOf('/static/upload/') === 0) ? '' : 'none';
+            if (dUrl.indexOf('http') === 0) { // 绝对 URL 归一化（公网可能下发完整地址）：取 pathname 再判前缀
+                try { var dU = new URL(dUrl); dUrl = dU.pathname + dU.search; } catch (dE) { }
+            }
+            var dsServer = dUrl.indexOf('/static/upload/') === 0;
+            var dsLocal = dUrl.indexOf('blob:') === 0 || dUrl.indexOf('data:') === 0;
+            drivesaveItem.style.display = ((dsServer && msgId > 0) || dsLocal) ? '' : 'none';
         }
         // 阶段一百三十四："在线编辑"仅可编辑文档（docx/xlsx）显示——点击文档已统一走预览，
         // OnlyOffice 编辑由本右键入口按需触发；null 守卫同上（防旧缓存 index.html 无本项）
@@ -1759,24 +1766,53 @@
                         a2.click();
                     }
                 } else if (action === 'drivesave') {
-                    // 阶段一百六十六：聊天文件转存网盘——服务端把 static/upload 本体转入网盘对象
-                    // 存储（客户端零上传），建"我的网盘"根目录记录（同名自动改名）；
-                    // P2P 文件入口已隐藏，此处服务端归口兜底拒绝
-                    fetch('/api/drive/chat/save', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ username: IMSocket.getUsername(), msg_id: msgId })
-                    }).then(function (res) {
-                        res.json().then(function (data) {
-                            if (!res.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }
-                            // 黑名单隔离改名：服务端以 .im 名落库时随响应附带提示
-                            if (data.renamed) {
-                                showToast(I18N.t('为安全考虑，已自动改名为 {v} 保存', { v: (data.item && data.item.name) || '' }));
-                                return;
-                            }
-                            showToast(I18N.t('已保存到网盘') + '：' + ((data.item && data.item.name) || ''));
+                    // 阶段一百六十八：聊天文件转存网盘——
+                    //  1) 服务端文件（/static/upload/ 且已持久化）：服务端把本体转入网盘对象存储（客户端零上传）
+                    //  2) P2P 直传文件（blob:/data:，服务端无本体）：前端 fetch 本机 blob → multipart 直传网盘兜底
+                    // 两链路均落"我的网盘"根目录（同名自动改名），黑名单 .im 隔离提示一致
+                    var dsFb = msgTarget.querySelector('.bubble-file[data-url]');
+                    var dsUrl = dsFb ? (dsFb.getAttribute('data-url') || '') : '';
+                    var dsName = (dsFb && dsFb.querySelector('.file-name') || {}).textContent || 'file';
+                    if (dsUrl.indexOf('http') === 0) { // 绝对 URL 归一化：取 pathname 再判前缀
+                        try { var dsU = new URL(dsUrl); dsUrl = dsU.pathname + dsU.search; } catch (dsE) { }
+                    }
+                    var dsHandle = function (data) {
+                        if (data.renamed) { // 黑名单隔离改名：服务端以 .im 名落库时随响应附带提示
+                            showToast(I18N.t('为安全考虑，已自动改名为 {v} 保存', { v: (data.item && data.item.name) || '' }));
+                            return;
+                        }
+                        showToast(I18N.t('已保存到网盘') + '：' + ((data.item && data.item.name) || ''));
+                    };
+                    if (dsUrl.indexOf('/static/upload/') === 0 && msgId > 0) {
+                        fetch('/api/drive/chat/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: IMSocket.getUsername(), msg_id: msgId })
+                        }).then(function (res) {
+                            res.json().then(function (data) {
+                                if (!res.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }
+                                dsHandle(data);
+                            }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
                         }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
-                    }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
+                    } else if (dsUrl.indexOf('blob:') === 0 || dsUrl.indexOf('data:') === 0) {
+                        // P2P 直传：本体仅存本端内存 blob → fetch 读出后 multipart 直传网盘
+                        fetch(dsUrl).then(function (dsRes) {
+                            if (!dsRes.ok) throw new Error('blob');
+                            return dsRes.blob();
+                        }).then(function (dsBlob) {
+                            var dsFd = new FormData();
+                            dsFd.append('file', dsBlob, dsName);
+                            return fetch('/api/drive/upload?username=' + encodeURIComponent(IMSocket.getUsername()) + '&parent_id=0',
+                                { method: 'POST', body: dsFd });
+                        }).then(function (dsRes) {
+                            dsRes.json().then(function (data) {
+                                if (!dsRes.ok) { showToast(I18N.t(data.error || '保存失败，请稍后再试')); return; }
+                                dsHandle(data);
+                            }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
+                        }, function () { showToast(I18N.t('保存失败，请稍后再试')); });
+                    } else {
+                        showToast(I18N.t('文件处理中，请稍后再试'));
+                    }
                 } else if (action === 'docedit') {
                     // 阶段一百三十四："在线编辑"入口——OnlyOffice 编辑层（原点击文档自动进编辑，
                     // 现改为右键按需触发）。要求已持久化 + 服务端 URL（blob 本地地址不送编辑层）
@@ -21965,9 +22001,9 @@
         // 折叠/展开、滚动锚定钳制、面板布局变化等任何时序漏洞导致的位置残留，
         // 都会在下一次 mousemove 时被覆盖（osbUpdate 只读几个缓存布局值，move 频率下无性能压力）
         document.addEventListener('mousemove', function () {
-            if (sbLast && sbLast._osbUpdate && sbLast._osbThumb && sbLast._osbThumb.classList.contains('sb-show')) {
-                sbLast._osbUpdate('move');
-            }
+            if (!sbLast || !sbLast._osbThumb || !sbLast._osbThumb.classList.contains('sb-show')) return;
+            if (sbLast._osbUpdate) sbLast._osbUpdate('move');
+            if (sbLast._osbUpdateH) sbLast._osbUpdateH('move'); // 双轴容器：横滑块同步兜底
         }, { passive: true });
         function sbScheduleHide(el) {
             clearTimeout(el._osbHideT);
@@ -21986,7 +22022,11 @@
         function sbMark(el, on) {
             el.classList.toggle('sb-hover', on);
             if (el._osbThumb) el._osbThumb.classList.toggle('sb-show', on);
-            if (on && el._osbUpdate) el._osbUpdate('sbOn'); // 浮现时强制重定位，杜绝残留旧位置
+            if (el._osbThumbH) el._osbThumbH.classList.toggle('sb-show', on); // 双轴容器：横滑块同步显隐
+            if (on) { // 浮现时强制重定位，杜绝残留旧位置（竖/横各自入口）
+                if (el._osbUpdate) el._osbUpdate('sbOn');
+                if (el._osbUpdateH) el._osbUpdateH('sbOn');
+            }
         }
 
         // ===== 阶段四十五：自绘悬浮滚动条（微信同款：不占布局空间，消除容器边缘空隙） =====
@@ -22104,7 +22144,8 @@
             thumb.className = 'osb-thumb osb-h';
             document.body.appendChild(thumb);
             thumb._osbHost = el;
-            el._osbThumb = thumb; // 悬停显隐联动（sbMark/sbScheduleHide 通用读写 _osbThumb）
+            el._osbThumbH = thumb; // 横向滑块独立引用（双轴容器竖/横滑块并存）
+            if (!el._osbThumb) el._osbThumb = thumb; // 纯横滚容器：沿用 _osbThumb 联动（sbMark/sbScheduleHide 通用读写）
             // 按横向滚动比例刷新滑块位置与长度；fixed 定位基于容器可视区实时矩形
             function osbUpdate() {
                 var sw = el.scrollWidth, cw = el.clientWidth, sl = el.scrollLeft;
@@ -22146,9 +22187,11 @@
                 osbUpdate();
                 osbTick();
             }).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-            el._osbUpdate = osbUpdate; // mousemove 兜底/过渡钩子通用入口
-            el._osbTick = osbTick;
-            (window._osbHosts = window._osbHosts || []).push(el); // 登记宿主：CSS 布局过渡时全程跟踪
+            el._osbUpdateH = osbUpdate; // 横向版重定位入口（sbMark/mousemove 双轴同步用）
+            if (!el._osbUpdate) el._osbUpdate = osbUpdate; // 纯横滚容器：兼容通用入口（双轴容器保留纵向版）
+            if (!el._osbTick) el._osbTick = osbTick;       // 同上：双轴容器保留纵向版 tick
+            if (!window._osbHosts || window._osbHosts.indexOf(el) < 0)
+                (window._osbHosts = window._osbHosts || []).push(el); // 登记宿主（双轴容器已被纵向版登记，防重）
             // 滑块拖拽：按下后按位移比例映射回 scrollLeft（比例与 osbUpdate 一致）
             thumb.addEventListener('mousedown', function (e) {
                 e.preventDefault();

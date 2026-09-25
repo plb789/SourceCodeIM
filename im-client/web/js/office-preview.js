@@ -138,7 +138,8 @@
             }
             if (tabEl) box.replaceChild(tab, tabEl); else box.appendChild(tab);
             tabEl = tab;
-            if (window._osbInit) window._osbInit(box);
+            if (window._osbInit) window._osbInit(box);   // 预览滚动区自绘悬浮滑块（纵向）归口
+            if (window._osbInitH) window._osbInitH(box); // 宽表横向溢出：横滑块同容器并存（双轴）
         }
         if (names.length > 1) {
             var bar = document.createElement('div');

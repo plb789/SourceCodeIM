@@ -123,6 +123,99 @@
         el.classList.remove('hidden');
     }
 
+    // ===== 自绘悬浮滑块（分享页精简版，主程序 chat.js 同款视觉与交互） =====
+    // 本页不加载 chat.js，而 Office 预览滚动归口 office-preview.js 统一调 window._osbInit/_osbInitH
+    // 注册滑块——故本页内嵌精简实现挂同款全局入口（共享模块零改动即生效）；
+    // 样式复用 style.css 的 .osb-thumb/.osb-h/.sb-show/.osb-drag（share.html 已引入主样式）
+    // 竖/横双轴同构：滚动 rAF 同步、悬停浮现（180ms 延迟防容器↔滑块间闪烁）、比例拖拽
+    (function () {
+        function make(el, horiz) {
+            if (el[horiz ? '_osbH' : '_osb']) return; // 防重复初始化（与主程序同标记）
+            el[horiz ? '_osbH' : '_osb'] = true;
+            var thumb = document.createElement('div');
+            thumb.className = 'osb-thumb' + (horiz ? ' osb-h' : '');
+            document.body.appendChild(thumb);
+            if (horiz) { el._osbThumbH = thumb; if (!el._osbThumb) el._osbThumb = thumb; }
+            else el._osbThumb = thumb;
+            // 按滚动比例刷新滑块位置与长度；fixed 定位基于容器可视区实时矩形
+            function update() {
+                var total = horiz ? el.scrollWidth : el.scrollHeight;
+                var view = horiz ? el.clientWidth : el.clientHeight;
+                var pos = horiz ? el.scrollLeft : el.scrollTop;
+                if (total <= view + 1 || view === 0) { thumb.style.display = 'none'; return; }
+                var rect = el.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) { thumb.style.display = 'none'; return; }
+                thumb.style.display = 'block';
+                var len = Math.max(30, Math.round(view * view / total)); // 滑块最小 30px，内容越多越短
+                var maxPos = view - len - 2; // 边距 2px
+                var viewPos = 2 + Math.round(pos / Math.max(1, total - view) * (maxPos - 2));
+                if (horiz) {
+                    thumb.style.width = len + 'px';
+                    thumb.style.left = Math.round(rect.left + viewPos) + 'px';
+                    thumb.style.top = Math.round(rect.bottom - 8) + 'px'; // 底部 2px 边距（高 6px）
+                } else {
+                    thumb.style.height = len + 'px';
+                    thumb.style.top = Math.round(rect.top + viewPos) + 'px';
+                    thumb.style.left = Math.round(rect.right - 8) + 'px'; // 右侧 2px 边距（宽 6px）
+                }
+            }
+            el.addEventListener('scroll', function () { requestAnimationFrame(update); }, { passive: true });
+            if (window.ResizeObserver) new ResizeObserver(update).observe(el); // 尺寸变化同步（窗口缩放等）
+            if (window.MutationObserver) new MutationObserver(update).observe(el, { childList: true, subtree: true });
+            el.addEventListener('click', update, true); // 折叠/切换类点击后布局收敛复查
+            // 悬停显隐：移出延迟 180ms，容器与滑块任一悬停则保持（拖拽可稳定抓住，同主程序口径）
+            function show(on) {
+                clearTimeout(el._osbHideT);
+                if (on) {
+                    el.classList.add('sb-hover');
+                    if (el._osbThumb) el._osbThumb.classList.add('sb-show');
+                    if (el._osbThumbH) el._osbThumbH.classList.add('sb-show');
+                    update(); // 浮现时强制重定位，杜绝残留旧位置
+                } else {
+                    el._osbHideT = setTimeout(function () {
+                        var hover = el.matches(':hover') ||
+                            (el._osbThumb && el._osbThumb.matches(':hover')) ||
+                            (el._osbThumbH && el._osbThumbH.matches(':hover'));
+                        if (hover) return;
+                        el.classList.remove('sb-hover');
+                        if (el._osbThumb) el._osbThumb.classList.remove('sb-show');
+                        if (el._osbThumbH) el._osbThumbH.classList.remove('sb-show');
+                    }, 180);
+                }
+            }
+            el.addEventListener('mouseenter', function () { show(true); });
+            el.addEventListener('mouseleave', function () { show(false); });
+            thumb.addEventListener('mouseenter', function () { clearTimeout(el._osbHideT); });
+            thumb.addEventListener('mouseleave', function () { show(false); });
+            // 滑块拖拽：按下后按位移比例映射回滚动位置（比例与 update 一致）
+            thumb.addEventListener('mousedown', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                thumb.classList.add('osb-drag');
+                var startPos = horiz ? e.clientX : e.clientY;
+                var startScroll = horiz ? el.scrollLeft : el.scrollTop;
+                function onMove(ev) {
+                    var view = horiz ? el.clientWidth : el.clientHeight;
+                    var total = horiz ? el.scrollWidth : el.scrollHeight;
+                    var len = (horiz ? thumb.offsetWidth : thumb.offsetHeight) || 30;
+                    var d = (horiz ? ev.clientX : ev.clientY) - startPos;
+                    var target = startScroll + d * (total - view) / Math.max(1, view - len - 2 - 2);
+                    if (horiz) el.scrollLeft = target; else el.scrollTop = target;
+                }
+                function onUp() {
+                    thumb.classList.remove('osb-drag');
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                }
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+            update();
+        }
+        window._osbInit = function (el) { make(el, false); }; // 纵向（office-preview 归口按需调用）
+        window._osbInitH = function (el) { make(el, true); }; // 横向（宽表双轴并存）
+    })();
+
     // ===== 视图切换 =====
     function showInvalid(text) {
         $('sp-card').classList.add('hidden');
@@ -213,6 +306,7 @@
                 pre.textContent = text; // textContent 防 XSS
                 viewerBody.innerHTML = '';
                 viewerBody.appendChild(pre);
+                if (window._osbInit) window._osbInit(pre); // 文本滚动区自绘悬浮滑块（禁系统滚动条归口）
             }, function (err) {
                 viewerBody.innerHTML = '<div class="sp-viewer-loading"></div>';
                 viewerBody.firstChild.textContent = err.message || T('预览加载失败');

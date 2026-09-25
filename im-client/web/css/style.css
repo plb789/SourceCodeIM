@@ -14731,12 +14731,21 @@ html.m .dsm-list {
 .office-view-scroll .ws-xlsx-tabs {
     padding: 8px 10px 0;
     background: var(--bg, #fff);
+    position: sticky; /* 宽表横向滚动时标签条钉在滚筒左缘，切表入口始终可见 */
+    left: 0;
+    z-index: 1;
 }
 .office-view-scroll .ws-xlsx-body {
     padding: 10px 14px 14px;
     background: var(--bg, #fff);
     min-height: 100%;
     box-sizing: border-box;
+    /* 滚动全部归外层滚筒（含横向）：内层表体自滚会抢走悬停命中（sbFind 命中第一个可滚容器），
+       导致外层滚筒的自绘滑块不浮现（2026-09-26 用户反馈"表格预览没有滚动条"根因）；
+       width:max-content 让表体随宽表撑开（白底跟随），自身永无可滚溢出 */
+    overflow: visible;
+    width: max-content;
+    min-width: 100%;
 }
 .drive-viewer-loading {
     font-size: 13px;
