@@ -1653,3 +1653,20 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     flex: 1;
     min-width: 200px;
 }
+
+/* ===== 文件存储管理（阶段一百六十七）：勾选列居中窄列，表格/徽标/分页复用 vec 系列与 at-badge 现有样式 ===== */
+.fm-td-ck {
+    text-align: center;
+    width: 36px;
+}
+.fm-td-ck input {
+    vertical-align: middle;
+    cursor: pointer;
+    accent-color: var(--primary);
+}
+/* 徽标禁止折行：状态列较窄时"源文件已删除"等长文案徽标会被逐字竖排撑高整行，
+   徽标语义上是一个不可拆分的整体标签，统一单行展示（列宽不足时由表格横向滚动兜底） */
+#admin-view-filemgr .at-badge,
+#admin-view-fileshares .at-badge {
+    white-space: nowrap;
+}

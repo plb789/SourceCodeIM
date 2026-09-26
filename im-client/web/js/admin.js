@@ -30,6 +30,8 @@
             billing: 'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z',
             compress: 'M8 11h3v10h2V11h3l-4-4-4 4zM4 3v2h16V3H4zm0 4h7V5H4v2zm16 0v2h-7V5h7z',
             drive: 'M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z',
+            filemgr: 'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
+            fileshares: 'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z',
             agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'
         };
         var nav = document.querySelector('.admin-nav');
@@ -210,6 +212,10 @@
             else if (item.dataset.view === 'calllogs') { calllogsPage = 1; loadCallLogs(); }
             // 阶段一百四十五：进入工作台管理视图拉取应用清单
             else if (item.dataset.view === 'workbench') { wbLoadList(); }
+            // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
+            else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
+            // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
+            else if (item.dataset.view === 'fileshares') { stopKBPolling(); fsPage = 1; fsLoadShares(); }
             else stopKBPolling();
         });
     });
@@ -2123,6 +2129,302 @@
     $('calllogs-next').addEventListener('click', function () {
         if (calllogsPage < calllogsTotalPages) { calllogsPage++; loadCallLogs(); }
     });
+
+    // ===== 文件存储管理（阶段一百六十七：/admin/api/drive/* 全站文件/回收站统一管理） =====
+    // 删除/还原全走服务端归口（引用计数保护：共享对象只清元数据），前端零计算只展示
+    var FM_PAGE_SIZE = 20;
+    var fmPage = 1, fmTotalPages = 1;
+    var fmRows = [];        // 当前页数据（全选本页用）
+    var fmSelected = {};    // 勾选集合（id -> true）；加载新列表即重置——防止跨筛选/翻页误操作不可见文件
+    function fmFormatSize(n) {
+        if (n === null || n === undefined || isNaN(n)) return '-';
+        if (n < 1024) return n + ' B';
+        var units = ['KB', 'MB', 'GB', 'TB'], v = n, i = -1;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return v.toFixed(v >= 100 ? 0 : 1) + ' ' + units[i];
+    }
+    function fmFormatTime(t) {
+        return t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '-';
+    }
+    function fmLoadStats() {
+        if (!getToken()) return;
+        api('GET', '/admin/api/drive/stats').then(function (result) {
+            if (!result.ok) return;
+            var d = result.data || {};
+            $('fm-total-size').textContent = fmFormatSize(d.total_size || 0);
+            $('fm-file-count').textContent = '文件数 ' + (d.file_count || 0);
+            $('fm-user-count').textContent = d.user_count || 0;
+            $('fm-share-total').textContent = '分享数 ' + (d.share_total || 0);
+            $('fm-trash-size').textContent = fmFormatSize(d.trash_size || 0);
+            $('fm-trash-count').textContent = '文件数 ' + (d.trash_count || 0);
+            $('fm-backend').textContent = d.backend === 'minio' ? 'MinIO' : d.backend === 'local' ? '本地磁盘' : (d.backend || '-');
+        }).catch(function () { /* 静默：总览卡片保持上次值 */ });
+    }
+    function fmQuery() {
+        var params = 'page=' + fmPage + '&page_size=' + FM_PAGE_SIZE;
+        if ($('fm-trash-filter').value) params += '&trash=' + $('fm-trash-filter').value;
+        if ($('fm-shared-filter').value) params += '&shared=1';
+        var kw = $('fm-keyword').value.trim();
+        if (kw) params += '&keyword=' + encodeURIComponent(kw);
+        var ow = $('fm-owner').value.trim();
+        if (ow) params += '&owner=' + encodeURIComponent(ow);
+        params += '&sort=' + ($('fm-sort').value || 'time_desc');
+        return params;
+    }
+    function fmLoadFiles() {
+        if (!getToken()) return;
+        fmSelected = {}; fmSyncSel();
+        $('fm-status').textContent = '加载中…';
+        api('GET', '/admin/api/drive/files?' + fmQuery()).then(function (result) {
+            if (!result.ok) {
+                $('fm-status').textContent = result.msg || '加载失败';
+                return;
+            }
+            var d = result.data || {};
+            fmRows = d.list || [];
+            fmRender(fmRows);
+            fmTotalPages = Math.max(1, Math.ceil((d.total || 0) / FM_PAGE_SIZE));
+            $('fm-page-info').textContent = '共 ' + (d.total || 0) + ' 条 · 第 ' + (d.page || 1) + ' / ' + fmTotalPages + ' 页';
+            $('fm-status').textContent = '更新于 ' + nowHMS();
+        }).catch(function () {
+            $('fm-status').textContent = '加载失败';
+        });
+    }
+    function fmCell(text, cls, title) {
+        var td = document.createElement('td');
+        if (cls) td.className = cls;
+        td.textContent = text;
+        if (title) td.title = title;
+        return td;
+    }
+    function fmBadge(text, badgeCls) {
+        var span = document.createElement('span');
+        span.className = 'at-badge ' + badgeCls;
+        span.textContent = text;
+        return span;
+    }
+    function fmActBtn(text, danger, cb) {
+        var b = document.createElement('button');
+        b.className = 'admin-btn small' + (danger ? ' danger' : '');
+        b.textContent = text;
+        b.addEventListener('click', cb);
+        return b;
+    }
+    function fmRender(rows) {
+        var body = $('fm-tbody');
+        body.innerHTML = '';
+        if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="10" class="vec-empty">暂无文件</td></tr>';
+            return;
+        }
+        rows.forEach(function (r) {
+            var tr = document.createElement('tr');
+            // 勾选列
+            var tdCk = document.createElement('td');
+            tdCk.className = 'fm-td-ck';
+            var ck = document.createElement('input');
+            ck.type = 'checkbox';
+            ck.checked = !!fmSelected[r.id];
+            ck.addEventListener('change', function () {
+                if (ck.checked) fmSelected[r.id] = true; else delete fmSelected[r.id];
+                fmSyncSel();
+            });
+            tdCk.appendChild(ck);
+            tr.appendChild(tdCk);
+            // 文件名 / 归属用户 / 大小 / 类型 / 上传时间 / 引用 / 分享
+            tr.appendChild(fmCell(r.name, 'vec-td-file', r.name));
+            tr.appendChild(fmCell(r.owner || '-', 'vec-td-nowrap'));
+            tr.appendChild(fmCell(fmFormatSize(r.size), 'vec-td-num'));
+            tr.appendChild(fmCell(r.mime_type || '-', 'vec-td-nowrap'));
+            tr.appendChild(fmCell(fmFormatTime(r.create_time), 'vec-td-nowrap'));
+            // 引用列：>1 悬浮提示共享来源（秒传/受让副本）
+            tr.appendChild(fmCell(String(r.ref_count || 0), 'vec-td-num',
+                (r.ref_count || 0) > 1 ? r.ref_count + ' 条记录共享同一存储对象（秒传/受让副本），彻底删除仅清元数据' : ''));
+            // 分享列：有分享记录显示条数徽标
+            var tdShare = document.createElement('td');
+            if ((r.share_count || 0) > 0) {
+                tdShare.appendChild(fmBadge('已分享 · ' + r.share_count, 'at-st-completed'));
+            } else {
+                tdShare.textContent = '-';
+            }
+            tr.appendChild(tdShare);
+            // 状态列：正常 / 回收站
+            var tdSt = document.createElement('td');
+            if (r.deleted_at) {
+                tdSt.appendChild(fmBadge('回收站', 'at-st-cancelled'));
+                tdSt.title = '删除于 ' + fmFormatTime(r.deleted_at);
+            } else {
+                tdSt.appendChild(fmBadge('正常', 'at-st-completed'));
+            }
+            tr.appendChild(tdSt);
+            // 操作列：正常行=删除+彻底删除；回收站行=还原+彻底删除
+            var tdAct = document.createElement('td');
+            tdAct.className = 'vec-td-actions';
+            if (r.deleted_at) {
+                tdAct.appendChild(fmActBtn('还原', false, function () { fmOp([r.id], 'restore'); }));
+            } else {
+                tdAct.appendChild(fmActBtn('删除', true, function () { fmAskDelete([r.id], false); }));
+            }
+            tdAct.appendChild(fmActBtn('彻底删除', true, function () { fmAskDelete([r.id], true); }));
+            tr.appendChild(tdAct);
+            body.appendChild(tr);
+        });
+        $('fm-check-all').checked = rows.length > 0 && rows.every(function (r) { return fmSelected[r.id]; });
+    }
+    function fmSyncSel() {
+        var n = Object.keys(fmSelected).length;
+        $('fm-sel-tip').textContent = n ? '已选 ' + n + ' 项' : '未选中文件';
+    }
+    // fmOp 操作归口：delete=移入回收站 / purge=彻底删除 / restore=还原；成功后列表与总览联动刷新
+    function fmOp(ids, op) {
+        var req;
+        if (op === 'restore') {
+            req = api('POST', '/admin/api/drive/restore', { ids: ids });
+        } else {
+            req = api('POST', '/admin/api/drive/delete', { ids: ids, purge: op === 'purge' });
+        }
+        req.then(function (result) {
+            if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+            var d = result.data || {};
+            if (op === 'restore') {
+                showToast('已还原 ' + (d.restored || 0) + ' 项');
+            } else {
+                showToast('已删除 ' + (d.deleted || 0) + ' 条记录' + (d.purged ? '，清理对象 ' + d.purged + ' 个' : ''));
+            }
+            fmLoadFiles();
+            fmLoadStats();
+        }).catch(function () { showToast('操作失败'); });
+    }
+    // fmAskDelete 删除确认归口（自绘弹窗）：彻底删除明确提示不可恢复与共享对象保护
+    function fmAskDelete(ids, purge) {
+        var n = ids.length;
+        if (purge) {
+            confirmBox('彻底删除后不可恢复（仍被其他记录共享引用的存储对象仅清元数据、对象保留）。确定彻底删除所选 ' + n + ' 项？', function () { fmOp(ids, 'purge'); });
+        } else {
+            confirmBox('确定将所选 ' + n + ' 项移入回收站？相关分享将同时失效。', function () { fmOp(ids, 'delete'); });
+        }
+    }
+    function fmSelIds() { return Object.keys(fmSelected).map(Number); }
+    $('fm-search').addEventListener('click', function () { fmPage = 1; fmLoadFiles(); });
+    $('fm-refresh').addEventListener('click', function () { fmPage = 1; fmLoadFiles(); fmLoadStats(); });
+    $('fm-keyword').addEventListener('keydown', function (e) { if (e.key === 'Enter') { fmPage = 1; fmLoadFiles(); } });
+    $('fm-owner').addEventListener('keydown', function (e) { if (e.key === 'Enter') { fmPage = 1; fmLoadFiles(); } });
+    $('fm-trash-filter').addEventListener('change', function () { fmPage = 1; fmLoadFiles(); });
+    $('fm-shared-filter').addEventListener('change', function () { fmPage = 1; fmLoadFiles(); });
+    $('fm-sort').addEventListener('change', function () { fmPage = 1; fmLoadFiles(); });
+    $('fm-prev').addEventListener('click', function () { if (fmPage > 1) { fmPage--; fmLoadFiles(); } });
+    $('fm-next').addEventListener('click', function () { if (fmPage < fmTotalPages) { fmPage++; fmLoadFiles(); } });
+    $('fm-check-all').addEventListener('change', function () {
+        var on = $('fm-check-all').checked;
+        fmRows.forEach(function (r) {
+            if (on) fmSelected[r.id] = true; else delete fmSelected[r.id];
+        });
+        fmSyncSel();
+        fmRender(fmRows);
+    });
+    $('fm-batch-delete').addEventListener('click', function () {
+        var ids = fmSelIds();
+        if (!ids.length) { showToast('请先勾选文件'); return; }
+        fmAskDelete(ids, false);
+    });
+    $('fm-batch-restore').addEventListener('click', function () {
+        var ids = fmSelIds();
+        if (!ids.length) { showToast('请先勾选文件'); return; }
+        confirmBox('确定还原所选 ' + ids.length + ' 项？文件在其已删除目录内时将整树连带还原。', function () { fmOp(ids, 'restore'); });
+    });
+    $('fm-batch-purge').addEventListener('click', function () {
+        var ids = fmSelIds();
+        if (!ids.length) { showToast('请先勾选文件'); return; }
+        fmAskDelete(ids, true);
+    });
+
+    // ===== 分享管理（阶段一百六十七：/admin/api/drive/shares 全站分享审计 + 强制取消） =====
+    var FS_PAGE_SIZE = 20;
+    var fsPage = 1, fsTotalPages = 1;
+    var FS_STATE_TEXT = { valid: '有效', canceled: '已取消', expired: '已过期', deleted: '源文件已删除' };
+    var FS_STATE_BADGE = { valid: 'at-st-completed', canceled: 'at-st-cancelled', expired: 'at-st-queued', deleted: 'at-st-failed' };
+    function fsLoadShares() {
+        if (!getToken()) return;
+        $('fs-status').textContent = '加载中…';
+        var params = 'page=' + fsPage + '&page_size=' + FS_PAGE_SIZE;
+        if ($('fs-status-filter').value) params += '&status=' + $('fs-status-filter').value;
+        var kw = $('fs-keyword').value.trim();
+        if (kw) params += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/admin/api/drive/shares?' + params).then(function (result) {
+            if (!result.ok) {
+                $('fs-status').textContent = result.msg || '加载失败';
+                return;
+            }
+            var d = result.data || {};
+            var rows = d.list || [];
+            var body = $('fs-tbody');
+            body.innerHTML = '';
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="11" class="vec-empty">暂无分享</td></tr>';
+                $('fs-page-info').textContent = '共 0 条';
+                $('fs-status').textContent = '更新于 ' + nowHMS();
+                return;
+            }
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                tr.appendChild(fsCell(r.from || '-', 'vec-td-nowrap'));
+                var name = (r.is_dir ? '[目录] ' : '') + (r.file_name || '-');
+                tr.appendChild(fsCell(name, 'vec-td-file', name));
+                tr.appendChild(fsCell(r.is_dir ? '-' : fmFormatSize(r.size), 'vec-td-num'));
+                tr.appendChild(fsCell(r.has_extract ? '有' : '无'));
+                tr.appendChild(fsCell(r.expire_at ? new Date(r.expire_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '永久', 'vec-td-nowrap'));
+                tr.appendChild(fsCell(String(r.view_count || 0), 'vec-td-num'));
+                tr.appendChild(fsCell(String(r.download_count || 0), 'vec-td-num'));
+                tr.appendChild(fsCell(String(r.save_count || 0), 'vec-td-num'));
+                // 状态徽标（服务端 state 归口四态）
+                var tdSt = document.createElement('td');
+                var badge = document.createElement('span');
+                badge.className = 'at-badge ' + (FS_STATE_BADGE[r.state] || 'at-st-cancelled');
+                badge.textContent = FS_STATE_TEXT[r.state] || r.state;
+                tdSt.appendChild(badge);
+                tr.appendChild(tdSt);
+                tr.appendChild(fsCell(fmFormatTime(r.create_time), 'vec-td-nowrap'));
+                // 操作列：有效分享可强制取消（已取消/已失效项无可操作动作）
+                var tdAct = document.createElement('td');
+                tdAct.className = 'vec-td-actions';
+                if (r.state !== 'canceled') {
+                    var btn = document.createElement('button');
+                    btn.className = 'admin-btn small danger';
+                    btn.textContent = '强制取消';
+                    btn.addEventListener('click', function () {
+                        confirmBox('确定强制取消该分享？站内链接与聊天卡片将立即失效。', function () {
+                            api('POST', '/admin/api/drive/share/cancel', { ids: [r.id] }).then(function (res) {
+                                if (!res.ok) { showToast(res.msg || '操作失败'); return; }
+                                showToast('已取消 ' + ((res.data || {}).canceled || 0) + ' 条分享');
+                                fsLoadShares();
+                            }).catch(function () { showToast('操作失败'); });
+                        });
+                    });
+                    tdAct.appendChild(btn);
+                }
+                tr.appendChild(tdAct);
+                body.appendChild(tr);
+            });
+            fsTotalPages = Math.max(1, Math.ceil((d.total || 0) / FS_PAGE_SIZE));
+            $('fs-page-info').textContent = '共 ' + (d.total || 0) + ' 条 · 第 ' + (d.page || 1) + ' / ' + fsTotalPages + ' 页';
+            $('fs-status').textContent = '更新于 ' + nowHMS();
+        }).catch(function () {
+            $('fs-status').textContent = '加载失败';
+        });
+    }
+    function fsCell(text, cls, title) {
+        var td = document.createElement('td');
+        if (cls) td.className = cls;
+        td.textContent = text;
+        if (title) td.title = title;
+        return td;
+    }
+    $('fs-search').addEventListener('click', function () { fsPage = 1; fsLoadShares(); });
+    $('fs-refresh').addEventListener('click', function () { fsPage = 1; fsLoadShares(); });
+    $('fs-keyword').addEventListener('keydown', function (e) { if (e.key === 'Enter') { fsPage = 1; fsLoadShares(); } });
+    $('fs-status-filter').addEventListener('change', function () { fsPage = 1; fsLoadShares(); });
+    $('fs-prev').addEventListener('click', function () { if (fsPage > 1) { fsPage--; fsLoadShares(); } });
+    $('fs-next').addEventListener('click', function () { if (fsPage < fsTotalPages) { fsPage++; fsLoadShares(); } });
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     if (getToken()) {

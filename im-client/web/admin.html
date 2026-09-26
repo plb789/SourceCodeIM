@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.22">
+    <link rel="stylesheet" href="css/admin.css?v=1.25">
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
@@ -54,6 +54,8 @@
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
                 <button class="admin-nav-item" data-view="drive">网盘设置</button>
+                <button class="admin-nav-item" data-view="filemgr">文件存储管理</button>
+                <button class="admin-nav-item" data-view="fileshares">分享管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -682,6 +684,130 @@
                 </div>
             </section>
 
+            <!-- 阶段一百六十七：文件存储管理（全站文件平铺 + 存储总览 + 回收站/引用计数管理，
+                 删除/还原归口服务端 drive.go 引用计数保护，MinIO/本地双后端自适应） -->
+            <section id="admin-view-filemgr" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>文件存储管理</h2>
+                    <span id="fm-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全站网盘文件统一管理视图：文件本体经对象存储归口（MinIO / 本地磁盘双后端自适应）。秒传与分享受让副本共享同一存储对象——引用数 &gt;1 时彻底删除只清元数据、对象保留，引用数 =1 才物理删除。删除=移入回收站（源文件删除后相关分享自动失效），回收站内可还原或彻底删除。</p>
+                <!-- 存储总览卡片 -->
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">总占用</span><span class="dash-card-value sm" id="fm-total-size">-</span><span class="dash-card-sub" id="fm-file-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">使用用户</span><span class="dash-card-value sm" id="fm-user-count">-</span><span class="dash-card-sub" id="fm-share-total">分享数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">回收站占用</span><span class="dash-card-value sm" id="fm-trash-size">-</span><span class="dash-card-sub" id="fm-trash-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">存储后端</span><span class="dash-card-value sm" id="fm-backend">-</span><span class="dash-card-sub">MinIO 或本地磁盘</span></div>
+                </div>
+                <!-- 筛选工具条：范围/分享/关键词/用户/排序 -->
+                <div class="vec-toolbar">
+                    <select id="fm-trash-filter" class="admin-input vec-select" title="文件范围">
+                        <option value="">正常文件</option>
+                        <option value="1">回收站</option>
+                    </select>
+                    <select id="fm-shared-filter" class="admin-input vec-select" title="分享状态">
+                        <option value="">全部文件</option>
+                        <option value="1">仅被分享的文件</option>
+                    </select>
+                    <input type="text" id="fm-keyword" class="admin-input vec-search-input" placeholder="按文件名搜索">
+                    <input type="text" id="fm-owner" class="admin-input" style="width:150px;flex:none" placeholder="按归属用户搜索">
+                    <select id="fm-sort" class="admin-input vec-select" style="width:130px" title="排序">
+                        <option value="time_desc">最新上传</option>
+                        <option value="time_asc">最早上传</option>
+                        <option value="size_desc">体积最大</option>
+                        <option value="size_asc">体积最小</option>
+                    </select>
+                    <button id="fm-search" class="admin-btn primary">搜索</button>
+                    <button id="fm-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 批量操作条 -->
+                <div class="vec-toolbar">
+                    <button id="fm-batch-delete" class="admin-btn small danger">删除所选</button>
+                    <button id="fm-batch-restore" class="admin-btn small">还原所选</button>
+                    <button id="fm-batch-purge" class="admin-btn small danger">彻底删除所选</button>
+                    <span id="fm-sel-tip" class="admin-view-tip">未选中文件</span>
+                </div>
+                <!-- 全宽表格：勾选/文件名/归属用户/大小/类型/上传时间/引用/分享/状态/操作 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th class="fm-td-ck"><input type="checkbox" id="fm-check-all" title="全选本页"></th>
+                                <th>文件名</th>
+                                <th>归属用户</th>
+                                <th>大小</th>
+                                <th>类型</th>
+                                <th>上传时间</th>
+                                <th title="共享同一存储对象的记录数（秒传/受让副本）">引用</th>
+                                <th>分享</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fm-tbody">
+                            <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="fm-prev" class="admin-btn small">上一页</button>
+                    <span id="fm-page-info" class="admin-view-tip">-</span>
+                    <button id="fm-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- 阶段一百六十七：全站分享管理（浏览/下载/保存计数审计 + 管理员强制取消） -->
+            <section id="admin-view-fileshares" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>分享管理</h2>
+                    <span id="fs-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全站网盘分享统一审计视图：浏览 / 下载 / 保存计数由服务端归口统计（60 秒同源去重）；分享状态实时计算（有效 / 已取消 / 已过期 / 源文件已删除）。管理员可强制取消任意分享——与分享者本人取消同水位，站内链接与聊天卡片立即失效。</p>
+                <!-- 筛选工具条：状态 + 关键词 -->
+                <div class="vec-toolbar">
+                    <select id="fs-status-filter" class="admin-input vec-select" title="按状态筛选">
+                        <option value="">全部状态</option>
+                        <option value="valid">有效</option>
+                        <option value="canceled">已取消</option>
+                        <option value="expired">已过期</option>
+                        <option value="deleted">源文件已删除</option>
+                    </select>
+                    <input type="text" id="fs-keyword" class="admin-input vec-search-input" placeholder="按分享人 / 文件名搜索">
+                    <button id="fs-search" class="admin-btn primary">搜索</button>
+                    <button id="fs-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 全宽表格：分享人/文件/大小/提取码/有效期/浏览/下载/保存/状态/创建时间/操作 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>分享人</th>
+                                <th>文件</th>
+                                <th>大小</th>
+                                <th>提取码</th>
+                                <th>有效期</th>
+                                <th>浏览</th>
+                                <th>下载</th>
+                                <th>保存</th>
+                                <th>状态</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fs-tbody">
+                            <tr><td colspan="11" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="fs-prev" class="admin-btn small">上一页</button>
+                    <span id="fs-page-info" class="admin-view-tip">-</span>
+                    <button id="fs-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
             <!-- MCP 服务器管理（阶段八十九：TRAE CN 同款 MCP 能力，服务端归口） -->
             <section id="admin-view-mcp" class="admin-view">
                 <header class="admin-view-head">
@@ -1053,7 +1179,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.32"></script>
+    <script src="js/admin.js?v=1.34"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

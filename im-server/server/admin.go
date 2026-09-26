@@ -153,6 +153,13 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百六十六：网盘上传扩展名黑名单热更设置（黑名单归口 drive.go）
 	http.HandleFunc("GET /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsGet))
 	http.HandleFunc("PUT /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsSave))
+	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）
+	http.HandleFunc("GET /admin/api/drive/stats", s.adminGuard(s.handleAdminDriveStats))
+	http.HandleFunc("GET /admin/api/drive/files", s.adminGuard(s.handleAdminDriveFiles))
+	http.HandleFunc("POST /admin/api/drive/delete", s.adminGuard(s.handleAdminDriveDelete))
+	http.HandleFunc("POST /admin/api/drive/restore", s.adminGuard(s.handleAdminDriveRestore))
+	http.HandleFunc("GET /admin/api/drive/shares", s.adminGuard(s.handleAdminDriveShares))
+	http.HandleFunc("POST /admin/api/drive/share/cancel", s.adminGuard(s.handleAdminDriveShareCancel))
 
 	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
 	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))
