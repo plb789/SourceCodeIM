@@ -93,6 +93,36 @@
     });
     syncThemeBtn(); // 初始按已存偏好渲染（登录前后按钮均存在，直接执行）
 
+    // ===== 列表骨架屏归口（阶段一百六十八）：数据列表请求期间的占位动画 =====
+    // 表格骨架：向 tbody 注入 rows 行 × cols 列 shimmer 占位（列宽伪随机错开更自然），渲染函数到达后整体覆盖
+    function skelRows(tbodyId, cols, rows) {
+        var tb = $(tbodyId);
+        if (!tb) return;
+        var html = '';
+        var n = rows || 6;
+        for (var r = 0; r < n; r++) {
+            html += '<tr>';
+            for (var c = 0; c < cols; c++) {
+                html += '<td><span class="skel-line" style="width:' + (48 + ((r * 17 + c * 29) % 46)) + '%"></span></td>';
+            }
+            html += '</tr>';
+        }
+        tb.innerHTML = html;
+    }
+    // 卡片列表骨架：复用 admin-card 结构（头像块 + 两行文本占位），渲染函数到达后整体覆盖
+    function skelCards(containerId, n) {
+        var el = $(containerId);
+        if (!el) return;
+        var html = '';
+        var m = n || 4;
+        for (var i = 0; i < m; i++) {
+            html += '<div class="admin-card"><div class="admin-card-avatar"><span class="skel-line skel-block" style="width:42px;height:42px"></span></div>' +
+                '<div class="admin-card-main"><span class="skel-line" style="width:' + (30 + (i * 13) % 25) + '%"></span>' +
+                '<div style="margin-top:9px"><span class="skel-line" style="width:' + (55 + (i * 7) % 30) + '%"></span></div></div></div>';
+        }
+        el.innerHTML = html;
+    }
+
     // ===== API 封装 =====
     var tokenKey = 'admin_token';
     function getToken() { return localStorage.getItem(tokenKey) || ''; }
@@ -419,6 +449,7 @@
     var providers = [];
     // loadProviders 返回 Promise：agents 视图（下拉数据依赖）串行等待，避免加载竞态
     function loadProviders() {
+        skelCards('provider-list', 4);
         return api('GET', '/admin/api/ai/providers').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载失败'); return; }
             providers = result.data || [];
@@ -530,6 +561,7 @@
         return opts;
     }
     function loadAgents() {
+        skelCards('agent-list', 4);
         api('GET', '/admin/api/ai/agents').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载失败'); return; }
             renderAgents(result.data || []);
@@ -678,6 +710,7 @@
     }
 
     function loadKBList() {
+        skelCards('kb-list', 3);
         return api('GET', '/admin/api/kb/list').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载知识库失败'); return; }
             kbList = result.data || [];
@@ -791,6 +824,7 @@
 
     function loadKBFiles() {
         if (!kbSelectedId) return;
+        skelCards('kb-file-list', 4);
         return api('GET', '/admin/api/kb/' + kbSelectedId + '/files').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载文件列表失败'); return; }
             renderKBFiles(result.data || []);
@@ -1174,7 +1208,7 @@
         var url = '/admin/api/kb/chunks?kb_id=' + encodeURIComponent(kbId) + '&page=' + vecPage + '&size=' + VEC_SIZE;
         if (q) url += '&q=' + encodeURIComponent(q);
         var body = $('vec-tbody');
-        body.innerHTML = '<tr><td colspan="8" class="vec-empty">加载中…</td></tr>';
+        skelRows('vec-tbody', 8); // 骨架占位（替换旧式"加载中…"单行，视觉更平滑）
         api('GET', url).then(function (result) {
             if (!result.ok) {
                 body.innerHTML = '<tr><td colspan="8" class="vec-empty">加载失败</td></tr>';
@@ -1340,7 +1374,7 @@
         if (user) url += '&user=' + encodeURIComponent(user);
         if (status) url += '&status=' + encodeURIComponent(status);
         var body = $('at-tbody');
-        body.innerHTML = '<tr><td colspan="9" class="vec-empty">加载中…</td></tr>';
+        skelRows('at-tbody', 9); // 骨架占位（替换旧式"加载中…"单行）
         api('GET', url).then(function (result) {
             if (!result.ok) {
                 body.innerHTML = '<tr><td colspan="9" class="vec-empty">加载失败</td></tr>';
@@ -2153,6 +2187,7 @@
         if (!getToken()) return;
         var filter = $('calllogs-link-filter').value || '';
         $('calllogs-status').textContent = '加载中…';
+        skelRows('calllogs-tbody', 7);
         api('GET', '/admin/api/calllogs?page=' + calllogsPage + '&page_size=' + CALLLOGS_PAGE_SIZE +
             (filter ? '&link_type=' + filter : '')).then(function (result) {
             if (!result.ok) {
@@ -2243,6 +2278,7 @@
         if (!getToken()) return;
         fmSelected = {}; fmSyncSel();
         $('fm-status').textContent = '加载中…';
+        skelRows('fm-tbody', 10);
         api('GET', '/admin/api/drive/files?' + fmQuery()).then(function (result) {
             if (!result.ok) {
                 $('fm-status').textContent = result.msg || '加载失败';
@@ -2414,6 +2450,7 @@
     function fsLoadShares() {
         if (!getToken()) return;
         $('fs-status').textContent = '加载中…';
+        skelRows('fs-tbody', 11);
         var params = 'page=' + fsPage + '&page_size=' + FS_PAGE_SIZE;
         if ($('fs-status-filter').value) params += '&status=' + $('fs-status-filter').value;
         var kw = $('fs-keyword').value.trim();
@@ -2522,6 +2559,7 @@
     function upLoadFiles() {
         if (!getToken()) return;
         $('up-status').textContent = '加载中…';
+        skelRows('up-tbody', 9);
         var params = 'page=' + upPage + '&page_size=' + UP_PAGE_SIZE;
         if ($('up-cat-filter').value) params += '&category=' + $('up-cat-filter').value;
         if ($('up-sort').value) params += '&sort=' + $('up-sort').value;
@@ -2705,6 +2743,7 @@
 
     function loadPointsUsers() {
         $('points-status').textContent = '加载中…';
+        skelRows('points-tbody', 7);
         api('GET', '/admin/api/users').then(function (result) {
             if (!result.ok) {
                 $('points-status').textContent = result.msg || '加载失败';
@@ -2873,7 +2912,7 @@
     };
 
     function loadPointsLogs() {
-        $('plog-tbody').innerHTML = '<tr><td colspan="7" class="vec-empty">加载中…</td></tr>';
+        skelRows('plog-tbody', 7); // 骨架占位（替换旧式"加载中…"单行）
         var path = '/admin/api/points/logs?' + pointsLogFilterQuery() +
             '&page=' + plogPage + '&page_size=' + PLOG_PAGE_SIZE;
         api('GET', path).then(function (result) {
@@ -2965,6 +3004,7 @@
 
     function loadAccounts() {
         $('accounts-status').textContent = '加载中…';
+        skelRows('accounts-tbody', 10);
         api('GET', '/admin/api/users').then(function (result) {
             if (!result.ok) {
                 $('accounts-status').textContent = result.msg || '加载失败';
@@ -3189,6 +3229,7 @@
     }
 
     function loadMCPServers(quiet) {
+        if (!quiet) skelCards('mcp-server-list', 3); // 轮询静默刷新不打骨架
         return api('GET', '/admin/api/mcp/servers').then(function (result) {
             if (!result.ok) {
                 if (!quiet) showToast(result.msg || '加载失败');
@@ -3498,6 +3539,7 @@
     var toolchains = [];
 
     function loadToolchains() {
+        skelCards('toolchains-list', 4);
         return api('GET', '/admin/api/toolchains').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载失败'); return; }
             toolchains = (result.data && result.data.toolchains) || [];
@@ -3651,6 +3693,7 @@
     var mcpPlugins = [];
 
     function loadMCPPlugins() {
+        skelCards('mcpplugins-list', 4);
         return api('GET', '/admin/api/mcp/plugins').then(function (result) {
             if (!result.ok) { showToast(result.msg || '加载失败'); return; }
             mcpPlugins = (result.data && result.data.plugins) || [];
@@ -3959,6 +4002,7 @@
     // ===== 列表 =====
     function annLoadList() {
         $('ann-status').textContent = '加载中…';
+        skelRows('ann-tbody', 7);
         var qs = '?page=' + annPage + '&size=20';
         var category = $('ann-filter-category').value;
         var status = $('ann-filter-status').value;
