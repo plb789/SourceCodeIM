@@ -38,6 +38,7 @@ func RegisterDriveShareRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/share/cancel", s.handleDriveShareCancel)
 	http.HandleFunc("POST /api/drive/share/delete", s.handleDriveShareDelete)
 	http.HandleFunc("GET /api/drive/share/info", s.handleDriveShareInfo)
+	http.HandleFunc("GET /api/drive/share/children", s.handleDriveShareChildren)
 	http.HandleFunc("POST /api/drive/share/save", s.handleDriveShareSave)
 	http.HandleFunc("GET /api/drive/share/download", s.handleDriveShareDownload)
 }
@@ -180,7 +181,8 @@ var (
 	shareDlSeen = map[string]int64{} // code|ip -> 最近计数 UnixMilli
 )
 
-// driveShareDlShouldCount 下载是否应计数（窗口内首次 true；超 1 万条惰性清理过期项防膨胀）
+// driveShareDlShouldCount 下载是否应计数（窗口内首次 true；超 1 万条惰性清理过期项防膨胀）；
+// code 参数可内嵌文件 ID（如 code|fileID，文件夹分享批量下载时各文件独立去重窗口）
 func driveShareDlShouldCount(code, ip string) bool {
 	shareDlMu.Lock()
 	defer shareDlMu.Unlock()
@@ -541,8 +543,121 @@ func (s *Server) handleDriveShareInfo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"share": driveShareToClient(s, sh, false)})
 }
 
-// handleDriveShareSave 保存到我的网盘 POST /api/drive/share/save {username,code,extract,parent_id}
+// driveShareInSubtree 判断 fid 是否位于分享根 rootID 的子树内（防越权枚举兄弟目录）：
+// 从 fid 沿 parent 链向上走（限深 32 与 BFS 同款防环），每步限定 owner（他人目录视为不存在）；
+// 中间节点被软删级联时查询为空直接 false（天然容错，无需区分删除与越权）
+func (s *Server) driveShareInSubtree(rootID, fid uint, owner string) bool {
+	cur := fid
+	for i := 0; i < 32 && cur > 0; i++ {
+		if cur == rootID {
+			return true
+		}
+		var rec model.DriveFile
+		if err := store.DB.Where("id = ? AND owner = ?", cur, owner).First(&rec).Error; err != nil {
+			return false
+		}
+		cur = rec.ParentID
+	}
+	return false
+}
+
+// driveShareNode 子树收集节点：rec 为源记录；parentID 仅顶层节点使用（落库挂新父），
+// 子节点 parentID=0，落库时经 idMap 按 BFS 序挂接；depth 用于限深防环与顶层判定
+type driveShareNode struct {
+	rec      model.DriveFile
+	parentID uint
+	depth    int
+}
+
+// driveShareCollectSubtree BFS 收集 root 子树（限深 32 防环、上限 maxNodes 防滥用），
+// 返回（先父后子的落库序列, 文件字节总量——目录不计容，配额校验归口）
+func (s *Server) driveShareCollectSubtree(owner string, root model.DriveFile, rootParentID uint, maxNodes int) ([]driveShareNode, int64) {
+	subtree := []driveShareNode{}
+	frontier := []driveShareNode{{rec: root, parentID: rootParentID, depth: 0}}
+	seen := map[uint]bool{}
+	total := int64(0)
+	for len(frontier) > 0 && len(subtree) < maxNodes {
+		cur := frontier[0]
+		frontier = frontier[1:]
+		if seen[cur.rec.ID] || cur.depth > 32 {
+			continue
+		}
+		seen[cur.rec.ID] = true
+		subtree = append(subtree, cur)
+		if !cur.rec.IsDir {
+			total += cur.rec.Size
+		} else {
+			var children []model.DriveFile
+			store.DB.Where("owner = ? AND parent_id = ?", owner, cur.rec.ID).Find(&children)
+			for _, c := range children {
+				frontier = append(frontier, driveShareNode{rec: c, parentID: 0, depth: cur.depth + 1}) // parent 落库时按新树挂接
+			}
+		}
+	}
+	return subtree, total
+}
+
+// handleDriveShareChildren 分享内容浏览 GET /api/drive/share/children?code=xxx&extract=yyyy&fid=0
+// 凭 分享码+提取码 浏览分享子树（123 云盘同款文件夹展开语义）：fid=0 取分享根——
+// 根为文件时返回单行列表，根为目录时返回其子项；fid>0 须位于分享子树内（driveShareInSubtree
+// 沿 parent 链校验，防越权枚举分享范围外的兄弟目录）且必须是目录。
+// 仅回展示字段，不泄露 object_key/owner/md5；浏览不 bump view_count（info 归口）
+func (s *Server) handleDriveShareChildren(w http.ResponseWriter, r *http.Request) {
+	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
+	if errMsg != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": errMsg, "need_extract": need})
+		return
+	}
+	fid, _ := strconv.ParseUint(r.URL.Query().Get("fid"), 10, 64)
+	var dirID uint
+	if fid == 0 {
+		root, err := s.driveOwnFile(sh.FileID, sh.Owner)
+		if err != nil {
+			driveFail(w, http.StatusForbidden, "文件已被删除")
+			return
+		}
+		if !root.IsDir {
+			// 分享根为文件：单行列表（前端直接渲染为可勾选的一行）
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"items": []map[string]interface{}{{
+				"id": root.ID, "name": root.Name, "is_dir": false,
+				"size": root.Size, "mime_type": root.MimeType, "update_time": root.UpdateTime,
+			}}})
+			return
+		}
+		dirID = root.ID
+	} else {
+		rec, err := s.driveOwnFile(uint(fid), sh.Owner)
+		if err != nil || !s.driveShareInSubtree(sh.FileID, rec.ID, sh.Owner) {
+			driveFail(w, http.StatusForbidden, "无权访问该目录")
+			return
+		}
+		if !rec.IsDir {
+			driveFail(w, http.StatusBadRequest, "该文件不支持展开浏览")
+			return
+		}
+		dirID = rec.ID
+	}
+	// 子项排序与本人网盘列表同款：文件夹在前，名称升序
+	var list []model.DriveFile
+	store.DB.Where("owner = ? AND parent_id = ?", sh.Owner, dirID).Order("is_dir DESC, name ASC").Find(&list)
+	items := make([]map[string]interface{}, 0, len(list))
+	for _, f := range list {
+		items = append(items, map[string]interface{}{
+			"id": f.ID, "name": f.Name, "is_dir": f.IsDir,
+			"size": f.Size, "mime_type": f.MimeType, "update_time": f.UpdateTime,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"items": items})
+}
+
+// handleDriveShareSave 保存到我的网盘 POST /api/drive/share/save {username,code,extract,parent_id,items}
 // 零拷贝归口：文件=单条元数据记录指向同一 object_key；目录=整棵子树记录复制（本体零复制）；
+// items 为空=整树保存（旧语义向后兼容），items 非空=勾选批量保存（123 云盘同款：逐项子树
+// 归属校验防越权，祖先目录已勾选时冗余后代自动跳过随祖先整体保存）；
 // 配额校验/同名拦截/父目录归属全部服务端归口
 func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -550,6 +665,7 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 		Code     string `json:"code"`
 		Extract  string `json:"extract"`
 		ParentID uint   `json:"parent_id"`
+		Items    []uint `json:"items"` // 勾选批量保存（空=整树保存）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
 		driveFail(w, http.StatusBadRequest, "参数错误")
@@ -578,32 +694,58 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// BFS 先收集子树（限深 32 防环），配额校验归口（目录不计容）
-	type node struct {
-		rec      model.DriveFile
-		parentID uint
-		depth    int
-	}
-	subtree := []node{}
-	frontier := []node{{rec: *src, parentID: body.ParentID, depth: 0}}
-	seen := map[uint]bool{}
+	// BFS 收集待保存子树（限深 32 防环、上限 1 万节点），配额校验归口（目录不计容）
+	var subtree []driveShareNode
 	total := int64(0)
-	for len(frontier) > 0 && len(subtree) < 10000 {
-		cur := frontier[0]
-		frontier = frontier[1:]
-		if seen[cur.rec.ID] || cur.depth > 32 {
-			continue
-		}
-		seen[cur.rec.ID] = true
-		subtree = append(subtree, cur)
-		if !cur.rec.IsDir {
-			total += cur.rec.Size
-		} else {
-			var children []model.DriveFile
-			store.DB.Where("owner = ? AND parent_id = ?", src.Owner, cur.rec.ID).Find(&children)
-			for _, c := range children {
-				frontier = append(frontier, node{rec: c, parentID: 0, depth: cur.depth + 1}) // parent 落库时按新树挂接
+	if len(body.Items) == 0 {
+		subtree, total = s.driveShareCollectSubtree(sh.Owner, *src, body.ParentID, 10000)
+	} else {
+		// 勾选批量保存：去重+上限 500，逐项校验归属（越权/已删除整批拒绝，防半保存态）
+		sel := map[uint]bool{}
+		items := make([]uint, 0, len(body.Items))
+		for _, id := range body.Items {
+			if id > 0 && !sel[id] && len(items) < 500 {
+				sel[id] = true
+				items = append(items, id)
 			}
+		}
+		recs := make(map[uint]model.DriveFile, len(items))
+		for _, id := range items {
+			rec, err := s.driveOwnFile(id, sh.Owner)
+			if err != nil || !s.driveShareInSubtree(sh.FileID, id, sh.Owner) {
+				driveFail(w, http.StatusForbidden, "所选文件已不在分享范围内")
+				return
+			}
+			recs[id] = *rec
+		}
+		// 冗余跳过：祖先目录已被勾选时，其子树随祖先整体保存，后代不再重复收集
+		tops := make([]uint, 0, len(items))
+		for _, id := range items {
+			redundant := false
+			for cur, i := recs[id].ParentID, 0; i < 32 && cur > 0 && cur != sh.FileID; i++ {
+				if sel[cur] {
+					redundant = true
+					break
+				}
+				var p model.DriveFile
+				if err := store.DB.Where("id = ? AND owner = ?", cur, sh.Owner).First(&p).Error; err != nil {
+					break
+				}
+				cur = p.ParentID
+			}
+			if !redundant {
+				tops = append(tops, id)
+			}
+		}
+		if len(tops) == 0 {
+			driveFail(w, http.StatusBadRequest, "请选择要保存的文件")
+			return
+		}
+		subtree = []driveShareNode{}
+		for _, id := range tops {
+			ns, t := s.driveShareCollectSubtree(sh.Owner, recs[id], body.ParentID, 10000-len(subtree))
+			subtree = append(subtree, ns...)
+			total += t
 		}
 	}
 	if quota := s.cfg.Drive.QuotaBytes; quota >= 0 {
@@ -615,13 +757,25 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// 根节点同名拦截（子树内部结构原样复制，不会产生新冲突）
-	var cnt int64
-	store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
-		body.Username, body.ParentID, src.Name).Count(&cnt)
-	if cnt > 0 {
-		driveFail(w, http.StatusConflict, "同名文件或文件夹已存在")
-		return
+	// 顶层同名拦截（勾选模式对每个顶层项逐一校验，同批重名一并拒绝；
+	// 子树内部结构原样复制，不会产生新冲突）
+	seenTop := map[string]bool{}
+	for _, n := range subtree {
+		if n.depth != 0 {
+			continue
+		}
+		if seenTop[n.rec.Name] {
+			driveFail(w, http.StatusConflict, "同名文件或文件夹已存在")
+			return
+		}
+		seenTop[n.rec.Name] = true
+		var cnt int64
+		store.DB.Model(&model.DriveFile{}).Where("owner = ? AND parent_id = ? AND name = ?",
+			body.Username, body.ParentID, n.rec.Name).Count(&cnt)
+		if cnt > 0 {
+			driveFail(w, http.StatusConflict, "同名文件或文件夹已存在")
+			return
+		}
 	}
 	// 按收集顺序落库（BFS 先父后子）：新记录 id 回填映射，子节点挂新父
 	idMap := map[uint]uint{}
@@ -642,14 +796,16 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 		idMap[n.rec.ID] = rec.ID
 		saved++
 	}
-	logger.Info("网盘分享保存: %s <- %s code=%s, 保存 %d 项 (parent=%d)", body.Username, sh.Owner, sh.ShareCode, saved, body.ParentID)
+	logger.Info("网盘分享保存: %s <- %s code=%s, 保存 %d 项 (parent=%d, items=%d)", body.Username, sh.Owner, sh.ShareCode, saved, body.ParentID, len(body.Items))
 	driveShareBump(sh.ID, "save_count") // 保存计数归口：成功保存即 +1（按动作计，条目数另由 saved 体现）
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"saved": saved})
 }
 
-// handleDriveShareDownload 分享下载 GET /api/drive/share/download?code=xxx&extract=yyyy
-// 校验分享有效后复用 serveDriveFile 下发链路（MinIO 302 预签名 / 本地流式，与本人下载同款）
+// handleDriveShareDownload 分享下载 GET /api/drive/share/download?code=xxx&extract=yyyy&fid=0
+// 校验分享有效后复用 serveDriveFile 下发链路（MinIO 302 预签名 / 本地流式，与本人下载同款）；
+// fid=0 下载分享根（原语义），fid>0 下载分享子树内勾选的单文件（须 driveShareInSubtree
+// 归属校验，防越权枚举分享范围外文件）；计数键含文件 ID，多文件各自独立去重窗口
 func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request) {
 	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
 	if errMsg != "" {
@@ -663,6 +819,17 @@ func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request
 		http.Error(w, "文件已被删除", http.StatusForbidden)
 		return
 	}
+	// fid>0：文件夹分享内勾选的单文件下载（须位于分享子树内；403 不区分越权与不存在，不泄露枚举信息）
+	if fidStr := r.URL.Query().Get("fid"); fidStr != "" && fidStr != "0" {
+		if fid, perr := strconv.ParseUint(fidStr, 10, 64); perr == nil && fid > 0 {
+			sub, serr := s.driveOwnFile(uint(fid), sh.Owner)
+			if serr != nil || !s.driveShareInSubtree(sh.FileID, sub.ID, sh.Owner) {
+				http.Error(w, "无权访问该文件", http.StatusForbidden)
+				return
+			}
+			rec = sub
+		}
+	}
 	if rec.IsDir {
 		http.Error(w, "文件夹不支持下载", http.StatusBadRequest)
 		return
@@ -672,12 +839,14 @@ func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request
 		s.serveDriveFile(w, r, rec, true)
 		return
 	}
-	// 下载计数归口：非预览成功下发 +1；60 秒同 code|ip 去重（Range 分片/断点续传不虚增）
+	// 下载计数归口：非预览成功下发 +1；60 秒同 code|ip|文件 去重（Range 分片/断点续传不虚增，
+	// 勾选批量下载时每个文件各自计数，窗口互不挤占）
 	ip := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		ip = h
 	}
-	if driveShareDlShouldCount(sh.ShareCode, ip) {
+	dlKey := sh.ShareCode + "|" + strconv.FormatUint(uint64(rec.ID), 10)
+	if driveShareDlShouldCount(dlKey, ip) {
 		driveShareBump(sh.ID, "download_count")
 	}
 	s.serveDriveFile(w, r, rec, false)

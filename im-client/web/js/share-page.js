@@ -1,6 +1,6 @@
-// ===== 网盘分享独立页逻辑（/s/<code> 落地页，百度网盘同款） =====
+// ===== 网盘分享独立页逻辑（/s/<code> 落地页，123 云盘同款：内容列表+勾选批量） =====
 // 设计归口（服务端统一数据归口，本页只展示）：
-//  1. 查看/下载免登录：凭 分享码+提取码 访问 /api/drive/share/info|download（无需任何登录态）
+//  1. 查看/下载/浏览列表免登录：凭 分享码+提取码 访问 /api/drive/share/info|children|download
 //  2. 保存到我的网盘需登录：服务端 driveCheckUser 以 WS 在线水位校验 → 本页复用 socket.js
 //     同一套 LOGIN 协议建立会话（与主应用共享 localStorage['im_auth'] 凭据）
 //  3. 失效文案（已取消/已过期/文件已删除/不存在）全部服务端返回，本页零判断
@@ -22,11 +22,17 @@
     // ===== DOM 引用 =====
     function $(id) { return document.getElementById(id); }
     var loginEntry = $('sp-login-entry'), userNameEl = $('sp-user-name'), logoutBtn = $('sp-logout');
-    var iconEl = $('sp-icon'), nameEl = $('sp-name'), metaEl = $('sp-meta'), statsEl = $('sp-stats');
+    var nameEl = $('sp-name'), metaEl = $('sp-meta'); // 卡片名/元信息仅提取锁定态使用
     var extractRow = $('sp-extract-row'), extractInput = $('sp-extract-input'),
         extractBtn = $('sp-extract-btn'), extractErr = $('sp-extract-err');
     var btnRow = $('sp-btn-row'), downloadBtn = $('sp-download-btn'), saveBtn = $('sp-save-btn'),
         previewBtn = $('sp-preview-btn');
+    // 内容区（hero 信息条 + 面包屑/批量条 + 可勾选列表）
+    var wrapEl = $('sp-wrap'), heroIcon = $('sp-hero-icon'), heroName = $('sp-hero-name'),
+        heroMeta = $('sp-hero-meta'), heroStats = $('sp-hero-stats');
+    var crumbEl = $('sp-crumb'), batchBar = $('sp-batchbar'), batchCount = $('sp-batch-count'),
+        batchSaveBtn = $('sp-batch-save'), batchDlBtn = $('sp-batch-dl'), batchCancelBtn = $('sp-batch-cancel');
+    var checkAllEl = $('sp-check-all'), listEl = $('sp-list'), emptyEl = $('sp-empty');
     var viewerMask = $('sp-viewer-mask'), viewerTitle = $('sp-viewer-title'),
         viewerBody = $('sp-viewer-body'), viewerClose = $('sp-viewer-close');
     var invalidEl = $('sp-invalid'), invalidText = $('sp-invalid-text');
@@ -37,12 +43,19 @@
 
     // ===== 状态 =====
     var shareInfo = null;     // info 接口返回的 share 对象（提取通过后填充）
-    var extract = '';         // 已通过的提取码（下载/保存共用）
+    var extract = '';         // 已通过的提取码（下载/保存/列表共用）
     var authed = false;       // WS 登录成功（服务端在线水位达成）
     var pendingSave = false;  // 登录成功后自动补发保存
     var autoConnFailSilent = false; // 自动连接失败静默（仅回退顶栏，不弹错误）
     var lastRejectText = '';        // 最近一次 ERROR 帧文案（服务端拒绝判定：ERROR+close 连发）
     var toastTimer = 0;
+    // 列表导航状态（123 云盘同款文件夹浏览）
+    var crumbs = [];          // 面包屑栈 [{id,name}]，id=0 为分享根
+    var curFid = 0;           // 当前目录 fid（0=分享根）
+    var listSeq = 0;          // children 响应乱序守卫（快速进出目录时旧响应丢弃）
+    var selSet = {};          // 当前目录勾选集合（不跨目录，进目录即清）
+    var curItems = [];        // 当前目录条目缓存（勾选/批量动作取数）
+    var batchBusy = false;    // 批量下载进行中（防重入）
 
     // ===== 类别 SVG 图标（与 drive.js ICONS 同一套 path，独立内嵌避免引主应用模块） =====
     var ICONS = {
@@ -105,6 +118,21 @@
         if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
         if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
         return (n / 1073741824).toFixed(2) + ' GB';
+    }
+    // HTML 转义（列表行/面包屑由 innerHTML 拼接，文件名必须过此归口防 XSS）
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    // RFC3339 时间 → 'YYYY-MM-DD HH:mm'（列表时间列展示）
+    function fmtTime(v) {
+        if (!v) return '-';
+        var d = new Date(v);
+        if (isNaN(d.getTime())) return '-';
+        var pad = function (x) { return x < 10 ? '0' + x : '' + x; };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+            ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
     }
     function expireText(ts) {
         if (!ts) return T('永久有效');
@@ -219,27 +247,37 @@
     // ===== 视图切换 =====
     function showInvalid(text) {
         $('sp-card').classList.add('hidden');
+        wrapEl.classList.add('hidden');
         invalidText.textContent = text || T('分享不存在或已失效');
         invalidEl.classList.remove('hidden');
     }
+    // 提取通过渲染：卡片收起，内容区（hero 信息条 + 面包屑 + 列表）显示
     function renderShare(sh) {
         invalidEl.classList.add('hidden');
-        iconEl.className = 'sp-icon k-' + kindOf(sh);
-        iconEl.innerHTML = ICONS[kindOf(sh)] || ICONS.file;
-        nameEl.textContent = sh.file_name || T('未命名文件');
-        nameEl.title = sh.file_name || '';
-        metaEl.textContent = (sh.is_dir ? T('文件夹') : fmtSize(sh.size)) +
-            ' · ' + T('{u} 分享', { u: sh.from || '' }) + ' · ' + expireText(sh.expire_at) +
-            (sh.has_extract ? '' : '');
+        $('sp-card').classList.add('hidden');
+        var kind = kindOf(sh);
+        heroIcon.className = 'sp-icon k-' + kind;
+        heroIcon.innerHTML = ICONS[kind] || ICONS.file;
+        heroName.textContent = sh.file_name || T('未命名文件');
+        heroName.title = sh.file_name || '';
+        heroMeta.textContent = (sh.is_dir ? T('文件夹') : fmtSize(sh.size)) +
+            ' · ' + T('{u} 分享', { u: sh.from || '' }) + ' · ' + expireText(sh.expire_at);
         // 分享统计（服务端归口计数，本行只展示；响应即含本次浏览）
-        statsEl.textContent = T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' +
+        heroStats.textContent = T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' +
             T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 });
-        statsEl.classList.remove('hidden');
         extractRow.classList.add('hidden');
         btnRow.classList.remove('hidden');
-        downloadBtn.classList.toggle('hidden', !!sh.is_dir); // 文件夹不支持下载（服务端同款限制）
-        // 在线预览按钮：仅文件且浏览器原生可渲染的类型显示（img 全系/video 仅 mp4|webm/audio 全系/pdf/文本类）
+        // 文件夹分享 hero 无下载/无预览（整树无下载语义；预览走文件行点击，123 云盘同款）
+        downloadBtn.classList.toggle('hidden', !!sh.is_dir);
         previewBtn.classList.toggle('hidden', !!sh.is_dir || !canPreviewName(sh.file_name || ''));
+        // 内容区显示（主体顶部对齐：列表高时垂直居中会裁顶）
+        wrapEl.classList.remove('hidden');
+        document.querySelector('.sp-main').classList.add('sp-top');
+        // 面包屑归位 + 首屏列表（列表容器挂自绘悬浮滑块，_osb 幂等标记防重复初始化）
+        crumbs = [{ id: 0, name: sh.file_name || T('未命名文件') }];
+        curFid = 0;
+        if (!listEl._osb && window._osbInit) window._osbInit(listEl);
+        loadChildren(0);
     }
 
     // ===== 在线预览（百度网盘分享页同款：凭 分享码+提取码 inline 下发，本页内联渲染） =====
@@ -254,16 +292,20 @@
         if (window.OfficePreview && OfficePreview.kindOf(name)) return true;                       // Office（docx/表格/pptx 归口共享渲染）
         return false;
     }
-    // 分享文件下发 URL 归口（下载与预览共用；preview=1 服务端改 inline 下发）
-    function shareFileUrl(preview) {
+    // 分享文件下发 URL 归口（下载与预览共用；preview=1 服务端改 inline 下发；
+    // fid 空=分享根走旧链路（hero 按钮语义不变），子文件传 fid 走服务端子树校验链路）
+    function shareFileUrl(preview, fid) {
         return '/api/drive/share/download?code=' + encodeURIComponent(code) +
-            '&extract=' + encodeURIComponent(extract) + (preview ? '&preview=1' : '');
+            '&extract=' + encodeURIComponent(extract) + (preview ? '&preview=1' : '') +
+            (fid ? '&fid=' + fid : '');
     }
-    function openViewer() {
-        if (!shareInfo) return;
-        var name = shareInfo.file_name || '';
-        var kind = kindOf(shareInfo);
-        var url = shareFileUrl(true);
+    // 预览泛化：item 空=分享根（hero 按钮），item=children 列表行（勾选行外的行点击预览）
+    function openViewer(item) {
+        var info = item || shareInfo;
+        if (!info) return;
+        var name = info.name || info.file_name || '';
+        var kind = kindOf(info);
+        var url = shareFileUrl(true, item ? item.id : 0);
         viewerTitle.textContent = name + ' · ' + T('在线预览');
         viewerBody.innerHTML = '<div class="sp-viewer-loading">' + T('正在加载预览…') + '</div>';
         viewerMask.classList.remove('hidden');
@@ -325,6 +367,179 @@
         if (e.key === 'Escape' && !viewerMask.classList.contains('hidden')) closeViewer();
     });
 
+    // ===== 分享内容列表（123 云盘同款：children 逐级浏览 + 勾选批量保存/下载） =====
+    // 浏览免登录：children 每次请求全量走 分享码+提取码 校验（禁止缓存/绕过，
+    // 提取码锁定计数器天然覆盖）；勾选不跨目录，进目录即清
+    function loadChildren(fid) {
+        var seq = ++listSeq;
+        emptyEl.classList.add('hidden');
+        listEl.innerHTML = '<div class="sp-empty">' + T('正在加载…') + '</div>';
+        apiJSON('/api/drive/share/children?code=' + encodeURIComponent(code) +
+            '&extract=' + encodeURIComponent(extract) + '&fid=' + (fid || 0), null, function (err, data) {
+            if (seq !== listSeq) return; // 乱序丢弃（快速切换目录时旧响应不落榜）
+            if (err) {
+                listEl.innerHTML = '';
+                toast(TR(err.message) || T('加载失败'));
+                return;
+            }
+            curItems = data.items || [];
+            selSet = {}; // 勾选不跨目录
+            renderCrumbs();
+            renderList();
+            updateBatchBar();
+        });
+    }
+    function findItem(id) {
+        for (var i = 0; i < curItems.length; i++) if (curItems[i].id === id) return curItems[i];
+        return null;
+    }
+    function renderCrumbs() {
+        var html = '';
+        for (var i = 0; i < crumbs.length; i++) {
+            if (i > 0) html += '<span class="drive-crumb-sep">/</span>';
+            if (i === crumbs.length - 1) html += '<span class="drive-crumb-cur">' + esc(crumbs[i].name) + '</span>';
+            else html += '<span class="drive-crumb" data-idx="' + i + '">' + esc(crumbs[i].name) + '</span>';
+        }
+        crumbEl.innerHTML = html;
+        crumbEl.querySelectorAll('.drive-crumb').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var idx = +el.getAttribute('data-idx');
+                crumbs = crumbs.slice(0, idx + 1); // 回跳即裁掉后方层级
+                curFid = crumbs[idx].id;
+                loadChildren(curFid);
+            });
+        });
+    }
+    // 行 HTML（复用主程序 .drive-check/.drive-icon 视觉；文件名过 esc 防 XSS）
+    function spRowHtml(it) {
+        var kind = kindOf(it);
+        return '<div class="sp-row" data-id="' + it.id + '">' +
+            '<span class="drive-check' + (selSet[it.id] ? ' checked' : '') + '"><svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></span>' +
+            '<span class="sp-cell-name"><span class="drive-icon k-' + kind + '">' + (ICONS[kind] || ICONS.file) + '</span><span class="sp-fname" title="' + esc(it.name) + '">' + esc(it.name) + '</span></span>' +
+            '<span class="sp-cell-size">' + (it.is_dir ? '-' : fmtSize(it.size)) + '</span>' +
+            '<span class="sp-cell-time">' + fmtTime(it.update_time) + '</span>' +
+            '</div>';
+    }
+    function renderList() {
+        var html = '';
+        for (var i = 0; i < curItems.length; i++) html += spRowHtml(curItems[i]);
+        listEl.innerHTML = html;
+        emptyEl.classList.toggle('hidden', curItems.length > 0);
+        syncCheckAll();
+    }
+    function updateRowCheck(id) {
+        var row = listEl.querySelector('.sp-row[data-id="' + id + '"]');
+        if (row) row.querySelector('.drive-check').classList.toggle('checked', !!selSet[id]);
+    }
+    function syncCheckAll() {
+        var all = curItems.length > 0;
+        for (var i = 0; i < curItems.length; i++) {
+            if (!selSet[curItems[i].id]) { all = false; break; }
+        }
+        checkAllEl.classList.toggle('checked', all);
+    }
+    function updateBatchBar() {
+        var n = 0, k;
+        for (k in selSet) if (selSet.hasOwnProperty(k)) n++;
+        var hasFile = false;
+        for (var i = 0; i < curItems.length; i++) {
+            if (selSet[curItems[i].id] && !curItems[i].is_dir) { hasFile = true; break; }
+        }
+        var selecting = n > 0;
+        batchBar.classList.toggle('hidden', !selecting);
+        crumbEl.classList.toggle('hidden', selecting); // 批量条替代面包屑行（123 云盘同款）
+        if (selecting) {
+            batchCount.textContent = T('已选 {n} 项', { n: n });
+            batchDlBtn.disabled = !hasFile; // 只勾了文件夹：无可下载文件，下载置灰
+        }
+    }
+    function clearSelection() {
+        selSet = {};
+        listEl.querySelectorAll('.sp-row .drive-check.checked').forEach(function (el) {
+            el.classList.remove('checked');
+        });
+        syncCheckAll();
+        updateBatchBar();
+    }
+    function toggleSel(id) {
+        if (selSet[id]) delete selSet[id]; else selSet[id] = true;
+        updateRowCheck(id);
+        syncCheckAll();
+        updateBatchBar();
+    }
+    // 列表事件委托（行点击=进目录/预览；勾选列点击=勾选不触发行动作）
+    listEl.addEventListener('click', function (e) {
+        var row = e.target.closest ? e.target.closest('.sp-row') : null;
+        if (!row) return;
+        var id = +row.getAttribute('data-id');
+        var it = findItem(id);
+        if (!it) return;
+        var chk = row.querySelector('.drive-check');
+        if (chk && (e.target === chk || chk.contains(e.target))) { toggleSel(id); return; }
+        if (it.is_dir) {
+            crumbs.push({ id: it.id, name: it.name });
+            curFid = it.id;
+            loadChildren(curFid);
+            return;
+        }
+        if (canPreviewName(it.name)) openViewer(it);
+        else toast(T('该文件不支持在线预览，请下载查看'));
+    });
+    // 表头主勾选框（两态 toggle：全选/全不选，仅作用于当前目录）
+    checkAllEl.addEventListener('click', function () {
+        var all = curItems.length > 0;
+        for (var i = 0; i < curItems.length; i++) {
+            if (!selSet[curItems[i].id]) { all = false; break; }
+        }
+        for (var j = 0; j < curItems.length; j++) {
+            if (all) delete selSet[curItems[j].id]; else selSet[curItems[j].id] = true;
+        }
+        renderList(); // 全量刷新勾选态最简
+        updateBatchBar();
+    });
+    batchCancelBtn.addEventListener('click', clearSelection);
+    batchSaveBtn.addEventListener('click', requestSave); // 与 hero 保存同链路（登录引导/自动补发共用）
+    // 批量下载（页内串行队列：fetch→blob→a[download]，与主程序 drive.js 同款；
+    // 免登录可发起——download 接口凭 分享码+提取码 即可；仅下载文件，文件夹跳过）
+    function batchDownload() {
+        if (batchBusy) return;
+        var files = [];
+        for (var i = 0; i < curItems.length; i++) {
+            if (selSet[curItems[i].id] && !curItems[i].is_dir) files.push(curItems[i]);
+        }
+        if (!files.length) { toast(T('所选项目均不支持下载')); return; }
+        batchBusy = true;
+        batchDlBtn.disabled = true;
+        var idx = 0;
+        (function next() {
+            if (idx >= files.length) {
+                batchBusy = false;
+                batchDlBtn.disabled = false;
+                toast(T('下载完成'));
+                return;
+            }
+            var it = files[idx++];
+            toast(T('正在下载 {i}/{n}…', { i: idx, n: files.length }));
+            fetch(shareFileUrl(false, it.id)).then(function (res) {
+                if (!res.ok) throw new Error(res.status);
+                return res.blob();
+            }).then(function (blob) {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = it.name;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+                next();
+            }, function () {
+                batchBusy = false;
+                batchDlBtn.disabled = false;
+                toast(T('下载失败'));
+            });
+        })();
+    }
+    batchDlBtn.addEventListener('click', batchDownload);
+
     // ===== 分享信息获取（info 免登录归口；need_extract 引导提取码行） =====
     function fetchInfo(ex) {
         apiJSON('/api/drive/share/info?code=' + encodeURIComponent(code) +
@@ -336,7 +551,6 @@
                     invalidEl.classList.add('hidden');
                     nameEl.textContent = T('加密分享');
                     metaEl.textContent = T('输入提取码后查看和下载文件');
-                    statsEl.classList.add('hidden'); // 提取前无统计数据
                     extractRow.classList.remove('hidden');
                     if (ex) showError(extractErr, TR(err.message) || T('提取码错误'));
                     setTimeout(function () { extractInput.focus(); extractInput.select(); }, 60);
@@ -360,16 +574,22 @@
     });
 
     // ===== 保存到我的网盘（需登录 = WS 在线水位） =====
+    // 有勾选=批量保存选中项（服务端 items 逐项子树校验），无勾选=整树保存（旧语义不变）
     function doSave() {
         var u = (window.IMSocket && IMSocket.getUsername()) || (getAuth() || {}).u || '';
         if (!u) { openLoginPanel(true); return; }
         saveBtn.disabled = true;
+        batchSaveBtn.disabled = true;
+        var items = [];
+        for (var k in selSet) if (selSet.hasOwnProperty(k)) items.push(+k);
+        var selMode = items.length > 0;
         apiJSON('/api/drive/share/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: u, code: code, extract: extract, parent_id: 0 })
+            body: JSON.stringify({ username: u, code: code, extract: extract, parent_id: 0, items: items })
         }, function (err, data) {
             saveBtn.disabled = false;
+            batchSaveBtn.disabled = false;
             if (err) {
                 var raw = err.message || '';
                 if (raw.indexOf('未在线') >= 0) { // 在线水位判定用未翻译原文（翻译后关键词失效）
@@ -381,10 +601,16 @@
                 toast(TR(raw) || T('保存失败'));
                 return;
             }
-            toast(T('已保存到我的网盘（共 {n} 项）', { n: data && data.saved || 0 }));
+            if (selMode) {
+                toast(T('已保存选中 {n} 项', { n: data && data.saved || 0 }));
+                clearSelection();
+            } else {
+                toast(T('已保存到我的网盘（共 {n} 项）', { n: data && data.saved || 0 }));
+            }
         });
     }
-    saveBtn.addEventListener('click', function () {
+    // 保存入口归一（hero 保存按钮与批量条"保存"共用：登录引导/自动补发同一链路）
+    function requestSave() {
         if (!code) return;
         if (authed) { doSave(); return; }
         var saved = getAuth();
@@ -397,7 +623,8 @@
         } else {
             openLoginPanel(true);
         }
-    });
+    }
+    saveBtn.addEventListener('click', requestSave);
 
     // ===== 登录面板（自绘浮层） =====
     function openLoginPanel(autoSave) {

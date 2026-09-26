@@ -510,3 +510,245 @@ body {
         max-width: none;
     }
 }
+
+/* ===== v1.3 分享内容区（123 云盘同款：hero 信息条 + 面包屑 + 可勾选文件列表） =====
+   主题归口不变：全部颜色引用 style.css 既有变量；复用主程序 .drive-check/.drive-icon/
+   .drive-crumb 系与自绘悬浮滑块 .osb-thumb 系，本文件只做分享页布局归口 */
+/* 内容区出现时主体顶部对齐（列表较高时垂直居中会裁顶） */
+.sp-main.sp-top {
+    justify-content: flex-start;
+    padding-top: 24px;
+}
+.sp-wrap {
+    width: min(960px, 100%);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    box-sizing: border-box;
+}
+/* hero 信息条（图标 + 名称/元信息/统计 + 按钮排右置） */
+.sp-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--border);
+}
+.sp-hero .sp-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 14px;
+    margin-bottom: 0;
+    flex: none;
+}
+.sp-hero .sp-icon svg {
+    width: 34px;
+    height: 34px;
+}
+.sp-hero-info {
+    flex: 1;
+    min-width: 0;
+}
+.sp-hero-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-hero-meta {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-hero-stats {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+/* hero 按钮排（复用 .sp-btn-row/.sp-btn 既有样式，仅改对齐与占比） */
+.sp-hero .sp-btn-row {
+    width: auto;
+    margin-top: 0;
+    flex: none;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+.sp-hero .sp-btn {
+    min-width: 0;
+    padding: 0 18px;
+}
+/* ===== 面板：面包屑 / 批量条 / 列表 ===== */
+.sp-panel {
+    padding: 10px 16px 16px;
+}
+.sp-panel-top {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+}
+.sp-crumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.sp-crumb.hidden {
+    display: none;
+}
+.sp-batchbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+.sp-batch-count {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: 2px;
+    white-space: nowrap;
+}
+.sp-batch-btn {
+    height: 28px;
+    padding: 0 14px;
+    border-radius: 14px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid var(--primary);
+    background: transparent;
+    color: var(--primary);
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    transition: opacity 0.15s ease;
+}
+.sp-batch-btn:hover:not(:disabled) {
+    background: rgba(7, 193, 96, 0.08);
+}
+.sp-batch-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.sp-batch-btn.sp-batch-primary {
+    background: var(--primary);
+    color: #ffffff;
+}
+.sp-batch-btn.sp-batch-primary:hover:not(:disabled) {
+    opacity: 0.88;
+    background: var(--primary);
+}
+.sp-batch-btn.sp-batch-ghost {
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+.sp-batch-btn.sp-batch-ghost:hover:not(:disabled) {
+    background: var(--hover);
+}
+/* 列表网格列（勾选/名称/大小/时间，比例对齐主程序网盘列表） */
+.sp-list-head,
+.sp-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) 110px 170px;
+    align-items: center;
+    column-gap: 8px;
+}
+.sp-list-head {
+    height: 36px;
+    padding: 0 8px;
+    font-size: 12px;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+.sp-list-head .drive-check {
+    cursor: pointer;
+}
+.sp-list {
+    max-height: 52vh;
+    overflow: auto;
+    scrollbar-width: none; /* 原生滚动条隐藏，走自绘悬浮滑块（悬停浮现，禁系统滚动条归口） */
+}
+.sp-list::-webkit-scrollbar {
+    display: none;
+}
+.sp-row {
+    height: 44px;
+    padding: 0 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+}
+.sp-row:hover {
+    background: var(--hover);
+}
+.sp-cell-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.sp-cell-name .drive-icon {
+    width: 22px;
+    height: 22px;
+}
+.sp-cell-name .drive-icon svg {
+    width: 20px;
+    height: 20px;
+}
+.sp-fname {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-cell-size {
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap; /* 左对齐同表头与主程序网盘列表（原 right 导致表头/数值错位） */
+}
+.sp-cell-time {
+    color: var(--text-light);
+    font-size: 12px;
+    white-space: nowrap;
+}
+.sp-empty {
+    text-align: center;
+    padding: 36px 0 28px;
+    font-size: 13px;
+    color: var(--text-light);
+}
+/* 勾选框常显覆盖（主程序 .drive-check 默认仅多选模式显示，分享页列表常显） */
+.sp-list-head .drive-check,
+.sp-row .drive-check {
+    display: inline-flex;
+}
+/* ===== 内容区响应式（窄屏：hero 折行 / 隐藏时间列） ===== */
+@media (max-width: 720px) {
+    .sp-hero {
+        flex-wrap: wrap;
+    }
+    .sp-hero .sp-btn-row {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+@media (max-width: 560px) {
+    .sp-wrap {
+        border-radius: 10px;
+    }
+    .sp-list-head,
+    .sp-row {
+        grid-template-columns: 36px minmax(0, 1fr) 90px;
+    }
+    .sp-cell-time,
+    .sp-col-time {
+        display: none;
+    }
+}
