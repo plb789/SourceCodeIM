@@ -44,6 +44,9 @@
     // ===== 状态 =====
     var shareInfo = null;     // info 接口返回的 share 对象（提取通过后填充）
     var extract = '';         // 已通过的提取码（下载/保存/列表共用）
+    var ticket = '';          // 下载票据（download URL 凭 ?t= 访问，不内嵌提取码，防复制直链）
+    var ticketAt = 0;         // 票据签发时刻（超过 60 秒视为陈旧，再次动作前主动重签；
+                              // 服务端 15 分钟滑动续期，正在播放的预览不中断）
     var authed = false;       // WS 登录成功（服务端在线水位达成）
     var pendingSave = false;  // 登录成功后自动补发保存
     var autoConnFailSilent = false; // 自动连接失败静默（仅回退顶栏，不弹错误）
@@ -292,74 +295,129 @@
         if (window.OfficePreview && OfficePreview.kindOf(name)) return true;                       // Office（docx/表格/pptx 归口共享渲染）
         return false;
     }
+    // ===== 下载票据（防复制直链：download URL 凭短时效票据访问，不内嵌提取码） =====
+    // ticket 接口复用提取码校验（错码 429 锁定同款生效）；缓存 60 秒内复用（批量串行复用
+    // 同一张票），超时/强制（401 重试）重签——服务端重启等票据作废场景自愈
+    function ensureTicket(force, cb) {
+        if (!force && ticket && Date.now() - ticketAt < 60 * 1000) { cb(null); return; }
+        apiJSON('/api/drive/share/ticket?code=' + encodeURIComponent(code) +
+            '&extract=' + encodeURIComponent(extract), null, function (err, data) {
+            if (err) { cb(err); return; }
+            ticket = data.ticket || '';
+            ticketAt = Date.now();
+            cb(null);
+        });
+    }
     // 分享文件下发 URL 归口（下载与预览共用；preview=1 服务端改 inline 下发；
-    // fid 空=分享根走旧链路（hero 按钮语义不变），子文件传 fid 走服务端子树校验链路）
+    // 凭票据 ?t= 访问（不含提取码）；fid 空/0=分享根（hero 按钮语义不变），
+    // 子文件传 fid 走服务端子树校验链路）
     function shareFileUrl(preview, fid) {
         return '/api/drive/share/download?code=' + encodeURIComponent(code) +
-            '&extract=' + encodeURIComponent(extract) + (preview ? '&preview=1' : '') +
+            '&t=' + encodeURIComponent(ticket) + (preview ? '&preview=1' : '') +
             (fid ? '&fid=' + fid : '');
     }
     // 预览泛化：item 空=分享根（hero 按钮），item=children 列表行（勾选行外的行点击预览）
+    // 先取票据再渲染（票据失效自动重签）；媒体加载 401 一次性强刷自愈
     function openViewer(item) {
         var info = item || shareInfo;
         if (!info) return;
-        var name = info.name || info.file_name || '';
-        var kind = kindOf(info);
-        var url = shareFileUrl(true, item ? item.id : 0);
-        viewerTitle.textContent = name + ' · ' + T('在线预览');
-        viewerBody.innerHTML = '<div class="sp-viewer-loading">' + T('正在加载预览…') + '</div>';
-        viewerMask.classList.remove('hidden');
-        if (window.OfficePreview && OfficePreview.kindOf(name)) {
-            // Office 文档（docx/xls/xlsx/csv/pptx）：归口 OfficePreview 共享渲染（缺库自动懒加载）
-            OfficePreview.render(url, name, viewerBody, T);
-        } else if (kind === 'img') {
-            viewerBody.innerHTML = '';
-            var img = document.createElement('img');
-            img.alt = name;
-            img.src = url;
-            viewerBody.appendChild(img);
-        } else if (kind === 'pdf') {
-            viewerBody.innerHTML = '';
-            var frame = document.createElement('iframe');
-            frame.src = url;
-            viewerBody.appendChild(frame);
-        } else if (kind === 'video') {
-            viewerBody.innerHTML = '';
-            var video = document.createElement('video');
-            video.controls = true;
-            video.autoplay = true;
-            video.src = url;
-            viewerBody.appendChild(video);
-        } else if (kind === 'audio') {
-            viewerBody.innerHTML = '';
-            var audio = document.createElement('audio');
-            audio.controls = true;
-            audio.autoplay = true;
-            audio.src = url;
-            viewerBody.appendChild(audio);
-        } else {
-            // 文本类：拉取后 <pre> 直显（2MB 截断提示，防超大文本卡渲染）
-            fetch(url).then(function (res) {
-                if (!res.ok) throw new Error(T('预览加载失败({n})', { n: res.status }));
-                return res.text();
-            }, function () { throw new Error(T('网络异常，请稍后重试')); }).then(function (text) {
-                if (text.length > 2 * 1024 * 1024) text = text.slice(0, 2 * 1024 * 1024) + '\n\n…' + T('内容过大，仅预览前 2MB，请下载查看全文');
-                var pre = document.createElement('pre');
-                pre.textContent = text; // textContent 防 XSS
+        ensureTicket(false, function (err) {
+            if (err) { toast(TR(err.message) || T('预览加载失败')); return; }
+            renderViewer(item);
+        });
+    }
+    function renderViewer(item) {
+            var info = item || shareInfo;
+            var name = info.name || info.file_name || '';
+            var kind = kindOf(info);
+            var url = shareFileUrl(true, item ? item.id : 0);
+            viewerTitle.textContent = name + ' · ' + T('在线预览');
+            viewerBody.innerHTML = '<div class="sp-viewer-loading">' + T('正在加载预览…') + '</div>';
+            viewerMask.classList.remove('hidden');
+            if (window.OfficePreview && OfficePreview.kindOf(name)) {
+                // Office 文档（docx/xls/xlsx/csv/pptx）：归口 OfficePreview 共享渲染（缺库自动懒加载）
+                OfficePreview.render(url, name, viewerBody, T);
+            } else if (kind === 'img') {
                 viewerBody.innerHTML = '';
-                viewerBody.appendChild(pre);
-                if (window._osbInit) window._osbInit(pre); // 文本滚动区自绘悬浮滑块（禁系统滚动条归口）
-            }, function (err) {
-                viewerBody.innerHTML = '<div class="sp-viewer-loading"></div>';
-                viewerBody.firstChild.textContent = err.message || T('预览加载失败');
-            });
-        }
+                var img = document.createElement('img');
+                img.alt = name;
+                mediaRetry(img, function () { return shareFileUrl(true, item ? item.id : 0); });
+                img.src = url;
+                viewerBody.appendChild(img);
+            } else if (kind === 'pdf') {
+                viewerBody.innerHTML = '';
+                var frame = document.createElement('iframe');
+                frame.src = url;
+                viewerBody.appendChild(frame);
+            } else if (kind === 'video') {
+                viewerBody.innerHTML = '';
+                var video = document.createElement('video');
+                video.controls = true;
+                video.autoplay = true;
+                mediaRetry(video, function () { return shareFileUrl(true, item ? item.id : 0); });
+                video.src = url;
+                viewerBody.appendChild(video);
+            } else if (kind === 'audio') {
+                viewerBody.innerHTML = '';
+                var audio = document.createElement('audio');
+                audio.controls = true;
+                audio.autoplay = true;
+                mediaRetry(audio, function () { return shareFileUrl(true, item ? item.id : 0); });
+                audio.src = url;
+                viewerBody.appendChild(audio);
+            } else {
+                // 文本类：拉取后 <pre> 直显（2MB 截断提示，防超大文本卡渲染）；401 票据失效强刷重试一次
+                fetchTextWithRetry(url, function () { return shareFileUrl(true, item ? item.id : 0); },
+                    function (err, text) {
+                        if (err) {
+                            viewerBody.innerHTML = '<div class="sp-viewer-loading"></div>';
+                            viewerBody.firstChild.textContent = err.message || T('预览加载失败');
+                            return;
+                        }
+                        if (text.length > 2 * 1024 * 1024) text = text.slice(0, 2 * 1024 * 1024) + '\n\n…' + T('内容过大，仅预览前 2MB，请下载查看全文');
+                        var pre = document.createElement('pre');
+                        pre.textContent = text; // textContent 防 XSS
+                        viewerBody.innerHTML = '';
+                        viewerBody.appendChild(pre);
+                        if (window._osbInit) window._osbInit(pre); // 文本滚动区自绘悬浮滑块（禁系统滚动条归口）
+                    });
+            }
+    }
+    // 媒体元素（img/video/audio）票据失效自愈：onerror 后强刷票据重设 src 一次
+    // （文件真损坏时重试仍 onerror，标记保证不再循环）
+    function mediaRetry(el, makeUrl) {
+        var retried = false;
+        el.onerror = function () {
+            if (retried) return;
+            retried = true;
+            ensureTicket(true, function () { el.src = makeUrl(); });
+        };
+    }
+    // 文本预览拉取（401 票据失效强刷重试一次；其余错误/成功经 cb 归口）
+    function fetchTextWithRetry(url, makeUrl, cb) {
+        fetch(url).then(function (res) {
+            if (res.status === 401) {
+                return new Promise(function (resolve, reject) {
+                    ensureTicket(true, function (terr) {
+                        if (terr) reject(terr); else resolve(null);
+                    });
+                }).then(function () { return fetch(makeUrl()); });
+            }
+            return res;
+        }).then(function (res) {
+            if (!res.ok) throw new Error(T('预览加载失败({n})', { n: res.status }));
+            return res.text();
+        }, function () { throw new Error(T('网络异常，请稍后重试')); }).then(function (text) {
+            cb(null, text);
+        }, function (err) {
+            cb(err);
+        });
     }
     function closeViewer() {
         viewerMask.classList.add('hidden');
         viewerBody.innerHTML = ''; // 清空内容区：视频/音频随之停止播放
     }
-    previewBtn.addEventListener('click', openViewer);
+    previewBtn.addEventListener('click', function () { openViewer(); }); // hero 语义=item 空取分享根；直绑会把 event 误当条目致 Office 判型失败乱码
     viewerClose.addEventListener('click', closeViewer);
     viewerMask.addEventListener('click', function (e) { if (e.target === viewerMask) closeViewer(); });
     document.addEventListener('keydown', function (e) {
@@ -370,10 +428,20 @@
     // ===== 分享内容列表（123 云盘同款：children 逐级浏览 + 勾选批量保存/下载） =====
     // 浏览免登录：children 每次请求全量走 分享码+提取码 校验（禁止缓存/绕过，
     // 提取码锁定计数器天然覆盖）；勾选不跨目录，进目录即清
+    // 列表行骨架（children 加载期间占位：勾选方块+图标块+名条+大小/时间条，与真实行结构对齐；
+    // 响应到达 renderList/error 分支 innerHTML 覆盖即天然移除，无需额外状态）
+    function spSkelRows() {
+        var row = '<div class="sp-skel-srow">' +
+            '<span class="sp-skel-check"></span><span class="sp-skel-ficon"></span>' +
+            '<span class="sp-skel-fname"></span><span class="sp-skel-fsize"></span><span class="sp-skel-ftime"></span></div>';
+        var html = '';
+        for (var i = 0; i < 4; i++) html += row;
+        return html;
+    }
     function loadChildren(fid) {
         var seq = ++listSeq;
         emptyEl.classList.add('hidden');
-        listEl.innerHTML = '<div class="sp-empty">' + T('正在加载…') + '</div>';
+        listEl.innerHTML = spSkelRows();
         apiJSON('/api/drive/share/children?code=' + encodeURIComponent(code) +
             '&extract=' + encodeURIComponent(extract) + '&fid=' + (fid || 0), null, function (err, data) {
             if (seq !== listSeq) return; // 乱序丢弃（快速切换目录时旧响应不落榜）
@@ -500,7 +568,8 @@
     batchCancelBtn.addEventListener('click', clearSelection);
     batchSaveBtn.addEventListener('click', requestSave); // 与 hero 保存同链路（登录引导/自动补发共用）
     // 批量下载（页内串行队列：fetch→blob→a[download]，与主程序 drive.js 同款；
-    // 免登录可发起——download 接口凭 分享码+提取码 即可；仅下载文件，文件夹跳过）
+    // 免登录可发起——download 接口凭 分享码+票据 访问（批量前取一次票串行复用，
+    // 中途失效自动强刷重试一次）；仅下载文件，文件夹跳过）
     function batchDownload() {
         if (batchBusy) return;
         var files = [];
@@ -508,35 +577,51 @@
             if (selSet[curItems[i].id] && !curItems[i].is_dir) files.push(curItems[i]);
         }
         if (!files.length) { toast(T('所选项目均不支持下载')); return; }
-        batchBusy = true;
-        batchDlBtn.disabled = true;
-        var idx = 0;
-        (function next() {
-            if (idx >= files.length) {
-                batchBusy = false;
-                batchDlBtn.disabled = false;
-                toast(T('下载完成'));
-                return;
-            }
-            var it = files[idx++];
-            toast(T('正在下载 {i}/{n}…', { i: idx, n: files.length }));
-            fetch(shareFileUrl(false, it.id)).then(function (res) {
-                if (!res.ok) throw new Error(res.status);
-                return res.blob();
-            }).then(function (blob) {
-                var a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = it.name;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-                next();
-            }, function () {
-                batchBusy = false;
-                batchDlBtn.disabled = false;
-                toast(T('下载失败'));
-            });
-        })();
+        ensureTicket(false, function (err) {
+            if (err) { toast(TR(err.message) || T('下载失败')); return; }
+            batchBusy = true;
+            batchDlBtn.disabled = true;
+            var idx = 0;
+            (function next() {
+                if (idx >= files.length) {
+                    batchBusy = false;
+                    batchDlBtn.disabled = false;
+                    toast(T('下载完成'));
+                    return;
+                }
+                var it = files[idx++];
+                var retried = false;
+                toast(T('正在下载 {i}/{n}…', { i: idx, n: files.length }));
+                (function attempt() {
+                    fetch(shareFileUrl(false, it.id)).then(function (res) {
+                        if (res.status === 401 && !retried) { // 票据失效（批量中途过期）：强刷重试本文件一次
+                            retried = true;
+                            ensureTicket(true, function (terr) {
+                                if (terr) { fail(); return; }
+                                attempt();
+                            });
+                            return;
+                        }
+                        if (!res.ok) throw new Error(res.status);
+                        return res.blob();
+                    }).then(function (blob) {
+                        if (!blob) return; // 401 重试分支（无 blob，下一轮 attempt 接力）
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = it.name;
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+                        next();
+                    }, fail);
+                })();
+                function fail() {
+                    batchBusy = false;
+                    batchDlBtn.disabled = false;
+                    toast(T('下载失败'));
+                }
+            })();
+        });
     }
     batchDlBtn.addEventListener('click', batchDownload);
 
@@ -544,6 +629,7 @@
     function fetchInfo(ex) {
         apiJSON('/api/drive/share/info?code=' + encodeURIComponent(code) +
             '&extract=' + encodeURIComponent(ex || ''), null, function (err, data) {
+            $('sp-card').classList.add('loaded'); // 数据到达：移除首屏骨架（三态出口统一归口此一行）
             if (err) {
                 if (data && data.need_extract) {
                     // 需要提取码：显示输入行（错误文案如"提取码错误"显示在输入行下方）
@@ -566,11 +652,14 @@
     }
 
     // ===== 下载（免登录：浏览器原生下载，本地流式/MinIO 302 均带 attachment） =====
+    // 先取下载票据（凭提取码签发，URL 不内嵌提取码，防复制直链绕过分享页）
     downloadBtn.addEventListener('click', function () {
         if (!code) return;
-        toast(T('开始下载…'));
-        location.href = '/api/drive/share/download?code=' + encodeURIComponent(code) +
-            '&extract=' + encodeURIComponent(extract);
+        ensureTicket(false, function (err) {
+            if (err) { toast(TR(err.message) || T('下载失败')); return; }
+            toast(T('开始下载…'));
+            location.href = shareFileUrl(false, 0);
+        });
     });
 
     // ===== 保存到我的网盘（需登录 = WS 在线水位） =====

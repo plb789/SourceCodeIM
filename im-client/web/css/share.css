@@ -752,3 +752,129 @@ body {
         display: none;
     }
 }
+
+/* ===== 首屏骨架屏（v1.5：纯 CSS 占位防脚本/接口白屏；数据到达加 .loaded 隐藏） =====
+   色彩归口既有主题变量：底条 --hover、波浪 --active，浅深主题自动跟随，零硬编码 */
+.sp-skel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    padding: 4px 0 8px;
+}
+.sp-skel-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.sp-skel-block {
+    width: 64px;
+    height: 64px;
+    flex: none;
+    border-radius: 14px;
+}
+.sp-skel-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+.sp-skel-line {
+    height: 16px;
+    border-radius: 8px;
+}
+.sp-skel-line.w76 { width: 76%; }
+.sp-skel-line.w52 { width: 52%; }
+.sp-skel-block,
+.sp-skel-line {
+    background: linear-gradient(90deg, var(--hover) 25%, var(--active) 50%, var(--hover) 75%);
+    background-size: 200% 100%;
+    animation: sp-skel-wave 1.4s ease-in-out infinite;
+}
+@keyframes sp-skel-wave {
+    from { background-position: 200% 0; }
+    to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sp-skel-block,
+    .sp-skel-line {
+        animation: none;
+    }
+}
+/* 数据到达：骨架原位移除（display:none 不留占位，卡片内容自然顶上） */
+.sp-card.loaded .sp-skel { display: none; }
+
+/* ===== 列表行骨架（v1.6：children 加载期间占位，与真实行结构对齐） ===== */
+.sp-skel-srow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 8px;
+}
+.sp-skel-srow + .sp-skel-srow {
+    border-top: 1px solid var(--border);
+}
+.sp-skel-check {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 4px;
+}
+.sp-skel-ficon {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 8px;
+}
+.sp-skel-fname {
+    flex: 1;
+    min-width: 0;
+    height: 14px;
+    border-radius: 7px;
+}
+.sp-skel-fsize {
+    width: 56px;
+    height: 12px;
+    flex: none;
+    border-radius: 6px;
+}
+.sp-skel-ftime {
+    width: 96px;
+    height: 12px;
+    flex: none;
+    border-radius: 6px;
+}
+.sp-skel-check,
+.sp-skel-ficon,
+.sp-skel-fname,
+.sp-skel-fsize,
+.sp-skel-ftime {
+    background: linear-gradient(90deg, var(--hover) 25%, var(--active) 50%, var(--hover) 75%);
+    background-size: 200% 100%;
+    animation: sp-skel-wave 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .sp-skel-check,
+    .sp-skel-ficon,
+    .sp-skel-fname,
+    .sp-skel-fsize,
+    .sp-skel-ftime {
+        animation: none;
+    }
+}
+@media (max-width: 640px) {
+    .sp-skel-fsize,
+    .sp-skel-ftime {
+        display: none;
+    }
+}
+
+/* ===== 骨架期间隐藏真实内容元素（v1.7：sp-icon 空色块/sp-name/sp-meta 会与骨架叠加显示，
+   数据到达 .loaded 后由各分支自行填充显示；提取行等 hidden 元素不受影响） ===== */
+.sp-card:not(.loaded) .sp-icon,
+.sp-card:not(.loaded) .sp-name,
+.sp-card:not(.loaded) .sp-meta {
+    display: none;
+}

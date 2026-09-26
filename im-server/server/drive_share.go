@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ func RegisterDriveShareRoutes(s *Server) {
 	http.HandleFunc("POST /api/drive/share/delete", s.handleDriveShareDelete)
 	http.HandleFunc("GET /api/drive/share/info", s.handleDriveShareInfo)
 	http.HandleFunc("GET /api/drive/share/children", s.handleDriveShareChildren)
+	http.HandleFunc("GET /api/drive/share/ticket", s.handleDriveShareTicket)
 	http.HandleFunc("POST /api/drive/share/save", s.handleDriveShareSave)
 	http.HandleFunc("GET /api/drive/share/download", s.handleDriveShareDownload)
 }
@@ -156,6 +158,58 @@ func driveShareExtractReset(code, ip string) {
 	if st := shareExtractFails[driveShareExtractKey(code, ip)]; st != nil {
 		st.fails = 0
 	}
+}
+
+// ===== 下载票据（防"复制 download 直链跳过分享页直下"） =====
+// download 链接不再内嵌提取码，改凭短时效票据：分享页凭 分享码+提取码 向 ticket 接口
+// 换取 15 分钟票据（签发复用提取码防暴力归口），download 凭 ?t= 下发；票据绑定分享码
+// 且滑动续期（预览视频拖进度条不中断）。内存态重启清零可接受（同提取码防暴力语义，
+// 客户端 401 后自动重取票据）。
+const shareTicketTTL = int64(15 * 60) // 下载票据有效期（秒）
+
+type shareTicketEntry struct {
+	code    string // 绑定分享码（防跨分享码用票）
+	expires int64  // 过期 Unix 秒
+}
+
+var (
+	shareTicketMu    sync.Mutex
+	shareTicketStore = map[string]*shareTicketEntry{}
+)
+
+// driveShareTicketIssue 签发下载票据（32 位随机 hex；超 1 万条惰性清理过期项防膨胀）
+func driveShareTicketIssue(code string) string {
+	shareTicketMu.Lock()
+	defer shareTicketMu.Unlock()
+	if len(shareTicketStore) > 10000 {
+		now := time.Now().Unix()
+		for k, v := range shareTicketStore {
+			if v.expires <= now {
+				delete(shareTicketStore, k)
+			}
+		}
+	}
+	b := make([]byte, 16)
+	rand.Read(b)
+	t := hex.EncodeToString(b)
+	shareTicketStore[t] = &shareTicketEntry{code: code, expires: time.Now().Unix() + shareTicketTTL}
+	return t
+}
+
+// driveShareTicketCheck 票据校验：有效返回绑定分享码并滑动续期；无效/过期返回 false
+func driveShareTicketCheck(t string) (string, bool) {
+	shareTicketMu.Lock()
+	defer shareTicketMu.Unlock()
+	e, ok := shareTicketStore[t]
+	if !ok {
+		return "", false
+	}
+	if e.expires <= time.Now().Unix() {
+		delete(shareTicketStore, t)
+		return "", false
+	}
+	e.expires = time.Now().Unix() + shareTicketTTL
+	return e.code, true
 }
 
 // ===== 分享统计（服务端归口原子计数，客户端只展示） =====
@@ -486,22 +540,33 @@ func (s *Server) handleDriveShareDelete(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+// driveShareLoad 分享加载归口（按 code 查记录 + 有效性三态校验，不含提取码校验）；
+// 供 driveShareLoadAndCheck 与下载票据链路（凭票免提取码）共用
+func (s *Server) driveShareLoad(code string) (*model.DriveShare, string, int) {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 40 {
+		return nil, "分享不存在或已失效", http.StatusNotFound
+	}
+	var sh model.DriveShare
+	if err := store.DB.Where("share_code = ?", code).First(&sh).Error; err != nil {
+		return nil, "分享不存在或已失效", http.StatusNotFound
+	}
+	if reason := s.driveShareInvalidReason(&sh); reason != "" {
+		return nil, reason, http.StatusForbidden
+	}
+	return &sh, "", 0
+}
+
 // driveShareLoadAndCheck 分享访问凭据校验归口（详情/保存/下载共用）：
 // 按 share_code 查记录 → 有效性三态校验 → 提取码校验（need=true 表示前端应弹出输入框）；
 // 提取码防暴力归口接入（同一 IP 同一 code 连续错 5 次锁 10 分钟，成功清零）；
 // 返回 (分享记录, 错误文本, HTTP 状态码, 需要提取码)
 // 原签名：func (s *Server) driveShareLoadAndCheck(code, extract string) (*model.DriveShare, string, int, bool)
 func (s *Server) driveShareLoadAndCheck(r *http.Request, code, extract string) (*model.DriveShare, string, int, bool) {
-	code = strings.TrimSpace(code)
-	if code == "" || len(code) > 40 {
-		return nil, "分享不存在或已失效", http.StatusNotFound, false
-	}
-	var sh model.DriveShare
-	if err := store.DB.Where("share_code = ?", code).First(&sh).Error; err != nil {
-		return nil, "分享不存在或已失效", http.StatusNotFound, false
-	}
-	if reason := s.driveShareInvalidReason(&sh); reason != "" {
-		return nil, reason, http.StatusForbidden, false
+	code = strings.TrimSpace(code) // 提取码防暴力 key 与原语义一致（TrimSpace 后参与）
+	sh, errMsg, status := s.driveShareLoad(code)
+	if errMsg != "" {
+		return nil, errMsg, status, false
 	}
 	if sh.ExtractCode != "" {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -523,7 +588,7 @@ func (s *Server) driveShareLoadAndCheck(r *http.Request, code, extract string) (
 		}
 		driveShareExtractReset(code, ip)
 	}
-	return &sh, "", 0, false
+	return sh, "", 0, false
 }
 
 // handleDriveShareInfo 分享详情 GET /api/drive/share/info?code=xxx&extract=yyyy
@@ -802,15 +867,83 @@ func (s *Server) handleDriveShareSave(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"saved": saved})
 }
 
-// handleDriveShareDownload 分享下载 GET /api/drive/share/download?code=xxx&extract=yyyy&fid=0
-// 校验分享有效后复用 serveDriveFile 下发链路（MinIO 302 预签名 / 本地流式，与本人下载同款）；
-// fid=0 下载分享根（原语义），fid>0 下载分享子树内勾选的单文件（须 driveShareInSubtree
-// 归属校验，防越权枚举分享范围外文件）；计数键含文件 ID，多文件各自独立去重窗口
-func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request) {
+// handleDriveShareTicket 签发下载票据 GET /api/drive/share/ticket?code=xxx&extract=yyyy
+// 凭 分享码+提取码 换取短时效下载票据（download 链接不内嵌提取码，防复制直链绕过分享页）；
+// 复用提取码校验归口（错码计数/429 锁定同款生效）；不 bump view_count（info 归口）
+func (s *Server) handleDriveShareTicket(w http.ResponseWriter, r *http.Request) {
 	sh, errMsg, code, need := s.driveShareLoadAndCheck(r, r.URL.Query().Get("code"), r.URL.Query().Get("extract"))
 	if errMsg != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": errMsg, "need_extract": need})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ticket": driveShareTicketIssue(sh.ShareCode), "expires_in": shareTicketTTL})
+}
+
+// capacitorRefererOK 手机 APP（Capacitor）WebView 本地 origin 放行判定：
+// APP 页面打包进 APK（androidScheme=http → origin http://localhost，iOS 默认 capacitor://localhost），
+// 与 API 跨域，fetch 的 Referer host 恒为 localhost/127.0.0.1——不放行会挡掉 APP 内分享卡片下载；
+// 浏览器强制 Referer=真实 origin，网页无法伪造 localhost，放行不削弱本闸
+// （地址栏粘贴无 Referer 仍 403、外站盗链仍 403；curl 伪造本就不在此闸对抗范围）
+func capacitorRefererOK(ref *url.URL, err error) bool {
+	if err != nil || ref == nil || ref.Host == "" {
+		return false
+	}
+	host := strings.ToLower(ref.Hostname())
+	if host != "localhost" && host != "127.0.0.1" {
+		return false
+	}
+	switch strings.ToLower(ref.Scheme) {
+	case "http", "https", "capacitor", "ionic":
+		return true
+	}
+	return false
+}
+
+// handleDriveShareDownload 分享下载 GET /api/drive/share/download?code=xxx&t=ticket&fid=0
+// 防"复制 download 直链跳过分享页直下"双闸：
+//  1. Referer 同源校验前置（覆盖票据/extract 老链路全部请求）：地址栏直开无 Referer、
+//     外站引用 Host 不同源，一律 403——防的是复制粘贴（非确定性对抗）；同源 img/iframe/
+//     video/fetch/location.href 均自动携带 Referer 不受影响，反向代理部署需保证 Host 一致
+//  2. 短时效下载票据 ?t=（ticket 接口凭提取码签发，15 分钟滑动续期，绑定分享码）：
+//     下载记录里的地址复制出去短时效即失效；extract 老链路保留（主程序分享卡片弹窗向后兼容）
+//
+// fid>0 下载分享子树内勾选单文件（driveShareInSubtree 归属校验，防越权枚举分享范围外文件）；
+// 计数键含文件 ID，多文件各自独立去重窗口
+func (s *Server) handleDriveShareDownload(w http.ResponseWriter, r *http.Request) {
+	// Referer 同源校验：地址栏直开（无 Referer）/外站盗链（Host 不同）一律 403；
+	// 手机 APP（Capacitor）WebView 本地 origin 例外放行（见 capacitorRefererOK 注释）
+	ref, rerr := url.Parse(r.Referer())
+	if rerr != nil || ref.Host == "" || (ref.Host != r.Host && !capacitorRefererOK(ref, rerr)) {
+		http.Error(w, "请从分享页操作", http.StatusForbidden)
+		return
+	}
+	q := r.URL.Query()
+	var (
+		sh       *model.DriveShare
+		errMsg   string
+		httpCode int
+		need     bool
+	)
+	if t := q.Get("t"); t != "" {
+		// 票据链路：票据有效且绑定分享码一致 → 免提取码加载分享（失效三态仍要判）
+		if tkCode, ok := driveShareTicketCheck(t); ok && tkCode == q.Get("code") {
+			sh, errMsg, httpCode = s.driveShareLoad(q.Get("code"))
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "下载链接已过期，请刷新页面重试", "need_ticket": true})
+			return
+		}
+	} else {
+		// extract 老链路：主程序分享卡片弹窗等既有调用方兼容（提取码防暴力归口不变）
+		sh, errMsg, httpCode, need = s.driveShareLoadAndCheck(r, q.Get("code"), q.Get("extract"))
+	}
+	if errMsg != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(httpCode)
 		json.NewEncoder(w).Encode(map[string]interface{}{"error": errMsg, "need_extract": need})
 		return
 	}

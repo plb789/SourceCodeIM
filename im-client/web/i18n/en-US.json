@@ -1537,6 +1537,8 @@
   "提取码错误": "Incorrect extract code",
   "请输入提取码": "Please enter the extract code",
   "提取码错误次数过多，请稍后再试": "Too many incorrect attempts. Please try again in 10 minutes",
+  "下载链接已过期，请刷新页面重试": "Download link expired. Please refresh the page and try again",
+  "请从分享页操作": "Please operate from the share page",
   "查询失败": "Query failed",
   "目标目录不存在": "Target folder not found",
   "网盘空间不足，无法保存": "Not enough drive space to save",
