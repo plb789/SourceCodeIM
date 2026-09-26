@@ -10874,20 +10874,19 @@ html.m .ms-actions {
 .settings-btn {
     margin-top: 14px;
     padding: 8px 18px;
-    border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+    border: none;
     border-radius: 8px;
-    /* 原代码：background: none; 用户反馈纯描边在深色主题下单调，改主题色淡底（跟随主题色变化） */
-    background: color-mix(in srgb, var(--primary) 14%, transparent);
-    color: var(--primary);
+    /* 次按钮中性化：灰底正常字色（主操作才用主题色实心，避免全页按钮主题色淡底的 AI 感） */
+    background: var(--hover);
+    color: var(--text);
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s;
 }
 
 .settings-btn:hover {
-    background: color-mix(in srgb, var(--primary) 24%, transparent);
-    border-color: var(--primary);
+    background: var(--active);
 }
 
 /* 阶段一百五十九补：自动落盘路径行（仅 PC 客户端显示，跟随主题变量） */
@@ -10914,20 +10913,19 @@ html.m .ms-actions {
 .settings-disk-path-btn {
     flex-shrink: 0;
     padding: 3px 12px;
-    border: 1px solid color-mix(in srgb, var(--primary) 55%, transparent);
+    border: none;
     border-radius: 6px;
-    /* 原代码：background: none; 与 settings-btn 同步主题色淡底 */
-    background: color-mix(in srgb, var(--primary) 14%, transparent);
-    color: var(--primary);
+    /* 与 settings-btn 同款中性化：灰底弱化 */
+    background: var(--hover);
+    color: var(--text);
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s;
 }
 
 .settings-disk-path-btn:hover {
-    background: color-mix(in srgb, var(--primary) 24%, transparent);
-    border-color: var(--primary);
+    background: var(--active);
 }
 
 /* 阶段一百五十九补：自绘滑块开关（微信同款，替代网络页原生勾选框；跟随主题色，关闭态用边框色） */
@@ -13746,8 +13744,8 @@ html.m .rp-detail-box {
     transition: all 0.15s;
 }
 .drive-tb-btn:hover {
-    border-color: var(--primary);
-    color: var(--primary);
+    /* 中性化 hover：灰底加深（原绿边绿字与全局按钮语言统一性差） */
+    background: var(--hover);
 }
 .drive-tb-btn.drive-tb-primary {
     border-color: var(--primary);
@@ -14753,10 +14751,14 @@ html.m .dsm-list {
 }
 
 /* ===== 网盘批量操作（多选模式：行首自绘勾选框 + 顶部批量操作条，全部主题变量跟随主题色） ===== */
-/* 工具栏"多选"入口激活态 */
+/* 工具栏"多选"入口激活态（去绿描边胶囊感：灰底承载按钮形态，主题色文字保留激活语义） */
 #drive-select-btn.active {
+    background: var(--hover);
     color: var(--primary);
-    border-color: var(--primary);
+    border-color: transparent;
+}
+#drive-select-btn.active:hover {
+    background: var(--active);
 }
 /* 行首自绘勾选框（原生 checkbox 禁用归口：纯 span+SVG，选中态主题色填充白勾） */
 .drive-check {
@@ -14818,7 +14820,8 @@ html.m .dsm-list {
 }
 .drive-batch-danger {
     color: #d86a6a;
-    border-color: #d86a6a;
+    border-color: transparent;
+    background: var(--hover);
 }
 /* 目录选择弹窗（移动/复制到：面包屑导航 + 仅目录列表 + 底部新建文件夹/取消/确定；全部主题变量归口） */
 .drive-pick-box {

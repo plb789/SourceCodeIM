@@ -53,17 +53,17 @@ body {
     gap: 12px;
 }
 .sp-login-entry {
-    border: 1px solid var(--primary);
-    background: transparent;
-    color: var(--primary);
+    border: none;
+    background: var(--hover);
+    color: var(--text);
     font-size: 13px;
     padding: 5px 16px;
-    border-radius: 15px;
+    border-radius: 8px;
     cursor: pointer;
+    transition: background-color 0.15s ease;
 }
 .sp-login-entry:hover {
-    background: var(--primary);
-    color: #ffffff;
+    background: var(--active);
 }
 .sp-user-name {
     font-size: 13px;
@@ -216,7 +216,7 @@ body {
 .sp-btn {
     height: 40px;
     min-width: 132px;
-    border-radius: 20px;
+    border-radius: 8px;
     font-size: 14px;
     cursor: pointer;
     display: inline-flex;
@@ -224,7 +224,7 @@ body {
     justify-content: center;
     gap: 6px;
     border: 1px solid transparent;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
 }
 .sp-btn:disabled {
     opacity: 0.55;
@@ -237,13 +237,13 @@ body {
 .sp-btn-primary:hover:not(:disabled) {
     opacity: 0.88;
 }
+/* 次按钮：中性浅底（微信/百度网盘克制风——主操作才用主题色，次操作灰底弱化，零描边） */
 .sp-btn-ghost {
-    background: transparent;
-    border-color: var(--primary);
-    color: var(--primary);
+    background: var(--hover);
+    color: var(--text);
 }
 .sp-btn-ghost:hover:not(:disabled) {
-    background: rgba(7, 193, 96, 0.08);
+    background: var(--active);
 }
 
 /* ===== 失效态 ===== */
@@ -618,19 +618,19 @@ body {
 .sp-batch-btn {
     height: 28px;
     padding: 0 14px;
-    border-radius: 14px;
+    border-radius: 6px;
     font-size: 12px;
     cursor: pointer;
-    border: 1px solid var(--primary);
-    background: transparent;
-    color: var(--primary);
+    border: 1px solid transparent;
+    background: var(--hover);
+    color: var(--text);
     display: inline-flex;
     align-items: center;
     white-space: nowrap;
-    transition: opacity 0.15s ease;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
 }
 .sp-batch-btn:hover:not(:disabled) {
-    background: rgba(7, 193, 96, 0.08);
+    background: var(--active);
 }
 .sp-batch-btn:disabled {
     opacity: 0.45;

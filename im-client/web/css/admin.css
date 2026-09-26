@@ -101,8 +101,8 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     transition: all 0.15s;
 }
 .admin-btn:hover {
-    border-color: var(--primary);
-    color: var(--primary);
+    /* 中性化 hover：灰底加深（原绿边绿字与全站按钮语言统一） */
+    background: var(--hover);
 }
 .admin-btn.primary {
     background: var(--primary);
@@ -163,13 +163,19 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     background: var(--panel-bg);
     color: var(--text-light);
     border-radius: 6px;
-    font-size: 11px;
-    padding: 3px 8px;
+    /* 图标按钮化：方形居中（SVG 内联于 admin.html，hover 仍灰底加深） */
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
     cursor: pointer;
 }
 .admin-theme-btn:hover {
-    color: var(--primary);
-    border-color: var(--primary);
+    /* 中性化 hover：灰底加深（同 admin-btn 统一） */
+    background: var(--hover);
 }
 .admin-nav {
     flex: 1;
@@ -189,6 +195,11 @@ html, body, .admin-body, .admin-cards, .admin-edit-form {
     font-size: 14px;
     cursor: pointer;
     transition: background 0.15s;
+    /* 图标布局：注入的 SVG 与文字同行居中（admin.js 顶部按 data-view 静态映射注入） */
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    white-space: nowrap;
 }
 .admin-nav-item:hover {
     background: var(--rail-hover, rgba(0, 0, 0, 0.06));
