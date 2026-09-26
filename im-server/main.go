@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"net/http"
+	pprof "net/http/pprof"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/gorilla/websocket"
 
@@ -23,6 +25,19 @@ func main() {
 	// 原实现：cfg := config.Default() 纯硬编码，现改为读取 config.yaml（缺省时回退默认值）
 	// cfg := config.Default()
 	cfg := config.Load()
+
+	// 性能诊断：IM_PPROF=1 时开本机 pprof（仅 127.0.0.1:6060，默认关闭不影响生产路由）
+	if os.Getenv("IM_PPROF") != "" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", pprof.Index)
+			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("/debug/pprof/heap", pprof.Handler("heap").ServeHTTP)
+			_ = http.ListenAndServe("127.0.0.1:6060", mux)
+		}()
+		runtime.SetMutexProfileFraction(1)
+		runtime.SetBlockProfileRate(1)
+	}
 
 	// 1. 初始化 MySQL
 	if err := store.InitMySQL(cfg); err != nil {

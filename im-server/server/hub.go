@@ -2,15 +2,22 @@ package server
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"im-server/logger"
 )
 
 // Hub 连接管理中心：同一用户名支持多设备同时在线（用户名 -> 连接集合）
 // 多端架构下：任一连接在线即用户在线；定向推送遍历该用户全部连接；最后一个连接断开才判定离线
+// 集群模式（cluster_enabled=true）：Broadcast/BroadcastExcept 内部自动"本地投递+总线发布"，
+// 跨实例广播对调用方透明；集群关闭时 bus 为 nil，纯本地投递（单实例行为不变）
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[string]map[*Client]bool // username -> 连接集合
+	bus     *clusterBus                 // 集群总线（startClusterBus 注入；nil=单实例模式）
+	// 并发改造 D1：连接总数原子计数（原 TotalConns 遍历全 map O(N)，每次新连接接入
+	// 都要在 HandleWS 里全量统计一遍，万级在线时每次接入遍历万级 map）——Add/Remove 增减，读取 O(1)
+	total atomic.Int64
 }
 
 // NewHub 创建连接管理中心
@@ -44,6 +51,8 @@ func (h *Hub) Add(c *Client) {
 	}
 	set[c] = true
 	total := len(set)
+	// 并发改造 D1：净增 1（新连接）- len(kicked)（同端互踢移除的旧连接）
+	h.total.Add(int64(1 - len(kicked)))
 	h.mu.Unlock()
 	// 被踢提示（platformName 归口端型中文命名，日志与提示语一致）
 	for _, old := range kicked {
@@ -80,7 +89,13 @@ func (h *Hub) Remove(c *Client) int {
 	if !ok {
 		return 0
 	}
+	if _, existed := set[c]; !existed {
+		// 并发改造 D1：连接已被 Add 的同端互踢移除，非集合成员，不重复递减计数
+		// （原实现 no-op delete 后同样返回剩余数，行为不变，仅补计数保护）
+		return len(set)
+	}
 	delete(set, c)
+	h.total.Add(-1)
 	if len(set) == 0 {
 		delete(h.clients, c.username)
 		return 0
@@ -148,32 +163,50 @@ func (h *Hub) HasCall(username string) bool {
 func (h *Hub) Usernames() []string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	names := make([]string, 0, h.connTotal())
+	names := make([]string, 0, h.total.Load())
 	for name := range h.clients {
 		names = append(names, name)
 	}
 	return names
 }
 
-// TotalConns 返回当前全部在线连接总数（阶段三十一：max_connections 上限校验使用）
-// 原实现：config 的 MaxConnections 配置项从未被执行校验
-func (h *Hub) TotalConns() int {
+// Users 在线用户数（多端合并后账号数；仪表盘采样用，非热路径）
+func (h *Hub) Users() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.connTotal()
+	return len(h.clients)
 }
 
-// connTotal 统计连接总数（调用方须已持有读锁）
-func (h *Hub) connTotal() int {
-	total := 0
+// AllConns 枚举全部连接（仪表盘发送队列水位采样用，非热路径；调用方不得修改连接）
+func (h *Hub) AllConns() []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	all := make([]*Client, 0, h.total.Load())
 	for _, set := range h.clients {
-		total += len(set)
+		for c := range set {
+			all = append(all, c)
+		}
 	}
-	return total
+	return all
+}
+
+// TotalConns 返回当前全部在线连接总数（阶段三十一：max_connections 上限校验使用）
+// 并发改造 D1：原遍历全 map O(N)，现原子计数 O(1)
+func (h *Hub) TotalConns() int {
+	return int(h.total.Load())
 }
 
 // Broadcast 向所有在线客户端的全部连接广播消息
+// 集群模式：本地投递 + 总线全员广播（各实例本地投递，From==self 回环跳过防重复）
 func (h *Hub) Broadcast(data []byte) {
+	if h.bus != nil {
+		h.bus.publish(&busEnvelope{Kind: busKindBroadcast, Data: data})
+	}
+	h.broadcastLocal(data)
+}
+
+// broadcastLocal 纯本地全员广播（总线订阅回调回环投递归口，不再上总线）
+func (h *Hub) broadcastLocal(data []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, set := range h.clients {
@@ -184,7 +217,16 @@ func (h *Hub) Broadcast(data []byte) {
 }
 
 // BroadcastExcept 向除指定用户外的所有在线客户端广播消息（该用户的全部设备均不接收）
+// 集群模式：本地投递 + 总线广播（各实例按 except 本地排除）
 func (h *Hub) BroadcastExcept(except string, data []byte) {
+	if h.bus != nil {
+		h.bus.publish(&busEnvelope{Kind: busKindBroadcast, Except: except, Data: data})
+	}
+	h.broadcastLocalExcept(except, data)
+}
+
+// broadcastLocalExcept 纯本地排除广播（总线订阅回调回环投递归口）
+func (h *Hub) broadcastLocalExcept(except string, data []byte) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for name, set := range h.clients {

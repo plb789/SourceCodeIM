@@ -155,7 +155,8 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 		ToUser:   rec.ToUser,
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
 		http.Error(w, "消息落库失败", http.StatusInternalServerError)
 		return
 	}
@@ -300,7 +301,8 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 		ToUser:   toUser,
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
 		http.Error(w, "消息落库失败", http.StatusInternalServerError)
 		return
 	}
@@ -441,7 +443,8 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 		ToUser:   toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
 		http.Error(w, "消息落库失败", http.StatusInternalServerError)
 		return
 	}
@@ -470,20 +473,12 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 	s.hub.Broadcast(data)
 
 	// 群聊离线消息：给所有离线的注册用户入队（与群聊文字消息行为一致）
-	var usernames []string
-	if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err == nil {
-		for _, name := range usernames {
-			if name != username && !s.isOnline(name) {
-				s.queueOffline(name, notice)
-			}
-		}
-	}
+	// 集群化归口：离线判定全局化 + 注册名单缓存 + pipeline 批量入队（fanoutGlobalGroupOffline）
+	s.fanoutGlobalGroupOffline(notice, username)
 
 	// 更新所有在线用户的群聊会话摘要为 [图片] 并推送（离线用户登录时 ensureGroupConv 兜底存在）
-	for _, name := range s.hub.Usernames() {
-		s.touchConversation(name, "", "[图片]")
-		s.notifyConvUpdate(name)
-	}
+	// 集群化归口：全局在线名单批量写 + 总线一条会话刷新信封（fanoutGlobalGroupConv）
+	s.fanoutGlobalGroupConv("[图片]")
 
 	logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
 
@@ -587,7 +582,8 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		ToUser:   toUser, // 阶段一百四十二：多群聊归属（原实现：恒为空串）
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
 		http.Error(w, "消息落库失败", http.StatusInternalServerError)
 		return
 	}
@@ -615,20 +611,12 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 	s.hub.Broadcast(data)
 
 	// 群聊离线消息：给所有离线的注册用户入队（与群聊图片行为一致）
-	var usernames []string
-	if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err == nil {
-		for _, name := range usernames {
-			if name != username && !s.isOnline(name) {
-				s.queueOffline(name, notice)
-			}
-		}
-	}
+	// 集群化归口：离线判定全局化 + 注册名单缓存 + pipeline 批量入队（fanoutGlobalGroupOffline）
+	s.fanoutGlobalGroupOffline(notice, username)
 
 	// 更新所有在线用户的群聊会话摘要为 [文件] 并推送
-	for _, name := range s.hub.Usernames() {
-		s.touchConversation(name, "", "[文件]")
-		s.notifyConvUpdate(name)
-	}
+	// 集群化归口：全局在线名单批量写 + 总线一条会话刷新信封（fanoutGlobalGroupConv）
+	s.fanoutGlobalGroupConv("[文件]")
 
 	logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
 

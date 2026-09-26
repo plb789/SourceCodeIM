@@ -148,7 +148,8 @@ func (s *Server) syncPinByKey(key string) {
 			Timestamp: time.Now().Unix(),
 		})
 		// 用户任一连接在线则推送其全部连接（多端同步）
-		if s.hub.Count(u) > 0 {
+		// 集群模式：isOnlineFast 全局判定（跨实例在线经总线定向信封送达，原本地 Count 门限会漏推）
+		if s.isOnlineFast(u) {
 			s.sendToUser(u, out)
 		}
 	}

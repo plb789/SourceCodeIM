@@ -197,8 +197,9 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 		ToUser:   chatMsg.ToUser,
 		Content:  chatMsg.Content,
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
-		logger.Error("红包消息落库失败（红包 %d）：%v", pkt.ID, err)
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
+		logger.Error("红包消息落库失败（红包 %d）", pkt.ID)
 		s.sendError(c, "红包发送失败，积分已退回")
 		if bal2, e2 := userPointsAdd(c.username, amount); e2 == nil {
 			recordPointsLog(c.username, amount, bal2, "redpacket_refund", "system", "红包消息落库失败自动退回")
@@ -217,19 +218,21 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 		memberIDs := getGroupMemberIDs(groupID)
 		s.sendToGroupMembers(memberIDs, data)
 		for _, name := range memberIDs {
-			if name != c.username && !s.isOnline(name) {
+			// 集群模式：在线判定全局化（isOnlineFast，跨实例连接仍判在线）
+			if name != c.username && !s.isOnlineFast(name) {
 				s.queueOffline(name, &chatMsg)
 			}
-			if s.isOnline(name) {
+			if s.isOnlineFast(name) {
 				s.touchConversation(name, msg.ToUser, summary)
 				s.notifyConvUpdate(name)
 			}
 		}
 	} else {
 		// 私聊红包：双方定向推送（多端同步）+ 离线入队 + 会话摘要（对齐 handlePrivateChat 链路）
-		if s.hub.Count(msg.ToUser) > 0 {
+		// 集群模式：isOnlineFast 全局判定（跨实例在线实时投递；离线入队）
+		if s.isOnlineFast(msg.ToUser) {
 			s.sendToUser(msg.ToUser, data)
-		} else if !s.isOnline(msg.ToUser) {
+		} else {
 			s.queueOffline(msg.ToUser, &chatMsg)
 		}
 		s.sendToUser(c.username, data)

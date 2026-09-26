@@ -372,10 +372,13 @@ type Message struct {
 	// 阶段七十二：复合索引 idx_msg_from_to_read（from_user+to_user+is_read 全等值前缀）——
 	// 登录会话列表的未读数 COUNT 原为全表扫描（EXPLAIN type=ALL，千万级消息时登录分钟级卡顿），
 	// 私聊历史按双方互发对查询同样受益；群聊历史/AI 会话历史仍走主键倒扫 LIMIT（实测无劣化）
-	FromUser string `gorm:"column:from_user;type:varchar(32);not null;index:idx_msg_from_to_read,priority:1" json:"from_user"`
-	ToUser   string `gorm:"column:to_user;type:varchar(32);index:idx_msg_from_to_read,priority:2" json:"to_user"` // 群聊为空
+	// 并发改造 A2：追加 idx_msg_to_read_from（to_user+is_read 前缀 + from_user）——
+	// 会话列表未读数改单条聚合查询（GROUP BY from_user）后，原索引前缀 from_user 无法命中，
+	// 新索引以 to_user+is_read 全等值前缀命中聚合扫描
+	FromUser string `gorm:"column:from_user;type:varchar(32);not null;index:idx_msg_from_to_read,priority:1;index:idx_msg_to_read_from,priority:3" json:"from_user"`
+	ToUser   string `gorm:"column:to_user;type:varchar(32);index:idx_msg_from_to_read,priority:2;index:idx_msg_to_read_from,priority:1" json:"to_user"` // 群聊为空
 	Content  string `gorm:"column:content;type:text" json:"content"`
-	IsRead   bool   `gorm:"column:is_read;default:false;index:idx_msg_from_to_read,priority:3" json:"is_read"` // 已读状态
+	IsRead   bool   `gorm:"column:is_read;default:false;index:idx_msg_from_to_read,priority:3;index:idx_msg_to_read_from,priority:2" json:"is_read"` // 已读状态
 	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"`                                     // 是否已撤回
 	// AI 回复 Token 消耗（服务端 usage 归口；普通消息恒为 0，历史加载同样可显示）
 	PromptTokens     int `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`

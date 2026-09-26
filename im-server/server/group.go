@@ -38,26 +38,29 @@ func resolveGroupUploadScope(groupParam, username string) (bool, string) {
 
 // broadcastGroupMediaNotice 阶段一百四十二：多群聊图片/文件广播归口——按群成员定向广播 +
 // 离线成员入队 + 在线成员会话摘要更新（与全局群原链路同序；全局群仍走调用方原 hub.Broadcast 路径）
+// 集群化批量归口：在线判定全局化（跨实例连接仍判在线，投递经总线跨实例送达）、
+// 离线批量入队、会话去抖推送一条信封覆盖全部在线成员
 func (s *Server) broadcastGroupMediaNotice(notice *protocol.Message, summary string) {
 	groupID := groupIDFromTarget(notice.ToUser)
 	memberIDs := getGroupMemberIDs(groupID)
 	data, _ := json.Marshal(notice)
 	s.sendToGroupMembers(memberIDs, data)
 
-	// 离线成员入队（与群聊文字消息行为一致：发送者自身不入队）
+	// 在线/离线分流（发送者自身不入离线队列，与群聊文字消息行为一致）
+	onlineMembers := make([]string, 0, len(memberIDs))
+	offlineMembers := make([]string, 0, len(memberIDs))
 	for _, name := range memberIDs {
-		if name != notice.FromUser && !s.isOnline(name) {
-			s.queueOffline(name, notice)
+		if name != notice.FromUser && !s.isOnlineFast(name) {
+			offlineMembers = append(offlineMembers, name)
+		} else {
+			onlineMembers = append(onlineMembers, name)
 		}
 	}
+	s.queueOfflineBatch(offlineMembers, notice)
 
-	// 在线成员会话摘要更新并推送（离线成员登录时按 to_user 拉取群历史，摘要行入群时已创建）
-	for _, name := range memberIDs {
-		if s.isOnline(name) {
-			s.touchConversation(name, notice.ToUser, summary)
-			s.notifyConvUpdate(name)
-		}
-	}
+	// 在线成员会话摘要批量更新 + 会话列表去抖推送（离线成员登录时按 to_user 拉取群历史，摘要行入群时已创建）
+	s.touchConversationBatch(onlineMembers, notice.ToUser, summary)
+	s.notifyConvUpdateBatch(onlineMembers)
 }
 
 // groupTargetOf 群ID → 会话目标编码（如 1 → "g1"）
@@ -112,10 +115,9 @@ func groupMemberCount(groupID uint) int64 {
 
 // sendToGroupMembers 向指定成员集合的全部在线连接定向发送（多端同步；替代全员广播的成员过滤原语，
 // 全局群路径仍走 hub.Broadcast 不变）
+// 集群批量归口：一次总线定向信封覆盖全部成员（原逐成员 sendToUser = 千人群每条消息 N 次 PUBLISH → 1 次）
 func (s *Server) sendToGroupMembers(memberIDs []string, data []byte) {
-	for _, name := range memberIDs {
-		s.sendToUser(name, data)
-	}
+	s.sendToUsers(memberIDs, data)
 }
 
 // GroupMemberInfo 群成员信息（随 73 群列表同步下发）
@@ -733,14 +735,14 @@ func (s *Server) handleMultiGroupChat(c *Client, msg *protocol.Message, groupID 
 	// ToUser 保持 'gN'：前端按 target 归口渲染，历史/会话清空按 to_user 参数化过滤
 	msg.Timestamp = time.Now().Unix()
 
-	// 持久化到 MySQL，回填消息唯一 ID
+	// 持久化到 MySQL，回填消息唯一 ID（并发优化 E1：批量落库归口，单事务批写一次 fsync）
 	record := model.Message{
 		MsgType:  int8(msg.MsgType),
 		FromUser: msg.FromUser,
 		ToUser:   msg.ToUser,
 		Content:  msg.Content,
 	}
-	store.DB.Create(&record)
+	record.ID = s.persistMessage(&record)
 	msg.MsgID = record.ID
 
 	data, _ := json.Marshal(msg)
@@ -748,14 +750,23 @@ func (s *Server) handleMultiGroupChat(c *Client, msg *protocol.Message, groupID 
 	s.sendToGroupMembers(memberIDs, data)
 
 	// 在线成员会话摘要更新并推送；离线成员入离线队列（按成员过滤，优于全局群全表扫描）
+	// 并发改造 A4：在线判定改全局判定（isOnlineFast，跨实例连接仍判在线，投递经总线跨实例送达）
+	// 并发改造 A3 补全：多群会话批量写——原逐成员 touch 每条消息 2 次 DB/成员，
+	// 千人群每条消息 2000 次写，现归口 touchConversationBatch（与全局群同路径）
+	// 集群批量归口：会话去抖推送一条信封覆盖全部在线成员（原逐成员 N 次 PUBLISH → 1 次）、
+	// 离线成员 pipeline 一次往返批量入队
 	summary := messageSummary(msg.Content)
 	target := groupTargetOf(groupID)
+	onlineMembers := make([]string, 0, len(memberIDs))
+	offlineMembers := make([]string, 0, len(memberIDs))
 	for _, name := range memberIDs {
-		if s.isOnline(name) {
-			s.touchConversation(name, target, summary)
-			s.notifyConvUpdate(name)
+		if s.isOnlineFast(name) {
+			onlineMembers = append(onlineMembers, name)
 		} else if name != c.username {
-			s.queueOffline(name, msg)
+			offlineMembers = append(offlineMembers, name)
 		}
 	}
+	s.touchConversationBatch(onlineMembers, target, summary)
+	s.notifyConvUpdateBatch(onlineMembers)
+	s.queueOfflineBatch(offlineMembers, msg)
 }

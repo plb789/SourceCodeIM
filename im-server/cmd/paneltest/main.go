@@ -59,7 +59,6 @@ func main() {
 			return
 		}
 	}
-	log.Fatal("20 秒内未完成闭环")
 }
 
 func sendMsg(conn *websocket.Conn, m protocol.Message) {

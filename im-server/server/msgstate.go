@@ -90,9 +90,9 @@ func (s *Server) handleRead(c *Client, msg *protocol.Message) {
 
 	// 未读数变化，刷新读取者全部在线连接的会话列表（多端同步未读清零）
 	// 原实现：s.pushConvList(c) 仅刷新当前连接
-	for _, conn := range s.hub.GetAll(c.username) {
-		s.pushConvList(conn)
-	}
+	// 集群模式：归口 notifyConvUpdateDirect——本实例立即推送全部连接 + 总线会话刷新信封
+	//（读取者其他设备在跨实例时同步未读清零；原本地 GetAll 循环跨实例漏推）
+	s.notifyConvUpdateDirect(c.username)
 }
 
 // handleRecall 消息撤回：仅限 2 分钟内自己发送的消息
@@ -102,9 +102,34 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 		return
 	}
 	var record model.Message
+	// 并发优化 E1：消息处于批量落库窗口（≤60ms）时"已投递未落库"——发送后立即发起的撤回
+	//（自动化/脚本场景）查库会 miss，此处短重试兜底；真正不存在的消息重试后仍正确拒绝。
+	// 读写分离适配 E5：主备从中间件无"写后读主"粘滞时，INSERT（主库）后立即 SELECT（从库）
+	// 受复制延迟影响可见性滞后——db_recall_retry_window>0 时在窗口内每秒重查
+	//（默认 0=单库/中间件粘滞部署零开销跳过；延迟 10s 部署建议配 12）
 	if err := store.DB.First(&record, msg.MsgID).Error; err != nil {
-		s.sendError(c, "消息不存在")
-		return
+		found := false
+		for i := 0; i < 3; i++ {
+			time.Sleep(40 * time.Millisecond)
+			if err2 := store.DB.First(&record, msg.MsgID).Error; err2 == nil {
+				found = true
+				break
+			}
+		}
+		if !found && s.cfg.DBRecallRetryWindow > 0 {
+			deadline := time.Now().Add(time.Duration(s.cfg.DBRecallRetryWindow) * time.Second)
+			for time.Now().Before(deadline) {
+				time.Sleep(time.Second)
+				if err2 := store.DB.First(&record, msg.MsgID).Error; err2 == nil {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			s.sendError(c, "消息不存在")
+			return
+		}
 	}
 	if record.FromUser != c.username {
 		s.sendError(c, "只能撤回自己发送的消息")
@@ -154,7 +179,12 @@ func (s *Server) handleRecall(c *Client, msg *protocol.Message) {
 		Timestamp: time.Now().Unix(),
 	}
 	data, _ := json.Marshal(notice)
-	if record.ToUser == "" {
+	// 补测回归修复：多群（gN）撤回通知适配——原实现只区分全局群（to_user 空 → 全量广播）与私聊，
+	// 多群消息 record.ToUser="gN" 落入私聊分支，sendToUser("gN") 无此用户，群成员收不到撤回通知
+	if gid, err := strconv.Atoi(strings.TrimPrefix(record.ToUser, "g")); err == nil && record.ToUser != "" && strings.HasPrefix(record.ToUser, "g") && gid > 0 {
+		s.sendToGroupMembers(getGroupMemberIDs(uint(gid)), data)
+		s.sendToUser(c.username, data) // 发起人多端同步
+	} else if record.ToUser == "" {
 		s.hub.Broadcast(data)
 	} else {
 		// 私聊撤回：通知双方全部在线连接（多端同步）
@@ -170,7 +200,12 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 	// 查询该会话最新的未撤回消息，判断撤回的是否为最后一条可见消息
 	query := store.DB.Model(&model.Message{}).Where("recalled = ?", false)
 	var users []string // 需要更新摘要的会话归属者
-	if record.ToUser == "" {
+	if gid, err := strconv.Atoi(strings.TrimPrefix(record.ToUser, "g")); err == nil && record.ToUser != "" && strings.HasPrefix(record.ToUser, "g") && gid > 0 {
+		// 补测回归修复：多群（gN）撤回摘要联动——原实现只适配全局群（target 空）与私聊，
+		// gN 落入私聊分支后 users 含 "gN" 无会话行，群成员会话摘要残留已撤回内容
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86}, record.ToUser)
+		users = getGroupMemberIDs(uint(gid))
+	} else if record.ToUser == "" {
 		// 群聊会话：全部群消息，摘要更新所有已存在群会话行的用户
 		// 阶段二十六：纳入群聊图片消息(4)——撤回群聊图片后摘要应重算为最新可见的图片/文字消息；
 		// 需限定 to_user 为空，私聊图片同样为 msg_type=4 但 to_user 非空
@@ -401,11 +436,9 @@ func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
 		Where("content LIKE ? AND recalled = ?", "%"+escaped+"%", false)
 
 	// 排除当前用户已删除的消息
-	var delIDs []uint
-	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
-	if len(delIDs) > 0 {
-		query = query.Where("id NOT IN ?", delIDs)
-	}
+	// 回归修复：与 handleHistory 同模式——原全量 Pluck 已删 ID + NOT IN 万级列表，
+	// 现改 NOT EXISTS 反连接子查询命中 idx_del_user_msg 索引（handleSearch/handleConvSearch 两处）
+	query = query.Where("NOT EXISTS (SELECT 1 FROM im_msg_delete d WHERE d.user_id = ? AND d.msg_id = im_message.id)", c.username)
 
 	if msg.ToUser != "" {
 		// 指定会话搜索（私聊双向）
@@ -450,12 +483,8 @@ func (s *Server) handleConvSearch(c *Client, msg *protocol.Message) {
 	query := store.DB.Model(&model.Message{}).
 		Where("content LIKE ? AND recalled = ?", "%"+escaped+"%", false)
 
-	// 排除当前用户已删除的消息
-	var delIDs []uint
-	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
-	if len(delIDs) > 0 {
-		query = query.Where("id NOT IN ?", delIDs)
-	}
+	// 排除当前用户已删除的消息（同 handleSearch/handleHistory：NOT EXISTS 替代全量 Pluck）
+	query = query.Where("NOT EXISTS (SELECT 1 FROM im_msg_delete d WHERE d.user_id = ? AND d.msg_id = im_message.id)", c.username)
 
 	if msg.ToUser == "" {
 		// 群聊会话内搜索：全部群消息

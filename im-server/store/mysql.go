@@ -1,10 +1,12 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -19,6 +21,20 @@ import (
 
 var DB *gorm.DB
 
+// SlowQueryCount 慢查询累计（仪表盘观测）：gorm 执行 >500ms 计一次
+// （与日志 SlowThreshold 同阈值；持续增长=索引劣化/锁等待信号）
+var SlowQueryCount atomic.Int64
+
+// slowQueryLogger gorm 日志包装：全部行为转发内置 logger，仅 Trace 中加慢查询计数
+type slowQueryLogger struct{ gormlogger.Interface }
+
+func (l slowQueryLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	if err == nil && time.Since(begin) > 500*time.Millisecond {
+		SlowQueryCount.Add(1)
+	}
+	l.Interface.Trace(ctx, begin, fc, err)
+}
+
 // InitMySQL 初始化 MySQL 连接池、自动创建数据库与数据表
 func InitMySQL(cfg *config.Config) error {
 	// 先连接不含数据库的 DSN，确保数据库存在
@@ -30,14 +46,40 @@ func InitMySQL(cfg *config.Config) error {
 	// 默认配置会打红字误导排查（实测：资源管理器粘贴前 PROPFIND 探测不存在文件每次刷红字）。
 	// 官方正规配置 IgnoreRecordNotFoundError=true——真正的 SQL 执行错误仍照常输出
 	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{
-		Logger: gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
+		Logger: slowQueryLogger{gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
 			SlowThreshold:             500 * time.Millisecond,
 			IgnoreRecordNotFoundError: true,
 			LogLevel:                  gormlogger.Warn,
-		}),
+		})},
 	})
 	if err != nil {
 		return fmt.Errorf("连接 MySQL 失败: %w", err)
+	}
+
+	// 并发优化 E4：连接池参数配置化（原实现未设置——Go 默认 max_open=0 无上限、max_idle=2，
+	// 风暴后空闲连接仅留 2 个，高峰重建握手开销大；现从配置读取，缺省兜底见 config.go 注释）
+	if sqlDB, err := db.DB(); err == nil {
+		maxOpen := cfg.DBMaxOpenConns
+		if maxOpen <= 0 {
+			maxOpen = 2000
+		}
+		maxIdle := cfg.DBMaxIdleConns
+		if maxIdle <= 0 {
+			maxIdle = 50
+		}
+		if maxIdle > maxOpen {
+			maxIdle = maxOpen
+		}
+		sqlDB.SetMaxOpenConns(maxOpen)
+		sqlDB.SetMaxIdleConns(maxIdle)
+		// 连接最长存活期：配置 >0 用配置；0 兜底 240s（沿用原加固值——防复用临期死连接，
+		// 兼容已删除的历史硬编码段语义）
+		lifetime := cfg.DBConnMaxLifetime
+		if lifetime <= 0 {
+			lifetime = 240
+		}
+		sqlDB.SetConnMaxLifetime(time.Duration(lifetime) * time.Second)
+		logger.Info("MySQL 连接池：max_open=%d max_idle=%d lifetime=%ds", maxOpen, maxIdle, lifetime)
 	}
 
 	// 自动创建数据表（首次启动）；阶段四十六追加文档编辑版本表 im_doc_edit
@@ -60,12 +102,11 @@ func InitMySQL(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetMaxIdleConns(10)
 	// 登录回归加固：部分环境 MySQL 会主动断开空闲连接（日志出现 wsarecv: connection aborted），
 	// 池中死连接导致"空闲后首次查询"报 invalid connection（该英文底层错误修复前还会原样下发客户端）
-	// 原代码：仅设置 MaxOpen/MaxIdle，无连接寿命限制与保活
-	sqlDB.SetConnMaxLifetime(4 * time.Minute) // 连接最长存活期，防复用临期连接
+	// 连接最长存活期/空闲滞留期 + 后台 Ping 保活：剔除失效连接并按需重建，保证连接池始终可用。
+	// 并发优化 E4 修正：原硬编码 SetMaxOpenConns(100)/SetMaxIdleConns(10) 在配置化设置之后执行
+	// 会覆盖配置值（仪表盘恒显 100 的根因），现删除硬编码，池上限以 E4 段配置为准
 	sqlDB.SetConnMaxIdleTime(1 * time.Minute) // 空闲连接最长滞留期，超时回收防死连接驻留
 	go keepMySQLAlive(sqlDB)                  // 后台定时 Ping 保活：剔除失效连接并按需重建，保证连接池始终可用
 

@@ -335,7 +335,8 @@ func (s *Server) finalizeChunkUpload(w http.ResponseWriter, sess *directUploadSe
 		ToUser:   sess.ToUser,
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
 		os.Remove(dst)
 		http.Error(w, "消息落库失败", http.StatusInternalServerError)
 		return
@@ -348,10 +349,8 @@ func (s *Server) finalizeChunkUpload(w http.ResponseWriter, sess *directUploadSe
 		summary = "[图片]"
 	}
 	if sess.ToUser == "" {
-		for _, name := range s.hub.Usernames() {
-			s.touchConversation(name, "", summary)
-			s.notifyConvUpdate(name)
-		}
+		// 集群化归口：全局在线名单批量写 + 本实例本地去抖 + 总线一条会话刷新信封（与全局群文字消息同构）
+		s.fanoutGlobalGroupConv(summary)
 	} else {
 		s.touchConversation(sess.FromUser, sess.ToUser, summary)
 		s.touchConversation(sess.ToUser, sess.FromUser, summary)

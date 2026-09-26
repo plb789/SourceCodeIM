@@ -97,17 +97,24 @@ func (s *Server) handleProfileUpdate(c *Client, msg *protocol.Message) {
 		return
 	}
 	// 阶段八十五：昵称缓存失效（群聊帧/历史帧下发用），下次读取回源取新昵称
-	nickCache.Delete(c.username)
+	// 集群模式：总线广播失效其他实例的昵称缓存（无 TTL 进程缓存，跨实例必须显式失效）
+	s.invalidateNickname(c.username)
 
 	// 回推本人全部在线连接（多端同步），is_friend/remark 对自己无意义固定零值
+	// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的多端连接；原本地 GetAll 循环跨实例漏推）
 	info, ok := s.buildProfileInfo(c.username, c.username)
 	if !ok {
 		s.sendError(c, "资料读取失败")
 		return
 	}
-	for _, cc := range s.hub.GetAll(c.username) {
-		s.sendProfileResp(cc, info)
-	}
+	pContent, _ := json.Marshal(info)
+	pData, _ := json.Marshal(&protocol.Message{
+		MsgType:   protocol.MsgTypeProfileResp,
+		ToUser:    c.username,
+		Content:   string(pContent),
+		Timestamp: time.Now().Unix(),
+	})
+	s.sendToUser(c.username, pData)
 	s.sendError(c, "资料已保存")
 	logger.Info("用户 %s 更新个人资料：昵称=%s 性别=%d 地区=%s", c.username, info.Nickname, info.Gender, info.Region)
 }

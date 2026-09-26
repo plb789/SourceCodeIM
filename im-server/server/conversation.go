@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"im-server/logger"
 	"im-server/model"
@@ -46,6 +48,41 @@ func (s *Server) touchConversation(userID, target, lastMsg string) {
 	}
 }
 
+// touchConversationBatch 并发改造 A3：批量刷新会话（存在则更新最后消息，不存在则创建）
+// 全局群每条消息原对每个在线用户逐个 touchConversation（每人 SELECT+UPDATE/INSERT 共 2 次 DB），
+// 现按 500 行/批一次 INSERT ... ON DUPLICATE KEY UPDATE（依赖 (user_id,target) 唯一索引 idx_conv_user_target），
+// N 人在线 2N 次写 → ⌈N/500⌉ 次写；摘要截断口径与 touchConversation 一致（按字符截取防无效 UTF-8）
+func (s *Server) touchConversationBatch(userIDs []string, target, lastMsg string) {
+	if len(userIDs) == 0 {
+		return
+	}
+	if runes := []rune(lastMsg); len(runes) > 200 {
+		lastMsg = string(runes[:200])
+	}
+	now := time.Now()
+	const batch = 500
+	for i := 0; i < len(userIDs); i += batch {
+		end := i + batch
+		if end > len(userIDs) {
+			end = len(userIDs)
+		}
+		rows := make([]model.Conversation, 0, end-i)
+		for _, uid := range userIDs[i:end] {
+			rows = append(rows, model.Conversation{UserID: uid, Target: target, LastMsg: lastMsg, LastTime: now})
+		}
+		if err := store.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}, {Name: "target"}},
+			DoUpdates: clause.AssignmentColumns([]string{"last_msg", "last_time"}),
+		}).Create(&rows).Error; err != nil {
+			logger.Error("会话批量刷新失败（目标 %s）：%v", target, err)
+			// 批量失败兜底：回退逐条刷新，保证会话行不丢（与原行为对齐）
+			for _, uid := range userIDs[i:end] {
+				s.touchConversation(uid, target, lastMsg)
+			}
+		}
+	}
+}
+
 // ensureGroupConv 登录时确保群聊会话存在（不刷新时间，避免每次登录都跳到最前）
 func (s *Server) ensureGroupConv(userID string) {
 	var count int64
@@ -56,43 +93,44 @@ func (s *Server) ensureGroupConv(userID string) {
 }
 
 // pushConvList 推送会话列表（置顶优先，按最后消息时间倒序）
+// 并发改造 A2：未读数原逐会话 COUNT（最多 50 次查询），现一次聚合后内存匹配；
+// 瓶颈优化 ①：会话列表 + 未读聚合两次往返合并为单条 SQL（LEFT JOIN 聚合子查询），
+// 群消息风暴下每用户每去抖窗口 2 次往返 → 1 次。
+// 未读口径与原 unreadCountsByFrom 完全一致：私聊收到的 msg_type 2/4/5/86、未读、
+// 未撤回、未被本人删除（im_msg_delete 排除）；群会话 target 匹配不到 from_user，COALESCE 归 0
 func (s *Server) pushConvList(c *Client) {
-	var convs []model.Conversation
-	store.DB.Where("user_id = ?", c.username).
-		Order("pinned DESC, last_time DESC").Limit(50).Find(&convs)
+	var convs []ConvInfo
+	// last_time 为毫秒精度 DATETIME(3)，UNIX_TIMESTAMP() 对其返回 DECIMAL 带小数秒
+	//（驱动给 []uint8("1790444535.754")），Scan 到 int64 会整结果集失败 → 必须 CAST 为 SIGNED
+	store.DB.Raw(`
+SELECT c.target AS target, c.last_msg AS last_msg,
+       CAST(UNIX_TIMESTAMP(c.last_time) AS SIGNED) AS last_time, c.pinned AS pinned,
+       COALESCE(u.cnt, 0) AS unread
+FROM im_conversation c
+LEFT JOIN (
+    SELECT from_user, COUNT(*) AS cnt
+    FROM im_message
+    WHERE msg_type IN (2, 4, 5, 86) AND to_user = ? AND is_read = 0 AND recalled = 0
+      AND id NOT IN (SELECT msg_id FROM im_msg_delete WHERE user_id = ?)
+    GROUP BY from_user
+) u ON u.from_user = c.target
+WHERE c.user_id = ?
+ORDER BY c.pinned DESC, c.last_time DESC
+LIMIT 50`, c.username, c.username, c.username).Scan(&convs)
 
-	infos := make([]ConvInfo, 0, len(convs))
-	for _, cv := range convs {
-		var unread int64
-		if cv.Target != "" {
-			// 私聊未读数：对方发给我且未读的未撤回消息
-			// 阶段十四增强：排除自己已删除的消息（删除仅对自己生效，不可见消息不应计入未读）
-			// 原实现：仅排除已撤回，删除未读消息后角标不减，与"删除仅对自己生效"语义矛盾
-			// 阶段二十四：图片消息(4)与文件消息(5)同样计入未读
-			// 阶段一百五十四：红包消息(86)计入未读（微信同款：收到红包角标 +1）
-			store.DB.Model(&model.Message{}).
-				Where("msg_type IN ? AND from_user = ? AND to_user = ? AND is_read = ? AND recalled = ?"+
-					" AND id NOT IN (SELECT msg_id FROM im_msg_delete WHERE user_id = ?)",
-					[]int{2, 4, 5, 86}, cv.Target, c.username, false, false, c.username).
-				Count(&unread)
-		}
+	for i := range convs {
 		// 阶段四十补充：读取侧摘要归口自愈——历史引用消息曾把 JSON 原串直存进群聊摘要，
 		// 推送时统一再走一次 messageSummary，坏数据同时回写修正，避免旧摘要一直显示 JSON
-		healed := messageSummary(cv.LastMsg)
-		if healed != cv.LastMsg {
-			cv.LastMsg = healed
-			store.DB.Model(&model.Conversation{}).Where("id = ?", cv.ID).Update("last_msg", healed)
+		healed := messageSummary(convs[i].LastMsg)
+		if healed != convs[i].LastMsg {
+			convs[i].LastMsg = healed
+			store.DB.Model(&model.Conversation{}).
+				Where("user_id = ? AND target = ?", c.username, convs[i].Target).
+				Update("last_msg", healed)
 		}
-		infos = append(infos, ConvInfo{
-			Target:   cv.Target,
-			LastMsg:  cv.LastMsg,
-			LastTime: cv.LastTime.Unix(),
-			Unread:   unread,
-			Pinned:   cv.Pinned,
-		})
 	}
 
-	content, _ := json.Marshal(infos)
+	content, _ := json.Marshal(convs)
 	msg := protocol.Message{
 		MsgType:   protocol.MsgTypeConvList,
 		Content:   string(content),
@@ -102,11 +140,106 @@ func (s *Server) pushConvList(c *Client) {
 	c.send(data)
 }
 
-// notifyConvUpdate 在线时向指定用户推送会话列表（推送其全部在线连接，多端同步）
-// 原实现：仅推送单一连接
+// ===== 并发改造 A1：会话列表推送去抖合并 =====
+// convDirtyUsers 脏标记集合 + 单一全局 flush 定时器：同一用户去抖窗口内的多次会话更新
+// 合并为一次全量会话列表推送（原实现每条消息对收发双方各推一次，群聊对每个在线用户各推一次，
+// 刷屏/群消息风暴场景查询与下行帧被成倍放大）。窗口期 300ms，对用户无感知。
+//
+// 瓶颈优化 ②：去抖窗口自适应退避——群消息风暴时单轮脏用户数超阈值则窗口逐轮翻倍
+// （上限 2s），负载回落按半衰期收敛回基准窗口。千人群每条消息对每个在线成员标脏，
+// 3000 人在线持续风暴 ≈ 2 万 QPS 查询（触连接池上限）；退避后风暴期自动降频至
+// 1/6 ~ 1/7，会话角标刷新延迟上限 2s（微信同量级），置顶/已读/删除等主动操作仍走直推不受影响。
+var (
+	convDirtyMu    sync.Mutex
+	convDirtyUsers = make(map[string]struct{})
+	convFlushTimer *time.Timer
+	convFlushCur   = convFlushDelayBase // 当前生效窗口（风暴时动态退避）
+)
+
+const (
+	convFlushDelayBase = 300 * time.Millisecond // 基准去抖窗口
+	convFlushDelayMax  = 2 * time.Second        // 风暴退避上限
+	convFlushBacklog   = 200                    // 单轮脏用户数超过该值时窗口翻倍
+)
+
+// notifyConvUpdate 标记指定用户的会话列表为脏，去抖窗口到期后统一推送其全部在线连接（多端同步）
+// 集群模式：本地标脏 + 总线会话刷新事件（其他实例对本实例内该用户连接执行本地去抖推送，
+// 未读角标多端跨实例同步）；发送方本地已标脏，订阅端 From==self 回环跳过防重复
 func (s *Server) notifyConvUpdate(username string) {
+	s.notifyConvUpdateLocal(username)
+	if s.hub.bus != nil {
+		s.hub.bus.publishConvUpdate([]string{username})
+	}
+}
+
+// convBackoffMS 会话推送当前生效退避窗口（毫秒，仪表盘观测）：
+// 300=常态，升档=会话推送风暴中（A1 自适应退避工作信号）。读竞态仅影响展示精度
+func convBackoffMS() int64 { return int64(convFlushCur / time.Millisecond) }
+
+// notifyConvUpdateLocal 本地去抖标记（总线会话刷新事件的本地归口）
+func (s *Server) notifyConvUpdateLocal(username string) {
+	convDirtyMu.Lock()
+	convDirtyUsers[username] = struct{}{}
+	if convFlushTimer == nil {
+		delay := convFlushCur
+		convFlushTimer = time.AfterFunc(delay, func() {
+			convDirtyMu.Lock()
+			users := make([]string, 0, len(convDirtyUsers))
+			for name := range convDirtyUsers {
+				users = append(users, name)
+			}
+			convDirtyUsers = make(map[string]struct{})
+			convFlushTimer = nil
+			// 自适应退避：本轮脏用户多 → 窗口翻倍削峰；负载回落 → 半衰收敛回基准
+			if len(users) > convFlushBacklog {
+				if convFlushCur*2 > convFlushDelayMax {
+					convFlushCur = convFlushDelayMax
+				} else {
+					convFlushCur *= 2
+				}
+			} else {
+				convFlushCur /= 2
+				if convFlushCur < convFlushDelayBase {
+					convFlushCur = convFlushDelayBase
+				}
+			}
+			convDirtyMu.Unlock()
+			for _, name := range users {
+				for _, c := range s.hub.GetAll(name) {
+					s.pushConvList(c)
+				}
+			}
+		})
+	}
+	convDirtyMu.Unlock()
+}
+
+// notifyConvUpdateBatch 批量会话刷新（群聊消息热路径归口）：本实例内在线成员本地标脏去抖 +
+// 总线一条会话刷新信封覆盖全部目标（集群模式避免逐用户 PUBLISH，千人群 N 次 → 1 次；
+// 非本实例成员由订阅端对本实例内该用户连接执行本地去抖推送）
+func (s *Server) notifyConvUpdateBatch(users []string) {
+	if len(users) == 0 {
+		return
+	}
+	for _, name := range users {
+		if s.hub.Count(name) > 0 {
+			s.notifyConvUpdateLocal(name)
+		}
+	}
+	if s.hub.bus != nil {
+		s.hub.bus.publishConvUpdate(users)
+	}
+}
+
+// notifyConvUpdateDirect 立即推送会话列表（跳过去抖窗口）：置顶/清空/删除等用户主动操作后的即时反馈场景
+// 使用，消息热路径一律走 notifyConvUpdate（去抖合并）。
+// 集群模式：本地直推 + 会话刷新事件（其他实例走去抖推送，多端跨实例延迟 ≤ 去抖窗口）
+func (s *Server) notifyConvUpdateDirect(username string) {
 	for _, c := range s.hub.GetAll(username) {
 		s.pushConvList(c)
+	}
+	if s.hub.bus != nil {
+		s.hub.bus.publishConvUpdate([]string{username})
 	}
 }
 

@@ -14,6 +14,10 @@ chunk_size: 65536
 # 最大在线连接数（阶段三十一起在 HandleWS 实际执行校验，原实现该配置从未生效）
 # 原实现：max_connections: 1000
 max_connections: 10000
+# 单 IP 连接频率上限（并发改造 B3）：统计窗口内最多该次数新建连接，超过拒绝（防异常高频连接）
+# 缺省 20 次/10 秒与历史硬编码一致；NAT 办公网全公司共用出口 IP、登录并发高时可调大防误伤
+# ip_conn_limit: 20
+# ip_conn_window: 10
 # 单连接发送队列缓冲条数（阶段三十一：文件分片与聊天消息共用队列，过小会溢出丢消息）
 # 原实现：固定 256
 send_queue_size: 1024
@@ -34,6 +38,21 @@ upload_chunk_size: 4194304
 max_direct_size: 2147483648
 # 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
 recall_window: 120
+
+# ============================================================
+# 并发改造 C 系列：集群模式（hub 分布式化 + Redis pub/sub 跨实例广播，修改后需重启服务端生效）
+# true = 启动集群总线：消息投递/全员广播/会话刷新/缓存失效经 Redis 频道跨实例投递，
+#        多实例水平扩展（须共享同一 MySQL 与 Redis），ws_addr 各实例监听不同端口；
+#        多端跨实例在线、离线判定（全局在线名单 im:ulist）、黑名单/注册名单缓存失效均自动生效
+# false（默认）= 单实例模式：全部本地内存投递，与历史行为完全一致，零额外开销
+# 已知边界：同端互踢仅同实例生效（跨实例同端多连接共存，多端语义扩展）；
+#           通话/会议/远程协助的离线宽限收口为进程内存态（跨实例重连不取消收口）；
+#           带用户上下文的 HTTP 接口（上传/网盘等）与 WS 建议按用户会话粘性路由到同实例
+# ============================================================
+# cluster_enabled: false
+# 集群总线频道名（同一集群所有实例必须一致；缺省 im:bus）
+# cluster_channel: "im:bus"
+
 
 # 阶段一四五：注册开关（修改后需重启服务端生效）
 # true  = 保留"首次登录即注册"默认行为（登录时账号不存在自动注册），独立注册页亦可正常注册
@@ -59,7 +78,17 @@ ai_billing:
 secure_file_key: "04295b6cbee2a305b95ed81c52bf47637939dcdd40e4525dc644286a2b107402"
 
 # MySQL 数据源
-mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.50:4716)/im?charset=utf8mb4&parseTime=True&loc=Local"
+mysql_dsn: "root:Prminac6sas0@ifW@tcp(172.16.89.97:6544)/im?charset=utf8mb4&parseTime=True&loc=Local"
+# MySQL 连接池参数（并发优化 E4，缺省：max_open=2000 / max_idle=50 / lifetime 不设）
+# max_open 为懒建立软上限（不预占），但受 MySQL 服务端 max_connections 硬顶（默认 151）——
+# 调大本项时服务端须配套 SET GLOBAL max_connections（每连接约 1-10MB 内存，自行评估）
+# max_idle：高峰后保留的空闲连接数，避免风暴再来时重建连接握手开销
+# db_conn_max_lifetime：连接最长复用秒数（防服务端 wait_timeout 单方面掐断后报错），0=不设
+db_max_open_conns: 300
+db_max_idle_conns: 50
+db_conn_max_lifetime: 3600
+# 读写分离适配 E5：复制延迟 10s 部署，撤回兜底重试窗口 12s
+db_recall_retry_window: 12
 # Redis 配置
 redis_addr: "172.16.89.28:4967"
 redis_password: "@PUsmojra9ddma7r"
@@ -410,9 +439,10 @@ drive:
   # block_exts: ""
   minio:
     endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
-    public_endpoint: "minio.sxgyxny.com"      # 外网客户端直连下载地址（内外网分流：服务端 API 读写走上面内网
-                                                   # endpoint，预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同）
-    public_ssl: true             # 外网直连地址是否 HTTPS（CDN 443 已配证书并实测回源正常；https 才能避免浏览器 Mixed Content 拦截下载）
+    public_endpoint: "minio.sxgyxny.com"          # 外网客户端直连下载地址（内外网分流：服务端 API 读写走 endpoint，
+                                 # 预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同——
+                                 # 本机不在 MinIO 内网，读写与下载同走公网域名，无需配置）
+    public_ssl: true            # 外网直连地址是否 HTTPS（上 HTTPS 后改 true）
     access_key: "RgdSF4IAuMrXJWAPC63T"               # 访问账号（仅存本文件，不下发客户端）
     secret_key: "v8IWwSMg3z419p2LbeRwl6SFY44idgOWAiaWXxO5"               # 访问密钥（仅存本文件，不下发客户端）
     bucket: "im-drive"           # 桶名（不存在启动时自动创建）

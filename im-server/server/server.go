@@ -43,6 +43,14 @@ func NewServer(cfg *config.Config) *Server {
 		uploadSessions: make(map[string]*directUploadSession),
 	}
 	defaultServerRef = s
+	// 并发优化 E1：消息批量落库 worker（全站高频 Message 写归口，单事务批写一次 fsync）
+	startMessageBatchWorker()
+	// 集群总线：cluster_enabled=true 时启动订阅消费端并注入 hub（默认关闭=单实例零行为变化）
+	s.startClusterBus(cfg)
+	if s.hub.bus != nil {
+		startUserListCleanup()
+	}
+	startAlertEvaluator(s) // 监控告警评估协程（30s 周期，仪表盘告警横幅数据源）
 	return s
 }
 
@@ -74,10 +82,76 @@ func (s *Server) HandleWS(conn *websocket.Conn) {
 }
 
 // sendToUser 向指定用户的全部在线连接推送数据（多端同步归口）
+// 集群模式：本地投递 + 总线定向信封（各实例对本实例内该用户连接投递，From==self 回环跳过）
+// 跨实例段为尽力而为（总线 fire-and-forget）；本地段语义不变
 func (s *Server) sendToUser(username string, data []byte) {
+	if s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: []string{username}, Data: data})
+	}
+	s.deliverLocal(username, data)
+}
+
+// sendToUsers 批量定向推送（多群成员等多人场景）：一次总线信封覆盖全部目标，
+// 避免逐用户 PUBLISH 的 N 次往返（千人群每条消息 1000 次往返 → 1 次）
+func (s *Server) sendToUsers(usernames []string, data []byte) {
+	if len(usernames) == 0 {
+		return
+	}
+	if s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: usernames, Data: data})
+	}
+	for _, name := range usernames {
+		s.deliverLocal(name, data)
+	}
+}
+
+// deliverLocal 纯本地定向投递（总线订阅回调回环投递归口）
+func (s *Server) deliverLocal(username string, data []byte) {
 	for _, c := range s.hub.GetAll(username) {
 		c.send(data)
 	}
+}
+
+// fanoutGlobalGroupConv 全局群媒体消息（图片/文件/分片直传完成）的会话摘要归口（与全局群文字消息同构）：
+// 全局在线名单批量写会话行 + 本实例成员本地去抖标脏 + 总线一条会话刷新信封（集群模式跨实例同步角标）
+func (s *Server) fanoutGlobalGroupConv(summary string) {
+	globalOnline := s.globalOnlineNames()
+	s.touchConversationBatch(globalOnline, "", summary)
+	for _, name := range s.hub.Usernames() {
+		s.notifyConvUpdateLocal(name)
+	}
+	if s.hub.bus != nil {
+		s.hub.bus.publishConvUpdate(globalOnline)
+	}
+}
+
+// fanoutGlobalGroupOffline 全局群媒体消息的离线入队归口（与全局群文字消息同构）：
+// 离线名单 = 全注册用户（C2 缓存）- 全局在线名单 - 发送者，pipeline 批量入队（原全表 Pluck + 逐人 isOnline）
+func (s *Server) fanoutGlobalGroupOffline(msg *protocol.Message, sender string) {
+	var usernames []string
+	if cached := registeredUsernames(); cached != nil {
+		usernames = cached
+	} else if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err != nil {
+		return
+	} else {
+		usersCacheStore(usernames)
+	}
+	globalOnline := s.globalOnlineNames()
+	onlineSet := make(map[string]struct{}, len(globalOnline))
+	for _, n := range globalOnline {
+		onlineSet[n] = struct{}{}
+	}
+	offline := make([]string, 0, len(usernames))
+	for _, name := range usernames {
+		if name == sender {
+			continue
+		}
+		if _, on := onlineSet[name]; on {
+			continue
+		}
+		offline = append(offline, name)
+	}
+	s.queueOfflineBatch(offline, msg)
 }
 
 // sendToUserBlock 向指定用户的全部在线连接阻塞推送（带超时）：文件分片等不可丢弃消息使用
@@ -119,6 +193,16 @@ func (s *Server) unregister(c *Client) {
 	data, _ := json.Marshal(msg)
 	s.hub.Broadcast(data)
 	logger.Info("用户 %s 下线", c.username)
+
+	// 集群模式：同步摘除全局在线名单条目 + 发布在场下线事件——其他实例本地仍有该用户
+	// 连接（多端跨实例）时抢注续写（cluster.go 订阅回调），防止多端场景误判全端离线。
+	// 发布顺序在 offline 广播之后：跨实例多端场景其他实例先收 offline 再收在场事件，
+	// 抢注实例随即补发 online 纠偏帧（见 cluster.go presence 分支），保证各实例客户端最终在线态正确
+	if s.hub.bus != nil {
+		store.RDB.HDel(context.Background(), KeyUserList, c.username)
+		s.hub.bus.publishPresenceOff(c.username)
+		invalidateGlobalListCache()
+	}
 
 	// 通话/会议状态离线收口：响铃/通话/会议中掉线若不收口，忙态与房间残留，
 	// 重连后被服务端恒判"忙"（无法再发起/被邀）。hangup 未命中 1v1 会话时自动回落
@@ -347,6 +431,13 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		if s.cfg.RegisterEnabled {
 			// 注册开关开启：尝试注册
 			user, err = registerUser(username, password)
+			// 并发改造 C2：登录链路自动注册同样失效注册名单缓存（集群模式同步广播）
+			if err == nil {
+				usersCacheInvalidate()
+				if s.hub.bus != nil {
+					s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invUsers})
+				}
+			}
 		} else {
 			// 注册开关关闭：登录链路不做静默注册，明确提示需先注册账号
 			err = ErrNeedRegister
@@ -385,6 +476,11 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 写入 Redis 在线缓存
 	ctx := context.Background()
 	store.RDB.Set(ctx, store.KeyOnlineUser+user.Username, "online", 120*time.Second)
+	// 集群模式：登记全局在线名单（用户 → 心跳时间戳，跨实例 USER_LIST/在线判定/群 fanout 数据源）
+	if s.hub.bus != nil {
+		store.RDB.HSet(ctx, KeyUserList, user.Username, strconv.FormatInt(time.Now().Unix(), 10))
+		invalidateGlobalListCache()
+	}
 
 	// 登录成功响应
 	// 头像缺失修复：原实现仅下发 result 与 recall_window，前端拿不到自己头像，聊天消息气泡无法渲染头像
@@ -410,21 +506,26 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 推送在线用户列表给所有在线用户
 	s.pushUserList()
 
-	// 推送好友列表 + 待处理好友申请 + 黑名单列表 + 会话列表 + 置顶消息
-	s.pushFriendList(c)
-	s.pushPendingRequests(c)
-	s.pushBlacklist(c)
+	// 并发改造 B2：登录后推送并行化——原 10 项推送串行执行（15+ 次 DB/Redis 往返逐个排队，
+	// 登录延迟为全部往返之和），现相互独立的推送并行执行，登录延迟从"各往返之和"降为"最慢一组"。
+	// 依赖约束：ensureGroupConv（可能写库补建全局群会话行）必须先于 pushConvList（读取该行），
+	// 二者保持主协程串行；其余 9 项（离线补发/好友/申请/黑名单/群列表/群邀请/置顶/审批/已读水位）
+	// 均为只读 + 经 sendCh 线程安全下发，互不依赖，WaitGroup 并行 + 末尾统一收口，
+	// 与原串行行为时序等价（handleLogin 返回前登录期帧已全部入队）
+	var wg sync.WaitGroup
+	wg.Add(9)
+	go func() { defer wg.Done(); s.pushOfflineMessages(c) }()
+	go func() { defer wg.Done(); s.pushFriendList(c) }()
+	go func() { defer wg.Done(); s.pushPendingRequests(c) }()
+	go func() { defer wg.Done(); s.pushBlacklist(c) }()
+	go func() { defer wg.Done(); s.sendGroupListSync(user.Username) }()
+	go func() { defer wg.Done(); s.pushPendingGroupInvites(c) }()
+	go func() { defer wg.Done(); s.pushPinList(c) }()
+	go func() { defer wg.Done(); s.pushPendingPurges(c) }()
+	go func() { defer wg.Done(); s.pushReadWatermarks(c) }()
 	s.ensureGroupConv(user.Username)
-	// 阶段一百四十二：登录推送群列表全量同步（前端 groupMap 归口）+ 补推登录前待处理的群邀请
-	// （与好友申请 pushPendingRequests 同款防重复策略：仅补推登录前存在的邀请）
-	s.sendGroupListSync(user.Username)
-	s.pushPendingGroupInvites(c)
 	s.pushConvList(c)
-	s.pushPinList(c)
-	// 阶段七十二：补推与我相关的未处理永久删除审批卡片（离线审批不丢失）
-	s.pushPendingPurges(c)
-	// 阶段十四增强：登录补发对端已读水位，重连/重登后本地"已读"显示即时恢复（多端同步）
-	s.pushReadWatermarks(c)
+	wg.Wait()
 	// 阶段一百四十七：登录重连取消其活跃通话的下线宽限收口（切网闪断回来，通话继续）
 	callCancelOfflineHangup(user.Username)
 	// 阶段一百四十八：登录重连取消其所在会议房间的断网宽限收口（切网闪断回来，会议继续）
@@ -459,11 +560,21 @@ func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
 	data, _ := json.Marshal(resp)
 	c.send(data)
 	logger.Info("用户 %s 注册成功（独立注册页）", user.Username)
+	// 并发改造 C2：注册成功失效注册名单缓存（全局群离线入队名单），集群模式同步广播失效
+	usersCacheInvalidate()
+	if s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invUsers})
+	}
 }
 
 // handleHeartbeat 处理心跳，续期 Redis 在线缓存
 func (s *Server) handleHeartbeat(c *Client) {
-	store.RDB.Set(context.Background(), store.KeyOnlineUser+c.username, "online", 120*time.Second)
+	ctx := context.Background()
+	store.RDB.Set(ctx, store.KeyOnlineUser+c.username, "online", 120*time.Second)
+	// 集群模式：全局在线名单心跳续期（60s 新鲜度过滤的判定依据）
+	if s.hub.bus != nil {
+		store.RDB.HSet(ctx, KeyUserList, c.username, strconv.FormatInt(time.Now().Unix(), 10))
+	}
 }
 
 // messageSummary 阶段四十：引用消息会话摘要归口——引用消息 content 为信封 JSON
@@ -573,14 +684,14 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	msg.ToUser = ""
 	msg.Timestamp = time.Now().Unix()
 
-	// 持久化到 MySQL，回填消息唯一 ID
+	// 持久化到 MySQL，回填消息唯一 ID（并发优化 E1：批量落库归口，单事务批写一次 fsync）
 	record := model.Message{
 		MsgType:  int8(msg.MsgType),
 		FromUser: msg.FromUser,
 		ToUser:   "",
 		Content:  msg.Content,
 	}
-	store.DB.Create(&record)
+	record.ID = s.persistMessage(&record)
 	msg.MsgID = record.ID
 
 	data, _ := json.Marshal(msg)
@@ -589,20 +700,49 @@ func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
 	// 更新所有在线用户的群聊会话并推送会话列表（离线用户登录时确保存在）
 	// 阶段四十补充：群聊路径同样走会话摘要归口——引用消息 content 为信封 JSON，
 	// 原实现：touchConversation 直存 msg.Content，JSON 原串显示在会话列表（私聊路径已归口，群聊路径漏改）
+	// 并发改造 A3：逐人 touchConversation（2 次 DB/人）→ 批量 upsert（500 行/批一次写入）
+	// 并发改造 A1：notifyConvUpdate 自带去抖，同一用户 300ms 窗口内合并为一次推送
 	summary := messageSummary(msg.Content)
+	// 集群模式：全局在线名单（跨实例）替代本实例 Usernames——
+	// 会话行批量写归口本实例一次（覆盖全部在线用户）；会话刷新本实例去抖 + 跨实例批量 conv 事件；
+	// 群消息帧广播经 hub.Broadcast 自动"本地+总线"（各实例本地全员投递）
+	globalOnline := s.globalOnlineNames()
+	s.touchConversationBatch(globalOnline, "", summary)
 	for _, name := range s.hub.Usernames() {
-		s.touchConversation(name, "", summary)
-		s.notifyConvUpdate(name)
+		s.notifyConvUpdateLocal(name)
+	}
+	if s.hub.bus != nil {
+		s.hub.bus.publishConvUpdate(globalOnline)
 	}
 
 	// 群聊离线消息：给所有离线的注册用户入队
+	// 并发改造 A4：在线判定改 hub 内存判定（零 Redis 往返；原 Redis 判定在 hub 无连接
+	// 但在线键未过期时既不实时投递也不入离线队列，存在丢消息窗口，内存判定反而更准确）
+	// 集群模式：离线名单 = 全注册用户 - 全局在线 - 发送者，批量入队（pipeline，零逐人往返）
 	var usernames []string
-	if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err == nil {
-		for _, name := range usernames {
-			if name != c.username && !s.isOnline(name) {
-				s.queueOffline(name, msg)
-			}
+	if cached := registeredUsernames(); cached != nil {
+		usernames = cached
+	} else if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err != nil {
+		usernames = nil
+	} else {
+		usersCacheStore(usernames)
+	}
+	if usernames != nil {
+		onlineSet := make(map[string]struct{}, len(globalOnline))
+		for _, n := range globalOnline {
+			onlineSet[n] = struct{}{}
 		}
+		offline := make([]string, 0, len(usernames))
+		for _, name := range usernames {
+			if name == c.username {
+				continue
+			}
+			if _, on := onlineSet[name]; on {
+				continue
+			}
+			offline = append(offline, name)
+		}
+		s.queueOfflineBatch(offline, msg)
 	}
 }
 
@@ -633,22 +773,26 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	msg.FromUser = c.username
 	msg.Timestamp = time.Now().Unix()
 
-	// 持久化到 MySQL，回填消息唯一 ID
+	// 持久化到 MySQL，回填消息唯一 ID（并发优化 E1：批量落库归口，单事务批写一次 fsync）
 	record := model.Message{
 		MsgType:  int8(msg.MsgType),
 		FromUser: msg.FromUser,
 		ToUser:   msg.ToUser,
 		Content:  msg.Content,
 	}
-	store.DB.Create(&record)
+	record.ID = s.persistMessage(&record)
 	msg.MsgID = record.ID
 
 	data, _ := json.Marshal(msg)
 
 	// 推送给接收方全部在线连接（多端同步）
-	if s.hub.Count(msg.ToUser) > 0 {
+	// 并发改造 A4：离线判定改内存判定（消除原 Redis 判定在连接已断、在线键未过期窗口内
+	// 既不投递也不入队的丢消息可能）
+	// 集群模式：isOnlineFast 为全局判定——接收方连接在跨实例时仍实时投递（经总线定向信封送达），
+	// 原本地 hub.Count 门限在跨实例场景会既不投递也不入队导致丢消息
+	if s.isOnlineFast(msg.ToUser) {
 		s.sendToUser(msg.ToUser, data)
-	} else if !s.isOnline(msg.ToUser) {
+	} else {
 		// 目标用户离线，消息入离线队列
 		s.queueOffline(msg.ToUser, msg)
 	}
@@ -713,12 +857,13 @@ func (s *Server) handleFileHeader(c *Client, msg *protocol.Message) {
 	store.RDB.Expire(ctx, store.KeyFileChunk+fileID, 24*time.Hour)
 
 	// 中转文件头给接收方全部在线连接（多端同步）
-	if s.hub.Count(msg.ToUser) > 0 {
+	// 集群模式：在线判定全局化（接收方连接在跨实例时经总线定向信封送达，原本地 Count 门限会漏发）
+	if s.isOnlineFast(msg.ToUser) {
 		data, _ := json.Marshal(msg)
-		logger.Info("文件头中转: %s -> %s, 在线连接 %d, 帧 %d 字节, chunk=%d", c.username, msg.ToUser, s.hub.Count(msg.ToUser), len(data), msg.ChunkIndex)
+		logger.Info("文件头中转: %s -> %s, 帧 %d 字节, chunk=%d", c.username, msg.ToUser, len(data), msg.ChunkIndex)
 		s.sendToUser(msg.ToUser, data)
 	} else {
-		logger.Warn("文件头中转跳过: 接收方 %s 不在线（hub 无连接）", msg.ToUser)
+		logger.Warn("文件头中转跳过: 接收方 %s 不在线", msg.ToUser)
 	}
 	// 回显给发送方（携带 fileID）
 	data, _ := json.Marshal(msg)
@@ -739,11 +884,17 @@ func (s *Server) handleFileChunk(c *Client, msg *protocol.Message) {
 	// 中转分片给接收方全部在线连接（多端同步）
 	// 原实现：s.sendToUser(msg.ToUser, data) 非阻塞投递，接收方队列满时静默丢片，文件永远组装不齐且无提示
 	// 阶段三十一：改用阻塞背压推送（5 秒超时），接收方消费不及时节流发送方；失败时向发送方反馈，杜绝静默损坏
-	if s.hub.Count(msg.ToUser) > 0 {
+	// 集群模式：本实例有连接走阻塞背压；仅跨实例在线时走总线定向信封（尽力而为，无法阻塞确认，
+	// 跨实例分片直传依赖会话粘性路由部署，此处保证不静默漏发）
+	if local := s.hub.Count(msg.ToUser); local > 0 {
 		data, _ := json.Marshal(msg)
 		if !s.sendToUserBlock(msg.ToUser, data, 5*time.Second) {
 			s.sendError(c, "对方接收队列已满，文件传输中断，请重新发送")
 			return
+		}
+	} else if s.isOnlineFast(msg.ToUser) {
+		if data, err := json.Marshal(msg); err == nil {
+			s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: []string{msg.ToUser}, Data: data})
 		}
 	}
 
@@ -790,11 +941,10 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 	query := store.DB.Model(&model.Message{})
 
 	// 排除当前用户已删除的消息（删除仅影响自己的视图）
-	var delIDs []uint
-	store.DB.Model(&model.MessageDelete{}).Where("user_id = ?", c.username).Pluck("msg_id", &delIDs)
-	if len(delIDs) > 0 {
-		query = query.Where("id NOT IN ?", delIDs)
-	}
+	// 回归修复：原实现每次翻页全量 Pluck 该用户全部已删消息 ID（删除记录多的用户每次翻页
+	// 都拉全量 ID 列表 + SQL NOT IN 万级列表），现改 NOT EXISTS 反连接子查询，
+	// 命中 idx_del_user_msg (user_id, msg_id) 索引，翻页查询恒定成本
+	query = query.Where("NOT EXISTS (SELECT 1 FROM im_msg_delete d WHERE d.user_id = ? AND d.msg_id = im_message.id)", c.username)
 
 	// 阶段一百四十二：多群聊历史归口——to_user='gN' 按群过滤（原写死的 '' 参数化，全局群传空串行为不变）；
 	// 原实现：仅支持全局群 to_user = ''
@@ -860,9 +1010,37 @@ type UserInfo struct {
 	Avatar   string `json:"avatar"`
 }
 
-// pushUserList 推送在线用户列表（携带头像）给所有在线用户
+// ===== 并发改造 B1：在线用户列表推送全局合并去抖 =====
+// userListMu/userListTimer 单一全局 1 秒窗口：窗口内多次触发（登录、头像更新等）合并为一次全量广播。
+// 原实现每次登录广播一次 O(N) 全量快照，N 人同时重连（服务重启/网络抖动）产生 O(N²) 下行帧；
+// 合并后窗口内 N 次触发仅 1 次广播。快照语义不变（前端整体重建，chat.js USER_LIST 处理器零改动）
+var (
+	userListMu    sync.Mutex
+	userListTimer *time.Timer
+)
+
+// pushUserList 推送在线用户列表（携带头像）给所有在线用户——去抖入口，1 秒窗口内合并
 func (s *Server) pushUserList() {
-	names := s.hub.Usernames()
+	userListMu.Lock()
+	if userListTimer != nil {
+		userListMu.Unlock()
+		return // 已有待触发任务，合并
+	}
+	userListTimer = time.AfterFunc(time.Second, func() {
+		userListMu.Lock()
+		userListTimer = nil
+		userListMu.Unlock()
+		s.pushUserListNow()
+	})
+	userListMu.Unlock()
+}
+
+// pushUserListNow 立即构建在线用户快照并广播
+// 集群模式：名单源改为全局在线名单（HASH im:ulist 心跳时间戳）——原本实例 Usernames()
+// 在多实例下快照只含本实例用户，前端 USER_LIST 为全量重建语义，会误抹另一实例的在线用户；
+// 广播经 hub.Broadcast 自动"本地+总线"，各实例收到同一份全局快照
+func (s *Server) pushUserListNow() {
+	names := s.globalOnlineNames()
 
 	// 查询在线用户的头像
 	avatarMap := map[string]string{}

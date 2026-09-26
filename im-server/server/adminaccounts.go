@@ -14,10 +14,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"im-server/logger"
 	"im-server/model"
+	"im-server/protocol"
 	"im-server/store"
 )
 
@@ -98,12 +100,19 @@ func (s *Server) handleAdminUserProfilePut(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 昵称缓存失效（群聊帧/历史帧下发用），下次读取回源取新昵称
-	nickCache.Delete(username)
+	// 集群模式：总线广播失效其他实例的昵称缓存（无 TTL 进程缓存，跨实例必须显式失效）
+	s.invalidateNickname(username)
 	// 向目标全部在线连接推送最新资料（PROFILE_RESP 与本人改资料同帧同口径，多端实时同步）
+	// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的连接；原本地 GetAll 循环跨实例漏推）
 	if info, ok := s.buildProfileInfo(username, username); ok {
-		for _, cc := range s.hub.GetAll(username) {
-			s.sendProfileResp(cc, info)
-		}
+		pContent, _ := json.Marshal(info)
+		pData, _ := json.Marshal(&protocol.Message{
+			MsgType:   protocol.MsgTypeProfileResp,
+			ToUser:    username,
+			Content:   string(pContent),
+			Timestamp: time.Now().Unix(),
+		})
+		s.sendToUser(username, pData)
 	}
 	logger.Info("后台管理：管理员 %s 修改账号 %s 资料", adminUserFromCtx(r), username)
 	adminJSON(w, map[string]interface{}{"ok": true, "username": username})
@@ -260,7 +269,14 @@ func (s *Server) handleAdminUserDeletePut(w http.ResponseWriter, r *http.Request
 
 // kickUserConnections 阶段一百三十五：向指定用户全部在线连接同步下发提示并断开（锁定封禁/注销即时生效）
 // 客户端侧约定：1 秒内收到 ERROR 帧后连接关闭视为服务端拒绝（非网络断开），不再自动重连
+// 集群模式：跨实例连接无法远程断开——经总线尽力送达提示帧（客户端收帧未断线会走自动重连，
+// 重连登录被拒后退出，最终态一致）；本实例连接发帧后立即断开（即时生效）
 func (s *Server) kickUserConnections(username, reason string) {
+	if s.hub.Count(username) == 0 && s.hub.bus != nil && s.isOnlineFast(username) {
+		if data, err := json.Marshal(&protocol.Message{MsgType: protocol.MsgTypeError, Content: reason, Timestamp: time.Now().Unix()}); err == nil {
+			s.hub.bus.publish(&busEnvelope{Kind: busKindDirect, Targets: []string{username}, Data: data})
+		}
+	}
 	for _, cc := range s.hub.GetAll(username) {
 		cc.SendErrorAndClose(reason)
 	}

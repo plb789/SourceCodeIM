@@ -897,8 +897,17 @@ func (s *Server) adminAfterAIChange(action string) {
 
 // aiChangeApply 阶段五十七：AI 配置变更应用归口（管理端与用户端共用）——
 // 重建运行时索引 + 按用户视角广播 AI_AGENTS 刷新（每用户内容=公共智能体+其个人智能体）
+// 集群模式：总线发布失效事件，各实例重建索引并按各自在线用户视角重新广播
 func (s *Server) aiChangeApply(action string) {
 	reloadAIAgents()
+	s.aiChangeBroadcastLocal()
+	if s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invAgents})
+	}
+}
+
+// aiChangeBroadcastLocal 本实例在线用户视角广播 AI_AGENTS 刷新（单实例与集群订阅回环归口）
+func (s *Server) aiChangeBroadcastLocal() {
 	s.hub.BroadcastUser(func(username string) []byte {
 		msg := protocol.Message{
 			MsgType:   protocol.MsgTypeAIAgents,

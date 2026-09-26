@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"im-server/logger"
@@ -44,7 +45,8 @@ func (s *Server) handleFriendRequest(c *Client, msg *protocol.Message) {
 	}
 
 	// 推送给在线接收方的全部连接（携带申请记录 ID，供前端去重；多端同步）
-	if s.hub.Count(msg.ToUser) > 0 {
+	// 集群模式：isOnlineFast 全局判定（接收方连接在跨实例时经总线定向信封送达，原本地 Count 门限会漏推）
+	if s.isOnlineFast(msg.ToUser) {
 		data, _ := json.Marshal(&protocol.Message{
 			MsgType:   protocol.MsgTypeFriendRequest,
 			FromUser:  c.username,
@@ -196,6 +198,13 @@ func (s *Server) handleBlacklist(c *Client, msg *protocol.Message) {
 		s.sendError(c, "已移出黑名单")
 		logger.Info("取消拉黑：%s -> %s", c.username, msg.ToUser)
 	}
+	// 并发改造 D2：黑名单变更后全量失效内存缓存，保证拦截判定即时生效
+	// 集群模式：同步广播失效事件——其他实例缓存即时失效（原各实例独立缓存，跨实例拉黑
+	// 拦截最长延迟一个缓存 TTL 才生效）
+	blacklistInvalidate()
+	if s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invBlacklist})
+	}
 	s.refreshFriendList(c.username)
 	s.pushBlacklist(c)
 }
@@ -260,49 +269,86 @@ func (s *Server) addFriend(a, b string) {
 	}
 }
 
+// ===== 并发改造 D2：黑名单内存缓存 =====
+// 每条私聊热路径原直查 im_blacklist 一次；现命中缓存零查询。黑名单写操作（拉黑/取消拉黑）
+// 全量失效缓存，60s TTL 兜底防外部直改表后缓存悬挂。黑名单操作低频，全量失效成本可忽略
+var (
+	blacklistCacheMu    sync.RWMutex
+	blacklistCachePairs = make(map[string]blacklistCacheEntry)
+)
+
+type blacklistCacheEntry struct {
+	blocked bool
+	expire  time.Time
+}
+
+// blacklistInvalidate 黑名单缓存全量失效（拉黑/取消拉黑后调用）
+func blacklistInvalidate() {
+	blacklistCacheMu.Lock()
+	blacklistCachePairs = make(map[string]blacklistCacheEntry)
+	blacklistCacheMu.Unlock()
+}
+
 // isBlocked 判断 a 是否被 b 拉黑，或 b 是否被 a 拉黑（任一方向拉黑即拦截）
+// 并发改造 D2：查询结果进内存缓存（60s TTL），私聊热路径免 DB 往返
 func (s *Server) isBlocked(a, b string) bool {
+	key := a + "|" + b
+	now := time.Now()
+	blacklistCacheMu.RLock()
+	e, ok := blacklistCachePairs[key]
+	blacklistCacheMu.RUnlock()
+	if ok && now.Before(e.expire) {
+		return e.blocked
+	}
 	var count int64
 	store.DB.Model(&model.Blacklist{}).
 		Where("(user_id = ? AND blocked_id = ?) OR (user_id = ? AND blocked_id = ?)", a, b, b, a).
 		Count(&count)
-	return count > 0
+	blocked := count > 0
+	blacklistCacheMu.Lock()
+	blacklistCachePairs[key] = blacklistCacheEntry{blocked: blocked, expire: now.Add(60 * time.Second)}
+	blacklistCacheMu.Unlock()
+	return blocked
 }
 
 // refreshFriendList 向指定在线用户推送好友列表（推送其全部在线连接，多端同步）
 // 原实现：仅推送单一连接
+// 集群模式：sendToUser 归口（总线定向信封覆盖跨实例的多端连接；本实例语义不变）
 func (s *Server) refreshFriendList(username string) {
-	for _, c := range s.hub.GetAll(username) {
-		s.pushFriendList(c)
-	}
+	s.sendToUser(username, s.buildFriendListData(username))
 }
 
-// pushFriendList 查询好友并推送好友列表（含备注、分组、在线状态、头像）
-func (s *Server) pushFriendList(c *Client) {
+// buildFriendListData 构造 22 好友列表帧（含备注、分组、在线状态、头像；按用户名构建一次，多端复用）
+func (s *Server) buildFriendListData(username string) []byte {
 	var friends []model.Friend
-	store.DB.Where("user_id = ?", c.username).Find(&friends)
+	store.DB.Where("user_id = ?", username).Find(&friends)
 
 	infos := make([]FriendInfo, 0, len(friends))
 	for _, f := range friends {
 		var u model.User
 		store.DB.Where("username = ?", f.FriendID).First(&u)
+		// 并发改造 A4：在线状态改全局判定（好友列表在线态跨实例准确）
 		infos = append(infos, FriendInfo{
 			Username: f.FriendID,
 			Remark:   f.Remark,
 			Group:    f.GroupName,
-			Online:   s.isOnline(f.FriendID),
+			Online:   s.isOnlineFast(f.FriendID),
 			Avatar:   u.Avatar,
 		})
 	}
 
 	content, _ := json.Marshal(infos)
-	msg := protocol.Message{
+	data, _ := json.Marshal(&protocol.Message{
 		MsgType:   protocol.MsgTypeFriendList,
 		Content:   string(content),
 		Timestamp: time.Now().Unix(),
-	}
-	data, _ := json.Marshal(msg)
-	c.send(data)
+	})
+	return data
+}
+
+// pushFriendList 查询好友并推送好友列表（登录链路单连接推送归口）
+func (s *Server) pushFriendList(c *Client) {
+	c.send(s.buildFriendListData(c.username))
 }
 
 // pushPendingRequests 推送待处理的好友申请给指定用户

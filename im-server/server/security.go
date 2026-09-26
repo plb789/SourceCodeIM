@@ -45,6 +45,8 @@ func isDangerousFile(filename string) bool {
 const ipLimitKey = "im:ip:conn:"
 
 // checkIPLimit 异常连接防护：单 IP 高频连接限制
+// 并发改造 B3：阈值与窗口由 config.yaml 下发（ip_conn_limit / ip_conn_window，缺省 20 次/10 秒
+// 与原硬编码一致）；NAT 办公网共用出口 IP 场景可调大防误伤
 func (s *Server) checkIPLimit(ip string) bool {
 	ctx := context.Background()
 	key := ipLimitKey + ip
@@ -54,11 +56,10 @@ func (s *Server) checkIPLimit(ip string) bool {
 		return true // Redis 异常时放行，避免误伤
 	}
 	if count == 1 {
-		store.RDB.Expire(ctx, key, 10*time.Second)
+		store.RDB.Expire(ctx, key, time.Duration(s.cfg.IPConnWindow)*time.Second)
 	}
 
-	// 10 秒内最多 20 次连接
-	if count > 20 {
+	if count > int64(s.cfg.IPConnLimit) {
 		logger.Warn("异常连接防护：IP %s 连接过于频繁", ip)
 		return false
 	}

@@ -78,6 +78,8 @@
                     <h2>性能仪表盘</h2>
                     <span id="dash-status" class="admin-view-tip">加载中…</span>
                 </header>
+                <!-- 监控告警横幅（告警评估协程 30s 周期维护；error 红 / warn 黄，恢复自动消失） -->
+                <div id="dash-alerts" style="display:none;margin-bottom:14px"></div>
                 <!-- 核心业务指标卡片 -->
                 <div class="dash-cards">
                     <div class="dash-card">
@@ -109,6 +111,30 @@
                         <span class="dash-card-label">网盘占用</span>
                         <span class="dash-card-value" id="dash-drive-size">-</span>
                         <span class="dash-card-sub" id="dash-drive-files">文件数 -</span>
+                    </div>
+                    <div class="dash-card" title="消息批量落库队列（瞬时长度/容量）；悬浮可见批均大小、背压降级与批写超时累计次数">
+                        <span class="dash-card-label">落库队列</span>
+                        <span class="dash-card-value sm" id="dash-msgq">-</span>
+                    </div>
+                    <div class="dash-card" title="会话列表推送当前退避窗口：300ms=常态；升档=推送风暴中（自适应退避工作信号）">
+                        <span class="dash-card-label">会话退避</span>
+                        <span class="dash-card-value sm" id="dash-conv-backoff">-</span>
+                    </div>
+                    <div class="dash-card" title="writePump 写耗时 >200ms 的累计次数；持续增长=网卡/对端拥塞信号">
+                        <span class="dash-card-label">WS 慢写</span>
+                        <span class="dash-card-value sm" id="dash-slow-writes">-</span>
+                    </div>
+                    <div class="dash-card" title="发送队列占用超半载的连接数；>0 说明有连接消费不及投递（瞬时采样）">
+                        <span class="dash-card-label">发送积压</span>
+                        <span class="dash-card-value sm" id="dash-backpressured">-</span>
+                    </div>
+                    <div class="dash-card" title="MySQL 执行 >500ms 的查询累计；持续增长=索引劣化/锁等待信号">
+                        <span class="dash-card-label">慢查询</span>
+                        <span class="dash-card-value sm" id="dash-slow-queries">-</span>
+                    </div>
+                    <div class="dash-card" title="集群总线发布队列（瞬时长度/容量）；悬浮可见降级次数与全局在线名单条数。单实例部署恒为 0">
+                        <span class="dash-card-label">总线队列</span>
+                        <span class="dash-card-value sm" id="dash-busq">-</span>
                     </div>
                 </div>
                 <!-- 图表区：内存/GC 实时曲线 + 今日消息分布 -->

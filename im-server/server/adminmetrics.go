@@ -27,6 +27,13 @@ import (
 // 服务启动时刻（运行时长统计锚点，包级初始化即启动时刻）
 var adminBootTime = time.Now()
 
+// 消息速率采样状态（今日消息量差分；管理页低频采样互斥保护）
+var (
+	msgRateMu      sync.Mutex
+	msgRateLastVal int64
+	msgRateLastAt  time.Time
+)
+
 // 上传目录扫描缓存（atomic 保护，后台 goroutine 写，指标接口读）
 var (
 	adminUploadFiles  atomic.Int64
@@ -88,6 +95,10 @@ type adminMetricsSystem struct {
 	UptimeSec    float64 `json:"uptime_sec"`      // 服务运行时长
 	NumCPU       int     `json:"num_cpu"`         // CPU 核数
 	GoVersion    string  `json:"go_version"`
+	// 并发优化观测扩展（仪表盘）：WS 层与会话推送层健康信号
+	WSBackpressured int   `json:"ws_backpressured"` // 发送队列超半载连接数（>0=有连接消费不及投递）
+	WSSlowWrites    int64 `json:"ws_slow_writes"`   // WS 慢写累计（writePump >200ms；持续增长=网卡/对端拥塞）
+	ConvBackoffMS   int64 `json:"conv_backoff_ms"`  // 会话推送当前退避窗口（300=常态，升档=推送风暴中）
 }
 
 type adminMetricsBusiness struct {
@@ -114,6 +125,8 @@ type adminMetricsBusiness struct {
 	CallCompleted int64 `json:"call_completed"` // 已接通话单数
 	CallP2P       int64 `json:"call_p2p"`       // P2P 直连话单数（已接通中客户端上报 link_type=p2p）
 	CallRelay     int64 `json:"call_relay"`     // TURN 中继话单数（已接通中客户端上报 link_type=relay）
+	// 并发优化观测扩展：消息速率（两次采样差值/间隔，条/s）
+	MsgRate float64 `json:"msg_rate"`
 }
 
 type adminHourStat struct {
@@ -126,14 +139,30 @@ type adminMetricsDB struct {
 	MySQLInUse     int     `json:"mysql_in_use"`     // 使用中连接
 	MySQLIdle      int     `json:"mysql_idle"`       // 空闲连接
 	MySQLWaitCount int64   `json:"mysql_wait_count"` // 累计等待次数（高并发压力信号）
+	MsgQLen        int64   `json:"msg_q_len"`        // 消息批量落库队列当前长度（并发优化 E1，瞬时观测）
+	MsgQCap        int64   `json:"msg_q_cap"`        // 消息批量落库队列容量
+	MsgQDegraded   int64   `json:"msg_q_degraded"`   // 累计背压降级次数（队列满直写；持续增长=DB 写入跟不上）
+	MsgQTimeouts   int64   `json:"msg_q_timeouts"`   // 累计批写卡死兜底降级次数（正常态恒为 0）
 	RedisOK        bool    `json:"redis_ok"`         // Redis 可用性
 	RedisPingMS    float64 `json:"redis_ping_ms"`    // Ping 往返毫秒
+	// 并发优化观测扩展：Redis 连接池健康 + 集群总线水位
+	RedisPoolConns    int64 `json:"redis_pool_conns"`    // 连接池累计新建连接数
+	RedisPoolHits     int64 `json:"redis_pool_hits"`     // 池命中次数
+	RedisPoolMisses   int64 `json:"redis_pool_misses"`   // 池未命中（需新建）次数
+	RedisPoolTimeouts int64 `json:"redis_pool_timeouts"` // 等待空闲连接超时次数（非 0=Redis 池吃紧）
+	UlistCount        int64 `json:"ulist_count"`         // 全局在线名单条数（集群模式 im:ulist，单实例=0）
+	PubQLen           int64 `json:"pub_q_len"`           // 总线发布队列当前长度（单实例=0）
+	PubQCap           int64 `json:"pub_q_cap"`           // 总线发布队列容量
+	PubQDegraded      int64 `json:"pub_q_degraded"`      // 总线队列满降级累计（持续增长=总线 RTT 瓶颈）
+	SlowQueries       int64 `json:"slow_queries"`        // MySQL 慢查询累计（>500ms；持续增长=索引劣化/锁等待）
+	BatchAvg          int64 `json:"batch_avg"`           // 消息落库批均大小（fsync 合并效率观测；与落库队列同组展示）
 }
 
 type adminMetricsResp struct {
 	System   adminMetricsSystem   `json:"system"`
 	Business adminMetricsBusiness `json:"business"`
 	DB       adminMetricsDB       `json:"db"`
+	Alerts   []adminAlert         `json:"alerts"` // 活跃告警（告警评估协程 30s 周期维护，空数组=一切正常）
 }
 
 // handleAdminMetrics 性能仪表盘指标接口（管理员鉴权）
@@ -142,6 +171,7 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 		System:   collectSystemMetrics(),
 		Business: s.collectBusinessMetrics(),
 		DB:       collectDBMetrics(),
+		Alerts:   currentAlerts(),
 	}
 	adminJSON(w, resp)
 }
@@ -150,7 +180,7 @@ func (s *Server) handleAdminMetrics(w http.ResponseWriter, r *http.Request) {
 func collectSystemMetrics() adminMetricsSystem {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	return adminMetricsSystem{
+	sys := adminMetricsSystem{
 		HeapAllocMB:  float64(ms.HeapAlloc) / 1024 / 1024,
 		HeapSysMB:    float64(ms.HeapSys) / 1024 / 1024,
 		HeapObjects:  ms.HeapObjects,
@@ -161,6 +191,19 @@ func collectSystemMetrics() adminMetricsSystem {
 		NumCPU:       runtime.NumCPU(),
 		GoVersion:    runtime.Version(),
 	}
+	// 并发优化观测扩展：WS 发送队列水位（遍历连接数 O(在线数)，管理页低频采样可接受）
+	if s := defaultServer(); s != nil && s.hub != nil {
+		backpressured := 0
+		for _, c := range s.hub.AllConns() {
+			if len(c.sendCh) > cap(c.sendCh)/2 {
+				backpressured++
+			}
+		}
+		sys.WSBackpressured = backpressured
+	}
+	sys.WSSlowWrites = wsSlowWrites.Load()
+	sys.ConvBackoffMS = convBackoffMS()
+	return sys
 }
 
 // collectBusinessMetrics 业务指标（Hub 即时 + SQL count + 上传缓存）
@@ -176,6 +219,15 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 	store.DB.Model(&model.Message{}).Count(&b.TotalMsgs)
 	todayStart := time.Now().Truncate(24 * time.Hour)
 	store.DB.Model(&model.Message{}).Where("create_time >= ?", todayStart).Count(&b.TodayMsgs)
+	// 消息速率：今日消息量两次采样差值/间隔（条/s；服务重启后首次采样无前值，显示 0）
+	msgRateMu.Lock()
+	if !msgRateLastAt.IsZero() {
+		if dt := time.Since(msgRateLastAt).Seconds(); dt > 0.5 && b.TodayMsgs >= msgRateLastVal {
+			b.MsgRate = float64(b.TodayMsgs-msgRateLastVal) / dt
+		}
+	}
+	msgRateLastVal, msgRateLastAt = b.TodayMsgs, time.Now()
+	msgRateMu.Unlock()
 
 	// 今日按小时分布（一次性查出后补齐 0-23 点，前端免补零逻辑）
 	var rows []adminHourStat
@@ -232,6 +284,20 @@ func collectDBMetrics() adminMetricsDB {
 		d.MySQLIdle = st.Idle
 		d.MySQLWaitCount = st.WaitCount
 	}
+	d.MsgQLen, d.MsgQCap, d.MsgQDegraded, d.MsgQTimeouts, d.BatchAvg = msgQueueStats()
+	// Redis 连接池健康（go-redis PoolStats 现成统计）
+	if ps := store.RDB.PoolStats(); ps != nil {
+		d.RedisPoolConns = int64(ps.TotalConns)
+		d.RedisPoolHits = int64(ps.Hits)
+		d.RedisPoolMisses = int64(ps.Misses)
+		d.RedisPoolTimeouts = int64(ps.Timeouts)
+	}
+	// 集群总线水位 + 全局在线名单（单实例模式均为 0）
+	d.PubQLen, d.PubQCap, d.PubQDegraded = busQueueStats()
+	if n, err := store.RDB.HLen(context.Background(), KeyUserList).Result(); err == nil {
+		d.UlistCount = n
+	}
+	d.SlowQueries = store.SlowQueryCount.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()

@@ -158,8 +158,9 @@ func (s *Server) persistAgentFileMessage(agent, username, absPath, url string) e
 		ToUser:   username,
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
-		return err
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
+		return errPersistFailed
 	}
 	store.DB.Model(&model.FileRecord{}).Where("id = ?", rec.ID).Update("msg_id", record.ID)
 

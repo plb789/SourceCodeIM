@@ -464,8 +464,9 @@ func (s *Server) fileP2PDone(c *Client, msg *protocol.Message, from string, p *f
 		ToUser:   snapshot.To,
 		Content:  string(contentBytes),
 	}
-	if err := store.DB.Create(&record).Error; err != nil {
-		logger.Error("文件直传消息落库失败（transfer_id=%s）：%v", snapshot.ID, err)
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
+		logger.Error("文件直传消息落库失败（transfer_id=%s）", snapshot.ID)
 		// 落库失败：通知双方中止，客户端自动回退 HTTP 链路重传
 		s.fileP2PSystem(snapshot.From, map[string]interface{}{"action": "abort", "transfer_id": snapshot.ID, "reason": "persist_failed"})
 		s.fileP2PSystem(snapshot.To, map[string]interface{}{"action": "abort", "transfer_id": snapshot.ID, "reason": "persist_failed"})

@@ -19,6 +19,17 @@ type Config struct {
 	ChunkSize int `yaml:"chunk_size"`
 	// 最大在线连接数
 	MaxConnections int `yaml:"max_connections"`
+	// 并发改造 B3：单 IP 连接频率上限（统计窗口内最多该次数新建连接，超过拒绝；0=默认 20）
+	// NAT 办公网全公司共用出口 IP、登录并发高时可调大，防误伤正常登录
+	IPConnLimit int `yaml:"ip_conn_limit"`
+	// 单 IP 连接频率统计窗口秒（0=默认 10）
+	IPConnWindow int `yaml:"ip_conn_window"`
+	// 并发改造 C 系列：集群模式开关（hub 分布式化 + Redis pub/sub 跨实例广播）
+	// true = 启动集群总线订阅消费端，消息投递/广播/会话刷新/缓存失效跨实例投递，
+	// 多实例水平扩展共享同一 MySQL 与 Redis；false（默认）= 单实例模式，全部本地内存投递，零行为变化
+	ClusterEnabled bool `yaml:"cluster_enabled"`
+	// 集群总线频道名（同一集群的实例必须一致；空=默认 im:bus）
+	ClusterChannel string `yaml:"cluster_channel"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
 	// 阶段一四五：注册开关（后台 config.yaml 归口）
@@ -52,6 +63,17 @@ type Config struct {
 
 	// MySQL 配置
 	MySQLDSN string `yaml:"mysql_dsn"`
+	// 并发优化 E4：MySQL 连接池参数（缺省兜底 max_open=2000 / max_idle=50 / lifetime=3600s）
+	// max_open 为懒建立软上限（不预占连接），但受 MySQL 服务端 max_connections 硬顶——
+	// 配 2000 时服务端须配套调大（每连接 1-10MB 内存，自行评估）；max_idle 为风暴后保留
+	// 的空闲连接数（Go 默认仅 2，高峰后连接被关，再来风暴需重建握手，故默认 50）
+	DBMaxOpenConns    int `yaml:"db_max_open_conns"`
+	DBMaxIdleConns    int `yaml:"db_max_idle_conns"`
+	DBConnMaxLifetime int `yaml:"db_conn_max_lifetime"` // 连接最长复用秒数（防长连接被服务端 wait_timeout 单方面掐断报错），0=不设
+	// 读写分离适配 E5：撤回兜底重试窗口（秒）。主备从中间件无"写后读主"粘滞时，撤回的
+	// "写（主库 INSERT）后立即读（从库 SELECT）"受复制延迟影响——>0 时未命中在窗口内每秒重查；
+	// 0=默认跳过（单库/粘滞部署零开销）。复制延迟 10s 建议配 12
+	DBRecallRetryWindow int `yaml:"db_recall_retry_window"`
 	// Redis 配置
 	RedisAddr     string `yaml:"redis_addr"`
 	RedisPassword string `yaml:"redis_password"`
@@ -437,6 +459,17 @@ func Load() *Config {
 	// 关键参数兜底：配置缺省或非法时回退默认值
 	if cfg.RecallWindow <= 0 {
 		cfg.RecallWindow = 120
+	}
+	// 并发改造 B3：单 IP 连接频率限制兜底（20 次/10 秒，与历史硬编码行为一致）
+	if cfg.IPConnLimit <= 0 {
+		cfg.IPConnLimit = 20
+	}
+	if cfg.IPConnWindow <= 0 {
+		cfg.IPConnWindow = 10
+	}
+	// 集群总线频道兜底（ClusterEnabled 默认 false，无需兜底；频道为空时总线用默认 im:bus）
+	if cfg.ClusterChannel == "" {
+		cfg.ClusterChannel = "im:bus"
 	}
 	if cfg.HeartbeatTimeout <= 0 {
 		cfg.HeartbeatTimeout = 90

@@ -2095,7 +2095,8 @@
             var sys = result.data.system, biz = result.data.business, db = result.data.db;
             // 核心业务卡片
             $('dash-online-users').textContent = biz.online_users;
-            $('dash-online-conns').textContent = '连接数 ' + biz.online_conns;
+            $('dash-online-conns').textContent = '连接数 ' + biz.online_conns + ' · 消息 ' +
+                biz.msg_rate.toFixed(1) + ' 条/s';
             $('dash-today-msgs').textContent = biz.today_msgs;
             $('dash-total-msgs').textContent = '总量 ' + biz.total_msgs;
             $('dash-total-users').textContent = biz.total_users;
@@ -2124,7 +2125,59 @@
             $('dash-uptime').textContent = formatUptime(sys.uptime_sec);
             $('dash-mysql').textContent = db.mysql_in_use + ' / ' + db.mysql_max_open;
             $('dash-mysql').title = '空闲 ' + db.mysql_idle + ' · 累计等待 ' + db.mysql_wait_count;
-            $('dash-redis').textContent = db.redis_ok ? db.redis_ping_ms.toFixed(2) + ' ms' : '不可用';
+            // 监控告警横幅：活跃告警列表（error 红 / warn 黄；随指标采样刷新，恢复自动消失）
+            // 判空防御：浏览器缓存旧版 admin.html 时新节点不存在，跳过填充避免 TypeError 中断后续卡片
+            const alerts = (result.data.alerts || []);
+            const alertBox = $('dash-alerts');
+            if (alertBox) {
+                if (!alerts.length) {
+                    alertBox.style.display = 'none';
+                    alertBox.innerHTML = '';
+                } else {
+                    alertBox.style.display = 'block';
+                    alertBox.innerHTML = alerts.map(a => {
+                        const isErr = a.level === 'error';
+                        const color = isErr ? '#e05555' : '#d69e2e';
+                        const bg = isErr ? 'rgba(224,85,85,0.08)' : 'rgba(214,158,46,0.08)';
+                        return '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;margin-bottom:6px;'
+                            + 'border-radius:8px;border-left:4px solid ' + color + ';background:' + bg + ';'
+                            + 'font-size:13px;color:var(--admin-text,#333);">'
+                            + '<strong style="color:' + color + ';white-space:nowrap;">' + (isErr ? '严重' : '警告') + '</strong>'
+                            + '<span style="flex:1;">' + a.message + '</span>'
+                            + '<span style="opacity:0.6;white-space:nowrap;">' + new Date(a.since * 1000).toLocaleTimeString() + ' 起</span>'
+                            + '</div>';
+                    }).join('');
+                }
+            }
+            // 并发优化 E1：消息批量落库队列观测——长度/容量 + 累计降级次数（悬浮提示）
+            $('dash-msgq').textContent = db.msg_q_len + ' / ' + db.msg_q_cap;
+            $('dash-msgq').title = '批均 ' + (db.batch_avg || 0) + ' 条/批 · 背压降级 ' + db.msg_q_degraded +
+                ' 次 · 批写超时 ' + db.msg_q_timeouts + ' 次（后两项正常态应为 0）';
+            // 并发优化观测扩展卡片（判空同上：旧缓存页面无节点时跳过）
+            const convBackoffEl = $('dash-conv-backoff');
+            if (convBackoffEl) {
+                convBackoffEl.textContent = sys.conv_backoff_ms + ' ms';
+                const slowWritesEl = $('dash-slow-writes');
+                if (slowWritesEl) {
+                    slowWritesEl.textContent = sys.ws_slow_writes + ' 次';
+                    slowWritesEl.title = '发送积压连接数 ' + sys.ws_backpressured;
+                }
+                const backpressureEl = $('dash-backpressured');
+                if (backpressureEl) backpressureEl.textContent = sys.ws_backpressured;
+                const slowQueriesEl = $('dash-slow-queries');
+                if (slowQueriesEl) slowQueriesEl.textContent = db.slow_queries + ' 次';
+                const busqEl = $('dash-busq');
+                if (busqEl) {
+                    busqEl.textContent = db.pub_q_len + ' / ' + db.pub_q_cap;
+                    busqEl.title = '总线满降级 ' + db.pub_q_degraded + ' 次 · 全局在线名单 ' + db.ulist_count + ' 人';
+                }
+            }
+            const redisEl = $('dash-redis');
+            if (redisEl) {
+                redisEl.textContent = db.redis_ok ? db.redis_ping_ms.toFixed(2) + ' ms' : '不可用';
+                redisEl.title = 'Redis 池：新建 ' + db.redis_pool_conns + ' · 命中 ' + db.redis_pool_hits +
+                    ' · 未命中 ' + db.redis_pool_misses + ' · 等待超时 ' + db.redis_pool_timeouts;
+            }
             // 元信息行
             $('dash-meta').textContent = 'Go ' + sys.go_version + ' · CPU ' + sys.num_cpu + ' 核 · 堆对象 ' +
                 sys.heap_objects + ' · 距上次 GC ' + sys.gc_last_ago_sec.toFixed(1) + ' 秒 · 上传目录扫描于 ' +

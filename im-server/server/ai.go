@@ -536,6 +536,12 @@ func aiAttemptOnce[T any](ctx context.Context, p *config.AIProviderConfig, attem
 
 // aiStreamChat 调用 OpenAI 兼容 chat/completions 流式接口（SSE），逐段回调增量文本，返回完整回复
 // 与本次消耗的 Token 统计（stream_options.include_usage 请求归口，兼容服务无该字段时 usage 归零优雅降级）。
+// aiGlobalSem 并发改造 D3：AI 上游调用全局并发信号量（收口 aiStreamChat——AI 问答/群聊 @AI/
+// Agent 任务/记忆提取/翻译等全部上游调用方共用）。单用户有限流（limit_count），但全员并发无上限，
+// 万人在线理论上限 1600+ 并发上游调用会打爆上游 API；现全局默认 50 并发，超出排队等待
+// （受各调用方 ctx 超时兜底，不会无限堆积）
+var aiGlobalSem = make(chan struct{}, 50)
+
 // provider 为 nil 时使用本地 Mock 应答（未配置模型服务的降级路径）。
 // 原实现：单源直连，失败即整体失败——阶段一百三十一改走 aiFailoverRun 多源兜底，主体下沉为 aiStreamChatAttempt
 func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, onDelta func(string)) (string, aiUsage, error) {
@@ -543,6 +549,13 @@ func aiStreamChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, 
 		reply := "我是 " + agent.Name + "（本地演示模式）。服务端尚未配置模型服务，请在 im-server/bin/config.yaml 的 ai 节点配置 providers（api_url/api_key/model）与 agents 后重启服务。"
 		onDelta(reply)
 		return reply, aiUsage{}, nil
+	}
+	// 并发改造 D3：进入上游调用前获取全局并发额度（满载排队，ctx 取消即放弃）
+	select {
+	case aiGlobalSem <- struct{}{}:
+		defer func() { <-aiGlobalSem }()
+	case <-ctx.Done():
+		return "", aiUsage{}, ctx.Err()
 	}
 	emitted := false
 	wrapped := func(delta string) {

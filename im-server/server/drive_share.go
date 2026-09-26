@@ -416,15 +416,17 @@ func (s *Server) deliverDriveShareCards(sh *model.DriveShare, owner string, toUs
 			ToUser: target, Content: envelope, Timestamp: time.Now().Unix(),
 		}
 		record := model.Message{MsgType: int8(protocol.MsgTypeDriveShare), FromUser: owner, ToUser: target, Content: envelope}
-		if err := store.DB.Create(&record).Error; err != nil {
-			logger.Error("网盘分享卡片落库失败（%s -> %s）：%v", owner, target, err)
+		record.ID = s.persistMessage(&record)
+		if record.ID == 0 {
+			logger.Error("网盘分享卡片落库失败（%s -> %s）", owner, target)
 			continue
 		}
 		chatMsg.MsgID = record.ID
 		data, _ := json.Marshal(chatMsg)
-		if s.hub.Count(target) > 0 {
+		// 集群模式：isOnlineFast 全局判定（跨实例在线实时投递；离线入队）
+		if s.isOnlineFast(target) {
 			s.sendToUser(target, data)
-		} else if !s.isOnline(target) {
+		} else {
 			s.queueOffline(target, &chatMsg)
 		}
 		s.sendToUser(owner, data) // 自己多端同步（与私聊消息回显同口径）
@@ -445,8 +447,9 @@ func (s *Server) deliverDriveShareCards(sh *model.DriveShare, owner string, toUs
 			ToUser: "g" + strconv.FormatUint(uint64(gid), 10), Content: envelope, Timestamp: time.Now().Unix(),
 		}
 		record := model.Message{MsgType: int8(protocol.MsgTypeDriveShare), FromUser: owner, ToUser: chatMsg.ToUser, Content: envelope}
-		if err := store.DB.Create(&record).Error; err != nil {
-			logger.Error("网盘分享群卡片落库失败（%s -> 群%d）：%v", owner, gid, err)
+		record.ID = s.persistMessage(&record)
+		if record.ID == 0 {
+			logger.Error("网盘分享群卡片落库失败（%s -> 群%d）", owner, gid)
 			continue
 		}
 		chatMsg.MsgID = record.ID
@@ -454,10 +457,11 @@ func (s *Server) deliverDriveShareCards(sh *model.DriveShare, owner string, toUs
 		memberIDs := getGroupMemberIDs(gid)
 		s.sendToGroupMembers(memberIDs, data)
 		for _, name := range memberIDs {
-			if name != owner && !s.isOnline(name) {
+			// 集群模式：在线判定全局化（isOnlineFast，跨实例连接仍判在线）
+			if name != owner && !s.isOnlineFast(name) {
 				s.queueOffline(name, &chatMsg)
 			}
-			if s.isOnline(name) {
+			if s.isOnlineFast(name) {
 				s.touchConversation(name, chatMsg.ToUser, summary)
 				s.notifyConvUpdate(name)
 			}

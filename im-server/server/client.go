@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,6 +24,9 @@ type Client struct {
 	// 回归加固：连接写互斥锁——writePump（队列写）与 SendErrorAndClose（登录失败同步写）
 	// 都可能写同一底层连接，gorilla/websocket 不允许并发写（会 panic 打崩进程），必须串行化
 	writeMu sync.Mutex
+	// 并发改造 C1 审计加固：连接关闭标记——读循环退出/主动关闭时置位，
+	// 离线补发等长循环据此快速中止，避免对死连接逐条空等背压超时（大积压 × 3s/条的空转）
+	closed atomic.Bool
 }
 
 // newClient 创建客户端连接对象
@@ -59,9 +63,15 @@ func (c *Client) sendBlock(data []byte, timeout time.Duration) bool {
 	}
 }
 
-// Close 关闭连接
+// Close 关闭连接（置位 closed 标记 + 关底层连接）
 func (c *Client) Close() {
+	c.closed.Store(true)
 	c.conn.Close()
+}
+
+// isClosed 连接是否已关闭（离线补发等长循环的中止判定）
+func (c *Client) isClosed() bool {
+	return c.closed.Load()
 }
 
 // SendErrorAndClose 同步发送错误消息后立即关闭连接：登录失败等需断开的场景使用
@@ -82,14 +92,14 @@ func (c *Client) SendErrorAndClose(content string) {
 	if err != nil {
 		logger.Warn("向客户端发送登录错误提示失败: %v", err)
 	}
-	c.conn.Close()
+	c.Close()
 }
 
 // readPump 读循环：解析消息、处理心跳超时、分发
 func (c *Client) readPump() {
 	defer func() {
 		c.server.unregister(c)
-		c.conn.Close()
+		c.Close()
 	}()
 
 	// 心跳超时：90s 未收到任何消息判定离线
@@ -117,17 +127,66 @@ func (c *Client) readPump() {
 
 // writePump 写循环：将发送队列内容写回连接
 // 回归加固：写操作经 writeMu 串行化，避免与 SendErrorAndClose 的同步写并发冲突
+// packTextFrames 多帧拼接（RFC 6455 服务端帧：FIN=1、opcode=1(text)、服务端帧无掩码）
+// 并发优化 E3：消息风暴下同一连接的积压帧合并为一次底层 Write——N 次写 syscall 合并为 1 次。
+// TCP 字节流上连续完整帧与逐帧写在接收端语义完全一致（按帧边界流式解析）
+func packTextFrames(frames [][]byte) []byte {
+	total := 0
+	for _, f := range frames {
+		total += len(f) + 10 // 帧头最大 10 字节
+	}
+	buf := make([]byte, 0, total)
+	for _, f := range frames {
+		buf = append(buf, 0x81) // FIN=1 + opcode=1（text）
+		n := len(f)
+		switch {
+		case n < 126:
+			buf = append(buf, byte(n))
+		case n <= 0xFFFF:
+			buf = append(buf, 126, byte(n>>8), byte(n))
+		default: // 消息为 KB 级，高 4 字节恒 0
+			buf = append(buf, 127, 0, 0, 0, 0, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		}
+		buf = append(buf, f...)
+	}
+	return buf
+}
+
+// wsSlowWrites 慢写累计计数（仪表盘观测，writePump >200ms 时 +1；持续增长=网卡/对端拥塞信号）
+var wsSlowWrites atomic.Int64
+
 func (c *Client) writePump() {
 	for data := range c.sendCh {
+		// 并发优化 E3：取首帧后非阻塞排干积压帧，多帧拼接一次底层 Write（N 次 syscall → 1 次）。
+		// 单帧/空闲路径保持原 WriteMessage 不变，零额外开销；与 gorilla 默认 pong 回写（读协程
+		// writeControl）的并发关系与原实现同级，本项目心跳为应用层 text 帧，WS 层 ping 场景实际不触发
+		batch := append(make([][]byte, 0, 64), data)
+	drain:
+		for len(batch) < 64 {
+			select {
+			case d := <-c.sendCh:
+				batch = append(batch, d)
+			default:
+				break drain
+			}
+		}
 		wStart := time.Now()
+		var err error
 		c.writeMu.Lock()
 		c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		err := c.conn.WriteMessage(websocket.TextMessage, data)
+		if len(batch) == 1 {
+			err = c.conn.WriteMessage(websocket.TextMessage, batch[0])
+		} else {
+			_, err = c.conn.UnderlyingConn().Write(packTextFrames(batch))
+		}
 		c.writeMu.Unlock()
 		if cost := time.Since(wStart); cost > 200*time.Millisecond {
-			logger.Warn("慢写观测（用户 %s 写耗时 %v 帧 %d 字节）", c.username, cost, len(data))
+			wsSlowWrites.Add(1) // 仪表盘观测：慢写累计（持续增长=网卡/对端拥塞信号）
+			logger.Warn("慢写观测（用户 %s 写耗时 %v 合并 %d 帧）", c.username, cost, len(batch))
 		}
 		if err != nil {
+			// 写失败即连接死亡：主动置位关闭标记并断开，加速读循环退出与离线补发等长循环中止
+			c.Close()
 			return
 		}
 	}
