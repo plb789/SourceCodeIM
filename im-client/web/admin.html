@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.27">
+    <link rel="stylesheet" href="css/admin.css?v=1.29">
 </head>
 <body>
     <!-- 启动骨架层：脚本编译期间（echarts/admin.js 数百 KB）保持主题背景+spinner，
@@ -97,42 +97,42 @@
                         <span class="dash-card-value" id="dash-total-users">-</span>
                         <span class="dash-card-sub" id="dash-ai-count">AI 智能体 -</span>
                     </div>
-                    <div class="dash-card" title="统计口径：全部注册用户积分余额总和（服务端实时聚合，双精度 3 位小数）">
+                    <div class="dash-card" data-tip-text="统计口径：全部注册用户积分余额总和（服务端实时聚合，双精度 3 位小数）">
                         <span class="dash-card-label">积分总量</span>
                         <span class="dash-card-value" id="dash-points-total">-</span>
                         <span class="dash-card-sub" id="dash-points-avg">人均 -</span>
                     </div>
-                    <div class="dash-card" title="统计口径：聊天附件上传目录（static/upload，IM 消息图片/文件/头像）磁盘扫描，5 分钟刷新；网盘文件不在此列，网盘占用见右侧「网盘占用」卡片">
+                    <div class="dash-card" data-tip-text="统计口径：聊天附件上传目录（static/upload，IM 消息图片/文件/头像）磁盘扫描，5 分钟刷新；网盘文件不在此列，网盘占用见右侧「网盘占用」卡片">
                         <span class="dash-card-label">聊天附件占用</span>
                         <span class="dash-card-value" id="dash-upload-size">-</span>
                         <span class="dash-card-sub" id="dash-upload-files">文件数 -</span>
                     </div>
-                    <div class="dash-card" title="统计口径：网盘正常文件（不含目录与回收站）元数据聚合，60 秒刷新；与「文件存储管理」视图总占用同源">
+                    <div class="dash-card" data-tip-text="统计口径：网盘正常文件（不含目录与回收站）元数据聚合，60 秒刷新；与「文件存储管理」视图总占用同源">
                         <span class="dash-card-label">网盘占用</span>
                         <span class="dash-card-value" id="dash-drive-size">-</span>
                         <span class="dash-card-sub" id="dash-drive-files">文件数 -</span>
                     </div>
-                    <div class="dash-card" title="消息批量落库队列（瞬时长度/容量）；悬浮可见批均大小、背压降级与批写超时累计次数">
+                    <div class="dash-card" data-tip-text="消息批量落库队列（瞬时长度/容量）；悬浮可见批均大小、背压降级与批写超时累计次数">
                         <span class="dash-card-label">落库队列</span>
                         <span class="dash-card-value sm" id="dash-msgq">-</span>
                     </div>
-                    <div class="dash-card" title="会话列表推送当前退避窗口：300ms=常态；升档=推送风暴中（自适应退避工作信号）">
+                    <div class="dash-card" data-tip-text="会话列表推送当前退避窗口：300ms=常态；升档=推送风暴中（自适应退避工作信号）">
                         <span class="dash-card-label">会话退避</span>
                         <span class="dash-card-value sm" id="dash-conv-backoff">-</span>
                     </div>
-                    <div class="dash-card" title="writePump 写耗时 >200ms 的累计次数；持续增长=网卡/对端拥塞信号">
+                    <div class="dash-card" data-tip-text="writePump 写耗时 >200ms 的累计次数；持续增长=网卡/对端拥塞信号">
                         <span class="dash-card-label">WS 慢写</span>
                         <span class="dash-card-value sm" id="dash-slow-writes">-</span>
                     </div>
-                    <div class="dash-card" title="发送队列占用超半载的连接数；>0 说明有连接消费不及投递（瞬时采样）">
+                    <div class="dash-card" data-tip-text="发送队列占用超半载的连接数；>0 说明有连接消费不及投递（瞬时采样）">
                         <span class="dash-card-label">发送积压</span>
                         <span class="dash-card-value sm" id="dash-backpressured">-</span>
                     </div>
-                    <div class="dash-card" title="MySQL 执行 >500ms 的查询累计；持续增长=索引劣化/锁等待信号">
+                    <div class="dash-card" data-tip-text="MySQL 执行 >500ms 的查询累计；持续增长=索引劣化/锁等待信号">
                         <span class="dash-card-label">慢查询</span>
                         <span class="dash-card-value sm" id="dash-slow-queries">-</span>
                     </div>
-                    <div class="dash-card" title="集群总线发布队列（瞬时长度/容量）；悬浮可见降级次数与全局在线名单条数。单实例部署恒为 0">
+                    <div class="dash-card" data-tip-text="集群总线发布队列（瞬时长度/容量）；悬浮可见降级次数与全局在线名单条数。单实例部署恒为 0">
                         <span class="dash-card-label">总线队列</span>
                         <span class="dash-card-value sm" id="dash-busq">-</span>
                     </div>
@@ -1290,7 +1290,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.43"></script>
+    <script src="js/admin.js?v=1.44"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

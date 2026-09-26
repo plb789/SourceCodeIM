@@ -2077,6 +2077,15 @@
         });
     }
 
+    // 卡片悬浮说明统一入口：写 data-tip-text（全站 tooltip.js 自绘气泡渲染，样式与主界面统一）。
+    // 不用原生 title：tooltip.js 摘存 title 期间原生气泡会竞态叠出，且容器/子元素各带 title 双显
+    function cardTitle(id, text) {
+        const el = $(id);
+        if (!el) return;
+        const card = el.closest('.dash-card');
+        if (card) card.setAttribute('data-tip-text', text);
+    }
+
     // 主题切换后图表配色即时刷新（重设全部文字/线条/柱色）
     function refreshDashChartsTheme() {
         renderMemChart();
@@ -2124,7 +2133,8 @@
             $('dash-gc').textContent = sys.gc_count + ' 次';
             $('dash-uptime').textContent = formatUptime(sys.uptime_sec);
             $('dash-mysql').textContent = db.mysql_in_use + ' / ' + db.mysql_max_open;
-            $('dash-mysql').title = '空闲 ' + db.mysql_idle + ' · 累计等待 ' + db.mysql_wait_count;
+            // 动态悬浮说明统一写到卡片容器（覆盖 HTML 静态 title），避免容器/数值两处 title 出双气泡
+            cardTitle('dash-mysql', '空闲 ' + db.mysql_idle + ' · 累计等待 ' + db.mysql_wait_count);
             // 监控告警横幅：活跃告警列表（error 红 / warn 黄；随指标采样刷新，恢复自动消失）
             // 判空防御：浏览器缓存旧版 admin.html 时新节点不存在，跳过填充避免 TypeError 中断后续卡片
             const alerts = (result.data.alerts || []);
@@ -2151,8 +2161,8 @@
             }
             // 并发优化 E1：消息批量落库队列观测——长度/容量 + 累计降级次数（悬浮提示）
             $('dash-msgq').textContent = db.msg_q_len + ' / ' + db.msg_q_cap;
-            $('dash-msgq').title = '批均 ' + (db.batch_avg || 0) + ' 条/批 · 背压降级 ' + db.msg_q_degraded +
-                ' 次 · 批写超时 ' + db.msg_q_timeouts + ' 次（后两项正常态应为 0）';
+            cardTitle('dash-msgq', '批均 ' + (db.batch_avg || 0) + ' 条/批 · 背压降级 ' + db.msg_q_degraded +
+                ' 次 · 批写超时 ' + db.msg_q_timeouts + ' 次（后两项正常态应为 0）');
             // 并发优化观测扩展卡片（判空同上：旧缓存页面无节点时跳过）
             const convBackoffEl = $('dash-conv-backoff');
             if (convBackoffEl) {
@@ -2160,7 +2170,7 @@
                 const slowWritesEl = $('dash-slow-writes');
                 if (slowWritesEl) {
                     slowWritesEl.textContent = sys.ws_slow_writes + ' 次';
-                    slowWritesEl.title = '发送积压连接数 ' + sys.ws_backpressured;
+                    cardTitle('dash-slow-writes', '发送积压连接数 ' + sys.ws_backpressured);
                 }
                 const backpressureEl = $('dash-backpressured');
                 if (backpressureEl) backpressureEl.textContent = sys.ws_backpressured;
@@ -2169,14 +2179,14 @@
                 const busqEl = $('dash-busq');
                 if (busqEl) {
                     busqEl.textContent = db.pub_q_len + ' / ' + db.pub_q_cap;
-                    busqEl.title = '总线满降级 ' + db.pub_q_degraded + ' 次 · 全局在线名单 ' + db.ulist_count + ' 人';
+                    cardTitle('dash-busq', '总线满降级 ' + db.pub_q_degraded + ' 次 · 全局在线名单 ' + db.ulist_count + ' 人');
                 }
             }
             const redisEl = $('dash-redis');
             if (redisEl) {
                 redisEl.textContent = db.redis_ok ? db.redis_ping_ms.toFixed(2) + ' ms' : '不可用';
-                redisEl.title = 'Redis 池：新建 ' + db.redis_pool_conns + ' · 命中 ' + db.redis_pool_hits +
-                    ' · 未命中 ' + db.redis_pool_misses + ' · 等待超时 ' + db.redis_pool_timeouts;
+                cardTitle('dash-redis', 'Redis 池：新建 ' + db.redis_pool_conns + ' · 命中 ' + db.redis_pool_hits +
+                    ' · 未命中 ' + db.redis_pool_misses + ' · 等待超时 ' + db.redis_pool_timeouts);
             }
             // 元信息行
             $('dash-meta').textContent = 'Go ' + sys.go_version + ' · CPU ' + sys.num_cpu + ' 核 · 堆对象 ' +
