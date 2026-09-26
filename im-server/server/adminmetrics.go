@@ -103,8 +103,11 @@ type adminMetricsBusiness struct {
 	// 阶段一百六十八：网盘存储总占用（正常文件口径，与「文件存储管理」总览一致，60 秒缓存）
 	DriveTotalSize int64 `json:"drive_total_size"` // 网盘文件总字节（不含回收站）
 	DriveFileCount int64 `json:"drive_file_count"` // 网盘文件数（不含目录/回收站）
-	AIProviders    int64 `json:"ai_providers"`     // 模型服务数
-	AIAgents       int64 `json:"ai_agents"`        // 启用中智能体数
+	// 阶段一百六十八：积分总量（全站用户积分余额实时聚合；仪表盘为管理员低频接口，SQL 直查同 total_users 口径。
+	// 积分为双精度 3 位小数存储（aipoints.go 归口），SUM 结果同为浮点，前端按 fmtPts 口径格式化）
+	PointsTotal float64 `json:"points_total"` // 积分余额总和
+	AIProviders int64   `json:"ai_providers"` // 模型服务数
+	AIAgents    int64   `json:"ai_agents"`    // 启用中智能体数
 	// 阶段一百四十七：通话链路统计（话单服务端归口，管理员仪表盘直读）
 	TotalCalls    int64 `json:"total_calls"`    // 话单总数（含未接通）
 	TodayCalls    int64 `json:"today_calls"`    // 今日话单数
@@ -200,6 +203,9 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 		b.DriveTotalSize = size
 		b.DriveFileCount = count
 	}
+
+	// 阶段一百六十八：积分总量（全站 SUM，COALESCE 兜底空表 0）
+	store.DB.Model(&model.User{}).Select("COALESCE(SUM(points),0)").Scan(&b.PointsTotal)
 
 	// AI 配置规模
 	store.DB.Model(&model.AIProvider{}).Count(&b.AIProviders)

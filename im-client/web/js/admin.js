@@ -2025,6 +2025,9 @@
             $('dash-total-msgs').textContent = '总量 ' + biz.total_msgs;
             $('dash-total-users').textContent = biz.total_users;
             $('dash-ai-count').textContent = 'AI 智能体 ' + biz.ai_agents + ' / 服务 ' + biz.ai_providers;
+            // 阶段一百六十八：积分总量卡片（服务端 SUM 实时聚合；人均 = 总量/注册用户数，fmtPts 统一格式化）
+            $('dash-points-total').textContent = fmtPts(biz.points_total || 0);
+            $('dash-points-avg').textContent = biz.total_users ? ('人均 ' + fmtPts((biz.points_total || 0) / biz.total_users)) : '人均 -';
             $('dash-upload-size').textContent = biz.upload_size_mb.toFixed(1) + ' MB';
             $('dash-upload-files').textContent = '文件数 ' + biz.upload_files;
             // 阶段一百六十八：网盘占用卡片（与文件存储管理「总占用」同源，60 秒服务端缓存）

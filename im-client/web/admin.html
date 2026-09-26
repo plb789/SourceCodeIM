@@ -17,7 +17,7 @@
 </head>
 <body>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
-    <div id="admin-login" class="admin-login-view">
+    <div id="admin-login" class="admin-login-view hidden">
         <div class="admin-login-card">
             <h1 class="admin-login-title">后台管理</h1>
             <p class="admin-login-sub">即时通讯管理控制台</p>
@@ -88,6 +88,11 @@
                         <span class="dash-card-label">注册用户</span>
                         <span class="dash-card-value" id="dash-total-users">-</span>
                         <span class="dash-card-sub" id="dash-ai-count">AI 智能体 -</span>
+                    </div>
+                    <div class="dash-card" title="统计口径：全部注册用户积分余额总和（服务端实时聚合，双精度 3 位小数）">
+                        <span class="dash-card-label">积分总量</span>
+                        <span class="dash-card-value" id="dash-points-total">-</span>
+                        <span class="dash-card-sub" id="dash-points-avg">人均 -</span>
                     </div>
                     <div class="dash-card" title="统计口径：聊天附件上传目录（static/upload，IM 消息图片/文件/头像）磁盘扫描，5 分钟刷新；网盘文件不在此列，网盘占用见右侧「网盘占用」卡片">
                         <span class="dash-card-label">聊天附件占用</span>
@@ -1253,7 +1258,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.37"></script>
+    <script src="js/admin.js?v=1.38"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
