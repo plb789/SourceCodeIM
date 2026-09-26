@@ -161,6 +161,11 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /admin/api/drive/shares", s.adminGuard(s.handleAdminDriveShares))
 	http.HandleFunc("POST /admin/api/drive/share/cancel", s.adminGuard(s.handleAdminDriveShareCancel))
 
+	// 阶段一百六十八：聊天附件管理（static/upload 目录文件级明细与删除/孤儿清理，实现归口 adminupload.go）
+	http.HandleFunc("GET /admin/api/upload/stats", s.adminGuard(s.handleAdminUploadStats))
+	http.HandleFunc("GET /admin/api/upload/files", s.adminGuard(s.handleAdminUploadFiles))
+	http.HandleFunc("POST /admin/api/upload/delete", s.adminGuard(s.handleAdminUploadDelete))
+
 	// 阶段七十八：用户积分管理（用户列表含积分余额；调整积分为绝对值设置，AI 问答扣分归口在 aipoints.go）
 	http.HandleFunc("GET /admin/api/users", s.adminGuard(s.handleAdminUserList))
 	http.HandleFunc("PUT /admin/api/users/{username}/points", s.adminGuard(s.handleAdminUserPointsPut))

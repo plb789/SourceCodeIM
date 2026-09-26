@@ -32,6 +32,7 @@
             drive: 'M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z',
             filemgr: 'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
             fileshares: 'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z',
+            uploads: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
             agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'
         };
         var nav = document.querySelector('.admin-nav');
@@ -153,6 +154,7 @@
                 setToken(result.data.token);
                 $('admin-current-user').textContent = result.data.nickname || result.data.username;
                 showMain();
+                restoreViewFromHash(); // 与刷新恢复同归口：URL 带 hash 时登录后直达对应视图，行为一致
             })
             .catch(function (e) { showToast(e.message || '网络异常'); });
     }
@@ -216,9 +218,28 @@
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
             else if (item.dataset.view === 'fileshares') { stopKBPolling(); fsPage = 1; fsLoadShares(); }
+            // 阶段一百六十八：进入聊天附件管理视图（总览 + 文件级明细）
+            else if (item.dataset.view === 'uploads') { stopKBPolling(); upPage = 1; upLoadStats(); upLoadFiles(); }
             else stopKBPolling();
+            // 阶段一百六十七：hash 记忆当前视图——刷新浏览器后原位恢复（replaceState 不产生历史条目；
+            // file:// 等特殊环境失败不影响视图切换本身）
+            try { history.replaceState(null, '', '#' + item.dataset.view); } catch (e) { /* 忽略 */ }
         });
     });
+
+    // ===== 阶段一百六十七：刷新后视图原位恢复 =====
+    // 读 location.hash 匹配导航项并模拟点击（完整复用点击分发：active 态/视图切换/数据加载/轮询归口）；
+    // hash 缺失或非法（含 #logout 等历史残留）时保持默认仪表盘不动
+    function restoreViewFromHash() {
+        var hv = (location.hash || '').replace(/^#/, '');
+        if (!hv) return false;
+        var hit = null;
+        navItems.forEach(function (item) {
+            if (item.dataset.view === hv) hit = item;
+        });
+        if (hit) { hit.click(); return true; }
+        return false;
+    }
 
     // ===== 确认弹窗（自定义，禁用系统弹窗） =====
     var confirmCb = null;
@@ -2006,6 +2027,9 @@
             $('dash-ai-count').textContent = 'AI 智能体 ' + biz.ai_agents + ' / 服务 ' + biz.ai_providers;
             $('dash-upload-size').textContent = biz.upload_size_mb.toFixed(1) + ' MB';
             $('dash-upload-files').textContent = '文件数 ' + biz.upload_files;
+            // 阶段一百六十八：网盘占用卡片（与文件存储管理「总占用」同源，60 秒服务端缓存）
+            $('dash-drive-size').textContent = fmFormatSize(biz.drive_total_size || 0);
+            $('dash-drive-files').textContent = '文件数 ' + (biz.drive_file_count || 0);
             // 阶段一百四十七：通话链路统计卡片（直连率=P2P 直连占已接通比例，链路未知=旧客户端/未接通）
             $('dash-calls-today').textContent = biz.today_calls;
             $('dash-calls-total').textContent = biz.total_calls;
@@ -2426,9 +2450,197 @@
     $('fs-prev').addEventListener('click', function () { if (fsPage > 1) { fsPage--; fsLoadShares(); } });
     $('fs-next').addEventListener('click', function () { if (fsPage < fsTotalPages) { fsPage++; fsLoadShares(); } });
 
+    // ===== 聊天附件管理（阶段一百六十八：/admin/api/upload/* static/upload 目录文件级明细） =====
+    // 口径：分类（聊天文件=im_file 命中 / 功能文件=公告与工作台前缀 / 未关联=孤儿）与保留期倒计时
+    // 由服务端归口；删除=物理删除（与定期清理同语义），不删 im_file 审计记录
+    var UP_PAGE_SIZE = 20;
+    var upPage = 1, upTotalPages = 1;
+    var upSelected = {};          // 跨页勾选集合（key=磁盘文件名）
+    var UP_CAT_TEXT = { chat: '聊天文件', feature: '功能文件', orphan: '未关联' };
+    var UP_CAT_BADGE = { chat: 'at-st-completed', feature: 'at-st-queued', orphan: 'at-st-failed' };
+
+    function upLoadStats() {
+        if (!getToken()) return;
+        api('GET', '/admin/api/upload/stats').then(function (result) {
+            if (!result.ok) return;
+            var d = result.data || {};
+            $('up-total-size').textContent = fmFormatSize(d.total_size || 0);
+            $('up-file-count').textContent = '文件数 ' + (d.file_count || 0);
+            $('up-chat-count').textContent = String(d.chat_count || 0);
+            $('up-image-count').textContent = '图片 ' + (d.image_count || 0);
+            $('up-feature-count').textContent = String(d.feature_count || 0);
+            $('up-orphan-count').textContent = String(d.orphan_count || 0);
+            var rd = d.retention_days;
+            $('up-retention').textContent = rd < 0 ? '清理未启用' : '保留 ' + rd + ' 天';
+        }).catch(function () { /* 总览失败不阻断列表 */ });
+    }
+
+    function upLoadFiles() {
+        if (!getToken()) return;
+        $('up-status').textContent = '加载中…';
+        var params = 'page=' + upPage + '&page_size=' + UP_PAGE_SIZE;
+        if ($('up-cat-filter').value) params += '&category=' + $('up-cat-filter').value;
+        if ($('up-sort').value) params += '&sort=' + $('up-sort').value;
+        var kw = $('up-keyword').value.trim();
+        if (kw) params += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/admin/api/upload/files?' + params).then(function (result) {
+            if (!result.ok) {
+                $('up-status').textContent = result.msg || '加载失败';
+                return;
+            }
+            var d = result.data || {};
+            var rows = d.list || [];
+            var body = $('up-tbody');
+            body.innerHTML = '';
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="9" class="vec-empty">暂无文件</td></tr>';
+                $('up-page-info').textContent = '共 0 条';
+                $('up-status').textContent = '更新于 ' + nowHMS();
+                upSyncSel();
+                return;
+            }
+            rows.forEach(function (r) {
+                var tr = document.createElement('tr');
+                // 勾选列（跨页保留）
+                var tdCk = document.createElement('td');
+                tdCk.className = 'fm-td-ck';
+                var ck = document.createElement('input');
+                ck.type = 'checkbox';
+                ck.checked = !!upSelected[r.name];
+                ck.addEventListener('change', function () {
+                    if (ck.checked) upSelected[r.name] = true; else delete upSelected[r.name];
+                    upSyncSel();
+                });
+                tdCk.appendChild(ck);
+                tr.appendChild(tdCk);
+                var img = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].indexOf((r.ext || '').replace('.', '')) !== -1;
+                tr.appendChild(upCell(r.name, 'vec-td-file', r.name));
+                tr.appendChild(upCell(r.orig_name || '—', 'vec-td-nowrap'));
+                tr.appendChild(upCell(r.owner || '—', 'vec-td-nowrap'));
+                tr.appendChild(upCell(fmFormatSize(r.size), 'vec-td-num'));
+                // 分类徽标（图片文件追加图片标记）
+                var tdCat = document.createElement('td');
+                var catBadge = document.createElement('span');
+                catBadge.className = 'at-badge ' + (UP_CAT_BADGE[r.category] || 'at-st-cancelled');
+                catBadge.textContent = UP_CAT_TEXT[r.category] || r.category;
+                tdCat.appendChild(catBadge);
+                if (img) {
+                    var imgTag = document.createElement('span');
+                    imgTag.className = 'admin-card-tag';
+                    imgTag.style.marginLeft = '4px';
+                    imgTag.textContent = '图';
+                    tdCat.appendChild(imgTag);
+                }
+                tr.appendChild(tdCat);
+                tr.appendChild(upCell(r.mod_time || '—', 'vec-td-nowrap'));
+                // 保留期列：>=0 剩余天数；-1 不适用；-2 清理未启用
+                tr.appendChild(upCell(r.retain_days >= 0 ? ('剩 ' + r.retain_days + ' 天') : (r.retain_days === -2 ? '未启用' : '—'), 'vec-td-nowrap'));
+                // 操作列：图片可预览；全部可删除
+                var tdAct = document.createElement('td');
+                tdAct.className = 'vec-td-actions';
+                if (img) {
+                    var pv = document.createElement('button');
+                    pv.className = 'admin-btn small';
+                    pv.textContent = '预览';
+                    pv.addEventListener('click', function () { upPreview(r.name); });
+                    tdAct.appendChild(pv);
+                }
+                var del = document.createElement('button');
+                del.className = 'admin-btn small danger';
+                del.textContent = '删除';
+                del.addEventListener('click', function () { upAskDelete([r.name]); });
+                tdAct.appendChild(del);
+                tr.appendChild(tdAct);
+                body.appendChild(tr);
+            });
+            upTotalPages = Math.max(1, Math.ceil((d.total || 0) / UP_PAGE_SIZE));
+            $('up-page-info').textContent = '共 ' + (d.total || 0) + ' 条 · 第 ' + (d.page || 1) + ' / ' + upTotalPages + ' 页';
+            $('up-status').textContent = '更新于 ' + nowHMS();
+            upSyncSel();
+        }).catch(function () {
+            $('up-status').textContent = '加载失败';
+        });
+    }
+    function upCell(text, cls, title) {
+        var td = document.createElement('td');
+        if (cls) td.className = cls;
+        td.textContent = text;
+        if (title) td.title = title;
+        return td;
+    }
+    // 批量条与全选框状态同步（与 FM 同款：勾选计数 + 全选框三态）
+    function upSyncSel() {
+        var n = Object.keys(upSelected).length;
+        $('up-sel-tip').textContent = n ? '已选 ' + n + ' 个文件' : '未选中文件';
+        var boxes = $('up-tbody').querySelectorAll('input[type="checkbox"]');
+        var checked = 0;
+        boxes.forEach(function (b) { if (b.checked) checked++; });
+        $('up-check-all').checked = boxes.length > 0 && checked === boxes.length;
+        $('up-check-all').indeterminate = checked > 0 && checked < boxes.length;
+    }
+    // 删除确认（自绘弹窗归口 confirmBox）：物理删除强警示
+    function upAskDelete(names) {
+        if (!names || !names.length) { showToast('未选择文件'); return; }
+        confirmBox('确定永久删除 ' + names.length + ' 个聊天附件？物理删除不可恢复，历史消息将无法查看对应文件（消息卡片按「文件已过期」灰显）。', function () {
+            api('POST', '/admin/api/upload/delete', { names: names }).then(function (res) {
+                if (!res.ok) { showToast(res.msg || '操作失败'); return; }
+                var d = res.data || {};
+                names.forEach(function (n) { delete upSelected[n]; });
+                showToast('已删除 ' + (d.deleted || 0) + ' 个文件' + (d.failed ? '，失败 ' + d.failed : ''));
+                upLoadFiles();
+                upLoadStats();
+            }).catch(function () { showToast('操作失败'); });
+        });
+    }
+    // 图片预览：自绘遮罩浮层（点击任意处关闭；图片直连静态目录原尺寸自适应展示）
+    function upPreview(name) {
+        var mask = document.createElement('div');
+        mask.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:3000;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+        var img = document.createElement('img');
+        img.src = '/static/upload/' + encodeURIComponent(name);
+        img.alt = name;
+        img.style.cssText = 'max-width:88vw;max-height:88vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.45);background:#fff;';
+        mask.appendChild(img);
+        mask.addEventListener('click', function () { document.body.removeChild(mask); });
+        document.body.appendChild(mask);
+    }
+    $('up-search').addEventListener('click', function () { upPage = 1; upLoadFiles(); });
+    $('up-refresh').addEventListener('click', function () { upPage = 1; upLoadFiles(); upLoadStats(); });
+    $('up-keyword').addEventListener('keydown', function (e) { if (e.key === 'Enter') { upPage = 1; upLoadFiles(); } });
+    $('up-cat-filter').addEventListener('change', function () { upPage = 1; upLoadFiles(); });
+    $('up-sort').addEventListener('change', function () { upPage = 1; upLoadFiles(); });
+    $('up-prev').addEventListener('click', function () { if (upPage > 1) { upPage--; upLoadFiles(); } });
+    $('up-next').addEventListener('click', function () { if (upPage < upTotalPages) { upPage++; upLoadFiles(); } });
+    $('up-check-all').addEventListener('change', function () {
+        var on = $('up-check-all').checked;
+        $('up-tbody').querySelectorAll('input[type="checkbox"]').forEach(function (b) {
+            // 反推文件名：勾选框位于行首列，行内文件名列 title 即磁盘名
+            var name = b.closest('tr').querySelector('.vec-td-file').title;
+            if (on) upSelected[name] = true; else delete upSelected[name];
+            b.checked = on;
+        });
+        upSyncSel();
+    });
+    $('up-batch-delete').addEventListener('click', function () {
+        var names = Object.keys(upSelected);
+        upAskDelete(names);
+    });
+    $('up-orphan-cleanup').addEventListener('click', function () {
+        confirmBox('确定清理全部「未关联」文件？这些文件无任何传输记录关联（多为 AI 文件等直接落盘内容），物理删除不可恢复。', function () {
+            api('POST', '/admin/api/upload/delete', { orphans: true }).then(function (res) {
+                if (!res.ok) { showToast(res.msg || '操作失败'); return; }
+                var d = res.data || {};
+                showToast('已清理 ' + (d.deleted || 0) + ' 个未关联文件，释放 ' + fmFormatSize(d.freed_bytes || 0));
+                upLoadFiles();
+                upLoadStats();
+            }).catch(function () { showToast('操作失败'); });
+        });
+    });
+
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     if (getToken()) {
         showMain();
+        restoreViewFromHash(); // 刷新后原位恢复刷新前视图（hash 记忆），无 hash 保持默认仪表盘
     } else {
         showLogin();
     }

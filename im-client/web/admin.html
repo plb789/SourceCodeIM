@@ -56,6 +56,7 @@
                 <button class="admin-nav-item" data-view="drive">网盘设置</button>
                 <button class="admin-nav-item" data-view="filemgr">文件存储管理</button>
                 <button class="admin-nav-item" data-view="fileshares">分享管理</button>
+                <button class="admin-nav-item" data-view="uploads">聊天附件管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
             </nav>
             <div class="admin-side-foot">
@@ -88,10 +89,15 @@
                         <span class="dash-card-value" id="dash-total-users">-</span>
                         <span class="dash-card-sub" id="dash-ai-count">AI 智能体 -</span>
                     </div>
-                    <div class="dash-card">
-                        <span class="dash-card-label">上传占用</span>
+                    <div class="dash-card" title="统计口径：聊天附件上传目录（static/upload，IM 消息图片/文件/头像）磁盘扫描，5 分钟刷新；网盘文件不在此列，网盘占用见右侧「网盘占用」卡片">
+                        <span class="dash-card-label">聊天附件占用</span>
                         <span class="dash-card-value" id="dash-upload-size">-</span>
                         <span class="dash-card-sub" id="dash-upload-files">文件数 -</span>
+                    </div>
+                    <div class="dash-card" title="统计口径：网盘正常文件（不含目录与回收站）元数据聚合，60 秒刷新；与「文件存储管理」视图总占用同源">
+                        <span class="dash-card-label">网盘占用</span>
+                        <span class="dash-card-value" id="dash-drive-size">-</span>
+                        <span class="dash-card-sub" id="dash-drive-files">文件数 -</span>
                     </div>
                 </div>
                 <!-- 图表区：内存/GC 实时曲线 + 今日消息分布 -->
@@ -808,6 +814,74 @@
                 </div>
             </section>
 
+            <!-- 阶段一百六十八：聊天附件管理（static/upload 目录文件级明细 + 删除/孤儿清理） -->
+            <section id="admin-view-uploads" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>聊天附件管理</h2>
+                    <span id="up-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">聊天附件目录（IM 聊天图片 / 文件、AI 文件、群公告附件、工作台文件）统一管理视图。删除为物理删除（与定期清理同语义，不可恢复），删除后历史消息将无法查看对应文件（消息卡片按「文件已过期」灰显）——保留天数内未到期的标准聊天文件会随定期清理自动删除（图片永存）。</p>
+                <!-- 总览卡片 -->
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">总占用</span><span class="dash-card-value sm" id="up-total-size">-</span><span class="dash-card-sub" id="up-file-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">聊天文件</span><span class="dash-card-value sm" id="up-chat-count">-</span><span class="dash-card-sub" id="up-image-count">图片 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">功能文件</span><span class="dash-card-value sm" id="up-feature-count">-</span><span class="dash-card-sub">公告 / 工作台附件</span></div>
+                    <div class="dash-card"><span class="dash-card-label">未关联</span><span class="dash-card-value sm" id="up-orphan-count">-</span><span class="dash-card-sub" id="up-retention">保留期 -</span></div>
+                </div>
+                <!-- 筛选工具条：分类/关键词/排序 -->
+                <div class="vec-toolbar">
+                    <select id="up-cat-filter" class="admin-input vec-select" title="按分类筛选">
+                        <option value="">全部分类</option>
+                        <option value="chat">聊天文件</option>
+                        <option value="feature">功能文件</option>
+                        <option value="orphan">未关联</option>
+                        <option value="image">仅图片</option>
+                    </select>
+                    <input type="text" id="up-keyword" class="admin-input vec-search-input" placeholder="按文件名 / 原始文件名搜索">
+                    <select id="up-sort" class="admin-input vec-select" style="width:130px" title="排序">
+                        <option value="time_desc">最新上传</option>
+                        <option value="time_asc">最早上传</option>
+                        <option value="size_desc">体积最大</option>
+                        <option value="size_asc">体积最小</option>
+                    </select>
+                    <button id="up-search" class="admin-btn primary">搜索</button>
+                    <button id="up-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 批量操作条 -->
+                <div class="vec-toolbar">
+                    <button id="up-batch-delete" class="admin-btn small danger">删除所选</button>
+                    <button id="up-orphan-cleanup" class="admin-btn small danger">清理全部未关联</button>
+                    <span id="up-sel-tip" class="admin-view-tip">未选中文件</span>
+                </div>
+                <!-- 全宽表格：勾选/文件名/原始文件名/归属/大小/分类/上传时间/保留期/操作 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th class="fm-td-ck"><input type="checkbox" id="up-check-all" title="全选本页"></th>
+                                <th>文件名</th>
+                                <th>原始文件名</th>
+                                <th>归属</th>
+                                <th>大小</th>
+                                <th>分类</th>
+                                <th>上传时间</th>
+                                <th title="距定期清理的剩余天数（估算）；「—」表示不适用（图片永存 / 功能文件免疫 / 清理未启用）">保留期</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="up-tbody">
+                            <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- 分页条 -->
+                <div class="vec-pager">
+                    <button id="up-prev" class="admin-btn small">上一页</button>
+                    <span id="up-page-info" class="admin-view-tip">-</span>
+                    <button id="up-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
             <!-- MCP 服务器管理（阶段八十九：TRAE CN 同款 MCP 能力，服务端归口） -->
             <section id="admin-view-mcp" class="admin-view">
                 <header class="admin-view-head">
@@ -1179,7 +1253,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.34"></script>
+    <script src="js/admin.js?v=1.37"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

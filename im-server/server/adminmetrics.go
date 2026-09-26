@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -99,8 +100,11 @@ type adminMetricsBusiness struct {
 	UploadFiles  int64           `json:"upload_files"`   // 上传文件数（缓存）
 	UploadSizeMB float64         `json:"upload_size_mb"` // 上传占用 MB（缓存）
 	UploadScanAt int64           `json:"upload_scan_at"` // 最近扫描时间戳
-	AIProviders  int64           `json:"ai_providers"`   // 模型服务数
-	AIAgents     int64           `json:"ai_agents"`      // 启用中智能体数
+	// 阶段一百六十八：网盘存储总占用（正常文件口径，与「文件存储管理」总览一致，60 秒缓存）
+	DriveTotalSize int64 `json:"drive_total_size"` // 网盘文件总字节（不含回收站）
+	DriveFileCount int64 `json:"drive_file_count"` // 网盘文件数（不含目录/回收站）
+	AIProviders    int64 `json:"ai_providers"`     // 模型服务数
+	AIAgents       int64 `json:"ai_agents"`        // 启用中智能体数
 	// 阶段一百四十七：通话链路统计（话单服务端归口，管理员仪表盘直读）
 	TotalCalls    int64 `json:"total_calls"`    // 话单总数（含未接通）
 	TodayCalls    int64 `json:"today_calls"`    // 今日话单数
@@ -190,6 +194,13 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 	b.UploadSizeMB = float64(adminUploadBytes.Load()) / 1024 / 1024
 	b.UploadScanAt = adminUploadScanAt.Load()
 
+	// 阶段一百六十八：网盘存储总占用（正常文件口径 = 文件存储管理「总占用」同源；
+	// 仪表盘轮询频率高于网盘数据变化频率，60 秒缓存避免每次轮询全表聚合）
+	if size, count, ok := adminDriveStatsCached(); ok {
+		b.DriveTotalSize = size
+		b.DriveFileCount = count
+	}
+
 	// AI 配置规模
 	store.DB.Model(&model.AIProvider{}).Count(&b.AIProviders)
 	store.DB.Model(&model.AIAgent{}).Where("enabled = ?", true).Count(&b.AIAgents)
@@ -223,4 +234,32 @@ func collectDBMetrics() adminMetricsDB {
 		d.RedisPingMS = float64(time.Since(start).Microseconds()) / 1000
 	}
 	return d
+}
+
+// adminDriveStatsCache 网盘总占用缓存（60 秒 TTL；仪表盘轮询高节流，与文件存储管理口径同源）
+var adminDriveStatsCache struct {
+	sync.Mutex
+	at    time.Time
+	size  int64
+	count int64
+}
+
+// adminDriveStatsCached 正常文件（不含目录/回收站）总字节与数量，60 秒缓存；查询失败返回 ok=false（前端保持上次值）
+func adminDriveStatsCached() (size int64, count int64, ok bool) {
+	adminDriveStatsCache.Lock()
+	defer adminDriveStatsCache.Unlock()
+	if !adminDriveStatsCache.at.IsZero() && time.Since(adminDriveStatsCache.at) < 60*time.Second {
+		return adminDriveStatsCache.size, adminDriveStatsCache.count, true
+	}
+	row := store.DB.Model(&model.DriveFile{}).
+		Select("COALESCE(SUM(size),0) AS s, COUNT(*) AS c").
+		Where("is_dir = ? AND deleted_at IS NULL", false).
+		Row()
+	if err := row.Scan(&size, &count); err != nil {
+		return 0, 0, false
+	}
+	adminDriveStatsCache.size = size
+	adminDriveStatsCache.count = count
+	adminDriveStatsCache.at = time.Now()
+	return size, count, true
 }
