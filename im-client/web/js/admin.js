@@ -122,7 +122,12 @@
     }
 
     // ===== 视图切换（登录/主界面） =====
+    function hideBoot() {
+        var boot = $('admin-boot');
+        if (boot) boot.classList.add('hidden');
+    }
     function showLogin() {
+        hideBoot(); // 启动骨架层归口：界面就绪即撤掉 spinner
         $('admin-login').classList.remove('hidden');
         $('admin-main').classList.add('hidden');
         $('admin-login-password').value = '';
@@ -131,10 +136,28 @@
         stopMCPPolling(); // 阶段八十九：同步停止 MCP 状态轮询
     }
     function showMain() {
+        hideBoot(); // 启动骨架层归口：界面就绪即撤掉 spinner
         $('admin-login').classList.add('hidden');
         $('admin-main').classList.remove('hidden');
         loadProviders();
         startDashboardPolling(); // 仪表盘为默认视图，登录即开始轮询
+    }
+    // enterMain 进入主界面统一归口（登录成功与刷新启动共用）：
+    // 恢复左下角显示名（本地缓存）→ 视图原位恢复（hash），无 hash 时默认点击仪表盘导航项。
+    // 导航高亮与视图 active 全部由点击分发归口（HTML 不再静态预置 active），
+    // 消除刷新时"先高亮仪表盘再跳到目标视图"的闪烁跳动
+    function enterMain() {
+        var name = '';
+        try { name = localStorage.getItem('im_admin_name') || ''; } catch (e) { }
+        $('admin-current-user').textContent = name;
+        showMain();
+        if (!restoreViewFromHash()) {
+            var dash = null;
+            navItems.forEach(function (item) {
+                if (item.dataset.view === 'dashboard') dash = item;
+            });
+            if (dash) dash.click();
+        }
     }
 
     // ===== 登录 / 退出 =====
@@ -152,9 +175,10 @@
                     return;
                 }
                 setToken(result.data.token);
-                $('admin-current-user').textContent = result.data.nickname || result.data.username;
-                showMain();
-                restoreViewFromHash(); // 与刷新恢复同归口：URL 带 hash 时登录后直达对应视图，行为一致
+                // 显示名本地缓存：刷新后启动归口无法从 Redis 会话取昵称（服务端会话仅存 username），
+                // 本地缓存避免刷新后左下角用户名空白
+                try { localStorage.setItem('im_admin_name', result.data.nickname || result.data.username); } catch (e) { }
+                enterMain();
             })
             .catch(function (e) { showToast(e.message || '网络异常'); });
     }
@@ -1949,6 +1973,21 @@
         if (typeof echarts === 'undefined' || dashMemChart) return;
         dashMemChart = echarts.init($('dash-chart-mem'));
         dashMsgChart = echarts.init($('dash-chart-msg'));
+        // 阶段一百六十八：容器尺寸自适应——仪表盘视图初始 display:none（去除静态 active 修复导航跳动后），
+        // echarts.init 拿到 0 尺寸导致坐标轴挤压/绘图区空白；ResizeObserver 监听容器实际尺寸变化
+        // （切回仪表盘 0→有效尺寸 / 窗口缩放 / 侧栏变化），仅在有尺寸时 resize 避免空容器告警
+        if (typeof ResizeObserver !== 'undefined') {
+            var ro = new ResizeObserver(function (entries) {
+                entries.forEach(function (en) {
+                    if (en.contentRect.width > 0 && en.contentRect.height > 0) {
+                        if (dashMemChart) dashMemChart.resize();
+                        if (dashMsgChart) dashMsgChart.resize();
+                    }
+                });
+            });
+            ro.observe($('dash-chart-mem'));
+            ro.observe($('dash-chart-msg'));
+        }
         window.addEventListener('resize', function () {
             if (dashMemChart) dashMemChart.resize();
             if (dashMsgChart) dashMsgChart.resize();
@@ -2010,8 +2049,10 @@
         renderMsgChart(dashLastHourly);
     }
 
-    function fetchMetrics() {
-        if (!isDashboardActive() || !getToken()) return;
+    function fetchMetrics(force) {
+        // force：启动/进入时的首次拉取不等 active（enterMain 中 showMain 先于视图激活执行，
+        // 首拉会被 isDashboardActive 守卫跳过，导致刷新后卡片"-"最长卡 5 秒才出数据）
+        if (!force && (!isDashboardActive() || !getToken())) return;
         api('GET', '/admin/api/metrics').then(function (result) {
             if (!result.ok) {
                 $('dash-status').textContent = result.msg || '加载失败';
@@ -2074,7 +2115,7 @@
 
     function startDashboardPolling() {
         initDashCharts();
-        fetchMetrics();
+        fetchMetrics(true); // 首拉强制：进入即出数据（后续轮询由 active 守卫省流量）
         if (dashTimer) clearInterval(dashTimer);
         dashTimer = setInterval(fetchMetrics, DASH_POLL_MS);
     }
@@ -2642,8 +2683,7 @@
 
     // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
     if (getToken()) {
-        showMain();
-        restoreViewFromHash(); // 刷新后原位恢复刷新前视图（hash 记忆），无 hash 保持默认仪表盘
+        enterMain(); // 显示名恢复 + hash 视图原位恢复（无 hash 默认仪表盘），全程无中间态闪烁
     } else {
         showLogin();
     }

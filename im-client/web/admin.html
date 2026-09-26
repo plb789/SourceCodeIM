@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -13,9 +13,15 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.25">
+    <link rel="stylesheet" href="css/admin.css?v=1.26">
 </head>
 <body>
+    <!-- 启动骨架层：脚本编译期间（echarts/admin.js 数百 KB）保持主题背景+spinner，
+         showLogin/showMain 归口隐藏，消除刷新时"空白→界面突现"的闪烁感 -->
+    <div id="admin-boot" class="admin-boot">
+        <div class="admin-boot-spinner"></div>
+        <div class="admin-boot-text">加载中…</div>
+    </div>
     <!-- 登录视图（复用聊天端账号体系，仅管理员白名单账号可登录） -->
     <div id="admin-login" class="admin-login-view hidden">
         <div class="admin-login-card">
@@ -37,7 +43,7 @@
                 <button id="admin-theme-btn" class="admin-theme-btn" title="切换主题（浅色/深色/跟随系统）"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></button>
             </div>
             <nav class="admin-nav">
-                <button class="admin-nav-item active" data-view="dashboard">性能仪表盘</button>
+                <button class="admin-nav-item" data-view="dashboard">性能仪表盘</button>
                 <button class="admin-nav-item" data-view="calllogs">通话统计</button>
                 <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
                 <button class="admin-nav-item" data-view="agents">AI 智能体</button>
@@ -67,7 +73,7 @@
 
         <main class="admin-body">
             <!-- 性能仪表盘（阶段五十） -->
-            <section id="admin-view-dashboard" class="admin-view active">
+            <section id="admin-view-dashboard" class="admin-view">
                 <header class="admin-view-head">
                     <h2>性能仪表盘</h2>
                     <span id="dash-status" class="admin-view-tip">加载中…</span>
@@ -1258,7 +1264,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.38"></script>
+    <script src="js/admin.js?v=1.42"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>
