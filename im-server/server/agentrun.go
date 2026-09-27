@@ -2831,6 +2831,7 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		s.sendError(c, "任务请求格式错误")
 		return
 	}
+	logger.Info("Agent 任务上行（用户 %s，action=%q，agent=%q，goal前60=%q）", c.username, req.Action, req.AgentName, aiLeakLogSnippet(req.Goal))
 
 	// 取消分支
 	if req.Action == "cancel" {
@@ -3272,7 +3273,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// 阶段六十二：改流式调用（Trae CN 同款打字机）——正文/推理增量经 text_delta/thought_delta
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
 		// 阶段一百三十八：正文增量经泄漏过滤器（模型幻觉输出的工具调用标记整行拦截，思考流不过滤）
-		agentLeak := &aiLeakFilter{out: func(delta string) {
+		agentLeak := &aiLeakFilter{tag: "agent", out: func(delta string) {
 			s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
 		}}
 		content, toolCalls, streamed, u, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,

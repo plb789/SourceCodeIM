@@ -693,13 +693,25 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 // 防线二（结果）：aiSanitizeToolLeak 静态净化返回正文——全泄漏时替换为友好提示。
 // 思考流（reasoning）不过滤：模型推理过程中"想调工具"属于合理过程展示。
 
-// aiIsToolLeakLine 判断一行是否为泄漏的工具调用标记行（含尖括号 + dsml 协议名，大小写不敏感；
-// 仅匹配"尖括号+dsml"组合，正常讨论 DSML 字样的纯文本不受影响）
+// aiGlmLeakMarks GLM 系模型文本形式工具调用标记前缀（阶段一百六十一）：无工具定义的纯文本
+// 端点上模型幻觉输出 <|tool_calls_section_begin|><|tool_call_begin|>functions.xxx:0
+// <|tool_call_argument_begin|>{json}<|tool_call_end|><|tool_calls_section_end|> 连排原文
+// （实测恒为单行），与 DSML 厂商协议同判为泄漏行；兼容端点不带竖线的 <tool_call...> 变体
+var aiGlmLeakMarks = []string{"<|tool_call", "<tool_call"}
+
+// aiIsToolLeakLine 判断一行是否为泄漏的工具调用标记行（含尖括号 + DSML 协议名或 GLM 文本
+// 工具标记前缀，大小写不敏感；正常讨论 DSML/tool_call 字样的纯文本行内无尖括号组合不受影响）
 func aiIsToolLeakLine(line string) bool {
 	if !strings.Contains(line, "<") {
 		return false
 	}
-	return strings.Contains(strings.ToLower(line), "dsml")
+	low := strings.ToLower(line)
+	for _, m := range aiGlmLeakMarks {
+		if strings.Contains(low, m) {
+			return true
+		}
+	}
+	return strings.Contains(low, "dsml")
 }
 
 // aiLeakFilter 流式增量泄漏过滤器：按行缓冲放行（泄漏标记可能跨增量分片，逐字符放行无法拦截）；
@@ -707,7 +719,8 @@ func aiIsToolLeakLine(line string) bool {
 type aiLeakFilter struct {
 	buf     string
 	out     func(string)
-	blocked bool // 是否拦截过泄漏内容（诊断用）
+	blocked bool   // 是否拦截过泄漏内容（诊断用）
+	tag     string // 诊断日志标签（ask=普通聊天 / agent=Agent 任务，空=未知出口）
 }
 
 func (f *aiLeakFilter) write(s string) {
@@ -729,6 +742,7 @@ func (f *aiLeakFilter) write(s string) {
 		line := f.buf[:idx+1]
 		if aiIsToolLeakLine(line) {
 			f.blocked = true
+			logger.Info("AI 泄漏过滤[%s] 流式拦截标记行：%q", f.tag, aiLeakLogSnippet(line))
 		} else {
 			f.out(line)
 		}
@@ -745,11 +759,20 @@ func (f *aiLeakFilter) flush() {
 	if f.buf != "" {
 		if aiIsToolLeakLine(f.buf) {
 			f.blocked = true
+			logger.Info("AI 泄漏过滤[%s] 收尾拦截标记残余：%q", f.tag, aiLeakLogSnippet(f.buf))
 		} else {
 			f.out(f.buf)
 		}
 		f.buf = ""
 	}
+}
+
+// aiLeakLogSnippet 诊断日志行截断（标记行可能携带长 JSON 参数，日志只留前 160 字节）
+func aiLeakLogSnippet(s string) string {
+	if len(s) > 160 {
+		return s[:160] + "..."
+	}
+	return s
 }
 
 // aiToolLeakNotice 全文均为工具调用标记（剔除后无有效内容）时下发的友好提示
@@ -758,7 +781,9 @@ const aiToolLeakNotice = "（模型尝试调用工具，但当前会话未开启
 // aiSanitizeToolLeak 结果层兜底净化：剔除正文中泄漏的工具调用标记行；
 // 全文均为标记时替换为友好提示。流式过滤后的内容再过一遍幂等无害（双保险）
 func aiSanitizeToolLeak(content string) string {
-	if !strings.Contains(strings.ToLower(content), "dsml") {
+	low := strings.ToLower(content)
+	if !strings.Contains(low, "dsml") &&
+		!strings.Contains(low, "<|tool_call") && !strings.Contains(low, "<tool_call") {
 		return content
 	}
 	lines := strings.Split(content, "\n")
@@ -1421,6 +1446,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		s.sendError(c, "AI 助手不存在或已被移除")
 		return
 	}
+	logger.Info("AI 问答上行（用户 %s，智能体 %s，remark=%q，sid=%d，content前60=%q）", c.username, agent.Name, msg.Remark, msg.SessionID, aiLeakLogSnippet(msg.Content))
 
 	// 阶段七十一：多会话归属校验（上行 session_id 指定目标会话，0=默认会话；
 	// 非法 id 拒绝，防协议直发把消息盖到他人/不存在的会话）
@@ -1593,7 +1619,7 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		// 用户停止（context.Canceled）时按它落库已生成部分（联网搜索循环链路自身不返回部分内容）
 		var pushed strings.Builder
 		// 阶段一百三十八：流式增量经泄漏过滤器（含工具调用标记的整行不推送不落库）
-		leak := &aiLeakFilter{out: func(delta string) {
+		leak := &aiLeakFilter{tag: "ask", out: func(delta string) {
 			pushed.WriteString(delta)
 			chunk := protocol.Message{
 				MsgType:   protocol.MsgTypeAIStream,
