@@ -98,8 +98,27 @@ type Config struct {
 	// 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
 	FileP2P FileP2PConfig `yaml:"file_p2p"`
 
+	// 阶段一百六十一：登录排队系统（服务重启集中重连风暴削峰）
+	LoginQueue LoginQueueConfig `yaml:"login_queue"`
+
 	// 网盘配置（百度网盘同款个人云盘：元数据 MySQL + 文件本体经 store.ObjectStore 落 MinIO/本地双后端）
 	Drive DriveConfig `yaml:"drive"`
+}
+
+// LoginQueueConfig 阶段一百六十一：登录排队配置节
+// 原实现问题：服务重启后集中重连（如 5 万在线瞬时重登）下登录链路（密码验证 DB 查询 +
+// 登录后并行推送 + 名单快照单发）瞬时过载，max_connections 只能硬拒绝后来者；
+// 排队系统按速率平滑放行，把"硬拒绝"变为"软排队"，两者互补
+type LoginQueueConfig struct {
+	// Enabled 总开关（false 完全旁路零开销；enabled=true 且未配置其余项时走下方默认值）
+	Enabled bool `yaml:"enabled"`
+	// Rate 每秒放行登录数（令牌桶填充速率，0=默认 200；突发上限为 1 秒额度）
+	Rate int `yaml:"rate"`
+	// MaxLen 等待队列长度上限（0=默认 20000；超限直接拒绝"服务器繁忙"，
+	// 建议不超过 max_connections——排队连接同样占用 WS 连接配额）
+	MaxLen int `yaml:"max_len"`
+	// Timeout 排队等待超时秒（0=默认 60；超时拒绝防僵尸连接长期占用队列与连接配额）
+	Timeout int `yaml:"timeout"`
 }
 
 // DriveConfig 网盘配置节
@@ -589,6 +608,16 @@ func Load() *Config {
 	}
 	if cfg.FileP2P.MaxPerUser <= 0 {
 		cfg.FileP2P.MaxPerUser = 3
+	}
+	// 阶段一百六十一：登录排队参数兜底（显式配 0 时回退默认值；负数视为非法同样回退）
+	if cfg.LoginQueue.Rate <= 0 {
+		cfg.LoginQueue.Rate = 200
+	}
+	if cfg.LoginQueue.MaxLen <= 0 {
+		cfg.LoginQueue.MaxLen = 20000
+	}
+	if cfg.LoginQueue.Timeout <= 0 {
+		cfg.LoginQueue.Timeout = 60
 	}
 	// 网盘配置兜底（单文件上限/配额/storage 合法性/本地目录锚定 exe 解析）
 	if cfg.Drive.MaxFileSize <= 0 {

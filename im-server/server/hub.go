@@ -27,19 +27,24 @@ func NewHub() *Hub {
 	}
 }
 
-// Add 新连接加入在线列表
+// Add 新连接加入在线列表，返回是否为该用户的首设备上线
 // 原实现：连接集合多端共存不踢旧连接——同账号同端（PC 对 PC）重复登录产生多连接并存，
 // 违背"同端单实例"预期（跨端多开 PC+WEB 才是多端共存的正确语义）
 // 阶段一百四十五：同端互踢——同账号同 platform（PC↔PC / WEB↔WEB / 手机↔手机）仅保留最新连接，
 // 跨端（PC+WEB+手机）继续多端共存；被踢旧连接下发提示后关闭（客户端弹窗回登录页，不自动重连，
 // 复用封禁踢出同款链路 SendErrorAndClose），网络抖动重连/页面刷新场景新连接自然接管旧半死连接
-func (h *Hub) Add(c *Client) {
+// 5万容量改造（E9）：返回值语义=加入前连接集合为空（用户此前完全不在线）。同端替换登录
+// （互踢后 Count 同样为 1）与跨端新增（用户本就在线）均返回 false——调用方据此判定是否
+// 广播上线通知/名单增量，修复替换登录被误判首设备导致的重复广播（存量 bug，原全量快照
+// 广播幂等掩盖，E9 增量语义下由探针 T6 暴露）
+func (h *Hub) Add(c *Client) bool {
 	h.mu.Lock()
 	set, ok := h.clients[c.username]
 	if !ok {
 		set = make(map[*Client]bool)
 		h.clients[c.username] = set
 	}
+	firstDevice := len(set) == 0 // 踢人前判定：集合为空=用户此前无任何在线连接
 	// 同端互踢：锁内收集同 platform 旧连接并移出集合，锁外发提示并关闭（SendErrorAndClose
 	// 同步写后触发 readPump 退出 → unregister → Remove 再取锁，持锁调用会死锁，必须锁外执行）
 	var kicked []*Client
@@ -62,6 +67,7 @@ func (h *Hub) Add(c *Client) {
 	if total > 1 {
 		logger.Info("用户 %s 新设备接入，当前在线连接数 %d", c.username, total)
 	}
+	return firstDevice
 }
 
 // platformName 端型中文名（互踢提示与日志归口；未知值原样返回便于排查）

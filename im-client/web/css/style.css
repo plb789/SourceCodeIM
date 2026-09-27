@@ -183,6 +183,62 @@ html, body {
     opacity: 0.28;
 }
 
+/* ---------- 阶段一百六十一：登录排队遮罩（微信式自绘浮层，主题色跟随 --primary 归口） ---------- */
+.login-queue-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 3400; /* 高于全部业务浮层（项目现役最大 3300），排队期间全局拦截输入 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(4px);
+}
+
+.login-queue-card {
+    width: min(360px, 86vw);
+    padding: 36px 32px 28px;
+    border-radius: 16px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop);
+    text-align: center;
+}
+
+.login-queue-spinner {
+    width: 44px;
+    height: 44px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    border: 4px solid color-mix(in srgb, var(--primary) 22%, transparent);
+    border-top-color: var(--primary);
+    animation: lq-spin 0.9s linear infinite;
+}
+
+@keyframes lq-spin {
+    to { transform: rotate(360deg); }
+}
+
+.login-queue-title {
+    margin: 0 0 10px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.login-queue-text {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--primary);
+}
+
+.login-queue-sub {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-light);
+}
+
 /* 登录卡片：左右分栏容器 */
 .login-card {
     position: relative;

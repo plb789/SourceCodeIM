@@ -86,6 +86,12 @@ func (s *Server) HandleChunkUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
 		return
 	}
+	// 容量优化 E8 前置：全局群路径废弃——分片直传为私聊专属协议，to_user 必须为对端用户名
+	//（原实现 to_user 为空落入全局群 fanout 归口，全局群废弃后该分支已删）
+	if toUser == "" {
+		http.Error(w, "全局群聊已废弃，请在群聊中发送", http.StatusForbidden)
+		return
+	}
 	// 在线校验（与直传/群聊图片同水位：防止离线/不存在用户名被冒用上传）
 	if s.hub.Count(username) == 0 {
 		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
@@ -343,20 +349,15 @@ func (s *Server) finalizeChunkUpload(w http.ResponseWriter, sess *directUploadSe
 	}
 	store.DB.Model(&model.FileRecord{}).Where("id = ?", rec.ID).Update("msg_id", record.ID)
 
-	// 会话摘要：私聊更新双方；群聊更新全部在线用户（与群聊图片口径一致）
+	// 会话摘要：私聊更新双方（分片直传为私聊专属协议，to_user 已在入口校验非空）
 	summary := "[文件]"
 	if msgType == int8(MsgTypeImageSaved) {
 		summary = "[图片]"
 	}
-	if sess.ToUser == "" {
-		// 集群化归口：全局在线名单批量写 + 本实例本地去抖 + 总线一条会话刷新信封（与全局群文字消息同构）
-		s.fanoutGlobalGroupConv(summary)
-	} else {
-		s.touchConversation(sess.FromUser, sess.ToUser, summary)
-		s.touchConversation(sess.ToUser, sess.FromUser, summary)
-		s.notifyConvUpdate(sess.FromUser)
-		s.notifyConvUpdate(sess.ToUser)
-	}
+	s.touchConversation(sess.FromUser, sess.ToUser, summary)
+	s.touchConversation(sess.ToUser, sess.FromUser, summary)
+	s.notifyConvUpdate(sess.FromUser)
+	s.notifyConvUpdate(sess.ToUser)
 	logger.Info("分片直传完成: %s -> %s, 文件 %s (%d 字节, %d 片), fileID=%s -> 消息%d, url=%s",
 		sess.FromUser, sess.ToUser, sess.FileName, sess.FileSize, sess.TotalChunks, fileID, record.ID, url)
 

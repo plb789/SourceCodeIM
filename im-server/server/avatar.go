@@ -93,8 +93,10 @@ func (s *Server) HandleAvatarUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 广播用户列表更新，全端刷新头像
-	s.pushUserList()
+	// 5万容量改造（E9）：头像变更走在线名单增量帧（其余用户更新该用户头像），
+	// 原实现触发全量快照广播（广播帧体积与总下行随在线人数平方增长）；同步更新快照头像缓存
+	avatarCache.Store(username, avatarURL)
+	s.pushUserListOnline(UserInfo{Username: username, Avatar: avatarURL})
 	logger.Info("用户 %s 更新头像: %s", username, avatarURL)
 
 	w.Header().Set("Content-Type", "application/json")

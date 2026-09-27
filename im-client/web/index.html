@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN" class="app-booting">
 <head>
     <meta charset="UTF-8">
@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=2.71">
+    <link rel="stylesheet" href="/css/style.css?v=2.72">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -164,6 +164,18 @@
                 <p class="login-hint">没有账号？<a class="login-reg-link" href="register.html">注册账号</a></p>
                 <p class="login-form-foot">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
             </div>
+        </div>
+    </div>
+
+    <!-- 阶段一百六十一：登录排队遮罩（微信式自绘浮层，服务端限流排队时显示当前位置与预计等待；
+         顶层覆盖登录视图与聊天视图——刷新自动重登/断线重连两种入口都可能触发排队；
+         登录成功 / 登录被拒 / 连接断开时由 chat.js 自动隐藏） -->
+    <div id="login-queue-mask" class="login-queue-mask hidden">
+        <div class="login-queue-card">
+            <div class="login-queue-spinner" aria-hidden="true"></div>
+            <p class="login-queue-title">登录排队中</p>
+            <p class="login-queue-text" id="login-queue-text">正在等待服务器放行…</p>
+            <p class="login-queue-sub">当前登录人数较多，已进入先到先得队列，请勿关闭页面或重复提交</p>
         </div>
     </div>
 
@@ -1855,7 +1867,7 @@
     <!-- Toast 轻提示 -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.31"></script>
+    <script src="/js/socket.js?v=1.32"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.9"></script>
@@ -1877,7 +1889,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.5"></script>
-    <script src="/js/chat.js?v=3.101"></script>
+    <script src="/js/chat.js?v=3.102"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>

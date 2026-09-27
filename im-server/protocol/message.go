@@ -136,10 +136,10 @@ const (
 	MsgTypeRegister = 85 // 上行：注册请求（from_user=用户名，content=密码）；下行：注册结果（content="ok" 或错误提示文本）
 
 	// ===== 阶段一百五十四：积分红包（微信同款，积分归口服务端计算） =====
-	MsgTypeRedPacket        = 86 // 红包消息（与普通消息同链路落库转发，content 为 JSON：{rp:{id,type,count,amount,greeting,status,claimed_count,claimed_amount,my_amount}}；msg_type 落库 86，历史渲染按类型出红包气泡）
-	MsgTypeRedPacketOpen    = 87 // 上行：打开红包（content 为 JSON：{packet_id}）；下行同帧：领取结果（content 为 JSON：{ok,packet_id,amount?,balance?,err?}，ok=true 顺带携带红包详情供打开即显）
-	MsgTypeRedPacketSync    = 88 // 下行：红包状态同步（领取/领完/过期退回后向会话双方或全群在线成员广播，content 为 JSON：{packet_id,status,claimed_count,count,claimed_amount,remaining_amount,msg_id,to_user,group_id}；卡片原位刷新）
-	MsgTypeRedPacketDetail  = 89 // 上行：红包详情查询（content 为 JSON：{packet_id}）；下行同帧：领取明细（content 为 JSON：{ok,packet_id,type,total_amount,count,status,greeting,from_user,expire_time,list:[{username,name,amount,claim_time}]}）
+	MsgTypeRedPacket       = 86 // 红包消息（与普通消息同链路落库转发，content 为 JSON：{rp:{id,type,count,amount,greeting,status,claimed_count,claimed_amount,my_amount}}；msg_type 落库 86，历史渲染按类型出红包气泡）
+	MsgTypeRedPacketOpen   = 87 // 上行：打开红包（content 为 JSON：{packet_id}）；下行同帧：领取结果（content 为 JSON：{ok,packet_id,amount?,balance?,err?}，ok=true 顺带携带红包详情供打开即显）
+	MsgTypeRedPacketSync   = 88 // 下行：红包状态同步（领取/领完/过期退回后向会话双方或全群在线成员广播，content 为 JSON：{packet_id,status,claimed_count,count,claimed_amount,remaining_amount,msg_id,to_user,group_id}；卡片原位刷新）
+	MsgTypeRedPacketDetail = 89 // 上行：红包详情查询（content 为 JSON：{packet_id}）；下行同帧：领取明细（content 为 JSON：{ok,packet_id,type,total_amount,count,status,greeting,from_user,expire_time,list:[{username,name,amount,claim_time}]}）
 
 	// ===== 阶段一百五十五：QQ 同款远程协助（一期 PC↔PC 完整互控，媒体走 WebRTC P2P 直连，服务端仅转发信令） =====
 	// content 为 JSON：{action, session_id, mode?, grant?, sdp?, candidate?, reason?}，action 取值：
@@ -164,6 +164,18 @@ const (
 	// ===== 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}） =====
 	// 与红包(86)同链路：服务端落库转发（私聊双方/群成员定向），历史按类型渲染卡片气泡，点击弹分享详情（保存/下载）
 	MsgTypeDriveShare = 92
+
+	// ===== 5万容量改造：在线名单增量同步 =====
+	// 原 USER_LIST(6) 全量快照广播：帧体积 O(在线人数)（5万在线 ≈ 4MB），广播总下行 O(在线人数²)
+	// （≈200GB/次），登录高峰雪崩。改造后全量快照仅登录者单发（6 号帧语义收窄），此后名单变更
+	// （上线/头像变更/下线）经本类型增量帧 1s 窗口聚合广播，帧体积 O(窗口内变更人数)
+	MsgTypeUserListDelta = 93 // 下行：名单增量（content 为 JSON：{online:[{username,avatar}],offline:["u1"]}；窗口内同用户上下线闪烁自动抵消）
+
+	// ===== 阶段一百六十一：登录排队系统（服务重启集中重连风暴削峰） =====
+	// 令牌桶按可配置速率平滑放行登录，取不到配额进 FIFO 队列；排队者收本帧位置推送，
+	// 排到队首后正常收 LOGIN_RESP(8)；排队期间 4 号心跳照常（连接保活不超时）
+	MsgTypeLoginQueue = 94 // 下行：登录排队位置推送（content 为 JSON：{position 当前第 N 位, wait 预计等待秒}）
+
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

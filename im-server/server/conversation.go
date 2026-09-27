@@ -33,6 +33,8 @@ type ConvInfo struct {
 // 语义影响：窗口内 pushConvList 读库可能读到上一条摘要（滞后 ≤50ms，角标走未读计数不受影响）；
 // 进程崩溃丢 ≤50ms 摘要（下次消息自动刷新，与 E1 批写风险同级）。
 // 会话删除/清空/摘要清写路径必须先 touchDiscard（防窗口内 flush 把旧摘要写回/删行复活）。
+// 并发优化 E8：群聊会话摘要同样纳入去抖（touchConversationMarkDirtyBatch，扇出=群成员数；
+// 全局群已废弃），flush 多 worker 并行，群聊被踢/退群升级 touchDiscardWatermarked 水位。
 
 const touchFlushDelay = 50 * time.Millisecond
 
@@ -102,7 +104,12 @@ func touchDiscardWatermarked(userID, target string, maxMsgID uint) {
 	touchFlushMu.Unlock()
 }
 
-// flushTouchDirty 脏摘要批量落库（单 timer 归口；500/批 ON DUPLICATE，失败回退逐条直写）
+// maxTouchFlushWorkers E8 flush 并行 worker 上限（与 MySQL 连接池容量匹配，避免挤占在线查询）
+const maxTouchFlushWorkers = 4
+
+// flushTouchDirty 脏摘要批量落库（单 timer 归口；E8 多 worker 并行分片写，500 行/批 ON DUPLICATE，
+// 失败回退逐条直写）——群消息风暴下脏集可达数千行，单 goroutine 串行分片写会拉长 touchFlushMu
+// 持锁时间（touchDiscardWatermarked 等锁与摘要可见性均受影响），按分片数并行写入
 func (s *Server) flushTouchDirty() {
 	touchMu.Lock()
 	batch := touchDirty
@@ -118,9 +125,36 @@ func (s *Server) flushTouchDirty() {
 		rows = append(rows, model.Conversation{UserID: e.user, Target: e.target, LastMsg: e.lastMsg, LastTime: now})
 	}
 	// 竞态修复：落库段全程持 touchFlushMu，touchDiscard 据此等待在途落库完成
-	// （换批已在 touchMu 内完成，此处 batch 固定，持锁时间=批量写耗时，毫秒级）
+	// （换批已在 touchMu 内完成，此处 batch 固定，持锁时间=最慢分片耗时，毫秒级）
 	touchFlushMu.Lock()
 	defer touchFlushMu.Unlock()
+	const step = 500
+	if len(rows) <= step {
+		s.flushTouchRows(rows)
+		return
+	}
+	parts := (len(rows) + step - 1) / step
+	if parts > maxTouchFlushWorkers {
+		parts = maxTouchFlushWorkers
+	}
+	chunk := (len(rows) + parts - 1) / parts
+	var wg sync.WaitGroup
+	for i := 0; i < len(rows); i += chunk {
+		end := i + chunk
+		if end > len(rows) {
+			end = len(rows)
+		}
+		wg.Add(1)
+		go func(part []model.Conversation) {
+			defer wg.Done()
+			s.flushTouchRows(part)
+		}(rows[i:end])
+	}
+	wg.Wait()
+}
+
+// flushTouchRows 单分片落库（500 行/批 INSERT ... ON DUPLICATE KEY UPDATE，失败回退逐条直写保证摘要不丢）
+func (s *Server) flushTouchRows(rows []model.Conversation) {
 	const step = 500
 	for i := 0; i < len(rows); i += step {
 		end := i + step
@@ -163,48 +197,41 @@ func (s *Server) touchConversation(userID, target, lastMsg string) {
 	}
 }
 
-// touchConversationBatch 并发改造 A3：批量刷新会话（存在则更新最后消息，不存在则创建）
-// 全局群每条消息原对每个在线用户逐个 touchConversation（每人 SELECT+UPDATE/INSERT 共 2 次 DB），
-// 现按 500 行/批一次 INSERT ... ON DUPLICATE KEY UPDATE（依赖 (user_id,target) 唯一索引 idx_conv_user_target），
-// N 人在线 2N 次写 → ⌈N/500⌉ 次写；摘要截断口径与 touchConversation 一致（按字符截取防无效 UTF-8）
-func (s *Server) touchConversationBatch(userIDs []string, target, lastMsg string) {
+// ===== 并发优化 E8：群聊会话摘要去抖合并落库 =====
+// 原 A3 touchConversationBatch：群聊每条消息对全部在线成员同步批写会话行（500 行/批
+// INSERT ... ON DUPLICATE），在发送者 readPump 内联等待落库返回，实测 300 行 ~12ms、
+// 1000 行 ~40ms/条，是群消息入口限流的根因。E8 复用 E7 私聊摘要去抖机制：热路径逐成员
+// 标脏（同 key 50ms 窗口内只保留最后一条），单 timer 到期多 worker 并行批量落库。
+// 群消息 persistMessage 已回填消息 ID，标脏携带 msgID——删除水位（touchConvWatermark）
+// 对群聊同样生效：被踢/退群（升级为 touchDiscardWatermarked）、清空/删会话（原有）。
+// 全局群路径已废弃（E8 前置），标脏扇出规模=群成员数（受群人数上限约束），可控。
+
+// touchConversationMarkDirtyBatch 群聊会话摘要热路径（E8）：逐成员标脏去抖，不落库不阻塞。
+// msgID=群消息 ID（persistMessage 回填），供删除水位判定；摘要截断口径与 touchConversation 一致
+func (s *Server) touchConversationMarkDirtyBatch(userIDs []string, target, lastMsg string, msgID uint) {
 	if len(userIDs) == 0 {
 		return
 	}
 	if runes := []rune(lastMsg); len(runes) > 200 {
 		lastMsg = string(runes[:200])
 	}
-	now := time.Now()
-	const batch = 500
-	for i := 0; i < len(userIDs); i += batch {
-		end := i + batch
-		if end > len(userIDs) {
-			end = len(userIDs)
-		}
-		rows := make([]model.Conversation, 0, end-i)
-		for _, uid := range userIDs[i:end] {
-			rows = append(rows, model.Conversation{UserID: uid, Target: target, LastMsg: lastMsg, LastTime: now})
-		}
-		if err := store.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "user_id"}, {Name: "target"}},
-			DoUpdates: clause.AssignmentColumns([]string{"last_msg", "last_time"}),
-		}).Create(&rows).Error; err != nil {
-			logger.Error("会话批量刷新失败（目标 %s）：%v", target, err)
-			// 批量失败兜底：回退逐条刷新，保证会话行不丢（与原行为对齐）
-			for _, uid := range userIDs[i:end] {
-				s.touchConversation(uid, target, lastMsg)
+	touchMu.Lock()
+	for _, uid := range userIDs {
+		key := uid + "\x00" + target
+		// 删除水位拦截（与私聊同语义）：MsgID ≤ 水位说明该消息属已删除/已清空/已退群会话的历史，
+		// 摘要不得写回；新消息越过水位恢复正常（并清水位）
+		if wm, ok := touchConvWatermark[key]; ok && msgID > 0 {
+			if msgID <= wm {
+				continue
 			}
+			delete(touchConvWatermark, key)
 		}
+		touchDirty[key] = touchDirtyEntry{uid, target, lastMsg, msgID}
 	}
-}
-
-// ensureGroupConv 登录时确保群聊会话存在（不刷新时间，避免每次登录都跳到最前）
-func (s *Server) ensureGroupConv(userID string) {
-	var count int64
-	store.DB.Model(&model.Conversation{}).Where("user_id = ? AND target = ''", userID).Count(&count)
-	if count == 0 {
-		store.DB.Create(&model.Conversation{UserID: userID, Target: "", LastMsg: "群聊", LastTime: time.Now()})
+	if touchTimer == nil && len(touchDirty) > 0 {
+		touchTimer = time.AfterFunc(touchFlushDelay, func() { s.flushTouchDirty() })
 	}
+	touchMu.Unlock()
 }
 
 // pushConvList 推送会话列表（置顶优先，按最后消息时间倒序）

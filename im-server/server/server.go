@@ -21,6 +21,8 @@ import (
 type Server struct {
 	cfg *config.Config
 	hub *Hub
+	// 阶段一百六十一：登录排队器（令牌桶准入 + FIFO 等待队列，重连风暴削峰）
+	loginQ *loginQueue
 	// 阶段三十二：超大文件分片直传会话表（upload_id → 会话），进度归口与收齐判定依据
 	// 仅存内存（重启丢失即重传，不落库不进 Redis，超大文件场景避免高频写）
 	uploadSessions map[string]*directUploadSession
@@ -43,6 +45,9 @@ func NewServer(cfg *config.Config) *Server {
 		uploadSessions: make(map[string]*directUploadSession),
 	}
 	defaultServerRef = s
+	// 阶段一百六十一：登录排队器（enabled=false 时零开销旁路）
+	s.loginQ = newLoginQueue(cfg.LoginQueue)
+	s.loginQ.start()
 	// 并发优化 E1：消息批量落库 worker（全站高频 Message 写归口，单事务批写一次 fsync）
 	startMessageBatchWorker()
 	// 集群总线：cluster_enabled=true 时启动订阅消费端并注入 hub（默认关闭=单实例零行为变化）
@@ -112,48 +117,6 @@ func (s *Server) deliverLocal(username string, data []byte) {
 	}
 }
 
-// fanoutGlobalGroupConv 全局群媒体消息（图片/文件/分片直传完成）的会话摘要归口（与全局群文字消息同构）：
-// 全局在线名单批量写会话行 + 本实例成员本地去抖标脏 + 总线一条会话刷新信封（集群模式跨实例同步角标）
-func (s *Server) fanoutGlobalGroupConv(summary string) {
-	globalOnline := s.globalOnlineNames()
-	s.touchConversationBatch(globalOnline, "", summary)
-	for _, name := range s.hub.Usernames() {
-		s.notifyConvUpdateLocal(name)
-	}
-	if s.hub.bus != nil {
-		s.hub.bus.publishConvUpdate(globalOnline)
-	}
-}
-
-// fanoutGlobalGroupOffline 全局群媒体消息的离线入队归口（与全局群文字消息同构）：
-// 离线名单 = 全注册用户（C2 缓存）- 全局在线名单 - 发送者，pipeline 批量入队（原全表 Pluck + 逐人 isOnline）
-func (s *Server) fanoutGlobalGroupOffline(msg *protocol.Message, sender string) {
-	var usernames []string
-	if cached := registeredUsernames(); cached != nil {
-		usernames = cached
-	} else if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err != nil {
-		return
-	} else {
-		usersCacheStore(usernames)
-	}
-	globalOnline := s.globalOnlineNames()
-	onlineSet := make(map[string]struct{}, len(globalOnline))
-	for _, n := range globalOnline {
-		onlineSet[n] = struct{}{}
-	}
-	offline := make([]string, 0, len(usernames))
-	for _, name := range usernames {
-		if name == sender {
-			continue
-		}
-		if _, on := onlineSet[name]; on {
-			continue
-		}
-		offline = append(offline, name)
-	}
-	s.queueOfflineBatch(offline, msg)
-}
-
 // sendToUserBlock 向指定用户的全部在线连接阻塞推送（带超时）：文件分片等不可丢弃消息使用
 // 阶段三十一：任一连接推送失败返回 false，由调用方向发送方反馈传输失败（原实现静默丢弃分片导致文件损坏）
 func (s *Server) sendToUserBlock(username string, data []byte, timeout time.Duration) bool {
@@ -183,16 +146,13 @@ func (s *Server) unregister(c *Client) {
 	// 最后一个连接断开：删除 Redis 在线缓存
 	store.RDB.Del(context.Background(), store.KeyOnlineUser+c.username)
 
-	// 广播下线通知
-	msg := protocol.Message{
-		MsgType:   protocol.MsgTypeOnline,
-		FromUser:  c.username,
-		Content:   "offline",
-		Timestamp: time.Now().Unix(),
-	}
-	data, _ := json.Marshal(msg)
-	s.hub.Broadcast(data)
+	// 5号帧热点修复：下线通知不再单独全员广播（原每事件 O(N)，churn 风暴热点），
+	// 并入下方 93 增量帧 1s 窗口聚合广播——好友在线态与会话上下线提示由前端增量处理器统一维护
 	logger.Info("用户 %s 下线", c.username)
+
+	// 5万容量改造（E9）：在线名单增量广播（其余用户摘除本用户），原实现下线不刷新名单，
+	// 前端 onlineUsers 残留至下次全量推送（顺带修复）
+	s.pushUserListOffline(c.username)
 
 	// 集群模式：同步摘除全局在线名单条目 + 发布在场下线事件——其他实例本地仍有该用户
 	// 连接（多端跨实例）时抢注续写（cluster.go 订阅回调），防止多端场景误判全端离线。
@@ -421,6 +381,13 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	username := msg.FromUser
 	password := msg.Content
 
+	// 阶段一百六十一：登录排队准入——排队必须在密码验证之前（排队保护的核心资源正是
+	// 验证 DB 查询与登录后推送链路，验证后再排队等于没排队）；排队期间 94 帧定期推送
+	// 排队位置，超时/队列满由排队器直接回执拒绝（返回 false 即终止登录，不进验证链路）
+	if !s.loginQ.admit(c, username) {
+		return
+	}
+
 	// 登录注册开关改造（阶段一四五）：
 	// 原实现：用户不存在（ErrUserNotFound）时无条件自动注册，"首次登录即注册"
 	// 现改为受后台 config.yaml 注册开关 register_enabled 控制：
@@ -429,15 +396,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	user, err := verifyUser(username, password)
 	if err == ErrUserNotFound {
 		if s.cfg.RegisterEnabled {
-			// 注册开关开启：尝试注册
+			// 注册开关开启：尝试注册（全局群废弃：注册名单缓存已随全局群离线入队归口删除）
 			user, err = registerUser(username, password)
-			// 并发改造 C2：登录链路自动注册同样失效注册名单缓存（集群模式同步广播）
-			if err == nil {
-				usersCacheInvalidate()
-				if s.hub.bus != nil {
-					s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invUsers})
-				}
-			}
 		} else {
 			// 注册开关关闭：登录链路不做静默注册，明确提示需先注册账号
 			err = ErrNeedRegister
@@ -471,7 +431,10 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
 	// 阶段六十：记录登录设备类型（"pc"=Electron 桌面端）——Agent 本地执行器据此判定工具下发目标
 	c.platform = strings.TrimSpace(msg.Platform)
-	s.hub.Add(c)
+	// 5万容量改造（E9）：首设备判定改由 Add 返回（加入前连接集合为空）——
+	// 原实现 Add 后 Count==1：同端互踢替换登录时旧连接已被同步移除，Count 同样为 1，
+	// 误判首设备导致上线通知/名单增量重复广播（探针 T6 暴露）
+	firstDevice := s.hub.Add(c)
 
 	// 写入 Redis 在线缓存
 	ctx := context.Background()
@@ -488,32 +451,27 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 阶段三十：改传整个 user，登录响应携带完整个人资料（昵称/性别/地区/签名）
 	s.sendLoginResp(c, "ok", *user)
 
-	// 批量推送离线消息
-	s.pushOfflineMessages(c)
-
-	// 仅首个设备上线时广播上线通知，多端重复登录不重复广播
-	if s.hub.Count(user.Username) == 1 {
-		onlineMsg := protocol.Message{
-			MsgType:   protocol.MsgTypeOnline,
-			FromUser:  user.Username,
-			Content:   "online",
-			Timestamp: time.Now().Unix(),
-		}
-		onlineData, _ := json.Marshal(onlineMsg)
-		s.hub.BroadcastExcept(user.Username, onlineData)
+	// 仅首个设备上线时广播上线通知，多端重复登录/同端替换登录不重复广播（E9：判定改用 Add 返回值）
+	// 5号帧热点修复：上线通知不再单独全员广播（原每事件 O(N)，上下线 churn 风暴下成为热点），
+	// 并入下方 93 增量帧 1s 窗口聚合广播——好友在线态由前端增量处理器统一维护
+	if firstDevice {
+		// 5万容量改造（E9）：在线名单增量广播——其余用户补录本用户+头像（1s 窗口聚合），
+		// 替代原全量快照广播（原实现广播帧体积与总下行随在线人数平方增长）
+		s.pushUserListOnline(UserInfo{Username: user.Username, Avatar: user.Avatar})
 	}
 
-	// 推送在线用户列表给所有在线用户
-	s.pushUserList()
+	// 5万容量改造（E9）：全量在线名单快照改为仅登录者单发（原 pushUserList 全量广播，见 E9 区块说明），
+	// 移入并行推送组避免快照构建（全员名单序列化 + 头像缓存查询）阻塞登录链路
 
 	// 并发改造 B2：登录后推送并行化——原 10 项推送串行执行（15+ 次 DB/Redis 往返逐个排队，
 	// 登录延迟为全部往返之和），现相互独立的推送并行执行，登录延迟从"各往返之和"降为"最慢一组"。
-	// 依赖约束：ensureGroupConv（可能写库补建全局群会话行）必须先于 pushConvList（读取该行），
-	// 二者保持主协程串行；其余 9 项（离线补发/好友/申请/黑名单/群列表/群邀请/置顶/审批/已读水位）
+	// 全局群废弃：ensureGroupConv（登录补建全局群会话行）已删除，pushConvList 直接读取既有会话行；
+	// 其余 10 项（名单快照单发/离线补发/好友/申请/黑名单/群列表/群邀请/置顶/审批/已读水位）
 	// 均为只读 + 经 sendCh 线程安全下发，互不依赖，WaitGroup 并行 + 末尾统一收口，
 	// 与原串行行为时序等价（handleLogin 返回前登录期帧已全部入队）
 	var wg sync.WaitGroup
-	wg.Add(9)
+	wg.Add(10)
+	go func() { defer wg.Done(); s.pushUserListSnapshot(c) }()
 	go func() { defer wg.Done(); s.pushOfflineMessages(c) }()
 	go func() { defer wg.Done(); s.pushFriendList(c) }()
 	go func() { defer wg.Done(); s.pushPendingRequests(c) }()
@@ -523,7 +481,6 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	go func() { defer wg.Done(); s.pushPinList(c) }()
 	go func() { defer wg.Done(); s.pushPendingPurges(c) }()
 	go func() { defer wg.Done(); s.pushReadWatermarks(c) }()
-	s.ensureGroupConv(user.Username)
 	s.pushConvList(c)
 	wg.Wait()
 	// 阶段一百四十七：登录重连取消其活跃通话的下线宽限收口（切网闪断回来，通话继续）
@@ -560,11 +517,7 @@ func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
 	data, _ := json.Marshal(resp)
 	c.send(data)
 	logger.Info("用户 %s 注册成功（独立注册页）", user.Username)
-	// 并发改造 C2：注册成功失效注册名单缓存（全局群离线入队名单），集群模式同步广播失效
-	usersCacheInvalidate()
-	if s.hub.bus != nil {
-		s.hub.bus.publish(&busEnvelope{Kind: busKindInvalidate, InvKind: invUsers})
-	}
+	// 全局群废弃：注册名单缓存失效（usersCacheInvalidate + invUsers 总线广播）已随之删除
 }
 
 // handleHeartbeat 处理心跳，续期 Redis 在线缓存
@@ -656,94 +609,31 @@ func nicknameOf(username string) string {
 }
 
 // handleGroupChat 群聊广播并持久化
+// 容量优化 E8 前置：全局群路径废弃——原 to_user 为空的全局群消息对全体注册用户广播 +
+// 全员会话批写 + 全员离线入队，扇出规模=注册用户数（不受群人数上限约束），是 5 万在线
+// 容量目标下不可控的写放大源头。现仅保留多群聊（to_user='gN'）分流，全局群信令拒绝并提示；
+// 全局群 @AI 唤醒（handleGroupAI）随之废弃，AI 问答请私聊智能体
 func (s *Server) handleGroupChat(c *Client, msg *protocol.Message) {
-	// 敏感词过滤
+	// 敏感词过滤（多群聊入口校验前置，handleMultiGroupChat 依赖此处已过滤）
 	if word, ok := containsSensitive(msg.Content); ok {
 		s.sendError(c, "消息包含敏感词，已拦截")
 		logger.Warn("敏感词拦截：%s 群聊消息包含 '%s'", c.username, word)
 		return
 	}
 
-	// 阶段一百四十二：多群聊分流——to_user='gN' 走群成员定向广播（前置分流，不进全局群 @AI 唤醒分支）；
-	// 原实现：无多群分流，to_user 恒为空
+	// 多群聊分流：to_user='gN' 走群成员定向广播（不进全局群 @AI 唤醒分支）
 	if groupID, ok := isGroupTarget(msg.ToUser); ok {
 		s.handleMultiGroupChat(c, msg, groupID)
 		return
 	}
-
-	// 群聊 @AI 唤醒应答
-	if strings.HasPrefix(strings.TrimSpace(msg.Content), "@"+AIBotName) {
-		s.handleGroupAI(c, msg)
+	// 'gN' 形式但群已解散/不存在：给准确提示（原实现会落入全局群全员广播，属误投）
+	if groupIDFromTarget(msg.ToUser) != 0 {
+		s.sendError(c, "群聊不存在或已解散")
 		return
 	}
 
-	msg.MsgType = protocol.MsgTypeGroupChat
-	msg.FromUser = c.username
-	// 阶段八十五：群聊帧携带发送者昵称（服务端归口，前端"备注→昵称→账号"解析渲染发送者标签）
-	msg.FromName = nicknameOf(c.username)
-	msg.ToUser = ""
-	msg.Timestamp = time.Now().Unix()
-
-	// 持久化到 MySQL，回填消息唯一 ID（并发优化 E1：批量落库归口，单事务批写一次 fsync）
-	record := model.Message{
-		MsgType:  int8(msg.MsgType),
-		FromUser: msg.FromUser,
-		ToUser:   "",
-		Content:  msg.Content,
-	}
-	record.ID = s.persistMessage(&record)
-	msg.MsgID = record.ID
-
-	data, _ := json.Marshal(msg)
-	s.hub.Broadcast(data)
-
-	// 更新所有在线用户的群聊会话并推送会话列表（离线用户登录时确保存在）
-	// 阶段四十补充：群聊路径同样走会话摘要归口——引用消息 content 为信封 JSON，
-	// 原实现：touchConversation 直存 msg.Content，JSON 原串显示在会话列表（私聊路径已归口，群聊路径漏改）
-	// 并发改造 A3：逐人 touchConversation（2 次 DB/人）→ 批量 upsert（500 行/批一次写入）
-	// 并发改造 A1：notifyConvUpdate 自带去抖，同一用户 300ms 窗口内合并为一次推送
-	summary := messageSummary(msg.Content)
-	// 集群模式：全局在线名单（跨实例）替代本实例 Usernames——
-	// 会话行批量写归口本实例一次（覆盖全部在线用户）；会话刷新本实例去抖 + 跨实例批量 conv 事件；
-	// 群消息帧广播经 hub.Broadcast 自动"本地+总线"（各实例本地全员投递）
-	globalOnline := s.globalOnlineNames()
-	s.touchConversationBatch(globalOnline, "", summary)
-	for _, name := range s.hub.Usernames() {
-		s.notifyConvUpdateLocal(name)
-	}
-	if s.hub.bus != nil {
-		s.hub.bus.publishConvUpdate(globalOnline)
-	}
-
-	// 群聊离线消息：给所有离线的注册用户入队
-	// 并发改造 A4：在线判定改 hub 内存判定（零 Redis 往返；原 Redis 判定在 hub 无连接
-	// 但在线键未过期时既不实时投递也不入离线队列，存在丢消息窗口，内存判定反而更准确）
-	// 集群模式：离线名单 = 全注册用户 - 全局在线 - 发送者，批量入队（pipeline，零逐人往返）
-	var usernames []string
-	if cached := registeredUsernames(); cached != nil {
-		usernames = cached
-	} else if err := store.DB.Model(&model.User{}).Pluck("username", &usernames).Error; err != nil {
-		usernames = nil
-	} else {
-		usersCacheStore(usernames)
-	}
-	if usernames != nil {
-		onlineSet := make(map[string]struct{}, len(globalOnline))
-		for _, n := range globalOnline {
-			onlineSet[n] = struct{}{}
-		}
-		offline := make([]string, 0, len(usernames))
-		for _, name := range usernames {
-			if name == c.username {
-				continue
-			}
-			if _, on := onlineSet[name]; on {
-				continue
-			}
-			offline = append(offline, name)
-		}
-		s.queueOfflineBatch(offline, msg)
-	}
+	// 全局群路径废弃：不再支持 to_user 为空的全员广播消息
+	s.sendError(c, "全局群聊已废弃，请选择一个群聊发送消息")
 }
 
 // handlePrivateChat 私聊定向转发并持久化
@@ -1013,62 +903,147 @@ type UserInfo struct {
 	Avatar   string `json:"avatar"`
 }
 
-// ===== 并发改造 B1：在线用户列表推送全局合并去抖 =====
-// userListMu/userListTimer 单一全局 1 秒窗口：窗口内多次触发（登录、头像更新等）合并为一次全量广播。
-// 原实现每次登录广播一次 O(N) 全量快照，N 人同时重连（服务重启/网络抖动）产生 O(N²) 下行帧；
-// 合并后窗口内 N 次触发仅 1 次广播。快照语义不变（前端整体重建，chat.js USER_LIST 处理器零改动）
+// ===== 并发改造 B1→E9：在线名单增量同步（5万容量改造）=====
+// 原实现：登录/头像更新触发全量在线快照广播（pushUserList 1s 去抖仅合并触发次数），快照帧体积
+// O(在线人数)（5万在线 ≈ 4MB），广播总下行 O(在线人数²)（≈200GB/次），登录高峰（服务重启集中
+// 重连）雪崩——sendCh 满载丢帧连锁。改造：
+//  1. 全量快照仅登录者单发（pushUserListSnapshot，6 号帧语义收窄，O(N) 帧只发 1 份）；
+//  2. 名单变更（上线/头像变更/下线）进聚合缓冲，1s 窗口合并为一条 USER_LIST_DELTA 增量帧广播，
+//     帧体积 O(窗口内变更人数)；窗口内同用户先上线后下线（或反之）flush 时按当前在线状态过滤，闪烁自动收敛；
+//  3. 快照头像走 avatarCache（sync.Map），消除登录高峰逐登录全员 IN 查询的 DB 写放大，
+//     头像上传时同步更新缓存。
+//
+// 集群模式：增量帧经 hub.Broadcast 自动"本地+总线"全实例送达；快照名单源 globalOnlineNames（全局 HASH）
 var (
 	userListMu    sync.Mutex
 	userListTimer *time.Timer
+	deltaOnline   = make(map[string]UserInfo) // 窗口内上线/头像变更条目（同用户后写覆盖，头像取最新）
+	deltaOffline  = make(map[string]bool)     // 窗口内下线用户
 )
 
-// pushUserList 推送在线用户列表（携带头像）给所有在线用户——去抖入口，1 秒窗口内合并
-func (s *Server) pushUserList() {
+// avatarCache 在线名单快照头像缓存（username -> avatar；头像上传低频，avatar.go 更新时同步覆盖）
+var avatarCache sync.Map
+
+// avatarsByNames 批量取头像：缓存命中直取，miss 分批回源 DB 并回填（含查无用户缓存空串防重复回源）
+func avatarsByNames(names []string) map[string]string {
+	m := make(map[string]string, len(names))
+	var miss []string
+	for _, n := range names {
+		if v, ok := avatarCache.Load(n); ok {
+			s, _ := v.(string)
+			m[n] = s
+		} else {
+			miss = append(miss, n)
+		}
+	}
+	const step = 5000
+	for i := 0; i < len(miss); i += step {
+		end := i + step
+		if end > len(miss) {
+			end = len(miss)
+		}
+		var users []model.User
+		if err := store.DB.Model(&model.User{}).Where("username IN ?", miss[i:end]).Select("username", "avatar").Find(&users).Error; err == nil {
+			for _, u := range users {
+				avatarCache.Store(u.Username, u.Avatar)
+				m[u.Username] = u.Avatar
+			}
+		}
+		for _, n := range miss[i:end] { // 查无用户（已注销）缓存空串，避免每次登录重复回源
+			if _, ok := m[n]; !ok {
+				avatarCache.Store(n, "")
+				m[n] = ""
+			}
+		}
+	}
+	return m
+}
+
+// pushUserListOnline 上线/头像变更增量入队（多端重复登录仅在首设备上线时触发，不重复广播）
+func (s *Server) pushUserListOnline(u UserInfo) {
 	userListMu.Lock()
+	deltaOnline[u.Username] = u
+	delete(deltaOffline, u.Username) // 同窗口先下线后上线：抵消
+	armUserListFlush(s)
+	userListMu.Unlock()
+}
+
+// pushUserListOffline 下线增量入队（原实现下线不刷新名单，前端 onlineUsers 残留至下次全量推送——顺带修复）
+func (s *Server) pushUserListOffline(username string) {
+	userListMu.Lock()
+	delete(deltaOnline, username) // 同窗口先上线后下线：抵消
+	deltaOffline[username] = true
+	armUserListFlush(s)
+	userListMu.Unlock()
+}
+
+// armUserListFlush 1s 窗口定时器（调用方持 userListMu）：窗口满一次构建增量帧广播
+func armUserListFlush(s *Server) {
 	if userListTimer != nil {
-		userListMu.Unlock()
-		return // 已有待触发任务，合并
+		return
 	}
 	userListTimer = time.AfterFunc(time.Second, func() {
 		userListMu.Lock()
 		userListTimer = nil
+		online := make([]UserInfo, 0, len(deltaOnline))
+		for _, u := range deltaOnline {
+			online = append(online, u)
+		}
+		offline := make([]string, 0, len(deltaOffline))
+		for name := range deltaOffline {
+			offline = append(offline, name)
+		}
+		deltaOnline = make(map[string]UserInfo)
+		deltaOffline = make(map[string]bool)
 		userListMu.Unlock()
-		s.pushUserListNow()
-	})
-	userListMu.Unlock()
-}
-
-// pushUserListNow 立即构建在线用户快照并广播
-// 集群模式：名单源改为全局在线名单（HASH im:ulist 心跳时间戳）——原本实例 Usernames()
-// 在多实例下快照只含本实例用户，前端 USER_LIST 为全量重建语义，会误抹另一实例的在线用户；
-// 广播经 hub.Broadcast 自动"本地+总线"，各实例收到同一份全局快照
-func (s *Server) pushUserListNow() {
-	names := s.globalOnlineNames()
-
-	// 查询在线用户的头像
-	avatarMap := map[string]string{}
-	if len(names) > 0 {
-		var users []model.User
-		if err := store.DB.Model(&model.User{}).Where("username IN ?", names).Find(&users).Error; err == nil {
-			for _, u := range users {
-				avatarMap[u.Username] = u.Avatar
+		if len(online) == 0 && len(offline) == 0 {
+			return
+		}
+		// 窗口内状态可能已再次变化：按当前在线判定过滤（上线后已离线→丢弃；下线后又上线→丢弃）
+		live := online[:0]
+		for _, u := range online {
+			if s.isOnlineFast(u.Username) {
+				live = append(live, u)
 			}
 		}
-	}
+		stillOff := offline[:0]
+		for _, name := range offline {
+			if !s.isOnlineFast(name) {
+				stillOff = append(stillOff, name)
+			}
+		}
+		if len(live) == 0 && len(stillOff) == 0 {
+			return
+		}
+		content, _ := json.Marshal(map[string]interface{}{"online": live, "offline": stillOff})
+		msg := protocol.Message{
+			MsgType:   protocol.MsgTypeUserListDelta,
+			Content:   string(content),
+			Timestamp: time.Now().Unix(),
+		}
+		data, _ := json.Marshal(msg)
+		s.hub.Broadcast(data)
+	})
+}
 
+// pushUserListSnapshot 推送全量在线名单快照给指定登录者（仅单发，不再广播）。
+// 名单源：集群模式全局在线名单（HASH im:ulist 心跳时间戳），单实例本 hub 在线用户；
+// 头像走 avatarCache 缓存（登录高峰逐登录全员 IN 查询的写放大收口）
+func (s *Server) pushUserListSnapshot(c *Client) {
+	names := s.globalOnlineNames()
+	avatarMap := avatarsByNames(names)
 	infos := make([]UserInfo, 0, len(names))
 	for _, n := range names {
 		infos = append(infos, UserInfo{Username: n, Avatar: avatarMap[n]})
 	}
 	content, _ := json.Marshal(infos)
-
 	listMsg := protocol.Message{
 		MsgType:   protocol.MsgTypeUserList,
 		Content:   string(content),
 		Timestamp: time.Now().Unix(),
 	}
 	data, _ := json.Marshal(listMsg)
-	s.hub.Broadcast(data)
+	c.send(data)
 }
 
 // sendLoginResp 发送登录响应（携带服务端撤回时间窗口，供前端撤回菜单判断与窗口配置保持一致）

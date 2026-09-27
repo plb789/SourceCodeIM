@@ -302,8 +302,31 @@
         // UI 规范修复：原代码 alert('请输入用户名') 为系统默认弹窗，违反"禁止使用系统默认弹窗"规则，改用页面内 Toast
         if (!username) { showToast(I18N.t('请输入用户名')); return; }
         if (!password) { showToast(I18N.t('请输入密码')); return; }
+        // 阶段一百六十一：排队期间禁止重复提交——重复点击会新建第二条 WS 连接，
+        // 与排队中的连接互踢错乱（服务端同端互踢会把排队位作废）
+        if (isQueueMaskVisible()) return;
         IMSocket.connect(username, password);
     }
+
+    // ===== 阶段一百六十一：登录排队遮罩（服务端限流排队，94 号帧驱动） =====
+    // 服务重启集中重连风暴下，服务端令牌桶放行不过来时登录进入 FIFO 队列，
+    // 前端显示微信式"排队中：第 N 位，预计 X 秒"遮罩；排到队首后正常收 LOGIN_RESP 自动进入
+    var queueMask = document.getElementById('login-queue-mask');
+    var queueText = document.getElementById('login-queue-text');
+    function isQueueMaskVisible() {
+        return queueMask && !queueMask.classList.contains('hidden');
+    }
+    function hideQueueMask() {
+        if (queueMask) queueMask.classList.add('hidden');
+    }
+    IMSocket.on(MSG.LOGIN_QUEUE, function (msg) {
+        var info = null;
+        try { info = JSON.parse(msg.content); } catch (e) { return; }
+        if (!info || typeof info.position !== 'number' || !queueMask) return;
+        var wait = (typeof info.wait === 'number' && info.wait > 0) ? info.wait : 1;
+        queueText.textContent = '当前第 ' + info.position + ' 位，预计等待约 ' + wait + ' 秒';
+        queueMask.classList.remove('hidden');
+    });
 
     // 阶段一百五十五：远程协助被控端引擎初始化——注入信令上行回调
     //（引擎 offer/answer/candidate 经此发往对端；chat.js 下行分支再原样喂回引擎）
@@ -363,6 +386,8 @@
     // 登录持久化：自动登录期间连接失败（服务端未启动/登录被拒后断开），
     // 从乐观显示的聊天界面回退到登录界面（socket.js onclose 且未登录成功时派发该事件）
     window.addEventListener('im_connect_failed', function () {
+        // 阶段一百六十一：排队中连接断开（超时拒绝后服务端关连接/网络闪断）同步收起排队遮罩
+        hideQueueMask();
         loginView.classList.remove('hidden');
         chatView.classList.add('hidden');
     });
@@ -2035,13 +2060,11 @@
         fwdPreview.classList.remove('hidden');
     }
 
-    // 目标列表：群聊置顶 + 好友（排除 AI 智能体会话，在线优先同通讯录排序），按备注/昵称/账号关键字过滤
+    // 目标列表：多群置顶 + 好友（排除 AI 智能体会话，在线优先同通讯录排序），按备注/昵称/账号关键字过滤
+    // 全局群已废弃：不再作为转发目标（服务端拒绝空群参数）
     function renderForwardList(kw) {
         fwdList.innerHTML = '';
         var items = [];
-        if (!kw || I18N.t('群聊').indexOf(kw) >= 0 || 'group'.indexOf(kw) >= 0) {
-            items.push({ target: '', name: I18N.t('群聊'), sub: I18N.t('群内所有成员可见'), ph: I18N.t('群') });
-        }
         // 阶段一百四十二：多群会话作为转发目标（按群名过滤，成员数副标题，与全局群同置顶）
         for (var gid in groupMap) {
             var g = groupMap[gid];
@@ -2059,8 +2082,8 @@
             fwdList.innerHTML = '<div class="grp-empty">' + I18N.t('无匹配联系人') + '</div>';
             return;
         }
-        items.sort(function (a, b) { // 在线优先（群聊项视为恒在线置顶）
-            return (b.online === true || b.target === '' ? 1 : 0) - (a.online === true || a.target === '' ? 1 : 0);
+        items.sort(function (a, b) { // 在线优先（多群项视为恒在线置顶）
+            return (b.online === true ? 1 : 0) - (a.online === true ? 1 : 0);
         });
         items.forEach(function (it) {
             var item = document.createElement('div');
@@ -2136,8 +2159,8 @@
         var img = bubble ? bubble.querySelector('.chat-image') : null;
         if (img && img.getAttribute('src')) {
             fetchSrcAsFile(img.getAttribute('src'), 'image.png').then(function (f) {
-                // 阶段一百四十二：多群泛化——群目标（旧全局群/多群）统一走群图片直传（group 参数携带目标群）
-                if (target === '' || isGroupTarget(target)) {
+                // 阶段一百四十二：多群泛化——群目标统一走群图片直传（group 参数携带目标群）；全局群已废弃
+                if (isGroupTarget(target)) {
                     sendGroupImage(f, true, target);
                     if (!silent) showToast(I18N.t('已转发'));
                 } else {
@@ -2154,8 +2177,8 @@
             if (!furl) { showToast(I18N.t('该消息暂不支持转发')); return; }
             var fnameEl = bubble.querySelector('.file-name');
             fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || I18N.t('文件')).then(function (f) {
-                // 阶段一百四十二：多群泛化——群目标统一走群文件直传（group 参数携带目标群）
-                if (target === '' || isGroupTarget(target)) {
+                // 阶段一百四十二：多群泛化——群目标统一走群文件直传（group 参数携带目标群）；全局群已废弃
+                if (isGroupTarget(target)) {
                     sendGroupFile(f, true, target).then(function () {
                         if (!silent) showToast(I18N.t('已转发'));
                     }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
@@ -2172,8 +2195,8 @@
         var tx = bubble ? bubble.querySelector('.msg-text') : null;
         var content = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
         if (!content) { showToast(I18N.t('该消息不支持转发')); return; }
-        var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
-        if (target !== '') m.to_user = target;
+        var m = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+        m.to_user = target;
         if (IMSocket.send(m)) { if (!silent) showToast(I18N.t('已转发')); } else showToast(I18N.t('转发失败'));
     }
 
@@ -2457,8 +2480,8 @@
     function sendMergedForward(target, silent) {
         var built = buildMergedPayload();
         if (built.err) { showToast(built.err); return; }
-        var m = { msg_type: (target === '' || isGroupTarget(target)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
-        if (target !== '') m.to_user = target;
+        var m = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
+        m.to_user = target;
         if (!IMSocket.send(m)) { showToast(I18N.t('转发失败')); return; }
         if (!silent) showToast(built.skipped ? (I18N.t('已转发（') + built.skipped + I18N.t('条未完成上传的消息已跳过）')) : I18N.t('已转发'));
     }
@@ -2882,9 +2905,13 @@
             // 阶段六十九：联网搜索开关开启时经 remark 上行（服务端归口校验配置，未开启时降级普通问答）
             if (webSearchOn && webSearchAvailable) msg.remark = 'web_search';
         } else {
-            // 阶段一百四十二：多群泛化——群会话（旧全局群/多群 'gN'）统一走 GROUP_CHAT，多群携带 to_user='gN'
-            msg = { msg_type: (currentChatUser === '' || isGroupTarget(currentChatUser)) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
-            if (currentChatUser !== '') msg.to_user = currentChatUser;
+            // 全局群已废弃：空态（currentChatUser===''）拦截发送，群聊统一走 'gN' 会话
+            if (currentChatUser === '') {
+                showToast(I18N.t('全局群聊已废弃，请选择一个群聊发送消息'));
+                return;
+            }
+            msg = { msg_type: isGroupTarget(currentChatUser) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
+            msg.to_user = currentChatUser;
         }
         // 阶段四十：引用发送——content 换成引用信封 JSON（服务端归口解析会话摘要），发送后清引用条
         // 原实现：content 始终为纯文本
@@ -3033,9 +3060,10 @@
         if (imageInput.files[0]) {
             // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
             // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
-            // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）
-            if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
+            // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
+            if (isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
             else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
+            else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
             else sendFile(imageInput.files[0]);
         }
         imageInput.value = '';
@@ -3043,8 +3071,9 @@
     fileInput.addEventListener('change', function () {
         if (fileInput.files[0]) {
             // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
-            // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）
-            if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
+            // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）；全局群已废弃
+            if (isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
+            else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
             else sendFile(fileInput.files[0]);
         }
         fileInput.value = '';
@@ -4586,8 +4615,9 @@
         // AI 智能体会话：截图同样走 AI 图片识别链路（/upload/ai/image + AI_CHAT 信封），
         // 与图片按钮一致；原实现直走通用文件链路，AI 不响应文件消息导致截图提问无应答
         if (currentChatUser !== '' && isAIAgent(currentChatUser)) { sendAIImage(shot); return; }
-        // 阶段一百四十二：多群泛化——多群会话截图同走群图片直传（group 参数归口）
-        if (currentChatUser === '' || isGroupTarget(currentChatUser)) sendGroupImage(shot);
+        // 阶段一百四十二：多群泛化——多群会话截图同走群图片直传（group 参数归口）；全局群已废弃
+        if (isGroupTarget(currentChatUser)) sendGroupImage(shot);
+        else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
         else sendFile(shot);
     }
 
@@ -4813,7 +4843,7 @@
         if (pv.src && pv.src.indexOf('blob:') === 0) URL.revokeObjectURL(pv.src);
         pv.src = URL.createObjectURL(blob);
         var mins = Math.floor(durationMs / 60000), secs = Math.floor((durationMs % 60000) / 1000);
-        var target = currentChatUser === '' ? I18N.t('当前群聊') : senderDisplayName(currentChatUser);
+        var target = currentChatUser === '' ? I18N.t('当前群聊') : (isGroupTarget(currentChatUser) ? groupNameOf(currentChatUser) : senderDisplayName(currentChatUser));
         recPreviewMask.querySelector('.rec-preview-info').textContent =
             I18N.t('录屏视频 · ') + mins + I18N.t('分') + secs + I18N.t('秒 · ') + formatSize(blob.size) + I18N.t(' · 发送到：') + target;
         recPreviewMask._blob = blob;
@@ -4837,8 +4867,9 @@
         var name = I18N.t('录屏_') + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '_' +
             pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.webm';
         var file = new File([blob], name, { type: 'video/webm' });
-        // 阶段一百四十二：多群泛化——多群会话录屏同走群文件直传（group 参数归口）
-        if (currentChatUser === '' || isGroupTarget(currentChatUser)) { sendGroupFile(file); return; }
+        // 阶段一百四十二：多群泛化——多群会话录屏同走群文件直传（group 参数归口）；全局群已废弃
+        if (isGroupTarget(currentChatUser)) { sendGroupFile(file); return; }
+        if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
         sendFile(file);
     }
 
@@ -5360,7 +5391,12 @@
 
     // ===== 清空当前聊天显示（保留云端记录） =====
     clearBtn.addEventListener('click', function () {
-        var isGroup = currentChatUser === '';
+        // 全局群已废弃：未选会话不提供清空操作；群会话（gN）仅支持视图清空（服务端拒绝群聊永久删除）
+        if (currentChatUser === '') {
+            showToast(I18N.t('请先选择一个聊天'));
+            return;
+        }
+        var isGroup = isGroupTarget(currentChatUser);
         var isAI = !isGroup && isAIAgent(currentChatUser);
         // 阶段七十二：清空聊天双选项——清空显示（服务端写删除表，本端不再加载，云端保留）/ 永久删除（物理删除云端记录，不可恢复）。
         // 原实现仅清本地视图不写删除表，刷新或重开会话后历史原样回来，清空形同虚设
@@ -5401,6 +5437,8 @@
 
     // ===== 消息分发 =====
     IMSocket.on(MSG.LOGIN_RESP, function (msg) {
+        // 阶段一百六十一：排队放行后必收本帧，遮罩在此隐藏（被拒场景经 ERROR/im_connect_failed 隐藏）
+        hideQueueMask();
         // 原实现：仅支持纯字符串 "ok"，服务端下发撤回窗口参数后 content 改为 JSON，导致登录被误判为失败
         // if (msg.content === 'ok') {
         var ok = msg.content === 'ok'; // 兼容旧版服务端纯字符串响应
@@ -5458,7 +5496,8 @@
             // 原实现：登录成功后停留在默认空界面
             try {
                 var lastChat = localStorage.getItem('im_last_chat_' + IMSocket.getUsername());
-                if (lastChat !== null) openConversation(lastChat || '');
+                // 全局群已废弃：lastChat 为空串（旧记录停在全局群）不恢复，停留空态
+                if (lastChat) openConversation(lastChat);
             } catch (e) {}
             // 阶段四十三：登录成功后拉取 AI 智能体列表（刷新自动重登/断线重连均会走 LOGIN_RESP，服务端配置归口）
             requestAIAgents();
@@ -5489,12 +5528,12 @@
         }
     });
 
-    // 头像缺失修复：在线用户列表推送（登录/上下线时服务端广播），
+    // 头像缺失修复：在线用户列表推送（5万容量改造：全量快照仅登录者单发，此后变更走 USER_LIST_DELTA 增量帧），
     // 记录全部在线用户头像（含自己），群聊发送者不在好友列表时从此处兜底取头像
     IMSocket.on(MSG.USER_LIST, function (msg) {
         var infos = [];
         try { infos = JSON.parse(msg.content) || []; } catch (e) { infos = []; }
-        var nextOnline = {}; // 阶段八十六：快照整体重建（上下线都伴随全量推送），确保掉线用户被移除
+        var nextOnline = {}; // 阶段八十六：快照整体重建（仅登录时收到单发快照），确保陈旧条目被清除
         infos.forEach(function (u) {
             if (u && u.username) {
                 userAvatars[u.username] = u.avatar || '';
@@ -5511,6 +5550,53 @@
         onlineUsers = nextOnline;
         // 在线快照变化后刷新当前会话标题状态（覆盖非好友会话：好友会话另有 USER_STATUS 联动）
         updateChatTitle();
+    });
+
+    // 5万容量改造：在线名单增量同步（服务端上线/下线/头像变更 1s 窗口聚合广播 93 帧，
+    // 全量快照 6 号帧仅登录者单发，替代原全量快照广播——广播总下行随在线人数平方增长）
+    // 5号帧热点修复：原上下线通知 5 号帧每事件全员广播 O(N)（churn 风暴热点）已并入本帧聚合广播，
+    // 好友在线态（原 5 号帧职责）与会话上下线系统提示由本处理器统一维护（提示延迟 ≤1s 聚合窗口）
+    // online 条目：补录/更新 onlineUsers 与 userAvatars（avatar 空串不覆盖，防抹掉好友列表头像优先级）；
+    // offline 条目：仅移除 onlineUsers（userAvatars 保留——离线用户头像仍供消息气泡兜底渲染）
+    IMSocket.on(MSG.USER_LIST_DELTA, function (msg) {
+        var d = null;
+        try { d = JSON.parse(msg.content) || {}; } catch (e) { d = {}; }
+        var changed = false;
+        var friendChanged = false;
+        var self = IMSocket.getUsername();
+        // 归属校验与原 5 号帧同口径：私聊视图仅显示会话对方上下线，多群会话视图显示全部成员上下线
+        var sysTip = isGroupTarget(currentChatUser) || false;
+        (d.online || []).forEach(function (u) {
+            if (u && u.username) {
+                onlineUsers[u.username] = true;
+                if (u.avatar) userAvatars[u.username] = u.avatar;
+                changed = true;
+                if (u.username !== self) { // 本人条目（93 帧广播含本人）不触发好友态与提示
+                    var f = friendList.find(function (x) { return x.username === u.username; });
+                    if (f && !f.online) { f.online = true; friendChanged = true; }
+                    if (sysTip || u.username === currentChatUser) {
+                        appendSystem(u.username + I18N.t(' 上线了'));
+                    }
+                }
+            }
+        });
+        (d.offline || []).forEach(function (name) {
+            if (name) {
+                delete onlineUsers[name];
+                changed = true;
+                if (name !== self) {
+                    var f2 = friendList.find(function (x) { return x.username === name; });
+                    if (f2 && f2.online) { f2.online = false; friendChanged = true; }
+                    if (sysTip || name === currentChatUser) {
+                        appendSystem(name + I18N.t(' 下线了'));
+                    }
+                }
+            }
+        });
+        // 批量合并渲染：聚合帧一次含 N 人仅重绘一次（原 5 号帧每事件重绘一次）
+        if (friendChanged) renderFriendList();
+        // 在线名单变化后刷新当前会话标题状态（非好友会话在线态兜底数据源，与全量快照处理器同口径）
+        if (changed || friendChanged) updateChatTitle();
     });
 
     IMSocket.on(MSG.ERROR, function (msg) {
@@ -5531,6 +5617,8 @@
             return;
         }
         showToast(msg.content);
+        // 阶段一百六十一：排队超时/队列满拒绝同帧送达，隐藏排队遮罩回退登录界面（im_connect_failed 联动）
+        hideQueueMask();
         // 阶段四十三：AI 限流/智能体不存在等失败路径只发 ERROR 无 END 帧，这里同步收起"思考中"指示防空等
         if (aiThinking[currentChatUser]) {
             hideAIThinking(currentChatUser);
@@ -15983,11 +16071,13 @@
             return;
         }
         convList.forEach(function (cv) {
-            // 阶段一百四十二：多群泛化——多群会话（'gN'）与旧全局群同按群聊口径渲染
-            var isGroup = cv.target === '' || isGroupTarget(cv.target);
+            // 全局群已废弃：存量 target='' 会话行不再渲染（服务端已停建新行，用户无法再进入全局群视图）
+            if (cv.target === '') return;
+            // 阶段一百四十二：多群泛化——多群会话（'gN'）同按群聊口径渲染
+            var isGroup = isGroupTarget(cv.target);
             // 原实现：var convName = isGroup ? '群聊' : cv.target; 会话列表只显示用户名，通讯录修改备注后不同步
             // 修复：与通讯录/聊天标题同口径——好友备注优先显示，无备注回退用户名
-            var convName = isGroup ? (cv.target === '' ? I18N.t('群聊') : groupNameOf(cv.target)) : cv.target;
+            var convName = isGroup ? groupNameOf(cv.target) : cv.target;
             if (!isGroup) {
                 var convFriend = friendList.find(function (x) { return x.username === cv.target; });
                 if (convFriend && convFriend.remark) convName = convFriend.remark;
@@ -16791,23 +16881,8 @@
         openGroupPicker('invite', groupIdFromTarget(currentChatUser));
     });
 
-    // 上下线通知：更新好友在线状态
-    IMSocket.on(MSG.ONLINE, function (msg) {
-        var f = friendList.find(function (x) { return x.username === msg.from_user; });
-        if (f) {
-            f.online = (msg.content === 'online');
-            renderFriendList();
-            // 标题栏在线状态联动：当前打开的会话正是该好友时，同步刷新"在线/离线"显示
-            // 原实现：只更新好友列表，标题栏状态停留在打开会话时的旧值，出现"提示下线了但标题栏仍显示在线"
-            updateChatTitle();
-        }
-        // 阶段二十七：归属校验——上下线提示仅群聊视图显示全部成员，私聊视图仅显示会话对方，
-        // 原实现：无校验，任何人的上下线提示都渲染进当前打开的无关会话，切换会话后提示消失（串窗）
-        // 阶段一百四十二：多群泛化——全局群/多群会话视图均显示全部成员上下线
-        var grpConv = currentChatUser === '' || isGroupTarget(currentChatUser);
-        if (!grpConv && msg.from_user !== currentChatUser) return;
-        appendSystem(msg.from_user + (msg.content === 'online' ? I18N.t(' 上线了') : I18N.t(' 下线了')));
-    });
+    // 上下线通知处理器已删除：5号帧热点修复后服务端不再广播 5 号帧（并入 USER_LIST_DELTA
+    // 增量帧 1s 聚合广播），好友在线态与会话上下线提示统一由 USER_LIST_DELTA 处理器维护
 
     // 群聊/私聊消息
     IMSocket.on(MSG.GROUP_CHAT, function (msg) {
@@ -17154,6 +17229,13 @@
 
     function loadHistory() {
         historyTarget = currentChatUser;
+        // 全局群已废弃：空态（currentChatUser===''）不拉历史，展示空态提示
+        //（openConversation('') 仅作为"删除会话/被移出群聊"后的回落视图）
+        if (currentChatUser === '') {
+            messageList.classList.remove('conv-switching');
+            appendSystem(I18N.t('请选择一个会话开始聊天'));
+            return;
+        }
         var msg = { msg_type: MSG.HISTORY, page: 1, page_size: PAGE_SIZE };
         if (currentChatUser !== '') msg.to_user = currentChatUser;
         // 阶段七十一：AI 多会话恒传当前查看会话（服务端按消息盖戳 ai_session_id 过滤；
@@ -18055,16 +18137,8 @@
             });
         }
 
-        // 群聊分区：会话列表存在群聊会话（target 为空）且关键词与「群聊」匹配时展示
-        // 原实现：搜索面板仅展示聊天记录，无联系人/群聊分区
-        var hasGroupConv = convList.some(function (cv) { return cv.target === ''; });
-        if (hasGroupConv && I18N.t('群聊').indexOf(keyword) !== -1) {
-            var groupTitle = document.createElement('div');
-            groupTitle.className = 'search-title';
-            groupTitle.textContent = I18N.t('群聊');
-            searchPanel.appendChild(groupTitle);
-            searchPanel.appendChild(buildContactItem({ username: '', remark: I18N.t('群聊'), online: false }));
-        }
+        // 全局群已废弃：原"群聊"搜索分区（打开 target='' 全局群会话）随之移除——
+        // 多群会话在会话列表/通讯录可见，搜索面板不再暴露空会话入口
 
         // 聊天记录分区：回车/放大镜触发服务端搜索（MSG.SEARCH）后展示，未搜索时给出操作提示
         var msgTitle = document.createElement('div');
@@ -18164,7 +18238,9 @@
 
     // ===== 好友列表渲染 =====
     function renderFriendList() {
-        var html = '<li class="user-item group-item' + (currentChatUser === '' ? ' active' : '') + I18N.t('" data-user="">群聊') + '</li>';
+        // 全局群已废弃（服务端 to_user='' 全员广播路径移除）：原"群聊"入口项删除，
+        // 群聊统一走多人群会话（'gN'）条目
+        var html = '';
 
         // 阶段一百四十二：多群会话条目（按群 ID 升序，点击进入群会话；条目文本式，无头像/右键菜单）
         var gids = Object.keys(groupMap).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
@@ -19048,7 +19124,8 @@
 
     function updateChatTitle() {
         if (currentChatUser === '') {
-            chatTitle.textContent = I18N.t('群聊');
+            // 全局群已废弃：空态仅作为删除会话/被移出群聊后的回落视图
+            chatTitle.textContent = I18N.t('选择一个会话');
             chatStatus.textContent = '';
         } else if (isGroupTarget(currentChatUser)) {
             // 阶段一百四十二：多群会话标题（群名 + 成员数，服务端 73 归口；无数据降级"群聊"）

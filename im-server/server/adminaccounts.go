@@ -99,6 +99,15 @@ func (s *Server) handleAdminUserProfilePut(w http.ResponseWriter, r *http.Reques
 		adminFail(w, http.StatusInternalServerError, "账号资料修改失败")
 		return
 	}
+	if av, ok := updates["avatar"]; ok {
+		// 5万容量改造（E9）：后台改头像同步名单头像缓存并广播在线名单增量——
+		// 原实现后台改头像不触发任何名单刷新，其他用户侧头像停留旧值至该用户重登
+		//（E9 后全量快照仅登录者单发，头像变更必须走 93 增量帧才能实时到达各端）
+		avatarCache.Store(username, av)
+		if s.isOnlineFast(username) {
+			s.pushUserListOnline(UserInfo{Username: username, Avatar: av.(string)})
+		}
+	}
 	// 昵称缓存失效（群聊帧/历史帧下发用），下次读取回源取新昵称
 	// 集群模式：总线广播失效其他实例的昵称缓存（无 TTL 进程缓存，跨实例必须显式失效）
 	s.invalidateNickname(username)

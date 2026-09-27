@@ -20,12 +20,13 @@ import (
 // groupTargetPrefix 群会话目标前缀
 const groupTargetPrefix = "g"
 
-// resolveGroupUploadScope 阶段一百四十二：群图片/文件上传的群作用域解析——
-// group 参数为空=全局群（原行为完全不变）；非空=多群聊（校验群存在 + 上传者是成员）。
+// resolveGroupUploadScope 群图片/文件上传的群作用域解析——
+// group 参数为空=全局群（已废弃，拒绝）；非空=多群聊（校验群存在 + 上传者是成员）。
 // 返回（是否多群, 错误信息）
 func resolveGroupUploadScope(groupParam, username string) (bool, string) {
 	if groupParam == "" {
-		return false, ""
+		// 容量优化 E8 前置：全局群路径废弃，媒体消息（图片/文件/网盘转存）同样不再支持空群参数
+		return false, "全局群聊已废弃，请在群聊中发送"
 	}
 	groupID, ok := isGroupTarget(groupParam)
 	if !ok {
@@ -59,8 +60,9 @@ func (s *Server) broadcastGroupMediaNotice(notice *protocol.Message, summary str
 	}
 	s.queueOfflineBatch(offlineMembers, notice)
 
-	// 在线成员会话摘要批量更新 + 会话列表去抖推送（离线成员登录时按 to_user 拉取群历史，摘要行入群时已创建）
-	s.touchConversationBatch(onlineMembers, notice.ToUser, summary)
+	// 在线成员会话摘要标脏去抖（E8：不落库不阻塞，50ms 窗口合并多 worker 批写；带消息 ID 供删除水位）+
+	// 会话列表去抖推送（离线成员登录时按 to_user 拉取群历史，摘要行入群时已创建）
+	s.touchConversationMarkDirtyBatch(onlineMembers, notice.ToUser, summary, notice.MsgID)
 	s.notifyConvUpdateBatch(onlineMembers)
 }
 
@@ -707,7 +709,9 @@ func (s *Server) handleGroupKick(c *Client, msg *protocol.Message) {
 	invalidateGroupMembersCache(p.GroupID) // E6：成员被移出，名单即时失效（本实例 + 集群）
 	// 被踢者会话行删除（target=gN）
 	target := groupTargetOf(p.GroupID)
-	touchDiscard(p.Member, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
+	// E8：带删除水位丢弃——群消息 persistMessage 已回填消息 ID，水位拦截乱序写入
+	//（摘要标脏晚于本删除帧到达时，靠水位拦截删除前历史摘要写回，防删行后被 flush 复活）
+	touchDiscardWatermarked(p.Member, target, convMaxMsgID(p.Member, target))
 	store.DB.Where("user_id = ? AND target = ?", p.Member, target).Delete(&model.Conversation{})
 	logger.Info("移出群成员：群 %d「%s」%s 被 %s 移出", p.GroupID, group.Name, p.Member, c.username)
 
@@ -750,7 +754,8 @@ func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 	}
 	invalidateGroupMembersCache(p.GroupID) // E6：退群，名单即时失效（本实例 + 集群）
 	target := groupTargetOf(p.GroupID)
-	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
+	// E8：带删除水位丢弃（与被踢同语义：水位拦截窗口内乱序摘要写回）
+	touchDiscardWatermarked(c.username, target, convMaxMsgID(c.username, target))
 	store.DB.Where("user_id = ? AND target = ?", c.username, target).Delete(&model.Conversation{})
 	logger.Info("退出群聊：群 %d「%s」成员 %s 退群", p.GroupID, group.Name, c.username)
 
@@ -796,8 +801,9 @@ func (s *Server) handleMultiGroupChat(c *Client, msg *protocol.Message, groupID 
 
 	// 在线成员会话摘要更新并推送；离线成员入离线队列（按成员过滤，优于全局群全表扫描）
 	// 并发改造 A4：在线判定改全局判定（isOnlineFast，跨实例连接仍判在线，投递经总线跨实例送达）
-	// 并发改造 A3 补全：多群会话批量写——原逐成员 touch 每条消息 2 次 DB/成员，
-	// 千人群每条消息 2000 次写，现归口 touchConversationBatch（与全局群同路径）
+	// 并发优化 E8：多群会话摘要标脏去抖——原 A3 同步批写在发送者 readPump 内联等待
+	//（千人群每条消息 ~40ms），现逐成员标脏（同 key 50ms 窗口合并），flush 多 worker 批写，
+	// 热路径零 DB 操作；带消息 ID 供被踢/退群/清空/删会话的删除水位拦截
 	// 集群批量归口：会话去抖推送一条信封覆盖全部在线成员（原逐成员 N 次 PUBLISH → 1 次）、
 	// 离线成员 pipeline 一次往返批量入队
 	summary := messageSummary(msg.Content)
@@ -811,7 +817,7 @@ func (s *Server) handleMultiGroupChat(c *Client, msg *protocol.Message, groupID 
 			offlineMembers = append(offlineMembers, name)
 		}
 	}
-	s.touchConversationBatch(onlineMembers, target, summary)
+	s.touchConversationMarkDirtyBatch(onlineMembers, target, summary, record.ID)
 	s.notifyConvUpdateBatch(onlineMembers)
 	s.queueOfflineBatch(offlineMembers, msg)
 }

@@ -11,7 +11,6 @@ import (
 
 	"im-server/config"
 	"im-server/logger"
-	"im-server/protocol"
 	"im-server/store"
 )
 
@@ -219,8 +218,6 @@ func (b *clusterBus) consume(s *Server) {
 			switch env.InvKind {
 			case invBlacklist:
 				blacklistInvalidate()
-			case invUsers:
-				usersCacheInvalidate()
 			case invNick:
 				// 昵称缓存失效：改昵称方实例已本地失效，其他实例按 Targets 携带的用户名失效
 				//（nickCache 无 TTL，不失效则其他实例群聊帧/历史帧永远携带旧昵称）
@@ -242,29 +239,32 @@ func (b *clusterBus) consume(s *Server) {
 				}
 			}
 		case busKindPresence:
-			// 在场抢注：本实例仍有该用户连接则重新写入全局在线名单（多端跨实例下线竞态自愈），
-			// 并补发 online 纠偏帧（offline 广播已先行到达各实例客户端，纠正跨实例多端的误下线展示）
+			// 在场抢注：本实例仍有该用户连接则重新写入全局在线名单（多端跨实例下线竞态自愈）。
+			// 5号帧热点修复：online 纠偏不再单独广播 5 号帧（原每事件 O(N)），与 93 名单增量
+			// 纠偏合并为一帧（93 帧经 Broadcast 本地+总线送达，好友在线态由前端增量处理器维护），
+			// offline 广播已先行到达各实例客户端，纠正跨实例多端的误下线展示
 			if len(env.Targets) > 0 && s.hub.Count(env.Targets[0]) > 0 {
 				store.RDB.HSet(ctx, KeyUserList, env.Targets[0], strconv.FormatInt(time.Now().Unix(), 10))
 				invalidateGlobalListCache()
-				onlineMsg := protocol.Message{
-					MsgType:   protocol.MsgTypeOnline,
-					FromUser:  env.Targets[0],
-					Content:   "online",
-					Timestamp: time.Now().Unix(),
+				// 5万容量改造（E9）：补发名单增量 online 纠偏——93 增量帧 offline 已先行删除
+				// 各端 onlineUsers 条目，非好友在线名单表需一并恢复（E9 前另有 5 号帧恢复好友在线态，
+				// 现好友在线态同样由本帧恢复）
+				name := env.Targets[0]
+				av, _ := avatarCache.Load(name)
+				avatar, _ := av.(string)
+				if avatar == "" {
+					avatar = avatarsByNames([]string{name})[name]
 				}
-				if data, err := json.Marshal(onlineMsg); err == nil {
-					s.hub.BroadcastExcept(env.Targets[0], data) // 本地 + 总线（与登录上线通知同口径，本人除外）
-				}
+				s.pushUserListOnline(UserInfo{Username: name, Avatar: avatar})
 			}
 		}
 	}
 }
 
 // invalidate kinds（进程内缓存跨实例失效类别）
+// 全局群废弃：invUsers（注册名单缓存失效事件）已随 usersCache 删除
 const (
 	invBlacklist    = "blacklist"
-	invUsers        = "users"
 	invNick         = "nick"
 	invAgents       = "agents"
 	invGroupMembers = "group_members"
@@ -369,40 +369,4 @@ func startUserListCleanup() {
 			cleanupUserListStale()
 		}
 	}()
-}
-
-// ===== 注册用户名单缓存（并发改造 C2：全局群离线入队免全表 Pluck）=====
-// 内存缓存全注册用户名单（5 分钟 TTL），注册/注销成功时主动失效 + 集群失效事件广播。
-// 全局群每条消息原实现全表 Pluck（万人 = 万人名单/条），缓存后零 DB 查询。
-var (
-	usersCacheMu    sync.RWMutex
-	usersCacheNames []string
-	usersCacheAt    time.Time
-)
-
-const usersCacheTTL = 5 * time.Minute
-
-// registeredUsernames 取全注册用户名单（缓存命中返回 nil 表示无数据需回源）
-func registeredUsernames() []string {
-	usersCacheMu.RLock()
-	defer usersCacheMu.RUnlock()
-	if usersCacheNames != nil && time.Since(usersCacheAt) < usersCacheTTL {
-		return usersCacheNames
-	}
-	return nil
-}
-
-// usersCacheStore 回源后写缓存
-func usersCacheStore(names []string) {
-	usersCacheMu.Lock()
-	usersCacheNames = names
-	usersCacheAt = time.Now()
-	usersCacheMu.Unlock()
-}
-
-// usersCacheInvalidate 名单缓存失效（注册/注销/管理端删号后调用；集群模式同步广播）
-func usersCacheInvalidate() {
-	usersCacheMu.Lock()
-	usersCacheNames = nil
-	usersCacheMu.Unlock()
 }

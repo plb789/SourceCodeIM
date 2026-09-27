@@ -135,7 +135,9 @@
         RED_PACKET_DETAIL: 89,   // 双向：上行详情查询 {packet_id}；下行领取明细列表（打开红包页/详情页共用数据源）
         REMOTE_SIGNAL: 90,       // 阶段一百五十五：QQ 同款远程协助信令（双向，content 为 JSON：{action,session_id,mode?,grant?,sdp?,candidate?,reason?}；好友强校验，话单由服务端归口落库）
         FILE_P2P_SIGNAL: 91,     // 阶段一百五十六：好友文件 P2P 直传信令（双向，content 为 JSON：{action,transfer_id,name?,size?,mime?,sha256?,reason?,sdp?,candidate?,platform?,nonce?}；服务端仅转发信令+归口判定，文件字节点对点直传）
-        DRIVE_SHARE: 92          // 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}；点击弹详情保存/下载）
+        DRIVE_SHARE: 92,         // 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}；点击弹详情保存/下载）
+        USER_LIST_DELTA: 93,     // 5万容量改造：在线名单增量同步（下行 content 为 JSON：{online:[{username,avatar}],offline:["u1"]}；全量快照仅登录者单发，此后上下线/头像变更走本帧 1s 窗口聚合广播）
+        LOGIN_QUEUE: 94          // 阶段一百六十一：登录排队位置推送（下行 content 为 JSON：{position 当前第 N 位, wait 预计等待秒}；排到队首后正常收 LOGIN_RESP，排队遮罩由 chat.js 渲染）
     };
 
     function connect(username, password) {

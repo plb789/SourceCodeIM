@@ -460,27 +460,11 @@ func (s *Server) HandleGroupImageUpload(w http.ResponseWriter, r *http.Request) 
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
 	}
-	// 阶段一百四十二：多群聊按成员定向广播（含离线入队与会话摘要）；原实现：hub.Broadcast 全员广播
-	if toUser != "" {
-		s.broadcastGroupMediaNotice(notice, "[图片]")
+	// 多群聊按成员定向广播（含离线入队与会话摘要）；全局群已废弃（入口 resolveGroupUploadScope
+	// 已拒绝空 group 参数，toUser 恒为 'gN'）
+	s.broadcastGroupMediaNotice(notice, "[图片]")
 
-		logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
-		return
-	}
-	data, _ := json.Marshal(notice)
-	s.hub.Broadcast(data)
-
-	// 群聊离线消息：给所有离线的注册用户入队（与群聊文字消息行为一致）
-	// 集群化归口：离线判定全局化 + 注册名单缓存 + pipeline 批量入队（fanoutGlobalGroupOffline）
-	s.fanoutGlobalGroupOffline(notice, username)
-
-	// 更新所有在线用户的群聊会话摘要为 [图片] 并推送（离线用户登录时 ensureGroupConv 兜底存在）
-	// 集群化归口：全局在线名单批量写 + 总线一条会话刷新信封（fanoutGlobalGroupConv）
-	s.fanoutGlobalGroupConv("[图片]")
-
-	logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
+	logger.Info("群聊图片消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
@@ -598,27 +582,11 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
 	}
-	// 阶段一百四十二：多群聊按成员定向广播（含离线入队与会话摘要）；原实现：hub.Broadcast 全员广播
-	if toUser != "" {
-		s.broadcastGroupMediaNotice(notice, "[文件]")
+	// 多群聊按成员定向广播（含离线入队与会话摘要）；全局群已废弃（入口 resolveGroupUploadScope
+	// 已拒绝空 group 参数，toUser 恒为 'gN'）
+	s.broadcastGroupMediaNotice(notice, "[文件]")
 
-		logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
-		return
-	}
-	data, _ := json.Marshal(notice)
-	s.hub.Broadcast(data)
-
-	// 群聊离线消息：给所有离线的注册用户入队（与群聊图片行为一致）
-	// 集群化归口：离线判定全局化 + 注册名单缓存 + pipeline 批量入队（fanoutGlobalGroupOffline）
-	s.fanoutGlobalGroupOffline(notice, username)
-
-	// 更新所有在线用户的群聊会话摘要为 [文件] 并推送
-	// 集群化归口：全局在线名单批量写 + 总线一条会话刷新信封（fanoutGlobalGroupConv）
-	s.fanoutGlobalGroupConv("[文件]")
-
-	logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 消息%d, url=%s", username, header.Filename, header.Size, record.ID, url)
+	logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
