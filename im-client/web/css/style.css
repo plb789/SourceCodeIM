@@ -239,6 +239,47 @@ html, body {
     color: var(--text-light);
 }
 
+/* ===== 阶段一百六十一：未选中会话空态（微信 PC 同款）=====
+   整个聊天区显示居中 logo + 应用名，覆盖顶栏/消息区/输入框；
+   背景沿用聊天区底色，logo/文字走主题变量跟随主题色变化。
+   logo 为微信同款"透明灰、轻微可见"：取主题灰阶 text-light 加低透明度，深浅主题下均为淡灰轮廓。
+   z-index 500：盖过聊天区内普通流与无 z-index 浮层，低于列表折叠按钮（1601）与全局弹窗（3300+） */
+.chat-empty-state {
+    position: absolute;
+    inset: 0;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: var(--chat-bg);
+    user-select: none;
+}
+
+.chat-empty-state.hidden {
+    display: none;
+}
+
+.chat-empty-logo {
+    width: 112px;
+    height: 112px;
+    color: var(--text-light);
+    opacity: 0.06;
+}
+
+.chat-empty-logo svg {
+    width: 100%;
+    height: 100%;
+}
+
+.chat-empty-name {
+    font-size: 16px;
+    letter-spacing: 2px;
+    color: var(--text-light);
+    opacity: 0.2;
+}
+
 /* 登录卡片：左右分栏容器 */
 .login-card {
     position: relative;

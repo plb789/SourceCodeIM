@@ -99,6 +99,9 @@
     var userListEl = document.getElementById('user-list');
     var chatTitle = document.getElementById('chat-title');
     var chatStatus = document.getElementById('chat-status');
+    // 阶段一百六十一：未选中会话空态（微信 PC 同款居中 logo+应用名，覆盖整个聊天区，显隐归口 updateChatTitle）
+    var chatEmptyState = document.getElementById('chat-empty-state');
+    var chatEmptyName = document.getElementById('chat-empty-name');
     var messageList = document.getElementById('message-list');
     var messageInput = document.getElementById('message-input');
     var sendBtn = document.getElementById('send-btn');
@@ -19123,10 +19126,17 @@
     }
 
     function updateChatTitle() {
+        // 阶段一百六十一：空态层默认隐藏（其余分支均为已选中会话），空态分支单独显示
+        if (chatEmptyState) chatEmptyState.classList.add('hidden');
         if (currentChatUser === '') {
             // 全局群已废弃：空态仅作为删除会话/被移出群聊后的回落视图
             chatTitle.textContent = I18N.t('选择一个会话');
             chatStatus.textContent = '';
+            // 微信 PC 同款：未选中会话时整个聊天区显示居中 logo + 应用名（隐藏顶栏/消息区/输入框的观感）
+            if (chatEmptyState) {
+                chatEmptyName.textContent = I18N.t('即时通讯');
+                chatEmptyState.classList.remove('hidden');
+            }
         } else if (isGroupTarget(currentChatUser)) {
             // 阶段一百四十二：多群会话标题（群名 + 成员数，服务端 73 归口；无数据降级"群聊"）
             // 阶段一百四十三：标题可点击进入群设置面板（微信同款点群名进设置）
