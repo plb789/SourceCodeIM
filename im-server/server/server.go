@@ -804,8 +804,10 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	// 阶段四十：引用消息 content 为信封 JSON，会话摘要归口解析出回复正文（原实现：summary := msg.Content 直存 JSON 原串）
 	// 并发优化 E7：私聊摘要去抖合并（50ms 窗口批量落库，消除每消息 4 次会话表写）
 	summary := messageSummary(msg.Content)
-	s.touchConversationDebounced(c.username, msg.ToUser, summary)
-	s.touchConversationDebounced(msg.ToUser, c.username, summary)
+	// 摘要携带消息 ID：删除水位（竞态修复）判定依据——persistMessage 等批写回填期间
+	// 删除帧可能先到，靠水位拦截删除前历史摘要写回复活
+	s.touchConversationDebounced(c.username, msg.ToUser, summary, record.ID)
+	s.touchConversationDebounced(msg.ToUser, c.username, summary, record.ID)
 	s.notifyConvUpdate(c.username)
 	s.notifyConvUpdate(msg.ToUser)
 }

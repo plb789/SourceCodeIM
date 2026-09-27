@@ -38,32 +38,68 @@ const touchFlushDelay = 50 * time.Millisecond
 
 type touchDirtyEntry struct {
 	user, target, lastMsg string
+	msgID                 uint // 摘要归属消息 ID（删除水位判定依据；0=无 ID 仅等锁兜底）
 }
 
 var (
 	touchMu    sync.Mutex
 	touchDirty = make(map[string]touchDirtyEntry) // key: user\x00target
 	touchTimer *time.Timer
+	// touchFlushMu flush 落库段互斥（竞态修复一）：flush 换批后条目脱离 touchMu 保护，
+	// touchDiscard 删不到已换出的 batch——flush 落库全程持锁，touchDiscard 删脏集后等锁，
+	// discard 后续的删行/清空写必然晚于在途 flush 的写。两把锁从不嵌套持有，无死锁
+	touchFlushMu sync.Mutex
+	// touchConvWatermark 删除水位（竞态修复二）：实测发现摘要写脏集发生在 persistMessage
+	// （阻塞等 E1 批写回填 ~20ms）之后，删会话帧可能先于摘要写入到达——discard 删了个寂寞，
+	// 摘要随后入集被 flush 复活（等锁也拦不住，写入发生在 discard 之后）。
+	// 删会话/清空时记录该会话当前最大消息 ID，摘要写脏集时 MsgID ≤ 水位者属删除前历史，
+	// 直接丢弃；新消息 MsgID > 水位正常写入（并清水位）。key 残留仅在"删除后永不再聊"时
+	// 存在（每 key 几十字节、删除低频，量级无害；再次删除覆盖）
+	touchConvWatermark = make(map[string]uint)
 )
 
-// touchConversationDebounced 热路径会话摘要（私聊双向调用；去抖合并）
-func (s *Server) touchConversationDebounced(userID, target, lastMsg string) {
+// touchConversationDebounced 热路径会话摘要（私聊双向调用；去抖合并；msgID=该消息 ID）
+func (s *Server) touchConversationDebounced(userID, target, lastMsg string, msgID uint) {
 	if runes := []rune(lastMsg); len(runes) > 200 {
 		lastMsg = string(runes[:200])
 	}
 	touchMu.Lock()
-	touchDirty[userID+"\x00"+target] = touchDirtyEntry{userID, target, lastMsg}
+	// 删除水位拦截：MsgID ≤ 水位说明该消息属已删除/已清空会话的历史，摘要不得写回
+	if wm, ok := touchConvWatermark[userID+"\x00"+target]; ok && msgID > 0 {
+		if msgID <= wm {
+			touchMu.Unlock()
+			return
+		}
+		delete(touchConvWatermark, userID+"\x00"+target) // 新消息越过水位，恢复正常
+	}
+	touchDirty[userID+"\x00"+target] = touchDirtyEntry{userID, target, lastMsg, msgID}
 	if touchTimer == nil {
 		touchTimer = time.AfterFunc(touchFlushDelay, func() { s.flushTouchDirty() })
 	}
 	touchMu.Unlock()
 }
 
-// touchDiscard 会话行删除/摘要清写前丢弃待落库摘要（防 flush 复活旧摘要/已删行）
+// touchDiscard 会话行删除/摘要清写前丢弃待落库摘要（防 flush 复活旧摘要/已删行）。
+// 兜底一（等锁）：该条目可能已被换出 batch 正在落库——调用方随后的删行/清空写
+// 因此必然晚于 flush 的写。群聊被踢/退群与永久删除路径使用（无水位参数场景）
 func touchDiscard(userID, target string) {
 	touchMu.Lock()
 	delete(touchDirty, userID+"\x00"+target)
 	touchMu.Unlock()
+	touchFlushMu.Lock()
+	touchFlushMu.Unlock()
+}
+
+// touchDiscardWatermarked 带删除水位的会话丢弃归口（私聊删会话/清空使用）：
+// 水位拦截乱序写入（修复二）+ 删脏集 + 等在途 flush（修复一）双防线全闭合。
+// maxMsgID=该会话当前最大消息 ID（调用方聚合查询），之后 MsgID ≤ 它的摘要一律丢弃
+func touchDiscardWatermarked(userID, target string, maxMsgID uint) {
+	touchMu.Lock()
+	touchConvWatermark[userID+"\x00"+target] = maxMsgID
+	delete(touchDirty, userID+"\x00"+target)
+	touchMu.Unlock()
+	touchFlushMu.Lock()
+	touchFlushMu.Unlock()
 }
 
 // flushTouchDirty 脏摘要批量落库（单 timer 归口；500/批 ON DUPLICATE，失败回退逐条直写）
@@ -81,6 +117,10 @@ func (s *Server) flushTouchDirty() {
 	for _, e := range batch {
 		rows = append(rows, model.Conversation{UserID: e.user, Target: e.target, LastMsg: e.lastMsg, LastTime: now})
 	}
+	// 竞态修复：落库段全程持 touchFlushMu，touchDiscard 据此等待在途落库完成
+	// （换批已在 touchMu 内完成，此处 batch 固定，持锁时间=批量写耗时，毫秒级）
+	touchFlushMu.Lock()
+	defer touchFlushMu.Unlock()
 	const step = 500
 	for i := 0; i < len(rows); i += step {
 		end := i + step
@@ -352,6 +392,13 @@ func convMessageQuery(userID, target string) *gorm.DB {
 		[]int{2, 86}, userID, target, target, userID)
 }
 
+// convMaxMsgID 会话当前最大消息 ID（删除水位来源；COALESCE 兜底空会话返回 0）
+func convMaxMsgID(userID, target string) uint {
+	var maxID uint
+	convMessageQuery(userID, target).Select("COALESCE(MAX(id),0)").Scan(&maxID)
+	return maxID
+}
+
 // markConvRead 清空指定私聊会话未读：对方发给我的未读消息标记为已读，并同步提升已读回执水位
 // 水位前进时转发回执给对方全部在线连接（多端同步），供发送方实时显示"已读"
 // 原实现：仅更新 is_read 不同步水位，会话删除重建后水位从 0 开始，旧消息回执会重复写库+转发
@@ -457,7 +504,9 @@ func (s *Server) handleConvClear(c *Client, msg *protocol.Message) {
 	}
 
 	// 清空会话摘要（保留会话行，云端记录不受影响）
-	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防清空后 flush 写回旧摘要
+	// 竞态修复：带删除水位丢弃——摘要写脏集晚于本清空帧到达（persistMessage 等批写回填）
+	// 时，靠水位拦截删除前历史摘要写回
+	touchDiscardWatermarked(c.username, target, convMaxMsgID(c.username, target))
 	store.DB.Model(&model.Conversation{}).
 		Where("user_id = ? AND target = ?", c.username, target).
 		Update("last_msg", "")
@@ -482,7 +531,9 @@ func (s *Server) handleConvDelete(c *Client, msg *protocol.Message) {
 	target := strings.TrimSpace(msg.ToUser) // 群聊为空
 
 	// 删除会话记录
-	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
+	// 竞态修复：带删除水位丢弃——摘要写脏集晚于本删除帧到达（persistMessage 等批写回填）时，
+	// 原"删脏集+等 flush"拦不住（写入发生在 discard 之后），靠水位拦截删除前历史摘要复活
+	touchDiscardWatermarked(c.username, target, convMaxMsgID(c.username, target))
 	store.DB.Where("user_id = ? AND target = ?", c.username, target).Delete(&model.Conversation{})
 
 	// 未读清零：对方发给我的未读消息标记为已读，并同步提升回执水位转发对方
