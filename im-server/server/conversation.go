@@ -25,6 +25,81 @@ type ConvInfo struct {
 	Pinned   bool   `json:"pinned"`    // 是否置顶
 }
 
+// ===== 并发优化 E7：私聊会话摘要去抖合并落库 =====
+// 写放大背景：私聊每条消息双向 touch 各 SELECT+UPDATE 共 4 次 DB 操作，5000 消息/s 时
+// 会话表写操作 2 万次/s，超过消息本体 INSERT（E1 已批量）成为单主写入最大头。
+// 机制：热路径摘要先进脏集合（同会话 50ms 窗口内只保留最后一条），单 timer 到期一次
+// INSERT ... ON DUPLICATE KEY UPDATE 批量落库（同 A3 已验证的 SQL 路径）。
+// 语义影响：窗口内 pushConvList 读库可能读到上一条摘要（滞后 ≤50ms，角标走未读计数不受影响）；
+// 进程崩溃丢 ≤50ms 摘要（下次消息自动刷新，与 E1 批写风险同级）。
+// 会话删除/清空/摘要清写路径必须先 touchDiscard（防窗口内 flush 把旧摘要写回/删行复活）。
+
+const touchFlushDelay = 50 * time.Millisecond
+
+type touchDirtyEntry struct {
+	user, target, lastMsg string
+}
+
+var (
+	touchMu    sync.Mutex
+	touchDirty = make(map[string]touchDirtyEntry) // key: user\x00target
+	touchTimer *time.Timer
+)
+
+// touchConversationDebounced 热路径会话摘要（私聊双向调用；去抖合并）
+func (s *Server) touchConversationDebounced(userID, target, lastMsg string) {
+	if runes := []rune(lastMsg); len(runes) > 200 {
+		lastMsg = string(runes[:200])
+	}
+	touchMu.Lock()
+	touchDirty[userID+"\x00"+target] = touchDirtyEntry{userID, target, lastMsg}
+	if touchTimer == nil {
+		touchTimer = time.AfterFunc(touchFlushDelay, func() { s.flushTouchDirty() })
+	}
+	touchMu.Unlock()
+}
+
+// touchDiscard 会话行删除/摘要清写前丢弃待落库摘要（防 flush 复活旧摘要/已删行）
+func touchDiscard(userID, target string) {
+	touchMu.Lock()
+	delete(touchDirty, userID+"\x00"+target)
+	touchMu.Unlock()
+}
+
+// flushTouchDirty 脏摘要批量落库（单 timer 归口；500/批 ON DUPLICATE，失败回退逐条直写）
+func (s *Server) flushTouchDirty() {
+	touchMu.Lock()
+	batch := touchDirty
+	touchDirty = make(map[string]touchDirtyEntry)
+	touchTimer = nil
+	touchMu.Unlock()
+	if len(batch) == 0 {
+		return
+	}
+	now := time.Now()
+	rows := make([]model.Conversation, 0, len(batch))
+	for _, e := range batch {
+		rows = append(rows, model.Conversation{UserID: e.user, Target: e.target, LastMsg: e.lastMsg, LastTime: now})
+	}
+	const step = 500
+	for i := 0; i < len(rows); i += step {
+		end := i + step
+		if end > len(rows) {
+			end = len(rows)
+		}
+		part := rows[i:end]
+		if err := store.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}, {Name: "target"}},
+			DoUpdates: clause.AssignmentColumns([]string{"last_msg", "last_time"}),
+		}).Create(&part).Error; err != nil {
+			logger.Error("会话摘要批量落库失败：%v", err)
+			for _, r := range part { // 回退直写保证摘要不丢
+				s.touchConversation(r.UserID, r.Target, r.LastMsg)
+			}
+		}
+	}
+}
+
 // touchConversation 刷新会话（存在则更新最后消息，不存在则创建）
 func (s *Server) touchConversation(userID, target, lastMsg string) {
 	// 阶段六十六修复：摘要截断按字符截取——原实现 lastMsg[:200] 按字节截断，中文多字节字符
@@ -382,6 +457,7 @@ func (s *Server) handleConvClear(c *Client, msg *protocol.Message) {
 	}
 
 	// 清空会话摘要（保留会话行，云端记录不受影响）
+	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防清空后 flush 写回旧摘要
 	store.DB.Model(&model.Conversation{}).
 		Where("user_id = ? AND target = ?", c.username, target).
 		Update("last_msg", "")
@@ -406,6 +482,7 @@ func (s *Server) handleConvDelete(c *Client, msg *protocol.Message) {
 	target := strings.TrimSpace(msg.ToUser) // 群聊为空
 
 	// 删除会话记录
+	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
 	store.DB.Where("user_id = ? AND target = ?", c.username, target).Delete(&model.Conversation{})
 
 	// 未读清零：对方发给我的未读消息标记为已读，并同步提升回执水位转发对方

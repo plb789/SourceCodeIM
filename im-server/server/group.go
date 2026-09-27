@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"im-server/logger"
@@ -99,11 +100,49 @@ func isGroupMember(groupID uint, username string) bool {
 	return count > 0
 }
 
-// getGroupMemberIDs 查询群全部成员用户名（一期直查，复合唯一索引足够快；预留下一步 Redis 缓存位）
+// groupMembersCache 群成员名单进程内缓存（并发优化 E6）：群消息 fanout/撤回/红包/会议/网盘
+// 共 14 个读点每条消息都要成员名单，千人群每条消息一次成员表 Pluck。进程内命中零 RTT，
+// 优于 Redis 直存（每消息一次网络往返）；TTL 5min 兜底 + 变更即失效（本实例 + 集群事件），
+// 成员变更后其他实例的名单经 invGroupMembers 广播即时失效，正确性与直查一致
+type groupMembersEntry struct {
+	ids    []string
+	expire time.Time
+}
+
+var groupMembersCache sync.Map // groupID(uint) → *groupMembersEntry
+
+const groupMembersTTL = 5 * time.Minute
+
+// getGroupMemberIDs 查询群全部成员用户名（E6 缓存归口；返回副本——调用方可能就地 append，
+// 共享底层切片会污染缓存）
 func getGroupMemberIDs(groupID uint) []string {
+	if v, ok := groupMembersCache.Load(groupID); ok {
+		e := v.(*groupMembersEntry)
+		if time.Now().Before(e.expire) {
+			out := make([]string, len(e.ids))
+			copy(out, e.ids)
+			return out
+		}
+	}
 	var ids []string
 	store.DB.Model(&model.GroupMember{}).Where("group_id = ?", groupID).Order("role asc, id asc").Pluck("user_id", &ids)
-	return ids
+	groupMembersCache.Store(groupID, &groupMembersEntry{ids: ids, expire: time.Now().Add(groupMembersTTL)})
+	out := make([]string, len(ids))
+	copy(out, ids)
+	return out
+}
+
+// invalidateGroupMembersCache 群成员名单失效归口（成员表任何写操作后调用）：
+// 本实例立即失效 + 集群模式广播 invGroupMembers（各实例删除同 key），跨实例名单即时一致
+func invalidateGroupMembersCache(groupID uint) {
+	groupMembersCache.Delete(groupID)
+	if s := defaultServer(); s != nil && s.hub.bus != nil {
+		s.hub.bus.publish(&busEnvelope{
+			Kind:    busKindInvalidate,
+			InvKind: invGroupMembers,
+			Targets: []string{strconv.FormatUint(uint64(groupID), 10)},
+		})
+	}
 }
 
 // groupMemberCount 群成员数
@@ -300,6 +339,7 @@ func (s *Server) handleGroupCreate(c *Client, msg *protocol.Message) {
 		return
 	}
 	logger.Info("建群成功：群 %d「%s」群主 %s 成员 %v", group.ID, name, c.username, members)
+	invalidateGroupMembersCache(group.ID) // E6：新群名单入缓存前先清（幂等防握手期脏读）
 
 	// 逐成员建会话行（target=gN）并推送 73 群列表
 	target := groupTargetOf(group.ID)
@@ -480,6 +520,7 @@ func (s *Server) handleGroupInviteResp(c *Client, msg *protocol.Message) {
 			s.sendError(c, "加入群聊失败，请稍后重试")
 			return
 		}
+		invalidateGroupMembersCache(group.ID) // E6：新成员入群，名单即时失效（本实例 + 集群）
 	}
 
 	// 新成员会话行 + 全群推 73（群列表归口刷新）+ 77 join 通知（同时作为邀请人同意回执）
@@ -663,8 +704,10 @@ func (s *Server) handleGroupKick(c *Client, msg *protocol.Message) {
 		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "该用户不是群成员")
 		return
 	}
+	invalidateGroupMembersCache(p.GroupID) // E6：成员被移出，名单即时失效（本实例 + 集群）
 	// 被踢者会话行删除（target=gN）
 	target := groupTargetOf(p.GroupID)
+	touchDiscard(p.Member, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
 	store.DB.Where("user_id = ? AND target = ?", p.Member, target).Delete(&model.Conversation{})
 	logger.Info("移出群成员：群 %d「%s」%s 被 %s 移出", p.GroupID, group.Name, p.Member, c.username)
 
@@ -705,7 +748,9 @@ func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 		s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, false, "你不是群成员")
 		return
 	}
+	invalidateGroupMembersCache(p.GroupID) // E6：退群，名单即时失效（本实例 + 集群）
 	target := groupTargetOf(p.GroupID)
+	touchDiscard(c.username, target) // E7：丢弃窗口内待落库摘要，防删行后被 flush 复活
 	store.DB.Where("user_id = ? AND target = ?", c.username, target).Delete(&model.Conversation{})
 	logger.Info("退出群聊：群 %d「%s」成员 %s 退群", p.GroupID, group.Name, c.username)
 

@@ -802,9 +802,10 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 
 	// 更新双方最近会话并推送
 	// 阶段四十：引用消息 content 为信封 JSON，会话摘要归口解析出回复正文（原实现：summary := msg.Content 直存 JSON 原串）
+	// 并发优化 E7：私聊摘要去抖合并（50ms 窗口批量落库，消除每消息 4 次会话表写）
 	summary := messageSummary(msg.Content)
-	s.touchConversation(c.username, msg.ToUser, summary)
-	s.touchConversation(msg.ToUser, c.username, summary)
+	s.touchConversationDebounced(c.username, msg.ToUser, summary)
+	s.touchConversationDebounced(msg.ToUser, c.username, summary)
 	s.notifyConvUpdate(c.username)
 	s.notifyConvUpdate(msg.ToUser)
 }

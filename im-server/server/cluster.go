@@ -232,6 +232,14 @@ func (b *clusterBus) consume(s *Server) {
 				//（BroadcastUser 为逐用户生成内容，无法随单一总线信封携带）
 				reloadAIAgents()
 				s.aiChangeBroadcastLocal()
+			case invGroupMembers:
+				// 群成员名单失效（E6）：变更方实例已本地失效，其他实例按 Targets 携带的群ID删除，
+				// 下次读取回源 DB——跨实例成员变更后 fanout 名单即时一致
+				if len(env.Targets) > 0 {
+					if gid, err := strconv.ParseUint(env.Targets[0], 10, 64); err == nil && gid > 0 {
+						groupMembersCache.Delete(uint(gid))
+					}
+				}
 			}
 		case busKindPresence:
 			// 在场抢注：本实例仍有该用户连接则重新写入全局在线名单（多端跨实例下线竞态自愈），
@@ -255,10 +263,11 @@ func (b *clusterBus) consume(s *Server) {
 
 // invalidate kinds（进程内缓存跨实例失效类别）
 const (
-	invBlacklist = "blacklist"
-	invUsers     = "users"
-	invNick      = "nick"
-	invAgents    = "agents"
+	invBlacklist    = "blacklist"
+	invUsers        = "users"
+	invNick         = "nick"
+	invAgents       = "agents"
+	invGroupMembers = "group_members"
 )
 
 // invalidateNickname 昵称缓存失效归口（本人改资料/后台改账号资料共用）：

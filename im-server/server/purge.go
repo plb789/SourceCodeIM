@@ -140,6 +140,7 @@ func (s *Server) purgeConvTails(a, b string) {
 			store.DB.Delete(&model.MessagePin{}, pin.ID)
 			s.syncPinByKey(pin.ConvKey)
 		}
+		touchDiscard(u, other) // E7：摘要清写前丢弃窗口内待落库摘要
 		store.DB.Model(&model.Conversation{}).Where("user_id = ? AND target = ?", u, other).Update("last_msg", "")
 	}
 }
