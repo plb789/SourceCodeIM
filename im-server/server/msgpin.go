@@ -68,6 +68,15 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 				return
 			}
 		}
+		// 通话/会议信封消息（{"type":"call",...}）以私聊文本类型落库（call.go 话单归口），
+		// 类型校验拦不住——无置顶语义（微信同款），按信封结构拒绝（红包卡片同口径分层拦截）
+		var envProbe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(record.Content), &envProbe); err == nil && envProbe.Type == "call" {
+			s.sendError(c, "该消息不支持置顶")
+			return
+		}
 		// 每个会话仅一条置顶：存在则替换，不存在则创建
 		var existing model.MessagePin
 		if err := store.DB.Where("conv_key = ?", key).First(&existing).Error; err == nil {

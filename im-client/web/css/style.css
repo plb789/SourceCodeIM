@@ -12598,20 +12598,24 @@ html.m .ms-actions {
     opacity: 0.85;
 }
 
-/* 顶栏让位：登录视图/聊天视图整体下移标题栏高度，其余浮层（居中/底部定位）不受影响 */
+/* 顶栏让位：标题栏高度改为 body padding-top 让位（见下方说明），登录/聊天视图占满剩余高度，
+   其余浮层（居中/底部定位）不受影响 */
 .pc-titlebar .login-view,
 .pc-titlebar .chat-view {
     height: calc(100vh - var(--titlebar-h));
-    margin-top: var(--titlebar-h);
 }
 
-/* 阶段八十五修复：登录后 login-view 为 display:none、标题栏 fixed 不占流，chat-view 成为 body 首个
-   在流子元素，其 margin-top 与 body 外边距塌陷溢出到 body 外 → 文档多出 34px 可滚动高度
-   （实测 scrollHeight=100vh+34）。滚动链（列表到顶继续滚）/消息定位 scrollIntoView 会把整页滚下
-   34px 且不自动复位：固定标题栏不动，好友名称行被盖、左栏按钮整体上移（仅 PC 端有此 margin 故仅 PC 复现）。
-   禁止根滚动兜底（移动端 html.m body 同款约定），不影响视图内各自滚动 */
+/* 阶段八十五修复：标题栏 fixed 不占流，视图高度需让出标题栏高度。
+   原 margin-top 方案缺陷：chat-view 作为 body 首个在流子元素时其 margin-top 经外边距塌陷
+   溢出到根文档（实测 scrollHeight=100vh+34 的幻影高度）；body overflow:hidden 只拦得住滚轮
+   滚动链，拦不住 scrollIntoView/focus 等程序化滚动（overflow:hidden 容器仍可程序化滚动）——
+   置顶条定位高亮 scrollIntoView({block:'center'}) 会把根文档滚下 34px 且不自动复位：
+   固定标题栏不动，名称行被盖、左栏按钮整体上移、输入区下方露出 34px 空隙（仅 PC 端复现）。
+   改用 body padding-top 让位：padding 不参与外边距塌陷，根文档恰为 100vh 无溢出可滚，
+   滚轮/程序化滚动两条链路同时根治（移动端 html.m body 同款约定，不影响视图内各自滚动） */
 .pc-titlebar body {
     overflow: hidden;
+    padding-top: var(--titlebar-h);
 }
 
 /* 个人资料面板固定贴顶（top:0），标题栏存在时其头部（关闭按钮）会被压住，需同步让位 */

@@ -1769,7 +1769,10 @@
         // 阶段八十八：只改 .mi-text 文字节点——直接赋 textContent 会连同 SVG 图标一起清掉（实测丢图标根因）
         var pinItem = msgMenu.querySelector('[data-action="pin"]');
         // 阶段一百五十四：红包卡片不支持置顶（服务端仅允许文字消息置顶），隐藏入口避免误导报错
-        pinItem.style.display = isRpBubble ? 'none' : '';
+        // 通话/会议信封（{"type":"call",...}）以私聊文本类型落库，同无置顶语义（微信同款）：
+        // 服务端按信封结构拦截，前端同步隐藏入口
+        var isCallBubble = !!el.querySelector('.msg-call-bubble');
+        pinItem.style.display = (isRpBubble || isCallBubble) ? 'none' : '';
         var pinLabel = pinItem.querySelector('.mi-text') || pinItem;
         var p = pinInfo[currentChatUser];
         pinLabel.textContent = (p && p.msg_id && p.msg_id === msgId) ? I18N.t('取消置顶') : I18N.t('置顶');
@@ -3470,6 +3473,28 @@
     function quoteDisplayText(content) {
         var m = parseQuoteEnvelope(content);
         return m ? m.text : content;
+    }
+
+    // 置顶条展示文本：与气泡渲染同口径解析信封——引用/AI图片/AI文档信封取附言正文，
+    // 通话/会议信封按视角映射通话文案（历史遗留的已置顶通话消息也能正常显示，不露 JSON 原串），
+    // 合并转发信封显示"聊天记录"摘要（置顶服务端仅放行文本类消息，信封均以文本类型落库；
+    // 原样展示会露出 JSON 串）。非信封（普通文本）原样返回
+    function pinDisplayText(content, fromUser) {
+        var call = parseCallEnvelope(content);
+        if (call) {
+            return callBubbleText(call, fromUser === IMSocket.getUsername());
+        }
+        var q = parseQuoteEnvelope(content);
+        if (q) return q.text;
+        var img = parseAIImageEnvelope(content);
+        if (img) return img.text;
+        var doc = parseAIDocEnvelope(content);
+        if (doc) return doc.text;
+        var merged = parseMergedEnvelope(content);
+        if (merged) {
+            return I18N.t('聊天记录') + '（' + (merged.c || (merged.i || []).length) + I18N.t('条消息') + '）';
+        }
+        return content;
     }
 
     // 阶段四十四：解析 AI 图片提问信封 content（{"image":url,"text":附言}）；非图片信封返回 null。
@@ -19571,7 +19596,8 @@
         var info = pinInfo[currentChatUser];
         if (info && info.msg_id) {
             pinBarUser.textContent = info.from_user + I18N.t('：');
-            pinBarText.textContent = info.content;
+            // 信封消息（通话/引用/AI图片/AI文档/合并转发）与气泡同口径展示正文，不露 JSON 原文
+            pinBarText.textContent = pinDisplayText(info.content, info.from_user);
             pinBar.classList.remove('hidden');
         } else {
             pinBar.classList.add('hidden');
