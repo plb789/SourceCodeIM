@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.4"></script>
+    <script src="/js/i18n.js?v=3.17"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=2.77">
+    <link rel="stylesheet" href="/css/style.css?v=2.87">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -494,6 +494,21 @@
                     <button id="agent-mode-btn" class="tool-btn agent-mode-btn hidden" title="Agent 任务模式：输入任务目标，智能体将自主规划并调用工具完成（写文件/命令需审批）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M12 3a1.3 1.3 0 1 0 0 2.6 1.3 1.3 0 1 0 0-2.6zM11.5 5.5h1v1.8h-1zM7.5 7.3h9a2.5 2.5 0 0 1 2.5 2.5v7.9a2.5 2.5 0 0 1-2.5 2.5h-9a2.5 2.5 0 0 1-2.5-2.5V9.8a2.5 2.5 0 0 1 2.5-2.5zM5 11.75H3.4a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1H5zm14 0h1.6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H19zM9 10.7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 1 0 0-3zM8.85 15.7h6.3a.8.8 0 0 1 0 1.6h-6.3a.8.8 0 0 1 0-1.6z"/></svg>
                     </button>
+                    <!-- 阶段一百六十四：计划模式开关（TRAE CN Plan 同款——Agent 先只读调研并提交执行计划，
+                         用户批准后才开始执行；仅 Agent 任务模式开启时显示，随任务上行 plan_mode 标记） -->
+                    <button id="agent-plan-btn" class="tool-btn agent-plan-btn hidden" title="计划模式：Agent 先调研并提交执行计划，你批准后才开始动手执行（TRAE CN Plan 同款）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M9 2.5h6a1.5 1.5 0 0 1 1.5 1.5v.5H19a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h2.5V4A1.5 1.5 0 0 1 9 2.5zm6 3V4H9v2a.9.9 0 0 0 .9.9h4.2A.9.9 0 0 0 15 5.5zm-8 5.25a1 1 0 0 1 1-1h8a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h8a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h5a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1z"/></svg>
+                    </button>
+                    <!-- 阶段一百七十六：SOLO 全自动模式开关（TRAE SOLO 同款——任务内需审批操作自动放行免逐条确认，
+                         变更留痕可回滚；仅 Agent 任务模式开启时显示，随任务上行 solo_mode 标记） -->
+                    <button id="agent-solo-btn" class="tool-btn agent-solo-btn hidden" title="全自动模式（SOLO）：任务内写文件/命令免审批自动执行，完成后自动自检；所有变更留痕可回滚">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M13.2 2.3c.4-.5 1.2-.1 1 .5L12.6 9h4.1c.6 0 .9.7.5 1.1l-8.4 11.4c-.4.6-1.3.1-1.1-.5L9.4 14H5.3c-.6 0-.9-.7-.5-1.1z"/></svg>
+                    </button>
+                    <!-- 阶段一百六十七：任务视频入口（仅任务模式显示）——选择视频后浏览器抽关键帧
+                         作为图片附件随任务上行（复用 images 链路，服务端零改动；视频本体不上传） -->
+                    <button id="agent-video-btn" class="tool-btn agent-video-btn hidden" title="添加视频：选择视频文件，自动提取关键帧随任务发送（模型将结合画面理解任务）">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5h11a2 2 0 0 1 2 2v3.2l4.4-2.9a.8.8 0 0 1 1.2.7v8a.8.8 0 0 1-1.2.7L17 13.8V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h11V7H4z"/></svg>
+                    </button>
                     <!-- 阶段一百一十七：Agent 审批模式选择已移至输入区左下角（TRAE CN 同款，见 input-footer） -->
                     <!-- 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启联网搜索时显示，开启后 AI 问答可实时搜索） -->
                     <button id="web-search-btn" class="tool-btn web-search-btn hidden" title="联网搜索：开启后 AI 问答可实时联网查询最新信息（搜索过程与结果条数随回复展示）">
@@ -614,6 +629,8 @@
 
     <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif" class="hidden">
     <input type="file" id="image-input" accept="image/*" class="hidden">
+    <!-- 阶段一百六十七：任务视频选择控件（agent-video-btn 触发，抽帧入任务附件） -->
+    <input type="file" id="agent-video-input" accept="video/mp4,video/webm,video/quicktime,video/x-m4v,video/x-matroska,.mp4,.webm,.mov,.m4v,.mkv" class="hidden">
     <input type="file" id="file-input" class="hidden">
     <!-- 阶段四十五：AI 文档问答选择框（docx/xlsx/xlsm/csv/md/txt，与服务端解析白名单一致） -->
     <input type="file" id="doc-input" accept=".docx,.xlsx,.xlsm,.csv,.md,.txt" class="hidden">
@@ -820,6 +837,17 @@
                 <button id="modal-extra" class="modal-btn modal-btn-danger hidden">删除</button>
                 <button id="modal-cancel" class="modal-btn">取消</button>
                 <button id="modal-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 阶段一百八十一：任务变更 diff 弹层（+绿/-红行级着色，JetBrains Mono 等宽；自绘弹窗禁用系统弹窗/滚动条） -->
+    <div id="agent-diff-mask" class="modal-mask hidden">
+        <div class="modal-box agent-diff-box">
+            <div id="agent-diff-title" class="modal-title"></div>
+            <div id="agent-diff-body" class="agent-diff-body"></div>
+            <div class="modal-btns">
+                <button id="agent-diff-close" class="modal-btn">关闭</button>
             </div>
         </div>
     </div>
@@ -1283,7 +1311,7 @@
                     <div class="settings-card-head">
                         <div class="settings-card-head-text">
                             <div class="settings-card-title">规则</div>
-                            <div class="settings-card-desc">创建并管理规则，聊天回答与 Agent 任务执行前都会先逐条对照检查。</div>
+                            <div class="settings-card-desc">创建并管理规则，聊天回答与 Agent 任务执行前都会先逐条对照检查。也可在项目内放置 AGENTS.md 或 .trae/rules/*.md，Agent 任务自动加载（随仓库携带）。</div>
                         </div>
                         <button id="settings-rule-create" class="settings-primary-btn">+ 创建</button>
                     </div>
@@ -1491,11 +1519,37 @@
     </div>
 
     <!-- 阶段六十四：Agent 任务历史弹窗（本人任务分页列表/状态筛选/点击展开详情；自研弹窗禁用系统弹窗，样式复用知识库弹窗骨架） -->
+    <!-- 阶段一百八十二：弹窗加页签（任务历史/任务模板），模板卡一键带参重跑 -->
     <div id="taskhist-mask" class="modal-mask hidden">
         <div class="modal-box kb-box">
-            <div class="modal-title">任务历史</div>
+            <div id="taskhist-title" class="modal-title">任务历史</div>
             <div id="taskhist-status" class="kb-status"></div>
-            <!-- 状态筛选（chips 按钮组） -->
+            <!-- 页签行（阶段一百八十二：任务历史/任务模板切换；阶段一百八十四：+定时任务） -->
+            <div id="taskhist-tabs" class="taskhist-tabs">
+                <button class="taskhist-tab active" data-tab="hist">任务历史</button>
+                <button class="taskhist-tab" data-tab="tpl">任务模板</button>
+                <button class="taskhist-tab" data-tab="cron">定时任务</button>
+            </div>
+            <!-- 阶段一百八十四：定时任务新建/编辑表单（cron 页签下显示；会话与智能体取自当前会话） -->
+            <div id="taskhist-cron-form" class="th-cron-form hidden">
+                <textarea id="th-cron-goal" class="modal-input th-cron-goal" rows="2" maxlength="4000" placeholder="任务目标：定时自动发起，巡检/汇总类任务建议写明输出位置与要求"></textarea>
+                <div class="th-cron-row">
+                    <select id="th-cron-kind" class="modal-input th-cron-kind" title="调度类型">
+                        <option value="interval">每 N 分钟</option>
+                        <option value="daily">每天 HH:MM</option>
+                    </select>
+                    <input type="number" id="th-cron-mins" class="modal-input th-cron-val" min="1" max="1440" value="30" title="间隔分钟数（1~1440）">
+                    <input type="time" id="th-cron-time" class="modal-input th-cron-val hidden" value="09:00" title="每天运行时刻">
+                </div>
+                <div class="th-cron-row th-cron-modes">
+                    <label class="th-cron-check"><input type="checkbox" id="th-cron-plan">计划模式</label>
+                    <label class="th-cron-check"><input type="checkbox" id="th-cron-solo">SOLO</label>
+                    <span id="th-cron-sid" class="th-cron-sid"></span>
+                    <button id="th-cron-cancel" class="taskhist-op-btn hidden">取消编辑</button>
+                    <button id="th-cron-save" class="taskhist-op-btn primary">保存</button>
+                </div>
+            </div>
+            <!-- 状态筛选（chips 按钮组；模板页签下隐藏） -->
             <div id="taskhist-filter" class="taskhist-filter">
                 <button class="taskhist-chip active" data-status="">全部</button>
                 <button class="taskhist-chip" data-status="queued">排队中</button>
@@ -1896,7 +1950,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.5"></script>
-    <script src="/js/chat.js?v=3.103"></script>
+    <script src="/js/chat.js?v=3.122"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>

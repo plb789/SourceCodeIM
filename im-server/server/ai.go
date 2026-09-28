@@ -1289,6 +1289,18 @@ func aiChatMsgText(m aiChatMessage) string {
 	if v, ok := m.Content.(string); ok {
 		return v
 	}
+	// 阶段一百六十六：多模态消息仅取文本片段——base64 图片体积巨大，若经 JSON 序列化进入
+	// 压缩估算（aiMsgsBytes/aiMsgsEstimateTokens）与压缩转录，会瞬间撑爆判据并烧穿摘要输入；
+	// 图片附件不计入文本口径（模型上下文仍完整保留图片）
+	if parts, ok := m.Content.([]aiContentPart); ok {
+		texts := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p.Type == "text" && p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
 	b, err := json.Marshal(m.Content)
 	if err != nil {
 		return ""
@@ -1585,6 +1597,19 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 	// 会话摘要归口（会话列表显示提问正文并排序置顶）
 	s.touchConversation(c.username, agent.Name, messageSummary(msg.Content))
 	s.notifyConvUpdate(c.username)
+
+	// 阶段一百七十九：任务运行中追加指令（Steering，TRAE 同款插话）——本会话该智能体存在
+	// 运行中任务且本次为纯文本提问时转为追加指令：已照常落库回显（上方回显链路，会话历史
+	// 成对可见），但不走 AI 问答，由运行中任务在下一轮模型决策前取出注入调整方向；
+	// 图片/文档/联网搜索提问不转（走原问答链路）；queued 任务不接插话（目标已定）
+	if imageEnv == nil && docEnv == nil && msg.Remark != "web_search" {
+		if task := agentActiveTaskFor(c.username, agent.Name, sid); task != nil {
+			task.agentPushSteer(question)
+			logger.Info("Agent 任务追加指令（Steering，任务 %s，用户 %s，前60=%q）", task.ID, c.username, aiLeakLogSnippet(question))
+			s.agentEmit(task, "steer", map[string]interface{}{"text": question}) // 任务卡内提示行"已转达"
+			return
+		}
+	}
 
 	// 再组装上下文（此时本次提问已落库，按 excludeID 排除防上下文重复）：
 	// 知识库命中与长期记忆均为向量检索（embedding API 调用），耗时随网络波动，

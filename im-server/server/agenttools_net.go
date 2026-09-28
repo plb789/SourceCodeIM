@@ -21,7 +21,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	// 阶段一百六十九：别名防与标准库 html（UnescapeString）冲突
+	xhtml "golang.org/x/net/html"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -191,6 +194,362 @@ func agentToolHttpRequest(params map[string]interface{}) string {
 	if method == "HEAD" || len(runes) == 0 {
 		b.WriteString("（无响应体）")
 	}
+	return b.String()
+}
+
+// ===== fetch_page 网页阅读（阶段一百六十九） =====
+// 抓取网页 → HTML 转 Markdown 正文（去脚本/样式/导航/交互控件噪音，标题/链接/列表/代码/表格
+// 结构化保留）→ 截断回传。TRAE CN fetch 工具同语义：给模型直接可读的结构化正文，
+// 替代 http_request 抓网页时的整页 HTML 标签噪音（省 token、提高阅读准确率）。
+// 只读 GET，始终服务端执行，与 http_request 共用内网拦截/超时/编码解码归口。
+
+const (
+	agentFetchOutMaxChars = 20000                                                                                                             // fetch_page 正文回传字符上限（与 http_request 同量级）
+	agentFetchUA          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" // 浏览器 UA 防简单反爬（http_request 保持无 UA 语义不变）
+)
+
+// agentMDSkipTags 转 Markdown 时整体跳过的噪音标签——脚本样式/元信息/交互控件/媒体/
+// 版头版尾导航（正文优先；title 单独提取不作正文）
+var agentMDSkipTags = map[string]bool{
+	"script": true, "style": true, "noscript": true, "template": true, "iframe": true,
+	"svg": true, "canvas": true, "object": true, "embed": true,
+	"meta": true, "link": true, "title": true, "head": true,
+	"input": true, "button": true, "select": true, "option": true, "textarea": true, "form": true, "label": true,
+	"img": true, "picture": true, "video": true, "audio": true, "source": true, "track": true,
+	"nav": true, "header": true, "footer": true, "aside": true, "dialog": true,
+}
+
+// agentMDInlineTags 行内标签（不影响块级空行边界，透明渲染）
+var agentMDInlineTags = map[string]bool{
+	"a": true, "code": true, "b": true, "strong": true, "i": true, "em": true,
+	"span": true, "small": true, "sub": true, "sup": true, "u": true, "s": true, "mark": true, "abbr": true,
+}
+
+// agentMDWriter HTML→Markdown 转换状态
+type agentMDWriter struct {
+	b        strings.Builder
+	base     *url.URL // 相对链接绝对化基准（页面 URL）
+	inPre    int      // >0 表示处于 <pre> 内（空白原样保留）
+	linkHref string   // 处于 <a> 内时的目标地址（空=非链接上下文）
+	linkText strings.Builder
+	listTag  []string // 列表类型栈（ul/ol）
+	olIdx    []int    // 有序列表各层计数器
+	tableRow int      // 表格当前行号（首行后补分隔线）
+	tableCol int      // 首行列数（分隔线复用）
+}
+
+// agentMDCollapse 折叠连续空白为单空格（pre 外文本归一化）
+func agentMDCollapse(s string) string {
+	var b strings.Builder
+	sp := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			sp = true
+			continue
+		}
+		if sp && b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		sp = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// needSpace 尾字符是否允许补词间空格（防 <b>x</b> <i>y</i> 词间空格被折叠丢弃后粘连）
+func (w *agentMDWriter) needSpace() bool {
+	s := w.b.String()
+	if s == "" {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r != ' ' && r != '\n' && r != '\t'
+}
+
+// text 文本节点输出：链接内文本归集到 linkText（退出 <a> 时整体成 [text](href)），
+// pre 内原样，其余折叠空白（全空白时若词间需要则补单空格）
+func (w *agentMDWriter) text(s string) {
+	if w.linkHref != "" {
+		w.linkText.WriteString(s)
+		return
+	}
+	if w.inPre > 0 {
+		w.b.WriteString(s)
+		return
+	}
+	out := agentMDCollapse(s)
+	if out == "" {
+		if strings.ContainsAny(s, " \t\n\r") && w.needSpace() {
+			w.b.WriteString(" ")
+		}
+		return
+	}
+	w.b.WriteString(out)
+}
+
+// agentMDAttr 取元素属性值（无则空串）
+func agentMDAttr(n *xhtml.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+// render 递归渲染节点为 Markdown
+func (w *agentMDWriter) render(n *xhtml.Node) {
+	if n.Type == xhtml.TextNode {
+		w.text(n.Data)
+		return
+	}
+	if n.Type != xhtml.ElementNode {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			w.render(c)
+		}
+		return
+	}
+	tag := n.Data
+	if agentMDSkipTags[tag] {
+		return
+	}
+	children := func() {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			w.render(c)
+		}
+	}
+	switch tag {
+	case "br":
+		if w.inPre == 0 {
+			w.b.WriteString("\n")
+		}
+		return
+	case "hr":
+		w.b.WriteString("\n\n---\n\n")
+		return
+	case "a":
+		href := strings.TrimSpace(agentMDAttr(n, "href"))
+		if href == "" || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "#") {
+			children() // 锚点/脚本链接无阅读价值：只渲染文本
+			return
+		}
+		full := href
+		if ref, err := url.Parse(href); err == nil && w.base != nil {
+			full = w.base.ResolveReference(ref).String()
+		}
+		prev := w.linkHref
+		w.linkHref = full
+		children()
+		txt := strings.TrimSpace(w.linkText.String())
+		w.linkText.Reset()
+		w.linkHref = prev
+		if txt != "" {
+			w.b.WriteString("[" + txt + "](" + full + ")")
+		}
+		return
+	case "pre":
+		w.inPre++
+		w.b.WriteString("\n\n```\n")
+		children()
+		w.b.WriteString("\n```\n\n")
+		w.inPre--
+		return
+	case "code":
+		if w.inPre > 0 {
+			children()
+			return
+		}
+		w.b.WriteString("`")
+		children()
+		w.b.WriteString("`")
+		return
+	case "b", "strong":
+		w.b.WriteString("**")
+		children()
+		w.b.WriteString("**")
+		return
+	case "i", "em":
+		w.b.WriteString("*")
+		children()
+		w.b.WriteString("*")
+		return
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		w.b.WriteString("\n\n" + strings.Repeat("#", int(tag[1]-'0')) + " ")
+		children()
+		w.b.WriteString("\n\n")
+		return
+	case "li":
+		marker := "- "
+		if len(w.listTag) > 0 && w.listTag[len(w.listTag)-1] == "ol" {
+			w.olIdx[len(w.olIdx)-1]++
+			marker = fmt.Sprintf("%d. ", w.olIdx[len(w.olIdx)-1])
+		}
+		w.b.WriteString("\n" + marker)
+		children() // close 不补换行：下一 li 的 open 换行 + 列表收尾自带边界（防列表项间空行）
+		return
+	case "ul", "ol":
+		w.listTag = append(w.listTag, tag)
+		w.olIdx = append(w.olIdx, 0)
+		w.b.WriteString("\n")
+		children()
+		w.listTag = w.listTag[:len(w.listTag)-1]
+		w.olIdx = w.olIdx[:len(w.olIdx)-1]
+		w.b.WriteString("\n")
+		return
+	case "tr":
+		w.tableRow++
+		if w.tableRow == 2 && w.tableCol > 0 { // 首行后补表头分隔线
+			w.b.WriteString(strings.Repeat("---|", w.tableCol) + "\n")
+		}
+		w.b.WriteString("|")
+		children()
+		w.b.WriteString("\n")
+		return
+	case "td", "th":
+		if w.tableRow == 1 {
+			w.tableCol++
+		}
+		w.b.WriteString(" ")
+		children()
+		w.b.WriteString(" |")
+		return
+	}
+	if agentMDInlineTags[tag] {
+		children()
+		return
+	}
+	// 其余标签默认块级：前后空行边界（多余空行由 normalize 压缩）
+	w.b.WriteString("\n\n")
+	children()
+	w.b.WriteString("\n\n")
+}
+
+// agentMDNormalize 压缩连续空行 + 去行尾空白 + 整体裁剪
+func agentMDNormalize(s string) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	blank := 0
+	for _, ln := range lines {
+		ln = strings.TrimRight(ln, " \t\r")
+		if ln == "" {
+			blank++
+			if blank > 1 {
+				continue
+			}
+		} else {
+			blank = 0
+		}
+		out = append(out, ln)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// agentHTMLToMarkdown HTML 正文转 Markdown，返回 (markdown, 页面标题)
+func agentHTMLToMarkdown(body, baseURL string) (string, string) {
+	doc, err := xhtml.Parse(strings.NewReader(body))
+	if err != nil {
+		return "", ""
+	}
+	// 页面标题提取（<title> 文本）
+	var title string
+	var findTitle func(n *xhtml.Node)
+	findTitle = func(n *xhtml.Node) {
+		if title != "" || n.Type != xhtml.ElementNode || n.Data != "title" {
+			if title == "" {
+				for c := n.FirstChild; c != nil && title == ""; c = c.NextSibling {
+					findTitle(c)
+				}
+			}
+			return
+		}
+		if n.FirstChild != nil && n.FirstChild.Type == xhtml.TextNode {
+			title = strings.TrimSpace(n.FirstChild.Data)
+		}
+	}
+	findTitle(doc)
+	base, _ := url.Parse(baseURL)
+	w := &agentMDWriter{base: base}
+	w.render(doc)
+	return agentMDNormalize(w.b.String()), title
+}
+
+// agentDecodeHTMLBody 响应体解码归口：Content-Type 显式 GB 系字符集或 UTF-8 出现替换符时按 GBK 转码
+// （与 read_file/http_request 同款策略，覆盖中文站点常见 GBK 页面）
+func agentDecodeHTMLBody(data []byte, contentType string) string {
+	ct := strings.ToLower(contentType)
+	if strings.Contains(ct, "charset=gb") || strings.Contains(ct, "charset=gbk") || strings.Contains(ct, "charset=gb2312") {
+		if gbk, err := simplifiedchinese.GBK.NewDecoder().Bytes(data); err == nil {
+			return string(gbk)
+		}
+	}
+	text := string(data)
+	if strings.ContainsRune(text, 0xFFFD) {
+		if gbk, err := simplifiedchinese.GBK.NewDecoder().Bytes(data); err == nil {
+			return string(gbk)
+		}
+	}
+	return text
+}
+
+// agentToolFetchPage fetch_page 工具执行：GET 抓取网页 → HTML 转 Markdown → 截断回传
+func agentToolFetchPage(params map[string]interface{}) string {
+	rawURL := strings.TrimSpace(agentParamString(params["url"]))
+	if rawURL == "" {
+		return "错误：url 不能为空"
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "错误：url 无效（仅支持 http/https 完整地址）"
+	}
+	timeout := time.Duration(agentToolTimeout.Load()) * time.Second
+	if v, ok := params["timeout"].(float64); ok && v > 0 {
+		if v > agentCmdTimeoutMax {
+			v = agentCmdTimeoutMax
+		}
+		timeout = time.Duration(v) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "错误：请求构建失败 " + err.Error()
+	}
+	req.Header.Set("User-Agent", agentFetchUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	client := &http.Client{Timeout: timeout, Transport: agentHTTPTransport()}
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Sprintf("错误：请求超时（%v），已中止", timeout)
+		}
+		return "错误：请求失败 " + err.Error()
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, agentHttpBodyMax))
+	if resp.StatusCode >= 400 {
+		return fmt.Sprintf("错误：HTTP %d %s", resp.StatusCode, resp.Status)
+	}
+	var b strings.Builder
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") && ct != "" {
+		// 非网页内容（json/纯文本/图片等）：fetch_page 语义不匹配，指引模型换工具
+		return fmt.Sprintf("提示：该地址 Content-Type 为 %s，非网页内容，请改用 http_request 获取原始响应体。", ct)
+	}
+	text := agentDecodeHTMLBody(data, ct)
+	md, title := agentHTMLToMarkdown(text, u.String())
+	if md == "" {
+		return "提示：页面无可提取正文（可能为纯脚本渲染页面），请改用内置浏览器工具打开后再读取。"
+	}
+	runes := []rune(md)
+	if len(runes) > agentFetchOutMaxChars {
+		md = string(runes[:agentFetchOutMaxChars]) + fmt.Sprintf("\n…（正文过长已截断，共 %d 字符）", len(runes))
+	}
+	b.WriteString(fmt.Sprintf("HTTP %d %s\n", resp.StatusCode, resp.Status))
+	if title != "" {
+		b.WriteString("标题: " + title + "\n")
+	}
+	b.WriteString("\n" + md)
 	return b.String()
 }
 

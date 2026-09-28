@@ -92,7 +92,7 @@ const (
 	MsgTypePcFileResp = 65 // 上行：PC 渲染进程 → 服务端本地文件操作结果（content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
 
 	// 阶段七十七：Agent 文件变更审查（TRAE CN 同款"文件变更审查条"——撤销/保留归口）
-	MsgTypeAgentChanges = 66 // 上行：审查操作（content 为 JSON：{task_id,action:"keep"/"revert",path?}，path 缺省=全部 pending）；下行：审查后全量刷新帧（content 为 JSON：{task_id,session_id,changes:[{path,kind,adds,dels,status}],total_adds,total_dels}）
+	MsgTypeAgentChanges = 66 // 上行：审查操作（content 为 JSON：{task_id,action:"keep"/"revert",path?,round?}，path 缺省=全部 pending，round>0=按轮回滚撤销该轮及之后登记的变更（阶段一百七十三））；下行：审查后全量刷新帧（content 为 JSON：{task_id,session_id,changes:[{path,kind,adds,dels,status}],total_adds,total_dels}）
 
 	// 阶段九十：用户自定义本机 MCP 服务器（TRAE 同款本地 stdio，命令/环境变量等凭据仅存用户本机）
 	MsgTypeAgentPcTools = 67 // 上行：PC 渲染进程 → 服务端，本机 MCP 工具清单上报（content 为 JSON：{tools:[{server,tool,description,input_schema}]}，登录后/清单变更时全量覆盖上报）；下行：服务端确认帧（content 为 JSON：{ok:true,count:N}，N=0 表示已清除注入）
@@ -175,6 +175,11 @@ const (
 	// 令牌桶按可配置速率平滑放行登录，取不到配额进 FIFO 队列；排队者收本帧位置推送，
 	// 排到队首后正常收 LOGIN_RESP(8)；排队期间 4 号心跳照常（连接保活不超时）
 	MsgTypeLoginQueue = 94 // 下行：登录排队位置推送（content 为 JSON：{position 当前第 N 位, wait 预计等待秒}）
+
+	// 阶段一百六十四：Agent 计划模式（TRAE CN Plan 同款——发起任务时上行 plan_mode=true，
+	// Agent 先只读调研再经 present_plan 提交执行计划，计划经 AGENT_EVENT 下发展示，
+	// 本类型承载用户审批结果上行；批准前服务端工具门禁锁定全部有副作用操作）
+	MsgTypeAgentPlan = 95 // 上行：计划审批结果（content 为 JSON：{task_id,step,action:"approve"/"reject",feedback?}；reject 时 feedback 为驳回意见）
 
 )
 

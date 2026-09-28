@@ -794,6 +794,13 @@ const CMD_STREAM_FLUSH_MS = 200;        // 输出聚合下发节流（毫秒，�
 const CMD_BG_TIMEOUT_MS = 30 * 60 * 1000; // 转后台兜底强杀
 const CMD_DONE_SENTINEL = '__AGENT_CMD_DONE__'; // 阶段一百零一：命令尾部完成哨兵（与服务端 agentCmdDoneSentinel 一致；读到该行即命令链收尾，孙进程占管道也能及时返回）
 const CMD_FORCE_RETURN_MS = 5000; // 阶段一百零一：超时杀树后等 'close' 的宽限（到点强制收尾返回已有输出，不挂死任务）
+// 阶段一百八十六：命令退出码标记——链尾 `& echo 哨兵` 使 cmd 退出码恒为 echo 的 0，命令失败被
+// `&` 链吞掉（'close' 事件恒 0，「命令退出码异常」分支成死代码，失败命令被伪报成功）。在哨兵前
+// 追加 `call echo 标记`：%^errorlevel% 经 ^ 转义躲过首趟解析、call 触发二次展开得到真实 errorlevel
+// （与服务端 agentCmdExitMark 同款语义）。标记行不计入输出上下文，捕获后 finish 按其判定成败
+const CMD_EXIT_MARK = '__AGENT_CMD_EXIT_';
+const CMD_EXIT_MARK_EXPR = '__AGENT_CMD_EXIT_%^errorlevel%__';
+const CMD_EXIT_MARK_RE = /__AGENT_CMD_EXIT_(-?\d+)__/;
 
 // 每用户当前运行中命令登记（requestBg 归口；同用户同时至多一条命令——服务端任务队列串行派发）
 const runningCmds = {};
@@ -808,6 +815,94 @@ function requestBg(username) {
         return true;
     }
     return false;
+}
+
+// ===== 阶段一百七十一：持久终端会话（run_command 环境状态跨调用保留）=====
+// 与服务端同口径快照记账：纯 cd/盘符/set 类命令本地记账立即返回（不 spawn，按服务端下发的
+// cwd/env 镜像在本机 stat 校验），回传 shell 字段同步权威状态；其余命令以镜像 cwd 为工作目录、
+// 镜像 env 覆盖注入。PC 端无状态化——权威状态归服务端 AgentTask，每次请求自带当前值。
+
+// shellStateKind 纯状态记账类命令判定（与服务端 agentShellStateKind 同口径，勿单边修改）
+function shellStateKind(command) {
+    let lc = String(command || '').trim().toLowerCase();
+    lc = lc.replace(/^["']+|["']+$/g, '');
+    if (/[&|]/.test(lc)) return ''; // 链式命令（cmd /C 内的 cd 只影响子进程）不记账，与服务端同口径
+    if (/^cd(\s|$)/.test(lc) || /^[a-z]:$/.test(lc)) return 'cd';
+    if (lc === 'set' || (/^set\s+\S+/.test(lc) && !/^set\s+\//.test(lc))) return 'set';
+    return '';
+}
+
+// agentShellNoteJs 结果尾注：会话目录提示（与服务端 agentShellNote 同语义，模型感知当前目录）
+function agentShellNoteJs(cwd) {
+    return '\n[会话目录] ' + cwd;
+}
+
+// runShellState 记账类命令执行归口：以请求携带的镜像状态（params.cwd/params.env）为基准，
+// 在本机解析校验 cd 目标 / set 赋值，回传 shell 字段（服务端写回权威状态）。
+// output 文本回传空 cwd 语义：cd 未变更（裸 cd 显示当前目录）时 shell.cwd 不回传，服务端保持原值
+function runShellState(params, done) {
+    const command = String((params && params.command) || '').trim();
+    const raw = command.replace(/^["']+|["']+$/g, ''); // 原文（路径/变量值保留大小写，关键字匹配大小写无关）
+    let cwd = String((params && params.cwd) || '');
+    const env = Object.assign({}, (params && params.env) || {});
+    if (shellStateKind(command) === 'cd') {
+        if (!cwd) {
+            done({ ok: false, output: '错误：缺少会话目录镜像（cwd），请重试' });
+            return;
+        }
+        let target = '';
+        const mD = /^cd\s+\/d\s+(.+)$/i.exec(raw);
+        const mP = mD ? null : /^cd\s+(.+)$/i.exec(raw);
+        if (mD) target = mD[1].trim();
+        else if (mP) target = mP[1].trim();
+        else if (/^[a-z]:$/i.test(raw)) target = raw; // 纯盘符命令
+        if (!target) { // 裸 cd：显示当前目录
+            done({ ok: true, output: '当前目录：' + cwd });
+            return;
+        }
+        let np;
+        if (/^[a-zA-Z]:$/.test(target)) np = target + '\\';
+        else if (/^[a-zA-Z]:/.test(target) || target.startsWith('\\') || target.startsWith('/')) np = path.resolve(target);
+        else np = path.resolve(cwd, target);
+        let st = null;
+        try { st = fs.statSync(np); } catch (e) {}
+        if (!st || !st.isDirectory()) {
+            done({ ok: false, output: '错误：系统找不到指定的路径：' + np + '\n（当前目录仍为 ' + cwd + '）' });
+            return;
+        }
+        done({ ok: true, output: '已切换到：' + np, shell: { cwd: np } });
+        return;
+    }
+    // set 记账（镜像基准上改写，整表回传——服务端以回传为准覆盖；值保留原文大小写）
+    const body = raw.replace(/^set\s*/i, '').trim();
+    if (!body) {
+        const keys = Object.keys(env);
+        if (!keys.length) { done({ ok: true, output: '（本会话尚未用 set 修改环境变量）' }); return; }
+        const lines = keys.sort().map(function (k) { return k + '=' + env[k]; });
+        done({ ok: true, output: '本会话 set 记账：\n' + lines.join('\n') });
+        return;
+    }
+    const eq = body.indexOf('=');
+    if (eq < 0) {
+        const prefix = body.toUpperCase();
+        const hits = Object.keys(env).filter(function (k) { return k.indexOf(prefix) === 0; }).sort();
+        if (!hits.length) { done({ ok: true, output: '（会话记账中无以 ' + prefix + ' 开头的变量）' }); return; }
+        done({ ok: true, output: hits.map(function (k) { return k + '=' + env[k]; }).join('\n') });
+        return;
+    }
+    const key = body.slice(0, eq).trim().toUpperCase();
+    const val = body.slice(eq + 1).trim();
+    if (!key || !/^[A-Z_][A-Z0-9_.()-]*$/.test(key)) {
+        done({ ok: false, output: '错误：环境变量名不合法：' + key });
+        return;
+    }
+    if (!val) {
+        delete env[key];
+        done({ ok: true, output: '已删除环境变量：' + key, shell: { env: env } });
+        return;
+    }
+    env[key] = val;
+    done({ ok: true, output: '已设置 ' + key + '=' + val, shell: { env: env } });
 }
 
 // 阶段一百二十：编译命令首词提取（按 && 与 & 分段后各取首词——覆盖 "cd dir && gcc ..." 链式命令）
@@ -894,14 +989,18 @@ function runCommandExec(username, params, done, onFrame, prefixNote) {
         done({ ok: false, output: '错误：' + (e.message || e) });
         return;
     }
+    // 阶段一百七十一：持久终端会话——工作目录用服务端下发的会话镜像 cwd（空=主工作区根），
+    // 环境变量在 buildAgentEnv 基础上覆盖注入镜像 env（set 记账差异）
+    const shellCwd = String((params && params.cwd) || '') || ws;
+    const shellEnv = Object.assign({}, (params && params.env) || {});
     // chcp 65001 先切控制台代码页（有真实控制台的场景生效；windowsHide 隐藏控制台下不生效，
     // 编码正确性由 decodeOutput 按字节检测兜底，与 Go 服务端同款）
     // 阶段一百零一：命令尾部追加完成哨兵（与服务端同款语义）
     let child;
     try {
-        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command + ' & echo ' + CMD_DONE_SENTINEL], {
-            cwd: ws,
-            env: buildAgentEnv(), // 阶段一百一十九：PATH 前置工具链与便携 Node，任务中可直接执行 uvx/uv/npx 等命令
+        child = spawn('cmd', ['/C', 'chcp 65001 >nul 2>&1 & ' + command + ' & call echo ' + CMD_EXIT_MARK_EXPR + ' & echo ' + CMD_DONE_SENTINEL], {
+            cwd: shellCwd,
+            env: Object.assign({}, buildAgentEnv(), shellEnv), // 阶段一百一十九：PATH 前置工具链与便携 Node + 一百七十一：会话 env 覆盖
             windowsHide: true, // 不闪黑色控制台窗口
             stdio: ['ignore', 'pipe', 'pipe']
         });
@@ -937,8 +1036,16 @@ function runCommandExec(username, params, done, onFrame, prefixNote) {
     // 阶段一百零一：收尾幂等标记（哨兵/超时兜底/close 三路竞态只收尾一次）+ 强返定时器
     let finishedSent = false;
     let forceTimer = null;
+    let pendingExit = null; // 阶段一百八十六：标记行捕获的命令真实退出码（null=未捕获）
 
     const addLine = function (raw) {
+        // 阶段一百八十六：退出码标记行——捕获真实 errorlevel，不计入输出上下文
+        //（标记位于哨兵之前、命令输出之后，用户命令自行 echo 同名标记会被链尾真实标记覆盖）
+        if (raw.indexOf(CMD_EXIT_MARK) >= 0) {
+            const m = raw.match(CMD_EXIT_MARK_RE);
+            if (m) pendingExit = parseInt(m[1], 10);
+            return;
+        }
         // 阶段一百零一：完成哨兵行——命中即收尾返回（该行不计入输出上下文），孙进程占管道也不挂死
         if (raw.includes(CMD_DONE_SENTINEL)) {
             finish(timedOut ? -1 : 0);
@@ -1014,6 +1121,8 @@ function runCommandExec(username, params, done, onFrame, prefixNote) {
         // 阶段一百零一：幂等保护——哨兵/超时兜底/close 三路竞态只收尾一次
         if (finishedSent) return;
         finishedSent = true;
+        // 阶段一百八十六：成败按标记行真实退出码判定（'close' 的 code 被 `&` 链吞成 echo 的 0）
+        if (code === 0 && pendingExit !== null && !timedOut) code = pendingExit;
         if (bgd) { // 转后台进程结束：仅发终帧（前端控制台显示退出码），不再回传结果
             cleanup();
             if (pendingFrame) { pushFrame(pendingFrame, false); pendingFrame = null; }
@@ -1031,19 +1140,19 @@ function runCommandExec(username, params, done, onFrame, prefixNote) {
             text = text.slice(0, CMD_OUT_MAX_CHARS) + '\n…（输出过长已截断，共 ' + text.length + ' 字符）';
         }
         if (timedOut) {
-            done({ ok: false, output: '错误：命令执行超时（' + timeoutSec + ' 秒），已终止\n输出：\n' + text });
+            done({ ok: false, output: '错误：命令执行超时（' + timeoutSec + ' 秒），已终止\n输出：\n' + text + agentShellNoteJs(shellCwd) });
             return;
         }
         if (code !== 0) {
             // 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
-            done({ ok: false, output: '命令退出码异常：' + code + '\n输出：\n' + text });
+            done({ ok: false, output: '命令退出码异常：' + code + '\n输出：\n' + text + agentShellNoteJs(shellCwd) });
             return;
         }
         if (!text.trim()) {
-            done({ ok: true, output: '（命令执行成功，无输出）' });
+            done({ ok: true, output: '（命令执行成功，无输出）' + agentShellNoteJs(shellCwd) });
             return;
         }
-        done({ ok: true, output: text });
+        done({ ok: true, output: text + agentShellNoteJs(shellCwd) });
     };
     child.on('error', function (e) {
         if (finishedSent || bgd) return; // 阶段一百零一：与哨兵/超时兜底竞态防双发
@@ -1089,6 +1198,11 @@ function execTool(req, done) {
             done(grepSync(username, params));
             return;
         case 'run_command':
+            // 阶段一百七十一：记账类命令（cd/盘符/set）本地记账立即回传（不 spawn），shell 字段同步权威状态
+            if (shellStateKind(params && params.command)) {
+                runShellState(params, done);
+                return;
+            }
             runCommandSync(username, params, done);
             return;
         // 阶段八十：变更审查下行（撤销=还原字节并删备份；保留=仅清理备份），文件在用户磁盘只有本地能执行
@@ -1322,6 +1436,37 @@ function fileCreateLevel(username, parent, name, isDir) {
         return { ok: true };
     } catch (e) {
         return { ok: false, error: (isDir ? '创建目录失败：' : '创建文件失败：') + (e.message || e) };
+    }
+}
+
+// 阶段一百八十三：工作区文件上传（path=父目录相对根，空=根；content=JSON{name,b64}，同名覆盖）。
+// 服务端 PC 模式上传归口：base64 经 msg 64 送达（单文件上限 2MB 由服务端把守），落当前项目/工作区内
+function fileUploadLevel(username, parent, content) {
+    let data;
+    try { data = JSON.parse(String(content || '{}')); } catch (e) { return { ok: false, error: '上传内容解析失败' }; }
+    const nm = wsEntryName(data.name);
+    if (!nm) return { ok: false, error: '名称非法（不能包含路径分隔符与 <>:"|?* 等字符）' };
+    let full;
+    const pv = String(parent || '').trim();
+    if (!pv || pv === '.' || pv === '/') {
+        full = userRoot(username);
+    } else {
+        const r = safePath(username, pv);
+        if (r.err) return { ok: false, error: r.err };
+        full = r.full;
+    }
+    try {
+        const st = fs.statSync(full);
+        if (!st.isDirectory()) return { ok: false, error: '目标父级不是目录' };
+    } catch (e) {
+        return { ok: false, error: '父目录不存在' };
+    }
+    try {
+        const buf = Buffer.from(String(data.b64 || ''), 'base64');
+        fs.writeFileSync(path.join(full, nm), buf);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: '上传失败：' + (e.message || e) };
     }
 }
 
@@ -2008,6 +2153,7 @@ function fileOp(username, payload, onProgress) {
     if (op === 'rename') return fileRenameLevel(username, payload.path, payload.content);
     if (op === 'newfile') return fileCreateLevel(username, payload.path, payload.content, false);
     if (op === 'newdir') return fileCreateLevel(username, payload.path, payload.content, true);
+    if (op === 'upload') return fileUploadLevel(username, payload.path, payload.content);
     if (op === 'reveal') return fileRevealLevel(username, payload.path);
     if (op === 'proj_list') return projListLevel(username);
     if (op === 'proj_open') return projOpenLevel(username, payload.content);

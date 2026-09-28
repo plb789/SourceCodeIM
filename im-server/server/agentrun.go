@@ -64,6 +64,13 @@ const (
 	// 阶段一百零一：命令超时收尾三保险（杀整树 / 哨兵提前判定 / 强返兜底），修复任务永久挂死
 	agentCmdDoneSentinel   = "__AGENT_CMD_DONE__" // 命令尾部完成哨兵（读到该行即命令链收尾，孙进程占管道也能及时返回；PC 端 CMD_DONE_SENTINEL 与此一致）
 	agentCmdForceReturnGap = 5 * time.Second      // 超时杀树后的强返宽限（到点强制返回已有输出，绝不等管道 EOF 挂死任务）
+	// 阶段一百八十六：命令退出码标记——链尾 `& echo 哨兵` 使 cmd 退出码恒为 echo 的 0，
+	// 命令失败被 `&` 链吞掉（cmd.Wait 恒成功，「命令退出码异常」分支成死代码，模型与调试增强
+	// 归口均拿不到成败信号）。在哨兵前追加 `call echo 标记`：%^errorlevel% 经 ^ 转义躲过首趟
+	// 解析、call 触发二次展开得到命令真实 errorlevel（本机实测 7→输出标记 7；echo 不清 errorlevel）。
+	// 标记行不计入输出上下文，addLine 捕获后成败判定即刻可用，哨兵路径无需再等 Wait
+	agentCmdExitMark     = "__AGENT_CMD_EXIT_"
+	agentCmdExitMarkExpr = "__AGENT_CMD_EXIT_%^errorlevel%__"
 
 	agentChangeMaxFiles = 200 // 阶段七十七：递归删目录时逐文件快照上限（防超大目录拖垮任务，超出部分不记变更不可撤销）
 
@@ -71,6 +78,9 @@ const (
 	// 更早轮次 LLM 摘要归并；阈值与 AI 问答共用 aiCompressThreshold，config.yaml ai.compress_threshold_tokens）
 	agentCompressKeepTurns = 3
 )
+
+// agentCmdExitMarkRe 退出码标记行解析（包级 var——regexp.MustCompile 非常量，须 var 初始化）
+var agentCmdExitMarkRe = regexp.MustCompile(`__AGENT_CMD_EXIT_(-?\d+)__`)
 
 // agentToolResultMaxChars 阶段八十四：工具结果写入模型上下文的字符上限
 // （0=默认 8000，负数=不截断；仅约束进模型的历史，前端执行控制台与留痕仍显示全量）
@@ -140,6 +150,14 @@ type AgentExecResult struct {
 	OK      bool            // false=工具级失败（路径越界/读失败等），结果照常回传模型自纠
 	Output  string          // 给模型的结果文本（与服务端执行同格式约定）
 	Changes []agentPCChange // 阶段八十：本地文件变更（写/改/删回传，服务端登记审查条）
+	Shell   *agentPCShell   // 阶段一百七十一：run_command 记账类命令执行后的会话状态（回传即同步权威值）
+}
+
+// agentPCShell 阶段一百七十一：PC 本地执行器回传的持久终端会话状态（cd/set 记账类命令
+// 在 PC 本机校验真实文件系统后的新值；权威状态归服务端 AgentTask，此处为同步载体）
+type agentPCShell struct {
+	Cwd string            `json:"cwd,omitempty"`
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // agentPCChange 阶段八十：PC 本地执行回传的结构化文件变更（执行器首触备份后组装）。
@@ -171,6 +189,18 @@ type AgentTask struct {
 	Username string
 	Agent    *AIRunAgent
 	Goal     string
+	// 阶段一百六十六：任务图片输入（TRAE CN 同款贴图布置任务）——发起时上行服务端静态 URL，
+	// 受理时经 aiLoadImageDataURL 归口加载为 base64 data URL（创建后只读，无需锁保护）
+	Images []string
+	// 阶段一百七十：@ 上下文引用（用户输入框 @ 选择的文件/目录）——装载时已过 agentSafePath
+	// 校验并内联小文件内容（创建后只读，无需锁保护）
+	Contexts []AgentTaskContext
+	// 阶段一百七十一：持久终端会话状态（TRAE 同款快照记账——run_command 不再每调用从工作区根
+	// 冷启动，cd/盘符切换与 set 环境变量的效果跨调用保留）。权威状态归服务端（任务生命周期内
+	// 串行执行无竞态；PC 模式经回传 shell 字段同步，PC 端无状态化）。空 cwd=工作区根。
+	// 锁：读写均经 mu 保护（PC 回传在 execCh 等待栈上，与执行串行；加锁为防后续调用形态变化）
+	shellCwd string            // 当前工作目录（空=工作区根；PC 模式为用户本机目录语义）
+	shellEnv map[string]string // set 记账差异（key 规整大写，值空=删除该变量；spawn 时覆盖注入）
 
 	Status    string // queued / running / waiting_approval / completed / failed / cancelled
 	Cancelled atomic.Bool
@@ -180,15 +210,26 @@ type AgentTask struct {
 
 	mu          sync.Mutex
 	todo        []AgentTodoItem
-	approveCh   chan *AgentApproval   // 容量 1：等待审批时由 handleAgentApprove 投递
-	approveStep string                // 当前等待审批的步骤 key（toolCall.ID，防跨任务/跨步骤错投）
-	approveTool string                // 阶段六十二：当前等待审批的工具名（"同意并加白"按工具分流）
-	askCh       chan *AgentApproval   // 阶段一百二十五：容量 1，等待 ask_user 提问回答时由 handleAgentAsk 投递（与审批同源挂起语义，互不干扰）
-	askStep     string                // 阶段一百二十五：当前等待回答的步骤 key（toolCall.ID，防迟到回答错投）
-	execCh      chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
-	execStep    string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
-	runBgCh     chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
-	runBgStep   string                // 转后台通道归属步骤（toolCall.ID，防错投）
+	steers      []string            // 阶段一百七十九：运行中用户追加指令队列（mu 保护；下一轮模型决策前取出注入，任务完结即弃）
+	approveCh   chan *AgentApproval // 容量 1：等待审批时由 handleAgentApprove 投递
+	approveStep string              // 当前等待审批的步骤 key（toolCall.ID，防跨任务/跨步骤错投）
+	approveTool string              // 阶段六十二：当前等待审批的工具名（"同意并加白"按工具分流）
+	askCh       chan *AgentApproval // 阶段一百二十五：容量 1，等待 ask_user 提问回答时由 handleAgentAsk 投递（与审批同源挂起语义，互不干扰）
+	askStep     string              // 阶段一百二十五：当前等待回答的步骤 key（toolCall.ID，防迟到回答错投）
+	// 阶段一百六十四：计划模式（TRAE CN Plan 同款）——发起时上行 plan_mode=true，Agent 先只读调研，
+	// 再经 present_plan 提交执行计划等待用户批准；批准前工具门禁锁定全部有副作用操作
+	PlanMode bool
+	// 阶段一百七十六：SOLO 全自动模式——发起时上行 solo_mode=true，任务内需审批操作不再挂起等待
+	// 用户确认而直接自动放行（安全兜底不变：沙箱路径约束/变更留痕可回滚/系统提示纪律红线）
+	SoloMode     bool
+	subCount     int                   // 阶段一百七十八：本任务已派生子 Agent 计数（mu 保护；上限 agentSubMaxPerTask 防循环派生）
+	planApproved bool                  // 计划是否已获用户批准（mu 保护；批准后门禁解锁、任务转入执行）
+	planCh       chan *AgentApproval   // 容量 1：等待计划审批时由 handleAgentPlan 投递（approve/reject/cancel）
+	planStep     string                // 当前等待计划审批的步骤 key（toolCall.ID，防迟到审批错投）
+	execCh       chan *AgentExecResult // 阶段六十：容量 1，等待 PC 本地执行回传时由 handleAgentExecResp 投递
+	execStep     string                // 当前等待本地执行回传的步骤 key（toolCall.ID，防迟到回传错投）
+	runBgCh      chan struct{}         // 阶段七十五：当前运行中 run_command 的"转后台"请求通道（close 广播；nil=无运行中命令）
+	runBgStep    string                // 转后台通道归属步骤（toolCall.ID，防错投）
 	// 阶段一百三十八：任务级取消上下文——修复"用户停止后当前轮模型调用继续烧上游 tokens"问题。
 	// 原实现每轮 askCtx 派生自 context.Background()，取消信号传不到进行中的调用，当前轮要跑完
 	// （叠加多源重试最长可达数倍 aiAskTimeout）才在循环回顶检查点退出；现每轮 askCtx 派生自
@@ -199,6 +240,9 @@ type AgentTask struct {
 	steps      int
 	StartAt    time.Time         // 阶段一百三十八：实际开始执行时刻（直接启动/队列派发时赋值），完结时算耗时随帧下发
 	stepSeq    int               // 阶段六十五：执行轨迹序号计数器（与 steps 区分——steps 为模型迭代轮次，stepSeq 为工具调用留痕序号）
+	dbgLastFP  string            // 阶段一百八十六：调试熔断——上一失败结果错误指纹（agentdebug.go；mu 保护，空=无失败史）
+	dbgFPCount int               // 阶段一百八十六：同指纹失败连续次数（任务内累计不因成功清零，换指纹才重算；mu 保护）
+	dbgActive  bool              // 阶段一百八十七：专项调试模式——run_command 失败进入/成功解除（agentdebug.go；mu 保护）
 	changeSeq  int               // 阶段七十七：变更快照序号（备份文件命名去重）
 	changes    []*agentChangeRec // 阶段七十七：任务内文件变更归口（同路径首触保留最早 before，撤销还原到任务前状态）
 	usageTotal aiUsage           // 阶段一百零二：任务全程模型调用 Token 累计（mu 保护；完结时统一落库/随帧下发）
@@ -324,6 +368,14 @@ func InitAgent(cfg *config.Config) {
 		strings.TrimSpace(cfg.AI.Agent.WebSearch.Endpoint))
 	if err := store.DB.AutoMigrate(&model.AgentTaskRecord{}); err != nil {
 		logger.Error("Agent 任务表迁移失败: %v", err)
+	}
+	// 阶段一百八十二：任务模板表迁移（一键带参重跑落库归口）
+	if err := store.DB.AutoMigrate(&model.AgentTaskTpl{}); err != nil {
+		logger.Error("Agent 任务模板表迁移失败: %v", err)
+	}
+	// 阶段一百八十四：定时/巡检任务表迁移（到期自动发起归口）
+	if err := store.DB.AutoMigrate(&model.AgentCronTask{}); err != nil {
+		logger.Error("Agent 定时任务表迁移失败: %v", err)
 	}
 	// 阶段六十七：服务重启遗留态归口——内存任务注册表随进程消失，落库的 queued/running 记录
 	// 已不可能恢复（queued 从未启动、running 执行中断），统一标记 failed 防任务历史出现幻影进行态
@@ -561,6 +613,50 @@ func agentWebSearchToolDef() aiToolDefinition {
 	}}
 }
 
+// agentPlanToolDef 阶段一百六十四：present_plan 工具 schema（TRAE CN Plan 同款）——
+// 仅计划模式任务注入（runAgentTask 内按 t.PlanMode 追加），模型完成只读调研后提交执行计划
+func agentPlanToolDef() aiToolDefinition {
+	return aiToolDefinition{Type: "function", Function: map[string]interface{}{
+		"name":        "present_plan",
+		"description": "提交执行计划给用户审批（计划模式专用）。完成只读调研后调用本工具展示分步计划，用户批准后才能开始执行有副作用的操作（写文件/编辑/删除/执行命令/MCP 工具等）；计划被驳回时请结合用户意见调整方案后重新提交，不要擅自开始执行。",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"title":   map[string]interface{}{"type": "string", "description": "计划标题（一句话概括整体方案）"},
+				"summary": map[string]interface{}{"type": "string", "description": "方案说明（调研发现、技术选型理由、风险提示等，可选）"},
+				"steps": map[string]interface{}{
+					"type":        "array",
+					"description": "有序执行步骤（3-8 步为宜，按执行顺序排列）",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"content": map[string]interface{}{"type": "string", "description": "步骤内容（一句话说明该步做什么）"},
+							"detail":  map[string]interface{}{"type": "string", "description": "步骤细节（涉及的关键文件/命令/预期产出，可选）"},
+						},
+						"required": []string{"content"},
+					},
+				},
+			},
+			"required": []string{"steps"},
+		},
+	}}
+}
+
+// agentPlanBlockedTool 阶段一百六十四：计划模式工具门禁——计划获用户批准前，
+// 有副作用的操作一律拒绝执行（只读调研类工具放行）。MCP 工具语义未知，一律视为有副作用
+func agentPlanBlockedTool(tool string, params map[string]interface{}) bool {
+	switch tool {
+	case "write_file", "edit_file", "delete_file", "run_command":
+		return true
+	case "http_request":
+		method := strings.ToUpper(strings.TrimSpace(agentParamString(params["method"])))
+		return method != "" && method != "GET" && method != "HEAD"
+	case "browser_click", "browser_input", "browser_eval":
+		return true
+	}
+	return strings.HasPrefix(tool, "mcp_")
+}
+
 // agentToolDefinitions 注入模型的工具 schema（OpenAI function calling 格式；
 // 阶段六十八：http_request/web_search 按配置开关动态注入，未开启不进 schema 防模型误调用）
 func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
@@ -706,6 +802,23 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 			},
 		}},
 	}
+	// 阶段一百七十四：工作区语义检索工具注入（embedding 未配置时向量通道不可用，
+	// schema 不注入防误调用——与 web_search/http_request 未开启不宣传同口径；此时模型用 grep 兜底）
+	if kbEmbedEnabled() {
+		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
+			"name":        "semantic_search",
+			"description": "在工作区内按语义（含义）搜索代码与文档（返回 相关文件片段+相似度 列表），不依赖精确关键字——用自然语言描述要找的功能/逻辑即可。适合「在哪处理了XX」「XX逻辑在哪实现」这类定位问题；精确关键字/符号搜索用 grep。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query":       map[string]interface{}{"type": "string", "description": "自然语言查询，描述要找的内容（如「用户登录鉴权逻辑」「WebSocket 心跳处理」）"},
+					"path":        map[string]interface{}{"type": "string", "description": "限定搜索的子目录相对路径（默认整个工作区）"},
+					"max_results": map[string]interface{}{"type": "integer", "description": "最多返回片段数（1-30，默认 8）"},
+				},
+				"required": []string{"query"},
+			},
+		}})
+	}
 	// 阶段六十八：网络工具（HTTP 请求 + 联网搜索）
 	if agentHttpEnabled.Load() {
 		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
@@ -723,10 +836,25 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 				"required": []string{"url"},
 			},
 		}})
+		// 阶段一百六十九：fetch_page 网页阅读（抓网页转 Markdown 正文，TRAE CN fetch 同语义）
+		tools = append(tools, aiToolDefinition{Type: "function", Function: map[string]interface{}{
+			"name":        "fetch_page",
+			"description": "抓取网页并把 HTML 转为 Markdown 正文（自动去除脚本/样式/导航等噪音，标题/链接/列表/代码/表格结构化保留），适合阅读文档、文章、新闻等网页内容。仅 GET 只读自动放行。接口调用/自定义请求头与请求体用 http_request；JS 动态渲染或需登录的页面用内置浏览器工具。",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"url":     map[string]interface{}{"type": "string", "description": "完整网页地址（http/https）"},
+					"timeout": map[string]interface{}{"type": "integer", "description": "超时秒数（1-300，默认 60）"},
+				},
+				"required": []string{"url"},
+			},
+		}})
 	}
 	if agentSearchEnabled.Load() {
 		tools = append(tools, agentWebSearchToolDef())
 	}
+	// 阶段一百七十八：spawn_agent 子 Agent 派生工具（恒注入——服务端专属，子 Agent 工具集不含它=防递归）
+	tools = append(tools, agentSubToolDef())
 	// 阶段九十一：内置浏览器工具注入（WebContentsView 在用户电脑上，PC 端本地执行；
 	// 开关 ai.agent.pc_browser + 仅发起人 PC 端在线时注入——离线时调用必失败，schema 反而误导模型）
 	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
@@ -755,9 +883,13 @@ func (s *Server) agentEmit(t *AgentTask, eventType string, payload map[string]in
 	// 阶段七十一：事件流携带会话归属，客户端任务卡按会话盖戳过滤渲染（多端防串会话）
 	payload["session_id"] = t.SessionID
 	data, _ := json.Marshal(payload)
+	from := "智能体"
+	if t.Agent != nil { // 测试构造/异常路径可能无 Agent，防 nil 崩溃（正常任务链路恒有值）
+		from = t.Agent.Name
+	}
 	msg := protocol.Message{
 		MsgType:   protocol.MsgTypeAgentEvent,
-		FromUser:  t.Agent.Name, // 前端按会话归属渲染事件卡片
+		FromUser:  from, // 前端按会话归属渲染事件卡片
 		ToUser:    t.Username,
 		Content:   string(data),
 		Timestamp: time.Now().Unix(),
@@ -854,8 +986,12 @@ func agentWhitelistAutoWrite(username string) {
 // username 阶段八十三：白名单按用户隔离（个人 ∪ 全局），调用方传任务发起人
 func agentNeedsApproval(username, tool string, params map[string]interface{}) (bool, string) {
 	switch tool {
-	case "read_file", "todo_write", "list_dir", "grep":
-		return false, "" // 只读与任务清单：安全，自动放行（阶段七十四新增 list_dir/grep）
+	case "read_file", "todo_write", "list_dir", "grep", "semantic_search":
+		return false, "" // 只读与任务清单：安全，自动放行（阶段七十四新增 list_dir/grep；阶段一百七十四 semantic_search 只读语义检索）
+	case "spawn_agent":
+		// 阶段一百七十八：子 Agent 派生为只读调研语义（子工具集固定白名单+步数/超时/数量三重上限），
+		// 免审批自动放行；入并行白名单后多 spawn_agent 并发执行
+		return false, ""
 	case "write_file", "edit_file":
 		// 阶段七十四：edit_file 与 write_file 同为写操作，共用写文件免审批白名单
 		agentWlMu.RLock()
@@ -876,6 +1012,8 @@ func agentNeedsApproval(username, tool string, params map[string]interface{}) (b
 		return true, "命令不在自动放行白名单内，请确认后执行"
 	case "web_search":
 		return false, "" // 阶段六十八：只读搜索，自动放行
+	case "fetch_page":
+		return false, "" // 阶段一百六十九：只读网页阅读（GET 抓取转 Markdown），自动放行
 	case "http_request":
 		// 阶段六十八：GET/HEAD 只读请求自动放行；非只读方法可能改变远端数据，走审批
 		method := strings.ToUpper(strings.TrimSpace(agentParamString(params["method"])))
@@ -993,6 +1131,8 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 		return agentToolListDir(t.Username, params) // 阶段七十四：列目录
 	case "grep":
 		return agentToolGrep(t.Username, params) // 阶段七十四：内容搜索
+	case "semantic_search":
+		return agentToolSemanticSearch(t, params) // 阶段一百七十四：工作区语义检索（向量 TopK）
 	case "todo_write":
 		return agentToolTodoWrite(s, t, params)
 	case "run_command":
@@ -1001,6 +1141,11 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 		return agentToolHttpRequest(params) // 阶段六十八：服务端代理 HTTP 请求
 	case "web_search":
 		return agentToolWebSearch(params) // 阶段六十八：联网搜索
+	case "fetch_page":
+		return agentToolFetchPage(params) // 阶段一百六十九：网页阅读（抓取转 Markdown）
+	case "spawn_agent":
+		goal, _ := params["goal"].(string) // 阶段一百七十八：派生子 Agent（阻塞至子任务返回结论）
+		return s.agentSubAgentRun(t, goal)
 	}
 	return "错误：未知工具 " + tool
 }
@@ -1017,7 +1162,11 @@ func agentToolServerOnly(tool string) bool {
 		}
 	}
 	// 阶段一百二十五：ask_user 交互归口在服务端事件流（等待用户回答），与本地执行无关
-	return tool == "todo_write" || tool == "http_request" || tool == "web_search" || tool == "ask_user"
+	// 阶段一百七十四：semantic_search 嵌入调用归口服务端（chromem 向量库在服务端内存/磁盘），恒 server
+	// 阶段一百七十八：spawn_agent 子 Agent 派生归口服务端（子循环在服务端并发执行）
+	return tool == "todo_write" || tool == "http_request" || tool == "web_search" ||
+		tool == "fetch_page" || tool == "ask_user" || tool == "semantic_search" ||
+		tool == "spawn_agent" // 阶段一百七十八
 }
 
 // agentToolEnvHint 阶段六十：tool_start 事件携带的执行环境预判（仅供前端即时展示提示）。
@@ -1061,6 +1210,21 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 		return agentToolExec(s, t, callID, tool, params), "server"
 	}
 	if agentPcExec.Load() && s.hub.HasPC(t.Username) {
+		// 阶段一百七十一：run_command 下发前注入会话状态镜像（cwd=记账目录，空=主工作区根；
+		// env=set 记账差异）——PC 端无状态化，按镜像值 spawn；记账类命令（cd/set）由 PC 校验
+		// 本机文件系统后经回传 shell 字段同步权威状态
+		if tool == "run_command" {
+			params["cwd"] = agentShellCwd(t)
+			t.mu.Lock()
+			if len(t.shellEnv) > 0 {
+				envCopy := make(map[string]string, len(t.shellEnv))
+				for k, v := range t.shellEnv {
+					envCopy[k] = v
+				}
+				params["env"] = envCopy
+			}
+			t.mu.Unlock()
+		}
 		if result, ok := s.agentWaitLocalExec(t, callID, tool, params); ok {
 			return result, "pc"
 		}
@@ -1078,6 +1242,121 @@ func (s *Server) agentToolExecDispatch(t *AgentTask, callID, tool string, params
 	return agentToolExec(s, t, callID, tool, params), "server"
 }
 
+// agentToolParallelizable 阶段一百六十五：工具并行化判定——仅「服务端执行 + 只读 + 免审批」的
+// 工具可入并行批。PC 本地执行等待通道为任务级单槽（t.execCh，agentWaitLocalExec），
+// 并发下派会互相覆盖，故 PC 在线时的文件/目录工具不并行；todo_write 为任务状态变更保持串行，
+// 维持与计划批准/清单展示的次序语义
+func agentToolParallelizable(s *Server, t *AgentTask, tool string, params map[string]interface{}) bool {
+	if agentToolEnvHint(s, t, tool) != "server" {
+		return false
+	}
+	switch tool {
+	case "read_file", "list_dir", "grep", "web_search", "fetch_page", "semantic_search": // 阶段一百六十九：fetch_page 只读网页阅读入并行白名单；阶段一百七十四 semantic_search 只读入并行白名单
+		return true
+	case "spawn_agent":
+		// 阶段一百七十八：子 Agent 派生入并行白名单——多个 spawn_agent 同轮 tool_calls 并发执行
+		//（子 Agent 挂父任务取消树、无挂起分支、服务端执行不碰任务级单槽 execCh，可安全并发）
+		return true
+	case "http_request":
+		method := strings.ToUpper(strings.TrimSpace(agentParamString(params["method"])))
+		return method == "" || method == "GET" || method == "HEAD"
+	}
+	return false
+}
+
+// agentToolSegments 阶段一百六十五：本轮 tool_calls 执行段切分归口——连续的并行化候选
+// 合并为一段（长度 ≥2 即并行批），其余工具各成单元素段；段序=原 tool_calls 序，
+// 副作用/交互工具与相邻只读调用的相对次序不变（读在写前/写后语义保持），串行语义不受影响
+func agentToolSegments(s *Server, t *AgentTask, toolCalls []aiToolCall) [][]aiToolCall {
+	segs := make([][]aiToolCall, 0, len(toolCalls))
+	cur := make([]aiToolCall, 0, 4)
+	flush := func() {
+		if len(cur) > 0 {
+			segs = append(segs, cur)
+			cur = make([]aiToolCall, 0, 4)
+		}
+	}
+	for _, tc := range toolCalls {
+		var params map[string]interface{}
+		if strings.TrimSpace(tc.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &params); err != nil {
+				params = map[string]interface{}{"_parse_error": err.Error()}
+			}
+		}
+		if agentToolParallelizable(s, t, tc.Function.Name, params) {
+			cur = append(cur, tc)
+			continue
+		}
+		flush()
+		segs = append(segs, []aiToolCall{tc})
+	}
+	flush()
+	return segs
+}
+
+// agentRunToolBatch 阶段一百六十五：并行批执行归口——入参均为服务端只读免审批工具
+// （agentToolSegments 切分保证），无审批/提问/计划等交互挂起分支，可安全并发
+// （信号量上限 4 路，防模型一次塞十几个调用打满服务端资源）。
+// 事件时序：tool_start 按原序先全部下发（前端即时出全部工具卡），tool_result 随各调用
+// 完成即推（call_id 精确归属各卡）；步骤留痕与历史消息按原 tool_calls 顺序落位，
+// 保证 OpenAI 兼容格式 assistant(tool_calls)→tool(tool_call_id) 配对次序稳定
+func (s *Server) agentRunToolBatch(t *AgentTask, tools []aiToolCall) []aiChatMessage {
+	type batchResult struct {
+		params   map[string]interface{}
+		result   string
+		dbgBlock string // 阶段一百八十六：调试增强块本体（入史时截断原结果后追加）
+		env      string
+		ok       bool
+		costMS   int64
+	}
+	results := make([]batchResult, len(tools))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, tc := range tools {
+		toolName := tc.Function.Name
+		var params map[string]interface{}
+		if strings.TrimSpace(tc.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &params); err != nil {
+				params = map[string]interface{}{"_parse_error": err.Error()}
+			}
+		}
+		results[i].params = params
+		s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID, "label": agentToolLabel(t.Username, toolName), "round": agentTaskCurRound(t)})
+		wg.Add(1)
+		go func(i int, callID, toolName string, params map[string]interface{}) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			start := time.Now()
+			result, env := s.agentToolExecDispatch(t, callID, toolName, params)
+			r := &results[i]
+			r.result, r.env, r.ok, r.costMS = result, env, agentResultOK(result), time.Since(start).Milliseconds()
+			s.agentEmit(t, "tool_result", map[string]interface{}{
+				"tool": toolName, "ok": r.ok, "output": r.result,
+				"duration_ms": r.costMS, "env": r.env,
+			})
+		}(i, tc.ID, toolName, params)
+	}
+	wg.Wait()
+	// 留痕与历史消息按原 tool_calls 顺序落位（与串行路径同语义：截断 + 截图附件抽出注入）
+	msgs := make([]aiChatMessage, 0, len(tools))
+	for i, tc := range tools {
+		r := results[i]
+		r.result, r.dbgBlock = agentDebugAnalyze(t, r.result, r.env, tc.Function.Name) // 阶段一百八十六：失败结果调试增强（装配序执行保指纹计数有序；tool_result 事件已按原始输出先行推送）
+		s.agentStepTrace(t, tc.Function.Name, r.params, r.result, r.ok, r.env, "none", r.costMS)
+		clean, images := agentExtractToolImages(r.result)
+		msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(strings.TrimSuffix(clean, r.dbgBlock)) + r.dbgBlock, ToolCallID: tc.ID, Name: tc.Function.Name})
+		if len(images) > 0 {
+			parts := []aiContentPart{{Type: "text", Text: fmt.Sprintf("工具 %s 返回了 %d 张屏幕截图（base64 已转为图像附件），请结合截图画面与上文工具输出继续完成任务。", tc.Function.Name, len(images))}}
+			for _, dataURL := range images {
+				parts = append(parts, aiContentPart{Type: "image_url", ImageURL: &aiImageURLField{URL: dataURL}})
+			}
+			msgs = append(msgs, aiChatMessage{Role: "user", Content: parts})
+		}
+	}
+	return msgs
+}
+
 // agentStepTrace 阶段六十五：单步工具调用轨迹落库归口（免审/审批通过/拒绝/取消/超时/本地回退各分支统一收口）。
 // 每步即时落库（任务运行中查看详情亦可追溯已执行部分），序号取任务内递增 stepSeq；
 // 参数摘要截断 1000 字、结果摘要截断 2000 字防超长撑表；落库失败仅记日志不阻断任务执行
@@ -1085,6 +1364,7 @@ func (s *Server) agentStepTrace(t *AgentTask, tool string, params map[string]int
 	t.mu.Lock()
 	t.stepSeq++
 	seq := t.stepSeq
+	round := t.steps + 1 // 阶段一百七十二：调用时点所属轮次（steps 轮末自增，+1 为当前轮，与 step_tokens 同口径）
 	t.mu.Unlock()
 	paramsJSON := ""
 	if len(params) > 0 {
@@ -1102,10 +1382,20 @@ func (s *Server) agentStepTrace(t *AgentTask, tool string, params map[string]int
 		Env:        env,
 		Approval:   approval,
 		DurationMS: durationMS,
+		Round:      round,
 	}
 	if err := store.DB.Create(&rec).Error; err != nil {
 		logger.Error("Agent 执行轨迹落库失败（任务 %s 步骤 %d）：%v", t.ID, seq, err)
 	}
+}
+
+// agentTaskCurRound 阶段一百七十二：当前执行轮次（steps 轮末自增，+1 为正在进行的轮，1 起）。
+// 实时事件帧（text_delta/thought_delta/tool_start）随帧携带，前端据此插入逐轮时间线节点
+func agentTaskCurRound(t *AgentTask) int {
+	t.mu.Lock()
+	r := t.steps + 1
+	t.mu.Unlock()
+	return r
 }
 
 // agentWaitLocalExec 阶段六十：下发本地执行请求并挂起等待 PC 回传。
@@ -1218,6 +1508,7 @@ func (s *Server) handleAgentExecResp(c *Client, msg *protocol.Message) {
 		OK      bool            `json:"ok"`
 		Output  string          `json:"output"`
 		Changes []agentPCChange `json:"changes"`
+		Shell   *agentPCShell   `json:"shell"` // 阶段一百七十一：run_command 记账类命令（cd/set）执行后的会话状态回传（权威同步）
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
 		return // 本地执行回传属于旁路信令，格式异常静默丢弃即可
@@ -1248,7 +1539,18 @@ func (s *Server) handleAgentExecResp(c *Client, msg *protocol.Message) {
 	if ch == nil || step != req.Step { // 非等待态或步骤不匹配（迟到的回传）直接丢弃
 		return
 	}
-	r := &AgentExecResult{OK: req.OK, Output: req.Output, Changes: req.Changes}
+	r := &AgentExecResult{OK: req.OK, Output: req.Output, Changes: req.Changes, Shell: req.Shell}
+	// 阶段一百七十一：持久终端会话状态同步——PC 执行记账类命令（cd/set）后回传新值，写回权威状态
+	if r.Shell != nil {
+		t.mu.Lock()
+		if r.Shell.Cwd != "" {
+			t.shellCwd = r.Shell.Cwd
+		}
+		if r.Shell.Env != nil {
+			t.shellEnv = r.Shell.Env
+		}
+		t.mu.Unlock()
+	}
 	// 阶段八十：本地文件工具回传携带变更——登记审查行（env=pc）并推送审查条（任务中即时可见）
 	if len(r.Changes) > 0 {
 		s.agentRecordPCChanges(t, r.Changes)
@@ -2004,6 +2306,7 @@ type agentChangeRec struct {
 	Backup      string // 首触备份绝对路径（create 首触为空——任务前文件不存在）
 	Env         string // 阶段八十：server=服务端工作区（完结统一 diff 统计）/ pc=用户本地（统计执行器上报，免重算）
 	Explanation string // AI 修改说明（同路径重复触碰取最近一次，供前端变更浮层/审查列表展示）
+	Round       int    // 阶段一百七十二：首触登记轮次（模型迭代轮，1 起；重放详情逐轮归组）
 }
 
 // agentChangeView 下发视图（done/error 事件与下行 66 刷新帧共用）
@@ -2014,6 +2317,8 @@ type agentChangeView struct {
 	Dels        int    `json:"dels"`
 	Status      string `json:"status"`
 	Explanation string `json:"explanation,omitempty"`
+	Round       int    `json:"round,omitempty"` // 阶段一百七十二：首触登记轮次（重放详情逐轮归组；旧数据 0 不下发）
+	Env         string `json:"env,omitempty"`   // 阶段一百八十一：归属环境（pc=用户本地磁盘，前端隐藏 diff 按钮——服务端读不到本地文件）
 }
 
 // agentRelPath 工作区内绝对路径 → 相对路径（正斜杠，记录表与前端展示归口）；解析失败回退文件名
@@ -2081,7 +2386,8 @@ func agentRecordChange(t *AgentTask, rel, kind, backup, explanation string) {
 		}
 	}
 	if dup == nil {
-		rec := &agentChangeRec{Path: rel, Kind: kind, Backup: backup, Explanation: explanation}
+		round := t.steps + 1 // 阶段一百七十二：首触登记轮次（与步骤轨迹同口径）
+		rec := &agentChangeRec{Path: rel, Kind: kind, Backup: backup, Explanation: explanation, Round: round}
 		t.changes = append(t.changes, rec)
 	}
 	t.mu.Unlock()
@@ -2096,7 +2402,7 @@ func agentRecordChange(t *AgentTask, rel, kind, backup, explanation string) {
 	}
 	if err := store.DB.Create(&model.AgentChangeRecord{
 		TaskID: t.ID, Username: t.Username, Path: rel, Kind: kind, BackupFile: backup,
-		Explanation: explanation, Status: "pending",
+		Explanation: explanation, Status: "pending", Round: t.steps + 1,
 	}).Error; err != nil {
 		logger.Error("Agent 变更登记落库失败（任务 %s，%s）：%v", t.ID, rel, err)
 	}
@@ -2113,6 +2419,7 @@ func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
 			continue
 		}
 		t.mu.Lock()
+		pcRound := t.steps + 1 // 阶段一百七十二：首触登记轮次（与步骤轨迹同口径）
 		var dup *agentChangeRec
 		for _, r := range t.changes {
 			if r.Path == ch.Path {
@@ -2121,7 +2428,7 @@ func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
 			}
 		}
 		if dup == nil {
-			t.changes = append(t.changes, &agentChangeRec{Path: ch.Path, Kind: ch.Kind, Backup: ch.Backup, Env: "pc", Explanation: ch.Explanation})
+			t.changes = append(t.changes, &agentChangeRec{Path: ch.Path, Kind: ch.Kind, Backup: ch.Backup, Env: "pc", Explanation: ch.Explanation, Round: pcRound})
 		} else if ch.Explanation != "" {
 			dup.Explanation = ch.Explanation // 说明 last-wins（与 agentRecordChange 同口径）
 		}
@@ -2146,7 +2453,7 @@ func (s *Server) agentRecordPCChanges(t *AgentTask, changes []agentPCChange) {
 		if err := store.DB.Create(&model.AgentChangeRecord{
 			TaskID: t.ID, Username: t.Username, Path: ch.Path, Kind: ch.Kind,
 			Adds: ch.Adds, Dels: ch.Dels, BackupFile: ch.Backup, LocalPath: ch.Local,
-			Env: "pc", Status: "pending", Explanation: ch.Explanation,
+			Env: "pc", Status: "pending", Explanation: ch.Explanation, Round: pcRound,
 		}).Error; err != nil {
 			logger.Error("Agent 本地变更登记落库失败（任务 %s，%s）：%v", t.ID, ch.Path, err)
 			continue
@@ -2178,7 +2485,7 @@ func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
 			if err := store.DB.Where("task_id = ? AND path = ?", t.ID, r.Path).First(&row).Error; err != nil {
 				continue
 			}
-			views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: row.Adds, Dels: row.Dels, Status: row.Status, Explanation: row.Explanation})
+			views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: row.Adds, Dels: row.Dels, Status: row.Status, Explanation: row.Explanation, Round: r.Round, Env: r.Env})
 			continue
 		}
 		full, err := agentSafePath(t.Username, r.Path)
@@ -2210,7 +2517,7 @@ func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
 		}
 		store.DB.Model(&model.AgentChangeRecord{}).Where("task_id = ? AND path = ?", t.ID, r.Path).
 			Updates(map[string]interface{}{"adds": adds, "dels": dels})
-		views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: adds, Dels: dels, Status: "pending", Explanation: r.Explanation})
+		views = append(views, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: adds, Dels: dels, Status: "pending", Explanation: r.Explanation, Round: r.Round})
 	}
 	if len(views) == 0 {
 		return nil
@@ -2221,6 +2528,13 @@ func (s *Server) agentFinalizeChanges(t *AgentTask) []agentChangeView {
 // agentChangesPush 下行 66 全量刷新帧：从 DB 读全量构造（不依赖内存任务态，天然支持多端/重连/重启）。
 // 会话归属随帧下发（前端任务卡按会话过滤渲染，与 agentEmit 同口径）
 func (s *Server) agentChangesPush(username, taskID string) {
+	s.agentChangesPushOpt(username, taskID, nil)
+}
+
+// agentChangesPushOpt 下行 66 帧（extra 可选附加字段）。
+// 阶段一百八十一：diff 请求回帧经 extra 携带 {diff:{path,text}}（旧前端忽略未知字段，向后兼容）；
+// 附加字段只随本次帧下发（全量刷新帧每次独立构造，不会残留到后续帧）
+func (s *Server) agentChangesPushOpt(username, taskID string, extra map[string]interface{}) {
 	var rec model.AgentTaskRecord
 	agentName, sid := "", uint(0)
 	if err := store.DB.Select("agent_name", "session_id").Where("task_id = ?", taskID).First(&rec).Error; err == nil {
@@ -2231,14 +2545,18 @@ func (s *Server) agentChangesPush(username, taskID string) {
 	changes := make([]agentChangeView, 0, len(rows))
 	totalAdds, totalDels := 0, 0
 	for _, r := range rows {
-		changes = append(changes, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: r.Adds, Dels: r.Dels, Status: r.Status, Explanation: r.Explanation})
+		changes = append(changes, agentChangeView{Path: r.Path, Kind: r.Kind, Adds: r.Adds, Dels: r.Dels, Status: r.Status, Explanation: r.Explanation, Round: r.Round, Env: r.Env})
 		totalAdds += r.Adds
 		totalDels += r.Dels
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	payloadMap := map[string]interface{}{
 		"task_id": taskID, "session_id": sid, "changes": changes,
 		"total_adds": totalAdds, "total_dels": totalDels,
-	})
+	}
+	for k, v := range extra {
+		payloadMap[k] = v
+	}
+	payload, _ := json.Marshal(payloadMap)
 	out, _ := json.Marshal(protocol.Message{
 		MsgType:   protocol.MsgTypeAgentChanges,
 		FromUser:  agentName,
@@ -2250,27 +2568,51 @@ func (s *Server) agentChangesPush(username, taskID string) {
 	s.sendToUser(username, out)
 }
 
-// handleAgentChanges 阶段七十七：文件变更审查上行（content 为 JSON：{task_id,action,path?}）。
+// handleAgentChanges 阶段七十七：文件变更审查上行（content 为 JSON：{task_id,action,path?,round?}）。
 // action=keep 弃备份确认保留；revert 按 Kind 还原（modify/delete → 恢复备份，create → 删除文件，
 // git discard 同语义：用户事后手动改动会被覆盖）。path 缺省=全部 pending 行。
+// 阶段一百七十三：round>0 时按轮回滚（Checkpoint）——撤销该轮及之后登记的全部 pending 变更
+// （登记为首触轮次，round>=N 恰为"从第 N 轮开始登记"的变更集合）；与 path 叠加时取交集（前端不组合使用）。
 // 处理后回下行 66 全量帧同步多端；全部行离开 pending 后清理备份目录（孤儿容忍）
 func (s *Server) handleAgentChanges(c *Client, msg *protocol.Message) {
 	var req struct {
 		TaskID string `json:"task_id"`
-		Action string `json:"action"` // keep / revert
+		Action string `json:"action"` // keep / revert / diff（阶段一百八十一）
 		Path   string `json:"path"`   // 缺省=全部 pending
+		Round  int    `json:"round"`  // 阶段一百七十三：按轮回滚（撤销该轮及之后登记的变更；0=不过滤）
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
 		s.sendError(c, "参数错误")
 		return
 	}
+	// 阶段一百八十一：diff=查看单文件变更前后差异（行级 LCS，before=首触备份 / after=工作区当前），
+	// 结果随 66 帧 diff 字段回发，前端弹层着色展示；只读操作不动记录与备份
+	if req.Action == "diff" {
+		if req.Path == "" {
+			s.sendError(c, "diff 需要指定文件路径")
+			return
+		}
+		text, err := agentChangeDiff(c.username, req.TaskID, req.Path)
+		if err != nil {
+			s.sendError(c, err.Error())
+			return
+		}
+		logger.Info("Agent 变更差异查看（任务 %s，用户 %s，路径 %s）", req.TaskID, c.username, req.Path)
+		s.agentChangesPushOpt(c.username, req.TaskID, map[string]interface{}{
+			"diff": map[string]string{"path": req.Path, "text": text},
+		})
+		return
+	}
 	if req.Action != "keep" && req.Action != "revert" {
-		s.sendError(c, "action 仅支持 keep/revert")
+		s.sendError(c, "action 仅支持 keep/revert/diff")
 		return
 	}
 	db := store.DB.Where("task_id = ? AND username = ? AND status = ?", req.TaskID, c.username, "pending")
 	if req.Path != "" {
 		db = db.Where("path = ?", req.Path)
+	}
+	if req.Round > 0 {
+		db = db.Where("round >= ?", req.Round)
 	}
 	var rows []model.AgentChangeRecord
 	db.Order("id ASC").Find(&rows)
@@ -2455,10 +2797,218 @@ func agentKillTree(pid int) {
 	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run()
 }
 
+// ===== 阶段一百七十一：持久终端会话（run_command 环境状态跨调用保留）=====
+// 方案：cwd + 环境变量快照记账（非真持久进程——cmd.exe 交互进程有孙进程占管道挂死风险，
+// 阶段一百零一已验证；记账方案复用现有超时/杀树/哨兵/流式管道全部逻辑，风险面最小）。
+// 纯 cd/盘符/set 类命令本地记账立即返回（不 spawn）；其余命令以记账 cwd 为工作目录、
+// 记账 env 覆盖注入执行。权威状态归 AgentTask（服务端），PC 模式下发给 PC 执行、记账类
+// 命令由 PC 校验真实文件系统后回传新状态（服务端同步），PC 端无状态化。
+
+// 持久终端正则归口（包级编译一次；cd/set/盘符形态解析共用）
+var (
+	reShellCd      = regexp.MustCompile(`(?i)^cd(?:\s|$)`)
+	reShellDrive   = regexp.MustCompile(`^[a-z]:$`)
+	reShellSetArg  = regexp.MustCompile(`(?i)^set\s+\S+`)
+	reShellSetSw   = regexp.MustCompile(`(?i)^set\s+/`) // set /a /p 等开关：cmd 自有语义，不进记账（效果仅子进程内，如实执行）
+	reShellSetBody = regexp.MustCompile(`(?i)^set\s*`)  // set 前缀剥离（body 保留原文大小写）
+	reShellCdD     = regexp.MustCompile(`(?i)^cd\s+/d\s+(.+)$`)
+	reShellCdP     = regexp.MustCompile(`(?i)^cd\s+(.+)$`)
+	reShellDriveT  = regexp.MustCompile(`^[a-zA-Z]:$`)
+	reShellEnvKey  = regexp.MustCompile(`^[A-Z_][A-Z0-9_.()-]*$`)
+)
+
+// agentShellStateKind 纯状态记账类命令判定归口（服务端与 PC 端同口径）。
+// 返回 "cd"（cd/盘符切换）、"set"（set 赋值/查询/列表/删除）、""（普通命令，正常 spawn 执行）。
+// 仅识别「整条命令就是一条状态命令」；链式（cd x && build）不拦截——cmd /C 内的 cd 只影响
+// 子进程，会话目录不变（系统提示词已引导模型单独调用 cd）
+func agentShellStateKind(command string) string {
+	lc := strings.ToLower(strings.TrimSpace(command))
+	lc = strings.Trim(lc, "\"'") // 防模型给整条命令包引号
+	if strings.ContainsAny(lc, "&|") {
+		return "" // 链式命令不拦截（cmd /C 内的 cd 只影响子进程，会话目录不变）
+	}
+	if reShellCd.MatchString(lc) || reShellDrive.MatchString(lc) {
+		return "cd"
+	}
+	if lc == "set" || (reShellSetArg.MatchString(lc) && !reShellSetSw.MatchString(lc)) {
+		return "set"
+	}
+	return ""
+}
+
+// agentShellCwd 当前记账目录（空=工作区根）
+func agentShellCwd(t *AgentTask) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.shellCwd
+}
+
+// agentShellCwdResolve 解析记账目录：空记账值回退工作区根（PC 模式由下发方另行填本机目录）
+func agentShellCwdResolve(t *AgentTask, ws string) string {
+	if cwd := agentShellCwd(t); cwd != "" {
+		return cwd
+	}
+	return ws
+}
+
+// agentShellCdSet 记账类命令服务端执行归口：解析并校验后更新会话状态，返回给模型的结果文本。
+// PC 模式不走这里（下发 PC 校验真实文件系统，回传 shell 字段同步）。
+// cd 语义对齐 cmd.exe：裸 cd 显示当前目录；cd 路径 / cd .. / cd /d X:\dir / X: 切盘。
+// set 语义：set X=V 赋值（值 TrimSpace）、set X= 删除、set X 查询、裸 set 列记账差异。
+// 目标路径与变量值按原文解析（保留大小写——仅关键字匹配大小写无关），与用户真实目录一致
+func agentShellCdSet(t *AgentTask, ws, command string) string {
+	raw := strings.TrimSpace(command)
+	raw = strings.Trim(raw, "\"'") // 与 agentShellStateKind 同口径去整条引号
+	kind := agentShellStateKind(command)
+	if kind == "" {
+		return "" // 开关类（set /a 等）不进记账：调用方仅 kind 非空时走到这里，防御兜底
+	}
+	if kind == "cd" {
+		t.mu.Lock()
+		cur := t.shellCwd
+		t.mu.Unlock()
+		if cur == "" {
+			cur = ws
+		}
+		// 解析目标目录（纯盘符命令 "x:" 直接切盘；cd /d 路径；cd 路径；正则均大小写无关，目标保留原文）
+		target := ""
+		switch {
+		case reShellDriveT.MatchString(raw):
+			target = raw
+		case reShellCdD.MatchString(raw):
+			target = strings.TrimSpace(reShellCdD.FindStringSubmatch(raw)[1])
+		case reShellCdP.MatchString(raw):
+			target = strings.TrimSpace(reShellCdP.FindStringSubmatch(raw)[1])
+		}
+		if target == "" {
+			// 裸 cd：显示当前目录（cmd 原语义），不改状态
+			return "当前目录：" + cur
+		}
+		np := ""
+		if reShellDriveT.MatchString(target) {
+			np = target + "\\" // 仅盘符：切到该盘根（cmd 原语义为该盘上次目录，简化为根）
+		} else if filepath.IsAbs(target) || strings.Contains(target, ":") {
+			np = filepath.Clean(target)
+		} else {
+			np = filepath.Clean(filepath.Join(cur, target))
+		}
+		st, err := os.Stat(np)
+		if err != nil || !st.IsDir() {
+			return "错误：系统找不到指定的路径：" + np + "\n（当前目录仍为 " + cur + "）"
+		}
+		t.mu.Lock()
+		t.shellCwd = np
+		t.mu.Unlock()
+		return "已切换到：" + np
+	}
+	// set 记账：与 agentShellEnvCmd 的注入语义一致（key 大写规整、值空=删除；值保留原文大小写）
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.shellEnv == nil {
+		t.shellEnv = map[string]string{}
+	}
+	body := strings.TrimSpace(reShellSetBody.ReplaceAllString(raw, ""))
+	if body == "" {
+		// 裸 set：列出记账差异（cmd 原语义为列全部环境变量，这里列本会话已改写项）
+		if len(t.shellEnv) == 0 {
+			return "（本会话尚未用 set 修改环境变量）"
+		}
+		var b strings.Builder
+		b.WriteString("本会话 set 记账：\n")
+		for k, v := range t.shellEnv {
+			if v == "" {
+				b.WriteString(k + "=（已删除）\n")
+			} else {
+				b.WriteString(k + "=" + v + "\n")
+			}
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	eq := strings.IndexByte(body, '=')
+	if eq < 0 {
+		// set X：查询前缀（cmd 语义：列出以 X 开头的变量）
+		prefix := strings.ToUpper(body)
+		hits := 0
+		var b strings.Builder
+		for k, v := range t.shellEnv {
+			if strings.HasPrefix(k, prefix) {
+				hits++
+				b.WriteString(k + "=" + v + "\n")
+			}
+		}
+		if hits == 0 {
+			return "（会话记账中无以 " + prefix + " 开头的变量）"
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	key := strings.ToUpper(strings.TrimSpace(body[:eq]))
+	val := body[eq+1:]
+	if key == "" || !reShellEnvKey.MatchString(key) {
+		return "错误：环境变量名不合法：" + key
+	}
+	if strings.TrimSpace(val) == "" {
+		delete(t.shellEnv, key)
+		return "已删除环境变量：" + key
+	}
+	t.shellEnv[key] = strings.TrimSpace(val)
+	return "已设置 " + key + "=" + t.shellEnv[key]
+}
+
+// agentShellEnvCmd 记账 env 合并进当前进程环境（run_command spawn 用）。
+// 返回 nil=无记账差异（cmd.Env=nil 继承父进程）；覆盖同名（大小写不敏感，key 保留原条目大小写）、
+// 值空=删除该变量（Windows 环境块同 key 重复条目行为未定义，必须替换而非追加）
+func agentShellEnvCmd(t *AgentTask) []string {
+	t.mu.Lock()
+	env := t.shellEnv
+	t.mu.Unlock()
+	if len(env) == 0 {
+		return nil
+	}
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(env))
+	seen := map[string]bool{}
+	for _, kv := range base {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		k := strings.ToUpper(kv[:eq])
+		if v, ok := env[k]; ok {
+			seen[k] = true
+			if v != "" { // 空值=删除
+				out = append(out, kv[:eq+1]+v) // 保留原 key 大小写
+			}
+			continue
+		}
+		out = append(out, kv)
+	}
+	for k, v := range env {
+		if !seen[k] && v != "" {
+			out = append(out, k+"="+v)
+		}
+	}
+	return out
+}
+
+// agentShellNote 结果尾注：当前目录 + 记账 env 提示（模型感知会话状态，轻量一行）
+func agentShellNote(t *AgentTask, ws string) string {
+	cwd := agentShellCwdResolve(t, ws)
+	t.mu.Lock()
+	n := len(t.shellEnv)
+	t.mu.Unlock()
+	if n > 0 {
+		return fmt.Sprintf("\n[会话目录] %s（持久终端：cd/set 跨命令保留）[env 差异 %d 项]", cwd, n)
+	}
+	return "\n[会话目录] " + cwd
+}
+
 // agentToolRunCommand 工作区内执行命令（cmd /C，超时强杀，输出截断；chcp 65001 统一 UTF-8 输出）。
 // 阶段七十五：输出管道流式读取，行级聚合 200ms 节流下发 tool_output 事件（控制台实时可见）；
 // 执行期间用户可请求"转后台"（runBgCh close 触发）——立即返回不阻塞模型，进程继续跑完，
 // 结束后发 tool_exit 事件（退出码/耗时仅前端展示，不进模型上下文）。后台兜底 30 分钟强杀。
+// 阶段一百七十一：持久终端会话——纯 cd/盘符/set 类命令本地记账立即返回（不 spawn，服务端
+// 执行路径归口；PC 路径在 dispatch 前仍下发 PC 校验回传）；其余命令以记账 cwd 为工作目录、
+// 记账 env 覆盖注入，结果尾部附会话目录提示
 func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[string]interface{}) string {
 	command, _ := params["command"].(string)
 	command = strings.TrimSpace(command)
@@ -2476,13 +3026,19 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	if err != nil {
 		return "错误：" + err.Error()
 	}
+	// 阶段一百七十一：记账类命令快速路径（不 spawn 进程）
+	if kind := agentShellStateKind(command); kind != "" {
+		return agentShellCdSet(t, ws, command) + agentShellNote(t, ws)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	// chcp 65001 先切控制台代码页为 UTF-8（失败不中断），解决中文输出乱码
 	// 阶段一百零一：命令尾部追加完成哨兵——读到哨兵行即命令链收尾（powershell 等孙进程占住
 	// stdout 管道时 cmd.Wait 会永久阻塞，哨兵先到即返回已有输出，不等进程退出）
-	cmd := exec.CommandContext(ctx, "cmd", "/C", "chcp 65001 >nul 2>&1 & "+command+" & echo "+agentCmdDoneSentinel)
-	cmd.Dir = ws
+	cmd := exec.CommandContext(ctx, "cmd", "/C", "chcp 65001 >nul 2>&1 & "+command+" & call echo "+agentCmdExitMarkExpr+" & echo "+agentCmdDoneSentinel)
+	// 阶段一百七十一：工作目录=记账 cwd（空=工作区根）、环境=记账差异覆盖注入（持久终端会话）
+	cmd.Dir = agentShellCwdResolve(t, ws)
+	cmd.Env = agentShellEnvCmd(t)
 	stdout, perr := cmd.StdoutPipe()
 	if perr != nil {
 		return "错误：" + perr.Error()
@@ -2534,10 +3090,29 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	const fullTail = 56 << 10
 	// 阶段一百零一：完成哨兵信号（容量 1，重复命中忽略）——读到哨兵行即命令链收尾
 	doneSentinel := make(chan struct{}, 1)
+	// 阶段一百八十六：命令真实退出码（标记行捕获；mu 保护，-1+false=未捕获）
+	cmdExit := -1
+	cmdExitSet := false
+	capturedExit := func() (int, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		return cmdExit, cmdExitSet
+	}
 
 	addLine := func(raw []byte) {
 		mu.Lock()
 		defer mu.Unlock()
+		// 阶段一百八十六：退出码标记行——捕获真实 errorlevel，不计入输出上下文
+		// （标记位于哨兵之前、命令输出之后，用户命令自行 echo 同名标记会被链尾真实标记覆盖）
+		if bytes.Contains(raw, []byte(agentCmdExitMark)) {
+			if m := agentCmdExitMarkRe.FindSubmatch(raw); m != nil {
+				if v, e := strconv.Atoi(string(m[1])); e == nil {
+					cmdExit = v
+					cmdExitSet = true
+				}
+			}
+			return
+		}
 		// 阶段一百零一：哨兵行不计入输出上下文（total/fullBuf/acc 均不含），命中即通知主流程可提前返回
 		if bytes.Contains(raw, []byte(agentCmdDoneSentinel)) {
 			select {
@@ -2652,31 +3227,39 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 	case err := <-doneCh:
 		finalFlush()
 		text := modelText()
+		// 阶段一百八十六：标记行携带的真实退出码优先（`&` 链使 Wait 恒成功，成败只能看标记）
+		if ec, ok := capturedExit(); ok && ec != 0 && !timedOutFlag.Load() {
+			return fmt.Sprintf("命令退出码异常：exit status %d\n输出：\n%s", ec, text) + agentShellNote(t, ws)
+		}
 		if err != nil {
 			if timedOutFlag.Load() {
-				return fmt.Sprintf("错误：命令执行超时（%v），已终止\n输出：\n%s", timeout, text)
+				return fmt.Sprintf("错误：命令执行超时（%v），已终止\n输出：\n%s", timeout, text) + agentShellNote(t, ws)
 			}
 			// 非零退出码也把已有输出带回（编译报错等场景输出比退出码更有价值）
-			return fmt.Sprintf("命令退出码异常：%v\n输出：\n%s", err, text)
+			return fmt.Sprintf("命令退出码异常：%v\n输出：\n%s", err, text) + agentShellNote(t, ws)
 		}
 		if strings.TrimSpace(text) == "" {
-			return "（命令执行成功，无输出）"
+			return "（命令执行成功，无输出）" + agentShellNote(t, ws)
 		}
-		return text
+		return text + agentShellNote(t, ws)
 	case <-doneSentinel:
 		// 阶段一百零一：哨兵先到即返回（命令链已跑完、输出已完整；cmd.Wait 因孙进程占管道
-		// 未返回时不再死等，TRAE 同款哨兵语义）。残余输出仍会经输出泵推到控制台，不进模型
+		// 未返回时不再死等，TRAE 同款哨兵语义）。残余输出仍会经输出泵推到控制台，不进模型。
+		// 阶段一百八十六：成败按标记行真实退出码判定（不再依赖被 & 链吞掉的 cmd 退出码）
 		finalFlush()
 		text := modelText()
-		if strings.TrimSpace(text) == "" {
-			return "（命令执行成功，无输出）"
+		if ec, ok := capturedExit(); ok && ec != 0 && !timedOutFlag.Load() {
+			return fmt.Sprintf("命令退出码异常：exit status %d\n输出：\n%s", ec, text) + agentShellNote(t, ws)
 		}
-		return text
+		if strings.TrimSpace(text) == "" {
+			return "（命令执行成功，无输出）" + agentShellNote(t, ws)
+		}
+		return text + agentShellNote(t, ws)
 	case <-forceReturn.C:
 		// 阶段一百零一：强返兜底——杀树已在超时时刻发生，Wait 仍未返回则强制收尾
 		finalFlush()
 		text := modelText()
-		return fmt.Sprintf("错误：命令执行超时（%v），已强制终止\n输出：\n%s", timeout, text)
+		return fmt.Sprintf("错误：命令执行超时（%v），已强制终止\n输出：\n%s", timeout, text) + agentShellNote(t, ws)
 	case <-bgCh:
 		// 转后台：停前台超时，换 30 分钟兜底强杀（阶段一百零一：同样杀整树再 cancel 兜底）；
 		// 进程继续，输出继续流，结束仅发 tool_exit 事件
@@ -2686,7 +3269,10 @@ func agentToolRunCommand(s *Server, t *AgentTask, callID string, params map[stri
 			err := <-doneCh
 			finalFlush()
 			exitCode := 0
-			if err != nil {
+			// 阶段一百八十六：标记行真实退出码优先（`&` 链使 Wait 恒成功，原 err 判定拿不到成败）
+			if ec, ok := capturedExit(); ok {
+				exitCode = ec
+			} else if err != nil {
 				if ee, ok := err.(*exec.ExitError); ok {
 					exitCode = ee.ExitCode()
 				} else {
@@ -2747,12 +3333,17 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 	toolList := "read_file（读文件，支持 offset/limit 分段）、list_dir（列目录）、grep（按内容搜索文件）、" +
 		"write_file（写文件，需用户审批）、edit_file（精确替换编辑文件，需用户审批）、delete_file（删除文件/目录，需用户审批且不可恢复）、" +
 		"todo_write（任务清单）、run_command（执行命令，白名单外需审批）、ask_user（向用户提问获取决策/澄清需求，用户选择选项或自由输入后继续）"
+	if kbEmbedEnabled() {
+		toolList += "、semantic_search（按语义搜索工作区文件，自然语言描述要找的功能/逻辑；精确关键字搜索仍用 grep）"
+	}
 	if agentHttpEnabled.Load() {
 		toolList += "、http_request（HTTP 接口调用/网页抓取，非只读方法需审批）"
 	}
 	if agentSearchEnabled.Load() {
 		toolList += "、web_search（联网搜索）"
 	}
+	// 阶段一百七十八：spawn_agent 子 Agent 并行调研提示（TRAE CN 同款——大调研拆方向并行推进）
+	toolList += "、spawn_agent（派生子 Agent 并行执行只读调研子任务并返回结论；把大调研拆成多个互不依赖的方向，一次回复发多个即可并行执行）"
 	// 阶段九十一：内置浏览器工具提示（仅 PC 在线时已注入 schema，这里给分工纪律：
 	// JS 渲染/登录态页面用 browser_*，纯接口/静态抓取仍优先 http_request）
 	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
@@ -2776,32 +3367,34 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 		"7. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
 		"8. C/C++ 编译能力：可直接调用 gcc/g++/make 等编译命令，客户端首次使用时会自动准备本地编译环境（系统已有 MSVC/编译器时优先使用，无需任何安装操作；若系统为 MSVC，错误提示会引导改用 cl 语法）。\n" +
 		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。\n" +
-		"10. 遇到需要用户判断/决策的问题（多种可行方案、需求不明确、缺少关键信息且无法自行获取）时，用 ask_user 提问：问题简明扼要，给 2-4 个带说明的候选选项并标出推荐项；一次只问一个最关键的问题，能凭现有信息合理决策的不要打扰用户；用户取消回答时按最合理的默认方案继续，不要重复追问。"
+		"10. 遇到需要用户判断/决策的问题（多种可行方案、需求不明确、缺少关键信息且无法自行获取）时，用 ask_user 提问：问题简明扼要，给 2-4 个带说明的候选选项并标出推荐项；一次只问一个最关键的问题，能凭现有信息合理决策的不要打扰用户；用户取消回答时按最合理的默认方案继续，不要重复追问。\n" +
+		"11. run_command 在持久终端会话中执行：cd 与 set 的效果跨命令保留（每条命令结果尾部标注当前会话目录）。需要切换目录时单独调用 run_command 执行 cd（如 \"cd build\"），后续命令自动在新目录执行；cd 与其他命令用 && 连接不会保留目录。set 设置的环境变量（如 set GOFLAGS=-mod=vendor）在后续命令中生效；取消设置用 set 变量名=。"
 }
 
 // agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
 // 与 AI 问答提问落库回显同口径 ai.go handleAIChat；最终答复由 agentFinish 落库，问答成对可见）。
 // 阶段七十一：sid 指定归属会话（0=默认会话），回显/落库同源盖戳
-func (s *Server) agentEchoGoal(c *Client, agentName, goal string, sid uint) {
+// 阶段一百八十四：签名改传 username（定时任务无客户端连接，仅按归属用户推送）
+func (s *Server) agentEchoGoal(username, agentName, goal string, sid uint) {
 	record := model.Message{
 		MsgType:     2,
-		FromUser:    c.username,
+		FromUser:    username,
 		ToUser:      agentName,
 		Content:     goal,
 		IsRead:      true, // AI 会话无已读回执语义，避免自己发的提问永远显示"未读"
 		AISessionID: sid,
 	}
 	if err := store.DB.Create(&record).Error; err != nil {
-		logger.Error("Agent 任务目标落库失败（用户 %s）：%v", c.username, err)
+		logger.Error("Agent 任务目标落库失败（用户 %s）：%v", username, err)
 		return
 	}
 	// 阶段七十一：占位标题会话以任务目标生成标题（与 AI 提问同归口）
-	aiSessionAutoTitle(c.username, agentName, sid, goal)
+	aiSessionAutoTitle(username, agentName, sid, goal)
 	// 回显给发起人全部在线连接（复用私聊渲染链路，多端同步），真实 msg_id 随帧下发；
 	// SessionID 随帧下发：多端按会话归属过滤渲染
 	echo := protocol.Message{
 		MsgType:   protocol.MsgTypePrivate,
-		FromUser:  c.username,
+		FromUser:  username,
 		ToUser:    agentName,
 		Content:   goal,
 		MsgID:     record.ID,
@@ -2810,23 +3403,17 @@ func (s *Server) agentEchoGoal(c *Client, agentName, goal string, sid uint) {
 		Timestamp: time.Now().Unix(),
 	}
 	echoData, _ := json.Marshal(echo)
-	s.sendToUser(c.username, echoData)
+	s.sendToUser(username, echoData)
 	// 会话摘要归口（会话列表显示任务目标并排序置顶）
-	s.touchConversation(c.username, agentName, messageSummary(goal))
-	s.notifyConvUpdate(c.username)
+	s.touchConversation(username, agentName, messageSummary(goal))
+	s.notifyConvUpdate(username)
 }
 
 // handleAgentRun 阶段五十九：任务发起/取消（上行 msg_type=46）
 // 发起 content 为 JSON {goal, agent_name}；取消 content 为 JSON {task_id, action:"cancel"}
 func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 	content := strings.TrimSpace(msg.Content)
-	var req struct {
-		TaskID    string `json:"task_id"`
-		Action    string `json:"action"`
-		Goal      string `json:"goal"`
-		AgentName string `json:"agent_name"`
-		SessionID uint   `json:"session_id"` // 阶段七十一：归属会话（0=默认会话），任务全程按此盖戳
-	}
+	var req agentRunMsg
 	if err := json.Unmarshal([]byte(content), &req); err != nil {
 		s.sendError(c, "任务请求格式错误")
 		return
@@ -2864,6 +3451,8 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 				step := t.approveStep
 				askCh := t.askCh // 阶段一百二十五：提问等待同步唤醒（停止按钮对提问挂起同样生效）
 				askStep := t.askStep
+				planCh := t.planCh // 阶段一百六十四：计划审批等待同步唤醒（停止按钮对计划挂起同样生效）
+				planStep := t.planStep
 				t.mu.Unlock()
 				if ch != nil && step != "" {
 					// 唤醒等待中的审批（携带 cancel 标记，状态机内统一收口）
@@ -2876,6 +3465,13 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 					// 阶段一百二十五：唤醒等待中的提问（取消语义同审批，任务收口为已取消）
 					select {
 					case askCh <- &AgentApproval{Action: "cancel"}:
+					default:
+					}
+				}
+				if planCh != nil && planStep != "" {
+					// 阶段一百六十四：唤醒等待中的计划审批（取消语义同审批，任务收口为已取消）
+					select {
+					case planCh <- &AgentApproval{Action: "cancel"}:
 					default:
 					}
 				}
@@ -2916,53 +3512,89 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 发起分支
+	// 发起分支——归口 agentStartTask（阶段一百八十四自本函数抽出：手动上行与定时任务
+	// 共用同一校验/装载/排队/建任务/落库/回显链路，防双路径漂移）
 	if !agentEnabled.Load() {
 		s.sendError(c, "智能 Agent 功能未开启（后台管理 Agent 设置或 config.yaml ai.agent.enabled 可开启）")
 		return
 	}
+	if _, err := s.agentStartTask(c.username, req, ""); err != nil {
+		s.sendError(c, err.Error())
+	}
+}
+
+// agentRunMsg 任务发起参数（阶段一百八十四：46 号上行与定时任务共用；发起归口 agentStartTask）
+type agentRunMsg struct {
+	TaskID    string        `json:"task_id"`
+	Action    string        `json:"action"`
+	Goal      string        `json:"goal"`
+	AgentName string        `json:"agent_name"`
+	SessionID uint          `json:"session_id"` // 阶段七十一：归属会话（0=默认会话），任务全程按此盖戳
+	PlanMode  bool          `json:"plan_mode"`  // 阶段一百六十四：计划模式（先只读调研→present_plan 提交计划→用户批准后解锁副作用工具）
+	SoloMode  bool          `json:"solo_mode"`  // 阶段一百七十六：SOLO 全自动模式（任务内需审批操作自动放行，免逐条确认）
+	Images    []string      `json:"images"`     // 阶段一百六十六：任务图片附件（服务端静态 URL 数组，/static/upload/ 下）
+	Contexts  []AgentCtxReq `json:"contexts"`   // 阶段一百七十：@ 上下文引用（工作区相对路径 + 目录标记）
+}
+
+// agentStartTask 任务发起归口（阶段一百八十四自 handleAgentRun 抽出）：手动上行与定时任务共用
+// 智能体校验/附件装载/会话校验/排队归口/建任务/落库/回显全链路。source：空=手动上行；
+// "cron"=定时任务自动发起（任务记录 Source 留痕）。返回 taskID 或面向用户的错误文案
+func (s *Server) agentStartTask(username string, req agentRunMsg, source string) (string, error) {
 	goal := strings.TrimSpace(req.Goal)
 	if goal == "" {
-		s.sendError(c, "任务目标不能为空")
-		return
+		return "", errors.New("任务目标不能为空")
 	}
 	agentName := strings.TrimSpace(req.AgentName)
 	if agentName == "" {
 		agentName = aiAgentList()[0].Name // 缺省取首个智能体
 	}
-	agent := aiAgentForUser(agentName, c.username)
+	agent := aiAgentForUser(agentName, username)
 	if agent == nil {
-		s.sendError(c, "智能体不存在或无权使用")
-		return
+		return "", errors.New("智能体不存在或无权使用")
 	}
 	if agent.Provider == nil {
-		s.sendError(c, "该智能体未绑定模型服务，无法执行自动化任务")
-		return
+		return "", errors.New("该智能体未绑定模型服务，无法执行自动化任务")
+	}
+
+	// 阶段一百六十六：任务图片输入——附件归口加载（能力双保险 + 数量上限 + 路径/格式校验），
+	// 无效附件快速失败不建任务（对齐 AI 问答图片链路语义）
+	taskImages, err := s.agentTaskImagesLoad(agent, req.Images)
+	if err != nil {
+		return "", err
+	}
+
+	// 阶段一百七十：@ 上下文引用——路径安全校验 + 存在性 + 小文件内容直读装载，
+	// 任一无效引用快速失败不建任务（对齐任务图片链路语义）
+	taskCtxs, err := s.agentTaskContextsLoad(username, req.Contexts)
+	if err != nil {
+		return "", err
 	}
 
 	// 阶段七十一：多会话归属校验（0=默认会话），任务回显/答复/记录全程按此会话盖戳
 	sid := req.SessionID
-	if !aiSessionValidate(c.username, agent.Name, sid) {
-		s.sendError(c, "会话不存在或已被删除")
-		return
+	if !aiSessionValidate(username, agent.Name, sid) {
+		return "", errors.New("会话不存在或已被删除")
 	}
 
 	// 阶段六十七：任务队列归口——活动任务数低于并发上限直接启动，超出入队排队（FIFO），
 	// 排队已满拒绝；全程持锁防并发发起竞态超开（sendToUser 非阻塞投递，锁内推送安全）
 	agentQueueMu.Lock()
-	active, queued := agentCountForUser(c.username)
+	active, queued := agentCountForUser(username)
 	if active >= int(agentConcurrency.Load()) && len(queued) >= int(agentQueueSize.Load()) {
 		agentQueueMu.Unlock()
-		s.sendError(c, fmt.Sprintf("已有任务在执行中且排队已满（并发 %d + 排队 %d），请等待任务完成或取消后再发起", agentConcurrency.Load(), agentQueueSize.Load()))
-		return
+		return "", fmt.Errorf("已有任务在执行中且排队已满（并发 %d + 排队 %d），请等待任务完成或取消后再发起", agentConcurrency.Load(), agentQueueSize.Load())
 	}
 
 	t := &AgentTask{
 		ID:        agentNewTaskID(),
-		Username:  c.username,
+		Username:  username,
 		Agent:     agent,
 		Goal:      goal,
-		SessionID: sid, // 阶段七十一：任务全程会话归属（事件流/答复/任务记录同源）
+		Images:    taskImages,   // 阶段一百六十六：任务图片附件（已加载 data URL，创建后只读）
+		Contexts:  taskCtxs,     // 阶段一百七十：@ 上下文引用（已校验装载，创建后只读）
+		SessionID: sid,          // 阶段七十一：任务全程会话归属（事件流/答复/任务记录同源）
+		PlanMode:  req.PlanMode, // 阶段一百六十四：计划模式（创建后只读，无需锁保护）
+		SoloMode:  req.SoloMode, // 阶段一百七十六：SOLO 全自动模式（创建后只读，无需锁保护）
 	}
 	// 阶段一百三十八：任务级取消上下文（直接启动与排队派发共用；agentFinish 统一 runCancel 防泄漏）
 	t.runCtx, t.runCancel = context.WithCancel(context.Background())
@@ -2973,26 +3605,32 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 		agentTasks.Store(t.ID, t)
 		agentQueueMu.Unlock()
 
-		// 落库初始记录（running 态即建行，结束态更新，任务全程可追溯）
-		rec := model.AgentTaskRecord{
+		// 阶段一百八十二：发起参数快照（图片/@ 引用/计划模式/SOLO 模式）随记录落库，
+		// 供任务历史"重跑/存为模板"带参复用（两条建行路径共用同一快照辅助函数）
+		recSnap := model.AgentTaskRecord{
 			TaskID:    t.ID,
-			Username:  c.username,
+			Username:  username,
 			AgentName: agent.Name,
 			Goal:      goal,
 			Status:    "running",
 			SessionID: sid,
+			Images:    agentTaskImgSnapshot(req.Images),
+			Contexts:  agentTaskCtxSnapshot(req.Contexts),
+			PlanMode:  req.PlanMode,
+			SoloMode:  req.SoloMode,
+			Source:    source, // 阶段一百八十四：发起来源留痕（手动上行空串/定时任务 cron）
 		}
-		store.DB.Create(&rec)
+		store.DB.Create(&recSnap)
 
 		// 阶段七十：任务目标落库回显（提问进会话历史，切会话/重登不丢；先于受理事件保证提问气泡在任务卡上方）
-		s.agentEchoGoal(c, agent.Name, goal, sid)
+		s.agentEchoGoal(username, agent.Name, goal, sid)
 
 		// 已受理事件（前端创建任务面板）
 		s.agentEmit(t, "status", map[string]interface{}{"status": "running", "text": "任务已受理", "goal": goal, "agent": agent.Name})
 
 		// 异步执行状态机（不阻塞 WebSocket 主调度）
 		go s.runAgentTask(t)
-		return
+		return t.ID, nil
 	}
 
 	// 无空位：入队排队（FIFO 序号归口，落库 queued 态，任务历史可见）
@@ -3004,17 +3642,23 @@ func (s *Server) handleAgentRun(c *Client, msg *protocol.Message) {
 
 	rec := model.AgentTaskRecord{
 		TaskID:    t.ID,
-		Username:  c.username,
+		Username:  username,
 		AgentName: agent.Name,
 		Goal:      goal,
 		Status:    "queued",
 		SessionID: sid,
+		Images:    agentTaskImgSnapshot(req.Images), // 阶段一百八十二：发起参数快照（同直接启动路径）
+		Contexts:  agentTaskCtxSnapshot(req.Contexts),
+		PlanMode:  req.PlanMode,
+		SoloMode:  req.SoloMode,
+		Source:    source,
 	}
 	store.DB.Create(&rec)
-	logger.Info("Agent 任务入队 %s（用户 %s，排队位次 %d）", t.ID, c.username, position)
+	logger.Info("Agent 任务入队 %s（用户 %s，排队位次 %d）", t.ID, username, position)
 	// 阶段七十：任务目标落库回显（排队任务同口径，提问进会话历史；先于受理事件保证提问气泡在任务卡上方）
-	s.agentEchoGoal(c, agent.Name, goal, sid)
+	s.agentEchoGoal(username, agent.Name, goal, sid)
 	s.agentEmit(t, "status", map[string]interface{}{"status": "queued", "text": "排队中", "position": position, "goal": goal, "agent": agent.Name})
+	return t.ID, nil
 }
 
 // agentFinish 任务结束归口：状态落库 + done/error 事件推送（endOnce 防重复收尾）
@@ -3037,6 +3681,8 @@ func (s *Server) agentFinish(t *AgentTask, status, result, errMsg string) {
 		if t.runCancel != nil {
 			t.runCancel()
 		}
+		// 阶段一百七十七：任务完结即失效项目结构缓存——任务内文件变更在下个任务的目录树中立即可见
+		agentTreeInvalidate(t.Username)
 		// 阶段一百六十三（2026-09-24）：完结落库失败必须留痕——原实现静默忽略错误，落库失败会让
 		// DB 永久挂 running 幻影行（客户端重放显示进行态且永不可停止），此处至少留日志可追溯
 		if err := store.DB.Model(&model.AgentTaskRecord{}).Where("task_id = ?", t.ID).
@@ -3226,6 +3872,157 @@ func (s *Server) agentCancelOrphanRow(taskID, username string) bool {
 	return true
 }
 
+// agentTaskMaxImages 阶段一百六十六：单任务图片附件上限（多模态多图 token 成本高，4 张覆盖
+// UI 截图对比/设计稿参考等典型场景；超出直接拒绝让用户精简）
+const agentTaskMaxImages = 4
+
+// ===== @ 上下文引用（阶段一百七十） =====
+// 用户在输入框 @ 引用工作区文件/目录布置任务（TRAE CN 同款上下文引用）：前端随 AGENT_RUN
+// contexts 上行 [{path, dir}]，此处归口校验装载——路径安全（agentSafePath 防逃逸）+ 存在性校验 +
+// 小文件内容直读（模型先读后执行，省一轮 read_file 工具往返）；大文件/二进制只注入路径与大小，
+// 提示模型用 read_file 按需自读，避免超长内容撑爆任务上下文。
+
+// @ 引用上限（与前端提示一致）
+const (
+	agentCtxMaxCount    = 8        // 引用条目上限
+	agentCtxInlineMax   = 8 << 10  // 单文件内容直读上限（8KB）
+	agentCtxInlineTotal = 32 << 10 // 全部内联内容总量上限（32KB，防多个小文件叠加撑爆 goal）
+)
+
+// AgentCtxReq 前端上行引用项（工作区相对路径 + 目录标记）
+type AgentCtxReq struct {
+	Path string `json:"path"`
+	Dir  bool   `json:"dir"`
+}
+
+// AgentTaskContext 装载后的引用项（Inline 非空=内容已内联；Size 为文件字节数，目录恒 0）
+type AgentTaskContext struct {
+	Path   string
+	Dir    bool
+	Inline string
+	Size   int64
+}
+
+// agentTaskContextsLoad @ 引用归口装载：逐项安全校验，任一无效整体快速失败不建任务
+// （对齐任务图片链路语义）。单文件 ≤8KB 且非二进制直接内联；总量 32KB 封顶，超出部分降级为
+// 路径清单（尾部标注截断）。路径统一规整为工作区相对斜杠路径（Clean 去冗余段；agentSafePath
+// 已拒绝 .. 与绝对路径）
+func (s *Server) agentTaskContextsLoad(username string, raw []AgentCtxReq) ([]AgentTaskContext, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if len(raw) > agentCtxMaxCount {
+		return nil, fmt.Errorf("引用上下文最多 %d 项", agentCtxMaxCount)
+	}
+	out := make([]AgentTaskContext, 0, len(raw))
+	total := 0
+	for _, r := range raw {
+		path := strings.TrimSpace(r.Path)
+		if path == "" {
+			return nil, errors.New("引用路径不能为空")
+		}
+		full, err := agentSafePath(username, path)
+		if err != nil {
+			return nil, fmt.Errorf("引用 %q 不可用：%w", path, err)
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			return nil, fmt.Errorf("引用 %q 不存在或不可访问", path)
+		}
+		item := AgentTaskContext{
+			Path: filepath.ToSlash(filepath.Clean(strings.ReplaceAll(path, "\\", "/"))),
+			Dir:  r.Dir || info.IsDir(), // 目录标记以实际 stat 为准（防前端漏标）
+		}
+		if item.Dir {
+			out = append(out, item)
+			continue
+		}
+		// 超单文件上限或总量已满：不内联，只注入路径与大小（模型用 read_file 按需自读）
+		if info.Size() > agentCtxInlineMax || total >= agentCtxInlineTotal {
+			item.Size = info.Size()
+			out = append(out, item)
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return nil, fmt.Errorf("引用文件 %q 读取失败：%w", path, err)
+		}
+		if bytes.IndexByte(data, 0) >= 0 { // 二进制检测（含 NUL），同 read_file 口径不灌上下文
+			item.Size = info.Size()
+			out = append(out, item)
+			continue
+		}
+		text := string(data)
+		if strings.ContainsRune(text, 0xFFFD) { // GBK 兜底转码（与 read_file 同策略）
+			if gbk, gerr := simplifiedchinese.GBK.NewDecoder().Bytes(data); gerr == nil {
+				text = string(gbk)
+			}
+		}
+		runes := []rune(text)
+		if remain := agentCtxInlineTotal - total; len(runes) > remain { // 总量钳制：截断内联（标注尾巴计入预算）
+			tail := "\n…（内容过长已截断，完整内容请用 read_file 读取）"
+			cut := remain - len([]rune(tail))
+			if cut < 0 {
+				cut = 0
+			}
+			item.Size = info.Size()
+			item.Inline = string(runes[:cut]) + tail
+			total = agentCtxInlineTotal
+		} else {
+			item.Inline = text
+			total += len(runes)
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// agentContextBlock @ 引用注入区块（goal 前置）：目录给路径提示 list_dir 展开；小文件内容直读；
+// 大文件/二进制给路径与大小提示按需自读
+func agentContextBlock(ctxs []AgentTaskContext) string {
+	if len(ctxs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("【引用上下文】以下为用户通过 @ 引用的工作区内容，请优先基于它们理解并执行任务：\n")
+	for _, c := range ctxs {
+		if c.Dir {
+			fmt.Fprintf(&b, "[目录] %s（用 list_dir 查看内容）\n", c.Path)
+			continue
+		}
+		if c.Inline == "" {
+			fmt.Fprintf(&b, "[文件] %s（%d 字节，内容未内联，请用 read_file 按需读取）\n", c.Path, c.Size)
+			continue
+		}
+		fmt.Fprintf(&b, "[文件] %s 内容如下：\n%s\n", c.Path, c.Inline)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// agentTaskImagesLoad 阶段一百六十六：任务图片附件受理归口——能力双保险（前端入口已按
+// 智能体图片能力隐藏，此处防协议直发绕过，语义对齐 AI 问答）→ 数量上限 → 逐张经
+// aiLoadImageDataURL 读取（仅 /static/upload/ 纯文件名防穿越 + 扩展名白名单），失败快速返回不建任务
+func (s *Server) agentTaskImagesLoad(agent *AIRunAgent, raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if agent == nil || agent.Provider == nil || !agent.SupportsImage {
+		return nil, errors.New("该智能体不支持图片识别，请选择标注「支持图片」的智能体，或不带图重新发起任务")
+	}
+	if len(raw) > agentTaskMaxImages {
+		return nil, fmt.Errorf("任务图片最多 %d 张", agentTaskMaxImages)
+	}
+	out := make([]string, 0, len(raw))
+	for _, u := range raw {
+		dataURL, err := s.aiLoadImageDataURL(strings.TrimSpace(u))
+		if err != nil {
+			return nil, fmt.Errorf("任务图片加载失败：%w", err)
+		}
+		out = append(out, dataURL)
+	}
+	return out, nil
+}
+
 // runAgentTask Agent Loop 状态机：模型决策 → 工具调用（含审批挂起）→ 循环迭代 → 最终答复
 func (s *Server) runAgentTask(t *AgentTask) {
 	wsDir, err := agentWorkspaceDir(t.Username)
@@ -3245,12 +4042,65 @@ func (s *Server) runAgentTask(t *AgentTask) {
 	if ruleCtx := rulesContextForAgent(t.Agent, t.Username); ruleCtx != "" {
 		sysContent += "\n\n" + ruleCtx
 	}
+	// 阶段一百七十五：项目规则文件注入（AGENTS.md / .trae/rules/*.md，工作区根+当前项目两层；
+	// 经文件面板通道读取：PC 在线读本地主工作区，离线回退服务端工作区，60s 缓存防重复跨端扫描）
+	if rulesBlock, _ := s.agentRulesFilesBlock(t.Username); rulesBlock != "" {
+		sysContent += "\n\n" + rulesBlock
+	}
+	// 阶段一百七十七：项目结构注入（目录树进系统提示，同通道扫描；任务完结/切换项目即失效重扫）
+	if treeBlock := s.agentProjTreeBlock(t.Username); treeBlock != "" {
+		sysContent += "\n\n" + treeBlock
+	}
+	// 阶段一百八十七：构建/测试感知（工作区根识别构建/测试体系注入系统提示，引导模型
+	// 修改代码后主动运行对应构建/测试命令验证修复，不再全靠模型自觉试探）
+	if buildBlock := agentBuildHint(wsDir); buildBlock != "" {
+		sysContent += "\n\n" + buildBlock
+	}
+	// 阶段一百六十四：计划模式纪律（TRAE CN Plan 同款）——先只读调研、present_plan 提交计划、
+	// 批准前副作用工具被服务端门禁拦截；批准后按计划逐步执行
+	if t.PlanMode {
+		sysContent += "\n\n【计划模式】本任务以计划模式运行，工作方式如下：\n" +
+			"1. 先仅使用只读工具调研（read_file/list_dir/grep/web_search/http_request 只读请求/ask_user），不要执行任何有副作用的操作（写文件/编辑/删除/执行命令/MCP 工具等会被服务端门禁拒绝）。\n" +
+			"2. 调研完成后调用 present_plan 提交执行计划：title 一句话概括整体方案；summary 补充调研发现与选型理由；steps 为 3-8 个有序步骤（每步 content 一句话说明做什么，detail 补充关键文件/命令/预期产出）。\n" +
+			"3. 计划获用户批准前禁止开始执行；计划被驳回时按用户意见调整方案后重新调用 present_plan 提交，不要擅自执行。\n" +
+			"4. 计划获批准后立即转入执行：先调用 todo_write 建立执行清单（步骤与计划一致），然后逐步完成并实时更新条目状态。"
+	}
+	// 阶段一百七十六：SOLO 全自动模式纪律——免审批自动放行 + 完成前自检修复（TRAE SOLO 同款体验）
+	if t.SoloMode {
+		sysContent += "\n\n【全自动模式（SOLO）】本任务以全自动模式运行，工作方式如下：\n" +
+			"1. 本任务内所有需审批的操作（写文件/编辑/删除/执行命令/MCP 副作用调用等）将自动放行直接执行，无需用户逐条确认；所有变更均有留痕，用户事后可回滚。\n" +
+			"2. 自主权更大，责任也更大：严格限定在任务目标内操作，不做目标外的高危动作（大规模删除、把本地数据外发、修改用户系统配置等）；遇到后果不可逆且拿不准的操作，仍用 ask_user 向用户确认。\n" +
+			"3. 完成前必须自检：代码/配置类产出行尽量运行构建或校验命令验证（如 go build ./...、node --check、python -m py_compile、npm run build 等，按项目实际选择），失败则分析原因、修复后重验（最多 3 轮），全部通过后再输出最终总结。\n" +
+			"4. 尽量不要调用 ask_user 打断用户（全自动语义）；确需提问时只问最关键的决策点，其余按最合理默认方案继续。"
+	}
+	// 阶段一百七十：@ 引用上下文注入——goal 前置【引用上下文】区块（目录/大文件给路径提示
+	// 模型 list_dir/read_file 自读，小文件内容直读），文本与图片多模态两个分支共用同一 goal 文本
+	goalFull := t.Goal
+	if ctxBlock := agentContextBlock(t.Contexts); ctxBlock != "" {
+		goalFull = ctxBlock + "\n\n" + goalFull
+	}
 	msgs := []aiChatMessage{
 		// 阶段六十一：PC 端在线且用户配置了沙箱白名单时，注入本地授权目录（模型据此可用绝对路径操作用户自选目录）
 		{Role: "system", Content: sysContent},
-		{Role: "user", Content: t.Goal},
+		{Role: "user", Content: goalFull},
+	}
+	// 阶段一百六十六：任务图片输入——目标消息多模态化（文本目标 + base64 图片附件），与 AI 问答
+	// 同一 OpenAI 兼容 parts 格式；文本尾部追加系统提示引导模型先读图再执行。
+	// 压缩归口对 msgs[1] 恒整条保留（agentCompressBoundary 0/1 不参与），附件全程不丢
+	if len(t.Images) > 0 {
+		goalText := fmt.Sprintf("%s\n\n[系统提示] 本任务随附 %d 张图片，请先结合图片内容理解任务再执行。", goalFull, len(t.Images))
+		parts := make([]aiContentPart, 0, len(t.Images)+1)
+		parts = append(parts, aiContentPart{Type: "text", Text: goalText})
+		for _, dataURL := range t.Images {
+			parts = append(parts, aiContentPart{Type: "image_url", ImageURL: &aiImageURLField{URL: dataURL}})
+		}
+		msgs[1].Content = parts
 	}
 	tools := s.agentToolDefinitions(t.Username)
+	// 阶段一百六十四：计划模式任务追加 present_plan 工具（非计划任务不注入，防模型误调用）
+	if t.PlanMode {
+		tools = append(tools, agentPlanToolDef())
+	}
 
 	for {
 		// 取消检查（模型调用前）
@@ -3267,6 +4117,21 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// LLM 摘要归并（assistant+tool 配对永不拆分），Recent 轮保留原文；事件流实时提示前端
 		msgs = s.agentCompressTaskHistory(t, msgs)
 
+		// 阶段一百七十九：用户追加指令（Steering，TRAE 同款插话）——运行中插话在下一轮模型
+		// 决策前注入，模型自然调整方向；取走后即清空（单次注入不重复）；任务取消时插话随对象即弃
+		if steers := t.agentDrainSteers(); len(steers) > 0 {
+			for _, st := range steers {
+				msgs = append(msgs, aiChatMessage{Role: "user", Content: "【用户追加指令】" + st})
+			}
+		}
+
+		// 阶段一百八十七：专项调试策略——命令失败进入调试模式后，每轮模型调用前注入调试纪律
+		// 消息强制「定位→最小修复→重跑同命令验证」循环（TRAE 自主调试同款），run_command
+		// 成功即解除（agentDebugModeUpdate 归口进出）；插话为固定轻量文案，控制上下文开销
+		if t.agentDebugActive() {
+			msgs = append(msgs, aiChatMessage{Role: "user", Content: agentDebugDirective})
+		}
+
 		// 阶段一百三十八：每轮超时上下文派生自任务级 runCtx（原 context.Background()）——
 		// 用户停止任务时取消归口调 runCancel()，当前轮进行中的上游调用立即中止，tokens 即刻停耗
 		askCtx, cancelAsk := context.WithTimeout(t.runCtx, aiAskTimeout)
@@ -3274,12 +4139,12 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// 事件实时推送；无增量（上游一次性返回）时回退整段 thought 事件兼容
 		// 阶段一百三十八：正文增量经泄漏过滤器（模型幻觉输出的工具调用标记整行拦截，思考流不过滤）
 		agentLeak := &aiLeakFilter{tag: "agent", out: func(delta string) {
-			s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta})
+			s.agentEmit(t, "text_delta", map[string]interface{}{"text": delta, "round": agentTaskCurRound(t)})
 		}}
 		content, toolCalls, streamed, u, err := aiAgentChatStream(askCtx, t.Agent, msgs, tools,
 			agentLeak.write,
 			func(delta string) {
-				s.agentEmit(t, "thought_delta", map[string]interface{}{"text": delta})
+				s.agentEmit(t, "thought_delta", map[string]interface{}{"text": delta, "round": agentTaskCurRound(t)})
 			})
 		agentLeak.flush()
 		content = aiSanitizeToolLeak(content) // 结果层兜底净化（全泄漏→友好提示）
@@ -3388,7 +4253,15 @@ func (s *Server) runAgentTask(t *AgentTask) {
 		// assistant 消息（含 tool_calls）入历史，后续 tool 结果按 tool_call_id 对应回传
 		msgs = append(msgs, aiChatMessage{Role: "assistant", Content: content, ToolCalls: toolCalls})
 
-		for _, tc := range toolCalls {
+		// 阶段一百六十五：并行工具调用（TRAE CN 同款）——本轮 tool_calls 先经 agentToolSegments
+		// 切分执行段：连续的只读免审批服务端工具（≥2 个）归入并行批并发执行（agentRunToolBatch），
+		// 其余段按原序逐个走既有串行路径；副作用/交互/审批/PC 本地工具的语义与次序完全不变
+		for _, seg := range agentToolSegments(s, t, toolCalls) {
+			if len(seg) > 1 {
+				msgs = append(msgs, s.agentRunToolBatch(t, seg)...)
+				continue
+			}
+			tc := seg[0]
 			if t.Cancelled.Load() {
 				s.agentFinish(t, "cancelled", "", "用户取消")
 				return
@@ -3406,7 +4279,7 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			start := time.Now()
 
 			// 阶段七十五：事件携带 call_id（toolCall ID），前端控制台输出/转后台按钮按步骤精确归属
-			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID, "label": agentToolLabel(t.Username, toolName)})
+			s.agentEmit(t, "tool_start", map[string]interface{}{"tool": toolName, "params": params, "env": agentToolEnvHint(s, t, toolName), "call_id": tc.ID, "label": agentToolLabel(t.Username, toolName), "round": agentTaskCurRound(t)})
 
 			// 风险分级：需审批的工具挂起等待用户确认（改参放行/直接放行/拒绝/取消/超时）
 			needApprove, reason := agentNeedsApproval(t.Username, toolName, params)
@@ -3447,9 +4320,82 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				continue
 			}
 
+			// 阶段一百六十四：present_plan 提交执行计划（TRAE CN Plan 同款）——计划卡片下发用户，
+			// 任务挂起等待批准（approve→解锁门禁并把步骤同步为任务清单）/驳回（带意见，模型修改后重提）/取消
+			if toolName == "present_plan" {
+				// 参数规整（模型输出容错）：仅保留有 content 的步骤
+				title := strings.TrimSpace(agentParamString(params["title"]))
+				summary := strings.TrimSpace(agentParamString(params["summary"]))
+				steps := make([]map[string]interface{}, 0, 8)
+				if raw, ok := params["steps"].([]interface{}); ok {
+					for _, it := range raw {
+						if m, ok := it.(map[string]interface{}); ok {
+							if strings.TrimSpace(agentParamString(m["content"])) != "" {
+								steps = append(steps, m)
+							}
+						}
+					}
+				}
+				if len(steps) == 0 {
+					result := "错误：present_plan 缺少有效的 steps 参数（至少一个执行步骤，每步须含 content）"
+					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": false, "output": result, "env": "server"})
+					s.agentStepTrace(t, toolName, params, result, false, "server", "none", time.Since(start).Milliseconds())
+					msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+					continue
+				}
+				action, feedback, aerr := s.agentWaitPlanApproval(t, tc.ID, title, summary, steps)
+				if aerr != nil {
+					// 等待超时：与审批同语义，先留痕再中止任务
+					s.agentStepTrace(t, toolName, params, aerr.Error(), false, "server", "timeout", time.Since(start).Milliseconds())
+					s.agentFinish(t, "failed", "", aerr.Error())
+					return
+				}
+				if action == "cancel" {
+					s.agentStepTrace(t, toolName, params, "用户取消了任务", false, "server", "cancelled", time.Since(start).Milliseconds())
+					s.agentFinish(t, "cancelled", "", "用户取消")
+					return
+				}
+				var result string
+				if action == "approve" {
+					result = "计划已获用户批准。请立即按计划执行：先调用 todo_write 建立执行清单（步骤与计划一致），然后逐步完成并实时更新状态；执行中仍须遵守既有审批纪律。"
+				} else {
+					result = "用户驳回了计划"
+					if feedback != "" {
+						result += "，意见：" + feedback
+					}
+					result += "。请结合用户意见调整方案后重新调用 present_plan 提交计划，不要擅自开始执行。"
+				}
+				s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": action == "approve", "output": result, "env": "server"})
+				s.agentStepTrace(t, toolName, params, result, action == "approve", "server", action, time.Since(start).Milliseconds())
+				msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+				continue
+			}
+
+			// 阶段一百六十四：计划模式工具门禁——计划获用户批准前，有副作用的操作一律拒绝
+			//（不进审批流、不执行，错误结果回传模型自纠；软门禁与系统提示纪律双保险）
+			if t.PlanMode && !t.planApprovedLoad() && agentPlanBlockedTool(toolName, params) {
+				result := "错误：计划模式尚未获用户批准，禁止执行有副作用的操作（" + toolName + "）。请先完成只读调研，并调用 present_plan 提交执行计划等待用户批准。"
+				s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": false, "output": result, "env": "server"})
+				s.agentStepTrace(t, toolName, params, result, false, "server", "plan_blocked", time.Since(start).Milliseconds())
+				msgs = append(msgs, aiChatMessage{Role: "tool", Content: result, ToolCallID: tc.ID, Name: toolName})
+				continue
+			}
+
 			var result string
 			var env string
-			if needApprove {
+			var dbgBlock string // 阶段一百八十六：调试增强块本体（入史时截断原结果后追加，防定位头部被中段省略吃掉）
+			if needApprove && t.SoloMode {
+				// 阶段一百七十六：SOLO 全自动模式——需审批工具不再挂起等待用户，直接自动放行执行
+				//（TRAE SOLO 同款全自动体验；安全兜底不变：沙箱路径约束、变更留痕/按轮回滚、
+				// 系统提示纪律红线、任务取消联动）。事件与留痕标注 solo，前端展示"SOLO 自动放行"标签
+				result, env = s.agentToolExecDispatch(t, tc.ID, toolName, params)
+				result, dbgBlock = agentDebugAnalyze(t, result, env, toolName) // 阶段一百八十六：失败结果调试增强（解析定位+熔断提示）
+				s.agentEmit(t, "tool_result", map[string]interface{}{
+					"tool": toolName, "ok": agentResultOK(result), "output": result,
+					"duration_ms": time.Since(start).Milliseconds(), "env": env, "solo": true,
+				})
+				s.agentStepTrace(t, toolName, params, result, agentResultOK(result), env, "solo", time.Since(start).Milliseconds())
+			} else if needApprove {
 				approved, out, aerr := s.agentWaitApproval(t, tc.ID, toolName, params, reason)
 				if aerr != nil {
 					// 阶段六十五：审批等待超时先留痕再中止任务
@@ -3471,18 +4417,20 @@ func (s *Server) runAgentTask(t *AgentTask) {
 				} else {
 					// 阶段六十：执行环境分派（PC 在线且开关开启时本地执行，事件流带 env 标签）
 					result, env = s.agentToolExecDispatch(t, tc.ID, toolName, params)
-					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": !strings.HasPrefix(result, "错误"), "output": result, "env": env})
+					result, dbgBlock = agentDebugAnalyze(t, result, env, toolName) // 阶段一百八十六：失败结果调试增强（解析定位+熔断提示）
+					s.agentEmit(t, "tool_result", map[string]interface{}{"tool": toolName, "ok": agentResultOK(result), "output": result, "env": env})
 					// 阶段六十五：审批通过留痕（params 已含用户改参后的最终参数）
-					s.agentStepTrace(t, toolName, params, result, !strings.HasPrefix(result, "错误"), env, "approved", time.Since(start).Milliseconds())
+					s.agentStepTrace(t, toolName, params, result, agentResultOK(result), env, "approved", time.Since(start).Milliseconds())
 				}
 			} else {
 				result, env = s.agentToolExecDispatch(t, tc.ID, toolName, params)
+				result, dbgBlock = agentDebugAnalyze(t, result, env, toolName) // 阶段一百八十六：失败结果调试增强（解析定位+熔断提示）
 				s.agentEmit(t, "tool_result", map[string]interface{}{
-					"tool": toolName, "ok": !strings.HasPrefix(result, "错误"), "output": result,
+					"tool": toolName, "ok": agentResultOK(result), "output": result,
 					"duration_ms": time.Since(start).Milliseconds(), "env": env,
 				})
 				// 阶段六十五：免审批步骤留痕
-				s.agentStepTrace(t, toolName, params, result, !strings.HasPrefix(result, "错误"), env, "none", time.Since(start).Milliseconds())
+				s.agentStepTrace(t, toolName, params, result, agentResultOK(result), env, "none", time.Since(start).Milliseconds())
 			}
 
 			// tool 结果消息入历史（role=tool + tool_call_id，OpenAI 兼容格式）；
@@ -3490,7 +4438,9 @@ func (s *Server) runAgentTask(t *AgentTask) {
 			// 阶段一百一十四：截图图像（[[MCP_IMAGE:...]] 内联标记，Computer Use 等）在截断前抽出，
 			// 以独立 user 多模态消息紧随注入（OpenAI 兼容 API 的 tool 角色不支持图像内容）
 			clean, images := agentExtractToolImages(result)
-			msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(clean), ToolCallID: tc.ID, Name: toolName})
+			// 阶段一百八十六：模型上下文 = 截断(剥离增强块的原结果) + 完整增强块——
+			// 定位头部（文件:行号+快照）不随超长编译输出被中段省略吃掉；无增强块时 TrimSuffix 空串原样返回
+			msgs = append(msgs, aiChatMessage{Role: "tool", Content: agentTruncateToolResult(strings.TrimSuffix(clean, dbgBlock)) + dbgBlock, ToolCallID: tc.ID, Name: toolName})
 			if len(images) > 0 {
 				parts := []aiContentPart{{Type: "text", Text: fmt.Sprintf("工具 %s 返回了 %d 张屏幕截图（base64 已转为图像附件），请结合截图画面与上文工具输出继续完成任务。", toolName, len(images))}}
 				for _, dataURL := range images {
@@ -3894,6 +4844,118 @@ func (s *Server) handleAgentAsk(c *Client, msg *protocol.Message) {
 	}
 }
 
+// planApprovedLoad 计划批准标记读取（mu 保护；仅计划模式任务使用）
+func (t *AgentTask) planApprovedLoad() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.planApproved
+}
+
+// agentWaitPlanApproval 阶段一百六十四：计划审批挂起（TRAE CN Plan 同款）——
+// present_plan 调用后下发计划事件，阻塞等待用户上行审批（approve/reject/cancel/超时）。
+// 与审批/提问同源挂起语义：等待期计入活动任务数、超时复用审批等待秒数；
+// 批准置 planApproved 解锁工具门禁；驳回带用户意见回传模型修改后重提
+// 返回 (action, 驳回意见, error)；action=approve/reject/cancel
+func (s *Server) agentWaitPlanApproval(t *AgentTask, callID, title, summary string, steps []map[string]interface{}) (string, string, error) {
+	ch := make(chan *AgentApproval, 1)
+	step := callID // 步骤 key：tool_call ID 全局唯一且与本次调用一一对应
+	t.mu.Lock()
+	t.planCh = ch
+	t.planStep = step
+	t.Status = "waiting_approval"
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.planCh = nil
+		t.planStep = ""
+		t.mu.Unlock()
+	}()
+
+	payload := map[string]interface{}{
+		"step":  step,
+		"steps": steps,
+	}
+	if title != "" {
+		payload["title"] = title
+	}
+	if summary != "" {
+		payload["summary"] = summary
+	}
+	s.agentEmit(t, "plan", payload)
+	display := title
+	if display == "" {
+		display = "执行计划"
+	}
+	s.agentSetStatus(t, "waiting_approval", "等待用户审批计划："+display)
+
+	select {
+	case ap := <-ch:
+		switch ap.Action {
+		case "approve":
+			t.mu.Lock()
+			t.planApproved = true
+			t.mu.Unlock()
+			s.agentEmit(t, "plan_approved", map[string]interface{}{"step": step})
+			// 批准后计划步骤同步为任务清单（执行进度实时可见，TRAE CN 同款批准即转入执行）
+			items := make([]AgentTodoItem, 0, len(steps))
+			for _, m := range steps {
+				items = append(items, AgentTodoItem{Content: strings.TrimSpace(agentParamString(m["content"])), Status: "pending"})
+			}
+			t.mu.Lock()
+			t.todo = items
+			t.mu.Unlock()
+			s.agentEmit(t, "todo", map[string]interface{}{"todos": items, "done": 0, "total": len(items)})
+			s.agentSetStatus(t, "running", "计划已批准，开始执行")
+			return "approve", "", nil
+		case "reject":
+			s.agentSetStatus(t, "running", "用户驳回计划，等待修改后重新提交")
+			return "reject", ap.Answer, nil
+		default: // cancel（用户停止任务时服务端内部投递）
+			return "cancel", "", nil
+		}
+	case <-time.After(time.Duration(agentApproveWait.Load()) * time.Second):
+		return "", "", fmt.Errorf("计划审批等待超时（%d 秒），任务中止", agentApproveWait.Load())
+	}
+}
+
+// handleAgentPlan 计划审批结果上行（msg_type=95）：校验发起人与步骤后投递到等待中的任务
+func (s *Server) handleAgentPlan(c *Client, msg *protocol.Message) {
+	var req struct {
+		TaskID   string `json:"task_id"`
+		Step     string `json:"step"`
+		Action   string `json:"action"` // approve=批准执行；reject=驳回（可带 feedback 意见）
+		Feedback string `json:"feedback"`
+	}
+	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil || req.TaskID == "" {
+		s.sendError(c, "计划审批请求格式错误")
+		return
+	}
+	if req.Action != "approve" && req.Action != "reject" {
+		s.sendError(c, "未知的计划审批操作")
+		return
+	}
+	v, ok := agentTasks.Load(req.TaskID)
+	if !ok {
+		s.sendError(c, "任务不存在或已结束")
+		return
+	}
+	t := v.(*AgentTask)
+	if t.Username != c.username { // 仅发起人可审批
+		return
+	}
+	t.mu.Lock()
+	ch := t.planCh
+	step := t.planStep
+	t.mu.Unlock()
+	if ch == nil || step != req.Step { // 非等待态或迟到的审批直接忽略
+		return
+	}
+	select {
+	case ch <- &AgentApproval{Action: req.Action, Answer: strings.TrimSpace(req.Feedback)}:
+	default:
+	}
+}
+
 // HandleAgentPreview 工作区静态访问（阶段五十九：页面预览工具的前端支撑，iframe 加载工作区 HTML 等产物）。
 // 鉴权与现有 HTTP 接口一致（query username，内网信任模式）；路径安全归口 agentSafePath，
 // 仅允许访问本人工作区内的文件
@@ -4105,4 +5167,108 @@ func (s *Server) HandleAdminAgentTaskSteps(w http.ResponseWriter, r *http.Reques
 	var rows []model.AgentStepRecord
 	store.DB.Where("task_id = ?", taskID).Order("seq ASC").Find(&rows)
 	adminJSON(w, map[string]interface{}{"task_id": taskID, "total": len(rows), "steps": rows})
+}
+
+// ===== 阶段一百八十二：任务模板一键重跑 =====
+// agentTaskImgSnapshot / agentTaskCtxSnapshot 发起参数快照序列化归口（两条建行路径共用）：
+// 快照存上行原始参数（静态 URL / 相对路径，体积小可持久化），不存装载后的 data URL 全文；
+// nil/空统一落空串（列语义"空=无附件"，旧记录无该列值前端 JSON.parse 容错）
+
+func agentTaskImgSnapshot(urls []string) string {
+	if len(urls) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(urls)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func agentTaskCtxSnapshot(ctxs []AgentCtxReq) string {
+	if len(ctxs) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(ctxs)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// HandleAgentTaskTplList 用户端任务模板列表（仅本人，全量倒序不分页：模板量小且 goal 全文
+// 随列表直出，前端"运行"免二次详情请求）
+func (s *Server) HandleAgentTaskTplList(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	var rows []model.AgentTaskTpl
+	store.DB.Where("username = ?", username).Order("id DESC").Find(&rows)
+	adminJSON(w, map[string]interface{}{"total": len(rows), "tpls": rows})
+}
+
+// HandleAgentTaskTplAdd 用户端存任务为模板（body：task_id 必填 + name 可选；
+// 从任务记录克隆 goal/images/contexts/plan/solo 全套发起参数，服务端权威克隆防伪造）
+func (s *Server) HandleAgentTaskTplAdd(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		TaskID string `json:"task_id"`
+		Name   string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.TaskID) == "" {
+		adminFail(w, http.StatusBadRequest, "缺少 task_id")
+		return
+	}
+	// 归属校验归口 im_agent_task：仅本人任务可存模板（与详情接口同语义）
+	var rec model.AgentTaskRecord
+	if err := store.DB.Where("task_id = ? AND username = ?", strings.TrimSpace(body.TaskID), username).First(&rec).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "任务不存在")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = truncateRunes(rec.Goal, 30) // 缺省模板名：目标截断 30 字
+	}
+	tpl := model.AgentTaskTpl{
+		Username:  username,
+		AgentName: rec.AgentName,
+		Name:      name,
+		Goal:      rec.Goal,
+		Images:    rec.Images,
+		Contexts:  rec.Contexts,
+		PlanMode:  rec.PlanMode,
+		SoloMode:  rec.SoloMode,
+	}
+	if err := store.DB.Create(&tpl).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "模板保存失败")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"id": tpl.ID, "name": tpl.Name})
+}
+
+// HandleAgentTaskTplDel 用户端删除任务模板（归属校验：仅本人模板可删）
+func (s *Server) HandleAgentTaskTplDel(w http.ResponseWriter, r *http.Request) {
+	username, ok := userKBUsername(w, r)
+	if !ok {
+		return
+	}
+	id := adminQueryUint(r.PathValue("id"))
+	if id == 0 {
+		adminFail(w, http.StatusBadRequest, "缺少模板 ID")
+		return
+	}
+	res := store.DB.Where("id = ? AND username = ?", id, username).Delete(&model.AgentTaskTpl{})
+	if res.Error != nil {
+		adminFail(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	if res.RowsAffected == 0 {
+		adminFail(w, http.StatusNotFound, "模板不存在")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"id": id})
 }

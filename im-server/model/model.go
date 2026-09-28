@@ -290,13 +290,77 @@ type AgentTaskRecord struct {
 	// ReplyMsgID 完结通知消息 ID（阶段七十）：前端重进会话时以答复气泡为锚点内联重放任务卡，执行过程历史可见
 	ReplyMsgID uint `gorm:"column:reply_msg_id;not null;default:0" json:"reply_msg_id"`
 	// SessionID 归属 AI 会话（阶段七十一）：任务回显落库时按当前生效会话盖戳，任务卡重放按会话区间过滤防串会话
-	SessionID  uint      `gorm:"column:session_id;not null;default:0" json:"session_id"`
+	SessionID uint `gorm:"column:session_id;not null;default:0" json:"session_id"`
+	// Images 任务图片附件 URL 快照（阶段一百八十二）：JSON 数组字符串（[]string，空=无附件），
+	// 发起任务时随记录落库，供任务卡"重跑/存为模板"带参复用（模板重跑原样上行 images）
+	Images string `gorm:"column:images;type:text" json:"images"`
+	// Contexts @ 引用上下文快照（阶段一百八十二）：JSON 数组字符串（[]AgentCtxReq 形状 {path,dir}，空=无引用），
+	// 语义同 Images，重跑/存模板时还原引用参数
+	Contexts string `gorm:"column:contexts;type:text" json:"contexts"`
+	// PlanMode 计划模式快照（阶段一百八十二）：发起任务时的上行值落库，重跑按原模式重建任务
+	PlanMode bool `gorm:"column:plan_mode;not null;default:false" json:"plan_mode"`
+	// SoloMode SOLO 全自动模式快照（阶段一百八十二）：语义同 PlanMode
+	SoloMode bool `gorm:"column:solo_mode;not null;default:false" json:"solo_mode"`
+	// Source 发起来源（阶段一百八十四）：空=手动上行；"cron"=定时/巡检任务自动发起（任务历史留痕可辨）
+	Source     string    `gorm:"column:source;type:varchar(16);not null;default:''" json:"source"`
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
 
 // TableName 指定表名
 func (AgentTaskRecord) TableName() string { return "im_agent_task" }
+
+// AgentTaskTpl 任务模板（阶段一百八十二）：任务历史"存为模板"落库归口，一键带参重跑。
+// 从 AgentTaskRecord 克隆 goal/images/contexts/plan/solo 全套发起参数，仅本人可见可运行；
+// Images/Contexts 存 JSON 字符串语义与任务记录同源
+type AgentTaskTpl struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 归属用户（仅本人可见）
+	AgentName  string    `gorm:"column:agent_name;type:varchar(64);not null" json:"agent_name"`   // 执行智能体（重跑按它路由）
+	Name       string    `gorm:"column:name;type:varchar(64);not null;default:''" json:"name"`    // 模板名（缺省取 goal 截断）
+	Goal       string    `gorm:"column:goal;type:text" json:"goal"`                               // 任务目标全文
+	Images     string    `gorm:"column:images;type:text" json:"images"`                           // 图片 URL JSON 数组字符串
+	Contexts   string    `gorm:"column:contexts;type:text" json:"contexts"`                       // @ 引用 JSON 数组字符串
+	PlanMode   bool      `gorm:"column:plan_mode;not null;default:false" json:"plan_mode"`
+	SoloMode   bool      `gorm:"column:solo_mode;not null;default:false" json:"solo_mode"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AgentTaskTpl) TableName() string { return "im_agent_task_tpl" }
+
+// AgentCronTask 定时/巡检任务（阶段一百八十四）：按周期自动发起 Agent 任务，结果经既有完结链路
+// （agentFinish 落库+未读+会话推送）回流，无需独立推送通道。调度语义两档：interval（每 N 分钟）
+// / daily（每天 HH:MM）；到期扫描→防重叠（上次任务仍在进行态则跳过本次）→ 与手动上行同链路发起
+type AgentCronTask struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username  string `gorm:"column:username;type:varchar(32);not null;index" json:"username"` // 归属用户（仅本人可见可管）
+	AgentName string `gorm:"column:agent_name;type:varchar(64);not null" json:"agent_name"`   // 执行智能体
+	Goal      string `gorm:"column:goal;type:text" json:"goal"`                               // 任务目标全文
+	SessionID uint   `gorm:"column:session_id;not null;default:0" json:"session_id"`          // 归属 AI 会话（0=默认会话）
+	PlanMode  bool   `gorm:"column:plan_mode;not null;default:false" json:"plan_mode"`
+	SoloMode  bool   `gorm:"column:solo_mode;not null;default:false" json:"solo_mode"`
+	// Images/Contexts 发起参数快照（JSON 字符串，语义与任务记录同源；定时发起时装载复用）
+	Images   string `gorm:"column:images;type:text" json:"images"`
+	Contexts string `gorm:"column:contexts;type:text" json:"contexts"`
+	// Kind 调度类型：interval（每 N 分钟）/ daily（每天 HH:MM）；Value 对应"分钟数"/"HH:MM"
+	Kind  string `gorm:"column:kind;type:varchar(16);not null" json:"kind"`
+	Value string `gorm:"column:value;type:varchar(16);not null" json:"value"`
+	// Enabled 启停开关（停用后不再扫描触发）；NextRunAt 下次运行时间（过期即触发，重启补跑）
+	Enabled   bool       `gorm:"column:enabled;not null;default:true" json:"enabled"`
+	NextRunAt *time.Time `gorm:"column:next_run_at" json:"next_run_at"`
+	// LastRunAt/LastTaskID/LastStatus 最近一次触发留痕（发起失败 last_status=launch_failed；
+	// 发起成功 running，任务完结后由下次触发前回填真实终态）
+	LastRunAt  *time.Time `gorm:"column:last_run_at" json:"last_run_at"`
+	LastTaskID string     `gorm:"column:last_task_id;type:varchar(40);not null;default:''" json:"last_task_id"`
+	LastStatus string     `gorm:"column:last_status;type:varchar(16);not null;default:''" json:"last_status"`
+	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time  `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 指定表名
+func (AgentCronTask) TableName() string { return "im_agent_cron_task" }
 
 // AgentWhitelist 智能 Agent 审批白名单（阶段六十二）：审批弹窗"同意并加白"的持久化归口。
 // kind=cmd → value 为命令首词前缀（如 node/git），后续命中前缀的 run_command 自动放行（阶段八十二：后台全量管理，DB 即真值）；
@@ -335,6 +399,7 @@ type AgentStepRecord struct {
 	Env        string    `gorm:"column:env;type:varchar(8)" json:"env"`             // 执行环境 pc/server
 	Approval   string    `gorm:"column:approval;type:varchar(16)" json:"approval"`  // 审批情况
 	DurationMS int64     `gorm:"column:duration_ms;not null;default:0" json:"duration_ms"`
+	Round      int       `gorm:"column:round;not null;default:0" json:"round"` // 阶段一百七十二：所属轮次（模型迭代轮，1 起；旧数据 0 归"执行过程"兜底组）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
@@ -358,6 +423,7 @@ type AgentChangeRecord struct {
 	LocalPath   string    `gorm:"column:local_path;type:varchar(512)" json:"local_path"`           // 阶段八十：pc 环境文件本地绝对路径（撤销下发执行器还原用）
 	Status      string    `gorm:"column:status;type:varchar(12);not null;default:pending" json:"status"`
 	Explanation string    `gorm:"column:explanation;type:varchar(1024)" json:"explanation"` // AI 修改说明（工具 explanation 参数，同路径重复触碰取最近一次）
+	Round       int       `gorm:"column:round;not null;default:0" json:"round"`             // 阶段一百七十二：首触登记轮次（模型迭代轮，1 起；旧数据 0 不参与逐轮归组）
 	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
@@ -379,7 +445,7 @@ type Message struct {
 	ToUser   string `gorm:"column:to_user;type:varchar(32);index:idx_msg_from_to_read,priority:2;index:idx_msg_to_read_from,priority:1" json:"to_user"` // 群聊为空
 	Content  string `gorm:"column:content;type:text" json:"content"`
 	IsRead   bool   `gorm:"column:is_read;default:false;index:idx_msg_from_to_read,priority:3;index:idx_msg_to_read_from,priority:2" json:"is_read"` // 已读状态
-	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"`                                     // 是否已撤回
+	Recalled bool   `gorm:"column:recalled;default:false" json:"recalled"`                                                                           // 是否已撤回
 	// AI 回复 Token 消耗（服务端 usage 归口；普通消息恒为 0，历史加载同样可显示）
 	PromptTokens     int `gorm:"column:prompt_tokens;default:0" json:"prompt_tokens,omitempty"`
 	CompletionTokens int `gorm:"column:completion_tokens;default:0" json:"completion_tokens,omitempty"`

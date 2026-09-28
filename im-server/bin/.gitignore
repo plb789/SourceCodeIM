@@ -1,2 +1,10 @@
 # 你要排除的目录（写在这里）
 *.exe
+# 运行数据与本地构建产物不入库（防源代码管理面板被刷屏）
+agent_workspace/
+kb_data/
+drive_data/
+data/
+static/
+im-server
+*.log

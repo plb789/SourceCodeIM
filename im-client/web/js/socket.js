@@ -110,6 +110,7 @@
         PC_FILE_RESP: 65,    // 阶段七十六：本地文件操作结果上行（PC 渲染进程 → 服务端，content 为 JSON：{op,req_id,ok,error,root?,entries?/content?,binary?,truncated?}）
         AGENT_CHANGES: 66,   // 阶段七十七：文件变更审查（上行 {task_id,action:"keep"/"revert",path?}；下行全量刷新帧 {task_id,session_id,changes,total_adds,total_dels}）
         AGENT_ASK: 68,       // 阶段一百二十五：Agent 向用户提问的回答上行（TRAE CN 同款，content 为 JSON：{task_id,step,action:"answer"/"skip",answer?}；提问本身经 AGENT_EVENT 下发）
+        AGENT_PLAN: 95,      // 阶段一百六十四：计划模式计划审批结果上行（TRAE CN Plan 同款，content 为 JSON：{task_id,step,action:"approve"/"reject",feedback?}；计划本身经 AGENT_EVENT 下发）
         CALL_SIGNAL: 70,     // 阶段一百四十一：音视频通话信令（双向，content 为 JSON：{action,call_id,call_type?,sdp?,candidate?,reason?}；话单由服务端归口落库）
         // 阶段一百四十二：微信同款多群聊信令（新群会话目标编码 to_user='g'+群ID；群内收发复用 1/34/69，仅 to_user 携带群编码）
         GROUP_CREATE: 71,        // 上行：建群（content 为 JSON：{name, members:["u1","u2"]}，成员选自好友）

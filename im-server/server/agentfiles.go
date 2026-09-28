@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -1323,6 +1325,8 @@ func wsProjTouch(username, proj string) {
 		m.TS[m.Cur] = time.Now().Unix()
 	}
 	wsProjMetaSave(username, m)
+	agentRulesInvalidate(username) // 阶段一百七十五：当前项目变更即失效规则文件缓存（下个任务重扫新项目规则）
+	agentTreeInvalidate(username)  // 阶段一百七十七：当前项目变更即失效项目结构缓存（下个任务重扫新项目目录树）
 }
 
 func wsProjDirExists(p string) bool {
@@ -1628,4 +1632,121 @@ func wsProjClone(username, reqID, content string, push wsProgressFn) *wsFileResu
 	wsProjTouch(username, name)
 	wsProjRecentAdd(username, wsProjSanitizeURL(strings.TrimSpace(req.URL)), name)
 	return &wsFileResult{OK: true}
+}
+
+// ===== 阶段一百八十三：工作区文件上传 =====
+// POST /api/agent/ws/upload?username=&dir=&name=（raw body = 文件原始字节，octet-stream）
+// dir=目标父目录（工作区相对路径，空=工作区根/当前项目根由前端携带），name=文件名（wsEntryName 校验）。
+// 执行环境与文件面板同口径分派：
+//   服务端模式：请求体流式写盘（大小同聊天文件口径 MaxFileSize，缺省 20MB），同名覆盖（响应带 overwritten）；
+//   PC 本地模式（执行器开+在线）：转发 msg 64 op=upload（content=JSON{name,b64}），单文件上限 2MB
+//   （WS 帧读限 4MB 的硬约束）；PC 超时/失败不回退服务端——面板显示的是 PC 本地根，落服务端不可见，必须明确报错。
+// 路径安全归口 agentSafePath（拒绝绝对路径/../逃逸）+ wsEntryName（文件名非法字符），目标强制落本人工作区内。
+
+// wsUploadSeq 上传请求序号（req_id 唯一性：同用户并发上传防碰撞）
+var wsUploadSeq atomic.Int64
+
+// wsUploadPcMax PC 本地模式单文件上限（base64 后约 2.7MB，含 JSON 包装须在 WS 读限 4MB 内）
+const wsUploadPcMax = 2 << 20
+
+func (s *Server) HandleAgentWsUpload(w http.ResponseWriter, r *http.Request) {
+	username := strings.TrimSpace(r.URL.Query().Get("username"))
+	dir := strings.ReplaceAll(strings.TrimSpace(r.URL.Query().Get("dir")), "\\", "/")
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if username == "" || name == "" {
+		http.Error(w, "缺少 username 或 name 参数", http.StatusBadRequest)
+		return
+	}
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		return
+	}
+	name, ok := wsEntryName(name)
+	if !ok {
+		http.Error(w, "名称非法（不能包含路径分隔符与 <>:\"|?* 等字符）", http.StatusBadRequest)
+		return
+	}
+	// 目标相对路径拼装后统一过 agentSafePath（dir 内含 .. / 绝对路径同样被拒）
+	rel := name
+	if dir != "" && dir != "." && dir != "/" {
+		rel = strings.Trim(dir, "/") + "/" + name
+	}
+	full, err := agentSafePath(username, rel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	pcMode := agentPcExec.Load() && s.hub.HasPC(username)
+
+	// 大小限制按模式分档：PC 模式受 WS 帧约束 2MB；服务端模式与聊天文件同口径
+	maxSize := int64(s.cfg.MaxFileSize)
+	if maxSize <= 0 {
+		maxSize = 20 << 20
+	}
+	if pcMode {
+		maxSize = wsUploadPcMax
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+
+	// PC 本地模式：base64 装载转发执行器（op=upload，path=父目录，content=JSON{name,b64}）
+	if pcMode {
+		data, rerr := io.ReadAll(r.Body)
+		if rerr != nil {
+			if strings.Contains(rerr.Error(), "request body too large") {
+				http.Error(w, "PC 本地模式单文件上限 2MB", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "读取上传内容失败", http.StatusBadRequest)
+			return
+		}
+		reqID := strconv.FormatInt(wsUploadSeq.Add(1), 10) + "_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		content, _ := json.Marshal(map[string]string{"name": name, "b64": base64.StdEncoding.EncodeToString(data)})
+		res := s.wsFileWaitPC(username, reqID, "upload", strings.Trim(dir, "/"), string(content), wsFileOpTimeout)
+		if res == nil {
+			http.Error(w, "PC 端无响应，上传失败", http.StatusGatewayTimeout)
+			return
+		}
+		if !res.OK {
+			http.Error(w, res.Error, http.StatusInternalServerError)
+			return
+		}
+		logger.Info("工作区上传（用户 %s PC 本地：%s/%s，%d 字节）", username, dir, name, len(data))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "path": rel, "mode": "pc"})
+		return
+	}
+
+	// 服务端模式：流式落盘（同名覆盖）
+	var overwritten bool
+	if st, serr := os.Stat(full); serr == nil {
+		if st.IsDir() {
+			http.Error(w, "同名目录已存在，无法覆盖为文件", http.StatusBadRequest)
+			return
+		}
+		overwritten = true
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		http.Error(w, "创建目录失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.OpenFile(full, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		http.Error(w, "文件保存失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_, err = io.Copy(f, r.Body)
+	f.Close()
+	if err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			os.Remove(full) // 超限残片清理
+			http.Error(w, "文件过大（超过单文件上限）", http.StatusRequestEntityTooLarge)
+			return
+		}
+		os.Remove(full)
+		http.Error(w, "文件写入失败："+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	logger.Info("工作区上传（用户 %s 服务端：%s/%s，覆盖 %v）", username, dir, name, overwritten)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "path": rel, "overwritten": overwritten, "mode": "server"})
 }

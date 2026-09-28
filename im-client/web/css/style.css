@@ -4758,6 +4758,110 @@ html.m #list-panel.list-collapsed {
     cursor: default;
 }
 
+/* ===== 阶段一百六十六：Agent 任务图片附件 ===== */
+/* 输入区上方附件条（仿引用条 .quote-bar 族）：缩略图 + 逐张移除 + 数量提示 */
+.agent-task-images {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 12px 0;
+    padding: 6px 10px;
+    background: var(--panel-bg);
+    border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+    border-radius: 8px;
+}
+
+.agent-task-images.hidden {
+    display: none;
+}
+
+.agent-task-images-item {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.agent-task-images-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.agent-task-images-del {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 15px;
+    height: 15px;
+    border: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text) 55%, transparent);
+    color: var(--panel-bg, #fff);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.agent-task-images-del:hover {
+    background: #f56c6c;
+}
+
+/* 阶段一百六十七：视频抽帧项角标（左下角，主题色底） */
+.agent-task-images-vbadge {
+    position: absolute;
+    left: 1px;
+    bottom: 1px;
+    padding: 1px 4px;
+    font-size: 9px;
+    line-height: 1.3;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary) 82%, transparent);
+    color: #fff;
+    pointer-events: none;
+}
+
+.agent-task-images-hint {
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 目标气泡内附件缩略图条（带图任务回显）：点击新窗放大 */
+.agent-goal-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border);
+}
+
+.agent-goal-images img {
+    width: 72px;
+    height: 72px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: zoom-in;
+    transition: transform 0.15s;
+}
+
+.agent-goal-images img:hover {
+    transform: scale(1.05);
+}
+
 /* 进度条（自实现，禁止系统默认样式） */
 .agent-task-progress {
     display: flex;
@@ -4927,6 +5031,12 @@ html.m #list-panel.list-collapsed {
     background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
+/* 阶段一百七十六：SOLO 全自动放行标签（沿用现有 --warning 主题变量，明暗主题自动跟随） */
+.agent-env-tag.solo {
+    color: var(--warning, #d29922);
+    background: color-mix(in srgb, var(--warning, #d29922) 14%, transparent);
+}
+
 .agent-event.thought .agent-event-head::before {
     content: '💭 ';
 }
@@ -5009,6 +5119,88 @@ html.m #list-panel.list-collapsed {
 .agent-event.tool.fail .agent-event-head::after {
     content: '异常';
     color: #f56c6c;
+}
+
+/* ===== 阶段一百七十二：逐轮 Checkpoint 时间线（TRAE CN 同款轮次节点） ===== */
+/* 实时卡轮次分隔节点：圆点 + 轮次名 + 时刻，右侧细线延伸（全部跟随主题色变量） */
+.agent-round-node {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 2px 0;
+    font-size: 11px;
+    user-select: none;
+}
+
+.agent-round-node::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border, #ececec);
+}
+
+.agent-round-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--primary);
+    background: var(--panel-bg, #fff);
+    box-sizing: border-box;
+    flex: none;
+}
+
+.agent-round-label {
+    color: var(--text, #333);
+    font-weight: 500;
+}
+
+.agent-round-time {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    flex: none;
+}
+
+/* 重放详情轮次头（重放卡/任务历史弹窗共用）：与实时卡同视觉语言 */
+.th-round-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 8px 0 4px;
+    font-size: 12px;
+}
+
+.th-round-changes {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* 阶段一百七十三：轮次头逐轮回滚按钮（Checkpoint）——描边弱化小钮与逐文件撤销同视觉语言 */
+.th-round-revert {
+    flex: none;
+    margin-left: auto;
+    border: 1px solid var(--border, #e0e0e0);
+    background: transparent;
+    color: var(--text-secondary, #888);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.th-round-revert:hover:not(:disabled) {
+    border-color: #d4553f;
+    color: #d4553f;
+    background: rgba(212, 85, 63, 0.06);
+}
+
+.th-round-revert:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 /* ===== 阶段六十二：工具行人性化（中文标题+参数芯片+结果摘要行）与流式文本块（Trae CN 同款） ===== */
@@ -7294,6 +7486,57 @@ html.m #list-panel.list-collapsed {
     letter-spacing: 1px;
 }
 
+/* 阶段一百八十三：上传按钮（与刷新/更多同款图标化按钮盒） */
+.ws-upload-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+}
+
+/* 阶段一百八十三：工作区上传进度条（头部下方横向细条，主题色填充；自绘非系统控件） */
+.ws-upload-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border, #ececec);
+    background: var(--header-bg, #fafafa);
+}
+
+.ws-upload-bar.hidden {
+    display: none;
+}
+
+.ws-upload-txt {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+}
+
+.ws-upload-track {
+    flex-shrink: 0;
+    width: 72px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--hover, #f0f0f0);
+    overflow: hidden;
+}
+
+.ws-upload-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--primary); /* 主题色填充，跟随主题变化 */
+    transition: width 0.2s ease;
+}
+
 /* 头部"更多操作"（⋯）与自绘下拉菜单：浮层右对齐弹出，低频操作统一收纳（禁用系统弹窗） */
 .ws-more {
     position: relative;
@@ -8547,6 +8790,141 @@ html.m #list-panel.list-collapsed {
     padding-top: 8px;
 }
 
+/* ===== 阶段一百六十四：执行计划审批（TRAE CN Plan 同款） ===== */
+/* 计划子卡片（任务卡内嵌），主题色联动与提问卡同族 */
+.agent-event.plan {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.agent-event.plan .agent-event-head.plan {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary);
+    cursor: default;
+}
+
+.agent-event.plan.approved {
+    border-color: color-mix(in srgb, var(--primary) 70%, transparent);
+}
+
+.agent-plan-title {
+    padding: 8px 10px 2px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #333);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-plan-summary {
+    padding: 2px 10px 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-plan-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 10px 2px;
+}
+
+.agent-plan-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    padding: 7px 10px;
+    background: var(--panel-bg, #fff);
+}
+
+.agent-plan-step-no {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: var(--primary);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+}
+
+.agent-plan-step-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-plan-step-content {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text, #333);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.agent-plan-step-detail {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+/* 驳回意见输入行（可选填，回车直接驳回） */
+.agent-plan-feedback {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px 4px;
+}
+
+.agent-plan-feedback-label {
+    flex: none;
+    font-size: 12px;
+    color: var(--text, #333);
+}
+
+.agent-plan-feedback-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    background: var(--panel-bg, #fff);
+    color: var(--text, #333);
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+.agent-plan-feedback-input:focus {
+    border-color: var(--primary);
+}
+
+.agent-plan-feedback-input:disabled {
+    opacity: 0.6;
+}
+
+.agent-plan-feedback-count {
+    flex: none;
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    min-width: 34px;
+    text-align: right;
+}
+
+.agent-plan-actions {
+    justify-content: flex-end; /* 与提问卡同款：驳回/批准右对齐 */
+    padding-top: 8px;
+}
+
+
 /* 居中提问弹窗（自绘遮罩，z-index 与全局 .modal-mask 同层基准） */
 .agent-ask-modal-mask {
     position: fixed;
@@ -8615,6 +8993,66 @@ html.m #list-panel.list-collapsed {
 
 .diff-del {
     color: #d4553f;
+}
+
+/* ===== 阶段一百八十一：任务变更 diff 弹层（+绿/-红行级着色，JetBrains Mono 等宽，主题变量联动明暗） ===== */
+.agent-diff-box {
+    width: min(760px, 92vw);
+    display: flex;
+    flex-direction: column;
+}
+
+.agent-diff-body {
+    max-height: 62vh;
+    overflow: auto;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    background: var(--panel-bg, #ffffff);
+    padding: 6px 0;
+    font-family: 'JetBrains Mono IM', 'Cascadia Code', Consolas, 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre;
+    text-align: left; /* 弹窗容器居中基调下 diff 强制左对齐（标准 diff 阅读习惯） */
+    user-select: text; /* 差异文本可选中复制 */
+}
+
+.agent-diff-line {
+    padding: 0 10px;
+    color: var(--text, #333);
+    word-break: break-all;
+}
+
+.agent-diff-line.add {
+    color: #22a05a;
+    background: rgba(34, 160, 90, 0.12);
+}
+
+.agent-diff-line.del {
+    color: #d4553f;
+    background: rgba(212, 85, 63, 0.12);
+}
+
+.agent-diff-line.meta {
+    color: var(--text-light, #999);
+}
+
+/* diff 按钮（变更行内，撤销按钮同款小按钮风格；紧跟 dstat 之后，无 margin-left:auto——dstat 已推右） */
+.agent-changes-diff {
+    border: 1px solid var(--border, #e0e0e0);
+    background: transparent;
+    color: var(--text-secondary, #999999);
+    font-size: 11px;
+    font-family: Consolas, Monaco, monospace;
+    padding: 1px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.agent-changes-diff:hover {
+    color: var(--text, #333);
+    border-color: var(--text-light, #999);
 }
 
 .agent-changes-arrow {
@@ -10481,6 +10919,85 @@ html.m .ms-actions {
     color: var(--text-light);
 }
 
+/* 阶段一百八十二：页签行（任务历史/任务模板）——胶囊页签，选中态主题色实底（与状态 chips 同语言） */
+.taskhist-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 10px;
+}
+
+.taskhist-tab {
+    padding: 4px 14px;
+    font-size: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text-light);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.taskhist-tab:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.taskhist-tab.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* 阶段一百八十二：卡片操作按钮（重跑/存为模板/运行/删除）——小号胶囊幽灵按钮，主题色关联 */
+.taskhist-ops {
+    flex: none;
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.th-tpl-ops {
+    margin-top: 8px;
+    justify-content: flex-end;
+}
+
+.taskhist-op-btn {
+    padding: 2px 10px;
+    font-size: 11px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text-light);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.taskhist-op-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.taskhist-op-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.taskhist-op-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.taskhist-op-btn.primary:hover {
+    background: color-mix(in srgb, var(--primary) 85%, #ffffff);
+    color: #fff;
+}
+
+.taskhist-op-btn.danger:hover {
+    border-color: var(--danger, #fa5151);
+    color: var(--danger, #fa5151);
+}
+
 /* 展开详情区：pre-wrap 保留换行，主题色标签行 */
 .taskhist-detail {
     margin-top: 8px;
@@ -10508,6 +11025,84 @@ html.m .ms-actions {
    转为 <br>，保留 pre-wrap 会把源码残余换行叠加显示成双倍行距；代码块内部自有 pre 语义不受影响 */
 .taskhist-d-body.ai-md {
     white-space: normal;
+}
+
+/* ===== 阶段一百八十四：定时/巡检任务（第三页签表单与列表卡片，全 var 主题色关联） ===== */
+/* 新建/编辑表单：面板底细分区，与弹窗内 chips/页签同语言 */
+.th-cron-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+    margin-bottom: 10px;
+}
+
+.th-cron-goal {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 44px;
+    font-size: 12px;
+}
+
+.th-cron-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.th-cron-kind {
+    width: 128px;
+    flex: none;
+}
+
+.th-cron-val {
+    width: 96px;
+    flex: none;
+}
+
+/* 模式勾选行：小号文字勾选 + 归属说明（text-secondary 主题变量关联）+ 右侧操作按钮 */
+.th-cron-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-light);
+    cursor: pointer;
+    user-select: none;
+}
+
+.th-cron-check input {
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.th-cron-sid {
+    font-size: 11px;
+    color: var(--text-secondary, var(--text-light));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+/* 定时任务卡：头部开关与目标同行；停用态整卡降透明（保留可见可再启用） */
+.th-cron-card .th-cron-sw {
+    margin-right: 8px;
+}
+
+.th-cron-card.th-cron-off .taskhist-goal,
+.th-cron-card.th-cron-off .taskhist-meta {
+    opacity: 0.55;
+}
+
+.th-cron-card .taskhist-head {
+    align-items: center;
 }
 
 /* ===== 阶段六十五：任务详情执行轨迹（每步工具调用时间线，主题色变量关联） ===== */
@@ -15018,4 +15613,178 @@ html.m .dsm-list {
 }
 .drive-act-restore:hover {
     background: var(--active);
+}
+
+/* ===== 阶段一百七十：@ 上下文引用（任务模式输入 @ 的文件选择浮层 + 引用条 + 回显 chip 条） ===== */
+/* 浮层：body 级 fixed（.input-bar overflow:hidden 会裁子浮层），定位由 JS 按输入框矩形计算 */
+.agent-at-panel {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    max-height: 300px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    z-index: 1600;
+    overflow: hidden;
+}
+
+.agent-at-panel.hidden {
+    display: none;
+}
+
+/* 面包屑：工作区 / 目录路径，可点击跳转 */
+.agent-at-crumb {
+    padding: 7px 12px;
+    font-size: 12px;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+    background: var(--hover);
+    white-space: nowrap;
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.agent-at-crumb-item {
+    color: var(--primary);
+    cursor: pointer;
+}
+
+.agent-at-crumb-item:hover {
+    text-decoration: underline;
+}
+
+.agent-at-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.agent-at-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.agent-at-row.sel {
+    background: var(--hover);
+}
+
+.agent-at-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 目录行尾引用按钮（目录单击=进入，+ 号=直接引用目录） */
+.agent-at-add {
+    margin-left: auto;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-light);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.agent-at-add:hover {
+    background: var(--active);
+    color: var(--primary);
+}
+
+.agent-at-hint {
+    padding: 12px;
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+}
+
+/* 输入区引用条（仿 .agent-task-images 附件条）：提示 + 引用 chip 列表 */
+.agent-ctx-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 12px 0;
+    padding: 6px 10px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.agent-ctx-bar.hidden {
+    display: none;
+}
+
+.agent-ctx-bar-tip {
+    font-size: 12px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
+.agent-ctx-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 260px;
+    padding: 2px 4px 2px 8px;
+    background: var(--hover);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.agent-ctx-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.agent-ctx-chip-del {
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: var(--active);
+    color: var(--text-light);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.agent-ctx-chip-del:hover {
+    color: var(--text);
+}
+
+/* 任务目标回显气泡下的引用 chip 条（纯展示，与缩略图条 .agent-goal-images 同位） */
+.agent-goal-ctxs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.agent-goal-ctx {
+    padding: 1px 8px;
+    background: var(--hover);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-light);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }

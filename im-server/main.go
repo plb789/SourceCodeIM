@@ -139,6 +139,26 @@ func main() {
 	http.HandleFunc("GET /api/agent/task/{task_id}", srv.HandleAgentTaskDetail)
 	// 阶段六十五：Agent 任务执行轨迹（每步工具调用留痕，详情展开时拉取）
 	http.HandleFunc("GET /api/agent/task/{task_id}/steps", srv.HandleAgentTaskSteps)
+	// 阶段一百八十五：任务报告导出 Markdown（服务端渲染归口，鉴权水位与任务详情一致）
+	http.HandleFunc("GET /api/agent/task/{task_id}/report", srv.HandleAgentTaskReport)
+
+	// 阶段一百八十二：任务模板一键重跑（用户端仅本人模板，鉴权水位与任务历史一致）
+	http.HandleFunc("GET /api/agent/tasks/tpl", srv.HandleAgentTaskTplList)
+	http.HandleFunc("POST /api/agent/tasks/tpl", srv.HandleAgentTaskTplAdd)
+	http.HandleFunc("DELETE /api/agent/tasks/tpl/{id}", srv.HandleAgentTaskTplDel)
+
+	// 阶段一百八十四：定时/巡检任务（到期自动发起 Agent 任务，结果经既有完结链路落会话；
+	// 鉴权水位与任务模板一致）
+	http.HandleFunc("GET /api/agent/cron/list", srv.HandleAgentCronList)
+	http.HandleFunc("POST /api/agent/cron/save", srv.HandleAgentCronSave)
+	http.HandleFunc("POST /api/agent/cron/toggle", srv.HandleAgentCronToggle)
+	http.HandleFunc("POST /api/agent/cron/delete", srv.HandleAgentCronDel)
+	// 调度循环（启动即扫描一次：重启后 next_run_at 过期的任务补跑）
+	server.StartAgentCron(srv)
+
+	// 阶段一百八十三：工作区文件上传（服务端模式直落工作区；PC 本地模式转发执行器，
+	// 路径安全归口 agentSafePath + wsEntryName，鉴权水位与 /agent/preview 一致）
+	http.HandleFunc("POST /api/agent/ws/upload", srv.HandleAgentWsUpload)
 
 	// 阶段五十九：Agent 工作区静态访问（页面预览支撑，仅限本人工作区内文件）
 	http.HandleFunc("GET /agent/preview", srv.HandleAgentPreview)

@@ -6,6 +6,7 @@ Redis-x64-5.0.14.1/
 *.zip
 *.gob
 *.log
+*.rdb
 *.xlsx
 *.docx
 *.png

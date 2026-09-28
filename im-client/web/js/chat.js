@@ -115,6 +115,10 @@
     var screenshotBtn = document.getElementById('screenshot-btn');
     var clearBtn = document.getElementById('clear-btn');
     var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
+    var agentPlanBtn = document.getElementById('agent-plan-btn'); // 阶段一百六十四：计划模式开关（Agent 先提交计划，用户批准后执行；随任务上行 plan_mode）
+    var agentSoloBtn = document.getElementById('agent-solo-btn'); // 阶段一百七十六：SOLO 全自动模式开关（任务内需审批操作自动放行；随任务上行 solo_mode）
+    var agentVideoBtn = document.getElementById('agent-video-btn'); // 阶段一百六十七：任务视频入口（仅任务模式显示，选视频抽关键帧入任务附件）
+    var agentVideoInput = document.getElementById('agent-video-input'); // 阶段一百六十七：视频文件选择控件（hidden，agentVideoBtn 触发）
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
     var agentMcpBtn = document.getElementById('agent-mcp-btn'); // 阶段九十：我的 MCP 服务器入口（仅 PC 端，本机 stdio 自定义）
     var agentApproveBtn = document.getElementById('agent-approve-btn'); // 阶段一百一十七：Agent 审批模式盾牌入口（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
@@ -258,6 +262,9 @@
     });
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && !modalMask.classList.contains('hidden')) closeModal();
+        // 阶段一百八十一：Esc 关闭任务变更 diff 弹层
+        var agentDiffMask = document.getElementById('agent-diff-mask');
+        if (e.key === 'Escape' && agentDiffMask && !agentDiffMask.classList.contains('hidden')) agentDiffMask.classList.add('hidden');
         // 阶段四十二：Esc 关闭添加好友弹窗
         if (e.key === 'Escape' && !addFriendMask.classList.contains('hidden')) closeAddFriendDialog();
         // 阶段三十：Esc 依次关闭资料卡/个人资料面板（后打开的优先关闭）
@@ -2807,6 +2814,522 @@
         if (quoteBarEl) quoteBarEl.classList.add('hidden');
     }
 
+    // ===== 阶段一百六十六：Agent 任务图片附件（TRAE CN 同款贴图布置任务） =====
+    // 任务模式下选择/截图的图片先入暂存区（输入区附件条预览，可逐张移除），发送任务时统一上传
+    // （/upload/ai/image，与 AI 问答图片同归口）后随 AGENT_RUN payload images 上行；上限与服务端一致
+    var agentTaskMaxImages = 4;
+    var agentTaskImages = [];      // 暂存项 { file, blobURL }
+    var agentTaskImagesEl = null;  // 附件条 DOM（惰性创建，插在 .input-bar 最前）
+    // 带图任务的目标回显挂图（agent -> [服务端 url]）：AGENT_RUN 发出后记录，目标回显气泡上屏时
+    // 挂缩略图条（内存态——刷新后仅文字，服务端历史仍为纯文本目标，图片本体随任务上下文供模型使用）
+    var agentTaskGoalImages = {};
+
+    function agentTaskImagesRender() {
+        if (!agentTaskImagesEl) {
+            agentTaskImagesEl = document.createElement('div');
+            agentTaskImagesEl.className = 'agent-task-images hidden';
+            var bar = document.querySelector('.input-bar');
+            if (bar) bar.insertBefore(agentTaskImagesEl, bar.firstChild);
+        }
+        agentTaskImagesEl.innerHTML = '';
+        for (var i = 0; i < agentTaskImages.length; i++) {
+            (function (idx) {
+                var cell = document.createElement('div');
+                cell.className = 'agent-task-images-item';
+                var img = document.createElement('img');
+                img.src = agentTaskImages[idx].blobURL;
+                img.alt = '';
+                var del = document.createElement('button');
+                del.className = 'agent-task-images-del';
+                del.textContent = '×';
+                del.title = I18N.t('移除图片');
+                del.addEventListener('click', function () {
+                    agentTaskImages.splice(idx, 1);
+                    agentTaskImagesRender();
+                });
+                cell.appendChild(img);
+                // 阶段一百六十七：视频抽帧项加角标（悬停 title 显示来源视频文件名）
+                if (agentTaskImages[idx].fromVideo) {
+                    var vbadge = document.createElement('span');
+                    vbadge.className = 'agent-task-images-vbadge';
+                    vbadge.textContent = I18N.t('视频');
+                    cell.appendChild(vbadge);
+                    cell.title = agentTaskImages[idx].fromVideo;
+                }
+                cell.appendChild(del);
+                agentTaskImagesEl.appendChild(cell);
+            })(i);
+        }
+        var hint = document.createElement('span');
+        hint.className = 'agent-task-images-hint';
+        hint.textContent = I18N.t('随任务发送的图片（') + agentTaskImages.length + '/' + agentTaskMaxImages + '）';
+        agentTaskImagesEl.appendChild(hint);
+        if (agentTaskImages.length) agentTaskImagesEl.classList.remove('hidden');
+        else agentTaskImagesEl.classList.add('hidden');
+    }
+
+    function agentTaskAddImage(file) {
+        if (!isImageName(file.name)) { showToast(I18N.t('仅支持发送图片文件')); return; }
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        if (file.size > maxFile) { showToast(I18N.t('图片超过大小上限（') + formatSize(maxFile) + '）'); return; }
+        if (agentTaskImages.length >= agentTaskMaxImages) {
+            showToast(I18N.t('任务图片最多 ') + agentTaskMaxImages + I18N.t(' 张'));
+            return;
+        }
+        agentTaskImages.push({ file: file, blobURL: URL.createObjectURL(file) });
+        agentTaskImagesRender();
+    }
+
+    function agentTaskImagesClear() {
+        for (var i = 0; i < agentTaskImages.length; i++) {
+            try { URL.revokeObjectURL(agentTaskImages[i].blobURL); } catch (e) { }
+        }
+        agentTaskImages = [];
+        agentTaskImagesRender();
+    }
+
+    // ===== 阶段一百六十七：Agent 任务视频输入（浏览器 canvas 抽帧，复用图片附件链路） =====
+    // 视频经 video 元素解码后均匀抽取关键帧（JPEG），作为普通图片项入任务附件——上行/多模态/
+    // 回显全走阶段一百六十六已验证的 images 链路，服务端零改动、无 ffmpeg 依赖、任意视觉模型可用；
+    // 视频本体不上传（Agent 工具链无视频消费方，聚焦"理解视频内容"）
+    var agentTaskVideoMaxBytes = 100 * 1024 * 1024; // 本地解码不占上行带宽，上限从宽（100MB）
+    var agentTaskVideoFrameEdge = 1280;             // 帧图最长边（等比缩放，控制 base64 体积与 token 消耗）
+
+    function agentTaskVideoExtract(file, maxFrames) {
+        return new Promise(function (resolve, reject) {
+            var url = URL.createObjectURL(file);
+            var video = document.createElement('video');
+            video.preload = 'auto';
+            video.muted = true;
+            video.playsInline = true;
+            video.src = url;
+            var cleaned = false;
+            var timer = setTimeout(function () {
+                cleanup();
+                reject(new Error(I18N.t('视频加载超时')));
+            }, 20000);
+            function cleanup() {
+                if (cleaned) return;
+                cleaned = true;
+                clearTimeout(timer);
+                try { URL.revokeObjectURL(url); } catch (e) { }
+                video.onseeked = null;
+                video.onloadedmetadata = null;
+                video.onerror = null;
+                video.removeAttribute('src');
+                try { video.load(); } catch (e) { }
+            }
+            video.onerror = function () {
+                cleanup();
+                reject(new Error(I18N.t('视频解码失败，浏览器不支持该格式')));
+            };
+            video.onloadedmetadata = function () {
+                if (!video.videoWidth || !video.videoHeight || !isFinite(video.duration) || video.duration <= 0) {
+                    cleanup();
+                    reject(new Error(I18N.t('无法读取视频信息')));
+                    return;
+                }
+                // 帧数：约每 2 秒 1 帧，[1, maxFrames] 截断（短视频 1 帧即概览，长视频封顶配额）
+                var n = Math.max(1, Math.min(maxFrames, Math.round(video.duration / 2) || 1));
+                // 采样时刻避开首尾（首帧常黑、末尾可能无画面）：均匀取 (i+0.5)/n
+                var canvas = document.createElement('canvas');
+                var scale = Math.min(1, agentTaskVideoFrameEdge / Math.max(video.videoWidth, video.videoHeight));
+                canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+                canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+                var ctx = canvas.getContext('2d');
+                var base = file.name.replace(/\.[^.]+$/, '');
+                var frames = [];
+                var step = function (idx) {
+                    if (idx >= n) {
+                        cleanup();
+                        if (!frames.length) { reject(new Error(I18N.t('视频抽帧失败：'))); return; }
+                        resolve(frames);
+                        return;
+                    }
+                    video.onseeked = function () {
+                        try {
+                            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                            canvas.toBlob(function (blob) {
+                                if (blob) {
+                                    frames.push(new File([blob], base + '_帧' + (idx + 1) + '.jpg', { type: 'image/jpeg' }));
+                                }
+                                step(idx + 1); // 单帧 toBlob 失败跳过不中断整体
+                            }, 'image/jpeg', 0.8);
+                        } catch (e) {
+                            step(idx + 1);
+                        }
+                    };
+                    try { video.currentTime = video.duration * (idx + 0.5) / n; } catch (e) { step(idx + 1); }
+                };
+                step(0);
+            };
+        });
+    }
+
+    function agentTaskAddVideo(file) {
+        if (!isVideoName(file.name)) { showToast(I18N.t('仅支持视频文件')); return; }
+        if (file.size > agentTaskVideoMaxBytes) { showToast(I18N.t('视频超过大小上限（100MB）')); return; }
+        var remain = agentTaskMaxImages - agentTaskImages.length;
+        if (remain <= 0) { showToast(I18N.t('附件已满，无法添加视频帧')); return; }
+        showToast(I18N.t('正在提取视频关键帧…'));
+        agentTaskVideoExtract(file, remain).then(function (frames) {
+            for (var i = 0; i < frames.length; i++) {
+                agentTaskImages.push({ file: frames[i], blobURL: URL.createObjectURL(frames[i]), fromVideo: file.name });
+            }
+            agentTaskImagesRender();
+        }).catch(function (e) {
+            showToast(I18N.t('视频抽帧失败：') + (e && e.message ? e.message : e));
+        });
+    }
+
+    // 逐张上传任务附件（与 AI 问答图片同归口 /upload/ai/image），返回 Promise<服务端 url 数组>
+    function agentTaskImagesUpload(items) {
+        var urls = [];
+        var chain = Promise.resolve();
+        items.forEach(function (item) {
+            chain = chain.then(function () {
+                var fd = new FormData();
+                fd.append('file', item.file);
+                return fetch('/upload/ai/image?username=' + encodeURIComponent(IMSocket.getUsername()) +
+                    '&to_user=' + encodeURIComponent(currentChatUser), {
+                    method: 'POST',
+                    body: fd
+                }).then(function (res) {
+                    if (!res.ok) return res.text().then(function (t) { throw new Error(t || ('HTTP ' + res.status)); });
+                    return res.json();
+                }).then(function (data) {
+                    if (!data || !data.url) throw new Error(I18N.t('上传响应缺少图片地址'));
+                    urls.push(data.url);
+                });
+            });
+        });
+        return chain.then(function () { return urls; });
+    }
+
+    // AGENT_RUN 上行归口（原内联于 sendMessage；阶段一百六十六抽出供图片附件上传完成后复用）
+    // ctxs：阶段一百七十 @ 引用上下文 [{path, dir}]（随 payload contexts 上行，发出后清引用条并缓存回显）
+    function sendAgentRun(goal, sid, imageUrls, ctxs) {
+        var payload = { goal: goal, agent_name: currentChatUser, session_id: sid, plan_mode: planModeOn, solo_mode: soloModeOn }; // 阶段一百七十六：随任务上行 solo_mode（全自动免审批）
+        if (imageUrls && imageUrls.length) payload.images = imageUrls;
+        if (ctxs && ctxs.length) {
+            payload.contexts = ctxs.map(function (c) { return { path: c.path, dir: c.dir }; });
+        }
+        if (IMSocket.send({ msg_type: MSG.AGENT_RUN, to_user: currentChatUser, content: JSON.stringify(payload) })) {
+            messageInput.value = '';
+            messageInput.focus();
+            // 阶段七十：任务目标改由服务端落库回显（真实 msg_id，切会话/重登历史不丢，与 AI 问答同口径）；
+            // 标记待达回显，PRIVATE 处理器据此抑制"思考中"指示（任务模式无 AI 问答指示）
+            agentEchoPending[currentChatUser] = true;
+            // 阶段一百六十六：带图任务——记录附件地址，目标回显气泡上屏时挂缩略图条
+            if (imageUrls && imageUrls.length) agentTaskGoalImages[currentChatUser] = imageUrls.slice();
+            // 阶段一百七十：@ 引用任务——缓存引用项，目标回显气泡上屏时挂引用 chip 条；引用条发出即清
+            if (ctxs && ctxs.length) agentTaskGoalCtxs[currentChatUser] = ctxs.map(function (c) { return { path: c.path, dir: c.dir }; });
+            agentCtxClear();
+        }
+    }
+
+    // 阶段一百六十六：任务目标回显气泡挂附件缩略图条（按 msg_id 定位气泡，找不到静默跳过——
+    // 文字目标不受影响；缩略图点击新窗放大）
+    function agentGoalBubbleAttach(msgId, urls) {
+        if (!msgId || !urls || !urls.length) return;
+        try {
+            var el = document.querySelector('.message[data-msg-id="' + String(msgId) + '"] .bubble') ||
+                document.querySelector('[data-msg-id="' + String(msgId) + '"] .bubble') ||
+                document.querySelector('[data-msg-id="' + String(msgId) + '"]');
+            if (!el) return;
+            var strip = document.createElement('div');
+            strip.className = 'agent-goal-images';
+            for (var i = 0; i < urls.length; i++) {
+                var img = document.createElement('img');
+                img.src = urls[i];
+                img.alt = '';
+                img.addEventListener('click', function (ev) { window.open(ev.target.src, '_blank'); });
+                strip.appendChild(img);
+            }
+            el.appendChild(strip);
+        } catch (e) { }
+    }
+
+    // ===== 阶段一百七十：@ 上下文引用（TRAE CN 同款 @ 文件引用布置任务） =====
+    // 任务模式输入 @ 触发工作区文件选择浮层（复用文件面板 WS_FILE_REQ 'tree' 链路：PC 在线走
+    // 本地、离线走服务端工作区，路径同为工作区相对路径，与 Agent 文件工具 read_file 语义一致），
+    // 点选文件/目录入引用条，随 AGENT_RUN contexts 上行；服务端校验路径后注入任务上下文
+    // （小文件内容直读、大文件给路径清单让模型 read_file 自读）
+    var agentTaskCtxs = [];      // 引用项 [{path, dir}]（path=工作区相对路径）
+    var agentTaskCtxMax = 8;     // 引用条目上限（与服务端一致）
+    var agentCtxBarEl = null;    // 引用条 DOM（惰性创建，仿任务图片附件条）
+    var agentAtPanelEl = null;   // @ 选择浮层 DOM（body 级 fixed，惰性创建；.input-bar overflow:hidden 会裁子浮层）
+    var agentAtState = null;     // 浮层态 { dir, tokenStart, filter, all, items, sel }（all=当前目录原始条目，items=过滤后）
+    var agentTaskGoalCtxs = {};  // 发出后回显缓存（agent -> ctxs），目标回显气泡挂引用 chip 条（内存态，与图片附件同口径）
+
+    // 检测输入框光标前是否为未闭合 @ token（@ 前须行首或空白，防误触邮箱）：命中返回 {start, filter}
+    function agentAtTokenAtCursor() {
+        var pos = messageInput.selectionStart || 0;
+        if (messageInput.selectionEnd !== pos) return null; // 选区中不触发
+        var m = messageInput.value.slice(0, pos).match(/(^|\s)@([^\s]*)$/);
+        if (!m) return null;
+        return { start: pos - m[2].length - 1, filter: m[2] }; // start=@ 字符位置
+    }
+
+    // 引用条渲染（chip：目录/文件图标 + 路径 + 移除 ×）
+    function agentCtxBarRender() {
+        if (!agentCtxBarEl) {
+            agentCtxBarEl = document.createElement('div');
+            agentCtxBarEl.className = 'agent-ctx-bar hidden';
+            var bar = document.querySelector('.input-bar');
+            if (bar) bar.insertBefore(agentCtxBarEl, bar.firstChild);
+        }
+        agentCtxBarEl.textContent = '';
+        if (!agentTaskCtxs.length) {
+            agentCtxBarEl.classList.add('hidden');
+            return;
+        }
+        var tip = document.createElement('span');
+        tip.className = 'agent-ctx-bar-tip';
+        tip.textContent = I18N.t('引用上下文');
+        agentCtxBarEl.appendChild(tip);
+        agentTaskCtxs.forEach(function (c, idx) {
+            var chip = document.createElement('span');
+            chip.className = 'agent-ctx-chip';
+            chip.title = c.path;
+            var name = document.createElement('span');
+            name.className = 'agent-ctx-chip-name';
+            name.textContent = (c.dir ? '📁 ' : '📄 ') + c.path;
+            var del = document.createElement('button');
+            del.className = 'agent-ctx-chip-del';
+            del.textContent = '×';
+            del.title = I18N.t('移除引用');
+            del.addEventListener('click', function () {
+                agentTaskCtxs.splice(idx, 1);
+                agentCtxBarRender();
+            });
+            chip.appendChild(name);
+            chip.appendChild(del);
+            agentCtxBarEl.appendChild(chip);
+        });
+        agentCtxBarEl.classList.remove('hidden');
+    }
+
+    function agentCtxClear() {
+        agentTaskCtxs = [];
+        agentCtxBarRender();
+    }
+
+    // 加入引用（超限 toast；重复引用忽略）
+    function agentCtxAdd(path, dir) {
+        if (agentTaskCtxs.length >= agentTaskCtxMax) {
+            showToast(I18N.t('引用上下文最多 ') + agentTaskCtxMax + I18N.t(' 项'));
+            return false;
+        }
+        for (var i = 0; i < agentTaskCtxs.length; i++) {
+            if (agentTaskCtxs[i].path === path) return true; // 已引用静默通过
+        }
+        agentTaskCtxs.push({ path: path, dir: dir });
+        agentCtxBarRender();
+        return true;
+    }
+
+    // @ 浮层 DOM（面包屑 + 列表；列表挂自绘悬浮滑块）
+    function agentAtBuild() {
+        agentAtPanelEl = document.createElement('div');
+        agentAtPanelEl.className = 'agent-at-panel hidden';
+        var crumb = document.createElement('div');
+        crumb.className = 'agent-at-crumb';
+        var list = document.createElement('div');
+        list.className = 'agent-at-list';
+        agentAtPanelEl.appendChild(crumb);
+        agentAtPanelEl.appendChild(list);
+        document.body.appendChild(agentAtPanelEl);
+        agentAtPanelEl.addEventListener('mousedown', function (e) { e.preventDefault(); }); // 防点击浮层夺走输入框焦点
+        if (window._osbInit) window._osbInit(list);
+    }
+
+    // 浮层定位到输入框正上方（fixed 定位按视口坐标）
+    function agentAtPlace() {
+        if (!agentAtPanelEl || agentAtPanelEl.classList.contains('hidden')) return;
+        var rect = messageInput.getBoundingClientRect();
+        agentAtPanelEl.style.left = rect.left + 'px';
+        agentAtPanelEl.style.width = Math.max(rect.width, 320) + 'px';
+        agentAtPanelEl.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+    }
+
+    // 面包屑渲染：工作区 > proj > sub（可点击跳转；根恒显示）
+    function agentAtCrumbRender() {
+        var crumb = agentAtPanelEl.querySelector('.agent-at-crumb');
+        crumb.textContent = '';
+        var parts = agentAtState.dir ? agentAtState.dir.split('/') : [];
+        var mk = function (label, dir) {
+            var a = document.createElement('span');
+            a.className = 'agent-at-crumb-item';
+            a.textContent = label;
+            a.addEventListener('click', function () { agentAtLoad(dir); });
+            return a;
+        };
+        crumb.appendChild(mk(I18N.t('工作区'), ''));
+        var acc = '';
+        parts.forEach(function (p) {
+            acc = acc ? acc + '/' + p : p;
+            crumb.appendChild(document.createTextNode(' / '));
+            crumb.appendChild(mk(p, acc));
+        });
+    }
+
+    // 加载目录（path=工作区相对目录路径，''=根；过滤词保留重渲染）
+    function agentAtLoad(path) {
+        agentAtState.dir = path;
+        agentAtCrumbRender();
+        agentAtApplyFilter();
+        var list = agentAtPanelEl.querySelector('.agent-at-list');
+        list.textContent = '';
+        var hint = document.createElement('div');
+        hint.className = 'agent-at-hint';
+        hint.textContent = I18N.t('加载中…');
+        list.appendChild(hint);
+        wsPanelReq('tree', path).then(function (res) {
+            if (!agentAtState || agentAtState.dir !== path) return; // 浮层已关/已跳转其他目录
+            agentAtState.all = res.entries || [];
+            agentAtApplyFilter();
+        }).catch(function (err) {
+            if (!agentAtState || agentAtState.dir !== path) return;
+            list.textContent = '';
+            var tip = document.createElement('div');
+            tip.className = 'agent-at-hint';
+            tip.textContent = I18N.t('加载失败：') + (err && err.message || err);
+            list.appendChild(tip);
+        });
+    }
+
+    // 按过滤词过滤当前目录条目并渲染（@ 后输入的字符实时过滤，不重发请求）
+    function agentAtApplyFilter() {
+        if (!agentAtState) return;
+        var f = (agentAtState.filter || '').toLowerCase();
+        agentAtState.items = (agentAtState.all || []).filter(function (en) {
+            return !f || en.name.toLowerCase().indexOf(f) >= 0;
+        });
+        agentAtState.sel = 0;
+        var list = agentAtPanelEl.querySelector('.agent-at-list');
+        list.textContent = '';
+        if (!agentAtState.items.length) {
+            var hint = document.createElement('div');
+            hint.className = 'agent-at-hint';
+            hint.textContent = agentAtState.all && agentAtState.all.length ? I18N.t('无匹配') : I18N.t('（空目录）');
+            list.appendChild(hint);
+            return;
+        }
+        var selfPath = function (en) { return agentAtState.dir ? agentAtState.dir + '/' + en.name : en.name; };
+        agentAtState.items.forEach(function (en, i) {
+            var row = document.createElement('div');
+            row.className = 'agent-at-row' + (en.dir ? ' dir' : ' file') + (i === agentAtState.sel ? ' sel' : '');
+            var icon = wsMakeFileIcon(en); // 复用文件面板彩色语言徽标
+            var name = document.createElement('span');
+            name.className = 'agent-at-name';
+            name.textContent = en.name;
+            row.appendChild(icon);
+            row.appendChild(name);
+            var pick = function () {
+                if (!agentCtxAdd(selfPath(en), !!en.dir)) return;
+                agentAtEraseToken();
+                agentAtClose();
+                messageInput.focus();
+            };
+            if (en.dir) {
+                var add = document.createElement('button');
+                add.className = 'agent-at-add';
+                add.textContent = '+';
+                add.title = I18N.t('引用此目录');
+                add.addEventListener('click', function (e) { e.stopPropagation(); pick(); });
+                row.appendChild(add);
+                row.addEventListener('click', function (e) {
+                    e.stopPropagation(); // 防 agentAtLoad 清列表后 row 脱离 DOM，冒泡到 document 被误判"点击外部"关浮层
+                    agentAtLoad(selfPath(en)); // 单击进入目录
+                });
+            } else {
+                row.addEventListener('click', function (e) { e.stopPropagation(); pick(); }); // 单击文件直接引用（同上防误关）
+            }
+            row.addEventListener('mouseenter', function () {
+                agentAtState.sel = i;
+                Array.prototype.forEach.call(list.querySelectorAll('.agent-at-row.sel'), function (el) { el.classList.remove('sel'); });
+                row.classList.add('sel');
+            });
+            list.appendChild(row);
+        });
+    }
+
+    // 键盘导航（方向键移动高亮；Enter/Tab 选中；Escape 关闭）
+    function agentAtMove(d) {
+        var n = agentAtState.items.length;
+        if (!n) return;
+        agentAtState.sel = (agentAtState.sel + d + n) % n;
+        var list = agentAtPanelEl.querySelector('.agent-at-list');
+        var rows = list.querySelectorAll('.agent-at-row');
+        Array.prototype.forEach.call(rows, function (el, i) { el.classList.toggle('sel', i === agentAtState.sel); });
+        if (rows[agentAtState.sel]) rows[agentAtState.sel].scrollIntoView({ block: 'nearest' });
+    }
+
+    function agentAtPickSel() {
+        var it = agentAtState.items[agentAtState.sel];
+        if (!it) return;
+        var p = agentAtState.dir ? agentAtState.dir + '/' + it.name : it.name;
+        if (it.dir) { agentAtLoad(p); return; } // 键盘选中目录=进入（加引用走行尾 + 按钮）
+        if (!agentCtxAdd(p, false)) return;
+        agentAtEraseToken();
+        agentAtClose();
+        messageInput.focus();
+    }
+
+    // 从输入框删除当前 @ token（@ 起至光标）
+    function agentAtEraseToken() {
+        if (!agentAtState) return;
+        var pos = messageInput.selectionStart || 0;
+        messageInput.value = messageInput.value.slice(0, agentAtState.tokenStart) + messageInput.value.slice(pos);
+        messageInput.selectionStart = messageInput.selectionEnd = agentAtState.tokenStart;
+    }
+
+    function agentAtClose() {
+        agentAtState = null;
+        if (agentAtPanelEl) agentAtPanelEl.classList.add('hidden');
+    }
+
+    // input 联动归口：任务模式检测 @ token 开/关浮层并同步过滤词（非任务模式一律关闭）
+    function agentAtSyncOnInput() {
+        if (!agentMode || !currentChatUser || !isAIAgent(currentChatUser)) { agentAtClose(); return; }
+        var tok = agentAtTokenAtCursor();
+        if (!tok) { agentAtClose(); return; }
+        if (!agentAtPanelEl) agentAtBuild();
+        if (!wsPanelEnsure()) { agentAtClose(); return; }
+        var reopen = !agentAtState || agentAtState.tokenStart !== tok.start;
+        if (reopen) {
+            agentAtState = { dir: '', tokenStart: tok.start, filter: '', all: [], items: [], sel: 0 };
+            agentAtPanelEl.classList.remove('hidden');
+            agentAtPlace();
+            agentAtLoad(wsPanel.proj || ''); // 初始目录与文件面板视角一致（项目根或工作区根）
+        } else if (agentAtState.filter !== tok.filter) {
+            agentAtState.filter = tok.filter;
+            agentAtApplyFilter();
+        }
+    }
+
+    // 任务目标回显气泡挂 @ 引用 chip 条（按 msg_id 定位，找不到静默跳过；纯展示不交互）
+    function agentGoalCtxAttach(msgId, ctxs) {
+        if (!msgId || !ctxs || !ctxs.length) return;
+        try {
+            var el = document.querySelector('.message[data-msg-id="' + String(msgId) + '"] .bubble') ||
+                document.querySelector('[data-msg-id="' + String(msgId) + '"] .bubble') ||
+                document.querySelector('[data-msg-id="' + String(msgId) + '"]');
+            if (!el) return;
+            var strip = document.createElement('div');
+            strip.className = 'agent-goal-ctxs';
+            ctxs.forEach(function (c) {
+                var chip = document.createElement('span');
+                chip.className = 'agent-goal-ctx';
+                chip.textContent = (c.dir ? '📁 ' : '📄 ') + c.path;
+                chip.title = c.path;
+                strip.appendChild(chip);
+            });
+            el.appendChild(strip);
+        } catch (e) { }
+    }
+
     // 解析引用信封 content（{"quote":{msg_id,from,text},"text":回复}）；
     // 非信封（普通文本/图片 JSON 等）返回 null——必须同时有 quote 对象与 text 字符串才判定为引用，
     // 防止把图片消息 JSON（url/name/size）或纯数字文本误判为引用
@@ -2876,6 +3399,13 @@
             var note = content;
             clearPendingShot();
             messageInput.value = '';
+            // 阶段一百六十六：Agent 任务模式——待发送截图改入任务附件随任务上行，附言还原为任务目标文字
+            if (currentChatUser !== '' && isAIAgent(currentChatUser) && agentMode) {
+                for (var si = 0; si < shots.length; si++) agentTaskAddImage(shots[si].blob);
+                messageInput.value = note;
+                messageInput.focus();
+                return;
+            }
             // 修复：必须传 item.blob（列表项为 { blob: xx } 包装对象，直传会把对象序列化成 "[object Object]" 垃圾内容导致图片全碎）
             // 原实现：for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i]);
             for (var i = 0; i < shots.length; i++) sendScreenshotFile(shots[i].blob, note);
@@ -2892,15 +3422,43 @@
             var sid = aiViewSession[currentChatUser] || 0;
             // 阶段五十九：Agent 任务模式——发送内容作为自动化任务目标（服务端建任务闭环，事件流实时回推）
             if (agentMode) {
-                clearQuoteTarget(); // 任务目标不参与引用（引用信封 JSON 会破坏 AGENT_RUN 协议格式）
-                msg = { msg_type: MSG.AGENT_RUN, to_user: currentChatUser, content: JSON.stringify({ goal: content, agent_name: currentChatUser, session_id: sid }) };
-                if (IMSocket.send(msg)) {
+                // 阶段一百七十九：运行中任务的会话里发送纯文本 = 追加指令（Steering，TRAE 同款插话）——
+                // 走 AI_CHAT 文本上行，服务端转投运行中任务下一轮注入（归口 agentActiveTaskFor）；
+                // 复用 agentEchoPending 抑制"思考中"（服务端不回 AI 流，由任务卡 steer 提示行接管反馈）；
+                // 带图片附件/@ 引用的输入仍按新任务上行（附件语义属于新任务）；发新任务须先停当前任务；
+                // 仅 running 态分流（queued 任务不接插话，与服务端 agentActiveTaskFor 口径一致）
+                var _actSt = agentTaskCards[agentActiveTask[currentChatUser]];
+                var _actRunning = !!(_actSt && _actSt.statusEl && /\brunning\b/.test(_actSt.statusEl.className));
+                if (_actRunning && !agentTaskImages.length && !agentTaskCtxs.length) {
+                    clearQuoteTarget(); // 引用不参与插话（引用信封 JSON 会破坏 AI_CHAT 文本格式）
+                    agentAtClose();
+                    agentEchoPending[currentChatUser] = true;
+                    IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content, session_id: sid });
                     messageInput.value = '';
                     messageInput.focus();
-                    // 阶段七十：任务目标改由服务端落库回显（真实 msg_id，切会话/重登历史不丢，与 AI 问答同口径）；
-                    // 标记待达回显，PRIVATE 处理器据此抑制"思考中"指示（任务模式无 AI 问答指示）
-                    agentEchoPending[currentChatUser] = true;
+                    return;
                 }
+                clearQuoteTarget(); // 任务目标不参与引用（引用信封 JSON 会破坏 AGENT_RUN 协议格式）
+                agentAtClose();     // 阶段一百七十：发送前若 @ 浮层开着先关（引用以引用条为准）
+                // 阶段一百七十：@ 引用上下文随任务上行（先取快照，图片上传失败还原时不误清）
+                var taskCtxs = agentTaskCtxs.slice();
+                // 阶段一百六十四：计划模式开启时随任务上行 plan_mode（服务端建计划模式任务：
+                // 先只读调研→present_plan 提交计划→用户批准后解锁副作用工具）
+                // 阶段一百六十六：任务图片附件——先逐张上传拿服务端地址，再随 AGENT_RUN images 上行
+                //（上传期间清空附件条；失败把附件还原回暂存区，文字留在输入框可修改后重试）
+                if (agentTaskImages.length) {
+                    var taskAtts = agentTaskImages.slice();
+                    agentTaskImagesClear();
+                    agentTaskImagesUpload(taskAtts).then(function (urls) {
+                        sendAgentRun(content, sid, urls, taskCtxs);
+                    }).catch(function (e) {
+                        showToast(I18N.t('任务图片上传失败：') + (e && e.message ? e.message : e));
+                        for (var k = 0; k < taskAtts.length; k++) agentTaskImages.push(taskAtts[k]);
+                        agentTaskImagesRender();
+                    });
+                    return;
+                }
+                sendAgentRun(content, sid, null, taskCtxs);
                 return;
             }
             // 阶段七十一：流式回复按会话归属渲染（服务端落库同源，AI_STREAM/END 帧携带同 sid 过滤）
@@ -2936,6 +3494,13 @@
     }
     sendBtn.addEventListener('click', sendMessage);
     messageInput.addEventListener('keydown', function (e) {
+        // 阶段一百七十：@ 浮层打开时键盘导航优先于发送/换行
+        if (agentAtState && agentAtPanelEl && !agentAtPanelEl.classList.contains('hidden')) {
+            if (e.key === 'ArrowDown') { e.preventDefault(); agentAtMove(1); return; }
+            if (e.key === 'ArrowUp') { e.preventDefault(); agentAtMove(-1); return; }
+            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); agentAtPickSel(); return; }
+            if (e.key === 'Escape') { e.preventDefault(); agentAtClose(); return; }
+        }
         if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); sendMessage(); }
         else if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); insertAtCursor('\n'); }
     });
@@ -2948,6 +3513,8 @@
         messageInput.focus();
     }
     messageInput.addEventListener('input', function () {
+        // 阶段一百七十：任务模式 @ 触发文件引用浮层（token 检测/过滤/失配关闭归口）
+        agentAtSyncOnInput();
         // 阶段四十三：AI 会话无输入状态语义（对方非真实用户），跳过 TYPING 推送；
         // 阶段一百四十二：群会话同样无输入状态语义（多人群聊不显示"对方正在输入"）
         if (currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser)) {
@@ -2978,6 +3545,11 @@
     document.addEventListener('click', function (e) {
         if (!emojiPanel.classList.contains('hidden') && !emojiPanel.contains(e.target)) {
             emojiPanel.classList.add('hidden');
+        }
+        // 阶段一百七十：点击输入框以外区域关闭 @ 引用浮层（浮层自身点击由 mousedown preventDefault 不丢焦点，不影响）
+        if (agentAtState && !agentAtPanelEl.classList.contains('hidden') &&
+            !agentAtPanelEl.contains(e.target) && e.target !== messageInput) {
+            agentAtClose();
         }
     });
 
@@ -3050,6 +3622,15 @@
         }
         imageInput.click();
     });
+    // 阶段一百六十七：任务视频入口——仅任务模式可用，选视频抽关键帧入任务附件（复用图片链路上行）
+    agentVideoBtn.addEventListener('click', function () {
+        if (!agentMode) { showToast(I18N.t('请先开启任务模式')); return; }
+        agentVideoInput.click();
+    });
+    agentVideoInput.addEventListener('change', function () {
+        if (agentVideoInput.files[0]) agentTaskAddVideo(agentVideoInput.files[0]);
+        agentVideoInput.value = '';
+    });
     fileBtn.addEventListener('click', function () {
         // 阶段一百三十四：群聊文件放开——群聊与私聊同走 HTTP 上传链路（sendGroupFile，对齐群聊图片口径）；
         // 原实现：群聊视图拦截提示"群聊暂不支持发送文件"
@@ -3065,7 +3646,11 @@
             // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
             // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
             if (isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
-            else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
+            // 阶段一百六十六：Agent 任务模式——图片入任务附件随任务上行；AI 问答模式仍走图片识别链路
+            else if (isAIAgent(currentChatUser)) {
+                if (agentMode) agentTaskAddImage(imageInput.files[0]);
+                else sendAIImage(imageInput.files[0]);
+            } // 阶段四十四：AI 图片识别链路
             else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
             else sendFile(imageInput.files[0]);
         }
@@ -5325,6 +5910,18 @@
                 var file = items[i].getAsFile();
                 if (!file) return;
                 e.preventDefault(); // 阻止图片按默认行为插入输入框
+                // 阶段一百六十八：任务模式粘贴直入附件（TRAE CN 同款贴图布置任务）——跳过截图编辑器
+                // 无缝入附件条；AI 问答/普通聊天保持原编辑器链路（可标注后再发）。粘贴项 name 可能为空，
+                // 按实际 mime 规范化文件名（isImageName 与上传端点均按扩展名判定）
+                if (agentMode && currentChatUser && isAIAgent(currentChatUser)) {
+                    var pf = file;
+                    if (!isImageName(file.name)) {
+                        var ext = (items[i].type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+                        pf = new File([file], 'paste.' + ext, { type: items[i].type });
+                    }
+                    agentTaskAddImage(pf);
+                    return;
+                }
                 if (window.desktop && window.desktop.openEditor) {
                     // PC 端：图片直送独立编辑器窗口（open 编辑器模式，默认全图选区，确认后直接发送）。
                     // dataURL 前缀统一标 PNG（stitchBlobToDataUrl 复用）——Image 解码按内容嗅探，mime 标注不影响显示
@@ -7017,9 +7614,57 @@
         showToast(webSearchOn ? I18N.t('已开启联网搜索，AI 问答可实时查询最新信息') : I18N.t('已关闭联网搜索'));
     });
 
+    // ===== 阶段一百六十四：计划模式开关（TRAE CN Plan 同款） =====
+    // 仅 Agent 任务模式开启时可用；开启后发起的任务携带 plan_mode 上行，
+    // Agent 先只读调研并提交执行计划，用户批准后才开始执行（批准前服务端门禁锁定副作用工具）
+    var planModeOn = false;
+
+    agentPlanBtn.addEventListener('click', function () {
+        if (!currentChatUser || !isAIAgent(currentChatUser) || !agentMode) return;
+        planModeOn = !planModeOn;
+        agentPlanBtn.classList.toggle('active', planModeOn);
+        showToast(planModeOn
+            ? I18N.t('已开启计划模式：Agent 将先提交执行计划，你批准后才开始执行')
+            : I18N.t('已关闭计划模式：Agent 将直接执行任务（危险操作仍需审批）'));
+    });
+
+    // ===== 阶段一百七十六：SOLO 全自动模式开关（TRAE SOLO 同款） =====
+    // 仅 Agent 任务模式开启时可用；开启后发起的任务携带 solo_mode 上行，任务内需审批操作
+    // （写文件/命令等）由服务端自动放行不再弹审批（变更留痕可回滚；与计划模式可叠加——批准后自动执行）
+    var soloModeOn = false;
+
+    agentSoloBtn.addEventListener('click', function () {
+        if (!currentChatUser || !isAIAgent(currentChatUser) || !agentMode) return;
+        soloModeOn = !soloModeOn;
+        agentSoloBtn.classList.toggle('active', soloModeOn);
+        showToast(soloModeOn
+            ? I18N.t('已开启全自动模式（SOLO）：本次任务写文件/命令免审批自动执行，变更留痕可回滚')
+            : I18N.t('已关闭全自动模式：需审批操作恢复逐条确认'));
+    });
+
     function setAgentMode(on) {
         agentMode = on;
         agentModeBtn.classList.toggle('active', on);
+        // 阶段一百六十四：计划模式开关随任务模式联动——任务模式关闭时开关收起并复位
+        //（计划模式只在任务执行前有意义，普通问答不涉及）；显隐归口本函数，切会话/开关任务模式一处覆盖
+        agentPlanBtn.classList.toggle('hidden', !on);
+        // 阶段一百七十六：SOLO 全自动开关随任务模式联动（与计划模式同款显隐/复位归口）
+        agentSoloBtn.classList.toggle('hidden', !on);
+        // 阶段一百六十七：任务视频入口随任务模式显隐（视频抽帧入附件只在任务模式下有意义）
+        agentVideoBtn.classList.toggle('hidden', !on);
+        if (!on && planModeOn) {
+            planModeOn = false;
+            agentPlanBtn.classList.remove('active');
+        }
+        if (!on && soloModeOn) {
+            soloModeOn = false;
+            agentSoloBtn.classList.remove('active');
+        }
+        // 阶段一百六十六：任务模式关闭时清空待发图片附件（附件只在任务模式下有意义，
+        // 防止关闭后残留、下次开任务模式时旧图意外随任务上行）
+        if (!on) agentTaskImagesClear();
+        // 阶段一百七十：任务模式关闭时同步清 @ 引用与选择浮层（引用只在任务模式下有意义）
+        if (!on) { agentCtxClear(); agentAtClose(); }
         // 阶段一百三十八：Agent 模式隐藏双头像（AI 头像与自己头像）给聊天内容腾宽——挂
         // agent-mode 标记类于消息列表归口，CSS 统一隐藏头像并放宽对齐线；会话切换经本函数
         // 归口（openConversation 切普通会话传 false），类自动摘除头像恢复
@@ -9708,14 +10353,43 @@
         agentTaskScroll();
     }
 
+    // ===== 阶段一百七十二：逐轮 Checkpoint 时间线（TRAE CN 同款轮次节点）=====
+    // text_delta/thought_delta/step_tokens/tool_start 帧携带 round（服务端 agentTaskCurRound 归口），
+    // round 前进时插入轮次分隔节点；该轮思考/工具/结果行按到达顺序落在节点之后，完结折叠与
+    // 展开回看均保持逐轮结构。旧帧无 round（round=0）不插节点，兼容服务端未升级场景
+    function agentRoundNode(st, round) {
+        round = Number(round) || 0;
+        if (!round || round <= (st.lastRound || 0)) return; // 乱序/重复帧幂等跳过
+        st.lastRound = round;
+        var node = document.createElement('div');
+        node.className = 'agent-round-node';
+        var dot = document.createElement('span');
+        dot.className = 'agent-round-dot';
+        var label = document.createElement('span');
+        label.className = 'agent-round-label';
+        label.textContent = I18N.t('第 {n} 轮', { n: round });
+        var now = new Date();
+        var time = document.createElement('span');
+        time.className = 'agent-round-time';
+        time.textContent = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ':' + String(now.getSeconds()).padStart(2, '0');
+        node.appendChild(dot);
+        node.appendChild(label);
+        node.appendChild(time);
+        st.events.appendChild(node);
+        agentTaskScroll();
+    }
+
     // 阶段六十二：工具人性化映射（Trae CN 同款）——中文标题 + 关键参数芯片（路径/命令/条目数）
     // 阶段六十八：新增 http_request / web_search 映射；阶段七十四：新增 edit_file/delete_file/list_dir/grep 映射
-    var AGENT_TOOL_TITLE = { read_file: I18N.t('读取文件'), write_file: I18N.t('写入文件'), edit_file: I18N.t('编辑文件'), delete_file: I18N.t('删除文件'), list_dir: I18N.t('列目录'), grep: I18N.t('搜索文件'), run_command: I18N.t('执行命令'), todo_write: I18N.t('更新任务清单'), http_request: I18N.t('HTTP 请求'), web_search: I18N.t('联网搜索'), ask_user: I18N.t('向用户提问') };
+    // 阶段一百七十四：新增 semantic_search 映射；阶段一百七十八：新增 spawn_agent 映射
+    var AGENT_TOOL_TITLE = { read_file: I18N.t('读取文件'), write_file: I18N.t('写入文件'), edit_file: I18N.t('编辑文件'), delete_file: I18N.t('删除文件'), list_dir: I18N.t('列目录'), grep: I18N.t('搜索文件'), semantic_search: I18N.t('语义检索'), spawn_agent: I18N.t('子 Agent'), run_command: I18N.t('执行命令'), todo_write: I18N.t('更新任务清单'), http_request: I18N.t('HTTP 请求'), web_search: I18N.t('联网搜索'), ask_user: I18N.t('向用户提问'), present_plan: I18N.t('提交执行计划') };
 
     function agentToolChipText(tool, params) {
         var p = params || {};
         if (tool === 'read_file' || tool === 'write_file' || tool === 'edit_file' || tool === 'delete_file' || tool === 'list_dir') return String(p.path || p.file || '');
         if (tool === 'grep') return String(p.pattern || '');
+        if (tool === 'semantic_search') return String(p.query || ''); // 阶段一百七十四
+        if (tool === 'spawn_agent') return String(p.goal || ''); // 阶段一百七十八：子 Agent 调研目标
         if (tool === 'run_command') return String(p.command || p.cmd || '');
         if (tool === 'http_request') {
             var m = String(p.method || 'GET').toUpperCase();
@@ -9975,7 +10649,7 @@
                         // 阶段七十九：pending 变更登记到停靠栏（重进会话/刷新页面后输入区上方仍可见）
                         agentDockSetChanges(agent, t.task_id, d.changes);
                     }
-                    thLoadSteps(detail, t.task_id); // 执行轨迹懒加载（与任务历史弹窗同链路）
+                    thLoadSteps(detail, t.task_id, d.changes); // 执行轨迹懒加载（与任务历史弹窗同链路；传变更做逐轮归组）
                 })
                 .catch(function () { detail.textContent = I18N.t('详情加载失败'); });
         });
@@ -10000,12 +10674,53 @@
     // + 增删行数）+ 待审查底栏（全部撤销/全部保留）。仅统计服务端工作区变更（PC 本地执行不经服务端归口）；
     // 撤销为 git discard 语义：直接还原任务前内容。live 卡与重放卡详情共用 agentBuildChangesBox。
 
-    // 上行审查操作（path 缺省=全部 pending；服务端处理后回下行 66 全量刷新帧同步多端）
-    function sendAgentChangesAction(taskId, action, path) {
+    // 上行审查操作（path 缺省=全部 pending；服务端处理后回下行 66 全量刷新帧同步多端）。
+    // 阶段一百七十三：round>0 按轮回滚（Checkpoint）——撤销该轮及之后登记的全部 pending 变更
+    function sendAgentChangesAction(taskId, action, path, round) {
         var payload = { task_id: taskId, action: action };
         if (path) payload.path = path;
+        if (round > 0) payload.round = round;
         IMSocket.send({ msg_type: MSG.AGENT_CHANGES, content: JSON.stringify(payload) });
     }
+
+    // ===== 阶段一百八十一：任务变更 Diff 弹层（TRAE CN 同款差异查看；自绘弹窗禁用系统弹窗/滚动条） =====
+    // 已点击 diff 等待 66 帧回发的路径标记：命中才弹层（diff 随 66 全量帧下发，多端/重放刷新同帧到达时其余端不误弹）
+    var agentDiffPending = {};
+
+    // diff 弹层渲染：逐行着色（+绿/-红/hunk 元信息灰蓝），JetBrains Mono 等宽，自绘悬浮滚动条
+    function showAgentDiffModal(path, text) {
+        var mask = document.getElementById('agent-diff-mask');
+        var title = document.getElementById('agent-diff-title');
+        var body = document.getElementById('agent-diff-body');
+        if (!mask || !title || !body) return;
+        title.textContent = I18N.t('变更差异') + ' · ' + path;
+        title.title = path;
+        body.textContent = '';
+        String(text || '').split('\n').forEach(function (ln) {
+            var el = document.createElement('div');
+            var cls = 'agent-diff-line';
+            var isMeta = ln.indexOf('@@') === 0 || ln.indexOf('--- ') === 0 || ln.indexOf('+++ ') === 0;
+            if (isMeta) cls += ' meta';
+            else if (ln.charAt(0) === '+') cls += ' add';
+            else if (ln.charAt(0) === '-') cls += ' del';
+            el.className = cls;
+            el.textContent = ln.length ? ln : ' '; // 空行占位保行高
+            body.appendChild(el);
+        });
+        mask.classList.remove('hidden');
+        if (window._osbInit) window._osbInit(body); // 自绘悬浮滑块（原生滚动条全局禁用）
+    }
+
+    // diff 弹层关闭：关闭按钮 + 点遮罩（只读查看无表单，无误操作丢失风险）+ 全局 Esc（keydown 链）
+    (function () {
+        var mask = document.getElementById('agent-diff-mask');
+        if (!mask) return;
+        var closeBtn = document.getElementById('agent-diff-close');
+        if (closeBtn) closeBtn.addEventListener('click', function () { mask.classList.add('hidden'); });
+        mask.addEventListener('click', function (e) {
+            if (e.target === mask) mask.classList.add('hidden');
+        });
+    })();
 
     // 路径拆分：[文件名, 目录]（正斜杠归一，目录部分悬停可见全文）
     function splitChangePath(p) {
@@ -10058,6 +10773,20 @@
             d.textContent = '-' + (c.dels || 0);
             dstat.appendChild(a);
             dstat.appendChild(d);
+            // 阶段一百八十一：diff 按钮（仅 pending 且服务端工作区行——pc 行服务端读不到本地文件，kept/reverted 备份已删无从比对）。
+            // 点击上行 action=diff，服务端随 66 帧 diff 字段回发，agentDiffPending 标记命中才弹层（防多端误弹）
+            if (st === 'pending' && c.env !== 'pc') {
+                var df = document.createElement('button');
+                df.className = 'agent-changes-diff';
+                df.textContent = 'diff';
+                df.title = I18N.t('查看变更前后差异');
+                df.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    agentDiffPending[c.path] = true;
+                    sendAgentChangesAction(taskId, 'diff', c.path);
+                });
+                row.appendChild(df);
+            }
             var badge = document.createElement('span');
             badge.className = 'agent-changes-badge ' + st;
             if (st === 'kept') {
@@ -11338,6 +12067,19 @@
         });
         head.appendChild(projBtn);
         head.appendChild(refreshBtn);
+        // 阶段一百八十三：上传按钮（HTTP 直传服务端归口）——仅 WEB/手机端显示（回归修正）：
+        // PC 端工作区面板/ @ 引用树即用户本地磁盘（WS_FILE_REQ 经执行器走本地），本地加文件直接
+        // 复制进工作区目录即可，绕道「上传→服务端→转发执行器写回本机」无意义；浏览器/手机无法
+        // 直写本地磁盘，上传才是给 Agent 供文件的途径。端判断与 davIsPC 同惯例（window.desktop 桥）
+        if (!window.desktop) {
+            var uploadBtn = document.createElement('button');
+            uploadBtn.className = 'ws-panel-btn ws-upload-btn';
+            uploadBtn.type = 'button';
+            uploadBtn.innerHTML = wsGitIco('upload');
+            uploadBtn.title = I18N.t('上传文件到工作区');
+            uploadBtn.addEventListener('click', function () { wsPanelUploadPick(); });
+            head.appendChild(uploadBtn);
+        }
         head.appendChild(moreWrap);
         wsPanel.moreBtn = moreBtn;
         wsPanel.moreMenu = menu;
@@ -11365,6 +12107,22 @@
         wsPanel.gitEl = gitEl;
         colTree.appendChild(nav);
         colTree.appendChild(head);
+        // 阶段一百八十三：上传进度条（头部下方横向细条，主题色填充；上传中显示文件名与百分比）
+        var upBar = document.createElement('div');
+        upBar.className = 'ws-upload-bar hidden';
+        var upTxt = document.createElement('span');
+        upTxt.className = 'ws-upload-txt';
+        var upTrack = document.createElement('div');
+        upTrack.className = 'ws-upload-track';
+        var upFill = document.createElement('div');
+        upFill.className = 'ws-upload-fill';
+        upTrack.appendChild(upFill);
+        upBar.appendChild(upTxt);
+        upBar.appendChild(upTrack);
+        colTree.appendChild(upBar);
+        wsPanel.upBar = upBar;
+        wsPanel.upTxt = upTxt;
+        wsPanel.upFill = upFill;
         colTree.appendChild(wsPanel.treeEl);
         colTree.appendChild(gitEl);
         // 右键菜单挂 body（fixed 贴光标，不受面板 overflow 裁剪）；树空白区右键出根级菜单（新建/刷新）
@@ -12006,6 +12764,91 @@
         wsPanelLoadDir(wsPanel.proj || '', wsPanel.treeEl);
     }
 
+    // ===== 阶段一百八十三：工作区文件上传（HTTP POST /api/agent/ws/upload 服务端归口） =====
+    // 目标目录：头部按钮=当前项目根（wsPanel.proj，空=工作区根）；右键目录=该目录。
+    // 多文件排队逐个上传，TRAE CN 同款横向细进度条（主题色填充）；完成 toast + 文件树原地刷新。
+    // PC 本地模式由服务端转发执行器落本机工作区（单文件上限 2MB），服务端模式直落（上限同聊天文件）。
+    var wsUploadInput = null;
+    var wsUploadDir = '';
+    function wsPanelUploadPick(targetDir) {
+        if (!wsPanel.visible) return;
+        wsUploadDir = (targetDir === undefined) ? (wsPanel.proj || '') : String(targetDir || '');
+        if (!wsUploadInput) {
+            wsUploadInput = document.createElement('input');
+            wsUploadInput.type = 'file';
+            wsUploadInput.multiple = true;
+            wsUploadInput.style.display = 'none';
+            document.body.appendChild(wsUploadInput);
+            wsUploadInput.addEventListener('change', function () {
+                var files = Array.prototype.slice.call(wsUploadInput.files || []);
+                wsUploadInput.value = '';
+                if (files.length) wsPanelUploadFiles(files);
+            });
+        }
+        wsUploadInput.click();
+    }
+    function wsPanelUploadBarShow(name, frac, idx, total) {
+        if (!wsPanel.upBar) return;
+        wsPanel.upBar.classList.remove('hidden');
+        var pct = Math.round(((idx - 1) + frac) / total * 100);
+        wsPanel.upTxt.textContent = I18N.t('上传中 ') + name + ' (' + pct + '%)';
+        wsPanel.upFill.style.width = pct + '%';
+    }
+    function wsPanelUploadBarHide() {
+        if (wsPanel.upBar) wsPanel.upBar.classList.add('hidden');
+    }
+    function wsPanelUploadFiles(files) {
+        var dir = wsUploadDir;
+        var i = 0, okCnt = 0, overCnt = 0, firstErr = '';
+        var next = function () {
+            if (i >= files.length) { finish(); return; }
+            var f = files[i++];
+            wsPanelUploadBarShow(f.name, 0, i, files.length);
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/agent/ws/upload?username=' + encodeURIComponent(IMSocket.getUsername()) +
+                '&dir=' + encodeURIComponent(dir) + '&name=' + encodeURIComponent(f.name), true);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.upload.onprogress = function (e) {
+                if (e.lengthComputable) wsPanelUploadBarShow(f.name, e.loaded / e.total, i, files.length);
+            };
+            xhr.onload = function () {
+                if (xhr.status === 200) {
+                    okCnt++;
+                    try { if (JSON.parse(xhr.responseText).overwritten) overCnt++; } catch (e2) {}
+                } else if (!firstErr) {
+                    firstErr = wsUploadErrText(xhr, f.name);
+                }
+                next();
+            };
+            xhr.onerror = function () { if (!firstErr) firstErr = f.name + '：' + I18N.t('网络错误'); next(); };
+            xhr.send(f);
+        };
+        var finish = function () {
+            wsPanelUploadBarHide();
+            if (okCnt) {
+                showToast(I18N.t('已上传 ') + okCnt + I18N.t(' 个文件到工作区') +
+                    (overCnt ? '，' + I18N.t('覆盖 ') + overCnt + I18N.t(' 个同名文件') : ''));
+            }
+            if (firstErr) showToast(firstErr);
+            if (okCnt) wsPanelRefreshTree();
+        };
+        next();
+    }
+    // 错误文案归口：服务端 http.Error 为纯文本，JSON 解析失败回退原文（HTML 响应不回显）
+    function wsUploadErrText(xhr, name) {
+        var msg = '';
+        try {
+            var data = JSON.parse(xhr.responseText);
+            if (data && data.error) msg = String(data.error);
+        } catch (e) {}
+        if (!msg) {
+            var t = String(xhr.responseText || '').trim();
+            if (t && t.indexOf('<') !== 0) msg = t;
+        }
+        if (!msg) msg = I18N.t('上传失败') + ' (HTTP ' + xhr.status + ')';
+        return name + '：' + msg;
+    }
+
     // ===== 源代码管理（Trae CN 同款）：工作区 git 面板 =====
     // 执行归口 wsPanelReq('git')：PC 在线走本地执行器（execFile 异步，不阻塞客户端），
     // 离线回退服务端工作区（服务器需装 git）。视图切换不销毁文件树状态。
@@ -12468,7 +13311,9 @@
         'arrow-swap': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M11.3536 1.64645C11.1583 1.45118 10.8417 1.45118 10.6464 1.64645C10.4512 1.84171 10.4512 2.15829 10.6464 2.35355L12.2929 4H2.5C2.22386 4 2 4.22386 2 4.5C2 4.77614 2.22386 5 2.5 5H12.2929L10.6464 6.64645C10.4512 6.84171 10.4512 7.15829 10.6464 7.35355C10.8417 7.54882 11.1583 7.54882 11.3536 7.35355L13.8536 4.85355C14.0488 4.65829 14.0488 4.34171 13.8536 4.14645L11.3536 1.64645ZM5.35355 9.35355C5.54882 9.15829 5.54882 8.84171 5.35355 8.64645C5.15829 8.45118 4.84171 8.45118 4.64645 8.64645L2.14645 11.1464C1.95118 11.3417 1.95118 11.6583 2.14645 11.8536L4.64645 14.3536C4.84171 14.5488 5.15829 14.5488 5.35355 14.3536C5.54882 14.1583 5.54882 13.8417 5.35355 13.6464L3.70711 12H13.5C13.7761 12 14 11.7761 14 11.5C14 11.2239 13.7761 11 13.5 11H3.70711L5.35355 9.35355Z"/></svg>',
         'repo-pull': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M4.85 6.15C4.755 6.05 4.627 6 4.5 6C4.372 6 4.245 6.05 4.15 6.15C4.05 6.245 4 6.373 4 6.5C4 6.627 4.05 6.755 4.15 6.85L7.15 9.85C7.245 9.95 7.372 10 7.5 10C7.628 10 7.755 9.95 7.85 9.85L10.85 6.85C10.95 6.755 11 6.628 11 6.5C11 6.372 10.95 6.245 10.85 6.15C10.755 6.05 10.627 6 10.5 6C10.373 6 10.245 6.05 10.15 6.15L8 8.29V1.5C8 1.22 7.78 1 7.5 1C7.22 1 7 1.22 7 1.5V8.29L4.85 6.15Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.95 13H12.5C12.78 13 13 13.22 13 13.5C13 13.78 12.78 14 12.5 14H9.95C9.72 15.14 8.71 16 7.5 16C6.29 16 5.28 15.14 5.05 14H2.5C2.22 14 2 13.78 2 13.5C2 13.22 2.22 13 2.5 13H5.05C5.28 11.86 6.29 11 7.5 11C8.71 11 9.72 11.86 9.95 13ZM6.09 14C6.29 14.58 6.85 15 7.5 15C8.15 15 8.71 14.58 8.91 14C8.97 13.84 9 13.68 9 13.5C9 13.32 8.97 13.16 8.91 13C8.71 12.42 8.15 12 7.5 12C6.85 12 6.29 12.42 6.09 13C6.03 13.16 6 13.32 6 13.5C6 13.68 6.03 13.84 6.09 14Z"/></svg>',
         'repo-push': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M4.85 4.85C4.755 4.95 4.627 5 4.5 5C4.372 5 4.245 4.95 4.15 4.85C4.05 4.755 4 4.627 4 4.5C4 4.373 4.05 4.245 4.15 4.15L7.15 1.15C7.245 1.05 7.372 1 7.5 1C7.628 1 7.755 1.05 7.85 1.15L10.85 4.15C10.95 4.245 11 4.372 11 4.5C11 4.628 10.95 4.755 10.85 4.85C10.755 4.95 10.627 5 10.5 5C10.373 5 10.245 4.95 10.15 4.85L8 2.71V9.5C8 9.78 7.78 10 7.5 10C7.22 10 7 9.78 7 9.5V2.71L4.85 4.85Z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.95 13H12.5C12.78 13 13 13.22 13 13.5C13 13.78 12.78 14 12.5 14H9.95C9.72 15.14 8.71 16 7.5 16C6.29 16 5.28 15.14 5.05 14H2.5C2.22 14 2 13.78 2 13.5C2 13.22 2.22 13 2.5 13H5.05C5.28 11.86 6.29 11 7.5 11C8.71 11 9.72 11.86 9.95 13ZM6.09 14C6.29 14.58 6.85 15 7.5 15C8.15 15 8.71 14.58 8.91 14C8.97 13.84 9 13.68 9 13.5C9 13.32 8.97 13.16 8.91 13C8.71 12.42 8.15 12 7.5 12C6.85 12 6.29 12.42 6.09 13C6.03 13.16 6 13.32 6 13.5C6 13.68 6.03 13.84 6.09 14Z"/></svg>',
-        'refresh': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M3 8C3 5.23858 5.23858 3 8 3C9.63527 3 11.0878 3.78495 12.0005 5H10C9.72386 5 9.5 5.22386 9.5 5.5C9.5 5.77614 9.72386 6 10 6H12.8904C12.8973 6.00014 12.9041 6.00014 12.911 6H13C13.2761 6 13.5 5.77614 13.5 5.5V2.5C13.5 2.22386 13.2761 2 13 2C12.7239 2 12.5 2.22386 12.5 2.5V4.03138C11.4009 2.78613 9.79253 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14C11.1301 14 13.6999 11.6035 13.9756 8.54488C14.0003 8.26985 13.7975 8.0268 13.5225 8.00202C13.2474 7.97723 13.0044 8.1801 12.9796 8.45512C12.75 11.003 10.6079 13 8 13C5.23858 13 3 10.7614 3 8Z"/></svg>'
+        'refresh': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M3 8C3 5.23858 5.23858 3 8 3C9.63527 3 11.0878 3.78495 12.0005 5H10C9.72386 5 9.5 5.22386 9.5 5.5C9.5 5.77614 9.72386 6 10 6H12.8904C12.8973 6.00014 12.9041 6.00014 12.911 6H13C13.2761 6 13.5 5.77614 13.5 5.5V2.5C13.5 2.22386 13.2761 2 13 2C12.7239 2 12.5 2.22386 12.5 2.5V4.03138C11.4009 2.78613 9.79253 2 8 2C4.68629 2 2 4.68629 2 8C2 11.3137 4.68629 14 8 14C11.1301 14 13.6999 11.6035 13.9756 8.54488C14.0003 8.26985 13.7975 8.0268 13.5225 8.00202C13.2474 7.97723 13.0044 8.1801 12.9796 8.45512C12.75 11.003 10.6079 13 8 13C5.23858 13 3 10.7614 3 8Z"/></svg>',
+        // 阶段一百八十三：上传图标（向上箭头 + 底部托盘，与 codicon 同风格 16 viewBox）
+        'upload': '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor"><path d="M8 1.5L4.65 4.85L5.35 5.56L7.5 3.41V11H8.5V3.41L10.65 5.56L11.35 4.85L8 1.5ZM2 9.5H3V13H13V9.5H14V13.5L13.5 14H2.5L2 13.5V9.5Z"/></svg>'
     };
     function wsGitIco(name) { return WS_GIT_ICONS[name] || ''; }
 
@@ -14006,6 +14851,9 @@
             } else showToast(I18N.t('当前环境不支持复制'));
         });
         if (isDir) {
+            // 阶段一百八十三：上传到此处（文件落该目录；树空白区=当前视图根，与头部按钮同目录语义）
+            // PC 端不显示（工作区即本地磁盘，本地复制即可，回归修正与头部按钮同口径）
+            if (!window.desktop) add('⬆️', I18N.t('上传到此处'), function () { wsPanelUploadPick(path); });
             add('📄', I18N.t('新建文件'), function () {
                 showPrompt(I18N.t('新建文件'), I18N.t('位于 ') + name, function (val) {
                     req('newfile', path, val, function () { wsPanelExpandAndRefresh(path); });
@@ -15036,6 +15884,13 @@
             if (oldTag) oldTag.remove();
             head.appendChild(buildAgentEnvTag(ev.env));
         }
+        // 阶段一百七十六：SOLO 全自动放行标注（服务端对需审批工具免挂起自动执行时携带 solo 标记）
+        if (ev.solo && !head.querySelector('.agent-env-tag.solo')) {
+            var soloTag = document.createElement('span');
+            soloTag.className = 'agent-env-tag solo';
+            soloTag.textContent = I18N.t('SOLO 自动放行');
+            head.appendChild(soloTag);
+        }
         agentTaskScroll();
     }
 
@@ -15134,6 +15989,7 @@
                     // 阶段七十：取消同样折叠执行过程（与完成态观感一致，点击卡头可回看）
                     collapseAgentCard(st);
                     agentFinalizeText(st, true);
+                    agentPlanSettlePending(st, I18N.t('任务已取消')); // 阶段一百六十四：取消时收尾等待中的计划卡
                     // 阶段一百零二：取消不扣积分，已消耗 Token 标注到任务卡
                     finishAgentTask(st, I18N.t('已取消') + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'cancelled', ev.elapsed_ms);
                     // 阶段六十六：取消通知留档气泡（服务端落库 is_read=true 本人操作无未读），实时端同步渲染保持一致
@@ -15141,7 +15997,12 @@
                 }
                 break;
             case 'thought': addAgentThought(st, ev.text); break;
-            case 'text_delta': case 'thought_delta': agentStreamText(st, ev.text); break; // 阶段六十二：流式打字
+            case 'steer':
+                // 阶段一百七十九：运行中追加指令已转达（TRAE 同款插话）——用户消息气泡已照常
+                // 上屏，此处任务卡内回执避免"发了没反应"的疑惑；模型下一轮决策前即注入
+                addAgentThought(st, I18N.t('已转达追加指令：') + (ev.text || ''));
+                break;
+            case 'text_delta': case 'thought_delta': agentRoundNode(st, ev.round); agentStreamText(st, ev.text); break; // 阶段六十二：流式打字；阶段一百七十二：轮次推进插节点
             case 'history_compress':
                 // 阶段八十四：TRAE 同款"历史对话压缩中"——长任务上下文自动瘦身（较早已完成工具轮归并为摘要）；
                 // start=压缩开始提示，done=完成（完成不重复上屏，避免思考区出现两条）
@@ -15158,6 +16019,7 @@
                 // 阶段一百零三：每轮 Token 消耗实时行（单行更新不新增行）；阶段一百三十八：去掉
                 // "累计 N tokens"尾巴（完结数意义不大），行尾固定耗时槽位——任务完结后"耗时 X 分 Y 秒"
                 // 显示在该位置（用户指定，TRAE CN 观感）。首到达建行结构，后续轮次仅更新 label 文本
+                agentRoundNode(st, ev.round); // 阶段一百七十二：轮次推进兜底插节点（无思考/工具输出的轮也有节点）
                 if (st.costEl) {
                     st.costEl.classList.remove('hidden');
                     if (!st.costEl._label) {
@@ -15185,11 +16047,14 @@
                 break;
             case 'tool_start':
                 agentFinalizeText(st, true); // 流式文本归入"思考过程"折叠块（Trae 同款：出工具即收思考）
+                agentRoundNode(st, ev.round); // 阶段一百七十二：轮次推进插节点（思考帧丢失时兜底）
                 addAgentTool(st, ev);
                 break;
             case 'tool_result':
                 // 阶段一百二十五：ask_user 的 tool_result（回答/跳过/超时收口）到达 → 统一收尾提问卡（防迟到重复作答）
                 if (ev.tool === 'ask_user') agentAskSettlePending(st, ev.output || I18N.t('本次提问已收尾'));
+                // 阶段一百六十四：present_plan 的 tool_result（批准/驳回/超时收口）到达 → 统一收尾计划卡（防迟到重复审批）
+                if (ev.tool === 'present_plan') agentPlanSettlePending(st, ev.output || I18N.t('本次计划已收尾'));
                 fillAgentTool(st, ev);
                 wsPanelOnToolResult(ev); // 阶段七十六：文件面板刷新树 + 自动打开生成/修改的文件
                 break;
@@ -15202,9 +16067,19 @@
                 agentFinalizeText(st, true); // 流式思考先收尾，提问卡紧随其后（对齐 tool_start 收尾节奏）
                 renderAgentAsk(st, ev);
                 break;
+            case 'plan':
+                // 阶段一百六十四：Agent 提交执行计划（TRAE CN Plan 同款）——任务挂起等待批准/驳回
+                agentFinalizeText(st, true); // 流式思考先收尾，计划卡紧随其后
+                renderAgentPlan(st, ev);
+                break;
+            case 'plan_approved':
+                // 阶段一百六十四：计划获批实时标记（按钮即时转已批准态；tool_result 稍后统一收尾）
+                agentPlanMarkApproved(st);
+                break;
             case 'done':
                 st.bar.style.width = '100%';
                 st.pct.textContent = '100%';
+                agentPlanSettlePending(st, I18N.t('任务已结束')); // 阶段一百六十四：完结时收尾遗留的计划卡
                 // 阶段一百零二：全任务 Token 消耗记录（任务卡标注 + 答复气泡操作栏复用）
                 st.tokens = { total: ev.total_tokens || 0, prompt: ev.prompt_tokens || 0, completion: ev.completion_tokens || 0 };
                 // 阶段七十：任务完成自动折叠——执行过程整体收起保持卡片紧凑（点击卡头可回看），与重进会话重放卡观感一致
@@ -15236,6 +16111,7 @@
                 break;
             case 'error':
                 agentFinalizeText(st, true);
+                agentPlanSettlePending(st, I18N.t('任务已结束')); // 阶段一百六十四：失败时收尾遗留的计划卡
                 // 阶段一百零二：失败不扣积分，已消耗 Token 标注到任务卡
                 finishAgentTask(st, I18N.t('失败') + agentTokensTag({ total: ev.total_tokens || 0 }, ev.points_cost), 'failed', ev.elapsed_ms);
                 // 阶段七十七：失败同样结算变更（已落盘的脏改可撤销）
@@ -15600,12 +16476,182 @@
         }
     }
 
+    // ===== 阶段一百六十四：执行计划审批（TRAE CN Plan 同款） =====
+    // 服务端 present_plan 工具下发 plan 事件（任务挂起等待批准）。渲染为任务卡内嵌计划卡：
+    // 标题/方案说明/分步列表 + 驳回意见输入 + 批准/驳回按钮。批准后 plan_approved 事件即时转态，
+    // tool_result（批准/驳回/超时收口）统一收尾留痕；事件不落库不重放，切会话返回后不再重显。
+    // agentPlanMarkApproved 计划获批实时标记：该任务全部等待中的计划卡按钮转"已批准"禁用态
+    function agentPlanMarkApproved(st) {
+        if (!st || !st.pendingPlanBlocks) return;
+        st.pendingPlanBlocks.forEach(function (block) {
+            if (block._settled) return;
+            block.classList.add('approved');
+            var ok = block.querySelector('.agent-approve-ok');
+            var no = block.querySelector('.agent-approve-no');
+            var fb = block.querySelector('.agent-plan-feedback-input');
+            if (ok) { ok.disabled = true; ok.textContent = I18N.t('已批准'); }
+            if (no) no.disabled = true;
+            if (fb) fb.disabled = true;
+        });
+    }
+
+    // agentPlanSettlePending 收尾该任务全部等待中的计划实例（tool_result/任务完结时归口调用）
+    function agentPlanSettlePending(st, tip) {
+        if (st && st.pendingPlanBlocks) {
+            var list = st.pendingPlanBlocks;
+            st.pendingPlanBlocks = null;
+            list.forEach(function (block) {
+                if (block._settle) { try { block._settle(tip); } catch (e) { } }
+            });
+        }
+    }
+
+    // agentBuildPlanBlock 构造计划交互卡（标题 + 方案说明 + 分步列表 + 驳回意见 + 批准/驳回）
+    function agentBuildPlanBlock(st, ev) {
+        var block = document.createElement('div');
+        block.className = 'agent-event plan';
+        var head = document.createElement('div');
+        head.className = 'agent-event-head plan';
+        head.textContent = I18N.t('已提交执行计划 · 等待你的审批');
+        var title = document.createElement('div');
+        title.className = 'agent-plan-title';
+        title.textContent = ev.title || I18N.t('执行计划');
+        block.appendChild(head);
+        block.appendChild(title);
+        if (ev.summary) {
+            var summary = document.createElement('div');
+            summary.className = 'agent-plan-summary';
+            summary.textContent = ev.summary;
+            block.appendChild(summary);
+        }
+        var steps = Array.isArray(ev.steps) ? ev.steps : [];
+        var list = document.createElement('div');
+        list.className = 'agent-plan-steps';
+        steps.forEach(function (sp, idx) {
+            var item = document.createElement('div');
+            item.className = 'agent-plan-step';
+            var no = document.createElement('span');
+            no.className = 'agent-plan-step-no';
+            no.textContent = String(idx + 1);
+            var body = document.createElement('div');
+            body.className = 'agent-plan-step-body';
+            var content = document.createElement('div');
+            content.className = 'agent-plan-step-content';
+            content.textContent = (sp && sp.content) || '';
+            body.appendChild(content);
+            if (sp && sp.detail) {
+                var detail = document.createElement('div');
+                detail.className = 'agent-plan-step-detail';
+                detail.textContent = sp.detail;
+                body.appendChild(detail);
+            }
+            item.appendChild(no);
+            item.appendChild(body);
+            list.appendChild(item);
+        });
+        block.appendChild(list);
+
+        // 驳回意见输入行（可选：不填即单纯驳回，TRAE CN 同款"说明原因"提示）
+        var fbRow = document.createElement('div');
+        fbRow.className = 'agent-plan-feedback';
+        var fbLabel = document.createElement('span');
+        fbLabel.className = 'agent-plan-feedback-label';
+        fbLabel.textContent = I18N.t('驳回意见');
+        var fbInput = document.createElement('input');
+        fbInput.className = 'agent-plan-feedback-input';
+        fbInput.type = 'text';
+        fbInput.maxLength = 500;
+        fbInput.placeholder = I18N.t('驳回时可选填修改意见（回车直接驳回）');
+        var fbCount = document.createElement('span');
+        fbCount.className = 'agent-plan-feedback-count';
+        fbCount.textContent = '0/500';
+        fbInput.addEventListener('input', function () {
+            fbCount.textContent = fbInput.value.length + '/500';
+        });
+        fbRow.appendChild(fbLabel);
+        fbRow.appendChild(fbInput);
+        fbRow.appendChild(fbCount);
+        block.appendChild(fbRow);
+
+        // 操作行：驳回 + 批准
+        var actions = document.createElement('div');
+        actions.className = 'agent-approve-actions agent-plan-actions';
+        var noBtn = document.createElement('button');
+        noBtn.className = 'agent-approve-no';
+        noBtn.textContent = I18N.t('驳回');
+        noBtn.title = I18N.t('驳回计划，Agent 将按意见修改后重新提交');
+        var okBtn = document.createElement('button');
+        okBtn.className = 'agent-approve-ok';
+        okBtn.textContent = I18N.t('批准执行');
+        okBtn.title = I18N.t('批准计划，Agent 将按步骤开始执行');
+        actions.appendChild(noBtn);
+        actions.appendChild(okBtn);
+        block.appendChild(actions);
+
+        var settled = false;
+        function settle(tip) {
+            if (settled) return;
+            settled = true;
+            block._settled = true;
+            okBtn.disabled = true;
+            noBtn.disabled = true;
+            fbInput.disabled = true;
+            block.classList.add('settled');
+            var tipEl = document.createElement('div');
+            tipEl.className = 'agent-approve-tip';
+            tipEl.textContent = tip;
+            block.appendChild(tipEl);
+        }
+        block._settle = settle;
+
+        function send(action, feedback) {
+            IMSocket.send({
+                msg_type: MSG.AGENT_PLAN,
+                content: JSON.stringify({ task_id: st.taskId, step: ev.step, action: action, feedback: feedback || '' })
+            });
+        }
+        okBtn.addEventListener('click', function () {
+            if (settled) return;
+            send('approve');
+            agentPlanSettlePending(st, I18N.t('计划已批准，Agent 开始执行'));
+        });
+        function reject() {
+            if (settled) return;
+            var feedback = fbInput.value.trim();
+            send('reject', feedback);
+            agentPlanSettlePending(st, feedback ? I18N.t('已驳回，意见：') + feedback : I18N.t('已驳回计划，Agent 将修改后重新提交'));
+        }
+        noBtn.addEventListener('click', reject);
+        fbInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.isComposing) {
+                e.preventDefault();
+                reject();
+            }
+        });
+
+        // 登记到任务卡收尾表（tool_result 到达 / 任务完结时统一收尾）
+        if (!st.pendingPlanBlocks) st.pendingPlanBlocks = [];
+        st.pendingPlanBlocks.push(block);
+        return block;
+    }
+
+    // renderAgentPlan plan 事件渲染归口：计划卡内联在任务卡事件流中（不弹模态，任务卡即当前注意力焦点）
+    function renderAgentPlan(st, ev) {
+        st.events.appendChild(agentBuildPlanBlock(st, ev));
+        agentTaskScroll();
+    }
+
     // ===== 阶段七十七：文件变更审查全量刷新帧（保留/撤销后服务端回推，多端一致） =====
     IMSocket.on(MSG.AGENT_CHANGES, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return;
         var ev;
         try { ev = JSON.parse(msg.content); } catch (e) { return; }
         if (!ev || !ev.task_id) return;
+        // 阶段一百八十一：diff 回帧——本端点击过 diff（agentDiffPending 命中）才弹层，多端同帧/常规刷新不误弹
+        if (ev.diff && ev.diff.path && agentDiffPending[ev.diff.path]) {
+            delete agentDiffPending[ev.diff.path];
+            showAgentDiffModal(ev.diff.path, ev.diff.text);
+        }
         // live 卡状态同步（后续任务事件渲染用最新变更集）
         var st = agentTaskCards[ev.task_id];
         if (st) st.changes = ev.changes;
@@ -15615,6 +16661,14 @@
             document.querySelectorAll('.agent-changes[data-changes-task="' + ev.task_id + '"]').forEach(function (old) {
                 var fresh = agentBuildChangesBox(ev.task_id, ev.changes); // 每处独立实例（事件监听器不随节点复用）
                 if (fresh) old.replaceWith(fresh); else old.remove();
+            });
+            // 阶段一百七十三：按轮回滚后重建执行轨迹（轮次头回滚按钮态与该轮 pending 变更联动刷新；
+            // 任务历史弹窗的轨迹不带 data-th-task 标记不参与重建）
+            document.querySelectorAll('.th-steps[data-th-task="' + ev.task_id + '"]').forEach(function (old) {
+                var detail = old.parentNode;
+                if (!detail) return;
+                old.remove();
+                thLoadSteps(detail, ev.task_id, ev.changes);
             });
         }
         // 阶段七十九：同步停靠栏"文件变更"页签（pending 清零自动摘除页签/收面板）
@@ -15674,7 +16728,8 @@
                     content: JSON.stringify({
                         task_id: ev.task_id, step: ev.step,
                         ok: !!(res && res.ok), output: (res && res.output) || '',
-                        changes: (res && res.changes) || [] // 阶段八十：本地文件变更上报（服务端登记审查条）
+                        changes: (res && res.changes) || [], // 阶段八十：本地文件变更上报（服务端登记审查条）
+                        shell: (res && res.shell) || null // 阶段一百七十一：持久终端记账类命令（cd/set）回传会话状态，服务端同步权威值
                     })
                 });
             }).catch(function (err) {
@@ -16921,6 +17976,17 @@
             if (isMine && isAIAgent(msg.to_user)) {
                 if (agentEchoPending[msg.to_user]) delete agentEchoPending[msg.to_user];
                 else showAIThinking(msg.to_user);
+                // 阶段一百六十六：任务图片回显——服务端回显任务目标气泡送达后，把本次随任务
+                // 上行的图片以缩略图条挂到该气泡下方（挂完即删缓存，防重复挂载）
+                if (agentTaskGoalImages[msg.to_user] && agentTaskGoalImages[msg.to_user].length) {
+                    agentGoalBubbleAttach(msg.msg_id, agentTaskGoalImages[msg.to_user]);
+                    delete agentTaskGoalImages[msg.to_user];
+                }
+                // 阶段一百七十：@ 引用回显——任务目标气泡下挂引用 chip 条（挂完即删缓存防重复）
+                if (agentTaskGoalCtxs[msg.to_user] && agentTaskGoalCtxs[msg.to_user].length) {
+                    agentGoalCtxAttach(msg.msg_id, agentTaskGoalCtxs[msg.to_user]);
+                    delete agentTaskGoalCtxs[msg.to_user];
+                }
             }
             // 正在查看会话时收到对方消息：自动发送已读回执（客户端水位去重）
             if (!isMine && msg.msg_id) {
@@ -17137,6 +18203,12 @@
             agentConsoleOpenByUser[currentChatUser] = agentConsole.open; // 控制台开合状态同样按会话记忆
         }
         currentChatUser = user;
+        // 阶段一百六十六：切会话清空待发图片附件（附件是暂存态不随会话记忆，防止 A 会话
+        // 选的图在 B 会话误随任务上行串图）；已 revokeObjectURL 释放 blob
+        agentTaskImagesClear();
+        // 阶段一百七十：切会话同步清 @ 引用条与选择浮层（同暂存态不跨会话携带）
+        agentCtxClear();
+        agentAtClose();
         // 阶段一百三十七：按钮显隐归口 syncAgentUiForConversation（登录自动恢复时智能体列表未就绪，
         // 需在 AI_AGENTS 返回后二次修正，抽函数避免两处重复维护）
         // 原实现：内联判定（智能体列表未返回时 isAIAgent 恒为 false，按钮被隐藏且列表就绪后无法修正）
@@ -20992,11 +22064,14 @@
     var taskhistPrev = document.getElementById('taskhist-prev');
     var taskhistNext = document.getElementById('taskhist-next');
     var taskhistClose = document.getElementById('taskhist-close');
+    var taskhistTabsEl = document.getElementById('taskhist-tabs'); // 阶段一百八十二：页签行（任务历史/任务模板）
+    var taskhistTitleEl = document.getElementById('taskhist-title'); // 阶段一百八十二：弹窗标题（随页签切换）
     var thPage = 1;        // 当前页码
     var thTotal = 0;       // 匹配总条数
     var TH_SIZE = 20;      // 每页条数（与服务端上限一致）
     var thStatus = '';     // 当前状态筛选（空=全部）
     var thExpandId = '';   // 当前展开详情的 task_id（翻页后保持展开语义无必要，翻页重置）
+    var thTab = 'hist';    // 阶段一百八十二：当前页签（hist 任务历史 / tpl 任务模板）
 
     // thStateLabel 状态中文标签映射（queued 排队中/running 运行中/completed 已完成/failed 失败/cancelled 已取消）
     function thStateLabel(s) {
@@ -21018,6 +22093,9 @@
         taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
         thPage = 1;
         thStatus = '';
+        thTab = 'hist';    // 阶段一百八十二：每次打开回到任务历史页签
+        thCronFormReset(); // 阶段一百八十四：定时任务表单复位为新建态
+        thApplyTab();
         // 重置筛选 chips 到"全部"
         taskhistFilterEl.querySelectorAll('.taskhist-chip').forEach(function (c) {
             c.classList.toggle('active', c.dataset.status === '');
@@ -21029,8 +22107,88 @@
         taskhistMask.classList.add('hidden');
     }
 
+    // 阶段一百八十二：thApplyTab 页签 UI 同步（按钮 active 态 + 弹窗标题 + 状态筛选显隐）
+    // 阶段一百八十四：+定时任务页签（表单显隐联动；非任务历史页签下隐藏状态筛选）
+    function thApplyTab() {
+        taskhistTabsEl.querySelectorAll('.taskhist-tab').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.tab === thTab);
+        });
+        if (taskhistTitleEl) taskhistTitleEl.textContent = thTab === 'tpl' ? I18N.t('任务模板') : (thTab === 'cron' ? I18N.t('定时任务') : I18N.t('任务历史'));
+        taskhistFilterEl.classList.toggle('hidden', thTab !== 'hist');
+        var cronForm = document.getElementById('taskhist-cron-form');
+        if (cronForm) cronForm.classList.toggle('hidden', thTab !== 'cron');
+    }
+
+    // 阶段一百八十二：thParseJSONArr 快照列解析归口（images/contexts 落库为 JSON 字符串；
+    // 旧记录无值/坏 JSON 一律回退空数组，重跑按"无附件"处理不阻断）
+    function thParseJSONArr(s) {
+        if (!s) return [];
+        try {
+            var v = JSON.parse(s);
+            return Array.isArray(v) ? v : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    // 阶段一百八十二：thRunTask 模板运行/任务重跑共用发起归口——绕开输入框直发 AGENT_RUN
+    // （payload 形状与 sendAgentRun 同参：goal/agent_name/session_id/plan_mode/solo_mode/images/contexts）；
+    // 图片与 @ 引用缓存到回显挂条缓存，目标气泡上屏时挂缩略图/引用 chip 条；成功后关弹窗
+    function thRunTask(agent, goal, images, ctxs, planMode, soloMode) {
+        if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+        var payload = {
+            goal: goal,
+            agent_name: agent,
+            session_id: aiViewSession[currentChatUser] || 0,
+            plan_mode: !!planMode,
+            solo_mode: !!soloMode
+        };
+        if (images && images.length) payload.images = images;
+        if (ctxs && ctxs.length) payload.contexts = ctxs.map(function (c) { return { path: c.path, dir: c.dir }; });
+        if (!IMSocket.send({ msg_type: MSG.AGENT_RUN, to_user: agent, content: JSON.stringify(payload) })) return;
+        agentEchoPending[agent] = true;
+        if (images && images.length) agentTaskGoalImages[agent] = images.slice();
+        if (ctxs && ctxs.length) agentTaskGoalCtxs[agent] = ctxs.map(function (c) { return { path: c.path, dir: c.dir }; });
+        taskhistCloseDialog();
+        showToast(I18N.t('任务已发起'));
+    }
+
     // taskhistLoad 拉取任务分页列表（筛选与页码取自模块内状态）
     function taskhistLoad() {
+        // 阶段一百八十四：定时任务页签——全量列表直出（不分页，prev/next 置灰；表单归属随当前会话）
+        if (thTab === 'cron') {
+            taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
+            thCronSyncSid();
+            fetch('/api/agent/cron/list?username=' + encodeURIComponent(kbUsername()))
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (!res.ok) { showToast(res.msg || I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; return; }
+                    thCronRender(res.data.crons || []);
+                    var n = res.data.total || 0;
+                    taskhistPageInfo.textContent = n ? I18N.t('共 ') + n + I18N.t(' 个定时任务') : I18N.t('暂无定时任务');
+                    taskhistPrev.disabled = true;
+                    taskhistNext.disabled = true;
+                })
+                .catch(function () { showToast(I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; });
+            return;
+        }
+        // 阶段一百八十二：模板页签——全量列表直出（不分页，prev/next 置灰；goal 全文随列表返回免二次请求）
+        if (thTab === 'tpl') {
+            taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
+            fetch('/api/agent/tasks/tpl?username=' + encodeURIComponent(kbUsername()))
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    if (!res.ok) { showToast(res.msg || I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; return; }
+                    thTplRender(res.data.tpls || []);
+                    var n = res.data.total || 0;
+                    taskhistPageInfo.textContent = n ? I18N.t('共 ') + n + I18N.t(' 个模板') : I18N.t('暂无模板');
+                    taskhistPrev.disabled = true;
+                    taskhistNext.disabled = true;
+                })
+                .catch(function () { showToast(I18N.t('加载失败')); taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载失败') + '</div>'; });
+            return;
+        }
+        taskhistFilterEl.classList.remove('hidden');
         var url = '/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) +
             '&page=' + thPage + '&size=' + TH_SIZE;
         if (thStatus) url += '&status=' + encodeURIComponent(thStatus);
@@ -21075,6 +22233,71 @@
             goal.title = t.goal || '';
             head.appendChild(badge);
             head.appendChild(goal);
+            // 卡片操作区（阶段一百八十五 报告导出 + 阶段一百八十二 重跑/存为模板）：
+            // 报告导出仅是下载文件，无会话路由语义，所有任务可见；
+            // 重跑/存为模板仅当前查看智能体的任务显示（跨智能体任务不在当前会话路由，按钮隐藏防混乱）；
+            // 点击 stopPropagation 防触发卡片展开
+            var ops = document.createElement('span');
+            ops.className = 'taskhist-ops';
+            var rptBtn = document.createElement('button');
+            rptBtn.className = 'taskhist-op-btn';
+            rptBtn.textContent = I18N.t('报告');
+            rptBtn.title = I18N.t('导出任务报告 Markdown 文件（含目标/结果/文件变更/执行轨迹）');
+            rptBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                // 服务端 Content-Disposition 附件下发：临时 <a download> 触发浏览器下载，不跳页不闪新标签
+                var a = document.createElement('a');
+                a.href = '/api/agent/task/' + encodeURIComponent(t.task_id) + '/report?username=' + encodeURIComponent(kbUsername());
+                a.download = '';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            });
+            ops.appendChild(rptBtn);
+            if (t.agent_name === currentChatUser) {
+                var rerunBtn = document.createElement('button');
+                rerunBtn.className = 'taskhist-op-btn';
+                rerunBtn.textContent = I18N.t('重跑');
+                rerunBtn.title = I18N.t('按原任务参数一键重跑（含图片与 @ 引用）');
+                rerunBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    // 重跑需 goal 全文（列表摘要截断 100 字）——先拉详情再按快照参数发起
+                    rerunBtn.disabled = true;
+                    fetch('/api/agent/task/' + encodeURIComponent(t.task_id) + '?username=' + encodeURIComponent(kbUsername()))
+                        .then(function (r) { return r.json(); })
+                        .then(function (res) {
+                            rerunBtn.disabled = false;
+                            if (!res.ok) { showToast(res.msg || I18N.t('详情加载失败')); return; }
+                            var d = res.data || {};
+                            thRunTask(t.agent_name, d.goal || t.goal, thParseJSONArr(d.images), thParseJSONArr(d.contexts), d.plan_mode, d.solo_mode);
+                        })
+                        .catch(function () { rerunBtn.disabled = false; showToast(I18N.t('详情加载失败')); });
+                });
+                var saveBtn = document.createElement('button');
+                saveBtn.className = 'taskhist-op-btn';
+                saveBtn.textContent = I18N.t('存为模板');
+                saveBtn.title = I18N.t('保存目标/图片/@ 引用为任务模板，后续一键重跑');
+                saveBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    // 服务端权威克隆：仅传 task_id，goal/图片/引用/模式由任务记录原样克隆
+                    saveBtn.disabled = true;
+                    fetch('/api/agent/tasks/tpl?username=' + encodeURIComponent(kbUsername()), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ task_id: t.task_id })
+                    })
+                        .then(function (r) { return r.json(); })
+                        .then(function (res) {
+                            saveBtn.disabled = false;
+                            if (!res.ok) { showToast(res.msg || I18N.t('保存失败')); return; }
+                            showToast(I18N.t('已存为任务模板'));
+                        })
+                        .catch(function () { saveBtn.disabled = false; showToast(I18N.t('保存失败')); });
+                });
+                ops.appendChild(rerunBtn);
+                ops.appendChild(saveBtn);
+            }
+            head.appendChild(ops);
             card.appendChild(head);
 
             // 元信息行：智能体 · N 步 · 扣 N 积分（阶段一百三十八，旧记录无该值不显示） · 发起时间
@@ -21154,14 +22377,298 @@
         });
     }
 
+    // 阶段一百八十二：thTplRender 模板卡渲染——模板名 + 元信息（智能体/图片数/引用数/模式/保存时间）
+    // + 操作（运行/删除）；运行仅当前查看智能体的模板显示（跨智能体模板不在当前会话路由）
+    function thTplRender(tpls) {
+        taskhistListEl.innerHTML = '';
+        if (!tpls.length) {
+            taskhistListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无模板') }));
+            return;
+        }
+        tpls.forEach(function (tp) {
+            var card = document.createElement('div');
+            card.className = 'taskhist-card';
+            var head = document.createElement('div');
+            head.className = 'taskhist-head';
+            var name = document.createElement('span');
+            name.className = 'taskhist-goal';
+            name.textContent = tp.name || tp.goal || I18N.t('(无目标)');
+            name.title = tp.goal || '';
+            head.appendChild(name);
+            card.appendChild(head);
+
+            // 元信息：智能体 · 图 N · 引用 N · 计划模式 · SOLO · 保存时间（有值才拼，无附件不显 0）
+            var imgs = thParseJSONArr(tp.images);
+            var ctxs = thParseJSONArr(tp.contexts);
+            var meta = document.createElement('div');
+            meta.className = 'taskhist-meta';
+            var parts = [tp.agent_name];
+            if (imgs.length) parts.push(I18N.t('图 ') + imgs.length);
+            if (ctxs.length) parts.push(I18N.t('引用 ') + ctxs.length);
+            if (tp.plan_mode) parts.push(I18N.t('计划模式'));
+            if (tp.solo_mode) parts.push(I18N.t('SOLO'));
+            parts.push(thFormatTime(tp.update_time || tp.create_time));
+            meta.textContent = parts.join(' · ');
+            card.appendChild(meta);
+
+            // 操作区：运行（一键带参重跑）/ 删除
+            var ops = document.createElement('div');
+            ops.className = 'taskhist-ops th-tpl-ops';
+            if (tp.agent_name === currentChatUser) {
+                var runBtn = document.createElement('button');
+                runBtn.className = 'taskhist-op-btn primary';
+                runBtn.textContent = I18N.t('运行');
+                runBtn.title = I18N.t('按模板参数一键发起任务');
+                runBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    thRunTask(tp.agent_name, tp.goal, imgs, ctxs, tp.plan_mode, tp.solo_mode);
+                });
+                ops.appendChild(runBtn);
+            }
+            var delBtn = document.createElement('button');
+            delBtn.className = 'taskhist-op-btn danger';
+            delBtn.textContent = I18N.t('删除');
+            delBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                delBtn.disabled = true;
+                fetch('/api/agent/tasks/tpl/' + tp.id + '?username=' + encodeURIComponent(kbUsername()), { method: 'DELETE' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        delBtn.disabled = false;
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('模板已删除'));
+                        taskhistLoad(); // 刷新列表（删除后条数变化）
+                    })
+                    .catch(function () { delBtn.disabled = false; showToast(I18N.t('删除失败')); });
+            });
+            ops.appendChild(delBtn);
+            card.appendChild(ops);
+            taskhistListEl.appendChild(card);
+        });
+    }
+
+    // ===== 阶段一百八十四：定时/巡检任务（第三页签：列表 + 新建/编辑表单 + 启停/删除） =====
+    // 服务端归口 /api/agent/cron/*；发起复用 agentStartTask 同链路（与手动任务一致），
+    // 结果经任务完结链路（落库+未读+会话推送）回流，本页签只做配置管理
+    var thCronEditId = null; // 正在编辑的定时任务 id（null=新建态）
+
+    // thCronSyncSid 归属说明行：定时任务固定归属当前打开的 AI 会话（智能体+会话号随会话切换）
+    function thCronSyncSid() {
+        var el = document.getElementById('th-cron-sid');
+        if (!el) return;
+        var sid = aiViewSession[currentChatUser] || 0;
+        el.textContent = I18N.t('智能体：') + currentChatUser + (sid ? (I18N.t(' · 会话 #') + sid) : (' · ' + I18N.t('默认会话')));
+    }
+
+    // thCronStatusLabel 行状态标签（发起失败专属文案；任务终态复用 thStateLabel 归口）
+    function thCronStatusLabel(s) {
+        if (!s) return '—';
+        if (s === 'launch_failed') return I18N.t('发起失败');
+        return thStateLabel(s);
+    }
+
+    // thCronFormReset 表单复位为新建态（清目标/编辑标记/模式勾选，调度复位每 30 分钟）
+    function thCronFormReset() {
+        thCronEditId = null;
+        var goalEl = document.getElementById('th-cron-goal');
+        if (goalEl) goalEl.value = '';
+        var kindEl = document.getElementById('th-cron-kind');
+        if (kindEl) kindEl.value = 'interval';
+        var minsEl = document.getElementById('th-cron-mins');
+        if (minsEl) { minsEl.value = '30'; minsEl.classList.remove('hidden'); }
+        var timeEl = document.getElementById('th-cron-time');
+        if (timeEl) timeEl.classList.add('hidden');
+        var planEl = document.getElementById('th-cron-plan');
+        if (planEl) planEl.checked = false;
+        var soloEl = document.getElementById('th-cron-solo');
+        if (soloEl) soloEl.checked = false;
+        var saveBtn = document.getElementById('th-cron-save');
+        if (saveBtn) saveBtn.textContent = I18N.t('保存');
+        var cancelBtn = document.getElementById('th-cron-cancel');
+        if (cancelBtn) cancelBtn.classList.add('hidden');
+    }
+
+    // thCronFormFill 编辑态填表（保存按钮转「保存修改」，出现取消编辑；目标全文悬停 title 可见）
+    function thCronFormFill(row) {
+        thCronEditId = row.id;
+        document.getElementById('th-cron-goal').value = row.goal || '';
+        document.getElementById('th-cron-kind').value = row.kind === 'daily' ? 'daily' : 'interval';
+        document.getElementById('th-cron-mins').value = row.kind === 'daily' ? '30' : (row.value || '30');
+        document.getElementById('th-cron-time').value = row.kind === 'daily' ? (row.value || '09:00') : '09:00';
+        document.getElementById('th-cron-mins').classList.toggle('hidden', row.kind === 'daily');
+        document.getElementById('th-cron-time').classList.toggle('hidden', row.kind !== 'daily');
+        document.getElementById('th-cron-plan').checked = !!row.plan_mode;
+        document.getElementById('th-cron-solo').checked = !!row.solo_mode;
+        document.getElementById('th-cron-save').textContent = I18N.t('保存修改');
+        document.getElementById('th-cron-cancel').classList.remove('hidden');
+        var form = document.getElementById('taskhist-cron-form');
+        if (form && form.scrollIntoView) form.scrollIntoView({ block: 'nearest' });
+        document.getElementById('th-cron-goal').focus();
+    }
+
+    // thCronSave 新建/保存定时任务（表单 → POST /api/agent/cron/save；客户端先行校验与服务端同口径）
+    function thCronSave() {
+        if (currentChatUser === '' || !isAIAgent(currentChatUser)) return;
+        var kind = document.getElementById('th-cron-kind').value;
+        var value = kind === 'daily' ? document.getElementById('th-cron-time').value : document.getElementById('th-cron-mins').value;
+        var goal = document.getElementById('th-cron-goal').value.trim();
+        if (!goal) { showToast(I18N.t('任务目标不能为空')); return; }
+        if (kind === 'daily' && !/^\d{2}:\d{2}$/.test(String(value))) { showToast(I18N.t('每日时刻格式须为 HH:MM（如 08:30）')); return; }
+        if (kind === 'interval' && (!/^\d+$/.test(String(value)) || +value < 1 || +value > 1440)) { showToast(I18N.t('间隔分钟数须为 1~1440 的整数')); return; }
+        var body = {
+            id: thCronEditId || 0,
+            agent_name: currentChatUser,
+            goal: goal,
+            session_id: aiViewSession[currentChatUser] || 0,
+            plan_mode: document.getElementById('th-cron-plan').checked,
+            solo_mode: document.getElementById('th-cron-solo').checked,
+            kind: kind,
+            value: String(value)
+        };
+        var saveBtn = document.getElementById('th-cron-save');
+        saveBtn.disabled = true;
+        fetch('/api/agent/cron/save?username=' + encodeURIComponent(kbUsername()), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                saveBtn.disabled = false;
+                if (!res.ok) { showToast(res.msg || I18N.t('保存失败')); return; }
+                showToast(thCronEditId ? I18N.t('定时任务已更新') : I18N.t('定时任务已创建'));
+                thCronFormReset();
+                taskhistLoad();
+            })
+            .catch(function () { saveBtn.disabled = false; showToast(I18N.t('保存失败')); });
+    }
+
+    // thCronRender 定时任务卡渲染：启停开关（slide-switch 滑块样式）+ 目标摘要 +
+    // 元信息（调度 · 上次结果 · 下次运行 · 上次运行 · 模式）+ 编辑/删除
+    function thCronRender(rows) {
+        taskhistListEl.innerHTML = '';
+        if (!rows.length) {
+            taskhistListEl.appendChild(Object.assign(document.createElement('div'), { className: 'kb-empty', textContent: I18N.t('暂无定时任务') }));
+            return;
+        }
+        rows.forEach(function (row) {
+            var card = document.createElement('div');
+            card.className = 'taskhist-card th-cron-card' + (row.enabled ? '' : ' th-cron-off');
+
+            var head = document.createElement('div');
+            head.className = 'taskhist-head';
+            // 启停滑块开关（跟随主题色；切换即 POST toggle，失败回弹）
+            var sw = document.createElement('input');
+            sw.type = 'checkbox';
+            sw.className = 'slide-switch th-cron-sw';
+            sw.checked = !!row.enabled;
+            sw.title = row.enabled ? I18N.t('点击停用') : I18N.t('点击启用');
+            sw.addEventListener('click', function (e) { e.stopPropagation(); });
+            sw.addEventListener('change', function () {
+                sw.disabled = true;
+                fetch('/api/agent/cron/toggle?username=' + encodeURIComponent(kbUsername()), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: row.id, enabled: sw.checked })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        sw.disabled = false;
+                        if (!res.ok) { sw.checked = !sw.checked; showToast(res.msg || I18N.t('操作失败')); return; }
+                        showToast(sw.checked ? I18N.t('定时任务已启用') : I18N.t('定时任务已停用'));
+                        taskhistLoad();
+                    })
+                    .catch(function () { sw.disabled = false; sw.checked = !sw.checked; showToast(I18N.t('操作失败')); });
+            });
+            head.appendChild(sw);
+            var goal = document.createElement('span');
+            goal.className = 'taskhist-goal';
+            goal.textContent = row.goal || I18N.t('(无目标)');
+            goal.title = row.goal || '';
+            head.appendChild(goal);
+            card.appendChild(head);
+
+            // 元信息：调度描述 · 上次结果 · 下次运行 · 上次运行 · 计划模式 · SOLO（有值才拼）
+            var meta = document.createElement('div');
+            meta.className = 'taskhist-meta';
+            var parts = [row.desc || (row.kind + ':' + row.value)];
+            if (row.last_status) parts.push(I18N.t('上次：') + thCronStatusLabel(row.last_status));
+            if (row.next_run_at) parts.push(I18N.t('下次：') + thFormatTime(row.next_run_at * 1000));
+            if (row.last_run_at) parts.push(I18N.t('上次运行：') + thFormatTime(row.last_run_at * 1000));
+            if (row.plan_mode) parts.push(I18N.t('计划模式'));
+            if (row.solo_mode) parts.push(I18N.t('SOLO'));
+            meta.textContent = parts.join(' · ');
+            card.appendChild(meta);
+
+            // 操作区：编辑（填表）/ 删除（归属校验服务端归口）
+            var ops = document.createElement('div');
+            ops.className = 'taskhist-ops th-tpl-ops';
+            var editBtn = document.createElement('button');
+            editBtn.className = 'taskhist-op-btn';
+            editBtn.textContent = I18N.t('编辑');
+            editBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                thCronFormFill(row);
+            });
+            ops.appendChild(editBtn);
+            var delBtn = document.createElement('button');
+            delBtn.className = 'taskhist-op-btn danger';
+            delBtn.textContent = I18N.t('删除');
+            delBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                delBtn.disabled = true;
+                fetch('/api/agent/cron/delete?username=' + encodeURIComponent(kbUsername()), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: row.id })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (res) {
+                        delBtn.disabled = false;
+                        if (!res.ok) { showToast(res.msg || I18N.t('删除失败')); return; }
+                        showToast(I18N.t('定时任务已删除'));
+                        taskhistLoad();
+                    })
+                    .catch(function () { delBtn.disabled = false; showToast(I18N.t('删除失败')); });
+            });
+            ops.appendChild(delBtn);
+            card.appendChild(ops);
+            taskhistListEl.appendChild(card);
+        });
+    }
+
+    // 定时任务表单事件注册（调度类型切换显隐 分钟/时刻 输入；保存/取消编辑）
+    (function () {
+        var kindEl = document.getElementById('th-cron-kind');
+        if (!kindEl) return;
+        kindEl.addEventListener('change', function () {
+            var daily = kindEl.value === 'daily';
+            document.getElementById('th-cron-mins').classList.toggle('hidden', daily);
+            document.getElementById('th-cron-time').classList.toggle('hidden', !daily);
+        });
+        document.getElementById('th-cron-save').addEventListener('click', thCronSave);
+        document.getElementById('th-cron-cancel').addEventListener('click', thCronFormReset);
+    })();
+
     taskhistBtn.addEventListener('click', taskhistOpenDialog);
     taskhistClose.addEventListener('click', taskhistCloseDialog);
+
+    // 阶段一百八十二：页签切换（任务历史/任务模板/定时任务），切换即重载列表
+    taskhistTabsEl.addEventListener('click', function (e) {
+        var b = e.target.closest('.taskhist-tab');
+        if (!b || b.dataset.tab === thTab) return;
+        thTab = b.dataset.tab;
+        thApplyTab();
+        taskhistListEl.innerHTML = '<div class="kb-empty">' + I18N.t('加载中…') + '</div>';
+        taskhistLoad();
+    });
 
     // ===== 阶段六十五：执行轨迹渲染 =====
     // thApprovalLabel 审批情况标签文案归口
     function thApprovalLabel(a) {
         // 阶段一百二十五：新增 answered（ask_user 用户已回答，中文映射，未知值兜底显示原文）
-        return { none: I18N.t('免审批'), approved: I18N.t('审批通过'), rejected: I18N.t('用户拒绝'), cancelled: I18N.t('用户取消'), timeout: I18N.t('审批超时'), answered: I18N.t('已回答') }[a] || a || '—';
+        // 阶段一百七十六：新增 solo（SOLO 全自动放行，免挂起自动执行，中文映射）
+        return { none: I18N.t('免审批'), approved: I18N.t('审批通过'), rejected: I18N.t('用户拒绝'), cancelled: I18N.t('用户取消'), timeout: I18N.t('审批超时'), answered: I18N.t('已回答'), solo: I18N.t('SOLO 自动放行') }[a] || a || '—';
     }
     // thEnvLabel 执行环境标签文案归口
     function thEnvLabel(e) {
@@ -21192,11 +22699,16 @@
             case 'delete_file': line = I18N.t('删除文件/目录 ') + path; break;
             case 'list_dir': line = I18N.t('列出目录 ') + (path || I18N.t('工作区根目录')); break;
             case 'grep': line = I18N.t('搜索「') + brief(p('pattern'), 60) + '」' + (p('include') ? I18N.t('（匹配 ') + p('include') + '）' : ''); break;
+            case 'semantic_search': line = I18N.t('语义检索「') + brief(p('query'), 60) + '」' + (p('path') ? I18N.t('（限定 ') + brief(p('path'), 40) + '）' : ''); break; // 阶段一百七十四
+            case 'spawn_agent': line = I18N.t('派生子 Agent「') + brief(p('goal'), 60) + '」'; break; // 阶段一百七十八：并行调研子任务
             case 'todo_write': line = I18N.t('更新任务清单'); break;
             case 'run_command': line = I18N.t('执行命令：') + brief(p('command'), 120); break;
             case 'web_search': line = I18N.t('联网搜索「') + brief(p('query'), 60) + '」'; break;
             case 'http_request': line = I18N.t('发起 HTTP ') + (p('method') || 'GET') + I18N.t(' 请求：') + brief(p('url'), 80); break;
             case 'ask_user': line = I18N.t('向用户提问：') + brief(p('question'), 80); break;
+            case 'present_plan': // 阶段一百六十四：计划模式提交执行计划
+                var _ps = Array.isArray(p('steps')) ? p('steps').length : 0;
+                line = I18N.t('提交执行计划：') + brief(p('title') || I18N.t('共 ') + _ps + I18N.t(' 个步骤'), 80); break;
             default:
                 if (tool.indexOf('browser_') === 0) {
                     // 内置浏览器工具中文标签（与服务端 agentBrowserLabel 同语义）
@@ -21274,11 +22786,14 @@
             thHoverHideTimer = setTimeout(thStepHoverCardRemove, 200);
         });
     }
-    // thLoadSteps 执行轨迹拉取与渲染：每步工具调用时间线（序号/工具/环境/审批/耗时 + 参数结果摘要）
+    // thLoadSteps 执行轨迹渲染（阶段一百七十二：按轮次分组的时间线——TRAE CN 同款逐轮 Checkpoint 回看）。
+    // 服务端步骤记录带 round（agentStepTrace 归口，1 起）；round=0 旧数据归"执行过程"兜底组。
+    // changes 可选（重放卡详情传入）：轮次头附带该轮触碰文件（首触登记轮次归口）。
     // 调用时机由任务详情回调触发（详情渲染完成后追加，避免并行竞态清空）
-    function thLoadSteps(detail, taskID) {
+    function thLoadSteps(detail, taskID, changes) {
         var box = document.createElement('div');
         box.className = 'th-steps';
+        box.dataset.thTask = taskID; // 阶段一百七十三：66 帧回滚后按任务重建执行轨迹（轮次头按钮态联动）
         box.textContent = I18N.t('执行轨迹加载中…');
         detail.appendChild(box);
         fetch('/api/agent/task/' + encodeURIComponent(taskID) + '/steps?username=' + encodeURIComponent(kbUsername()))
@@ -21291,46 +22806,107 @@
                 title.className = 'th-steps-title';
                 title.textContent = steps.length ? (I18N.t('执行轨迹（') + steps.length + I18N.t(' 步）')) : I18N.t('执行轨迹（无工具调用）');
                 box.appendChild(title);
+                // 阶段一百七十二：按轮归组（保持服务端 seq 升序；round=0 兜底组置于最前）
+                var groups = [];
+                var byRound = {};
                 steps.forEach(function (s) {
-                    var item = document.createElement('div');
-                    item.className = 'th-step' + (s.ok ? '' : ' fail');
+                    var rd = Number(s.round) || 0;
+                    if (!byRound[rd]) {
+                        byRound[rd] = { round: rd, steps: [] };
+                        groups.push(byRound[rd]);
+                    }
+                    byRound[rd].steps.push(s);
+                });
+                groups.sort(function (a, b) { return a.round - b.round; }); // 兜底组(0)在前，其余轮次升序
+                groups.forEach(function (g) {
+                    // 轮次头：时间线圆点 + 轮次名 + 首步时间 + 步数（+ 该轮文件变更）
                     var head = document.createElement('div');
-                    head.className = 'th-step-head';
-                    var seq = document.createElement('span');
-                    seq.className = 'th-step-seq';
-                    seq.textContent = s.seq;
-                    var tool = document.createElement('span');
-                    tool.className = 'th-step-tool';
-                    tool.textContent = s.tool;
-                    head.appendChild(seq);
-                    head.appendChild(tool);
-                    // 元信息一次拼接：执行环境 · 审批情况 · 耗时
+                    head.className = 'th-round-head';
+                    var dot = document.createElement('span');
+                    dot.className = 'agent-round-dot';
+                    head.appendChild(dot);
+                    var name = document.createElement('span');
+                    name.className = 'agent-round-label';
+                    name.textContent = g.round ? I18N.t('第 {n} 轮', { n: g.round }) : I18N.t('执行过程');
+                    head.appendChild(name);
+                    var first = g.steps[0] || {};
                     var meta = document.createElement('span');
-                    meta.className = 'th-step-meta';
-                    meta.textContent = thEnvLabel(s.env) + ' · ' + thApprovalLabel(s.approval) + ' · ' + (s.duration_ms || 0) + 'ms';
+                    meta.className = 'agent-round-time';
+                    meta.textContent = thFormatTime(first.create_time) + ' · ' + g.steps.length + I18N.t(' 步');
                     head.appendChild(meta);
-                    item.appendChild(head);
-                    // 阶段一百三十九：参数转中文动作摘要（查询/修改/删除等操作不再显示 JSON 格式）；
-                    // 原实现悬停 title 直出原始 JSON 串（用户实测悬停气泡仍是 JSON），摘要 3 行内可读
-                    // 后悬停气泡取消；原实现保留备查：
-                    // p.title = s.params; // 悬停看全文（服务端已截断）
-                    if (s.params) {
-                        var p = document.createElement('div');
-                        p.className = 'th-step-body';
-                        p.textContent = I18N.t('参数：') + thStepParamSummary(s.tool, s.params);
-                        item.appendChild(p);
+                    // 该轮文件变更（changes 按首触登记轮次归组；旧数据无 round 不参与）
+                    if (changes && changes.length && g.round) {
+                        var files = changes.filter(function (c) { return Number(c.round) === g.round; }).map(function (c) { return c.path; });
+                        if (files.length) {
+                            var ch = document.createElement('span');
+                            ch.className = 'th-round-changes';
+                            ch.textContent = I18N.t('变更 {files}', { files: files.join('、') });
+                            ch.title = ch.textContent;
+                            head.appendChild(ch);
+                        }
                     }
-                    if (s.result) {
-                        var rEl = document.createElement('div');
-                        rEl.className = 'th-step-body';
-                        rEl.textContent = (s.ok ? I18N.t('结果：') : I18N.t('错误：')) + thStepResultText(s.result);
-                        // 悬停原生 title 换自绘格式化悬浮卡（MCP ? 帮助同款视觉）：JSON 已美化缩进、
-                        // 全文等宽展示可复制；原实现 title 直出原始串显示乱，保留备查：
-                        // rEl.title = thStepResultText(s.result);
-                        thStepHoverCard(rEl, thStepResultText(s.result));
-                        item.appendChild(rEl);
+                    // 阶段一百七十三：逐轮回滚（Checkpoint）——该轮及之后仍有 pending 变更时轮次头附回滚按钮
+                    // （重放卡传 changes 才渲染；任务历史弹窗不传则无此按钮）。66 帧后整块重建自动刷新按钮态
+                    if (changes && changes.length && g.round) {
+                        var revCnt = changes.filter(function (c) { return Number(c.round) >= g.round && (c.status || 'pending') === 'pending'; }).length;
+                        if (revCnt > 0) {
+                            var rv = document.createElement('button');
+                            rv.className = 'th-round-revert';
+                            rv.textContent = I18N.t('回滚此轮起');
+                            rv.title = I18N.t('撤销第 {n} 轮及之后登记的全部文件变更，文件还原到任务前内容', { n: g.round });
+                            rv.addEventListener('click', function (e) {
+                                e.stopPropagation(); // 阻断冒泡：避免触发外层任务卡折叠/审查条展开
+                                if (rv.disabled) return;
+                                showConfirm(I18N.t('回滚确认'), I18N.t('将撤销第 {n} 轮及之后登记的全部文件变更（{count} 个文件），文件还原到任务前内容。', { n: g.round, count: revCnt }), function () {
+                                    rv.disabled = true;
+                                    sendAgentChangesAction(taskID, 'revert', '', g.round);
+                                });
+                            });
+                            head.appendChild(rv);
+                        }
                     }
-                    box.appendChild(item);
+                    box.appendChild(head);
+                    g.steps.forEach(function (s) {
+                        var item = document.createElement('div');
+                        item.className = 'th-step' + (s.ok ? '' : ' fail');
+                        var shead = document.createElement('div');
+                        shead.className = 'th-step-head';
+                        var seq = document.createElement('span');
+                        seq.className = 'th-step-seq';
+                        seq.textContent = s.seq;
+                        var tool = document.createElement('span');
+                        tool.className = 'th-step-tool';
+                        tool.textContent = s.tool;
+                        shead.appendChild(seq);
+                        shead.appendChild(tool);
+                        // 元信息一次拼接：执行环境 · 审批情况 · 耗时
+                        var smeta = document.createElement('span');
+                        smeta.className = 'th-step-meta';
+                        smeta.textContent = thEnvLabel(s.env) + ' · ' + thApprovalLabel(s.approval) + ' · ' + (s.duration_ms || 0) + 'ms';
+                        shead.appendChild(smeta);
+                        item.appendChild(shead);
+                        // 阶段一百三十九：参数转中文动作摘要（查询/修改/删除等操作不再显示 JSON 格式）；
+                        // 原实现悬停 title 直出原始 JSON 串（用户实测悬停气泡仍是 JSON），摘要 3 行内可读
+                        // 后悬停气泡取消；原实现保留备查：
+                        // p.title = s.params; // 悬停看全文（服务端已截断）
+                        if (s.params) {
+                            var p = document.createElement('div');
+                            p.className = 'th-step-body';
+                            p.textContent = I18N.t('参数：') + thStepParamSummary(s.tool, s.params);
+                            item.appendChild(p);
+                        }
+                        if (s.result) {
+                            var rEl = document.createElement('div');
+                            rEl.className = 'th-step-body';
+                            rEl.textContent = (s.ok ? I18N.t('结果：') : I18N.t('错误：')) + thStepResultText(s.result);
+                            // 悬停原生 title 换自绘格式化悬浮卡（MCP ? 帮助同款视觉）：JSON 已美化缩进、
+                            // 全文等宽展示可复制；原实现 title 直出原始串显示乱，保留备查：
+                            // rEl.title = thStepResultText(s.result);
+                            thStepHoverCard(rEl, thStepResultText(s.result));
+                            item.appendChild(rEl);
+                        }
+                        box.appendChild(item);
+                    });
                 });
             })
             .catch(function () { box.textContent = I18N.t('执行轨迹加载失败'); });
