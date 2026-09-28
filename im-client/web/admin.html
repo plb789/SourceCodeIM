@@ -647,7 +647,7 @@
                         <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="usage" checked> 按量计费（1000 tokens = 1 积分，按当次实际消耗折算，上下文越长单次扣费越多）</label>
                     </div>
                     <div class="agentset-row">
-                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="percall"> 按次计费（TRAE CN 同款：每次模型调用固定扣费，与 token 数无关，上下文膨胀由平台吸收）</label>
+                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="percall"> 按次计费（每次模型调用固定扣费，与 token 数无关，上下文膨胀由平台吸收）</label>
                     </div>
                     <div class="agentset-row" id="billing-cost-row">
                         <label class="agentset-label" for="billing-percall-cost" title="仅按次计费模式生效；每次 AI 问答 / Agent 每轮迭代扣该固定积分">按次计费单价（积分/次）</label>
@@ -667,11 +667,11 @@
                     <h2>历史压缩设置</h2>
                     <span id="compress-status" class="admin-view-tip"></span>
                 </header>
-                <p class="admin-view-tip">Agent 任务长上下文自动压缩的触发口径：上下文达到阈值时把较早完整工具轮 LLM 摘要归并（最近若干轮保留原文），显著降低 token 消耗并加速响应。保存后立即热生效（对执行中的任务下一轮即按新口径判断），无需重启服务端；设置持久化保存，重启后保持。任务卡右下角"上下文占用环"展示口径自动跟随。</p>
+                <p class="admin-view-tip">AI 问答与 Agent 任务历史上下文自动压缩的触发口径（两者统一跟随本设置）：上下文达到阈值时把较早历史/完整工具轮 LLM 摘要归并（最近若干轮保留原文），显著降低 token 消耗并加速响应。保存后立即热生效（对执行中的任务下一轮即按新口径判断），无需重启服务端；设置持久化保存，重启后保持。任务卡右下角"上下文占用环"与问答输入区上方"上下文水位条"展示口径自动跟随。</p>
                 <div class="agentset-group">
                     <h3 class="agentset-group-title">压缩触发口径</h3>
                     <div class="agentset-row">
-                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="kb" checked> KB 字节口径（TRAE CN 状态栏同款：上下文累计 UTF-8 字节数达阈值触发，中英混排直观可预期）</label>
+                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="kb" checked> KB 字节口径（上下文累计 UTF-8 字节数达阈值触发，中英混排直观可预期）</label>
                     </div>
                     <div class="agentset-row">
                         <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="tokens"> 估算 token 口径（CJK≈1 字符 1 token、其余≈4 字符 1 token 粗估，达阈值触发）</label>

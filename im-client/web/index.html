@@ -505,7 +505,7 @@
                     </button>
                     <!-- 阶段一百六十四：计划模式开关（TRAE CN Plan 同款——Agent 先只读调研并提交执行计划，
                          用户批准后才开始执行；仅 Agent 任务模式开启时显示，随任务上行 plan_mode 标记） -->
-                    <button id="agent-plan-btn" class="tool-btn agent-plan-btn hidden" title="计划模式：Agent 先调研并提交执行计划，你批准后才开始动手执行（TRAE CN Plan 同款）">
+                    <button id="agent-plan-btn" class="tool-btn agent-plan-btn hidden" title="计划模式：Agent 先调研并提交执行计划，你批准后才开始动手执行">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M9 2.5h6a1.5 1.5 0 0 1 1.5 1.5v.5H19a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h2.5V4A1.5 1.5 0 0 1 9 2.5zm6 3V4H9v2a.9.9 0 0 0 .9.9h4.2A.9.9 0 0 0 15 5.5zm-8 5.25a1 1 0 0 1 1-1h8a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h8a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h5a1 1 0 1 1 0 2H8a1 1 0 0 1-1-1z"/></svg>
                     </button>
                     <!-- 阶段一百七十六：SOLO 全自动模式开关（TRAE SOLO 同款——任务内需审批操作自动放行免逐条确认，
@@ -2030,7 +2030,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.5"></script>
-    <script src="/js/chat.js?v=3.133"></script>
+    <script src="/js/chat.js?v=3.137"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>

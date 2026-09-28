@@ -7342,7 +7342,7 @@
         if (billingMode === 'percall' && billingCost != null && billingCost > 0) {
             var pc = document.createElement('span');
             pc.className = 'ai-token-info';
-            pc.title = I18N.t('按次计费（TRAE CN 同款）：单次调用固定扣 ') + billingCost + I18N.t(' 积分，与 token 数无关') + (tokens && tokens.total > 0 ? I18N.t('；本次消耗 ') + tokens.total + I18N.t(' tokens 仅供参考') : '');
+            pc.title = I18N.t('按次计费：单次调用固定扣 ') + billingCost + I18N.t(' 积分，与 token 数无关') + (tokens && tokens.total > 0 ? I18N.t('；本次消耗 ') + tokens.total + I18N.t(' tokens 仅供参考') : '');
             pc.textContent = '⚡ ' + billingCost + I18N.t(' 积分');
             bar.appendChild(pc);
         } else if (tokens && tokens.total > 0) {
@@ -7780,7 +7780,14 @@
         fg.classList.toggle('ctx-warn', pct >= 80 && pct < 95);
         fg.classList.toggle('ctx-danger', pct >= 95);
         txt.textContent = pct + '%';
-        aiCtxBarEl.title = I18N.t('上下文占用（') + I18N.t('估算 token') + I18N.t('口径，达阈值自动触发历史压缩归并）');
+        // 阶段一百九十六：TRAE CN 同款悬停明细——title 带已用/上限具体数值；口径跟随后台压缩设置
+        // （服务端随帧标注 mode：tokens 直接数字 / kb 经 formatSize 缩写，与任务卡占用环同款显示）。
+        // 阶段一百九十六补：必须写 data-tip-text（tooltip.js 自绘气泡归口）而非 title——本条每次
+        // END 帧都重写，写 title 会在 tooltip.js 摘存后又被写回，鼠标停留 1-2s 弹出系统原生黑气泡
+        // （新值）与自绘气泡（摘存旧值）叠出双气泡双数值（用户反馈）；data-tip-text 每次 show()
+        // 实时读取，数值恒为最新且原生气泡从根源杜绝
+        var isTok = (w.mode || 'tokens') === 'tokens';
+        aiCtxBarEl.setAttribute('data-tip-text', I18N.t('上下文占用：已用 ') + (isTok ? w.used : formatSize(w.used)) + I18N.t(' / 上限 ') + (isTok ? w.max : formatSize(w.max)) + I18N.t('（') + (isTok ? I18N.t('估算 token') : I18N.t('KB 字节')) + I18N.t('口径，达阈值自动触发历史压缩归并）'));
         aiCtxBarEl.classList.remove('hidden');
     }
     // 切会话入口刷新（与 agentBoardSyncEntry 同点挂载）：当前会话有缓存水位则恢复，无则隐藏
@@ -7795,8 +7802,9 @@
         if (msg.to_user !== IMSocket.getUsername()) return;
         hideAIThinking(msg.from_user); // 失败/降级路径同样收起"思考中"指示
         // 阶段一百九十四：上下文水位随帧缓存——放在会话过滤 return 之前（切走的会话也存，切回恢复显示）
+        // 阶段一百九十六：缓存口径 mode（tokens/kb 跟随后台压缩设置，服务端随帧标注）
         if (msg.context_used != null && msg.context_max > 0) {
-            aiCtxWater[msg.from_user] = { used: msg.context_used, max: msg.context_max };
+            aiCtxWater[msg.from_user] = { used: msg.context_used, max: msg.context_max, mode: msg.context_mode || 'tokens' };
             aiCtxBarUpdate(msg.from_user);
         }
         // 阶段七十八：结束帧携带扣分后积分余额（服务端归口，仅成功扣分帧有值）→ 标题栏实时刷新
@@ -10657,7 +10665,7 @@
         if (st.costEl._ctxRing) return st.costEl._ctxRing;
         var wrap = document.createElement('span');
         wrap.className = 'agent-task-ctx';
-        wrap.title = I18N.t('上下文占用（达阈值自动触发历史压缩归并）');
+        wrap.setAttribute('data-tip-text', I18N.t('上下文占用（达阈值自动触发历史压缩归并）'));
         var NS = 'http://www.w3.org/2000/svg';
         var svg = document.createElementNS(NS, 'svg');
         svg.setAttribute('viewBox', '0 0 36 36');
@@ -10692,7 +10700,11 @@
         var C = 2 * Math.PI * 15.5;
         st.costEl._ctxRingFg.setAttribute('stroke-dashoffset', (C * (1 - pct / 100)).toFixed(2));
         st.costEl._ctxRingPct.textContent = pct + '%';
-        wrap.title = I18N.t('上下文占用（') + (mode === 'tokens' ? I18N.t('估算 token') : I18N.t('KB 字节')) + I18N.t('口径，达阈值自动触发历史压缩归并）');
+        // 阶段一百九十六：TRAE CN 同款悬停明细——title 带已用/上限具体数值（kb 口径经 formatSize 友好缩写，
+        // tokens 口径直接数字；数值均来自服务端随帧下发，前端不硬编码阈值）
+        var usedTxt = mode === 'tokens' ? String(used) : formatSize(used);
+        var maxTxt = mode === 'tokens' ? String(max) : formatSize(max);
+        wrap.setAttribute('data-tip-text', I18N.t('上下文占用：已用 ') + usedTxt + I18N.t(' / 上限 ') + maxTxt + I18N.t('（') + (mode === 'tokens' ? I18N.t('估算 token') : I18N.t('KB 字节')) + I18N.t('口径，达阈值自动触发历史压缩归并）'));
         st.costEl._ctxRingFg.classList.toggle('ctx-warn', pct >= 80 && pct < 95);
         st.costEl._ctxRingFg.classList.toggle('ctx-danger', pct >= 95);
         st.costEl.classList.remove('hidden');

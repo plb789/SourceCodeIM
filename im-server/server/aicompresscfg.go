@@ -9,8 +9,9 @@ package server
 //  1. 后台管理设置（DB 落库 admin_settings 归口，保存即生效 + 重启不丢）——后台保存后为唯一真源
 //  2. config.yaml ai 段启动加载值（compress_threshold_tokens / compress_threshold_kb）作初始默认
 //
-// 判据消费归口 agentCompressTaskHistory（agentrun.go，每轮模型调用前）；AI 问答压缩不走此配置
-// （仍由 aiCompressThreshold token 判据归口）。切换只改配置，下一轮模型调用即按新口径压缩。
+// 判据消费归口：agentCompressTaskHistory（agentrun.go，任务每轮模型调用前）与 aiCompressHistory
+// （ai.go，AI 问答每次提问前）——阶段一百九十六起问答与任务统一跟随后台口径（原问答固定走
+// aiCompressThreshold token 判据，后台切 KB 后问答口径与设置不一致）。切换只改配置，下次调用即按新口径压缩。
 
 import (
 	"errors"

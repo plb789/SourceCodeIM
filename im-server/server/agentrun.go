@@ -4544,8 +4544,8 @@ func agentCompressBoundary(msgs []aiChatMessage, keepTurns int) int {
 // agentCompressKeepTurns 轮保留原文。摘要失败时若未超 3 倍阈值则本轮跳过（下轮重试），
 // 超 3 倍则紧急截断（弃旧轮+省略声明）防"上下文超长"直接压死任务
 // 阶段一百三十九：触发口径后台可选（admin 后台保存即热生效）——tokens 估算 / kb 字节（TRAE CN
-// 状态栏同款）双口径，归口 aicompresscfg.go（aiCompressCfgGet）；仅 Agent 任务生效，
-// AI 问答压缩仍走 aiCompressThreshold token 判据（aiCompressHistory）
+// 状态栏同款）双口径，归口 aicompresscfg.go（aiCompressCfgGet）；阶段一百九十六起 AI 问答压缩
+// （aiCompressHistory）同步跟随后台口径，问答/任务口径统一
 func (s *Server) agentCompressTaskHistory(t *AgentTask, msgs []aiChatMessage) []aiChatMessage {
 	// 原实现：token 判据（阶段八十四，AI 问答与 Agent 任务共用 aiCompressThreshold）
 	// if aiCompressThreshold <= 0 || t.Agent == nil || t.Agent.Provider == nil || len(msgs) < 4 {

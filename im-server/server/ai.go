@@ -1240,8 +1240,9 @@ func (s *Server) aiBuildContext(ctx context.Context, username string, agent *AIR
 	}
 	// 阶段八十四：压缩启用时额外回溯 aiCompressScanExtra 条更早历史（原窗口外滑走即丢 → 可进摘要长期保留）；
 	// 未触发压缩时仍按原 aiContextWindow 窗口取尾，行为与 token 上界完全不变
+	// 阶段一百九十六：启用判据跟随后台压缩口径（与 aiCompressHistory 同归口，双口径任一有效即启用）
 	limit := aiContextWindow
-	if aiCompressThreshold > 0 {
+	if cfgE := aiCompressCfgGet(); (cfgE.Mode == "tokens" && cfgE.Tokens > 0) || (cfgE.Mode == "kb" && cfgE.KB > 0) {
 		limit += aiCompressScanExtra
 	}
 	query.Order("id DESC").Limit(limit).Find(&records)
@@ -1310,15 +1311,36 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 		}
 		return records
 	}
-	if aiCompressThreshold <= 0 || agent == nil || agent.Provider == nil {
+	if agent == nil || agent.Provider == nil {
 		return rawTail(), ""
 	}
+	// 阶段一百九十六：触发口径跟随后台压缩设置（与 Agent 任务 agentCompressTaskHistory 同归口
+	// aiCompressCfgGet——tokens 估算 / kb 字节双口径，后台保存即热生效）。原实现固定走
+	// aiCompressThreshold token 判据，后台切 KB 口径后问答仍按 token 判据压缩、水位条口径与
+	// 后台设置不一致（用户反馈"设置 KB 却显示 token/上限 12000"——12000 为 config.yaml
+	// compress_threshold_tokens 初始默认）；maxV<=0（config 显式禁用回落负值）语义不变
+	cfgC := aiCompressCfgGet()
 	total := 0
-	for i := range records {
-		total += aiEstimateTokens(records[i].Content)
-	}
-	if total < aiCompressThreshold {
-		return rawTail(), "" // 未达阈值：原窗口行为不变
+	if cfgC.Mode == "tokens" {
+		for i := range records {
+			total += aiEstimateTokens(records[i].Content)
+		}
+		if cfgC.Tokens <= 0 {
+			return rawTail(), "" // config 启动禁用（threshold_tokens<=0）语义保持
+		}
+		if total < cfgC.Tokens {
+			return rawTail(), "" // 未达阈值：原窗口行为不变
+		}
+	} else {
+		for i := range records {
+			total += len(records[i].Content) // UTF-8 字节数（与任务判据 aiMsgsBytes 同口径）
+		}
+		if cfgC.KB <= 0 {
+			return rawTail(), ""
+		}
+		if total < cfgC.KB*1024 {
+			return rawTail(), ""
+		}
 	}
 	keep := aiCompressKeep
 	if keep >= len(records) {
@@ -1979,12 +2001,22 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			BillingMode:      billingMode,
 			Timestamp:        time.Now().Unix(),
 		}
-		// 阶段一百九十四：上下文水位随 END 帧下发（未启用压缩 aiCompressThreshold<=0 时缺省，前端水位条不展示）
-		if aiCompressThreshold > 0 {
-			ctxMax := aiCompressThreshold
-			endMsg.ContextUsed = &ctxUsed
-			endMsg.ContextMax = &ctxMax
-			endMsg.ContextMode = "tokens"
+		// 阶段一百九十四：上下文水位随 END 帧下发（压缩禁用时缺省，前端水位条不展示）。
+		// 阶段一百九十六：口径跟随后台压缩设置（与 aiCompressHistory 判据/任务卡占用环同归口）——
+		// tokens 口径下发估算 token 数，kb 口径下发 UTF-8 字节数（前端 formatSize 缩写显示）
+		if cfgW := aiCompressCfgGet(); (cfgW.Mode == "tokens" && cfgW.Tokens > 0) || (cfgW.Mode == "kb" && cfgW.KB > 0) {
+			if cfgW.Mode == "tokens" {
+				ctxMax := cfgW.Tokens
+				endMsg.ContextUsed = &ctxUsed
+				endMsg.ContextMax = &ctxMax
+				endMsg.ContextMode = "tokens"
+			} else {
+				ctxBytes := aiMsgsBytes(chatMsgs)
+				ctxMax := cfgW.KB * 1024
+				endMsg.ContextUsed = &ctxBytes
+				endMsg.ContextMax = &ctxMax
+				endMsg.ContextMode = "kb"
+			}
 		}
 		data, _ := json.Marshal(endMsg)
 		s.sendToUser(c.username, data)
