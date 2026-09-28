@@ -1122,9 +1122,9 @@ func agentToolExec(s *Server, t *AgentTask, callID, tool string, params map[stri
 	case "read_file":
 		return agentToolReadFile(t.Username, params)
 	case "write_file":
-		return agentToolWriteFile(t, params)
+		return agentLintWrap(t, agentParamString(params["path"]), agentToolWriteFile(t, params)) // 阶段一百八十九：写入后 Lint 回喂
 	case "edit_file":
-		return agentToolEditFile(t, params) // 阶段七十四：精确替换编辑
+		return agentLintWrap(t, agentParamString(params["path"]), agentToolEditFile(t, params)) // 阶段七十四：精确替换编辑 + 阶段一百八十九 Lint 回喂
 	case "delete_file":
 		return agentToolDeleteFile(t, params) // 阶段七十四：删除文件/目录
 	case "list_dir":
@@ -3349,6 +3349,10 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
 		toolList += "、内置浏览器工具（browser_navigate/browser_snapshot/browser_click/browser_input/browser_screenshot/browser_eval/browser_tabs/browser_close，在用户电脑内置浏览器打开与操作网页；登录态/JS 渲染页面优先用本族工具，纯接口调用仍用 http_request）"
 	}
+	// 阶段八十九：服务端 MCP 工具纪律说明（schema 已动态注入，这里给命名空间说明防误用）
+	if len(mcpOpenAIToolDefinitions()) > 0 {
+		toolList += "、MCP 服务器工具（mcp_ 前缀，来自服务端接入的 MCP 服务器，参数按各工具 schema 说明传入；默认需用户审批后执行）"
+	}
 	// 阶段九十：本机 MCP 工具提示（schema 已按用户上报清单动态注入，这里给纪律性说明防误用）
 	if pcTools := s.agentPcToolsFor(username); len(pcTools) > 0 {
 		toolList += "、本机 MCP 工具（mcp_pc_ 前缀，经用户电脑本地执行，使用前确认语义与参数来自用户数据）"
@@ -3364,6 +3368,7 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 		"5. 浏览目录结构用 list_dir；定位内容先 grep 搜索再 read_file 按需分段（offset/limit）读取，避免整读大文件。\n" +
 		"6. 修改既有文件优先 edit_file 精确替换，仅新建文件或整体重写时才用 write_file。\n" +
 		"6a. 调用 write_file/edit_file/delete_file 时必须在 explanation 字段用一句中文说明本次修改意图（面向用户的变更说明，将展示在变更浮层与审查列表中，帮助用户决定保留或撤销）。\n" +
+		"6b. 写入 .go/.js/.py/.json 文件后会自动做静态检查（Lint）：检查未通过时结果以「错误：【Lint】」开头并附报错位置，此时文件内容已写入成功，请按报错位置用 edit_file 修复即可，不要整体重写。\n" +
 		"7. 需要实时/外部信息（新闻、行情、文档、接口数据）时优先 web_search 检索，再用 http_request 抓取具体接口或页面；向用户转述时注明信息来源链接。\n" +
 		"8. C/C++ 编译能力：可直接调用 gcc/g++/make 等编译命令，客户端首次使用时会自动准备本地编译环境（系统已有 MSVC/编译器时优先使用，无需任何安装操作；若系统为 MSVC，错误提示会引导改用 cl 语法）。\n" +
 		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。\n" +
