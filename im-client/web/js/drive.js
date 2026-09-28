@@ -1614,7 +1614,8 @@
         var kind = kindOf(sh);
         var ok = sh.status === 'valid';
         var metaBits = [(sh.is_dir ? T('文件夹') : fmtSize(sh.size)), dsExpireText(sh.expire_at)];
-        if (sh.has_extract) metaBits.push(T('提取码'));
+        // 提取码明文展示（服务端仅本人列表回传 extract_code；旧缓存/未升级时回退字样提示）
+        if (sh.has_extract) metaBits.push(sh.extract_code ? T('提取码 {v}', { v: sh.extract_code }) : T('提取码'));
         // 分享统计（服务端归口计数：浏览/下载/保存，词条与弹窗版共用）
         metaBits.push(T('{n} 次浏览', { n: sh.view_count || 0 }) + ' · ' + T('{n} 次下载', { n: sh.download_count || 0 }) + ' · ' + T('{n} 次保存', { n: sh.save_count || 0 }));
         var status = ok ? T('分享中') : (TR(sh.valid_msg) || T('已失效'));
@@ -1632,6 +1633,8 @@
             '  <div class="drive-cell-time">' + fmtTime(sh.expire_at) + '</div>' +
             '  <div class="drive-cell-actions">' +
             '    <span class="dsm-status ' + (ok ? 'ok' : 'bad') + '">' + esc(status) + '</span>' +
+            // 复制链接（阶段一百九十八：一键带出链接+提取码，免删除重分享；失效分享不给复制避免外发死链）
+            (ok ? '    <button class="drive-act" data-act="copyslink" title="' + T('复制链接') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg></button>' : '') +
             (ok ? '    <button class="drive-act drive-act-danger" data-act="unshare" title="' + T('取消分享') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' : '') +
             delBtn +
             '  </div>' +
@@ -1655,7 +1658,13 @@
             row.querySelectorAll('.drive-act').forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
                     e.stopPropagation();
-                    if (btn.getAttribute('data-act') === 'unshare') cancelShare(it);
+                    if (btn.getAttribute('data-act') === 'copyslink') {
+                        // 一键复制：完整链接 + 提取码（有码时带码，好友无需再问）
+                        var url = location.origin + it.share_link;
+                        var text = it.extract_code ? url + '\n' + T('提取码 {v}', { v: it.extract_code }) : url;
+                        dsCopyText(text, it.extract_code ? T('链接与提取码已复制') : T('链接已复制'));
+                    }
+                    else if (btn.getAttribute('data-act') === 'unshare') cancelShare(it);
                     else if (btn.getAttribute('data-act') === 'delshare') deleteShareRecord(it);
                 });
             });

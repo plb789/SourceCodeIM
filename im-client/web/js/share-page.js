@@ -40,6 +40,8 @@
         loginUser = $('sp-login-username'), loginPass = $('sp-login-password'),
         loginErr = $('sp-login-err'), loginOkBtn = $('sp-login-ok');
     var toastEl = $('sp-toast');
+    // 客户端下载浮层（顶栏入口 + Windows/Android 双端自绘选择卡）
+    var dlBtn = $('sp-client-btn'), dlMask = $('sp-dl-mask'), dlClose = $('sp-dl-close');
 
     // ===== 状态 =====
     var shareInfo = null;     // info 接口返回的 share 对象（提取通过后填充）
@@ -743,6 +745,24 @@
     loginPass.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); submitLogin(); }
     });
+
+    // ===== 客户端下载浮层（自绘，禁系统弹窗；点击遮罩/关闭按钮收起，下载卡为原生 a[download] 直下） =====
+    dlBtn.addEventListener('click', function () { dlMask.classList.remove('hidden'); });
+    dlClose.addEventListener('click', function () { dlMask.classList.add('hidden'); });
+    dlMask.addEventListener('click', function (e) { if (e.target === dlMask) dlMask.classList.add('hidden'); });
+
+    // 下载链接后台可维护（shareclient.go 归口）：加载即拉取覆盖 HTML 默认 href；
+    // 失败静默保持默认静态托管兜底；赋值前再校验协议（http(s)/相对路径，防 javascript: 注入）
+    (function () {
+        var safe = function (u) { return typeof u === 'string' && u.length <= 500 && (/^https?:\/\//i.test(u) || u.charAt(0) === '/') ? u : ''; };
+        fetch('/api/share/client-dl').then(function (r) { return r.json(); }).then(function (j) {
+            if (!j || !j.ok || !j.data) return;
+            var pc = safe(j.data.pc_url), apk = safe(j.data.apk_url);
+            var cards = dlMask.querySelectorAll('.sp-dl-card');
+            if (pc && cards[0]) cards[0].href = pc;
+            if (apk && cards[1]) cards[1].href = apk;
+        }).catch(function () { /* 静默兜底 */ });
+    })();
     loginUser.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); loginPass.focus(); }
     });

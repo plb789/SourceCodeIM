@@ -736,6 +736,15 @@
                         <label class="agentset-label" for="edge-auth-rate" title="/auth 全局限流每秒放行请求数（请求源为 DCDN 边缘节点，无法按 IP 限流）。0=默认 500；范围 1~100000">全局限流（QPS）</label>
                         <input type="number" id="edge-auth-rate" class="admin-input" style="width:140px" min="0" max="100000" step="50" placeholder="0=默认 500">
                     </div>
+                    <h3 class="agentset-group-title">分享页客户端下载</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="share-dl-pc" title="分享页「客户端下载」浮层的 Windows 安装包地址；留空=默认静态托管路径 /static/download/im-client.exe；可填完整 http(s) 外链（如 CDN/对象存储直链）">Windows 链接</label>
+                        <input type="text" id="share-dl-pc" class="admin-input" style="flex:1" placeholder="留空=默认 /static/download/im-client.exe">
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="share-dl-apk" title="分享页「客户端下载」浮层的 Android 安装包地址；留空=默认静态托管路径 /static/download/im-client.apk；可填完整 http(s) 外链（如 CDN/对象存储直链）">Android 链接</label>
+                        <input type="text" id="share-dl-apk" class="admin-input" style="flex:1" placeholder="留空=默认 /static/download/im-client.apk">
+                    </div>
                 </div>
                 <div class="agentset-actions">
                     <button id="drive-save" class="admin-btn primary">保存设置</button>
@@ -1306,7 +1315,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.46"></script>
+    <script src="js/admin.js?v=1.47"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

@@ -11,6 +11,11 @@ import (
 
 // TestEdgeAuthHandler /auth 端点 HTTP 层全链路：有效票 200 / 无效票 403 / 吊销后 403 / 限流 429
 func TestEdgeAuthHandler(t *testing.T) {
+	// 热更开关显式启用（handleEdgeAuth 开头按 edgeSetEnabled 判 404，测试进程默认未启用）
+	edgeSetMu.Lock()
+	edgeSetEnabled = true
+	edgeSetMu.Unlock()
+	defer func() { edgeSetMu.Lock(); edgeSetEnabled = false; edgeSetMu.Unlock() }()
 	edgeAuthRateInit(1000) // 大额度：限流用例单独收口，避免干扰
 	store.DriveTicketInit(true, 60)
 	defer store.DriveTicketInit(false, 0)
@@ -49,6 +54,11 @@ func TestEdgeAuthHandler(t *testing.T) {
 
 // TestEdgeAuthRateLimit 全局令牌桶限流：超额请求 429
 func TestEdgeAuthRateLimit(t *testing.T) {
+	// 热更开关显式启用（同 TestEdgeAuthHandler：handler 开头按 edgeSetEnabled 判 404）
+	edgeSetMu.Lock()
+	edgeSetEnabled = true
+	edgeSetMu.Unlock()
+	defer func() { edgeSetMu.Lock(); edgeSetEnabled = false; edgeSetMu.Unlock() }()
 	edgeAuthRateInit(3) // 3 QPS（桶容量 6）：7 连发必触限流
 	store.DriveTicketInit(true, 60)
 	defer store.DriveTicketInit(false, 0)

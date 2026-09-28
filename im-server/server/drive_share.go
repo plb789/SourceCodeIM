@@ -284,6 +284,9 @@ type driveShareClient struct {
 	Status    string `json:"status"`      // valid/canceled/expired/deleted（列表与管理页归口展示）
 	ValidMsg  string `json:"valid_msg"`   // 失效原因（status != valid 时携带）
 	ShareLink string `json:"share_link"`  // 站内链接路径 /s/<code>（列表/详情共用）
+	// ExtractCode 提取码明文（阶段一百九十八：仅本人分享列表回填，供"复制链接"一键带出，免删除重分享；
+	// 公开 info 接口与管理列表均不回填——访客侧永不可见，加密分享不因列表查询泄码）
+	ExtractCode string `json:"extract_code,omitempty"`
 	// 分享统计（服务端归口计数，info/list 响应共用；管理列表与分享页展示）
 	ViewCount     int64 `json:"view_count"`
 	DownloadCount int64 `json:"download_count"`
@@ -500,6 +503,7 @@ func (s *Server) handleDriveShareList(w http.ResponseWriter, r *http.Request) {
 	out := make([]driveShareClient, 0, len(shares))
 	for i := range shares {
 		out = append(out, driveShareToClient(s, &shares[i], true))
+		out[len(out)-1].ExtractCode = shares[i].ExtractCode // 仅本人列表回填提取码（公开 info 永不回填）
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"items": out})

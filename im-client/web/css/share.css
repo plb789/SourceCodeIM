@@ -878,3 +878,111 @@ body {
 .sp-card:not(.loaded) .sp-meta {
     display: none;
 }
+
+/* ===== v1.9 顶栏客户端下载按钮 + 自绘下载浮层（禁系统弹窗） =====
+   主题归口不变：全部颜色引用 style.css 既有变量，零硬编码 */
+.sp-client-btn {
+    border: none;
+    background: var(--hover);
+    color: var(--text);
+    font-size: 13px;
+    padding: 5px 14px 5px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sp-client-btn:hover {
+    background: var(--active);
+    color: var(--primary);
+}
+/* 浮层骨架复用 .sp-login-mask/.sp-login-close/.sp-login-title 既有样式（同层级 z-index/圆角/主题色） */
+.sp-dl-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.sp-dl-mask.hidden { display: none; }
+.sp-dl-box {
+    position: relative;
+    width: 420px;
+    max-width: calc(100vw - 32px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 28px 26px 24px;
+    box-sizing: border-box;
+}
+.sp-dl-tip {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: -8px 0 20px;
+}
+.sp-dl-cards {
+    display: flex;
+    gap: 12px;
+}
+.sp-dl-card {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 18px 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-decoration: none;
+    color: var(--text);
+    background: var(--hover);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.sp-dl-card:hover {
+    background: var(--active);
+    border-color: var(--primary);
+}
+.sp-dl-icon {
+    color: var(--primary);
+    line-height: 0;
+}
+.sp-dl-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+.sp-dl-sub {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.sp-dl-go {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #ffffff;
+    background: var(--primary);
+    padding: 6px 18px;
+    border-radius: 16px;
+    transition: opacity 0.15s ease;
+}
+.sp-dl-card:hover .sp-dl-go {
+    opacity: 0.88;
+}
+@media (max-width: 520px) {
+    .sp-dl-cards {
+        flex-direction: column;
+    }
+    .sp-user {
+        gap: 8px;
+    }
+}

@@ -22,7 +22,7 @@
          页面专属样式归口 css/share.css。注意：本页经 /s/<code> 深层路径服务，
          静态资源必须根绝对路径（相对路径在深层路径下 404） -->
     <link rel="stylesheet" href="/css/style.css?v=2.67">
-    <link rel="stylesheet" href="/css/share.css?v=1.8">
+    <link rel="stylesheet" href="/css/share.css?v=1.9">
     <!-- WebSocket 登录引擎（自含协议，独立于主应用 chat.js 可单独加载；
          保存到我的网盘需服务端 WS 在线水位校验，登录归口复用同一套 LOGIN 协议） -->
     <script src="/js/socket.js?v=1.31"></script>
@@ -37,6 +37,11 @@
             <span class="sp-logo-text">网盘</span>
         </div>
         <div class="sp-user" id="sp-user">
+            <!-- 客户端下载入口（自绘浮层选择 Windows/Android 双端，share-page.js 接线） -->
+            <button class="sp-client-btn" id="sp-client-btn" title="下载电脑与手机客户端">
+                <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                客户端下载
+            </button>
             <!-- 未登录：登录按钮 / 已登录：用户名 + 退出（share-page.js 按态渲染） -->
             <button class="sp-login-entry hidden" id="sp-login-entry">登录</button>
             <span class="sp-user-name hidden" id="sp-user-name"></span>
@@ -160,10 +165,39 @@
         </div>
     </div>
 
+    <!-- ===== 自绘客户端下载浮层（禁系统弹窗；Windows/Android 双端入口，静态托管 /static/download/） ===== -->
+    <div class="sp-dl-mask hidden" id="sp-dl-mask">
+        <div class="sp-dl-box">
+            <button class="sp-login-close" id="sp-dl-close" title="关闭">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="sp-login-title">下载客户端</div>
+            <div class="sp-dl-tip">电脑和手机也能用：登录同一账号，聊天与网盘文件多端同步</div>
+            <div class="sp-dl-cards">
+                <a class="sp-dl-card" href="/static/download/im-client.exe" download>
+                    <span class="sp-dl-icon">
+                        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+                    </span>
+                    <span class="sp-dl-name">Windows 版</span>
+                    <span class="sp-dl-sub">适用于 Windows 10/11（.exe）</span>
+                    <span class="sp-dl-go">立即下载</span>
+                </a>
+                <a class="sp-dl-card" href="/static/download/im-client.apk" download>
+                    <span class="sp-dl-icon">
+                        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h2v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h1c.55 0 1-.45 1-1V8H6v10zM3.5 8C2.67 8 2 8.67 2 9.5v7c0 .83.67 1.5 1.5 1.5S5 17.33 5 16.5v-7C5 8.67 4.33 8 3.5 8zm17 0c-.83 0-1.5.67-1.5 1.5v7c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-7c0-.83-.67-1.5-1.5-1.5zm-4.97-5.84l1.3-1.3c.2-.2.2-.51 0-.71-.2-.2-.51-.2-.71 0l-1.48 1.48C13.85 1.23 12.95 1 12 1c-.96 0-1.86.23-2.66.63L7.85.15c-.2-.2-.51-.2-.71 0-.2.2-.2.51 0 .71l1.31 1.31C6.97 3.26 6 5.01 6 7h12c0-1.99-.97-3.75-2.47-4.84zM10 5H9V4h1v1zm5 0h-1V4h1v1z"/></svg>
+                    </span>
+                    <span class="sp-dl-name">Android 版</span>
+                    <span class="sp-dl-sub">适用于 Android 8.0+（.apk）</span>
+                    <span class="sp-dl-go">立即下载</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
     <!-- 自绘 toast（2.5s 自灭，复用主程序交互规范） -->
     <div class="sp-toast hidden" id="sp-toast"></div>
 
     <script src="/js/office-preview.js?v=1.1"></script>
-    <script src="/js/share-page.js?v=2.0"></script>
+    <script src="/js/share-page.js?v=2.2"></script>
 </body>
 </html>

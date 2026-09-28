@@ -253,7 +253,7 @@
             else if (item.dataset.view === 'billing') { loadBillingSettings(); }
             // 阶段一百三十九：进入历史压缩设置视图拉取当前生效压缩配置
             else if (item.dataset.view === 'compress') { loadCompressSettings(); }
-            else if (item.dataset.view === 'drive') { loadDriveBlockExts(); loadDriveEdgeAuth(); }
+            else if (item.dataset.view === 'drive') { loadDriveBlockExts(); loadDriveEdgeAuth(); loadShareClientDl(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1678,6 +1678,19 @@
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     }
 
+    // ===== 网盘设置：分享页客户端下载链接（阶段一百九十八扩展，分享页浮层双端安装包地址） =====
+    // 空值回填为空串（placeholder 提示留空=默认）；source 标注不写 drive-source-tip（归口 blockexts 防争写）
+    function loadShareClientDl() {
+        api('GET', '/admin/api/share/clientdl').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            $('share-dl-pc').value = result.data.pc_url === '/static/download/im-client.exe' ? '' : result.data.pc_url;
+            $('share-dl-apk').value = result.data.apk_url === '/static/download/im-client.apk' ? '' : result.data.apk_url;
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
     // 保存：空串=恢复内置默认黑名单；服务端逐项校验归一后落库 + 内存直更（挂载盘与网页上传同时生效）
     $('drive-save').addEventListener('click', function () {
         var raw = $('drive-blockexts').value.trim();
@@ -1687,24 +1700,29 @@
         var rate = parseInt($('edge-auth-rate').value, 10) || 0;
         if (ttl !== 0 && (ttl < 60 || ttl > 86400)) { showToast('票据有效期须在 60~86400 秒（0=默认 1800）'); return; }
         if (rate !== 0 && (rate < 1 || rate > 100000)) { showToast('限流 QPS 须在 1~100000（0=默认 500）'); return; }
-        var blockDone = false, edgeDone = false, blockErr = null, edgeErr = null, finish = function () {
-            if (!blockDone || !edgeDone) return;
-            if (blockErr) { showToast(blockErr); }
-            else if (edgeErr) { showToast(edgeErr); }
+        // 分享页客户端下载链接校验（空=默认；服务端同口径：/ 开头相对路径或 http(s) 完整外链）
+        var pcUrl = $('share-dl-pc').value.trim(), apkUrl = $('share-dl-apk').value.trim();
+        var dlBad = function (v) { return v !== '' && !(/^https?:\/\//i.test(v) || v.charAt(0) === '/') || v.length > 500; };
+        if (dlBad(pcUrl)) { showToast('Windows 链接无效：须为 / 开头相对路径或 http(s):// 完整外链，留空=恢复默认'); return; }
+        if (dlBad(apkUrl)) { showToast('Android 链接无效：须为 / 开头相对路径或 http(s):// 完整外链，留空=恢复默认'); return; }
+        var pending = 3, saveErr = null, finish = function (err) {
+            if (err) saveErr = err;
+            if (--pending > 0) return;
+            if (saveErr) { showToast(saveErr); }
             else { showToast('网盘设置已保存并热生效'); }
             loadDriveBlockExts(); // 回读刷新归一值与来源标注
             loadDriveEdgeAuth();
+            loadShareClientDl();
         };
         api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked, mode: mode, cache: $('drive-cache').checked }).then(function (result) {
-            if (!result.ok) blockErr = result.msg || '黑名单保存失败';
-        }).catch(function (e) { blockErr = e.message || '网络异常'; }).then(function () {
-            blockDone = true; finish();
-        });
+            finish(result.ok ? null : (result.msg || '黑名单保存失败'));
+        }).catch(function (e) { finish(e.message || '网络异常'); });
         api('PUT', '/admin/api/drive/edgeauth', { enabled: $('edge-auth-enabled').checked, ticket_ttl: ttl, rate_limit: rate }).then(function (result) {
-            if (!result.ok) edgeErr = result.msg || '远程鉴权保存失败';
-        }).catch(function (e) { edgeErr = e.message || '网络异常'; }).then(function () {
-            edgeDone = true; finish();
-        });
+            finish(result.ok ? null : (result.msg || '远程鉴权保存失败'));
+        }).catch(function (e) { finish(e.message || '网络异常'); });
+        api('PUT', '/admin/api/share/clientdl', { pc_url: pcUrl, apk_url: apkUrl }).then(function (result) {
+            finish(result.ok ? null : (result.msg || '下载链接保存失败'));
+        }).catch(function (e) { finish(e.message || '网络异常'); });
     });
 
     function agentSetAddCmd() {

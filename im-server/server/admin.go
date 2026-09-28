@@ -156,6 +156,10 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百九十七扩展：DCDN 远程鉴权热更设置（enabled/ticket_ttl/rate_limit，归口 edgeauth.go）
 	http.HandleFunc("GET /admin/api/drive/edgeauth", s.adminGuard(s.handleAdminEdgeAuthGet))
 	http.HandleFunc("PUT /admin/api/drive/edgeauth", s.adminGuard(s.handleAdminEdgeAuthSave))
+	// 阶段一百九十八扩展：分享页客户端下载链接维护（公开读取供分享页动态拉取，归口 shareclient.go）
+	http.HandleFunc("GET /api/share/client-dl", handleShareClientDlGet)
+	http.HandleFunc("GET /admin/api/share/clientdl", s.adminGuard(s.handleAdminShareClientDlGet))
+	http.HandleFunc("PUT /admin/api/share/clientdl", s.adminGuard(s.handleAdminShareClientDlSave))
 	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）
 	http.HandleFunc("GET /admin/api/drive/stats", s.adminGuard(s.handleAdminDriveStats))
 	http.HandleFunc("GET /admin/api/drive/files", s.adminGuard(s.handleAdminDriveFiles))
