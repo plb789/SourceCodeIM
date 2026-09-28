@@ -2200,6 +2200,15 @@ html, body {
     justify-content: center;
 }
 
+/* 阶段一百九十六：通用确认弹窗置顶于业务浮层——showConfirm/showChoice 的 #modal-mask 与
+   记忆/任务历史/网盘详情等复用 .modal-mask 的面板同层级（2000），但弹窗 DOM 靠前（897 行），
+   同层级时 DOM 靠后者在上：面板连同其全屏遮罩把确认框整个压住并拦截点击，必须先关面板
+   才能确认（清空记忆"清空全部"首现）。提到业务遮罩现役最大 3300 之上、排队遮罩 3400 之下，
+   弹窗压暗面板仍可透出背景；toast(3000)/各业务面板互层不受影响 */
+#modal-mask {
+    z-index: 3350;
+}
+
 .modal-box {
     width: 300px;
     background: var(--panel-bg);
