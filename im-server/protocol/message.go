@@ -218,6 +218,13 @@ type Message struct {
 	// 阶段一百三十八：计费模式随帧标注（"usage"=按量 1000 tokens=1 积分 | "percall"=按次固定积分，TRAE CN 同款），
 	// 前端按模式切换展示口径（tokens 明细 / 扣费积分）；config.yaml ai_billing.mode 热更后新帧自动携带新模式
 	BillingMode string `json:"billing_mode,omitempty"`
+	// 阶段一百九十四：普通 AI 问答上下文水位（AI_STREAM_END 帧携带，输入区上方常驻水位条渲染）。
+	// used=本次请求注入模型的估算 token（aiMsgsEstimateTokens 归口）；max=历史压缩触发阈值（达 100% 即将压缩，
+	// 口径与 aiCompressHistory 触发判据一致）；未启用压缩（阈值<=0）三字段全缺省，前端水位条不展示。
+	// 指针：used 恰为 0 时也下发区分"未启用"，nil=旧服务端/未启用
+	ContextUsed *int   `json:"context_used,omitempty"`
+	ContextMax  *int   `json:"context_max,omitempty"`
+	ContextMode string `json:"context_mode,omitempty"`
 	// 已读状态（随私聊回显帧下发：AI 提问回显为 true——AI 会话无回执语义，服务端落库即视为已读；
 	// 普通私聊回显为 false 保持既有回执链路）
 	IsRead bool `json:"is_read,omitempty"`
@@ -226,4 +233,7 @@ type Message struct {
 	FromName string `json:"from_name,omitempty"`
 	// 阶段八十五：历史响应（HISTORY_RESP）携带页内发送者昵称映射（username→nickname），前端合并进昵称缓存后再渲染
 	Names map[string]string `json:"names,omitempty"`
+	// 阶段一百九十：模型覆盖上行（AI 问答/Agent 任务发起可选携带已启用模型服务名，服务端浅拷贝
+	// 智能体临时换绑，不改库不影响他人；空=跟随智能体绑定；仅 AI_CHAT/AGENT_RUN 上行读取，其余类型忽略）
+	ModelName string `json:"model_name,omitempty"`
 }

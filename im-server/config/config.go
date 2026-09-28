@@ -388,6 +388,15 @@ type AIConfig struct {
 	// 任务循环上下文累计达到该值触发 LLM 摘要压缩）。仅作用于 Agent 任务，AI 问答仍用 compress_threshold_tokens。
 	// 0=默认 200，负数=禁用 Agent 任务压缩
 	CompressThresholdKB int `yaml:"compress_threshold_kb"`
+	// 阶段一百九十：轻量模型服务名（任务内分工·多模型协同）——须为已启用模型服务名。
+	// 配置后子 Agent（spawn_agent 调研）与历史压缩摘要等辅助调用自动走该轻量模型，
+	// 主对话/主任务仍用智能体绑定模型；空=不启用分工（辅助调用跟随绑定模型，维持现状）
+	LightProvider string `yaml:"light_provider"`
+	// 阶段一百九十五：AI 响应空闲超时（秒）——上游建连后断流（连接未断但长时间无数据，
+	// 实测 deepseek 偶发）时流式/非流式读取会一直阻塞到 ai_ask_timeout 5 分钟总超时才兜底，
+	// 任务卡死观感差。数据块间空闲超过该值即中断请求转超时类错误（多源兜底跳过同源重试直接换源），
+	// 断流恢复提速到阈值秒级。0=默认 90，负数=禁用看护（维持旧行为）
+	StreamIdleTimeout int `yaml:"stream_idle_timeout"`
 }
 
 // Default 返回默认配置，与《开发文档》5.2 核心配置参数保持一致

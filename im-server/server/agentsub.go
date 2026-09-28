@@ -136,7 +136,10 @@ func (s *Server) agentSubAgentRun(parent *AgentTask, goal string) string {
 	if n > agentSubMaxPerTask {
 		return "错误：本任务派生子 Agent 数已达上限（" + strconv.Itoa(agentSubMaxPerTask) + "）"
 	}
-	logger.Info("Agent 派生子 Agent（任务 %s，用户 %s，第 %d 个，目标 %q）", parent.ID, parent.Username, n, goal)
+	// 阶段一百九十：轻模型协同（任务内分工）——子 Agent 调研属辅助调用，轻量模型已配置时
+	// 走轻模型（主任务仍用绑定/覆盖模型）；未配置回退任务模型（维持现状）
+	chatAgent := aiLightAgent(parent.Agent)
+	logger.Info("Agent 派生子 Agent（任务 %s，用户 %s，第 %d 个，目标 %q，模型 %s）", parent.ID, parent.Username, n, goal, aiModelLabel(chatAgent))
 
 	// 挂父任务取消树下：父任务取消/超时，子 Agent 的上游调用即刻中止
 	ctx, cancel := context.WithTimeout(parent.runCtx, agentSubTimeout)
@@ -160,7 +163,7 @@ func (s *Server) agentSubAgentRun(parent *AgentTask, goal string) string {
 		if ctx.Err() != nil {
 			return "错误：子 Agent 超时（" + strconv.Itoa(int(agentSubTimeout/time.Second)) + " 秒）"
 		}
-		content, calls, err := agentSubChatFn(ctx, parent.Agent, msgs, tools)
+		content, calls, err := agentSubChatFn(ctx, chatAgent, msgs, tools)
 		if err != nil {
 			return "错误：子 Agent 模型调用失败：" + err.Error()
 		}
@@ -193,7 +196,7 @@ func (s *Server) agentSubAgentRun(parent *AgentTask, goal string) string {
 		return "错误：子 Agent 超时（" + strconv.Itoa(int(agentSubTimeout/time.Second)) + " 秒）"
 	}
 	msgs = append(msgs, aiChatMessage{Role: "user", Content: "已达步数上限，请立即停止探查，基于以上已获取的信息直接输出调研结论。"})
-	content, _, err := agentSubChatFn(ctx, parent.Agent, msgs, nil)
+	content, _, err := agentSubChatFn(ctx, chatAgent, msgs, nil)
 	if err != nil {
 		return "错误：子 Agent 未能在步数上限内完成（模型收口失败：" + err.Error() + "）"
 	}

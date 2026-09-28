@@ -430,10 +430,21 @@ function createTray() {
     });
 }
 
-// 桌面通知（供新消息提醒）
+// 桌面通知（供新消息提醒）；阶段一百九十四：通知点击 → 聚焦窗口 + 通知渲染层（渲染层
+// 按 agentNotifyTarget 直达任务归属会话，与 Web 端 Toast 点击行为一致）
 function showNotification(title, body) {
     if (Notification.isSupported()) {
-        new Notification({ title: title, body: body }).show();
+        var n = new Notification({ title: title, body: body });
+        n.on('click', function () {
+            var win = BrowserWindow.getAllWindows()[0];
+            if (win) {
+                if (win.isMinimized()) win.restore();
+                win.show();
+                win.focus();
+                win.webContents.send('desktop-notify-click');
+            }
+        });
+        n.show();
     }
 }
 

@@ -110,24 +110,34 @@
 
     // ===== 输入栏元素（微信风格工具栏） =====
     var emojiBtn = document.getElementById('emoji-btn');
-    var imageBtn = document.getElementById('image-btn');
-    var fileBtn = document.getElementById('file-btn');
     var screenshotBtn = document.getElementById('screenshot-btn');
     var clearBtn = document.getElementById('clear-btn');
     var agentModeBtn = document.getElementById('agent-mode-btn'); // 阶段五十九：Agent 任务模式开关（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
     var agentPlanBtn = document.getElementById('agent-plan-btn'); // 阶段一百六十四：计划模式开关（Agent 先提交计划，用户批准后执行；随任务上行 plan_mode）
     var agentSoloBtn = document.getElementById('agent-solo-btn'); // 阶段一百七十六：SOLO 全自动模式开关（任务内需审批操作自动放行；随任务上行 solo_mode）
-    var agentVideoBtn = document.getElementById('agent-video-btn'); // 阶段一百六十七：任务视频入口（仅任务模式显示，选视频抽关键帧入任务附件）
-    var agentVideoInput = document.getElementById('agent-video-input'); // 阶段一百六十七：视频文件选择控件（hidden，agentVideoBtn 触发）
+    // 阶段一百九十二：AI 会话入口合并为左下角「+」附件菜单（TRAE CN 同款）
+    var attachBtn = document.getElementById('attach-btn'); // 附件菜单按钮（input-footer 行首，仅 AI 智能体会话显示）
+    var attachPanel = document.getElementById('attach-panel'); // 附件菜单面板（上传附件/添加视频）
+    var attachVideoItem = document.getElementById('attach-video-item'); // 添加视频条目（仅任务模式显示）
+    var attachInput = document.getElementById('attach-input'); // 统一附件选择控件（无 accept 限制，选中后按类型分流）
+    var agentVideoInput = document.getElementById('agent-video-input'); // 阶段一百六十七：视频文件选择控件（hidden，附件菜单视频条目触发）
+    // 阶段一百九十六：普通好友聊天恢复独立图片/文件入口（阶段一百九十二曾误对普通聊天合并移除；
+    // 普通会话显示 image-btn/file-btn，AI 智能体会话隐藏本两按钮并显示「+」附件菜单，显隐归口 syncAgentUiForConversation）
+    var imageBtn = document.getElementById('image-btn');
+    var fileBtn = document.getElementById('file-btn');
+    var imageInput = document.getElementById('image-input');
+    var fileInput = document.getElementById('file-input');
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
     var agentMcpBtn = document.getElementById('agent-mcp-btn'); // 阶段九十：我的 MCP 服务器入口（仅 PC 端，本机 stdio 自定义）
     var agentApproveBtn = document.getElementById('agent-approve-btn'); // 阶段一百一十七：Agent 审批模式盾牌入口（未定义会在下方 addEventListener 处抛 TypeError 打断整个脚本初始化）
     var agentApprovePanel = document.getElementById('agent-approve-panel'); // 阶段一百一十七：审批模式面板（手动/自动/完全访问）
     var webSearchBtn = document.getElementById('web-search-btn'); // 阶段六十九：普通聊天联网搜索开关（AI 会话且服务端开启时显示）
+    var aiModelBtn = document.getElementById('ai-model-btn'); // 阶段一百九十：会话内模型选择器入口（AI 会话显示）
+    var aiModelBtnLabel = document.getElementById('ai-model-btn-label'); // 模型选择器标签（按会话选择刷新）
+    var aiModelPanel = document.getElementById('ai-model-panel'); // 模型选择面板（TRAE CN 同款自研下拉）
+    var aiModelItemsEl = document.getElementById('ai-model-items'); // 模型条目容器（chat.js 动态填充）
     var emojiPanel = document.getElementById('emoji-panel');
-    var imageInput = document.getElementById('image-input');
-    var fileInput = document.getElementById('file-input');
-    var docInput = document.getElementById('doc-input'); // 阶段四十五：AI 文档问答选择框
+    // 阶段一百九十二：docInput（AI 文档问答选择框）已随 AI 会话入口合并移除（文档问答统一走 #attach-input 分流）
     var convListEl = document.getElementById('conv-list');
     var friendsPanel = document.getElementById('friends-panel');
     // 阶段四十三：AI 助手面板与智能体列表（服务端配置归口下发）
@@ -168,6 +178,7 @@
     var modalExtra = document.getElementById('modal-extra');
     var toastEl = document.getElementById('toast');
     var toastTimer = null;
+    var toastClickFn = null; // 阶段一百九十四：Toast 可点击回调（showToast(text, onClick) 单例复用归口）
     var modalOkCallback = null; // 当前弹窗确定按钮回调
     var modalExtraCallback = null; // 第二动作按钮回调
     var modalCancelCallback = null; // 取消按钮回调（可选；远程协助弹窗取消=拒绝信令，其余弹窗不传行为不变）
@@ -272,12 +283,27 @@
         else if (e.key === 'Escape' && !profilePanel.classList.contains('hidden')) closeProfilePanel();
     });
 
-    // Toast 轻提示：2.5 秒后自动消失
+    // Toast 轻提示：2.5 秒后自动消失；阶段一百九十四：可选 onClick——传入时 Toast 可点击
+    // （点击即执行回调并立即消失，如任务提醒直达会话），无参行为与全站既有调用完全一致
     // 入口统一 I18N.tr：服务端 sendError 下发的提示文本（"中文原文即 key"归口）按语言包
     // 全等反查翻译；未命中（拼接句/动态内容/用户消息）原样返回，杜绝误替换
-    function showToast(text) {
+    function showToast(text, onClick) {
         toastEl.textContent = I18N.tr(text);   // 原实现：toastEl.textContent = text;
         toastEl.classList.remove('hidden');
+        // 阶段一百九十四：点击态归口——先清上一条的监听与类（Toast 单例复用，防回调串条）
+        toastEl.classList.remove('toast-clickable');
+        if (toastClickFn) { toastEl.removeEventListener('click', toastClickFn); toastClickFn = null; }
+        if (typeof onClick === 'function') {
+            toastClickFn = function () {
+                clearTimeout(toastTimer);
+                toastEl.classList.add('hidden');
+                toastEl.removeEventListener('click', toastClickFn);
+                toastClickFn = null;
+                onClick();
+            };
+            toastEl.classList.add('toast-clickable');
+            toastEl.addEventListener('click', toastClickFn);
+        }
         clearTimeout(toastTimer);
         toastTimer = setTimeout(function () {
             toastEl.classList.add('hidden');
@@ -2214,6 +2240,16 @@
     var multiSelectMode = false;
     var multiSelected = {};   // msgId -> true（选中集合，DOM 顺序在发送时按列表顺序重采）
     var inputBarEl = document.getElementById('input-bar');
+    // 阶段一百九十二：窄聊天区自适应（TRAE CN 同款）——输入区宽度经 ResizeObserver 感知（聊天列
+    // 宽随分割线拖拽变化，window resize 不够用），窄于 430px 时挂 .input-narrow：隐藏 Enter 提示
+    // 文案与模型按钮标签（只留图标），防文字挤压换行/按钮被挤出；发送键已纯图标化天然不受挤压
+    if (window.ResizeObserver && inputBarEl) {
+        var narrowRO = new ResizeObserver(function (entries) {
+            var w = entries[0].contentRect.width;
+            inputBarEl.classList.toggle('input-narrow', w < 430);
+        });
+        narrowRO.observe(inputBarEl);
+    }
     var msBarEl = document.getElementById('ms-bar');
     var msCountEl = document.getElementById('ms-count');
     var msMergeBtn = document.getElementById('ms-merge');
@@ -2716,6 +2752,92 @@
         removePendingShotBar();
     }
 
+    // ===== 阶段一百九十二：附件待发区（微信同款：+ 菜单选中图片/文件不直接发送，先进输入框上方
+    // 待发条——缩略图/文档卡片可逐个移除、可继续累积，输入附言后点发送/Enter 一并发出）。
+    // 骨架复用截图待发条（.pending-shot 系列）；任务模式不走此条（任务图片已有 agentTaskImages
+    // 附件条同语义，文档仍走文档问答直发），本条仅服务 AI 问答/私聊/群聊 =====
+    var pendingFiles = [];      // 待发送附件列表（File 对象）
+    var pendingFileBar = null;  // 待发条 DOM（输入区顶部，仅一条）
+    var pendingFileListEl = null; // 附件项容器
+
+    // 惰性创建待发条（首个附件入列时才插入输入区顶部；插入在截图条之后）
+    function ensurePendingFileBar() {
+        if (pendingFileBar) return;
+        pendingFileBar = document.createElement('div');
+        pendingFileBar.className = 'pending-shot pending-file';
+        pendingFileListEl = document.createElement('div');
+        pendingFileListEl.className = 'pending-shot-list';
+        pendingFileBar.appendChild(pendingFileListEl);
+        var bar = document.querySelector('.input-bar');
+        if (bar) {
+            var ref = bar.querySelector('.pending-shot:not(.pending-file)');
+            if (ref) bar.insertBefore(pendingFileBar, ref.nextSibling);
+            else bar.insertBefore(pendingFileBar, bar.firstChild);
+        }
+    }
+
+    // 单个附件入列：图片渲染缩略图，其余渲染文档卡片（图标+文件名+大小），右上角 × 单独移除
+    function pendingFileAdd(file) {
+        if (!file) return;
+        ensurePendingFileBar();
+        pendingFiles.push(file);
+        var cell = document.createElement('div');
+        cell.className = 'pending-shot-item pending-file-item';
+        var isImg = isImageName(file.name);
+        if (isImg) {
+            var thumb = document.createElement('img');
+            thumb.className = 'pending-file-thumb';
+            thumb.src = URL.createObjectURL(file);
+            thumb.onload = function () { URL.revokeObjectURL(thumb.src); }; // 已渲染即可释放
+            thumb.title = file.name;
+            cell.appendChild(thumb);
+        } else {
+            var card = document.createElement('div');
+            card.className = 'pending-file-card';
+            card.title = file.name;
+            var icon = document.createElement('span');
+            icon.className = 'pending-file-icon';
+            icon.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z"/></svg>';
+            var meta = document.createElement('span');
+            meta.className = 'pending-file-meta';
+            meta.textContent = file.name;
+            var size = document.createElement('i');
+            size.textContent = formatSize(file.size || 0);
+            meta.appendChild(size);
+            card.appendChild(icon);
+            card.appendChild(meta);
+            cell.appendChild(card);
+        }
+        var del = document.createElement('button');
+        del.className = 'pending-shot-del';
+        del.textContent = '×';
+        del.title = I18N.t('移除附件');
+        del.addEventListener('click', function () {
+            var idx = pendingFiles.indexOf(file);
+            if (idx >= 0) pendingFiles.splice(idx, 1);
+            cell.remove();
+            if (!pendingFiles.length) removePendingFileBar(); // 全部移除后收起待发条
+            messageInput.focus();
+        });
+        cell.appendChild(del);
+        pendingFileListEl.appendChild(cell);
+        messageInput.focus();
+    }
+
+    // 仅收起待发条 DOM（列表已空时调用）
+    function removePendingFileBar() {
+        if (pendingFileBar) {
+            pendingFileBar.remove();
+            pendingFileBar = null;
+            pendingFileListEl = null;
+        }
+    }
+
+    function clearPendingFiles() {
+        pendingFiles = [];
+        removePendingFileBar();
+    }
+
     // ===== 阶段三十九：待发送截图预览浮层（点击缩略图放大查看编辑后效果，确认后可一键发送此图） =====
     var shotPreviewMask = null; // 预览遮罩 DOM（惰性创建，全局仅一份）
 
@@ -3010,6 +3132,8 @@
     // ctxs：阶段一百七十 @ 引用上下文 [{path, dir}]（随 payload contexts 上行，发出后清引用条并缓存回显）
     function sendAgentRun(goal, sid, imageUrls, ctxs) {
         var payload = { goal: goal, agent_name: currentChatUser, session_id: sid, plan_mode: planModeOn, solo_mode: soloModeOn }; // 阶段一百七十六：随任务上行 solo_mode（全自动免审批）
+        // 阶段一百九十：任务级模型覆盖（会话所选模型；空=跟随智能体绑定，cron 路径恒空不受影响）
+        if (aiModelSelOf(currentChatUser)) payload.model = aiModelSelOf(currentChatUser);
         if (imageUrls && imageUrls.length) payload.images = imageUrls;
         if (ctxs && ctxs.length) {
             payload.contexts = ctxs.map(function (c) { return { path: c.path, dir: c.dir }; });
@@ -3376,9 +3500,14 @@
     }
 
     function sendMessage() {
-        // 阶段七十三：停止态优先（Trae 同款）——AI 问答生成中/任务执行中时，发送按钮与 Enter 均为"停止"：
-        // 任务模式下取消进行中任务（复用 AGENT_RUN cancel 既有机制），否则停止进行中的流式问答（AI_STOP）
-        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+        // 阶段七十三：停止态优先（Trae 同款）——AI 问答生成中/任务执行中且输入框为空时，发送按钮与 Enter 为"停止"：
+        // 任务模式下取消进行中任务（复用 AGENT_RUN cancel 既有机制），否则停止进行中的流式问答（AI_STOP）。
+        // 阶段一百九十二修复：输入框有文字时不再吞成停止——用户连发第二条消息被静默转成 AI_STOP
+        // 把第一轮回复杀掉（"只有光标闪回复不显示"），服务端每问独立 goroutine+流帧按 streamID
+        // 归位，并发两轮流完全支持；空输入点发送/Enter 仍是想停止的自然意图，保留原语义。
+        // 连带修复：任务运行中原 cancel 分支无条件截胡，179 阶段的 steer 插话（输入框有字 +
+        // 任务卡 running）实际不可达——有字时落到下方 steer/新任务分流后自然恢复
+        if (currentChatUser !== '' && isAIAgent(currentChatUser) && !messageInput.value.trim()) {
             var stopTaskId = agentMode ? agentActiveTask[currentChatUser] : null;
             if (stopTaskId) {
                 IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: stopTaskId, action: 'cancel' }) });
@@ -3413,6 +3542,46 @@
             if (currentChatUser !== '' && isAIAgent(currentChatUser)) return; // AI：附言已入图片信封
             if (!note) return; // 无附言：仅发图
             content = note; // 普通/群聊：附言继续走下方普通消息链路，与截图同次点击一起发出
+        }
+        // ===== 阶段一百九十二：附件待发区发送（微信同款：+ 菜单所选附件与附言一并发出） =====
+        // AI 问答：第一个附件带走附言（图/文信封单气泡图+文），其余附件空附言逐条发；
+        // 任务模式（防御：附件在任务模式开启前入列）：图片逐张还原入任务附件条，文档走文档问答；
+        // 私聊/群聊：附件逐个发出（原口径：私聊不分流统一 sendFile，群聊按类型分流），
+        // 附言继续走下方文本链路同次发出；纯附件（无文字）也直接发送
+        if (pendingFiles.length) {
+            var pfs = pendingFiles.slice();
+            var pnote = content;
+            clearPendingFiles();
+            messageInput.value = '';
+            if (currentChatUser !== '' && isAIAgent(currentChatUser) && agentMode) {
+                for (var pi = 0; pi < pfs.length; pi++) {
+                    if (isImageName(pfs[pi].name)) agentTaskAddImage(pfs[pi]);
+                    else sendAIDoc(pfs[pi]);
+                }
+                messageInput.value = pnote; // 附言还原为任务目标文字（对齐截图待发条口径）
+                messageInput.focus();
+                return;
+            }
+            var noteUsed = false; // 附言只随第一个附件走（AI 信封单气泡图+文）
+            for (var pj = 0; pj < pfs.length; pj++) {
+                var pf = pfs[pj];
+                var pfImg = isImageName(pf.name);
+                if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+                    var pfn = noteUsed ? '' : pnote;
+                    if (pfImg) sendAIImage(pf, pfn);
+                    else sendAIDoc(pf, pfn);
+                    noteUsed = true;
+                } else if (isGroupTarget(currentChatUser)) {
+                    if (pfImg) sendGroupImage(pf);
+                    else sendGroupFile(pf);
+                } else {
+                    sendFile(pf);
+                }
+            }
+            messageInput.focus();
+            if (currentChatUser !== '' && isAIAgent(currentChatUser)) return; // AI：附言已入信封
+            if (!pnote) return; // 无附言：仅发附件
+            content = pnote; // 普通/群聊：附言继续走下方普通消息链路，与附件同次点击一起发出
         }
         if (!content) return;
         // 阶段四十三：AI 智能体会话走专用问答协议（服务端归口调用模型并流式回复，密钥不下发）
@@ -3462,7 +3631,9 @@
                 return;
             }
             // 阶段七十一：流式回复按会话归属渲染（服务端落库同源，AI_STREAM/END 帧携带同 sid 过滤）
+            // 阶段一百九十：随问携带会话所选模型（model_name，空=跟随智能体绑定）
             msg = { msg_type: MSG.AI_CHAT, to_user: currentChatUser, content: content, session_id: sid };
+            if (aiModelSelOf(currentChatUser)) msg.model_name = aiModelSelOf(currentChatUser);
             // 阶段六十九：联网搜索开关开启时经 remark 上行（服务端归口校验配置，未开启时降级普通问答）
             if (webSearchOn && webSearchAvailable) msg.remark = 'web_search';
         } else {
@@ -3610,67 +3781,125 @@
     var pendingUploads = [];   // 等待服务端回执 file_id 的上传任务队列
     var fileBuffers = {};      // 接收中的文件组装缓冲 file_id -> {name,size,total,chunks,count}
 
-    imageBtn.addEventListener('click', function () {
-        // 原实现：群聊视图拦截提示"群聊暂不支持发送图片"，阶段二十六放开——群聊图片走 HTTP 上传链路
-        // if (currentChatUser === '') { showToast('群聊暂不支持发送图片'); return; }
-        // 阶段四十四：AI 会话走图片识别链路——仅支持图片的智能体（配置归口）可发图
-        if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
-            if (!aiAgentSupportsImage(currentChatUser)) {
-                showToast(I18N.t('该助手不支持图片识别'));
-                return;
-            }
-        }
-        imageInput.click();
-    });
-    // 阶段一百六十七：任务视频入口——仅任务模式可用，选视频抽关键帧入任务附件（复用图片链路上行）
-    agentVideoBtn.addEventListener('click', function () {
-        if (!agentMode) { showToast(I18N.t('请先开启任务模式')); return; }
-        agentVideoInput.click();
-    });
+    // 阶段一百六十七：任务视频入口——附件菜单「添加视频」条目触发（仅任务模式显示），选视频抽关键帧入任务附件
     agentVideoInput.addEventListener('change', function () {
         if (agentVideoInput.files[0]) agentTaskAddVideo(agentVideoInput.files[0]);
         agentVideoInput.value = '';
     });
-    fileBtn.addEventListener('click', function () {
-        // 阶段一百三十四：群聊文件放开——群聊与私聊同走 HTTP 上传链路（sendGroupFile，对齐群聊图片口径）；
-        // 原实现：群聊视图拦截提示"群聊暂不支持发送文件"
-        // if (currentChatUser === '') { showToast('群聊暂不支持发送文件'); return; }
-        // 阶段四十五：AI 会话文件按钮 = 文档问答入口（服务端解析文档文本注入提问，不依赖模型多模态）；
-        // 普通私聊仍走分片文件链路
-        if (isAIAgent(currentChatUser)) { docInput.click(); return; }
-        fileInput.click();
-    });
-    imageInput.addEventListener('change', function () {
-        if (imageInput.files[0]) {
-            // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
-            // 原实现：if (imageInput.files[0]) sendFile(imageInput.files[0]);
-            // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
-            if (isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
-            // 阶段一百六十六：Agent 任务模式——图片入任务附件随任务上行；AI 问答模式仍走图片识别链路
-            else if (isAIAgent(currentChatUser)) {
-                if (agentMode) agentTaskAddImage(imageInput.files[0]);
-                else sendAIImage(imageInput.files[0]);
-            } // 阶段四十四：AI 图片识别链路
-            else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
-            else sendFile(imageInput.files[0]);
+    // ===== 阶段一百九十二：左下角「+」附件菜单（TRAE CN 同款，合并原工具栏图片/文件/视频三入口） =====
+    // attachPanelToggle 面板开合：打开时锚定按钮正上方（模型面板同款动态锚定——先移除 hidden 再取
+    // 坐标，display:none 时 offsetParent 为 null 会抛 TypeError；输入区高度拖拽变化不错位）
+    function attachPanelToggle(on) {
+        if (on) {
+            attachPanel.classList.remove('hidden');
+            var pr = attachPanel.offsetParent && attachPanel.offsetParent.getBoundingClientRect();
+            var br = attachBtn.getBoundingClientRect();
+            if (pr && br.width > 0 && br.height > 0) {
+                attachPanel.style.left = Math.max(8, br.left - pr.left) + 'px';
+                attachPanel.style.bottom = (pr.bottom - br.top + 6) + 'px';
+            } else {
+                attachPanel.style.left = '12px';
+                attachPanel.style.bottom = '180px';
+            }
+        } else {
+            attachPanel.classList.add('hidden');
         }
-        imageInput.value = '';
-    });
-    fileInput.addEventListener('change', function () {
-        if (fileInput.files[0]) {
-            // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
-            // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）；全局群已废弃
-            if (isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
-            else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
-            else sendFile(fileInput.files[0]);
+    }
+    // 绑定前守卫：PC 端磁盘缓存 index.html 可能滞后于 chat.js（web-cache 增量同步时序），
+    // 节点缺失时跳过绑定防 TypeError 中断整个脚本初始化（ai-model-btn 同坑先例）
+    if (attachBtn && attachPanel && attachInput && attachVideoItem) {
+        attachBtn.addEventListener('click', function (e) {
+            e.stopPropagation(); // 防触发 document 级"点外关闭"监听（审批面板同款约定）
+            attachPanelToggle(attachPanel.classList.contains('hidden'));
+        });
+        attachPanel.addEventListener('click', function (e) { e.stopPropagation(); });
+        // 条目点击：上传附件 → 统一选择控件（选中后按类型自动分流）；添加视频 → 视频选择控件
+        attachPanel.addEventListener('click', function (e) {
+            var item = e.target.closest('.attach-item');
+            if (!item) return;
+            var kind = item.getAttribute('data-attach') || 'file';
+            attachPanelToggle(false);
+            if (kind === 'video') agentVideoInput.click();
+            else attachInput.click();
+        });
+        // 点击面板与按钮以外区域关闭（审批面板同款约定）
+        document.addEventListener('click', function (e) {
+            if (!attachPanel.classList.contains('hidden') && !attachPanel.contains(e.target) && e.target !== attachBtn && !attachBtn.contains(e.target)) {
+                attachPanel.classList.add('hidden');
+            }
+        });
+    }
+    // 统一附件入口：任务模式直入任务附件区（既有待发语义，随任务上行）；
+    // 非任务模式（AI 问答/私聊/群聊）一律进输入框上方「附件待发区」（微信同款）——
+    // 选中不直接发送，可累积/移除，输入附言后点发送/Enter 一并发出（发送时分流见 sendMessage）
+    attachInput.addEventListener('change', function () {
+        var f = attachInput.files[0];
+        attachInput.value = '';
+        if (!f) return;
+        var isImg = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name);
+        var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
+        // 任务模式：保持原直入口径（图片入任务附件条，文档走文档问答链路）
+        if (isAIAgent(currentChatUser) && agentMode) {
+            if (isImg) agentTaskAddImage(f);
+            else sendAIDoc(f);
+            return;
         }
-        fileInput.value = '';
+        // 添加时校验（原发送时校验前置——发不出去的文件不进待发区）
+        if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
+        if (f.size > maxFile) { showToast(I18N.t('文件超过大小上限（') + formatSize(maxFile) + '）'); return; }
+        if (isAIAgent(currentChatUser)) {
+            if (isImg) {
+                if (!aiAgentSupportsImage(currentChatUser)) { showToast(I18N.t('该助手不支持图片识别')); return; }
+            } else if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(f.name)) {
+                showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt 文档')); return;
+            }
+        }
+        pendingFileAdd(f);
     });
-    // 阶段四十五：AI 文档问答入口（文件按钮在 AI 会话触发）
-    docInput.addEventListener('change', function () {
-        if (docInput.files[0]) sendAIDoc(docInput.files[0]);
-        docInput.value = '';
-    });
+    // ===== 阶段一百九十六：普通好友聊天恢复独立图片/文件入口（微信同款） =====
+    // 阶段一百九十二曾把本两按钮与 change 分流合并进「+」附件菜单，但输入区为普通聊天与 AI
+    // 聊天共用 DOM，普通好友聊天也被连带改掉（用户反馈：普通聊天应为工具栏独立图标）。
+    // 现恢复原直发链路：普通会话工具栏显示 image-btn/file-btn；AI 会话按钮隐藏（走「+」菜单），
+    // 下方 AI 分支守卫保留兜底（按钮误显示时仍按原链路分流）。绑定前守卫：PC 端磁盘缓存
+    // index.html 可能滞后于 chat.js（节点缺失跳过绑定防 TypeError 中断脚本初始化，attach 同坑先例）
+    if (imageBtn && fileBtn && imageInput && fileInput) {
+        imageBtn.addEventListener('click', function () {
+            // 原实现：群聊视图拦截提示"群聊暂不支持发送图片"，阶段二十六放开——群聊图片走 HTTP 上传链路
+            // 阶段四十四：AI 会话走图片识别链路——仅支持图片的智能体（配置归口）可发图
+            if (currentChatUser !== '' && isAIAgent(currentChatUser)) {
+                if (!aiAgentSupportsImage(currentChatUser)) {
+                    showToast(I18N.t('该助手不支持图片识别'));
+                    return;
+                }
+            }
+            imageInput.click();
+        });
+        fileBtn.addEventListener('click', function () {
+            // 阶段一百三十四：群聊文件放开——群聊与私聊同走 HTTP 上传链路（sendGroupFile，对齐群聊图片口径）
+            fileInput.click();
+        });
+        imageInput.addEventListener('change', function () {
+            if (imageInput.files[0]) {
+                // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
+                // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
+                if (isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
+                else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
+                else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
+                else sendFile(imageInput.files[0]);
+            }
+            imageInput.value = '';
+        });
+        fileInput.addEventListener('change', function () {
+            if (fileInput.files[0]) {
+                // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
+                // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）；全局群已废弃
+                if (isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
+                else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
+                else sendFile(fileInput.files[0]);
+            }
+            fileInput.value = '';
+        });
+    }
 
     // ===== 阶段一百六十一：文件拖拽发送（微信同款）+ 拖拽默认行为全局兜底 =====
     // 背景：渲染层此前完全没有拖拽处理，PC Electron 里把文件拖到窗口时 Chromium 会把拖入
@@ -4848,7 +5077,9 @@
             lastAIQuestion[agent] = { raw: envelope, text: note || I18N.t('[图片]') };
             bubble.remove(); // 回显渲染最终气泡，移除本地预览防重复
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（图片已存档，可重新发）
-            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
+            // 阶段一百九十：随问携带会话所选模型（空=跟随智能体绑定，下同）
+            var imgModel = aiModelSelOf(agent);
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0, model_name: imgModel || undefined })) {
                 throw new Error(I18N.t('消息发送失败'));
             }
             messageInput.value = '';
@@ -4861,14 +5092,15 @@
     // 阶段四十五：AI 文档问答——POST /upload/ai/doc 落盘+服务端试解析（不落库），成功后发送
     // AI_CHAT 文档信封（{"doc":url,"name":原名,"text":附言}）。文档正文不经过前端：提问时服务端
     // 按 URL 重新解析落盘文档提取文本注入提示词。附言取发送时输入框内容（可空，服务端给默认指令）。
-    // 不依赖模型多模态能力：全部智能体均可发文档
-    function sendAIDoc(file) {
+    // 阶段一百九十二：noteText 可外部快照传入（附件待发区多附件发送时附言只随第一个附件走，
+    // 对齐 sendAIImage 的 noteText 口径）；不依赖模型多模态能力：全部智能体均可发文档
+    function sendAIDoc(file, noteText) {
         var agent = currentChatUser;
         if (!agent || !isAIAgent(agent)) return;
         if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(file.name)) { showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt 文档')); return; }
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxFile) { showToast(I18N.t('文档超过大小上限（') + formatSize(maxFile) + '）'); return; }
-        var note = messageInput.value.trim();
+        var note = (noteText !== undefined && noteText !== null) ? String(noteText) : messageInput.value.trim();
         showToast(I18N.t('正在上传文档…'));
         var fd = new FormData();
         fd.append('file', file);
@@ -4887,7 +5119,9 @@
             // 记录提问原文（重新生成按信封原样重发，服务端重新解析文档，口径与首次发送一致）
             lastAIQuestion[agent] = { raw: envelope, text: note ? I18N.t('[文档] ') + file.name + ' ' + note : I18N.t('[文档] ') + file.name };
             if (currentChatUser !== agent) return; // 上传期间切走了会话：信封不再补发（文档已存档，可重新发）
-            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0 })) {
+            // 阶段一百九十：随问携带会话所选模型（空=跟随智能体绑定，下同）
+            var docModel = aiModelSelOf(agent);
+            if (!IMSocket.send({ msg_type: MSG.AI_CHAT, to_user: agent, content: envelope, session_id: aiViewSession[agent] || 0, model_name: docModel || undefined })) {
                 throw new Error(I18N.t('消息发送失败'));
             }
             messageInput.value = '';
@@ -6835,16 +7069,22 @@
 
     // 阶段七十三：发送按钮"停止"态归口（Trae CN 同款）——当前会话为 AI 智能体且有进行中的
     // 问答或（任务模式下的）执行中任务时，按钮由"发送"切换为"停止"，点击中断生成/取消任务。
-    // 问答停止走 AI_STOP（服务端中断模型流式调用），任务停止复用 AGENT_RUN cancel（既有机制）
+    // 问答停止走 AI_STOP（服务端中断模型流式调用），任务停止复用 AGENT_RUN cancel（既有机制）。
+    // 阶段一百九十二：纯图标形态（TRAE CN 同款）——纸飞机=发送 / 白色方块=停止，固定 32px
+    // 方形不再随窄聊天区挤压换行；提示文本经 data-tip-text 自绘气泡随态切换
+    var SEND_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+    var STOP_ICON_HTML = '<span class="stop-icon"></span>';
     function updateSendBtnState() {
         var stopping = currentChatUser !== '' && isAIAgent(currentChatUser) &&
             ((agentMode && agentActiveTask[currentChatUser]) || aiAgentGenerating(currentChatUser));
         if (stopping) {
             sendBtn.classList.add('stopping');
-            sendBtn.innerHTML = '<span class="stop-icon">' + '</span>' + I18N.t('停止');
+            sendBtn.innerHTML = STOP_ICON_HTML;
+            sendBtn.setAttribute('data-tip-text', I18N.t('停止'));
         } else {
             sendBtn.classList.remove('stopping');
-            sendBtn.textContent = I18N.t('发送');
+            sendBtn.innerHTML = SEND_ICON_SVG;
+            sendBtn.setAttribute('data-tip-text', I18N.t('发送'));
         }
     }
 
@@ -6881,6 +7121,9 @@
         //     openConversation(currentChatUser);
         // }
         if (currentChatUser) syncAgentUiForConversation(currentChatUser);
+        // 阶段一百九十三：智能体列表就绪（登录/重连后必达时点）拉看板快照——恢复跨会话活跃任务
+        // 感知与入口徽标（页面刷新后 agentBoardMap 清空，靠此处重建）
+        agentBoardSnapshot();
         // 阶段一百三十八修复：智能体列表晚到补标消息行 ai 类——登录自动恢复会话时历史渲染
         // 早于本列表下发，isAIAgent(fromUser) 必为 false，AI 回复行缺 ai 标记导致气泡保持
         // 70% 收缩未撑满（用户实测"普通 AI 100% 了，Agent 模式不是"）；列表就绪后按行
@@ -7135,7 +7378,9 @@
         addBtn(I18N.t('重新生成'), ICONS.redo, function () {
             var q = lastAIQuestion[agent];
             if (!q || !q.raw) { showToast(I18N.t('暂无原始提问，无法重新生成')); return; }
+            // 阶段一百九十：重新生成同样携带会话所选模型（口径与首次发送一致）
             var regen = { msg_type: MSG.AI_CHAT, to_user: agent, content: q.raw, session_id: aiViewSession[agent] || 0 };
+            if (aiModelSelOf(agent)) regen.model_name = aiModelSelOf(agent);
             if (webSearchOn && webSearchAvailable) regen.remark = 'web_search';
             IMSocket.send(regen);
         });
@@ -7513,11 +7758,47 @@
         messageList.scrollTop = messageList.scrollHeight;
     }
 
+    // ===== 阶段一百九十四：普通 AI 问答上下文水位条（输入区上方常驻，TRAE CN 同款）=====
+    // END 帧携带 context_used/max（tokens 估算口径，max=历史压缩触发阈值）；按智能体缓存各自水位，
+    // 切会话恢复该会话最后水位；任务侧占用环（agentCtxRing，任务卡内）独立运行互不影响；
+    // 未启用历史压缩时服务端不下发（context_used 缺省），条恒隐藏
+    var aiCtxBarEl = document.getElementById('ai-ctx-bar');
+    var aiCtxWater = {}; // agent → { used: 估算token, max: 压缩阈值 }
+    function aiCtxBarUpdate(agent) {
+        if (!aiCtxBarEl) return;
+        var w = aiCtxWater[agent];
+        if (!w || !(w.max > 0) || currentChatUser !== agent) {
+            aiCtxBarEl.classList.add('hidden');
+            return;
+        }
+        var pct = Math.max(0, Math.min(100, Math.round(w.used / w.max * 100)));
+        var fg = aiCtxBarEl.querySelector('.ai-ctx-fg');
+        var txt = aiCtxBarEl.querySelector('.ai-ctx-pct');
+        if (!fg || !txt) return;
+        var C = 2 * Math.PI * 15.5; // 与任务环同规格（r=15.5），dashoffset=周长×(1-占比)
+        fg.setAttribute('stroke-dashoffset', (C * (1 - pct / 100)).toFixed(2));
+        fg.classList.toggle('ctx-warn', pct >= 80 && pct < 95);
+        fg.classList.toggle('ctx-danger', pct >= 95);
+        txt.textContent = pct + '%';
+        aiCtxBarEl.title = I18N.t('上下文占用（') + I18N.t('估算 token') + I18N.t('口径，达阈值自动触发历史压缩归并）');
+        aiCtxBarEl.classList.remove('hidden');
+    }
+    // 切会话入口刷新（与 agentBoardSyncEntry 同点挂载）：当前会话有缓存水位则恢复，无则隐藏
+    function aiCtxBarRefresh() {
+        if (currentChatUser) aiCtxBarUpdate(currentChatUser);
+        else if (aiCtxBarEl) aiCtxBarEl.classList.add('hidden');
+    }
+
     // AI 流式结束：有流则收尾（END.content 为完整回复，仅在未曾收到增量时降级整段打字防重复）；
     // 无流（如降级路径）且正在查看该会话时补一条完整回复
     IMSocket.on(MSG.AI_STREAM_END, function (msg) {
         if (msg.to_user !== IMSocket.getUsername()) return;
         hideAIThinking(msg.from_user); // 失败/降级路径同样收起"思考中"指示
+        // 阶段一百九十四：上下文水位随帧缓存——放在会话过滤 return 之前（切走的会话也存，切回恢复显示）
+        if (msg.context_used != null && msg.context_max > 0) {
+            aiCtxWater[msg.from_user] = { used: msg.context_used, max: msg.context_max };
+            aiCtxBarUpdate(msg.from_user);
+        }
         // 阶段七十八：结束帧携带扣分后积分余额（服务端归口，仅成功扣分帧有值）→ 标题栏实时刷新
         if (msg.points_balance != null) setPointsBalance(msg.points_balance);
         // 阶段七十一：结束帧同口径按会话归属过滤（与本端查看会话不符不渲染，回复已落库切回经历史可见）
@@ -7592,6 +7873,49 @@
     // 交互设计对齐 Trae CN：发起任务 → 任务卡片（清单+进度条）→ 思考/工具/审批子事件流 → 最终答复
     var agentMode = false;    // 当前是否处于 Agent 任务模式（仅 AI 智能体会话内可开启）
     var agentTaskCards = {};  // task_id → 任务卡片状态（切会话 DOM 清空但状态保留，重进不重放事件）
+    // ===== 阶段一百九十三：多任务并行看板数据源（task_id → 活跃任务轻量条目，跨会话全局） =====
+    // agentTaskCards 只含建卡时正在查看的会话任务（AGENT_EVENT 分发处「仅当前会话渲染」过滤在建卡前），
+    // 看板需跨会话感知全部活跃任务：事件镜像（零干扰纯内存写）+ 打开时 GET /api/agent/tasks?status=active 快照双轨归口
+    // 条目：{ goal, agent, status(queued|running|waiting_approval), position, todoDone, todoTotal, createTime, sessionId, startAt }
+    var agentBoardMap = {};
+    var agentBoardTimer = null; // 看板打开期间 5s 快照轮询兜底（防 WS 瞬断漏帧；关闭即停）
+
+    // 事件 → 看板条目镜像（AGENT_EVENT 分发处每个事件调用；完结/取消移除）。
+    // 只写内存与重绘看板，不触碰任何会话渲染分支——切会话/最小化期间完结也要同步看板
+    function agentBoardMirror(ev) {
+        var tid = ev.task_id || '';
+        if (!tid) return;
+        var b = agentBoardMap[tid];
+        var touch = false;
+        if (ev.type === 'status') {
+            if (ev.status === 'queued') {
+                if (!b) { b = agentBoardMap[tid] = { goal: ev.goal || '', agent: ev.agent || '' }; touch = true; }
+                b.status = 'queued';
+                b.position = ev.position || 1;
+            } else if (ev.status === 'running') {
+                if (!b) { b = agentBoardMap[tid] = { goal: ev.goal || '', agent: ev.agent || '' }; touch = true; }
+                b.status = 'running';
+                b.position = 0;
+                if (!b.startAt) b.startAt = Date.now(); // 本地执行计时起点（快照路径由 update_time 兜底）
+            } else if (ev.status === 'waiting_approval') {
+                if (b) { b.status = 'waiting_approval'; }
+            } else if (ev.status === 'cancelled') {
+                delete agentBoardMap[tid];
+                touch = true;
+            }
+        } else if (ev.type === 'todo') {
+            if (b) {
+                var todos = Array.isArray(ev.todos) ? ev.todos : [];
+                b.todoDone = ev.done || 0;
+                b.todoTotal = ev.total || todos.length || 0;
+            }
+        } else if (ev.type === 'done' || ev.type === 'error') {
+            delete agentBoardMap[tid];
+            touch = true;
+        }
+        if (touch) agentBoardRender();
+        else if (agentBoardMask && !agentBoardMask.classList.contains('hidden')) agentBoardRefreshRow(tid);
+    }
     // 阶段七十八：各 AI 会话的 Agent 开关记忆——切换好友再切回自动恢复原开关，不用重新打开；
     // localStorage 按账号持久化，刷新页面后同样恢复
     var agentModeByUser = (function () {
@@ -7650,8 +7974,9 @@
         agentPlanBtn.classList.toggle('hidden', !on);
         // 阶段一百七十六：SOLO 全自动开关随任务模式联动（与计划模式同款显隐/复位归口）
         agentSoloBtn.classList.toggle('hidden', !on);
-        // 阶段一百六十七：任务视频入口随任务模式显隐（视频抽帧入附件只在任务模式下有意义）
-        agentVideoBtn.classList.toggle('hidden', !on);
+        // 阶段一百六十七：任务视频入口随任务模式显隐（阶段一百九十二起为附件菜单内条目；
+        // 视频抽帧入附件只在任务模式下有意义）
+        attachVideoItem.classList.toggle('hidden', !on);
         if (!on && planModeOn) {
             planModeOn = false;
             agentPlanBtn.classList.remove('active');
@@ -8899,6 +9224,114 @@
             agentApprovePanel.classList.add('hidden');
         }
     });
+
+    // ===== 阶段一百九十：会话内模型选择器（TRAE CN 同款一键切换模型） =====
+    // 服务端 GET /api/ai/models 下发已启用模型服务（仅名称/模型名/图片能力，无凭据）；
+    // 选择按会话（智能体）记忆于 aiModelSelByUser，仅随本次对话/任务上行（AI_CHAT model_name /
+    // AGENT_RUN model），服务端浅拷贝智能体临时换绑，不改库不影响他人；空串=跟随智能体绑定。
+    var aiModelSelByUser = {}; // 智能体名 → 所选模型服务名（''=跟随智能体绑定，默认）
+    var aiModelList = [];      // 已启用模型列表缓存 [{name, model, supports_image}]
+    var aiModelsFetched = false;
+
+    // aiModelSelOf 取当前会话选择（供上行链路取值归口）
+    function aiModelSelOf(agentName) {
+        return (agentName && aiModelSelByUser[agentName]) || '';
+    }
+
+    // aiModelListFetch 拉取已启用模型列表（仅拉一次；失败静默——面板提示稍后再试，不打扰主流程）
+    function aiModelListFetch(done) {
+        if (aiModelsFetched) { if (done) done(); return; }
+        fetch('/api/ai/models?username=' + encodeURIComponent(IMSocket.getUsername()))
+            .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+            .then(function (body) {
+                var data = body && body.data ? body.data : {};
+                aiModelList = data.models || [];
+                aiModelsFetched = true;
+                if (done) done();
+            })
+            .catch(function () { showToast(I18N.t('模型列表获取失败，请稍后重试')); });
+    }
+
+    // aiModelPanelRender 重绘模型条目（首项"跟随智能体绑定" + 已启用模型；选中项高亮对勾）
+    function aiModelPanelRender() {
+        var sel = aiModelSelOf(currentChatUser);
+        var html = '';
+        html += '<div class="agent-approve-item ai-model-item' + (sel === '' ? ' selected' : '') + '" data-model="">';
+        html += '<span class="agent-approve-icon"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3z"/></svg></span>';
+        html += '<span class="agent-approve-text"><b>' + I18N.t('跟随智能体绑定') + '</b><i>' + I18N.t('使用智能体默认配置的模型') + '</i></span>';
+        html += '<svg class="ai-model-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg></div>';
+        for (var i = 0; i < aiModelList.length; i++) {
+            var m = aiModelList[i];
+            if (!m || !m.name) continue;
+            var on = sel === m.name;
+            html += '<div class="agent-approve-item ai-model-item' + (on ? ' selected' : '') + '" data-model="' + m.name.replace(/"/g, '&quot;') + '">';
+            html += '<span class="agent-approve-text"><b>' + m.name.replace(/</g, '&lt;') + '</b><i>' + String(m.model || '').replace(/</g, '&lt;') + '</i></span>';
+            if (m.supports_image) html += '<span class="ai-model-badge">' + I18N.t('图片') + '</span>';
+            html += '<svg class="ai-model-check" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg></div>';
+        }
+        aiModelItemsEl.innerHTML = html;
+    }
+
+    // aiModelBtnLabelSync 按钮标签同步（默认"默认"，已选非默认模型显示服务名并主题色高亮）
+    function aiModelBtnLabelSync() {
+        if (!aiModelBtnLabel) return;
+        var sel = aiModelSelOf(currentChatUser);
+        aiModelBtnLabel.textContent = sel ? sel : I18N.t('默认');
+        aiModelBtn.classList.toggle('ai-model-custom', !!sel);
+    }
+
+    // aiModelPanelToggle 面板开合归口（打开时确保列表已拉取并按当前会话重绘）
+    function aiModelPanelToggle(on) {
+        if (on) {
+            aiModelListFetch(function () {
+                aiModelPanelRender();
+                aiModelPanel.classList.remove('hidden');
+                // 左下角锚定（审批面板同款）：面板底缘贴按钮顶缘上方 6px，left 对齐按钮左缘——
+                // 输入区高度可拖拽变化，固定 bottom 会错位；先移除 hidden 再取坐标（display:none
+                // 时 offsetParent 为 null 会抛 TypeError，审批面板同坑先例）
+                var pr = aiModelPanel.offsetParent && aiModelPanel.offsetParent.getBoundingClientRect();
+                var br = aiModelBtn.getBoundingClientRect();
+                if (pr && br.width > 0 && br.height > 0) {
+                    aiModelPanel.style.left = Math.max(8, br.left - pr.left) + 'px';
+                    aiModelPanel.style.bottom = (pr.bottom - br.top + 6) + 'px';
+                } else {
+                    aiModelPanel.style.left = '12px';
+                    aiModelPanel.style.bottom = '180px';
+                }
+            });
+        } else {
+            aiModelPanel.classList.add('hidden');
+        }
+    }
+
+    // 绑定前守卫：PC 端磁盘缓存 index.html 可能滞后于 chat.js（web-cache 增量同步时序），
+    // 节点缺失时跳过绑定防 TypeError 中断整个脚本初始化（browserProgressEl 同坑先例）
+    if (aiModelBtn && aiModelPanel && aiModelItemsEl) {
+        aiModelBtn.addEventListener('click', function (e) {
+            e.stopPropagation(); // 防触发 document 级"点外关闭"监听（审批面板同款约定）
+            aiModelPanelToggle(aiModelPanel.classList.contains('hidden'));
+        });
+        aiModelPanel.addEventListener('click', function (e) { e.stopPropagation(); });
+        // 条目点击采用委托（列表动态重绘，逐项绑定会随 innerHTML 覆盖失效）
+        aiModelItemsEl.addEventListener('click', function (e) {
+            var item = e.target.closest('.ai-model-item');
+            if (!item || !currentChatUser) return;
+            var name = item.getAttribute('data-model') || '';
+            var prev = aiModelSelOf(currentChatUser);
+            aiModelSelByUser[currentChatUser] = name;
+            aiModelPanelRender();
+            aiModelBtnLabelSync();
+            aiModelPanelToggle(false);
+            if (name) showToast(I18N.t('本次会话已切换模型：') + name);
+            else if (prev) showToast(I18N.t('已恢复默认模型（跟随智能体绑定）'));
+        });
+        // 点击面板与按钮以外区域关闭（审批面板同款约定）
+        document.addEventListener('click', function (e) {
+            if (!aiModelPanel.classList.contains('hidden') && !aiModelPanel.contains(e.target) && e.target !== aiModelBtn && !aiModelBtn.contains(e.target)) {
+                aiModelPanel.classList.add('hidden');
+            }
+        });
+    }
 
     // ===== 阶段九十一：内置浏览区（TRAE CN 同款，仅 PC Electron 壳内启用） =====
     // 阶段九十三（全 DOM 化）：file 标签由主页面同源 iframe 承载，web 标签由主页面 <webview>
@@ -10267,6 +10700,10 @@
 
     function finishAgentTask(st, text, cls, elapsedMs) {
         st.finished = true; // 阶段七十：完结标记（会话重放时据此区分实时卡与已完结任务）
+        // 阶段一百九十二：任务终态即收口事件流内仍"执行中"的工具卡（取消/失败路径无 tool_result/
+        // tool_exit 下发，完成路径已转后台命令也可能没有 tool_exit）——停计时防"执行中 · Xs"永久跑
+        var pendTools = st.events.querySelectorAll('.agent-event.tool.pending');
+        for (var pi = 0; pi < pendTools.length; pi++) agentAbortToolBlock(pendTools[pi]);
         // 阶段一百六十三：任务完结即清"取消中…"兜底重试定时器（防完结后仍重发取消/复位按钮）
         if (st.cancelRetryTimer) {
             clearInterval(st.cancelRetryTimer);
@@ -11109,6 +11546,19 @@
         if (block._bgTimer) { clearTimeout(block._bgTimer); block._bgTimer = null; }
         if (block._elapsedTimer) { clearInterval(block._elapsedTimer); block._elapsedTimer = null; }
         if (block._bgBtn) { block._bgBtn.remove(); block._bgBtn = null; }
+    }
+
+    // 阶段一百九十二：任务终态兜底中止工具块——任务取消/失败时服务端不再下发 tool_result/tool_exit
+    // （已转后台命令随任务取消尤甚），pending 工具卡会永久停在"执行中 · Xs"计时；此处停计时与
+    // 转后台按钮、摘执行中标签，由 CSS ::after 标注灰色"已中止"终态（与 ✓完成/✕异常 同位标记）
+    function agentAbortToolBlock(block) {
+        stopAgentToolTimers(block);
+        block.classList.remove('pending');
+        block.classList.add('abort');
+        var running = block.querySelector('.agent-tool-running');
+        if (running) running.remove();
+        var prog = block.querySelector('.agent-tool-progress');
+        if (prog) prog.remove();
     }
 
     // 控制台归属：按 call_id 精确匹配；兜底最后一个执行中的 run_command 块（旧服务端事件无 call_id 时）
@@ -15948,6 +16398,9 @@
         // 阶段一百零二：Agent 任务扣后积分余额实时刷新（done 帧携带，服务端归口；
         // 与当前查看会话无关——切走会话/最小化时完结也要刷新标题栏 ⚡ 积分）
         if (ev.points_balance != null) setPointsBalance(ev.points_balance);
+        // 阶段一百九十三：多任务并行看板镜像（跨会话全局；必须在下方「仅当前会话渲染」过滤之前——
+        // 切走会话后任务事件不建卡但看板仍需实时感知；纯内存写+看板重绘，零干扰现有分支）
+        agentBoardMirror(ev);
         var st = agentTaskCards[ev.task_id];
         // 阶段七十三：任务完结/取消即清进行中标记（不依赖当前查看会话——切走期间完结也要复位发送按钮态）
         if (agentActiveTask[msg.from_user] === ev.task_id &&
@@ -16129,17 +16582,28 @@
     });
 
     // 阶段六十六：任务完结系统级提醒归口——窗口隐藏或已切走会话时，PC 端弹系统桌面通知，
-    // Web 端轻提示兜底；会话角标/摘要由服务端完结消息落库联动（CONV_LIST 归口），此处补"即时可感知"体验
+    // Web 端轻提示兜底；会话角标/摘要由服务端完结消息落库联动（CONV_LIST 归口），此处补"即时可感知"体验。
+    // 阶段一百九十四：提醒可点击直达——Web Toast 点击 openConversation 切到任务会话；PC 端桌面通知
+    // 点击经 main.js 'desktop-notify-click' 转发回渲染层（preload onNotifyClick）后同样跳转，
+    // agentNotifyTarget 记录最近一次通知归属会话（多任务并发时以最后一次通知为准）
+    var agentNotifyTarget = '';
     function agentTaskNotify(msg, st, statusText) {
         if (!document.hidden && currentChatUser === msg.from_user) return; // 正盯着该会话，任务卡片即通知
         var goal = (st && st.goal) ? String(st.goal) : '';
         if (goal.length > 20) goal = goal.slice(0, 20) + '…';
         var body = I18N.t('任务') + statusText + (goal ? I18N.t('：') + goal : '');
+        agentNotifyTarget = msg.from_user || '';
         if (window.desktop && typeof window.desktop.notify === 'function') {
             window.desktop.notify(I18N.t('Agent 任务'), body);
         } else {
-            showToast(body);
+            showToast(body, function () { openConversation(msg.from_user); });
         }
+    }
+    // 阶段一百九十四：PC 桌面通知点击 → 聚焦窗口（main.js 已 show+focus）+ 直达通知归属会话
+    if (window.desktop && typeof window.desktop.onNotifyClick === 'function') {
+        window.desktop.onNotifyClick(function () {
+            if (agentNotifyTarget) openConversation(agentNotifyTarget);
+        });
     }
 
     // 审批请求卡片：参数 JSON 可直接编辑（改参放行），同意/拒绝上行归口
@@ -16167,6 +16631,12 @@
                 if (currentChatUser === msg.from_user) agentTaskScroll();
             }
             return;
+        }
+        // 阶段一百九十四：人工审批等待提醒——切走会话或窗口隐藏时任务会静默挂起等审批（用户无感知，
+        // 可能一等数小时），补系统级提醒与 done/error 同归口（PC 桌面通知/Web 可点击 Toast 直达会话）；
+        // agentTaskNotify 首行守卫与本章条件互补不会重复提醒；st 可空（切走会话未建卡，内部已判空兜底）
+        if (document.hidden || currentChatUser !== msg.from_user) {
+            agentTaskNotify(msg, st, I18N.t('等待审批'));
         }
         if (currentChatUser !== msg.from_user) return;
         if (!st) return;
@@ -18177,10 +18647,20 @@
         agentModeBtn.classList.toggle('hidden', !targetIsAgent);
         // 阶段六十九：联网搜索开关仅 AI 智能体会话且服务端开启时显示（开关状态跨会话保持）
         webSearchBtn.classList.toggle('hidden', !(user && isAIAgent(user) && webSearchAvailable));
+        // 阶段一百九十：会话内模型选择器同显隐（仅 AI 智能体会话；标签随会话选择刷新）
+        if (aiModelBtn) {
+            aiModelBtn.classList.toggle('hidden', !(user && isAIAgent(user)));
+            aiModelBtnLabelSync();
+        }
         // 阶段六十一：工作区按钮与 Agent 模式按钮同显隐，但仅 PC 端可用（Web 端工作区在服务端，无本地自选意义）
         agentWsBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentWsSupported()));
         // 阶段九十：我的 MCP 服务器按钮同显隐（仅 PC 端，本机 stdio 自定义）
         agentMcpBtn.classList.toggle('hidden', !(user && isAIAgent(user) && agentMcpSupported()));
+        // 阶段一百九十六：附件入口按会话类型分流——AI 智能体会话显示左下角「+」统一附件菜单，
+        // 普通好友/群聊会话显示工具栏独立「发送图片/发送文件」图标（微信同款；未选会话均隐藏）
+        if (attachBtn) attachBtn.classList.toggle('hidden', !targetIsAgent);
+        if (imageBtn) imageBtn.classList.toggle('hidden', targetIsAgent);
+        if (fileBtn) fileBtn.classList.toggle('hidden', targetIsAgent);
         // 阶段一百一十七：审批模式盾牌显隐归 setAgentMode（上方已调用，仅 Agent 任务模式开启时显示）
         return targetIsAgent; // 阶段一百三十八修复：openConversation 后续控制台恢复逻辑仍需该判定值（回归：注释声明后未声明变量抛 ReferenceError 中断切换会话）
     }
@@ -18234,6 +18714,8 @@
         }
         // 阶段三十八：切换会话清空待发送截图（防止把 A 会话的截图误发到 B 会话）
         clearPendingShot();
+        // 阶段一百九十二：切换会话清空附件待发区（同上——附件按会话语义归属，不跨会话携带）
+        clearPendingFiles();
         // 阶段七十五（增强）：切换会话复位独立控制台抽屉（控制台会话级归属，不跨会话串日志）
         agentConsoleReset();
         // 阶段七十八：恢复该 AI 会话的控制台开合状态（日志仍按会话清空，仅恢复"开着"的显示状态；
@@ -20231,6 +20713,10 @@
         // 阶段六十四：任务历史按钮同口径显隐（与记忆按钮一致，仅 AI 智能体会话显示）
         var taskhistBtn = document.getElementById('taskhist-btn');
         if (taskhistBtn) taskhistBtn.classList.toggle('hidden', !(currentChatUser !== '' && isAIAgent(currentChatUser)));
+        // 阶段一百九十三：看板入口显隐随切会话刷新（AI 会话常显；其他会话有活跃任务也显+徽标）
+        agentBoardSyncEntry();
+        // 阶段一百九十四：问答上下文水位条随切会话刷新（有缓存的会话恢复显示，无缓存/普通会话隐藏）
+        aiCtxBarRefresh();
         // 阶段七十一：AI 多会话按钮同口径显隐（Trae 同款"新建会话"入口）
         var aiSessionBtn = document.getElementById('ai-session-btn');
         if (aiSessionBtn) {
@@ -20257,6 +20743,12 @@
         // 阶段一百五十四：红包按钮显隐——私聊真实用户与群聊显示，AI 智能体会话隐藏（微信同款收发红包入口）
         var rpBtn = document.getElementById('redpacket-btn');
         if (rpBtn) rpBtn.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser)));
+        // 阶段一百九十六：图片/文件按钮与「+」附件菜单按会话类型分流（与 syncAgentUiForConversation 同判定
+        // 口径幂等——本函数覆盖未选会话等全部刷新路径：普通会话工具栏独立图标，AI 会话「+」菜单，未选会话均隐藏）
+        var chatIsAI = currentChatUser !== '' && isAIAgent(currentChatUser);
+        if (attachBtn) attachBtn.classList.toggle('hidden', !chatIsAI);
+        if (imageBtn) imageBtn.classList.toggle('hidden', chatIsAI);
+        if (fileBtn) fileBtn.classList.toggle('hidden', chatIsAI);
     }
 
     // ===== 消息渲染 =====
@@ -20362,8 +20854,13 @@
         var mergedEnv = parseMergedEnvelope(content);
         // 阶段一百四十一：通话信封优先（服务端归口落库的通话记录消息，渲染为微信同款通话气泡）
         var callEnv = parseCallEnvelope(content);
-        var aiDocEnv = (mergedEnv || callEnv) ? null : ((type === 'self' && isAIAgent(currentChatUser)) ? parseAIDocEnvelope(content) : null);
-        var aiImgEnv = (mergedEnv || callEnv || aiDocEnv) ? null : ((!aiDocEnv && type === 'self' && isAIAgent(currentChatUser)) ? parseAIImageEnvelope(content) : null);
+        // 阶段一百九十二修复：AI 图片/文档信封识别不再依赖 isAIAgent(currentChatUser)——
+        // 刷新页面时历史渲染早于 AI_AGENTS 列表下发（同头像回正/ai 补标记已修竞态的第三处漏网），
+        // 判定恒 false 导致历史里图片/文档消息显示 JSON 原文。信封解析本身已严格限定结构
+        // （image/doc 与 text 字段同在且为 string 才判定），普通聊天手打撞上该结构的概率趋近零，
+        // 且普通会话里该串也无语义，误判损失可忽略；保留 self 限定（他人消息永不渲染信封）
+        var aiDocEnv = (mergedEnv || callEnv) ? null : (type === 'self' ? parseAIDocEnvelope(content) : null);
+        var aiImgEnv = (mergedEnv || callEnv || aiDocEnv) ? null : (!aiDocEnv && type === 'self' ? parseAIImageEnvelope(content) : null);
         var envelope = (aiDocEnv || aiImgEnv || mergedEnv || callEnv) ? null : parseQuoteEnvelope(content);
         if (callEnv) {
             // 微信同款通话气泡：类型图标 + 视角文案（未接听图标红色，微信同款）
@@ -22447,7 +22944,203 @@
         });
     }
 
-    // ===== 阶段一百八十四：定时/巡检任务（第三页签：列表 + 新建/编辑表单 + 启停/删除） =====
+    // ===== 阶段一百九十三：多任务并行看板（TRAE CN 同款跨会话活跃任务实时视图） =====
+    // 数据双轨：打开/轮询拉 GET /api/agent/tasks?status=active 快照（服务端权威） + AGENT_EVENT 事件镜像
+    // （agentBoardMirror，会话过滤之前归口）；条目支持跳转会话与取消；防闪烁走签名比对重绘
+    var agentBoardBtn = document.getElementById('agent-board-btn');
+    var agentBoardBadge = document.getElementById('agent-board-badge');
+    var agentBoardMask = document.getElementById('agent-board-mask');
+    var agentBoardStatusEl = document.getElementById('agent-board-status');
+    var agentBoardListEl = document.getElementById('agent-board-list');
+    var agentBoardSecTimer = null; // 打开期间每秒耗时自刷（独立于重绘，不动 DOM 结构）
+
+    function agentBoardOpen() {
+        agentBoardMask.classList.remove('hidden');
+        agentBoardSnapshot();
+        if (agentBoardTimer) clearInterval(agentBoardTimer);
+        agentBoardTimer = setInterval(agentBoardSnapshot, 5000); // 5s 快照兜底（防 WS 瞬断漏帧）
+        if (agentBoardSecTimer) clearInterval(agentBoardSecTimer);
+        agentBoardSecTimer = setInterval(function () { // 运行中条目耗时每秒自刷
+            if (agentBoardMask.classList.contains('hidden')) return;
+            var rows = agentBoardListEl.querySelectorAll('.agent-board-row[data-start]');
+            for (var i = 0; i < rows.length; i++) {
+                var el = rows[i].querySelector('.agent-board-elapsed');
+                if (el) el.textContent = I18N.t('已耗时 ') + agentElapsedText(Date.now() - Number(rows[i].getAttribute('data-start')));
+            }
+        }, 1000);
+        agentBoardRender();
+    }
+
+    function agentBoardClose() {
+        agentBoardMask.classList.add('hidden');
+        if (agentBoardTimer) { clearInterval(agentBoardTimer); agentBoardTimer = null; }
+        if (agentBoardSecTimer) { clearInterval(agentBoardSecTimer); agentBoardSecTimer = null; }
+    }
+
+    // 快照拉取与合并：服务端权威覆盖（goal/agent/session/status/position），map 独有新条目保留
+    // （拉取瞬间刚发起的任务可能尚未入快照，误删会丢实时条目）；完结条目移除由镜像归口负责
+    function agentBoardSnapshot() {
+        fetch('/api/agent/tasks?username=' + encodeURIComponent(kbUsername()) + '&status=active&page=1&size=50')
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (!res.ok) return;
+                var tasks = (res.data && res.data.tasks) || [];
+                for (var i = 0; i < tasks.length; i++) {
+                    var t = tasks[i];
+                    var tid = t.task_id || '';
+                    if (!tid) continue;
+                    var b = agentBoardMap[tid] || (agentBoardMap[tid] = {});
+                    b.goal = t.goal || b.goal || '';
+                    b.agent = t.agent_name || b.agent || '';
+                    b.status = t.status || b.status || 'running';
+                    b.sessionId = t.session_id;
+                    if (!b.startAt) b.startAt = Number(t.create_time) || Date.now(); // 快照路径计时起点（毫秒）
+                    if (b.status !== 'queued') b.position = 0;
+                }
+                agentBoardRender();
+            })
+            .catch(function () { /* 快照失败静默：事件镜像数据仍在，不打扰用户 */ });
+    }
+
+    // 状态徽标文本（queued 排队 N 位 / waiting_approval 等待审批 / running 执行中）
+    function agentBoardStateText(b) {
+        if (b.status === 'queued') return I18N.t('排队中 · 第 ') + (b.position || 1) + I18N.t(' 位');
+        if (b.status === 'waiting_approval') return I18N.t('等待审批');
+        return I18N.t('执行中');
+    }
+
+    // 全量重绘（签名比对防闪烁：输入无变化跳过重建，仿 agentDockSync dockSig 归口）
+    function agentBoardRender() {
+        agentBoardSyncEntry();
+        if (!agentBoardMask || agentBoardMask.classList.contains('hidden')) return;
+        var ids = Object.keys(agentBoardMap);
+        var sig = JSON.stringify(ids.map(function (tid) {
+            var b = agentBoardMap[tid];
+            return [tid, b.goal, b.agent, b.status, b.position, b.todoDone, b.todoTotal, b.startAt];
+        }));
+        if (sig === agentBoardListEl._sig) return;
+        agentBoardListEl._sig = sig;
+        agentBoardStatusEl.textContent = ids.length ? I18N.t('进行中任务：') + ids.length : I18N.t('暂无进行中的任务');
+        agentBoardListEl.innerHTML = '';
+        if (!ids.length) {
+            agentBoardListEl.innerHTML = '<div class="kb-empty">' + I18N.t('暂无进行中的任务') + '</div>';
+            return;
+        }
+        ids.forEach(function (tid) {
+            var b = agentBoardMap[tid];
+            var row = document.createElement('div');
+            row.className = 'agent-board-row status-' + (b.status || 'running');
+            row.setAttribute('data-task', tid);
+            if (b.status === 'running' && b.startAt) row.setAttribute('data-start', String(b.startAt));
+            // 头列：智能体名 + 目标摘要
+            var main = document.createElement('div');
+            main.className = 'agent-board-main';
+            var name = document.createElement('span');
+            name.className = 'agent-board-agent';
+            name.textContent = b.agent || I18N.t('智能体');
+            var goal = document.createElement('span');
+            goal.className = 'agent-board-goal';
+            goal.textContent = b.goal || I18N.t('（无目标描述）');
+            goal.title = b.goal || '';
+            main.appendChild(name);
+            main.appendChild(goal);
+            // 元列：状态徽标 + 进度 + 耗时
+            var meta = document.createElement('div');
+            meta.className = 'agent-board-meta';
+            var st = document.createElement('span');
+            st.className = 'agent-board-state ' + (b.status || 'running');
+            st.textContent = agentBoardStateText(b);
+            meta.appendChild(st);
+            if (b.status === 'running' && b.todoTotal > 0) {
+                var prog = document.createElement('span');
+                prog.className = 'agent-board-progress';
+                prog.textContent = (b.todoDone || 0) + '/' + b.todoTotal;
+                meta.appendChild(prog);
+            }
+            if (b.status === 'running' && b.startAt) {
+                var el = document.createElement('span');
+                el.className = 'agent-board-elapsed';
+                el.textContent = I18N.t('已耗时 ') + agentElapsedText(Date.now() - b.startAt);
+                meta.appendChild(el);
+            }
+            // 操作列：跳转 / 取消
+            var ops = document.createElement('div');
+            ops.className = 'agent-board-ops';
+            var goBtn = document.createElement('button');
+            goBtn.className = 'taskhist-op-btn';
+            goBtn.textContent = I18N.t('跳转');
+            goBtn.title = I18N.t('前往该智能体会话查看任务详情');
+            goBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (!b.agent) return;
+                agentBoardClose();
+                openConversation(b.agent);
+            });
+            var stopBtn = document.createElement('button');
+            stopBtn.className = 'taskhist-op-btn danger';
+            stopBtn.textContent = I18N.t('取消');
+            stopBtn.title = I18N.t('取消该任务（与任务卡停止同链路）');
+            stopBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                stopBtn.disabled = true;
+                stopBtn.textContent = I18N.t('取消中…');
+                IMSocket.send({ msg_type: MSG.AGENT_RUN, content: JSON.stringify({ task_id: tid, action: 'cancel' }) });
+                showToast(I18N.t('已发送取消请求'));
+            });
+            ops.appendChild(goBtn);
+            ops.appendChild(stopBtn);
+            row.appendChild(main);
+            row.appendChild(meta);
+            row.appendChild(ops);
+            agentBoardListEl.appendChild(row);
+        });
+    }
+
+    // 行内轻刷新（事件镜像高频路径：仅更新该行状态/进度文本与 data-start，不重建行防按钮态丢失）
+    function agentBoardRefreshRow(tid) {
+        var row = agentBoardListEl ? agentBoardListEl.querySelector('.agent-board-row[data-task="' + tid + '"]') : null;
+        var b = agentBoardMap[tid];
+        if (!row || !b) return;
+        var st = row.querySelector('.agent-board-state');
+        if (st) { st.textContent = agentBoardStateText(b); st.className = 'agent-board-state ' + (b.status || 'running'); }
+        var prog = row.querySelector('.agent-board-progress');
+        if (b.status === 'running' && b.todoTotal > 0) {
+            if (!prog) { prog = document.createElement('span'); prog.className = 'agent-board-progress'; row.querySelector('.agent-board-meta').appendChild(prog); }
+            prog.textContent = (b.todoDone || 0) + '/' + b.todoTotal;
+        } else if (prog) prog.remove();
+        if (b.status === 'running' && b.startAt) row.setAttribute('data-start', String(b.startAt));
+        else row.removeAttribute('data-start');
+    }
+
+    // 入口显隐归口：AI 会话常显；任何会话下有活跃任务也显（带计数徽标）——跨会话可感知可直达
+    function agentBoardSyncEntry() {
+        if (!agentBoardBtn) return;
+        var n = Object.keys(agentBoardMap).length;
+        var isAI = currentChatUser !== '' && isAIAgent(currentChatUser);
+        agentBoardBtn.classList.toggle('hidden', !isAI && n === 0);
+        if (agentBoardBadge) {
+            agentBoardBadge.textContent = String(n);
+            agentBoardBadge.classList.toggle('hidden', n === 0);
+        }
+    }
+
+    if (agentBoardBtn) {
+        agentBoardBtn.addEventListener('click', agentBoardOpen);
+    }
+    if (agentBoardMask) {
+        // 遮罩点击关闭（自绘弹窗标准模式；面板内点击不冒泡关闭）
+        agentBoardMask.addEventListener('mousedown', function (e) {
+            if (e.target === agentBoardMask) agentBoardClose();
+        });
+        var boardCloseBtn = document.getElementById('agent-board-close');
+        if (boardCloseBtn) boardCloseBtn.addEventListener('click', agentBoardClose);
+        var boardHistBtn = document.getElementById('agent-board-hist');
+        if (boardHistBtn) boardHistBtn.addEventListener('click', function () {
+            agentBoardClose();
+            if (taskhistBtn) taskhistBtn.click(); // 复用任务历史弹窗打开链路（含智能体校验）
+        });
+    }
+
     // 服务端归口 /api/agent/cron/*；发起复用 agentStartTask 同链路（与手动任务一致），
     // 结果经任务完结链路（落库+未读+会话推送）回流，本页签只做配置管理
     var thCronEditId = null; // 正在编辑的定时任务 id（null=新建态）
@@ -23892,7 +24585,9 @@
         // 打开后悬停浮现自绘滑块，与新 friends-list 同模式；initOsb 幂等防重复挂载）
         // 阶段一百四十三：追加 .gset-box（群设置面板整体滚动容器）——后改 profile-panel 同款右侧滑出，
         // 滚动区 #gset-content 挂 .profile-content 类，由上方 '.profile-content' 选择器直接命中，无需单独注册
-        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list']
+        // 阶段一百九十：追加模型选择面板条目区 #ai-model-items（模型多时限高滚动，DOM 静态常驻直接注册；
+        // initOsb 幂等，面板每次打开重绘条目后 MutationObserver 自行刷新滑块）
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list', '#ai-model-items']
             .forEach(function (sel) {
                 // 阶段一百四十二：querySelectorAll 全量挂载——querySelector 只命中首个实例，
                 // 会漏掉同选择器的后续元素（如 .fwd-list 同时存在于转发 #fwd-list 与建群/邀请 #grp-list）

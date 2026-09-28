@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -3373,7 +3375,11 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 		"8. C/C++ 编译能力：可直接调用 gcc/g++/make 等编译命令，客户端首次使用时会自动准备本地编译环境（系统已有 MSVC/编译器时优先使用，无需任何安装操作；若系统为 MSVC，错误提示会引导改用 cl 语法）。\n" +
 		"9. 任务完成后（所有清单条目 done），不再调用任何工具，直接输出最终总结答复（做了什么、产出在哪里、结果如何）。\n" +
 		"10. 遇到需要用户判断/决策的问题（多种可行方案、需求不明确、缺少关键信息且无法自行获取）时，用 ask_user 提问：问题简明扼要，给 2-4 个带说明的候选选项并标出推荐项；一次只问一个最关键的问题，能凭现有信息合理决策的不要打扰用户；用户取消回答时按最合理的默认方案继续，不要重复追问。\n" +
-		"11. run_command 在持久终端会话中执行：cd 与 set 的效果跨命令保留（每条命令结果尾部标注当前会话目录）。需要切换目录时单独调用 run_command 执行 cd（如 \"cd build\"），后续命令自动在新目录执行；cd 与其他命令用 && 连接不会保留目录。set 设置的环境变量（如 set GOFLAGS=-mod=vendor）在后续命令中生效；取消设置用 set 变量名=。"
+		"11. run_command 在持久终端会话中执行：cd 与 set 的效果跨命令保留（每条命令结果尾部标注当前会话目录）。需要切换目录时单独调用 run_command 执行 cd（如 \"cd build\"），后续命令自动在新目录执行；cd 与其他命令用 && 连接不会保留目录。set 设置的环境变量（如 set GOFLAGS=-mod=vendor）在后续命令中生效；取消设置用 set 变量名=。\n" +
+		// 阶段一百九十一：前端视觉自检纪律（TRAE 同款"写完页面必须预览验证"）——
+		// 预览路由 /agent/site 双模读工作区（PC 在线读本地主工作区，离线读服务端工作区），
+		// 多文件 HTML 相对引用可正常加载；服务端地址与聊天页面同源（同机部署 127.0.0.1:8888）
+		"12. Web 前端自检纪律（产出 HTML/CSS/JS 页面时）：写完不要直接交付——先用内置浏览器打开整页预览地址自查视觉效果：http://<服务端地址>/agent/site/" + username + "/{页面相对路径}（服务端地址与聊天页面同源，同机部署即 http://127.0.0.1:8888；多文件页面的相对引用 css/js/图片经预览路由可正常加载，无需合并成单文件）。打开后用 browser_screenshot 截图检查布局错位、样式未生效、资源 404、白屏等问题，用 edit_file 修复后重新打开验证，迭代至页面正常显示再交付；内置浏览器不可用时，在最终答复中给出预览地址请用户打开检查，并按用户反馈修复。"
 }
 
 // agentEchoGoal 阶段七十：任务目标落库并回显（服务端归口会话历史——切会话/重登后提问不丢失，
@@ -3539,6 +3545,7 @@ type agentRunMsg struct {
 	SoloMode  bool          `json:"solo_mode"`  // 阶段一百七十六：SOLO 全自动模式（任务内需审批操作自动放行，免逐条确认）
 	Images    []string      `json:"images"`     // 阶段一百六十六：任务图片附件（服务端静态 URL 数组，/static/upload/ 下）
 	Contexts  []AgentCtxReq `json:"contexts"`   // 阶段一百七十：@ 上下文引用（工作区相对路径 + 目录标记）
+	Model     string        `json:"model"`      // 阶段一百九十：任务级模型覆盖（已启用模型服务名；空=跟随智能体绑定，cron 路径恒空）
 }
 
 // agentStartTask 任务发起归口（阶段一百八十四自 handleAgentRun 抽出）：手动上行与定时任务共用
@@ -3557,6 +3564,13 @@ func (s *Server) agentStartTask(username string, req agentRunMsg, source string)
 	if agent == nil {
 		return "", errors.New("智能体不存在或无权使用")
 	}
+	// 阶段一百九十：任务级模型覆盖（req.model 可选；覆盖在前、绑定为空的拦截在后——
+	// 未绑定智能体+显式选模型也可跑任务，与问答链路口径一致）
+	ovAgent, err := aiOverrideAgent(agent, req.Model)
+	if err != nil {
+		return "", err
+	}
+	agent = ovAgent
 	if agent.Provider == nil {
 		return "", errors.New("该智能体未绑定模型服务，无法执行自动化任务")
 	}
@@ -4985,6 +4999,105 @@ func (s *Server) HandleAgentPreview(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, full)
 }
 
+// HandleAgentSite 阶段一百九十一：工作区目录级静态预览（GET /agent/site/{username}/{path...}）——
+// 多文件 HTML 产物（index.html 相对引用同目录 css/js/图片）可整页打开：/agent/preview 仅单文件
+// 直出（相对资源 404），本路由只读托管整个用户工作区，Agent 视觉自检（写页面→浏览器打开→截图→
+// 迭代）与用户预览共用。读取归口 wsFileDispatch readb（双模：PC 在线读本地主工作区，离线读服务端
+// 工作区，≤2MB/文件，base64 回传）；鉴权水位与 /agent/preview 一致（query username，内网信任模式）；
+// 路径安全前置 agentSafePath 校验（防绝对路径/..越界），目录请求自动补 index.html（缺失 404 不列目录）。
+func (s *Server) HandleAgentSite(w http.ResponseWriter, r *http.Request) {
+	// username 归口路由路径段（相对引用的 css/js/图片请求只带路径不带 query，浏览器场景
+	// query 取不到）；兼容 query 传参（与 /agent/preview 同水位的手工拼链场景）
+	username := strings.TrimSpace(r.PathValue("username"))
+	if username == "" {
+		username = strings.TrimSpace(r.URL.Query().Get("username"))
+	}
+	if username == "" {
+		http.Error(w, "缺少 username 参数", http.StatusBadRequest)
+		return
+	}
+	p := strings.TrimRight(r.PathValue("path"), "/")
+	if p == "" {
+		p = "index.html"
+	}
+	if _, err := agentSafePath(username, p); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	reqID := fmt.Sprintf("site_%d", time.Now().UnixNano())
+	res := s.wsFileDispatch(username, reqID, "readb", p, "")
+	// 目录请求兜底：无扩展名路径读取失败时补 index.html 再试一次（subdir → subdir/index.html）
+	if (res == nil || !res.OK) && filepath.Ext(p) == "" {
+		p = strings.TrimRight(p, "/") + "/index.html"
+		if _, err := agentSafePath(username, p); err == nil {
+			reqID = fmt.Sprintf("site_%d", time.Now().UnixNano())
+			res = s.wsFileDispatch(username, reqID, "readb", p, "")
+		}
+	}
+	if res == nil {
+		http.Error(w, "工作区无响应，预览失败", http.StatusGatewayTimeout)
+		return
+	}
+	if !res.OK || !res.Binary || res.Content == "" {
+		http.Error(w, "文件不存在或不可预览", http.StatusNotFound)
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(res.Content)
+	if err != nil {
+		http.Error(w, "内容解码失败", http.StatusInternalServerError)
+		return
+	}
+	ct := agentSiteMime(p, data)
+	w.Header().Set("Content-Type", ct)
+	if strings.HasPrefix(ct, "text/html") {
+		w.Header().Set("Cache-Control", "no-cache") // 迭代自检期间 HTML 每次回源拿最新
+	}
+	_, _ = w.Write(data)
+}
+
+// agentSiteMime 预览静态资源 MIME 归口（常见扩展名显式映射——Windows 内置 mime 表不全，
+// 注册表污染会导致 .js/.css 误判；未知类型嗅探内容兜底）
+func agentSiteMime(name string, data []byte) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".json":
+		return "application/json; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".ico":
+		return "image/x-icon"
+	case ".txt", ".md":
+		return "text/plain; charset=utf-8"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	case ".ttf":
+		return "font/ttf"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".mp4":
+		return "video/mp4"
+	}
+	if ct := mime.TypeByExtension(strings.ToLower(filepath.Ext(name))); ct != "" {
+		return ct
+	}
+	return http.DetectContentType(data)
+}
+
 // ===== 阶段六十四：Agent 任务历史查看 =====
 // 用户端：查看本人任务分页列表与单任务详情（鉴权水位与 /api/agents 一致：username 查询参数）；
 // 管理端：审计全部用户任务（adminGuard 保护，支持用户名/状态筛选）。
@@ -5043,7 +5156,13 @@ func (s *Server) HandleAgentTaskList(w http.ResponseWriter, r *http.Request) {
 	page, size, status := agentTaskListQuery(r)
 	db := store.DB.Model(&model.AgentTaskRecord{}).Where("username = ?", username)
 	if status != "" {
-		db = db.Where("status = ?", status)
+		// 阶段一百九十三：status=active 聚合值——展开为活跃三态 IN 查询（多任务并行看板一次拉取全部活跃任务）；
+		// 其余 status 单值语义不变（任务历史弹窗筛选不受扰）
+		if status == "active" {
+			db = db.Where("status IN ?", []string{"queued", "running", "waiting_approval"})
+		} else {
+			db = db.Where("status = ?", status)
+		}
 	}
 	// 阶段七十：agent 过滤（会话内任务卡重放按智能体归口拉取，不掺其他会话任务）
 	if ag := strings.TrimSpace(r.URL.Query().Get("agent")); ag != "" {

@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('desktop', {
     notify: function (title, body) {
         ipcRenderer.send('notify', { title: title, body: body });
     },
+    // 阶段一百九十四：桌面通知点击订阅（主进程点击转发 → 渲染层直达任务归属会话；无回调则忽略）
+    onNotifyClick: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('desktop-notify-click', function () { cb(); });
+    },
     // 阶段三十七（第三期）：静默抓屏（无系统共享弹窗），返回 PNG dataURL（Promise）
     // 阶段一百三十九：可选参数 hideMain——截图时是否隐藏主窗口画面（QQ 同款"隐藏当前窗口"
     // 开关，undefined 时主进程走自身状态，Alt+A 全局截图同源）

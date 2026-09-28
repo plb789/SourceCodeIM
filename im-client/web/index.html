@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=2.87">
+    <link rel="stylesheet" href="/css/style.css?v=2.97">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -360,6 +360,11 @@
                     <button id="taskhist-btn" class="logout-btn hidden" title="任务历史">
                         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 1 1 7 7 6.95 6.95 0 0 1-4.9-2.03l-1.42 1.42A8.95 8.95 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
                     </button>
+                    <!-- 阶段一百九十三：多任务并行看板入口（AI 会话常显；任何会话下有活跃任务也显示并带计数徽标） -->
+                    <button id="agent-board-btn" class="logout-btn agent-board-btn hidden" title="任务看板">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5zm10 0a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V5zM3 17a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2zm10-2a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-6z"/></svg>
+                        <span id="agent-board-badge" class="agent-board-badge hidden">0</span>
+                    </button>
                     <button id="ai-session-btn" class="logout-btn hidden" title="会话历史 / 新建会话">
                         <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4l3 3 3-3h4a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 4 1.2 2.6L16 10l-2.4 1.7L14.4 15 12 13.6 9.6 15l.8-3.3L8 10l2.8-.4L12 7z"/></svg>
                     </button>
@@ -447,12 +452,16 @@
                     <button id="emoji-btn" class="tool-btn" title="表情">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3.5-9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm-7 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg>
                     </button>
-                    <button id="image-btn" class="tool-btn" title="发送图片">
+                    <!-- 阶段一百九十六：普通好友聊天恢复微信同款「发送图片/发送文件」独立图标（阶段一百九十二
+                         误把「+」附件菜单对普通聊天也生效——现按会话类型分流：普通会话显示本两按钮，
+                         AI 智能体会话隐藏并显示左下角「+」附件菜单；显隐归口 chat.js syncAgentUiForConversation） -->
+                    <button id="image-btn" class="tool-btn hidden" title="发送图片">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
                     </button>
-                    <button id="file-btn" class="tool-btn" title="发送文件">
+                    <button id="file-btn" class="tool-btn hidden" title="发送文件">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16v10z"/></svg>
                     </button>
+                    <!-- 阶段一百九十二：AI 智能体会话保留输入区左下角「+」附件菜单（TRAE CN 同款），见 input-footer 与 #attach-panel -->
                     <!-- 阶段一百五十四：积分红包按钮（微信同款红包，私聊/群聊可用，AI 智能体会话隐藏；
                          金额计算/扣款/领取/退回全部服务端归口，前端仅展示） -->
                     <button id="redpacket-btn" class="tool-btn hidden" title="发红包">
@@ -504,16 +513,14 @@
                     <button id="agent-solo-btn" class="tool-btn agent-solo-btn hidden" title="全自动模式（SOLO）：任务内写文件/命令免审批自动执行，完成后自动自检；所有变更留痕可回滚">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" fill-rule="evenodd" d="M13.2 2.3c.4-.5 1.2-.1 1 .5L12.6 9h4.1c.6 0 .9.7.5 1.1l-8.4 11.4c-.4.6-1.3.1-1.1-.5L9.4 14H5.3c-.6 0-.9-.7-.5-1.1z"/></svg>
                     </button>
-                    <!-- 阶段一百六十七：任务视频入口（仅任务模式显示）——选择视频后浏览器抽关键帧
-                         作为图片附件随任务上行（复用 images 链路，服务端零改动；视频本体不上传） -->
-                    <button id="agent-video-btn" class="tool-btn agent-video-btn hidden" title="添加视频：选择视频文件，自动提取关键帧随任务发送（模型将结合画面理解任务）">
-                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5h11a2 2 0 0 1 2 2v3.2l4.4-2.9a.8.8 0 0 1 1.2.7v8a.8.8 0 0 1-1.2.7L17 13.8V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h11V7H4z"/></svg>
-                    </button>
+                    <!-- 阶段一百九十二：任务视频入口已并入输入区左下角「+」附件菜单（#attach-panel 视频条目） -->
                     <!-- 阶段一百一十七：Agent 审批模式选择已移至输入区左下角（TRAE CN 同款，见 input-footer） -->
                     <!-- 阶段六十九：普通聊天联网搜索开关（仅 AI 智能体会话且服务端开启联网搜索时显示，开启后 AI 问答可实时搜索） -->
                     <button id="web-search-btn" class="tool-btn web-search-btn hidden" title="联网搜索：开启后 AI 问答可实时联网查询最新信息（搜索过程与结果条数随回复展示）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
                     </button>
+                    <!-- 阶段一百九十：会话内模型选择器已移至输入区左下角审批按钮旁（用户反馈工具栏拥挤，TRAE CN 同款左下角下拉簇），
+                         见 input-footer；标签文本由 chat.js 按会话选择刷新 -->
                     <!-- 阶段六十一：Agent 工作区/沙箱白名单按钮（仅 PC 端本地执行器可用，用户自选任意文件夹作为主工作区并维护授权目录白名单） -->
                     <button id="agent-ws-btn" class="tool-btn agent-ws-btn hidden" title="Agent 工作区：选择本地文件夹作为主工作区，并维护沙箱白名单（授权目录内允许 Agent 读写文件）">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
@@ -529,14 +536,40 @@
                 </div>
                 <textarea id="message-input" placeholder="输入消息" rows="3"></textarea>
                 <div class="input-footer">
+                    <!-- 阶段一百九十二：附件菜单按钮（TRAE CN 同款「+」下拉，置于左下角行首；合并 AI 会话原
+                         发送图片/发送文件/添加视频三入口——上传附件按所选文件类型自动分流，添加视频仅任务模式显示；
+                         阶段一百九十六起仅 AI 智能体会话显示，普通会话恢复工具栏独立图标）。
+                         悬停提示用 data-tip-text（tooltip.js 自绘气泡归口），禁止原生 title（停留 1-2 秒会叠出系统气泡） -->
+                    <!-- 阶段一百九十六：初始 hidden（未选会话不显示；显隐归口 chat.js syncAgentUiForConversation/
+                         updateChatTitle 按会话类型分流——仅 AI 智能体会话显示，普通会话显示工具栏图片/文件按钮） -->
+                    <button id="attach-btn" class="tool-btn attach-btn hidden" data-tip-text="上传附件：图片、文档、视频等文件（点击展开菜单）">
+                        <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M11 11V5a1 1 0 1 1 2 0v6h6a1 1 0 1 1 0 2h-6v6a1 1 0 1 1-2 0v-6H5a1 1 0 1 1 0-2h6z"/></svg>
+                    </button>
                     <!-- 阶段一百一十七：Agent 审批模式选择（TRAE CN 同款盾牌下拉，置于左下角；手动审批/自动审批/完全访问，仅 Agent 任务模式开启时显示）。
                          悬停提示用 data-tip-text（tooltip.js 自绘气泡归口），禁止原生 title（停留 1-2 秒会叠出系统气泡） -->
                     <button id="agent-approve-btn" class="tool-btn agent-approve-btn hidden" data-tip-text="审批模式：手动审批（重要操作由你确认）（点击切换）">
                         <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3zm-1.2 13.5-3.2-3.2 1.4-1.4 1.8 1.8 4.6-4.6 1.4 1.4-6 6z"/></svg>
                         <svg class="approve-caret" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4z"/></svg>
                     </button>
+                    <!-- 阶段一百九十：会话内模型选择器（TRAE CN 同款——AI 会话显示，默认跟随智能体绑定；
+                         选中模型仅本会话生效不改库；列表经 GET /api/ai/models 拉取，仅含名称/模型名/图片能力）。
+                         悬停提示用 data-tip-text（tooltip.js 自绘气泡归口），标签文本由 chat.js 按会话选择刷新 -->
+                    <button id="ai-model-btn" class="tool-btn ai-model-btn hidden" data-tip-text="模型：本次会话使用的 AI 模型（点击切换）">
+                        <svg viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h3a3 3 0 0 1 3 3v1h.27c.34-.6.99-1 1.73-1a2 2 0 1 1 0 4c-.74 0-1.39-.4-1.73-1H19v1a3 3 0 0 1-3 3h-3v1.27c.6.34 1 .99 1 1.73a2 2 0 1 1-4 0c0-.74.4-1.39 1-1.73V19H8a3 3 0 0 1-3-3v-1h-.27c-.34.6-.99 1-1.73 1a2 2 0 1 1 0-4c.74 0 1.39.4 1.73 1H5v-1a3 3 0 0 1 3-3h3V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/><circle fill="currentColor" cx="12" cy="12" r="2.6"/><circle fill="currentColor" cx="12" cy="4" r="1"/><circle fill="currentColor" cx="12" cy="20" r="1"/><circle fill="currentColor" cx="4" cy="12" r="1"/><circle fill="currentColor" cx="20" cy="12" r="1"/></svg>
+                        <span id="ai-model-btn-label" class="ai-model-btn-label"></span>
+                        <svg class="approve-caret" viewBox="0 0 24 24" width="10" height="10"><path fill="currentColor" d="m12 15.4-6-6L7.4 8l4.6 4.6L16.6 8 18 9.4z"/></svg>
+                    </button>
                     <span class="input-hint">Enter 发送 / Ctrl+Enter 换行</span>
-                    <button id="send-btn">发送</button>
+                    <!-- 阶段一百九十四：普通 AI 问答上下文水位条（TRAE CN 同款，输入区底部右侧常驻；
+                         END 帧 context_used/max 驱动（tokens 估算口径，max=压缩阈值），未启用压缩/无数据会话隐藏；
+                         环规格与任务卡占用环一致（r=15.5，周长≈97.39），主题变量跟随） -->
+                    <div id="ai-ctx-bar" class="ai-ctx-bar hidden">
+                        <svg viewBox="0 0 36 36"><circle class="ctx-bg" cx="18" cy="18" r="15.5"/><circle class="ctx-fg ai-ctx-fg" cx="18" cy="18" r="15.5" transform="rotate(-90 18 18)" stroke-dasharray="97.39" stroke-dashoffset="97.39"/></svg>
+                        <span class="ai-ctx-pct">0%</span>
+                    </div>
+                    <!-- 阶段一百九十二：发送按钮改纯图标（TRAE CN 同款）——纸飞机=发送/方块=停止（JS 切换），
+                         固定 32px 方形不再随窄聊天区换行挤压；提示文本走 data-tip-text 自绘气泡 -->
+                    <button id="send-btn" data-tip-text="发送"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
                 </div>
             </div>
 
@@ -585,6 +618,38 @@
                 </div>
             </div>
 
+            <!-- 阶段一百九十：会话内模型选择面板（TRAE CN 同款自研下拉，跟随主题色）——
+                 首项"跟随智能体绑定"，其余由 chat.js 按 GET /api/ai/models 动态填充（仅名称/模型名/图片能力） -->
+            <div id="ai-model-panel" class="agent-approve-panel ai-model-panel hidden">
+                <div class="agent-approve-panel-title">本次会话使用哪个模型？</div>
+                <div id="ai-model-items" class="ai-model-items"></div>
+            </div>
+
+            <!-- 阶段一百九十二：附件菜单面板（TRAE CN 同款「+」下拉：上传附件/添加视频，自研面板跟随主题色）。
+                 上传附件为统一入口——选中文件后按类型自动分流（图片→图片链路、文档→文档问答、其他→文件链路）；
+                 添加视频条目仅任务模式显示（chat.js 随 agentMode 联动），选视频抽关键帧入任务附件 -->
+            <div id="attach-panel" class="agent-approve-panel attach-panel hidden">
+                <div class="agent-approve-panel-title">发送附件</div>
+                <div class="agent-approve-item attach-item" data-attach="file">
+                    <span class="agent-approve-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
+                    </span>
+                    <span class="agent-approve-text">
+                        <b>上传附件</b>
+                        <i>图片、文档等，选中后按类型自动发送</i>
+                    </span>
+                </div>
+                <div class="agent-approve-item attach-item hidden" id="attach-video-item" data-attach="video">
+                    <span class="agent-approve-icon">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 5h11a2 2 0 0 1 2 2v3.2l4.4-2.9a.8.8 0 0 1 1.2.7v8a.8.8 0 0 1-1.2.7L17 13.8V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v10h11V7H4z"/></svg>
+                    </span>
+                    <span class="agent-approve-text">
+                        <b>添加视频</b>
+                        <i>提取关键帧随任务发送（模型结合画面理解）</i>
+                    </span>
+                </div>
+            </div>
+
             <!-- 阶段九十一：内置浏览区面板（TRAE CN 同款，仅 PC Electron 壳启用——chat.js 能力检测后启用交互）。
                  网页内容由主进程 BrowserView 原生渲染并精确贴合 #browser-content 矩形（browser:bounds 上报），
                  本 DOM 仅承担标签栏/工具栏与内容区占位（加载间隙背景可见），Web/手机端整块保持隐藏 -->
@@ -628,12 +693,13 @@
     </div>
 
     <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/gif" class="hidden">
+    <!-- 阶段一百九十六：恢复普通会话图片/文件选择控件（阶段一百九十二曾合并移除由 #attach-input 归口；
+         现普通会话恢复独立入口，AI 会话仍走 #attach-input 统一分流） -->
     <input type="file" id="image-input" accept="image/*" class="hidden">
+    <input type="file" id="file-input" class="hidden">
+    <input type="file" id="attach-input" class="hidden">
     <!-- 阶段一百六十七：任务视频选择控件（agent-video-btn 触发，抽帧入任务附件） -->
     <input type="file" id="agent-video-input" accept="video/mp4,video/webm,video/quicktime,video/x-m4v,video/x-matroska,.mp4,.webm,.mov,.m4v,.mkv" class="hidden">
-    <input type="file" id="file-input" class="hidden">
-    <!-- 阶段四十五：AI 文档问答选择框（docx/xlsx/xlsm/csv/md/txt，与服务端解析白名单一致） -->
-    <input type="file" id="doc-input" accept=".docx,.xlsx,.xlsm,.csv,.md,.txt" class="hidden">
 
     <!-- 好友右键菜单 -->
     <div id="friend-menu" class="friend-menu hidden">
@@ -1568,6 +1634,20 @@
         </div>
     </div>
 
+    <!-- 阶段一百九十三：多任务并行看板弹窗（跨会话活跃任务实时视图；快照拉取+事件镜像双轨；自绘弹窗复用知识库骨架） -->
+    <div id="agent-board-mask" class="modal-mask hidden">
+        <div class="modal-box agent-board-box">
+            <div class="modal-title"><span id="agent-board-title">任务看板</span></div>
+            <div id="agent-board-status" class="kb-status"></div>
+            <div id="agent-board-list" class="kb-list agent-board-list"></div>
+            <div class="taskhist-pager">
+                <button id="agent-board-hist" class="modal-btn">查看全部历史</button>
+                <span class="agent-board-flex"></span>
+                <button id="agent-board-close" class="modal-btn">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 阶段五十七：我的智能体弹窗（个人智能体自建/编辑/删除；自研弹窗禁用系统弹窗，样式复用知识库弹窗骨架） -->
     <div id="ua-mask" class="modal-mask hidden">
         <div class="modal-box kb-box">
@@ -1950,7 +2030,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.5"></script>
-    <script src="/js/chat.js?v=3.122"></script>
+    <script src="/js/chat.js?v=3.133"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>

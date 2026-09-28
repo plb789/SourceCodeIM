@@ -69,7 +69,12 @@ var (
 	// 阶段八十四：TRAE 同款历史对话压缩参数（config.yaml ai.compress_* 归口，AI 问答与 Agent 任务共用）
 	aiCompressThreshold = 12000 // 历史上下文估算 token 达到该值触发压缩（<=0 禁用）
 	aiCompressKeep      = 6     // 压缩时保留最近原文消息条数，更早历史并入摘要
-	aiCompressScanExtra = 60    // 压缩启用时额外回溯的更早历史条数（原窗口外不再"滑走即丢"）
+	// 阶段一百九十二：增量压缩节流——历史总量超阈值后，若已有缓存摘要且新增段（上次压缩覆盖点
+	// 之后的未摘要历史）估算 token 未达该值，本次提问复用已有摘要直接回答（不跑增量 LLM、不发
+	// "历史对话压缩中"提示帧），新增段暂留在原文窗口，攒够再压。原实现每轮提问都跑增量摘要
+	// LLM（哪怕只新增 1 条消息，实测单次 5~15 秒），用户观感"每次发送都在压缩中"且首字显著变慢
+	aiCompressIncrementTokens = 3000
+	aiCompressScanExtra       = 60 // 压缩启用时额外回溯的更早历史条数（原窗口外不再"滑走即丢"）
 	// 阶段一百三十九：Agent 任务上下文压缩阈值改 KB 口径（与 TRAE CN 状态栏同款，UTF-8 字节计）——
 	// 仅作用于 Agent 任务循环，AI 问答仍用上面的 token 阈值；KB 判据对中英混排上下文更直观可预期
 	aiCompressThresholdKB = 200 // 任务上下文累计字节达到该 KB 值触发压缩（<=0 禁用 Agent 压缩）
@@ -82,6 +87,12 @@ var (
 	// 首问触发一次重压缩，属派生缓存可接受；会话清空/删除时同步失效）
 	aiCompressMu    sync.Mutex
 	aiCompressCache sync.Map
+	// 阶段一百九十五：AI 响应空闲超时（config.yaml ai.stream_idle_timeout 归口，秒）——
+	// 上游建连后断流（连接未断但长时间无数据，实测 deepseek 偶发）时流式 scanner 与非流式
+	// ReadAll 会一直阻塞，只能靠 aiAskTimeout 5 分钟总超时兜底（任务卡死观感差）。空闲阈值内
+	// 无任何数据块到达即中断请求转超时类错误，aiFailoverRun 按超时语义换源/失败，恢复提速到
+	// 阈值秒级。0=默认 90 秒，负数=禁用看护（维持旧行为）
+	aiStreamIdleTimeout = 90 * time.Second
 	// 阶段五十七：用户自建智能体配置（config.yaml ai.user_agent 归口，启动时加载）
 	aiUserEnabled    = false  // 总开关（默认关闭，需 config 显式开启）
 	aiUserProviders  []string // 用户可选模型服务白名单（provider 名）
@@ -96,6 +107,10 @@ var (
 	// 阶段一百三十一：启用中的模型服务有序列表（DB id 序，reloadAIAgents 原子替换）——
 	// 主源失败时按此顺序取备用源（aiFailoverChain），对话/Agent/压缩/建议等全部模型调用共用
 	aiProviders []*config.AIProviderConfig
+	// 阶段一百九十：轻量模型服务（任务内分工·多模型协同）——config.yaml ai.light_provider 配置服务名，
+	// reloadAIAgents 按启用 provider 解析；nil=未配置或未命中（辅助调用回退智能体绑定模型）
+	aiLightProviderName string
+	aiLightProvider     *config.AIProviderConfig
 )
 
 // InitAI 阶段四十三：初始化 AI 智能体（服务端归口：API 地址与密钥仅存服务端，客户端不接触）
@@ -107,6 +122,8 @@ var (
 func InitAI(cfg *config.Config) {
 	// 种子导入：全新部署（AI 两表均空）时从 config.yaml 迁入一次
 	seedAIFromConfig(cfg)
+	// 阶段一百九十：轻量模型服务名（须先于 reloadAIAgents 赋值——reload 按它解析启用 provider）
+	aiLightProviderName = strings.TrimSpace(cfg.AI.LightProvider)
 	// 从数据库构建运行时索引
 	reloadAIAgents()
 
@@ -144,6 +161,12 @@ func InitAI(cfg *config.Config) {
 	aiUserProviders = cfg.AI.UserAgent.Providers
 	if cfg.AI.UserAgent.MaxPerUser > 0 {
 		aiUserMaxPerUser = cfg.AI.UserAgent.MaxPerUser
+	}
+	// 阶段一百九十五：AI 响应空闲超时兜底（0=默认 90 秒，负数=禁用看护）
+	if cfg.AI.StreamIdleTimeout > 0 {
+		aiStreamIdleTimeout = time.Duration(cfg.AI.StreamIdleTimeout) * time.Second
+	} else if cfg.AI.StreamIdleTimeout < 0 {
+		aiStreamIdleTimeout = 0
 	}
 	if cfg.AI.UserAgent.PromptLimit > 0 {
 		aiUserPromptMax = cfg.AI.UserAgent.PromptLimit
@@ -253,11 +276,22 @@ func reloadAIAgents() {
 		logger.Warn("未配置 AI 智能体，内置默认\"AI助手\"（本地 Mock 应答）；请在后台管理界面添加智能体")
 	}
 
+	// 阶段一百九十：轻量模型解析（按启用 provider 热解析；未命中记日志回退绑定模型）
+	var lightP *config.AIProviderConfig
+	if aiLightProviderName != "" {
+		if p, ok := provMap[aiLightProviderName]; ok {
+			lightP = p
+		} else {
+			logger.Warn("轻量模型服务 %q 未配置或已停用，子 Agent/压缩摘要回退智能体绑定模型", aiLightProviderName)
+		}
+	}
+
 	// 写锁原子替换（对话链路持 RLock 读取，替换期间阻塞极短）
 	aiMu.Lock()
 	aiAgents = newList
 	aiAgentIndex = newIndex
 	aiProviders = provOrder // 阶段一百三十一：备用源有序链同步热替换
+	aiLightProvider = lightP
 	aiMu.Unlock()
 	logger.Info("AI 助手加载完成：%d 个智能体，%d 个可用模型服务", len(newList), len(provMap))
 }
@@ -448,6 +482,82 @@ func aiFailoverChain(primary *config.AIProviderConfig) []*config.AIProviderConfi
 	return chain
 }
 
+// aiModelLabel 模型服务展示名归口（日志/事件用）：绑定 provider 名，未绑定显示"本地Mock"
+func aiModelLabel(agent *AIRunAgent) string {
+	if agent == nil || agent.Provider == nil {
+		return "本地Mock"
+	}
+	return agent.Provider.Name
+}
+
+// aiOverrideAgent 阶段一百九十：模型覆盖归口（A·会话内一键切换模型）——providerName 非空时
+// 浅拷贝智能体临时换绑所选模型（仅本次对话/任务生效，不改库不影响他人，多源兜底链随新主源重建）；
+// 空名或与当前绑定同名原样返回。未知名/已停用返回错误（前端选择器仅列启用项，此处为协议直发兜底）。
+// 换绑后 SupportsImage 随新 provider 继承（与 reloadAIAgents 同口径）
+func aiOverrideAgent(agent *AIRunAgent, providerName string) (*AIRunAgent, error) {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" || (agent.Provider != nil && agent.Provider.Name == providerName) {
+		return agent, nil
+	}
+	aiMu.RLock()
+	var p *config.AIProviderConfig
+	for _, c := range aiProviders {
+		if c.Name == providerName {
+			p = c
+			break
+		}
+	}
+	aiMu.RUnlock()
+	if p == nil {
+		return nil, fmt.Errorf("模型服务 %q 未配置或已停用", providerName)
+	}
+	na := *agent
+	na.Provider = p
+	na.SupportsImage = p.SupportsImage
+	logger.Info("AI 模型覆盖生效（智能体 %s）：绑定 %s → 会话选择 %s", agent.Name, aiModelLabel(agent), p.Name)
+	return &na, nil
+}
+
+// aiLightAgent 阶段一百九十：轻模型协同归口（B·任务内分工）——轻量模型已配置启用时浅拷贝
+// 智能体换绑轻模型（辅助调用专用：子 Agent 调研/历史压缩摘要），未配置或未命中回退原智能体
+// （维持现状全走绑定模型）。名字保留原智能体（事件流/日志可读性）
+func aiLightAgent(agent *AIRunAgent) *AIRunAgent {
+	aiMu.RLock()
+	p := aiLightProvider
+	aiMu.RUnlock()
+	if p == nil || agent == nil {
+		return agent
+	}
+	na := *agent
+	na.Provider = p
+	na.SupportsImage = p.SupportsImage
+	return &na
+}
+
+// aiModelItem 用户端模型列表项（GET /api/ai/models 响应体）——
+// 仅名称/模型名/图片能力，api_key/api_url 凭据字段绝不出现（与管理端 DTO 分口径）
+type aiModelItem struct {
+	Name          string `json:"name"`
+	Model         string `json:"model"`
+	SupportsImage bool   `json:"supports_image"`
+}
+
+// HandleAIModels GET /api/ai/models：已启用模型服务列表（会话内模型选择器数据源；
+// 鉴权水位与 /api/agent/tasks 一致 username query）。轻量模型分工是否启用随 light 字段下发
+// （前端选择器可展示"轻模型协同"提示）
+func (s *Server) HandleAIModels(w http.ResponseWriter, r *http.Request) {
+	if _, ok := userKBUsername(w, r); !ok {
+		return
+	}
+	aiMu.RLock()
+	defer aiMu.RUnlock()
+	out := make([]aiModelItem, 0, len(aiProviders))
+	for _, p := range aiProviders {
+		out = append(out, aiModelItem{Name: p.Name, Model: p.Model, SupportsImage: p.SupportsImage})
+	}
+	adminJSON(w, map[string]interface{}{"models": out, "light": aiLightProviderName})
+}
+
 // aiIsTimeoutErr 判断是否超时类错误——超时类不在同源重试（主源已卡满一个超时周期，重试只会双倍等待）
 func aiIsTimeoutErr(err error) bool {
 	if err == nil {
@@ -619,7 +729,11 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 	if err != nil {
 		return aiStreamRes{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(body))
+	// 阶段一百九十五：空闲看护——watchCtx 供建请求（cancel 可中断），body 包装后喂 scanner，
+	// 数据块间空闲超阈值即中断（上游断流不再等 aiAskTimeout 5 分钟总超时兜底）
+	watchCtx, bodyWrap, stopWatch := aiIdleWatch(ctx, aiStreamIdleTimeout)
+	defer stopWatch()
+	req, err := http.NewRequestWithContext(watchCtx, http.MethodPost, p.APIURL, bytes.NewReader(body))
 	if err != nil {
 		return aiStreamRes{}, err
 	}
@@ -645,7 +759,7 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 	// usage 随末尾帧下发（include_usage），取到即记（无则保持零值，前端不显示）
 	var full strings.Builder
 	var usage aiUsage
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(bodyWrap(resp)) // 阶段一百九十五：空闲看护包装（数据块到达即续期）
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -677,6 +791,11 @@ func aiStreamChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIPro
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		// 阶段一百九十五：空闲看护触发（上游断流）转超时类错误——aiFailoverRun 跳过同源重试直接换源；
+		// 用户主动停止走父级 context.Canceled 原样返回
+		if cause := context.Cause(watchCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return aiStreamRes{text: full.String(), usage: usage}, cause
+		}
 		return aiStreamRes{text: full.String(), usage: usage}, err
 	}
 	if full.Len() == 0 {
@@ -818,6 +937,48 @@ func aiAgentChat(ctx context.Context, agent *AIRunAgent, msgs []aiChatMessage, t
 	return res.content, res.calls, err
 }
 
+// aiIdleReader 阶段一百九十五：空闲看护 body 包装——每次成功读到数据就 Reset 看护计时器，
+// 数据块间空闲超过阈值时计时器回调中断请求（见 aiIdleWatch），阻塞中的 Read 立即返回错误
+type aiIdleReader struct {
+	rc      io.ReadCloser
+	timer   *time.Timer
+	timeout time.Duration
+}
+
+func (r *aiIdleReader) Read(p []byte) (int, error) {
+	n, err := r.rc.Read(p)
+	if n > 0 && r.timer != nil {
+		r.timer.Reset(r.timeout)
+	}
+	return n, err
+}
+
+func (r *aiIdleReader) Close() error { return r.rc.Close() }
+
+// aiIdleWatch 阶段一百九十五：AI 响应空闲看护归口（流式/非流式 attempt 共用）——
+// 上游建连后断流（连接未断但长时间无数据，实测 deepseek 偶发）时 scanner.Scan/ReadAll 阻塞，
+// 只能靠 aiAskTimeout 5 分钟总超时兜底（任务卡死观感差）。本包装在数据块间空闲超过 timeout 时
+// 以 cancel 原因中断请求，错误消息含 "idle timeout" 被 aiIsTimeoutErr 归为超时类——
+// aiFailoverRun 跳过同源快速重试直接换源（或链尽报错），断流恢复从分钟级提速到阈值秒级。
+// 返回（watchCtx, body 包装器, 收尾函数）：attempt 侧 req 须用 watchCtx 创建（cancel 才能中断
+// 请求），body 用 bodyWrap(resp) 包装后交给 scanner/ReadAll，错误分支以 context.Cause(watchCtx)
+// 非 nil 且非 context.Canceled 判定看护触发。timeout<=0（禁用）时原样透传零开销。
+func aiIdleWatch(ctx context.Context, timeout time.Duration) (context.Context, func(*http.Response) io.Reader, func()) {
+	if timeout <= 0 {
+		return ctx, func(resp *http.Response) io.Reader { return resp.Body }, func() {}
+	}
+	watchCtx, cancel := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(timeout, func() {
+		cancel(fmt.Errorf("AI 响应空闲超时 (stream idle timeout %s without data)", timeout))
+	})
+	return watchCtx, func(resp *http.Response) io.Reader {
+			return &aiIdleReader{rc: resp.Body, timer: timer, timeout: timeout}
+		}, func() {
+			timer.Stop()
+			cancel(nil)
+		}
+}
+
 // aiAgentChatAttempt aiAgentChat 主体（非流式单次调用，显式指定 provider 执行——多源兜底由 aiFailoverRun 归口）
 func aiAgentChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProviderConfig, msgs []aiChatMessage, tools []aiToolDefinition) (aiAgentChatRes, error) {
 	body := map[string]interface{}{
@@ -834,7 +995,10 @@ func aiAgentChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProv
 	if err != nil {
 		return aiAgentChatRes{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.APIURL, bytes.NewReader(data))
+	// 阶段一百九十五：空闲看护——watchCtx 供建请求（cancel 可中断），body 包装后喂 ReadAll
+	watchCtx, bodyWrap, stopWatch := aiIdleWatch(ctx, aiStreamIdleTimeout)
+	defer stopWatch()
+	req, err := http.NewRequestWithContext(watchCtx, http.MethodPost, p.APIURL, bytes.NewReader(data))
 	if err != nil {
 		return aiAgentChatRes{}, err
 	}
@@ -848,8 +1012,11 @@ func aiAgentChatAttempt(ctx context.Context, agent *AIRunAgent, p *config.AIProv
 		return aiAgentChatRes{}, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	raw, err := io.ReadAll(io.LimitReader(bodyWrap(resp), 8<<20))
 	if err != nil {
+		if cause := context.Cause(watchCtx); cause != nil && !errors.Is(cause, context.Canceled) {
+			return aiAgentChatRes{}, cause // 空闲看护触发：转超时类错误（aiIsTimeoutErr 命中换源）
+		}
 		return aiAgentChatRes{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -1166,6 +1333,7 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 	}
 	// 增量收集：只摘要缓存未覆盖（id > ent.UptoID）的段落；缓存已全覆盖则直接复用，零 LLM 调用
 	segs := make([]string, 0, len(old))
+	newSegTokens := 0 // 未摘要新增段的估算 token（节流判据，按截断前原文计）
 	maxOldID := uint(0)
 	for i := len(old) - 1; i >= 0; i-- { // id ASC 顺序转录
 		if old[i].ID > maxOldID {
@@ -1178,6 +1346,7 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 		if content == "" {
 			continue
 		}
+		newSegTokens += aiEstimateTokens(content)
 		// 阶段一百零三：转录段瘦身——每条历史先按 rune 截断再进摘要（摘要只需要点，全文转录
 		// 会让压缩调用本身烧掉大量 tokens；原始历史仍在库中可随时重压）
 		if aiCompressSegMaxRunes > 0 {
@@ -1194,6 +1363,12 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 	prev := ""
 	if ent != nil {
 		prev = ent.Summary
+	}
+	// 阶段一百九十二：增量压缩节流——已有摘要且新增段 token 未达门槛时复用摘要直接回答，
+	// 不跑增量 LLM、不发"压缩中"提示帧（新增段暂留原文窗口尾部，攒够再压）；
+	// 首次压缩（无缓存）不节流，保证长历史首压及时收敛
+	if ent != nil && newSegTokens < aiCompressIncrementTokens {
+		return records[len(records)-keep:], prev
 	}
 	summary := prev
 	if len(segs) > 0 {
@@ -1215,6 +1390,9 @@ func (s *Server) aiCompressHistory(ctx context.Context, username string, agent *
 // （provider 未配置/调用失败返回空串；aiStreamChat 丢弃增量，不产生对用户的流式输出；
 // ctx 为空时按独立超时上下文处理——Agent 任务路径无停止句柄可挂）
 func aiCompressSummarize(ctx context.Context, agent *AIRunAgent, prevSummary string, segs []string) string {
+	// 阶段一百九十：轻模型协同（任务内分工）——压缩摘要属辅助调用，轻量模型已配置时走轻模型，
+	// 未配置回退传入模型（维持现状）
+	agent = aiLightAgent(agent)
 	var b strings.Builder
 	b.WriteString("你是即时通讯系统的对话上下文压缩器。请把提供的历史对话记录蒸馏为一份紧凑摘要，供 AI 在后续对话中作为较早历史的记忆使用。要求：\n" +
 		"1. 保留关键事实、结论、决定、数字、文件/路径/命令及其结果、未解决的问题；\n" +
@@ -1458,7 +1636,15 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		s.sendError(c, "AI 助手不存在或已被移除")
 		return
 	}
-	logger.Info("AI 问答上行（用户 %s，智能体 %s，remark=%q，sid=%d，content前60=%q）", c.username, agent.Name, msg.Remark, msg.SessionID, aiLeakLogSnippet(msg.Content))
+	// 阶段一百九十：会话内模型覆盖（前端模型选择器随问随带 msg.model_name；空=跟随智能体绑定，
+	// 未知名/已停用拒绝——选择器仅列启用项，此处为协议直发兜底）
+	ovAgent, err := aiOverrideAgent(agent, msg.ModelName)
+	if err != nil {
+		s.sendError(c, err.Error())
+		return
+	}
+	agent = ovAgent
+	logger.Info("AI 问答上行（用户 %s，智能体 %s，模型 %s，remark=%q，sid=%d，content前60=%q）", c.username, agent.Name, aiModelLabel(agent), msg.Remark, msg.SessionID, aiLeakLogSnippet(msg.Content))
 
 	// 阶段七十一：多会话归属校验（上行 session_id 指定目标会话，0=默认会话；
 	// 非法 id 拒绝，防协议直发把消息盖到他人/不存在的会话）
@@ -1635,6 +1821,10 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 		chatMsgs[len(chatMsgs)-1].Content = docPrompt
 	}
 
+	// 阶段一百九十四：上下文水位——注入模型的最终消息集估算（图片/文档替换后取值才准确，多模态仅计文本 part），
+	// 随 END 帧下发前端输入区上方常驻水位条（max=压缩阈值，达 100% 即将触发历史压缩，与 aiCompressHistory 判据同口径）
+	ctxUsed := aiMsgsEstimateTokens(chatMsgs)
+
 	// 异步调用模型流式接口，避免阻塞 WebSocket 主调度
 	go func() {
 		// 阶段七十三：协程退出统一收口（注销停止句柄 + 释放超时上下文）
@@ -1788,6 +1978,13 @@ func (s *Server) handleAIChatMsg(c *Client, msg *protocol.Message) {
 			PointsCost:       &cost,      // 阶段一百三十八：本次实际扣费积分（服务端归口折算，前端只展示）
 			BillingMode:      billingMode,
 			Timestamp:        time.Now().Unix(),
+		}
+		// 阶段一百九十四：上下文水位随 END 帧下发（未启用压缩 aiCompressThreshold<=0 时缺省，前端水位条不展示）
+		if aiCompressThreshold > 0 {
+			ctxMax := aiCompressThreshold
+			endMsg.ContextUsed = &ctxUsed
+			endMsg.ContextMax = &ctxMax
+			endMsg.ContextMode = "tokens"
 		}
 		data, _ := json.Marshal(endMsg)
 		s.sendToUser(c.username, data)

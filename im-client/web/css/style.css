@@ -1480,13 +1480,16 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 12px;
+    gap: 8px; /* 阶段一百九十二：12→8px——左下三按钮（+/审批/模型）间距收紧（配合按钮 padding 0 4px，视觉间距 24→16px），行尾 hint/send 同步微收 */
     padding: 4px 16px 10px;
 }
 
 .input-hint {
     font-size: 12px;
     color: var(--text-light);
+    /* 阶段一百九十二：左下按钮组（+/审批/模型）驻左、hint/send 驻右的分布归口——
+       auto margin 放在始终显示的 hint 上，不随按钮显隐组合变化（原放按钮上有 hidden 失效边界） */
+    margin-left: auto;
 }
 
 .input-footer button {
@@ -1509,6 +1512,35 @@ html, body {
    覆盖层 pointer-events:none 不拦截鼠标事件（否则 dragleave 在覆盖层上乱跳），颜色跟随主题变量 */
 .input-bar {
     position: relative;
+}
+
+/* ===== 阶段一百九十二：发送按钮纯图标形态（TRAE CN 同款）=====
+   纸飞机=发送 / 白色方块=停止（chat.js 切换 innerHTML）；固定 32px 方形，
+   窄聊天区不再出现"发送"两字竖排换行挤压；图标颜色随按钮白字继承 */
+#send-btn {
+    width: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+}
+
+#send-btn .stop-icon {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 0; /* 纯图标态无文字，不再留文字间距 */
+    vertical-align: 0;
+    background: #fff;
+    border-radius: 2px;
+}
+
+/* 窄聊天区自适应（chat.js ResizeObserver 挂 .input-narrow）：隐藏 Enter 提示文案与
+   模型按钮标签（只留图标+三角），防文字挤压换行/左下按钮被挤出可视区 */
+.input-bar.input-narrow .input-hint,
+.input-bar.input-narrow .ai-model-btn-label {
+    display: none;
 }
 
 .input-bar.drag-over::after {
@@ -1538,16 +1570,7 @@ html, body {
     pointer-events: none;
 }
 
-/* 阶段七十三：发送按钮"停止"态（Trae 同款）——问答生成中/任务执行中显示，背景仍跟随主题色 */
-#send-btn .stop-icon {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    margin-right: 6px;
-    vertical-align: -1px;
-    background: #fff;
-    border-radius: 2px;
-}
+/* 阶段一百九十二：旧"停止态"规则已并入上方 #send-btn 图标形态块（margin-right 清零适配纯图标） */
 
 /* 阶段七十三：AI 回复气泡"已停止生成"留痕标注（弱化灰字，操作栏下方） */
 .ai-stopped-note {
@@ -2279,6 +2302,18 @@ html, body {
 @keyframes toast-in {
     from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 阶段一百九十四：可点击 Toast（任务提醒直达会话）——pointer 光标 + hover 反馈（背景提亮 + 主题色描边） */
+.toast-clickable {
+    cursor: pointer;
+    border: 1px solid var(--primary, #409eff);
+    transition: background 0.15s, transform 0.15s;
+}
+
+.toast-clickable:hover {
+    background: rgba(0, 0, 0, 0.88);
+    transform: translateX(-50%) translateY(-1px);
 }
 
 /* ===== 置顶消息条：服务端归口，双方同步，样式跟随主题 ===== */
@@ -3322,6 +3357,41 @@ html, body {
 /* 单张缩略图单元（相对定位：× 删除按钮钉在右上角） */
 .pending-shot-item {
     position: relative;
+}
+
+/* 阶段一百九十二：附件待发条（微信同款）——骨架复用 .pending-shot 系列（条/列表/× 删除），
+   仅补文档卡片差异项；图片附件直接复用 .pending-shot img 缩略图尺寸（56x40） */
+.pending-file-card {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 10px;
+    background: color-mix(in srgb, var(--primary) 8%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-width: 220px;
+}
+
+.pending-file-icon {
+    display: inline-flex;
+    color: var(--primary);
+}
+
+.pending-file-meta {
+    font-size: 12px;
+    color: var(--text);
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pending-file-meta i {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: 6px;
 }
 
 .pending-shot img {
@@ -4956,6 +5026,54 @@ html.m #list-panel.list-collapsed {
     white-space: nowrap;
 }
 
+/* ===== 阶段一百九十四：普通 AI 问答上下文水位条（输入区底部右侧常驻，TRAE CN 同款）=====
+   环视觉语言与任务卡占用环（.agent-task-ctx）一致：底环中性色、进度弧主题色、
+   ≥80% 橙 / ≥95% 红分档；尺寸略大（14px）适配 footer 行高；hidden 显隐由通用 .hidden 归口 */
+.ai-ctx-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    margin-right: 8px;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+.ai-ctx-bar svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.ai-ctx-bar circle {
+    fill: none;
+    stroke-width: 5;
+}
+
+.ai-ctx-bar .ctx-bg {
+    stroke: var(--hover, #f0f0f0);
+}
+
+.ai-ctx-bar .ctx-fg {
+    stroke: var(--primary);
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.4s ease, stroke 0.2s;
+}
+
+.ai-ctx-bar .ctx-fg.ctx-warn {
+    stroke: #e6a23c;
+}
+
+.ai-ctx-bar .ctx-fg.ctx-danger {
+    stroke: #f56c6c;
+}
+
+.ai-ctx-pct {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    white-space: nowrap;
+}
+
 /* 任务清单（todo_write 全量重绘） */
 .agent-todo-list {
     border-top: 1px dashed var(--border, #e8e8e8);
@@ -5119,6 +5237,24 @@ html.m #list-panel.list-collapsed {
 .agent-event.tool.fail .agent-event-head::after {
     content: '异常';
     color: #f56c6c;
+}
+
+/* 阶段一百九十二：任务取消/失败/完结时未收到结果的中止工具块（灰色"已中止"终态标记，跟随主题） */
+.agent-event.tool.abort {
+    border-color: var(--border, #ececec);
+    opacity: 0.75;
+}
+
+.agent-event.tool.abort .agent-event-head {
+    background: var(--hover, #f0f0f0);
+    color: var(--text-secondary, #999);
+}
+
+.agent-event.tool.abort .agent-event-head::after {
+    content: '已中止';
+    float: right;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
 }
 
 /* ===== 阶段一百七十二：逐轮 Checkpoint 时间线（TRAE CN 同款轮次节点） ===== */
@@ -10998,6 +11134,135 @@ html.m .ms-actions {
     color: var(--danger, #fa5151);
 }
 
+/* ===== 阶段一百九十三：多任务并行看板（跨会话活跃任务实时视图；全部跟随主题变量） ===== */
+.agent-board-box {
+    max-width: 640px;
+    width: 92%;
+}
+
+.agent-board-list {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.agent-board-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--panel-bg);
+    transition: border-color 0.15s ease;
+}
+
+.agent-board-row:hover {
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.agent-board-row.status-running {
+    border-left: 3px solid var(--primary);
+}
+
+.agent-board-row.status-queued {
+    border-left: 3px solid var(--warning, #d29922);
+}
+
+.agent-board-row.status-waiting_approval {
+    border-left: 3px solid var(--warning, #d29922);
+}
+
+.agent-board-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.agent-board-agent {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.agent-board-goal {
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 380px;
+}
+
+.agent-board-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+}
+
+.agent-board-state {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+.agent-board-state.queued,
+.agent-board-state.waiting_approval {
+    background: color-mix(in srgb, var(--warning, #d29922) 14%, transparent);
+    color: var(--warning, #d29922);
+}
+
+.agent-board-progress {
+    font-size: 11px;
+    color: var(--text-light);
+    white-space: nowrap;
+}
+
+.agent-board-elapsed {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    min-width: 64px;
+}
+
+.agent-board-ops {
+    display: flex;
+    gap: 6px;
+    flex: none;
+}
+
+/* 入口按钮活跃计数徽标（右上角圆点数字，主题色底） */
+.agent-board-btn {
+    position: relative;
+}
+
+.agent-board-badge {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 14px;
+    height: 14px;
+    line-height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 600;
+    text-align: center;
+    pointer-events: none;
+}
+
+.agent-board-flex {
+    flex: 1;
+}
+
 /* 展开详情区：pre-wrap 保留换行，主题色标签行 */
 .taskhist-detail {
     margin-top: 8px;
@@ -13162,12 +13427,15 @@ body.browser-resizing .browser-web-frame {
     border-radius: 6px;
 }
 
-/* 底部行左下角盾牌按钮（TRAE CN 同款）：.input-footer button 通配规则会给它染成主色发送键，
-   此处还原 tool-btn 幽灵外观；margin-right:auto 把它推到行首（提示文案与发送键保持右侧） */
-.input-footer .agent-approve-btn {
-    margin-right: auto;
+/* 底部行左下角按钮组（+ 附件/审批盾牌/模型选择，均 TRAE CN 同款）：.input-footer button 通配
+   规则会把它们染成主色发送键，此处统一还原 tool-btn 幽灵外观；行首/行尾分布由
+   .input-hint 的 margin-left:auto 承接（左下按钮组无论显隐组合都驻左，hint/send 驻右）
+   注：+ 按钮不额外加边框/三角（纯 + 图标，与微信工具栏图标同款观感） */
+.input-footer .attach-btn,
+.input-footer .agent-approve-btn,
+.input-footer .ai-model-btn {
     width: auto;
-    padding: 0 6px;
+    padding: 0 4px;
     background: none;
     color: var(--text-light);
 }
@@ -13243,6 +13511,54 @@ body.browser-resizing .browser-web-frame {
     visibility: hidden; /* 仅选中项显示（.selected 放开） */
 }
 .agent-approve-item.selected .agent-approve-check {
+    visibility: visible;
+}
+
+/* ===== 阶段一百九十：会话内模型选择器（TRAE CN 同款，自研下拉跟随主题色） =====
+   面板复用 .agent-approve-panel 基础样式（绝对定位/边框/阴影/内边距），条目复用
+   .agent-approve-item 行布局（hover 主题色 8% / 图标底 / 文案两行 / 选中对勾），
+   仅补模型面板专属：按钮标签、面板锚位、条目限高滚动（自绘悬浮滑块，禁系统滚动条） */
+.ai-model-btn {
+    gap: 4px;
+}
+.ai-model-btn-label {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--text-secondary, var(--text));
+    user-select: none;
+}
+/* 已选非默认模型时标签主题色高亮（active 为按钮按压态，二者叠加均走主题色） */
+.ai-model-btn.ai-model-custom .ai-model-btn-label {
+    color: var(--primary);
+}
+.ai-model-panel {
+    /* 位置：与审批面板同款动态锚定（chat.js 打开时按按钮坐标写 left/bottom），
+       此处不再覆盖基类 bottom:180px——180px 仅作 JS 坐标失效时的兜底 */
+}
+.ai-model-items {
+    max-height: 264px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.ai-model-badge {
+    flex-shrink: 0;
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+    user-select: none;
+}
+.ai-model-check {
+    flex-shrink: 0;
+    color: var(--primary);
+    visibility: hidden;
+}
+.ai-model-item.selected .ai-model-check {
     visibility: visible;
 }
 

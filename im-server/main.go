@@ -156,12 +156,18 @@ func main() {
 	// 调度循环（启动即扫描一次：重启后 next_run_at 过期的任务补跑）
 	server.StartAgentCron(srv)
 
+	// 阶段一百九十：已启用模型服务列表（会话内模型选择器数据源；仅名称/模型名/图片能力，
+	// 凭据字段绝不出现；鉴权水位与 /api/agent/tasks 一致）
+	http.HandleFunc("GET /api/ai/models", srv.HandleAIModels)
+
 	// 阶段一百八十三：工作区文件上传（服务端模式直落工作区；PC 本地模式转发执行器，
 	// 路径安全归口 agentSafePath + wsEntryName，鉴权水位与 /agent/preview 一致）
 	http.HandleFunc("POST /api/agent/ws/upload", srv.HandleAgentWsUpload)
 
 	// 阶段五十九：Agent 工作区静态访问（页面预览支撑，仅限本人工作区内文件）
 	http.HandleFunc("GET /agent/preview", srv.HandleAgentPreview)
+	// 阶段一百九十一：工作区目录级静态预览（多文件 HTML 产物整页打开 + Agent 视觉自检截图链路）
+	http.HandleFunc("GET /agent/site/{username}/{path...}", srv.HandleAgentSite)
 	// 静态文件托管前端（im-client/web）
 	// 原实现：http.Handle("/", http.FileServer(http.Dir("../im-client/web")))（相对进程工作目录，从 bin 目录双击 exe 启动会 404）
 	// 现改为读取配置 WebDir（锚定 exe 所在目录解析，双击 bin 目录下的 exe 亦可正常访问）
