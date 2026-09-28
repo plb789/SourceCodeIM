@@ -399,6 +399,7 @@
     }
     function clearAuth() {
         try { localStorage.removeItem('im_auth'); } catch (e) {}
+        try { localStorage.removeItem('drive_token'); } catch (e) {} // 阶段一百九十八：切号/登出同步清网盘 token
     }
     function getSavedAuth() {
         try { return JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || null; } catch (e) { return null; }

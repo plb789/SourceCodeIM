@@ -329,6 +329,11 @@
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
                 }
+                // 阶段一百九十八：接收网盘 API 鉴权 token（登录签发、Redis 会话、连接断开即吊销）；
+                // drive.js 网盘请求头归口注入。无 token/旧服务端走兼容路径，敏感字段（提取码）不回传
+                if (info && info.drive_token) {
+                    try { localStorage.setItem('drive_token', info.drive_token); } catch (err) {}
+                }
                 // 阶段一百三十八：接收服务端计费模式（usage 按量 / percall 按次 TRAE CN 同款）与按次单价——
                 // 标题栏 ⚡ 积分悬停提示按模式显示对应扣费口径；归口 chat.js 的 window.applyTitlebarBillingTip
                 if (info && info.billing_mode && typeof window.applyTitlebarBillingTip === 'function') {

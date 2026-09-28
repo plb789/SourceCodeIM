@@ -19,6 +19,7 @@ const (
 	KeyFileChunk  = "im:file:chunk:"  // 文件分片缓存 im:file:chunk:fileid
 	KeySession    = "im:session:"     // 用户会话缓存 im:session:username
 	KeyOfflineMsg = "im:offline:msg:" // 离线消息队列 im:offline:msg:username
+	KeyDriveToken = "im:drivetoken:"  // 网盘 API 鉴权 token 会话 im:drivetoken:<token> → username（阶段一百九十八）
 )
 
 // InitRedis 初始化 Redis 连接并校验连通性

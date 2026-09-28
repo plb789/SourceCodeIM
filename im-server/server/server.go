@@ -131,6 +131,9 @@ func (s *Server) sendToUserBlock(username string, data []byte, timeout time.Dura
 
 // unregister 连接断开后的清理（按连接移除，同账号其他设备仍在线时不判定离线）
 func (s *Server) unregister(c *Client) {
+	// 阶段一百九十八：连接断开即吊销其网盘 API token（按 token 吊销，其他端 token 不受影响；
+	// 未登录连接 token 为空串，Revoke 内部判空安全）
+	DriveTokenRevoke(c.driveToken)
 	if c.username == "" {
 		return
 	}
@@ -432,6 +435,8 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 
 	c.username = user.Username
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
+	// 阶段一百九十八：签发网盘 API 鉴权 token（登录回执下发；连接断开即吊销，签发失败回空串走前端兼容路径）
+	c.driveToken = DriveTokenIssue(user.Username)
 	// 阶段六十：记录登录设备类型（"pc"=Electron 桌面端）——Agent 本地执行器据此判定工具下发目标
 	c.platform = strings.TrimSpace(msg.Platform)
 	// 5万容量改造（E9）：首设备判定改由 Add 返回（加入前连接集合为空）——
@@ -527,6 +532,12 @@ func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
 func (s *Server) handleHeartbeat(c *Client) {
 	ctx := context.Background()
 	store.RDB.Set(ctx, store.KeyOnlineUser+c.username, "online", 120*time.Second)
+	// 阶段一百九十八：网盘 token 在线续期（30 分钟节流）——在线用户 token 永不静默过期
+	// （7 天 TTL 只对离线场景兜底），避免长时间在线后提取码显示静默消失；Expire 极轻，节流后可忽略
+	if c.driveToken != "" && time.Since(c.lastTokenTouch) >= 30*time.Minute {
+		c.lastTokenTouch = time.Now()
+		store.RDB.Expire(ctx, store.KeyDriveToken+c.driveToken, driveTokenTTL)
+	}
 	// 集群模式：全局在线名单心跳续期（60s 新鲜度过滤的判定依据）
 	if s.hub.bus != nil {
 		store.RDB.HSet(ctx, KeyUserList, c.username, strconv.FormatInt(time.Now().Unix(), 10))
@@ -1083,6 +1094,8 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		"file_p2p_archive":           s.cfg.FileP2P.Archive,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
+		// 阶段一百九十八：下发网盘 API 鉴权 token（前端 localStorage 持久化，网盘请求头 X-Drive-Token 携带）
+		"drive_token": c.driveToken,
 		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）
 		"profile": map[string]interface{}{
 			"nickname":  user.Nickname,

@@ -20,7 +20,11 @@ type Client struct {
 	loginTime time.Time // 本次登录时间，用于好友申请去重
 	// 阶段六十：登录设备类型（"pc"=Electron 桌面端，空=Web/手机）——Agent 本地执行器据此判定工具下发目标
 	platform string
-	sendCh   chan []byte
+	// 阶段一百九十八：网盘 API 鉴权 token（登录签发，回执下发前端网盘请求头携带；连接断开即吊销）
+	driveToken string
+	// token 心跳续期节流时间戳（零值=从未续期，首次心跳立即续；仅内存比对，无锁——单连接读循环内串行访问）
+	lastTokenTouch time.Time
+	sendCh         chan []byte
 	// 回归加固：连接写互斥锁——writePump（队列写）与 SendErrorAndClose（登录失败同步写）
 	// 都可能写同一底层连接，gorilla/websocket 不允许并发写（会 panic 打崩进程），必须串行化
 	writeMu sync.Mutex

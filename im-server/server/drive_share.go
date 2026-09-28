@@ -501,9 +501,14 @@ func (s *Server) handleDriveShareList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]driveShareClient, 0, len(shares))
+	// 提取码回填仅对 token 校验通过的本人请求开放（guardDrive 置 Verified 标记）：
+	// 无 token 的历史路径（老客户端/越权查询）不回填，防提取码泄密
+	verified := r.Header.Get("X-Drive-Verified") == "1"
 	for i := range shares {
 		out = append(out, driveShareToClient(s, &shares[i], true))
-		out[len(out)-1].ExtractCode = shares[i].ExtractCode // 仅本人列表回填提取码（公开 info 永不回填）
+		if verified {
+			out[len(out)-1].ExtractCode = shares[i].ExtractCode
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"items": out})

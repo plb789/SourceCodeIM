@@ -1721,6 +1721,7 @@
   "提取码 {v}": "Extract code {v}",
   "复制链接": "Copy link",
   "链接与提取码已复制": "Link and extract code copied",
+  "登录已过期，请重新登录": "Session expired, please sign in again",
   "目录不存在": "Folder not found",
   "名称不合法": "Invalid name",
   "创建失败": "Failed to create",

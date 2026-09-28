@@ -100,10 +100,18 @@
     }
     function clearAuth() {
         try { localStorage.removeItem('im_auth'); } catch (e) {}
+        try { localStorage.removeItem('drive_token'); } catch (e) {} // 阶段一百九十八：登出同步清网盘 token
     }
 
     // ===== 通用请求（JSON 归口，服务端 error 文本直显） =====
     function apiJSON(url, opts, cb) {
+        opts = opts || {};
+        opts.headers = opts.headers || {};
+        // 阶段一百九十八：网盘 token 鉴权头（主站/分享页 WS 登录统一由 socket.js 写入 localStorage）
+        try {
+            var dt = localStorage.getItem('drive_token');
+            if (dt) opts.headers['X-Drive-Token'] = dt;
+        } catch (e) {}
         fetch(url, opts).then(function (res) {
             res.json().then(function (data) {
                 if (!res.ok) cb(new Error(data.error || T('请求失败({n})', { n: res.status })), data);

@@ -119,13 +119,28 @@ func RegisterDriveRoutes(s *Server) {
 	s.startDriveUploadGC()
 }
 
-// guardDrive 网盘接口统一包装：总开关/用户名/在线校验归口（通过后才进具体处理器）
+// guardDrive 网盘接口统一包装：总开关/用户名/在线校验归口（通过后才进具体处理器）。
+// 阶段一百九十八：token 强校验——带 X-Drive-Token 时自报 username 必须与 token 签发归属一致
+// （防冒名查询/操作他人网盘与分享），校验通过置 X-Drive-Verified 标记供下游敏感字段（提取码）回传
+// 判定；无 token 走历史路径兼容旧客户端（敏感字段不回传，越权面不扩大）。
+// 先 Del 再 Set：客户端伪造的 Verified 头无条件清除，标记不可被请求侧注入
 func (s *Server) guardDrive(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		username := r.URL.Query().Get("username")
 		if msg := s.driveCheckUser(username); msg != "" {
 			http.Error(w, msg, http.StatusUnauthorized)
 			return
+		}
+		r.Header.Del("X-Drive-Verified")
+		if tk := r.Header.Get("X-Drive-Token"); tk != "" {
+			if tu, ok := DriveTokenVerify(tk); ok {
+				if tu != username {
+					logger.Warn("网盘 token 身份不符: tokenUser=%s queryUser=%s ip=%s", tu, username, r.RemoteAddr)
+					http.Error(w, "身份校验失败，请重新登录", http.StatusUnauthorized)
+					return
+				}
+				r.Header.Set("X-Drive-Verified", "1")
+			}
 		}
 		h(w, r)
 	}

@@ -122,12 +122,20 @@
 
     // ===== 通用请求（JSON 归口：失败弹自绘提示，服务端 error 文本全等反查翻译，客户端兜底文案走 T） =====
     function apiJSON(url, opts, cb) {
+        opts = opts || {};
+        opts.headers = opts.headers || {};
+        // 阶段一百九十八：网盘 token 鉴权头（登录回执下发 localStorage 持久化；无 token 走服务端兼容路径）
+        try {
+            var dt = localStorage.getItem('drive_token');
+            if (dt) opts.headers['X-Drive-Token'] = dt;
+        } catch (e) {}
         fetch(url, opts).then(function (res) {
             res.json().then(function (data) {
-                if (!res.ok) cb(new Error(data.error ? TR(data.error) : T('请求失败({n})', { n: res.status })), data);
+                if (!res.ok) cb(new Error(data.error ? TR(data.error) : (res.status === 401 ? T('登录已过期，请重新登录') : T('请求失败({n})', { n: res.status }))), data);
                 else cb(null, data);
             }, function () {
-                cb(new Error(T('请求失败({n})', { n: res.status })));
+                // 401 纯文本拒绝（guardDrive token 身份不符）无 JSON 体，同样给专用提示
+                cb(new Error(res.status === 401 ? T('登录已过期，请重新登录') : T('请求失败({n})', { n: res.status })));
             });
         }, function () {
             cb(new Error(T('网络异常，请稍后重试')));
