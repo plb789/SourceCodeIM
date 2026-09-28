@@ -253,7 +253,7 @@
             else if (item.dataset.view === 'billing') { loadBillingSettings(); }
             // 阶段一百三十九：进入历史压缩设置视图拉取当前生效压缩配置
             else if (item.dataset.view === 'compress') { loadCompressSettings(); }
-            else if (item.dataset.view === 'drive') { loadDriveBlockExts(); }
+            else if (item.dataset.view === 'drive') { loadDriveBlockExts(); loadDriveEdgeAuth(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1652,6 +1652,7 @@
             $('drive-blockexts').value = d.exts || '';
             $('drive-default-tip').textContent = '内置默认黑名单：' + d.default;
             $('drive-elf').checked = !!d.elf;
+            $('drive-cache').checked = !!d.cache; // 下载响应 CDN 缓存开关回显
             // 处置方式回显（rename=隔离改名 .im 默认 / deny=直接拦截）
             var mode = d.mode === 'deny' ? 'drive-mode-deny' : 'drive-mode-rename';
             document.getElementById(mode).checked = true;
@@ -1660,18 +1661,50 @@
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     }
 
+    // ===== 网盘设置：DCDN 远程鉴权热更（阶段一百九十七扩展，enabled/ticket_ttl/rate_limit） =====
+    // 读取当前生效设置回填表单（0=恢复默认口径：TTL 1800 / QPS 500）
+    // 来源标注不在此处写：与 loadDriveBlockExts 并发回填会争写同一个 drive-source-tip（后到覆盖前者），
+    // 两组同按钮一起保存来源同步变化，归口 blockexts 一处展示即可
+    function loadDriveEdgeAuth() {
+        api('GET', '/admin/api/drive/edgeauth').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            $('edge-auth-enabled').checked = !!d.enabled;
+            $('edge-auth-ttl').value = d.ticket_ttl > 0 ? d.ticket_ttl : 0;
+            $('edge-auth-rate').value = d.rate_limit > 0 ? d.rate_limit : 0;
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
     // 保存：空串=恢复内置默认黑名单；服务端逐项校验归一后落库 + 内存直更（挂载盘与网页上传同时生效）
     $('drive-save').addEventListener('click', function () {
         var raw = $('drive-blockexts').value.trim();
         var mode = $('drive-mode-deny').checked ? 'deny' : 'rename';
-        api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked, mode: mode }).then(function (result) {
-            if (!result.ok) {
-                showToast(result.msg || '保存失败');
-                return;
-            }
-            showToast('上传黑名单已保存并热生效');
+        // DCDN 远程鉴权三项校验（0=恢复默认；与 input min/max 及服务端校验同口径）
+        var ttl = parseInt($('edge-auth-ttl').value, 10) || 0;
+        var rate = parseInt($('edge-auth-rate').value, 10) || 0;
+        if (ttl !== 0 && (ttl < 60 || ttl > 86400)) { showToast('票据有效期须在 60~86400 秒（0=默认 1800）'); return; }
+        if (rate !== 0 && (rate < 1 || rate > 100000)) { showToast('限流 QPS 须在 1~100000（0=默认 500）'); return; }
+        var blockDone = false, edgeDone = false, blockErr = null, edgeErr = null, finish = function () {
+            if (!blockDone || !edgeDone) return;
+            if (blockErr) { showToast(blockErr); }
+            else if (edgeErr) { showToast(edgeErr); }
+            else { showToast('网盘设置已保存并热生效'); }
             loadDriveBlockExts(); // 回读刷新归一值与来源标注
-        }).catch(function (e) { showToast(e.message || '网络异常'); });
+            loadDriveEdgeAuth();
+        };
+        api('PUT', '/admin/api/drive/blockexts', { exts: raw, elf: $('drive-elf').checked, mode: mode, cache: $('drive-cache').checked }).then(function (result) {
+            if (!result.ok) blockErr = result.msg || '黑名单保存失败';
+        }).catch(function (e) { blockErr = e.message || '网络异常'; }).then(function () {
+            blockDone = true; finish();
+        });
+        api('PUT', '/admin/api/drive/edgeauth', { enabled: $('edge-auth-enabled').checked, ticket_ttl: ttl, rate_limit: rate }).then(function (result) {
+            if (!result.ok) edgeErr = result.msg || '远程鉴权保存失败';
+        }).catch(function (e) { edgeErr = e.message || '网络异常'; }).then(function () {
+            edgeDone = true; finish();
+        });
     });
 
     function agentSetAddCmd() {

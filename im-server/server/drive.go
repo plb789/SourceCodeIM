@@ -893,6 +893,7 @@ var (
 	driveBlockRaw     string          // 当前生效原始串（""=内置默认；后台展示与热更归一）
 	driveElfOn        bool            // ELF 魔数检测开关（默认开；扩展名黑名单挡不住改名 ELF）
 	driveModeIsRename bool            // 黑名单处置模式：true=自动加 .im 隔离保存（默认，人性化）；false=直接拦截 403
+	driveCacheOn      bool            // 下载响应 CDN 缓存开关（默认关=no-store；开=public,max-age=3600 允许 DCDN 边缘缓存代理下载）
 	driveBlockInited  bool
 	driveBlockOvKnow  bool
 	driveElfOvKnow    bool
@@ -903,7 +904,8 @@ var (
 const (
 	driveBlockKind = "drive_block_exts"
 	driveElfKind   = "drive_block_elf"
-	driveModeKind  = "drive_block_mode" // 处置模式：rename=隔离改名 .im / deny=拦截 403
+	driveModeKind  = "drive_block_mode"  // 处置模式：rename=隔离改名 .im / deny=拦截 403
+	driveCacheKind = "drive_share_cache" // 下载响应 CDN 缓存开关（true=public,max-age=3600 可被 DCDN 边缘缓存；false=no-store 默认）
 )
 
 // driveParseBlockExts 解析逗号分隔扩展名串为 map（大小写归一、自动补前导点）；空串/全非法 → 内置默认
@@ -933,14 +935,15 @@ func (s *Server) driveBlockInitLocked() {
 		return
 	}
 	driveBlockInited = true
-	driveElfOn = true        // 默认开启 ELF 检测
-	driveModeIsRename = true // 默认隔离改名模式（比直接 403 更人性化，文件本体仍隔离不可执行）
+	driveElfOn = true                     // 默认开启 ELF 检测
+	driveModeIsRename = true              // 默认隔离改名模式（比直接 403 更人性化，文件本体仍隔离不可执行）
+	driveCacheOn = s.cfg.Drive.ShareCache // 下载 CDN 缓存默认关（安全优先：取消分享/吊销即时生效）
 	driveBlockRaw = strings.TrimSpace(s.cfg.Drive.BlockExts)
 	driveBlockMap = driveParseBlockExts(driveBlockRaw)
 	if !driveBlockOvDone {
 		driveBlockOvDone = true
 		var rows []model.AgentWhitelist
-		if err := store.DB.Where("kind IN ? AND username = ?", []string{driveBlockKind, driveElfKind, driveModeKind}, "").Find(&rows).Error; err == nil {
+		if err := store.DB.Where("kind IN ? AND username = ?", []string{driveBlockKind, driveElfKind, driveModeKind, driveCacheKind}, "").Find(&rows).Error; err == nil {
 			for _, r := range rows {
 				switch r.Kind {
 				case driveBlockKind:
@@ -952,6 +955,8 @@ func (s *Server) driveBlockInitLocked() {
 					driveElfOvKnow = true
 				case driveModeKind:
 					driveModeIsRename = r.Value != "deny"
+				case driveCacheKind:
+					driveCacheOn = r.Value == "1"
 				}
 			}
 		}
@@ -1040,6 +1045,36 @@ func (s *Server) driveSetBlockMode(rename bool) error {
 		return err
 	}
 	driveModeIsRename = rename
+	return nil
+}
+
+// driveShareCacheOn 当前下载响应 CDN 缓存开关（true=public,max-age=3600 允许 DCDN 边缘缓存代理下载；
+// false=no-store 默认，取消分享/吊销即时生效）
+func (s *Server) driveShareCacheOn() bool {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	return driveCacheOn
+}
+
+// driveSetShareCache 后台保存下载缓存开关：DB 落库（重启不丢）+ 内存直更（保存即生效）
+func (s *Server) driveSetShareCache(on bool) error {
+	driveBlockMu.Lock()
+	defer driveBlockMu.Unlock()
+	s.driveBlockInitLocked()
+	val := "0"
+	if on {
+		val = "1"
+	}
+	var row model.AgentWhitelist
+	if err := store.DB.Where("kind = ? AND username = ?", driveCacheKind, "").First(&row).Error; err == nil {
+		if err := store.DB.Model(&row).Update("value", val).Error; err != nil {
+			return err
+		}
+	} else if err := store.DB.Create(&model.AgentWhitelist{Kind: driveCacheKind, Value: val}).Error; err != nil {
+		return err
+	}
+	driveCacheOn = on
 	return nil
 }
 
@@ -1720,7 +1755,8 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 		if ct == "" || ct == "application/octet-stream" {
 			ct = driveMimeOf(rec.Name)
 		}
-		if url, err := st.Presign(rec.ObjectKey, 30*time.Minute, dispo, ct); err == nil {
+		url, err := st.Presign(rec.ObjectKey, 30*time.Minute, dispo, ct)
+		if err == nil {
 			// CORS：fetch 规范要求 cors 模式下跨域重定向的 302 响应本身通过 CORS check
 			// （实测：缺失时浏览器报 TypeError: Failed to fetch，预签名直连全挂）；
 			// 回显请求 Origin 并加 Vary（无 cookie 凭据下载，回显比 * 更收敛）；
@@ -1729,10 +1765,14 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 			}
+			// 阶段一百九十七：no-store——302 的 Location 是 30 分钟短时效预签名 URL，DCDN/浏览器
+			// 缓存旧 302 会在取消分享/票据吊销后继续放行旧链接；源站 no-store 是阿里云 DCDN 默认
+			// 缓存规则的最高优先级（遵循源站不缓存），取消/吊销即时生效
+			w.Header().Set("Cache-Control", "no-store")
 			http.Redirect(w, r, url, http.StatusFound)
 			return
 		}
-		logger.Warn("网盘预签名失败，回退服务端代理下载: key=%s", rec.ObjectKey)
+		logger.Warn("网盘预签名失败，回退服务端代理下载: key=%s err=%v", rec.ObjectKey, err)
 	}
 	rc, _, err := st.Open(rec.ObjectKey)
 	if err != nil {
@@ -1744,6 +1784,16 @@ func (s *Server) serveDriveFile(w http.ResponseWriter, r *http.Request, rec *mod
 	disp := "attachment"
 	if inline {
 		disp = "inline"
+	}
+	// Cache-Control 归口：默认 no-store——实测（2026-09-28 生产）DCDN 边缘按默认规则缓存文件响应
+	// （octet-stream/exe），取消分享后服务端已 401 但边缘命中缓存仍吐旧文件，绕过全部校验；
+	// no-store 同时禁浏览器与 DCDN 缓存（ServeContent 不覆盖已设置的 Cache-Control）。
+	// 后台「下载 CDN 缓存」开关开启时改发 public, max-age=3600（省服务端回源带宽），
+	// 代价：取消分享/吊销的即时性降级为缓存过期（1 小时）后失效；302 预签名跳转不受此开关影响（永远 no-store）
+	if s.driveShareCacheOn() {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
 	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disp, map[string]string{"filename": rec.Name}))
 	if seeker, ok := rc.(io.ReadSeeker); ok {

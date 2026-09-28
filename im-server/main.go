@@ -59,6 +59,9 @@ func main() {
 			logger.Error("%v", err)
 			os.Exit(1)
 		}
+		// 3.6 DCDN 远程鉴权票据初始化（drive.edge_auth.enabled：Presign 签发 auth_ticket 短时效票据，
+		// /auth 端点供 DCDN 边缘节点校验，防跳过分享页直连 MinIO；关闭时零开销行为不变）
+		store.DriveTicketInit(cfg.Drive.EdgeAuth.Enabled, cfg.Drive.EdgeAuth.TicketTTL)
 	}
 
 	// 4. WebSocket 监听入口
@@ -223,6 +226,9 @@ func main() {
 	server.RegisterDriveRoutes(srv)
 	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）
 	server.RegisterDriveShareRoutes(srv)
+	// DCDN 远程鉴权路由（drive.edge_auth.enabled：公开端点 GET /auth 供阿里云 DCDN 边缘节点
+	// 校验 MinIO 预签名票据，未启用静默不注册）
+	server.RegisterEdgeAuthRoutes(cfg)
 	// 网盘挂载路由（WebDAV /dav/：资源管理器 net use 映射本地盘符，与 /api/drive 同一存储归口；
 	// drive.enabled + drive.webdav.enabled 双开关，未启用静默不注册）
 	server.RegisterWebDavRoutes(srv)

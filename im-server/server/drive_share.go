@@ -471,6 +471,23 @@ func (s *Server) deliverDriveShareCards(sh *model.DriveShare, owner string, toUs
 	return count
 }
 
+// driveRevokeShareTickets 分享取消后即时吊销该文件对象已签出的 DCDN 鉴权票据（阶段一百九十七）。
+// 已投递出去的预签名 URL 在票据吊销后即使 MinIO 签名未过期也无法通过边缘鉴权——
+// 「跳过分享页直连」收回能力的核心；未启用远程鉴权时零开销直返。
+// 对象粒度吊销会连带本人网盘与同对象其他分享的活跃票据（重新下载即获新票，影响可忽略）
+func (s *Server) driveRevokeShareTickets(sh *model.DriveShare) {
+	if !store.DriveTicketsEnabled() {
+		return
+	}
+	var f model.DriveFile
+	if err := store.DB.Select("object_key").Where("id = ? AND owner = ?", sh.FileID, sh.Owner).First(&f).Error; err != nil {
+		return // 源文件已不存在：对象已删，票据回源 404 无需吊销
+	}
+	if n := store.DriveTicketRevokeKey(f.ObjectKey); n > 0 {
+		logger.Info("DCDN 鉴权票据吊销: share=%d code=%s key=%s count=%d", sh.ID, sh.ShareCode, f.ObjectKey, n)
+	}
+}
+
 // handleDriveShareList 我发出的分享 GET /api/drive/share/list?username=xxx
 // 状态服务端归口计算（valid/invalid + 失效原因），按创建时间倒序，上限 200 条
 func (s *Server) handleDriveShareList(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +524,7 @@ func (s *Server) handleDriveShareCancel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	store.DB.Model(&sh).Update("canceled", true)
+	s.driveRevokeShareTickets(&sh)
 	logger.Info("网盘分享取消: %s share=%d code=%s", body.Username, sh.ID, sh.ShareCode)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})

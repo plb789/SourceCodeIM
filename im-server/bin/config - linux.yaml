@@ -459,6 +459,9 @@ drive:
   # 留空=内置默认黑名单：exe/msi/com/scr/cpl/hta/dll/lnk/bat/cmd/vbs/vbe/ps1/psm1/reg；
   # 设值则完全覆盖默认（如只拦 exe 填 ".exe"）；修改后需重启服务端生效
   # block_exts: ""
+  # share_cache: false           # 下载响应 CDN 缓存开关（后台可热更新，本项仅作首次启动默认；false=no-store
+                                 # 取消分享/吊销即时生效；true=public,max-age=3600 允许 DCDN 边缘缓存代理下载省带宽，
+                                 # 取消分享的即时性降级为缓存过期后失效；302 预签名跳转不受影响永远 no-store）
   minio:
     endpoint: "172.16.33.231:9000"                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
     public_endpoint: "minio.sxgyxny.com"          # 外网客户端直连下载地址（内外网分流：服务端 API 读写走 endpoint，
@@ -471,6 +474,18 @@ drive:
     use_ssl: false               # MinIO 是否 HTTPS
     # 下载链路说明：MinIO 后端下载为 302 跳 30 分钟短时效预签名地址（客户端直连 MinIO 下载，
     # 省服务端带宽），URL 域名取 public_endpoint（内外网分流）否则取 endpoint；MinIO 不可达时服务端自动回退流式代理
+  # 阿里云 DCDN 远程鉴权（阶段一百九十七）：minio 外网域名（public_endpoint）接入 DCDN 且控制台
+  # 开启远程鉴权（鉴权服务器地址填 https://<im域名>/auth、GET、保留所有参数）后，边缘节点把每个
+  # 文件请求转发本服务 /auth 校验——预签名 URL 附带短时效票据 auth_ticket（纳入 MinIO 签名），
+  # 票据有效 200 放行、无效 403；分享取消即时吊销，防跳过分享页直连 MinIO 下载。
+  # 部署顺序：先启用本配置并重启服务端，再到 DCDN 控制台开远程鉴权（控制台建议：
+  # 「其他状态码是否放行」选否——仅 200 放行；「鉴权超时动作」按可用性权衡）
+  edge_auth:
+    enabled: true                # 生产启用（minio.sxgyxny.com 走 DCDN 远程鉴权；DCDN 控制台配置完成后生效）
+                                 # 三项均可在管理后台-网盘设置热更新（保存即生效+落库重启不丢，yaml 仅作首次默认）
+    ticket_ttl: 1800             # 票据滑动有效期秒（0=1800 与预签名 30min 对齐；每次校验通过续期，
+                                 # 支持视频 Range 多段请求；调小可收紧重放窗口，中断后重新下载即获新票）
+    rate_limit: 500              # /auth 全局限流 QPS（0=500；请求源为 DCDN 节点无法按 IP 限流）
     # 本地部署 MinIO 参考（Windows 单文件免安装）：
     #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
     #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"

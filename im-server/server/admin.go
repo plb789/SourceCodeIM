@@ -153,6 +153,9 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百六十六：网盘上传扩展名黑名单热更设置（黑名单归口 drive.go）
 	http.HandleFunc("GET /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsGet))
 	http.HandleFunc("PUT /admin/api/drive/blockexts", s.adminGuard(s.handleAdminDriveBlockExtsSave))
+	// 阶段一百九十七扩展：DCDN 远程鉴权热更设置（enabled/ticket_ttl/rate_limit，归口 edgeauth.go）
+	http.HandleFunc("GET /admin/api/drive/edgeauth", s.adminGuard(s.handleAdminEdgeAuthGet))
+	http.HandleFunc("PUT /admin/api/drive/edgeauth", s.adminGuard(s.handleAdminEdgeAuthSave))
 	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）
 	http.HandleFunc("GET /admin/api/drive/stats", s.adminGuard(s.handleAdminDriveStats))
 	http.HandleFunc("GET /admin/api/drive/files", s.adminGuard(s.handleAdminDriveFiles))

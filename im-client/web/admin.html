@@ -720,9 +720,25 @@
                     <div class="agentset-row">
                         <label class="agentset-switch-label"><input type="checkbox" id="drive-elf"> ELF 魔数检测（识别改名的 Linux 可执行文件：Linux 二进制没有固定扩展名，按文件头内容判定，命中同样按处置方式处理，关闭后仅靠扩展名黑名单）</label>
                     </div>
+                    <h3 class="agentset-group-title">下载缓存</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="drive-cache"> 允许 CDN 边缘缓存下载响应（开启后服务端代理下载响应带 Cache-Control: public, max-age=3600，DCDN/浏览器缓存 1 小时、显著节省服务端回源带宽；代价：取消分享/吊销票据的即时性降级为缓存过期后失效，且已被缓存的旧响应需在 DCDN 控制台刷新才立即清除。默认关闭=响应 no-store，取消分享即时生效。302 预签名直连跳转不受本开关影响，永远不缓存）</label>
+                    </div>
+                    <h3 class="agentset-group-title">DCDN 远程鉴权</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="edge-auth-enabled"> 启用远程鉴权票据（服务端给 MinIO 预签名 URL 附带 auth_ticket 短时效票据，DCDN 边缘转发 /auth 校验，防跳过分享页直连下载。⚠️ 与 DCDN 控制台联动：开启前须在 DCDN 控制台配置远程鉴权并部署生效；关闭前须先在 DCDN 控制台关闭远程鉴权，否则 minio 域名全部下载将被边缘 403 拒绝）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="edge-auth-ttl" title="票据滑动有效期秒，每次校验通过自动续期；视频 Range 多段下载每段续期不中断。0=默认 1800（与预签名 30 分钟对齐）；范围 60~86400">票据有效期（秒）</label>
+                        <input type="number" id="edge-auth-ttl" class="admin-input" style="width:140px" min="0" max="86400" step="60" placeholder="0=默认 1800">
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="edge-auth-rate" title="/auth 全局限流每秒放行请求数（请求源为 DCDN 边缘节点，无法按 IP 限流）。0=默认 500；范围 1~100000">全局限流（QPS）</label>
+                        <input type="number" id="edge-auth-rate" class="admin-input" style="width:140px" min="0" max="100000" step="50" placeholder="0=默认 500">
+                    </div>
                 </div>
                 <div class="agentset-actions">
-                    <button id="drive-save" class="admin-btn primary">保存黑名单</button>
+                    <button id="drive-save" class="admin-btn primary">保存设置</button>
                     <span id="drive-source-tip" class="agentset-sub-tip"></span>
                 </div>
             </section>
@@ -1290,7 +1306,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.44"></script>
+    <script src="js/admin.js?v=1.46"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

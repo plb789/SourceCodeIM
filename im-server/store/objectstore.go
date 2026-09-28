@@ -200,9 +200,13 @@ type minioStore struct {
 }
 
 func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
+	// Region 必须显式设置：留空时 PresignedGetObject 签名前会先发 GetBucketLocation 网络查询，
+	// 该请求经 DCDN 会被远程鉴权拦截（无 auth_ticket → 403 Tengine，实测 2026-09-28 生产），
+	// Presign 整体失败静默回退代理下载；显式 region 后纯本地签名零网络请求（MinIO 默认 region 即 us-east-1）
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
+		Region: "us-east-1",
 	})
 	if err != nil {
 		return nil, err
@@ -214,6 +218,7 @@ func newMinioStore(cfg config.MinioConfig) (*minioStore, error) {
 		pubClient, err = minio.New(pub, &minio.Options{
 			Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 			Secure: cfg.PublicUseSSL,
+			Region: "us-east-1", // 同 client：显式 region 跳过 GetBucketLocation，防 DCDN 拦截（见上）
 		})
 		if err != nil {
 			return nil, fmt.Errorf("外网直连地址初始化失败: %w", err)
@@ -278,7 +283,10 @@ func (s *minioStore) Delete(key string) error {
 // 内外网分流时 URL 用外网域名生成（客户端可达），服务端读写仍走内网 endpoint）；
 // dispo 非空时签名内嵌 response-content-disposition 覆盖参数——对象元数据的 attachment
 // 是上传时写入的，预览直显必须靠签名参数覆盖，否则浏览器弹另存为框无法内联渲染；
-// ctype 非空时同步覆盖 response-content-type（对象元数据 octet-stream 会被浏览器强制下载）
+// ctype 非空时同步覆盖 response-content-type（对象元数据 octet-stream 会被浏览器强制下载）；
+// 远程鉴权启用时签名内嵌 auth_ticket 票据（DriveTicketParam）——DCDN 边缘节点转发 /auth
+// 校验该票据放行回源；必须参与签名（而非签名后 URL 追加）：DCDN 回源携带该参数时
+// MinIO 按 canonical query 校验签名，后追加会导致 SignatureDoesNotMatch
 func (s *minioStore) Presign(key string, expiry time.Duration, dispo string, ctype string) (string, error) {
 	cli := s.client
 	if s.pubClient != nil {
@@ -293,6 +301,14 @@ func (s *minioStore) Presign(key string, expiry time.Duration, dispo string, cty
 			params = url.Values{}
 		}
 		params.Set("response-content-type", ctype)
+	}
+	if DriveTicketsEnabled() { // 锁内读开关（后台热更可变，勿直读变量——与热更写端存在数据竞争）
+		if t := DriveTicketIssue(key); t != "" {
+			if params == nil {
+				params = url.Values{}
+			}
+			params.Set(DriveTicketParam, t)
+		}
 	}
 	u, err := cli.PresignedGetObject(context.Background(), s.bucket, key, expiry, params)
 	if err != nil {

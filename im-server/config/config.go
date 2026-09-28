@@ -138,12 +138,33 @@ type DriveConfig struct {
 	// exe/msi/com/scr/cpl/hta/dll/lnk/bat/cmd/vbs/vbe/ps1/psm1/reg）。
 	// 网盘 API 上传与挂载盘 WebDAV 写入统一归口拦截，防可执行文件入库传播
 	BlockExts string `yaml:"block_exts"`
+	// ShareCache 分享/网盘下载响应是否允许 CDN 边缘缓存（仅服务端代理下载分支生效；
+	// 302 预签名跳转永远 no-store——Location 每次签名变化且票据吊销要求即时性，缓存纯风险无收益）。
+	// 开启后响应带 Cache-Control: public, max-age=3600（DCDN/浏览器缓存 1 小时，省服务端回源带宽），
+	// 代价：取消分享/吊销的即时性降级为缓存过期后失效；后台可热更新（DB 落库），本项仅作首次启动默认
+	ShareCache bool `yaml:"share_cache"`
 	// LocalDir 本地存储根目录（空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
 	LocalDir string `yaml:"local_dir"`
 	// Minio MinIO 连接配置（endpoint+access_key 非空即视为已配置）
 	Minio MinioConfig `yaml:"minio"`
+	// EdgeAuth DCDN 远程鉴权配置节（阿里云 DCDN 边缘节点把 minio 外网域名请求转发本服务 /auth 校验，
+	// 防跳过分享页直连 MinIO 下载——仅 MinIO 后端生效，本地磁盘无直连场景）
+	EdgeAuth EdgeAuthConfig `yaml:"edge_auth"`
 	// WebDav 网盘挂载（WebDAV 协议层，阿里云盘企业版挂载盘同原理：Windows net use 映射成本地盘符）
 	WebDav WebDavConfig `yaml:"webdav"`
+}
+
+// EdgeAuthConfig DCDN 远程鉴权配置（enabled 时 Presign 签名附加一次性短时效票据 auth_ticket，
+// 并注册公开端点 GET /auth 供 DCDN 边缘节点校验：票据有效 200 放行、无效 403 拒绝；
+// 分享取消/管理端批量取消即时吊销同对象票据——比 30 分钟 presigned 窗口收紧为服务端可控）
+type EdgeAuthConfig struct {
+	// Enabled 总开关（false 不签发票据、不注册 /auth，行为与历史完全一致）
+	Enabled bool `yaml:"enabled"`
+	// TicketTTL 票据滑动有效期秒（0=1800 与 Presign 30min 对齐；每次 /auth 校验通过续期，
+	// 支持视频 Range 多段请求；调小可收紧重放窗口，预览中断后重新走 im-server 签发新票）
+	TicketTTL int `yaml:"ticket_ttl"`
+	// RateLimit /auth 全局限流 QPS（0=500；请求源是 DCDN 节点无法按 IP 限流，全局令牌桶归口）
+	RateLimit int `yaml:"rate_limit"`
 }
 
 // WebDavConfig 网盘挂载配置节（/dav/ 路由，FileSystem 桥接 drive 存储归口禁止旁路）
@@ -464,6 +485,8 @@ func Default() *Config {
 			Storage:     "auto",
 			ChunkSize:   8 << 20,                     // 分片单片 8MB（网盘二期大文件链路）
 			WebDav:      WebDavConfig{Enabled: true}, // 挂载服务默认随网盘开启（不启用时 yaml 置 false）
+			// 远程鉴权默认关闭（需 DCDN 控制台配合配置后打开；TTL/限流缺省归口 EdgeAuthConfig 注释）
+			EdgeAuth: EdgeAuthConfig{Enabled: false, TicketTTL: 1800, RateLimit: 500},
 		},
 	}
 }

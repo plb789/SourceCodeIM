@@ -31,6 +31,7 @@ func (s *Server) handleAdminDriveBlockExtsGet(w http.ResponseWriter, r *http.Req
 		"source":     source, // override=后台设置（DB 真源）/ config=config.yaml 初始默认
 		"elf":        s.driveBlockElf(),
 		"mode":       mode,
+		"cache":      s.driveShareCacheOn(), // 下载响应 CDN 缓存开关（true=public,max-age=3600 / false=no-store）
 	})
 }
 
@@ -39,9 +40,10 @@ func (s *Server) handleAdminDriveBlockExtsGet(w http.ResponseWriter, r *http.Req
 // 请求体 {"exts": ".exe,.msi", "elf": true, "mode": "rename"}
 func (s *Server) handleAdminDriveBlockExtsSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Ext  string  `json:"exts"`
-		Elf  *bool   `json:"elf"`  // nil=不修改 ELF 检测开关（部分更新语义）
-		Mode *string `json:"mode"` // "rename"=隔离改名 / "deny"=拦截；nil=不修改
+		Ext   string  `json:"exts"`
+		Elf   *bool   `json:"elf"`   // nil=不修改 ELF 检测开关（部分更新语义）
+		Mode  *string `json:"mode"`  // "rename"=隔离改名 / "deny"=拦截；nil=不修改
+		Cache *bool   `json:"cache"` // 下载响应 CDN 缓存开关；nil=不修改
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "请求格式错误")
@@ -92,6 +94,14 @@ func (s *Server) handleAdminDriveBlockExtsSave(w http.ResponseWriter, r *http.Re
 		}
 		modeNow = *req.Mode == "rename"
 	}
+	cacheNow := s.driveShareCacheOn()
+	if req.Cache != nil && *req.Cache != cacheNow {
+		if err := s.driveSetShareCache(*req.Cache); err != nil {
+			adminFail(w, http.StatusInternalServerError, "保存失败，请重试")
+			return
+		}
+		cacheNow = *req.Cache
+	}
 	shown := norm
 	if shown == "" {
 		shown = "内置默认"
@@ -100,8 +110,8 @@ func (s *Server) handleAdminDriveBlockExtsSave(w http.ResponseWriter, r *http.Re
 	if modeNow {
 		modeName = "rename"
 	}
-	logger.Info("后台管理：管理员 %s 修改网盘上传黑名单（%s，ELF检测 %v，处置 %s）", adminUserFromCtx(r), shown, elfNow, modeName)
-	adminJSON(w, map[string]interface{}{"ok": true, "exts": norm, "elf": elfNow, "mode": modeName})
+	logger.Info("后台管理：管理员 %s 修改网盘上传黑名单（%s，ELF检测 %v，处置 %s，下载CDN缓存 %v）", adminUserFromCtx(r), shown, elfNow, modeName, cacheNow)
+	adminJSON(w, map[string]interface{}{"ok": true, "exts": norm, "elf": elfNow, "mode": modeName, "cache": cacheNow})
 }
 
 // ===== 阶段一百六十七：文件存储管理（全站文件/分享统一管理视图） =====
@@ -440,6 +450,12 @@ func (s *Server) handleAdminDriveShareCancel(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	res := store.DB.Model(&model.DriveShare{}).Where("id IN ? AND canceled = 0", body.IDs).UpdateColumn("canceled", true)
+	// 即时吊销已签出的 DCDN 鉴权票据（与分享者本人取消同水位：链接/卡片失效 + 直连收回）
+	var canceledShares []model.DriveShare
+	store.DB.Where("id IN ?", body.IDs).Find(&canceledShares)
+	for i := range canceledShares {
+		s.driveRevokeShareTickets(&canceledShares[i])
+	}
 	logger.Info("后台管理：管理员 %s 强制取消分享 %d 条（请求 %d 项）", adminUserFromCtx(r), res.RowsAffected, len(body.IDs))
 	adminJSON(w, map[string]interface{}{"canceled": res.RowsAffected})
 }
