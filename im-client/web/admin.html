@@ -54,6 +54,7 @@
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
+                <button class="admin-nav-item" data-view="online">在线账号</button>
                 <button class="admin-nav-item" data-view="announcements">公告管理</button>
                 <button class="admin-nav-item" data-view="workbench">工作台管理</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
@@ -401,6 +402,39 @@
                     <button id="accounts-prev" class="admin-btn small">上一页</button>
                     <span id="accounts-page-info" class="admin-view-tip">-</span>
                     <button id="accounts-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            <!-- 在线账号管理（阶段二百二十二：hub 内存连接表快照，10 秒轮询自动刷新） -->
+            <section id="admin-view-online" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>在线账号</h2>
+                    <span id="online-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">当前在线的全部连接明细（每行一条连接）：账号/昵称、登录端（PC/WEB/手机/分享页）、真实客户端 IP、上线时间与账号状态。列表每 10 秒自动刷新；同一账号多端同时在线会显示多行。强制下线仅断开当前连接（可重新登录）；封禁为落库全局生效并即时踢出，可点击操作列按钮或前往"账号管理"页操作。</p>
+                <!-- 搜索工具条：实时过滤（用户名/昵称/IP） -->
+                <div class="vec-toolbar">
+                    <input type="text" id="online-search" class="admin-input vec-search-input" placeholder="按用户名/昵称/IP 搜索（实时过滤）">
+                    <button id="online-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 在线连接表格 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>登录端</th>
+                                <th>IP</th>
+                                <th>上线时间</th>
+                                <th>账号状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="online-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
 
@@ -1315,7 +1349,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.47"></script>
+    <script src="js/admin.js?v=1.48"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.0"></script>
 </body>

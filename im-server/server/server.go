@@ -100,7 +100,7 @@ func (s *Server) HandleWS(conn *websocket.Conn, realIP string) {
 
 	// 接入日志在全部校验通过后打印（带真实 IP）——拒绝连接不刷 INFO 日志，防日志 IO 噪声
 	logger.Info("客户端接入: %s", realIP)
-	c := newClient(s, conn)
+	c := newClient(s, conn, realIP)
 	s.pendingConns.Add(1)
 	go c.writePump()
 	c.readPump()

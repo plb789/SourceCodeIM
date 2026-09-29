@@ -186,6 +186,9 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段一百三十五：账号锁定封禁（含封禁原因）/删除注销（即时踢出在线连接，登录拒绝并提示原因）
 	http.HandleFunc("PUT /admin/api/users/{username}/lock", s.adminGuard(s.handleAdminUserLockPut))
 	http.HandleFunc("PUT /admin/api/users/{username}/delete", s.adminGuard(s.handleAdminUserDeletePut))
+	// 阶段二百二十二：在线账号管理（在线连接列表 + 强制下线，实现归口 adminonline.go）
+	http.HandleFunc("GET /admin/api/online", s.adminGuard(s.handleAdminOnlineList))
+	http.HandleFunc("POST /admin/api/online/kick", s.adminGuard(s.handleAdminOnlineKick))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====

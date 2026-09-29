@@ -34,10 +34,13 @@ type Client struct {
 	// 阶段二百二十一：连接建立时刻——未登录硬超时的锚点（readPump 中未登录连接的
 	// ReadDeadline 恒定为 createdAt+pending_timeout，不随客户端发帧刷新，发帧不可续命）
 	createdAt time.Time
+	// 阶段二百二十二：真实客户端 IP（HandleWS 入口 realClientIP 解析，经 CDN/反代链路）——
+	// 后台在线账号管理展示与按 IP 排查用；连接级属性，随连接对象生命周期
+	ip string
 }
 
 // newClient 创建客户端连接对象
-func newClient(s *Server, conn *websocket.Conn) *Client {
+func newClient(s *Server, conn *websocket.Conn, ip string) *Client {
 	// 原实现：sendCh: make(chan []byte, 256) 固定 256 缓冲，大文件分片与聊天消息混流时易溢出丢消息
 	// 阶段三十一：缓冲大小改由配置 send_queue_size 下发（默认 1024）
 	return &Client{
@@ -45,6 +48,7 @@ func newClient(s *Server, conn *websocket.Conn) *Client {
 		conn:      conn,
 		sendCh:    make(chan []byte, s.cfg.SendQueueSize),
 		createdAt: time.Now(),
+		ip:        ip,
 	}
 }
 

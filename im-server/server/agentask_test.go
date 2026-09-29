@@ -30,7 +30,7 @@ func askTestTask(s *Server, username string) *AgentTask {
 }
 
 func askTestClient(s *Server, username string) *Client {
-	c := newClient(s, nil)
+	c := newClient(s, nil, "")
 	c.username = username
 	return c
 }

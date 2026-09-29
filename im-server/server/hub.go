@@ -3,6 +3,7 @@ package server
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"im-server/logger"
 )
@@ -138,6 +139,36 @@ func (h *Hub) Get(username string) (*Client, bool) {
 		return c, true
 	}
 	return nil, false
+}
+
+// OnlineConn 在线连接快照条目（阶段二百二十二：后台在线账号管理数据源）
+type OnlineConn struct {
+	Username  string    // 账号
+	Platform  string    // 端标记原始值（pc/web/app/''/share，展示层经 platformName 归一化）
+	IP        string    // 真实客户端 IP（HandleWS 入口 realClientIP 解析，经 CDN/反代链路）
+	LoginTime time.Time // 上线时刻（登录成功赋值；零值回退连接建立时刻 createdAt）
+}
+
+// Snapshot 返回全部在线连接的只读快照（后台在线列表）
+// 集群模式边界：仅本实例连接（跨实例在线仅有 Redis im:ulist 用户名名单，无 IP/端明细）
+func (h *Hub) Snapshot() []OnlineConn {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	n := 0
+	for _, set := range h.clients {
+		n += len(set)
+	}
+	list := make([]OnlineConn, 0, n)
+	for name, set := range h.clients {
+		for c := range set {
+			lt := c.loginTime
+			if lt.IsZero() {
+				lt = c.createdAt
+			}
+			list = append(list, OnlineConn{Username: name, Platform: c.platform, IP: c.ip, LoginTime: lt})
+		}
+	}
+	return list
 }
 
 // HasPC 阶段六十：该用户是否存在 PC 端（Electron）在线连接——Agent 本地执行器下发判定依据。

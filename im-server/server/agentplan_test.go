@@ -310,7 +310,7 @@ func TestAgentPlanUnknownActionRejected(t *testing.T) {
 
 // planTestClient 构造测试客户端（与 askTestClient 同款）
 func planTestClient(s *Server, username string) *Client {
-	c := newClient(s, nil)
+	c := newClient(s, nil, "")
 	c.username = username
 	return c
 }

@@ -24,6 +24,7 @@
             vecdata: 'M4 4h7v7H4V4zm0 9h7v7H4v-7zm9 0h7v7h-7v-7zm4-9l3 3-3 3-3-3 3-3z',
             agenttasks: 'M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
             accounts: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+            online: 'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
             announcements: 'M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z',
             workbench: 'M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z',
             points: 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
@@ -235,6 +236,7 @@
             var view = $('admin-view-' + item.dataset.view);
             if (view) view.classList.add('active');
             stopMCPPolling(); // 阶段八十九：切换视图统一切断 MCP 状态轮询，mcp 分支按需重启
+            stopOnlinePolling(); // 阶段二百二十二：切换视图统一切断在线列表轮询，online 分支按需重启
             // 进入列表页时刷新数据（agents 依赖 providers 下拉数据，串行加载避免竞态）
             if (item.dataset.view === 'providers') loadProviders();
             if (item.dataset.view === 'agents') loadProviders().then(loadAgents);
@@ -247,6 +249,8 @@
             else if (item.dataset.view === 'agenttasks') { loadAgentTasks(); }
             // 阶段一百三十四：进入账号管理视图拉取账号列表
             else if (item.dataset.view === 'accounts') { loadAccounts(); }
+            // 阶段二百二十二：进入在线账号视图拉取连接列表并启动轮询
+            else if (item.dataset.view === 'online') { loadOnline(); startOnlinePolling(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
             // 阶段一百三十八：进入 AI 计费设置视图拉取当前生效计费配置
@@ -3255,8 +3259,13 @@
 
     // 锁定/解锁弹窗（阶段一百三十五）：锁定必填封禁原因（用户登录与在线踢出时提示）；
     // 解锁为恢复性低风险操作，直接执行；已封禁账号按钮显示"解锁"
-    function openAccountLockModal(username) {
+    // 阶段二百二十二参数化：在线账号页复用同款弹窗——knownStatus=当前账号状态兜底（在线页数据
+    // 自带 status，账号管理页缓存 miss 时可用行内状态渲染）；onDone=操作成功后的刷新回调
+    // （不传默认 loadAccounts，账号管理页原有调用行为不变）
+    function openAccountLockModal(username, knownStatus, onDone) {
+        var done = onDone || loadAccounts;
         var u = findAccount(username);
+        if (!u && knownStatus !== undefined) u = { username: username, status: knownStatus };
         if (!u) { showToast('账号数据已过期，请刷新后重试'); return; }
         if (u.status === 1) {
             // 解锁：恢复 normal 并清空封禁原因
@@ -3264,7 +3273,7 @@
                 .then(function (result) {
                     if (!result.ok) { showToast(result.msg || '解锁失败'); return; }
                     showToast('已解锁 ' + u.username + '，该账号可正常登录');
-                    loadAccounts();
+                    done();
                 }).catch(function (e) { showToast(e.message || '网络异常'); });
             return;
         }
@@ -3279,7 +3288,7 @@
                     if (!result.ok) { showToast(result.msg || '锁定失败'); return; }
                     closeEditModal();
                     showToast('已锁定 ' + u.username + '，其在线设备已被踢出');
-                    loadAccounts();
+                    done();
                 }).catch(function (e) { showToast(e.message || '网络异常'); });
         });
     }
@@ -3325,6 +3334,110 @@
         var pages = Math.ceil(accountsFiltered.length / ACCOUNTS_PAGE_SIZE);
         if (accountsPage < pages) { accountsPage++; renderAccountsTable(); }
     });
+
+    // ===== 阶段二百二十二：在线账号管理（hub 内存连接表快照 + 10 秒轮询 + 强制下线/封禁复用） =====
+    var onlineAll = [];        // 全量在线连接（每行一条连接，多端同账号多行）
+    var onlineFiltered = [];   // 搜索过滤后的展示集合
+    var onlinePollTimer = null;
+
+    // 轮询：仅在线视图激活期间运行（切视图统一 stopOnlinePolling，online 分支按需重启）
+    function startOnlinePolling() {
+        stopOnlinePolling();
+        onlinePollTimer = setInterval(function () { loadOnline(true); }, 10000);
+    }
+    function stopOnlinePolling() {
+        if (onlinePollTimer) { clearInterval(onlinePollTimer); onlinePollTimer = null; }
+    }
+
+    // 拉取在线连接列表（quiet=轮询静默刷新，不打骨架/不弹错误提示）
+    function loadOnline(quiet) {
+        if (!quiet) {
+            $('online-status').textContent = '加载中…';
+            skelRows('online-tbody', 7);
+        }
+        api('GET', '/admin/api/online').then(function (result) {
+            if (!result.ok) {
+                if (!quiet) showToast(result.msg || '在线列表加载失败');
+                $('online-status').textContent = result.msg || '加载失败';
+                return;
+            }
+            onlineAll = (result.data && result.data.conns) || [];
+            $('online-status').textContent = '共 ' + onlineAll.length + ' 条在线连接，更新于 ' + new Date().toLocaleTimeString();
+            applyOnlineFilter();
+        }).catch(function (e) {
+            if (!quiet) showToast(e.message || '网络异常');
+            if (!quiet) $('online-status').textContent = e.message || '网络异常';
+        });
+    }
+
+    // 搜索实时过滤（用户名/昵称/IP）
+    function applyOnlineFilter() {
+        var kw = ($('online-search').value || '').trim().toLowerCase();
+        onlineFiltered = onlineAll.filter(function (c) {
+            if (!kw) return true;
+            return (c.username || '').toLowerCase().indexOf(kw) !== -1 ||
+                   (c.nickname || '').toLowerCase().indexOf(kw) !== -1 ||
+                   (c.ip || '').toLowerCase().indexOf(kw) !== -1;
+        });
+        renderOnlineTable();
+    }
+
+    function renderOnlineTable() {
+        var tbody = $('online-tbody');
+        if (!onlineFiltered.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">' +
+                (onlineAll.length ? '暂无匹配连接' : '当前没有在线用户') + '</td></tr>';
+            return;
+        }
+        var html = '';
+        onlineFiltered.forEach(function (c) {
+            var locked = Number(c.status) === 1;
+            var statusCell = locked
+                ? '<span class="at-badge at-st-failed" title="封禁原因：' + escAttr(c.lock_reason || '未填写') + '">已封禁</span>'
+                : '<span class="points-role-normal">正常</span>';
+            html += '<tr>' +
+                '<td class="points-username">' + escHtml(c.username || '') + '</td>' +
+                '<td>' + escHtml(c.nickname || '-') + '</td>' +
+                '<td><span class="at-badge at-st-completed">' + escHtml(c.platform_name || '未知') + '</span></td>' +
+                '<td class="points-time">' + escHtml(c.ip || '-') + '</td>' +
+                '<td class="points-time">' + escHtml(c.login_time || '-') + '</td>' +
+                '<td>' + statusCell + '</td>' +
+                '<td><button class="admin-btn small online-kick-btn" data-username="' + escAttr(c.username || '') + '">强制下线</button>' +
+                ' <button class="admin-btn small online-lock-btn" data-username="' + escAttr(c.username || '') + '" data-status="' + (Number(c.status) || 0) + '">' + (locked ? '解锁' : '封禁') + '</button></td>' +
+                '</tr>';
+        });
+        tbody.innerHTML = html;
+    }
+
+    // 强制下线弹窗：输入用户名确认（复用编辑弹窗壳），成功后静默刷新列表
+    function openOnlineKickModal(username) {
+        openEditModal('强制下线 - ' + username, [
+            { key: 'confirm', label: '确认下线', type: 'text', placeholder: '请输入用户名 ' + username + ' 以确认', hint: '该账号全部在线连接将被断开并收到下线提示；不封禁账号，可重新登录' }
+        ], {}, function (data) {
+            if (String(data.confirm || '').trim() !== username) { showToast('输入的用户名不一致，请重新输入'); return; }
+            api('POST', '/admin/api/online/kick', { username: username })
+                .then(function (result) {
+                    if (!result.ok) { showToast(result.msg || '强制下线失败'); return; }
+                    closeEditModal();
+                    showToast('已将 ' + username + ' 强制下线');
+                    loadOnline(true);
+                }).catch(function (e) { showToast(e.message || '网络异常'); });
+        });
+    }
+
+    // 表格内"强制下线"/"封禁/解锁"按钮：事件委托（10 秒轮询重渲染无需重复绑定）
+    $('online-tbody').addEventListener('click', function (e) {
+        var kickBtn = e.target.closest('.online-kick-btn');
+        if (kickBtn) { openOnlineKickModal(kickBtn.getAttribute('data-username')); return; }
+        var lockBtn = e.target.closest('.online-lock-btn');
+        if (lockBtn) {
+            // knownStatus 兜底：在线页数据自带 status，不依赖账号管理页缓存；成功后刷新在线列表
+            openAccountLockModal(lockBtn.getAttribute('data-username'), Number(lockBtn.getAttribute('data-status')) || 0, loadOnline.bind(null, true));
+        }
+    });
+    // 搜索实时过滤 + 手动刷新
+    $('online-search').addEventListener('input', applyOnlineFilter);
+    $('online-refresh').addEventListener('click', function () { loadOnline(true); });
 
     // ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，服务端归口建连与调用） =====
     var mcpServers = [];
