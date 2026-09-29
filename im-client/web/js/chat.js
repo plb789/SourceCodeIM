@@ -21477,14 +21477,26 @@
 
     // 关闭文档编辑/预览弹窗：编辑模式销毁实例释放 DocumentServer 会话（约 10 秒缓存期内同 key 重开可复现现场）；
     // 预览模式清空容器即卸载 iframe（停止渲染与播放）
+    // 阶段二百二十一：移动端先播 push 滑出动画再收层（网盘/添加好友同款时序，全屏页整体滑出无闪现）；
+    // PC/WEB 维持瞬时关闭
     function closeDocEditor() {
         if (docEditorInstance) {
             try { docEditorInstance.destroyEditor(); } catch (e) {}
             docEditorInstance = null;
         }
         document.getElementById('doc-editor-placeholder').innerHTML = '';
-        document.getElementById('doc-editor-mask').classList.add('hidden');
-        document.getElementById('doc-editor-window').classList.add('hidden');
+        var m = document.getElementById('doc-editor-mask');
+        var w = document.getElementById('doc-editor-window');
+        if (document.documentElement.classList.contains('m')) {
+            if (w) w.classList.add('doc-push-out');
+            setTimeout(function () {
+                if (m) m.classList.add('hidden');
+                if (w) { w.classList.add('hidden'); w.classList.remove('doc-push-out'); }
+            }, 220);
+        } else {
+            if (m) m.classList.add('hidden');
+            if (w) w.classList.add('hidden');
+        }
     }
 
     // 文件卡片点击统一入口（阶段四十六·双层架构）：

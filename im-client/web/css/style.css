@@ -4587,14 +4587,15 @@ html.m .mobile-plus-panel:not(.hidden) {
     animation: modal-in 0.15s ease-out;
 }
 
-/* 标题栏：主题色底（跟随主题色变化），白字 */
+/* 标题栏：中性主题底（跟随主题深浅变化，不再用主题绿），文字/按钮用主题前景色 */
 .doc-editor-titlebar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    background: var(--primary);
-    color: #fff;
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
     flex-shrink: 0;
 }
 
@@ -4616,20 +4617,20 @@ html.m .mobile-plus-panel:not(.hidden) {
     flex-shrink: 0;
 }
 
-/* 标题栏按钮（半透明白底，悬停加深） */
+/* 标题栏按钮（主题悬停底+主题前景字，悬停加深） */
 .doc-editor-tbtn {
     border: none;
     padding: 4px 12px;
     font-size: 13px;
-    color: #fff;
-    background: rgba(255, 255, 255, 0.2);
+    color: var(--text);
+    background: var(--hover);
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s ease;
 }
 
 .doc-editor-tbtn:hover {
-    background: rgba(255, 255, 255, 0.35);
+    background: var(--active);
 }
 
 /* 编辑器挂载区：占满剩余空间（DocsAPI iframe 自适应 100%） */
@@ -17479,6 +17480,33 @@ html.m #img-layer-img {
     -webkit-user-select: none;
     pointer-events: auto;
     touch-action: none;
+}
+
+/* ===================== 阶段二百二十一：移动端文档/文本预览全屏页（微信文件预览同款） ===================== */
+/* 弹窗小窗 → 全屏页：push 滑入，导航栏 56px（safe-area 适配），iframe 铺满余下全屏 */
+html.m .doc-editor-window {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+    animation: imPagePushIn 0.25s ease-out forwards;
+}
+html.m .doc-editor-window.doc-push-out {
+    animation: imPagePushOut 0.22s ease-in forwards;
+}
+html.m .doc-editor-titlebar {
+    height: 56px;
+    padding: 56px 12px 8px;
+    box-sizing: content-box;
+}
+html.m .doc-editor-name {
+    font-size: 16px;
+}
+html.m .doc-editor-tbtn {
+    padding: 6px 14px;
+    font-size: 14px;
 }
 
 /* 结果区撑满余下全屏 */
