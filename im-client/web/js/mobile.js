@@ -112,6 +112,11 @@
         var sysApp = window.Capacitor.Plugins.App;
         sysApp.addListener('backButton', function () {
             if (!inMobile()) { sysApp.exitApp(); return; }
+            // 0) 页内图片查看层（阶段二百二十：最顶层，侧滑/返回键=关闭层，微信同款）
+            if (window.IMImgLayer && window.IMImgLayer.isOpen()) {
+                window.IMImgLayer.close();
+                return;
+            }
             // 1) 扫码视图
             var scanMask = document.getElementById('qr-scan-mask');
             if (scanMask && !scanMask.classList.contains('hidden')) {

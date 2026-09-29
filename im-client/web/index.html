@@ -48,7 +48,7 @@
          须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
     <script src="/js/web-call-bridge.js?v=1.0"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
-    <script src="/js/mobile.js?v=1.22"></script>
+    <script src="/js/mobile.js?v=1.23"></script>
     <!-- 阶段七十七：PC 端自定义标题栏引导——仅 Electron 壳内启用（浏览器/手机 APP 无 desktop 桥自动旁路），
          尽早挂根类让 CSS 提前让位顶栏，避免布局闪动；preload 注入的 setTitlebarColors 存在才启用 -->
     <script>
@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.43">
+    <link rel="stylesheet" href="/css/style.css?v=3.44">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -2179,6 +2179,16 @@
         <div class="qr-scan-tip">对准好友的二维码名片，即可加为好友</div>
         <button id="qr-scan-cancel" class="qr-scan-cancel">取消</button>
     </div>
+    <!-- 阶段二百二十：移动端页内全屏图片查看层（微信同款：点图不跳页，多图翻页/双击缩放/下滑关闭） -->
+    <div id="img-layer" class="img-layer hidden mobile-only">
+        <div class="img-layer-top">
+            <span id="img-layer-info"></span>
+            <button id="img-layer-close" aria-label="关闭">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+        </div>
+        <img id="img-layer-img" draggable="false" alt="">
+    </div>
     <!-- 阶段二百一十：移动端「+」菜单"扫一扫"转发锚点（纯隐藏锚点，两端均不可见，仅接收转发点击） -->
     <span id="scan-entry" hidden></span>
 
@@ -2216,6 +2226,8 @@
     <script src="/js/lib/qrcode.min.js?v=1.4.4"></script>
     <script src="/js/lib/jsQR.min.js?v=1.4.0"></script>
     <script src="/js/qr.js?v=1.0.5"></script>
+    <!-- 阶段二百二十：移动端页内图片查看层（微信同款，替代跳页 image-viewer 在 APP 白屏的问题） -->
+    <script src="/js/image-layer.js?v=1.0"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="/js/tooltip.js?v=1.0"></script>

@@ -17427,6 +17427,60 @@ html.m #conv-search-input {
     border-radius: 8px;
 }
 
+/* ===================== 阶段二百二十：移动端页内全屏图片查看层（微信同款） ===================== */
+/* 黑色沉浸背景 + 顶部信息/关闭栏；img 居中适应，transform 由 image-layer.js 手势驱动 */
+html.m #img-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 2200;
+    background: #0a0a0a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+html.m #img-layer.hidden {
+    display: none;
+}
+html.m #img-layer .img-layer-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    padding-top: env(safe-area-inset-top, 0px);
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.5), transparent);
+    color: #e0e0e0;
+    font-size: 14px;
+    z-index: 2;
+}
+html.m #img-layer .img-layer-top button {
+    width: 38px;
+    height: 38px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+}
+html.m #img-layer-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transform-origin: center center;
+    will-change: transform;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: auto;
+    touch-action: none;
+}
+
 /* 结果区撑满余下全屏 */
 html.m #add-friend-mask .add-friend-result {
     flex: 1;
