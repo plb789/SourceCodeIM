@@ -28,6 +28,11 @@
         ::-webkit-scrollbar-thumb:hover { background: rgba(138, 138, 138, 0.75); }
         ::-webkit-scrollbar-corner { background: transparent; }
         * { scrollbar-width: thin; scrollbar-color: rgba(138, 138, 138, 0.45) transparent; }
+        /* 阶段二百二十一：手机端隐藏滚动条（触屏滚动自带惯性，同 doc-preview；桌面不变） */
+        @media (max-width: 768px) {
+            ::-webkit-scrollbar { width: 0; height: 0; }
+            * { scrollbar-width: none; }
+        }
         /* 幻灯片画布区：垂直排列，留白居中 */
         #pptx-viewer { padding: 16px 0 24px; }
         /* 加载/错误提示（PPTXjs 渲染为同步流程，加载态在触发前展示） */

@@ -20,6 +20,12 @@
         ::-webkit-scrollbar-thumb:hover { background: rgba(138, 138, 138, 0.75); }
         ::-webkit-scrollbar-corner { background: transparent; }
         * { scrollbar-width: thin; scrollbar-color: rgba(138, 138, 138, 0.45) transparent; }
+        /* 阶段二百二十一：手机端隐藏滚动条（触屏滚动自带惯性，微信文档预览同款；
+           桌面 iframe 宽窗口不受影响仍显示自绘滚动条） */
+        @media (max-width: 768px) {
+            ::-webkit-scrollbar { width: 0; height: 0; }
+            * { scrollbar-width: none; }
+        }
         /* 加载中提示 */
         #loading {
             position: fixed; top: 45%; left: 0; right: 0; text-align: center;

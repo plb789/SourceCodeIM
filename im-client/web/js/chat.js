@@ -21468,7 +21468,7 @@
             var ext = lname.match(/\.(docx|xlsx|pptx)/);
             var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
             var type = (ext && ext[1]) || 'docx';
-            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url);
+            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url) + '&pv=1.1';
         }
         holder.appendChild(frame);
         document.getElementById('doc-editor-mask').classList.remove('hidden');
