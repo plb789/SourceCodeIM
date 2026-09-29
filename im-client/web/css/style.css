@@ -17398,6 +17398,35 @@ html[data-theme="system"] .mpa-item .ti-system {
     display: inline-block;
 }
 
+/* ===================== 阶段二百一十九：移动端弹窗输入框/按钮全局归口 ===================== */
+/* 所有弹窗文本输入（通用 prompt/群设置改名/知识库等）：无边框灰底圆角（微信同款），
+   width:100%+border-box 由 modal-box 内边距控留白，杜绝贴边溢出 */
+html.m .modal-mask .modal-input,
+html.m .gset-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    border-radius: 8px;
+}
+
+/* 弹窗确认按钮统一素色（同添加好友/发起群聊归口：亮绿底刺眼） */
+html.m .modal-btn.primary {
+    background: var(--hover);
+    color: var(--text);
+    border: none;
+}
+
+/* 会话内搜索框：与首页搜索框统一（无边框灰底圆角） */
+html.m #conv-search-input {
+    box-sizing: border-box;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    border-radius: 8px;
+}
+
 /* 结果区撑满余下全屏 */
 html.m #add-friend-mask .add-friend-result {
     flex: 1;
