@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,6 +28,9 @@ type Server struct {
 	// 仅存内存（重启丢失即重传，不落库不进 Redis，超大文件场景避免高频写）
 	uploadSessions map[string]*directUploadSession
 	uploadMu       sync.RWMutex
+	// 阶段二百二十一：未登录（半开）连接原子计数——恶意刷连接防护，
+	// HandleWS 校验通过后 +1、readPump 退出时 -1，超 pending_limit 拒绝新连接
+	pendingConns atomic.Int64
 }
 
 // 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
@@ -59,13 +63,30 @@ func NewServer(cfg *config.Config) *Server {
 	return s
 }
 
-// HandleWS 处理新连接
-func (s *Server) HandleWS(conn *websocket.Conn) {
-	// 异常连接防护：单 IP 高频限制
-	ip := conn.RemoteAddr().String()
-	if !s.checkIPLimit(ip) {
-		logger.Warn("拒绝高频连接: %s", ip)
-		conn.Close()
+// rejectWS 拒绝连接：同步写一条 ERROR 提示帧后关闭——客户端可感知拒绝原因，
+// 前端 lastRejectAt 机制据 ERROR 帧停止自动重连，避免被拒端 3 秒重试持续轰击
+func rejectWS(conn *websocket.Conn, text string) {
+	errMsg, _ := json.Marshal(&protocol.Message{MsgType: protocol.MsgTypeError, Content: text})
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	conn.WriteMessage(websocket.TextMessage, errMsg)
+	conn.Close()
+}
+
+// HandleWS 处理新连接（realIP=经反代透传的真实客户端 IP，限流按真实 IP 分桶）
+func (s *Server) HandleWS(conn *websocket.Conn, realIP string) {
+	// 异常连接防护：单 IP 高频限制（拒绝时回 ERROR 帧让前端停止重试风暴）
+	if !s.checkIPLimit(realIP) {
+		logger.Warn("拒绝高频连接: %s", realIP)
+		rejectWS(conn, "连接过于频繁，请稍后重试")
+		return
+	}
+
+	// 阶段二百二十一：未登录连接数上限——原实现未登录连接不受任何总量约束
+	// （max_connections 校验的 hub.TotalConns 仅统计已登录连接），恶意刷连接/重连风暴
+	// 可无限占用 goroutine 与内存直至 OOM；超限回 ERROR 帧后关闭
+	if s.pendingConns.Load() >= int64(s.cfg.PendingLimit) {
+		logger.Warn("拒绝新连接: 未登录连接数已达上限 %d", s.cfg.PendingLimit)
+		rejectWS(conn, "服务器繁忙，请稍后重试")
 		return
 	}
 
@@ -73,15 +94,14 @@ func (s *Server) HandleWS(conn *websocket.Conn) {
 	// 原实现：该配置项从未被执行校验，连接数仅受系统资源约束
 	if s.cfg.MaxConnections > 0 && s.hub.TotalConns() >= s.cfg.MaxConnections {
 		logger.Warn("拒绝新连接: 在线连接数已达上限 %d", s.cfg.MaxConnections)
-		// 回执错误提示后再关闭，前端可感知原因
-		errMsg, _ := json.Marshal(&protocol.Message{MsgType: protocol.MsgTypeError, Content: "服务器连接数已达上限，请稍后重试"})
-		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		conn.WriteMessage(websocket.TextMessage, errMsg)
-		conn.Close()
+		rejectWS(conn, "服务器连接数已达上限，请稍后重试")
 		return
 	}
 
+	// 接入日志在全部校验通过后打印（带真实 IP）——拒绝连接不刷 INFO 日志，防日志 IO 噪声
+	logger.Info("客户端接入: %s", realIP)
 	c := newClient(s, conn)
+	s.pendingConns.Add(1)
 	go c.writePump()
 	c.readPump()
 }

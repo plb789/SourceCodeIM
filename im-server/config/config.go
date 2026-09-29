@@ -24,6 +24,13 @@ type Config struct {
 	IPConnLimit int `yaml:"ip_conn_limit"`
 	// 单 IP 连接频率统计窗口秒（0=默认 10）
 	IPConnWindow int `yaml:"ip_conn_window"`
+	// 阶段二百二十一：未登录（半开）连接数上限——恶意刷连接/重连风暴场景，未登录连接不受
+	// max_connections 约束（hub.TotalConns 仅统计已登录连接），无上限时可被耗尽 goroutine 与内存。
+	// 超限对新连接回 ERROR 帧后关闭（0=默认 5000）
+	PendingLimit int `yaml:"pending_limit"`
+	// 未登录连接硬超时秒：deadline 锚定连接建立时刻、不随客户端发帧刷新——攻击者无法靠定时发
+	// 垃圾帧给未登录连接续命长期占位；正常客户端建连即发 LOGIN（秒级）不受影响（0=默认 60）
+	PendingTimeout int `yaml:"pending_timeout"`
 	// 并发改造 C 系列：集群模式开关（hub 分布式化 + Redis pub/sub 跨实例广播）
 	// true = 启动集群总线订阅消费端，消息投递/广播/会话刷新/缓存失效跨实例投递，
 	// 多实例水平扩展共享同一 MySQL 与 Redis；false（默认）= 单实例模式，全部本地内存投递，零行为变化
@@ -517,6 +524,13 @@ func Load() *Config {
 	}
 	if cfg.IPConnWindow <= 0 {
 		cfg.IPConnWindow = 10
+	}
+	// 阶段二百二十一：未登录连接防护兜底（5000 上限 / 60 秒硬超时）
+	if cfg.PendingLimit <= 0 {
+		cfg.PendingLimit = 5000
+	}
+	if cfg.PendingTimeout <= 0 {
+		cfg.PendingTimeout = 60
 	}
 	// 集群总线频道兜底（ClusterEnabled 默认 false，无需兜底；频道为空时总线用默认 im:bus）
 	if cfg.ClusterChannel == "" {

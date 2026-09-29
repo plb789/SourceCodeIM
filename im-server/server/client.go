@@ -31,6 +31,9 @@ type Client struct {
 	// 并发改造 C1 审计加固：连接关闭标记——读循环退出/主动关闭时置位，
 	// 离线补发等长循环据此快速中止，避免对死连接逐条空等背压超时（大积压 × 3s/条的空转）
 	closed atomic.Bool
+	// 阶段二百二十一：连接建立时刻——未登录硬超时的锚点（readPump 中未登录连接的
+	// ReadDeadline 恒定为 createdAt+pending_timeout，不随客户端发帧刷新，发帧不可续命）
+	createdAt time.Time
 }
 
 // newClient 创建客户端连接对象
@@ -38,9 +41,10 @@ func newClient(s *Server, conn *websocket.Conn) *Client {
 	// 原实现：sendCh: make(chan []byte, 256) 固定 256 缓冲，大文件分片与聊天消息混流时易溢出丢消息
 	// 阶段三十一：缓冲大小改由配置 send_queue_size 下发（默认 1024）
 	return &Client{
-		server: s,
-		conn:   conn,
-		sendCh: make(chan []byte, s.cfg.SendQueueSize),
+		server:    s,
+		conn:      conn,
+		sendCh:    make(chan []byte, s.cfg.SendQueueSize),
+		createdAt: time.Now(),
 	}
 }
 
@@ -106,6 +110,8 @@ func (c *Client) SendErrorAndClose(content string) {
 // readPump 读循环：解析消息、处理心跳超时、分发
 func (c *Client) readPump() {
 	defer func() {
+		// 阶段二百二十一：未登录连接计数递减（HandleWS 校验通过后 +1）
+		c.server.pendingConns.Add(-1)
 		c.server.unregister(c)
 		c.Close()
 	}()
@@ -115,7 +121,15 @@ func (c *Client) readPump() {
 	c.conn.SetReadLimit(4 << 20) // 单条消息最大 4MB（文件面板 readb 的 65 上行回传 base64 可达约 2.7MB，普通消息不受影响）
 
 	for {
-		c.conn.SetReadDeadline(time.Now().Add(timeout))
+		// 阶段二百二十一：未登录连接硬超时——ReadDeadline 锚定连接建立时刻
+		// （createdAt+pending_timeout 秒内必须完成登录），不随循环刷新；
+		// 原实现每轮 SetReadDeadline(now+90s)，攻击者定时发垃圾帧即可给未登录连接
+		// 无限续命长期占位（goroutine+内存），与重连风暴叠加放大资源耗尽
+		if c.username == "" {
+			c.conn.SetReadDeadline(c.createdAt.Add(time.Duration(c.server.cfg.PendingTimeout) * time.Second))
+		} else {
+			c.conn.SetReadDeadline(time.Now().Add(timeout))
+		}
 		var msg protocol.Message
 		if err := c.conn.ReadJSON(&msg); err != nil {
 			return

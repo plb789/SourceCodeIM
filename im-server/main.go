@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	pprof "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gorilla/websocket"
 
@@ -19,6 +21,45 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// realClientIP 提取真实客户端 IP（阶段二百二十一：登录连接风暴排查加固）
+// 原缺陷：经 nginx 反代后 conn.RemoteAddr() 恒为 127.0.0.1，单 IP 高频限流
+// （checkIPLimit 按 RemoteAddr 分桶）实际是全站用户共享一个 20 次/10 秒的配额桶——
+// 任一波动（服务重启集中重连/恶意刷连接）即可打爆共享桶，全体用户被拒后前端
+// 3 秒重试继续刷计数，形成"卡在登录无法登录"的自锁风暴，且属可被恶意利用的 DoS 面。
+//
+// 分桶判据（阿里云 CDN 链路适配）：用户 → 阿里云 CDN → nginx → 本服务。
+// X-Real-IP 在该链路被 nginx 以 $remote_addr 覆盖为"CDN 回源节点 IP"（节点池共享，
+// 不可用作用户分桶）；X-Forwarded-For 末段同样是回源节点 IP，而倒数第二段才是
+// CDN 看到的用户真实 IP——用户自带的伪造 XFF 值会被 CDN 的覆盖/追加排在更前，
+// 无法污染该位置。直连反代（无 CDN）时 XFF 为单段用户 IP，同样命中。
+// 兜底：无 XFF 时回退 X-Real-IP（既有直连反代行为），再回退 RemoteAddr。
+// 遗留面：绕过 CDN 直连源站可伪造 XFF，由"源站安全组仅放行 CDN 回源段"收口（运维建议）
+func realClientIP(r *http.Request) string {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			parts := strings.Split(v, ",")
+			if len(parts) >= 2 {
+				// CDN/多级代理链：倒数第一=最后一级代理（CDN 回源节点/nginx），倒数第二=真实用户 IP
+				if prev := strings.TrimSpace(parts[len(parts)-2]); prev != "" {
+					return prev
+				}
+			}
+			if first := strings.TrimSpace(parts[0]); first != "" {
+				return first
+			}
+		}
+		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+			return v
+		}
+	}
+	return host
 }
 
 func main() {
@@ -67,13 +108,15 @@ func main() {
 	// 4. WebSocket 监听入口
 	srv := server.NewServer(cfg)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		realIP := realClientIP(r)
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			logger.Error("WebSocket 升级失败: %v", err)
 			return
 		}
-		logger.Info("客户端接入: %s", conn.RemoteAddr())
-		srv.HandleWS(conn)
+		// 阶段二百二十一：接入日志移入 HandleWS 校验通过后（带真实 IP）——原在升级后立即打，
+		// 被限流拒绝的连接也刷 INFO 日志，攻击者可借此制造日志 IO 噪声
+		srv.HandleWS(conn, realIP)
 	})
 	// 头像上传接口
 	http.HandleFunc("/upload/avatar", srv.HandleAvatarUpload)
