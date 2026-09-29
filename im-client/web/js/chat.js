@@ -20889,8 +20889,8 @@
         var callVisible = callSupported && currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser);
         if (voiceCallBtn) voiceCallBtn.classList.toggle('hidden', !callVisible);
         if (videoCallBtn) videoCallBtn.classList.toggle('hidden', !callVisible);
-        // 阶段一百四十四：群会议按钮显隐——仅 PC 端群会话显示（一期会议从群发起；
-        // Web/手机端无 desktop 桥恒隐藏，被邀能力由服务端 hub.HasPC 归口判定）
+        // 阶段一百四十四：群会议按钮显隐——群会话显示（一期会议从群发起；
+        // 阶段一百九十八起 Web/手机端经 web-call-bridge 页内形态同样支持，被邀能力由服务端 hub.HasCall 归口判定）
         if (meetBtn) meetBtn.classList.toggle('hidden', !(callSupported && currentChatUser !== '' && isGroupTarget(currentChatUser)));
         // 阶段一百五十五：远程协助按钮显隐——仅 PC 端好友私聊显示（desktop.remoteInputSend 为 PC 端专有桥；
         // AI 会话/群聊/非好友隐藏；Web/手机端恒隐藏。好友校验服务端 isFriend 归口，此处为入口预检）
