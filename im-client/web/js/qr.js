@@ -86,7 +86,10 @@
             scanStream = null;
         }
         var v = document.getElementById('qr-video');
-        if (v) v.srcObject = null;
+        if (v) {
+            v.srcObject = null;
+            v.classList.remove('live');
+        }
     }
 
     function closeScanner() {
@@ -139,6 +142,16 @@
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (stream) {
             scanStream = stream;
             var v = document.getElementById('qr-video');
+            // 首帧就绪才淡入（loadeddata = 首帧已解码；400ms 兜底幂等）——
+            // visibility 切换瞬间原生层无首帧会闪现默认播放器海报
+            var shown = false;
+            var showFrame = function () {
+                if (shown) return;
+                shown = true;
+                v.classList.add('live');
+            };
+            v.addEventListener('loadeddata', showFrame, { once: true });
+            setTimeout(showFrame, 400);
             v.srcObject = stream;
             v.setAttribute('playsinline', 'true');
             v.play();
