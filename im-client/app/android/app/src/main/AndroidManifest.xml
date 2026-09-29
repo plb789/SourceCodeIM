@@ -39,4 +39,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 阶段一百九十八：语音/视频通话/会议（WebRTC getUserMedia）——Capacitor BridgeWebChromeClient
+         内建 onPermissionRequest 桥接：Web 侧权限请求映射到下列 Android 运行时权限按需弹窗授权 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>

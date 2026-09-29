@@ -78,7 +78,9 @@ func platformName(p string) string {
 		return "PC"
 	case "web":
 		return "WEB"
-	case "":
+	case "app", "":
+		// 阶段一百九十八：手机 APP 端 platform 由空改上报 "app"（WEB 通话桥放开后与浏览器 web 端区分，
+		// 同端互踢按 platform 相等判定——app↔app 互踢、app 与 web/pc 跨端共存）；空值保留兼容旧版 APP
 		return "手机"
 	case "share":
 		return "分享页"
@@ -153,12 +155,13 @@ func (h *Hub) HasPC(username string) bool {
 
 // HasCall 阶段一百四十五：该用户是否存在支持音视频通话的端在线连接——通话/会议被叫能力归口判定。
 // WEB 端（浏览器，platform="web"）通话功能上线后与 PC 端（platform="pc"）同具 WebRTC 通话能力；
-// 手机端（platform 空）暂不支持。多端同账号在线时任一可通话连接在线即视为可呼叫
+// 阶段一百九十八：手机 APP 端（Capacitor，platform="app"）WebView 内复用 WEB 通话桥，同具通话能力。
+// 多端同账号在线时任一可通话连接在线即视为可呼叫
 func (h *Hub) HasCall(username string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for c := range h.clients[username] {
-		if c.platform == "pc" || c.platform == "web" {
+		if c.platform == "pc" || c.platform == "web" || c.platform == "app" {
 			return true
 		}
 	}

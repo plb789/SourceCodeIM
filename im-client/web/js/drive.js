@@ -319,10 +319,15 @@
             '  <div class="drive-cell-size">' + (it.is_dir ? '-' : fmtSize(it.size)) + '</div>' +
             '  <div class="drive-cell-time">' + fmtTime(it.update_time || it.create_time) + '</div>' +
             '  <div class="drive-cell-actions">' +
+            // 阶段二百零八：PC=悬浮按钮组（悬停浮现）；移动端=常驻"···"按钮弹右键同款菜单
+            // （手机 tap 会误触 hover 使按钮浮现在时间上重叠，故收进菜单归口）
+            '    <span class="drive-act-group">' +
             '    <button class="drive-act" data-act="share" title="' + T('分享') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg></button>' +
             (it.is_dir ? '' : '    <button class="drive-act" data-act="download" title="' + T('下载') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>') +
             '    <button class="drive-act" data-act="rename" title="' + T('重命名') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>' +
             '    <button class="drive-act drive-act-danger" data-act="delete" title="' + T('删除') + '"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>' +
+            '    </span>' +
+            '    <button class="drive-act drive-act-more" title="' + T('更多') + '"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></button>' +
             '  </div>' +
             '</div>';
     }
@@ -444,7 +449,8 @@
                 if (it.is_dir) enterDir(it.id, it.name);
                 else if (canPreviewName(it.name)) openDriveViewer(it);
             });
-            row.querySelectorAll('.drive-act').forEach(function (btn) {
+            // 阶段二百零八：排除"···"按钮——它须冒泡到 listEl 的菜单合成监听，不能被 stopPropagation 截停
+            row.querySelectorAll('.drive-act:not(.drive-act-more)').forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
                     e.stopPropagation();
                     var act = btn.getAttribute('data-act');
@@ -1805,10 +1811,21 @@
     function init() {
         if (inited) return;
         inited = true;
-        console.log('[网盘] 脚本 v2.23 已加载（下载先弹保存框流式写盘/批量静默；PDF+Office 文档在线预览）；若右键无菜单请按 Ctrl+F5 强刷后重试'); // 版本判定归口：用户 F12 一眼确认所跑版本
+        console.log('[网盘] 脚本 v2.27 已加载（下载先弹保存框流式写盘/批量静默；PDF+Office 文档在线预览）；若右键无菜单请按 Ctrl+F5 强刷后重试'); // 版本判定归口：用户 F12 一眼确认所跑版本
         // DOM 移入主聊天区（公告流/设置页同款 absolute 覆盖，左侧列表保持可见）
         if (mainChatEl && view.parentElement !== mainChatEl) mainChatEl.appendChild(view);
-        closeBtn.addEventListener('click', close);
+        // 阶段二百零七：返回键语义分级（微信导航栈同款）——
+        // 搜索态：返回搜索前的目录；子目录：回上级目录；根目录/回收站/分享页：关闭页面
+        closeBtn.addEventListener('click', function () {
+            if (trashMode || shareMode) { close(); return; }
+            if (searchMode) { clearSearchUI(); return; }
+            if (crumbs.length > 1) {
+                var up = crumbs[crumbs.length - 2];
+                enterDir(up.id, null, true);
+                return;
+            }
+            close();
+        });
         mkdirBtn.addEventListener('click', mkdir);
         uploadBtn.addEventListener('click', function () { fileInput.click(); });
         // ===== 批量操作事件绑定（多选模式） =====
@@ -1877,6 +1894,23 @@
             row.classList.add('ctx-target'); // v2.18：菜单弹出期间高亮目标行（动作作用行可视化，hideCtxMenu 统一清除）
         }
         listEl.addEventListener('contextmenu', handleDriveCtx); // 通道一：标准冒泡（保留防回归）
+        // 阶段二百零八：移动端"···"按钮——合成 contextmenu 复用右键菜单（分享/下载/重命名/删除），
+        // 菜单锚定按钮位置，业务项与长按菜单完全同源零复制
+        listEl.addEventListener('click', function (e) {
+            var more = e.target.closest('.drive-act-more');
+            if (!more) return;
+            // 阻止本 click 继续冒泡：全局"点别处关菜单"监听会立即关掉刚弹出的菜单
+            e.stopPropagation();
+            var row = more.closest('.drive-row');
+            if (!row) return;
+            var r = more.getBoundingClientRect();
+            row.dispatchEvent(new MouseEvent('contextmenu', {
+                bubbles: true,
+                cancelable: true,
+                clientX: r.left + r.width / 2,
+                clientY: r.top + r.height / 2
+            }));
+        });
         // 通道二：右键按下（mousedown）立即弹——contextmenu 事件被扩展吞掉时的生命线，且观感同 Windows 桌面
         listEl.addEventListener('mousedown', function (e) {
             if (e.button !== 2) return;
@@ -1913,8 +1947,15 @@
                 if (mi) mi.style.display = vis[act] ? '' : 'none'; // null 守卫：缓存错位（新 JS+旧 HTML 缺菜单项）时不崩、菜单仍可弹
             }
             ctxMenu.classList.remove('hidden');
+            // 阶段二百零八：视口边界钳制（菜单显示后量实际尺寸）——移动端"···"按钮贴近屏幕
+            // 右缘/下缘，PC 右键贴屏缘同样受益，防菜单溢出视口
             ctxMenu.style.top = y + 'px';
             ctxMenu.style.left = x + 'px';
+            var mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
+            var maxX = window.innerWidth - mw - 6;
+            var maxY = window.innerHeight - mh - 6;
+            if (x > maxX) ctxMenu.style.left = Math.max(6, maxX) + 'px';
+            if (y > maxY) ctxMenu.style.top = Math.max(6, maxY) + 'px';
         }
         // 菜单项动作归口（粘贴复用 doMoveCopy 归口：toast+退出多选+原位刷新+复制刷容量；delete 按选区规模分发单删/批删）
         ctxMenu.querySelectorAll('.menu-item').forEach(function (item) {
@@ -2066,6 +2107,9 @@
         });
         // 左侧"我的文件"入口：退出回收站/分享页回根目录并刷新
         driveEntry.addEventListener('click', function () {
+            // 阶段二百零七：与分享/回收站入口同款守卫——手机端"返回聊天"后仍停在网盘
+            // tab，再点"我的文件"时页面已关（visible=false），须先重开，否则滑入的是空聊天页
+            if (!visible) open();
             if (trashMode) resetTrashUI();
             if (shareMode) resetShareUI();
             if (searchMode) clearSearchUI();
@@ -2156,7 +2200,16 @@
     }
     function close() {
         visible = false;
-        view.classList.add('hidden');
+        // 阶段二百零八：移动端延迟隐藏——立即 hidden 会在 main-chat 滑出动画期间
+        // 露出底下消息区（好友聊天页闪现）；让视图随容器整体滑出后再隐藏。
+        // visible 已置 false（isOpen 立即可查），mobile.js 据此提前触发退场动画
+        if (document.documentElement.classList.contains('m')) {
+            setTimeout(function () {
+                if (!visible) view.classList.add('hidden'); // 复查：滑出期间若重新打开则不隐藏
+            }, 260);
+        } else {
+            view.classList.add('hidden');
+        }
     }
     function isOpen() { return visible; }
 

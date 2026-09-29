@@ -29,10 +29,12 @@ const (
 
 // persistedMsgContent 持久化消息的 content 结构
 type persistedMsgContent struct {
-	URL   string `json:"url"`             // 静态资源 URL（/static/upload/xxx）
-	Name  string `json:"name"`            // 原始文件名
-	Size  int64  `json:"size"`            // 文件大小（字节）
-	Nonce string `json:"nonce,omitempty"` // 阶段二十六：客户端本地气泡标识（仅群聊图片携带，广播回填 msg_id 时精确匹配，历史渲染忽略）
+	URL      string `json:"url"`                // 静态资源 URL（/static/upload/xxx）
+	Name     string `json:"name"`               // 原始文件名
+	Size     int64  `json:"size"`               // 文件大小（字节）
+	Nonce    string `json:"nonce,omitempty"`    // 阶段二十六：客户端本地气泡标识（仅群聊图片携带，广播回填 msg_id 时精确匹配，历史渲染忽略）
+	Voice    bool   `json:"voice,omitempty"`    // 阶段一百九十八：语音消息标记（微信手机版"按住 说话"语音条，复用文件消息链路零白名单改动）
+	Duration int    `json:"duration,omitempty"` // 阶段一百九十八：语音时长（秒，前端录音计时；0=普通文件）
 }
 
 // isImageExt 判断扩展名是否为图片（图片落库为图片消息，其余为文件消息）
@@ -204,6 +206,14 @@ func (s *Server) HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, username string) {
 	toUser := r.URL.Query().Get("to_user")
 	nonce := r.URL.Query().Get("nonce") // 发送端本地气泡标识：FILE_PERSISTED 回填 msg_id 时按 nonce 精确匹配
+	// 阶段一百九十八：语音消息标记与时长（微信手机版"按住 说话"；voice=1 时 content 带 voice/duration，摘要显示 [语音]）
+	voiceFlag := r.URL.Query().Get("voice") == "1"
+	voiceDuration := 0
+	if voiceFlag {
+		if n, err := strconv.Atoi(r.URL.Query().Get("duration")); err == nil && n > 0 && n <= 3600 {
+			voiceDuration = n
+		}
+	}
 	if toUser == "" {
 		http.Error(w, "缺少接收方参数", http.StatusBadRequest)
 		return
@@ -290,7 +300,8 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 	fileID := strconv.FormatUint(uint64(rec.ID), 10)
 
 	// 落库消息：图片为图片消息(4)，其余为文件消息(5)；nonce 写入 content 供发送端本地气泡回填
-	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
+	// 阶段一百九十八：语音消息复用文件消息链路（content 带 voice/duration，历史渲染按标记出语音条）
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce, Voice: voiceFlag, Duration: voiceDuration})
 	msgType := int8(MsgTypeFileSaved)
 	if isImageExt(ext) {
 		msgType = int8(MsgTypeImageSaved)
@@ -309,9 +320,11 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 	// 回写文件记录消息 ID（与分片持久化路径对齐，撤回/置顶能力前提）
 	store.DB.Model(&model.FileRecord{}).Where("id = ?", rec.ID).Update("msg_id", record.ID)
 
-	// 更新双方会话摘要并推送（按类型显示 [图片]/[文件]）
+	// 更新双方会话摘要并推送（按类型显示 [图片]/[文件]，语音消息显示 [语音]）
 	summary := "[文件]"
-	if msgType == int8(MsgTypeImageSaved) {
+	if voiceFlag {
+		summary = "[语音]"
+	} else if msgType == int8(MsgTypeImageSaved) {
 		summary = "[图片]"
 	}
 	s.touchConversation(username, toUser, summary)
@@ -480,6 +493,14 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 	nonce := r.URL.Query().Get("nonce") // 客户端本地气泡标识：广播回填 msg_id 按 nonce 精确匹配（与群图片同归口）
 	// 阶段一百四十二：多群聊作用域（空=全局群，'gN'=指定群；向后兼容不带参调用）
 	groupParam := r.URL.Query().Get("group")
+	// 阶段一百九十八：语音消息标记与时长（微信手机版"按住 说话"；content 带 voice/duration，摘要 [语音]）
+	voiceFlag := r.URL.Query().Get("voice") == "1"
+	voiceDuration := 0
+	if voiceFlag {
+		if n, err := strconv.Atoi(r.URL.Query().Get("duration")); err == nil && n > 0 && n <= 3600 {
+			voiceDuration = n
+		}
+	}
 	if username == "" {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
 		return
@@ -559,7 +580,8 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 	url := "/static/upload/" + filename
 
 	// 落库消息：msg_type=5 文件消息，ToUser 为空表示全局群、'gN' 表示多群聊（与群聊文字/图片消息同命名空间）
-	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce})
+	// 阶段一百九十八：语音消息复用文件消息链路（content 带 voice/duration）
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: header.Filename, Size: header.Size, Nonce: nonce, Voice: voiceFlag, Duration: voiceDuration})
 	record := model.Message{
 		MsgType:  int8(MsgTypeFileSaved),
 		FromUser: username,
@@ -583,8 +605,12 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now().Unix(),
 	}
 	// 多群聊按成员定向广播（含离线入队与会话摘要）；全局群已废弃（入口 resolveGroupUploadScope
-	// 已拒绝空 group 参数，toUser 恒为 'gN'）
-	s.broadcastGroupMediaNotice(notice, "[文件]")
+	// 已拒绝空 group 参数，toUser 恒为 'gN'）；语音消息摘要显示 [语音]（阶段一百九十八）
+	groupSummary := "[文件]"
+	if voiceFlag {
+		groupSummary = "[语音]"
+	}
+	s.broadcastGroupMediaNotice(notice, groupSummary)
 
 	logger.Info("群聊文件消息: %s 上传 %s (%d 字节) -> 群%s 消息%d, url=%s", username, header.Filename, header.Size, toUser, record.ID, url)
 

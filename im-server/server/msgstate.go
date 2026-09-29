@@ -245,7 +245,12 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		case 4:
 			summary = "[图片]"
 		case 5:
+			// 阶段一百九十八：语音消息（复用文件消息链路，content 带 voice 标记）显示 [语音]
 			summary = "[文件]"
+			var mc persistedMsgContent
+			if json.Unmarshal([]byte(latest.Content), &mc) == nil && mc.Voice {
+				summary = "[语音]"
+			}
 		case 86:
 			// 阶段一百五十四：红包信封归口——撤回中间消息且最新可见消息为红包时，
 			// 摘要显示"[红包] 祝福语"，复用 messageSummary 与正常会话摘要链路同口径，防 JSON 原串外泄

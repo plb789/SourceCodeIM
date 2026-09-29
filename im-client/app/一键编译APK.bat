@@ -20,7 +20,7 @@ set "JAVA_HOME=%~dp0tools\jdk-17.0.20.1+1"
 set "PATH=%JAVA_HOME%\bin;%PATH%"
 
 echo.
-echo [1/3] 同步前端资源到 Android 工程（im-client/web -^> android）...
+echo [1/4] 同步前端资源到 Android 工程（im-client/web -^> android）...
 call npx cap sync android
 if errorlevel 1 (
     echo [错误] 前端资源同步失败，请检查上方错误信息。
@@ -28,7 +28,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/3] 编译 Release APK（首次编译需下载依赖，耗时较长）...
+echo [2/4] 剔除无需内嵌 APK 的 PC 分发大文件（static/download 安装包、编译工具链 zip，
+echo        这些文件仅供 WEB 端下载区使用，内嵌会使 APK 膨胀到 1GB；APP 下载走 im-server 接口）...
+if exist "android\app\src\main\assets\public\static\download" rmdir /s /q "android\app\src\main\assets\public\static\download"
+for %%F in ("android\app\src\main\assets\public\static\*-toolchain.zip") do (
+    if exist "%%F" del /q "%%F"
+)
+
+echo.
+echo [3/4] 编译 Release APK（首次编译需下载依赖，耗时较长）...
 cd /d "%~dp0android"
 call gradlew.bat assembleRelease --no-daemon
 if errorlevel 1 (
@@ -37,7 +45,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] 复制 APK 到发布目录...
+echo [4/4] 复制 APK 到发布目录...
 cd /d "%~dp0"
 if not exist "bin" mkdir "bin"
 copy /y "android\app\build\outputs\apk\release\app-release.apk" "bin\im-client.apk" >nul

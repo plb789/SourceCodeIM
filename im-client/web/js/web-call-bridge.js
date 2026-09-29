@@ -4,15 +4,20 @@
       尺寸/居中/信令缓冲对齐 PC 主进程（callSigQueue 同语义：iframe 就绪前的下行信令缓冲，就绪后按到达序回放）
    2. 响铃条：页内顶部弹条（微信同款），WebAudio 合成振铃音（零资源文件），铃声参数对齐 call-ring.js
    3. 能力注入：window.desktop 上仅填充通话相关方法（其余 PC 能力保持 undefined，截图/工具链等不受影响）
-   激活条件：非 Electron（window.desktop 不存在）且非 Capacitor 手机端（手机端一期不支持通话，恒旁路）
+   激活条件：非 Electron（window.desktop 不存在）。
+   阶段一百九十八：手机 APP 端（Capacitor）解除旁路——Android WebView 同源 iframe + WebRTC 可用，
+   与浏览器同链路复用（platform 上报 'app'，服务端 hub.HasCall 已归口）；通话窗/响铃条按移动视口全屏适配。
    消息协议（父页 ↔ 通话窗 iframe，同源 postMessage）：
    父→iframe：{src:'web-call-bridge', t:'call:load'|'call:signal'|'call:window-close', ...}
    iframe→父：{src:'web-call-page',  t:'call:send'|'call:close'|'meet:invite-ask', ...} */
 (function () {
     'use strict';
-    // 激活判定：PC 端 preload 已注入 window.desktop（整脚本旁路）；手机端 Capacitor 恒旁路（通话按钮维持隐藏）
+    // 激活判定：PC 端 preload 已注入 window.desktop（整脚本旁路）。
+    // 原实现：Capacitor 手机端恒旁路（一期手机端不支持通话，按钮维持隐藏）；
+    // 阶段一百九十八：手机端解除旁路（Android WebView WebView Chrome 内核完整支持 WebRTC，
+    // 运行时权限由 Capacitor BridgeWebChromeClient 内建 onPermissionRequest 桥接弹窗授权）
     if (window.desktop) return;
-    if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return;
+    var isApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
     // ===== 回调登记（chat.js 经 window.desktop.onXxx 注册，语义与 PC preload 一致） =====
     var cbCallSend = null;       // 通话窗上行信令（chat.js 经 WS 发出）
@@ -27,7 +32,12 @@
     var sigQueue = [];           // 就绪前缓冲的下行信令（对齐 PC callSigQueue：room_info 早于窗口就绪的竞态）
 
     // 通话窗尺寸按类型分形态（与 PC main.js callWindowSize 完全同款：语音竖版小窗/视频横版大窗/会议宫格）
+    // 阶段一百九十八：手机 APP 端（Capacitor，屏幕窄）统一近全屏形态——微信手机版通话为全屏页，
+    // iframe 满视口承载（内部页面 flex/absolute 布局天然自适应，会议窄屏另有 @media 收缩列宽）
     function frameSize(callType, isMeet) {
+        if (isApp || window.innerWidth <= 500) {
+            return { w: window.innerWidth, h: window.innerHeight };
+        }
         // 阶段一百五十一：会议视频 1100×700 → 1366×860（腾讯会议同款共享主舞台需要大画面，原 1280×800），
         // 并按视口收敛（浏览器弹层不超出可视区，边距 40→24 再让一档给画面）；语音会议与 1v1 各形态不变
         if (isMeet) {
@@ -151,6 +161,13 @@
         pendingLoad = data;
         callFrame = document.createElement('iframe');
         callFrame.className = 'wcb-frame';
+        // 阶段一百九十八：手机端全屏形态去圆角阴影（微信手机版通话全屏页观感）；拖动把手无意义跳过
+        if (isApp || window.innerWidth <= 500) {
+            callFrame.style.borderRadius = '0';
+            callFrame.style.boxShadow = 'none';
+            callFrame.style.maxWidth = 'none';
+            callFrame.style.maxHeight = 'none';
+        }
         // iframe 权限策略：媒体设备 + 共享屏幕（同源默认 self，显式声明稳妥）
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
@@ -160,7 +177,7 @@
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
         applyFrameSize(s);
-        ensureDragBar(); // 通话窗拖动把手（阶段一百四十五）
+        if (!isApp && window.innerWidth > 500) ensureDragBar(); // 通话窗拖动把手（阶段一百四十五；移动端跳过）
     }
 
     function closeCallFrame() {

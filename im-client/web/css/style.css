@@ -1300,6 +1300,24 @@ html, body {
     transition: background 0.15s, color 0.15s;
 }
 
+/* ===== 阶段一百九十七：微信手机版一行式输入行（移动布局专属控件） =====
+   语音切换按钮/按住说话条/加号按钮与「+」面板仅 html.m 显示，PC/WEB 布局恒隐藏；
+   PC 端展示形态不受影响（.tool-btn 的 display:flex 与本规则同权重，按源序后者生效） */
+.mobile-only,
+.hold-to-talk {
+    display: none;
+}
+
+/* 微信手机版「+」面板（自绘浮层）：PC 端隐藏；显示需同时满足 html.m 且无 hidden
+   （.hidden 带 !important，显隐归口 mobile.js 的 classList 切换） */
+.mobile-plus-panel {
+    display: none;
+}
+
+html.m .mobile-plus-panel:not(.hidden) {
+    display: block;
+}
+
 /* ===== 阶段一百三十九：截图按钮 QQ 同款两段式（主区域截图 + 下拉箭头弹"隐藏当前窗口"选项） =====
    箭头占按钮右侧窄条（9px 命中区略放宽到 12px 提升可点性），悬浮随按钮同色加亮 */
 #screenshot-btn .shot-caret {
@@ -1747,6 +1765,68 @@ html, body {
     font-size: 12px;
     color: var(--text-light);
     margin-top: 2px;
+}
+
+/* ===== 阶段一百九十八：语音消息条（微信手机版同款：声波 + 时长，点击播放） =====
+   背景跟随 self/other 既有气泡色（.message-bubble 已按方向着色），气泡宽度由 JS 按时长设定；
+   data-url 保留——右键"另存为"/转发复用文件卡片链路零适配 */
+.bubble-voice {
+    /* 覆盖 .bubble-file 的 min-width：语音条宽度完全由 JS 按时长控制（1s 最窄 88px） */
+    min-width: 0;
+    justify-content: space-between;
+    padding: 11px 12px;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    /* 声波图标方向镜像：自己的语音条声波朝右（微信同款），对方的朝左 */
+}
+
+.message.other .bubble-voice {
+    flex-direction: row-reverse;
+}
+
+.voice-wave {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
+.message.self .voice-wave {
+    color: #fff; /* self 气泡底色为主题绿，声波反白（浅深主题下 self 气泡恒绿，同微信） */
+}
+
+.voice-dur {
+    font-size: 13px;
+    color: var(--text);
+    flex-shrink: 0;
+}
+
+.message.self .voice-dur {
+    color: #fff;
+}
+
+/* 播放态：三段声波交替伸缩（微信同款"呼吸"动画） */
+.bubble-voice .voice-wave svg path {
+    transform-origin: center;
+}
+
+.bubble-voice.playing .voice-wave svg path {
+    animation: voiceWavePulse 0.9s ease-in-out infinite;
+}
+
+.bubble-voice.playing .voice-wave svg .w2 {
+    animation-delay: 0.15s;
+}
+
+.bubble-voice.playing .voice-wave svg .w3 {
+    animation-delay: 0.3s;
+}
+
+@keyframes voiceWavePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
 }
 
 /* 阶段三十二：超大文件分片直传进度条（微信同款"发送中/接收中 xx%"，跟随主题色） */
@@ -4604,14 +4684,15 @@ html.m .nav-rail {
     height: calc(58px + env(safe-area-inset-bottom, 0px));
     flex-direction: row;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 12px env(safe-area-inset-bottom, 0px);
+    justify-content: space-around; /* 阶段二百零九：五项等距均分（原 space-between 首项偏移） */
+    padding: 0 4px env(safe-area-inset-bottom, 0px);
     border-top: 1px solid var(--border);
     z-index: 50;
 }
 
 html.m .nav-top {
     width: auto;
+    order: 5; /* 阶段二百零九：contents 提升后与 tab 同层均分，"我"固定末位 */
 }
 
 /* 底部栏空间有限：隐藏用户名文本，保留头像入口（点击打开资料面板） */
@@ -4631,13 +4712,11 @@ html.m .nav-rail .current-avatar {
     gap: 36px;
     margin-top: 0;
 } */
+/* 阶段二百零九：底栏五项等距均分（微信同款）——nav-icons 提升为透明容器，
+   4 个 tab 与 nav-top（我）在 rail 层一起 space-around 均分；
+   原 flex:1+space-evenly 会让"聊天"前多出一段间隙、首尾不均 */
 html.m .nav-icons {
-    flex-direction: row;
-    gap: 0;
-    margin-top: 0;
-    flex: 1;
-    min-width: 0;
-    justify-content: space-evenly;
+    display: contents;
 }
 
 /* 竖条指示在横排布局下改为图标主题色高亮（active 已有 color: var(--primary)） */
@@ -4667,6 +4746,425 @@ html.m .sidebar {
 html.m #list-panel.list-collapsed {
     width: 100%;
     border-right-width: 0;
+}
+
+/* ===== 阶段一百九十九：手机 APP 端微信式首页布局（独立 UI 架构：仅 html.m 生效，PC/WEB 端零影响） =====
+   顶栏（居中标题+搜索/加号）+ 底部五入口（聊天/通讯录/AI助手/工作台/我）；
+   公告/网盘/添加好友/主题/退出收纳至个人页与顶栏加号菜单（参考 docs/app.jpg 仅布局形态） */
+
+/* 移动端专属新增 DOM：PC/WEB 端恒隐藏（架构隔离的关键——新元素默认不显示） */
+.m-home-topbar,
+.m-plus-menu,
+.m-profile-actions,
+/* 阶段二百一十：扫一扫入口锚点与扫码全屏视图（仅 html.m 生效，PC/WEB 恒隐藏） */
+#scan-entry,
+#qr-scan-mask,
+/* 阶段二百零六：个人页功能分组卡（替代旧 m-profile-actions 容器，PC/WEB 端同样恒隐藏） */
+.mpc-actions {
+    display: none;
+}
+
+/* ---- 1. 首页顶栏：居中标题 + 右侧搜索/加号（微信同款） ---- */
+html.m .m-home-topbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    padding: 0 6px;
+    flex-shrink: 0;
+    background: var(--panel-bg);
+}
+
+html.m .m-home-title {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+html.m .m-home-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+html.m .m-home-btn {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+}
+
+html.m .m-home-btn:active {
+    background: var(--hover);
+}
+
+/* 搜索框：首页默认隐藏（微信同款），经顶栏搜索按钮展开既有搜索框 */
+html.m .search-bar {
+    display: none;
+}
+
+html.m .search-bar.search-open {
+    display: flex;
+}
+
+/* ---- 2. 加号下拉菜单（自绘浮层：添加好友/发起群聊，条目转发既有入口） ---- */
+html.m .m-plus-menu:not(.hidden) {
+    display: block;
+    position: fixed;
+    top: 56px;
+    right: 8px;
+    z-index: 1500;
+    min-width: 168px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop);
+}
+
+html.m .m-plus-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    font-size: 15px;
+    cursor: pointer;
+    text-align: left;
+}
+
+html.m .m-plus-item:active {
+    background: var(--hover);
+}
+
+/* ---- 3. 底部导航五入口：聊天/通讯录/AI助手/工作台/我（图标+文字，微信同款） ---- */
+/* 公告/网盘移入个人页；添加好友/主题/退出（nav-bottom 整组）移入个人页与顶栏加号菜单 */
+html.m .nav-icon[data-tab="announcement"],
+html.m .nav-icon[data-tab="drive"],
+html.m .nav-bottom {
+    display: none;
+}
+
+/* 头像即"我"入口（点击打开个人资料/更换头像），排到行尾微信"我"位 */
+html.m .nav-rail .nav-top {
+    order: 9;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 56px;
+}
+
+/* tab 形态：图标上、文字下；顺序对齐需求：聊天/通讯录/AI助手/工作台（头像"我"在 nav-top 已排行尾） */
+html.m .nav-icons .nav-icon {
+    flex-direction: column;
+    gap: 3px;
+}
+
+html.m .nav-icons .nav-icon[data-tab="chat"] { order: 1; }
+html.m .nav-icons .nav-icon[data-tab="friends"] { order: 2; }
+html.m .nav-icons .nav-icon[data-tab="ai"] { order: 3; }
+html.m .nav-icons .nav-icon[data-tab="workbench"] { order: 4; }
+
+/* ---- 阶段二百零五：文字标签改真实 DOM span（mobile.js 注入）----
+   原实现为 ::after content(attr(title))，WebView/GPU 合成层在 tab 切换动画后
+   存在伪元素渲染丢失（部分标签消失不重绘），真实文本节点彻底规避该问题。
+   PC 端 span 恒隐藏（伪元素规则一并移除，PC 端本就不显示文字） */
+.nav-label {
+    display: none;
+}
+
+html.m .nav-label {
+    display: block;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-secondary, var(--text-light));
+    white-space: nowrap;
+}
+
+/* 微信同款：激活 tab 文字随图标一起变主题色 */
+html.m .nav-icon.active .nav-label,
+html.m .nav-top .nav-label {
+    color: var(--text);
+}
+
+/* ---- 4. 个人资料面板（阶段二百零六：微信"我"页同款）----
+   顶部个人卡（大头像+昵称+账号+积分）→ 编辑信息卡 → 功能分组卡（行式+右侧箭头），
+   退出登录独立红字组；分组间以 10px 间隙隔开，卡片圆角 12 与聊天区一体 */
+html.m .profile-panel {
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: 100%;
+}
+
+html.m .profile-content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+html.m .m-profile-card {
+    background: var(--panel-bg);
+    border-radius: 12px;
+    padding: 4px 14px;
+}
+
+/* 移动态恢复显示（基础层对 PC/WEB 恒隐藏） */
+html.m .mpc-actions {
+    display: block;
+}
+
+/* 顶部个人卡（微信同款）：头像左侧大圆角方，右侧昵称大字+账号/积分灰字竖排 */
+html.m .mpc-head {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    column-gap: 16px;
+    align-items: center;
+    padding: 16px 16px 10px;
+}
+
+html.m .mpc-head .profile-field {
+    border-bottom: none;
+    padding: 0;
+}
+
+html.m .mpc-head .profile-label {
+    display: none;
+}
+
+html.m .mpc-head .profile-avatar-field {
+    grid-row: 1 / 4;
+    grid-column: 1;
+    padding: 0;
+}
+
+html.m .mpc-head .profile-avatar-field > div:first-of-type {
+    margin: 0;
+}
+
+html.m .mpc-head .profile-avatar-wrap {
+    width: 64px;
+    height: 64px;
+    border-radius: 10px;
+}
+
+/* 昵称/账号/积分依次排在头像右侧第 1/2/3 行，全部左对齐（微信同款） */
+html.m .mpc-head .profile-field:nth-of-type(2) {
+    grid-row: 1;
+    grid-column: 2;
+}
+
+html.m .mpc-head .profile-field:nth-of-type(3) {
+    grid-row: 2;
+    grid-column: 2;
+}
+
+html.m .mpc-head .profile-field:nth-of-type(4) {
+    grid-row: 3;
+    grid-column: 2;
+}
+
+html.m .mpc-head .profile-input {
+    text-align: left;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+html.m .mpc-head .profile-value {
+    text-align: left;
+    font-size: 13px;
+    padding: 0;
+}
+
+/* 编辑信息卡：label 左 input 右（微信"个人信息"编辑页同款行式） */
+html.m .mpc-edit .profile-field {
+    border-bottom: 1px solid var(--border);
+    padding: 13px 0;
+}
+
+html.m .mpc-edit .profile-field:last-of-type {
+    border-bottom: none;
+}
+
+html.m .mpc-edit .profile-input {
+    text-align: right;
+    font-size: 14px;
+}
+
+html.m .profile-save {
+    width: 100%;
+    margin: 12px 0 6px;
+    padding: 11px 0;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    font-size: 15px;
+}
+
+/* 功能分组卡：行式条目 + 右侧箭头（微信同款），条目间浅分隔 */
+html.m .mpc-actions .mpa-item {
+    width: 100%;
+    padding: 15px 2px;
+    border-bottom: 1px solid var(--border);
+}
+
+html.m .mpc-actions .mpa-item:last-child {
+    border-bottom: none;
+}
+
+html.m .mpa-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: 15px;
+    cursor: pointer;
+    text-align: left;
+}
+
+html.m .mpa-item::after {
+    content: "›";
+    margin-left: auto;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text-light);
+}
+
+html.m .mpa-item:active {
+    opacity: 0.7;
+}
+
+html.m .mpa-item svg {
+    color: var(--primary);
+    flex-shrink: 0;
+}
+
+html.m .mpa-danger,
+html.m .mpa-danger svg {
+    color: var(--danger, #e05252);
+}
+
+/* ===== 阶段二百：聊天页微信化（顶部返回+居中标题+···菜单；输入框微信尺寸自动长高） =====
+   仅 html.m 生效，PC/WEB 端头部按钮组与输入区形态不变；移动端专属 DOM 恒隐藏兜底 */
+.chat-more-menu {
+    display: none;
+}
+
+/* ---- 1. 聊天头部：返回箭头 + 居中标题 + 右侧···（微信同款） ---- */
+html.m .chat-header {
+    position: relative;
+    height: 52px;
+    padding: 0 6px;
+    align-items: center;
+}
+
+/* 标题绝对居中（左右按钮宽度不对称也保持居中，微信同款），超长截断 */
+html.m .chat-header #chat-title {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    flex: none;
+    max-width: 42%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 600;
+}
+
+/* 头部原按钮组收进···菜单（功能保留经镜像转发，PC 端不受影响） */
+html.m .chat-header .header-actions > *:not(#chat-more-btn) {
+    display: none;
+}
+
+html.m #chat-more-btn {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+}
+
+html.m #chat-more-btn:active {
+    background: var(--hover);
+}
+
+/* ···下拉菜单：贴头部右上（自绘浮层，条目动态镜像 header-actions 可用功能） */
+html.m .chat-more-menu:not(.hidden) {
+    display: block;
+    position: fixed;
+    top: 56px;
+    right: 8px;
+    z-index: 1500;
+    min-width: 176px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop);
+}
+
+html.m .chat-more-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    font-size: 15px;
+    cursor: pointer;
+    text-align: left;
+}
+
+html.m .chat-more-item:active {
+    background: var(--hover);
+}
+
+html.m .chat-more-item svg {
+    flex-shrink: 0;
+    color: var(--text-secondary, var(--text-light));
+}
+
+/* ---- 2. 输入框微信尺寸：40px 一行起步随内容长高（高度由 mobile.js autogrow 接管，
+     消除 PC 端 resizer 写入的 inline 高度对移动端的影响） ---- */
+html.m #message-input {
+    height: 40px;
+    min-height: 40px;
+    max-height: 120px;
+    line-height: 20px;
+    border-radius: 8px;
 }
 
 /* ===== 阶段五十九：智能 Agent 任务模式（任务卡片 / 思考 / 工具 / 审批 / 清单进度，跟随 --primary 主题色） ===== */
@@ -9807,7 +10305,7 @@ html.m .message.ai {
     max-width: 92%;
 }
 
-/* ---- 5. 输入区（微信手机版紧凑样式） ---- */
+/* ---- 5. 输入区（微信手机版一行式：语音气泡 + 输入框 + 表情 + 加号/发送） ---- */
 /* 输入框高度拖拽条为 PC 交互，移动端隐藏 */
 html.m #input-resizer {
     display: none;
@@ -9818,29 +10316,292 @@ html.m #screenshot-btn {
     display: none;
 }
 
-/* 键盘手势条安全区：输入区底部留白 */
-html.m .input-bar {
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-}
-
-html.m #message-input {
-    height: 40px;
-    min-height: 40px;
-    max-height: 120px;
-}
-
 /* 键盘快捷键提示对触屏无意义 */
 html.m .input-hint {
     display: none;
 }
 
-/* ---- 6. 表情面板宽度自适应（bottom 由现有布局基准，贴住输入区上方） ---- */
-html.m .emoji-panel {
-    left: 8px;
-    right: 8px;
+/* 阶段一百九十七：输入条改微信手机版同款——通栏平贴底部（悬浮圆角卡片为 PC 形态），
+   工具栏/底行 display:contents 透明化，子项直接参与一行排布 */
+html.m .input-bar {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 8px;
+    margin: 0;
+    border-radius: 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--header-bg);
+    border-top: 1px solid var(--border);
+}
+
+html.m .input-toolbar,
+html.m .input-footer {
+    display: contents;
+}
+
+/* 工具栏/底行仅保留表情与发送，其余入口收进「+」面板（微信手机版同款收纳） */
+html.m .input-toolbar > *:not(#emoji-btn),
+html.m .input-footer > *:not(#send-btn) {
+    display: none;
+}
+
+/* 一行式排布顺序：语音气泡 → 输入框 → 表情 → 加号 → 发送 */
+html.m #voice-toggle-btn { order: 0; }
+html.m #message-input,
+html.m #hold-to-talk { order: 1; }
+html.m #emoji-btn { order: 2; }
+html.m #mobile-plus-btn { order: 3; }
+html.m #send-btn { order: 4; }
+
+/* 移动端专属按钮露出 + 40px 触控目标（微信同款间距） */
+html.m .mobile-only {
+    display: flex;
+}
+
+html.m #voice-toggle-btn,
+html.m #emoji-btn,
+html.m #mobile-plus-btn {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 6px;
+}
+
+html.m #voice-toggle-btn svg,
+html.m #mobile-plus-btn svg {
+    width: 26px;
+    height: 26px;
+}
+
+/* 输入框（微信手机版圆角场）：40px 起步随内容长高，行内按钮底对齐 */
+html.m #message-input {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    min-height: 40px;
+    max-height: 120px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--search-bg);
+}
+
+/* 语音模式（微信同款）：输入框替换为"按住 说话"条，语音气泡按钮主题色高亮，
+   左侧图标同步变键盘（点击切回文字输入）；键盘图标 PC 端恒隐藏。
+   用 ID 特异性防被 .tool-btn svg 等通用规则覆盖 */
+#voice-toggle-btn .vt-keyboard {
+    display: none;
+}
+
+html.m .input-bar.voice-mode #voice-toggle-btn .vt-voice {
+    display: none;
+}
+
+html.m .input-bar.voice-mode #voice-toggle-btn .vt-keyboard {
+    display: block;
+}
+
+html.m .input-bar.voice-mode #message-input {
+    display: none;
+}
+
+html.m .input-bar.voice-mode #hold-to-talk {
+    display: flex;
+}
+
+html.m .input-bar.voice-mode #voice-toggle-btn {
+    color: var(--primary);
+}
+
+/* ===== 阶段二百零三：输入栏图标统一尺寸（微信同款三键等大） =====
+   修复表情(20px)/加号(26px)/语音(24px)图标大小不一，统一为 26px */
+html.m .input-bar .tool-btn svg {
+    width: 26px;
+    height: 26px;
+}
+
+/* 按住说话按下态（微信同款压深反馈） */
+html.m .hold-to-talk.pressing {
+    background: var(--hover);
+}
+
+/* 按住说话条（微信手机版同款圆角场；录音交互阶段一百九十八接线） */
+html.m .hold-to-talk {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 15px;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+}
+
+/* ===== 阶段一百九十八：按住说话录音反馈浮层（微信手机版同款，居中于消息区） =====
+   仅移动布局显示；cancel 态整体转红（微信同款取消观感），文字由 JS 动态切换 */
+.voice-rec-tip {
+    display: none;
+}
+
+html.m .voice-rec-tip:not(.hidden) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -60%);
+    z-index: 1300;
+    width: 150px;
+    height: 150px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    pointer-events: none; /* 纯反馈层：不拦截消息区手势 */
+}
+
+html.m .voice-rec-tip .vrt-icon {
+    color: #fff;
+    opacity: 0.95;
+}
+
+html.m .voice-rec-tip .vrt-text {
+    font-size: 14px;
+}
+
+html.m .voice-rec-tip .vrt-slide {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* 上滑取消态：图标与主文案转红（微信同款），上滑提示隐藏 */
+html.m .voice-rec-tip.cancel {
+    background: rgba(0, 0, 0, 0.82);
+}
+
+html.m .voice-rec-tip.cancel .vrt-icon,
+html.m .voice-rec-tip.cancel .vrt-text {
+    color: #ff5b5b;
+}
+
+html.m .voice-rec-tip.cancel .vrt-slide {
+    display: none;
+}
+
+/* 发送按钮（微信同款文字胶囊）：输入非空出现顶替加号位；AI 生成中保持停止态可见 */
+html.m #send-btn {
     width: auto;
-    bottom: calc(132px + env(safe-area-inset-bottom, 0px));
-    max-height: 240px;
+    height: 36px;
+    padding: 0 14px;
+    font-size: 14px;
+    border-radius: 5px;
+    margin-bottom: 2px;
+}
+
+html.m #send-btn:not(.stopping) svg {
+    display: none;
+}
+
+html.m #send-btn:not(.stopping)::after {
+    content: attr(data-tip-text);
+    white-space: nowrap;
+}
+
+html.m .input-bar:not(.has-text) #send-btn:not(.stopping) {
+    display: none;
+}
+
+html.m .input-bar.has-text #mobile-plus-btn {
+    display: none;
+}
+
+/* 多选模式：整行让位给多选工具栏（行内移动端专属件一并隐藏） */
+html.m .input-bar.ms-mode #voice-toggle-btn,
+html.m .input-bar.ms-mode #mobile-plus-btn,
+html.m .input-bar.ms-mode #hold-to-talk {
+    display: none;
+}
+
+html.m .input-bar.ms-mode #ms-bar {
+    flex: 1;
+}
+
+/* ===== 阶段一百九十七：微信手机版「+」面板（自绘网格浮层，贴输入条上方） =====
+   阶段二百零一：对齐 docs/app-2.jpg 微信同款——面板改为流式布局（DOM 位于输入条之后，
+   flex column 尾部自然展开在输入条下方、消息区自动压缩），全宽无圆角与聊天区一体，
+   图标为圆润方底座+下方文字、4 列网格 */
+html.m .mobile-plus-panel {
+    position: static;
+    width: 100%;
+    height: 280px;
+    padding: 34px 18px 22px;
+    border-radius: 0;
+    background: var(--header-bg);
+    border-top: 1px solid var(--border);
+    box-shadow: none;
+    overflow-y: auto;
+}
+
+html.m .mp-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 26px 6px;
+}
+
+html.m .mp-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+html.m .mp-icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--search-bg);
+    color: var(--text);
+    transition: background 0.12s;
+}
+
+html.m .mp-item:active .mp-icon {
+    background: var(--hover);
+}
+
+html.m .mp-label {
+    font-size: 12px;
+    color: var(--text-secondary, var(--text-light));
+}
+
+/* 阶段一百九十七→二百零一：表情面板与「+」面板同款微信形态——流式布局贴输入条下方
+   全宽展开（DOM 位于输入条之后），无圆角阴影与聊天区一体 */
+html.m .emoji-panel {
+    position: static;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    height: 280px;
+    max-height: none;
+    padding: 14px 12px;
+    border-radius: 0;
+    background: var(--header-bg);
+    border-top: 1px solid var(--border);
+    box-shadow: none;
+    overflow-y: auto;
 }
 
 /* ---- 7. 弹窗/菜单触屏适配 ---- */
@@ -14926,6 +15687,126 @@ html.m .rp-detail-box {
 .drive-row:hover .drive-cell-actions {
     opacity: 1;
 }
+/* 阶段二百零八：行尾"···"按钮（移动端专用入口，PC 端恒隐藏——PC 用悬浮按钮组）。
+   用 .drive-act.drive-act-more 双类特异性，防被后方 .drive-act 的 display 覆盖 */
+.drive-act.drive-act-more {
+    display: none;
+    color: var(--text-light);
+}
+html.m .drive-act.drive-act-more {
+    display: flex;
+}
+/* 阶段二百零八：返回键双文案——PC 恢复原"返回聊天"（右上、无箭头）；
+   移动端微信二级页形态"‹ 返回"（左上、svg 箭头）。
+   基础（PC/WEB）隐藏移动端箭头与文案 */
+.drive-back-ico,
+.drive-back-txt-m {
+    display: none;
+}
+html.m .drive-back-txt-pc {
+    display: none;
+}
+html.m .drive-back-txt-m {
+    display: inline;
+}
+html.m .drive-back-ico {
+    display: inline-block;
+    vertical-align: -2px; /* svg 与文字基线对齐（微信同款 ‹ 返回） */
+}
+/* 阶段二百零八：公告流返回键移动端微信二级页形态（左上 ‹ 返回）；
+   PC 端保持原右上"返回聊天"小按钮不变 */
+html.m .ann-stream-close {
+    order: -1;
+    margin-left: 0;   /* 覆盖 PC 的 auto 推右，左置（微信二级页 ‹ 返回） */
+    margin-right: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    box-shadow: none;
+    padding: 6px 8px 6px 2px;
+    font-size: 15px;
+    color: var(--text);
+}
+/* 悬浮按钮组包裹层：PC 端 display:contents 完全透明（按钮直接参与 actions 单元格
+   原有 flex 横排，避免 span 打断布局导致按钮竖排撑高行）；移动端整组隐藏 */
+.drive-act-group {
+    display: contents;
+}
+html.m .drive-act-group {
+    display: none;
+}
+/* 移动端操作列常驻显示（原 hover 浮现规则在触屏上会误触发压住时间列） */
+html.m .drive-cell-actions {
+    opacity: 1;
+}
+/* 阶段二百零八：两行结构容器——PC 端 display:contents 完全透明（原单行 flex 布局零影响） */
+.drive-batch-row1,
+.drive-batch-row2 {
+    display: contents;
+}
+/* 阶段二百零八：移动端批量操作条——微信多选同款底部操作条。
+   原 PC 条（搜索框下一行塞 6 按钮）在手机宽度下按钮被压成竖排文字，
+   改为底部固定两行：上行=计数+全选+取消，下行=4 动作按钮等分 */
+html.m .drive-batch-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    flex-direction: column;
+    align-items: stretch; /* 覆盖 PC 的 center：column 布局下两行容器须铺满全宽 */
+    gap: 8px;
+    border-radius: 0;
+    border: none;
+    border-top: 1px solid var(--border-color);
+    padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+}
+html.m .drive-batch-flex {
+    display: none;
+}
+/* 上行：计数占满左侧，全选/取消靠右（contents 基础规则需覆盖为 flex，防 column 下竖排） */
+html.m .drive-batch-row1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+html.m .drive-batch-count {
+    flex: 1;
+    text-align: left;
+}
+/* 下行：4 动作按钮等分一行，禁竖排 */
+html.m .drive-batch-row2 {
+    display: flex;
+    gap: 8px;
+}
+html.m .drive-batch-row2 .drive-tb-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    white-space: nowrap;
+    text-align: center;
+    padding: 9px 0;
+}
+/* 回收站操作条同款底部化（计数+清空按钮，单行即可） */
+html.m #drive-trash-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    border-radius: 0;
+    border: none;
+    border-top: 1px solid var(--border-color);
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+}
+/* 文件列表预留底部操作条高度，防最后一行被遮挡（selecting=多选态含两行条） */
+html.m #drive-file-list {
+    padding-bottom: 70px;
+}
+html.m .drive-view.selecting #drive-file-list {
+    padding-bottom: 118px;
+}
 .drive-act {
     border: none;
     background: transparent;
@@ -15150,10 +16031,17 @@ html.m .rp-detail-box {
     background: var(--primary);
     color: #fff;
 }
-/* 手机端适配（html.m）：列宽压缩、工具栏收紧 */
+/* 手机端适配（html.m）：列宽压缩、工具栏收紧。
+   阶段二百零八：名称列此前仅剩约 60px 被压成竖排——收窄大小/时间/操作列
+   与间隙，把宽度还给名称（操作入口移动端以长按菜单为主） */
 html.m .drive-columns,
 html.m .drive-row {
-    grid-template-columns: minmax(0, 1fr) 80px 130px 96px;
+    grid-template-columns: minmax(0, 1fr) 56px 104px 26px;
+    gap: 6px;
+}
+html.m .drive-cell-size,
+html.m .drive-cell-time {
+    font-size: 11px;
 }
 html.m .drive-toolbar {
     padding: 10px 12px;
@@ -15164,10 +16052,26 @@ html.m .drive-search-box {
     margin-left: 0;
     order: 3; /* 手机端搜索框独占一行（按钮行下方） */
 }
-html.m .drive-file-list,
-html.m .drive-head {
+html.m .drive-file-list {
     padding-left: 12px;
     padding-right: 12px;
+}
+html.m .drive-head {
+    padding-left: 6px;
+    padding-right: 12px;
+}
+/* 阶段二百零七：返回键微信二级页同款——左上角 ‹ 返回（面包屑与标题随其后） */
+html.m #drive-close {
+    order: -1;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    box-shadow: none;
+    padding: 6px 8px 6px 2px;
+    font-size: 15px;
+    color: var(--text);
 }
 html.m .drive-uploads {
     right: 10px;
@@ -16116,4 +17020,512 @@ html.m .dsm-list {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* ===================== 阶段二百一十：二维码名片与扫一扫 ===================== */
+/* PC/WEB：资料面板"二维码名片"按钮（全宽次级按钮，位于保存上方） */
+.qr-entry-btn {
+    width: 100%;
+    height: 40px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.qr-entry-btn:hover {
+    background: var(--hover);
+}
+
+/* 名片浮层（PC 居中卡片；移动端同构，仅尺寸微调） */
+.qr-card-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.qr-card {
+    position: relative;
+    width: 320px;
+    max-width: calc(100vw - 40px);
+    background: var(--panel-bg);
+    border-radius: 14px;
+    padding: 24px 24px 20px;
+    text-align: center;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+    animation: modal-in 0.15s ease-out;
+}
+
+.qr-card-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.qr-card-close:hover {
+    color: var(--text);
+    background: var(--hover);
+}
+
+.qr-card-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    margin-bottom: 18px;
+}
+
+.qr-card-avatar,
+.qr-card-avatar-ph {
+    width: 52px;
+    height: 52px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    object-fit: cover;
+    background: var(--placeholder-bg);
+}
+
+.qr-card-avatar-ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    color: #fff;
+    font-weight: bold;
+}
+
+.qr-card-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 17px;
+    font-weight: bold;
+    color: var(--text);
+    word-break: break-all;
+}
+
+.qr-code-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 160px;
+}
+
+.qr-code-box img {
+    width: 220px;
+    height: 220px;
+    display: block;
+}
+
+.qr-card-tip {
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
+.qr-card-id {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-light);
+    word-break: break-all;
+}
+
+/* 扫一扫全屏视图（后摄取景铺满 + 主题色取景框 + 扫描线动画） */
+.qr-scan-mask {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 1900;
+}
+
+#qr-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.qr-scan-frame {
+    position: absolute;
+    left: 50%;
+    top: 36%;
+    width: 240px;
+    height: 240px;
+    transform: translate(-50%, -50%);
+}
+
+.qr-scan-frame .c {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--primary);
+}
+
+.qr-scan-frame .c1 { top: 0; left: 0; border-right: none; border-bottom: none; }
+.qr-scan-frame .c2 { top: 0; right: 0; border-left: none; border-bottom: none; }
+.qr-scan-frame .c3 { bottom: 0; left: 0; border-right: none; border-top: none; }
+.qr-scan-frame .c4 { bottom: 0; right: 0; border-left: none; border-top: none; }
+
+.qr-scan-line {
+    position: absolute;
+    left: 6%;
+    width: 88%;
+    height: 2px;
+    background: var(--primary);
+    box-shadow: 0 0 8px var(--primary);
+    animation: qrScanMove 2.2s ease-in-out infinite alternate;
+}
+
+@keyframes qrScanMove {
+    from { top: 8px; }
+    to { top: calc(100% - 10px); }
+}
+
+.qr-scan-tip {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 140px;
+    text-align: center;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+}
+
+.qr-scan-cancel {
+    position: absolute;
+    left: 50%;
+    bottom: 48px;
+    transform: translateX(-50%);
+    min-width: 96px;
+    height: 40px;
+    padding: 0 24px;
+    border: none;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.qr-scan-cancel:active {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+/* 移动端隔离：PC 入口按钮在 html.m 下隐藏（移动端走个人页 mpa-item 条目转发） */
+html.m #qr-card-entry {
+    display: none;
+}
+
+/* ===================== 阶段二百一十一：移动端「新的朋友」微信同款全屏页 ===================== */
+/* PC/WEB 默认隐藏返回箭头（保持 × 关闭按钮不变） */
+#new-friends-close .nf-back-ico {
+    display: none;
+}
+
+html.m #new-friends-panel {
+    top: 0;
+    bottom: 0;               /* absolute 拉满聊天区，盖住聊天头部/消息区/输入栏（微信同款全屏页） */
+    z-index: 1300;
+    display: flex;
+    flex-direction: column;
+    border-bottom: none;
+    box-shadow: none;
+}
+
+html.m #new-friends-panel .conv-search-bar {
+    position: relative;
+    height: 56px;            /* 与移动端聊天页头部同高 */
+    padding: 0 52px;         /* 两侧留出返回按钮安全区 */
+    align-items: center;
+}
+
+/* 移动端标题居中（微信同款导航栏形态） */
+html.m #new-friends-panel .new-friends-title {
+    font-size: 17px;
+    text-align: center;
+}
+
+/* × 文本隐藏，换左侧微信同款 ‹ 返回箭头 */
+html.m #new-friends-close {
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0;            /* 压掉 × 文本 */
+    padding: 10px;
+    line-height: 0;
+}
+
+html.m #new-friends-close .nf-back-ico {
+    display: block;
+    vertical-align: -2px;
+    color: var(--text);
+}
+
+/* 列表撑满余下全屏（自带自绘悬浮滑块滚动） */
+html.m .new-friends-list {
+    flex: 1;
+    max-height: none;
+    border-top: none;
+}
+
+/* ===================== 阶段二百一十三：移动端「添加好友」微信同款全屏页 ===================== */
+/* 实底全屏页（微信同款），不再是居中小卡片+半透明遮罩 */
+html.m #add-friend-mask {
+    background: var(--bg);
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+html.m #add-friend-mask .modal-box {
+    position: relative;      /* 作为左上返回按钮的定位锚 */
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    animation: none;
+}
+
+/* 导航栏：标题居中（微信同款） */
+html.m #add-friend-mask .modal-title {
+    position: relative;
+    height: 56px;
+    line-height: 56px;
+    padding: 0 52px;
+    font-size: 17px;
+    text-align: center;
+    margin-bottom: 0;
+    flex-shrink: 0;
+}
+
+/* 搜索输入框（微信同款大搜索框形态） */
+html.m #add-friend-mask .modal-input {
+    margin: 8px 16px;
+    height: 40px;
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+/* 结果区撑满余下全屏 */
+html.m #add-friend-mask .add-friend-result {
+    flex: 1;
+    margin: 4px 16px 0;
+    overflow-y: auto;
+    border: none;
+}
+
+/* 底部按钮区固定页底（safe-area 兜底，取消已移出该流） */
+html.m #add-friend-mask .modal-btns {
+    margin-top: auto;
+    padding: 12px 16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    flex-shrink: 0;
+}
+
+/* 取消按钮上移为左上 ‹ 返回（font-size:0 压掉"取消"文字） */
+html.m #add-friend-cancel {
+    position: absolute;
+    left: 4px;
+    top: 13px;
+    height: 30px;
+    padding: 0 12px;
+    background: none;
+    font-size: 0;
+}
+
+html.m #add-friend-cancel::before {
+    content: '‹';
+    font-size: 30px;
+    line-height: 30px;
+    color: var(--text);
+}
+
+/* ===================== 阶段二百一十四：添加好友全屏页微信 push 转场 ===================== */
+/* 打开：页面从右滑入（与"新的朋友"/聊天视图滑入同向，微信 Android push 同款）；
+   关闭：向右滑出后收面板（chat.js 延迟归口，同网盘返回时序） */
+@keyframes imPagePushIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+@keyframes imPagePushOut {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+}
+
+html.m #add-friend-mask .modal-box {
+    animation: imPagePushIn 0.25s ease-out;
+}
+
+/* 关闭滑出态：chat.js 加 im-page-out 触发，动画结束由其延迟 220ms 加 hidden 收面板 */
+html.m #add-friend-mask.im-page-out .modal-box {
+    animation: imPagePushOut 0.22s ease-in forwards;
+}
+
+/* ===================== 阶段二百一十五：移动端「发起群聊/邀请成员」微信 Android 同款全屏页 ===================== */
+/* 实底全屏 + push 转场（同添加好友） */
+html.m #grp-mask {
+    background: var(--bg);
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+html.m #grp-mask .modal-box {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    animation: imPagePushIn 0.25s ease-out;
+}
+
+html.m #grp-mask.im-page-out .modal-box {
+    animation: imPagePushOut 0.22s ease-in forwards;
+}
+
+/* 顶部导航栏：动态标题（openGroupPicker 写入 data-title，create/invite 模式文案不同） */
+html.m #grp-mask .modal-box::before {
+    content: attr(data-title);
+    position: absolute;
+    top: 0;
+    left: 52px;
+    right: 52px;
+    height: 56px;
+    line-height: 56px;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--text);
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 双栏改微信 Android 单栏：contents 后按 群名→搜索→已选→候选→完成 纵向排序 */
+html.m #grp-mask .grp-cols {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-top: 56px;
+}
+
+html.m #grp-mask .grp-left,
+html.m #grp-mask .grp-right {
+    display: contents;
+}
+
+html.m #grp-mask .grp-name-input {
+    order: 1;
+    margin: 8px 16px;
+    flex-shrink: 0;
+}
+
+html.m #grp-mask .grp-search-wrap {
+    order: 2;
+    margin: 0 16px;
+    flex-shrink: 0;
+}
+
+/* 已选区：计数行 + 横向头像条（微信 Android 同款，空态显示引导小字）；
+   右栏原标题隐藏——顶部导航栏已有同文案标题，避免重复 */
+html.m #grp-mask .grp-right-title {
+    display: none;
+}
+
+html.m #grp-mask .grp-right-head {
+    order: 3;
+    margin: 6px 16px 0;
+    align-items: baseline;
+    justify-content: flex-end;
+}
+
+html.m #grp-mask .grp-sel-list {
+    order: 3;
+    flex: none;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    height: 64px;
+    margin: 4px 16px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+html.m #grp-mask .grp-sel-item {
+    flex: none;
+    margin-right: 12px;
+}
+
+html.m #grp-mask .grp-empty {
+    align-self: center;
+    padding: 0;
+}
+
+/* 候选好友列表撑满余下全屏 */
+html.m #grp-mask .grp-cand-list {
+    order: 4;
+    flex: 1;
+    min-height: 0;
+    margin: 8px 16px 0;
+}
+
+/* 底部完成按钮（取消已移出该流） */
+html.m #grp-mask .grp-btns {
+    order: 5;
+    padding: 12px 16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* 取消按钮上移为左上 ‹ 返回（font-size:0 压掉"取消"文字） */
+html.m #grp-mask #grp-cancel {
+    position: absolute;
+    left: 4px;
+    top: 13px;
+    height: 30px;
+    padding: 0 12px;
+    background: none;
+    font-size: 0;
+    z-index: 2;
+}
+
+html.m #grp-mask #grp-cancel::before {
+    content: '‹';
+    font-size: 30px;
+    line-height: 30px;
+    color: var(--text);
+}
+
+html.m #grp-mask #grp-ok {
+    flex: 1;
 }

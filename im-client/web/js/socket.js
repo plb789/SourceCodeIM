@@ -163,8 +163,16 @@
             // 独立分享页阶段：/s/ 分享页上报独立端型 'share'，与主应用（'pc'/'web'/''）跨端共存——
             // 原实现分享页与浏览器主应用同为 '' 端被服务端同端互踢（hub.go platform 相等即踢），
             // 用户开分享链接会把正在使用的主应用踢下线且双方自动重连互相反踢形成循环
-            var _loginPlatform = window.desktop ? (window.__webCallBridge ? 'web' : 'pc')
-                : (location.pathname.indexOf('/s/') === 0 ? 'share' : '');
+            // 阶段一百九十八：手机 APP 端（Capacitor）通话放开后同样注入 window.desktop 通话桥，
+            // 须在 desktop 判定前先识别原生环境上报 'app'（hub.HasCall 已纳入；app↔app 同端互踢，与 web/pc 共存）
+            var _loginPlatform;
+            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                _loginPlatform = 'app';
+            } else if (window.desktop) {
+                _loginPlatform = window.__webCallBridge ? 'web' : 'pc';
+            } else {
+                _loginPlatform = location.pathname.indexOf('/s/') === 0 ? 'share' : '';
+            }
             send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: _loginPlatform });
             // 启动心跳
             startHeartbeat();

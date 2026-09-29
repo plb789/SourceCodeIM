@@ -1582,10 +1582,21 @@
     }
 
     function closeAddFriendDialog() {
-        addFriendMask.classList.add('hidden');
-        addFriendQuery = null;
-        addFriendFound = null;
-        if (addFriendSearchTimer) { clearTimeout(addFriendSearchTimer); addFriendSearchTimer = null; }
+        // 阶段二百一十四：移动端（html.m）微信 push 关闭——先播向右滑出动画，结束再收面板；
+        // PC/WEB 维持原瞬时关闭。finish 统一清理状态（隐藏+摘滑出态+清查询缓存）
+        var finish = function () {
+            addFriendMask.classList.add('hidden');
+            addFriendMask.classList.remove('im-page-out');
+            addFriendQuery = null;
+            addFriendFound = null;
+            if (addFriendSearchTimer) { clearTimeout(addFriendSearchTimer); addFriendSearchTimer = null; }
+        };
+        if (document.documentElement.classList.contains('m') && !addFriendMask.classList.contains('hidden')) {
+            addFriendMask.classList.add('im-page-out');
+            setTimeout(finish, 220);
+        } else {
+            finish();
+        }
     }
 
     // 渲染提示行（搜索中/无该用户/不能添加自己/已是好友等纯文字状态）
@@ -1660,6 +1671,13 @@
 
     addFriendBtn.addEventListener('click', openAddFriendDialog);
     addFriendCancel.addEventListener('click', closeAddFriendDialog);
+    // 阶段二百一十：扫码加好友归口——qr.js 解析出 im://u/<账号> 后调此函数，
+    // 复用既有添加好友弹窗与输入防抖查询链路（与手动输入完全同路径，零逻辑复制）
+    window.__imAddFriendByCode = function (username) {
+        openAddFriendDialog();
+        addFriendInput.value = username;
+        addFriendInput.dispatchEvent(new Event('input', { bubbles: true }));
+    };
     addFriendInput.addEventListener('input', function () {
         clearTimeout(addFriendSearchTimer);
         addFriendSearchTimer = setTimeout(searchAddFriend, 400); // 停止输入 400ms 后自动查询
@@ -4384,6 +4402,58 @@
         });
     }
 
+    // ===== 阶段一百九十八：语音消息发送（微信手机版"按住 说话"归口） =====
+    // 统一强制 HTTP 直传（voice=1&duration=N 元数据经 query 透传给 uploadfile.go，
+    // WS 分片协议无法携带语音标记/时长，故不经 sendFile 三层分流）；群聊走 /upload/group/file 同款参数。
+    // 私聊 isPrivate=true 时带 msg-status 状态元素（未读→FILE_PERSISTED 回执归口翻已读，与图片同款）
+    function sendVoiceMessage(blob, duration, toUserOverride) {
+        var toUser = toUserOverride || currentChatUser;
+        if (!toUser) return;
+        var isGroup = isGroupTarget(toUser);
+        var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        var mime = (blob && blob.type) || 'audio/mp4';
+        var ext = mime.indexOf('webm') >= 0 ? '.webm' : '.mp4';
+        var file = new File([blob], 'voice_' + Date.now() + ext, { type: mime });
+        // 本地立即渲染语音条（blob 预览 + nonce 标识，FILE_PERSISTED/GROUP_FILE 按_nonce 回填）
+        var b = appendVoiceMsg(IMSocket.getUsername(), URL.createObjectURL(blob), duration, 'self', !isGroup);
+        b.setAttribute('data-nonce', nonce);
+        var fd = new FormData();
+        fd.append('file', file);
+        var api = isGroup ? '/upload/group/file' : '/upload/file';
+        var qs = '?username=' + encodeURIComponent(IMSocket.getUsername()) +
+              '&nonce=' + encodeURIComponent(nonce) +
+              '&voice=1&duration=' + Math.max(1, Math.round(duration || 1));
+        if (isGroup) {
+            qs += '&group=' + encodeURIComponent(toUser);
+        } else {
+            qs += '&to_user=' + encodeURIComponent(toUser);
+        }
+        fetch(api + qs, { method: 'POST', body: fd }).then(function (res) {
+            if (!res.ok) {
+                showToast(I18N.t('语音发送失败：') + ('HTTP ' + res.status));
+                return;
+            }
+            // HTTP 响应归口回填（广播 nonce 匹配保留作时序兜底，与群文件同策略）
+            return res.json().catch(function () { return null; }).then(function (data) {
+                if (data && data.url) {
+                    var bEl = b.querySelector('.bubble-voice');
+                    if (bEl) {
+                        var u = bEl.getAttribute('data-url');
+                        if (!u || u.indexOf('blob:') === 0) bEl.setAttribute('data-url', data.url);
+                    }
+                }
+                if (data && data.msg_id) b.setAttribute('data-msg-id', data.msg_id);
+            });
+        }).catch(function (e) {
+            console.warn('语音上传失败:', e);
+            showToast(I18N.t('语音发送失败'));
+        });
+    }
+    // 供 mobile.js 录音手势调用（mobile.js 先于本脚本加载，DOMContentLoaded 后才触发录音，时序安全）
+    window.__imSendVoice = sendVoiceMessage;
+    // mobile.js 无 Toast 归口（showToast 为本文件私有），别名挂载复用全站单实例 Toast
+    window.__imToast = showToast;
+
     // 阶段三十二：分片直传活动表（uploadId → 状态），取消时据此中止在途 XHR
     var activeChunkUploads = {};
 
@@ -4727,7 +4797,10 @@
         }
         if (currentChatUser !== peer2) return;
         var mediaEl;
-        if (isImageName(meta.name || '')) {
+        if (meta.voice) {
+            // 阶段一百九十八：语音消息（复用文件消息链路 content 带 voice/duration）渲染微信同款语音条
+            mediaEl = appendVoiceMsg(msg.from_user, meta.url, meta.duration || 1, isMine ? 'self' : 'other', true);
+        } else if (isImageName(meta.name || '')) {
             mediaEl = appendImageMsg(msg.from_user, meta.url, isMine ? 'self' : 'other', true);
         } else {
             mediaEl = appendFileMsg(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), meta.url, isMine ? 'self' : 'other', true);
@@ -5221,7 +5294,13 @@
                 return;
             }
         }
-        var el = appendFileMsg(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), meta.url || '', isMine ? 'self' : 'other', false);
+        var el;
+        if (meta.voice) {
+            // 阶段一百九十八：群聊语音消息渲染微信同款语音条（群聊显示发送者昵称）
+            el = appendVoiceMsg(msg.from_user, meta.url || '', meta.duration || 1, isMine ? 'self' : 'other', false);
+        } else {
+            el = appendFileMsg(msg.from_user, meta.name || I18N.t('未命名文件'), formatSize(meta.size || 0), meta.url || '', isMine ? 'self' : 'other', false);
+        }
         if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
         if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
     });
@@ -17936,7 +18015,14 @@
         IMSocket.send({ msg_type: MSG.FRIEND_REQ_LIST });
     });
     newFriendsClose.addEventListener('click', function () {
-        newFriendsPanel.classList.add('hidden');
+        // 阶段二百一十二：移动端（html.m）延迟 260ms 隐藏（网盘返回同款时序）——
+        // mobile.js 先退聊天视图，全屏"新的朋友"页随 main-chat 整体滑出，滑完再收面板；
+        // 原同步 hidden 会在退视图前裸露底下聊天页一帧（表现为闪现好友聊天内容）
+        if (document.documentElement.classList.contains('m')) {
+            setTimeout(function () { newFriendsPanel.classList.add('hidden'); }, 260);
+        } else {
+            newFriendsPanel.classList.add('hidden');
+        }
     });
 
     // 申请方收到处理结果同步：微信式"对方已同意/拒绝你的好友申请"提示（多端同步由服务端归口推送）
@@ -18273,6 +18359,9 @@
         grpSelected = {};
         grpSelOrder = [];
         grpTitle.textContent = mode === 'create' ? I18N.t('发起群聊') : I18N.t('邀请成员');
+        // 移动端全屏页顶部导航栏标题（CSS ::before attr() 读 box 自身属性，故须写在 modal-box 上）
+        var grpBox = grpMask.querySelector('.modal-box');
+        if (grpBox) grpBox.dataset.title = grpTitle.textContent;
         grpName.classList.toggle('hidden', mode !== 'create'); // 邀请模式隐藏群名输入框
         if (mode === 'create') grpName.value = '';
         grpSearch.value = '';
@@ -18283,9 +18372,20 @@
     }
 
     function closeGroupPicker() {
-        grpMask.classList.add('hidden');
-        grpSelected = {};
-        grpSelOrder = [];
+        // 阶段二百一十五：移动端（html.m）微信 push 关闭——先播向右滑出动画再收面板；
+        // PC/WEB 维持瞬时关闭。finish 统一清理状态，重复触发幂等无害
+        var finish = function () {
+            grpMask.classList.add('hidden');
+            grpMask.classList.remove('im-page-out');
+            grpSelected = {};
+            grpSelOrder = [];
+        };
+        if (document.documentElement.classList.contains('m') && !grpMask.classList.contains('hidden')) {
+            grpMask.classList.add('im-page-out');
+            setTimeout(finish, 220);
+        } else {
+            finish();
+        }
     }
 
     // 右栏已选列表渲染：头像 + 昵称 + × 移除按钮；计数"已选择N个联系人"（微信同款）
@@ -18720,6 +18820,8 @@
             agentModeMemSave();
             agentConsoleOpenByUser[currentChatUser] = agentConsole.open; // 控制台开合状态同样按会话记忆
         }
+        // 阶段一百九十八：切换会话停止语音播放（微信同款：离开会话语音即停，不跨会话续播）
+        stopVoicePlayback();
         currentChatUser = user;
         // 阶段一百六十六：切会话清空待发图片附件（附件是暂存态不随会话记忆，防止 A 会话
         // 选的图在 B 会话误随任务上行串图）；已 revokeObjectURL 释放 blob
@@ -19305,6 +19407,25 @@
             // 退化为文件卡片无法内联播放（与实时形态不一致，用户实测反馈）；
             // 过期视频仍走下方文件卡片（灰显+已过期角标，本体已被服务端清理，避免 404 视频元素）
             var vName = meta.name || I18N.t('未命名文件');
+            // 阶段一百九十八：语音消息历史渲染微信同款语音条（与实时形态一致；过期判断不适用——
+            // 语音本体即普通文件，过期后走文件卡片灰显链路反而破坏语音条形态，直接渲染由播放点击兜底提示）
+            if (meta.voice) {
+                var voiceDiv = appendVoiceMsg(r.from_user, meta.url || '', meta.duration || 1, type, isPrivate, { buildOnly: true });
+                if (r.id) voiceDiv.setAttribute('data-msg-id', r.id);
+                if (ts) voiceDiv.setAttribute('data-ts', ts); // 覆盖为消息时间（撤回/定位口径一致）
+                // 自己发送的私聊消息显示已读/未读状态（与视频/文件卡片同口径）
+                if (isMine && isPrivate && r.id) {
+                    var wb = voiceDiv.querySelector('.message-body');
+                    if (wb) {
+                        var wst = document.createElement('div');
+                        wst.className = 'msg-status' + (isRead ? ' read' : '');
+                        wst.setAttribute('data-msg-id', r.id);
+                        wst.textContent = isRead ? I18N.t('已读') : I18N.t('未读');
+                        wb.appendChild(wst);
+                    }
+                }
+                return voiceDiv;
+            }
             var vExpired = false;
             if (meta.url) {
                 var retenV = (IMSocket.getFileRetentionDays && IMSocket.getFileRetentionDays()) || 0;
@@ -21662,6 +21783,89 @@
         }
         // 阶段一百六十：历史渲染复用支持（opts.beforeEl 向上补插不滚底；实时/追加场景行为不变）——
         // 原实现固定 appendChild+无条件滚底，仅服务实时渲染，历史分支无法复用（会插错位置+误滚底）
+        if (opts && opts.beforeEl) {
+            messageList.insertBefore(div, opts.beforeEl);
+        } else {
+            messageList.appendChild(div);
+            if (!opts || opts.stickBottom) messageList.scrollTop = messageList.scrollHeight;
+        }
+        return div;
+    }
+
+    // ===== 阶段一百九十八：语音消息（微信手机版"按住 说话"语音条，复用文件消息链路） =====
+    // content JSON 复用文件消息结构并扩展 voice/duration 标记（服务端 uploadfile.go 归口），
+    // 渲染为微信同款语音条气泡：声波图标 + 时长，点击播放；气泡保留 bubble-file 类与 data-url
+    // ——右键"另存为"/转发复用文件链路，零额外适配；历史/实时/回填全链路同款渲染
+    var voiceAudio = null;     // 全局单实例播放器（同时只播一条，微信同款）
+    var voicePlayingEl = null; // 正在播放的气泡元素（动画类归口）
+    var voicePlayTimer = null; // 播放时长维持定时器（动画随播放结束/超时自动停）
+
+    // 停止当前语音播放（切会话/重新点击时收口）
+    function stopVoicePlayback() {
+        if (voicePlayTimer) { clearTimeout(voicePlayTimer); voicePlayTimer = null; }
+        if (voicePlayingEl) { voicePlayingEl.classList.remove('playing'); voicePlayingEl = null; }
+        if (voiceAudio) {
+            try { voiceAudio.pause(); voiceAudio.src = ''; } catch (e) { }
+            voiceAudio = null;
+        }
+    }
+
+    // 语音条宽度按时长映射（微信同款：越长约宽，1s 最窄封顶 60s）
+    function voiceBarWidth(dur) {
+        var d = Math.max(1, Math.min(dur || 1, 60));
+        return Math.round(88 + (d - 1) * 3.6);
+    }
+
+    // 语音消息气泡（三模式 opts.buildOnly/beforeEl/stickBottom，参照 appendVideoMsg 模板）
+    function appendVoiceMsg(fromUser, url, duration, type, isPrivate, opts) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        // 撤回能力前提：气泡携带发送者与时间戳（与文件消息一致）
+        div.setAttribute('data-from', fromUser);
+        div.setAttribute('data-ts', Math.floor(Date.now() / 1000));
+        var nameEl = document.createElement('div');
+        nameEl.className = 'message-name';
+        nameEl.textContent = senderDisplayName(fromUser);
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-file bubble-voice';
+        bubble.setAttribute('data-url', url || '');
+        bubble.style.width = voiceBarWidth(duration) + 'px';
+        // 声波图标（三段弧线，播放态由 CSS 依 .playing 类做波纹动画）
+        var wave = document.createElement('span');
+        wave.className = 'voice-wave';
+        wave.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path class="w1" d="M8.5 9.5v5"/><path class="w2" d="M12 7.5v9"/><path class="w3" d="M15.5 9.5v5"/></svg>';
+        var durEl = document.createElement('span');
+        durEl.className = 'voice-dur';
+        durEl.textContent = (duration || 1) + '"';
+        bubble.appendChild(wave);
+        bubble.appendChild(durEl);
+        // 点击播放/暂停：全局单实例，正在播再点即停（微信同款）
+        // URL 动态取 data-url（FILE_PERSISTED 回填 blob:→服务端地址后自动切换），空值回退构造时闭包 url
+        bubble.addEventListener('click', function () {
+            if (voicePlayingEl === bubble) { stopVoicePlayback(); return; }
+            var cur = bubble.getAttribute('data-url') || url;
+            if (!cur || cur.indexOf('blob:') === 0 && url && url.indexOf('blob:') !== 0) cur = url;
+            if (!cur) { showToast(I18N.t('语音已过期或不可用')); return; }
+            stopVoicePlayback();
+            voiceAudio = new Audio(cur);
+            voicePlayingEl = bubble;
+            bubble.classList.add('playing');
+            var sec = Math.max(1, duration || 1);
+            voicePlayTimer = setTimeout(stopVoicePlayback, sec * 1000 + 500);
+            var p = voiceAudio.play();
+            if (p && p.catch) p.catch(function () { stopVoicePlayback(); });
+        });
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        if (!isPrivate) body.appendChild(nameEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        // 构建模式：仅构建返回，不插入不滚底（历史渲染统一由调用方插入，与图片/文件卡片同流程）
+        if (opts && opts.buildOnly) {
+            return div;
+        }
+        // 历史渲染复用支持（opts.beforeEl 向上补插不滚底；实时/追加场景行为不变）
         if (opts && opts.beforeEl) {
             messageList.insertBefore(div, opts.beforeEl);
         } else {
