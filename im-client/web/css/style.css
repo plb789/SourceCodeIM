@@ -17565,6 +17565,28 @@ html.m #add-friend-mask.im-page-out .modal-box {
     animation: imPagePushOut 0.22s ease-in forwards;
 }
 
+/* ===== 阶段二百二十一：文件卡片"保存到设备"圆形下载钮（微信文件卡片同款） ===== */
+.bubble-file { position: relative; }
+.file-save-btn {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--hover);
+    color: var(--text-2, var(--text));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.file-save-btn:hover { background: var(--primary-soft, var(--hover)); color: var(--text); }
+.file-save-btn svg { pointer-events: none; }
+
 /* ===================== 阶段二百一十五：移动端「发起群聊/邀请成员」微信 Android 同款全屏页 ===================== */
 /* 实底全屏 + push 转场（同添加好友） */
 html.m #grp-mask {

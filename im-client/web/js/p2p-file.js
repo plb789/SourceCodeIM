@@ -670,7 +670,14 @@
         if (!cacheOn('im_p2p_idb_cache')) return diskGet(msgId, name);
         return dbGet(msgId).then(function (rec) {
             if (rec && rec.blob) {
-                try { return { url: URL.createObjectURL(rec.blob), name: rec.name || name || 'file' }; } catch (e) {}
+                try {
+                    return {
+                        url: URL.createObjectURL(rec.blob),
+                        name: rec.name || name || 'file',
+                        blob: rec.blob,              // 阶段二百二十一：携带本体（保存到设备免二次 fetch）
+                        mime: rec.mime || ''
+                    };
+                } catch (e) {}
             }
             return diskGet(msgId, name);
         });
@@ -681,7 +688,10 @@
         }
         return window.desktop.readP2PFile({ username: myUsername(), msg_id: msgId, name: name || '' }).then(function (r) {
             if (r && r.ok && r.buf) {
-                try { return { url: URL.createObjectURL(new Blob([r.buf])), name: r.name || name || 'file' }; } catch (e) {}
+                try {
+                    var blob = new Blob([r.buf]);
+                    return { url: URL.createObjectURL(blob), name: r.name || name || 'file', blob: blob, mime: '' };
+                } catch (e) {}
             }
             return null;
         }).catch(function () { return null; });
@@ -749,14 +759,7 @@
     function saveOpen(blob, name, mime) {
         var P = window.Capacitor && window.Capacitor.Plugins;
         if (!P || !P.Filesystem || !P.FileOpener) return Promise.resolve(false);
-        return blobToB64(blob).then(function (b64) {
-            return P.Filesystem.writeFile({
-                path: name,
-                data: b64,                      // 纯 base64（不带 data: 前缀）
-                directory: 'DOCUMENTS',         // 应用专属 Documents（免存储权限，FileProvider 可授权打开）
-                recursive: true
-            });
-        }).then(function (res) {
+        return writeDevice(blob, name).then(function (res) {
             return P.FileOpener.open({
                 filePath: res.uri,
                 mimeType: mime || extMime(name)
@@ -769,8 +772,42 @@
             return false;
         });
     }
+    // 仅保存不打开（文件卡片"保存到设备"图标归口）
+    function writeDevice(blob, name) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        if (!P || !P.Filesystem) return Promise.reject(new Error('no-plugin'));
+        return blobToB64(blob).then(function (b64) {
+            return P.Filesystem.writeFile({
+                path: name,
+                data: b64,                      // 纯 base64（不带 data: 前缀）
+                directory: 'DOCUMENTS',         // 应用专属 Documents（免存储权限，FileProvider 可授权打开）
+                recursive: true
+            });
+        });
+    }
     // I18N 兼容（p2p-file.js 不依赖 I18N，缺省直返）
     function I18N_COMPAT(s) { return (window.I18N && window.I18N.t) ? window.I18N.t(s) : s; }
+    // 缓存取本体（saveAndOpen/saveOnly 共用）：IDB/磁盘命中 → {blob|url, name, mime}
+    function cacheBlob(msgId, name) {
+        return cacheGet(msgId, name).then(function (hit) {
+            return (hit && (hit.blob || hit.url)) ? hit : null;
+        });
+    }
+    // 内存 blob url（在线接收回填）→ fetch → 保存并系统打开
+    function saveOpenUrl(url, name) {
+        return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+            return saveOpen(b, name, b.type);
+        }).catch(function () {
+            if (window.__imToast) window.__imToast(I18N_COMPAT('无法打开该文件类型'));
+            return false;
+        });
+    }
+    // 内存 blob url → fetch → 仅写设备（图标保存归口内部步骤）
+    function saveBlobUrlWrite(url, name) {
+        return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+            return writeDevice(b, name);
+        });
+    }
 
     window.P2PFile = {
         send: send,
@@ -797,21 +834,55 @@
         // 阶段一百五十九：接收文件缓存归口（chat.js done_ack 写入 / 历史渲染读回）
         cacheReceived: cacheReceived,
         cacheGet: cacheGet,
+        // 阶段二百二十一：APP 端本地生成内容（聊天记录 txt 导出等）保存到设备并打开
+        saveBlob: function (blob, name, mime) {
+            return saveOpen(blob, name, mime);
+        },
         // 阶段二百二十一：APP 端点击直传卡片 → 本机缓存 blob → 保存到设备并系统打开
+        // （cacheGet 返回 blob 本体或 blob url，两者均归口）
         saveAndOpen: function (msgId, name) {
-            return cacheGet(msgId, name).then(function (hit) {
-                if (hit && hit.blob) return saveOpen(hit.blob, hit.name || name, hit.mime);
-                if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
-                return false;
+            return cacheBlob(msgId, name).then(function (p) {
+                if (!p) {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
+                    return false;
+                }
+                return p.blob ? saveOpen(p.blob, p.name, p.mime) : saveOpenUrl(p.url, p.name);
+            });
+        },
+        // 阶段二百二十一：仅保存到设备不打开（文件卡片"保存到设备"图标归口）
+        saveOnly: function (msgId, name) {
+            return cacheBlob(msgId, name).then(function (p) {
+                if (!p) {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
+                    return false;
+                }
+                var w = p.blob ? writeDevice(p.blob, p.name) : saveBlobUrlWrite(p.url, p.name);
+                return w.then(function () {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                    return true;
+                }).catch(function () {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                    return false;
+                });
             });
         },
         // 阶段二百二十一：APP 端下载分支归口（服务器文件 fetch → 保存 → 系统打开）
-        openFromUrl: function (url, name) {
+        // open=false 时仅保存不打开（文件卡片"保存到设备"图标归口）
+        openFromUrl: function (url, name, open) {
             if (!url) return Promise.resolve(false);
             return fetch(url).then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.blob();
             }).then(function (b) {
+                if (open === false) {
+                    return writeDevice(b, name || 'file').then(function () {
+                        if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                        return true;
+                    }).catch(function () {
+                        if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                        return false;
+                    });
+                }
                 return saveOpen(b, name || 'file', b.type);
             }).catch(function () {
                 if (window.__imToast) window.__imToast(I18N_COMPAT('文件下载失败'));

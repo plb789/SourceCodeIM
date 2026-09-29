@@ -1843,10 +1843,7 @@
                     // will-download 默认行为即弹出系统"另存为"对话框（文件名预填）
                     var fb = msgTarget.querySelector('.bubble-file[data-url]');
                     if (fb) {
-                        var a2 = document.createElement('a');
-                        a2.href = fb.getAttribute('data-url') || '';
-                        a2.download = (fb.querySelector('.file-name') || {}).textContent || 'file';
-                        a2.click();
+                        imDownload(fb.getAttribute('data-url') || '', (fb.querySelector('.file-name') || {}).textContent || 'file');
                     }
                 } else if (action === 'drivesave') {
                     // 阶段一百六十八：聊天文件转存网盘——
@@ -2416,14 +2413,69 @@
         try { return decodeURIComponent(seg.pop()) || fallback; } catch (e) { return fallback; }
     }
 
-    // 触发浏览器下载（与 onFileCardClick 同一 <a download> 归口；多文件间隔 200ms 防浏览器连发限流）
-    function triggerSelDownload(url, name, delayMs) {
+    // ===== 阶段二百二十一：APP 端下载统一归口 =====
+    // <a download> 在 Android WebView 中完全无反应（既不下载也不提示），故 APP 端统一走
+    // P2PFile.openFromUrl：fetch → Capacitor Filesystem 写入设备 → FileOpener 系统应用打开
+    // （微信文件同款"点击即下载并打开"）。PC/WEB 端维持原 <a download> 行为不变。
+    // 声明式定义（hoisting）：多选下载（1848 行）等早于本行的调用点同样可用。
+    function imDownload(url, name, delayMs) {
         setTimeout(function () {
+            if (window.Capacitor && url && window.P2PFile && window.P2PFile.openFromUrl) {
+                window.P2PFile.openFromUrl(url, name);
+                return;
+            }
             var a = document.createElement('a');
             a.href = url || '';
             a.download = name || 'file';
             a.click();
         }, delayMs || 0);
+    }
+    // 本地生成内容（聊天记录 txt 导出等）：APP → saveBlob 保存并打开；PC/WEB → blobURL 下载
+    function imSaveBlob(blob, name) {
+        if (window.Capacitor && window.P2PFile && window.P2PFile.saveBlob) {
+            window.P2PFile.saveBlob(blob, name);
+            return;
+        }
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name || 'file';
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    }
+
+    // 阶段二百二十一：文件卡片"保存到设备"图标点击归口（appendFileMsg 统一挂载的 .file-save-btn）
+    // 判定顺序：服务器 URL（https）→ 仅保存；直传（data-msg-id 有缓存）→ 缓存仅保存；
+    // 在线直传 blob url → fetch 后保存；PC/WEB=快捷另存为（原右键菜单不受影响）
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.file-save-btn') : null;
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var fb = btn.closest('.bubble-file');
+        if (!fb) return;
+        var name = (fb.querySelector('.file-name') || {}).textContent || 'file';
+        var u = fb.getAttribute('data-url') || '';
+        var mid = fb.getAttribute('data-msg-id') || '';
+        if (window.Capacitor && window.P2PFile) {
+            if (u && u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
+                window.P2PFile.openFromUrl(u, name, false);
+            } else if (mid) {
+                window.P2PFile.saveOnly(mid, name);
+            } else if (u) {
+                fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
+                    window.P2PFile.saveBlob(b, name);
+                });
+            } else if (window.__imToast) {
+                window.__imToast(I18N.t('文件不在本机，请对方重新发送'));
+            }
+            return;
+        }
+        imDownload(u, name);
+    });
+
+    // 触发浏览器下载（统一 imDownload 归口；多文件间隔 200ms 防浏览器连发限流）
+    function triggerSelDownload(url, name, delayMs) {
+        imDownload(url, name, delayMs);
     }
 
     // 保存到电脑：图片/文件逐个下载，文本消息汇总为 txt（仅存在文本消息时生成）
@@ -2453,10 +2505,7 @@
             var stamp = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2) +
                 '_' + ('0' + d.getHours()).slice(-2) + ('0' + d.getMinutes()).slice(-2);
             var blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
-            var a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = I18N.t('聊天记录_') + stamp + '.txt';
-            a.click();
+            imSaveBlob(blob, I18N.t('聊天记录_') + stamp + '.txt');
             fileCount++;
         }
         exitMultiSelect();
@@ -19472,6 +19521,15 @@
             info.appendChild(fileSize);
             bubbleFile.appendChild(icon);
             bubbleFile.appendChild(info);
+            // 阶段二百二十一：微信同款"保存到设备"入口（卡片右下圆形下载钮）——历史/实时、
+            // 直传/服务器文件统一挂载；点击归口见 document 委托 listener（imDownload 定义旁）。
+            // APP=仅保存到设备 Documents；PC/WEB=快捷"另存为"（原右键菜单不受影响）
+            bubbleFile.setAttribute('data-msg-id', r.id || '');
+            var saveBtn = document.createElement('button');
+            saveBtn.className = 'file-save-btn';
+            saveBtn.title = I18N.t('保存到设备');
+            saveBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v11m0 0l-4.5-4.5M12 14l4.5-4.5M5 20h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            bubbleFile.appendChild(saveBtn);
             if (meta.url) {
                 // 阶段一百六十：服务器文件保留期过期判断（file_retention_days 登录响应下发，服务端归口）——
                 // create_time 超过保留期的文件卡片灰显+「已过期」角标，点击仅提示（文件本体已被服务端
@@ -19527,12 +19585,8 @@
                         }
                         bubbleFile.setAttribute('data-url', hit.url);
                         bubbleFile.onclick = function () {
-                            // 阶段二百二十一：APP 端直传文件=保存到设备并系统打开（微信同款，
-                            // 绕开 blob 跨 iframe 预览不可达）；PC/WEB 维持预览/另存为链路
-                            if (window.Capacitor && P2PFile.saveAndOpen) {
-                                P2PFile.saveAndOpen(r.id, hit.name);
-                                return;
-                            }
+                            // 阶段二百二十一：历史直传命中=与在线一致的预览/下载归口（docx/pdf 内置
+                            // 预览、zip 等走 imDownload→保存并打开）；原 saveAndOpen 改由"保存"图标承担
                             onFileCardClick(bubbleFile, r.id, hit.name, hit.url);
                         };
                     });
@@ -21363,10 +21417,7 @@
     // 触发浏览器下载（标题栏"下载"按钮 / 在线编辑不可用时的回退行为）
     // 走服务端 /doc/download 归口：服务端解析最新版本后以附件下发（未启用在线编辑时不可用）
     function triggerDocDownload(msgId, name) {
-        var a = document.createElement('a');
-        a.href = '/doc/download?msg_id=' + msgId + '&username=' + encodeURIComponent(IMSocket.getUsername());
-        a.download = name || 'file';
-        a.click();
+        imDownload('/doc/download?msg_id=' + msgId + '&username=' + encodeURIComponent(IMSocket.getUsername()), name);
     }
 
     // 打开文档编辑弹窗（双层架构·编辑层）：服务端签发配置（含归属校验/版本解析/JWT）→ 懒加载 api.js → 拉起编辑器
@@ -21556,16 +21607,8 @@
             openDocPreview(url, name);
             return;
         }
-        // 阶段二百二十一：APP 端下载分支改"下载到设备并系统打开"（<a download> 在 Android
-        // WebView 无任何反应；微信同款点击即下载打开）；PC/WEB 维持原 <a download>
-        if (window.Capacitor && url && window.P2PFile && window.P2PFile.openFromUrl) {
-            window.P2PFile.openFromUrl(url, name);
-            return;
-        }
-        var a = document.createElement('a');
-        a.href = url || '';
-        a.download = name || 'file';
-        a.click();
+        // 阶段二百二十一：统一 imDownload 归口（APP=下载到设备并系统打开；PC/WEB=<a download>）
+        imDownload(url, name);
     }
 
     // 编辑/预览弹窗按钮绑定（关闭销毁实例/卸载 iframe；遮罩点击不关闭，防误触丢失未保存内容）
@@ -21573,11 +21616,9 @@
         document.getElementById('doc-editor-close').addEventListener('click', closeDocEditor);
         document.getElementById('doc-editor-download').addEventListener('click', function () {
             // 预览模式：直接下载消息内文档地址；编辑模式：走服务端 /doc/download 归口下载最新版本
+            // 阶段二百二十一：统一 imDownload 归口（原 <a download> 在 APP WebView 无反应=用户点下载无响应）
             if (docEditorMode === 'preview' && docPreviewUrl) {
-                var a = document.createElement('a');
-                a.href = docPreviewUrl;
-                a.download = docEditorName || 'file';
-                a.click();
+                imDownload(docPreviewUrl, docEditorName || 'file');
                 return;
             }
             if (docEditorMsgId > 0) triggerDocDownload(docEditorMsgId, docEditorName);
@@ -23020,13 +23061,8 @@
             rptBtn.title = I18N.t('导出任务报告 Markdown 文件（含目标/结果/文件变更/执行轨迹）');
             rptBtn.addEventListener('click', function (e) {
                 e.stopPropagation();
-                // 服务端 Content-Disposition 附件下发：临时 <a download> 触发浏览器下载，不跳页不闪新标签
-                var a = document.createElement('a');
-                a.href = '/api/agent/task/' + encodeURIComponent(t.task_id) + '/report?username=' + encodeURIComponent(kbUsername());
-                a.download = '';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                // 服务端附件下发；阶段二百二十一：统一 imDownload 归口（APP 端保存并打开）
+                imDownload('/api/agent/task/' + encodeURIComponent(t.task_id) + '/report?username=' + encodeURIComponent(kbUsername()), 'task-report-' + t.task_id + '.md');
             });
             ops.appendChild(rptBtn);
             if (t.agent_name === currentChatUser) {
