@@ -712,6 +712,66 @@
     }
 
     // ===== 对外 API =====
+    // ===== 阶段二百二十一：APP 端「点击即下载到设备并系统打开」（微信文件同款体验） =====
+    // 链路：blob → base64 → Capacitor Filesystem 写入应用 Documents 目录 → FileOpener 调起
+    // 系统应用按 mime 打开（pdf→PDF 查看器、docx→Office、zip→解压工具……）。
+    // 仅 Capacitor 原生环境生效；PC/WEB 端自动旁路（走既有预览/另存为链路）。
+    function extMime(name) {
+        var n = (name || '').toLowerCase();
+        var map = {
+            '.pdf': 'application/pdf', '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.xls': 'application/vnd.ms-excel',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.ppt': 'application/vnd.ms-powerpoint',
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.txt': 'text/plain', '.md': 'text/plain', '.log': 'text/plain',
+            '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+            '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+            '.zip': 'application/zip', '.rar': 'application/x-rar-compressed', '.7z': 'application/x-7z-compressed',
+            '.apk': 'application/vnd.android.package-archive'
+        };
+        var i = n.lastIndexOf('.');
+        return (i >= 0 && map[n.substring(i)]) || 'application/octet-stream';
+    }
+    // 分块转 base64（FileReader 已被 PPTXjs 污染不可用；大文件 String.fromCharCode 分块防爆栈）
+    function blobToB64(blob) {
+        return new Response(blob).arrayBuffer().then(function (buf) {
+            var bytes = new Uint8Array(buf);
+            var CHUNK = 0x8000;
+            var bin = '';
+            for (var i = 0; i < bytes.length; i += CHUNK) {
+                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+            }
+            return btoa(bin);
+        });
+    }
+    function saveOpen(blob, name, mime) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        if (!P || !P.Filesystem || !P.FileOpener) return Promise.resolve(false);
+        return blobToB64(blob).then(function (b64) {
+            return P.Filesystem.writeFile({
+                path: name,
+                data: b64,                      // 纯 base64（不带 data: 前缀）
+                directory: 'DOCUMENTS',         // 应用专属 Documents（免存储权限，FileProvider 可授权打开）
+                recursive: true
+            });
+        }).then(function (res) {
+            return P.FileOpener.open({
+                filePath: res.uri,
+                mimeType: mime || extMime(name)
+            });
+        }).then(function () {
+            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存，正在打开…'));
+            return true;
+        }).catch(function (e) {
+            if (window.__imToast) window.__imToast(I18N_COMPAT('无法打开该文件类型'));
+            return false;
+        });
+    }
+    // I18N 兼容（p2p-file.js 不依赖 I18N，缺省直返）
+    function I18N_COMPAT(s) { return (window.I18N && window.I18N.t) ? window.I18N.t(s) : s; }
+
     window.P2PFile = {
         send: send,
         onSignal: onSignal,
@@ -737,6 +797,27 @@
         // 阶段一百五十九：接收文件缓存归口（chat.js done_ack 写入 / 历史渲染读回）
         cacheReceived: cacheReceived,
         cacheGet: cacheGet,
+        // 阶段二百二十一：APP 端点击直传卡片 → 本机缓存 blob → 保存到设备并系统打开
+        saveAndOpen: function (msgId, name) {
+            return cacheGet(msgId, name).then(function (hit) {
+                if (hit && hit.blob) return saveOpen(hit.blob, hit.name || name, hit.mime);
+                if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
+                return false;
+            });
+        },
+        // 阶段二百二十一：APP 端下载分支归口（服务器文件 fetch → 保存 → 系统打开）
+        openFromUrl: function (url, name) {
+            if (!url) return Promise.resolve(false);
+            return fetch(url).then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.blob();
+            }).then(function (b) {
+                return saveOpen(b, name || 'file', b.type);
+            }).catch(function () {
+                if (window.__imToast) window.__imToast(I18N_COMPAT('文件下载失败'));
+                return false;
+            });
+        },
         // 阶段一百五十九补：手动清理（设置-网络"缓存清理"按钮）
         cacheClear: cacheClear,
         localEnabled: localEnabled,

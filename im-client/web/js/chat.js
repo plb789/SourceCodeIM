@@ -19516,12 +19516,25 @@
                     P2PFile.cacheGet(r.id, meta.name).then(function (hit) {
                         if (!hit || !hit.url) {
                             bubbleFile.addEventListener('click', function () {
-                                showToast(I18N.t('直传文件不保存到服务器，如需留存请发送方开启归档'));
+                                // 阶段二百二十一：APP 端缓存未命中也走归口（内部提示"文件不在本机"）；PC/WEB 维持原提示
+                                if (window.Capacitor && P2PFile.saveAndOpen) {
+                                    P2PFile.saveAndOpen(r.id, meta.name);
+                                } else {
+                                    showToast(I18N.t('直传文件不保存到服务器，如需留存请发送方开启归档'));
+                                }
                             });
                             return;
                         }
                         bubbleFile.setAttribute('data-url', hit.url);
-                        bubbleFile.onclick = function () { onFileCardClick(bubbleFile, r.id, hit.name, hit.url); };
+                        bubbleFile.onclick = function () {
+                            // 阶段二百二十一：APP 端直传文件=保存到设备并系统打开（微信同款，
+                            // 绕开 blob 跨 iframe 预览不可达）；PC/WEB 维持预览/另存为链路
+                            if (window.Capacitor && P2PFile.saveAndOpen) {
+                                P2PFile.saveAndOpen(r.id, hit.name);
+                                return;
+                            }
+                            onFileCardClick(bubbleFile, r.id, hit.name, hit.url);
+                        };
                     });
                 } else {
                     bubbleFile.addEventListener('click', function () {
@@ -21460,15 +21473,19 @@
         var frame = document.createElement('iframe');
         frame.id = 'doc-preview-iframe';
         if (/\.pdf($|\?)/.test(lname)) {
-            // 阶段一百三十四：PDF 预览——iframe 直指 URL 交 Chromium 内置 PDFium 渲染（主窗口
-            // plugins:true 已启用），无需解析页。注意 Android WebView 无内置 PDF 查看器，
-            // 手机端不进本分支（onFileCardClick 已按 Capacitor 环境分流）。原实现：无 PDF 预览
-            frame.src = url;
+            if (window.Capacitor) {
+                // 阶段二百二十一：Android WebView 无内置 PDF 查看器——pdf.js 逐页渲染（doc-preview 内置分支）
+                frame.src = '/doc-preview.html?type=pdf&url=' + encodeURIComponent(url) + '&pv=1.2';
+            } else {
+                // 阶段一百三十四：PDF 预览——iframe 直指 URL 交 Chromium 内置 PDFium 渲染（主窗口
+                // plugins:true 已启用），无需解析页
+                frame.src = url;
+            }
         } else {
             var ext = lname.match(/\.(docx|xlsx|pptx)/);
             var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
             var type = (ext && ext[1]) || 'docx';
-            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url) + '&pv=1.1';
+            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url) + '&pv=1.2';
         }
         holder.appendChild(frame);
         document.getElementById('doc-editor-mask').classList.remove('hidden');
@@ -21533,10 +21550,16 @@
             return;
         }
         // 阶段一百三十四：PDF 改预览——复用 doc-editor 弹窗壳，iframe 直指 URL 交 Chromium 内置
-        // PDFium 渲染（PC/浏览器）；Android WebView 无内置 PDF 查看器，手机 APP 保持下载行为
-        // 原实现：PDF 与 zip 等一同走下方下载分支
-        if (url && !window.Capacitor && /\.pdf($|\?)/i.test(name || '')) {
+        // PDFium 渲染（PC/浏览器）；阶段二百二十一：手机 APP 也进预览（doc-preview.html 内置
+        // pdf.js 逐页渲染，Android WebView 无内置 PDF 查看器，原 <a download> 在 WebView 无反应）
+        if (url && /\.pdf($|\?)/i.test(name || '')) {
             openDocPreview(url, name);
+            return;
+        }
+        // 阶段二百二十一：APP 端下载分支改"下载到设备并系统打开"（<a download> 在 Android
+        // WebView 无任何反应；微信同款点击即下载打开）；PC/WEB 维持原 <a download>
+        if (window.Capacitor && url && window.P2PFile && window.P2PFile.openFromUrl) {
+            window.P2PFile.openFromUrl(url, name);
             return;
         }
         var a = document.createElement('a');

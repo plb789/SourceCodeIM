@@ -10,6 +10,8 @@
     <script src="js/lib/jszip.min.js?v=1.0"></script>
     <script src="js/lib/docx-preview.min.js?v=1.0"></script>
     <script src="js/lib/xlsx.full.min.js?v=1.0"></script>
+    <!-- 阶段二百二十一：pdf.js（本地化）——Android WebView 无内置 PDF 查看器，手机端预览逐页渲染 -->
+    <script src="js/lib/pdf.min.js?v=1.0"></script>
     <style>
         /* 页面基础：白底文档阅读场景（预览内容与文档实际打印观感一致，不随主应用深色主题变化） */
         html, body { margin: 0; padding: 0; background: #f5f5f5; }
@@ -44,6 +46,8 @@
         .xlsx-sheet h3 { margin: 0 0 12px; font-size: 14px; color: #333; border-left: 3px solid #07c160; padding-left: 8px; font-family: "Microsoft YaHei", sans-serif; }
         .xlsx-sheet table { border-collapse: collapse; font-size: 12px; font-family: "Microsoft YaHei", sans-serif; }
         .xlsx-sheet td { border: 1px solid #e0e0e0; padding: 4px 10px; min-width: 48px; height: 22px; color: #333; white-space: nowrap; }
+        /* pdf 渲染容器（pdf.js 逐页 canvas）：白底页居中，页间留缝 */
+        .pdf-page { display: block; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12); max-width: 100%; }
     </style>
 </head>
 <body>
@@ -101,6 +105,33 @@
             });
         }
 
+        // 阶段二百二十一：PDF 预览（pdf.js 逐页渲染，串行出页省内存，大文档首屏快）
+        function renderPdf(buf) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'js/lib/pdf.worker.min.js?v=1.0';
+            pdfjsLib.getDocument({ data: buf }).promise.then(function (pdf) {
+                var i = 1;
+                (function next() {
+                    if (i > pdf.numPages) { loadingEl.style.display = 'none'; return; }
+                    pdf.getPage(i).then(function (page) {
+                        var base = page.getViewport({ scale: 1 });
+                        var target = Math.max(320, Math.min(viewerEl.clientWidth - 24, 960));
+                        var vp = page.getViewport({ scale: target / base.width });
+                        var canvas = document.createElement('canvas');
+                        canvas.className = 'pdf-page';
+                        canvas.width = vp.width;
+                        canvas.height = vp.height;
+                        page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise.then(function () {
+                            viewerEl.appendChild(canvas);
+                            i++;
+                            next();
+                        });
+                    }).catch(function () { loadingEl.style.display = 'none'; });
+                })();
+            }).catch(function () {
+                showError('PDF 解析失败');
+            });
+        }
+
         if (!fileUrl) {
             // 无查询参数：等待父窗口（doc-viewer.html）postMessage 推送地址（blob 场景 dataURL 中转）
             // 阶段一百三十四：独立文档查看器无法访问主聊天页的 blob:，父窗口把 blob 转成自包含
@@ -120,6 +151,7 @@
                 return res.arrayBuffer();
             }).then(function (buf) {
                 if (type === 'xlsx') renderXlsx(buf);
+                else if (type === 'pdf') renderPdf(buf);
                 else renderDocx(buf);
             }).catch(function (e) {
                 showError('文档加载失败');
