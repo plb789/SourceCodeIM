@@ -17362,8 +17362,10 @@ html.m #add-friend-mask .modal-input:focus {
     outline: none;
 }
 
-/* 确定按钮中性化（阶段二百一十九：亮绿底刺眼，改主题灰底素色，微信搜索页同款无彩观感） */
-html.m #add-friend-mask .modal-btn.primary {
+/* 确定按钮中性化（阶段二百一十九：亮绿底刺眼，改主题灰底素色，微信搜索页同款无彩观感；
+   发起群聊"完成"按钮同款归口） */
+html.m #add-friend-mask .modal-btn.primary,
+html.m #grp-mask .modal-btn.primary {
     background: var(--hover);
     color: var(--text);
     border: none;
@@ -17514,6 +17516,13 @@ html.m #grp-mask .grp-right {
 html.m #grp-mask .grp-name-input {
     order: 1;
     margin: 8px 16px;
+    width: auto;
+    box-sizing: border-box;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    border-radius: 8px;
+    height: 40px;
     flex-shrink: 0;
 }
 
