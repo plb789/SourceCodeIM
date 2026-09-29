@@ -199,6 +199,37 @@
         if (e.target.closest('#logout-btn')) exitChat();
     }, true);
 
+    /* ---------- 2.6 系统状态栏跟随主题（微信同款：状态栏与顶栏同色无缝） ---------- */
+    // Android WebView 默认状态栏走系统色（vivo 等显示灰色），与 APP 深色顶栏割裂。
+    // @capacitor/status-bar（原生层已随 APK 编译）读首页顶栏实际背景色动态染色，
+    // 图标深浅按背景亮度自适应；html[data-theme] 切换时实时跟随。
+    // 浏览器/插件缺省时整体旁路（PC/WEB 端无系统状态栏概念，零影响）。
+    function syncStatusBar() {
+        if (!isNative) return;
+        var cap = window.Capacitor && window.Capacitor.Plugins;
+        var SB = cap && cap.StatusBar;
+        if (!SB || !SB.setBackgroundColor) return;
+        var topbar = document.querySelector('.m-home-topbar');
+        if (!topbar || !inMobile()) return;
+        var rgb = getComputedStyle(topbar).backgroundColor; // "rgb(r, g, b)"
+        var m = rgb && rgb.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+        if (!m) return;
+        var r = +m[1], g = +m[2], b = +m[3];
+        try {
+            SB.setBackgroundColor({ color: '#' + [r, g, b].map(function (c) {
+                return ('0' + c.toString(16)).slice(-2);
+            }).join('') });
+            // 感知亮度决定状态栏图标深浅：浅色背景配黑图标（LIGHT），深色背景配白图标（DARK）
+            var lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            SB.setStyle({ style: lum > 140 ? 'LIGHT' : 'DARK' });
+        } catch (err) { /* 状态栏染色失败不影响功能 */ }
+    }
+    // 主题/布局变化实时跟随：html data-theme 属性切换（chat.js applyTheme 归口）
+    new MutationObserver(syncStatusBar).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    document.addEventListener('DOMContentLoaded', syncStatusBar);
+    // 首页顶栏随移动布局类开合（浏览器窄窗切换 html.m 的场景）
+    new MutationObserver(syncStatusBar).observe(root, { attributes: true, attributeFilter: ['class'] });
+
     // 阶段二百零七：网盘页视图桥接——drive-view（文件区/上传工具栏）是挂在 main-chat 内的
     // absolute 全屏浮层，移动布局下 main-chat 平移到视口外，直接切网盘 tab 只能看到
     // side-bar 里的目录列表，文件区永远在屏幕外（表现为"没有上传入口"）。

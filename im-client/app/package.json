@@ -12,6 +12,7 @@
     "@capacitor/android": "^6.2.2",
     "@capacitor/app": "^6.0.3",
     "@capacitor/cli": "^6.2.2",
-    "@capacitor/core": "^6.2.2"
+    "@capacitor/core": "^6.2.2",
+    "@capacitor/status-bar": "^6.0.3"
   }
 }
