@@ -18154,3 +18154,53 @@ html.m #grp-mask #grp-ok {
     animation: camFadeIn 0.15s ease-out;
 }
 .cam-toast.hidden { display: none; }
+
+/* 相机启动失败诊断卡片（自绘，明示根因 + 重试入口；真机权限/占用类失败不再静默关页） */
+.cam-err-card {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    max-width: 360px;
+    padding: 22px 20px 16px;
+    border-radius: 14px;
+    background: rgba(30, 30, 30, 0.96);
+    color: #fff;
+    z-index: 7;
+    animation: camFadeIn 0.18s ease-out;
+}
+.cam-err-card.hidden { display: none; }
+.cam-err-title {
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+}
+.cam-err-name {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--danger, #fa5151); /* 错误名用危险语义色 */
+    font-family: monospace;
+    text-align: center;
+    word-break: break-all;
+}
+.cam-err-msg {
+    margin-top: 4px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: monospace;
+    text-align: center;
+    word-break: break-all;
+}
+.cam-err-hint {
+    margin-top: 12px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.85);
+}
+.cam-err-btns {
+    margin-top: 16px;
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}

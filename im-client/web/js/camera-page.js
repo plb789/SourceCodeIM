@@ -20,13 +20,15 @@
     var CANCEL_PX = 80;       // 上滑取消位移阈值（与语音条上滑取消同量级）
     var PHOTO_LONG_EDGE = 1920; // 拍照长边上限（控制成片体积，上传链路友好）
     var RING_LEN = 301.6;     // 进度环周长 2πr（r=48）
-    // 录像容器格式探测（依次回退；mp4 兼容性最优，webm 为 Chromium 兜底）
+    // 录像容器格式探测（webm 优先：Android 系统 WebView 的 MediaRecorder 对 mp4/H.264
+    // 存在编码器初始化后约 1~2 秒固定 native 崩溃的已知问题，Chromium 内核三端下 webm 最稳；
+    // webm 全不支持时才回退 mp4）
     var MIME_CANDS = [
-        ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'mp4'],
-        ['video/mp4', 'mp4'],
         ['video/webm;codecs=vp9,opus', 'webm'],
         ['video/webm;codecs=vp8,opus', 'webm'],
-        ['video/webm', 'webm']
+        ['video/webm', 'webm'],
+        ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'mp4'],
+        ['video/mp4', 'mp4']
     ];
 
     // ===== 运行态 =====
@@ -130,6 +132,14 @@
         // 长按屏蔽系统右键菜单/拖拽（微信同款无任何系统交互）
         page.addEventListener('contextmenu', function (e) { e.preventDefault(); });
         page.addEventListener('dragstart', function (e) { e.preventDefault(); });
+        // 全局异常捕获：相机页打开期间留档取证 + 轻提示（真机排查"2 秒消失"类问题）
+        window.addEventListener('error', function (ev) {
+            diag('js-error', (ev && ev.message) || '');
+        });
+        window.addEventListener('unhandledrejection', function (ev) {
+            var r = ev && ev.reason;
+            diag('promise', (r && (r.name || '') + ':' + (r.message || r)) || '');
+        });
         // 页面切后台即收（释放摄像头，微信同款；避免后台占用相机）
         document.addEventListener('visibilitychange', function () {
             if (document.hidden && page && !page.classList.contains('hidden')) closeCamera();
@@ -202,9 +212,66 @@
             video.classList.add('live');
             probeTorch();
         }).catch(function (err) {
-            toast(err && err.name === 'NotAllowedError' ? T('相机权限被拒绝，请在系统设置中开启') : T('无法访问相机'));
-            closeCamera();
+            // 失败不再静默关页（真机权限桥接被 ROM 静默拒绝时约 2 秒后 reject，
+            // 表现为"画面一闪就没"）——改自绘诊断卡片明示根因，可重试
+            showCamError(err);
         });
+    }
+
+    // ===== 诊断留档（localStorage 环形缓冲，真机无法看 console 时的取证通道） =====
+    function diag(ev, detail) {
+        try {
+            var arr = JSON.parse(localStorage.getItem('im_cam_diag') || '[]');
+            arr.push({ t: new Date().toISOString(), ev: ev, d: String(detail || '').slice(0, 200) });
+            if (arr.length > 20) arr = arr.slice(-20);
+            localStorage.setItem('im_cam_diag', JSON.stringify(arr));
+        } catch (e) { /* 存储不可用则忽略 */ }
+    }
+
+    // ===== 相机启动失败诊断卡片（全自绘，明示错误名/原因/重试入口） =====
+    function showCamError(err) {
+        var name = (err && err.name) || 'UnknownError';
+        var msg = (err && err.message) || '';
+        diag('gum-fail', name + ' ' + msg);
+        state = 'viewfinder';
+        var card = document.getElementById('cam-err');
+        if (!card) {
+            card = document.createElement('div');
+            card.id = 'cam-err';
+            card.className = 'cam-err-card hidden';
+            card.innerHTML =
+                '<div class="cam-err-title">' + T('相机启动失败') + '</div>' +
+                '<div class="cam-err-name" id="cam-err-name"></div>' +
+                '<div class="cam-err-msg" id="cam-err-msg"></div>' +
+                '<div class="cam-err-hint" id="cam-err-hint"></div>' +
+                '<div class="cam-err-btns">' +
+                    '<button id="cam-err-retry" class="cam-pv-btn ok">' + T('重试') + '</button>' +
+                    '<button id="cam-err-close" class="cam-pv-btn ghost">' + T('关闭') + '</button>' +
+                '</div>';
+            page.appendChild(card);
+            $('cam-err-retry').addEventListener('click', function () {
+                card.classList.add('hidden');
+                openStream();
+            });
+            $('cam-err-close').addEventListener('click', function () {
+                card.classList.add('hidden');
+                closeCamera();
+            });
+        }
+        $('cam-err-name').textContent = name;
+        $('cam-err-msg').textContent = msg;
+        var hint;
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            hint = T('相机/麦克风权限被拒绝：请在系统「设置 → 应用 → 即时通讯 → 权限」中允许相机与麦克风后点重试');
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            hint = T('摄像头被其他应用占用，请关闭正在使用摄像头的应用后重试');
+        } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+            hint = T('未找到可用摄像头设备');
+        } else {
+            hint = T('相机初始化异常，请重启应用后重试');
+        }
+        $('cam-err-hint').textContent = hint;
+        card.classList.remove('hidden');
     }
 
     function closeStreamOnly() {
@@ -294,6 +361,11 @@
         recChunks = [];
         recCancelled = false;
         recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+        recorder.onerror = function (ev) {
+            // 编码异常兜底（native 层崩溃无法拦截，但 JS 层错误可留档并停止录制）
+            diag('rec-error', (ev && ev.error && (ev.error.name + ':' + ev.error.message)) || 'unknown');
+            stopRec();
+        };
         recorder.onstop = function () {
             clearInterval(recTimer);
             recTimer = null;
@@ -305,6 +377,7 @@
             state = 'viewfinder';
             if (cancelled) { toast(T('已取消')); return; }
             if (dur < 500) { toast(T('录制时间太短')); return; }
+            if (!chunks.length) { toast(T('录制失败，请重试')); return; } // 编码异常空片保护
             var blob = new Blob(chunks, { type: (mime ? mime[0] : 'video/webm') });
             showPreview('video', blob, 'VID_' + stamp() + '.' + recExt, dur);
         };
@@ -417,6 +490,8 @@
         if (!page) return;
         killRec();
         closeStreamOnly();
+        var card = document.getElementById('cam-err');
+        if (card) card.classList.add('hidden'); // 同步隐藏诊断卡片
         if (pendingUrl) { URL.revokeObjectURL(pendingUrl); pendingUrl = ''; }
         pendingBlob = null;
         pv.classList.add('hidden');
