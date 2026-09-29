@@ -17369,6 +17369,33 @@ html.m #add-friend-mask .modal-btn.primary {
     border: none;
 }
 
+/* ===================== 阶段二百一十九：个人资料输入框微信同款 + 主题图标联动 ===================== */
+/* 地区/签名输入框：无边框纯灰底圆角块（同添加好友页搜索框形态） */
+html.m .profile-input {
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    border-radius: 8px;
+    height: 40px;
+    box-sizing: border-box;
+}
+
+/* 切换主题图标随主题联动：深色=月亮 / 浅色=太阳 / 跟随系统=电脑（纯 CSS 显隐，零 JS） */
+.mpa-item .ti-sun,
+.mpa-item .ti-system {
+    display: none;
+}
+html[data-theme="light"] .mpa-item .ti-moon,
+html[data-theme="system"] .mpa-item .ti-moon {
+    display: none;
+}
+html[data-theme="light"] .mpa-item .ti-sun {
+    display: inline-block;
+}
+html[data-theme="system"] .mpa-item .ti-system {
+    display: inline-block;
+}
+
 /* 结果区撑满余下全屏 */
 html.m #add-friend-mask .add-friend-result {
     flex: 1;
