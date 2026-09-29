@@ -94,7 +94,9 @@
             background: #000000;
             display: none;
         }
-        body.mode-video .cw-remote { display: block; }
+        /* 阶段二百一十八：remote-live（拿到远端流）才显示远端画面——等待接通期 video 无流时
+           Android WebView 会绘制原生"播放按钮"占位图（原生层盖不住），表现为连接中背景是播放器图标 */
+        body.mode-video.remote-live .cw-remote { display: block; }
         /* 语音模式的远端声音出口（隐藏元素持续播放） */
         #cwRemoteAudio { display: none; }
 
@@ -736,6 +738,6 @@
     </div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=26"></script>
+    <script src="js/call-page.js?v=27"></script>
 </body>
 </html>

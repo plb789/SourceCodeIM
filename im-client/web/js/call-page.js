@@ -301,6 +301,9 @@
             // 视频模式出画面（cwRemote），语音模式出声音（cwRemoteAudio）
             var el = st.callType === 'video' ? $('cwRemote') : $('cwRemoteAudio');
             el.srcObject = st.remote;
+            // 阶段二百一十八：拿到远端流才亮出画面元素——等待接通期 Android WebView 对
+            // 无流 video 绘制原生播放按钮占位图，表现为"连接中背景是个播放器"
+            if (st.callType === 'video') document.body.classList.add('remote-live');
             var pr = el.play && el.play();
             if (pr && pr.catch) pr.catch(function () { });
         };

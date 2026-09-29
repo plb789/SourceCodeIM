@@ -95,6 +95,13 @@
         if (m) m.classList.add('hidden');
     }
 
+    // 阶段二百一十九：切后台/回桌面自动释放摄像头（微信同款离开即停）——
+    // 否则流持续占用，下次扫码触发系统"相机被占用"弹窗，且页面回到前台时
+    // 扫码视图与死流状态错乱
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden && scanStream) closeScanner();
+    });
+
     function scanLoop(video) {
         var canvas = document.getElementById('qr-scan-canvas');
         if (!canvas) return;
@@ -125,6 +132,9 @@
             toast('当前环境不支持扫码');
             return;
         }
+        // 阶段二百一十九：幂等清残留——上次扫码流未释放（切后台/系统强断）时先停干净，
+        // 避免 vivo 等系统弹"相机被占用"且新流失败导致"点了没反应"
+        if (scanStream) stopScan();
         mask.classList.remove('hidden');
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (stream) {
             scanStream = stream;
@@ -133,6 +143,16 @@
             v.setAttribute('playsinline', 'true');
             v.play();
             scanLoop(v);
+            // 系统强断流自愈（用户在 vivo 弹窗点"关闭"等）：自动收起扫码视图并提示
+            var vt = stream.getVideoTracks()[0];
+            if (vt && vt.addEventListener) {
+                vt.addEventListener('ended', function () {
+                    if (scanStream === stream) {
+                        closeScanner();
+                        toast('相机已断开');
+                    }
+                });
+            }
         }).catch(function () {
             closeScanner();
             toast('无法打开摄像头');

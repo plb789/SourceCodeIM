@@ -4756,9 +4756,11 @@ html.m #list-panel.list-collapsed {
 .m-home-topbar,
 .m-plus-menu,
 .m-profile-actions,
-/* 阶段二百一十：扫一扫入口锚点与扫码全屏视图（仅 html.m 生效，PC/WEB 恒隐藏） */
+/* 阶段二百一十：扫一扫入口锚点（PC/WEB 恒隐藏）；
+   阶段二百一十九修正：#qr-scan-mask 不能进本名单——ID 特异性 (1,0,0) 会永久压死
+   移动端显示规则（表现为扫码视图永不显示但摄像头已调用），改为仅 PC/WEB 隐藏 */
 #scan-entry,
-#qr-scan-mask,
+html:not(.m) #qr-scan-mask,
 /* 阶段二百零六：个人页功能分组卡（替代旧 m-profile-actions 容器，PC/WEB 端同样恒隐藏） */
 .mpc-actions {
     display: none;
