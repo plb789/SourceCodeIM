@@ -4400,16 +4400,34 @@
         var toUser = currentChatUser;
         // 本地立即渲染（自己发送的消息）
         var url = URL.createObjectURL(file);
+        // 阶段二百二十四：视频文件生成 nonce 供上传进度圈按气泡精确定位（非视频不挂不生成，原逻辑零影响）
+        var chunkNonce = isVideoName(file.name) ? (Date.now() + '_' + Math.random().toString(36).slice(2)) : '';
         if (isImageName(file.name)) {
             appendImageMsg(IMSocket.getUsername(), url, 'self', currentChatUser !== '');
         } else {
-            appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', currentChatUser !== '');
+            var cfB = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', currentChatUser !== '');
+            if (chunkNonce) cfB.setAttribute('data-nonce', chunkNonce);
         }
-        pendingUploads.push({ file: file, total: total });
+        pendingUploads.push({ file: file, total: total, nonce: chunkNonce });
         IMSocket.send({
             msg_type: MSG.FILE, chunk_index: -1, to_user: toUser,
             file_name: file.name, file_size: file.size, total_chunks: total
         });
+    }
+
+    // ===== 阶段二百二十四：视频上传进度圈（微信同款中央环形进度） =====
+    // 按 nonce 定位本地视频气泡内的 .bubble-video-upring，驱动 SVG 环形进度
+    // （周长 2π×26≈163.36，dashoffset 随进度反向递减）；百分比封顶 99%，
+    // 完成态由 FILE_PERSISTED 回填重建正式气泡归口（圈层自然消失）
+    var UPFRING_LEN = 163.36;
+    function updateVideoUploadRing(nonce, pct) {
+        var ring = messageList.querySelector('.message[data-nonce="' + nonce + '"] .bubble-video-upring');
+        if (!ring) return;
+        var p = Math.max(0, Math.min(99, Math.round(pct)));
+        var fg = ring.querySelector('.upring-fg');
+        if (fg) fg.style.strokeDashoffset = String(UPFRING_LEN * (1 - p / 100));
+        var txt = ring.querySelector('.upring-pct');
+        if (txt) txt.textContent = p + '%';
     }
 
     // 阶段三十一：大文件 HTTP 直传（对齐群聊图片 sendGroupImage 模式）
@@ -4434,19 +4452,32 @@
         }
         var fd = new FormData();
         fd.append('file', file);
-        return fetch('/upload/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
-              '&to_user=' + encodeURIComponent(toUser) +
-              '&nonce=' + encodeURIComponent(nonce), {
-            method: 'POST',
-            body: fd
-        }).then(function (res) {
-            // 异常加固：HTTP 4xx/5xx（文件过大/未在线/被拉黑等）统一告警，本地 blob 预览保留
-            if (!res.ok) console.warn('大文件直传被拒绝:', res.status);
-            return res; // 阶段八十六：转发链路据此判定成败
-        }).catch(function (e) {
-            // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
-            console.warn('大文件直传失败:', e);
-            throw e; // 阶段八十六：转发链路据此提示失败
+        // 阶段二百二十四：fetch 无上传进度事件，改 XHR 以驱动视频气泡上传进度圈（微信同款）；
+        // Promise 形态 {ok, status} 与原 fetch 返回消费面对齐（转发链路仅用 res.ok/res.status，零改动）
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
+                '&to_user=' + encodeURIComponent(toUser) +
+                '&nonce=' + encodeURIComponent(nonce));
+            if (xhr.upload) {
+                xhr.upload.onprogress = function (ev) {
+                    if (ev.lengthComputable && ev.total > 0) {
+                        updateVideoUploadRing(nonce, (ev.loaded / ev.total) * 100);
+                    }
+                };
+            }
+            xhr.onload = function () {
+                // 异常加固：HTTP 4xx/5xx（文件过大/未在线/被拉黑等）统一告警，本地 blob 预览保留
+                if (xhr.status < 200 || xhr.status >= 300) console.warn('大文件直传被拒绝:', xhr.status);
+                resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status });
+            };
+            xhr.onerror = function () {
+                // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
+                var err = new Error('upload failed');
+                console.warn('大文件直传失败:', err);
+                reject(err); // 阶段八十六：转发链路据此提示失败
+            };
+            xhr.send(fd);
         });
     }
 
@@ -4671,7 +4702,7 @@
     // 顺序发送分片：base64 编码后逐片上传
     // 阶段三十一：发送前检查底层 WebSocket 缓冲积压（bufferedAmount），超过 8 个分片量级时等待 10ms 重试——
     // 原实现：FileReader 全速递归发送无任何节流，弱网时分片在浏览器/服务端队列堆积，挤掉普通聊天消息
-    function sendChunks(file, fileId, toUser, total) {
+    function sendChunks(file, fileId, toUser, total, ringNonce) {
         var idx = 0;
         function next() {
             if (idx >= total) {
@@ -4695,6 +4726,8 @@
                     file_data: dataUrl.split(',')[1] // 去掉 data: 前缀，仅保留 base64
                 });
                 idx++;
+                // 阶段二百二十四：分片链路（<1MB）视频同款上传进度圈驱动（每片推进，封顶/截断由函数归口）
+                if (ringNonce) updateVideoUploadRing(ringNonce, (idx / total) * 100);
                 next();
             }).catch(function (e) {
                 console.warn('文件分片读取失败，跳过分片 ' + idx + ':', e);
@@ -4758,6 +4791,10 @@
                     if (!pu || pu.indexOf('blob:') === 0) pFile.setAttribute('data-url', pm.url);
                 }
             } catch (pe) {}
+            // 阶段二百二十四：分片路径视频气泡的进度圈随回填摘除（<1MB 分片链路同享圈层，
+            // 分片通知 content 无 url，video.src 保持 blob 本地预览，刷新后走历史加载自愈）
+            var pUpring = el.querySelector('.bubble-video-upring');
+            if (pUpring) pUpring.remove();
             // 发送端图片气泡带已读状态元素（接收端无），按对端回填
             var peer = msg.from_user === IMSocket.getUsername() ? (msg.to_user || '') : msg.from_user;
             applyBubbleReadStatus(el, msg.msg_id, peer);
@@ -4829,6 +4866,10 @@
                 if (ptxt) ptxt.remove();
                 var pcancel = mineEl.querySelector('.file-progress-cancel');
                 if (pcancel) pcancel.remove();
+                // 阶段二百二十四：视频上传进度圈随终态摘除（直传视频气泡走就地转终态，不重建，
+                // video.src 已回填服务器 URL；圈层残留会永久遮挡封面，必须就地移除）
+                var upring = mineEl.querySelector('.bubble-video-upring');
+                if (upring) upring.remove();
                 mineEl.classList.remove('upload-failed');
                 return;
             }
@@ -5174,12 +5215,35 @@
         fd.append('file', file);
         // 阶段一百四十二：多群泛化——group 参数携带目标群（旧全局群为空不追加，服务端按群落库广播）
         var grp = groupTarget || (isGroupTarget(currentChatUser) ? currentChatUser : '');
-        // 返回 fetch 链：转发路径（suppressLocal）按 Promise 收尾提示；直接发送路径 fire-and-forget 不受影响
-        return fetch('/upload/group/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
+        // 阶段二百二十四：fetch 无上传进度事件，改 XHR 驱动群聊视频气泡上传进度圈（微信同款）；
+        // resolve 对象兼容原 fetch Response 消费面（ok/status/text()/json()），转发与内部回填零改动；
+        // 返回 Promise 链：转发路径（suppressLocal）按 Promise 收尾提示；直接发送路径 fire-and-forget 不受影响
+        var grpQs = '/upload/group/file?username=' + encodeURIComponent(IMSocket.getUsername()) +
               '&nonce=' + encodeURIComponent(nonce) +
-              (grp ? '&group=' + encodeURIComponent(grp) : ''), {
-            method: 'POST',
-            body: fd
+              (grp ? '&group=' + encodeURIComponent(grp) : '');
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', grpQs);
+            if (xhr.upload) {
+                xhr.upload.onprogress = function (ev) {
+                    if (ev.lengthComputable && ev.total > 0) {
+                        updateVideoUploadRing(nonce, (ev.loaded / ev.total) * 100);
+                    }
+                };
+            }
+            xhr.onload = function () {
+                resolve({
+                    ok: xhr.status >= 200 && xhr.status < 300,
+                    status: xhr.status,
+                    text: function () { return Promise.resolve(xhr.responseText); },
+                    json: function () {
+                        try { return Promise.resolve(JSON.parse(xhr.responseText)); }
+                        catch (eJ) { return Promise.reject(eJ); }
+                    }
+                });
+            };
+            xhr.onerror = function () { reject(new Error('upload failed')); };
+            xhr.send(fd);
         }).then(function (res) {
             if (!res.ok) {
                 return res.text().then(function (t) {
@@ -5200,6 +5264,9 @@
                             if (bEl) bEl.setAttribute('data-url', data.url);
                         }
                         if (data && data.msg_id && bubble) bubble.setAttribute('data-msg-id', String(data.msg_id));
+                        // 阶段二百二十四：群聊视频进度圈随上传完成摘除（HTTP 响应归口，群聊无 FILE_PERSISTED 链路）
+                        var gUpring = bubble.querySelector('.bubble-video-upring');
+                        if (gUpring) gUpring.remove();
                     } catch (e0) { }
                 }
             });
@@ -5357,6 +5424,9 @@
                         if (!mu || mu.indexOf('blob:') === 0) mFileEl.setAttribute('data-url', meta.url);
                     }
                 } catch (e1) { }
+                // 阶段二百二十四：进度圈兜底摘除（广播先于 HTTP 响应到达的竞态场景）
+                var gUpring2 = mineEl.querySelector('.bubble-video-upring');
+                if (gUpring2) gUpring2.remove();
                 return;
             }
         }
@@ -5383,7 +5453,7 @@
                 var mineBubbles = messageList.querySelectorAll('.message.self:not([data-file-id])');
                 var mineLast = mineBubbles[mineBubbles.length - 1];
                 if (mineLast) mineLast.setAttribute('data-file-id', msg.file_id);
-                sendChunks(task.file, msg.file_id, msg.to_user, task.total);
+                sendChunks(task.file, msg.file_id, msg.to_user, task.total, task.nonce);
             }
             return;
         }
@@ -21893,6 +21963,12 @@
         var cover = document.createElement('div');
         cover.className = 'bubble-video-cover';
         cover.setAttribute('data-role', 'video-cover');
+        // 阶段二百二十四：封面抽帧兜底图（MediaRecorder webm 无 duration/Cues 元数据，
+        // 原生 video 首帧在部分 WebView 渲染为黑屏默认播放器图；抽帧成功后盖显示）
+        var coverImg = document.createElement('img');
+        coverImg.className = 'bubble-video-coverimg';
+        coverImg.alt = '';
+        cover.appendChild(coverImg);
         var playBtn = document.createElement('div');
         playBtn.className = 'bubble-video-playbtn';
         var durBadge = document.createElement('span');
@@ -21900,6 +21976,17 @@
         cover.appendChild(playBtn);
         cover.appendChild(durBadge);
         box.appendChild(cover);
+        // 上传进度圈（微信同款中央环形进度）：仅发送方本地 blob 预览期显示，
+        // FILE_PERSISTED 回填重建正式气泡后自然消失；进度由 sendFileDirect XHR onprogress 驱动
+        if (type === 'self' && url && url.indexOf('blob:') === 0) {
+            var upring = document.createElement('div');
+            upring.className = 'bubble-video-upring';
+            upring.innerHTML =
+                '<svg viewBox="0 0 60 60"><circle class="upring-bg" cx="30" cy="30" r="26"></circle>' +
+                '<circle class="upring-fg" cx="30" cy="30" r="26"></circle></svg>' +
+                '<span class="upring-pct">0%</span>';
+            box.appendChild(upring);
+        }
         // 时长角标：元数据就绪后显示（微信同款右下角时长）
         video.addEventListener('loadedmetadata', function () {
             var d = Math.floor(video.duration || 0);
@@ -21908,6 +21995,28 @@
                 durBadge.classList.add('show');
             }
         });
+        // 阶段二百二十四：封面抽帧兜底——duration 非有限（MediaRecorder webm 特征）时，
+        // loadeddata/seeked（HAVE_CURRENT_DATA，不依赖 duration/seek）直接抓首帧绘为封面；
+        // 常规视频原生首帧正常不干预（历史长列表零开销）
+        var coverFallbackDone = false;
+        var drawCoverFallback = function () {
+            if (coverFallbackDone) return;
+            if (isFinite(video.duration) && video.duration > 0) return;
+            try {
+                if (!video.videoWidth || !video.videoHeight) return;
+                var c = document.createElement('canvas');
+                c.width = video.videoWidth;
+                c.height = video.videoHeight;
+                c.getContext('2d').drawImage(video, 0, 0);
+                coverImg.src = c.toDataURL('image/jpeg', 0.82);
+                coverImg.classList.add('show');
+                coverFallbackDone = true;
+                video.removeEventListener('loadeddata', drawCoverFallback);
+                video.removeEventListener('seeked', drawCoverFallback);
+            } catch (e) { /* 抽帧失败保持原生渲染 */ }
+        };
+        video.addEventListener('loadeddata', drawCoverFallback);
+        video.addEventListener('seeked', drawCoverFallback);
         // 点击封面 → 揭开原生控制条并起播（用户手势内调用，不受自动播放策略限制）
         cover.addEventListener('click', function () {
             if (cover.parentNode) cover.parentNode.removeChild(cover);
