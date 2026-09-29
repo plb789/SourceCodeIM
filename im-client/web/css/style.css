@@ -8,6 +8,7 @@
     --bubble-other: #ffffff;  /* 微信对方白色气泡 */
     --border: #e0e0e0;
     --primary: #07c160;       /* 微信绿 */
+    --primary-soft: rgba(7, 193, 96, 0.6); /* 主色柔化（输入框聚焦描边等轻量强调） */
     --hover: #d9d9d9;
     --active: #c8c8c8;
     --panel-bg: #ffffff;      /* 面板背景 */
@@ -18,6 +19,12 @@
     --text-secondary: #999999;                    /* 次级文字（原各处 fallback #999 归口主题管理） */
     --shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.08); /* 浮层阴影（控制台抽屉等，随主题深浅） */
     --shadow-soft: 0 2px 10px rgba(0, 0, 0, 0.10); /* 轻阴影（浮标胶囊等小浮层） */
+}
+
+/* 阶段二百一十九：关闭 Android WebView 触点高亮——手机端点击按钮/列表项会闪现
+   系统默认的半透明灰色矩形（微信同款无此效果）；该属性仅作用于触屏点按，PC/WEB 鼠标零影响 */
+* {
+    -webkit-tap-highlight-color: transparent;
 }
 
 /* 深色主题 */
@@ -31,6 +38,7 @@
     --bubble-other: #2c2c2c;
     --border: #333333;
     --primary: #07c160;
+    --primary-soft: rgba(7, 193, 96, 0.5); /* 深色下再柔一档 */
     --hover: #2a2a2a;
     --active: #383838;
     --panel-bg: #1e1e1e;
@@ -58,6 +66,7 @@
         --bubble-other: #2c2c2c;
         --border: #333333;
         --primary: #07c160;
+        --primary-soft: rgba(7, 193, 96, 0.5);
         --hover: #2a2a2a;
         --active: #383838;
         --panel-bg: #1e1e1e;
@@ -17334,12 +17343,30 @@ html.m #add-friend-mask .modal-title {
     flex-shrink: 0;
 }
 
-/* 搜索输入框（微信同款大搜索框形态） */
+/* 搜索输入框（微信同款：无边框纯灰底圆角块；width:auto+border-box 修正 100%+margin 溢出） */
 html.m #add-friend-mask .modal-input {
     margin: 8px 16px;
+    width: auto;
+    box-sizing: border-box;
     height: 40px;
     border-radius: 8px;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
     flex-shrink: 0;
+}
+
+/* 聚焦同样无边框（微信搜索框无描边态） */
+html.m #add-friend-mask .modal-input:focus {
+    border: none;
+    outline: none;
+}
+
+/* 确定按钮中性化（阶段二百一十九：亮绿底刺眼，改主题灰底素色，微信搜索页同款无彩观感） */
+html.m #add-friend-mask .modal-btn.primary {
+    background: var(--hover);
+    color: var(--text);
+    border: none;
 }
 
 /* 结果区撑满余下全屏 */
