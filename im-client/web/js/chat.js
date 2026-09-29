@@ -2443,12 +2443,14 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
     }
 
-    // 阶段二百二十一：文件卡片"保存到设备"图标点击归口（appendFileMsg 统一挂载的 .file-save-btn）
+    // 阶段二百二十一：文件卡片"保存到设备"图标点击归口（历史渲染挂载的 .file-save-btn）
+    // 阶段二百二十二：按钮仅 APP 端挂载（见历史渲染挂载点），本委托仅服务 APP——
     // 判定顺序：服务器 URL（https）→ 仅保存；直传（data-msg-id 有缓存）→ 缓存仅保存；
-    // 在线直传 blob url → fetch 后保存；PC/WEB=快捷另存为（原右键菜单不受影响）
+    // 在线直传 blob url → fetch 后保存
     document.addEventListener('click', function (e) {
         var btn = e.target.closest ? e.target.closest('.file-save-btn') : null;
         if (!btn) return;
+        if (!(window.Capacitor && window.P2PFile)) return; // WEB/PC 无此按钮，防御性直通
         e.preventDefault();
         e.stopPropagation();
         var fb = btn.closest('.bubble-file');
@@ -2456,21 +2458,17 @@
         var name = (fb.querySelector('.file-name') || {}).textContent || 'file';
         var u = fb.getAttribute('data-url') || '';
         var mid = fb.getAttribute('data-msg-id') || '';
-        if (window.Capacitor && window.P2PFile) {
-            if (u && u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
-                window.P2PFile.openFromUrl(u, name, false);
-            } else if (mid) {
-                window.P2PFile.saveOnly(mid, name);
-            } else if (u) {
-                fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
-                    window.P2PFile.saveBlob(b, name);
-                });
-            } else if (window.__imToast) {
-                window.__imToast(I18N.t('文件不在本机，请对方重新发送'));
-            }
-            return;
+        if (u && u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
+            window.P2PFile.openFromUrl(u, name, false);
+        } else if (mid) {
+            window.P2PFile.saveOnly(mid, name);
+        } else if (u) {
+            fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
+                window.P2PFile.saveBlob(b, name);
+            });
+        } else if (window.__imToast) {
+            window.__imToast(I18N.t('文件不在本机，请对方重新发送'));
         }
-        imDownload(u, name);
     });
 
     // 触发浏览器下载（统一 imDownload 归口；多文件间隔 200ms 防浏览器连发限流）
@@ -4802,7 +4800,9 @@
                 // 原实现只回填了图片 img.src 与文件 data-url，video.src 停留 blob: 跨会话/查看器失效）
                 var mVid = mineEl.querySelector('video.bubble-video-el');
                 if (mVid && meta.url && mVid.getAttribute('src') && mVid.getAttribute('src').indexOf('blob:') === 0) {
-                    mVid.setAttribute('src', meta.url);
+                    // 视频封面修复：回填同样带 #t=0.001 媒体片段（与 appendVideoMsg 首帧预览同源），
+                    // 原实现回填裸 URL 后已播放过封面被揭开的场景不受影响，未播放场景会退回"默认播放器"画面
+                    mVid.setAttribute('src', videoPreviewSrc(meta.url));
                     try { mVid.load(); } catch (eV) { } // src 变更后重载元数据
                 }
                 // 阶段三十二：分片直传气泡为进度形态，回填后移除进度条/百分比/取消按钮（转为终态文件卡片）
@@ -19523,13 +19523,10 @@
             bubbleFile.appendChild(info);
             // 阶段二百二十一：微信同款"保存到设备"入口（卡片右下圆形下载钮）——历史/实时、
             // 直传/服务器文件统一挂载；点击归口见 document 委托 listener（imDownload 定义旁）。
-            // APP=仅保存到设备 Documents；PC/WEB=快捷"另存为"（原右键菜单不受影响）
+            // 阶段二百二十二：按钮仅 APP 端挂载（window.Capacitor 判定，与 imDownload 同口径）——
+            // 用户需求：WEB/PC 端不显示（另存为走右键菜单 + 整卡点击，入口不受影响）；
+            // 挂载时补 has-save-btn 类，供 CSS 将"直传"角标移位避让（原两元素右下角堆叠）
             bubbleFile.setAttribute('data-msg-id', r.id || '');
-            var saveBtn = document.createElement('button');
-            saveBtn.className = 'file-save-btn';
-            saveBtn.title = I18N.t('保存到设备');
-            saveBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v11m0 0l-4.5-4.5M12 14l4.5-4.5M5 20h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-            bubbleFile.appendChild(saveBtn);
             if (meta.url) {
                 // 阶段一百六十：服务器文件保留期过期判断（file_retention_days 登录响应下发，服务端归口）——
                 // create_time 超过保留期的文件卡片灰显+「已过期」角标，点击仅提示（文件本体已被服务端
@@ -19551,6 +19548,17 @@
                     // 阶段一百三十四：历史文件气泡补存 data-url（与实时气泡 L15035 对齐）——
                     // 右键"另存为"需从 DOM 取源地址（点击回调闭包拿不到）
                     bubbleFile.setAttribute('data-url', meta.url);
+                    // 阶段二百二十三：按钮挂载移入未过期分支（原挂载在过期判定之前，导致"已过期"
+                    // 角标与按钮右下角堆叠，2026-09-29 用户实测截图）——文件已被服务端清理，
+                    // 下载必失败，过期卡片不再提供保存入口（与上方不回填 data-url 同语义）
+                    if (window.Capacitor) {
+                        var saveBtn = document.createElement('button');
+                        saveBtn.className = 'file-save-btn';
+                        saveBtn.title = I18N.t('保存到设备');
+                        saveBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3v11m0 0l-4.5-4.5M12 14l4.5-4.5M5 20h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                        bubbleFile.appendChild(saveBtn);
+                        bubbleFile.classList.add('has-save-btn');
+                    }
                 } else {
                     bubbleFile.classList.add('file-expired');
                     var expTag = document.createElement('div');
@@ -21824,6 +21832,15 @@
     // ===== 阶段一百三十九：视频消息气泡（内联 video 播放 + 文件名/大小行；微信同款观感） =====
     // 气泡复用 bubble-file 类名并带 data-url：右键"另存为"按 .bubble-file[data-url] 判定，视频同享；
     // 由 appendFileMsg 开头按 isVideoName 统一分流（本地发送/接收/历史加载/转发全链路自动生效）
+
+    // 视频首帧预览地址：#t=0.001 媒体片段使 Chromium 在 preload=metadata 下也渲染首帧画面，
+    // 原实现裸 URL + preload=metadata 只出"黑底+播放键+0:00"的默认播放器初始画面（2026-09-29 实测）；
+    // blob: 本地预览不支持媒体片段，改走 preload=auto 出首帧（本地无网络开销）
+    function videoPreviewSrc(url) {
+        if (!url || url.indexOf('blob:') === 0 || url.indexOf('#') !== -1) return url;
+        return url + '#t=0.001';
+    }
+
     function appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate, opts) {
         var div = document.createElement('div');
         div.className = 'message ' + type;
@@ -21837,13 +21854,50 @@
         bubble.className = 'message-bubble bubble-file bubble-video';
         var video = document.createElement('video');
         video.className = 'bubble-video-el';
-        if (url) video.src = url;
-        video.controls = true;
-        video.preload = 'metadata';
+        if (url) {
+            video.src = videoPreviewSrc(url);
+            // blob 本地预览用 auto 出首帧，服务器 URL 用 metadata + 媒体片段（长历史不批量拉全片）
+            video.preload = url.indexOf('blob:') === 0 ? 'auto' : 'metadata';
+        } else {
+            video.preload = 'metadata';
+        }
+        // 微信同款：初始不露原生控制条（默认播放器观感），首帧封面 + 自绘播放键，点击后交还原生控制
+        video.controls = false;
         video.playsInline = true;
+        // 封面容器：自绘播放遮罩绝对定位锚点（跟随视频尺寸）
+        var box = document.createElement('div');
+        box.className = 'bubble-video-box';
+        box.appendChild(video);
+        var cover = document.createElement('div');
+        cover.className = 'bubble-video-cover';
+        cover.setAttribute('data-role', 'video-cover');
+        var playBtn = document.createElement('div');
+        playBtn.className = 'bubble-video-playbtn';
+        var durBadge = document.createElement('span');
+        durBadge.className = 'bubble-video-dur';
+        cover.appendChild(playBtn);
+        cover.appendChild(durBadge);
+        box.appendChild(cover);
+        // 时长角标：元数据就绪后显示（微信同款右下角时长）
+        video.addEventListener('loadedmetadata', function () {
+            var d = Math.floor(video.duration || 0);
+            if (d > 0 && isFinite(d)) {
+                durBadge.textContent = Math.floor(d / 60) + ':' + ('0' + (d % 60)).slice(-2);
+                durBadge.classList.add('show');
+            }
+        });
+        // 点击封面 → 揭开原生控制条并起播（用户手势内调用，不受自动播放策略限制）
+        cover.addEventListener('click', function () {
+            if (cover.parentNode) cover.parentNode.removeChild(cover);
+            video.controls = true;
+            try {
+                var pp = video.play();
+                if (pp && pp.catch) pp.catch(function () { });
+            } catch (eP) { }
+        });
         // 阶段一百四十：去掉文件名/大小信息区（用户需求：视频+文件名同显冗余，微信同款只显示视频）；
         // 气泡仍带 bubble-file 类与 data-url——右键"另存为"入口保留，"在线编辑"因 file-name 缺失自动隐藏
-        bubble.appendChild(video);
+        bubble.appendChild(box);
         if (url) {
             bubble.setAttribute('data-url', url);
         }

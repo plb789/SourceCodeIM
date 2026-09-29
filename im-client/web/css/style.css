@@ -3679,6 +3679,62 @@ html.m .mobile-plus-panel:not(.hidden) {
     background: #000;
 }
 
+/* 视频封面容器：自绘播放遮罩的绝对定位锚点（随视频首帧尺寸收缩，替代原生默认播放器初始画面） */
+.bubble-video-box {
+    position: relative;
+    font-size: 0;
+}
+
+/* 自绘播放遮罩：中心播放键 + 右下角时长角标（微信同款观感，覆盖在视频首帧画面上） */
+.bubble-video-cover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 6px;
+    z-index: 2;
+}
+
+.bubble-video-cover .bubble-video-playbtn {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none; /* 点击统一由遮罩归口 */
+}
+
+.bubble-video-cover .bubble-video-playbtn::after {
+    content: '';
+    margin-left: 4px; /* 三角视觉居中修正 */
+    border-left: 14px solid rgba(255, 255, 255, 0.92);
+    border-top: 9px solid transparent;
+    border-bottom: 9px solid transparent;
+}
+
+.bubble-video-cover .bubble-video-dur {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 11px;
+    line-height: 16px;
+    pointer-events: none;
+    display: none; /* 元数据就绪后由 JS 加 .show 显示 */
+}
+
+.bubble-video-cover .bubble-video-dur.show {
+    display: block;
+}
+
 /* 录屏预览浮层（复用截图预览浮层视觉：深色遮罩 + 内容居中 + 按钮） */
 .rec-preview-mask {
     position: fixed;
@@ -17592,6 +17648,16 @@ html.m #add-friend-mask.im-page-out .modal-box {
 }
 .file-save-btn:hover { background: var(--primary-soft, var(--hover)); color: var(--text); }
 .file-save-btn svg { pointer-events: none; }
+
+/* 阶段二百二十二：APP 端保存钮与"直传"角标并存时的避让（原两者右下角堆叠，2026-09-29 实测）——
+   角标由 flex 流内改为绝对定位，移到按钮左侧并与按钮垂直居中对齐；
+   WEB/PC 端不挂按钮（无 has-save-btn 类），角标维持原 flex 布局不受影响 */
+.bubble-file.has-save-btn .file-p2p-badge {
+    position: absolute;
+    right: 44px;  /* 按钮左缘（right:10+28px）+ 6px 间距 */
+    bottom: 16px; /* 按钮中心（bottom:10+14px）- 角标半高 8px */
+    align-self: auto;
+}
 
 /* ===================== 阶段二百一十五：移动端「发起群聊/邀请成员」微信 Android 同款全屏页 ===================== */
 /* 实底全屏 + push 转场（同添加好友） */
