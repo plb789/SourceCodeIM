@@ -103,6 +103,83 @@
         if (document.body.classList.contains('in-chat')) exitChat();
     });
 
+    /* ---------- 2.5 Android 返回手势/返回键：逐级返回（微信同款） ---------- */
+    // 系统侧滑返回手势与返回键经 Capacitor App 插件派发 backButton（监听后系统不再
+    // 自动 history.back / 退后台），由这里按"最上层优先"逐级归口——全部委托既有
+    // 按钮 click 链路（零逻辑复制）。无可返回层级时最小化到后台（微信同款），
+    // 不再出现"子页面侧滑直接退到后台"
+    if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+        var sysApp = window.Capacitor.Plugins.App;
+        sysApp.addListener('backButton', function () {
+            if (!inMobile()) { sysApp.exitApp(); return; }
+            // 1) 扫码视图
+            var scanMask = document.getElementById('qr-scan-mask');
+            if (scanMask && !scanMask.classList.contains('hidden')) {
+                var sc = document.getElementById('qr-scan-cancel');
+                if (sc) sc.click();
+                return;
+            }
+            // 2) 二维码名片
+            var qcm = document.getElementById('qr-card-mask');
+            if (qcm && !qcm.classList.contains('hidden')) {
+                var qc = document.getElementById('qr-card-close');
+                if (qc) qc.click();
+                return;
+            }
+            // 3) 发起群聊/邀请成员（chat.js push 关闭归口，侧滑带滑出动画）
+            var gm = document.getElementById('grp-mask');
+            if (gm && !gm.classList.contains('hidden')) {
+                var gc = document.getElementById('grp-cancel');
+                if (gc) gc.click();
+                return;
+            }
+            // 4) 添加好友（同上 push 关闭归口）
+            var afm = document.getElementById('add-friend-mask');
+            if (afm && !afm.classList.contains('hidden')) {
+                var ac = document.getElementById('add-friend-cancel');
+                if (ac) ac.click();
+                return;
+            }
+            // 5) 聊天页浮层（表情面板/会话内搜索/移动加号面板/首页加号菜单/更多菜单）
+            var floatIds = ['emoji-panel', 'conv-search', 'mobile-plus-panel', 'm-plus-menu', 'chat-more-menu'];
+            for (var fi = 0; fi < floatIds.length; fi++) {
+                var fel = document.getElementById(floatIds[fi]);
+                if (fel && !fel.classList.contains('hidden')) {
+                    fel.classList.add('hidden');
+                    return;
+                }
+            }
+            // 6) 新的朋友（chat.js 关闭归口 + mobile.js 既有委托退视图）
+            var nfp = document.getElementById('new-friends-panel');
+            if (nfp && !nfp.classList.contains('hidden')) {
+                var nc = document.getElementById('new-friends-close');
+                if (nc) nc.click();
+                return;
+            }
+            // 7) 网盘页打开态：委托 drive.js 返回分级（子目录→上级/搜索态→回前/根→关页）；
+            //    关页后由 mobile.js 既有 #drive-close 委托联动 exitChat
+            if (window.IMDrive && IMDrive.isOpen()) {
+                var dc = document.getElementById('drive-close');
+                if (dc) dc.click();
+                return;
+            }
+            // 8) 公告流打开 → 返回公告分类列表（mobile.js 既有委托联动 exitChat）
+            var asc = document.getElementById('ann-stream-close');
+            if (asc && getComputedStyle(asc).display !== 'none') {
+                asc.click();
+                return;
+            }
+            // 9) 聊天视图 → 列表（并清 enterChat 推入的历史，保持栈平衡）
+            if (document.body.classList.contains('in-chat')) {
+                exitChat();
+                try { if (history.state) history.back(); } catch (err) { /* 栈操作失败不影响视图 */ }
+                return;
+            }
+            // 10) 首页列表视图 → 最小化到后台（微信同款，不杀进程）
+            sysApp.minimizeApp();
+        });
+    }
+
     // "新的朋友"浮层位于聊天视图（main-chat）内，而入口在通讯录面板（列表视图）：
     // 移动端点击入口需先切入聊天视图使浮层可见；关闭浮层后退回列表视图
     // 同样注册在 capture 阶段（与进入聊天委托同理，避免动态重建 DOM 后 closest 失效）

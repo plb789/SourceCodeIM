@@ -21,6 +21,11 @@
     // 服务器地址硬编码，禁止用户修改
     var DEFAULT_SERVER = 'https://im.sxgyxny.com';
 
+    // 阶段二百一十七：capacitor.config.json 已配置 server.url 直启远程域——
+    // WebView 起始页即为服务器域（Capacitor 桥注入该域，isNative 恒真），
+    // 这里同域直接放行，不再显示连接横幅、不再多余重载
+    if (location.host === DEFAULT_SERVER.replace(/^https?:\/\//i, '')) return;
+
     function jump() {
         window.location.replace(DEFAULT_SERVER + '/?__app=1');
     }

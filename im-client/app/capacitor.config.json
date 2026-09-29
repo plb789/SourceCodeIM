@@ -6,7 +6,8 @@
     "allowMixedContent": true
   },
   "server": {
-    "androidScheme": "http",
+    "url": "https://im.sxgyxny.com",
+    "androidScheme": "https",
     "allowNavigation": ["*"]
   }
 }
