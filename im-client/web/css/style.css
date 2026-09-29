@@ -3663,11 +3663,17 @@ html.m .mobile-plus-panel:not(.hidden) {
 /* 视频消息气泡：内联播放（微信同款），视频区圆角与气泡一致 */
 .bubble-video {
     padding: 6px !important; /* 视频气泡内边距小于文件卡片（视频画面占主体） */
+    /* 视频宽度上限收在气泡上（border-box 含左右 padding 12）：PC 宽屏维持视频 300px 观感上限；
+       手机窄屏气泡被 .message-bubble 的 max-width:100% 夹得更窄，视频随之收缩不越界 */
+    max-width: 312px;
 }
 
 .bubble-video-el {
     display: block;
-    max-width: 300px;
+    /* 原缺陷：绝对 300px 上限在窄视口（手机气泡可用宽约 246px）下比气泡还宽，
+       video 冲出气泡右缘 60px（376px 视口实测）。改相对气泡宽度 100% 跟随收缩，
+       宽屏时气泡 312px 上限保证视频仍不超过 300px，两端观感一致 */
+    max-width: 100%;
     max-height: 220px;
     border-radius: 6px;
     background: #000;
