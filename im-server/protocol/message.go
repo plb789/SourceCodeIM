@@ -205,6 +205,11 @@ type Message struct {
 	SessionID   uint   `json:"session_id"`      // 阶段七十一：AI 多会话 ID（HISTORY 按会话区间拉历史；0=不区分会话取全量）
 	Clear       bool   `json:"clear,omitempty"` // 阶段七十二：AI_SESSION_DEL 置 true 时为"清空会话"（真删除消息+任务记录，会话行保留；sid=0 允许），缺省 false 维持"删除会话并入默认"语义
 	Platform    string `json:"platform"`        // 阶段六十：登录设备类型（pc=Electron 桌面端；空=Web/手机，Agent 本地执行器按此判定下发）
+	// 阶段二百二十一：断连型 ERROR 标记（仅 SendErrorAndClose 置位：同端互踢/封禁踢出/登录拒绝等发完即断开的错误）。
+	// 普通操作提示 sendError 不置位——已登录态大量非断连 ERROR（如"好友申请已发送成功"）也走 ERROR 帧，
+	// 前端据 kick 精确区分"将被断开的踢出"与"普通提示"，被踢端立即终止自动重连，消除移动网络下
+	// onclose 迟到超 1 秒（原 lastRejectAt 窗口判定失效）导致的 3 秒重连反踢循环
+	Kick bool `json:"kick,omitempty"`
 	// AI 回复 Token 消耗（服务端 usage 归口，随 AI_STREAM_END 结束帧下发；其余消息恒为 0 不序列化）
 	PromptTokens     int `json:"prompt_tokens,omitempty"`
 	CompletionTokens int `json:"completion_tokens,omitempty"`

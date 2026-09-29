@@ -87,6 +87,10 @@ func (c *Client) SendErrorAndClose(content string) {
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeError,
 		Content: content,
+		// 阶段二百二十一：断连型标记——前端收到 kick ERROR 立即终止自动重连。
+		// 原实现仅靠前端 onclose 时 1 秒窗口判定（lastRejectAt），移动网络下连接关闭事件
+		// 迟到超 1 秒即误判"网络断开"→ 3 秒自动重连 → 反踢新登录端 → 双方互踢循环
+		Kick: true,
 	}
 	data, _ := json.Marshal(msg)
 	c.writeMu.Lock()

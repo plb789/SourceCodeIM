@@ -168,10 +168,15 @@
             var _loginPlatform;
             if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
                 _loginPlatform = 'app';
-            } else if (window.desktop) {
-                _loginPlatform = window.__webCallBridge ? 'web' : 'pc';
+            } else if (location.pathname.indexOf('/s/') === 0) {
+                _loginPlatform = 'share';
+            } else if (window.desktop && !window.__webCallBridge) {
+                _loginPlatform = 'pc';
             } else {
-                _loginPlatform = location.pathname.indexOf('/s/') === 0 ? 'share' : '';
+                // 阶段二百二十一修复：纯浏览器 WEB 端原上报 ''（空值在服务端 platformName 归"手机"），
+                // 与旧版手机 APP（同报 ''）构成同端互踢——用户 WEB 端登录即把手机踢下线且双方重连反踢
+                // 形成循环。现统一上报 'web'：web↔web 互踢、与 app/pc 跨端共存，语义与端型命名一致
+                _loginPlatform = 'web';
             }
             send({ msg_type: MSG.LOGIN, from_user: username, content: password, platform: _loginPlatform });
             // 启动心跳
@@ -298,7 +303,10 @@
         if (reconnectTimer) return;
         reconnectTimer = setTimeout(function () {
             reconnectTimer = null;
-            if (!connected && currentUsername) {
+            // 阶段二百二十一：补 loginOk 判定——被踢/登录被拒置 loginOk=false 后，
+            // 此前已排队的重连定时器不得再触发（原判定仅 connected/username，
+            // 存在"处置后挂起定时器仍重连"的竞态漏洞）
+            if (!connected && currentUsername && loginOk) {
                 connect(currentUsername, window._lastPassword || '');
             }
         }, 3000); // 3s 后重连
@@ -320,6 +328,18 @@
         // onclose 据此判定为服务端拒绝而非网络断开，阻断自动重连防循环）
         if (msg.msg_type === MSG.ERROR) {
             lastRejectAt = Date.now();
+            // 阶段二百二十一：断连型踢出立即终止自动重连——服务端 SendErrorAndClose（同端互踢/
+            // 封禁踢出/登录拒绝）下发的 ERROR 帧带 kick 标记（普通操作提示 sendError 不带）。
+            // 原实现仅靠 onclose 时 1 秒窗口（lastRejectAt）判定，移动网络/公网下连接关闭事件
+            // 迟到超 1 秒即误判"网络断开"→ 3 秒自动重连 → 把新登录端反踢下线 → 双方互踢循环
+            // （服务端日志表现为每 3 秒一次"同端互踢"）。已登录态收到 kick 即刻处置，不等 onclose
+            if (msg.kick) {
+                loginOk = false;
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            }
         }
         if (msg.msg_type === MSG.LOGIN_RESP) {
             // 登录失败提示修复：记录登录成功标记（新格式 content 为 JSON result='ok'，旧格式 content 为 'ok' 字符串），
