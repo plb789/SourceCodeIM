@@ -125,6 +125,7 @@
     // 普通会话显示 image-btn/file-btn，AI 智能体会话隐藏本两按钮并显示「+」附件菜单，显隐归口 syncAgentUiForConversation）
     var imageBtn = document.getElementById('image-btn');
     var fileBtn = document.getElementById('file-btn');
+    var cameraBtn = document.getElementById('camera-btn'); // 阶段二百二十四：拍摄入口（微信同款自绘相机页，仅 APP 端，相机页归口 js/camera-page.js）
     var imageInput = document.getElementById('image-input');
     var fileInput = document.getElementById('file-input');
     var agentWsBtn = document.getElementById('agent-ws-btn'); // 阶段六十一：Agent 工作区/沙箱白名单入口（仅 PC 端本地执行器可用）
@@ -4500,6 +4501,22 @@
     window.__imSendVoice = sendVoiceMessage;
     // mobile.js 无 Toast 归口（showToast 为本文件私有），别名挂载复用全站单实例 Toast
     window.__imToast = showToast;
+
+    // 阶段二百二十四：拍摄发送归口——相机页（js/camera-page.js）确认成片后调用，
+    // 按当前会话类型分流到既有发送链路（零新协议）：私聊走 sendFile（内部按 isImageName/isVideoName
+    // 自动分流图片气泡/文件视频链路，含三层大文件分流），群聊图片走 sendGroupImage、
+    // 视频/其他走 sendGroupFile；AI 会话拍摄入口已隐藏，防御性忽略
+    window.__imSendCameraFile = function (file) {
+        if (!file) return;
+        if (currentChatUser === '') { showToast(I18N.t('请先选择会话')); return; }
+        if (isGroupTarget(currentChatUser)) {
+            if (isImageName(file.name)) sendGroupImage(file);
+            else sendGroupFile(file);
+            return;
+        }
+        if (isAIAgent(currentChatUser)) return;
+        sendFile(file);
+    };
 
     // 阶段三十二：分片直传活动表（uploadId → 状态），取消时据此中止在途 XHR
     var activeChunkUploads = {};
@@ -18848,6 +18865,9 @@
         if (attachBtn) attachBtn.classList.toggle('hidden', !targetIsAgent);
         if (imageBtn) imageBtn.classList.toggle('hidden', targetIsAgent);
         if (fileBtn) fileBtn.classList.toggle('hidden', targetIsAgent);
+        // 阶段二百二十四：拍摄入口仅 APP 端可用（window.Capacitor 口径与文件卡片下载按钮一致），
+        // 且随 AI 会话隐藏（与图片/文件按钮同判定口径）
+        if (cameraBtn) cameraBtn.classList.toggle('hidden', targetIsAgent || !window.Capacitor);
         // 阶段一百一十七：审批模式盾牌显隐归 setAgentMode（上方已调用，仅 Agent 任务模式开启时显示）
         return targetIsAgent; // 阶段一百三十八修复：openConversation 后续控制台恢复逻辑仍需该判定值（回归：注释声明后未声明变量抛 ReferenceError 中断切换会话）
     }
@@ -20984,6 +21004,8 @@
         if (attachBtn) attachBtn.classList.toggle('hidden', !chatIsAI);
         if (imageBtn) imageBtn.classList.toggle('hidden', chatIsAI);
         if (fileBtn) fileBtn.classList.toggle('hidden', chatIsAI);
+        // 阶段二百二十四：拍摄入口与图片/文件按钮同判定口径（仅 APP 端 + 非 AI 会话，本函数覆盖未选会话等全部刷新路径）
+        if (cameraBtn) cameraBtn.classList.toggle('hidden', chatIsAI || !window.Capacitor);
     }
 
     // ===== 消息渲染 =====

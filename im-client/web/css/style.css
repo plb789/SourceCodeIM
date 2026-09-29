@@ -17809,3 +17809,348 @@ html.m #grp-mask #grp-cancel::before {
 html.m #grp-mask #grp-ok {
     flex: 1;
 }
+
+/* ===================== 阶段二百二十四：拍摄相机页（微信同款自绘全屏相机，仅 APP 端入口） =====================
+   取景 getUserMedia + MediaRecorder（与通话/WebRTC 同一权限桥接链路，零新增原生插件）；
+   黑色沉浸 UI（相机页独立于主题明暗，微信同款）；确认/激活等语义色仍归口 var(--primary) 随主题变化；
+   录制红为微信录制语义色（#fa5151，与全局危险色同族），非主题色不随明暗切换 */
+.camera-page {
+    position: fixed;
+    inset: 0;
+    z-index: 2300; /* 高于移动端图片查看层（2200）：相机从聊天直接进入，退出后原层不可达 */
+    background: #000;
+    user-select: none;
+    -webkit-user-select: none;
+    animation: camFadeIn 0.18s ease-out;
+}
+.camera-page.hidden { display: none; }
+@keyframes camFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* 取景器：首帧就绪才淡入（同扫一扫 #qr-video 方案，规避 WebView 原生视频层海报闪现） */
+#cam-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.22s ease;
+}
+#cam-video.live {
+    visibility: visible;
+    opacity: 1;
+}
+/* 前摄镜像预览（微信同款自拍观感；成片同步镜像保证所见即所得） */
+.camera-page.front #cam-video {
+    transform: scaleX(-1);
+}
+
+/* 拍照白闪反馈层 */
+.cam-flash-layer {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 3;
+}
+.cam-flash-layer.on {
+    animation: camFlash 0.18s ease-out;
+}
+@keyframes camFlash {
+    0% { opacity: 0.9; }
+    100% { opacity: 0; }
+}
+
+/* 顶部栏：关闭（左）+ 闪光灯（右），渐变压暗保证白色图标可读 */
+.cam-topbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+    z-index: 4;
+}
+.cam-ico-btn {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s;
+}
+.cam-ico-btn:active {
+    background: rgba(255, 255, 255, 0.3);
+}
+/* 闪光灯开启态：主题色激活语义（随主题变化） */
+.cam-ico-btn.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+/* 录制计时（录制中显示于快门上方） */
+.cam-rec-timer {
+    position: absolute;
+    left: 50%;
+    bottom: 200px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    z-index: 4;
+    pointer-events: none;
+}
+.cam-rec-timer .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #fa5151;
+    animation: camBlink 1s ease-in-out infinite;
+}
+@keyframes camBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+.camera-page.recording .cam-rec-timer {
+    display: flex;
+}
+
+/* 上滑取消提示（录制中显示，armed 态高亮） */
+.cam-cancel-tip {
+    position: absolute;
+    left: 50%;
+    bottom: 240px;
+    transform: translateX(-50%);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    z-index: 4;
+    pointer-events: none;
+    transition: color 0.12s;
+}
+.cam-cancel-tip svg {
+    display: block;
+}
+.camera-page.recording .cam-cancel-tip {
+    display: flex;
+}
+.camera-page.cancel-armed .cam-cancel-tip {
+    color: #fa5151;
+    font-weight: 600;
+}
+
+/* 底部控制区：相册 | 快门 | 翻转 */
+.cam-bottom {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 30px;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+    z-index: 4;
+}
+.cam-side-btn {
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s;
+}
+.cam-side-btn:active {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* 快门：外圈进度环 + 白色按钮；录制中按钮芯收缩为红色圆角方（微信同款） */
+.cam-shutter-wrap {
+    position: relative;
+    width: 104px;
+    height: 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cam-ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+    pointer-events: none;
+}
+.cam-ring-bg,
+.cam-ring-fg {
+    fill: none;
+    stroke-width: 3;
+}
+.cam-ring-bg {
+    stroke: rgba(255, 255, 255, 0.22);
+}
+.cam-ring-fg {
+    stroke: #fa5151;
+    stroke-linecap: round;
+    stroke-dasharray: 301.6; /* 2πr, r=48 */
+    stroke-dashoffset: 301.6;
+    opacity: 0;
+}
+.camera-page.recording .cam-ring-fg {
+    opacity: 1;
+}
+#cam-shutter {
+    position: relative;
+    width: 76px;
+    height: 76px;
+    border-radius: 50%;
+    border: 4px solid #fff;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    touch-action: none; /* 长按/滑动手势不受浏览器默认触摸行为干扰 */
+    -webkit-tap-highlight-color: transparent;
+}
+.cam-shutter-core {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    background: #fff;
+    transition: all 0.18s ease;
+}
+.camera-page.recording .cam-shutter-core {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #fa5151;
+}
+.camera-page.cancel-armed #cam-shutter {
+    border-color: #fa5151;
+}
+
+/* 成片预览层（照片/视频共用：全屏媒体 + 顶部返回 + 底部 取消/确认） */
+.cam-preview {
+    position: absolute;
+    inset: 0;
+    background: #000;
+    z-index: 5;
+    animation: camFadeIn 0.15s ease-out;
+}
+.cam-preview.hidden { display: none; }
+.cam-pv-media {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* 预览完整成片（与取景 cover 裁切不同，微信同款完整回看） */
+    background: #000;
+}
+.cam-pv-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), transparent);
+    z-index: 2;
+}
+.cam-pv-dur {
+    position: absolute;
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    left: 62px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    z-index: 2;
+}
+.cam-pv-bar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.6), transparent);
+    z-index: 2;
+}
+.cam-pv-btn {
+    min-width: 88px;
+    height: 40px;
+    border: none;
+    border-radius: 20px;
+    font-size: 15px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity 0.15s;
+}
+.cam-pv-btn:active {
+    opacity: 0.85;
+}
+.cam-pv-btn.ghost {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+}
+.cam-pv-btn.ok {
+    background: var(--primary); /* 确认动作跟随主题色 */
+    color: #fff;
+    font-weight: 600;
+}
+
+/* 相机页内自绘 Toast（页内层级高于控制区，避免被黑色沉浸层吞掉全局 Toast） */
+.cam-toast {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 72%;
+    padding: 10px 18px;
+    border-radius: 10px;
+    background: rgba(30, 30, 30, 0.92);
+    color: #fff;
+    font-size: 14px;
+    text-align: center;
+    z-index: 6;
+    pointer-events: none;
+    animation: camFadeIn 0.15s ease-out;
+}
+.cam-toast.hidden { display: none; }

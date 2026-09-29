@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.45">
+    <link rel="stylesheet" href="/css/style.css?v=3.46">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -522,6 +522,11 @@
                     <button id="file-btn" class="tool-btn hidden" title="发送文件">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16v10z"/></svg>
                     </button>
+                    <!-- 阶段二百二十四：拍摄按钮（微信同款自绘相机页入口）——仅 APP 端显示（chat.js 显隐归口：
+                         window.Capacitor 且非 AI 会话，与图片/文件按钮同判定；WEB/PC 恒隐藏零影响） -->
+                    <button id="camera-btn" class="tool-btn hidden" title="拍摄">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M9.4 4 8 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-4l-1.4-2H9.4zM12 8.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+                    </button>
                     <!-- 阶段一百九十二：AI 智能体会话保留输入区左下角「+」附件菜单（TRAE CN 同款），见 input-footer 与 #attach-panel -->
                     <!-- 阶段一百五十四：积分红包按钮（微信同款红包，私聊/群聊可用，AI 智能体会话隐藏；
                          金额计算/扣款/领取/退回全部服务端归口，前端仅展示） -->
@@ -656,6 +661,13 @@
                     <button class="mp-item" data-target="image-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></span>
                         <span class="mp-label">相册</span>
+                    </button>
+                    <!-- 阶段二百二十四：拍摄入口（微信同款自绘相机页）——点击仅转发 camera-btn（零逻辑复制），
+                         显隐镜像 camera-btn（chat.js 按 window.Capacitor+会话类型控制，WEB/PC 恒隐藏）；
+                         相机页归口 js/camera-page.js，成片经 __imSendCameraFile 走既有发送链路 -->
+                    <button class="mp-item" data-target="camera-btn">
+                        <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M9.4 4 8 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-4l-1.4-2H9.4zM12 8.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg></span>
+                        <span class="mp-label">拍摄</span>
                     </button>
                     <button class="mp-item" data-target="file-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M20 6h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 12H4V8h16v10z"/></svg></span>
@@ -2216,7 +2228,9 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.150"></script>
+    <script src="/js/chat.js?v=3.151"></script>
+    <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
+    <script src="/js/camera-page.js?v=1.0"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>
