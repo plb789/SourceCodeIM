@@ -10,7 +10,7 @@
     // 主题跟随：与主窗口同 origin 共享 localStorage（chat.js 键 im_theme：light/dark/system），
     // style.css 按 html[data-theme] 切换变量；system 模式由 CSS 媒体查询分支自行判定深浅
     try {
-        var t = localStorage.getItem('im_theme') || 'light';
+        var t = localStorage.getItem('im_theme') || 'dark'; // 阶段二百四十一：无偏好默认深色
         document.documentElement.setAttribute('data-theme', t);
     } catch (err) { /* localStorage 不可用时保持默认浅色 */ }
 

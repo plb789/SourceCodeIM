@@ -79,13 +79,17 @@
         system: '<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>'
     };
     function syncThemeBtn() {
-        var cur = localStorage.getItem('im_theme') || 'system';
+        var cur = localStorage.getItem('im_theme') || 'dark';
+        // 三态图标
         var btn = $('admin-theme-btn');
         btn.innerHTML = THEME_ICONS[cur] || THEME_ICONS.system;
-        btn.title = '当前主题：' + (cur === 'light' ? '浅色' : cur === 'dark' ? '深色' : '跟随系统') + '（点击切换）';
+        // 阶段二百四十一修复：悬停双气泡——点击切换后 title 属性回归致原生+自绘气泡叠出，
+        // 改维护自绘 tooltip 的 data-tip-text（原生 title 永不存在）
+        btn.setAttribute('data-tip-text', '当前主题：' + (cur === 'light' ? '浅色' : cur === 'dark' ? '深色' : '跟随系统') + '（点击切换）');
+        btn.removeAttribute('title');
     }
     $('admin-theme-btn').addEventListener('click', function () {
-        var cur = localStorage.getItem('im_theme') || 'light';
+        var cur = localStorage.getItem('im_theme') || 'dark'; // 阶段二百四十一：无偏好默认深色
         var next = cur === 'light' ? 'dark' : (cur === 'dark' ? 'system' : 'light');
         applyTheme(next);
         syncThemeBtn();

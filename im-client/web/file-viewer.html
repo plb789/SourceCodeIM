@@ -23,7 +23,7 @@
     <script>
         (function () {
             var t = 'light';
-            try { t = localStorage.getItem('im_theme') || 'light'; } catch (e) {}
+            try { t = localStorage.getItem('im_theme') || 'dark'; } catch (e) {}
             var dark = t === 'dark' || (t === 'system' &&
                 window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
             document.documentElement.setAttribute('data-theme', t);
@@ -641,7 +641,7 @@
         var fvSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
         function fvThemeRaw() {
             var t = 'light';
-            try { t = localStorage.getItem('im_theme') || 'light'; } catch (e) {}
+            try { t = localStorage.getItem('im_theme') || 'dark'; } catch (e) {}
             return t;
         }
         function fvThemeDark() {

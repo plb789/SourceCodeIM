@@ -182,7 +182,8 @@ function resolveBootDark() {
     var t = themeStoreLoad();
     // 阶段一百五十一补丁：无持久化偏好（首启/文件缺失）原实现恒浅色初值——改为跟随系统深浅
     //（与渲染层首绘引导、chat.js getTheme 默认 system 三方一致，深色系统首启窗口底不再浅色）
-    if (t === '') t = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+    // 阶段二百四十一：无偏好默认深色（原跟随系统——渲染层 index.html/chat.js 同步改）
+    if (t === '') t = 'dark';
     bootDarkCache = t === 'dark' || (t === 'system' && nativeTheme.shouldUseDarkColors);
     return bootDarkCache;
 }

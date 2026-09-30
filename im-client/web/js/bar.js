@@ -7,7 +7,7 @@
     // 主题跟随：与主窗口同 origin 共享 localStorage（chat.js getTheme 键 im_theme：light/dark/system），
     // system 模式跟随系统深浅（媒体查询与 chat.js titlebarIsDark 同源逻辑）
     try {
-        var t = localStorage.getItem('im_theme') || 'light';
+        var t = localStorage.getItem('im_theme') || 'dark'; // 阶段二百四十一：无偏好默认深色
         var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         if (!dark) document.documentElement.classList.add('light');
     } catch (err) { /* localStorage 不可用时保持默认深色 */ }
@@ -15,7 +15,7 @@
     var schemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
     var themeHandler = function () {
         try {
-            var t2 = localStorage.getItem('im_theme') || 'light';
+            var t2 = localStorage.getItem('im_theme') || 'dark'; // 阶段二百四十一：无偏好默认深色
             if (t2 === 'system') document.documentElement.classList.toggle('light', !schemeQuery.matches);
         } catch (err) { /* 忽略 */ }
     };

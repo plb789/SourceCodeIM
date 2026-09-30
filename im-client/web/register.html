@@ -122,8 +122,8 @@
         'use strict';
 
         // ===== 主题初始化（与 chat.js getTheme 同规则：localStorage im_theme，light/dark/system） =====
-        var savedTheme = 'light';
-        try { savedTheme = localStorage.getItem('im_theme') || 'light'; } catch (e) {}
+        var savedTheme = 'dark';
+        try { savedTheme = localStorage.getItem('im_theme') || 'dark'; } catch (e) {} // 阶段二百四十一：无偏好默认深色
         document.documentElement.setAttribute('data-theme', savedTheme);
 
         var usernameEl = document.getElementById('reg-username');

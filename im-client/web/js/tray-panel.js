@@ -4,9 +4,9 @@
 (function () {
     // 主题跟随：读取主界面存储的主题偏好（面板与主页面同源，localStorage 共享）
     try {
-        var t = localStorage.getItem('im_theme');
-        if (t) document.documentElement.setAttribute('data-theme', t);
-    } catch (e) {}
+        var t = localStorage.getItem('im_theme') || 'dark'; // 阶段二百四十一：无偏好默认深色
+        document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
 
     var listEl = document.getElementById('tp-list');
     var emptyEl = document.getElementById('tp-empty');

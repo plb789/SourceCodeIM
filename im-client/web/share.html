@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -12,7 +12,7 @@
         (function () {
             var t = '';
             try { t = localStorage.getItem('im_theme') || ''; } catch (e) { t = ''; }
-            if (t !== 'light' && t !== 'dark' && t !== 'system') t = 'system';
+            if (t !== 'light' && t !== 'dark' && t !== 'system') t = 'dark'; // 阶段二百四十一：无偏好默认深色（原跟随系统）
             var dark = t === 'dark' || (t === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
             document.documentElement.setAttribute('data-theme', t);
             document.documentElement.style.background = dark ? '#111111' : '#f5f5f5';

@@ -59,7 +59,8 @@
             try {
                 var t = localStorage.getItem('im_theme');
                 if (t === 'dark') dark = true;
-                else if (t === '' || t === 'system' || t === null) {
+                else if (t === null || t === '') dark = true; // 阶段二百四十一：无偏好默认深色（原跟随系统）
+                else if (t === 'system') {
                     dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
                 }
             } catch (eBoot) {

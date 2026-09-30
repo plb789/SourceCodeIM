@@ -695,7 +695,8 @@
     };
     // 原实现：return localStorage.getItem('im_theme') || 'light';（无偏好恒浅色——阶段一百五十一补丁改为
     // 跟随系统，与 index.html 主题首绘引导同值，深色系统用户首启不再先浅后深闪屏）
-    function getTheme() { return localStorage.getItem('im_theme') || 'system'; }
+    // 阶段二百四十一：无偏好默认深色（原跟随系统——阶段一百五十一补丁）
+    function getTheme() { return localStorage.getItem('im_theme') || 'dark'; }
     // ===== 阶段七十七：PC 端自定义标题栏（Electron titleBarOverlay）主题同步 =====
     // 仅 Electron 壳内生效（window.desktop.setTitlebarColors 由 preload 注入，浏览器/手机 APP 不存在自动旁路）；
     // 原生窗口按钮底色/符号色必须与 style.css --titlebar-bg/--titlebar-fg、main.js titleBarOverlay 初值一致（三方同值，改动需同步）
@@ -747,7 +748,11 @@
     // 按当前主题刷新按钮图标与悬停提示
     function renderThemeBtn(theme) {
         themeBtn.innerHTML = themeIcons[theme];
-        themeBtn.title = I18N.t('主题·') + themeNames[theme];
+        // 阶段二百四十一修复：悬停双气泡——原实现重设 btn.title，点击切换后 title 属性回归
+        // （鼠标仍悬停）致原生气泡与自绘气泡叠出；改为直接维护自绘 tooltip 的 data-tip-text，
+        // 原生 title 永不存在（tooltip.js takeText 优先读 data-tip-text，文案同步新主题名）
+        themeBtn.setAttribute('data-tip-text', I18N.t('主题·') + themeNames[theme]);
+        themeBtn.removeAttribute('title');
     }
     applyTheme(getTheme());
     themeBtn.addEventListener('click', function () {
