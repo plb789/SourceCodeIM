@@ -7,6 +7,11 @@
         /* ===== 阶段一百五十五：远程协助观看窗（QQ 同款深色沉浸式，自绘控制条，无边框拖动区在顶部）
            形态：远端屏幕画面铺满（object-fit:contain 保画面完整不裁切）+ 顶部信息条 + 底部控制条
            主题说明：协助界面为固定深色沉浸（不受明暗主题切换影响），强调色取主题绿 #07c160 */
+        /* 阶段二百三十六：WebView 点击高亮修复——与 call-window.html 同批：独立窗口不加载
+           style.css，圆形控制钮点击时方形边界会露出 Android 默认青色高亮块 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
         html, body {
             margin: 0;
             padding: 0;

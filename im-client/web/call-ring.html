@@ -7,6 +7,11 @@
         /* ===== 阶段一百四十一：来电响铃条（微信同款顶部小条，独立 BrowserWindow 承载） =====
            形态：372×100 深色条（头像 + 昵称 + 邀请文案 + 拒绝/接听圆钮），整条可拖动，按钮 no-drag
            主题说明：固定深色沉浸（与通话窗一致），接听钮取主题绿 #07c160 */
+        /* 阶段二百三十六：WebView 点击高亮修复——与 call-window.html 同批：独立窗口不加载
+           style.css，圆形拒绝/接听钮点击时方形边界会露出 Android 默认青色高亮块 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
         html, body {
             margin: 0;
             padding: 0;

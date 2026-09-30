@@ -7,6 +7,11 @@
         /* ===== 阶段一百五十五：被控端协助悬浮条（QQ 同款：贴顶居中小条 + 断开按钮）
            主进程 setContentProtection(true) 防入镜（共享画面看不到本条，本地正常显示）；
            showInactive 不抢焦点（被控端正在操作自己的电脑，弹条不能打断输入） */
+        /* 阶段二百三十六：WebView 点击高亮修复——与 call-window.html 同批：独立窗口不加载
+           style.css，圆形断开钮点击时方形边界会露出 Android 默认青色高亮块 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
         html, body {
             margin: 0;
             padding: 0;
