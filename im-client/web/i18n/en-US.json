@@ -8,6 +8,8 @@
   "显示密码": "Show password",
   "请输入用户名": "Please enter your username",
   "请输入密码": "Please enter your password",
+  "当前服务端暂不支持扫码登录，请使用账号密码登录": "QR login is not supported by the current server, please use account and password",
+  "二维码组件未加载，请刷新页面重试": "QR component not loaded, please refresh and try again",
   "浅色": "Light",
   "深色": "Dark",
   "跟随系统": "Follow system",

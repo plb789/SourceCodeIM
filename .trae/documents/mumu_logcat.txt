@@ -1362,3 +1362,1504 @@ gTag: 12.2437
 09-30 23:42:49.644 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
 ll|10080
 09-30 23:42:49.645 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:45:13.914 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10080
+09-30 23:45:13.914 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10080
+09-30 23:45:13.915 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:45:29.169 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10080 user=0: deletePackageX
+09-30 23:45:29.170 I/ActivityManager( 1291): Killing 5939:com.gengyang.im/u0a80 (adj 50): stop com.gengyang.im due to d
+eletePackageX
+09-30 23:45:29.191 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=91, [ Capabilities: INTERNET&NOT
+_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10080 RequestorUid: 10080 RequestorPkg: com.gengyang.im] ] (release request)
+09-30 23:45:29.192 I/WindowManager( 1291): WIN DEATH: Window{f0e7f88 u0 com.gengyang.im/com.gengyang.im.MainActivity}
+09-30 23:45:29.192 W/InputManager-JNI( 1291): Input channel object 'f0e7f88 com.gengyang.im/com.gengyang.im.MainActivit
+y (client)' was disposed without first being removed with the input manager!
+09-30 23:45:29.195 W/ActivityTaskManager( 1291): Force removing ActivityRecord{76811b2 u0 com.gengyang.im/.MainActivity
+ t142 f}}: app died, no saved state
+09-30 23:45:29.196 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=142 attached=false
+09-30 23:45:29.196 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=142 attached=false
+09-30 23:45:29.197 V/ActivityManager( 1291): Got obituary of 5939:com.gengyang.im
+09-30 23:45:29.198 W/ActivityManager( 1291): java.lang.SecurityException: Caller com.gengyang.im:10080 cannot post for 
+pkg com.gengyang.im in user 0
+09-30 23:45:29.199 W/UsageStatsService( 1291): Unexpected activity event reported! (com.gengyang.im/com.gengyang.im.Mai
+nActivity event : 23 instanceId : 59311065)
+09-30 23:45:29.203 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10080
+09-30 23:45:29.203 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10080
+09-30 23:45:29.204 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:45:29.206 I/PackageManager( 1291): Removing permission com.gengyang.im.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSIO
+N that used to be declared by com.gengyang.im
+09-30 23:45:29.206 I/PackageManager( 1291): Removing permission com.gengyang.im.ACCS that used to be declared by com.ge
+ngyang.im
+09-30 23:45:29.206 I/PackageManager( 1291): Removing permission com.gengyang.im.AGOO that used to be declared by com.ge
+ngyang.im
+09-30 23:45:29.248 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:45:29.248 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:45:29.248 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:45:29.248 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:45:29.274 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10080 user=0: pkg removed
+09-30 23:45:29.293 D/CompanionDeviceManagerService( 1291): onPackageRemoved(packageName = com.gengyang.im, uid = 10080)
+09-30 23:45:29.293 V/StorageManagerService( 1291): Package com.gengyang.im does not have legacy storage
+09-30 23:45:29.293 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =false
+09-30 23:45:29.295 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+09-30 23:45:29.296 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: UninstallAPP	sign: ISasgSf3EA
+IJihqgZc9+IF+9I9Y=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_
+name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0
+e991c3"}
+09-30 23:45:29.297 I/RollbackManager( 1291): broadcast=ACTION_PACKAGE_FULLY_REMOVED pkg=com.gengyang.im
+09-30 23:45:29.297 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:45:29.297 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:45:29.297 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:45:29.306 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:45:29.306 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:45:29.306 I/GameManagerService( 1291): Disabling downscale for com.gengyang.im
+09-30 23:45:29.306 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{207716e com.gengyang.im}
+09-30 23:45:29.310 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:45:29.310 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:45:29.314 I/ConditionProviders( 1291): Disallowing condition provider com.gengyang.im (userSet: true)
+09-30 23:45:29.319 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:45:29.321 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:45:29.321 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{64b97a3 com.gengyang.im}
+09-30 23:45:29.323 I/MediaProvider( 2059): Begin Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:c
+om.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extra
+s) }
+09-30 23:45:29.323 D/MediaProvider( 2059): Deleted 0 Android/media items belonging to com.gengyang.im on /data/user/0/c
+om.android.providers.media.module/databases/external.db
+09-30 23:45:29.324 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:45:29.324 I/MediaProvider( 2059): End Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:com
+.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras)
+ }
+09-30 23:45:29.325 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_FULLY_REMOVED data: package:com.geng
+yang.im com.gengyang.im replacing =false
+09-30 23:45:32.229 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallableState
+(8), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFilePat
+h='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable@db2
+4cde, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrlInde
+x=-1, mChannelType=0, multiUserId = 0}
+09-30 23:45:32.332 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallPendingSt
+ate(10), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFil
+ePath='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable
+@db24cde, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrl
+Index=-1, mChannelType=0, multiUserId = 0}
+09-30 23:45:32.352 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:45:32.397 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:45:32.400 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:45:32.400 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:45:32.402 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:45:32.417 I/PackageDexOptimizer( 1291): Running dexopt (dexoptNeeded=1) on: /data/app/~~oTDDqoo9ADehLvL1R432IQ
+==/com.gengyang.im-93lBIyugBuDrYbNhQaDb2Q==/base.apk pkg=com.gengyang.im isa=x86_64 dexoptFlags=boot_complete,profile_g
+uided,public,enable_hidden_api_checks targetFilter=speed-profile oatDir=/data/app/~~oTDDqoo9ADehLvL1R432IQ==/com.gengya
+ng.im-93lBIyugBuDrYbNhQaDb2Q==/oat classLoaderContext=PCL[]{}
+09-30 23:45:32.417 V/installd( 1158): DexInv: --- BEGIN '/data/app/~~oTDDqoo9ADehLvL1R432IQ==/com.gengyang.im-93lBIyugB
+uDrYbNhQaDb2Q==/base.apk' ---
+09-30 23:45:32.417 V/installd( 1158): Running /apex/com.android.art/bin/dex2oat32 in=base.apk out=/data/app/~~oTDDqoo9A
+DehLvL1R432IQ==/com.gengyang.im-93lBIyugBuDrYbNhQaDb2Q==/oat/x86_64/base.odex
+09-30 23:45:32.450 I/dex2oat32( 6205): /apex/com.android.art/bin/dex2oat32 --input-vdex-fd=-1 --output-vdex-fd=9 --clas
+spath-dir=/data/app/~~oTDDqoo9ADehLvL1R432IQ==/com.gengyang.im-93lBIyugBuDrYbNhQaDb2Q== --class-loader-context=PCL[]{} 
+--compact-dex-level=none --compiler-filter=speed-profile --compilation-reason=install --max-image-block-size=524288 --r
+esolve-startup-const-strings=true --generate-mini-debug-info
+09-30 23:45:32.619 V/installd( 1158): DexInv: --- END '/data/app/~~oTDDqoo9ADehLvL1R432IQ==/com.gengyang.im-93lBIyugBuD
+rYbNhQaDb2Q==/base.apk' (success) ---
+09-30 23:45:32.619 V/BackupManagerService( 1291): [UserID:0] restoreAtInstall pkg=com.gengyang.im token=8 restoreSet=0
+09-30 23:45:32.624 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.packageinstaller/.PackageInst
+alledReceiver
+09-30 23:45:32.624 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMonito
+r
+09-30 23:45:32.624 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:45:32.624 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.store/.install.PackageReceiver
+09-30 23:45:32.624 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_ADDED data: package:com.gengyang.im 
+com.gengyang.im replacing =false
+09-30 23:45:32.624 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_ADDED
+09-30 23:45:32.627 W/DistribAdManager( 2266): trackInstallFinishDistribAd: packageName = com.gengyang.im
+09-30 23:45:32.637 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"apk_insta
+ller":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk","app_name":"即时
+通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"extra"
+:{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: InstallAPP	sign
+: 2i67zN32jOZHGMnX/uHQOZlvxjA=	uid: 1000	json:{"apk_installer":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c014
+59211815af34939f001f3313ea5/im-client.apk","app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_
+version_name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7
+401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:45:32.639 D/CompanionDeviceManagerService( 1291): onPackageModified(packageName = com.gengyang.im)
+09-30 23:45:32.649 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:45:32.650 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:45:32.655 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:45:32.656 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:45:32.685 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:45:37.573 I/ActivityTaskManager( 1291): START u0 {act=android.intent.action.MAIN cat=[android.intent.category.
+LAUNCHER] flg=0x10200000 cmp=com.gengyang.im/.MainActivity bnds=[338,1703][593,2333]} from uid 1000, pid 1585
+09-30 23:45:37.574 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.gengyang.im
+09-30 23:45:37.575 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=143 attached=false
+09-30 23:45:37.603 I/ActivityManager( 1291): Start proc 6233:com.gengyang.im/u0a81 for pre-top-activity {com.gengyang.i
+m/com.gengyang.im.MainActivity}
+09-30 23:45:37.609 I/Zygote  ( 6233): fakeProductInfoIfNeed callded! com.gengyang.im
+09-30 23:45:37.610 I/Zygote  ( 6233): fake Product info com.gengyang.im not matched any pattern
+09-30 23:45:37.610 I/Zygote  ( 6233): fakeProductInfoFromProperties callded! com.gengyang.im
+09-30 23:45:37.622 V/libnb   ( 6233): enter native_bridge2_initialize /data/user/0/com.gengyang.im/code_cache arm64
+09-30 23:45:37.630 W/HP      ( 6233): x_initialize private_dir:/data/user/0/com.gengyang.im/code_cache instruction_set:
+arm64 getMethodShorty:0x7dc7abb3c340 ret:1
+09-30 23:45:37.646 D/NemuJavaHotPatchHelper( 6233): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:45:37.701 V/GraphicsEnvironment( 6233): ANGLE Developer option for 'com.gengyang.im' set to: 'default'
+09-30 23:45:37.701 V/GraphicsEnvironment( 6233): ANGLE GameManagerService for com.gengyang.im: false
+09-30 23:45:37.703 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:143","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":true,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklUC
+AgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdKA
+4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde0
+g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLmE
+r6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dpi
+Gl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpPe
+vJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5d
+tOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi7
+eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJG
+MMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\/
+UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJo
+qVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25RQ
+GdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAAA
+ElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":6233,"uid":10081,"action":"open"}}
+09-30 23:45:37.705 W/Bundle  ( 6233): 	at com.gengyang.im.MainApplication.getMetaValue(MainApplication.java:92)
+09-30 23:45:37.705 W/Bundle  ( 6233): 	at com.gengyang.im.MainApplication.initEmasIfConfigured(MainApplication.java:61)
+09-30 23:45:37.705 W/Bundle  ( 6233): 	at com.gengyang.im.MainApplication.onCreate(MainApplication.java:33)
+09-30 23:45:37.737 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.VariationsSeedServer, isSkip: true
+09-30 23:45:37.752 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:45:37.753 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:45:37.755 I/ActivityManager( 1291): Start proc 6260:com.android.webview:sandboxed_process0:org.chromium.conten
+t.app.SandboxedProcessService0:0/u0i10 for  {com.gengyang.im/org.chromium.content.app.SandboxedProcessService0:0}
+09-30 23:45:37.791 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.ComponentsProviderService, isSkip: true
+09-30 23:45:37.793 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.MetricsUploadService, isSkip: true
+09-30 23:45:37.797 D/NemuJavaHotPatchHelper( 6260): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:45:37.805 D/ConnectivityService( 1291): requestNetwork for uid/pid:10081/6233 activeRequest: null callbackRequ
+est: 93 [NetworkRequest [ REQUEST id=94, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10081 Req
+uestorUid: 10081 RequestorPkg: com.gengyang.im] ]] callback flags: 0 priority: 2147483647
+09-30 23:45:37.806 D/WifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=94, [ Capabilities: INTERNET&NO
+T_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10081 RequestorUid: 10081 RequestorPkg: com.gengyang.im] ]
+09-30 23:45:37.806 D/UntrustedWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=94, [ Capabilities: IN
+TERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10081 RequestorUid: 10081 RequestorPkg: com.gengyang.im] ]
+09-30 23:45:37.806 D/OemPaidWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=94, [ Capabilities: INTE
+RNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10081 RequestorUid: 10081 RequestorPkg: com.gengyang.im] ]
+09-30 23:45:37.889 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:45:37.893 I/ActivityTaskManager( 1291): Displayed com.gengyang.im/.MainActivity: +319ms
+09-30 23:45:37.929 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=nemu.intent.action
+.NEW_TASK dat=package:com.gengyang.im flg=0x10 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:45:37.931 D/NewFileUpdater( 1439): onOpenNewTask focusPkgName set to com.gengyang.im
+09-30 23:45:37.932 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.so\",\"NB_64BIT\":\"true\"}","amp
+_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: LaunchAPP	sign: LHoxwJPM330fnY+kEb2htgl
+gxuI=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","
+error":{"code":0,"msg":"ok"},"extra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.s
+o\",\"NB_64BIT\":\"true\"}","amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:45:37.933 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:45:38.034 W/NewFileUpdater( 1439): MSG_GET_PACKAGE_TAG_INFO, no available new tag for: com.gengyang.im, workin
+gTag: 12.2437
+09-30 23:45:38.077 W/InputManager-JNI( 1291): Input channel object '6e421ca Splash Screen com.gengyang.im (client)' was
+ disposed without first being removed with the input manager!
+09-30 23:45:38.142 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+09-30 23:45:42.872 D/ProfileInstaller( 6233): Installing profile for com.gengyang.im
+09-30 23:45:48.360 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10081
+09-30 23:45:48.360 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10081
+09-30 23:45:48.360 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:49:18.956 I/sxgyxny.com/...( 6233): type=1400 audit(0.0:6466): avc: denied { search } for name="/" dev="sda6" 
+ino=2 scontext=u:r:untrusted_app:s0:c81,c256,c512,c768 tcontext=u:object_r:unlabeled:s0 tclass=dir permissive=1 app=com
+.gengyang.im
+09-30 23:49:18.959 I/com.gengyang.im( 6233): type=1400 audit(0.0:6467): avc: denied { read } for scontext=u:r:untrusted
+_app:s0:c81,c256,c512,c768 tcontext=u:r:init:s0 tclass=unix_stream_socket permissive=1 app=com.gengyang.im
+09-30 23:49:19.126 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10081
+09-30 23:49:19.126 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10081
+09-30 23:49:19.128 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:49:19.718 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10081
+09-30 23:49:19.718 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10081
+09-30 23:49:19.719 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:49:21.553 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10081 user=0: deletePackageX
+09-30 23:49:21.553 I/ActivityManager( 1291): Killing 6233:com.gengyang.im/u0a81 (adj 50): stop com.gengyang.im due to d
+eletePackageX
+09-30 23:49:21.575 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=94, [ Capabilities: INTERNET&NOT
+_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10081 RequestorUid: 10081 RequestorPkg: com.gengyang.im] ] (release request)
+09-30 23:49:21.576 I/WindowManager( 1291): WIN DEATH: Window{b131cc7 u0 com.gengyang.im/com.gengyang.im.MainActivity}
+09-30 23:49:21.576 W/InputManager-JNI( 1291): Input channel object 'b131cc7 com.gengyang.im/com.gengyang.im.MainActivit
+y (client)' was disposed without first being removed with the input manager!
+09-30 23:49:21.577 W/ActivityTaskManager( 1291): Force removing ActivityRecord{17f47be u0 com.gengyang.im/.MainActivity
+ t143 f}}: app died, no saved state
+09-30 23:49:21.578 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=143 attached=false
+09-30 23:49:21.578 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=143 attached=false
+09-30 23:49:21.580 V/ActivityManager( 1291): Got obituary of 6233:com.gengyang.im
+09-30 23:49:21.580 W/UsageStatsService( 1291): Unexpected activity event reported! (com.gengyang.im/com.gengyang.im.Mai
+nActivity event : 23 instanceId : 39065794)
+09-30 23:49:21.580 W/ActivityManager( 1291): java.lang.SecurityException: Caller com.gengyang.im:10081 cannot post for 
+pkg com.gengyang.im in user 0
+09-30 23:49:21.581 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10081
+09-30 23:49:21.581 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10081
+09-30 23:49:21.583 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:49:21.586 I/PackageManager( 1291): Removing permission com.gengyang.im.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSIO
+N that used to be declared by com.gengyang.im
+09-30 23:49:21.586 I/PackageManager( 1291): Removing permission com.gengyang.im.ACCS that used to be declared by com.ge
+ngyang.im
+09-30 23:49:21.586 I/PackageManager( 1291): Removing permission com.gengyang.im.AGOO that used to be declared by com.ge
+ngyang.im
+09-30 23:49:21.619 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:49:21.619 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:49:21.619 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:49:21.619 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:49:21.645 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10081 user=0: pkg removed
+09-30 23:49:21.650 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10081 user=0: pkg removed
+09-30 23:49:21.657 V/StorageManagerService( 1291): Package com.gengyang.im does not have legacy storage
+09-30 23:49:21.657 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =false
+09-30 23:49:21.657 I/RollbackManager( 1291): broadcast=ACTION_PACKAGE_FULLY_REMOVED pkg=com.gengyang.im
+09-30 23:49:21.657 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:49:21.657 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:49:21.657 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:49:21.657 D/CompanionDeviceManagerService( 1291): onPackageRemoved(packageName = com.gengyang.im, uid = 10081)
+09-30 23:49:21.660 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: UninstallAPP	sign: ISasgSf3EA
+IJihqgZc9+IF+9I9Y=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_
+name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0
+e991c3"}
+09-30 23:49:21.660 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+09-30 23:49:21.671 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:49:21.671 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:49:21.671 I/GameManagerService( 1291): Disabling downscale for com.gengyang.im
+09-30 23:49:21.672 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{100b3d6 com.gengyang.im}
+09-30 23:49:21.676 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:49:21.682 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_FULLY_REMOVED data: package:com.geng
+yang.im com.gengyang.im replacing =false
+09-30 23:49:21.685 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:49:21.685 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:49:21.685 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{2950ba com.gengyang.im}
+09-30 23:49:21.687 I/ConditionProviders( 1291): Disallowing condition provider com.gengyang.im (userSet: true)
+09-30 23:49:21.688 I/MediaProvider( 2059): Begin Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:c
+om.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extra
+s) }
+09-30 23:49:21.689 D/MediaProvider( 2059): Deleted 0 Android/media items belonging to com.gengyang.im on /data/user/0/c
+om.android.providers.media.module/databases/external.db
+09-30 23:49:21.690 I/MediaProvider( 2059): End Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:com
+.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras)
+ }
+09-30 23:49:21.690 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:49:21.691 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:49:30.139 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallableState
+(8), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFilePat
+h='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable@af6
+a3fa, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrlInde
+x=-1, mChannelType=0, multiUserId = 0}
+09-30 23:49:30.141 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallPendingSt
+ate(10), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFil
+ePath='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable
+@af6a3fa, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrl
+Index=-1, mChannelType=0, multiUserId = 0}
+09-30 23:49:30.165 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:49:30.210 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:49:30.212 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:49:30.213 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:49:30.214 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:49:30.231 I/PackageDexOptimizer( 1291): Running dexopt (dexoptNeeded=1) on: /data/app/~~GlZ_azJf2XT8ZBaT_iFHqA
+==/com.gengyang.im-liK27OhcHNGgO9blnrM74A==/base.apk pkg=com.gengyang.im isa=x86_64 dexoptFlags=boot_complete,profile_g
+uided,public,enable_hidden_api_checks targetFilter=speed-profile oatDir=/data/app/~~GlZ_azJf2XT8ZBaT_iFHqA==/com.gengya
+ng.im-liK27OhcHNGgO9blnrM74A==/oat classLoaderContext=PCL[]{}
+09-30 23:49:30.231 V/installd( 1158): DexInv: --- BEGIN '/data/app/~~GlZ_azJf2XT8ZBaT_iFHqA==/com.gengyang.im-liK27OhcH
+NGgO9blnrM74A==/base.apk' ---
+09-30 23:49:30.231 V/installd( 1158): Running /apex/com.android.art/bin/dex2oat32 in=base.apk out=/data/app/~~GlZ_azJf2
+XT8ZBaT_iFHqA==/com.gengyang.im-liK27OhcHNGgO9blnrM74A==/oat/x86_64/base.odex
+09-30 23:49:30.262 I/dex2oat32( 6522): /apex/com.android.art/bin/dex2oat32 --input-vdex-fd=-1 --output-vdex-fd=9 --clas
+spath-dir=/data/app/~~GlZ_azJf2XT8ZBaT_iFHqA==/com.gengyang.im-liK27OhcHNGgO9blnrM74A== --class-loader-context=PCL[]{} 
+--compact-dex-level=none --compiler-filter=speed-profile --compilation-reason=install --max-image-block-size=524288 --r
+esolve-startup-const-strings=true --generate-mini-debug-info
+09-30 23:49:30.436 V/installd( 1158): DexInv: --- END '/data/app/~~GlZ_azJf2XT8ZBaT_iFHqA==/com.gengyang.im-liK27OhcHNG
+gO9blnrM74A==/base.apk' (success) ---
+09-30 23:49:30.437 V/BackupManagerService( 1291): [UserID:0] restoreAtInstall pkg=com.gengyang.im token=9 restoreSet=0
+09-30 23:49:30.443 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_ADDED data: package:com.gengyang.im 
+com.gengyang.im replacing =false
+09-30 23:49:30.444 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_ADDED
+09-30 23:49:30.452 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.packageinstaller/.PackageInst
+alledReceiver
+09-30 23:49:30.453 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMonito
+r
+09-30 23:49:30.453 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:49:30.453 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.store/.install.PackageReceiver
+09-30 23:49:30.455 W/DistribAdManager( 2266): trackInstallFinishDistribAd: packageName = com.gengyang.im
+09-30 23:49:30.460 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"apk_insta
+ller":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk","app_name":"即时
+通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"extra"
+:{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: InstallAPP	sign
+: 2i67zN32jOZHGMnX/uHQOZlvxjA=	uid: 1000	json:{"apk_installer":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c014
+59211815af34939f001f3313ea5/im-client.apk","app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_
+version_name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7
+401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:49:30.472 D/CompanionDeviceManagerService( 1291): onPackageModified(packageName = com.gengyang.im)
+09-30 23:49:30.472 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:49:30.472 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:49:30.480 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:49:30.481 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:49:30.500 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:49:32.739 I/ActivityTaskManager( 1291): START u0 {act=android.intent.action.MAIN cat=[android.intent.category.
+LAUNCHER] flg=0x10200000 cmp=com.gengyang.im/.MainActivity bnds=[338,1703][593,2333]} from uid 1000, pid 1585
+09-30 23:49:32.741 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.gengyang.im
+09-30 23:49:32.741 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=144 attached=false
+09-30 23:49:32.753 I/ActivityManager( 1291): Start proc 6547:com.gengyang.im/u0a82 for pre-top-activity {com.gengyang.i
+m/com.gengyang.im.MainActivity}
+09-30 23:49:32.755 I/Zygote  ( 6547): fakeProductInfoIfNeed callded! com.gengyang.im
+09-30 23:49:32.758 I/Zygote  ( 6547): fake Product info com.gengyang.im not matched any pattern
+09-30 23:49:32.758 I/Zygote  ( 6547): fakeProductInfoFromProperties callded! com.gengyang.im
+09-30 23:49:32.765 V/libnb   ( 6547): enter native_bridge2_initialize /data/user/0/com.gengyang.im/code_cache arm64
+09-30 23:49:32.774 W/HP      ( 6547): x_initialize private_dir:/data/user/0/com.gengyang.im/code_cache instruction_set:
+arm64 getMethodShorty:0x7dc7abb3c340 ret:1
+09-30 23:49:32.788 D/NemuJavaHotPatchHelper( 6547): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:49:32.845 V/GraphicsEnvironment( 6547): ANGLE Developer option for 'com.gengyang.im' set to: 'default'
+09-30 23:49:32.845 V/GraphicsEnvironment( 6547): ANGLE GameManagerService for com.gengyang.im: false
+09-30 23:49:32.849 W/Bundle  ( 6547): 	at com.gengyang.im.MainApplication.getMetaValue(MainApplication.java:92)
+09-30 23:49:32.849 W/Bundle  ( 6547): 	at com.gengyang.im.MainApplication.initEmasIfConfigured(MainApplication.java:61)
+09-30 23:49:32.849 W/Bundle  ( 6547): 	at com.gengyang.im.MainApplication.onCreate(MainApplication.java:33)
+09-30 23:49:32.853 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:144","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":true,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklUC
+AgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdKA
+4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde0
+g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLmE
+r6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dpi
+Gl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpPe
+vJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5d
+tOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi7
+eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJG
+MMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\/
+UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJo
+qVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25RQ
+GdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAAA
+ElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":6547,"uid":10082,"action":"open"}}
+09-30 23:49:32.887 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.VariationsSeedServer, isSkip: true
+09-30 23:49:32.902 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:49:32.905 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:49:32.906 I/ActivityManager( 1291): Start proc 6574:com.android.webview:sandboxed_process0:org.chromium.conten
+t.app.SandboxedProcessService0:0/u0i11 for  {com.gengyang.im/org.chromium.content.app.SandboxedProcessService0:0}
+09-30 23:49:32.946 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.ComponentsProviderService, isSkip: true
+09-30 23:49:32.948 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.MetricsUploadService, isSkip: true
+09-30 23:49:32.952 D/NemuJavaHotPatchHelper( 6574): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:49:32.959 D/ConnectivityService( 1291): requestNetwork for uid/pid:10082/6547 activeRequest: null callbackRequ
+est: 96 [NetworkRequest [ REQUEST id=97, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 Req
+uestorUid: 10082 RequestorPkg: com.gengyang.im] ]] callback flags: 0 priority: 2147483647
+09-30 23:49:32.959 D/WifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=97, [ Capabilities: INTERNET&NO
+T_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:49:32.959 D/UntrustedWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=97, [ Capabilities: IN
+TERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:49:32.959 D/OemPaidWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=97, [ Capabilities: INTE
+RNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:49:33.052 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:49:33.056 I/ActivityTaskManager( 1291): Displayed com.gengyang.im/.MainActivity: +316ms
+09-30 23:49:33.073 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=nemu.intent.action
+.NEW_TASK dat=package:com.gengyang.im flg=0x10 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:49:33.074 D/NewFileUpdater( 1439): onOpenNewTask focusPkgName set to com.gengyang.im
+09-30 23:49:33.074 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.so\",\"NB_64BIT\":\"true\"}","amp
+_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: LaunchAPP	sign: LHoxwJPM330fnY+kEb2htgl
+gxuI=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","
+error":{"code":0,"msg":"ok"},"extra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.s
+o\",\"NB_64BIT\":\"true\"}","amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:49:33.077 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:49:33.191 W/NewFileUpdater( 1439): MSG_GET_PACKAGE_TAG_INFO, no available new tag for: com.gengyang.im, workin
+gTag: 12.2437
+09-30 23:49:33.237 W/InputManager-JNI( 1291): Input channel object '5e977c3 Splash Screen com.gengyang.im (client)' was
+ disposed without first being removed with the input manager!
+09-30 23:49:33.296 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+09-30 23:49:38.879 D/ProfileInstaller( 6547): Installing profile for com.gengyang.im
+09-30 23:49:43.506 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:49:43.506 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:49:43.507 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:52:03.347 W/System.err( 6547): 	at com.gengyang.im.BackgroundIMPlugin.openOverlaySettings(BackgroundIMPlugin.j
+ava:281)
+09-30 23:52:03.348 I/ActivityTaskManager( 1291): START u0 {act=android.settings.action.MANAGE_OVERLAY_PERMISSION dat=pa
+ckage:com.gengyang.im flg=0x10000000 cmp=com.android.settings/.Settings$OverlaySettingsActivity} from uid 10082, pid 65
+47
+09-30 23:52:03.349 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.android.settings
+09-30 23:52:03.350 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=145 attached=false
+09-30 23:52:03.627 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:52:03.627 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:52:03.628 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:52:03.706 I/ActivityTaskManager( 1291): Displayed com.android.settings/.Settings$OverlaySettingsActivity: +355
+ms
+09-30 23:52:04.162 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:52:04.162 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:52:04.164 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:52:25.210 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:52:25.210 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:52:25.211 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:52:25.215 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:52:25.215 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:52:25.217 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:52:25.265 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=145 attached=false
+09-30 23:52:25.265 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=145 attached=false
+09-30 23:52:25.268 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:144","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":false,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklU
+CAgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdK
+A4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde
+0g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLm
+Er6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dp
+iGl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpP
+evJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5
+dtOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi
+7eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJ
+GMMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\
+/UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJ
+oqVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25R
+QGdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAA
+AElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":6547,"uid":10082,"action":"open"}}
+09-30 23:52:25.466 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:52:25.466 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:52:25.467 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:54:25.255 D/NewFileUpdater( 1439): onTabOpen focusPkgName set to com.gengyang.im
+09-30 23:58:16.206 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:58:16.209 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:58:16.210 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:58:16.212 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+09-30 23:58:16.213 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10082 user=-1: installPackageLI
+09-30 23:58:16.214 I/PackageManager( 1291): Update package com.gengyang.im code path from /data/app/~~GlZ_azJf2XT8ZBaT_
+iFHqA==/com.gengyang.im-liK27OhcHNGgO9blnrM74A== to /data/app/~~BT7LM_jSCBY6cS4qe-6Jcg==/com.gengyang.im-jet-_7ZxZX5g3n
+VGiqBioA==; Retain data and using new
+09-30 23:58:16.214 I/ActivityManager( 1291): Killing 6547:com.gengyang.im/u0a82 (adj 0): stop com.gengyang.im due to in
+stallPackageLI
+09-30 23:58:16.216 W/ActivityTaskManager( 1291): Force removing ActivityRecord{9940a4b u0 com.gengyang.im/.MainActivity
+ t144 f}}: app died, no saved state
+09-30 23:58:16.218 W/InputManager-JNI( 1291): Input channel object '3de2e30 com.gengyang.im/com.gengyang.im.MainActivit
+y (client)' was disposed without first being removed with the input manager!
+09-30 23:58:16.228 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=97, [ Capabilities: INTERNET&NOT
+_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ] (release request)
+09-30 23:58:16.235 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=144 attached=false
+09-30 23:58:16.235 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=144 attached=false
+09-30 23:58:16.240 V/ActivityManager( 1291): Got obituary of 6547:com.gengyang.im
+09-30 23:58:16.243 I/PackageDexOptimizer( 1291): Running dexopt (dexoptNeeded=1) on: /data/app/~~BT7LM_jSCBY6cS4qe-6Jcg
+==/com.gengyang.im-jet-_7ZxZX5g3nVGiqBioA==/base.apk pkg=com.gengyang.im isa=x86_64 dexoptFlags=boot_complete,profile_g
+uided,public,enable_hidden_api_checks targetFilter=speed-profile oatDir=/data/app/~~BT7LM_jSCBY6cS4qe-6Jcg==/com.gengya
+ng.im-jet-_7ZxZX5g3nVGiqBioA==/oat classLoaderContext=PCL[]{}
+09-30 23:58:16.244 V/installd( 1158): DexInv: --- BEGIN '/data/app/~~BT7LM_jSCBY6cS4qe-6Jcg==/com.gengyang.im-jet-_7ZxZ
+X5g3nVGiqBioA==/base.apk' ---
+09-30 23:58:16.244 V/installd( 1158): Running /apex/com.android.art/bin/dex2oat32 in=base.apk out=/data/app/~~BT7LM_jSC
+BY6cS4qe-6Jcg==/com.gengyang.im-jet-_7ZxZX5g3nVGiqBioA==/oat/x86_64/base.odex
+09-30 23:58:16.244 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:58:16.287 I/dex2oat32( 6786): /apex/com.android.art/bin/dex2oat32 --input-vdex-fd=-1 --output-vdex-fd=9 --clas
+spath-dir=/data/app/~~BT7LM_jSCBY6cS4qe-6Jcg==/com.gengyang.im-jet-_7ZxZX5g3nVGiqBioA== --class-loader-context=PCL[]{} 
+--compact-dex-level=none --compiler-filter=speed-profile --compilation-reason=install --max-image-block-size=524288 --r
+esolve-startup-const-strings=true --generate-mini-debug-info
+09-30 23:58:16.463 V/installd( 1158): DexInv: --- END '/data/app/~~BT7LM_jSCBY6cS4qe-6Jcg==/com.gengyang.im-jet-_7ZxZX5
+g3nVGiqBioA==/base.apk' (success) ---
+09-30 23:58:16.466 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10082 user=0: pkg removed
+09-30 23:58:16.476 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:58:16.476 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:58:16.476 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:58:16.477 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+09-30 23:58:16.479 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10082 user=0: pkg removed
+09-30 23:58:16.484 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =true
+09-30 23:58:16.491 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_ADDED
+09-30 23:58:16.491 D/CompanionDeviceManagerService( 1291): onPackageModified(packageName = com.gengyang.im)
+09-30 23:58:16.491 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.packageinstaller/.PackageInst
+alledReceiver
+09-30 23:58:16.491 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMonito
+r
+09-30 23:58:16.491 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:58:16.491 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.store/.install.PackageReceiver
+09-30 23:58:16.491 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_ADDED data: package:com.gengyang.im 
+com.gengyang.im replacing =true
+09-30 23:58:16.496 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REPLACED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedRecei
+ver
+09-30 23:58:16.496 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REPLACED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.netease.nemu_vapi_android.nemu/com
+.netease.nemu_vapi_android.receiver.LaunchReceiver
+09-30 23:58:16.500 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:58:16.502 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"apk_path"
+:"socket:[55682]","app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","erro
+r":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"has_installed":1,"token":"9ac7401e-4200-4575-a658-3c7ad
+0e991c3"}}	type: InstallAPP	sign: kWjt3y/cPjfXO4rtciOhJLYPuuE=	uid: 1000	json:{"apk_path":"socket:[55682]","app_name":"
+即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"extr
+a":{"amp_name":"即时通讯","ampid":0},"has_installed":1,"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:58:16.525 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:58:16.537 I/ActivityTaskManager( 1291): START u0 {flg=0x10000000 cmp=com.gengyang.im/.MainActivity} from uid 2
+000, pid 6821
+09-30 23:58:16.538 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.gengyang.im
+09-30 23:58:16.539 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=146 attached=false
+09-30 23:58:16.548 I/ActivityManager( 1291): Start proc 6824:com.gengyang.im/u0a82 for pre-top-activity {com.gengyang.i
+m/com.gengyang.im.MainActivity}
+09-30 23:58:16.548 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:146","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":true,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklUC
+AgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdKA
+4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde0
+g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLmE
+r6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dpi
+Gl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpPe
+vJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5d
+tOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi7
+eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJG
+MMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\/
+UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJo
+qVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25RQ
+GdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAAA
+ElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":6824,"uid":10082,"action":"open"}}
+09-30 23:58:16.548 I/Zygote  ( 6824): fakeProductInfoIfNeed callded! com.gengyang.im
+09-30 23:58:16.549 I/Zygote  ( 6824): fake Product info com.gengyang.im not matched any pattern
+09-30 23:58:16.549 I/Zygote  ( 6824): fakeProductInfoFromProperties callded! com.gengyang.im
+09-30 23:58:16.557 V/libnb   ( 6824): enter native_bridge2_initialize /data/user/0/com.gengyang.im/code_cache arm64
+09-30 23:58:16.568 W/HP      ( 6824): x_initialize private_dir:/data/user/0/com.gengyang.im/code_cache instruction_set:
+arm64 getMethodShorty:0x7dc7abb3c340 ret:1
+09-30 23:58:16.589 D/NemuJavaHotPatchHelper( 6824): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:58:16.632 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:58:16.650 V/GraphicsEnvironment( 6824): ANGLE Developer option for 'com.gengyang.im' set to: 'default'
+09-30 23:58:16.651 V/GraphicsEnvironment( 6824): ANGLE GameManagerService for com.gengyang.im: false
+09-30 23:58:16.655 W/Bundle  ( 6824): 	at com.gengyang.im.MainApplication.getMetaValue(MainApplication.java:92)
+09-30 23:58:16.655 W/Bundle  ( 6824): 	at com.gengyang.im.MainApplication.initEmasIfConfigured(MainApplication.java:61)
+09-30 23:58:16.655 W/Bundle  ( 6824): 	at com.gengyang.im.MainApplication.onCreate(MainApplication.java:33)
+09-30 23:58:16.656 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+09-30 23:58:16.720 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:58:16.721 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:58:16.724 I/ActivityManager( 1291): Start proc 6867:com.android.webview:sandboxed_process0:org.chromium.conten
+t.app.SandboxedProcessService0:0/u0i12 for  {com.gengyang.im/org.chromium.content.app.SandboxedProcessService0:0}
+09-30 23:58:16.765 D/NemuJavaHotPatchHelper( 6867): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+09-30 23:58:16.765 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.ComponentsProviderService, isSkip: true
+09-30 23:58:16.768 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.MetricsUploadService, isSkip: true
+09-30 23:58:16.780 D/ConnectivityService( 1291): requestNetwork for uid/pid:10082/6824 activeRequest: null callbackRequ
+est: 99 [NetworkRequest [ REQUEST id=100, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 Re
+questorUid: 10082 RequestorPkg: com.gengyang.im] ]] callback flags: 0 priority: 2147483647
+09-30 23:58:16.782 D/WifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=100, [ Capabilities: INTERNET&N
+OT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:58:16.782 D/UntrustedWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=100, [ Capabilities: I
+NTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:58:16.782 D/OemPaidWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=100, [ Capabilities: INT
+ERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ]
+09-30 23:58:16.909 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+09-30 23:58:16.927 I/ActivityTaskManager( 1291): Displayed com.gengyang.im/.MainActivity: +378ms
+09-30 23:58:16.980 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=nemu.intent.action
+.NEW_TASK dat=package:com.gengyang.im flg=0x10 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:58:16.983 D/NewFileUpdater( 1439): onOpenNewTask focusPkgName set to com.gengyang.im
+09-30 23:58:16.984 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.so\",\"NB_64BIT\":\"true\"}","amp
+_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: LaunchAPP	sign: LHoxwJPM330fnY+kEb2htgl
+gxuI=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","
+error":{"code":0,"msg":"ok"},"extra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.s
+o\",\"NB_64BIT\":\"true\"}","amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+09-30 23:58:16.986 D/updatePackage( 1585): version com.gengyang.im 1
+09-30 23:58:17.062 W/InputManager-JNI( 1291): Input channel object '8c1f0ea Splash Screen com.gengyang.im (client)' was
+ disposed without first being removed with the input manager!
+09-30 23:58:17.101 W/NewFileUpdater( 1439): MSG_GET_PACKAGE_TAG_INFO, no available new tag for: com.gengyang.im, workin
+gTag: 12.2437
+09-30 23:58:22.218 D/ProfileInstaller( 6824): Installing profile for com.gengyang.im
+09-30 23:58:27.154 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:58:27.155 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:58:27.155 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:58:58.544 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:58:58.544 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:58:58.545 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:58:59.137 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:58:59.137 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:58:59.138 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:59:01.211 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10082 user=0: deletePackageX
+09-30 23:59:01.212 I/ActivityManager( 1291): Killing 6824:com.gengyang.im/u0a82 (adj 50): stop com.gengyang.im due to d
+eletePackageX
+09-30 23:59:01.230 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=100, [ Capabilities: INTERNET&NO
+T_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10082 RequestorUid: 10082 RequestorPkg: com.gengyang.im] ] (release request)
+09-30 23:59:01.231 I/WindowManager( 1291): WIN DEATH: Window{c2eac4e u0 com.gengyang.im/com.gengyang.im.MainActivity}
+09-30 23:59:01.231 W/InputManager-JNI( 1291): Input channel object 'c2eac4e com.gengyang.im/com.gengyang.im.MainActivit
+y (client)' was disposed without first being removed with the input manager!
+09-30 23:59:01.239 I/Binder:1158_6( 1158): type=1400 audit(0.0:7411): avc: denied { read } for name="com.gengyang.im" d
+ev="sdc3" ino=4325934 scontext=u:r:init:s0 tcontext=u:object_r:app_data_file:s0:c82,c256,c512,c768 tclass=dir permissiv
+e=1
+09-30 23:59:01.239 I/Binder:1158_6( 1158): type=1400 audit(0.0:7412): avc: denied { open } for path="/data/data/com.gen
+gyang.im" dev="sdc3" ino=4325934 scontext=u:r:init:s0 tcontext=u:object_r:app_data_file:s0:c82,c256,c512,c768 tclass=di
+r permissive=1
+09-30 23:59:01.239 I/Binder:1158_6( 1158): type=1400 audit(0.0:7413): avc: denied { search } for name="com.gengyang.im"
+ dev="sdc3" ino=4325934 scontext=u:r:init:s0 tcontext=u:object_r:app_data_file:s0:c82,c256,c512,c768 tclass=dir permiss
+ive=1
+09-30 23:59:01.239 I/Binder:1158_6( 1158): type=1400 audit(0.0:7414): avc: denied { getattr } for path="/data/data/com.
+gengyang.im/app_textures" dev="sdc3" ino=4325992 scontext=u:r:init:s0 tcontext=u:object_r:app_data_file:s0:c82,c256,c51
+2,c768 tclass=dir permissive=1
+09-30 23:59:01.246 W/ActivityTaskManager( 1291): Force removing ActivityRecord{abc4f60 u0 com.gengyang.im/.MainActivity
+ t146 f}}: app died, no saved state
+09-30 23:59:01.248 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=146 attached=false
+09-30 23:59:01.248 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=146 attached=false
+09-30 23:59:01.248 V/ActivityManager( 1291): Got obituary of 6824:com.gengyang.im
+09-30 23:59:01.252 I/PackageManager( 1291): Removing permission com.gengyang.im.AGOO that used to be declared by com.ge
+ngyang.im
+09-30 23:59:01.252 I/PackageManager( 1291): Removing permission com.gengyang.im.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSIO
+N that used to be declared by com.gengyang.im
+09-30 23:59:01.252 I/PackageManager( 1291): Removing permission com.gengyang.im.ACCS that used to be declared by com.ge
+ngyang.im
+09-30 23:59:01.255 W/UsageStatsService( 1291): Unexpected activity event reported! (com.gengyang.im/com.gengyang.im.Mai
+nActivity event : 23 instanceId : 94155877)
+09-30 23:59:01.255 W/ActivityManager( 1291): java.lang.SecurityException: Caller com.gengyang.im:10082 cannot post for 
+pkg com.gengyang.im in user 0
+09-30 23:59:01.279 E/TargetSdkResolver( 1469): Failed looking up ApplicationInfo for com.gengyang.im
+09-30 23:59:01.279 E/TargetSdkResolver( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:59:01.279 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10082
+09-30 23:59:01.280 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10082
+09-30 23:59:01.281 W/NotificationEntry( 1755): Couldn't look up com.gengyang.im
+09-30 23:59:01.281 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:59:01.289 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:59:01.289 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:59:01.289 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+09-30 23:59:01.289 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+09-30 23:59:01.304 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10082 user=0: pkg removed
+09-30 23:59:01.312 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+09-30 23:59:01.312 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+09-30 23:59:01.312 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+09-30 23:59:01.312 D/CompanionDeviceManagerService( 1291): onPackageRemoved(packageName = com.gengyang.im, uid = 10082)
+09-30 23:59:01.312 V/StorageManagerService( 1291): Package com.gengyang.im does not have legacy storage
+09-30 23:59:01.313 I/RollbackManager( 1291): broadcast=ACTION_PACKAGE_FULLY_REMOVED pkg=com.gengyang.im
+09-30 23:59:01.314 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+09-30 23:59:01.314 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =false
+09-30 23:59:01.315 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: UninstallAPP	sign: ISasgSf3EA
+IJihqgZc9+IF+9I9Y=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_
+name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0
+e991c3"}
+09-30 23:59:01.319 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:59:01.319 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:59:01.319 I/GameManagerService( 1291): Disabling downscale for com.gengyang.im
+09-30 23:59:01.320 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{dca63dd com.gengyang.im}
+09-30 23:59:01.326 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+09-30 23:59:01.326 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+09-30 23:59:01.327 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:59:01.327 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{57f977 com.gengyang.im}
+09-30 23:59:01.330 I/ConditionProviders( 1291): Disallowing condition provider com.gengyang.im (userSet: true)
+09-30 23:59:01.331 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+09-30 23:59:01.331 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_FULLY_REMOVED data: package:com.geng
+yang.im com.gengyang.im replacing =false
+09-30 23:59:01.332 I/MediaProvider( 2059): Begin Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:c
+om.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extra
+s) }
+09-30 23:59:01.332 D/MediaProvider( 2059): Deleted 0 Android/media items belonging to com.gengyang.im on /data/user/0/c
+om.android.providers.media.module/databases/external.db
+09-30 23:59:01.336 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+09-30 23:59:01.342 I/MediaProvider( 2059): End Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:com
+.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras)
+ }
+10-01 00:01:11.504 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallableState
+(8), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFilePat
+h='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable@963
+aee3, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrlInde
+x=-1, mChannelType=0, multiUserId = 0}
+10-01 00:01:11.506 D/LauncherInstallationHel( 2266): notify: pkgData = PkgData{mId=-1, mChannelName='null', mChannelIco
+n='null', mPkgName='com.gengyang.im', mVersionCode=1, mVersionName='null', mDownloadUrl='null', mSize=0, mMd5='null', m
+Gifts=null, mCoupons=null, mUpdateTips=null, defaultChnl=false, mQrcode='null', mForceUpdateVersion=0, mRemindUpdateVer
+sion=0, mAutoDownloadTime=0, mDownloadBackupUrlLists=[], mAppId=0, mAppData=id: -1 name: 即时通讯 , mState=InstallPendingSt
+ate(10), mTempStateValue=8, mUpgradeable=false, mInstalled=false, mLocalPkgVersion=-1, mDownloadId=-1, mPercent=0, mFil
+ePath='/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk', mLocalIcon=android.graphics.drawable.BitmapDrawable
+@963aee3, mDownloadStartTime=0, mDownloadCostTime=0, mInstallStartTime=0, mRedownloadCount=0, mCurrentBackUpDownloadUrl
+Index=-1, mChannelType=0, multiUserId = 0}
+10-01 00:01:11.526 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:01:11.575 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:01:11.578 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:01:11.579 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:01:11.581 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:01:11.599 I/PackageDexOptimizer( 1291): Running dexopt (dexoptNeeded=1) on: /data/app/~~IuR0KuJ6m1tPVNXJ-AVIeQ
+==/com.gengyang.im-YR__fGDDraeH28NxAHMHqQ==/base.apk pkg=com.gengyang.im isa=x86_64 dexoptFlags=boot_complete,profile_g
+uided,public,enable_hidden_api_checks targetFilter=speed-profile oatDir=/data/app/~~IuR0KuJ6m1tPVNXJ-AVIeQ==/com.gengya
+ng.im-YR__fGDDraeH28NxAHMHqQ==/oat classLoaderContext=PCL[]{}
+10-01 00:01:11.599 V/installd( 1158): DexInv: --- BEGIN '/data/app/~~IuR0KuJ6m1tPVNXJ-AVIeQ==/com.gengyang.im-YR__fGDDr
+aeH28NxAHMHqQ==/base.apk' ---
+10-01 00:01:11.599 V/installd( 1158): Running /apex/com.android.art/bin/dex2oat32 in=base.apk out=/data/app/~~IuR0KuJ6m
+1tPVNXJ-AVIeQ==/com.gengyang.im-YR__fGDDraeH28NxAHMHqQ==/oat/x86_64/base.odex
+10-01 00:01:11.642 I/dex2oat32( 7088): /apex/com.android.art/bin/dex2oat32 --input-vdex-fd=-1 --output-vdex-fd=9 --clas
+spath-dir=/data/app/~~IuR0KuJ6m1tPVNXJ-AVIeQ==/com.gengyang.im-YR__fGDDraeH28NxAHMHqQ== --class-loader-context=PCL[]{} 
+--compact-dex-level=none --compiler-filter=speed-profile --compilation-reason=install --max-image-block-size=524288 --r
+esolve-startup-const-strings=true --generate-mini-debug-info
+10-01 00:01:11.823 V/installd( 1158): DexInv: --- END '/data/app/~~IuR0KuJ6m1tPVNXJ-AVIeQ==/com.gengyang.im-YR__fGDDrae
+H28NxAHMHqQ==/base.apk' (success) ---
+10-01 00:01:11.824 V/BackupManagerService( 1291): [UserID:0] restoreAtInstall pkg=com.gengyang.im token=b restoreSet=0
+10-01 00:01:11.831 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_ADDED data: package:com.gengyang.im 
+com.gengyang.im replacing =false
+10-01 00:01:11.831 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.packageinstaller/.PackageInst
+alledReceiver
+10-01 00:01:11.831 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMonito
+r
+10-01 00:01:11.831 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 00:01:11.831 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.store/.install.PackageReceiver
+10-01 00:01:11.832 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_ADDED
+10-01 00:01:11.838 W/DistribAdManager( 2266): trackInstallFinishDistribAd: packageName = com.gengyang.im
+10-01 00:01:11.842 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"apk_insta
+ller":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c01459211815af34939f001f3313ea5/im-client.apk","app_name":"即时
+通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"extra"
+:{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: InstallAPP	sign
+: 2i67zN32jOZHGMnX/uHQOZlvxjA=	uid: 1000	json:{"apk_installer":"host-file-mumu-app-store","apk_path":"/mnt/shared/1c014
+59211815af34939f001f3313ea5/im-client.apk","app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_
+version_name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"has_installed":0,"token":"9ac7
+401e-4200-4575-a658-3c7ad0e991c3"}
+10-01 00:01:11.851 D/CompanionDeviceManagerService( 1291): onPackageModified(packageName = com.gengyang.im)
+10-01 00:01:11.851 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+10-01 00:01:11.852 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_CHANGED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+10-01 00:01:11.853 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:01:11.858 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:01:11.885 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:01:48.652 I/ActivityTaskManager( 1291): START u0 {act=android.intent.action.MAIN cat=[android.intent.category.
+LAUNCHER] flg=0x10200000 cmp=com.gengyang.im/.MainActivity bnds=[338,1703][593,2333]} from uid 1000, pid 1585
+10-01 00:01:48.654 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.gengyang.im
+10-01 00:01:48.654 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=147 attached=false
+10-01 00:01:48.667 I/Zygote  ( 7132): fakeProductInfoIfNeed callded! com.gengyang.im
+10-01 00:01:48.668 I/Zygote  ( 7132): fake Product info com.gengyang.im not matched any pattern
+10-01 00:01:48.668 I/Zygote  ( 7132): fakeProductInfoFromProperties callded! com.gengyang.im
+10-01 00:01:48.670 I/ActivityManager( 1291): Start proc 7132:com.gengyang.im/u0a83 for pre-top-activity {com.gengyang.i
+m/com.gengyang.im.MainActivity}
+10-01 00:01:48.686 V/libnb   ( 7132): enter native_bridge2_initialize /data/user/0/com.gengyang.im/code_cache arm64
+10-01 00:01:48.698 W/HP      ( 7132): x_initialize private_dir:/data/user/0/com.gengyang.im/code_cache instruction_set:
+arm64 getMethodShorty:0x7dc7abb3c340 ret:1
+10-01 00:01:48.721 D/NemuJavaHotPatchHelper( 7132): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+10-01 00:01:48.768 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:147","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":true,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklUC
+AgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdKA
+4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde0
+g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLmE
+r6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dpi
+Gl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpPe
+vJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5d
+tOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi7
+eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJG
+MMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\/
+UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJo
+qVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25RQ
+GdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAAA
+ElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":7132,"uid":10083,"action":"open"}}
+10-01 00:01:48.797 V/GraphicsEnvironment( 7132): ANGLE Developer option for 'com.gengyang.im' set to: 'default'
+10-01 00:01:48.797 V/GraphicsEnvironment( 7132): ANGLE GameManagerService for com.gengyang.im: false
+10-01 00:01:48.802 W/Bundle  ( 7132): 	at com.gengyang.im.MainApplication.getMetaValue(MainApplication.java:92)
+10-01 00:01:48.802 W/Bundle  ( 7132): 	at com.gengyang.im.MainApplication.initEmasIfConfigured(MainApplication.java:61)
+10-01 00:01:48.802 W/Bundle  ( 7132): 	at com.gengyang.im.MainApplication.onCreate(MainApplication.java:33)
+10-01 00:01:48.860 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.VariationsSeedServer, isSkip: true
+10-01 00:01:48.878 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:01:48.880 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:01:48.882 I/ActivityManager( 1291): Start proc 7160:com.android.webview:sandboxed_process0:org.chromium.conten
+t.app.SandboxedProcessService0:0/u0i13 for  {com.gengyang.im/org.chromium.content.app.SandboxedProcessService0:0}
+10-01 00:01:48.929 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.ComponentsProviderService, isSkip: true
+10-01 00:01:48.931 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.MetricsUploadService, isSkip: true
+10-01 00:01:48.936 D/NemuJavaHotPatchHelper( 7160): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+10-01 00:01:48.943 D/ConnectivityService( 1291): requestNetwork for uid/pid:10083/7132 activeRequest: null callbackRequ
+est: 102 [NetworkRequest [ REQUEST id=103, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 R
+equestorUid: 10083 RequestorPkg: com.gengyang.im] ]] callback flags: 0 priority: 2147483647
+10-01 00:01:48.944 D/WifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=103, [ Capabilities: INTERNET&N
+OT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:01:48.944 D/UntrustedWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=103, [ Capabilities: I
+NTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:01:48.944 D/OemPaidWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=103, [ Capabilities: INT
+ERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:01:49.037 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:01:49.042 I/ActivityTaskManager( 1291): Displayed com.gengyang.im/.MainActivity: +388ms
+10-01 00:01:49.058 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=nemu.intent.action
+.NEW_TASK dat=package:com.gengyang.im flg=0x10 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 00:01:49.060 D/NewFileUpdater( 1439): onOpenNewTask focusPkgName set to com.gengyang.im
+10-01 00:01:49.061 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.so\",\"NB_64BIT\":\"true\"}","amp
+_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: LaunchAPP	sign: LHoxwJPM330fnY+kEb2htgl
+gxuI=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","
+error":{"code":0,"msg":"ok"},"extra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.s
+o\",\"NB_64BIT\":\"true\"}","amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+10-01 00:01:49.070 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:01:49.175 W/NewFileUpdater( 1439): MSG_GET_PACKAGE_TAG_INFO, no available new tag for: com.gengyang.im, workin
+gTag: 12.2437
+10-01 00:01:49.227 W/InputManager-JNI( 1291): Input channel object '762f1b4 Splash Screen com.gengyang.im (client)' was
+ disposed without first being removed with the input manager!
+10-01 00:01:49.280 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+10-01 00:01:51.033 I/com.gengyang.im( 7132): type=1400 audit(0.0:7704): avc: denied { read } for scontext=u:r:untrusted
+_app:s0:c83,c256,c512,c768 tcontext=u:r:init:s0 tclass=unix_stream_socket permissive=1
+10-01 00:01:54.123 D/ProfileInstaller( 7132): Installing profile for com.gengyang.im
+10-01 00:01:59.508 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:01:59.510 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:01:59.510 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:02:23.365 I/ActivityTaskManager( 1291): START u0 {act=android.intent.action.GET_CONTENT cat=[android.intent.ca
+tegory.OPENABLE] typ=image/jpeg cmp=com.android.documentsui/.picker.PickActivity (has extras)} from uid 10083, pid 7132
+10-01 00:02:23.367 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.android.documentsui
+10-01 00:02:23.373 W/ActivityTaskManager( 1291): Tried to set launchTime (0) < mLastActivityLaunchTime (325312)
+10-01 00:02:23.427 I/ActivityTaskManager( 1291): Displayed com.android.documentsui/.picker.PickActivity: +60ms
+10-01 00:02:23.591 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:02:23.591 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:02:23.593 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:02:24.176 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:02:24.176 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:02:24.177 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:02:26.398 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:02:26.398 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:02:26.400 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:02:26.405 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:02:26.405 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:02:26.406 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:02:26.668 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:02:26.668 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:02:26.669 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:06:40.422 I/ActivityTaskManager( 1291): START u0 {act=android.content.pm.action.REQUEST_PERMISSIONS pkg=com.an
+droid.permissioncontroller cmp=com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity (has extras)} f
+rom uid 10083, pid 7132
+10-01 00:06:40.424 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.android.permissioncontroller
+10-01 00:06:40.428 W/ActivityTaskManager( 1291): Tried to set launchTime (0) < mLastActivityLaunchTime (3165896)
+10-01 00:06:40.471 I/ActivityTaskManager( 1291): Displayed com.android.permissioncontroller/.permission.ui.GrantPermiss
+ionsActivity: +46ms
+10-01 00:06:40.477 V/GrantPermissionsViewModel( 2039): Permission grant result requestId=2351355453759717647 callingUid
+=10083 callingPackage=com.gengyang.im permission=android.permission.RECORD_AUDIO isImplicit=false result=4
+10-01 00:06:40.640 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:06:40.640 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:06:40.641 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:06:40.707 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:06:40.707 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:06:40.710 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:06:40.993 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:06:40.994 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:06:40.995 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:07:43.121 I/ActivityTaskManager( 1291): START u0 {act=android.content.pm.action.REQUEST_PERMISSIONS pkg=com.an
+droid.permissioncontroller cmp=com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity (has extras)} f
+rom uid 10083, pid 7132
+10-01 00:07:43.122 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.android.permissioncontroller
+10-01 00:07:43.126 W/ActivityTaskManager( 1291): Tried to set launchTime (0) < mLastActivityLaunchTime (6547212)
+10-01 00:07:43.144 I/ActivityTaskManager( 1291): Displayed com.android.permissioncontroller/.permission.ui.GrantPermiss
+ionsActivity: +20ms
+10-01 00:07:43.157 V/GrantPermissionsViewModel( 2039): Permission grant result requestId=-9177324854481793307 callingUi
+d=10083 callingPackage=com.gengyang.im permission=android.permission.CAMERA isImplicit=false result=4
+10-01 00:07:43.185 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:07:43.187 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:07:43.338 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:07:43.338 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:07:43.342 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:07:43.346 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:07:43.375 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:07:43.375 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:07:43.378 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:07:43.673 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:07:43.673 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:07:43.675 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:07:49.768 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:25:38.148 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:27:37.202 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:27:37.202 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:27:37.350 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:27:46.021 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:27:46.022 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:27:46.165 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:28:09.124 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:28:09.125 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:28:09.267 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:28:20.232 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:28:20.232 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:28:20.232 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:28:20.431 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:28:20.431 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:28:20.572 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:28:28.527 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:30:20.205 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 1) and Came
+ra API version 2
+10-01 00:30:20.205 I/Camera2ClientBase( 1150): Camera 1: Opened. Client: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:30:20.346 I/MediaFocusControl( 1291): requestAudioFocus() from uid/pid 10083/7132 AA=USAGE_MEDIA/CONTENT_TYPE_
+MUSIC clientId=android.media.AudioManager@2d3a2b9org.chromium.content.browser.AudioFocusDelegate@3c6d6fe callingPack=co
+m.gengyang.im req=1 flags=0x0 sdk=34
+10-01 00:31:29.400 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:31:29.400 I/Camera2ClientBase( 1150): Closed Camera 1. Client was: com.gengyang.im (PID 7132, UID 10083)
+10-01 00:35:54.823 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:35:54.827 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:35:54.828 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:35:54.830 I/NativeHelper( 1291): com.gengyang.im use max number of library use abi:x86_64 index:0
+10-01 00:35:54.831 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=-1: installPackageLI
+10-01 00:35:54.832 I/PackageManager( 1291): Update package com.gengyang.im code path from /data/app/~~IuR0KuJ6m1tPVNXJ-
+AVIeQ==/com.gengyang.im-YR__fGDDraeH28NxAHMHqQ== to /data/app/~~opcpVRhDVf1PzfbMAh9V9w==/com.gengyang.im-WqhqQOznJW1Oqi
+lr0ywA2Q==; Retain data and using new
+10-01 00:35:54.832 I/ActivityManager( 1291): Killing 7132:com.gengyang.im/u0a83 (adj 0): stop com.gengyang.im due to in
+stallPackageLI
+10-01 00:35:54.871 I/WindowManager( 1291): WIN DEATH: Window{7e7ff5 u0 com.gengyang.im/com.gengyang.im.MainActivity}
+10-01 00:35:54.871 W/InputManager-JNI( 1291): Input channel object '7e7ff5 com.gengyang.im/com.gengyang.im.MainActivity
+ (client)' was disposed without first being removed with the input manager!
+10-01 00:35:54.872 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=103, [ Capabilities: INTERNET&NO
+T_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ] (release request)
+10-01 00:35:54.881 W/ActivityTaskManager( 1291): Force removing ActivityRecord{3b84cfa u0 com.gengyang.im/.MainActivity
+ t147 f}}: app died, no saved state
+10-01 00:35:54.882 I/PackageDexOptimizer( 1291): Running dexopt (dexoptNeeded=1) on: /data/app/~~opcpVRhDVf1PzfbMAh9V9w
+==/com.gengyang.im-WqhqQOznJW1Oqilr0ywA2Q==/base.apk pkg=com.gengyang.im isa=x86_64 dexoptFlags=boot_complete,profile_g
+uided,public,enable_hidden_api_checks targetFilter=speed-profile oatDir=/data/app/~~opcpVRhDVf1PzfbMAh9V9w==/com.gengya
+ng.im-WqhqQOznJW1Oqilr0ywA2Q==/oat classLoaderContext=PCL[]{}
+10-01 00:35:54.883 V/installd( 1158): DexInv: --- BEGIN '/data/app/~~opcpVRhDVf1PzfbMAh9V9w==/com.gengyang.im-WqhqQOznJ
+W1Oqilr0ywA2Q==/base.apk' ---
+10-01 00:35:54.883 V/installd( 1158): Running /apex/com.android.art/bin/dex2oat32 in=base.apk out=/data/app/~~opcpVRhDV
+f1PzfbMAh9V9w==/com.gengyang.im-WqhqQOznJW1Oqilr0ywA2Q==/oat/x86_64/base.odex
+10-01 00:35:54.886 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=147 attached=false
+10-01 00:35:54.886 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=147 attached=false
+10-01 00:35:54.888 V/ActivityManager( 1291): Got obituary of 7132:com.gengyang.im
+10-01 00:35:54.897 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:35:54.939 I/dex2oat32( 7830): /apex/com.android.art/bin/dex2oat32 --input-vdex-fd=-1 --output-vdex-fd=9 --clas
+spath-dir=/data/app/~~opcpVRhDVf1PzfbMAh9V9w==/com.gengyang.im-WqhqQOznJW1Oqilr0ywA2Q== --class-loader-context=PCL[]{} 
+--compact-dex-level=none --compiler-filter=speed-profile --compilation-reason=install --max-image-block-size=524288 --r
+esolve-startup-const-strings=true --generate-mini-debug-info
+10-01 00:35:55.123 V/installd( 1158): DexInv: --- END '/data/app/~~opcpVRhDVf1PzfbMAh9V9w==/com.gengyang.im-WqhqQOznJW1
+Oqilr0ywA2Q==/base.apk' (success) ---
+10-01 00:35:55.127 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=0: pkg removed
+10-01 00:35:55.129 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=0: pkg removed
+10-01 00:35:55.136 D/CompanionDeviceManagerService( 1291): onPackageModified(packageName = com.gengyang.im)
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.packageinstaller/.PackageInst
+alledReceiver
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMonito
+r
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 00:35:55.136 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_ADDED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.store/.install.PackageReceiver
+10-01 00:35:55.137 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =true
+10-01 00:35:55.137 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_ADDED data: package:com.gengyang.im 
+com.gengyang.im replacing =true
+10-01 00:35:55.137 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+10-01 00:35:55.139 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_ADDED
+10-01 00:35:55.140 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REPLACED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedRecei
+ver
+10-01 00:35:55.140 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REPLACED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.netease.nemu_vapi_android.nemu/com
+.netease.nemu_vapi_android.receiver.LaunchReceiver
+10-01 00:35:55.145 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:35:55.147 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"apk_path"
+:"socket:[65566]","app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","erro
+r":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"has_installed":1,"token":"9ac7401e-4200-4575-a658-3c7ad
+0e991c3"}}	type: InstallAPP	sign: OFoQ/go1MFgNk9y9+JsXKinoyPI=	uid: 1000	json:{"apk_path":"socket:[65566]","app_name":"
+即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"extr
+a":{"amp_name":"即时通讯","ampid":0},"has_installed":1,"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+10-01 00:35:55.163 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:35:55.194 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=0: clear data
+10-01 00:35:55.195 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=-1: clearApplicationUserDa
+ta
+10-01 00:35:55.217 I/MediaProvider( 2059): Begin Intent { act=android.intent.action.PACKAGE_DATA_CLEARED dat=package:co
+m.gengyang.im flg=0x1000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras
+) }
+10-01 00:35:55.218 D/MediaProvider( 2059): Deleted 0 Android/media items belonging to com.gengyang.im on /data/user/0/c
+om.android.providers.media.module/databases/external.db
+10-01 00:35:55.218 I/MediaProvider( 2059): End Intent { act=android.intent.action.PACKAGE_DATA_CLEARED dat=package:com.
+gengyang.im flg=0x1000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras) 
+}
+10-01 00:35:55.255 I/ActivityTaskManager( 1291): START u0 {flg=0x10000000 cmp=com.gengyang.im/.MainActivity} from uid 2
+000, pid 7884
+10-01 00:35:55.257 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.gengyang.im
+10-01 00:35:55.257 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=148 attached=false
+10-01 00:35:55.269 I/ActivityManager( 1291): Start proc 7892:com.gengyang.im/u0a83 for pre-top-activity {com.gengyang.i
+m/com.gengyang.im.MainActivity}
+10-01 00:35:55.270 I/Zygote  ( 7892): fakeProductInfoIfNeed callded! com.gengyang.im
+10-01 00:35:55.271 I/Zygote  ( 7892): fake Product info com.gengyang.im not matched any pattern
+10-01 00:35:55.271 I/Zygote  ( 7892): fakeProductInfoFromProperties callded! com.gengyang.im
+10-01 00:35:55.277 V/libnb   ( 7892): enter native_bridge2_initialize /data/user/0/com.gengyang.im/code_cache arm64
+10-01 00:35:55.292 W/HP      ( 7892): x_initialize private_dir:/data/user/0/com.gengyang.im/code_cache instruction_set:
+arm64 getMethodShorty:0x7dc7abb3c340 ret:1
+10-01 00:35:55.309 D/NemuJavaHotPatchHelper( 7892): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+10-01 00:35:55.325 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:35:55.356 I/com.gengyang.im( 7892): type=1400 audit(0.0:7936): avc: denied { getattr } for path="/system" dev=
+"sda6" ino=2 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlabeled:s0 tclass=dir permissive=1 
+app=com.gengyang.im
+10-01 00:35:55.356 I/com.gengyang.im( 7892): type=1400 audit(0.0:7937): avc: denied { read } for name="overlay" dev="sd
+a6" ino=4246 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlabeled:s0 tclass=dir permissive=1 
+app=com.gengyang.im
+10-01 00:35:55.356 I/com.gengyang.im( 7892): type=1400 audit(0.0:7938): avc: denied { open } for path="/system/product/
+overlay" dev="sda6" ino=4246 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlabeled:s0 tclass=d
+ir permissive=1 app=com.gengyang.im
+10-01 00:35:55.368 D/RecentTaskMonitor( 1291): VAddressShellNotifier#notifyOpenTab :{"uri":"player\/tab","need_response
+":false,"params":{"id":"task:148","displayId":0,"userId":0,"name":"即时通讯","originName":"即时通讯","packageName":"com.gengyan
+g.im","launcher":false,"newTask":true,"icon":"iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAAXNSR0IArs4c6QAAAARzQklUC
+AgICHwIZIgAAAQJSURBVEiJtZRfaJZVHMc\/5zzP8\/7Z6585pluluUmjXCoVWdBwhkYXky4KaSNqKMHYoIslpBiZg6i7QKNgEKsLb2LgVUQgQThJvREdKA
+4EddOcY76pve3d8z7vOefXxeP2vo+bZlA\/+F0833N+v885v9\/vOQp4GTgCtHC\/aR+dW4ZKZ1FaI84iYRFXLICzC7bfZ7eAXQq4CqxNLGVyLH29m5Wde0
+g3NqO0N78kpkx44xJT335C8dSPYM3DINMKcIACUEvrqN81wLKtbxOsWDUnP8CEaGqCuyNHyX93AKLiopsUIADBmvU8\/vlPpBua4rwic9jYxSH3vsQaVLmE
+r6CcrqF44SQ3v3gHe+v6AkIMSGVoOnINf1k9AC78C2sFEDwFkspCNIsVhVYCwFcvpvj4XETRX4LWmtK1Ma5\/8DwShQmARyo7sOrTn0mtXo84hQ1neH+dpi
+Gl2LDcQ0S4FYK18NkmH7EKBC7\/KVyeDVA61lSujmB1C8XfjiYAOnjqJdJPv4K1CmsFW7JsXK4JFFwtOHJaYcoOFeT48rzl3XUe3c0+p6ZBSGOMwlpwTpPe
+vJNc84YkIL3pNRwBzsaT51xc\/mPXHL8XhOW+QsTHGsUfkc\/Jm46DZwyi0jinKnEWwMc1PJMA+Pg5rJmbF4WQYfB8iTef1HhKYRyYkkUhSMmyIqXZ1qA5d
+tOigmC+8ZWx0UmAmSlgo+pdKc7khbPTBsHdu6ePlEFZzfcXLWuXwLZGhQ7iGxfKcKUAU7PgonISEJ3\/BduxH+UFVXIaq9OVsRRoDOCHjizP1oFe5PcwDi7
+eFroH73CueoqkMD1Aczuqbm1cUwfWxSdzFnBwcDMMboUncosnh1hvqFG817WTXC7H8ePHERE8nBkwZ4ZRG9+CXD3OKcQRu8CBzfDhc5DyAIQwDPF9H6UqJG
+MMURTheR6pVIq2tjacc5w4cSLuCyDojAT7L0jmkJPsYZHsYZHar0VmIpm3sbEx6e3tlZGREam2oaEh2bdvn4RhmNBbWlqk0nIXUj70Kvb2FNbEb1h9AFm\/
+UoYwDFFKkc\/nE+WJoghrLSKS0FtbW5l\/iwAIatAfjaFr1wBxza\/0yXw5RARjzIISOedwzuF5XkLfsWMHyaGl8tPYsmPi7K9MTVdOq5QiCIJEEgCt9QJo
+qVTi9OnTVT0Awa8R9lwS3vhGeOwFQWnp6ekRY4z8G8vn87J9+\/a5vFUAlFCzUpIasnv3bhkfHxdr7T8mHx0dlfb29up4FiR8kO\/du1cmJyelXC6Lc25RQ
+GdnZyIm2eRHMN\/3aWpqorGxkUwmg4jQ1tZGf38\/tbW1dHV1MTw8nIh55Bs8zDOZjPT19cmWLVvuX+PGfwVZxO8AdAAT\/0Pyu0DP30KvtDIxL9z4AAAAA
+ElFTkSuQmCC","canChangeAppOrientation":false,"canReceiveFile":false,"pid":7892,"uid":10083,"action":"open"}}
+10-01 00:35:55.371 V/GraphicsEnvironment( 7892): ANGLE Developer option for 'com.gengyang.im' set to: 'default'
+10-01 00:35:55.372 V/GraphicsEnvironment( 7892): ANGLE GameManagerService for com.gengyang.im: false
+10-01 00:35:55.376 W/Bundle  ( 7892): 	at com.gengyang.im.MainApplication.getMetaValue(MainApplication.java:92)
+10-01 00:35:55.376 W/Bundle  ( 7892): 	at com.gengyang.im.MainApplication.initEmasIfConfigured(MainApplication.java:61)
+10-01 00:35:55.376 W/Bundle  ( 7892): 	at com.gengyang.im.MainApplication.onCreate(MainApplication.java:33)
+10-01 00:35:55.420 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.VariationsSeedServer, isSkip: true
+10-01 00:35:55.434 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:35:55.435 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:35:55.438 I/ActivityManager( 1291): Start proc 7921:com.android.webview:sandboxed_process0:org.chromium.conten
+t.app.SandboxedProcessService0:0/u0i14 for  {com.gengyang.im/org.chromium.content.app.SandboxedProcessService0:0}
+10-01 00:35:55.480 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.ComponentsProviderService, isSkip: true
+10-01 00:35:55.481 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.android_webview.services.MetricsUploadService, isSkip: true
+10-01 00:35:55.489 D/NemuJavaHotPatchHelper( 7921): onHandleBindApplication reportedPackageName:com.gengyang.im isMatch
+JavaPatch:false
+10-01 00:35:55.495 D/ConnectivityService( 1291): requestNetwork for uid/pid:10083/7892 activeRequest: null callbackRequ
+est: 105 [NetworkRequest [ REQUEST id=106, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 R
+equestorUid: 10083 RequestorPkg: com.gengyang.im] ]] callback flags: 0 priority: 2147483647
+10-01 00:35:55.496 D/WifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=106, [ Capabilities: INTERNET&N
+OT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:35:55.496 D/UntrustedWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=106, [ Capabilities: I
+NTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:35:55.496 D/OemPaidWifiNetworkFactory( 1291): got request NetworkRequest [ REQUEST id=106, [ Capabilities: INT
+ERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ]
+10-01 00:35:55.602 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.android.webview, name:org.
+chromium.content.app.SandboxedProcessService0, isSkip: true
+10-01 00:35:55.609 I/ActivityTaskManager( 1291): Displayed com.gengyang.im/.MainActivity: +353ms
+10-01 00:35:55.627 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=nemu.intent.action
+.NEW_TASK dat=package:com.gengyang.im flg=0x10 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 00:35:55.628 D/NewFileUpdater( 1439): onOpenNewTask focusPkgName set to com.gengyang.im
+10-01 00:35:55.629 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.so\",\"NB_64BIT\":\"true\"}","amp
+_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: LaunchAPP	sign: LHoxwJPM330fnY+kEb2htgl
+gxuI=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","
+error":{"code":0,"msg":"ok"},"extra":{"NB":"{\"NB_MD5\":\"6A997A644DC56222DBC85F7856A8EF2C\",\"NB_NAME\":\"libhoudini.s
+o\",\"NB_64BIT\":\"true\"}","amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}
+10-01 00:35:55.630 D/updatePackage( 1585): version com.gengyang.im 1
+10-01 00:35:55.751 W/InputManager-JNI( 1291): Input channel object '1dd7742 Splash Screen com.gengyang.im (client)' was
+ disposed without first being removed with the input manager!
+10-01 00:35:55.787 W/NewFileUpdater( 1439): MSG_GET_PACKAGE_TAG_INFO, no available new tag for: com.gengyang.im, workin
+gTag: 12.2437
+10-01 00:35:55.870 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+10-01 00:36:00.944 D/ProfileInstaller( 7892): Installing profile for com.gengyang.im
+10-01 00:36:06.091 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:36:06.094 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:36:06.094 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:36:17.303 I/com.gengyang.im( 7892): type=1400 audit(0.0:8122): avc: denied { read } for scontext=u:r:untrusted
+_app:s0:c83,c256,c512,c768 tcontext=u:r:init:s0 tclass=unix_stream_socket permissive=1 app=com.gengyang.im
+10-01 00:36:17.303 I/com.gengyang.im( 7892): type=1400 audit(0.0:8123): avc: denied { call } for scontext=u:r:untrusted
+_app:s0:c83,c256,c512,c768 tcontext=u:r:init:s0 tclass=binder permissive=1 app=com.gengyang.im
+10-01 00:36:17.309 I/AudioThread( 7892): type=1400 audit(0.0:8124): avc: denied { transfer } for scontext=u:r:untrusted
+_app:s0:c83,c256,c512,c768 tcontext=u:r:init:s0 tclass=binder permissive=1 app=com.gengyang.im
+10-01 00:36:22.133 I/Chrome_IOThread( 7892): type=1400 audit(0.0:8147): avc: denied { connectto } for path="/dev/socket
+/fwmarkd" scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:r:init:s0 tclass=unix_stream_socket permissive=1 
+app=com.gengyang.im
+10-01 00:36:22.358 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:36:22.358 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:36:22.360 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:36:25.580 I/ActivityTaskManager( 1291): START u0 {act=android.content.pm.action.REQUEST_PERMISSIONS pkg=com.an
+droid.permissioncontroller cmp=com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity (has extras)} f
+rom uid 10083, pid 7892
+10-01 00:36:25.581 I/ActivityTaskManager( 1291): [KeepAlive] disabled for com.android.permissioncontroller
+10-01 00:36:25.607 W/ActivityTaskManager( 1291): Tried to set launchTime (0) < mLastActivityLaunchTime (6609910)
+10-01 00:36:25.640 I/ActivityTaskManager( 1291): Displayed com.android.permissioncontroller/.permission.ui.GrantPermiss
+ionsActivity: +59ms
+10-01 00:36:25.661 V/GrantPermissionsViewModel( 2039): Permission grant result requestId=-8203199498743553891 callingUi
+d=10083 callingPackage=com.gengyang.im permission=android.permission.CAMERA isImplicit=false result=4
+10-01 00:36:25.807 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:36:25.808 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:36:25.835 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:36:25.835 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:36:25.838 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:36:25.996 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:36:25.996 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:36:25.998 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:36:26.285 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:36:26.285 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:36:26.286 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:37:59.309 I/Chrome_InProcGp( 7892): type=1400 audit(0.0:8192): avc: denied { ioctl } for path="/dev/vaddress" 
+dev="tmpfs" ino=134 ioctlcmd=0x4c19 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:device:s0 tcla
+ss=chr_file permissive=1 app=com.gengyang.im
+10-01 00:38:00.127 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:38:00.267 W/ActivityManager( 1291): callingPackage:com.gengyang.im, packageName:com.gengyang.im, name:com.geng
+yang.im.KeepAliveService, isSkip: true
+10-01 00:38:00.266 I/com.gengyang.im( 7892): type=1400 audit(0.0:8193): avc: denied { getattr } for path="/system/frame
+work/framework-res.apk" dev="sda6" ino=2219 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlabe
+led:s0 tclass=file permissive=1 app=com.gengyang.im
+10-01 00:38:00.482 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:38:00.482 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:38:00.482 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:38:05.865 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 00:38:05.865 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 00:38:05.866 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 00:38:42.359 I/com.gengyang.im( 7892): type=1400 audit(0.0:8204): avc: denied { map } for path="/system/product/a
+pp/webview/webview.apk" dev="sda6" ino=4002 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlabe
+led:s0 tclass=file permissive=1 app=com.gengyang.im
+10-01 00:38:42.359 I/com.gengyang.im( 7892): type=1400 audit(0.0:8205): avc: denied { read } for path="/system/product/
+app/webview/webview.apk" dev="sda6" ino=4002 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:unlab
+eled:s0 tclass=file permissive=1 app=com.gengyang.im
+10-01 00:38:42.392 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:38:42.392 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:38:42.503 I/Binder:7892_2( 7892): type=1400 audit(0.0:8206): avc: denied { read write } for name="vaddress" de
+v="tmpfs" ino=134 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:device:s0 tclass=chr_file permis
+sive=1 app=com.gengyang.im
+10-01 00:38:42.503 I/Binder:7892_2( 7892): type=1400 audit(0.0:8207): avc: denied { open } for path="/dev/vaddress" dev
+="tmpfs" ino=134 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:device:s0 tclass=chr_file permiss
+ive=1 app=com.gengyang.im
+10-01 00:38:42.503 I/Binder:7892_2( 7892): type=1400 audit(0.0:8208): avc: denied { map } for path="/dev/vaddress" dev=
+"tmpfs" ino=134 scontext=u:r:untrusted_app:s0:c83,c256,c512,c768 tcontext=u:object_r:device:s0 tclass=chr_file permissi
+ve=1 app=com.gengyang.im
+10-01 00:41:36.737 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:41:36.737 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:44:07.632 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:44:07.632 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:55:30.053 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:55:30.054 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:55:43.816 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:55:43.817 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:57:05.143 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:57:05.143 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 00:57:36.086 I/CameraService( 1150): CameraService::connect call (PID -1 "com.gengyang.im", camera ID 0) and Came
+ra API version 2
+10-01 00:57:36.086 I/Camera2ClientBase( 1150): Camera 0: Opened. Client: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:42.925 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 01:01:42.925 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 01:01:42.926 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 01:01:43.512 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 01:01:43.512 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 01:01:43.513 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 01:01:47.164 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=0: deletePackageX
+10-01 01:01:47.165 I/ActivityManager( 1291): Killing 7892:com.gengyang.im/u0a83 (adj 50): stop com.gengyang.im due to d
+eletePackageX
+10-01 01:01:47.180 W/ActivityTaskManager( 1291): Force removing ActivityRecord{c4602b7 u0 com.gengyang.im/.MainActivity
+ t148 f}}: app died, no saved state
+10-01 01:01:47.180 W/InputManager-JNI( 1291): Input channel object 'c66c457 com.gengyang.im/com.gengyang.im.MainActivit
+y (client)' was disposed without first being removed with the input manager!
+10-01 01:01:47.180 W/UsageStatsService( 1291): Unexpected activity event reported! (com.gengyang.im/com.gengyang.im.Mai
+nActivity event : 23 instanceId : 13874614)
+10-01 01:01:47.182 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=148 attached=false
+10-01 01:01:47.182 W/ActivityTaskManager( 1291): Can't find TaskDisplayArea to determine support for multi window. Task
+ id=148 attached=false
+10-01 01:01:47.184 W/ActivityManager( 1291): java.lang.SecurityException: Caller com.gengyang.im:10083 cannot post for 
+pkg com.gengyang.im in user 0
+10-01 01:01:47.186 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.186 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.186 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.186 D/ConnectivityService( 1291): releasing NetworkRequest [ REQUEST id=106, [ Capabilities: INTERNET&NO
+T_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10083 RequestorUid: 10083 RequestorPkg: com.gengyang.im] ] (release request)
+10-01 01:01:47.186 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.186 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.187 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.187 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.187 I/Camera2ClientBase( 1150): Closed Camera 0. Client was: com.gengyang.im (PID 7892, UID 10083)
+10-01 01:01:47.188 I/PackageManager( 1291): Removing permission com.gengyang.im.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSIO
+N that used to be declared by com.gengyang.im
+10-01 01:01:47.188 I/PackageManager( 1291): Removing permission com.gengyang.im.AGOO that used to be declared by com.ge
+ngyang.im
+10-01 01:01:47.189 I/PackageManager( 1291): Removing permission com.gengyang.im.ACCS that used to be declared by com.ge
+ngyang.im
+10-01 01:01:47.194 V/ActivityManager( 1291): Got obituary of 7892:com.gengyang.im
+10-01 01:01:47.228 E/TargetSdkResolver( 1469): Failed looking up ApplicationInfo for com.gengyang.im
+10-01 01:01:47.228 E/TargetSdkResolver( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+10-01 01:01:47.228 W/NotificationEntry( 1755): Couldn't look up com.gengyang.im
+10-01 01:01:47.228 D/InterruptionStateProvider( 1469): No bubble up: not allowed to bubble: 0|com.gengyang.im|1001|null
+|10083
+10-01 01:01:47.228 D/InterruptionStateProvider( 1469): No heads up: unimportant notification: 0|com.gengyang.im|1001|nu
+ll|10083
+10-01 01:01:47.231 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 01:01:47.234 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+10-01 01:01:47.234 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+10-01 01:01:47.234 E/Icon    ( 1469): Unable to find pkg=com.gengyang.im for icon Icon(typ=RESOURCE pkg=com.gengyang.im
+ id=0x7f0c0000)
+10-01 01:01:47.234 E/Icon    ( 1469): android.content.pm.PackageManager$NameNotFoundException: com.gengyang.im
+10-01 01:01:47.251 I/ActivityManager( 1291): Force stopping com.gengyang.im appid=10083 user=0: pkg removed
+10-01 01:01:47.264 D/CompanionDeviceManagerService( 1291): onPackageRemoved(packageName = com.gengyang.im, uid = 10083)
+10-01 01:01:47.265 I/RollbackManager( 1291): broadcast=ACTION_PACKAGE_FULLY_REMOVED pkg=com.gengyang.im
+10-01 01:01:47.265 V/StorageManagerService( 1291): Package com.gengyang.im does not have legacy storage
+10-01 01:01:47.265 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.android.gallery3d/.app.PackagesMoni
+tor
+10-01 01:01:47.265 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.acc/.AccMsgReceiver
+10-01 01:01:47.266 W/BroadcastQueue( 1291): Background execution not allowed: receiving Intent { act=android.intent.act
+ion.PACKAGE_REMOVED dat=package:com.gengyang.im flg=0x4000010 (has extras) } to com.mumu.launcher/.PackageChangedReceiv
+er
+10-01 01:01:47.266 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_REMOVED data: package:com.gengyang.i
+m com.gengyang.im replacing =false
+10-01 01:01:47.267 D/Watchdog( 1439): upload event: {"architecture":"x86_64","channel":"wegametlbb2","country":"zh-CN",
+"engine":"NEMUX","fchannel":"nochannel-mumu12","language":"zh-Hans","mpid":"0","package":"mumu","product":"","product_v
+ersion":"4.1.22.3677","usage":"0","uuid":"57663430-2000-6a41-978f-c282b241144a","version":"4.1.22.3677","x":{"app_name"
+:"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_name":"1.0","error":{"code":0,"msg":"ok"},"ex
+tra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0e991c3"}}	type: UninstallAPP	sign: ISasgSf3EA
+IJihqgZc9+IF+9I9Y=	uid: 1000	json:{"app_name":"即时通讯","app_package":"com.gengyang.im","app_version_code":1,"app_version_
+name":"1.0","error":{"code":0,"msg":"ok"},"extra":{"amp_name":"即时通讯","ampid":0},"token":"9ac7401e-4200-4575-a658-3c7ad0
+e991c3"}
+10-01 01:01:47.268 I/MediaProvider( 2059): Invalidating LocalCallingIdentity cache for package com.gengyang.im. Reason:
+ package android.intent.action.PACKAGE_REMOVED
+10-01 01:01:47.273 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+10-01 01:01:47.273 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+10-01 01:01:47.273 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{1bbd50f com.gengyang.im}
+10-01 01:01:47.273 I/GameManagerService( 1291): Disabling downscale for com.gengyang.im
+10-01 01:01:47.285 W/WifiService( 1291): Couldn't get PackageInfo for package:com.gengyang.im
+10-01 01:01:47.285 D/WifiService( 1291): Remove settings for package:com.gengyang.im
+10-01 01:01:47.286 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+10-01 01:01:47.286 D/WifiConfigManager( 1291): Remove all networks for app ApplicationInfo{ec79388 com.gengyang.im}
+10-01 01:01:47.286 I/ConditionProviders( 1291): Disallowing condition provider com.gengyang.im (userSet: true)
+10-01 01:01:47.291 I/PasspointManager( 1291): No app ops listener found for com.gengyang.im
+10-01 01:01:47.295 I/MediaProvider( 2059): Begin Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:c
+om.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extra
+s) }
+10-01 01:01:47.295 D/MediaProvider( 2059): Deleted 0 Android/media items belonging to com.gengyang.im on /data/user/0/c
+om.android.providers.media.module/databases/external.db
+10-01 01:01:47.295 D/PeopleSpaceWidgetMgr( 1469): Sbn doesn't contain valid PeopleTileKey: null/0/com.gengyang.im
+10-01 01:01:47.295 I/MediaProvider( 2059): End Intent { act=android.intent.action.PACKAGE_FULLY_REMOVED dat=package:com
+.gengyang.im flg=0x5000010 cmp=com.android.providers.media.module/com.android.providers.media.MediaService (has extras)
+ }
+10-01 01:01:47.297 D/PackageReceiver( 2266): action: android.intent.action.PACKAGE_FULLY_REMOVED data: package:com.geng
+yang.im com.gengyang.im replacing =false

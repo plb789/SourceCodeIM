@@ -173,7 +173,18 @@
     }
 
     function handleResult(data) {
-        if (typeof data !== 'string' || data.indexOf(PROTOCOL) !== 0) {
+        if (typeof data !== 'string' || !data) {
+            toast('未识别的二维码');
+            return;
+        }
+        // 阶段二百四十：扫码登录分支——识别 PC/WEB 登录页二维码（/qrl?t=<qr_id> 链接），
+        // 命中后走手机端确认授权流程（showQrLoginConfirm）
+        var qid = parseQrLoginUrl(data);
+        if (qid) {
+            handleQRLoginScan(qid);
+            return;
+        }
+        if (data.indexOf(PROTOCOL) !== 0) {
             toast('未识别的二维码');
             return;
         }
@@ -187,6 +198,95 @@
         } else {
             toast('添加好友功能未就绪');
         }
+    }
+
+    /* ---------- 2.5 扫码登录确认（阶段二百四十：PC/WEB 登录页二维码 → 手机确认授权） ---------- */
+    var qrLoginPendingId = ''; // 在途确认的二维码 ID（回执匹配 + 按钮 action 归口）
+
+    // parseQrLoginUrl 识别登录码链接（https://<域名>/qrl?t=<qr_id>），非登录码返回空串
+    function parseQrLoginUrl(data) {
+        try {
+            var u = new URL(data);
+            if (u.pathname === '/qrl') {
+                return (u.searchParams.get('t') || '').trim();
+            }
+        } catch (e) { /* 非标准 URL（协议串等）按非登录码处理 */ }
+        return '';
+    }
+
+    // handleQRLoginScan 发起扫描上报（97 scan）——回执 ok 后弹确认授权卡
+    function handleQRLoginScan(qrId) {
+        var me = (window.IMSocket && typeof IMSocket.getUsername === 'function') ? (IMSocket.getUsername() || '').trim() : '';
+        if (!me) { toast('请先登录后再扫码'); return; }
+        qrLoginPendingId = qrId;
+        var sent = IMSocket.send({
+            msg_type: IMSocket.MSG.QR_SIGN,
+            from_user: me,
+            content: JSON.stringify({ action: 'scan', qr_id: qrId })
+        });
+        if (!sent) toast('连接未就绪，请稍后重试');
+    }
+
+    // showQrLoginConfirm 弹出微信同款授权卡（头像/昵称取当前登录账号，端别文案服务端下发）
+    function showQrLoginConfirm(platform) {
+        var mask = document.getElementById('qr-login-mask');
+        if (!mask) return;
+        // 头像归口左上角当前账号头像（与名片同款降级链路：无头像/加载失败显示首字母占位）
+        var av = document.getElementById('current-avatar');
+        var ph = document.getElementById('current-avatar-ph');
+        var dlgAv = document.getElementById('qr-login-avatar');
+        var dlgPh = document.getElementById('qr-login-avatar-ph');
+        if (av && av.style.display !== 'none' && av.src) {
+            dlgAv.src = av.src;
+            dlgAv.style.display = '';
+            dlgPh.style.display = 'none';
+        } else {
+            dlgAv.style.display = 'none';
+            dlgAv.removeAttribute('src');
+            dlgPh.style.display = '';
+            dlgPh.textContent = ph ? ph.textContent : '';
+        }
+        var nick = document.getElementById('profile-nickname');
+        var account = (window.IMSocket && typeof IMSocket.getUsername === 'function') ? (IMSocket.getUsername() || '').trim() : '';
+        document.getElementById('qr-login-name').textContent = (nick && nick.value) || account;
+        document.getElementById('qr-login-platform').textContent = platform === 'pc' ? '电脑' : '网页';
+        document.getElementById('qr-login-ok').disabled = false;
+        mask.classList.remove('hidden');
+    }
+
+    function hideQrLoginConfirm() {
+        var mask = document.getElementById('qr-login-mask');
+        if (mask) mask.classList.add('hidden');
+        qrLoginPendingId = '';
+    }
+
+    // 97 号回执监听（服务端 scan/confirm/cancel 应答归口；纯信令帧不落库不转发）
+    if (window.IMSocket && IMSocket.on) {
+        IMSocket.on(IMSocket.MSG.QR_SIGN, function (msg) {
+            // 阶段二百四十修复：服务端回执字段在帧顶层（{msg_type:97, action, ok, reason?, platform?}），
+            // content 为空串——原实现按 content JSON 解析，JSON.parse('') 抛异常静默 return，
+            // 回执被整体丢弃，手机扫码后确认授权卡永远不弹出（实测复现）
+            var action = msg.action;
+            if (action === 'scan') {
+                if (msg.ok) {
+                    showQrLoginConfirm(msg.platform);
+                } else {
+                    qrLoginPendingId = '';
+                    toast(msg.reason || '扫码失败，请重新扫描');
+                }
+            } else if (action === 'confirm') {
+                if (msg.ok) {
+                    toast('已确认，请在电脑上查看');
+                    hideQrLoginConfirm();
+                } else {
+                    toast(msg.reason || '确认失败');
+                    var okBtn = document.getElementById('qr-login-ok');
+                    if (okBtn) okBtn.disabled = false;
+                }
+            } else if (action === 'cancel') {
+                hideQrLoginConfirm();
+            }
+        });
     }
 
     /* ---------- 3. 入口绑定（DOM 就绪后） ---------- */
@@ -203,6 +303,28 @@
         if (close2) close2.addEventListener('click', closeScanner);
         var scanMask = document.getElementById('qr-scan-mask');
         if (scanMask) scanMask.addEventListener('click', function (e) { if (e.target === scanMask) closeScanner(); });
+        // 阶段二百四十：扫码登录确认弹窗按钮（取消=上报 cancel 回退待扫描态；确认=上报 confirm 授权登录）
+        var qlOk = document.getElementById('qr-login-ok');
+        var qlCancel = document.getElementById('qr-login-cancel');
+        if (qlOk) qlOk.addEventListener('click', function () {
+            if (!qrLoginPendingId) return;
+            qlOk.disabled = true; // 防连点：等服务端回执后关弹窗或复位按钮
+            IMSocket.send({
+                msg_type: IMSocket.MSG.QR_SIGN,
+                from_user: (IMSocket.getUsername() || '').trim(),
+                content: JSON.stringify({ action: 'confirm', qr_id: qrLoginPendingId })
+            });
+        });
+        if (qlCancel) qlCancel.addEventListener('click', function () {
+            if (qrLoginPendingId) {
+                IMSocket.send({
+                    msg_type: IMSocket.MSG.QR_SIGN,
+                    from_user: (IMSocket.getUsername() || '').trim(),
+                    content: JSON.stringify({ action: 'cancel', qr_id: qrLoginPendingId })
+                });
+            }
+            hideQrLoginConfirm();
+        });
     });
 
     window.IMQR = { showCard: showCard, openScanner: openScanner };

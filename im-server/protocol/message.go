@@ -186,6 +186,11 @@ const (
 	// reg_id 为空=注销上报，服务端清除绑定防消息通知泄漏到已登出设备）；纯信令帧不落库不转发
 	MsgTypePushRegID = 96
 
+	// 阶段二百四十：PC/WEB 端扫码登录（微信同款）
+	// 上行：手机端已登录态扫码确认（content 为 JSON：{action:"scan"/"confirm"/"cancel", qr_id}）；
+	// 下行：同类型回执（content 为 JSON：{action, ok, reason?}）；纯信令帧不落库不转发
+	MsgTypeQRSign = 97
+
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

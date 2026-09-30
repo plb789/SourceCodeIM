@@ -41,7 +41,8 @@ var reservedUsernameRe = regexp.MustCompile(`^g[0-9]+$`)
 // 底层依赖错误（MySQL/Redis 连接异常等，如 invalid connection）不属于业务错误，
 // 由调用方统一下发通用中文提示，完整错误仅记日志，避免英文底层错误暴露给客户端
 func isAuthBusinessError(err error) bool {
-	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername || err == ErrNeedRegister
+	return err == ErrUserExists || err == ErrInvalidLogin || err == ErrEmptyUsername || err == ErrEmptyPassword || err == ErrReservedUsername || err == ErrNeedRegister ||
+		err == ErrQRLoginExpired || err == ErrQRLoginInvalid // 阶段二百四十：扫码登录业务错误原样下发
 }
 
 // hashPassword 密码加密（SHA256）

@@ -345,6 +345,123 @@
         IMSocket.connect(username, password);
     }
 
+    // ===== 阶段二百四十：扫码登录（微信同款：登录页出码 → 手机 APP 扫一扫确认 → 凭一次性登录码免密登录） =====
+    // 流程归口：create 申请 qr_id → qrcode.min.js 渲染 /qrl?t=<id> 链接 → 1.5s 轮询 poll →
+    // waiting/scanned/confirmed 三级状态；confirmed 拿到一次性登录码后 connect('', 'qrc:'+code)
+    // 走既有登录链路（服务端以码定账号）。手机端交互（扫一扫识别 + 确认弹窗）归口 qr.js
+    var loginTabPass = document.getElementById('login-tab-pass');
+    var loginTabQr = document.getElementById('login-tab-qr');
+    var loginPassPane = document.getElementById('login-pass-pane');
+    var loginQrPane = document.getElementById('login-qr-pane');
+    var loginQrImg = document.getElementById('login-qr-img');
+    var loginQrVeil = document.getElementById('login-qr-veil');
+    var loginQrExpired = document.getElementById('login-qr-expired');
+    var loginQrRefresh = document.getElementById('login-qr-refresh');
+    var loginFormTitle = document.getElementById('login-form-title');
+    var loginFormSub = document.getElementById('login-form-sub');
+    var qrLoginTimer = null;   // 轮询定时器
+    var qrLoginActive = false; // 扫码面板是否激活（切回密码面板即停止轮询）
+    var qrLoginDone = false;   // 已进入凭码登录（停止轮询，防止登录页跳转期间误触刷新）
+    var isNativeApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+
+    // 手机 APP 原生环境隐藏登录方式切换（扫码登录面向 PC/WEB 大屏；手机端只保留账号密码登录）
+    if (isNativeApp && loginTabQr && loginTabPass) {
+        var loginTabsBox = document.getElementById('login-mode-tabs');
+        if (loginTabsBox) loginTabsBox.classList.add('hidden');
+    }
+
+    function setLoginMode(mode) {
+        var qr = mode === 'qr';
+        loginTabPass.classList.toggle('active', !qr);
+        loginTabQr.classList.toggle('active', qr);
+        loginPassPane.classList.toggle('hidden', qr);
+        loginQrPane.classList.toggle('hidden', !qr);
+        loginFormTitle.textContent = qr ? '扫码登录' : '账号登录';
+        loginFormSub.textContent = qr ? '使用手机 APP 扫描二维码，手机确认后即可安全登录。' : '请输入账号和密码，完成当前工作台的安全准入。';
+        qrLoginActive = qr;
+        if (qr) {
+            startQRLogin();
+        } else {
+            stopQRLogin();
+        }
+    }
+    if (loginTabPass) loginTabPass.addEventListener('click', function () { setLoginMode('pass'); });
+    if (loginTabQr) loginTabQr.addEventListener('click', function () { setLoginMode('qr'); });
+    if (loginQrRefresh) loginQrRefresh.addEventListener('click', function () { if (qrLoginActive) startQRLogin(); });
+
+    // stopQRLogin 停止轮询并复位三级状态遮罩（切回密码面板 / 凭码登录成功时调用）
+    function stopQRLogin() {
+        if (qrLoginTimer) { clearInterval(qrLoginTimer); qrLoginTimer = null; }
+        if (loginQrVeil) loginQrVeil.classList.add('hidden');
+        if (loginQrExpired) loginQrExpired.classList.add('hidden');
+    }
+
+    // startQRLogin 申请二维码并启动轮询（切到扫码面板 / 过期刷新共用归口）
+    function startQRLogin() {
+        stopQRLogin();
+        qrLoginDone = false;
+        loginQrImg.innerHTML = '';
+        // 申请端别归口 socket.js 同款判定：Electron 壳=pc，浏览器=web（手机端已隐藏入口不参与）
+        var platform = (window.desktop && !window.__webCallBridge) ? 'pc' : 'web';
+        fetch('/api/qrlogin/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ platform: platform })
+        }).then(function (r) { return r.json(); }).then(function (res) {
+            if (!res || !res.ok || !res.id) {
+                // 旧服务端无此接口（404/500）或限频：提示后退回密码面板
+                showToast(I18N.t('当前服务端暂不支持扫码登录，请使用账号密码登录'));
+                setLoginMode('pass');
+                return;
+            }
+            // 渲染二维码（内容为当前域名 /qrl?t=<id> 链接——APP 内扫一扫识别走确认流程，
+            // 系统相机扫码打开落地页提示改用 APP）；qrcode-generator 本地库与名片同款 API
+            if (typeof window.qrcode === 'function') {
+                var qrgen = window.qrcode(0, 'M');
+                qrgen.addData(location.origin + '/qrl?t=' + res.id);
+                qrgen.make();
+                loginQrImg.innerHTML = qrgen.createImgTag(4, 8); // 模块 4px、留白 8 模块（196px 容器内居中）
+            } else {
+                showToast(I18N.t('二维码组件未加载，请刷新页面重试'));
+                return;
+            }
+            qrLoginActive = true;
+            qrLoginTimer = setInterval(function () { pollQRLogin(res.id); }, 1500);
+        }).catch(function () {
+            showToast(I18N.t('当前服务端暂不支持扫码登录，请使用账号密码登录'));
+            setLoginMode('pass');
+        });
+    }
+
+    // pollQRLogin 轮询扫码状态机：waiting 待扫描 / scanned 已扫描待确认 / confirmed 凭码登录 / expired 过期
+    function pollQRLogin(id) {
+        if (!qrLoginActive || qrLoginDone) return;
+        if (document.hidden) return; // 页面隐藏暂停轮询（回前台下一拍自动恢复）
+        fetch('/api/qrlogin/poll?id=' + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (res) {
+            if (!qrLoginActive || qrLoginDone || !res) return;
+            var st = res.state;
+            if (st === 'scanned') {
+                loginQrVeil.classList.remove('hidden');
+                loginQrExpired.classList.add('hidden');
+            } else if (st === 'confirmed' && res.code) {
+                // 一次性登录码已到手：停轮询，凭码走免密登录（from_user 留空，服务端以码定账号）
+                qrLoginDone = true;
+                stopQRLogin();
+                if (isQueueMaskVisible()) return; // 排队中不建连（与密码登录同水位）
+                IMSocket.connect('', 'qrc:' + res.code);
+            } else if (st === 'expired') {
+                stopQRLogin();
+                loginQrExpired.classList.remove('hidden');
+            } else if (st === 'waiting') {
+                // 阶段二百四十：手机端点「取消登录」后服务端状态回退 waiting——
+                // 同步撤下「已扫描」浮层回到待扫描态（原实现 waiting 分支为空操作，
+                // 浮层残留导致已取消仍显示"请在手机上确认"）
+                loginQrVeil.classList.add('hidden');
+            }
+        }).catch(function () { /* 网络抖动忽略，下一拍重试 */ });
+    }
+
+
     // ===== 阶段一百六十一：登录排队遮罩（服务端限流排队，94 号帧驱动） =====
     // 服务重启集中重连风暴下，服务端令牌桶放行不过来时登录进入 FIFO 队列，
     // 前端显示微信式"排队中：第 N 位，预计 X 秒"遮罩；排到队首后正常收 LOGIN_RESP 自动进入

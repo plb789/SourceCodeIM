@@ -404,6 +404,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段一四五：独立注册页注册信令（注册页短连接，注册成功/失败均回执后由客户端自行断开）
 	case protocol.MsgTypeRegister:
 		s.handleRegister(c, msg)
+	// 阶段二百四十：扫码登录确认信令（手机端已登录态扫描/确认/取消，归口 qrlogin.go）
+	case protocol.MsgTypeQRSign:
+		s.HandleQRSign(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -418,6 +421,18 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	// 验证 DB 查询与登录后推送链路，验证后再排队等于没排队）；排队期间 94 帧定期推送
 	// 排队位置，超时/队列满由排队器直接回执拒绝（返回 false 即终止登录，不进验证链路）
 	if !s.loginQ.admit(c, username) {
+		return
+	}
+
+	// 阶段二百四十：扫码登录通道判定（content 前缀 qrc: → 一次性登录码换账号，免密码登录；
+	// 登录码由手机端扫码确认后签发，归口 qrlogin.go）——命中后按绑定账号走收尾登录链路
+	if strings.HasPrefix(password, QRLoginCodePrefix) {
+		user, qerr := qrLoginResolveUser(password)
+		if qerr != nil {
+			c.SendErrorAndClose(qerr.Error())
+			return
+		}
+		s.finishLogin(c, msg, user)
 		return
 	}
 
@@ -453,7 +468,15 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 		return
 	}
 
-	// 阶段一百三十五：账号状态拦截（锁定封禁/已注销）——仅密码校验通过的存量账号命中
+	// 阶段一百三十五：账号状态拦截移入 finishLogin（扫码登录共用同一状态拦截水位）
+	s.finishLogin(c, msg, user)
+}
+
+// finishLogin 阶段二百四十：登录收尾链路归口（密码验证通过 / 扫码凭码通过 共用同一链路）
+// 职责：账号状态拦截 → 会话绑定 → hub 注册 → Redis 在线缓存 → 登录响应下发 → 10 项并行推送 →
+// 通话/会议/协助宽限取消。原 handleLogin 尾段原样抽取，行为时序不变
+func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User) {
+	// 阶段一百三十五：账号状态拦截（锁定封禁/已注销）——仅凭据校验通过的存量账号命中
 	// （新注册账号恒为正常态），拒绝原因（含封禁原因）同步下发后关闭连接，前端弹窗提示
 	if rejectMsg := userStatusRejectMsg(user); rejectMsg != "" {
 		c.SendErrorAndClose(rejectMsg)
@@ -1121,6 +1144,9 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		"file_p2p_archive":           s.cfg.FileP2P.Archive,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
+		// 阶段二百四十：下发归口账号名（扫码登录凭码登录时前端未输入账号，以服务端签发为准
+		// 校正本地 currentUsername / 凭据存储；密码登录该值与输入一致，零回归）
+		"username": user.Username,
 		// 阶段一百九十八：下发网盘 API 鉴权 token（前端 localStorage 持久化，网盘请求头 X-Drive-Token 携带）
 		"drive_token": c.driveToken,
 		// 阶段三十：下发完整个人资料（微信式"我的个人资料"面板数据源）

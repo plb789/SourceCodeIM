@@ -415,6 +415,118 @@ html, body {
     margin-bottom: 10px;
 }
 
+/* ===== 阶段二百四十：登录方式切换 tab（微信同款：账号密码 | 扫码登录） ===== */
+.login-mode-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    padding: 4px;
+    border-radius: 8px;
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+}
+
+.login-mode-tab {
+    flex: 1;
+    height: 34px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 13px;
+    color: var(--text-light);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.login-mode-tab.active {
+    background: var(--primary);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+/* 扫码登录面板：二维码容器 + 三级状态（待扫描/已扫描/已过期） */
+#login-qr-pane {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.login-qr-box {
+    position: relative;
+    width: 196px;
+    height: 196px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    box-sizing: content-box;
+}
+
+#login-qr-img {
+    width: 196px;
+    height: 196px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#login-qr-img img,
+#login-qr-img canvas {
+    width: 196px;
+    height: 196px;
+}
+
+.login-qr-veil,
+.login-qr-expired {
+    position: absolute;
+    inset: 0;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.94);
+    z-index: 2;
+}
+
+.login-qr-veil p {
+    font-size: 13px;
+    font-weight: 600;
+    color: #07c160;
+    margin: 0;
+}
+
+.login-qr-expired {
+    background: rgba(245, 245, 245, 0.96);
+}
+
+.login-qr-expired p {
+    font-size: 13px;
+    color: var(--text-light);
+    margin: 0;
+}
+
+.login-qr-expired button {
+    height: 32px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.login-qr-tip {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+    line-height: 1.6;
+}
+
 .login-form-title {
     font-size: 26px;
     font-weight: 700;
@@ -17192,6 +17304,117 @@ html.m .dsm-list {
     align-items: center;
     justify-content: center;
 }
+
+/* ===== 阶段二百四十：扫码登录确认弹窗（微信同款授权卡：头像+昵称+端别确认+取消/确认） ===== */
+.qr-login-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1950;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.qr-login-card {
+    width: 300px;
+    max-width: calc(100vw - 48px);
+    background: var(--panel-bg);
+    border-radius: 14px;
+    padding: 22px 22px 18px;
+    text-align: center;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+    animation: modal-in 0.15s ease-out;
+}
+
+.qr-login-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 16px;
+}
+
+.qr-login-avatar-wrap {
+    width: 68px;
+    height: 68px;
+    margin: 0 auto 10px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--search-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.qr-login-avatar {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+}
+
+.qr-login-avatar-ph {
+    font-size: 26px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--primary);
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.qr-login-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 6px;
+}
+
+.qr-login-q {
+    font-size: 13px;
+    color: var(--text-light);
+    margin: 0 0 18px;
+}
+
+.qr-login-q span {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.qr-login-btns {
+    display: flex;
+    gap: 12px;
+}
+
+.qr-login-btns button {
+    flex: 1;
+    height: 40px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+#qr-login-cancel {
+    background: var(--search-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+#qr-login-ok {
+    background: var(--primary);
+    color: #fff;
+    font-weight: 600;
+}
+
+.qr-login-btns button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 
 .qr-card {
     position: relative;

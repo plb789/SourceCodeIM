@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.47">
+    <link rel="stylesheet" href="/css/style.css?v=3.48">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -136,8 +136,15 @@
             <!-- 右侧表单区（浅色面板） -->
             <div class="login-form-panel">
                 <p class="login-form-caption">SYSTEM ACCESS</p>
-                <h2 class="login-form-title">账号登录</h2>
-                <p class="login-form-sub">请输入账号和密码，完成当前工作台的安全准入。</p>
+                <!-- 阶段二百四十：登录方式切换（微信同款：账号密码 | 扫码登录，主题色高亮自绘 tab） -->
+                <div class="login-mode-tabs" id="login-mode-tabs">
+                    <button type="button" id="login-tab-pass" class="login-mode-tab active">账号密码登录</button>
+                    <button type="button" id="login-tab-qr" class="login-mode-tab">扫码登录</button>
+                </div>
+                <h2 class="login-form-title" id="login-form-title">账号登录</h2>
+                <p class="login-form-sub" id="login-form-sub">请输入账号和密码，完成当前工作台的安全准入。</p>
+                <!-- 账号密码面板（阶段二百四十：原表单整体包Pane，切换互斥显示） -->
+                <div id="login-pass-pane">
                 <label class="login-label" for="login-username">账号</label>
                 <div class="login-field">
                     <span class="login-field-icon">
@@ -162,6 +169,25 @@
                      服务端 register_enabled=true 时登录仍会自动注册，false 时提示"请先注册账号"引导至此 -->
                 <!-- <p class="login-hint">首次登录将自动注册</p> -->
                 <p class="login-hint">没有账号？<a class="login-reg-link" href="register.html">注册账号</a></p>
+                </div><!-- /login-pass-pane -->
+                <!-- 阶段二百四十：扫码登录面板（微信同款三级状态：待扫描/已扫描/已过期置灰刷新；
+                     二维码内容为 https://<当前域名>/qrl?t=<id>，手机 APP 扫一扫识别后确认登录） -->
+                <div id="login-qr-pane" class="hidden">
+                    <div class="login-qr-box" id="login-qr-box">
+                        <div id="login-qr-img"></div>
+                        <!-- 已扫描浮层（绿对勾 + 提示，二维码压暗） -->
+                        <div class="login-qr-veil hidden" id="login-qr-veil">
+                            <svg viewBox="0 0 24 24" width="46" height="46"><path fill="#07c160" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm-1.2 14.4-4-4 1.4-1.4 2.6 2.6 5.8-5.8 1.4 1.4z"/></svg>
+                            <p id="login-qr-veil-text">已扫描，请在手机上确认</p>
+                        </div>
+                        <!-- 过期遮罩（置灰 + 刷新按钮） -->
+                        <div class="login-qr-expired hidden" id="login-qr-expired">
+                            <p>二维码已过期</p>
+                            <button type="button" id="login-qr-refresh">点击刷新</button>
+                        </div>
+                    </div>
+                    <p class="login-qr-tip">请使用手机 APP「+」菜单中的「扫一扫」扫描二维码登录</p>
+                </div>
                 <p class="login-form-foot">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
             </div>
         </div>
@@ -2252,6 +2278,23 @@
         <div class="qr-scan-tip">对准好友的二维码名片，即可加为好友</div>
         <button id="qr-scan-cancel" class="qr-scan-cancel">取消</button>
     </div>
+    <!-- 阶段二百四十：扫码登录确认弹窗（微信同款：手机扫到 PC/WEB 登录码后确认授权；
+         自绘弹窗禁系统控件，头像/昵称取当前登录账号，端别文案由服务端 scan 回执下发） -->
+    <div id="qr-login-mask" class="qr-login-mask hidden">
+        <div class="qr-login-card">
+            <h3 class="qr-login-title">扫码登录</h3>
+            <div class="qr-login-avatar-wrap">
+                <img id="qr-login-avatar" class="qr-login-avatar" alt="">
+                <span id="qr-login-avatar-ph" class="qr-login-avatar-ph"></span>
+            </div>
+            <p id="qr-login-name" class="qr-login-name"></p>
+            <p class="qr-login-q">确认在<span id="qr-login-platform">电脑</span>上登录此账号？</p>
+            <div class="qr-login-btns">
+                <button type="button" id="qr-login-cancel">取消</button>
+                <button type="button" id="qr-login-ok">确认登录</button>
+            </div>
+        </div>
+    </div>
     <!-- 阶段二百二十：移动端页内全屏图片查看层（微信同款：点图不跳页，多图翻页/双击缩放/下滑关闭） -->
     <div id="img-layer" class="img-layer hidden mobile-only">
         <div class="img-layer-top">
@@ -2267,7 +2310,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.38"></script>
+    <script src="/js/socket.js?v=1.39"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.9"></script>
@@ -2289,7 +2332,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.157"></script>
+    <script src="/js/chat.js?v=3.159"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
@@ -2300,7 +2343,7 @@
     <!-- 阶段二百一十：二维码生成/解码库（均本地化，内网离线可用）+ 名片/扫一扫业务模块（归口 chat.js 添加好友链路） -->
     <script src="/js/lib/qrcode.min.js?v=1.4.4"></script>
     <script src="/js/lib/jsQR.min.js?v=1.4.0"></script>
-    <script src="/js/qr.js?v=1.0.5"></script>
+    <script src="/js/qr.js?v=1.0.7"></script>
     <!-- 阶段二百二十：移动端页内图片查看层（微信同款，替代跳页 image-viewer 在 APP 白屏的问题） -->
     <script src="/js/image-layer.js?v=1.0"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>

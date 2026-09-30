@@ -176,6 +176,12 @@ func main() {
 	// 阶段一百四十一：通话话单查询（本人相关话单分页倒序，鉴权水位与 /api/kb 一致）
 	http.HandleFunc("GET /api/call/logs", srv.HandleCallLogs)
 
+	// 阶段二百四十：扫码登录（PC/WEB 登录页二维码申请/状态轮询 + 系统相机扫码落地页；
+	// 无鉴权——登录前调用，安全归口一次性 qr_id/登录码 + 限频，见 server/qrlogin.go）
+	http.HandleFunc("POST /api/qrlogin/create", srv.HandleQRLoginCreate)
+	http.HandleFunc("GET /api/qrlogin/poll", srv.HandleQRLoginPoll)
+	http.HandleFunc("/qrl", srv.HandleQRLanding)
+
 	// 阶段一百三十六：前端资源密文下发（PC 端磁盘零明文；无鉴权——密文本身即屏障，
 	// 排除规则与清单一致，密钥未配置时 503 由客户端回退明文链路）
 	http.HandleFunc("GET /api/secure-file", srv.HandleSecureFile)

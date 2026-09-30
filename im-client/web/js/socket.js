@@ -4,6 +4,7 @@
     var heartbeatTimer = null;
     var reconnectTimer = null;
     var currentUsername = '';
+    var qrLoginConn = false; // 阶段二百四十：本次连接是否走扫码登录通道（凭码成功后校正账号并清空重连凭据）
     // 原实现：recallWindow 未声明（隐式全局）且未暴露 getRecallWindow，
     // 服务端下发的撤回窗口配置从未被前端撤回菜单使用（恒用 120 秒兜底）
     // 阶段十二修复：声明变量并暴露 getRecallWindow，撤回菜单显隐与配置文件 recall_window 保持一致
@@ -239,7 +240,8 @@
         FILE_P2P_SIGNAL: 91,     // 阶段一百五十六：好友文件 P2P 直传信令（双向，content 为 JSON：{action,transfer_id,name?,size?,mime?,sha256?,reason?,sdp?,candidate?,platform?,nonce?}；服务端仅转发信令+归口判定，文件字节点对点直传）
         DRIVE_SHARE: 92,         // 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}；点击弹详情保存/下载）
         USER_LIST_DELTA: 93,     // 5万容量改造：在线名单增量同步（下行 content 为 JSON：{online:[{username,avatar}],offline:["u1"]}；全量快照仅登录者单发，此后上下线/头像变更走本帧 1s 窗口聚合广播）
-        LOGIN_QUEUE: 94          // 阶段一百六十一：登录排队位置推送（下行 content 为 JSON：{position 当前第 N 位, wait 预计等待秒}；排到队首后正常收 LOGIN_RESP，排队遮罩由 chat.js 渲染）
+        LOGIN_QUEUE: 94,         // 阶段一百六十一：登录排队位置推送（下行 content 为 JSON：{position 当前第 N 位, wait 预计等待秒}；排到队首后正常收 LOGIN_RESP，排队遮罩由 chat.js 渲染）
+        QR_SIGN: 97              // 阶段二百四十：扫码登录确认信令（上行 {action:"scan"/"confirm"/"cancel", qr_id}；下行同类型回执 {action, ok, reason?, platform?}）
     };
 
     function connect(username, password) {
@@ -247,6 +249,10 @@
         // 登录失败提示修复：记录本次连接使用的密码，登录成功后断线自动重连需携带真实密码
         // 原实现：window._lastPassword 从未被赋真实值（恒为空字符串），断线重连用空密码登录必然失败
         window._lastPassword = password || '';
+        // 阶段二百四十：扫码登录通道标记（content 前缀 qrc: = 一次性登录码免密登录）——
+        // LOGIN_RESP 成功后以服务端归口账号校正 currentUsername 并清空 _lastPassword
+        // （码已消费，重连不能复用；断线后自动重登失败回落登录页，与微信 PC 扫码会话行为一致）
+        qrLoginConn = (password || '').indexOf('qrc:') === 0;
         // 阶段一百二十二：恢复 location 推导（同 origin http 拦截方案下页面 origin 不变，推导依旧有效；
         // 原 app://local 方案曾改用 preload 注入的 desktop.serverOrigin，实测导航稳定性问题后回退）
         var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -520,6 +526,13 @@
                 var info = JSON.parse(msg.content);
                 if (info && info.result === 'ok') {
                     loginOk = true;
+                }
+                // 阶段二百四十：扫码登录账号归口——凭码登录 from_user 为空，服务端以码定账号，
+                // 此处以登录响应携带的归口账号名校正本地用户名（重连/保活/UI 归口真实账号）；
+                // 登录码一次性已消费：清空重连密码，断线重连失败自然回落登录页重新扫码或输密码
+                if (loginOk && qrLoginConn && info && info.username) {
+                    currentUsername = info.username;
+                    window._lastPassword = '';
                 }
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
