@@ -19,9 +19,9 @@
     var scanStream = null;
     var scanRaf = null;
 
-    /* ---------- 通用提示：归口 chat.js 全局 toast ---------- */
+    /* ---------- 通用提示：归口 chat.js 全局 toast（阶段二百四十一：统一过 I18N.t，英文模式显示对应译文） ---------- */
     function toast(msg) {
-        if (window.__imToast) window.__imToast(msg);
+        if (window.__imToast) window.__imToast(window.I18N ? I18N.t(msg) : msg);
     }
 
     /* ---------- 1. 我的二维码名片 ---------- */
@@ -53,7 +53,7 @@
         var nick = document.getElementById('profile-nickname');
         var account = currentAccount();
         document.getElementById('qr-card-name').textContent = (nick && nick.value) || account;
-        document.getElementById('qr-card-id').textContent = '账号：' + account;
+        document.getElementById('qr-card-id').textContent = I18N.t('账号：') + account;
 
         var box = document.getElementById('qr-code-box');
         box.innerHTML = '';
@@ -249,7 +249,7 @@
         var nick = document.getElementById('profile-nickname');
         var account = (window.IMSocket && typeof IMSocket.getUsername === 'function') ? (IMSocket.getUsername() || '').trim() : '';
         document.getElementById('qr-login-name').textContent = (nick && nick.value) || account;
-        document.getElementById('qr-login-platform').textContent = platform === 'pc' ? '电脑' : '网页';
+        document.getElementById('qr-login-platform').textContent = I18N.t(platform === 'pc' ? '电脑' : '网页');
         document.getElementById('qr-login-ok').disabled = false;
         mask.classList.remove('hidden');
     }

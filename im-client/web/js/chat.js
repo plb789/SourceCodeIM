@@ -376,8 +376,8 @@
         loginTabQr.classList.toggle('active', qr);
         loginPassPane.classList.toggle('hidden', qr);
         loginQrPane.classList.toggle('hidden', !qr);
-        loginFormTitle.textContent = qr ? '扫码登录' : '账号登录';
-        loginFormSub.textContent = qr ? '使用手机 APP 扫描二维码，手机确认后即可安全登录。' : '请输入账号和密码，完成当前工作台的安全准入。';
+        loginFormTitle.textContent = I18N.t(qr ? '扫码登录' : '账号登录');
+        loginFormSub.textContent = I18N.t(qr ? '使用手机 APP 扫描二维码，手机确认后即可安全登录。' : '请输入账号和密码，完成当前工作台的安全准入。');
         qrLoginActive = qr;
         if (qr) {
             startQRLogin();

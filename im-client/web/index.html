@@ -60,7 +60,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.50">
+    <link rel="stylesheet" href="/css/style.css?v=3.51">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -1560,7 +1560,7 @@
                         <span class="settings-card-label">全屏来电画面</span>
                         <span id="settings-call-fullstate" class="settings-card-value">检测中…</span>
                     </div>
-                    <p class="settings-desc">开启后熄屏、锁屏收到语音/视频邀请时自动全屏弹出接听画面（微信同款）。</p>
+                    <p class="settings-desc">开启后熄屏、锁屏收到语音/视频邀请时自动全屏弹出接听画面。</p>
                     <button id="settings-call-fullbtn" class="settings-btn" style="display:none;">去开启全屏来电</button>
                     <div class="settings-card-row">
                         <span class="settings-card-label">悬浮窗显示</span>
@@ -2343,7 +2343,7 @@
     <!-- 阶段二百一十：二维码生成/解码库（均本地化，内网离线可用）+ 名片/扫一扫业务模块（归口 chat.js 添加好友链路） -->
     <script src="/js/lib/qrcode.min.js?v=1.4.4"></script>
     <script src="/js/lib/jsQR.min.js?v=1.4.0"></script>
-    <script src="/js/qr.js?v=1.0.7"></script>
+    <script src="/js/qr.js?v=1.0.8"></script>
     <!-- 阶段二百二十：移动端页内图片查看层（微信同款，替代跳页 image-viewer 在 APP 白屏的问题） -->
     <script src="/js/image-layer.js?v=1.0"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>

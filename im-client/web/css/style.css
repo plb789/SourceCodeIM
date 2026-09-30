@@ -4940,7 +4940,7 @@ html.m .nav-rail {
     align-items: center;
     justify-content: space-around; /* 阶段二百零九：五项等距均分（原 space-between 首项偏移） */
     padding: 0 4px env(safe-area-inset-bottom, 0px);
-    border-top: 1px solid var(--border);
+    border-top: 0.5px solid var(--divider); /* 阶段二百四十一：微信同款淡细分隔线（与会话分割线同款） */
     z-index: 50;
 }
 
