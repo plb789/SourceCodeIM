@@ -103,7 +103,6 @@ public class KeepAliveService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         stopped = false;
-        android.util.Log.i("BGSvc", "onStartCommand action=" + (intent == null ? "null(STICKY)" : intent.getAction()));
         // 每次 startForegroundService 调用都必须立即进入前台态（Android 8+ 硬性要求）
         int type = Build.VERSION.SDK_INT >= 34 ? ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING : 0;
         ServiceCompat.startForeground(this, FG_ID, buildFgNotification(), type);
@@ -185,12 +184,10 @@ public class KeepAliveService extends Service {
         if (stopped || handover || ws != null) return;
         if (TextUtils.isEmpty(username) || TextUtils.isEmpty(wsUrl)) return;
         loginRejected = false;
-        android.util.Log.i("BGSvc", "connect() 发起 user=" + username);
         Request req = new Request.Builder().url(wsUrl).build();
         ws = http.newWebSocket(req, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
-                android.util.Log.i("BGSvc", "onOpen owner=" + (webSocket == ws) + " handover=" + handover + " stopped=" + stopped);
                 if (webSocket != ws) return;
                 sendLogin(webSocket);
             }
@@ -218,7 +215,6 @@ public class KeepAliveService extends Service {
     private void onLinkDown() {
         ws = null;
         loggedIn = false;
-        android.util.Log.i("BGSvc", "onLinkDown handover=" + handover + " stopped=" + stopped + " rejected=" + loginRejected);
         main.removeCallbacks(heartbeatTask);
         main.removeCallbacks(reconnectTask);
         if (!stopped && !handover && !loginRejected) {
@@ -228,7 +224,6 @@ public class KeepAliveService extends Service {
 
     private void teardown() {
         loggedIn = false;
-        android.util.Log.i("BGSvc", "teardown 有连接=" + (ws != null));
         main.removeCallbacks(heartbeatTask);
         // 交还/停止：对称释放 WakeLock（回前台后 WebView 持连接，无需保 CPU）
         if (wakeLock != null && wakeLock.isHeld()) {
@@ -261,7 +256,6 @@ public class KeepAliveService extends Service {
     };
 
     private void sendLogin(WebSocket webSocket) {
-        android.util.Log.i("BGSvc", "sendLogin 发出 user=" + username);
         try {
             JSONObject login = new JSONObject();
             login.put("msg_type", 7);
@@ -315,11 +309,9 @@ public class KeepAliveService extends Service {
                 }
                 if (ok) {
                     loggedIn = true;
-                    android.util.Log.i("BGSvc", "LOGIN_RESP ok 在线");
                     reconnectDelay = 3000;
                     startHeartbeat();
                 } else {
-                    android.util.Log.i("BGSvc", "LOGIN_RESP fail");
                     // 登录被拒（密码错误/账号异常）：不再自动重连，提示用户回应用处理
                     loginRejected = true;
                     teardown();
@@ -329,7 +321,6 @@ public class KeepAliveService extends Service {
             }
             case 9: { // ERROR
                 if (m.optBoolean("kick")) {
-                    android.util.Log.i("BGSvc", "被同端踢下线（kick）");
                     // 同端被踢：正常为回前台交接时 WebView 登录顶掉本连接（或他处新 app 登录）。
                     // 置 handover 进入待命态：断开且不自动重连，等下一次 TAKEOVER 再接管，
                     // 避免"本服务 ↔ 新登录端"双方自动重连互踢循环

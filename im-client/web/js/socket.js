@@ -252,9 +252,24 @@
         var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
         var url = proto + location.host + '/ws';
 
+        // 阶段二百三十五修复：connect 防重入——回前台 visibilitychange 与 Capacitor App resume
+        // 双通道先后触发 bgEndHandover，两次调用间隔仅几毫秒，首个连接尚未 onopen（connected
+        // 仍 false）第二次调用即再建一条同端连接并覆盖 ws 引用 → 服务端同端互踢连环触发
+        // （本地 15 轮交接循环 100% 复现：connect#30/#31 成对、open 相差 8ms、服务端连环互踢）
+        // 已有连接在建/存活时拒绝重复建连；断线重连场景旧连接已 CLOSED 不受影响
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+            return;
+        }
         ws = new WebSocket(url);
+        // 阶段二百三十五修复：固化本连接引用——回调触发时与外部 ws 变量比对，
+        // 外部已被新连接覆盖（或已置空）即本次回调来自被遗弃的旧连接，一律忽略
+        var sock = ws;
 
         ws.onopen = function () {
+            // 阶段二百三十五修复：owner 检查——被覆盖/被踢旧连接的回调事件被 WebView 冻结
+            // 延迟数秒补发（实测 close code=1006 迟到 1~7 秒+），若不核对归属，迟到的 open
+            // 会重置 connected 并发出第二条登录帧触发互踢
+            if (ws !== sock) return;
             connected = true;
             // 发送登录消息（阶段六十：PC 端 Electron preload 暴露 window.desktop，据此上报设备类型，
             // 服务端 Agent 本地执行器按 platform=pc 判定文件/命令工具下发目标；Web/手机端为空走服务端执行）
@@ -285,6 +300,9 @@
         };
 
         ws.onmessage = function (e) {
+            // 阶段二百三十五修复：owner 检查——旧连接迟到的消息帧（含 kick ERROR）不得
+            // 触发当前连接的登录态处置（实测旧连接 kick 迟到会把 loginOk 误杀回登录页）
+            if (ws !== sock) return;
             var msg;
             try {
                 msg = JSON.parse(e.data);
@@ -294,7 +312,12 @@
             dispatch(msg);
         };
 
-        ws.onclose = function () {
+        ws.onclose = function (ev) {
+            // 阶段二百三十五修复：owner 检查——本 bug 的核心放大器：被踢旧连接的 close
+            // 事件迟到补发时 loginOk 已被后继连接置 true，原逻辑判「网络断开」走
+            // scheduleReconnect 再建新连接，把当前在线的后继连接踢下线（本地实测
+            // #30迟到close→3s后connect#32→#32踢掉在线的#31→用户回登录页）
+            if (ws !== sock) return;
             connected = false;
             stopHeartbeat();
             // 阶段一百三十五：服务端拒绝登录（账号封禁/注销/密码错误等）先下发 ERROR 帧再立即关连接，
@@ -321,6 +344,7 @@
         };
 
         ws.onerror = function () {
+            if (ws !== sock) return;
             connected = false;
         };
     }
