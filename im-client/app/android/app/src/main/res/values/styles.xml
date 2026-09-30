@@ -13,6 +13,9 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- 阶段二百四十一：修复启动白屏——启动屏（黑底图标）结束后 WebView 加载远程页面期间
+             窗口底色裸露 DayNight 浅色系统默认白；定死 #111111 与页面首绘深色底一致（原 android:background=@null） -->
+        <item name="android:windowBackground">#111111</item>
     </style>
 
 

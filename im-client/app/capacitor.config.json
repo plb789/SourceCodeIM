@@ -5,7 +5,8 @@
   "webContentsDebuggingEnabled": true,
   "android": {
     "allowMixedContent": true,
-    "useLegacyBridge": true
+    "useLegacyBridge": true,
+    "backgroundColor": "#111111"
   },
   "server": {
     "url": "https://im.sxgyxny.com",
