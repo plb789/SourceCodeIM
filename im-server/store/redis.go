@@ -20,6 +20,7 @@ const (
 	KeySession    = "im:session:"     // 用户会话缓存 im:session:username
 	KeyOfflineMsg = "im:offline:msg:" // 离线消息队列 im:offline:msg:username
 	KeyDriveToken = "im:drivetoken:"  // 网盘 API 鉴权 token 会话 im:drivetoken:<token> → username（阶段一百九十八）
+	KeyPushRegID  = "im:regid:"       // 厂商推送 regId 注册表 im:regid:username → 厂商推送 token（阶段二百二十六）
 )
 
 // InitRedis 初始化 Redis 连接并校验连通性

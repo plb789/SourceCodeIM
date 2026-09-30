@@ -9,6 +9,14 @@
  *
  * 阶段二百一十六：服务器地址硬编码（用户不可修改）——移除地址配置弹窗与
  * 横幅"更改"入口，仅保留连接提示横幅。
+ *
+ * 阶段二百三十一：恢复跳转模式并静默跳转——
+ * 1. server.url 直启模式实测 Capacitor 桥未注入远程域页面（window.Capacitor
+ *    不存在 → nativeBG=false → 保活服务/通知/状态栏等原生插件功能全部静默
+ *    失效，切后台进程失保被 ROM 掐网下线），跳转模式（localhost 起始 →
+ *    replace 远程域）下桥注入远程页实测可靠，故回退；
+ * 2. 原跳转路径先画 900ms"正在连接"横幅再跳——用户反馈登录时横幅反复出现，
+ *    改为立即静默跳转（内嵌闪屏页本身已有品牌过渡，无信息损失）。
  */
 (function () {
     'use strict';
@@ -21,33 +29,9 @@
     // 服务器地址硬编码，禁止用户修改
     var DEFAULT_SERVER = 'https://im.sxgyxny.com';
 
-    // 阶段二百一十七：capacitor.config.json 已配置 server.url 直启远程域——
-    // WebView 起始页即为服务器域（Capacitor 桥注入该域，isNative 恒真），
-    // 这里同域直接放行，不再显示连接横幅、不再多余重载
+    // 同域（server.url 直启态）放行，不跳转
     if (location.host === DEFAULT_SERVER.replace(/^https?:\/\//i, '')) return;
 
-    function jump() {
-        window.location.replace(DEFAULT_SERVER + '/?__app=1');
-    }
-
-    /* ---------- 连接提示横幅（主题色跟随 --primary，无修改入口） ---------- */
-    var cssText =
-        '.as-banner{position:fixed;top:0;left:0;right:0;z-index:99998;background:var(--primary,#07c160);color:#fff;font-size:13px;padding:10px 14px;text-align:center}';
-
-    function boot() {
-        var s = document.createElement('style');
-        s.textContent = cssText;
-        document.head.appendChild(s);
-        var banner = document.createElement('div');
-        banner.className = 'as-banner';
-        banner.textContent = '正在连接 ' + DEFAULT_SERVER.replace(/^https?:\/\//i, '') + ' …';
-        document.body.appendChild(banner);
-        setTimeout(jump, 900);
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', boot);
-    } else {
-        boot();
-    }
+    // 静默跳转：不画横幅（闪屏页即视觉过渡），跳转后 __app=1 标记防死循环
+    window.location.replace(DEFAULT_SERVER + '/?__app=1');
 })();

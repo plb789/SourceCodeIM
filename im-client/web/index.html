@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.17"></script>
+    <script src="/js/i18n.js?v=3.18"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -914,6 +914,12 @@
                     <svg class="ti-system" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
                     <span>切换主题</span>
                 </button>
+                <!-- 阶段二百三十：设置入口（手机端唯一到达全屏设置页的路径——标题栏齿轮仅 PC 显示，
+                     转发点击到 #titlebar-settings 复用 settingsOpen；data-close-profile 先关个人页防叠层） -->
+                <button class="mpa-item" data-target="titlebar-settings" data-close-profile="1">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                    <span>设置</span>
+                </button>
             </div>
             <div class="m-profile-card mpc-actions">
                 <button class="mpa-item mpa-danger" data-target="logout-btn">
@@ -1378,7 +1384,21 @@
                 </button>
             </div>
         </aside>
+        <!-- 阶段二百三十一：手机端设置主页（微信同款分组条目列表；仅 html.m 显示）。
+             条目由 chat.js 从上方 .settings-nav-item 克隆生成（图标/文字/data-view 零复制归口，
+             PC 新增分类手机端自动跟进），分组顺序在 chat.js SETTINGS_HOME_GROUPS 维护 -->
+        <div id="settings-home" class="settings-home"></div>
         <main class="settings-content">
+            <!-- 阶段二百三十一：手机端二级页顶栏（返回主页 + 当前分类名 + 关闭；PC 端隐藏走左导航） -->
+            <div class="settings-subhead" id="settings-subhead">
+                <button id="settings-subhead-back" class="settings-subhead-btn" aria-label="返回">
+                    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <span id="settings-subhead-title" class="settings-subhead-title">设置</span>
+                <button id="settings-subhead-close" class="settings-subhead-btn" aria-label="关闭">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
             <!-- 账号：账户信息卡 + 退出登录 -->
             <section id="settings-view-account" class="settings-view">
                 <h2 class="settings-title">账号</h2>
@@ -1482,6 +1502,30 @@
                 <!-- 阶段一百五十九补：手动清理按钮（自绘确认弹窗 → 引擎 cacheClear 双清 IndexedDB+磁盘） -->
                 <p class="settings-desc">清理浏览器本地缓存与 PC 端磁盘缓存目录中的接收文件；清理后历史文件卡片将无法再另存为或预览。</p>
                 <button id="settings-p2p-cache-clear" class="settings-btn">缓存清理</button>
+                <!-- 阶段二百二十六：后台保活引导（学微信引导用户开系统权限；仅手机 APP 端显示，JS 控制显隐）。
+                     电池优化豁免是唯一可编程弹系统授权框的项；厂商自启动管理页无公开 API，仅跳转引导手动开启 -->
+                <h3 class="settings-subtitle" id="settings-ka-subtitle" style="display:none;">后台保活</h3>
+                <div class="settings-card" id="settings-ka-card" style="display:none;">
+                    <!-- 阶段二百三十：消息通知权限行——Android 13+ 被拒后横幅/息屏提醒全静默，优先级高于保活 -->
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">消息通知</span>
+                        <span id="settings-ka-notif-state" class="settings-card-value">检测中…</span>
+                    </div>
+                    <p class="settings-desc">关闭后收不到任何新消息提醒（横幅弹窗与通知栏均静默）。</p>
+                    <button id="settings-ka-notif-btn" class="settings-btn" style="display:none;">去开启消息通知</button>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">电池优化豁免</span>
+                        <span id="settings-ka-battery-state" class="settings-card-value">检测中…</span>
+                    </div>
+                    <p class="settings-desc">开启后息屏、省电模式不再限制后台消息连接，保障消息实时送达。</p>
+                    <button id="settings-ka-battery-btn" class="settings-btn" style="display:none;">申请电池优化豁免</button>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">厂商自启动管理</span>
+                        <span id="settings-ka-autostart-state" class="settings-card-value"></span>
+                    </div>
+                    <p class="settings-desc">部分手机会阻止应用后台运行，请在打开的页面中允许本应用自启动与后台运行。</p>
+                    <button id="settings-ka-autostart-btn" class="settings-btn">去开启自启动</button>
+                </div>
             </section>
             <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 把网盘映射成本地盘符，阿里云盘挂载盘同原理；
                  PC 端显示完整控件，WEB 端无本地盘概念仅展示挂载密码与说明） -->
@@ -2206,7 +2250,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.35"></script>
+    <script src="/js/socket.js?v=1.37"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.9"></script>
@@ -2228,7 +2272,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.155"></script>
+    <script src="/js/chat.js?v=3.157"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；

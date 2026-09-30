@@ -181,6 +181,11 @@ const (
 	// 本类型承载用户审批结果上行；批准前服务端工具门禁锁定全部有副作用操作）
 	MsgTypeAgentPlan = 95 // 上行：计划审批结果（content 为 JSON：{task_id,step,action:"approve"/"reject",feedback?}；reject 时 feedback 为驳回意见）
 
+	// 阶段二百二十六：厂商推送 regId 上报（方案 B：进程被杀兜底通道的投递依据）
+	// 上行：APP 端登录成功后上报厂商推送 token（content 为 JSON：{vendor:"mipush",reg_id:"..."}；
+	// reg_id 为空=注销上报，服务端清除绑定防消息通知泄漏到已登出设备）；纯信令帧不落库不转发
+	MsgTypePushRegID = 96
+
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

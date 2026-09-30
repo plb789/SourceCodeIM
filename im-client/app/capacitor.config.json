@@ -2,8 +2,10 @@
   "appId": "com.gengyang.im",
   "appName": "即时通讯",
   "webDir": "../web",
+  "webContentsDebuggingEnabled": true,
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": true,
+    "useLegacyBridge": true
   },
   "server": {
     "url": "https://im.sxgyxny.com",

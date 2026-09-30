@@ -50,6 +50,9 @@ func (s *Server) queueOffline(username string, msg *protocol.Message) {
 	key := store.KeyOfflineMsg + username
 	store.RDB.RPush(ctx, key, string(data))
 	store.RDB.Expire(ctx, key, offlineMsgTTL)
+	// 阶段二百二十六：厂商推送兜底（接收端无在线连接时经厂商系统推送下发摘要通知；
+	// 未启用配置时直通返回，零开销）
+	s.vendorPushNotify([]string{username}, msg.FromUser, msg)
 }
 
 // queueOfflineBatch 批量离线入队（集群模式全局群离线名单归口）：pipeline 一次往返写入
@@ -72,6 +75,8 @@ func (s *Server) queueOfflineBatch(usernames []string, msg *protocol.Message) {
 	if _, err := pipe.Exec(ctx); err != nil {
 		logger.Error("批量离线入队失败（%d 人）: %v", len(usernames), err)
 	}
+	// 阶段二百二十六：厂商推送兜底（群消息离线成员批量场景，worker 池内限流防队列打爆）
+	s.vendorPushNotify(usernames, msg.FromUser, msg)
 }
 
 // pushOfflineMessages 用户上线后批量推送离线消息并清空队列

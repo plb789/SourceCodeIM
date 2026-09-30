@@ -8,6 +8,9 @@ buildscript {
         maven { url 'https://maven.aliyun.com/repository/google' }
         maven { url 'https://maven.aliyun.com/repository/central' }
         maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        // 阶段二百二十六：EMAS 官方 maven 仓库（alicloud-android-push 仅发布于此，
+        // 不在 google/central；官方文档 https://help.aliyun.com/ 文档指定仓库地址）
+        maven { url 'https://maven.aliyun.com/nexus/content/repositories/releases/' }
         google()
         mavenCentral()
     }
@@ -28,6 +31,8 @@ allprojects {
         // 改为阿里云镜像优先，原始仓库兜底
         maven { url 'https://maven.aliyun.com/repository/google' }
         maven { url 'https://maven.aliyun.com/repository/central' }
+        // 阶段二百二十六：EMAS 官方 maven 仓库（同 buildscript，供 :app 模块解析 SDK 依赖）
+        maven { url 'https://maven.aliyun.com/nexus/content/repositories/releases/' }
         google()
         mavenCentral()
     }

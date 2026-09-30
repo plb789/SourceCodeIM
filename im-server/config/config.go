@@ -108,6 +108,9 @@ type Config struct {
 	// 阶段一百六十一：登录排队系统（服务重启集中重连风暴削峰）
 	LoginQueue LoginQueueConfig `yaml:"login_queue"`
 
+	// 阶段二百二十六：厂商推送通道（方案 B：接收端进程被杀时经厂商系统级推送下发消息通知兜底）
+	Push PushConfig `yaml:"push"`
+
 	// 网盘配置（百度网盘同款个人云盘：元数据 MySQL + 文件本体经 store.ObjectStore 落 MinIO/本地双后端）
 	Drive DriveConfig `yaml:"drive"`
 }
@@ -126,6 +129,53 @@ type LoginQueueConfig struct {
 	MaxLen int `yaml:"max_len"`
 	// Timeout 排队等待超时秒（0=默认 60；超时拒绝防僵尸连接长期占用队列与连接配额）
 	Timeout int `yaml:"timeout"`
+}
+
+// PushConfig 阶段二百二十六：厂商推送配置节（方案 B：接收端无任何在线连接——APP 进程被杀/
+// 彻底退出——时经厂商系统级推送下发消息摘要通知。厂商推送服务为系统常驻进程，应用进程不在
+// 也能收到并弹通知，是"消息永远收得到"的兜底通道，微信同款机制。
+// 使用前提：先到对应厂商开放平台注册应用并开通推送服务获取凭据；凭据仅存本文件不下发客户端。
+// FGS 后台接管时长连接在线（离线判定不命中），不进入本通道，天然不重复推送）
+type PushConfig struct {
+	// Enabled 厂商推送总开关（false 时全链路直通返回零开销；regId 上报信令仍接受但不投递）
+	Enabled bool `yaml:"enabled"`
+	// MiPush 小米推送通道（REST v3，api.xmpush.xiaomi.com）
+	MiPush MiPushConfig `yaml:"mipush"`
+	// EMAS 阿里云移动推送通道（聚合推送：服务端只调阿里云一个 OpenAPI，在线走 ACCS 长连接、
+	// 进程被杀自动降级厂商离线通道；启用时优先于 MiPush，实现"全量替代"路线）
+	EMAS EMASConfig `yaml:"emas"`
+}
+
+// EMASConfig 阿里云 EMAS 移动推送通道配置（阿里云控制台开通移动推送 → EMAS/移动推送控制台
+// 创建应用拿 AppKey → RAM 创建 AccessKey；各厂商离线通道凭据在 EMAS 控制台配置，服务端只对接
+// 阿里云 OpenAPI（mobilepush.aliyuncs.com）。投递按账号（Target=ACCOUNT）推送，客户端 SDK 接入
+// 后原生调 bindAccount(用户名) 即可，无需 regId 注册表；AppKey 留空=通道停用）
+type EMASConfig struct {
+	// Enabled 阿里云通道开关
+	Enabled bool `yaml:"enabled"`
+	// AccessKeyID 阿里云 RAM AccessKey ID（仅存服务端不下发客户端）
+	AccessKeyID string `yaml:"access_key_id"`
+	// AccessKeySecret 阿里云 RAM AccessKey Secret（建议 RAM 子账号最小权限 AliyunPushFullAccess）
+	AccessKeySecret string `yaml:"access_key_secret"`
+	// AppKey EMAS 应用级 AppKey（移动推送控制台应用详情页获取，纯数字字符串）
+	AppKey string `yaml:"app_key"`
+	// Region OpenAPI 接入区域（默认 cn-hangzhou，与 EMAS 应用开通区域一致）
+	Region string `yaml:"region"`
+	// Package 应用包名（与 APK applicationId 一致）：厂商离线通道"辅助弹窗"参数
+	// AndroidPopupActivity=<Package>.EmasPopupActivity 组装用；留空=不带辅助弹窗参数，
+	// 进程被杀后厂商离线通道（小米/华为等）推送不可达，仅在线 ACCS 通道可达
+	Package string `yaml:"package"`
+}
+
+// MiPushConfig 小米推送通道配置（小米开放平台 dev.mi.com → 推送服务申请；Package 须与
+// APK applicationId 完全一致，MiPush 以 restricted_package_name 校验）
+type MiPushConfig struct {
+	// Enabled 小米通道开关
+	Enabled bool `yaml:"enabled"`
+	// AppSecret 小米推送 AppSecret（开放平台推送服务页获取；空=通道停用）
+	AppSecret string `yaml:"app_secret"`
+	// Package 应用包名（与 APK applicationId 一致）
+	Package string `yaml:"package"`
 }
 
 // DriveConfig 网盘配置节

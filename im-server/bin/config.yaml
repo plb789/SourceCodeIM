@@ -448,6 +448,38 @@ file_p2p:
   max_per_user: 3          # 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail）
 
 # ============================================================
+# 阶段二百二十六：厂商推送通道（方案 B：进程被杀兜底，修改后需重启服务端生效）
+# 接收端无任何在线连接（APP 进程被杀/彻底退出）时，经厂商系统级推送下发消息摘要通知，
+# 点击通知经深链打开对应会话（与前台服务通知同款）。厂商推送服务为系统常驻进程，
+# 应用进程不在也能收到——这是微信"消息永远收得到"的兜底机制；
+# FGS 后台接管时连接在线，不进入本通道，天然不重复推送。
+# 通道二选一（EMAS 启用即优先，全量替代路线）：
+#   emas  = 阿里云 EMAS 移动推送（聚合推送，推荐）：服务端只调阿里云一个 OpenAPI，按账号
+#           推送（客户端 SDK 原生 bindAccount 绑定，无需 regId 注册表）；在线走阿里云 ACCS
+#           长连接、进程被杀自动降级华为/小米/OPPO/vivo 等厂商离线通道。使用前提：
+#           阿里云控制台开通移动推送 → EMAS 控制台创建应用（包名 com.gengyang.im）拿 AppKey
+#           → RAM 创建 AccessKey（建议子账号最小权限）→ 各厂商离线通道凭据在 EMAS 控制台配置；
+#           客户端需接入 EMAS SDK；服务器须能出网访问 cloudpush.aliyuncs.com
+#   mipush = 小米直连（备用）：先到小米开放平台（dev.mi.com）注册应用并开通推送服务取得
+#           AppSecret，并把 APK 重新打包集成 MiPush SDK；按设备 regId 定向推送
+# ============================================================
+push:
+  enabled: true        # 厂商推送总开关（false 时全链路直通，零开销零回归）
+  emas:
+    enabled: true      # 阿里云 EMAS 聚合推送通道开关（启用时优先于 mipush）
+    access_key_id: ""      # 阿里云 RAM AccessKey ID（留空=通道停用；真值仅填本地，禁止提交进 Git）
+    access_key_secret: ""  # 阿里云 RAM AccessKey Secret（仅存本文件，不下发客户端；真值仅填本地，禁止提交进 Git）
+    app_key: "335752905"   # EMAS 应用级 AppKey（移动推送控制台应用详情页获取，纯数字）
+    region: "cn-hangzhou"  # OpenAPI 接入区域（与 EMAS 应用开通区域一致）
+    package: "com.gengyang.im"  # 应用包名（与 APK applicationId 一致；厂商离线通道辅助弹窗参数
+                           # AndroidPopupActivity=<package>.EmasPopupActivity 组装用，
+                           # 留空=不带辅助弹窗参数，进程被杀后厂商离线通道不可达，仅在线可达）
+  mipush:
+    enabled: false     # 小米推送通道开关（EMAS 启用时本通道不投递，保留备用）
+    app_secret: ""     # 小米推送 AppSecret（开放平台推送服务页获取；留空=通道停用）
+    package: ""        # 应用包名（须与 APK applicationId 完全一致）
+
+# ============================================================
 # 网盘（百度网盘同款个人云盘：元数据 MySQL im_drive_file + 文件本体经服务端归口
 # 落 MinIO 或本地磁盘；客户端永不接触 MinIO 凭据，全部操作经 /api/drive/* 代理）
 # ============================================================

@@ -31,6 +31,8 @@ type Server struct {
 	// 阶段二百二十一：未登录（半开）连接原子计数——恶意刷连接防护，
 	// HandleWS 校验通过后 +1、readPump 退出时 -1，超 pending_limit 拒绝新连接
 	pendingConns atomic.Int64
+	// 阶段二百二十六：厂商推送投递队列（worker 池消费；未启用推送配置时恒空零开销）
+	pushCh chan pushJob
 }
 
 // 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
@@ -54,6 +56,8 @@ func NewServer(cfg *config.Config) *Server {
 	s.loginQ.start()
 	// 并发优化 E1：消息批量落库 worker（全站高频 Message 写归口，单事务批写一次 fsync）
 	startMessageBatchWorker()
+	// 阶段二百二十六：厂商推送投递 worker 池（未启用推送配置时队列恒空零开销）
+	s.startPushWorkers()
 	// 集群总线：cluster_enabled=true 时启动订阅消费端并注入 hub（默认关闭=单实例零行为变化）
 	s.startClusterBus(cfg)
 	if s.hub.bus != nil {
@@ -318,6 +322,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段三十二：超大文件分片直传取消（发送方上行，服务端清理会话并同步双方）
 	case protocol.MsgTypeFileCancel:
 		s.handleFileCancel(c, msg)
+	// 阶段二百二十六：厂商推送 regId 上报（APP 端登录后上报，离线通知投递依据）
+	case protocol.MsgTypePushRegID:
+		s.handlePushRegID(c, msg)
 	// 阶段四十三：AI 问答（智能体列表查询 + 流式问答）
 	case protocol.MsgTypeAIAgents:
 		s.handleAIAgents(c, msg)

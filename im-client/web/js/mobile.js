@@ -745,6 +745,12 @@
                     var tabBtn = document.querySelector('.nav-icon[data-tab="' + tabName + '"]');
                     if (tabBtn) tabBtn.click();
                 } else if (targetId) {
+                    // 阶段二百三十：带 data-close-profile 的条目（设置入口）先关个人页再转发，
+                    // 设置页为全屏覆盖层，不关会导致返回时个人页叠在设置页之下状态残留
+                    if (item.getAttribute('data-close-profile')) {
+                        var profileClose = document.getElementById('profile-close');
+                        if (profileClose) profileClose.click();
+                    }
                     var btn = document.getElementById(targetId);
                     if (btn) btn.click();
                 }

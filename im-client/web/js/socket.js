@@ -39,6 +39,107 @@
     // 服务端会先下发 ERROR 帧再立即关连接，onclose 据此区分"服务端拒绝"与"网络断开"
     var lastRejectAt = 0;
 
+    // ===== 阶段二百二十五：手机 APP 切后台/息屏后台保活（WebView ↔ 原生前台服务连接交接） =====
+    // 根因：Android 切后台/息屏后 WebView 网络与定时器被系统冻结，心跳发不出 → 服务端判死断线。
+    // 方案：切后台时本页面主动断开（带交接标记，防 3s 重连与原生服务互踢循环），由原生前台服务
+    // （KeepAliveService，同协议同 platform='app'）接管收消息弹通知；回前台时原生断开交还，
+    // 本页面立即重连。同一时刻仅一条 app 端连接，规避服务端同端互踢。
+    var nativeBG = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    // 阶段二百三十一：桥可能晚于本脚本注入（页面加载早期 isNativePlatform 尚未就绪），
+    // nativeBG 一次性求值会永久锁死 false——load 后重算一次，晚注册的窗口事件同样受益
+    window.addEventListener('load', function () {
+        nativeBG = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        // 桥就绪但登录已成功且服务未拉起的场景（此前 nativeBG=false 跳过了 startKeepAlive）：
+        // 重算后立即尝试补拉（幂等；桥仍未就绪则进入轮询等待，登录响应先于桥注入时由此兜住）
+        try { bgDoStart() || bgWaitStart(); } catch (e) {}
+    });
+    var bgHandover = false;     // true=已切后台交接（连接断开不触发自动重连）
+    var bgResyncPending = false;// 回前台重连成功后需重拉当前会话历史（后台期消息由原生连接接收，WebView 未渲染）
+    // 阶段二百三十二修复：bgPlugin 原实现以 !!(...) 返回布尔值，调用处却当插件对象用
+    // （bgp.startKeepAlive / bgPlugin().takeOver()）——true 上取方法恒 undefined 抛
+    // TypeError，startKeepAlive/takeOver/handBack 从未真正发出（prefs 凭据为空 → 后台接管
+    // 登录失败 → 切后台即下线；此前切后台接管全靠原生 ActivityLifecycleCallbacks 兜底）。
+    // 现返回插件对象（桥未就绪返回 null），调用处按对象判空使用
+    function bgPlugin() {
+        // 全实时求值：isNativePlatform 现查而非依赖加载期快照（防桥晚注入竞态）
+        if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+            && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM) {
+            return window.Capacitor.Plugins.BackgroundIM;
+        }
+        return null;
+    }
+    function bgStartHandover() {
+        if (!nativeBG || bgHandover || !loginOk) return;
+        bgHandover = true;
+        try { if (ws) ws.close(1000, 'handover'); } catch (e) {}
+        try { var bgp = bgPlugin(); if (bgp) bgp.takeOver(); } catch (e) {}
+    }
+    function bgEndHandover() {
+        // 阶段二百二十五：不要求 bgHandover 已置位——JS 被系统瞬间冻结未及走交接流程时
+        // （切后台 close/takeOver 均未执行），回前台仍须交还并重连
+        if (!nativeBG || !loginOk) return;
+        bgHandover = false;
+        try { var bgp = bgPlugin(); if (bgp) bgp.handBack(); } catch (e) {}
+        if (!connected && currentUsername) {
+            // 立即重连（不等 3s 重连定时器），成功后重拉当前会话历史补齐后台期消息
+            bgResyncPending = true;
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            connect(currentUsername, window._lastPassword || '');
+        }
+    }
+    // 页面隐藏且已登录：连接归原生服务所有，WebView 一律不得重连（防互踢循环）
+    function bgHoldReconnect() {
+        return nativeBG && loginOk && document.visibilityState === 'hidden';
+    }
+
+    // 阶段二百三十一：桥就绪等待器——LOGIN_RESP 到达时 Capacitor 桥可能尚未注入完成
+    // （实测：两次独立会话 LOGIN_RESP 时 bgPlugin() 恒为 false，而更早会话同机制可通——
+    // 桥注入走 handleProxyRequest 代理/DocumentStart，就绪时机不受页面控制）。
+    // 不能因一次求值 false 就放弃保活拉起：轮询等待桥就绪后补拉 startKeepAlive（幂等），
+    // 上限 50 次×200ms=10 秒，超时放弃（原生侧凭据空则本来就忽略）。
+    var bgWaitTimer = null;
+    var bgStartDone = false;
+    function bgDoStart() {
+        if (bgStartDone || !loginOk) return false;
+        var bgp = bgPlugin();
+        if (!bgp) return false;
+        bgStartDone = true;
+        if (bgWaitTimer) {
+            clearInterval(bgWaitTimer);
+            bgWaitTimer = null;
+        }
+        try {
+            bgp.startKeepAlive({ username: currentUsername, password: window._lastPassword || '' });
+        } catch (e) {
+            bgStartDone = false; // 调用异常不锁死，下次轮询可重试
+            return false;
+        }
+        return true;
+    }
+    function bgWaitStart() {
+        if (bgStartDone || bgWaitTimer || !loginOk) return;
+        var tries = 0;
+        bgWaitTimer = setInterval(function () {
+            tries++;
+            if (bgDoStart() || tries > 50) {
+                clearInterval(bgWaitTimer);
+                bgWaitTimer = null;
+            }
+        }, 200);
+    }
+    // 登录态失效（服务端拒绝/被踢/登出）时复位等待器——切账号重登需重新拉起，
+    // 原生侧以最近一次 startKeepAlive 的凭据为准（旧账号服务被顶掉属预期互踢）
+    function bgResetStart() {
+        bgStartDone = false;
+        if (bgWaitTimer) {
+            clearInterval(bgWaitTimer);
+            bgWaitTimer = null;
+        }
+    }
+
     // 消息类型常量
     var MSG = {
         GROUP_CHAT: 1,
@@ -199,13 +300,18 @@
             // 阶段一百三十五：服务端拒绝登录（账号封禁/注销/密码错误等）先下发 ERROR 帧再立即关连接，
             // 1 秒内收到过 ERROR 视为服务端拒绝而非网络断开，置 loginOk=false 阻断自动重连
             // （修复：密码被修改/账号被封禁后重连陷入"拒绝→3 秒重连→拒绝"无限循环）
-            if (Date.now() - lastRejectAt < 1000) {
+            // 阶段二百二十五：页面隐藏期（连接归原生服务）的 ERROR+关闭视为交接顶掉，
+            // 保持登录态——回前台 bgEndHandover 统一重连，防误回登录界面
+            if (Date.now() - lastRejectAt < 1000 && !bgHoldReconnect()) {
                 loginOk = false;
+                bgResetStart();
             }
             // 登录失败提示修复：仅登录成功后才自动重连。
             // 登录失败（密码错误等）服务端会下发错误提示并关闭连接，原实现无条件重连会陷入
             // "失败→3秒重连→失败"无限循环且每次都无提示，页面表现为点击登录后毫无反应
-            if (loginOk) {
+            // 阶段二百二十五：交接断开（切后台主动 close，或接管期被原生登录顶掉）不重连，
+            // 页面隐藏期连接归原生服务所有，防止后台 WebView 与原生服务互踢循环
+            if (loginOk && !bgHandover && !bgHoldReconnect()) {
                 scheduleReconnect();
             } else {
                 // 登录持久化：未登录成功即断开（服务端未启动/密码错误被拒），
@@ -306,7 +412,8 @@
             // 阶段二百二十一：补 loginOk 判定——被踢/登录被拒置 loginOk=false 后，
             // 此前已排队的重连定时器不得再触发（原判定仅 connected/username，
             // 存在"处置后挂起定时器仍重连"的竞态漏洞）
-            if (!connected && currentUsername && loginOk) {
+            // 阶段二百二十五：交接期（bgHandover）与页面隐藏期（连接归原生服务）同样不得触发
+            if (!connected && currentUsername && loginOk && !bgHandover && !bgHoldReconnect()) {
                 connect(currentUsername, window._lastPassword || '');
             }
         }, 3000); // 3s 后重连
@@ -314,7 +421,18 @@
 
     // 阶段一百四十九：回前台立即恢复防线——后台节流期间若 WS 已被掐断，回到页面瞬间
     // 立即补发心跳/触发重连（不等被节流拉长的重连定时器），缩短"回到页面仍显示离线"的窗口
+    // 阶段二百二十五：手机 APP 端改造为连接交接归口——切后台/息屏（hidden/pause）主动断开
+    // 并由原生前台服务接管；回前台（visible/resume）原生交还并立即重连。WEB/PC 端保持原逻辑。
     document.addEventListener('visibilitychange', function () {
+        if (nativeBG) {
+            if (!loginOk) return;
+            if (document.visibilityState === 'hidden') {
+                bgStartHandover();
+            } else {
+                bgEndHandover();
+            }
+            return;
+        }
         if (document.visibilityState !== 'visible' || !loginOk) return;
         if (ws && ws.readyState === WebSocket.OPEN) {
             send({ msg_type: MSG.HEARTBEAT });
@@ -322,6 +440,18 @@
             scheduleReconnect();
         }
     });
+    // 阶段二百二十五：Capacitor App 插件 pause/resume 兜底（与 visibilitychange 同语义，
+    // 双通道幂等——JS 被冻结前监听器仍在原生事件桥上，保证交接不丢）
+    if (nativeBG && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+        try {
+            window.Capacitor.Plugins.App.addListener('pause', function () {
+                if (loginOk) bgStartHandover();
+            });
+            window.Capacitor.Plugins.App.addListener('resume', function () {
+                if (loginOk) bgEndHandover();
+            });
+        } catch (e) {}
+    }
 
     function dispatch(msg) {
         // 阶段一百三十五：记录 ERROR 帧到达时间（登录拒绝/踢出先发 ERROR 再关连接，
@@ -334,10 +464,23 @@
             // 迟到超 1 秒即误判"网络断开"→ 3 秒自动重连 → 把新登录端反踢下线 → 双方互踢循环
             // （服务端日志表现为每 3 秒一次"同端互踢"）。已登录态收到 kick 即刻处置，不等 onclose
             if (msg.kick) {
-                loginOk = false;
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
+                if (bgHoldReconnect()) {
+                    // 阶段二百二十五：页面隐藏期被顶掉=自家原生前台服务接管登录（预期交接），
+                    // 保持登录态不处置；回前台由 bgEndHandover 交还并重连
+                } else {
+                    loginOk = false;
+                    bgResetStart();
+                    if (reconnectTimer) {
+                        clearTimeout(reconnectTimer);
+                        reconnectTimer = null;
+                    }
+                    // 阶段二百三十四修复：被踢=本端登录态已失效——停掉原生前台服务并清除凭据。
+                    // 原实现只阻断 WebView 自动重连，KeepAliveService 仍持有旧凭据：被踢设备
+                    // 息屏/切后台时原生服务照旧 TAKEOVER 自动登录「抢线」，把当前在线设备踢下线，
+                    // 双端各持凭据互相顶掉形成循环（真机+模拟器同账号两端互踢实测复现）。
+                    // 交接期被顶（自家原生接管）走上方 bgHoldReconnect 分支不受影响；
+                    // 用户重新登录成功后 startKeepAlive 会重写凭据，正常使用无感
+                    try { var bgpKicked = bgPlugin(); if (bgpKicked) bgpKicked.stopKeepAlive(); } catch (e) {}
                 }
             }
         }
@@ -404,6 +547,18 @@
                 }
                 if (window.P2PFile && window.P2PFile.config) window.P2PFile.config(p2pCfg);
             } catch (e) {}
+            // 阶段二百二十五：登录成功后启动原生前台服务（保存凭据+拉起服务，幂等）；
+            // 回前台交接重连成功后派发历史补拉事件（后台期消息由原生连接接收，WebView 未渲染）
+            // 阶段二百三十一：登录成功即尝试拉起保活；桥未就绪时由等待器轮询补拉——
+            // 实测桥注入（handleProxyRequest 代理/DocumentStart）就绪时机不受页面控制，
+            // LOGIN_RESP 到达时 bgPlugin() 可为 false，不能就此放弃保活
+            if (loginOk) {
+                try { if (!bgDoStart()) bgWaitStart(); } catch (e) {}
+                if (bgResyncPending) {
+                    bgResyncPending = false;
+                    try { window.dispatchEvent(new CustomEvent('im_resync_history')); } catch (e) {}
+                }
+            }
             window._lastPassword = window._lastPassword || '';
         }
         // 阶段一百五十六：文件直传信令分流到 P2P 引擎（协商/数据面处理；

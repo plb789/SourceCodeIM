@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
+        android:name=".MainApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -9,6 +10,17 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
+
+        <!-- 阶段二百二十六：阿里云 EMAS 移动推送凭据（EMAS 控制台创建应用 com.gengyang.im）。
+             排障结论（2026-09-30）：曾误判"切后台断线"为 EMAS 所致并摘除 MainApplication 做二分；
+             实测根因是 capacitor.config.json 的 server.url 直启远程域名导致 Capacitor 插件桥接失效，
+             保活服务从未启动。恢复内嵌加载后保活正常，EMAS 初始化（MainApplication）与保活共存无冲突。 -->
+        <meta-data
+            android:name="com.alibaba.app.appkey"
+            android:value="335752905" />
+        <meta-data
+            android:name="com.alibaba.app.appsecret"
+            android:value="d33861971d4b473f83c8279c6c574d2a" />
 
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
@@ -23,6 +35,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- 阶段二百二十六：imapp 深链（scheme=imapp，BROWSABLE 供浏览器/厂商推送 Intent URI 拉起；
+                 前台服务通知为显式 Intent 不依赖本 filter；前端 initNativeDeepLink 归口消费 imapp://chat?to=） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="imapp" />
+            </intent-filter>
+
         </activity>
 
         <provider
@@ -34,6 +55,38 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- 阶段二百二十五：后台保活前台服务（切后台/息屏接管长连接收消息弹通知；
+             remoteMessaging 类型为 Android 14+ 消息类前台服务专用型，旧版本自动忽略） -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging"
+            android:stopWithTask="false" />
+
+        <!-- 阶段二百二十六：EMAS 厂商离线通道辅助弹窗（小米/华为等厂商通道推送点击经本
+             Activity 中转跳深链；服务端推送须带 AndroidPopupActivity/Title/Body 参数才可达，
+             与本类一一对应。exported=false 仅 SDK 内部拉起） -->
+        <activity
+            android:name=".EmasPopupActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- 阶段二百二十六：EMAS 自有通道（ACCS 在线）通知点击/清除回调（厂商通道点击走
+             EmasPopupActivity 辅助弹窗；各厂商通道专用 action 接入对应 third-push SDK 后
+             按官方文档补齐） -->
+        <receiver
+            android:name=".EmasMessageReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.alibaba.push2.action.NOTIFICATION_OPENED" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.alibaba.push2.action.NOTIFICATION_REMOVED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- Permissions -->
@@ -45,4 +98,12 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 阶段二百二十五：后台保活前台服务所需权限（前台服务/消息类前台服务/通知/唤醒锁） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 阶段二百二十六：电池优化豁免申请（设置页"后台保活"引导，IM 消息类应用合规使用；
+         仅用于弹出系统授权框，不自动开启） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 </manifest>

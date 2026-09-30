@@ -401,6 +401,14 @@
     function clearAuth() {
         try { localStorage.removeItem('im_auth'); } catch (e) {}
         try { localStorage.removeItem('drive_token'); } catch (e) {} // 阶段一百九十八：切号/登出同步清网盘 token
+        // 阶段二百二十五：退出/换号同步停止后台保活服务（凭据随之清除，后台不再收消息通知）
+        try {
+            var bg = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+                && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+            if (bg) bg.stopKeepAlive();
+            // 阶段二百二十六：退出/换号同步解绑 EMAS 账号（防离线通知泄漏到已登出账号）
+            if (bg && bg.emasBindAccount) bg.emasBindAccount({ account: '' });
+        } catch (e) {}
     }
     function getSavedAuth() {
         try { return JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || null; } catch (e) { return null; }
@@ -429,6 +437,86 @@
         loginView.classList.remove('hidden');
         chatView.classList.add('hidden');
     });
+
+    // ===== 阶段二百二十五：手机 APP 后台保活联动（切后台由原生前台服务接管收消息） =====
+    // 回前台交接重连成功后（socket.js 派发），重拉当前会话历史——后台期消息由原生连接
+    // 接收并弹通知，WebView 未渲染，交接窗口内到达的消息经服务端登录补推/历史拉取归口补齐
+    window.addEventListener('im_resync_history', function () {
+        if (!currentChatUser || !IMSocket.isConnected()) return;
+        historyPage = 1;
+        historyHasMore = true;
+        loadingMore = false;
+        messageList.innerHTML = '';
+        messageList.classList.add('conv-switching');
+        if (convSwitchTimer) clearTimeout(convSwitchTimer);
+        convSwitchTimer = setTimeout(function () {
+            convSwitchTimer = null;
+            messageList.classList.remove('conv-switching');
+        }, 3000);
+        loadHistory();
+    });
+    // 后台通知点击跳转：原生通知携带深链 imapp://chat?to=<会话目标>，
+    // 经 Capacitor App 插件 appUrlOpen（热启动）/getLaunchUrl（冷启动）送达此处打开会话
+    (function initNativeDeepLink() {
+        if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) return;
+        var capApp = window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+        if (!capApp) return;
+        var pendingTarget = null;
+        function openTarget(target) {
+            if (!target || chatView.classList.contains('hidden')) {
+                // 未登录：暂存，登录成功后再打开（LOGIN_RESP 监听消费）
+                if (target) pendingTarget = target;
+                return;
+            }
+            try { openConversation(target); } catch (e) {}
+        }
+        function handleUrl(url) {
+            try {
+                if (!url || url.indexOf('imapp://chat') !== 0) return;
+                var m = /to=([^&]+)/.exec(url);
+                if (m && m[1]) openTarget(decodeURIComponent(m[1]));
+            } catch (e) {}
+        }
+        try {
+            capApp.addListener('appUrlOpen', function (data) { handleUrl(data && data.url); });
+            if (capApp.getLaunchUrl) {
+                capApp.getLaunchUrl().then(function (data) { if (data && data.url) handleUrl(data.url); }).catch(function () {});
+            }
+        } catch (e) {}
+        IMSocket.on(IMSocket.MSG.LOGIN_RESP, function (msg) {
+            var ok = false;
+            try { ok = JSON.parse(msg.content).result === 'ok'; } catch (e) { ok = msg.content === 'ok'; }
+            // 阶段二百二十六：厂商推送 regId 上报（方案 B 骨架）——登录成功后把厂商推送 token
+            // 经 96 号帧上报服务端，离线（进程被杀）时服务端经厂商 REST API 下发通知摘要，
+            // 点击通知深链打开会话。MiPush SDK 未接入时插件返回空串即跳过；接入后零改动生效
+            if (ok) {
+                try {
+                    var bgIM = window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+                    if (bgIM && bgIM.getVendorPushRegId) {
+                        bgIM.getVendorPushRegId().then(function (r) {
+                            if (!r || !r.reg_id) return;
+                            IMSocket.send({
+                                msg_type: 96,
+                                from_user: (IMSocket.getUsername && IMSocket.getUsername()) || '',
+                                to_user: '',
+                                content: JSON.stringify({ vendor: r.vendor || 'mipush', reg_id: r.reg_id })
+                            });
+                        }).catch(function () {});
+                    }
+                    // 阶段二百二十六：EMAS 按账号绑定（服务端离线推送 Target=ACCOUNT 定向前提；
+                    // EMAS 凭据未配置时插件内静默返回，不影响现有流程）
+                    if (bgIM && bgIM.emasBindAccount) {
+                        bgIM.emasBindAccount({ account: (IMSocket.getUsername && IMSocket.getUsername()) || '' });
+                    }
+                } catch (e) {}
+            }
+            if (ok && pendingTarget) {
+                var t = pendingTarget;
+                pendingTarget = null;
+                openConversation(t);
+            }
+        });
+    })();
 
     // ===== 主题切换 =====
     var themes = ['light', 'dark', 'system'];
@@ -479,6 +567,19 @@
         // 阶段一百三十四：主题持久化到主进程（userData/im_theme.json）——下次启动窗口背景/按钮初值
         // 直接按主题深浅创建，消除深色主题下启动早期短暂浅色底；浏览器/手机 APP 无 desktop 桥自动旁路
         if (window.desktop && window.desktop.syncTheme) window.desktop.syncTheme(theme);
+        // 阶段二百三十一：手机 APP 系统状态栏底色跟随主题（--primary；浅色主题=主题绿、深色主题=深色面板），
+        // 消除登录页/聊天页顶部时间电量行黑底与页面割裂；仅 APP 端有 StatusBar 插件，浏览器自动旁路
+        try {
+            var SB = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar;
+            if (SB) {
+                var css = getComputedStyle(document.documentElement);
+                var dark = theme === 'dark';
+                var color = dark
+                    ? ((css.getPropertyValue('--panel-bg') || '').trim() || '#1e1e1e') // 深色=主题面板色
+                    : ((css.getPropertyValue('--primary') || '').trim() || '#07c160'); // 浅色=主题色
+                SB.setBackgroundColor({ color: color }).catch(function () {});
+            }
+        } catch (e) {}
     }
     // 按当前主题刷新按钮图标与悬停提示
     function renderThemeBtn(theme) {
@@ -502,10 +603,21 @@
     var settingsViews = document.querySelectorAll('.settings-view');
     // 修订（用户实测反馈：铺满全屏会盖住左侧列表栏）——设置页仅占用主聊天区（浏览区）：
     // DOM 移入 .main-chat（position:relative 已就绪）配合 CSS absolute 定位，左侧列表保持可见可点
+    // 阶段二百三十：手机端（html.m）main-chat 整体滑出视口——设置页挂在其内会跟着不可见
+    //（用户实测：点设置只见个人页关闭回列表，点好友时设置页才随 main-chat 滑入"冒"出来）。
+    // 故挂载按视口归口：手机端移回原始父级（配合 CSS fixed 全屏覆盖），PC/WEB 宽屏移入主聊天区
     var mainChatEl = document.querySelector('.main-chat');
-    if (mainChatEl && settingsMask && settingsMask.parentElement !== mainChatEl) {
-        mainChatEl.appendChild(settingsMask);
+    var settingsHomeEl = settingsMask ? settingsMask.parentElement : null;
+    function settingsMountByViewport() {
+        if (!settingsMask || !mainChatEl) return;
+        var mobile = document.documentElement.classList.contains('m');
+        if (mobile && settingsMask.parentElement === mainChatEl && settingsHomeEl) {
+            settingsHomeEl.appendChild(settingsMask);
+        } else if (!mobile && settingsMask.parentElement !== mainChatEl) {
+            mainChatEl.appendChild(settingsMask);
+        }
     }
+    settingsMountByViewport();
 
     // ===== 阶段一百二十一：工具链市场（独立页级市场；清单 /api/toolchains，一键下载安装到 ~/.im-mcp/<name>） =====
     // 与 MCP 插件市场最大区别：非长驻 MCP 服务器，安装=下载→SHA256 校验→解压；安装状态=~/.im-mcp/<name>/bin/gcc.exe 是否存在。
@@ -672,9 +784,10 @@
     function settingsShowView(view) {
         // 阶段一百零五：MCP 仅 PC 端支持（Web/手机端无 desktop 桥），不支持时提示并留在当前分类
         // 阶段一百一十三：插件市场安装同样依赖 desktop 桥（mcpSave/uv 安装），同 PC 限定
+        // 阶段二百三十一：返回 false 供手机端主页条目判断——拦截时不推入二级页（留在列表）
         if ((view === 'mcp' || view === 'market') && !agentMcpSupported()) {
             showToast(I18N.t('仅 PC 客户端支持该功能'));
-            return;
+            return false;
         }
         settingsNavItems.forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
         settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-' + view); });
@@ -698,6 +811,16 @@
                 renderAgentMcpList();
             });
         }
+        // 阶段二百三十一：手机端统一归口——任何路径切换分类即推入二级页（微信式），
+        // 主页条目/openMcpPanel 深链/PC nav 复用同一入口；标题同步当前分类名
+        if (document.documentElement.classList.contains('m')) {
+            var navBtn = document.querySelector('.settings-nav-item[data-view="' + view + '"]');
+            settingsMask.classList.add('settings-sub');
+            if (settingsSubheadTitle) {
+                settingsSubheadTitle.textContent = (navBtn && navBtn.querySelector('span')) ? navBtn.querySelector('span').textContent : I18N.t('设置');
+            }
+        }
+        return true;
     }
 
     // 主题卡片高亮当前主题（与标题栏主题按钮同源 getTheme）
@@ -718,6 +841,7 @@
 
     // 打开设置页：回填账号信息（用户名/头像/积分与标题栏同源，前端零计算），默认账号分类
     function settingsOpen() {
+        settingsMountByViewport(); // 阶段二百三十：按当前视口归口挂载（手机端全屏 / PC 主聊天区；resize 横竖屏切换后纠偏）
         settingsMask.classList.remove('hidden');
         var name = IMSocket.getUsername() || '';
         document.getElementById('settings-account-name').textContent = name || I18N.t('未登录');
@@ -737,17 +861,95 @@
         var ptsText = pts ? '⚡ ' + pts : '—';
         document.getElementById('settings-points').textContent = ptsText;
         document.getElementById('settings-account-points').textContent = pts ? pts + I18N.t(' 积分') : '—';
-        settingsShowView('account');
+        // 阶段二百三十一：手机端打开停留在主页列表（微信式首页态），不预推二级页；
+        // 二级页由条目点击/settingsShowView 统一归口推入（openMcpPanel 深链随后调
+        // settingsShowView('mcp') 自动进入，不受此分支影响）。PC 端维持默认账号分类
+        if (document.documentElement.classList.contains('m')) {
+            settingsMask.classList.remove('settings-sub');
+            if (settingsSubheadTitle) settingsSubheadTitle.textContent = I18N.t('设置');
+            // 预备账号视图内容为当前显示（防上次退出残留视图在返回时闪现）
+            settingsViews.forEach(function (s) { s.classList.toggle('hidden', s.id !== 'settings-view-account'); });
+        } else {
+            settingsShowView('account');
+        }
     }
 
     function settingsClose() {
         settingsMask.classList.add('hidden');
+        // 阶段二百三十一：手机端清理二级页态（下次打开从主页列表开始）
+        settingsMask.classList.remove('settings-sub');
         // 阶段一百零五：MCP 面板随设置页关闭时同步停止状态轮询（closeMcpPanel 内含轮询清理）
         closeMcpPanel();
     }
 
     settingsBtn.addEventListener('click', settingsOpen);
     settingsCloseBtn.addEventListener('click', settingsClose);
+
+    // ===== 阶段二百三十一：手机端设置主页（微信同款分组条目列表 + 二级页推入导航） =====
+    // 分组定义（PC 端左导航顺序无关；条目图标/文字从 .settings-nav-item 克隆，零复制归口）
+    var SETTINGS_HOME_GROUPS = [
+        ['account', 'appearance', 'network'],
+        ['drivemount', 'rules', 'tasks'],
+        ['mcp', 'market', 'toolchain'],
+        ['about']
+    ];
+    var settingsHomeEl = document.getElementById('settings-home');
+    var settingsSubheadEl = document.getElementById('settings-subhead');
+    var settingsSubheadTitle = document.getElementById('settings-subhead-title');
+    // 组装主页：每分组一张圆角卡片，条目 = 克隆 nav 图标 + 文字 + 右侧箭头
+    (function settingsHomeBuild() {
+        if (!settingsHomeEl) return;
+        var head = document.createElement('div');
+        head.className = 'settings-home-head';
+        head.innerHTML = '<span class="settings-home-title">' + I18N.t('设置') + '</span>';
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'settings-subhead-btn';
+        closeBtn.setAttribute('aria-label', I18N.t('关闭'));
+        closeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+        closeBtn.addEventListener('click', settingsClose);
+        head.appendChild(closeBtn);
+        settingsHomeEl.appendChild(head);
+        var body = document.createElement('div');
+        body.className = 'settings-home-body';
+        SETTINGS_HOME_GROUPS.forEach(function (group) {
+            var card = document.createElement('div');
+            card.className = 'settings-home-group';
+            group.forEach(function (view) {
+                var navBtn = document.querySelector('.settings-nav-item[data-view="' + view + '"]');
+                if (!navBtn) return; // PC 侧不存在该分类时跳过（防御）
+                var item = document.createElement('button');
+                item.className = 'settings-home-item';
+                var label = '';
+                navBtn.querySelectorAll('svg').forEach(function (s) { item.appendChild(s.cloneNode(true)); });
+                var span = navBtn.querySelector('span');
+                if (span) label = span.textContent;
+                var labelEl = document.createElement('span');
+                labelEl.className = 'settings-home-item-label';
+                labelEl.textContent = label;
+                item.appendChild(labelEl);
+                var chevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                chevron.setAttribute('viewBox', '0 0 24 24');
+                chevron.setAttribute('width', '18');
+                chevron.setAttribute('height', '18');
+                chevron.setAttribute('class', 'settings-home-item-arrow');
+                chevron.innerHTML = '<path fill="currentColor" d="M9.29 6.71a1 1 0 0 0 0 1.41L13.17 12l-3.88 3.88a1 1 0 1 0 1.41 1.41l4.59-4.59a1 1 0 0 0 0-1.41L10.7 6.7a1 1 0 0 0-1.41 0z"/>';
+                item.appendChild(chevron);
+                item.addEventListener('click', function () { settingsShowView(view); });
+                card.appendChild(item);
+            });
+            if (card.children.length) body.appendChild(card);
+        });
+        settingsHomeEl.appendChild(body);
+    })();
+    // 二级页顶栏：返回 = 退回主页列表；× = 关闭设置页（与 PC settings-close 同归口）
+    var settingsSubheadBack = document.getElementById('settings-subhead-back');
+    var settingsSubheadClose = document.getElementById('settings-subhead-close');
+    if (settingsSubheadBack) settingsSubheadBack.addEventListener('click', function () {
+        settingsMask.classList.remove('settings-sub');
+        if (settingsSubheadTitle) settingsSubheadTitle.textContent = I18N.t('设置');
+    });
+    if (settingsSubheadClose) settingsSubheadClose.addEventListener('click', settingsClose);
+
     settingsNavItems.forEach(function (b) {
         b.addEventListener('click', function () { settingsShowView(b.dataset.view); });
     });
@@ -1061,6 +1263,82 @@
             showToast(sP2p.checked ? I18N.t('已开启好友文件直传') : I18N.t('已关闭好友文件直传'));
         });
     }
+
+    // 阶段二百二十六：手机 APP 后台保活引导（学微信：设置页引导用户开系统权限）。
+    // 仅原生 APP 端显示；电池优化豁免是唯一可编程弹系统授权框的项（允许后息屏/省电不限制后台连接），
+    // 厂商自启动管理页无公开 API 仅跳转引导。状态在进入页面与从系统设置页返回时刷新。
+    (function initKeepAliveGuide() {
+        // 阶段二百三十：Capacitor 桥初始化晚于页面脚本时（启动竞态）页面加载瞬间
+        // Plugins 可能尚未注册——轮询等待就绪（100ms×100 次≈10s 上限）再判定显隐，
+        // 避免竞态导致卡片永不显示（登录后的 startKeepAlive 时机更晚故一直正常）
+        var kaTries = 0;
+        (function tryInit() {
+        var isNative = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+        var bgPlugin = isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+        var kaCard = document.getElementById('settings-ka-card');
+        if (!bgPlugin || !kaCard) {
+            if (++kaTries <= 100) setTimeout(tryInit, 100);
+            return;
+        }
+        document.getElementById('settings-ka-subtitle').style.display = '';
+        kaCard.style.display = '';
+        var kaBatState = document.getElementById('settings-ka-battery-state');
+        var kaBatBtn = document.getElementById('settings-ka-battery-btn');
+        var kaNState = document.getElementById('settings-ka-notif-state');
+        var kaNBtn = document.getElementById('settings-ka-notif-btn');
+        var kaVState = document.getElementById('settings-ka-autostart-state');
+        var kaVBtn = document.getElementById('settings-ka-autostart-btn');
+        var MF_NAMES = { xiaomi: '小米/红米', redmi: '小米/红米', huawei: '华为/荣耀', honor: '华为/荣耀',
+            oppo: 'OPPO/一加', realme: 'OPPO/一加', oneplus: 'OPPO/一加', vivo: 'vivo/iQOO', iqoo: 'vivo/iQOO',
+            meizu: '魅族', samsung: '三星', letv: '乐视', google: '通用' };
+        function refreshKaStatus() {
+            try {
+                // 阶段二百三十：消息通知权限（被拒 = 横幅/息屏提醒全静默，最优先引导）
+                bgPlugin.getNotificationStatus().then(function (s) {
+                    if (!s || !kaNState) return;
+                    var on = !!s.enabled;
+                    kaNState.textContent = on ? I18N.t('已开启') : I18N.t('已关闭（收不到提醒）');
+                    if (kaNBtn) kaNBtn.style.display = on ? 'none' : '';
+                }).catch(function () {});
+                bgPlugin.getKeepAliveGuideStatus().then(function (s) {
+                    if (!s) return;
+                    var ignored = !!s.batteryIgnored;
+                    kaBatState.textContent = ignored ? I18N.t('已豁免') : I18N.t('未豁免（建议开启）');
+                    kaBatBtn.style.display = ignored ? 'none' : '';
+                    var mf = String(s.manufacturer || '');
+                    kaVState.textContent = I18N.t(MF_NAMES[mf] || mf || '通用');
+                }).catch(function () {});
+            } catch (e) {}
+        }
+        refreshKaStatus();
+        if (kaBatBtn) kaBatBtn.addEventListener('click', function () {
+            try {
+                bgPlugin.requestIgnoreBatteryOptimization().then(function () {
+                    // 系统授权框关闭回跳页面后 visibilitychange 会刷新；延时兜底部分 ROM 不触发事件
+                    setTimeout(refreshKaStatus, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        if (kaNBtn) kaNBtn.addEventListener('click', function () {
+            try {
+                bgPlugin.openNotificationSettings().then(function () {
+                    setTimeout(refreshKaStatus, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        if (kaVBtn) kaVBtn.addEventListener('click', function () {
+            try {
+                bgPlugin.openAutoStartSetting().then(function () {
+                    showToast(I18N.t('请在打开的页面中允许本应用自启动与后台运行'));
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        // 用户从系统设置页返回 APP 时刷新豁免状态（仅回前台这一刻查一次，开销可忽略）
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) refreshKaStatus();
+        });
+        })();
+    })();
 
     // 阶段一百五十九：接收文件本地缓存双开关（用户反馈默认值：自动落盘开、本地缓存关；
     // 写入/读回归口 p2p-file.js cacheReceived/cacheGet）
