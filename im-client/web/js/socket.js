@@ -342,9 +342,15 @@
             // 页面隐藏期连接归原生服务所有，防止后台 WebView 与原生服务互踢循环
             if (loginOk && !bgHandover && !bgHoldReconnect()) {
                 scheduleReconnect();
-            } else {
+            } else if (!loginOk) {
                 // 登录持久化：未登录成功即断开（服务端未启动/密码错误被拒），
-                // 派发连接失败事件，供乐观显示的聊天界面回退到登录界面
+                // 派发连接失败事件，供乐观显示的聊天界面回退到登录界面。
+                // 阶段二百四十一修复：交接型断开（bgHandover 切后台主动 close /
+                // bgHoldReconnect 页面隐藏期被自家原生接管顶掉）loginOk 仍为 true，
+                // 原实现 else 无条件派发 im_connect_failed → chat.js 把聊天界面切
+                // 成登录界面 → 切后台瞬间/回前台/打开文件选择器（Activity 离开前台
+                // 均触发 visibilitychange 交接）闪现登录页；交接期登录态保持，
+                // 回前台由 bgEndHandover 统一重连恢复，不应回退登录页
                 try { window.dispatchEvent(new CustomEvent('im_connect_failed')); } catch (e) {}
             }
         };
