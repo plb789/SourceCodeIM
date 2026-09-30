@@ -245,6 +245,68 @@ public class BackgroundIMPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    /** 阶段二百三十七：来电弹窗权限状态——fullScreen=全屏意图可用（熄屏/锁屏自动全屏拉起接听页），
+     *  overlay=悬浮窗已授权（亮屏使用其他应用时直接弹出接听页，Android 10+ 后台启动豁免）。
+     *  Android 14+ 全屏意图默认收回（API 31-33 声明即授予），需引导用户到系统设置开启 */
+    @PluginMethod
+    public void getCallAlertStatus(PluginCall call) {
+        Context ctx = bridge.getContext().getApplicationContext();
+        boolean fullScreen = true;
+        if (Build.VERSION.SDK_INT >= 31) {
+            android.app.NotificationManager nm =
+                    (android.app.NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            try {
+                fullScreen = nm != null && nm.canUseFullScreenIntent();
+            } catch (Throwable t) {
+                // 部分模拟器魔改 framework 缺失该方法（NoSuchMethodError），按 API 31-33
+                // 「声明即授予」语义兜底为已授予；真机 Android 14+ 该方法必然存在不受影响
+                fullScreen = true;
+            }
+        }
+        JSObject ret = new JSObject();
+        ret.put("fullScreen", fullScreen);
+        ret.put("overlay", android.provider.Settings.canDrawOverlays(ctx));
+        call.resolve(ret);
+    }
+
+    /** 阶段二百三十七：跳系统"显示在其他应用上层"设置页（悬浮窗授权——亮屏直接弹出接听页的前提） */
+    @PluginMethod
+    public void openOverlaySettings(PluginCall call) {
+        Activity act = bridge.getActivity();
+        if (act != null) {
+            try {
+                Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + act.getPackageName()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                act.startActivity(i);
+            } catch (Exception ignored) {
+            }
+        }
+        call.resolve();
+    }
+
+    /** 阶段二百三十七：跳系统全屏意图（来电弹窗）设置页——Android 14+ 专用入口；
+     *  低版本声明即授予无此页，直接 resolve。页面不可用时降级应用详情页 */
+    @PluginMethod
+    public void openFullScreenIntentSettings(PluginCall call) {
+        Activity act = bridge.getActivity();
+        if (act != null && Build.VERSION.SDK_INT >= 34) {
+            try {
+                Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        Uri.parse("package:" + act.getPackageName()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                act.startActivity(i);
+            } catch (Exception e) {
+                try {
+                    act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + act.getPackageName())));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        call.resolve();
+    }
+
     /** 厂商推送通道查询（MiPush 备用直连通道的 96 帧上报桥；EMAS 主路线不走本方法——
      *  账号绑定经 emasBindAccount，服务端按账号推送无需 regId）。
      *  MiPush SDK 接入后在返回值填注册 token（当前空串=前端不上报，服务端零推送） */

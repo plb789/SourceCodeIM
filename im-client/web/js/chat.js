@@ -472,10 +472,55 @@
         }
         function handleUrl(url) {
             try {
-                if (!url || url.indexOf('imapp://chat') !== 0) return;
-                var m = /to=([^&]+)/.exec(url);
-                if (m && m[1]) openTarget(decodeURIComponent(m[1]));
+                if (!url) return;
+                if (url.indexOf('imapp://chat') === 0) {
+                    var m = /to=([^&]+)/.exec(url);
+                    if (m && m[1]) openTarget(decodeURIComponent(m[1]));
+                    return;
+                }
+                // 阶段二百三十七：后台来电深链 imapp://call?...——原生三级拉起（悬浮窗直启/全屏意图
+                // 通知/横幅点击）后 WebView 恢复，经此路由展示接听画面；接听/拒绝走既有
+                // onCallRingAction 归口（invite 实时帧不落库，画面字段全部来自深链参数）
+                if (url.indexOf('imapp://call') === 0) handleCallUrl(url);
             } catch (e) {}
+        }
+        // 阶段二百三十七：来电深链参数解析与响铃条拉起（字段与前台 invite 分支一致）
+        function handleCallUrl(url) {
+            if (!(window.desktop && window.desktop.callOpen && window.desktop.callRing)) return;
+            var q = {};
+            var qs = url.indexOf('?') >= 0 ? url.slice(url.indexOf('?') + 1) : '';
+            qs.split('&').forEach(function (kv) {
+                if (!kv) return;
+                var eq = kv.indexOf('=');
+                if (eq < 0) { q[kv] = ''; return; }
+                try { q[kv.slice(0, eq)] = decodeURIComponent(kv.slice(eq + 1) || ''); } catch (e2) {}
+            });
+            if (!q.call_id || !q.from) return;
+            // 本端忙（通话中/已有来电）：自动拒接（与前台 invite 分支同语义，服务端忙判已拦双保险）
+            if (callOpenId || pendingRing) {
+                callSignalSend(q.meet ? '' : q.from,
+                        { action: q.meet ? 'meet_decline' : 'reject', call_id: q.call_id, reason: 'busy' });
+                return;
+            }
+            var ice = [];
+            if (q.ice) { try { ice = JSON.parse(q.ice) || []; } catch (e3) { ice = []; } }
+            pendingRing = {
+                call_id: q.call_id, from: q.from,
+                call_type: q.type === 'video' ? 'video' : 'audio',
+                meet: !!q.meet, group_id: parseInt(q.group_id, 10) || 0,
+                meet_no: q.meet_no || '', ice: ice
+            };
+            window.desktop.callRing({
+                call_id: q.call_id, from: q.from,
+                from_name: q.name || callPeerName(q.from), from_avatar: getAvatarUrl(q.from),
+                call_type: pendingRing.call_type,
+                meet: !!q.meet, group_id: pendingRing.group_id
+            });
+            // 阶段二百三十八：通知接听钮深链（auto=1）——登录完成后自动接听，免先进响铃条再点
+            if (q.auto === '1') {
+                pendingAutoAccept = true;
+                tryAutoAccept();
+            }
         }
         try {
             capApp.addListener('appUrlOpen', function (data) { handleUrl(data && data.url); });
@@ -515,6 +560,7 @@
                 pendingTarget = null;
                 openConversation(t);
             }
+            if (ok) tryAutoAccept(); // 阶段二百三十八：通知接听钮冷启动——登录后补触发自动接听
         });
     })();
 
@@ -1288,6 +1334,13 @@
         var kaNBtn = document.getElementById('settings-ka-notif-btn');
         var kaVState = document.getElementById('settings-ka-autostart-state');
         var kaVBtn = document.getElementById('settings-ka-autostart-btn');
+        // 阶段二百三十七：来电弹窗引导（全屏意图 + 悬浮窗，与保活卡片同模式显隐与状态刷新）
+        var caSub = document.getElementById('settings-call-subtitle');
+        var caFState = document.getElementById('settings-call-fullstate');
+        var caFBtn = document.getElementById('settings-call-fullbtn');
+        var caOState = document.getElementById('settings-call-overlay-state');
+        var caOBtn = document.getElementById('settings-call-overlay-btn');
+        if (caSub && caSub.style) { caSub.style.display = ''; }
         var MF_NAMES = { xiaomi: '小米/红米', redmi: '小米/红米', huawei: '华为/荣耀', honor: '华为/荣耀',
             oppo: 'OPPO/一加', realme: 'OPPO/一加', oneplus: 'OPPO/一加', vivo: 'vivo/iQOO', iqoo: 'vivo/iQOO',
             meizu: '魅族', samsung: '三星', letv: '乐视', google: '通用' };
@@ -1308,6 +1361,19 @@
                     var mf = String(s.manufacturer || '');
                     kaVState.textContent = I18N.t(MF_NAMES[mf] || mf || '通用');
                 }).catch(function () {});
+                // 阶段二百三十七：来电弹窗权限状态（全屏意图/悬浮窗，二者均影响后台来电拉起方式）
+                var callCard = document.getElementById('settings-call-card');
+                if (callCard) callCard.style.display = '';
+                if (bgPlugin.getCallAlertStatus) {
+                    bgPlugin.getCallAlertStatus().then(function (s) {
+                        if (!s) return;
+                        var fs = !!s.fullScreen, ov = !!s.overlay;
+                        if (caFState) caFState.textContent = fs ? I18N.t('已开启') : I18N.t('未开启（仅横幅提醒）');
+                        if (caFBtn) caFBtn.style.display = fs ? 'none' : '';
+                        if (caOState) caOState.textContent = ov ? I18N.t('已开启') : I18N.t('未开启（需点通知）');
+                        if (caOBtn) caOBtn.style.display = ov ? 'none' : '';
+                    }).catch(function () {});
+                }
             } catch (e) {}
         }
         refreshKaStatus();
@@ -1330,6 +1396,23 @@
             try {
                 bgPlugin.openAutoStartSetting().then(function () {
                     showToast(I18N.t('请在打开的页面中允许本应用自启动与后台运行'));
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        // 阶段二百三十七：来电弹窗两个权限入口（从系统设置返回时由 visibilitychange 归口刷新）
+        if (caFBtn) caFBtn.addEventListener('click', function () {
+            try {
+                bgPlugin.openFullScreenIntentSettings().then(function () {
+                    showToast(I18N.t('请在打开的页面中允许显示全屏通知'));
+                    setTimeout(refreshKaStatus, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        if (caOBtn) caOBtn.addEventListener('click', function () {
+            try {
+                bgPlugin.openOverlaySettings().then(function () {
+                    showToast(I18N.t('请在打开的页面中允许显示在其他应用上层'));
+                    setTimeout(refreshKaStatus, 1500);
                 }).catch(function () {});
             } catch (e) {}
         });
@@ -20784,6 +20867,45 @@
         window.desktop.onCallSend(function (frame) { IMSocket.send(frame); });
     }
     // 主进程桥：响铃条按钮动作（接受 → 关铃开通话窗；拒绝 → 回 reject/meet_decline 信令）
+    // 阶段二百三十八：接听核心从桥回调提出为 callRingAccept()——通知卡片「接听」钮
+    // 深链 auto=1 复用同一归口，行为与响铃条点接听完全一致
+    var pendingAutoAccept = false; // 通知接听钮待自动接听标记（登录门控：未登录先挂起）
+    function callRingAccept() {
+        if (!pendingRing) return;
+        var r = pendingRing;
+        callClearRing();
+        callOpenId = r.call_id;
+        if (r.meet) {
+            // 阶段一百四十四：会议入会——开会议窗（宫格等待态）→ meet_accept 上行，
+            // 服务端下发 room_info（全员资料）后对每个成员等 offer 应答建 Mesh
+            window.desktop.callOpen({
+                role: 'callee', meet: true, call_id: r.call_id, group_id: r.group_id,
+                meet_title: groupNameOf('g' + (r.group_id || 0)),
+                meet_no: r.meet_no || '', // 阶段一百五十二：会议号透传会议窗顶部展示
+                self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+                call_type: r.call_type,
+                ice_servers: r.ice || [] // meet_invite 帧注入的 ICE 配置透传给会议窗（buildPC 用）
+            });
+            callSignalSend('', { action: 'meet_accept', call_id: r.call_id });
+            return;
+        }
+        window.desktop.callOpen({
+            role: 'callee', call_id: r.call_id, peer: r.from,
+            peer_name: callPeerName(r.from), peer_avatar: getAvatarUrl(r.from),
+            self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
+            call_type: r.call_type,
+            ice_servers: r.ice || [] // invite 帧注入的 ICE 配置透传给通话窗（被叫 buildPC 用）
+        });
+    }
+    // 阶段二百三十八：auto=1 自动接听触发器——连接未登录时挂起（LOGIN_RESP 补触发），
+    // 已登录（热启动回前台）立即接听；忙态已在 handleCallUrl 入口拦截不会到达此处
+    function tryAutoAccept() {
+        if (!pendingAutoAccept) return;
+        if (!(IMSocket.isConnected && IMSocket.isConnected())) return;
+        if (!(IMSocket.getUsername && IMSocket.getUsername())) return;
+        pendingAutoAccept = false;
+        callRingAccept();
+    }
     if (window.desktop && window.desktop.onCallRingAction) {
         window.desktop.onCallRingAction(function (data) {
             if (!data || !pendingRing) return;
@@ -20796,30 +20918,7 @@
                 }
                 callClearRing();
             } else if (data.action === 'accept') {
-                var r = pendingRing;
-                callClearRing();
-                callOpenId = r.call_id;
-                if (r.meet) {
-                    // 阶段一百四十四：会议入会——开会议窗（宫格等待态）→ meet_accept 上行，
-                    // 服务端下发 room_info（全员资料）后对每个成员等 offer 应答建 Mesh
-                    window.desktop.callOpen({
-                        role: 'callee', meet: true, call_id: r.call_id, group_id: r.group_id,
-                        meet_title: groupNameOf('g' + (r.group_id || 0)),
-                        meet_no: r.meet_no || '', // 阶段一百五十二：会议号透传会议窗顶部展示
-                        self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
-                        call_type: r.call_type,
-                        ice_servers: r.ice || [] // meet_invite 帧注入的 ICE 配置透传给会议窗（buildPC 用）
-                    });
-                    callSignalSend('', { action: 'meet_accept', call_id: r.call_id });
-                    return;
-                }
-                window.desktop.callOpen({
-                    role: 'callee', call_id: r.call_id, peer: r.from,
-                    peer_name: callPeerName(r.from), peer_avatar: getAvatarUrl(r.from),
-                    self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
-                    call_type: r.call_type,
-                    ice_servers: r.ice || [] // invite 帧注入的 ICE 配置透传给通话窗（被叫 buildPC 用）
-                });
+                callRingAccept();
             }
         });
     }

@@ -87,6 +87,12 @@
                 <action android:name="com.alibaba.push2.action.NOTIFICATION_REMOVED" />
             </intent-filter>
         </receiver>
+
+        <!-- 阶段二百三十八：来电通知卡片「挂断」钮广播归口（原生连接在线直达拒接信令，
+             交还前台退化为深链忙态拒接；仅应用内 PendingIntent 触发，exported=false） -->
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
@@ -106,4 +112,7 @@
     <!-- 阶段二百二十六：电池优化豁免申请（设置页"后台保活"引导，IM 消息类应用合规使用；
          仅用于弹出系统授权框，不自动开启） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 阶段二百三十七：后台来电全屏拉起接听画面（全屏意图通知；Android 14+ 需用户在设置授予，
+         由设置页"来电弹窗"引导跳转系统设置页开启） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 </manifest>

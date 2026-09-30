@@ -8,14 +8,25 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+// 阶段二百三十七：来电邀请全屏意图通知（渠道铃声属性 + 全屏意图权限查询）
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
+// 阶段二百三十八：来电通知卡片（RemoteViews 自定义布局 + 头像位图圆形裁剪）
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.widget.RemoteViews;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
@@ -26,6 +37,7 @@ import org.json.JSONObject;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.io.InputStream;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -49,13 +61,21 @@ import okhttp3.WebSocketListener;
  */
 public class KeepAliveService extends Service {
 
-    // 通知渠道：前台常驻（静音）/ 聊天消息（高优先级横幅）/ 系统提示（默认）
+    // 通知渠道：前台常驻（静音）/ 聊天消息（高优先级横幅）/ 系统提示（默认）/ 通话邀请（来电铃声+振动）
     private static final String CH_FG = "im_keepalive_fg";
     private static final String CH_MSG = "im_messages";
     private static final String CH_SYS = "im_system";
+    // 阶段二百三十七：通话邀请渠道（CATEGORY_CALL + 来电铃声循环 + 振动，微信来电同款提醒强度）
+    private static final String CH_CALL = "im_calls";
     private static final int FG_ID = 1001;
     private static final int SYS_ID = 1002;
+    // 阶段二百三十七：来电邀请通知固定 id（同一时刻仅一路来电，新邀请顶替旧通知）
+    public static final int CALL_NOTIFY_ID = 1003;
     private static final int MSG_ID_BASE = 10000;
+    // 阶段二百三十七：当前响铃中的通话邀请 call_id——后续 cancel/dismiss/timeout 等帧据此撤通知
+    private volatile String ringingCallId;
+    // 阶段二百三十八：运行实例静态桥（通知挂断钮广播直达信令用，onCreate/onDestroy 对称维护）
+    private static volatile KeepAliveService self;
     // 凭据存储名（插件层 startKeepAlive 写入、本服务 loadCreds 读取，公共常量）
     public static final String PREFS_FIELD = "im_bg_keepalive";
 
@@ -83,10 +103,13 @@ public class KeepAliveService extends Service {
     // 群名/好友显示名映射（登录后由 73 群列表同步/22 好友列表帧维护，通知标题用）
     private final Map<Integer, String> groupNames = new HashMap<>();
     private final Map<String, String> friendNames = new HashMap<>();
+    // 阶段二百三十八：好友头像相对路径映射（好友列表帧 22 携带，来电卡片头像装载用）
+    private final Map<String, String> friendAvatars = new HashMap<>();
 
     @Override
     public void onCreate() {
         super.onCreate();
+        self = this; // 阶段二百三十八：静态桥登记（通知挂断钮广播直达信令）
         ensureChannels();
         http = new OkHttpClient.Builder()
                 .pingInterval(25, TimeUnit.SECONDS)     // WS 协议层 ping，防 NAT/代理掐空闲链路
@@ -140,6 +163,11 @@ public class KeepAliveService extends Service {
             // 回前台：断开交还 WebView
             handover = true;
             main.removeCallbacks(reconnectTask);
+            // 阶段二百三十七：交还前台时撤下来电通知——前台响铃画面由 WebView 经深链路由展示，
+            // 通知残留会与页内响铃条重复；后续信令（cancel/超时）归口 WebView 处理
+            ringingCallId = null;
+            NotificationManager nmHandback = getSystemService(NotificationManager.class);
+            if (nmHandback != null) nmHandback.cancel(CALL_NOTIFY_ID);
             teardown();
         }
         return START_STICKY;
@@ -153,6 +181,7 @@ public class KeepAliveService extends Service {
     @Override
     public void onDestroy() {
         stopped = true;
+        if (self == this) self = null; // 阶段二百三十八：静态桥对称注销
         main.removeCallbacksAndMessages(null);
         teardown();
         super.onDestroy();
@@ -346,6 +375,9 @@ public class KeepAliveService extends Service {
                         if (name.isEmpty()) name = f.optString("nickname", "");
                         if (name.isEmpty()) name = f.optString("remark", "");
                         if (!name.isEmpty()) friendNames.put(un, name);
+                        // 阶段二百三十八：头像相对路径同帧入库（来电卡片头像装载用）
+                        String av = f.optString("avatar", "");
+                        if (!av.isEmpty()) friendAvatars.put(un, av);
                     }
                 } catch (Exception ignored) {
                 }
@@ -428,12 +460,19 @@ public class KeepAliveService extends Service {
                 showMsgNotice(from, displayName(from, null), truncate(m.optString("content", "")), 0);
                 break;
             }
-            case 70: { // 通话信令：仅邀请弹通知（其余动作前台 UI 归口）
+            case 70: { // 通话信令：邀请拉起接听画面（阶段二百三十七），其余动作前台 UI 归口
                 try {
                     JSONObject info = new JSONObject(m.optString("content", "{}"));
-                    if ("invite".equals(info.optString("action"))) {
-                        boolean video = "video".equals(info.optString("call_type", "audio"));
-                        showMsgNotice(from, "通话邀请", from + " 邀请你" + (video ? "视频通话" : "语音通话"), 0);
+                    String sigAction = info.optString("action");
+                    if ("invite".equals(sigAction) || "meet_invite".equals(sigAction)) {
+                        showCallInvite(m, info, sigAction);
+                    } else if (ringingCallId != null && ringingCallId.equals(info.optString("call_id", ""))
+                            && ("cancel".equals(sigAction) || "dismiss".equals(sigAction)
+                                || "timeout".equals(sigAction) || "error".equals(sigAction))) {
+                        // 对方取消/他端已接/超时/异常：撤下来电通知（本端未点开过则响铃只留在通知层）
+                        ringingCallId = null;
+                        NotificationManager nmCall = getSystemService(NotificationManager.class);
+                        if (nmCall != null) nmCall.cancel(CALL_NOTIFY_ID);
                     }
                 } catch (Exception ignored) {
                 }
@@ -493,6 +532,216 @@ public class KeepAliveService extends Service {
         }
     }
 
+    /**
+     * 阶段二百三十七：后台来电拉起接听画面（微信同款三级降级）
+     * 一级：有悬浮窗权限（SYSTEM_ALERT_WINDOW）→ Android 10+ 后台启动豁免，直接 startActivity
+     *       全屏拉起接听页（亮屏使用其他应用时也立即可见，无需经通知）；
+     * 二级：有全屏意图权限（USE_FULL_SCREEN_INTENT）→ 发全屏意图通知：
+     *       熄屏/锁屏系统自动全屏拉起；亮屏使用中以 heads-up 横幅置顶，点击进入；
+     * 三级：都无权限 → 高优先级普通通知（文字提示，行为同旧版）。
+     * 拉起载体统一深链 imapp://call?...（chat.js appUrlOpen/getLaunchUrl 路由到
+     * web-call-bridge 响铃条）。invite 为实时帧不落库，WebView 重连后服务端不会重推——
+     * 接听画面所需字段（from/call_id/call_type/meet/ICE 配置）全部随深链透传。
+     */
+    private void showCallInvite(JSONObject frame, JSONObject info, String action) {
+        String from = frame.optString("from_user", "");
+        String callId = info.optString("call_id", "");
+        if (callId.isEmpty() || from.isEmpty() || from.equals(username)) return;
+        String type = "video".equals(info.optString("call_type", "audio")) ? "video" : "audio";
+        boolean meet = "meet_invite".equals(action);
+        String name = displayName(from, frame.optString("from_name", ""));
+        StringBuilder url = new StringBuilder("imapp://call?from=")
+                .append(Uri.encode(from))
+                .append("&name=").append(Uri.encode(name))
+                .append("&type=").append(type)
+                .append("&call_id=").append(Uri.encode(callId));
+        if (meet) {
+            url.append("&meet=1&group_id=").append(info.optInt("group_id", 0))
+               .append("&meet_no=").append(Uri.encode(info.optString("meet_no", "")));
+        }
+        // invite 帧注入的 ICE 配置透传（接听后 buildPC 建连用，TURN 启用时必需）
+        org.json.JSONArray ice = info.optJSONArray("ice");
+        if (ice != null) {
+            url.append("&ice=").append(Uri.encode(ice.toString()));
+        }
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url.toString()), this, MainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this,
+                Math.abs(callId.hashCode()), i,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        // 阶段二百三十八：接听钮 = 深链带 auto=1（页面登录完成后自动接听，免先进响铃条再点）；
+        // 挂断钮 = 广播直达（原生连接在线直接上 reject 信令，交还前台时退化为深链忙态拒接）
+        Intent ai = new Intent(Intent.ACTION_VIEW, Uri.parse(url.toString() + "&auto=1"), this, MainActivity.class);
+        ai.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent piAccept = PendingIntent.getActivity(this,
+                Math.abs(callId.hashCode()) + 1, ai,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Intent ri = new Intent(this, CallActionReceiver.class)
+                .setAction(CallActionReceiver.ACTION_REJECT)
+                .putExtra("call_id", callId)
+                .putExtra("from", from)
+                .putExtra("meet", meet)
+                .putExtra("deep", url.toString());
+        PendingIntent piReject = PendingIntent.getBroadcast(this,
+                Math.abs(callId.hashCode()) + 2, ri,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        ringingCallId = callId;
+
+        // 一级：悬浮窗已授权 → 直接拉起（后台启动豁免），不落通知
+        if (Settings.canDrawOverlays(this)) {
+            try {
+                startActivity(i);
+            } catch (Exception ignored) {
+            }
+            return;
+        }
+
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        String body = meet ? "邀请你加入会议" : ("邀请你" + ("video".equals(type) ? "视频通话" : "语音通话"));
+        try {
+            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null));
+        } catch (Exception ignored) {
+        }
+        fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject);
+    }
+
+    // 阶段二百三十八：来电卡片通知构建（RemoteViews 微信同款：头像 + 主叫 + 接听/挂断圆钮）
+    private Notification buildCallCard(String name, String body, PendingIntent pi, PendingIntent piAccept,
+                                       PendingIntent piReject, Bitmap avatar) {
+        RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notify_call);
+        rv.setTextViewText(R.id.call_name, name);
+        rv.setTextViewText(R.id.call_sub, body);
+        if (avatar != null) {
+            rv.setImageViewBitmap(R.id.call_avatar, avatar);
+        } else {
+            rv.setImageViewResource(R.id.call_avatar, R.mipmap.ic_launcher);
+        }
+        rv.setOnClickPendingIntent(R.id.btn_accept, piAccept);
+        rv.setOnClickPendingIntent(R.id.btn_decline, piReject);
+        return new NotificationCompat.Builder(this, CH_CALL)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setCustomContentView(rv)
+                .setCustomBigContentView(rv)
+                .setStyle(new NotificationCompat.DecoratedCustomViewStyle())
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setFullScreenIntent(pi, true) // 熄屏/锁屏系统自动全屏拉起
+                .setContentIntent(pi)          // 卡片点按（非按钮）进入响铃条
+                .build();
+    }
+
+    /**
+     * 阶段二百三十八：来电卡片头像异步装载——通知先以默认图标弹出（响铃零延迟），
+     * 好友头像（好友列表帧 22 携带的 /static/avatar/ 相对路径）HTTP 拉取后圆形裁剪回填
+     * 同一通知 id；拉取完成时响铃已结束（call_id 不匹配）则放弃回填，防旧头像顶替新来电
+     */
+    private void fetchAvatarAsync(String from, String callId, String name, String body,
+                                  PendingIntent pi, PendingIntent piAccept, PendingIntent piReject) {
+        String path = friendAvatars.get(from);
+        if (path == null || path.isEmpty()) return;
+        String full = avatarFullUrl(path);
+        if (full.isEmpty()) return;
+        Request req = new Request.Builder().url(full).build();
+        // 独立短超时客户端：3s 拉不到即放弃，不影响保活长连接参数
+        http.newBuilder().callTimeout(3, TimeUnit.SECONDS).build()
+                .newCall(req).enqueue(new okhttp3.Callback() {
+                    @Override
+                    public void onFailure(okhttp3.Call c, java.io.IOException e) {
+                    }
+
+                    @Override
+                    public void onResponse(okhttp3.Call c, Response resp) throws java.io.IOException {
+                        Bitmap bmp = null;
+                        try (InputStream is = resp.body() != null ? resp.body().byteStream() : null) {
+                            if (is != null && resp.isSuccessful()) bmp = BitmapFactory.decodeStream(is);
+                        } catch (Exception ignored) {
+                        } finally {
+                            resp.close();
+                        }
+                        if (bmp == null) return;
+                        // 响铃已结束/已被新邀请顶替（call_id 不匹配）则放弃回填
+                        KeepAliveService s = self;
+                        if (s == null || !callId.equals(s.ringingCallId)) return;
+                        NotificationManager nm = getSystemService(NotificationManager.class);
+                        if (nm == null) return;
+                        try {
+                            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject,
+                                    circleBitmap(bmp)));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                });
+    }
+
+    // 阶段二百三十八：好友头像相对路径 → 绝对 URL（保活 wsUrl 的 ws/wss 协议换 http/https 取源站）
+    private String avatarFullUrl(String path) {
+        if (path == null || path.isEmpty()) return "";
+        if (path.startsWith("http://") || path.startsWith("https://")) return path;
+        if (wsUrl == null) return "";
+        String base = wsUrl.startsWith("wss://") ? "https://" + wsUrl.substring(6)
+                : (wsUrl.startsWith("ws://") ? "http://" + wsUrl.substring(5) : "");
+        if (base.isEmpty()) return "";
+        int idx = base.indexOf('/', base.indexOf("://") + 3);
+        String origin = idx > 0 ? base.substring(0, idx) : base;
+        return origin + (path.startsWith("/") ? path : "/" + path);
+    }
+
+    // 阶段二百三十八：位图居中裁方后圆形遮罩（RemoteViews 头像圆形展示）
+    private static Bitmap circleBitmap(Bitmap src) {
+        try {
+            int w = src.getWidth(), h = src.getHeight();
+            int side = Math.min(w, h);
+            Bitmap sq = Bitmap.createBitmap(src, (w - side) / 2, (h - side) / 2, side, side);
+            Bitmap out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(out);
+            Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            paint.setShader(new BitmapShader(sq, BitmapShader.TileMode.CLAMP, BitmapShader.TileMode.CLAMP));
+            canvas.drawCircle(side / 2f, side / 2f, side / 2f, paint);
+            return out;
+        } catch (Exception e) {
+            return src;
+        }
+    }
+
+    // ===== 阶段二百三十八：通知挂断钮直达信令（静态桥，CallActionReceiver 调用） =====
+
+    /**
+     * 原生保活连接在线（后台被叫态）→ 直接上行 reject/meet_decline，熄屏/后台秒拒；
+     * 返回 false 表示连接不在线（已交还前台 WebView），调用方退化走深链忙态拒接。
+     * 帧结构与页面 accept 分支同构（msg_type=70 + content JSON），服务端按登录名归口。
+     */
+    static boolean trySendCallReject(String callId, String fromUser, boolean meet) {
+        KeepAliveService s = self;
+        WebSocket w = s != null ? s.ws : null;
+        if (s == null || w == null || !s.loggedIn || callId == null || callId.isEmpty()) return false;
+        try {
+            JSONObject content = new JSONObject();
+            content.put("action", meet ? "meet_decline" : "reject");
+            content.put("call_id", callId);
+            if (!meet) content.put("reason", "declined");
+            JSONObject frame = new JSONObject();
+            frame.put("msg_type", 70);
+            frame.put("from_user", s.username);
+            frame.put("to_user", meet ? "" : (fromUser == null ? "" : fromUser));
+            frame.put("content", content.toString());
+            return w.send(frame.toString());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // 阶段二百三十八：通知挂断后清响铃标记（callId 为空或匹配当前响铃才清，防误清新邀请）
+    static void clearRingingCall(String callId) {
+        KeepAliveService s = self;
+        if (s != null && (callId == null || callId.equals(s.ringingCallId))) {
+            s.ringingCallId = null;
+        }
+    }
+
     private void showSysNotice(String body) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
@@ -539,6 +788,17 @@ public class KeepAliveService extends Service {
         nm.createNotificationChannel(msg);
         NotificationChannel sys = new NotificationChannel(CH_SYS, "系统提示", NotificationManager.IMPORTANCE_DEFAULT);
         nm.createNotificationChannel(sys);
+        // 阶段二百三十七：通话邀请渠道（微信来电同款：CATEGORY_CALL + 来电铃声循环 + 振动三连）
+        NotificationChannel call = new NotificationChannel(CH_CALL, "通话邀请", NotificationManager.IMPORTANCE_HIGH);
+        call.setDescription("收到语音/视频通话邀请时提醒");
+        call.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build());
+        call.enableVibration(true);
+        call.setVibrationPattern(new long[]{0, 600, 500, 600, 500, 600});
+        nm.createNotificationChannel(call);
     }
 
     // ===== 显示名与摘要 =====
@@ -573,6 +833,20 @@ public class KeepAliveService extends Service {
             } else if (env.has("image")) {
                 String note = env.optString("text", "");
                 s = note.isEmpty() ? "[图片]" : "[图片] " + note;
+            } else if ("call".equals(env.optString("type"))) {
+                // 阶段二百三十八：通话信封消息渲染可读文案（此前未接来电通知裸显 JSON）
+                String kind = "video".equals(env.optString("call", "audio")) ? "视频通话" : "语音通话";
+                switch (env.optString("status", "")) {
+                    case "missed": s = "未接" + kind; break;
+                    case "rejected": s = "已拒绝" + kind; break;
+                    case "canceled": s = "已取消" + kind; break;
+                    case "timeout": s = "对方无人接听"; break;
+                    case "completed":
+                        int d = env.optInt("duration", 0);
+                        s = "通话时长 " + String.format(java.util.Locale.CHINA, "%d:%02d", d / 60, d % 60);
+                        break;
+                    default: s = kind; break;
+                }
             } else if (env.has("doc")) {
                 String note = env.optString("text", "");
                 s = note.isEmpty() ? "[文档]" : "[文档] " + note;

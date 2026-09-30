@@ -1526,6 +1526,23 @@
                     <p class="settings-desc">部分手机会阻止应用后台运行，请在打开的页面中允许本应用自启动与后台运行。</p>
                     <button id="settings-ka-autostart-btn" class="settings-btn">去开启自启动</button>
                 </div>
+                <!-- 阶段二百三十七：来电弹窗引导（后台语音/视频邀请全屏拉起接听画面；仅手机 APP 端显示，JS 控制显隐）。
+                     全屏意图：熄屏/锁屏自动全屏弹出来电画面（Android 14+ 需手动授予）；悬浮窗：亮屏使用其他应用时直接弹出 -->
+                <h3 class="settings-subtitle" id="settings-call-subtitle" style="display:none;">来电弹窗</h3>
+                <div class="settings-card" id="settings-call-card" style="display:none;">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">全屏来电画面</span>
+                        <span id="settings-call-fullstate" class="settings-card-value">检测中…</span>
+                    </div>
+                    <p class="settings-desc">开启后熄屏、锁屏收到语音/视频邀请时自动全屏弹出接听画面（微信同款）。</p>
+                    <button id="settings-call-fullbtn" class="settings-btn" style="display:none;">去开启全屏来电</button>
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">悬浮窗显示</span>
+                        <span id="settings-call-overlay-state" class="settings-card-value">检测中…</span>
+                    </div>
+                    <p class="settings-desc">开启后正在使用其他应用时收到邀请，接听画面直接弹出，无需点击通知。</p>
+                    <button id="settings-call-overlay-btn" class="settings-btn">去开启悬浮窗</button>
+                </div>
             </section>
             <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 把网盘映射成本地盘符，阿里云盘挂载盘同原理；
                  PC 端显示完整控件，WEB 端无本地盘概念仅展示挂载密码与说明） -->
