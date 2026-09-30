@@ -1,0 +1,18 @@
+点图标 → 系统启动屏（黑底+图标 ✓）
+      → 启动屏结束，Activity 窗口出现 ← ★白屏在这里
+      → WebView 初始化 + 加载远程页面（1-3秒网络耗时）
+      → 页面首绘（深色 booting 遮罩）→ 进入聊天页
+
+E:\SourceCodeIM\im-client\app\android\app\src\main\res\drawable\splash.png
+启动图本身（splash.png）是黑底 GY logo
+
+E:\SourceCodeIM\im-client\app
+capacitor.config.json这个是初始化白屏，可修改成图片广告
+
+E:\SourceCodeIM\im-client\app\android\app\src\main\res\values
+styles.xml-这个也是
+
+
+- 方案 A：品牌封面页（微信同款思路，推荐） ——把现有启动画面升级：中央 logo 加 CSS 动画（呼吸/渐入）、应用名、底部公司标语，资源就绪自动淡出。纯 CSS 零加载成本， 三端（WEB/PC/APP）统一生效
+- 方案 B：可运营广告页 ——服务端接口下发广告图/标语（可轮播、可点击跳转），显示 2-3 秒带「跳过」按钮，无网时回退默认封面。需要加服务端配置接口 + 前端广告组件，启动多一跳网络
+- 方案 C：Lottie 动画 ——JSON 矢量动画（比 GIF 体积小效果好），需引入动画库与制作动画文件

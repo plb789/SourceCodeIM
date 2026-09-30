@@ -526,5 +526,13 @@ drive:
                                  # 支持视频 Range 多段请求；调小可收紧重放窗口，中断后重新下载即获新票）
     rate_limit: 500              # /auth 全局限流 QPS（0=500；请求源为 DCDN 节点无法按 IP 限流）
     # 本地部署 MinIO 参考（Windows 单文件免安装）：
-    #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
-    #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"
+  #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
+  #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"
+
+# 阶段二百四十一：APP 启动广告图（微信启动页同款：APK 内置保底图 + 服务端下发可运营广告图。
+# APP 每次冷启动后台拉取本配置，URL 变化自动预下载新图缓存、下次启动显示；enabled=false 或
+# 拉取失败时 APP 显示内置保底图直接进入，不阻塞启动。仅 APP 端消费，WEB/PC 不涉及）
+splash_ad:
+  enabled: false                 # 广告图总开关（false 时接口返回空，APP 不显示缓存图并清空旧缓存）
+  image_url: ""                  # 广告图下载地址（竖版 1080x1920 以上；更换 URL 即换广告，建议走网盘分享或固定 CDN 地址）
+  duration: 3                    # 广告页显示秒数（0=默认 3；右上角跳过按钮可提前进入主界面）

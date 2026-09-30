@@ -20,7 +20,18 @@
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- 阶段二百四十一补：窗口背景改空——原设 @drawable/splash 拉伸层与 SplashActivity
+             ImageView 等比层同图叠加，两层缩放错位致顶部出现重影错位带；保底图归口
+             SplashActivity ImageView 单层显示（SplashScreen 主题下该 background 也不可靠） -->
+        <item name="android:background">@null</item>
+        <!-- 阶段二百四十一补：background @null 后 SplashScreen 基础主题的标题栏露出（顶部白条
+             +「即时通讯」文字）。SplashActivity 是原生 Activity（extends Activity），
+             必须用 android: 前缀平台属性（无前缀的 appcompat 属性对其无效） -->
+        <item name="windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- 阶段二百四十一补：启动/广告页全屏隐藏状态栏（微信同款——启动时无时间电量条，
+             进主界面后 MainActivity 用 AppTheme.NoActionBar 主题状态栏自动恢复） -->
+        <item name="android:windowFullscreen">true</item>
         <!-- Android 12+ 系统启动屏：黑底 + 项目图标（微信启动页同款形态） -->
         <item name="windowSplashScreenBackground">#000000</item>
         <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>

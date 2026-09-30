@@ -22,6 +22,20 @@
             android:name="com.alibaba.app.appsecret"
             android:value="d33861971d4b473f83c8279c6c574d2a" />
 
+        <!-- 阶段二百四十一：启动广告页（微信启动页同款：LAUNCHER 入口移至本页——
+             有服务端下发缓存广告图时全屏显示+右上角跳过倒计时，无缓存立即进主界面；
+             APK 内置保底图经主题 windowBackground 呈现。深链仍直达 MainActivity 不经广告页） -->
+        <activity
+            android:name=".SplashActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:name=".MainActivity"
@@ -30,10 +44,8 @@
             android:launchMode="singleTask"
             android:exported="true">
 
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+            <!-- 阶段二百四十一：LAUNCHER 入口已移至 SplashActivity（启动广告页），
+                 主界面改为仅显式/深链进入 -->
 
             <!-- 阶段二百二十六：imapp 深链（scheme=imapp，BROWSABLE 供浏览器/厂商推送 Intent URI 拉起；
                  前台服务通知为显式 Intent 不依赖本 filter；前端 initNativeDeepLink 归口消费 imapp://chat?to=） -->

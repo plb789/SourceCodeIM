@@ -182,6 +182,10 @@ func main() {
 	http.HandleFunc("GET /api/qrlogin/poll", srv.HandleQRLoginPoll)
 	http.HandleFunc("/qrl", srv.HandleQRLanding)
 
+	// 阶段二百四十一：APP 启动广告图配置下发（微信启动页同款：服务端可运营广告图，
+	// APP 预下载缓存下次冷启动显示；无鉴权登录前调用，纯配置无敏感数据）
+	http.HandleFunc("GET /api/splash/ads", srv.HandleSplashAdGet)
+
 	// 阶段一百三十六：前端资源密文下发（PC 端磁盘零明文；无鉴权——密文本身即屏障，
 	// 排除规则与清单一致，密钥未配置时 503 由客户端回退明文链路）
 	http.HandleFunc("GET /api/secure-file", srv.HandleSecureFile)

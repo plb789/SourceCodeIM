@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 阶段二百四十一：启动广告页布局（服务端下发可运营广告图）。
+     ImageView 全屏显示缓存的广告图；右上角「跳过 N」自绘圆角按钮（行业惯例样式，
+     不用系统默认按钮）。无缓存广告时本 Activity 立即跳转主界面不停留 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/splash_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:contentDescription="@string/app_name" />
+
+    <TextView
+        android:id="@+id/splash_skip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="32dp"
+        android:layout_marginEnd="20dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:background="@drawable/skip_btn_bg"
+        android:text="跳过 3"
+        android:textColor="#ffffff"
+        android:textSize="13sp"
+        android:visibility="gone" />
+</FrameLayout>

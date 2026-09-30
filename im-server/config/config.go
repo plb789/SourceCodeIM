@@ -113,6 +113,22 @@ type Config struct {
 
 	// 网盘配置（百度网盘同款个人云盘：元数据 MySQL + 文件本体经 store.ObjectStore 落 MinIO/本地双后端）
 	Drive DriveConfig `yaml:"drive"`
+
+	// 阶段二百四十一：APP 启动广告图配置（微信启动页同款思路：APK 内置保底图 + 服务端下发可运营广告图；
+	// APP 预下载缓存、下次启动生效。仅 APP 原生层消费，WEB/PC 不涉及）
+	SplashAd SplashAdConfig `yaml:"splash_ad"`
+}
+
+// SplashAdConfig 阶段二百四十一：APP 启动广告图配置节
+// 运营方式：更换 image_url 即换广告（APP 每次启动后台拉取配置，URL 变化自动预下载新图缓存，
+// 下次冷启动显示；enabled=false 或拉取失败时 APP 显示内置保底图直接进入，不阻塞启动）
+type SplashAdConfig struct {
+	// Enabled 广告图总开关（false 时接口返回空，APP 不显示缓存图直接进入主界面）
+	Enabled bool `yaml:"enabled"`
+	// ImageURL 广告图下载地址（竖版 1080x1920 以上；更换 URL 即换广告，APP 端 URL 变化触发预下载）
+	ImageURL string `yaml:"image_url"`
+	// Duration 广告页显示秒数（0=默认 3；右上角跳过按钮可提前进入）
+	Duration int `yaml:"duration"`
 }
 
 // LoginQueueConfig 阶段一百六十一：登录排队配置节
