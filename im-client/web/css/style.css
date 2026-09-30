@@ -4839,9 +4839,10 @@ html.m .nav-rail .current-user {
     display: none;
 }
 
+/* 阶段二百三十九：头像稍放大（30→36px，与 tab 图标区协调；无文字标签后纯头像居中） */
 html.m .nav-rail .current-avatar {
-    width: 30px;
-    height: 30px;
+    width: 36px;
+    height: 36px;
 }
 
 /* 阶段一百四十五：工作台入口使底栏图标增至 5 个，固定 gap 在窄屏溢出，
@@ -5001,9 +5002,9 @@ html.m .nav-bottom {
     display: none;
 }
 
-/* 头像即"我"入口（点击打开个人资料/更换头像），排到行尾微信"我"位 */
+/* 头像即"我"入口（点击打开个人资料/更换头像）；阶段二百三十九：与 AI助手换位排第 3 位 */
 html.m .nav-rail .nav-top {
-    order: 9;
+    order: 3;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -5012,7 +5013,7 @@ html.m .nav-rail .nav-top {
     width: 56px;
 }
 
-/* tab 形态：图标上、文字下；顺序对齐需求：聊天/通讯录/AI助手/工作台（头像"我"在 nav-top 已排行尾） */
+/* tab 形态：图标上、文字下；顺序对齐需求：聊天/通讯录/头像/工作台（阶段二百三十九：AI助手移至行尾） */
 html.m .nav-icons .nav-icon {
     flex-direction: column;
     gap: 3px;
@@ -5020,7 +5021,7 @@ html.m .nav-icons .nav-icon {
 
 html.m .nav-icons .nav-icon[data-tab="chat"] { order: 1; }
 html.m .nav-icons .nav-icon[data-tab="friends"] { order: 2; }
-html.m .nav-icons .nav-icon[data-tab="ai"] { order: 3; }
+html.m .nav-icons .nav-icon[data-tab="ai"] { order: 9; }
 html.m .nav-icons .nav-icon[data-tab="workbench"] { order: 4; }
 
 /* ---- 阶段二百零五：文字标签改真实 DOM span（mobile.js 注入）----
@@ -5039,9 +5040,8 @@ html.m .nav-label {
     white-space: nowrap;
 }
 
-/* 微信同款：激活 tab 文字随图标一起变主题色 */
-html.m .nav-icon.active .nav-label,
-html.m .nav-top .nav-label {
+/* 微信同款：激活 tab 文字随图标一起变主题色（阶段二百三十九：头像无标签，规则移除） */
+html.m .nav-icon.active .nav-label {
     color: var(--text);
 }
 

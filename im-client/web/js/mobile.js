@@ -779,13 +779,7 @@
             s.textContent = t;
             n.appendChild(s);
         });
-        var navTop = document.querySelector('.nav-rail .nav-top');
-        if (navTop && !navTop.querySelector('.nav-label')) {
-            var me = document.createElement('span');
-            me.className = 'nav-label';
-            me.textContent = '我';
-            navTop.appendChild(me);
-        }
+        // 阶段二百三十九：底栏头像不再追加"我"文字标签（头像本身即个人页入口，微信同款纯头像）
     }
 
     /* ---------- 9. 阶段二百零九：首页顶栏标题随 tab 联动（微信同款） ----------
