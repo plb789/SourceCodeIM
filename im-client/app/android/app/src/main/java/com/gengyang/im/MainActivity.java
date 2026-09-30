@@ -7,9 +7,11 @@ import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
@@ -31,6 +33,7 @@ public class MainActivity extends BridgeActivity {
     private TextView adSkip;  // 「跳过 N」按钮
     private int adRemain = 0;
     private boolean adSkipArmed = false; // 1 秒后可点（防启动瞬间误触）
+    private int adSbTop = 0; // 已采纳的状态栏避让高度 px（只增不减，见 showAdOverlay 注释）
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -59,6 +62,10 @@ public class MainActivity extends BridgeActivity {
             if (bmp == null) { AdCache.clear(filesDir); return; } // 图损坏清缓存直进
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
+                // 广告期间强制全屏（微信同款——广告页无时间电量条）：addFlags 须在内容
+                // 挂载前设置，首次布局即全屏；切勿配合 setDecorFitsSystemWindows(false)——
+                // Android 11+ 上那会令 FLAG_FULLSCREEN 被系统忽略（真机实测状态栏压字根因）
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
                 LayoutInflater inf = LayoutInflater.from(MainActivity.this);
                 adOverlay = inf.inflate(R.layout.activity_splash, (ViewGroup) findViewById(android.R.id.content), false);
                 ImageView imgView = adOverlay.findViewById(R.id.splash_image);
@@ -67,10 +74,32 @@ public class MainActivity extends BridgeActivity {
                 adRemain = Math.max(1, meta.optInt("duration", 3));
                 addContentView(adOverlay, new ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                // 广告期间全屏隐藏状态栏（微信同款——广告页无时间电量条），揭幕后恢复
-                WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-                WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
-                        .hide(WindowInsetsCompat.Type.statusBars());
+                // 跳过按钮避开状态栏（兜底）：个别 ROM FLAG_FULLSCREEN/hide 假生效状态栏
+                // 仍在显示——初始边距用系统 status_bar_height 兜底；inset 回调改「只增不减」，
+                // 防 hide 成功后 top=0 的派发把边距缩回 32dp 再次被状态栏压住（真机复现）
+                final float density = getResources().getDisplayMetrics().density;
+                int sbRes = getResources().getIdentifier("status_bar_height", "dimen", "android");
+                adSbTop = sbRes > 0 ? getResources().getDimensionPixelSize(sbRes) : 0;
+                FrameLayout.LayoutParams lp0 = (FrameLayout.LayoutParams) adSkip.getLayoutParams();
+                lp0.topMargin = adSbTop + (int) (32 * density);
+                adSkip.setLayoutParams(lp0);
+                ViewCompat.setOnApplyWindowInsetsListener(adOverlay, (v, insets) -> {
+                    int sbTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+                    if (sbTop > adSbTop) {
+                        adSbTop = sbTop;
+                        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) adSkip.getLayoutParams();
+                        lp.topMargin = sbTop + (int) (32 * density);
+                        adSkip.setLayoutParams(lp);
+                    }
+                    return insets;
+                });
+                // insets hide 兜底（双保险）：延后到视图挂载后执行（未挂载时调用无效）
+                getWindow().getDecorView().post(() -> {
+                    if (!isDestroyed() && adOverlay != null) {
+                        WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+                                .hide(WindowInsetsCompat.Type.statusBars());
+                    }
+                });
                 // 跳过按钮 1 秒后出现（防误触），倒计时每秒刷新文案
                 adHandler.postDelayed(() -> {
                     if (adOverlay == null) return;
@@ -96,8 +125,12 @@ public class MainActivity extends BridgeActivity {
     private void dismissAd() {
         if (adOverlay == null) return;
         adHandler.removeCallbacksAndMessages(null);
+        // 摘除 inset 监听防残留派发（状态栏 show 后 insets 重派，不得再改按钮边距）
+        ViewCompat.setOnApplyWindowInsetsListener(adOverlay, null);
         ((ViewGroup) adOverlay.getParent()).removeView(adOverlay);
         adOverlay = null;
+        // 退出强制全屏：清除 FLAG_FULLSCREEN + 重新显示状态栏，主页面正常显示时间电量条
+        getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN);
         WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
                 .show(WindowInsetsCompat.Type.statusBars());
     }
