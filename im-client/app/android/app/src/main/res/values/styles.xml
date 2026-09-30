@@ -16,6 +16,10 @@
         <!-- 阶段二百四十一：修复启动白屏——启动屏（黑底图标）结束后 WebView 加载远程页面期间
              窗口底色裸露 DayNight 浅色系统默认白；定死 #111111 与页面首绘深色底一致（原 android:background=@null） -->
         <item name="android:windowBackground">#111111</item>
+        <!-- 阶段二百四十一补：状态栏启动屏同款纯黑+白图标（WEB 层 StatusBar 插件异步染色前的
+             早期窗口阶段由主题兜底，避免闪现系统默认色；深浅色主题统一黑底与启动屏贯通） -->
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
 
@@ -32,6 +36,11 @@
         <!-- 阶段二百四十一补：启动/广告页全屏隐藏状态栏（微信同款——启动时无时间电量条，
              进主界面后 MainActivity 用 AppTheme.NoActionBar 主题状态栏自动恢复） -->
         <item name="android:windowFullscreen">true</item>
+        <!-- 阶段二百四十一补：系统启动屏（Android 12 系统绘制的第一屏）不响应 windowFullscreen，
+             状态栏无法真正隐藏（平台限制，微信同款限制）；将状态栏/导航栏底色染成与启动屏一致的
+             黑色实现视觉融合——时钟图标仍淡显但无分割无异色，观感接近全屏 -->
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
         <!-- Android 12+ 系统启动屏：黑底 + 项目图标（微信启动页同款形态） -->
         <item name="windowSplashScreenBackground">#000000</item>
         <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
