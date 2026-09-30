@@ -7,6 +7,7 @@
     --bubble-self: #95ec69;   /* 微信己方绿色气泡 */
     --bubble-other: #ffffff;  /* 微信对方白色气泡 */
     --border: #e0e0e0;
+    --divider: rgba(0, 0, 0, 0.06); /* 阶段二百四十一：列表分割线（微信同款淡线，比 --border 暗一档） */
     --primary: #07c160;       /* 微信绿 */
     --primary-soft: rgba(7, 193, 96, 0.6); /* 主色柔化（输入框聚焦描边等轻量强调） */
     --hover: #d9d9d9;
@@ -37,6 +38,7 @@
     --bubble-self: #0a7a3d;
     --bubble-other: #2c2c2c;
     --border: #333333;
+    --divider: rgba(255, 255, 255, 0.045); /* 深色下更贴近背景的淡分割线 */
     --primary: #07c160;
     --primary-soft: rgba(7, 193, 96, 0.5); /* 深色下再柔一档 */
     --hover: #2a2a2a;
@@ -65,6 +67,7 @@
         --bubble-self: #0a7a3d;
         --bubble-other: #2c2c2c;
         --border: #333333;
+        --divider: rgba(255, 255, 255, 0.045); /* 跟随系统·深色：同 dark 主题 */
         --primary: #07c160;
         --primary-soft: rgba(7, 193, 96, 0.5);
         --hover: #2a2a2a;
@@ -2298,7 +2301,7 @@ html.m .mobile-plus-panel:not(.hidden) {
     gap: 10px;
     padding: 10px 14px;
     cursor: pointer;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 0.5px solid var(--divider); /* 阶段二百四十一：微信同款淡分割线（随主题；0.5px 亚像素，高 DPI 屏不显粗） */
     transition: background 0.1s;
 }
 
