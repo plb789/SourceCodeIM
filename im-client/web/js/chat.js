@@ -4455,22 +4455,43 @@
         });
         imageInput.addEventListener('change', function () {
             if (imageInput.files[0]) {
-                // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
-                // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
-                if (isGroupTarget(currentChatUser)) sendGroupImage(imageInput.files[0]);
-                else if (isAIAgent(currentChatUser)) sendAIImage(imageInput.files[0]); // 阶段四十四：AI 图片识别链路
-                else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
-                else sendFile(imageInput.files[0]);
+                var f = imageInput.files[0];
+                // 阶段二百四十三：交接重连窗口兜底——APP 端拉起系统相册选择器触发 pause 交接
+                // （页面 WS 主动断开交原生前台服务），选完返回时 WS 尚在重连（1~3 秒），此刻
+                // 发送即静默丢失（图片发不出去）。现等连接就绪后再分流；私聊分支由 sendFile
+                // 内部再兜一层。10 秒仍不可达按失败提示
+                var dispatchImg = function () {
+                    // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
+                    // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
+                    if (isGroupTarget(currentChatUser)) sendGroupImage(f);
+                    else if (isAIAgent(currentChatUser)) sendAIImage(f); // 阶段四十四：AI 图片识别链路
+                    else if (currentChatUser === '') showToast(I18N.t('请先选择一个聊天'));
+                    else sendFile(f);
+                };
+                if (IMSocket.isConnected()) dispatchImg();
+                else IMSocket.whenReady(function (ok) {
+                    if (ok) dispatchImg();
+                    else showToast(I18N.t('网络连接失败，请重新发送'));
+                });
             }
             imageInput.value = '';
         });
         fileInput.addEventListener('change', function () {
             if (fileInput.files[0]) {
-                // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
-                // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）；全局群已废弃
-                if (isGroupTarget(currentChatUser)) sendGroupFile(fileInput.files[0]);
-                else if (currentChatUser === '') { showToast(I18N.t('请先选择一个聊天')); return; }
-                else sendFile(fileInput.files[0]);
+                var f = fileInput.files[0];
+                // 阶段二百四十三：交接重连窗口兜底（同 imageInput）——选完文件等连接就绪再分流
+                var dispatchFile = function () {
+                    // 阶段一百三十四：群聊视图走 HTTP 上传链路（sendGroupFile，与群聊图片同归口），私聊仍走分片协议
+                    // 阶段一百四十二：多群泛化——多群会话同走群文件直传（group 参数归口）；全局群已废弃
+                    if (isGroupTarget(currentChatUser)) sendGroupFile(f);
+                    else if (currentChatUser === '') showToast(I18N.t('请先选择一个聊天'));
+                    else sendFile(f);
+                };
+                if (IMSocket.isConnected()) dispatchFile();
+                else IMSocket.whenReady(function (ok) {
+                    if (ok) dispatchFile();
+                    else showToast(I18N.t('网络连接失败，请重新发送'));
+                });
             }
             fileInput.value = '';
         });
@@ -4850,6 +4871,17 @@
     // 阶段三十一：大文件（超过服务端下发阈值 upload_threshold）分流至 HTTP 直传（sendFileDirect），
     // WebSocket 仅传信令，避免海量分片占满连接队列、挤掉普通聊天消息
     function sendFile(file) {
+        // 阶段二百四十三：交接重连窗口兜底——选完图片/文件返回时 WS 尚在重连（1~3 秒），
+        // 原实现此刻发送即静默丢失（IMSocket.send 未就绪返回 false）。现等连接就绪后再走
+        // 原链路；本入口同时覆盖附件待发区、拖拽、转发等全部 sendFile 调用路径。
+        // 10 秒仍不可达按失败提示
+        if (!IMSocket.isConnected()) {
+            IMSocket.whenReady(function (ok) {
+                if (ok) sendFile(file);
+                else showToast(I18N.t('网络连接失败，请重新发送'));
+            });
+            return;
+        }
         var threshold = (IMSocket.getUploadThreshold && IMSocket.getUploadThreshold()) || 1048576;
         // 阶段三十二：三层分流——超过分片直传上限直接拒绝；超过单请求直传上限走分片直传（进度回显可取消）；
         // 超过 WS 分片阈值走单请求 HTTP 直传；小文件仍走 WS 分片协议（协议不变）
@@ -7126,13 +7158,17 @@
         var sysTip = isGroupTarget(currentChatUser) || false;
         (d.online || []).forEach(function (u) {
             if (u && u.username) {
+                // 阶段二百四十三：迁移守卫——仅在"离线→在线"真实跳变时提示。APP 端息屏/切后台
+                // 连接交接（页面断开→原生服务接管）在服务端宽限机制下不再广播下线，但重连侧
+                // firstDevice 上线增量仍会到达（好友端本就视其为在线），无守卫会凭空弹"上线了"
+                var wasOnline = !!onlineUsers[u.username];
                 onlineUsers[u.username] = true;
                 if (u.avatar) userAvatars[u.username] = u.avatar;
                 changed = true;
                 if (u.username !== self) { // 本人条目（93 帧广播含本人）不触发好友态与提示
                     var f = friendList.find(function (x) { return x.username === u.username; });
                     if (f && !f.online) { f.online = true; friendChanged = true; }
-                    if (sysTip || u.username === currentChatUser) {
+                    if ((sysTip || u.username === currentChatUser) && !wasOnline) {
                         appendSystem(u.username + I18N.t(' 上线了'));
                     }
                 }
@@ -7140,12 +7176,13 @@
         });
         (d.offline || []).forEach(function (name) {
             if (name) {
+                var wasOnline = !!onlineUsers[name]; // 同上：仅真实"在线→离线"跳变才提示
                 delete onlineUsers[name];
                 changed = true;
                 if (name !== self) {
                     var f2 = friendList.find(function (x) { return x.username === name; });
                     if (f2 && f2.online) { f2.online = false; friendChanged = true; }
-                    if (sysTip || name === currentChatUser) {
+                    if ((sysTip || name === currentChatUser) && wasOnline) {
                         appendSystem(name + I18N.t(' 下线了'));
                     }
                 }
@@ -24641,6 +24678,7 @@
     var rpOpenGreeting = document.getElementById('rp-open-greeting');
     var rpOpenIdle = document.getElementById('rp-open-idle');
     var rpOpenBtn = document.getElementById('rp-open-btn');
+    var rpOpenCountdown = document.getElementById('rp-open-countdown');
     var rpOpenResult = document.getElementById('rp-open-result');
     var rpOpenAmount = document.getElementById('rp-open-amount');
     var rpOpenDetailBtn = document.getElementById('rp-open-detail');
@@ -24652,6 +24690,9 @@
 
     var rpSendType = 'normal';    // 发送类型（群聊可切：normal 普通 / lucky 拼手气）
     var rpOpenCtx = null;         // 当前开红包上下文 {packetId, fromUser}
+    var rpOpenTimeout = null;     // 领取回执超时兜底定时器（半开连接 send 成功却无回执的卡死防线）
+    var rpCountdownTimer = null;  // 阶段二百四十六："開"弹窗 10s 自动开启倒计时定时器
+                                  // （用户停留不点也自动领取；顺带把弹窗停留时长压进 CDN 空闲阈值内）
     var rpDetailCbs = {};         // 89 详情响应回调表（packet_id → cb）：历史渲染会批量并发查询，
                                   // 单回调变量会被后续查询覆盖导致响应错配丢弃，故按红包 ID 归口分派
     var rpQueriedPackets = {};    // 会话级去重：已静默查询过详情的红包（历史渲染状态兜底）
@@ -24679,6 +24720,8 @@
         rpTypeLuckyBtn.classList.toggle('active', rpSendType === 'lucky');
         rpSendAmount.value = '';
         rpSendErr.textContent = '';
+        rpSendLock = false; // 阶段二百四十六：每次打开弹窗重置防重锁与按钮态
+        rpSendOk.disabled = false;
         var bal = rpBalanceText();
         rpSendBalance.textContent = bal ? (I18N.t('余额 ') + bal + I18N.t(' 积分')) : I18N.t('余额获取中…');
         rpSendMask.classList.remove('hidden');
@@ -24686,7 +24729,14 @@
     }
     function rpCloseSendDialog() {
         rpSendMask.classList.add('hidden');
+        // 阶段二百四十六：锁不在关闭时重置——Enter 键 keydown 自动重复（MuMu 模拟器实体键盘
+        // 按住回车即触发）会在弹窗关闭后再次转发 click，若此时已解锁就会第二条 86 双发。
+        // 锁生命周期 = 弹窗会话，重置归口 rpOpenSendDialog（下次打开必然重置）。
     }
+    // 阶段二百四十六：发送防重锁——手机端启动卡顿窗口内双击"塞钱进红包"，弹窗关闭延迟期间两次
+    // click 都会命中按钮，此前无锁导致两条 86 上行、服务端创建两个红包（扣两份积分）。
+    // 锁在 handler 入口短路重复触发，发送后立即禁用按钮；配合服务端 ct 幂等双保险。
+    var rpSendLock = false;
     rpTypeNormalBtn.addEventListener('click', function () {
         rpSendType = 'normal';
         rpTypeNormalBtn.classList.add('active');
@@ -24699,9 +24749,17 @@
     });
     rpSendClose.addEventListener('click', rpCloseSendDialog);
     rpSendMask.addEventListener('click', function (e) { if (e.target === rpSendMask) rpCloseSendDialog(); });
-    rpSendAmount.addEventListener('keydown', function (e) { if (e.key === 'Enter') rpSendOk.click(); });
-    rpSendCount.addEventListener('keydown', function (e) { if (e.key === 'Enter') rpSendOk.click(); });
+    // 阶段二百四十六：Enter 转发点击——e.repeat 是按键按住时的系统自动重复（MuMu 模拟器实体键盘
+    // 按住回车即连发），必须拦截；弹窗已关闭后也不再转发（防重复触发路径二）。
+    function rpEnterSend(e) {
+        if (e.key !== 'Enter' || e.repeat) return;
+        if (rpSendMask.classList.contains('hidden')) return;
+        rpSendOk.click();
+    }
+    rpSendAmount.addEventListener('keydown', rpEnterSend);
+    rpSendCount.addEventListener('keydown', rpEnterSend);
     rpSendOk.addEventListener('click', function () {
+        if (rpSendLock) return; // 阶段二百四十六：防重锁——同一次弹窗生命周期只允许发送一次
         var amount = parseFloat(rpSendAmount.value.trim());
         if (!(amount > 0)) { rpSendErr.textContent = I18N.t('请输入正确的金额'); return; }
         var isGroup = isGroupTarget(currentChatUser);
@@ -24712,6 +24770,8 @@
             if (Math.round(amount * 1000) < count) { rpSendErr.textContent = I18N.t('每份至少 0.001 积分'); return; }
         }
         rpSendErr.textContent = '';
+        rpSendLock = true; // 校验全通过才上锁：参数错误时用户可改完重发，不受锁影响
+        rpSendOk.disabled = true;
         IMSocket.send({
             msg_type: MSG.RED_PACKET,
             to_user: currentChatUser,
@@ -24719,7 +24779,8 @@
                 amount: amount,
                 count: count,
                 type: isGroup ? rpSendType : 'normal',
-                greeting: rpSendGreeting.value.trim()
+                greeting: rpSendGreeting.value.trim(),
+                ct: Date.now().toString(36) + Math.random().toString(36).slice(2, 8) // 幂等令牌（服务端 60 秒去重）
             })
         });
         rpCloseSendDialog();
@@ -24873,18 +24934,110 @@
         rpOpenResult.classList.add('hidden');
         rpOpenBtn.disabled = false;
         rpOpenMask.classList.remove('hidden');
+        rpStartCountdown(); // 阶段二百四十六：5s 内点「開」立即领取；不点则倒计时结束自动领取
+    }
+
+    /** rpStartCountdown/rpStopCountdown "開"弹窗 5 秒自动开启倒计时（阶段二百四十六）：
+     * 用户打开红包页后即使不点「開」，5 秒后也自动发出领取请求（点击仍随时可用）。
+     * 附带收益：弹窗停留时长被压进 CDN WS 空闲阈值（30s）内，避免停留过久连接被
+     * CDN 静默回收后点「開」撞上死连接超时误报「网络异常」（阶段二百四十五实测） */
+    function rpStartCountdown() {
+        rpStopCountdown();
+        var left = 5;
+        rpOpenCountdown.textContent = left + ' ' + I18N.t('秒后自动开启');
+        rpCountdownTimer = setInterval(function () {
+            left--;
+            if (left <= 0) {
+                rpStopCountdown();
+                rpAutoOpen();
+                return;
+            }
+            rpOpenCountdown.textContent = left + ' ' + I18N.t('秒后自动开启');
+            // 重触发缩放跳动动画（移除后下一帧加回，保证连续秒数变化也有视觉反馈）
+            rpOpenCountdown.classList.remove('tick');
+            void rpOpenCountdown.offsetWidth;
+            rpOpenCountdown.classList.add('tick');
+        }, 1000);
+    }
+    function rpStopCountdown() {
+        if (rpCountdownTimer) {
+            clearInterval(rpCountdownTimer);
+            rpCountdownTimer = null;
+        }
+        rpOpenCountdown.textContent = '';
+        rpOpenCountdown.classList.remove('tick');
+    }
+    /** rpAutoOpen 倒计时归零自动领取：与点击「開」走完全相同链路（防重+补发+超时兜底）。
+     * rpGetAudioCtx 在无用户手势时创建会被浏览器置于挂起态——调用安全，领取成功音效
+     * 若因此无声属浏览器自动播放策略，不影响领取流程 */
+    function rpAutoOpen() {
+        if (!rpOpenCtx || rpOpenBtn.disabled) return; // 弹窗已关/已切换红包/领取中：不触发
+        rpGetAudioCtx();
+        rpOpenBtn.disabled = true;
+        rpSendOpen(rpOpenCtx.packetId);
     }
     function rpCloseOpenDialog() {
         rpOpenMask.classList.add('hidden');
         rpOpenCtx = null;
+        rpStopCountdown();
+        if (rpOpenTimeout) { clearTimeout(rpOpenTimeout); rpOpenTimeout = null; }
     }
     rpOpenClose.addEventListener('click', rpCloseOpenDialog);
     rpOpenBtn.addEventListener('click', function () {
         if (!rpOpenCtx) return;
+        rpStopCountdown(); // 手动点击立即领取，终止倒计时防二次自动触发
         rpGetAudioCtx(); // 用户手势内预解锁 AudioContext（领取回执为异步帧，届时不可再解锁）
         rpOpenBtn.disabled = true; // 领取中防重复点击（响应/错误回执后恢复）
-        IMSocket.send({ msg_type: MSG.RED_PACKET_OPEN, content: JSON.stringify({ packet_id: rpOpenCtx.packetId }) });
+        rpSendOpen(rpOpenCtx.packetId);
     });
+
+    /** rpSendOpen 领取请求发出（含断线自动补发）：
+     * APP 端停留在开红包页期间手机息屏/短暂切出会触发连接交接（页面断开→原生服务接管），
+     * 亮屏回来页面重连需 1~3 秒——此窗口点「開」原实现 send 失败即静默卡死（真机必现）。
+     * 现改为：send 失败进入 500ms 周期补发（最长 15 秒，覆盖回前台重连时长），连接恢复后
+     * 自动发出领取请求，回执走正常流转——用户全程无感，不再提示"网络异常"。
+     * send 成功后启动 8 秒回执超时兜底（半开连接防线，见 armRpOpenTimeout） */
+    function rpSendOpen(packetId) {
+        var frame = { msg_type: MSG.RED_PACKET_OPEN, content: JSON.stringify({ packet_id: packetId }) };
+        if (IMSocket.send(frame)) {
+            armRpOpenTimeout(packetId); // 已发出：等回执（8s 兜底防半开连接石沉大海）
+            return;
+        }
+        // 未连接/重连窗口：周期补发直到连接恢复（弹窗关闭即停；15 秒仍失败才降级提示）
+        var tries = 0;
+        var iv = setInterval(function () {
+            tries++;
+            if (!rpOpenCtx || rpOpenCtx.packetId !== packetId || rpOpenMask.classList.contains('hidden')) {
+                clearInterval(iv); // 弹窗已关/已切换红包：停止补发
+                return;
+            }
+            if (IMSocket.send(frame)) {
+                clearInterval(iv);
+                armRpOpenTimeout(packetId);
+                return;
+            }
+            if (tries >= 30) { // 15 秒补发窗口耗尽（重连失败/网络不可用）
+                clearInterval(iv);
+                rpCloseOpenDialog();
+                showToast(I18N.t('网络异常，请稍后重试'));
+                rpQueryDetail(packetId, function (d) { rpHandleDetail(d, true); }); // 纠偏：按实际领取状态分流
+            }
+        }, 500);
+    }
+
+    /** armRpOpenTimeout 领取回执超时兜底：半开连接（readyState=OPEN 但链路已死）send 返回
+     * true 却石沉大海，服务端可能已领取而回执丢失——8 秒无回执收起开红包页并自动查详情
+     * 纠偏：实际已领取→详情页展示结果；未领取→重开开红包页可再点（回执正常到达时清除） */
+    function armRpOpenTimeout(packetId) {
+        if (rpOpenTimeout) clearTimeout(rpOpenTimeout);
+        rpOpenTimeout = setTimeout(function () {
+            rpOpenTimeout = null;
+            if (!rpOpenCtx) return; // 窗口已关（rpCloseOpenDialog 已清定时器，双保险）
+            rpCloseOpenDialog();
+            showToast(I18N.t('网络异常，请稍后重试'));
+            rpQueryDetail(packetId, function (d) { rpHandleDetail(d, true); });
+        }, 8000);
+    }
 
     // ---- 红包详情弹窗（领取列表，自己高亮；列表挂自绘悬浮滑块） ----
     function rpShowDetailDialog(d) {
@@ -25279,6 +25432,7 @@
             return;
         }
         if (d.act === 'open') {
+            if (rpOpenTimeout) { clearTimeout(rpOpenTimeout); rpOpenTimeout = null; } // 回执已达，撤销超时兜底
             rpOpenBtn.disabled = false;
             if (!d.ok) { showToast(d.err || I18N.t('领取失败')); return; }
             rpPlayOpenSound(); // 领取成功：微信同款硬币落袋声（ctx 已在"開"点击手势中解锁）

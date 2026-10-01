@@ -38,20 +38,30 @@ import java.util.List;
  * 1. startKeepAlive：登录成功后由前端调用——持久化凭据（私有 prefs，Base64 轻度混淆，
  *    供系统杀进程后 START_STICKY 重启服务重新登录用）+ 申请通知权限 + 拉起前台服务；
  * 2. stopKeepAlive：退出登录/换号时停服并清除凭据；
- * 3. takeOver/handBack：切后台接管 / 回前台交还（前端 visibilitychange 与原生
- *    ActivityLifecycleCallbacks 双通道触发，幂等安全）；
- * 4. 前后台监听兜底：JS 被冻结时由原生生命周期回调保证交接不丢；
+ * 3. takeOver/handBack：切后台接管 / 回前台交还。阶段二百四十四 P1 make-before-break 后
+ *    归口变化：切后台仍由 JS visibilitychange 与原生 onActivityPaused 600ms 兜底双通道
+ *    TAKEOVER；回前台交还由页面主导（重连登录 → 服务端同端互踢顶掉原生连接 → 服务收 kick
+ *    自行待命，登录回执再补一次 handBack），原生 onActivityResumed 不再延迟 HANDBACK
+ *    （原兜底先断原生再等页面重连，产生交接真空，是 break-before-make 元凶）；
+ * 4. 前后台监听兜底：JS 被冻结时由原生生命周期回调保证切后台接管不丢；
  * 5. 阶段二百二十六保活引导：getKeepAliveGuideStatus/requestIgnoreBatteryOptimization/
  *    openAutoStartSetting——设置页"后台保活"引导（电池豁免弹窗 + 厂商自启动页跳转）。
  */
 @CapacitorPlugin(name = "BackgroundIM")
 public class BackgroundIMPlugin extends Plugin {
 
-    private int resumedCount = 0;
+    // 阶段二百四十四 P1：改静态——KeepAliveService.onOpen 需跨类查询前台态决定让位
+    // （同进程静态直达，插件实例与服务同主进程）；volatile 保多线程可见（生命周期回调
+    // 在主线程，服务 WS 回调在 OkHttp 线程）
+    private static volatile int resumedCount = 0;
     private final Handler main = new Handler(Looper.getMainLooper());
     private Runnable pendingTakeover;
-    private Runnable pendingHandback;
     private boolean lifecycleRegistered = false;
+
+    /** 页面是否前台（KeepAliveService onOpen 让位判定用；服务与插件同主进程静态查询） */
+    public static boolean isAppForeground() {
+        return resumedCount > 0;
+    }
 
     @Override
     public void load() {
@@ -62,24 +72,19 @@ public class BackgroundIMPlugin extends Plugin {
             @Override
             public void onActivityResumed(Activity activity) {
                 resumedCount++;
-                // 回前台：撤销待发的接管，交还连接给 WebView
+                // 阶段二百四十四 P1：仅撤销待发的接管。原 300ms 延迟 HANDBACK 兜底移除——
+                // 它是 break-before-make 元凶（先断原生连接再等页面重连，产生交接真空）。
+                // P1 下交还归口页面 bgEndHandover：立即 connect 登录，服务端同端互踢顶掉
+                // 原生连接后服务收 kick 自行待命；登录回执再补一次 HANDBACK（幂等）
                 main.removeCallbacks(pendingTakeover);
-                main.removeCallbacks(pendingHandback);
-                pendingHandback = new Runnable() {
-                    @Override
-                    public void run() {
-                        sendAction(KeepAliveService.ACTION_HANDBACK);
-                    }
-                };
-                main.postDelayed(pendingHandback, 300);
             }
 
             @Override
             public void onActivityPaused(Activity activity) {
                 resumedCount = Math.max(0, resumedCount - 1);
                 if (resumedCount == 0) {
-                    // 切后台/息屏：延迟 600ms 接管（快速过渡如拉起通知栏不产生连接抖动）
-                    main.removeCallbacks(pendingHandback);
+                    // 切后台/息屏：延迟 600ms 接管（快速过渡如拉起通知栏不产生连接抖动）。
+                    // P1 下 TAKEOVER 后原生登录会经服务端互踢顶掉页面连接，页面静默让位
                     main.removeCallbacks(pendingTakeover);
                     pendingTakeover = new Runnable() {
                         @Override

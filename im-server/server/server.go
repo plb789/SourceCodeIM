@@ -33,6 +33,11 @@ type Server struct {
 	pendingConns atomic.Int64
 	// 阶段二百二十六：厂商推送投递队列（worker 池消费；未启用推送配置时恒空零开销）
 	pushCh chan pushJob
+	// 阶段二百四十六：红包发送幂等缓存（客户端令牌 → 首次收到时刻）。
+	// 手机端启动卡顿窗口内双击"塞钱进红包"会连续上行两条同令牌 86 帧，服务端按
+	// from_user+ct 去重只建一个红包（60 秒滑动窗口，重启丢失可接受——幂等窗口本就短）。
+	rpCtSeen map[string]time.Time
+	rpCtMu   sync.Mutex
 }
 
 // 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
@@ -49,6 +54,7 @@ func NewServer(cfg *config.Config) *Server {
 		cfg:            cfg,
 		hub:            NewHub(),
 		uploadSessions: make(map[string]*directUploadSession),
+		rpCtSeen:       make(map[string]time.Time), // 阶段二百四十六：红包发送幂等缓存
 	}
 	defaultServerRef = s
 	// 阶段一百六十一：登录排队器（enabled=false 时零开销旁路）
@@ -174,22 +180,13 @@ func (s *Server) unregister(c *Client) {
 	store.RDB.Del(context.Background(), store.KeyOnlineUser+c.username)
 
 	// 5号帧热点修复：下线通知不再单独全员广播（原每事件 O(N)，churn 风暴热点），
-	// 并入下方 93 增量帧 1s 窗口聚合广播——好友在线态与会话上下线提示由前端增量处理器统一维护
+	// 并入 93 增量帧 1s 窗口聚合广播——好友在线态与会话上下线提示由前端增量处理器统一维护
 	logger.Info("用户 %s 下线", c.username)
 
-	// 5万容量改造（E9）：在线名单增量广播（其余用户摘除本用户），原实现下线不刷新名单，
-	// 前端 onlineUsers 残留至下次全量推送（顺带修复）
-	s.pushUserListOffline(c.username)
-
-	// 集群模式：同步摘除全局在线名单条目 + 发布在场下线事件——其他实例本地仍有该用户
-	// 连接（多端跨实例）时抢注续写（cluster.go 订阅回调），防止多端场景误判全端离线。
-	// 发布顺序在 offline 广播之后：跨实例多端场景其他实例先收 offline 再收在场事件，
-	// 抢注实例随即补发 online 纠偏帧（见 cluster.go presence 分支），保证各实例客户端最终在线态正确
-	if s.hub.bus != nil {
-		store.RDB.HDel(context.Background(), KeyUserList, c.username)
-		s.hub.bus.publishPresenceOff(c.username)
-		invalidateGlobalListCache()
-	}
+	// 阶段二百四十三：下线广播宽限调度（APP 端息屏/切后台连接交接好友无感，见 offlineBroadcastGrace 说明）。
+	// 仅延迟"展示面"广播（93 增量/名单/集群在场事件）；Redis 在线缓存已在上方立即删除，
+	// 消息路由与离线队列判定（isOnlineFast/isOnline）不受宽限影响，宽限期内新消息照常入离线队列
+	s.scheduleOfflineBroadcast(c.username)
 
 	// 通话/会议状态离线收口：响铃/通话/会议中掉线若不收口，忙态与房间残留，
 	// 重连后被服务端恒判"忙"（无法再发起/被邀）。hangup 未命中 1v1 会话时自动回落
@@ -197,6 +194,67 @@ func (s *Server) unregister(c *Client) {
 	callOfflineCleanup(s, c.username)
 	// 阶段一百五十五：远程协助状态离线收口（等待响应立即收口；协助中 30s 宽限，重连自动恢复）
 	remoteOfflineCleanup(s, c.username)
+}
+
+// ===== 阶段二百四十三：下线广播宽限（APP 端息屏/切后台连接交接好友无感） =====
+// APP 端停留在页面期间手机息屏/短暂切出会触发连接交接：页面 WebSocket 主动断开 →
+// 原生前台服务（KeepAliveService，同协议同 platform）重连接管，重连耗时约 1~3 秒
+// （跨进程拉起 + 公网 RTT）。交接期间该用户真实离线数秒，原实现下线增量直接入 1s 聚合
+// 窗口——交接常超 1 秒，窗口过期即广播，好友看到"下线→上线"闪烁（用户观感即"莫名断线"）。
+// 现加宽限期：最后一个连接断开时挂起下线广播，宽限内任一连接重新登录（handleLogin 调
+// cancelOfflineBroadcast）即整体取消——好友全程无感；宽限耗尽仍未上线才真正广播下线，
+// 真实离线场景仅延迟展示，无语义变化。集群模式的在场摘除（HDel/publishPresenceOff）
+// 一并随宽限延迟，重连取消时两者同步取消（HSet 在登录路径先行续写，状态自洽）
+const offlineBroadcastGrace = 5 * time.Second
+
+var (
+	offlineGraceMu     sync.Mutex
+	offlineGraceTimers = make(map[string]*time.Timer) // 宽限期中的用户 → 下线广播定时器
+)
+
+// scheduleOfflineBroadcast 宽限调度下线广播（unregister 最后连接断开路径调用）：
+// 同用户重复调度时续窗（多端先后断开），定时器到点仍离线才入队下线增量与集群在场摘除
+func (s *Server) scheduleOfflineBroadcast(username string) {
+	offlineGraceMu.Lock()
+	if t := offlineGraceTimers[username]; t != nil {
+		t.Reset(offlineBroadcastGrace)
+	} else {
+		offlineGraceTimers[username] = time.AfterFunc(offlineBroadcastGrace, func() {
+			offlineGraceMu.Lock()
+			delete(offlineGraceTimers, username)
+			offlineGraceMu.Unlock()
+			// 宽限内已重连（本实例 hub 或集群其他实例接管）：无需广播（防御性双查，
+			// 正常路径重连时 cancelOfflineBroadcast 已先行取消定时器）
+			if s.isOnlineFast(username) {
+				return
+			}
+			logger.Info("用户 %s 下线广播宽限到期，正式广播下线", username)
+			// 5万容量改造（E9）：在线名单增量广播（其余用户摘除本用户）
+			s.pushUserListOffline(username)
+			// 集群模式：同步摘除全局在线名单条目 + 发布在场下线事件——其他实例本地仍有该用户
+			// 连接（多端跨实例）时抢注续写（cluster.go 订阅回调），防止多端场景误判全端离线
+			if s.hub.bus != nil {
+				store.RDB.HDel(context.Background(), KeyUserList, username)
+				s.hub.bus.publishPresenceOff(username)
+				invalidateGlobalListCache()
+			}
+		})
+	}
+	offlineGraceMu.Unlock()
+}
+
+// cancelOfflineBroadcast 用户重新上线时取消挂起中的下线广播（handleLogin 登录成功路径调用）：
+// 宽限内回来 = 交接/闪断自愈，好友全程无感
+func cancelOfflineBroadcast(username string) {
+	offlineGraceMu.Lock()
+	if t := offlineGraceTimers[username]; t != nil {
+		t.Stop()
+		delete(offlineGraceTimers, username)
+		offlineGraceMu.Unlock()
+		logger.Info("用户 %s 宽限期内重连，已取消下线广播", username)
+		return
+	}
+	offlineGraceMu.Unlock()
 }
 
 // callOfflineCleanup 用户最后连接离线时的通话状态归口清理（callUserBusy 全覆盖 1v1 与会议）
@@ -493,6 +551,8 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	// 原实现 Add 后 Count==1：同端互踢替换登录时旧连接已被同步移除，Count 同样为 1，
 	// 误判首设备导致上线通知/名单增量重复广播（探针 T6 暴露）
 	firstDevice := s.hub.Add(c)
+	// 阶段二百四十三：登录重连取消挂起中的下线广播宽限（APP 息屏/切后台交接、切网闪断回来，好友无感）
+	cancelOfflineBroadcast(user.Username)
 
 	// 写入 Redis 在线缓存
 	ctx := context.Background()

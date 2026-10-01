@@ -51,12 +51,16 @@ import okhttp3.WebSocketListener;
  * 根因：Android 切后台/息屏后 WebView 网络与 JS 定时器被系统冻结（Doze/厂商省电），
  * WebView 内 30s 心跳发不出，服务端 90s 判死断线，纯 Web 层无法对抗。
  * 方案：原生前台服务（remoteMessaging 类型）在后台期间接管长连接——
- *   切后台/息屏：WebView 主动断开（socket.js 带交接标记防重连循环），本服务用同一协议
- *               （登录帧 msg_type=7 platform='app' + 30s 心跳 msg_type=4）重新登录，
- *               实时接收消息帧并弹系统通知（文本直显、媒体类显示摘要）；
- *   回前台：插件层 handBack 通知本服务断开交还，WebView 立即重连（socket.js），
- *           交接窗口内到达的消息由服务端登录补推/历史拉取归口，不丢失。
- * 同一时刻仅一条 app 端连接，天然规避同端互踢（hub.go platform 相等即踢）。
+ *   阶段二百四十四 P1 make-before-break（交接真空归零）：
+ *   切后台/息屏：页面连接不主动断开，本服务 TAKEOVER 后以同一协议（登录帧 msg_type=7
+ *               platform='app' + 30s 心跳 msg_type=4）登录，服务端同端互踢自动顶掉
+ *               页面连接（页面静默让位），实时接收消息帧并弹系统通知；弱网下本服务
+ *               连不上时页面连接保持在线，消息经页面连接不丢（优于先断后建）；
+ *   回前台：页面立即重连登录，服务端同端互踢顶掉本连接（收 kick 置 handover 待命
+ *           不重连），页面登录回执再补一次 HANDBACK（幂等，兼撤来电通知）。
+ *           本服务 onOpen 时检测页面在前台（isAppForeground）则让位不发登录帧，
+ *           防反向互踢页面连接引发乒乓。
+ * 同一时刻仅一条 app 端连接，由服务端同端互踢（hub.go platform 相等即踢）收敛保证。
  * 服务端零改动：本服务就是一个普通 app 端客户端。
  */
 public class KeepAliveService extends Service {
@@ -138,6 +142,7 @@ public class KeepAliveService extends Service {
             return START_STICKY;
         }
         String action = intent.getAction();
+        android.util.Log.d("BGIM", "onStartCommand action=" + action);
         if (ACTION_START.equals(action)) {
             loadCreds();
             boolean appFg = intent.getBooleanExtra("app_fg", true);
@@ -213,11 +218,22 @@ public class KeepAliveService extends Service {
         if (stopped || handover || ws != null) return;
         if (TextUtils.isEmpty(username) || TextUtils.isEmpty(wsUrl)) return;
         loginRejected = false;
+        android.util.Log.d("BGIM", "connect: " + wsUrl);
         Request req = new Request.Builder().url(wsUrl).build();
         ws = http.newWebSocket(req, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
                 if (webSocket != ws) return;
+                android.util.Log.d("BGIM", "onOpen fg=" + BackgroundIMPlugin.isAppForeground());
+                // 阶段二百四十四 P1 make-before-break 缺口修复：连接刚建立时若页面已回前台
+                // （竞态：切后台瞬间插件 600ms 兜底 TAKEOVER 已入队，用户立即切回），此时发登录帧
+                // 会被服务端同端互踢用于顶掉页面连接——与页面 bgEndHandover 的重连形成反向互踢
+                // 乒乓。检测到页面在前台则让位：不发登录帧，进入待命态（等下次 TAKEOVER 再接管）
+                if (BackgroundIMPlugin.isAppForeground()) {
+                    handover = true;
+                    teardown();
+                    return;
+                }
                 sendLogin(webSocket);
             }
 
@@ -230,12 +246,14 @@ public class KeepAliveService extends Service {
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
                 if (webSocket != ws) return;
+                android.util.Log.d("BGIM", "onClosed code=" + code + " reason=" + reason);
                 onLinkDown();
             }
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
                 if (webSocket != ws) return;
+                android.util.Log.d("BGIM", "onFailure: " + t);
                 onLinkDown();
             }
         });
@@ -296,10 +314,13 @@ public class KeepAliveService extends Service {
         }
     }
 
-    // 30s 应用层心跳（与服务端 heartbeat_timeout 判死口径一致，前端同款）
+    // 15s 应用层心跳（前端同款。阶段二百四十五：CDN 侧 WS 空闲超时已从 60s 收紧至 30s，
+    // 原 30s 心跳与阈值零裕度压线——挂机 30s 后的首个上行帧即触发 CDN 1006 静默断连，
+    // 帧发往死连接导致红包领取等操作超时误报「网络异常」。加密至 15s 留 2 倍裕度，
+    // 仍远小于服务端 heartbeat_timeout 判死口径）
     private void startHeartbeat() {
         main.removeCallbacks(heartbeatTask);
-        main.postDelayed(heartbeatTask, 30000);
+        main.postDelayed(heartbeatTask, 15000);
     }
 
     private final Runnable heartbeatTask = new Runnable() {
@@ -312,7 +333,7 @@ public class KeepAliveService extends Service {
                 } catch (Exception ignored) {
                 }
             }
-            main.postDelayed(this, 30000);
+            main.postDelayed(this, 15000);
         }
     };
 
@@ -337,11 +358,13 @@ public class KeepAliveService extends Service {
                     ok = "ok".equals(content);
                 }
                 if (ok) {
+                    android.util.Log.d("BGIM", "LOGIN_RESP ok");
                     loggedIn = true;
                     reconnectDelay = 3000;
                     startHeartbeat();
                 } else {
                     // 登录被拒（密码错误/账号异常）：不再自动重连，提示用户回应用处理
+                    android.util.Log.d("BGIM", "LOGIN_RESP rejected");
                     loginRejected = true;
                     teardown();
                     showSysNotice("后台消息服务已停止：登录失败，请打开应用重新登录");
@@ -350,9 +373,11 @@ public class KeepAliveService extends Service {
             }
             case 9: { // ERROR
                 if (m.optBoolean("kick")) {
-                    // 同端被踢：正常为回前台交接时 WebView 登录顶掉本连接（或他处新 app 登录）。
-                    // 置 handover 进入待命态：断开且不自动重连，等下一次 TAKEOVER 再接管，
-                    // 避免"本服务 ↔ 新登录端"双方自动重连互踢循环
+                    android.util.Log.d("BGIM", "kicked -> standby");
+                    // 同端被踢：阶段二百四十四 P1 下为回前台交接的主路径——页面重连登录成功，
+                    // 服务端同端互踢顶掉本连接（或他处新 app 登录）。置 handover 进入待命态：
+                    // 断开且不自动重连，等下一次 TAKEOVER 再接管，页面登录回执还会补发一次
+                    // HANDBACK（幂等），避免"本服务 ↔ 新登录端"双方自动重连互踢循环
                     handover = true;
                     teardown();
                 } else if (!loggedIn) {

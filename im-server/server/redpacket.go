@@ -51,10 +51,33 @@ func (s *Server) handleRedPacketSend(c *Client, msg *protocol.Message) {
 		Count    int     `json:"count"`
 		Type     string  `json:"type"`
 		Greeting string  `json:"greeting"`
+		CT       string  `json:"ct"` // 阶段二百四十六：客户端幂等令牌（可选；手机端启动卡顿双击会连发两条同令牌帧）
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil {
 		s.sendError(c, "红包参数错误")
 		return
+	}
+	// 阶段二百四十六：发送幂等（from_user+ct 60 秒去重）。命中静默丢弃（不发 ERROR 不建红包）——
+	// 第一条帧已正常创建红包并回执，重复帧多来自双击/重试，静默即可；无 ct 的旧客户端零影响
+	if p.CT != "" {
+		key := c.username + ":" + p.CT
+		now := time.Now()
+		s.rpCtMu.Lock()
+		if t, ok := s.rpCtSeen[key]; ok && now.Sub(t) < 60*time.Second {
+			s.rpCtMu.Unlock()
+			logger.Warn("红包发送幂等拦截：%s 60 秒内重复令牌 %s（疑似双击/重发，已丢弃）", c.username, p.CT)
+			return
+		}
+		s.rpCtSeen[key] = now
+		// 惰性清理：缓存超过 512 条时清一次过期项（红包发送频率低，简单够用）
+		if len(s.rpCtSeen) > 512 {
+			for k, t := range s.rpCtSeen {
+				if now.Sub(t) >= 60*time.Second {
+					delete(s.rpCtSeen, k)
+				}
+			}
+		}
+		s.rpCtMu.Unlock()
 	}
 	if msg.ToUser == "" {
 		s.sendError(c, "红包缺少接收方")

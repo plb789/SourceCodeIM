@@ -1152,9 +1152,10 @@
     </div>
 
     <!-- 开红包遮罩：微信同款大圆"开"按钮；领取后切换结果态（金额 + 存入提示 + 查看详情入口） -->
+    <!-- 阶段二百四十六：关闭 X 移入红包封面内（原挂遮罩右上角距离红包过远）；"開"下方 5s 倒计时自动开启 -->
     <div id="rp-open-mask" class="rp-open-mask hidden">
-        <button id="rp-open-close" class="rp-open-close" title="关闭">×</button>
         <div class="rp-open-card">
+            <button id="rp-open-close" class="rp-open-close" title="关闭">×</button>
             <div class="rp-open-head">
                 <div id="rp-open-avatar" class="rp-open-avatar"></div>
                 <div id="rp-open-name" class="rp-open-name"></div>
@@ -1162,6 +1163,7 @@
             </div>
             <div id="rp-open-idle" class="rp-open-idle">
                 <button id="rp-open-btn" class="rp-open-btn">開</button>
+                <div id="rp-open-countdown" class="rp-open-countdown"></div>
             </div>
             <div id="rp-open-result" class="rp-open-result hidden">
                 <div id="rp-open-amount" class="rp-open-amount"></div>
@@ -2310,7 +2312,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.40"></script>
+    <script src="/js/socket.js?v=1.41"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.9"></script>
@@ -2332,7 +2334,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.160"></script>
+    <script src="/js/chat.js?v=3.163"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；

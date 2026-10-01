@@ -1201,6 +1201,7 @@
   "每份至少 0.001 积分": "Each share is at least 0.001 points",
   "已过期": "Expired",
   "已存入积分余额": "Added to your points balance",
+  "秒后自动开启": "s until auto-open",
   "已领取完毕": "Fully claimed",
   "等待领取": "Waiting to be claimed",
   "领取红包": "Claim red packet",

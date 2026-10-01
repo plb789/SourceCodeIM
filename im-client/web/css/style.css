@@ -15424,22 +15424,26 @@ html.m .wb-app-icon {
     from { opacity: 0; }
     to { opacity: 1; }
 }
+/* 阶段二百四十六：X 移入封面内右上角（原 top:18px/right:22px 相对全屏遮罩，距红包过远） */
 .rp-open-close {
     position: absolute;
-    top: 18px;
-    right: 22px;
+    top: 8px;
+    right: 8px;
     border: none;
     background: transparent;
-    color: rgba(255, 255, 255, 0.75);
-    font-size: 26px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 24px;
     line-height: 1;
     cursor: pointer;
     padding: 4px 8px;
+    z-index: 1;
 }
 .rp-open-close:hover {
     color: #fff;
 }
+/* 阶段二百四十六：关闭 X 从遮罩右上角移入红包封面内（卡片即定位锚点） */
 .rp-open-card {
+    position: relative;
     width: 320px;
     max-width: calc(100vw - 40px);
     background: linear-gradient(170deg, #d5504a 0%, #c23a34 60%, #a92c27 100%);
@@ -15492,7 +15496,8 @@ html.m .wb-app-icon {
 .rp-open-idle {
     padding: 26px 0 6px;
     display: flex;
-    justify-content: center;
+    flex-direction: column; /* 阶段二百四十六：「開」与倒计时纵向排列（默认 row 会把倒计时挤到按钮右侧） */
+    align-items: center;
 }
 .rp-open-btn {
     width: 84px;
@@ -15521,6 +15526,22 @@ html.m .wb-app-icon {
     filter: grayscale(0.4);
     cursor: wait;
     animation: none;
+}
+/* 阶段二百四十六："開"下方 10s 自动开启倒计时（金色小字，数字变化时轻微缩放跳动） */
+.rp-open-countdown {
+    margin-top: 12px;
+    min-height: 17px;
+    font-size: 12px;
+    color: #fbe3b6;
+    opacity: 0.85;
+    letter-spacing: 0.5px;
+}
+.rp-open-countdown.tick {
+    animation: rp-cd-tick 0.3s ease;
+}
+@keyframes rp-cd-tick {
+    from { transform: scale(1.18); }
+    to { transform: scale(1); }
 }
 .rp-open-result {
     padding: 18px 0 8px;
