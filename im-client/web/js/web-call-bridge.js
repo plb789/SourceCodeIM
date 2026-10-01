@@ -73,6 +73,27 @@
         '.wcb-ring-decline{background:#fa5151;}.wcb-ring-decline:hover{background:#e64340;filter:none;}' +
         '.wcb-ring-accept{background:#07c160;}.wcb-ring-accept:hover{background:#06ad56;filter:none;}' +
         '.wcb-ring-btn.hidden{display:none;}' +
+        /* 手机 APP 端全屏来电页（微信同款）：满屏深色沉浸，来电头像放大模糊暗化作背景，
+           中部大圆头像 + 昵称 + 邀请文案，底部红/绿大圆钮（绿色接听带呼吸脉动） */
+        '.wcb-ring-fs{position:fixed;left:0;top:0;right:0;bottom:0;z-index:99999;display:flex;' +
+        'flex-direction:column;align-items:center;background:#101214;color:#fff;' +
+        'font-family:"Microsoft YaHei","PingFang SC",sans-serif;user-select:none;-webkit-user-select:none;' +
+        'animation:wcbFadeIn .25s ease-out;}@keyframes wcbFadeIn{from{opacity:0;}to{opacity:1;}}' +
+        '.wcb-ringfs-bg{position:absolute;left:-40px;top:-40px;right:-40px;bottom:-40px;' +
+        'background-size:cover;background-position:center;filter:blur(48px) brightness(.32) saturate(1.15);}' +
+        '.wcb-ringfs-center{position:relative;flex:1;display:flex;flex-direction:column;align-items:center;' +
+        'justify-content:center;padding-bottom:10vh;width:100%;}' +
+        '.wcb-ring-fs .wcb-ring-ava{width:92px;height:92px;box-shadow:0 6px 32px rgba(0,0,0,.45);}' +
+        '.wcb-ring-fs .wcb-ring-ava-ph{font-size:34px;}' +
+        '.wcb-ringfs-info{margin-top:22px;display:flex;flex-direction:column;align-items:center;min-width:0;}' +
+        '.wcb-ring-fs .wcb-ring-name{max-width:78vw;font-size:24px;font-weight:500;text-align:center;}' +
+        '.wcb-ring-fs .wcb-ring-desc{margin-top:10px;font-size:14px;color:rgba(255,255,255,.72);text-align:center;}' +
+        '.wcb-ringfs-btns{position:relative;display:flex;justify-content:center;align-items:center;' +
+        'gap:110px;padding-bottom:max(40px,env(safe-area-inset-bottom));width:100%;}' +
+        '.wcb-ring-fs .wcb-ring-btn{width:66px;height:66px;}' +
+        '.wcb-ring-fs .wcb-ring-btn svg{width:26px;height:26px;}' +
+        '@keyframes wcbPulse{0%,100%{box-shadow:0 0 0 0 rgba(7,193,96,.45);}55%{box-shadow:0 0 0 14px rgba(7,193,96,0);}}' +
+        '.wcb-ring-fs .wcb-ring-accept{animation:wcbPulse 1.6s ease-out infinite;}' +
         /* 阶段一百四十五：通话窗拖动把手（浏览器 iframe 吞鼠标事件，-webkit-app-region 失效，
            以父页透明条覆盖 iframe 顶部拖动区实现按住移动；对齐 PC 端拖顶部移动窗口的体验） */
         '.wcb-drag{position:fixed;height:36px;z-index:100001;cursor:move;user-select:none;-webkit-user-select:none;}';
@@ -235,10 +256,11 @@
         }, 60000);
     }
 
-    // 构建响铃条 DOM（结构/样式对齐 call-ring.html）
+    // 构建响铃条 DOM（结构/样式对齐 call-ring.html；手机 APP/窄屏为微信同款全屏来电页）
     function buildRing(data) {
+        var isFull = isApp || window.innerWidth <= 500; // 全屏来电页仅手机形态（桌面浏览器保持顶部小条）
         var bar = document.createElement('div');
-        bar.className = 'wcb-ring';
+        bar.className = isFull ? 'wcb-ring-fs' : 'wcb-ring';
         var ava = document.createElement('div');
         ava.className = 'wcb-ring-ava';
         var info = document.createElement('div');
@@ -257,7 +279,27 @@
         btnAccept.title = '接听';
         btnAccept.innerHTML = '<svg class="ico-audio" viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>' +
             '<svg class="ico-video hidden" viewBox="0 0 24 24" width="19" height="19"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>';
-        bar.appendChild(ava); bar.appendChild(info); bar.appendChild(btnDecline); bar.appendChild(btnAccept);
+        if (isFull) {
+            // 微信同款全屏来电页：来电头像放大模糊暗化作背景（破图降级纯深色），
+            // 中部头像 + 昵称/文案居中，底部红/绿大圆钮
+            info.className = 'wcb-ringfs-info'; // 全屏纵向布局（flex:1 拉伸语义不适用）
+            var bg = document.createElement('div');
+            bg.className = 'wcb-ringfs-bg';
+            if (data.from_avatar) bg.style.backgroundImage = 'url("' + data.from_avatar + '")';
+            var center = document.createElement('div');
+            center.className = 'wcb-ringfs-center';
+            center.appendChild(ava);
+            center.appendChild(info);
+            var btns = document.createElement('div');
+            btns.className = 'wcb-ringfs-btns';
+            btns.appendChild(btnDecline);
+            btns.appendChild(btnAccept);
+            bar.appendChild(bg);
+            bar.appendChild(center);
+            bar.appendChild(btns);
+        } else {
+            bar.appendChild(ava); bar.appendChild(info); bar.appendChild(btnDecline); bar.appendChild(btnAccept);
+        }
         document.body.appendChild(bar);
         ringEl = bar;
         // 头像（图片优先，破图降级首字母占位——与 call-ring.js 同语义）

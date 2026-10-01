@@ -20,13 +20,15 @@ import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
-// 阶段二百三十八：来电通知卡片（RemoteViews 自定义布局 + 头像位图圆形裁剪）
+// 阶段二百三十八：来电通知卡片（头像位图圆形裁剪）
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Paint;
-import android.widget.RemoteViews;
+// 微信同款来电通知：系统 CallStyle 模板 + Person（头像随 Person 渲染大圆标）
+import androidx.core.app.Person;
+import androidx.core.graphics.drawable.IconCompat;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
@@ -691,30 +693,37 @@ public class KeepAliveService extends Service {
         fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject);
     }
 
-    // 阶段二百三十八：来电卡片通知构建（RemoteViews 微信同款：头像 + 主叫 + 接听/挂断圆钮）
+    // 微信同款来电通知：整卡交由系统渲染（统一系统背景，无白边）。
+    // 根因备注：旧版自定义 RemoteViews 黑色卡片会被系统模板在外层包一层系统装饰底板
+    // （Android 12+ heads-up 为动态取色浅色底），黑卡浮在浅色底上出现白色边框部分；
+    // CallStyle 来电模板（大圆头像 + 主叫名 + 副标题 + 系统红/绿挂断接听按钮）即微信效果。
     private Notification buildCallCard(String name, String body, PendingIntent pi, PendingIntent piAccept,
                                        PendingIntent piReject, Bitmap avatar) {
-        RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notify_call);
-        rv.setTextViewText(R.id.call_name, name);
-        rv.setTextViewText(R.id.call_sub, body);
-        if (avatar != null) {
-            rv.setImageViewBitmap(R.id.call_avatar, avatar);
-        } else {
-            rv.setImageViewResource(R.id.call_avatar, R.mipmap.ic_launcher);
-        }
-        rv.setOnClickPendingIntent(R.id.btn_accept, piAccept);
-        rv.setOnClickPendingIntent(R.id.btn_decline, piReject);
-        return new NotificationCompat.Builder(this, CH_CALL)
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH_CALL)
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setCustomContentView(rv)
-                .setCustomBigContentView(rv)
-                .setStyle(new NotificationCompat.DecoratedCustomViewStyle())
+                .setContentText(body) // CallStyle 模板副标题（「邀请你视频通话/语音通话」）
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
+                // CallStyle 硬性要求：通知必须 ongoing，否则系统校验不通过、忽略来电模板，
+                // 降级为标准通知（方形小头像 + 文字按钮）——首版实测即踩此坑
+                .setOngoing(true)
+                .setAutoCancel(true) // 点卡片主体仍自动消失（ongoing 仅禁滑动清除）
                 .setFullScreenIntent(pi, true) // 熄屏/锁屏系统自动全屏拉起
-                .setContentIntent(pi)          // 卡片点按（非按钮）进入响铃条
-                .build();
+                .setContentIntent(pi);         // 卡片点按（非按钮）进入响铃条
+        if (avatar != null) b.setLargeIcon(avatar); // API <30 降级通知与人物头像共用
+        if (Build.VERSION.SDK_INT >= 30) {
+            Person caller = new Person.Builder()
+                    .setName(name)
+                    .setIcon(avatar != null ? IconCompat.createWithBitmap(avatar) : null)
+                    .build();
+            b.setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, piReject, piAccept));
+        } else {
+            // Android 11 以下降级：标准通知 + 文字按钮（同样系统统一背景，无白边）
+            b.setContentTitle(name);
+            b.addAction(new NotificationCompat.Action.Builder(0, "挂断", piReject).build());
+            b.addAction(new NotificationCompat.Action.Builder(0, "接听", piAccept).build());
+        }
+        return b.build();
     }
 
     /**
