@@ -5255,6 +5255,9 @@
 
     // 阶段二十四：回传原文件给服务端持久化（POST /upload/file，服务端按 file_id 幂等落库）
     // 上传失败仅告警不影响实时显示（blob 渲染照常），刷新后该消息从历史中消失属预期降级
+    // 阶段二百四十七：响应携带 {msg_id,url,file_id}——图片气泡 data-src 回填服务器地址，且
+    // blob 预览未就绪时切服务器地址兜底（Android WebView 相册 content:// File 的 blob 预览
+    // 可能挂起/失败，真机表现为自己看不到自己发的图；与直传路径 FILE_PERSISTED 回填同口径）
     function persistUploadedFile(file, fileId) {
         var fd = new FormData();
         fd.append('file', file);
@@ -5263,12 +5266,24 @@
             body: fd
         }).then(function (r) { return r.json(); }).then(function (res) {
             // msg_id 回填统一由 FILE_PERSISTED 服务端通知处理（服务端归口，双方一致，按 file_id 精确匹配）
-            // 原实现：HTTP 响应后取"最后一条无 msg_id 的 self 气泡"回填，仅发送方生效且并发发送时可能错位
-            // if (res && res.msg_id) {
-            //     var bubbles = messageList.querySelectorAll('.message.self:not([data-msg-id])');
-            //     var last = bubbles[bubbles.length - 1];
-            //     if (last) last.setAttribute('data-msg-id', res.msg_id);
-            // }
+            // 图片/文件气泡地址兜底：按 file_id 精确匹配本端气泡（并发发送不错位）
+            if (!res || !res.url) return;
+            var el = messageList.querySelector('.message.self[data-file-id="' + fileId + '"]');
+            if (!el) return;
+            var pImg = el.querySelector('.chat-image');
+            if (pImg) {
+                pImg.setAttribute('data-src', res.url);
+                if (pImg.getAttribute('data-blob-fail') === '1') {
+                    pImg.src = res.url;
+                } else if (pImg.getAttribute('data-blob-ok') !== '1') {
+                    setTimeout(function () {
+                        if (!pImg.parentNode) return;                       // 气泡已被移除（切会话/撤回）
+                        if (pImg.getAttribute('data-blob-ok') === '1') return;
+                        if (pImg.complete && pImg.naturalWidth > 0) return; // 已就绪（load 竞态兜底）
+                        pImg.src = res.url;
+                    }, 1500);
+                }
+            }
         }).catch(function (e) {
             console.warn('文件持久化上传失败（不影响实时显示）:', e);
         });
@@ -5353,16 +5368,31 @@
                 applyBubbleReadStatus(mineEl, msg.msg_id, msg.to_user || '');
                 // 阶段三十八：图片气泡 src 从 blob: 回填为服务器 URL——blob 仅本页面有效，
                 // 图片查看器（独立窗口）收集列表时跨窗口加载失败，导致自己发的图进不了翻页/缩略图列表
-                // 原实现：仅回填 msg_id/file_id，img.src 永远停留在 blob:
+                // 阶段二百四十六修复：不再替换 img.src——原实现把已显示的 blob 本地预览换成服务器 URL
+                // 会触发整图重新下载（发送端刚上传完又从服务器下载回来，移动网络下数秒气泡空白，
+                // 表现为"自己发的图迟迟不显示、发下一张时上一张才出现"）；且 FILE_PERSISTED 先于
+                // blob load 到达时 src 被中途替换会吞掉 load 事件，骨架屏长期停留（手机端相册返回
+                // resume 后 blob 读取慢，竞态高发）。现仅回填 data-src 为服务器地址：显示层 blob
+                // 预览即时可见（对齐群聊图片/分片小文件路径既有行为），消费点经 chatImgSrc 读取
+                // （src 为 blob: 时让位 data-src）仍拿到服务器地址，查看器/转发/另存跨窗口语义不变
                 var mImg = mineEl.querySelector('.chat-image');
-                // 骨架屏兼容：blob 预览地址可能停留在 src 或 data-src，两处都要回填
+                // 骨架屏兼容：blob 预览地址可能停留在 src 或 data-src，data-src 统一回填服务器地址
                 if (mImg && meta.url) {
-                    var mSrc = mImg.getAttribute('src');
-                    if (mSrc && mSrc.indexOf('blob:') === 0) {
-                        mImg.setAttribute('src', meta.url);
-                        if (mImg.getAttribute('data-src')) mImg.setAttribute('data-src', meta.url);
-                    } else if (!mSrc && (mImg.getAttribute('data-src') || '').indexOf('blob:') === 0) {
-                        mImg.setAttribute('data-src', meta.url);
+                    mImg.setAttribute('data-src', meta.url);
+                    // 阶段二百四十七兜底（真机实测：Android WebView 对相册 content:// File 的 blob
+                    // 预览可能挂起/加载失败，而 XHR 上传走原生网络栈不受影响——好友可见而自己
+                    // 永远看不到自己发的图）。blob 已失败直接切服务器地址；仍在加载中的给 1.5s
+                    // 缓冲（桌面 blob 毫秒级完成不误切），超时仍未就绪（complete=false 或未成功）
+                    // 切服务器地址——load 成功后骨架/降级占位经既有监听自动清理
+                    if (mImg.getAttribute('data-blob-fail') === '1') {
+                        mImg.src = meta.url;
+                    } else if (mImg.getAttribute('data-blob-ok') !== '1') {
+                        setTimeout(function () {
+                            if (!mImg.parentNode) return;                       // 气泡已被移除（切会话/撤回）
+                            if (mImg.getAttribute('data-blob-ok') === '1') return;
+                            if (mImg.complete && mImg.naturalWidth > 0) return; // 已就绪（load 竞态兜底）
+                            mImg.src = meta.url;
+                        }, 1500);
                     }
                 }
                 // 阶段一百三十四：文件气泡 data-url 同款回填（阶段三十八只修了图片，文件遗漏）——
@@ -22346,7 +22376,13 @@
     // 完成后骨架移除、图片显示；加载失败/挂起超时转 attachImageFallback 主题化占位（点击重试）。
     // 地址同步记录 data-src：FILE_PERSISTED blob 回填判断、加载完成前的 src 消费点兜底均依赖它。
     function chatImgSrc(im) {
-        return im.getAttribute('src') || im.getAttribute('data-src') || '';
+        var src = im.getAttribute('src') || '';
+        var ds = im.getAttribute('data-src') || '';
+        // 阶段二百四十六：src 为 blob 本地预览且 data-src 已回填服务器地址（FILE_PERSISTED 归口）
+        // 时优先返回服务器地址——查看器/转发/另存/复制等消费点跨窗口可用，与原"回填后 src=服务器
+        // 地址"的消费面一致；未回填时（两端均为 blob:/空）维持原读取顺序（src 优先，data-src 兜底）
+        if (src.indexOf('blob:') === 0 && ds && ds.indexOf('blob:') !== 0) return ds;
+        return src || ds;
     }
 
     // img 需已插入气泡（骨架插在其前）；stickBottom：加载撑高后是否贴底（调用方插入前快照）
@@ -22368,12 +22404,14 @@
         }
         skTimer = setTimeout(skTimeout, 10000);
         img.addEventListener('load', function () {
+            img.setAttribute('data-blob-ok', '1'); // 阶段二百四十七：预览就绪标记（FILE_PERSISTED 回填判断用）
             clearSkTimer();
             if (sk.parentNode) sk.remove();
             img.style.display = '';
             if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
         });
         img.addEventListener('error', function () {
+            img.setAttribute('data-blob-fail', '1'); // 阶段二百四十七：预览失败标记（FILE_PERSISTED 回填切服务器地址用）
             clearSkTimer();
             if (sk.parentNode) sk.remove(); // attachImageFallback 的 error 回调负责插入降级占位
         });
@@ -22406,7 +22444,9 @@
         img.addEventListener('click', function () {
             // 原实现：window.open(url, '_blank') 直接弹裸图片窗口，无工具栏
             // 阶段三十八：改走图片查看器（置顶/翻页/缩略图/缩放/旋转/另存为）
-            openImageViewer(url);
+            // 阶段二百四十六：点击时动态取当前地址（blob 预览期回填后 chatImgSrc 返回服务器地址），
+            // 避免构造时闭包 blob: 传入查看器后与列表中同图的服务器地址重复占位
+            openImageViewer(chatImgSrc(img));
         });
         bubble.appendChild(img);
         attachChatImageSkeleton(img, url, stick);
