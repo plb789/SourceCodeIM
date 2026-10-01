@@ -36,7 +36,9 @@ import org.json.JSONObject;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.io.InputStream;
 
 import okhttp3.OkHttpClient;
@@ -109,6 +111,11 @@ public class KeepAliveService extends Service {
     private final Map<String, String> friendNames = new HashMap<>();
     // 阶段二百三十八：好友头像相对路径映射（好友列表帧 22 携带，来电卡片头像装载用）
     private final Map<String, String> friendAvatars = new HashMap<>();
+    // 阶段二百四十六：消息通知头像（微信同款）——圆形头像位图缓存（连续消息免重复拉取）
+    // + 会话维度通知序号（连续消息顶替时作废在途头像回填任务，防旧内容覆盖新通知）
+    private final Map<String, Bitmap> noticeAvatarCache = new ConcurrentHashMap<>();
+    private final Map<String, Long> noticeSeq = new ConcurrentHashMap<>();
+    private final AtomicLong noticeSeqGen = new AtomicLong();
 
     @Override
     public void onCreate() {
@@ -460,14 +467,14 @@ public class KeepAliveService extends Service {
                 break;
             }
             case 20: { // 好友申请
-                showMsgNotice(from, "好友申请", from + "：" + m.optString("content", "请求加为好友"), 0);
+                showMsgNotice(from, from, "好友申请", from + "：" + m.optString("content", "请求加为好友"), 0);
                 break;
             }
             case 75: { // 群邀请通知
                 try {
                     JSONObject info = new JSONObject(m.optString("content", "{}"));
                     String inviter = info.optString("from_name", from);
-                    showMsgNotice(from, "群聊邀请", inviter + " 邀请你加入群聊「" + info.optString("name", "") + "」", 0);
+                    showMsgNotice(from, from, "群聊邀请", inviter + " 邀请你加入群聊「" + info.optString("name", "") + "」", 0);
                 } catch (Exception ignored) {
                 }
                 break;
@@ -475,14 +482,14 @@ public class KeepAliveService extends Service {
             case 84: { // 公告发布推送
                 try {
                     JSONObject info = new JSONObject(m.optString("content", "{}"));
-                    showMsgNotice("", "公告发布", info.optString("title", "") + "　" + info.optString("digest", ""), 0);
+                    showMsgNotice("", "", "公告发布", info.optString("title", "") + "　" + info.optString("digest", ""), 0);
                 } catch (Exception ignored) {
                 }
                 break;
             }
             case 45: { // AI 回复完成（流式增量 44 忽略，仅终态通知）
                 if ("error".equals(m.optString("remark", ""))) break;
-                showMsgNotice(from, displayName(from, null), truncate(m.optString("content", "")), 0);
+                showMsgNotice(from, from, displayName(from, null), truncate(m.optString("content", "")), 0);
                 break;
             }
             case 70: { // 通话信令：邀请拉起接听画面（阶段二百三十七），其余动作前台 UI 归口
@@ -526,10 +533,10 @@ public class KeepAliveService extends Service {
             title = displayName(from, m.optString("from_name", ""));
             body = summary;
         }
-        showMsgNotice(target, title, body, m.optLong("timestamp", 0));
+        showMsgNotice(from, target, title, body, m.optLong("timestamp", 0));
     }
 
-    private void showMsgNotice(String target, String title, String body, long ts) {
+    private void showMsgNotice(String from, String target, String title, String body, long ts) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         // 点击跳转会话：深链 imapp://chat?to=<target>，经 App 插件 appUrlOpen 送达前端
@@ -540,21 +547,72 @@ public class KeepAliveService extends Service {
         PendingIntent pi = PendingIntent.getActivity(this,
                 (target == null ? "" : target).hashCode(), i,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification n = new NotificationCompat.Builder(this, CH_MSG)
+        long when = ts > 0 ? ts * 1000 : System.currentTimeMillis();
+        String key = target == null ? "" : target;
+        // 微信同款：会话维度通知序号——连续消息顶替时作废在途头像回填，防旧内容覆盖新通知
+        long seq = noticeSeqGen.incrementAndGet();
+        noticeSeq.put(key, seq);
+        Bitmap avatar = noticeAvatarCache.get(from); // 缓存命中直接带头像（连续消息免重复拉取）
+        int id = MSG_ID_BASE + Math.abs(key.hashCode()) % 100000;
+        try {
+            nm.notify(id, buildMsgNotice(title, body, when, pi, avatar));
+        } catch (Exception ignored) {
+        }
+        if (avatar == null) fetchNoticeAvatar(from, key, id, title, body, when, pi, seq);
+    }
+
+    // 阶段二百四十六：消息通知构建归口（正文先即时展示；头像到位后同 id 原位顶替补 largeIcon）
+    private Notification buildMsgNotice(String title, String body, long when, PendingIntent pi, Bitmap avatar) {
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH_MSG)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
-                .setWhen(ts > 0 ? ts * 1000 : System.currentTimeMillis())
-                .setContentIntent(pi)
-                .build();
-        // 同会话通知复用同一 id 顶替（微信同款：连续消息不堆积，显示最新一条）
-        int id = MSG_ID_BASE + Math.abs((target == null ? "" : target).hashCode()) % 100000;
-        try {
-            nm.notify(id, n);
-        } catch (Exception ignored) {
-        }
+                .setWhen(when)
+                .setContentIntent(pi);
+        if (avatar != null) b.setLargeIcon(avatar); // 微信同款圆形头像（缓存位图已圆裁）
+        return b.build();
+    }
+
+    // 阶段二百四十六：消息通知头像异步回填——3s 拉不到即放弃，不影响正文通知时效；
+    // 序号校验保证连续消息只由最新一条完成回填；发言人非好友/无头像时优雅降级（仅应用图标）
+    private void fetchNoticeAvatar(String from, String target, int id, String title, String body,
+                                   long when, PendingIntent pi, long seq) {
+        String path = friendAvatars.get(from);
+        if (path == null || path.isEmpty()) return;
+        String full = avatarFullUrl(path);
+        if (full.isEmpty()) return;
+        http.newBuilder().callTimeout(3, TimeUnit.SECONDS).build()
+                .newCall(new Request.Builder().url(full).build()).enqueue(new okhttp3.Callback() {
+                    @Override
+                    public void onFailure(okhttp3.Call c, java.io.IOException e) {
+                    }
+
+                    @Override
+                    public void onResponse(okhttp3.Call c, Response resp) throws java.io.IOException {
+                        Bitmap bmp = null;
+                        try (InputStream is = resp.body() != null ? resp.body().byteStream() : null) {
+                            if (is != null && resp.isSuccessful()) bmp = BitmapFactory.decodeStream(is);
+                        } catch (Exception ignored) {
+                        } finally {
+                            resp.close();
+                        }
+                        if (bmp == null) return;
+                        Bitmap circle = circleBitmap(bmp);
+                        noticeAvatarCache.put(from, circle); // 留存缓存，后续该好友消息免拉取
+                        KeepAliveService s = self;
+                        if (s == null) return;
+                        Long cur = noticeSeq.get(target);
+                        if (cur == null || cur.longValue() != seq) return; // 已有更新通知：本轮回填作废
+                        NotificationManager nm = getSystemService(NotificationManager.class);
+                        if (nm == null) return;
+                        try {
+                            nm.notify(id, buildMsgNotice(title, body, when, pi, circle));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                });
     }
 
     /**
