@@ -96,7 +96,14 @@
         '.wcb-ring-fs .wcb-ring-accept{animation:wcbPulse 1.6s ease-out infinite;}' +
         /* 阶段一百四十五：通话窗拖动把手（浏览器 iframe 吞鼠标事件，-webkit-app-region 失效，
            以父页透明条覆盖 iframe 顶部拖动区实现按住移动；对齐 PC 端拖顶部移动窗口的体验） */
-        '.wcb-drag{position:fixed;height:36px;z-index:100001;cursor:move;user-select:none;-webkit-user-select:none;}';
+        '.wcb-drag{position:fixed;height:36px;z-index:100001;cursor:move;user-select:none;-webkit-user-select:none;}' +
+        /* 阶段二百四十七：通话悬浮小窗（微信同款）——122×218 竖条（9:16 对齐微信小窗比例），
+           初始挂右上角避开状态栏；拖动后位置走 inline（left/top），!important 尺寸类压过 inline 尺寸；
+           .wcb-mini-click 为小窗覆盖层（iframe 吞触摸事件，拖动/轻点恢复全屏均在其上感知） */
+        '.wcb-frame-mini{width:122px!important;height:218px!important;left:auto!important;right:12px;top:72px;' +
+        'transform:none!important;border-radius:14px!important;box-shadow:0 8px 28px rgba(0,0,0,.5)!important;' +
+        'max-width:none!important;max-height:none!important;}' +
+        '.wcb-mini-click{position:fixed;z-index:100001;user-select:none;-webkit-user-select:none;}';
     document.head.appendChild(css);
 
     // ===== 通话窗承载 =====
@@ -172,8 +179,10 @@
 
     function openCallFrame(data) {
         var s = frameSize(data.call_type === 'video', !!data.meet);
+        curLoad = data; // 当前通话任务（悬浮小窗恢复全屏时按此重算正常尺寸）
         if (callFrame) {
-            // 复用窗口切换形态（语音/视频互切场景，对齐 PC ensureCallWindow）
+            // 复用窗口切换形态（语音/视频互切场景，对齐 PC ensureCallWindow）；小窗态先复位全屏
+            exitMini(true);
             applyFrameSize(s);
             deliverLoad(data);
             return;
@@ -193,7 +202,7 @@
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
         // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS/JS 改动浏览器端立即生效）
-        callFrame.src = 'call-window.html?v=1524';
+        callFrame.src = 'call-window.html?v=1525';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
@@ -205,10 +214,115 @@
         if (callFrame && callFrame.parentNode) callFrame.parentNode.removeChild(callFrame);
         callFrame = null;
         removeDragBar(); // 拖动把手随窗销毁
+        exitMini(true);  // 悬浮小窗随通话销毁（静默：iframe 已不存在，不再发 mini:off）
+        curLoad = null;
         frameReady = false;
         pendingLoad = null;
         sigQueue = [];
         if (cbClosed) cbClosed(); // chat.js 清本端通话态（callOpenId=''）
+    }
+
+    // ===== 阶段二百四十七：通话悬浮小窗（微信同款） =====
+    // 小窗化：iframe 切 .wcb-frame-mini（122×218 竖条）+ 通知内核切 mode-mini（隐藏控制面）；
+    // 交互覆盖层（.wcb-mini-click）接管触摸——按住拖动小窗、轻点（位移 < 8px）恢复全屏；
+    // 复位（silent）：挂断/互切时静默清理，不再给已销毁的 iframe 发消息
+    var miniOn = false;      // 小窗态开关
+    var miniClick = null;    // 小窗覆盖层（拖动 + 轻点恢复）
+    var curLoad = null;      // 当前通话任务（恢复全屏时按此重算正常尺寸）
+
+    function enterMini() {
+        if (!callFrame || miniOn) return;
+        miniOn = true;
+        callFrame.style.left = '';
+        callFrame.style.top = '';
+        callFrame.style.transform = '';
+        callFrame.classList.add('wcb-frame-mini');
+        postToFrame({ src: 'web-call-bridge', t: 'call:mini', on: true });
+        removeDragBar(); // 拖动把手与小窗互斥（小窗自带拖动覆盖层）
+        if (!miniClick) {
+            miniClick = document.createElement('div');
+            miniClick.className = 'wcb-mini-click';
+            bindMiniDrag(miniClick);
+            document.body.appendChild(miniClick);
+        }
+        syncMiniClick();
+    }
+
+    function exitMini(silent) {
+        if (!miniOn) return;
+        miniOn = false;
+        if (callFrame) {
+            callFrame.classList.remove('wcb-frame-mini');
+            callFrame.style.left = '';
+            callFrame.style.top = '';
+            callFrame.style.transform = '';
+            applyFrameSize(curLoad ? frameSize(curLoad.call_type === 'video', !!curLoad.meet) : { w: 360, h: 560 });
+            postToFrame({ src: 'web-call-bridge', t: 'call:mini', on: false }); // iframe 存活即通知（互切复位小窗布局）
+            if (!silent && !isApp && window.innerWidth > 500) ensureDragBar(); // 桌面浏览器恢复拖动把手
+        }
+        if (miniClick && miniClick.parentNode) miniClick.parentNode.removeChild(miniClick);
+        miniClick = null;
+    }
+
+    // 覆盖层跟随小窗位置/尺寸（拖动后同步，保证触点始终命中覆盖层而非 iframe）
+    function syncMiniClick() {
+        if (!miniClick || !callFrame) return;
+        var r = callFrame.getBoundingClientRect();
+        miniClick.style.left = r.left + 'px';
+        miniClick.style.top = r.top + 'px';
+        miniClick.style.width = r.width + 'px';
+        miniClick.style.height = r.height + 'px';
+    }
+
+    // 覆盖层手势：按住 > 8px 位移 = 拖动小窗（视口内收敛）；轻点 = 恢复全屏（微信同款）
+    function bindMiniDrag(el) {
+        var sx = 0, sy = 0, ox = 0, oy = 0, moved = false, dragging = false;
+        function start(x, y) {
+            if (!callFrame) return;
+            dragging = true; moved = false; sx = x; sy = y;
+            var r = callFrame.getBoundingClientRect();
+            ox = r.left; oy = r.top;
+        }
+        function move(x, y) {
+            if (!dragging || !callFrame) return;
+            var dx = x - sx, dy = y - sy;
+            if (!moved && Math.abs(dx) + Math.abs(dy) > 8) {
+                moved = true;
+                callFrame.style.right = 'auto'; // 拖动后改走 left/top 定位
+                callFrame.style.left = ox + 'px';
+                callFrame.style.top = oy + 'px';
+            }
+            if (moved) {
+                var w = callFrame.offsetWidth, h = callFrame.offsetHeight;
+                callFrame.style.left = Math.max(0, Math.min(x - sx + ox, window.innerWidth - w)) + 'px';
+                callFrame.style.top = Math.max(0, Math.min(y - sy + oy, window.innerHeight - h)) + 'px';
+                syncMiniClick();
+            }
+        }
+        function end() {
+            if (!dragging) return;
+            dragging = false;
+            if (!moved) exitMini(false); // 轻点恢复全屏
+        }
+        el.addEventListener('touchstart', function (e) {
+            var t = e.touches[0]; start(t.clientX, t.clientY);
+        }, { passive: true });
+        el.addEventListener('touchmove', function (e) {
+            var t = e.touches[0]; move(t.clientX, t.clientY);
+            if (moved) e.preventDefault();
+        }, { passive: false });
+        el.addEventListener('touchend', end);
+        el.addEventListener('mousedown', function (e) {
+            start(e.clientX, e.clientY);
+            var mv = function (ev) { move(ev.clientX, ev.clientY); };
+            var up = function () {
+                document.removeEventListener('mousemove', mv);
+                document.removeEventListener('mouseup', up);
+                end();
+            };
+            document.addEventListener('mousemove', mv);
+            document.addEventListener('mouseup', up);
+        });
     }
 
     function postToSignal(frame) {
@@ -382,6 +496,8 @@
             if (cbCallSend) cbCallSend(m.frame);
         } else if (m.t === 'call:close') {
             closeCallFrame();
+        } else if (m.t === 'call:minimize') {
+            enterMini(); // 通话页缩小钮上报：切悬浮小窗（微信同款）
         } else if (m.t === 'meet:invite-ask') {
             if (cbMeetInviteAsk) cbMeetInviteAsk(m.data);
         }

@@ -27,8 +27,10 @@
             var m = ev.data;
             if (!m || m.src !== 'web-call-bridge') return;
             if (m.t === 'call:load' && onLoad) onLoad(m.data);
-            else if (m.t === 'call:signal' && onMsg) onMsg(m.frame);
-            else if (m.t === 'call:window-close' && onCloseReq) onCloseReq();
+        else if (m.t === 'call:signal' && onMsg) onMsg(m.frame);
+        else if (m.t === 'call:window-close' && onCloseReq) onCloseReq();
+        // 阶段二百四十七：悬浮小窗模式开关（父页小窗化/恢复全屏时切换，本页只切换视觉形态）
+        else if (m.t === 'call:mini') document.body.classList.toggle('mode-mini', !!m.on);
         });
         // 握手：脚本就绪即上报（父页收到后才投递通话任务/回放缓冲信令，防动态 iframe
         // about:blank 阶段 load 事件误触发导致的任务丢失）
@@ -39,6 +41,8 @@
             onCallWindowClose: function (cb) { onCloseReq = cb; },
             callSend: function (frame) { post({ t: 'call:send', frame: frame }); },
             callClose: function () { post({ t: 'call:close' }); },
+            // 阶段二百四十七：小窗化请求（父页把 iframe 缩为可拖动悬浮小窗）
+            callMinimize: function () { post({ t: 'call:minimize' }); },
             meetInviteAsk: function (data) { post({ t: 'meet:invite-ask', data: data }); }
         };
     }
@@ -2028,6 +2032,15 @@
     if (btnMeetMin && window.desktop && window.desktop.callMinimize) {
         btnMeetMin.style.display = '';
         btnMeetMin.addEventListener('click', function () { window.desktop.callMinimize(); });
+    }
+    // 阶段二百四十七：悬浮小窗缩小钮（微信同款右上角；仅 WEB 端 iframe 形态显示，
+    // 会议窗沿用 PC 最小化按钮；点击上报父页把通话缩为可拖动小窗）
+    var btnMin = $('btnMin');
+    if (btnMin && window.parent !== window) {
+        btnMin.classList.add('show');
+        btnMin.addEventListener('click', function () {
+            if (d.callMinimize) d.callMinimize();
+        });
     }
     // 阶段一百五十二：会议号徽标点击复制（clipboard API 优先，secure context 缺失回退 execCommand）
     var meetNoEl = $('meetNo');

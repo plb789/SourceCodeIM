@@ -242,6 +242,47 @@
             border-radius: 8px;
         }
 
+        /* ===== 阶段二百四十七：通话悬浮小窗（微信同款） =====
+           右上角缩小钮（iframe 形态显示，会议窗沿用 PC 最小化按钮不亮出）；
+           mode-mini 下本页退化为小窗内核：隐藏控制条/信息条/本地画中画，
+           语音视图紧凑化（小头像 + 昵称 + 通话时长），视频保留远端画面铺满；
+           小窗拖动/轻点恢复全屏由父页覆盖层处理（iframe 吞触摸事件） */
+        .cw-min {
+            position: fixed;
+            top: 10px;
+            right: 12px;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,0.35);
+            color: #ffffff;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 32;
+            outline: none;
+            padding: 0;
+            cursor: pointer;
+        }
+        .cw-min.show { display: flex; }
+        body.mode-meet .cw-min { display: none !important; }
+
+        /* 悬浮小窗模式：控制面全部隐藏，仅保留核心画面 */
+        body.mode-mini .cw-controls,
+        body.mode-mini .cw-video-top,
+        body.mode-mini .cw-drag,
+        body.mode-mini .cw-local,
+        body.mode-mini #cwLocalPh,
+        body.mode-mini .cw-mask,
+        body.mode-mini .cw-min { display: none !important; }
+        /* 语音模式小窗紧凑化（头像 52px + 昵称 + 通话时长，微信同款） */
+        body.mode-mini .cw-audio { background: #161819; }
+        body.mode-mini .cw-avatar-wrap { margin-top: 18px; width: 52px; height: 52px; }
+        body.mode-mini .cw-avatar-ph { font-size: 22px; }
+        body.mode-mini .cw-name { margin-top: 10px; font-size: 13px; }
+        body.mode-mini .cw-status { margin-top: 6px; font-size: 11px; }
+
         /* ===== 阶段一百四十四：多人会议视图（宫格布局，微信会议同款） =====
            mode-meet 下隐藏单人视图（语音头像区/远端铺满/本地画中画），宫格承载全员画面；
            视频会议 tile 内 video（contain 保画面完整，共享屏幕不被裁切），
@@ -721,6 +762,12 @@
 
     <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
 
+    <!-- 阶段二百四十七：通话悬浮小窗缩小钮（微信同款右上角；iframe 形态下显示，
+         点击上报 call:minimize 由父页缩小为可拖动小窗；会议窗沿用 PC 最小化不亮出） -->
+    <button class="cw-min" id="btnMin" title="缩小">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
+    </button>
+
     <!-- 阶段一百五十三：会议窗内邀请成员面板（独立于主窗口选人弹窗；名单走 meet_members_ask 服务端归口，
          邀请动作复用 meet_invite 追加邀请链路；深色风格随会议窗，滚动条自绘禁系统默认） -->
     <div class="invite-mask hidden" id="inviteMask">
@@ -744,6 +791,6 @@
     </div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=27"></script>
+    <script src="js/call-page.js?v=28"></script>
 </body>
 </html>
