@@ -809,9 +809,31 @@
         });
     }
 
+    /* ---------- 阶段二百五十：手机端会议入口 ---------- */
+    /* PC 两段式入口（主区域选人 + 12px 宽小三角菜单）在手机上触摸目标过小点不中，
+       用户感知"只有会议按钮、没有创建/加入入口"。窄视口拦截会议按钮点击（捕获阶段，
+       先于 chat.js 冒泡监听执行），统一弹出「发起会议/创建会议/加入会议」入口菜单
+       （腾讯会议手机版同款三入口，菜单本体由 chat.js meetMenuOpen 自绘）。
+       阈值 500 与入口菜单窄屏分支、通话窗窄屏媒体查询保持一致；宽窗口完全旁路。 */
+    function setupMeetEntrance() {
+        var mb = document.getElementById('meet-btn');
+        if (!mb || mb.dataset.meetEntrance) return; // 幂等（DOM 重建后可重复挂）
+        mb.dataset.meetEntrance = '1';
+        mb.addEventListener('click', function (ev) {
+            if (window.innerWidth > 500) return; // 宽窗口保持 PC 两段式
+            ev.stopImmediatePropagation(); // 拦下 chat.js 的直接选人发起（窄屏统一走菜单）
+            if (typeof window.__meetMenuOpen === 'function') window.__meetMenuOpen();
+        }, true);
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initAll);
     } else {
         initAll();
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupMeetEntrance);
+    } else {
+        setupMeetEntrance();
     }
 })();

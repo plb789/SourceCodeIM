@@ -349,6 +349,44 @@
             .meet-side { width: 112px; margin-left: 8px; }
             .meet-thumb { height: 61px; }
         }
+        /* ===== 阶段二百五十：腾讯会议手机版同款布局（≤500px：手机 APP 全屏 + 窄窗） =====
+           1. 控制条：flex-shrink:0 防 6 颗按钮在窄屏被压缩成椭圆（原 bug：42px 间距挤爆屏宽，
+              flex 默认压缩按钮宽度→椭圆变形）；按钮下方文字标签（data-label，腾讯同款）
+           2. 共享视图：主舞台在上占大头、缩略图横向底部（原 PC 竖列挤占舞台宽度致画面小）
+           3. 宫格画面 object-fit:cover 填满裁剪（人脸满格；共享画面恒走主舞台 contain 不受影响） */
+        @media (max-width: 500px) {
+            .cw-controls { gap: 16px; height: 100px; }
+            .cw-btn { flex: 0 0 auto; width: 48px; height: 48px; }
+            .cw-btn.danger { width: 54px; height: 54px; }
+            .cw-btn::after {
+                content: attr(data-label);
+                position: absolute;
+                left: 50%;
+                top: 100%;
+                transform: translateX(-50%);
+                margin-top: 5px;
+                font-size: 11px;
+                line-height: 1;
+                color: rgba(255, 255, 255, 0.72);
+                white-space: nowrap;
+                pointer-events: none;
+            }
+            .meet-wrap { padding: 40px 6px 104px; }
+            body.mode-meet .meet-wrap { flex-direction: column; }
+            .meet-side {
+                width: 100%;
+                height: 88px;
+                margin-left: 0;
+                margin-top: 8px;
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+                flex: 0 0 auto;
+            }
+            .meet-thumb { width: 132px; height: 77px; }
+            .meet-grid { gap: 6px; }
+            .meet-grid .meet-tile video { object-fit: cover; }
+        }
         /* 顶部全屏按钮（腾讯会议同款右上角；hover 提亮） */
         .meet-top .meet-fs {
             -webkit-app-region: no-drag; /* 阶段一百五十一补丁：从拖拽区豁免，恢复点击（Electron 无边框窗） */
@@ -738,25 +776,26 @@
         </div>
     </div>
 
-    <!-- 底部控制条：静音 / 摄像头（视频）/ 共享屏幕（视频会议）/ 邀请成员（会议）/ 挂断 -->
+    <!-- 底部控制条：静音 / 摄像头（视频）/ 共享屏幕（视频会议）/ 邀请成员（会议）/ 挂断
+         data-label：手机端按钮下方文字标签（腾讯会议手机版同款，窄屏媒体查询消费） -->
     <div class="cw-controls">
-        <button class="cw-btn" id="btnMute" title="静音">
+        <button class="cw-btn" id="btnMute" title="静音" data-label="静音">
             <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
         </button>
-        <button class="cw-btn hidden" id="btnCam" title="关闭摄像头">
+        <button class="cw-btn hidden" id="btnCam" title="关闭摄像头" data-label="摄像头">
             <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
         </button>
-        <button class="cw-btn hidden" id="btnShare" title="共享屏幕">
+        <button class="cw-btn hidden" id="btnShare" title="共享屏幕" data-label="共享">
             <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6zm7 9h2v-3h3l-4-4-4 4h3v3z"/></svg>
         </button>
-        <button class="cw-btn hidden" id="btnInvite" title="邀请成员">
+        <button class="cw-btn hidden" id="btnInvite" title="邀请成员" data-label="邀请">
             <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
         </button>
         <!-- 会议录制（腾讯会议同款本地录制：混音+画面合成写本地文件；PC 端专属，语音/视频会议均可录） -->
-        <button class="cw-btn hidden" id="btnRecord" title="开始录制">
+        <button class="cw-btn hidden" id="btnRecord" title="开始录制" data-label="录制">
             <svg viewBox="0 0 24 24" width="22" height="22"><circle fill="currentColor" cx="12" cy="12" r="6"/></svg>
         </button>
-        <button class="cw-btn danger" id="btnHangup" title="挂断">
+        <button class="cw-btn danger" id="btnHangup" title="挂断" data-label="结束">
             <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
         </button>
     </div>
@@ -792,6 +831,6 @@
     </div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=32"></script>
+    <script src="js/call-page.js?v=35"></script>
 </body>
 </html>

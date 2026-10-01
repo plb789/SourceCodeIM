@@ -21072,9 +21072,14 @@
         var menu = document.createElement('div');
         menu.id = 'meet-menu';
         var items = [
+            // 阶段二百五十：窄屏（手机 APP）补「发起会议」项——PC 两段式入口（主区域选人 +
+            // 12px 小三角菜单）手机上点不中，统一走本菜单（腾讯会议手机版同款三入口）
+            { label: I18N.t('发起会议'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-9 12V8h2v2h2v2h-2v2h-2zm6 0h-2v-2h2v2zm0-4h-2V8h2v2z"/></svg>', run: function () { meetMenuClose(); openMeetPicker('create', null); } },
             { label: I18N.t('创建会议'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>', run: function () { meetMenuClose(); startMeet('video', []); } },
             { label: I18N.t('加入会议'), icon: '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>', run: function () { meetMenuClose(); joinMeetByNo(); } }
         ];
+        // 窄窗隐藏「发起会议」PC 主区域入口（两段式保留，避免菜单与主区域功能重复）
+        if (window.innerWidth > 500) items.shift();
         items.forEach(function (it) {
             var el = document.createElement('div');
             el.className = 'meet-menu-item';
@@ -21097,6 +21102,8 @@
         meetMenuEl = menu;
         document.addEventListener('mousedown', meetMenuOutside, true); // 捕获阶段抢在外部点击前关闭
     }
+    // 阶段二百五十：手机端会议入口桥（mobile.js 窄屏点击拦截调起；闭包内函数跨文件桥接）
+    window.__meetMenuOpen = meetMenuOpen;
     // 加入会议：忙态前置检查（与发起会议同语义）→ 自定义输入弹窗收会议号 → 校验后上行
     // 校验失败/会议不存在等错误经服务端 error 帧回包，由信令分发 toast 兜底（此时本端无会议窗）
     function joinMeetByNo() {

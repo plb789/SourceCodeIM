@@ -559,6 +559,7 @@
         try { if (st.local) st.local.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
         st.local = null; st.remote = null;
         st.pendingCands = [];
+        st.pendingMeetOffers = {}; st.pendingMeetCands = {}; // 阶段二百五十：首协商竞态缓冲随换场清空
         st.iceServers = [];
         st.state = 'idle';
         st.startedAt = 0;
@@ -650,12 +651,18 @@
         st.selfAvatar = data.self_avatar || '';
         if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = 'mode-meet ' + (st.callType === 'video' ? 'mode-video' : 'mode-audio');
+        var bm = $('btnMin');
+        if (bm) bm.classList.remove('show'); // 会议布局未适配悬浮小窗（宫格在 122×218 内溢出裁剪），隐藏缩小钮
+        pipSwapped = false; // 复用 iframe 开新通话时清除上通互换残留（防自愈画面归位错乱）
         $('meetTitle').textContent = st.meetTitle;
         meetNoShow(); // 会议号徽标显隐（无号隐藏：旧房间/信令未到的瞬间）
         // 会议控制条显隐：视频会议显摄像头/共享屏幕，语音会议仅静音；邀请成员会议恒显（1v1 保持原样）
         if (st.callType === 'video') {
             btnCam.classList.remove('hidden');
-            btnShare.classList.remove('hidden');
+            // 阶段二百五十：手机 APP 端隐藏共享屏幕——Android WebView 内核不支持
+            // getDisplayMedia（屏幕捕获需原生 MediaProjection，浏览器层无此 API），
+            // 按钮亮出点击必然静默无反应（用户实测）；PC/桌面浏览器不受影响
+            if (!/\bwv\b/.test(navigator.userAgent)) btnShare.classList.remove('hidden');
         }
         btnInvite.classList.remove('hidden');
         // 会议录制按钮（语音/视频会议均可录——语音=纯录音；仅 PC 端亮出，WEB 端 iframe 桥无写盘 IPC）
@@ -1110,8 +1117,12 @@
         var users = [];
         for (var u in st.members) users.push(u);
         var n = users.length + 1;
-        var cols = Math.ceil(Math.sqrt(n));
-        var gap = 10;
+        // 阶段二百五十：腾讯会议手机版同款排布——竖屏/窄窗 2 人上下两行（原 sqrt 公式 2 人成
+        // 两列竖条裁脸）、3-4 人 2×2、5 人起 3 列；桌面横屏维持自动平方根排布
+        var narrow = window.innerWidth <= 500;
+        var portrait = narrow || window.innerHeight > window.innerWidth;
+        var cols = portrait ? (n <= 2 ? 1 : n <= 4 ? 2 : 3) : Math.ceil(Math.sqrt(n));
+        var gap = narrow ? 6 : 10; // 与窄屏媒体查询 .meet-grid gap 保持一致（宽度 calc 依赖）
         var w = 'calc((100% - ' + ((cols - 1) * gap) + 'px) / ' + cols + ')';
         var rows = Math.ceil(n / cols);
         var h = 'calc((100% - ' + ((Math.min(rows, cols) - 1) * gap) + 'px) / ' + Math.ceil(n / cols) + ')';
@@ -1600,6 +1611,8 @@
                 for (var ru in st.members) {
                     meetConnect(ru, false);
                 }
+                // 阶段二百五十：成员表/连接就绪，重放早于 room_info 到达的 offer/candidate（竞态缓冲）
+                flushPendingMeetFrames();
                 break;
             case 'meet_join':
                 // 已在会成员收：新成员资料 + 由我发 offer（建连方向规则）；ICE 随帧注入（发起人唯一拿到配置的路径）
@@ -1620,7 +1633,16 @@
                 break;
             case 'offer': {
                 var m = st.members[from];
-                if (!m || !m.pc) break;
+                if (!m) {
+                    // 阶段二百五十：首协商 offer 早于 room_info 的竞态缓冲——已在会成员对
+                    // 新成员发 offer（meet_join 处理）与服务端 room_info 回包赛跑，早到的
+                    // offer 因成员表未初始化被静默丢弃，而 offer 方无首协商重发（restart 仅
+                    // 断线触发），双端永久卡"有 tile 无连接"（后进者看不到先者、先者只显名字）。
+                    // 缓存整帧待 room_info 就绪后重放
+                    if (st.meet && !st.ended) st.pendingMeetOffers[from] = frame;
+                    break;
+                }
+                if (!m.pc) break;
                 // 阶段一百四十八：restart 幂等——offer 方重试循环重发同一 offer（sdp 相同）时
                 // 只重发既有 answer + 候选缓存，不重复 setRemote/createAnswer（防本地 ICE 反复重建）
                 if (m.lastRestartOffer && p.sdp && p.sdp.sdp === m.lastRestartOffer) {
@@ -1674,6 +1696,15 @@
             }
             case 'candidate': {
                 var m3 = st.members[from];
+                if (!m3) {
+                    // 阶段二百五十：candidate 早于 room_info 同款竞态缓冲（重放 offer 后 setRemote
+                    // 完成，重放的 candidate 经 pendingCands 机制正常补投）
+                    if (st.meet && !st.ended && p.candidate) {
+                        if (!st.pendingMeetCands[from]) st.pendingMeetCands[from] = [];
+                        st.pendingMeetCands[from].push(frame);
+                    }
+                    break;
+                }
                 if (!m3 || !p.candidate) break;
                 if (!m3.pc.remoteDescription || !m3.pc.remoteDescription.type) {
                     m3.pendingCands.push(p.candidate);
@@ -1888,6 +1919,22 @@
     }
 
     // ===== 信令下行（帧为完整协议帧：{msg_type, from_user, to_user, content}） =====
+    // 阶段二百五十：首协商竞态缓冲重放——offer/candidate 早于 room_info 到达时整帧缓存
+    //（见 offer/candidate case 注释），room_info 成员表初始化后按序重放（走完整信令入口，
+    // offer 重放触发 setRemote+answer，candidate 重放经 pendingCands 机制补投，均幂等）
+    function flushPendingMeetFrames() {
+        if (st.ended) return;
+        var po = st.pendingMeetOffers || {};
+        var pc2 = st.pendingMeetCands || {};
+        st.pendingMeetOffers = {};
+        st.pendingMeetCands = {};
+        var replay = function (f) {
+            return function () { if (!st.ended && st.meet) onSignal(f); };
+        };
+        for (var u1 in po) setTimeout(replay(po[u1]), 0);
+        for (var u2 in pc2) pc2[u2].forEach(function (f) { setTimeout(replay(f), 0); });
+    }
+
     function onSignal(frame) {
         if (!frame || st.ended) return;
         var p;
@@ -1960,6 +2007,9 @@
         st.peerName = data.peer_name || st.peer;
         st.peerAvatar = data.peer_avatar || '';
         st.callType = data.call_type === 'video' ? 'video' : 'audio';
+        var bm = $('btnMin');
+        if (bm) bm.classList.add('show'); // 会议→1v1 复用 iframe 时恢复缩小钮（会议态已隐藏）
+        pipSwapped = false; // 复用 iframe 开新通话时清除上通互换残留（防自愈画面归位错乱）
         // 被叫路径：invite 帧注入的 ICE 配置经响铃条/主窗口随 payload 透传（服务端归口下发）
         if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = st.callType === 'video' ? 'mode-video' : 'mode-audio';
@@ -2109,6 +2159,10 @@
     function recaptureLocalCamera() {
         if (st.ended || !st.local || st.camOff) return;
         getMediaDegrade().then(function (r) {
+            // 采集期间挂断/关摄像头：新开设备会话必须立即关闭（否则相机被占用至超时，后续通话打不开）
+            if (r.stream && (st.ended || st.camOff)) {
+                try { r.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
+            }
             if (st.ended || !r.stream || st.camOff) return;
             var nvt = r.stream.getVideoTracks()[0] || null;
             var old = st.local.getVideoTracks()[0] || null;
@@ -2119,9 +2173,12 @@
             }
             if (old) { try { old.stop(); } catch (e2) { } st.local.removeTrack(old); }
             st.local.addTrack(nvt);
-            // 按互换态归位画面元素（pipSwapped：本地流在大画面，远端流在小窗）
-            if (pipSwapped) { var rv = $('cwRemote'); if (rv) rv.srcObject = st.local; }
-            else { var lv = $('cwLocal'); if (lv) lv.srcObject = st.local; }
+            // 按互换态归位画面元素（pipSwapped：本地流在大画面，远端流在小窗）；
+            // 会议布局 tile 绑定 st.local 引用，track 替换后自动出新帧，无需也不得动 DOM
+            if (!st.meet) {
+                if (pipSwapped) { var rv = $('cwRemote'); if (rv) rv.srcObject = st.local; }
+                else { var lv = $('cwLocal'); if (lv) lv.srcObject = st.local; }
+            }
             replaceLocalSender('video', nvt);
         }).catch(function () {
             // vivo 相机回收窗口期重采可能失败，1.5s 后重试一次
@@ -2137,6 +2194,9 @@
     function recaptureLocalMic() {
         if (st.ended || !st.local || st.muted || st.micUnavailable) return;
         getMediaDegrade().then(function (r) {
+            if (r.stream && (st.ended || st.micUnavailable)) { // 并发收口防泄漏
+                try { r.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
+            }
             if (st.ended || !r.stream || st.micUnavailable) return;
             var nat = r.stream.getAudioTracks()[0] || null;
             var old = st.local.getAudioTracks()[0] || null;
@@ -2146,6 +2206,7 @@
                 return;
             }
             if (old) { try { old.stop(); } catch (e2) { } st.local.removeTrack(old); }
+            if (st.muted) nat.enabled = false; // 重采期间用户已静音：新轨继承静音态（防静音被意外解除）
             st.local.addTrack(nat);
             replaceLocalSender('audio', nat);
         }).catch(function () { });
@@ -2169,6 +2230,17 @@
     // 自愈触发链：MainActivity.onResume 原生广播 im-resume → 主文档 web-call-bridge.js 转发
     // call:resumed → iframeBridge 消息处理调本函数（iframe 内拿不到 Capacitor App 插件，
     // 原先的 appStateChange 直连监听从未生效，已移除）
+    // 阶段二百五十：横竖屏切换/窗口缩放重排会议宫格（列数按当前视口重算，防抖 200ms；
+    // renderMeetGrid 的行列公式只在渲染时计算，不监听则旋转后仍是旧布局）
+    var meetRszT = null;
+    window.addEventListener('resize', function () {
+        if (!st.meet || st.ended) return;
+        if (meetRszT) clearTimeout(meetRszT);
+        meetRszT = setTimeout(function () {
+            meetRszT = null;
+            if (!st.ended && st.meet) renderMeetStage();
+        }, 200);
+    });
     // 阶段一百五十二：会议号徽标点击复制（clipboard API 优先，secure context 缺失回退 execCommand）
     var meetNoEl = $('meetNo');
     if (meetNoEl) meetNoEl.addEventListener('click', copyMeetNo);
