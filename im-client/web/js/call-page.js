@@ -2042,6 +2042,21 @@
             if (d.callMinimize) d.callMinimize();
         });
     }
+    // 阶段二百四十八：大小画面互换（微信同款）——点击本地画中画，自己画面与对方画面互换主次，
+    // 再点换回；远端音频恒走 #cwRemoteAudio 独立出口防回声/断声
+    function swapPip() {
+        var rv = $('cwRemote'), lv = $('cwLocal');
+        // 仅远端画面就绪的 1v1 视频通话可互换（等待期/会议/已结束不响应，避免黑大屏与路由错乱）
+        if (st.meet || st.ended || st.callType !== 'video' || !st.remote || !st.local) return;
+        if (rv.srcObject !== st.remote && rv.srcObject !== st.local) return; // 状态异常防御
+        var peerToMain = rv.srcObject === st.remote; // 当前大画面是否为对方
+        rv.srcObject = peerToMain ? st.local : st.remote;   // 互换主画面
+        lv.srcObject = peerToMain ? st.remote : st.local;   // 互换小窗画面
+        rv.muted = peerToMain; // 大画面播本地流必须静音（防自听回声），播远端流恢复出声
+        $('cwRemoteAudio').srcObject = peerToMain ? st.remote : null; // 互换期远端声音改走独立出口
+    }
+    var cwLocalEl = $('cwLocal');
+    if (cwLocalEl) cwLocalEl.addEventListener('click', swapPip);
     // 阶段一百五十二：会议号徽标点击复制（clipboard API 优先，secure context 缺失回退 execCommand）
     var meetNoEl = $('meetNo');
     if (meetNoEl) meetNoEl.addEventListener('click', copyMeetNo);

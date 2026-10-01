@@ -97,12 +97,15 @@
         /* 阶段一百四十五：通话窗拖动把手（浏览器 iframe 吞鼠标事件，-webkit-app-region 失效，
            以父页透明条覆盖 iframe 顶部拖动区实现按住移动；对齐 PC 端拖顶部移动窗口的体验） */
         '.wcb-drag{position:fixed;height:36px;z-index:100001;cursor:move;user-select:none;-webkit-user-select:none;}' +
-        /* 阶段二百四十七：通话悬浮小窗（微信同款）——122×218 竖条（9:16 对齐微信小窗比例），
-           初始挂右上角避开状态栏；拖动后位置走 inline（left/top），!important 尺寸类压过 inline 尺寸；
+        /* 阶段二百四十七：通话悬浮小窗（微信同款）——122×218 竖条（9:16 对齐微信小窗比例）；
+           定位全部走 inline（enterMini 设置右上角起点，拖动/吸附实时改写）——
+           原 bug：类里 left:auto!important 压制 inline 定位，拖拽/吸附改 left 全部无效；
            .wcb-mini-click 为小窗覆盖层（iframe 吞触摸事件，拖动/轻点恢复全屏均在其上感知） */
-        '.wcb-frame-mini{width:122px!important;height:218px!important;left:auto!important;right:12px;top:72px;' +
-        'transform:none!important;border-radius:14px!important;box-shadow:0 8px 28px rgba(0,0,0,.5)!important;' +
-        'max-width:none!important;max-height:none!important;}' +
+        '.wcb-frame-mini{width:122px!important;height:218px!important;' +
+        'border-radius:14px!important;box-shadow:0 8px 28px rgba(0,0,0,.5)!important;' +
+        'max-width:none!important;max-height:none!important;transition:left .25s ease,top .25s ease;}' +
+        /* 拖动中禁过渡（跟手），松手吸附/滑出恢复过渡（微信同款滑入滑出动效） */
+        '.wcb-frame-mini.wcb-dragging{transition:none!important;}' +
         '.wcb-mini-click{position:fixed;z-index:100001;user-select:none;-webkit-user-select:none;}';
     document.head.appendChild(css);
 
@@ -202,7 +205,7 @@
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
         // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS/JS 改动浏览器端立即生效）
-        callFrame.src = 'call-window.html?v=1525';
+        callFrame.src = 'call-window.html?v=1526';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
@@ -225,18 +228,29 @@
     // ===== 阶段二百四十七：通话悬浮小窗（微信同款） =====
     // 小窗化：iframe 切 .wcb-frame-mini（122×218 竖条）+ 通知内核切 mode-mini（隐藏控制面）；
     // 交互覆盖层（.wcb-mini-click）接管触摸——按住拖动小窗、轻点（位移 < 8px）恢复全屏；
+    // 贴边吸附（阶段二百四十八）：松手时距屏幕左/右缘 40px 内吸附半隐（露出 24px 边条），
+    // 吸附态轻点滑出（贴边完整可见），再轻点恢复全屏；
     // 复位（silent）：挂断/互切时静默清理，不再给已销毁的 iframe 发消息
     var miniOn = false;      // 小窗态开关
     var miniClick = null;    // 小窗覆盖层（拖动 + 轻点恢复）
     var curLoad = null;      // 当前通话任务（恢复全屏时按此重算正常尺寸）
+    var miniDock = null;     // 吸附边：'left' / 'right' / null
 
     function enterMini() {
         if (!callFrame || miniOn) return;
         miniOn = true;
-        callFrame.style.left = '';
-        callFrame.style.top = '';
-        callFrame.style.transform = '';
+        miniDock = null;
+        // 定位全走 inline（类不参与定位，规避 !important 压制）：初始挂右上角避开状态栏
+        callFrame.style.right = 'auto';
+        callFrame.style.transform = 'none';
+        callFrame.style.left = (window.innerWidth - 122 - 12) + 'px';
+        callFrame.style.top = '72px';
+        // 先禁过渡再切小窗类并强制回流——位置立即生效，覆盖层对位不取动画中间值
+        //（原 bug：带过渡切类后 rect 取到动画起点，覆盖层错位导致点击/拖动/吸附全失效）
+        callFrame.classList.add('wcb-dragging');
         callFrame.classList.add('wcb-frame-mini');
+        void callFrame.offsetWidth;
+        callFrame.classList.remove('wcb-dragging');
         postToFrame({ src: 'web-call-bridge', t: 'call:mini', on: true });
         removeDragBar(); // 拖动把手与小窗互斥（小窗自带拖动覆盖层）
         if (!miniClick) {
@@ -251,11 +265,13 @@
     function exitMini(silent) {
         if (!miniOn) return;
         miniOn = false;
+        miniDock = null;
         if (callFrame) {
-            callFrame.classList.remove('wcb-frame-mini');
+            callFrame.classList.remove('wcb-frame-mini', 'wcb-dragging');
             callFrame.style.left = '';
             callFrame.style.top = '';
             callFrame.style.transform = '';
+            callFrame.style.right = '';
             applyFrameSize(curLoad ? frameSize(curLoad.call_type === 'video', !!curLoad.meet) : { w: 360, h: 560 });
             postToFrame({ src: 'web-call-bridge', t: 'call:mini', on: false }); // iframe 存活即通知（互切复位小窗布局）
             if (!silent && !isApp && window.innerWidth > 500) ensureDragBar(); // 桌面浏览器恢复拖动把手
@@ -264,22 +280,60 @@
         miniClick = null;
     }
 
+    // 松手贴边吸附：距左/右缘 40px 内吸附半隐（露出 24px 边条，微信同款贴边隐藏）；
+    // 覆盖层直接按吸附后的可见区域对位（动画期间也命中，不依赖 rect 即时值）
+    function dockMini() {
+        if (!callFrame) return;
+        var r = callFrame.getBoundingClientRect();
+        var w = r.width;
+        var edge = null;
+        if (r.left < 40) edge = 'left';
+        else if (r.left + w > window.innerWidth - 40) edge = 'right';
+        if (!edge) { miniDock = null; return; }
+        miniDock = edge;
+        var target = edge === 'left' ? -(w - 24) : window.innerWidth - 24;
+        callFrame.style.right = 'auto';
+        callFrame.style.left = target + 'px';
+        placeMiniClick(Math.max(0, target), r.top, w - Math.max(0, -target), r.height);
+    }
+
+    // 吸附态滑出：解除吸附并贴边完整可见（滑出动画经 .wcb-frame-mini transition），
+    // 覆盖层直接按滑出后的完整位置对位
+    function undockMini() {
+        if (!callFrame || !miniDock) return;
+        var edge = miniDock;
+        miniDock = null;
+        var w = callFrame.offsetWidth;
+        var r = callFrame.getBoundingClientRect();
+        var target = edge === 'left' ? 0 : window.innerWidth - w;
+        callFrame.style.left = target + 'px';
+        placeMiniClick(target, r.top, w, r.height);
+    }
+
     // 覆盖层跟随小窗位置/尺寸（拖动后同步，保证触点始终命中覆盖层而非 iframe）
     function syncMiniClick() {
         if (!miniClick || !callFrame) return;
         var r = callFrame.getBoundingClientRect();
-        miniClick.style.left = r.left + 'px';
-        miniClick.style.top = r.top + 'px';
-        miniClick.style.width = r.width + 'px';
-        miniClick.style.height = r.height + 'px';
+        placeMiniClick(r.left, r.top, r.width, r.height);
     }
 
-    // 覆盖层手势：按住 > 8px 位移 = 拖动小窗（视口内收敛）；轻点 = 恢复全屏（微信同款）
+    // 覆盖层直接对位（吸附/滑出动画期间目标位置已知，不取 rect 即时值防错位）
+    function placeMiniClick(l, t, w, h) {
+        if (!miniClick) return;
+        miniClick.style.left = l + 'px';
+        miniClick.style.top = t + 'px';
+        miniClick.style.width = w + 'px';
+        miniClick.style.height = h + 'px';
+    }
+
+    // 覆盖层手势：按住 > 8px 位移 = 拖动小窗（视口内收敛，松手贴边吸附）；
+    // 吸附态轻点 = 滑出；小窗态轻点 = 恢复全屏（微信同款）
     function bindMiniDrag(el) {
         var sx = 0, sy = 0, ox = 0, oy = 0, moved = false, dragging = false;
         function start(x, y) {
             if (!callFrame) return;
             dragging = true; moved = false; sx = x; sy = y;
+            callFrame.classList.add('wcb-dragging'); // 拖动中禁过渡（跟手）
             var r = callFrame.getBoundingClientRect();
             ox = r.left; oy = r.top;
         }
@@ -288,6 +342,7 @@
             var dx = x - sx, dy = y - sy;
             if (!moved && Math.abs(dx) + Math.abs(dy) > 8) {
                 moved = true;
+                miniDock = null; // 拖动即解除吸附
                 callFrame.style.right = 'auto'; // 拖动后改走 left/top 定位
                 callFrame.style.left = ox + 'px';
                 callFrame.style.top = oy + 'px';
@@ -302,7 +357,10 @@
         function end() {
             if (!dragging) return;
             dragging = false;
-            if (!moved) exitMini(false); // 轻点恢复全屏
+            if (callFrame) callFrame.classList.remove('wcb-dragging'); // 恢复过渡（吸附/滑出动效）
+            if (moved) dockMini();           // 拖动结束：贴边吸附判定
+            else if (miniDock) undockMini(); // 吸附态轻点：滑出
+            else exitMini(false);            // 小窗态轻点：恢复全屏
         }
         el.addEventListener('touchstart', function (e) {
             var t = e.touches[0]; start(t.clientX, t.clientY);
