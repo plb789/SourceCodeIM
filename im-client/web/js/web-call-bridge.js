@@ -19,6 +19,18 @@
     if (window.desktop) return;
     var isApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
+    // ===== 阶段二百四十九：原生回前台转发（APP 端通话媒体自愈，微信同款） =====
+    // MainActivity.onResume 原生广播 im-resume；Capacitor 原生桥只注入主文档，通话 iframe 内
+    // 的 call-page.js 拿不到 App 插件的 appStateChange（vivo 断流自愈监听此前从未触发）——
+    // 故自愈监听在主文档注册，收到广播后转发给通话窗 iframe 执行 healMediaOnResume
+    window.addEventListener('im-resume', function () {
+        if (callFrame && callFrame.contentWindow) {
+            try {
+                callFrame.contentWindow.postMessage({ src: 'web-call-bridge', t: 'call:resumed' }, location.origin);
+            } catch (e) { }
+        }
+    });
+
     // ===== 回调登记（chat.js 经 window.desktop.onXxx 注册，语义与 PC preload 一致） =====
     var cbCallSend = null;       // 通话窗上行信令（chat.js 经 WS 发出）
     var cbRingAction = null;     // 响铃条按钮动作（accept/decline，chat.js 归口发信令/开窗）
@@ -205,7 +217,7 @@
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
         // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS/JS 改动浏览器端立即生效）
-        callFrame.src = 'call-window.html?v=1526';
+        callFrame.src = 'call-window.html?v=1529';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);

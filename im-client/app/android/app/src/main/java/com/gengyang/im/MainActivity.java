@@ -141,4 +141,14 @@ public class MainActivity extends BridgeActivity {
         if (adOverlay != null) { dismissAd(); return; }
         super.onBackPressed();
     }
+
+    /** 阶段二百四十九：回前台原生广播（通话媒体自愈，微信同款）——WebView 暂停期相机数据流
+     * 被 ROM（vivo OriginOS 等）强制断开且 track 不置 ended，页面层需感知前台切换做重采自愈；
+     * Capacitor 原生桥只注入主文档，通话 iframe 内拿不到 App 插件的 appStateChange——
+     * 故由原生层统一广播，主文档 web-call-bridge 监听后转发给通话窗 iframe */
+    @Override
+    public void onResume() {
+        super.onResume();
+        if (bridge != null) bridge.triggerWindowJSEvent("im-resume");
+    }
 }

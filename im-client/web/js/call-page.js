@@ -31,6 +31,9 @@
         else if (m.t === 'call:window-close' && onCloseReq) onCloseReq();
         // 阶段二百四十七：悬浮小窗模式开关（父页小窗化/恢复全屏时切换，本页只切换视觉形态）
         else if (m.t === 'call:mini') document.body.classList.toggle('mode-mini', !!m.on);
+        // 阶段二百四十九：原生回前台转发（MainActivity.onResume → 主文档 web-call-bridge 转达）
+        // ——iframe 内拿不到 Capacitor App 插件，自愈只能走父页转发（vivo 断流自愈入口）
+        else if (m.t === 'call:resumed' && typeof healMediaOnResume === 'function') healMediaOnResume();
         });
         // 握手：脚本就绪即上报（父页收到后才投递通话任务/回放缓冲信令，防动态 iframe
         // about:blank 阶段 load 事件误触发导致的任务丢失）
@@ -2044,12 +2047,14 @@
     }
     // 阶段二百四十八：大小画面互换（微信同款）——点击本地画中画，自己画面与对方画面互换主次，
     // 再点换回；远端音频恒走 #cwRemoteAudio 独立出口防回声/断声
+    var pipSwapped = false; // 互换态标记（后台回前台媒体自愈按此恢复两个画面元素）
     function swapPip() {
         var rv = $('cwRemote'), lv = $('cwLocal');
         // 仅远端画面就绪的 1v1 视频通话可互换（等待期/会议/已结束不响应，避免黑大屏与路由错乱）
         if (st.meet || st.ended || st.callType !== 'video' || !st.remote || !st.local) return;
         if (rv.srcObject !== st.remote && rv.srcObject !== st.local) return; // 状态异常防御
         var peerToMain = rv.srcObject === st.remote; // 当前大画面是否为对方
+        pipSwapped = !peerToMain;
         rv.srcObject = peerToMain ? st.local : st.remote;   // 互换主画面
         lv.srcObject = peerToMain ? st.remote : st.local;   // 互换小窗画面
         rv.muted = peerToMain; // 大画面播本地流必须静音（防自听回声），播远端流恢复出声
@@ -2057,6 +2062,113 @@
     }
     var cwLocalEl = $('cwLocal');
     if (cwLocalEl) cwLocalEl.addEventListener('click', swapPip);
+
+    // ===== 阶段二百四十九：后台回前台媒体自愈（微信同款） =====
+    // Android WebView 退后台时 <video> 渲染暂停，回前台不会自动恢复。两级病情分级处理：
+    // ① track 终止（readyState ended）→ 立即重采；② vivo 等 OriginOS/部分 ROM 后台强制断开
+    // 相机数据流但 track 保持 live+muted（无帧输出、永不 ended）→ 延迟复查仍 muted 再经
+    // requestVideoFrameCallback 验证确实无帧，确认后重采相机并 replaceTrack 热替换
+    // （同 kind 替换免重协商；1v1 单连接 + 会议 Mesh 逐成员连接均覆盖）
+    function healMediaOnResume() {
+        document.querySelectorAll('video, audio').forEach(function (el) {
+            if (el.srcObject || el.src) {
+                var p = el.play(); // 恢复 WebView 暂停期冻结的播放（含远端画面/声音/本地预览）
+                if (p && p.catch) p.catch(function () { });
+            }
+        });
+        if (st.ended || !st.local) return;
+        var vt = st.local.getVideoTracks()[0] || null;
+        var at = st.local.getAudioTracks()[0] || null;
+        var needCam = st.callType === 'video' && !st.camOff && vt && vt.readyState === 'ended';
+        var needMic = !st.micUnavailable && at && at.readyState === 'ended';
+        if (needCam) recaptureLocalCamera();
+        if (needMic) recaptureLocalMic();
+        // vivo 类 ROM：断流 track 可能呈 live+muted，也可能 muted 标记不准——统一给系统
+        // 900ms 自恢复窗口后帧探测（不依赖 muted 标记），确认无帧才重采（正常机型不误杀）
+        if (st.callType === 'video' && !st.camOff && vt && vt.readyState === 'live') {
+            setTimeout(function () {
+                if (st.ended || st.camOff || !st.local) return;
+                var cur = st.local.getVideoTracks()[0];
+                if (!cur || cur.readyState !== 'live') return;
+                frameProbe(function (hasFrame) {
+                    if (!hasFrame) recaptureLocalCamera();
+                });
+            }, 900);
+        }
+    }
+    // 帧探测：注册视频帧回调，900ms 内无新帧 = 相机数据流确实未恢复（探本地预览元素，
+    // 大小画面互换态本地流在大画面 #cwRemote 上）；不支持 rVFC 的内核保守放行不误杀
+    function frameProbe(cb) {
+        var el = pipSwapped ? $('cwRemote') : $('cwLocal');
+        if (!el || !el.requestVideoFrameCallback) { cb(true); return; }
+        var fired = false;
+        el.requestVideoFrameCallback(function () { fired = true; });
+        setTimeout(function () { cb(fired); }, 900);
+    }
+    // 重采相机并热替换（防重复采集：系统已自行恢复出帧时丢弃新流，避免设备泄漏）
+    function recaptureLocalCamera() {
+        if (st.ended || !st.local || st.camOff) return;
+        getMediaDegrade().then(function (r) {
+            if (st.ended || !r.stream || st.camOff) return;
+            var nvt = r.stream.getVideoTracks()[0] || null;
+            var old = st.local.getVideoTracks()[0] || null;
+            if (!nvt) return;
+            if (old && old.readyState === 'live' && !old.muted) { // 已自行恢复：关新流防泄漏
+                try { nvt.stop(); } catch (e) { }
+                return;
+            }
+            if (old) { try { old.stop(); } catch (e2) { } st.local.removeTrack(old); }
+            st.local.addTrack(nvt);
+            // 按互换态归位画面元素（pipSwapped：本地流在大画面，远端流在小窗）
+            if (pipSwapped) { var rv = $('cwRemote'); if (rv) rv.srcObject = st.local; }
+            else { var lv = $('cwLocal'); if (lv) lv.srcObject = st.local; }
+            replaceLocalSender('video', nvt);
+        }).catch(function () {
+            // vivo 相机回收窗口期重采可能失败，1.5s 后重试一次
+            setTimeout(function () {
+                if (!st.ended && st.local && !st.camOff) {
+                    var cur = st.local.getVideoTracks()[0];
+                    if (!cur || cur.readyState === 'ended' || cur.muted) recaptureLocalCamera();
+                }
+            }, 1500);
+        });
+    }
+    // 重采麦克风并热替换（同防泄漏语义；静音态/设备故障不采）
+    function recaptureLocalMic() {
+        if (st.ended || !st.local || st.muted || st.micUnavailable) return;
+        getMediaDegrade().then(function (r) {
+            if (st.ended || !r.stream || st.micUnavailable) return;
+            var nat = r.stream.getAudioTracks()[0] || null;
+            var old = st.local.getAudioTracks()[0] || null;
+            if (!nat) return;
+            if (old && old.readyState === 'live' && !old.muted) {
+                try { nat.stop(); } catch (e) { }
+                return;
+            }
+            if (old) { try { old.stop(); } catch (e2) { } st.local.removeTrack(old); }
+            st.local.addTrack(nat);
+            replaceLocalSender('audio', nat);
+        }).catch(function () { });
+    }
+    // 热替换发送轨道（同 kind replaceTrack 免重协商）：1v1 走单连接，会议 Mesh 遍历各成员连接
+    function replaceLocalSender(kind, track) {
+        var swap = function (pc) {
+            if (!pc) return;
+            pc.getSenders().forEach(function (s) {
+                if (s.track && s.track.kind === kind) { try { s.replaceTrack(track); } catch (e) { } }
+            });
+        };
+        if (st.meet) {
+            Object.keys(st.members).forEach(function (u) {
+                swap(st.members[u] && st.members[u].pc);
+            });
+        } else {
+            swap(st.pc);
+        }
+    }
+    // 自愈触发链：MainActivity.onResume 原生广播 im-resume → 主文档 web-call-bridge.js 转发
+    // call:resumed → iframeBridge 消息处理调本函数（iframe 内拿不到 Capacitor App 插件，
+    // 原先的 appStateChange 直连监听从未生效，已移除）
     // 阶段一百五十二：会议号徽标点击复制（clipboard API 优先，secure context 缺失回退 execCommand）
     var meetNoEl = $('meetNo');
     if (meetNoEl) meetNoEl.addEventListener('click', copyMeetNo);
