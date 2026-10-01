@@ -4906,8 +4906,17 @@
             sendFileChunked(file);
             return;
         }
-        if (file.size > threshold) {
-            sendFileDirect(file);
+        // 阶段二百四十九：私聊图片统一走 HTTP 直传（不再按阈值分流）——分片路径图片气泡
+        // 无 nonce/响应兜底，persistUploadedFile 的持久化 fetch 失败仅 console.warn（无任何
+        // 反馈与补救），叠加真机 blob 预览挂起与 FILE_PERSISTED 交接窗口丢帧，偶发"好友可见
+        // 而自己看不到自己发的图"。直传路径具备完整链路（本地 blob 预览 + HTTP 响应兜底回填
+        // msg_id/url + 失败 toast + 60s 超时），与群聊图片（sendGroupImage）、语音
+        // （sendVoiceMessage）、图片转发（sendFileDirect）既有统一口径一致。
+        // 非图片文件维持原三层分流（<1MB 小文件走 WS 分片协议，协议不变）
+        if (file.size > threshold || isImageName(file.name)) {
+            // 阶段二百四十八：失败反馈由 failDirectUpload 归口（toast + 气泡降级），此处吞掉 reject
+            // 防普通发送路径 unhandledrejection（转发路径的成败提示由转发归口消费返回值）
+            sendFileDirect(file).catch(function () {});
             return;
         }
         // 原实现：所有文件一律走分片协议
@@ -4952,6 +4961,56 @@
     // 阶段八十六：toUserOverride/suppressLocal 供消息转发复用——指定目标会话（默认仍取当前会话）、
     // 抑制本地气泡（FILE_PERSISTED 对 nonce 无匹配气泡时静默跳过，已确认容错）；
     // 返回上传 fetch 的 Promise（普通发送不关心返回值，转发据此 toast 成败）
+    // 阶段二百四十八：直传结果本地兜底归口——手机端发图经历"拉起相册→页面 pause→WS 断开交接
+    // →返回 resume 重连"窗口，服务端落库后推送的 FILE_PERSISTED 回执帧可能丢失（WS 尚未重连完成），
+    // 而此刻 blob 本地预览也可能挂起，两条显示路径同时失效（真机表现为"偶尔自己看不到自己发的图，
+    // 且第一次能看到、紧接着的第二张看不到"——第一张发送时 WS 稳定）。HTTP 上传响应与 WS 无关、
+    // 必然到达，据此直接回填；WS 回执后到时经 FILE_PERSISTED 的 data-msg-id 去重（幂等跳过）
+    function applyDirectUploadResult(nonce, resp) {
+        if (!resp || !resp.url) return;
+        var el = messageList.querySelector('.message.self[data-nonce="' + nonce + '"]');
+        if (!el) return; // suppressLocal（转发抑制本地气泡）等场景：转发链路自持消费
+        if (resp.msg_id && !el.getAttribute('data-msg-id')) el.setAttribute('data-msg-id', resp.msg_id);
+        if (resp.file_id && !el.getAttribute('data-file-id')) el.setAttribute('data-file-id', resp.file_id);
+        var img = el.querySelector('.chat-image');
+        if (img) {
+            img.setAttribute('data-src', resp.url);
+            // blob 预览已失败直接切服务器地址；仍在加载中的给 1.5s 缓冲（桌面 blob 毫秒级
+            // 完成不误切），超时仍未就绪切服务器地址——load 成功后骨架/占位经既有监听自动清理
+            if (img.getAttribute('data-blob-fail') === '1') {
+                img.src = resp.url;
+            } else if (img.getAttribute('data-blob-ok') !== '1') {
+                setTimeout(function () {
+                    if (!img.parentNode) return;                        // 气泡已被移除（切会话/撤回）
+                    if (img.getAttribute('data-blob-ok') === '1') return;
+                    if (img.complete && img.naturalWidth > 0) return;   // 已就绪（load 竞态兜底）
+                    img.src = resp.url;
+                }, 1500);
+            }
+        }
+        // 文件气泡 data-url 同款回填（视频经 FILE_PERSISTED WS 归口升级内联，此处仅补地址）
+        var fBubble = el.querySelector('.bubble-file');
+        if (fBubble) {
+            var fu = fBubble.getAttribute('data-url');
+            if (!fu || fu.indexOf('blob:') === 0) fBubble.setAttribute('data-url', resp.url);
+        }
+    }
+
+    // 阶段二百四十八：直传失败明确反馈——原实现仅 console.warn，真机弱网下骨架屏干等 10 秒
+    // 超时才转降级占位，用户不知道发送已失败（感知即"看不到自己发的图"）
+    function failDirectUpload(nonce) {
+        showToast(I18N.t('发送失败，请检查网络后重试'));
+        var el = messageList.querySelector('.message.self[data-nonce="' + nonce + '"]');
+        if (!el) return; // suppressLocal（转发抑制气泡）：失败提示由转发链路 catch 归口
+        var img = el.querySelector('.chat-image');
+        if (img && img.style.display === 'none') {
+            // 骨架/未显示态：立即转降级占位（点击可重试重载），不再干等 10 秒骨架超时
+            img.dispatchEvent(new Event('error'));
+        }
+        var ring = el.querySelector('.bubble-video-upring');
+        if (ring) ring.remove(); // 视频/文件上传进度圈随失败摘除
+    }
+
     function sendFileDirect(file, toUserOverride, suppressLocal) {
         var toUser = toUserOverride || currentChatUser;
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
@@ -4981,16 +5040,27 @@
                     }
                 };
             }
+            // 阶段二百四十八：60s 超时（sendFileDirect 仅承载 <20MB 文件，弱网挂死不再无限等）
+            xhr.timeout = 60000;
             xhr.onload = function () {
-                // 异常加固：HTTP 4xx/5xx（文件过大/未在线/被拉黑等）统一告警，本地 blob 预览保留
-                if (xhr.status < 200 || xhr.status >= 300) console.warn('大文件直传被拒绝:', xhr.status);
-                resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status });
+                var ok = xhr.status >= 200 && xhr.status < 300;
+                if (!ok) {
+                    console.warn('大文件直传被拒绝:', xhr.status);
+                    failDirectUpload(nonce);
+                    resolve({ ok: false, status: xhr.status });
+                    return;
+                }
+                // 解析响应体 {msg_id,url,file_id} 本地兜底回填（不依赖 WS 回执是否丢失）
+                try { applyDirectUploadResult(nonce, JSON.parse(xhr.responseText || '{}')); } catch (e) { /* 旧服务端非 JSON 响应：维持 WS 回执归口 */ }
+                resolve({ ok: true, status: xhr.status });
             };
             xhr.onerror = function () {
-                // 上传失败仅告警：本地 blob 预览保留，刷新后该消息消失（未落库）属预期降级；不自动重试（服务端无幂等锚点）
-                var err = new Error('upload failed');
-                console.warn('大文件直传失败:', err);
-                reject(err); // 阶段八十六：转发链路据此提示失败
+                failDirectUpload(nonce);
+                reject(new Error('upload failed')); // 阶段八十六：转发链路据此提示失败
+            };
+            xhr.ontimeout = function () {
+                failDirectUpload(nonce);
+                reject(new Error('upload timeout'));
             };
             xhr.send(fd);
         });
@@ -5338,9 +5408,13 @@
         var meta = {};
         try { meta = JSON.parse(msg.content || '{}'); } catch (e) {}
         if (!meta.url) return;
-        // msg_id 去重（并发加固）：历史已渲染该消息、多端重复通知等场景防止重复气泡
-        if (messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
-        var isMine = msg.from_user === IMSocket.getUsername();
+        // msg_id 去重（并发加固）：历史已渲染该消息、多端重复通知等场景防止重复气泡。
+        // 阶段二百四十八：本地实时气泡可能已被 HTTP 上传响应兜底回填 msg_id（WS 回执丢失场景），
+        // 该气泡仍需走下方回填（已读状态注册等，均幂等），仅对非本地实时气泡（历史渲染/多端）跳过
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var dupEl = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
+        if (dupEl && !(isMine0 && meta.nonce && dupEl.getAttribute('data-nonce') === meta.nonce)) return;
+        var isMine = isMine0;
         // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
         if (isMine && meta.nonce) {
             var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
@@ -5546,7 +5620,7 @@
             if (info) {
                 var maxFile2 = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
                 if (file.size > maxFile2) sendFileChunked(file, info.toUser);
-                else sendFileDirect(file, info.toUser);
+                else sendFileDirect(file, info.toUser).catch(function () {}); // 失败反馈由 failDirectUpload 归口
             }
         });
     }
@@ -8342,7 +8416,7 @@
             pptx.write({ outputType: 'blob' }).then(function (blob) {
                 if (currentChatUser !== agent) { showToast(I18N.t('已切离会话，PPT 未发送')); return; }
                 var file = new File([blob], I18N.t('AI演示_') + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
-                sendFileDirect(file); // 直传链路：本地气泡 + 落库 + FILE_PERSISTED 回填
+                sendFileDirect(file).catch(function () {}); // 直传链路：本地气泡 + 落库 + FILE_PERSISTED 回填（失败反馈由 failDirectUpload 归口）
                 showToast(I18N.t('PPT 已生成并发送到会话'));
             }).catch(function (e) {
                 showToast(I18N.t('PPT 生成失败：') + (e.message || e));
