@@ -1809,6 +1809,43 @@ html.m .mobile-plus-panel:not(.hidden) {
     opacity: 0.75;
 }
 
+/* 聊天图片骨架屏（微信同款灰色微光占位）：图片进入可视区域才发起加载，加载完成前显示占位，
+   尺寸与失败降级占位一致，颜色全部关联现有主题变量（--hover 底 + 白色微光扫过） */
+.chat-image-skeleton {
+    width: 140px;
+    height: 92px;
+    border-radius: 4px;
+    background: var(--hover);
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+}
+
+.chat-image-skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.55) 50%, rgba(255, 255, 255, 0) 100%);
+    animation: chat-img-skeleton-sweep 1.3s ease-in-out infinite;
+}
+
+[data-theme="dark"] .chat-image-skeleton::after {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.07) 50%, rgba(255, 255, 255, 0) 100%);
+}
+
+@keyframes chat-img-skeleton-sweep {
+    to {
+        transform: translateX(100%);
+    }
+}
+
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] .chat-image-skeleton::after {
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.07) 50%, rgba(255, 255, 255, 0) 100%);
+    }
+}
+
 /* 阶段四十五：AI 文档问答卡片（微信文件卡片风格，主题色归口） */
 .msg-doc-card {
     display: inline-flex;

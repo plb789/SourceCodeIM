@@ -2398,7 +2398,7 @@
                     var qImg = qBubble ? qBubble.querySelector('.chat-image') : null;
                     var qFrom = msgTarget.getAttribute('data-from') || '';
                     if (qImg) {
-                        var qSrc = qImg.getAttribute('src') || '';
+                        var qSrc = chatImgSrc(qImg); // 图片地址归口读取（src 优先，data-src 兜底）
                         // blob: URL 跨端无效（本页临时预览），转 dataURL 后随信封发出；服务器 URL 直接使用
                         if (qSrc.indexOf('blob:') === 0) {
                             // 原实现：图片引用仅存"[图片]"文字摘要，无真实图片内容
@@ -2539,10 +2539,10 @@
         if (!el) return; // 多选模式（fwdPendingEl 为 null）不预览，或无可预览内容
         var bubble = el.querySelector('.message-bubble');
         var img = bubble ? bubble.querySelector('.chat-image') : null;
-        if (img && img.getAttribute('src')) {
+        if (img && chatImgSrc(img)) {
             fwdPreview.innerHTML = '';
             var im = document.createElement('img');
-            im.src = img.getAttribute('src');
+            im.src = chatImgSrc(img);
             var pinfo = document.createElement('div');
             pinfo.className = 'fwd-preview-info';
             var nm = document.createElement('div');
@@ -2696,8 +2696,8 @@
         var bubble = el.querySelector('.message-bubble');
         // 图片消息
         var img = bubble ? bubble.querySelector('.chat-image') : null;
-        if (img && img.getAttribute('src')) {
-            fetchSrcAsFile(img.getAttribute('src'), 'image.png').then(function (f) {
+        if (img && chatImgSrc(img)) {
+            fetchSrcAsFile(chatImgSrc(img), 'image.png').then(function (f) {
                 // 阶段一百四十二：多群泛化——群目标统一走群图片直传（group 参数携带目标群）；全局群已废弃
                 if (isGroupTarget(target)) {
                     sendGroupImage(f, true, target);
@@ -2862,9 +2862,9 @@
                 t: parseInt(el.getAttribute('data-ts'), 10) || 0
             };
             var img = bubble.querySelector('.chat-image');
-            if (img && img.getAttribute('src')) {
+            if (img && chatImgSrc(img)) {
                 item.k = 'image';
-                item.u = img.getAttribute('src');
+                item.u = chatImgSrc(img);
             } else if (bubble.classList.contains('bubble-file')) {
                 item.k = 'file';
                 item.u = bubble.getAttribute('data-url') || '';
@@ -3046,8 +3046,8 @@
                 t: parseInt(el.getAttribute('data-ts'), 10) || 0
             };
             var img = bubble.querySelector('.chat-image');
-            if (img && img.getAttribute('src')) {
-                var src = img.getAttribute('src');
+            if (img && chatImgSrc(img)) {
+                var src = chatImgSrc(img);
                 if (src.indexOf('blob:') === 0 || src.indexOf('data:') === 0) { skipped++; return; }
                 item.k = 'image';
                 item.u = src;
@@ -5355,8 +5355,15 @@
                 // 图片查看器（独立窗口）收集列表时跨窗口加载失败，导致自己发的图进不了翻页/缩略图列表
                 // 原实现：仅回填 msg_id/file_id，img.src 永远停留在 blob:
                 var mImg = mineEl.querySelector('.chat-image');
-                if (mImg && meta.url && mImg.getAttribute('src') && mImg.getAttribute('src').indexOf('blob:') === 0) {
-                    mImg.setAttribute('src', meta.url);
+                // 骨架屏兼容：blob 预览地址可能停留在 src 或 data-src，两处都要回填
+                if (mImg && meta.url) {
+                    var mSrc = mImg.getAttribute('src');
+                    if (mSrc && mSrc.indexOf('blob:') === 0) {
+                        mImg.setAttribute('src', meta.url);
+                        if (mImg.getAttribute('data-src')) mImg.setAttribute('data-src', meta.url);
+                    } else if (!mSrc && (mImg.getAttribute('data-src') || '').indexOf('blob:') === 0) {
+                        mImg.setAttribute('data-src', meta.url);
+                    }
                 }
                 // 阶段一百三十四：文件气泡 data-url 同款回填（阶段三十八只修了图片，文件遗漏）——
                 // 独立文档查看器（另一页面）无法访问主窗口 blob:，白屏且触发下载弹窗（2026-09-17 实测）
@@ -8057,7 +8064,7 @@
         var bubble = el.querySelector('.message-bubble');
         if (!bubble) { showToast(I18N.t('该消息不支持复制')); return; }
         var img = bubble.querySelector('.chat-image');
-        if (img && img.getAttribute('src')) { copyImageToClipboard(img.getAttribute('src')); return; }
+        if (img && chatImgSrc(img)) { copyImageToClipboard(chatImgSrc(img)); return; }
         if (bubble.classList.contains('bubble-file')) {
             var fnEl = bubble.querySelector('.file-name');
             copyTextToClipboard((fnEl && fnEl.textContent) || I18N.t('文件'));
@@ -20043,22 +20050,15 @@
             bubbleImg.className = 'message-bubble bubble-image';
             var img = document.createElement('img');
             img.className = 'chat-image';
-            img.src = meta.url || '';
             attachImageFallback(img);
-            // 图片显示一半修复（与实时渲染一致）：按调用方插入前的贴底快照决定加载撑高后是否滚底
-            // 原实现：load 回调内实时 isNearBottom() 判定——列表已被撑高导致误判，已废弃
-            // img.addEventListener('load', function () {
-            //     if (isNearBottom()) messageList.scrollTop = messageList.scrollHeight;
-            // });
-            img.addEventListener('load', function () {
-                if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
-            });
+            // 骨架屏（与实时渲染一致）：创建即加载，加载撑高后按贴底快照决定是否滚底
             img.addEventListener('click', function () {
                 // 原实现：window.open(meta.url, '_blank') 弹裸图片窗口
                 // 阶段三十八：历史图片消息统一走图片查看器（与实时气泡一致）
                 openImageViewer(meta.url || '');
             });
             bubbleImg.appendChild(img);
+            if (meta.url) attachChatImageSkeleton(img, meta.url, stickBottom);
             body.appendChild(bubbleImg);
         } else {
             // 阶段一百六十：视频消息历史渲染统一视频气泡（内联可播放，与实时渲染形态一致）——
@@ -21799,13 +21799,13 @@
             bubble.classList.add('bubble-image');
             var qImg = document.createElement('img');
             qImg.className = 'chat-image';
-            qImg.src = aiImgEnv.image;
             qImg.alt = '';
             attachImageFallback(qImg);
             qImg.addEventListener('click', function () {
                 openImageViewer(aiImgEnv.image); // 与聊天图片一致走图片查看器
             });
             bubble.appendChild(qImg);
+            attachChatImageSkeleton(qImg, aiImgEnv.image); // 骨架屏（与聊天图片同链路）
             if (aiImgEnv.text) {
                 var aiImgText = document.createElement('div');
                 aiImgText.className = 'msg-text';
@@ -22001,7 +22001,7 @@
         var ordered = [];
         var jobs = [];
         document.querySelectorAll('.chat-image').forEach(function (im) {
-            var u = im.getAttribute('src') || '';
+            var u = chatImgSrc(im); // 图片地址归口读取（src 优先，data-src 兜底）
             if (!u) return;
             var i = ordered.length;
             ordered.push(null); // 占位保序（DOM 顺序即时间顺序）
@@ -22340,6 +22340,47 @@
         });
     }
 
+    // ===== 聊天图片骨架屏（微信同款）=====
+    // 图片创建即发起加载（与原行为一致的显示速度：图片并行下载、HTTP 缓存预热，
+    // 翻历史时已缓存的图片秒开），加载完成前显示灰色微光骨架占位（替代原来的空白塌陷），
+    // 完成后骨架移除、图片显示；加载失败/挂起超时转 attachImageFallback 主题化占位（点击重试）。
+    // 地址同步记录 data-src：FILE_PERSISTED blob 回填判断、加载完成前的 src 消费点兜底均依赖它。
+    function chatImgSrc(im) {
+        return im.getAttribute('src') || im.getAttribute('data-src') || '';
+    }
+
+    // img 需已插入气泡（骨架插在其前）；stickBottom：加载撑高后是否贴底（调用方插入前快照）
+    function attachChatImageSkeleton(img, url, stickBottom) {
+        img.setAttribute('data-src', url);
+        img.style.display = 'none'; // 加载完成前隐藏 img（骨架占位），失败转降级占位
+        var sk = document.createElement('div');
+        sk.className = 'chat-image-skeleton';
+        var skTimer = null;
+        function clearSkTimer() { if (skTimer) { clearTimeout(skTimer); skTimer = null; } }
+        // 骨架超时兜底（骨架不允许永久停留）：10 秒仍未加载完成（请求挂起/过慢）时
+        // 转降级占位（点击重试可强制重载，同微信失败占位）
+        function skTimeout() {
+            skTimer = null;
+            if (!img.parentNode) return;                       // 气泡已被移除（切会话/撤回/删除）
+            if (img.complete && img.naturalWidth > 0) return;  // 已加载成功（load 竞态兜底）
+            if (sk.parentNode) sk.remove();
+            img.dispatchEvent(new Event('error')); // 转 attachImageFallback 降级占位（点击重试）
+        }
+        skTimer = setTimeout(skTimeout, 10000);
+        img.addEventListener('load', function () {
+            clearSkTimer();
+            if (sk.parentNode) sk.remove();
+            img.style.display = '';
+            if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
+        });
+        img.addEventListener('error', function () {
+            clearSkTimer();
+            if (sk.parentNode) sk.remove(); // attachImageFallback 的 error 回调负责插入降级占位
+        });
+        if (img.parentNode) img.parentNode.insertBefore(sk, img);
+        img.src = url; // 创建即加载：保持原显示速度与缓存预热，骨架仅作加载完成前的视觉过渡
+    }
+
     function appendImageMsg(fromUser, url, type, isPrivate) {
         // 贴底状态必须在插入前快照：原实现 load 时再判 isNearBottom()，此时图片已把列表撑高
         // （gap 瞬间≈图片高度>80px 容差），会被误判为"翻历史中"而放弃滚底，导致图片仍只显示一半
@@ -22358,23 +22399,17 @@
         bubble.className = 'message-bubble bubble-image';
         var img = document.createElement('img');
         img.className = 'chat-image';
-        img.src = url;
         attachImageFallback(img);
-        // 图片显示一半修复：图片异步加载完成前高度为 0，插入后立即滚底会停在半截；
-        // 加载完成后按"插入前贴底快照"决定是否再次滚底（stick 在插入前采样，不受加载撑高影响）
+        // 骨架屏：创建即加载（原速度不变），加载完成前显示骨架占位，
+        // 完成后按"插入前贴底快照"决定是否再次滚底（stick 在插入前采样，不受加载撑高影响）
         // 原实现：load 回调内实时 isNearBottom() 判定——此时列表已被撑高导致误判，已废弃
-        // img.addEventListener('load', function () {
-        //     if (isNearBottom()) messageList.scrollTop = messageList.scrollHeight;
-        // });
-        img.addEventListener('load', function () {
-            if (stick) messageList.scrollTop = messageList.scrollHeight;
-        });
         img.addEventListener('click', function () {
             // 原实现：window.open(url, '_blank') 直接弹裸图片窗口，无工具栏
             // 阶段三十八：改走图片查看器（置顶/翻页/缩略图/缩放/旋转/另存为）
             openImageViewer(url);
         });
         bubble.appendChild(img);
+        attachChatImageSkeleton(img, url, stick);
         // 头像缺失修复：与文字消息一致，头像 + 内容列微信风格结构
         // 原代码：div.appendChild(nameEl); div.appendChild(bubble); 平铺在 .message 下，无头像
         var body = document.createElement('div');
