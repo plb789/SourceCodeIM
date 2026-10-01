@@ -7,11 +7,15 @@
     var thumbsEl = document.getElementById('thumbs');
     var infoEl = document.getElementById('ivInfo');
 
+    // 禁用浏览器原生图片拖拽（否则左键拖动会出现"禁止"光标和图片鬼影，拖动平移由画布接管）
+    img.draggable = false;
+    img.addEventListener('dragstart', function (e) { e.preventDefault(); });
+
     var list = [];        // 当前会话图片 URL 列表（翻页/缩略图）
     var index = 0;        // 当前显示索引
     var scale = 1;        // 缩放倍率（fit 模式下为相对适应尺寸的倍率）
     var rotation = 0;     // 旋转角度（90° 步进）
-    var fit = true;       // true=适应窗口，false=1:1 基准
+    var fit = true;       // true=适应窗口（默认打开整图可见，小图不放大），false=1:1 实际尺寸
     var baseFit = 1;      // 适应窗口时图片的自然缩放基准（图片相对容器的适配比例）
     var offsetX = 0, offsetY = 0; // 平移偏移（像素）
     var pinned = false;   // 窗口置顶状态
@@ -51,7 +55,7 @@
         rotation = 0;
         offsetX = 0;
         offsetY = 0;
-        fit = true;
+        fit = true; // 每次翻页重置为适应窗口，保证整图可见
         updateInfo();
     }
 
@@ -124,9 +128,9 @@
         updateInfo();
     }
 
-    // 缩放：以窗口中心为基准，范围 0.1 ~ 8
+    // 缩放：以当前视觉尺寸为基准连续缩放（适应模式下先落定基准再缩放，避免跳变），范围 0.1 ~ 8
     function zoomBy(f) {
-        fit = false;
+        if (fit) { scale = baseFit; fit = false; }
         scale = clamp(scale * f, 0.1, 8);
         apply();
     }
@@ -236,7 +240,7 @@
     });
     window.addEventListener('mousemove', function (e) {
         if (!dragging) return;
-        fit = false; // 平移即脱离适应模式（保留视觉尺寸）
+        // 仅平移：保持当前视觉尺寸不变，不切换缩放基准（避免拖动时图片跳变放大）
         offsetX += e.clientX - lastX;
         offsetY += e.clientY - lastY;
         lastX = e.clientX;

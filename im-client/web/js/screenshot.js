@@ -698,6 +698,20 @@
         if (ocrCardEl) ocrCardEl.classList.add('hidden');
     }
 
+    // 当前用户名归口：主页面走 IMSocket；editor.html 独立页未加载 socket.js，
+    // 回退读 im_auth 登录凭据（同源 localStorage，chat.js 登录成功后写入 {u,p}），
+    // 否则 OCR/翻译请求 username 为空会被服务端拒绝（"缺少 username 参数"）
+    function currentUsername() {
+        if (typeof IMSocket !== 'undefined' && IMSocket.getUsername) {
+            var u = IMSocket.getUsername();
+            if (u) return u;
+        }
+        try {
+            var auth = JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || '')));
+            return (auth && auth.u) || '';
+        } catch (e) { return ''; }
+    }
+
     // 入口：框选完成后的提取/翻译动作（withTranslate=true 时识别后追加服务端翻译）
     function runScreenOCR(withTranslate) {
         if (ocrBusy) return; // 请求在途防重入
@@ -714,7 +728,7 @@
             ocrCardEl.classList.remove('hidden');
             return;
         }
-        var user = (typeof IMSocket !== 'undefined' && IMSocket.getUsername) ? IMSocket.getUsername() : '';
+        var user = currentUsername();
         ocrBusy = true;
         showOcrCard(true, withTranslate);
         fetch('/api/ocr?username=' + encodeURIComponent(user), {

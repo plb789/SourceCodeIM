@@ -21994,7 +21994,7 @@
                 window.desktop.openImageViewer({ url: oTarget, list: oList, index: oIdx });
             } else {
                 window.__imageViewerList = oList;
-                window.open('/image-viewer.html?url=' + encodeURIComponent(oTarget), '_blank');
+                window.open('/image-viewer.html?v=5&url=' + encodeURIComponent(oTarget), '_blank');
             }
             return;
         }
@@ -22032,7 +22032,7 @@
                     window.desktop.openImageViewer({ url: target, list: list, index: idx });
                 } else {
                     window.__imageViewerList = list; // Web 端查看器页从 opener 拉取列表
-                    window.open('/image-viewer.html?url=' + encodeURIComponent(target), '_blank');
+                    window.open('/image-viewer.html?v=5&url=' + encodeURIComponent(target), '_blank');
                 }
             });
         });

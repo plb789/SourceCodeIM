@@ -971,7 +971,7 @@ function ensureViewerWindow() {
     });
     // 阶段一百二十二：图片查看器地址恢复服务端 http（静态资源经 http 拦截读本地，原 app:// 方案已回退）
     // 更早原实现：viewerWin.loadURL(SERVER_URL + 'image-viewer.html')
-    viewerWin.loadURL(SERVER_URL + 'image-viewer.html');
+    viewerWin.loadURL(SERVER_URL + 'image-viewer.html?v=5'); // v5：查看器缩放/拖动交互修复（页面变更防远程缓存）
     viewerWin.on('close', function (e) {
         // 关闭改为隐藏复用：保留窗口避免频繁重建（页面内 Esc/关闭按钮走同一隐藏逻辑）
         if (viewerWin.isVisible()) {
