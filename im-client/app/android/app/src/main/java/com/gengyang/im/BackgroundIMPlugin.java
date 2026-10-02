@@ -305,11 +305,13 @@ public class BackgroundIMPlugin extends Plugin {
         call.resolve();
     }
 
-    /** 阶段二百五十：页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等） */
+    /** 阶段二百五十：页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等）
+     *  阶段二百五十三：携带 call_id——仅当与原生当前未接来电匹配（或为空兜底）时才
+     *  清来电态/撤通知卡，防旧来电收尾停铃误清新来电状态 */
     @PluginMethod
     public void stopCallRing(PluginCall call) {
         try {
-            KeepAliveService.stopRingtoneStatic();
+            KeepAliveService.stopRingtoneStatic(call == null ? "" : call.getString("call_id", ""));
         } catch (Exception ignored) {
         }
         call.resolve();

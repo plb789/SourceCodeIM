@@ -444,10 +444,15 @@
         if (ringTimer) { clearInterval(ringTimer); ringTimer = null; }
         // 阶段二百五十：页面侧停铃归口——响铃条接听/挂断/60s 兜底清条时同步停原生
         // 系统铃声（幂等；原生信令归口已停时无害）
-        if (isApp) {
+        // 阶段二百五十三：携带 call_id——原生仅当与当前未接来电匹配时才清来电态/撤通知卡，
+        // 避免「旧来电收尾的停铃」误清新来电的 ringingCallId 导致互踢守卫误杀新铃声；
+        // 页面无响铃条（ringCur 空，如深链入口预清残留）时完全不动原生铃——此刻原生铃
+        // 属于刚到达的来电（真机 logcat 23:17:18.553 空 id 停铃在新铃起始 39ms 后杀掉新铃，
+        // 随后互踢守卫误判「无未接来电」再杀 → 铃声不到半秒即停）
+        if (isApp && ringCur) {
             try {
                 var bgp2 = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
-                if (bgp2 && bgp2.stopCallRing) bgp2.stopCallRing();
+                if (bgp2 && bgp2.stopCallRing) bgp2.stopCallRing({ call_id: ringCur.call_id });
             } catch (e) { }
         }
     }
@@ -551,6 +556,15 @@
 
     function showRing(data) {
         if (!data || !data.call_id) return;
+        // 阶段二百五十三：同一来电重复推送（页面重连后服务端重投 invite）不重建不重启铃声——
+        // 原实现每次先 hideRing（→ ringStop → stopCallRing 停原生铃）再起播，页面重连期间
+        // 每几秒出现一次「停铃 → 起铃」抖动（真机 logcat 插件线程成对 stopRingtone/startCallRing），
+        // 极端情况下起播被随后的原生互踢停铃打断即「静音」。同 call_id 仅续期兜底计时
+        if (ringCur && ringCur.call_id === data.call_id) {
+            ringCur = data;
+            ringArmTimeout();
+            return;
+        }
         hideRing(false); // 单例：重复来电先撤旧条（服务端忙判已拦并发，防御兜底）
         ringCur = data;
         buildRing(data);

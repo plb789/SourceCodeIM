@@ -132,6 +132,8 @@ public class KeepAliveService extends Service {
     private static final String CH_CALL_QUIET = "im_calls_native";
     private MediaPlayer ringPlayer;
     private Vibrator ringVibrator;
+    // 阶段二百五十三：原生铃声起播时间戳（ms）——空 id 停铃保护窗用
+    private volatile long ringStartedAt;
     private final Runnable ringStopTask = this::stopRingtone;
     // 阶段二百三十八：运行实例静态桥（通知挂断钮广播直达信令用，onCreate/onDestroy 对称维护）
     private static volatile KeepAliveService self;
@@ -279,10 +281,15 @@ public class KeepAliveService extends Service {
             main.removeCallbacks(standbyRetry);
             // 阶段二百三十七：交还前台时撤下来电通知——前台响铃画面由 WebView 经深链路由展示，
             // 通知残留会与页内响铃条重复；后续信令（cancel/超时）归口 WebView 处理
-            ringingCallId = null;
-            stopRingtone(); // 页内响铃条接管响铃，停原生循环铃声（阶段二百四十七）
-            // 阶段二百五十：主卡 + 无 FSI 兜底卡一并撤（cancelCallCards 归口）
-            cancelCallCards(getSystemService(NotificationManager.class));
+            // 阶段二百五十三：未接来电（ringingCallId != null）期间不停铃/不撤卡——真机 logcat
+            // 实测 22:39:00 HANDBACK 紧随 stopRingtone player=true，把正在响的原生铃声杀掉；而
+            // 页面响铃条只在 showRing 时起播一次、不会续响 → 表现为「铃声刚响就停、来电画面在但无声」。
+            // 未接听期间响铃归口原生保持，由页面接听/拒接（stopCallRing 插件）或 65s 兜底停铃
+            if (ringingCallId == null) {
+                stopRingtone(); // 页内响铃条接管响铃，停原生循环铃声（阶段二百四十七）
+                // 阶段二百五十：主卡 + 无 FSI 兜底卡一并撤（cancelCallCards 归口）
+                cancelCallCards(getSystemService(NotificationManager.class));
+            }
             teardown();
         }
         return START_STICKY;
@@ -518,7 +525,11 @@ public class KeepAliveService extends Service {
                     handover = true;
                     // 阶段二百五十：锁屏来电页点接听 → 页面豁免重连互踢顶掉本连接时立即停铃
                     // （不等 HANDBACK 补停，消除互踢到 HANDBACK 之间铃声多响一小段的间隙）
-                    stopRingtone();
+                    // 阶段二百五十三：仅在无未接来电时停铃——页面单纯重连（非接听）互踢也走本分支，
+                    // 原无条件停铃导致「切好友页面/页面重连瞬间铃声被杀」（真机 logcat 22:39:07.703
+                    // kicked→standby 紧随 stopRingtone player=true）。未接听期间响铃由页面接听/拒接
+                    // （stopCallRing 插件，其归口已清 ringingCallId）或 65s 兜底停
+                    if (ringingCallId == null) stopRingtone();
                     teardown();
                     // 阶段二百五十二：standby 复位兜底——锁屏接听等场景页面互踢本连接后随即
                     // 被系统冻结（锁屏/息屏 WebView 冻结），切后台事件早已消费不会再产生
@@ -828,9 +839,11 @@ public class KeepAliveService extends Service {
         // 挂断后才看到普通消息通知」；微信息屏来电即本路径）
         PowerManager pmScreen = (PowerManager) getSystemService(POWER_SERVICE);
         boolean screenOn = pmScreen != null && pmScreen.isInteractive();
+        boolean pageShown = false;
         if (Settings.canDrawOverlays(this)) {
             try {
                 startActivity(i);
+                pageShown = true;
             } catch (Exception ignored) {
             }
         }
@@ -846,31 +859,43 @@ public class KeepAliveService extends Service {
         // 原生 startCallRing 同响）。响铃统一归口原生单一路径（下方 startCallRing，
         // 页面 showRing→ensureCallRing 幂等续响），通知只承担显示职责
         String channel = CH_CALL_QUIET;
-        try {
-            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null, channel, true));
-        } catch (Exception ignored) {
+        // 阶段二百五十三：来电页直启成功时完全不落通知卡——页面（setShowWhenLocked 锁屏
+        // 可见）本身就是来电 UI（微信同款：来电即全屏页，无通知横幅）；原主卡 CH_CALL_QUIET
+        // 虽静音但 IMPORTANCE_HIGH，vivo 真机仍弹横幅（用户复测「又显示出通知了」）。
+        // 直启失败（无悬浮窗权限/ROM 拦截）时主卡 + 兜底卡照常承担可见性
+        if (!pageShown) {
+            try {
+                nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null, channel, true));
+            } catch (Exception ignored) {
+            }
         }
         // 阶段二百五十：兜底卡直接复用消息渠道 CH_MSG——vivo 真机实测：消息通知（有声
         // 渠道）锁屏可显，而来电专用无声渠道（CH_CALL_QUIET/CH_CALL_FB）一律被系统归入
         // "静默通知"折叠不显示（用户锁屏截图：系统弹「要将通知设为静默吗」，无声渠道
         // 被 ROM 静默化处理）。渠道提示音仅起始"叮"一声，随后原生铃声循环接管；
         // 点卡片走接听深链（MainActivity 已 setShowWhenLocked，锁屏直接显示来电页自动接听）
-        try {
-            nm.notify(CALL_NOTIFY_FALLBACK_ID, buildFallbackCard(name, body, piAccept, CH_MSG));
-        } catch (Exception ignored) {
+        // 阶段二百五十三：兜底卡仅在来电页未直启时补发——原恒发 CH_MSG（有声渠道），
+        // 渠道提示音「叮」与下方 startCallRing 原生铃声同刻叠加 → 息屏「通知音与铃声共存双响」
+        // （用户真机实测反馈）。悬浮窗直启成功时来电页（setShowWhenLocked 锁屏可见）已是
+        // 可见入口，兜底卡纯重复且带噪音；未直启（无悬浮窗权限）时仍需其承担锁屏可见性
+        if (!pageShown) {
+            try {
+                nm.notify(CALL_NOTIFY_FALLBACK_ID, buildFallbackCard(name, body, piAccept, CH_MSG));
+            } catch (Exception ignored) {
+            }
         }
-        // 诊断日志：兜底卡实际渠道（CH_MSG）重要度 / 通知总开关 / FSI 权限 / 悬浮窗权限
+        // 诊断日志：兜底卡渠道（CH_MSG）重要度 / 通知总开关 / FSI 权限 / 悬浮窗权限
         // （用户真机导日志定位"来电不显示"）
         try {
             NotificationChannel chDbg = nm.getNotificationChannel(CH_MSG);
             boolean fsiDbg = Build.VERSION.SDK_INT < 34 || nm.canUseFullScreenIntent();
-            android.util.Log.i("BGIM", "call notify ch=" + channel
+            android.util.Log.i("BGIM", "call notify ch=" + channel + " pageShown=" + pageShown
                     + " msgImp=" + (chDbg != null ? chDbg.getImportance() : -1)
                     + " chEnabled=" + nm.areNotificationsEnabled()
                     + " fsi=" + fsiDbg + " overlay=" + Settings.canDrawOverlays(this));
         } catch (Exception ignored) {
         }
-        fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject, channel);
+        fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject, channel, pageShown);
         // 阶段二百五十：响铃统一归口原生（亮屏/息屏一致，渠道已全部静音防双响；
         // 页面 showRing→ensureCallRing 幂等续响，接听/挂断/超时即停）
         startCallRing();
@@ -953,6 +978,7 @@ public class KeepAliveService extends Service {
             mp.prepare(); // 本地系统铃声，同步 prepare 即可（WS 线程调用，无 UI 阻塞）
             mp.start();
             ringPlayer = mp;
+            ringStartedAt = System.currentTimeMillis(); // 阶段二百五十三：空 id 停铃保护窗计时起点
         } catch (Exception e) {
             if (ringPlayer != null) {
                 try {
@@ -1017,10 +1043,28 @@ public class KeepAliveService extends Service {
         s.startCallRing();
     }
 
-    /** 页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等） */
-    static void stopRingtoneStatic() {
+    /** 页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等）
+     *  阶段二百五十三：携带 call_id 精确收口——
+     *  - 空 id（旧页面兜底）：全清（停铃 + 清来电态 + 撤卡）
+     *  - id 与当前未接来电匹配：全清
+     *  - id 不匹配（旧来电收尾停铃 vs 新来电已接管）：直接忽略——真机 logcat 实测
+     *    23:06:15 旧来电 stopCallRing 把新来电 ringingCallId 清掉，随后互踢守卫误判
+     *    「无未接来电」杀掉新铃声 */
+    static void stopRingtoneStatic(String callId) {
         KeepAliveService s = self;
-        if (s != null) s.stopRingtone();
+        if (s == null) return;
+        String cur = s.ringingCallId;
+        boolean match = callId == null || callId.isEmpty() || cur == null || callId.equals(cur);
+        if (!match) return;
+        // 阶段二百五十三：空 id 停铃在铃声起播 2s 内直接忽略——真机 logcat 实测空 id 停铃
+        // 发生在新铃起始 39ms 后（深链入口预清残留等无响铃条场景），它清掉 ringingCallId
+        // 后互踢守卫误判「无未接来电」杀铃，表现为铃声不到半秒即停。带 id 的合法停铃
+        // （接听/拒接，新版页面必带 call_id）不受此窗限制
+        if ((callId == null || callId.isEmpty())
+                && System.currentTimeMillis() - s.ringStartedAt < 2000L) return;
+        s.ringingCallId = null;
+        s.stopRingtone();
+        cancelCallCards(s.getSystemService(NotificationManager.class));
     }
 
     /**
@@ -1030,7 +1074,7 @@ public class KeepAliveService extends Service {
      */
     private void fetchAvatarAsync(String from, String callId, String name, String body,
                                   PendingIntent pi, PendingIntent piAccept, PendingIntent piReject,
-                                  String channel) {
+                                  String channel, boolean pageShown) {
         String path = friendAvatars.get(from);
         if (path == null || path.isEmpty()) return;
         String full = avatarFullUrl(path);
@@ -1056,6 +1100,8 @@ public class KeepAliveService extends Service {
                         // 响铃已结束/已被新邀请顶替（call_id 不匹配）则放弃回填
                         KeepAliveService s = self;
                         if (s == null || !callId.equals(s.ringingCallId)) return;
+                        // 阶段二百五十三：来电页直启成功时不落通知卡（页面即 UI），头像回填跳过
+                        if (pageShown) return;
                         NotificationManager nm = getSystemService(NotificationManager.class);
                         if (nm == null) return;
                         try {

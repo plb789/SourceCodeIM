@@ -21344,6 +21344,10 @@
             // 阶段一百四十四：会议邀请来电（含发起/追加邀请两路，服务端逐人转发）
             if (msg.from_user === me) return; // 多端回显防御
             if (!window.desktop || !window.desktop.callOpen) return; // Web/手机端无会议能力（服务端 HasPC 已拦截）
+            // 阶段二百五十三：同一来电重投（页面重连后服务端补发 invite）静默忽略——
+            // 原实现落「忙态自动拒接」，把本端正在响的同一次来电当成第二次呼叫回 reject，
+            // 主叫端误显「对方已拒绝」（真机复测）；不同 call_id 的真并发忙态仍自动拒接
+            if (pendingRing && pendingRing.call_id === p.call_id) return;
             // 本端忙（通话中/会议中/已有来电）：自动拒绝（服务端忙判已拦，双保险）
             if (callOpenId || pendingRing) {
                 callSignalSend('', { action: 'meet_decline', call_id: p.call_id });
@@ -21368,6 +21372,10 @@
             // Web/手机端无音视频能力：静默忽略（纯 Web 被叫场景服务端 HasPC 已拦截呼叫；
             // PC+Web 同账号同挂时若在此自动拒绝，会抢在 PC 端人工接听前触发服务端收口，导致永远无法呼通）
             if (!window.desktop || !window.desktop.callOpen) return;
+            // 阶段二百五十三：同一来电重投（页面重连后服务端补发 invite）静默忽略——
+            // 原实现落「忙态自动拒接」，把本端正在响的同一次来电当成第二次呼叫回 reject，
+            // 主叫端误显「对方已拒绝」（真机复测）；不同 call_id 的真并发忙态仍自动拒接
+            if (pendingRing && pendingRing.call_id === p.call_id) return;
             // 本端忙（通话中/已有来电）：自动拒接（服务端忙判已拦，双保险）
             if (callOpenId || pendingRing) {
                 callSignalSend(msg.from_user, { action: 'reject', call_id: p.call_id, reason: 'busy' });
