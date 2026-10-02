@@ -12,6 +12,8 @@
     // 阶段一百四十五：WEB 端浏览器在同源 iframe 内（父页 web-call-bridge.js 承载）经 postMessage 桥通信，
     // 接口语义与 PC preload 完全一致（onCallLoad/onCallSignal/callSend/callClose/meetInviteAsk）
     var d = window.desktop || (window.parent !== window ? iframeBridge() : {});
+    // 阶段二百五十四补丁3：原生沉浸态已请求值缓存（幂等去重，防重复桥调用）
+    var immersiveOn = false;
 
     // ===== WEB 端浏览器 iframe 桥（父页对接，消息协议见 web-call-bridge.js 头注） =====
     function iframeBridge() {
@@ -30,7 +32,8 @@
         else if (m.t === 'call:signal' && onMsg) onMsg(m.frame);
         else if (m.t === 'call:window-close' && onCloseReq) onCloseReq();
         // 阶段二百四十七：悬浮小窗模式开关（父页小窗化/恢复全屏时切换，本页只切换视觉形态）
-        else if (m.t === 'call:mini') document.body.classList.toggle('mode-mini', !!m.on);
+        // 阶段二百五十四补丁3：小窗态退出原生沉浸（否则整窗 Activity 沉浸、状态栏消失）
+        else if (m.t === 'call:mini') { document.body.classList.toggle('mode-mini', !!m.on); applyImmersive(); }
         // 阶段二百四十九：原生回前台转发（MainActivity.onResume → 主文档 web-call-bridge 转达）
         // ——iframe 内拿不到 Capacitor App 插件，自愈只能走父页转发（vivo 断流自愈入口）
         else if (m.t === 'call:resumed' && typeof healMediaOnResume === 'function') healMediaOnResume();
@@ -46,6 +49,9 @@
             callClose: function () { post({ t: 'call:close' }); },
             // 阶段二百四十七：小窗化请求（父页把 iframe 缩为可拖动悬浮小窗）
             callMinimize: function () { post({ t: 'call:minimize' }); },
+            // 阶段二百五十四补丁3：共享沉浸全屏请求（父页转发原生隐藏状态栏/导航栏+刘海扩展；
+            // PC 端 window.desktop 无此方法自动跳过，走 Fullscreen API）
+            callImmersive: function (on) { post({ t: 'call:immersive', on: !!on }); },
             meetInviteAsk: function (data) { post({ t: 'meet:invite-ask', data: data }); }
         };
     }
@@ -80,6 +86,7 @@
         // ===== 阶段一百四十四：多人会议（Mesh 全员互连） =====
         meet: false,         // 会议模式开关（true 时 1v1 单人视图逻辑不参与）
         stageUser: '',       // 阶段一百五十一：主舞台目标（'self'/成员账号；空=宫格模式，腾讯会议同款布局）
+        stageFull: false,    // 阶段二百五十四：共享舞台「全屏观看」态（true=隐藏缩略图列让共享画面独占全屏，腾讯会议同款画廊/全屏切换）
         groupId: 0,          // 发起群（会中邀请时回传主窗口定位群成员范围）
         meetTitle: '',       // 会议标题（群名，主窗口下发）
         // username -> {name, avatar, pc, stream, pendingCands, muted,
@@ -576,6 +583,10 @@
         btnMute.disabled = false; btnCam.disabled = false; btnShare.disabled = false;
         btnMute.title = '静音'; btnCam.title = '关闭摄像头'; btnShare.title = '共享屏幕';
         document.body.classList.remove('cam-off', 'cam-dead');
+        // 阶段二百五十四：换场清共享舞台态与沉浸全屏类（残留会遮住下场顶栏/控制条）
+        st.stageUser = ''; st.stageFull = false;
+        document.body.classList.remove('stage-immersive');
+        applyImmersive();
         elMask.classList.remove('visible');
     }
 
@@ -1145,6 +1156,7 @@
     function renderMeetStage() {
         var side = $('meetSide');
         var stageBox = $('stageBox');
+        var toggle = $('stageViewToggle');
         var sharers = [];
         if (sharing && screenStream) sharers.push('self');
         for (var u in st.members) {
@@ -1153,6 +1165,10 @@
         if (!sharers.length) {
             // 宫格模式：舞台目标清空 + 缩略图列隐藏
             st.stageUser = '';
+            st.stageFull = false; // 阶段二百五十四：退出共享舞台时复位全屏观看态
+            document.body.classList.remove('stage-immersive');
+            applyImmersive();
+            if (toggle) toggle.style.display = 'none';
             side.style.display = 'none';
             side.innerHTML = '';
             stageBox.style.display = 'none';
@@ -1164,9 +1180,20 @@
         // 舞台目标失效（其共享已停止）：回退最新共享者；仍有效则保持（手动切换不被抢回）
         if (sharers.indexOf(st.stageUser) < 0) st.stageUser = sharers[sharers.length - 1];
         $('meetGrid').style.display = 'none';
-        side.style.display = 'flex';
         stageBox.style.display = 'block';
         stageBox.innerHTML = '';
+        // 阶段二百五十四：画廊/沉浸全屏两态（腾讯会议同款）——全屏态隐藏顶栏/控制条/缩略图列
+        // （body.stage-immersive 统一控制），共享画面独占整个通话窗视口；缩略图列仍照常构建（切回立即可见）
+        side.style.display = st.stageFull ? 'none' : 'flex';
+        document.body.classList.toggle('stage-immersive', !!st.stageFull);
+        applyImmersive();
+        if (toggle) {
+            toggle.style.display = 'flex';
+            toggle.innerHTML = st.stageFull
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+            toggle.title = st.stageFull ? '退出全屏观看' : '全屏观看共享';
+        }
         var su = st.stageUser;
         var si = meetUserOf(su);
         var stageTile = buildMeetTile(su, si.name, si.avatar, stageStreamOf(su), su === 'self', '100%', '100%', false);
@@ -1190,6 +1217,16 @@
             };
             side.appendChild(th);
         });
+    }
+
+    // 阶段二百五十四补丁3：沉浸全屏请求归口——stageFull 且非小窗态才向父页桥请求原生
+    // 沉浸式（隐藏状态栏/导航栏+刘海扩展）；退出全屏、小窗化、宫格态、通话结束一律恢复。
+    // PC 端 window.desktop 无 callImmersive 方法自动跳过（PC 走 Fullscreen API 全屏按钮）
+    function applyImmersive() {
+        var on = !!st.stageFull && !document.body.classList.contains('mode-mini');
+        if (immersiveOn === on) return;
+        immersiveOn = on;
+        try { if (d.callImmersive) d.callImmersive(on); } catch (e) { }
     }
 
     // 成员显示信息归口（'self'=自己，其余查成员表）
@@ -2084,7 +2121,23 @@
     // 阶段一百五十一：腾讯会议同款全屏（右上角按钮 / 双击画面切换，Esc 退出）
     var btnMeetFs = $('btnMeetFs');
     if (btnMeetFs) btnMeetFs.addEventListener('click', toggleMeetFullscreen);
-    $('meetWrap').addEventListener('dblclick', toggleMeetFullscreen);
+    // 阶段二百五十四：沉浸全屏态双击=退出全屏观看（优先于系统全屏）；画廊/宫格态双击=系统全屏
+    $('meetWrap').addEventListener('dblclick', function () {
+        if (st.stageFull) {
+            st.stageFull = false;
+            renderMeetStage();
+            return;
+        }
+        toggleMeetFullscreen();
+    });
+    // 阶段二百五十四：共享舞台画廊/全屏切换（腾讯会议同款）——全屏态隐藏缩略图列，
+    // 共享画面独占整个主区域；stop 冒泡防触发 meetWrap 双击全屏等上层手势
+    var stageViewToggle = $('stageViewToggle');
+    if (stageViewToggle) stageViewToggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        st.stageFull = !st.stageFull;
+        renderMeetStage();
+    });
     // 阶段一百五十一补丁：最小化按钮（仅 PC 端显示；HTML 默认 display:none，有 desktop 能力才亮出）
     var btnMeetMin = $('btnMeetMin');
     if (btnMeetMin && window.desktop && window.desktop.callMinimize) {

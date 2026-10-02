@@ -308,6 +308,51 @@
            透明轨道，禁系统默认滚动条） */
         .meet-main { flex: 1; min-width: 0; height: 100%; position: relative; }
         .meet-stage-box { display: none; width: 100%; height: 100%; }
+        /* ===== 阶段二百五十四：画廊/全屏切换按钮（腾讯会议同款，仅共享舞台态显示） =====
+           共享画面独占全屏（隐藏缩略图列，主舞台铺满整个 .meet-main）与画廊（带缩略图列）二态切换；
+           贴主舞台右上角，半透明圆角，hover 提亮，跟随主题强调色描边；display 由 JS 按舞台态控制 */
+        .stage-view-toggle {
+            position: absolute;
+            right: 12px;
+            top: 12px;
+            z-index: 6;
+            width: 34px;
+            height: 34px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 8px;
+            color: #dfe3e8;
+            cursor: pointer;
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .stage-view-toggle:hover { background: rgba(0, 0, 0, 0.6); border-color: rgba(255, 255, 255, 0.5); }
+        .stage-view-toggle svg { width: 18px; height: 18px; display: block; }
+        /* ===== 阶段二百五十四补丁：共享桌面沉浸全屏（腾讯会议同款「全屏显示共享」） =====
+           全屏观看态不再只是隐藏缩略图列——顶栏/控制条/缩略图列全部隐藏、会议视图内边距清零，
+           共享画面独占整个通话窗视口；右上角仅保留切换按钮（变退出图标）作为唯一浮层出口，
+           双击画面同效退出。宫格/画廊态不受影响 */
+        body.stage-immersive .meet-top,
+        body.stage-immersive .cw-controls,
+        body.stage-immersive .meet-side { display: none !important; }
+        /* 关键：.meet-wrap 原 inset 底部预留 96px 给控制条 + 上下 padding 避让顶栏——
+           沉浸态控制条/顶栏已隐藏，须把 inset 与 padding 全部清零回收这部分空间，
+           否则画面下方留一条黑边（真机实测：横屏下 96px 占视口约 21%，黑边极明显） */
+        body.stage-immersive .meet-wrap { inset: 0 !important; padding: 0 !important; }
+        body.stage-immersive .stage-view-toggle {
+            background: rgba(0, 0, 0, 0.55);
+            border-color: rgba(255, 255, 255, 0.35);
+        }
+        /* 阶段二百五十四补丁2：横屏沉浸态共享画面 cover 铺满（腾讯会议全屏看共享同款）——
+           16:9 桌面在 21:9 横屏视口 contain 天然左右留黑边；cover 裁掉上下约 15% 换全屏无黑。
+           竖屏沉浸不裁（448×958 视口 cover 会裁掉桌面 3/4 宽度，不可读），保持 contain */
+        @media (orientation: landscape) {
+            body.stage-immersive .meet-stage-box .meet-tile video { object-fit: cover; }
+        }
         .meet-side {
             width: 176px;
             margin-left: 10px;
@@ -755,6 +800,8 @@
         <div class="meet-main" id="meetMain">
             <div class="meet-grid" id="meetGrid"></div>
             <div class="meet-stage-box" id="stageBox"></div>
+            <!-- 阶段二百五十四：画廊/全屏切换（腾讯会议同款，仅共享舞台态由 JS 显示） -->
+            <div class="stage-view-toggle" id="stageViewToggle" title="全屏观看共享"></div>
         </div>
         <div class="meet-side" id="meetSide"></div>
     </div>
@@ -831,6 +878,6 @@
     </div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=36"></script>
+    <script src="js/call-page.js?v=39"></script>
 </body>
 </html>

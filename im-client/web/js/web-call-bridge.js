@@ -118,16 +118,59 @@
         'max-width:none!important;max-height:none!important;transition:left .25s ease,top .25s ease;}' +
         /* 拖动中禁过渡（跟手），松手吸附/滑出恢复过渡（微信同款滑入滑出动效） */
         '.wcb-frame-mini.wcb-dragging{transition:none!important;}' +
-        '.wcb-mini-click{position:fixed;z-index:100001;user-select:none;-webkit-user-select:none;}';
+        '.wcb-mini-click{position:fixed;z-index:100001;user-select:none;-webkit-user-select:none;}' +
+        /* ===== 阶段二百五十四：手机全屏通话窗改用 CSS 视口单位（腾讯会议同款横屏铺满） =====
+           真机实测根因：iframe 尺寸原以 inline 像素在开窗一刻设定一次，Android WebView 旋转时
+           resize/orientationchange 事件不可靠（configChanges=orientation 下 WebView 不重建、事件
+           可能在 innerWidth 更新前触发），inline 像素不随旋转刷新 → 横屏后 iframe 仍是竖屏像素、
+           被视口约束成中央小窗，共享桌面缩成一片模糊（用户反馈「横屏还是没铺满」）。
+           根治：isApp 形态下 iframe 宽高恒取 100vw/100vh（视口单位，旋转即时跟随，零 JS 依赖），
+           不再写 inline 像素。特异性 (0,2,0) 高于 .wcb-frame-mini (0,1,0)，故 enterMini 须先摘
+           本类，小窗态才不被 100vw 覆盖（见 enterMini/exitMini 的 classList 切换） */
+        '.wcb-frame.app-full{width:100vw!important;height:100vh!important;' +
+        'max-width:none!important;max-height:none!important;border-radius:0!important;' +
+        'box-shadow:none!important;left:0!important;top:0!important;right:auto!important;' +
+        'transform:none!important;}';
     document.head.appendChild(css);
 
     // ===== 通话窗承载 =====
+    // 阶段二百五十四：手机全屏形态判定（原生 APP 恒全屏；浏览器窄窗同走全屏 CSS 铺满，
+    // 与 frameSize 的 isApp||innerWidth<=500 同口径）
+    function isAppFull() { return isApp || window.innerWidth <= 500; }
     function applyFrameSize(s) {
         if (!callFrame) return;
+        // 阶段二百五十四：手机全屏形态不写 inline 像素（由 .app-full 的 100vw/100vh 接管，
+        // 旋转即时跟随）；桌面弹层保留 inline 像素 + resize 监听重算
+        if (isAppFull()) return;
         callFrame.style.width = s.w + 'px';
         callFrame.style.height = s.h + 'px';
         syncDragBar(); // 尺寸变化后拖动把手跟随（复用窗口切换形态场景）
     }
+
+    // ===== 阶段二百五十四：旋转/视口变化跟随（腾讯会议同款横屏看共享桌面） =====
+    // 真机实测根因：通话 iframe 尺寸仅在开窗时按当时视口设定一次，无任何 resize 监听——
+    // 系统自动旋转开启时 Activity 正常横屏（Manifest 未锁向，dumpsys 实证），但 iframe
+    // 仍是竖屏像素，被 max-width/max-height 约束成横屏中央一块小窗，共享桌面缩成一片
+    // 模糊（用户反馈「自动旋转试了还是不行」）。监听 resize/orientationchange 重算：
+    // 手机全屏形态自动取新视口满屏（横屏 958 宽 >500 触发 call-window 舞台布局——
+    // 主舞台大区域+右侧缩略图列，与腾讯会议横屏同款），桌面弹层同步按新视口收敛；
+    // 小窗态是用户手动定位的悬浮条，跳过重算
+    function refitFrameOnResize() {
+        if (!callFrame || miniOn || !curLoad) return;
+        // 阶段二百五十四：手机全屏形态由 .app-full 的 100vw/100vh 自动跟随旋转，无需 JS 重算；
+        // 桌面窗口跨 500px 阈值缩放时同步切换铺满类并清/重算 inline 像素（开窗后窗口变化场景）
+        if (isAppFull()) {
+            callFrame.classList.add('app-full');
+            callFrame.style.width = '';
+            callFrame.style.height = '';
+        } else {
+            callFrame.classList.remove('app-full');
+            applyFrameSize(frameSize(curLoad.call_type === 'video', !!curLoad.meet));
+        }
+    }
+    window.addEventListener('resize', refitFrameOnResize);
+    // orientationchange 触发时视口尺寸可能未更新（Android WebView 实测早于 resize），延时兜底
+    window.addEventListener('orientationchange', function () { setTimeout(refitFrameOnResize, 300); });
 
     // ===== 阶段一百四十五：通话窗拖动（把手覆盖 iframe 顶部 36px 拖动区） =====
     var dragBar = null; // 拖动把手 DOM（iframe 兄弟层，事件归父页处理）
@@ -207,17 +250,16 @@
         callFrame = document.createElement('iframe');
         callFrame.className = 'wcb-frame';
         // 阶段一百九十八：手机端全屏形态去圆角阴影（微信手机版通话全屏页观感）；拖动把手无意义跳过
-        if (isApp || window.innerWidth <= 500) {
-            callFrame.style.borderRadius = '0';
-            callFrame.style.boxShadow = 'none';
-            callFrame.style.maxWidth = 'none';
-            callFrame.style.maxHeight = 'none';
+        // 阶段二百五十四：手机全屏形态改挂 .app-full 类（100vw/100vh 视口单位，旋转即时跟随，
+        // 类内已含去圆角/阴影/max 约束）；桌面宽窗保留 .wcb-frame 基础弹层样式（圆角阴影+inline 像素）
+        if (isAppFull()) {
+            callFrame.classList.add('app-full');
         }
         // iframe 权限策略：媒体设备 + 共享屏幕（同源默认 self，显式声明稳妥）
         // 阶段一百五十一：fullscreen 授权——会议窗全屏按钮（Fullscreen API 在 iframe 内需显式 allow）
         callFrame.allow = 'microphone; camera; display-capture; fullscreen';
         // 阶段一百五十一补丁：HTML 带版本号查询串防 HTTP 缓存（页面内 CSS/JS 改动浏览器端立即生效）
-        callFrame.src = 'call-window.html?v=1533';
+        callFrame.src = 'call-window.html?v=1536';
         // 任务投递采用握手制：等 iframe 内 call-page.js 就绪主动上报 page:ready（见 message 监听），
         // 不用 load 事件——动态 iframe 的 about:blank 阶段也可能触发一次 load，会误耗 pendingLoad 丢任务
         document.body.appendChild(callFrame);
@@ -234,6 +276,12 @@
         frameReady = false;
         pendingLoad = null;
         sigQueue = [];
+        // 阶段二百五十四补丁3：兜底恢复原生沉浸态——iframe 销毁前可能来不及上报退出全屏，
+        // 否则状态栏/导航栏残留隐藏影响后续界面（幂等，仅 APP 端有原生能力）
+        try {
+            var bgpImc = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+            if (bgpImc && bgpImc.setImmersive) bgpImc.setImmersive({ on: false });
+        } catch (e) { }
         if (cbClosed) cbClosed(); // chat.js 清本端通话态（callOpenId=''）
     }
 
@@ -252,6 +300,9 @@
         if (!callFrame || miniOn) return;
         miniOn = true;
         miniDock = null;
+        // 阶段二百五十四：.app-full(0,2,0) 特异性高于 .wcb-frame-mini(0,1,0)，进小窗前必须摘除，
+        // 否则 100vw/100vh 压制小窗 122×218 尺寸（全屏铺满态与小窗态互斥）
+        callFrame.classList.remove('app-full');
         // 定位全走 inline（类不参与定位，规避 !important 压制）：初始挂右上角避开状态栏
         callFrame.style.right = 'auto';
         callFrame.style.transform = 'none';
@@ -284,7 +335,10 @@
             callFrame.style.top = '';
             callFrame.style.transform = '';
             callFrame.style.right = '';
-            applyFrameSize(curLoad ? frameSize(curLoad.call_type === 'video', !!curLoad.meet) : { w: 360, h: 560 });
+            // 阶段二百五十四：手机全屏形态恢复 .app-full（100vw/100vh 铺满，旋转跟随）；
+            // 桌面弹层走 inline 像素重算
+            if (isAppFull()) callFrame.classList.add('app-full');
+            else applyFrameSize(curLoad ? frameSize(curLoad.call_type === 'video', !!curLoad.meet) : { w: 360, h: 560 });
             postToFrame({ src: 'web-call-bridge', t: 'call:mini', on: false }); // iframe 存活即通知（互切复位小窗布局）
             if (!silent && !isApp && window.innerWidth > 500) ensureDragBar(); // 桌面浏览器恢复拖动把手
         }
@@ -603,6 +657,14 @@
             closeCallFrame();
         } else if (m.t === 'call:minimize') {
             enterMini(); // 通话页缩小钮上报：切悬浮小窗（微信同款）
+        } else if (m.t === 'call:immersive') {
+            // 阶段二百五十四补丁3：共享桌面沉浸全屏（腾讯会议同款）——iframe 拿不到 Capacitor
+            // 桥，经父页转发原生 setImmersive：隐藏状态栏/导航栏 + 内容扩展进刘海安全区
+            // （真机实测横屏刘海侧一条黑边即未扩展所致）。仅 APP 端有原生能力，浏览器静默跳过
+            try {
+                var bgpIm = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+                if (bgpIm && bgpIm.setImmersive) bgpIm.setImmersive({ on: !!m.on });
+            } catch (e) { }
         } else if (m.t === 'meet:invite-ask') {
             if (cbMeetInviteAsk) cbMeetInviteAsk(m.data);
         }

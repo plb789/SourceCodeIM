@@ -330,6 +330,62 @@ public class BackgroundIMPlugin extends Plugin {
         call.resolve();
     }
 
+    /** 阶段二百五十四补丁3：共享桌面沉浸全屏（腾讯会议同款）——on=true 隐藏系统状态栏/
+     * 导航栏并把内容扩展进刘海安全区（真机实测：横屏刘海侧留一条黑边即未扩展所致），
+     * on=false 恢复。通话窗 iframe 拿不到 Capacitor 桥，由主文档 web-call-bridge 转发。
+     * API 30+ 走 WindowInsetsController（粘性沉浸，滑动短暂浮现后自动收回）；
+     * 旧版本回退 systemUiVisibility 同款标志 */
+    @PluginMethod
+    public void setImmersive(PluginCall call) {
+        final boolean on = call.getBoolean("on", false);
+        final Activity act = bridge.getActivity();
+        if (act != null) {
+            act.runOnUiThread(() -> {
+                try { applyImmersive(act, on); } catch (Exception ignored) { }
+            });
+        }
+        call.resolve();
+    }
+
+    private static void applyImmersive(Activity act, boolean on) {
+        android.view.Window w = act.getWindow();
+        android.view.WindowManager.LayoutParams lp = w.getAttributes();
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode = on
+                    ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController ic = w.getInsetsController();
+            if (ic != null) {
+                if (on) {
+                    ic.hide(android.view.WindowInsets.Type.systemBars());
+                    ic.setSystemBarsBehavior(android.view.WindowInsetsController
+                            .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                } else {
+                    ic.show(android.view.WindowInsets.Type.systemBars());
+                }
+            }
+        } else {
+            //noinspection deprecation
+            w.getDecorView().setSystemUiVisibility(on
+                    //noinspection deprecation
+                    ? (android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    //noinspection deprecation
+                    | android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    //noinspection deprecation
+                    | android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                    //noinspection deprecation
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    //noinspection deprecation
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    //noinspection deprecation
+                    | android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
+                    : 0);
+        }
+        w.setAttributes(lp);
+    }
+
     // ===== 阶段二百二十六：保活引导（学微信：设置页引导用户开系统权限） =====
     // 微信也无法自动获得"自启动/后台运行/无限制省电"，靠的是引导用户手动开 + 厂商系统级推送兜底；
     // 唯一可编程弹窗申请的是 Google 官方电池优化豁免（Doze 白名单，IM 消息类应用合规使用场景），
