@@ -2,9 +2,11 @@ package com.gengyang.im;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -54,6 +56,9 @@ public class BackgroundIMPlugin extends Plugin {
     // （同进程静态直达，插件实例与服务同主进程）；volatile 保多线程可见（生命周期回调
     // 在主线程，服务 WS 回调在 OkHttp 线程）
     private static volatile int resumedCount = 0;
+    // 阶段二百四十八：插件实例静态钩子——KeepAliveService 收到通话取消/超时帧时经此
+    // notifyListeners 转发页面（页面被锁屏冻结时事件排队，解锁后送达，清残留响铃条）
+    private static volatile BackgroundIMPlugin instance;
     private final Handler main = new Handler(Looper.getMainLooper());
     private Runnable pendingTakeover;
     private boolean lifecycleRegistered = false;
@@ -63,10 +68,43 @@ public class BackgroundIMPlugin extends Plugin {
         return resumedCount > 0;
     }
 
+    /**
+     * 阶段二百四十八：原生侧通话信令事件转发页面（服务静音调用，插件实例可能未加载则忽略）。
+     * 页面锁屏冻结期间事件由桥排队，解锁恢复后送达——chat.js 监听 bgCallSignal 清残留响铃条
+     */
+    public static void notifyCallSignal(String action, String callId) {
+        BackgroundIMPlugin p = instance;
+        if (p == null) return;
+        JSObject d = new JSObject();
+        d.put("action", action == null ? "" : action);
+        d.put("call_id", callId == null ? "" : callId);
+        try {
+            p.notifyListeners("bgCallSignal", d);
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     public void load() {
+        instance = this;
         if (lifecycleRegistered) return;
         lifecycleRegistered = true;
+        // 阶段二百四十八：解锁广播转发页面——锁屏期页面 connect 门禁跳过的重连，在用户解锁
+        // 后由本事件驱动重入（FSI 拉起的页面停在锁屏后时 visibilityState 可能不再变化，
+        // 无本事件页面解锁后无人重连，卡在冻结的等待画面）
+        try {
+            Context appCtx = bridge.getContext().getApplicationContext();
+            appCtx.registerReceiver(new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    try {
+                        BackgroundIMPlugin.this.notifyListeners("bgUnlock", new JSObject());
+                    } catch (Exception ignored) {
+                    }
+                }
+            }, new IntentFilter(Intent.ACTION_USER_PRESENT));
+        } catch (Exception ignored) {
+        }
         Context app = bridge.getContext().getApplicationContext();
         ((Application) app).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
             @Override
@@ -231,6 +269,28 @@ public class BackgroundIMPlugin extends Plugin {
     public void handBack(PluginCall call) {
         sendAction(KeepAliveService.ACTION_HANDBACK);
         call.resolve();
+    }
+
+    /**
+     * 阶段二百四十八：锁屏状态查询——FSI 全屏意图会把页面在锁屏后面拉起（onNewIntent/
+     * onResume 触发 visibilitychange），此时 WebView 随时被系统冻结：页面若在此刻抢线
+     * 重连（服务端互踢顶掉原生连接），后续 cancel/超时帧无人处理（响铃不止/画面残留/
+     * 二次来电误回 busy 拒绝），且页内 WebAudio 响铃无声（原生铃声已被 handBack 停掉，
+     * 即「响半下就停」）。connect 门禁据此在锁屏中拒绝页面抢线，保持连接归原生服务。
+     */
+    @PluginMethod
+    public void isKeyguardLocked(PluginCall call) {
+        boolean locked;
+        try {
+            android.app.KeyguardManager km = (android.app.KeyguardManager)
+                    bridge.getContext().getApplicationContext().getSystemService(Context.KEYGUARD_SERVICE);
+            locked = km != null && km.isKeyguardLocked();
+        } catch (Exception e) {
+            locked = false;
+        }
+        JSObject r = new JSObject();
+        r.put("locked", locked);
+        call.resolve(r);
     }
 
     // ===== 阶段二百二十六：保活引导（学微信：设置页引导用户开系统权限） =====

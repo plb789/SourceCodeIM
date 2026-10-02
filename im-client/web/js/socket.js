@@ -276,7 +276,26 @@
         QR_SIGN: 97              // 阶段二百四十：扫码登录确认信令（上行 {action:"scan"/"confirm"/"cancel", qr_id}；下行同类型回执 {action, ok, reason?, platform?}）
     };
 
+    // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/
+    // resume/visibilitychange 触发"回前台"交接流程），此刻 WebView 随时被系统冻结：页面若
+    // 抢线重连（服务端互踢顶掉原生连接），后续 cancel/超时帧无人处理（原生铃声被 handBack
+    // 停掉后页内 WebAudio 又无声=「响半下就停」、等待画面残留、二次来电误回 busy 拒绝）。
+    // 锁屏中拒绝建连（连接保持归原生服务），解锁后经 bgUnlock 事件重入（bgUnlock 监听见下）
     function connect(username, password) {
+        var bgp = nativeBG ? bgPlugin() : null;
+        if (bgp && bgp.isKeyguardLocked && loginOk && currentUsername) {
+            try {
+                bgp.isKeyguardLocked().then(function (res) {
+                    if (res && res.locked) return; // 锁屏中：不抢线，解锁后 bgUnlock/重入补偿
+                    doConnect(username, password);
+                }).catch(function () { doConnect(username, password); });
+                return;
+            } catch (e) { /* 桥异常走同步直连 */ }
+        }
+        doConnect(username, password);
+    }
+
+    function doConnect(username, password) {
         currentUsername = username;
         // 登录失败提示修复：记录本次连接使用的密码，登录成功后断线自动重连需携带真实密码
         // 原实现：window._lastPassword 从未被赋真实值（恒为空字符串），断线重连用空密码登录必然失败
@@ -531,6 +550,17 @@
             });
             window.Capacitor.Plugins.App.addListener('resume', function () {
                 if (loginOk) bgEndHandover();
+            });
+        } catch (e) {}
+    }
+    // 阶段二百四十八：解锁重入——FSI 拉起的页面停在锁屏后时，visibilityState 可能保持
+    // 'visible' 不再变化（门禁跳过的重连无人重推），用户解锁后由原生 USER_PRESENT 广播
+    // 经插件事件驱动重入交接（重连登录 → 互踢顶掉原生 → handBack，页面接管）
+    if (nativeBG && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM
+            && window.Capacitor.Plugins.BackgroundIM.addListener) {
+        try {
+            window.Capacitor.Plugins.BackgroundIM.addListener('bgUnlock', function () {
+                if (loginOk && !connected) bgEndHandover();
             });
         } catch (e) {}
     }

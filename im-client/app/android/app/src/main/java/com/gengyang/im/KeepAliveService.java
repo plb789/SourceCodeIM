@@ -511,6 +511,8 @@ public class KeepAliveService extends Service {
                 try {
                     JSONObject info = new JSONObject(m.optString("content", "{}"));
                     String sigAction = info.optString("action");
+                    android.util.Log.d("BGIM", "call sig action=" + sigAction + " call_id=" + info.optString("call_id", "")
+                            + " ringing=" + ringingCallId);
                     if ("invite".equals(sigAction) || "meet_invite".equals(sigAction)) {
                         showCallInvite(m, info, sigAction);
                     } else if (ringingCallId != null && ringingCallId.equals(info.optString("call_id", ""))
@@ -519,6 +521,10 @@ public class KeepAliveService extends Service {
                         // 对方取消/他端已接/超时/异常：撤下来电通知（本端未点开过则响铃只留在通知层）
                         ringingCallId = null;
                         stopRingtone(); // 停息屏原生循环响铃
+                        // 阶段二百四十八：转发页面清残留响铃条——连接归原生期间页面深链拉出的
+                        // 等待画面收不到 WS cancel（页面可能已被锁屏冻结），经插件事件补送
+                        // （页面冻结时事件排队，解锁恢复后送达）
+                        BackgroundIMPlugin.notifyCallSignal(sigAction, info.optString("call_id", ""));
                         NotificationManager nmCall = getSystemService(NotificationManager.class);
                         if (nmCall != null) nmCall.cancel(CALL_NOTIFY_ID);
                     }
@@ -755,6 +761,7 @@ public class KeepAliveService extends Service {
      */
     private synchronized void startCallRing() {
         if (ringPlayer != null) return; // 已在响铃（连续来电不重复起播）
+        android.util.Log.d("BGIM", "startCallRing screen-off native ring begin");
         try {
             MediaPlayer mp = new MediaPlayer();
             mp.setAudioAttributes(new AudioAttributes.Builder()
@@ -799,6 +806,8 @@ public class KeepAliveService extends Service {
 
     /** 停止息屏原生响铃与振动（幂等，多来源并发调用安全） */
     private synchronized void stopRingtone() {
+        android.util.Log.d("BGIM", "stopRingtone player=" + (ringPlayer != null) + " vibrator=" + (ringVibrator != null)
+                + new Throwable("trace").fillInStackTrace());
         main.removeCallbacks(ringStopTask);
         if (ringPlayer != null) {
             MediaPlayer mp = ringPlayer;

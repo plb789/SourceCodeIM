@@ -613,11 +613,20 @@
                 try { q[kv.slice(0, eq)] = decodeURIComponent(kv.slice(eq + 1) || ''); } catch (e2) {}
             });
             if (!q.call_id || !q.from) return;
-            // 本端忙（通话中/已有来电）：自动拒接（与前台 invite 分支同语义，服务端忙判已拦双保险）
+            // 本端忙（通话中/已有来电）：自动拒接（与前台 invite 分支同语义，服务端忙判已拦双保险）。
+            // 阶段二百四十八：仅页面真实持有连接（IMSocket.isConnected）才回 busy 拒绝——
+            // 锁屏冻结期残留的 callOpenId/pendingRing（cancel 帧归原生处理、页面未及清理）
+            // 若仍盲目回拒，会让第二次来电被"被叫拒绝"误伤；此时清残留态并接听新来电
             if (callOpenId || pendingRing) {
-                callSignalSend(q.meet ? '' : q.from,
-                        { action: q.meet ? 'meet_decline' : 'reject', call_id: q.call_id, reason: 'busy' });
-                return;
+                if (IMSocket.isConnected()) {
+                    callSignalSend(q.meet ? '' : q.from,
+                            { action: q.meet ? 'meet_decline' : 'reject', call_id: q.call_id, reason: 'busy' });
+                    return;
+                }
+                // 连接不在页面（交接冻结期）：清残留来电态后继续展示本次来电
+                pendingRing = null;
+                if (callOpenId && !IMSocket.isConnected()) callOpenId = null;
+                try { if (window.desktop.callRingHide) window.desktop.callRingHide(); } catch (e9) {}
             }
             var ice = [];
             if (q.ice) { try { ice = JSON.parse(q.ice) || []; } catch (e3) { ice = []; } }
@@ -643,6 +652,22 @@
             capApp.addListener('appUrlOpen', function (data) { handleUrl(data && data.url); });
             if (capApp.getLaunchUrl) {
                 capApp.getLaunchUrl().then(function (data) { if (data && data.url) handleUrl(data.url); }).catch(function () {});
+            }
+        } catch (e) {}
+        // 阶段二百四十八：原生侧通话结信令转发——连接归原生的息屏来电，cancel/超时帧由
+        // KeepAliveService 处理后经插件事件补送页面（页面锁屏冻结时事件排队，解锁送达），
+        // 清掉深链拉出的残留等待画面（否则解锁后仍显示"等待接听"直到 60s 超时）
+        try {
+            var bgIMCall = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+            if (bgIMCall && bgIMCall.addListener) {
+                bgIMCall.addListener('bgCallSignal', function (d) {
+                    if (!d || !d.call_id) return;
+                    if (pendingRing && pendingRing.call_id === d.call_id
+                            && (d.action === 'cancel' || d.action === 'dismiss'
+                                || d.action === 'timeout' || d.action === 'error')) {
+                        callClearRing();
+                    }
+                });
             }
         } catch (e) {}
         IMSocket.on(IMSocket.MSG.LOGIN_RESP, function (msg) {
