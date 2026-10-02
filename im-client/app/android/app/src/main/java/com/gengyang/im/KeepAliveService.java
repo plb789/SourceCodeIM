@@ -10,6 +10,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 // 阶段二百三十七：来电邀请全屏意图通知（渠道铃声属性 + 全屏意图权限查询）
 import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
@@ -17,6 +18,8 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
@@ -82,6 +85,14 @@ public class KeepAliveService extends Service {
     private static final int MSG_ID_BASE = 10000;
     // 阶段二百三十七：当前响铃中的通话邀请 call_id——后续 cancel/dismiss/timeout 等帧据此撤通知
     private volatile String ringingCallId;
+    // 阶段二百四十七：息屏来电原生响铃（微信同款循环铃声+振动）。根因：悬浮窗已授权时来电
+    // 走一级路径直接 startActivity 不落通知（渠道铃声从未播放），且息屏时 WebView 冻结、
+    // 页内 WebAudio 响铃不可用 → 息屏整程静音。改由原生循环播放+振动，接听/挂断/取消/
+    // 超时/交还即停。CH_CALL_QUIET 为息屏专用静音渠道（铃声原生播，避免渠道铃声叠加双响）
+    private static final String CH_CALL_QUIET = "im_calls_native";
+    private MediaPlayer ringPlayer;
+    private Vibrator ringVibrator;
+    private final Runnable ringStopTask = this::stopRingtone;
     // 阶段二百三十八：运行实例静态桥（通知挂断钮广播直达信令用，onCreate/onDestroy 对称维护）
     private static volatile KeepAliveService self;
     // 凭据存储名（插件层 startKeepAlive 写入、本服务 loadCreds 读取，公共常量）
@@ -180,6 +191,7 @@ public class KeepAliveService extends Service {
             // 阶段二百三十七：交还前台时撤下来电通知——前台响铃画面由 WebView 经深链路由展示，
             // 通知残留会与页内响铃条重复；后续信令（cancel/超时）归口 WebView 处理
             ringingCallId = null;
+            stopRingtone(); // 页内响铃条接管响铃，停原生循环铃声（阶段二百四十七）
             NotificationManager nmHandback = getSystemService(NotificationManager.class);
             if (nmHandback != null) nmHandback.cancel(CALL_NOTIFY_ID);
             teardown();
@@ -196,6 +208,7 @@ public class KeepAliveService extends Service {
     public void onDestroy() {
         stopped = true;
         if (self == this) self = null; // 阶段二百三十八：静态桥对称注销
+        stopRingtone(); // 服务销毁停原生响铃（阶段二百四十七）
         main.removeCallbacksAndMessages(null);
         teardown();
         super.onDestroy();
@@ -505,6 +518,7 @@ public class KeepAliveService extends Service {
                                 || "timeout".equals(sigAction) || "error".equals(sigAction))) {
                         // 对方取消/他端已接/超时/异常：撤下来电通知（本端未点开过则响铃只留在通知层）
                         ringingCallId = null;
+                        stopRingtone(); // 停息屏原生循环响铃
                         NotificationManager nmCall = getSystemService(NotificationManager.class);
                         if (nmCall != null) nmCall.cancel(CALL_NOTIFY_ID);
                     }
@@ -674,8 +688,12 @@ public class KeepAliveService extends Service {
 
         ringingCallId = callId;
 
-        // 一级：悬浮窗已授权 → 直接拉起（后台启动豁免），不落通知
-        if (Settings.canDrawOverlays(this)) {
+        // 一级：亮屏 + 悬浮窗已授权 → 直接拉起（后台启动豁免），不落通知（页内 WebAudio 响铃）。
+        // 阶段二百四十七：息屏不再走本路径——息屏时 WebView 冻结页内响铃不可用，且深链拉起
+        // 不会点亮屏幕；改走全屏意图通知（系统自动亮屏）+ 原生循环响铃（微信同款）
+        PowerManager pmScreen = (PowerManager) getSystemService(POWER_SERVICE);
+        boolean screenOn = pmScreen != null && pmScreen.isInteractive();
+        if (screenOn && Settings.canDrawOverlays(this)) {
             try {
                 startActivity(i);
             } catch (Exception ignored) {
@@ -686,11 +704,14 @@ public class KeepAliveService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         String body = meet ? "邀请你加入会议" : ("邀请你" + ("video".equals(type) ? "视频通话" : "语音通话"));
+        // 息屏走静音渠道（铃声由原生循环播放，防渠道铃声叠加双响）；亮屏无悬浮窗保持渠道铃声
+        String channel = screenOn ? CH_CALL : CH_CALL_QUIET;
         try {
-            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null));
+            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null, channel));
         } catch (Exception ignored) {
         }
-        fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject);
+        fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject, channel);
+        if (!screenOn) startCallRing(); // 息屏：原生循环铃声+振动（微信同款），接听/挂断/超时即停
     }
 
     // 微信同款来电通知：整卡交由系统渲染（统一系统背景，无白边）。
@@ -698,8 +719,8 @@ public class KeepAliveService extends Service {
     // （Android 12+ heads-up 为动态取色浅色底），黑卡浮在浅色底上出现白色边框部分；
     // CallStyle 来电模板（大圆头像 + 主叫名 + 副标题 + 系统红/绿挂断接听按钮）即微信效果。
     private Notification buildCallCard(String name, String body, PendingIntent pi, PendingIntent piAccept,
-                                       PendingIntent piReject, Bitmap avatar) {
-        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CH_CALL)
+                                       PendingIntent piReject, Bitmap avatar, String channel) {
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, channel)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentText(body) // CallStyle 模板副标题（「邀请你视频通话/语音通话」）
                 .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -727,12 +748,87 @@ public class KeepAliveService extends Service {
     }
 
     /**
+     * 阶段二百四十七：息屏来电原生循环响铃（微信同款）。息屏时 WebView 冻结、页内 WebAudio
+     * 响铃不可用，且悬浮窗一级路径不落通知（渠道铃声从未播放）→ 息屏整程静音。改由原生
+     * MediaPlayer 循环播放系统来电铃声（铃声音量流，息屏/后台可播）+ Vibrator 循环振动，
+     * 接听交还/挂断广播/取消超时帧/兜底计时归口 stopRingtone 停止。
+     */
+    private synchronized void startCallRing() {
+        if (ringPlayer != null) return; // 已在响铃（连续来电不重复起播）
+        try {
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
+            mp.setDataSource(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE));
+            mp.setLooping(true);
+            mp.setOnErrorListener((p, what, extra) -> {
+                stopRingtone();
+                return true;
+            });
+            mp.prepare(); // 本地系统铃声，同步 prepare 即可（WS 线程调用，无 UI 阻塞）
+            mp.start();
+            ringPlayer = mp;
+        } catch (Exception e) {
+            if (ringPlayer != null) {
+                try {
+                    ringPlayer.release();
+                } catch (Exception ignored) {
+                }
+                ringPlayer = null;
+            }
+        }
+        // 循环振动（振 600ms 停 500ms 三连后从头循环，与通知渠道振动同参数）
+        try {
+            Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            long[] pattern = new long[]{0, 600, 500, 600, 500, 600};
+            if (v != null && v.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= 26) {
+                    v.vibrate(VibrationEffect.createWaveform(pattern, 0));
+                } else {
+                    v.vibrate(pattern, 0);
+                }
+                ringVibrator = v;
+            }
+        } catch (Exception ignored) {
+        }
+        // 65s 兜底自停（正常由服务端 60s 超时帧/信令归口提前停，防连接异常时无限响铃耗电）
+        main.postDelayed(ringStopTask, 65_000L);
+    }
+
+    /** 停止息屏原生响铃与振动（幂等，多来源并发调用安全） */
+    private synchronized void stopRingtone() {
+        main.removeCallbacks(ringStopTask);
+        if (ringPlayer != null) {
+            MediaPlayer mp = ringPlayer;
+            ringPlayer = null;
+            try {
+                mp.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                mp.release();
+            } catch (Exception ignored) {
+            }
+        }
+        if (ringVibrator != null) {
+            try {
+                ringVibrator.cancel();
+            } catch (Exception ignored) {
+            }
+            ringVibrator = null;
+        }
+    }
+
+    /**
      * 阶段二百三十八：来电卡片头像异步装载——通知先以默认图标弹出（响铃零延迟），
      * 好友头像（好友列表帧 22 携带的 /static/avatar/ 相对路径）HTTP 拉取后圆形裁剪回填
      * 同一通知 id；拉取完成时响铃已结束（call_id 不匹配）则放弃回填，防旧头像顶替新来电
      */
     private void fetchAvatarAsync(String from, String callId, String name, String body,
-                                  PendingIntent pi, PendingIntent piAccept, PendingIntent piReject) {
+                                  PendingIntent pi, PendingIntent piAccept, PendingIntent piReject,
+                                  String channel) {
         String path = friendAvatars.get(from);
         if (path == null || path.isEmpty()) return;
         String full = avatarFullUrl(path);
@@ -762,7 +858,7 @@ public class KeepAliveService extends Service {
                         if (nm == null) return;
                         try {
                             nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject,
-                                    circleBitmap(bmp)));
+                                    circleBitmap(bmp), channel));
                         } catch (Exception ignored) {
                         }
                     }
@@ -831,6 +927,7 @@ public class KeepAliveService extends Service {
         KeepAliveService s = self;
         if (s != null && (callId == null || callId.equals(s.ringingCallId))) {
             s.ringingCallId = null;
+            s.stopRingtone(); // 挂断即停息屏原生循环响铃（阶段二百四十七）
         }
     }
 
@@ -891,6 +988,14 @@ public class KeepAliveService extends Service {
         call.enableVibration(true);
         call.setVibrationPattern(new long[]{0, 600, 500, 600, 500, 600});
         nm.createNotificationChannel(call);
+        // 阶段二百四十七：息屏来电专用静音渠道——铃声/振动改由应用原生循环播放（微信同款，
+        // 渠道铃声只响一次且悬浮窗一级路径下从不播放），渠道自身静音避免与原生铃声叠加双响；
+        // IMPORTANCE_HIGH 保持全屏意图（熄屏自动亮屏拉起）可用
+        NotificationChannel callQuiet = new NotificationChannel(CH_CALL_QUIET, "来电铃声", NotificationManager.IMPORTANCE_HIGH);
+        callQuiet.setDescription("收到语音/视频通话邀请时由应用循环响铃（支持息屏响铃）");
+        callQuiet.setSound(null, null);
+        callQuiet.enableVibration(false);
+        nm.createNotificationChannel(callQuiet);
     }
 
     // ===== 显示名与摘要 =====

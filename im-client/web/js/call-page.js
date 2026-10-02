@@ -87,7 +87,12 @@
         //   lastRestartOffer, lastRestartAnswer, lost, restartTimer, restartFirstTimer, giveupTimer}
         // （Mesh 每成员一条连接；asOfferer/restart 系列为一百四十八成员级断网恢复状态，
         //   lost=连接中断 UI 标记，giveupTimer=60s 放弃阈值兜底）
-        members: {}
+        members: {},
+        // 阶段二百五十：首协商竞态缓冲（offer/candidate 早于 room_info 到达时按发送者缓存整帧，
+        // room_info 就绪后重放）。必须在 st 字面量初始化——resetState 仅同窗换场时执行，
+        // 首场会议不走 resetState，漏初始化会在写缓冲时 TypeError
+        pendingMeetOffers: {},
+        pendingMeetCands: {}
     };
     var timerId = null;      // 通话时长计时器
     var watchdogId = null;   // 看门狗（协商超时/断网收口）
