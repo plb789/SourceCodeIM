@@ -414,7 +414,9 @@
         if (isApp) {
             try {
                 var bgp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
-                if (bgp && bgp.ensureCallRing) bgp.ensureCallRing();
+                // 阶段二百五十三：携带 call_id——原生据此区分「页面侧新来电接管响铃」与
+                // 「已终结来电的残留响铃条幽灵续响」（后者阻断，防「主叫挂断被叫一直响」）
+                if (bgp && bgp.ensureCallRing) bgp.ensureCallRing({ call_id: (ringCur && ringCur.call_id) || '' });
             } catch (e) { }
             return;
         }

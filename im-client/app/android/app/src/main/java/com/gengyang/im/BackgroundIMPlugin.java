@@ -299,7 +299,7 @@ public class BackgroundIMPlugin extends Plugin {
     @PluginMethod
     public void ensureCallRing(PluginCall call) {
         try {
-            KeepAliveService.ensureRingtone();
+            KeepAliveService.ensureRingtone(call == null ? "" : call.getString("call_id", ""));
         } catch (Exception ignored) {
         }
         call.resolve();

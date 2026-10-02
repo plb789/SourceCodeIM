@@ -21348,11 +21348,14 @@
             // 原实现落「忙态自动拒接」，把本端正在响的同一次来电当成第二次呼叫回 reject，
             // 主叫端误显「对方已拒绝」（真机复测）；不同 call_id 的真并发忙态仍自动拒接
             if (pendingRing && pendingRing.call_id === p.call_id) return;
-            // 本端忙（通话中/会议中/已有来电）：自动拒绝（服务端忙判已拦，双保险）
-            if (callOpenId || pendingRing) {
+            // 真在通话中（通话窗打开）才拒；仅「来电未接」态不拒——后台冻结期间旧来电的
+            // cancel 可能丢失致 pendingRing 残留，主叫挂断再拨（新 call_id）会被误判忙态
+            // 自动拒接（真机复测「再次拨打提示对方拒绝」）。微信同款：新来电顶替残留旧来电
+            if (callOpenId) {
                 callSignalSend('', { action: 'meet_decline', call_id: p.call_id });
                 return;
             }
+            if (pendingRing) callClearRing();
             pendingRing = {
                 call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio',
                 meet: true, group_id: p.group_id || 0,
@@ -21376,11 +21379,14 @@
             // 原实现落「忙态自动拒接」，把本端正在响的同一次来电当成第二次呼叫回 reject，
             // 主叫端误显「对方已拒绝」（真机复测）；不同 call_id 的真并发忙态仍自动拒接
             if (pendingRing && pendingRing.call_id === p.call_id) return;
-            // 本端忙（通话中/已有来电）：自动拒接（服务端忙判已拦，双保险）
-            if (callOpenId || pendingRing) {
+            // 真在通话中（通话窗打开）才拒；仅「来电未接」态不拒——后台冻结期间旧来电的
+            // cancel 可能丢失致 pendingRing 残留，主叫挂断再拨（新 call_id）会被误判忙态
+            // 自动拒接（真机复测「再次拨打提示对方拒绝」）。微信同款：新来电顶替残留旧来电
+            if (callOpenId) {
                 callSignalSend(msg.from_user, { action: 'reject', call_id: p.call_id, reason: 'busy' });
                 return;
             }
+            if (pendingRing) callClearRing();
             pendingRing = {
                 call_id: p.call_id, from: msg.from_user, call_type: p.call_type === 'video' ? 'video' : 'audio',
                 ice: Array.isArray(p.ice) ? p.ice : [] // 服务端注入的 ICE 配置（TURN 启用时下发，二期）
