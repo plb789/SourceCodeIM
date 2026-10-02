@@ -293,6 +293,41 @@ public class BackgroundIMPlugin extends Plugin {
         call.resolve(r);
     }
 
+    /** 阶段二百五十：页面来电 UI 拉起时补起/续响原生系统铃声（幂等）——APP 端来电铃声
+     * 统一归口原生（息屏原生循环响铃无缝续响、亮屏前台补起系统铃），页面不再 WebAudio
+     * 合成音，消除"解锁进 APP 铃声突变"的音色跳变（微信全程同一种铃声） */
+    @PluginMethod
+    public void ensureCallRing(PluginCall call) {
+        try {
+            KeepAliveService.ensureRingtone();
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
+    /** 阶段二百五十：页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等） */
+    @PluginMethod
+    public void stopCallRing(PluginCall call) {
+        try {
+            KeepAliveService.stopRingtoneStatic();
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
+    /** 阶段二百五十一：桌面图标未读角标（微信同款 +99）——页面会话未读总数经此更新
+     * 厂商桌面角标（vivo/华为/荣耀/三星等，无角标能力桌面静默忽略）；登录/回前台校准、
+     * 后台期间由服务收消息累加 */
+    @PluginMethod
+    public void setBadgeCount(PluginCall call) {
+        int c = call.getInt("count", 0);
+        try {
+            BadgeHelper.apply(bridge.getContext().getApplicationContext(), c);
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
     // ===== 阶段二百二十六：保活引导（学微信：设置页引导用户开系统权限） =====
     // 微信也无法自动获得"自启动/后台运行/无限制省电"，靠的是引导用户手动开 + 厂商系统级推送兜底；
     // 唯一可编程弹窗申请的是 Google 官方电池优化豁免（Doze 白名单，IM 消息类应用合规使用场景），
@@ -441,6 +476,76 @@ public class BackgroundIMPlugin extends Plugin {
             }
         }
         call.resolve();
+    }
+
+    /** 阶段二百五十三/二百五十四：后台白名单引导——国产 ROM 均有私有后台限制，"电池优化豁免"
+     *  （Doze 白名单）对其无效，必须引导用户开各自的白名单开关，否则切后台掉线：
+     *   · vivo/iQOO：cgroup 整进程冻结（本机实测应用已在 deviceidle 白名单仍 freeze=1，
+     *     切后台 20s 心跳停 → CDN 空闲掐连接 → 掉线）→ 电池"后台耗电管理 → 允许后台高耗电"；
+     *   · 小米/红米：省电策略"限制后台活动" → 应用省电策略设为"无限制"；
+     *   · 华为/荣耀：PowerGenie/HwPFWService 杀进程 → 应用启动管理改"手动管理"三开关全开；
+     *   · OPPO/一加/realme：耗电管理省电策略 → 允许后台运行；
+     *   · 三星：深度休眠 → 电池"不受限制"。
+     *  各厂商页面均为私有页、无公开 API，只能逐个 try 链式降级，全部不可用则降级应用信息页。
+     *  vivo 入口为本机实测验证（OriginOS，V2170A）：应用耗电详情页 + package_name 直达，
+     *  页面底部即"后台耗电管理"；其余厂商沿用本项目自启动链既有组件，待对应实机确认 */
+    @PluginMethod
+    public void openHighPowerSettings(PluginCall call) {
+        Activity act = bridge.getActivity();
+        if (act == null) {
+            call.resolve();
+            return;
+        }
+        String pkg = act.getPackageName();
+        String mf = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase();
+        List<Intent> chain = new ArrayList<Intent>();
+        if (mf.contains("vivo") || mf.contains("iqoo")) {
+            chain.add(comp("com.iqoo.powersaving",
+                    "com.iqoo.powersaving.fuelgauge.PowerUsageSummaryActivity"));
+            // 旧版 Funtouch 备用包名
+            chain.add(comp("com.vivo.powersaving",
+                    "com.vivo.powersaving.fuelgauge.PowerUsageSummaryActivity"));
+        } else if (mf.contains("xiaomi") || mf.contains("redmi")) {
+            // 省电策略（应用智能省电）→ 自启动管理
+            chain.add(comp("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"));
+            chain.add(comp("com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+        } else if (mf.contains("huawei") || mf.contains("honor")) {
+            // 应用启动管理（手动管理三开关）→ 应用启动控制
+            chain.add(comp("com.huawei.systemmanager",
+                    "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"));
+            chain.add(comp("com.huawei.systemmanager",
+                    "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"));
+        } else if (mf.contains("oppo") || mf.contains("realme") || mf.contains("oneplus")) {
+            chain.add(comp("com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.startup.StartupAppListActivity"));
+            chain.add(comp("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"));
+        } else if (mf.contains("samsung")) {
+            chain.add(comp("com.samsung.android.lool", "com.samsung.android.sm.battery.ui.BatteryActivity"));
+        }
+        for (Intent i : chain) {
+            i.putExtra("package_name", pkg); // 部分页面识别定位到本应用；不识别该 extra 也不影响打开
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                act.startActivity(i);
+                call.resolve();
+                return;
+            } catch (Exception e) {
+                // 该入口不可用（ROM 改版/页面更名），尝试下一级
+            }
+        }
+        // 兜底：应用信息页（应用信息 → 电量/电池 → 后台管理入口）
+        try {
+            act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ignored) {
+        }
+        call.resolve();
+    }
+
+    /** 厂商私有页面组件意图（链式降级用；页面名随 ROM 版本可能变化） */
+    private static Intent comp(String pkg, String cls) {
+        return new Intent().setComponent(new ComponentName(pkg, cls));
     }
 
     /** 自启动引导：按厂商跳转对应自启动/省电管理页（页面名随 ROM 版本可能变化，逐个 try 链式降级；

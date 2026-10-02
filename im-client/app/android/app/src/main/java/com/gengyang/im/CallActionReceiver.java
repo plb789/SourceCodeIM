@@ -28,7 +28,7 @@ public class CallActionReceiver extends BroadcastReceiver {
         String deep = intent.getStringExtra("deep");
 
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.cancel(KeepAliveService.CALL_NOTIFY_ID);
+        KeepAliveService.cancelCallCards(nm); // 阶段二百五十：主卡 + 无 FSI 兜底卡一并撤
         KeepAliveService.clearRingingCall(callId);
 
         if (KeepAliveService.trySendCallReject(callId, from, meet)) return;

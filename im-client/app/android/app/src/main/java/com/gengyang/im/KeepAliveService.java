@@ -12,6 +12,9 @@ import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -43,6 +46,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.io.InputStream;
 
@@ -82,6 +86,42 @@ public class KeepAliveService extends Service {
     private static final int SYS_ID = 1002;
     // 阶段二百三十七：来电邀请通知固定 id（同一时刻仅一路来电，新邀请顶替旧通知）
     public static final int CALL_NOTIFY_ID = 1003;
+    /** 阶段二百五十：无 FSI 兜底来电卡片 id（vivo 等 ROM「锁屏显示/后台弹出」默认拒绝时
+     * FSI 全屏页被拦且通知被消费 → 空亮屏无任何来电提示；无 FSI 通知不受影响锁屏可见） */
+    public static final int CALL_NOTIFY_FALLBACK_ID = 1004;
+
+    /** 撤下来电通知归口（主卡 + 兜底卡一起撤，接听/挂断/取消/超时共用） */
+    static void cancelCallCards(NotificationManager nm) {
+        if (nm == null) return;
+        try {
+            nm.cancel(CALL_NOTIFY_ID);
+        } catch (Exception ignored) {
+        }
+        try {
+            nm.cancel(CALL_NOTIFY_FALLBACK_ID);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * 阶段二百五十：无 FSI 兜底来电卡（普通样式，非 CallStyle）——vivo OriginOS 对
+     * CallStyle 通话模板做 ROM 级拦截（转自有来电 UI 需厂商权限），锁屏不显示；普通
+     * 消息通知样式与"已取消xx通话"消息卡完全同构，实测锁屏可显。点卡片走接听深链
+     */
+    private Notification buildFallbackCard(String name, String body, PendingIntent piAccept, String channel) {
+        return new NotificationCompat.Builder(this, channel)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(name)
+                .setContentText(body)
+                // 阶段二百五十二：不再设 CATEGORY_CALL/ongoing——vivo 对"通话类"通知有 ROM
+                // 级管控（CallStyle 被拦转自有来电 UI 同源），兜底卡须与消息通知最大同构
+                // （消息通知 vivo 实测锁屏可显）
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setContentIntent(piAccept) // 点卡片=接听（锁屏直显来电页自动接听）
+                .build();
+    }
     private static final int MSG_ID_BASE = 10000;
     // 阶段二百三十七：当前响铃中的通话邀请 call_id——后续 cancel/dismiss/timeout 等帧据此撤通知
     private volatile String ringingCallId;
@@ -129,6 +169,14 @@ public class KeepAliveService extends Service {
     private final Map<String, Bitmap> noticeAvatarCache = new ConcurrentHashMap<>();
     private final Map<String, Long> noticeSeq = new ConcurrentHashMap<>();
     private final AtomicLong noticeSeqGen = new AtomicLong();
+    // 阶段二百五十一：后台期间桌面角标未读累加计数（页面回前台后由会话未读总数精确校准）
+    private final AtomicInteger badgeCount = new AtomicInteger(0);
+    // 阶段二百五十二：standby 复位兜底——被踢待命 5 秒未见 HANDBACK 且页面非前台时
+    // 自动重连接管（防"页面被锁屏冻结 + 服务永久待命"双离线）
+    private final Runnable standbyRetry = this::standbyReclaim;
+    private volatile boolean handBackSeen;
+    // 阶段二百五十二：网络恢复侦测回调（onCreate 注册、onDestroy 对称注销）
+    private ConnectivityManager.NetworkCallback netCallback;
 
     @Override
     public void onCreate() {
@@ -145,13 +193,50 @@ public class KeepAliveService extends Service {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "im:keepalive");
             wakeLock.setReferenceCounted(false); // 非计数锁：acquire/release 一对一，避免重复 acquire 泄漏
         }
+        // 阶段二百五十二：网络恢复侦测——vivo OriginOS 等会掐后台应用网络（即使亮屏），
+        // 掐网期间指数退避重连全失败且 delay 涨到 60s 封顶；网络恢复时立即重连回线，
+        // 消除恢复后最长 60 秒的离线空窗（MuMu 无此限制所以模拟器不复现）
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                netCallback = new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        main.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (stopped || handover || ws != null) return;
+                                android.util.Log.i("BGIM", "network available -> immediate connect");
+                                reconnectDelay = 3000; // 退避复位：恢复后从头递增
+                                main.removeCallbacks(reconnectTask);
+                                connect();
+                            }
+                        });
+                    }
+                };
+                cm.registerNetworkCallback(new NetworkRequest.Builder().build(), netCallback);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         stopped = false;
-        // 每次 startForegroundService 调用都必须立即进入前台态（Android 8+ 硬性要求）
-        int type = Build.VERSION.SDK_INT >= 34 ? ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING : 0;
+        // 每次 startForegroundService 调用都必须立即进入前台态（Android 8+ 硬性要求）。
+        // 阶段二百五十二：叠加 mediaPlayback 类型——vivo OriginOS 实测对后台应用整进程
+        // cgroup 冻结（切后台 20s freeze=1，心跳停 → CDN 30s 空闲掐连接 → 离线，
+        // WakeLock 无效），媒体类前台服务获 freezer 豁免；34+ 组合 remoteMessaging
+        //（消息类）与 mediaPlayback（响铃播音频，语义成立）
+        int type;
+        if (Build.VERSION.SDK_INT >= 34) {
+            type = ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
+        } else {
+            type = 0;
+        }
         ServiceCompat.startForeground(this, FG_ID, buildFgNotification(), type);
 
         if (intent == null) {
@@ -162,7 +247,7 @@ public class KeepAliveService extends Service {
             return START_STICKY;
         }
         String action = intent.getAction();
-        android.util.Log.d("BGIM", "onStartCommand action=" + action);
+        android.util.Log.i("BGIM", "onStartCommand action=" + action);
         if (ACTION_START.equals(action)) {
             loadCreds();
             boolean appFg = intent.getBooleanExtra("app_fg", true);
@@ -178,6 +263,7 @@ public class KeepAliveService extends Service {
             // 切后台/息屏：接管长连接（持 WakeLock 保 CPU，防息屏心跳冻结）
             handover = false;
             main.removeCallbacks(reconnectTask);
+            main.removeCallbacks(standbyRetry); // 阶段二百五十二：新接管流程复位待命兜底
             if (wakeLock != null) {
                 // 带超时兜底防极端场景泄漏：12 小时后自动失效（正常使用远不会到）
                 if (Build.VERSION.SDK_INT >= 28) wakeLock.acquire(12 * 3600 * 1000L);
@@ -188,12 +274,15 @@ public class KeepAliveService extends Service {
             // 回前台：断开交还 WebView
             handover = true;
             main.removeCallbacks(reconnectTask);
+            // 阶段二百五十二：页面已交还成功（前台交接主路径闭环），取消待命自动复位兜底
+            handBackSeen = true;
+            main.removeCallbacks(standbyRetry);
             // 阶段二百三十七：交还前台时撤下来电通知——前台响铃画面由 WebView 经深链路由展示，
             // 通知残留会与页内响铃条重复；后续信令（cancel/超时）归口 WebView 处理
             ringingCallId = null;
             stopRingtone(); // 页内响铃条接管响铃，停原生循环铃声（阶段二百四十七）
-            NotificationManager nmHandback = getSystemService(NotificationManager.class);
-            if (nmHandback != null) nmHandback.cancel(CALL_NOTIFY_ID);
+            // 阶段二百五十：主卡 + 无 FSI 兜底卡一并撤（cancelCallCards 归口）
+            cancelCallCards(getSystemService(NotificationManager.class));
             teardown();
         }
         return START_STICKY;
@@ -209,6 +298,21 @@ public class KeepAliveService extends Service {
         stopped = true;
         if (self == this) self = null; // 阶段二百三十八：静态桥对称注销
         stopRingtone(); // 服务销毁停原生响铃（阶段二百四十七）
+        // 阶段二百五十一：服务销毁（登出/换号）清桌面角标（未读计数随会话上下文失效）
+        badgeCount.set(0);
+        try {
+            BadgeHelper.apply(this, 0);
+        } catch (Exception ignored) {
+        }
+        // 阶段二百五十二：网络恢复侦测回调对称注销
+        if (netCallback != null) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(netCallback);
+            } catch (Exception ignored) {
+            }
+            netCallback = null;
+        }
         main.removeCallbacksAndMessages(null);
         teardown();
         super.onDestroy();
@@ -236,17 +340,28 @@ public class KeepAliveService extends Service {
 
     // ===== 连接 =====
 
+    /** 阶段二百五十二：standby 复位兜底主体——被踢待命 5 秒后未见 HANDBACK 且页面非前台
+     * （页面已被锁屏/息屏冻结，无人在线）时自动重连接管；onOpen 内的前台让位检查仍生效，
+     * 页面前台场景不会误抢线 */
+    private void standbyReclaim() {
+        if (stopped || !handover || handBackSeen) return;
+        if (BackgroundIMPlugin.isAppForeground()) return; // 前台交接正常进行中，等 handBack
+        android.util.Log.i("BGIM", "standby reclaim: no handback & app bg -> retake");
+        handover = false;
+        connect();
+    }
+
     private void connect() {
         if (stopped || handover || ws != null) return;
         if (TextUtils.isEmpty(username) || TextUtils.isEmpty(wsUrl)) return;
         loginRejected = false;
-        android.util.Log.d("BGIM", "connect: " + wsUrl);
+        android.util.Log.i("BGIM", "connect: " + wsUrl);
         Request req = new Request.Builder().url(wsUrl).build();
         ws = http.newWebSocket(req, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
                 if (webSocket != ws) return;
-                android.util.Log.d("BGIM", "onOpen fg=" + BackgroundIMPlugin.isAppForeground());
+                android.util.Log.i("BGIM", "onOpen fg=" + BackgroundIMPlugin.isAppForeground());
                 // 阶段二百四十四 P1 make-before-break 缺口修复：连接刚建立时若页面已回前台
                 // （竞态：切后台瞬间插件 600ms 兜底 TAKEOVER 已入队，用户立即切回），此时发登录帧
                 // 会被服务端同端互踢用于顶掉页面连接——与页面 bgEndHandover 的重连形成反向互踢
@@ -268,14 +383,14 @@ public class KeepAliveService extends Service {
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
                 if (webSocket != ws) return;
-                android.util.Log.d("BGIM", "onClosed code=" + code + " reason=" + reason);
+                android.util.Log.i("BGIM", "onClosed code=" + code + " reason=" + reason);
                 onLinkDown();
             }
 
             @Override
             public void onFailure(WebSocket webSocket, Throwable t, Response response) {
                 if (webSocket != ws) return;
-                android.util.Log.d("BGIM", "onFailure: " + t);
+                android.util.Log.i("BGIM", "onFailure: " + t);
                 onLinkDown();
             }
         });
@@ -380,13 +495,13 @@ public class KeepAliveService extends Service {
                     ok = "ok".equals(content);
                 }
                 if (ok) {
-                    android.util.Log.d("BGIM", "LOGIN_RESP ok");
+                    android.util.Log.i("BGIM", "LOGIN_RESP ok");
                     loggedIn = true;
                     reconnectDelay = 3000;
                     startHeartbeat();
                 } else {
                     // 登录被拒（密码错误/账号异常）：不再自动重连，提示用户回应用处理
-                    android.util.Log.d("BGIM", "LOGIN_RESP rejected");
+                    android.util.Log.i("BGIM", "LOGIN_RESP rejected");
                     loginRejected = true;
                     teardown();
                     showSysNotice("后台消息服务已停止：登录失败，请打开应用重新登录");
@@ -395,13 +510,24 @@ public class KeepAliveService extends Service {
             }
             case 9: { // ERROR
                 if (m.optBoolean("kick")) {
-                    android.util.Log.d("BGIM", "kicked -> standby");
+                    android.util.Log.i("BGIM", "kicked -> standby");
                     // 同端被踢：阶段二百四十四 P1 下为回前台交接的主路径——页面重连登录成功，
                     // 服务端同端互踢顶掉本连接（或他处新 app 登录）。置 handover 进入待命态：
                     // 断开且不自动重连，等下一次 TAKEOVER 再接管，页面登录回执还会补发一次
                     // HANDBACK（幂等），避免"本服务 ↔ 新登录端"双方自动重连互踢循环
                     handover = true;
+                    // 阶段二百五十：锁屏来电页点接听 → 页面豁免重连互踢顶掉本连接时立即停铃
+                    // （不等 HANDBACK 补停，消除互踢到 HANDBACK 之间铃声多响一小段的间隙）
+                    stopRingtone();
                     teardown();
+                    // 阶段二百五十二：standby 复位兜底——锁屏接听等场景页面互踢本连接后随即
+                    // 被系统冻结（锁屏/息屏 WebView 冻结），切后台事件早已消费不会再产生
+                    // TAKEOVER → 无人在线被服务端判死（息屏/后台下线根因）。5 秒后若未见
+                    // HANDBACK 且页面非前台，自动重连接管（服务端同端互踢顶掉已冻结的页面
+                    // 连接，单连接收敛）；页面在前台则维持原交接流程等 handBack 防互踢循环
+                    handBackSeen = false;
+                    main.removeCallbacks(standbyRetry);
+                    main.postDelayed(standbyRetry, 5000L);
                 } else if (!loggedIn) {
                     loginRejected = true;
                     teardown();
@@ -511,7 +637,7 @@ public class KeepAliveService extends Service {
                 try {
                     JSONObject info = new JSONObject(m.optString("content", "{}"));
                     String sigAction = info.optString("action");
-                    android.util.Log.d("BGIM", "call sig action=" + sigAction + " call_id=" + info.optString("call_id", "")
+                    android.util.Log.i("BGIM", "call sig action=" + sigAction + " call_id=" + info.optString("call_id", "")
                             + " ringing=" + ringingCallId);
                     if ("invite".equals(sigAction) || "meet_invite".equals(sigAction)) {
                         showCallInvite(m, info, sigAction);
@@ -525,8 +651,7 @@ public class KeepAliveService extends Service {
                         // 等待画面收不到 WS cancel（页面可能已被锁屏冻结），经插件事件补送
                         // （页面冻结时事件排队，解锁恢复后送达）
                         BackgroundIMPlugin.notifyCallSignal(sigAction, info.optString("call_id", ""));
-                        NotificationManager nmCall = getSystemService(NotificationManager.class);
-                        if (nmCall != null) nmCall.cancel(CALL_NOTIFY_ID);
+                        cancelCallCards(getSystemService(NotificationManager.class));
                     }
                 } catch (Exception ignored) {
                 }
@@ -578,6 +703,8 @@ public class KeepAliveService extends Service {
         int id = MSG_ID_BASE + Math.abs(key.hashCode()) % 100000;
         try {
             nm.notify(id, buildMsgNotice(title, body, when, pi, avatar));
+            // 阶段二百五十一：后台期间桌面角标累加（页面回前台后由会话未读总数精确校准）
+            BadgeHelper.apply(this, badgeCount.incrementAndGet());
         } catch (Exception ignored) {
         }
         if (avatar == null) fetchNoticeAvatar(from, key, id, title, body, when, pi, seq);
@@ -694,30 +821,75 @@ public class KeepAliveService extends Service {
 
         ringingCallId = callId;
 
-        // 一级：亮屏 + 悬浮窗已授权 → 直接拉起（后台启动豁免），不落通知（页内 WebAudio 响铃）。
-        // 阶段二百四十七：息屏不再走本路径——息屏时 WebView 冻结页内响铃不可用，且深链拉起
-        // 不会点亮屏幕；改走全屏意图通知（系统自动亮屏）+ 原生循环响铃（微信同款）
+        // 一级：悬浮窗已授权 → 直接拉起来电页（SYSTEM_ALERT_WINDOW 豁免 Android 10+ 后台
+        // 启动限制）。阶段二百五十：息屏恢复直启——MainActivity 已
+        // setShowWhenLocked/setTurnScreenOn，锁屏上直接亮屏显示来电页（vivo 等 ROM 对
+        // 侧载应用 FSI 权限默认拒绝，仅靠 FSI 通知息屏不亮屏无画面，实测「来电无任何通知，
+        // 挂断后才看到普通消息通知」；微信息屏来电即本路径）
         PowerManager pmScreen = (PowerManager) getSystemService(POWER_SERVICE);
         boolean screenOn = pmScreen != null && pmScreen.isInteractive();
-        if (screenOn && Settings.canDrawOverlays(this)) {
+        if (Settings.canDrawOverlays(this)) {
             try {
                 startActivity(i);
             } catch (Exception ignored) {
             }
-            return;
         }
+
+        // 二级：来电通知（CallStyle + FSI，FSI 被拒时降级横幅/锁屏卡片）——直启成功时并存
+        // 作保险（ROM 静默拦截直启时为唯一可见入口；接听 HANDBACK/cancel/超时归口撤销）
 
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         String body = meet ? "邀请你加入会议" : ("邀请你" + ("video".equals(type) ? "视频通话" : "语音通话"));
-        // 息屏走静音渠道（铃声由原生循环播放，防渠道铃声叠加双响）；亮屏无悬浮窗保持渠道铃声
-        String channel = screenOn ? CH_CALL : CH_CALL_QUIET;
+        // 阶段二百五十：来电通知一律静音渠道——CH_CALL 渠道铃声与原生铃声叠加双响
+        // （实测「同样的铃声双重响」：亮屏直启/FSI 路径渠道铃 + 页面 ensureCallRing/
+        // 原生 startCallRing 同响）。响铃统一归口原生单一路径（下方 startCallRing，
+        // 页面 showRing→ensureCallRing 幂等续响），通知只承担显示职责
+        String channel = CH_CALL_QUIET;
         try {
-            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null, channel));
+            nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject, null, channel, true));
+        } catch (Exception ignored) {
+        }
+        // 阶段二百五十：兜底卡直接复用消息渠道 CH_MSG——vivo 真机实测：消息通知（有声
+        // 渠道）锁屏可显，而来电专用无声渠道（CH_CALL_QUIET/CH_CALL_FB）一律被系统归入
+        // "静默通知"折叠不显示（用户锁屏截图：系统弹「要将通知设为静默吗」，无声渠道
+        // 被 ROM 静默化处理）。渠道提示音仅起始"叮"一声，随后原生铃声循环接管；
+        // 点卡片走接听深链（MainActivity 已 setShowWhenLocked，锁屏直接显示来电页自动接听）
+        try {
+            nm.notify(CALL_NOTIFY_FALLBACK_ID, buildFallbackCard(name, body, piAccept, CH_MSG));
+        } catch (Exception ignored) {
+        }
+        // 诊断日志：兜底卡实际渠道（CH_MSG）重要度 / 通知总开关 / FSI 权限 / 悬浮窗权限
+        // （用户真机导日志定位"来电不显示"）
+        try {
+            NotificationChannel chDbg = nm.getNotificationChannel(CH_MSG);
+            boolean fsiDbg = Build.VERSION.SDK_INT < 34 || nm.canUseFullScreenIntent();
+            android.util.Log.i("BGIM", "call notify ch=" + channel
+                    + " msgImp=" + (chDbg != null ? chDbg.getImportance() : -1)
+                    + " chEnabled=" + nm.areNotificationsEnabled()
+                    + " fsi=" + fsiDbg + " overlay=" + Settings.canDrawOverlays(this));
         } catch (Exception ignored) {
         }
         fetchAvatarAsync(from, callId, name, body, pi, piAccept, piReject, channel);
-        if (!screenOn) startCallRing(); // 息屏：原生循环铃声+振动（微信同款），接听/挂断/超时即停
+        // 阶段二百五十：响铃统一归口原生（亮屏/息屏一致，渠道已全部静音防双响；
+        // 页面 showRing→ensureCallRing 幂等续响，接听/挂断/超时即停）
+        startCallRing();
+        if (!screenOn) {
+            // 阶段二百五十：亮屏兜底——FSI 权限缺失（Android 14+ 默认不授予非通话类应用）
+            // 时系统不亮屏不弹全屏，锁屏界面对通知静默，用户感知"只有铃声没有画面"。
+            // 主动点亮屏幕 5 秒展示锁屏来电卡片（配合 MainActivity setShowWhenLocked/
+            // setTurnScreenOn；FSI 正常生效时系统已亮屏，此处幂等无害）
+            try {
+                PowerManager pmWake = (PowerManager) getSystemService(POWER_SERVICE);
+                @SuppressWarnings("deprecation")
+                PowerManager.WakeLock wl = pmWake.newWakeLock(
+                        PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP
+                                | PowerManager.ON_AFTER_RELEASE,
+                        "im:callScreenWake");
+                wl.acquire(5000L);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     // 微信同款来电通知：整卡交由系统渲染（统一系统背景，无白边）。
@@ -725,18 +897,22 @@ public class KeepAliveService extends Service {
     // （Android 12+ heads-up 为动态取色浅色底），黑卡浮在浅色底上出现白色边框部分；
     // CallStyle 来电模板（大圆头像 + 主叫名 + 副标题 + 系统红/绿挂断接听按钮）即微信效果。
     private Notification buildCallCard(String name, String body, PendingIntent pi, PendingIntent piAccept,
-                                       PendingIntent piReject, Bitmap avatar, String channel) {
+                                       PendingIntent piReject, Bitmap avatar, String channel, boolean fullScreen) {
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, channel)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentText(body) // CallStyle 模板副标题（「邀请你视频通话/语音通话」）
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
+                // 阶段二百五十：锁屏显示完整来电卡片（默认 PRIVATE 在部分 ROM 锁屏设置下
+                // 只显示"应用有通知"不显内容——FSI 未生效的降级场景通知会"看不到来电"）
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 // CallStyle 硬性要求：通知必须 ongoing，否则系统校验不通过、忽略来电模板，
                 // 降级为标准通知（方形小头像 + 文字按钮）——首版实测即踩此坑
                 .setOngoing(true)
                 .setAutoCancel(true) // 点卡片主体仍自动消失（ongoing 仅禁滑动清除）
-                .setFullScreenIntent(pi, true) // 熄屏/锁屏系统自动全屏拉起
                 .setContentIntent(pi);         // 卡片点按（非按钮）进入响铃条
+        if (fullScreen) b.setFullScreenIntent(pi, true); // 熄屏/锁屏系统自动全屏拉起（兜底卡不带：
+        // vivo 等 ROM FSI 消费通知后全屏页又被「锁屏显示」权限拦截 → 空亮屏无任何提示）
         if (avatar != null) b.setLargeIcon(avatar); // API <30 降级通知与人物头像共用
         if (Build.VERSION.SDK_INT >= 30) {
             Person caller = new Person.Builder()
@@ -761,7 +937,7 @@ public class KeepAliveService extends Service {
      */
     private synchronized void startCallRing() {
         if (ringPlayer != null) return; // 已在响铃（连续来电不重复起播）
-        android.util.Log.d("BGIM", "startCallRing screen-off native ring begin");
+        android.util.Log.i("BGIM", "startCallRing screen-off native ring begin");
         try {
             MediaPlayer mp = new MediaPlayer();
             mp.setAudioAttributes(new AudioAttributes.Builder()
@@ -806,7 +982,7 @@ public class KeepAliveService extends Service {
 
     /** 停止息屏原生响铃与振动（幂等，多来源并发调用安全） */
     private synchronized void stopRingtone() {
-        android.util.Log.d("BGIM", "stopRingtone player=" + (ringPlayer != null) + " vibrator=" + (ringVibrator != null)
+        android.util.Log.i("BGIM", "stopRingtone player=" + (ringPlayer != null) + " vibrator=" + (ringVibrator != null)
                 + new Throwable("trace").fillInStackTrace());
         main.removeCallbacks(ringStopTask);
         if (ringPlayer != null) {
@@ -828,6 +1004,23 @@ public class KeepAliveService extends Service {
             }
             ringVibrator = null;
         }
+    }
+
+    // ===== 阶段二百五十：页面侧铃声归口（web-call-bridge 经插件桥调用） =====
+
+    /** 页面来电 UI 拉起时补起/续响原生系统铃声（已在响则幂等）。息屏来电原生已在循环响铃
+     * （无缝续响），亮屏前台一级路径（startActivity 直启，不落通知）此前只有页内 WebAudio
+     * 合成音——统一改由原生播系统铃声，消除"解锁进 APP 铃声突变"的音色跳变（微信全程同一种铃声） */
+    static void ensureRingtone() {
+        KeepAliveService s = self;
+        if (s == null || s.ringPlayer != null) return;
+        s.startCallRing();
+    }
+
+    /** 页面侧停铃归口（响铃条接听/挂断/60s 兜底清条时调用，幂等） */
+    static void stopRingtoneStatic() {
+        KeepAliveService s = self;
+        if (s != null) s.stopRingtone();
     }
 
     /**
@@ -867,7 +1060,10 @@ public class KeepAliveService extends Service {
                         if (nm == null) return;
                         try {
                             nm.notify(CALL_NOTIFY_ID, buildCallCard(name, body, pi, piAccept, piReject,
-                                    circleBitmap(bmp), channel));
+                                    circleBitmap(bmp), channel, true));
+                            // 阶段二百五十：兜底卡同步回填头像（普通样式，无 FSI）
+                            nm.notify(CALL_NOTIFY_FALLBACK_ID,
+                                    buildFallbackCard(name, body, piAccept, channel));
                         } catch (Exception ignored) {
                         }
                     }
@@ -1000,7 +1196,7 @@ public class KeepAliveService extends Service {
         // 阶段二百四十七：息屏来电专用静音渠道——铃声/振动改由应用原生循环播放（微信同款，
         // 渠道铃声只响一次且悬浮窗一级路径下从不播放），渠道自身静音避免与原生铃声叠加双响；
         // IMPORTANCE_HIGH 保持全屏意图（熄屏自动亮屏拉起）可用
-        NotificationChannel callQuiet = new NotificationChannel(CH_CALL_QUIET, "来电铃声", NotificationManager.IMPORTANCE_HIGH);
+        NotificationChannel callQuiet = new NotificationChannel(CH_CALL_QUIET, "来电通知", NotificationManager.IMPORTANCE_HIGH);
         callQuiet.setDescription("收到语音/视频通话邀请时由应用循环响铃（支持息屏响铃）");
         callQuiet.setSound(null, null);
         callQuiet.enableVibration(false);

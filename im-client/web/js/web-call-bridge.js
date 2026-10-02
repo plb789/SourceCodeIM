@@ -406,7 +406,18 @@
     var ringActx = null, ringTimer = null;
 
     function ringStart() {
-        ringStop();
+        if (ringTimer) { clearInterval(ringTimer); ringTimer = null; }
+        // 阶段二百五十：APP 端铃声归口原生系统铃声——息屏来电原生已在循环响铃（无缝续响），
+        // 亮屏前台一级路径补起系统铃；页面不再 WebAudio 合成，消除"解锁进 APP 铃声突变"
+        // （合成电子音 ↔ 系统铃声来回切换的音色跳变，微信全程同一种铃声）。浏览器端无
+        // 原生层，保持 WebAudio 合成音
+        if (isApp) {
+            try {
+                var bgp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+                if (bgp && bgp.ensureCallRing) bgp.ensureCallRing();
+            } catch (e) { }
+            return;
+        }
         try {
             if (!ringActx) ringActx = new (window.AudioContext || window.webkitAudioContext)();
             if (ringActx.state === 'suspended') ringActx.resume();
@@ -431,6 +442,14 @@
     }
     function ringStop() {
         if (ringTimer) { clearInterval(ringTimer); ringTimer = null; }
+        // 阶段二百五十：页面侧停铃归口——响铃条接听/挂断/60s 兜底清条时同步停原生
+        // 系统铃声（幂等；原生信令归口已停时无害）
+        if (isApp) {
+            try {
+                var bgp2 = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+                if (bgp2 && bgp2.stopCallRing) bgp2.stopCallRing();
+            } catch (e) { }
+        }
     }
     function ringArmTimeout() {
         if (ringTimeoutId) clearTimeout(ringTimeoutId);

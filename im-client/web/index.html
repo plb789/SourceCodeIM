@@ -1545,8 +1545,17 @@
                         <span class="settings-card-label">电池优化豁免</span>
                         <span id="settings-ka-battery-state" class="settings-card-value">检测中…</span>
                     </div>
-                    <p class="settings-desc">开启后息屏、省电模式不再限制后台消息连接，保障消息实时送达。</p>
+                    <p class="settings-desc" id="settings-ka-battery-desc">开启后息屏、省电模式不再限制后台消息连接，保障消息实时送达。</p>
                     <button id="settings-ka-battery-btn" class="settings-btn" style="display:none;">申请电池优化豁免</button>
+                    <!-- 阶段二百五十三/二百五十四：后台白名单引导（仅国产 ROM 显示，文案按厂商动态填充）——
+                         vivo/iQOO 冻结整进程、小米省电策略、华为应用启动管理、OPPO 耗电管理、
+                         三星不受限制；标准"电池优化豁免"（Doze 白名单）对这些私有机制均无效 -->
+                    <div class="settings-card-row" id="settings-ka-hp-row" style="display:none;">
+                        <span class="settings-card-label" id="settings-ka-hp-label">后台白名单</span>
+                        <span id="settings-ka-hp-state" class="settings-card-value">需手动开启</span>
+                    </div>
+                    <p class="settings-desc" id="settings-ka-hp-desc" style="display:none;"></p>
+                    <button id="settings-ka-hp-btn" class="settings-btn" style="display:none;">去开启</button>
                     <div class="settings-card-row">
                         <span class="settings-card-label">厂商自启动管理</span>
                         <span id="settings-ka-autostart-state" class="settings-card-value"></span>

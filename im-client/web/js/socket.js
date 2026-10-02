@@ -281,12 +281,16 @@
     // 抢线重连（服务端互踢顶掉原生连接），后续 cancel/超时帧无人处理（原生铃声被 handBack
     // 停掉后页内 WebAudio 又无声=「响半下就停」、等待画面残留、二次来电误回 busy 拒绝）。
     // 锁屏中拒绝建连（连接保持归原生服务），解锁后经 bgUnlock 事件重入（bgUnlock 监听见下）
+    // 阶段二百五十：锁屏话务豁免窗——用户在锁屏来电页主动点接听/挂断时（chat.js 置
+    // window._ringBypassAt）开 10 秒豁免，页面临时抢线完成接听话务动作；其余锁屏场景
+    // 仍不抢线（保原生铃声与连接归口）
     function connect(username, password) {
         var bgp = nativeBG ? bgPlugin() : null;
-        if (bgp && bgp.isKeyguardLocked && loginOk && currentUsername) {
+        var bypass = function () { return Date.now() - (window._ringBypassAt || 0) < 10000; };
+        if (!bypass() && bgp && bgp.isKeyguardLocked && loginOk && currentUsername) {
             try {
                 bgp.isKeyguardLocked().then(function (res) {
-                    if (res && res.locked) return; // 锁屏中：不抢线，解锁后 bgUnlock/重入补偿
+                    if (res && res.locked && !bypass()) return; // 锁屏中：不抢线，解锁后 bgUnlock/重入补偿
                     doConnect(username, password);
                 }).catch(function () { doConnect(username, password); });
                 return;

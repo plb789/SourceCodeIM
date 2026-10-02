@@ -1,6 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 阶段二百五十一：桌面/角标包可见性——Android 11+ 未声明 queries 时系统过滤隐式
+         广播接收者与跨应用 provider（vivo launcher 收不到角标广播，ShortcutBadger 类库
+         Android 11+ 失效的已知同因）。HOME intent 覆盖所有厂商桌面，vivo launcher 包名
+         显式声明双保险 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <package android:name="com.bbk.launcher2" />
+    </queries>
+
+    <!-- 阶段二百五十一：vivo 桌面角标双接口权限（vivo 官方开发文档要求）——
+         BADGE_ICON=Funtouch/兼容广播接口；abe.launcher.notification.num=OriginOS
+         ContentProvider 新接口（官方持续维护） -->
+    <uses-permission android:name="com.vivo.notification.permission.BADGE_ICON" />
+    <uses-permission android:name="com.vivo.abe.permission.launcher.notification.num" />
+
     <application
         android:name=".MainApplication"
         android:allowBackup="true"
@@ -69,11 +87,15 @@
         </provider>
 
         <!-- 阶段二百二十五：后台保活前台服务（切后台/息屏接管长连接收消息弹通知；
-             remoteMessaging 类型为 Android 14+ 消息类前台服务专用型，旧版本自动忽略） -->
+             remoteMessaging 类型为 Android 14+ 消息类前台服务专用型，旧版本自动忽略；
+             阶段二百五十二：叠加 mediaPlayback 类型——vivo OriginOS 对后台应用执行
+             cgroup freezer 整进程冻结（实测切后台 20 秒 freeze=1，心跳/连接全停被
+             CDN 30s 空闲超时掐断下线，WakeLock 无效），媒体类前台服务获 freezer 豁免
+             （响铃播音频语义成立），微信同款保活手段） -->
         <service
             android:name=".KeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="remoteMessaging"
+            android:foregroundServiceType="remoteMessaging|mediaPlayback"
             android:stopWithTask="false" />
 
         <!-- 阶段二百二十六：EMAS 厂商离线通道辅助弹窗（小米/华为等厂商通道推送点击经本
@@ -119,6 +141,9 @@
     <!-- 阶段二百二十五：后台保活前台服务所需权限（前台服务/消息类前台服务/通知/唤醒锁） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <!-- 阶段二百五十二：mediaPlayback 类型前台服务（Android 14+ 类型权限，缺之则
+         startForeground 抛 SecurityException 服务崩溃 → 进程死 → 持续离线） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 阶段二百四十七：息屏来电原生循环振动（微信同款响铃体验；Vibrator API 必需权限） -->

@@ -646,6 +646,13 @@
             if (q.auto === '1') {
                 pendingAutoAccept = true;
                 tryAutoAccept();
+                // 阶段二百五十：锁屏通知接听——页面无连接（锁屏门禁保原生铃声与连接归口）
+                // 时打开 10 秒豁免窗重连，登录回执后 tryAutoAccept 补触发接听（微信同款
+                // 锁屏来电直接可接）
+                if (IMSocket.isConnected && !IMSocket.isConnected()) {
+                    window._ringBypassAt = Date.now();
+                    IMSocket.connect(IMSocket.getUsername(), window._lastPassword || '');
+                }
             }
         }
         try {
@@ -702,7 +709,18 @@
                 pendingTarget = null;
                 openConversation(t);
             }
-            if (ok) tryAutoAccept(); // 阶段二百三十八：通知接听钮冷启动——登录后补触发自动接听
+            if (ok) {
+                // 阶段二百五十：锁屏来电页拒接补发——豁免门禁重连成功后在此归口上行
+                if (pendingDecline) {
+                    var pd = pendingDecline;
+                    pendingDecline = null;
+                    try {
+                        callSignalSend(pd.meet ? '' : pd.from,
+                                { action: pd.meet ? 'meet_decline' : 'reject', call_id: pd.call_id, reason: 'declined' });
+                    } catch (ePD) { }
+                }
+                tryAutoAccept(); // 阶段二百三十八：通知接听钮冷启动——登录后补触发自动接听
+            }
         });
     })();
 
@@ -1491,6 +1509,32 @@
         var MF_NAMES = { xiaomi: '小米/红米', redmi: '小米/红米', huawei: '华为/荣耀', honor: '华为/荣耀',
             oppo: 'OPPO/一加', realme: 'OPPO/一加', oneplus: 'OPPO/一加', vivo: 'vivo/iQOO', iqoo: 'vivo/iQOO',
             meizu: '魅族', samsung: '三星', letv: '乐视', google: '通用' };
+        // 阶段二百五十四：各厂商"后台白名单"开关（标签 / 说明 / 按钮文案）——国产 ROM 的后台限制
+        // 均为私有机制，标准"电池优化豁免"（Doze 白名单）对其无效，须按厂商引导开启各自开关：
+        // vivo/iQOO=后台耗电管理（实测 cgroup 整进程冻结，已在 Doze 白名单仍冻）、
+        // 小米/红米=省电策略"无限制"、华为/荣耀=应用启动管理"手动管理"、
+        // OPPO/一加/realme=耗电管理"允许后台运行"、三星=电池"不受限制"
+        var KA_HP = {};
+        (function () {
+            function reg(keys, label, desc, btn) {
+                keys.split(' ').forEach(function (k) { KA_HP[k] = [label, desc, btn]; });
+            }
+            reg('vivo iqoo', '后台高耗电',
+                'vivo/iQOO 会冻结后台应用（标准电池优化豁免无效），须在打开的页面底部点击“后台耗电管理”并允许本应用后台高耗电，否则切后台会掉线收不到消息。',
+                '去开启后台高耗电');
+            reg('xiaomi redmi', '省电策略',
+                '小米/红米需把本应用“省电策略”设为“无限制”，并在最近任务中下拉卡片加锁，否则切后台可能被限制联网而掉线。',
+                '去设置省电策略');
+            reg('huawei honor', '后台活动',
+                '华为/荣耀需在“应用启动管理”中改为“手动管理”，并打开“允许自启动/关联启动/后台活动”三项，否则切后台会被系统清理而掉线。',
+                '去开启后台活动');
+            reg('oppo realme oneplus', '后台运行',
+                'OPPO/一加需在“耗电管理”中允许本应用后台运行并允许自启动，否则切后台会被省电策略限制而掉线。',
+                '去开启后台运行');
+            reg('samsung', '不受限制',
+                '三星需把本应用电池设为“不受限制”，并关闭“将未使用的应用休眠”，否则后台会被限制而掉线。',
+                '去设置电池不受限制');
+        })();
         function refreshKaStatus() {
             try {
                 // 阶段二百三十：消息通知权限（被拒 = 横幅/息屏提醒全静默，最优先引导）
@@ -1507,6 +1551,27 @@
                     kaBatBtn.style.display = ignored ? 'none' : '';
                     var mf = String(s.manufacturer || '');
                     kaVState.textContent = I18N.t(MF_NAMES[mf] || mf || '通用');
+                    // 阶段二百五十四：按厂商显示"后台白名单"引导（国产 ROM 私有后台限制，
+                    // 标准电池优化豁免无效——vivo 实测已在 Doze 白名单仍被冻结掉线）
+                    var hp = KA_HP[mf];
+                    var hpRow = document.getElementById('settings-ka-hp-row');
+                    var hpLabel = document.getElementById('settings-ka-hp-label');
+                    var hpDesc = document.getElementById('settings-ka-hp-desc');
+                    var hpBtnEl = document.getElementById('settings-ka-hp-btn');
+                    var batDesc = document.getElementById('settings-ka-battery-desc');
+                    if (hpRow) hpRow.style.display = hp ? '' : 'none';
+                    if (hpDesc) hpDesc.style.display = hp ? '' : 'none';
+                    if (hpBtnEl) hpBtnEl.style.display = hp ? '' : 'none';
+                    if (hp) {
+                        if (hpLabel) hpLabel.textContent = I18N.t(hp[0]);
+                        if (hpDesc) hpDesc.textContent = I18N.t(hp[1]);
+                        if (hpBtnEl) hpBtnEl.textContent = I18N.t(hp[2]);
+                    }
+                    if (batDesc) {
+                        batDesc.textContent = hp
+                            ? I18N.t('开启后息屏、省电模式不再限制后台消息连接。本机系统还需按下方提示开启后台白名单，否则切后台仍可能被限制掉线。')
+                            : I18N.t('开启后息屏、省电模式不再限制后台消息连接，保障消息实时送达。');
+                    }
                 }).catch(function () {});
                 // 阶段二百三十七：来电弹窗权限状态（全屏意图/悬浮窗，二者均影响后台来电拉起方式）
                 var callCard = document.getElementById('settings-call-card');
@@ -1536,6 +1601,16 @@
             try {
                 bgPlugin.openNotificationSettings().then(function () {
                     setTimeout(refreshKaStatus, 1500);
+                }).catch(function () {});
+            } catch (e) {}
+        });
+        // 阶段二百五十三/二百五十四：后台白名单入口（按厂商跳对应私有页面）
+        var kaHpBtn = document.getElementById('settings-ka-hp-btn');
+        if (kaHpBtn) kaHpBtn.addEventListener('click', function () {
+            try {
+                if (!bgPlugin.openHighPowerSettings) return;
+                bgPlugin.openHighPowerSettings().then(function () {
+                    showToast(I18N.t('请在打开的页面中开启本应用的后台白名单开关；若未看到相关选项，请到系统设置中手动查找'));
                 }).catch(function () {});
             } catch (e) {}
         });
@@ -18485,6 +18560,15 @@
         if (navBadge) {
             var navTotal = 0;
             convList.forEach(function (cv) { navTotal += (cv.unread > 0 ? cv.unread : 0); });
+            // 阶段二百五十一：APP 端桌面图标未读角标（微信同款 +99）——会话未读总数经原生
+            // 插件更新厂商桌面角标（vivo/华为/荣耀/三星等私有通道；无角标能力的桌面静默
+            // 忽略）。登录/回前台由本归口以服务端未读精确校准后台服务的累加计数
+            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                try {
+                    var bgpB = window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+                    if (bgpB && bgpB.setBadgeCount) bgpB.setBadgeCount({ count: navTotal });
+                } catch (e) { }
+            }
             if (navTotal > 0) {
                 navBadge.textContent = navTotal > 99 ? '99+' : navTotal;
                 navBadge.classList.remove('hidden');
@@ -21165,6 +21249,7 @@
     // 阶段二百三十八：接听核心从桥回调提出为 callRingAccept()——通知卡片「接听」钮
     // 深链 auto=1 复用同一归口，行为与响铃条点接听完全一致
     var pendingAutoAccept = false; // 通知接听钮待自动接听标记（登录门控：未登录先挂起）
+    var pendingDecline = null; // 阶段二百五十：锁屏来电页拒接挂起（登录回执后补发 reject/meet_decline）
     function callRingAccept() {
         if (!pendingRing) return;
         var r = pendingRing;
@@ -21205,6 +21290,15 @@
         window.desktop.onCallRingAction(function (data) {
             if (!data || !pendingRing) return;
             if (data.action === 'decline') {
+                // 阶段二百五十：锁屏来电页拒接——页面无连接（锁屏门禁保原生铃声与连接归口），
+                // 打开 10 秒门禁豁免窗重连，登录回执后补发拒接信令（pendingDecline 归口）
+                if (IMSocket.isConnected && !IMSocket.isConnected()) {
+                    window._ringBypassAt = Date.now();
+                    pendingDecline = { from: pendingRing.from, call_id: pendingRing.call_id, meet: !!pendingRing.meet };
+                    callClearRing();
+                    IMSocket.connect(IMSocket.getUsername(), window._lastPassword || '');
+                    return;
+                }
                 // 会议来电：回 meet_decline（房间制，服务端归口通知发起人）；1v1 维持 reject
                 if (pendingRing.meet) {
                     callSignalSend('', { action: 'meet_decline', call_id: pendingRing.call_id });
@@ -21213,6 +21307,14 @@
                 }
                 callClearRing();
             } else if (data.action === 'accept') {
+                // 阶段二百五十：锁屏来电页接听——页面无连接时豁免门禁重连，登录回执后
+                // 自动接听（pendingAutoAccept → tryAutoAccept 归口，与通知接听钮同链路）
+                if (IMSocket.isConnected && !IMSocket.isConnected()) {
+                    window._ringBypassAt = Date.now();
+                    pendingAutoAccept = true;
+                    IMSocket.connect(IMSocket.getUsername(), window._lastPassword || '');
+                    return;
+                }
                 callRingAccept();
             }
         });

@@ -1,6 +1,7 @@
 package com.gengyang.im;
 
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -44,6 +45,17 @@ public class MainActivity extends BridgeActivity {
         // 阶段二百二十五：注册后台保活插件（切后台/息屏由原生前台服务接管长连接收消息）
         registerPlugin(BackgroundIMPlugin.class);
         super.onCreate(savedInstanceState);
+        // 阶段二百五十：锁屏来电可见（微信同款息屏来电）——FSI 全屏意图拉起本 Activity 时
+        // 直接在锁屏上显示来电页并点亮屏幕。缺省时 FSI 拉起的页面被锁屏覆盖，锁屏上又因
+        // 通知被 FSI 消费而不显示卡片 → 息屏来电"只有铃声没有画面"（用户实测反馈）
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        } else {
+            //noinspection deprecation
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                    | android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
         showAdOverlay();
     }
 
