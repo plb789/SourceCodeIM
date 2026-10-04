@@ -76,7 +76,9 @@ func (s *Server) handlePurgeResp(c *Client, msg *protocol.Message) {
 
 	agree := msg.Content == "agree"
 	if agree {
-		// 物理删除申请时点之前的双方互发消息（口径与历史加载一致含图片/文件，分批防长事务锁表）
+		// 物理删除申请时点之前的双方互发文本/图片/文件消息（分批防长事务锁表）。
+		// 红包(86)与网盘卡片(92)不删除：红包涉及积分结算、网盘卡片涉及共享资源，
+		// 删除聊天记录不清算资产（产品口径，用户确认 2026-10-04）
 		cond := "msg_type IN (2,4,5) AND create_time <= ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))"
 		args := []interface{}{req.CreateTime, req.FromUser, req.ToUser, req.ToUser, req.FromUser}
 		for i := 0; i < 10000; i++ { // 万批保险丝：防异常死循环
@@ -122,11 +124,22 @@ func (s *Server) pushPurgeCard(req model.MsgPurgeApply) {
 	s.sendToUser(req.ToUser, data)
 }
 
-// pushPendingPurges 登录补推与我相关的未处理审批卡片（离线审批不丢失；已终态的不再补推，历史结论无重放需求）
+// pushPendingPurges 登录补推与我相关的审批卡片（离线审批不丢失）。
+// 阶段二百五十六：一并补推近 72 小时内的终态卡片（已同意/已拒绝）——
+// 原实现仅补推 status=0：APP 切后台/息屏交接窗口内对方同意删除时，57 终态帧由原生保活
+// 连接接收但不转发 WebView（且帧不入离线队列），回前台后本端永远错过终态：视图停留旧记录、
+// 审批卡片停留在"等待处理"。补推终态后前端按 (apply_id,status) 去重归位卡片与视图
 func (s *Server) pushPendingPurges(c *Client) {
 	var reqs []model.MsgPurgeApply
 	store.DB.Where("(from_user = ? OR to_user = ?) AND status = 0", c.username, c.username).Find(&reqs)
 	for _, req := range reqs {
+		s.pushPurgeCard(req)
+	}
+	var done []model.MsgPurgeApply
+	store.DB.Where("(from_user = ? OR to_user = ?) AND status IN (1,2) AND handle_time >= ?",
+		c.username, c.username, time.Now().Add(-72*time.Hour)).
+		Order("id desc").Limit(20).Find(&done)
+	for _, req := range done {
 		s.pushPurgeCard(req)
 	}
 }

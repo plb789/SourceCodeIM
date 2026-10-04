@@ -555,21 +555,70 @@
         chatView.classList.add('hidden');
     });
 
+    // ===== 阶段二百五十：在途自发消息气泡跨"交接重拉历史"保全 =====
+    // 根因：APP 从相册选图返回触发 pause→resume 交接，重连登录成功派发 im_resync_history，
+    // 处理器 messageList.innerHTML='' 清空整列再重拉历史。若此刻有在途发送（DIRECT_IN 后
+    // HTTP/WS 回填未达），本地 blob 预览气泡被销毁，而服务端历史此刻尚未含该条（未落库/
+    // 落库晚于 HISTORY 查询）→ 列表只剩上一张已落库图，真机表现为"发第 N 张看到第 N-1 张 /
+    // 自己看不到刚发的图但好友能收到"。修复：清空前暂存带 data-nonce 的自发在途气泡，
+    // HISTORY 首页渲染完成后把"未落库"的气泡补回列表末尾（已落库的用历史副本，丢弃 blob 副本）。
+    var __pendingSelf = [];      // [{nonce, el, msgId}] 暂存的在途自发气泡（el 为脱离 DOM 的节点引用）
+    var __pendingByNonce = {};   // nonce → el，供 HTTP/WS 回填迟到时去重历史副本
+    function stashInflightSelfBubbles() {
+        __pendingSelf = [];
+        __pendingByNonce = {};
+        var nodes = messageList.querySelectorAll('.message.self[data-nonce]');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var nonce = el.getAttribute('data-nonce') || '';
+            __pendingSelf.push({ nonce: nonce, el: el, msgId: el.getAttribute('data-msg-id') || '' });
+            if (nonce) __pendingByNonce[nonce] = el;
+        }
+    }
+    // renderedIds：本次 HISTORY 首页已渲染的消息 id 集合；命中即视为已落库，丢弃本地 blob 副本
+    // 可重入：3s 兜底先补回、HISTORY 迟到时再次调用——已补回 DOM 的副本若此时判定已落库需就地移除
+    function restoreInflightSelfBubbles(renderedIds) {
+        if (!__pendingSelf.length) return;
+        var kept = [];
+        for (var i = 0; i < __pendingSelf.length; i++) {
+            var p = __pendingSelf[i];
+            var liveMsgId = p.el.getAttribute('data-msg-id') || p.msgId; // 暂存后可能已被 HTTP/WS 回填
+            if (liveMsgId && renderedIds[liveMsgId]) { // 已落库→历史副本已渲染，丢弃 blob 副本（防双气泡）
+                if (p.el.parentNode === messageList) p.el.remove();
+                if (p.nonce) delete __pendingByNonce[p.nonce];
+                continue;
+            }
+            if (p.el.parentNode !== messageList) messageList.appendChild(p.el); // 未落库→补回列表末尾，等待 HTTP/WS 回填
+            kept.push(p);
+        }
+        __pendingSelf = kept;
+        if (kept.length) messageList.scrollTop = messageList.scrollHeight;
+    }
+    // 回填迟到去重：nonce 气泡拿到 msg_id 后，移除同 msg_id 的历史副本（无 nonce 者），保留用户已见的 blob 气泡
+    // keepEl 必须已在列表中（补回后）才执行：暂存窗口内 keepEl 脱离 DOM 时不动历史副本，
+    // 否则历史副本被移除而 blob 副本又被 restore 判"已落库"丢弃 → 消息消失
+    function dedupSelfBubbleByMsgId(keepEl, msgId) {
+        if (!msgId || !keepEl || keepEl.parentNode !== messageList) return;
+        var dups = messageList.querySelectorAll('.message[data-msg-id="' + msgId + '"]');
+        for (var i = 0; i < dups.length; i++) {
+            if (dups[i] !== keepEl && !dups[i].getAttribute('data-nonce')) dups[i].remove();
+        }
+    }
+    function clearPendingSelfBubbles() { __pendingSelf = []; __pendingByNonce = {}; }
+
     // ===== 阶段二百二十五：手机 APP 后台保活联动（切后台由原生前台服务接管收消息） =====
     // 回前台交接重连成功后（socket.js 派发），重拉当前会话历史——后台期消息由原生连接
     // 接收并弹通知，WebView 未渲染，交接窗口内到达的消息经服务端登录补推/历史拉取归口补齐
+    // 阶段二百五十六补丁：静默重拉标记——resync 不再"先清空再重绘"（无新消息也会隐藏→重现，
+    // 构成可见刷新：打开/关闭相册回前台均触发）。改为不清空直接拉首页历史，HISTORY_RESP 处与
+    // 当前视图逐条比对：一致=零重绘（无感）；有差异才静默全量重绘（挂隐藏类批量替换）
+    var resyncSilent = false;
     window.addEventListener('im_resync_history', function () {
         if (!currentChatUser || !IMSocket.isConnected()) return;
         historyPage = 1;
         historyHasMore = true;
         loadingMore = false;
-        messageList.innerHTML = '';
-        messageList.classList.add('conv-switching');
-        if (convSwitchTimer) clearTimeout(convSwitchTimer);
-        convSwitchTimer = setTimeout(function () {
-            convSwitchTimer = null;
-            messageList.classList.remove('conv-switching');
-        }, 3000);
+        resyncSilent = true; // HISTORY_RESP 首页分支消费：比对视图决定零重绘或静默重绘
         loadHistory();
     });
     // 后台通知点击跳转：原生通知携带深链 imapp://chat?to=<会话目标>，
@@ -4537,6 +4586,23 @@
     // 现恢复原直发链路：普通会话工具栏显示 image-btn/file-btn；AI 会话按钮隐藏（走「+」菜单），
     // 下方 AI 分支守卫保留兜底（按钮误显示时仍按原链路分流）。绑定前守卫：PC 端磁盘缓存
     // index.html 可能滞后于 chat.js（节点缺失跳过绑定防 TypeError 中断脚本初始化，attach 同坑先例）
+    // [插桩] 手机端相册发图诊断日志：console + localStorage 环形缓冲（上限 400 条）。
+    // 排查"发第 N 张自己看到第 N-1 张 / 自己看不到刚发的图但好友能收到"错位问题。
+    // 真机读取：USB 连接后 Chrome 打开 chrome://inspect 看 console 的 [IMGDBG] 前缀日志；
+    // 或在控制台执行 JSON.parse(localStorage.getItem('im_img_dbg')) 导出全部记录。
+    window.__imgDbg = function (tag, data) {
+        try {
+            var line = '[IMGDBG] ' + Date.now() + ' ' + tag +
+                (data !== undefined ? ' ' + (typeof data === 'string' ? data : JSON.stringify(data)) : '');
+            console.log(line);
+            var arr = [];
+            try { arr = JSON.parse(localStorage.getItem('im_img_dbg') || '[]'); } catch (eP) { arr = []; }
+            arr.push(line);
+            if (arr.length > 400) arr = arr.slice(arr.length - 400);
+            localStorage.setItem('im_img_dbg', JSON.stringify(arr));
+        } catch (e) { }
+    };
+    var __imgDbgSeq = 0;
     if (imageBtn && fileBtn && imageInput && fileInput) {
         imageBtn.addEventListener('click', function () {
             // 原实现：群聊视图拦截提示"群聊暂不支持发送图片"，阶段二十六放开——群聊图片走 HTTP 上传链路
@@ -4556,11 +4622,28 @@
         imageInput.addEventListener('change', function () {
             if (imageInput.files[0]) {
                 var f = imageInput.files[0];
+                // [插桩] 相册选择回调：记录本次选中文件的指纹（name/size/lastModified）与 files 长度，
+                // 用于判定 WebView 是否把"上一次的 File"回填到 change 事件（错位根因候选①）
+                __imgDbgSeq++;
+                var __seq = __imgDbgSeq; // 快照本次序号（whenReady 回调延迟触发时全局序号可能已推进）
+                window.__imgDbg('PICK seq=' + __seq, {
+                    count: imageInput.files.length,
+                    name: f.name, size: f.size, lastModified: f.lastModified,
+                    type: f.type, to: currentChatUser
+                });
                 // 阶段二百四十三：交接重连窗口兜底——APP 端拉起系统相册选择器触发 pause 交接
                 // （页面 WS 主动断开交原生前台服务），选完返回时 WS 尚在重连（1~3 秒），此刻
                 // 发送即静默丢失（图片发不出去）。现等连接就绪后再分流；私聊分支由 sendFile
                 // 内部再兜一层。10 秒仍不可达按失败提示
                 var dispatchImg = function () {
+                    // [插桩] 分流时刻记录：seq 与 PICK 对应、WS 是否就绪、走哪条链路
+                    window.__imgDbg('DISPATCH seq=' + __seq, {
+                        connected: IMSocket.isConnected(), name: f.name, size: f.size,
+                        lastModified: f.lastModified, to: currentChatUser,
+                        branch: isGroupTarget(currentChatUser) ? 'group'
+                                : isAIAgent(currentChatUser) ? 'ai'
+                                : (currentChatUser === '' ? 'none' : 'private')
+                    });
                     // 阶段二十六：群聊视图走 HTTP 上传链路（sendGroupImage），私聊仍走分片协议（sendFile）
                     // 阶段一百四十二：多群泛化——多群会话同走群图片直传（group 参数归口）；全局群已废弃
                     if (isGroupTarget(currentChatUser)) sendGroupImage(f);
@@ -4570,6 +4653,8 @@
                 };
                 if (IMSocket.isConnected()) dispatchImg();
                 else IMSocket.whenReady(function (ok) {
+                    // [插桩] 交接重连窗口：记录 whenReady 回调延迟（选图→就绪之间可能错位）
+                    window.__imgDbg('WHENREADY seq=' + __seq + ' ok=' + ok + ' t=' + Date.now());
                     if (ok) dispatchImg();
                     else showToast(I18N.t('网络连接失败，请重新发送'));
                 });
@@ -5069,21 +5154,36 @@
     function applyDirectUploadResult(nonce, resp) {
         if (!resp || !resp.url) return;
         var el = messageList.querySelector('.message.self[data-nonce="' + nonce + '"]');
+        // 阶段二百五十：交接暂存窗口内气泡脱离 DOM，回填改打暂存节点（补回时已带 msg_id/url）
+        if (!el && __pendingByNonce[nonce]) el = __pendingByNonce[nonce];
+        // [插桩] HTTP 上传响应兜底回填：nonce 是否匹配到本地气泡（匹配不到=本地预览已丢，"自己看不到"）
+        var __hbImg = el ? el.querySelector('.chat-image') : null;
+        window.__imgDbg('HTTP_BACKFILL nonce=' + nonce, {
+            found: !!el, msg_id: resp.msg_id, url: resp.url,
+            blobOk: __hbImg ? __hbImg.getAttribute('data-blob-ok') : null,
+            blobFail: __hbImg ? __hbImg.getAttribute('data-blob-fail') : null,
+            src: __hbImg ? __hbImg.getAttribute('src') : null
+        });
         if (!el) return; // suppressLocal（转发抑制本地气泡）等场景：转发链路自持消费
         if (resp.msg_id && !el.getAttribute('data-msg-id')) el.setAttribute('data-msg-id', resp.msg_id);
         if (resp.file_id && !el.getAttribute('data-file-id')) el.setAttribute('data-file-id', resp.file_id);
+        // 阶段二百五十：补回的在途气泡拿到 msg_id 后，若同 msg_id 的历史副本已渲染（交接窗口内
+        // HISTORY 先于 HTTP 响应落库返回），移除无 nonce 的历史副本，保留用户已见的 blob 气泡（防双气泡）
+        if (resp.msg_id) dedupSelfBubbleByMsgId(el, resp.msg_id);
         var img = el.querySelector('.chat-image');
         if (img) {
             img.setAttribute('data-src', resp.url);
             // blob 预览已失败直接切服务器地址；仍在加载中的给 1.5s 缓冲（桌面 blob 毫秒级
             // 完成不误切），超时仍未就绪切服务器地址——load 成功后骨架/占位经既有监听自动清理
             if (img.getAttribute('data-blob-fail') === '1') {
+                window.__imgDbg('SRC_SWITCH nonce=' + nonce + ' reason=fail -> ' + resp.url);
                 img.src = resp.url;
             } else if (img.getAttribute('data-blob-ok') !== '1') {
                 setTimeout(function () {
                     if (!img.parentNode) return;                        // 气泡已被移除（切会话/撤回）
                     if (img.getAttribute('data-blob-ok') === '1') return;
                     if (img.complete && img.naturalWidth > 0) return;   // 已就绪（load 竞态兜底）
+                    window.__imgDbg('SRC_SWITCH nonce=' + nonce + ' reason=timeout1500 -> ' + resp.url);
                     img.src = resp.url;
                 }, 1500);
             }
@@ -5114,11 +5214,20 @@
     function sendFileDirect(file, toUserOverride, suppressLocal) {
         var toUser = toUserOverride || currentChatUser;
         var nonce = Date.now() + '_' + Math.random().toString(36).slice(2);
+        // [插桩] 直传入口：文件指纹 + nonce，关联 PICK/DISPATCH 与后续 HTTP 响应/渲染
+        window.__imgDbg('DIRECT_IN nonce=' + nonce, {
+            name: file.name, size: file.size, lastModified: file.lastModified,
+            suppressLocal: !!suppressLocal, to: toUser
+        });
         if (!suppressLocal) {
             var url = URL.createObjectURL(file);
             if (isImageName(file.name)) {
                 var b1 = appendImageMsg(IMSocket.getUsername(), url, 'self', true);
                 b1.setAttribute('data-nonce', nonce);
+                // [插桩] 本地 blob 预览气泡创建：记录 blob 地址与气泡当前总数（错位=列表里气泡与文件不一致）
+                window.__imgDbg('BUBBLE nonce=' + nonce, {
+                    blob: url, imgCount: messageList.querySelectorAll('.message.self[data-nonce]').length
+                });
             } else {
                 var b2 = appendFileMsg(IMSocket.getUsername(), file.name, formatSize(file.size), url, 'self', true);
                 b2.setAttribute('data-nonce', nonce);
@@ -5513,11 +5622,21 @@
         // 该气泡仍需走下方回填（已读状态注册等，均幂等），仅对非本地实时气泡（历史渲染/多端）跳过
         var isMine0 = msg.from_user === IMSocket.getUsername();
         var dupEl = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
-        if (dupEl && !(isMine0 && meta.nonce && dupEl.getAttribute('data-nonce') === meta.nonce)) return;
+        // 阶段二百五十：dupEl 命中但本地在途气泡（含暂存中）持有同 nonce 时不跳过——仍需回填
+        if (dupEl && !(isMine0 && meta.nonce && (dupEl.getAttribute('data-nonce') === meta.nonce || __pendingByNonce[meta.nonce]))) return;
         var isMine = isMine0;
         // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
         if (isMine && meta.nonce) {
             var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            // 阶段二百五十：交接暂存窗口内气泡脱离 DOM（innerHTML 清空后尚未补回），
+            // 回填改打在暂存节点上——补回时已带 msg_id，restore 按历史渲染结果决定去留（防双气泡）
+            if (!mineEl && __pendingByNonce[meta.nonce]) mineEl = __pendingByNonce[meta.nonce];
+            // [插桩] WS 回执但本地气泡缺失（切会话/被移除/预览未建）——"自己看不到"的关键分叉
+            if (!mineEl) {
+                window.__imgDbg('WS_NO_LOCAL_BUBBLE nonce=' + meta.nonce, {
+                    msg_id: msg.msg_id, selfNonceCount: messageList.querySelectorAll('.message.self[data-nonce]').length
+                });
+            }
             if (mineEl) {
                 // 阶段一百六十：视频文件完成回填升级为内联视频气泡（微信同款可点击播放）——
                 // 进度气泡为通用文件卡片形态，就地转终态会绕过 appendFileMsg 的视频分流，
@@ -5525,6 +5644,14 @@
                 // 图片气泡走 appendImageMsg 独立路径不受影响，普通文件维持就地转终态（原位重绘无闪烁）
                 var upName = (mineEl.querySelector('.file-name') || {}).textContent || '';
                 if (meta.url && isVideoName(upName)) {
+                    // 阶段二百五十：暂存节点被视频终态气泡替代——先摘出暂存表（nv 已由 appendVideoMsg
+                    // 入列，旧节点不再补回，防双气泡）
+                    if (mineEl.parentNode !== messageList) {
+                        for (var __pi = __pendingSelf.length - 1; __pi >= 0; __pi--) {
+                            if (__pendingSelf[__pi].el === mineEl) __pendingSelf.splice(__pi, 1);
+                        }
+                        if (meta.nonce) delete __pendingByNonce[meta.nonce];
+                    }
                     var nv = appendVideoMsg(IMSocket.getUsername(), upName, (mineEl.querySelector('.file-size') || {}).textContent || '', meta.url, 'self', true);
                     nv.setAttribute('data-msg-id', msg.msg_id);
                     nv.setAttribute('data-file-id', msg.file_id);
@@ -5539,6 +5666,8 @@
                 }
                 mineEl.setAttribute('data-msg-id', msg.msg_id);
                 mineEl.setAttribute('data-file-id', msg.file_id);
+                // 阶段二百五十：补回的在途气泡经 WS 回填 msg_id 后，移除同 msg_id 的历史副本（防双气泡）
+                dedupSelfBubbleByMsgId(mineEl, msg.msg_id);
                 applyBubbleReadStatus(mineEl, msg.msg_id, msg.to_user || '');
                 // 阶段三十八：图片气泡 src 从 blob: 回填为服务器 URL——blob 仅本页面有效，
                 // 图片查看器（独立窗口）收集列表时跨窗口加载失败，导致自己发的图进不了翻页/缩略图列表
@@ -5553,18 +5682,27 @@
                 // 骨架屏兼容：blob 预览地址可能停留在 src 或 data-src，data-src 统一回填服务器地址
                 if (mImg && meta.url) {
                     mImg.setAttribute('data-src', meta.url);
+                    // [插桩] WS FILE_PERSISTED 命中本地气泡（nonce 匹配），记录 blob 当前状态
+                    window.__imgDbg('WS_PERSISTED nonce=' + meta.nonce, {
+                        msg_id: msg.msg_id, url: meta.url,
+                        blobOk: mImg.getAttribute('data-blob-ok'),
+                        blobFail: mImg.getAttribute('data-blob-fail'),
+                        src: mImg.getAttribute('src'), nw: mImg.naturalWidth
+                    });
                     // 阶段二百四十七兜底（真机实测：Android WebView 对相册 content:// File 的 blob
                     // 预览可能挂起/加载失败，而 XHR 上传走原生网络栈不受影响——好友可见而自己
                     // 永远看不到自己发的图）。blob 已失败直接切服务器地址；仍在加载中的给 1.5s
                     // 缓冲（桌面 blob 毫秒级完成不误切），超时仍未就绪（complete=false 或未成功）
                     // 切服务器地址——load 成功后骨架/降级占位经既有监听自动清理
                     if (mImg.getAttribute('data-blob-fail') === '1') {
+                        window.__imgDbg('SRC_SWITCH nonce=' + meta.nonce + ' reason=ws_fail -> ' + meta.url);
                         mImg.src = meta.url;
                     } else if (mImg.getAttribute('data-blob-ok') !== '1') {
                         setTimeout(function () {
                             if (!mImg.parentNode) return;                       // 气泡已被移除（切会话/撤回）
                             if (mImg.getAttribute('data-blob-ok') === '1') return;
                             if (mImg.complete && mImg.naturalWidth > 0) return; // 已就绪（load 竞态兜底）
+                            window.__imgDbg('SRC_SWITCH nonce=' + meta.nonce + ' reason=ws_timeout1500 -> ' + meta.url);
                             mImg.src = meta.url;
                         }, 1500);
                     }
@@ -6110,9 +6248,12 @@
             // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
             // 多端场景：其他设备无带 nonce 的本地气泡，走下方通用渲染分支
             var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            // 阶段二百五十：交接暂存窗口内气泡脱离 DOM，回填改打暂存节点（补回时已带 msg_id，防双气泡）
+            if (!mineEl && __pendingByNonce[meta.nonce]) mineEl = __pendingByNonce[meta.nonce];
             if (mineEl) {
                 if (msg.msg_id) mineEl.setAttribute('data-msg-id', msg.msg_id);
                 if (msg.timestamp) mineEl.setAttribute('data-ts', msg.timestamp);
+                dedupSelfBubbleByMsgId(mineEl, msg.msg_id); // 阶段二百五十：移除同 msg_id 历史副本（防双气泡）
                 return;
             }
         }
@@ -6138,6 +6279,8 @@
         if (isMine && meta.nonce) {
             // 发送端：按 nonce 精确匹配本地气泡回填 msg_id（本地 blob 预览已在发送时渲染，不重复渲染）
             var mineEl = messageList.querySelector('.message.self[data-nonce="' + meta.nonce + '"]');
+            // 阶段二百五十：交接暂存窗口内气泡脱离 DOM，回填改打暂存节点（补回时已带 msg_id，防双气泡）
+            if (!mineEl && __pendingByNonce[meta.nonce]) mineEl = __pendingByNonce[meta.nonce];
             if (mineEl) {
                 if (msg.msg_id) mineEl.setAttribute('data-msg-id', msg.msg_id);
                 if (msg.timestamp) mineEl.setAttribute('data-ts', msg.timestamp);
@@ -6153,6 +6296,7 @@
                 // 阶段二百二十四：进度圈兜底摘除（广播先于 HTTP 响应到达的竞态场景）
                 var gUpring2 = mineEl.querySelector('.bubble-video-upring');
                 if (gUpring2) gUpring2.remove();
+                dedupSelfBubbleByMsgId(mineEl, msg.msg_id); // 阶段二百五十：移除同 msg_id 历史副本（防双气泡）
                 return;
             }
         }
@@ -7298,7 +7442,12 @@
             try {
                 var lastChat = localStorage.getItem('im_last_chat_' + IMSocket.getUsername());
                 // 全局群已废弃：lastChat 为空串（旧记录停在全局群）不恢复，停留空态
-                if (lastChat) openConversation(lastChat);
+                // 阶段二百五十六：APP 回前台重登（相册开关触发交接重连）页面并未刷新、视图仍在
+                // 该会话（DOM 有消息）——跳过重开。原实现无条件 openConversation 会 innerHTML 清空
+                // +挂隐藏类再全量重绘，正是"打开/关闭相册聊天区可见刷新"的根因；视图一致性由
+                // im_resync_history 静默比对兜底（一致=零重绘）。浏览器刷新/首登 currentChatUser=''，
+                // 条件成立照常恢复，行为不变
+                if (lastChat && !(lastChat === currentChatUser && messageList.children.length)) openConversation(lastChat);
             } catch (e) {}
             // 阶段四十三：登录成功后拉取 AI 智能体列表（刷新自动重登/断线重连均会走 LOGIN_RESP，服务端配置归口）
             requestAIAgents();
@@ -19526,6 +19675,32 @@
     // 归口：服务端申请单落库（同一对用户仅一条待处理）；卡片状态经 PURGE_APPLY 帧同步双方
     // （发起/审批/登录补推/终态变更 复用同一帧），前端按 from_user===自己 区分发起/审批视角
     var purgeCards = {}; // peer -> {apply_id, from_user, to_user, status}
+    // 阶段二百五十六补丁二：持久化"已处理终态申请 id"集合——相册开关/断线重连触发服务端登录补推
+    // （pushPendingPurges 近 72h 终态卡片）时，同一 status=1 帧会重复到达。原去重仅靠内存 purgeCards
+    // （整页重载即丢失）→ dup 恒 false → 每次重连都执行 messageList.innerHTML='' 清空已填充视图，
+    // 这正是"打开/关闭相册聊天区可见刷新"根因（CLEAR_TRACE 实测栈锁定 chat.js:19739）。
+    // 用 localStorage 持久化已清空过的 apply_id：补推的旧终态帧命中即跳过清空（视图由 openConversation
+    // /resync 自然恢复），仅首次真实同意（不在集合内）才清空重拉——与 resyncSilent 时序无关，不误伤
+    // 后台错过终态帧→回前台即时清理链路（该场景 apply_id 首次出现，seen=false 正常清空）。
+    function purgeSeenKey() { return 'im_purge_seen_' + (IMSocket.getUsername() || ''); }
+    function purgeSeenHas(id) {
+        try { return (JSON.parse(localStorage.getItem(purgeSeenKey())) || []).indexOf(id) >= 0; } catch (e) { return false; }
+    }
+    function purgeSeenAdd(id) {
+        try {
+            var a = JSON.parse(localStorage.getItem(purgeSeenKey())) || [];
+            if (a.indexOf(id) < 0) {
+                a.push(id);
+                if (a.length > 50) a = a.slice(a.length - 50); // 环形裁剪防无限增长
+                localStorage.setItem(purgeSeenKey(), JSON.stringify(a));
+            }
+        } catch (e) {}
+    }
+    // 阶段二百五十六：APP 切后台/息屏交接窗口内好友同意删除——57 帧仅在线推送且原生
+    // KeepAliveService 不转发，WebView 错过终态帧后视图停留旧记录（须手动切会话才刷新）。
+    // 主修复在 socket.js（交接断开补置 bgResyncPending → 回前台重连重拉历史清空视图）+
+    // 服务端登录补推终态卡片（见 purge.go）。此处按 (apply_id,status) 去重：重连补推的终态帧
+    // 若与本端已记录状态一致，仅刷新卡片展示、不再重复"清空+重拉"（避免与 resync 双刷闪烁）
 
     IMSocket.on(MSG.PURGE_APPLY, function (msg) {
         var p = null;
@@ -19533,15 +19708,33 @@
         if (!p.apply_id || !p.from_user) return;
         var me = IMSocket.getUsername();
         var peer = (p.from_user === me) ? p.to_user : p.from_user;
-        purgeCards[peer] = p;
+        var prev = purgeCards[peer];
+        // 同一申请同一状态重复帧（登录补推/多端回环）：仅更新卡片展示，不重复清空重拉
+        var dup = prev && prev.apply_id === p.apply_id && prev.status === p.status;
+        // 阶段二百五十六补丁：同一对用户可能存在"旧终态+新待处理"两条申请（登录补推按 id 倒序
+        // 先后到达，purgeCards 按 peer 归口会被旧终态帧覆盖新待处理卡片——审批方看不到同意/
+        // 拒绝按钮，审批流卡死）。归口优先级：待处理(0) 恒覆盖；终态帧仅在无待处理或同申请时落位
+        // 唯一不覆盖场景：本端正展示待处理申请，新帧是另一申请的终态（防旧终态吞掉待处理卡片）
+        if (!(prev && prev.apply_id !== p.apply_id && p.status !== 0 && prev.status === 0)) {
+            purgeCards[peer] = p;
+        }
         if (currentChatUser !== peer) return;
         if (p.status === 1) {
             // 对方已同意：云端已物理删除，重拉当前视图清掉残留气泡（卡片由历史加载钩子重挂终态）
-            messageList.innerHTML = '';
-            historyPage = 1;
-            historyHasMore = true;
-            loadingMore = false;
-            loadHistory();
+            // 阶段二百五十六补丁二：清空判据从"内存 dup"改为"持久化 seen"——dup 仅在本次页面会话
+            // 内有效，整页重载/重连后必 false，导致服务端每次补推同一终态帧都清空已填充视图（相册
+            // 开关可见刷新根因）。seen 命中即跳过清空，视图由 openConversation/resync 自然恢复；
+            // 首次真实同意（含后台错过终态帧回前台场景）seen=false 正常清空，链路不误伤
+            if (!dup && !purgeSeenHas(p.apply_id)) {
+                purgeSeenAdd(p.apply_id);
+                messageList.innerHTML = '';
+                historyPage = 1;
+                historyHasMore = true;
+                loadingMore = false;
+                loadHistory();
+                return;
+            }
+            renderPurgeCard(); // 补推的旧终态帧：不重绘视图，仅确保卡片状态在位
             return;
         }
         renderPurgeCard();
@@ -19778,6 +19971,7 @@
         // 切换会话：重置定位状态、关闭搜索浮层、刷新置顶条
         locateState.active = false;
         closeConvSearch();
+        clearPendingSelfBubbles(); // 阶段二百五十：切换会话丢弃上一会话的在途暂存气泡（防串会话）
         messageList.innerHTML = '';
         // 阶段一百三十四：会话切换渲染期隐藏——旧实现清空后等 HISTORY 响应逐条 append（内容逐步涌现
         // 跨多帧+网络空窗）构成闪烁；挂类隐藏后批量渲染完毕一次性显示（HISTORY_RESP 归口移除），
@@ -20087,6 +20281,59 @@
             return;
         }
 
+        // 阶段二百五十六补丁：静默重拉比对——回前台 resync 不再无条件"先清空再重绘"
+        // （无新消息也会隐藏→重现构成可见刷新：打开/关闭相册回前台均触发）。视图与首页历史
+        // 逐条一致=零重绘（在途气泡原地保留无需暂存）；有差异=静默全量重绘（暂存在途气泡+挂
+        // 隐藏类批量替换+一次性显示）
+        if (resyncSilent) {
+            resyncSilent = false;
+            var __same = true;
+            var curSeq = [], expSeq = [];
+            (function () {
+                var nodes = messageList.children;
+                for (var i2 = 0; i2 < nodes.length; i2++) {
+                    var el = nodes[i2];
+                    if (!el || !el.classList) continue;
+                    if (el.classList.contains('msg-purge-card')) continue; // 卡片由 renderPurgeCard 归口，不参与比对
+                    // 在途未落库自发气泡（有 nonce 无 msg-id）：历史不含但视图须保留，不参与比对
+                    if (el.classList.contains('message') && el.getAttribute('data-nonce') && !el.getAttribute('data-msg-id')) continue;
+                    // 仅收集消息气泡 ID 与撤回占位标记（其余如智能体卡/空态等装饰元素不参与比对）。
+                    // 撤回提示只比"占位"不比文本——昵称缓存可能在两次渲染间更新导致文本漂移误判 diff
+                    if (el.getAttribute('data-msg-id')) {
+                        curSeq.push(el.getAttribute('data-msg-id'));
+                    } else if (el.classList.contains('system-tip')) {
+                        curSeq.push('tip');
+                    }
+                }
+                for (var j2 = records.length - 1; j2 >= 0; j2--) { // 服务端倒序→正序
+                    expSeq.push(records[j2].recalled ? 'tip' : String(records[j2].id));
+                }
+                if (curSeq.length < expSeq.length) { __same = false; return; }
+                var off2 = curSeq.length - expSeq.length; // 视图可能含更早翻页内容，尾部对齐比较
+                for (var k2 = 0; k2 < expSeq.length; k2++) {
+                    if (curSeq[off2 + k2] !== expSeq[k2]) { __same = false; return; }
+                }
+            })();
+            if (__same) {
+                // 零重绘：视图已与服务端一致，仅补已读回执（后台无新消息场景完全无感）
+                historyHasMore = records.length >= msg.page_size;
+                var maxId0 = 0;
+                records.forEach(function (r) { if (r.from_user !== IMSocket.getUsername() && r.id > maxId0) maxId0 = r.id; });
+                if (maxId0 && currentChatUser !== '' && !isGroupTarget(currentChatUser)) sendReadReceipt(currentChatUser, maxId0);
+                return;
+            }
+            // 有差异：静默全量重绘（暂存在途气泡防销毁，隐藏类下批量渲染后一次性显示）
+            stashInflightSelfBubbles();
+            messageList.innerHTML = '';
+            messageList.classList.add('conv-switching');
+            if (convSwitchTimer) clearTimeout(convSwitchTimer);
+            convSwitchTimer = setTimeout(function () {
+                convSwitchTimer = null;
+                messageList.classList.remove('conv-switching');
+                if (__pendingSelf.length) restoreInflightSelfBubbles({});
+            }, 3000);
+        }
+
         // 服务端按 ID 倒序返回，正序渲染
         records.reverse().forEach(function (r) {
             renderHistoryRecord(r);
@@ -20115,6 +20362,17 @@
         if (maxId && currentChatUser !== '' && !isGroupTarget(currentChatUser)) {
             // 原实现：IMSocket.send({ msg_type: MSG.READ, to_user: currentChatUser, content: String(maxId) });
             sendReadReceipt(currentChatUser, maxId);
+        }
+
+        // 阶段二百五十：交接重拉历史渲染完成——把暂存的"未落库"在途自发气泡补回列表末尾
+        // （已落库的本次历史已渲染，丢弃 blob 副本防双气泡）。在 conv-switching 摘类前补回，
+        // 与历史内容同帧显示无闪烁
+        if (__pendingSelf.length) {
+            var __renderedIds = {};
+            for (var __ri = 0; __ri < records.length; __ri++) {
+                if (records[__ri].id) __renderedIds[records[__ri].id] = true;
+            }
+            restoreInflightSelfBubbles(__renderedIds);
         }
 
         // 阶段一百三十四：会话切换渲染完成——一次性显示（与 openConversation/aiSwitchSession 的
@@ -22614,6 +22872,13 @@
         var sk = document.createElement('div');
         sk.className = 'chat-image-skeleton';
         var skTimer = null;
+        // [插桩] 渲染层诊断：blob 加载成功/失败的时刻与耗时（错位/看不到=load 迟到或 error）。
+        // nonce 取自所属气泡（appendImageMsg 调用方随后挂上，异步读取避免时序问题）
+        var __skT0 = Date.now();
+        var __dbgId = function () {
+            var m = img.closest ? img.closest('.message') : null;
+            return m ? (m.getAttribute('data-nonce') || m.getAttribute('data-msg-id') || '?') : '?';
+        };
         function clearSkTimer() { if (skTimer) { clearTimeout(skTimer); skTimer = null; } }
         // 骨架超时兜底（骨架不允许永久停留）：10 秒仍未加载完成（请求挂起/过慢）时
         // 转降级占位（点击重试可强制重载，同微信失败占位）
@@ -22631,11 +22896,22 @@
             if (sk.parentNode) sk.remove();
             img.style.display = '';
             if (stickBottom) messageList.scrollTop = messageList.scrollHeight;
+            // [插桩] blob/服务器地址加载成功：记录耗时、当前 src、像素尺寸（naturalWidth=0 即"看不到"）
+            window.__imgDbg('IMG_LOAD nonce=' + __dbgId(), {
+                ms: Date.now() - __skT0, src: img.getAttribute('src'),
+                dataSrc: img.getAttribute('data-src'),
+                nw: img.naturalWidth, nh: img.naturalHeight
+            });
         });
         img.addEventListener('error', function () {
             img.setAttribute('data-blob-fail', '1'); // 阶段二百四十七：预览失败标记（FILE_PERSISTED 回填切服务器地址用）
             clearSkTimer();
             if (sk.parentNode) sk.remove(); // attachImageFallback 的 error 回调负责插入降级占位
+            // [插桩] 加载失败/挂起：这是"自己看不到自己发的图"的直接现场
+            window.__imgDbg('IMG_ERR nonce=' + __dbgId(), {
+                ms: Date.now() - __skT0, src: img.getAttribute('src'),
+                dataSrc: img.getAttribute('data-src')
+            });
         });
         if (img.parentNode) img.parentNode.insertBefore(sk, img);
         img.src = url; // 创建即加载：保持原显示速度与缓存预热，骨架仅作加载完成前的视觉过渡

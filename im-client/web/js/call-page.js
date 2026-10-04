@@ -1660,7 +1660,18 @@
                 // 已在会成员收：新成员资料 + 由我发 offer（建连方向规则）；ICE 随帧注入（发起人唯一拿到配置的路径）
                 if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
                 var mi = p.member || {};
-                if (!mi.username || st.members[mi.username]) break;
+                if (!mi.username) break;
+                // 阶段二百五十五：断线重加入——成员表已有该用户（其进程被杀后凭会议号重进，
+                // 服务端清残留态重发 meet_join）时不能跳过：旧 pc 已死，须关连接清看门狗后
+                // 重建成员态再走 offer 建连（新入会者收 room_info 等 offer，双端才能配对）
+                if (st.members[mi.username]) {
+                    var om = st.members[mi.username];
+                    clearMeetGiveup(mi.username);
+                    stopMeetRestartLoop(mi.username);
+                    try { if (om.pc) om.pc.close(); } catch (e) { }
+                    delete st.members[mi.username];
+                    if (recRemote[mi.username]) { delete recRemote[mi.username]; recBadgeRefresh(); }
+                }
                 st.members[mi.username] = {
                     name: mi.name || mi.username, avatar: mi.avatar || '', pc: null, stream: null, pendingCands: [], muted: false,
                     // 阶段一百四十八：成员级断网恢复状态初始化（同 room_info）

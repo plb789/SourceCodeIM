@@ -64,6 +64,11 @@
                                 // onmessage/onclose 排迟到回前台之后（此时 visibilityState 已 visible，
                                 // bgHoldReconnect 判定失效），以 8 秒交接活动窗口兜底识别交接型 kick
     var bgResyncPending = false;// 回前台重连成功后需重拉当前会话历史（后台期消息由原生连接接收，WebView 未渲染）
+    // 阶段二百五十六补丁：后台期可能丢帧标记（与 bgResyncPending 区分——pending 绑定"需要重连"，
+    // missed 仅标记"后台期有帧由原生接收 WebView 未渲染"）。原实现交接 kick 即置 pending：
+    // 相册/拍摄等半透明浮层场景页面仍可见、3s 补位重连登录成功即派发 resync → 选图期间聊天页
+    // 可见刷新。现 kick 仅置 missed，回前台（visibilitychange visible）统一消费派发，选图期间零刷新
+    var bgMissedFrames = false;
     // 阶段二百三十二修复：bgPlugin 原实现以 !!(...) 返回布尔值，调用处却当插件对象用
     // （bgp.startKeepAlive / bgPlugin().takeOver()）——true 上取方法恒 undefined 抛
     // TypeError，startKeepAlive/takeOver/handBack 从未真正发出（prefs 凭据为空 → 后台接管
@@ -92,12 +97,18 @@
         // （切后台 close/takeOver 均未执行），回前台仍须交还并重连
         if (!nativeBG || !loginOk) return;
         bgHandoverAt = Date.now();
+        // 阶段二百五十六补丁：相册/拍摄等独立 Activity 仍在前台（pause 未配对 resume）时，
+        // 个别机型/模拟器 visibilitychange 会误报 visible——此刻重连会与原生保活互踢循环
+        // （RESYNC_CLEAR 每 4~5s 连发、聊天页持续刷新）。门禁：pause 期间连接归原生所有
+        if (bgAppPaused) return;
         if (!connected && currentUsername) {
             // 阶段二百四十四 P1：不再先 handBack 断原生连接（真空窗口元凶）——页面立即重连，
             // 登录成功后服务端同端互踢顶掉原生连接（KeepAliveService 收 kick 静默待命），
             // 登录回执处再补一次 handBack（幂等）。交接态保持至重连登录成功（LOGIN_RESP ok
             // 处解除），期间排迟的 kick/onclose 均按交接口径静默。成功后重拉当前会话历史
-            bgResyncPending = true;
+            // 阶段二百五十六补丁：missed 并入 pending（LOGIN_RESP 归口消费）
+            bgResyncPending = bgResyncPending || bgMissedFrames;
+            bgMissedFrames = false;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
@@ -116,16 +127,28 @@
                 if (connected) {
                     bgHandover = false;
                     try { var bgp = bgPlugin(); if (bgp) bgp.handBack(); } catch (e) {}
+                    // 阶段二百五十六补丁：连接存活但后台期帧由原生接收——直接消费 missed 派发重拉
+                    if (bgMissedFrames) {
+                        bgMissedFrames = false;
+                        try { window.dispatchEvent(new CustomEvent('im_resync_history')); } catch (e) {}
+                    }
                 } else if (!reconnectTimer) {
-                    bgResyncPending = true;
+                    bgResyncPending = bgResyncPending || bgMissedFrames;
+                    bgMissedFrames = false;
                     connect(currentUsername, window._lastPassword || '');
                 }
             }, 300);
         }
     }
+    // 阶段二百五十六补丁：APP 级 pause 标记（相册/拍摄等独立 Activity 在前台期间为 true）。
+    // 根因（leveldb 取证）：相册打开期间页面与原生保活互踢循环——RESYNC_CLEAR 每 4~5s 连发，
+    // 每轮 LOGIN_RESP 触发 resync 构成持续可见刷新。原 bgHoldReconnect 仅看 visibilityState，
+    // 部分机型/模拟器上独立 Activity 覆盖时 WebView 不报 hidden，门禁失效。pause/resume 由
+    // 原生 ActivityLifecycleCallbacks 驱动，语义可靠，并入重连门禁
+    var bgAppPaused = false;
     // 页面隐藏且已登录：连接归原生服务所有，WebView 一律不得重连（防互踢循环）
     function bgHoldReconnect() {
-        return nativeBG && loginOk && document.visibilityState === 'hidden';
+        return nativeBG && loginOk && (document.visibilityState === 'hidden' || bgAppPaused);
     }
 
     // 阶段二百三十一：桥就绪等待器——LOGIN_RESP 到达时 Capacitor 桥可能尚未注入完成
@@ -394,6 +417,13 @@
                 loginOk = false;
                 bgResetStart();
             }
+            // 阶段二百五十六：交接型断开（kick ERROR 帧丢失/排迟未到而 close 先到时按同口径判定）
+            // 置 missed 标记——后台期消息与控制帧由原生连接接收，WebView 未渲染，
+            // 回前台统一消费派发重拉（与 dispatch kick 分支同口径，选图浮层期间零刷新）
+            if (loginOk && (bgHandover || bgHoldReconnect()
+                || (nativeBG && Date.now() - bgHandoverAt < 8000))) {
+                bgMissedFrames = true;
+            }
             // 登录失败提示修复：仅登录成功后才自动重连。
             // 登录失败（密码错误等）服务端会下发错误提示并关闭连接，原实现无条件重连会陷入
             // "失败→3秒重连→失败"无限循环且每次都无提示，页面表现为点击登录后毫无反应
@@ -550,9 +580,13 @@
     if (nativeBG && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
         try {
             window.Capacitor.Plugins.App.addListener('pause', function () {
+                // 阶段二百五十六补丁：APP 级 pause 置位（相册/拍摄独立 Activity 前台期间
+                // 连接归原生所有，页面不得重连防互踢循环）
+                bgAppPaused = true;
                 if (loginOk) bgStartHandover();
             });
             window.Capacitor.Plugins.App.addListener('resume', function () {
+                bgAppPaused = false;
                 if (loginOk) bgEndHandover();
             });
         } catch (e) {}
@@ -591,6 +625,11 @@
                 //   真实异端互踢，8 秒窗口不再吞并，须正常处置防重连循环）
                 if (bgHoldReconnect() || bgHandover
                     || (nativeBG && Date.now() - bgHandoverAt < 8000)) {
+                    // 阶段二百五十六：交接期被自家原生顶掉=后台期消息由原生连接接收、WebView 未渲染
+                    // （含 57 审批终态等仅在线推送的控制帧），回前台须重拉历史归位视图。
+                    // 补丁：仅置 missed 标记（回前台统一消费），不在此置 pending——相册/拍摄等半透明
+                    // 浮层场景页面仍可见，补位重连登录成功即派发 resync 会造成选图期间聊天页可见刷新
+                    bgMissedFrames = true;
                     return;
                 }
                 loginOk = false;

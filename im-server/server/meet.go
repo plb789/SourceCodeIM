@@ -504,15 +504,35 @@ func (s *Server) handleMeetJoinNo(from string, msg *protocol.Message, p *callSig
 		s.callSendError(from, "", "会议不存在或已结束")
 		return
 	}
-	if _, busy := callUserBusy[from]; busy {
+	// 阶段二百五十五：断线重加入（进程被杀/闪断后凭会议号重进）——原实现直接拒绝
+	// "你正在通话中/你已在会议中"。但会议号加入信令仅在页面无会议窗时才会发出（前端有窗即拦截），
+	// 服务端仍记本人为成员/忙只可能是残留旧态：强杀后登录路径无条件取消宽限收口（本意保护
+	// 闪断重连窗仍在的场景），成员名单永不清理 → 用户被永久锁在会外。改按重加入处理：
+	// 清本人宽限定时器与共享/录制/设备快照（旧进程已死，快照必失效），走正常入会链路重建
+	// 双端状态（其他成员收 meet_join 幂等替换旧成员态，客户端 call-page.js 阶段二百五十五配套）；
+	// 忙指向其他通话/会议仍按原语义拒绝
+	busyID := callUserBusy[from]
+	ghost := room.Members[from] || busyID == room.ID
+	if busyID != "" && !ghost {
 		meetMu.Unlock()
 		s.callSendError(from, "", "你正在通话中")
 		return
 	}
-	if room.Members[from] {
-		meetMu.Unlock()
-		s.callSendError(from, "", "你已在会议中")
-		return
+	if ghost {
+		logger.Info("会议 %s：%s 凭会议号重加入，清理断线残留成员态", room.ID, from)
+		if room.offlineTimers != nil {
+			if t, ok := room.offlineTimers[from]; ok && t != nil {
+				t.Stop()
+			}
+			delete(room.offlineTimers, from)
+		}
+		delete(room.Sharing, from)
+		delete(room.Recording, from)
+		delete(room.Media, from)
+		// 阶段二百五十五补丁：清残留忙标记（成功路径下方 callUserBusy[from]=room.ID 会重写，
+		// 此 delete 为数据一致性兜底；罕见路径：ghost 清理后撞群成员/设备校验提前 return 时，
+		// 防用户被卡在指向本房间的 busy 态无法发起新通话）
+		delete(callUserBusy, from)
 	}
 	if room.GroupID > 0 && !isGroupMember(room.GroupID, from) {
 		meetMu.Unlock()
