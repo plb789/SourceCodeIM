@@ -238,7 +238,8 @@
         var dlgPh = document.getElementById('qr-login-avatar-ph');
         if (av && av.style.display !== 'none' && av.src) {
             dlgAv.src = av.src;
-            dlgAv.style.display = '';
+            // 关键：CSS 中 .qr-login-avatar 默认为 display:none，置空串会回落到样式表导致头像不显示（黑圈），必须显式 block
+            dlgAv.style.display = 'block';
             dlgPh.style.display = 'none';
         } else {
             dlgAv.style.display = 'none';
