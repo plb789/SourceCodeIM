@@ -426,11 +426,15 @@
         applyFs(target);
         if (target) enterWebFs(); else exitWebFs();
     }
-    // 横屏自动沉浸（仅 APP）：旋转到横屏自动进全屏铺满状态栏区，转回竖屏还原
-    function updateAutoFs() {
+    // 横屏自动沉浸（仅 APP）：旋转到横屏自动进全屏铺满状态栏区，转回竖屏还原。
+    // 仅在方向"变化"时触发（force=true 供 open 会话开始强制评估）——防软键盘弹出
+    // 引起的 resize 把用户手动退出的全屏又自动开回去
+    function updateAutoFs(force) {
         var land = !!(window.matchMedia && window.matchMedia('(orientation: landscape)').matches);
+        var changed = land !== st.landscape;
         st.landscape = land;
         if (!isApp()) return; // Web 端旋转非手势不可自动全屏，仅按钮手动
+        if (!changed && !force) return;
         if (land && !st.fs) { setAppImmersive(true); applyFs(true); }
         else if (!land && st.fs) { setAppImmersive(false); applyFs(false); }
     }
@@ -452,10 +456,12 @@
         document.addEventListener('webkitfullscreenchange', fsEvt);
         if (window.matchMedia) {
             var mq = window.matchMedia('(orientation: landscape)');
-            if (mq.addEventListener) mq.addEventListener('change', updateAutoFs);
-            else if (mq.addListener) mq.addListener(updateAutoFs);
+            // 注意：不能直接把 updateAutoFs 挂成事件回调——Event 对象会作为 truthy 的
+            // force 参数绕过"仅方向变化"守卫（软键盘 resize 会误触发自动开/关全屏）
+            if (mq.addEventListener) mq.addEventListener('change', function () { updateAutoFs(); });
+            else if (mq.addListener) mq.addListener(function () { updateAutoFs(); });
         }
-        window.addEventListener('resize', updateAutoFs);
+        window.addEventListener('resize', function () { updateAutoFs(); });
     }
 
     // ===== 软键盘（"键盘"按钮聚焦隐藏输入框，逐键 down/up 上行） =====
@@ -530,7 +536,7 @@
         resetTools();
         // 阶段二百六十四：复位全屏态（防上次会话残留），APP 若已横屏进入即自动沉浸
         exitFs();
-        updateAutoFs();
+        updateAutoFs(true);
         root.classList.remove('hidden');
         // 连接超时兜底（90s 同 PC 观看窗：offer 永不到达/被控端起流失败收口防层卡死）
         if (st.connectTimer) clearTimeout(st.connectTimer);

@@ -7,8 +7,11 @@ import (
 	"regexp"
 	"strings"
 
+	"im-server/logger"
 	"im-server/model"
 	"im-server/store"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ErrUserExists 用户名已存在
@@ -45,10 +48,41 @@ func isAuthBusinessError(err error) bool {
 		err == ErrQRLoginExpired || err == ErrQRLoginInvalid // 阶段二百四十：扫码登录业务错误原样下发
 }
 
-// hashPassword 密码加密（SHA256）
+// hashPassword 密码加密（阶段二百六十四：升级 bcrypt 自描述哈希）。
+// 新写入一律 bcrypt（cost 10，60 字符 $2a$ 前缀，User.password varchar(64) 可容纳）；
+// 存量 SHA256 哈希由 verifyPassword 双路兼容，并在登录成功时惰性升级（upgradePasswordHash）
 func hashPassword(password string) string {
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt 仅密码超 72 字节等极端场景失败——回落 SHA256 保证注册/改密不中断
+		sum := sha256.Sum256([]byte(password))
+		return hex.EncodeToString(sum[:])
+	}
+	return string(h)
+}
+
+// verifyPassword 双路校验归口：$2 前缀走 bcrypt 比对，否则按存量 SHA256 比对。
+// 返回 needUpgrade=true 表示存量旧格式校验通过，调用方应择机回写 bcrypt 哈希
+func verifyPassword(stored, password string) (ok bool, needUpgrade bool) {
+	if stored == "" {
+		return false, false
+	}
+	if strings.HasPrefix(stored, "$2") {
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) == nil, false
+	}
 	sum := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]) == stored, true
+}
+
+// upgradePasswordHash 惰性升级：存量 SHA256 账号登录成功后回写 bcrypt（明文此刻仅在
+// 内存中，校验通过即换）。回写失败不影响本次登录（保持旧哈希，下次登录再升）。
+// 注意：WebDAV 挂载密码由 DB 密码哈希派生（webdav.go driveDavPassword），本次升级会使
+// 已挂载用户的 dav 密码一次性轮换——与"改密自动轮换"同语义，设置页始终显示当前密码，用户重输即可
+func upgradePasswordHash(userID uint, password string) {
+	if err := store.DB.Model(&model.User{}).Where("id = ?", userID).
+		Update("password", hashPassword(password)).Error; err != nil {
+		logger.Warn("密码哈希惰性升级失败（uid=%d）：%v", userID, err)
+	}
 }
 
 // registerUser 注册新用户，用户名查重
@@ -96,8 +130,13 @@ func verifyUser(username, password string) (*model.User, error) {
 		// 现改为用户不存在返回 ErrUserNotFound，由调用方决定是否自动注册
 		return nil, ErrUserNotFound
 	}
-	if user.Password != hashPassword(password) {
+	ok, needUpgrade := verifyPassword(user.Password, password)
+	if !ok {
 		return nil, ErrInvalidLogin
+	}
+	if needUpgrade {
+		// 存量 SHA256 账号登录成功：惰性升级回写 bcrypt（IM 登录与后台登录共用本函数，双通道收口）
+		upgradePasswordHash(user.ID, password)
 	}
 	return &user, nil
 }

@@ -73,7 +73,9 @@ func rcRecordFail(deviceID string, maxFails, lockSec int) bool {
 		e = &rcLockEntry{}
 		rcLockMap[deviceID] = e
 	}
-	if time.Now().After(e.LockUntil) {
+	// 仅"曾锁定且锁已过期"才重新计数——新条目 LockUntil 为零值（0001-01-01），
+	// 无条件 After 判断会把每次失败计数清零，导致锁定永不触发（实测抓出的真 bug）
+	if !e.LockUntil.IsZero() && time.Now().After(e.LockUntil) {
 		e.Fails = 0 // 锁过期后重新计数
 	}
 	e.Fails++
@@ -232,10 +234,15 @@ func rcVerifyCode(dev *model.Device, code string) (ok bool, locked bool) {
 		rcClearFail(dev.DeviceID)
 		return true, false
 	}
-	// 静态密码：用户自设长期有效（空=未启用；存 sha256，校验时同哈希水位比对）
-	if dev.StaticPWHash != "" && hashPassword(code) == dev.StaticPWHash {
-		rcClearFail(dev.DeviceID)
-		return true, false
+	// 静态密码：用户自设长期有效（空=未启用；新存 bcrypt，存量 sha256 双路兼容+校验通过惰性升级）
+	if dev.StaticPWHash != "" {
+		if ok, needUpgrade := verifyPassword(dev.StaticPWHash, code); ok {
+			if needUpgrade {
+				store.DB.Model(&model.Device{}).Where("id = ?", dev.ID).Update("static_pw_hash", hashPassword(code))
+			}
+			rcClearFail(dev.DeviceID)
+			return true, false
+		}
 	}
 	locked = rcRecordFail(dev.DeviceID, rcMaxFails(), rcLockSec())
 	return false, locked
@@ -277,12 +284,18 @@ func (s *Server) guardRC(h http.HandlerFunc) http.HandlerFunc {
 			driveFail(w, http.StatusUnauthorized, "用户未在线，请先登录")
 			return
 		}
-		// 带 token 强校验归属（同网盘水位：防冒名管理他人设备）
-		if tk := r.Header.Get("X-Drive-Token"); tk != "" {
-			if tu, ok := DriveTokenVerify(tk); !ok || tu != username {
-				driveFail(w, http.StatusUnauthorized, "身份校验失败，请重新登录")
-				return
-			}
+		// 安全收口（审计修复）：token 强校验必选——远程控制设备管理接口回传动态验证码，
+		// 旧"空 token 放行"水位可被冒名在线用户拉取他人 device_id+dyn_code，配合
+		// rc_connect"验证码即授权"实现免确认静默接管。所有合法调用方（rc-panel.js）
+		// 均随登录回执持久化并携带 X-Drive-Token，无旧客户端兼容负担（RC 为新增功能）
+		tk := r.Header.Get("X-Drive-Token")
+		if tk == "" {
+			driveFail(w, http.StatusUnauthorized, "缺少身份凭证，请重新登录")
+			return
+		}
+		if tu, ok := DriveTokenVerify(tk); !ok || tu != username {
+			driveFail(w, http.StatusUnauthorized, "身份校验失败，请重新登录")
+			return
 		}
 		h(w, r)
 	}
@@ -378,7 +391,7 @@ func (s *Server) handleRCDeviceMy(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRCStaticPW 设置/清除静态访问密码 POST /api/rc/device/static_pw?username=xxx
-// 入参 {install_uuid, password}；password 空=清除静态密码。服务端 sha256 存 hash（与账号密码同水位）
+// 入参 {install_uuid, password}；password 空=清除静态密码。服务端 hashPassword（bcrypt）存 hash，存量 sha256 校验通过时惰性升级（与账号密码同水位）
 func (s *Server) handleRCStaticPW(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
 	var body struct {
