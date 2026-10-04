@@ -7673,6 +7673,15 @@
                 // 兜底：页面刚加载脚本未就绪时点击（IMDrive 未定义），延迟重试避免首次点击无响应
                 setTimeout(function () { if (window.IMDrive) window.IMDrive.open(); }, 300);
             }
+            // 阶段二百六十一：远程控制面板纳入互斥切换（向日葵同款；页面形态网盘同款覆盖层）
+            var rcPanelEl = document.getElementById('rc-panel');
+            if (rcPanelEl) rcPanelEl.classList.toggle('hidden', tabName !== 'rc');
+            if (window.IMRC) {
+                if (tabName === 'rc') window.IMRC.open();
+                else if (window.IMRC.isOpen()) window.IMRC.close();
+            } else if (tabName === 'rc') {
+                setTimeout(function () { if (window.IMRC) window.IMRC.open(); }, 300);
+            }
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
@@ -18652,14 +18661,16 @@
                 if (convFriend && convFriend.remark) name = convFriend.remark;
             }
             if (parts.length < 3) parts.push(name + '(' + cv.unread + ')');
-            // 预览面板明细（最多 5 条）：名称/最后消息摘要/未读数/头像（服务端头像优先，缺失面板内回退首字母）
+            // 预览面板明细（最多 5 条）：名称/最后消息摘要/未读数/头像（与主界面同口径 getAvatarUrl：
+            // 好友列表 > AI 智能体 > 在线用户表，缺失面板内回退首字母；原实现只查 userAvatars，
+            // 好友头像在 friendList 而不在登录 USER_LIST 快照时取空 → 通知/面板头像丢失回退默认图标）
             if (list.length < 5) {
                 list.push({
                     target: cv.target,
                     name: name,
                     last: cv.last_msg || '',
                     unread: cv.unread,
-                    avatar: cv.target !== '' ? (userAvatars[cv.target] || '') : ''
+                    avatar: cv.target !== '' ? getAvatarUrl(cv.target) : ''
                 });
             }
         });
@@ -18688,7 +18699,8 @@
                 rpNotifyLastTs = ntNow;
                 if (window.desktop && window.desktop.notify) {
                     var nf = list[0]; // convList 按最后活跃倒序，首条即最新消息来源
-                    window.desktop.notify(nf.name, nf.last || I18N.t('发来新消息'));
+                    // 头像随通知下发：主进程下载作大图（好友头像），缺失/失败回退应用图标
+                    window.desktop.notify(nf.name, nf.last || I18N.t('发来新消息'), nf.avatar || '');
                 }
             }
         }
@@ -21738,6 +21750,10 @@
     var remoteRingTimer = null;     // 60s 本地兜底计时器（服务端 timeout 归口前的双保险）
     var remoteRingActx = null, remoteRingInterval = null;
     var remoteMenuEl = null;        // 远程协助入口菜单单例（点击外部关闭）
+    // 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连）——rcPending 本连接发起中的连接请求
+    // {session_id, device_id, cb}；rc_ok 回执匹配即开观看窗，error/timeout 匹配即回调面板失败原因。
+    // 同账号多设备回环防御：仅持有 rcPending 的连接响应 rc_ok（其余连接 session 不匹配自然忽略）
+    var rcPending = null;
 
     // 远程协助信令上行（统一入口：msg_type=90 + content JSON）
     function remoteSignalSend(toUser, obj) {
@@ -21790,6 +21806,7 @@
         if (window.RemoteEngine) window.RemoteEngine.stop();
         if (window.desktop && window.desktop.remoteBarClose) window.desktop.remoteBarClose();
         if (window.desktop && window.desktop.remoteClose) window.desktop.remoteClose();
+        if (window.RCMobileView) window.RCMobileView.close(); // 阶段二百六十一：手机/WEB 控制端页内观看层收口
         remoteOpenId = '';
         remoteRole = '';
         remoteGrant = '';
@@ -21815,6 +21832,30 @@
         });
         showToast(mode === 'assist' ? I18N.t('已发送协助请求，等待对方接受') : I18N.t('已发送控制请求，等待对方接受'));
     }
+
+    // ===== 阶段二百六十一：远程控制发起（向日葵同款：设备ID+验证码直连，供"远程控制"面板调用） =====
+    // deviceId 9-10 位数字、code 动态码/静态密码；cb(ok, reason) 回执：true=已接通开窗口，false=失败原因。
+    // 信令 to_user 填 device_id 占位（服务端 rc_connect 按 device_id 查设备归口，不读 to_user）。
+    // 本地 20s 超时兜底（rc_ok/error 均丢失时防面板卡"连接中"；接通后由观看窗 90s connectTimer 归口）
+    window.rcConnect = function (deviceId, code, cb) {
+        deviceId = (deviceId || '').trim();
+        code = (code || '').trim();
+        if (!/^[0-9]{9,10}$/.test(deviceId)) { if (cb) cb(false, I18N.t('设备ID格式无效')); return; }
+        if (!code) { if (cb) cb(false, I18N.t('请输入验证码')); return; }
+        if (remoteOpenId || remotePendingInvite || rcPending) { if (cb) cb(false, I18N.t('正在远程会话中，请先断开')); return; }
+        if (callOpenId || pendingRing) { if (cb) cb(false, I18N.t('正在通话中，无法发起')); return; }
+        var sessionId = 'rc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        rcPending = { session_id: sessionId, device_id: deviceId, cb: cb };
+        var to = setTimeout(function () {
+            if (rcPending && rcPending.session_id === sessionId) {
+                var c = rcPending; rcPending = null;
+                if (c.cb) { try { c.cb(false, I18N.t('连接超时，对方设备可能不在线')); } catch (e) { } }
+            }
+        }, 20000);
+        // 超时句柄挂到 rcPending（rc_ok/error 到达时清除，防误触）
+        rcPending.timer = to;
+        remoteSignalSend(deviceId, { action: 'rc_connect', session_id: sessionId, device_id: deviceId, code: code });
+    };
 
     // 被邀请方接受（按 invite 模式定角色，QQ 同款语义）：
     // control=对方请求控制我 → 我是被控方（sharer）：发 accept(grant 由我选) + 悬浮条 + 共享引擎
@@ -21918,9 +21959,18 @@
             // 观看窗按 session_id 自过滤，观看窗未开时 IPC 空转无害）
             if (window.desktop && window.desktop.remoteSignalIn) window.desktop.remoteSignalIn(msg);
             var isMySession = (remoteOpenId && p.session_id === remoteOpenId) || (remotePendingInvite && remotePendingInvite.session_id === p.session_id);
-            if (p.action === 'error' && !isMySession) {
+            // 阶段二百六十一：远程控制连接请求（rc_connect 已发、rc_ok 未回）的校验失败同样归口本端
+            var isRcSession = rcPending && p.session_id === rcPending.session_id;
+            if (p.action === 'error' && !isMySession && !isRcSession) {
                 // 无在途会话的 error（校验拒绝等）：直接 toast（发起前收口，无窗可展示）
                 if (p.reason) showToast(p.reason);
+                return;
+            }
+            if (isRcSession) {
+                // 连接被拒（验证码错误/设备离线/锁定等）：回调面板展示，本端无媒体面需收口
+                if (rcPending.timer) clearTimeout(rcPending.timer);
+                if (rcPending.cb) { try { rcPending.cb(false, p.reason || I18N.t('连接失败')); } catch (e) { } }
+                rcPending = null;
                 return;
             }
             if (isMySession && p.reason) showToast(p.reason);
@@ -22003,12 +22053,87 @@
             if (remotePendingInvite && remotePendingInvite.session_id === p.session_id) remoteClearInvite();
             return;
         }
+        // ===== 阶段二百六十一：远程控制（设备ID+验证码）自动接通 =====
+        if (p.action === 'rc_ready') {
+            // 服务端验证码校验通过→本端为被控端（Sharer），无需人工确认直接起共享流。
+            // 回环防御：本连接若正持有 rcPending（即本端是控制端发起方），说明是同账号自控
+            // 场景下发到自己手机的帧，本端不应作为被控端起流——交由发起分支处理，此处忽略。
+            if (rcPending && rcPending.session_id === p.session_id) return;
+            if (remoteOpenId || remotePendingInvite) return; // 已在会话中：忙，忽略（服务端忙判已拦，双保险）
+            // 被控依赖 Electron 抓屏/注入能力——非 PC 端（Web/手机）无引擎，静默忽略
+            if (!window.RemoteEngine || !window.desktop || !window.desktop.remoteInputSend) return;
+            // 阶段二百六十一：同账号多台 PC 在线定向过滤——rc_ready 按用户名下发（sendToUser 全端），
+            // 仅 install_uuid 与帧一致的目标设备起流，其余 PC 静默忽略（防笔记本被误控+双 offer 冲突）；
+            // 获取本机标识失败时照常起流（单机账号常态，宁误起不漏起——悬浮条仍可一键断开）
+            var rcReadyGo = function (myUuid) {
+                if (p.install_uuid && myUuid && p.install_uuid !== myUuid) return; // 非本机目标设备
+                if (remoteOpenId || remotePendingInvite) return; // 异步间隙二次忙检
+                remoteOpenId = p.session_id;
+                remoteRole = 'sharer';
+                remoteGrant = 'control'; // 验证码即授权固定完整控制
+                remotePeerUser = p.controller || msg.from_user || '';
+                // 悬浮条提示"XX 正在控制你的电脑"（防入镜 + 一键断开）+ 起共享引擎（offer 发往控制端观看窗）
+                if (window.desktop.remoteBarOpen) {
+                    window.desktop.remoteBarOpen({
+                        peer: remotePeerUser,
+                        peer_name: p.controller_name || callPeerName(remotePeerUser),
+                        grant: 'control'
+                    });
+                }
+                var dpr0 = window.devicePixelRatio || 1;
+                window.RemoteEngine.startSharer({
+                    session_id: p.session_id, grant: 'control',
+                    ice: p.ice || null, // 阶段二百六十一：服务端下发 TURN/STUN 中继配置（跨 NAT 穿透）
+                    rc: true, // 阶段二百六十一：rc 场景标记（引擎 answer 超时兜底仅 rc 启用，旧协助零改动）
+                    screen: { w: Math.round(screen.width * dpr0), h: Math.round(screen.height * dpr0) }
+                });
+            };
+            if (window.desktop.rcGetInstallInfo) {
+                window.desktop.rcGetInstallInfo().then(function (info) {
+                    rcReadyGo(info && info.install_uuid ? info.install_uuid : '');
+                }, function () { rcReadyGo(''); });
+            } else {
+                rcReadyGo('');
+            }
+            return;
+        }
+        if (p.action === 'rc_ok') {
+            // 服务端接通回执→本连接是控制端发起方（持有 rcPending）：开观看窗等待被控端 offer
+            if (!rcPending || rcPending.session_id !== p.session_id) return;
+            var pend = rcPending;
+            rcPending = null;
+            if (pend.timer) clearTimeout(pend.timer);
+            remoteOpenId = p.session_id;
+            remoteRole = 'controller';
+            remoteGrant = 'control';
+            remotePeerUser = p.peer || '';
+            var rcTask = {
+                session_id: p.session_id, peer: remotePeerUser,
+                peer_name: p.device_name || callPeerName(remotePeerUser),
+                grant: 'control', screen: null,
+                ice: p.ice || null // 观看窗建连用 TURN/STUN 配置
+            };
+            if (window.desktop && window.desktop.remoteOpen) {
+                // PC 端：独立观看窗（Electron 桥）
+                window.desktop.remoteOpen(rcTask);
+            } else if (window.RCMobileView && window.RCMobileView.open) {
+                // 阶段二百六十一：手机/WEB 控制端——页内全屏观看层（无 Electron 桥，WebRTC 直接在本页建连）；
+                // 注入信令上行回调（本页不持有 socket，disconnect/candidate 经 chat.js WS 发出）
+                rcTask.send = function (obj) { remoteSignalSend(remotePeerUser, obj); };
+                window.RCMobileView.open(rcTask);
+            }
+            if (pend.cb) { try { pend.cb(true, ''); } catch (e) { } }
+            return;
+        }
         if (p.action === 'offer' || p.action === 'answer' || p.action === 'candidate') {
             // 被控端引擎在主窗口：直接喂引擎；控制端引擎在观看窗：经主进程桥转发
             if (remoteRole === 'sharer' && window.RemoteEngine) {
                 window.RemoteEngine.handleSignal(p, msg.from_user);
             } else if (remoteRole === 'controller' && window.desktop && window.desktop.remoteSignalIn) {
                 window.desktop.remoteSignalIn(msg);
+            } else if (remoteRole === 'controller' && window.RCMobileView) {
+                // 手机/WEB 控制端：页内观看层直接喂入（同账号自控回环：仅 controller 角色连接喂入，其余连接忽略）
+                window.RCMobileView.handleSignal(p);
             }
             return;
         }
@@ -22017,6 +22142,9 @@
             // 主进程校验 e.sender，主窗口发不出去；此前观看窗收不到断开信令，只能靠媒体层 1~5s
             // 感知触发"网络不稳定"提示 + 30s 看门狗才收口。转发后观看窗 finish 归口毫秒级关窗）
             if (window.desktop && window.desktop.remoteSignalIn) window.desktop.remoteSignalIn(msg);
+            // 阶段二百六十一：手机/WEB 控制端页内观看层——先喂入显示"对方已断开"遮罩
+            // （finish 置 ended 后 remoteEndLocal 的 close 走宽限分支保留遮罩 1.2s 再收起）
+            if (window.RCMobileView && window.RCMobileView.isOpen && window.RCMobileView.isOpen()) window.RCMobileView.handleSignal(p);
             if (remoteOpenId && p.session_id === remoteOpenId) {
                 showToast(I18N.t('对方已断开远程协助'));
                 remoteEndLocal();
@@ -26312,7 +26440,8 @@
         // 滚动区 #gset-content 挂 .profile-content 类，由上方 '.profile-content' 选择器直接命中，无需单独注册
         // 阶段一百九十：追加模型选择面板条目区 #ai-model-items（模型多时限高滚动，DOM 静态常驻直接注册；
         // initOsb 幂等，面板每次打开重绘条目后 MutationObserver 自行刷新滑块）
-        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list', '#ai-model-items']
+        // 阶段二百六十一：追加 .rc-page（远程控制页三视图滚动容器，DOM 静态常驻直接注册）
+        ['.message-list', '.conv-list', '#user-list', '#ai-agent-list', '.emoji-panel', '.search-panel', '.conv-search-results', '.new-friends-list', '.profile-content', '.kb-list', '#ua-list', '#memory-list', '#ai-session-list', '#settings-rule-list', '#settings-mem-list', '.fwd-list', '#ai-model-items', '.rc-page']
             .forEach(function (sel) {
                 // 阶段一百四十二：querySelectorAll 全量挂载——querySelector 只命中首个实例，
                 // 会漏掉同选择器的后续元素（如 .fwd-list 同时存在于转发 #fwd-list 与建群/邀请 #grp-list）

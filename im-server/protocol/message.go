@@ -142,13 +142,19 @@ const (
 	MsgTypeRedPacketDetail = 89 // 上行：红包详情查询（content 为 JSON：{packet_id}）；下行同帧：领取明细（content 为 JSON：{ok,packet_id,type,total_amount,count,status,greeting,from_user,expire_time,list:[{username,name,amount,claim_time}]}）
 
 	// ===== 阶段一百五十五：QQ 同款远程协助（一期 PC↔PC 完整互控，媒体走 WebRTC P2P 直连，服务端仅转发信令） =====
+	// ===== 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，复用本消息类型 rc_* action） =====
 	// content 为 JSON：{action, session_id, mode?, grant?, sdp?, candidate?, reason?}，action 取值：
 	//   invite（请求方→被控方，mode=control 请求控制对方 / mode=assist 请求对方协助）/
 	//   accept（被控方→控制方，grant=control 允许操作 / grant=view 仅观看，screen={w,h} 主屏分辨率）/
 	//   reject（被控方→请求方）/ cancel（请求方→被控方，响应前放弃）/ disconnect（会话中任一方断开）/
 	//   offer / answer / candidate（WebRTC 媒体协商中继帧）；
-	//   服务端自生成：error（校验拒绝：非好友/离线/忙/非 PC 端）/ timeout（60s 无响应）/
+	//   rc_connect（控制端上行：{device_id, code}，服务端校验验证码即授权自动接通，无需对方确认）/
+	//   rc_ready（服务端→被控端：自动接通通知，含 session_id/grant/controller/controller_name/ice，
+	//     被控端引擎收到即起流发 offer）/ rc_ok（服务端→控制端：接通回执，UI 反馈"正在连接"）；
+	//   服务端自生成：error（校验拒绝：非好友/离线/忙/非 PC 端/验证码错误/锁定）/ timeout（60s 无响应）/
 	//   dismiss（同账号其他设备撤下弹窗）/ ended（对端全下线 30s 宽限收口）
+	// 同账号多设备（手机控自己 PC）：rc_ready 仅 PC 端引擎响应（remoteInputSend 守卫），
+	// rc_ok 仅发起 rc_connect 的连接开观看窗，其余连接按 session 角色忽略自发回环帧
 	// 控制事件不走信令：WebRTC DataChannel 点对点直传（鼠标/键盘注入事件），服务端零参与
 	MsgTypeRemoteSignal = 90
 
@@ -190,7 +196,6 @@ const (
 	// 上行：手机端已登录态扫码确认（content 为 JSON：{action:"scan"/"confirm"/"cancel", qr_id}）；
 	// 下行：同类型回执（content 为 JSON：{action, ok, reason?}）；纯信令帧不落库不转发
 	MsgTypeQRSign = 97
-
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

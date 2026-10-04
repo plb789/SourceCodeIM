@@ -9,9 +9,12 @@
         active: false,
         sessionId: '',
         grant: '',
+        ice: null, // 阶段二百六十一：服务端随 rc_ready 下发的 STUN/TURN 配置（向日葵远程控制跨 NAT 穿透；旧协助流程恒 null 纯 P2P 零改动）
         pc: null,
         stream: null,
         dc: null,
+        rcMode: false,     // 阶段二百六十一：rc 远程控制场景标记（answer 超时兜底仅 rc 启用，旧协助零改动）
+        answerTimer: null, // 阶段二百六十一：offer 后等待 answer 超时兜底（rc 控制端超时收口防被控端悬挂）
         pendingCands: [] // 远端描述就绪前缓冲的 ICE 候选（offer/answer 竞态兜底）
     };
     var sendFn = null; // chat.js 注入：function(obj) → remoteSignalSend(对端, obj)
@@ -24,7 +27,9 @@
     // 建连（被控端为 offer 方：屏幕轨随 offer SDP 发出，控制端应答即收流）
     function buildPC() {
         // 一期纯 P2P 直连（无 STUN/TURN，与通话一期同水位；同网段/公网直连场景）
-        var pc = new RTCPeerConnection(null);
+        // 阶段二百六十一：远程控制（rc）场景服务端随 rc_ready 下发 ice（STUN/TURN 中继），
+        // 跨 NAT 穿透；旧协助流程 task 无 ice 字段恒 null，行为与一期完全一致零改动
+        var pc = new RTCPeerConnection(st.ice ? { iceServers: st.ice } : null);
         // 屏幕视频轨：constraints 限制 1080p/15fps（WebRTC 带宽自适应兜底，局域网可满帧）
         if (st.stream) {
             st.stream.getVideoTracks().forEach(function (t) { pc.addTrack(t, st.stream); });
@@ -71,6 +76,8 @@
         if (!sendFn) { log('信令通道未注入，无法启动'); return; }
         st.sessionId = task.session_id;
         st.grant = task.grant === 'control' ? 'control' : 'view';
+        st.ice = Array.isArray(task.ice) && task.ice.length ? task.ice : null; // 远程控制跨 NAT 中继配置
+        st.rcMode = !!task.rc; // 阶段二百六十一：仅 rc 场景启用 answer 超时兜底（旧协助零改动）
         st.active = true;
         // 主屏静默抓屏：主进程 setDisplayMediaRequestHandler 注入 sources[0]，无系统共享弹窗；
         // 一期仅共享主屏（多屏选择归二期）
@@ -89,6 +96,19 @@
                 return pc.setLocalDescription(off).then(function () {
                     sendFn({ action: 'offer', session_id: st.sessionId, sdp: { type: off.type, sdp: off.sdp } });
                     log('offer 已发送');
+                    // 阶段二百六十一：answer 迟到兜底（仅 rc 场景）——控制端 rc_connect 20s 超时收口后
+                    // 会话即悬挂，被控端悬浮条/抓屏不能无限等待：offer 后 30s 未收到 answer 自动收口
+                    // （stop → onStop 发 disconnect 归口服务端结束会话，防隐私悬挂）；旧协助 rcMode=false 不启用
+                    if (st.rcMode) {
+                        if (st.answerTimer) clearTimeout(st.answerTimer);
+                        st.answerTimer = setTimeout(function () {
+                            st.answerTimer = null;
+                            if (st.active && (!st.pc || !st.pc.remoteDescription)) {
+                                log('等待 answer 超时（控制端可能已超时收口），自动结束');
+                                stop();
+                            }
+                        }, 30000);
+                    }
                 });
             });
         }).catch(function (err) {
@@ -102,6 +122,7 @@
         if (!st.active) return;
         if (p.action === 'answer') {
             if (!st.pc) return;
+            if (st.answerTimer) { clearTimeout(st.answerTimer); st.answerTimer = null; } // 阶段二百六十一：answer 到达解除超时兜底
             st.pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
                 flushCands();
             }).catch(function (e) { log('answer 失败：', e); });
@@ -122,6 +143,9 @@
         st.pendingCands = [];
         st.sessionId = '';
         st.grant = '';
+        st.ice = null;
+        st.rcMode = false;
+        if (st.answerTimer) { clearTimeout(st.answerTimer); st.answerTimer = null; }
         if (wasActive && stopCb) { try { stopCb(); } catch (e) { } }
         log('共享已停止');
     }

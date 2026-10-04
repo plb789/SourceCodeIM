@@ -18728,3 +18728,292 @@ html.m .settings-content {
 html.m .settings-view {
     max-width: 100%;
 }
+
+/* ===================== 阶段二百六十一：向日葵同款远程控制页面（rc-panel.js） ===================== */
+/* 覆盖层形态同 .drive-view（absolute 盖 .main-chat，左侧列表保持可见）；全部颜色走主题变量 */
+.rc-view {
+    position: absolute;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    flex-direction: column;
+    background: var(--chat-bg);
+}
+.rc-view.hidden { display: none; }
+.rc-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+    flex-shrink: 0;
+}
+.rc-logo { color: var(--primary); display: flex; align-items: center; }
+.rc-title { font-size: 16px; font-weight: bold; color: var(--text); flex-shrink: 0; }
+.rc-head-flex { flex: 1; }
+.rc-page {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 24px 32px;
+}
+.rc-page.hidden { display: none; }
+/* 工具条按钮（同 drive-tb-btn 语义，独立命名防样式耦合） */
+.rc-tb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.rc-tb-btn:hover { background: var(--hover); }
+.rc-tb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 设备卡片 */
+.rc-card-wrap { display: flex; flex-wrap: wrap; gap: 16px; }
+.rc-device-card {
+    width: 320px;
+    max-width: 100%;
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.rc-dev-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.rc-dev-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rc-dev-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-light);
+    flex-shrink: 0;
+}
+.rc-dev-dot.on { background: var(--primary); }
+.rc-dev-online { font-size: 12px; color: var(--text-light); flex-shrink: 0; }
+.rc-dev-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rc-dev-label { font-size: 13px; color: var(--text-light); width: 48px; flex-shrink: 0; }
+.rc-dev-id {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 1px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+.rc-dev-id:hover .rc-copy-ico { opacity: 1; }
+.rc-copy-ico { opacity: 0; font-size: 13px; color: var(--primary); margin-left: 4px; transition: opacity 0.15s; }
+.rc-dev-code { font-size: 16px; font-weight: 600; color: var(--primary); letter-spacing: 2px; font-variant-numeric: tabular-nums; }
+.rc-code-left { font-size: 12px; font-weight: normal; color: var(--text-light); letter-spacing: 0; margin-left: 6px; }
+.rc-dev-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.rc-pw-form { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rc-pw-form.hidden { display: none; }
+.rc-pw-btns { display: inline-flex; gap: 6px; }
+/* 空态 */
+.rc-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-light);
+    font-size: 14px;
+    line-height: 1.6;
+}
+.rc-empty.hidden { display: none; }
+/* 连接远端表单（向日葵同款居中卡片） */
+.rc-connect-box {
+    max-width: 420px;
+    margin: 24px auto 0;
+    padding: 26px 28px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-bg);
+}
+.rc-connect-title { font-size: 17px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.rc-connect-sub { font-size: 13px; color: var(--text-light); margin-bottom: 20px; line-height: 1.5; }
+.rc-field { display: block; margin-bottom: 16px; }
+.rc-field-label { display: block; font-size: 13px; color: var(--text-light); margin-bottom: 6px; }
+.rc-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--chat-bg);
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+.rc-input:focus { border-color: var(--primary); }
+.rc-pw-form .rc-input { width: auto; flex: 1; min-width: 120px; padding: 7px 10px; font-size: 13px; }
+.rc-connect-status { margin: 4px 0 12px; font-size: 13px; color: var(--text-light); line-height: 1.5; }
+.rc-connect-status.hidden { display: none; }
+.rc-connect-status.err { color: #fa5151; }
+.rc-connect-status.ok { color: var(--primary); }
+.rc-primary-btn {
+    width: 100%;
+    padding: 11px 0;
+    border: none;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+.rc-primary-btn:hover { opacity: 0.9; }
+.rc-primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rc-connect-tip { margin-top: 14px; font-size: 12px; color: var(--text-light); }
+/* 控制记录列表 */
+.rc-records-list { max-width: 720px; margin: 0 auto; }
+.rc-record-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+}
+.rc-record-time { color: var(--text-light); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.rc-record-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-record-dur { color: var(--text-light); flex-shrink: 0; }
+.rc-record-status { flex-shrink: 0; padding: 2px 8px; border-radius: 4px; font-size: 12px; background: var(--hover); color: var(--text-light); }
+.rc-record-status.st-connected { color: var(--primary); }
+.rc-record-status.st-rejected, .rc-record-status.st-missed { color: #fa5151; }
+/* 手机端适配：卡片/表单满宽，操作按钮换行 */
+html.m .rc-page { padding: 14px 14px 28px; }
+html.m .rc-device-card { width: 100%; }
+html.m .rc-connect-box { margin-top: 12px; padding: 20px 18px; }
+html.m .rc-head { padding: 12px 14px; }
+
+/* ===== 阶段二百六十一：手机/WEB 控制端页内全屏观看层（rc-mobile-view.js） ===== */
+.rc-mv-root {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    flex-direction: column;
+    background: #000;
+}
+.rc-mv-root.hidden { display: none; }
+.rc-mv-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.rc-mv-name {
+    font-size: 13px;
+    color: var(--text);
+    max-width: 30vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rc-mv-mode {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-light);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rc-mv-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.rc-mv-btn:hover { background: var(--hover); }
+.rc-mv-btn.rc-mv-danger { color: #fa5151; }
+.rc-mv-stage { position: relative; flex: 1; min-height: 0; background: #000; }
+.rc-mv-stage video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    touch-action: none;
+}
+.rc-mv-mask {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font-size: 14px;
+    padding: 20px;
+    text-align: center;
+}
+.rc-mv-mask.visible { display: flex; }
+.rc-mv-kb {
+    flex-shrink: 0;
+    margin: 6px 10px 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-input, var(--bg));
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+}
+.rc-mv-kb.hidden { display: none; }
+.rc-mv-confirm {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+}
+.rc-mv-confirm.hidden { display: none; }
+.rc-mv-confirm-box {
+    width: min(320px, 80vw);
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 20px 18px 14px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.rc-mv-confirm-text {
+    font-size: 15px;
+    color: var(--text);
+    text-align: center;
+    margin-bottom: 16px;
+}
+.rc-mv-confirm-btns { display: flex; gap: 10px; }
+.rc-mv-confirm-btns .rc-mv-btn {
+    flex: 1;
+    padding: 9px 0;
+    border-radius: 8px;
+    background: var(--hover);
+    font-size: 14px;
+}
+.rc-mv-confirm-btns .rc-mv-btn.rc-mv-danger { background: rgba(250, 81, 81, 0.12); }

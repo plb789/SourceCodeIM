@@ -108,6 +108,9 @@ type Config struct {
 	// 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
 	FileP2P FileP2PConfig `yaml:"file_p2p"`
 
+	// 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，server/remotedevice.go + remote.go rc_* 信令）
+	RC RCConfig `yaml:"rc"`
+
 	// 阶段一百六十一：登录排队系统（服务重启集中重连风暴削峰）
 	LoginQueue LoginQueueConfig `yaml:"login_queue"`
 
@@ -280,6 +283,20 @@ type FileP2PConfig struct {
 	Archive bool `yaml:"archive"`
 	// MaxPerUser 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail(busy)）
 	MaxPerUser int `yaml:"max_per_user"`
+}
+
+// RCConfig 阶段二百六十一：向日葵同款远程控制配置节（设备ID+验证码直连）
+type RCConfig struct {
+	// Disabled 关闭开关（反向语义：缺省零值=启用；true 时 rc_connect 一律拒绝、设备注册接口空转，零回归）
+	Disabled bool `yaml:"disabled"`
+	// DynCodeTTL 动态验证码有效期秒（0=300；过期后 rc_connect 校验时惰性重生成并推送被控端刷新）
+	DynCodeTTL int `yaml:"dyn_code_ttl"`
+	// MaxFails 同一设备ID连续验证码错误次数上限（0=5；达到即锁定）
+	MaxFails int `yaml:"max_fails"`
+	// LockSec 防爆破锁定时长秒（0=600；锁定期间该设备ID一律拒绝连接）
+	LockSec int `yaml:"lock_sec"`
+	// StaticPWMinLen 静态访问密码最小长度（0=6；设置接口校验）
+	StaticPWMinLen int `yaml:"static_pw_min_len"`
 }
 
 // TurnConfig 阶段一百四十二：TURN/STUN 中继配置节（基于 pion/turn，与 im-server 同进程零额外部署）
@@ -727,6 +744,19 @@ func Load() *Config {
 	}
 	if cfg.FileP2P.MaxPerUser <= 0 {
 		cfg.FileP2P.MaxPerUser = 3
+	}
+	// 阶段二百六十一：远程控制（设备ID+验证码）参数兜底（配置缺省或非法时回退默认值）
+	if cfg.RC.DynCodeTTL <= 0 {
+		cfg.RC.DynCodeTTL = 300
+	}
+	if cfg.RC.MaxFails <= 0 {
+		cfg.RC.MaxFails = 5
+	}
+	if cfg.RC.LockSec <= 0 {
+		cfg.RC.LockSec = 600
+	}
+	if cfg.RC.StaticPWMinLen < 4 {
+		cfg.RC.StaticPWMinLen = 6
 	}
 	// 阶段一百六十一：登录排队参数兜底（显式配 0 时回退默认值；负数视为非法同样回退）
 	if cfg.LoginQueue.Rate <= 0 {

@@ -96,11 +96,6 @@ browserManager.setCdpSwitch();
 // 导致任务管理器分组名显示为 "Electron"（即便 exe 元数据 FileDescription 已是产品名）。
 // 值与 package.json appId 保持一致
 app.setAppUserModelId('com.im.client');
-// 注册 AUMID 显示名：系统按 AUMID 解析应用名时优先查注册表 DisplayName；未注册则回退 exe 文件名
-// （任务栏/任务管理器显示 "im-client.exe"）。HKCU 无需管理员权限，失败静默（名称回退不影响运行）
-try {
-    require('child_process').execFile('reg', ['add', 'HKCU\\Software\\Classes\\AppUserModelId\\com.im.client', '/v', 'DisplayName', '/t', 'REG_SZ', '/d', 'im-client', '/f']);
-} catch (e) { }
 
 // 服务端地址（默认本地）
 const SERVER_URL = 'https://im.sxgyxny.com/';
@@ -153,6 +148,24 @@ function resolveSecureKey() {
 // 原实现：createTray 内直接写死 64.ico 文件名
 const APP_ICON = path.join(__dirname, '64.ico');
 
+// 注册 AUMID 通知图标与展示名：Windows 原生通知（Notification）不读 icon 参数，toast 头部小图标由
+// Shell 按 AUMID 注册表 IconUri 解析（缺失/不可读时回退占位图标）。实测 IconUri 指向 .ico 文件 Shell
+// 不识别（头部仍显示占位方格），必须 PNG：启动时 nativeImage 读 64.ico 转 PNG 落盘 userData 再注册
+// （asar 内路径 Shell 不可读）；ShowName 为 toast 头部展示名（产品名"即时通讯"，DisplayName 供任务栏/
+// 任务管理器分组）。HKCU 无需管理员权限，失败静默（回退不影响运行）。
+try {
+    const notifyPng = path.join(app.getPath('userData'), 'im-notify.png');
+    const notifyImg = nativeImage.createFromPath(APP_ICON);
+    if (notifyImg && !notifyImg.isEmpty()) fs.writeFileSync(notifyPng, notifyImg.toPNG());
+    const aumidKey = 'HKCU\\Software\\Classes\\AppUserModelId\\com.im.client';
+    const regArgs = function (name, value) {
+        return ['add', aumidKey, '/v', name, '/t', 'REG_SZ', '/d', value, '/f'];
+    };
+    require('child_process').execFile('reg', regArgs('DisplayName', 'im-client'));
+    require('child_process').execFile('reg', regArgs('IconUri', notifyPng));
+    require('child_process').execFile('reg', regArgs('ShowName', '即时通讯'));
+} catch (e) { }
+
 // ===== 阶段一百三十四：主题持久化（主进程可读，深色启动底色根治）=====
 // 渲染层主题变更时经 theme:sync 上报落盘（userData/im_theme.json），createWindow 创建窗口时读取
 // 初值直接按主题深浅设置 titleBarOverlay/backgroundColor，消除深色主题下启动早期短暂浅色底；
@@ -175,6 +188,34 @@ ipcMain.on('theme:sync', function (event, theme) {
     var t = String(theme || '');
     if (t === 'light' || t === 'dark' || t === 'system') themeStoreSave(t);
 });
+
+// ===== 阶段二百六十一：向日葵同款远程控制——本机安装标识（设备ID注册键） =====
+// install_uuid 持久化 userData/im_install.json（一次生成终身使用；重装客户端同 userData 下可找回），
+// 控制面板据此 + 登录账号 POST /api/rc/device/register 换取 9-10 位数字设备ID——
+// 服务端按 (username, install_uuid) 复用原设备ID，重装/重登不换号，与向日葵"本机ID固定"一致；
+// 设备名默认 os.hostname()（电脑名，向日葵同款展示）
+const installFile = path.join(app.getPath('userData'), 'im_install.json');
+
+function rcInstallInfo() {
+    var info = null;
+    try { info = JSON.parse(fs.readFileSync(installFile, 'utf8')); } catch (e) { }
+    if (!info || typeof info.install_uuid !== 'string' || !/^[0-9a-f-]{36}$/i.test(info.install_uuid)) {
+        var crypto = require('crypto');
+        var uuid = '';
+        try { uuid = crypto.randomUUID(); } catch (e) { }
+        if (!uuid) { // 老版本 Node 无 randomUUID：手工拼 v4
+            var b = crypto.randomBytes(16);
+            b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+            var h = b.toString('hex');
+            uuid = h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
+        }
+        info = { install_uuid: uuid };
+        try { fs.writeFileSync(installFile, JSON.stringify(info)); } catch (e) { }
+    }
+    return { install_uuid: info.install_uuid, device_name: String(os.hostname() || '').slice(0, 64) };
+}
+
+ipcMain.handle('rc:install-info', function () { return rcInstallInfo(); });
 
 // 阶段一百五十四：启动主题深浅判定提为模块级（createWindow 与启动闪屏 createSplash 共用同一判定源，
 // 保证闪屏底色与主窗口 backgroundColor 恒同值无缝）——原判定逻辑在 createWindow 内部
@@ -436,11 +477,56 @@ function createTray() {
     });
 }
 
+// fetchAvatarImage 下载好友头像作为通知大图：经 net（Chromium 网络栈 + defaultSession，同源 Cookie
+// 鉴权与渲染层 <img> 一致）拉取，相对路径按 SERVER_URL 解析；2.5s 超时/非图片/超限/失败一律 cb(null)
+// （调用方回退应用图标）。头像可为 http(s) 绝对地址或 /static/upload/xxx 相对路径，emoji 文本头像跳过。
+function fetchAvatarImage(rawUrl, cb) {
+    var done = false;
+    function once(img) { if (!done) { done = true; cb(img); } }
+    if (!rawUrl || typeof rawUrl !== 'string') return once(null);
+    var v = rawUrl.trim();
+    if (!/^(https?:\/\/|\/)/.test(v)) return once(null); // emoji/文本头像跳过
+    var full = /^https?:\/\//i.test(v) ? v : SERVER_URL.replace(/\/+$/, '') + (v.charAt(0) === '/' ? v : '/' + v);
+    var req;
+    try { req = net.request({ method: 'GET', url: full }); } catch (e) { return once(null); }
+    var timer = setTimeout(function () { try { req.abort(); } catch (e) { } once(null); }, 2500);
+    var chunks = 0;
+    var bufs = [];
+    req.on('response', function (res) {
+        if (res.statusCode !== 200) { clearTimeout(timer); return once(null); }
+        res.on('data', function (c) {
+            chunks += c.length;
+            if (chunks > 2 * 1024 * 1024) { clearTimeout(timer); try { res.destroy(); } catch (e) { } return once(null); } // 2MB 上限
+            bufs.push(c);
+        });
+        res.on('end', function () {
+            clearTimeout(timer);
+            try {
+                var img = nativeImage.createFromBuffer(Buffer.concat(bufs));
+                once(img && !img.isEmpty() ? img : null);
+            } catch (e) { once(null); }
+        });
+        res.on('error', function () { clearTimeout(timer); once(null); });
+    });
+    req.on('error', function () { clearTimeout(timer); once(null); });
+    try { req.end(); } catch (e) { clearTimeout(timer); once(null); }
+}
+
 // 桌面通知（供新消息提醒）；阶段一百九十四：通知点击 → 聚焦窗口 + 通知渲染层（渲染层
 // 按 agentNotifyTarget 直达任务归属会话，与 Web 端 Toast 点击行为一致）
-function showNotification(title, body) {
-    if (Notification.isSupported()) {
-        var n = new Notification({ title: title, body: body });
+// avatarUrl：好友头像地址（有则下载作通知大图，缺失/失败回退应用图标 64.ico）
+function showNotification(title, body, avatarUrl) {
+    if (!Notification.isSupported()) return;
+    function present(icon) {
+        var opts = { title: title, body: body };
+        if (icon) opts.icon = icon;
+        else {
+            try {
+                var ni = nativeImage.createFromPath(APP_ICON);
+                if (ni && !ni.isEmpty()) opts.icon = ni;
+            } catch (e) { }
+        }
+        var n = new Notification(opts);
         n.on('click', function () {
             var win = BrowserWindow.getAllWindows()[0];
             if (win) {
@@ -452,11 +538,13 @@ function showNotification(title, body) {
         });
         n.show();
     }
+    if (avatarUrl) fetchAvatarImage(avatarUrl, function (img) { present(img); });
+    else present(null);
 }
 
 // 阶段六十六：渲染层系统通知转发（Agent 任务完结提醒等场景）
 ipcMain.on('notify', function (event, payload) {
-    showNotification(String((payload && payload.title) || '即时通讯'), String((payload && payload.body) || ''));
+    showNotification(String((payload && payload.title) || '即时通讯'), String((payload && payload.body) || ''), (payload && payload.avatar) || '');
 });
 
 // 阶段七十七：渲染层主题切换时同步原生窗口按钮（titleBarOverlay）配色，浅色/深色跟随主题；

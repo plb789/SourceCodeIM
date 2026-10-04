@@ -10,8 +10,12 @@
 //  5. dev/未打包形态整体静默跳过（autoUpdater 依赖 NSIS 安装器元数据，--dir 形态不可用）。
 'use strict';
 
-const { app, BrowserWindow, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, nativeImage } = require('electron');
 const path = require('path');
+
+// 通知图标：electron-updater 错误/结果通知与主窗口消息通知共用应用图标（64.ico，asar 内可读）
+let NOTIFY_ICON = null;
+try { NOTIFY_ICON = nativeImage.createFromPath(path.join(__dirname, '64.ico')); } catch (e) { }
 
 let autoUpdater = null;
 try {
@@ -107,7 +111,7 @@ function registerIpc() {
         curState = { phase: 'downloading', percent: 0, msg: '' };
         pushState();
         autoUpdater.downloadUpdate().catch(function (e) {
-            curState = { phase: 'error', percent: 0, msg: (e && e.message) || '下载失败' };
+            curState = { phase: 'error', percent: 0, msg: friendlyError(e, '下载失败') };
             pushState();
         });
     });
@@ -155,18 +159,32 @@ function check(explicit) {
                 pushState();
             });
         }).catch(function (e) {
-            if (explicitCheck) notifyUser('检查更新', '检查失败：' + ((e && e.message) || '网络异常'));
+            if (explicitCheck) notifyUser('检查更新', '检查失败：' + friendlyError(e));
             explicitCheck = false;
         });
     } catch (e) {
-        if (explicit) notifyUser('检查更新', '检查失败：' + ((e && e.message) || '未知错误'));
+        if (explicit) notifyUser('检查更新', '检查失败：' + friendlyError(e));
     }
 }
 
 function notifyUser(title, body) {
     try {
-        if (Notification.isSupported()) new Notification({ title: title, body: body }).show();
+        if (Notification.isSupported()) {
+            var opts = { title: title, body: body };
+            if (NOTIFY_ICON && !NOTIFY_ICON.isEmpty()) opts.icon = NOTIFY_ICON;
+            new Notification(opts).show();
+        }
     } catch (e) { /* 通知不可用静默 */ }
+}
+
+// friendlyError 压缩 electron-updater 原始错误：其 message 含 HTTP 头/Cookie/堆栈（数百字符），
+// 直接进通知会整段展示；归一为单行友好文案（404=服务端未发布更新包，网络类=连接失败，其余取首行截断）
+function friendlyError(e, fallback) {
+    var raw = (e && e.message) || '';
+    if (/Cannot find channel|404/i.test(raw)) return '服务器暂未发布 Windows 更新包（latest.yml 404）';
+    if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|network|getaddrinfo|ERR_/i.test(raw)) return '网络连接失败，请检查网络后重试';
+    var first = raw.split('\n')[0].trim();
+    return first ? first.slice(0, 60) : (fallback || '未知错误');
 }
 
 // init main.js 归口入口：注入服务端地址与主题判定，绑定 electron-updater 事件
@@ -189,9 +207,9 @@ function init(opts) {
     } catch (e) { return; }
 
     autoUpdater.on('error', function (e) {
-        curState = { phase: 'error', percent: curState.percent, msg: (e && e.message) || '更新失败' };
+        curState = { phase: 'error', percent: curState.percent, msg: friendlyError(e) };
         pushState();
-        if (explicitCheck) { notifyUser('检查更新', '检查失败：' + ((e && e.message) || '未知错误')); explicitCheck = false; }
+        if (explicitCheck) { notifyUser('检查更新', '检查失败：' + friendlyError(e)); explicitCheck = false; }
     });
     autoUpdater.on('update-available', function () { /* 信息聚合在 checkForUpdates 回调统一处理 */ });
     autoUpdater.on('update-not-available', function () {

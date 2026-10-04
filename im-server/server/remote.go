@@ -16,6 +16,7 @@ package server
 
 import (
 	"encoding/json"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,7 +47,8 @@ type remoteSession struct {
 	Peer         string // 对方
 	Controller   string // 控制方（invite 时按 mode 预填，accept 后不变）
 	Sharer       string // 被控方
-	Mode         string // control 请求控制对方 / assist 请求对方协助
+	Mode         string // control 请求控制对方 / assist 请求对方协助 / rc 设备ID+验证码直连（向日葵同款远程控制）
+	DeviceID     string // 远程控制目标设备ID（仅 Mode=rc；话单归口）
 	Grant        string // 最终授权：control 允许操作 / view 仅观看（接受后落定，话单归口）
 	State        int8
 	StartAt      time.Time   // 请求发起时间
@@ -80,6 +82,8 @@ func (s *Server) HandleRemoteSignal(c *Client, msg *protocol.Message) {
 	switch p.Action {
 	case "invite":
 		s.remoteInvite(c, msg, from, &p)
+	case "rc_connect":
+		s.remoteRCConnect(c, msg, from, &p)
 	case "accept":
 		s.remoteAccept(msg, from, &p)
 	case "reject":
@@ -259,6 +263,128 @@ func (s *Server) remoteInvite(c *Client, msg *protocol.Message, from string, p *
 	s.remoteForward(from, peer, msg.Content)
 }
 
+// ===== 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，验证码即授权自动接通） =====
+// rc_connect 信令面：控制端（PC/手机均可）输入 设备ID+验证码 发起；服务端归口校验
+// （防爆破锁定 → 验证码 → 设备归属账号 PC 端在线 → 忙互斥）后直接构造 active 会话
+// （跳过 invite/accept 人工环节），向被控端下发 rc_ready（含会话/控制方展示名/iceServers，
+// 被控端引擎收到即自动起流发 offer），并向控制端回执 rc_ok（UI 反馈"正在连接"）。
+// offer/answer/candidate/disconnect 全部复用既有中继与收口链路；话单 Mode=rc + device_id。
+func (s *Server) remoteRCConnect(c *Client, msg *protocol.Message, from string, p *remoteSignalPayload) {
+	if rcDisabled() {
+		s.remoteSendError(from, p.SessionID, "远程控制功能未启用")
+		return
+	}
+	var body struct {
+		DeviceID string `json:"device_id"`
+		Code     string `json:"code"`
+	}
+	_ = json.Unmarshal([]byte(msg.Content), &body)
+	if !rcDeviceIDRe.MatchString(body.DeviceID) {
+		s.remoteSendError(from, p.SessionID, "设备ID格式无效")
+		return
+	}
+	if p.SessionID == "" {
+		s.sendError(c, "远程控制信令缺少 session_id")
+		return
+	}
+	// 防爆破：锁定期内该设备ID一律拒绝
+	if remain := rcCheckLock(body.DeviceID); remain > 0 {
+		s.remoteSendError(from, p.SessionID, "验证码错误次数过多，该设备已临时锁定，请 "+strconv.Itoa(remain)+" 秒后再试")
+		return
+	}
+	// 设备存在性 + 验证码校验（服务端归口，动态码/静态密码任一匹配）
+	var dev model.Device
+	if err := store.DB.Where("device_id = ?", body.DeviceID).First(&dev).Error; err != nil {
+		s.remoteSendError(from, p.SessionID, "设备不存在或未注册")
+		return
+	}
+	ok, locked := rcVerifyCode(&dev, body.Code)
+	if !ok {
+		if locked {
+			s.remoteSendError(from, p.SessionID, "验证码错误次数过多，该设备已临时锁定")
+		} else {
+			s.remoteSendError(from, p.SessionID, "验证码错误")
+		}
+		return
+	}
+	peer := dev.Username // 被控端账号
+	if peer == from && s.hub.Count(from) <= 1 {
+		// 同账号自控（手机控自己 PC）允许；但仅一个连接时不可能有另一台设备在线，直接拒
+		s.remoteSendError(from, p.SessionID, "该设备当前不在线")
+		return
+	}
+	// 被控端必须 PC 端在线（被控依赖 Electron 抓屏/注入能力；控制端不限端型）
+	if !s.hub.HasPC(peer) {
+		s.remoteSendError(from, p.SessionID, "对方设备不在线或不在 PC 客户端登录状态")
+		return
+	}
+	// 忙互斥：与通话双向 + 协助会话（同账号自控时 from==peer，检查一次即可）
+	if callUserBusyAny(from, peer) {
+		s.remoteSendError(from, p.SessionID, "对方忙，请稍后再试")
+		return
+	}
+	remoteMu.Lock()
+	if _, busy := remoteUserBusy[from]; busy {
+		remoteMu.Unlock()
+		s.remoteSendError(from, p.SessionID, "你正在远程协助中")
+		return
+	}
+	if _, busy := remoteUserBusy[peer]; busy {
+		remoteMu.Unlock()
+		s.remoteSendError(from, p.SessionID, "对方忙，请稍后再试")
+		return
+	}
+	now := time.Now()
+	sess := &remoteSession{
+		ID:         p.SessionID,
+		Requester:  from,
+		Peer:       peer,
+		Controller: from,
+		Sharer:     peer,
+		Mode:       "rc",
+		DeviceID:   body.DeviceID,
+		Grant:      "control", // 验证码即授权：自动接通固定完整控制（被控端悬浮条可一键断开）
+		State:      remoteStateActive,
+		StartAt:    now,
+		AcceptAt:   now,
+	}
+	remoteSessions[sess.ID] = sess
+	remoteUserBusy[from] = sess.ID
+	remoteUserBusy[peer] = sess.ID
+	remoteMu.Unlock()
+
+	// 被控端展示名（昵称回退用户名）：rc_ready 悬浮条显示"XX 正在控制你的电脑"
+	var u model.User
+	store.DB.Where("username = ?", from).First(&u)
+	name := u.Nickname
+	if name == "" {
+		name = from
+	}
+	// rc_ready → 被控端（服务端归口构造，不透传客户端原始帧，防伪造/泄露验证码）
+	// install_uuid 供被控端定向过滤：同账号多台 PC 在线时仅目标设备起流（其余 PC 忽略）
+	ready, _ := json.Marshal(map[string]interface{}{
+		"action":          "rc_ready",
+		"session_id":      sess.ID,
+		"grant":           "control",
+		"controller":      from,
+		"controller_name": name,
+		"device_name":     dev.DeviceName,
+		"install_uuid":    dev.InstallUUID,
+	})
+	s.remoteForwardByUser("rc_ready", peer, callInjectICE(string(ready)))
+	// rc_ok → 控制端（UI 反馈"正在连接对方屏幕"；媒体 offer 经既有中继到达，ice 随 offer 注入）
+	okFrame, _ := json.Marshal(map[string]interface{}{
+		"action":      "rc_ok",
+		"session_id":  sess.ID,
+		"peer":        peer,
+		"device_id":   body.DeviceID,
+		"device_name": dev.DeviceName,
+	})
+	s.remoteForwardByUser("rc_ok", from, callInjectICE(string(okFrame)))
+
+	logger.Info("远程控制接通：%s → %s（device_id=%s，session_id=%s）", from, peer, body.DeviceID, sess.ID)
+}
+
 // remoteAccept 被控方接受（等待响应中才有效；grant 最终授权在此落定，话单时长从此刻起算）
 func (s *Server) remoteAccept(msg *protocol.Message, from string, p *remoteSignalPayload) {
 	sess := remoteSessionOf(p.SessionID)
@@ -397,6 +523,7 @@ func (s *Server) remoteFinish(sess *remoteSession, status string, notify bool, s
 		Requester: sess.Requester,
 		Peer:      sess.Peer,
 		Mode:      sess.Mode,
+		DeviceID:  sess.DeviceID,
 		AuthMode:  sess.Grant,
 		Status:    status,
 		Duration:  duration,

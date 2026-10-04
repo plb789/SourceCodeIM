@@ -247,6 +247,10 @@
                 <div class="nav-icon sidebar-tab" data-tab="drive" title="网盘">
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0 1 22 15c0 1.65-1.35 3-3 3z"/></svg>
                 </div>
+                <!-- 阶段二百六十一：远程控制入口（向日葵同款：设备ID+验证码直连；被控端仅 PC，控制端 PC/手机） -->
+                <div class="nav-icon sidebar-tab" data-tab="rc" title="远程控制">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/><path fill="currentColor" d="m11.5 7.5 4 6-1.9.1-1.2 2.2-1.4-.6 1.2-2.2-1.9-.6z"/></svg>
+                </div>
             </div>
             <div class="nav-bottom">
                 <button id="add-friend-btn" class="nav-btn" title="添加好友">
@@ -395,6 +399,28 @@
                 <div id="drive-usage" class="drive-usage hidden">
                     <div class="drive-usage-bar"><div id="drive-usage-fill" class="drive-usage-fill"></div></div>
                     <div id="drive-usage-text" class="drive-usage-text"></div>
+                </div>
+            </div>
+
+            <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；左侧三入口，右侧覆盖页显示，网盘同款形态） -->
+            <div id="rc-panel" class="friends-panel hidden">
+                <div id="rc-entry-mine" class="new-friends-entry" title="我的电脑">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/></svg>
+                    </span>
+                    <span class="new-friends-text">我的电脑</span>
+                </div>
+                <div id="rc-entry-connect" class="new-friends-entry" title="远程控制其他电脑">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3.4 20.4 18.85 4.95a1.99 1.99 0 0 0 0-2.83 1.99 1.99 0 0 0-2.83 0L.59 17.6a1 1 0 0 0-.2.34L0 20l2.06-.59a1 1 0 0 0 .34-.2zM9.7 5.55 8.28 4.12 4.84 7.56l1.41 1.41zM20 20h2v-7.5a1.5 1.5 0 0 0-1.5-1.5h-5v2h4.5V20zM12 4h5V2.5A1.5 1.5 0 0 0 15.5 1h-5zm-2 8H4.5v2H10zm6-4h2v6h-2z"/></svg>
+                    </span>
+                    <span class="new-friends-text">远程控制其他电脑</span>
+                </div>
+                <div id="rc-entry-records" class="new-friends-entry" title="控制记录">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21c5 0 9-4 9-9s-4-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+                    </span>
+                    <span class="new-friends-text">控制记录</span>
                 </div>
             </div>
 
@@ -935,6 +961,11 @@
                 <button class="mpa-item" data-target-tab="drive">
                     <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11A2.98 2.98 0 0 1 22 15c0 1.65-1.35 3-3 3z"/></svg>
                     <span>网盘</span>
+                </button>
+                <!-- 阶段二百六十一：远程控制入口（手机仅作控制端：输入ID+验证码连自己/他人 PC） -->
+                <button class="mpa-item" data-target-tab="rc">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/><path fill="currentColor" d="m11.5 7.5 4 6-1.9.1-1.2 2.2-1.4-.6 1.2-2.2-1.9-.6z"/></svg>
+                    <span>远程控制</span>
                 </button>
                 <button class="mpa-item" data-target="theme-btn">
                     <!-- 主题图标联动（纯 CSS 按 html[data-theme] 显隐）：深色=月亮 / 浅色=太阳 / 跟随系统=电脑 -->
@@ -2163,6 +2194,53 @@
         <input type="file" id="drive-file-input" multiple class="hidden">
     </div>
 
+    <!-- 阶段二百六十一：远程控制页面（向日葵同款：设备ID+验证码直连；覆盖右侧聊天区，网盘同款形态，
+         DOM 由 rc-panel.js 移入 .main-chat；三视图=我的电脑/连接远端/控制记录） -->
+    <div id="rc-view" class="rc-view hidden">
+        <div class="rc-head">
+            <span class="rc-logo">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/></svg>
+            </span>
+            <span class="rc-title" id="rc-title">远程控制</span>
+            <span class="rc-head-flex"></span>
+            <button id="rc-refresh-btn" class="rc-tb-btn hidden" title="刷新">
+                <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                <span>刷新</span>
+            </button>
+            <button id="rc-close" class="ann-stream-close"><svg class="drive-back-ico" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg><span class="drive-back-txt-pc">返回聊天</span><span class="drive-back-txt-m">返回</span></button>
+        </div>
+        <!-- 视图一：我的电脑（本机设备ID + 动态验证码 + 静态密码设置；仅 PC 端有本机设备语义） -->
+        <div id="rc-page-mine" class="rc-page hidden">
+            <div class="rc-card-wrap" id="rc-mine-wrap"><!-- 设备卡片由 rc-panel.js 渲染 --></div>
+            <div id="rc-mine-empty" class="rc-empty hidden">
+                <span id="rc-mine-empty-text">远程控制被控端仅支持 PC 客户端，请在电脑上登录本账号查看本机识别码</span>
+            </div>
+        </div>
+        <!-- 视图二：连接远端（输入 设备ID + 验证码，向日葵同款） -->
+        <div id="rc-page-connect" class="rc-page hidden">
+            <div class="rc-connect-box">
+                <div class="rc-connect-title">远程控制其他电脑</div>
+                <div class="rc-connect-sub">输入对方设备ID和验证码即可发起连接（验证码即授权，对方无需确认）</div>
+                <label class="rc-field">
+                    <span class="rc-field-label">设备ID</span>
+                    <input id="rc-in-device" class="rc-input" type="text" inputmode="numeric" maxlength="10" placeholder="9-10 位数字" autocomplete="off">
+                </label>
+                <label class="rc-field">
+                    <span class="rc-field-label">验证码</span>
+                    <input id="rc-in-code" class="rc-input" type="text" maxlength="32" placeholder="动态验证码或访问密码" autocomplete="off">
+                </label>
+                <div id="rc-connect-status" class="rc-connect-status hidden"></div>
+                <button id="rc-connect-btn" class="rc-primary-btn">发起远程控制</button>
+                <div class="rc-connect-tip">提示：对方需在 PC 客户端登录并保持在线</div>
+            </div>
+        </div>
+        <!-- 视图三：控制记录（Mode=rc 话单，服务端归口倒序） -->
+        <div id="rc-page-records" class="rc-page hidden">
+            <div id="rc-records-list" class="rc-records-list"></div>
+            <div id="rc-records-empty" class="rc-empty hidden">暂无数据</div>
+        </div>
+    </div>
+
     <!-- 网盘分享弹窗（二期：双 tab「发给好友/群」+「生成链接」；全部自绘弹窗，状态归口服务端） -->
     <div id="ds-mask" class="modal-mask hidden">
         <div class="modal-box ds-box">
@@ -2357,6 +2435,12 @@
     <script src="/js/md5.js?v=1.0"></script>
     <script src="/js/office-preview.js?v=1.1"></script>
     <script src="/js/drive.js?v=2.31"></script>
+    <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
+         复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
+    <script src="/js/rc-panel.js?v=1.0"></script>
+    <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
+         须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
+    <script src="/js/rc-mobile-view.js?v=1.0"></script>
     <!-- 阶段二百一十：二维码生成/解码库（均本地化，内网离线可用）+ 名片/扫一扫业务模块（归口 chat.js 添加好友链路） -->
     <script src="/js/lib/qrcode.min.js?v=1.4.4"></script>
     <script src="/js/lib/jsQR.min.js?v=1.4.0"></script>

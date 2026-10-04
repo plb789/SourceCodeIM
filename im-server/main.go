@@ -281,6 +281,8 @@ func main() {
 	server.RegisterDriveRoutes(srv)
 	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）
 	server.RegisterDriveShareRoutes(srv)
+	// 阶段二百六十一：向日葵同款远程控制路由（设备注册/验证码管理/历史话单；信令面 rc_connect 归 remote.go）
+	server.RegisterRCRoutes(srv, cfg.RC)
 	// DCDN 远程鉴权路由（drive.edge_auth.enabled：公开端点 GET /auth 供阿里云 DCDN 边缘节点
 	// 校验 MinIO 预签名票据，未启用静默不注册）
 	server.RegisterEdgeAuthRoutes(cfg)

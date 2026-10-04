@@ -79,7 +79,9 @@ type RemoteLog struct {
 	SessionID string `gorm:"column:session_id;type:varchar(64);index" json:"session_id"`
 	Requester string `gorm:"column:requester;type:varchar(32);index" json:"requester"` // 请求发起人
 	Peer      string `gorm:"column:peer;type:varchar(32);index" json:"peer"`           // 对方
-	Mode      string `gorm:"column:mode;type:varchar(8)" json:"mode"`                  // control 请求控制对方 / assist 请求对方协助
+	Mode      string `gorm:"column:mode;type:varchar(8)" json:"mode"`                  // control 请求控制对方 / assist 请求对方协助 / rc 设备ID+验证码直连（向日葵同款远程控制）
+	// DeviceID 远程控制目标设备ID（仅 Mode=rc 有话单记录；好友协助话单为空）
+	DeviceID string `gorm:"column:device_id;type:varchar(16);default:'';index" json:"device_id"`
 	// AuthMode 最终授权（列名规避 MySQL 8 保留字 grant）：control 允许操作 / view 仅观看；未接通为空
 	AuthMode string `gorm:"column:auth_mode;type:varchar(8);default:''" json:"auth_mode"`
 	// Status 协助结果：connected 已接通（含时长）/ rejected 被控方拒绝 / canceled 请求方取消 / missed 无人响应
@@ -90,6 +92,25 @@ type RemoteLog struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (RemoteLog) TableName() string { return "im_remote_log" }
+
+// Device 阶段二百六十一：向日葵同款远程控制——设备注册表（一台 PC 安装一个设备ID，服务端归口）
+// 设备ID 按 (username, install_uuid) 分配：同机重装凭 install_uuid 找回原ID；同账号多台PC各自一行
+type Device struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username    string `gorm:"column:username;type:varchar(32);not null;index" json:"username"`                                // 归属账号
+	InstallUUID string `gorm:"column:install_uuid;type:varchar(64);not null;uniqueIndex:idx_user_install" json:"install_uuid"` // 客户端安装标识（Electron userData 持久化）
+	DeviceID    string `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex" json:"device_id"`                        // 9-10 位随机数字设备ID（向日葵同款对外标识）
+	DeviceName  string `gorm:"column:device_name;type:varchar(64);default:''" json:"device_name"`                              // 设备展示名（计算机名）
+	// StaticPWHash 静态访问密码 bcrypt hash（空=未启用；用户自设，常用设备免动态码）
+	StaticPWHash string `gorm:"column:static_pw_hash;type:varchar(128);default:''" json:"-"`
+	// DynCode 动态验证码（6位数字；rc_connect 时惰性刷新，TTL 内有效；被控端经 rc_info 推送展示）
+	DynCode   string    `gorm:"column:dyn_code;type:varchar(8);default:''" json:"dyn_code"`
+	DynExpire time.Time `gorm:"column:dyn_expire;type:datetime;default:CURRENT_TIMESTAMP" json:"dyn_expire"`
+	LastSeen  time.Time `gorm:"column:last_seen;type:datetime;default:CURRENT_TIMESTAMP;index" json:"last_seen"` // 最近在线时间（面板展示用）
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (Device) TableName() string { return "im_device" }
 
 // TableName 表名沿用 im_ 前缀约定（GORM 默认复数命名不符合本项目规范，显式指定）
 func (PointsLog) TableName() string { return "im_points_log" }

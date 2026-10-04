@@ -8,8 +8,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
     platform: process.platform,
     // 阶段六十六：系统桌面通知（Agent 任务完结提醒等场景），转发主进程弹系统通知
-    notify: function (title, body) {
-        ipcRenderer.send('notify', { title: title, body: body });
+    // avatar：好友头像地址（/static/upload/xxx 或绝对 URL），主进程下载作通知大图，缺失回退应用图标
+    notify: function (title, body, avatar) {
+        ipcRenderer.send('notify', { title: title, body: body, avatar: avatar || '' });
     },
     // 阶段一百九十四：桌面通知点击订阅（主进程点击转发 → 渲染层直达任务归属会话；无回调则忽略）
     onNotifyClick: function (cb) {
@@ -773,6 +774,11 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('remote:bar-action', function (event, data) {
             callback(data);
         });
+    },
+    // ===== 阶段二百六十一：向日葵同款远程控制——本机安装标识（设备ID注册键，仅 PC 端） =====
+    // 返回 {install_uuid, device_name}（主进程 userData/im_install.json 持久化 + os.hostname()）
+    rcGetInstallInfo: function () {
+        return ipcRenderer.invoke('rc:install-info');
     },
     // ===== 阶段一百四十四：会议（会中邀请桥，主窗口/会议窗 两方共用） =====
     // 会议窗侧：请求主窗口弹选人弹窗（data = {call_id, call_type, group_id, members:[已在会账号]}）

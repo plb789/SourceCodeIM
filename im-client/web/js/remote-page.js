@@ -16,6 +16,7 @@
         peer: '',          // 被控端账号（信令投递目标）
         peerName: '',      // 被控端展示名
         grant: 'view',     // control=对方允许本端操作 / view=仅观看
+        ice: null,         // 阶段二百六十一：服务端随 rc_ok 下发的 STUN/TURN 配置（远程控制跨 NAT 穿透；旧协助流程恒 null）
         pc: null,          // RTCPeerConnection（应答方）
         dc: null,          // 被控端创建的 'remote-input' 控制通道（上行注入事件）
         pendingCands: [],  // 远端描述未就绪前的 ICE 候选缓冲（offer/candidate 竞态兜底）
@@ -78,7 +79,9 @@
     // ===== 建连（应答方：无本地轨，收被控端屏幕流 + 接管 DataChannel） =====
     function buildPC() {
         // 一期纯 P2P 直连（无 STUN/TURN，与通话一期同水位）
-        var pc = new RTCPeerConnection(null);
+        // 阶段二百六十一：远程控制（rc）场景服务端随 rc_ok 下发 ice（STUN/TURN 中继）跨 NAT 穿透；
+        // 旧协助流程 task 无 ice 字段恒 null，行为与一期完全一致零改动
+        var pc = new RTCPeerConnection(st.ice ? { iceServers: st.ice } : null);
         pc.ontrack = function (e) {
             // 空 msid 轨兜底（对端 RTP 无 msid 时 e.streams 为空）：复用已有流塞轨防画面丢失
             var stream = (e.streams && e.streams.length) ? e.streams[0] : null;
@@ -269,6 +272,7 @@
         st.peer = task.peer || '';
         st.peerName = task.peer_name || task.peer || '对方';
         st.grant = task.grant === 'control' ? 'control' : 'view';
+        st.ice = Array.isArray(task.ice) && task.ice.length ? task.ice : null; // 远程控制跨 NAT 中继配置
         elName.textContent = st.peerName;
         document.body.classList.toggle('grant-control', st.grant === 'control');
         elMode.textContent = '连接中';
