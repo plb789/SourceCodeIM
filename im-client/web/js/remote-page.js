@@ -229,15 +229,25 @@
     elVideo.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
     // 键盘：Esc 本地消费（断开确认）；F11/F12 本地保留（全屏/调试）；其余转发被控端做 VK 映射
+    // 阶段二百六十三回归修复：VK 表补字母/数字后，裸敲字母会命中 VK 注入——被控端中文 IME
+    // 激活时被截获进候选态（原 UNICODE 路径直注上屏）。仅组合键（含 Ctrl/Alt/Meta）才发 code
+    // 走 VK；裸字母/数字发 code:'' 回落 UNICODE，行为与阶段二百六十二前完全一致。
+    // downCodeMap 记忆 keydown 实际发送的 code，keyup 复用——防按住字母再按修饰键时
+    // down/up 路径不一致（uni-down + VK-up 不对称注入）。
+    var downCodeMap = {};
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { if (!st.ended) openConfirm(); return; }
         if (!st.inputOn || e.key === 'F11' || e.key === 'F12') return;
-        sendInput({ t: 'k', act: 'down', code: e.code, key: e.key });
+        var c = (/^(Key[A-Z]|Digit[0-9])$/.test(e.code) && !e.ctrlKey && !e.altKey && !e.metaKey) ? '' : e.code;
+        downCodeMap[e.code] = c;
+        sendInput({ t: 'k', act: 'down', code: c, key: e.key });
         e.preventDefault();
     });
     document.addEventListener('keyup', function (e) {
         if (!st.inputOn || e.key === 'F11' || e.key === 'F12') return;
-        sendInput({ t: 'k', act: 'up', code: e.code, key: e.key });
+        var c = (e.code in downCodeMap) ? downCodeMap[e.code] : e.code;
+        delete downCodeMap[e.code];
+        sendInput({ t: 'k', act: 'up', code: c, key: e.key });
         e.preventDefault();
     });
 

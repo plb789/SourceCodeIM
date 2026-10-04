@@ -19080,6 +19080,31 @@ html.m .rc-home.hidden { display: none; }
     font-size: 14px;
 }
 .rc-mv-confirm-btns .rc-mv-btn.rc-mv-danger { background: rgba(250, 81, 81, 0.12); }
+/* ===== 阶段二百六十四：全屏态（Web Fullscreen API / APP 原生沉浸共用） =====
+   head 转顶部浮层（渐变压暗保证任意画面上可读，避开刘海/状态栏安全区），
+   stage 占满整屏（含原状态栏位置），软键盘同样转底部浮层 */
+.rc-mv-fs .rc-mv-head {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 6;
+    padding-top: max(6px, env(safe-area-inset-top));
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+    border-bottom: none;
+}
+.rc-mv-fs .rc-mv-head .rc-mv-btn { color: #fff; }
+.rc-mv-fs .rc-mv-head .rc-mv-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.rc-mv-fs .rc-mv-name { color: #fff; max-width: 40vw; }
+.rc-mv-fs .rc-mv-mode { color: rgba(255, 255, 255, 0.72); }
+.rc-mv-fs .rc-mv-kb {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    z-index: 7;
+    margin: 0;
+}
 /* ===== 阶段二百六十二：控制层浮动工具栏（右侧把手展开；半透明深色底适配任意桌面画面） ===== */
 .rc-mv-tools {
     position: absolute;

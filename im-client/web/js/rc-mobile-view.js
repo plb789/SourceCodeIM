@@ -22,9 +22,18 @@
         onEnded: null, // 收口回调（chat.js open 注入；finish 本端收口时清 chat 会话态，once 防重复）
         onEndedCalled: false,
         curBtn: 0, // 当前点击键位（0=左 1=右）：浮动工具栏切换，轻点/长按语义共用
-        touch: null // 单指手势状态 {id, sx, sy, moved, holdTimer, rightSent}
+        touch: null, // 单指手势状态 {id, sx, sy, moved, holdTimer, rightSent}
+        landscape: false, // 当前是否横屏（matchMedia 维护；APP 端横屏自动沉浸依赖此标记）
+        immersiveOn: false, // APP 原生沉浸已开启（退出/收口时成对关闭）
+        fs: false // 全屏态（Web=Fullscreen API；APP=原生沉浸）——head 转浮层，画面铺满含状态栏区
     };
     var root = null, elVideo, elName, elMode, elMask, elMaskText, elKbInput, kbVisible = false;
+
+    // APP（Capacitor）环境判定：有原生 BackgroundIM.setImmersive 桥即可用无手势限制的全屏
+    function isApp() {
+        return !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM
+            && window.Capacitor.Plugins.BackgroundIM.setImmersive);
+    }
 
     function log() {
         try { console.log.apply(console, ['[rc-mobile-view]'].concat([].slice.call(arguments))); } catch (e) { }
@@ -45,6 +54,8 @@
             '<span class="rc-mv-mode" id="rcMvMode"></span>' +
             '<button id="rcMvKb" class="rc-mv-btn" title="' + T('键盘') + '">' +
             '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2zm0 6h2v2h-2v-2zm-3 0h2v2h-2v-2zM5 17h2v-2H5v2z"/></svg></button>' +
+            '<button id="rcMvFs" class="rc-mv-btn" title="' + T('全屏') + '">' +
+            '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>' +
             '<button id="rcMvHangup" class="rc-mv-btn rc-mv-danger">' + T('断开') + '</button>' +
             '</div>' +
             '<div class="rc-mv-stage"><video id="rcMvVideo" autoplay playsinline muted></video>' +
@@ -85,6 +96,7 @@
         bindInput();
         bindTouch();
         bindTools();
+        bindFs();
         return true;
     }
 
@@ -124,6 +136,7 @@
     function close() {
         if (!root) return;
         if (st.graceTimer) return; // 遮罩提示期不收起，等宽限计时器归位
+        exitFs(); // 阶段二百六十四：收起观看层同步退出全屏（APP 还原状态栏/导航栏，Web 退 Fullscreen）
         root.classList.add('hidden');
     }
 
@@ -374,6 +387,77 @@
         if (btnR) btnR.classList.remove('active');
     }
 
+    // ===== 全屏（阶段二百六十四：画面铺满含状态栏区，head 转浮层，横屏看 PC 桌面更大） =====
+    // Web：requestFullscreen 必须用户手势触发（旋转非手势，无法自动全屏），点按钮手动进入；
+    // APP：BackgroundIM.setImmersive 无手势限制（原生 WindowInsetsController 隐藏状态栏/导航栏 +
+    //      扩展进刘海），横屏自动进入沉浸，竖屏/退出自动还原。两端 head 都切浮层覆盖，画面占满整屏。
+    function applyFs(on) {
+        st.fs = on;
+        if (root) root.classList.toggle('rc-mv-fs', on);
+        var b = document.getElementById('rcMvFs');
+        if (b) b.title = T(on ? '退出全屏' : '全屏');
+    }
+    function enterWebFs() {
+        var el = document.documentElement;
+        var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (!fn) return;
+        try { var p = fn.call(el); if (p && p.catch) p.catch(function () { }); } catch (e) { }
+    }
+    function exitWebFs() {
+        try {
+            if (document.fullscreenElement || document.webkitFullscreenElement) {
+                var fn = document.exitFullscreen || document.webkitExitFullscreen;
+                if (fn) { var p = fn.call(document); if (p && p.catch) p.catch(function () { }); }
+            }
+        } catch (e) { }
+    }
+    function setAppImmersive(on) {
+        try {
+            var bgp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.BackgroundIM;
+            if (bgp && bgp.setImmersive) bgp.setImmersive({ on: !!on });
+        } catch (e) { }
+        st.immersiveOn = !!on;
+    }
+    // 手动全屏按钮：点击即切换布局类（画面铺满、head 转浮层）；再叠加平台全屏机制——
+    // Web 尽力调 Fullscreen API 隐藏浏览器工具栏（可能被拒绝，不影响布局类），APP 走原生沉浸
+    function toggleFs() {
+        var target = !st.fs;
+        if (isApp()) { setAppImmersive(target); applyFs(target); return; }
+        applyFs(target);
+        if (target) enterWebFs(); else exitWebFs();
+    }
+    // 横屏自动沉浸（仅 APP）：旋转到横屏自动进全屏铺满状态栏区，转回竖屏还原
+    function updateAutoFs() {
+        var land = !!(window.matchMedia && window.matchMedia('(orientation: landscape)').matches);
+        st.landscape = land;
+        if (!isApp()) return; // Web 端旋转非手势不可自动全屏，仅按钮手动
+        if (land && !st.fs) { setAppImmersive(true); applyFs(true); }
+        else if (!land && st.fs) { setAppImmersive(false); applyFs(false); }
+    }
+    function exitFs() {
+        if (st.fs) {
+            if (isApp()) setAppImmersive(false); else exitWebFs();
+            applyFs(false);
+        }
+    }
+    function bindFs() {
+        document.getElementById('rcMvFs').addEventListener('click', toggleFs);
+        // Web 全屏态由系统手势/Esc 退出时同步（fullscreenchange 覆盖 requestFullscreen 与手动退出）
+        var fsEvt = function () {
+            if (isApp()) return;
+            var active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            applyFs(active);
+        };
+        document.addEventListener('fullscreenchange', fsEvt);
+        document.addEventListener('webkitfullscreenchange', fsEvt);
+        if (window.matchMedia) {
+            var mq = window.matchMedia('(orientation: landscape)');
+            if (mq.addEventListener) mq.addEventListener('change', updateAutoFs);
+            else if (mq.addListener) mq.addListener(updateAutoFs);
+        }
+        window.addEventListener('resize', updateAutoFs);
+    }
+
     // ===== 软键盘（"键盘"按钮聚焦隐藏输入框，逐键 down/up 上行） =====
     function toggleKeyboard() {
         if (kbVisible) { hideKeyboard(); return; }
@@ -444,6 +528,9 @@
         document.getElementById('rcMvConfirm').classList.add('hidden');
         hideKeyboard();
         resetTools();
+        // 阶段二百六十四：复位全屏态（防上次会话残留），APP 若已横屏进入即自动沉浸
+        exitFs();
+        updateAutoFs();
         root.classList.remove('hidden');
         // 连接超时兜底（90s 同 PC 观看窗：offer 永不到达/被控端起流失败收口防层卡死）
         if (st.connectTimer) clearTimeout(st.connectTimer);
