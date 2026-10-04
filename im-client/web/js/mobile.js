@@ -174,6 +174,13 @@
                 if (dc) dc.click();
                 return;
             }
+            // 7.5) 远程控制页打开态：委托 rc-panel.js 返回分级（子页→回首页/首页→关页）；
+            //      关页后由 mobile.js 既有 #rc-close 委托联动 exitChat
+            if (window.IMRC && IMRC.isOpen()) {
+                var rcc = document.getElementById('rc-close');
+                if (rcc) rcc.click();
+                return;
+            }
             // 8) 公告流打开 → 返回公告分类列表（mobile.js 既有委托联动 exitChat）
             var asc = document.getElementById('ann-stream-close');
             if (asc && getComputedStyle(asc).display !== 'none') {
@@ -256,6 +263,15 @@
             enterChat();
         } else if (e.target.closest('#drive-close')) {
             if (window.IMDrive && !window.IMDrive.isOpen()) exitChat();
+        } else if (e.target.closest('#rc-close')) {
+            // 远程控制关页（首页态点返回/挂断后点返回）后退回列表视图；子页点返回回首页视图仍开着，不动
+            if (window.IMRC && !window.IMRC.isOpen()) {
+                // 关页时 tab 仍停在 rc（移动端 rc-panel 隐藏、会话列表被 tab 互斥收起），
+                // 不切回 chat 的话列表视图只剩空白顶栏——先切 tab 恢复会话列表再退视图
+                var rcChatTab = document.querySelector('.nav-icon[data-tab="chat"]');
+                if (rcChatTab) rcChatTab.click();
+                exitChat();
+            }
         } else if (e.target.closest('#ann-stream-close')) {
             // 公告流"返回"（阶段二百零八）：关流由 chat.js 归口，这里补退回列表视图——
             // 移动端一击直达公告分类列表，不停留在空聊天页；PC 端"返回聊天"语义不变
@@ -744,6 +760,14 @@
                 if (tabName) {
                     var closeBtn = document.getElementById('profile-close');
                     if (closeBtn) closeBtn.click(); // 关闭个人页
+                    // 远程控制：#rc-view 是挂在 main-chat 内的全屏覆盖层，需滑入聊天视图才可见
+                    // （列表视图下 main-chat 平移到视口外，沿用公告/网盘阶段二百零七修复前同款缺陷）
+                    if (tabName === 'rc') {
+                        enterChat();
+                        var rcTab = document.querySelector('.nav-icon[data-tab="rc"]');
+                        if (rcTab) rcTab.click();
+                        return;
+                    }
                     // 阶段二百零七修正：个人页是聊天视图内的浮层，关闭≠退视图；
                     // 不退回列表视图的话 main-chat 仍滑入占据屏幕，而公告/网盘面板
                     // 在滑出视口的 side-bar 里，用户只看到空聊天页（误以为打开了好友界面）

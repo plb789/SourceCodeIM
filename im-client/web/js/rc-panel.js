@@ -32,11 +32,18 @@
     var connectStatus = document.getElementById('rc-connect-status');
     var recordsList = document.getElementById('rc-records-list');
     var recordsEmpty = document.getElementById('rc-records-empty');
+    // 手机端远程控制首页（设备卡片优先）：仅 html.m 使用，PC 端仍走侧栏三入口 + 视图一~三
+    var pageHome = document.getElementById('rc-page-home');
+    var homeDevices = document.getElementById('rc-home-devices');
+    var homeEmpty = document.getElementById('rc-home-empty');
+    var homeEmptyText = document.getElementById('rc-home-empty-text');
 
     var visible = false;
-    var curPage = '';        // mine / connect / records
+    var curPage = '';        // home / mine / connect / records
     var codeTimer = 0;       // 动态码倒计时定时器（页面关闭/刷新即清）
     var connecting = false;  // 连接发起中（防重复点击）
+
+    function isMobile() { return document.documentElement.classList.contains('m'); }
 
     function u() { return (window.IMSocket && IMSocket.getUsername()) || ''; }
     function T(s, p) { return (window.I18N ? I18N.t(s, p) : s); }
@@ -92,13 +99,16 @@
     // ===== 视图切换 =====
     function showPage(name) {
         curPage = name;
+        if (pageHome) pageHome.classList.toggle('hidden', name !== 'home');
         pageMine.classList.toggle('hidden', name !== 'mine');
         pageConnect.classList.toggle('hidden', name !== 'connect');
         pageRecords.classList.toggle('hidden', name !== 'records');
-        titleEl.textContent = name === 'mine' ? T('我的电脑') : (name === 'records' ? T('控制记录') : T('远程控制'));
-        refreshBtn.classList.toggle('hidden', name === 'connect');
-        if (name !== 'mine' && codeTimer) { clearInterval(codeTimer); codeTimer = 0; }
+        titleEl.textContent = { mine: T('我的电脑'), records: T('控制记录'), home: T('远程控制'), connect: T('连接其他电脑') }[name] || T('远程控制');
+        refreshBtn.classList.toggle('hidden', name === 'connect' || name === 'home');
+        // 倒计时仅 mine/home 两态需要（都渲染设备码）；离开即清
+        if (name !== 'mine' && name !== 'home' && codeTimer) { clearInterval(codeTimer); codeTimer = 0; }
         if (name === 'mine') loadMine();
+        else if (name === 'home') loadHome();
         else if (name === 'records') loadRecords();
     }
 
@@ -247,6 +257,107 @@
         });
     }
 
+    // ===== 手机端远程控制首页（设备卡片优先 + 一键直连） =====
+    function loadHome() {
+        if (!u()) return;
+        apiGet('device/my', function (err, data) {
+            if (err) { renderHome(null, err.message); return; }
+            renderHome((data && data.items) || [], '');
+        });
+    }
+    function renderHome(items, errMsg) {
+        if (codeTimer) { clearInterval(codeTimer); codeTimer = 0; }
+        if (!homeDevices) return;
+        homeDevices.innerHTML = '';
+        if (errMsg) {
+            homeEmptyText.textContent = errMsg;
+            homeEmpty.classList.remove('hidden');
+            if (!items || !items.length) return;
+        }
+        if (!items || !items.length) {
+            homeEmptyText.textContent = T('还没有可控制的电脑');
+            homeEmpty.classList.remove('hidden');
+            bindHomeCountdown();
+            return;
+        }
+        homeEmpty.classList.add('hidden');
+        var now = Math.floor(Date.now() / 1000);
+        items.forEach(function (d) {
+            var left = d.dyn_code ? (d.dyn_expire - now) : 0;
+            var onlineTxt = d.online ? T('在线') : T('离线');
+            var card = document.createElement('div');
+            card.className = 'rc-home-card' + (d.online ? ' online' : '');
+            card.innerHTML =
+                '<div class="rc-home-card-head">' +
+                '<span class="rc-home-dev-ico"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h7v2H8v2h8v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11z"/></svg></span>' +
+                '<span class="rc-home-dev-name">' + esc(d.device_name || T('未命名设备')) + '</span>' +
+                '<span class="rc-dev-dot ' + (d.online ? 'on' : '') + '"></span><span class="rc-home-dev-online">' + onlineTxt + '</span>' +
+                '</div>' +
+                '<div class="rc-home-dev-id" data-copy="' + esc(d.device_id) + '">' + T('设备ID') + ' ' + esc(d.device_id) + '</div>' +
+                '<button class="rc-home-connect-btn" data-id="' + esc(d.device_id) + '" data-code="' + esc(d.dyn_code || '') + '" data-expire="' + (d.dyn_expire || 0) + '"' + (d.online ? '' : ' disabled') + '>' +
+                (d.online ? T('远程控制') : T('设备离线')) + '</button>';
+            homeDevices.appendChild(card);
+        });
+        bindHomeCountdown();
+    }
+    // 首页设备码倒计时归零静默刷新（换新码；与 PC mine 页同口径，仅 curPage=home 时触发）
+    function bindHomeCountdown() {
+        codeTimer = setInterval(function () {
+            if (curPage !== 'home') return;
+            var n = Math.floor(Date.now() / 1000);
+            var expired = false;
+            homeDevices.querySelectorAll('.rc-home-connect-btn').forEach(function (b) {
+                var exp = parseInt(b.getAttribute('data-expire'), 10) || 0;
+                if (exp && exp - n <= 0) expired = true;
+            });
+            if (expired) loadHome();
+        }, 1000);
+    }
+    function bindHomeEvents() {
+        var cConnect = document.getElementById('rc-home-connect');
+        var cRecords = document.getElementById('rc-home-records');
+        if (cConnect) cConnect.addEventListener('click', function () { showPage('connect'); });
+        if (cRecords) cRecords.addEventListener('click', function () { showPage('records'); });
+        if (!homeDevices) return;
+        homeDevices.addEventListener('click', function (e) {
+            var idEl = e.target.closest('.rc-home-dev-id');
+            if (idEl) {
+                var id = idEl.getAttribute('data-copy');
+                try {
+                    (navigator.clipboard ? navigator.clipboard.writeText(id) : Promise.reject()).then(function () { toast(T('设备ID已复制')); }, function () { toast(id); });
+                } catch (err) { toast(id); }
+                return;
+            }
+            var btn = e.target.closest('.rc-home-connect-btn');
+            if (btn && !btn.disabled) homeQuickConnect(btn);
+        });
+    }
+    // 一键直连：ID + 动态码免手输（码缺失/剩余<10s/离线 → 跳连接页预填 ID 手输）
+    function homeQuickConnect(btn) {
+        if (connecting) return;
+        var id = btn.getAttribute('data-id') || '';
+        var code = btn.getAttribute('data-code') || '';
+        var exp = parseInt(btn.getAttribute('data-expire'), 10) || 0;
+        var left = exp ? (exp - Math.floor(Date.now() / 1000)) : 0;
+        if (!code || left < 10) {
+            showPage('connect');
+            inDevice.value = id; inCode.value = ''; inCode.focus();
+            setStatus(T('验证码即将过期，请重新获取或手输'), '');
+            return;
+        }
+        connecting = true;
+        btn.disabled = true;
+        var oldTxt = btn.textContent;
+        btn.textContent = T('连接中…');
+        window.rcConnect(id, code, function (ok, reason) {
+            connecting = false;
+            btn.disabled = false;
+            btn.textContent = oldTxt;
+            if (ok) toast(T('已接通，正在建立屏幕通道…'));
+            else toast(TR(reason || T('连接失败')));
+        });
+    }
+
     // ===== 连接远端 =====
     function setStatus(text, kind) {
         if (!text) { connectStatus.classList.add('hidden'); return; }
@@ -319,7 +430,8 @@
         connecting = false;
         connectBtn.disabled = false;
         setStatus('');
-        showPage(isPC() ? 'mine' : 'connect'); // PC 默认看本机识别码；手机/Web 默认连接页
+        // 手机端：设备卡片优先首页；PC：默认看本机识别码；Web 无桥：默认连接页
+        showPage(isMobile() ? 'home' : (isPC() ? 'mine' : 'connect'));
     }
     function close() {
         visible = false;
@@ -332,6 +444,14 @@
     }
     function isOpen() { return visible; }
 
+    // 返回分级（手机端）：子页（connect/records/mine）→ 回首页；首页 → 关页交 mobile.js exitChat。
+    // PC 端：直接关页回聊天（行为不变）。返回 true 表示已回到 home（视图仍开着），false 表示已关页。
+    function goBack() {
+        if (isMobile() && curPage !== 'home') { showPage('home'); return true; }
+        close();
+        return false;
+    }
+
     // ===== 事件绑定 =====
     var entries = [
         ['rc-entry-mine', 'mine'],
@@ -342,10 +462,14 @@
         var el = document.getElementById(pair[0]);
         if (el) el.addEventListener('click', function () { showPage(pair[1]); });
     });
+    bindHomeEvents();
     closeBtn.addEventListener('click', function () {
-        close();
-        var chatTab = document.querySelector('.nav-icon[data-tab="chat"]');
-        if (chatTab) chatTab.click();
+        // 手机端子页返回只回首页，不关页；关页时交给 mobile.js 的 #rc-close 委托 exitChat
+        if (goBack()) return;
+        if (!isMobile()) {
+            var chatTab = document.querySelector('.nav-icon[data-tab="chat"]');
+            if (chatTab) chatTab.click();
+        }
     });
     refreshBtn.addEventListener('click', function () {
         if (curPage === 'mine') loadMine();

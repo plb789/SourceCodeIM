@@ -22120,6 +22120,10 @@
                 // 阶段二百六十一：手机/WEB 控制端——页内全屏观看层（无 Electron 桥，WebRTC 直接在本页建连）；
                 // 注入信令上行回调（本页不持有 socket，disconnect/candidate 经 chat.js WS 发出）
                 rcTask.send = function (obj) { remoteSignalSend(remotePeerUser, obj); };
+                // 阶段二百六十三：注入收口回调——观看层本端 finish（用户挂断/90s 超时/看门狗）时
+                // 同步清本端会话态（remoteOpenId），否则控制端自发的 disconnect 服务端不回显，
+                // 状态永久残留导致重连恒报"正在远程会话中，请先断开"
+                rcTask.onEnded = function () { remoteEndLocal(); };
                 window.RCMobileView.open(rcTask);
             }
             if (pend.cb) { try { pend.cb(true, ''); } catch (e) { } }

@@ -2209,6 +2209,24 @@
             </button>
             <button id="rc-close" class="ann-stream-close"><svg class="drive-back-ico" viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg><span class="drive-back-txt-pc">返回聊天</span><span class="drive-back-txt-m">返回</span></button>
         </div>
+        <!-- 视图〇：手机端远程控制首页（设备卡片优先，向日葵/ToDesk 手机版同款；仅 html.m 使用，
+             PC 端仍走视图一~三 + 侧栏三入口。设备卡片区一键直连（ID+动态码免手输），下方列表行进子页 -->
+        <div id="rc-page-home" class="rc-page rc-home hidden">
+            <div id="rc-home-devices" class="rc-home-devices"><!-- 设备卡片由 rc-panel.js renderHome 渲染 --></div>
+            <div id="rc-home-empty" class="rc-empty hidden"><span id="rc-home-empty-text"></span></div>
+            <div class="rc-home-rows">
+                <button class="rc-home-row" id="rc-home-connect">
+                    <span class="rc-home-row-ico"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.4 18.85 4.95a1.99 1.99 0 0 0 0-2.83 1.99 1.99 0 0 0-2.83 0L.59 17.6a1 1 0 0 0-.2.34L0 20l2.06-.59a1 1 0 0 0 .34-.2zM9.7 5.55 8.28 4.12 4.84 7.56l1.41 1.41zM20 20h2v-7.5a1.5 1.5 0 0 0-1.5-1.5h-5v2h4.5V20zM12 4h5V2.5A1.5 1.5 0 0 0 15.5 1h-5zm-2 8H4.5v2H10zm6-4h2v6h-2z"/></svg></span>
+                    <span class="rc-home-row-txt"><span class="rc-home-row-title">连接其他电脑</span><span class="rc-home-row-sub">输入设备ID和验证码直连</span></span>
+                    <span class="rc-home-row-arrow"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg></span>
+                </button>
+                <button class="rc-home-row" id="rc-home-records">
+                    <span class="rc-home-row-ico"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21c5 0 9-4 9-9s-4-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg></span>
+                    <span class="rc-home-row-txt"><span class="rc-home-row-title">控制记录</span><span class="rc-home-row-sub">历史连接与时长</span></span>
+                    <span class="rc-home-row-arrow"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg></span>
+                </button>
+            </div>
+        </div>
         <!-- 视图一：我的电脑（本机设备ID + 动态验证码 + 静态密码设置；仅 PC 端有本机设备语义） -->
         <div id="rc-page-mine" class="rc-page hidden">
             <div class="rc-card-wrap" id="rc-mine-wrap"><!-- 设备卡片由 rc-panel.js 渲染 --></div>

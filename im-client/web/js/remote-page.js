@@ -60,6 +60,8 @@
         if (st.connectTimer) { clearTimeout(st.connectTimer); st.connectTimer = null; }
         if (st.pc) { try { st.pc.close(); } catch (e) { } st.pc = null; }
         st.dc = null;
+        // 阶段二百六十三：流终止后 video 重新渲染默认占位图标，同款隐藏（遮罩下露纯黑底）
+        elVideo.classList.add('rw-nostream');
         document.body.classList.remove('grant-control');
         setMode('已断开');
         if (text) showMask(text);
@@ -90,6 +92,9 @@
                 if (!stream.getTracks().some(function (t) { return t.id === e.track.id; })) stream.addTrack(e.track);
             }
             elVideo.srcObject = stream;
+            // 阶段二百六十三：首帧流到达才显影——无流期间 video 渲染 Chromium 默认占位播放图标
+            // （半透明遮罩下透出，观感如"默认播放器"），nostream 类隐藏露纯黑底
+            elVideo.classList.remove('rw-nostream');
             var pr = elVideo.play && elVideo.play();
             if (pr && pr.catch) pr.catch(function () { });
             // 实际流分辨率刷新信息条（accept 报的是被控端主屏物理分辨率，此处以流为准）
@@ -267,6 +272,8 @@
         elMask.classList.remove('visible');
         elConfirm.classList.remove('visible');
         elVideo.srcObject = null;
+        // 阶段二百六十三：连接期无流——先隐藏 video 防默认占位播放图标透出遮罩（ontrack 首帧到达显影）
+        elVideo.classList.add('rw-nostream');
         elScreen.textContent = '';
         st.sessionId = task.session_id;
         st.peer = task.peer || '';

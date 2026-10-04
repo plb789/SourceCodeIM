@@ -19,6 +19,9 @@
         inputOn: false, sendFn: null,
         moveTimer: null, pendMove: null,
         watchdog: null, connectTimer: null, graceTimer: null,
+        onEnded: null, // 收口回调（chat.js open 注入；finish 本端收口时清 chat 会话态，once 防重复）
+        onEndedCalled: false,
+        curBtn: 0, // 当前点击键位（0=左 1=右）：浮动工具栏切换，轻点/长按语义共用
         touch: null // 单指手势状态 {id, sx, sy, moved, holdTimer, rightSent}
     };
     var root = null, elVideo, elName, elMode, elMask, elMaskText, elKbInput, kbVisible = false;
@@ -45,7 +48,20 @@
             '<button id="rcMvHangup" class="rc-mv-btn rc-mv-danger">' + T('断开') + '</button>' +
             '</div>' +
             '<div class="rc-mv-stage"><video id="rcMvVideo" autoplay playsinline muted></video>' +
-            '<div class="rc-mv-mask" id="rcMvMask"><span id="rcMvMaskText"></span></div></div>' +
+            '<div class="rc-mv-mask" id="rcMvMask"><span id="rcMvMaskText"></span></div>' +
+            '<div class="rc-mv-tools" id="rcMvTools">' +
+            '<button id="rcMvHandle" class="rc-mv-handle" title="' + T('工具') + '">' +
+            '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M22 9v6h-4V9h4zm0-9v6h-8V0h8zM6 0v9H2V0h4zm0 18v6H2v-6h4zM14 9v15h-4V9h4z"/></svg></button>' +
+            '<div class="rc-mv-tools-bar hidden" id="rcMvToolsBar">' +
+            '<button id="rcMvBtnL" class="rc-mv-tool active" title="' + T('左键') + '">' + T('左') + '</button>' +
+            '<button id="rcMvBtnR" class="rc-mv-tool" title="' + T('右键') + '">' + T('右') + '</button>' +
+            '<button id="rcMvWheelU" class="rc-mv-tool" title="' + T('滚轮上') + '">' + T('滚↑') + '</button>' +
+            '<button id="rcMvWheelD" class="rc-mv-tool" title="' + T('滚轮下') + '">' + T('滚↓') + '</button>' +
+            '<button id="rcMvCombo" class="rc-mv-tool" title="' + T('组合键') + '">' + T('组合') + '</button>' +
+            '</div>' +
+            '<div class="rc-mv-combo hidden" id="rcMvComboPanel"></div>' +
+            '</div>' +
+            '</div>' +
             '<input id="rcMvKbInput" class="rc-mv-kb hidden" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="' + T('点击输入，发送到对方电脑') + '">' +
             '<div class="rc-mv-confirm hidden" id="rcMvConfirm">' +
             '<div class="rc-mv-confirm-box"><div class="rc-mv-confirm-text">' + T('确定断开远程控制吗？') + '</div>' +
@@ -68,6 +84,7 @@
         document.getElementById('rcMvKb').addEventListener('click', toggleKeyboard);
         bindInput();
         bindTouch();
+        bindTools();
         return true;
     }
 
@@ -90,12 +107,19 @@
         if (st.connectTimer) { clearTimeout(st.connectTimer); st.connectTimer = null; }
         if (st.pc) { try { st.pc.close(); } catch (e) { } st.pc = null; }
         st.dc = null;
+        // 阶段二百六十三：流终止后 video 会重新渲染默认占位图标，同款隐藏（遮罩下露纯黑底）
+        elVideo.classList.add('rc-mv-nostream');
         setMode(T('已断开'));
         if (text) showMask(text);
         // 遮罩宽限期 1.2s：finish 后由计时器统一收起（外部 remoteEndLocal 的 close()
         // 在宽限期内只隐藏无遮罩的层，保证"对方已断开"提示可见）
         if (st.graceTimer) clearTimeout(st.graceTimer);
         st.graceTimer = setTimeout(function () { st.graceTimer = null; if (st.ended) close(); }, 1200);
+        // 阶段二百六十三：本端收口必须同步清 chat.js 会话态（remoteOpenId 等）——控制端自己发的
+        // disconnect 服务端不会回显给自己，90s 连接超时/用户挂断若不回调，remoteOpenId 永久残留，
+        // 重连恒报"正在远程会话中，请先断开"。放在宽限期设置之后触发：remoteEndLocal 的
+        // RCMobileView.close() 走 graceTimer 守卫分支，"已断开"遮罩提示不丢失
+        if (st.onEnded && !st.onEndedCalled) { st.onEndedCalled = true; try { st.onEnded(); } catch (e) { } }
     }
     function close() {
         if (!root) return;
@@ -113,6 +137,9 @@
                 if (!stream.getTracks().some(function (t) { return t.id === e.track.id; })) stream.addTrack(e.track);
             }
             elVideo.srcObject = stream;
+            // 阶段二百六十三：首帧流到达才显影——无流期间 video 会渲染 Chromium 默认占位
+            // 播放图标（半透明遮罩下透出，观感如"默认播放器"），nostream 类将其隐藏露纯黑底
+            elVideo.classList.remove('rc-mv-nostream');
             var pr = elVideo.play && elVideo.play();
             if (pr && pr.catch) pr.catch(function () { });
         };
@@ -279,16 +306,72 @@
         if (st.touch.mode === 'wheel') { st.touch = null; return; }
         if (st.touch.holdTimer) { clearTimeout(st.touch.holdTimer); st.touch.holdTimer = null; }
         if (!st.touch.moved && !st.touch.rightSent && st.touch.pos) {
-            // 轻点 = 左键单击
+            // 轻点 = 当前键位单击（工具栏"左/右"切换 st.curBtn；默认左键）
             flushMove();
-            sendInput({ t: 'm', act: 'down', btn: 0 });
-            sendInput({ t: 'm', act: 'up', btn: 0 });
+            sendInput({ t: 'm', act: 'down', btn: st.curBtn });
+            sendInput({ t: 'm', act: 'up', btn: st.curBtn });
         }
         st.touch = null;
     }
     function cancelTouch() {
         if (st.touch && st.touch.holdTimer) clearTimeout(st.touch.holdTimer);
         st.touch = null;
+    }
+
+    // ===== 浮动工具栏（右侧把手展开：左/右键模式、滚轮、组合键、键盘入口） =====
+    // 组合键全部走 {t:'k',act,code} VK 注入协议（被控端 remote-input.js VK_BY_CODE 归口，
+    // 字母键 VK 映射为阶段二百六十二新增）；Ctrl+Alt+Del 属系统安全桌面，SendInput 不可注入，不提供
+    var COMBOS = [
+        { label: 'Esc', seq: [{ act: 'down', code: 'Escape' }, { act: 'up', code: 'Escape' }] },
+        { label: 'Alt+Tab', seq: [{ act: 'down', code: 'AltLeft' }, { act: 'down', code: 'Tab' }, { act: 'up', code: 'Tab' }, { act: 'up', code: 'AltLeft' }] },
+        { label: 'Win', seq: [{ act: 'down', code: 'MetaLeft' }, { act: 'up', code: 'MetaLeft' }] },
+        { label: 'Win+D', seq: [{ act: 'down', code: 'MetaLeft' }, { act: 'down', code: 'KeyD' }, { act: 'up', code: 'KeyD' }, { act: 'up', code: 'MetaLeft' }] },
+        { label: 'Win+E', seq: [{ act: 'down', code: 'MetaLeft' }, { act: 'down', code: 'KeyE' }, { act: 'up', code: 'KeyE' }, { act: 'up', code: 'MetaLeft' }] },
+        { label: 'PrtSc', seq: [{ act: 'down', code: 'PrintScreen' }, { act: 'up', code: 'PrintScreen' }] }
+    ];
+    function bindTools() {
+        var handle = document.getElementById('rcMvHandle');
+        var bar = document.getElementById('rcMvToolsBar');
+        var comboPanel = document.getElementById('rcMvComboPanel');
+        var btnL = document.getElementById('rcMvBtnL');
+        var btnR = document.getElementById('rcMvBtnR');
+        // 组合键面板一次性渲染
+        comboPanel.innerHTML = COMBOS.map(function (c, i) {
+            return '<button class="rc-mv-combo-btn" data-i="' + i + '">' + c.label + '</button>';
+        }).join('');
+        handle.addEventListener('click', function () {
+            bar.classList.toggle('hidden');
+            if (!bar.classList.contains('hidden')) comboPanel.classList.add('hidden');
+        });
+        function setBtnMode(n) {
+            st.curBtn = n;
+            btnL.classList.toggle('active', n === 0);
+            btnR.classList.toggle('active', n === 1);
+        }
+        btnL.addEventListener('click', function () { setBtnMode(0); });
+        btnR.addEventListener('click', function () { setBtnMode(1); });
+        document.getElementById('rcMvWheelU').addEventListener('click', function () { sendInput({ t: 'm', act: 'wheel', dy: -400 }); });
+        document.getElementById('rcMvWheelD').addEventListener('click', function () { sendInput({ t: 'm', act: 'wheel', dy: 400 }); });
+        document.getElementById('rcMvCombo').addEventListener('click', function () { comboPanel.classList.toggle('hidden'); });
+        comboPanel.addEventListener('click', function (e) {
+            var b = e.target.closest('.rc-mv-combo-btn');
+            if (!b) return;
+            var c = COMBOS[parseInt(b.getAttribute('data-i'), 10)];
+            if (!c) return;
+            c.seq.forEach(function (k) { sendInput({ t: 'k', act: k.act, code: k.code, key: '' }); });
+            comboPanel.classList.add('hidden');
+        });
+    }
+    function resetTools() {
+        st.curBtn = 0;
+        var bar = document.getElementById('rcMvToolsBar');
+        var comboPanel = document.getElementById('rcMvComboPanel');
+        var btnL = document.getElementById('rcMvBtnL');
+        var btnR = document.getElementById('rcMvBtnR');
+        if (bar) bar.classList.add('hidden');
+        if (comboPanel) comboPanel.classList.add('hidden');
+        if (btnL) btnL.classList.add('active');
+        if (btnR) btnR.classList.remove('active');
     }
 
     // ===== 软键盘（"键盘"按钮聚焦隐藏输入框，逐键 down/up 上行） =====
@@ -344,6 +427,8 @@
         st.peerName = task.peer_name || task.peer || '';
         st.ice = Array.isArray(task.ice) && task.ice.length ? task.ice : null;
         st.sendFn = typeof task.send === 'function' ? task.send : null;
+        st.onEnded = typeof task.onEnded === 'function' ? task.onEnded : null;
+        st.onEndedCalled = false;
         st.dc = null;
         st.pendingCands = [];
         st.connected = false;
@@ -351,11 +436,14 @@
         if (st.watchdog) { clearTimeout(st.watchdog); st.watchdog = null; }
         if (st.graceTimer) { clearTimeout(st.graceTimer); st.graceTimer = null; }
         elVideo.srcObject = null;
+        // 阶段二百六十三：连接期无流——先隐藏 video 防默认占位播放图标透出遮罩（ontrack 首帧到达显影）
+        elVideo.classList.add('rc-mv-nostream');
         elName.textContent = st.peerName;
         setMode(T('连接中'));
         showMask(T('正在建立屏幕通道…'));
         document.getElementById('rcMvConfirm').classList.add('hidden');
         hideKeyboard();
+        resetTools();
         root.classList.remove('hidden');
         // 连接超时兜底（90s 同 PC 观看窗：offer 永不到达/被控端起流失败收口防层卡死）
         if (st.connectTimer) clearTimeout(st.connectTimer);

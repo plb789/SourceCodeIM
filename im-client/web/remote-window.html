@@ -47,6 +47,9 @@
         }
         /* 观看模式：远端画面上禁止右键菜单（画面内容非本端交互目标） */
         body.grant-view #rwRemote { pointer-events: none; }
+        /* 阶段二百六十三：无流期间（连接中/已断开）隐藏——video 空态会渲染 Chromium 默认占位
+           播放图标，半透明遮罩下透出（观感如"默认播放器"）；首帧流到达由 JS 移除本类显影 */
+        #rwRemote.rw-nostream { visibility: hidden; }
 
         /* ===== 顶部信息条（对方名 + 模式标签 + 分辨率） ===== */
         .rw-top {
@@ -165,7 +168,7 @@
     </style>
 </head>
 <body>
-    <video id="rwRemote" autoplay playsinline muted></video>
+    <video id="rwRemote" class="rw-nostream" autoplay playsinline muted></video>
     <div class="rw-drag"></div>
     <div class="rw-top" id="rwTop">
         <span class="rw-name" id="rwName">远程协助</span>
@@ -190,6 +193,6 @@
             </div>
         </div>
     </div>
-    <script src="js/remote-page.js?v=1.0"></script>
+    <script src="js/remote-page.js?v=1.1"></script>
 </body>
 </html>

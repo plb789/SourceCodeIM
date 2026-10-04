@@ -5147,9 +5147,12 @@ html.m .m-plus-item:active {
 }
 
 /* ---- 3. 底部导航五入口：聊天/通讯录/AI助手/工作台/我（图标+文字，微信同款） ---- */
-/* 公告/网盘移入个人页；添加好友/主题/退出（nav-bottom 整组）移入个人页与顶栏加号菜单 */
+/* 公告/网盘移入个人页；添加好友/主题/退出（nav-bottom 整组）移入个人页与顶栏加号菜单；
+   阶段二百六十二：远程控制同样收口个人页（移动端 rc-view 为 main-chat 内全屏页，无需底栏入口） */
 html.m .nav-icon[data-tab="announcement"],
 html.m .nav-icon[data-tab="drive"],
+html.m .nav-icon[data-tab="rc"],
+html.m #rc-panel,
 html.m .nav-bottom {
     display: none;
 }
@@ -18899,6 +18902,63 @@ html.m .rc-page { padding: 14px 14px 28px; }
 html.m .rc-device-card { width: 100%; }
 html.m .rc-connect-box { margin-top: 12px; padding: 20px 18px; }
 html.m .rc-head { padding: 12px 14px; }
+/* PC 端不使用首页视图（renderHome 仅移动端渲染，双保险隐藏） */
+.rc-home { display: none; }
+html.m .rc-home { display: block; }
+html.m .rc-home.hidden { display: none; }
+
+/* ===== 阶段二百六十二：手机端远程控制首页（设备卡片优先，向日葵/ToDesk 手机版同款） ===== */
+.rc-home-devices { display: flex; flex-direction: column; gap: 12px; }
+.rc-home-card {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel-bg);
+}
+.rc-home-card.online { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); }
+.rc-home-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rc-home-dev-ico { color: var(--primary); display: flex; align-items: center; flex-shrink: 0; }
+.rc-home-dev-name {
+    flex: 1; min-width: 0;
+    font-size: 16px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rc-home-dev-online { font-size: 12px; color: var(--text-light); flex-shrink: 0; }
+.rc-home-dev-id {
+    font-size: 13px; color: var(--text-light); margin-bottom: 12px;
+    letter-spacing: .5px; font-variant-numeric: tabular-nums;
+}
+.rc-home-dev-id:active { color: var(--primary); }
+.rc-home-connect-btn {
+    width: 100%; padding: 12px 0;
+    border: none; border-radius: 10px;
+    background: var(--primary); color: #fff;
+    font-size: 16px; font-weight: 600; cursor: pointer;
+    transition: opacity .15s;
+}
+.rc-home-connect-btn:active { opacity: .85; }
+.rc-home-connect-btn:disabled { background: var(--hover); color: var(--text-light); cursor: not-allowed; }
+/* 功能列表行（微信设置页同款视觉语言） */
+.rc-home-rows {
+    margin-top: 16px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+.rc-home-row {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; min-height: 56px; padding: 10px 14px;
+    border: none; background: none; color: var(--text);
+    text-align: left; cursor: pointer; box-sizing: border-box;
+}
+.rc-home-row + .rc-home-row { border-top: 1px solid var(--border); }
+.rc-home-row:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.rc-home-row-ico { color: var(--primary); display: flex; align-items: center; flex-shrink: 0; }
+.rc-home-row-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rc-home-row-title { font-size: 15px; color: var(--text); }
+.rc-home-row-sub { font-size: 12px; color: var(--text-light); }
+.rc-home-row-arrow { color: var(--text-light); flex-shrink: 0; display: flex; }
 
 /* ===== 阶段二百六十一：手机/WEB 控制端页内全屏观看层（rc-mobile-view.js） ===== */
 .rc-mv-root {
@@ -18960,6 +19020,9 @@ html.m .rc-head { padding: 12px 14px; }
     object-fit: contain;
     touch-action: none;
 }
+/* 阶段二百六十三：无流期间（连接中/已断开）隐藏——video 空态会渲染 Chromium 默认占位
+   播放图标，半透明遮罩下透出（观感如"默认播放器"）；首帧流到达由 JS 移除本类显影 */
+.rc-mv-stage video.rc-mv-nostream { visibility: hidden; }
 .rc-mv-mask {
     position: absolute;
     inset: 0;
@@ -19017,3 +19080,77 @@ html.m .rc-head { padding: 12px 14px; }
     font-size: 14px;
 }
 .rc-mv-confirm-btns .rc-mv-btn.rc-mv-danger { background: rgba(250, 81, 81, 0.12); }
+/* ===== 阶段二百六十二：控制层浮动工具栏（右侧把手展开；半透明深色底适配任意桌面画面） ===== */
+.rc-mv-tools {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: max(6px, env(safe-area-inset-right));
+    pointer-events: none; /* 容器不挡画面，仅子元素可点 */
+}
+.rc-mv-handle {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 56px;
+    border: none;
+    border-radius: 8px 0 0 8px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    cursor: pointer;
+}
+.rc-mv-handle:active { background: rgba(0, 0, 0, 0.65); }
+.rc-mv-tools-bar {
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 6px;
+    border-radius: 10px 0 0 10px;
+    background: rgba(0, 0, 0, 0.5);
+}
+.rc-mv-tools-bar.hidden { display: none; }
+.rc-mv-tool {
+    min-width: 40px;
+    padding: 8px 6px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+}
+.rc-mv-tool:active { background: rgba(255, 255, 255, 0.3); }
+.rc-mv-tool.active { background: var(--primary); color: #fff; }
+.rc-mv-combo {
+    pointer-events: auto;
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.62);
+}
+.rc-mv-combo.hidden { display: none; }
+.rc-mv-combo-btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.rc-mv-combo-btn:active { background: var(--primary); }

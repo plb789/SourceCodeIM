@@ -32,6 +32,11 @@ const VK_BY_CODE = {};
     add('NumpadMultiply', 0x6A); add('NumpadAdd', 0x6B); add('NumpadSubtract', 0x6D);
     add('NumpadDecimal', 0x6E); add('NumpadDivide', 0x6F, true); add('NumpadEnter', 0x0D, true);
     add('ContextMenu', 0x5D, true);
+    // 阶段二百六十二：字母 A-Z / 数字 0-9 的 VK 映射——组合键（Win+D/Win+R/Alt+F4 等）必须以真实
+    // VK 注入才能与修饰键组合生效（UNICODE 注入 wVk=0 不参与组合）。纯增量：文本输入路径
+    // （软键盘发 code:''）不查本表、仍走 UNICODE，行为零变化；仅显式携带 code:'KeyX'/'DigitN' 时命中。
+    for (var l = 0; l < 26; l++) add('Key' + String.fromCharCode(65 + l), 0x41 + l);
+    for (var g = 0; g < 10; g++) add('Digit' + g, 0x30 + g);
 })();
 
 function write(line) {
