@@ -12677,6 +12677,19 @@ html.m .ms-actions {
     font-size: 18px;
 }
 
+/* 手机端：名称与头像 emoji 拆为两行独立输入——同排时名称框被压得过窄、
+   头像框溢出弹窗右边界，竖排后与其他表单项（模型下拉/提示词）同宽对齐 */
+html.m .ua-form-row {
+    flex-direction: column;
+    gap: 8px;
+}
+
+html.m .ua-form-row .modal-input {
+    margin-bottom: 0;
+    width: 100%;
+    min-width: 0;
+}
+
 /* 模型下拉（白名单选项，外观对齐输入框） */
 .ua-form select.modal-input {
     appearance: none;
