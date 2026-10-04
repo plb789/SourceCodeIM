@@ -154,4 +154,7 @@
     <!-- 阶段二百三十七：后台来电全屏拉起接听画面（全屏意图通知；Android 14+ 需用户在设置授予，
          由设置页"来电弹窗"引导跳转系统设置页开启） -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- 阶段二百六十：APP 自动更新——拉起系统安装页安装下载的新版 APK（Android 8+ 运行时
+         需用户在"安装未知应用"授权，AppUpdaterPlugin.install 检测未授权时引导跳转设置页） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 </manifest>

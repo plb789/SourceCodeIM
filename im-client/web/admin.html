@@ -57,6 +57,7 @@
                 <button class="admin-nav-item" data-view="online">在线账号</button>
                 <button class="admin-nav-item" data-view="announcements">公告管理</button>
                 <button class="admin-nav-item" data-view="workbench">工作台管理</button>
+                <button class="admin-nav-item" data-view="appversion">客户端更新</button>
                 <button class="admin-nav-item" data-view="points">积分管理</button>
                 <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
                 <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
@@ -1124,6 +1125,47 @@
                 <button id="wb-next" class="admin-btn small">下一页</button>
             </div>
             </section>
+
+            <!-- 客户端更新管理（阶段二百六十：APP/PC 自动更新，安装包上传+版本启停） -->
+            <section id="admin-view-appversion" class="admin-view">
+            <header class="admin-view-head">
+                <h2>客户端更新</h2>
+                <span id="av-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">APP（APK）与 PC（Setup 安装包）的原生壳版本发布归口：上传安装包后点"启用"才对外生效（同平台仅一个生效版本，启用新版自动停用旧版）。勾选"强制更新"后旧版客户端必须更新才能继续使用。客户端界面/功能更新走 web 部署即时生效，无需在此发布；此处仅用于原生壳变更（新权限、插件、打包资源）。注意：APK 覆盖安装要求新旧包签名一致。</p>
+            <!-- 工具条：平台筛选 + 上传 -->
+            <div class="vec-toolbar">
+                <select id="av-filter-platform" class="admin-input">
+                    <option value="">全部平台</option>
+                    <option value="android">APP（Android APK）</option>
+                    <option value="win">PC（Windows Setup）</option>
+                </select>
+                <button id="av-refresh" class="admin-btn small">刷新</button>
+                <button id="av-upload" class="admin-btn small primary">上传新版本</button>
+            </div>
+            <!-- 版本表格 -->
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>平台</th>
+                            <th>版本号</th>
+                            <th>versionCode</th>
+                            <th>安装包</th>
+                            <th>大小</th>
+                            <th>强制</th>
+                            <th>状态</th>
+                            <th>发布时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="av-tbody">
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            </section>
         </main>
     </div>
 
@@ -1146,6 +1188,49 @@
             <div class="modal-btns">
                 <button id="admin-confirm-cancel" class="modal-btn">取消</button>
                 <button id="admin-confirm-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 客户端更新包上传弹窗（阶段二百六十：安装包上传+版本登记，含文件选择） -->
+    <div id="av-upload-mask" class="modal-mask hidden">
+        <div class="modal-box admin-edit-box">
+            <div class="modal-title">上传新版本安装包</div>
+            <div class="admin-edit-form">
+                <div class="admin-field">
+                    <label>平台</label>
+                    <select id="av-up-platform" class="admin-input">
+                        <option value="android">APP（Android APK）</option>
+                        <option value="win">PC（Windows Setup exe）</option>
+                    </select>
+                </div>
+                <div class="admin-field">
+                    <label>版本号</label>
+                    <input type="text" id="av-up-version" class="admin-input" placeholder="如 1.2.0">
+                    <span class="admin-field-hint">语义化版本（字母数字点横线）；PC 端以此比对更新</span>
+                </div>
+                <div class="admin-field">
+                    <label>versionCode（仅 APP 必填）</label>
+                    <input type="number" id="av-up-code" class="admin-input" placeholder="如 2，须大于线上旧值">
+                    <span class="admin-field-hint">Android 整型版本号，与 build.gradle versionCode 对应；APP 端以此比对更新</span>
+                </div>
+                <div class="admin-field">
+                    <label>更新说明</label>
+                    <textarea id="av-up-notes" class="admin-input" rows="3" placeholder="本次更新内容（客户端弹窗展示）"></textarea>
+                </div>
+                <div class="admin-field admin-field-check">
+                    <input type="checkbox" id="av-up-force">
+                    <label for="av-up-force">强制更新（旧版客户端必须更新才能继续使用）</label>
+                </div>
+                <div class="admin-field">
+                    <label>安装包文件</label>
+                    <input type="file" id="av-up-file" class="admin-input" accept=".apk,.exe">
+                    <span class="admin-field-hint">APP 选 .apk，PC 选 electron-builder 产出的 Setup .exe</span>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="av-upload-cancel" class="modal-btn">取消</button>
+                <button id="av-upload-ok" class="modal-btn primary">上 传</button>
             </div>
         </div>
     </div>

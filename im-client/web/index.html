@@ -49,6 +49,9 @@
     <script src="/js/web-call-bridge.js?v=2.4"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
     <script src="/js/mobile.js?v=1.24"></script>
+    <!-- 阶段二百六十：客户端自动更新（APP 原生壳检测/下载/安装弹窗 + PC 设置页检查更新接线；
+         纯浏览器 WEB 端服务端托管即全员生效，本脚本自动旁路） -->
+    <script src="/js/app-update.js?v=1.0"></script>
     <!-- 阶段七十七：PC 端自定义标题栏引导——仅 Electron 壳内启用（浏览器/手机 APP 无 desktop 桥自动旁路），
          尽早挂根类让 CSS 提前让位顶栏，避免布局闪动；preload 注入的 setTitlebarColors 存在才启用 -->
     <script>
@@ -1786,6 +1789,9 @@
                         <span class="settings-card-value">阶段一百零五</span>
                     </div>
                 </div>
+                <!-- 阶段二百六十：检查更新（APP 原生壳 / PC 客户端显示，浏览器 WEB 端由脚本旁路隐藏；
+                     APP 走自绘更新弹窗下载 APK，PC 触发主进程 electron-updater 手动检查） -->
+                <button id="settings-check-update" class="settings-btn" style="display:none;">检查更新</button>
             </section>
         </main>
         <button id="settings-close" class="settings-close" title="关闭设置">×</button>

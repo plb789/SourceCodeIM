@@ -44,6 +44,8 @@ public class MainActivity extends BridgeActivity {
         // startKeepAlive 等全部插件调用静默失效（保活/通知/状态栏全废，探针实测 PLG=false 铁证）。
         // 阶段二百二十五：注册后台保活插件（切后台/息屏由原生前台服务接管长连接收消息）
         registerPlugin(BackgroundIMPlugin.class);
+        // 阶段二百六十：注册 APP 自动更新插件（检测/下载/校验/拉起系统安装页，弹窗 UI 归口前端自绘）
+        registerPlugin(AppUpdaterPlugin.class);
         super.onCreate(savedInstanceState);
         // 阶段二百五十：锁屏来电可见（微信同款息屏来电）——FSI 全屏意图拉起本 Activity 时
         // 直接在锁屏上显示来电页并点亮屏幕。缺省时 FSI 拉起的页面被锁屏覆盖，锁屏上又因

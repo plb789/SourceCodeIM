@@ -811,5 +811,32 @@ contextBridge.exposeInMainWorld('desktop', {
     // 行列零基 LSP 坐标）。返回 Promise<{markdown, range} | null>，超时/未装服务器返回 null 由 viewer 页回落静态表
     lspHover: function (req) {
         return ipcRenderer.invoke('lsp:hover', req || {});
+    },
+    // ===== 阶段二百六十：自动更新窗（update.html 专用桥）=====
+    // 设置页"检查更新"入口触发手动检查（主进程 updater.check(true)，与托盘菜单同源）
+    updaterCheck: function () {
+        ipcRenderer.send('updater:check');
+    },
+    updaterGetInfo: function () {
+        return ipcRenderer.invoke('updater:info');
+    },
+    updaterDownload: function () {
+        ipcRenderer.send('updater:download');
+    },
+    updaterInstall: function () {
+        ipcRenderer.send('updater:install');
+    },
+    updaterDismiss: function () {
+        ipcRenderer.send('updater:dismiss');
+    },
+    onUpdaterInfo: function (callback) {
+        ipcRenderer.on('updater:info', function (event, data) {
+            callback(data);
+        });
+    },
+    onUpdaterState: function (callback) {
+        ipcRenderer.on('updater:state', function (event, data) {
+            callback(data);
+        });
     }
 });

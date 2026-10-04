@@ -27,6 +27,7 @@
             online: 'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
             announcements: 'M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z',
             workbench: 'M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z',
+            appversion: 'M12 2L4 5v6.09c0 5.42 3.43 10.25 8 11.91 4.57-1.66 8-6.49 8-11.91V5l-8-3zm-1 11h-2v-2h2v2zm0-4h-2V7h2v2zm4 4h-2v-2h2v2zm0-4h-2V7h2v2z',
             points: 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
             billing: 'M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z',
             compress: 'M8 11h3v10h2V11h3l-4-4-4 4zM4 3v2h16V3H4zm0 4h7V5H4v2zm16 0v2h-7V5h7z',
@@ -276,6 +277,8 @@
             else if (item.dataset.view === 'calllogs') { calllogsPage = 1; loadCallLogs(); }
             // 阶段一百四十五：进入工作台管理视图拉取应用清单
             else if (item.dataset.view === 'workbench') { wbLoadList(); }
+            // 阶段二百六十：进入客户端更新视图拉取版本清单
+            else if (item.dataset.view === 'appversion') { avLoadList(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -4872,4 +4875,142 @@
         }).catch(function () { showToast('网络异常'); });
     });
     $('wb-icon').addEventListener('change', function () { wbRenderIconPreview(this.value.trim()); });
+
+    // ===== 阶段二百六十：客户端更新管理（APP/PC 安装包上传 + 版本启停） =====
+    var AV_PLAT_TEXT = { android: 'APP', win: 'PC' };
+
+    function avLoadList() {
+        $('av-status').textContent = '加载中…';
+        var p = $('av-filter-platform').value;
+        var qs = p ? '?platform=' + p : '';
+        api('GET', '/admin/api/appversion' + qs).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); $('av-status').textContent = '加载失败'; return; }
+            var list = (result.data && result.data.list) || [];
+            $('av-status').textContent = '共 ' + list.length + ' 个版本';
+            avRenderList(list);
+        }).catch(function () { $('av-status').textContent = '加载失败'; showToast('网络异常'); });
+    }
+
+    function avRenderList(list) {
+        var tbody = $('av-tbody');
+        tbody.innerHTML = '';
+        if (!list.length) {
+            var tr0 = document.createElement('tr');
+            var td0 = document.createElement('td');
+            td0.colSpan = 10;
+            td0.className = 'vec-empty';
+            td0.textContent = '暂无版本记录，点击"上传新版本"发布 APP/PC 安装包';
+            tr0.appendChild(td0);
+            tbody.appendChild(tr0);
+            return;
+        }
+        function opBtn(text, cls, fn) {
+            var b = document.createElement('button');
+            b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+            b.textContent = text;
+            b.addEventListener('click', fn);
+            return b;
+        }
+        list.forEach(function (v) {
+            var tr = document.createElement('tr');
+            var tdId = document.createElement('td'); tdId.textContent = v.id; tr.appendChild(tdId);
+            var tdPlat = document.createElement('td'); tdPlat.textContent = AV_PLAT_TEXT[v.platform] || v.platform; tr.appendChild(tdPlat);
+            var tdVer = document.createElement('td'); tdVer.textContent = v.version_name; tr.appendChild(tdVer);
+            var tdCode = document.createElement('td'); tdCode.textContent = v.platform === 'android' ? (v.version_code || '-') : '-'; tr.appendChild(tdCode);
+            // 安装包（链接可下载自验，悬浮看原名）
+            var tdFile = document.createElement('td');
+            var a = document.createElement('a');
+            a.textContent = v.file_name;
+            a.href = v.url;
+            a.target = '_blank';
+            a.title = '点击下载校验：' + v.file_name;
+            tdFile.appendChild(a);
+            tr.appendChild(tdFile);
+            var tdSize = document.createElement('td'); tdSize.textContent = fmFormatSize(v.size); tr.appendChild(tdSize);
+            var tdForce = document.createElement('td'); tdForce.textContent = v.force ? '强制' : '可选'; tr.appendChild(tdForce);
+            // 状态（生效/未生效，复用公告状态点样式）
+            var tdSt = document.createElement('td');
+            var tag = document.createElement('span');
+            tag.className = 'ann-status-dot ' + (v.enabled ? 'ann-status-published' : 'ann-status-draft');
+            tag.textContent = v.enabled ? '生效中' : '未生效';
+            tdSt.appendChild(tag);
+            tr.appendChild(tdSt);
+            var tdTime = document.createElement('td'); tdTime.textContent = fmFormatTime(v.create_time); tr.appendChild(tdTime);
+            // 操作：启用（仅未生效项）+ 删除
+            var tdOp = document.createElement('td');
+            if (!v.enabled) {
+                tdOp.appendChild(opBtn('启用', 'primary', function () {
+                    confirmBox('启用后「' + (AV_PLAT_TEXT[v.platform] || v.platform) + ' ' + v.version_name + '」成为当前对外版本（同平台旧生效版本自动停用），确定启用？', function () {
+                        api('POST', '/admin/api/appversion/' + v.id + '/enable').then(function (result) {
+                            if (!result.ok) { showToast(result.msg || '启用失败'); return; }
+                            showToast('已启用');
+                            avLoadList();
+                        }).catch(function () { showToast('网络异常'); });
+                    });
+                }));
+            }
+            tdOp.appendChild(opBtn('删除', '', function () {
+                confirmBox('删除版本「' + v.version_name + '」及其安装包文件？' + (v.enabled ? '（当前生效版本，删除后客户端不再收到该更新提示）' : ''), function () {
+                    api('DELETE', '/admin/api/appversion/' + v.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        avLoadList();
+                    }).catch(function () { showToast('网络异常'); });
+                });
+            }));
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // 上传弹窗归口（FormData 走管理端专用端点；大文件上传期间按钮禁用防重复提交）
+    $('av-upload').addEventListener('click', function () {
+        $('av-up-platform').value = $('av-filter-platform').value || 'android';
+        $('av-up-version').value = '';
+        $('av-up-code').value = '';
+        $('av-up-notes').value = '';
+        $('av-up-force').checked = false;
+        $('av-up-file').value = '';
+        $('av-upload-mask').classList.remove('hidden');
+    });
+    $('av-upload-cancel').addEventListener('click', function () { $('av-upload-mask').classList.add('hidden'); });
+    $('av-upload-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    $('av-upload-ok').addEventListener('click', function () {
+        var platform = $('av-up-platform').value;
+        var version = $('av-up-version').value.trim();
+        var file = ($('av-up-file').files || [])[0];
+        if (!version) { showToast('请填写版本号'); return; }
+        if (!file) { showToast('请选择安装包文件'); return; }
+        if (platform === 'android' && !(parseInt($('av-up-code').value, 10) > 0)) { showToast('APP 版本须填写 versionCode'); return; }
+        var fd = new FormData();
+        fd.append('platform', platform);
+        fd.append('version_name', version);
+        fd.append('version_code', $('av-up-code').value || '0');
+        fd.append('notes', $('av-up-notes').value.trim());
+        fd.append('force', $('av-up-force').checked ? '1' : '0');
+        fd.append('file', file);
+        var okBtn = $('av-upload-ok');
+        okBtn.disabled = true;
+        okBtn.textContent = '上传中…';
+        fetch('/admin/api/appversion', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd
+        }).then(function (resp) {
+            return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+        }).then(function (result) {
+            okBtn.disabled = false;
+            okBtn.textContent = '上 传';
+            if (!result.ok) { showToast(result.msg || '上传失败'); return; }
+            $('av-upload-mask').classList.add('hidden');
+            showToast('已上传（未生效，列表中点"启用"后对外下发）');
+            avLoadList();
+        }).catch(function () {
+            okBtn.disabled = false;
+            okBtn.textContent = '上 传';
+            showToast('网络异常');
+        });
+    });
+    $('av-refresh').addEventListener('click', function () { avLoadList(); });
+    $('av-filter-platform').addEventListener('change', function () { avLoadList(); });
 })();

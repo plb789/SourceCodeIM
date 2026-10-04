@@ -275,6 +275,8 @@ func main() {
 	server.RegisterAnnouncementRoutes(srv)
 	// 阶段一百四十五：工作台路由（后台维护办公网站清单 + 客户端宫格导航只读归口）
 	server.RegisterWorkbenchRoutes(srv)
+	// 阶段二百六十：客户端自动更新路由（后台上传安装包/启停版本 + 客户端版本检查归口）
+	server.RegisterAppVersionRoutes(srv)
 	// 网盘路由（个人云盘：元数据 MySQL + 文件本体 MinIO/本地双后端，全部操作服务端归口代理）
 	server.RegisterDriveRoutes(srv)
 	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）

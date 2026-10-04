@@ -19,6 +19,8 @@ const debugManager = require('./debug-manager.js');
 const webCache = require('./web-cache.js');
 // 阶段一百五十五：远程协助被控端输入注入管理器（PowerShell SendInput 常驻工作进程）
 const remoteInput = require('./remote-input.js');
+// 阶段二百六十：自动更新模块（electron-updater；未安装依赖/未打包形态内部静默降级）
+const updater = require('./updater.js');
 
 // 阶段一百六十四：主进程全局异常兜底——未捕获异常/未处理 Promise 拒绝一律记日志，不弹模态框
 // （原实现：Electron 默认对 uncaughtException 弹 showErrorBox 模态对话框。实测 LSP 语言服务器
@@ -415,6 +417,9 @@ function createTray() {
     tray.setToolTip('即时通讯');
     const contextMenu = Menu.buildFromTemplate([
         { label: '显示主窗口', click: function () { mainWindow.show(); } },
+        // 阶段二百六十：托盘手动检查更新（无新版系统通知提示已是最新；有新版弹自绘更新窗）
+        { label: '检查更新', click: function () { updater.check(true); } },
+        { type: 'separator' },
         { label: '退出', click: function () { app.isQuitting = true; app.quit(); } }
     ]);
     tray.setContextMenu(contextMenu);
@@ -2908,6 +2913,12 @@ app.whenReady().then(async function () {
     // ——失败后 web-cache 内部定时重试（30s 起指数退避封顶 5 分钟），自愈成功经 onSynced 刷新主窗口
     var syncResult = await webCache.sync();
     createTray();
+    // 阶段二百六十：自动更新初始化（electron-updater generic feed 指向服务端 win 安装包目录；
+    // dev/未打包形态内部静默跳过，不影响开发调试）
+    updater.init({
+        serverUrl: SERVER_URL,
+        getThemeDark: resolveBootDark
+    });
 
     // 阶段九十一：内置浏览器管理器初始化（渲染层 IPC 入口注册 + 主窗口引用注入；
     // 需在 createWindow 之后——mainWindow 引用就绪后 agent 工具与面板控制才可用）

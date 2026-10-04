@@ -112,6 +112,12 @@
         var sysApp = window.Capacitor.Plugins.App;
         sysApp.addListener('backButton', function () {
             if (!inMobile()) { sysApp.exitApp(); return; }
+            // 阶段二百六十：APP 更新弹窗（自绘浮层最顶层；强制更新 tryClose 消费返回键但不关，
+            // 防返回键绕过强制更新；非强制关闭弹窗）
+            if (window.IMAppUpdate && window.IMAppUpdate.isOpen()) {
+                window.IMAppUpdate.tryClose();
+                return;
+            }
             // 0) 页内图片查看层（阶段二百二十：最顶层，侧滑/返回键=关闭层，微信同款）
             if (window.IMImgLayer && window.IMImgLayer.isOpen()) {
                 window.IMImgLayer.close();
