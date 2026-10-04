@@ -74,6 +74,7 @@
         micUnavailable: false, // 麦克风不可用（设备故障降级标记，通信不阻断）
         camUnavailable: false, // 摄像头不可用（设备故障降级标记，通信不阻断）
         ended: false,        // 收口标记（防重复收口）
+        pendingCancel: false, // 阶段二百六十一强化：响铃期取消在任务未投递（call:load 竞态）时排队，onCallLoad 后补发
         needRestart: false,  // 阶段一百四十七：ICE restart 意图标记（主叫断网置位，connected 恢复清除）
         // ===== 阶段一百四十七：restart 恢复期状态（connected 恢复/收口/重置全清） =====
         iceRestartActive: false, // restart 恢复期开关（主叫断网置位/被叫收 restart offer 置位）
@@ -206,7 +207,13 @@
     // target 阶段一百四十四：会议模式下媒体帧的定向接收方（content.target，服务端校验后转发）；
     // 会议帧 to_user 恒空（服务端按 target 归口，不信任帧级路由）
     function send(action, extra, target) {
-        if (!d.callSend || !st.callId) return;
+        if (!d.callSend || !st.callId) {
+            // 阶段二百六十一强化：响铃期取消在任务未投递（call:load 竞态）时不可静默丢弃——
+            // 原实现直接 return 后 finish 本地收口，服务端会话残留（被叫幽灵响铃 + 双方忙态拦截重拨）；
+            // 标记待补发，onCallLoad 任务到达后立即补发 cancel（服务端幂等）
+            if (action === 'cancel' && !st.callId) st.pendingCancel = true;
+            return;
+        }
         if (!st.meet && !st.peer) return; // 1v1 必须有对端；会议模式 to_user 留空
         var o = { action: action, call_id: st.callId };
         if (st.meet && target) o.target = target;
@@ -576,6 +583,7 @@
         st.state = 'idle';
         st.startedAt = 0;
         st.muted = false; st.camOff = false; st.ended = false;
+        st.pendingCancel = false; // 阶段二百六十一强化：换场清排队取消标记（防换场后误挂新通话）
         st.micUnavailable = false; st.camUnavailable = false;
         st.meet = false; st.groupId = 0; st.meetTitle = ''; st.selfName = ''; st.selfAvatar = '';
         btnMute.classList.remove('active'); btnCam.classList.remove('active');
@@ -2052,12 +2060,22 @@
     //       会议模式 data = {role, call_id, call_type, meet:true, group_id, meet_title, self_name, self_avatar}） =====
     d.onCallLoad(function (data) {
         if (!data || !data.call_id) return;
+        var wasIdle = !st.callId; // 窗口首次载入任务（复用换场 resetState 已清场景态）
         if (st.callId && st.callId !== data.call_id) resetState();
-        if (data.meet) { meetInit(data); return; } // 阶段一百四十四：会议分流（宫格 + Mesh 建连）
+        if (data.meet) {
+            st.pendingCancel = false; // 会议载入丢弃 1v1 排队取消标记（防跨场泄漏误挂后续 1v1 通话）
+            meetInit(data); return; // 阶段一百四十四：会议分流（宫格 + Mesh 建连）
+        }
         st.role = data.role === 'callee' ? 'callee' : 'caller';
         st.callId = data.call_id;
         st.peer = data.peer || '';
         st.peerName = data.peer_name || st.peer;
+        // 阶段二百六十一强化：补发就绪前被守卫拦下的响铃期取消（任务未投递时点挂断的场景）；
+        // 仅窗口首次载入补发（复用换场场景丢弃残留标记，防误挂新通话）
+        if (st.pendingCancel) {
+            st.pendingCancel = false;
+            if (wasIdle) send('cancel', {});
+        }
         st.peerAvatar = data.peer_avatar || '';
         st.callType = data.call_type === 'video' ? 'video' : 'audio';
         var bm = $('btnMin');

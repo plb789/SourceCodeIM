@@ -93,6 +93,12 @@
     // ===== 来电推送（每次展示重置 UI 与计时，窗口为常驻单例复用） =====
     d.onRingShow(function (data) {
         if (!data || !data.call_id) return;
+        // 阶段二百六十一强化：命中早到结束信令的来电直接不展示（主叫已在展示前取消/超时）
+        pruneGone();
+        if (recentGone[data.call_id]) {
+            delete recentGone[data.call_id];
+            return;
+        }
         cur = data;
         fillProfile();
         ringStart();
@@ -108,14 +114,32 @@
         });
     }
 
+    // ===== 阶段二百六十一强化：早到结束信令缓冲（防幽灵响铃） =====
+    // 主进程转发 cancel/timeout/dismiss 时响铃页可能尚未完成加载（onRingShow 未到、cur 未就绪），
+    // 原实现 !cur 直接丢弃该信令 → 主叫已取消但本页仍响铃满 60s 自兜底。此处按 call_id 记入
+    // 缓冲，随后来电展示命中 10 秒内记录直接不渲染（超 10 秒视为过期信令，正常展示）
+    var recentGone = {};     // call_id → 结束信令到达时刻（ms）
+    function pruneGone() {
+        var now = Date.now();
+        for (var k in recentGone) {
+            if (now - recentGone[k] > 10000) delete recentGone[k];
+        }
+    }
+
     // ===== 信令兜底（主进程仅响铃条可见时转发；cancel/timeout/dismiss 自收口） =====
     if (d.onCallSignal) {
         d.onCallSignal(function (frame) {
-            if (!frame || !cur) return;
+            if (!frame) return;
             var p;
             try { p = JSON.parse(frame.content); } catch (e) { return; }
-            if (!p || p.call_id !== cur.call_id) return;
-            if (p.action === 'cancel' || p.action === 'timeout' || p.action === 'dismiss') hideSelf();
+            if (!p || !p.call_id) return;
+            if (p.action !== 'cancel' && p.action !== 'timeout' && p.action !== 'dismiss') return;
+            if (!cur || p.call_id !== cur.call_id) {
+                pruneGone();
+                recentGone[p.call_id] = Date.now();
+                return;
+            }
+            hideSelf();
         });
     }
 

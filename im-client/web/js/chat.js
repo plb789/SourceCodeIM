@@ -21213,6 +21213,11 @@
     var videoCallBtn = document.getElementById('video-call-btn');
     var callOpenId = '';     // 本端进行中的通话 call_id（空=无通话窗）
     var pendingRing = null;  // 来电待处理（{call_id, from, call_type}）
+    // 阶段二百六十一强化：本端通话角色/主叫对端（窗口关闭安全网判定）——
+    // 通话窗关闭时若 cancel/hangup 因页面加载竞态或非常规关闭路径丢失，服务端会话残留：
+    // 被叫幽灵响铃满 60s 且双方忙态拦截重拨，主窗口补发终结信令兜底（服务端会话已收口时静默忽略，幂等）
+    var callSelfRole = '';   // 本端角色：caller（主叫）/ callee（被叫）/ meet（会议）
+    var callSelfPeer = '';   // 主叫对端账号（安全网补发 cancel 归口）
 
     // 通话信令上行（统一入口：msg_type=70 + content JSON）
     function callSignalSend(toUser, obj) {
@@ -21239,6 +21244,8 @@
         if (currentChatUser === '' || isAIAgent(currentChatUser)) return;
         var callId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         callOpenId = callId;
+        callSelfRole = 'caller';     // 安全网判定：本窗为主叫呼出
+        callSelfPeer = currentChatUser;
         // 先开窗（等待态 UI）再发 invite；服务端校验失败经 error 帧回抛给通话窗展示
         window.desktop.callOpen({
             role: 'caller', call_id: callId, peer: currentChatUser,
@@ -21525,6 +21532,8 @@
         var r = pendingRing;
         callClearRing();
         callOpenId = r.call_id;
+        callSelfRole = r.meet ? 'meet' : 'callee'; // 安全网判定：被叫接听（会议窗关闭不发 1v1 终结信令）
+        callSelfPeer = '';
         if (r.meet) {
             // 阶段一百四十四：会议入会——开会议窗（宫格等待态）→ meet_accept 上行，
             // 服务端下发 room_info（全员资料）后对每个成员等 offer 应答建 Mesh
@@ -21591,7 +21600,18 @@
     }
     // 主进程桥：通话窗已关闭（挂断/异常收口），清本端通话态
     if (window.desktop && window.desktop.onCallClosed) {
-        window.desktop.onCallClosed(function () { callOpenId = ''; });
+        window.desktop.onCallClosed(function () {
+            // 阶段二百六十一强化：主叫安全网补发 cancel——通话窗关闭时终结信令可能尚未发出
+            // （页面加载竞态下 send 静默丢失 / 窗体非常规关闭 / 页面崩溃），服务端会话残留
+            // 致被叫幽灵响铃满 60s 且双方忙态拦截重拨。此处归口补发，服务端会话已正常收口
+            // 时查无会话静默忽略（幂等，与窗内已发的 cancel/hangup 不产生双份话单）
+            if (callOpenId && callSelfRole === 'caller' && callSelfPeer) {
+                callSignalSend(callSelfPeer, { action: 'cancel', call_id: callOpenId });
+            }
+            callOpenId = '';
+            callSelfRole = '';
+            callSelfPeer = '';
+        });
     }
 
     // 通话信令分发（msg_type=70）
@@ -21685,6 +21705,8 @@
         if (p.action === 'room_info' && !callOpenId) {
             if (!window.desktop || !window.desktop.callOpen) return; // Web/手机端无会议能力
             callOpenId = p.call_id; // 开窗即占线（与 accept 链路同语义，后续信令走通用中继）
+            callSelfRole = 'meet';  // 安全网判定：会议入会（窗关不发 1v1 终结信令）
+            callSelfPeer = '';
             window.desktop.callOpen({
                 role: 'callee', meet: true, call_id: p.call_id, group_id: p.group_id || 0,
                 meet_title: groupNameOf('g' + (p.group_id || 0)),

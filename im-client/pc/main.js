@@ -1833,6 +1833,10 @@ ipcMain.on('call:ring', function (e, data) {
     var win = ensureRingWindow();
     var show = function () {
         if (!ringWin || ringWin.isDestroyed()) return;
+        // 阶段二百六十一强化：窗口加载期间来电已被取消/顶替（ringPending 已清空或已换新来电）时
+        // 不再补发展示——原实现 did-finish-load 无条件发 ring:show，主叫秒挂的来电会在被叫端
+        // 幽灵响铃满 60s（该窗口期 cancel 因响铃窗未 visible 不会转发到页面，页面侧无从自愈）
+        if (ringPending !== data) return;
         ringWin.webContents.send('call:ring:show', data);
         ringWin.setPositionAtRight();
         // showInactive：弹条不抢主窗口焦点（微信同款，正在打字不被打断）

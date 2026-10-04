@@ -185,6 +185,20 @@ func callInjectICE(content string) string {
 	return string(b)
 }
 
+// staleRingOf 忙态指向的会话是否为「同主叫同被叫且仍在响铃」的残留会话（须持 callMu 调用）。
+// 阶段二百六十一强化：主叫响铃期取消信令丢失（页面加载竞态/窗体非常规关闭）时服务端会话残留，
+// 60s 超时兜底前双方忙态拦截重拨、被叫来电页幽灵响铃——主叫重拨时按顶替收口
+func staleRingOf(busyID, from, callee string) *callSession {
+	if busyID == "" {
+		return nil
+	}
+	old, ok := callSessions[busyID]
+	if !ok || old.Caller != from || old.Callee != callee || old.State != callStateRinging {
+		return nil
+	}
+	return old
+}
+
 // callInvite 主叫发起呼叫
 func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *callSignalPayload) {
 	var body struct {
@@ -236,15 +250,36 @@ func (s *Server) callInvite(c *Client, msg *protocol.Message, from string, p *ca
 
 	callMu.Lock()
 	// 双方忙判定（响铃中/通话中均算忙）
-	if _, busy := callUserBusy[from]; busy {
-		callMu.Unlock()
-		s.callSendError(from, p.CallID, "你正在通话中")
-		return
+	// 阶段二百六十一强化：忙态指向「同主叫同被叫且仍在响铃」的残留会话时按主叫重拨顶替——
+	// 先解锁收口（callFinish 自带 callMu 且同步转发 cancel 撤被叫幽灵来电页并释放双方忙态），
+	// 再重新加锁二次校验忙态（顶替窗口内他呼可能已抢占任一方）；其余忙态维持原提示
+	checkBusy := func() (string, bool) {
+		if _, busy := callUserBusy[from]; busy {
+			return "你正在通话中", true
+		}
+		if _, busy := callUserBusy[callee]; busy {
+			return "对方忙，请稍后再试", true
+		}
+		return "", false
 	}
-	if _, busy := callUserBusy[callee]; busy {
+	if errMsg, busy := checkBusy(); busy {
+		stale := staleRingOf(callUserBusy[from], from, callee)
+		if stale == nil {
+			stale = staleRingOf(callUserBusy[callee], from, callee)
+		}
+		if stale == nil {
+			callMu.Unlock()
+			s.callSendError(from, p.CallID, errMsg)
+			return
+		}
 		callMu.Unlock()
-		s.callSendError(from, p.CallID, "对方忙，请稍后再试")
-		return
+		s.callFinish(stale, "canceled", true, from)
+		callMu.Lock()
+		if errMsg2, busy2 := checkBusy(); busy2 {
+			callMu.Unlock()
+			s.callSendError(from, p.CallID, errMsg2)
+			return
+		}
 	}
 	sess := &callSession{
 		ID:       p.CallID,
