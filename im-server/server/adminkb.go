@@ -340,7 +340,7 @@ func (s *Server) handleAdminKBFileUpload(w http.ResponseWriter, r *http.Request)
 func kbSaveUploadFile(kbID uint, header *multipart.FileHeader, file multipart.File) (*model.KBFile, int, string) {
 	ext := filepath.Ext(header.Filename)
 	if !kbAllowedExt(ext) {
-		return nil, http.StatusBadRequest, "仅支持 docx/xlsx/xlsm/csv/md/txt 文件"
+		return nil, http.StatusBadRequest, "仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文件"
 	}
 	if header.Size > kbMaxFileSize {
 		return nil, http.StatusBadRequest, fmt.Sprintf("文件超出大小限制（%d MB）", kbMaxFileSize>>20)
@@ -705,7 +705,7 @@ func (s *Server) handleAdminKBFileSourceGet(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !kbSourceEditable(filepath.Ext(f.Path)) {
-		adminFail(w, http.StatusBadRequest, "仅文本类文件（txt/md/csv）支持源文编辑，docx/xlsx 请重新上传")
+		adminFail(w, http.StatusBadRequest, "仅文本类文件（txt/md/csv）支持源文编辑，docx/xlsx/pptx/pdf 请重新上传")
 		return
 	}
 	if f.Status == "processing" {
@@ -737,7 +737,7 @@ func (s *Server) handleAdminKBFileSourcePut(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !kbSourceEditable(filepath.Ext(f.Path)) {
-		adminFail(w, http.StatusBadRequest, "仅文本类文件（txt/md/csv）支持源文编辑，docx/xlsx 请重新上传")
+		adminFail(w, http.StatusBadRequest, "仅文本类文件（txt/md/csv）支持源文编辑，docx/xlsx/pptx/pdf 请重新上传")
 		return
 	}
 	if !kbEmbedEnabled() {

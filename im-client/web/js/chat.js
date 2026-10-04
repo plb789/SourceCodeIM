@@ -4574,8 +4574,8 @@
         if (isAIAgent(currentChatUser)) {
             if (isImg) {
                 if (!aiAgentSupportsImage(currentChatUser)) { showToast(I18N.t('该助手不支持图片识别')); return; }
-            } else if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(f.name)) {
-                showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt 文档')); return;
+            } else if (!/\.(docx|xlsx|xlsm|csv|md|txt|pdf|pptx)$/i.test(f.name)) {
+                showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文档')); return;
             }
         }
         pendingFileAdd(f);
@@ -6193,7 +6193,7 @@
     function sendAIDoc(file, noteText) {
         var agent = currentChatUser;
         if (!agent || !isAIAgent(agent)) return;
-        if (!/\.(docx|xlsx|xlsm|csv|md|txt)$/i.test(file.name)) { showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt 文档')); return; }
+        if (!/\.(docx|xlsx|xlsm|csv|md|txt|pdf|pptx)$/i.test(file.name)) { showToast(I18N.t('仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文档')); return; }
         var maxFile = (IMSocket.getMaxFileSize && IMSocket.getMaxFileSize()) || 20971520;
         if (file.size > maxFile) { showToast(I18N.t('文档超过大小上限（') + formatSize(maxFile) + '）'); return; }
         var note = (noteText !== undefined && noteText !== null) ? String(noteText) : messageInput.value.trim();
@@ -23450,7 +23450,7 @@
                 upRow.className = 'kb-upload-row';
                 var upBtn = document.createElement('button');
                 upBtn.className = 'kb-upload-btn';
-                upBtn.textContent = I18N.t('上传文件（docx / xlsx / xlsm / csv / md / txt）');
+                upBtn.textContent = I18N.t('上传文件（docx / xlsx / xlsm / csv / md / txt / pdf / pptx）');
                 upBtn.addEventListener('click', function () {
                     kbUploadFiles(kb.id);
                 });
@@ -23560,7 +23560,7 @@
     function kbUploadFiles(kbId) {
         var input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.docx,.xlsx,.xlsm,.csv,.md,.txt';
+        input.accept = '.docx,.xlsx,.xlsm,.csv,.md,.txt,.pdf,.pptx';
         input.multiple = true;
         input.addEventListener('change', function () {
             var files = Array.prototype.slice.call(input.files || []);

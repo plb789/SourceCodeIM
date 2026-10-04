@@ -338,10 +338,10 @@ func truncateStr(s string, max int) string {
 
 // ===== 上传处理流水线（异步） =====
 
-// kbAllowedExt 知识库允许的文件扩展名（与 aiExtractDocText 解析能力一致：docx/xlsx/xlsm/csv/md/txt）
+// kbAllowedExt 知识库允许的文件扩展名（与 aiExtractDocText 解析能力一致：docx/xlsx/xlsm/csv/md/txt/pdf/pptx）
 func kbAllowedExt(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".docx", ".xlsx", ".xlsm", ".csv", ".md", ".txt":
+	case ".docx", ".xlsx", ".xlsm", ".csv", ".md", ".txt", ".pdf", ".pptx":
 		return true
 	}
 	return false

@@ -13,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ledongthuc/pdf"
 	"github.com/xuri/excelize/v2"
 
 	"im-server/logger"
@@ -599,8 +601,9 @@ func (s *Server) HandleAIExportWord(w http.ResponseWriter, r *http.Request) {
 // 历史上下文仅携带"[文档] 文件名 附言"摘要（messageSummary 归口），避免多轮重复携带全文撑爆 token。
 
 // aiDocExts 阶段四十五：文档问答支持的扩展名白名单（大小写不敏感）
-// .docx/.xlsx 走 OOXML 解析；.xlsm 为启用宏的工作簿（zip 结构与 xlsx 同源，excelize 可读）；
-// .csv/.md/.txt 为纯文本直读。老版二进制格式 .doc/.xls/.ppt 结构复杂不支持，明确拒之门外
+// .docx/.pptx 走 OOXML 解析；.xlsx 走 excelize；.xlsm 为启用宏的工作簿（zip 结构与 xlsx 同源，excelize 可读）；
+// .csv/.md/.txt 为纯文本直读；.pdf 走 ledongthuc/pdf 提取文本层（扫描件无文本层会拒绝）。
+// 老版二进制格式 .doc/.xls/.ppt 结构复杂不支持，明确拒之门外
 var aiDocExts = map[string]bool{
 	".docx": true,
 	".xlsx": true,
@@ -608,6 +611,8 @@ var aiDocExts = map[string]bool{
 	".csv":  true,
 	".md":   true,
 	".txt":  true,
+	".pdf":  true,
+	".pptx": true,
 }
 
 // aiDocXMLReplacer docx document.xml 标准实体反转义（&apos; 由 Word 生成器可能出现，一并处理）
@@ -662,6 +667,71 @@ func aiParseDocxText(data []byte) (string, error) {
 		}
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// aiParsePptxText 解析 pptx：zip 读 ppt/slides/slideN.xml（按页码升序）→ 每页按 <a:p> 段落切分 → 段内拼接 <a:t> 文本片段。
+// 页标题带「第 N 页」前缀，保留幻灯片页边界便于模型理解与切片；备注页/母版不提取（与知识库检索用途无关）
+func aiParsePptxText(data []byte) (string, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("pptx 文件结构非法")
+	}
+	// 收集 slide 部件并按页码升序（slide10 须排在 slide2 之后，字典序不成立）
+	type slidePart struct {
+		num  int
+		name string
+	}
+	var parts []slidePart
+	slideRe := regexp.MustCompile(`^ppt/slides/slide(\d+)\.xml$`)
+	for _, f := range zr.File {
+		if m := slideRe.FindStringSubmatch(f.Name); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			parts = append(parts, slidePart{num: n, name: f.Name})
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("pptx 缺少幻灯片部分")
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].num < parts[j].num })
+
+	paraRe := regexp.MustCompile(`(?s)<a:p\b[^>]*>.*?</a:p>|<a:p\b[^>]*/>`)
+	textRe := regexp.MustCompile(`(?s)<a:t\b[^>]*>(.*?)</a:t>`)
+
+	var out strings.Builder
+	for _, sp := range parts {
+		f, err := zr.Open(sp.name)
+		if err != nil {
+			continue
+		}
+		buf := new(bytes.Buffer)
+		_, readErr := buf.ReadFrom(f)
+		f.Close()
+		if readErr != nil {
+			continue
+		}
+		var lines []string
+		for _, pm := range paraRe.FindAllStringSubmatch(buf.String(), -1) {
+			var sb strings.Builder
+			for _, tm := range textRe.FindAllStringSubmatch(pm[0], -1) {
+				sb.WriteString(aiDocXMLReplacer.Replace(tm[1]))
+			}
+			line := strings.TrimSpace(sb.String())
+			if line != "" {
+				lines = append(lines, line)
+			}
+		}
+		if len(lines) == 0 {
+			continue // 纯图片页跳过，避免空页噪声污染切片
+		}
+		out.WriteString(fmt.Sprintf("## 第 %d 页\n", sp.num))
+		out.WriteString(strings.Join(lines, "\n"))
+		out.WriteString("\n\n")
+	}
+	text := strings.TrimSpace(out.String())
+	if text == "" {
+		return "", fmt.Errorf("pptx 未提取到文本内容")
+	}
+	return text, nil
 }
 
 // aiSpreadsheetText 表格行 → 标准化文本（阶段五十五：表格向量化数据标准化）
@@ -751,6 +821,52 @@ func aiParseCsvText(absPath string) (string, error) {
 	return text, nil
 }
 
+// aiParsePdfText 解析 pdf：逐页提取文本层（纯 Go 解析，依赖 ToUnicode CMap 支持中文；扫描件/纯图片 PDF 无文本层时返回错误提示）
+// ledongthuc/pdf 用 panic 传递解析错误，且其字典遍历在畸形 PDF 上会外泄 panic；本函数由上传流水线在 goroutine 内调用，
+// 未 recover 的 panic 会崩溃整个进程，故统一兜底转为 error（任意来源 PDF 属不可信输入）。
+func aiParsePdfText(absPath string) (text string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = ""
+			err = fmt.Errorf("PDF 解析异常: %v", r)
+		}
+	}()
+	fp, err := os.Open(absPath)
+	if err != nil {
+		return "", fmt.Errorf("文件读取失败")
+	}
+	defer fp.Close()
+	fi, err := fp.Stat()
+	if err != nil {
+		return "", fmt.Errorf("文件读取失败")
+	}
+	r, err := pdf.NewReader(fp, fi.Size())
+	if err != nil {
+		return "", fmt.Errorf("PDF 文件结构非法")
+	}
+	var buf strings.Builder
+	for i := 1; i <= r.NumPage(); i++ {
+		p := r.Page(i)
+		if p.V.IsNull() {
+			continue
+		}
+		// fonts 传 nil：由库内部按页解析字体 CMap（GetPlainText 自带 recover）
+		content, err := p.GetPlainText(nil)
+		if err != nil {
+			continue
+		}
+		if t := strings.TrimSpace(content); t != "" {
+			buf.WriteString(t)
+			buf.WriteString("\n")
+		}
+	}
+	text = strings.TrimSpace(buf.String())
+	if text == "" {
+		return "", fmt.Errorf("PDF 无文本层（可能为扫描件），无法提取文本")
+	}
+	return text, nil
+}
+
 // aiExtractDocText 文档文本提取归口：按扩展名分发解析器（absPath 为落盘文件绝对路径）
 func aiExtractDocText(absPath, ext string) (string, error) {
 	switch strings.ToLower(ext) {
@@ -760,6 +876,12 @@ func aiExtractDocText(absPath, ext string) (string, error) {
 			return "", fmt.Errorf("文档文件不存在或已清理")
 		}
 		return aiParseDocxText(data)
+	case ".pptx":
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			return "", fmt.Errorf("文档文件不存在或已清理")
+		}
+		return aiParsePptxText(data)
 	case ".xlsx", ".xlsm":
 		return aiParseXlsxText(absPath)
 	case ".csv":
@@ -774,6 +896,8 @@ func aiExtractDocText(absPath, ext string) (string, error) {
 			return "", fmt.Errorf("文档内容为空")
 		}
 		return text, nil
+	case ".pdf":
+		return aiParsePdfText(absPath)
 	}
 	return "", fmt.Errorf("不支持的文档格式")
 }
@@ -871,7 +995,7 @@ func (s *Server) HandleAIDocUpload(w http.ResponseWriter, r *http.Request) {
 	// 扩展名白名单校验（解析器按扩展名分发，非白名单一律拒绝）
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if !aiDocExts[ext] {
-		http.Error(w, "仅支持 docx/xlsx/xlsm/csv/md/txt 文档", http.StatusBadRequest)
+		http.Error(w, "仅支持 docx/xlsx/xlsm/csv/md/txt/pdf/pptx 文档", http.StatusBadRequest)
 		return
 	}
 
