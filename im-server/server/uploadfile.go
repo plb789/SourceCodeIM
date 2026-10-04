@@ -336,8 +336,12 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 
 	// 持久化完成通知双方全部在线连接：携带 content（url/name/size/nonce）+ msg_id + file_id
 	// 接收方按 content 直接渲染（原实现无此通道，接收方离线/无分片场景拿不到文件）
-	// 发送端按 nonce 精确回填本地气泡 msg_id；离线用户经历史加载与 CONV_LIST 覆盖（消息已落库）
-	notice, _ := json.Marshal(&protocol.Message{
+	// 发送端按 nonce 精确回填本地气泡 msg_id；发送端 HTTP 上传响应必然到达（本地兜底回填归口）仍实时推送多端同步
+	// 阶段二百六十二强化：接收方对齐文字消息投递水位（A4 同款分流）——原实现无条件 sendToUser
+	// 且无入队，接收端 WS 瞬断/重连窗口（发送队列满同理）时帧静默丢失，实时气泡缺失只能靠
+	// 切会话/重登拉历史补现（用户感知"偶尔收不到图片"）。离线入队后登录经 pushOfflineMessages
+	// 原子补推，客户端 FILE_PERSISTED 按 msg_id 去重幂等，双推不产生重复气泡
+	persisted := &protocol.Message{
 		MsgType:   protocol.MsgTypeFilePersisted,
 		FromUser:  username,
 		ToUser:    toUser,
@@ -345,9 +349,14 @@ func (s *Server) handleDirectUpload(w http.ResponseWriter, r *http.Request, user
 		FileID:    fileID,
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
-	})
+	}
+	notice, _ := json.Marshal(persisted)
 	s.sendToUser(username, notice)
-	s.sendToUser(toUser, notice)
+	if s.isOnlineFast(toUser) {
+		s.sendToUser(toUser, notice)
+	} else {
+		s.queueOffline(toUser, persisted)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})

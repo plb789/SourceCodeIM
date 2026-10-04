@@ -369,7 +369,9 @@ func (s *Server) finalizeChunkUpload(w http.ResponseWriter, sess *directUploadSe
 
 	// 持久化完成通知双方全部在线连接：携带 content（url/name/size/nonce）+ msg_id + file_id
 	// 接收端移除"发送中"进度气泡渲染正式卡片；发送端按 nonce 回填本地气泡 msg_id
-	notice, _ := json.Marshal(&protocol.Message{
+	// 阶段二百六十二强化：接收方对齐文字消息投递水位（A4 同款分流，与直传路径同口径）——
+	// 离线/重连窗口入离线队列防实时帧静默丢失（登录补推，客户端按 msg_id 去重幂等）
+	persisted := &protocol.Message{
 		MsgType:   protocol.MsgTypeFilePersisted,
 		FromUser:  sess.FromUser,
 		ToUser:    sess.ToUser,
@@ -377,12 +379,17 @@ func (s *Server) finalizeChunkUpload(w http.ResponseWriter, sess *directUploadSe
 		FileID:    fileID,
 		MsgID:     record.ID,
 		Timestamp: time.Now().Unix(),
-	})
+	}
+	notice, _ := json.Marshal(persisted)
 	if sess.ToUser == "" {
 		s.hub.Broadcast(notice)
 	} else {
 		s.sendToUser(sess.FromUser, notice)
-		s.sendToUser(sess.ToUser, notice)
+		if s.isOnlineFast(sess.ToUser) {
+			s.sendToUser(sess.ToUser, notice)
+		} else {
+			s.queueOffline(sess.ToUser, persisted)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url, "file_id": fileID})
