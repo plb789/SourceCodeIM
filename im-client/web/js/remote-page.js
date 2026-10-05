@@ -261,6 +261,11 @@
         if (document.fullscreenElement) document.exitFullscreen();
         else document.documentElement.requestFullscreen().catch(function () { });
     });
+    // 全屏状态同步 body（CSS body.rw-fullscreen）：全屏期间顶条拖动区停用并放行事件，
+    // 远端画面全屏无遮挡——含顶条区在内的全画面可直接操作（窗口态顶条承担拖动窗口）
+    document.addEventListener('fullscreenchange', function () {
+        document.body.classList.toggle('rw-fullscreen', !!document.fullscreenElement);
+    });
 
     // ===== 桥对接（PC preload；无桥环境仅提示不参与流程） =====
     if (d.onRemoteLoad) d.onRemoteLoad(function (task) {
