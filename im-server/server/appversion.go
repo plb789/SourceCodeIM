@@ -4,7 +4,9 @@ package server
 // 设计归口：
 //  1. 维护侧：admin 后台上传安装包（APK / PC Setup exe）走 /admin/api/appversion*，复用 adminGuard 鉴权；
 //     安装包落盘 <WebDir>/static/download/<platform>/，服务端静态服务（main.go fileServer）天然托管，
-//     URL 直接可下载，零新增下载路由；
+//     URL 直接可下载，零新增下载路由；亦支持"外部 URL"模式——multipart 仅携带 url 字段（大文件免上传，
+//     直填 OSS/网盘完整地址存库下发），size/sha256/sha512_b64 选填（PC 因 electron-updater 校验
+//     硬约束须 sha512/sha256 二者其一，见其 Provider.resolveFiles 缺两者即 ERR_UPDATER_NO_CHECKSUM）；
 //  2. 检查侧：公开只读 GET /api/app/version?platform=&code=&name=——客户端上报当前版本，
 //     服务端比对当前生效版本（enabled）返回是否有更新/下载地址/是否强制。android 按 versionCode
 //     整型比对，win 按语义化版本（x.y.z）比对；
@@ -21,7 +23,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -106,6 +110,11 @@ func appVerEnabled(platform string) *model.AppVersion {
 
 // ===== latest.yml 生成（electron-updater generic feed 兼容） =====
 
+// appVerIsExternal 外链版本判定（URL 为完整 http/https 地址，非本站静态相对路径）
+func appVerIsExternal(v *model.AppVersion) bool {
+	return strings.HasPrefix(v.URL, "http://") || strings.HasPrefix(v.URL, "https://")
+}
+
 // writeWinLatestYml 按 win 当前生效版本重写 latest.yml（生效版本变更归口调用）；
 // 无生效版本时删除该文件（客户端检查 404 视为无更新，不会误触发）
 func (s *Server) writeWinLatestYml() {
@@ -115,18 +124,45 @@ func (s *Server) writeWinLatestYml() {
 		os.Remove(path)
 		return
 	}
-	// electron-updater 期望的 latest.yml 字段（generic provider 按 url/path 相对本目录解析安装包）
-	yml := fmt.Sprintf("version: %s\nfiles:\n  - url: %s\n    sha512: %s\n    size: %d\npath: %s\nsha512: %s\nreleaseDate: '%s'\n",
-		v.VersionName, v.FileName, v.SHA512Base64, v.Size, v.FileName, v.SHA512Base64,
-		v.UpdateTime.Format(time.RFC3339))
-	if err := os.WriteFile(path, []byte(yml), 0o644); err != nil {
+	// electron-updater 期望的 latest.yml 字段：files[0].url 经 new URL(url, baseUrl) 解析，
+	// 完整外链绝对地址优先直接生效；校验和 sha512 缺省时降级 sha2（resolveFiles 对二者有其一即可）
+	fileURL := v.FileName
+	if appVerIsExternal(v) {
+		fileURL = v.URL
+	}
+	var b strings.Builder
+	b.WriteString("version: " + v.VersionName + "\nfiles:\n  - url: ")
+	if appVerIsExternal(v) {
+		b.WriteString(strconv.Quote(fileURL)) // 外链加引号防 YAML 特殊字符截断
+	} else {
+		b.WriteString(fileURL)
+	}
+	b.WriteString("\n")
+	if v.SHA512Base64 != "" {
+		b.WriteString("    sha512: " + v.SHA512Base64 + "\n")
+	} else if v.SHA256 != "" {
+		b.WriteString("    sha2: " + v.SHA256 + "\n")
+	}
+	b.WriteString(fmt.Sprintf("    size: %d\npath: %s\n", v.Size, v.FileName))
+	if v.SHA512Base64 != "" {
+		b.WriteString("sha512: " + v.SHA512Base64 + "\n")
+	} else if v.SHA256 != "" {
+		b.WriteString("sha2: " + v.SHA256 + "\n")
+	}
+	b.WriteString("releaseDate: '" + v.UpdateTime.Format(time.RFC3339) + "'\n")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		logger.Error("latest.yml 生成失败: %v", err)
 	}
 }
 
 // ===== 管理端 =====
 
-// handleAdminAppVersionUpload 上传安装包并登记版本（multipart：file + platform/version_name/version_code/notes/force）
+// handleAdminAppVersionUpload 登记新版本（双模式归口）：
+//  1. 上传模式：multipart 携带 file——现有流程，落盘 + 流式哈希；
+//  2. 外链模式：仅携带 url（大文件免上传，直填 OSS/网盘完整地址），size/sha256/sha512_b64 选填，
+//     PC 平台因 electron-updater 校验硬约束须 sha512/sha256 二者其一。
+//
+// 公共参数：platform/version_name/version_code/notes/force
 func (s *Server) handleAdminAppVersionUpload(w http.ResponseWriter, r *http.Request) {
 	maxSize := s.appVerPkgMaxSize()
 	r.Body = http.MaxBytesReader(w, r.Body, maxSize)
@@ -153,12 +189,28 @@ func (s *Server) handleAdminAppVersionUpload(w http.ResponseWriter, r *http.Requ
 		adminFail(w, http.StatusBadRequest, "PC 版本号须为语义化格式（如 1.2.0）")
 		return
 	}
+	force := r.FormValue("force") == "1"
+	notes := strings.TrimSpace(r.FormValue("notes"))
+	if len([]rune(notes)) > 2000 {
+		notes = string([]rune(notes)[:2000])
+	}
+	// 双模式分流：有 file 走上传落盘；否则有 url 走外链登记；二者皆无拒绝
 	file, header, err := r.FormFile("file")
-	if err != nil {
-		adminFail(w, http.StatusBadRequest, "缺少安装包文件")
+	if err == nil {
+		defer file.Close()
+		s.appVerUploadFileMode(w, r, platform, versionName, versionCode, force, notes, header, file)
 		return
 	}
-	defer file.Close()
+	extURL := strings.TrimSpace(r.FormValue("url"))
+	if extURL == "" {
+		adminFail(w, http.StatusBadRequest, "缺少安装包文件或外链 URL")
+		return
+	}
+	s.appVerRegisterExternal(w, r, platform, versionName, versionCode, force, notes, extURL)
+}
+
+// appVerUploadFileMode 上传模式：落盘安装包并登记（文件名服务端归口生成，流式同步算 sha256/sha512）
+func (s *Server) appVerUploadFileMode(w http.ResponseWriter, r *http.Request, platform, versionName string, versionCode int, force bool, notes string, header *multipart.FileHeader, file multipart.File) {
 	// 扩展名白名单（与平台匹配）
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if platform == "android" && ext != ".apk" {
@@ -195,11 +247,6 @@ func (s *Server) handleAdminAppVersionUpload(w http.ResponseWriter, r *http.Requ
 		adminFail(w, http.StatusInternalServerError, "文件写入失败")
 		return
 	}
-	force := r.FormValue("force") == "1"
-	notes := strings.TrimSpace(r.FormValue("notes"))
-	if len([]rune(notes)) > 2000 {
-		notes = string([]rune(notes)[:2000])
-	}
 	rec := model.AppVersion{
 		Platform:     platform,
 		VersionName:  versionName,
@@ -221,6 +268,87 @@ func (s *Server) handleAdminAppVersionUpload(w http.ResponseWriter, r *http.Requ
 	}
 	logger.Info("客户端安装包已上传: id=%d 平台=%s 版本=%s(%d) 大小=%d 强制=%v 操作人=%s",
 		rec.ID, platform, versionName, versionCode, size, force, rec.Creator)
+	adminJSON(w, map[string]interface{}{"id": rec.ID})
+}
+
+// appVerSHA256Re sha256 十六进制摘要格式
+var appVerSHA256Re = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+// appVerRegisterExternal 外链登记：URL 存库不落盘（安装包由外部源站直供，服务器零存储压力）
+func (s *Server) appVerRegisterExternal(w http.ResponseWriter, r *http.Request, platform, versionName string, versionCode int, force bool, notes, extURL string) {
+	u, err := url.Parse(extURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		adminFail(w, http.StatusBadRequest, "外链 URL 不合法（须为 http/https 完整地址）")
+		return
+	}
+	// 扩展名白名单（与平台匹配，按 URL 路径末段判断）
+	ext := strings.ToLower(filepath.Ext(u.Path))
+	if platform == "android" && ext != ".apk" {
+		adminFail(w, http.StatusBadRequest, "Android 外链须指向 .apk 文件")
+		return
+	}
+	if platform == "win" && ext != ".exe" {
+		adminFail(w, http.StatusBadRequest, "PC 外链须指向 .exe 文件")
+		return
+	}
+	// 校验和选填（格式校验）；PC 强约束：electron-updater resolveFiles 缺 sha512/sha2 直接拒绝更新
+	sha256Hex := strings.ToLower(strings.TrimSpace(r.FormValue("sha256")))
+	if sha256Hex != "" && !appVerSHA256Re.MatchString(sha256Hex) {
+		adminFail(w, http.StatusBadRequest, "sha256 须为 64 位十六进制摘要")
+		return
+	}
+	sha512B64 := strings.TrimSpace(r.FormValue("sha512_b64"))
+	if sha512B64 != "" {
+		if raw, derr := base64.StdEncoding.DecodeString(sha512B64); derr != nil || len(raw) != 64 {
+			adminFail(w, http.StatusBadRequest, "sha512 须为 base64 编码的 64 字节摘要")
+			return
+		}
+	}
+	if platform == "win" && sha512B64 == "" && sha256Hex == "" {
+		adminFail(w, http.StatusBadRequest, "PC 外链须提供 sha512（base64）或 sha256（hex）校验和（electron-updater 下载校验硬约束）")
+		return
+	}
+	var size int64
+	if sv := strings.TrimSpace(r.FormValue("size")); sv != "" {
+		size, err = strconv.ParseInt(sv, 10, 64)
+		if err != nil || size < 0 {
+			adminFail(w, http.StatusBadRequest, "文件大小须为非负整数（字节）")
+			return
+		}
+	}
+	// 文件名取外链路径末段净化（APP 端落盘名复用；空/异常回退版本名默认名）
+	fileName := u.Path
+	if i := strings.LastIndexByte(fileName, '/'); i >= 0 {
+		fileName = fileName[i+1:]
+	}
+	fileName = appVerSanitizeVersion(fileName)
+	if fileName == "" || fileName == "." {
+		if platform == "android" {
+			fileName = fmt.Sprintf("imapp-%s-%d.apk", versionName, versionCode)
+		} else {
+			fileName = fmt.Sprintf("im-client-%s.exe", versionName)
+		}
+	}
+	rec := model.AppVersion{
+		Platform:     platform,
+		VersionName:  versionName,
+		VersionCode:  versionCode,
+		FileName:     fileName,
+		URL:          extURL,
+		Size:         size,
+		SHA256:       sha256Hex,
+		SHA512Base64: sha512B64,
+		Notes:        notes,
+		Force:        force,
+		Enabled:      false, // 与上传模式一致，默认未生效，"启用"才对外下发
+		Creator:      adminUserFromCtx(r),
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "版本记录保存失败")
+		return
+	}
+	logger.Info("客户端版本已登记外链: id=%d 平台=%s 版本=%s(%d) url=%s 强制=%v 操作人=%s",
+		rec.ID, platform, versionName, versionCode, extURL, force, rec.Creator)
 	adminJSON(w, map[string]interface{}{"id": rec.ID})
 }
 

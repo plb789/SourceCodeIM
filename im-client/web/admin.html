@@ -1223,9 +1223,36 @@
                     <label for="av-up-force">强制更新（旧版客户端必须更新才能继续使用）</label>
                 </div>
                 <div class="admin-field">
+                    <label>安装包来源</label>
+                    <select id="av-up-mode" class="admin-input">
+                        <option value="file">上传文件</option>
+                        <option value="url">外部 URL（大文件免上传）</option>
+                    </select>
+                </div>
+                <div class="admin-field" id="av-up-file-field">
                     <label>安装包文件</label>
                     <input type="file" id="av-up-file" class="admin-input" accept=".apk,.exe">
                     <span class="admin-field-hint">APP 选 .apk，PC 选 electron-builder 产出的 Setup .exe</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-url-field">
+                    <label>外链完整地址</label>
+                    <input type="text" id="av-up-url" class="admin-input" placeholder="https://oss.example.com/download/im-client-1.2.0.exe">
+                    <span class="admin-field-hint">http/https 完整地址（APK 链接须指向 .apk，PC 链接须指向 .exe）；客户端将直连该地址下载</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-sha256-field">
+                    <label>sha256（外链选填，APP 下载校验用）</label>
+                    <input type="text" id="av-up-sha256" class="admin-input" placeholder="64 位十六进制摘要">
+                    <span class="admin-field-hint">对安装包文件本地计算后粘贴，PC 端同样认可；获取：PowerShell 执行 (Get-FileHash 文件路径 -Algorithm SHA256).Hash.ToLower()</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-sha512-field">
+                    <label>sha512 base64（PC 外链与 sha256 二选一必填）</label>
+                    <input type="text" id="av-up-sha512" class="admin-input" placeholder="base64 编码摘要">
+                    <span class="admin-field-hint">通常只填上面的 sha256 即可；如需本项：[Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::OpenRead(文件路径)))</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-size-field">
+                    <label>文件大小（外链选填，字节）</label>
+                    <input type="number" id="av-up-size" class="admin-input" placeholder="如 123456789">
+                    <span class="admin-field-hint">用于客户端更新弹窗展示下载体积</span>
                 </div>
             </div>
             <div class="modal-btns">

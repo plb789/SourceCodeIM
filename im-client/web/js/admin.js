@@ -4917,13 +4917,14 @@
             var tdPlat = document.createElement('td'); tdPlat.textContent = AV_PLAT_TEXT[v.platform] || v.platform; tr.appendChild(tdPlat);
             var tdVer = document.createElement('td'); tdVer.textContent = v.version_name; tr.appendChild(tdVer);
             var tdCode = document.createElement('td'); tdCode.textContent = v.platform === 'android' ? (v.version_code || '-') : '-'; tr.appendChild(tdCode);
-            // 安装包（链接可下载自验，悬浮看原名）
+            // 安装包（链接可下载自验，悬浮看完整地址；外链记录悬浮展示来源 URL）
             var tdFile = document.createElement('td');
             var a = document.createElement('a');
             a.textContent = v.file_name;
             a.href = v.url;
             a.target = '_blank';
-            a.title = '点击下载校验：' + v.file_name;
+            var isExt = /^https?:/i.test(v.url || '');
+            a.title = isExt ? '外部链接：' + v.url : '点击下载校验：' + v.file_name;
             tdFile.appendChild(a);
             tr.appendChild(tdFile);
             var tdSize = document.createElement('td'); tdSize.textContent = fmFormatSize(v.size); tr.appendChild(tdSize);
@@ -4964,13 +4965,29 @@
     }
 
     // 上传弹窗归口（FormData 走管理端专用端点；大文件上传期间按钮禁用防重复提交）
+    // 双模式：file=上传安装包（服务端落盘），url=外部完整链接（免上传，服务端仅登记）
+    function avToggleMode() {
+        var isUrl = $('av-up-mode').value === 'url';
+        $('av-up-file-field').classList.toggle('hidden', isUrl);
+        $('av-up-url-field').classList.toggle('hidden', !isUrl);
+        $('av-up-sha256-field').classList.toggle('hidden', !isUrl);
+        $('av-up-sha512-field').classList.toggle('hidden', !isUrl);
+        $('av-up-size-field').classList.toggle('hidden', !isUrl);
+    }
+    $('av-up-mode').addEventListener('change', avToggleMode);
     $('av-upload').addEventListener('click', function () {
         $('av-up-platform').value = $('av-filter-platform').value || 'android';
         $('av-up-version').value = '';
         $('av-up-code').value = '';
         $('av-up-notes').value = '';
         $('av-up-force').checked = false;
+        $('av-up-mode').value = 'file';
         $('av-up-file').value = '';
+        $('av-up-url').value = '';
+        $('av-up-sha256').value = '';
+        $('av-up-sha512').value = '';
+        $('av-up-size').value = '';
+        avToggleMode();
         $('av-upload-mask').classList.remove('hidden');
     });
     $('av-upload-cancel').addEventListener('click', function () { $('av-upload-mask').classList.add('hidden'); });
@@ -4979,8 +4996,18 @@
         var platform = $('av-up-platform').value;
         var version = $('av-up-version').value.trim();
         var file = ($('av-up-file').files || [])[0];
+        var isUrl = $('av-up-mode').value === 'url';
+        var urlVal = isUrl ? $('av-up-url').value.trim() : '';
+        var sha256 = isUrl ? $('av-up-sha256').value.trim() : '';
+        var sha512 = isUrl ? $('av-up-sha512').value.trim() : '';
         if (!version) { showToast('请填写版本号'); return; }
-        if (!file) { showToast('请选择安装包文件'); return; }
+        if (isUrl) {
+            if (!urlVal) { showToast('请填写外链 URL'); return; }
+            if (!/^https?:\/\//i.test(urlVal)) { showToast('外链须为 http/https 完整地址'); return; }
+            if (platform === 'win' && !sha512 && !sha256) { showToast('PC 外链须填写 sha512 或 sha256 校验和'); return; }
+        } else {
+            if (!file) { showToast('请选择安装包文件'); return; }
+        }
         if (platform === 'android' && !(parseInt($('av-up-code').value, 10) > 0)) { showToast('APP 版本须填写 versionCode'); return; }
         var fd = new FormData();
         fd.append('platform', platform);
@@ -4988,10 +5015,18 @@
         fd.append('version_code', $('av-up-code').value || '0');
         fd.append('notes', $('av-up-notes').value.trim());
         fd.append('force', $('av-up-force').checked ? '1' : '0');
-        fd.append('file', file);
+        if (isUrl) {
+            fd.append('url', urlVal);
+            if (sha256) fd.append('sha256', sha256);
+            if (sha512) fd.append('sha512_b64', sha512);
+            var sz = parseInt($('av-up-size').value, 10);
+            if (sz > 0) fd.append('size', String(sz));
+        } else {
+            fd.append('file', file);
+        }
         var okBtn = $('av-upload-ok');
         okBtn.disabled = true;
-        okBtn.textContent = '上传中…';
+        okBtn.textContent = isUrl ? '提交中…' : '上传中…';
         fetch('/admin/api/appversion', {
             method: 'POST',
             headers: { 'Authorization': 'Bearer ' + getToken() },
@@ -5003,7 +5038,7 @@
             okBtn.textContent = '上 传';
             if (!result.ok) { showToast(result.msg || '上传失败'); return; }
             $('av-upload-mask').classList.add('hidden');
-            showToast('已上传（未生效，列表中点"启用"后对外下发）');
+            showToast(isUrl ? '外链版本已登记（未生效，列表中点"启用"后对外下发）' : '已上传（未生效，列表中点"启用"后对外下发）');
             avLoadList();
         }).catch(function () {
             okBtn.disabled = false;

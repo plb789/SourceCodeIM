@@ -23,7 +23,9 @@ type AppVersion struct {
 	SHA512Base64 string    `gorm:"column:sha512_b64;type:varchar(128);default:''" json:"sha512_b64"` // electron-updater latest.yml 校验（PC 端）
 	Notes        string    `gorm:"column:notes;type:varchar(2000);default:''" json:"notes"`          // 更新说明
 	Force        bool      `gorm:"column:force;default:false" json:"force"`                          // 强制更新（客户端不更新不可继续使用）
-	Enabled      bool      `gorm:"column:enabled;default:true" json:"enabled"`                       // 是否对外生效（下架后检查接口忽略）
+	// Enabled 不带 default 标签：带 default 时 GORM 对零值 false 跳过该列、回退 DB 列默认值 1，
+	// 导致"上传后默认未生效"失效（新上传即对外生效）。去掉标签后 INSERT 显式写入 false
+	Enabled      bool      `gorm:"column:enabled" json:"enabled"`                    // 是否对外生效（下架后检查接口忽略）
 	Creator      string    `gorm:"column:creator;type:varchar(64);default:''" json:"creator"`        // 发布管理员
 	CreateTime   time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime   time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
