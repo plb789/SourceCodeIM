@@ -21897,7 +21897,8 @@
                 window.desktop.remoteOpen({
                     session_id: inv.session_id, peer: inv.from,
                     peer_name: callPeerName(inv.from),
-                    grant: 'control', screen: null
+                    grant: 'control', screen: null,
+                    ice: inv.ice || null // 观看窗建连 STUN/TURN 配置（跨 NAT 穿透）
                 });
             }
             return;
@@ -21915,7 +21916,7 @@
         if (window.desktop && window.desktop.remoteBarOpen) {
             window.desktop.remoteBarOpen({ peer: inv.from, peer_name: callPeerName(inv.from), grant: grant });
         }
-        if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: inv.session_id, grant: grant });
+        if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: inv.session_id, grant: grant, ice: inv.ice || null }); // ice：跨 NAT 中继配置
     }
 
     // 被控端拒绝邀请
@@ -22011,7 +22012,8 @@
                 remoteSignalSend(msg.from_user, { action: 'reject', session_id: p.session_id, reason: 'busy' });
                 return;
             }
-            remotePendingInvite = { session_id: p.session_id, from: msg.from_user, mode: p.mode === 'assist' ? 'assist' : 'control' };
+            // ice：服务端随 invite 注入的 STUN/TURN 配置（跨 NAT 穿透；未启用 TURN 时无此字段恒 null）
+            remotePendingInvite = { session_id: p.session_id, from: msg.from_user, mode: p.mode === 'assist' ? 'assist' : 'control', ice: p.ice || null };
             remoteRingStart();
             // 60s 本地兜底（服务端 timeout 归口，此为信令丢失场景双保险）
             remoteRingTimer = setTimeout(function () {
@@ -22044,7 +22046,8 @@
                         session_id: p.session_id, peer: remotePeerUser,
                         peer_name: callPeerName(remotePeerUser),
                         grant: remoteGrant,
-                        screen: p.screen || null
+                        screen: p.screen || null,
+                        ice: p.ice || null // 服务端随 accept 注入的 STUN/TURN 配置（跨 NAT 穿透）
                     });
                 }
             } else if (remoteRole === 'sharer') {
@@ -22054,7 +22057,7 @@
                 if (window.desktop && window.desktop.remoteBarOpen) {
                     window.desktop.remoteBarOpen({ peer: remotePeerUser, peer_name: callPeerName(remotePeerUser), grant: 'control' });
                 }
-                if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: p.session_id, grant: 'control' });
+                if (window.RemoteEngine) window.RemoteEngine.startSharer({ session_id: p.session_id, grant: 'control', ice: p.ice || null }); // ice：跨 NAT 中继配置
             }
             return;
         }

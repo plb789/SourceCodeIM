@@ -260,7 +260,9 @@ func (s *Server) remoteInvite(c *Client, msg *protocol.Message, from string, p *
 
 	logger.Info("远程协助发起：%s → %s（%s，session_id=%s）", from, peer, body.Mode, sess.ID)
 	// 信令转发给被控方（from_user 强制请求方，防伪造）
-	s.remoteForward(from, peer, msg.Content)
+	// ice 注入（与 rc/通话同水位）：invite 帧携带 STUN/TURN 配置，被控方 accept 后起共享流
+	// 的 RTCPeerConnection 用其跨 NAT 穿透——原实现纯 P2P 直连，跨网段（双方均内网）必然连不上
+	s.remoteForward(from, peer, callInjectICE(msg.Content))
 }
 
 // ===== 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，验证码即授权自动接通） =====
@@ -419,7 +421,8 @@ func (s *Server) remoteAccept(msg *protocol.Message, from string, p *remoteSigna
 	// accept 转发请求方（invite 发送人，两种模式通用）：
 	// control 模式=控制方（开观看窗等 offer）/ assist 模式=被协助方（开悬浮条 + 起共享流）
 	//（修复：此前转发 Controller，assist 模式 Controller=accept 发送人自己，回环自收且发起方收不到）
-	s.remoteForward(from, sess.Requester, msg.Content)
+	// ice 注入（与 invite 对称）：观看窗/共享引擎建连均以此配置跨 NAT 穿透
+	s.remoteForward(from, sess.Requester, callInjectICE(msg.Content))
 }
 
 // remoteReject 被邀请人拒绝（等待响应中有效；写"已拒绝"话单）
