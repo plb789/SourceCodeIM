@@ -112,6 +112,35 @@ type Device struct {
 // TableName 表名沿用 im_ 前缀约定
 func (Device) TableName() string { return "im_device" }
 
+// RemoteTrust 阶段二百六十二：跨账号信任对——控制方凭静态访问密码成功连接一次后自动建立，
+// 之后 rc_connect 免验证码直连（向日葵"信任此设备"同款）。动态码验证成功绝不建信任：
+// 动态码 5 分钟有效且"看到即可用"，建信任会把一次性窥视升级为永久权限（提权漏洞）。
+// 被控账号可经 /api/rc/trust 查看 / trust/remove 移除（移除即时生效）
+type RemoteTrust struct {
+	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	// OwnerUsername 被控设备归属账号；DeviceID 设备ID；ControllerUsername 获信任的控制方账号
+	OwnerUsername      string `gorm:"column:owner_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"owner_username"`
+	DeviceID           string `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_trust_pair" json:"device_id"`
+	ControllerUsername string `gorm:"column:controller_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"controller_username"`
+	CreateTime         time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RemoteTrust) TableName() string { return "im_remote_trust" }
+
+// RemoteCard 阶段二百六十二：用户自定义远程卡片（设备ID+备注名，服务端存储三端同步）。
+// 仅存设备ID+备注不存凭据：凭据走信任机制（输一次访问密码即互信），卡片点击直连
+type RemoteCard struct {
+	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username   string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_card_pair" json:"username"` // 归属账号（卡片主人）
+	DeviceID   string `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_card_pair" json:"device_id"`
+	Remark     string `gorm:"column:remark;type:varchar(64);default:''" json:"remark"` // 展示备注名（用户自起）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RemoteCard) TableName() string { return "im_remote_card" }
+
 // TableName 表名沿用 im_ 前缀约定（GORM 默认复数命名不符合本项目规范，显式指定）
 func (PointsLog) TableName() string { return "im_points_log" }
 

@@ -21863,7 +21863,8 @@
         deviceId = (deviceId || '').trim();
         code = (code || '').trim();
         if (!/^[0-9]{9,10}$/.test(deviceId)) { if (cb) cb(false, I18N.t('设备ID格式无效')); return; }
-        if (!code) { if (cb) cb(false, I18N.t('请输入验证码')); return; }
+        // 阶段二百六十二：code 允许为空——卡片/历史一键直连走服务端信任对免码校验（未信任回
+        // err_code=need_code 由前端引导输码）；手输码场景仍由服务端归口校验动态码/访问密码
         if (remoteOpenId || remotePendingInvite || rcPending) { if (cb) cb(false, I18N.t('正在远程会话中，请先断开')); return; }
         if (callOpenId || pendingRing) { if (cb) cb(false, I18N.t('正在通话中，无法发起')); return; }
         var sessionId = 'rc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -22002,7 +22003,7 @@
             if (isRcSession) {
                 // 连接被拒（验证码错误/设备离线/锁定等）：回调面板展示，本端无媒体面需收口
                 if (rcPending.timer) clearTimeout(rcPending.timer);
-                if (rcPending.cb) { try { rcPending.cb(false, p.reason || I18N.t('连接失败')); } catch (e) { } }
+                if (rcPending.cb) { try { rcPending.cb(false, p.reason || I18N.t('连接失败'), p.err_code || ''); } catch (e) { } }
                 rcPending = null;
                 return;
             }
@@ -22185,6 +22186,15 @@
                 // 手机/WEB 控制端：页内观看层直接喂入（同账号自控回环：仅 controller 角色连接喂入，其余连接忽略）
                 window.RCMobileView.handleSignal(p);
             }
+            return;
+        }
+        if (p.action === 'resume') {
+            // 服务端存活探测（WS 重连后账号仍有 active 远程会话）：本地会话态匹配=真会话继续，
+            // 信令通道已恢复，忽略即可（媒体由 ICE restart 自愈）；本地无此会话=观看窗看门狗已在
+            // 断网期间 finish（disconnect 信令随断线丢失）或页面已刷新——回 disconnect 让服务端
+            // 归口收口残留并通知对方，否则服务端忙表永久锁死，重连恒报"正在远程协助中"
+            if (remoteOpenId === p.session_id) return;
+            remoteSignalSend(p.peer || '', { action: 'disconnect', session_id: p.session_id, reason: 'resume-cleanup' });
             return;
         }
         if (p.action === 'disconnect') {

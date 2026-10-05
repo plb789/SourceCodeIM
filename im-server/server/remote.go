@@ -126,9 +126,15 @@ func (s *Server) remoteForward(from, toUser, content string) {
 }
 
 // remoteSendError 协助专用错误帧（不走全局 ERROR——错误随信令下发，由聊天/协助窗口展示，
-// 避免主窗口 toast 与会话提示双通道重复打扰，对齐通话 callSendError）
-func (s *Server) remoteSendError(toUser, sessionID, reason string) {
-	b, _ := json.Marshal(map[string]string{"action": "error", "session_id": sessionID, "reason": reason})
+// 避免主窗口 toast 与会话提示双通道重复打扰，对齐通话 callSendError）。
+// 阶段二百六十二追加可选 err_code（业务错误码，如 rc 免码直连未信任时的 "need_code"），
+// 客户端据此分流 UI（跳输码页）；旧客户端忽略该字段向后兼容
+func (s *Server) remoteSendError(toUser, sessionID, reason string, errCode ...string) {
+	payload := map[string]string{"action": "error", "session_id": sessionID, "reason": reason}
+	if len(errCode) > 0 && errCode[0] != "" {
+		payload["err_code"] = errCode[0]
+	}
+	b, _ := json.Marshal(payload)
 	s.remoteForwardByUser("error", toUser, string(b))
 }
 
@@ -294,22 +300,45 @@ func (s *Server) remoteRCConnect(c *Client, msg *protocol.Message, from string, 
 		s.remoteSendError(from, p.SessionID, "验证码错误次数过多，该设备已临时锁定，请 "+strconv.Itoa(remain)+" 秒后再试")
 		return
 	}
-	// 设备存在性 + 验证码校验（服务端归口，动态码/静态密码任一匹配）
+	// 设备存在性 + 阶段二百六十二信任预查：命中信任对（控制方账号曾被该设备主人授予免码）
+	// 直接放行，跳过验证码与爆破锁——防攻击者故意输错码锁死设备、把真实账号主人也挡在门外
 	var dev model.Device
 	if err := store.DB.Where("device_id = ?", body.DeviceID).First(&dev).Error; err != nil {
 		s.remoteSendError(from, p.SessionID, "设备不存在或未注册")
 		return
 	}
-	ok, locked := rcVerifyCode(&dev, body.Code)
-	if !ok {
-		if locked {
-			s.remoteSendError(from, p.SessionID, "验证码错误次数过多，该设备已临时锁定")
-		} else {
-			s.remoteSendError(from, p.SessionID, "验证码错误")
-		}
-		return
-	}
 	peer := dev.Username // 被控端账号
+	trusted := false
+	if from != peer {
+		var cnt int64
+		store.DB.Model(&model.RemoteTrust{}).Where("owner_username = ? AND device_id = ? AND controller_username = ?",
+			peer, body.DeviceID, from).Count(&cnt)
+		trusted = cnt > 0
+	}
+	if !trusted {
+		// 未信任走验证码校验（动态码/静态密码任一匹配；via 据此决定是否建信任）
+		ok, locked, via := rcVerifyCode(&dev, body.Code)
+		if !ok {
+			// 免码尝试（code 空=卡片/历史一键直连）未信任：回 need_code 错误码供前端分流到输码页
+			if body.Code == "" {
+				s.remoteSendError(from, p.SessionID, "该设备未信任此账号，请输入验证码", "need_code")
+				return
+			}
+			if locked {
+				s.remoteSendError(from, p.SessionID, "验证码错误次数过多，该设备已临时锁定")
+			} else {
+				s.remoteSendError(from, p.SessionID, "验证码错误")
+			}
+			return
+		}
+		// 静态密码验证成功且为跨账号：自动建立信任对（动态码成功绝不建——一次性窥视不得升永久权限）。
+		// 放会话建立之前：忙互斥失败也保留信任（凭据已证明）
+		if via == "static" && from != peer {
+			store.DB.Where(model.RemoteTrust{OwnerUsername: peer, DeviceID: body.DeviceID, ControllerUsername: from}).
+				FirstOrCreate(&model.RemoteTrust{OwnerUsername: peer, DeviceID: body.DeviceID, ControllerUsername: from})
+			logger.Info("远程控制信任建立：%s 可免码控制 %s 的设备 %s", from, peer, body.DeviceID)
+		}
+	}
 	if peer == from && s.hub.Count(from) <= 1 {
 		// 同账号自控（手机控自己 PC）允许；但仅一个连接时不可能有另一台设备在线，直接拒
 		s.remoteSendError(from, p.SessionID, "该设备当前不在线")
@@ -592,9 +621,18 @@ func remoteOfflineCleanup(s *Server, username string) {
 }
 
 // remoteCancelOfflineGrace 用户重连上线时取消其活跃协助的下线宽限收口（宽限期内回来 = 协助继续）；
-// 媒体面由客户端 ICE restart 自动恢复，服务端只需不收口
-func remoteCancelOfflineGrace(username string) {
+// 媒体面由客户端 ICE restart 自动恢复，服务端只需不收口。
+// 阶段二百六十二修复（实测：网络抖动中断后重连恒报"正在远程协助中"，仅重启服务端可解）：
+// 取消宽限的前提假设是"重连 = 客户端 UI 仍在会话中"，但观看窗看门狗可能在 WS 断开期间已
+// finish（其 disconnect 信令随断线丢失）或用户已刷新页面——本地态已清而服务端会话残留，
+// 且双方 WS 均在线时 remoteOfflineCleanup 永不兜底，忙表永久锁死。故取消宽限的同时向重连
+// 用户推送 resume 存活探测帧：客户端本地会话态匹配=真会话（忽略，信令通道已恢复继续）；
+// 本地无此会话=UI 已收口，回 disconnect 由服务端归口收口并通知对方，残留自愈。
+// 仅在真的取消了宽限定时器时才推（timer 存在 ⇒ 账号曾全离线 ⇒ 不存在"同账号其他端正在
+// 会话中被误杀"——多端在线时 cleanup 根本不会触发）——防多端同账号误清正常会话
+func (s *Server) remoteCancelOfflineGrace(username string) {
 	remoteMu.Lock()
+	var resumes []*remoteSession
 	for _, sess := range remoteSessions {
 		if sess.State != remoteStateActive || (sess.Controller != username && sess.Sharer != username) {
 			continue
@@ -602,7 +640,20 @@ func remoteCancelOfflineGrace(username string) {
 		if sess.offlineTimer != nil {
 			sess.offlineTimer.Stop()
 			sess.offlineTimer = nil
+			resumes = append(resumes, sess) // 仅本次真取消宽限的会话才需探测（详见函数头防误杀说明）
 		}
 	}
 	remoteMu.Unlock()
+	// 锁外推送（sendToUser 自带通道锁）：每个被取消宽限的活跃会话一条探测帧
+	for _, sess := range resumes {
+		role := "controller"
+		if sess.Controller != username {
+			role = "sharer"
+		}
+		b, _ := json.Marshal(map[string]string{
+			"action": "resume", "session_id": sess.ID,
+			"role": role, "peer": remotePeerOf(sess, username),
+		})
+		s.remoteForwardByUser("resume", username, string(b))
+	}
 }

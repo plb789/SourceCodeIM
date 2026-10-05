@@ -19192,3 +19192,98 @@ html.m .rc-home.hidden { display: none; }
     white-space: nowrap;
 }
 .rc-mv-combo-btn:active { background: var(--primary); }
+
+/* ===== 阶段二百六十二：免码直连——我的卡片 / 历史访问 / 信任名单（mine 页与手机 home 页共用） ===== */
+.rc-sub-sec { margin-top: 18px; max-width: 720px; margin-left: auto; margin-right: auto; }
+.rc-sub-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+.rc-sub-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.rc-card-add-btn { padding: 4px 12px; font-size: 12px; }
+.rc-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+.rc-sub-empty {
+    grid-column: 1 / -1;
+    padding: 18px 14px;
+    text-align: center;
+    color: var(--text-light);
+    font-size: 13px;
+    line-height: 1.6;
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+}
+.rc-card-item { padding: 12px 14px; }
+.rc-card-badge {
+    margin-top: 2px;
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+}
+.rc-card-form { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.rc-card-form.hidden { display: none; }
+.rc-card-form .rc-input { padding: 8px 10px; font-size: 13px; }
+.rc-trust-form { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rc-trust-form.hidden { display: none; }
+.rc-trust-list { display: flex; flex-direction: column; gap: 6px; }
+.rc-trust-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--hover);
+    font-size: 13px;
+    color: var(--text);
+}
+.rc-trust-row .rc-tb-btn { padding: 3px 10px; font-size: 12px; }
+.rc-trust-empty { background: none; color: var(--text-light); font-size: 12px; padding: 2px 0; }
+.rc-trust-acc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-trust-time { color: var(--text-light); font-size: 12px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.rc-visits-list { display: flex; flex-direction: column; }
+.rc-visit-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+}
+.rc-visit-row:last-child { border-bottom: none; }
+.rc-visit-main {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.rc-visit-id {
+    margin-left: 8px;
+    color: var(--text-light);
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    font-variant-numeric: tabular-nums;
+}
+.rc-visit-meta { color: var(--text-light); font-size: 12px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.rc-visit-badge {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    color: var(--primary);
+}
+.rc-visit-row .rc-tb-btn { flex-shrink: 0; }
+/* 手机端适配：卡片单列满宽，历史行内元信息换行收窄 */
+html.m .rc-sub-sec { margin-top: 14px; }
+html.m .rc-cards-grid { grid-template-columns: 1fr; }
+html.m .rc-visit-meta { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

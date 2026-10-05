@@ -223,16 +223,18 @@ type rcConfigView struct {
 }
 
 // rcVerifyCode 验证码校验归口：动态码（TTL 内）或静态密码（sha256 比对）任一匹配即通过。
+// via 返回实际匹配方式："dyn" 动态码 / "static" 静态密码 / "" 未通过——阶段二百六十二信任
+// 机制据 via 决定是否建立信任对（仅 static 建，dyn 绝不建，防一次性窥视升级永久权限）。
 // 通过返回 true 并清零爆破计数；失败记录计数（调用方据返回的 locked 提示锁定）
-func rcVerifyCode(dev *model.Device, code string) (ok bool, locked bool) {
+func rcVerifyCode(dev *model.Device, code string) (ok bool, locked bool, via string) {
 	if !rcCodeRe.MatchString(code) {
 		locked = rcRecordFail(dev.DeviceID, rcMaxFails(), rcLockSec())
-		return false, locked
+		return false, locked, ""
 	}
 	// 动态码：仅 TTL 内有效（过期即失效，下次校验惰性刷新新码）
 	if dev.DynCode != "" && code == dev.DynCode && time.Now().Before(dev.DynExpire) {
 		rcClearFail(dev.DeviceID)
-		return true, false
+		return true, false, "dyn"
 	}
 	// 静态密码：用户自设长期有效（空=未启用；新存 bcrypt，存量 sha256 双路兼容+校验通过惰性升级）
 	if dev.StaticPWHash != "" {
@@ -241,11 +243,11 @@ func rcVerifyCode(dev *model.Device, code string) (ok bool, locked bool) {
 				store.DB.Model(&model.Device{}).Where("id = ?", dev.ID).Update("static_pw_hash", hashPassword(code))
 			}
 			rcClearFail(dev.DeviceID)
-			return true, false
+			return true, false, "static"
 		}
 	}
 	locked = rcRecordFail(dev.DeviceID, rcMaxFails(), rcLockSec())
-	return false, locked
+	return false, locked, ""
 }
 
 func rcMaxFails() int {
@@ -315,6 +317,13 @@ func RegisterRCRoutes(s *Server, cfg config.RCConfig) {
 	http.HandleFunc("POST /api/rc/device/static_pw", s.guardRC(s.handleRCStaticPW))
 	http.HandleFunc("POST /api/rc/device/refresh_code", s.guardRC(s.handleRCRefreshCode))
 	http.HandleFunc("GET /api/rc/records", s.guardRC(s.handleRCRecords))
+	// 阶段二百六十二：信任名单 / 自定义远程卡片 / 历史访问（一键直连配套）
+	http.HandleFunc("GET /api/rc/trust", s.guardRC(s.handleRCTrustList))
+	http.HandleFunc("POST /api/rc/trust/remove", s.guardRC(s.handleRCTrustRemove))
+	http.HandleFunc("GET /api/rc/card/list", s.guardRC(s.handleRCCardList))
+	http.HandleFunc("POST /api/rc/card/add", s.guardRC(s.handleRCCardAdd))
+	http.HandleFunc("POST /api/rc/card/remove", s.guardRC(s.handleRCCardRemove))
+	http.HandleFunc("GET /api/rc/visits", s.guardRC(s.handleRCVisits))
 	// 防爆破锁表 GC（每小时一轮，防不存在设备ID刷计数撑爆内存）
 	go func() {
 		for {
@@ -477,4 +486,217 @@ func (s *Server) handleRCRecords(w http.ResponseWriter, r *http.Request) {
 func rcWriteJSON(w http.ResponseWriter, data map[string]interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
+}
+
+// ===== 阶段二百六十二：信任名单 / 自定义远程卡片 / 历史访问（一键直连配套） =====
+
+// rcTrusted 信任对查询归口：controller 是否获 owner 的 device 免码直连信任
+func rcTrusted(owner, deviceID, controller string) bool {
+	var cnt int64
+	store.DB.Model(&model.RemoteTrust{}).Where("owner_username = ? AND device_id = ? AND controller_username = ?",
+		owner, deviceID, controller).Count(&cnt)
+	return cnt > 0
+}
+
+// rcDevicesByID 批量取设备行归口（ids 顺序无关），返回 map[device_id]Device
+func rcDevicesByID(ids []string) map[string]model.Device {
+	out := make(map[string]model.Device, len(ids))
+	if len(ids) == 0 {
+		return out
+	}
+	var devs []model.Device
+	store.DB.Where("device_id IN ?", ids).Find(&devs)
+	for _, d := range devs {
+		out[d.DeviceID] = d
+	}
+	return out
+}
+
+// handleRCTrustList 信任名单 GET /api/rc/trust?username=xxx
+// 返回本人全部设备的信任记录（谁可免码控制我的哪台设备），被控端面板"信任名单"按钮数据源
+func (s *Server) handleRCTrustList(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var trusts []model.RemoteTrust
+	store.DB.Where("owner_username = ?", username).Order("id desc").Limit(200).Find(&trusts)
+	ids := make([]string, 0, len(trusts))
+	for _, t := range trusts {
+		ids = append(ids, t.DeviceID)
+	}
+	devMap := rcDevicesByID(ids)
+	items := make([]map[string]interface{}, 0, len(trusts))
+	for _, t := range trusts {
+		items = append(items, map[string]interface{}{
+			"device_id":   t.DeviceID,
+			"device_name": devMap[t.DeviceID].DeviceName,
+			"controller":  t.ControllerUsername,
+			"create_time": t.CreateTime.Unix(),
+		})
+	}
+	rcWriteJSON(w, map[string]interface{}{"items": items})
+}
+
+// handleRCTrustRemove 移除信任 POST /api/rc/trust/remove?username=xxx
+// 入参 {device_id, controller}；仅设备归属账号可移除（归属校验，防冒名删他人信任），移除即时生效
+func (s *Server) handleRCTrustRemove(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		DeviceID   string `json:"device_id"`
+		Controller string `json:"controller"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if !rcDeviceIDRe.MatchString(body.DeviceID) || !driveUsernameRe.MatchString(body.Controller) {
+		driveFail(w, http.StatusBadRequest, "参数格式错误")
+		return
+	}
+	// 归属校验：仅设备主人可移除信任
+	var cnt int64
+	store.DB.Model(&model.Device{}).Where("username = ? AND device_id = ?", username, body.DeviceID).Count(&cnt)
+	if cnt == 0 {
+		driveFail(w, http.StatusForbidden, "仅设备主人可管理信任名单")
+		return
+	}
+	store.DB.Where("owner_username = ? AND device_id = ? AND controller_username = ?",
+		username, body.DeviceID, body.Controller).Delete(&model.RemoteTrust{})
+	rcWriteJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleRCCardList 我的远程卡片 GET /api/rc/card/list?username=xxx
+// 返回卡片+目标设备实时信息（设备名/账号级在线/是否已信任），点击卡片直连或引导输码
+func (s *Server) handleRCCardList(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var cards []model.RemoteCard
+	store.DB.Where("username = ?", username).Order("id desc").Limit(50).Find(&cards)
+	ids := make([]string, 0, len(cards))
+	for _, c := range cards {
+		ids = append(ids, c.DeviceID)
+	}
+	devMap := rcDevicesByID(ids)
+	items := make([]map[string]interface{}, 0, len(cards))
+	for _, c := range cards {
+		dev, ok := devMap[c.DeviceID]
+		item := map[string]interface{}{
+			"device_id":   c.DeviceID,
+			"remark":      c.Remark,
+			"create_time": c.CreateTime.Unix(),
+			"device_name": "",
+			"online":      false,
+			"trusted":     false,
+		}
+		if ok {
+			item["device_name"] = dev.DeviceName
+			item["online"] = s.hub.HasPC(dev.Username) // 在线为账号级（多 PC 账号以主账号 PC 登录为准）
+			item["trusted"] = rcTrusted(dev.Username, c.DeviceID, username)
+		}
+		items = append(items, item)
+	}
+	rcWriteJSON(w, map[string]interface{}{"items": items})
+}
+
+// handleRCCardAdd 添加/更新卡片 POST /api/rc/card/add?username=xxx
+// 入参 {device_id, remark}；设备须已注册（跨账号连接目标）；同 device_id 重复添加=改备注；
+// 每账号上限 50 张防滥用。仅存 ID+备注不存凭据（凭据走信任机制）
+func (s *Server) handleRCCardAdd(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		DeviceID string `json:"device_id"`
+		Remark   string `json:"remark"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	body.DeviceID = strings.TrimSpace(body.DeviceID)
+	body.Remark = strings.TrimSpace(body.Remark)
+	if !rcDeviceIDRe.MatchString(body.DeviceID) {
+		driveFail(w, http.StatusBadRequest, "设备ID格式无效（9-10 位数字）")
+		return
+	}
+	if len([]rune(body.Remark)) > 32 {
+		driveFail(w, http.StatusBadRequest, "备注最多 32 个字")
+		return
+	}
+	var dev model.Device
+	if err := store.DB.Where("device_id = ?", body.DeviceID).First(&dev).Error; err != nil {
+		driveFail(w, http.StatusBadRequest, "设备不存在或未注册")
+		return
+	}
+	var cnt int64
+	store.DB.Model(&model.RemoteCard{}).Where("username = ?", username).Count(&cnt)
+	var card model.RemoteCard
+	err := store.DB.Where("username = ? AND device_id = ?", username, body.DeviceID).First(&card).Error
+	if err == nil {
+		// 同设备重复添加：更新备注（upsert 语义）
+		store.DB.Model(&model.RemoteCard{}).Where("id = ?", card.ID).Update("remark", body.Remark)
+		rcWriteJSON(w, map[string]interface{}{"ok": true, "updated": true})
+		return
+	}
+	if cnt >= 50 {
+		driveFail(w, http.StatusBadRequest, "卡片数量已达上限（50 张）")
+		return
+	}
+	store.DB.Create(&model.RemoteCard{Username: username, DeviceID: body.DeviceID, Remark: body.Remark})
+	rcWriteJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleRCCardRemove 删除卡片 POST /api/rc/card/remove?username=xxx
+// 入参 {device_id}；仅卡片主人可删（where 带 username 双保险）
+func (s *Server) handleRCCardRemove(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		DeviceID string `json:"device_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if !rcDeviceIDRe.MatchString(body.DeviceID) {
+		driveFail(w, http.StatusBadRequest, "参数格式错误")
+		return
+	}
+	store.DB.Where("username = ? AND device_id = ?", username, body.DeviceID).Delete(&model.RemoteCard{})
+	rcWriteJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleRCVisits 历史访问 GET /api/rc/visits?username=xxx
+// 派生查询无新表：im_remote_log 中我作为控制方成功接通的 rc 会话按设备去重（最后时间倒序
+// 最多 50 台），补设备名/账号级在线/信任标记——面板"历史访问"区块一键重连数据源
+func (s *Server) handleRCVisits(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	type visitRow struct {
+		DeviceID string    `gorm:"column:device_id"`
+		LastTime time.Time `gorm:"column:last_time"`
+		Times    int64     `gorm:"column:times"`
+	}
+	var rows []visitRow
+	store.DB.Model(&model.RemoteLog{}).
+		Select("device_id, MAX(create_time) AS last_time, COUNT(*) AS times").
+		Where("mode = ? AND requester = ? AND status = ? AND device_id <> ''", "rc", username, "connected").
+		Group("device_id").Order("last_time desc").Limit(50).Scan(&rows)
+	ids := make([]string, 0, len(rows))
+	for _, v := range rows {
+		ids = append(ids, v.DeviceID)
+	}
+	devMap := rcDevicesByID(ids)
+	items := make([]map[string]interface{}, 0, len(rows))
+	for _, v := range rows {
+		dev, ok := devMap[v.DeviceID]
+		item := map[string]interface{}{
+			"device_id":   v.DeviceID,
+			"last_time":   v.LastTime.Unix(),
+			"times":       v.Times,
+			"device_name": "",
+			"online":      false,
+			"trusted":     false,
+		}
+		if ok {
+			item["device_name"] = dev.DeviceName
+			item["online"] = s.hub.HasPC(dev.Username)
+			item["trusted"] = rcTrusted(dev.Username, v.DeviceID, username)
+		}
+		items = append(items, item)
+	}
+	rcWriteJSON(w, map[string]interface{}{"items": items})
 }

@@ -37,6 +37,11 @@
     var homeDevices = document.getElementById('rc-home-devices');
     var homeEmpty = document.getElementById('rc-home-empty');
     var homeEmptyText = document.getElementById('rc-home-empty-text');
+    // 阶段二百六十二：我的卡片 / 历史访问区块（mine 页与手机 home 页共用渲染函数，容器不同）
+    var cardsSec = document.getElementById('rc-cards-sec');
+    var visitsSec = document.getElementById('rc-visits-sec');
+    var homeCards = document.getElementById('rc-home-cards');
+    var homeVisits = document.getElementById('rc-home-visits');
 
     var visible = false;
     var curPage = '';        // home / mine / connect / records
@@ -107,8 +112,8 @@
         refreshBtn.classList.toggle('hidden', name === 'connect' || name === 'home');
         // 倒计时仅 mine/home 两态需要（都渲染设备码）；离开即清
         if (name !== 'mine' && name !== 'home' && codeTimer) { clearInterval(codeTimer); codeTimer = 0; }
-        if (name === 'mine') loadMine();
-        else if (name === 'home') loadHome();
+        if (name === 'mine') { loadMine(); loadCardsInto(cardsSec); loadVisitsInto(visitsSec); }
+        else if (name === 'home') { loadHome(); loadCardsInto(homeCards); loadVisitsInto(homeVisits); }
         else if (name === 'records') loadRecords();
     }
 
@@ -174,15 +179,19 @@
                 (d.dyn_code ? ' <span class="rc-code-left" data-expire="' + d.dyn_expire + '">' + T('剩余') + ' ' + fmtLeft(left) + '</span>' : '') +
                 '</span></div>' +
                 '<div class="rc-dev-actions">' +
-                '<button class="rc-tb-btn rc-btn-connect" data-id="' + esc(d.device_id) + '">' + T('连接此设备') + '</button>' +
+                // 阶段二百六十二：一键直连——携带当前动态码/过期时间，点击即连免手输
+                '<button class="rc-tb-btn rc-btn-connect" data-id="' + esc(d.device_id) + '" data-code="' + esc(d.dyn_code || '') + '" data-expire="' + (d.dyn_expire || 0) + '">' + T('连接此设备') + '</button>' +
                 (d.online ? '<button class="rc-tb-btn rc-btn-refresh">' + T('刷新验证码') + '</button>' : '') +
                 '<button class="rc-tb-btn rc-btn-pw" data-enabled="' + (d.static_pw_enabled ? '1' : '') + '">' + (d.static_pw_enabled ? T('修改访问密码') : T('设置访问密码')) + '</button>' +
+                '<button class="rc-tb-btn rc-btn-trust" data-id="' + esc(d.device_id) + '">' + T('信任名单') + '</button>' +
                 '</div>' +
                 '<div class="rc-pw-form hidden">' +
                 '<input class="rc-input rc-pw-input" type="text" maxlength="32" placeholder="' + T('6-32 位字母或数字，留空=清除') + '">' +
                 '<span class="rc-pw-btns"><button class="rc-tb-btn rc-pw-save">' + T('保存') + '</button>' +
                 '<button class="rc-tb-btn rc-pw-cancel">' + T('取消') + '</button></span>' +
-                '</div>';
+                '</div>' +
+                // 信任名单展开区（按需懒加载：首次展开拉 /api/rc/trust 过滤本设备）
+                '<div class="rc-trust-form hidden" data-tid="' + esc(d.device_id) + '"><div class="rc-trust-list"></div></div>';
             mineWrap.appendChild(card);
         });
         // 非 PC 端"我的电脑"仅展示 + 连接预填（刷新码/静态密码需 install_uuid，仅本机 PC 可操作）
@@ -216,10 +225,8 @@
         });
         mineWrap.querySelectorAll('.rc-btn-connect').forEach(function (btn) {
             btn.addEventListener('click', function () {
-                showPage('connect');
-                inDevice.value = btn.getAttribute('data-id');
-                inCode.value = '';
-                inCode.focus();
+                // 阶段二百六十二：一键直连——自动用卡片当前动态码（免手输）；过期/离线回退连接页预填
+                oneClickConnect(btn);
             });
         });
         mineWrap.querySelectorAll('.rc-device-card').forEach(function (card) {
@@ -254,6 +261,45 @@
                     });
                 });
             }
+            // 阶段二百六十二：信任名单——查看谁可免码控制本设备并可移除（懒加载，展开时拉取）
+            var tb = card.querySelector('.rc-btn-trust');
+            var tbox = card.querySelector('.rc-trust-form');
+            if (tb && tbox) tb.addEventListener('click', function () {
+                var opening = tbox.classList.contains('hidden');
+                tbox.classList.toggle('hidden');
+                if (!opening) return;
+                var devId = tb.getAttribute('data-id');
+                var list = tbox.querySelector('.rc-trust-list');
+                list.innerHTML = '<div class="rc-trust-row rc-trust-empty">' + T('加载中…') + '</div>';
+                apiGet('trust', function (err, data) {
+                    if (err) { list.innerHTML = '<div class="rc-trust-row rc-trust-empty">' + esc(err.message) + '</div>'; return; }
+                    var rows = ((data && data.items) || []).filter(function (t) { return t.device_id === devId; });
+                    if (!rows.length) {
+                        list.innerHTML = '<div class="rc-trust-row rc-trust-empty">' + T('暂无信任账号——对方用访问密码成功连接一次后自动加入') + '</div>';
+                        return;
+                    }
+                    list.innerHTML = '';
+                    rows.forEach(function (t) {
+                        var row = document.createElement('div');
+                        row.className = 'rc-trust-row';
+                        row.innerHTML =
+                            '<span class="rc-trust-acc">' + esc(t.controller) + '</span>' +
+                            '<span class="rc-trust-time">' + fmtTime(t.create_time) + '</span>' +
+                            '<button class="rc-tb-btn rc-trust-del">' + T('移除') + '</button>';
+                        row.querySelector('.rc-trust-del').addEventListener('click', function () {
+                            apiPost('trust/remove', { device_id: devId, controller: t.controller }, function (err2) {
+                                if (err2) { toast(err2.message); return; }
+                                toast(T('已移除信任，对方下次连接需重新输入验证码'));
+                                row.remove();
+                                if (!list.querySelectorAll('.rc-trust-row').length) {
+                                    list.innerHTML = '<div class="rc-trust-row rc-trust-empty">' + T('暂无信任账号') + '</div>';
+                                }
+                            });
+                        });
+                        list.appendChild(row);
+                    });
+                });
+            });
         });
     }
 
@@ -329,11 +375,11 @@
                 return;
             }
             var btn = e.target.closest('.rc-home-connect-btn');
-            if (btn && !btn.disabled) homeQuickConnect(btn);
+            if (btn && !btn.disabled) oneClickConnect(btn);
         });
     }
-    // 一键直连：ID + 动态码免手输（码缺失/剩余<10s/离线 → 跳连接页预填 ID 手输）
-    function homeQuickConnect(btn) {
+    // 一键直连（同账号设备卡与手机首页共用）：ID+动态码免手输（码缺失/剩余<10s/离线 → 跳连接页预填 ID 手输）
+    function oneClickConnect(btn) {
         if (connecting) return;
         var id = btn.getAttribute('data-id') || '';
         var code = btn.getAttribute('data-code') || '';
@@ -422,6 +468,151 @@
         });
     }
 
+    // ===== 阶段二百六十二：免码直连 / 我的卡片 / 历史访问 =====
+    // quickConnect 免码直连归口（服务端信任对命中则直接放行）：未信任回 need_code →
+    // 跳连接页预填设备ID引导输码（输访问密码成功后服务端自动建信任，下次免码；动态码仅单次有效）
+    function quickConnect(id) {
+        if (connecting) return;
+        connecting = true;
+        window.rcConnect(id, '', function (ok, reason, errCode) {
+            connecting = false;
+            if (ok) { toast(T('已接通，正在建立屏幕通道…')); return; }
+            if (errCode === 'need_code') {
+                showPage('connect');
+                inDevice.value = id;
+                inCode.value = '';
+                inCode.focus();
+                setStatus(T('该设备未信任此账号，请输入验证码（动态码或访问密码）'), 'err');
+                return;
+            }
+            toast(TR(reason || T('连接失败')));
+        });
+    }
+
+    // 我的卡片（自定义常用设备，服务端存储三端同步；mine 页与手机 home 页共用渲染）
+    function loadCardsInto(el) {
+        if (!el) return;
+        apiGet('card/list', function (err, data) {
+            renderCardsInto(el, err ? null : (data && data.items) || [], err ? err.message : '');
+        });
+    }
+    function renderCardsInto(el, items, errMsg) {
+        if (!el) return;
+        el.innerHTML = '';
+        var head = document.createElement('div');
+        head.className = 'rc-sub-head';
+        head.innerHTML = '<span class="rc-sub-title">' + T('我的卡片') + '</span>' +
+            '<button class="rc-tb-btn rc-card-add-btn">' + T('添加卡片') + '</button>';
+        el.appendChild(head);
+        var grid = document.createElement('div');
+        grid.className = 'rc-cards-grid';
+        if (errMsg) {
+            grid.innerHTML = '<div class="rc-sub-empty">' + esc(errMsg) + '</div>';
+        } else if (!items.length) {
+            grid.innerHTML = '<div class="rc-sub-empty">' + T('收藏常用设备，点击即可连接（对方设备ID可在其"我的电脑"页查看）') + '</div>';
+        } else {
+            items.forEach(function (c) {
+                var name = c.remark || c.device_name || c.device_id;
+                var card = document.createElement('div');
+                card.className = 'rc-device-card rc-card-item';
+                card.innerHTML =
+                    '<div class="rc-dev-head">' +
+                    '<span class="rc-dev-name">' + esc(name) + '</span>' +
+                    '<span class="rc-dev-dot ' + (c.online ? 'on' : '') + '"></span><span class="rc-dev-online">' + (c.online ? T('在线') : T('离线')) + '</span>' +
+                    '</div>' +
+                    '<div class="rc-dev-row"><span class="rc-dev-label">' + T('设备ID') + '</span>' +
+                    '<span class="rc-dev-id" data-copy="' + esc(c.device_id) + '">' + esc(c.device_id) + '<span class="rc-copy-ico" title="' + T('复制') + '">⧉</span></span></div>' +
+                    (c.trusted ? '<div class="rc-card-badge">' + T('已信任 · 可免码直连') + '</div>' : '') +
+                    '<div class="rc-dev-actions">' +
+                    '<button class="rc-tb-btn rc-card-connect" data-id="' + esc(c.device_id) + '">' + T('连接') + '</button>' +
+                    '<button class="rc-tb-btn rc-card-del" data-id="' + esc(c.device_id) + '">' + T('删除') + '</button>' +
+                    '</div>';
+                grid.appendChild(card);
+            });
+        }
+        el.appendChild(grid);
+        // 添加表单（页内自绘，同访问密码表单交互）
+        var form = document.createElement('div');
+        form.className = 'rc-card-form hidden';
+        form.innerHTML =
+            '<input class="rc-input rc-card-id-in" type="text" inputmode="numeric" maxlength="10" placeholder="' + T('设备ID（9-10 位数字）') + '">' +
+            '<input class="rc-input rc-card-remark-in" type="text" maxlength="32" placeholder="' + T('备注名（选填，如：办公室电脑）') + '">' +
+            '<span class="rc-pw-btns"><button class="rc-tb-btn rc-card-save">' + T('保存') + '</button>' +
+            '<button class="rc-tb-btn rc-card-cancel">' + T('取消') + '</button></span>';
+        el.appendChild(form);
+        head.querySelector('.rc-card-add-btn').addEventListener('click', function () { form.classList.toggle('hidden'); });
+        form.querySelector('.rc-card-cancel').addEventListener('click', function () { form.classList.add('hidden'); });
+        form.querySelector('.rc-card-save').addEventListener('click', function () {
+            var id = form.querySelector('.rc-card-id-in').value.trim();
+            var remark = form.querySelector('.rc-card-remark-in').value.trim();
+            apiPost('card/add', { device_id: id, remark: remark }, function (err) {
+                if (err) { toast(err.message); return; }
+                toast(T('卡片已保存'));
+                loadCardsInto(el);
+            });
+        });
+        // 卡片事件（复制ID/连接/删除）
+        el.querySelectorAll('.rc-dev-id').forEach(function (idEl) {
+            idEl.addEventListener('click', function () {
+                var id = idEl.getAttribute('data-copy');
+                try {
+                    (navigator.clipboard ? navigator.clipboard.writeText(id) : Promise.reject()).then(function () {
+                        toast(T('设备ID已复制'));
+                    }, function () { toast(id); });
+                } catch (e) { toast(id); }
+            });
+        });
+        el.querySelectorAll('.rc-card-connect').forEach(function (btn) {
+            btn.addEventListener('click', function () { quickConnect(btn.getAttribute('data-id')); });
+        });
+        el.querySelectorAll('.rc-card-del').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                apiPost('card/remove', { device_id: btn.getAttribute('data-id') }, function (err) {
+                    if (err) { toast(err.message); return; }
+                    toast(T('卡片已删除'));
+                    loadCardsInto(el);
+                });
+            });
+        });
+    }
+
+    // 历史访问（我作为控制方成功接通过的设备，服务端按设备去重派生；一键重连）
+    function loadVisitsInto(el) {
+        if (!el) return;
+        apiGet('visits', function (err, data) {
+            renderVisitsInto(el, err ? null : (data && data.items) || [], err ? err.message : '');
+        });
+    }
+    function renderVisitsInto(el, items, errMsg) {
+        if (!el) return;
+        el.innerHTML = '';
+        var head = document.createElement('div');
+        head.className = 'rc-sub-head';
+        head.innerHTML = '<span class="rc-sub-title">' + T('历史访问') + '</span>';
+        el.appendChild(head);
+        var list = document.createElement('div');
+        list.className = 'rc-visits-list';
+        if (errMsg) {
+            list.innerHTML = '<div class="rc-sub-empty">' + esc(errMsg) + '</div>';
+        } else if (!items.length) {
+            list.innerHTML = '<div class="rc-sub-empty">' + T('暂无记录——成功连接过的设备会出现在这里，可一键重连') + '</div>';
+        } else {
+            items.forEach(function (v) {
+                var row = document.createElement('div');
+                row.className = 'rc-visit-row';
+                row.innerHTML =
+                    '<span class="rc-dev-dot ' + (v.online ? 'on' : '') + '"></span>' +
+                    '<span class="rc-visit-main">' + esc(v.device_name || v.device_id) + '<span class="rc-visit-id">' + esc(v.device_id) + '</span></span>' +
+                    '<span class="rc-visit-meta">' + v.times + ' ' + T('次') + ' · ' + fmtTime(v.last_time) + '</span>' +
+                    (v.trusted ? '<span class="rc-visit-badge">' + T('已信任') + '</span>' : '') +
+                    '<button class="rc-tb-btn rc-visit-connect">' + T('连接') + '</button>';
+                row.querySelector('.rc-visit-connect').addEventListener('click', function () { quickConnect(v.device_id); });
+                list.appendChild(row);
+            });
+        }
+        el.appendChild(list);
+    }
+
     // ===== 打开 / 关闭 =====
     function open() {
         if (mainChatEl && view.parentElement !== mainChatEl) mainChatEl.appendChild(view);
@@ -472,7 +663,7 @@
         }
     });
     refreshBtn.addEventListener('click', function () {
-        if (curPage === 'mine') loadMine();
+        if (curPage === 'mine') { loadMine(); loadCardsInto(cardsSec); loadVisitsInto(visitsSec); }
         else if (curPage === 'records') loadRecords();
     });
     connectBtn.addEventListener('click', doConnect);

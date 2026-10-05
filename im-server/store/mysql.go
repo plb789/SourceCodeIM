@@ -96,7 +96,9 @@ func InitMySQL(cfg *config.Config) error {
 	// 阶段一百五十四：追加积分红包两表 im_red_packet / im_red_packet_claim（微信同款红包，积分归口）
 	// 阶段二百六十：追加客户端版本表 im_app_version（APP/PC 自动更新，服务端版本归口）
 	// 阶段二百六十一：追加远程控制设备表 im_device（向日葵同款设备ID+验证码远程控制）
-	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}); err != nil {
+	// 阶段二百六十二：追加跨账号信任对表 im_remote_trust（静态密码成功连接免码直连）与
+	// 自定义远程卡片表 im_remote_card（设备ID+备注，服务端存储三端同步）
+	if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.FileRecord{}, &model.Friend{}, &model.FriendRequest{}, &model.Blacklist{}, &model.MessageDelete{}, &model.Conversation{}, &model.MessagePin{}, &model.DocEdit{}, &model.AIProvider{}, &model.AIAgent{}, &model.KB{}, &model.KBFile{}, &model.UserKB{}, &model.PointsLog{}, &model.MCPServer{}, &model.CallLog{}, &model.Group{}, &model.GroupMember{}, &model.GroupInvite{}, &model.Announcement{}, &model.AnnouncementAttachment{}, &model.AnnouncementRead{}, &model.WorkbenchApp{}, &model.RedPacket{}, &model.RedPacketClaim{}, &model.RemoteLog{}, &model.DriveFile{}, &model.DriveShare{}, &model.DriveUploadSession{}, &model.AppVersion{}, &model.Device{}, &model.RemoteTrust{}, &model.RemoteCard{}); err != nil {
 		return fmt.Errorf("自动建表失败: %w", err)
 	}
 

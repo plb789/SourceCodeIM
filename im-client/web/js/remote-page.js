@@ -51,10 +51,13 @@
     }
 
     // ===== 收口：发 disconnect（notify=true）→ 停媒体 → 遮罩提示 → 关窗 =====
+    // 修复（实测：点断开后重连恒报"你正在远程协助中"，需等被控端 ICE 自保 15-30s 才能再连）：
+    // 必须先发 disconnect 再置 st.ended——send 开头有 st.ended 拦截，先置位会把本端主动断开的
+    // 收口信令自己吞掉，服务端收不到 disconnect 忙表残留（双方在线时离线宽限兜底不触发）
     function finish(text, notify) {
         if (st.ended) return;
-        st.ended = true;
         if (notify) send('disconnect', { reason: 'controller-close' });
+        st.ended = true;
         stopInput();
         if (st.watchdog) { clearTimeout(st.watchdog); st.watchdog = null; }
         if (st.connectTimer) { clearTimeout(st.connectTimer); st.connectTimer = null; }

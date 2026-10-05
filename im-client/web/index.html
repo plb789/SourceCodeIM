@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.52">
+    <link rel="stylesheet" href="/css/style.css?v=3.56">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -2214,6 +2214,9 @@
         <div id="rc-page-home" class="rc-page rc-home hidden">
             <div id="rc-home-devices" class="rc-home-devices"><!-- 设备卡片由 rc-panel.js renderHome 渲染 --></div>
             <div id="rc-home-empty" class="rc-empty hidden"><span id="rc-home-empty-text"></span></div>
+            <!-- 阶段二百六十二：我的卡片 / 历史访问区块（空壳，rc-panel.js 渲染） -->
+            <div id="rc-home-cards" class="rc-sub-sec"></div>
+            <div id="rc-home-visits" class="rc-sub-sec"></div>
             <div class="rc-home-rows">
                 <button class="rc-home-row" id="rc-home-connect">
                     <span class="rc-home-row-ico"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.4 18.85 4.95a1.99 1.99 0 0 0 0-2.83 1.99 1.99 0 0 0-2.83 0L.59 17.6a1 1 0 0 0-.2.34L0 20l2.06-.59a1 1 0 0 0 .34-.2zM9.7 5.55 8.28 4.12 4.84 7.56l1.41 1.41zM20 20h2v-7.5a1.5 1.5 0 0 0-1.5-1.5h-5v2h4.5V20zM12 4h5V2.5A1.5 1.5 0 0 0 15.5 1h-5zm-2 8H4.5v2H10zm6-4h2v6h-2z"/></svg></span>
@@ -2233,6 +2236,9 @@
             <div id="rc-mine-empty" class="rc-empty hidden">
                 <span id="rc-mine-empty-text">远程控制被控端仅支持 PC 客户端，请在电脑上登录本账号查看本机识别码</span>
             </div>
+            <!-- 阶段二百六十二：我的卡片 / 历史访问区块（空壳，rc-panel.js 渲染） -->
+            <div id="rc-cards-sec" class="rc-sub-sec"></div>
+            <div id="rc-visits-sec" class="rc-sub-sec"></div>
         </div>
         <!-- 视图二：连接远端（输入 设备ID + 验证码，向日葵同款） -->
         <div id="rc-page-connect" class="rc-page hidden">
@@ -2445,7 +2451,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.169"></script>
+    <script src="/js/chat.js?v=3.171"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
@@ -2455,7 +2461,7 @@
     <script src="/js/drive.js?v=2.31"></script>
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
-    <script src="/js/rc-panel.js?v=1.0"></script>
+    <script src="/js/rc-panel.js?v=1.1"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
     <script src="/js/rc-mobile-view.js?v=1.1"></script>

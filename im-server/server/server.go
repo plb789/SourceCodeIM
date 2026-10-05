@@ -605,8 +605,10 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	callCancelOfflineHangup(user.Username)
 	// 阶段一百四十八：登录重连取消其所在会议房间的断网宽限收口（切网闪断回来，会议继续）
 	meetCancelOfflineHangup(user.Username)
-	// 阶段一百五十五：登录重连取消其活跃远程协助的下线宽限收口（切网闪断回来，协助继续）
-	remoteCancelOfflineGrace(user.Username)
+	// 阶段一百五十五：登录重连取消其活跃远程协助的下线宽限收口（切网闪断回来，协助继续）；
+	// 阶段二百六十二：取消宽限时推送 resume 存活探测帧——客户端本地会话态不匹配则回 disconnect
+	// 收口残留（观看窗看门狗已在断网期间 finish 时 disconnect 信令丢失，忙表永久锁死场景自愈）
+	s.remoteCancelOfflineGrace(user.Username)
 	logger.Info("用户 %s 上线", user.Username)
 }
 
