@@ -313,31 +313,6 @@ td .skel-line {
     margin-bottom: 16px;
 }
 
-/* 占位卡片（阶段二/三开放） */
-.admin-placeholder {
-    background: var(--panel-bg);
-    border: 1px dashed var(--border);
-    border-radius: 12px;
-    padding: 48px 24px;
-    text-align: center;
-}
-.admin-placeholder-icon {
-    font-size: 36px;
-    margin-bottom: 12px;
-}
-.admin-placeholder-title {
-    font-size: 15px;
-    color: var(--text);
-    margin-bottom: 6px;
-}
-.admin-placeholder-desc {
-    font-size: 13px;
-    color: var(--text-light);
-    max-width: 460px;
-    margin: 0 auto;
-    line-height: 1.6;
-}
-
 /* ===== 配置卡片列表 ===== */
 .admin-cards {
     display: flex;

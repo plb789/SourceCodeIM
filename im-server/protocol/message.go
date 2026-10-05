@@ -126,7 +126,7 @@ const (
 	MsgTypeGroupSettingResp = 79 // 下行：设置回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 73 刷新，面板据此提示）
 	MsgTypeGroupKick        = 80 // 上行：移出成员（content 为 JSON：{group_id, member:"u2"}，仅群主；不可移出自己）
 	MsgTypeGroupKickResp    = 81 // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}；成功后被踢者收 77 action=kick，其余成员收 73 刷新）
-	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群涉及转让/解散归二期）
+	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群出口：先转让（98）或解散（100））
 	MsgTypeGroupQuitResp    = 83 // 下行：退群回执（content 为 JSON：{ok, group_id, err?}；成功后退群者收 77 action=leave，其余成员收 73 刷新）
 
 	// ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，收尾 82/83 遗留的群主出口） =====

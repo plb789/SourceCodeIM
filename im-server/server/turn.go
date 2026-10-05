@@ -7,8 +7,9 @@ package server
 //   1. 必须部署在拥有公网 IP 的服务器上；防火墙/安全组放行 turn.port（UDP+TCP）与
 //      turn.min_port~turn.max_port（UDP，媒体中继端口段）
 //   2. config.yaml turn.enabled=false（默认）时整段不启动，零开销零回归
-//   3. 信令/话单/UI 链路零改动；客户端接入二期实现（RTCPeerConnection iceServers 填
-//      turn:<public_ip>:<port>，建议经 invite/accept 信令由服务端下发，凭证可按通话轮换）
+//   3. 信令/话单/UI 链路零改动；客户端接入已完成——1v1 通话（invite/accept 经 callInjectICE
+//      注入）、群会议（meet_invite/room_info 等）、文件 P2P 直传（probe/answer）、远程协助
+//      （rc_ok）均下发 iceServers，call-page.js 建连时填入 RTCPeerConnection.iceServers
 
 import (
 	"crypto/md5"
