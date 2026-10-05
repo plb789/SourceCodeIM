@@ -22453,7 +22453,10 @@
                 chatTitleAvatar.classList.remove('hidden');
                 var grpOwner = isGroupOwner(currentChatUser);
                 chatTitleAvatar.classList.toggle('owner', grpOwner);
-                chatTitleAvatar.title = grpOwner ? I18N.t('点击更换群头像') : I18N.t('群头像');
+                // 悬停提示走 tooltip.js 自绘气泡（data-tip-text 归口），严禁原生 title——
+                // title 会被 tooltip.js 首悬停摘除显示自绘气泡，但此处每次 updateChatTitle 动态重写，
+                // 原生黑气泡与自绘白气泡叠出双气泡（用户截图反馈）
+                chatTitleAvatar.setAttribute('data-tip-text', grpOwner ? I18N.t('点击更换群头像') : I18N.t('群头像'));
             }
         } else if (isAIAgent(currentChatUser)) {
             // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
