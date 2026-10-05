@@ -426,6 +426,18 @@ td .skel-line {
     width: 480px;
     max-width: calc(100vw - 40px);
 }
+
+/* 客户端更新上传弹窗表单项多（外链模式含 URL/校验和大输入框），单独加宽加高 */
+#av-upload-mask .admin-edit-box {
+    width: 860px;
+}
+#av-upload-mask .admin-edit-form {
+    max-height: 72vh;
+}
+/* 提示文案里的长命令（无空格 ASCII 串）不可断行会把表单撑出横向滚动，允许任意断行 */
+#av-upload-mask .admin-field-hint {
+    overflow-wrap: anywhere;
+}
 .admin-edit-form {
     max-height: 56vh;
     overflow-y: auto;

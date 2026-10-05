@@ -4991,7 +4991,7 @@
         $('av-upload-mask').classList.remove('hidden');
     });
     $('av-upload-cancel').addEventListener('click', function () { $('av-upload-mask').classList.add('hidden'); });
-    $('av-upload-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    // 注意：不绑遮罩点击关闭——表单项多，点空白误关会丢已填内容，只能经"取消"按钮关闭
     $('av-upload-ok').addEventListener('click', function () {
         var platform = $('av-up-platform').value;
         var version = $('av-up-version').value.trim();
