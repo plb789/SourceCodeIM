@@ -16,6 +16,7 @@ package server
 import (
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"math/big"
 	"net/http"
 	"regexp"
@@ -317,6 +318,7 @@ func RegisterRCRoutes(s *Server, cfg config.RCConfig) {
 	http.HandleFunc("POST /api/rc/device/static_pw", s.guardRC(s.handleRCStaticPW))
 	http.HandleFunc("POST /api/rc/device/refresh_code", s.guardRC(s.handleRCRefreshCode))
 	http.HandleFunc("GET /api/rc/records", s.guardRC(s.handleRCRecords))
+	http.HandleFunc("POST /api/rc/records/delete", s.guardRC(s.handleRCRecordsDelete))
 	// 阶段二百六十二：信任名单 / 自定义远程卡片 / 历史访问（一键直连配套）
 	http.HandleFunc("GET /api/rc/trust", s.guardRC(s.handleRCTrustList))
 	http.HandleFunc("POST /api/rc/trust/remove", s.guardRC(s.handleRCTrustRemove))
@@ -460,16 +462,32 @@ func (s *Server) handleRCRefreshCode(w http.ResponseWriter, r *http.Request) {
 	rcWriteJSON(w, map[string]interface{}{"dyn_code": code, "dyn_expire": dev.DynExpire.Unix()})
 }
 
-// handleRCRecords 远程控制历史话单 GET /api/rc/records?username=xxx
-// 仅 Mode=rc 话单（好友协助历史归 remote.go 旧链路），按时间倒序最多 200 条
+// handleRCRecords 控制记录（阶段二百六十三改分页）：mode=rc 且本人为发起方或对端的话单，
+// id 倒序。记录量增长后全量拉取卡顿，改 page/page_size（size 兜底 20 上限 50），返回
+// total/has_more 供客户端"加载更多"；行内含 id 供删除接口定位
 func (s *Server) handleRCRecords(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("username")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if size < 1 {
+		size = 20
+	}
+	if size > 50 {
+		size = 50
+	}
+	var total int64
+	store.DB.Model(&model.RemoteLog{}).
+		Where("mode = ? AND (requester = ? OR peer = ?)", "rc", username, username).Count(&total)
 	var logs []model.RemoteLog
 	store.DB.Where("mode = ? AND (requester = ? OR peer = ?)", "rc", username, username).
-		Order("id desc").Limit(200).Find(&logs)
+		Order("id desc").Limit(size).Offset((page - 1) * size).Find(&logs)
 	items := make([]map[string]interface{}, 0, len(logs))
 	for _, l := range logs {
 		items = append(items, map[string]interface{}{
+			"id":          l.ID,
 			"session_id":  l.SessionID,
 			"requester":   l.Requester,
 			"peer":        l.Peer,
@@ -479,7 +497,36 @@ func (s *Server) handleRCRecords(w http.ResponseWriter, r *http.Request) {
 			"create_time": l.CreateTime.Unix(),
 		})
 	}
-	rcWriteJSON(w, map[string]interface{}{"items": items})
+	rcWriteJSON(w, map[string]interface{}{"items": items, "total": total, "page": page, "has_more": int(total) > page*size})
+}
+
+// handleRCRecordsDelete 删除控制记录（阶段二百六十三）：RemoteLog 为会话双方共享行，
+// 归属校验"本人是发起方或对端"即可删（删即双方列表消失——保持话单表单薄，未引入按端
+// 隐藏标记表）；ids 批量上限 200，all=true 清空本人相关全部。行删除/清空的二次确认由
+// 客户端自绘完成（两次点击模式，项目规则禁用系统弹窗）
+func (s *Server) handleRCRecordsDelete(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	var body struct {
+		IDs []uint `json:"ids"`
+		All bool   `json:"all"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		driveFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if body.All {
+		store.DB.Where("mode = ? AND (requester = ? OR peer = ?)", "rc", username, username).Delete(&model.RemoteLog{})
+		logger.Info("远程控制记录清空：%s", username)
+	} else {
+		if len(body.IDs) == 0 || len(body.IDs) > 200 {
+			driveFail(w, http.StatusBadRequest, "参数错误")
+			return
+		}
+		store.DB.Where("mode = ? AND (requester = ? OR peer = ?) AND id IN ?",
+			"rc", username, username, body.IDs).Delete(&model.RemoteLog{})
+		logger.Info("远程控制记录删除：%s 删除 %d 条", username, len(body.IDs))
+	}
+	rcWriteJSON(w, map[string]interface{}{"ok": true})
 }
 
 // rcWriteJSON JSON 响应归口（成功帧统一 ok:true）

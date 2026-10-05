@@ -114,7 +114,7 @@
         if (name !== 'mine' && name !== 'home' && codeTimer) { clearInterval(codeTimer); codeTimer = 0; }
         if (name === 'mine') { loadMine(); loadCardsInto(cardsSec); loadVisitsInto(visitsSec); }
         else if (name === 'home') { loadHome(); loadCardsInto(homeCards); loadVisitsInto(homeVisits); }
-        else if (name === 'records') loadRecords();
+        else if (name === 'records') loadRecords(true);
     }
 
     // ===== 我的电脑（PC：先注册本机再列全部；非 PC：仅列表） =====
@@ -446,25 +446,132 @@
         function p(n) { return n < 10 ? '0' + n : '' + n; }
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     }
-    function loadRecords() {
-        recordsList.innerHTML = '';
-        apiGet('records', function (err, data) {
-            if (err) { recordsEmpty.textContent = err.message; recordsEmpty.classList.remove('hidden'); return; }
-            var items = (data && data.items) || [];
-            if (!items.length) { recordsEmpty.textContent = T('暂无数据'); recordsEmpty.classList.remove('hidden'); return; }
-            recordsEmpty.classList.add('hidden');
-            items.forEach(function (r) {
-                var row = document.createElement('div');
-                row.className = 'rc-record-row';
-                var role = r.requester === u() ? T('我控制') : T('对方控制');
-                var who = r.requester === u() ? (r.device_id || r.peer) : r.requester;
-                row.innerHTML =
-                    '<span class="rc-record-time">' + fmtTime(r.create_time) + '</span>' +
-                    '<span class="rc-record-main">' + role + ' ' + esc(who) + '</span>' +
-                    '<span class="rc-record-dur">' + fmtDur(r.duration) + '</span>' +
-                    '<span class="rc-record-status st-' + esc(r.status) + '">' + TR(RC_STATUS[r.status] || r.status) + '</span>';
-                recordsList.appendChild(row);
+    // ===== 控制记录（阶段二百六十三：骨架屏 + 分页加载 + 行删除/清空） =====
+    // 分页状态：服务端 page/page_size 归口，客户端累积渲染 + "加载更多"；刷新/切页重置第 1 页
+    var recordsPage = 0, recordsMore = false, recordsBusy = false, recordsTotal = 0;
+    // 骨架屏：请求期间渲染 6 行 shimmer 占位（结构对齐真实行，四段灰条模拟时间/主体/时长/状态，
+    // sweep 高光动画走 CSS 变量随主题深浅自适应）
+    function renderRecordSkeleton() {
+        var wrap = document.createElement('div');
+        wrap.className = 'rc-rec-skel-wrap';
+        for (var i = 0; i < 6; i++) {
+            var sk = document.createElement('div');
+            sk.className = 'rc-record-row rc-rec-skel';
+            sk.innerHTML = '<span class="sk-bar sk-w1"></span><span class="sk-bar sk-w2"></span>' +
+                '<span class="sk-bar sk-w3"></span><span class="sk-bar sk-w4"></span>';
+            wrap.appendChild(sk);
+        }
+        recordsList.appendChild(wrap);
+    }
+    function removeSkeleton() {
+        var sk = recordsList.querySelector('.rc-rec-skel-wrap');
+        if (sk && sk.parentNode) sk.parentNode.removeChild(sk);
+    }
+    // 二次确认归口（项目规则禁系统弹窗，自绘两次点击模式）：首次点击变红显示确认文案，
+    // 3s 内再点执行，超时自动恢复；定时器挂在按钮上互不干扰
+    function armConfirm(btn, text, fn) {
+        if (btn.classList.contains('confirm')) { disarmConfirm(btn); fn(); return; }
+        btn.classList.add('confirm');
+        btn.dataset.prev = btn.textContent;
+        btn.textContent = text;
+        btn._ct = setTimeout(function () { disarmConfirm(btn); }, 3000);
+    }
+    function disarmConfirm(btn) {
+        if (btn._ct) { clearTimeout(btn._ct); btn._ct = 0; }
+        btn.classList.remove('confirm');
+        if (btn.dataset.prev != null) btn.textContent = btn.dataset.prev;
+    }
+    function appendRecordRow(r) {
+        var row = document.createElement('div');
+        row.className = 'rc-record-row';
+        var role = r.requester === u() ? T('我控制') : T('对方控制');
+        var who = r.requester === u() ? (r.device_id || r.peer) : r.requester;
+        row.innerHTML =
+            '<span class="rc-record-time">' + fmtTime(r.create_time) + '</span>' +
+            '<span class="rc-record-main">' + role + ' ' + esc(who) + '</span>' +
+            '<span class="rc-record-dur">' + fmtDur(r.duration) + '</span>' +
+            '<span class="rc-record-status st-' + esc(r.status) + '">' + TR(RC_STATUS[r.status] || r.status) + '</span>' +
+            '<button class="rc-rec-del" data-id="' + Number(r.id) + '" title="' + T('删除') + '">✕</button>';
+        row.querySelector('.rc-rec-del').addEventListener('click', function () {
+            var btn = this;
+            armConfirm(btn, T('确认'), function () {
+                apiPost('records/delete', { ids: [Number(btn.getAttribute('data-id'))] }, function (err) {
+                    if (err) { toast(err.message); return; }
+                    if (row.parentNode) row.parentNode.removeChild(row);
+                    if (recordsTotal > 0) recordsTotal--;
+                    renderRecordsFoot();
+                    toast(T('已删除'));
+                });
             });
+        });
+        recordsList.appendChild(row);
+    }
+    // 底部区：加载更多（has_more）/ 已全部加载提示 + 清空记录（有记录时显示）
+    function renderRecordsFoot() {
+        var old = document.getElementById('rc-records-foot');
+        if (old) old.parentNode.removeChild(old);
+        var foot = document.createElement('div');
+        foot.id = 'rc-records-foot';
+        foot.className = 'rc-records-foot';
+        if (recordsMore) {
+            var more = document.createElement('button');
+            more.className = 'rc-load-more';
+            more.textContent = T('加载更多');
+            more.addEventListener('click', function () { loadRecords(false); });
+            foot.appendChild(more);
+        } else if (recordsTotal > 0) {
+            var done = document.createElement('span');
+            done.className = 'rc-rec-foot-tip';
+            done.textContent = T('已全部加载');
+            foot.appendChild(done);
+        }
+        if (recordsTotal > 0) {
+            var clear = document.createElement('button');
+            clear.className = 'rc-rec-clear';
+            clear.textContent = T('清空记录');
+            clear.addEventListener('click', function () {
+                armConfirm(clear, T('确认清空'), function () {
+                    apiPost('records/delete', { all: true }, function (err) {
+                        if (err) { toast(err.message); return; }
+                        recordsPage = 0; recordsMore = false; recordsTotal = 0;
+                        recordsList.innerHTML = '';
+                        renderRecordsFoot();
+                        toast(T('记录已清空'));
+                    });
+                });
+            });
+            foot.appendChild(clear);
+        }
+        if (foot.childNodes.length) recordsList.parentNode.appendChild(foot);
+    }
+    function loadRecords(reset) {
+        if (recordsBusy) return;
+        if (reset || !recordsPage) { recordsPage = 1; recordsList.innerHTML = ''; }
+        else { recordsPage++; }
+        recordsBusy = true;
+        recordsEmpty.classList.add('hidden');
+        renderRecordSkeleton();
+        apiGet('records?page=' + recordsPage + '&page_size=20', function (err, data) {
+            recordsBusy = false;
+            removeSkeleton();
+            if (err) {
+                // 首页失败显示空态文案；翻页失败 toast 提示并回退页码，下次重试本页
+                if (recordsPage <= 1) { recordsPage = 0; recordsEmpty.textContent = err.message; recordsEmpty.classList.remove('hidden'); }
+                else { recordsPage--; toast(err.message); }
+                return;
+            }
+            var items = (data && data.items) || [];
+            recordsTotal = (data && data.total) || 0;
+            recordsMore = !!(data && data.has_more);
+            if (recordsPage === 1 && !items.length) {
+                recordsEmpty.textContent = T('暂无数据');
+                recordsEmpty.classList.remove('hidden');
+                renderRecordsFoot();
+                return;
+            }
+            recordsEmpty.classList.add('hidden');
+            items.forEach(appendRecordRow);
+            renderRecordsFoot();
         });
     }
 
@@ -664,7 +771,7 @@
     });
     refreshBtn.addEventListener('click', function () {
         if (curPage === 'mine') { loadMine(); loadCardsInto(cardsSec); loadVisitsInto(visitsSec); }
-        else if (curPage === 'records') loadRecords();
+        else if (curPage === 'records') loadRecords(true);
     });
     connectBtn.addEventListener('click', doConnect);
     [inDevice, inCode].forEach(function (inp) {

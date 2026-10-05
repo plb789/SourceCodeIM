@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.56">
+    <link rel="stylesheet" href="/css/style.css?v=3.57">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -2461,7 +2461,7 @@
     <script src="/js/drive.js?v=2.31"></script>
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
-    <script src="/js/rc-panel.js?v=1.1"></script>
+    <script src="/js/rc-panel.js?v=1.2"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
     <script src="/js/rc-mobile-view.js?v=1.1"></script>
