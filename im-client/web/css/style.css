@@ -2377,6 +2377,71 @@ html.m .mobile-plus-panel:not(.hidden) {
     display: block;
 }
 
+/* ===== 阶段二百六十六：微信同款群头像（无群头像降级成员头像九宫格拼格） ===== */
+/* 网格容器：分割线色打底 + 1px 缝（微信同款观感）；列数 1/2/2/3 由 JS 按成员数注入 grid-template-columns */
+.grp-avatar-grid {
+    display: grid;
+    gap: 1px;
+    padding: 1px;
+    box-sizing: border-box;
+    background: var(--divider);
+    border-radius: inherit;
+}
+
+.grp-avatar-grid img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 0;
+}
+
+/* 无头像成员的首字母占位格（跟随主题色弱化显示） */
+.grp-avatar-grid .grp-avatar-ph {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-size: 10px;
+    color: var(--text-light);
+    background: var(--bg);
+    overflow: hidden;
+}
+
+/* 九宫格填充容器（grp-avatar-fill）：占满外层槽位（标题栏头像/通讯录群条目槽），网格布局归 grp-avatar-grid */
+.grp-avatar-grid.grp-avatar-fill {
+    width: 100%;
+    height: 100%;
+}
+
+/* ===== 阶段二百六十六：聊天标题栏群头像（群名前 28px 圆角方形，微信同款） ===== */
+.chat-title-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+/* 群主可点击更换：手型光标 + 悬浮微亮反馈 */
+.chat-title-avatar.owner {
+    cursor: pointer;
+}
+
+.chat-title-avatar.owner:hover {
+    filter: brightness(1.15);
+}
+
+/* 通讯录群条目头像槽：继承 .user-item .avatar 30px 尺寸，圆形容器与好友头像一致 */
+.grp-avatar-slot {
+    display: block;
+    overflow: hidden;
+}
+
 .conv-main {
     flex: 1;
     min-width: 0;
@@ -11523,6 +11588,8 @@ html.m #friend-menu {
     margin-bottom: 6px;
 }
 
+/* ===== 阶段二百六十六：群设置面板群头像区（已移除——头像入口迁至聊天标题栏群名前） ===== */
+
 .gset-row {
     display: flex;
     align-items: flex-start;
@@ -11620,11 +11687,6 @@ html.m #friend-menu {
 
 .gset-quit-btn:hover {
     opacity: 0.85;
-}
-
-.gset-quit-tip {
-    font-size: 12px;
-    color: var(--text-light);
 }
 
 /* 空公告弱化显示（与有内容区分） */

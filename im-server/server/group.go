@@ -256,10 +256,10 @@ func (s *Server) notifyGroupListSync(usernames []string) {
 // groupMemberNoticePayload 77 成员变更通知载荷
 type groupMemberNoticePayload struct {
 	GroupID     uint              `json:"group_id"`
-	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）/ kick=被移出群聊 / leave=已退出群聊（阶段一百四十三）
-	Users       []GroupMemberInfo `json:"users,omitempty"` // action=join 时为新成员；action=reject 时为被拒绝对象
+	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）/ kick=被移出群聊 / leave=已退出群聊（阶段一百四十三）/ transfer=群主已转让（阶段二百六十四，users=新群主）/ dissolve=群聊已解散（阶段二百六十四，带群名）
+	Users       []GroupMemberInfo `json:"users,omitempty"` // action=join 时为新成员；action=reject 时为被拒绝对象；action=transfer 时为新群主
 	MemberCount int               `json:"member_count"`
-	Name        string            `json:"name,omitempty"` // 阶段一百四十三：群名（kick/leave 提示语归口服务端下发，避免前端离线期数据缺失）
+	Name        string            `json:"name,omitempty"` // 阶段一百四十三：群名（kick/leave/dissolve 提示语归口服务端下发，避免前端离线期数据缺失）
 }
 
 // pushGroupMemberNotice 向成员集合推送 77 成员变更通知
@@ -381,8 +381,10 @@ type groupInvitePayload struct {
 	Members []string `json:"members"`
 }
 
-// handleGroupInvite 处理邀请入群（一期仅群主可邀请）：校验成员身份/被邀请人非成员/在途邀请去重 →
-// 写 im_group_invite(Status=0) → 被邀请人在线推 75；离线由登录补推兜底（与好友申请同款，不入离线队列防重复）
+// handleGroupInvite 处理邀请入群（阶段二百六十五：全员可邀请，原一期仅群主）：邀请人须为群成员（服务端归口校验）→
+// 校验被邀请人非成员/无在途邀请 → 写 im_group_invite(Status=0，FromUser=实际邀请人) →
+// 被邀请人在线推 75；离线由登录补推兜底（与好友申请同款，不入离线队列防重复）；
+// 拒绝回执（77 reject）天然推给实际邀请人，群主/普通成员链路同构
 func (s *Server) handleGroupInvite(c *Client, msg *protocol.Message) {
 	var payload groupInvitePayload
 	if err := json.Unmarshal([]byte(msg.Content), &payload); err != nil {
@@ -398,9 +400,9 @@ func (s *Server) handleGroupInvite(c *Client, msg *protocol.Message) {
 		s.sendError(c, "群不存在")
 		return
 	}
-	// 一期仅群主可邀请（二期扩展管理员）
-	if group.OwnerID != c.username {
-		s.sendError(c, "仅群主可以邀请成员")
+	// 阶段二百六十五：全员可邀请——邀请人须为本群成员（服务端归口，防非成员/已退群者发起）
+	if !isGroupMember(group.ID, c.username) {
+		s.sendError(c, "你不是该群成员，无法邀请")
 		return
 	}
 
@@ -744,7 +746,7 @@ func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 		return
 	}
 	if group.OwnerID == c.username {
-		s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, false, "群主暂不支持退出群聊（转让/解散功能规划中）")
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, false, "群主不可直接退出群聊，请先转让群主或解散群聊")
 		return
 	}
 	res := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, c.username).Delete(&model.GroupMember{})
@@ -766,6 +768,123 @@ func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 	})
 	s.notifyGroupListSync(getGroupMemberIDs(p.GroupID))
 	s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, true, "")
+}
+
+// ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，收尾 82/83 遗留的群主出口） =====
+
+// groupTransferPayload 98 转让群主载荷
+type groupTransferPayload struct {
+	GroupID uint   `json:"group_id"`
+	To      string `json:"to"`
+}
+
+// handleGroupTransfer 处理群主转让（98，仅群主）：校验目标为在群成员且非自己 →
+// 群主字段与成员角色同步翻转（新群主 Role=1、原群主降为 Role=2）→ 名单缓存失效 →
+// 回执 99 + 全员 77 action=transfer（users=新群主，提示归口）+ 全员 73 全量同步归口
+// （owner/角色随 73 刷新，前端群管理入口/邀请按钮/退出按钮显隐自动归位）
+func (s *Server) handleGroupTransfer(c *Client, msg *protocol.Message) {
+	var p groupTransferPayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	p.To = strings.TrimSpace(p.To)
+	if p.To == "" {
+		s.sendError(c, "请选择新群主")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID != c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupTransferResp, p.GroupID, false, "仅群主可转让群主")
+		return
+	}
+	if p.To == c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupTransferResp, p.GroupID, false, "不能转让给自己")
+		return
+	}
+	if !isGroupMember(p.GroupID, p.To) {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupTransferResp, p.GroupID, false, "该用户不是群成员")
+		return
+	}
+	// 群主字段写库（角色翻转紧随其后；任一写库失败即回执失败，下次转让可重试归位）
+	if err := store.DB.Model(&model.Group{}).Where("id = ?", p.GroupID).Update("owner_id", p.To).Error; err != nil {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupTransferResp, p.GroupID, false, "转让失败，请稍后重试")
+		logger.Error("群主转让写库失败：群 %d %v", p.GroupID, err)
+		return
+	}
+	store.DB.Model(&model.GroupMember{}).Where("group_id = ? AND user_id = ?", p.GroupID, p.To).Update("role", 1)
+	store.DB.Model(&model.GroupMember{}).Where("group_id = ? AND user_id = ?", p.GroupID, c.username).Update("role", 2)
+	invalidateGroupMembersCache(p.GroupID) // E6：角色翻转，名单（含 role 排序）即时失效（本实例 + 集群）
+	logger.Info("群主转让：群 %d「%s」群主 %s → %s", p.GroupID, group.Name, c.username, p.To)
+
+	// 全员 77 transfer（users=新群主，前端提示归口）+ 73 全量同步（owner/角色归口刷新）
+	memberIDs := getGroupMemberIDs(p.GroupID)
+	s.pushGroupMemberNotice(memberIDs, groupMemberNoticePayload{
+		GroupID:     p.GroupID,
+		Action:      "transfer",
+		Users:       []GroupMemberInfo{{Username: p.To, Name: nicknameOf(p.To), Role: 1}},
+		MemberCount: len(memberIDs),
+	})
+	s.notifyGroupListSync(memberIDs)
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupTransferResp, p.GroupID, true, "")
+}
+
+// groupDissolvePayload 100 解散群聊载荷
+type groupDissolvePayload struct {
+	GroupID uint `json:"group_id"`
+}
+
+// handleGroupDissolve 处理解散群聊（100，仅群主）：全员会话行删除（含删除水位防摘要 flush 复活）→
+// 在途邀请清理（防登录补推死邀请）→ 成员行/群行删除 + 名单缓存失效 →
+// 回执 101 + 全员 77 action=dissolve（带群名，客户端清会话并提示）。
+// 群历史消息行保留（与被踢/退群同口径：仅删会话入口，不物理清消息）
+func (s *Server) handleGroupDissolve(c *Client, msg *protocol.Message) {
+	var p groupDissolvePayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID != c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupDissolveResp, p.GroupID, false, "仅群主可解散群聊")
+		return
+	}
+
+	target := groupTargetOf(p.GroupID)
+	memberIDs := getGroupMemberIDs(p.GroupID)
+	// 全员会话行删除 + 逐成员删除水位（E8：与被踢/退群同语义——摘要标脏晚于删除帧到达时，
+	// 靠水位拦截删除前历史摘要写回，防删行后被 flush 复活）
+	for _, name := range memberIDs {
+		touchDiscardWatermarked(name, target, convMaxMsgID(name, target))
+	}
+	store.DB.Where("target = ?", target).Delete(&model.Conversation{})
+	// 在途邀请清理（Status=0）：pushPendingGroupInvites 虽有群缺位兜底，归口直清更干净
+	store.DB.Where("group_id = ? AND status = 0", p.GroupID).Delete(&model.GroupInvite{})
+	// 成员行 + 群行删除
+	store.DB.Where("group_id = ?", p.GroupID).Delete(&model.GroupMember{})
+	if err := store.DB.Delete(&model.Group{}, p.GroupID).Error; err != nil {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupDissolveResp, p.GroupID, false, "解散失败，请稍后重试")
+		logger.Error("群解散写库失败：群 %d %v", p.GroupID, err)
+		return
+	}
+	invalidateGroupMembersCache(p.GroupID) // E6：群已解散，名单即时失效（本实例 + 集群）
+	logger.Info("解散群聊：群 %d「%s」群主 %s 解散，成员 %v 会话清理完成", p.GroupID, group.Name, c.username, memberIDs)
+
+	// 全员 77 dissolve（带群名，客户端清会话并提示；含操作者多端同步）
+	s.pushGroupMemberNotice(memberIDs, groupMemberNoticePayload{
+		GroupID: p.GroupID,
+		Action:  "dissolve",
+		Name:    group.Name,
+	})
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupDissolveResp, p.GroupID, true, "")
 }
 
 // handleMultiGroupChat 阶段一百四十二：多群聊消息广播并持久化（to_user='gN'，由 handleGroupChat 开头分流进入；

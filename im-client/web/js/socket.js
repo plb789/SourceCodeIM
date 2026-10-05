@@ -273,10 +273,10 @@
         GROUP_CREATE: 71,        // 上行：建群（content 为 JSON：{name, members:["u1","u2"]}，成员选自好友）
         GROUP_CREATE_RESP: 72,   // 下行：建群回执（content 为 JSON：{group_id, name, members, create_time}；群信息本体以 73 全量同步归口）
         GROUP_LIST_SYNC: 73,     // 下行：群列表全量同步（content 为 JSON：{groups:[{group_id,name,avatar,owner,member_count,members,create_time}]}；登录+变更推送，前端维护 groupMap）
-        GROUP_INVITE: 74,        // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，仅群主可邀请）
+        GROUP_INVITE: 74,        // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，阶段二百六十五：全员可邀请，邀请人须为群成员）
         GROUP_INVITE_NOTICE: 75, // 下行：群邀请通知（被邀请人收，content 为 JSON：{invite_id, group_id, name, from_user, from_name, member_count}；离线登录补推同帧）
         GROUP_INVITE_RESP: 76,   // 上行：邀请响应（content 为 JSON：{invite_id, accept:true/false}）
-        GROUP_MEMBER_NOTICE: 77, // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join"/"reject"/"kick"/"leave", users, member_count, name}；join 同时作邀请人同意回执，reject 仅邀请人收；kick/leave 为被移出/退群者收，阶段一百四十三）
+        GROUP_MEMBER_NOTICE: 77, // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join"/"reject"/"kick"/"leave"/"transfer"/"dissolve", users, member_count, name}；join 同时作邀请人同意回执，reject 仅邀请人收；kick/leave 为被移出/退群者收，阶段一百四十三；transfer=群主已转让（users=新群主）/dissolve=群聊已解散，阶段二百六十四）
         // ===== 阶段一百四十三：群设置面板信令（数据变更统一以 73 全量同步归口，回执仅作结果提示） =====
         GROUP_SETTING: 78,       // 上行：修改群设置（content 为 JSON：{group_id, name?, announce?}，仅群主）
         GROUP_SETTING_RESP: 79,  // 下行：设置回执（content 为 JSON：{ok, group_id, err?}）
@@ -284,6 +284,11 @@
         GROUP_KICK_RESP: 81,     // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}）
         GROUP_QUIT: 82,          // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退）
         GROUP_QUIT_RESP: 83,     // 下行：退群回执（content 为 JSON：{ok, group_id, err?}）
+        // ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，数据变更统一以 73 全量同步归口） =====
+        GROUP_TRANSFER: 98,      // 上行：转让群主（content 为 JSON：{group_id, to:"u2"}，仅群主；目标须为在群成员且非自己）
+        GROUP_TRANSFER_RESP: 99, // 下行：转让回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 transfer + 73 归位）
+        GROUP_DISSOLVE: 100,     // 上行：解散群聊（content 为 JSON：{group_id}，仅群主）
+        GROUP_DISSOLVE_RESP: 101,// 下行：解散回执（content 为 JSON：{ok, group_id, err?}；成功后全员收 77 dissolve 清会话）
         ANNOUNCEMENT_PUSH: 84,   // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
         REGISTER: 85,            // 阶段一四五：独立注册页注册信令（双向同类型，上行注册请求；下行 content="ok" 或错误提示）
         // ===== 阶段一百五十四：积分红包（微信同款，金额计算/拆分/扣减/退回全部服务端归口） =====

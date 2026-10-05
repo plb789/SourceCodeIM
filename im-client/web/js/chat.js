@@ -18715,6 +18715,58 @@
     }
 
 
+    // ===== 阶段二百六十六：微信同款群头像归口（有群头像显示单图；无群头像降级成员头像九宫格拼格） =====
+    // 布局同微信：1人单图 / 2人两格 / 3-4人田字 / 5-9人九宫格；成员头像经 getAvatarUrl 归口解析
+    //（自己/好友/在线表），无头像成员降级首字母占位；失效图 onError 降级占位防破图。
+    // baseCls 控制外层尺寸类（会话列表 conv-avatar 40px / 面板 grp-avatar-fill 100% 填充外壳）
+    function buildGroupAvatarEl(g, baseCls) {
+        var box = document.createElement('div');
+        box.className = (baseCls ? baseCls + ' ' : '') + 'grp-avatar-grid';
+        if (g && g.avatar) {
+            var img = document.createElement('img');
+            img.src = g.avatar;
+            img.alt = '';
+            // 群头像文件失效（文件被清理/路径变更）时降级九宫格拼格，避免破图
+            img.addEventListener('error', function () {
+                img.remove();
+                fillGrid();
+            });
+            box.appendChild(img);
+            return box;
+        }
+        fillGrid();
+        return box;
+
+        function fillGrid() {
+            var ms = (g && g.members ? g.members : []).slice(0, 9);
+            var n = ms.length;
+            if (!n) { box.textContent = I18N.t('群'); return; }
+            var cols = n <= 2 ? n : (n <= 4 ? 2 : 3);
+            box.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+            ms.forEach(function (m) {
+                var u = m.username || m;
+                var url = m.avatar || getAvatarUrl(u) || '';
+                var cell;
+                if (url) {
+                    cell = document.createElement('img');
+                    cell.src = url;
+                    cell.alt = '';
+                    cell.addEventListener('error', function () {
+                        var ph = document.createElement('div');
+                        ph.className = 'grp-avatar-ph';
+                        ph.textContent = (m.name || u).charAt(0).toUpperCase();
+                        cell.replaceWith(ph);
+                    });
+                } else {
+                    cell = document.createElement('div');
+                    cell.className = 'grp-avatar-ph';
+                    cell.textContent = (m.name || u).charAt(0).toUpperCase();
+                }
+                box.appendChild(cell);
+            });
+        }
+    }
+
     function renderConvList() {
         // 阶段二十三：微信风格导航栏聊天图标未读角标（服务端归口，与会话列表同源汇总）
         var navBadge = document.getElementById('nav-chat-badge');
@@ -18741,7 +18793,16 @@
         // 阶段一百零五：签名比对防闪烁——每条消息/CONV_LIST 推送都会调本函数，
         // 数据无变化时跳过清空重建（原实现每次 innerHTML='' 全量重建，连续消息/群聊场景
         // 会话列表反复闪烁、头像重载、悬停态丢失；签名含 高亮会话+列表全字段+好友备注头像）
-        var convSig = JSON.stringify([currentChatUser, convList, friendList]);
+        // 阶段二百六十六：签名纳入群头像/成员头像轻量指纹——群头像上传（73 刷新）或成员头像
+        // 变更后群头像九宫格即时重绘；只取 avatar 字段避免全量 groupMap 序列化开销
+        var grpAvSig = '';
+        for (var sigGid in groupMap) {
+            var sigG = groupMap[sigGid];
+            grpAvSig += sigGid + ':' + (sigG.avatar || '') + ':';
+            (sigG.members || []).forEach(function (sigM) { grpAvSig += (sigM.avatar || '') + ','; });
+            grpAvSig += ';';
+        }
+        var convSig = JSON.stringify([currentChatUser, convList, friendList, grpAvSig]);
         if (convSig === renderConvList._sig) return;
         renderConvList._sig = convSig;
         convListEl.innerHTML = '';
@@ -18769,27 +18830,30 @@
             if (currentChatUser === cv.target) li.classList.add('active');
             li.setAttribute('data-user', cv.target);
 
-            // 会话头像：有头像显示图片（失效降级首字母），无头像显示首字母占位，群聊显示"群"字
-            // 原实现：avatar.textContent = convName.charAt(0).toUpperCase(); 会话头像一律首字母占位，从不显示真实头像
-            // avatar.textContent = convName.charAt(0).toUpperCase();
+            // 会话头像：好友/AI 走头像或占位；群聊走微信同款归口（阶段二百六十六：有群头像显示单图，
+            // 无群头像降级成员头像九宫格拼格，失效均 onError 防破图）
             var avatarUrl = isGroup ? '' : getAvatarUrl(cv.target);
-            var avatar = document.createElement('div');
-            avatar.className = 'conv-avatar';
-            // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
-            // 阶段一百四十二：多群会话无头像时回退"群"字占位（旧全局群仍走 convName 首字）
-            var avatarFallback = !isGroup && isAIAgent(cv.target) ? '🤖' : (isGroup && cv.target !== '' ? I18N.t('群') : convName.charAt(0).toUpperCase());
-            if (avatarUrl) {
-                var avatarImg = document.createElement('img');
-                avatarImg.src = avatarUrl;
-                avatarImg.alt = '';
-                // 头像文件失效（文件被清理/路径变更）时降级占位，避免破图
-                avatarImg.addEventListener('error', function () {
-                    avatarImg.remove();
-                    avatar.textContent = avatarFallback;
-                });
-                avatar.appendChild(avatarImg);
+            var avatar;
+            if (isGroup) {
+                avatar = buildGroupAvatarEl(groupOfId(groupIdFromTarget(cv.target)), 'conv-avatar');
             } else {
-                avatar.textContent = avatarFallback;
+                avatar = document.createElement('div');
+                avatar.className = 'conv-avatar';
+                // 阶段四十三：AI 智能体无配置头像时回退 🤖 占位（与 AI 列表口径一致，原实现降级首字母不一致）
+                var avatarFallback = isAIAgent(cv.target) ? '🤖' : convName.charAt(0).toUpperCase();
+                if (avatarUrl) {
+                    var avatarImg = document.createElement('img');
+                    avatarImg.src = avatarUrl;
+                    avatarImg.alt = '';
+                    // 头像文件失效（文件被清理/路径变更）时降级占位，避免破图
+                    avatarImg.addEventListener('error', function () {
+                        avatarImg.remove();
+                        avatar.textContent = avatarFallback;
+                    });
+                    avatar.appendChild(avatarImg);
+                } else {
+                    avatar.textContent = avatarFallback;
+                }
             }
 
             var main = document.createElement('div');
@@ -19142,6 +19206,15 @@
         } else if (data.action === 'leave') {
             // 阶段一百四十三：自己退群成功的清理通知
             removeGroupLocal(data.group_id, I18N.t('已退出群聊「') + (data.name || I18N.t('群聊')) + '」');
+        } else if (data.action === 'transfer') {
+            // 阶段二百六十四：群主已转让——全员提示（新群主本人特殊文案）；owner/角色归位由 73 全量同步归口
+            var nu = (data.users && data.users[0]) || null;
+            if (nu) {
+                showToast(nu.username === IMSocket.getUsername() ? I18N.t('你已成为群主') : ((nu.name || nu.username) + I18N.t(' 已成为新群主')));
+            }
+        } else if (data.action === 'dissolve') {
+            // 阶段二百六十四：群聊已解散——全员本地清理归口（与被踢同路径）
+            removeGroupLocal(data.group_id, I18N.t('群聊「') + (data.name || I18N.t('群聊')) + I18N.t('」已解散'));
         }
         if (data.invite_id) {
             var remain = groupInvites.filter(function (x) { return x.invite_id !== data.invite_id; });
@@ -19170,7 +19243,8 @@
     var gsetAnnounceEditRow = document.getElementById('gset-announce-edit-row');
     var gsetAnnounceInput = document.getElementById('gset-announce-input');
     var gsetQuit = document.getElementById('gset-quit');
-    var gsetQuitTip = document.getElementById('gset-quit-tip');
+    var gsetTransfer = document.getElementById('gset-transfer'); // 阶段二百六十四：群主转让入口（仅群主可见）
+    var gsetDissolve = document.getElementById('gset-dissolve'); // 阶段二百六十四：解散群聊入口（仅群主可见）
     var gsetGroupID = 0; // 当前面板打开的群 ID
 
     // 被移出/退群后的本地清理归口（77 kick/leave）：删 groupMap 条目与本地会话缓存，
@@ -19225,10 +19299,12 @@
         gsetName.textContent = g.name || I18N.t('群聊');
         gsetAnnounce.textContent = g.announce || I18N.t('暂无群公告');
         gsetAnnounce.classList.toggle('gset-empty-announce', !g.announce);
-        // 管理入口显隐（仅群主）
+        // 阶段二百六十六调整：群头像入口移至聊天标题栏（群名前显示，群主点击更换），面板内不再重复展示
+        // 管理入口显隐（仅群主：转让/解散归群主，阶段二百六十四；退出按钮归普通成员）
         gsetNameEditBtn.classList.toggle('hidden', !owner);
         gsetAnnounceBtn.classList.toggle('hidden', !owner);
-        gsetQuitTip.classList.toggle('hidden', !owner);
+        gsetTransfer.classList.toggle('hidden', !owner);
+        gsetDissolve.classList.toggle('hidden', !owner);
         gsetQuit.classList.toggle('hidden', owner);
         // 成员网格（群主排前；搜索按昵称/账号过滤）
         var members = (g.members || []).slice();
@@ -19267,8 +19343,8 @@
             });
             gsetMembersEl.appendChild(cell);
         });
-        // 群主"添加"格子 → 复用邀请成员弹窗（过滤已在群成员）
-        if (owner) {
+        // "添加"格子（阶段二百六十五：全员可邀请，原一期仅群主）→ 复用邀请成员弹窗（过滤已在群成员）
+        {
             var add = document.createElement('div');
             add.className = 'gset-add';
             add.title = I18N.t('添加成员');
@@ -19329,6 +19405,54 @@
         }, I18N.t('退出'));
     });
 
+    // 转让群主（群主，阶段二百六十四）：微信同款选人弹窗（transfer 模式：候选=群内成员除自己，单选），
+    // 完成后自绘确认弹窗发 98；成功路径 owner/角色归位由 73 全量同步归口
+    gsetTransfer.addEventListener('click', function () {
+        var g = groupOfId(gsetGroupID);
+        if (!g) return;
+        openGroupPicker('transfer', gsetGroupID);
+    });
+
+    // 解散群聊（群主，阶段二百六十四）：自绘确认弹窗（微信同款二次确认）后发 100；
+    // 成功路径全员清理由 77 dissolve 归口
+    gsetDissolve.addEventListener('click', function () {
+        var g = groupOfId(gsetGroupID);
+        if (!g) return;
+        showConfirm(I18N.t('解散群聊'), I18N.t('解散后所有成员将被移出群聊，且不可恢复。确定解散群聊「') + (g.name || I18N.t('群聊')) + '」？', function () {
+            IMSocket.send({ msg_type: MSG.GROUP_DISSOLVE, content: JSON.stringify({ group_id: gsetGroupID }) });
+        }, I18N.t('解散'));
+    });
+
+    // ===== 阶段二百六十六：群头像上传（群主，微信同款点击聊天标题栏群名前头像更换） =====
+    // 点击标题栏头像 → 文件选择 → POST /upload/group-avatar（服务端归口校验群主身份）；
+    // 成功后服务端全员 73 全量同步，标题栏/会话列表/通讯录单图与九宫格自动归位
+    var grpAvatarFile = document.getElementById('group-avatar-file');
+    var chatTitleAvatar = document.getElementById('chat-title-avatar');
+    if (grpAvatarFile && chatTitleAvatar) {
+        chatTitleAvatar.addEventListener('click', function () {
+            if (!isGroupTarget(currentChatUser) || !isGroupOwner(currentChatUser)) return; // 仅群会话群主可更换
+            grpAvatarFile.click();
+        });
+        grpAvatarFile.addEventListener('change', function () {
+            var file = grpAvatarFile.files[0];
+            if (!file) return;
+            var gid = groupIdFromTarget(currentChatUser);
+            if (!gid) { grpAvatarFile.value = ''; return; }
+            var formData = new FormData();
+            formData.append('avatar', file);
+            fetch('/upload/group-avatar?group_id=' + gid + '&username=' + encodeURIComponent(IMSocket.getUsername()), {
+                method: 'POST', body: formData
+            }).then(function (r) {
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || '上传失败'); });
+                return r.json();
+            }).then(function (data) {
+                if (data.avatar) showToast(I18N.t('群头像已更新'));
+                else showToast(I18N.t('群头像上传失败'));
+            }).catch(function (e) { showToast(e.message || I18N.t('群头像上传失败')); });
+            grpAvatarFile.value = '';
+        });
+    }
+
     // 成员搜索过滤
     gsetMSearch.addEventListener('input', renderGroupSetting);
 
@@ -19369,6 +19493,22 @@
         if (!data.ok) showToast(data.err || I18N.t('操作失败'));
     });
 
+    // 99 转让回执（仅失败提示；成功提示归口 77 transfer，owner/角色归位由 73 全量同步归口）
+    IMSocket.on(MSG.GROUP_TRANSFER_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (!data.ok) showToast(data.err || I18N.t('操作失败'));
+    });
+
+    // 101 解散回执（仅失败提示；成功清理由 77 dissolve 归口）
+    IMSocket.on(MSG.GROUP_DISSOLVE_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (!data.ok) showToast(data.err || I18N.t('操作失败'));
+    });
+
     // 群会话标题点击 → 打开群设置面板（微信同款点群名进设置）
     chatTitle.addEventListener('click', function () {
         if (isGroupTarget(currentChatUser)) openGroupSetting(groupIdFromTarget(currentChatUser));
@@ -19395,7 +19535,7 @@
         grpTargetGroup = groupId || 0;
         grpSelected = {};
         grpSelOrder = [];
-        grpTitle.textContent = mode === 'create' ? I18N.t('发起群聊') : I18N.t('邀请成员');
+        grpTitle.textContent = mode === 'create' ? I18N.t('发起群聊') : (mode === 'transfer' ? I18N.t('转让群主') : I18N.t('邀请成员'));
         // 移动端全屏页顶部导航栏标题（CSS ::before attr() 读 box 自身属性，故须写在 modal-box 上）
         var grpBox = grpMask.querySelector('.modal-box');
         if (grpBox) grpBox.dataset.title = grpTitle.textContent;
@@ -19429,7 +19569,7 @@
     function renderGrpSelected() {
         grpCount.textContent = grpSelOrder.length ? (I18N.t('已选择') + grpSelOrder.length + I18N.t('个联系人')) : '';
         if (!grpSelOrder.length) {
-            grpSelListEl.innerHTML = '<div class="grp-empty">' + (grpMode === 'create' ? I18N.t('在左侧选择联系人') : I18N.t('在左侧选择要邀请的好友')) + '</div>';
+            grpSelListEl.innerHTML = '<div class="grp-empty">' + (grpMode === 'create' ? I18N.t('在左侧选择联系人') : (grpMode === 'transfer' ? I18N.t('在左侧选择新群主') : I18N.t('在左侧选择要邀请的好友'))) + '</div>';
             return;
         }
         grpSelListEl.innerHTML = '';
@@ -19437,11 +19577,22 @@
             var f = null;
             for (var i = 0; i < friendList.length; i++) { if (friendList[i].username === u) { f = friendList[i]; break; } }
             var disp = f ? ((f.remark || '').trim() || (nickCache[u] || '').trim() || u) : u;
+            var avUrl = (f && f.avatar) || '';
+            if (grpMode === 'transfer') {
+                // 阶段二百六十四：转让模式候选来自群成员（可能非好友），显示名/头像以 73 members 归口
+                var g = groupOfId(grpTargetGroup);
+                if (g && g.members) {
+                    for (var i = 0; i < g.members.length; i++) {
+                        var mm = g.members[i];
+                        if ((mm.username || mm) === u) { disp = mm.name || u; avUrl = mm.avatar || avUrl; break; }
+                    }
+                }
+            }
             var item = document.createElement('div');
             item.className = 'grp-sel-item';
-            if (f && f.avatar) {
+            if (avUrl) {
                 var av = document.createElement('img');
-                av.src = f.avatar;
+                av.src = avUrl;
                 item.appendChild(av);
             } else {
                 var ph = document.createElement('span');
@@ -19486,8 +19637,9 @@
         renderGrpSelected();
     }
 
-    // 候选渲染（左栏）：仅好友（排除 AI 智能体）；invite 模式排除已在群内成员（服务端会拒绝，前端先行过滤）；
-    // 微信同款按显示名首字符分组（节头取首字符，localeCompare 中文拼音序），圆形勾选框多选
+    // 候选渲染（左栏）：create/invite 模式仅好友（排除 AI 智能体），invite 排除已在群内成员（服务端会拒绝，
+    // 前端先行过滤）；transfer 模式（阶段二百六十四）候选=群内成员除自己（转让不限于好友，以 73 members 为准）；
+    // 微信同款按显示名首字符分组（节头取首字符，localeCompare 中文拼音序），圆形勾选框多选（transfer 单选）
     function renderGroupPickList(kw) {
         kw = (kw || '').toLowerCase();
         grpListEl.innerHTML = '';
@@ -19497,16 +19649,27 @@
             if (g && g.members) g.members.forEach(function (m) { inGroup[m.username || m] = true; }); // 73 members 为资料对象数组（兼容旧字符串形态）
         }
         var cands = [];
-        friendList.forEach(function (f) {
-            if (isAIAgent(f.username)) return;
-            if (inGroup[f.username]) return;
-            var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
-            if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) return;
-            cands.push({ f: f, disp: disp });
-        });
+        if (grpMode === 'transfer') {
+            var g = groupOfId(grpTargetGroup);
+            (g && g.members ? g.members : []).forEach(function (m) {
+                var u = m.username || m;
+                if (u === IMSocket.getUsername()) return; // 转让给自己无意义，排除
+                var disp = m.name || u;
+                if (kw && disp.toLowerCase().indexOf(kw) < 0 && u.toLowerCase().indexOf(kw) < 0) return;
+                cands.push({ f: { username: u, avatar: m.avatar || '' }, disp: disp });
+            });
+        } else {
+            friendList.forEach(function (f) {
+                if (isAIAgent(f.username)) return;
+                if (inGroup[f.username]) return;
+                var disp = (f.remark || '').trim() || (nickCache[f.username] || '').trim() || f.username;
+                if (kw && disp.toLowerCase().indexOf(kw) < 0 && f.username.toLowerCase().indexOf(kw) < 0) return;
+                cands.push({ f: f, disp: disp });
+            });
+        }
         cands.sort(function (a, b) { return a.disp.localeCompare(b.disp, 'zh'); });
         if (!cands.length) {
-            grpListEl.innerHTML = '<div class="grp-empty">' + (kw ? I18N.t('无匹配联系人') : I18N.t('无可选好友')) + '</div>';
+            grpListEl.innerHTML = '<div class="grp-empty">' + (kw ? I18N.t('无匹配联系人') : (grpMode === 'transfer' ? I18N.t('群内暂无其他成员') : I18N.t('无可选好友'))) + '</div>';
             return;
         }
         var lastLetter = null;
@@ -19543,6 +19706,10 @@
             nm.textContent = c.disp;
             item.appendChild(nm);
             item.addEventListener('click', function () {
+                // 阶段二百六十四：transfer 模式单选语义（先清空已选再勾选，微信转让群主同款）
+                if (grpMode === 'transfer') {
+                    Object.keys(grpSelected).forEach(function (u) { toggleGrpPick(u, false); });
+                }
                 toggleGrpPick(c.f.username, !grpSelected[c.f.username]);
             });
             grpListEl.appendChild(item);
@@ -19557,6 +19724,21 @@
                 msg_type: MSG.GROUP_CREATE,
                 content: JSON.stringify({ name: (grpName.value || '').trim(), members: keys })
             });
+        } else if (grpMode === 'transfer') {
+            // 阶段二百六十四：转让群主（单选语义取首个勾选）→ 先关选人弹窗，再自绘确认弹窗二次确认后发 98
+            var to = keys[0];
+            var nm = to;
+            var g = groupOfId(grpTargetGroup);
+            if (g && g.members) {
+                for (var i = 0; i < g.members.length; i++) {
+                    if ((g.members[i].username || g.members[i]) === to) { nm = g.members[i].name || to; break; }
+                }
+            }
+            closeGroupPicker();
+            showConfirm(I18N.t('转让群主'), I18N.t('将群主转让给「') + nm + I18N.t('」？转让后你将不再是群主'), function () {
+                IMSocket.send({ msg_type: MSG.GROUP_TRANSFER, content: JSON.stringify({ group_id: grpTargetGroup, to: to }) });
+            }, I18N.t('转让'));
+            return;
         } else {
             IMSocket.send({
                 msg_type: MSG.GROUP_INVITE,
@@ -19573,7 +19755,7 @@
         renderGroupPickList(grpSearch.value.trim().toLowerCase());
     });
 
-    // 入口绑定：好友面板"发起群聊" + 群会话标题栏"邀请成员"（仅群主可见，显隐归口 updateChatTitle）
+    // 入口绑定：好友面板"发起群聊" + 群会话标题栏"邀请成员"（阶段二百六十五：全员可见，显隐归口 updateChatTitle）
     var grpCreateEntry = document.getElementById('grp-create-entry');
     if (grpCreateEntry) grpCreateEntry.addEventListener('click', function () {
         openGroupPicker('create', 0);
@@ -21127,12 +21309,14 @@
         // 群聊统一走多人群会话（'gN'）条目
         var html = '';
 
-        // 阶段一百四十二：多群会话条目（按群 ID 升序，点击进入群会话；条目文本式，无头像/右键菜单）
+        // 阶段一百四十二：多群会话条目（按群 ID 升序，点击进入群会话）
+        // 阶段二百六十六：群条目带头像（九宫格降级归口复用，微信同款）——先拼占位槽，innerHTML 后统一填九宫格 DOM
         var gids = Object.keys(groupMap).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
         gids.forEach(function (gk) {
             var g = groupMap[gk];
             html += '<li class="user-item group-item' + (currentChatUser === 'g' + g.group_id ? ' active' : '') + '" data-user="g' + g.group_id + '">'
-                + (g.name || I18N.t('群聊')) + '（' + (g.member_count || 0) + I18N.t('人）') + '</li>';
+                + '<span class="avatar grp-avatar-slot" data-gid="' + g.group_id + '"></span>'
+                + '<span class="user-name">' + (g.name || I18N.t('群聊')) + '（' + (g.member_count || 0) + I18N.t('人）') + '</span></li>';
         });
 
         // 在线好友在前，离线在后
@@ -21160,6 +21344,12 @@
                 + avatarHtml + '<span class="user-name">' + displayName + '</span>' + dot + badge + '</li>';
         });
         userListEl.innerHTML = html;
+
+        // 阶段二百六十六：通讯录群条目头像填充（九宫格降级归口复用；点击头像冒泡进群会话）
+        userListEl.querySelectorAll('.grp-avatar-slot').forEach(function (slot) {
+            var gg = groupOfId(slot.getAttribute('data-gid'));
+            slot.appendChild(buildGroupAvatarEl(gg, 'grp-avatar-fill'));
+        });
 
         userListEl.querySelectorAll('.user-item').forEach(function (item) {
             item.addEventListener('click', function () {
@@ -22256,15 +22446,28 @@
             var grp = groupOfId(groupIdFromTarget(currentChatUser));
             chatTitle.textContent = grp ? ((grp.name || I18N.t('群聊')) + '（' + (grp.member_count || 0) + '）') : I18N.t('群聊');
             chatStatus.textContent = '';
+            // 阶段二百六十六：标题栏群名前头像（微信同款九宫格降级归口复用）；群主点击可更换（title 提示区分权限）
+            if (chatTitleAvatar) {
+                chatTitleAvatar.innerHTML = '';
+                chatTitleAvatar.appendChild(buildGroupAvatarEl(grp, 'grp-avatar-fill'));
+                chatTitleAvatar.classList.remove('hidden');
+                var grpOwner = isGroupOwner(currentChatUser);
+                chatTitleAvatar.classList.toggle('owner', grpOwner);
+                chatTitleAvatar.title = grpOwner ? I18N.t('点击更换群头像') : I18N.t('群头像');
+            }
         } else if (isAIAgent(currentChatUser)) {
             // 阶段四十三：AI 智能体会话标题（非好友，不查在线状态）
             chatTitle.textContent = currentChatUser;
             chatStatus.textContent = I18N.t('AI 助手');
+            if (chatTitleAvatar) { chatTitleAvatar.classList.add('hidden'); chatTitleAvatar.innerHTML = ''; }
         } else {
             var f = friendList.find(function (x) { return x.username === currentChatUser; });
             chatTitle.textContent = (f && f.remark) ? f.remark + '(' + currentChatUser + ')' : currentChatUser;
             chatStatus.textContent = isPeerOnline(currentChatUser) ? I18N.t('在线') : I18N.t('离线');
+            if (chatTitleAvatar) { chatTitleAvatar.classList.add('hidden'); chatTitleAvatar.innerHTML = ''; }
         }
+        // 未选会话回落视图同步隐藏标题头像
+        if (currentChatUser === '' && chatTitleAvatar) { chatTitleAvatar.classList.add('hidden'); chatTitleAvatar.innerHTML = ''; }
         // 阶段一百四十三：群会话标题显示手型光标（可点击进群设置）
         chatTitle.classList.toggle('grp-clickable', isGroupTarget(currentChatUser));
         // 阶段五十八：记忆管理按钮仅 AI 智能体会话显示（群聊/普通用户会话隐藏）
@@ -22296,9 +22499,9 @@
         var remoteSupported = !!(window.desktop && window.desktop.remoteInputSend);
         var remoteVisible = remoteSupported && currentChatUser !== '' && !isAIAgent(currentChatUser) && !isGroupTarget(currentChatUser) && isFriendName(currentChatUser);
         if (remoteBtn) remoteBtn.classList.toggle('hidden', !remoteVisible);
-        // 阶段一百四十二：邀请成员按钮显隐——仅群主在多群会话中可见
+        // 阶段一百四十二→二百六十五：邀请成员按钮显隐——多群会话全员可见（原一期仅群主）
         var grpInvBtn = document.getElementById('grp-invite-btn');
-        if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !(isGroupTarget(currentChatUser) && isGroupOwner(currentChatUser)));
+        if (grpInvBtn) grpInvBtn.classList.toggle('hidden', !isGroupTarget(currentChatUser));
         // 阶段一百五十四：红包按钮显隐——私聊真实用户与群聊显示，AI 智能体会话隐藏（微信同款收发红包入口）
         var rpBtn = document.getElementById('redpacket-btn');
         if (rpBtn) rpBtn.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser)));

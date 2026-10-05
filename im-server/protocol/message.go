@@ -117,7 +117,7 @@ const (
 	MsgTypeGroupCreate       = 71 // 上行：建群（content 为 JSON：{name, members:["u1","u2"]}，成员选自好友列表，不含自己）
 	MsgTypeGroupCreateResp   = 72 // 下行：建群回执（content 为 JSON：{group_id, name, members, create_time}；群信息本体以 73 全量同步归口）
 	MsgTypeGroupListSync     = 73 // 下行：群列表全量同步（content 为 JSON：{groups:[{group_id,name,avatar,owner,member_count,members:[{username,name,role,avatar}],create_time}]}；登录推送+成员/信息变更时向相关用户推送，前端据此维护 groupMap）
-	MsgTypeGroupInvite       = 74 // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，仅群主可邀请；被邀请人须非成员且无在途邀请）
+	MsgTypeGroupInvite       = 74 // 上行：邀请入群（content 为 JSON：{group_id, members:["u2"]}，阶段二百六十五：全员可邀请，邀请人须为群成员；被邀请人须非成员且无在途邀请）
 	MsgTypeGroupInviteNotice = 75 // 下行：群邀请通知（被邀请人收，content 为 JSON：{invite_id, group_id, name, from_user, from_name, member_count}；离线登录补推同帧）
 	MsgTypeGroupInviteResp   = 76 // 上行：邀请响应（content 为 JSON：{invite_id, accept:true/false}；仅被邀请人可响应且 Status=0 在途邀请有效）
 	MsgTypeGroupMemberNotice = 77 // 下行：成员变更通知（content 为 JSON：{group_id, action:"create"/"join"/"reject"/"kick"/"leave", users, member_count, name}；action=join 时同时作为邀请结果回执发给邀请人复用一帧；kick/leave 阶段一百四十三：被移出/退群者的客户端据此移除会话）
@@ -128,6 +128,12 @@ const (
 	MsgTypeGroupKickResp    = 81 // 下行：踢人回执（content 为 JSON：{ok, group_id, err?}；成功后被踢者收 77 action=kick，其余成员收 73 刷新）
 	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群涉及转让/解散归二期）
 	MsgTypeGroupQuitResp    = 83 // 下行：退群回执（content 为 JSON：{ok, group_id, err?}；成功后退群者收 77 action=leave，其余成员收 73 刷新）
+
+	// ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，收尾 82/83 遗留的群主出口） =====
+	MsgTypeGroupTransfer     = 98  // 上行：转让群主（content 为 JSON：{group_id, to:"u2"}，仅群主；目标须为在群成员且非自己）
+	MsgTypeGroupTransferResp = 99  // 下行：转让回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 action=transfer + 73 全量同步（owner/角色归位））
+	MsgTypeGroupDissolve     = 100 // 上行：解散群聊（content 为 JSON：{group_id}，仅群主；全员会话删除 + 在途邀请清理 + 群行/成员行删除）
+	MsgTypeGroupDissolveResp = 101 // 下行：解散回执（content 为 JSON：{ok, group_id, err?}；成功后全员收 77 action=dissolve 清会话）
 
 	// 阶段一百四十四：公司公告与动态（后台发布归口 + 客户端微信式阅读）
 	MsgTypeAnnouncementPush = 84 // 下行：公告发布实时推送（content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入列表头）

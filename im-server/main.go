@@ -120,6 +120,8 @@ func main() {
 	})
 	// 头像上传接口
 	http.HandleFunc("/upload/avatar", srv.HandleAvatarUpload)
+	// 群头像上传接口（阶段二百六十六：仅群主可更换，落盘后全员 73 全量同步）
+	http.HandleFunc("/upload/group-avatar", srv.HandleGroupAvatarUpload)
 	// 聊天文件持久化上传接口（阶段二十四：图片/文件消息落库，历史可重现）
 	http.HandleFunc("/upload/file", srv.HandleFileUpload)
 	// 超大文件分片直传接口（阶段三十二：>20MB 文件按片 HTTP 上传，进度节流推送接收方）

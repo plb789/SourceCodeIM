@@ -459,6 +459,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleGroupKick(c, msg)
 	case protocol.MsgTypeGroupQuit:
 		s.handleGroupQuit(c, msg)
+	// 阶段二百六十四：群主转让与解散群聊信令（微信同款群管理闭环）
+	case protocol.MsgTypeGroupTransfer:
+		s.handleGroupTransfer(c, msg)
+	case protocol.MsgTypeGroupDissolve:
+		s.handleGroupDissolve(c, msg)
 	// 阶段一四五：独立注册页注册信令（注册页短连接，注册成功/失败均回执后由客户端自行断开）
 	case protocol.MsgTypeRegister:
 		s.handleRegister(c, msg)
