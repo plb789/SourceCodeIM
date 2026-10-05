@@ -719,6 +719,17 @@ contextBridge.exposeInMainWorld('desktop', {
         });
     },
     // —— 观看窗侧（remote-page.js）——
+    // 观看窗最小化（标题栏自绘按钮）
+    remoteMinimize: function () {
+        ipcRenderer.send('remote:minimize');
+    },
+    // 置顶状态查询 / 切换（回调回传 boolean 新状态）
+    remotePinGet: function (callback) {
+        ipcRenderer.invoke('remote:pin-get').then(function (r) { if (callback) callback(!!r); }, function () { if (callback) callback(false); });
+    },
+    remotePinToggle: function (callback) {
+        ipcRenderer.invoke('remote:pin-toggle').then(function (r) { if (callback) callback(!!r); }, function () { if (callback) callback(false); });
+    },
     // 接收协助任务（data 同 remoteOpen）
     onRemoteLoad: function (callback) {
         ipcRenderer.on('remote:load', function (event, data) {

@@ -5,6 +5,7 @@
 #   m wheel <delta>             vertical wheel, 120 = one notch (positive = scroll up)
 #   k down <vk> <ext> | k up <vk> <ext>   virtual key event (ext: 1 = extended key)
 #   k uni <down|up> <code>      unicode char event (utf-16 code unit, decimal)
+#   wait <ms>                   pause between steps (synthetic key sequences need spacing)
 # Handshake: writes "ready" on stdout after init. EOF (stdin closed) exits itself,
 # so a crashed parent never leaves orphans behind. ASCII-only comments on purpose:
 # Windows PowerShell 5.1 parses BOM-less UTF-8 Chinese comments as ANSI (mojibake).

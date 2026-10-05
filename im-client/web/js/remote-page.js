@@ -266,6 +266,18 @@
     document.addEventListener('fullscreenchange', function () {
         document.body.classList.toggle('rw-fullscreen', !!document.fullscreenElement);
     });
+    // ===== 标题栏窗控（最小化 / 置顶；主窗标题栏同款自绘风格） =====
+    var btnMin = document.getElementById('rwMin');
+    var btnPin = document.getElementById('rwPin');
+    if (btnMin && d.remoteMinimize) {
+        btnMin.addEventListener('click', function () { d.remoteMinimize(); });
+    } else if (btnMin) { btnMin.style.display = 'none'; } // 旧主进程无桥：藏按钮不误导
+    if (btnPin && d.remotePinToggle) {
+        btnPin.addEventListener('click', function () {
+            d.remotePinToggle(function (on) { btnPin.classList.toggle('on', !!on); });
+        });
+        if (d.remotePinGet) d.remotePinGet(function (on) { btnPin.classList.toggle('on', !!on); }); // 窗口复用时同步真实状态
+    } else if (btnPin) { btnPin.style.display = 'none'; }
 
     // ===== 桥对接（PC preload；无桥环境仅提示不参与流程） =====
     if (d.onRemoteLoad) d.onRemoteLoad(function (task) {

@@ -21900,6 +21900,16 @@
                     grant: 'control', screen: null,
                     ice: inv.ice || null // 观看窗建连 STUN/TURN 配置（跨 NAT 穿透）
                 });
+            } else if (window.RCMobileView && window.RCMobileView.open) {
+                // WEB/手机控制方：页内观看层兜底（无 Electron 桥环境，WebRTC 页内建连，同 rc 流）
+                window.RCMobileView.open({
+                    session_id: inv.session_id, peer: inv.from,
+                    peer_name: callPeerName(inv.from),
+                    grant: 'control', screen: null,
+                    ice: inv.ice || null,
+                    send: function (obj) { remoteSignalSend(inv.from, obj); },
+                    onEnded: function () { remoteEndLocal(); }
+                });
             }
             return;
         }
@@ -22048,6 +22058,17 @@
                         grant: remoteGrant,
                         screen: p.screen || null,
                         ice: p.ice || null // 服务端随 accept 注入的 STUN/TURN 配置（跨 NAT 穿透）
+                    });
+                } else if (window.RCMobileView && window.RCMobileView.open) {
+                    // WEB/手机控制方：页内观看层兜底（无 Electron 桥环境，同 rc_ok 分支）
+                    window.RCMobileView.open({
+                        session_id: p.session_id, peer: remotePeerUser,
+                        peer_name: callPeerName(remotePeerUser),
+                        grant: remoteGrant,
+                        screen: p.screen || null,
+                        ice: p.ice || null,
+                        send: function (obj) { remoteSignalSend(remotePeerUser, obj); },
+                        onEnded: function () { remoteEndLocal(); }
                     });
                 }
             } else if (remoteRole === 'sharer') {

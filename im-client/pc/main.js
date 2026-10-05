@@ -1929,7 +1929,7 @@ function ensureRemoteWindow() {
             nodeIntegration: false
         }
     });
-    remoteWin.loadURL(SERVER_URL + 'remote-window.html?v=1551');
+    remoteWin.loadURL(SERVER_URL + 'remote-window.html?v=1552');
     remoteWin.on('close', function (e) {
         if (app.isQuitting || remoteWindowCloseArmed) return; // 托盘退出/页面已收口：放行销毁
         // Alt+F4/点关闭转断开语义：通知页面走 disconnect 信令收口后自行 remoteClose，
@@ -1940,6 +1940,22 @@ function ensureRemoteWindow() {
     remoteWin.on('closed', function () { remoteWin = null; remoteHotkeyResume(); }); // 异常销毁兜底恢复快捷键（幂等）
     return remoteWin;
 }
+
+// ===== 观看窗标题栏窗控（自绘按钮：最小化 / 置顶） =====
+ipcMain.on('remote:minimize', function (e) {
+    if (!remoteWin || e.sender !== remoteWin.webContents) return;
+    remoteWin.minimize();
+});
+ipcMain.handle('remote:pin-get', function (e) {
+    if (!remoteWin || e.sender !== remoteWin.webContents) return false;
+    return remoteWin.isAlwaysOnTop();
+});
+ipcMain.handle('remote:pin-toggle', function (e) {
+    if (!remoteWin || e.sender !== remoteWin.webContents) return false;
+    var on = !remoteWin.isAlwaysOnTop();
+    remoteWin.setAlwaysOnTop(on);
+    return on;
+});
 
 // 打开观看窗（主窗口 chat.js 收 accept 后调用）
 ipcMain.on('remote:open', function (e, data) {

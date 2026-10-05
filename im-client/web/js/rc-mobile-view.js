@@ -95,6 +95,7 @@
         document.getElementById('rcMvKb').addEventListener('click', toggleKeyboard);
         bindInput();
         bindTouch();
+        bindMouse();
         bindTools();
         bindFs();
         return true;
@@ -258,6 +259,7 @@
         st.pendMove = null;
         if (st.touch && st.touch.holdTimer) { clearTimeout(st.touch.holdTimer); st.touch.holdTimer = null; }
         st.touch = null;
+        downCodeMap = {}; // 收口清按键记忆（防下次会话残留 down/up 不对称映射）
     }
 
     // ===== 触摸手势（向日葵手机版同款） =====
@@ -329,6 +331,67 @@
     function cancelTouch() {
         if (st.touch && st.touch.holdTimer) clearTimeout(st.touch.holdTimer);
         st.touch = null;
+    }
+
+    // ===== 鼠标与物理键盘（PC 浏览器场景：触摸手势层只认 touch 事件，鼠标完全无效） =====
+    // 与触摸手势并存：触屏设备 touchstart 已 preventDefault，浏览器不再派发合成鼠标事件，
+    // 双输入设备（触屏笔记本）两路各走各的不重复；事件协议与 PC 观看窗 remote-page.js 一致
+    var downCodeMap = {}; // keydown 实际发送的 code 记忆，keyup 复用（防按住键再按修饰键时 down/up 路径分叉）
+    function bindMouse() {
+        elVideo.addEventListener('mousemove', function (e) {
+            if (!st.inputOn) return;
+            var n = normPos(e.clientX, e.clientY);
+            if (n) st.pendMove = { t: 'm', act: 'move', x: n.x, y: n.y }; // 复用 50ms flushMove 节流
+        });
+        elVideo.addEventListener('mousedown', function (e) {
+            if (!st.inputOn) return;
+            flushMove(); // 按下前 flush 最新坐标，防"按下点≠移动点"漂移
+            sendInput({ t: 'm', act: 'down', btn: e.button });
+            e.preventDefault();
+        });
+        elVideo.addEventListener('mouseup', function (e) {
+            if (!st.inputOn) return;
+            flushMove();
+            sendInput({ t: 'm', act: 'up', btn: e.button });
+            e.preventDefault();
+        });
+        elVideo.addEventListener('wheel', function (e) {
+            if (!st.inputOn) return;
+            flushMove();
+            sendInput({ t: 'm', act: 'wheel', dy: e.deltaY });
+            e.preventDefault();
+        }, { passive: false });
+        // 捕获阶段注册 + 会话中阻断传播：观看层为全屏沉浸态，会话期间键盘归远程——
+        // chat.js 等先注册的 document 级快捷键（Esc 关面板/Ctrl 组合键等）不再误触；
+        // 非会话期（ended/inputOn 守卫提前 return）不阻断，本地按键行为零变化
+        document.addEventListener('keydown', onKey, true);
+        document.addEventListener('keyup', onKeyUp, true);
+    }
+    function onKey(e) {
+        if (e.target === elKbInput) return; // 软键盘输入框自管（bindInput 已转发），不重复发送
+        if (e.key === 'Escape') { // Esc：断开确认弹窗（显示中再按=取消），本地消费不转发
+            if (st.ended) return;
+            e.stopPropagation();
+            e.preventDefault();
+            document.getElementById('rcMvConfirm').classList.toggle('hidden');
+            return;
+        }
+        if (!st.inputOn || e.key === 'F11' || e.key === 'F12') return; // F11/F12 本地保留（全屏/调试）
+        // 裸字母/数字发 code:'' 走 UNICODE 注入（被控端中文 IME 激活时不被截获进候选态）；
+        // 组合键（含 Ctrl/Alt/Meta）发 code 走 VK 注入才能与修饰键组合生效
+        var c = (/^(Key[A-Z]|Digit[0-9])$/.test(e.code) && !e.ctrlKey && !e.altKey && !e.metaKey) ? '' : e.code;
+        downCodeMap[e.code] = c;
+        e.stopImmediatePropagation(); // 键盘隔离：转发键不再落入本地快捷键监听
+        e.preventDefault();
+        sendInput({ t: 'k', act: 'down', code: c, key: e.key });
+    }
+    function onKeyUp(e) {
+        if (e.target === elKbInput || !st.inputOn || e.key === 'F11' || e.key === 'F12') return;
+        var c = (e.code in downCodeMap) ? downCodeMap[e.code] : e.code;
+        delete downCodeMap[e.code];
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        sendInput({ t: 'k', act: 'up', code: c, key: e.key });
     }
 
     // ===== 浮动工具栏（右侧把手展开：左/右键模式、滚轮、组合键、键盘入口） =====
