@@ -90,8 +90,11 @@
             cb(new Error(T('网络异常，请稍后重试')));
         });
     }
+    // path 可自带 query（如 'records?page=1&page_size=20'）——此时用 & 追加 username，
+    // 固定拼 '?' 会把 username 挤成第二个 ?（服务端解析不到 → 误报"非法用户名"，实测抓出）
     function apiGet(path, cb) {
-        apiJSON('/api/rc/' + path + '?username=' + encodeURIComponent(u()), null, cb);
+        var sep = path.indexOf('?') >= 0 ? '&' : '?';
+        apiJSON('/api/rc/' + path + sep + 'username=' + encodeURIComponent(u()), null, cb);
     }
     function apiPost(path, body, cb) {
         apiJSON('/api/rc/' + path + '?username=' + encodeURIComponent(u()), {
