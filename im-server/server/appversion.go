@@ -44,6 +44,7 @@ func RegisterAppVersionRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/appversion", s.adminGuard(s.handleAdminAppVersionUpload))
 	http.HandleFunc("GET /admin/api/appversion", s.adminGuard(s.handleAdminAppVersionList))
 	http.HandleFunc("POST /admin/api/appversion/{id}/enable", s.adminGuard(s.handleAdminAppVersionEnable))
+	http.HandleFunc("PUT /admin/api/appversion/{id}", s.adminGuard(s.handleAdminAppVersionUpdate))
 	http.HandleFunc("DELETE /admin/api/appversion/{id}", s.adminGuard(s.handleAdminAppVersionDelete))
 	// 客户端公开检查（无用户态，只读）
 	http.HandleFunc("GET /api/app/version", s.handleAppVersionCheck)
@@ -387,6 +388,125 @@ func (s *Server) handleAdminAppVersionEnable(w http.ResponseWriter, r *http.Requ
 		s.writeWinLatestYml()
 	}
 	logger.Info("客户端版本已启用: id=%d 平台=%s 版本=%s 操作人=%s", v.ID, v.Platform, v.VersionName, adminUserFromCtx(r))
+	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleAdminAppVersionUpdate 编辑已登记版本（不换文件）：
+//  1. 公共可改：版本名 / versionCode / 更新说明 / 强制标记；
+//  2. 外链记录可改：URL/校验和/大小（重走登记校验，文件名跟随新 URL 末段）；
+//  3. 上传记录锁定：安装包本体与文件衍生字段（file_name/url/sha/size）不可改，拒绝携带文件——
+//     如需更换安装包请删除该版本后重新上传；
+//  4. win 生效版本编辑后重写 latest.yml（版本名/URL/校验和/大小变更需同步给 electron-updater）。
+func (s *Server) handleAdminAppVersionUpdate(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	var v model.AppVersion
+	if err := store.DB.First(&v, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "版本记录不存在")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数解析失败")
+		return
+	}
+	if _, _, err := r.FormFile("file"); err == nil {
+		adminFail(w, http.StatusBadRequest, "安装包文件不可在线更换，如需更换请删除该版本后重新上传")
+		return
+	}
+	versionName := appVerSanitizeVersion(r.FormValue("version_name"))
+	if versionName == "" || len(versionName) > 32 {
+		adminFail(w, http.StatusBadRequest, "版本号不合法（字母数字点横线，≤32 字符）")
+		return
+	}
+	versionCode, _ := strconv.Atoi(r.FormValue("version_code"))
+	if v.Platform == "android" && versionCode <= 0 {
+		adminFail(w, http.StatusBadRequest, "Android 版本须填写 versionCode（正整数）")
+		return
+	}
+	if v.Platform == "win" && appVerSemverCompare(versionName, "0") <= 0 {
+		adminFail(w, http.StatusBadRequest, "PC 版本号须为语义化格式（如 1.2.0）")
+		return
+	}
+	force := r.FormValue("force") == "1"
+	notes := strings.TrimSpace(r.FormValue("notes"))
+	if len([]rune(notes)) > 2000 {
+		notes = string([]rune(notes)[:2000])
+	}
+	v.VersionName = versionName
+	v.VersionCode = versionCode
+	v.Force = force
+	v.Notes = notes
+	if appVerIsExternal(&v) {
+		// 外链记录：URL/校验和/大小可改，校验规则与登记一致（平台不变）
+		extURL := strings.TrimSpace(r.FormValue("url"))
+		if extURL == "" {
+			adminFail(w, http.StatusBadRequest, "缺少外链 URL")
+			return
+		}
+		u, err := url.Parse(extURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			adminFail(w, http.StatusBadRequest, "外链 URL 不合法（须为 http/https 完整地址）")
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(u.Path))
+		if v.Platform == "android" && ext != ".apk" {
+			adminFail(w, http.StatusBadRequest, "Android 外链须指向 .apk 文件")
+			return
+		}
+		if v.Platform == "win" && ext != ".exe" {
+			adminFail(w, http.StatusBadRequest, "PC 外链须指向 .exe 文件")
+			return
+		}
+		sha256Hex := strings.ToLower(strings.TrimSpace(r.FormValue("sha256")))
+		if sha256Hex != "" && !appVerSHA256Re.MatchString(sha256Hex) {
+			adminFail(w, http.StatusBadRequest, "sha256 须为 64 位十六进制摘要")
+			return
+		}
+		sha512B64 := strings.TrimSpace(r.FormValue("sha512_b64"))
+		if sha512B64 != "" {
+			if raw, derr := base64.StdEncoding.DecodeString(sha512B64); derr != nil || len(raw) != 64 {
+				adminFail(w, http.StatusBadRequest, "sha512 须为 base64 编码的 64 字节摘要")
+				return
+			}
+		}
+		if v.Platform == "win" && sha512B64 == "" && sha256Hex == "" {
+			adminFail(w, http.StatusBadRequest, "PC 外链须提供 sha512（base64）或 sha256（hex）校验和（electron-updater 下载校验硬约束）")
+			return
+		}
+		var size int64
+		if sv := strings.TrimSpace(r.FormValue("size")); sv != "" {
+			size, err = strconv.ParseInt(sv, 10, 64)
+			if err != nil || size < 0 {
+				adminFail(w, http.StatusBadRequest, "文件大小须为非负整数（字节）")
+				return
+			}
+		}
+		v.URL = extURL
+		v.SHA256 = sha256Hex
+		v.SHA512Base64 = sha512B64
+		v.Size = size
+		// 文件名跟随新外链路径末段（净化；异常回退版本默认名）
+		fileName := u.Path
+		if i := strings.LastIndexByte(fileName, '/'); i >= 0 {
+			fileName = fileName[i+1:]
+		}
+		fileName = appVerSanitizeVersion(fileName)
+		if fileName == "" || fileName == "." {
+			if v.Platform == "android" {
+				fileName = fmt.Sprintf("imapp-%s-%d.apk", versionName, versionCode)
+			} else {
+				fileName = fmt.Sprintf("im-client-%s.exe", versionName)
+			}
+		}
+		v.FileName = fileName
+	}
+	if err := store.DB.Save(&v).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "版本记录保存失败")
+		return
+	}
+	if v.Platform == "win" && v.Enabled {
+		s.writeWinLatestYml() // 生效版本的版本名/URL/校验和/大小变更同步 latest.yml
+	}
+	logger.Info("客户端版本已编辑: id=%d 平台=%s 版本=%s(%d) 操作人=%s", v.ID, v.Platform, v.VersionName, v.VersionCode, adminUserFromCtx(r))
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
 

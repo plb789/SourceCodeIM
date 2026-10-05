@@ -1195,7 +1195,7 @@
     <!-- 客户端更新包上传弹窗（阶段二百六十：安装包上传+版本登记，含文件选择） -->
     <div id="av-upload-mask" class="modal-mask hidden">
         <div class="modal-box admin-edit-box">
-            <div class="modal-title">上传新版本安装包</div>
+            <div id="av-upload-title" class="modal-title">上传新版本安装包</div>
             <div class="admin-edit-form">
                 <div class="admin-field">
                     <label>平台</label>
@@ -1233,6 +1233,12 @@
                     <label>安装包文件</label>
                     <input type="file" id="av-up-file" class="admin-input" accept=".apk,.exe">
                     <span class="admin-field-hint">APP 选 .apk，PC 选 electron-builder 产出的 Setup .exe</span>
+                </div>
+                <!-- 编辑模式（上传记录）展示：文件锁定不可在线更换 -->
+                <div class="admin-field hidden" id="av-up-file-lock">
+                    <label>安装包文件</label>
+                    <input type="text" class="admin-input" value="（已上传文件，不可在线更换）" disabled>
+                    <span class="admin-field-hint">修改版本号不会变更已上传文件名；如需更换安装包，请删除该版本后重新上传</span>
                 </div>
                 <div class="admin-field hidden" id="av-up-url-field">
                     <label>外链完整地址</label>

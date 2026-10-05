@@ -438,6 +438,15 @@ td .skel-line {
 #av-upload-mask .admin-field-hint {
     overflow-wrap: anywhere;
 }
+
+/* 版本列表安装包链接：浏览器默认链接蓝与主题不搭，统一走主题色（跟随主题色变化） */
+#av-tbody a {
+    color: var(--primary);
+    text-decoration: none;
+}
+#av-tbody a:hover {
+    text-decoration: underline;
+}
 .admin-edit-form {
     max-height: 56vh;
     overflow-y: auto;
