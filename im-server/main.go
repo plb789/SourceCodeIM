@@ -248,7 +248,14 @@ func main() {
 		// if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html") {
 		// 	w.Header().Set("Cache-Control", "no-cache")
 		// }
-		w.Header().Set("Cache-Control", "no-cache")
+		// 阶段二百六十三：头像强缓存——头像文件名上传时含纳秒时间戳+随机数全局唯一，
+		// 换头像必然换 URL，按 URL 永久缓存不存在陈旧风险，immutable 后浏览器/手机 WebView
+		// 二次启动直接读本地磁盘缓存零回源（微信同款：头像首次下载后本地秒出）
+		if strings.HasPrefix(r.URL.Path, "/static/avatar/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		fileServer.ServeHTTP(w, r)
 	}))
 	// 头像目录注入（锚定 exe 所在目录解析，替代 avatar.go 中原相对路径实现）

@@ -2,8 +2,10 @@
 // 背景：主窗口原直接 loadURL 服务端 http 地址，每个静态资源都回源校验（no-cache），页面打开/切换慢。
 // 方案（同 origin http 拦截）：session.protocol.handle('http') 拦截发往服务端地址的请求——
 //   静态资源读本地磁盘（缓存目录 → 内置快照 → 代理服务端三级回退），动态请求（/api/、/upload/、
-//   /export/、/doc/、/agent/、用户数据 static/upload|avatar|_git_extract）经 net.fetch 透传服务端，
+//   /export/、/doc/、/agent/、用户数据 static/upload|_git_extract）经 net.fetch 透传服务端，
 //   服务端保持资源归口；非服务端地址的 http 请求一律透传，行为不变。
+// 阶段二百六十三：/static/avatar/ 头像磁盘缓存归口（userData/avatarcache）——首次联网下载落盘，
+//   之后启动本地直出零回源（微信同款：头像不再每次启动逐张回源闪烁占位符）
 // 关键收益：页面 origin 保持 http://127.0.0.1:8888 不变——localStorage（登录态 im_auth/主题偏好）、
 //   WebSocket（socket.js 按 location 推导）、剪贴板 secure context、OnlyOffice 混合内容等全部与
 //   原行为完全一致，无需任何前端适配与登录态迁移。
@@ -37,6 +39,9 @@ const DOWNLOAD_CONCURRENCY = 4;
 
 // 动态路径前缀：命中即透传服务端（不走本地缓存）
 // 说明：/ws 为 WebSocket 升级，不经 protocol handler（浏览器 ws 连接不走路由），由 socket.js 直连服务端
+// 阶段二百六十三：/static/avatar/ 不再透传——改走头像磁盘缓存（见 handleAvatar），首次联网下载
+// 落盘、之后启动本地直出（微信同款），文件名含上传纳秒时间戳全局唯一，换头像必然换 URL 无陈旧风险
+const AVATAR_PREFIX = '/static/avatar/';
 const DYNAMIC_PREFIXES = [
     '/api/',
     '/admin/api/',
@@ -45,7 +50,6 @@ const DYNAMIC_PREFIXES = [
     '/doc/',
     '/agent/',
     '/static/upload/',
-    '/static/avatar/',
     '/static/_git_extract/'
 ];
 
@@ -60,6 +64,13 @@ let serverUrl = '';   // 服务端根地址（main.js 注入，如 http://127.0.
 let serverHost = '';  // 服务端 host（含端口，拦截范围归口：仅该 host 的 http 请求走本地缓存逻辑）
 let cacheDir = '';    // 增量缓存目录（userData/webcache，可写）
 let snapshotDir = ''; // 内置明文快照目录（仅明文回退链路使用：dev 为 ../web；打包版自阶段一百三十六起不再内置明文快照，目录不存在时回退全量下载）
+// 阶段二百六十三：头像磁盘缓存目录（userData/avatarcache）——好友/群/自己头像首次联网下载落盘，
+// 之后每次启动本地直出零回源，慢网启动不再因头像逐张回源出现占位符长时间闪烁（微信同款）
+let avatarCacheDir = '';
+// 头像缓存容量守卫阈值：总量超 CLEAN 上限按最旧优先删至 SOFT（头像单张几十 KB，正常使用远达不到，
+// 仅防经年累积无限增长）
+const AVATAR_CLEAN_BYTES = 200 * 1024 * 1024;
+const AVATAR_SOFT_BYTES = 100 * 1024 * 1024;
 // 阶段一百三十六：加密链路状态
 let secureKey = null;  // 密钥字节（32B）；非空即加密链路启用（磁盘只落密文、内存解密、blob 参与回退）
 let blobFile = '';     // 内置加密快照 blob 路径（pc 根目录 web-snapshot.enc，打包后位于 app.asar 内）
@@ -120,6 +131,8 @@ function init(cfg) {
     serverUrl = String((cfg && cfg.serverUrl) || '');
     try { serverHost = new URL(serverUrl).host; } catch (e) { serverHost = ''; }
     cacheDir = path.join(app.getPath('userData'), 'webcache');
+    avatarCacheDir = path.join(app.getPath('userData'), 'avatarcache');
+    try { fs.mkdirSync(avatarCacheDir, { recursive: true }); } catch (e) { }
     // 快照目录：打包后取 resources/web-snapshot；dev（npm start）取仓库 web 目录
     snapshotDir = (cfg && cfg.snapshotDir) || (app.isPackaged
         ? path.join(process.resourcesPath, 'web-snapshot')
@@ -136,15 +149,20 @@ function init(cfg) {
     if (typeof (cfg && cfg.onSynced) === 'function') onSyncedCb = cfg.onSynced;
     blobFile = path.join(__dirname, 'web-snapshot.enc'); // 构建期产物（obfuscate.js 生成），随 app.asar 打包
     blobState = 0; // 重置 blob 探测状态（init 理论上仅调用一次，防御性归零）
+    // 阶段二百六十三：头像缓存容量守卫（延迟 10s 异步执行，避开启动 IO 高峰；总量超 200MB 才动）
+    setTimeout(sweepAvatarCache, 10000);
     console.log('[web-cache] 缓存目录:', cacheDir, '| 快照目录:', snapshotDir,
         '| 加密链路:', secureKey ? '启用（磁盘零明文）' : '关闭（明文回退）');
 }
 
-// installInterceptor app ready 后安装 http 拦截（main.js whenReady 调用，先于任何窗口加载）
+// installInterceptor app ready 后安装 http/https 拦截（main.js whenReady 调用，先于任何窗口加载）
 // 仅拦默认会话（主窗口/查看器/托盘面板所在会话）；agent-browser 独立 partition 不受影响；
-// 非服务端 host 的 http 请求原样透传（bypass 防递归），浏览区外部网页行为不变
+// 非服务端 host 的请求原样透传（bypass 防递归），浏览区外部网页行为不变
+// 阶段二百六十三：SERVER_URL 为 https 域名时原仅注册 http 拦截整体失效（页面资源与头像缓存
+// 全走网络），现 http/https 同规则注册——仅服务端 host 的 https 请求进本地缓存逻辑，
+// 其余 https 请求（外部网页/更新包等）一律透传，TLS 行为不变
 function installInterceptor() {
-    session.defaultSession.protocol.handle('http', function (req) {
+    var handler = function (req) {
         try {
             var u = new URL(req.url);
             if (serverHost && u.host === serverHost) {
@@ -152,8 +170,10 @@ function installInterceptor() {
             }
         } catch (e) { /* URL 解析失败按透传处理 */ }
         return net.fetch(req, { bypassCustomProtocolHandlers: true });
-    });
-    console.log('[web-cache] http 拦截已安装（host=' + serverHost + '）');
+    };
+    session.defaultSession.protocol.handle('http', handler);
+    session.defaultSession.protocol.handle('https', handler);
+    console.log('[web-cache] http/https 拦截已安装（host=' + serverHost + '）');
 }
 
 // isDynamicPath 判断是否动态路径（透传服务端，不读本地缓存）
@@ -389,7 +409,76 @@ function passthrough(req) {
     return net.fetch(req, init);
 }
 
-// handleRequest 服务端地址请求处理归口：动态前缀透传 → 加密链路（缓存.enc → blob 快照 → 透传兜底）
+// handleAvatar 阶段二百六十三：头像磁盘缓存归口——
+//   命中本地（avatarcache/<文件名>）磁盘直读秒出，零网络零回源；
+//   未命中透传服务端（等价旧版行为），成功图片响应顺手落盘（tmp+rename 原子写），下次启动秒出。
+// 安全性：头像文件名上传时由服务端生成（纳秒时间戳+随机数，avatar.go），换头像必然换 URL，
+//   按 URL 永久缓存不存在陈旧风险；文件名防穿越校验（无目录分隔/无 ..），不合法一律透传兜底
+async function handleAvatar(pathname, req) {
+    var name;
+    try { name = decodeURIComponent(pathname.substring(AVATAR_PREFIX.length)); } catch (e) { }
+    if (!name || name.indexOf('/') !== -1 || name.indexOf('\\') !== -1 || name.indexOf('..') !== -1) {
+        return passthrough(req);
+    }
+    var fp = path.join(avatarCacheDir, name);
+    if (fp !== avatarCacheDir && fp.indexOf(avatarCacheDir + path.sep) !== 0) return passthrough(req);
+    // 命中本地缓存：磁盘直读（serveBuffer 自带 Range/206 支持）
+    try {
+        var st = fs.statSync(fp);
+        if (st.isFile()) return serveBuffer(fs.readFileSync(fp), mimeOf(name), req);
+    } catch (e) { }
+    // 未命中：透传服务端
+    var res = await passthrough(req);
+    if (req.method !== 'GET' || res.status !== 200) return res;
+    var buf;
+    try {
+        buf = Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+        // 响应流读取失败（网络中断）：等同透传失败，无法重放
+        return new Response(null, { status: 502 });
+    }
+    // 落盘失败（磁盘满/权限等）不影响本次展示，下次启动重下；递归建目录防目录被外力删除
+    try {
+        fs.mkdirSync(avatarCacheDir, { recursive: true });
+        var tmp = fp + '.tmp';
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, fp);
+    } catch (e) {
+        console.warn('[web-cache] 头像缓存落盘失败:', name, e && e.message);
+    }
+    return serveBuffer(buf, mimeOf(name), req);
+}
+
+// sweepAvatarCache 头像缓存容量守卫：目录总量超上限时按 mtime 最旧优先删至软上限
+// （异步执行不阻塞启动；init 延迟触发，避开启动 IO 高峰）
+function sweepAvatarCache() {
+    if (!avatarCacheDir) return;
+    fs.readdir(avatarCacheDir, function (err, files) {
+        if (err || !files || !files.length) return;
+        var items = [];
+        var total = 0;
+        var pending = files.length;
+        files.forEach(function (f) {
+            var fp = path.join(avatarCacheDir, f);
+            fs.stat(fp, function (e, st) {
+                if (!e && st.isFile()) {
+                    items.push({ p: fp, t: st.mtimeMs, s: st.size });
+                    total += st.size;
+                }
+                if (--pending === 0 && total > AVATAR_CLEAN_BYTES) {
+                    items.sort(function (a, b) { return a.t - b.t; }); // 最旧优先
+                    var removed = 0;
+                    for (var i = 0; i < items.length && total > AVATAR_SOFT_BYTES; i++) {
+                        try { fs.unlinkSync(items[i].p); total -= items[i].s; removed++; } catch (e) { }
+                    }
+                    console.log('[web-cache] 头像缓存超限清理: 删除 ' + removed + ' 个最旧文件，剩余 ' + Math.round(total / 1024 / 1024) + 'MB');
+                }
+            });
+        });
+    });
+}
+
+// handleRequest 服务端地址请求处理归口：头像缓存 → 动态前缀透传 → 加密链路（缓存.enc → blob 快照 → 透传兜底）
 //   / 明文链路（缓存 → 快照 → 透传兜底，原实现）
 async function handleRequest(req) {
     try {
@@ -400,6 +489,10 @@ async function handleRequest(req) {
         // resolveLocalEnc/tryServeBlob 内部各自归一，唯 mimeOf(pathname) 被遗漏（实测根文档
         // 从加密缓存命中时 content-type=application/octet-stream）
         if (pathname === '/' || pathname === '') pathname = '/index.html';
+        // 阶段二百六十三：头像磁盘缓存（优先于动态前缀判断）
+        if (pathname.indexOf(AVATAR_PREFIX) === 0) {
+            return await handleAvatar(pathname, req);
+        }
         if (isDynamicPath(pathname)) {
             return await passthrough(req);
         }
