@@ -148,6 +148,17 @@ function resolveSecureKey() {
 // 原实现：createTray 内直接写死 64.ico 文件名
 const APP_ICON = path.join(__dirname, '64.ico');
 
+// 窗口图标（nativeImage）：Windows 任务栏按钮图标优先取同 AUMID 的开始菜单快捷方式图标（安装版
+// 用户），无匹配快捷方式时（绿色版/直接运行 exe）回退窗口图标——统一显式传 nativeImage 保证绿色版
+// 场景任务栏/标题栏/Alt-Tab 图标正确。asar 内路径经 fs 补丁可被 nativeImage 读取，传对象规避
+// BrowserWindow icon 路径的 asar 限制；空图（路径失效）时为 undefined 走 Electron 默认，不报错
+const WIN_ICON = (function () {
+    try {
+        var img = nativeImage.createFromPath(APP_ICON);
+        return img && !img.isEmpty() ? img : undefined;
+    } catch (e) { return undefined; }
+})();
+
 // 注册 AUMID 通知图标与展示名：Windows 原生通知（Notification）不读 icon 参数，toast 头部小图标由
 // Shell 按 AUMID 注册表 IconUri 解析（缺失/不可读时回退占位图标）。实测 IconUri 指向 .ico 文件 Shell
 // 不识别（头部仍显示占位方格），必须 PNG：启动时 nativeImage 读 64.ico 转 PNG 落盘 userData 再注册
@@ -264,6 +275,7 @@ function createSplash() {
         + '<div class="splash-name">即时通讯</div>'
         + '</body></html>';
     splashWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 300,
         height: 380,
         frame: false,          // 无边框：纯 logo 卡片（微信启动图同款形态）
@@ -305,6 +317,7 @@ function createWindow() {
         minWidth: 800,
         minHeight: 560,
         title: '即时通讯',
+        icon: WIN_ICON,
         // 阶段一百五十四：启动闪屏配套——主窗口延迟到页面加载完成后显示（did-finish-load 回调），
         // 加载期由 splash 闪屏窗覆盖（原实现：创建即显示，加载期露出灰黑背景色）
         show: false,
@@ -847,6 +860,7 @@ function createStitchBar() {
     closeStitchBar(); // 残留防御：二次进入先关旧条窗
     var b = stitchToolbarBounds;
     stitchBarWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: b.width,
         height: b.height,
         x: b.x,
@@ -1048,6 +1062,7 @@ var viewerWin = null; // 查看器窗口（单例复用：重复打开仅刷新�
 function ensureViewerWindow() {
     if (viewerWin) return viewerWin;
     viewerWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 900,
         height: 640,
         minWidth: 480,
@@ -1136,6 +1151,7 @@ function editorWinDark() {
 function ensureEditorWindow() {
     if (editorWin) return editorWin;
     editorWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 900,
         height: 640,
         minWidth: 480,
@@ -1299,6 +1315,7 @@ var docViewerWin = null; // 文档查看器窗口（单例复用：重复打开�
 function ensureDocViewerWindow() {
     if (docViewerWin) return docViewerWin;
     docViewerWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 960,
         height: 680,
         minWidth: 520,
@@ -1364,6 +1381,7 @@ ipcMain.handle('ann:open-link', function (event, url) {
     if (!/^https?:\/\//i.test(u)) return false;
     if (!annLinkWin || annLinkWin.isDestroyed()) {
         annLinkWin = new BrowserWindow({
+            icon: WIN_ICON,
             width: 1200,
             height: 820,
             minWidth: 520,
@@ -1717,6 +1735,7 @@ function ensureCallWindow(callType, isMeet) {
         return callWin;
     }
     callWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: w0,
         height: h0,
         show: false,
@@ -1792,6 +1811,7 @@ ipcMain.on('call:close', function (e) {
 function ensureRingWindow() {
     if (ringWin && !ringWin.isDestroyed()) return ringWin;
     ringWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 372,
         height: 100,
         show: false,
@@ -1915,6 +1935,7 @@ function ensureRemoteWindow() {
     if (remoteWin && !remoteWin.isDestroyed()) return remoteWin;
     var size = remoteWindowSize();
     remoteWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: size.width,
         height: size.height,
         minWidth: 640,
@@ -2033,6 +2054,7 @@ var remoteBarWin = null;
 function ensureRemoteBar() {
     if (remoteBarWin && !remoteBarWin.isDestroyed()) return remoteBarWin;
     remoteBarWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 348,
         height: 64,
         show: false,
@@ -2882,6 +2904,7 @@ ipcMain.on('tray:unread', function (event, data) {
 function ensureTrayPanel() {
     if (panelWin) return panelWin;
     panelWin = new BrowserWindow({
+        icon: WIN_ICON,
         width: 320,
         height: 200,
         show: false,

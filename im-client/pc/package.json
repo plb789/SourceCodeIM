@@ -58,7 +58,8 @@
     ],
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": true
+      "signAndEditExecutable": true,
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
