@@ -1,0 +1,6 @@
+# PC 客户端 electron-updater 依赖文件（electron-builder 无 publish 配置时不会自动生成，故手工随包分发）
+# 运行时 feed 地址由 updater.js setFeedURL 动态注入（本文件 provider/url 不参与运行），
+# 此文件仅作为下载阶段 loadUpdateConfig 的存在性依赖（缺文件即 ENOENT），并提供下载缓存目录名
+provider: generic
+url: https://im.sxgyxny.com/static/download/win/
+updaterCacheDirName: im-client-updater

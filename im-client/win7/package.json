@@ -1,0 +1,85 @@
+{
+  "name": "im-client-pc-win7",
+  "version": "1.0.1",
+  "description": "即时通讯 PC 桌面客户端",
+  "author": {
+    "name": "山西梗阳新能源有限公司"
+  },
+  "winExeMeta": {
+    "fileDescription": "即时通讯 PC 桌面客户端",
+    "productName": "即时通讯"
+  },
+  "main": "loader.min.js",
+  "scripts": {
+    "pack": "electron-builder --win --ia32 --dir"
+  },
+  "devDependencies": {
+    "electron": "22.3.27",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "cdt-gdb-adapter": "^1.10.0",
+    "cross-spawn": "^7.0.6",
+    "electron-updater": "^6.8.9",
+    "rcedit": "^4.0.1"
+  },
+  "build": {
+    "appId": "com.im.client",
+    "productName": "im-client",
+    "npmRebuild": false,
+    "asarUnpack": [
+      "shot-window-picker.ps1",
+      "remote-sendinput.ps1",
+      "node_modules/cdt-gdb-adapter/**",
+      "node_modules/@vscode/debugadapter/**",
+      "node_modules/@vscode/debugprotocol/**",
+      "node_modules/async-mutex/**"
+    ],
+    "files": [
+      "!bundled/**",
+      "!builder-cache/**",
+      "!dist/**",
+      "!loader.js",
+      "!obfuscate.js",
+      "!build.bat",
+      "!main.js",
+      "!web-cache.js",
+      "!agent-executor.js",
+      "!browser-manager.js",
+      "!toolchain-manager.js",
+      "!mcp-manager.js",
+      "!node-runtime.js",
+      "!lsp-manager.js",
+      "!remote-input.js",
+      "!debug-manager.js",
+      "!updater.js",
+      "!*.bat",
+      "!gen-package.js",
+      "!patch-obfuscate.js",
+      "!patch-main.js",
+      "!api-test.js",
+      "!*.log",
+      "!*.md"
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": true,
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "im-client-setup-${version}.${ext}",
+      "installerIcon": "64.ico",
+      "uninstallerIcon": "64.ico"
+    },
+    "extraResources": [
+      {
+        "from": "app-update.yml",
+        "to": "app-update.yml"
+      }
+    ]
+  }
+}

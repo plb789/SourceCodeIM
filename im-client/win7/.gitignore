@@ -1,0 +1,8 @@
+node_modules/
+builder-cache/
+bundled/
+dist/
+_toolchain/
+user-data-t1/
+user-data-t2/
+*.enc
