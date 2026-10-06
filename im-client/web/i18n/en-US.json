@@ -1619,6 +1619,8 @@
   "好友间大文件优先点对点直传，不经服务器；失败自动回退原链路。": "Large files between friends go peer-to-peer first without passing through the server; falls back to the original link automatically on failure.",
   "已开启好友文件直传": "Peer-to-peer file transfer enabled",
   "已关闭好友文件直传": "Peer-to-peer file transfer disabled",
+  "已开启上下线提示": "Online/offline tips enabled",
+  "已关闭上下线提示": "Online/offline tips disabled",
   "文件分享 - 网盘": "File Share - Drive",
   "网盘": "Drive",
   "登录": "Sign in",

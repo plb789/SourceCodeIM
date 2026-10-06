@@ -1524,6 +1524,21 @@
         });
     }
 
+    // 上下线提示开关（localStorage 持久化；默认关闭——会话标题旁已实时显示在线/离线状态，
+    // 聊天区"xx 上线了/下线了"系统提示条仅供联调测试观察连接变化用，正式发布不显示）
+    var sOflt = document.getElementById('settings-online-tips');
+    if (sOflt) {
+        try { sOflt.checked = localStorage.getItem('im_online_tips') === '1'; } catch (eOflt) { sOflt.checked = false; }
+        sOflt.addEventListener('change', function () {
+            try { localStorage.setItem('im_online_tips', sOflt.checked ? '1' : '0'); } catch (eOflt2) {}
+            showToast(sOflt.checked ? I18N.t('已开启上下线提示') : I18N.t('已关闭上下线提示'));
+        });
+    }
+    // 上下线提示开关读取（USER_LIST_DELTA 处理器内调用；localStorage 异常兜底默认关闭）
+    function onlineTipsEnabled() {
+        try { return localStorage.getItem('im_online_tips') === '1'; } catch (eOflt3) { return false; }
+    }
+
     // 阶段二百二十六：手机 APP 后台保活引导（学微信：设置页引导用户开系统权限）。
     // 仅原生 APP 端显示；电池优化豁免是唯一可编程弹系统授权框的项（允许后息屏/省电不限制后台连接），
     // 厂商自启动管理页无公开 API 仅跳转引导。状态在进入页面与从系统设置页返回时刷新。
@@ -7528,7 +7543,7 @@
                 if (u.username !== self) { // 本人条目（93 帧广播含本人）不触发好友态与提示
                     var f = friendList.find(function (x) { return x.username === u.username; });
                     if (f && !f.online) { f.online = true; friendChanged = true; }
-                    if ((sysTip || u.username === currentChatUser) && !wasOnline) {
+                    if ((sysTip || u.username === currentChatUser) && !wasOnline && onlineTipsEnabled()) {
                         appendSystem(u.username + I18N.t(' 上线了'));
                     }
                 }
@@ -7542,7 +7557,7 @@
                 if (name !== self) {
                     var f2 = friendList.find(function (x) { return x.username === name; });
                     if (f2 && f2.online) { f2.online = false; friendChanged = true; }
-                    if ((sysTip || name === currentChatUser) && wasOnline) {
+                    if ((sysTip || name === currentChatUser) && wasOnline && onlineTipsEnabled()) {
                         appendSystem(name + I18N.t(' 下线了'));
                     }
                 }

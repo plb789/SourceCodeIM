@@ -1512,6 +1512,17 @@
                         <span class="settings-lang-name">English</span>
                     </button>
                 </div>
+                <!-- 上下线提示开关：默认关闭（会话标题旁已实时显示在线/离线状态，聊天区系统提示条仅供联调测试观察连接变化用，正式发布不显示） -->
+                <h3 class="settings-subtitle">聊天</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">上下线提示</div>
+                            <div class="settings-card-desc">好友与群成员上线、下线时在聊天区显示系统提示条；会话标题旁已有在线状态标记，日常使用建议关闭，测试联调时可开启。</div>
+                        </div>
+                        <input id="settings-online-tips" type="checkbox" class="slide-switch">
+                    </div>
+                </div>
                 <!-- 原代码（阶段一百五十七迁移）：好友文件直传开关原置于外观"文件"小节，
                      用户反馈该开关属网络行为而非 UI 外观，迁至独立"网络"分类（settings-view-network），
                      DOM id（settings-file-p2p）与 chat.js 绑定逻辑全保留零改动
