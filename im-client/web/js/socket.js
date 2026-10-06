@@ -289,6 +289,8 @@
         GROUP_TRANSFER_RESP: 99, // 下行：转让回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 transfer + 73 归位）
         GROUP_DISSOLVE: 100,     // 上行：解散群聊（content 为 JSON：{group_id}，仅群主）
         GROUP_DISSOLVE_RESP: 101,// 下行：解散回执（content 为 JSON：{ok, group_id, err?}；成功后全员收 77 dissolve 清会话）
+        GROUP_SET_ROLE: 102,     // 上行：任命/罢免管理员（content 为 JSON：{group_id, member:"u2", admin:true/false}，仅群主；阶段二百六十七）
+        GROUP_SET_ROLE_RESP: 103,// 下行：设置回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 action=role + 73 刷新）
         ANNOUNCEMENT_PUSH: 84,   // 阶段一百四十四：公告发布实时推送（下行，content 为 JSON：{id,title,category,digest,publisher,publish_time}；客户端亮红点并入公告列表头）
         REGISTER: 85,            // 阶段一四五：独立注册页注册信令（双向同类型，上行注册请求；下行 content="ok" 或错误提示）
         // ===== 阶段一百五十四：积分红包（微信同款，金额计算/拆分/扣减/退回全部服务端归口） =====

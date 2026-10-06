@@ -1945,5 +1945,15 @@
   "三星": "Samsung",
   "乐视": "LeEco",
   "通用": "Generic",
-  "请在打开的页面中允许本应用自启动与后台运行": "Please allow this app to auto-start and run in the background on the opened page"
+  "请在打开的页面中允许本应用自启动与后台运行": "Please allow this app to auto-start and run in the background on the opened page",
+  "设为管理员": "Set as Admin",
+  "取消管理员": "Remove Admin",
+  "移出群聊": "Remove from Group",
+  "你已成为群管理员": "You are now a group admin",
+  " 已成为群管理员": " is now a group admin",
+  "你的群管理员身份已被取消": "Your group admin role has been removed",
+  " 的群管理员身份已取消": "'s group admin role has been removed",
+  " · 管理员": " · Admin",
+  "群主": "Owner",
+  "管理员": "Admin"
 }

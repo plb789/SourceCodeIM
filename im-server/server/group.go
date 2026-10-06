@@ -256,8 +256,8 @@ func (s *Server) notifyGroupListSync(usernames []string) {
 // groupMemberNoticePayload 77 成员变更通知载荷
 type groupMemberNoticePayload struct {
 	GroupID     uint              `json:"group_id"`
-	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）/ kick=被移出群聊 / leave=已退出群聊（阶段一百四十三）/ transfer=群主已转让（阶段二百六十四，users=新群主）/ dissolve=群聊已解散（阶段二百六十四，带群名）
-	Users       []GroupMemberInfo `json:"users,omitempty"` // action=join 时为新成员；action=reject 时为被拒绝对象；action=transfer 时为新群主
+	Action      string            `json:"action"`          // create=群聊已创建 / join=新成员加入 / reject=邀请被拒绝（仅邀请人收）/ kick=被移出群聊 / leave=已退出群聊（阶段一百四十三）/ transfer=群主已转让（阶段二百六十四，users=新群主）/ dissolve=群聊已解散（阶段二百六十四，带群名）/ role=管理员任命或罢免（阶段二百六十七，users=被操作者含新角色）
+	Users       []GroupMemberInfo `json:"users,omitempty"` // action=join 时为新成员；action=reject 时为被拒绝对象；action=transfer 时为新群主；action=role 时为被操作成员
 	MemberCount int               `json:"member_count"`
 	Name        string            `json:"name,omitempty"` // 阶段一百四十三：群名（kick/leave/dissolve 提示语归口服务端下发，避免前端离线期数据缺失）
 }
@@ -608,7 +608,16 @@ func (s *Server) sendGroupOkResp(c *Client, msgType int, groupID uint, ok bool, 
 	s.sendToUser(c.username, data)
 }
 
-// handleGroupSetting 处理群设置修改（78，仅群主）：群名/公告校验（长度+敏感词，与建群同口径）→
+// groupActorRole 查询用户在群内的角色（0=非成员；1 群主 2 成员 3 管理员，阶段二百六十七）
+func groupActorRole(groupID uint, username string) int8 {
+	var m model.GroupMember
+	if err := store.DB.Where("group_id = ? AND user_id = ?", groupID, username).First(&m).Error; err != nil {
+		return 0
+	}
+	return m.Role
+}
+
+// handleGroupSetting 处理群设置修改（78，群主/管理员，阶段二百六十七放宽）：群名/公告校验（长度+敏感词，与建群同口径）→
 // 更新写库 → 回执 79 + 全群 73 同步归口刷新（前端 groupMap/标题/设置面板自动更新）
 func (s *Server) handleGroupSetting(c *Client, msg *protocol.Message) {
 	var p groupSettingPayload
@@ -621,8 +630,8 @@ func (s *Server) handleGroupSetting(c *Client, msg *protocol.Message) {
 		s.sendError(c, "群不存在")
 		return
 	}
-	if group.OwnerID != c.username {
-		s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "仅群主可修改群设置")
+	if role := groupActorRole(p.GroupID, c.username); role != 1 && role != 3 {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSettingResp, p.GroupID, false, "仅群主和管理员可修改群设置")
 		return
 	}
 	name := strings.TrimSpace(p.Name)
@@ -677,7 +686,8 @@ type groupKickPayload struct {
 	Member  string `json:"member"`
 }
 
-// handleGroupKick 处理移出成员（80，仅群主）：校验目标在群且非自己 → 删成员行 + 删其会话行
+// handleGroupKick 处理移出成员（80，群主/管理员，阶段二百六十七放宽）：校验目标在群且非自己；
+// 管理员仅可移出普通成员（不可动群主/其他管理员）→ 删成员行 + 删其会话行
 // （防重新登录残留）→ 回执 81 + 被踢者推 77 kick（含群名，客户端清会话并提示）+ 其余成员 73 同步刷新
 func (s *Server) handleGroupKick(c *Client, msg *protocol.Message) {
 	var p groupKickPayload
@@ -695,13 +705,22 @@ func (s *Server) handleGroupKick(c *Client, msg *protocol.Message) {
 		s.sendError(c, "群不存在")
 		return
 	}
-	if group.OwnerID != c.username {
-		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "仅群主可移出成员")
+	actorRole := groupActorRole(p.GroupID, c.username)
+	if actorRole != 1 && actorRole != 3 {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "仅群主和管理员可移出成员")
 		return
 	}
 	if p.Member == c.username {
 		s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "不能移出自己")
 		return
+	}
+	if actorRole == 3 {
+		// 阶段二百六十七：管理员只能移出普通成员，群主与其他管理员不可动
+		var target model.GroupMember
+		if err := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, p.Member).First(&target).Error; err != nil || target.Role != 2 {
+			s.sendGroupOkResp(c, protocol.MsgTypeGroupKickResp, p.GroupID, false, "管理员仅可移出普通成员")
+			return
+		}
 	}
 	res := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, p.Member).Delete(&model.GroupMember{})
 	if res.Error != nil || res.RowsAffected == 0 {
@@ -732,8 +751,8 @@ type groupQuitPayload struct {
 	GroupID uint `json:"group_id"`
 }
 
-// handleGroupQuit 处理退出群聊（82）：一期群主不可退（转让/解散归二期），普通成员退群 →
-// 删成员行 + 删自己的会话行 → 回执 83 + 退群者推 77 leave + 其余成员 73 同步刷新
+// handleGroupQuit 处理退出群聊（82）：群主不可退（出口：转让/解散，阶段二百六十四），
+// 普通成员/管理员退群 → 删成员行 + 删自己的会话行 → 回执 83 + 退群者推 77 leave + 其余成员 73 同步刷新
 func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 	var p groupQuitPayload
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
@@ -768,6 +787,92 @@ func (s *Server) handleGroupQuit(c *Client, msg *protocol.Message) {
 	})
 	s.notifyGroupListSync(getGroupMemberIDs(p.GroupID))
 	s.sendGroupOkResp(c, protocol.MsgTypeGroupQuitResp, p.GroupID, true, "")
+}
+
+// ===== 阶段二百六十七：群管理员角色体系（微信同款 Role=3 管理员：日常管理权下放，任命/罢免仍群主专属） =====
+// Role 语义：1 群主 / 2 成员 / 3 管理员；管理员可改群名公告（78）、移出普通成员（80），
+// 任命/罢免管理员（102）、转让群主（98）、解散群聊（100）仍归群主专属
+
+// groupSetRolePayload 102 任命/罢免管理员载荷
+type groupSetRolePayload struct {
+	GroupID uint   `json:"group_id"`
+	Member  string `json:"member"`
+	Admin   bool   `json:"admin"` // true=设为管理员（Role 2→3）false=取消管理员（Role 3→2）
+}
+
+// handleGroupSetRole 处理任命/罢免管理员（102，仅群主）：校验目标为在群成员且非自己，
+// admin=true 须目标为普通成员、false 须目标为管理员 → 写库 → 回执 103 +
+// 全员 77 action=role（users=被操作者含新角色）+ 73 全量同步归口刷新
+func (s *Server) handleGroupSetRole(c *Client, msg *protocol.Message) {
+	var p groupSetRolePayload
+	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.GroupID == 0 {
+		s.sendError(c, "参数格式错误")
+		return
+	}
+	p.Member = strings.TrimSpace(p.Member)
+	if p.Member == "" {
+		s.sendError(c, "请选择要设置的成员")
+		return
+	}
+	var group model.Group
+	if err := store.DB.Where("id = ?", p.GroupID).First(&group).Error; err != nil {
+		s.sendError(c, "群不存在")
+		return
+	}
+	if group.OwnerID != c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, "仅群主可设置管理员")
+		return
+	}
+	if p.Member == c.username {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, "不能设置自己")
+		return
+	}
+	var target model.GroupMember
+	if err := store.DB.Where("group_id = ? AND user_id = ?", p.GroupID, p.Member).First(&target).Error; err != nil {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, "该用户不是群成员")
+		return
+	}
+	if p.Admin {
+		if target.Role != 2 {
+			hint := "该成员已是管理员"
+			if target.Role == 1 {
+				hint = "群主无需设置"
+			}
+			s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, hint)
+			return
+		}
+	} else if target.Role != 3 {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, "该成员不是管理员")
+		return
+	}
+	newRole := int8(2)
+	if p.Admin {
+		newRole = 3
+	}
+	if err := store.DB.Model(&model.GroupMember{}).Where("group_id = ? AND user_id = ?", p.GroupID, p.Member).Update("role", newRole).Error; err != nil {
+		s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, false, "保存失败，请稍后重试")
+		logger.Error("设置群管理员写库失败：群 %d %v", p.GroupID, err)
+		return
+	}
+	logger.Info("群管理员变更：群 %d「%s」%s 由 %s 设置 role=%d", p.GroupID, group.Name, p.Member, c.username, newRole)
+	invalidateGroupMembersCache(p.GroupID) // E6：角色变更，名单（按 role 排序）即时失效（本实例 + 集群），与转让/踢人同惯例
+
+	// 回执 + 全员 77 role（被操作者含新角色，前端据此提示与归位）+ 73 全量同步
+	s.sendGroupOkResp(c, protocol.MsgTypeGroupSetRoleResp, p.GroupID, true, "")
+	var u model.User
+	store.DB.Where("username = ?", p.Member).First(&u)
+	s.pushGroupMemberNotice(getGroupMemberIDs(p.GroupID), groupMemberNoticePayload{
+		GroupID: p.GroupID,
+		Action:  "role",
+		Users: []GroupMemberInfo{{
+			Username: p.Member,
+			Name:     nicknameOf(p.Member),
+			Role:     newRole,
+			Avatar:   u.Avatar,
+		}},
+		Name: group.Name,
+	})
+	s.notifyGroupListSync(getGroupMemberIDs(p.GroupID))
 }
 
 // ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，收尾 82/83 遗留的群主出口） =====

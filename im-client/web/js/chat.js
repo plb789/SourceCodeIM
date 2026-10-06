@@ -19215,6 +19215,17 @@
         } else if (data.action === 'dissolve') {
             // 阶段二百六十四：群聊已解散——全员本地清理归口（与被踢同路径）
             removeGroupLocal(data.group_id, I18N.t('群聊「') + (data.name || I18N.t('群聊')) + I18N.t('」已解散'));
+        } else if (data.action === 'role') {
+            // 阶段二百六十七：管理员任命/罢免——全员提示（被操作者本人特殊文案）；角色归位由 73 全量同步归口
+            var ru = (data.users && data.users[0]) || null;
+            if (ru) {
+                var rn = ru.name || ru.username;
+                if (ru.role === 3) {
+                    showToast(ru.username === IMSocket.getUsername() ? I18N.t('你已成为群管理员') : ('「' + rn + '」' + I18N.t(' 已成为群管理员')));
+                } else {
+                    showToast(ru.username === IMSocket.getUsername() ? I18N.t('你的群管理员身份已被取消') : ('「' + rn + '」' + I18N.t(' 的群管理员身份已取消')));
+                }
+            }
         }
         if (data.invite_id) {
             var remain = groupInvites.filter(function (x) { return x.invite_id !== data.invite_id; });
@@ -19278,6 +19289,7 @@
         gsetMask.classList.add('hidden');
         gsetPanel.classList.add('hidden');
         gsetGroupID = 0;
+        closeGsetCtx(); // 阶段二百六十七：关闭面板时同步收起成员菜单
     }
     document.getElementById('gset-close').addEventListener('click', closeGroupSetting);
 
@@ -19294,21 +19306,28 @@
     function renderGroupSetting() {
         var g = groupOfId(gsetGroupID);
         if (!g) { closeGroupSetting(); return; }
+        closeGsetCtx(); // 阶段二百六十七：面板重渲染（73 刷新）时收起旧成员菜单浮层，防菜单指向失效格子
         var owner = isGroupOwner('g' + g.group_id);
         var kw = gsetMSearch.value.trim().toLowerCase();
         gsetName.textContent = g.name || I18N.t('群聊');
         gsetAnnounce.textContent = g.announce || I18N.t('暂无群公告');
         gsetAnnounce.classList.toggle('gset-empty-announce', !g.announce);
         // 阶段二百六十六调整：群头像入口移至聊天标题栏（群名前显示，群主点击更换），面板内不再重复展示
-        // 管理入口显隐（仅群主：转让/解散归群主，阶段二百六十四；退出按钮归普通成员）
-        gsetNameEditBtn.classList.toggle('hidden', !owner);
-        gsetAnnounceBtn.classList.toggle('hidden', !owner);
+        // 管理入口显隐（仅群主：转让/解散归群主，阶段二百六十四；退出按钮归群主以外的成员）
+        // 阶段二百六十七：群名/公告编辑入口同步对管理员开放（服务端 78 校验已放宽）
+        var admin = myGroupRole(g) === 3; // 操作者是否管理员
+        gsetNameEditBtn.classList.toggle('hidden', !owner && !admin);
+        gsetAnnounceBtn.classList.toggle('hidden', !owner && !admin);
         gsetTransfer.classList.toggle('hidden', !owner);
         gsetDissolve.classList.toggle('hidden', !owner);
         gsetQuit.classList.toggle('hidden', owner);
-        // 成员网格（群主排前；搜索按昵称/账号过滤）
+        // 成员网格（群主>管理员>普通成员排序；搜索按昵称/账号过滤）
         var members = (g.members || []).slice();
-        members.sort(function (a, b) { return (a.role || 2) - (b.role || 2); });
+        members.sort(function (a, b) {
+            var wa = a.role === 1 ? 0 : (a.role === 3 ? 1 : 2);
+            var wb = b.role === 1 ? 0 : (b.role === 3 ? 1 : 2);
+            return wa - wb;
+        });
         var shown = members.filter(function (m) {
             var nm = (m.name || m.username || '');
             return !kw || nm.toLowerCase().indexOf(kw) >= 0 || (m.username || '').toLowerCase().indexOf(kw) >= 0;
@@ -19319,7 +19338,7 @@
             var isMe = m.username === IMSocket.getUsername();
             var cell = document.createElement('div');
             cell.className = 'gset-member';
-            cell.title = (isMe ? nm + I18N.t('（我）') : nm) + (m.role === 1 ? I18N.t(' · 群主') : '');
+            cell.title = (isMe ? nm + I18N.t('（我）') : nm) + (m.role === 1 ? I18N.t(' · 群主') : (m.role === 3 ? I18N.t(' · 管理员') : ''));
             if (m.avatar) {
                 var av = document.createElement('img');
                 av.src = m.avatar;
@@ -19334,12 +19353,20 @@
             lbl.className = 'gset-member-name';
             lbl.textContent = isMe ? I18N.t('我') : nm;
             cell.appendChild(lbl);
+            // 阶段二百六十七：角色徽标（群主/管理员，微信同款小标签）
+            if (m.role === 1 || m.role === 3) {
+                var tag = document.createElement('span');
+                tag.className = 'gset-member-tag' + (m.role === 1 ? ' owner' : '');
+                tag.textContent = m.role === 1 ? I18N.t('群主') : I18N.t('管理员');
+                cell.appendChild(tag);
+            }
             cell.addEventListener('click', function () {
-                // 群主点击普通成员 → 确认后移出（自研确认弹窗）；群主/自己点击无操作
-                if (!owner || m.role === 1 || isMe) return;
-                showConfirm(I18N.t('移出成员'), I18N.t('将「') + nm + I18N.t('」移出群聊「') + (g.name || I18N.t('群聊')) + '」？', function () {
-                    IMSocket.send({ msg_type: MSG.GROUP_KICK, content: JSON.stringify({ group_id: gsetGroupID, member: m.username }) });
-                }, I18N.t('移出'));
+                // 阶段二百六十七：按操作者/目标角色弹自绘成员菜单（设为管理员/取消管理员/移出群聊）；
+                // 自己/普通成员操作者/群主目标不弹菜单（管理员仅可操作普通成员）
+                if (isMe || m.role === 1) return;
+                var mr = myGroupRole(g);
+                if (mr === 1) { openGsetMemberMenu(cell, m, g, 1); return; }
+                if (mr === 3 && m.role === 2) openGsetMemberMenu(cell, m, g, 3);
             });
             gsetMembersEl.appendChild(cell);
         });
@@ -19364,6 +19391,76 @@
         var expanded = gsetMembersEl.classList.contains('expanded');
         gsetMore.classList.toggle('hidden', !(overflow || expanded));
         gsetMore.textContent = expanded ? I18N.t('收起') : I18N.t('查看全部成员');
+    }
+
+    // ===== 阶段二百六十七：成员操作菜单（自绘浮层，微信同款点击成员弹出，禁用系统弹窗） =====
+    var gsetCtx = null; // 当前打开的成员菜单
+
+    function closeGsetCtx() {
+        if (gsetCtx) { gsetCtx.remove(); gsetCtx = null; }
+        document.removeEventListener('click', closeGsetCtx, true);
+    }
+
+    // 操作者在群 g 内的角色（1 群主 2 成员 3 管理员；非成员 2 兜底）
+    function myGroupRole(g) {
+        var mr = 2;
+        ((g && g.members) || []).forEach(function (x) {
+            if (x.username === IMSocket.getUsername()) mr = x.role || 2;
+        });
+        return mr;
+    }
+
+    // 弹出成员操作菜单：myRole=1 群主（设为管理员/取消管理员/移出群聊）；
+    // myRole=3 管理员仅可移出普通成员；菜单项微信同款，设置类操作直接发送（结果归口 103/77 role）
+    function openGsetMemberMenu(cell, m, g, myRole) {
+        closeGsetCtx();
+        var nm = m.name || m.username || '?';
+        var items = [];
+        if (myRole === 1) {
+            if (m.role === 2) {
+                items.push({ text: I18N.t('设为管理员'), act: function () {
+                    IMSocket.send({ msg_type: MSG.GROUP_SET_ROLE, content: JSON.stringify({ group_id: gsetGroupID, member: m.username, admin: true }) });
+                } });
+            }
+            if (m.role === 3) {
+                items.push({ text: I18N.t('取消管理员'), act: function () {
+                    IMSocket.send({ msg_type: MSG.GROUP_SET_ROLE, content: JSON.stringify({ group_id: gsetGroupID, member: m.username, admin: false }) });
+                } });
+            }
+        }
+        if ((myRole === 1 && m.role !== 1) || (myRole === 3 && m.role === 2)) {
+            items.push({ text: I18N.t('移出群聊'), danger: true, act: function () {
+                showConfirm(I18N.t('移出成员'), I18N.t('将「') + nm + I18N.t('」移出群聊「') + (g.name || I18N.t('群聊')) + '」？', function () {
+                    IMSocket.send({ msg_type: MSG.GROUP_KICK, content: JSON.stringify({ group_id: gsetGroupID, member: m.username }) });
+                }, I18N.t('移出'));
+            } });
+        }
+        if (!items.length) return;
+        var menu = document.createElement('div');
+        menu.className = 'ws-more-menu ws-ctx-menu';
+        items.forEach(function (it) {
+            var el = document.createElement('div');
+            el.className = 'ws-more-item' + (it.danger ? ' danger' : '');
+            el.textContent = it.text;
+            el.addEventListener('click', function (e) {
+                e.stopPropagation();
+                closeGsetCtx();
+                it.act();
+            });
+            menu.appendChild(el);
+        });
+        document.body.appendChild(menu);
+        gsetCtx = menu;
+        // 定位：默认弹在成员格子上方（面板内空间向上充足），空间不足翻转到下方；左右防溢出
+        var r = cell.getBoundingClientRect();
+        var mw = menu.offsetWidth, mh = menu.offsetHeight;
+        var left = Math.min(Math.max(r.left, 8), window.innerWidth - mw - 8);
+        var top = r.top - mh - 6;
+        if (top < 8) top = r.bottom + 6;
+        menu.style.left = Math.round(left) + 'px';
+        menu.style.top = Math.round(top) + 'px';
+        // 下一帧再挂全局关闭监听（捕获阶段），避免本次点击冒泡立即关闭
+        setTimeout(function () { document.addEventListener('click', closeGsetCtx, true); }, 0);
     }
 
     // 群名行内编辑：显示编辑行并预填当前群名
@@ -19503,6 +19600,14 @@
 
     // 101 解散回执（仅失败提示；成功清理由 77 dissolve 归口）
     IMSocket.on(MSG.GROUP_DISSOLVE_RESP, function (msg) {
+        var data;
+        try { data = JSON.parse(msg.content); } catch (e) { data = null; }
+        if (!data) return;
+        if (!data.ok) showToast(data.err || I18N.t('操作失败'));
+    });
+
+    // 103 管理员设置回执（仅失败提示；成功提示归口 77 role，角色归位由 73 全量同步归口）
+    IMSocket.on(MSG.GROUP_SET_ROLE_RESP, function (msg) {
         var data;
         try { data = JSON.parse(msg.content); } catch (e) { data = null; }
         if (!data) return;

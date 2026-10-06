@@ -459,6 +459,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleGroupKick(c, msg)
 	case protocol.MsgTypeGroupQuit:
 		s.handleGroupQuit(c, msg)
+	// 阶段二百六十七：群管理员任命/罢免信令（微信同款 Role=3 管理员）
+	case protocol.MsgTypeGroupSetRole:
+		s.handleGroupSetRole(c, msg)
 	// 阶段二百六十四：群主转让与解散群聊信令（微信同款群管理闭环）
 	case protocol.MsgTypeGroupTransfer:
 		s.handleGroupTransfer(c, msg)

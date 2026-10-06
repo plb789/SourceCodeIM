@@ -129,6 +129,10 @@ const (
 	MsgTypeGroupQuit        = 82 // 上行：退出群聊（content 为 JSON：{group_id}，仅普通成员可退；群主退群出口：先转让（98）或解散（100））
 	MsgTypeGroupQuitResp    = 83 // 下行：退群回执（content 为 JSON：{ok, group_id, err?}；成功后退群者收 77 action=leave，其余成员收 73 刷新）
 
+	// ===== 阶段二百六十七：群管理员角色体系（微信同款 Role=3 管理员：改名/公告/移出普通成员下放，任命/罢免/转让/解散仍群主专属） =====
+	MsgTypeGroupSetRole     = 102 // 上行：任命/罢免管理员（content 为 JSON：{group_id, member:"u2", admin:true/false}，仅群主；admin=true 须目标为普通成员，false 须目标为管理员）
+	MsgTypeGroupSetRoleResp = 103 // 下行：设置回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 action=role + 73 刷新）
+
 	// ===== 阶段二百六十四：群主转让与解散群聊（微信同款群管理闭环，收尾 82/83 遗留的群主出口） =====
 	MsgTypeGroupTransfer     = 98  // 上行：转让群主（content 为 JSON：{group_id, to:"u2"}，仅群主；目标须为在群成员且非自己）
 	MsgTypeGroupTransferResp = 99  // 下行：转让回执（content 为 JSON：{ok, group_id, err?}；成功后全群收 77 action=transfer + 73 全量同步（owner/角色归位））

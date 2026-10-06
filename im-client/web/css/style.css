@@ -11530,6 +11530,22 @@ html.m #friend-menu {
     text-overflow: ellipsis;
 }
 
+/* 阶段二百六十七：成员角色徽标（群主/管理员，微信同款小标签，跟随主题色） */
+.gset-member-tag {
+    display: inline-block;
+    margin-top: 3px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 16px;
+    color: var(--text-light);
+    background: var(--hover);
+}
+.gset-member-tag.owner {
+    color: var(--primary);
+    background: var(--primary-soft, var(--hover));
+}
+
 /* 群主专属"添加"格子：虚线边框 + 号，点击复用邀请成员弹窗 */
 .gset-add {
     width: 56px;
