@@ -132,6 +132,19 @@ function registerIpc() {
     });
 }
 
+// appVerSemverCompare 语义化版本比对（x.y.z 数值段逐位比较，与服务端 appversion.go 口径一致；a>b 返回 1）
+function appVerSemverCompare(a, b) {
+    var pa = String(a).split('.');
+    var pb = String(b).split('.');
+    var n = Math.max(pa.length, pb.length);
+    for (var i = 0; i < n; i++) {
+        var va = parseInt(pa[i], 10) || 0;
+        var vb = parseInt(pb[i], 10) || 0;
+        if (va !== vb) return va > vb ? 1 : -1;
+    }
+    return 0;
+}
+
 // check 启动检查/托盘手动检查归口；explicit=true 时无论有无更新均给出反馈
 function check(explicit) {
     if (!autoUpdater || !app.isPackaged) {
@@ -144,6 +157,12 @@ function check(explicit) {
             if (!task || !task.updateInfo) return;
             var u = task.updateInfo;
             var version = u.version || '';
+            // 同版本/降级即无更新：generic feed 下 checkForUpdates 无论有无新版均 resolve updateInfo
+            // （无新版由 update-not-available 事件单独反馈），此处不比对会误弹"发现新版本 v同版本"窗
+            if (!version || appVerSemverCompare(version, app.getVersion()) <= 0) {
+                explicitCheck = false; // 事件侧已提示"已是最新版本"（手动检查），复位防重复通知
+                return;
+            }
             fetchForce(version).then(function (extra) {
                 curInfo = {
                     version: version,

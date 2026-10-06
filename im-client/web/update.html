@@ -67,6 +67,8 @@
         cursor: pointer;
     }
     .titlebar .tb-close:hover { background: var(--btn-ghost-bg); color: var(--text); }
+    /* 通用隐藏开关：仅 .tb-close/.btn 有作用域限定规则，force-tag 等无对应规则导致 hidden 失效（红标常显 bug） */
+    .hidden { display: none !important; }
     .titlebar .tb-close.hidden { display: none; }
     /* 主体 */
     .main {
@@ -231,7 +233,26 @@
     }
 
     function applyState(s) { state = s || state; render(); }
-    function applyInfo(i) { info = i || info; render(); }
+    // 语义化版本比对（x.y.z 数值段逐位比较，与主进程/服务端口径一致；a>b 返回 1）
+    function semverCmp(a, b) {
+        var pa = String(a).split('.'), pb = String(b).split('.');
+        var n = Math.max(pa.length, pb.length);
+        for (var i = 0; i < n; i++) {
+            var va = parseInt(pa[i], 10) || 0, vb = parseInt(pb[i], 10) || 0;
+            if (va !== vb) return va > vb ? 1 : -1;
+        }
+        return 0;
+    }
+    function applyInfo(i) {
+        info = i || info;
+        // 旧版主进程兼容：旧 updater.js 对 generic feed 拿到的 updateInfo 不做比对直接开窗，
+        // 同版本/降级也弹"发现新版本"；此处同版本自关自愈（新版主进程已归口拦截，走不到该分支）
+        if (info && info.version && info.current && semverCmp(info.version, info.current) <= 0) {
+            if (bridge && bridge.updaterDismiss) bridge.updaterDismiss();
+            return;
+        }
+        render();
+    }
 
     if (bridge && bridge.updaterGetInfo) {
         bridge.updaterGetInfo().then(function (r) {
