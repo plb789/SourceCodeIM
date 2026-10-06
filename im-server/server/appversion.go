@@ -48,6 +48,8 @@ func RegisterAppVersionRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/appversion/{id}", s.adminGuard(s.handleAdminAppVersionDelete))
 	// 客户端公开检查（无用户态，只读）
 	http.HandleFunc("GET /api/app/version", s.handleAppVersionCheck)
+	// 启动自愈：按当前生效 win 版本重建 latest.yml（历史部署目录缺失/文件丢失时免人工重启用）
+	s.writeWinLatestYml()
 }
 
 // 平台白名单（固定枚举；android=APK 壳更新，win=PC electron-updater）
@@ -151,6 +153,12 @@ func (s *Server) writeWinLatestYml() {
 		b.WriteString("sha2: " + v.SHA256 + "\n")
 	}
 	b.WriteString("releaseDate: '" + v.UpdateTime.Format(time.RFC3339) + "'\n")
+	// 目录兜底：外链登记模式从不落盘安装包（无 MkdirAll 时机），win 目录可能不存在，
+	// 直接 WriteFile 会因目录缺失失败（仅留一行日志），客户端检查 latest.yml 即 404
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		logger.Error("latest.yml 目录创建失败: %v", err)
+		return
+	}
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		logger.Error("latest.yml 生成失败: %v", err)
 	}
