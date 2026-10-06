@@ -22,10 +22,15 @@ type PinMsgInfo struct {
 	PinUser    string `json:"pin_user"`    // 置顶操作人
 }
 
-// convKey 会话键：群聊固定 group，私聊按字典序拼接双方用户名（同一会话双方计算结果一致）
+// convKey 会话键：全局群固定 group，多人群用群编码（g+群ID），私聊按字典序拼接双方用户名（同一会话双方计算结果一致）
+// 阶段二百六十八：多人群会话（to_user='g'+群ID）归一群编码键——原实现按私聊拼接生成
+// 'user|g123' 错误键，群消息置顶写库/联动清理/登录恢复全部失配（群置顶功能完全失效）
 func convKey(self, target string) string {
 	if target == "" {
 		return "group"
+	}
+	if groupIDFromTarget(target) != 0 {
+		return target
 	}
 	if self < target {
 		return self + "|" + target
@@ -55,7 +60,13 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 			return
 		}
 		// 校验消息归属当前会话（群聊消息或双方互发的私聊消息）
-		if target == "" {
+		if gid := groupIDFromTarget(target); gid != 0 {
+			// 阶段二百六十八：多人群会话——消息须为本群消息（群消息以 to_user='g'+群ID 落库）
+			if record.MsgType != 1 || record.ToUser != target {
+				s.sendError(c, "消息不属于当前会话")
+				return
+			}
+		} else if target == "" {
 			if record.MsgType != 1 {
 				s.sendError(c, "消息不属于当前会话")
 				return
@@ -122,11 +133,11 @@ func (s *Server) handleMsgPin(c *Client, msg *protocol.Message) {
 	s.syncPinByKey(key)
 }
 
-// syncPinByKey 按会话键推送置顶状态：群聊广播全体，私聊推送给双方
+// syncPinByKey 按会话键推送置顶状态：多人群定向推送群成员，全局群广播，私聊推送给双方
 func (s *Server) syncPinByKey(key string) {
 	info := s.buildPinInfo(key)
 	if key == "group" {
-		// 群聊：全体广播，会话目标为空
+		// 全局群：全体广播，会话目标为空
 		info.Target = ""
 		data, _ := json.Marshal(info)
 		out, _ := json.Marshal(protocol.Message{
@@ -135,6 +146,20 @@ func (s *Server) syncPinByKey(key string) {
 			Timestamp: time.Now().Unix(),
 		})
 		s.hub.Broadcast(out)
+		return
+	}
+	// 阶段二百六十八：多人群会话键（g+群ID）→ 定向推送全体群成员（各成员视角 Target=群编码，
+	// 与前端 currentChatUser 群编码一致），成员离线者登录时由 pushPinList 补发
+	if gid := groupIDFromTarget(key); gid != 0 {
+		info.Target = key
+		data, _ := json.Marshal(info)
+		out, _ := json.Marshal(protocol.Message{
+			MsgType:   protocol.MsgTypeMsgPinSync,
+			ToUser:    key,
+			Content:   string(data),
+			Timestamp: time.Now().Unix(),
+		})
+		s.sendToGroupMembers(getGroupMemberIDs(gid), out)
 		return
 	}
 	// 私聊：分别以双方的视角推送（各自会话目标为对方）
@@ -188,12 +213,31 @@ func (s *Server) buildPinInfo(key string) PinMsgInfo {
 }
 
 // pushPinList 登录时推送当前用户所有会话的置顶消息（服务端归口，多端同步）
+// 阶段二百六十八：补发多人群会话（conv_key='g'+群ID）置顶——原查询仅覆盖全局群与私聊键，
+// 群成员重登录后群置顶条丢失
 func (s *Server) pushPinList(c *Client) {
 	var pins []model.MessagePin
-	store.DB.Where("conv_key = ? OR conv_key LIKE ? OR conv_key LIKE ?",
+	store.DB.Where("conv_key = ? OR conv_key REGEXP '^g[0-9]+$' OR conv_key LIKE ? OR conv_key LIKE ?",
 		"group", c.username+"|%", "%|"+c.username).Find(&pins)
 
 	for _, p := range pins {
+		// 多人群：登录者须为群成员，按群编码视角推送（buildPinInfo 重新查询可校验撤回状态）
+		if gid := groupIDFromTarget(p.ConvKey); gid != 0 {
+			if !isGroupMember(gid, c.username) {
+				continue
+			}
+			info := s.buildPinInfo(p.ConvKey)
+			info.Target = p.ConvKey
+			data, _ := json.Marshal(info)
+			out, _ := json.Marshal(protocol.Message{
+				MsgType:   protocol.MsgTypeMsgPinSync,
+				ToUser:    p.ConvKey,
+				Content:   string(data),
+				Timestamp: time.Now().Unix(),
+			})
+			c.send(out)
+			continue
+		}
 		// 私聊会话按对方视角推送（buildPinInfo 重新查询可校验撤回状态）
 		if p.ConvKey == "group" {
 			info := s.buildPinInfo(p.ConvKey)
