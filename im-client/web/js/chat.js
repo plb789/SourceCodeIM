@@ -2452,7 +2452,7 @@
                     var el = msgTarget;
                     showConfirm(I18N.t('删除消息'), I18N.t('确定删除这条消息吗？仅从你的聊天窗口移除。'), function () {
                         IMSocket.send({ msg_type: MSG.DELETE, msg_id: msgId });
-                        el.remove();
+                        pruneTimeDivider(el); // 移除气泡并清理组内已无消息的孤条时间条
                     }, I18N.t('删除'));
                 } else if (action === 'pin' && msgId) {
                     // 置顶/取消置顶：服务端归口并同步双方，每个会话仅一条置顶
@@ -3166,7 +3166,7 @@
             els.forEach(function (el) {
                 var id = parseInt(el.getAttribute('data-msg-id'), 10) || 0;
                 if (id) IMSocket.send({ msg_type: MSG.DELETE, msg_id: id });
-                el.remove();
+                pruneTimeDivider(el); // 移除气泡并清理组内已无消息的孤条时间条
             });
             exitMultiSelect();
             showToast(I18N.t('已删除 ') + n + I18N.t(' 条消息'));
@@ -22972,6 +22972,110 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }
+
+    // ===== 微信同款聊天时间条：相邻消息间隔超 5 分钟时在消息流居中显示时间分隔 =====
+    // 归口设计：不侵入 30+ 处消息插入点，MutationObserver 监听列表直接子节点插入与
+    // data-ts 回填（文件/视频落库回填等异步补属性场景），统一走 maybeInsertTimeDivider；
+    // 历史批量渲染（首页正序/翻页 prepend/定位向前翻页）同批节点按 DOM 邻位关系判定，天然保序
+    var TIME_DIVIDER_GAP = 300; // 分组间隔：5 分钟（秒），微信同款
+
+    // 时间条文本（微信口径）：当天 HH:mm / 昨天 / 一周内 星期X / 今年 M月D日 / 往年 Y年M月D日，均带 HH:mm
+    function chatDividerTime(ts) {
+        var d = new Date(ts * 1000);
+        if (isNaN(d.getTime())) return '';
+        var now = new Date();
+        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+        if (d.toDateString() === now.toDateString()) return hm;
+        var dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (d.toDateString() === new Date(dayStart.getTime() - 86400000).toDateString()) return I18N.t('昨天') + ' ' + hm;
+        if (d.getTime() >= dayStart.getTime() - 6 * 86400000) {
+            return I18N.t(['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][d.getDay()]) + ' ' + hm;
+        }
+        if (d.getFullYear() === now.getFullYear()) {
+            return I18N.t('{m}月{d}日', { m: d.getMonth() + 1, d: d.getDate() }) + ' ' + hm;
+        }
+        return I18N.t('{y}年{m}月{d}日', { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }) + ' ' + hm;
+    }
+
+    // 沿方向找最近的时间锚（消息或时间条，二者都带 data-ts；无 ts 的系统提示等元素跳过）
+    function timeAnchorSibling(el, dir) {
+        var n = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+        while (n) {
+            var isTd = n.classList && n.classList.contains('time-divider');
+            var t = parseInt(n.getAttribute('data-ts'), 10) || 0;
+            if (isTd || t) return { td: isTd ? n : null, ts: t || null };
+            n = dir < 0 ? n.previousElementSibling : n.nextElementSibling;
+        }
+        return { td: null, ts: null };
+    }
+
+    function buildTimeDividerEl(ts) {
+        var d = document.createElement('div');
+        d.className = 'time-divider';
+        d.setAttribute('data-ts', ts);
+        d.textContent = chatDividerTime(ts);
+        return d;
+    }
+
+    // 为已入 DOM 的消息气泡（带 data-ts，unix 秒）判定并插入时间条：
+    // 1) 前有锚：与锚差 < 5 分钟并入前组不插；时间条也是锚（时间条在 el 前说明 el 属于该组尾段）
+    // 2) 前无锚（列表头，prepend 场景）：与后组时间条差 < 5 分钟则时间条前移归位（组头变更为 el），
+    //    否则（后向链无时间条 = 新组头）必插——补齐跨页切组时缺失的组头时间条
+    function maybeInsertTimeDivider(el) {
+        if (el.parentNode !== messageList) return; // 只处理列表直接子节点（气泡根），防嵌套内容误插
+        var ts = parseInt(el.getAttribute('data-ts'), 10) || 0;
+        if (!ts) return;
+        var prev = timeAnchorSibling(el, -1);
+        if (prev.ts !== null) {
+            if (ts - prev.ts >= TIME_DIVIDER_GAP) el.parentNode.insertBefore(buildTimeDividerEl(ts), el);
+            return;
+        }
+        var next = timeAnchorSibling(el, +1);
+        if (next.td && next.ts !== null && next.ts - ts < TIME_DIVIDER_GAP) {
+            next.td.setAttribute('data-ts', ts);
+            next.td.textContent = chatDividerTime(ts);
+            el.parentNode.insertBefore(next.td, el);
+            return;
+        }
+        el.parentNode.insertBefore(buildTimeDividerEl(ts), el);
+    }
+
+    // 删除消息后清理孤条时间条（组内已无消息则一并移除）；el 仍在 DOM 时调用（先取前兄弟再移除）
+    function pruneTimeDivider(el) {
+        var prev = el.previousElementSibling;
+        if (el.parentNode) el.parentNode.removeChild(el);
+        if (!prev || !prev.classList || !prev.classList.contains('time-divider')) return;
+        var n = prev.nextElementSibling;
+        while (n) {
+            if (n.classList && n.classList.contains('time-divider')) break;
+            if (n.getAttribute && n.getAttribute('data-ts')) return; // 组内仍有消息，保留
+            n = n.nextElementSibling;
+        }
+        if (prev.parentNode) prev.parentNode.removeChild(prev);
+    }
+
+    // 时间条统一归口监听：childList（仅列表直接子节点，气泡内流式追加不产生记录）覆盖全部插入
+    // 路径（实时/历史/在途恢复）；attributes 兜底落库回填补 data-ts 场景；时间条自身带
+    // time-divider 类防重入
+    function timeDividerOnMutations(muts) {
+        for (var i = 0; i < muts.length; i++) {
+            var m = muts[i];
+            if (m.type === 'childList') {
+                for (var j = 0; j < m.addedNodes.length; j++) {
+                    var n = m.addedNodes[j];
+                    if (n.nodeType !== 1 || !n.getAttribute) continue;
+                    if (n.classList.contains('time-divider')) continue;
+                    if (n.getAttribute('data-ts')) maybeInsertTimeDivider(n);
+                }
+            } else {
+                var t = m.target;
+                if (t.getAttribute('data-ts') && t.classList && !t.classList.contains('time-divider')) maybeInsertTimeDivider(t);
+            }
+        }
+    }
+    new MutationObserver(timeDividerOnMutations).observe(messageList, { childList: true });
+    new MutationObserver(timeDividerOnMutations).observe(messageList, { subtree: true, attributeFilter: ['data-ts'] });
 
     // 图片消息渲染
     // 判断消息列表是否接近底部（容差 80px）：图片异步加载撑高后决定是否跟随滚底，
