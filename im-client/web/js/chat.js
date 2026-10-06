@@ -23033,6 +23033,28 @@
         return d;
     }
 
+    // 插入时间条并补偿滚动位置：时间条由 MutationObserver 异步插入（microtask），此时消息
+    // append 的 scrollTop=scrollHeight 滚底已执行——插入撑高列表后若无补偿，底部最后一条
+    // 消息会被顶出视口只显示一半（切会话/实时收发消息场景实测 2026-10-06）；
+    // 向上翻页 prepend 场景 HISTORY_RESP 的 scrollHeight 差值补偿执行时时间条尚未插入，
+    // 随后插入会让视口内容整体下跳——按插入点与视口位置二分处理：
+    // 贴底（含刚滚底）→ 重新滚到底；插入点在视口上沿之上 → 按高度差补偿 scrollTop 锚定视口；
+    // 插入点在视口内/下方且不贴底（用户正翻看历史）→ 不干预不打断浏览
+    function insertDividerWithScrollKeep(td, el) {
+        var stick = isNearBottom(); // 贴底快照须在插入前采样（插入后列表已撑高失真）
+        var listTop = 0, sh0 = 0;
+        if (!stick) {
+            listTop = messageList.getBoundingClientRect().top;
+            if (el.getBoundingClientRect().top < listTop) sh0 = messageList.scrollHeight; // 仅补偿场景才读（减少强制 layout）
+        }
+        messageList.insertBefore(td, el);
+        if (stick) {
+            messageList.scrollTop = messageList.scrollHeight; // 微信同款：贴底状态插入时间条后保持贴底
+        } else if (sh0) {
+            messageList.scrollTop += messageList.scrollHeight - sh0; // prepend 翻页：锚定视口内容不跳动
+        }
+    }
+
     // 为已入 DOM 的消息气泡（带 data-ts，unix 秒）判定并插入时间条：
     // 1) 前有锚：与锚差 < 5 分钟并入前组不插；时间条也是锚（时间条在 el 前说明 el 属于该组尾段）
     // 2) 前无锚（列表头，prepend 场景）：与后组时间条差 < 5 分钟则时间条前移归位（组头变更为 el），
@@ -23043,7 +23065,7 @@
         if (!ts) return;
         var prev = timeAnchorSibling(el, -1);
         if (prev.ts !== null) {
-            if (ts - prev.ts >= TIME_DIVIDER_GAP) el.parentNode.insertBefore(buildTimeDividerEl(ts), el);
+            if (ts - prev.ts >= TIME_DIVIDER_GAP) insertDividerWithScrollKeep(buildTimeDividerEl(ts), el);
             return;
         }
         var next = timeAnchorSibling(el, +1);
@@ -23053,7 +23075,7 @@
             el.parentNode.insertBefore(next.td, el);
             return;
         }
-        el.parentNode.insertBefore(buildTimeDividerEl(ts), el);
+        insertDividerWithScrollKeep(buildTimeDividerEl(ts), el);
     }
 
     // 删除消息后清理孤条时间条（组内已无消息则一并移除）；el 仍在 DOM 时调用（先取前兄弟再移除）
@@ -23098,6 +23120,42 @@
     function isNearBottom() {
         return messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 80;
     }
+
+    // ===== 统一贴底跟随器（微信同款"贴底态内容/布局变化自动跟随"兜底）=====
+    // 背景实测 2026-10-06：切会话后底部仍偶发只显示一半且时有时无——各渲染点的同步滚底
+    // （append*/HISTORY_RESP/时间条 insertDividerWithScrollKeep 补偿）只能管"操作当时"，
+    // 之后仍有大量异步布局变化破坏贴底：图片/视频加载撑高、置顶条 renderPinBar 异步显隐
+    // 压缩列表、FILE_PERSISTED 回填、字体回流等——逐点补偿无法穷举，统一兜底：
+    // 距底距离（scrollHeight-scrollTop-clientHeight）上次 <80（贴底态）且布局变化导致
+    // 距底变化 → 重新滚底；用户主动滚离（翻历史/定位/向上翻页）由 scroll 监听同步
+    // lastGap 不误拉；rAF 节流每帧最多一次 scrollHeight 读取（与 osb 同规格开销）
+    (function () {
+        var lastGap = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight;
+        messageList.addEventListener('scroll', function () {
+            // 用户滚动/浏览器钳制（内容缩小、容器压缩超限）都同步记录当前距底，
+            // 供 followCheck 区分"用户滚离"与"布局变化破坏贴底"
+            lastGap = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight;
+        }, { passive: true });
+        var pending = false;
+        function followCheck() {
+            pending = false;
+            var gap = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight;
+            if (gap !== lastGap) {
+                if (lastGap < 80) {
+                    messageList.scrollTop = messageList.scrollHeight; // 贴底态布局变化 → 跟随贴底
+                    gap = 0;
+                }
+                lastGap = gap;
+            }
+        }
+        function schedule() {
+            if (pending) return;
+            pending = true;
+            requestAnimationFrame(followCheck);
+        }
+        new MutationObserver(schedule).observe(messageList, { childList: true, subtree: true, attributes: true, characterData: true });
+        if (window.ResizeObserver) new ResizeObserver(schedule).observe(messageList); // 容器压缩/窗口缩放（置顶条显隐、输入框 resizer）
+    })();
 
     // 阶段三十八：打开图片查看器（PC 端 Electron 无边框工具栏窗口 / Web 端浏览器新标签，同套工具栏页面）
     // 收集当前会话 DOM 内全部图片作为翻页/缩略图列表：
