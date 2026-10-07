@@ -667,12 +667,16 @@
                 if (info && info.result === 'ok') {
                     loginOk = true;
                 }
-                // 阶段二百四十：扫码登录账号归口——凭码登录 from_user 为空，服务端以码定账号，
-                // 此处以登录响应携带的归口账号名校正本地用户名（重连/保活/UI 归口真实账号）；
-                // 登录码一次性已消费：清空重连密码，断线重连失败自然回落登录页重新扫码或输密码
-                if (loginOk && qrLoginConn && info && info.username) {
+                // 账号归口（扫码 + 密码登录统一）：服务端 hub 以 DB 规范用户名注册（server.go: c.username = user.Username），
+                // MySQL 排序规则大小写不敏感——登录输入 PLB1 也能命中 plb1 账号：登录成功但本地 currentUsername
+                // 仍为输入原样，后续所有 HTTP username= 参数（上传直传/网盘/远程控制，均走 getUsername()）
+                // 在 hub 查无此名 → 401「用户未在线，请先登录」。登录回执恒携带归口账号名，此处统一校正；
+                // 登录码一次性已消费：仅扫码登录清空重连密码，断线重连失败自然回落登录页重新扫码或输密码
+                if (loginOk && info && info.username) {
                     currentUsername = info.username;
-                    window._lastPassword = '';
+                    if (qrLoginConn) {
+                        window._lastPassword = '';
+                    }
                 }
                 if (info && info.recall_window > 0) {
                     recallWindow = info.recall_window;
