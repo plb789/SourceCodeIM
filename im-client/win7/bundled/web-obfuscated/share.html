@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>文件分享 - 网盘</title>
+    
+    <script src="/js/i18n.js?v=3.4"></script>
+    
+    <script>
+        (function () {
+            var t = '';
+            try { t = localStorage.getItem('im_theme') || ''; } catch (e) { t = ''; }
+            if (t !== 'light' && t !== 'dark' && t !== 'system') t = 'dark'; // 阶段二百四十一：无偏好默认深色（原跟随系统）
+            var dark = t === 'dark' || (t === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.style.background = dark ? '#111111' : '#f5f5f5';
+        })();
+    </script>
+    
+    <link rel="stylesheet" href="/css/style.css?v=2.67">
+    <link rel="stylesheet" href="/css/share.css?v=1.9">
+    
+    <script src="/js/socket.js?v=1.33"></script>
+</head>
+<body>
+    
+    <header class="sp-topbar">
+        <div class="sp-logo">
+            <span class="sp-logo-icon">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19.35 10.04A7.49 7.49 0 0 0 12 4C9.11 4 6.6 5.64 5.35 8.04A5.994 5.994 0 0 0 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95A5.469 5.469 0 0 1 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/></svg>
+            </span>
+            <span class="sp-logo-text">网盘</span>
+        </div>
+        <div class="sp-user" id="sp-user">
+            
+            <button class="sp-client-btn" id="sp-client-btn" title="下载电脑与手机客户端">
+                <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                客户端下载
+            </button>
+            
+            <button class="sp-login-entry hidden" id="sp-login-entry">登录</button>
+            <span class="sp-user-name hidden" id="sp-user-name"></span>
+            <button class="sp-logout hidden" id="sp-logout">退出</button>
+        </div>
+    </header>
+
+    
+    <main class="sp-main">
+        <div class="sp-card" id="sp-card">
+            
+            <div class="sp-skel" id="sp-skel" aria-hidden="true">
+                <div class="sp-skel-row">
+                    <div class="sp-skel-block"></div>
+                    <div class="sp-skel-lines">
+                        <div class="sp-skel-line w76"></div>
+                        <div class="sp-skel-line w52"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="sp-icon k-file" id="sp-icon"></div>
+            
+            <div class="sp-name" id="sp-name"></div>
+            
+            <div class="sp-meta" id="sp-meta"></div>
+            
+            <div class="sp-extract-row hidden" id="sp-extract-row">
+                <div class="sp-extract-tip">此分享需要提取码</div>
+                <div class="sp-extract-line">
+                    <input class="sp-extract-input" id="sp-extract-input" maxlength="4" placeholder="请输入 4 位提取码" autocomplete="off">
+                    <button class="sp-btn sp-btn-primary sp-extract-btn" id="sp-extract-btn">提取文件</button>
+                </div>
+                <div class="sp-extract-err hidden" id="sp-extract-err"></div>
+            </div>
+        </div>
+        
+        <div class="sp-wrap hidden" id="sp-wrap">
+            <div class="sp-hero">
+                <div class="sp-icon k-file" id="sp-hero-icon"></div>
+                <div class="sp-hero-info">
+                    <div class="sp-hero-name" id="sp-hero-name"></div>
+                    <div class="sp-hero-meta" id="sp-hero-meta"></div>
+                    <div class="sp-hero-stats" id="sp-hero-stats"></div>
+                </div>
+                
+                <div class="sp-btn-row" id="sp-btn-row">
+                    <button class="sp-btn sp-btn-ghost" id="sp-save-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                        保存到我的网盘
+                    </button>
+                    <button class="sp-btn sp-btn-primary" id="sp-download-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                        下载
+                    </button>
+                    <button class="sp-btn sp-btn-ghost hidden" id="sp-preview-btn">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                        在线预览
+                    </button>
+                </div>
+            </div>
+            <div class="sp-panel">
+                <div class="sp-panel-top">
+                    
+                    <div class="sp-crumb" id="sp-crumb"></div>
+                    
+                    <div class="sp-batchbar hidden" id="sp-batchbar">
+                        <span class="sp-batch-count" id="sp-batch-count"></span>
+                        <button class="sp-batch-btn sp-batch-primary" id="sp-batch-save">保存</button>
+                        <button class="sp-batch-btn" id="sp-batch-dl">下载</button>
+                        <button class="sp-batch-btn sp-batch-ghost" id="sp-batch-cancel">取消</button>
+                    </div>
+                </div>
+                
+                <div class="sp-list-head" id="sp-list-head">
+                    <span class="drive-check" id="sp-check-all" title="全选"><svg viewBox="0 0 24 24" width="11" height="11"><path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></span>
+                    <span class="sp-col-name">名称</span>
+                    <span class="sp-col-size">大小</span>
+                    <span class="sp-col-time">时间</span>
+                </div>
+                <div class="sp-list" id="sp-list"></div>
+                <div class="sp-empty hidden" id="sp-empty">暂无内容</div>
+            </div>
+        </div>
+        
+        <div class="sp-invalid hidden" id="sp-invalid">
+            <div class="sp-invalid-icon">
+                <svg viewBox="0 0 24 24" width="64" height="64"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            </div>
+            <div class="sp-invalid-text" id="sp-invalid-text">分享不存在或已失效</div>
+        </div>
+    </main>
+
+    <footer class="sp-footer">本页面由站内网盘分享生成 · 下载与查看无需登录，保存到网盘需登录账号</footer>
+
+    
+    <div class="sp-login-mask hidden" id="sp-login-mask">
+        <div class="sp-login-box">
+            <button class="sp-login-close" id="sp-login-close" title="关闭">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="sp-login-title">登录后保存到我的网盘</div>
+            <input class="sp-login-input" id="sp-login-username" placeholder="账号" autocomplete="username">
+            <input class="sp-login-input" id="sp-login-password" type="password" placeholder="密码" autocomplete="current-password">
+            <div class="sp-login-err hidden" id="sp-login-err"></div>
+            <button class="sp-btn sp-btn-primary sp-login-btn" id="sp-login-ok">登 录</button>
+        </div>
+    </div>
+
+    
+    <div class="sp-viewer-mask hidden" id="sp-viewer-mask">
+        <div class="sp-viewer-box">
+            <div class="sp-viewer-head">
+                <div class="sp-viewer-title" id="sp-viewer-title"></div>
+                <button class="sp-viewer-close" id="sp-viewer-close" title="关闭">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <div class="sp-viewer-body" id="sp-viewer-body"></div>
+        </div>
+    </div>
+
+    
+    <div class="sp-dl-mask hidden" id="sp-dl-mask">
+        <div class="sp-dl-box">
+            <button class="sp-login-close" id="sp-dl-close" title="关闭">
+                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+            <div class="sp-login-title">下载客户端</div>
+            <div class="sp-dl-tip">电脑和手机也能用：登录同一账号，聊天与网盘文件多端同步</div>
+            <div class="sp-dl-cards">
+                <a class="sp-dl-card" href="/static/download/im-client.exe" download>
+                    <span class="sp-dl-icon">
+                        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+                    </span>
+                    <span class="sp-dl-name">Windows 版</span>
+                    <span class="sp-dl-sub">适用于 Windows 10/11（.exe）</span>
+                    <span class="sp-dl-go">立即下载</span>
+                </a>
+                <a class="sp-dl-card" href="/static/download/im-client.apk" download>
+                    <span class="sp-dl-icon">
+                        <svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h2v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V19h1c.55 0 1-.45 1-1V8H6v10zM3.5 8C2.67 8 2 8.67 2 9.5v7c0 .83.67 1.5 1.5 1.5S5 17.33 5 16.5v-7C5 8.67 4.33 8 3.5 8zm17 0c-.83 0-1.5.67-1.5 1.5v7c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-7c0-.83-.67-1.5-1.5-1.5zm-4.97-5.84l1.3-1.3c.2-.2.2-.51 0-.71-.2-.2-.51-.2-.71 0l-1.48 1.48C13.85 1.23 12.95 1 12 1c-.96 0-1.86.23-2.66.63L7.85.15c-.2-.2-.51-.2-.71 0-.2.2-.2.51 0 .71l1.31 1.31C6.97 3.26 6 5.01 6 7h12c0-1.99-.97-3.75-2.47-4.84zM10 5H9V4h1v1zm5 0h-1V4h1v1z"/></svg>
+                    </span>
+                    <span class="sp-dl-name">Android 版</span>
+                    <span class="sp-dl-sub">适用于 Android 8.0+（.apk）</span>
+                    <span class="sp-dl-go">立即下载</span>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    
+    <div class="sp-toast hidden" id="sp-toast"></div>
+
+    <script src="/js/office-preview.js?v=1.1"></script>
+    <script src="/js/share-page.js?v=2.3"></script>
+</body>
+</html>

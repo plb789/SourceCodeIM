@@ -1,0 +1,1726 @@
+/* ===== 阶段四十九：后台管理界面样式 =====
+   主题色归口：全部复用 style.css 的 CSS 变量体系（--primary/--panel-bg/--border 等），
+   浅色/深色/跟随系统三态自动跟随聊天端主题设定，不在本文件新增任何独立主题色 */
+
+/* ===== 滚动条覆盖（重要）：聊天端为"自绘悬浮滑块"全局隐藏原生滚动条，
+   管理页为内容型页面，恢复为始终可见、易点击拖拽的自定义滚动条（禁用系统默认样式，
+   样式符合页面整体主题） */
+html, body, .admin-body, .admin-cards, .admin-edit-form {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+::-webkit-scrollbar {
+    width: 10px !important;
+    height: 10px !important;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(138, 138, 138, 0.55);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(120, 120, 120, 0.85);
+    background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* ===== 启动骨架层（阶段一百六十八）：脚本编译期间的全屏占位，
+   背景/文字/ spinner 全部走主题变量，主题明暗自动跟随，消除刷新白闪与界面突现跳变 */
+.admin-boot {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+}
+.admin-boot.hidden {
+    display: none;
+}
+.admin-boot-spinner {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--primary);
+    animation: admin-boot-spin 0.8s linear infinite;
+}
+.admin-boot-text {
+    font-size: 13px;
+    color: var(--text-light);
+}
+@keyframes admin-boot-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ===== 列表骨架屏（阶段一百六十八）：所有数据列表请求期间的占位动画，
+   颜色走主题变量（--placeholder-bg/--hover），深浅色自动跟随；数据到达后由渲染函数整体覆盖 */
+.skel-line {
+    display: inline-block;
+    height: 12px;
+    border-radius: 6px;
+    vertical-align: middle;
+    background: linear-gradient(90deg, var(--placeholder-bg) 25%, var(--hover) 50%, var(--placeholder-bg) 75%);
+    background-size: 200% 100%;
+    animation: skel-shimmer 1.1s linear infinite;
+}
+.skel-block {
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+}
+td .skel-line {
+    display: block;
+    height: 13px;
+}
+@keyframes skel-shimmer {
+    to { background-position: -200% 0; }
+}
+
+/* ===== 登录视图 ===== */
+.admin-login-view {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--login-bg);
+}
+.admin-login-card {
+    width: 360px;
+    background: var(--panel-bg);
+    border-radius: 12px;
+    padding: 40px 36px 28px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.admin-login-title {
+    font-size: 22px;
+    text-align: center;
+    color: var(--primary);
+}
+.admin-login-sub {
+    font-size: 13px;
+    color: var(--text-light);
+    text-align: center;
+    margin-bottom: 12px;
+}
+.admin-input {
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0 12px;
+    font-size: 14px;
+    background: var(--search-bg);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s;
+}
+.admin-input:focus {
+    border-color: var(--primary);
+}
+.admin-login-hint {
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+    margin-top: 4px;
+}
+.admin-login-back {
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+    text-decoration: none;
+}
+.admin-login-back:hover {
+    color: var(--primary);
+}
+
+/* ===== 按钮 ===== */
+.admin-btn {
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.admin-btn:hover {
+    /* 中性化 hover：灰底加深（原绿边绿字与全站按钮语言统一） */
+    background: var(--hover);
+}
+.admin-btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+.admin-btn.primary:hover {
+    opacity: 0.9;
+}
+.admin-btn.small {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+.admin-btn.block {
+    width: 100%;
+    padding: 11px 0;
+    font-size: 15px;
+}
+.admin-btn.danger {
+    color: #e64340;
+    border-color: rgba(230, 67, 64, 0.4);
+}
+.admin-btn.danger:hover {
+    background: rgba(230, 67, 64, 0.08);
+    border-color: #e64340;
+}
+.admin-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ===== 主布局：左侧导航 + 右侧内容 ===== */
+.admin-main {
+    display: flex;
+    height: 100vh;
+}
+.admin-side {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+}
+.admin-side-head {
+    padding: 18px 16px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.admin-side-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--primary);
+}
+.admin-theme-btn {
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text-light);
+    border-radius: 6px;
+    /* 图标按钮化：方形居中（SVG 内联于 admin.html，hover 仍灰底加深） */
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    cursor: pointer;
+}
+.admin-theme-btn:hover {
+    /* 中性化 hover：灰底加深（同 admin-btn 统一） */
+    background: var(--hover);
+}
+.admin-nav {
+    flex: 1;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+}
+.admin-nav-item {
+    border: none;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    padding: 11px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+    /* 图标布局：注入的 SVG 与文字同行居中（admin.js 顶部按 data-view 静态映射注入） */
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    white-space: nowrap;
+}
+.admin-nav-item:hover {
+    background: var(--rail-hover, rgba(0, 0, 0, 0.06));
+}
+.admin-nav-item.active {
+    background: var(--primary);
+    color: #fff;
+}
+.admin-side-foot {
+    padding: 14px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.admin-current-user {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ===== 内容区 ===== */
+.admin-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 32px;
+    background: var(--bg);
+}
+.admin-view {
+    display: none;
+    /* 右边距对齐修复：原实现 max-width: 960px 锁死内容列宽，宽屏下右侧大面积留空；
+       现改为占满 .admin-body 可用宽度（内边距由 .admin-body 的 24px 32px 归口） */
+    /* 原代码：max-width: 960px; */
+    max-width: none;
+}
+.admin-view.active {
+    display: block;
+}
+.admin-view-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.admin-view-head h2 {
+    font-size: 18px;
+    color: var(--text);
+}
+.admin-view-tip {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-bottom: 16px;
+}
+
+/* ===== 配置卡片列表 ===== */
+.admin-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.admin-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.admin-card.disabled {
+    opacity: 0.55;
+}
+.admin-card-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    background: var(--placeholder-bg);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    overflow: hidden;
+}
+.admin-card-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+.admin-card-main {
+    flex: 1;
+    min-width: 0;
+}
+.admin-card-name {
+    font-size: 14px;
+    color: var(--text);
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.admin-card-desc {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.admin-card-tag {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(7, 193, 96, 0.12);
+    color: var(--primary);
+    font-weight: normal;
+}
+.admin-card-tag.off {
+    background: rgba(138, 138, 138, 0.18);
+    color: var(--text-light);
+}
+.admin-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.admin-card-empty {
+    text-align: center;
+    color: var(--text-light);
+    font-size: 13px;
+    padding: 40px 0;
+    background: var(--panel-bg);
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+}
+
+/* ===== 编辑弹窗（复用 modal-mask/modal-box/modal-title/modal-btns，仅定制表单区） ===== */
+.admin-edit-box {
+    width: 480px;
+    max-width: calc(100vw - 40px);
+}
+
+/* 客户端更新上传弹窗表单项多（外链模式含 URL/校验和大输入框），单独加宽加高 */
+#av-upload-mask .admin-edit-box {
+    width: 860px;
+}
+#av-upload-mask .admin-edit-form {
+    max-height: 72vh;
+}
+/* 提示文案里的长命令（无空格 ASCII 串）不可断行会把表单撑出横向滚动，允许任意断行 */
+#av-upload-mask .admin-field-hint {
+    overflow-wrap: anywhere;
+}
+
+/* 版本列表安装包链接：浏览器默认链接蓝与主题不搭，统一走主题色（跟随主题色变化） */
+#av-tbody a {
+    color: var(--primary);
+    text-decoration: none;
+}
+#av-tbody a:hover {
+    text-decoration: underline;
+}
+.admin-edit-form {
+    max-height: 56vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 2px;
+}
+.admin-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.admin-field label {
+    font-size: 12px;
+    color: var(--text-light);
+}
+.admin-field input[type="text"],
+.admin-field input[type="password"],
+.admin-field select,
+.admin-field textarea {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size: 13px;
+    background: var(--search-bg);
+    color: var(--text);
+    outline: none;
+    font-family: inherit;
+    transition: border-color 0.15s;
+}
+.admin-field input:focus,
+.admin-field select:focus,
+.admin-field textarea:focus {
+    border-color: var(--primary);
+}
+.admin-field textarea {
+    resize: vertical;
+    min-height: 84px;
+    line-height: 1.5;
+}
+/* 阶段五十一：多选下拉（智能体绑定知识库），给足高度便于 Ctrl+点击 多选 */
+.admin-field select[multiple] {
+    min-height: 88px;
+}
+.admin-field select[multiple] option {
+    padding: 5px 8px;
+}
+.admin-field-check {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+.admin-field-check input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+.admin-field-check label {
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+}
+.admin-field-hint {
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+/* ===== 性能仪表盘（阶段五十） ===== */
+.dash-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.dash-cards-small {
+    grid-template-columns: repeat(6, 1fr);
+}
+.dash-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+/* 卡片悬浮说明走全站 tooltip.js 自绘机制（data-tip-text 驱动），不用原生 title——
+   title 会被 tooltip.js 摘存渲染，与浏览器原生气泡竞态叠出双气泡 */
+.dash-card-label {
+    font-size: 12px;
+    color: var(--text-light);
+}
+.dash-card-value {
+    font-size: 26px;
+    font-weight: bold;
+    color: var(--primary);
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dash-card-value.sm {
+    font-size: 18px;
+}
+.dash-card-sub {
+    font-size: 11px;
+    color: var(--text-light);
+}
+.dash-charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.dash-chart-box {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px 6px;
+    min-width: 0;
+}
+.dash-chart-title {
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.dash-chart {
+    height: 240px;
+    width: 100%;
+}
+.dash-subtitle {
+    font-size: 14px;
+    color: var(--text);
+    margin: 4px 0 10px;
+}
+@media (max-width: 900px) {
+    .dash-cards {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .dash-cards-small {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .dash-charts {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ===== 知识库管理（阶段五十一：详情面板/文件行/命中结果） ===== */
+.admin-card.selected {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 1px var(--primary) inset;
+}
+.admin-kb-panel {
+    margin-top: 20px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px 20px;
+}
+.admin-kb-panel-title {
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 12px;
+}
+.admin-kb-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+.admin-kb-file-input {
+    font-size: 12px;
+    color: var(--text-light);
+    max-width: 320px;
+}
+.admin-kb-files {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+.admin-kb-file-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+}
+.admin-kb-file-info {
+    flex: 1;
+    min-width: 0;
+}
+.admin-kb-file-name {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.admin-kb-file-status {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.admin-kb-file-status.ready {
+    color: var(--primary);
+}
+.admin-kb-file-status.failed {
+    color: #e64340;
+}
+.admin-kb-file-status.processing {
+    color: #e6a23c;
+}
+.admin-kb-test-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.admin-kb-test-row .admin-input {
+    flex: 1;
+    height: 36px;
+}
+.admin-kb-hits {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.admin-kb-hit {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--bg);
+}
+.admin-kb-hit-head {
+    font-size: 12px;
+    color: var(--primary);
+    margin-bottom: 6px;
+    font-weight: bold;
+}
+.admin-kb-hit-content {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+/* ===== 阶段五十二：知识维护增强（文件行按钮区/切片查看弹窗/文本直贴） ===== */
+.admin-kb-file-btns {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.admin-chunks-box {
+    width: 640px;
+    max-width: calc(100vw - 40px);
+}
+.admin-chunks-list {
+    max-height: 56vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 2px;
+}
+.admin-chunk-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    background: var(--bg);
+}
+.admin-chunk-head {
+    font-size: 12px;
+    color: var(--primary);
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+.admin-chunk-content {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+/* 文本直贴的知识内容输入框给足高度，便于粘贴与段落编排 */
+#af_content {
+    min-height: 200px;
+}
+
+/* ===== 阶段五十三：知识库数据微调（检索调试徽标/切片向量摘要/切片行操作区） ===== */
+/* 检索调试面板的库参数与候选统计摘要行 */
+.admin-kb-debug-meta {
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 2px 2px 0;
+}
+/* 命中判定徽标：注入（主题色）/ 被阈值过滤（橙）/ 超出 topK（灰） */
+.admin-kb-hit-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: normal;
+    vertical-align: middle;
+}
+.admin-kb-hit-badge.inject {
+    color: #fff;
+    background: var(--primary);
+}
+.admin-kb-hit-badge.filter {
+    color: #fff;
+    background: #e6a23c;
+}
+.admin-kb-hit-badge.trunc {
+    color: var(--text-light);
+    background: var(--border);
+}
+/* 注入命中的卡片左侧主题色描边（与徽标呼应） */
+.admin-kb-hit.hit-inject {
+    border-color: var(--primary);
+}
+/* 切片行头区：左侧摘要文字与右侧编辑/删除按钮区两端对齐 */
+.admin-chunk-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+.admin-chunk-head-row .admin-chunk-head {
+    margin-bottom: 0;
+    min-width: 0;
+}
+.admin-chunk-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+/* 向量前 8 维预览（等宽字体逐维展示，健康检查用） */
+.admin-chunk-vec {
+    font-size: 11px;
+    color: var(--text-light);
+    font-family: Consolas, monospace;
+    margin-top: 4px;
+    word-break: break-all;
+}
+.admin-chunk-item .admin-chunk-content {
+    margin-top: 5px;
+}
+
+/* ===== 响应式（窄窗口侧栏收缩） ===== */
+@media (max-width: 720px) {
+    .admin-main {
+        flex-direction: column;
+    }
+    .admin-side {
+        width: 100%;
+        flex-direction: row;
+        align-items: center;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+    .admin-side-head {
+        padding: 10px 12px;
+    }
+    .admin-nav {
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 6px;
+    }
+    .admin-nav-item {
+        white-space: nowrap;
+        padding: 8px 12px;
+    }
+    .admin-side-foot {
+        border-top: none;
+        padding: 10px 12px;
+    }
+    .admin-body {
+        padding: 16px;
+    }
+}
+
+/* ===== 阶段五十四：量化数据管理（全库切片表格化视图） =====
+   主题色归口：全部复用 style.css CSS 变量（--panel-bg/--border/--hover 等），明暗主题自动跟随 */
+
+/* 工具条：库筛选下拉 + 关键词搜索 + 刷新 */
+.vec-toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.vec-select {
+    width: 230px;
+}
+.vec-search-input {
+    flex: 1;
+    min-width: 200px;
+    max-width: 420px;
+}
+
+/* 表格容器：全宽撑满内容区（解决右侧留白），内部横向滚动兜底窄屏 */
+.vec-table-wrap {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: auto;
+}
+.vec-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 960px;
+}
+.vec-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: normal;
+    color: var(--text-light);
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+}
+.vec-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text);
+}
+.vec-table tbody tr:hover td {
+    background: var(--hover);
+}
+.vec-table tbody tr:last-child td {
+    border-bottom: none;
+}
+.vec-th-content {
+    width: 38%;
+}
+
+/* 单元格细节：文件名截断省略 / 数字列右对齐等宽 / 空数据行 */
+.vec-td-nowrap {
+    white-space: nowrap;
+}
+.vec-td-file {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.vec-td-num {
+    font-family: Consolas, monospace;
+    white-space: nowrap;
+}
+.vec-td-content .vec-content-main {
+    word-break: break-all;
+    line-height: 1.5;
+}
+/* 向量前 8 维预览（等宽小字，健康检查用） */
+.vec-dim8 {
+    font-size: 11px;
+    color: var(--text-light);
+    font-family: Consolas, monospace;
+    margin-top: 4px;
+    word-break: break-all;
+}
+.vec-td-actions {
+    white-space: nowrap;
+}
+.vec-td-actions .admin-btn {
+    margin-right: 6px;
+    margin-bottom: 4px;
+}
+.vec-empty {
+    text-align: center;
+    color: var(--text-light);
+    padding: 32px 0 !important;
+}
+
+/* ===== Agent 任务审计（阶段六十四）：状态徽标 + 详情弹窗 ===== */
+/* 状态徽标：running 主题色呼吸 / completed 主题绿 / failed 危险红 / cancelled 中性灰 */
+.at-badge {
+    display: inline-block;
+    font-size: 11px;
+    line-height: 18px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    color: #fff;
+}
+
+.at-badge.at-st-running {
+    background: color-mix(in srgb, var(--primary) 60%, #ffffff);
+    animation: at-pulse 1.2s ease-in-out infinite;
+}
+
+/* 阶段六十七：排队中徽标（中性灰蓝，弱于运行中的脉冲） */
+.at-badge.at-st-queued {
+    background: color-mix(in srgb, var(--primary) 22%, var(--text-light, #cccccc));
+}
+
+.at-badge.at-st-completed {
+    background: var(--primary);
+}
+
+.at-badge.at-st-failed {
+    background: var(--danger, #fa5151);
+}
+
+.at-badge.at-st-cancelled {
+    background: var(--text-light);
+}
+
+/* 运行中徽标呼吸动画（动态反馈，避免误以为卡住） */
+@keyframes at-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+}
+
+/* 详情弹窗：元信息行 + 标签/正文（pre-wrap 保留换行） */
+.at-detail-meta {
+    font-size: 12px;
+    color: var(--text-light);
+    padding-bottom: 8px;
+    border-bottom: 1px dashed var(--border);
+}
+
+.at-detail-label {
+    font-size: 12px;
+    color: var(--primary);
+    margin: 10px 0 4px;
+}
+
+.at-detail-body {
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.7;
+}
+
+/* ===== 执行轨迹（阶段六十五：每步工具调用留痕时间线，主题色变量关联） ===== */
+.at-steps {
+    margin-top: 12px;
+}
+
+.at-step {
+    padding: 6px 10px;
+    border-left: 2px solid var(--primary);
+    background: color-mix(in srgb, var(--primary) 4%, transparent);
+    border-radius: 0 6px 6px 0;
+    margin-bottom: 6px;
+}
+
+/* 失败/被拒步骤：左侧描边转危险色提示 */
+.at-step.fail {
+    border-left-color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 6%, transparent);
+}
+
+.at-step-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.at-step-seq {
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    font-size: 11px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: #fff;
+}
+
+.at-step.fail .at-step-seq {
+    background: var(--danger, #fa5151);
+}
+
+.at-step-tool {
+    font-size: 12px;
+    font-weight: bold;
+    color: var(--text);
+    font-family: Consolas, monospace;
+}
+
+.at-step-meta {
+    font-size: 11px;
+    color: var(--text-light);
+    margin-left: auto;
+}
+
+.at-step-body {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    margin-top: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 分页条 */
+.vec-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 14px;
+}
+
+/* ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） ===== */
+.agentset-group {
+    background: var(--panel-bg, #252526);
+    border: 1px solid var(--border, #333);
+    border-radius: 8px;
+    padding: 6px 16px 12px;
+    margin-bottom: 12px;
+}
+
+.agentset-group-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #ddd);
+    margin: 10px 0 4px;
+}
+
+.agentset-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--border-light, #2d2d2d);
+}
+
+.agentset-row:last-child {
+    border-bottom: none;
+}
+
+.agentset-col {
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.agentset-label {
+    flex-shrink: 0;
+    width: 170px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+}
+
+.agentset-num {
+    width: 110px;
+    flex-shrink: 0;
+}
+
+.agentset-wide {
+    flex: 1;
+    min-width: 200px;
+}
+
+.agentset-range {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-dim, #888);
+    font-family: Consolas, monospace;
+}
+
+.agentset-sub-tip {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-dim, #888);
+}
+
+.agentset-switch-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+    cursor: pointer;
+    user-select: none;
+}
+
+.agentset-switch-label input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--primary, #07c160);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* 命令白名单标签区 */
+.agentset-cmds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 0;
+    min-height: 26px;
+}
+
+.agentset-cmd-empty {
+    font-size: 12px;
+    color: var(--text-dim, #888);
+}
+
+.agentset-cmd-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px 2px 10px;
+    background: var(--primary-bg, rgba(7, 193, 96, 0.12));
+    border: 1px solid var(--primary-border, rgba(7, 193, 96, 0.35));
+    border-radius: 12px;
+    font-size: 12px;
+    font-family: Consolas, monospace;
+    color: var(--text, #ddd);
+}
+
+.agentset-cmd-del {
+    border: none;
+    background: transparent;
+    color: var(--text-dim, #888);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+.agentset-cmd-del:hover {
+    color: var(--danger, #e05555);
+}
+
+/* 阶段八十三：用户个人白名单条目（用户名高亮前缀 + › 命令），配色沿用全局条目主题变量 */
+.agentset-user-chip .agentset-user-chip-name {
+    font-weight: 600;
+    color: var(--text-strong, #fff);
+}
+
+.agentset-cmd-add {
+    display: flex;
+    gap: 8px;
+}
+
+.agentset-cmd-add .admin-input {
+    flex: 1;
+    max-width: 360px;
+}
+
+.agentset-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
+}
+
+/* ===== 阶段七十八：积分管理面板 ===== */
+/* 用户名列：等宽字体便于对齐辨识 */
+.points-username {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+}
+
+/* 积分余额强调：加粗放大；低积分（<10）警示橙红、零积分危险红，与现有 --danger/--warning 主题变量关联 */
+.points-num {
+    font-size: 14px;
+    color: var(--text, #333333);
+}
+
+.points-num.points-low {
+    color: var(--warning, #d29922);
+}
+
+.points-num.points-zero {
+    color: var(--danger, #fa5151);
+}
+
+/* 角色列：管理员用主题色徽标（复用 at-badge 基础类），普通用户弱化纯文本 */
+.points-role-normal {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+}
+
+/* 注册时间弱化显示 */
+.points-time {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    white-space: nowrap;
+}
+
+/* ===== 阶段七十八：积分流水记录 ===== */
+/* 变动量着色：加分为微信绿（主题色），扣除为危险红，与现有主题变量关联 */
+.plog-change-plus {
+    font-weight: 600;
+    color: var(--primary, #07c160);
+}
+
+.plog-change-minus {
+    font-weight: 600;
+    color: var(--danger, #fa5151);
+}
+
+/* 类型徽标：AI 扣除橙 / 管理员调整主题色 / 注册赠送绿，复用 at-badge 基础形状 */
+.plog-badge-ai {
+    background: var(--warning, #d29922);
+}
+
+.plog-badge-admin {
+    background: color-mix(in srgb, var(--primary) 75%, #666666);
+}
+
+.plog-badge-reg {
+    background: var(--primary, #07c160);
+}
+
+/* 说明列与余额列弱化排版 */
+.plog-detail {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    max-width: 320px;
+}
+
+.points-num-cell {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+/* ===== 阶段七十八：流水时间范围筛选 ===== */
+.plog-time-label {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    white-space: nowrap;
+}
+
+.plog-time-input {
+    min-width: 190px;
+}
+
+/* 用户 ID 列：等宽小字弱化显示（与用户名列区分） */
+.points-uid {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+}
+
+/* ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，主题色跟随现有变量体系） ===== */
+.admin-mcp-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 14px;
+}
+
+/* 阶段九十：新增服务器弹窗的生产模板一键填充按钮行（跟随主题色，与工具栏同款间距） */
+.admin-mcp-tpl-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.admin-mcp-tpl-row .admin-btn {
+    background: color-mix(in srgb, var(--primary, #07c160) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary, #07c160) 35%, transparent);
+    color: var(--text, #1a1a1a);
+}
+.admin-mcp-tpl-row .admin-btn:hover {
+    background: color-mix(in srgb, var(--primary, #07c160) 18%, transparent);
+}
+
+/* 状态灯：connected 绿 / connecting 橙闪 / error 红 / disconnected 灰 */
+.mcp-status-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: none;
+    background: #9aa0a6;
+}
+.mcp-status-dot.connected {
+    background: var(--primary, #07c160);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #07c160) 18%, transparent);
+}
+.mcp-status-dot.connecting {
+    background: #ff976a;
+    animation: mcp-blink 1.2s ease-in-out infinite;
+}
+.mcp-status-dot.error {
+    background: var(--danger, #fa5151);
+}
+.mcp-status-dot.disconnected {
+    background: #9aa0a6;
+}
+@keyframes mcp-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.mcp-status-msg {
+    font-size: 12px;
+    color: var(--danger, #fa5151);
+    margin-top: 4px;
+    word-break: break-all;
+}
+
+/* 工具管理弹窗：per-tool 启停清单 */
+.admin-mcp-tools-box {
+    width: min(560px, 92vw);
+}
+.admin-mcp-tools-list {
+    max-height: 52vh;
+    overflow: auto;
+    margin: 10px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.admin-mcp-tool-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+}
+.admin-mcp-tool-item:hover {
+    background: color-mix(in srgb, var(--primary, #07c160) 5%, transparent);
+}
+.admin-mcp-tool-item input {
+    margin-top: 3px;
+    flex: none;
+}
+.admin-mcp-tool-name {
+    font-weight: bold;
+    font-size: 13px;
+    color: var(--text);
+    word-break: break-all;
+}
+.admin-mcp-tool-desc {
+    font-size: 12px;
+    color: var(--text-light, #8a8a8a);
+    margin-top: 2px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 60px;
+    overflow: hidden;
+}
+
+/* JSON 导入弹窗 */
+.admin-mcp-import-box {
+    width: min(640px, 92vw);
+}
+.admin-mcp-import-text {
+    width: 100%;
+    height: 180px;
+    resize: vertical;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+}
+
+/* Git 助手提示词编辑区（阶段一百零六）：等宽字体便于阅读提示词文本，纵向可拉伸 */
+.admin-gitprompt-text {
+    width: 100%;
+    resize: vertical;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.agentset-gitprompt-actions {
+    margin-top: 6px;
+}
+
+/* ===== 阶段一百四十四：公告管理（富文本编辑弹窗 + 已读签收弹窗） ===== */
+.ann-modal-box {
+    width: min(880px, 94vw);
+}
+.ann-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 64vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.ann-form-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.ann-title-input {
+    flex: 1;
+    min-width: 240px;
+}
+.ann-cat-input {
+    width: 130px;
+    flex: none;
+}
+.ann-cover-input {
+    flex: 1;
+    min-width: 240px;
+}
+.ann-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+.ann-toolbar {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.ann-tool-btn {
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+.ann-tool-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+/* 阶段一百四十四三期：工具条新控件（字号下拉/颜色选择）+ 源码模式态 + 封面预览 + 源码编辑区 */
+.ann-tool-select {
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 12px;
+    padding: 0 4px;
+    cursor: pointer;
+}
+.ann-tool-select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+.ann-tool-color {
+    width: 28px;
+    height: 28px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    cursor: pointer;
+}
+.ann-tool-btn.on {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+.ann-html-source {
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12px;
+    white-space: pre;
+    resize: vertical;
+    min-height: 220px;
+}
+.ann-cover-row {
+    align-items: center;
+}
+.ann-cover-preview {
+    width: 72px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.ann-editor {
+    min-height: 220px;
+    max-height: 42vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: var(--search-bg);
+    color: var(--text);
+    line-height: 1.75;
+    font-size: 14px;
+    outline: none;
+    text-align: left;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.ann-editor:focus {
+    border-color: var(--primary);
+}
+.ann-editor:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-light);
+    pointer-events: none;
+}
+.ann-editor img {
+    max-width: 100%;
+    border-radius: 6px;
+}
+.ann-editor h2 {
+    font-size: 18px;
+    margin: 8px 0;
+}
+.ann-editor blockquote {
+    border-left: 3px solid var(--primary);
+    padding: 4px 12px;
+    margin: 8px 0;
+    color: var(--text-light);
+    background: var(--search-bg);
+    border-radius: 0 6px 6px 0;
+}
+.ann-editor ul, .ann-editor ol {
+    padding-left: 24px;
+}
+.ann-editor a {
+    color: var(--primary);
+}
+.ann-attach-row {
+    justify-content: flex-start;
+}
+.ann-attach-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ann-attach-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text);
+}
+.ann-attach-item .ann-attach-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ann-attach-item .ann-attach-size {
+    color: var(--text-light);
+    font-size: 12px;
+    flex: none;
+}
+.ann-attach-item .ann-attach-del {
+    border: none;
+    background: none;
+    color: var(--danger, #fa5151);
+    cursor: pointer;
+    font-size: 12px;
+    flex: none;
+}
+.ann-reads-box {
+    width: min(560px, 92vw);
+}
+.ann-reads-wrap {
+    max-height: 50vh;
+}
+.ann-status-dot {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+.ann-status-published {
+    color: var(--primary, #07c160);
+    background: color-mix(in srgb, var(--primary, #07c160) 12%, transparent);
+}
+.ann-status-draft {
+    color: var(--text-light);
+    background: color-mix(in srgb, var(--text-light) 14%, transparent);
+}
+.ann-status-withdrawn {
+    color: #ff976a;
+    background: rgba(255, 151, 106, 0.14);
+}
+.ann-cat-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+.ann-cat-notice {
+    color: #1485ee;
+    background: rgba(20, 133, 238, 0.12);
+}
+.ann-cat-news {
+    color: #8c8c8c;
+    background: rgba(140, 140, 140, 0.14);
+}
+.ann-cat-red {
+    color: var(--danger, #fa5151);
+    background: color-mix(in srgb, var(--danger, #fa5151) 12%, transparent);
+}
+
+/* ===== 阶段一百四十五：工作台管理（应用清单表格 + 编辑弹窗） ===== */
+.wb-list-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    display: inline-block;
+    vertical-align: middle;
+}
+.wb-list-icon-ph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--primary, #07c160) 14%, transparent);
+    color: var(--primary, #07c160);
+    font-size: 14px;
+    font-weight: 600;
+    user-select: none;
+}
+.wb-url-cell {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wb-modal-box {
+    width: min(560px, 94vw);
+}
+.wb-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 64vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.wb-modal-body .admin-input {
+    flex: 1;
+    min-width: 200px;
+}
+.wb-cat-input {
+    flex: none !important;
+    width: 140px;
+    min-width: 140px !important;
+}
+.wb-sort-input {
+    flex: none !important;
+    width: 110px;
+    min-width: 110px !important;
+}
+.wb-icon-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+/* ===== 文件存储管理（阶段一百六十七）：勾选列居中窄列，表格/徽标/分页复用 vec 系列与 at-badge 现有样式 ===== */
+.fm-td-ck {
+    text-align: center;
+    width: 36px;
+}
+.fm-td-ck input {
+    vertical-align: middle;
+    cursor: pointer;
+    accent-color: var(--primary);
+}
+/* 徽标禁止折行：状态列较窄时"源文件已删除"等长文案徽标会被逐字竖排撑高整行，
+   徽标语义上是一个不可拆分的整体标签，统一单行展示（列宽不足时由表格横向滚动兜底） */
+#admin-view-filemgr .at-badge,
+#admin-view-fileshares .at-badge {
+    white-space: nowrap;
+}

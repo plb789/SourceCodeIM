@@ -98,6 +98,17 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 // win7: 独立 userData——Chromium 108 与 134 共用配置目录有缓存格式冲突风险，单实例锁互不影响
 try { app.setPath('userData', path.join(app.getPath('appData'), 'im-client-win7')); } catch (e) { }
+// win7 诊断：渲染层 console 全量落盘（含 remote-engine 的 offer/ICE/连接状态日志）
+try {
+    var __w7Log = path.join(app.getPath('userData'), 'renderer-console.log');
+    try { if (require('fs').statSync(__w7Log).size > 5 * 1024 * 1024) require('fs').unlinkSync(__w7Log); } catch (e) { }
+    app.on('web-contents-created', function (e2, wc) {
+        wc.on('console-message', function (e3, level, message, line, sourceId) {
+            try { require('fs').appendFileSync(__w7Log, new Date().toISOString() + ' [L' + level + '] ' + String(sourceId || '').split('/').pop() + ':' + line + ' ' + message + '\n'); } catch (err) { }
+        });
+    });
+    try { require('fs').appendFileSync(__w7Log, new Date().toISOString() + ' [win7] 启动，渲染层日志监听就绪\n'); } catch (err) { }
+} catch (e) { }
 
 // 服务端地址（默认本地）
 const SERVER_URL = 'https://im.sxgyxny.com/';

@@ -1,0 +1,1 @@
+(function(){"use strict";var t=!!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform());if(t&&location.search.indexOf("__app=1")===-1){var i="https://im.sxgyxny.com";location.host!==i.replace(/^https?:\/\//i,"")&&window.location.replace(i+"/?__app=1")}})();

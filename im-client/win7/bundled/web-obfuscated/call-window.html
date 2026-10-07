@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>通话</title>
+    <style>
+        /* ===== 阶段一百四十一：通话窗（微信同款深色沉浸式，自绘控制条，无边框拖动区在顶部） =====
+           形态：audio=竖版小窗（头像+状态+控制条） / video=横版大窗（远端画面铺满+本地画中画+控制条）
+           主题说明：通话界面与微信一致为固定深色沉浸（不受明暗主题切换影响），强调色取主题绿 #07c160 */
+        /* 阶段二百三十六：WebView 点击高亮修复——圆形控制钮点击时元素方形边界露出 Android 默认
+           青色高亮块（语音通话挂断钮点击出现方框报障）；本页为独立窗口不加载 style.css，
+           须自带与主界面 style.css 全局 tap-highlight 修复一致的规则 */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #161819;
+            user-select: none;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            color: #ffffff;
+        }
+
+        /* 顶部拖动条（无边框窗口移动区） */
+        .cw-drag {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 36px;
+            -webkit-app-region: drag;
+            z-index: 30;
+        }
+
+        /* ===== 语音模式视图 ===== */
+        .cw-audio {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            /* 微信语音通话同款深色渐变背景 */
+            background: radial-gradient(ellipse at 50% 30%, #2a3038 0%, #161819 70%);
+        }
+        body.mode-video .cw-audio { display: none; }
+
+        .cw-avatar-wrap {
+            margin-top: 92px;
+            width: 96px;
+            height: 96px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: #3a4048;
+            flex-shrink: 0;
+        }
+        .cw-avatar {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        /* 头像占位（无头像时显示首字母） */
+        .cw-avatar-ph {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: #dfe3e8;
+            background: #4a5568;
+        }
+
+        .cw-name {
+            margin-top: 18px;
+            font-size: 20px;
+            font-weight: 500;
+            max-width: 88%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .cw-status {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #9aa3ad;
+        }
+        .cw-status.ended { color: #e6a23c; }
+
+        /* ===== 视频模式视图 ===== */
+        .cw-remote {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000000;
+            display: none;
+        }
+        /* 阶段二百一十八：remote-live（拿到远端流）才显示远端画面——等待接通期 video 无流时
+           Android WebView 会绘制原生"播放按钮"占位图（原生层盖不住），表现为连接中背景是播放器图标 */
+        body.mode-video.remote-live .cw-remote { display: block; }
+        /* 语音模式的远端声音出口（隐藏元素持续播放） */
+        #cwRemoteAudio { display: none; }
+
+        .cw-video-top {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 10px 14px;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+            -webkit-app-region: drag;
+            z-index: 20;
+        }
+        body.mode-video .cw-video-top { display: flex; }
+        .cw-video-top .cw-vname { font-size: 15px; font-weight: 500; }
+        .cw-video-top .cw-vstatus { font-size: 12px; color: #c8cdd3; }
+        .cw-video-top.ended .cw-vstatus { color: #e6a23c; }
+
+        /* 本地画中画（视频模式右上角，微信同款；点击与对方大画面互换主次——阶段二百四十八） */
+        .cw-local {
+            position: fixed;
+            top: 48px;
+            right: 12px;
+            width: 108px;
+            height: 162px;
+            border-radius: 8px;
+            object-fit: cover;
+            background: #101214;
+            border: 1px solid rgba(255,255,255,0.14);
+            z-index: 21;
+            display: none;
+            cursor: pointer;
+        }
+        body.mode-video .cw-local { display: block; }
+        body.mode-video.cam-off .cw-local { display: none; }
+
+        /* 摄像头不可用：本地画中画替换为"无视频可用"占位（同位同样式，仅标记不阻断通信） */
+        #cwLocalPh {
+            position: fixed;
+            top: 48px;
+            right: 12px;
+            width: 108px;
+            height: 162px;
+            border-radius: 8px;
+            background: #101214;
+            border: 1px solid rgba(255,255,255,0.14);
+            z-index: 21;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #9aa3ad;
+            text-align: center;
+            padding: 0 8px;
+            box-sizing: border-box;
+        }
+        body.mode-video.cam-dead #cwLocalPh { display: flex; }
+        body.mode-video.cam-dead .cw-local { display: none; }
+
+        /* ===== 底部控制条（自绘，微信同款圆形按钮） ===== */
+        .cw-controls {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 96px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 42px;
+            background: linear-gradient(to top, rgba(0,0,0,0.5), transparent);
+            z-index: 25;
+        }
+        .cw-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            background: rgba(255,255,255,0.16);
+            transition: background 0.15s;
+            outline: none;
+            padding: 0;
+        }
+        .cw-btn:hover { background: rgba(255,255,255,0.26); }
+        .cw-btn.active { background: #ffffff; color: #161819; }
+        /* 会议录制按钮激活态（红色实底——录制语义色，与白底 active 区分；腾讯会议同款） */
+        .cw-btn.rec-on { background: #e8403a; color: #ffffff; }
+        .cw-btn.rec-on:hover { background: #ff554e; }
+        .cw-btn.danger {
+            background: #fa5151;
+            width: 58px;
+            height: 58px;
+        }
+        .cw-btn.danger:hover { background: #e64340; }
+        .cw-btn.hidden { display: none; }
+
+        /* 设备不可用标记：按钮置灰 + 红斜线（麦克风/摄像头不可用，通信不阻断仅禁用该输入） */
+        .cw-btn { position: relative; }
+        .cw-btn.dev-off { opacity: 0.45; cursor: not-allowed; }
+        .cw-btn.dev-off:hover { background: rgba(255,255,255,0.16); }
+        .cw-btn.dev-off:active { background: rgba(255,255,255,0.16); }
+        .cw-btn.dev-off::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 36px;
+            height: 2px;
+            background: #fa5151;
+            transform: translate(-50%, -50%) rotate(-45deg);
+            border-radius: 1px;
+        }
+
+        /* 结束收尾遮罩提示 */
+        .cw-mask {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 40;
+        }
+        .cw-mask.visible { display: flex; }
+        .cw-mask span {
+            background: rgba(0,0,0,0.72);
+            color: #ffffff;
+            font-size: 14px;
+            padding: 10px 22px;
+            border-radius: 8px;
+        }
+
+        /* ===== 阶段二百四十七：通话悬浮小窗（微信同款） =====
+           右上角缩小钮（iframe 形态显示，会议窗沿用 PC 最小化按钮不亮出）；
+           mode-mini 下本页退化为小窗内核：隐藏控制条/信息条/本地画中画，
+           语音视图紧凑化（小头像 + 昵称 + 通话时长），视频保留远端画面铺满；
+           小窗拖动/轻点恢复全屏由父页覆盖层处理（iframe 吞触摸事件） */
+        .cw-min {
+            position: fixed;
+            top: 10px;
+            right: 12px;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(0,0,0,0.35);
+            color: #ffffff;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 32;
+            outline: none;
+            padding: 0;
+            cursor: pointer;
+        }
+        .cw-min.show { display: flex; }
+        body.mode-meet .cw-min { display: none !important; }
+
+        /* 悬浮小窗模式：控制面全部隐藏，仅保留核心画面 */
+        body.mode-mini .cw-controls,
+        body.mode-mini .cw-video-top,
+        body.mode-mini .cw-drag,
+        body.mode-mini .cw-local,
+        body.mode-mini #cwLocalPh,
+        body.mode-mini .cw-mask,
+        body.mode-mini .cw-min { display: none !important; }
+        /* 语音模式小窗紧凑化（头像 52px + 昵称 + 通话时长，微信同款） */
+        body.mode-mini .cw-audio { background: #161819; }
+        body.mode-mini .cw-avatar-wrap { margin-top: 18px; width: 52px; height: 52px; }
+        body.mode-mini .cw-avatar-ph { font-size: 22px; }
+        body.mode-mini .cw-name { margin-top: 10px; font-size: 13px; }
+        body.mode-mini .cw-status { margin-top: 6px; font-size: 11px; }
+
+        /* ===== 阶段一百四十四：多人会议视图（宫格布局，微信会议同款） =====
+           mode-meet 下隐藏单人视图（语音头像区/远端铺满/本地画中画），宫格承载全员画面；
+           视频会议 tile 内 video（contain 保画面完整，共享屏幕不被裁切），
+           语音会议 tile 内头像 + 昵称（纯音频无画面）；右上角麦克风状态图标 */
+        body.mode-meet .cw-audio,
+        body.mode-meet .cw-remote,
+        body.mode-meet #cwVideoTop,
+        body.mode-meet .cw-local,
+        body.mode-meet #cwLocalPh { display: none !important; }
+        .meet-wrap {
+            position: absolute;
+            inset: 0 0 96px 0;
+            display: none;
+            padding: 44px 12px 12px;
+            box-sizing: border-box;
+        }
+        body.mode-meet .meet-wrap { display: flex; } /* 原代码：display:block——阶段一百五十一舞台布局改双列 flex */
+        /* ===== 阶段一百五十一：腾讯会议同款舞台布局 =====
+           共享时主舞台（#stageBox：contain 大区域）占满剩余宽度，右侧 #meetSide 竖排缩略图列
+           （全员，点击切换主画面，选中白色描边——本窗强调色归口 .cw-btn.active 白）；
+           无人共享回退宫格（#meetGrid）。缩略图列滚动条为项目自绘样式（同 admin.css 细圆角悬浮滑块，
+           透明轨道，禁系统默认滚动条） */
+        .meet-main { flex: 1; min-width: 0; height: 100%; position: relative; }
+        .meet-stage-box { display: none; width: 100%; height: 100%; }
+        /* ===== 阶段二百五十四：画廊/全屏切换按钮（腾讯会议同款，仅共享舞台态显示） =====
+           共享画面独占全屏（隐藏缩略图列，主舞台铺满整个 .meet-main）与画廊（带缩略图列）二态切换；
+           贴主舞台右上角，半透明圆角，hover 提亮，跟随主题强调色描边；display 由 JS 按舞台态控制 */
+        .stage-view-toggle {
+            position: absolute;
+            right: 12px;
+            top: 12px;
+            z-index: 6;
+            width: 34px;
+            height: 34px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            border-radius: 8px;
+            color: #dfe3e8;
+            cursor: pointer;
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .stage-view-toggle:hover { background: rgba(0, 0, 0, 0.6); border-color: rgba(255, 255, 255, 0.5); }
+        .stage-view-toggle svg { width: 18px; height: 18px; display: block; }
+        /* ===== 阶段二百五十四补丁：共享桌面沉浸全屏（腾讯会议同款「全屏显示共享」） =====
+           全屏观看态不再只是隐藏缩略图列——顶栏/控制条/缩略图列全部隐藏、会议视图内边距清零，
+           共享画面独占整个通话窗视口；右上角仅保留切换按钮（变退出图标）作为唯一浮层出口，
+           双击画面同效退出。宫格/画廊态不受影响 */
+        body.stage-immersive .meet-top,
+        body.stage-immersive .cw-controls,
+        body.stage-immersive .meet-side { display: none !important; }
+        /* 关键：.meet-wrap 原 inset 底部预留 96px 给控制条 + 上下 padding 避让顶栏——
+           沉浸态控制条/顶栏已隐藏，须把 inset 与 padding 全部清零回收这部分空间，
+           否则画面下方留一条黑边（真机实测：横屏下 96px 占视口约 21%，黑边极明显） */
+        body.stage-immersive .meet-wrap { inset: 0 !important; padding: 0 !important; }
+        body.stage-immersive .stage-view-toggle {
+            background: rgba(0, 0, 0, 0.55);
+            border-color: rgba(255, 255, 255, 0.35);
+        }
+        /* 阶段二百五十四补丁2：横屏沉浸态共享画面 cover 铺满（腾讯会议全屏看共享同款）——
+           16:9 桌面在 21:9 横屏视口 contain 天然左右留黑边；cover 裁掉上下约 15% 换全屏无黑。
+           竖屏沉浸不裁（448×958 视口 cover 会裁掉桌面 3/4 宽度，不可读），保持 contain */
+        @media (orientation: landscape) {
+            body.stage-immersive .meet-stage-box .meet-tile video { object-fit: cover; }
+        }
+        .meet-side {
+            width: 176px;
+            margin-left: 10px;
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        .meet-thumb {
+            width: 100%;
+            height: 99px; /* 16:9 等比缩略 */
+            flex-shrink: 0;
+            position: relative;
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: 10px;
+            box-sizing: border-box;
+        }
+        .meet-thumb.active { border-color: rgba(255, 255, 255, 0.9); }
+        .meet-thumb:hover { border-color: rgba(255, 255, 255, 0.4); }
+        .meet-thumb .meet-tile { width: 100%; height: 100%; }
+        .meet-side::-webkit-scrollbar { width: 8px; }
+        .meet-side::-webkit-scrollbar-track { background: transparent; }
+        .meet-side::-webkit-scrollbar-thumb {
+            background: rgba(138, 138, 138, 0.55);
+            border-radius: 5px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .meet-side::-webkit-scrollbar-thumb:hover { background-color: rgba(179, 179, 179, 0.8); }
+        /* 阶段一百五十一补丁：窄窗自适应——窗口越窄缩略图列越窄，宽度让给主舞台（共享画面更大）；
+           缩略图高度按 16:9 等比随列宽缩小 */
+        @media (max-width: 1100px) {
+            .meet-side { width: 140px; }
+            .meet-thumb { height: 77px; }
+        }
+        @media (max-width: 800px) {
+            .meet-side { width: 112px; margin-left: 8px; }
+            .meet-thumb { height: 61px; }
+        }
+        /* ===== 阶段二百五十：腾讯会议手机版同款布局（≤500px：手机 APP 全屏 + 窄窗） =====
+           1. 控制条：flex-shrink:0 防 6 颗按钮在窄屏被压缩成椭圆（原 bug：42px 间距挤爆屏宽，
+              flex 默认压缩按钮宽度→椭圆变形）；按钮下方文字标签（data-label，腾讯同款）
+           2. 共享视图：主舞台在上占大头、缩略图横向底部（原 PC 竖列挤占舞台宽度致画面小）
+           3. 宫格画面 object-fit:cover 填满裁剪（人脸满格；共享画面恒走主舞台 contain 不受影响） */
+        @media (max-width: 500px) {
+            .cw-controls { gap: 16px; height: 100px; }
+            .cw-btn { flex: 0 0 auto; width: 48px; height: 48px; }
+            .cw-btn.danger { width: 54px; height: 54px; }
+            .cw-btn::after {
+                content: attr(data-label);
+                position: absolute;
+                left: 50%;
+                top: 100%;
+                transform: translateX(-50%);
+                margin-top: 5px;
+                font-size: 11px;
+                line-height: 1;
+                color: rgba(255, 255, 255, 0.72);
+                white-space: nowrap;
+                pointer-events: none;
+            }
+            .meet-wrap { padding: 40px 6px 104px; }
+            body.mode-meet .meet-wrap { flex-direction: column; }
+            .meet-side {
+                width: 100%;
+                height: 88px;
+                margin-left: 0;
+                margin-top: 8px;
+                flex-direction: row;
+                overflow-x: auto;
+                overflow-y: hidden;
+                flex: 0 0 auto;
+            }
+            .meet-thumb { width: 132px; height: 77px; }
+            .meet-grid { gap: 6px; }
+            .meet-grid .meet-tile video { object-fit: cover; }
+        }
+        /* 顶部全屏按钮（腾讯会议同款右上角；hover 提亮） */
+        .meet-top .meet-fs {
+            -webkit-app-region: no-drag; /* 阶段一百五十一补丁：从拖拽区豁免，恢复点击（Electron 无边框窗） */
+            background: rgba(255, 255, 255, 0.12);
+            border: none;
+            border-radius: 6px;
+            color: #dfe3e8;
+            width: 28px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            padding: 0;
+            flex-shrink: 0;
+        }
+        /* 阶段一百五十一补丁：右侧按钮组（组整体推右缘——组内按钮 display:none 显隐不影响组定位；
+         * 原 auto 挂在最小化按钮上，WEB 端该按钮隐藏后全屏按钮会脱离右缘） */
+        .meet-top .meet-actions {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            -webkit-app-region: no-drag; /* 从拖拽区豁免（组内空隙也放行点击） */
+        }
+        .meet-top .meet-fs:hover { background: rgba(255, 255, 255, 0.22); color: #ffffff; }
+        /* 阶段一百五十二：会议号徽标（顶部信息条内，描边胶囊样式，点击复制；从拖拽区豁免恢复点击） */
+        .meet-top .meet-no {
+            flex-shrink: 0;
+            margin-left: 10px;
+            padding: 1px 9px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 10px;
+            font-size: 12px;
+            line-height: 18px;
+            color: #dfe3e8;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            -webkit-app-region: no-drag; /* 从拖拽区豁免（可点击复制） */
+            transition: background 0.15s, color 0.15s;
+        }
+        .meet-top .meet-no:hover { background: rgba(255, 255, 255, 0.12); color: #ffffff; }
+        .meet-top .meet-no.hidden { display: none; }
+        /* 会议录制徽标（顶部信息条内，腾讯会议同款红色「正在录制」提示；文本动态含录制者名） */
+        .meet-top .rec-badge {
+            flex-shrink: 0;
+            margin-left: 10px;
+            padding: 1px 9px;
+            border-radius: 10px;
+            background: rgba(232, 64, 58, 0.18);
+            font-size: 12px;
+            line-height: 18px;
+            color: #ff6b64;
+            white-space: nowrap;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .meet-top .rec-badge::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #e8403a;
+            animation: recPulse 1.2s ease-in-out infinite;
+        }
+        @keyframes recPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.35; }
+        }
+        .meet-top .rec-badge.hidden { display: none; }
+        /* ===== 阶段一百五十三：会议窗内邀请成员面板（独立弹层不跳主窗口；深色风格随会议窗） ===== */
+        .invite-mask {
+            position: fixed;
+            inset: 0;
+            z-index: 60; /* 高于 meet-top(31) 与底部控制条 */
+            background: rgba(0, 0, 0, 0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .invite-mask.hidden { display: none; }
+        .invite-panel {
+            width: 340px;
+            max-width: calc(100vw - 48px);
+            height: 460px;
+            max-height: calc(100vh - 80px);
+            background: #22262b;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .invite-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px 8px;
+        }
+        .invite-title { font-size: 15px; color: #eef1f4; font-weight: 500; }
+        .invite-close {
+            width: 26px;
+            height: 26px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: #aab1b8;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: background 0.15s, color 0.15s;
+        }
+        .invite-close:hover { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+        .invite-search {
+            margin: 0 14px 8px;
+            padding: 6px 10px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.06);
+            color: #eef1f4;
+            font-size: 13px;
+            outline: none;
+            box-sizing: border-box;
+        }
+        .invite-search::placeholder { color: #7d858d; }
+        .invite-search:focus { border-color: rgba(255, 255, 255, 0.28); }
+        .invite-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 2px 8px;
+        }
+        /* 自绘滚动条（与 .meet-side 同款细圆角悬浮滑块，禁系统默认滚动条） */
+        .invite-list::-webkit-scrollbar { width: 8px; }
+        .invite-list::-webkit-scrollbar-track { background: transparent; }
+        .invite-list::-webkit-scrollbar-thumb {
+            background: rgba(138, 138, 138, 0.55);
+            border-radius: 5px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .invite-list::-webkit-scrollbar-thumb:hover { background-color: rgba(179, 179, 179, 0.8); }
+        .invite-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .invite-row:hover { background: rgba(255, 255, 255, 0.06); }
+        .invite-row.disabled { cursor: default; opacity: 0.45; }
+        .invite-row.disabled:hover { background: transparent; }
+        .invite-avatar {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #3a4046;
+            color: #dfe3e8;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .invite-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .invite-info { flex: 1; min-width: 0; }
+        .invite-name {
+            font-size: 13px;
+            color: #eef1f4;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .invite-status { font-size: 11px; color: #8a9199; margin-top: 1px; }
+        .invite-status.ok { color: #07c160; }
+        .invite-check {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 1.5px solid #6b7278;
+            box-sizing: border-box;
+            position: relative;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .invite-row.sel .invite-check { border-color: #07c160; background: #07c160; }
+        .invite-row.sel .invite-check::after {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 2px;
+            width: 4px;
+            height: 8px;
+            border: solid #fff;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+        .invite-empty {
+            padding: 30px 0;
+            text-align: center;
+            color: #7d858d;
+            font-size: 13px;
+        }
+        .invite-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .invite-count { font-size: 12px; color: #8a9199; }
+        .invite-btns { display: flex; gap: 8px; }
+        .invite-btn {
+            padding: 6px 18px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 8px;
+            background: transparent;
+            color: #dfe3e8;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s, opacity 0.15s;
+        }
+        .invite-btn:hover { background: rgba(255, 255, 255, 0.08); }
+        .invite-btn.primary { background: #07c160; border-color: #07c160; color: #ffffff; }
+        .invite-btn.primary:hover { background: #06ad56; }
+        .invite-btn.primary.disabled { opacity: 0.4; cursor: default; }
+        .invite-btn.primary.disabled:hover { background: #07c160; }
+        .meet-grid {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            align-content: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .meet-tile {
+            position: relative;
+            background: #22262b;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-sizing: border-box;
+        }
+        .meet-tile video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain; /* contain 保共享屏幕/文档画面完整（cover 会裁切表格边缘） */
+            display: block;
+            background: #101214;
+        }
+        .meet-tile .mt-audio {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+        .meet-tile .mt-ava {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: #3a4048;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 30px;
+            color: #dfe3e8;
+            flex-shrink: 0;
+        }
+        .meet-tile .mt-ava img { width: 100%; height: 100%; object-fit: cover; }
+        .meet-tile .mt-name {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 4px 10px;
+            font-size: 12px;
+            color: #ffffff;
+            background: linear-gradient(to top, rgba(0,0,0,0.6), transparent);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .meet-tile .mt-mic {
+            position: absolute;
+            top: 6px;
+            right: 8px;
+            color: #fa5151;
+            display: none;
+            z-index: 2;
+        }
+        .meet-tile.muted .mt-mic { display: block; }
+        /* 阶段一百五十一补丁：摄像头不可用叉摄标记（叉麦左侧并排；meet_media 信令全员可见） */
+        .meet-tile .mt-cam {
+            position: absolute;
+            top: 6px;
+            right: 32px;
+            color: #fa5151;
+            display: none;
+            z-index: 2;
+        }
+        .meet-tile.cam-dead .mt-cam { display: block; }
+        /* 阶段一百四十八：连接中断成员 tile（红色描边 + 名字条警示色，恢复自动移除标记） */
+        .meet-tile.lost { outline: 2px solid rgba(250, 81, 81, 0.85); outline-offset: -2px; }
+        .meet-tile.lost .mt-name { color: #ff8f8f; }
+        /* 摄像头不可用：tile 内"无视频可用"占位 */
+        .meet-tile .no-video-ph {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            color: #9aa3ad;
+            background: #101214;
+            z-index: 1;
+        }
+        /* 原实现：.meet-top { display: none; } —— meetTop 复用 cw-video-top 样式类，
+           特异性低于 body.mode-video .cw-video-top，导致 1对1 视频下"多人会议"信息条误显示盖住对方名称；
+           修复：排除会议模式后强制隐藏（同特异性但源码在后，稳定压过 L114 显示规则） */
+        body:not(.mode-meet) .meet-top { display: none; }
+        /* 原代码：body.mode-meet .meet-top { display: flex; } —— 阶段一百五十一补丁加 z-index:31：
+           .cw-drag（z-index:30）盖在顶部 36px 吞掉拖拽事件，全屏按钮（y≈10~34 在带内）点不到；
+           meet-top 抬到其上后窗口拖拽由 meet-top（复用 .cw-video-top 自带 -webkit-app-region:drag）继续承担 */
+        body.mode-meet .meet-top { display: flex; z-index: 31; }
+    </style>
+</head>
+<body class="mode-audio">
+    <div class="cw-drag"></div>
+
+    
+    <div class="cw-audio">
+        <div class="cw-avatar-wrap" id="cwAvatarWrap"></div>
+        <div class="cw-name" id="cwName"></div>
+        <div class="cw-status" id="cwStatus"></div>
+    </div>
+
+    
+    <video id="cwRemote" class="cw-remote" autoplay playsinline></video>
+    <div class="cw-video-top" id="cwVideoTop">
+        <span class="cw-vname" id="cwVName"></span>
+        <span class="cw-vstatus" id="cwVStatus"></span>
+    </div>
+    <video id="cwLocal" class="cw-local" autoplay playsinline muted></video>
+    <div id="cwLocalPh">无视频可用</div>
+    
+    <audio id="cwRemoteAudio" autoplay></audio>
+
+    
+    <div class="meet-wrap" id="meetWrap">
+        <div class="meet-main" id="meetMain">
+            <div class="meet-grid" id="meetGrid"></div>
+            <div class="meet-stage-box" id="stageBox"></div>
+            
+            <div class="stage-view-toggle" id="stageViewToggle" title="全屏观看共享"></div>
+        </div>
+        <div class="meet-side" id="meetSide"></div>
+    </div>
+    <div class="cw-video-top meet-top" id="meetTop">
+        <span class="cw-vname" id="meetTitle">多人会议</span>
+        <span class="cw-vstatus" id="meetStatus"></span>
+        
+        <span class="meet-no hidden" id="meetNo" title="点击复制会议号"></span>
+        
+        <span class="rec-badge hidden" id="recBadge"></span>
+        <div class="meet-actions">
+            <button class="meet-fs" id="btnMeetMin" title="最小化" style="display:none">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
+            </button>
+            <button class="meet-fs" id="btnMeetFs" title="全屏">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    
+    <div class="cw-controls">
+        <button class="cw-btn" id="btnMute" title="静音" data-label="静音">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+        </button>
+        <button class="cw-btn hidden" id="btnCam" title="关闭摄像头" data-label="摄像头">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+        </button>
+        <button class="cw-btn hidden" id="btnShare" title="共享屏幕" data-label="共享">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6zm7 9h2v-3h3l-4-4-4 4h3v3z"/></svg>
+        </button>
+        <button class="cw-btn hidden" id="btnInvite" title="邀请成员" data-label="邀请">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+        </button>
+        
+        <button class="cw-btn hidden" id="btnRecord" title="开始录制" data-label="录制">
+            <svg viewBox="0 0 24 24" width="22" height="22"><circle fill="currentColor" cx="12" cy="12" r="6"/></svg>
+        </button>
+        <button class="cw-btn danger" id="btnHangup" title="挂断" data-label="结束">
+            <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28a11.27 11.27 0 0 0-2.67-1.85.996.996 0 0 1-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+        </button>
+    </div>
+
+    <div class="cw-mask" id="cwMask"><span id="cwMaskText"></span></div>
+
+    
+    <button class="cw-min" id="btnMin" title="缩小">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 13H5v-2h14v2z"/></svg>
+    </button>
+
+    
+    <div class="invite-mask hidden" id="inviteMask">
+        <div class="invite-panel" id="invitePanel">
+            <div class="invite-head">
+                <span class="invite-title">邀请成员</span>
+                <button class="invite-close" id="btnInviteClose" title="关闭">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+            </div>
+            <input class="invite-search" id="inviteSearch" type="text" placeholder="搜索成员" />
+            <div class="invite-list" id="inviteList"></div>
+            <div class="invite-foot">
+                <span class="invite-count" id="inviteCount">已选 0 人</span>
+                <div class="invite-btns">
+                    <button class="invite-btn" id="btnInviteCancel">取消</button>
+                    <button class="invite-btn primary disabled" id="btnInviteConfirm">邀请</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    
+    <script src="js/call-page.js?v=41"></script>
+</body>
+</html>

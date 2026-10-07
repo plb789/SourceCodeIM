@@ -1,6 +1,5 @@
+# 你要排除的目录（写在这里）
 node_modules/
-builder-cache/
-bundled/
 dist/
 _toolchain/
 user-data-t1/

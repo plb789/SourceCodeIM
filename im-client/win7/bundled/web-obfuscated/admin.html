@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>后台管理 - 即时通讯</title>
+    
+    <script>
+        (function () {
+            var theme = localStorage.getItem('im_theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    
+    <link rel="stylesheet" href="css/style.css?v=1.52">
+    <link rel="stylesheet" href="css/admin.css?v=1.29">
+</head>
+<body>
+    
+    <div id="admin-boot" class="admin-boot">
+        <div class="admin-boot-spinner"></div>
+        <div class="admin-boot-text">加载中…</div>
+    </div>
+    
+    <div id="admin-login" class="admin-login-view hidden">
+        <div class="admin-login-card">
+            <h1 class="admin-login-title">后台管理</h1>
+            <p class="admin-login-sub">即时通讯管理控制台</p>
+            <input type="text" id="admin-login-username" class="admin-input" placeholder="管理员账号" autocomplete="username">
+            <input type="password" id="admin-login-password" class="admin-input" placeholder="密码" autocomplete="current-password">
+            <button id="admin-login-btn" class="admin-btn primary block">登 录</button>
+            <p class="admin-login-hint">仅管理员白名单账号可登录</p>
+            <a class="admin-login-back" href="/">← 返回聊天</a>
+        </div>
+    </div>
+
+    
+    <div id="admin-main" class="admin-main hidden">
+        <aside class="admin-side">
+            <div class="admin-side-head">
+                <span class="admin-side-title">后台管理</span>
+                <button id="admin-theme-btn" class="admin-theme-btn" title="切换主题（浅色/深色/跟随系统）"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg></button>
+            </div>
+            <nav class="admin-nav">
+                <button class="admin-nav-item" data-view="dashboard">性能仪表盘</button>
+                <button class="admin-nav-item" data-view="calllogs">通话统计</button>
+                <button class="admin-nav-item" data-view="providers">AI 模型服务</button>
+                <button class="admin-nav-item" data-view="agents">AI 智能体</button>
+                <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
+                <button class="admin-nav-item" data-view="mcpplugins">MCP 插件库</button>
+                <button class="admin-nav-item" data-view="toolchains">工具链市场</button>
+                <button class="admin-nav-item" data-view="knowledge">知识库</button>
+                <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
+                <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
+                <button class="admin-nav-item" data-view="accounts">账号管理</button>
+                <button class="admin-nav-item" data-view="online">在线账号</button>
+                <button class="admin-nav-item" data-view="announcements">公告管理</button>
+                <button class="admin-nav-item" data-view="workbench">工作台管理</button>
+                <button class="admin-nav-item" data-view="appversion">客户端更新</button>
+                <button class="admin-nav-item" data-view="points">积分管理</button>
+                <button class="admin-nav-item" data-view="billing">AI 计费设置</button>
+                <button class="admin-nav-item" data-view="compress">历史压缩设置</button>
+                <button class="admin-nav-item" data-view="drive">网盘设置</button>
+                <button class="admin-nav-item" data-view="filemgr">文件存储管理</button>
+                <button class="admin-nav-item" data-view="fileshares">分享管理</button>
+                <button class="admin-nav-item" data-view="uploads">聊天附件管理</button>
+                <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
+            </nav>
+            <div class="admin-side-foot">
+                <span id="admin-current-user" class="admin-current-user"></span>
+                <button id="admin-logout-btn" class="admin-btn small">退出登录</button>
+            </div>
+        </aside>
+
+        <main class="admin-body">
+            
+            <section id="admin-view-dashboard" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>性能仪表盘</h2>
+                    <span id="dash-status" class="admin-view-tip">加载中…</span>
+                </header>
+                
+                <div id="dash-alerts" style="display:none;margin-bottom:14px"></div>
+                
+                <div class="dash-cards">
+                    <div class="dash-card">
+                        <span class="dash-card-label">在线用户</span>
+                        <span class="dash-card-value" id="dash-online-users">-</span>
+                        <span class="dash-card-sub" id="dash-online-conns">连接数 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">今日消息</span>
+                        <span class="dash-card-value" id="dash-today-msgs">-</span>
+                        <span class="dash-card-sub" id="dash-total-msgs">总量 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">注册用户</span>
+                        <span class="dash-card-value" id="dash-total-users">-</span>
+                        <span class="dash-card-sub" id="dash-ai-count">AI 智能体 -</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="统计口径：全部注册用户积分余额总和（服务端实时聚合，双精度 3 位小数）">
+                        <span class="dash-card-label">积分总量</span>
+                        <span class="dash-card-value" id="dash-points-total">-</span>
+                        <span class="dash-card-sub" id="dash-points-avg">人均 -</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="统计口径：聊天附件上传目录（static/upload，IM 消息图片/文件/头像）磁盘扫描，5 分钟刷新；网盘文件不在此列，网盘占用见右侧「网盘占用」卡片">
+                        <span class="dash-card-label">聊天附件占用</span>
+                        <span class="dash-card-value" id="dash-upload-size">-</span>
+                        <span class="dash-card-sub" id="dash-upload-files">文件数 -</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="统计口径：网盘正常文件（不含目录与回收站）元数据聚合，60 秒刷新；与「文件存储管理」视图总占用同源">
+                        <span class="dash-card-label">网盘占用</span>
+                        <span class="dash-card-value" id="dash-drive-size">-</span>
+                        <span class="dash-card-sub" id="dash-drive-files">文件数 -</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="消息批量落库队列（瞬时长度/容量）；悬浮可见批均大小、背压降级与批写超时累计次数">
+                        <span class="dash-card-label">落库队列</span>
+                        <span class="dash-card-value sm" id="dash-msgq">-</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="会话列表推送当前退避窗口：300ms=常态；升档=推送风暴中（自适应退避工作信号）">
+                        <span class="dash-card-label">会话退避</span>
+                        <span class="dash-card-value sm" id="dash-conv-backoff">-</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="writePump 写耗时 >200ms 的累计次数；持续增长=网卡/对端拥塞信号">
+                        <span class="dash-card-label">WS 慢写</span>
+                        <span class="dash-card-value sm" id="dash-slow-writes">-</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="发送队列占用超半载的连接数；>0 说明有连接消费不及投递（瞬时采样）">
+                        <span class="dash-card-label">发送积压</span>
+                        <span class="dash-card-value sm" id="dash-backpressured">-</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="MySQL 执行 >500ms 的查询累计；持续增长=索引劣化/锁等待信号">
+                        <span class="dash-card-label">慢查询</span>
+                        <span class="dash-card-value sm" id="dash-slow-queries">-</span>
+                    </div>
+                    <div class="dash-card" data-tip-text="集群总线发布队列（瞬时长度/容量）；悬浮可见降级次数与全局在线名单条数。单实例部署恒为 0">
+                        <span class="dash-card-label">总线队列</span>
+                        <span class="dash-card-value sm" id="dash-busq">-</span>
+                    </div>
+                </div>
+                
+                <div class="dash-charts">
+                    <div class="dash-chart-box">
+                        <h3 class="dash-chart-title">内存与 Goroutine 实时曲线（10 分钟窗口）</h3>
+                        <div id="dash-chart-mem" class="dash-chart"></div>
+                    </div>
+                    <div class="dash-chart-box">
+                        <h3 class="dash-chart-title">今日消息分布（按小时）</h3>
+                        <div id="dash-chart-msg" class="dash-chart"></div>
+                    </div>
+                </div>
+                
+                <h3 class="dash-subtitle">运行环境</h3>
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">堆内存</span><span class="dash-card-value sm" id="dash-heap">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">Goroutines</span><span class="dash-card-value sm" id="dash-goroutines">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">GC 次数</span><span class="dash-card-value sm" id="dash-gc">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">运行时长</span><span class="dash-card-value sm" id="dash-uptime">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">MySQL 连接池</span><span class="dash-card-value sm" id="dash-mysql">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">Redis 延迟</span><span class="dash-card-value sm" id="dash-redis">-</span></div>
+                </div>
+                
+                <h3 class="dash-subtitle">通话链路统计</h3>
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">今日通话</span><span class="dash-card-value sm" id="dash-calls-today">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">话单总数</span><span class="dash-card-value sm" id="dash-calls-total">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">P2P 直连</span><span class="dash-card-value sm" id="dash-calls-p2p">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">TURN 中继</span><span class="dash-card-value sm" id="dash-calls-relay">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">直连率</span><span class="dash-card-value sm" id="dash-calls-rate">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">链路未统计</span><span class="dash-card-value sm" id="dash-calls-unknown">-</span></div>
+                </div>
+                <p class="admin-view-tip" id="dash-meta"></p>
+            </section>
+
+            
+            <section id="admin-view-calllogs" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>通话统计</h2>
+                    <span id="calllogs-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">媒体链路由客户端挂断时采样上报（服务端白名单归口）：P2P 直连=打洞成功，TURN 中继=打洞失败兜底转发；未统计=旧客户端或未接通话单。</p>
+                
+                <div class="vec-toolbar">
+                    <select id="calllogs-link-filter" class="admin-input vec-select" title="按媒体链路筛选">
+                        <option value="">全部链路</option>
+                        <option value="p2p">P2P 直连</option>
+                        <option value="relay">TURN 中继</option>
+                        <option value="none">未统计</option>
+                    </select>
+                    <button id="calllogs-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>主叫</th>
+                                <th>被叫</th>
+                                <th>类型</th>
+                                <th>状态</th>
+                                <th>时长</th>
+                                <th>媒体链路</th>
+                            </tr>
+                        </thead>
+                        <tbody id="calllogs-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="calllogs-prev" class="admin-btn small">上一页</button>
+                    <span id="calllogs-page-info" class="admin-view-tip">-</span>
+                    <button id="calllogs-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-providers" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 模型服务</h2>
+                    <button id="provider-add" class="admin-btn primary">+ 新增模型服务</button>
+                </header>
+                <p class="admin-view-tip">OpenAI 兼容 chat/completions 接口；停用后绑定的智能体降级为本地演示应答。保存后立即热生效，在线客户端自动刷新。</p>
+                <div id="provider-list" class="admin-cards"></div>
+            </section>
+
+            
+            <section id="admin-view-agents" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 智能体</h2>
+                    <button id="agent-add" class="admin-btn primary">+ 新增智能体</button>
+                </header>
+                <p class="admin-view-tip">面向用户的聊天助手；停用后不再下发客户端。保存后立即热生效，在线客户端自动刷新。</p>
+                <div id="agent-list" class="admin-cards"></div>
+            </section>
+
+            
+            <section id="admin-view-knowledge" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>知识库</h2>
+                    <span id="kb-status" class="admin-view-tip">加载中…</span>
+                    <button id="kb-add" class="admin-btn primary">+ 新增知识库</button>
+                </header>
+                <p class="admin-view-tip">公共库绑定智能体后对所有用户生效；个人库仅归属者与该智能体对话时参与检索。上传文件自动解析→切片→向量化（docx/xlsx/xlsm/csv/md/txt/pdf/pptx）。</p>
+                <div id="kb-list" class="admin-cards"></div>
+
+                
+                <div id="kb-detail" class="admin-kb-panel hidden">
+                    <h3 class="admin-kb-panel-title" id="kb-detail-title">文件管理</h3>
+                    <div class="admin-kb-upload-row">
+                        <input type="file" id="kb-file-input" class="admin-kb-file-input">
+                        <button id="kb-file-upload" class="admin-btn primary">上传并向量化</button>
+                        
+                        <button id="kb-file-text" class="admin-btn">文本直贴</button>
+                        <button id="kb-rebuild-btn" class="admin-btn">整库重建</button>
+                        <button id="kb-file-refresh" class="admin-btn small">刷新</button>
+                        <span id="kb-file-tip" class="admin-view-tip"></span>
+                    </div>
+                    <div id="kb-file-list" class="admin-kb-files"></div>
+
+                    <h3 class="admin-kb-panel-title">检索调试（阈值/注入判定可视化）</h3>
+                    <div class="admin-kb-test-row">
+                        <input type="text" id="kb-test-query" class="admin-input" placeholder="输入测试问题，展示全部候选命中及阈值过滤/注入判定">
+                        <button id="kb-test-btn" class="admin-btn primary">调试</button>
+                    </div>
+                    <div id="kb-test-result" class="admin-kb-hits"></div>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-vecdata" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>量化数据管理</h2>
+                    <span id="vec-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全部知识库已向量化切片的统一管理视图：可按库筛选、按内容关键词搜索；行内编辑保存后自动重新向量化，删除后不再参与检索，文本类文件可编辑源文（改后自动重切片）。注意：切片编辑仅改向量库，源文件不改动，重建时将被覆盖。</p>
+                
+                <div class="vec-toolbar">
+                    <select id="vec-kb-filter" class="admin-input vec-select" title="按知识库筛选">
+                        <option value="0">全部知识库</option>
+                    </select>
+                    <input type="text" id="vec-search" class="admin-input vec-search-input" placeholder="按切片内容关键词搜索">
+                    <button id="vec-search-btn" class="admin-btn primary">搜索</button>
+                    <button id="vec-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>知识库</th>
+                                <th>文件</th>
+                                <th>切片</th>
+                                <th>字数</th>
+                                <th>维度</th>
+                                <th>范数</th>
+                                <th class="vec-th-content">内容</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vec-tbody">
+                            <tr><td colspan="8" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="vec-prev" class="admin-btn small">上一页</button>
+                    <span id="vec-page-info" class="admin-view-tip">-</span>
+                    <button id="vec-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-agenttasks" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>Agent 任务审计</h2>
+                    <span id="at-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全部用户发起的 Agent 自动化任务审计视图：支持按用户名模糊搜索与状态筛选；点击行内"详情"查看任务目标全文、最终总结与失败原因。</p>
+                
+                <div class="vec-toolbar">
+                    <input type="text" id="at-user-filter" class="admin-input vec-search-input" placeholder="按用户名搜索">
+                    <select id="at-status-filter" class="admin-input vec-select" title="按状态筛选">
+                        <option value="">全部状态</option>
+                        <option value="queued">排队中</option>
+                        <option value="running">运行中</option>
+                        <option value="completed">已完成</option>
+                        <option value="failed">失败</option>
+                        <option value="cancelled">已取消</option>
+                    </select>
+                    <button id="at-search-btn" class="admin-btn primary">查询</button>
+                    <button id="at-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>任务ID</th>
+                                <th>用户</th>
+                                <th>智能体</th>
+                                <th class="vec-th-content">目标</th>
+                                <th>状态</th>
+                                <th>步数</th>
+                                <th>发起时间</th>
+                                <th>最近活动</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="at-tbody">
+                            <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="at-prev" class="admin-btn small">上一页</button>
+                    <span id="at-page-info" class="admin-view-tip">-</span>
+                    <button id="at-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-accounts" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>账号管理</h2>
+                    <span id="accounts-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">修改任意账号的资料（昵称/性别/地区/签名/头像）、重置密码、锁定封禁与删除注销；用户名为全库引用主键，不支持修改。资料保存后实时推送在线用户多端同步；密码重置后用户下次登录生效；锁定封禁需填写封禁原因，用户登录与在线时均会看到原因并被踢出；删除为注销（软删除），用户名保留防冒用、列表不再展示。</p>
+                
+                <div class="vec-toolbar">
+                    <input type="text" id="accounts-search" class="admin-input vec-search-input" placeholder="按用户名/昵称搜索（实时过滤）">
+                    <button id="accounts-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>角色</th>
+                                <th>状态</th>
+                                <th>性别</th>
+                                <th>地区</th>
+                                <th class="vec-th-content">个性签名</th>
+                                <th>注册时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-tbody">
+                            <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="accounts-prev" class="admin-btn small">上一页</button>
+                    <span id="accounts-page-info" class="admin-view-tip">-</span>
+                    <button id="accounts-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-online" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>在线账号</h2>
+                    <span id="online-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">当前在线的全部连接明细（每行一条连接）：账号/昵称、登录端（PC/WEB/手机/分享页）、真实客户端 IP、上线时间与账号状态。列表每 10 秒自动刷新；同一账号多端同时在线会显示多行。强制下线仅断开当前连接（可重新登录）；封禁为落库全局生效并即时踢出，可点击操作列按钮或前往"账号管理"页操作。</p>
+                
+                <div class="vec-toolbar">
+                    <input type="text" id="online-search" class="admin-input vec-search-input" placeholder="按用户名/昵称/IP 搜索（实时过滤）">
+                    <button id="online-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>登录端</th>
+                                <th>IP</th>
+                                <th>上线时间</th>
+                                <th>账号状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="online-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-points" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>积分管理</h2>
+                    <span id="points-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">AI 问答积分：按 Token 消耗折算扣除（1000 tokens = 1 积分，向上取整），余额不足拦截 AI 提问。此处调整保存后立即生效；在线用户在下一次 AI 回答结束后自动刷新显示。</p>
+                
+                <div class="dash-cards">
+                    <div class="dash-card">
+                        <span class="dash-card-label">用户总数</span>
+                        <span class="dash-card-value" id="points-stat-users">-</span>
+                        <span class="dash-card-sub" id="points-stat-admins">管理员 -</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">积分总量</span>
+                        <span class="dash-card-value" id="points-stat-total">-</span>
+                        <span class="dash-card-sub">全部用户余额合计</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">平均积分</span>
+                        <span class="dash-card-value" id="points-stat-avg">-</span>
+                        <span class="dash-card-sub">按用户总数平均</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">低积分用户</span>
+                        <span class="dash-card-value" id="points-stat-low">-</span>
+                        <span class="dash-card-sub">余额不足 10 分</span>
+                    </div>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <input type="text" id="points-search" class="admin-input vec-search-input" placeholder="按用户名/昵称搜索（实时过滤）">
+                    <button id="points-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>用户名</th>
+                                <th>昵称</th>
+                                <th>角色</th>
+                                <th>积分余额</th>
+                                <th>注册时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="points-tbody">
+                            <tr><td colspan="6" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="points-prev" class="admin-btn small">上一页</button>
+                    <span id="points-page-info" class="admin-view-tip">-</span>
+                    <button id="points-next" class="admin-btn small">下一页</button>
+                </div>
+
+                
+                <h3 class="dash-subtitle">积分流水记录</h3>
+                <div class="vec-toolbar">
+                    <input type="text" id="plog-username" class="admin-input vec-search-input" placeholder="按用户名过滤">
+                    <input type="text" id="plog-userid" class="admin-input vec-search-input" placeholder="按用户 ID 过滤" title="数字用户 ID（可在上方用户表格 ID 列查看），优先于用户名筛选">
+                    <select id="plog-reason" class="admin-input vec-select" title="按类型筛选">
+                        <option value="">全部类型</option>
+                        <option value="ai_deduct">AI 问答扣除</option>
+                        <option value="admin_adjust">管理员调整</option>
+                        <option value="register_grant">注册赠送</option>
+                    </select>
+                    <button id="plog-refresh" class="admin-btn primary">查询</button>
+                    <button id="plog-export" class="admin-btn small" title="按当前筛选条件导出全部流水为 CSV 文件">导出 CSV</button>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <span class="plog-time-label">时间从</span>
+                    <input type="datetime-local" id="plog-start" class="admin-input plog-time-input" title="起始时间（含），留空不限制">
+                    <span class="plog-time-label">至</span>
+                    <input type="datetime-local" id="plog-end" class="admin-input plog-time-input" title="结束时间（含），留空不限制">
+                    <span class="admin-view-tip">时间范围同时作用于流水查询与导出</span>
+                </div>
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>用户</th>
+                                <th>类型</th>
+                                <th>变动</th>
+                                <th>变动后余额</th>
+                                <th>操作人</th>
+                                <th>说明</th>
+                            </tr>
+                        </thead>
+                        <tbody id="plog-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="vec-pager">
+                    <button id="plog-prev" class="admin-btn small">上一页</button>
+                    <span id="plog-page-info" class="admin-view-tip">-</span>
+                    <button id="plog-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-agentsettings" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>Agent 设置</h2>
+                    <span id="agentset-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">Agent 自动化任务的运行参数。保存后立即热生效（运行中任务的下一步即按新值判定），无需重启服务端；全部设置持久化保存，重启后保持。</p>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">基础限制</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-max-steps" title="步数=模型决策+工具执行的一轮循环，达到上限任务以失败结束">单任务最大迭代步数</label>
+                        <input type="number" id="agentset-max-steps" class="admin-input agentset-num" min="1" max="500" step="1">
+                        <span class="agentset-range">1~500</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-tool-timeout" title="run_command/http_request 等工具默认超时">命令默认超时（秒）</label>
+                        <input type="number" id="agentset-tool-timeout" class="admin-input agentset-num" min="5" max="300" step="1">
+                        <span class="agentset-range">5~300</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-approve-timeout" title="高危工具（写文件/删文件/命令等）等待用户审批的超时">审批等待超时（秒）</label>
+                        <input type="number" id="agentset-approve-timeout" class="admin-input agentset-num" min="10" max="3600" step="1">
+                        <span class="agentset-range">10~3600</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-concurrency" title="每用户同时运行的任务数上限">每用户并发任务数</label>
+                        <input type="number" id="agentset-concurrency" class="admin-input agentset-num" min="1" max="10" step="1">
+                        <span class="agentset-range">1~10</span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-queue-size" title="每用户排队任务数上限，排队满时新任务直接拒绝">每用户排队上限</label>
+                        <input type="number" id="agentset-queue-size" class="admin-input agentset-num" min="1" max="50" step="1">
+                        <span class="agentset-range">1~50</span>
+                    </div>
+                </div>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">任务与审批</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-enabled"> Agent 功能总开关（关闭后无法发起新任务）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-pc-exec"> 本地执行器（PC 在线时文件/命令在用户电脑本地执行）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-autowrite"> 写文件/编辑文件免审批（全局开关，对所有用户生效）</label>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">命令自动放行白名单 <span class="agentset-sub-tip">（全局白名单：命中前缀的命令免审批，对所有用户生效）</span></label>
+                        <div id="agentset-cmds" class="agentset-cmds"></div>
+                        <div class="agentset-cmd-add">
+                            <input type="text" id="agentset-cmd-input" class="admin-input" placeholder="命令首词，如 git / node / npm（回车添加）" maxlength="64">
+                            <button id="agentset-cmd-add" class="admin-btn small">添加</button>
+                        </div>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">用户个人命令白名单 <span class="agentset-sub-tip">（按用户隔离：来自审批弹窗"同意并加白"，仅该用户本人生效；点 × 收回）</span></label>
+                        <div id="agentset-user-cmds" class="agentset-cmds"></div>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label">用户个人写文件免审批 <span class="agentset-sub-tip">（按用户隔离：来自审批弹窗加白，仅该用户写/编辑文件免审批；点 × 收回）</span></label>
+                        <div id="agentset-user-write" class="agentset-cmds"></div>
+                    </div>
+                </div>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">网络工具</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-http-enabled"> http_request 工具（服务端代理 HTTP 请求）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-http-private"> 允许访问内网/回环地址（关闭后在拨号层拦截私网地址）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="agentset-search-enabled"> web_search 联网搜索（Agent 与普通聊天共用）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-provider">搜索服务商</label>
+                        <select id="agentset-search-provider" class="admin-input agentset-num">
+                            <option value="">未选择</option>
+                            <option value="tavily">tavily（需 API Key）</option>
+                            <option value="bocha">bocha（需 API Key）</option>
+                            <option value="searxng">searxng（需实例地址）</option>
+                            <option value="duckduckgo">duckduckgo（免 Key）</option>
+                        </select>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-key">搜索 API Key</label>
+                        <input type="password" id="agentset-search-key" class="admin-input agentset-wide" placeholder="" autocomplete="new-password">
+                        <span id="agentset-key-hint" class="agentset-sub-tip"></span>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="agentset-search-endpoint">SearXNG 实例地址</label>
+                        <input type="text" id="agentset-search-endpoint" class="admin-input agentset-wide" placeholder="如 http://127.0.0.1:8889">
+                    </div>
+                </div>
+
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">Git 助手提示词</h3>
+                    <p class="admin-view-tip">源代码管理「AI 生成提交信息」与「AI 审查报告」的系统提示词。保存后下一次生成即按新提示词执行（热更新，无需重启服务端），持久化保存重启不丢；清空输入框并保存即恢复内置默认。</p>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label" for="agentset-git-commitmsg">AI 生成提交信息提示词 <span class="agentset-sub-tip">（占位符 {files} 会替换为多文件硬性要求，可省略——省略时多文件场景仍自动追加）</span></label>
+                        <textarea id="agentset-git-commitmsg" class="admin-input admin-gitprompt-text" rows="6" placeholder="留空使用内置默认"></textarea>
+                    </div>
+                    <div class="agentset-row agentset-col">
+                        <label class="agentset-label" for="agentset-git-review">AI 审查报告提示词 <span class="agentset-sub-tip">（占位符 {target} 会替换为审查目标分支名，可省略）</span></label>
+                        <textarea id="agentset-git-review" class="admin-input admin-gitprompt-text" rows="6" placeholder="留空使用内置默认"></textarea>
+                    </div>
+                    <div class="agentset-actions agentset-gitprompt-actions">
+                        <button id="agentset-gitprompt-save" class="admin-btn primary">保存提示词</button>
+                        <button id="agentset-gitprompt-reset" class="admin-btn small">恢复默认</button>
+                        <span id="agentset-gitprompt-state" class="agentset-sub-tip"></span>
+                    </div>
+                </div>
+
+                <div class="agentset-actions">
+                    <button id="agentset-save" class="admin-btn primary">保存全部设置</button>
+                    <span id="agentset-tip" class="admin-view-tip"></span>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-billing" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>AI 计费设置</h2>
+                    <span id="billing-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">AI 问答与 Agent 任务的积分扣费模式。保存后立即热生效（下一次模型调用即按新模式扣费），无需重启服务端；设置持久化保存，重启后保持。客户端气泡/任务卡展示口径自动跟随。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">计费模式</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="usage" checked> 按量计费（1000 tokens = 1 积分，按当次实际消耗折算，上下文越长单次扣费越多）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="billing-mode" value="percall"> 按次计费（每次模型调用固定扣费，与 token 数无关，上下文膨胀由平台吸收）</label>
+                    </div>
+                    <div class="agentset-row" id="billing-cost-row">
+                        <label class="agentset-label" for="billing-percall-cost" title="仅按次计费模式生效；每次 AI 问答 / Agent 每轮迭代扣该固定积分">按次计费单价（积分/次）</label>
+                        <input type="number" id="billing-percall-cost" class="admin-input agentset-num" min="0.001" max="1000" step="0.001">
+                        <span class="agentset-range">0.001~1000</span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="billing-save" class="admin-btn primary">保存计费设置</button>
+                    <span id="billing-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-compress" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>历史压缩设置</h2>
+                    <span id="compress-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">AI 问答与 Agent 任务历史上下文自动压缩的触发口径（两者统一跟随本设置）：上下文达到阈值时把较早历史/完整工具轮 LLM 摘要归并（最近若干轮保留原文），显著降低 token 消耗并加速响应。保存后立即热生效（对执行中的任务下一轮即按新口径判断），无需重启服务端；设置持久化保存，重启后保持。任务卡右下角"上下文占用环"与问答输入区上方"上下文水位条"展示口径自动跟随。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">压缩触发口径</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="kb" checked> KB 字节口径（上下文累计 UTF-8 字节数达阈值触发，中英混排直观可预期）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="radio" name="compress-mode" value="tokens"> 估算 token 口径（CJK≈1 字符 1 token、其余≈4 字符 1 token 粗估，达阈值触发）</label>
+                    </div>
+                    <div class="agentset-row" id="compress-kb-row">
+                        <label class="agentset-label" for="compress-kb" title="KB 字节口径触发阈值；200KB 中文约 6.8 万 token，请结合所用模型上下文窗口调整">KB 阈值（KB）</label>
+                        <input type="number" id="compress-kb" class="admin-input agentset-num" min="1" max="1048576" step="1">
+                        <span class="agentset-range">1~1048576</span>
+                    </div>
+                    <div class="agentset-row" id="compress-tokens-row">
+                        <label class="agentset-label" for="compress-tokens" title="估算 token 口径触发阈值">Token 阈值（估算）</label>
+                        <input type="number" id="compress-tokens" class="admin-input agentset-num" min="1000" max="10000000" step="1000">
+                        <span class="agentset-range">1000~10000000</span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="compress-save" class="admin-btn primary">保存压缩设置</button>
+                    <span id="compress-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-drive" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>网盘设置</h2>
+                    <span id="drive-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">网盘上传扩展名黑名单：命中黑名单的文件按处置模式处理（默认自动加 .im 隔离保存；或直接拒绝），覆盖网页上传与挂载盘（WebDAV）写入。保存后立即热生效（无需重启服务端）；设置持久化保存，重启后保持。留空表示使用内置默认黑名单；设值则完全覆盖默认（不会追加）。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">上传扩展名黑名单</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="drive-blockexts" title="逗号分隔的扩展名列表，如 .exe,.msi；留空=内置默认黑名单；设值则完全覆盖默认">黑名单扩展名</label>
+                        <input type="text" id="drive-blockexts" class="admin-input" style="flex:1" placeholder="留空=内置默认黑名单，如 .exe,.msi,.bat">
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-sub-tip" id="drive-default-tip"></span>
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-label">处置方式</span>
+                        <label class="agentset-switch-label"><input type="radio" name="drive-block-mode" id="drive-mode-rename" value="rename"> 自动加 .im 隔离保存（推荐：用户传 123.exe 服务端保存为 123.exe.im，MinIO 对象名同步加 .im，文件不可直接执行，改名前无需打扰用户）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-label"></span>
+                        <label class="agentset-switch-label"><input type="radio" name="drive-block-mode" id="drive-mode-deny" value="deny"> 直接拦截拒绝上传（命中即 403 拒绝并落告警日志）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="drive-elf"> ELF 魔数检测（识别改名的 Linux 可执行文件：Linux 二进制没有固定扩展名，按文件头内容判定，命中同样按处置方式处理，关闭后仅靠扩展名黑名单）</label>
+                    </div>
+                    <h3 class="agentset-group-title">下载缓存</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="drive-cache"> 允许 CDN 边缘缓存下载响应（开启后服务端代理下载响应带 Cache-Control: public, max-age=3600，DCDN/浏览器缓存 1 小时、显著节省服务端回源带宽；代价：取消分享/吊销票据的即时性降级为缓存过期后失效，且已被缓存的旧响应需在 DCDN 控制台刷新才立即清除。默认关闭=响应 no-store，取消分享即时生效。302 预签名直连跳转不受本开关影响，永远不缓存）</label>
+                    </div>
+                    <h3 class="agentset-group-title">DCDN 远程鉴权</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="edge-auth-enabled"> 启用远程鉴权票据（服务端给 MinIO 预签名 URL 附带 auth_ticket 短时效票据，DCDN 边缘转发 /auth 校验，防跳过分享页直连下载。⚠️ 与 DCDN 控制台联动：开启前须在 DCDN 控制台配置远程鉴权并部署生效；关闭前须先在 DCDN 控制台关闭远程鉴权，否则 minio 域名全部下载将被边缘 403 拒绝）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="edge-auth-ttl" title="票据滑动有效期秒，每次校验通过自动续期；视频 Range 多段下载每段续期不中断。0=默认 1800（与预签名 30 分钟对齐）；范围 60~86400">票据有效期（秒）</label>
+                        <input type="number" id="edge-auth-ttl" class="admin-input" style="width:140px" min="0" max="86400" step="60" placeholder="0=默认 1800">
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="edge-auth-rate" title="/auth 全局限流每秒放行请求数（请求源为 DCDN 边缘节点，无法按 IP 限流）。0=默认 500；范围 1~100000">全局限流（QPS）</label>
+                        <input type="number" id="edge-auth-rate" class="admin-input" style="width:140px" min="0" max="100000" step="50" placeholder="0=默认 500">
+                    </div>
+                    <h3 class="agentset-group-title">分享页客户端下载</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="share-dl-pc" title="分享页「客户端下载」浮层的 Windows 安装包地址；留空=默认静态托管路径 /static/download/im-client.exe；可填完整 http(s) 外链（如 CDN/对象存储直链）">Windows 链接</label>
+                        <input type="text" id="share-dl-pc" class="admin-input" style="flex:1" placeholder="留空=默认 /static/download/im-client.exe">
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="share-dl-apk" title="分享页「客户端下载」浮层的 Android 安装包地址；留空=默认静态托管路径 /static/download/im-client.apk；可填完整 http(s) 外链（如 CDN/对象存储直链）">Android 链接</label>
+                        <input type="text" id="share-dl-apk" class="admin-input" style="flex:1" placeholder="留空=默认 /static/download/im-client.apk">
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="drive-save" class="admin-btn primary">保存设置</button>
+                    <span id="drive-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-filemgr" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>文件存储管理</h2>
+                    <span id="fm-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全站网盘文件统一管理视图：文件本体经对象存储归口（MinIO / 本地磁盘双后端自适应）。秒传与分享受让副本共享同一存储对象——引用数 &gt;1 时彻底删除只清元数据、对象保留，引用数 =1 才物理删除。删除=移入回收站（源文件删除后相关分享自动失效），回收站内可还原或彻底删除。</p>
+                
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">总占用</span><span class="dash-card-value sm" id="fm-total-size">-</span><span class="dash-card-sub" id="fm-file-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">使用用户</span><span class="dash-card-value sm" id="fm-user-count">-</span><span class="dash-card-sub" id="fm-share-total">分享数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">回收站占用</span><span class="dash-card-value sm" id="fm-trash-size">-</span><span class="dash-card-sub" id="fm-trash-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">存储后端</span><span class="dash-card-value sm" id="fm-backend">-</span><span class="dash-card-sub">MinIO 或本地磁盘</span></div>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <select id="fm-trash-filter" class="admin-input vec-select" title="文件范围">
+                        <option value="">正常文件</option>
+                        <option value="1">回收站</option>
+                    </select>
+                    <select id="fm-shared-filter" class="admin-input vec-select" title="分享状态">
+                        <option value="">全部文件</option>
+                        <option value="1">仅被分享的文件</option>
+                    </select>
+                    <input type="text" id="fm-keyword" class="admin-input vec-search-input" placeholder="按文件名搜索">
+                    <input type="text" id="fm-owner" class="admin-input" style="width:150px;flex:none" placeholder="按归属用户搜索">
+                    <select id="fm-sort" class="admin-input vec-select" style="width:130px" title="排序">
+                        <option value="time_desc">最新上传</option>
+                        <option value="time_asc">最早上传</option>
+                        <option value="size_desc">体积最大</option>
+                        <option value="size_asc">体积最小</option>
+                    </select>
+                    <button id="fm-search" class="admin-btn primary">搜索</button>
+                    <button id="fm-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <button id="fm-batch-delete" class="admin-btn small danger">删除所选</button>
+                    <button id="fm-batch-restore" class="admin-btn small">还原所选</button>
+                    <button id="fm-batch-purge" class="admin-btn small danger">彻底删除所选</button>
+                    <span id="fm-sel-tip" class="admin-view-tip">未选中文件</span>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th class="fm-td-ck"><input type="checkbox" id="fm-check-all" title="全选本页"></th>
+                                <th>文件名</th>
+                                <th>归属用户</th>
+                                <th>大小</th>
+                                <th>类型</th>
+                                <th>上传时间</th>
+                                <th title="共享同一存储对象的记录数（秒传/受让副本）">引用</th>
+                                <th>分享</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fm-tbody">
+                            <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="fm-prev" class="admin-btn small">上一页</button>
+                    <span id="fm-page-info" class="admin-view-tip">-</span>
+                    <button id="fm-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-fileshares" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>分享管理</h2>
+                    <span id="fs-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">全站网盘分享统一审计视图：浏览 / 下载 / 保存计数由服务端归口统计（60 秒同源去重）；分享状态实时计算（有效 / 已取消 / 已过期 / 源文件已删除）。管理员可强制取消任意分享——与分享者本人取消同水位，站内链接与聊天卡片立即失效。</p>
+                
+                <div class="vec-toolbar">
+                    <select id="fs-status-filter" class="admin-input vec-select" title="按状态筛选">
+                        <option value="">全部状态</option>
+                        <option value="valid">有效</option>
+                        <option value="canceled">已取消</option>
+                        <option value="expired">已过期</option>
+                        <option value="deleted">源文件已删除</option>
+                    </select>
+                    <input type="text" id="fs-keyword" class="admin-input vec-search-input" placeholder="按分享人 / 文件名搜索">
+                    <button id="fs-search" class="admin-btn primary">搜索</button>
+                    <button id="fs-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>分享人</th>
+                                <th>文件</th>
+                                <th>大小</th>
+                                <th>提取码</th>
+                                <th>有效期</th>
+                                <th>浏览</th>
+                                <th>下载</th>
+                                <th>保存</th>
+                                <th>状态</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fs-tbody">
+                            <tr><td colspan="11" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="fs-prev" class="admin-btn small">上一页</button>
+                    <span id="fs-page-info" class="admin-view-tip">-</span>
+                    <button id="fs-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-uploads" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>聊天附件管理</h2>
+                    <span id="up-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">聊天附件目录（IM 聊天图片 / 文件、AI 文件、群公告附件、工作台文件）统一管理视图。删除为物理删除（与定期清理同语义，不可恢复），删除后历史消息将无法查看对应文件（消息卡片按「文件已过期」灰显）——保留天数内未到期的标准聊天文件会随定期清理自动删除（图片永存）。</p>
+                
+                <div class="dash-cards dash-cards-small">
+                    <div class="dash-card"><span class="dash-card-label">总占用</span><span class="dash-card-value sm" id="up-total-size">-</span><span class="dash-card-sub" id="up-file-count">文件数 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">聊天文件</span><span class="dash-card-value sm" id="up-chat-count">-</span><span class="dash-card-sub" id="up-image-count">图片 -</span></div>
+                    <div class="dash-card"><span class="dash-card-label">功能文件</span><span class="dash-card-value sm" id="up-feature-count">-</span><span class="dash-card-sub">公告 / 工作台附件</span></div>
+                    <div class="dash-card"><span class="dash-card-label">未关联</span><span class="dash-card-value sm" id="up-orphan-count">-</span><span class="dash-card-sub" id="up-retention">保留期 -</span></div>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <select id="up-cat-filter" class="admin-input vec-select" title="按分类筛选">
+                        <option value="">全部分类</option>
+                        <option value="chat">聊天文件</option>
+                        <option value="feature">功能文件</option>
+                        <option value="orphan">未关联</option>
+                        <option value="image">仅图片</option>
+                    </select>
+                    <input type="text" id="up-keyword" class="admin-input vec-search-input" placeholder="按文件名 / 原始文件名搜索">
+                    <select id="up-sort" class="admin-input vec-select" style="width:130px" title="排序">
+                        <option value="time_desc">最新上传</option>
+                        <option value="time_asc">最早上传</option>
+                        <option value="size_desc">体积最大</option>
+                        <option value="size_asc">体积最小</option>
+                    </select>
+                    <button id="up-search" class="admin-btn primary">搜索</button>
+                    <button id="up-refresh" class="admin-btn small">刷新</button>
+                </div>
+                
+                <div class="vec-toolbar">
+                    <button id="up-batch-delete" class="admin-btn small danger">删除所选</button>
+                    <button id="up-orphan-cleanup" class="admin-btn small danger">清理全部未关联</button>
+                    <span id="up-sel-tip" class="admin-view-tip">未选中文件</span>
+                </div>
+                
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th class="fm-td-ck"><input type="checkbox" id="up-check-all" title="全选本页"></th>
+                                <th>文件名</th>
+                                <th>原始文件名</th>
+                                <th>归属</th>
+                                <th>大小</th>
+                                <th>分类</th>
+                                <th>上传时间</th>
+                                <th title="距定期清理的剩余天数（估算）；「—」表示不适用（图片永存 / 功能文件免疫 / 清理未启用）">保留期</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="up-tbody">
+                            <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="vec-pager">
+                    <button id="up-prev" class="admin-btn small">上一页</button>
+                    <span id="up-page-info" class="admin-view-tip">-</span>
+                    <button id="up-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
+
+            
+            <section id="admin-view-mcp" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>MCP 服务器</h2>
+                    <span id="mcp-status" class="admin-view-tip"></span>
+                    <button id="mcp-add" class="admin-btn primary">+ 新增服务器</button>
+                </header>
+                <p class="admin-view-tip">MCP（Model Context Protocol）服务器由服务端统一建连与调用：stdio 在服务端本机拉起子进程，sse/http 直连远程端点。已连接服务器的启用工具自动注入 AI 智能体（默认逐次人工确认，可开启免审批）。配置保存即热生效，无需重启。</p>
+                <div class="admin-mcp-toolbar">
+                    <button id="mcp-import" class="admin-btn small">导入 mcp.json</button>
+                    <button id="mcp-refresh" class="admin-btn small">刷新</button>
+                    <span id="mcp-global-tip" class="admin-view-tip"></span>
+                </div>
+                <div id="mcp-server-list" class="admin-cards"></div>
+            </section>
+
+            
+            <section id="admin-view-mcpplugins" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>MCP 插件库</h2>
+                    <span id="mcpplugins-status" class="admin-view-tip"></span>
+                    <button id="mcpplugins-add" class="admin-btn primary">+ 新增插件</button>
+                </header>
+                <p class="admin-view-tip">插件清单由本页统一维护，PC 端用户在设置 → 插件市场一键安装（自动写入本机 MCP 配置并建连）。环境变量模板中的占位值（密码/令牌/目录）会标记"需配置"，用户安装时补填。删除插件不影响用户已安装的本机配置。</p>
+                <div id="mcpplugins-list" class="admin-cards"></div>
+            </section>
+            
+            <section id="admin-view-toolchains" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>工具链市场</h2>
+                    <span id="toolchains-status" class="admin-view-tip"></span>
+                    <button id="toolchains-add" class="admin-btn primary">+ 新增工具链</button>
+                </header>
+                <p class="admin-view-tip">工具链清单由本页统一维护，PC 端用户在设置 → 工具链一键下载安装（SHA256 校验后解压到 ~/.im-mcp/&lt;安装目录&gt;）。区别于 MCP 插件：工具链非长驻进程，安装即下载解压即可用；Agent 任务可直接调用编译命令。删除条目不影响用户本机已安装的目录。</p>
+                <div id="toolchains-list" class="admin-cards"></div>
+            </section>
+
+            
+            <section id="admin-view-announcements" class="admin-view">
+            <header class="admin-view-head">
+                <h2>公告管理</h2>
+                <span id="ann-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">公司公告、新闻动态与红头文件的统一发布入口：支持富文本正文与多附件（PDF/Word/表格/图片），发布后在线用户实时收到红点提醒，离线用户登录后补红点。红头文件可开启签收（用户须点击"已确认"，此处可查签收名单）。正文保存时服务端自动做安全消毒。</p>
+            
+            <div class="vec-toolbar">
+                <select id="ann-filter-category" class="admin-input">
+                    <option value="">全部分类</option>
+                    <option value="notice">公告</option>
+                    <option value="news">动态</option>
+                    <option value="red">红头文件</option>
+                </select>
+                <select id="ann-filter-status" class="admin-input">
+                    <option value="">全部状态</option>
+                    <option value="0">草稿</option>
+                    <option value="1">已发布</option>
+                    <option value="2">已撤回</option>
+                </select>
+                <input type="text" id="ann-search" class="admin-input vec-search-input" placeholder="按标题搜索">
+                <button id="ann-refresh" class="admin-btn small">刷新</button>
+                <button id="ann-create" class="admin-btn small primary">新建公告</button>
+            </div>
+            
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>标题</th>
+                            <th>分类</th>
+                            <th>状态</th>
+                            <th>附件</th>
+                            <th>已读</th>
+                            <th>签收</th>
+                            <th>发布人</th>
+                            <th>发布时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ann-tbody">
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="vec-pager">
+                <button id="ann-prev" class="admin-btn small">上一页</button>
+                <span id="ann-page-info" class="admin-view-tip">-</span>
+                <button id="ann-next" class="admin-btn small">下一页</button>
+            </div>
+            </section>
+
+            
+            <section id="admin-view-workbench" class="admin-view">
+            <header class="admin-view-head">
+                <h2>工作台管理</h2>
+                <span id="wb-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">企业内部办公网站的统一导航入口（钉钉工作台同款）：此处维护的应用清单实时下发到聊天端左侧"工作台"面板，点击即可打开对应系统。地址仅支持 http/https；图标可上传图片（不传则显示名称首字）；打开方式可选内置窗体或系统默认浏览器；排序值越小越靠前。</p>
+            
+            <div class="vec-toolbar">
+                <select id="wb-filter-category" class="admin-input">
+                    <option value="">全部分类</option>
+                    <option value="office">办公应用</option>
+                    <option value="biz">业务系统</option>
+                    <option value="hr">人事行政</option>
+                    <option value="it">IT服务</option>
+                    <option value="other">其他</option>
+                </select>
+                <select id="wb-filter-status" class="admin-input">
+                    <option value="">全部状态</option>
+                    <option value="1">启用</option>
+                    <option value="0">禁用</option>
+                </select>
+                <input type="text" id="wb-search" class="admin-input vec-search-input" placeholder="按名称/地址搜索">
+                <button id="wb-refresh" class="admin-btn small">刷新</button>
+                <button id="wb-create" class="admin-btn small primary">新建应用</button>
+            </div>
+            
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>图标</th>
+                            <th>名称</th>
+                            <th>分类</th>
+                            <th>地址</th>
+                            <th>打开方式</th>
+                            <th>排序</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wb-tbody">
+                        <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="vec-pager">
+                <button id="wb-prev" class="admin-btn small">上一页</button>
+                <span id="wb-page-info" class="admin-view-tip">-</span>
+                <button id="wb-next" class="admin-btn small">下一页</button>
+            </div>
+            </section>
+
+            
+            <section id="admin-view-appversion" class="admin-view">
+            <header class="admin-view-head">
+                <h2>客户端更新</h2>
+                <span id="av-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">APP（APK）与 PC（Setup 安装包）的原生壳版本发布归口：上传安装包后点"启用"才对外生效（同平台仅一个生效版本，启用新版自动停用旧版）。勾选"强制更新"后旧版客户端必须更新才能继续使用。客户端界面/功能更新走 web 部署即时生效，无需在此发布；此处仅用于原生壳变更（新权限、插件、打包资源）。注意：APK 覆盖安装要求新旧包签名一致。</p>
+            
+            <div class="vec-toolbar">
+                <select id="av-filter-platform" class="admin-input">
+                    <option value="">全部平台</option>
+                    <option value="android">APP（Android APK）</option>
+                    <option value="win">PC（Windows Setup）</option>
+                </select>
+                <button id="av-refresh" class="admin-btn small">刷新</button>
+                <button id="av-upload" class="admin-btn small primary">上传新版本</button>
+            </div>
+            
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>平台</th>
+                            <th>版本号</th>
+                            <th>versionCode</th>
+                            <th>安装包</th>
+                            <th>大小</th>
+                            <th>强制</th>
+                            <th>状态</th>
+                            <th>发布时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="av-tbody">
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            </section>
+        </main>
+    </div>
+
+    
+    <div id="admin-edit-mask" class="modal-mask hidden">
+        <div class="modal-box admin-edit-box">
+            <div id="admin-edit-title" class="modal-title"></div>
+            <div id="admin-edit-form" class="admin-edit-form"></div>
+            <div class="modal-btns">
+                <button id="admin-edit-cancel" class="modal-btn">取消</button>
+                <button id="admin-edit-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="admin-confirm-mask" class="modal-mask hidden">
+        <div class="modal-box">
+            <div id="admin-confirm-text" class="modal-text"></div>
+            <div class="modal-btns">
+                <button id="admin-confirm-cancel" class="modal-btn">取消</button>
+                <button id="admin-confirm-ok" class="modal-btn primary">确定</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="av-upload-mask" class="modal-mask hidden">
+        <div class="modal-box admin-edit-box">
+            <div id="av-upload-title" class="modal-title">上传新版本安装包</div>
+            <div class="admin-edit-form">
+                <div class="admin-field">
+                    <label>平台</label>
+                    <select id="av-up-platform" class="admin-input">
+                        <option value="android">APP（Android APK）</option>
+                        <option value="win">PC（Windows Setup exe）</option>
+                    </select>
+                </div>
+                <div class="admin-field">
+                    <label>版本号</label>
+                    <input type="text" id="av-up-version" class="admin-input" placeholder="如 1.2.0">
+                    <span class="admin-field-hint">语义化版本（字母数字点横线）；PC 端以此比对更新</span>
+                </div>
+                <div class="admin-field">
+                    <label>versionCode（仅 APP 必填）</label>
+                    <input type="number" id="av-up-code" class="admin-input" placeholder="如 2，须大于线上旧值">
+                    <span class="admin-field-hint">Android 整型版本号，与 build.gradle versionCode 对应；APP 端以此比对更新</span>
+                </div>
+                <div class="admin-field">
+                    <label>更新说明</label>
+                    <textarea id="av-up-notes" class="admin-input" rows="3" placeholder="本次更新内容（客户端弹窗展示）"></textarea>
+                </div>
+                <div class="admin-field admin-field-check">
+                    <input type="checkbox" id="av-up-force">
+                    <label for="av-up-force">强制更新（旧版客户端必须更新才能继续使用）</label>
+                </div>
+                <div class="admin-field">
+                    <label>安装包来源</label>
+                    <select id="av-up-mode" class="admin-input">
+                        <option value="file">上传文件</option>
+                        <option value="url">外部 URL（大文件免上传）</option>
+                    </select>
+                </div>
+                <div class="admin-field" id="av-up-file-field">
+                    <label>安装包文件</label>
+                    <input type="file" id="av-up-file" class="admin-input" accept=".apk,.exe">
+                    <span class="admin-field-hint">APP 选 .apk，PC 选 electron-builder 产出的 Setup .exe</span>
+                </div>
+                
+                <div class="admin-field hidden" id="av-up-file-lock">
+                    <label>安装包文件</label>
+                    <input type="text" class="admin-input" value="（已上传文件，不可在线更换）" disabled>
+                    <span class="admin-field-hint">修改版本号不会变更已上传文件名；如需更换安装包，请删除该版本后重新上传</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-url-field">
+                    <label>外链完整地址</label>
+                    <input type="text" id="av-up-url" class="admin-input" placeholder="https://oss.example.com/download/im-client-1.2.0.exe">
+                    <span class="admin-field-hint">http/https 完整地址（APK 链接须指向 .apk，PC 链接须指向 .exe）；客户端将直连该地址下载</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-sha256-field">
+                    <label>sha256（外链选填，APP 下载校验用）</label>
+                    <input type="text" id="av-up-sha256" class="admin-input" placeholder="64 位十六进制摘要">
+                    <span class="admin-field-hint">对安装包文件本地计算后粘贴，PC 端同样认可；获取：PowerShell 执行 (Get-FileHash 文件路径 -Algorithm SHA256).Hash.ToLower()</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-sha512-field">
+                    <label>sha512 base64（PC 外链与 sha256 二选一必填）</label>
+                    <input type="text" id="av-up-sha512" class="admin-input" placeholder="base64 编码摘要">
+                    <span class="admin-field-hint">通常只填上面的 sha256 即可；如需本项：[Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash([IO.File]::OpenRead(文件路径)))</span>
+                </div>
+                <div class="admin-field hidden" id="av-up-size-field">
+                    <label>文件大小（外链选填，字节）</label>
+                    <input type="number" id="av-up-size" class="admin-input" placeholder="如 123456789">
+                    <span class="admin-field-hint">用于客户端更新弹窗展示下载体积</span>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="av-upload-cancel" class="modal-btn">取消</button>
+                <button id="av-upload-ok" class="modal-btn primary">上 传</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="mcp-tools-mask" class="modal-mask hidden">
+        <div class="modal-box admin-mcp-tools-box">
+            <div id="mcp-tools-title" class="modal-title"></div>
+            <div id="mcp-tools-list" class="admin-mcp-tools-list"></div>
+            <div class="modal-btns">
+                <button id="mcp-tools-cancel" class="modal-btn">取消</button>
+                <button id="mcp-tools-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="mcp-import-mask" class="modal-mask hidden">
+        <div class="modal-box admin-mcp-import-box">
+            <div class="modal-title">导入 mcp.json</div>
+            <p class="admin-field-hint">粘贴 TRAE / Claude / Cursor 的 mcp.json 内容（{"mcpServers": {...}} 或直接的服务器对象），将逐个导入为 MCP 服务器。</p>
+            <textarea id="mcp-import-text" class="admin-input admin-mcp-import-text" placeholder='{"mcpServers": {"everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}}}'></textarea>
+            <div class="modal-btns">
+                <button id="mcp-import-cancel" class="modal-btn">取消</button>
+                <button id="mcp-import-ok" class="modal-btn primary">导 入</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="ann-modal-mask" class="modal-mask hidden">
+        <div class="modal-box ann-modal-box">
+            <div id="ann-modal-title" class="modal-title">新建公告</div>
+            <div class="ann-modal-body">
+                <div class="ann-form-row">
+                    <input id="ann-title" class="admin-input ann-title-input" placeholder="标题（必填）" maxlength="128">
+                    <select id="ann-category" class="admin-input ann-cat-input">
+                        <option value="notice">公告</option>
+                        <option value="news">动态</option>
+                        <option value="red">红头文件</option>
+                    </select>
+                </div>
+                <input id="ann-digest" class="admin-input" placeholder="摘要（列表页展示，可空）" maxlength="255">
+                <div class="ann-form-row">
+                    <label class="ann-check"><input type="checkbox" id="ann-stick"> 置顶</label>
+                    <label class="ann-check"><input type="checkbox" id="ann-confirm"> 需签收（红头文件）</label>
+                    <select id="ann-content-type" class="admin-input ann-cat-input" title="正文类型：富文本页在线渲染 / 文档型以附件为主 / 链接型用内置浏览器打开">
+                        <option value="html">富文本页</option>
+                        <option value="doc">文档型</option>
+                        <option value="link">链接型</option>
+                    </select>
+                    <select id="ann-card-style" class="admin-input ann-cat-input" title="卡牌样式：阅读端卡片流按此样式渲染">
+                        <option value="standard">标准卡</option>
+                        <option value="cover-left">左文右图</option>
+                        <option value="cover-top">大图卡</option>
+                        <option value="compact">紧凑条目</option>
+                    </select>
+                </div>
+                
+                <div class="ann-form-row ann-cover-row">
+                    <button id="ann-cover-btn" class="admin-btn small" type="button">上传封面</button>
+                    <input type="file" id="ann-cover-file" accept="image/*" class="hidden">
+                    <input id="ann-cover" class="admin-input ann-cover-input" placeholder="封面图 URL（可空，上传后自动回填）">
+                    <img id="ann-cover-preview" class="ann-cover-preview hidden" alt="封面预览">
+                </div>
+                
+                <div id="ann-link-row" class="ann-form-row hidden">
+                    <input id="ann-external-url" class="admin-input" placeholder="链接地址（必填，http:// 或 https://）">
+                    <label class="ann-check"><input type="checkbox" id="ann-open-browser" checked> 应用内独立窗体打开</label>
+                </div>
+                
+                <div class="ann-toolbar">
+                    <button type="button" class="ann-tool-btn" data-cmd="bold" title="加粗"><b>B</b></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="italic" title="斜体"><i>I</i></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="underline" title="下划线"><u>U</u></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="strikeThrough" title="删除线"><s>S</s></button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertUnorderedList" title="无序列表">•&nbsp;列表</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertOrderedList" title="有序列表">1.&nbsp;列表</button>
+                    <button type="button" class="ann-tool-btn" data-block="h2" title="小标题">标题</button>
+                    <button type="button" class="ann-tool-btn" data-block="blockquote" title="引用">引用</button>
+                    <button type="button" class="ann-tool-btn" data-block="p" title="正文段落">正文</button>
+                    
+                    <select id="ann-font-size" class="ann-tool-select" title="字号">
+                        <option value="">字号</option>
+                        <option value="2">小</option>
+                        <option value="3">标准</option>
+                        <option value="4">大</option>
+                        <option value="5">特大</option>
+                    </select>
+                    <input type="color" id="ann-fore-color" class="ann-tool-color" value="#333333" title="文字颜色">
+                    <input type="color" id="ann-bg-color" class="ann-tool-color" value="#ffe9a8" title="文字背景色">
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyLeft" title="左对齐">⬅</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyCenter" title="居中">⬌</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="justifyRight" title="右对齐">➡</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="insertHorizontalRule" title="分割线">—</button>
+                    <button type="button" class="ann-tool-btn" id="ann-insert-table" title="插入 3×3 表格">表格</button>
+                    <button type="button" class="ann-tool-btn" data-cmd="removeFormat" title="清除格式">清除格式</button>
+                    <button type="button" class="ann-tool-btn" id="ann-insert-image" title="插入图片（正文内嵌）">插入图片</button>
+                    <button type="button" class="ann-tool-btn" id="ann-html-toggle" title="切换 HTML 源码编辑（保存时仍经服务端消毒）">源码</button>
+                </div>
+                <div id="ann-editor" class="ann-editor" contenteditable="true"></div>
+                <textarea id="ann-html-source" class="ann-editor ann-html-source hidden" spellcheck="false" placeholder="直接编辑 HTML 源码…（保存时服务端白名单消毒，脚本/事件属性/危险链接会被剔除）"></textarea>
+                
+                <div class="ann-form-row ann-attach-row">
+                    <button id="ann-attach-btn" class="admin-btn small" type="button">添加附件</button>
+                    <input type="file" id="ann-attach-file" multiple class="hidden">
+                    <span class="admin-view-tip">支持 PDF/Word/Excel/PPT/TXT/CSV/图片，单文件 20MB 内，阅读端在线预览</span>
+                </div>
+                <ul id="ann-attach-list" class="ann-attach-list"></ul>
+            </div>
+            <div class="modal-btns">
+                <button id="ann-save-draft" class="modal-btn">存为草稿</button>
+                <button id="ann-save-publish" class="modal-btn primary">保存并发布</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="ann-reads-mask" class="modal-mask hidden">
+        <div class="modal-box ann-reads-box">
+            <div id="ann-reads-title" class="modal-title"></div>
+            <div class="vec-table-wrap ann-reads-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr><th>用户</th><th>已确认</th><th>阅读时间</th></tr>
+                    </thead>
+                    <tbody id="ann-reads-tbody"></tbody>
+                </table>
+            </div>
+            <div class="modal-btns">
+                <button id="ann-reads-close" class="modal-btn">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="admin-chunks-mask" class="modal-mask hidden">
+        <div class="modal-box admin-chunks-box">
+            <div id="admin-chunks-title" class="modal-title"></div>
+            <div id="admin-chunks-list" class="admin-chunks-list"></div>
+            <div class="modal-btns">
+                <button id="admin-chunks-close" class="modal-btn primary">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="wb-modal-mask" class="modal-mask hidden">
+        <div class="modal-box wb-modal-box">
+            <div id="wb-modal-title" class="modal-title">新建应用</div>
+            <div class="wb-modal-body">
+                <div class="ann-form-row">
+                    <input id="wb-name" class="admin-input" placeholder="应用名称（必填，如：OA办公）" maxlength="64">
+                    <select id="wb-category" class="admin-input wb-cat-input">
+                        <option value="office">办公应用</option>
+                        <option value="biz">业务系统</option>
+                        <option value="hr">人事行政</option>
+                        <option value="it">IT服务</option>
+                        <option value="other">其他</option>
+                    </select>
+                </div>
+                <input id="wb-url" class="admin-input" placeholder="网站地址（必填，http:// 或 https:// 开头）" maxlength="512">
+                
+                <div class="ann-form-row">
+                    <button id="wb-icon-btn" class="admin-btn small" type="button">上传图标</button>
+                    <input type="file" id="wb-icon-file" accept="image/*" class="hidden">
+                    <input id="wb-icon" class="admin-input wb-icon-input" placeholder="图标 URL（可空，上传后自动回填）">
+                    <img id="wb-icon-preview" class="ann-cover-preview hidden" alt="图标预览">
+                </div>
+                <div class="ann-form-row">
+                    <select id="wb-open-mode" class="admin-input wb-cat-input" title="内置浏览器：主界面浏览区面板新标签打开；内置窗体：聊天端独立窗口打开；系统浏览器：调用系统默认浏览器">
+                        <option value="embed">内置浏览器打开</option>
+                        <option value="window">内置窗体打开</option>
+                        <option value="system">系统浏览器打开</option>
+                    </select>
+                    <input id="wb-sort" type="number" class="admin-input wb-sort-input" placeholder="排序值" value="0">
+                    <label class="ann-check"><input type="checkbox" id="wb-enabled" checked> 启用</label>
+                </div>
+                <input id="wb-remark" class="admin-input" placeholder="备注（可空，鼠标悬浮提示用）" maxlength="255">
+            </div>
+            <div class="modal-btns">
+                <button id="wb-modal-cancel" class="modal-btn">取消</button>
+                <button id="wb-modal-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="admin-atdetail-mask" class="modal-mask hidden">
+        <div class="modal-box admin-chunks-box">
+            <div id="admin-atdetail-title" class="modal-title"></div>
+            <div id="admin-atdetail-body" class="admin-chunks-list"></div>
+            <div class="modal-btns">
+                <button id="admin-atdetail-close" class="modal-btn primary">关 闭</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div id="admin-toast" class="toast hidden"></div>
+
+    
+    <script src="js/lib/echarts.min.js?v=5.5.1"></script>
+    <script src="js/admin.js?v=1.49"></script>
+    
+    <script src="js/tooltip.js?v=1.0"></script>
+</body>
+</html>

@@ -1,0 +1,988 @@
+/* ===== 网盘分享独立页（百度网盘同款布局，/s/<code> 落地页） =====
+   主题归口：全部颜色引用 css/style.css 既有变量（--primary/--panel-bg/--text 等），
+   data-theme=light/dark 自动跟随（system 由 style.css 媒体查询块接管），本文件零颜色硬编码 */
+
+html, body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+}
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ===== 顶栏 ===== */
+.sp-topbar {
+    height: 56px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+}
+.sp-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}
+.sp-logo-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-logo-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+}
+.sp-user {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.sp-login-entry {
+    border: none;
+    background: var(--hover);
+    color: var(--text);
+    font-size: 13px;
+    padding: 5px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+.sp-login-entry:hover {
+    background: var(--active);
+}
+.sp-user-name {
+    font-size: 13px;
+    color: var(--text);
+}
+.sp-logout {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 6px;
+}
+.sp-logout:hover {
+    color: var(--primary);
+}
+
+/* ===== 主体：居中卡片 ===== */
+.sp-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 16px;
+}
+.sp-card {
+    width: 460px;
+    max-width: 100%;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 36px 32px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-sizing: border-box;
+}
+.sp-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+.sp-icon svg {
+    width: 40px;
+    height: 40px;
+}
+/* 图标色板（与 drive.js 列表图标同语义：文件夹黄/图片绿/视频蓝/音频紫/其余主题灰绿） */
+.sp-icon.k-dir    { background: rgba(245, 166, 35, 0.15); color: #f5a623; }
+.sp-icon.k-img    { background: rgba(7, 193, 96, 0.12);  color: var(--primary); }
+.sp-icon.k-video  { background: rgba(64, 128, 255, 0.12); color: #4080ff; }
+.sp-icon.k-audio  { background: rgba(155, 81, 224, 0.12); color: #9b51e0; }
+.sp-icon.k-zip,
+.sp-icon.k-doc,
+.sp-icon.k-sheet,
+.sp-icon.k-pdf,
+.sp-icon.k-txt,
+.sp-icon.k-file   { background: rgba(7, 193, 96, 0.10);  color: var(--primary); }
+
+.sp-name {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+}
+.sp-meta {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+/* 分享统计行（浏览/下载/保存，服务端归口计数；弱化展示） */
+.sp-stats {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+}
+.sp-stats.hidden { display: none; }
+
+/* ===== 提取码行 ===== */
+.sp-extract-row {
+    width: 100%;
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.sp-extract-row.hidden { display: none; }
+.sp-extract-tip {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+.sp-extract-line {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    max-width: 320px;
+}
+.sp-extract-input {
+    flex: 1;
+    min-width: 0;
+    height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 15px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    padding: 0 12px;
+    box-sizing: border-box;
+    outline: none;
+}
+.sp-extract-input:focus {
+    border-color: var(--primary);
+}
+.sp-extract-input::placeholder {
+    letter-spacing: 0;
+    color: var(--text-light);
+}
+.sp-extract-btn {
+    flex: none;
+}
+.sp-extract-err {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #e5534b;
+}
+
+/* ===== 操作按钮行 ===== */
+.sp-btn-row {
+    width: 100%;
+    margin-top: 26px;
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+}
+.sp-btn-row.hidden { display: none; }
+.sp-btn {
+    height: 40px;
+    min-width: 132px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid transparent;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+.sp-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+.sp-btn-primary {
+    background: var(--primary);
+    color: #ffffff;
+}
+.sp-btn-primary:hover:not(:disabled) {
+    opacity: 0.88;
+}
+/* 次按钮：中性浅底（微信/百度网盘克制风——主操作才用主题色，次操作灰底弱化，零描边） */
+.sp-btn-ghost {
+    background: var(--hover);
+    color: var(--text);
+}
+.sp-btn-ghost:hover:not(:disabled) {
+    background: var(--active);
+}
+
+/* ===== 失效态 ===== */
+.sp-invalid {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 48px 24px;
+}
+.sp-invalid.hidden { display: none; }
+.sp-invalid-icon {
+    color: var(--text-light);
+    opacity: 0.6;
+}
+.sp-invalid-text {
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
+/* ===== 自绘登录浮层 ===== */
+.sp-login-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.sp-login-mask.hidden { display: none; }
+.sp-login-box {
+    position: relative;
+    width: 340px;
+    max-width: calc(100vw - 32px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 28px 26px 24px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+.sp-login-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+    margin-bottom: 20px;
+}
+.sp-login-input {
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 14px;
+    padding: 0 12px;
+    box-sizing: border-box;
+    outline: none;
+    margin-bottom: 12px;
+}
+.sp-login-input:focus {
+    border-color: var(--primary);
+}
+.sp-login-err {
+    font-size: 12px;
+    color: #e5534b;
+    margin-bottom: 10px;
+}
+.sp-login-err.hidden { display: none; }
+.sp-login-btn {
+    width: 100%;
+    border-radius: 8px;
+    min-width: 0;
+}
+.sp-login-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-login-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+/* ===== 自绘预览浮层（百度网盘分享页同款：全屏遮罩+头栏+内联渲染区） ===== */
+.sp-viewer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.62);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100; /* 登录浮层(1000) 之上、toast(1200) 之下 */
+    padding: 20px;
+    box-sizing: border-box;
+}
+.sp-viewer-mask.hidden { display: none; }
+.sp-viewer-box {
+    width: min(920px, 100%);
+    height: min(86vh, 760px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.sp-viewer-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+}
+.sp-viewer-title {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-viewer-close {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.sp-viewer-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.sp-viewer-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 12px;
+    box-sizing: border-box;
+}
+/* 图片：自适应缩放（预览区深色底衬托透明图） */
+.sp-viewer-body img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* PDF：iframe 铺满内容区 */
+.sp-viewer-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #1e1e1e;
+    border-radius: 6px;
+}
+/* 视频/音频：原生控件居中 */
+.sp-viewer-body video {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 6px;
+    background: #1e1e1e;
+    outline: none;
+}
+.sp-viewer-body audio {
+    width: min(520px, 100%);
+}
+/* 文本：等宽字体滚动区（UTF-8 明示，防中文乱码） */
+.sp-viewer-body pre {
+    align-self: stretch;
+    flex: 1;
+    margin: 0;
+    padding: 14px 16px;
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: Consolas, 'JetBrains Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow: auto;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.sp-viewer-loading {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* ===== 自绘 toast ===== */
+.sp-toast {
+    position: fixed;
+    left: 50%;
+    top: 72px;
+    transform: translateX(-50%);
+    background: var(--primary);
+    color: #ffffff;
+    font-size: 13px;
+    padding: 9px 20px;
+    border-radius: 18px;
+    box-shadow: var(--shadow-soft);
+    z-index: 1200;
+    max-width: 80vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sp-toast.hidden { display: none; }
+
+/* ===== 页脚 ===== */
+.sp-footer {
+    flex: none;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-light);
+    padding: 18px 0 22px;
+    user-select: none;
+}
+
+/* ===== 手机宽度响应式（百度网盘移动分享页同款单列布局） ===== */
+@media (max-width: 520px) {
+    .sp-topbar {
+        padding: 0 16px;
+    }
+    .sp-card {
+        padding: 28px 20px 24px;
+        border-radius: 10px;
+    }
+    .sp-btn-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .sp-btn {
+        min-width: 0;
+        width: 100%;
+    }
+    .sp-extract-line {
+        max-width: none;
+    }
+}
+
+/* ===== v1.3 分享内容区（123 云盘同款：hero 信息条 + 面包屑 + 可勾选文件列表） =====
+   主题归口不变：全部颜色引用 style.css 既有变量；复用主程序 .drive-check/.drive-icon/
+   .drive-crumb 系与自绘悬浮滑块 .osb-thumb 系，本文件只做分享页布局归口 */
+/* 内容区出现时主体顶部对齐（列表较高时垂直居中会裁顶） */
+.sp-main.sp-top {
+    justify-content: flex-start;
+    padding-top: 24px;
+}
+.sp-wrap {
+    width: min(960px, 100%);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    box-sizing: border-box;
+}
+/* hero 信息条（图标 + 名称/元信息/统计 + 按钮排右置） */
+.sp-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--border);
+}
+.sp-hero .sp-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 14px;
+    margin-bottom: 0;
+    flex: none;
+}
+.sp-hero .sp-icon svg {
+    width: 34px;
+    height: 34px;
+}
+.sp-hero-info {
+    flex: 1;
+    min-width: 0;
+}
+.sp-hero-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-hero-meta {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-hero-stats {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-light);
+}
+/* hero 按钮排（复用 .sp-btn-row/.sp-btn 既有样式，仅改对齐与占比） */
+.sp-hero .sp-btn-row {
+    width: auto;
+    margin-top: 0;
+    flex: none;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+.sp-hero .sp-btn {
+    min-width: 0;
+    padding: 0 18px;
+}
+/* ===== 面板：面包屑 / 批量条 / 列表 ===== */
+.sp-panel {
+    padding: 10px 16px 16px;
+}
+.sp-panel-top {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+}
+.sp-crumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.sp-crumb.hidden {
+    display: none;
+}
+.sp-batchbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+.sp-batch-count {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: 2px;
+    white-space: nowrap;
+}
+.sp-batch-btn {
+    height: 28px;
+    padding: 0 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: var(--hover);
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+.sp-batch-btn:hover:not(:disabled) {
+    background: var(--active);
+}
+.sp-batch-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.sp-batch-btn.sp-batch-primary {
+    background: var(--primary);
+    color: #ffffff;
+}
+.sp-batch-btn.sp-batch-primary:hover:not(:disabled) {
+    opacity: 0.88;
+    background: var(--primary);
+}
+.sp-batch-btn.sp-batch-ghost {
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+.sp-batch-btn.sp-batch-ghost:hover:not(:disabled) {
+    background: var(--hover);
+}
+/* 列表网格列（勾选/名称/大小/时间，比例对齐主程序网盘列表） */
+.sp-list-head,
+.sp-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) 110px 170px;
+    align-items: center;
+    column-gap: 8px;
+}
+.sp-list-head {
+    height: 36px;
+    padding: 0 8px;
+    font-size: 12px;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+.sp-list-head .drive-check {
+    cursor: pointer;
+}
+.sp-list {
+    max-height: 52vh;
+    overflow: auto;
+    scrollbar-width: none; /* 原生滚动条隐藏，走自绘悬浮滑块（悬停浮现，禁系统滚动条归口） */
+}
+.sp-list::-webkit-scrollbar {
+    display: none;
+}
+.sp-row {
+    height: 44px;
+    padding: 0 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+}
+.sp-row:hover {
+    background: var(--hover);
+}
+.sp-cell-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.sp-cell-name .drive-icon {
+    width: 22px;
+    height: 22px;
+}
+.sp-cell-name .drive-icon svg {
+    width: 20px;
+    height: 20px;
+}
+.sp-fname {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sp-cell-size {
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap; /* 左对齐同表头与主程序网盘列表（原 right 导致表头/数值错位） */
+}
+.sp-cell-time {
+    color: var(--text-light);
+    font-size: 12px;
+    white-space: nowrap;
+}
+.sp-empty {
+    text-align: center;
+    padding: 36px 0 28px;
+    font-size: 13px;
+    color: var(--text-light);
+}
+/* 勾选框常显覆盖（主程序 .drive-check 默认仅多选模式显示，分享页列表常显） */
+.sp-list-head .drive-check,
+.sp-row .drive-check {
+    display: inline-flex;
+}
+/* ===== 内容区响应式（窄屏：hero 折行 / 隐藏时间列） ===== */
+@media (max-width: 720px) {
+    .sp-hero {
+        flex-wrap: wrap;
+    }
+    .sp-hero .sp-btn-row {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+@media (max-width: 560px) {
+    .sp-wrap {
+        border-radius: 10px;
+    }
+    .sp-list-head,
+    .sp-row {
+        grid-template-columns: 36px minmax(0, 1fr) 90px;
+    }
+    .sp-cell-time,
+    .sp-col-time {
+        display: none;
+    }
+}
+
+/* ===== 首屏骨架屏（v1.5：纯 CSS 占位防脚本/接口白屏；数据到达加 .loaded 隐藏） =====
+   色彩归口既有主题变量：底条 --hover、波浪 --active，浅深主题自动跟随，零硬编码 */
+.sp-skel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    padding: 4px 0 8px;
+}
+.sp-skel-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.sp-skel-block {
+    width: 64px;
+    height: 64px;
+    flex: none;
+    border-radius: 14px;
+}
+.sp-skel-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+.sp-skel-line {
+    height: 16px;
+    border-radius: 8px;
+}
+.sp-skel-line.w76 { width: 76%; }
+.sp-skel-line.w52 { width: 52%; }
+.sp-skel-block,
+.sp-skel-line {
+    background: linear-gradient(90deg, var(--hover) 25%, var(--active) 50%, var(--hover) 75%);
+    background-size: 200% 100%;
+    animation: sp-skel-wave 1.4s ease-in-out infinite;
+}
+@keyframes sp-skel-wave {
+    from { background-position: 200% 0; }
+    to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sp-skel-block,
+    .sp-skel-line {
+        animation: none;
+    }
+}
+/* 数据到达：骨架原位移除（display:none 不留占位，卡片内容自然顶上） */
+.sp-card.loaded .sp-skel { display: none; }
+
+/* ===== 列表行骨架（v1.6：children 加载期间占位，与真实行结构对齐） ===== */
+.sp-skel-srow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 8px;
+}
+.sp-skel-srow + .sp-skel-srow {
+    border-top: 1px solid var(--border);
+}
+.sp-skel-check {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 4px;
+}
+.sp-skel-ficon {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border-radius: 8px;
+}
+.sp-skel-fname {
+    flex: 1;
+    min-width: 0;
+    height: 14px;
+    border-radius: 7px;
+}
+.sp-skel-fsize {
+    width: 56px;
+    height: 12px;
+    flex: none;
+    border-radius: 6px;
+}
+.sp-skel-ftime {
+    width: 96px;
+    height: 12px;
+    flex: none;
+    border-radius: 6px;
+}
+.sp-skel-check,
+.sp-skel-ficon,
+.sp-skel-fname,
+.sp-skel-fsize,
+.sp-skel-ftime {
+    background: linear-gradient(90deg, var(--hover) 25%, var(--active) 50%, var(--hover) 75%);
+    background-size: 200% 100%;
+    animation: sp-skel-wave 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .sp-skel-check,
+    .sp-skel-ficon,
+    .sp-skel-fname,
+    .sp-skel-fsize,
+    .sp-skel-ftime {
+        animation: none;
+    }
+}
+@media (max-width: 640px) {
+    .sp-skel-fsize,
+    .sp-skel-ftime {
+        display: none;
+    }
+}
+
+/* ===== 骨架期间隐藏真实内容元素（v1.7：sp-icon 空色块/sp-name/sp-meta 会与骨架叠加显示，
+   数据到达 .loaded 后由各分支自行填充显示；提取行等 hidden 元素不受影响） ===== */
+.sp-card:not(.loaded) .sp-icon,
+.sp-card:not(.loaded) .sp-name,
+.sp-card:not(.loaded) .sp-meta {
+    display: none;
+}
+
+/* ===== v1.9 顶栏客户端下载按钮 + 自绘下载浮层（禁系统弹窗） =====
+   主题归口不变：全部颜色引用 style.css 既有变量，零硬编码 */
+.sp-client-btn {
+    border: none;
+    background: var(--hover);
+    color: var(--text);
+    font-size: 13px;
+    padding: 5px 14px 5px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sp-client-btn:hover {
+    background: var(--active);
+    color: var(--primary);
+}
+/* 浮层骨架复用 .sp-login-mask/.sp-login-close/.sp-login-title 既有样式（同层级 z-index/圆角/主题色） */
+.sp-dl-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.sp-dl-mask.hidden { display: none; }
+.sp-dl-box {
+    position: relative;
+    width: 420px;
+    max-width: calc(100vw - 32px);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    padding: 28px 26px 24px;
+    box-sizing: border-box;
+}
+.sp-dl-tip {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin: -8px 0 20px;
+}
+.sp-dl-cards {
+    display: flex;
+    gap: 12px;
+}
+.sp-dl-card {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 18px 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-decoration: none;
+    color: var(--text);
+    background: var(--hover);
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.sp-dl-card:hover {
+    background: var(--active);
+    border-color: var(--primary);
+}
+.sp-dl-icon {
+    color: var(--primary);
+    line-height: 0;
+}
+.sp-dl-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+.sp-dl-sub {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.sp-dl-go {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #ffffff;
+    background: var(--primary);
+    padding: 6px 18px;
+    border-radius: 16px;
+    transition: opacity 0.15s ease;
+}
+.sp-dl-card:hover .sp-dl-go {
+    opacity: 0.88;
+}
+@media (max-width: 520px) {
+    .sp-dl-cards {
+        flex-direction: column;
+    }
+    .sp-user {
+        gap: 8px;
+    }
+}
