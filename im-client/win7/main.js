@@ -98,6 +98,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 // win7: 独立 userData——Chromium 108 与 134 共用配置目录有缓存格式冲突风险，单实例锁互不影响
 try { app.setPath('userData', path.join(app.getPath('appData'), 'im-client-win7')); } catch (e) { }
+// win7: 禁用硬件加速——老显卡驱动下桌面捕获/GPU 合成黑帧高发，软件渲染保稳定
+try { app.disableHardwareAcceleration(); } catch (e) { }
 // win7 诊断：渲染层 console 全量落盘（含 remote-engine 的 offer/ICE/连接状态日志）
 try {
     var __w7Log = path.join(app.getPath('userData'), 'renderer-console.log');

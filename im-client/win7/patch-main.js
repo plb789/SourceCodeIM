@@ -13,6 +13,7 @@ function patchFile(file, patches) {
         process.exit(1);
     }
     var s = fs.readFileSync(f, 'utf8');
+    s = s.replace(/\r\n/g, '\n'); // 归一化 CRLF → LF，保证多行补丁锚点可匹配
     var changed = false;
     for (var i = 0; i < patches.length; i++) {
         var p = patches[i];
@@ -107,6 +108,14 @@ patchFile('main.js', [
             "    });\n" +
             "    try { require('fs').appendFileSync(__w7Log, new Date().toISOString() + ' [win7] 启动，渲染层日志监听就绪\\n'); } catch (err) { }\n" +
             "} catch (e) { }"
+    },
+    {
+        desc: '禁用硬件加速（Win7 老驱动 + Chromium 108 GPU 栈是桌面捕获黑帧高发区）',
+        marker: 'disableHardwareAcceleration',
+        oldStr: "try { app.setPath('userData', path.join(app.getPath('appData'), 'im-client-win7')); } catch (e) { }",
+        newStr: "try { app.setPath('userData', path.join(app.getPath('appData'), 'im-client-win7')); } catch (e) { }\n" +
+            "// win7: 禁用硬件加速——老显卡驱动下桌面捕获/GPU 合成黑帧高发，软件渲染保稳定\n" +
+            "try { app.disableHardwareAcceleration(); } catch (e) { }"
     }
 ]);
 
