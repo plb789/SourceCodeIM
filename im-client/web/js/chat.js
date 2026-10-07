@@ -19295,9 +19295,11 @@
         gsetMSearch.value = '';
         gsetMembersEl.classList.remove('expanded');
         exitGsetEdit(); // 归位行内编辑态
-        renderGroupSetting();
+        // 先显示面板再渲染：面板 display:none 时 clientWidth/scrollHeight 均为 0，
+        // 会导致成员网格溢出判定失效、"查看全部成员"按钮永不出现
         gsetMask.classList.remove('hidden');
         gsetPanel.classList.remove('hidden');
+        renderGroupSetting();
     }
 
     function closeGroupSetting() {
@@ -19348,7 +19350,14 @@
             return !kw || nm.toLowerCase().indexOf(kw) >= 0 || (m.username || '').toLowerCase().indexOf(kw) >= 0;
         });
         gsetMembersEl.innerHTML = '';
-        shown.forEach(function (m) {
+        // 微信同款"默认两行 + 查看全部成员"展开式：按格子个数截断（列数随面板宽度自适应，
+        // PC/手机一致生效），不做像素限高裁切，任何字体/DPI 下都不会出现半截头像
+        var gCols = Math.max(1, Math.floor((gsetMembersEl.clientWidth + 10) / 66)); // 56px 格宽 + 10px 列距
+        var gLimit = gCols * 2; // 默认最多两行
+        var gExpanded = gsetMembersEl.classList.contains('expanded');
+        var gTruncated = !gExpanded && shown.length + 1 > gLimit; // +1 为"添加"格子
+        var renderList = gTruncated ? shown.slice(0, gLimit - 1) : shown; // 截断时给"添加"格留位
+        renderList.forEach(function (m) {
             var nm = (m.name || m.username || '?');
             var isMe = m.username === IMSocket.getUsername();
             var cell = document.createElement('div');
@@ -19401,11 +19410,9 @@
             add.addEventListener('click', function () { openGroupPicker('invite', gsetGroupID); });
             gsetMembersEl.appendChild(add);
         }
-        // 溢出时显示"查看全部成员"（展开后按钮切换为"收起"）
-        var overflow = gsetMembersEl.scrollHeight > gsetMembersEl.clientHeight + 2;
-        var expanded = gsetMembersEl.classList.contains('expanded');
-        gsetMore.classList.toggle('hidden', !(overflow || expanded));
-        gsetMore.textContent = expanded ? I18N.t('收起') : I18N.t('查看全部成员');
+        // 溢出（成员+添加格超过两行）时显示"查看全部成员"；展开后按钮切换为"收起"
+        gsetMore.classList.toggle('hidden', !(gTruncated || gExpanded));
+        gsetMore.textContent = gExpanded ? I18N.t('收起') : I18N.t('查看全部成员');
     }
 
     // ===== 阶段二百六十七：成员操作菜单（自绘浮层，微信同款点击成员弹出，禁用系统弹窗） =====
@@ -19568,10 +19575,10 @@
     // 成员搜索过滤
     gsetMSearch.addEventListener('input', renderGroupSetting);
 
-    // 查看全部成员 / 收起
+    // 查看全部成员 / 收起（切换展开态后重渲染：收起恢复两行截断，展开渲染全部成员）
     gsetMore.addEventListener('click', function () {
-        var expanded = gsetMembersEl.classList.toggle('expanded');
-        gsetMore.textContent = expanded ? I18N.t('收起') : I18N.t('查看全部成员');
+        gsetMembersEl.classList.toggle('expanded');
+        renderGroupSetting();
     });
 
     // 遮罩点击关闭

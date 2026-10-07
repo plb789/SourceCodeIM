@@ -1,2 +1,2 @@
 // 阶段一百三十六：构建期自动生成（obfuscate.js）——前端资源加密密钥（掩码异或扰乱存储），勿手改
-module.exports={m:"f62df11b54970d67898166db3acf71b891ce4f190095772939ccefa1a2c505b5",k:"f204aa77ea75ae6230dfbec7687036dbe8f793c440712574ff88c7cb89d571b7"};
+module.exports={m:"f6a32ef7df5a21c6e30c66dc56b914c3d93942b177683169a1671bd45e7a5a5f",k:"f28a759b61b882c35a52bec0040653a0a0009e6c378c6334672333be756a2e5d"};

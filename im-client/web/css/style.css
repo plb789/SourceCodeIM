@@ -11495,17 +11495,12 @@ html.m #friend-menu {
     margin: 4px 0 12px;
 }
 
-/* 成员网格：微信同款头像格子，默认限高两行，点"查看全部成员"展开 */
+/* 成员网格：微信同款头像格子，默认按两行个数截断（渲染层控制），
+   不做像素限高裁切，避免不同字体/DPI 下第二行被裁半；点"查看全部成员"渲染全部 */
 .gset-members {
     display: flex;
     flex-wrap: wrap;
     gap: 12px 10px;
-    max-height: 124px;
-    overflow: hidden;
-}
-
-.gset-members.expanded {
-    max-height: none;
 }
 
 .gset-member {
