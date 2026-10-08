@@ -162,6 +162,31 @@ function init(cfg) {
 // 全走网络），现 http/https 同规则注册——仅服务端 host 的 https 请求进本地缓存逻辑，
 // 其余 https 请求（外部网页/更新包等）一律透传，TLS 行为不变
 function installInterceptor() {
+    // 阶段二百七十四：外部请求透传保真——protocol.handle 给到的 Request 按 fetch 规范把
+    // Referer 头并入 req.referrer 属性，net.fetch(req) 跨域转发时按
+    // strict-origin-when-cross-origin 语义重算（main 进程无页面上下文，实际近乎丢弃 Referer），
+    // 高德 JS API 安全域名校验（校验 Referer host）在 PC 端恒判 INVALID_USER_DOMAIN——
+    // 选点页逆地理/POI 搜索全挂显示"自定义位置"，WEB/手机不经过本拦截层所以正常。
+    // 修复：用原始 headers 显式构造转发（headers 含渲染层完整 Referer，绕开 referrer 重算）
+    function passThrough(req) {
+        // A/B 实测结论：Request 对象直传（原版）+ webRequest 服务域补 Referer 组合下
+        // 高德矢量数据（o4 pbf/icons）加载正常；显式 headers 重构转发（含删 accept-encoding）
+        // 反致矢量数据异常地图白屏，维持原版透传不动
+        return net.fetch(req, { bypassCustomProtocolHandlers: true });
+    }
+    // 阶段二百七十四：高德 JS API 安全域名校验 Referer——渲染层请求被 protocol.handle 拦截后
+    // 经 net.fetch 转发，无论 Request 对象还是显式 headers，Chromium 网络栈都按 referrer
+    // 控制语义丢弃 Referer（main 进程转发无页面上下文）→ 高德恒判 INVALID_USER_DOMAIN
+    // （选点页逆地理/POI 搜索全挂显示"自定义位置"；WEB/手机不经过本拦截层所以正常）。
+    // 在 session webRequest 层（bypass 转发后的真实网络请求必经出口）对 JS API **服务校验域**强制补
+    // Referer（restapi=服务调用白名单校验、webapi/jsapi=SDK 加载）。注意范围仅限服务域：
+    // o4.amap.com（矢量 pbf/图标）与 *.is.autonavi.com（瓦片）不校验 Referer，补了异常 Referer
+    // 反被防盗链拒绝 → 矢量数据加载失败地图白屏（实测）
+    session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://restapi.amap.com/*', 'https://webapi.amap.com/*', 'https://jsapi.amap.com/*'] }, function (details, callback) {
+        var h = details.requestHeaders;
+        if (!h['Referer'] && !h['referer']) h['Referer'] = serverUrl;
+        callback({ requestHeaders: h });
+    });
     var handler = function (req) {
         try {
             var u = new URL(req.url);
@@ -169,7 +194,7 @@ function installInterceptor() {
                 return handleRequest(req);
             }
         } catch (e) { /* URL 解析失败按透传处理 */ }
-        return net.fetch(req, { bypassCustomProtocolHandlers: true });
+        return passThrough(req);
     };
     session.defaultSession.protocol.handle('http', handler);
     session.defaultSession.protocol.handle('https', handler);
