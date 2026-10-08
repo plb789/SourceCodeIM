@@ -126,6 +126,8 @@ app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentS
 var DISK_CACHE_MB = 512;
 app.commandLine.appendSwitch('disk-cache-size', String(DISK_CACHE_MB * 1024 * 1024));
 (function sweepOversizeDiskCache() {
+    if (!singleInstanceAllowed) return; // 双开第二实例：app.quit() 异步、模块代码仍会执行到这里——
+                                        // 跳过扫描与删除，防止在首实例缓存打开期间动它的 Cache 目录
     try {
         var cachePath = path.join(app.getPath('userData'), 'Cache');
         var total = 0;
