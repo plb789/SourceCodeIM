@@ -1,4 +1,4 @@
-﻿# IM 服务端核心配置（与《开发文档》5.2 保持一致）
+# IM 服务端核心配置（与《开发文档》5.2 保持一致）
 # 说明：本文件由服务端启动时读取，缺省项自动回退内置默认值
 
 # WebSocket 监听地址
@@ -46,6 +46,18 @@ upload_chunk_size: 4194304
 max_direct_size: 2147483648
 # 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
 recall_window: 120
+
+# ============================================================
+# 阶段二百六十八：高德地图（位置消息 + 实时位置共享功能，Web JS API）
+# amap_key：高德开放平台 Web端(JS API) Key，https://lbs.amap.com/ 申请（须配置域名白名单防盗用）
+# amap_security：配套安全密钥 securityJsCode（新申请 Key 必填，与 Key 同页获取）
+# amap_web_key：高德"Web服务"类型 Key（与 amap_key 同应用下再创建一个即可）——专用于位置气泡静态地图缩略图
+#               （restapi.amap.com REST 接口按平台校验 Key，JS API 类型 Key 调用报 USERKEY_PLAT_NOMATCH；
+#               留空回退 amap_key，此时若 amap_key 为 JS API 类型则气泡仅无缩略图，收发与共享不受影响）
+# 前两项均留空 = 位置功能整体停用（前端位置入口隐藏，信令回"管理员未配置地图服务"）
+amap_key: "dec2756151d2ac016412e1c8672cb59d"
+amap_security: "deebbcd7422744a6a1a4b7406f384019"
+amap_web_key: "86b617dc94deb29ac6540c2b76f9d14c"
 
 # ============================================================
 # 并发改造 C 系列：集群模式（hub 分布式化 + Redis pub/sub 跨实例广播，修改后需重启服务端生效）
