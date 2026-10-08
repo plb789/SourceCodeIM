@@ -19453,11 +19453,14 @@ html.m .rc-visit-meta { max-width: 40vw; overflow: hidden; text-overflow: ellips
 .loc-share-call:active { transform: scale(0.92); }
 .loc-share-quit { flex-shrink: 0; border: none; background: transparent; padding: 8px 10px; font-size: 14px; font-weight: 600; color: var(--danger, #fa5151); cursor: pointer; border-radius: 8px; transition: background 0.15s; }
 .loc-share-quit:hover { background: var(--bg-hover, rgba(0,0,0,0.06)); }
-/* 共享地图成员标记（微信同款：圆角方头像；自己头像下蓝点，他人头像正下名字签） */
-.loc-mk-self, .loc-mk-peer { display: flex; flex-direction: column; align-items: center; }
-.loc-mk-self .loc-mk-av, .loc-mk-peer .loc-mk-av { border: 2px solid #fff; border-radius: 9px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
-.loc-mk-dot { width: 12px; height: 12px; margin-top: 2px; border-radius: 50%; background: #19b1f5; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
-.loc-mk-peer { position: relative; }
+/* 共享地图成员标记（微信同款）：自己 = 蓝点即 content 根元素（anchor center → 圆心精确
+   对准坐标，不依赖 offset 换算），头像绝对定位悬挂蓝点上方；他人 = 圆角方头像（底边即锚点）
+   + 头像正下名字签 */
+.loc-mk-self { position: relative; width: 16px; height: 16px; }
+.loc-mk-self .loc-mk-av { position: absolute; left: 50%; bottom: calc(100% + 2px); transform: translateX(-50%); border: 2px solid #fff; border-radius: 9px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+.loc-mk-dot { width: 16px; height: 16px; border-radius: 50%; background: #19b1f5; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+.loc-mk-peer { position: relative; display: flex; flex-direction: column; align-items: center; }
+.loc-mk-peer .loc-mk-av { border: 2px solid #fff; border-radius: 9px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 .loc-mk-peer .loc-mk-name { position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%); padding: 1px 6px; border-radius: 8px; background: rgba(0,0,0,0.55); color: #fff; font-size: 10px; line-height: 1.5; white-space: nowrap; pointer-events: none; }
 /* 位置消息气泡（静态地图缩略图 + 名称地址，微信同款卡片） */
 .bubble-loc-card { width: 220px; padding: 0 !important; overflow: hidden; cursor: pointer; }

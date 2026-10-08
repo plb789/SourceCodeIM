@@ -27267,9 +27267,9 @@
                 var mk = new AMap.Marker({
                     position: pos,
                     content: locMarkerHtml(m.username, m.name),
-                    // 自己：蓝点圆心对准坐标（content 底边下移半个蓝点高）；他人：头像底边对准坐标
-                    offset: isSelf ? new AMap.Pixel(0, 8) : new AMap.Pixel(0, 0),
-                    anchor: 'bottom-center'
+                    // 自己：蓝点即 content 根元素，anchor center → 圆心精确对准坐标
+                    //（不依赖 offset 像素换算，免受盒模型影响）；他人：头像底边对准坐标
+                    anchor: isSelf ? 'center' : 'bottom-center'
                 });
                 locShareMapObj.add(mk);
                 locShareMarkers[m.username] = mk;
