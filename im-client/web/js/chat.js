@@ -1539,6 +1539,32 @@
         try { return localStorage.getItem('im_online_tips') === '1'; } catch (eOflt3) { return false; }
     }
 
+    // 禁用硬件加速开关（设置-外观-性能；仅 PC 端显示，浏览器/手机 APP 无 desktop 桥自动旁路）：
+    // Win10 老显卡驱动下高频重绘可能触发 GPU 进程崩溃/合成器停摆（快速切换会话黑屏假死），
+    // 开启后客户端主进程下次启动调用 app.disableHardwareAcceleration() 走软件渲染更稳定。
+    // 状态持久化在主进程 userData/im_hwaccel.json（app ready 前读取才生效），切换后重启客户端生效
+    var sHwAccel = document.getElementById('settings-hwaccel');
+    var sHwAccelCard = document.getElementById('settings-hwaccel-card');
+    if (sHwAccel && sHwAccelCard && window.desktop && !window.__webCallBridge
+        && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+        sHwAccelCard.style.display = '';
+        sHwAccel.disabled = true; // 读取 IPC 应答前置灰，防止闪现默认未勾选态误导
+        if (window.desktop.hwAccelGet) {
+            window.desktop.hwAccelGet().then(function (st) {
+                sHwAccel.checked = !!(st && st.disabled);
+                sHwAccel.disabled = false;
+            }).catch(function () { sHwAccel.disabled = false; });
+        } else {
+            sHwAccel.disabled = false;
+        }
+        sHwAccel.addEventListener('change', function () {
+            if (window.desktop.hwAccelSet) window.desktop.hwAccelSet(sHwAccel.checked);
+            showToast(sHwAccel.checked
+                ? I18N.t('已开启禁用硬件加速，重启客户端后生效')
+                : I18N.t('已恢复硬件加速，重启客户端后生效'));
+        });
+    }
+
     // 阶段二百二十六：手机 APP 后台保活引导（学微信：设置页引导用户开系统权限）。
     // 仅原生 APP 端显示；电池优化豁免是唯一可编程弹系统授权框的项（允许后息屏/省电不限制后台连接），
     // 厂商自启动管理页无公开 API 仅跳转引导。状态在进入页面与从系统设置页返回时刷新。
@@ -18817,9 +18843,25 @@
             (sigG.members || []).forEach(function (sigM) { grpAvSig += (sigM.avatar || '') + ','; });
             grpAvSig += ';';
         }
-        var convSig = JSON.stringify([currentChatUser, convList, friendList, grpAvSig]);
-        if (convSig === renderConvList._sig) return;
+        // Win10 快速切换黑屏假死修复（2026-10-08）：原签名含 currentChatUser——仅切换选中会话
+        // 也会触发全量重建（重建全部会话条目 + 头像 img 重新解码重绘），快速连点好友时每秒多次
+        // 全列表重绘构成渲染风暴，Win10 老显卡驱动下 GPU 进程崩溃/合成器停摆（黑屏假死；
+        // Win11 高性能机器可扛住故不复现）。现签名剔除 currentChatUser：数据未变时仅原位切换
+        // active 高亮类（零重建零重绘零图片解码），数据真正变化（未读/置顶/备注/头像等）才全量重建
+        // 原实现：var convSig = JSON.stringify([currentChatUser, convList, friendList, grpAvSig]); if (convSig === renderConvList._sig) return;
+        var convSig = JSON.stringify([convList, friendList, grpAvSig]);
+        if (convSig === renderConvList._sig) {
+            // 仅选中会话变化：原位更新 active 类（切换选中高亮无需重建任何 DOM）
+            if (renderConvList._active !== currentChatUser) {
+                renderConvList._active = currentChatUser;
+                convListEl.querySelectorAll('.conv-item').forEach(function (li) {
+                    li.classList.toggle('active', li.getAttribute('data-user') === currentChatUser);
+                });
+            }
+            return;
+        }
         renderConvList._sig = convSig;
+        renderConvList._active = currentChatUser;
         convListEl.innerHTML = '';
         if (convList.length === 0) {
             var empty = document.createElement('li');
@@ -21432,6 +21474,37 @@
 
     // ===== 好友列表渲染 =====
     function renderFriendList() {
+        // Win10 快速切换黑屏假死修复（2026-10-08）：原实现无任何签名守卫——每次 openConversation
+        // 都全量 innerHTML 重建好友/群/黑名单列表（全部头像 img 重建重新解码重绘 + 全部事件重绑），
+        // 快速连点好友时每秒多次全列表重绘构成渲染风暴，Win10 老显卡驱动下 GPU 进程崩溃/合成器
+        // 停摆（黑屏假死；Win11 高性能机器可扛住故不复现）。现比照 renderConvList._sig 归口：
+        // 数据未变时仅原位切换 active 高亮类；数据真正变化（好友/群/未读/在线状态/黑名单）才全量重建。
+        // 原实现：无守卫，函数体直接全量重建（群九宫格头像九宫格槽 + 好友 img + 事件重绑 + 黑名单分组）
+        var grpAvSig = '';
+        for (var sigGid in groupMap) {
+            var sigG = groupMap[sigGid];
+            // 群条目渲染字段：名称/人数/头像 + 成员头像（九宫格降级用）——任一变化即触发重建
+            grpAvSig += sigGid + ':' + (sigG.name || '') + ':' + (sigG.avatar || '') + ':' + (sigG.member_count || 0) + ':';
+            (sigG.members || []).forEach(function (sigM) { grpAvSig += (sigM.avatar || '') + ','; });
+            grpAvSig += ';';
+        }
+        // 好友条目未读角标与会话列表同源（服务端归口 convList），未读变化需重建角标
+        var unreadSig = '';
+        for (var si = 0; si < convList.length; si++) unreadSig += convList[si].target + ':' + (convList[si].unread || 0) + ',';
+        var friendSig = JSON.stringify([friendList, blockedList, unreadSig, grpAvSig]);
+        if (friendSig === renderFriendList._sig) {
+            // 仅选中会话变化：原位更新 active 类（群条目 data-user='gN' 与 currentChatUser 同编码，直接比对）
+            if (renderFriendList._active !== currentChatUser) {
+                renderFriendList._active = currentChatUser;
+                userListEl.querySelectorAll('.user-item').forEach(function (item) {
+                    item.classList.toggle('active', item.getAttribute('data-user') === currentChatUser);
+                });
+            }
+            return;
+        }
+        renderFriendList._sig = friendSig;
+        renderFriendList._active = currentChatUser;
+
         // 全局群已废弃（服务端 to_user='' 全员广播路径移除）：原"群聊"入口项删除，
         // 群聊统一走多人群会话（'gN'）条目
         var html = '';

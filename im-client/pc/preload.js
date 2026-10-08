@@ -439,6 +439,16 @@ contextBridge.exposeInMainWorld('desktop', {
         return ipcRenderer.send('theme:sync', theme);
     },
 
+    // ===== 禁用硬件加速开关（设置-外观-性能；Win10 老显卡驱动黑屏假死自救）=====
+    // 状态持久化主进程 userData/im_hwaccel.json，主进程 app ready 前读取生效——切换后重启客户端生效
+    // hwAccelGet 返回 { disabled: 本次启动是否已禁用 }（浏览器/手机 APP 无 desktop 桥自动旁路）
+    hwAccelGet: function () {
+        return ipcRenderer.invoke('hwaccel:get');
+    },
+    hwAccelSet: function (disabled) {
+        ipcRenderer.send('hwaccel:set', !!disabled);
+    },
+
     // ===== 阶段九十一：内置浏览器（TRAE CN 同款浏览区）=====
     // 面板显隐（agent 工具链路在主进程侧自动展开；渲染层按钮显式开关走这里）
     browserPanel: function (visible) {

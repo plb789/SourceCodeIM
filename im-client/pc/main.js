@@ -35,6 +35,35 @@ process.on('unhandledRejection', function (reason) {
 });
 
 let mainWindow = null;
+// Win10 快速切换黑屏假死修复（2026-10-08）：GPU/渲染子进程崩溃监控与自愈——
+// Win10 老显卡驱动（Intel 核显为主）下高频重绘（快速连点好友切换触发全列表重绘风暴）可能
+// 令 GPU 进程崩溃，Chromium 重启 GPU 进程后窗口表面可能不再恢复（整窗黑屏假死，只能重启
+// 客户端；Win11 新驱动/新合成器不复现）。此处做两件事：
+//   1. 崩溃日志落盘 userData/child-process-gone.log（带类型/原因/退出码，用户可发回排查定位）
+//   2. GPU 进程异常退出时自动重载主窗口恢复显示（登录态 localStorage 持久化，重载后自动回连）
+// 崩溃循环保护：60 秒窗口内最多重载 3 次，防止持续崩溃陷入"重载→再崩"风暴
+let gpuReloadTimes = [];
+function childCrashLog(line) {
+    try {
+        var p = path.join(app.getPath('userData'), 'child-process-gone.log');
+        fs.appendFileSync(p, '[' + new Date().toLocaleString() + '] ' + line + '\r\n');
+    } catch (e) { /* 日志失败不影响主流程 */ }
+}
+app.on('child-process-gone', function (event, details) {
+    childCrashLog('type=' + details.type + ' reason=' + details.reason + ' exitCode=' + details.exitCode + ' service=' + (details.serviceName || ''));
+    if (details.type !== 'GPU' || details.reason === 'clean-exit') return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    var now = Date.now();
+    gpuReloadTimes = gpuReloadTimes.filter(function (t) { return now - t < 60000; });
+    if (gpuReloadTimes.length >= 3) return; // 循环保护：连续崩溃不再自动重载（避免丢用户输入的重载风暴）
+    gpuReloadTimes.push(now);
+    setTimeout(function () {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            childCrashLog('GPU 崩溃自愈：重载主窗口恢复显示');
+            mainWindow.webContents.reload();
+        }
+    }, 500); // 稍候 GPU 进程重启完成再重载（立即重载可能再遇无 GPU 环境）
+});
 // 阶段一百五十四：微信同款启动闪屏——主窗口 show:false 不再创建即显示（原实现：窗口创建即显示，
 // 页面加载完成前露出 backgroundColor 灰黑底，用户实测反馈"启动前显示灰黑色"）；先弹无边框 logo
 // 闪屏窗，主窗口 did-finish-load（静态资源本地拦截秒开）后关闭闪屏并显示主窗口，8 秒兜底强制切换
@@ -84,6 +113,36 @@ if (!singleInstanceAllowed) {
 // 且该特性无视页面 ::-webkit-scrollbar 自定义样式，与自绘悬浮滑块叠加出现"同一条轨道两条滚动条"。
 // 禁用后原生滚动条完全由页面 CSS 控制（宽度归零），仅保留自绘滑块
 app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar,OverlayScrollbars');
+
+// 阶段二百六十四：Chromium HTTP 磁盘缓存上限 + 启动期超限自愈（用户反馈：userData 缓存涨到 3G
+// 后操作页面容易卡）——默认会话资源经 web-cache 拦截后，动态路径与外部主机请求由 net.fetch 透传
+// 真实网络栈，其响应读写 Chromium HTTP 磁盘缓存（userData/Cache）；未显式设上限时 Chromium 默认
+// 容量与磁盘大小挂钩（约磁盘 3.3%，大磁盘可达数 GB），长期使用后条目海量增长，索引写回/条目
+// 淘汰的磁盘 IO 拥塞拖慢页面资源加载（机械盘 Win10 尤其明显）。两层修复：
+//   1) disk-cache-size 显式上限 512MB——超限 Chromium 自动 LRU 淘汰最旧条目，杜绝无限增长；
+//      必须在 app ready 前注入（Chromium 仅启动时读取）；已超限的历史大缓存随新写入逐步回落
+//   2) 启动期一次性自愈：Cache 目录超 2 倍上限（1GB）时整体删除重建（app ready 前缓存尚未打开，
+//      删除安全，Chromium 首次使用自动重建索引），历史 3G 安装即刻恢复轻盈，无需用户手动清理
+var DISK_CACHE_MB = 512;
+app.commandLine.appendSwitch('disk-cache-size', String(DISK_CACHE_MB * 1024 * 1024));
+(function sweepOversizeDiskCache() {
+    try {
+        var cachePath = path.join(app.getPath('userData'), 'Cache');
+        var total = 0;
+        (function walk(dir) {
+            var entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (var i = 0; i < entries.length; i++) {
+                var fp = path.join(dir, entries[i].name);
+                if (entries[i].isDirectory()) walk(fp);
+                else { try { total += fs.statSync(fp).size; } catch (e) { } }
+            }
+        })(cachePath);
+        if (total > DISK_CACHE_MB * 2 * 1024 * 1024) {
+            fs.rmSync(cachePath, { recursive: true, force: true });
+            console.log('[main] HTTP 缓存超限自愈: 已清空 ' + Math.round(total / 1024 / 1024) + 'MB 旧缓存（上限 ' + DISK_CACHE_MB + 'MB，超 2 倍触发整体重建）');
+        }
+    } catch (e) { /* 目录不存在/被占用等一律跳过，不影响启动 */ }
+})();
 
 // 阶段九十一：CDP 远程调试端口开关（Chrome DevTools Protocol，OpenClaw/TraeClaw 控制 Trae 同款）——
 // 必须在 app ready 前注入启动参数（Chromium 仅启动时读取）。userData/agent_browser.json 配置
@@ -198,6 +257,21 @@ function themeStoreSave(theme) {
 ipcMain.on('theme:sync', function (event, theme) {
     var t = String(theme || '');
     if (t === 'light' || t === 'dark' || t === 'system') themeStoreSave(t);
+});
+
+// ===== 禁用硬件加速开关（设置-外观-性能；Win10 老显卡驱动黑屏假死自救）=====
+// 持久化 userData/im_hwaccel.json（比照 im_theme.json 归口：主进程可直接读），模块加载期
+// （app ready 前）读取并按需 app.disableHardwareAcceleration()——该 API 仅 ready 前调用生效，
+// 故开关切换后需重启客户端；运行期只读，渲染层经 hwaccel:get / hwaccel:set 读写
+const hwAccelFile = path.join(app.getPath('userData'), 'im_hwaccel.json');
+let hwAccelDisabled = false; // 本次启动实际生效状态（运行期只读，改动下次启动生效）
+(function hwAccelStoreLoad() {
+    try { hwAccelDisabled = !!((JSON.parse(fs.readFileSync(hwAccelFile, 'utf8')) || {}).disabled); } catch (e) { hwAccelDisabled = false; }
+    if (hwAccelDisabled) app.disableHardwareAcceleration();
+})();
+ipcMain.handle('hwaccel:get', function () { return { disabled: hwAccelDisabled }; });
+ipcMain.on('hwaccel:set', function (event, disabled) {
+    try { fs.writeFileSync(hwAccelFile, JSON.stringify({ disabled: !!disabled })); } catch (e) {}
 });
 
 // ===== 阶段二百六十一：向日葵同款远程控制——本机安装标识（设备ID注册键） =====

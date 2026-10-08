@@ -1523,6 +1523,19 @@
                         <input id="settings-online-tips" type="checkbox" class="slide-switch">
                     </div>
                 </div>
+                <!-- 禁用硬件加速开关（仅 PC 端显示，chat.js 按端判定显隐）：Win10 老显卡驱动下高频重绘
+                     可能触发 GPU 进程崩溃/合成器停摆（快速切换会话黑屏假死），开启后走软件渲染更稳定；
+                     状态持久化在主进程 userData/im_hwaccel.json（app ready 前读取生效），切换后重启客户端生效 -->
+                <h3 class="settings-subtitle">性能</h3>
+                <div class="settings-card" id="settings-hwaccel-card" style="display:none">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">禁用硬件加速</div>
+                            <div class="settings-card-desc">界面出现黑屏、卡死或花屏时开启，软件渲染更稳定，显卡驱动异常的低端机建议开启；切换后需重启客户端生效。</div>
+                        </div>
+                        <input id="settings-hwaccel" type="checkbox" class="slide-switch">
+                    </div>
+                </div>
                 <!-- 原代码（阶段一百五十七迁移）：好友文件直传开关原置于外观"文件"小节，
                      用户反馈该开关属网络行为而非 UI 外观，迁至独立"网络"分类（settings-view-network），
                      DOM id（settings-file-p2p）与 chat.js 绑定逻辑全保留零改动
