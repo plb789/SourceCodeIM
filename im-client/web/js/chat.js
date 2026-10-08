@@ -26932,14 +26932,79 @@
         return div;
     }
     // 位置查看弹窗（历史/实时气泡共用入口）
+    var locViewCur = null; // 当前查看的位置 {lat,lng,name,address}（导航归口取坐标用，GCJ02）
     function locOpenView(loc) {
         if (!loc) return;
+        locViewCur = loc;
         locViewImg.src = locStaticMapUrl(loc.lat, loc.lng);
         locViewName.textContent = loc.name || I18N.t('位置');
         locViewAddr.textContent = loc.address || '';
         locViewMask.classList.remove('hidden');
     }
     document.getElementById('loc-view-close').addEventListener('click', function () { locViewMask.classList.add('hidden'); });
+
+    // ---- 位置详情导航（微信同款）：选择地图 → 调起已装地图 APP 直接导航 ----
+    // 坐标为 GCJ02：高德 dev=0 原生；百度/腾讯 scheme 分别以 coord_type=gcj02 / coord_type=1 声明，
+    // 无需坐标转换。APP 内经 Capacitor App.launcher 调起 scheme（未安装 completed=false），
+    // 自动回落对应网页版导航（系统浏览器/内置窗体）；PC/浏览器环境直接开网页版
+    var locNavSheet = document.getElementById('loc-nav-sheet');
+    var locNavApps = {
+        amap: {
+            scheme: function (lat, lng, name) { return 'amapuri://route/plan/?dlat=' + lat + '&dlon=' + lng + '&dname=' + name + '&dev=0&t=0'; },
+            web: function (lat, lng, name) { return 'https://uri.amap.com/navigation?to=' + lng + ',' + lat + ',' + name + '&mode=car&coordinate=gaode&src=imclient&callnative=1'; }
+        },
+        baidu: {
+            scheme: function (lat, lng, name) { return 'baidumap://map/direction?destination=' + lat + ',' + lng + '&coord_type=gcj02&mode=driving&src=im.client'; },
+            web: function (lat, lng, name) { return 'https://api.map.baidu.com/direction?destination=latlng:' + lat + ',' + lng + '|name:' + name + '&mode=driving&coord_type=gcj02&output=html&src=im.client'; }
+        },
+        qq: {
+            scheme: function (lat, lng, name) { return 'qqmap://map/routeplan?type=drive&to=' + name + '&tocoord=' + lat + ',' + lng + '&coord_type=1&referer=imclient'; },
+            web: function (lat, lng, name) { return 'https://apis.map.qq.com/uri/v1/routeplan?type=drive&to=' + name + '&tocoord=' + lat + ',' + lng + '&coord_type=1&referer=imclient'; }
+        }
+    };
+    function locNavOpenUrl(url) {
+        // PC 端内置独立窗体打开（与公告外链同一归口）；浏览器/手机 web 新标签；APP 内 launcher 走系统浏览器
+        if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App && Capacitor.Plugins.App.launcher) {
+            Capacitor.Plugins.App.launcher({ url: url });
+        } else if (window.desktop && window.desktop.openAnnLink) {
+            window.desktop.openAnnLink(url).catch(function () { window.open(url, '_blank'); });
+        } else {
+            window.open(url, '_blank');
+        }
+    }
+    function locNavGo(appKey) {
+        if (!locViewCur) return;
+        var cfg = locNavApps[appKey];
+        if (!cfg) return;
+        var lat = locViewCur.lat, lng = locViewCur.lng;
+        var name = encodeURIComponent(locViewCur.name || I18N.t('目的地'));
+        // APP 内：原生 ACTION_VIEW 调起本机地图 APP 导航（@capacitor/app 6.x Android 无 launcher
+        // 方法，自注册 OpenUrl 插件承担）；未安装（completed=false）toast 提示并保持本页面——
+        // 禁止整页跳转网页版兜底（mobile.js 会把 window.open 覆盖为同窗跳转，WebView 整页
+        // 替换成高德 H5，用户视角即"黑屏"）。PC/浏览器环境打开对应网页版导航
+        var capNav = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.OpenUrl;
+        if (capNav && capNav.openExternal) {
+            capNav.openExternal({ url: cfg.scheme(lat, lng, name) })
+                .then(function (r) {
+                    if (!r || !r.completed) showToast(I18N.t('未安装该地图，无法导航'));
+                })
+                .catch(function () { showToast(I18N.t('未安装该地图，无法导航')); });
+        } else {
+            locNavOpenUrl(cfg.web(lat, lng, name));
+        }
+        locViewMask.classList.add('hidden');
+    }
+    if (locNavSheet) {
+        document.getElementById('loc-view-nav').addEventListener('click', function () { locNavSheet.classList.add('open'); });
+        document.getElementById('loc-nav-cancel').addEventListener('click', function () { locNavSheet.classList.remove('open'); });
+        locNavSheet.addEventListener('click', function (e) { if (e.target === locNavSheet) locNavSheet.classList.remove('open'); });
+        Array.prototype.forEach.call(locNavSheet.querySelectorAll('.loc-nav-app'), function (btn) {
+            btn.addEventListener('click', function () {
+                locNavSheet.classList.remove('open');
+                locNavGo(btn.getAttribute('data-app'));
+            });
+        });
+    }
 
     // 104 实时接收（与 92 同口径：会话归属归一 + msg_id 去重 + 服务端昵称合并 + 私聊已读回执）
     IMSocket.on(MSG.LOCATION, function (msg) {

@@ -1255,6 +1255,12 @@
             </div>
             <div id="loc-view-name" class="loc-pick-name"></div>
             <div id="loc-view-addr" class="loc-pick-addr"></div>
+            <div class="loc-view-actions">
+                <button id="loc-view-nav" class="loc-view-nav" type="button">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M21.9 2.1a1 1 0 0 1 .2 1.1l-8.9 19a1 1 0 0 1-1.8-.1L8.6 15 1.7 12.4a1 1 0 0 1-.1-1.8l19-8.9a1 1 0 0 1 1.1.2z"/></svg>
+                    <span>导航</span>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -1288,6 +1294,18 @@
             <button id="loc-sheet-share" class="loc-sheet-item" type="button">共享实时位置</button>
         </div>
         <button id="loc-sheet-cancel" class="loc-sheet-cancel" type="button">取消</button>
+    </div>
+
+    <!-- 位置详情导航选择 ActionSheet（微信同款"选择要打开的方式"）：点击调起已安装地图 APP 导航，
+         未安装自动回落对应网页版导航（坐标为 GCJ02，三端 scheme 均按 GCJ02 参数声明） -->
+    <div id="loc-nav-sheet" class="loc-sheet-mask">
+        <div class="loc-sheet-panel">
+            <div class="loc-sheet-title">选择要打开的方式</div>
+            <button class="loc-sheet-item loc-nav-app" data-app="amap" type="button"><span class="loc-nav-ico" style="background:linear-gradient(135deg,#4f8cff,#1568f5)">高</span>高德地图</button>
+            <button class="loc-sheet-item loc-nav-app" data-app="baidu" type="button"><span class="loc-nav-ico" style="background:linear-gradient(135deg,#3a7dff,#e04a3f)">百</span>百度地图</button>
+            <button class="loc-sheet-item loc-nav-app" data-app="qq" type="button"><span class="loc-nav-ico" style="background:linear-gradient(135deg,#5a8bff,#8f5cff)">腾</span>腾讯地图</button>
+        </div>
+        <button id="loc-nav-cancel" class="loc-sheet-cancel" type="button">取消</button>
     </div>
 
     <!-- 开红包遮罩：微信同款大圆"开"按钮；领取后切换结果态（金额 + 存入提示 + 查看详情入口） -->

@@ -46,6 +46,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(BackgroundIMPlugin.class);
         // 阶段二百六十：注册 APP 自动更新插件（检测/下载/校验/拉起系统安装页，弹窗 UI 归口前端自绘）
         registerPlugin(AppUpdaterPlugin.class);
+        // 位置导航：调起外部地图 APP（@capacitor/app 6.x Android 无 launcher 方法，实测缺方法，
+        // 前端回落整页跳转网页版致"黑屏"；本插件 ACTION_VIEW 调起 scheme，未安装返回 completed=false）
+        registerPlugin(OpenUrlPlugin.class);
         super.onCreate(savedInstanceState);
         // 阶段二百五十：锁屏来电可见（微信同款息屏来电）——FSI 全屏意图拉起本 Activity 时
         // 直接在锁屏上显示来电页并点亮屏幕。缺省时 FSI 拉起的页面被锁屏覆盖，锁屏上又因
