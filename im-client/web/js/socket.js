@@ -303,7 +303,9 @@
         DRIVE_SHARE: 92,         // 网盘二期：文件分享卡片（服务端创建分享后投递，content 为 JSON：{share:{id,code,name,is_dir,size,from,has_extract,expire_at}}；点击弹详情保存/下载）
         USER_LIST_DELTA: 93,     // 5万容量改造：在线名单增量同步（下行 content 为 JSON：{online:[{username,avatar}],offline:["u1"]}；全量快照仅登录者单发，此后上下线/头像变更走本帧 1s 窗口聚合广播）
         LOGIN_QUEUE: 94,         // 阶段一百六十一：登录排队位置推送（下行 content 为 JSON：{position 当前第 N 位, wait 预计等待秒}；排到队首后正常收 LOGIN_RESP，排队遮罩由 chat.js 渲染）
-        QR_SIGN: 97              // 阶段二百四十：扫码登录确认信令（上行 {action:"scan"/"confirm"/"cancel", qr_id}；下行同类型回执 {action, ok, reason?, platform?}）
+        QR_SIGN: 97,             // 阶段二百四十：扫码登录确认信令（上行 {action:"scan"/"confirm"/"cancel", qr_id}；下行同类型回执 {action, ok, reason?, platform?}）
+        LOCATION: 104,           // 阶段二百六十八：位置消息（微信同款发送位置，content 为 JSON：{loc:{lat,lng,name,address}}；GCJ-02 坐标，落库转发同红包链路，历史按类型渲染位置气泡）
+        LOCATION_SHARE: 105      // 阶段二百六十八：实时位置共享信令（action 模式，纯信令不落库坐标；上行 start/join/leave/update/end，下行 started/joined/state/left/ended/error，房间态服务端内存归口）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/
@@ -690,6 +692,18 @@
                 // 标题栏 ⚡ 积分悬停提示按模式显示对应扣费口径；归口 chat.js 的 window.applyTitlebarBillingTip
                 if (info && info.billing_mode && typeof window.applyTitlebarBillingTip === 'function') {
                     window.applyTitlebarBillingTip(info.billing_mode, info.percall_cost);
+                }
+                // 阶段二百六十八：接收高德地图 JS API Key 与安全密钥（位置消息/实时位置共享数据源；
+                // 均空=管理员未配置，位置入口隐藏）。Key 与密钥仅内存保存，刷新页面后随下次登录响应刷新
+                if (info && info.amap_key) {
+                    window._amapKey = info.amap_key;
+                    window._amapSecurity = info.amap_security || '';
+                    // Web 服务类型 Key：位置气泡静态地图缩略图 REST 专用（平台校验与 JS API Key 不互通），空回退 _amapKey
+                    window._amapWebKey = info.amap_web_key || info.amap_key;
+                } else {
+                    window._amapKey = '';
+                    window._amapSecurity = '';
+                    window._amapWebKey = '';
                 }
                 // 阶段三十一：接收服务端下发的分片大小与大文件直传阈值（服务端归口）
                 if (info && info.chunk_size > 0) {

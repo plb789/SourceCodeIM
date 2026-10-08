@@ -132,6 +132,12 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 阶段二百七十一：位置功能（发送位置/实时共享）——WebView navigator.geolocation 需下列
+         权限才会触发系统授权弹窗（BridgeWebChromeClient onGeolocationPermissionsShowPrompt 映射）；
+         未声明时 geolocation 静默被拒 → 选点定位/共享上报全失败兜底北京。@capacitor/geolocation
+         原生插件定位同样依赖本权限 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- 阶段一百九十八：语音/视频通话/会议（WebRTC getUserMedia）——Capacitor BridgeWebChromeClient
          内建 onPermissionRequest 桥接：Web 侧权限请求映射到下列 Android 运行时权限按需弹窗授权 -->
     <uses-permission android:name="android.permission.CAMERA" />

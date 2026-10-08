@@ -19410,3 +19410,127 @@ html.m .rc-home.hidden { display: none; }
 html.m .rc-sub-sec { margin-top: 14px; }
 html.m .rc-cards-grid { grid-template-columns: 1fr; }
 html.m .rc-visit-meta { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ===== 阶段二百六十八：位置功能（发送位置 + 实时位置共享，微信同款高德 GCJ-02） ===== */
+/* 弹窗头（与红包弹窗同构：标题 + 关闭） */
+.loc-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+.loc-title { font-size: 16px; font-weight: 600; color: var(--text-main, #333); }
+/* 搜索行 */
+.loc-search-row { display: flex; align-items: center; gap: 8px; margin: 0 16px 10px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg-hover, rgba(0,0,0,0.05)); color: var(--text-light); }
+.loc-search-input { flex: 1; border: none; outline: none; background: transparent; font-size: 13px; color: var(--text-main, #333); }
+.loc-search-input::placeholder { color: var(--text-light); }
+/* 地图容器（选点/共享共用，高德实例挂载点） */
+.loc-map { position: relative; margin: 0 16px; height: 300px; border-radius: 10px; overflow: hidden; background: var(--bg-hover, rgba(0,0,0,0.05)); }
+.loc-map .amap-container { border-radius: 10px; }
+.loc-map-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; color: var(--text-light); z-index: 2; pointer-events: none; }
+/* 选中地点名称/地址 */
+.loc-pick-name { margin: 10px 16px 0; font-size: 14px; font-weight: 600; color: var(--text-main, #333); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loc-pick-addr { margin: 2px 16px 0; font-size: 12px; color: var(--text-light); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 16px; }
+/* 底部动作区 */
+.loc-actions { display: flex; gap: 10px; padding: 12px 16px 16px; }
+.loc-send-btn, .loc-share-btn { flex: 1; height: 38px; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: filter 0.15s; }
+.loc-send-btn { background: var(--primary); color: #fff; }
+.loc-share-btn { background: var(--bg-hover, rgba(0,0,0,0.06)); color: var(--text-main, #333); }
+.loc-send-btn:hover, .loc-share-btn:hover { filter: brightness(0.96); }
+.loc-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 选点弹窗尺寸（微信同款居中卡片） */
+.loc-picker-box, .loc-view-box { width: 420px; max-width: calc(100vw - 40px); background: var(--panel-bg); border-radius: 12px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.2); }
+.loc-view-img { display: block; width: 388px; max-width: calc(100vw - 72px); margin: 0 16px; border-radius: 10px; background: var(--bg-hover, rgba(0,0,0,0.05)); }
+.loc-view-box .loc-pick-name { margin-bottom: 4px; }
+.loc-view-box .loc-pick-addr { margin-bottom: 16px; }
+/* 共享面板（微信同款：全幅地图画布 + 左上返回/左下定位 + 底部悬浮胶囊条） */
+.loc-share-box { position: relative; width: 420px; height: 600px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); background: var(--panel-bg); border-radius: 12px; overflow: hidden; box-shadow: 0 8px 40px rgba(0,0,0,0.2); }
+.loc-share-box .loc-map { position: absolute; inset: 0; height: 100%; margin: 0; border-radius: 0; }
+.loc-share-back { position: absolute; top: 12px; left: 12px; z-index: 4; width: 36px; height: 36px; border: none; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, transform 0.15s; }
+.loc-share-back:hover { background: rgba(0,0,0,0.62); }
+.loc-share-back:active { transform: scale(0.92); }
+.loc-share-box .loc-relocate-btn { left: 12px; bottom: 84px; }
+.loc-share-dock { position: absolute; left: 12px; right: 12px; bottom: 16px; z-index: 4; height: 52px; border-radius: 26px; background: var(--panel-bg); box-shadow: 0 4px 16px rgba(0,0,0,0.22); display: flex; align-items: center; gap: 10px; padding: 0 8px 0 16px; }
+.loc-share-status { flex: 1; min-width: 0; border: none; background: transparent; font-size: 14px; color: var(--text-main, #333); cursor: pointer; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+.loc-share-status svg { flex-shrink: 0; color: var(--text-light); }
+.loc-share-call { flex-shrink: 0; width: 38px; height: 38px; border: none; border-radius: 50%; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: filter 0.15s, transform 0.15s; }
+.loc-share-call:hover { filter: brightness(1.06); }
+.loc-share-call:active { transform: scale(0.92); }
+.loc-share-quit { flex-shrink: 0; border: none; background: transparent; padding: 8px 10px; font-size: 14px; font-weight: 600; color: var(--danger, #fa5151); cursor: pointer; border-radius: 8px; transition: background 0.15s; }
+.loc-share-quit:hover { background: var(--bg-hover, rgba(0,0,0,0.06)); }
+/* 共享地图成员标记（微信同款：圆角方头像；自己头像下蓝点，他人头像正下名字签） */
+.loc-mk-self, .loc-mk-peer { display: flex; flex-direction: column; align-items: center; }
+.loc-mk-self .loc-mk-av, .loc-mk-peer .loc-mk-av { border: 2px solid #fff; border-radius: 9px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+.loc-mk-dot { width: 12px; height: 12px; margin-top: 2px; border-radius: 50%; background: #19b1f5; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+.loc-mk-peer { position: relative; }
+.loc-mk-peer .loc-mk-name { position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%); padding: 1px 6px; border-radius: 8px; background: rgba(0,0,0,0.55); color: #fff; font-size: 10px; line-height: 1.5; white-space: nowrap; pointer-events: none; }
+/* 位置消息气泡（静态地图缩略图 + 名称地址，微信同款卡片） */
+.bubble-loc-card { width: 220px; padding: 0 !important; overflow: hidden; cursor: pointer; }
+.loc-bubble-img { display: block; width: 100%; height: 120px; object-fit: cover; background: var(--bg-hover, rgba(0,0,0,0.06)); }
+/* 红色图钉标记（高德 markers 仅收预设色值，改前端叠加；尖端对准静态图中心=选点位置） */
+.loc-thumb-wrap, .loc-view-wrap { position: relative; }
+.loc-pin { position: absolute; left: 50%; top: 50%; width: 24px; height: 32px; transform: translate(-50%, -94%); pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35)); background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 32'%3E%3Cpath d='M12 0C5.4 0 0 5.4 0 12c0 8.4 12 20 12 20s12-11.6 12-20C24 5.4 18.6 0 12 0z' fill='%23EA4335'/%3E%3Ccircle cx='12' cy='12' r='4.5' fill='%23ffffff'/%3E%3C/svg%3E") no-repeat center / contain; }
+.loc-view-wrap .loc-pin { width: 32px; height: 42px; }
+.loc-bubble-body { padding: 8px 10px; }
+.loc-bubble-name { font-size: 13px; color: var(--text-main, #333); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loc-bubble-addr { font-size: 11px; margin-top: 2px; color: var(--text-light); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 聊天区"加入位置共享"提示条（他人发起时插入消息流，点击加入） */
+.loc-invite-tip { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px auto; padding: 5px 14px; width: fit-content; border-radius: 6px; font-size: 12px; background: var(--bg-hover, rgba(0,0,0,0.07)); color: var(--text-light); }
+.loc-invite-tip .loc-invite-join { border: none; background: transparent; color: var(--primary); font-size: 12px; cursor: pointer; padding: 0; }
+.loc-invite-tip .loc-invite-join:hover { text-decoration: underline; }
+/* 聊天区"正在共享位置"回航条（共享面板最小化后驻留提示，点击恢复面板；微信同款） */
+.loc-resume-bar { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 8px auto; padding: 5px 14px; width: fit-content; border-radius: 6px; font-size: 12px; background: var(--bg-hover, rgba(0,0,0,0.07)); color: var(--text-light); cursor: pointer; transition: background 0.15s, transform 0.15s; user-select: none; }
+.loc-resume-bar:hover { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.loc-resume-bar:active { transform: scale(0.96); }
+.loc-resume-bar .lrb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); animation: lrb-breath 1.6s ease-in-out infinite; }
+@keyframes lrb-breath { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.loc-resume-bar .lrb-arrow { font-size: 14px; line-height: 1; }
+/* 重新定位按钮（微信同款左下悬浮圆钮，比例尺上方，"回到当前位置"） */
+.loc-relocate-btn { position: absolute; left: 10px; bottom: 40px; z-index: 3; width: 34px; height: 34px; border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; background: var(--panel-bg); color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.18); transition: transform 0.15s, filter 0.15s; }
+.loc-relocate-btn:hover { filter: brightness(0.96); }
+.loc-relocate-btn:active { transform: scale(0.92); }
+/* POI 候选列表（搜索结果 / 逆地理附近地点，微信同款两行条目） */
+.loc-poi-list { max-height: 150px; overflow-y: auto; margin: 8px 16px 0; border-radius: 8px; background: var(--bg-hover, rgba(0,0,0,0.04)); }
+.loc-poi-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; cursor: pointer; transition: background 0.12s; }
+.loc-poi-item + .loc-poi-item { border-top: 0.5px solid var(--border-color, rgba(0,0,0,0.06)); }
+.loc-poi-item:hover { background: var(--bg-hover, rgba(0,0,0,0.06)); }
+.loc-poi-item.active { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.loc-poi-item .loc-poi-check { flex-shrink: 0; display: none; align-items: center; justify-content: center; color: var(--primary); }
+.loc-poi-item.active .loc-poi-check { display: flex; }
+.loc-poi-item .loc-poi-text { flex: 1; min-width: 0; }
+.loc-poi-item .loc-poi-name { font-size: 13px; color: var(--text-main, #333); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loc-poi-item.active .loc-poi-name { color: var(--primary); font-weight: 600; }
+.loc-poi-item .loc-poi-addr { font-size: 11px; margin-top: 1px; color: var(--text-light); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 中央固定气泡大头针（微信同款选点指示：气泡尾尖锚定地图中心，蓝点为落点；不拦截手势） */
+.loc-center-pin { position: absolute; left: 50%; top: 50%; z-index: 3; width: 0; height: 0; pointer-events: none; filter: drop-shadow(0 3px 6px rgba(0,0,0,0.3)); }
+.loc-center-dot { position: absolute; left: 0; top: 0; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; border-radius: 50%; background: #19b1f5; border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35); }
+.loc-center-bubble { position: absolute; left: 0; bottom: 6px; width: 32px; height: 32px; margin-left: -16px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--primary); border: 2px solid #fff; display: flex; align-items: center; justify-content: center; }
+.loc-center-bubble svg { transform: rotate(45deg); color: #fff; }
+/* 选点窗头部文字按钮（手机端"取消/发送"，PC 隐藏；发送用主题色强调） */
+.loc-head-btn { border: none; background: transparent; padding: 4px 2px; font-size: 15px; color: var(--text-main, #333); cursor: pointer; }
+.loc-head-btn-primary { color: var(--primary); font-weight: 600; }
+/* 手机/桌面端显隐工具类（位置弹窗头部按钮用；仅本项目位置区引用） */
+.m-only { display: none !important; }
+html.m .m-only { display: flex !important; align-items: center; }
+html.m .pc-only { display: none !important; }
+/* ===== 手机端（html.m）：选点/共享面板全屏微信样式页 ===== */
+/* 选点页信息层排布（flex order 重排，微信同款：头部栏 → 地图占满 → 底部搜索/列表/地址） */
+html.m .loc-picker-box { width: 100vw; max-width: none; height: 100vh; height: 100dvh; border-radius: 0; box-shadow: none; display: flex; flex-direction: column; }
+/* 共享页微信同款全屏地图（元素均绝对定位，随安全区避让手势条） */
+html.m .loc-share-box { width: 100vw; max-width: none; height: 100vh; height: 100dvh; max-height: none; border-radius: 0; box-shadow: none; }
+html.m .loc-head { padding: 12px 14px 8px; }
+html.m .loc-picker-box .loc-map { order: 1; flex: 1; min-height: 0; height: auto; margin: 0; border-radius: 0; }
+html.m .loc-map .amap-container { border-radius: 0; }
+html.m .loc-picker-box .loc-search-row { order: 2; margin: 10px 12px 0; }
+html.m .loc-picker-box .loc-poi-list { order: 3; margin: 6px 12px 0; max-height: 30vh; }
+html.m .loc-picker-box .loc-pick-name { order: 4; margin: 8px 12px 0; }
+html.m .loc-picker-box .loc-pick-addr { order: 5; margin: 2px 12px 12px; }
+html.m .loc-picker-box .loc-actions { order: 6; display: none; }
+/* 手机端共享页安全区适配（返回钮避让状态栏，胶囊条/定位钮避让手势条） */
+html.m .loc-share-back { top: calc(12px + env(safe-area-inset-top)); }
+html.m .loc-share-dock { left: 10px; right: 10px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+html.m .loc-share-box .loc-relocate-btn { bottom: calc(84px + env(safe-area-inset-bottom)); }
+/* 手机端位置入口二级 ActionSheet（微信同款：遮罩淡入 + 面板底部滑出；open 类驱动，非 .hidden） */
+.loc-sheet-mask { position: fixed; inset: 0; z-index: 2100; background: rgba(0,0,0,0.45); display: flex; flex-direction: column; justify-content: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.loc-sheet-mask.open { opacity: 1; pointer-events: auto; }
+.loc-sheet-panel, .loc-sheet-cancel { margin: 0 8px; border-radius: 14px; background: var(--panel-bg); transform: translateY(110%); transition: transform 0.25s ease; }
+.loc-sheet-mask.open .loc-sheet-panel, .loc-sheet-mask.open .loc-sheet-cancel { transform: translateY(0); }
+.loc-sheet-item { display: block; width: 100%; border: none; background: transparent; padding: 14px 0; font-size: 16px; color: var(--text-main, #333); cursor: pointer; transition: background 0.12s; }
+.loc-sheet-item + .loc-sheet-item { border-top: 0.5px solid var(--border-color, rgba(0,0,0,0.06)); }
+.loc-sheet-item:active, .loc-sheet-cancel:active { background: var(--bg-hover, rgba(0,0,0,0.06)); }
+.loc-sheet-cancel { display: block; width: calc(100% - 16px); border: none; padding: 14px 0; margin-top: 8px; margin-bottom: calc(8px + env(safe-area-inset-bottom)); font-size: 16px; font-weight: 600; color: var(--text-main, #333); cursor: pointer; }

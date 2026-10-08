@@ -484,6 +484,12 @@
                 </div>
                 <button id="pin-bar-close" class="pin-bar-close" title="取消置顶">×</button>
             </div>
+            <!-- 共享实时位置回航条：共享页最小化后显示（微信同款"你正在共享位置"），点击回到共享页 -->
+            <div id="loc-resume-bar" class="loc-resume-bar hidden">
+                <span class="lrb-dot"></span>
+                <span class="lrb-text">你正在共享位置</span>
+                <span class="lrb-arrow">›</span>
+            </div>
             <div id="message-list" class="message-list"></div>
             <!-- 阶段一百九十八：按住说话录音反馈浮层（微信手机版同款：录音中显示"松开发送"，
                  上滑切取消态；自绘浮层禁系统弹窗，仅移动布局 html.m 语音模式显示） -->
@@ -589,6 +595,11 @@
                          金额计算/扣款/领取/退回全部服务端归口，前端仅展示） -->
                     <button id="redpacket-btn" class="tool-btn hidden" title="发红包">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20.5 3h-17C2.7 3 2 3.7 2 4.5v3.2l9.1 4.1c.6.3 1.2.3 1.8 0L22 7.7V4.5c0-.8-.7-1.5-1.5-1.5zM2 10.3v9.2c0 .8.7 1.5 1.5 1.5h17c.8 0 1.5-.7 1.5-1.5v-9.2l-8.2 3.7c-1.2.5-2.5.5-3.6 0L2 10.3z"/></svg>
+                    </button>
+                    <!-- 阶段二百六十八：位置按钮（微信同款发送位置/实时位置共享入口，私聊/群聊可用，AI 智能体会话隐藏；
+                         服务端未配置高德 Key 时隐藏；地图数据源高德 JS API，坐标 GCJ-02） -->
+                    <button id="location-btn" class="tool-btn hidden" title="位置">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
                     </button>
                     <!-- 阶段一百四十一：语音/视频通话按钮（仅 PC 端私聊真实用户会话显示，chat.js 能力检测控制显隐；
                          Web/手机端隐藏——第一期通话仅 PC↔PC，媒体走 WebRTC P2P） -->
@@ -733,6 +744,10 @@
                     <button class="mp-item" data-target="redpacket-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M20.5 3h-17C2.7 3 2 3.7 2 4.5v3.2l9.1 4.1c.6.3 1.2.3 1.8 0L22 7.7V4.5c0-.8-.7-1.5-1.5-1.5zM2 10.3v9.2c0 .8.7 1.5 1.5 1.5h17c.8 0 1.5-.7 1.5-1.5v-9.2l-8.2 3.7c-1.2.5-2.5.5-3.6 0L2 10.3z"/></svg></span>
                         <span class="mp-label">红包</span>
+                    </button>
+                    <button class="mp-item" data-target="location-btn">
+                        <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg></span>
+                        <span class="mp-label">位置</span>
                     </button>
                     <button class="mp-item" data-target="voice-call-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24 11.36 11.36 0 0 0 3.57.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1 11.36 11.36 0 0 0 .57 3.57 1 1 0 0 1-.25 1.02z"/></svg></span>
@@ -1187,6 +1202,92 @@
             </div>
             <button id="rp-send-ok" class="rp-send-ok">塞钱进红包</button>
         </div>
+    </div>
+
+    <!-- ===== 阶段二百六十八：位置功能（微信同款，高德 JS API GCJ-02） ===== -->
+    <!-- 位置选择弹窗：搜索 + 地图选点 + 当前位置定位；PC 底部双动作（发送位置 / 共享实时位置），
+         手机端全屏化：头部"取消/发送"，中央固定气泡选点（微信同款） -->
+    <div id="loc-picker-mask" class="modal-mask hidden">
+        <div class="loc-picker-box">
+            <div class="loc-head">
+                <button id="loc-picker-cancel" class="loc-head-btn m-only" type="button">取消</button>
+                <span class="loc-title">位置</span>
+                <button id="loc-picker-send-m" class="loc-head-btn loc-head-btn-primary m-only" type="button">发送</button>
+                <button id="loc-picker-close" class="rp-close pc-only" title="关闭">×</button>
+            </div>
+            <div class="loc-search-row">
+                <svg class="loc-search-icon" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                <input type="text" id="loc-search-input" class="loc-search-input" placeholder="搜索地点" autocomplete="off">
+            </div>
+            <div id="loc-picker-map" class="loc-map">
+                <div id="loc-map-loading" class="loc-map-loading">地图加载中…</div>
+                <button id="loc-relocate" class="loc-relocate-btn" title="回到当前位置">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A9 9 0 0 0 13 3.06V1h-2v2.06A9 9 0 0 0 3.06 11H1v2h2.06A9 9 0 0 0 11 20.94V23h2v-2.06A9 9 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+                </button>
+                <!-- 中央固定气泡大头针（微信同款选点：拖动/缩放地图取中心点；底部蓝点=指针锚点） -->
+                <div id="loc-center-pin" class="loc-center-pin hidden">
+                    <i class="loc-center-dot"></i>
+                    <div class="loc-center-bubble">
+                        <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div id="loc-poi-list" class="loc-poi-list hidden"></div>
+            <div id="loc-picker-name" class="loc-pick-name">正在获取当前位置…</div>
+            <div id="loc-picker-addr" class="loc-pick-addr"></div>
+            <div class="loc-actions">
+                <button id="loc-picker-send" class="loc-send-btn">发送位置</button>
+                <button id="loc-picker-share" class="loc-share-btn">共享实时位置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 位置查看弹窗：静态地图缩略图 + 名称地址（历史/实时位置气泡点击进入） -->
+    <div id="loc-view-mask" class="modal-mask hidden">
+        <div class="loc-view-box">
+            <div class="loc-head">
+                <span class="loc-title">位置</span>
+                <button id="loc-view-close" class="rp-close" title="关闭">×</button>
+            </div>
+            <div class="loc-view-wrap">
+                <img id="loc-view-img" class="loc-view-img" alt="位置地图">
+                <div class="loc-pin"></div>
+            </div>
+            <div id="loc-view-name" class="loc-pick-name"></div>
+            <div id="loc-view-addr" class="loc-pick-addr"></div>
+        </div>
+    </div>
+
+    <!-- 实时位置共享面板（微信同款布局）：全幅地图 + 左上圆形返回钮（返回=最小化，共享继续）
+         + 左下回到我的位置 + 底部悬浮胶囊条（你正在共享位置› / 语音通话 / 退出） -->
+    <div id="loc-share-mask" class="modal-mask hidden">
+        <div class="loc-share-box">
+            <div id="loc-share-map" class="loc-map">
+                <div id="loc-share-loading" class="loc-map-loading">正在加入共享…</div>
+                <button id="loc-share-back" class="loc-share-back" title="返回（共享继续）">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M15.4 4.6 8 12l7.4 7.4 1.4-1.4-6-6 6-6z"/></svg>
+                </button>
+                <button id="loc-share-locate" class="loc-relocate-btn" title="回到我的位置">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A9 9 0 0 0 13 3.06V1h-2v2.06A9 9 0 0 0 3.06 11H1v2h2.06A9 9 0 0 0 11 20.94V23h2v-2.06A9 9 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+                </button>
+                <div class="loc-share-dock">
+                    <div id="loc-share-status" class="loc-share-status" title="回到我的位置">你正在共享位置<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M9.3 4.9 14.4 12l-5.1 7.1 1.6 1.2 5.9-8.3-5.9-8.3z"/></svg></div>
+                    <button id="loc-share-call" class="loc-share-call hidden" title="语音通话">
+                        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
+                    </button>
+                    <button id="loc-share-quit" class="loc-share-quit">退出</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 手机端位置入口二级 ActionSheet（微信同款：发送位置 / 共享实时位置 / 取消；open 类驱动底部滑入） -->
+    <div id="loc-sheet-mask" class="loc-sheet-mask">
+        <div class="loc-sheet-panel">
+            <button id="loc-sheet-send" class="loc-sheet-item" type="button">发送位置</button>
+            <button id="loc-sheet-share" class="loc-sheet-item" type="button">共享实时位置</button>
+        </div>
+        <button id="loc-sheet-cancel" class="loc-sheet-cancel" type="button">取消</button>
     </div>
 
     <!-- 开红包遮罩：微信同款大圆"开"按钮；领取后切换结果态（金额 + 存入提示 + 查看详情入口） -->

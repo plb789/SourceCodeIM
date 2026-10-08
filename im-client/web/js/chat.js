@@ -20798,6 +20798,34 @@
             }
             return;
         }
+        // 阶段二百六十八：位置消息(104)历史持久化渲染（content 为 JSON：{loc:{lat,lng,name,address}}）
+        if (r.msg_type === 104) {
+            var lcEnv = null;
+            try { lcEnv = JSON.parse(r.content); } catch (e) { lcEnv = null; }
+            if (lcEnv && lcEnv.loc && typeof lcEnv.loc.lat === 'number') {
+                var lcDiv = locBuildBubbleEl(r.from_user, lcEnv.loc, isMine ? 'self' : 'other', isPrivate);
+                if (r.id) lcDiv.setAttribute('data-msg-id', r.id);
+                lcDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(lcDiv, beforeEl);
+                } else {
+                    messageList.appendChild(lcDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            // 信封异常降级为系统提示，避免渲染成原始 JSON 串
+            var lcTip = document.createElement('div');
+            lcTip.className = 'system-tip';
+            lcTip.textContent = I18N.t('[位置]');
+            if (beforeEl) {
+                messageList.insertBefore(lcTip, beforeEl);
+            } else {
+                messageList.appendChild(lcTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         // 阶段一百五十四：红包消息(86)历史持久化渲染（content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
         if (r.msg_type === 86) {
             var rpEnv = null;
@@ -21626,24 +21654,28 @@
         return n || u;
     }
 
-    // 发起通话（工具栏按钮入口，callType: audio/video）
-    function startCall(callType) {
+    // 发起通话（工具栏按钮入口，callType: audio/video）；startCallPeer 支持指定对方
+    // username（共享实时位置面板的语音通话钮复用，peer 不随当前会话切换变化）
+    function startCallPeer(callType, peer) {
         if (!window.desktop || !window.desktop.callOpen) { showToast(I18N.t('音视频通话仅 PC 端支持')); return; }
         if (callOpenId) { showToast(I18N.t('正在通话中，请先挂断')); return; }
         if (pendingRing) { showToast(I18N.t('有来电待处理')); return; }
-        if (currentChatUser === '' || isAIAgent(currentChatUser)) return;
+        if (!peer || isAIAgent(peer)) return;
         var callId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         callOpenId = callId;
         callSelfRole = 'caller';     // 安全网判定：本窗为主叫呼出
-        callSelfPeer = currentChatUser;
+        callSelfPeer = peer;
         // 先开窗（等待态 UI）再发 invite；服务端校验失败经 error 帧回抛给通话窗展示
         window.desktop.callOpen({
-            role: 'caller', call_id: callId, peer: currentChatUser,
-            peer_name: callPeerName(currentChatUser), peer_avatar: getAvatarUrl(currentChatUser),
+            role: 'caller', call_id: callId, peer: peer,
+            peer_name: callPeerName(peer), peer_avatar: getAvatarUrl(peer),
             self_name: callPeerName(IMSocket.getUsername()), self_avatar: getAvatarUrl(IMSocket.getUsername()),
             call_type: callType
         });
-        callSignalSend(currentChatUser, { action: 'invite', call_id: callId, call_type: callType });
+        callSignalSend(peer, { action: 'invite', call_id: callId, call_type: callType });
+    }
+    function startCall(callType) {
+        startCallPeer(callType, currentChatUser);
     }
 
     if (voiceCallBtn) voiceCallBtn.addEventListener('click', function () { startCall('audio'); });
@@ -22708,6 +22740,9 @@
         // 阶段一百五十四：红包按钮显隐——私聊真实用户与群聊显示，AI 智能体会话隐藏（微信同款收发红包入口）
         var rpBtn = document.getElementById('redpacket-btn');
         if (rpBtn) rpBtn.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser)));
+        // 阶段二百六十八：位置按钮显隐——与红包同会话口径，另要求服务端已配置高德 Key（未配置整体隐藏）
+        var locBtnHid = document.getElementById('location-btn');
+        if (locBtnHid) locBtnHid.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser) && window._amapKey));
         // 阶段一百九十六：图片/文件按钮与「+」附件菜单按会话类型分流（与 syncAgentUiForConversation 同判定
         // 口径幂等——本函数覆盖未选会话等全部刷新路径：普通会话工具栏独立图标，AI 会话「+」菜单，未选会话均隐藏）
         var chatIsAI = currentChatUser !== '' && isAIAgent(currentChatUser);
@@ -26736,6 +26771,722 @@
             sendReadReceipt(target, msg.msg_id);
         }
     });
+
+    // ===== 阶段二百六十八：位置功能（微信同款发送位置 + 实时位置共享，高德 JS API GCJ-02） =====
+    // 信令：104 位置消息（静态选点发送，落库转发同红包链路）/ 105 实时共享（start/join/leave/update/end
+    // → started/state/ended）。Key 来源：登录响应 amap_key/amap_security（socket.js 归口注入
+    // window._amapKey）；未配置时位置入口隐藏、面板拒绝打开，前端零硬编码
+    var locBtn = document.getElementById('location-btn');
+    var locPickerMask = document.getElementById('loc-picker-mask');
+    var locPickerMapEl = document.getElementById('loc-picker-map');
+    var locMapLoading = document.getElementById('loc-map-loading');
+    var locSearchInput = document.getElementById('loc-search-input');
+    var locPickName = document.getElementById('loc-picker-name');
+    var locPickAddr = document.getElementById('loc-picker-addr');
+    var locPickerSend = document.getElementById('loc-picker-send');
+    var locPickerShare = document.getElementById('loc-picker-share');
+    var locViewMask = document.getElementById('loc-view-mask');
+    var locViewImg = document.getElementById('loc-view-img');
+    var locViewName = document.getElementById('loc-view-name');
+    var locViewAddr = document.getElementById('loc-view-addr');
+    var locShareMask = document.getElementById('loc-share-mask');
+    var locShareMapEl = document.getElementById('loc-share-map');
+    var locShareLoading = document.getElementById('loc-share-loading');
+    var locShareQuit = document.getElementById('loc-share-quit');
+    var locShareBack = document.getElementById('loc-share-back');
+    var locShareLocate = document.getElementById('loc-share-locate');
+    var locShareStatus = document.getElementById('loc-share-status');
+    var locShareCall = document.getElementById('loc-share-call');
+    var locResumeBar = document.getElementById('loc-resume-bar');
+    var locPoiList = document.getElementById('loc-poi-list'); // POI 候选列表（搜索结果/附近地点）
+    var locCenterPin = document.getElementById('loc-center-pin'); // 中央固定气泡大头针（微信同款选点）
+    var locPickerCancelM = document.getElementById('loc-picker-cancel');  // 手机端头部"取消"（PC 隐藏）
+    var locPickerSendM = document.getElementById('loc-picker-send-m');    // 手机端头部"发送"（PC 隐藏）
+    var locSheetMask = document.getElementById('loc-sheet-mask');         // 手机端位置入口二级 ActionSheet
+
+    var locPickerMapObj = null;      // 选点地图实例
+    var locPick = null;              // 当前选中点 {lat,lng,name,address}
+    var locPlaceSearch = null;       // POI 搜索实例
+    var locGeocoder = null;          // 逆地理编码实例
+    var locPickLocating = false;     // 定位中防抖（防重复 getCurrentPosition）
+    var locSuppressMove = false;     // 程序性 setCenter 抑制一次 moveend（防定位/选中 POI 后被中心点逆地理覆盖）
+    var locShareMapObj = null;       // 共享地图实例
+    var locShareMarkers = {};        // username → AMap.Marker（成员标记）
+    var locRoomId = '';              // 当前加入/发起的共享房间
+    var locIsCreator = false;        // 是否发起者（quit 按钮动作：end vs leave）
+    var locSharePeer = '';           // 共享对方 username（私聊共享时显示语音通话钮；群共享为空）
+    var locSelfPos = null;           // 我最近一次上报坐标 {lat,lng}（回我的位置/状态条点击居中用）
+    var locReportTimer = null;       // 坐标上报定时器（5s 周期）
+    var locReportBusy = false;       // 上报中防重叠（GPS 回调慢于周期）
+    var locInviteSeen = {};          // room_id 去重（started 重复帧不重复插邀请条）
+    var locSearchTimer = null;       // 搜索输入防抖定时器（400ms 实时出列表）
+
+    // WGS84（GPS 原始坐标）→ GCJ02（高德火星坐标）：标准偏移算法，境外粗判直接返回。
+    // 浏览器 geolocation 输出 WGS84，不经转换直接上图约偏移 300~600 米（大陆范围）
+    function locWgs2Gcj(lat, lng) {
+        if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lat, lng];
+        var a = 6378245.0, ee = 0.00669342162296594323;
+        function tLat(x, y) {
+            var r = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+            r += (20 * Math.sin(6 * x * Math.PI) + 20 * Math.sin(2 * x * Math.PI)) * 2 / 3;
+            r += (y * Math.PI) * (20 * Math.sin(y * Math.PI / 3) + 40 * Math.sin(y * Math.PI / 3) * 2) / 3;
+            r += (160 * y * Math.sin(y * Math.PI / 12) * 12) / 32;
+            r += (320 * y * Math.sin(y * Math.PI / 30.0) * 16) / 30.0;
+            return r;
+        }
+        function tLng(x, y) {
+            var r = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+            r += (20 * Math.sin(6 * x * Math.PI) + 20 * Math.sin(2 * x * Math.PI)) * 2 / 3;
+            r += (20 * Math.sin(x * Math.PI) + 40 * Math.sin(x / 3 * Math.PI)) * 2 / 3;
+            r += (150 * Math.sin(x / 12 * Math.PI) + 300 * Math.sin(x / 30 * Math.PI)) / 30;
+            return r;
+        }
+        var dLat = tLat(lng - 105, lat - 35), dLng = tLng(lng - 105, lat - 35);
+        var radLat = lat / 180 * Math.PI, magic = Math.sin(radLat);
+        magic = 1 - ee * magic * magic;
+        var sqrtMagic = Math.sqrt(magic);
+        dLat = (dLat * 180) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
+        dLng = (dLng * 180) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+        return [lat + dLat, lng + dLng];
+    }
+
+    // 高德 JS API 按需加载（幂等；安全密钥须在加载前注入 window._AMapSecurityConfig）
+    function locLoadAmap(cb) {
+        if (window.AMap) { cb(true); return; }
+        if (!window._amapKey) { cb(false); return; }
+        window._AMapSecurityConfig = { securityJsCode: window._amapSecurity || '' };
+        var s = document.createElement('script');
+        s.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(window._amapKey)
+            + '&plugin=AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation,AMap.Scale';
+        s.onload = function () { cb(true); };
+        s.onerror = function () { cb(false); };
+        document.head.appendChild(s);
+    }
+
+    // 静态图 URL（位置气泡缩略图/查看弹窗共用；不带 markers——高德仅接受官方预设色值，
+    // 自定义色报 20003，标记改由前端 .loc-pin 图钉叠加，视觉同微信红图钉）
+    // Key 用 Web 服务类型 _amapWebKey（REST 接口按平台校验，JS API Key 调用报 USERKEY_PLAT_NOMATCH；
+    // 服务端已做空回退，此处再兜一层防御性回退）
+    function locStaticMapUrl(lat, lng) {
+        var wk = window._amapWebKey || window._amapKey;
+        if (!wk) return '';
+        return 'https://restapi.amap.com/v3/staticmap?location=' + lng + ',' + lat
+            + '&zoom=15&size=440*240&scale=2'
+            + '&key=' + encodeURIComponent(wk);
+    }
+
+    // 位置气泡 DOM（仿 92 分享卡片：消息体 + 气泡卡片 + 头像；点击开查看弹窗）
+    function locBuildBubbleEl(fromUser, loc, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-loc-card';
+        var img = document.createElement('img');
+        img.className = 'loc-bubble-img';
+        img.loading = 'lazy';
+        img.src = locStaticMapUrl(loc.lat, loc.lng);
+        img.alt = '';
+        // 高德新 Key 开通延迟期/抖动期静态图偶发返回错误 JSON（10001/20003），失败自动重试一次
+        img.addEventListener('error', function () {
+            if (img.dataset.retried) return;
+            img.dataset.retried = '1';
+            img.src = locStaticMapUrl(loc.lat, loc.lng) + '&r=' + Date.now();
+        });
+        var info = document.createElement('div');
+        info.className = 'loc-bubble-body';
+        var wrap = document.createElement('div');
+        wrap.className = 'loc-thumb-wrap';
+        var pin = document.createElement('div');
+        pin.className = 'loc-pin';
+        wrap.appendChild(img);
+        wrap.appendChild(pin);
+        bubble.appendChild(wrap);
+        var nm = document.createElement('div');
+        nm.className = 'loc-bubble-name';
+        nm.textContent = loc.name || I18N.t('位置');
+        var addr = document.createElement('div');
+        addr.className = 'loc-bubble-addr';
+        addr.textContent = loc.address || '';
+        info.appendChild(nm);
+        info.appendChild(addr);
+        bubble.appendChild(info);
+        bubble.addEventListener('click', function () { locOpenView(loc); });
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+    function locAppendBubble(fromUser, loc, type, isPrivate) {
+        var div = locBuildBubbleEl(fromUser, loc, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+    // 位置查看弹窗（历史/实时气泡共用入口）
+    function locOpenView(loc) {
+        if (!loc) return;
+        locViewImg.src = locStaticMapUrl(loc.lat, loc.lng);
+        locViewName.textContent = loc.name || I18N.t('位置');
+        locViewAddr.textContent = loc.address || '';
+        locViewMask.classList.remove('hidden');
+    }
+    document.getElementById('loc-view-close').addEventListener('click', function () { locViewMask.classList.add('hidden'); });
+
+    // 104 实时接收（与 92 同口径：会话归属归一 + msg_id 去重 + 服务端昵称合并 + 私聊已读回执）
+    IMSocket.on(MSG.LOCATION, function (msg) {
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        if (target !== currentChatUser) return;
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var meta = {};
+        try { meta = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        var loc = meta.loc;
+        if (!loc || typeof loc.lat !== 'number') return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = locAppendBubble(msg.from_user, loc, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
+    });
+
+    // ---- 位置选择弹窗（搜索 + 选点 + 定位） ----
+    function locInitPickerMap(center) {
+        locPickerMapObj = new AMap.Map(locPickerMapEl, { zoom: 15, center: center, viewMode: '2D' });
+        if (AMap.Scale) locPickerMapObj.addControl(new AMap.Scale()); // 比例尺（微信左下同款）
+        // 微信同款中央固定气泡选点：气泡钉在地图中心，拖动/缩放结束取中心点为选点
+        if (locCenterPin) locCenterPin.classList.remove('hidden');
+        // 程序性 setCenter（定位回中/选中 POI）已置抑制标志：本一次 moveend 跳过（防止
+        // 中心点逆地理覆盖掉定位地址/POI 名称）；用户手动拖动/缩放/点击图面则正常应用
+        locPickerMapObj.on('moveend', function () {
+            if (locSuppressMove) { locSuppressMove = false; return; }
+            if (!locPickerMapObj) return;
+            var c = locPickerMapObj.getCenter();
+            locApplyPick(c.getLat(), c.getLng(), false);
+        });
+        // 点击地图：把点击处平移到中心（moveend 链路自动应用选点），与拖动同语义
+        locPickerMapObj.on('click', function (e) {
+            if (locPickerMapObj && e && e.lnglat) locPickerMapObj.setCenter(e.lnglat);
+        });
+        locPlaceSearch = new AMap.PlaceSearch({ city: '全国', pageSize: 8 });
+        locGeocoder = new AMap.Geocoder();
+        // 搜索输入防抖实时出候选列表；回车立即搜索（微信同款：列表点选而非直取首个）
+        locSearchInput.addEventListener('input', function () {
+            if (locSearchTimer) { clearTimeout(locSearchTimer); locSearchTimer = null; }
+            var kw = locSearchInput.value.trim();
+            if (!kw) { locHidePoiList(); return; }
+            locSearchTimer = setTimeout(function () { locSearchTimer = null; locDoPoiSearch(kw); }, 400);
+        });
+        locSearchInput.addEventListener('keydown', function (ev) {
+            if (ev.key !== 'Enter') return;
+            var kw = locSearchInput.value.trim();
+            if (!kw) return;
+            if (locSearchTimer) { clearTimeout(locSearchTimer); locSearchTimer = null; }
+            locDoPoiSearch(kw);
+        });
+    }
+    // POI 地址串（搜索/逆地理两源共用）：address 缺失（高德偶发回空数组）时用省市区拼接兜底
+    function locPoiAddrOf(poi) {
+        if (!poi) return '';
+        var a = (typeof poi.address === 'string') ? poi.address : '';
+        if (a) return a + (poi.cityname ? ' ' + poi.cityname : '');
+        return [poi.pname, poi.cityname, poi.adname].filter(Boolean).join('');
+    }
+    // 两点球面距离文案（haversine；微信同款：<1km 显示"N m内"，否则"x.x km"）
+    function locDistText(lat1, lng1, lat2, lng2) {
+        var R = 6371000, rad = Math.PI / 180;
+        var dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+            + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        var d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        if (d < 1000) return Math.max(1, Math.round(d)) + ' m内';
+        return (d / 1000).toFixed(1) + ' km';
+    }
+    // 渲染 POI 候选列表（activeIdx 高亮当前选中项；点击条目选中上图）
+    // 微信同款两行式：第一行名称，第二行"距离 | 区域"（基准点=当前选点；无区域退化为地址；
+    // 无基准点退化为纯地址）；选中项右侧主题色对勾
+    function locRenderPoiList(items, activeIdx) {
+        items = items || [];
+        if (!items.length) { locHidePoiList(); return; }
+        var base = (locPick && typeof locPick.lat === 'number') ? locPick : null;
+        locPoiList.innerHTML = '';
+        items.forEach(function (poi, idx) {
+            var item = document.createElement('div');
+            item.className = 'loc-poi-item' + (idx === activeIdx ? ' active' : '');
+            var text = document.createElement('div');
+            text.className = 'loc-poi-text';
+            var nm = document.createElement('div');
+            nm.className = 'loc-poi-name';
+            nm.textContent = poi.name || I18N.t('未命名地点');
+            var ad = document.createElement('div');
+            ad.className = 'loc-poi-addr';
+            var dist = base ? locDistText(base.lat, base.lng, poi.lat, poi.lng) : '';
+            ad.textContent = dist ? (poi.region ? dist + ' | ' + poi.region : dist) : (poi.addr || poi.region || '');
+            text.appendChild(nm);
+            text.appendChild(ad);
+            item.appendChild(text);
+            var check = document.createElement('div');
+            check.className = 'loc-poi-check';
+            check.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>';
+            item.appendChild(check);
+            item.addEventListener('click', function () {
+                locApplyPick(poi.lat, poi.lng, true, poi.name, poi.addr);
+                var kids = locPoiList.children;
+                for (var i = 0; i < kids.length; i++) kids[i].classList.toggle('active', kids[i] === item);
+            });
+            locPoiList.appendChild(item);
+        });
+        locPoiList.classList.remove('hidden');
+        if (window._osbInit) window._osbInit(locPoiList); // 自绘悬浮滑块（幂等；原生条全局禁用）
+    }
+    function locHidePoiList() { locPoiList.classList.add('hidden'); }
+    // 关键字搜索 → 候选列表（找不到时提示并收起）
+    function locDoPoiSearch(kw) {
+        if (!locPlaceSearch) return;
+        locPlaceSearch.search(kw, function (status, result) {
+            var pois = (status === 'complete' && result.poiList && result.poiList.pois) || [];
+            if (!pois.length) { showToast(I18N.t('未找到相关地点')); locHidePoiList(); return; }
+            locRenderPoiList(pois.filter(function (poi) { return poi && poi.location; }).map(function (poi) {
+                return { name: poi.name || '', addr: locPoiAddrOf(poi), region: poi.adname || poi.cityname || '', lat: poi.location.getLat(), lng: poi.location.getLng() };
+            }), -1);
+        });
+    }
+    // 应用选点：名称/地址行刷新；needName=true（列表选中 POI）直接用给定名称并居中地图，
+    // false（中央气泡随拖动/缩放取中心点）走逆地理编码解析
+    function locApplyPick(lat, lng, needName, name, addr) {
+        lat = Math.round(lat * 1e6) / 1e6;
+        lng = Math.round(lng * 1e6) / 1e6;
+        locPick = { lat: lat, lng: lng, name: name || '', address: addr || '' };
+        if (needName) {
+            locPickName.textContent = locPick.name || I18N.t('选中位置');
+            locPickAddr.textContent = locPick.address || '';
+            // 选中 POI 后地图居中该点（中央气泡随之下移指准）；抑制本次 moveend，
+            // 防止中心点逆地理把刚选中的 POI 名称覆盖掉（中心已一致则不必平移）
+            if (locPickerMapObj) {
+                var cur = locPickerMapObj.getCenter();
+                if (!cur || !cur.equals([lng, lat])) {
+                    locSuppressMove = true;
+                    locPickerMapObj.setCenter([lng, lat]);
+                }
+            }
+            return;
+        }
+        locPickName.textContent = I18N.t('解析地址中…');
+        locPickAddr.textContent = '';
+        // 位置已变：收起旧候选列表并清掉未竟搜索（待逆地理回来后以"附近地点"重建）
+        locHidePoiList();
+        locSearchInput.value = '';
+        if (locSearchTimer) { clearTimeout(locSearchTimer); locSearchTimer = null; }
+        // 逆地理实例不可用（地图初始化失败等）：名称兜底"自定义位置"，保证发送链路可用
+        if (!locGeocoder) {
+            locPick.name = locPick.name || I18N.t('自定义位置');
+            locPickName.textContent = locPick.name;
+            return;
+        }
+        locGeocoder.getAddress([lng, lat], function (status, result) {
+            if (status !== 'complete' || !result.regeocode) {
+                locPick.name = locPick.name || I18N.t('自定义位置');
+                locPickName.textContent = locPick.name;
+                return;
+            }
+            var p = result.regeocode.pois && result.regeocode.pois[0];
+            var comp = result.regeocode.addressComponent || {};
+            var a = (p && p.name) || (result.regeocode.formattedAddress || '');
+            locPick.name = locPick.name || a || I18N.t('自定义位置');
+            locPick.address = locPick.address || [comp.province, comp.city === comp.province ? '' : comp.city, comp.district, (p && p.address) || comp.street].filter(Boolean).join('');
+            locPickName.textContent = locPick.name;
+            locPickAddr.textContent = locPick.address;
+            // 附近地点填充列表（微信同款：选点下方列出周边 POI，命中当前名称的条目高亮）
+            var near = (result.regeocode.pois || []).filter(function (poi) { return poi && poi.location; }).slice(0, 8).map(function (poi) {
+                return { name: poi.name || '', addr: locPoiAddrOf(poi), region: poi.adname || poi.cityname || '', lat: poi.location.getLat(), lng: poi.location.getLng() };
+            });
+            if (near.length) locRenderPoiList(near, locPick.name ? near.findIndex(function (n) { return n.name === locPick.name; }) : -1);
+        });
+    }
+    // 打开选点弹窗：加载 SDK → 初始化地图 → 浏览器定位（WGS84→GCJ02）→ 逆地理显示当前位置
+    function locOpenPicker() {
+        if (!window._amapKey) {
+            showToast(I18N.t('管理员未配置地图服务'));
+            return;
+        }
+        if (!currentChatUser || isAIAgent(currentChatUser)) return;
+        locPick = null;
+        locSuppressMove = false; // 复位程序性回中抑制（防上次会话残留吞掉本次首次 moveend）
+        locPickName.textContent = I18N.t('正在获取当前位置…');
+        locPickAddr.textContent = '';
+        locSearchInput.value = '';
+        locHidePoiList();
+        locPickerMask.classList.remove('hidden');
+        locMapLoading.style.display = 'flex';
+        locLoadAmap(function (ok) {
+            if (!ok) {
+                locMapLoading.textContent = I18N.t('地图加载失败，请检查网络');
+                return;
+            }
+            // 弹窗重复打开：地图实例已存在则只重置提示层
+            if (locPickerMapObj) { locMapLoading.style.display = 'none'; locDoLocate(); return; }
+            // 默认中心（定位失败兜底：北京），定位回调成功后 setCenter
+            // Key 无效/配额超限等场景 AMap.Map 构造会抛异常——捕获降级：地图区显示失败文案，
+            // 但定位兜底/发送/共享链路照常可用（locApplyPick 内部已有地图实例空守卫）
+            try {
+                locInitPickerMap([116.397428, 39.90923]);
+                locMapLoading.style.display = 'none';
+            } catch (e) {
+                locMapLoading.textContent = I18N.t('地图加载失败，请检查网络');
+            }
+            locDoLocate();
+        });
+    }
+    // 统一定位归口（选点定位/共享坐标上报共用，回调 done(lat,lng) 均为 GCJ02）：
+    // ① Capacitor 原生定位（APP 端 @capacitor/geolocation 插件，系统权限弹窗由插件处理，
+    //    精确 GPS；manifest 未声明 ACCESS_*_LOCATION 时 WebView geolocation 静默被拒，
+    //    这是手机端定位失败兜底北京的根因）→ ② 浏览器 geolocation（WGS84→GCJ02）
+    //    → ③ 高德 AMap.Geolocation 插件（IP/H5 城市级兜底，GCJ02 直出）→ 兜底北京
+    function locAmapPosFallback(done) {
+        if (!window.AMap || !AMap.Geolocation) { done(39.90923, 116.397428); return; }
+        try {
+            var geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 8000 });
+            geo.getCurrentPosition(function (status, result) {
+                if (status === 'complete' && result && result.position) {
+                    done(result.position.getLat(), result.position.getLng());
+                } else {
+                    done(39.90923, 116.397428);
+                }
+            });
+        } catch (e) { done(39.90923, 116.397428); }
+    }
+    function locGetPos(done) {
+        // APP 端原生定位（插件自己处理 Android 运行时权限，无需 WebView geolocation）
+        var cap = window.Capacitor;
+        if (cap && cap.isNativePlatform && cap.isNativePlatform() && cap.Plugins && cap.Plugins.Geolocation) {
+            try {
+                cap.Plugins.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 })
+                    .then(function (res) {
+                        if (res && res.coords) {
+                            var g = locWgs2Gcj(res.coords.latitude, res.coords.longitude);
+                            done(g[0], g[1]);
+                        } else locAmapPosFallback(done);
+                    })
+                    .catch(function () { locAmapPosFallback(done); });
+                return;
+            } catch (e) { /* 原生桥异常继续降级 */ }
+        }
+        // PC/WEB 浏览器定位（Electron 常不可用，失败走高德插件兜底）
+        if (!navigator.geolocation) { locAmapPosFallback(done); return; }
+        navigator.geolocation.getCurrentPosition(function (pos) {
+            var g = locWgs2Gcj(pos.coords.latitude, pos.coords.longitude);
+            done(g[0], g[1]);
+        }, function () { locAmapPosFallback(done); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+    }
+    // 定位选点：统一归口取当前位置 → 地图回中（抑制 moveend）→ 逆地理显示
+    function locDoLocate() {
+        if (locPickLocating) return;
+        locPickLocating = true;
+        locGetPos(function (lat, lng) {
+            locPickLocating = false;
+            // 程序性回中：抑制本次 moveend（选点由下方 locApplyPick 显式应用；中心已一致不平移）
+            if (locPickerMapObj) {
+                var cur = locPickerMapObj.getCenter();
+                if (!cur || !cur.equals([lng, lat])) {
+                    locSuppressMove = true;
+                    locPickerMapObj.setCenter([lng, lat]);
+                }
+            }
+            locApplyPick(lat, lng, false);
+        });
+    }
+    // 重新定位按钮：回到当前位置（微信同款地图右上角悬浮钮，定重回选点窗中心）
+    document.getElementById('loc-relocate').addEventListener('click', function () { locDoLocate(); });
+    function locClosePicker() { locPickerMask.classList.add('hidden'); }
+    document.getElementById('loc-picker-close').addEventListener('click', locClosePicker);
+    // 发送位置：104 上行（服务端归口落库转发，实时回显走 104 下行渲染链路）
+    // PC 底部"发送位置"与手机端头部"发送"共用归口
+    function locSendPick() {
+        if (!locPick) { showToast(I18N.t('请先在地图上选择位置')); return; }
+        if (!currentChatUser || isAIAgent(currentChatUser)) return;
+        IMSocket.send({
+            msg_type: MSG.LOCATION,
+            to_user: currentChatUser,
+            content: JSON.stringify({ loc: locPick })
+        });
+        locClosePicker();
+    }
+    locPickerSend.addEventListener('click', locSendPick);
+    if (locPickerSendM) locPickerSendM.addEventListener('click', locSendPick);
+    if (locPickerCancelM) locPickerCancelM.addEventListener('click', locClosePicker);
+    // 共享实时位置：105 start 上行（started 回执后开共享面板，见 105 handler）
+    // PC 选点窗底部按钮与手机端 ActionSheet 共用归口
+    function locStartShare() {
+        if (!currentChatUser || isAIAgent(currentChatUser)) return;
+        var payload = { action: 'start' };
+        if (isGroupTarget(currentChatUser)) payload.group_id = parseInt(String(currentChatUser).slice(1), 10) || 0;
+        else payload.to_user = currentChatUser;
+        IMSocket.send({ msg_type: MSG.LOCATION_SHARE, to_user: currentChatUser, content: JSON.stringify(payload) });
+        locClosePicker();
+    }
+    locPickerShare.addEventListener('click', locStartShare);
+
+    // ---- 实时位置共享面板 ----
+    // 成员标记内容（微信同款）：自己 = 圆角方头像 + 下方蓝点（anchor bottom-center，
+    // offset 下移半个蓝点高使蓝点圆心落在真实坐标）；他人 = 圆角方头像 + 头像正下方
+    // 绝对定位名字签（不占布局，头像底边即锚点）。数据来自 state.members
+    function locMarkerHtml(username, name) {
+        var isSelf = username === IMSocket.getUsername();
+        var av = getAvatarUrl(username);
+        var side = isSelf ? 34 : 32;
+        var inner = av
+            ? '<img src="' + av + '" style="width:100%;height:100%;object-fit:cover;display:block;">'
+            : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;">' + (name || username || '?').slice(0, 1) + '</div>';
+        if (isSelf) {
+            return '<div class="loc-mk-self"><div class="loc-mk-av" style="width:' + side + 'px;height:' + side + 'px;background:var(--primary);">' + inner + '</div><div class="loc-mk-dot"></div></div>';
+        }
+        return '<div class="loc-mk-peer"><div class="loc-mk-av" style="width:' + side + 'px;height:' + side + 'px;background:var(--primary);">' + inner + '</div><div class="loc-mk-name">' + (name || username) + '</div></div>';
+    }
+    function locRenderMapMarkers(members) {
+        if (!locShareMapObj) return;
+        var seen = {};
+        members.forEach(function (m) {
+            seen[m.username] = true;
+            var pos = [m.lng, m.lat];
+            if (!m.lat && !m.lng) return; // 尚未上报坐标的成员不上图
+            if (locShareMarkers[m.username]) {
+                locShareMarkers[m.username].setPosition(pos);
+            } else {
+                var isSelf = m.username === IMSocket.getUsername();
+                var mk = new AMap.Marker({
+                    position: pos,
+                    content: locMarkerHtml(m.username, m.name),
+                    // 自己：蓝点圆心对准坐标（content 底边下移半个蓝点高）；他人：头像底边对准坐标
+                    offset: isSelf ? new AMap.Pixel(0, 8) : new AMap.Pixel(0, 0),
+                    anchor: 'bottom-center'
+                });
+                locShareMapObj.add(mk);
+                locShareMarkers[m.username] = mk;
+            }
+        });
+        // 已退出的成员移除标记
+        Object.keys(locShareMarkers).forEach(function (u) {
+            if (!seen[u]) {
+                locShareMapObj.remove(locShareMarkers[u]);
+                delete locShareMarkers[u];
+            }
+        });
+    }
+    // 打开共享面板（started 回执/邀请加入共用入口）；creator=true 时 quit 按钮语义为结束共享；
+    // peer 为私聊对方的 username（群共享传空）——私聊共享时底部胶囊条显示语音通话钮（微信同款）
+    function locOpenShare(roomId, creator, peer) {
+        locRoomId = roomId;
+        locIsCreator = creator;
+        locSharePeer = peer || '';
+        locShareQuit.textContent = creator ? I18N.t('结束共享') : I18N.t('退出共享');
+        if (locShareCall) locShareCall.classList.toggle('hidden', !(locSharePeer && !isGroupTarget(locSharePeer)));
+        locShareLoading.textContent = I18N.t('正在加入共享…');
+        locShareLoading.style.display = 'flex';
+        locShareMask.classList.remove('hidden');
+        locLoadAmap(function (ok) {
+            // Key 无效/配额超限等场景 AMap.Map 构造会抛异常——捕获降级不中断信令：
+            // join/坐标上报/成员 chips 不依赖地图实例（locRenderMapMarkers 已有空守卫），
+            // 仅地图画布不可用（state 帧到来时 loading 自然隐藏，chips 正常渲染）
+            if (!ok) locShareLoading.textContent = I18N.t('地图加载失败');
+            if (ok && !locShareMapObj) {
+                try {
+                    locShareMapObj = new AMap.Map(locShareMapEl, { zoom: 14, center: [116.397428, 39.90923], viewMode: '2D' });
+                    if (AMap.Scale) locShareMapObj.addControl(new AMap.Scale()); // 比例尺（微信左下同款）
+                } catch (e) {
+                    locShareLoading.textContent = I18N.t('地图加载失败');
+                }
+            }
+            // 加入房间（发起者服务端已置入成员表，join 幂等；重连/迟开面板亦走此入口恢复）
+            IMSocket.send({ msg_type: MSG.LOCATION_SHARE, content: JSON.stringify({ action: 'join', room_id: roomId }) });
+            locStartReport();
+        });
+    }
+    // 坐标上报循环（5s 周期）：统一归口 locGetPos（原生定位优先）→ GCJ02 → 105 update；
+    // 定位失败静默跳过（房间内标记 stale 置灰，下一周期自动重试）
+    function locStartReport() {
+        locStopReport();
+        locReportTimer = setInterval(function () {
+            if (!locRoomId || locReportBusy || document.hidden) return; // 后台节流：隐藏期不上报
+            locReportBusy = true;
+            locGetPos(function (lat, lng) {
+                locReportBusy = false;
+                if (!locRoomId) return;
+                locSelfPos = { lat: lat, lng: lng }; // 供定位钮/状态条"回我的位置"居中
+                IMSocket.send({
+                    msg_type: MSG.LOCATION_SHARE,
+                    content: JSON.stringify({ action: 'update', room_id: locRoomId, lat: lat, lng: lng })
+                });
+            });
+        }, 5000);
+        // 打开面板立即报一次（不等首周期）
+        setTimeout(function () {
+            if (!locRoomId) return;
+            locGetPos(function (lat, lng) {
+                if (!locRoomId) return;
+                locSelfPos = { lat: lat, lng: lng };
+                IMSocket.send({
+                    msg_type: MSG.LOCATION_SHARE,
+                    content: JSON.stringify({ action: 'update', room_id: locRoomId, lat: lat, lng: lng })
+                });
+            });
+        }, 300);
+    }
+    function locStopReport() {
+        if (locReportTimer) { clearInterval(locReportTimer); locReportTimer = null; }
+    }
+    function locCloseShare() {
+        // 发起者收口 end（全员收 ended），参与者 leave（其余人继续共享）
+        if (locRoomId) {
+            IMSocket.send({
+                msg_type: MSG.LOCATION_SHARE,
+                content: JSON.stringify({ action: locIsCreator ? 'end' : 'leave', room_id: locRoomId })
+            });
+        }
+        locRoomId = '';
+        locIsCreator = false;
+        locSharePeer = '';
+        locSelfPos = null;
+        locStopReport();
+        if (locShareMapObj) {
+            Object.keys(locShareMarkers).forEach(function (u) {
+                locShareMapObj.remove(locShareMarkers[u]);
+            });
+            locShareMarkers = {};
+        }
+        locShareMask.classList.add('hidden');
+        if (locResumeBar) locResumeBar.classList.add('hidden');
+    }
+    locShareQuit.addEventListener('click', locCloseShare);
+    // 微信同款：左上返回 = 最小化共享面板（共享/上报继续），聊天区回航条点击恢复；
+    // "退出/结束共享"才真正收口信令
+    function locMinimizeShare() {
+        locShareMask.classList.add('hidden');
+        if (locRoomId && locResumeBar) locResumeBar.classList.remove('hidden');
+    }
+    function locResumeShare() {
+        if (locResumeBar) locResumeBar.classList.add('hidden');
+        if (locRoomId) locShareMask.classList.remove('hidden');
+    }
+    locShareBack.addEventListener('click', locMinimizeShare);
+    locResumeBar.addEventListener('click', locResumeShare);
+    // 状态条/定位钮：地图居中回我的最新位置（未上报过/地图不可用时忽略）
+    function locFocusSelf() {
+        if (locSelfPos && locShareMapObj) locShareMapObj.setZoomAndCenter(16, [locSelfPos.lng, locSelfPos.lat]);
+    }
+    locShareStatus.addEventListener('click', locFocusSelf);
+    locShareLocate.addEventListener('click', locFocusSelf);
+    // 私聊共享时的语音通话钮：与私聊对方发起语音通话（群共享时按钮隐藏不可达）
+    locShareCall.addEventListener('click', function () {
+        if (locSharePeer && !isGroupTarget(locSharePeer)) startCallPeer('audio', locSharePeer);
+    });
+    // 页面卸载兜底退房（beforeunload 内 send 常发不出去，尽力而为；服务端 60min 过期兜底收口）
+    window.addEventListener('beforeunload', function () {
+        if (locRoomId) {
+            try {
+                IMSocket.send({
+                    msg_type: MSG.LOCATION_SHARE,
+                    content: JSON.stringify({ action: locIsCreator ? 'end' : 'leave', room_id: locRoomId })
+                });
+            } catch (e) { /* 连接已断等场景静默 */ }
+        }
+    });
+
+    // 105 下行归口：started（发起回执/他人邀请）/ state（成员坐标广播）/ ended（收口）
+    IMSocket.on(MSG.LOCATION_SHARE, function (msg) {
+        var d = {};
+        try { d = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (d.action === 'started') {
+            var fromMe = d.from_user === IMSocket.getUsername() || (msg.from_user === IMSocket.getUsername());
+            if (fromMe) {
+                // 发起回执：开共享面板（room_id 归口）；私聊共享把对方带给面板（语音通话钮）
+                var myPeer = (msg.to_user && !isGroupTarget(msg.to_user)) ? msg.to_user : '';
+                if (locRoomId !== d.room_id) locOpenShare(d.room_id, true, myPeer);
+                return;
+            }
+            // 他人发起：当前会话插入"加入共享"提示条（重复帧去重；非当前会话忽略——
+            // 会话摘要侧未推送共享态，切回会话可由再次发起触达，与微信"进入会话见共享入口"一致）
+            var isMine0 = false;
+            var to0 = msg.to_user || '';
+            var target = isGroupTarget(to0) ? to0 : msg.from_user;
+            if (target !== currentChatUser || locInviteSeen[d.room_id]) return;
+            locInviteSeen[d.room_id] = true;
+            var tip = document.createElement('div');
+            tip.className = 'loc-invite-tip';
+            var who = senderDisplayName(msg.from_user || d.from_user);
+            tip.appendChild(document.createTextNode(who + ' '));
+            var btn = document.createElement('button');
+            btn.className = 'loc-invite-join';
+            btn.textContent = I18N.t('发起了位置共享，点击加入');
+            var rid = d.room_id;
+            btn.addEventListener('click', function () { locOpenShare(rid, false, isGroupTarget(target) ? '' : target); });
+            tip.appendChild(btn);
+            messageList.appendChild(tip);
+            messageList.scrollTop = messageList.scrollHeight;
+            return;
+        }
+        if (d.action === 'state') {
+            if (d.room_id !== locRoomId) return; // 非当前房间（旧房间/他人房间）不渲染
+            locShareLoading.style.display = 'none';
+            locRenderMapMarkers(d.members || []);
+            return;
+        }
+        if (d.action === 'ended') {
+            if (d.room_id !== locRoomId) return;
+            showToast(I18N.t('位置共享已结束'));
+            locRoomId = '';
+            locIsCreator = false;
+            locSharePeer = '';
+            locSelfPos = null;
+            locStopReport();
+            if (locShareMapObj) {
+                Object.keys(locShareMarkers).forEach(function (u) {
+                    locShareMapObj.remove(locShareMarkers[u]);
+                });
+                locShareMarkers = {};
+            }
+            locShareMask.classList.add('hidden');
+            if (locResumeBar) locResumeBar.classList.add('hidden');
+        }
+    });
+    // ---- 手机端位置入口二级 ActionSheet（微信同款：发送位置 / 共享实时位置 / 取消） ----
+    // PC 点位置直接进选点窗；手机端先弹本面板分流（open 类驱动滑入动画，不走 .hidden）
+    function locOpenActionSheet() {
+        if (!currentChatUser || isAIAgent(currentChatUser)) return;
+        if (!window._amapKey) { showToast(I18N.t('管理员未配置地图服务')); return; }
+        if (locSheetMask) locSheetMask.classList.add('open');
+    }
+    function locCloseActionSheet() { if (locSheetMask) locSheetMask.classList.remove('open'); }
+    if (locSheetMask) {
+        document.getElementById('loc-sheet-send').addEventListener('click', function () {
+            locCloseActionSheet();
+            locOpenPicker();
+        });
+        document.getElementById('loc-sheet-share').addEventListener('click', function () {
+            locCloseActionSheet();
+            locStartShare();
+        });
+        document.getElementById('loc-sheet-cancel').addEventListener('click', locCloseActionSheet);
+        locSheetMask.addEventListener('click', function (e) { if (e.target === locSheetMask) locCloseActionSheet(); });
+    }
+    // 位置入口点击（桌面工具条；移动端"+"面板 data-target 转发至此自动生效）：
+    // 手机端先弹二级 ActionSheet（微信同款），桌面端直接进选点窗
+    if (locBtn) {
+        locBtn.addEventListener('click', function () {
+            if (document.documentElement.classList.contains('m')) { locOpenActionSheet(); return; }
+            locOpenPicker();
+        });
+    }
 
     // 站内分享链接归口：/s/<code> 打开的页面，登录成功后自动弹分享详情（一次性消费后清理地址栏，
     // 刷新不再重弹；详情/保存/下载仍归口 drive.js 校验与展示）

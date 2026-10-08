@@ -206,6 +206,24 @@ const (
 	// 上行：手机端已登录态扫码确认（content 为 JSON：{action:"scan"/"confirm"/"cancel", qr_id}）；
 	// 下行：同类型回执（content 为 JSON：{action, ok, reason?}）；纯信令帧不落库不转发
 	MsgTypeQRSign = 97
+
+	// ===== 阶段二百六十八：位置消息与实时位置共享（微信同款，高德地图 GCJ-02 坐标系） =====
+	// 位置消息（静态发送位置）：content 为 JSON {loc:{lat,lng,name,address}}，落库 msg_type=104
+	// 走私聊/群聊普通消息链路（对齐红包 86），历史记录按类型渲染位置气泡，点击开独立地图窗
+	MsgTypeLocation = 104
+	// 实时位置共享信令（action 模式，对齐通话 70/远程 90 惯例；纯信令不落库坐标，房间态仅内存）：
+	// 上行 content 为 JSON：{action, room_id?, to_user?, group_id?, lat?, lng?}，action 取值：
+	//   start（发起共享：to_user=对方账号 或 group_id=群号；服务端建房间（默认 60 分钟过期）并回执）
+	//   join（加入共享：room_id；私聊仅对方可加入，群聊仅群成员可加入）
+	//   leave（主动退出：room_id；最后一名成员退出房间自动结束）
+	//   update（坐标上报：room_id + lat/lng，GCJ-02；仅成员可上报，服务端更新内存坐标并广播成员表）
+	//   end（结束共享：room_id，发起方或超时清理协程使用）
+	// 下行同类型（content 为 JSON）：{action:"started"/"joined"/"state"/"left"/"ended"/"error",
+	//   room_id, target, members:[{username,name,lat,lng,ts,stale}], reason?}；
+	//   started=房间已建立（推给发起者与私聊对方/群在线成员，前端渲染"加入共享"入口）；
+	//   state=成员坐标表全量广播（update/join/leave 后推给房间全部在线成员，前端移动标记）；
+	//   ended=共享结束（房间过期/发起方结束/全员退出，前端收口卡片）
+	MsgTypeLocationShare = 105
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

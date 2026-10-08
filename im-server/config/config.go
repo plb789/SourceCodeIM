@@ -39,6 +39,14 @@ type Config struct {
 	ClusterChannel string `yaml:"cluster_channel"`
 	// 消息撤回时间窗口（秒），仅该窗口内的消息可撤回
 	RecallWindow int `yaml:"recall_window"`
+	// 阶段二百六十八：高德地图 Web 端 JS API Key 与安全密钥（位置消息/实时位置共享功能数据源）。
+	// 均留空时前端位置入口隐藏、信令回"管理员未配置地图服务"；Key 为前端 JS API Key（配合高德
+	// 控制台域名白名单防盗用），安全密钥经登录响应下发后由前端注入 window._AMapSecurityConfig
+	AmapKey      string `yaml:"amap_key"`
+	AmapSecurity string `yaml:"amap_security"`
+	// 高德"Web服务"类型 Key：位置气泡静态地图缩略图 REST（restapi.amap.com）专用——
+	// 该接口按平台校验 Key，JS API 类型 Key 调用报 USERKEY_PLAT_NOMATCH；留空回退 amap_key
+	AmapWebKey string `yaml:"amap_web_key"`
 	// 阶段一四五：注册开关（后台 config.yaml 归口）
 	// true  = 登录时账号不存在自动注册（保留"首次登录即注册"默认行为），独立注册页亦可正常注册
 	// false = 登录不再自动注册，账号不存在时提示"该账号不存在，请先注册账号"引导用户前往注册页；

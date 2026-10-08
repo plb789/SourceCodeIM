@@ -252,7 +252,7 @@ FROM im_conversation c
 LEFT JOIN (
     SELECT from_user, COUNT(*) AS cnt
     FROM im_message
-    WHERE msg_type IN (2, 4, 5, 86) AND to_user = ? AND is_read = 0 AND recalled = 0
+    WHERE msg_type IN (2, 4, 5, 86, 104) AND to_user = ? AND is_read = 0 AND recalled = 0
       AND id NOT IN (SELECT msg_id FROM im_msg_delete WHERE user_id = ?)
     GROUP BY from_user
 ) u ON u.from_user = c.target
@@ -411,12 +411,14 @@ func convMessageQuery(userID, target string) *gorm.DB {
 		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：return query.Where("msg_type = ?", 1)
 		// 阶段一百五十四：纳入红包消息(86)——清空会话时红包卡片一并从视图清除
-		return query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86}, target)
+		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，清空会话时位置气泡一并从视图清除
+		return query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86, 104}, target)
 	}
 	// 私聊：双方互发的消息
 	// 阶段一百五十四：纳入红包消息(86)，语义同群聊分支
+	// 阶段二百六十八：纳入位置消息(104)，语义同群聊分支
 	return query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-		[]int{2, 86}, userID, target, target, userID)
+		[]int{2, 86, 104}, userID, target, target, userID)
 }
 
 // convMaxMsgID 会话当前最大消息 ID（删除水位来源；COALESCE 兜底空会话返回 0）

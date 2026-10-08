@@ -93,11 +93,12 @@ func (s *Server) vendorPushNotify(usernames []string, from string, msg *protocol
 	if !s.pushEnabled() || len(usernames) == 0 || msg == nil {
 		return
 	}
-	// 可推送消息类型：1 群文字 2 私文字 3 文件 20 好友申请 34 群图片 69 群文件 75 群邀请 86 红包 92 网盘分享
+	// 可推送消息类型：1 群文字 2 私文字 3 文件 20 好友申请 34 群图片 69 群文件 75 群邀请 86 红包 92 网盘分享 104 位置
 	switch msg.MsgType {
 	case protocol.MsgTypeGroupChat, protocol.MsgTypePrivate, protocol.MsgTypeFile,
 		protocol.MsgTypeFriendRequest, protocol.MsgTypeGroupImage, protocol.MsgTypeGroupFile,
-		protocol.MsgTypeGroupInviteNotice, protocol.MsgTypeRedPacket, protocol.MsgTypeDriveShare:
+		protocol.MsgTypeGroupInviteNotice, protocol.MsgTypeRedPacket, protocol.MsgTypeDriveShare,
+		protocol.MsgTypeLocation:
 	default:
 		return
 	}
@@ -143,6 +144,8 @@ func pushBody(msg *protocol.Message) string {
 		return "[红包]"
 	case protocol.MsgTypeDriveShare:
 		return "[文件分享] " + msg.FileName
+	case protocol.MsgTypeLocation:
+		return "[位置]"
 	}
 	return ""
 }

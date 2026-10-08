@@ -38,6 +38,11 @@ type Server struct {
 	// from_user+ct 去重只建一个红包（60 秒滑动窗口，重启丢失可接受——幂等窗口本就短）。
 	rpCtSeen map[string]time.Time
 	rpCtMu   sync.Mutex
+	// 阶段二百六十八：实时位置共享房间表（room_id → 房间），纯内存态（坐标不落库，
+	// 重启即失效——客户端收不到 state 自动收口卡片，与通话 callSessions 同取舍）。
+	// 过期由 location.go 的 locSweep 协程统一清理
+	locRooms map[string]*locRoom
+	locMu    sync.Mutex
 }
 
 // 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
@@ -55,7 +60,9 @@ func NewServer(cfg *config.Config) *Server {
 		hub:            NewHub(),
 		uploadSessions: make(map[string]*directUploadSession),
 		rpCtSeen:       make(map[string]time.Time), // 阶段二百四十六：红包发送幂等缓存
+		locRooms:       make(map[string]*locRoom),  // 阶段二百六十八：位置共享房间表
 	}
+	s.startLocSweeper() // 阶段二百六十八：位置共享房间过期扫描协程
 	defaultServerRef = s
 	// 阶段一百六十一：登录排队器（enabled=false 时零开销旁路）
 	s.loginQ = newLoginQueue(cfg.LoginQueue)
@@ -473,6 +480,11 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段二百四十：扫码登录确认信令（手机端已登录态扫描/确认/取消，归口 qrlogin.go）
 	case protocol.MsgTypeQRSign:
 		s.HandleQRSign(c, msg)
+	// 阶段二百六十八：位置消息（静态发送位置落库转发）与实时位置共享信令（action 模式，归口 location.go）
+	case protocol.MsgTypeLocation:
+		s.handleLocationSend(c, msg)
+	case protocol.MsgTypeLocationShare:
+		s.HandleLocationShare(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -722,6 +734,21 @@ func messageSummary(content string) string {
 	}
 	if err := json.Unmarshal([]byte(content), &rpEnv); err == nil && rpEnv.RP.Greeting != "" {
 		return "[红包] " + rpEnv.RP.Greeting
+	}
+	// 阶段二百六十八：位置信封归口——会话摘要显示"[位置] 名称"，JSON 原串不外泄
+	// （location.go touchConversation 写入的已是摘要文本，本分支兜底读取侧自愈等其它调用方）
+	var locEnv struct {
+		Loc json.RawMessage `json:"loc"`
+	}
+	if err := json.Unmarshal([]byte(content), &locEnv); err == nil && len(locEnv.Loc) > 0 {
+		var locInfo struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(locEnv.Loc, &locInfo)
+		if locInfo.Name != "" {
+			return "[位置] " + locInfo.Name
+		}
+		return "[位置]"
 	}
 	return content
 }
@@ -985,14 +1012,16 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段一百四十二：to_user 参数化——''=全局群，'gN'=指定群
 		// 阶段一百五十四：纳入群红包消息(86)——群红包实时广播可见、重新登录后历史查询丢失
 		// 网盘二期：纳入网盘分享卡片(92)——卡片同走持久化链路，实时可见、历史同样可见
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92}, msg.ToUser)
+		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，实时可见、重新登录后历史查询不丢失
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
 		// 阶段一百五十四：纳入红包消息(86)——红包卡片历史渲染（信封 JSON 同走持久化消息链路）
 		// 网盘二期：纳入网盘分享卡片(92)——同 86 口径，卡片历史渲染归口 renderHistoryRecord
+		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，历史渲染位置气泡
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 92}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86, 92, 104}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）
@@ -1188,6 +1217,13 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 	respInfo, _ := json.Marshal(map[string]interface{}{
 		"result":        result,
 		"recall_window": s.cfg.RecallWindow,
+		// 阶段二百六十八：下发高德地图 JS API Key 与安全密钥（位置消息/实时位置共享数据源；
+		// 均空=未配置，前端位置入口隐藏）。Key 本为前端可见凭据（防盗用靠高德域名白名单），
+		// 经登录响应统一归口便于部署侧换 Key，前端零硬编码
+		"amap_key":      s.cfg.AmapKey,
+		"amap_security": s.cfg.AmapSecurity,
+		// Web 服务类型 Key（位置气泡静态地图缩略图 REST 专用，平台校验与 JS API Key 不互通；空回退 amap_key）
+		"amap_web_key": s.cfg.AmapWebKey,
 		// 阶段三十一：下发文件分片大小与大文件直传阈值（服务端归口，前端分片/分流逻辑与服务端配置保持一致）
 		// 原代码：无 chunk_size / upload_threshold 字段（前端硬编码 4KB）
 		"chunk_size":       s.cfg.ChunkSize,
