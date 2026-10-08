@@ -705,6 +705,9 @@
                     window._amapSecurity = '';
                     window._amapWebKey = '';
                 }
+                // 位置静态图回填广播：消息渲染可能早于登录响应 info（历史消息先到），
+                // key 未就绪时气泡静态图只能留空占位；key 到位后通知 chat.js 回填已渲染气泡
+                try { window.dispatchEvent(new Event('amap-key-ready')); } catch (e) { }
                 // 阶段三十一：接收服务端下发的分片大小与大文件直传阈值（服务端归口）
                 if (info && info.chunk_size > 0) {
                     chunkSize = info.chunk_size;

@@ -31,9 +31,9 @@ const crypto = require('crypto');
 const { Readable } = require('stream');
 
 // 增量同步总超时：超时即放行窗口加载（未完成的后台下载中止，缓存保持一致旧版，下次启动重试）
-const SYNC_TIMEOUT_MS = 4000;
-// 清单拉取超时（清单接口应当毫秒级返回，2s 足够）
-const MANIFEST_TIMEOUT_MS = 2000;
+const SYNC_TIMEOUT_MS = 60000;
+// 清单拉取超时（清单接口应当毫秒级返回；原 2s 在系统代理/首次连接探测场景会被 abort 且无错误信息）
+const MANIFEST_TIMEOUT_MS = 10000;
 // 差异文件并发下载数
 const DOWNLOAD_CONCURRENCY = 4;
 
@@ -648,7 +648,7 @@ async function sync() {
         if (secureKey) cleanLegacyPlaintext();
         // 1. 拉取服务端清单
         var mCtrl = new AbortController();
-        var mTimer = setTimeout(function () { mCtrl.abort(); }, MANIFEST_TIMEOUT_MS);
+        var mTimer = setTimeout(function () { mCtrl.abort(new Error('清单拉取超时 ' + MANIFEST_TIMEOUT_MS + 'ms')); }, MANIFEST_TIMEOUT_MS);
         var res;
         try {
             res = await net.fetch(serverUrl.replace(/\/+$/, '') + '/api/web-manifest', { signal: mCtrl.signal, bypassCustomProtocolHandlers: true });
@@ -733,7 +733,10 @@ async function sync() {
             });
         }
 
-        // 4. 并发下载（任何单个失败即中止本轮：缓存保持一致旧版，下次启动重试）
+        // 4. 并发下载（单个失败不再整轮作废——磁盘实测是唯一事实源（阶段一百三十二），
+        //    已落盘文件照写清单后下轮自动跳过，未完成文件磁盘缺失下轮自动续传，多轮收敛；
+        //    原实现 throw 作废清单 + 4s 固定总超时：差异文件一多每轮超时作废且已下载文件因
+        //    清单无 es 记录下轮重复下载 → 死循环（PC 端缓存长期陈旧、位置静态图裂图根因））
         var done = 0, failed = null;
         var esMap = {}; // 加密链路：本轮下载实得的密文长度（写清单 es 供下次磁盘属性比对）
         if (todo.length) {
@@ -756,7 +759,7 @@ async function sync() {
             var workers = [];
             for (var i = 0; i < DOWNLOAD_CONCURRENCY; i++) workers.push(worker());
             await Promise.all(workers);
-            if (failed) throw failed;
+            if (failed) console.warn('[web-cache] 本轮部分下载失败（已完成的保留，下轮续传）:', failed && failed.message);
         }
 
         // 5. 写新清单（tmp+rename 原子）：记录全部远端条目，下次启动直接比对；
@@ -782,7 +785,7 @@ async function sync() {
         }
         return result;
     } catch (e) {
-        console.warn('[web-cache] 增量同步跳过（缺失文件运行期代理兜底，不影响启动）:', e && e.message);
+        console.warn('[web-cache] 增量同步跳过（缺失文件运行期代理兜底，不影响启动）:', e && e.message, e && e.cause ? '| cause: ' + (e.cause && e.cause.message || e.cause) : '');
         scheduleSyncRetry(e && e.message);
         return null; // 同步失败：不回报变更，主进程不刷新（运行期代理兜底 + 定时重试自愈）
     } finally {

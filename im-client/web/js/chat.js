@@ -26874,6 +26874,19 @@
             + '&zoom=15&size=440*240&scale=2'
             + '&key=' + encodeURIComponent(wk);
     }
+    // key 迟到回填：登录响应 info 晚于历史消息渲染时，已渲染的位置气泡/查看弹窗静态图
+    // 此前因 key 空留白占位；key 到位（socket.js 广播 amap-key-ready）后统一重设 src
+    window.addEventListener('amap-key-ready', function () {
+        if (!(window._amapWebKey || window._amapKey)) return;
+        Array.prototype.forEach.call(document.querySelectorAll('.loc-bubble-img[data-lat]'), function (im) {
+            if (!im.naturalWidth && locStaticMapUrl(im.dataset.lat, im.dataset.lng)) {
+                im.src = locStaticMapUrl(im.dataset.lat, im.dataset.lng) + '&r=' + Date.now();
+            }
+        });
+        if (locViewCur && locViewImg && !locViewImg.naturalWidth && !locViewMask.classList.contains('hidden')) {
+            locViewImg.src = locStaticMapUrl(locViewCur.lat, locViewCur.lng) + '&r=' + Date.now();
+        }
+    });
 
     // 位置气泡 DOM（仿 92 分享卡片：消息体 + 气泡卡片 + 头像；点击开查看弹窗）
     function locBuildBubbleEl(fromUser, loc, type, isPrivate) {
@@ -26893,13 +26906,19 @@
         var img = document.createElement('img');
         img.className = 'loc-bubble-img';
         img.loading = 'lazy';
+        // 记录坐标供 key 迟到回填（登录响应 info 晚于历史消息渲染时静态图留空占位）
+        img.dataset.lat = loc.lat;
+        img.dataset.lng = loc.lng;
         img.src = locStaticMapUrl(loc.lat, loc.lng);
         img.alt = '';
-        // 高德新 Key 开通延迟期/抖动期静态图偶发返回错误 JSON（10001/20003），失败自动重试一次
+        // 高德新 Key 开通延迟期/抖动期静态图偶发返回错误 JSON（10001/20003），失败自动重试一次；
+        // base URL 为空（key 未就绪）不得拼防缓存参数——空串+'&r=' 会产生残段 URL 渲染裂图
         img.addEventListener('error', function () {
             if (img.dataset.retried) return;
+            var base = locStaticMapUrl(loc.lat, loc.lng);
+            if (!base) return;
             img.dataset.retried = '1';
-            img.src = locStaticMapUrl(loc.lat, loc.lng) + '&r=' + Date.now();
+            img.src = base + '&r=' + Date.now();
         });
         var info = document.createElement('div');
         info.className = 'loc-bubble-body';
