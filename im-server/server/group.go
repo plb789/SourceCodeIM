@@ -1044,4 +1044,8 @@ func (s *Server) handleMultiGroupChat(c *Client, msg *protocol.Message, groupID 
 	s.touchConversationMarkDirtyBatch(onlineMembers, target, summary, record.ID)
 	s.notifyConvUpdateBatch(onlineMembers)
 	s.queueOfflineBatch(offlineMembers, msg)
+
+	// 阶段二百七十四：纯 URL 文本消息异步抓取网页卡片（OG 元数据落库 + CARD_UPDATE 全群成员
+	// 回填帧，主链路零阻塞；离线成员登录后历史加载自带 card 列）
+	s.enrichWebCardAsync(&record, target, memberIDs)
 }

@@ -224,6 +224,12 @@ const (
 	//   state=成员坐标表全量广播（update/join/leave 后推给房间全部在线成员，前端移动标记）；
 	//   ended=共享结束（房间过期/发起方结束/全员退出，前端收口卡片）
 	MsgTypeLocationShare = 105
+
+	// 阶段二百七十四：网页卡片回填（微信同款链接分享卡片）。纯 URL 文本消息落库后服务端
+	// 异步抓取 OG 元数据（title/desc/缩略图/favicon），写回 im_message.card 列并向会话
+	// 在线方推送本帧（content 为卡片元数据 JSON，msg_id 定位前端气泡原位升级为卡片）；
+	// 离线端下次登录历史加载自带 card 列直接渲染，无需补帧
+	MsgTypeCardUpdate = 106
 )
 
 // Message 客户端与服务端统一 JSON 消息协议
@@ -284,4 +290,7 @@ type Message struct {
 	// 阶段一百九十：模型覆盖上行（AI 问答/Agent 任务发起可选携带已启用模型服务名，服务端浅拷贝
 	// 智能体临时换绑，不改库不影响他人；空=跟随智能体绑定；仅 AI_CHAT/AGENT_RUN 上行读取，其余类型忽略）
 	ModelName string `json:"model_name,omitempty"`
+	// 阶段二百七十四：网页卡片元数据（服务端 OG 抓取归口；私聊/群聊历史响应随 model.Message
+	// 行 JSON 透传字段名 card，本字段供 CARD_UPDATE(106) 实时回填帧与卡片元数据复用同一结构）
+	Card string `json:"card,omitempty"`
 }

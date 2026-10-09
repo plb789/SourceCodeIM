@@ -17530,6 +17530,256 @@ html.m .dsm-list {
     justify-content: center;
 }
 
+/* ============================================================
+   阶段二百七十四：消息 URL 链接 / 链接安全确认面板 / 网页卡片（微信同款）
+   主题色全部归口 --primary 与现有背景/文字变量，深浅主题自动跟随
+   ============================================================ */
+
+/* 消息正文内链接高亮（.msg-text 可选中例外已覆盖子元素；悬浮手型光标） */
+.msg-link {
+    color: var(--primary);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent);
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+    user-select: text;
+}
+
+.msg-link:hover {
+    text-decoration-color: var(--primary);
+}
+
+/* ---------- 链接安全确认面板（自绘遮罩浮层，禁止系统弹窗） ---------- */
+.link-confirm-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 4200;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: linkConfirmFade 0.16s ease-out;
+}
+
+@keyframes linkConfirmFade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.link-confirm-panel {
+    width: min(330px, 86vw);
+    background: var(--panel-bg);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: var(--shadow-pop);
+    animation: linkConfirmPop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes linkConfirmPop {
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.link-confirm-title {
+    padding: 20px 20px 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+}
+
+.link-confirm-domain {
+    margin-top: 10px;
+    padding: 0 20px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--primary);
+    text-align: center;
+    word-break: break-all;
+}
+
+.link-confirm-url {
+    margin-top: 6px;
+    padding: 0 20px;
+    font-size: 12px;
+    color: var(--text-light);
+    text-align: center;
+    word-break: break-all;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.link-confirm-tip {
+    margin-top: 12px;
+    padding: 0 20px 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+/* 竖排三按钮（微信菜单同款分隔线风格） */
+.link-confirm-btn {
+    padding: 13px 0;
+    font-size: 15px;
+    color: var(--text);
+    text-align: center;
+    cursor: pointer;
+    border-top: 0.5px solid var(--divider);
+    transition: background 0.12s;
+}
+
+.link-confirm-btn:hover,
+.link-confirm-btn:active {
+    background: var(--hover);
+}
+
+.link-confirm-btn.primary {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.link-confirm-btn.cancel {
+    color: var(--text-secondary);
+}
+
+/* ---------- 网页卡片（微信链接分享卡片同款布局） ---------- */
+.web-card-bubble {
+    padding: 0 !important; /* 卡片自带内边距，气泡壳零内边距防双重留白 */
+    overflow: hidden;
+}
+
+.web-card {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    width: 260px;
+    max-width: 72vw;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: filter 0.12s;
+}
+
+.web-card:hover {
+    filter: brightness(0.97);
+}
+
+.web-card:active {
+    filter: brightness(0.94);
+}
+
+/* 主题跟随：他人白气泡 / 自己绿气泡内卡片同底色微调（沿用气泡自身背景，仅描边区分） */
+.message .web-card-bubble .web-card {
+    border: 1px solid var(--divider);
+    border-radius: 8px;
+}
+
+.web-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.web-card-title {
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--text);
+    font-weight: 500;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+}
+
+.web-card-desc {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+}
+
+/* 域名行（favicon + 域名 + 网页徽标），置底对齐 */
+.web-card-site {
+    margin-top: auto;
+    padding-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.web-card-favicon {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.web-card-domain {
+    font-size: 11px;
+    color: var(--text-light);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+}
+
+.web-card-badge {
+    font-size: 10px;
+    color: var(--text-secondary);
+    border: 0.5px solid var(--border);
+    border-radius: 3px;
+    padding: 0 3px;
+    line-height: 15px;
+    flex-shrink: 0;
+}
+
+/* 右侧缩略图（加载成功才展示占位；加载中透明不闪白） */
+.web-card-thumb {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    display: none;
+    background: var(--hover);
+}
+
+.web-card-thumb.ok {
+    display: block;
+}
+
+.web-card-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* 无缩略图降级：域名首字占位块（主题色淡底） */
+.web-card-thumb-placeholder {
+    width: 72px;
+    height: 72px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    font-weight: 600;
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
 .qr-login-name {
     font-size: 14px;
     font-weight: 600;

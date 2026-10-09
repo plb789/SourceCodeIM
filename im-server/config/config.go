@@ -131,6 +131,16 @@ type Config struct {
 	// 阶段二百四十一：APP 启动广告图配置（微信启动页同款思路：APK 内置保底图 + 服务端下发可运营广告图；
 	// APP 预下载缓存、下次启动生效。仅 APP 原生层消费，WEB/PC 不涉及）
 	SplashAd SplashAdConfig `yaml:"splash_ad"`
+
+	// 阶段二百七十四：网页卡片配置节（微信同款链接分享卡片，server/webcard.go 归口）
+	Card CardConfig `yaml:"card"`
+}
+
+// CardConfig 阶段二百七十四：网页卡片抓取配置节
+type CardConfig struct {
+	// Enabled 抓取总开关：true 时纯 URL 文本消息落库后服务端异步抓取 OG 元数据出卡片，
+	// false 时消息保持纯 URL 文本（前端仍做链接化高亮+安全确认，不抓取不出卡片）
+	Enabled bool `yaml:"enabled"`
 }
 
 // SplashAdConfig 阶段二百四十一：APP 启动广告图配置节

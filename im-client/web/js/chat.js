@@ -20874,6 +20874,16 @@
             }
             return;
         }
+        // 阶段二百七十四：网页卡片消息历史渲染（服务端 OG 抓取落库 card 列，纯 URL 消息出卡片；
+        // card 缺失或解析失败降级为链接化文本——createMessageEl 默认渲染归口）
+        if (r.card) {
+            var wcEnv = null;
+            try { wcEnv = JSON.parse(r.card); } catch (e) { wcEnv = null; }
+            if (wcEnv && wcEnv.url) {
+                mountWebCardRow(wcEnv, r, ts, isPrivate, isRead, beforeEl);
+                return;
+            }
+        }
         var div = createMessageEl(r.from_user, r.content, isMine ? 'self' : 'other', r.id, ts, isPrivate, isRead,
             isAIAgent(r.from_user) ? { total: r.total_tokens || 0, prompt: r.prompt_tokens || 0, completion: r.completion_tokens || 0 } : undefined);
         if (beforeEl) {
@@ -22993,11 +23003,12 @@
             var textDiv = document.createElement('div');
             textDiv.className = 'msg-text';
             // 阶段四十三：AI 智能体消息渲染 Markdown，普通消息纯文本直出防 XSS
+            // 阶段二百七十四：普通消息正文 URL 片段链接化（同普通消息链路口径）
             if (isAIAgent(fromUser)) {
                 textDiv.classList.add('ai-md');
                 textDiv.innerHTML = renderAIMarkdown(envelope.text);
             } else {
-                textDiv.textContent = envelope.text;
+                renderTextWithLinks(textDiv, String(envelope.text == null ? '' : envelope.text));
             }
             bubble.appendChild(textDiv);
         } else if (isAIAgent(fromUser)) {
@@ -23014,9 +23025,11 @@
             // 有 .msg-text 所以能选，微信同款例外只覆盖到 .msg-text）；包裹后 style.css 明文例外
             // 生效（可拖选+悬停 text 光标），纯文本直出防 XSS 语义不变（仍为 textContent 赋值）；
             // pre-wrap/break-all/字号行高均为继承属性，布局与原先一致（AI 消息同构先例）
+            // 阶段二百七十四：URL 片段链接化（.msg-link 高亮，点击弹自绘安全确认面板）——
+            // 其余文本仍走 textNode 直出，零 innerHTML 注入面
             var plainDiv = document.createElement('div');
             plainDiv.className = 'msg-text';
-            plainDiv.textContent = content;
+            renderTextWithLinks(plainDiv, String(content == null ? '' : content));
             bubble.appendChild(plainDiv);
         }
         // 头像缺失修复：改为微信风格结构——头像 + 内容列（昵称/气泡/状态），
@@ -23094,6 +23107,245 @@
         messageList.appendChild(div);
         messageList.scrollTop = messageList.scrollHeight;
     }
+
+    /* ===== 阶段二百七十四：消息 URL 链接化 + 自绘安全确认面板 + 网页卡片（微信同款） ===== */
+
+    // 普通文本消息内的 URL 片段链接化：非 URL 文本走 textNode 直出（防 XSS 零 innerHTML），
+    // URL 片段包 .msg-link（data-href 存原文，点击经点击委托弹安全确认面板）。
+    // URL 正则与服务端 webCardURLFor 同口径：排除空白/尖括号/引号与常见中文标点收尾，
+    // 尾部英文标点（句号/逗号等）从链接中剥出，微信同款断句体验
+    var MSG_URL_RE = /https?:\/\/[^\s<>"'，。；！？、）】]+/gi;
+
+    function renderTextWithLinks(el, text) {
+        if (!text) return;
+        var last = 0, m;
+        MSG_URL_RE.lastIndex = 0;
+        while ((m = MSG_URL_RE.exec(text))) {
+            var u = m[0];
+            // 剥离尾部英文标点（微信同款：句尾标点属文本不属链接）
+            while (u.length) {
+                var c = u.charAt(u.length - 1);
+                if ('.,;:!?)\'"'.indexOf(c) >= 0) u = u.slice(0, -1);
+                else break;
+            }
+            var segEnd = m.index + u.length;
+            if (u && segEnd > m.index) {
+                if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+                var link = document.createElement('span');
+                link.className = 'msg-link';
+                link.setAttribute('data-href', u);
+                link.textContent = u;
+                el.appendChild(link);
+                last = segEnd;
+            }
+        }
+        if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    // 自绘链接安全确认面板（微信同款"即将打开外部页面"）：所有外域链接（正文链接与网页卡片）
+    // 点击统一归口，显示目标域名与完整 URL，用户确认后 window.open（三端归口：
+    // APP 端被 mobile.js 劫持走自绘内置浏览层；PC 端 Electron 外开系统浏览器；WEB 端新标签）。
+    // 全自绘 DOM（禁止系统弹窗），Esc/点遮罩关闭；复制走 copyTextToClipboard 归口
+    var linkConfirmMask = null;
+
+    function openLinkConfirm(url) {
+        closeLinkConfirm();
+        var host = '';
+        try { host = new URL(url).hostname; } catch (e) { host = url; }
+        var mask = document.createElement('div');
+        mask.className = 'link-confirm-mask';
+        var panel = document.createElement('div');
+        panel.className = 'link-confirm-panel';
+        var title = document.createElement('div');
+        title.className = 'link-confirm-title';
+        title.textContent = I18N.t('即将打开外部链接');
+        var domain = document.createElement('div');
+        domain.className = 'link-confirm-domain';
+        domain.textContent = host;
+        var urlEl = document.createElement('div');
+        urlEl.className = 'link-confirm-url';
+        urlEl.textContent = url;
+        var tip = document.createElement('div');
+        tip.className = 'link-confirm-tip';
+        tip.textContent = I18N.t('该页面由第三方提供，请注意信息安全，谨防诈骗');
+        var mkBtn = function (label, cls, fn) {
+            var b = document.createElement('div');
+            b.className = 'link-confirm-btn ' + cls;
+            b.textContent = I18N.t(label);
+            b.addEventListener('click', fn);
+            return b;
+        };
+        panel.appendChild(title);
+        panel.appendChild(domain);
+        panel.appendChild(urlEl);
+        panel.appendChild(tip);
+        panel.appendChild(mkBtn('继续访问', 'primary', function () {
+            closeLinkConfirm();
+            window.open(url, '_blank');
+        }));
+        panel.appendChild(mkBtn('复制链接', '', function () {
+            copyTextToClipboard(url);
+            closeLinkConfirm();
+        }));
+        panel.appendChild(mkBtn('取消', 'cancel', closeLinkConfirm));
+        mask.appendChild(panel);
+        // 点遮罩空白关闭（面板内点击不冒泡穿透）
+        mask.addEventListener('click', function (e) {
+            if (e.target === mask) closeLinkConfirm();
+        });
+        document.body.appendChild(mask);
+        linkConfirmMask = mask;
+    }
+
+    function closeLinkConfirm() {
+        if (linkConfirmMask && linkConfirmMask.parentNode) linkConfirmMask.parentNode.removeChild(linkConfirmMask);
+        linkConfirmMask = null;
+    }
+    // Esc 关闭（面板打开时优先级最高——后开先关由 openLinkConfirm 单例天然保证）
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && linkConfirmMask) closeLinkConfirm();
+    });
+
+    // 消息区内 URL 链接点击委托：正文链接与卡片共用安全确认归口
+    messageList.addEventListener('click', function (e) {
+        var link = e.target.closest && e.target.closest('.msg-link');
+        if (!link) return;
+        var href = link.getAttribute('data-href');
+        if (href) openLinkConfirm(href);
+    });
+
+    // 网页卡片气泡构建（微信同款布局：主区标题/摘要/域名行 + 右侧缩略图，无缩略图退化
+    // 域名首字占位块）。整卡点击走 openLinkConfirm 安全确认归口。
+    // 元数据（msg-id/data-ts/data-raw）由调用方回填，与网盘分享/位置卡片渲染归口同构
+    function webCardBuildBubbleEl(fromUser, card, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble web-card-bubble';
+        var cardEl = document.createElement('div');
+        cardEl.className = 'web-card';
+        var main = document.createElement('div');
+        main.className = 'web-card-main';
+        var title = document.createElement('div');
+        title.className = 'web-card-title';
+        title.textContent = card.title || card.domain || I18N.t('网页链接');
+        main.appendChild(title);
+        if (card.desc) {
+            var desc = document.createElement('div');
+            desc.className = 'web-card-desc';
+            desc.textContent = card.desc;
+            main.appendChild(desc);
+        }
+        var site = document.createElement('div');
+        site.className = 'web-card-site';
+        if (card.icon) {
+            var ico = document.createElement('img');
+            ico.className = 'web-card-favicon';
+            ico.src = card.icon;
+            ico.referrerPolicy = 'no-referrer'; // 防站点 Referer 防盗链 403
+            ico.addEventListener('error', function () { ico.remove(); });
+            site.appendChild(ico);
+        }
+        var dom = document.createElement('span');
+        dom.className = 'web-card-domain';
+        dom.textContent = card.domain || '';
+        site.appendChild(dom);
+        var badge = document.createElement('span');
+        badge.className = 'web-card-badge';
+        badge.textContent = I18N.t('网页');
+        site.appendChild(badge);
+        main.appendChild(site);
+        cardEl.appendChild(main);
+        if (card.thumb) {
+            var th = document.createElement('div');
+            th.className = 'web-card-thumb';
+            var img = document.createElement('img');
+            img.src = card.thumb;
+            img.referrerPolicy = 'no-referrer';
+            img.alt = '';
+            img.addEventListener('load', function () { th.classList.add('ok'); }); // 仅加载成功才占位展示
+            img.addEventListener('error', function () { th.remove(); replaceThumbPlaceholder(cardEl, card); });
+            th.appendChild(img);
+            cardEl.appendChild(th);
+        } else {
+            replaceThumbPlaceholder(cardEl, card);
+        }
+        cardEl.addEventListener('click', function () { openLinkConfirm(card.url); });
+        bubble.appendChild(cardEl);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+
+    // 无缩略图/缩略图加载失败：右侧域名首字占位块（主题色淡底，微信同款降级视觉）
+    function replaceThumbPlaceholder(cardEl, card) {
+        if (cardEl.querySelector('.web-card-thumb-placeholder')) return;
+        var ph = document.createElement('div');
+        ph.className = 'web-card-thumb-placeholder';
+        var ch = (card.domain || 'W').charAt(0).toUpperCase();
+        ph.textContent = ch;
+        cardEl.appendChild(ph);
+    }
+
+    // 历史加载与实时回填共用的卡片行装配：回填元数据（msg-id/from/ts/raw）并按贴底快照插入；
+    // 自己发送的私聊消息带已读/未读状态（与文本消息 createMessageEl 同口径）
+    function mountWebCardRow(card, r, ts, isPrivate, isRead, beforeEl) {
+        var isMine = r.from_user === IMSocket.getUsername();
+        var wcDiv = webCardBuildBubbleEl(r.from_user, card, isMine ? 'self' : 'other', isPrivate);
+        if (r.id) wcDiv.setAttribute('data-msg-id', r.id);
+        wcDiv.setAttribute('data-from', r.from_user);
+        wcDiv.setAttribute('data-ts', ts);
+        if (r.content && String(r.content).length <= 65536) wcDiv.setAttribute('data-raw', r.content);
+        if (isMine && isPrivate && r.id) {
+            var body = wcDiv.querySelector('.message-body');
+            if (body) {
+                var st = document.createElement('div');
+                st.className = 'msg-status' + (isRead ? ' read' : '');
+                st.setAttribute('data-msg-id', r.id);
+                st.textContent = isRead ? I18N.t('已读') : I18N.t('未读');
+                body.appendChild(st);
+            }
+        }
+        if (beforeEl) {
+            messageList.insertBefore(wcDiv, beforeEl);
+        } else {
+            messageList.appendChild(wcDiv);
+            messageList.scrollTop = messageList.scrollHeight;
+        }
+        return wcDiv;
+    }
+
+    // CARD_UPDATE(106)：实时卡片元数据回填——按 msg_id 原位把纯 URL 气泡升级为网页卡片
+    // （原位 replaceWith 零闪烁；不匹配当前会话的帧直接丢弃——card 已落库，历史加载兜底）
+    IMSocket.on(MSG.CARD_UPDATE, function (msg) {
+        var card = null;
+        try { card = JSON.parse(msg.content); } catch (e) { return; }
+        if (!card || !card.url || !msg.msg_id) return;
+        var isMine = msg.from_user === IMSocket.getUsername();
+        var target = isMine ? (msg.to_user || '') : (msg.from_user || '');
+        if (target !== currentChatUser) return;
+        var el = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
+        if (!el || el.classList.contains('web-card-row')) return; // 已是卡片（多端/群重复帧去重）
+        var ts = parseInt(el.getAttribute('data-ts'), 10) || 0;
+        var isPrivate = !!target && !isGroupTarget(target);
+        var row = webCardBuildBubbleEl(el.getAttribute('data-from') || msg.from_user, card, isMine ? 'self' : 'other', isPrivate);
+        row.setAttribute('data-msg-id', msg.msg_id);
+        row.setAttribute('data-from', el.getAttribute('data-from') || msg.from_user);
+        row.setAttribute('data-ts', ts);
+        var raw = el.getAttribute('data-raw');
+        if (raw) row.setAttribute('data-raw', raw);
+        row.classList.add('web-card-row');
+        el.replaceWith(row);
+    });
 
     function appendSystem(text) {
         var div = document.createElement('div');

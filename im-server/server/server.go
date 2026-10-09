@@ -861,6 +861,10 @@ func (s *Server) handlePrivateChat(c *Client, msg *protocol.Message) {
 	s.touchConversationDebounced(msg.ToUser, c.username, summary, record.ID)
 	s.notifyConvUpdate(c.username)
 	s.notifyConvUpdate(msg.ToUser)
+
+	// 阶段二百七十四：纯 URL 文本消息异步抓取网页卡片（OG 元数据落库 + CARD_UPDATE 回填帧，
+	// 主链路零阻塞；AI 智能体会话不适用——上方 handleAIChatMsg 已分流，走不到此处）
+	s.enrichWebCardAsync(&record, msg.ToUser, nil)
 }
 
 // handleFile 文件传输处理：文件头（ChunkIndex=-1）与分片数据（ChunkIndex>=0）

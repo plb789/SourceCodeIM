@@ -502,8 +502,12 @@ type Message struct {
 	TotalTokens      int `gorm:"column:total_tokens;default:0" json:"total_tokens,omitempty"`
 	// AISessionID 归属 AI 多会话（阶段七十一）：AI 提问/回复、Agent 任务回显与答复落库时盖戳，
 	// 上下文/历史/任务卡按列过滤实现会话隔离；0=默认会话（存量历史与未区分消息归口）
-	AISessionID uint      `gorm:"column:ai_session_id;not null;default:0;index" json:"ai_session_id"`
-	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	AISessionID uint `gorm:"column:ai_session_id;not null;default:0;index" json:"ai_session_id"`
+	// Card 网页卡片元数据（阶段二百七十四，AutoMigrate 自动加列）：纯 URL 文本消息落库后
+	// 服务端异步抓取 OG 元数据（title/desc/thumb/icon/domain JSON 串）写回本列，
+	// 历史加载随行 JSON 下发渲染卡片；普通消息恒为空串不参与
+	Card       string    `gorm:"column:card;type:text" json:"card,omitempty"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
 // TableName 指定表名
