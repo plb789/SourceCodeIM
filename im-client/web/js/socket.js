@@ -306,7 +306,8 @@
         QR_SIGN: 97,             // 阶段二百四十：扫码登录确认信令（上行 {action:"scan"/"confirm"/"cancel", qr_id}；下行同类型回执 {action, ok, reason?, platform?}）
         LOCATION: 104,           // 阶段二百六十八：位置消息（微信同款发送位置，content 为 JSON：{loc:{lat,lng,name,address}}；GCJ-02 坐标，落库转发同红包链路，历史按类型渲染位置气泡）
         LOCATION_SHARE: 105,     // 阶段二百六十八：实时位置共享信令（action 模式，纯信令不落库坐标；上行 start/join/leave/update/end，下行 started/joined/state/left/ended/error，房间态服务端内存归口）
-        CARD_UPDATE: 106         // 阶段二百七十四：网页卡片回填（微信同款链接分享卡片；下行 content 为卡片元数据 JSON {msg_id,url,title,desc,thumb,icon,domain}，前端按 msg_id 原位把纯 URL 气泡升级为卡片）
+        CARD_UPDATE: 106,        // 阶段二百七十四：网页卡片回填（微信同款链接分享卡片；下行 content 为卡片元数据 JSON {msg_id,url,title,desc,thumb,icon,domain}，前端按 msg_id 原位把纯 URL 气泡升级为卡片）
+        CONTACT_CARD: 107        // 阶段二百七十六：联系人名片（微信同款"个人名片"，上行 {user:"用户名"} 服务端查库富化；下行/历史 {user,name,avatar} 快照，点击打开资料卡可加好友）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/

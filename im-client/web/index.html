@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.19"></script>
+    <script src="/js/i18n.js?v=3.20"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.59">
+    <link rel="stylesheet" href="/css/style.css?v=3.61">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -601,6 +601,11 @@
                     <button id="location-btn" class="tool-btn hidden" title="位置">
                         <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
                     </button>
+                    <!-- 阶段二百七十六：联系人名片按钮（微信同款"推荐联系人"，私聊/群聊可用，AI 智能体会话隐藏；
+                         选择器自绘弹窗复用通讯录数据源，发送链路服务端归口校验富化） -->
+                    <button id="contactcard-btn" class="tool-btn hidden" title="名片">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 14H4V6h16v12zM8.5 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm-3 4.2c0-1.4 2-2.2 3-2.2s3 .8 3 2.2V16h-6v-.8zm9.5-4.7H20v1.5h-5v-1.5zm0 3H20V15h-5v-1.5z"/></svg>
+                    </button>
                     <!-- 阶段一百四十一：语音/视频通话按钮（仅 PC 端私聊真实用户会话显示，chat.js 能力检测控制显隐；
                          Web/手机端隐藏——第一期通话仅 PC↔PC，媒体走 WebRTC P2P） -->
                     <button id="voice-call-btn" class="tool-btn hidden" title="语音通话">
@@ -748,6 +753,11 @@
                     <button class="mp-item" data-target="location-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg></span>
                         <span class="mp-label">位置</span>
+                    </button>
+                    <!-- 阶段二百七十六：名片入口（镜像 contactcard-btn，点击仅转发零逻辑复制） -->
+                    <button class="mp-item" data-target="contactcard-btn">
+                        <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 14H4V6h16v12zM8.5 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm-3 4.2c0-1.4 2-2.2 3-2.2s3 .8 3 2.2V16h-6v-.8zm9.5-4.7H20v1.5h-5v-1.5zm0 3H20V15h-5v-1.5z"/></svg></span>
+                        <span class="mp-label">名片</span>
                     </button>
                     <button class="mp-item" data-target="voice-call-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24 11.36 11.36 0 0 0 3.57.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1 11.36 11.36 0 0 0 .57 3.57 1 1 0 0 1-.25 1.02z"/></svg></span>
@@ -1014,7 +1024,11 @@
         <div id="friend-card" class="friend-card">
             <button id="friend-card-close" class="friend-card-close" title="关闭">×</button>
             <div class="friend-card-top">
-                <img id="friend-card-avatar" class="friend-card-avatar" src="" alt="头像">
+                <div class="friend-card-avatar-wrap">
+                    <img id="friend-card-avatar" class="friend-card-avatar" src="" alt="头像">
+                    <!-- 阶段二百七十六补丁：头像无图/加载失败降级首字母占位（原 img 空 src 渲染为碎图） -->
+                    <div id="friend-card-avatar-ph" class="friend-card-avatar-ph hidden"></div>
+                </div>
                 <div class="friend-card-info">
                     <div class="friend-card-name-row">
                         <span id="friend-card-name" class="friend-card-name"></span>
@@ -1028,7 +1042,26 @@
             <div class="friend-card-btns">
                 <button id="friend-card-chat" class="friend-card-btn primary">发消息</button>
                 <button id="friend-card-remark" class="friend-card-btn">设置备注</button>
+                <!-- 阶段二百七十六：非好友资料卡"添加到通讯录"（名片推荐裂变入口，chat.js 按 is_friend 显隐） -->
+                <button id="friend-card-add" class="friend-card-btn primary hidden">添加到通讯录</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 阶段二百七十六：选择联系人（微信同款名片推荐选择器，自绘浮层；单选 + 搜索 + 自己条目，
+         数据源 friendList 归口 chat.js，发送走 107 名片链路服务端富化） -->
+    <div id="contactcard-mask" class="contactcard-mask hidden">
+        <div class="contactcard-dialog">
+            <div class="contactcard-head">
+                <button id="contactcard-cancel" class="contactcard-cancel">取消</button>
+                <span class="contactcard-title">选择联系人</span>
+                <button id="contactcard-send" class="contactcard-send" disabled>发送</button>
+            </div>
+            <div class="contactcard-search">
+                <svg class="cc-search-icon" viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+                <input id="contactcard-search-input" type="text" placeholder="搜索" autocomplete="off">
+            </div>
+            <div id="contactcard-list" class="contactcard-list"></div>
         </div>
     </div>
 
@@ -2578,7 +2611,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.41"></script>
+    <script src="/js/socket.js?v=1.42"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.10"></script>
@@ -2600,7 +2633,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.8"></script>
-    <script src="/js/chat.js?v=3.174"></script>
+    <script src="/js/chat.js?v=3.177"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；

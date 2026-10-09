@@ -79,8 +79,9 @@ func (s *Server) handlePurgeResp(c *Client, msg *protocol.Message) {
 		// 物理删除申请时点之前的双方互发文本/图片/文件/位置消息（分批防长事务锁表）。
 		// 红包(86)与网盘卡片(92)不删除：红包涉及积分结算、网盘卡片涉及共享资源，
 		// 删除聊天记录不清算资产（产品口径，用户确认 2026-10-04）；
-		// 位置消息(104)属普通聊天内容，随文本/图片/文件一并删除（2026-10-08）
-		cond := "msg_type IN (2,4,5,104) AND create_time <= ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))"
+		// 位置消息(104)属普通聊天内容，随文本/图片/文件一并删除（2026-10-08）；
+		// 名片消息(107)同 104 口径——普通聊天内容不含资产，一并删除（2026-10-10）
+		cond := "msg_type IN (2,4,5,104,107) AND create_time <= ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))"
 		args := []interface{}{req.CreateTime, req.FromUser, req.ToUser, req.ToUser, req.FromUser}
 		for i := 0; i < 10000; i++ { // 万批保险丝：防异常死循环
 			res := store.DB.Exec("DELETE FROM im_message WHERE "+cond+" LIMIT ?", append(args, 5000)...)

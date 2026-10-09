@@ -485,6 +485,9 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 		s.handleLocationSend(c, msg)
 	case protocol.MsgTypeLocationShare:
 		s.HandleLocationShare(c, msg)
+	// 阶段二百七十六：联系人名片推荐（微信同款，归口 contactcard.go）
+	case protocol.MsgTypeContactCard:
+		s.handleContactCardSend(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -750,6 +753,17 @@ func messageSummary(content string) string {
 		}
 		return "[位置]"
 	}
+	// 阶段二百七十六：名片信封归口——会话摘要显示"[联系人] 昵称"，JSON 原串不外泄
+	var ccEnv struct {
+		User string `json:"user"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(content), &ccEnv); err == nil && ccEnv.User != "" {
+		if ccEnv.Name != "" {
+			return "[联系人] " + ccEnv.Name
+		}
+		return "[联系人]"
+	}
 	return content
 }
 
@@ -1006,9 +1020,15 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 
 	// 阶段一百四十二：多群聊历史归口——to_user='gN' 按群过滤（原写死的 '' 参数化，全局群传空串行为不变）；
 	// 原实现：仅支持全局群 to_user = ''
-	_, isGroup := isGroupTarget(msg.ToUser)
+	gid, isGroup := isGroupTarget(msg.ToUser)
 	if msg.ToUser == "" || isGroup {
 		// 群聊历史
+		// 阶段二百七十七：群成员校验——非成员不可拉取群历史
+		// 原实现：无成员校验，任意用户构造 to_user='gN' 可读取任意群完整聊天记录（越权）
+		if isGroup && !isGroupMember(gid, c.username) {
+			s.sendError(c, "仅群成员可查看群聊记录")
+			return
+		}
 		// 阶段二十六：纳入群聊图片消息(4)，需限定 to_user 为空——私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：query.Where("msg_type = ?", 1)
 		// 阶段一百三十五：纳入群聊文件消息(5)——sendGroupFile 落库 msg_type=5 且 to_user 为空，
@@ -1017,15 +1037,17 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 阶段一百五十四：纳入群红包消息(86)——群红包实时广播可见、重新登录后历史查询丢失
 		// 网盘二期：纳入网盘分享卡片(92)——卡片同走持久化链路，实时可见、历史同样可见
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，实时可见、重新登录后历史查询不丢失
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104}, msg.ToUser)
+		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104, 107}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
 		// 阶段一百五十四：纳入红包消息(86)——红包卡片历史渲染（信封 JSON 同走持久化消息链路）
 		// 网盘二期：纳入网盘分享卡片(92)——同 86 口径，卡片历史渲染归口 renderHistoryRecord
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，历史渲染位置气泡
+		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 92, 104}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86, 92, 104, 107}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）

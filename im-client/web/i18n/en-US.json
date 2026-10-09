@@ -1967,5 +1967,11 @@
   " 的群管理员身份已取消": "'s group admin role has been removed",
   " · 管理员": " · Admin",
   "群主": "Owner",
-  "管理员": "Admin"
+  "管理员": "Admin",
+  "个人名片": "Contact Card",
+  "添加到通讯录": "Add to Contacts",
+  "选择联系人": "Select Contact",
+  "暂无匹配联系人": "No matching contacts",
+  "[名片]": "[Card]",
+  "[名片] ": "[Card] "
 }

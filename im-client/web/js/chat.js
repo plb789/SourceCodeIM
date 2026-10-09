@@ -88,6 +88,8 @@
     var friendCardMask = document.getElementById('friend-card-mask');
     var friendCardClose = document.getElementById('friend-card-close');
     var friendCardAvatar = document.getElementById('friend-card-avatar');
+    // 阶段二百七十六补丁：资料卡头像首字母占位（无图/加载失败降级显示，原 img 空 src 渲染为碎图）
+    var friendCardAvatarPh = document.getElementById('friend-card-avatar-ph');
     var friendCardName = document.getElementById('friend-card-name');
     var friendCardGender = document.getElementById('friend-card-gender');
     var friendCardUsername = document.getElementById('friend-card-username');
@@ -95,6 +97,8 @@
     var friendCardSignature = document.getElementById('friend-card-signature');
     var friendCardChatBtn = document.getElementById('friend-card-chat');
     var friendCardRemarkBtn = document.getElementById('friend-card-remark');
+    // 阶段二百七十六：资料卡"添加到通讯录"按钮（非好友显示，走既有好友申请链路——名片推荐好友裂变入口）
+    var friendCardAddBtn = document.getElementById('friend-card-add');
 
     var userListEl = document.getElementById('user-list');
     var chatTitle = document.getElementById('chat-title');
@@ -2157,6 +2161,26 @@
         }
     });
 
+    // ===== 阶段二百七十六补丁：资料卡头像降级统一入口（与导航栏/资料面板同规则） =====
+    // 原实现：friendCardAvatar.src 空串直赋，无头像账号（如新注册）打开资料卡渲染为碎图；
+    // 现空图/失效图均移除 src 并隐藏 img，显示被推荐账号首字母占位（跟随主题色占位底色）
+    function setFriendCardAvatar(url, username) {
+        if (url) {
+            friendCardAvatar.src = url;
+            friendCardAvatar.style.display = '';
+            friendCardAvatarPh.classList.add('hidden');
+        } else {
+            friendCardAvatar.removeAttribute('src');
+            friendCardAvatar.style.display = 'none';
+            friendCardAvatarPh.textContent = (username || '?').charAt(0).toUpperCase();
+            friendCardAvatarPh.classList.remove('hidden');
+        }
+    }
+    // 头像文件失效（被清理/路径变更）时降级为首字母占位，避免破图
+    friendCardAvatar.addEventListener('error', function () {
+        setFriendCardAvatar('', friendCardTarget);
+    });
+
     // ===== 阶段三十：好友资料卡（微信式，点击好友头像弹出） =====
     // 打开资料卡：先弹卡占位，PROFILE_QUERY 响应回来后填充（服务端归口：资料+好友关系+备注）
     function openFriendCard(username) {
@@ -2166,7 +2190,7 @@
             return;
         }
         friendCardTarget = username;
-        friendCardAvatar.src = getAvatarUrl(username) || '';
+        setFriendCardAvatar(getAvatarUrl(username), username); // 阶段二百七十六补丁：统一降级入口（原空 src 渲染碎图）
         friendCardName.textContent = I18N.t('加载中...');
         friendCardGender.textContent = '';
         friendCardGender.className = 'friend-card-gender';
@@ -2174,6 +2198,7 @@
         friendCardRegion.textContent = '';
         friendCardSignature.textContent = '';
         friendCardRemarkBtn.classList.add('hidden');
+        friendCardAddBtn.classList.add('hidden'); // 阶段二百七十六：占位态先隐藏，PROFILE_RESP 回来后按好友关系显隐
         friendCardMask.classList.remove('hidden');
         IMSocket.send({ msg_type: MSG.PROFILE_QUERY, to_user: username });
     }
@@ -2197,11 +2222,15 @@
             friendCardGender.textContent = '';
             friendCardGender.className = 'friend-card-gender';
         }
-        friendCardAvatar.src = info.avatar || '';
+        setFriendCardAvatar(info.avatar, info.username); // 阶段二百七十六补丁：统一降级入口（原空 src 渲染碎图）
         friendCardRegion.textContent = info.region || I18N.t('暂无');
         friendCardSignature.textContent = info.signature || I18N.t('暂无');
         // 仅好友可设置备注（非好友隐藏按钮，服务端同样归口校验）
         friendCardRemarkBtn.classList.toggle('hidden', !info.is_friend);
+        // 阶段二百七十六：非好友显示"添加到通讯录"（微信同款资料卡三态；好友隐藏）。
+        // 发消息按钮非好友隐藏（会话不存在，避免点开空会话困惑）；好友保持原"发消息+设置备注"
+        friendCardAddBtn.classList.toggle('hidden', !!info.is_friend);
+        friendCardChatBtn.classList.toggle('hidden', !info.is_friend);
     }
 
     function closeFriendCard() {
@@ -2228,6 +2257,15 @@
         showPrompt(I18N.t('设置备注'), I18N.t('请输入好友备注名'), function (remark) {
             IMSocket.send({ msg_type: MSG.FRIEND_UPDATE, to_user: target, remark: remark });
         });
+    });
+
+    // 阶段二百七十六：资料卡"添加到通讯录"（名片点开的非好友资料卡显示）——
+    // 直接走既有好友申请链路（FRIEND_REQUEST），成功/已是好友提示由服务端回执 toast 归口
+    friendCardAddBtn.addEventListener('click', function () {
+        var target = friendCardTarget;
+        if (!target) return;
+        IMSocket.send({ msg_type: MSG.FRIEND_REQUEST, to_user: target, content: I18N.t('请求添加你为好友') });
+        closeFriendCard();
     });
 
     // ===== 添加好友 =====
@@ -2600,6 +2638,10 @@
                             setQuoteTarget({ msg_id: msgId, from: qFrom, text: I18N.t('[图片]'), url: qSrc });
                             messageInput.focus();
                         }
+                    } else if (qBubble && qBubble.classList.contains('bubble-contact-card')) {
+                        // 阶段二百七十六：名片引用占位——一期无名片引用语义，摘要显示 [名片]，防信封原串外泄
+                        setQuoteTarget({ msg_id: msgId, from: qFrom, text: I18N.t('[名片]') });
+                        messageInput.focus();
                     } else if (qBubble) {
                         // 引用消息正文取 .msg-text（引用块自身不重复计入摘要）；普通消息取气泡全文
                         var qTextEl = qBubble.querySelector('.msg-text');
@@ -2919,6 +2961,14 @@
             }).catch(function () { if (!silent) showToast(I18N.t('转发失败：文件获取失败')); });
             return;
         }
+        // 阶段二百七十六：名片消息一期不支持原样转发——降级为文本占位 [名片]（防信封原串外泄）
+        if (bubble && bubble.classList.contains('bubble-contact-card')) {
+            var ccNmF = bubble.querySelector('.cc-name');
+            var mCc = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: I18N.t('[名片] ') + ((ccNmF && ccNmF.textContent) || '') };
+            mCc.to_user = target;
+            if (IMSocket.send(mCc)) { if (!silent) showToast(I18N.t('已转发')); } else showToast(I18N.t('转发失败'));
+            return;
+        }
         // 文本 / 引用信封 / AI 文本：原始 content 原样重发（引用块完整保真），降级取正文可见文本
         var raw = el.getAttribute('data-raw');
         var tx = bubble ? bubble.querySelector('.msg-text') : null;
@@ -3060,6 +3110,11 @@
                 item.u = bubble.getAttribute('data-url') || '';
                 var fnEl = bubble.querySelector('.file-name');
                 item.n = (fnEl && fnEl.textContent) || I18N.t('文件');
+            } else if (bubble.classList.contains('bubble-contact-card')) {
+                // 阶段二百七十六：名片多选复制占位（一期合并/逐条转发不携带名片信封，防原串外泄）
+                var ccNmEl = bubble.querySelector('.cc-name');
+                item.k = 'text';
+                item.x = I18N.t('[名片] ') + ((ccNmEl && ccNmEl.textContent) || '');
             } else {
                 var tx = bubble.querySelector('.msg-text');
                 var text = ((tx ? tx.textContent : (bubble.textContent || '')) || '').trim();
@@ -3250,6 +3305,11 @@
                 item.n = (fnEl && fnEl.textContent) || I18N.t('文件');
                 var fsEl = bubble.querySelector('.file-size');
                 item.s = (fsEl && fsEl.textContent) || '';
+            } else if (bubble.classList.contains('bubble-contact-card')) {
+                // 阶段二百七十六：名片合并转发占位（一期不携带名片信封，记录内显示 [名片] 文本）
+                var ccNmEl2 = bubble.querySelector('.cc-name');
+                item.k = 'text';
+                item.x = I18N.t('[名片] ') + ((ccNmEl2 && ccNmEl2.textContent) || '');
             } else {
                 var tx = bubble.querySelector('.msg-text');
                 var text = ((tx ? tx.textContent : (bubble.textContent || '')) || '').trim();
@@ -20826,6 +20886,35 @@
             }
             return;
         }
+        // 阶段二百七十六：名片消息(107)历史持久化渲染（content 为 JSON：{user,name,avatar} 服务端富化快照）
+        if (r.msg_type === 107) {
+            var ccEnv = null;
+            try { ccEnv = JSON.parse(r.content); } catch (e) { ccEnv = null; }
+            if (ccEnv && ccEnv.user) {
+                var ccDiv = ccBuildBubbleEl(r.from_user, ccEnv, isMine ? 'self' : 'other', isPrivate);
+                // 元数据与文字/图片消息同口径：消息 ID/时间戳（供已读回执与定位使用）
+                if (r.id) ccDiv.setAttribute('data-msg-id', r.id);
+                ccDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(ccDiv, beforeEl);
+                } else {
+                    messageList.appendChild(ccDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            // 信封异常降级为系统提示，避免渲染成原始 JSON 串
+            var ccTip = document.createElement('div');
+            ccTip.className = 'system-tip';
+            ccTip.textContent = I18N.t('[名片]');
+            if (beforeEl) {
+                messageList.insertBefore(ccTip, beforeEl);
+            } else {
+                messageList.appendChild(ccTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         // 阶段一百五十四：红包消息(86)历史持久化渲染（content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
         if (r.msg_type === 86) {
             var rpEnv = null;
@@ -22753,6 +22842,9 @@
         // 阶段二百六十八：位置按钮显隐——与红包同会话口径，另要求服务端已配置高德 Key（未配置整体隐藏）
         var locBtnHid = document.getElementById('location-btn');
         if (locBtnHid) locBtnHid.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser) && window._amapKey));
+        // 阶段二百七十六：名片按钮显隐——与红包同会话口径（私聊真实用户与群聊显示，AI 智能体会话隐藏）
+        var ccBtnHid = document.getElementById('contactcard-btn');
+        if (ccBtnHid) ccBtnHid.classList.toggle('hidden', !(currentChatUser !== '' && !isAIAgent(currentChatUser)));
         // 阶段一百九十六：图片/文件按钮与「+」附件菜单按会话类型分流（与 syncAgentUiForConversation 同判定
         // 口径幂等——本函数覆盖未选会话等全部刷新路径：普通会话工具栏独立图标，AI 会话「+」菜单，未选会话均隐藏）
         var chatIsAI = currentChatUser !== '' && isAIAgent(currentChatUser);
@@ -27093,6 +27185,203 @@
         if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
             sendReadReceipt(target, msg.msg_id);
         }
+    });
+
+    // ===== 阶段二百七十六：联系人名片（微信同款"推荐联系人/个人名片"） =====
+    // 链路：工具栏/「+」面板名片按钮 → 自绘选择联系人弹窗（数据源 friendList + 自己，微信同款允许推荐自己）
+    // → 上行 107 {user}（服务端校验存在性并查库富化 name/avatar 快照落库）→ 双方实时 107 帧 → 点击名片打开资料卡。
+    // 点击链路复用 openFriendCard（PROFILE_QUERY 38 归口），非好友资料卡显示"添加到通讯录"走既有申请链路
+    function ccBuildBubbleEl(fromUser, card, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称（与文字/图片消息同规则）
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-contact-card';
+        bubble.setAttribute('data-cc-user', card.user || '');
+        // 微信同款名片卡：左侧方形圆角头像（快照优先，无则首字母占位）+ 右侧昵称与"个人名片"灰字
+        var av = document.createElement('div');
+        av.className = 'cc-avatar';
+        var url = card.avatar || getAvatarUrl(card.user);
+        if (url) {
+            var img = document.createElement('img');
+            img.src = url;
+            img.alt = '';
+            // 快照头像文件失效（被清理/路径变更）时降级首字母占位，防止碎图（与资料卡头像降级同规则）
+            img.addEventListener('error', function () {
+                if (img.parentNode) img.parentNode.removeChild(img);
+                av.textContent = (card.name || card.user || '?').charAt(0).toUpperCase();
+            });
+            av.appendChild(img);
+        } else {
+            av.textContent = (card.name || card.user || '?').charAt(0).toUpperCase();
+        }
+        var info = document.createElement('div');
+        info.className = 'cc-info';
+        var nm = document.createElement('div');
+        nm.className = 'cc-name';
+        nm.textContent = card.name || card.user || '';
+        var sub = document.createElement('div');
+        sub.className = 'cc-sub';
+        sub.textContent = I18N.t('个人名片');
+        info.appendChild(nm);
+        info.appendChild(sub);
+        bubble.appendChild(av);
+        bubble.appendChild(info);
+        bubble.addEventListener('click', function () { openFriendCard(card.user); });
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+    function ccAppendBubble(fromUser, card, type, isPrivate) {
+        var div = ccBuildBubbleEl(fromUser, card, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+
+    // 107 实时接收（与 104 同口径：会话归属归一 + msg_id 去重 + 服务端昵称合并 + 私聊已读回执）
+    IMSocket.on(MSG.CONTACT_CARD, function (msg) {
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        if (target !== currentChatUser) return;
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var card = {};
+        try { card = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        if (!card.user) return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = ccAppendBubble(msg.from_user, card, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
+    });
+
+    // ---- 选择联系人弹窗（微信同款单选：搜索 + 好友列表 + 自己条目；自绘浮层禁止系统弹窗） ----
+    var ccBtn = document.getElementById('contactcard-btn');
+    var ccMask = document.getElementById('contactcard-mask');
+    var ccListEl = document.getElementById('contactcard-list');
+    var ccSearchEl = document.getElementById('contactcard-search-input');
+    var ccSendBtnEl = document.getElementById('contactcard-send');
+    var ccCancelBtnEl = document.getElementById('contactcard-cancel');
+    var ccPicked = '';       // 已选中的被推荐用户名（单选，再次点击取消选择）
+    var ccSearchTimer = null;
+
+    // 选择器条目归口：自己条目置顶（微信同款允许推荐自己）+ 好友列表（备注→账号 展示，与通讯录同规则）
+    function ccEntries() {
+        var list = [{
+            username: IMSocket.getUsername(),
+            display: ((myProfile.nickname || '').trim()) || IMSocket.getUsername(),
+            avatar: myAvatar || '',
+            self: true
+        }];
+        friendList.forEach(function (f) {
+            list.push({
+                username: f.username,
+                display: ((f.remark || '').trim()) || f.username,
+                avatar: f.avatar || '',
+                self: false
+            });
+        });
+        return list;
+    }
+    function ccRenderList(kw) {
+        var k = (kw || '').trim().toLowerCase();
+        ccListEl.innerHTML = '';
+        ccEntries().forEach(function (it) {
+            if (k && it.display.toLowerCase().indexOf(k) < 0 && it.username.toLowerCase().indexOf(k) < 0) return;
+            var item = document.createElement('div');
+            item.className = 'cc-item' + (ccPicked === it.username ? ' selected' : '');
+            // 头像降级：有头像显示图片，无头像显示首字母占位（与通讯录 renderFriendList 同规则）
+            if (it.avatar) {
+                var av = document.createElement('img');
+                av.className = 'avatar';
+                av.src = it.avatar;
+                item.appendChild(av);
+            } else {
+                var ph = document.createElement('div');
+                ph.className = 'avatar placeholder';
+                ph.textContent = it.display.charAt(0).toUpperCase();
+                item.appendChild(ph);
+            }
+            var nm = document.createElement('div');
+            nm.className = 'cc-item-name';
+            nm.textContent = it.display;
+            item.appendChild(nm);
+            var ck = document.createElement('span');
+            ck.className = 'cc-check';
+            ck.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
+            item.appendChild(ck);
+            item.addEventListener('click', function () {
+                ccPicked = (ccPicked === it.username) ? '' : it.username;
+                ccListEl.querySelectorAll('.cc-item').forEach(function (el) { el.classList.remove('selected'); });
+                if (ccPicked) item.classList.add('selected');
+                ccSendBtnEl.disabled = !ccPicked;
+            });
+            ccListEl.appendChild(item);
+        });
+        // 空结果提示（搜索无命中）
+        if (!ccListEl.children.length) {
+            var empty = document.createElement('div');
+            empty.className = 'cc-empty';
+            empty.textContent = I18N.t('暂无匹配联系人');
+            ccListEl.appendChild(empty);
+        }
+    }
+    function ccOpen() {
+        ccPicked = '';
+        ccSearchEl.value = '';
+        ccSendBtnEl.disabled = true;
+        ccRenderList('');
+        ccMask.classList.remove('hidden');
+        // 全局系统滚动条已禁用，联系人列表超高滚动挂自绘悬浮滑块（幂等）
+        if (window._osbInit) window._osbInit(ccListEl);
+        setTimeout(function () { ccSearchEl.focus(); }, 50);
+    }
+    // 关闭：移动端微信 push 式滑出（与添加好友弹窗同交互），PC/WEB 瞬时关闭
+    function ccClose() {
+        var finish = function () {
+            ccMask.classList.add('hidden');
+            ccMask.classList.remove('im-page-out');
+        };
+        if (document.documentElement.classList.contains('m') && !ccMask.classList.contains('hidden')) {
+            ccMask.classList.add('im-page-out');
+            setTimeout(finish, 220);
+        } else {
+            finish();
+        }
+    }
+    if (ccBtn) ccBtn.addEventListener('click', ccOpen);
+    if (ccCancelBtnEl) ccCancelBtnEl.addEventListener('click', ccClose);
+    if (ccMask) ccMask.addEventListener('click', function (e) { if (e.target === ccMask) ccClose(); });
+    if (ccSearchEl) {
+        ccSearchEl.addEventListener('input', function () {
+            clearTimeout(ccSearchTimer);
+            ccSearchTimer = setTimeout(function () { ccRenderList(ccSearchEl.value); }, 200);
+        });
+        ccSearchEl.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') ccClose();
+        });
+    }
+    if (ccSendBtnEl) ccSendBtnEl.addEventListener('click', function () {
+        if (!ccPicked || !currentChatUser) return;
+        IMSocket.send({
+            msg_type: MSG.CONTACT_CARD,
+            to_user: currentChatUser,
+            content: JSON.stringify({ user: ccPicked })
+        });
+        ccClose();
     });
 
     // ===== 阶段二百六十八：位置功能（微信同款发送位置 + 实时位置共享，高德 JS API GCJ-02） =====

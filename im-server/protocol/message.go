@@ -230,6 +230,12 @@ const (
 	// 在线方推送本帧（content 为卡片元数据 JSON，msg_id 定位前端气泡原位升级为卡片）；
 	// 离线端下次登录历史加载自带 card 列直接渲染，无需补帧
 	MsgTypeCardUpdate = 106
+
+	// 阶段二百七十六：联系人名片推荐（微信同款"个人名片"）。上行 content 为 JSON {user:"用户名"}
+	// （仅携带被推荐账号，昵称/头像由服务端查库富化后落库快照，防伪造与昵称漂移）；
+	// 下行/历史 content 为 JSON {user,name,avatar}，落库 msg_type=107，走私聊/群聊普通消息链路
+	// （对齐位置 104），气泡按微信同款渲染（方头像+昵称+「个人名片」），点击打开资料卡
+	MsgTypeContactCard = 107
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

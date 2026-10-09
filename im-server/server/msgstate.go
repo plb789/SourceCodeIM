@@ -203,7 +203,7 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 	if gid, err := strconv.Atoi(strings.TrimPrefix(record.ToUser, "g")); err == nil && record.ToUser != "" && strings.HasPrefix(record.ToUser, "g") && gid > 0 {
 		// 补测回归修复：多群（gN）撤回摘要联动——原实现只适配全局群（target 空）与私聊，
 		// gN 落入私聊分支后 users 含 "gN" 无会话行，群成员会话摘要残留已撤回内容
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86, 104}, record.ToUser)
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86, 104, 107}, record.ToUser)
 		users = getGroupMemberIDs(uint(gid))
 	} else if record.ToUser == "" {
 		// 群聊会话：全部群消息，摘要更新所有已存在群会话行的用户
@@ -211,14 +211,14 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		// 需限定 to_user 为空，私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：query = query.Where("msg_type = ?", 1)
 		// 阶段一百五十四：纳入红包消息(86)——红包不可撤回但可作为"最新可见消息"，撤回旧消息时摘要应重算为红包摘要
-		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 86, 104})
+		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 86, 104, 107})
 		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
 	} else {
 		// 私聊会话：双方互发消息，摘要更新双方
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，撤回文字后摘要应重算为最新的图片/文件消息摘要
 		// 阶段一百五十四：纳入红包消息(86)，语义同群聊分支
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 104}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
+			[]int{2, 4, 5, 86, 104, 107}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
 		users = []string{record.FromUser, record.ToUser}
 	}
 	var latest model.Message
@@ -254,6 +254,10 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		case 86:
 			// 阶段一百五十四：红包信封归口——撤回中间消息且最新可见消息为红包时，
 			// 摘要显示"[红包] 祝福语"，复用 messageSummary 与正常会话摘要链路同口径，防 JSON 原串外泄
+			summary = messageSummary(latest.Content)
+		case 104, 107:
+			// 阶段二百七十六：位置/名片信封归口——撤回中间消息且最新可见消息为位置或名片时，
+			// 摘要经 messageSummary 显示"[位置]/[联系人] 名称"，防 JSON 原串外泄（原 104 缺分支会泄漏原串）
 			summary = messageSummary(latest.Content)
 		}
 		if len(summary) > 200 {
@@ -451,7 +455,11 @@ func (s *Server) handleSearch(c *Client, msg *protocol.Message) {
 			2, c.username, msg.ToUser, msg.ToUser, c.username)
 	} else {
 		// 全局搜索：与我相关的群聊 + 私聊
-		query = query.Where("(msg_type = 1 OR (msg_type = 2 AND (from_user = ? OR to_user = ?)))", c.username, c.username)
+		// 群聊可见性收紧（阶段二百七十七）：msg_type=1 仅命中本人所在群（to_user IN 本人群目标列表）
+		// + 存量全局群消息（to_user=''，历史上全员可见）。
+		// 原实现：msg_type=1 无成员过滤，任意用户可搜到非本人所在群的聊天内容（越权读取他群消息）
+		query = query.Where("((msg_type = 1 AND (to_user = '' OR to_user IN ?)) OR (msg_type = 2 AND (from_user = ? OR to_user = ?)))",
+			myGroupTargets(c.username), c.username, c.username)
 	}
 
 	var records []model.Message
@@ -491,9 +499,18 @@ func (s *Server) handleConvSearch(c *Client, msg *protocol.Message) {
 	// 排除当前用户已删除的消息（同 handleSearch/handleHistory：NOT EXISTS 替代全量 Pluck）
 	query = query.Where("NOT EXISTS (SELECT 1 FROM im_msg_delete d WHERE d.user_id = ? AND d.msg_id = im_message.id)", c.username)
 
-	if msg.ToUser == "" {
-		// 群聊会话内搜索：全部群消息
-		query = query.Where("msg_type = ?", 1)
+	if gid, ok := isGroupTarget(msg.ToUser); ok {
+		// 多群会话内搜索：仅本群消息，成员校验防伪造 to_user 越权检索他群
+		// 原实现：非空 ToUser 一律按私聊检索，多群会话内搜索恒为空结果（阶段二百六十八遗留缺陷）
+		if !isGroupMember(gid, c.username) {
+			s.sendError(c, "仅群成员可搜索群聊记录")
+			return
+		}
+		query = query.Where("msg_type = ? AND to_user = ?", 1, msg.ToUser)
+	} else if msg.ToUser == "" {
+		// 全局群会话内搜索：存量全局群消息（全局群路径已废弃，仅历史数据）
+		// 原实现：msg_type=1 无 to_user 约束，会命中全部多群消息（越权泄漏他群内容）
+		query = query.Where("msg_type = ? AND to_user = ''", 1)
 	} else {
 		// 私聊会话内搜索：双方互发的消息
 		query = query.Where("msg_type = ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",

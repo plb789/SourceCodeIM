@@ -134,6 +134,18 @@ func getGroupMemberIDs(groupID uint) []string {
 	return out
 }
 
+// myGroupTargets 查询用户所在全部群的会话目标列表（'gN'）——搜索可见性归口用。
+// 解散群聊已删成员行与群行（handleGroupDissolve），按成员表直查即为有效群集合
+func myGroupTargets(username string) []string {
+	var gids []uint
+	store.DB.Model(&model.GroupMember{}).Where("user_id = ?", username).Pluck("group_id", &gids)
+	targets := make([]string, 0, len(gids))
+	for _, gid := range gids {
+		targets = append(targets, groupTargetOf(gid))
+	}
+	return targets
+}
+
 // invalidateGroupMembersCache 群成员名单失效归口（成员表任何写操作后调用）：
 // 本实例立即失效 + 集群模式广播 invGroupMembers（各实例删除同 key），跨实例名单即时一致
 func invalidateGroupMembersCache(groupID uint) {
