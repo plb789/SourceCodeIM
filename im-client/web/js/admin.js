@@ -35,7 +35,8 @@
             filemgr: 'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
             fileshares: 'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z',
             uploads: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
-            agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z'
+            agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
+            linksec: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -263,6 +264,8 @@
             // 阶段一百三十九：进入历史压缩设置视图拉取当前生效压缩配置
             else if (item.dataset.view === 'compress') { loadCompressSettings(); }
             else if (item.dataset.view === 'drive') { loadDriveBlockExts(); loadDriveEdgeAuth(); loadShareClientDl(); }
+            // 阶段二百七十五：进入链接安全视图拉取当前生效白名单
+            else if (item.dataset.view === 'linksec') { loadLinkWhitelist(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1734,6 +1737,124 @@
         api('PUT', '/admin/api/share/clientdl', { pc_url: pcUrl, apk_url: apkUrl }).then(function (result) {
             finish(result.ok ? null : (result.msg || '下载链接保存失败'));
         }).catch(function (e) { finish(e.message || '网络异常'); });
+    });
+
+    // ===== 链接安全：链接域名白名单（阶段二百七十五，命中免安全确认直接打开；保存即热生效 + 持久化） =====
+    // 阶段二百七十六：表格化管理——已入库域名逐行展示，行内输入框常态可编辑 + 单行删除 +
+    // 底部添加（回车快捷），统一"保存白名单"提交整串（GET/PUT 归一串接口不变，服务端零改动）
+    // 行内"匹配范围"列按输入值实时回显：* → 全部站点；其余（含 *./裸域）→ 域名及所有子域
+    function linkWlScopeText(item) {
+        return item.trim().toLowerCase() === '*' ? '全部站点（放行一切）' : '域名及所有子域';
+    }
+
+    function linkWlRenderRow(item) {
+        var tbody = $('linkwl-tbody');
+        var tr = document.createElement('tr');
+        var td1 = document.createElement('td');
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'admin-input linkwl-domain-input';
+        input.value = item;
+        input.style.width = '100%';
+        input.addEventListener('input', function () {
+            td2.textContent = linkWlScopeText(input.value);
+        });
+        td1.appendChild(input);
+        var td2 = document.createElement('td');
+        td2.className = 'linkwl-scope';
+        td2.textContent = linkWlScopeText(item);
+        var td3 = document.createElement('td');
+        var del = document.createElement('button');
+        del.className = 'admin-btn small linkwl-del';
+        del.textContent = '删除';
+        del.addEventListener('click', function () {
+            tr.remove();
+            linkWlRefreshEmpty();
+        });
+        td3.appendChild(del);
+        tr.appendChild(td1);
+        tr.appendChild(td2);
+        tr.appendChild(td3);
+        tbody.appendChild(tr);
+    }
+
+    // 空表占位行（无白名单时显示"未配置"提示，避免空表格观感）
+    function linkWlRefreshEmpty() {
+        var tbody = $('linkwl-tbody');
+        var empty = tbody.querySelector('.linkwl-empty-row');
+        var hasRows = tbody.querySelector('.linkwl-domain-input');
+        if (!hasRows && !empty) {
+            var tr = document.createElement('tr');
+            tr.className = 'linkwl-empty-row';
+            var td = document.createElement('td');
+            td.colSpan = 3;
+            td.textContent = '未配置白名单（所有外域链接均弹安全确认），在下方输入域名后点击"添加"';
+            td.className = 'linkwl-empty-td';
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        } else if (hasRows && empty) {
+            empty.remove();
+        }
+    }
+
+    function loadLinkWhitelist() {
+        api('GET', '/admin/api/link/whitelist').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var tbody = $('linkwl-tbody');
+            tbody.innerHTML = '';
+            var raw = (result.data.list || '').trim();
+            if (raw) {
+                raw.split(/[,\n]/).forEach(function (item) {
+                    if (item.trim()) linkWlRenderRow(item.trim());
+                });
+            }
+            linkWlRefreshEmpty();
+            $('linkwl-source-tip').textContent = result.data.is_default ? '当前状态：未配置白名单（所有外域链接均弹安全确认）' : '当前状态：已配置白名单（命中链接直接打开，卡片显示安全标识）';
+            $('linkwl-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 添加：行内粗校验（非空/去重提示/长度），格式细节以服务端保存校验归口为准
+    function linkWlAddRow() {
+        var input = $('linkwl-new');
+        var v = input.value.trim().toLowerCase();
+        if (!v) { showToast('请输入域名'); return; }
+        if (v.length > 253) { showToast('域名长度超限（上限 253 字符）'); return; }
+        var dup = Array.prototype.some.call(document.querySelectorAll('.linkwl-domain-input'), function (el) {
+            return el.value.trim().toLowerCase() === v;
+        });
+        if (dup) { showToast('该域名已在白名单'); return; }
+        linkWlRenderRow(v);
+        linkWlRefreshEmpty();
+        input.value = '';
+        input.focus();
+    }
+    $('linkwl-add').addEventListener('click', linkWlAddRow);
+    $('linkwl-new').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); linkWlAddRow(); }
+    });
+
+    // 保存：收集全部行内输入 → 归一为逗号串（空项跳过；`*` 单独一项时其余项冗余但无害，
+    // 服务端归一保留）→ PUT 整串热生效；服务端逐项格式校验，非法项返回错误文案
+    $('linkwl-save').addEventListener('click', function () {
+        var items = [];
+        document.querySelectorAll('.linkwl-domain-input').forEach(function (el) {
+            var v = el.value.trim().toLowerCase();
+            if (v) items.push(v);
+        });
+        var raw = items.join(',');
+        if (raw.length > 8000) { showToast('白名单内容过长'); return; }
+        api('PUT', '/admin/api/link/whitelist', { list: raw }).then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '白名单保存失败');
+                return;
+            }
+            showToast('白名单已保存并热生效');
+            loadLinkWhitelist(); // 回读刷新归一值（服务端剥 *. 前缀等）与状态标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 
     function agentSetAddCmd() {

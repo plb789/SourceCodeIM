@@ -23145,10 +23145,49 @@
     // 自绘链接安全确认面板（微信同款"即将打开外部页面"）：所有外域链接（正文链接与网页卡片）
     // 点击统一归口，显示目标域名与完整 URL，用户确认后 window.open（三端归口：
     // APP 端被 mobile.js 劫持走自绘内置浏览层；PC 端 Electron 外开系统浏览器；WEB 端新标签）。
-    // 全自绘 DOM（禁止系统弹窗），Esc/点遮罩关闭；复制走 copyTextToClipboard 归口
+    // 全自绘 DOM（禁止系统弹窗），Esc/点遮罩关闭；复制走 copyTextToClipboard 归口。
+    // 阶段二百七十五：命中后台白名单的可信域名跳过确认直接打开（admin「链接安全」配置归口）
     var linkConfirmMask = null;
 
+    // 链接域名白名单客户端缓存（/api/link/whitelist 公开拉取；60s TTL，管理员保存后
+    // 全端最迟一个缓存周期生效；拉取失败保持旧值——首次失败为空白名单=全部弹确认，安全侧）
+    var linkWlState = { raw: null, ts: 0 };
+    var LINK_WL_TTL = 60000;
+
+    function ensureLinkWhitelist() {
+        if (linkWlState.raw !== null && Date.now() - linkWlState.ts < LINK_WL_TTL) return;
+        fetch('/api/link/whitelist', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+            // 服务端 adminJSON 包装结构 {ok, data:{list}}，白名单串在 data.list
+            if (d && d.data && typeof d.data.list === 'string') {
+                linkWlState.raw = d.data.list;
+                linkWlState.ts = Date.now();
+            }
+        }).catch(function () { /* 保持旧值，下次点击重试 */ });
+    }
+
+    // 白名单匹配（与服务端 linkWlMatched 同规则）：项 `*` 放行一切；
+    // 其余项匹配自身或任意层级子域（*. 前缀解析期剥平）；仅按 hostname 匹配（无端口）
+    function linkHostWhitelisted(urlStr) {
+        var host = '';
+        try { host = new URL(urlStr).hostname.toLowerCase(); } catch (e) { return false; }
+        if (!host || linkWlState.raw === null) return false;
+        var items = linkWlState.raw.split(/[,\n]/);
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i].trim().toLowerCase().replace(/^\*\./, '');
+            if (!item) continue;
+            if (item === '*' || host === item || host.slice(-(item.length + 1)) === '.' + item) return true;
+        }
+        return false;
+    }
+    ensureLinkWhitelist(); // 预热：登录页/主界面加载即拉取，首击链接即有现值判定
+
     function openLinkConfirm(url) {
+        // 阶段二百七十五：命中白名单直接打开（缓存过期时后台刷新，本击按现值判定，点击零延迟）
+        ensureLinkWhitelist();
+        if (linkHostWhitelisted(url)) {
+            window.open(url, '_blank');
+            return;
+        }
         closeLinkConfirm();
         var host = '';
         try { host = new URL(url).hostname; } catch (e) { host = url; }
@@ -23258,6 +23297,17 @@
         dom.className = 'web-card-domain';
         dom.textContent = card.domain || '';
         site.appendChild(dom);
+        // 阶段二百七十六：白名单命中的卡片显示安全标识（微信安全绿盾同款，紧贴"网页"徽标）；
+        // 悬浮提示用纯 CSS 自绘气泡（禁系统 tooltip）。构建时顺带触发白名单缓存刷新（幂等），
+        // 缓存未就绪的边缘场景（首屏渲染早于预热返回）该卡不显示标识，下次渲染补上
+        ensureLinkWhitelist();
+        if (linkHostWhitelisted(card.url)) {
+            var safe = document.createElement('span');
+            safe.className = 'web-card-safe';
+            safe.setAttribute('data-tip', I18N.t('已加入网站白名单，可放心访问'));
+            safe.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z"/></svg>';
+            site.appendChild(safe);
+        }
         var badge = document.createElement('span');
         badge.className = 'web-card-badge';
         badge.textContent = I18N.t('网页');
@@ -23325,24 +23375,39 @@
     }
 
     // CARD_UPDATE(106)：实时卡片元数据回填——按 msg_id 原位把纯 URL 气泡升级为网页卡片
-    // （原位 replaceWith 零闪烁；不匹配当前会话的帧直接丢弃——card 已落库，历史加载兜底）
+    // （原位 replaceWith 零闪烁；不匹配当前会话的帧直接丢弃——card 已落库，历史加载兜底）。
+    // 会话归属判定与私聊/群聊帧结构对齐：群聊帧 to_user 为群编码（gN），全员共用同帧按群编码
+    // 匹配；私聊帧按"自己发的取 to_user / 收到的取 from_user"取会话对方
     IMSocket.on(MSG.CARD_UPDATE, function (msg) {
         var card = null;
         try { card = JSON.parse(msg.content); } catch (e) { return; }
         if (!card || !card.url || !msg.msg_id) return;
         var isMine = msg.from_user === IMSocket.getUsername();
-        var target = isMine ? (msg.to_user || '') : (msg.from_user || '');
+        var frameTo = msg.to_user || '';
+        var target;
+        if (isGroupTarget(frameTo)) {
+            target = frameTo; // 群聊帧：接收者与发送者视角统一按群编码归属
+        } else {
+            target = isMine ? frameTo : (msg.from_user || '');
+        }
         if (target !== currentChatUser) return;
         var el = messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]');
         if (!el || el.classList.contains('web-card-row')) return; // 已是卡片（多端/群重复帧去重）
         var ts = parseInt(el.getAttribute('data-ts'), 10) || 0;
-        var isPrivate = !!target && !isGroupTarget(target);
+        var isPrivate = !isGroupTarget(target);
         var row = webCardBuildBubbleEl(el.getAttribute('data-from') || msg.from_user, card, isMine ? 'self' : 'other', isPrivate);
         row.setAttribute('data-msg-id', msg.msg_id);
         row.setAttribute('data-from', el.getAttribute('data-from') || msg.from_user);
         row.setAttribute('data-ts', ts);
         var raw = el.getAttribute('data-raw');
         if (raw) row.setAttribute('data-raw', raw);
+        // 已读/未读状态迁移：原文本气泡自带 .msg-status（自己发的私聊消息），replaceWith 后
+        // 状态行不重建，原样搬移保持已读回执显示连续（卡片行结构与文本行同构）
+        var oldStatus = el.querySelector('.msg-status');
+        if (oldStatus) {
+            var newBody = row.querySelector('.message-body');
+            if (newBody) newBody.appendChild(oldStatus);
+        }
         row.classList.add('web-card-row');
         el.replaceWith(row);
     });

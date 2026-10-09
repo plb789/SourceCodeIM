@@ -66,6 +66,7 @@
                 <button class="admin-nav-item" data-view="fileshares">分享管理</button>
                 <button class="admin-nav-item" data-view="uploads">聊天附件管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
+                <button class="admin-nav-item" data-view="linksec">链接安全</button>
             </nav>
             <div class="admin-side-foot">
                 <span id="admin-current-user" class="admin-current-user"></span>
@@ -725,6 +726,43 @@
                 <div class="agentset-actions">
                     <button id="compress-save" class="admin-btn primary">保存压缩设置</button>
                     <span id="compress-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            <!-- 阶段二百七十五：链接安全（链接域名白名单热更，归口 server/linkwhitelist.go；命中免安全确认直接打开） -->
+            <!-- 阶段二百七十六：白名单改表格化管理——已入库域名逐行展示（行内输入框常态可编辑）+ 单行删除 + 追加 + 统一保存，复用整串读写接口（GET/PUT 归一串，服务端零改动） -->
+            <section id="admin-view-linksec" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>链接安全</h2>
+                    <span id="linkwl-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">链接域名白名单：聊天消息中的外域链接点击时默认弹出自绘安全确认面板（微信同款），命中白名单的链接跳过确认直接打开，且网页卡片上显示绿色安全标识。保存后立即热生效（无需重启服务端），客户端拉取缓存约 1 分钟内同步（重新打开会话或重启客户端立即生效）；设置持久化保存，重启后保持。表格清空并保存表示未配置白名单（所有外域链接均弹安全确认）。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">链接域名白名单（已入库）</h3>
+                    <div class="linkwl-table-wrap">
+                        <table class="vec-table linkwl-table">
+                            <thead>
+                                <tr>
+                                    <th class="vec-th-content">域名</th>
+                                    <th>匹配范围</th>
+                                    <th style="width:90px">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="linkwl-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div class="agentset-row" style="margin-top:12px">
+                        <label class="agentset-label" for="linkwl-new" title="支持 * 放行一切；*.example.com 放行该域名及任意层级子域；裸域名与 *.域名 同语义">添加域名</label>
+                        <input type="text" id="linkwl-new" class="admin-input" style="flex:1" placeholder="如 *.example.com、example.com，或 * 放行一切（不推荐）">
+                        <button id="linkwl-add" class="admin-btn">添加</button>
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-sub-tip">匹配规则：* 放行一切外域链接；*.example.com 放行 example.com 及其任意层级子域；裸域名与 *.域名 同语义；仅按域名匹配（忽略协议与端口）。最多 100 条。回车键快捷添加。</span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="linkwl-save" class="admin-btn primary">保存白名单</button>
+                    <span id="linkwl-source-tip" class="agentset-sub-tip"></span>
                 </div>
             </section>
 

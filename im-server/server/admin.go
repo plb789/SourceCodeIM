@@ -160,6 +160,11 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /api/share/client-dl", handleShareClientDlGet)
 	http.HandleFunc("GET /admin/api/share/clientdl", s.adminGuard(s.handleAdminShareClientDlGet))
 	http.HandleFunc("PUT /admin/api/share/clientdl", s.adminGuard(s.handleAdminShareClientDlSave))
+	// 阶段二百七十五：链接域名白名单热更设置（命中免安全确认直接打开，归口 linkwhitelist.go）
+	http.HandleFunc("GET /admin/api/link/whitelist", s.adminGuard(s.handleAdminLinkWhitelistGet))
+	http.HandleFunc("PUT /admin/api/link/whitelist", s.adminGuard(s.handleAdminLinkWhitelistSave))
+	// 用户端公开只读拉取（客户端登录后预热缓存，命中白名单的链接免安全确认直接打开）
+	http.HandleFunc("GET /api/link/whitelist", s.handleLinkWhitelistPublic)
 	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）
 	http.HandleFunc("GET /admin/api/drive/stats", s.adminGuard(s.handleAdminDriveStats))
 	http.HandleFunc("GET /admin/api/drive/files", s.adminGuard(s.handleAdminDriveFiles))

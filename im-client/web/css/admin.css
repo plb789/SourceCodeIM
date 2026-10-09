@@ -877,6 +877,34 @@ td .skel-line {
     width: 38%;
 }
 
+/* 阶段二百七十六：链接安全白名单表格（复用 vec-table 基础；列少行短，收窄最小宽度） */
+.linkwl-table {
+    min-width: 0;
+}
+
+.linkwl-table-wrap {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: auto;
+}
+
+.linkwl-table .linkwl-domain-input {
+    padding: 5px 9px;
+    font-size: 13px;
+}
+
+.linkwl-table .linkwl-scope {
+    color: var(--text-light);
+    white-space: nowrap;
+}
+
+.linkwl-table .linkwl-empty-td {
+    color: var(--text-light);
+    text-align: center;
+    padding: 22px 12px;
+}
+
 /* 单元格细节：文件名截断省略 / 数字列右对齐等宽 / 空数据行 */
 .vec-td-nowrap {
     white-space: nowrap;
