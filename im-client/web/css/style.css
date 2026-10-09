@@ -17743,41 +17743,15 @@ html.m .dsm-list {
     flex-shrink: 0;
 }
 
-/* 阶段二百七十六：白名单安全标识（微信安全绿盾同款，紧贴"网页"徽标左侧；
-   悬浮自绘提示气泡——禁系统 tooltip，深浅主题跟随变量） */
+/* 阶段二百七十六：白名单安全标识（微信安全绿盾同款，紧贴"网页"徽标左侧）；
+   悬浮提示归口 tooltip.js 全局自绘气泡（data-tip-text）——fixed 挂 body 定位不被消息列表
+   滚动容器裁剪，下方放不下自动翻转；点击盾牌主动展示 2.5s（触屏无 hover 的查看入口） */
 .web-card-safe {
     display: inline-flex;
     align-items: center;
     color: var(--primary);
     flex-shrink: 0;
-    position: relative;
-    cursor: default;
-}
-
-.web-card-safe::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: calc(100% + 6px);
-    right: 0;
-    background: var(--panel-bg);
-    color: var(--text);
-    font-size: 11px;
-    line-height: 1.4;
-    padding: 5px 9px;
-    border-radius: 6px;
-    border: 0.5px solid var(--border);
-    box-shadow: var(--shadow-pop);
-    white-space: nowrap;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.12s;
-    pointer-events: none;
-    z-index: 10;
-}
-
-.web-card-safe:hover::after {
-    opacity: 1;
-    visibility: visible;
+    cursor: pointer;
 }
 
 /* 右侧缩略图（加载成功才展示占位；加载中透明不闪白） */

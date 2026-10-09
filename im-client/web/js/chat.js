@@ -23298,14 +23298,20 @@
         dom.textContent = card.domain || '';
         site.appendChild(dom);
         // 阶段二百七十六：白名单命中的卡片显示安全标识（微信安全绿盾同款，紧贴"网页"徽标）；
-        // 悬浮提示用纯 CSS 自绘气泡（禁系统 tooltip）。构建时顺带触发白名单缓存刷新（幂等），
-        // 缓存未就绪的边缘场景（首屏渲染早于预热返回）该卡不显示标识，下次渲染补上
+        // 悬浮提示走 tooltip.js 全局自绘气泡（data-tip-text 归口，禁系统 tooltip）：
+        // fixed 挂 body 定位，首条卡片贴顶时不再被消息列表滚动容器裁剪（下方放不下自动翻转到上方）；
+        // 点击盾牌主动展示 2.5s（触屏无 hover 的查看入口；stopPropagation 不触发打开链接）。
+        // 构建时顺带触发白名单缓存刷新（幂等），缓存未就绪的边缘场景该卡不显示标识，下次渲染补上
         ensureLinkWhitelist();
         if (linkHostWhitelisted(card.url)) {
             var safe = document.createElement('span');
             safe.className = 'web-card-safe';
-            safe.setAttribute('data-tip', I18N.t('已加入网站白名单，可放心访问'));
+            safe.setAttribute('data-tip-text', I18N.t('已加入网站白名单，可放心访问'));
             safe.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z"/></svg>';
+            safe.addEventListener('click', function (e) {
+                e.stopPropagation(); // 点击图标=查看安全说明，不冒泡打开链接（点卡片其他区域仍打开）
+                if (window.imTipShow) window.imTipShow(safe, 2500);
+            });
             site.appendChild(safe);
         }
         var badge = document.createElement('span');

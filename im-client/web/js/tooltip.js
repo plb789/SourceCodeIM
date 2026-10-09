@@ -94,9 +94,24 @@
 
     function hide() {
         if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+        if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
         curTarget = null;
         if (tipEl) tipEl.classList.remove('show');
     }
+
+    // 阶段二百七十六：主动显示接口——触屏无 hover 场景（如网页卡片安全图标点击查看说明）。
+    // 复用委托链路的 show/place 定位（fixed 挂 body，脱离滚动容器裁剪，下方放不下自动翻转）；
+    // autoHideMs>0 时定时自动收起（触屏点击后无 mouseout，需兜底收起），重复调用重置计时
+    var autoTimer = null;
+    window.imTipShow = function (target, autoHideMs) {
+        if (!target || target.nodeType !== 1) return;
+        hide();
+        curTarget = target;
+        show(target);
+        if (autoHideMs > 0) {
+            autoTimer = setTimeout(hide, autoHideMs);
+        }
+    };
 
     document.addEventListener('mouseover', function (e) {
         var el = findTarget(e.target);
