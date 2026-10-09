@@ -112,6 +112,18 @@
         var LARGE_PPTX_BYTES = 50 * 1024 * 1024; // 超过 50MB 视为超大文件，预览前先确认
 
         function fmtMB(n) { return (n / 1048576).toFixed(1); }
+        // 阶段二百八十三补（实测修复"预览仍重复下载"）：本页运行于主窗口 iframe 内，Capacitor 桥
+        // 与 P2PFile 均只注入/定义在主 frame——iframe 里 window.P2PFile 必为 undefined，缓存分支
+        // 永远被跳过。同源 iframe 回退到父窗口取用（cacheRead/cacheWrite 函数体闭包绑定主 frame
+        // 的 window，其内部 window.Capacitor/插件天然可达，跨 frame 调用安全）
+        var CAP = window.Capacitor || (function () { try { return window.parent && window.parent.Capacitor || null; } catch (_) { return null; } })();
+        var P2P = window.P2PFile || (function () { try { return window.parent && window.parent.P2PFile || null; } catch (_) { return null; } })();
+        // 阶段二百八十三：从 URL 提取文件名（APP 本地缓存键辅助；键主体为完整 URL，name 仅扩展名回退）
+        function urlName(u) {
+            var p = String(u || '').split('?')[0].split('#')[0];
+            try { p = decodeURIComponent(p); } catch (_) {}
+            return p.substring(p.lastIndexOf('/') + 1) || 'file';
+        }
         function setLoadMsg(txt) {
             loadingEl.style.display = '';
             loadingEl.textContent = txt;
@@ -155,6 +167,13 @@
                     setLoadMsg('正在下载 ' + pct.toFixed(0) + '%（' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' MB）');
                     syncBar(pct, '下载中 ' + pct.toFixed(0) + '%');
                 };
+                // 阶段二百八十三：缓存命中预注入数据（__im_predata__ 标记 URL）——不走 XHR 零网络，
+                // 直接以 Uint8Array 的 buffer 进入 preInflate/JSZip 既有管线
+                if (url === '__im_predata__' && window.__imPreData) {
+                    var pd = window.__imPreData;
+                    done(null, pd.buffer.slice(pd.byteOffset, pd.byteOffset + pd.byteLength));
+                    return;
+                }
                 try {
                     var x = new XMLHttpRequest();
                     x.open('GET', url, true);
@@ -163,6 +182,12 @@
                     x.onreadystatechange = function () {
                         if (x.readyState !== 4) return;
                         if (x.status === 200 || x.status === 0) {
+                            // 阶段二百八十三：APP 端下载完成回写本地缓存（微信同款——下次预览零下载
+                            // 秒开，预览页右上"下载"按钮经 openCached 同键命中；写盘 4MB 分片异步
+                            // 进行不阻塞解析；blob:/data: 源内部自动跳过不缓存）
+                            if (CAP && P2P && P2P.cacheWrite) {
+                                try { P2P.cacheWrite(url, urlName(url), new Blob([x.response])); } catch (_) {}
+                            }
                             done(null, x.response);
                         } else {
                             done(new Error('Ajax error for ' + url + ' : ' + x.status + ' ' + x.statusText));
@@ -495,8 +520,34 @@
             renderPptx(fileUrl);
         }
 
-        // 渲染归口（查询参数与 postMessage 双入口共用）：先探测大小 → 超大文件确认 → 渲染
+        // 渲染归口（查询参数与 postMessage 双入口共用）：APP 端先查本地缓存 → 探测大小 → 超大确认 → 渲染
+        var CACHE_READ_MAX = 25 * 1024 * 1024; // 缓存读回上限：Filesystem.readFile 内存 ≈ 体积×3.7，超限走系统打开
         function renderPptx(u) {
+            // 阶段二百八十三：APP 端本地缓存命中——小文件读缓存直渲染（零下载，微信同款秒开）；
+            // 超大文件（实测 161.9MB 读回即 OOM 闪退）不再解析，直接系统打开已缓存文件（微信同款
+            // 大文件交本地应用），页内仅提示去向
+            if (CAP && P2P && P2P.cacheRead &&
+                u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
+                setLoadMsg('正在检查本地缓存…');
+                P2P.cacheRead(u, urlName(u), CACHE_READ_MAX).then(function (r) {
+                    if (r && r.tooBig) {
+                        setLoadMsg('文件较大（约 ' + fmtMB(r.size) + ' MB），已改用本地应用打开');
+                        if (P2P.openCached) P2P.openCached(u, urlName(u));
+                        return;
+                    }
+                    if (r) {
+                        setLoadMsg('已从本地缓存读取…');
+                        window.__imPreData = r; // Uint8Array 直注管线：省 Blob 构造与 blob: XHR 两份整文件拷贝
+                        startRender('__im_predata__');
+                        return;
+                    }
+                    renderPptxNet(u);
+                }).catch(function () { renderPptxNet(u); });
+                return;
+            }
+            renderPptxNet(u);
+        }
+        function renderPptxNet(u) {
             setLoadMsg('正在获取文件信息…');
             probeSize(u, function (n) {
                 if (n > LARGE_PPTX_BYTES) { askBig(u, n); return; }

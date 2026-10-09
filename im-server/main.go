@@ -255,7 +255,12 @@ func main() {
 		// 阶段二百六十三：头像强缓存——头像文件名上传时含纳秒时间戳+随机数全局唯一，
 		// 换头像必然换 URL，按 URL 永久缓存不存在陈旧风险，immutable 后浏览器/手机 WebView
 		// 二次启动直接读本地磁盘缓存零回源（微信同款：头像首次下载后本地秒出）
-		if strings.HasPrefix(r.URL.Path, "/static/avatar/") {
+		// 阶段二百八十一：聊天文件强缓存同款语义——上传文件名同样含纳秒时间戳+随机数全局
+		// 唯一、内容与 URL 一一不可变（转发/多端复用同 URL），immutable 后二次预览（pptx/doc
+		// 预览页 XHR）、二次下载（fetch）直接读 WebView/浏览器磁盘缓存零回源（微信同款：
+		// 已下载文件点开秒出，不再每次重新下载）。注：阶段一百六十超期物理清理后 URL 失效，
+		// 历史消息本已不可点，缓存命中无陈旧风险。
+		if strings.HasPrefix(r.URL.Path, "/static/avatar/") || strings.HasPrefix(r.URL.Path, "/static/upload/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")

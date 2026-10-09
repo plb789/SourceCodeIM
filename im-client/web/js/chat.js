@@ -2553,9 +2553,10 @@
                 } else if (action === 'saveas') {
                     // 阶段一百三十四：文件消息右键另存为——<a download> 在 Electron 会话
                     // will-download 默认行为即弹出系统"另存为"对话框（文件名预填）
+                    // 阶段二百八十二：APP 端 saveMode=true 仅保存到 Documents 不弹打开（微信同款）
                     var fb = msgTarget.querySelector('.bubble-file[data-url]');
                     if (fb) {
-                        imDownload(fb.getAttribute('data-url') || '', (fb.querySelector('.file-name') || {}).textContent || 'file');
+                        imDownload(fb.getAttribute('data-url') || '', (fb.querySelector('.file-name') || {}).textContent || 'file', 0, true);
                     }
                 } else if (action === 'drivesave') {
                     // 阶段一百六十八：聊天文件转存网盘——
@@ -3389,7 +3390,22 @@
     // 驻留 ≈ 体积×4.3，161.9MB 文件下载完成瞬间冲爆 WebView 堆（APP 闪退）。现改
     // P2PFile.downloadFromUrl 流式直写磁盘（恒定内存），浮层进度由 onProgress 驱动。
     // open=true 下载完成系统打开（微信同款）；open=false 仅保存（"保存到设备"图标）。
+    // 阶段二百八十一：微信同款缓存——open 模式先查本地缓存，命中直接系统打开（秒开零下载）；
+    // 未命中流式下载写入缓存目录（URL 为键，转发副本同 URL 复用同缓存）。
+    // 阶段二百八十二：新增 saveMode（仅保存语义）——①先查 dlActive 再查缓存：下载中的半成品
+    // 已落盘，若先查缓存会 stat 命中把损坏文件直接打开；②另存为/多选保存传 saveMode=true
+    // （open=false 仅保存到 Documents，不逐个弹系统打开——微信多选保存同款）。
     function appDownloadWithProgress(url, name, open) {
+        if (dlActive[url]) { showToast(I18N.t('该文件正在下载中')); return; }
+        if (open !== false && window.P2PFile.openCached) {
+            window.P2PFile.openCached(url, name).then(function (hit) {
+                if (!hit) startAppStreamDownload(url, name, open);
+            });
+            return;
+        }
+        startAppStreamDownload(url, name, open);
+    }
+    function startAppStreamDownload(url, name, open) {
         if (dlActive[url]) { showToast(I18N.t('该文件正在下载中')); return; }
         dlActive[url] = true;
         var task = dlTaskCreate(name);
@@ -3412,18 +3428,29 @@
     // 本地源（blob:/data:）→ P2PFile.openFromUrl 秒完成；服务端文件 → 流式直写磁盘+进度浮层
     // （阶段二百八十：微信同款——全程可见进度、可取消，完成后保存并系统打开，恒定内存不闪退）。
     // PC/WEB 端：本地源直下；服务端文件走进度下载，完成后弹系统保存对话框。
-    // 声明式定义（hoisting）：多选下载（1848 行）等早于本行的调用点同样可用。
-    function imDownload(url, name, delayMs) {
+    // 声明式定义（hoisting）：多选下载（triggerSelDownload）等早于本行的调用点同样可用。
+    // 阶段二百八十二：第 4 参 saveMode——true=仅保存语义（APP 端落 Documents 不弹打开；
+    // 另存为/多选保存归口），缺省=下载并打开（卡片点击/预览页下载，微信同款）。
+    function imDownload(url, name, delayMs, saveMode) {
         setTimeout(function () {
             if (window.Capacitor && url && window.P2PFile && window.P2PFile.openFromUrl) {
+                var appOpen = !saveMode;
                 if (url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) {
-                    window.P2PFile.openFromUrl(url, name); // 本地内存源秒完成，无网络进度
+                    if (appOpen) {
+                        window.P2PFile.openFromUrl(url, name); // 本地内存源秒完成，无网络进度
+                    } else {
+                        // 阶段二百八十二：blob 源仅保存——fetch 本机内存 blob → 分块写 Documents（不打开）
+                        fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+                            if (window.P2PFile.writeBlob) window.P2PFile.writeBlob(b, name);
+                            else window.P2PFile.saveBlob(b, name); // 旧版兼容兜底（保存并打开）
+                        });
+                    }
                 } else if (window.P2PFile.downloadFromUrl) {
-                    appDownloadWithProgress(url, name, true);
+                    appDownloadWithProgress(url, name, appOpen);
                 } else if (window.P2PFile.openBlob) {
                     downloadWithProgress(url, name, function (b) { window.P2PFile.openBlob(b, name); }); // 旧版兼容兜底
                 } else {
-                    window.P2PFile.openFromUrl(url, name);
+                    window.P2PFile.openFromUrl(url, name, appOpen ? undefined : false);
                 }
                 return;
             }
@@ -3486,8 +3513,9 @@
     });
 
     // 触发浏览器下载（统一 imDownload 归口；多文件间隔 200ms 防浏览器连发限流）
+    // 阶段二百八十二：多选"保存到电脑"= 仅保存语义（APP 端落 Documents 不逐个弹打开，微信同款）
     function triggerSelDownload(url, name, delayMs) {
-        imDownload(url, name, delayMs);
+        imDownload(url, name, delayMs, true);
     }
 
     // 保存到电脑：图片/文件逐个下载，文本消息汇总为 txt（仅存在文本消息时生成）
@@ -24136,6 +24164,25 @@
     // 通过 iframe 隔离：预览库的全局变量（JSZip v2/v3、jQuery、d3）不污染主应用，主应用也无需加载这批库
     function openDocPreview(url, name) {
         if (!url) return;
+        // 阶段二百八十三：APP 端大文件不进在线预览（微信同款）——预览页对未缓存大文件仍提供
+        // "确定在线解析"入口，161.9MB 级文件解析即 OOM 闪退（MuMu 实测三次稳定复现）。
+        // 归口在入口处：HEAD 探测 content-length，>25MB 直接走 imDownload（流式下载+缓存+
+        // FileOpener 系统打开，内存恒定）；HEAD 不可用（跨域 405 等）落原预览逻辑不劣化。
+        if (window.Capacitor && url && url.indexOf('blob:') !== 0 && url.indexOf('data:') !== 0 &&
+            /\.(docx|xlsx|pptx|pdf)($|\?)/i.test(name || url)) {
+            try {
+                fetch(url, { method: 'HEAD' }).then(function (r) {
+                    var len = parseInt((r.headers && r.headers.get('content-length')) || '0', 10) || 0;
+                    if (len > 25 * 1024 * 1024) {
+                        showToast(I18N.t('文件较大，正在下载并使用本地应用打开'));
+                        imDownload(url, name);
+                        return;
+                    }
+                    openDocPreviewFallback(url, name);
+                }).catch(function () { openDocPreviewFallback(url, name); });
+                return;
+            } catch (e) { /* HEAD 不可用落原逻辑 */ }
+        }
         // 阶段一百三十四：PC 端改走独立文档查看器窗口（用户需求：窗体弹窗遮挡聊天页，与图片查看器
         // 同款新窗口打开，支持置顶/拖动/下载/Esc 关闭）；浏览器与手机 APP 无 desktop 桥，
         // 落入下方弹窗 fallback（原实现注释保留）。
@@ -24178,7 +24225,7 @@
         if (/\.pdf($|\?)/.test(lname)) {
             if (window.Capacitor) {
                 // 阶段二百二十一：Android WebView 无内置 PDF 查看器——pdf.js 逐页渲染（doc-preview 内置分支）
-                frame.src = '/doc-preview.html?type=pdf&url=' + encodeURIComponent(url) + '&pv=1.2';
+                frame.src = '/doc-preview.html?type=pdf&url=' + encodeURIComponent(url) + '&pv=1.5';
             } else {
                 // 阶段一百三十四：PDF 预览——iframe 直指 URL 交 Chromium 内置 PDFium 渲染（主窗口
                 // plugins:true 已启用），无需解析页
@@ -24188,7 +24235,7 @@
             var ext = lname.match(/\.(docx|xlsx|pptx)/);
             var page = (ext && ext[1] === 'pptx') ? 'pptx-preview.html' : 'doc-preview.html';
             var type = (ext && ext[1]) || 'docx';
-            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url) + '&pv=1.2';
+            frame.src = '/' + page + '?type=' + type + '&url=' + encodeURIComponent(url) + '&pv=1.5';
         }
         holder.appendChild(frame);
         document.getElementById('doc-editor-mask').classList.remove('hidden');

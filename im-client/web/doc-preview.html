@@ -145,17 +145,58 @@
         }
 
         // 加载并渲染（查询参数与 postMessage 双入口共用归口）
+        // 阶段二百八十三：APP 端先查本地缓存——命中读缓存直渲染（零下载，微信同款第二次打开
+        // 秒开）；未命中走原 fetch 下载，完成后回写缓存（预览页右上"下载"按钮经 openCached 同键命中）
+        // 阶段二百八十三补：本页运行于主窗口 iframe 内，Capacitor 桥与 P2PFile 均只在主 frame
+        // ——iframe 里 window.P2PFile 必为 undefined，缓存分支永远被跳过。同源回退父窗口取用
+        var CAP = window.Capacitor || (function () { try { return window.parent && window.parent.Capacitor || null; } catch (_) { return null; } })();
+        var P2P = window.P2PFile || (function () { try { return window.parent && window.parent.P2PFile || null; } catch (_) { return null; } })();
+        function urlName(u) {
+            var p = String(u || '').split('?')[0].split('#')[0];
+            try { p = decodeURIComponent(p); } catch (_) {}
+            return p.substring(p.lastIndexOf('/') + 1) || 'file';
+        }
         function loadAndRender(u) {
+            if (CAP && P2P && P2P.cacheRead &&
+                u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
+                loadingEl.textContent = '正在检查本地缓存…';
+                // 阶段二百八十三：小文件读缓存直渲染（零下载秒开）；超大文件拒绝读回（Filesystem.readFile
+                // 内存 ≈ 体积×3.7，161.9MB 实测 OOM 闪退）——微信同款直接系统打开已缓存文件
+                P2P.cacheRead(u, urlName(u), 25 * 1024 * 1024).then(function (r) {
+                    if (r && r.tooBig) {
+                        loadingEl.textContent = '文件较大（约 ' + (r.size / 1048576).toFixed(1) + ' MB），已改用本地应用打开';
+                        if (P2P.openCached) P2P.openCached(u, urlName(u));
+                        return;
+                    }
+                    if (r) {
+                        loadingEl.textContent = '已从本地缓存读取…';
+                        renderBuf(r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength));
+                        return;
+                    }
+                    loadAndRenderNet(u);
+                }).catch(function () { loadAndRenderNet(u); });
+                return;
+            }
+            loadAndRenderNet(u);
+        }
+        function loadAndRenderNet(u) {
             fetch(u).then(function (res) {
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 return res.arrayBuffer();
             }).then(function (buf) {
-                if (type === 'xlsx') renderXlsx(buf);
-                else if (type === 'pdf') renderPdf(buf);
-                else renderDocx(buf);
+                // 阶段二百八十三：APP 端下载完成回写本地缓存（分片异步写盘不阻塞渲染；blob:/data: 源内部自动跳过）
+                if (CAP && P2P && P2P.cacheWrite) {
+                    try { P2P.cacheWrite(u, urlName(u), new Blob([buf])); } catch (_) {}
+                }
+                renderBuf(buf);
             }).catch(function (e) {
                 showError('文档加载失败');
             });
+        }
+        function renderBuf(buf) {
+            if (type === 'xlsx') renderXlsx(buf);
+            else if (type === 'pdf') renderPdf(buf);
+            else renderDocx(buf);
         }
     </script>
 </body>

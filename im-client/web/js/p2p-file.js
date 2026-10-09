@@ -698,6 +698,7 @@
     }
     // 阶段一百五十九补：手动清理（设置-网络"缓存清理"按钮）——清空 IndexedDB 全部缓存 +
     // PC 端磁盘缓存目录（web 端无桥仅清 IDB，disk 返回 null）；清理后历史卡片回填失效回到原提示
+    // 阶段二百八十一：追加清空 APP 下载缓存目录（imfile/，微信同款"清理缓存"语义）
     function cacheClear() {
         var idbDone = dbOpen().then(function (db) {
             if (!db) return false;
@@ -716,8 +717,16 @@
                 return !!(r && r.ok);
             }).catch(function () { return false; });
         }
-        return Promise.all([idbDone, diskDone]).then(function (rs) {
-            return { idb: rs[0] === true, disk: rs[1] === null ? null : rs[1] };
+        // APP 下载缓存目录（不存在的目录 rmdir 抛错 → 视为已清空 true）
+        var Pc = window.Capacitor && window.Capacitor.Plugins;
+        var appCacheDone = null;
+        if (Pc && Pc.Filesystem) {
+            appCacheDone = Pc.Filesystem.rmdir({ path: DL_CACHE_DIR, directory: 'CACHE', recursive: true })
+                .then(function () { return true; })
+                .catch(function () { return true; });
+        }
+        return Promise.all([idbDone, diskDone, appCacheDone]).then(function (rs) {
+            return { idb: rs[0] === true, disk: rs[1] === null ? null : rs[1], appCache: rs[2] === null ? null : rs[2] === true };
         });
     }
 
@@ -823,6 +832,117 @@
         });
     }
 
+    // ===== 阶段二百八十一：下载文件本地缓存（微信同款"点开即看"） =====
+    // 缓存键=服务端文件 URL（上传文件名含纳秒时间戳+随机数全局唯一、内容不可变，转发副本
+    // 同 URL 自动复用同一缓存，微信同款去重）。存 Directory.Cache（系统磁盘紧张可自动回收，
+    // 丢失即重新下载，无一致性风险）；file_paths.xml 已声明 cache-path，FileOpener 可直接
+    // 授权打开。"缓存清理"按钮经 cacheClear 一并清空。
+    var DL_CACHE_DIR = 'imfile';
+    function dlCachePath(url, name) {
+        // 扩展名从 URL 尾段取（转发改名不影响命中），回退 name 后缀
+        var m = (url || '').match(/\.([A-Za-z0-9]{1,8})(?:$|\?)/);
+        var ext = m ? m[1].toLowerCase() : (function () {
+            var n = (name || '').match(/\.([A-Za-z0-9]{1,8})$/);
+            return n ? n[1].toLowerCase() : '';
+        })();
+        return DL_CACHE_DIR + '/' + encodeURIComponent(url || '') + (ext ? '.' + ext : '');
+    }
+    function dlCacheGet(url, name) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        if (!P || !P.Filesystem || !url) return Promise.resolve(null);
+        var FS = P.Filesystem;
+        var path = dlCachePath(url, name);
+        return FS.stat({ path: path, directory: 'CACHE', recursive: true }).then(function () {
+            return FS.getUri({ path: path, directory: 'CACHE' }).then(function (u) {
+                return (u && u.uri) ? { uri: u.uri, path: path } : null;
+            });
+        }).catch(function () { return null; }); // 系统回收/未下载 → null 走下载
+    }
+    // 缓存命中直接系统打开（微信同款秒开，零下载）；未命中返回 false 由调用方走流式下载
+    function openCached(url, name) {
+        return dlCacheGet(url, name).then(function (c) {
+            if (!c || !c.uri || dlWriting[c.path]) return false; // 写入中的半成品视为未命中
+            var P = window.Capacitor && window.Capacitor.Plugins;
+            if (!P || !P.FileOpener) return false;
+            return P.FileOpener.open({ filePath: c.uri, mimeType: extMime(name || 'file') }).then(function () {
+                if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开'));
+                return true;
+            }).catch(function () {
+                if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开（无应用可打开该文件类型）'));
+                return true; // 文件已在本地，打开失败仅提示类型问题，不重复下载
+            });
+        }).catch(function () { return false; });
+    }
+
+    // ===== 阶段二百八十三：预览页缓存读/写归口（在线预览与"下载"按钮共用同一份本地缓存） =====
+    // 读：readFile（base64）→ 分块 atob 转 Blob。分块转换避免整文件 binary 串中间态
+    //（峰值 = base64 串 + 输出 bytes + 单块 ~3MB 串，而非三者整文件叠加冲爆堆——OOM 前车之鉴）。
+    // 写：4MB 分片 append（与 downloadFromUrl 缓存落盘同格式同键，openCached/dlCacheGet 直接命中）。
+    // 供 pptx-preview.html / doc-preview.html 预览前查缓存（微信同款：第二次打开零下载秒开），
+    // 预览下载完成后回写，预览页右上"下载"按钮经 openCached 同键秒开。blob:/data: 不缓存。
+    // dlWriting：按目标路径的写入锁——半成品文件对 cacheRead/openCached 不可见（视为未缓存），
+    // 并发 downloadFromUrl/cacheWrite 同键直接拒绝，杜绝"读到/写出损坏的半截缓存"
+    var dlWriting = {};
+    function cacheRead(url, name, maxBytes) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        if (!P || !P.Filesystem || !url ||
+            url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(null);
+        var FS = P.Filesystem;
+        var path = dlCachePath(url, name);
+        if (dlWriting[path]) return Promise.resolve(null); // 写入中（半成品）→ 视为未缓存走下载
+        return FS.stat({ path: path, directory: 'CACHE', recursive: true }).then(function (s) {
+            var size = (s && s.size) || 0;
+            // 阶段二百八十三：超大缓存文件拒绝整文件读回——Filesystem.readFile 的 Java 侧
+            // byte[] + Base64 字符串双份驻留 ≈ 体积×3.7，161.9MB 即 ~600MB 直接 OOM 闪退
+            //（用户实测"已从本地缓存读取"后闪退）。返回 tooBig 由调用方走系统打开（微信同款：
+            // 大文件不在线解析，交本地应用）。maxBytes 不传则不限制。
+            if (maxBytes && size > maxBytes) {
+                return FS.getUri({ path: path, directory: 'CACHE' }).then(function (u) {
+                    return { tooBig: true, size: size, uri: (u && u.uri) || '' };
+                });
+            }
+            return FS.readFile({ path: path, directory: 'CACHE' }).then(function (r) {
+                var b64 = (r && r.data) || '';
+                if (!b64) return null;
+                var out = new Uint8Array(Math.max(0, Math.floor(b64.length * 3 / 4)));
+                var CH = 4 * 1024 * 1024, pos = 0, i, bin, j; // CH 为 4 的倍数：块边界不截断 base64 编码单元
+                for (i = 0; i < b64.length; i += CH) {
+                    bin = atob(b64.substr(i, CH));
+                    for (j = 0; j < bin.length; j++) out[pos + j] = bin.charCodeAt(j);
+                    pos += bin.length;
+                }
+                return out.subarray(0, pos); // 返回 Uint8Array（不包 Blob：省一份整文件拷贝，调用方按需取 buffer）
+            });
+        }).catch(function () { return null; }); // 未缓存/系统已回收 → null 走下载
+    }
+    function cacheWrite(url, name, blob) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        if (!P || !P.Filesystem || !url || !blob ||
+            url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(false);
+        var FS = P.Filesystem;
+        var path = dlCachePath(url, name);
+        if (dlWriting[path]) return Promise.resolve(false); // 同键已在写入（流式下载/回写中）：拒绝并发写
+        dlWriting[path] = true;
+        return FS.writeFile({ path: path, data: '', directory: 'CACHE', recursive: true }).then(function () {
+            var off = 0;
+            function step() {
+                if (off >= blob.size) return true;
+                var end = Math.min(blob.size, off + WRITE_CHUNK);
+                return blobToB64(blob.slice(off, end)).then(function (b64) {
+                    return FS.writeFile({ path: path, data: b64, directory: 'CACHE', recursive: true, append: true });
+                }).then(function () { off = end; return step(); });
+            }
+            return step();
+        }).catch(function () {
+            // 失败清理半成品：损坏缓存比无缓存更糟（下次命中会解析出错），宁缺勿错
+            FS.deleteFile({ path: path, directory: 'CACHE', recursive: true }).catch(function () {});
+            return false;
+        }).then(function (ok) {
+            delete dlWriting[path];
+            return ok;
+        });
+    }
+
     // ===== 阶段二百八十：流式下载直写磁盘（微信同款大文件安全路径，OOM 修复核心） =====
     // fetch 流式读取 → 2MB 聚合缓冲 → base64 → Filesystem append 落盘，循环至完成。
     // 全程不组装整文件 Blob / arrayBuffer / 巨型 base64（内存恒定 ≈ 单缓冲 5MB）——
@@ -830,10 +950,14 @@
     // OOM 闪退（用户实测）。onProgress(loaded, total) 驱动进度浮层；open=true 完成后
     // FileOpener 系统打开（微信同款），open=false 仅保存。返回 { promise, abort() }：
     // 中止/失败 best-effort 清理半成品文件。
+    // 阶段二百八十一：open 模式写入应用缓存目录（微信同款——下次点开命中缓存秒开零下载）；
+    // save 模式（"保存到设备"图标）仍写 Documents 供用户直接取用。
     var DL_BUF = 2 * 1024 * 1024;
     function downloadFromUrl(url, name, onProgress, open) {
         var P = window.Capacitor && window.Capacitor.Plugins;
         var fname = name || 'file';
+        var destPath = (open === false) ? fname : dlCachePath(url, name);
+        var destDir = (open === false) ? 'DOCUMENTS' : 'CACHE';
         var handle = { promise: null, aborted: false, abort: function () { handle.aborted = true; } };
         if (!P || !P.Filesystem || !url) {
             handle.promise = Promise.reject(new Error('no-plugin'));
@@ -842,11 +966,17 @@
         var FS = P.Filesystem;
         var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
         handle.abort = function () { handle.aborted = true; if (ctrl) ctrl.abort(); };
+        // 阶段二百八十三：同目标路径已在写入（预览回写/重复下载）→ 拒绝，防止并发写损坏
+        if (dlWriting[destPath]) {
+            handle.promise = Promise.reject(new Error('busy'));
+            return handle;
+        }
+        dlWriting[destPath] = true;
         function safeProg(l, t) { if (onProgress) { try { onProgress(l, t); } catch (_) {} } }
         handle.promise = fetch(url, ctrl ? { signal: ctrl.signal } : {}).then(function (res) {
             if (!res.ok) throw new Error('HTTP ' + res.status);
             var total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
-            return FS.writeFile({ path: fname, data: '', directory: 'DOCUMENTS', recursive: true }).then(function (first) {
+            return FS.writeFile({ path: destPath, data: '', directory: destDir, recursive: true }).then(function (first) {
                 var uri = first && first.uri;
                 var pend = [], pendSize = 0, loaded = 0;
                 function flush() {
@@ -854,7 +984,7 @@
                     var blob = new Blob(pend); // 仅 ~2MB 聚合片，恒定内存
                     pend = []; pendSize = 0;
                     return blobToB64(blob).then(function (b64) {
-                        return FS.writeFile({ path: fname, data: b64, directory: 'DOCUMENTS', recursive: true, append: true });
+                        return FS.writeFile({ path: destPath, data: b64, directory: destDir, recursive: true, append: true });
                     }).then(function (w) { if (w && w.uri) uri = w.uri; });
                 }
                 function pump() {
@@ -877,14 +1007,14 @@
                 }
                 return pump().then(function () {
                     if (uri) return { uri: uri };
-                    return FS.getUri({ path: fname, directory: 'DOCUMENTS' }).catch(function () { return { uri: '' }; });
+                    return FS.getUri({ path: destPath, directory: destDir }).catch(function () { return { uri: '' }; });
                 }).then(function (u) {
                     if (open !== false && P.FileOpener && u && u.uri) {
                         return P.FileOpener.open({ filePath: u.uri, mimeType: extMime(fname) }).then(function () {
-                            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存，正在打开…'));
+                            if (window.__imToast) window.__imToast(I18N_COMPAT('已下载，正在打开…'));
                             return { uri: u.uri, bytes: loaded };
                         }).catch(function () {
-                            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents（无法打开该文件类型）'));
+                            if (window.__imToast) window.__imToast(I18N_COMPAT('已下载（无应用可打开该文件类型）'));
                             return { uri: u.uri, bytes: loaded };
                         });
                     }
@@ -894,9 +1024,14 @@
             });
         }).catch(function (err) {
             // 中止/失败：清理半成品（best-effort；首次建文件后才可能残留）
-            FS.deleteFile({ path: fname, directory: 'DOCUMENTS', recursive: true }).catch(function () {});
+            FS.deleteFile({ path: destPath, directory: destDir, recursive: true }).catch(function () {});
             throw err;
         });
+        // 阶段二百八十三：成功/失败双分支释放写入锁（半成品已在上方清理，锁随链路结束失效）
+        handle.promise = handle.promise.then(
+            function (r) { delete dlWriting[destPath]; return r; },
+            function (e) { delete dlWriting[destPath]; throw e; }
+        );
         return handle;
     }
 
@@ -996,6 +1131,12 @@
         },
         // 阶段二百八十：流式下载直写磁盘（大文件恒定内存，chat.js 进度浮层驱动）
         downloadFromUrl: downloadFromUrl,
+        // 阶段二百八十一：下载缓存（微信同款"点开即看"）——命中返回 uri 并系统打开，未命中 false
+        openCached: openCached,
+        dlCacheGet: dlCacheGet,
+        // 阶段二百八十三：预览页缓存读/写归口（pptx-preview.html / doc-preview.html 接入）
+        cacheRead: cacheRead,
+        cacheWrite: cacheWrite,
         // 阶段一百五十九补：手动清理（设置-网络"缓存清理"按钮）
         cacheClear: cacheClear,
         localEnabled: localEnabled,
