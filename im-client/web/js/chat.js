@@ -8150,7 +8150,7 @@
                 var item = document.createElement('div');
                 item.className = 'wb-app-item';
                 item.dataset.wbUrl = a.url;
-                item.dataset.wbMode = a.open_mode === 'system' ? 'system' : 'window';
+                item.dataset.wbMode = (a.open_mode === 'system' || a.open_mode === 'embed') ? a.open_mode : 'window';
                 if (a.remark) item.title = a.remark;
                 var icon = document.createElement('span');
                 icon.className = 'wb-app-icon';
