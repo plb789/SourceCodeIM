@@ -2892,23 +2892,40 @@
 
     // 确认发送：按已选目标循环执行（single 单条 / merge 合并 / multi 逐条），微信同款勾选确认式
     // exitMultiSelect 统一归口（sendMergedForward/sendMultiForward 已移除内部退出，多目标循环可重采）
+    // 阶段二百七十七：结果归口提示——原实现确认即 toast"已转发"（早于异步发送，文件重传失败时
+    // 先误报成功、好友收不到后无从感知）；现等全部目标落地后按实际结果汇总（元数据转发瞬时，无感知延迟）
     fwdSendBtn.addEventListener('click', function () {
         var targets = fwdTargets.slice();
         var el = fwdPendingEl; // 闭包先捕获（closeForwardPicker 会清空引用）
         var mode = fwdMode;
         if (!targets.length) return;
         closeForwardPicker();
+        var jobs = [];
         if (mode === 'merge') {
             // 阶段八十七：多选合并转发——多条打包为一条"聊天记录"信封消息逐目标发送
-            targets.forEach(function (t) { sendMergedForward(t, true); });
+            targets.forEach(function (t) { jobs.push(Promise.resolve(sendMergedForward(t, true) !== false)); });
         } else if (mode === 'multi') {
             // 阶段八十七：逐条转发——按时间顺序逐条原样转发
-            targets.forEach(function (t) { sendMultiForward(t, true); });
+            targets.forEach(function (t) { jobs.push(Promise.resolve(sendMultiForward(t, true))); });
         } else {
-            targets.forEach(function (t) { doForward(el, t, targets.length > 1); });
+            targets.forEach(function (t) { jobs.push(Promise.resolve(doForward(el, t, targets.length > 1))); });
         }
         exitMultiSelect(); // 多选入口打开时归位多选态（幂等，右键单选转发无副作用）
-        showToast(targets.length > 1 ? (I18N.t('已转发给') + targets.length + I18N.t('个目标')) : I18N.t('已转发'));
+        if (mode === 'single' && targets.length === 1) {
+            // 单条单目标：结果提示由 doForward 归口（保留 HTTP 状态详情），不叠加汇总 toast
+            return;
+        }
+        Promise.all(jobs).then(function (rs) {
+            var okCnt = 0;
+            rs.forEach(function (v) { if (v === true) okCnt++; });
+            if (okCnt === targets.length) {
+                showToast(targets.length > 1 ? (I18N.t('已转发给') + targets.length + I18N.t('个目标')) : I18N.t('已转发'));
+            } else if (okCnt > 0) {
+                showToast(I18N.t('已转发给') + okCnt + '/' + targets.length + I18N.t('个目标'));
+            } else {
+                showToast(I18N.t('转发失败'));
+            }
+        });
     });
 
     // 从消息源地址（服务端 URL / 本地 blob / dataURL）重取内容构造 File，复用既有上传链路
@@ -2921,62 +2938,125 @@
         });
     }
 
-    // 执行转发：图片/文件重取后走直传（suppressLocal 防污染当前视图）；文本/引用信封原样重发（服务端回显渲染）
-    // silent：逐条转发（阶段八十七）循环调用时抑制单条 toast，由 sendMultiForward 汇总提示
+    // 阶段二百七十七：微信同款元数据转发归口——服务端文件本体已在 /static/upload（上传时已过
+    // 大小/类型/黑名单校验），转发仅落库消息元数据 + 推送，零字节重传：任意大小文件瞬时完成。
+    // 接收方气泡即时可见，点击卡片时才按需下载（原全量重取+重传：大文件秒级延迟、超上限必败、弱网超时）
+    // 返回 Promise<{ok,status}>，与 sendFileDirect 消费面对齐
+    function forwardFileRef(url, name, target) {
+        var body = { url: url, name: name || '' };
+        if (isGroupTarget(target)) body.group = target;
+        else body.to_user = target;
+        return fetch('/upload/forward?username=' + encodeURIComponent(IMSocket.getUsername()), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).then(function (res) {
+            if (!res.ok) return { ok: false, status: res.status };
+            return res.json().catch(function () { return {}; }).then(function (d) {
+                return { ok: true, status: res.status, data: d };
+            });
+        }).catch(function () { return { ok: false, status: 0 }; });
+    }
+
+    // 执行转发：服务端文件（/static/upload/）走元数据转发零字节重传（suppressLocal 防污染当前视图）；
+    // blob/data 本体（P2P 直传无服务端副本）保留重取重传链路；文本/引用信封原样重发（服务端回显渲染）
+    // silent：逐条转发（阶段八十七）循环调用时抑制单条 toast，由调用方汇总提示
+    // 返回 Promise<boolean>（true=转发成功），供转发确认按钮按实际结果归口提示
     function doForward(el, target, silent) {
-        if (!el) return;
+        if (!el) return Promise.resolve(false);
         var bubble = el.querySelector('.message-bubble');
         // 图片消息
         var img = bubble ? bubble.querySelector('.chat-image') : null;
         if (img && chatImgSrc(img)) {
-            fetchSrcAsFile(chatImgSrc(img), 'image.png').then(function (f) {
+            var imgSrc = chatImgSrc(img);
+            // 阶段二百七十七：服务端已存本体——元数据转发瞬时完成（原全量重取+重传大图必超限/超时）
+            if (imgSrc.indexOf('/static/upload/') === 0) {
+                return forwardFileRef(imgSrc, '', target).then(function (res) {
+                    var ok = !!(res && res.ok);
+                    if (!silent) showToast(ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                    return ok;
+                });
+            }
+            return fetchSrcAsFile(imgSrc, 'image.png').then(function (f) {
                 // 阶段一百四十二：多群泛化——群目标统一走群图片直传（group 参数携带目标群）；全局群已废弃
                 if (isGroupTarget(target)) {
-                    sendGroupImage(f, true, target);
-                    if (!silent) showToast(I18N.t('已转发'));
-                } else {
-                    sendFileDirect(f, target, true).then(function (res) {
-                        if (!silent) showToast(res && res.ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
-                    }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
+                    return sendGroupImage(f, true, target).then(function () {
+                        if (!silent) showToast(I18N.t('已转发'));
+                        return true;
+                    }).catch(function () {
+                        if (!silent) showToast(I18N.t('转发失败'));
+                        return false;
+                    });
                 }
-            }).catch(function () { if (!silent) showToast(I18N.t('转发失败：图片获取失败')); });
-            return;
+                return sendFileDirect(f, target, true).then(function (res) {
+                    var ok = !!(res && res.ok);
+                    if (!silent) showToast(ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                    return ok;
+                }).catch(function () {
+                    if (!silent) showToast(I18N.t('转发失败'));
+                    return false;
+                });
+            }).catch(function () {
+                if (!silent) showToast(I18N.t('转发失败：图片获取失败'));
+                return false;
+            });
         }
-        // 文件消息（阶段一百三十四：群聊转发放开——重取源文件后走 sendGroupFile，与群文件发送同归口）
+        // 文件消息（阶段一百三十四：群聊转发放开；阶段二百七十七：服务端已存本体走元数据转发）
         if (bubble && bubble.classList.contains('bubble-file')) {
             var furl = bubble.getAttribute('data-url') || '';
-            if (!furl) { showToast(I18N.t('该消息暂不支持转发')); return; }
+            if (!furl) { showToast(I18N.t('该消息暂不支持转发')); return Promise.resolve(false); }
             var fnameEl = bubble.querySelector('.file-name');
-            fetchSrcAsFile(furl, (fnameEl && fnameEl.textContent) || I18N.t('文件')).then(function (f) {
-                // 阶段一百四十二：多群泛化——群目标统一走群文件直传（group 参数携带目标群）；全局群已废弃
+            var fname = (fnameEl && fnameEl.textContent) || I18N.t('文件');
+            if (furl.indexOf('/static/upload/') === 0) {
+                return forwardFileRef(furl, fname, target).then(function (res) {
+                    var ok = !!(res && res.ok);
+                    if (!silent) showToast(ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                    return ok;
+                });
+            }
+            // blob/data 本体（P2P 直传无服务端副本）：重取后走直传
+            return fetchSrcAsFile(furl, fname).then(function (f) {
                 if (isGroupTarget(target)) {
-                    sendGroupFile(f, true, target).then(function () {
+                    return sendGroupFile(f, true, target).then(function () {
                         if (!silent) showToast(I18N.t('已转发'));
-                    }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
-                    return;
+                        return true;
+                    }).catch(function () {
+                        if (!silent) showToast(I18N.t('转发失败'));
+                        return false;
+                    });
                 }
-                sendFileDirect(f, target, true).then(function (res) {
-                    if (!silent) showToast(res && res.ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
-                }).catch(function () { if (!silent) showToast(I18N.t('转发失败')); });
-            }).catch(function () { if (!silent) showToast(I18N.t('转发失败：文件获取失败')); });
-            return;
+                return sendFileDirect(f, target, true).then(function (res) {
+                    var ok = !!(res && res.ok);
+                    if (!silent) showToast(ok ? I18N.t('已转发') : I18N.t('转发失败（HTTP ') + (res ? res.status : I18N.t('网络')) + '）');
+                    return ok;
+                }).catch(function () {
+                    if (!silent) showToast(I18N.t('转发失败'));
+                    return false;
+                });
+            }).catch(function () {
+                if (!silent) showToast(I18N.t('转发失败：文件获取失败'));
+                return false;
+            });
         }
         // 阶段二百七十六：名片消息一期不支持原样转发——降级为文本占位 [名片]（防信封原串外泄）
         if (bubble && bubble.classList.contains('bubble-contact-card')) {
             var ccNmF = bubble.querySelector('.cc-name');
             var mCc = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: I18N.t('[名片] ') + ((ccNmF && ccNmF.textContent) || '') };
             mCc.to_user = target;
-            if (IMSocket.send(mCc)) { if (!silent) showToast(I18N.t('已转发')); } else showToast(I18N.t('转发失败'));
-            return;
+            var ccOk = IMSocket.send(mCc);
+            if (!silent) showToast(ccOk ? I18N.t('已转发') : I18N.t('转发失败'));
+            return Promise.resolve(!!ccOk);
         }
         // 文本 / 引用信封 / AI 文本：原始 content 原样重发（引用块完整保真），降级取正文可见文本
         var raw = el.getAttribute('data-raw');
         var tx = bubble ? bubble.querySelector('.msg-text') : null;
         var content = raw || ((tx ? tx.textContent : (bubble ? bubble.textContent : '')) || '').trim();
-        if (!content) { showToast(I18N.t('该消息不支持转发')); return; }
+        if (!content) { showToast(I18N.t('该消息不支持转发')); return Promise.resolve(false); }
         var m = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: content };
         m.to_user = target;
-        if (IMSocket.send(m)) { if (!silent) showToast(I18N.t('已转发')); } else showToast(I18N.t('转发失败'));
+        var txtOk = IMSocket.send(m);
+        if (!silent) showToast(txtOk ? I18N.t('已转发') : I18N.t('转发失败'));
+        return Promise.resolve(!!txtOk);
     }
 
     // ===== 阶段八十七：多选合并转发（微信同款：复选框勾选 → 工具栏合并/逐条转发） =====
@@ -3142,21 +3222,220 @@
         try { return decodeURIComponent(seg.pop()) || fallback; } catch (e) { return fallback; }
     }
 
-    // ===== 阶段二百二十一：APP 端下载统一归口 =====
-    // <a download> 在 Android WebView 中完全无反应（既不下载也不提示），故 APP 端统一走
-    // P2PFile.openFromUrl：fetch → Capacitor Filesystem 写入设备 → FileOpener 系统应用打开
-    // （微信文件同款"点击即下载并打开"）。PC/WEB 端维持原 <a download> 行为不变。
+    // ===== 阶段二百七十八：PC/WEB 下载进度浮层（右下角任务堆叠，微信同款下载反馈） =====
+    // 原 <a download> 归口 Electron will-download 后台下载：另存大文件时应用内零反馈、
+    // 落盘前无从感知（用户反馈痛点）。现服务端文件 fetch 流式读取回显进度，完成后
+    // 触发系统保存对话框（数据已在内存，落盘瞬时）。blob:/data: 本地源秒完成不建任务。
+    // 浮层全部自绘 + 主题变量跟随（--panel-bg/--primary/--text-light），多任务垂直堆叠
+    var dlDockEl = null;
+    var dlActive = {}; // url -> true 进行中去重（多选/连点防重复任务）
+
+    function dlDock() {
+        if (!dlDockEl) {
+            dlDockEl = document.createElement('div');
+            dlDockEl.className = 'dl-dock';
+            document.body.appendChild(dlDockEl);
+        }
+        return dlDockEl;
+    }
+
+    // 建任务条：返回 {update(pct, loadedText, totalText), done(), fail(text), onCancel(fn), el}
+    function dlTaskCreate(name) {
+        var item = document.createElement('div');
+        item.className = 'dl-item';
+        var row = document.createElement('div');
+        row.className = 'dl-row1';
+        var nm = document.createElement('div');
+        nm.className = 'dl-name';
+        nm.textContent = name || I18N.t('文件');
+        var cancel = document.createElement('button');
+        cancel.className = 'dl-cancel';
+        cancel.textContent = '×';
+        cancel.title = I18N.t('取消下载');
+        row.appendChild(nm);
+        row.appendChild(cancel);
+        var stat = document.createElement('div');
+        stat.className = 'dl-stat';
+        var stL = document.createElement('span');
+        stL.textContent = I18N.t('下载中…');
+        var stR = document.createElement('span');
+        stat.appendChild(stL);
+        stat.appendChild(stR);
+        var bar = document.createElement('div');
+        bar.className = 'dl-bar';
+        var fill = document.createElement('div');
+        fill.className = 'dl-fill';
+        bar.appendChild(fill);
+        item.appendChild(row);
+        item.appendChild(stat);
+        item.appendChild(bar);
+        dlDock().appendChild(item);
+
+        var finished = false;
+        var cancelFn = null;
+        cancel.addEventListener('click', function () {
+            if (finished) return;
+            finished = true;
+            if (cancelFn) cancelFn();
+            dlTaskRemove(item); // 用户主动取消：立即移除（无需"已取消"停留）
+        });
+
+        function leave(delay) {
+            setTimeout(function () {
+                item.classList.add('dl-leaving');
+                setTimeout(function () { if (item.parentNode) item.parentNode.removeChild(item); }, 300);
+            }, delay);
+        }
+
+        return {
+            update: function (pct, loadedText, totalText) {
+                if (finished) return;
+                if (pct == null) {
+                    fill.classList.add('dl-indet'); // 未知总量：流动条纹
+                    stL.textContent = I18N.t('下载中…');
+                } else {
+                    fill.classList.remove('dl-indet');
+                    fill.style.width = Math.max(0, Math.min(100, pct * 100)).toFixed(1) + '%';
+                    stL.textContent = (pct * 100).toFixed(0) + '%';
+                }
+                stR.textContent = totalText ? (loadedText + ' / ' + totalText) : (loadedText || '');
+            },
+            done: function () {
+                if (finished) return;
+                finished = true;
+                item.classList.add('dl-done');
+                fill.classList.remove('dl-indet');
+                fill.style.width = '100%';
+                stL.textContent = I18N.t('已完成');
+                cancel.style.display = 'none';
+                leave(1200);
+            },
+            fail: function (text) {
+                if (finished) return;
+                finished = true;
+                item.classList.add('dl-fail');
+                fill.classList.remove('dl-indet');
+                stL.textContent = text || I18N.t('下载失败');
+                stR.textContent = '';
+                cancel.style.display = 'none';
+                leave(2600); // 失败停留更久便于看到原因
+            },
+            onCancel: function (fn) { cancelFn = fn; }
+        };
+    }
+
+    function dlTaskRemove(item) {
+        item.classList.add('dl-leaving');
+        setTimeout(function () { if (item.parentNode) item.parentNode.removeChild(item); }, 300);
+    }
+
+    // 字节数 → 可读大小（进度浮层用，与文件卡片 formatSize 同口径 MiB 二进制换算）
+    function dlFmtSize(n) {
+        if (n >= 1048576) return (n / 1048576).toFixed(1) + 'MB';
+        if (n >= 1024) return (n / 1024).toFixed(0) + 'KB';
+        return n + 'B';
+    }
+
+    // 服务端文件流式下载 + 进度回显；PC/WEB 完成后 Blob → <a download> 弹系统保存（文件名预填），
+    // APP 端传入 onBlob（阶段二百七十九：P2PFile.openBlob/writeBlob 保存并按需打开，微信同款）
+    function downloadWithProgress(url, name, onBlob) {
+        if (dlActive[url]) { showToast(I18N.t('该文件正在下载中')); return; }
+        dlActive[url] = true;
+        var ctrl = new AbortController();
+        var task = dlTaskCreate(name);
+        task.onCancel(function () { ctrl.abort(); delete dlActive[url]; });
+        var total = 0, loaded = 0, chunks = [], mime = '';
+        fetch(url, { signal: ctrl.signal }).then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            mime = res.headers.get('content-type') || 'application/octet-stream';
+            var cl = parseInt(res.headers.get('content-length') || '0', 10);
+            if (cl > 0) total = cl;
+            if (!res.body) return res.blob().then(function (b) { return b; }); // 无流式能力降级：整取
+            var reader = res.body.getReader();
+            function pump() {
+                return reader.read().then(function (r) {
+                    if (r.done) return null;
+                    chunks.push(r.value);
+                    loaded += r.value.length;
+                    task.update(total ? loaded / total : null, dlFmtSize(loaded), total ? dlFmtSize(total) : '');
+                    return pump();
+                });
+            }
+            return pump();
+        }).then(function (b) {
+            if (b) { chunks = [b]; loaded = b.size; } // 降级整取路径
+            var blob = new Blob(chunks, { type: mime });
+            chunks = []; // 尽早释放分片引用
+            if (onBlob) {
+                onBlob(blob); // APP：写设备（并按需打开）；进度浮层自行收尾
+            } else {
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = name || 'file';
+                a.click();
+                setTimeout(function () { URL.revokeObjectURL(a.href); }, 30000); // 保存对话框停留期间保持引用
+            }
+            task.done();
+        }).catch(function (err) {
+            if (ctrl.signal.aborted) return; // 用户取消：任务条已在取消分支移除
+            task.fail(I18N.t('下载失败') + (err && err.message && err.message.indexOf('HTTP') === 0 ? '（' + err.message + '）' : ''));
+        }).then(function () {
+            delete dlActive[url]; // 成败均释放去重位（then 兜底，不吞异常）
+        });
+    }
+
+    // ===== 阶段二百八十：APP 端流式直写下载（OOM 修复） =====
+    // 原 downloadWithProgress+openBlob 链路：整文件 chunks 数组 + Blob 组装 + blobToB64 三份
+    // 驻留 ≈ 体积×4.3，161.9MB 文件下载完成瞬间冲爆 WebView 堆（APP 闪退）。现改
+    // P2PFile.downloadFromUrl 流式直写磁盘（恒定内存），浮层进度由 onProgress 驱动。
+    // open=true 下载完成系统打开（微信同款）；open=false 仅保存（"保存到设备"图标）。
+    function appDownloadWithProgress(url, name, open) {
+        if (dlActive[url]) { showToast(I18N.t('该文件正在下载中')); return; }
+        dlActive[url] = true;
+        var task = dlTaskCreate(name);
+        var dl = window.P2PFile.downloadFromUrl(url, name, function (loaded, total) {
+            task.update(total ? loaded / total : null, dlFmtSize(loaded), total ? dlFmtSize(total) : '');
+        }, open);
+        task.onCancel(function () { dl.abort(); delete dlActive[url]; }); // 中止并清理半成品
+        dl.promise.then(function () {
+            task.done();
+        }).catch(function (err) {
+            if (dl.aborted || (err && err.name === 'AbortError')) return; // 用户取消：任务条已移除
+            task.fail(I18N.t('下载失败') + (err && err.message && err.message.indexOf('HTTP') === 0 ? '（' + err.message + '）' : ''));
+        }).then(function () {
+            delete dlActive[url];
+        });
+    }
+
+    // ===== APP 端下载统一归口 =====
+    // <a download> 在 Android WebView 中完全无反应（既不下载也不提示）。APP 端：
+    // 本地源（blob:/data:）→ P2PFile.openFromUrl 秒完成；服务端文件 → 流式直写磁盘+进度浮层
+    // （阶段二百八十：微信同款——全程可见进度、可取消，完成后保存并系统打开，恒定内存不闪退）。
+    // PC/WEB 端：本地源直下；服务端文件走进度下载，完成后弹系统保存对话框。
     // 声明式定义（hoisting）：多选下载（1848 行）等早于本行的调用点同样可用。
     function imDownload(url, name, delayMs) {
         setTimeout(function () {
             if (window.Capacitor && url && window.P2PFile && window.P2PFile.openFromUrl) {
-                window.P2PFile.openFromUrl(url, name);
+                if (url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) {
+                    window.P2PFile.openFromUrl(url, name); // 本地内存源秒完成，无网络进度
+                } else if (window.P2PFile.downloadFromUrl) {
+                    appDownloadWithProgress(url, name, true);
+                } else if (window.P2PFile.openBlob) {
+                    downloadWithProgress(url, name, function (b) { window.P2PFile.openBlob(b, name); }); // 旧版兼容兜底
+                } else {
+                    window.P2PFile.openFromUrl(url, name);
+                }
                 return;
             }
-            var a = document.createElement('a');
-            a.href = url || '';
-            a.download = name || 'file';
-            a.click();
+            if (!url || url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) {
+                // 本地内存源（P2P 直传/导出内容）：数据已在本机，秒完成无需进度
+                var a = document.createElement('a');
+                a.href = url || '';
+                a.download = name || 'file';
+                a.click();
+                return;
+            }
+            downloadWithProgress(url, name);
         }, delayMs || 0);
     }
     // 本地生成内容（聊天记录 txt 导出等）：APP → saveBlob 保存并打开；PC/WEB → blobURL 下载
@@ -3188,7 +3467,13 @@
         var u = fb.getAttribute('data-url') || '';
         var mid = fb.getAttribute('data-msg-id') || '';
         if (u && u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
-            window.P2PFile.openFromUrl(u, name, false);
+            if (window.P2PFile.downloadFromUrl) {
+                appDownloadWithProgress(u, name, false); // 阶段二百八十：流式直写仅保存（恒定内存）
+            } else if (window.P2PFile.writeBlob) {
+                downloadWithProgress(u, name, function (b) { window.P2PFile.writeBlob(b, name); }); // 旧版兼容兜底
+            } else {
+                window.P2PFile.openFromUrl(u, name, false);
+            }
         } else if (mid) {
             window.P2PFile.saveOnly(mid, name);
         } else if (u) {
@@ -3326,22 +3611,32 @@
     }
 
     // silent：转发弹窗多目标循环调用时静默成功提示（失败提示保留），exitMultiSelect 由调用方归口（支持多目标循环重采）
+    // 返回 boolean 供调用方按实际结果汇总（WS 发送同步归口，无异步等待）
     function sendMergedForward(target, silent) {
         var built = buildMergedPayload();
-        if (built.err) { showToast(built.err); return; }
+        if (built.err) { showToast(built.err); return false; }
         var m = { msg_type: isGroupTarget(target) ? MSG.GROUP_CHAT : MSG.PRIVATE, content: built.payload };
         m.to_user = target;
-        if (!IMSocket.send(m)) { showToast(I18N.t('转发失败')); return; }
+        if (!IMSocket.send(m)) { showToast(I18N.t('转发失败')); return false; }
         if (!silent) showToast(built.skipped ? (I18N.t('已转发（') + built.skipped + I18N.t('条未完成上传的消息已跳过）')) : I18N.t('已转发'));
+        return true;
     }
 
     // silent：转发弹窗多目标循环调用时静默成功提示；exitMultiSelect 由调用方归口
+    // 返回 Promise<boolean>（true=全部成功）：逐条含文件/图片时各项经元数据转发/重传各自落地，
+    // 阶段二百七十七起等全部完成再汇总（原实现立即 toast 与实际发送结果脱节）
     function sendMultiForward(target, silent) {
         var els = multiSelectedEls();
-        if (!els.length) { showToast(I18N.t('选中的消息暂不支持转发')); return; }
+        if (!els.length) { showToast(I18N.t('选中的消息暂不支持转发')); return Promise.resolve(false); }
         var n = els.length;
-        els.forEach(function (el) { doForward(el, target, true); }); // 静默逐条（异步上传各自进行）
-        if (!silent) showToast(I18N.t('已逐条转发 ') + n + I18N.t(' 条消息'));
+        var jobs = [];
+        els.forEach(function (el) { jobs.push(Promise.resolve(doForward(el, target, true))); }); // 静默逐条（各自异步落地）
+        return Promise.all(jobs).then(function (rs) {
+            var ok = 0;
+            rs.forEach(function (v) { if (v === true) ok++; });
+            if (!silent) showToast(ok === n ? (I18N.t('已逐条转发 ') + n + I18N.t(' 条消息')) : (I18N.t('已逐条转发 ') + ok + '/' + n + I18N.t(' 条消息')));
+            return ok === n;
+        });
     }
 
     // 合并信封解析：仅识别 {"merged":{c,i:[...]}} 结构，普通 JSON 文本不受影响

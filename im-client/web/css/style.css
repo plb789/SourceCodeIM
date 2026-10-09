@@ -17996,6 +17996,126 @@ html.m .dsm-list {
     transform: translate(-50%, -50%);
 }
 
+/* ===== 阶段二百七十八：文件下载进度浮层（右下角任务堆叠，微信同款下载反馈） =====
+   原 <a download> 归口 Electron will-download 后台下载：应用内零反馈、大文件落盘前无进度可感知。
+   现服务端文件下载走 fetch 流式读取 + 本浮层回显（文件名/百分比/已下载大小/进度条/取消），
+   完成后落盘。全部自绘、主题变量跟随深浅主题；多任务垂直堆叠，完成后短暂展示再淡出 */
+.dl-dock {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 2900; /* 低于 toast(3000)，高于常规面板 */
+    pointer-events: none; /* 容器不挡下层点击，任务条单独恢复 */
+}
+.dl-item {
+    pointer-events: auto;
+    width: 300px;
+    background: var(--panel-bg, #ffffff);
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 10px;
+    box-shadow: var(--shadow-pop, 0 4px 16px rgba(0, 0, 0, 0.08));
+    padding: 10px 12px;
+    animation: dl-item-in 0.18s ease-out;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.dl-item.dl-leaving {
+    opacity: 0;
+    transform: translateY(6px);
+}
+@keyframes dl-item-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.dl-row1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.dl-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text, #333);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dl-cancel {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    line-height: 20px;
+    text-align: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-light, #999);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0;
+}
+.dl-cancel:hover {
+    background: var(--hover, #d9d9d9);
+    color: var(--text, #333);
+}
+.dl-stat {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-light, #999);
+}
+.dl-bar {
+    margin-top: 6px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--hover, #d9d9d9);
+    overflow: hidden;
+}
+.dl-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: var(--primary, #07c160);
+    transition: width 0.15s ease-out;
+}
+/* 未知总量：流动条纹（请求未返回 Content-Length 的响应仍可视推进） */
+.dl-fill.dl-indet {
+    width: 100%;
+    background: repeating-linear-gradient(90deg,
+        var(--primary, #07c160) 0 14px,
+        var(--primary-soft, rgba(7, 193, 96, 0.6)) 14px 28px);
+    background-size: 28px 100%;
+    animation: dl-stripes 0.9s linear infinite;
+}
+@keyframes dl-stripes {
+    from { background-position: 0 0; }
+    to { background-position: 28px 0; }
+}
+/* 终态：成功保持主题绿、失败转警示红 */
+.dl-item.dl-done .dl-fill {
+    width: 100%;
+    background: var(--primary, #07c160);
+}
+.dl-item.dl-fail .dl-fill {
+    background: #e64340;
+}
+.dl-item.dl-fail .dl-stat,
+.dl-item.dl-fail .dl-name {
+    color: #e64340;
+}
+/* 手机端：浮层全宽贴底（300px 定宽超出窄屏），保持微信下载提示的通栏观感 */
+html.m .dl-dock {
+    left: 16px;
+    right: 16px;
+}
+html.m .dl-item {
+    width: auto;
+}
+
 .qr-scan-frame .c {
     position: absolute;
     width: 28px;

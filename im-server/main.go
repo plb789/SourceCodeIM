@@ -130,6 +130,8 @@ func main() {
 	http.HandleFunc("/upload/group/image", srv.HandleGroupImageUpload)
 	// 群聊文件上传接口（阶段一百三十四：与群图片同链路，不限图片类型，落库 msg_type=5 + 广播 MsgTypeGroupFile）
 	http.HandleFunc("/upload/group/file", srv.HandleGroupFileUpload)
+	// 文件/图片消息转发接口（阶段二百七十七：微信同款元数据归口零字节重传——接收方即时见卡片，点击时按需下载）
+	http.HandleFunc("/upload/forward", srv.HandleFileForward)
 	// AI 图片提问上传接口（阶段四十四：仅落盘不落库，提问正文由 AI_CHAT 图片信封统一落库）
 	http.HandleFunc("/upload/ai/image", srv.HandleAIImageUpload)
 	// AI 文档问答上传接口（阶段四十五：仅落盘+试解析不落库，提问正文由 AI_CHAT 文档信封统一落库）

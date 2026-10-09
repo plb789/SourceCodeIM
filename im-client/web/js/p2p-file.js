@@ -773,16 +773,30 @@
         });
     }
     // 仅保存不打开（文件卡片"保存到设备"图标归口）
+    // ===== 阶段二百八十：分块落盘（OOM 闪退修复） =====
+    // 原实现整文件 blobToB64 一次写入：arrayBuffer + latin1 串 + base64 串三份驻留 ≈ 体积×3.3，
+    // 161.9MB 文件叠加 Blob 本体冲爆 WebView 堆上限（用户实测下载完成瞬间 APP 闪退）。
+    // 改为 4MB 分片逐块 append 写入：内存恒定 = 单分片 ≈13MB，任意大小文件安全。
+    var WRITE_CHUNK = 4 * 1024 * 1024;
     function writeDevice(blob, name) {
         var P = window.Capacitor && window.Capacitor.Plugins;
         if (!P || !P.Filesystem) return Promise.reject(new Error('no-plugin'));
-        return blobToB64(blob).then(function (b64) {
-            return P.Filesystem.writeFile({
-                path: name,
-                data: b64,                      // 纯 base64（不带 data: 前缀）
-                directory: 'DOCUMENTS',         // 应用专属 Documents（免存储权限，FileProvider 可授权打开）
-                recursive: true
-            });
+        var FS = P.Filesystem;
+        return FS.writeFile({ path: name, data: '', directory: 'DOCUMENTS', recursive: true }).then(function (first) {
+            var uri = first && first.uri;
+            var off = 0;
+            function step() {
+                if (off >= blob.size) return uri;
+                var end = Math.min(blob.size, off + WRITE_CHUNK);
+                return blobToB64(blob.slice(off, end)).then(function (b64) {
+                    return FS.writeFile({ path: name, data: b64, directory: 'DOCUMENTS', recursive: true, append: true });
+                }).then(function (w) {
+                    if (w && w.uri) uri = w.uri;
+                    off = end;
+                    return step();
+                });
+            }
+            return step();
         });
     }
     // I18N 兼容（p2p-file.js 不依赖 I18N，缺省直返）
@@ -807,6 +821,83 @@
         return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
             return writeDevice(b, name);
         });
+    }
+
+    // ===== 阶段二百八十：流式下载直写磁盘（微信同款大文件安全路径，OOM 修复核心） =====
+    // fetch 流式读取 → 2MB 聚合缓冲 → base64 → Filesystem append 落盘，循环至完成。
+    // 全程不组装整文件 Blob / arrayBuffer / 巨型 base64（内存恒定 ≈ 单缓冲 5MB）——
+    // 原链路整文件 blob 化 + blobToB64 三份驻留 ≈ 体积×4.3，161.9MB 文件下载完成瞬间
+    // OOM 闪退（用户实测）。onProgress(loaded, total) 驱动进度浮层；open=true 完成后
+    // FileOpener 系统打开（微信同款），open=false 仅保存。返回 { promise, abort() }：
+    // 中止/失败 best-effort 清理半成品文件。
+    var DL_BUF = 2 * 1024 * 1024;
+    function downloadFromUrl(url, name, onProgress, open) {
+        var P = window.Capacitor && window.Capacitor.Plugins;
+        var fname = name || 'file';
+        var handle = { promise: null, aborted: false, abort: function () { handle.aborted = true; } };
+        if (!P || !P.Filesystem || !url) {
+            handle.promise = Promise.reject(new Error('no-plugin'));
+            return handle;
+        }
+        var FS = P.Filesystem;
+        var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+        handle.abort = function () { handle.aborted = true; if (ctrl) ctrl.abort(); };
+        function safeProg(l, t) { if (onProgress) { try { onProgress(l, t); } catch (_) {} } }
+        handle.promise = fetch(url, ctrl ? { signal: ctrl.signal } : {}).then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            var total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+            return FS.writeFile({ path: fname, data: '', directory: 'DOCUMENTS', recursive: true }).then(function (first) {
+                var uri = first && first.uri;
+                var pend = [], pendSize = 0, loaded = 0;
+                function flush() {
+                    if (!pend.length) return Promise.resolve();
+                    var blob = new Blob(pend); // 仅 ~2MB 聚合片，恒定内存
+                    pend = []; pendSize = 0;
+                    return blobToB64(blob).then(function (b64) {
+                        return FS.writeFile({ path: fname, data: b64, directory: 'DOCUMENTS', recursive: true, append: true });
+                    }).then(function (w) { if (w && w.uri) uri = w.uri; });
+                }
+                function pump() {
+                    if (!res.body) { // 无流式能力降级：整取（小文件/老环境，writeDevice 分块兜底）
+                        return res.blob().then(function (b) { pend = [b]; loaded = b.size; safeProg(loaded, total); return flush(); });
+                    }
+                    var reader = res.body.getReader();
+                    function read() {
+                        return reader.read().then(function (r) {
+                            if (r.done) return flush();
+                            pend.push(r.value);
+                            loaded += r.value.length;
+                            pendSize += r.value.length;
+                            safeProg(loaded, total);
+                            if (pendSize >= DL_BUF) return flush().then(read);
+                            return read();
+                        });
+                    }
+                    return read();
+                }
+                return pump().then(function () {
+                    if (uri) return { uri: uri };
+                    return FS.getUri({ path: fname, directory: 'DOCUMENTS' }).catch(function () { return { uri: '' }; });
+                }).then(function (u) {
+                    if (open !== false && P.FileOpener && u && u.uri) {
+                        return P.FileOpener.open({ filePath: u.uri, mimeType: extMime(fname) }).then(function () {
+                            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存，正在打开…'));
+                            return { uri: u.uri, bytes: loaded };
+                        }).catch(function () {
+                            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents（无法打开该文件类型）'));
+                            return { uri: u.uri, bytes: loaded };
+                        });
+                    }
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                    return { uri: u && u.uri, bytes: loaded };
+                });
+            });
+        }).catch(function (err) {
+            // 中止/失败：清理半成品（best-effort；首次建文件后才可能残留）
+            FS.deleteFile({ path: fname, directory: 'DOCUMENTS', recursive: true }).catch(function () {});
+            throw err;
+        });
+        return handle;
     }
 
     window.P2PFile = {
@@ -889,6 +980,22 @@
                 return false;
             });
         },
+        // 阶段二百七十九：APP 端带进度下载的落盘归口（chat.js 进度浮层完成后调用）
+        // openBlob = 保存并系统打开（微信同款"下载完成即打开"）；writeBlob = 仅保存不打开（"保存到设备"图标归口）
+        openBlob: function (blob, name) {
+            return saveOpen(blob, name || 'file', blob && blob.type);
+        },
+        writeBlob: function (blob, name) {
+            return writeDevice(blob, name || 'file').then(function () {
+                if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                return true;
+            }).catch(function () {
+                if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                return false;
+            });
+        },
+        // 阶段二百八十：流式下载直写磁盘（大文件恒定内存，chat.js 进度浮层驱动）
+        downloadFromUrl: downloadFromUrl,
         // 阶段一百五十九补：手动清理（设置-网络"缓存清理"按钮）
         cacheClear: cacheClear,
         localEnabled: localEnabled,

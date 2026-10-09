@@ -627,6 +627,231 @@ func (s *Server) HandleGroupFileUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
 }
 
+// ===== 阶段二百七十七：文件/图片消息转发（微信同款元数据归口，零字节重传） =====
+// 原转发链路 fetchSrcAsFile 全量重取 + sendFileDirect 整体重传：1MB 级文件即有秒级延迟；
+// 超 max_file_size 直接 HTTP 400、弱网撞 60s 超时——大文件转发必败（用户感知"过了好一会才提示转发失败"，
+// 且确认按钮的"已转发"先于实际结果，误报成功）。服务端文件本体已在 /static/upload（上传时已过
+// 大小/类型/黑名单校验），转发仅归口元数据落库 + 推送：接收方气泡即时可见、点击卡片时按需下载
+// （微信同款"先显示后下载"），任意大小文件瞬时完成。
+// POST /upload/forward?username=xxx  body JSON: {"url":"/static/upload/xx","name":"报告.pdf","to_user":"bob"} 或 {"group":"g1"}
+// 私聊：建 im_file(status=3 复用原路径，file_id 供撤回/置顶能力) + msg_type=4/5 落库
+//
+//	→ FILE_PERSISTED 双端推送（接收方离线入队，登录补推）+ 双方会话摘要
+//
+// 群聊：msg_type=4/5（ToUser=gN）落库 → MsgTypeGroupImage/GroupFile 按成员定向广播（含离线入队+摘要）
+type forwardReq struct {
+	URL    string `json:"url"`
+	Name   string `json:"name"`
+	ToUser string `json:"to_user"`
+	Group  string `json:"group"`
+}
+
+// HandleFileForward 处理文件/图片消息转发：POST /upload/forward?username=xxx
+func (s *Server) HandleFileForward(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	if username == "" {
+		http.Error(w, "缺少参数", http.StatusBadRequest)
+		return
+	}
+	// 在线校验（与直传同水位：轻量活性锚点，防离线/不存在用户名被冒用转发）
+	if s.hub.Count(username) == 0 {
+		http.Error(w, "用户未在线，请先登录", http.StatusUnauthorized)
+		logger.Warn("文件转发拒绝： %s 无活跃连接", username)
+		return
+	}
+	var body forwardReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<10)).Decode(&body); err != nil {
+		http.Error(w, "参数解析失败", http.StatusBadRequest)
+		return
+	}
+	// URL 白名单：仅允许本服务静态上传目录（防 SSRF/路径穿越；P2P blob/data 本体由客户端走重传兜底）
+	if !strings.HasPrefix(body.URL, "/static/upload/") {
+		http.Error(w, "仅支持转发已上传到服务器的文件", http.StatusBadRequest)
+		return
+	}
+	filename := strings.TrimPrefix(body.URL, "/static/upload/")
+	// 文件名安全：仅字母数字._-，拒绝目录分隔符与 ..
+	if filename == "" || strings.ContainsAny(filename, `/\`) || strings.Contains(filename, "..") ||
+		!validUploadRefName(filename) {
+		http.Error(w, "非法文件地址", http.StatusBadRequest)
+		return
+	}
+	dir := s.cfg.UploadDir
+	if dir == "" {
+		dir = filepath.Join(s.cfg.WebDir, "static", "upload")
+	}
+	dst := filepath.Join(dir, filename)
+	// 双保险：规范化后必须仍落在上传目录内
+	abs, err := filepath.Abs(dst)
+	if err != nil {
+		http.Error(w, "非法文件地址", http.StatusBadRequest)
+		return
+	}
+	if absRoot, err2 := filepath.Abs(dir); err2 != nil ||
+		!strings.HasPrefix(abs, absRoot+string(filepath.Separator)) {
+		http.Error(w, "非法文件地址", http.StatusBadRequest)
+		return
+	}
+	// 本体存在性校验：源文件被清理时转发无意义（接收方点击必 404）
+	st, err := os.Stat(dst)
+	if err != nil || st.IsDir() {
+		http.Error(w, "源文件不存在或已被清理", http.StatusNotFound)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = filename
+	}
+	if isDangerousFile(name) {
+		http.Error(w, "禁止传输可执行文件", http.StatusBadRequest)
+		logger.Warn("文件转发拦截： %s 尝试转发危险文件 %s", username, name)
+		return
+	}
+	size := st.Size()
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" {
+		ext = strings.ToLower(filepath.Ext(dst))
+	}
+
+	if body.Group == "" {
+		s.forwardFilePrivate(w, username, body.ToUser, body.URL, name, size, ext)
+		return
+	}
+	s.forwardFileGroup(w, username, body.Group, body.URL, name, size, ext)
+}
+
+// validUploadRefName 转发地址文件名白名单（上传落盘命名为 时间戳_16位hex+扩展名，字符集收紧到字母数字._-）
+func validUploadRefName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// forwardFilePrivate 私聊转发归口：建档 im_file（复用原路径）+ 落库 + FILE_PERSISTED 双端推送
+func (s *Server) forwardFilePrivate(w http.ResponseWriter, username, toUser, url, name string, size int64, ext string) {
+	if toUser == "" {
+		http.Error(w, "缺少接收方参数", http.StatusBadRequest)
+		return
+	}
+	// 黑名单拦截（与私聊文字/直传同规则）
+	if s.isBlocked(username, toUser) {
+		http.Error(w, "对方已将你拉黑或你已拉黑对方，无法发送", http.StatusForbidden)
+		return
+	}
+	// 建档 im_file：复用原文件路径（零字节复制），Status=3 已持久化；file_id 供接收端气泡锚定与撤回/置顶能力
+	rec := model.FileRecord{
+		FileName: name,
+		FileSize: size,
+		FilePath: url,
+		FromUser: username,
+		ToUser:   toUser,
+		Status:   3,
+	}
+	if err := store.DB.Create(&rec).Error; err != nil {
+		http.Error(w, "文件记录创建失败", http.StatusInternalServerError)
+		return
+	}
+	fileID := strconv.FormatUint(uint64(rec.ID), 10)
+
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: name, Size: size})
+	msgType := int8(MsgTypeFileSaved)
+	if isImageExt(ext) {
+		msgType = int8(MsgTypeImageSaved)
+	}
+	record := model.Message{
+		MsgType:  msgType,
+		FromUser: username,
+		ToUser:   toUser,
+		Content:  string(contentBytes),
+	}
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
+		http.Error(w, "消息落库失败", http.StatusInternalServerError)
+		return
+	}
+	// 回写文件记录消息 ID（与直传路径对齐，撤回/置顶能力前提）
+	store.DB.Model(&model.FileRecord{}).Where("id = ?", rec.ID).Update("msg_id", record.ID)
+
+	summary := "[文件]"
+	if msgType == int8(MsgTypeImageSaved) {
+		summary = "[图片]"
+	}
+	s.touchConversation(username, toUser, summary)
+	s.touchConversation(toUser, username, summary)
+	s.notifyConvUpdate(username)
+	s.notifyConvUpdate(toUser)
+
+	// 持久化完成通知双方全部在线连接（接收方离线入队，登录经 pushOfflineMessages 原子补推；
+	// content 无 nonce——转发生成的是全新消息，双方无在途本地气泡需回填）
+	persisted := &protocol.Message{
+		MsgType:   protocol.MsgTypeFilePersisted,
+		FromUser:  username,
+		ToUser:    toUser,
+		Content:   string(contentBytes),
+		FileID:    fileID,
+		MsgID:     record.ID,
+		Timestamp: time.Now().Unix(),
+	}
+	notice, _ := json.Marshal(persisted)
+	s.sendToUser(username, notice)
+	if s.isOnlineFast(toUser) {
+		s.sendToUser(toUser, notice)
+	} else {
+		s.queueOffline(toUser, persisted)
+	}
+
+	logger.Info("文件元数据转发: %s -> %s, %s (%d 字节) -> 消息%d, url=%s", username, toUser, name, size, record.ID, url)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
+}
+
+// forwardFileGroup 群聊转发归口：落库（ToUser=gN）+ MsgTypeGroupImage/GroupFile 成员定向广播
+func (s *Server) forwardFileGroup(w http.ResponseWriter, username, groupParam, url, name string, size int64, ext string) {
+	// 群作用域校验（群存在 + 转发者是成员；空 group=全局群已废弃，拒绝）
+	if _, errMsg := resolveGroupUploadScope(groupParam, username); errMsg != "" {
+		http.Error(w, errMsg, http.StatusForbidden)
+		return
+	}
+	contentBytes, _ := json.Marshal(persistedMsgContent{URL: url, Name: name, Size: size})
+	msgType := int8(MsgTypeFileSaved)
+	wsType := protocol.MsgTypeGroupFile
+	summary := "[文件]"
+	if isImageExt(ext) {
+		msgType = int8(MsgTypeImageSaved)
+		wsType = protocol.MsgTypeGroupImage
+		summary = "[图片]"
+	}
+	record := model.Message{
+		MsgType:  msgType,
+		FromUser: username,
+		ToUser:   groupParam, // 'gN' 多群聊归属
+		Content:  string(contentBytes),
+	}
+	record.ID = s.persistMessage(&record)
+	if record.ID == 0 {
+		http.Error(w, "消息落库失败", http.StatusInternalServerError)
+		return
+	}
+	notice := &protocol.Message{
+		MsgType:   wsType,
+		FromUser:  username,
+		FromName:  nicknameOf(username),
+		ToUser:    groupParam,
+		Content:   string(contentBytes),
+		MsgID:     record.ID,
+		Timestamp: time.Now().Unix(),
+	}
+	s.broadcastGroupMediaNotice(notice, summary)
+
+	logger.Info("群聊文件元数据转发: %s -> 群%s, %s (%d 字节) -> 消息%d, url=%s", username, groupParam, name, size, record.ID, url)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"msg_id": record.ID, "url": url})
+}
+
 // HandleAIImageUpload 阶段四十四：AI 图片提问专用上传 POST /upload/ai/image?username=xxx&to_user=助手名
 // 与私聊/群聊图片上传的差异：不落库 im_message、不触会话摘要——提问正文由随后的 AI_CHAT 图片信封
 // 消息统一落库（单条记录同时承载图片与附言，历史/多端同步/会话摘要全走既有归口，避免重复气泡）。

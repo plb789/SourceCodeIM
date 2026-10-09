@@ -257,10 +257,35 @@
             return out;
         }
 
-        // --- 预解压：DEFLATE 条目全部经原生 inflate 进 preMap；失败条目存 0 字节兜底，
+        // --- 预解压：DEFLATE 条目经原生 inflate 进 preMap；失败条目存 0 字节兜底，
         //     保证任何条目都不会再走回 tinf 死循环 ---
+        // 阶段二百七十九（修复 Android WebView 卡死"0 / 116"）：keep.forEach 内联发起全部
+        // DecompressionStream——Chrome 80~102 的 WebView 有 DecompressionStream 但不支持
+        // 'deflate-raw' 格式，构造函数同步抛 TypeError，首个条目即中断整个 forEach 循环：
+        // doneN 永停在 0、onDone 永不回调（用户实测 161.9MB WPS 文件卡死截图"（0 / 116）"）。
+        // 加固：①入口探测 deflate-raw（不支持→大文件 fail-fast 提示下载查看——tinf 死循环
+        // 冻结主线程，任何定时器看门狗都救不了，必须拦截在进入 JSZip 之前；小文件回落原
+        // JSZip 链路保持既有行为）；②每条目独立 try/catch（单条同步异常不再中断整体）；
+        // ③并发限 8（手机端 116 条并发流内存尖峰过大）；④20s 无推进看门狗——未完成条目
+        // 空数据兜底放行（异步停滞时文字仍可渲染，绝不暴露 tinf、绝不久挂）。
+        var SMALL_PPTX_BYTES = 20 * 1024 * 1024; // 无原生解压能力时：小于此值回落 JSZip 原路径
+        var PRE_CONCURRENCY = 8;                 // 预解压并发上限
+        var PRE_WATCHDOG_MS = 20000;             // 看门狗：无推进超时放行
         function preInflate(data, onDone) {
-            if (!data || !data.byteLength || typeof window.DecompressionStream !== 'function') { onDone(); return; }
+            if (!data || !data.byteLength) { onDone(); return; }
+            var rawOk = false;
+            try {
+                rawOk = typeof window.DecompressionStream === 'function' &&
+                    !!(new window.DecompressionStream('deflate-raw'));
+            } catch (_) { rawOk = false; }
+            if (!rawOk) {
+                // 无 deflate-raw 能力：大文件直接提示下载（进入 JSZip 会被 tinf 死循环冻结主线程）；
+                // 小文件中毒流概率低，维持原 JSZip 行为（老环境小文件预览不受影响）
+                if (data.byteLength >= SMALL_PPTX_BYTES) {
+                    showError('文档较大且当前浏览器内核不支持在线预解压，请点击右上角"下载"按钮查看');
+                } else { onDone(); }
+                return;
+            }
             var list = [];
             try { list = parseZipEntries(data); } catch (_) { onDone(); return; }
             list = list.filter(function (e) {
@@ -273,22 +298,55 @@
             }
             if (!keep.length) { onDone(); return; }
             window.__preMap = {};
-            var doneN = 0;
+            var doneN = 0, idx = 0, inflight = 0, released = false, lastTick = Date.now();
             setLoadMsg('下载完成，正在预解压资源…（0 / ' + keep.length + '）');
             syncBar(100, '解析中…');
-            keep.forEach(function (e) {
-                var p = new Response(new Response(data.slice(e.dataOff, e.dataOff + e.compSize)).body
-                    .pipeThrough(new window.DecompressionStream('deflate-raw'))).arrayBuffer();
-                p.then(function (buf) { window.__preMap[e.name] = new Uint8Array(buf); })
-                    .catch(function () { window.__preMap[e.name] = new Uint8Array(0); }) // 损坏条目空数据兜底，宁缺勿冻结
-                    .then(function () {
-                        doneN++;
-                        if (doneN % 5 === 0 || doneN === keep.length) {
-                            setLoadMsg('下载完成，正在预解压资源…（' + doneN + ' / ' + keep.length + '）');
+            function release() {
+                if (released) return;
+                released = true;
+                clearInterval(wd);
+                onDone();
+            }
+            function tick() {
+                if (released) return; // 看门狗已放行：不再刷新消息/计数，避免重新唤起加载遮罩
+                doneN++;
+                lastTick = Date.now();
+                if (doneN % 5 === 0 || doneN === keep.length) {
+                    setLoadMsg('下载完成，正在预解压资源…（' + doneN + ' / ' + keep.length + '）');
+                }
+                if (doneN === keep.length) release();
+                else pump();
+            }
+            function pump() {
+                while (!released && inflight < PRE_CONCURRENCY && idx < keep.length) {
+                    (function (e) { // IIFE 按条目闭包（var 函数作用域，直采会全体指向末条目）
+                        inflight++;
+                        try {
+                            var p = new Response(new Response(data.slice(e.dataOff, e.dataOff + e.compSize)).body
+                                .pipeThrough(new window.DecompressionStream('deflate-raw'))).arrayBuffer();
+                            p.then(function (buf) { window.__preMap[e.name] = new Uint8Array(buf); })
+                                .catch(function () { window.__preMap[e.name] = new Uint8Array(0); }) // 损坏条目空数据兜底，宁缺勿冻结
+                                .then(function () { inflight--; tick(); });
+                        } catch (_) {
+                            inflight--;
+                            window.__preMap[e.name] = new Uint8Array(0); // 构造期同步异常（内存不足等）：空数据兜底
+                            tick();
                         }
-                        if (doneN === keep.length) onDone();
+                    })(keep[idx++]);
+                }
+            }
+            pump();
+            // 看门狗：流式解压异步停滞（promise 永不结算）时放行——未完成条目空数据兜底，
+            // 保证每个 keep 条目都有 preMap 记录（绝不暴露 tinf），文字先行渲染不冻结
+            var wd = setInterval(function () {
+                if (released) { clearInterval(wd); return; }
+                if (Date.now() - lastTick > PRE_WATCHDOG_MS) {
+                    keep.forEach(function (e) {
+                        if (!(e.name in window.__preMap)) window.__preMap[e.name] = new Uint8Array(0);
                     });
-            });
+                    release();
+                }
+            }, 2000);
         }
 
         // --- 包装 JSZip 条目原型：preMap 命中直接返回；超大媒体返回占位图 ---
