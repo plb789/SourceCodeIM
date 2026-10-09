@@ -44,11 +44,46 @@
             display: none; position: fixed; top: 42%; left: 0; right: 0; text-align: center;
             color: #999; font-size: 14px; font-family: "Microsoft YaHei", sans-serif; line-height: 2;
         }
+        /* 阶段二百二十二：超大文件确认条（页内自绘，禁系统弹窗；白卡片+绿色主按钮随项目现有配色） */
+        #big-warn {
+            display: none; position: fixed; inset: 0; z-index: 20;
+            background: rgba(0, 0, 0, 0.35);
+            align-items: center; justify-content: center;
+        }
+        #big-warn.on { display: flex; }
+        #big-warn-box {
+            width: 360px; max-width: 86%;
+            background: #ffffff; border-radius: 10px;
+            padding: 20px 22px 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+        }
+        #big-warn-title { font-size: 15px; font-weight: bold; color: #333; margin-bottom: 10px; }
+        #big-warn-text { font-size: 13px; color: #666; line-height: 1.7; margin-bottom: 16px; }
+        #big-warn-btns { text-align: right; }
+        #big-warn-btns button {
+            margin-left: 10px; padding: 7px 18px;
+            border-radius: 6px; border: none;
+            font-size: 13px; font-family: "Microsoft YaHei", sans-serif; cursor: pointer;
+        }
+        #bw-ok { background: #07c160; color: #ffffff; }
+        #bw-ok:hover { background: #06ad56; }
+        #bw-cancel { background: #f0f0f0; color: #666; }
+        #bw-cancel:hover { background: #e4e4e4; }
     </style>
 </head>
 <body>
     <div id="loading">幻灯片加载中…</div>
     <div id="err"></div>
+    <div id="big-warn">
+        <div id="big-warn-box">
+            <div id="big-warn-title">文件较大，在线预览耗时较长</div>
+            <div id="big-warn-text"></div>
+            <div id="big-warn-btns">
+                <button id="bw-ok">仍要预览</button>
+                <button id="bw-cancel">取消</button>
+            </div>
+        </div>
+    </div>
     <div id="pptx-viewer"></div>
     <script>
         // 解析查询参数（url=文档地址）
@@ -60,11 +95,334 @@
         var fileUrl = qs.url || '';
         var loadingEl = document.getElementById('loading');
         var errEl = document.getElementById('err');
+        var warnEl = document.getElementById('big-warn');
 
         function showError(msg) {
             loadingEl.style.display = 'none';
             errEl.style.display = 'block';
             errEl.innerHTML = '预览失败：' + msg + '<br>可点击窗口右上角"下载"按钮获取文件';
+        }
+
+        // ===== 阶段二百二十二：大文件真实进度与大文件确认 =====
+        // 原问题：PPTXjs 调用即渲染 "Loading... (1%)" 占位进度条，内部 JSZipUtils.getBinaryContent
+        // 下载全程无进度回调，随后 JSZip v2 同步解压同样不刷新进度——161.9MB 级大文件在
+        // "下载+解压"阶段长期停留在 1%，看起来像卡死。
+        // 修复：包装 JSZipUtils.getBinaryContent 注入 onprogress（下载百分比 + 已传/总量 MB），
+        // 同步驱动蓝色进度条宽度；下载完成切"解析中"提示；超过阈值先出页内确认条（自绘，非系统弹窗）。
+        var LARGE_PPTX_BYTES = 50 * 1024 * 1024; // 超过 50MB 视为超大文件，预览前先确认
+
+        function fmtMB(n) { return (n / 1048576).toFixed(1); }
+        function setLoadMsg(txt) {
+            loadingEl.style.display = '';
+            loadingEl.textContent = txt;
+        }
+        // 同步驱动 PPTXjs 预置的蓝色进度条（.slides-loading-progress-bar 由 pptxToHtml 调用即创建）
+        function syncBar(pct, txt) {
+            var bar = document.querySelector('.slides-loading-progress-bar');
+            if (!bar) return;
+            var p = Math.max(1, Math.min(100, pct));
+            bar.style.width = p + '%';
+            bar.innerHTML = "<span style='text-align: center;'>" + txt + "</span>";
+        }
+
+        // 包装下载入口：接管文件下载——pptxjs.min.js 末尾内嵌的旧版 jszip-utils 仅支持
+        // (url, callbackFn) 签名且无 progress 支持（传 {callback, progress} 会被当函数调用抛
+        // "e is not a function"），故此处以带 onprogress 的 XHR 自行下载，完成后按旧签名
+        // 回吐 arraybuffer，注入真实下载进度（仅本页实例生效，不影响其他页面）
+        (function patchGetBinaryContent() {
+            if (!window.JSZipUtils || !window.JSZipUtils.getBinaryContent) return;
+            window.JSZipUtils.getBinaryContent = function (url, cb) {
+                var real = (typeof cb === 'function') ? cb : (cb && cb.callback);
+                var done = function (err, data) {
+                    if (err) {
+                        // 移除进度条令收态轮询退出，避免空转
+                        var m = document.querySelector('.slides-loadnig-msg');
+                        if (m && m.parentNode) m.parentNode.removeChild(m);
+                        showError('文件下载失败：' + (err && err.message || err));
+                        return;
+                    }
+                    // 下载完成 → 先异步预解压（绕开 JSZip v2 inflate 对 stored-block 流的死循环）
+                    preInflate(data, function () {
+                        // 预解压完成 → 解析阶段（此时 JSZip 条目命中 preMap，同步装配极快，文字先行绘制）
+                        setLoadMsg('下载完成，正在解析幻灯片…（超大内嵌媒体将自动跳过以加快解析）');
+                        syncBar(100, '解析中…');
+                        if (real) real(null, data);
+                    });
+                };
+                var prog = function (loaded, total) {
+                    if (!total) return;
+                    var pct = loaded / total * 100;
+                    setLoadMsg('正在下载 ' + pct.toFixed(0) + '%（' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' MB）');
+                    syncBar(pct, '下载中 ' + pct.toFixed(0) + '%');
+                };
+                try {
+                    var x = new XMLHttpRequest();
+                    x.open('GET', url, true);
+                    if ('responseType' in x) x.responseType = 'arraybuffer';
+                    x.onprogress = function (e) { if (e && e.total) prog(e.loaded, e.total); };
+                    x.onreadystatechange = function () {
+                        if (x.readyState !== 4) return;
+                        if (x.status === 200 || x.status === 0) {
+                            done(null, x.response);
+                        } else {
+                            done(new Error('Ajax error for ' + url + ' : ' + x.status + ' ' + x.statusText));
+                        }
+                    };
+                    x.onerror = function () { done(new Error('网络错误：' + url)); };
+                    x.send();
+                } catch (err) { done(err); }
+            };
+        })();
+
+        // ===== 阶段二百二十三：预解压绕行（修复"解析中"永久卡死） =====
+        // 根因（真实 161.9MB 文件实测定位）：冻结点是 JSZip v2 内置纯 JS inflate（tinf）——
+        // 该文件 ppt/media/image2.jpeg 的 DEFLATE 流内含 stored block（压缩后 704993 字节反而
+        // 大于未压缩 704965 字节，已压缩数据如 JPEG 的典型写法，WPS 打包常见），tinf 遇此类流
+        // 不前进 → 主线程无报错死循环，页面永久停留在"解析中…"。实测 base64 编码器 J() 速度
+        // 约 23ms/MB 并非元凶；剔除 .MOV 的对照文件同样冻结，可复现实锤。
+        // 修复：下载完成后先自行解析 ZIP 中央目录，用浏览器原生 DecompressionStream('deflate-raw')
+        // 把全部 DEFLATE 条目异步预解压进 preMap；再包装 JSZip 条目原型的 asUint8Array /
+        // asText / asBinary 优先查 preMap（asArrayBuffer 内部经 asUint8Array 自动受益），
+        // 彻底绕开 tinf 缺陷。非白名单超大媒体（如 .MOV，库会走 base64 分支拖慢渲染）
+        // 仍由占位图逻辑拦截；无 DecompressionStream 的旧环境降级为原行为。
+        var MEDIA_SKIP_BYTES = 10 * 1024 * 1024; // 媒体超 10MB 走占位（不参与预解压）
+        var MEDIA_BLOB_EXT = ['mp4', 'webm', 'ogg', 'mp3', 'wav']; // 库的 Blob 快速路径扩展名，不拦截
+        var PRE_BUDGET_BYTES = 400 * 1024 * 1024; // 预解压总预算，超出部分回落原路径
+        var skippedMedia = { count: 0, bytes: 0 };
+
+        // 是否应跳过（占位）的媒体：ppt/media/ 下超过阈值、且不在库的 Blob 快速路径内
+        function shouldSkipMedia(name, size) {
+            if (!(size > MEDIA_SKIP_BYTES)) return false;
+            var n = String(name || '').toLowerCase();
+            if (n.indexOf('ppt/media/') !== 0) return false;
+            var m = n.match(/\.([a-z0-9]+)$/);
+            return !m || MEDIA_BLOB_EXT.indexOf(m[1]) === -1;
+        }
+
+        // 生成占位图（标注实际体积）
+        function makeMediaPlaceholder(sizeBytes) {
+            var cv = document.createElement('canvas');
+            cv.width = 480; cv.height = 320;
+            var ctx = cv.getContext('2d');
+            ctx.fillStyle = '#f2f2f2';
+            ctx.fillRect(0, 0, cv.width, cv.height);
+            ctx.fillStyle = '#666666';
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 30px "Microsoft YaHei", sans-serif';
+            ctx.fillText('内嵌媒体体积过大', cv.width / 2, 138);
+            ctx.font = '22px "Microsoft YaHei", sans-serif';
+            ctx.fillText('约 ' + fmtMB(sizeBytes) + ' MB，预览已跳过', cv.width / 2, 182);
+            ctx.fillStyle = '#999999';
+            ctx.fillText('下载后使用本地 PowerPoint / WPS 查看', cv.width / 2, 218);
+            var b64 = cv.toDataURL('image/png').split(',')[1];
+            var bin = atob(b64);
+            var u8 = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+            return u8;
+        }
+
+        // --- ZIP 中央目录解析（仅读取本页已下载缓冲，只读不改文件） ---
+        function findEocd(ab) {
+            var dv = new DataView(ab);
+            for (var i = ab.byteLength - 22, min = Math.max(0, i - 65535); i >= min; i--) {
+                if (dv.getUint32(i, true) === 0x06054b50) return i;
+            }
+            return -1;
+        }
+        function parseZipEntries(ab) {
+            var out = [], dv = new DataView(ab), eo = findEocd(ab);
+            if (eo < 0) return out;
+            var total = dv.getUint16(eo + 10, true), off = dv.getUint32(eo + 16, true);
+            // ZIP64 等超纲格式（字段为哨兵值）不处理，回落原路径
+            if (!total || total === 0xffff || off === 0xffffffff || off + 46 > ab.byteLength) return out;
+            var u8 = new Uint8Array(ab);
+            for (var k = 0; k < total; k++) {
+                if (off + 46 > ab.byteLength || dv.getUint32(off, true) !== 0x02014b50) break;
+                var nameLen = dv.getUint16(off + 28, true), extraLen = dv.getUint16(off + 30, true),
+                    cmtLen = dv.getUint16(off + 32, true), loff = dv.getUint32(off + 42, true);
+                var name = '';
+                try { name = new TextDecoder('utf-8').decode(u8.subarray(off + 46, off + 46 + nameLen)); } catch (_) {}
+                if (loff + 30 <= ab.byteLength && dv.getUint32(loff, true) === 0x04034b50) {
+                    out.push({
+                        name: name,
+                        method: dv.getUint16(off + 10, true),
+                        compSize: dv.getUint32(off + 20, true),
+                        uncompSize: dv.getUint32(off + 24, true),
+                        // 数据偏移按本地文件头自身的 name/extra 长度计算（与中央目录可不同）
+                        dataOff: loff + 30 + dv.getUint16(loff + 26, true) + dv.getUint16(loff + 28, true)
+                    });
+                }
+                off += 46 + nameLen + extraLen + cmtLen;
+            }
+            return out;
+        }
+
+        // --- 预解压：DEFLATE 条目全部经原生 inflate 进 preMap；失败条目存 0 字节兜底，
+        //     保证任何条目都不会再走回 tinf 死循环 ---
+        function preInflate(data, onDone) {
+            if (!data || !data.byteLength || typeof window.DecompressionStream !== 'function') { onDone(); return; }
+            var list = [];
+            try { list = parseZipEntries(data); } catch (_) { onDone(); return; }
+            list = list.filter(function (e) {
+                return e.method === 8 && e.compSize > 0 && e.uncompSize > 0 &&
+                    e.uncompSize <= 200 * 1024 * 1024 && !shouldSkipMedia(e.name, e.uncompSize);
+            });
+            var budget = PRE_BUDGET_BYTES, keep = [];
+            for (var i = 0; i < list.length && budget > 0; i++) {
+                if (list[i].uncompSize <= budget) { budget -= list[i].uncompSize; keep.push(list[i]); }
+            }
+            if (!keep.length) { onDone(); return; }
+            window.__preMap = {};
+            var doneN = 0;
+            setLoadMsg('下载完成，正在预解压资源…（0 / ' + keep.length + '）');
+            syncBar(100, '解析中…');
+            keep.forEach(function (e) {
+                var p = new Response(new Response(data.slice(e.dataOff, e.dataOff + e.compSize)).body
+                    .pipeThrough(new window.DecompressionStream('deflate-raw'))).arrayBuffer();
+                p.then(function (buf) { window.__preMap[e.name] = new Uint8Array(buf); })
+                    .catch(function () { window.__preMap[e.name] = new Uint8Array(0); }) // 损坏条目空数据兜底，宁缺勿冻结
+                    .then(function () {
+                        doneN++;
+                        if (doneN % 5 === 0 || doneN === keep.length) {
+                            setLoadMsg('下载完成，正在预解压资源…（' + doneN + ' / ' + keep.length + '）');
+                        }
+                        if (doneN === keep.length) onDone();
+                    });
+            });
+        }
+
+        // --- 包装 JSZip 条目原型：preMap 命中直接返回；超大媒体返回占位图 ---
+        (function patchZipEntryAccess() {
+            if (!window.JSZip) return;
+            // 用探测实例拿到库内部返回对象的原型（file() 每次新建实例但原型共享）
+            var probe = new JSZip();
+            probe.file('_probe', '1');
+            var pf = probe.file('_probe');
+            if (!pf) return;
+            var proto = Object.getPrototypeOf(pf);
+            if (!proto || typeof proto.asUint8Array !== 'function' || typeof proto.asText !== 'function' ||
+                typeof proto.asBinary !== 'function' || typeof proto.asArrayBuffer !== 'function') return;
+            var oU8 = proto.asUint8Array, oTx = proto.asText, oBn = proto.asBinary, oAb = proto.asArrayBuffer;
+            var phCache = {}; // 占位图按条目名缓存：重复读取只生成一次、只计数一次
+
+            function preHit(name) {
+                var pm = window.__preMap;
+                return (pm && Object.prototype.hasOwnProperty.call(pm, name)) ? pm[name] : null;
+            }
+            function placeholderFor(name, size) {
+                if (!phCache[name]) {
+                    skippedMedia.count++;
+                    skippedMedia.bytes += size;
+                    phCache[name] = makeMediaPlaceholder(size);
+                }
+                return phCache[name];
+            }
+            function metaSize() {
+                var d = this._data;
+                return (d && typeof d.uncompressedSize === 'number') ? d.uncompressedSize : -1;
+            }
+            proto.asUint8Array = function () {
+                var name = String(this.name || '');
+                var size = metaSize.call(this);
+                if (shouldSkipMedia(name, size)) return placeholderFor(name, size);
+                var u = preHit(name);
+                if (u) return u;
+                return oU8.apply(this, arguments);
+            };
+            proto.asText = function () {
+                var u = preHit(String(this.name || ''));
+                if (u) { try { return new TextDecoder('utf-8').decode(u); } catch (_) {} }
+                return oTx.apply(this, arguments);
+            };
+            proto.asBinary = function () {
+                var u = preHit(String(this.name || ''));
+                if (u) {
+                    var s = '', CH = 8192;
+                    for (var i = 0; i < u.length; i += CH) {
+                        s += String.fromCharCode.apply(null, u.subarray(i, Math.min(i + CH, u.length)));
+                    }
+                    return s;
+                }
+                return oBn.apply(this, arguments);
+            };
+            proto.asArrayBuffer = function () {
+                var name = String(this.name || '');
+                var size = metaSize.call(this);
+                if (shouldSkipMedia(name, size)) return placeholderFor(name, size).buffer;
+                var u = preHit(name);
+                if (u) return u.buffer;
+                var r = oAb.apply(this, arguments);
+                // 元数据缺失兜底：解出后按实际字节数补判占位
+                if (size < 0 && r && r.byteLength > MEDIA_SKIP_BYTES) {
+                    return placeholderFor(name, r.byteLength).buffer;
+                }
+                return r;
+            };
+        })();
+
+        // 渲染完成后：把库产出的无效 mime 媒体 img（data:undefined;…，.MOV 等未知扩展名）
+        // 替换为页内提示占位（自绘样式，随页面浅色主题），并按拦截统计弹顶部 toast
+        function fixSkippedMediaDom() {
+            var imgs = document.querySelectorAll('#pptx-viewer img');
+            for (var i = 0; i < imgs.length; i++) {
+                var src = imgs[i].getAttribute('src') || '';
+                if (src.indexOf('data:undefined;base64,') !== 0) continue;
+                var dv = document.createElement('div');
+                dv.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;' +
+                    'align-items:center;justify-content:center;background:#f2f2f2;color:#666;' +
+                    'font-family:"Microsoft YaHei",sans-serif;font-size:14px;text-align:center;' +
+                    'line-height:1.9;border-radius:4px;';
+                dv.innerHTML = '该内嵌媒体格式不支持网页预览<br>请下载后使用本地 PowerPoint / WPS 打开';
+                imgs[i].parentNode.replaceChild(dv, imgs[i]);
+            }
+            if (skippedMedia.count > 0) {
+                var t = document.createElement('div');
+                t.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);' +
+                    'z-index:30;background:rgba(0,0,0,0.72);color:#ffffff;font-size:13px;' +
+                    'padding:8px 16px;border-radius:8px;font-family:"Microsoft YaHei",sans-serif;' +
+                    'max-width:86%;box-sizing:border-box;';
+                t.textContent = '已跳过 ' + skippedMedia.count + ' 个超大内嵌媒体（合计约 ' +
+                    fmtMB(skippedMedia.bytes) + ' MB），下载后本地打开可查看';
+                document.body.appendChild(t);
+                setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 6000);
+            }
+        }
+
+        // 超大文件确认条按钮（自绘）
+        (function bindBigWarn() {
+            document.getElementById('bw-ok').addEventListener('click', function () {
+                warnEl.classList.remove('on');
+                startRender(warnEl.dataset.url || '');
+            });
+            document.getElementById('bw-cancel').addEventListener('click', function () {
+                warnEl.classList.remove('on');
+                setLoadMsg('已取消在线预览：可点击查看器窗口的"下载"按钮获取文件后，使用本地 PowerPoint / WPS 打开');
+            });
+        })();
+
+        function askBig(u, size) {
+            loadingEl.style.display = 'none';
+            document.getElementById('big-warn-text').textContent =
+                '当前文件约 ' + fmtMB(size) + ' MB，在线解析幻灯片耗时较长且大文件可能失败，建议下载后使用本地 PowerPoint / WPS 打开。';
+            warnEl.dataset.url = u;
+            warnEl.classList.add('on');
+        }
+
+        // 探测文件大小（HEAD Content-Length；blob: 拿不到返回 0 直接渲染；data: 按长度估算）
+        function probeSize(u, cb) {
+            if (u.indexOf('data:') === 0) return cb(Math.floor((u.length - u.indexOf(',') - 1) * 0.75));
+            if (u.indexOf('blob:') === 0) return cb(0);
+            try {
+                var x = new XMLHttpRequest();
+                x.open('HEAD', u, true);
+                x.onreadystatechange = function () {
+                    if (x.readyState !== 4) return;
+                    var n = parseInt(x.getResponseHeader('Content-Length'), 10);
+                    cb(isNaN(n) ? 0 : n);
+                };
+                x.onerror = function () { cb(0); };
+                x.send();
+            } catch (e) { cb(0); }
         }
 
         if (!fileUrl) {
@@ -79,24 +437,52 @@
             renderPptx(fileUrl);
         }
 
-        // 渲染归口（查询参数与 postMessage 双入口共用）
+        // 渲染归口（查询参数与 postMessage 双入口共用）：先探测大小 → 超大文件确认 → 渲染
         function renderPptx(u) {
-            // PPTXjs：URL 拉取渲染（slideMode 关闭=连续浏览模式；mediaProcess 开启图片/音视频渲染）
-            try {
-                $('#pptx-viewer').pptxToHtml({
-                    pptxFileUrl: u,
-                    slideMode: false,
-                    keyBoardShortCut: false,
-                    mediaProcess: true,
-                    themeProcess: true,
-                    slidesScale: ""
+            setLoadMsg('正在获取文件信息…');
+            probeSize(u, function (n) {
+                if (n > LARGE_PPTX_BYTES) { askBig(u, n); return; }
+                startRender(u);
+            });
+        }
+
+        function startRender(u) {
+            var go = function (realUrl) {
+                try {
+                    setLoadMsg('正在准备下载…'); // 确认点击后、首个进度事件前的即时反馈
+                    $('#pptx-viewer').pptxToHtml({
+                        pptxFileUrl: realUrl,
+                        slideMode: false,
+                        keyBoardShortCut: false,
+                        mediaProcess: true,
+                        themeProcess: true,
+                        slidesScale: ""
+                    });
+                    // 加载态收口改为轮询：库渲染完成后移除 .slides-loadnig-msg 时才收起
+                    //（原 600ms 定时会在下载阶段提前触发，误收加载提示）
+                    var poll = setInterval(function () {
+                        if (!document.querySelector('.slides-loadnig-msg')) {
+                            clearInterval(poll);
+                            loadingEl.style.display = 'none';
+                            fixSkippedMediaDom(); // 阶段二百二十三：替换无效媒体占位并提示
+                        }
+                    }, 300);
+                } catch (e) {
+                    // 异常信息直接透出（含 PPTXjs 内部抛出的原始 message），便于实测定位
+                    showError('幻灯片解析异常：' + (e && e.message ? e.message : e));
+                }
+            };
+            if (u.indexOf('data:') === 0) {
+                // data: URL 无法被 XHR 请求（jszip-utils 内部走 XHR）——先 fetch 转 blob: URL 再渲染
+                setLoadMsg('正在读取文件…');
+                fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
+                    go(URL.createObjectURL(b));
+                }).catch(function (e) {
+                    showError('文件读取失败：' + (e && e.message ? e.message : e));
                 });
-                // 渲染为同步流程：给 DOM 落地留一个周期后收起加载态
-                setTimeout(function () { loadingEl.style.display = 'none'; }, 600);
-            } catch (e) {
-                // 异常信息直接透出（含 PPTXjs 内部抛出的原始 message），便于实测定位
-                showError('幻灯片解析异常：' + (e && e.message ? e.message : e));
+                return;
             }
+            go(u);
         }
     </script>
 </body>

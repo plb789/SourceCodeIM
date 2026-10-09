@@ -23853,9 +23853,14 @@
                 return;
             }
             // blob → data: URL 中转（blobToDataURL：FileReader 已被 PPTXjs 污染不可用）
+            // 阶段二百二十二：大 blob 不转 data: 中转——161.9MB 级 blob 转 base64 会膨胀约 1.33 倍
+            // 且阻塞主窗口，独立查看器窗口也难承载；blob: 对本窗口 iframe 同源可用，直接落弹窗兜底
+            //（pptx 解析页大文件时自带下载进度与大文件确认）
             fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
+                if (b.size > 50 * 1024 * 1024) { openDocPreviewFallback(url, name); return; }
                 return blobToDataURL(b);
             }).then(function (dataUrl) {
+                if (!dataUrl) return;
                 window.desktop.openDocViewer({ url: dataUrl, name: name || I18N.t('文档') });
             }).catch(function () { openDocPreviewFallback(url, name); });
             return;
