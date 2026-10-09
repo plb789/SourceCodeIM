@@ -108,6 +108,15 @@
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
 
+        <!-- 阶段二百七十三：自绘内置浏览层（微信内置浏览器同款：自带 WebView + 顶栏
+             返回/关闭 + 进度条，零外部浏览器依赖——@capacitor/browser 的 Custom Tabs
+             实现在无 Chrome 设备回落系统默认浏览器）。全程序化布局无 XML 资源 -->
+        <activity
+            android:name=".InAppBrowserActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- 阶段二百二十六：EMAS 自有通道（ACCS 在线）通知点击/清除回调（厂商通道点击走
              EmasPopupActivity 辅助弹窗；各厂商通道专用 action 接入对应 third-push SDK 后
              按官方文档补齐） -->

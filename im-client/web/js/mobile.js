@@ -6,7 +6,8 @@
  *      移动布局的呈现全部由 style.css 的 html.m 规则块实现；
  *   2. 交互桥接：触屏长按合成 contextmenu 事件（复用 chat.js 现有三个右键菜单，零改动）、
  *      列表/聊天全屏视图互切（含 Android 物理返回键，history pushState/popstate 桥接）、
- *      图片查看器 window.open 改为同窗跳转（Capacitor 环境弹窗体验差）；
+ *      图片查看器 window.open 改为同窗跳转（Capacitor 环境弹窗体验差）、
+ *      外域链接 window.open 分流到 Capacitor Browser 内置浏览器层（自带返回/关闭，不整页替换聊天）；
  *   3. 触屏细节：输入框聚焦后消息区贴近底部时跟随滚底，避免键盘顶起后看不到最新消息。
  *
  * PC/WEB 宽窗口下本文件全部逻辑自动旁路，行为与改造前完全一致。
@@ -348,14 +349,43 @@
         }, true);
     }
 
-    /* ---------- 4. Capacitor 环境：window.open 改同窗跳转 ---------- */
-    // 图片查看器（image-viewer.html）等独立页面在手机 WebView 中弹新窗口体验差，
-    // 同窗跳转后可用系统返回手势/返回键回聊天页；PC/WEB 端不受影响
+    /* ---------- 4. Capacitor 环境：window.open 按目标分流 ---------- */
+    // 站内独立页面（image-viewer.html 图片查看器等）保持同窗跳转（系统返回手势/返回键回聊天页）；
+    // 外链（工作台应用打开的 http/https 外域站点）改走自绘原生内置浏览层（InAppBrowser 插件，
+    // 自带 WebView + 顶栏返回/关闭，微信内置浏览器同款，零外部浏览器依赖）——同窗跳转
+    // 会整页替换聊天界面且无返回入口，用户只能杀进程重进（真机实测问题）；关掉浏览层即
+    // 回聊天页，长连接全程不断。
+    // 阶段二百七十三：弃用 @capacitor/browser（Custom Tabs 实现）——国产 ROM/模拟器
+    // 无 Chrome 时回落 ACTION_VIEW 打开系统默认浏览器（用户实测选了"内置浏览器打开"
+    // 却弹出系统浏览器）；优先用 InAppBrowser，旧安装包未含时回落 Browser 再回落同窗跳转
     if (isNative) {
+        var capBrowser = window.Capacitor && window.Capacitor.Plugins
+            && (window.Capacitor.Plugins.InAppBrowser || window.Capacitor.Plugins.Browser);
+        var appOrigin = window.location.origin;
         window.open = function (u) {
-            if (u) window.location.href = u;
+            if (!u) return null;
+            // 站内页面（同源）保持同窗跳转；外链且浏览器层可用时走内置浏览器层
+            if (capBrowser && /^https?:\/\//i.test(u) && u.indexOf(appOrigin) !== 0) {
+                try {
+                    capBrowser.open({ url: u });
+                    return null;
+                } catch (eNav) { /* 插件调用失败回落同窗跳转 */ }
+            }
+            window.location.href = u;
             return null;
         };
+        // AI 消息 markdown 链接（chat.js 生成的 <a target="_blank">）不经 window.open，
+        // Capacitor 对外域 <a> 默认 ACTION_VIEW 拉起系统浏览器（与工作台外链同款体验问题）——
+        // capture 委托归口到上面的劫持层：外链走内置浏览层，站内链接保持原生行为
+        document.addEventListener('click', function (e) {
+            var link = e.target.closest && e.target.closest('a[target="_blank"]');
+            if (!link) return;
+            var href = link.getAttribute('href');
+            if (!href || !/^https?:\/\//i.test(href)) return;
+            if (href.indexOf(window.location.origin) === 0) return; // 站内链接不拦截
+            e.preventDefault();
+            window.open(href, '_blank');
+        }, true);
     }
 
     /* ---------- 5. 输入框聚焦跟随滚底 ---------- */
