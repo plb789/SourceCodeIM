@@ -89,6 +89,17 @@
 
     function isOpen() { return layer && !layer.classList.contains('hidden'); }
 
+    /* 显式列表打开归口（朋友圈九宫格等非聊天 DOM 场景）：列表由调用方给全（该条动态的
+     * 全部图片），不走聊天区 DOM 收集——朋友圈卡片散布整个列表，按 document 收集会把
+     * 他人动态的图混进翻页序列（微信同款语义=单条动态内翻页） */
+    function openList(listArr, startIdx) {
+        ensureDom();
+        if (!layer || !listArr || !listArr.length) return;
+        list = listArr.slice();
+        idx = Math.min(Math.max(0, startIdx || 0), list.length - 1);
+        show();
+    }
+
     function close() {
         if (!layer) return;
         layer.classList.add('hidden');
@@ -191,5 +202,5 @@
         open({ el: im });
     }, true);
 
-    window.IMImgLayer = { isOpen: isOpen, close: close };
+    window.IMImgLayer = { isOpen: isOpen, close: close, openList: openList };
 })();

@@ -73,10 +73,18 @@
         // 兜底：主界面 toast 未就绪时静默降级为控制台（朋友圈操作失败主链路已有 HTTP 错误提示）
         console.warn('[moments]', msg);
     }
-    // 图片查看归口（与聊天图片一致：Electron 桥优先，浏览器回退独立窗口查看器）
+    // 图片查看归口（PC：Electron 桥优先；手机：页内 IMImgLayer 全屏层；桌面浏览器：独立查看器页）
     function openImage(url, list, index) {
         if (window.desktop && window.desktop.openImageViewer) {
             window.desktop.openImageViewer({ url: url, list: list, index: index || 0 });
+            return;
+        }
+        // 手机端（APP/移动布局）走页内查看层（微信同款：下滑/右上角/系统返回键关闭）——
+        // 禁止跳独立查看器页：APP 上 window.open 被 mobile.js 归口为同窗跳转，而查看器页的
+        // window.close() 对非脚本打开的窗口无效，会卡死在查看器页只能杀进程（真机实测问题）
+        if (document.documentElement.classList.contains('m') && window.IMImgLayer &&
+            typeof window.IMImgLayer.openList === 'function') {
+            window.IMImgLayer.openList(list && list.length ? list.slice() : [url], index || 0);
             return;
         }
         var vList = list && list.length ? list : [url];
@@ -619,9 +627,11 @@
         document.getElementById('moments-vis-search').addEventListener('input', function () {
             renderVisFriends(this.value.trim());
         });
-        // Esc 逐级：拍摄浮层 → 视频浮层 → 可见范围浮层 → 发布页
+        // Esc 逐级：页内图片层（窄窗口浏览器 html.m 场景，与 mobile.js 返回键同优先级）
+        // → 拍摄浮层 → 视频浮层 → 可见范围浮层 → 发布页
         document.addEventListener('keydown', function (e) {
             if (e.key !== 'Escape') return;
+            if (window.IMImgLayer && IMImgLayer.isOpen()) { IMImgLayer.close(); return; }
             if (!camViewEl.classList.contains('hidden')) { closeCam(); return; }
             if (!vpViewEl.classList.contains('hidden')) { closeVideoPlayer(); return; }
             if (!visPanel.classList.contains('hidden')) { hideVisPanel(); return; }
