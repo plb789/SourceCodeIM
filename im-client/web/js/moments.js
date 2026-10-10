@@ -411,7 +411,7 @@
                 // 阶段二百八十一：视频格子走自绘播放浮层（不进图片查看器）
                 if (img.classList.contains('moment-video')) {
                     var vi = +img.getAttribute('data-imgi') || 0;
-                    openVideoPlayer(m.images[vi]);
+                    openVideoPlayer(m.images[vi], function () { return videoCellPoster(img); });
                 } else {
                     openImage(img.getAttribute('src'), m.images, +img.getAttribute('data-imgi'));
                 }
@@ -948,11 +948,46 @@
         });
         bar.addEventListener('pointermove', function (e) { if (vpBarDrag) vpSeek(e); });
         bar.addEventListener('pointerup', function () { vpBarDrag = false; });
+        // 播放器首帧就绪即显现（openVideoPlayer 取不到格子快照时走 vp-wait 黑底过渡）
+        vpVideoEl.addEventListener('loadeddata', function () {
+            vpVideoEl.classList.remove('vp-wait');
+        });
+        // 视频格（时间线/发布预览）首帧就绪前隐藏画面：防 WebView 灰底系统占位图闪现
+        document.addEventListener('loadeddata', function (e) {
+            var t = e.target;
+            if (t && t.tagName === 'VIDEO' && (t.closest('.moment-video') || t.closest('.moments-pub-thumb'))) {
+                t.classList.add('vd-ready');
+            }
+        }, true);
     }
-    function openVideoPlayer(url) {
+    // 取视频格已渲染的首帧快照作播放器开屏封面（同源画布无污染；取不到返回空走黑底过渡）
+    function videoCellPoster(cell) {
+        var v = cell && cell.querySelector('video');
+        if (!v || !v.videoWidth || v.readyState < 2) return '';
+        var w = Math.min(v.videoWidth, 480);
+        var h = Math.round(v.videoHeight * (w / v.videoWidth)) || 1;
+        var c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        c.getContext('2d').drawImage(v, 0, 0, w, h);
+        return c.toDataURL('image/jpeg', 0.72);
+    }
+    function openVideoPlayer(url, capturePoster) {
         vpViewEl.classList.remove('hidden');
         vpVideoEl.muted = false;
         document.getElementById('moments-vp-mute').classList.remove('muted');
+        // 开屏瞬间灰底系统占位图：WebView 在首帧就绪前渲染默认播放器画面——
+        // 有格子首帧快照则作 poster 即时盖住（微信同款开屏即封面）；取不到则
+        // 隐藏画面等 loadeddata 再显现（黑底过渡，全程无占位图）
+        var poster = '';
+        try { poster = (typeof capturePoster === 'function' && capturePoster()) || ''; } catch (err) { poster = ''; }
+        if (poster) {
+            vpVideoEl.poster = poster;
+            vpVideoEl.classList.remove('vp-wait');
+        } else {
+            vpVideoEl.poster = '';
+            vpVideoEl.classList.add('vp-wait');
+        }
         vpVideoEl.src = url;
         vpVideoEl.play().catch(function () { /* 自动播失败保持暂停态，用户点播放键 */ });
     }
