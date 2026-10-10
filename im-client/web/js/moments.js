@@ -200,8 +200,10 @@
             for (var i = 0; i < n; i++) {
                 // 阶段二百八十一：视频格子（首帧预览 + 播放角标，点击走自绘播放浮层；微信同款）
                 if (isVideoURL(m.images[i])) {
+                    // #t=0.1 媒体片段强制定位首帧：Android WebView 对 preload="metadata" 不渲染
+                    // 首帧（显示系统灰底播放器占位图），须 preload="auto"+定位片段才出封面
                     html += '<span class="moment-img moment-video" data-imgi="' + i + '">' +
-                        '<video src="' + esc(m.images[i]) + '" preload="metadata" muted playsinline></video>' +
+                        '<video src="' + esc(m.images[i]) + '#t=0.1" preload="auto" muted playsinline></video>' +
                         '<i class="mv-play"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l7 4.5-7 4.5z"/></svg></i>' +
                         '</span>';
                 } else {
@@ -681,7 +683,8 @@
             var thumb = document.createElement('div');
             thumb.className = 'moments-pub-thumb';
             if (isVideoURL(url)) {
-                thumb.innerHTML = '<video src="' + esc(url) + '" preload="metadata" muted playsinline></video>' +
+                // #t=0.1 首帧定位（同时间线格：Android WebView 须 auto+片段才渲染封面帧）
+                thumb.innerHTML = '<video src="' + esc(url) + '#t=0.1" preload="auto" muted playsinline></video>' +
                     '<i class="pub-thumb-play"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l7 4.5-7 4.5z"/></svg></i>';
             } else {
                 thumb.innerHTML = '<img src="' + esc(url) + '" alt="">';
@@ -739,6 +742,7 @@
     // target 归口：'publish' 拍完进发布页九宫格；'cover' 拍完直接设为朋友圈封面
     var camViewEl, camVideoEl, camStream = null, camFacing = 'user', camTarget = 'publish';
     var camRecording = false, camRecorder = null, camChunks = [], camTimer = null;
+    var camAbandon = false; // 页内关闭浮层引发的停录：丢弃本次录像不发布（微信同款）
     var camPressTimer = null, camPressAt = 0, camRingTimer = null, camRecordStart = 0;
     var CAM_MAX_MS = 15000; // 微信同款 15 秒上限
     function initCam() {
@@ -750,10 +754,13 @@
         document.getElementById('moments-cam-close').addEventListener('click', closeCam);
         document.getElementById('moments-cam-flip').addEventListener('click', flipCam);
         var shutter = document.getElementById('moments-cam-shutter');
-        // 指针统一处理（鼠标/触摸）：按下 300ms 后自动进入录像，松开时按住时长判定拍照/停录
+        // 指针统一处理（鼠标/触摸）：按下 300ms 后自动进入录像，松开时按住时长判定拍照/停录。
+        // 按下即捕获指针：长按中手指漂移/系统长按菜单不会再把事件流夺走（触摸漂移曾触发
+        // pointerleave 造成 1~4 秒随机提前停录——真机实测问题）
         shutter.addEventListener('pointerdown', function (e) {
             if (camRecording) return;
             e.preventDefault();
+            try { shutter.setPointerCapture(e.pointerId); } catch (err) { /* 无害 */ }
             camPressAt = Date.now();
             camPressTimer = setTimeout(startCamRecord, 300);
         });
@@ -765,9 +772,19 @@
                 shootCamPhoto();
             }
         });
-        shutter.addEventListener('pointerleave', function () {
+        shutter.addEventListener('pointercancel', function () {
+            // 系统抢占（来电/手势栏/权限弹窗）：已录则收尾保存，未录仅作废本次按压
+            clearTimeout(camPressTimer);
             if (camRecording) stopCamRecord();
         });
+        // 鼠标拖出按钮视为松开（桌面体验）；触摸流有指针捕获兜底，漂移不停录（微信同款）
+        shutter.addEventListener('pointerleave', function (e) {
+            if (e.pointerType === 'touch') return;
+            if (camRecording) stopCamRecord();
+            else clearTimeout(camPressTimer);
+        });
+        // 安卓长按菜单/文本选择劫持拦截
+        shutter.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     }
     function openCam(target) {
         camTarget = target || 'publish';
@@ -788,7 +805,10 @@
         });
     }
     function closeCam() {
-        if (camRecording) { try { camRecorder.state !== 'inactive' && camRecorder.stop(); } catch (e) {} camRecording = false; }
+        if (camRecording) {
+            camAbandon = true; // 页内关闭（×/Esc/切页）：丢弃本次录像不发布
+            try { camRecorder.state !== 'inactive' && camRecorder.stop(); } catch (e) {} camRecording = false;
+        }
         clearTimeout(camPressTimer);
         clearInterval(camRingTimer);
         if (camStream) {
@@ -848,15 +868,18 @@
             return;
         }
         camChunks = [];
+        camAbandon = false;
         camRecorder.ondataavailable = function (e) { if (e.data && e.data.size) camChunks.push(e.data); };
         camRecorder.onstop = function () {
             camRecording = false;
             clearInterval(camRingTimer);
             resetCamRing();
+            document.getElementById('moments-cam-hint').textContent = T('轻触拍照，按住摄像');
+            // 页内关闭浮层引发的停录：丢弃不发布（微信同款）；正常松开/15 秒满/系统抢占照常保存
+            if (camAbandon) { camAbandon = false; return; }
             var type = (camRecorder.mimeType || 'video/webm').indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm';
             var ext = type === 'video/mp4' ? '.mp4' : '.webm';
             var blob = new Blob(camChunks, { type: type });
-            document.getElementById('moments-cam-hint').textContent = T('轻触拍照，按住摄像');
             if (!blob.size) return;
             closeCam();
             var file = new File([blob], 'cam_' + Date.now() + ext, { type: type });
@@ -905,6 +928,15 @@
         vpVideoEl.addEventListener('pause', vpSyncPlayIco);
         vpVideoEl.addEventListener('timeupdate', vpSyncBar);
         vpVideoEl.addEventListener('loadedmetadata', function () {
+            // MediaRecorder 产物 webm 无时长头（duration=Infinity）：跳尾触发元数据补全后归零
+            if (vpVideoEl.duration === Infinity) {
+                vpVideoEl.currentTime = 1e7;
+                vpVideoEl.addEventListener('timeupdate', function fix() {
+                    vpVideoEl.removeEventListener('timeupdate', fix);
+                    vpVideoEl.currentTime = 0;
+                    document.getElementById('moments-vp-dur').textContent = vpFmtTime(vpVideoEl.duration);
+                });
+            }
             document.getElementById('moments-vp-dur').textContent = vpFmtTime(vpVideoEl.duration);
         });
         // 进度条：点击跳转 + 拖动跟手

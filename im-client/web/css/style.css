@@ -21223,6 +21223,11 @@ html.m .moments-vis-panel {
     transition: transform 0.12s;
     position: relative;
     z-index: 3;
+    /* 长按录像防劫持：禁滚动/缩放手势回收指针与安卓长按菜单（漂移曾致提前停录） */
+    touch-action: none;
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 .moments-cam-shutter:active { transform: scale(0.92); }
 .moments-cam-hint {
