@@ -168,6 +168,31 @@
                 if (nc) nc.click();
                 return;
             }
+            // 6.8) 朋友圈打开态：删除确认弹窗 → 可见范围浮层 → 发布页 → 关页（逐级，微信同款）；
+            //      关页后由 mobile.js 既有 #moments-back 委托联动 exitChat
+            if (window.IMMoments && IMMoments.isOpen()) {
+                var confirmMask = document.querySelector('body > .moments-vis-mask');
+                if (confirmMask) {
+                    var cmc = confirmMask.querySelector('.moments-vis-cancel');
+                    if (cmc) cmc.click();
+                    return;
+                }
+                var mvm = document.getElementById('moments-vis-mask');
+                if (mvm && !mvm.classList.contains('hidden')) {
+                    var mvc = document.getElementById('moments-vis-cancel');
+                    if (mvc) mvc.click();
+                    return;
+                }
+                var mpv = document.getElementById('moments-publish-view');
+                if (mpv && !mpv.classList.contains('hidden')) {
+                    var mpc = document.getElementById('moments-pub-cancel');
+                    if (mpc) mpc.click();
+                    return;
+                }
+                var mbb = document.getElementById('moments-back');
+                if (mbb) mbb.click();
+                return;
+            }
             // 7) 网盘页打开态：委托 drive.js 返回分级（子目录→上级/搜索态→回前/根→关页）；
             //    关页后由 mobile.js 既有 #drive-close 委托联动 exitChat
             if (window.IMDrive && IMDrive.isOpen()) {
@@ -273,6 +298,10 @@
                 if (rcChatTab) rcChatTab.click();
                 exitChat();
             }
+        } else if (e.target.closest('#moments-back')) {
+            // 朋友圈关页（返回按钮自身已切回聊天 Tab 并归口 close）后退回列表视图，
+            // 防止移动端停留在空聊天页；发布页/浮层内部返回未关页则不动
+            if (window.IMMoments && !window.IMMoments.isOpen()) exitChat();
         } else if (e.target.closest('#ann-stream-close')) {
             // 公告流"返回"（阶段二百零八）：关流由 chat.js 归口，这里补退回列表视图——
             // 移动端一击直达公告分类列表，不停留在空聊天页；PC 端"返回聊天"语义不变
@@ -859,6 +888,14 @@
                         if (rcTab) rcTab.click();
                         return;
                     }
+                    // 朋友圈：#moments-view 同为 main-chat 内全屏覆盖层（列表视图下不可见），
+                    // 沿用 rc 同款链路——先滑入聊天视图再开页（默认好友时间线）
+                    if (tabName === 'moments') {
+                        enterChat();
+                        var moTab = document.querySelector('.nav-icon[data-tab="moments"]');
+                        if (moTab) moTab.click();
+                        return;
+                    }
                     // 阶段二百零七修正：个人页是聊天视图内的浮层，关闭≠退视图；
                     // 不退回列表视图的话 main-chat 仍滑入占据屏幕，而公告/网盘面板
                     // 在滑出视口的 side-bar 里，用户只看到空聊天页（误以为打开了好友界面）
@@ -910,7 +947,7 @@
     function initHomeTitle() {
         var homeTitle = document.querySelector('.m-home-title');
         if (!homeTitle) return;
-        var TAB_NAMES = { chat: '聊天', friends: '通讯录', ai: 'AI助手', workbench: '工作台', announcement: '公告', drive: '网盘' };
+        var TAB_NAMES = { chat: '聊天', friends: '通讯录', ai: 'AI助手', workbench: '工作台', announcement: '公告', drive: '网盘', moments: '朋友圈' };
         function syncTitle() {
             var a = document.querySelector('.sidebar-tab.active');
             if (a) {

@@ -236,6 +236,11 @@ const (
 	// 下行/历史 content 为 JSON {user,name,avatar}，落库 msg_type=107，走私聊/群聊普通消息链路
 	// （对齐位置 104），气泡按微信同款渲染（方头像+昵称+「个人名片」），点击打开资料卡
 	MsgTypeContactCard = 107
+
+	// 阶段二百八十：朋友圈互动实时同步（微信同款朋友圈）。HTTP 归口写库后服务端主动下发：
+	// content 为 JSON {action: like/unlike/comment/reply/publish/delete, moment_id, actor, target}
+	// 接收方点亮朋友圈红点并按需刷新已打开的朋友圈页面（不轮询）
+	MsgTypeMomentSync = 108
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

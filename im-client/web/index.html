@@ -48,7 +48,7 @@
          须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
     <script src="/js/web-call-bridge.js?v=2.4"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
-    <script src="/js/mobile.js?v=1.25"></script>
+    <script src="/js/mobile.js?v=1.26"></script>
     <!-- 阶段二百六十：客户端自动更新（APP 原生壳检测/下载/安装弹窗 + PC 设置页检查更新接线；
          纯浏览器 WEB 端服务端托管即全员生效，本脚本自动旁路） -->
     <script src="/js/app-update.js?v=1.0"></script>
@@ -233,6 +233,12 @@
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-3.31 0-8 1.67-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-3.33-4.69-5-8-5z"/></svg>
                     <!-- 阶段二十九：通讯录图标红点角标（有待处理好友申请时显示，微信同款） -->
                     <span id="nav-friends-badge" class="nav-badge hidden"></span>
+                </div>
+                <!-- 阶段二百八十：朋友圈入口（微信同款，通讯录之后；红点=我的动态有新点赞/评论互动；
+                     手机端此图标 CSS 恒隐藏，入口归口个人资料页"朋友圈"条目 + 头像红点） -->
+                <div class="nav-icon sidebar-tab" data-tab="moments" title="朋友圈">
+                    <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.9 8.9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0zM5 17l3.5-4.5 2.5 3.01L14.5 11l4.5 6H5z"/></svg>
+                    <span id="nav-moments-badge" class="nav-badge hidden"></span>
                 </div>
                 <!-- 阶段一百四十四：公告与动态入口（公司公告/新闻动态/红头文件，后台发布归口，实时推送亮红点） -->
                 <div class="nav-icon sidebar-tab" data-tab="announcement" title="公告">
@@ -421,6 +427,22 @@
                         <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21c5 0 9-4 9-9s-4-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
                     </span>
                     <span class="new-friends-text">控制记录</span>
+                </div>
+            </div>
+
+            <!-- 阶段二百八十：朋友圈面板（微信同款；左侧两入口，右侧覆盖页显示，网盘同款形态） -->
+            <div id="moments-panel" class="friends-panel hidden">
+                <div id="moments-entry-feed" class="new-friends-entry" title="朋友圈">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.9 8.9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0zM5 17l3.5-4.5 2.5 3.01L14.5 11l4.5 6H5z"/></svg>
+                    </span>
+                    <span class="new-friends-text">朋友圈</span>
+                </div>
+                <div id="moments-entry-mine" class="new-friends-entry" title="我的相册">
+                    <span class="new-friends-icon drive-entry-avatar">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-3.31 0-8 1.67-8 5v1a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-1c0-3.33-4.69-5-8-5z"/></svg>
+                    </span>
+                    <span class="new-friends-text">我的相册</span>
                 </div>
             </div>
 
@@ -988,6 +1010,13 @@
                 <button class="mpa-item" data-target="qr-card-entry">
                     <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zM13 13h2v2h-2v-2zm4 0h2v2h-2v-2zm-4 4h2v2h-2v-2zm4 0h2v2h-2v-2z"/></svg>
                     <span>二维码名片</span>
+                </button>
+                <!-- 阶段二百八十：朋友圈入口（微信"我"页同款条目；行尾红点=我的动态有新互动，
+                     data-target-tab 转发至朋友圈 tab（mobile.js 特判 enterChat 后滑入覆盖页）） -->
+                <button class="mpa-item" data-target-tab="moments" id="mpa-moments">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.9 8.9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0zM5 17l3.5-4.5 2.5 3.01L14.5 11l4.5 6H5z"/></svg>
+                    <span>朋友圈</span>
+                    <span id="mpa-moments-badge" class="mpa-badge hidden"></span>
                 </button>
                 <button class="mpa-item" data-target-tab="announcement">
                     <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M18 11v2h4v-2h-4zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4zM4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9H4zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.02 1.5-3.34z"/></svg>
@@ -2384,6 +2413,73 @@
 
     <!-- 阶段二百六十一：远程控制页面（向日葵同款：设备ID+验证码直连；覆盖右侧聊天区，网盘同款形态，
          DOM 由 rc-panel.js 移入 .main-chat；三视图=我的电脑/连接远端/控制记录） -->
+    <!-- 朋友圈页面（微信同款：覆盖右侧聊天区，网盘/远程控制同款 absolute 覆盖；DOM 由 moments.js 移入 .main-chat；
+         双视图：时间线 feed（封面+头像+动态流）与发布页 publish（文字+九宫格选图+可见范围），互斥切换） -->
+    <div id="moments-view" class="moments-view hidden">
+        <!-- 顶部恒驻操作条（sticky 零高度：返回/相机随滚动恒驻，微信同款） -->
+        <div class="moments-topbar">
+            <button id="moments-back" class="moments-back" title="返回聊天">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            </button>
+            <button id="moments-camera" class="moments-camera" title="发布朋友圈">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path fill="currentColor" d="M9 3 7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a6 6 0 1 1 0-12 6 6 0 0 1 0 12z"/></svg>
+            </button>
+        </div>
+        <div class="moments-cover">
+            <div class="moments-cover-bg"></div>
+            <div class="moments-me">
+                <span id="moments-me-name" class="moments-me-name"></span>
+                <span id="moments-me-avatar" class="moments-me-avatar"></span>
+            </div>
+        </div>
+        <div id="moments-list" class="moments-list"><!-- 动态卡片由 moments.js 渲染 --></div>
+        <div id="moments-loading" class="moments-loading hidden"></div>
+        <div id="moments-empty" class="moments-empty hidden"></div>
+    </div>
+
+    <!-- 朋友圈发布页（微信同款发表页：文字框 + 九宫格选图 + 可见范围，覆盖在时间线之上） -->
+    <div id="moments-publish-view" class="moments-publish-view hidden">
+        <div class="moments-pub-head">
+            <button id="moments-pub-cancel" class="moments-pub-cancel">取消</button>
+            <span class="moments-pub-title">发表朋友圈</span>
+            <button id="moments-pub-send" class="moments-pub-send">发表</button>
+        </div>
+        <div class="moments-pub-body">
+            <textarea id="moments-pub-text" class="moments-pub-text" maxlength="2000" placeholder="这一刻的想法…"></textarea>
+            <div id="moments-pub-grid" class="moments-pub-grid">
+                <button id="moments-pub-add" class="moments-pub-add" title="添加图片">
+                    <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                </button>
+            </div>
+            <input type="file" id="moments-pub-file" accept="image/*" multiple hidden>
+            <!-- 可见范围（微信同款四选一 + 好友多选） -->
+            <button id="moments-pub-vis" class="moments-pub-vis">
+                <span class="moments-pub-vis-label">可见范围</span>
+                <span id="moments-pub-vis-text" class="moments-pub-vis-text">公开</span>
+                <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+            </button>
+            <!-- 可见范围选择浮层（自绘弹窗，禁用系统默认弹窗） -->
+            <div id="moments-vis-mask" class="moments-vis-mask hidden"></div>
+            <div id="moments-vis-panel" class="moments-vis-panel hidden">
+                <div class="moments-vis-head">
+                    <button id="moments-vis-cancel" class="moments-vis-cancel">取消</button>
+                    <span class="moments-vis-title">可见范围</span>
+                    <button id="moments-vis-ok" class="moments-vis-ok">完成</button>
+                </div>
+                <div class="moments-vis-opts">
+                    <button class="moments-vis-opt" data-vis="0"><span>公开</span><span class="moments-vis-sub">全部好友可见</span><span class="moments-vis-check"></span></button>
+                    <button class="moments-vis-opt" data-vis="1"><span>私密</span><span class="moments-vis-sub">仅自己可见</span><span class="moments-vis-check"></span></button>
+                    <button class="moments-vis-opt" data-vis="2"><span>部分可见</span><span class="moments-vis-sub">从通讯录选择可看的好友</span><span class="moments-vis-check"></span></button>
+                    <button class="moments-vis-opt" data-vis="3"><span>不给谁看</span><span class="moments-vis-sub">从通讯录选择不可看的好友</span><span class="moments-vis-check"></span></button>
+                </div>
+                <div id="moments-vis-friends" class="moments-vis-friends hidden">
+                    <input id="moments-vis-search" class="moments-vis-search" placeholder="搜索好友" maxlength="32" autocomplete="off">
+                    <div id="moments-vis-friend-list" class="moments-vis-friend-list"><!-- 好友多选列表由 moments.js 渲染 --></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="rc-view" class="rc-view hidden">
         <div class="rc-head">
             <span class="rc-logo">
@@ -2617,7 +2713,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.42"></script>
+    <script src="/js/socket.js?v=1.43"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.10"></script>
@@ -2639,7 +2735,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.11"></script>
-    <script src="/js/chat.js?v=3.184"></script>
+    <script src="/js/chat.js?v=3.185"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
@@ -2650,6 +2746,9 @@
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
     <script src="/js/rc-panel.js?v=1.3"></script>
+    <!-- 阶段二百八十：朋友圈（微信同款：时间线/发布/点赞/评论/楼中楼回复；须在 chat.js 之后加载：
+         复用 _osbInit 自绘滚动条与 IMContacts 好友数据源；Tab 切换经 window.IMMoments.open/close 联动） -->
+    <script src="/js/moments.js?v=1.2"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
     <script src="/js/rc-mobile-view.js?v=1.1"></script>

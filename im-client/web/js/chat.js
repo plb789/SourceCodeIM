@@ -8144,6 +8144,15 @@
             } else if (tabName === 'rc') {
                 setTimeout(function () { if (window.IMRC) window.IMRC.open(); }, 300);
             }
+            // 阶段二百八十：朋友圈面板纳入互斥切换（微信同款；页面形态网盘同款覆盖层）
+            var momentsPanelEl = document.getElementById('moments-panel');
+            if (momentsPanelEl) momentsPanelEl.classList.toggle('hidden', tabName !== 'moments');
+            if (window.IMMoments) {
+                if (tabName === 'moments') window.IMMoments.open();
+                else if (window.IMMoments.isOpen()) window.IMMoments.close();
+            } else if (tabName === 'moments') {
+                setTimeout(function () { if (window.IMMoments) window.IMMoments.open(); }, 300);
+            }
             // 阶段二十三：切换Tab时清空搜索状态（收起结果面板、清空输入与清除按钮），避免残留干扰
             closeSidebarSearch();
         });
