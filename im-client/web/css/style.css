@@ -20876,7 +20876,8 @@ html.m .cc-item { padding: 10px 8px; }
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
 }
-/* 手机端个人页朋友圈行红点（行尾，箭头前） */
+/* 手机端个人页朋友圈行红点：绝对定位贴在行尾箭头左侧（微信同款）——
+   不参与 flex 排版，箭头保持 margin-left:auto 与其他行"›"完全对齐 */
 html.m .mpa-badge {
     width: 8px;
     height: 8px;
@@ -20884,7 +20885,13 @@ html.m .mpa-badge {
     background: #fa5151;
     flex-shrink: 0;
 }
-html.m #mpa-moments::after { margin-left: 8px; }
+html.m #mpa-moments { position: relative; }
+html.m #mpa-moments-badge {
+    position: absolute;
+    right: 20px; /* 行右内边距 2px + 箭头字形宽约 10px，再留 8px 间距 */
+    top: 50%;
+    transform: translateY(-50%);
+}
 /* 手机端：朋友圈导航图标恒隐藏（入口归口个人资料页"朋友圈"条目 + 头像红点，微信同款） */
 html.m .nav-icon[data-tab="moments"] { display: none; }
 /* 手机端适配：封面通栏 + 头像红点 + 发布页全屏 */
