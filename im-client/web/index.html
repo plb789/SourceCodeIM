@@ -48,7 +48,7 @@
          须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
     <script src="/js/web-call-bridge.js?v=2.4"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
-    <script src="/js/mobile.js?v=1.24"></script>
+    <script src="/js/mobile.js?v=1.25"></script>
     <!-- 阶段二百六十：客户端自动更新（APP 原生壳检测/下载/安装弹窗 + PC 设置页检查更新接线；
          纯浏览器 WEB 端服务端托管即全员生效，本脚本自动旁路） -->
     <script src="/js/app-update.js?v=1.0"></script>
@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.61">
+    <link rel="stylesheet" href="/css/style.css?v=3.62">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -730,7 +730,10 @@
                  条目为既有工具按钮的镜像入口：点击仅转发 .click()，业务逻辑归口 chat.js 零复制；
                  条目显隐经 MutationObserver 跟随对应按钮 hidden 态（会话类型分流仍归口 chat.js） -->
             <div id="mobile-plus-panel" class="mobile-plus-panel hidden">
-                <div class="mp-grid">
+                <!-- 微信同款横向翻页：.mp-page 为一页（4 列×2 行=8 条），横向 scroll-snap 滑动切换，
+                     底部 .mp-dots 圆点指示当前页；初始 DOM 仅作 JS 加载前的占位（mobile.js 分页归口） -->
+                <div class="mp-scroller" id="mp-scroller">
+                    <div class="mp-page">
                     <button class="mp-item" data-target="image-btn">
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></span>
                         <span class="mp-label">相册</span>
@@ -779,7 +782,10 @@
                         <span class="mp-icon"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></span>
                         <span class="mp-label">清空聊天</span>
                     </button>
+                    </div>
                 </div>
+                <!-- 底部页指示圆点（微信同款：仅分页数 ≥2 时显示，当前页高亮跟随主题色） -->
+                <div class="mp-dots" id="mp-dots"></div>
             </div>
 
             <!-- 阶段一百一十七：Agent 审批模式面板（TRAE CN 同款下拉：手动审批/自动审批/完全访问，自研面板跟随主题色） -->
@@ -2632,8 +2638,8 @@
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
-    <script src="/js/p2p-file.js?v=1.10"></script>
-    <script src="/js/chat.js?v=3.183"></script>
+    <script src="/js/p2p-file.js?v=1.11"></script>
+    <script src="/js/chat.js?v=3.184"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；

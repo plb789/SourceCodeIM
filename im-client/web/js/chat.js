@@ -3454,6 +3454,44 @@
                 }
                 return;
             }
+            // 阶段二百八十四：PC（Electron）分支——微信 PC 同款文档缓存（saveMode 仅保存语义
+            // 不受影响仍走保存对话框；浏览器无 desktop 桥自动旁路）。文档类型归口主进程磁盘缓存：
+            // 命中 → shell.openPath 秒开零下载；未命中 → 流式下载（进度浮层）→ 落缓存 → 系统打开
+            if (window.desktop && window.desktop.docCacheOpen && !saveMode &&
+                url && url.indexOf('blob:') !== 0 && url.indexOf('data:') !== 0 &&
+                /\.(docx|xlsx|pptx|pdf)($|\?)/i.test(name || url)) {
+                window.desktop.docCacheOpen({ url: url, name: name }).then(function (res) {
+                    if (res && res.opened) {
+                        showToast(I18N.t('已从缓存打开'));
+                        return;
+                    }
+                    if (res && res.found) {
+                        // 已在本地但无关联应用：文件已缓存，仅提示不重复下载（与 openCached 同语义）
+                        showToast(I18N.t('已从缓存打开（无应用可打开该文件类型）'));
+                        return;
+                    }
+                    showToast(I18N.t('文件较大，正在下载并使用本地应用打开'));
+                    downloadWithProgress(url, name, function (blob) {
+                        if (!window.desktop.docCachePut) return;
+                        // 分块落缓存（8MB/片）：整块 arrayBuffer+IPC 序列化在 235MB 级会冻结
+                        // 渲染线程数秒（实测点击"无反应"体感），分片后每步内存/IPC 恒定
+                        var CH = 8 * 1024 * 1024, off = 0;
+                        function step() {
+                            if (off >= blob.size) {
+                                return window.desktop.docCacheOpen({ url: url, name: name }).then(function (r2) {
+                                    showToast(r2 && r2.opened ? I18N.t('已下载，正在打开…') : I18N.t('已下载（无应用可打开该文件类型）'));
+                                }).catch(function () { });
+                            }
+                            var end = Math.min(blob.size, off + CH);
+                            return blob.slice(off, end).arrayBuffer().then(function (ab) {
+                                return window.desktop.docCachePut({ url: url, name: name, buf: new Uint8Array(ab), append: off > 0 });
+                            }).then(function () { off = end; return step(); });
+                        }
+                        step();
+                    });
+                }).catch(function () { downloadWithProgress(url, name); });
+                return;
+            }
             if (!url || url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) {
                 // 本地内存源（P2P 直传/导出内容）：数据已在本机，秒完成无需进度
                 var a = document.createElement('a');
@@ -24180,6 +24218,27 @@
                     }
                     openDocPreviewFallback(url, name);
                 }).catch(function () { openDocPreviewFallback(url, name); });
+                return;
+            } catch (e) { /* HEAD 不可用落原逻辑 */ }
+        }
+        // 阶段二百八十四：PC 端大文件不进在线预览（微信 PC 同款，与上方 APP 分流同口径）——
+        // 独立查看器窗口对未缓存大文件在线下载解析（161.9MB 级既慢又每次重复下载，用户实测），
+        // HEAD 探测 >25MB 直接走 imDownload（PC 分支：缓存命中秒开 / 下载落缓存后系统默认应用打开）
+        if (window.desktop && window.desktop.openDocViewer && window.desktop.docCacheOpen &&
+            url && url.indexOf('blob:') !== 0 && url.indexOf('data:') !== 0 &&
+            /\.(docx|xlsx|pptx|pdf)($|\?)/i.test(name || url)) {
+            try {
+                fetch(url, { method: 'HEAD' }).then(function (r) {
+                    var len = parseInt((r.headers && r.headers.get('content-length')) || '0', 10) || 0;
+                    if (len > 25 * 1024 * 1024) {
+                        showToast(I18N.t('文件较大，正在下载并使用本地应用打开'));
+                        imDownload(url, name);
+                        return;
+                    }
+                    window.desktop.openDocViewer({ url: url, name: name || I18N.t('文档') });
+                }).catch(function () {
+                    window.desktop.openDocViewer({ url: url, name: name || I18N.t('文档') });
+                });
                 return;
             } catch (e) { /* HEAD 不可用落原逻辑 */ }
         }

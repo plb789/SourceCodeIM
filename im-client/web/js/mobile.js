@@ -441,6 +441,11 @@
             if (willShow) {
                 var ep2 = document.getElementById('emoji-panel');
                 if (ep2) ep2.classList.add('hidden');
+                // 微信同款：每次打开面板归位第一页（圆点同步回第一颗）
+                if (mpScroller) {
+                    mpScroller.scrollLeft = 0;
+                    mpSyncDots();
+                }
             }
         });
         // 阶段二百零一修复：反向互斥——表情面板与「+」面板均为流式占位布局，
@@ -477,12 +482,68 @@
             }
             var mirror = function () {
                 item.classList.toggle('hidden', btn.classList.contains('hidden'));
+                // 显隐变化改变可见条目数 → 分页布局需重算（6.4b 去抖合并 11 次初始镜像）
+                mpSchedulePaginate();
             };
             mirror();
             try {
                 new MutationObserver(mirror).observe(btn, { attributes: true, attributeFilter: ['class'] });
             } catch (err) { /* 观察失败仅影响镜像跟随，转发链路不受影响 */ }
         });
+
+        // 6.4b 阶段二百八十五：微信同款横向翻页——可见条目按每页 4×2=8 个分页装进
+        //     .mp-scroller（scroll-snap 一屏一翻），底部 .mp-dots 圆点指示当前页；
+        //     单页（≤8 条可见）时圆点隐藏。条目节点整体搬移不破坏 6.3 的面板级事件委托。
+        //     实测修复：全部条目节点初始化时一次留存（mpAllItems）——分页重建只搬移不丢弃，
+        //     否则初始化早期处于隐藏态的条目会被 textContent 清空抛出 DOM，之后
+        //     chat.js 恢复其可见时节点已丢失（实测 11 条全部丢失面板空白）。
+        var mpScroller = document.getElementById('mp-scroller');
+        var mpDots = document.getElementById('mp-dots');
+        var mpAllItems = Array.prototype.slice.call(mobilePlusPanel.querySelectorAll('.mp-item'));
+        var mpPageTimer = null;
+        function mpSchedulePaginate() {
+            if (mpPageTimer) clearTimeout(mpPageTimer);
+            mpPageTimer = setTimeout(mpPaginate, 60);
+        }
+        function mpPaginate() {
+            mpPageTimer = null;
+            if (!mpScroller || !mpDots) return;
+            // 可见条目按 DOM 顺序分页（隐藏条目不占格，节点保留待恢复）
+            var items = mpAllItems.filter(function (it) { return !it.classList.contains('hidden'); });
+            var pages = [];
+            for (var i = 0; i < items.length; i += 8) pages.push(items.slice(i, i + 8));
+            if (!pages.length) pages.push([]);
+            // 重建页（条目节点原地搬移，MutationObserver 观察的是目标工具按钮，不受影响）
+            mpScroller.textContent = '';
+            pages.forEach(function (list) {
+                var page = document.createElement('div');
+                page.className = 'mp-page';
+                list.forEach(function (it) { page.appendChild(it); });
+                mpScroller.appendChild(page);
+            });
+            // 重建圆点（微信同款：单页隐藏）
+            mpDots.textContent = '';
+            mpDots.classList.toggle('hidden', pages.length < 2);
+            for (var d = 0; d < pages.length; d++) {
+                var dot = document.createElement('span');
+                dot.className = 'mp-dot' + (d === 0 ? ' active' : '');
+                mpDots.appendChild(dot);
+            }
+            mpScroller.scrollLeft = 0;
+            mpSyncDots();
+        }
+        function mpSyncDots() {
+            if (!mpScroller || !mpDots) return;
+            var dots = mpDots.children;
+            if (!dots.length) return;
+            var w = mpScroller.clientWidth || 1;
+            var idx = Math.max(0, Math.min(dots.length - 1, Math.round(mpScroller.scrollLeft / w)));
+            for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('active', i === idx);
+        }
+        if (mpScroller) {
+            mpScroller.addEventListener('scroll', mpSyncDots, { passive: true });
+        }
+        mpPaginate();
 
         // 6.5 发送/加号互换（微信同款）：输入非空显示发送、隐藏加号；AI 停止态不受影响
         var msgInput = document.getElementById('message-input');

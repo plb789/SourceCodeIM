@@ -133,6 +133,41 @@
     <div class="dv-stage" id="dv-stage"></div>
     <div class="dv-loading" id="dv-loading">加载中…</div>
     <script>
+        // ===== 阶段二百八十四：文档磁盘缓存归口（本窗口预览 iframe 专用 P2PFile 缓存 shim） =====
+        // P2PFile.js 仅在主聊天窗口加载，本独立窗口的预览 iframe 经 window.parent 取不到
+        // （阶段二百八十三补的同源回退在本窗口落空）——PC 无 Capacitor 插件，缓存分支恒跳过，
+        // 每次打开都在线全量下载（用户实测 161.9MB 重复下载）。此处以 desktop.docCache* 桥实现
+        // 与主窗口 P2PFile 同签名的 cacheRead/cacheWrite/openCached，直通主进程磁盘缓存
+        //（md5(url) 键与主窗口 imDownload/预览页回写共用，二次打开零下载秒开）
+        (function () {
+            var DT = window.desktop;
+            if (!DT || !DT.docCacheGet) return; // 旧版主进程无缓存桥：不注入，预览页自动走在线逻辑
+            window.P2PFile = {
+                cacheRead: function (url, name, maxBytes) {
+                    if (!url || url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(null);
+                    return DT.docCacheGet({ url: url, name: name, maxBytes: maxBytes || 0 }).then(function (r) {
+                        if (!r || !r.found) return null;
+                        if (r.tooBig) return { tooBig: true, size: r.size, uri: r.path ? 'file://' + r.path : '' };
+                        if (!r.buf) return null;
+                        return new Uint8Array(r.buf);
+                    }).catch(function () { return null; });
+                },
+                cacheWrite: function (url, name, blob) {
+                    if (!url || !blob || url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(false);
+                    return blob.arrayBuffer().then(function (ab) {
+                        return DT.docCachePut({ url: url, name: name, buf: new Uint8Array(ab), append: false });
+                    }).then(function () { return true; }).catch(function () { return false; });
+                },
+                openCached: function (url, name) {
+                    return DT.docCacheOpen({ url: url, name: name }).then(function (r) {
+                        if (r && r.opened) return true;
+                        return !!(r && r.found); // 已在本地但无关联应用：视为命中不重复下载（同主窗口语义）
+                    }).catch(function () { return false; });
+                }
+            };
+        })();
+    </script>
+    <script>
         // 阶段一百三十四：独立文档查看器页内逻辑——接收主进程 doc:load 载荷按类型分派渲染
         (function () {
             var stage = document.getElementById('dv-stage');
@@ -236,13 +271,13 @@
                     // data: URL（blob 中转场景）过长不能走查询参数——iframe 无参加载后 postMessage 推入
                     var f2 = document.createElement('iframe');
                     if (url.indexOf('data:') === 0) {
-                        f2.src = '/doc-preview.html?type=' + ext;
+                        f2.src = '/doc-preview.html?v=3.184&type=' + ext;
                         f2.addEventListener('load', function () {
                             // postMessage 目标 origin 用本页 origin（解析页与本页同源）
                             f2.contentWindow.postMessage({ type: 'doc-preview-src', url: url }, location.origin);
                         });
                     } else {
-                        f2.src = '/doc-preview.html?type=' + ext + '&url=' + encodeURIComponent(url);
+                        f2.src = '/doc-preview.html?v=3.184&type=' + ext + '&url=' + encodeURIComponent(url);
                     }
                     stage.appendChild(f2);
                     return;
@@ -251,12 +286,12 @@
                     // pptx：复用 pptx-preview.html（PPTXjs；Chart.js 依赖已在页内引入）。data: 同上 postMessage
                     var f3 = document.createElement('iframe');
                     if (url.indexOf('data:') === 0) {
-                        f3.src = '/pptx-preview.html';
+                        f3.src = '/pptx-preview.html?v=3.184';
                         f3.addEventListener('load', function () {
                             f3.contentWindow.postMessage({ type: 'doc-preview-src', url: url }, location.origin);
                         });
                     } else {
-                        f3.src = '/pptx-preview.html?type=pptx&url=' + encodeURIComponent(url);
+                        f3.src = '/pptx-preview.html?v=3.184&type=pptx&url=' + encodeURIComponent(url);
                     }
                     stage.appendChild(f3);
                     return;

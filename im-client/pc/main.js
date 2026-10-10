@@ -1405,7 +1405,7 @@ function ensureDocViewerWindow() {
             nodeIntegration: false
         }
     });
-    docViewerWin.loadURL(SERVER_URL + 'doc-viewer.html');
+    docViewerWin.loadURL(SERVER_URL + 'doc-viewer.html?v=3.184'); // ?v= 版本参数：服务端页面更新后强制取新（防 HTTP 缓存旧页）
     docViewerWin.on('close', function (e) {
         // 关闭改为隐藏复用：保留窗口避免频繁重建（页面内 Esc/关闭按钮走同一隐藏逻辑）
         if (docViewerWin.isVisible()) {
@@ -1512,6 +1512,88 @@ ipcMain.handle('doc:save', async function (event, data) {
         return false;
     }
 });
+
+// ===== 阶段二百八十四：聊天文档磁盘缓存（微信 PC 同款——文档类文件打开即落缓存，二次打开零下载秒开） =====
+// 键 = 文件 URL（服务端上传名含纳秒时间戳全局唯一不可变），落盘名 = md5(url) + 原扩展名；
+// 渲染层经 desktop.docCache* 桥访问（preload 同名转发）；目录上限 2GB，超限按 mtime 清最旧。
+// 读写归口与 APP 端 P2PFile.cacheRead/cacheWrite/openCached 同构（同一套渲染层逻辑双端生效）
+var crypto = require('crypto');
+var DOC_CACHE_ROOT = path.join(app.getPath('userData'), 'im_doc_cache');
+var DOC_CACHE_MAX = 2 * 1024 * 1024 * 1024;
+function docCachePathOf(url, name) {
+    // 键归一化（实测修复"预览回写后读取仍 miss"）：预览页经 absUrl 归一化传完整 URL（scheme://host/path），
+    // 主窗口卡片 data-url 为相对路径（/path）——同文件两形态 md5 必不同，缓存永远失效。
+    // 统一剥去 scheme://host[:port] 前缀只取 path+query 作键（服务端上传名全局唯一，跨 origin 同文件同键）
+    var s = String(url || '');
+    var mUrl = s.match(/^[a-z][a-z0-9+.-]*:\/\/[^\/]+(\/.*)$/i);
+    if (mUrl) s = mUrl[1];
+    var key = crypto.createHash('md5').update(s).digest('hex');
+    var m = String(name || '').toLowerCase().match(/(\.[a-z0-9]+)($|\?)/);
+    return path.join(DOC_CACHE_ROOT, key + (m ? m[1] : ''));
+}
+ipcMain.handle('doc-cache:get', async function (event, data) {
+    try {
+        if (!data || !data.url) return { ok: false, found: false };
+        var pGet = docCachePathOf(data.url, data.name);
+        var stGet = await fs.promises.stat(pGet);
+        if (data.maxBytes && stGet.size > data.maxBytes) {
+            return { ok: true, found: true, tooBig: true, size: stGet.size, path: pGet };
+        }
+        var buf = await fs.promises.readFile(pGet);
+        return { ok: true, found: true, size: buf.length, buf: buf, path: pGet };
+    } catch (e) {
+        return { ok: true, found: false };
+    }
+});
+ipcMain.handle('doc-cache:put', async function (event, data) {
+    try {
+        if (!data || !data.url || !data.buf) return { ok: false };
+        var pPut = docCachePathOf(data.url, data.name);
+        await fs.promises.mkdir(DOC_CACHE_ROOT, { recursive: true });
+        await fs.promises.writeFile(pPut, Buffer.from(data.buf), { flag: data.append ? 'a' : 'w' });
+        if (!data.append) docCacheSweep(); // 全量写完成顺带清扫超限（异步不阻塞返回）
+        return { ok: true, path: pPut };
+    } catch (e) {
+        console.warn('文档缓存写入失败:', e && e.message);
+        return { ok: false };
+    }
+});
+ipcMain.handle('doc-cache:open', async function (event, data) {
+    try {
+        if (!data || !data.url) return { ok: false };
+        var pOpen = docCachePathOf(data.url, data.name);
+        var stOpen = await fs.promises.stat(pOpen).catch(function () { return null; });
+        if (!stOpen) return { ok: true, found: false, opened: false };
+        var rOpen = await shell.openPath(pOpen);
+        return { ok: true, found: true, opened: !rOpen, error: rOpen || '' };
+    } catch (e) {
+        return { ok: false };
+    }
+});
+// 超限清扫：按 mtime 从最旧开始删，直到回到上限内（单实例内串行，重入直接跳过）
+var docCacheSweeping = false;
+async function docCacheSweep() {
+    if (docCacheSweeping) return;
+    docCacheSweeping = true;
+    try {
+        var names = await fs.promises.readdir(DOC_CACHE_ROOT).catch(function () { return []; });
+        var items = [], total = 0;
+        for (var i = 0; i < names.length; i++) {
+            var st = await fs.promises.stat(path.join(DOC_CACHE_ROOT, names[i])).catch(function () { return null; });
+            if (st && st.isFile()) { items.push({ n: names[i], m: st.mtimeMs, s: st.size }); total += st.size; }
+        }
+        if (total <= DOC_CACHE_MAX) return;
+        items.sort(function (a, b) { return a.m - b.m; });
+        for (var j = 0; j < items.length && total > DOC_CACHE_MAX; j++) {
+            await fs.promises.unlink(path.join(DOC_CACHE_ROOT, items[j].n)).catch(function () {});
+            total -= items[j].s;
+        }
+    } catch (e) {
+        // 清扫失败不影响主流程（下次写入再触发）
+    } finally {
+        docCacheSweeping = false;
+    }
+}
 
 // ===== 阶段一百五十九：P2P 接收文件本地缓存（微信同款静默落盘，设置-网络"接收文件自动落盘"开关归口） =====
 // 目录：%APPDATA%/<应用名>/received_files/<账号>/<消息ID>_<文件名>；渲染层不传路径防目录穿越，

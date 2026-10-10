@@ -148,8 +148,10 @@
         // 阶段二百八十三：APP 端先查本地缓存——命中读缓存直渲染（零下载，微信同款第二次打开
         // 秒开）；未命中走原 fetch 下载，完成后回写缓存（预览页右上"下载"按钮经 openCached 同键命中）
         // 阶段二百八十三补：本页运行于主窗口 iframe 内，Capacitor 桥与 P2PFile 均只在主 frame
-        // ——iframe 里 window.P2PFile 必为 undefined，缓存分支永远被跳过。同源回退父窗口取用
-        var CAP = window.Capacitor || (function () { try { return window.parent && window.parent.Capacitor || null; } catch (_) { return null; } })();
+        // ——iframe 里 window.P2PFile 必为 undefined，缓存分支永远被跳过。同源回退父窗口取用。
+        // 阶段二百八十四：PC 端同经 P2PFile 缓存归口（主窗口时函数内自行分支 desktop 主进程
+        // 磁盘缓存；独立 doc-viewer 窗口时父窗口注入同签名 shim），判断收敛为仅 P2P——
+        // 浏览器端无缓存能力时函数内部自动旁路，行为不变
         var P2P = window.P2PFile || (function () { try { return window.parent && window.parent.P2PFile || null; } catch (_) { return null; } })();
         function urlName(u) {
             var p = String(u || '').split('?')[0].split('#')[0];
@@ -157,7 +159,7 @@
             return p.substring(p.lastIndexOf('/') + 1) || 'file';
         }
         function loadAndRender(u) {
-            if (CAP && P2P && P2P.cacheRead &&
+            if (P2P && P2P.cacheRead &&
                 u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
                 loadingEl.textContent = '正在检查本地缓存…';
                 // 阶段二百八十三：小文件读缓存直渲染（零下载秒开）；超大文件拒绝读回（Filesystem.readFile
@@ -185,7 +187,7 @@
                 return res.arrayBuffer();
             }).then(function (buf) {
                 // 阶段二百八十三：APP 端下载完成回写本地缓存（分片异步写盘不阻塞渲染；blob:/data: 源内部自动跳过）
-                if (CAP && P2P && P2P.cacheWrite) {
+                if (P2P && P2P.cacheWrite) {
                     try { P2P.cacheWrite(u, urlName(u), new Blob([buf])); } catch (_) {}
                 }
                 renderBuf(buf);

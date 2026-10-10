@@ -479,6 +479,21 @@ contextBridge.exposeInMainWorld('desktop', {
     docSave: function (payload) {
         return ipcRenderer.invoke('doc:save', payload);
     },
+    // ===== 阶段二百八十四：文档磁盘缓存（微信 PC 同款——大文件打开一次落盘，二次秒开零下载）=====
+    // get：data = {url, name, maxBytes}，命中且未超 maxBytes 返回 {found:true, buf(Uint8Array), size, path}；
+    // 命中但超过 maxBytes 返回 {found:true, tooBig:true, size, path}；未命中返回 {found:false}
+    docCacheGet: function (data) {
+        return ipcRenderer.invoke('doc-cache:get', data || {});
+    },
+    // put：data = {url, name, buf(Uint8Array), append}，append=true 追加写分片；写后非追加触发超限清扫
+    docCachePut: function (data) {
+        return ipcRenderer.invoke('doc-cache:put', data || {});
+    },
+    // open：data = {url, name}，缓存命中调 shell.openPath 用系统默认应用打开；
+    // 返回 {opened:boolean, error?, found:boolean, path?}
+    docCacheOpen: function (data) {
+        return ipcRenderer.invoke('doc-cache:open', data || {});
+    },
     // 导航操作（action: back/forward/reload/stop/goto；goto 时带 url）
     browserNav: function (action, url) {
         return ipcRenderer.invoke('browser:nav', { action: action, url: url });

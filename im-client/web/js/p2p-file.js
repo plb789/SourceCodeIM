@@ -860,6 +860,22 @@
     }
     // 缓存命中直接系统打开（微信同款秒开，零下载）；未命中返回 false 由调用方走流式下载
     function openCached(url, name) {
+        // 阶段二百八十四：PC 分支——主进程 stat + shell.openPath 系统默认应用打开。
+        // found 但 opened=false（无关联应用）：文件已在本地，仅提示类型问题，不重复下载（同 APP 语义）
+        var DT = window.desktop;
+        if (DT && DT.docCacheOpen) {
+            return DT.docCacheOpen({ url: url, name: name }).then(function (r) {
+                if (r && r.opened) {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开'));
+                    return true;
+                }
+                if (r && r.found) {
+                    if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开（无应用可打开该文件类型）'));
+                    return true;
+                }
+                return false;
+            }).catch(function () { return false; });
+        }
         return dlCacheGet(url, name).then(function (c) {
             if (!c || !c.uri || dlWriting[c.path]) return false; // 写入中的半成品视为未命中
             var P = window.Capacitor && window.Capacitor.Plugins;
@@ -884,6 +900,19 @@
     // 并发 downloadFromUrl/cacheWrite 同键直接拒绝，杜绝"读到/写出损坏的半截缓存"
     var dlWriting = {};
     function cacheRead(url, name, maxBytes) {
+        // 阶段二百八十四：PC（Electron）分支——主进程磁盘缓存（md5(url) 键，与 APP 同构结果形状）。
+        // PC 无 Capacitor 插件，原判断恒走 null 导致每次全量重新下载（用户实测重复下载）；
+        // desktop.docCacheGet 主进程 stat/readFile：命中 → Uint8Array；超 maxBytes → tooBig 系统打开
+        var DT = window.desktop;
+        if (DT && DT.docCacheGet && url &&
+            url.indexOf('blob:') !== 0 && url.indexOf('data:') !== 0) {
+            return DT.docCacheGet({ url: url, name: name, maxBytes: maxBytes || 0 }).then(function (r) {
+                if (!r || !r.found) return null;
+                if (r.tooBig) return { tooBig: true, size: r.size, uri: r.path ? 'file://' + r.path : '' };
+                if (!r.buf) return null;
+                return new Uint8Array(r.buf);
+            }).catch(function () { return null; });
+        }
         var P = window.Capacitor && window.Capacitor.Plugins;
         if (!P || !P.Filesystem || !url ||
             url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(null);
@@ -916,6 +945,24 @@
         }).catch(function () { return null; }); // 未缓存/系统已回收 → null 走下载
     }
     function cacheWrite(url, name, blob) {
+        // 阶段二百八十四：PC 分支——主进程整文件单写（大文件已被 chat.js 分流走系统打开，
+        // 此处仅承接预览页 ≤25MB 的中小文件回写）。写锁按 'pc:'+url 键与 APP 路径互不干扰
+        var DT = window.desktop;
+        if (DT && DT.docCachePut && url && blob &&
+            url.indexOf('blob:') !== 0 && url.indexOf('data:') !== 0) {
+            var pcKey = 'pc:' + url;
+            if (dlWriting[pcKey]) return Promise.resolve(false);
+            dlWriting[pcKey] = true;
+            return blob.arrayBuffer().then(function (ab) {
+                return DT.docCachePut({ url: url, name: name, buf: new Uint8Array(ab), append: false });
+            }).then(function () {
+                delete dlWriting[pcKey];
+                return true;
+            }).catch(function () {
+                delete dlWriting[pcKey];
+                return false;
+            });
+        }
         var P = window.Capacitor && window.Capacitor.Plugins;
         if (!P || !P.Filesystem || !url || !blob ||
             url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return Promise.resolve(false);

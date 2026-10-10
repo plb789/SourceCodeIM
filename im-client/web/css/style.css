@@ -1448,7 +1448,8 @@ html, body {
 }
 
 html.m .mobile-plus-panel:not(.hidden) {
-    display: block;
+    display: flex;
+    flex-direction: column;
 }
 
 /* ===== 阶段一百三十九：截图按钮 QQ 同款两段式（主区域截图 + 下拉箭头弹"隐藏当前窗口"选项） =====
@@ -10937,22 +10938,51 @@ html.m .input-bar.ms-mode #ms-bar {
 /* ===== 阶段一百九十七：微信手机版「+」面板（自绘网格浮层，贴输入条上方） =====
    阶段二百零一：对齐 docs/app-2.jpg 微信同款——面板改为流式布局（DOM 位于输入条之后，
    flex column 尾部自然展开在输入条下方、消息区自动压缩），全宽无圆角与聊天区一体，
-   图标为圆润方底座+下方文字、4 列网格 */
+   图标为圆润方底座+下方文字、4 列网格。
+   阶段二百八十五：微信同款横向翻页——可见条目按每页 4×2=8 个分页装进 .mp-scroller
+   （横向 scroll-snap 滑动、一屏一翻），底部 .mp-dots 圆点指示当前页（分页归口 mobile.js）；
+   此前 11 条纵向换行 3 行超出 280px 固定高被截半。 */
 html.m .mobile-plus-panel {
     position: static;
     width: 100%;
     height: 280px;
-    padding: 34px 18px 22px;
+    padding: 30px 0 8px;
     border-radius: 0;
     background: var(--header-bg);
     border-top: 1px solid var(--border);
     box-shadow: none;
-    overflow-y: auto;
+    overflow: hidden;
 }
 
-html.m .mp-grid {
+/* 横向翻页容器：一页一屏 scroll-snap；触摸滑动为原生滚动，滚动条整条隐藏（触屏无滚动条语义） */
+html.m .mp-scroller {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+}
+
+html.m .mp-scroller::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+/* 单页：自身即 4 列×2 行网格，左右内边距使内容与消息区对齐（页边界仍满屏吸附） */
+html.m .mp-page {
+    flex: 0 0 100%;
+    min-width: 100%;
+    box-sizing: border-box;
+    padding: 0 18px;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
     display: grid;
     grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: min-content;
+    align-content: start;
     gap: 26px 6px;
 }
 
@@ -10986,6 +11016,30 @@ html.m .mp-item:active .mp-icon {
 html.m .mp-label {
     font-size: 12px;
     color: var(--text-secondary, var(--text-light));
+}
+
+/* 底部页指示圆点（微信同款）：当前页用主题文字色高亮、非当前淡显，全部取自现有主题变量 */
+html.m .mp-dots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 12px 0 4px;
+    flex: none;
+}
+
+html.m .mp-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-light);
+    opacity: 0.4;
+    transition: opacity 0.2s, background 0.2s;
+}
+
+html.m .mp-dot.active {
+    background: var(--text);
+    opacity: 1;
 }
 
 /* 阶段一百九十七→二百零一：表情面板与「+」面板同款微信形态——流式布局贴输入条下方
