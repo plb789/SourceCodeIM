@@ -798,6 +798,7 @@
             audio: true
         }).then(function (stream) {
             camStream = stream;
+            camVideoEl.classList.remove('vd-ready'); // 重开/翻转重走首帧门，防占位图闪现
             camVideoEl.srcObject = stream;
         }).catch(function () {
             closeCam();
@@ -830,6 +831,7 @@
             audio: true
         }).then(function (stream) {
             camStream = stream;
+            camVideoEl.classList.remove('vd-ready'); // 翻转换流同样重走首帧门
             camVideoEl.srcObject = stream;
         }).catch(function () {
             camFacing = camFacing === 'user' ? 'environment' : 'user';
@@ -952,11 +954,13 @@
         vpVideoEl.addEventListener('loadeddata', function () {
             vpVideoEl.classList.remove('vp-wait');
         });
-        // 视频格（时间线/发布预览/封面背景）首帧就绪前隐藏画面：防 WebView 灰底系统占位图闪现
+        // 视频面（时间线/发布预览/封面背景/拍摄预览）首帧就绪前隐藏画面：防 WebView 灰底系统占位图闪现
+        // （拍摄预览为 srcObject 实时流，WebView 在摄像头首帧到达前同样绘制占位图）
         document.addEventListener('loadeddata', function (e) {
             var t = e.target;
             if (t && t.tagName === 'VIDEO' &&
-                (t.closest('.moment-video') || t.closest('.moments-pub-thumb') || t.closest('.moments-cover-media'))) {
+                (t.closest('.moment-video') || t.closest('.moments-pub-thumb') ||
+                 t.closest('.moments-cover-media') || t.closest('.moments-cam-video'))) {
                 t.classList.add('vd-ready');
             }
         }, true);

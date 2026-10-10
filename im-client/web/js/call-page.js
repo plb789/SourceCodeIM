@@ -15,6 +15,17 @@
     // 阶段二百五十四补丁3：原生沉浸态已请求值缓存（幂等去重，防重复桥调用）
     var immersiveOn = false;
 
+    // 阶段二百八十一：视频首帧就绪门——srcObject 实时流在首帧渲染前 Android WebView
+    // 会绘制系统占位图（接听瞬间"连接中背景是个播放器"）。远端大画面/本地画中画/会议
+    // tile 一律 visibility 隐藏至 loadeddata（CSS 门在 call-window.html，类由本委托添加）
+    document.addEventListener('loadeddata', function (e) {
+        var t = e.target;
+        if (t && t.tagName === 'VIDEO' &&
+            (t.classList.contains('cw-remote') || t.classList.contains('cw-local') || t.closest('.meet-tile'))) {
+            t.classList.add('vd-ready');
+        }
+    }, true);
+
     // ===== WEB 端浏览器 iframe 桥（父页对接，消息协议见 web-call-bridge.js 头注） =====
     function iframeBridge() {
         var post = function (msg) {
@@ -1343,6 +1354,7 @@
         if (!tile || !m.stream) return;
         var el = tile.querySelector(st.callType === 'video' ? 'video' : 'audio');
         if (el) {
+            el.classList.remove('vd-ready'); // 重挂流重走首帧门（此前无帧，隐藏无回退）
             el.srcObject = m.stream;
             var pr = el.play && el.play();
             if (pr && pr.catch) pr.catch(function () { });

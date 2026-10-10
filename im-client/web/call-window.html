@@ -141,6 +141,10 @@
         }
         body.mode-video .cw-local { display: block; }
         body.mode-video.cam-off .cw-local { display: none; }
+        /* 阶段二百八十一：首帧就绪门——srcObject 流在首帧渲染前 Android WebView 绘制系统占位图，
+           大画面/本地画中画/会议 tile 一律 visibility 隐藏至 loadeddata（远端沿 remote-live 展示门叠加本门） */
+        .cw-remote, .cw-local, .meet-tile video { visibility: hidden; }
+        .cw-remote.vd-ready, .cw-local.vd-ready, .meet-tile video.vd-ready { visibility: visible; }
 
         /* 摄像头不可用：本地画中画替换为"无视频可用"占位（同位同样式，仅标记不阻断通信） */
         #cwLocalPh {
@@ -878,6 +882,6 @@
     </div>
 
     <!-- 通话窗逻辑（WebRTC 引擎 + 信令状态机，独立 BrowserWindow / WEB 端 iframe 双形态承载） -->
-    <script src="js/call-page.js?v=41"></script>
+    <script src="js/call-page.js?v=43"></script>
 </body>
 </html>

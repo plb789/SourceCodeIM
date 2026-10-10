@@ -21210,18 +21210,21 @@ html.m .moments-vis-panel {
     gap: 12px;
     z-index: 1;
 }
-/* 视频首帧未就绪前隐藏画面：防 Android WebView 渲染灰底系统占位图（格子/封面/播放浮层/聊天气泡同口径） */
+/* 视频首帧未就绪前隐藏画面：防 Android WebView 渲染灰底系统占位图（格子/封面/播放浮层/聊天气泡/拍摄预览同口径，
+   拍摄预览为 srcObject 实时流，WebView 在摄像头首帧到达前同样绘制占位图） */
 .moment-video video,
 .moments-pub-thumb video,
 .moments-cover-media video,
 .bubble-video-el,
+.moments-cam-video,
 .moments-vp-video.vp-wait {
     visibility: hidden;
 }
 .moment-video video.vd-ready,
 .moments-pub-thumb video.vd-ready,
 .moments-cover-media video.vd-ready,
-.bubble-video-el.vd-ready {
+.bubble-video-el.vd-ready,
+.moments-cam-video.vd-ready {
     visibility: visible;
 }
 .moments-cam-shutter {
