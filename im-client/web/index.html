@@ -6,7 +6,7 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.20"></script>
+    <script src="/js/i18n.js?v=3.21"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.63">
+    <link rel="stylesheet" href="/css/style.css?v=3.69">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -238,7 +238,7 @@
                      手机端此图标 CSS 恒隐藏，入口归口个人资料页"朋友圈"条目 + 头像红点） -->
                 <div class="nav-icon sidebar-tab" data-tab="moments" title="朋友圈">
                     <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.9 8.9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0zM5 17l3.5-4.5 2.5 3.01L14.5 11l4.5 6H5z"/></svg>
-                    <span id="nav-moments-badge" class="nav-badge hidden"></span>
+                    <span id="nav-moments-actors" class="moments-actor-stack nav-actor-stack hidden"></span>
                 </div>
                 <!-- 阶段一百四十四：公告与动态入口（公司公告/新闻动态/红头文件，后台发布归口，实时推送亮红点） -->
                 <div class="nav-icon sidebar-tab" data-tab="announcement" title="公告">
@@ -1016,7 +1016,7 @@
                 <button class="mpa-item" data-target-tab="moments" id="mpa-moments">
                     <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.9 8.9a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0zM5 17l3.5-4.5 2.5 3.01L14.5 11l4.5 6H5z"/></svg>
                     <span>朋友圈</span>
-                    <span id="mpa-moments-badge" class="mpa-badge hidden"></span>
+                    <span id="mpa-moments-actors" class="moments-actor-stack mpa-actor-stack hidden"></span>
                 </button>
                 <button class="mpa-item" data-target-tab="announcement">
                     <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M18 11v2h4v-2h-4zm-2 6.61c.96.71 2.21 1.65 3.2 2.39.4-.53.8-1.07 1.2-1.6-.99-.74-2.24-1.68-3.2-2.4-.4.54-.8 1.08-1.2 1.61zM20.4 5.6c-.4-.53-.8-1.07-1.2-1.6-.99.74-2.24 1.68-3.2 2.4.4.53.8 1.07 1.2 1.6.96-.72 2.21-1.65 3.2-2.4zM4 9c-1.1 0-2 .9-2 2v2c0 1.1.9 2 2 2h1v4h2v-4h1l5 3V6L8 9H4zm11.5 3c0-1.33-.58-2.53-1.5-3.35v6.69c.92-.81 1.5-2.02 1.5-3.34z"/></svg>
@@ -2425,8 +2425,23 @@
                 <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path fill="currentColor" d="M9 3 7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a6 6 0 1 1 0-12 6 6 0 0 1 0 12z"/></svg>
             </button>
         </div>
-        <div class="moments-cover">
-            <div class="moments-cover-bg"></div>
+        <div id="moments-cover" class="moments-cover">
+            <div class="moments-cover-bg">
+                <!-- 阶段二百八十一：自定义封面媒体（图片/GIF/短视频，由 moments.js 按类型渲染；空则走渐变兜底） -->
+                <div id="moments-cover-media" class="moments-cover-media hidden"></div>
+            </div>
+            <!-- 微信同款「换封面」入口：点封面图拉伸展开后浮现（icon+文字），收起时隐藏 -->
+            <button id="moments-cover-change" class="moments-cover-change" title="更换相册封面">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+                <span>换封面</span>
+            </button>
+            <!-- 封面更换菜单（自绘弹窗，禁用系统默认弹窗） -->
+            <input type="file" id="moments-cover-file" accept="image/*,video/mp4,video/webm,video/quicktime" hidden>
+            <div id="moments-cover-menu" class="moments-cover-menu hidden">
+                <button id="moments-cover-pick" data-act="pick">从相册选择</button>
+                <button id="moments-cover-shot" data-act="shot">拍摄</button>
+                <button id="moments-cover-reset" data-act="reset" class="cover-menu-reset">恢复默认封面</button>
+            </div>
             <div class="moments-me">
                 <span id="moments-me-name" class="moments-me-name"></span>
                 <span id="moments-me-avatar" class="moments-me-avatar"></span>
@@ -2447,11 +2462,55 @@
         <div class="moments-pub-body">
             <textarea id="moments-pub-text" class="moments-pub-text" maxlength="2000" placeholder="这一刻的想法…"></textarea>
             <div id="moments-pub-grid" class="moments-pub-grid">
-                <button id="moments-pub-add" class="moments-pub-add" title="添加图片">
+                <button id="moments-pub-shot" class="moments-pub-add pub-shot" title="拍摄照片或视频">
+                    <svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path fill="currentColor" d="M9 3 7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.17L15 3H9zm3 15a6 6 0 1 1 0-12 6 6 0 0 1 0 12z"/></svg>
+                    <span>拍摄</span>
+                </button>
+                <button id="moments-pub-add" class="moments-pub-add" title="添加图片或视频">
                     <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
                 </button>
             </div>
-            <input type="file" id="moments-pub-file" accept="image/*" multiple hidden>
+            <input type="file" id="moments-pub-file" accept="image/*,video/mp4,video/webm,video/quicktime" multiple hidden>
+            <!-- 拍摄浮层（微信同款：getUserMedia 取流预览，轻触拍照/按住录像 15 秒上限；自绘非系统弹窗） -->
+            <div id="moments-cam-view" class="moments-cam-view hidden">
+                <video id="moments-cam-video" class="moments-cam-video" autoplay playsinline muted></video>
+                <div class="moments-cam-top">
+                    <button id="moments-cam-close" class="moments-cam-close" title="关闭">
+                        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                    <button id="moments-cam-flip" class="moments-cam-flip" title="翻转摄像头">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a6 6 0 0 1 6 6c0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 13a8 8 0 0 0-8-8zm0 14a6 6 0 0 1-6-6c0-1.01.25-1.97.7-2.8L5.24 8.74A7.93 7.93 0 0 0 4 13a8 8 0 0 0 8 8v4l5-5-5-5v4z"/></svg>
+                    </button>
+                </div>
+                <div class="moments-cam-bottom">
+                    <div class="moments-shutter-wrap">
+                        <svg class="moments-cam-ring" viewBox="0 0 84 84">
+                            <circle class="mc-ring-bg" cx="42" cy="42" r="39"></circle>
+                            <circle id="moments-cam-ring-fg" class="mc-ring-fg" cx="42" cy="42" r="39"></circle>
+                        </svg>
+                        <button id="moments-cam-shutter" class="moments-cam-shutter" title="轻触拍照，按住摄像"></button>
+                    </div>
+                    <span id="moments-cam-hint" class="moments-cam-hint">轻触拍照，按住摄像</span>
+                </div>
+            </div>
+            <!-- 视频播放浮层（自绘控制条：播放/暂停/进度/时间/静音，禁用原生控件） -->
+            <div id="moments-video-view" class="moments-video-view hidden">
+                <button id="moments-vp-close" class="moments-vp-close" title="关闭">
+                    <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+                <video id="moments-vp-video" class="moments-vp-video" playsinline></video>
+                <div class="moments-vp-ctrl">
+                    <button id="moments-vp-play" class="moments-vp-play" title="播放/暂停">
+                        <svg viewBox="0 0 24 24" width="20" height="20"><path id="moments-vp-play-ico" fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                    </button>
+                    <span id="moments-vp-cur" class="moments-vp-time">00:00</span>
+                    <div id="moments-vp-bar" class="moments-vp-bar"><div id="moments-vp-bar-fill" class="moments-vp-bar-fill"></div><div id="moments-vp-bar-dot" class="moments-vp-bar-dot"></div></div>
+                    <span id="moments-vp-dur" class="moments-vp-time">00:00</span>
+                    <button id="moments-vp-mute" class="moments-vp-mute" title="静音">
+                        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12z"/></svg>
+                    </button>
+                </div>
+            </div>
             <!-- 可见范围（微信同款四选一 + 好友多选） -->
             <button id="moments-pub-vis" class="moments-pub-vis">
                 <span class="moments-pub-vis-label">可见范围</span>
@@ -2748,7 +2807,7 @@
     <script src="/js/rc-panel.js?v=1.3"></script>
     <!-- 阶段二百八十：朋友圈（微信同款：时间线/发布/点赞/评论/楼中楼回复；须在 chat.js 之后加载：
          复用 _osbInit 自绘滚动条与 IMContacts 好友数据源；Tab 切换经 window.IMMoments.open/close 联动） -->
-    <script src="/js/moments.js?v=1.2"></script>
+    <script src="/js/moments.js?v=1.91"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
     <script src="/js/rc-mobile-view.js?v=1.1"></script>

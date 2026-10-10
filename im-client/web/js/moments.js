@@ -79,20 +79,56 @@
             window.desktop.openImageViewer({ url: url, list: list, index: index || 0 });
             return;
         }
-        window.open('/image-viewer.html?v=5&url=' + encodeURIComponent(url), '_blank');
+        var vList = list && list.length ? list : [url];
+        // opener 全局（chat.js 同款，新开标签可达）
+        try { window.__imageViewerList = vList; } catch (err) { /* 无害 */ }
+        // localStorage 快照（跨标签同源共享，任意打开方式均可达；from=moments 标记防止
+        // 聊天查看器同窗跳转场景误读本列表）；fragment 作第三道冗余
+        try {
+            localStorage.setItem('im_viewer_list', JSON.stringify(vList));
+            localStorage.setItem('im_viewer_index', String(index || 0));
+        } catch (err) { /* 存储受限：仍有 opener/fragment/单图兜底 */ }
+        var frag = '#L=' + encodeURIComponent(JSON.stringify(vList)) + '&I=' + (index || 0);
+        window.open('/image-viewer.html?v=7&from=moments&url=' + encodeURIComponent(url) + frag, '_blank');
+    }
+    // 视频扩展名归口（与服务端 isVideoExt 白名单一致；mov/m4v 浏览器尽力播放）
+    function isVideoURL(url) {
+        return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(String(url || ''));
+    }
+    function isImageURL(url) {
+        return /\.(jpg|jpeg|png|gif|webp|bmp)(\?|$)/i.test(String(url || ''));
     }
 
-    // ---------- 红点归口（导航图标 / 手机个人页行 / 手机底栏头像） ----------
-    function setBadge(count) {
-        var text = count > 0 ? (count > 99 ? '99+' : String(count)) : '';
-        var nav = document.getElementById('nav-moments-badge');
-        if (nav) {
-            nav.textContent = text;
-            nav.classList.toggle('hidden', !text);
+    // ---------- 入口提醒（微信发现页朋友圈行头像叠加同款） ----------
+    // 服务端 /api/moments/unread 按人聚合返回 actors=[{username,nickname,avatar,count}]（最新在前），
+    // 覆盖两类未读：好友发新动态(publish) + 我方动态收到点赞/评论互动(like/comment)。
+    // 叠加封顶 3 个防溢出边界，第 3 个带「+N」剩余计数角标
+    var ACTOR_MAX = 3;
+    function renderActorStack(el, actors) {
+        if (!el) return;
+        if (!actors || !actors.length) {
+            el.innerHTML = '';
+            el.classList.add('hidden');
+            return;
         }
-        var mpa = document.getElementById('mpa-moments-badge');
-        if (mpa) mpa.classList.toggle('hidden', !text);
-        // 手机底栏头像角标（微信"我"页红点同款：动态创建，幂等）
+        var shown = actors.slice(0, ACTOR_MAX);
+        var extra = actors.length - shown.length;
+        var html = '';
+        for (var i = 0; i < shown.length; i++) {
+            var a = shown[i];
+            var isLast = i === shown.length - 1;
+            var tip = a.nickname || a.username;
+            if (isLast && extra > 0) tip += ' 等 ' + actors.length + ' 位好友有新动态';
+            html += '<span class="mas-item">'
+                + avatarHTML(a, 'mas-av')
+                + (isLast && extra > 0 ? '<i class="mas-plus">+' + extra + '</i>' : '<i class="mas-dot"></i>')
+                + '</span>';
+        }
+        el.innerHTML = html;
+        el.classList.remove('hidden');
+    }
+    function setBadge(count, actors) {
+        // 手机底栏头像角标保持单红点（自己头像上不宜叠加他人头像）
         var navTop = document.querySelector('.nav-top');
         if (navTop) {
             var dot = document.getElementById('nav-top-moments-badge');
@@ -102,17 +138,20 @@
                 dot.className = 'moments-av-badge hidden';
                 navTop.appendChild(dot);
             }
-            dot.classList.toggle('hidden', !text);
+            dot.classList.toggle('hidden', !(count > 0));
         }
+        // PC 左栏朋友圈图标 + 手机个人页朋友圈行：好友头像叠加组
+        renderActorStack(document.getElementById('nav-moments-actors'), actors);
+        renderActorStack(document.getElementById('mpa-moments-actors'), actors);
     }
     function refreshUnread() {
         api('/api/moments/unread').then(function (j) {
-            if (j && j.ok) setBadge(j.count || 0);
+            if (j && j.ok) setBadge(j.count || 0, j.actors || []);
         }).catch(function () {});
     }
     function markRead() {
         api('/api/moments/unread/read', { method: 'POST' }).then(function () {
-            setBadge(0);
+            setBadge(0, []);
         }).catch(function () {});
     }
 
@@ -151,7 +190,15 @@
             var n = Math.min(m.images.length, 9);
             html += '<div class="moment-grid mg-' + n + '">';
             for (var i = 0; i < n; i++) {
-                html += '<img class="moment-img" src="' + esc(m.images[i]) + '" data-imgi="' + i + '" loading="lazy" alt="">';
+                // 阶段二百八十一：视频格子（首帧预览 + 播放角标，点击走自绘播放浮层；微信同款）
+                if (isVideoURL(m.images[i])) {
+                    html += '<span class="moment-img moment-video" data-imgi="' + i + '">' +
+                        '<video src="' + esc(m.images[i]) + '" preload="metadata" muted playsinline></video>' +
+                        '<i class="mv-play"><svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l7 4.5-7 4.5z"/></svg></i>' +
+                        '</span>';
+                } else {
+                    html += '<img class="moment-img" src="' + esc(m.images[i]) + '" data-imgi="' + i + '" loading="lazy" alt="">';
+                }
             }
             html += '</div>';
         }
@@ -259,6 +306,7 @@
         view.classList.remove('hidden');
         visible = true;
         fillMe();
+        loadCover(); // 朋友圈封面（首次拉取，本地缓存后不再重复请求）
         markRead(); // 打开朋友圈整单已读（微信"我"页红点同款链路）
         if (!loadedFeed || !cache.length) {
             oldestId = 0; noMore = false;
@@ -271,6 +319,15 @@
     function close() {
         visible = false;
         hideActBars();
+        // 退出朋友圈时回收拍摄流与播放浮层（防摄像头/声音后台驻留）
+        if (camViewEl && !camViewEl.classList.contains('hidden')) closeCam();
+        if (vpViewEl && !vpViewEl.classList.contains('hidden')) closeVideoPlayer();
+        // 封面收合归位（微信同款：下次打开从常规高度起，避免残留展开态）
+        var cover = document.getElementById('moments-cover');
+        if (cover) {
+            cover.classList.remove('cover-expanded');
+            document.getElementById('moments-cover-menu').classList.add('hidden');
+        }
         // 手机端延迟隐藏（滑出动画期间防露底，网盘同款）
         if (document.documentElement.classList.contains('m')) {
             setTimeout(function () { if (!visible) view.classList.add('hidden'); }, 260);
@@ -313,6 +370,8 @@
         listEl.addEventListener('click', onListClick);
         // 发布页
         initPublish();
+        // 封面更换（微信同款右下角相机入口）
+        initCover();
         // 实时同步：红点 + 已打开页面原位刷新（不轮询）
         if (window.IMSocket && IMSocket.on) {
             IMSocket.on(IMSocket.MSG.MOMENT_SYNC, onMomentSync);
@@ -338,7 +397,15 @@
         if (img) {
             var card = img.closest('.moment-card');
             var m = cache[+card.getAttribute('data-mid')];
-            if (m && m.images) openImage(img.getAttribute('src'), m.images, +img.getAttribute('data-imgi'));
+            if (m && m.images) {
+                // 阶段二百八十一：视频格子走自绘播放浮层（不进图片查看器）
+                if (img.classList.contains('moment-video')) {
+                    var vi = +img.getAttribute('data-imgi') || 0;
+                    openVideoPlayer(m.images[vi]);
+                } else {
+                    openImage(img.getAttribute('src'), m.images, +img.getAttribute('data-imgi'));
+                }
+            }
             return;
         }
         var actEl = e.target.closest('[data-act]');
@@ -486,7 +553,7 @@
     }
 
     // ---------- 发布页 ----------
-    var pubImages = [];      // 已上传图片 URL（发布归口）
+    var pubImages = [];      // 已上传媒体 URL（图片+视频；单视频独占，微信同款）
     var pubUploading = 0;    // 上传中计数（发表按钮守卫）
     var pubVis = 0;          // 0公开 1私密 2部分可见 3不给谁看
     var pubVisUsers = [];    // 部分/不给谁看名单
@@ -506,15 +573,27 @@
         VIS_NAMES = { 0: T('公开'), 1: T('私密'), 2: T('部分可见'), 3: T('不给谁看') };
         document.getElementById('moments-pub-cancel').addEventListener('click', closePublish);
         document.getElementById('moments-pub-add').addEventListener('click', function () {
+            if (hasPubVideo()) { showToast(T('视频动态仅支持单个视频')); return; }
             if (pubImages.length >= 9) { showToast(T('最多上传 9 张图片')); return; }
             fileInput.click();
+        });
+        document.getElementById('moments-pub-shot').addEventListener('click', function () {
+            if (pubImages.length && !hasPubVideo() && pubImages.length >= 9) { showToast(T('最多上传 9 张图片')); return; }
+            openCam('publish');
         });
         fileInput.addEventListener('change', function () {
             var files = Array.prototype.slice.call(fileInput.files || []);
             fileInput.value = '';
             files.forEach(function (f) {
-                if (pubImages.length >= 9) return;
-                uploadMomentImage(f);
+                if (/^video\//.test(f.type)) {
+                    // 微信同款：视频独占——已在九宫格时忽略多余选择
+                    if (hasPubVideo()) return;
+                    uploadMomentMedia(f);
+                } else {
+                    if (hasPubVideo()) return; // 已选视频时忽略图片（提示在 uploadMomentMedia 内）
+                    if (pubImages.length >= 9) return;
+                    uploadMomentMedia(f);
+                }
             });
         });
         document.getElementById('moments-pub-send').addEventListener('click', publish);
@@ -540,31 +619,47 @@
         document.getElementById('moments-vis-search').addEventListener('input', function () {
             renderVisFriends(this.value.trim());
         });
-        // Esc 逐级：可见范围浮层 → 发布页
+        // Esc 逐级：拍摄浮层 → 视频浮层 → 可见范围浮层 → 发布页
         document.addEventListener('keydown', function (e) {
             if (e.key !== 'Escape') return;
+            if (!camViewEl.classList.contains('hidden')) { closeCam(); return; }
+            if (!vpViewEl.classList.contains('hidden')) { closeVideoPlayer(); return; }
             if (!visPanel.classList.contains('hidden')) { hideVisPanel(); return; }
             if (!pubView.classList.contains('hidden')) { closePublish(); return; }
         });
         if (window._osbInit) window._osbInit(document.getElementById('moments-vis-friend-list'));
+        initCam();
+        initVideoPlayer();
     }
-    function uploadMomentImage(file) {
-        if (!/^image\//.test(file.type)) { showToast(T('朋友圈仅支持图片文件')); return; }
+    function hasPubVideo() {
+        return pubImages.some(isVideoURL);
+    }
+    function uploadMomentMedia(file) {
+        var isVideo = /^video\//.test(file.type) || isVideoURL(file.name);
+        if (!isVideo && !/^image\//.test(file.type)) { showToast(T('朋友圈仅支持图片/视频文件')); return; }
+        // 微信同款：单视频独占，视频与图片互斥
+        if (isVideo) {
+            if (hasPubVideo()) { showToast(T('视频动态仅支持单个视频')); return; }
+            if (pubImages.length) { showToast(T('视频不能与图片同时发布')); return; }
+        } else if (hasPubVideo()) {
+            showToast(T('视频不能与图片同时发布'));
+            return;
+        }
         pubUploading++;
         updateSendState();
         var fd = new FormData();
         fd.append('file', file);
-        fetch('/upload/moment/image?username=' + encodeURIComponent(myUsername), { method: 'POST', body: fd })
+        fetch((isVideo ? '/upload/moment/video' : '/upload/moment/image') + '?username=' + encodeURIComponent(myUsername), { method: 'POST', body: fd })
             .then(function (r) { return r.json(); })
             .then(function (j) {
                 pubUploading--;
                 if (j && j.url) { pubImages.push(j.url); renderPubGrid(); }
-                else showToast(T('图片上传失败'));
+                else showToast(isVideo ? T('视频上传失败') : T('图片上传失败'));
                 updateSendState();
             })
             .catch(function () {
                 pubUploading--;
-                showToast(T('图片上传失败'));
+                showToast(isVideo ? T('视频上传失败') : T('图片上传失败'));
                 updateSendState();
             });
     }
@@ -575,8 +670,13 @@
         pubImages.forEach(function (url, i) {
             var thumb = document.createElement('div');
             thumb.className = 'moments-pub-thumb';
-            thumb.innerHTML = '<img src="' + esc(url) + '" alt="">' +
-                '<button class="pub-thumb-del" data-i="' + i + '"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>';
+            if (isVideoURL(url)) {
+                thumb.innerHTML = '<video src="' + esc(url) + '" preload="metadata" muted playsinline></video>' +
+                    '<i class="pub-thumb-play"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l7 4.5-7 4.5z"/></svg></i>';
+            } else {
+                thumb.innerHTML = '<img src="' + esc(url) + '" alt="">';
+            }
+            thumb.innerHTML += '<button class="pub-thumb-del" data-i="' + i + '"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>';
             grid.insertBefore(thumb, addBtn);
         });
         grid.querySelectorAll('.pub-thumb-del').forEach(function (btn) {
@@ -585,7 +685,10 @@
                 renderPubGrid();
             });
         });
-        addBtn.style.display = pubImages.length >= 9 ? 'none' : '';
+        // 视频独占时隐藏加号与拍摄格（微信同款单格视频）
+        var hasV = hasPubVideo();
+        addBtn.style.display = (pubImages.length >= 9 || hasV) ? 'none' : '';
+        document.getElementById('moments-pub-shot').style.display = hasV ? 'none' : '';
     }
     function updateSendState() {
         document.getElementById('moments-pub-send').disabled = pubUploading > 0;
@@ -595,6 +698,7 @@
         var content = textEl.value.trim();
         if (!content && !pubImages.length) { showToast(T('内容不能为空')); return; }
         if (pubUploading > 0) { showToast(T('图片上传中，请稍候')); return; }
+        if (hasPubVideo() && pubImages.length > 1) { showToast(T('视频动态仅支持单个视频')); return; }
         var body = {
             content: content,
             images: pubImages,
@@ -618,6 +722,312 @@
         }).catch(function () {
             sendBtn.disabled = false;
             showToast(T('发布失败'));
+        });
+    }
+
+    // ---------- 拍摄浮层（微信同款：getUserMedia 预览，轻触拍照/按住录像 15 秒上限） ----------
+    // target 归口：'publish' 拍完进发布页九宫格；'cover' 拍完直接设为朋友圈封面
+    var camViewEl, camVideoEl, camStream = null, camFacing = 'user', camTarget = 'publish';
+    var camRecording = false, camRecorder = null, camChunks = [], camTimer = null;
+    var camPressTimer = null, camPressAt = 0, camRingTimer = null, camRecordStart = 0;
+    var CAM_MAX_MS = 15000; // 微信同款 15 秒上限
+    function initCam() {
+        camViewEl = document.getElementById('moments-cam-view');
+        // 封面拍摄入口在时间线页（发布页可能未开）：浮层 DOM 移入 main-chat 保证独立可见
+        var mainChat = document.querySelector('.main-chat');
+        if (mainChat && camViewEl.parentElement !== mainChat) mainChat.appendChild(camViewEl);
+        camVideoEl = document.getElementById('moments-cam-video');
+        document.getElementById('moments-cam-close').addEventListener('click', closeCam);
+        document.getElementById('moments-cam-flip').addEventListener('click', flipCam);
+        var shutter = document.getElementById('moments-cam-shutter');
+        // 指针统一处理（鼠标/触摸）：按下 300ms 后自动进入录像，松开时按住时长判定拍照/停录
+        shutter.addEventListener('pointerdown', function (e) {
+            if (camRecording) return;
+            e.preventDefault();
+            camPressAt = Date.now();
+            camPressTimer = setTimeout(startCamRecord, 300);
+        });
+        shutter.addEventListener('pointerup', function () {
+            clearTimeout(camPressTimer);
+            if (camRecording) {
+                stopCamRecord();
+            } else if (Date.now() - camPressAt < 300) {
+                shootCamPhoto();
+            }
+        });
+        shutter.addEventListener('pointerleave', function () {
+            if (camRecording) stopCamRecord();
+        });
+    }
+    function openCam(target) {
+        camTarget = target || 'publish';
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast(T('当前环境不支持摄像头'));
+            return;
+        }
+        camViewEl.classList.remove('hidden');
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: camFacing, width: { ideal: 1280 }, height: { ideal: 1280 } },
+            audio: true
+        }).then(function (stream) {
+            camStream = stream;
+            camVideoEl.srcObject = stream;
+        }).catch(function () {
+            closeCam();
+            showToast(T('无法访问摄像头，请检查权限'));
+        });
+    }
+    function closeCam() {
+        if (camRecording) { try { camRecorder.state !== 'inactive' && camRecorder.stop(); } catch (e) {} camRecording = false; }
+        clearTimeout(camPressTimer);
+        clearInterval(camRingTimer);
+        if (camStream) {
+            camStream.getTracks().forEach(function (t) { t.stop(); });
+            camStream = null;
+        }
+        camVideoEl.srcObject = null;
+        camViewEl.classList.add('hidden');
+        resetCamRing();
+        document.getElementById('moments-cam-hint').textContent = T('轻触拍照，按住摄像');
+    }
+    function flipCam() {
+        camFacing = camFacing === 'user' ? 'environment' : 'user';
+        if (!camStream) return;
+        // 重新取流（前后摄切换；PC 单摄时 facingMode 约束不满足则保持原流）
+        if (camStream) camStream.getTracks().forEach(function (t) { t.stop(); });
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: camFacing, width: { ideal: 1280 }, height: { ideal: 1280 } },
+            audio: true
+        }).then(function (stream) {
+            camStream = stream;
+            camVideoEl.srcObject = stream;
+        }).catch(function () {
+            camFacing = camFacing === 'user' ? 'environment' : 'user';
+            showToast(T('摄像头切换失败'));
+        });
+    }
+    function shootCamPhoto() {
+        if (!camStream || !camVideoEl.videoWidth) { showToast(T('摄像头未就绪')); return; }
+        var canvas = document.createElement('canvas');
+        canvas.width = camVideoEl.videoWidth;
+        canvas.height = camVideoEl.videoHeight;
+        var ctx = canvas.getContext('2d');
+        // 前摄镜像与预览一致（微信同款自拍体验）
+        if (camFacing === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(camVideoEl, 0, 0);
+        canvas.toBlob(function (blob) {
+            if (!blob) { showToast(T('拍照失败')); return; }
+            closeCam();
+            var file = new File([blob], 'cam_' + Date.now() + '.jpg', { type: 'image/jpeg' });
+            if (camTarget === 'cover') uploadCoverFile(file);
+            else uploadMomentMedia(file);
+        }, 'image/jpeg', 0.92);
+    }
+    function startCamRecord() {
+        if (!camStream || camRecording) return;
+        var mimes = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+        var mime = '';
+        for (var i = 0; i < mimes.length; i++) {
+            if (window.MediaRecorder && MediaRecorder.isTypeSupported(mimes[i])) { mime = mimes[i]; break; }
+        }
+        if (!window.MediaRecorder) { showToast(T('当前环境不支持录像')); return; }
+        try {
+            camRecorder = new MediaRecorder(camStream, mime ? { mimeType: mime } : undefined);
+        } catch (e) {
+            showToast(T('当前环境不支持录像'));
+            return;
+        }
+        camChunks = [];
+        camRecorder.ondataavailable = function (e) { if (e.data && e.data.size) camChunks.push(e.data); };
+        camRecorder.onstop = function () {
+            camRecording = false;
+            clearInterval(camRingTimer);
+            resetCamRing();
+            var type = (camRecorder.mimeType || 'video/webm').indexOf('mp4') >= 0 ? 'video/mp4' : 'video/webm';
+            var ext = type === 'video/mp4' ? '.mp4' : '.webm';
+            var blob = new Blob(camChunks, { type: type });
+            document.getElementById('moments-cam-hint').textContent = T('轻触拍照，按住摄像');
+            if (!blob.size) return;
+            closeCam();
+            var file = new File([blob], 'cam_' + Date.now() + ext, { type: type });
+            if (camTarget === 'cover') uploadCoverFile(file);
+            else uploadMomentMedia(file);
+        };
+        camRecorder.start(250);
+        camRecording = true;
+        camRecordStart = Date.now();
+        document.getElementById('moments-cam-hint').textContent = T('松开结束，最长 15 秒');
+        // 环形进度（15 秒走满一圈）
+        var fg = document.getElementById('moments-cam-ring-fg');
+        var circumference = 2 * Math.PI * 39;
+        camRingTimer = setInterval(function () {
+            var p = Math.min((Date.now() - camRecordStart) / CAM_MAX_MS, 1);
+            fg.style.strokeDashoffset = String(circumference * (1 - p));
+        }, 100);
+        camTimer = setTimeout(function () { if (camRecording) stopCamRecord(); }, CAM_MAX_MS);
+    }
+    function stopCamRecord() {
+        clearTimeout(camTimer);
+        if (camRecording && camRecorder && camRecorder.state !== 'inactive') camRecorder.stop();
+    }
+    function resetCamRing() {
+        var fg = document.getElementById('moments-cam-ring-fg');
+        if (fg) fg.style.strokeDashoffset = String(2 * Math.PI * 39);
+    }
+
+    // ---------- 视频播放浮层（自绘控制条，禁用原生控件） ----------
+    var vpViewEl, vpVideoEl, vpBarDrag = false;
+    function initVideoPlayer() {
+        vpViewEl = document.getElementById('moments-video-view');
+        // 播放浮层独立于发布页/时间线（video-view DOM 挪入 main-chat 同 cam-view 归口）
+        var mainChat = document.querySelector('.main-chat');
+        if (mainChat && vpViewEl.parentElement !== mainChat) mainChat.appendChild(vpViewEl);
+        vpVideoEl = document.getElementById('moments-vp-video');
+        document.getElementById('moments-vp-close').addEventListener('click', closeVideoPlayer);
+        document.getElementById('moments-vp-play').addEventListener('click', function () {
+            if (vpVideoEl.paused) vpVideoEl.play(); else vpVideoEl.pause();
+        });
+        document.getElementById('moments-vp-mute').addEventListener('click', function () {
+            vpVideoEl.muted = !vpVideoEl.muted;
+            this.classList.toggle('muted', vpVideoEl.muted);
+        });
+        vpVideoEl.addEventListener('play', vpSyncPlayIco);
+        vpVideoEl.addEventListener('pause', vpSyncPlayIco);
+        vpVideoEl.addEventListener('timeupdate', vpSyncBar);
+        vpVideoEl.addEventListener('loadedmetadata', function () {
+            document.getElementById('moments-vp-dur').textContent = vpFmtTime(vpVideoEl.duration);
+        });
+        // 进度条：点击跳转 + 拖动跟手
+        var bar = document.getElementById('moments-vp-bar');
+        bar.addEventListener('pointerdown', function (e) {
+            vpBarDrag = true;
+            bar.setPointerCapture(e.pointerId);
+            vpSeek(e);
+        });
+        bar.addEventListener('pointermove', function (e) { if (vpBarDrag) vpSeek(e); });
+        bar.addEventListener('pointerup', function () { vpBarDrag = false; });
+    }
+    function openVideoPlayer(url) {
+        vpViewEl.classList.remove('hidden');
+        vpVideoEl.muted = false;
+        document.getElementById('moments-vp-mute').classList.remove('muted');
+        vpVideoEl.src = url;
+        vpVideoEl.play().catch(function () { /* 自动播失败保持暂停态，用户点播放键 */ });
+    }
+    function closeVideoPlayer() {
+        vpVideoEl.pause();
+        vpVideoEl.removeAttribute('src');
+        vpVideoEl.load();
+        vpViewEl.classList.add('hidden');
+    }
+    function vpSyncPlayIco() {
+        document.getElementById('moments-vp-play-ico').setAttribute('d',
+            vpVideoEl.paused ? 'M8 5v14l11-7z' : 'M6 19h4V5H6v14zm8-14v14h4V5h-4z');
+    }
+    function vpSyncBar() {
+        if (vpBarDrag) return;
+        var dur = vpVideoEl.duration || 0;
+        var p = dur ? vpVideoEl.currentTime / dur : 0;
+        document.getElementById('moments-vp-bar-fill').style.width = (p * 100) + '%';
+        document.getElementById('moments-vp-bar-dot').style.left = (p * 100) + '%';
+        document.getElementById('moments-vp-cur').textContent = vpFmtTime(vpVideoEl.currentTime);
+    }
+    function vpSeek(e) {
+        var rect = e.currentTarget.getBoundingClientRect();
+        var p = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+        if (vpVideoEl.duration) {
+            vpVideoEl.currentTime = p * vpVideoEl.duration;
+            vpSyncBar();
+        }
+    }
+    function vpFmtTime(s) {
+        if (!isFinite(s)) return '00:00';
+        s = Math.floor(s);
+        var m = Math.floor(s / 60), sec = s % 60;
+        return (m < 10 ? '0' + m : m) + ':' + (sec < 10 ? '0' + sec : sec);
+    }
+
+    // ---------- 朋友圈封面（微信同款"更换相册封面"：图片/GIF/短视频，免裁剪直接铺满） ----------
+    var coverLoaded = false;
+    function loadCover() {
+        if (coverLoaded) return;
+        coverLoaded = true;
+        api('/api/moments/cover').then(function (j) {
+            if (j && j.ok) applyCover(j.cover || '');
+        }).catch(function () { coverLoaded = false; });
+    }
+    function applyCover(url) {
+        var box = document.getElementById('moments-cover-media');
+        if (!url) {
+            box.classList.add('hidden');
+            box.innerHTML = '';
+            return;
+        }
+        box.classList.remove('hidden');
+        if (isVideoURL(url)) {
+            // 视频封面：静音循环自动播放（微信同款动态封面体验）
+            box.innerHTML = '<video src="' + esc(url) + '" autoplay muted loop playsinline></video>';
+        } else {
+            box.innerHTML = '<img src="' + esc(url) + '" alt="">';
+        }
+    }
+    function uploadCoverFile(file) {
+        var isVideo = /^video\//.test(file.type) || isVideoURL(file.name);
+        if (!isVideo && !/^image\//.test(file.type)) { showToast(T('封面仅支持图片/视频文件')); return; }
+        showToast(T('封面上传中…'));
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch((isVideo ? '/upload/moment/video' : '/upload/moment/image') + '?username=' + encodeURIComponent(myUsername), { method: 'POST', body: fd })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!j || !j.url) { showToast(T('封面上传失败')); return; }
+                return api('/api/moments/cover', { method: 'POST', body: JSON.stringify({ url: j.url }) });
+            })
+            .then(function (j) {
+                if (j && j.ok) { applyCover(j.cover); showToast(T('封面已更新')); }
+                else if (j) showToast((j && j.error) ? j.error : T('封面上传失败'));
+            })
+            .catch(function () { showToast(T('封面上传失败')); });
+    }
+    function initCover() {
+        var cover = document.getElementById('moments-cover');
+        var menu = document.getElementById('moments-cover-menu');
+        var fileInput = document.getElementById('moments-cover-file');
+        // 微信同款：点封面图拉伸展开/收起，展开后才浮现「换封面」按钮（按钮/菜单点击不参与切换）
+        cover.addEventListener('click', function (e) {
+            if (e.target.closest('#moments-cover-change') || e.target.closest('#moments-cover-menu')) return;
+            var expanded = cover.classList.toggle('cover-expanded');
+            if (!expanded) menu.classList.add('hidden');
+        });
+        document.getElementById('moments-cover-change').addEventListener('click', function (e) {
+            e.stopPropagation();
+            menu.classList.toggle('hidden');
+        });
+        document.getElementById('moments-cover-pick').addEventListener('click', function () {
+            menu.classList.add('hidden');
+            fileInput.click();
+        });
+        document.getElementById('moments-cover-shot').addEventListener('click', function () {
+            menu.classList.add('hidden');
+            openCam('cover');
+        });
+        document.getElementById('moments-cover-reset').addEventListener('click', function () {
+            menu.classList.add('hidden');
+            api('/api/moments/cover', { method: 'DELETE' }).then(function (j) {
+                if (j && j.ok) { applyCover(''); showToast(T('已恢复默认封面')); }
+            }).catch(function () { showToast(T('操作失败')); });
+        });
+        fileInput.addEventListener('change', function () {
+            var f = (fileInput.files || [])[0];
+            fileInput.value = '';
+            if (f) uploadCoverFile(f);
+        });
+        // 点封面以外区域：收起封面菜单并收合展开态
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest('#moments-cover')) {
+                menu.classList.add('hidden');
+                cover.classList.remove('cover-expanded');
+            }
         });
     }
 

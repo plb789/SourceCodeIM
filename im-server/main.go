@@ -136,6 +136,8 @@ func main() {
 	http.HandleFunc("/upload/ai/image", srv.HandleAIImageUpload)
 	// 朋友圈图片上传接口（阶段二百八十：仅落盘不落库，发布正文由 /api/moments 归口落库）
 	http.HandleFunc("/upload/moment/image", srv.HandleMomentUpload)
+	// 朋友圈视频上传接口（阶段二百八十一：拍摄/相册视频动态直传，微信同款单视频独占）
+	http.HandleFunc("/upload/moment/video", srv.HandleMomentVideoUpload)
 	// 朋友圈 API（阶段二百八十：微信同款朋友圈，发布/时间线/我的相册/点赞/评论回复/删除/红点）
 	http.HandleFunc("POST /api/moments", srv.HandleMomentCreate)
 	http.HandleFunc("GET /api/moments", srv.HandleMomentList)
@@ -147,6 +149,10 @@ func main() {
 	http.HandleFunc("DELETE /api/moments/{id}/comment/{cid}", srv.HandleMomentCommentDelete)
 	http.HandleFunc("GET /api/moments/unread", srv.HandleMomentUnread)
 	http.HandleFunc("POST /api/moments/unread/read", srv.HandleMomentUnreadRead)
+	// 朋友圈封面（阶段二百八十一：微信同款"更换相册封面"，支持图片/GIF/短视频）
+	http.HandleFunc("GET /api/moments/cover", srv.HandleMomentCoverGet)
+	http.HandleFunc("POST /api/moments/cover", srv.HandleMomentCoverSet)
+	http.HandleFunc("DELETE /api/moments/cover", srv.HandleMomentCoverDelete)
 	// AI 文档问答上传接口（阶段四十五：仅落盘+试解析不落库，提问正文由 AI_CHAT 文档信封统一落库）
 	http.HandleFunc("/upload/ai/doc", srv.HandleAIDocUpload)
 	// AI 回复表格导出 Excel（阶段四十五：服务端归口解析 Markdown 表格转 xlsx，文件消息回发会话）

@@ -31,6 +31,9 @@ type User struct {
 	Status int8 `gorm:"column:status;type:tinyint;default:0" json:"status"`
 	// LockReason 锁定封禁原因（管理员填写，登录拒绝与在线踢出时提示给用户；解锁/注销时清空）
 	LockReason string `gorm:"column:lock_reason;type:varchar(255);default:''" json:"lock_reason"`
+	// 阶段二百八十一：朋友圈封面（微信同款"更换相册封面"）——/static/upload/ 相对路径，
+	// 空串走默认渐变背景；支持图片/GIF/短视频，AutoMigrate 自动加列，存量用户默认空
+	MomentCover string `gorm:"column:moment_cover;type:varchar(255);default:''" json:"moment_cover"`
 }
 
 // 用户状态常量（阶段一百三十五：后台账号锁定封禁/注销归口）

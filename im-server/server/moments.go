@@ -34,7 +34,25 @@ const (
 	momentVisExcept  int8 = 3 // 不给谁看：visible_users 内好友不可见
 	momentMaxImages       = 9 // 微信同款单条最多 9 图
 	momentPageSize        = 20
+	momentMaxVideos       = 1 // 微信同款：视频动态单视频独占（不与图片混排）
 )
+
+// isVideoExt 判断扩展名是否为浏览器 <video> 可直播的视频格式
+func isVideoExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".mp4", ".webm", ".mov", ".m4v":
+		return true
+	}
+	return false
+}
+
+// momentURLOf 按扩展名判断动态格子类型：返回 "video" / "image"（容错：无扩展名按图片）
+func momentURLOf(url string) string {
+	if isVideoExt(filepath.Ext(url)) {
+		return "video"
+	}
+	return "image"
+}
 
 // momentVisUsers 解析 visible_users JSON（容错：空/坏 JSON 返回空数组）
 func momentVisUsers(raw string) []string {
@@ -164,6 +182,17 @@ func (s *Server) pushMomentSync(users []string, action string, momentID uint, ac
 
 // HandleMomentUpload POST /upload/moment/image 朋友圈图片直传（仅存文件返回 URL，不落消息）
 func (s *Server) HandleMomentUpload(w http.ResponseWriter, r *http.Request) {
+	s.momentUploadMedia(w, r, false)
+}
+
+// HandleMomentVideoUpload POST /upload/moment/video 朋友圈视频直传（阶段二百八十一：
+// 微信同款拍摄/相册视频动态；大小上限跟随全局 MaxFileSize，扩展名白名单浏览器可播格式）
+func (s *Server) HandleMomentVideoUpload(w http.ResponseWriter, r *http.Request) {
+	s.momentUploadMedia(w, r, true)
+}
+
+// momentUploadMedia 朋友圈媒体直传归口：仅存文件返回 URL 不落消息；video=true 收视频，否则收图片
+func (s *Server) momentUploadMedia(w http.ResponseWriter, r *http.Request, video bool) {
 	username := momentArg(r)
 	if username == "" {
 		http.Error(w, "缺少参数", http.StatusBadRequest)
@@ -189,7 +218,12 @@ func (s *Server) HandleMomentUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if !isImageExt(ext) {
+	if video {
+		if !isVideoExt(ext) {
+			http.Error(w, "朋友圈视频仅支持 mp4/webm/mov 格式", http.StatusBadRequest)
+			return
+		}
+	} else if !isImageExt(ext) {
 		http.Error(w, "朋友圈仅支持图片文件", http.StatusBadRequest)
 		return
 	}
@@ -217,7 +251,11 @@ func (s *Server) HandleMomentUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Close()
 	url := "/static/upload/" + filename
-	logger.Info("朋友圈图片上传: %s -> %s, %s (%d 字节)", username, url, header.Filename, header.Size)
+	kind := "图片"
+	if video {
+		kind = "视频"
+	}
+	logger.Info("朋友圈%s上传: %s -> %s, %s (%d 字节)", kind, username, url, header.Filename, header.Size)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "url": url})
 }
@@ -262,6 +300,21 @@ func (s *Server) HandleMomentCreate(w http.ResponseWriter, r *http.Request) {
 			imgs = append(imgs, img)
 		}
 	}
+	// 微信同款：视频动态单视频独占——任一格子为视频则仅允许 1 格，不与图片混排
+	videos := 0
+	for _, u := range imgs {
+		if momentURLOf(u) == "video" {
+			videos++
+		}
+	}
+	if videos > momentMaxVideos {
+		momentFail(w, http.StatusBadRequest, "视频动态仅支持单个视频")
+		return
+	}
+	if videos == 1 && len(imgs) > 1 {
+		momentFail(w, http.StatusBadRequest, "视频不能与图片混排发布")
+		return
+	}
 	if body.Visibility < 0 || body.Visibility > 3 {
 		body.Visibility = 0
 	}
@@ -295,8 +348,42 @@ func (s *Server) HandleMomentCreate(w http.ResponseWriter, r *http.Request) {
 		momentFail(w, http.StatusInternalServerError, "发布失败")
 		return
 	}
+	// 好友新动态未读（微信发现页头像归口）：给可见好友各落一行 action=publish，
+	// 打开朋友圈整单已读；108 帧同步推给可见好友，入口头像叠加实时点亮
+	audience := momentAudience(username, body.Visibility, visUsers)
+	if len(audience) > 0 {
+		unreads := make([]model.MomentUnread, 0, len(audience))
+		for _, f := range audience {
+			unreads = append(unreads, model.MomentUnread{Username: f, MomentID: m.ID, Actor: username, Action: "publish"})
+		}
+		store.DB.Create(&unreads)
+		s.pushMomentSync(audience, "publish", m.ID, username)
+	}
 	s.pushMomentSync([]string{username}, "publish", m.ID, username) // 多端自身同步
 	momentJSON(w, map[string]interface{}{"ok": true, "id": m.ID})
+}
+
+// momentAudience 动态可见好友归口：0=全部好友 1=仅自己(无) 2=指定好友 3=好友去掉指定
+func momentAudience(owner string, visibility int8, visUsers []string) []string {
+	if visibility == momentVisPrivate {
+		return nil
+	}
+	friends := friendIDsOf(owner)
+	if visibility == momentVisPartly || visibility == momentVisExcept {
+		set := make(map[string]bool, len(visUsers))
+		for _, u := range visUsers {
+			set[u] = true
+		}
+		out := make([]string, 0, len(friends))
+		for _, f := range friends {
+			// 2=部分可见（须在名单内）；3=不给谁看（须不在名单内）
+			if (visibility == momentVisPartly) == set[f] {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	return friends
 }
 
 // HandleMomentList GET /api/moments 朋友圈时间线（双向好友 + 自己，visibility 过滤，游标分页）
@@ -693,10 +780,43 @@ func (s *Server) HandleMomentUnread(w http.ResponseWriter, r *http.Request) {
 			actors = append(actors, row.Actor)
 		}
 	}
-	briefs := momentUserBrief(actors...)
+	// 按人聚合（入口头像叠加归口）：最新未读在前，附昵称/头像/未读条数；
+	// GROUP BY 全量聚合不受 list 的 20 条截断影响
+	type momentActorAgg struct {
+		Actor string
+		Cnt   int64
+		Last  uint
+	}
+	var aggs []momentActorAgg
+	store.DB.Model(&model.MomentUnread{}).
+		Select("actor, COUNT(*) AS cnt, MAX(id) AS last").
+		Where("username = ? AND is_read = ?", username, false).
+		Group("actor").Order("last DESC").Limit(12).Scan(&aggs)
+	aggUsers := make([]string, 0, len(aggs))
+	for _, a := range aggs {
+		aggUsers = append(aggUsers, a.Actor)
+	}
+	briefs := momentUserBrief(aggUsers...)
+	actorList := make([]map[string]interface{}, 0, len(aggs))
+	for _, a := range aggs {
+		b := briefs[a.Actor]
+		nick := a.Actor
+		avatar := ""
+		if b != nil {
+			nick = b["nickname"]
+			avatar = b["avatar"]
+		}
+		actorList = append(actorList, map[string]interface{}{
+			"username": a.Actor,
+			"nickname": nick,
+			"avatar":   avatar,
+			"count":    a.Cnt,
+		})
+	}
+	briefs2 := momentUserBrief(actors...)
 	list := make([]map[string]interface{}, 0, len(rows))
 	for _, row := range rows {
-		b := briefs[row.Actor]
+		b := briefs2[row.Actor]
 		nick := row.Actor
 		if b != nil {
 			nick = b["nickname"]
@@ -709,7 +829,7 @@ func (s *Server) HandleMomentUnread(w http.ResponseWriter, r *http.Request) {
 			"create_time": row.CreateTime.Format(time.RFC3339),
 		})
 	}
-	momentJSON(w, map[string]interface{}{"ok": true, "count": count, "list": list})
+	momentJSON(w, map[string]interface{}{"ok": true, "count": count, "list": list, "actors": actorList})
 }
 
 // HandleMomentUnreadRead POST /api/moments/unread/read 打开朋友圈整单已读（红点清零归口）
@@ -721,6 +841,79 @@ func (s *Server) HandleMomentUnreadRead(w http.ResponseWriter, r *http.Request) 
 	}
 	store.DB.Model(&model.MomentUnread{}).Where("username = ? AND is_read = ?", username, false).
 		Update("is_read", true)
+	momentJSON(w, map[string]interface{}{"ok": true})
+}
+
+// ===== 阶段二百八十一：朋友圈封面（微信同款"更换相册封面"） =====
+// GET /api/moments/cover 打开页面时拉取当前封面；POST 保存；DELETE 恢复默认渐变。
+// 封面支持图片/GIF/短视频 URL（/static/upload/ 白名单内），空串走前端默认背景。
+
+// HandleMomentCoverGet GET /api/moments/cover 查询当前用户朋友圈封面
+func (s *Server) HandleMomentCoverGet(w http.ResponseWriter, r *http.Request) {
+	username := momentArg(r)
+	if username == "" {
+		momentFail(w, http.StatusBadRequest, "缺少 username")
+		return
+	}
+	var u model.User
+	if err := store.DB.Select("moment_cover").Where("username = ?", username).First(&u).Error; err != nil {
+		momentJSON(w, map[string]interface{}{"ok": true, "cover": ""})
+		return
+	}
+	momentJSON(w, map[string]interface{}{"ok": true, "cover": u.MomentCover})
+}
+
+// HandleMomentCoverSet POST /api/moments/cover 保存封面（请求体 {url}；须在线，同上传口鉴权水位）
+func (s *Server) HandleMomentCoverSet(w http.ResponseWriter, r *http.Request) {
+	username := momentArg(r)
+	if username == "" {
+		momentFail(w, http.StatusBadRequest, "缺少 username")
+		return
+	}
+	if s.hub.Count(username) == 0 {
+		momentFail(w, http.StatusUnauthorized, "用户未在线，请先登录")
+		return
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil {
+		momentFail(w, http.StatusBadRequest, "请求体解析失败")
+		return
+	}
+	url := strings.TrimSpace(body.URL)
+	if url != "" {
+		// 白名单与动态媒体一致：仅本站上传目录 + 图片/视频扩展名，防注入外链
+		if !strings.HasPrefix(url, "/static/upload/") || strings.Contains(url, "..") ||
+			(!isImageExt(filepath.Ext(url)) && !isVideoExt(filepath.Ext(url))) {
+			momentFail(w, http.StatusBadRequest, "封面地址不合法")
+			return
+		}
+	}
+	if err := store.DB.Model(&model.User{}).Where("username = ?", username).
+		Update("moment_cover", url).Error; err != nil {
+		momentFail(w, http.StatusInternalServerError, "封面保存失败")
+		return
+	}
+	momentJSON(w, map[string]interface{}{"ok": true, "cover": url})
+}
+
+// HandleMomentCoverDelete DELETE /api/moments/cover 恢复默认封面（清空字段走默认渐变背景）
+func (s *Server) HandleMomentCoverDelete(w http.ResponseWriter, r *http.Request) {
+	username := momentArg(r)
+	if username == "" {
+		momentFail(w, http.StatusBadRequest, "缺少 username")
+		return
+	}
+	if s.hub.Count(username) == 0 {
+		momentFail(w, http.StatusUnauthorized, "用户未在线，请先登录")
+		return
+	}
+	if err := store.DB.Model(&model.User{}).Where("username = ?", username).
+		Update("moment_cover", "").Error; err != nil {
+		momentFail(w, http.StatusInternalServerError, "封面恢复失败")
+		return
+	}
 	momentJSON(w, map[string]interface{}{"ok": true})
 }
 

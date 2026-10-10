@@ -291,12 +291,49 @@
 
     if (window.desktop && window.desktop.onViewerLoad) {
         window.desktop.onViewerLoad(loadData);
-    } else if (window.opener && window.opener.__imageViewerList) {
-        // Web 浏览器端：主页面渲染层收集列表挂到 opener 全局
-        var openerList = window.opener.__imageViewerList || [];
-        var url = decodeURIComponent((location.search.match(/[?&]url=([^&]+)/) || [])[1] || '');
-        var idx = openerList.indexOf(url);
-        loadData({ url: url, list: openerList, index: idx });
+    } else {
+        // ===== Web 端数据源三分支归口（原实现 opener 分支不成立时 loadData 从未执行 → 空白查看器） =====
+        var urlParam = decodeURIComponent((location.search.match(/[?&]url=([^&]+)/) || [])[1] || '');
+        (function webLoad() {
+            // 1) opener 全局列表（chat.js/moments.js 主页面挂载，新开标签可达）
+            if (window.opener && window.opener.__imageViewerList) {
+                var openerList = window.opener.__imageViewerList || [];
+                loadData({ url: urlParam, list: openerList, index: openerList.indexOf(urlParam) });
+                return;
+            }
+            // 2) localStorage 快照（仅 from=moments 请求读取：moments.js 打开前写入，
+            //    跨标签同源共享——同窗跳转/新开标签/自动化开窗均可达；读取后即清防残留）
+            if ((location.search.match(/[?&]from=moments(&|$)/) || [])[1]) {
+                try {
+                    var sArr = JSON.parse(localStorage.getItem('im_viewer_list') || 'null');
+                    if (sArr && sArr.length) {
+                        var sI = parseInt(localStorage.getItem('im_viewer_index'), 10) || 0;
+                        var sU = (urlParam && sArr.indexOf(urlParam) !== -1) ? urlParam : sArr[clamp(sI, 0, sArr.length - 1)];
+                        var sIdx = sArr.indexOf(sU);
+                        localStorage.removeItem('im_viewer_list');
+                        localStorage.removeItem('im_viewer_index');
+                        loadData({ url: sU, list: sArr, index: sIdx === -1 ? clamp(sI, 0, sArr.length - 1) : sIdx });
+                        return;
+                    }
+                } catch (e) { /* 存储受限/解析失败走下一分支 */ }
+            }
+            // 3) URL fragment 快照（moments.js 冗余携带；零存储依赖）
+            var fm = location.hash.match(/[?&]L=([^&]+)/);
+            if (fm) {
+                try {
+                    var arr = JSON.parse(decodeURIComponent(fm[1]));
+                    if (arr && arr.length) {
+                        var i0 = parseInt((location.hash.match(/[?&]I=(\d+)/) || [])[1], 10) || 0;
+                        var u = (urlParam && arr.indexOf(urlParam) !== -1) ? urlParam : arr[clamp(i0, 0, arr.length - 1)];
+                        var ii = arr.indexOf(u);
+                        loadData({ url: u, list: arr, index: ii === -1 ? clamp(i0, 0, arr.length - 1) : ii });
+                        return;
+                    }
+                } catch (e) { /* 解析失败走兜底 */ }
+            }
+            // 3) 单图兜底（直链新开/调用方未挂列表）
+            if (urlParam) loadData({ url: urlParam, list: [urlParam], index: 0 });
+        })();
     }
     // ===== 阶段四十五：缩略图条自绘悬浮滚动条（横向，不占布局空间，无空隙） =====
     // 原生滚动条已隐藏（见 image-viewer.html 阶段四十五样式），此处生成滑块浮层：

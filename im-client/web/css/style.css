@@ -20284,15 +20284,18 @@ html.m .cc-item { padding: 10px 8px; }
 .moments-back:hover,
 .moments-camera:hover { background: rgba(0, 0, 0, 0.45); }
 
-/* 封面（微信同款：渐变兜底 + 右下角 昵称+头像） */
+/* 封面（微信同款：渐变兜底 + 右下角 昵称+头像；点封面拉伸展开浮现换封面入口） */
 .moments-cover {
     position: relative;
     height: 240px;
-    overflow: hidden;
+    cursor: pointer;
+    transition: height 0.35s ease;
 }
+.moments-cover.cover-expanded { height: 420px; }
 .moments-cover-bg {
     position: absolute;
     inset: 0;
+    overflow: hidden; /* 背景裁剪归背景层：封面本体不裁剪，头像(bottom:-22px)才能跨压列表（微信同款） */
     background: linear-gradient(135deg, #3a4a5f 0%, #576b95 55%, #7d8fb3 100%);
 }
 [data-theme="dark"] .moments-cover-bg {
@@ -20876,21 +20879,93 @@ html.m .cc-item { padding: 10px 8px; }
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
 }
-/* 手机端个人页朋友圈行红点：绝对定位贴在行尾箭头左侧（微信同款）——
-   不参与 flex 排版，箭头保持 margin-left:auto 与其他行"›"完全对齐 */
-html.m .mpa-badge {
+/* ---------- 入口好友头像叠加（微信发现页朋友圈行同款） ----------
+   好友发新动态/互动未读时，入口显示发者头像半叠加（最多 3 个，第 3 个带「+N」
+   剩余计数角标防溢出边界），每个头像右上角红旗红点；打开朋友圈已读后整组消失 */
+.moments-actor-stack { display: flex; align-items: center; }
+.mas-item { position: relative; width: 28px; height: 28px; flex-shrink: 0; }
+.mas-item + .mas-item { margin-left: -10px; } /* 半叠加 */
+.mas-av {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    background-size: cover;
+    background-position: center;
+    color: #fff;
+    font-size: 12px;
+    line-height: 24px;
+    text-align: center;
+    box-sizing: border-box;
+    border: 2px solid var(--panel-bg);
+}
+.mas-dot {
+    position: absolute;
+    top: -3px;
+    right: -3px;
     width: 8px;
     height: 8px;
     border-radius: 50%;
     background: #fa5151;
-    flex-shrink: 0;
+    border: 1.5px solid var(--panel-bg);
+    box-sizing: border-box;
 }
-html.m #mpa-moments { position: relative; }
-html.m #mpa-moments-badge {
+.mas-plus {
     position: absolute;
-    right: 20px; /* 行右内边距 2px + 箭头字形宽约 10px，再留 8px 间距 */
+    top: -7px;
+    right: -10px;
+    min-width: 15px;
+    height: 15px;
+    border-radius: 8px;
+    background: #fa5151;
+    color: #fff;
+    font-size: 9px;
+    line-height: 12px;
+    text-align: center;
+    padding: 0 3px;
+    box-sizing: border-box;
+    font-style: normal;
+    border: 1.5px solid var(--panel-bg);
+    z-index: 2;
+}
+/* 手机个人页朋友圈行：绝对定位贴箭头左侧（不参与 flex，箭头右对齐不受扰） */
+html.m .mpa-actor-stack {
+    position: absolute;
+    right: 24px;
     top: 50%;
     transform: translateY(-50%);
+    z-index: 2;
+}
+html.m #mpa-moments { position: relative; }
+/* PC 左栏朋友圈图标右上角：16px 小头像叠加（半溢出图标边缘，微信同款形态） */
+.nav-actor-stack { position: absolute; right: -7px; top: -4px; z-index: 3; }
+.nav-actor-stack .mas-item { width: 16px; height: 16px; }
+.nav-actor-stack .mas-item + .mas-item { margin-left: -6px; }
+.nav-actor-stack .mas-av {
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: var(--sidebar-bg);
+    font-size: 8px;
+    line-height: 14px;
+}
+.nav-actor-stack .mas-dot {
+    width: 7px;
+    height: 7px;
+    top: -2px;
+    right: -2px;
+    border-width: 1px;
+    border-color: var(--sidebar-bg);
+}
+.nav-actor-stack .mas-plus {
+    min-width: 12px;
+    height: 12px;
+    line-height: 10px;
+    font-size: 8px;
+    border-radius: 6px;
+    top: -5px;
+    right: -6px;
+    border-width: 1px;
+    border-color: var(--sidebar-bg);
 }
 /* 手机端：朋友圈导航图标恒隐藏（入口归口个人资料页"朋友圈"条目 + 头像红点，微信同款） */
 html.m .nav-icon[data-tab="moments"] { display: none; }
@@ -20908,6 +20983,7 @@ html.m .nav-top { position: relative; }
     z-index: 3;
 }
 html.m .moments-cover { height: 280px; }
+html.m .moments-cover.cover-expanded { height: 62vh; }
 html.m .moments-list { padding-top: 40px; }
 html.m .moments-pub-grid { grid-template-columns: repeat(3, 1fr); max-width: none; }
 html.m .moments-vis-panel {
@@ -20927,3 +21003,333 @@ html.m .moments-vis-panel {
     border-radius: 6px;
     object-fit: cover;
 }
+
+/* ===== 阶段二百八十一：朋友圈视频动态 + 拍摄 + 封面更换（微信同款） ===== */
+/* 自定义封面媒体（免裁剪直接铺满：图片/GIF 走 img，短视频走静音循环 video） */
+.moments-cover-media {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+}
+.moments-cover-media img,
+.moments-cover-media video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+/* 「换封面」按钮（微信同款：点封面拉伸展开后浮现 白icon+文字，收起时隐藏） */
+.moments-cover-change {
+    position: absolute;
+    right: 14px;
+    bottom: 54px; /* 悬于头像区上方（头像伸入封面约 42px） */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    z-index: 3;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px);
+    transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s, background 0.15s;
+}
+.moments-cover.cover-expanded .moments-cover-change {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+.moments-cover-change:hover { background: rgba(0, 0, 0, 0.3); }
+.moments-cover-change svg { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45)); }
+.moments-cover-change span {
+    font-size: 12px;
+    line-height: 1;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+/* 封面更换菜单（自绘弹窗，禁系统弹窗；仅展开态可达，悬于按钮上方） */
+.moments-cover-menu {
+    position: absolute;
+    right: 14px;
+    bottom: 112px;
+    min-width: 150px;
+    padding: 4px;
+    border-radius: 8px;
+    background: var(--panel-bg);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    z-index: 4;
+}
+.moments-cover-menu button {
+    display: block;
+    width: 100%;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.moments-cover-menu button:hover { background: var(--hover-bg, rgba(0, 0, 0, 0.06)); }
+.moments-cover-menu .cover-menu-reset { color: #fa5151; }
+/* 时间线九宫格视频格子（首帧预览 + 播放角标） */
+.moment-video {
+    position: relative;
+    overflow: hidden;
+    border-radius: 4px;
+    display: block;
+}
+.mg-1 .moment-video { border-radius: 4px; }
+.moment-video video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none; /* 点击归格子本体（播放浮层归口），video 不截获 */
+}
+.moment-video .mv-play {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    display: flex;
+    color: #fff;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+    pointer-events: none;
+}
+/* 发布页视频预览格（同时间线语义） */
+.moments-pub-thumb video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none;
+}
+.moments-pub-thumb .pub-thumb-play {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    color: rgba(255, 255, 255, 0.9);
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+    pointer-events: none;
+}
+/* 拍摄格（微信手机相册选择器首格同款：图标+文字竖排） */
+.pub-shot {
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12px;
+}
+/* 拍摄浮层（全屏黑底：预览 + 顶栏 + 环形进度 + 快门） */
+.moments-cam-view {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.moments-cam-view.hidden { display: none; }
+.moments-cam-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000;
+}
+.moments-cam-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 14px 18px;
+    z-index: 2;
+}
+.moments-cam-close,
+.moments-cam-flip {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    cursor: pointer;
+}
+.moments-cam-close:hover,
+.moments-cam-flip:hover { background: rgba(0, 0, 0, 0.6); }
+/* 快门同心容器：环形进度与快门按钮同轴（修复两圆错位），提示文字独立在下
+ * （moments 专属类名，避免与 camera-page 的 .cam-shutter-wrap/.cam-ring-* 相互层叠误伤） */
+.moments-shutter-wrap {
+    position: relative;
+    width: 84px;
+    height: 84px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+/* 录像环形进度（贴 wrap 内缘，与快门永远同心） */
+.moments-cam-ring {
+    position: absolute;
+    inset: 0;
+    width: 84px;
+    height: 84px;
+    pointer-events: none;
+}
+.moments-cam-ring circle {
+    fill: none;
+    stroke-width: 4;
+    stroke-linecap: round;
+}
+.moments-cam-ring .mc-ring-bg { stroke: rgba(255, 255, 255, 0.25); }
+.moments-cam-ring .mc-ring-fg {
+    stroke: #fa5151;
+    stroke-dasharray: 245.04; /* 2πr, r=39 */
+    stroke-dashoffset: 245.04;
+    transform: rotate(-90deg);
+    transform-origin: center;
+}
+.moments-cam-bottom {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    z-index: 1;
+}
+.moments-cam-shutter {
+    width: 68px;
+    height: 68px;
+    border: none;
+    border-radius: 50%;
+    background: #fff;
+    border: 5px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    padding: 0;
+    transition: transform 0.12s;
+    position: relative;
+    z-index: 3;
+}
+.moments-cam-shutter:active { transform: scale(0.92); }
+.moments-cam-hint {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 13px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+/* 视频播放浮层（自绘控制条，禁用原生控件） */
+.moments-video-view {
+    position: fixed;
+    inset: 0;
+    z-index: 2050;
+    background: rgba(0, 0, 0, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.moments-video-view.hidden { display: none; }
+.moments-vp-video {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+}
+.moments-vp-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    cursor: pointer;
+    z-index: 2;
+}
+.moments-vp-close:hover { background: rgba(255, 255, 255, 0.22); }
+.moments-vp-ctrl {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.55));
+    z-index: 2;
+}
+.moments-vp-play,
+.moments-vp-mute {
+    display: flex;
+    border: none;
+    background: none;
+    color: #fff;
+    cursor: pointer;
+    padding: 4px;
+}
+.moments-vp-mute.muted { color: rgba(255, 255, 255, 0.45); }
+.moments-vp-time {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    min-width: 38px;
+    text-align: center;
+    user-select: none;
+}
+.moments-vp-bar {
+    position: relative;
+    flex: 1;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+}
+.moments-vp-bar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25);
+}
+.moments-vp-bar-fill {
+    position: absolute;
+    left: 0;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--primary, #07c160);
+    width: 0;
+}
+.moments-vp-bar-dot {
+    position: absolute;
+    left: 0;
+    width: 11px;
+    height: 11px;
+    margin-left: -5px;
+    border-radius: 50%;
+    background: var(--primary, #07c160);
+    transform: translateY(-50%);
+    top: 50%;
+}
+/* 手机端适配：拍摄/播放浮层全屏（fixed 已通栏）；换封面按钮位置统一（悬于头像上方） */
+html.m .moments-vp-ctrl { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+html.m .moments-cam-bottom { bottom: calc(34px + env(safe-area-inset-bottom, 0px)); }
