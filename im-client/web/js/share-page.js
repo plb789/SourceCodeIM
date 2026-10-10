@@ -364,6 +364,9 @@
                 var video = document.createElement('video');
                 video.controls = true;
                 video.autoplay = true;
+                // 首帧就绪前隐藏画面：防 Android WebView 渲染灰底系统占位图（同朋友圈口径）
+                video.style.visibility = 'hidden';
+                video.addEventListener('loadeddata', function () { video.style.visibility = 'visible'; });
                 mediaRetry(video, function () { return shareFileUrl(true, item ? item.id : 0); });
                 video.src = url;
                 viewerBody.appendChild(video);

@@ -24663,6 +24663,12 @@
         return url + '#t=0.001';
     }
 
+    // 视频气泡首帧就绪前隐藏画面（防 Android WebView 渲染灰底系统占位图；与朋友圈视频格同口径）
+    document.addEventListener('loadeddata', function (e) {
+        var t = e.target;
+        if (t && t.tagName === 'VIDEO' && t.closest('.bubble-video')) t.classList.add('vd-ready');
+    }, true);
+
     function appendVideoMsg(fromUser, name, sizeText, url, type, isPrivate, opts) {
         var div = document.createElement('div');
         div.className = 'message ' + type;

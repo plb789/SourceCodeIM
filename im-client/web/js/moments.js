@@ -952,10 +952,11 @@
         vpVideoEl.addEventListener('loadeddata', function () {
             vpVideoEl.classList.remove('vp-wait');
         });
-        // 视频格（时间线/发布预览）首帧就绪前隐藏画面：防 WebView 灰底系统占位图闪现
+        // 视频格（时间线/发布预览/封面背景）首帧就绪前隐藏画面：防 WebView 灰底系统占位图闪现
         document.addEventListener('loadeddata', function (e) {
             var t = e.target;
-            if (t && t.tagName === 'VIDEO' && (t.closest('.moment-video') || t.closest('.moments-pub-thumb'))) {
+            if (t && t.tagName === 'VIDEO' &&
+                (t.closest('.moment-video') || t.closest('.moments-pub-thumb') || t.closest('.moments-cover-media'))) {
                 t.classList.add('vd-ready');
             }
         }, true);

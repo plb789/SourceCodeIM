@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.71">
+    <link rel="stylesheet" href="/css/style.css?v=3.72">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -2794,20 +2794,20 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.11"></script>
-    <script src="/js/chat.js?v=3.185"></script>
+    <script src="/js/chat.js?v=3.186"></script>
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
     <script src="/js/camera-page.js?v=1.1"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>
     <script src="/js/office-preview.js?v=1.1"></script>
-    <script src="/js/drive.js?v=2.31"></script>
+    <script src="/js/drive.js?v=2.32"></script>
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
     <script src="/js/rc-panel.js?v=1.3"></script>
     <!-- 阶段二百八十：朋友圈（微信同款：时间线/发布/点赞/评论/楼中楼回复；须在 chat.js 之后加载：
          复用 _osbInit 自绘滚动条与 IMContacts 好友数据源；Tab 切换经 window.IMMoments.open/close 联动） -->
-    <script src="/js/moments.js?v=1.96"></script>
+    <script src="/js/moments.js?v=1.97"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
     <script src="/js/rc-mobile-view.js?v=1.1"></script>

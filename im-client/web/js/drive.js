@@ -1367,6 +1367,11 @@
             var tag = document.createElement(kind === 'img' ? 'img' : (kind === 'pdf' ? 'iframe' : kind));
             if (kind === 'img') tag.alt = name;
             if (kind === 'video' || kind === 'audio') { tag.controls = true; tag.autoplay = true; }
+            if (kind === 'video') {
+                // 首帧就绪前隐藏画面：防 Android WebView 渲染灰底系统占位图（浮层黑底过渡，同朋友圈口径）
+                tag.style.visibility = 'hidden';
+                tag.addEventListener('loadeddata', function () { tag.style.visibility = 'visible'; });
+            }
             tag.src = url;
             pvBody.appendChild(tag);
         } else {
