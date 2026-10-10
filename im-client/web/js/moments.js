@@ -517,13 +517,13 @@
             refreshCard(m.id);
         }).catch(function () { showToast(T('删除失败')); });
     }
-    // 自绘确认弹窗（禁用系统默认弹窗，项目规则）
+    // 自绘确认弹窗（禁用系统默认弹窗，项目规则）：微信同款居中 Alert。
+    // 不沿用可见范围浮层形态——其手机端样式为贴底抽屉，会随内联宽度错位
     function confirmMomentDelete(m) {
         var mask = document.createElement('div');
-        mask.className = 'moments-vis-mask';
+        mask.className = 'moments-vis-mask moments-cfrm';
         var box = document.createElement('div');
-        box.className = 'moments-vis-panel';
-        box.style.width = '300px';
+        box.className = 'moments-vis-panel moments-cfrm-box';
         box.innerHTML = '<div class="moments-vis-head" style="justify-content:center;border-bottom:1px solid var(--divider)">' +
             '<span class="moments-vis-title" style="font-weight:400">' + T('删除该朋友圈？') + '</span></div>' +
             '<div style="display:flex;border-top:1px solid var(--divider)">' +
