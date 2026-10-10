@@ -28687,6 +28687,9 @@
             return null;
         }
         document.addEventListener('mouseover', function (e) {
+            // 手机端（html.m）滑块永不出场：触摸设备滚动靠手势，微信同款无滚动条；
+            // tap 会合成 mouseover 唤出滑块，故在事件入口拦截，纵向/横向滑块一并屏蔽
+            if (document.documentElement.classList.contains('m')) return;
             var el = sbFind(e.target);
             if (el === sbLast) { if (el) clearTimeout(el._osbHideT); return; }
             if (sbLast) sbScheduleHide(sbLast);

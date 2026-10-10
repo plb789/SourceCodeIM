@@ -21371,3 +21371,6 @@ html.m .moments-vis-panel.moments-cfrm-box {
 /* 手机端适配：拍摄/播放浮层全屏（fixed 已通栏）；换封面按钮位置统一（悬于头像上方） */
 html.m .moments-vp-ctrl { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
 html.m .moments-cam-bottom { bottom: calc(34px + env(safe-area-inset-bottom, 0px)); }
+/* 手机端隐藏全部自绘滚动条（触摸设备滚动靠手势，微信同款无滚动条；
+   与 chat.js mouseover 入口守卫双保险——即使滑块 DOM 已挂载也永不显示） */
+html.m .osb-thumb { display: none !important; }

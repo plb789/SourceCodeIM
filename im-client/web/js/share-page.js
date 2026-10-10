@@ -224,10 +224,16 @@
                     }, 180);
                 }
             }
-            el.addEventListener('mouseenter', function () { show(true); });
-            el.addEventListener('mouseleave', function () { show(false); });
-            thumb.addEventListener('mouseenter', function () { clearTimeout(el._osbHideT); });
-            thumb.addEventListener('mouseleave', function () { show(false); });
+            // 触摸设备（手机端）滑块永不出场：滚动靠手势，微信同款无滚动条；
+            // share.html 不走 html.m 体系，用 hover 能力媒体查询判定（tap 合成 mouseenter 同样拦截）。
+            // 仅跳过悬停显隐绑定，拖拽/首次 update 照常（滑块常驻不可见，无行为差异）
+            var hoverable = !(window.matchMedia && !window.matchMedia('(hover: hover)').matches);
+            if (hoverable) {
+                el.addEventListener('mouseenter', function () { show(true); });
+                el.addEventListener('mouseleave', function () { show(false); });
+                thumb.addEventListener('mouseenter', function () { clearTimeout(el._osbHideT); });
+                thumb.addEventListener('mouseleave', function () { show(false); });
+            }
             // 滑块拖拽：按下后按位移比例映射回滚动位置（比例与 update 一致）
             thumb.addEventListener('mousedown', function (e) {
                 e.preventDefault();
