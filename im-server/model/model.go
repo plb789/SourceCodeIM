@@ -122,9 +122,9 @@ func (Device) TableName() string { return "im_device" }
 type RemoteTrust struct {
 	ID uint `gorm:"primaryKey;autoIncrement" json:"id"`
 	// OwnerUsername 被控设备归属账号；DeviceID 设备ID；ControllerUsername 获信任的控制方账号
-	OwnerUsername      string `gorm:"column:owner_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"owner_username"`
-	DeviceID           string `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_trust_pair" json:"device_id"`
-	ControllerUsername string `gorm:"column:controller_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"controller_username"`
+	OwnerUsername      string    `gorm:"column:owner_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"owner_username"`
+	DeviceID           string    `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_trust_pair" json:"device_id"`
+	ControllerUsername string    `gorm:"column:controller_username;type:varchar(32);not null;uniqueIndex:idx_trust_pair" json:"controller_username"`
 	CreateTime         time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
@@ -134,10 +134,10 @@ func (RemoteTrust) TableName() string { return "im_remote_trust" }
 // RemoteCard 阶段二百六十二：用户自定义远程卡片（设备ID+备注名，服务端存储三端同步）。
 // 仅存设备ID+备注不存凭据：凭据走信任机制（输一次访问密码即互信），卡片点击直连
 type RemoteCard struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Username   string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_card_pair" json:"username"` // 归属账号（卡片主人）
-	DeviceID   string `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_card_pair" json:"device_id"`
-	Remark     string `gorm:"column:remark;type:varchar(64);default:''" json:"remark"` // 展示备注名（用户自起）
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_card_pair" json:"username"` // 归属账号（卡片主人）
+	DeviceID   string    `gorm:"column:device_id;type:varchar(16);not null;uniqueIndex:idx_card_pair" json:"device_id"`
+	Remark     string    `gorm:"column:remark;type:varchar(64);default:''" json:"remark"` // 展示备注名（用户自起）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 }
 
@@ -949,3 +949,222 @@ type RedPacketClaim struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (RedPacketClaim) TableName() string { return "im_red_packet_claim" }
+
+// ===== 游戏中心（Steam 同款游戏浏览/下载，管理员自建游戏库，P1 全免费） =====
+// 设计归口：游戏元数据（im_game）与版本（im_game_version）、版本文件清单（im_game_file）、
+// 用户游戏库（im_game_library）四表分离；文件本体落本地磁盘 game_data/games/<slug>/<version>/，
+// 服务端归口下载（Range 断点续传），storage_path 不外泄（json:"-"），客户端凭文件 ID 走下载接口
+
+// Game 游戏主表 im_game（管理员上架，slug 即安装目录名，全局唯一）
+type Game struct {
+	ID   uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Slug string `gorm:"column:slug;type:varchar(64);uniqueIndex;not null" json:"slug"` // 唯一标识（=安装目录名，小写字母/数字/下划线/中划线）
+	Name string `gorm:"column:name;type:varchar(128);not null;index" json:"name"`      // 展示名
+	// ShortDesc 一句话简介（列表卡片）；Description 详细介绍（详情页，支持换行文本）
+	ShortDesc   string `gorm:"column:short_desc;type:varchar(255);default:''" json:"short_desc"`
+	Description string `gorm:"column:description;type:text" json:"description"`
+	// Cover 封面图 URL（/static/upload/games/ 相对路径，静态服务天然托管）
+	Cover string `gorm:"column:cover;type:varchar(255);default:''" json:"cover"`
+	// Banner 库横幅图 URL（游戏库页签选中游戏的 hero 大图；空回退封面）
+	Banner string `gorm:"column:banner;type:varchar(512);default:''" json:"banner"`
+	// Screenshots 截图 URL JSON 数组（如 ["/static/upload/games/s1.png"]）
+	Screenshots string `gorm:"column:screenshots;type:varchar(2048);default:'[]'" json:"screenshots"`
+	// Videos 预告片视频 URL JSON 数组（P2 商店化：如 ["/static/upload/games/videos/v1.mp4"]，
+	// 详情页媒体区视频+图片混排，视频排前 Steam 同款）
+	Videos string `gorm:"column:videos;type:varchar(2048);default:'[]'" json:"videos"`
+	// Tags 标签（逗号分隔，如 "动作,单人"；不建索引——255 字符 utf8mb4=1020B 超出服务器 1000B 索引上限，
+	// 且 LIKE '%x%' 检索本就吃不到 B-tree 索引）
+	Tags string `gorm:"column:tags;type:varchar(255);default:''" json:"tags"`
+	// Developer/Publisher 开发商/发行商
+	Developer string `gorm:"column:developer;type:varchar(64);default:''" json:"developer"`
+	Publisher string `gorm:"column:publisher;type:varchar(64);default:''" json:"publisher"`
+	// SizeBytes 冗余最新版本总大小（版本上架时刷新，列表卡片免聚合查询）
+	SizeBytes int64 `gorm:"column:size_bytes;default:0" json:"size_bytes"`
+	// LatestVersion 最新版本号（冗余快照）
+	LatestVersion string `gorm:"column:latest_version;type:varchar(32);default:''" json:"latest_version"`
+	// Price 售价（积分价格：0=免费直接入库；>0=入库需严格扣除对应积分，共用 AI 积分钱包，
+	// 流水 reason=game_purchase/game_refund；P2 商店化启用）
+	Price float64 `gorm:"column:price;type:double;default:0" json:"price"`
+	// DownCount 安装次数（加入库时递增）
+	DownCount int64 `gorm:"column:down_count;default:0" json:"down_count"`
+	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
+	Status     int8      `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
+	Sort       int       `gorm:"column:sort;default:0" json:"sort"` // 排序（小在前）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (Game) TableName() string { return "im_game" }
+
+// GameVersion 游戏版本表 im_game_version（uniqueIndex(game_id,version) 防重）
+type GameVersion struct {
+	ID     uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID uint `gorm:"column:game_id;not null;uniqueIndex:idx_game_ver" json:"game_id"`
+	// Version 版本号（同一游戏唯一；安装目录 games/<slug>/<version>/）
+	Version string `gorm:"column:version;type:varchar(32);not null;uniqueIndex:idx_game_ver" json:"version"`
+	// ManifestHash 文件清单指纹（sha256 over 排序后 rel_path:size:sha256 行，客户端增量校验锚点）
+	ManifestHash string `gorm:"column:manifest_hash;type:char(64);default:''" json:"manifest_hash"`
+	// SizeBytes 该版本全部文件总大小；FileCount 文件数
+	SizeBytes int64 `gorm:"column:size_bytes;default:0" json:"size_bytes"`
+	FileCount int   `gorm:"column:file_count;default:0" json:"file_count"`
+	// Changelog 更新日志；MinReq 最低配置说明（纯展示）
+	Changelog  string    `gorm:"column:changelog;type:varchar(1024);default:''" json:"changelog"`
+	MinReq     string    `gorm:"column:min_req;type:varchar(512);default:''" json:"min_req"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameVersion) TableName() string { return "im_game_version" }
+
+// GameNotice 游戏公告表 im_game_notice（管理端按游戏发布，库内游戏页"动态"区
+// 与版本更新按时间混排展示，Steam 库动态流同构）
+type GameNotice struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// GameID 所属游戏（删除游戏时级联清理）
+	GameID uint   `gorm:"column:game_id;not null;index" json:"game_id"`
+	Title  string `gorm:"column:title;type:varchar(128);not null" json:"title"`
+	// Content 公告正文（支持换行文本，可空——配合 Images 支持"纯图片公告"）
+	Content string `gorm:"column:content;type:text" json:"content"`
+	// Images 公告图片列表（JSON 数组串，支持 GIF 动图；首图兼作动态卡头图，空回退 cover/游戏封面）
+	Images string `gorm:"column:images;type:text" json:"images"`
+	// Layout 卡片布局样式（thumb=横向缩略图左图右文 / grid=图片网格 Steam 事件卡同款 /
+	// banner=通栏大图图上文下；空串回退 thumb，旧数据零变化）
+	Layout string `gorm:"column:layout;type:varchar(16);default:''" json:"layout"`
+	// Cover 公告头图 URL（旧字段兼容；新公告头图取 Images 首图）
+	Cover      string    `gorm:"column:cover;type:varchar(512);default:''" json:"cover"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameNotice) TableName() string { return "im_game_notice" }
+
+// GameFile 版本文件清单表 im_game_file（uniqueIndex(version_id,rel_path)）
+type GameFile struct {
+	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	VersionID uint   `gorm:"column:version_id;not null;uniqueIndex:idx_game_file" json:"version_id"`
+	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_game_file" json:"rel_path"` // 版本内相对路径（正斜杠；245 而非 512——与 bigint 组成唯一索引 988B 压入服务器 1000B 索引上限）
+	SizeBytes int64  `gorm:"column:size_bytes;default:0" json:"size_bytes"`
+	// SHA256 全文件指纹（服务端合并分片时流式复算校验，不信任客户端声明）
+	SHA256 string `gorm:"column:sha256;type:char(64);default:''" json:"sha256"`
+	// StoragePath 磁盘存储相对路径（基于游戏数据根目录，json:"-" 绝不外泄，下载按文件 ID 归口）
+	StoragePath string    `gorm:"column:storage_path;type:varchar(512);default:''" json:"-"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameFile) TableName() string { return "im_game_file" }
+
+// GameLibrary 用户游戏库表 im_game_library（uniqueIndex(username,game_id) 防重复入库）
+type GameLibrary struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_user_game" json:"username"`
+	GameID   uint   `gorm:"column:game_id;not null;uniqueIndex:idx_user_game" json:"game_id"`
+	// State 0未安装 1下载中 2暂停 3已安装 4待更新
+	State int8 `gorm:"column:state;type:tinyint;default:0" json:"state"`
+	// InstalledVersion 已安装版本号；InstallPath 最近一次安装路径（重装/更新时预填客户端选择框）
+	InstalledVersion string `gorm:"column:installed_version;type:varchar(32);default:''" json:"installed_version"`
+	InstallPath      string `gorm:"column:install_path;type:varchar(512);default:''" json:"install_path"`
+	// PayPrice 入库实付积分快照（0=免费入库；移出库退款按实付全额退还，防管理员中途调价导致退款歧义）
+	PayPrice float64 `gorm:"column:pay_price;type:double;default:0" json:"pay_price"`
+	// PlaySeconds 累计游玩秒数（客户端 start/end 上报归口累加）
+	PlaySeconds int64     `gorm:"column:play_seconds;default:0" json:"play_seconds"`
+	LastPlayAt  time.Time `gorm:"column:last_play_at;type:datetime;default:CURRENT_TIMESTAMP" json:"last_play_at"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameLibrary) TableName() string { return "im_game_library" }
+
+// GameConfig 商店布局配置表 im_game_config（单行表 id=1，管理端可改，用户打开商店即热生效）
+// 设计归口：Layout 模板二选一（steam=Steam 同款首页 / grid=经典网格）；Sections 区块开关
+// （轮播/精选/标签条，JSON 对象）；Featured 置顶推荐游戏 ID 有序列表（JSON 数组，轮播与精选
+// 优先展示，服务端写入时校验存在性与上架状态）
+type GameConfig struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// Layout 布局模板：steam | grid
+	Layout string `gorm:"column:layout;type:varchar(16);default:'steam'" json:"layout"`
+	// Sections 区块开关 JSON：{"carousel":true,"featured":true,"tagbar":true}
+	Sections string `gorm:"column:sections;type:varchar(255);default:'{}'" json:"sections"`
+	// Featured 置顶推荐游戏 ID 有序列表 JSON：[3,1,5]（最多 8 个，超出截断）
+	Featured   string    `gorm:"column:featured;type:varchar(255);default:'[]'" json:"featured"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameConfig) TableName() string { return "im_game_config" }
+
+// GameSection 商店自定义推荐区块表 im_game_section（Steam 首页多区块同构）：
+// 商店页同时显示多个样式区块，每区块 = 标题 + 展示样式 + 有序游戏列表，
+// 哪些游戏放进哪个区块由管理端配置（保存时校验存在性与上架状态）
+type GameSection struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// Title 区块标题（如"折扣与活动""热门新品"）
+	Title string `gorm:"column:title;type:varchar(64);not null" json:"title"`
+	// Style 展示样式枚举（见 server/gameSectionStyles）：
+	//   promo(活动大图轮播 1 大+2 小) / capsule(主图信息面板轮播) / row(横排卡片流) /
+	//   grid(网格卡片) / list(榜单列表行)
+	Style string `gorm:"column:style;type:varchar(16);not null;default:'promo'" json:"style"`
+	// Sort 排序权重（升序，同值按 id）；写入时按区块数组下标归一
+	Sort int `gorm:"column:sort;default:0" json:"sort"`
+	// Games 游戏 ID 有序列表 JSON：[3,1,5]（最多 12 个，渲染时仅保留上架游戏）
+	Games      string    `gorm:"column:games;type:varchar(512);default:'[]'" json:"games"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameSection) TableName() string { return "im_game_section" }
+
+// GameReview 游戏评测表 im_game_review（P2 商店化：Steam 同款评测，一人一评可编辑，
+// 仅已入库用户可评——服务端写入前校验 im_game_library 存在）
+type GameReview struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	GameID   uint   `gorm:"column:game_id;not null;uniqueIndex:idx_game_rev_user" json:"game_id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_game_rev_user" json:"username"`
+	// Recommended 1=推荐 0=不推荐（Steam 同款拇指二选，无评分制）
+	Recommended int8 `gorm:"column:recommended;type:tinyint;not null" json:"recommended"`
+	// Content 评测正文（纯文本可换行）
+	Content string `gorm:"column:content;type:text" json:"content"`
+	// PlayHours 评测提交时库内累计游玩小时数冗余（Steam 评测卡同款展示）
+	PlayHours float64 `gorm:"column:play_hours;type:double;default:0" json:"play_hours"`
+	// HelpfulCount "有帮助"标记计数（点击 toggle 时增减）
+	HelpfulCount int64 `gorm:"column:helpful_count;default:0" json:"helpful_count"`
+	// ReplyCount 评测回复数冗余计数（回复发布 +1 / 删除 GREATEST(-1,0)，与 HelpfulCount 同模式）
+	ReplyCount int64     `gorm:"column:reply_count;default:0" json:"reply_count"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameReview) TableName() string { return "im_game_review" }
+
+// GameReviewLike 评测"有帮助"标记表 im_game_review_like（uniqueIndex(review_id,username) 幂等：
+// 一人一标记，toggle 时插入/删除并联动 HelpfulCount 增减）
+type GameReviewLike struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	ReviewID   uint      `gorm:"column:review_id;not null;uniqueIndex:idx_rev_like_user" json:"review_id"`
+	Username   string    `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_rev_like_user" json:"username"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameReviewLike) TableName() string { return "im_game_review_like" }
+
+// GameReviewReply 评测回复表 im_game_review_reply（朋友圈 MomentComment 同款楼中楼模式：
+// ReplyTo=0 直接评论评测，>0 回复指定回复；ReplyToUser 冗余存储防被回复删除后"张三回复李四"展示断裂；
+// 回复的回复平铺归一，不嵌套）
+type GameReviewReply struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	ReviewID uint   `gorm:"column:review_id;not null;index" json:"review_id"`
+	Username string `gorm:"column:username;type:varchar(32);not null" json:"username"` // 回复人
+	ReplyTo  uint   `gorm:"column:reply_to;default:0" json:"reply_to"`                 // 被回复的回复ID（0=直接评论评测）
+	// ReplyToUser 被回复人（冗余存储：被回复删除后"张三回复李四"展示仍完整）
+	ReplyToUser string    `gorm:"column:reply_to_user;type:varchar(32);default:''" json:"reply_to_user"`
+	Content     string    `gorm:"column:content;type:varchar(512)" json:"content"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameReviewReply) TableName() string { return "im_game_review_reply" }

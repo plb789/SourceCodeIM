@@ -1,0 +1,2624 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>游戏中心</title>
+    <script>
+        /* 游戏中心主题首绘引导：与主界面同源读 im_theme（dark/light，默认 dark），
+           先于样式渲染设置 data-theme，避免深色主题下先浅后深闪屏 */
+        try { document.documentElement.setAttribute('data-theme', localStorage.getItem('im_theme') || 'dark'); }
+        catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    </script>
+    <!-- 引用全站样式表：主题 CSS 变量（--bg/--panel-bg/--primary 等明暗双主题）、
+         全局原生滚动条归零与自绘悬浮滑块 .osb-thumb 样式均来自这里，本页禁止硬编码颜色 -->
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* ===== 游戏中心（Steam 同款 P1·商店页）页面私有样式 =====
+           双环境运行：Electron PC 独立窗口（可下载/启动）/ 普通浏览器（只读浏览）。
+           布局参考 Steam：顶部工具栏 + 横向页签导航 + 内容区（商店首页为轮播/精选/标签条/网格
+           四段式，可由管理端布局配置热切换）；所有颜色一律引用 style.css 现有主题变量，
+           跟随 data-theme 明暗切换 */
+
+        /* ===== 游戏中心品牌色（Steam 同款双色调，用户反馈微信绿"太AI化"不符合游戏气质） =====
+           主强调 --primary 本页重定义为 Steam 蓝（评测摘要/进度条/筛选选中/导航/价格/推荐/链接），
+           浅色主题深一档保白底对比；行动按钮（安装/获取/发送/免费胶囊）用 Steam 安装绿渐变
+           --gs-btn；仅本页生效（style.css 在前本页 :root 同名同名变量后者胜），主客户端微信绿不受影响 */
+        :root {
+            --primary: #2b6cb8;
+            --gs-btn: linear-gradient(180deg, #7cbf42 0%, #588a1b 100%);
+            --gs-btn-text: #d9efb9;
+        }
+
+        [data-theme="dark"] {
+            --primary: #66c0f4;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            [data-theme="system"] { --primary: #66c0f4; }
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* ===== 顶部工具栏：Electron 无边框窗口的拖动区（按钮/搜索框 no-drag） ===== */
+        .gs-toolbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border);
+            -webkit-app-region: drag;
+            z-index: 20;
+        }
+
+        .gs-title {
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 600;
+            margin-left: 4px;
+            -webkit-app-region: drag;
+        }
+
+        .gs-search {
+            -webkit-app-region: no-drag;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 260px;
+            max-width: 32vw;
+            height: 30px;
+            margin-left: 16px;
+            padding: 0 10px;
+            border-radius: 15px;
+            background: var(--search-bg);
+            border: 1px solid var(--border);
+            flex-shrink: 1;
+        }
+
+        .gs-search svg { color: var(--text-light); flex-shrink: 0; }
+
+        .gs-search input {
+            flex: 1;
+            min-width: 0;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        .gs-search input::placeholder { color: var(--text-light); }
+
+        .gs-spacer { flex: 1; height: 100%; -webkit-app-region: drag; }
+
+        .gs-tool-btn {
+            -webkit-app-region: no-drag;
+            width: 34px;
+            height: 34px;
+            margin-left: 4px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-light);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-tool-btn:hover { background: var(--hover); color: var(--text); }
+
+        /* 标题栏账号区：头像圆形 22px + 名称（超长省略），hover 淡底可点击性提示 */
+        .gs-user {
+            -webkit-app-region: no-drag;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-right: 4px;
+            padding: 0 8px 0 4px;
+            height: 30px;
+            border-radius: 15px;
+            max-width: 180px;
+        }
+        .gs-user:hover { background: var(--hover); }
+        .gs-user-av {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            overflow: hidden;
+            flex-shrink: 0;
+            background: var(--primary); /* 无头像回退：主题色底 + 首字母 */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gs-user-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gs-user-av b { font-size: 11px; font-weight: 600; color: var(--bg); }
+        .gs-user-name {
+            font-size: 12px;
+            color: var(--text-secondary);
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* 窗口控制按钮仅 Electron 显示（body.gs-electron 由 JS 挂载；浏览器模式隐藏） */
+        .gs-hide-web { display: none; }
+        body.gs-electron .gs-hide-web { display: flex; }
+
+        /* ===== 左侧图标导航栏（微信同款窄栏：图标纵排 + 选中态左缘绿色指示条） ===== */
+        .gs-nav {
+            width: 56px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 8px;
+            background: var(--header-bg);
+            border-right: 1px solid var(--border);
+        }
+
+        .gs-nav-btn {
+            position: relative;
+            width: 44px;
+            height: 44px;
+            margin-bottom: 4px;
+            border: none;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-light);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-nav-btn:hover { background: var(--hover); color: var(--text); }
+
+        /* 选中态：主题绿图标 + 左缘绿色圆角竖条（微信同构，颜色走主题变量） */
+        .gs-nav-btn.active { color: var(--primary); }
+
+        .gs-nav-btn.active::after {
+            content: '';
+            position: absolute;
+            left: -6px;
+            top: 10px;
+            bottom: 10px;
+            width: 3px;
+            border-radius: 2px;
+            background: var(--primary);
+        }
+
+        /* ===== 主体：左导航栏 + 内容区（左侧图标导航切换视图） ===== */
+        .gs-body {
+            position: absolute;
+            top: 44px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+        }
+
+        .gs-main { flex: 1; position: relative; min-width: 0; background: var(--bg); }
+
+        .gs-view { position: absolute; inset: 0; display: flex; flex-direction: column; }
+
+        /* 滚动容器：原生滚动条已被 style.css 全局归零，由 JS 挂自绘悬浮滑块（.osb-thumb） */
+        .gs-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+
+        /* ===== Steam 布局·特色推荐轮播：主图 + 右侧纵列小卡 ===== */
+        .gs-carousel {
+            display: flex;
+            gap: 10px;
+            padding: 16px 16px 0;
+        }
+
+        .gs-car-main {
+            position: relative;
+            flex: 1;
+            min-width: 0;
+            aspect-ratio: 16 / 7;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            cursor: pointer;
+        }
+
+        .gs-car-main img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            transition: opacity 0.25s;
+        }
+
+        /* 主图底部渐隐信息条（名称/简介，Steam 特色推荐同构） */
+        .gs-car-info {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 26px 16px 12px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+            color: #fff;
+        }
+
+        /* 右侧信息面板（Steam"精选和推荐"同款）：游戏名 + 评测摘要 + 2×2 截图网格 + 标签 + 操作按钮 */
+        .gs-car-panel {
+            width: 300px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .gs-car-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-car-review { font-size: 12px; color: var(--text-secondary); }
+
+        /* 2×2 截图网格：格子高度随面板剩余空间均分（不溢出），图片 cover 裁切 */
+        .gs-car-shots {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 8px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .gs-car-shot {
+            min-height: 0;
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            cursor: pointer;
+        }
+
+        .gs-car-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-car-shot.bad { visibility: hidden; }
+
+        /* 截图悬停预览态：当前预览的小图加主题色内描边（Steam 同款悬停切主图反馈） */
+        .gs-car-shot.previewing {
+            outline: 2px solid var(--primary);
+            outline-offset: -2px;
+        }
+
+        .gs-car-shot-ph {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            border: 1px dashed var(--border);
+            color: var(--text-light);
+            font-size: 12px;
+            min-height: 90px;
+        }
+
+        .gs-car-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+        .gs-car-tag {
+            padding: 3px 10px;
+            border-radius: 12px;
+            /* 底色用 --active（比 --hover 深一档）：行/大卡悬停时宿主背景会变 --hover，
+               同色会导致胶囊融底消失（用户反馈"悬停后标签没有胶囊底色"） */
+            background: var(--active);
+            color: var(--text-secondary);
+            font-size: 11px;
+        }
+
+        .gs-car-action { display: flex; justify-content: flex-end; }
+
+        /* 免费开玩/积分价按钮（Steam 同款绿色大按钮；点击进详情） */
+        .gs-car-play {
+            padding: 8px 26px;
+            border: none;
+            border-radius: 6px;
+            background: var(--gs-btn);
+            color: var(--gs-btn-text);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .gs-car-play:hover { filter: brightness(1.1); }
+
+        /* 底部圆点指示器（Steam 同款居中横排：当前点亮，其余弱化；单游戏不渲染） */
+        .gs-car-dots {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 0 2px;
+        }
+
+        .gs-car-dot {
+            width: 8px;
+            height: 8px;
+            padding: 0;
+            border: none;
+            border-radius: 50%;
+            background: var(--text-light);
+            opacity: 0.45;
+            cursor: pointer;
+        }
+
+        .gs-car-dot:hover { opacity: 0.8; }
+
+        .gs-car-dot.active { background: var(--text); opacity: 1; }
+
+        /* 主图底部渐隐信息条：仅简介一行（名称已移右面板） */
+        .gs-car-desc {
+            margin-top: 4px;
+            font-size: 12px;
+            opacity: 0.85;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 1;
+            -webkit-box-orient: vertical;
+        }
+
+        /* ===== 自定义推荐区块（Steam 首页多区块同款，管理端配置） ===== */
+
+        /* grid 区块：网格卡片（复用 gs-card 卡片，布局与全部游戏网格一致） */
+        .gs-sec-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        /* promo 区块（折扣与活动同款）：每页 1 大卡 + 右侧竖排 2 小卡，左右箭头翻页 */
+        .gs-promo { position: relative; }
+
+        .gs-promo-page {
+            display: flex;
+            gap: 10px;
+            aspect-ratio: 16 / 7;
+        }
+
+        .gs-promo-card {
+            position: relative;
+            flex: 1.75;
+            min-width: 0;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            cursor: pointer;
+        }
+
+        .gs-promo-side {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .gs-promo-side .gs-promo-card { flex: 1; }
+
+        .gs-promo-card img {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .gs-promo-card .gs-cover-ph { position: absolute; inset: 0; }
+
+        /* 卡片底部渐隐条：大卡名称+一句话介绍，小卡仅名称 */
+        .gs-promo-fade {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 22px 12px 8px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+            color: #fff;
+        }
+
+        .gs-promo-name {
+            font-size: 14px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-promo-desc {
+            margin-top: 2px;
+            font-size: 12px;
+            opacity: 0.85;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 价格角标（右下深色胶囊；免费走主题绿高亮） */
+        .gs-promo-price {
+            position: absolute;
+            right: 10px;
+            bottom: 8px;
+            padding: 2px 10px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .gs-promo-price.free { background: var(--gs-btn); color: var(--gs-btn-text); }
+
+        /* 左右翻页箭头（垂直居中贴左右缘，Steam 同款半透明底） */
+        .gs-promo-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 30px;
+            height: 56px;
+            border: none;
+            background: rgba(0, 0, 0, 0.45);
+            color: #fff;
+            font-size: 20px;
+            line-height: 1;
+            cursor: pointer;
+            z-index: 2;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+
+        .gs-promo:hover .gs-promo-arrow { opacity: 1; }
+
+        .gs-promo-arrow.left { left: 0; border-radius: 8px 0 0 8px; }
+        .gs-promo-arrow.right { right: 0; border-radius: 0 8px 8px 0; }
+
+        .gs-promo-arrow:hover { background: var(--primary); }
+
+        /* list 区块（热门新品同款）：左侧行式榜单 + 右侧悬停预览面板双栏 */
+        .gs-lrows {
+            display: flex;
+            gap: 10px;
+            align-items: stretch;
+        }
+
+        .gs-lrows-list {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* 右侧悬停预览面板（Steam 同款）：标题/评测/介绍/标签 + 媒体堆栈，悬停行即时切换 */
+        .gs-lpv {
+            width: 330px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .gs-lpv-name {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lpv-rev {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .gs-lpv-rev b { color: var(--primary); font-weight: 600; }
+
+        .gs-lpv-desc {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .gs-lpv-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .gs-lpv-media {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .gs-lpv-tile {
+            position: relative;
+            flex: 1;
+            min-height: 0;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-lpv-tile img,
+        .gs-lpv-tile video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* 单游戏横向大卡（Steam 精选胶囊同款）：整行宽，左信息区 + 右 2×2 媒体网格 */
+        .gs-lpv-hero {
+            flex: 1;
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+
+        .gs-lpv-hero:hover { background: var(--hover); }
+
+        .gs-lpv-info {
+            width: 300px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .gs-lpv-info .gs-lpv-name { font-size: 17px; }
+
+        .gs-lpv-hero .gs-lpv-desc { -webkit-line-clamp: 4; }
+
+        .gs-lpv-info .gs-lrow-price { margin-top: auto; align-self: flex-start; }
+
+        .gs-lpv-hero .gs-lpv-media {
+            flex: 1;
+            min-width: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .gs-lpv-hero .gs-lpv-tile {
+            flex: none;
+            aspect-ratio: 16 / 9;
+        }
+
+        .gs-lpv-hero .gs-lpv-tile:only-child { grid-column: 1 / -1; }
+
+        .gs-lrow {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 7px 10px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+
+        .gs-lrow:hover { background: var(--hover); }
+
+        .gs-lrow-thumb {
+            position: relative;
+            width: 130px;
+            height: 60px;
+            flex-shrink: 0;
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-lrow-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .gs-lrow-mid {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .gs-lrow-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 一句话介绍（Steam 热门新品行内灰字同款） */
+        .gs-lrow-desc {
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lrow-tags {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .gs-lrow-price {
+            flex-shrink: 0;
+            min-width: 64px;
+            text-align: center;
+            padding: 5px 12px;
+            border-radius: 6px;
+            background: var(--hover);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .gs-lrow-price.free { background: var(--gs-btn); color: var(--gs-btn-text); }
+
+        /* ===== Steam 布局·精选推荐：横向卡片流 ===== */
+        .gs-fblock { padding: 18px 16px 0; }
+
+        .gs-fblock-title { margin-bottom: 10px; font-size: 14px; font-weight: 600; color: var(--text); }
+
+        .gs-frow {
+            display: flex;
+            gap: 10px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 10px;
+        }
+
+        .gs-fcard {
+            width: 190px;
+            flex-shrink: 0;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: transform 0.12s, box-shadow 0.12s;
+        }
+
+        .gs-fcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+
+        .gs-fcard .gs-cover { aspect-ratio: 16 / 9; }
+
+        .gs-fcard-body { padding: 8px 10px 10px; }
+
+        .gs-fcard-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-fcard-meta { margin-top: 4px; font-size: 11px; color: var(--text-light); }
+
+        /* ===== Steam 布局·标签胶囊筛选条 ===== */
+        .gs-tagbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 14px 16px 0;
+        }
+
+        .gs-pill {
+            padding: 4px 14px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .gs-pill:hover { background: var(--hover); color: var(--text); }
+
+        /* 选中态：Steam 蓝底白字（Steam 筛选胶囊同款） */
+        .gs-pill.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #fff;
+        }
+
+        /* 全部游戏网格标题（Steam 布局时展示区标题，经典网格隐藏） */
+        .gs-grid-title { padding: 18px 16px 0; font-size: 14px; font-weight: 600; color: var(--text); }
+
+        /* ===== 商店：封面卡片网格 ===== */
+        .gs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 14px;
+            padding: 16px;
+        }
+
+        .gs-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.12s, box-shadow 0.12s;
+        }
+
+        .gs-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+
+        .gs-cover {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        /* 精选卡悬停动态预览（Steam 同款）：铺满缩略图区盖在封面之上，object-fit 裁切同封面构图；
+           ready（首帧渲染/图片解码完成）前保持透明露出封面，防黑块闪现 */
+        .gs-hprev {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1; /* 显式盖过封面 img，不依赖 DOM 顺序 */
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+
+        .gs-hprev.ready { opacity: 1; }
+
+        /* 轮播大图悬停预览：压平 .gs-hprev 显式层级改靠 DOM 顺序（insertBefore 渐隐条），
+           落在封面之上、底部渐隐信息条之下——悬停播放时简介文字仍悬浮可见（Steam 同款） */
+        .gs-car-main .gs-hprev { z-index: auto; }
+
+        /* 无封面占位色块：底色取主题色按游戏名散列 hue-rotate 变色，首字母取 --bg 反差色 */
+        .gs-cover-ph {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary);
+        }
+
+        .gs-cover-ph b { font-size: 40px; font-weight: 600; color: var(--bg); }
+
+        .gs-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            background: var(--text-light);
+            color: var(--panel-bg);
+        }
+
+        .gs-badge.hot { background: var(--primary); }
+
+        .gs-card-body { padding: 10px 12px 12px; }
+
+        .gs-card-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-card-desc {
+            margin-top: 4px;
+            height: 32px;
+            font-size: 12px;
+            line-height: 16px;
+            color: var(--text-light);
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .gs-card-meta {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* ===== Steam 同款骨架屏（shimmer 扫光灰块）+ 无限滚动底部加载圈 =====
+           骨架色用 color-mix(text) 自适应明暗主题：深色=微亮灰块，浅色=微暗灰块，
+           扫光动画走 transform（GPU 合成）不触发重排 */
+        .sk {
+            position: relative;
+            overflow: hidden;
+            background: color-mix(in srgb, var(--text) 7%, transparent);
+            border-radius: 6px;
+        }
+
+        .sk::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            transform: translateX(-100%);
+            background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 5%, transparent), transparent);
+            animation: skSweep 1.4s ease-in-out infinite;
+        }
+
+        @keyframes skSweep { to { transform: translateX(100%); } }
+
+        /* 商店卡骨架：16:9 封面块 + 名称条 + 摘要短条 */
+        .gs-card-skel .sk-pic { height: 0; padding-bottom: 56.25%; }
+
+        .gs-card-skel .sk-line { height: 12px; margin-top: 10px; }
+
+        .gs-card-skel .sk-line.sm { width: 60%; height: 10px; margin-top: 8px; }
+
+        /* 库侧栏行骨架：38px 缩略图方块 + 名称条 */
+        .gs-lib-skel-row { display: flex; align-items: center; gap: 8px; padding: 4px; }
+
+        .gs-lib-skel-row .sk-sq { width: 38px; height: 38px; border-radius: 4px; flex: none; }
+
+        .gs-lib-skel-row .sk-bar { flex: 1; height: 11px; }
+
+        /* 公告卡骨架（thumb 左图右文同构） */
+        .gs-notice-skel {
+            display: flex;
+            gap: 12px;
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-bg);
+        }
+
+        .gs-notice-skel .sk-pic { width: 200px; height: 112px; flex: none; border-radius: 6px; }
+
+        .gs-notice-skel .sk-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; padding-top: 2px; }
+
+        .gs-notice-skel .sk-bar { height: 11px; }
+
+        .gs-notice-skel .sk-bar.w60 { width: 60%; }
+
+        .gs-notice-skel .sk-bar.w80 { width: 80%; }
+
+        /* 评测卡骨架：圆头像 + 名称条 + 三行正文条 */
+        .gs-rev-skel { padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-bg); }
+
+        .gs-rev-skel .sk-head { display: flex; align-items: center; gap: 8px; }
+
+        .gs-rev-skel .sk-av { width: 30px; height: 30px; border-radius: 50%; flex: none; }
+
+        .gs-rev-skel .sk-bar { flex: 1; height: 10px; }
+
+        .gs-rev-skel .sk-line { height: 11px; margin-top: 10px; }
+
+        .gs-rev-skel .sk-line.w70 { width: 70%; }
+
+        /* 无限滚动底部容器：主题绿 spinner 加载圈 / "已加载全部"灰字 */
+        .gs-infbox {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 0 22px;
+            min-height: 48px;
+            color: var(--text-light);
+            font-size: 12px;
+        }
+
+        .gs-infbox .sk-spin {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            border-top-color: var(--primary);
+            animation: skSpin 0.8s linear infinite;
+        }
+
+        @keyframes skSpin { to { transform: rotate(360deg); } }
+
+        .gs-infbox.hidden { display: none; }
+
+        .gs-empty { padding: 60px 0; text-align: center; color: var(--text-light); font-size: 13px; }
+
+        /* ===== 商店卡片悬停气泡卡（Steam 同款：标题/发行于/简介/评测/标签） ===== */
+        /* 单例挂 body + fixed 定位：逃出滚动容器裁剪；pointer-events:none 纯展示不挡点击 */
+        .gs-hover {
+            position: fixed;
+            z-index: 70; /* 高于吸顶条(60)，低于自绘弹窗 */
+            width: 300px;
+            padding: 14px 16px;
+            background: var(--header-bg);
+            border: 1px solid var(--divider);
+            border-radius: 6px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.12s ease;
+        }
+        .gs-hover.show { opacity: 1; }
+        /* 左侧指向箭头：旋转方块与气泡同底色，仅露朝卡片的两边框 */
+        .gs-hover::before {
+            content: '';
+            position: absolute;
+            left: -6px;
+            top: 50%;
+            width: 10px;
+            height: 10px;
+            margin-top: -5px;
+            background: var(--header-bg);
+            border-left: 1px solid var(--divider);
+            border-bottom: 1px solid var(--divider);
+            transform: rotate(45deg);
+        }
+        /* 卡片贴右缘时翻到左侧，箭头换右缘 */
+        .gs-hover.flip::before {
+            left: auto;
+            right: -6px;
+            border-left: none;
+            border-bottom: none;
+            border-right: 1px solid var(--divider);
+            border-top: 1px solid var(--divider);
+        }
+        .gs-hover-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+        .gs-hover-date { font-size: 11px; color: var(--text-light); margin-bottom: 8px; }
+        .gs-hover-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.65;
+            display: -webkit-box;
+            -webkit-line-clamp: 5;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .gs-hover-rev {
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: var(--hover);
+            border-radius: 4px;
+        }
+        .gs-hover-rev-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 2px; }
+        .gs-hover-rev-summary { font-size: 12px; font-weight: 600; color: var(--primary); }
+        .gs-hover-rev-count { font-size: 12px; color: var(--text-light); }
+        .gs-hover-label { font-size: 12px; color: var(--text-secondary); margin: 10px 0 6px; }
+        .gs-hover-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+        /* 好友拥有（Steam 同款）：圆角方形头像半叠加横排，右邻头像的底色边框压出分隔 */
+        .gs-hover-own {
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: var(--hover);
+            border-radius: 4px;
+        }
+        .gs-hover-own-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+        .gs-hover-own-avatars { display: flex; align-items: center; }
+        .gs-hover-own-av {
+            width: 28px;
+            height: 28px;
+            border-radius: 3px;
+            overflow: hidden;
+            flex: none;
+            border: 2px solid var(--header-bg);
+        }
+        .gs-hover-own-av + .gs-hover-own-av, .gs-hover-own-more { margin-left: -6px; }
+        .gs-hover-own-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gs-hover-own-ph {
+            width: 100%;
+            height: 100%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gs-hover-own-ph b { font-size: 12px; font-weight: 600; color: var(--bg); }
+        .gs-hover-own-more {
+            height: 28px;
+            padding: 0 6px;
+            border-radius: 3px;
+            flex: none;
+            display: flex;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: var(--header-bg);
+            border: 2px solid var(--divider);
+        }
+
+        /* ===== 我的游戏库：列表行 ===== */
+        .gs-lib-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--divider);
+            cursor: pointer;
+        }
+
+        .gs-lib-row:hover { background: var(--hover); }
+
+        .gs-lib-thumb {
+            position: relative;
+            width: 96px;
+            aspect-ratio: 16 / 9;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            flex-shrink: 0;
+        }
+
+        .gs-lib-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-lib-thumb .gs-cover-ph b { font-size: 24px; }
+
+        .gs-lib-info { flex: 1; min-width: 0; }
+
+        .gs-lib-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lib-sub { margin-top: 3px; font-size: 12px; color: var(--text-light); }
+
+        .gs-lib-path {
+            margin-top: 3px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lib-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+        /* ===== 通用按钮（主题色关联，明暗双主题自适应） ===== */
+        .gs-btn {
+            padding: 7px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .gs-btn:hover { background: var(--hover); }
+
+        .gs-btn.primary { background: var(--gs-btn); border-color: transparent; color: var(--gs-btn-text); }
+
+        .gs-btn.primary:hover { background: var(--gs-btn); opacity: 0.9; }
+
+        .gs-btn.danger { color: var(--text); border-color: var(--text-secondary); }
+
+        /* ===== 下载管理：任务行 ===== */
+        .gs-task { padding: 14px 16px; border-bottom: 1px solid var(--divider); }
+
+        .gs-task-head { display: flex; align-items: center; gap: 10px; }
+
+        .gs-task-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-task-state { font-size: 12px; color: var(--primary); flex-shrink: 0; }
+
+        .gs-task-state.gray { color: var(--text-light); }
+
+        .gs-task-file {
+            margin-top: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 自绘进度条（div 实现，非系统控件） */
+        .gs-progress {
+            margin-top: 8px;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--hover);
+            overflow: hidden;
+        }
+
+        .gs-progress-fill {
+            height: 100%;
+            width: 0;
+            border-radius: 3px;
+            background: var(--primary);
+            transition: width 0.2s;
+        }
+
+        .gs-task-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-light);
+        }
+
+        .gs-task-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+        /* ===== 详情视图（Steam 同款：左侧截图轮播+简介/版本，右侧信息/安装框） ===== */
+        .gs-detail-top {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--divider);
+            flex-shrink: 0;
+        }
+
+        .gs-back {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .gs-back:hover { background: var(--hover); }
+
+        .gs-detail-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-detail-wrap {
+            display: flex;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+            width: 100%;
+            max-width: 1100px; /* Steam 同款：内容容器居中，两侧空出背景 */
+            margin: 0 auto;
+            padding: 20px 32px 36px;
+            box-sizing: border-box;
+        }
+
+        .gs-detail-main { flex: 1; min-width: 0; }
+
+        /* 左列·截图轮播：主舞台 + 缩略图横条 */
+        .gs-stage {
+            position: relative;
+            aspect-ratio: 16 / 9;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-stage img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            transition: opacity 0.2s;
+        }
+
+        /* 舞台左右切换箭头：半透明圆形按钮（悬停浮现加深） */
+        .gs-stage-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.35);
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.15s, background 0.15s;
+        }
+
+        .gs-stage:hover .gs-stage-nav { opacity: 1; }
+
+        .gs-stage-nav:hover { background: rgba(0, 0, 0, 0.55); }
+
+        .gs-stage-nav.prev { left: 10px; }
+
+        .gs-stage-nav.next { right: 10px; }
+
+        /* 舞台底部序号指示（第 x / n 张） */
+        .gs-stage-idx {
+            position: absolute;
+            right: 10px;
+            bottom: 8px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.45);
+            color: #fff;
+            font-size: 11px;
+        }
+
+        .gs-thumbs {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 8px;
+        }
+
+        .gs-thumb {
+            width: 120px;
+            aspect-ratio: 16 / 9;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            border: 2px solid transparent;
+            cursor: pointer;
+            flex-shrink: 0;
+            padding: 0;
+            opacity: 0.65;
+        }
+
+        .gs-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        /* 视频缩略图（首帧画面）：与 img 同构铺满裁切，防原生尺寸溢出/黑边 */
+        .gs-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-thumb:hover { opacity: 1; }
+
+        /* 缩略图选中态：主题绿描边 */
+        .gs-thumb.active { border-color: var(--primary); opacity: 1; }
+
+        .gs-section { padding: 14px 0 0; }
+
+        .gs-section-title { margin-bottom: 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+
+        .gs-desc {
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* 图文混排（[img] 行协议）：文本段落与配图块（GIF 动图原生播放） */
+        .gs-desc-p { margin: 0 0 8px; }
+        .gs-desc-p:last-child { margin-bottom: 0; }
+        .gs-desc-img {
+            display: block;
+            width: 100%;
+            border-radius: 8px;
+            margin: 8px 0;
+            background: var(--placeholder-bg);
+            min-height: 40px;
+        }
+        .gs-desc-img.gm-broken { display: none; }
+
+        .gs-version { padding: 10px 0; border-bottom: 1px solid var(--divider); }
+
+        .gs-version:last-child { border-bottom: none; }
+
+        .gs-version-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+
+        .gs-version-ver { font-size: 13px; font-weight: 600; color: var(--text); }
+
+        .gs-version-meta { font-size: 11px; color: var(--text-secondary); }
+
+        .gs-version-log {
+            margin-top: 4px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: var(--text-light);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .gs-version-req { margin-top: 2px; font-size: 11px; color: var(--text-secondary); }
+
+        /* 右列·信息框 / 安装框（Steam 同款侧栏双框） */
+        .gs-side { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+
+        .gs-side-box {
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            padding: 12px;
+        }
+
+        .gs-side-cover {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-side-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-side-rows { margin-top: 10px; font-size: 12px; line-height: 2; color: var(--text-light); }
+
+        .gs-side-rows b { color: var(--text); font-weight: 500; }
+
+        .gs-side-rows .gs-side-row { display: flex; justify-content: space-between; gap: 10px; }
+
+        .gs-side-rows .gs-side-row span:first-child { color: var(--text-secondary); flex-shrink: 0; }
+
+        .gs-side-rows .gs-side-row span:last-child { text-align: right; min-width: 0; word-break: break-all; }
+
+        .gs-side-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+        .gs-tag {
+            padding: 2px 10px;
+            border-radius: 10px;
+            background: var(--hover);
+            color: var(--text-secondary);
+            font-size: 11px;
+        }
+
+        /* 安装框：状态行 + 主操作按钮区 */
+        .gs-install-state { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+
+        .gs-install-sub { font-size: 11px; color: var(--text-light); line-height: 1.8; }
+
+        .gs-install-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+        .gs-install-actions .gs-btn { flex: 1; min-width: 84px; padding: 9px 0; text-align: center; }
+
+        .gs-bar-hint { font-size: 12px; color: var(--text-light); }
+
+        /* ===== P2 商店化（Steam 同款）：购买块价格行 / 视频舞台 / 评测区 / 库双栏 ===== */
+        .gs-price-row { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; }
+
+        /* 价格高亮走主题色（跟随主题变化，不引入硬编码色） */
+        .gs-price { font-size: 20px; font-weight: 700; color: var(--primary); }
+
+        .gs-price.free {
+            font-size: 14px;
+            padding: 2px 12px;
+            border-radius: 4px;
+            background: var(--gs-btn);
+            color: var(--gs-btn-text);
+        }
+
+        .gs-price-unit { font-size: 12px; color: var(--text-light); }
+
+        /* 价格数字前的积分图标（⚡ 与主界面顶栏余额图标同源；em 随宿主字号缩放） */
+        .gs-price-ico { font-size: 0.9em; margin-right: 3px; }
+
+        /* 视频舞台：内联播放（object-fit 与图片一致，黑底衬边） */
+        .gs-stage-video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            background: rgba(0, 0, 0, 0.85);
+        }
+
+        /* 视频缩略图播放角标 */
+        .gs-thumb { position: relative; }
+
+        .gs-thumb-play {
+            position: absolute;
+            right: 5px;
+            bottom: 4px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 评测区 */
+        .gs-review-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .gs-review-head .gs-section-title { margin-bottom: 0; }
+
+        .gs-rev-sum {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+        }
+
+        .gs-rev-cap { font-size: 14px; font-weight: 700; color: var(--primary); }
+
+        .gs-rev-total { font-size: 12px; color: var(--text-light); }
+
+        .gs-rev-bar {
+            flex: 1;
+            min-width: 120px;
+            height: 10px;
+            border-radius: 5px;
+            background: var(--hover);
+            overflow: hidden;
+        }
+
+        .gs-rev-bar-pos { height: 100%; background: var(--primary); border-radius: 5px; }
+
+        .gs-rev-pct { font-size: 12px; color: var(--text-secondary); }
+
+        .gs-rev-filters { display: flex; gap: 8px; margin: 10px 0; }
+
+        /* 评测区为容器级全宽独立区（Steam 同款：左右两栏结束后横跨整个容器） */
+        .gs-review-section { width: 100%; }
+
+        /* 全宽顶部容器：汇总条 + 筛选行（双栏化后从卡流移出，避免瀑布跨列 hack） */
+        .gs-review-top { margin-bottom: 4px; }
+
+        /* 左右双栏（Steam 专区页同款）：左主列表单列大卡 + 右"最近发布"小卡流带左分隔线 */
+        .gs-review-cols { display: flex; gap: 24px; align-items: flex-start; }
+
+        .gs-review-main { flex: 1; min-width: 0; }
+
+        .gs-review-aside {
+            width: 300px;
+            flex-shrink: 0;
+            border-left: 1px solid var(--divider);
+            padding-left: 24px;
+        }
+
+        .gs-rev-col-title { font-size: 13px; font-weight: 600; color: var(--text-light); margin: 6px 0 8px; }
+
+        /* 主列表卡流（Steam 主列表同款单列，与右栏"最近发布"分栏展示） */
+        .gs-review-body { min-width: 0; }
+
+        .gs-rev-card {
+            display: flex;
+            gap: 14px;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        .gs-rev-card:last-child { border-bottom: none; }
+
+        /* 卡内左右分栏：左用户栏（头像+用户名+我的评测徽标）+ 右内容栏 */
+        .gs-rev-user { display: flex; align-items: flex-start; gap: 8px; width: 150px; flex-shrink: 0; }
+
+        .gs-rev-uinfo { min-width: 0; }
+
+        .gs-rev-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: var(--primary);
+            color: var(--bg);
+            font-size: 15px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .gs-rev-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-rev-uname {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-rev-main2 { flex: 1; min-width: 0; }
+
+        .gs-rev-topline { display: flex; align-items: center; gap: 10px; }
+
+        .gs-rev-rec { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+
+        .gs-rev-rec i, .gs-rev-help i { font-style: normal; }
+
+        .gs-rev-rec.up { color: var(--primary); }
+
+        .gs-rev-rec.down { color: var(--text-light); }
+
+        .gs-rev-hours { margin-left: auto; font-size: 11px; color: var(--text-light); flex-shrink: 0; }
+
+        .gs-rev-content {
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .gs-rev-help {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 10px;
+            padding: 4px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .gs-rev-help:hover { background: var(--hover); color: var(--text); }
+
+        .gs-rev-help.liked { border-color: var(--primary); color: var(--primary); background: var(--hover); }
+
+        .gs-rev-mine-tag { margin-top: 4px; font-size: 11px; color: var(--text-light); }
+
+        .gs-rev-more {
+            display: block;
+            margin: 12px auto 0;
+            padding: 7px 24px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        .gs-rev-more:hover { background: var(--hover); }
+
+        .gs-review-empty { padding: 16px 0; color: var(--text-light); font-size: 13px; }
+
+        /* ===== 右栏"最近发布"小卡（Steam 专区页同款：头像+用户名+日期/时长 → 正文截断 → 有帮助） ===== */
+        .gs-review-recent { min-width: 0; }
+
+        .gs-rev-avatar.sm { width: 26px; height: 26px; font-size: 12px; }
+
+        .gs-rev-mini { padding: 10px 0; border-bottom: 1px solid var(--divider); }
+
+        .gs-rev-mini:last-child { border-bottom: none; }
+
+        .gs-rev-mini-head { display: flex; align-items: center; gap: 8px; }
+
+        .gs-rev-mini-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+
+        .gs-rev-mini-meta { margin-left: auto; display: flex; gap: 8px; font-size: 11px; color: var(--text-light); flex-shrink: 0; }
+
+        /* 右栏小卡正文 4 行截断（Steam 右栏同款；展开后不受限） */
+        .gs-rev-content.mini {
+            margin-top: 6px;
+            font-size: 12px;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 4;
+            overflow: hidden;
+        }
+
+        .gs-rev-content.mini.expanded { display: block; overflow: visible; } /* 展开态解除 4 行截断 */
+
+        /* 长文"阅读全文"原地展开按钮（Steam 同款主题色文字链接样式） */
+        .gs-rev-expand {
+            display: inline-block;
+            margin-top: 2px;
+            padding: 0;
+            border: none;
+            background: transparent;
+            color: var(--primary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .gs-rev-expand:hover { text-decoration: underline; }
+
+        /* ===== 评论区（Steam 同款内嵌展开：气泡按钮 → 平铺楼中楼列表 → 输入行） ===== */
+        .gs-rev-reply-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            margin-left: 8px;
+            padding: 4px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text-secondary);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .gs-rev-reply-btn i { font-style: normal; }
+
+        .gs-rev-reply-btn:hover { background: var(--hover); color: var(--text); }
+
+        .gs-rev-replies {
+            margin-top: 10px;
+            padding-top: 4px;
+            border-top: 1px solid var(--divider);
+        }
+
+        .gs-rev-replies.hidden { display: none; }
+
+        .gs-rev-reply-list { min-width: 0; }
+
+        .gs-rev-reply {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            padding: 6px 0;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .gs-rev-reply + .gs-rev-reply { border-top: 1px dashed var(--divider); }
+
+        .gs-rev-reply-txt { flex: 1; min-width: 0; color: var(--text); word-break: break-word; }
+
+        .gs-rev-reply-name { color: var(--primary); font-weight: 600; }
+
+        .gs-rev-reply-mid { color: var(--text-light); margin: 0 2px; }
+
+        .gs-rev-reply-time { font-size: 11px; color: var(--text-light); flex-shrink: 0; }
+
+        .gs-rev-reply-act, .gs-rev-reply-del {
+            flex-shrink: 0;
+            font-size: 11px;
+            color: var(--text-light);
+            cursor: pointer;
+            visibility: hidden;
+        }
+
+        .gs-rev-reply:hover .gs-rev-reply-act, .gs-rev-reply:hover .gs-rev-reply-del { visibility: visible; }
+
+        .gs-rev-reply-act:hover { color: var(--primary); }
+
+        .gs-rev-reply-del:hover { color: var(--danger, #fa5151); }
+
+        .gs-rev-reply-empty, .gs-rev-reply-loading { padding: 8px 0; font-size: 12px; color: var(--text-light); }
+
+        /* 输入行：回复@标签 + 小输入框 + 发送按钮 */
+        .gs-rev-reply-inputrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+        .gs-rev-reply-tag {
+            flex-shrink: 0;
+            padding: 3px 8px;
+            border-radius: 10px;
+            background: var(--hover);
+            color: var(--text-secondary);
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        .gs-rev-reply-tag.hidden { display: none; }
+
+        .gs-rev-reply-tagx { margin-left: 4px; cursor: pointer; color: var(--text-light); }
+
+        .gs-rev-reply-tagx:hover { color: var(--text); }
+
+        .gs-rev-reply-input {
+            flex: 1;
+            min-width: 0;
+            height: 30px;
+            padding: 0 10px;
+            border-radius: 15px;
+            border: 1px solid var(--border);
+            background: var(--search-bg);
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+        }
+
+        .gs-rev-reply-input:focus { border-color: var(--primary); }
+
+        .gs-rev-reply-send {
+            flex-shrink: 0;
+            height: 30px;
+            padding: 0 14px;
+            border-radius: 15px;
+            border: none;
+            background: var(--gs-btn);
+            color: var(--gs-btn-text);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .gs-rev-reply-send:hover { filter: brightness(1.1); }
+
+        /* 窄窗口回退：双栏纵向堆叠（右栏分隔线转顶部分隔线），容器内边距收紧（Steam 窄屏同构） */
+        @media (max-width: 900px) {
+            .gs-detail-wrap { padding: 12px 14px 24px; }
+            .gs-review-cols { flex-direction: column; }
+            .gs-review-aside {
+                width: 100%;
+                border-left: none;
+                border-top: 1px solid var(--divider);
+                padding-left: 0;
+                padding-top: 8px;
+            }
+            /* 轮播窄屏：信息面板移至主图下方占满行宽 */
+            .gs-carousel { flex-direction: column; }
+            .gs-car-panel { width: 100%; }
+            .gs-car-shots { min-height: 180px; }
+            /* 推荐区块窄屏回退：活动轮播改纵向堆叠、榜单行隐藏标签列省空间 */
+            .gs-promo-page { aspect-ratio: auto; flex-direction: column; }
+            .gs-promo-card.big { aspect-ratio: 16 / 9; flex: none; }
+            .gs-promo-side { flex: none; }
+            .gs-promo-side .gs-promo-card { aspect-ratio: 16 / 9; }
+            .gs-lrow-tags { display: none; }
+            .gs-lpv { display: none; } /* 窄屏隐藏悬停预览面板，行列表回退整宽 */
+            .gs-lpv-hero { flex-direction: column; } /* 窄屏单游戏大卡纵向堆叠 */
+            .gs-lpv-info { width: auto; }
+            .gs-sec-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+            /* 动态区分栏窄屏回退：左右两栏纵向堆叠，公告卡头图转全宽（图上文下） */
+            .gs-lib-feed-cols { flex-direction: column; }
+            .gs-lib-feed-col.side { flex: 1 1 auto; width: 100%; }
+            /* 窄屏公告网格降为两列，避免三列挤压 */
+            .gs-notice-card-grid.n3 { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        /* 写评测弹窗（自绘） */
+        .gs-rev-modal { width: 460px; max-width: 92vw; }
+
+        .gs-rev-picks { display: flex; gap: 10px; margin-top: 14px; }
+
+        .gs-rev-pick {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--panel-bg);
+            color: var(--text-secondary);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .gs-rev-pick:hover { background: var(--hover); color: var(--text); }
+
+        .gs-rev-pick.active { border-color: var(--primary); color: var(--primary); background: var(--hover); }
+
+        .gs-rev-input {
+            margin-top: 12px;
+            width: 100%;
+            min-height: 120px;
+            resize: vertical;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--search-bg);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.6;
+            outline: none;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        .gs-rev-input:focus { border-color: var(--primary); }
+
+        .gs-rev-count { margin-top: 4px; text-align: right; font-size: 11px; color: var(--text-light); }
+
+        /* 库页签：Steam 同款双栏（左侧游戏侧栏 + 右侧内容区） */
+        .gs-lib-wrap { flex: 1; min-height: 0; display: flex; }
+
+        .gs-lib-side {
+            /* Steam 同款窄侧栏：显式 flex 0 0 固定基准宽度（元素同时挂 .gs-scroll，
+               其 flex:1 的 basis:0%+grow:1 会覆盖 width 导致侧栏与主区平分拉宽） */
+            flex: 0 0 250px;
+            width: 250px;
+            border-right: 1px solid var(--divider);
+            padding: 10px 8px;
+            overflow-y: auto;
+        }
+
+        .gs-lib-side-title { padding: 0 8px 8px; font-size: 13px; font-weight: 700; color: var(--text); }
+
+        /* 库侧栏搜索框（Steam 库列表顶部过滤框同款）：胶囊形，配色走主题变量 */
+        .gs-lib-search {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            height: 28px;
+            margin: 0 4px 10px;
+            padding: 0 10px;
+            border-radius: 14px;
+            background: var(--search-bg);
+            border: 1px solid var(--border);
+        }
+
+        .gs-lib-search svg { color: var(--text-light); flex-shrink: 0; }
+
+        .gs-lib-search input {
+            flex: 1;
+            min-width: 0;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: var(--text);
+            font-size: 12px;
+        }
+
+        .gs-lib-search input::placeholder { color: var(--text-light); }
+
+        /* 侧栏搜索无匹配提示 */
+        .gs-lib-empty { padding: 14px 8px; font-size: 12px; color: var(--text-light); text-align: center; }
+
+        /* 行紧凑化（Steam 库列表同款）：小缩略图 + 紧凑行距，一屏可见更多游戏 */
+        .gs-lib-srow {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        .gs-lib-srow:hover { background: var(--hover); }
+
+        /* 选中态：主题绿左缘竖条 + 悬浮底色 */
+        .gs-lib-srow.active { background: var(--hover); box-shadow: inset 3px 0 0 var(--primary); }
+
+        .gs-lib-sthumb {
+            width: 38px;
+            aspect-ratio: 16 / 9;
+            border-radius: 3px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            flex-shrink: 0;
+        }
+
+        .gs-lib-sthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-lib-sthumb .gs-cover-ph b { font-size: 10px; }
+
+        .gs-lib-sname {
+            flex: 1;
+            min-width: 0;
+            font-size: 12.5px;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lib-sstate { font-size: 10px; color: var(--text-light); flex-shrink: 0; }
+
+        .gs-lib-main { flex: 1; min-width: 0; overflow-y: auto; padding: 16px; }
+
+        .gs-lib-main-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+
+        .gs-lib-recent { display: flex; flex-wrap: wrap; gap: 12px; }
+
+        .gs-lib-rcard {
+            width: 220px;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: transform 0.12s, box-shadow 0.12s;
+        }
+
+        .gs-lib-rcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+
+        .gs-lib-rthumb { aspect-ratio: 16 / 9; }
+
+        .gs-lib-rthumb img { width: 100%; height: 100%; object-fit: cover; display: block; } /* 缺约束时竖图按原始尺寸撑破卡片 */
+
+        .gs-lib-rbody { padding: 8px 10px 10px; }
+
+        .gs-lib-rname {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-lib-rmeta { margin-top: 4px; font-size: 11px; color: var(--text-light); }
+
+        .gs-lib-go { text-align: center; padding: 20px 0 40px; }
+
+        /* 库内游戏页（Steam 库选中游戏同款）：hero 横幅 + 信息行 + 页签条 + 动态区；
+           内容全宽铺满主区（Steam 同款，窗口最大化不再右侧留白） */
+        .gs-lib-hero {
+            position: relative;
+            /* Steam 库横幅同款：高度随窗口自适应并封顶，避免超宽屏等比放大过高 */
+            height: clamp(190px, 24vw, 300px);
+            border-radius: 10px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        /* Steam 同款模糊背景层：原图放大铺满+模糊压暗，窄图/竖图两侧模糊填充不再硬裁切 */
+        .gs-lib-hero-bg {
+            position: absolute;
+            inset: -24px;
+            background-size: cover;
+            background-position: center;
+            filter: blur(16px) brightness(0.55);
+        }
+
+        .gs-lib-hero .gs-lib-hero-img {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-lib-hero .gs-lib-hero-img img {
+            width: 100%;
+            height: 100%;
+            /* Steam 库 hero 同款：图片裁切铺满全框（cover），顶部锚定裁切——与下方模糊背景
+               （同图同 position center top）内容对齐，衔接处无缝延伸；窄窗比例不足时由
+               .gs-lib-hero-bg 模糊层兜底（cover 铺满后仅极端比例露边） */
+            object-fit: cover;
+            object-position: center top;
+            display: block;
+        }
+
+        .gs-lib-hero-name {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 30px 18px 14px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+            color: #fff;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        /* Steam 库页同款页面级模糊背景：hero 同图放大深模糊，从库内容区顶端延伸到
+           动态区上方，mask 向下渐隐过渡到页面底色；浅色主题亮化、深色主题压暗，
+           文字始终叠在可读的模糊层上。静态层无动画，GPU 合成一次，无滚动开销 */
+        .gs-lib-game {
+            position: relative;
+        }
+
+        .gs-lib-pagebg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: clamp(420px, 46vw, 620px);
+            background-size: cover;
+            background-position: center top;
+            filter: blur(30px) brightness(1.6) saturate(1.15);
+            opacity: 0.9;
+            -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.55) 45%, transparent 80%);
+            mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0.55) 45%, transparent 80%);
+            pointer-events: none;
+        }
+
+        [data-theme="dark"] .gs-lib-pagebg {
+            filter: blur(30px) brightness(0.42) saturate(1.1);
+        }
+
+        /* 玻璃雾面：模糊层上再叠半透明磨砂色（Steam 库页下方"玻璃感"），深色微雾、浅色重雾 */
+        .gs-lib-pagebg::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        html:not([data-theme="dark"]) .gs-lib-pagebg::before {
+            background: rgba(255, 255, 255, 0.42);
+        }
+
+        /* 底色渐隐兜底：mask 渐隐之外再叠一层主题底色过渡，浅色主题下 toprow 文字区更干净 */
+        .gs-lib-pagebg::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, transparent 0%, var(--bg) 85%);
+        }
+
+        .gs-lib-game > *:not(.gs-lib-pagebg) {
+            position: relative; /* 内容层置顶于模糊背景之上（DOM 顺序已保证，双保险） */
+        }
+
+        /* Steam 库页滚动同款·吸顶操作条：hero 滚出视口后滑入（fixed 悬浮不占内容流），
+           磨砂玻璃底（backdrop-filter + 半透明面板色，主题变量自动跟随明暗），
+           left/width 由 JS 按 gsLibMain 视口矩形对位；top 对齐 44px 自绘标题栏下沿
+           （无边框窗口的标题栏同为 fixed top:0，吸顶条 z 更高，top:0 会盖住标题栏） */
+        .gs-lib-sticky {
+            position: fixed;
+            top: 44px;
+            z-index: 60;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 9px 14px;
+            background: color-mix(in srgb, var(--panel-bg) 78%, transparent);
+            backdrop-filter: blur(16px) saturate(1.2);
+            -webkit-backdrop-filter: blur(16px) saturate(1.2);
+            border-bottom: 1px solid var(--border);
+            transform: translateY(-100%);
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+
+        .gs-lib-sticky.show {
+            transform: translateY(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .gs-lib-sticky .gs-btn { flex: none; min-width: 110px; }
+
+        .gs-lib-sticky-ic {
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            object-fit: cover;
+            flex: none;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-lib-sticky-name {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Steam 库页滚动同款·返回顶部胶囊：底部中央（相对库内容区居中，JS 对位），
+           磨砂玻璃圆角胶囊，滚过一屏浮现，点击平滑滚回顶部 */
+        .gs-lib-topbtn {
+            position: fixed;
+            bottom: 20px;
+            z-index: 60;
+            transform: translateX(-50%) translateY(14px);
+            opacity: 0;
+            pointer-events: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 9px 20px;
+            border-radius: 18px;
+            background: color-mix(in srgb, var(--panel-bg) 86%, transparent);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            box-shadow: var(--shadow-pop);
+            transition: transform 0.2s, opacity 0.2s;
+        }
+
+        .gs-lib-topbtn.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .gs-lib-topbtn:hover {
+            background: var(--hover);
+        }
+
+        .gs-lib-actions-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+        .gs-lib-actions-row .gs-btn { min-width: 110px; padding: 10px 18px; }
+
+        /* 顶部信息行（Steam 库同款）：左操作按钮 + 右元信息（需要的空间/最后运行/游戏时间/版本） */
+        .gs-lib-toprow {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .gs-lib-meta { display: flex; gap: 24px; flex-wrap: wrap; }
+
+        .gs-lib-meta-label { font-size: 11px; color: var(--text-light); }
+
+        .gs-lib-meta-val { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 3px; }
+
+        .gs-lib-path {
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--text-light);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 页签条（Steam 库选中游戏同款横排页签）：动态/商店页面/评测 */
+        .gs-lib-tabs {
+            display: flex;
+            gap: 2px;
+            margin-top: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .gs-lib-tab {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+        }
+
+        .gs-lib-tab:hover { color: var(--text); background: var(--hover); }
+
+        /* 选中页签：主题绿底部指示条 */
+        .gs-lib-tab.active {
+            color: var(--text);
+            font-weight: 600;
+            box-shadow: inset 0 -2px 0 var(--primary);
+        }
+
+        /* ===== 库内动态区（Steam 库动态同款分栏）：左公告卡流 + 右更新历史 ===== */
+        .gs-lib-feed { margin-top: 4px; }
+
+        .gs-lib-feed-cols { display: flex; gap: 22px; align-items: flex-start; }
+
+        .gs-lib-feed-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+        /* 右栏更新历史：响应式宽度 clamp——未最大化窄窗口缩至 230px 把空间让给公告
+           （公告摘要文字不再挤压换行），宽窗口恢复 320px 保持 Steam 同款比例 */
+        .gs-lib-feed-col.side { flex: 0 0 clamp(230px, 20vw, 320px); }
+
+        .gs-lib-feed-head {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* 公告卡三种布局（管理端发布/编辑可选）：thumb=横向缩略图左图右文（默认，旧数据回退）/
+           grid=Steam 事件卡同款纵向流+图片横排网格 / banner=通栏大图图上文下；
+           长正文默认截断点击展开全文，纯图片公告（标题正文全空）thumb 自动转 grid */
+        .gs-notice-card {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 12px 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-bg);
+        }
+
+        /* thumb 横向缩略图变体（左图右文）：左列 200x112 首图（坏图回游戏名占位），
+           右列文字流 flex:1 + min-width:0 防溢出，多图时底部"共 N 张图片"小字提示 */
+        .gs-notice-card.row {
+            flex-direction: row;
+            gap: 12px;
+        }
+
+        .gs-notice-card-pic {
+            flex: 0 0 200px;
+            height: 112px;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-notice-card-pic img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .gs-notice-card-pic .gs-cover-ph b { font-size: 24px; }
+
+        .gs-notice-card-main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* 右列内间距归 gap 管，标题清外边距；摘要 3 行截断（横向卡高度与缩略图对齐） */
+        .gs-notice-card-main .gs-notice-card-title { margin: 0; }
+
+        .gs-notice-card-main .gs-notice-card-text { -webkit-line-clamp: 3; }
+
+        .gs-notice-card-hint { font-size: 11px; color: var(--text-light); margin-top: auto; }
+
+        /* banner 通栏大图变体（图上文下）：首图全宽 cover 高封顶 340px，余图缩略网格续排 */
+        .gs-notice-card-banner {
+            width: 100%;
+            max-height: 340px;
+            object-fit: cover;
+            border-radius: 6px;
+            display: block;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-notice-card-top { display: flex; align-items: baseline; gap: 8px; }
+
+        .gs-notice-card-tag { font-size: 11px; color: var(--text-light); flex-shrink: 0; }
+
+        .gs-notice-card-date { margin-left: auto; font-size: 11px; color: var(--text-light); flex-shrink: 0; }
+
+        .gs-notice-card-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            margin: 4px 0 6px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .gs-notice-card-text {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+            display: -webkit-box;
+            -webkit-line-clamp: 4;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .gs-notice-card.expanded .gs-notice-card-text { display: block; -webkit-line-clamp: unset; }
+
+        /* 公告图片网格（Steam 同款横排）：1 图全宽大图 / 2 图两列 / ≥3 图三列；
+           16:9 统一比例裁切，尾张可叠 "+N" 余图角标，GIF 动图原生播放 */
+        .gs-notice-card-grid {
+            margin-top: 2px;
+            display: grid;
+            gap: 8px;
+        }
+
+        .gs-notice-card-grid.n1 { grid-template-columns: 1fr; }
+
+        .gs-notice-card-grid.n2 { grid-template-columns: repeat(2, 1fr); }
+
+        .gs-notice-card-grid.n3 { grid-template-columns: repeat(3, 1fr); }
+
+        .gs-notice-card-cell {
+            position: relative;
+            aspect-ratio: 16 / 9;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+        }
+
+        .gs-notice-card-cell img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .gs-notice-card-more {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        /* 右栏更新历史行（版本号主题绿 + 日期 + 更新日志 3 行截断 + 大小·文件数） */
+        .gs-lib-update {
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-bg);
+        }
+
+        .gs-lib-update-top { display: flex; align-items: baseline; gap: 8px; }
+
+        .gs-lib-update-ver { font-size: 13px; font-weight: 700; color: var(--primary); }
+
+        .gs-lib-update-date { margin-left: auto; font-size: 11px; color: var(--text-light); }
+
+        .gs-lib-update-log {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .gs-lib-update-meta { margin-top: 6px; font-size: 11px; color: var(--text-light); }
+
+        .gs-lib-feed-empty {
+            padding: 40px 0;
+            text-align: center;
+            color: var(--text-light);
+            font-size: 13px;
+            background: var(--panel-bg);
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+        }
+
+        /* ===== 自绘确认弹窗（禁用系统 alert/confirm，样式对齐主窗口 modal） ===== */
+        .gs-modal-mask {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 2000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-modal {
+            width: 320px;
+            padding: 20px 20px 16px;
+            border-radius: 10px;
+            background: var(--panel-bg);
+            box-shadow: var(--shadow-pop);
+        }
+
+        .gs-modal-title { font-size: 15px; font-weight: 600; color: var(--text); text-align: center; }
+
+        .gs-modal-text {
+            margin-top: 10px;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            text-align: center;
+            word-break: break-all;
+        }
+
+        .gs-modal-btns { display: flex; gap: 10px; margin-top: 18px; }
+
+        .gs-modal-btns .gs-btn { flex: 1; padding: 8px 0; text-align: center; }
+
+        /* ===== Toast 轻提示（自绘，对齐主窗口 toast 位置手感，颜色走主题反色） ===== */
+        .gs-toast {
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 70%;
+            padding: 10px 18px;
+            border-radius: 6px;
+            background: var(--text);
+            color: var(--panel-bg);
+            font-size: 14px;
+            text-align: center;
+            word-break: break-all;
+            z-index: 3000;
+            animation: gs-toast-in 0.2s ease-out;
+        }
+
+        @keyframes gs-toast-in {
+            from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部工具栏：Electron 无边框窗口拖动区；浏览器中仅作普通顶栏 -->
+    <div class="gs-toolbar">
+        <span class="gs-title">游戏中心</span>
+        <div class="gs-search">
+            <svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M15.8 15.8L20 20"/></svg>
+            <input id="gsSearch" placeholder="搜索游戏（回车搜索）">
+        </div>
+        <div class="gs-spacer"></div>
+        <!-- 账号区：本账号头像 + 名称（昵称优先回退账号；头像加载失败回退首字母块） -->
+        <div class="gs-user" id="gsUser" title="">
+            <span class="gs-user-av" id="gsUserAv"></span>
+            <span class="gs-user-name" id="gsUserName"></span>
+        </div>
+        <!-- 窗口控制（仅 Electron 显示；浏览器模式无窗口语义隐藏） -->
+        <button class="gs-tool-btn gs-hide-web" id="gsBtnMin" title="最小化">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 12h12"/></svg>
+        </button>
+        <button class="gs-tool-btn gs-hide-web" id="gsBtnMax" data-tip-text="最大化">
+            <svg viewBox="0 0 24 24" width="15" height="15"><rect x="5.5" y="5.5" width="13" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <button class="gs-tool-btn" id="gsBtnClose" title="关闭（Esc）">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+    </div>
+
+    <div class="gs-body">
+        <!-- 左侧图标导航栏（微信同款窄栏：图标+选中态左缘绿色指示条；ID 与切换逻辑复用） -->
+        <div class="gs-nav">
+            <button class="gs-nav-btn active" id="gsNavStore" title="商店">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.67h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
+            </button>
+            <button class="gs-nav-btn" id="gsNavLibrary" title="我的游戏库">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zM11 13H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4-3a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>
+            </button>
+            <button class="gs-nav-btn" id="gsNavDownloads" title="下载管理">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            </button>
+        </div>
+        <div class="gs-main">
+            <!-- 商店页签：Steam 布局动态区（轮播/精选/标签条，按管理端配置渲染）+ 全部游戏网格 -->
+            <div class="gs-view" id="gsViewStore">
+                <div class="gs-scroll" id="gsStoreScroll">
+                    <div id="gsStoreChrome"></div>
+                    <div class="gs-grid" id="gsStoreGrid"></div>
+                    <div class="gs-infbox hidden" id="gsStoreInf"></div>
+                    <div class="gs-empty hidden" id="gsStoreEmpty">暂无数据</div>
+                </div>
+            </div>
+
+            <!-- 我的游戏库页签（Steam 同款双栏：左侧游戏侧栏 + 右侧最近游戏/库内游戏页） -->
+            <div class="gs-view hidden" id="gsViewLibrary">
+                <div class="gs-lib-wrap">
+                    <div class="gs-lib-side gs-scroll" id="gsLibSide">
+                        <div class="gs-lib-search">
+                            <svg viewBox="0 0 24 24" width="13" height="13"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M15.8 15.8L20 20"/></svg>
+                            <input id="gsLibSearch" placeholder="搜索游戏" spellcheck="false">
+                        </div>
+                        <div class="gs-lib-side-title" id="gsLibSideTitle">库</div>
+                        <div id="gsLibSideRows"></div>
+                    </div>
+                    <div class="gs-lib-main gs-scroll" id="gsLibMain"></div>
+                </div>
+            </div>
+
+            <!-- 下载管理页签 -->
+            <div class="gs-view hidden" id="gsViewDownloads">
+                <div class="gs-scroll" id="gsDlList">
+                    <div id="gsDlRows"></div>
+                    <div class="gs-empty hidden" id="gsDlEmpty">暂无数据</div>
+                    <div class="gs-empty hidden" id="gsDlHint"></div>
+                </div>
+            </div>
+
+            <!-- 详情视图（Steam 同款：左列截图轮播+简介/版本，右列信息框+安装框；商店卡片/库列表点入） -->
+            <div class="gs-view hidden" id="gsViewDetail">
+                <div class="gs-detail-top">
+                    <button class="gs-back" id="gsBtnBack" title="返回">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M14 6l-6 6 6 6"/></svg>
+                        <span>返回</span>
+                    </button>
+                    <span class="gs-detail-title" id="gsDetailTitle"></span>
+                </div>
+                <div class="gs-scroll" id="gsDetailScroll"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自绘确认弹窗（移出库/选主程序等二次确认） -->
+    <div class="gs-modal-mask hidden" id="gsModalMask">
+        <div class="gs-modal">
+            <div class="gs-modal-title" id="gsModalTitle"></div>
+            <div class="gs-modal-text" id="gsModalText"></div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsModalCancel">取消</button>
+                <button class="gs-btn primary" id="gsModalOk">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自绘写评测弹窗（Steam 同款：推荐/不推荐二选 + 内容输入） -->
+    <div class="gs-modal-mask hidden" id="gsRevMask">
+        <div class="gs-modal gs-rev-modal">
+            <div class="gs-modal-title" id="gsRevTitle">写评测</div>
+            <div class="gs-rev-picks">
+                <button class="gs-rev-pick" id="gsRevUp">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2 10h4v11H2zM22 11c0-1.1-.9-2-2-2h-5.2l.9-4.3c.1-.5-.1-1-.5-1.3L14 2 7.6 9.2c-.4.4-.6.9-.6 1.4V19c0 1.1.9 2 2 2h8c.8 0 1.5-.5 1.8-1.2l3-7c.1-.2.2-.5.2-.8v-1z"/></svg>
+                    <span>推荐</span>
+                </button>
+                <button class="gs-rev-pick" id="gsRevDown">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M22 3h-4v11h4zM2 13c0 1.1.9 2 2 2h5.2l-.9 4.3c-.1.5.1 1 .5 1.3L10 22l6.4-7.2c.4-.4.6-.9.6-1.4V5c0-1.1-.9-2-2-2H7c-.8 0-1.5.5-1.8 1.2l-3 7-.2.8v1z"/></svg>
+                    <span>不推荐</span>
+                </button>
+            </div>
+            <textarea class="gs-rev-input" id="gsRevText" maxlength="2000" placeholder="写下你的评测心得，帮助其他玩家了解这款游戏…"></textarea>
+            <div class="gs-rev-count" id="gsRevCount">0 / 2000</div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsRevCancel">取消</button>
+                <button class="gs-btn primary" id="gsRevSubmit">发布评测</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 自绘 Toast -->
+    <div class="gs-toast hidden" id="gsToast"></div>
+
+    <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
+    <script src="js/game-store.js?v=32"></script>
+    <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
+    <script src="js/tooltip.js?v=1.1"></script>
+</body>
+</html>

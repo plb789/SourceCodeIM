@@ -8158,6 +8158,16 @@
         });
     });
 
+    // ===== 阶段二百八十一：游戏中心入口（Steam 同款游戏浏览/下载；独立窗口，不走侧栏 Tab 切换） =====
+    // PC 客户端调主进程游戏窗口（单例复用，检测方式与 davIsPC 同款按桥 API 判定）；浏览器回退新标签打开商店页
+    var gameCenterBtn = document.getElementById('game-center-btn');
+    if (gameCenterBtn) {
+        gameCenterBtn.addEventListener('click', function () {
+            if (window.desktop && window.desktop.gameOpenWindow) window.desktop.gameOpenWindow();
+            else window.open('game-store.html', '_blank');
+        });
+    }
+
     // ===== 阶段一百四十四：公告与动态（公司公告/新闻动态/红头文件） =====
     // 阶段一百四十四二期改版（微信通讯录式）：左侧 3 个分类卡牌（头像+名称+分类未读角标），
     // 点击卡牌在右侧聊天区集中显示该分类全部公告卡片流，点卡片进详情弹层。

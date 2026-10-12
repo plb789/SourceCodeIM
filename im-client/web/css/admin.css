@@ -264,6 +264,28 @@ td .skel-line {
     background: var(--primary);
     color: #fff;
 }
+/* 二级导航项（如「游戏管理」下的「游戏公告」）：缩进对齐上级文字、弱化字号；
+   无独立图标时以左侧竖线挂靠上级，视觉上表达归属层级 */
+.admin-nav-item.sub {
+    padding-left: 26px;
+    font-size: 13px;
+    color: var(--text-light);
+    position: relative;
+}
+.admin-nav-item.sub::before {
+    content: '';
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 1.5px;
+    background: currentColor;
+    opacity: 0.55;
+}
+.admin-nav-item.sub.active {
+    color: #fff;
+}
 .admin-side-foot {
     padding: 14px 16px;
     border-top: 1px solid var(--border);
@@ -1751,4 +1773,743 @@ td .skel-line {
 #admin-view-filemgr .at-badge,
 #admin-view-fileshares .at-badge {
     white-space: nowrap;
+}
+
+/* ===== 游戏管理（Steam 同款上架运营）：列表封面/标签、编辑弹窗、版本上传进度 =====
+   主题色归口：全部复用 style.css CSS 变量（--primary/--panel-bg/--border/--hover 等），明暗自动跟随 */
+
+/* 列表封面缩略图（无封面走首字占位，同工作台 wb-list-icon 规则） */
+.gm-list-cover {
+    width: 52px;
+    height: 32px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    object-fit: cover;
+    display: inline-block;
+    vertical-align: middle;
+    background: var(--placeholder-bg);
+}
+.gm-list-cover-ph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--primary);
+    font-size: 13px;
+    font-weight: 600;
+    user-select: none;
+}
+/* 名称/slug 双行单元格 */
+.gm-name-cell {
+    line-height: 1.35;
+}
+.gm-name-cell .gm-name {
+    font-weight: 600;
+}
+.gm-name-cell .gm-slug {
+    font-size: 11px;
+    color: var(--text-light);
+    font-family: Consolas, monospace;
+}
+/* 标签小胶囊（窄列表内最多展示 3 个 + 溢出计数） */
+.gm-tag {
+    display: inline-block;
+    padding: 1px 7px;
+    margin: 1px 4px 1px 0;
+    border-radius: 9px;
+    font-size: 11px;
+    white-space: nowrap;
+    color: var(--text-light);
+    background: color-mix(in srgb, var(--text-light) 12%, transparent);
+}
+.gm-tag-more {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* 编辑弹窗：宽体 + 表单区滚动（自绘滚动条规则与全站一致，禁用系统默认样式） */
+.gm-edit-box {
+    width: min(640px, 94vw);
+    text-align: left;
+}
+.gm-ver-box {
+    width: min(880px, 96vw);
+    text-align: left;
+}
+.gm-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 68vh;
+    overflow-y: auto;
+    padding: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.gm-form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.gm-form-row .admin-input {
+    flex: 1;
+    min-width: 0;
+}
+.gm-slug-input {
+    flex: 0 0 240px !important;
+    font-family: Consolas, monospace;
+}
+.gm-num-input {
+    flex: none !important;
+    width: 130px;
+}
+.gm-desc-input {
+    height: auto;
+    min-height: 0;
+    resize: vertical;
+    line-height: 1.5;
+}
+/* 截图缩略图列表（悬浮右上角删除，微信风格小圆钮） */
+.gm-shots-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.gm-shots-list:empty {
+    display: none;
+}
+.gm-shot-item {
+    position: relative;
+    width: 104px;
+    height: 62px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    background: var(--placeholder-bg);
+}
+.gm-shot-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.gm-shot-del {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 12px;
+    line-height: 18px;
+    text-align: center;
+    cursor: pointer;
+}
+.gm-shot-del:hover {
+    background: rgba(230, 67, 64, 0.9);
+}
+
+/* ===== P2 商店化：分类胶囊多选（预设勾选 + 自定义胶囊，选中走主题色） ===== */
+.gm-tag-picks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.gm-tag-picks:empty {
+    display: none;
+}
+.gm-tag-pick {
+    padding: 3px 13px;
+    border-radius: 13px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-light);
+    font-size: 12px;
+    line-height: 18px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.gm-tag-pick:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+.gm-tag-pick.active {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* 宣传视频行（缩略图取首帧 + 文件名 + 删除） */
+.gm-vids-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.gm-vids-list:empty {
+    display: none;
+}
+.gm-vid-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+}
+.gm-vid-thumb {
+    width: 96px;
+    height: 54px;
+    flex-shrink: 0;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--placeholder-bg);
+}
+.gm-vid-thumb video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.gm-vid-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gm-vid-del {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 14px;
+    line-height: 22px;
+    text-align: center;
+    cursor: pointer;
+}
+.gm-vid-del:hover {
+    background: rgba(230, 67, 64, 0.15);
+    color: rgba(230, 67, 64, 0.9);
+}
+
+/* 列表积分价格列（收费走主题色支付语义，免费同色弱化） */
+.gm-price-cell {
+    color: var(--primary);
+}
+
+/* 版本管理弹窗：版本列表（复用 vec-table，弹窗内取消 960px 最小宽）+ 上架表单 */
+.gm-ver-table {
+    min-width: 0;
+}
+.gm-ver-list-wrap {
+    max-height: 220px;
+    overflow: auto;
+    flex: none;
+}
+.gm-ver-list-wrap .vec-table td {
+    vertical-align: middle;
+}
+.gm-ver-changelog {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-light);
+}
+.gm-pub-box {
+    border-top: 1px dashed var(--border);
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gm-pub-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+/* 文件清单/上传进度行（每文件一行：名称/大小/进度条/状态） */
+.gm-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 230px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+.gm-file-list:empty {
+    display: none;
+}
+.gm-file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text);
+}
+.gm-file-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* 长路径保尾部可见（文件名比目录重要） */
+    text-align: left;
+}
+.gm-file-size {
+    flex: none;
+    color: var(--text-light);
+    font-family: Consolas, monospace;
+}
+.gm-prog {
+    flex: none;
+    width: 110px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--placeholder-bg);
+    overflow: hidden;
+}
+.gm-prog-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 3px;
+    background: var(--primary);
+    transition: width 0.15s;
+}
+.gm-file-state {
+    flex: none;
+    min-width: 48px;
+    text-align: right;
+    color: var(--text-light);
+}
+.gm-file-state.ok {
+    color: var(--primary);
+}
+.gm-file-state.err {
+    color: var(--danger, #fa5151);
+}
+.gm-file-del {
+    flex: none;
+    border: none;
+    background: none;
+    padding: 0 2px;
+    color: var(--danger, #fa5151);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+/* ===== 商店布局设置卡（游戏管理页签：模板单选/区块开关/置顶推荐） =====
+   开关为滑块式（用户偏好 slider 样式），颜色全走主题变量跟随明暗切换 */
+.gm-layout-card {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg, var(--bg));
+}
+
+.gm-layout-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.gm-layout-body {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.gm-layout-col {
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.gm-cfg-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    margin-top: 4px;
+}
+
+/* 布局模板单选（原生 radio，accent-color 走主题色） */
+.gm-cfg-radio {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gm-cfg-radio input[type="radio"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--primary, #07c160);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* 滑块式开关：checkbox 隐藏，i 为轨道+圆形滑块，选中时滑块位移+主题色填充 */
+.gm-cfg-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text, #ddd);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gm-cfg-switch input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.gm-cfg-switch i {
+    position: relative;
+    width: 34px;
+    height: 19px;
+    border-radius: 10px;
+    background: var(--border, #444);
+    transition: background 0.18s;
+    flex-shrink: 0;
+}
+
+.gm-cfg-switch i::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--panel-bg, #fff);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: transform 0.18s;
+}
+
+.gm-cfg-switch input:checked + i {
+    background: var(--primary, #07c160);
+}
+
+.gm-cfg-switch input:checked + i::after {
+    transform: translateX(15px);
+}
+
+/* 置顶推荐行 / 候选游戏行（封面缩略图+名称+操作） */
+.gm-cfg-feat,
+.gm-cfg-cands {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(138, 138, 138, 0.6) transparent;
+}
+
+.gm-cfg-feat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text, #ddd);
+    cursor: default;
+}
+
+.gm-cfg-cands .gm-cfg-feat-row {
+    cursor: pointer;
+}
+
+.gm-cfg-cands .gm-cfg-feat-row:hover {
+    background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+
+.gm-cfg-cands .gm-cfg-feat-row.picked {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.gm-cfg-idx {
+    width: 18px;
+    text-align: center;
+    color: var(--text-secondary, #999);
+    flex-shrink: 0;
+}
+
+.gm-cfg-thumb {
+    position: relative;
+    width: 44px;
+    height: 26px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--primary, #07c160);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bg, #111);
+    flex-shrink: 0;
+}
+
+.gm-cfg-thumb img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.gm-cfg-name {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gm-cfg-ops {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.gm-cfg-op {
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text, #ddd);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.gm-cfg-op:hover {
+    background: var(--hover, rgba(255, 255, 255, 0.08));
+}
+
+.gm-cfg-op.disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.gm-cfg-op.disabled:hover {
+    background: transparent;
+}
+
+.gm-cfg-empty {
+    padding: 10px 0;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+}
+
+/* ===== 推荐区块（Steam 首页多区块同款：每区块=标题+样式+游戏列表的编辑卡） ===== */
+.gm-sec-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.gm-sec-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.gm-sec-head-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text, #ddd);
+}
+
+/* 标题输入与样式选择同宽成行（样式选择占固定宽，标题自适应） */
+.gm-sec-row2 {
+    display: flex;
+    gap: 8px;
+}
+
+.gm-sec-title-input {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    background: var(--search-bg);
+    color: var(--text);
+    outline: none;
+}
+
+.gm-sec-title-input:focus { border-color: var(--primary); }
+
+.gm-sec-style-select {
+    width: 240px;
+    flex-shrink: 0;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 8px;
+    font-size: 12px;
+    background: var(--search-bg);
+    color: var(--text);
+    outline: none;
+    cursor: pointer;
+}
+
+.gm-sec-style-select:focus { border-color: var(--primary); }
+
+/* 区块内游戏列表复用 .gm-cfg-feat 行样式；候选区放宽高度 */
+.gm-sec-games {
+    max-height: 150px;
+}
+
+.gm-sec-cands {
+    max-height: 150px;
+}
+
+/* 候选搜索框收窄高度与区块内风格一致 */
+.gm-sec-search {
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+    background: var(--search-bg);
+    color: var(--text);
+    outline: none;
+}
+
+.gm-sec-search:focus { border-color: var(--primary); }
+
+/* ===== 游戏公告发布（游戏管理页独立卡）：选游戏发公告，支持纯图片/图文混合/GIF 动图 ===== */
+.gm-np-card {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+}
+.gm-np-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.gm-np-body {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    margin-top: 10px;
+}
+.gm-np-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.gm-np-row { display: flex; align-items: center; gap: 8px; }
+.gm-np-content { resize: vertical; }
+/* 待发布图片缩略图行（× 移除，保持选择顺序） */
+.gm-np-imgs { display: flex; flex-wrap: wrap; gap: 8px; }
+.gm-np-imgs:empty { display: none; }
+.gm-np-img-item {
+    position: relative;
+    width: 84px;
+    height: 48px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--placeholder-bg);
+}
+.gm-np-img-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gm-np-img-del {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.62);
+    color: #fff;
+    font-size: 12px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+}
+.gm-np-img-del:hover { background: var(--danger, #e5484d); }
+/* 分页条（#gn-pager 复用同款类名） */
+.gm-np-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+.gm-np-pager-info {
+    font-size: 12px;
+    color: var(--text-light);
+    white-space: nowrap;
+}
+
+/* ===== 游戏公告管理页（游戏管理二级视图 gn）：工具行 + 表格 ===== */
+.gn-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.gn-game-sel {
+    width: 180px;
+    flex: none;
+}
+.gn-kw-input {
+    width: 260px;
+    flex: none;
+}
+/* gn 分页条沿用 .gm-np-pager 布局，页码信息复用 .gm-np-pager-info */
+
+/* ===== 公告编辑弹窗（复用 .modal-box/.gm-modal-body 通用样式） ===== */
+.gn-edit-box {
+    width: min(520px, 94vw);
+    text-align: left;
+}
+.gn-f-game-sel {
+    width: 200px;
+    flex: none;
 }

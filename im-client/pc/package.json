@@ -23,6 +23,7 @@
     "cdt-gdb-adapter": "^1.10.0",
     "cross-spawn": "^7.0.6",
     "electron-updater": "^6.8.9",
+    "koffi": "^3.3.3",
     "rcedit": "^4.0.1"
   },
   "build": {
@@ -95,5 +96,8 @@
         "to": "winfsp.msi"
       }
     ]
+  },
+  "allowScripts": {
+    "koffi@3.3.3": true
   }
 }

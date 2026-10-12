@@ -880,5 +880,58 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.on('updater:state', function (event, data) {
             callback(data);
         });
+    },
+    // ===== 阶段二百八十一：游戏中心（Steam 同款游戏浏览/下载）桥接 API =====
+    // 打开/复用游戏中心独立窗口（主进程单例，close 隐藏复用，下载进行中隐藏不中断任务）
+    gameOpenWindow: function () {
+        ipcRenderer.send('game:openWindow');
+    },
+    // 下载控制：payload={action:'start'|'pause'|'resume'|'cancel'|'status', taskId, gameId, installDir,
+    // username, serverBase, files:[{id,rel_path,size,sha256,url}]} → Promise<{ok, tasks?/error?}>
+    gameDownload: function (payload) {
+        return ipcRenderer.invoke('game:download', payload);
+    },
+    // 订阅下载进度（主进程 500ms 节流推送；任务完成必发一条 state:'done'，error/cancel 同样必发）
+    // 负载：{taskId, gameId, received, total, speed, state:'downloading'|'paused'|'done'|'error'|'verifying'|'cancel', fileRelPath, error}
+    onGameDownload: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-download:progress', function (event, data) {
+            cb(data);
+        });
+    },
+    // 选择游戏安装目录 → Promise<{canceled, filePath}>
+    gameChooseInstallDir: function () {
+        return ipcRenderer.invoke('game:choose-install-dir');
+    },
+    // 选择游戏主程序 exe → Promise<{canceled, filePath}>
+    gameChooseGameExe: function () {
+        return ipcRenderer.invoke('game:choose-game-exe');
+    },
+    // 启动游戏（主进程读启动注册表归口）→ Promise<{ok, startedAt}> / {ok:false, needExe:true}
+    gameLaunch: function (payload) {
+        return ipcRenderer.invoke('game:launch', payload);
+    },
+    // 订阅游戏进程退出（主窗口收 {gameId, startedAt}，页面统计游玩时长）
+    onGameExit: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-exit', function (event, data) {
+            cb(data);
+        });
+    },
+    // 登记游戏主程序到启动注册表（needExe 分支选完 exe 后调用）→ Promise<{ok, error?}>
+    gameRegisterExe: function (gameId, exePath) {
+        return ipcRenderer.invoke('game:register-exe', { gameId: gameId, exePath: exePath });
+    },
+    // 游戏中心窗最大化/还原切换（无边框窗自绘标题栏按钮，sender 窗口归口）→ Promise<boolean> 切换后是否最大化
+    gameWinToggleMaximize: function () {
+        return ipcRenderer.invoke('game:win-toggle-maximize');
+    },
+    // 游戏中心窗最小化（与最大化同构 invoke 通道）→ Promise<boolean> 调用后是否最小化
+    gameWinMinimize: function () {
+        return ipcRenderer.invoke('game:win-minimize');
+    },
+    // 订阅游戏中心窗最大化状态（maximize/unmaximize 系统级变化与页面加载完成时推送 boolean）
+    onGameWinMaximize: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-win:maximized', function (event, on) {
+            cb(!!on);
+        });
     }
 });

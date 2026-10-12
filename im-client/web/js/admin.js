@@ -20,6 +20,7 @@
             mcp: 'M4 4h7v7H4V4zm0 9h7v7H4v-7zm9 0h7v7h-7v-7zm0-9h7v7h-7V4z',
             mcpplugins: 'M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z',
             toolchains: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
+            games: 'M21.58 16.09l-1.09-7.66A3.996 3.996 0 0 0 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 15h6l2.25 3.25c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H9v2H8v-2H6v-1h2V8h1v2h2v1zm4-1c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm2 3c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z',
             knowledge: 'M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1zm0 13.5c-1.1-.35-2.3-.5-3.5-.5-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5 1.2 0 2.4.15 3.5.5v11.5z',
             vecdata: 'M4 4h7v7H4V4zm0 9h7v7H4v-7zm9 0h7v7h-7v-7zm4-9l3 3-3 3-3-3 3-3z',
             agenttasks: 'M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
@@ -282,6 +283,10 @@
             else if (item.dataset.view === 'workbench') { wbLoadList(); }
             // 阶段二百六十：进入客户端更新视图拉取版本清单
             else if (item.dataset.view === 'appversion') { avLoadList(); }
+            // 游戏管理：进入视图拉取游戏列表（重置到第一页）+ 商店布局配置
+            else if (item.dataset.view === 'games') { gmPage = 1; gmLoadList(); gmLoadConfig(); }
+            // 游戏公告（游戏管理二级页）：进入视图拉取公告表格（重置到第一页）
+            else if (item.dataset.view === 'gn') { gnPage = 1; gnLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -2965,13 +2970,6 @@
         });
     });
 
-    // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
-    if (getToken()) {
-        enterMain(); // 显示名恢复 + hash 视图原位恢复（无 hash 默认仪表盘），全程无中间态闪烁
-    } else {
-        showLogin();
-    }
-
     // ===== 阶段七十八：积分管理（AI 积分 = TRAE CN 同款问答积分） =====
     // 数据归口：积分余额/扣减全部在服务端（aipoints.go），后台仅做查询展示与绝对值调整；
     // 空数据显示"暂无用户"，仅请求出错时显示"加载失败"
@@ -5204,4 +5202,1617 @@
     });
     $('av-refresh').addEventListener('click', function () { avLoadList(); });
     $('av-filter-platform').addEventListener('change', function () { avLoadList(); });
+
+    // ===== 游戏管理（Steam 同款上架运营：元数据维护 + 版本分片上传） =====
+    // 设计归口：
+    //  - 列表/编辑/状态切换走 /admin/api/game/*（响应 {ok,data}，api() 归口携带 Bearer）
+    //  - 封面/截图走 multipart 小图通道 /admin/api/game/upload/image（≤20MB）
+    //  - 版本上架：逐文件 crypto.subtle 算 SHA-256（前端单文件上限 2GB）→ 8MB 分片顺序直传
+    //    /admin/api/game/upload/chunk（同文件同 upload_id，分片幂等可重传）→ 全部完成后
+    //    POST /admin/api/game/{id}/version 登记服务端合并落位；取消/失败即 POST cancel 清临时分片
+    var gmPage = 1, gmTotal = 0;
+    var GM_PAGE_SIZE = 20;
+    var GM_CHUNK = 8 * 1024 * 1024;           // 分片大小（与服务端 game.chunk_size 配置一致）
+    var GM_MAX_FILE = 2 * 1024 * 1024 * 1024; // 前端单文件上限 2GB（全量读入计算 SHA-256 的浏览器约束）
+    var GM_MAX_FILES = 5000;                  // 服务端文件清单上限
+    var GM_IMG_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+    // P2 商店化：分类预设（商店标签条/详情页同源展示，用户原话口径：单机/冒险/解谜/竞速/多人/动作/角色扮演等）
+    var GM_TAG_PRESETS = ['单机', '多人', '动作', '冒险', '解谜', '竞速', '角色扮演', '策略', '休闲', '射击', '模拟', '恐怖'];
+    var GM_TAG_MAX = 12;                      // 分类上限（含自定义，防标签串滥用）
+    var GM_VID_EXTS = ['mp4', 'webm', 'mkv']; // 与服务端 gameVideoExts 白名单一致
+    var GM_MAX_VIDEO = 200 * 1024 * 1024;     // 前端预检上限（服务端 game.video_max_size 为权威校验）
+    var GM_MAX_VIDS = 8;                      // 与服务端 gameVideosClean 上限一致
+    var GM_VIDS_HINT = 'mp4/webm/mkv，单个 ≤200MB，最多 8 个'; // 视频上传按钮旁默认提示（进度显示后恢复）
+    var gmEditingId = 0;   // 0=新建，>0=编辑中的游戏 ID
+    var gmCoverUrl = '';   // 编辑弹窗内暂存封面 URL
+    var gmBannerUrl = '';  // 编辑弹窗内暂存库横幅 URL（游戏库 hero 大图，空回退封面）
+    var gmShots = [];      // 编辑弹窗内暂存截图 URL 数组
+    var gmTags = [];       // 编辑弹窗内暂存分类标签（预设命中 + 自定义，保存合并逗号串）
+    var gmVids = [];       // 编辑弹窗内暂存宣传视频 URL 数组
+    var gmVidUploading = false; // 宣传视频分片上传进行中（防并发/保存归口拦截）
+    var gmVerGame = null;  // 版本弹窗当前游戏详情（含 versions）
+    var gmFiles = [];      // 待上传清单 [{rel_path,size,file,ui:{state,fill}}]
+    var gmUploading = false;  // 版本上传进行中（关闭/重复提交归口拦截）
+    var gmCancelFlag = false; // 取消标记（当前分片结束即停止后续）
+    var gmAbort = null;       // 当前分片 fetch 的 AbortController（取消即时断开）
+    var gmStartedIds = [];    // 本批已开始分片上传的 upload_id（取消/失败时统一 cancel 清临时分片）
+
+    // ===== 列表 =====
+    function gmLoadList() {
+        if (!getToken()) return;
+        $('gm-status').textContent = '加载中…';
+        var qs = '?page=' + gmPage + '&size=' + GM_PAGE_SIZE;
+        var kw = $('gm-search').value.trim();
+        if (kw) qs += '&keyword=' + encodeURIComponent(kw);
+        api('GET', '/admin/api/game/list' + qs).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '加载失败'); $('gm-status').textContent = '加载失败'; return; }
+            gmTotal = result.data.total || 0;
+            $('gm-status').textContent = '共 ' + gmTotal + ' 款游戏';
+            $('gm-page-info').textContent = '第 ' + gmPage + ' 页 / 共 ' + Math.max(1, Math.ceil(gmTotal / GM_PAGE_SIZE)) + ' 页';
+            gmRenderList(result.data.list || []);
+        }).catch(function () { $('gm-status').textContent = '加载失败'; showToast('网络异常'); });
+    }
+
+    function gmRenderList(list) {
+        var tbody = $('gm-tbody');
+        tbody.innerHTML = '';
+        gmNpFillGames(list);  // 公告发布卡游戏下拉同步（当前页全部游戏，含下架）
+        if (!list.length) {
+            var tr0 = document.createElement('tr');
+            var td0 = document.createElement('td');
+            td0.colSpan = 11;
+            td0.className = 'vec-empty';
+            td0.textContent = '暂无游戏，点击"新建游戏"上架第一款';
+            tr0.appendChild(td0);
+            tbody.appendChild(tr0);
+            return;
+        }
+        function opBtn(text, cls, fn) {
+            var b = document.createElement('button');
+            b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+            b.textContent = text;
+            b.addEventListener('click', fn);
+            return b;
+        }
+        list.forEach(function (a) {
+            var tr = document.createElement('tr');
+            // ID
+            var tdId = document.createElement('td'); tdId.textContent = a.id; tr.appendChild(tdId);
+            // 封面缩略图（无封面显示名称首字占位，同工作台规则）
+            var tdCover = document.createElement('td');
+            if (a.cover) {
+                var img = document.createElement('img');
+                img.src = a.cover;
+                img.className = 'gm-list-cover';
+                tdCover.appendChild(img);
+            } else {
+                var ph = document.createElement('span');
+                ph.className = 'gm-list-cover gm-list-cover-ph';
+                ph.textContent = (a.name || '?').charAt(0).toUpperCase();
+                tdCover.appendChild(ph);
+            }
+            tr.appendChild(tdCover);
+            // 名称 / slug 双行
+            var tdName = document.createElement('td');
+            tdName.className = 'gm-name-cell';
+            var nm = document.createElement('div');
+            nm.className = 'gm-name';
+            nm.textContent = a.name;
+            var sl = document.createElement('div');
+            sl.className = 'gm-slug';
+            sl.textContent = a.slug;
+            tdName.appendChild(nm);
+            tdName.appendChild(sl);
+            tdName.title = (a.short_desc || a.name);
+            tr.appendChild(tdName);
+            // 标签（窄列最多 3 个 + 溢出计数）
+            var tdTags = document.createElement('td');
+            var tags = Array.isArray(a.tags) ? a.tags : [];
+            tags.slice(0, 3).forEach(function (t) {
+                var tag = document.createElement('span');
+                tag.className = 'gm-tag';
+                tag.textContent = t;
+                tdTags.appendChild(tag);
+            });
+            if (tags.length > 3) {
+                var more = document.createElement('span');
+                more.className = 'gm-tag gm-tag-more';
+                more.textContent = '+' + (tags.length - 3);
+                tdTags.appendChild(more);
+            }
+            tr.appendChild(tdTags);
+            // 最新版本 / 大小 / 下载次数 / 排序
+            var tdVer = document.createElement('td'); tdVer.textContent = a.latest_version || '-'; tr.appendChild(tdVer);
+            var tdSize = document.createElement('td'); tdSize.textContent = fmFormatSize(a.size_bytes); tr.appendChild(tdSize);
+            // 积分价格（0=免费；收费走主题色支付语义，数值保留 3 位去尾零与积分钱包精度一致）
+            var tdPrice = document.createElement('td');
+            var price = parseFloat(a.price) || 0;
+            tdPrice.textContent = price > 0 ? gmFmtPoints(price) : '免费';
+            if (price > 0) tdPrice.className = 'gm-price-cell';
+            tr.appendChild(tdPrice);
+            var tdDown = document.createElement('td'); tdDown.textContent = a.down_count || 0; tr.appendChild(tdDown);
+            var tdSort = document.createElement('td'); tdSort.textContent = a.sort || 0; tr.appendChild(tdSort);
+            // 状态（0上架 1下架，复用公告状态点样式）
+            var tdSt = document.createElement('td');
+            var st = document.createElement('span');
+            st.className = 'ann-status-dot ' + (a.status === 0 ? 'ann-status-published' : 'ann-status-draft');
+            st.textContent = a.status === 0 ? '已上架' : '已下架';
+            tdSt.appendChild(st);
+            tr.appendChild(tdSt);
+            // 操作：编辑 / 版本 / 上架下架 / 删除
+            var tdOp = document.createElement('td');
+            tdOp.className = 'vec-td-actions';
+            tdOp.appendChild(opBtn('编辑', '', function () { gmEdit(a); }));
+            tdOp.appendChild(opBtn('版本', '', function () { gmOpenVersions(a); }));
+            tdOp.appendChild(opBtn(a.status === 0 ? '下架' : '上架', '', function () { gmToggleStatus(a); }));
+            tdOp.appendChild(opBtn('删除', 'danger', function () {
+                confirmBox('删除游戏「' + a.name + '」将同时删除全部版本文件与磁盘数据，不可恢复，确定删除？', function () {
+                    api('DELETE', '/admin/api/game/' + a.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('已删除');
+                        gmLoadList();
+                    }).catch(function () { showToast('网络异常'); });
+                });
+            }));
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ===== 编辑弹窗 =====
+    // 列表接口不含 description，编辑前先拉详情（顺带拿最新全字段，避免覆盖丢数据）
+    function gmEdit(a) {
+        api('GET', '/admin/api/game/' + a.id).then(function (det) {
+            if (!det.ok) { showToast(det.msg || '加载失败'); return; }
+            gmOpenEditor(det.data);
+        }).catch(function () { showToast('网络异常'); });
+    }
+
+    function gmOpenEditor(d) {
+        gmEditingId = d ? (d.id || 0) : 0;
+        $('gm-edit-title').textContent = gmEditingId ? '编辑游戏' : '新建游戏';
+        $('gm-f-name').value = d ? (d.name || '') : '';
+        $('gm-f-slug').value = d ? (d.slug || '') : '';
+        $('gm-f-slug').disabled = !!gmEditingId; // slug=安装目录锚点，创建后不可改（与服务端校验一致）
+        $('gm-f-short').value = d ? (d.short_desc || '') : '';
+        $('gm-f-desc').value = d ? (d.description || '') : '';
+        // 分类标签回填（详情/列表均返回数组；兼容历史逗号串）
+        var rawTags = d ? d.tags : [];
+        if (!Array.isArray(rawTags)) rawTags = String(rawTags || '').split(',');
+        gmTags = rawTags.map(function (t) { return String(t).trim(); }).filter(Boolean).slice(0, GM_TAG_MAX);
+        $('gm-f-developer').value = d ? (d.developer || '') : '';
+        $('gm-f-publisher').value = d ? (d.publisher || '') : '';
+        $('gm-f-price').value = d ? (d.price || 0) : 0;
+        $('gm-f-sort').value = d ? (d.sort || 0) : 0;
+        $('gm-f-status').value = d ? String(d.status === 1 ? 1 : 0) : '0';
+        gmCoverUrl = d ? (d.cover || '') : '';
+        gmBannerUrl = d ? (d.banner || '') : '';
+        gmShots = d && Array.isArray(d.screenshots) ? d.screenshots.slice() : [];
+        gmVids = d && Array.isArray(d.videos) ? d.videos.slice() : [];
+        $('gm-f-tag-custom').value = '';
+        gmRenderTagPicks();
+        gmRenderCoverPreview();
+        gmRenderBannerPreview();
+        gmRenderShots();
+        gmRenderVids();
+        $('gm-edit-mask').classList.remove('hidden');
+    }
+
+    function gmRenderCoverPreview() {
+        var img = $('gm-cover-preview');
+        if (gmCoverUrl) {
+            img.src = gmCoverUrl;
+            img.classList.remove('hidden');
+            $('gm-cover-clear').classList.remove('hidden');
+        } else {
+            img.classList.add('hidden');
+            $('gm-cover-clear').classList.add('hidden');
+        }
+    }
+
+    function gmRenderBannerPreview() {
+        var img = $('gm-banner-preview');
+        if (gmBannerUrl) {
+            img.src = gmBannerUrl;
+            img.classList.remove('hidden');
+            $('gm-banner-clear').classList.remove('hidden');
+        } else {
+            img.classList.add('hidden');
+            $('gm-banner-clear').classList.add('hidden');
+        }
+    }
+
+    // ===== 游戏公告发布（游戏管理页独立卡）：可不定期选择不同游戏发布公告 =====
+    // 支持纯图片公告（标题/内容可空）与图文混合；图片含 GIF 动图，≤9 张（首图兼作动态卡头图）
+    var gmNpImgs = [];  // 待发布公告图片 URL 列表（保持选择顺序）
+
+    // 公告卡游戏下拉填充（随游戏列表刷新同步：当前页全部游戏，含下架），切换后重载已发布公告
+    function gmNpFillGames(list) {
+        var sel = $('gm-np-game');
+        var cur = sel.value;
+        sel.innerHTML = '';
+        list.forEach(function (a) {
+            var opt = document.createElement('option');
+            opt.value = a.id;
+            opt.textContent = '#' + a.id + ' ' + a.name + (a.status === 0 ? '' : '（已下架）');
+            sel.appendChild(opt);
+        });
+        if (cur && list.some(function (a) { return String(a.id) === String(cur); })) sel.value = cur;
+        gnRefreshCount(); // 下拉重建（游戏列表刷新）后公告计数同步
+    }
+
+    // 发布卡：显示当前游戏公告总数（发布与管理同页，发布后表格即时可见）
+    function gnRefreshCount() {
+        var gid = parseInt($('gm-np-game').value, 10) || 0;
+        var tip = $('gm-np-count');
+        if (!gid) { tip.textContent = ''; return; }
+        api('GET', '/admin/api/game/notices?game_id=' + gid + '&page=1&size=1').then(function (result) {
+            var total = (result.ok && result.data) ? (result.data.total || 0) : 0;
+            tip.textContent = '该游戏已发布 ' + total + ' 条公告。';
+        }).catch(function () { tip.textContent = ''; });
+    }
+
+    // ===== 游戏公告管理页（游戏管理二级页：表格一行一条，服务端分页 + 关键词搜索，公告量不限） =====
+    var gnPage = 1, gnKw = '', gnGames = [];
+
+    function gnFillGames(list) {
+        gnGames = list;
+        var sel = $('gn-game');
+        var cur = sel.value;
+        sel.innerHTML = '<option value="0">全部游戏</option>';
+        list.forEach(function (a) {
+            var opt = document.createElement('option');
+            opt.value = a.id;
+            opt.textContent = '#' + a.id + ' ' + a.name + (a.status === 0 ? '' : '（已下架）');
+            sel.appendChild(opt);
+        });
+        if (cur && list.some(function (a) { return String(a.id) === String(cur); })) sel.value = cur;
+        gmNpFillGames(list); // 发布卡游戏下拉同步（发布卡已移入公告管理页，随表格数据源填充）
+    }
+
+    function gnLoad() {
+        var gid = parseInt($('gn-game').value, 10) || 0;
+        var kwq = gnKw ? '&keyword=' + encodeURIComponent(gnKw) : '';
+        var tbody = $('gn-tbody');
+        tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">加载中…</td></tr>';
+        // 游戏筛选下拉懒填充（进入视图首查后补齐，含下架游戏）
+        if (!gnGames.length) {
+            api('GET', '/admin/api/game/list?page=1&size=100').then(function (r) {
+                if (r.ok && r.data && r.data.list) gnFillGames(r.data.list);
+            }).catch(function () { });
+        }
+        api('GET', '/admin/api/game/notices?game_id=' + gid + '&page=' + gnPage + '&size=20' + kwq).then(function (result) {
+            if (!result.ok) { tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">' + (result.msg || '加载失败') + '</td></tr>'; return; }
+            gnRender(result.data.list || [], result.data.total || 0, result.data.page || 1, result.data.size || 20);
+        }).catch(function () { tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">网络异常</td></tr>'; });
+    }
+
+    function gnRender(list, total, page, size) {
+        var tbody = $('gn-tbody');
+        tbody.innerHTML = '';
+        var pager = $('gn-pager');
+        if (!list.length) { tbody.innerHTML = '<tr><td colspan="7" class="vec-empty">无匹配公告</td></tr>'; pager.classList.add('hidden'); return; }
+        list.forEach(function (n) {
+            var tr = document.createElement('tr');
+            var imgs = [];
+            try { imgs = n.images ? JSON.parse(n.images) : []; } catch (e) { imgs = []; }
+            var g = gnGames.filter(function (a) { return String(a.id) === String(n.game_id); })[0];
+            var second = n.content ? (n.content.length > 40 ? n.content.slice(0, 40) + '…' : n.content)
+                : (imgs.length ? imgs.length + ' 张图片' + (imgs.some(function (u) { return /\.gif$/i.test(u); }) ? '（含动图）' : '') : '—');
+            [String(n.id), g ? g.name : ('#' + n.game_id), n.title || '[纯图片公告]', second, String(imgs.length), String(n.create_time || '').replace('T', ' ').slice(0, 16)].forEach(function (v) {
+                var td = document.createElement('td');
+                td.textContent = v;
+                tr.appendChild(td);
+            });
+            var tdOp = document.createElement('td');
+            tdOp.style.whiteSpace = 'nowrap'; // 编辑/删除强制横排（列宽紧张时防挤成竖排）
+            var ed = document.createElement('button');
+            ed.className = 'admin-btn small';
+            ed.type = 'button';
+            ed.textContent = '编辑';
+            ed.addEventListener('click', function () { gnEditOpen(n); });
+            tdOp.appendChild(ed);
+            var sp = document.createElement('span');
+            sp.style.display = 'inline-block';
+            sp.style.width = '6px';
+            tdOp.appendChild(sp);
+            var del = document.createElement('button');
+            del.className = 'admin-btn small danger';
+            del.type = 'button';
+            del.textContent = '删除';
+            del.addEventListener('click', function () {
+                confirmBox('确认删除公告 #' + n.id + '？删除后玩家端「动态」区立即消失。', function () {
+                    api('DELETE', '/admin/api/game/notice/' + n.id).then(function (r) {
+                        if (!r.ok) { showToast(r.msg || '删除失败'); return; }
+                        showToast('公告已删除');
+                        // 删空当前页且非首页回退一页防停空页
+                        if (list.length === 1 && page > 1) gnPage = page - 1;
+                        gnLoad();
+                        gnRefreshCount();
+                    }).catch(function () { showToast('网络异常'); });
+                });
+            });
+            tdOp.appendChild(del);
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+        // 分页条（常驻表格下方，每页 20 条，服务端分页归口）；有数据即显示——单页时按钮禁用，让分页能力可感知
+        var totalPages = Math.max(1, Math.ceil(total / size));
+        if (total > 0) {
+            $('gn-page-info').textContent = '第 ' + page + ' / ' + totalPages + ' 页 · 共 ' + total + ' 条';
+            $('gn-pager-prev').disabled = page <= 1;
+            $('gn-pager-next').disabled = page >= totalPages;
+            pager.classList.remove('hidden');
+        } else {
+            pager.classList.add('hidden');
+        }
+    }
+
+    // ===== 公告编辑弹窗（表格行"编辑"入口：游戏归属/标题/内容/图片均可改，校验同发布） =====
+    var gnEdId = 0, gnEdImgs = [];
+
+    function gnEditOpen(n) {
+        gnEdId = n.id;
+        // 图片回显（images 为 JSON 数组串，解析失败按空处理）
+        try { gnEdImgs = n.images ? JSON.parse(n.images) : []; } catch (e) { gnEdImgs = []; }
+        if (!Array.isArray(gnEdImgs)) gnEdImgs = [];
+        // 布局回显（thumb/grid/banner，空回退横向缩略图）
+        $('gn-f-layout').value = (n.layout === 'grid' || n.layout === 'banner') ? n.layout : 'thumb';
+        // 游戏下拉复用 gnGames 缓存；缓存未就绪（直链进入未加载列表）时兜底拉取一次
+        var sel = $('gn-f-game');
+        var fill = function () {
+            sel.innerHTML = '';
+            gnGames.forEach(function (a) {
+                var opt = document.createElement('option');
+                opt.value = a.id;
+                opt.textContent = '#' + a.id + ' ' + a.name + (a.status === 0 ? '' : '（已下架）');
+                sel.appendChild(opt);
+            });
+            sel.value = String(n.game_id);
+            // 缓存翻页未含该游戏时补兜底项，防选中丢失
+            if (sel.value !== String(n.game_id)) {
+                var opt = document.createElement('option');
+                opt.value = n.game_id;
+                opt.textContent = '#' + n.game_id;
+                sel.insertBefore(opt, sel.firstChild);
+                sel.value = String(n.game_id);
+            }
+        };
+        if (gnGames.length) { fill(); }
+        else {
+            api('GET', '/admin/api/game/list?page=1&size=100').then(function (r) {
+                if (r.ok && r.data && r.data.list) gnFillGames(r.data.list);
+            }).catch(function () { }).then(fill);
+        }
+        $('gn-f-title').value = n.title || '';
+        $('gn-f-content').value = n.content || '';
+        gnEdRenderImgs();
+        $('gn-edit-mask').classList.remove('hidden');
+    }
+
+    function gnEdRenderImgs() {
+        var box = $('gn-f-imgs');
+        box.innerHTML = '';
+        gnEdImgs.forEach(function (url, idx) {
+            var item = document.createElement('div');
+            item.className = 'gm-np-img-item';
+            var img = document.createElement('img');
+            img.src = url;
+            item.appendChild(img);
+            var x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'gm-np-img-del';
+            x.textContent = '×';
+            x.title = '移除图片';
+            x.addEventListener('click', function () { gnEdImgs.splice(idx, 1); gnEdRenderImgs(); });
+            item.appendChild(x);
+            box.appendChild(item);
+        });
+    }
+
+    function gmNpRenderImgs() {
+        var box = $('gm-np-imgs');
+        box.innerHTML = '';
+        gmNpImgs.forEach(function (url, idx) {
+            var item = document.createElement('div');
+            item.className = 'gm-np-img-item';
+            var img = document.createElement('img');
+            img.src = url;
+            item.appendChild(img);
+            var x = document.createElement('button');
+            x.type = 'button';
+            x.className = 'gm-np-img-del';
+            x.textContent = '×';
+            x.title = '移除图片';
+            x.addEventListener('click', function () { gmNpImgs.splice(idx, 1); gmNpRenderImgs(); });
+            item.appendChild(x);
+            box.appendChild(item);
+        });
+    }
+
+    function gmRenderShots() {
+        var box = $('gm-shots-list');
+        box.innerHTML = '';
+        gmShots.forEach(function (url, idx) {
+            var item = document.createElement('div');
+            item.className = 'gm-shot-item';
+            var img = document.createElement('img');
+            img.src = url;
+            img.alt = '截图' + (idx + 1);
+            var del = document.createElement('button');
+            del.className = 'gm-shot-del';
+            del.type = 'button';
+            del.textContent = '×';
+            del.title = '删除截图';
+            del.addEventListener('click', function () {
+                gmShots.splice(idx, 1);
+                gmRenderShots();
+            });
+            item.appendChild(img);
+            item.appendChild(del);
+            box.appendChild(item);
+        });
+    }
+
+    // ===== 分类标签（预设胶囊多选 + 自定义补充，保存合并逗号串入 tags 字段） =====
+    function gmRenderTagPicks() {
+        var box = $('gm-tag-picks');
+        box.innerHTML = '';
+        GM_TAG_PRESETS.forEach(function (t) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'gm-tag-pick' + (gmTags.indexOf(t) !== -1 ? ' active' : '');
+            b.textContent = t;
+            b.addEventListener('click', function () {
+                var i = gmTags.indexOf(t);
+                if (i === -1) {
+                    if (gmTags.length >= GM_TAG_MAX) { showToast('最多 ' + GM_TAG_MAX + ' 个分类'); return; }
+                    gmTags.push(t);
+                } else {
+                    gmTags.splice(i, 1);
+                }
+                gmRenderTagPicks();
+            });
+            box.appendChild(b);
+        });
+        // 未命中预设的自定义项渲染为可删胶囊（点即移除）
+        gmTags.forEach(function (t) {
+            if (GM_TAG_PRESETS.indexOf(t) !== -1) return;
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'gm-tag-pick active';
+            b.title = '自定义分类，点击移除';
+            b.textContent = t + ' ×';
+            b.addEventListener('click', function () {
+                gmTags.splice(gmTags.indexOf(t), 1);
+                gmRenderTagPicks();
+            });
+            box.appendChild(b);
+        });
+    }
+
+    // 自定义分类收编（回车/逗号/失焦触发：支持一次输入逗号分隔多个，去重、限量）
+    function gmAddCustomTag() {
+        var inp = $('gm-f-tag-custom');
+        var raw = inp.value.trim();
+        if (!raw) return;
+        raw.split(/[,，]/).forEach(function (one) {
+            one = one.trim();
+            if (!one || gmTags.indexOf(one) !== -1) return;
+            if (gmTags.length >= GM_TAG_MAX) { showToast('最多 ' + GM_TAG_MAX + ' 个分类'); return; }
+            gmTags.push(one);
+        });
+        inp.value = '';
+        gmRenderTagPicks();
+    }
+
+    // ===== 宣传视频（Steam 同款详情页预告片：8MB 分片直传 → finish 合并落位 → 追加行） =====
+    function gmRenderVids() {
+        var box = $('gm-vids-list');
+        box.innerHTML = '';
+        gmVids.forEach(function (url, idx) {
+            var row = document.createElement('div');
+            row.className = 'gm-vid-row';
+            var thumb = document.createElement('div');
+            thumb.className = 'gm-vid-thumb';
+            var v = document.createElement('video'); // preload=metadata 惰性取首帧（不预下载整片）
+            v.src = url;
+            v.muted = true;
+            v.preload = 'metadata';
+            thumb.appendChild(v);
+            var name = document.createElement('span');
+            name.className = 'gm-vid-name';
+            name.textContent = url.split('/').pop() || url; // 服务端随机文件名（v时间戳_随机串.ext）
+            name.title = url;
+            var del = document.createElement('button');
+            del.className = 'gm-vid-del';
+            del.type = 'button';
+            del.textContent = '×';
+            del.title = '移除视频';
+            del.addEventListener('click', function () {
+                gmVids.splice(idx, 1);
+                gmRenderVids();
+            });
+            row.appendChild(thumb);
+            row.appendChild(name);
+            row.appendChild(del);
+            box.appendChild(row);
+        });
+    }
+
+    // 宣传视频分片上传归口：扩展名/大小前端预检（服务端权威）→ 8MB 顺序直传 → finish 合并
+    // 单片失败/中断即 cancel 会话清临时分片（文件留盘策略：列表移除仅改元数据，不删服务端文件）
+    function gmUploadVideo(file, cb) {
+        var ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (GM_VID_EXTS.indexOf(ext) === -1) { cb({ ok: false, msg: '仅支持 mp4/webm/mkv 视频' }); return; }
+        if (file.size > GM_MAX_VIDEO) { cb({ ok: false, msg: '视频超出 200MB 上限' }); return; }
+        var uploadId = 'gv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        var total = Math.ceil(file.size / GM_CHUNK);
+        var seq = 0;
+        var hint = $('gm-vids-hint');
+        function sendChunk() {
+            if (seq >= total) { finish(); return; }
+            var start = seq * GM_CHUNK;
+            file.slice(start, Math.min(start + GM_CHUNK, file.size)).arrayBuffer().then(function (chunk) {
+                fetch('/admin/api/game/upload/video?upload_id=' + encodeURIComponent(uploadId) +
+                    '&seq=' + seq + '&total=' + total + '&size=' + file.size + '&name=' + encodeURIComponent(file.name), {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
+                    body: chunk
+                }).then(function (resp) {
+                    return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+                }).then(function (r) {
+                    if (!r.ok) { cleanup(r.msg || '上传失败'); return; }
+                    seq++;
+                    hint.textContent = '上传中 ' + Math.round((seq / total) * 100) + '%';
+                    sendChunk();
+                });
+            }).catch(function () { cleanup('网络异常'); });
+        }
+        function finish() {
+            fetch('/admin/api/game/upload/video/finish?upload_id=' + encodeURIComponent(uploadId), {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + getToken() }
+            }).then(function (resp) {
+                return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+            }).then(function (r) {
+                if (r.ok && r.data && r.data.url) { cb({ ok: true, url: r.data.url }); return; }
+                cleanup(r.msg || '合并失败');
+            }).catch(function () { cleanup('网络异常'); });
+        }
+        function cleanup(msg) {
+            api('POST', '/admin/api/game/upload/cancel', { upload_id: uploadId }).catch(function () { /* 忽略 */ });
+            cb({ ok: false, msg: msg });
+        }
+        sendChunk();
+    }
+
+    // 积分格式化（保留 3 位去尾零，与积分钱包 round3 精度一致）
+    function gmFmtPoints(v) {
+        var s = (Math.round(v * 1000) / 1000).toFixed(3);
+        if (s.indexOf('.') !== -1) s = s.replace(/0+$/, '').replace(/\.$/, '');
+        return s;
+    }
+
+    // ===== 封面/截图小图上传归口（FormData + Bearer，与 api() 同会话规则） =====
+    function gmUploadImage(file, cb) {
+        var ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (GM_IMG_EXTS.indexOf(ext) === -1) { cb({ ok: false, msg: '仅支持 png/jpg/jpeg/gif/webp 图片' }); return; }
+        if (file.size > 20 * 1024 * 1024) { cb({ ok: false, msg: '图片超出 20MB 上限' }); return; }
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/admin/api/game/upload/image', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd
+        }).then(function (resp) {
+            return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+        }).then(cb).catch(function () { cb({ ok: false, msg: '网络异常' }); });
+    }
+
+    function gmSave() {
+        if (gmVidUploading) { showToast('视频上传中，请稍候'); return; }
+        gmAddCustomTag(); // 兜底收编未确认的自定义输入（防失焦时序遗漏）
+        var name = $('gm-f-name').value.trim();
+        var slug = $('gm-f-slug').value.trim().toLowerCase();
+        if (!name) { showToast('请填写游戏名称'); return; }
+        if (!gmEditingId && !/^[a-z0-9_-]{1,64}$/.test(slug)) {
+            showToast('slug 仅允许小写字母/数字/下划线/中划线（1-64 位）');
+            return;
+        }
+        var payload = {
+            slug: slug,
+            name: name,
+            short_desc: $('gm-f-short').value.trim(),
+            description: $('gm-f-desc').value,
+            cover: gmCoverUrl,
+            banner: gmBannerUrl,
+            screenshots: JSON.stringify(gmShots),
+            tags: gmTags.join(','),
+            videos: JSON.stringify(gmVids),
+            developer: $('gm-f-developer').value.trim(),
+            publisher: $('gm-f-publisher').value.trim(),
+            price: Math.max(0, parseFloat($('gm-f-price').value) || 0),
+            sort: parseInt($('gm-f-sort').value, 10) || 0,
+            status: parseInt($('gm-f-status').value, 10) || 0
+        };
+        var btn = $('gm-edit-ok');
+        btn.disabled = true;
+        var req = gmEditingId
+            ? api('PUT', '/admin/api/game/' + gmEditingId, payload)
+            : api('POST', '/admin/api/game', payload);
+        req.then(function (result) {
+            btn.disabled = false;
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            $('gm-edit-mask').classList.add('hidden');
+            showToast('已保存');
+            gmLoadList();
+        }).catch(function (e) { btn.disabled = false; showToast(e.message || '网络异常'); });
+    }
+
+    // ===== 上架/下架切换（PUT 全量元数据：列表不含 description，先拉详情再翻转状态回写） =====
+    function gmBuildPayload(d, status) {
+        return {
+            slug: d.slug || '',
+            name: d.name || '',
+            short_desc: d.short_desc || '',
+            description: d.description || '',
+            cover: d.cover || '',
+            banner: d.banner || '',
+            screenshots: JSON.stringify(Array.isArray(d.screenshots) ? d.screenshots : []),
+            tags: Array.isArray(d.tags) ? d.tags.join(',') : (d.tags || ''),
+            videos: JSON.stringify(Array.isArray(d.videos) ? d.videos : []), // 全量回写防更新时清空视频清单
+            developer: d.developer || '',
+            publisher: d.publisher || '',
+            price: d.price || 0,
+            sort: d.sort || 0,
+            status: status
+        };
+    }
+
+    function gmToggleStatus(a) {
+        api('GET', '/admin/api/game/' + a.id).then(function (det) {
+            if (!det.ok) { showToast(det.msg || '操作失败'); return; }
+            var ns = a.status === 0 ? 1 : 0;
+            api('PUT', '/admin/api/game/' + a.id, gmBuildPayload(det.data, ns)).then(function (result) {
+                if (!result.ok) { showToast(result.msg || '操作失败'); return; }
+                showToast(ns === 0 ? '已上架' : '已下架');
+                gmLoadList();
+            }).catch(function () { showToast('网络异常'); });
+        }).catch(function () { showToast('网络异常'); });
+    }
+
+    // ===== 版本管理弹窗 =====
+    function gmOpenVersions(a) {
+        api('GET', '/admin/api/game/' + a.id).then(function (det) {
+            if (!det.ok) { showToast(det.msg || '加载失败'); return; }
+            gmVerGame = det.data;
+            $('gm-ver-title').textContent = '版本管理 - ' + gmVerGame.name + '（' + gmVerGame.slug + '）';
+            $('gm-pub-version').value = '';
+            $('gm-pub-changelog').value = '';
+            $('gm-pub-minreq').value = '';
+            gmFiles = [];
+            gmRenderFiles();
+            gmRenderVersions();
+            $('gm-ver-mask').classList.remove('hidden');
+        }).catch(function () { showToast('网络异常'); });
+    }
+
+    function gmRefreshVersions() {
+        if (!gmVerGame) return;
+        api('GET', '/admin/api/game/' + gmVerGame.id).then(function (det) {
+            if (!det.ok) { showToast(det.msg || '加载失败'); return; }
+            gmVerGame = det.data;
+            gmRenderVersions();
+        }).catch(function () { showToast('网络异常'); });
+    }
+
+    function gmRenderVersions() {
+        var tbody = $('gm-ver-tbody');
+        tbody.innerHTML = '';
+        var versions = (gmVerGame && gmVerGame.versions) || [];
+        if (!versions.length) {
+            var tr0 = document.createElement('tr');
+            var td0 = document.createElement('td');
+            td0.colSpan = 6;
+            td0.className = 'vec-empty';
+            td0.textContent = '暂无版本，在下方上架第一个版本';
+            tr0.appendChild(td0);
+            tbody.appendChild(tr0);
+            return;
+        }
+        function opBtn(text, cls, fn) {
+            var b = document.createElement('button');
+            b.className = 'admin-btn small' + (cls ? ' ' + cls : '');
+            b.textContent = text;
+            b.addEventListener('click', fn);
+            return b;
+        }
+        versions.forEach(function (v) {
+            var tr = document.createElement('tr');
+            var tdV = document.createElement('td'); tdV.textContent = v.version; tr.appendChild(tdV);
+            var tdC = document.createElement('td'); tdC.textContent = v.file_count; tr.appendChild(tdC);
+            var tdS = document.createElement('td'); tdS.textContent = fmFormatSize(v.size_bytes); tr.appendChild(tdS);
+            var tdL = document.createElement('td');
+            tdL.className = 'gm-ver-changelog';
+            tdL.textContent = v.changelog || '-';
+            tdL.title = v.changelog || '';
+            tr.appendChild(tdL);
+            var tdT = document.createElement('td'); tdT.textContent = v.create_time || '-'; tr.appendChild(tdT);
+            var tdOp = document.createElement('td');
+            tdOp.className = 'vec-td-actions';
+            tdOp.appendChild(opBtn('删除', 'danger', function () {
+                confirmBox('删除版本「' + v.version + '」将同时删除其全部文件与磁盘数据，不可恢复，确定删除？', function () {
+                    api('DELETE', '/admin/api/game/version/' + v.id).then(function (result) {
+                        if (!result.ok) { showToast(result.msg || '删除失败'); return; }
+                        showToast('版本已删除');
+                        gmRefreshVersions();
+                        gmLoadList();
+                    }).catch(function () { showToast('网络异常'); });
+                });
+            }));
+            tr.appendChild(tdOp);
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ===== 文件清单（目录/多文件选择 → 归口清洗 → 逐行预览） =====
+    // 清洗规则与服务端 gameRelPathClean 同源：反斜杠转正斜杠、拒绝空段/./..；
+    // 空文件与同路径重复项跳过（服务端登记时均拒绝）；超 2GB 提示跳过
+    function gmAddFile(file, rel) {
+        rel = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+        var segs = rel.split('/');
+        var out = [];
+        for (var i = 0; i < segs.length; i++) {
+            var s = segs[i];
+            if (s === '' || s === '.' || s === '..') { showToast('非法文件路径，已跳过：' + rel); return; }
+            out.push(s);
+        }
+        if (!out.length) return;
+        rel = out.join('/');
+        if (file.size <= 0) return; // 空文件服务端拒绝登记，静默跳过（目录内常见空占位文件）
+        if (file.size > GM_MAX_FILE) {
+            showToast('单文件超限或过大，请压缩后上传（前端上限 2GB）：' + rel);
+            return;
+        }
+        for (var j = 0; j < gmFiles.length; j++) {
+            if (gmFiles[j].rel_path === rel) return; // 同路径重复项跳过
+        }
+        if (gmFiles.length >= GM_MAX_FILES) {
+            showToast('文件清单已达 5000 项上限，其余文件已跳过');
+            return;
+        }
+        gmFiles.push({ rel_path: rel, size: file.size, file: file });
+    }
+
+    function gmRenderFiles() {
+        var box = $('gm-file-list');
+        box.innerHTML = '';
+        var totalSize = 0;
+        gmFiles.forEach(function (item, idx) {
+            totalSize += item.size;
+            var row = document.createElement('div');
+            row.className = 'gm-file-row';
+            var name = document.createElement('span');
+            name.className = 'gm-file-name';
+            name.textContent = item.rel_path;
+            name.title = item.rel_path;
+            var size = document.createElement('span');
+            size.className = 'gm-file-size';
+            size.textContent = fmFormatSize(item.size);
+            var prog = document.createElement('div');
+            prog.className = 'gm-prog';
+            var fill = document.createElement('div');
+            fill.className = 'gm-prog-fill';
+            prog.appendChild(fill);
+            var state = document.createElement('span');
+            state.className = 'gm-file-state';
+            state.textContent = '等待';
+            var del = document.createElement('button');
+            del.className = 'gm-file-del';
+            del.type = 'button';
+            del.textContent = '移除';
+            del.addEventListener('click', function () {
+                if (gmUploading) return;
+                gmFiles.splice(idx, 1);
+                gmRenderFiles();
+            });
+            row.appendChild(name);
+            row.appendChild(size);
+            row.appendChild(prog);
+            row.appendChild(state);
+            row.appendChild(del);
+            box.appendChild(row);
+            item.ui = { state: state, fill: fill };
+        });
+        $('gm-file-summary').textContent = gmFiles.length
+            ? '共 ' + gmFiles.length + ' 个文件，总大小 ' + fmFormatSize(totalSize)
+            : '未选择文件';
+        if (gmUploading) { // 上传中隐藏移除按钮（清单重渲染归口保持一致）
+            var dels = box.querySelectorAll('.gm-file-del');
+            for (var i = 0; i < dels.length; i++) dels[i].style.display = 'none';
+        }
+    }
+
+    function gmFileState(idx, text, cls) {
+        var item = gmFiles[idx];
+        if (!item || !item.ui) return;
+        item.ui.state.textContent = text;
+        item.ui.state.className = 'gm-file-state' + (cls ? ' ' + cls : '');
+    }
+
+    function gmFileProgress(idx, pct) {
+        var item = gmFiles[idx];
+        if (!item || !item.ui) return;
+        item.ui.fill.style.width = pct + '%';
+    }
+
+    // 从 start 起把未完成行标记为 text（取消=已取消，失败=已跳过）
+    function gmMarkFrom(start, text) {
+        for (var i = start; i < gmFiles.length; i++) {
+            var t = gmFiles[i].ui ? gmFiles[i].ui.state.textContent : '';
+            if (t === '等待' || t === '上传中' || t === '校验中…') gmFileState(i, text);
+        }
+    }
+
+    function gmSetUploadUI(busy) {
+        gmUploading = busy;
+        $('gm-pub-ok').disabled = busy;
+        $('gm-pub-ok').textContent = busy ? '上传中…' : '开始上传并上架';
+        $('gm-ver-close').disabled = busy;
+        $('gm-pub-cancel').classList.toggle('hidden', !busy);
+        $('gm-pub-cancel').textContent = '取消上传';
+        ['gm-pick-dir', 'gm-pick-files', 'gm-pick-clear'].forEach(function (id) { $(id).disabled = busy; });
+        ['gm-pub-version', 'gm-pub-changelog', 'gm-pub-minreq'].forEach(function (id) { $(id).disabled = busy; });
+        var dels = $('gm-file-list').querySelectorAll('.gm-file-del');
+        for (var i = 0; i < dels.length; i++) dels[i].style.display = busy ? 'none' : '';
+    }
+
+    function gmSleep(ms) {
+        return new Promise(function (res) { setTimeout(res, ms); });
+    }
+
+    // 单文件上传归口：整文件读入算 SHA-256 → 8MB 分片顺序直传（单片失败重试 2 次，幂等覆盖）
+    async function gmUploadOneFile(item, idx) {
+        if (!window.crypto || !crypto.subtle) {
+            var se = new Error('当前环境不支持 SHA-256 计算（需安全上下文，请用客户端内置窗口或 https/localhost 打开）');
+            se.cancelled = false;
+            throw se;
+        }
+        gmFileState(idx, '校验中…');
+        var buf = await item.file.arrayBuffer();
+        var digest = await crypto.subtle.digest('SHA-256', buf);
+        buf = null; // 尽早释放大块内存
+        var sha = '';
+        var bytes = new Uint8Array(digest);
+        for (var i = 0; i < bytes.length; i++) sha += ('0' + bytes[i].toString(16)).slice(-2);
+        var uploadId = 'gf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+        gmStartedIds.push(uploadId);
+        var total = Math.ceil(item.size / GM_CHUNK);
+        for (var seq = 0; seq < total; seq++) {
+            if (gmCancelFlag) { var xe = new Error('已取消'); xe.cancelled = true; throw xe; }
+            gmFileState(idx, '上传中');
+            var start = seq * GM_CHUNK;
+            var chunk = await item.file.slice(start, Math.min(start + GM_CHUNK, item.size)).arrayBuffer();
+            var attempt = 0;
+            for (;;) {
+                try {
+                    gmAbort = new AbortController();
+                    var resp = await fetch('/admin/api/game/upload/chunk?upload_id=' + encodeURIComponent(uploadId) +
+                        '&seq=' + seq + '&total=' + total + '&size=' + item.size, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/octet-stream' },
+                        body: chunk,
+                        signal: gmAbort.signal
+                    });
+                    gmAbort = null;
+                    var r = await resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+                    if (!r.ok) throw new Error(r.msg || ('HTTP ' + resp.status));
+                    break;
+                } catch (e) {
+                    gmAbort = null;
+                    if (e.name === 'AbortError' || gmCancelFlag) {
+                        var ce = new Error('已取消'); ce.cancelled = true; throw ce;
+                    }
+                    attempt++;
+                    if (attempt >= 3) throw e; // 重试耗尽即整批中止（分片幂等，重开可整文件重传）
+                    await gmSleep(600 * attempt);
+                }
+            }
+            gmFileProgress(idx, Math.round(((seq + 1) / total) * 100));
+        }
+        return { rel_path: item.rel_path, size: item.size, sha256: sha, upload_id: uploadId };
+    }
+
+    // 取消/失败收尾：把本批已开始的分片会话逐个 cancel（服务端清临时目录；过期由 24h 惰性清理兜底）
+    async function gmCancelStarted() {
+        var ids = gmStartedIds;
+        gmStartedIds = [];
+        for (var i = 0; i < ids.length; i++) {
+            try { await api('POST', '/admin/api/game/upload/cancel', { upload_id: ids[i] }); } catch (e) { /* 忽略 */ }
+        }
+    }
+
+    // ===== 上传并上架归口：逐文件顺序处理 → 全部成功后登记版本 =====
+    async function gmRunPublish() {
+        if (gmUploading) return;
+        if (!gmVerGame) { showToast('请先打开版本管理'); return; }
+        var version = $('gm-pub-version').value.trim();
+        var changelog = $('gm-pub-changelog').value;
+        var minReq = $('gm-pub-minreq').value;
+        if (!version) { showToast('请填写版本号'); return; }
+        if (!gmFiles.length) { showToast('请先选择游戏目录或文件'); return; }
+        gmSetUploadUI(true);
+        gmCancelFlag = false;
+        gmStartedIds = [];
+        var okFiles = [], failMsg = '', cancelled = false;
+        for (var i = 0; i < gmFiles.length; i++) {
+            if (gmCancelFlag) { gmMarkFrom(i, '已取消'); cancelled = true; break; }
+            try {
+                okFiles.push(await gmUploadOneFile(gmFiles[i], i));
+                gmFileState(i, '已完成', 'ok');
+            } catch (e) {
+                if (e && e.cancelled) { gmMarkFrom(i, '已取消'); cancelled = true; break; }
+                failMsg = (gmFiles[i].rel_path || '') + '：' + (e && e.message ? e.message : '上传失败');
+                gmFileState(i, '失败', 'err');
+                gmMarkFrom(i + 1, '已跳过');
+                break; // 版本清单必须完整，单文件失败即整批中止（清单保留可修复后重试）
+            }
+        }
+        if (cancelled || failMsg) {
+            await gmCancelStarted();
+            gmSetUploadUI(false);
+            showToast(cancelled ? '已取消上传，未登记版本' : ('上传中止：' + failMsg));
+            return;
+        }
+        $('gm-pub-ok').textContent = '登记版本中…';
+        var reg;
+        try {
+            reg = await api('POST', '/admin/api/game/' + gmVerGame.id + '/version',
+                { version: version, changelog: changelog, min_req: minReq, files: okFiles });
+        } catch (e) {
+            gmSetUploadUI(false);
+            showToast(e.message || '网络异常');
+            return;
+        }
+        gmSetUploadUI(false);
+        if (!reg.ok) { showToast(reg.msg || '版本登记失败'); return; }
+        showToast('版本 ' + version + ' 已上架（' + reg.data.file_count + ' 个文件，共 ' + fmFormatSize(reg.data.size_bytes) + '）');
+        $('gm-pub-version').value = '';
+        $('gm-pub-changelog').value = '';
+        $('gm-pub-minreq').value = '';
+        gmFiles = [];
+        gmRenderFiles();
+        gmRefreshVersions();
+        gmLoadList();
+    }
+
+    // ===== 事件绑定 =====
+    $('gm-create').addEventListener('click', function () { gmOpenEditor(null); });
+    $('gm-refresh').addEventListener('click', function () { gmLoadList(); });
+    $('gm-search').addEventListener('input', function () { gmPage = 1; gmLoadList(); });
+    $('gm-prev').addEventListener('click', function () { if (gmPage > 1) { gmPage--; gmLoadList(); } });
+    $('gm-next').addEventListener('click', function () { if (gmPage * GM_PAGE_SIZE < gmTotal) { gmPage++; gmLoadList(); } });
+    // 编辑弹窗
+    $('gm-edit-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    $('gm-edit-cancel').addEventListener('click', function () { $('gm-edit-mask').classList.add('hidden'); });
+    $('gm-edit-ok').addEventListener('click', gmSave);
+    // 封面上传
+    $('gm-cover-btn').addEventListener('click', function () { $('gm-cover-file').click(); });
+    $('gm-cover-file').addEventListener('change', function () {
+        var file = (this.files || [])[0];
+        this.value = '';
+        if (!file) return;
+        gmUploadImage(file, function (result) {
+            if (!result.ok) { showToast(result.msg || '封面上传失败'); return; }
+            gmCoverUrl = result.data.url;
+            gmRenderCoverPreview();
+            showToast('封面已上传');
+        });
+    });
+    $('gm-cover-clear').addEventListener('click', function () { gmCoverUrl = ''; gmRenderCoverPreview(); });
+
+    // 库横幅上传（游戏库 hero 大图，同封面小图通道）
+    $('gm-banner-btn').addEventListener('click', function () { $('gm-banner-file').click(); });
+    $('gm-banner-file').addEventListener('change', function () {
+        var f = this.files && this.files[0];
+        this.value = '';
+        if (!f) return;
+        gmUploadImage(f, function (result) {
+            if (!result.ok) { showToast(result.msg || '横幅上传失败'); return; }
+            gmBannerUrl = result.data.url;
+            gmRenderBannerPreview();
+            showToast('库横幅已上传');
+        });
+    });
+    $('gm-banner-clear').addEventListener('click', function () { gmBannerUrl = ''; gmRenderBannerPreview(); });
+
+    // ===== 详细介绍插入图片（[img]URL 独立成行协议，商店详情页渲染为配图块，支持 GIF 动图）：
+    // 多选按顺序逐张上传，全部完成后统一插入光标处（保序，失败项跳过并提示）
+    $('gm-desc-img-btn').addEventListener('click', function () { $('gm-desc-img-file').click(); });
+    $('gm-desc-img-file').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        if (!files.length) return;
+        var ta = $('gm-f-desc');
+        var pos = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length; // 光标处插入（无选区取末尾）
+        var head = ta.value.slice(0, pos), tail = ta.value.slice(pos);
+        var urls = new Array(files.length), done = 0, failed = 0;
+        files.forEach(function (f, idx) {
+            gmUploadImage(f, function (result) {
+                if (result.ok && result.data && result.data.url) urls[idx] = '[img]' + result.data.url;
+                else { failed++; showToast((result && result.msg) || ('第 ' + (idx + 1) + ' 张图片上传失败')); }
+                done++;
+                if (done < files.length) return;
+                var ok = urls.filter(Boolean);
+                if (ok.length) {
+                    var lead = head && head.slice(-1) !== '\n' ? '\n' : ''; // 防与上一行粘连
+                    var block = lead + ok.join('\n') + '\n';
+                    ta.value = head + block + tail;
+                    ta.focus();
+                    var np = (head + block).length;
+                    try { ta.setSelectionRange(np, np); } catch (e) { /* ignore */ }
+                    showToast('已插入 ' + ok.length + ' 张图片' + (failed ? '，' + failed + ' 张失败' : ''));
+                }
+            });
+        });
+    });
+
+    // 游戏公告独立发布卡：选择游戏 + 标题/内容可空（纯图片公告）+ 多图上传（GIF 动图）+ 发布/列表删除
+    $('gm-np-publish').addEventListener('click', function () {
+        var gid = parseInt($('gm-np-game').value, 10) || 0;
+        if (!gid) { showToast('请先选择游戏'); return; }
+        var title = $('gm-np-title').value.trim();
+        var content = $('gm-np-content').value.trim();
+        if (!title && !content && !gmNpImgs.length) { showToast('标题、内容、图片至少填写一项'); return; }
+        var btn = this;
+        btn.disabled = true;
+        api('POST', '/admin/api/game/notice', { game_id: gid, title: title, content: content, images: JSON.stringify(gmNpImgs), cover: gmNpImgs[0] || '', layout: $('gm-np-layout').value }).then(function (result) {
+            btn.disabled = false;
+            if (!result.ok) { showToast(result.msg || '发布失败'); return; }
+            $('gm-np-title').value = '';
+            $('gm-np-content').value = '';
+            gmNpImgs = [];
+            gmNpRenderImgs();
+            showToast('公告已发布');
+            gnRefreshCount(); // 发布卡计数提示同步
+            // 发布与管理同页：表格筛选同步到发布游戏并回第一页，新公告（id DESC）立即可见
+            gnKw = '';
+            $('gn-kw').value = '';
+            gnPage = 1;
+            var gsel = $('gn-game');
+            if (gsel.querySelector('option[value="' + gid + '"]')) gsel.value = String(gid);
+            gnLoad();
+        }).catch(function () { btn.disabled = false; showToast('网络异常'); });
+    });
+    // 公告图片多选上传（顺序上传保持选择顺序，≤9 张）
+    $('gm-np-img-btn').addEventListener('click', function () { $('gm-np-img-file').click(); });
+    $('gm-np-img-file').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        if (!files.length) return;
+        if (gmNpImgs.length + files.length > 9) { showToast('公告图片最多 9 张'); return; }
+        (function next(i) {
+            if (i >= files.length) { gmNpRenderImgs(); return; }
+            gmUploadImage(files[i], function (result) {
+                if (result.ok) gmNpImgs.push(result.data.url);
+                else showToast(result.msg || '图片上传失败');
+                next(i + 1);
+            });
+        })(0);
+    });
+    $('gm-np-game').addEventListener('change', gnRefreshCount); // 切游戏刷新公告计数
+    // 游戏公告管理页（筛选/搜索防抖/分页/刷新）
+    $('gn-game').addEventListener('change', function () { gnPage = 1; gnLoad(); });
+    var gnKwTimer = null;
+    $('gn-kw').addEventListener('input', function () {
+        var v = this.value;
+        clearTimeout(gnKwTimer);
+        gnKwTimer = setTimeout(function () { gnKw = v.trim(); gnPage = 1; gnLoad(); }, 300);
+    });
+    $('gn-refresh').addEventListener('click', function () { gnPage = 1; gnLoad(); });
+    $('gn-pager-prev').addEventListener('click', function () { gnPage = Math.max(1, gnPage - 1); gnLoad(); });
+    $('gn-pager-next').addEventListener('click', function () { gnPage += 1; gnLoad(); });
+    // 公告编辑弹窗：保存/取消/遮罩关闭 + 图片多选上传（顺序上传保持选择顺序，≤9 张）
+    $('gn-edit-ok').addEventListener('click', function () {
+        if (!gnEdId) return;
+        var gid = parseInt($('gn-f-game').value, 10) || 0;
+        if (!gid) { showToast('请选择游戏'); return; }
+        var title = $('gn-f-title').value.trim();
+        var content = $('gn-f-content').value.trim();
+        if (!title && !content && !gnEdImgs.length) { showToast('标题、内容、图片至少填写一项'); return; }
+        var btn = this;
+        btn.disabled = true;
+        api('PUT', '/admin/api/game/notice/' + gnEdId, { game_id: gid, title: title, content: content, images: JSON.stringify(gnEdImgs), layout: $('gn-f-layout').value }).then(function (result) {
+            btn.disabled = false;
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            $('gn-edit-mask').classList.add('hidden');
+            showToast('公告已保存');
+            gnLoad();
+            gnRefreshCount();
+        }).catch(function () { btn.disabled = false; showToast('网络异常'); });
+    });
+    $('gn-edit-cancel').addEventListener('click', function () { $('gn-edit-mask').classList.add('hidden'); });
+    $('gn-edit-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
+    $('gn-f-img-btn').addEventListener('click', function () { $('gn-f-img-file').click(); });
+    $('gn-f-img-file').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        if (!files.length) return;
+        if (gnEdImgs.length + files.length > 9) { showToast('公告图片最多 9 张'); return; }
+        (function next(i) {
+            if (i >= files.length) { gnEdRenderImgs(); return; }
+            gmUploadImage(files[i], function (result) {
+                if (result.ok) gnEdImgs.push(result.data.url);
+                else showToast(result.msg || '图片上传失败');
+                next(i + 1);
+            });
+        })(0);
+    });
+    // 截图多选上传（顺序上传避免瞬时并发，逐张追加即时可见）
+    $('gm-shots-btn').addEventListener('click', function () { $('gm-shots-file').click(); });
+    $('gm-shots-file').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        if (!files.length) return;
+        (function next(i) {
+            if (i >= files.length) return;
+            gmUploadImage(files[i], function (result) {
+                if (result.ok) { gmShots.push(result.data.url); gmRenderShots(); }
+                else showToast(result.msg || '截图上传失败');
+                next(i + 1);
+            });
+        })(0);
+    });
+    // 自定义分类收编（回车/逗号即时确认，失焦兜底——保存前 blur 先收编再校验）
+    $('gm-f-tag-custom').addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ',') return;
+        e.preventDefault();
+        gmAddCustomTag();
+    });
+    $('gm-f-tag-custom').addEventListener('blur', function () { gmAddCustomTag(); });
+    // 宣传视频上传（单选顺序上传：按钮态切换 + 进度写入提示行，上传中禁保存防元数据不完整）
+    $('gm-vids-btn').addEventListener('click', function () {
+        if (gmVidUploading) { showToast('视频上传中，请稍候'); return; }
+        $('gm-vids-file').click();
+    });
+    $('gm-vids-file').addEventListener('change', function () {
+        var file = (this.files || [])[0];
+        this.value = '';
+        if (!file) return;
+        if (gmVids.length >= GM_MAX_VIDS) { showToast('最多 ' + GM_MAX_VIDS + ' 个宣传视频'); return; }
+        gmVidUploading = true;
+        $('gm-vids-btn').disabled = true;
+        $('gm-vids-btn').textContent = '上传中…';
+        gmUploadVideo(file, function (result) {
+            gmVidUploading = false;
+            $('gm-vids-btn').disabled = false;
+            $('gm-vids-btn').textContent = '添加视频';
+            $('gm-vids-hint').textContent = GM_VIDS_HINT;
+            if (!result.ok) { showToast(result.msg || '视频上传失败'); return; }
+            gmVids.push(result.url);
+            gmRenderVids();
+            showToast('视频已上传');
+        });
+    });
+    // 版本管理弹窗（上传中禁止关闭，防误触丢进度）
+    $('gm-ver-mask').addEventListener('click', function (e) {
+        if (e.target !== this) return;
+        if (gmUploading) { showToast('上传进行中，请先取消上传'); return; }
+        this.classList.add('hidden');
+    });
+    $('gm-ver-close').addEventListener('click', function () {
+        if (gmUploading) { showToast('上传进行中，请先取消上传'); return; }
+        $('gm-ver-mask').classList.add('hidden');
+    });
+    // 文件选择区
+    $('gm-pick-dir').addEventListener('click', function () { $('gm-file-dir').click(); });
+    $('gm-pick-files').addEventListener('click', function () { $('gm-file-multi').click(); });
+    $('gm-pick-clear').addEventListener('click', function () {
+        if (gmUploading) return;
+        gmFiles = [];
+        gmRenderFiles();
+    });
+    $('gm-file-dir').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        files.forEach(function (f) {
+            var rel = f.webkitRelativePath || f.name;
+            var parts = rel.split('/');
+            if (parts.length > 1) rel = parts.slice(1).join('/'); // 去掉第一段根目录名
+            gmAddFile(f, rel || f.name);
+        });
+        gmRenderFiles();
+    });
+    $('gm-file-multi').addEventListener('change', function () {
+        var files = Array.prototype.slice.call(this.files || []);
+        this.value = '';
+        files.forEach(function (f) { gmAddFile(f, f.name); });
+        gmRenderFiles();
+    });
+    // 上传与取消
+    $('gm-pub-ok').addEventListener('click', function () { gmRunPublish(); });
+    $('gm-pub-cancel').addEventListener('click', function () {
+        if (!gmUploading) return;
+        gmCancelFlag = true;
+        this.textContent = '取消中…';
+        if (gmAbort) { try { gmAbort.abort(); } catch (e) { /* 忽略 */ } } // 即时断开当前分片（幂等可重传）
+    });
+
+    // ===== 商店布局设置（GET/PUT /admin/api/game/config，保存后用户下次打开商店热生效） =====
+    // 设计归口：模板二选一（steam/grid）+ 三区块开关 + 置顶推荐有序列表（≤8，仅上架游戏，
+    // 服务端保存时校验）；候选游戏分页拉全量（100/页，最多 3 页）供点击添加
+    var gmCfg = { layout: 'steam', sections: { carousel: true, featured: true, tagbar: true }, featured: [] };
+    var gmCands = [];        // 可选游戏候选（仅上架，[{id,name,cover}]）
+    var gmCfgLoaded = false; // 已加载过配置（radio/checkbox 默认值只在首次渲染前由 DOM checked 兜底）
+
+    function gmLoadConfig() {
+        api('GET', '/admin/api/game/config').then(function (result) {
+            if (!result.ok) { showToast(result.msg || '商店布局配置加载失败'); return; }
+            var d = result.data || {};
+            gmCfg.layout = d.layout === 'grid' ? 'grid' : 'steam';
+            gmCfg.sections = { carousel: true, featured: true, tagbar: true };
+            var sec = d.sections || {};
+            ['carousel', 'featured', 'tagbar'].forEach(function (k) {
+                if (sec[k] !== undefined) gmCfg.sections[k] = !!sec[k];
+            });
+            gmCfg.featured = (d.featured_games || []).map(function (g) {
+                return { id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' };
+            });
+            gmCfgLoaded = true;
+            gmRenderConfig();
+        });
+        gmLoadCandidates();
+        gmSecLoad();
+    }
+
+    function gmLoadCandidates() {
+        gmCands = [];
+        (function pg(p) {
+            api('GET', '/admin/api/game/list?page=' + p + '&size=100').then(function (result) {
+                if (!result.ok) return;
+                var list = (result.data && result.data.list) || [];
+                list.forEach(function (g) {
+                    if (g && g.status === 0) gmCands.push({ id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' });
+                });
+                var total = (result.data && result.data.total) || 0;
+                if (p * 100 < total && p < 3) pg(p + 1);
+                else gmRenderCands();
+            });
+        })(1);
+    }
+
+    // 渲染设置卡：radio/开关按配置态，置顶列表与候选列表重建
+    function gmRenderConfig() {
+        var radios = document.querySelectorAll('input[name="gm-cfg-layout"]');
+        for (var i = 0; i < radios.length; i++) radios[i].checked = (radios[i].value === gmCfg.layout);
+        $('gm-cfg-carousel').checked = !!gmCfg.sections.carousel;
+        $('gm-cfg-featured').checked = !!gmCfg.sections.featured;
+        $('gm-cfg-tagbar').checked = !!gmCfg.sections.tagbar;
+        gmRenderFeat();
+        gmRenderCands();
+    }
+
+    // 置顶推荐列表：每行封面缩略图+名称+上移/下移/移除
+    function gmRenderFeat() {
+        var host = $('gm-cfg-feat');
+        host.innerHTML = '';
+        if (!gmCfg.featured.length) {
+            host.innerHTML = '<div class="gm-cfg-empty">暂未设置置顶推荐，轮播将回退为下载量前 5</div>';
+            return;
+        }
+        gmCfg.featured.forEach(function (g, i) {
+            var row = document.createElement('div');
+            row.className = 'gm-cfg-feat-row';
+            // 序号（展示顺序）
+            row.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-idx', textContent: String(i + 1) }));
+            // 封面缩略图（缺封面用首字母占位）
+            var th = document.createElement('span');
+            th.className = 'gm-cfg-thumb';
+            if (g.cover) {
+                var im = document.createElement('img');
+                im.src = g.cover;
+                im.onerror = function () { th.textContent = (g.name || '?').charAt(0); };
+                th.appendChild(im);
+            } else {
+                th.textContent = (g.name || '?').charAt(0);
+            }
+            row.appendChild(th);
+            row.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-name', textContent: g.name }));
+            var ops = document.createElement('span');
+            ops.className = 'gm-cfg-ops';
+            [['↑', '上移', i > 0, function () { gmFeatMove(i, -1); }],
+             ['↓', '下移', i < gmCfg.featured.length - 1, function () { gmFeatMove(i, 1); }],
+             ['×', '移除', true, function () { gmCfg.featured.splice(i, 1); gmRenderFeat(); }]]
+                .forEach(function (def) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'gm-cfg-op' + (def[2] ? '' : ' disabled');
+                    b.textContent = def[0];
+                    b.title = def[1];
+                    if (def[2]) b.addEventListener('click', function () { def[3](); });
+                    ops.appendChild(b);
+                });
+            row.appendChild(ops);
+            host.appendChild(row);
+        });
+    }
+
+    function gmFeatMove(i, d) {
+        var t = gmCfg.featured[i];
+        gmCfg.featured[i] = gmCfg.featured[i + d];
+        gmCfg.featured[i + d] = t;
+        gmRenderFeat();
+    }
+
+    // 候选游戏列表：按搜索框过滤（已置顶的标灰禁点）
+    function gmRenderCands() {
+        var host = $('gm-cfg-cands');
+        host.innerHTML = '';
+        var kw = ($('gm-cfg-search').value || '').trim().toLowerCase();
+        var picked = {};
+        gmCfg.featured.forEach(function (g) { picked[g.id] = true; });
+        var shown = 0;
+        gmCands.forEach(function (g) {
+            if (kw && g.name.toLowerCase().indexOf(kw) < 0) return;
+            if (shown >= 50) return; // 候选区最多渲染 50 行，更多请用搜索过滤
+            shown++;
+            var row = document.createElement('div');
+            row.className = 'gm-cfg-feat-row' + (picked[g.id] ? ' picked' : '');
+            row.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-name', textContent: g.name + (picked[g.id] ? '（已添加）' : '') }));
+            row.addEventListener('click', function () {
+                if (picked[g.id]) return;
+                if (gmCfg.featured.length >= 8) { showToast('置顶推荐最多 8 款'); return; }
+                gmCfg.featured.push({ id: g.id, name: g.name, cover: g.cover });
+                gmRenderFeat();
+                gmRenderCands();
+            });
+            host.appendChild(row);
+        });
+        if (!shown) host.innerHTML = '<div class="gm-cfg-empty">无匹配游戏</div>';
+    }
+
+    // 保存：radio/开关读回 DOM 态 → PUT；服务端校验置顶存在性与上架状态
+    $('gm-cfg-save').addEventListener('click', function () {
+        var layout = 'steam';
+        var radios = document.querySelectorAll('input[name="gm-cfg-layout"]');
+        for (var i = 0; i < radios.length; i++) {
+            if (radios[i].checked) layout = radios[i].value;
+        }
+        var body = {
+            layout: layout,
+            sections: {
+                carousel: $('gm-cfg-carousel').checked,
+                featured: $('gm-cfg-featured').checked,
+                tagbar: $('gm-cfg-tagbar').checked
+            },
+            featured: gmCfg.featured.map(function (g) { return g.id; })
+        };
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = '保存中…';
+        api('PUT', '/admin/api/game/config', body).then(function (result) {
+            btn.disabled = false;
+            btn.textContent = '保存布局';
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            var d = result.data || {};
+            gmCfg.layout = d.layout === 'grid' ? 'grid' : 'steam';
+            gmCfg.featured = (d.featured_games || []).map(function (g) {
+                return { id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' };
+            });
+            showToast('商店布局已保存，用户下次打开商店即生效');
+            gmRenderFeat();
+            gmRenderCands();
+        }).catch(function () {
+            btn.disabled = false;
+            btn.textContent = '保存布局';
+            showToast('网络异常');
+        });
+    });
+    $('gm-cfg-search').addEventListener('input', function () { gmRenderCands(); });
+
+    // ===== 推荐区块（多样式并存）：每区块=标题+样式+有序游戏，PUT 整表保存（事务替换） =====
+    var GM_SEC_STYLES = [
+        ['promo', '活动大图轮播（1 大图 + 2 小卡）'],
+        ['capsule', '主图信息面板轮播（精选和推荐同款）'],
+        ['row', '横排卡片流'],
+        ['grid', '网格卡片'],
+        ['list', '榜单列表行']
+    ];
+    var gmSecs = [];
+
+    function gmSecLoad() {
+        api('GET', '/admin/api/game/sections').then(function (result) {
+            if (!result.ok) return;
+            gmSecs = ((result.data && result.data.sections) || []).map(function (s) {
+                return {
+                    title: s.title || '',
+                    style: s.style || 'promo',
+                    _kw: '',
+                    games: (s.games || []).map(function (g) {
+                        return { id: g.id, name: g.name || ('游戏 #' + g.id), cover: g.cover || '' };
+                    })
+                };
+            });
+            gmRenderSecs();
+        });
+    }
+
+    // 渲染全部区块编辑卡（区块头排序/删除 + 标题/样式行 + 游戏 rows + 候选搜索；
+    // 搜索关键词随区块对象暂存 sec._kw，整卡重绘后不丢）
+    function gmRenderSecs() {
+        var host = $('gm-sec-list');
+        host.innerHTML = '';
+        if (!gmSecs.length) {
+            host.innerHTML = '<div class="gm-cfg-empty">暂无推荐区块，点击"添加区块"创建（商店页顶部轮播不受影响）</div>';
+            return;
+        }
+        gmSecs.forEach(function (sec, i) {
+            var block = document.createElement('div');
+            block.className = 'gm-sec-block';
+            // 头部：区块序号 + 上移/下移/删除
+            var head = document.createElement('div');
+            head.className = 'gm-sec-head';
+            head.appendChild(Object.assign(document.createElement('span'), { className: 'gm-sec-head-title', textContent: '区块 ' + (i + 1) }));
+            [['↑', '上移', i > 0, function () { gmSecMove(i, -1); }],
+             ['↓', '下移', i < gmSecs.length - 1, function () { gmSecMove(i, 1); }],
+             ['×', '删除区块', true, function () { gmSecs.splice(i, 1); gmRenderSecs(); }]]
+                .forEach(function (def) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'gm-cfg-op' + (def[2] ? '' : ' disabled');
+                    b.textContent = def[0];
+                    b.title = def[1];
+                    if (def[2]) b.addEventListener('click', function () { def[3](); });
+                    head.appendChild(b);
+                });
+            block.appendChild(head);
+            // 标题输入 + 样式下拉
+            var row2 = document.createElement('div');
+            row2.className = 'gm-sec-row2';
+            var ti = document.createElement('input');
+            ti.type = 'text';
+            ti.className = 'gm-sec-title-input';
+            ti.placeholder = '区块标题（如"折扣与活动"）';
+            ti.value = sec.title;
+            ti.addEventListener('input', function () { sec.title = ti.value; });
+            row2.appendChild(ti);
+            var sel = document.createElement('select');
+            sel.className = 'gm-sec-style-select';
+            GM_SEC_STYLES.forEach(function (st) {
+                var op = document.createElement('option');
+                op.value = st[0];
+                op.textContent = st[1];
+                if (sec.style === st[0]) op.selected = true;
+                sel.appendChild(op);
+            });
+            sel.addEventListener('change', function () { sec.style = sel.value; });
+            row2.appendChild(sel);
+            block.appendChild(row2);
+            // 区块游戏 rows（复用置顶推荐行样式）
+            var list = document.createElement('div');
+            list.className = 'gm-cfg-feat gm-sec-games';
+            if (!sec.games.length) {
+                list.innerHTML = '<div class="gm-cfg-empty">未添加游戏，该区块保存后商店页不显示</div>';
+            }
+            sec.games.forEach(function (g, gi) {
+                var r = document.createElement('div');
+                r.className = 'gm-cfg-feat-row';
+                r.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-idx', textContent: String(gi + 1) }));
+                var th = document.createElement('span');
+                th.className = 'gm-cfg-thumb';
+                if (g.cover) {
+                    var im = document.createElement('img');
+                    im.src = g.cover;
+                    im.onerror = function () { th.textContent = (g.name || '?').charAt(0); };
+                    th.appendChild(im);
+                } else {
+                    th.textContent = (g.name || '?').charAt(0);
+                }
+                r.appendChild(th);
+                r.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-name', textContent: g.name }));
+                var ops = document.createElement('span');
+                ops.className = 'gm-cfg-ops';
+                [['↑', '上移', gi > 0, function () { var t = sec.games[gi]; sec.games[gi] = sec.games[gi - 1]; sec.games[gi - 1] = t; gmRenderSecs(); }],
+                 ['↓', '下移', gi < sec.games.length - 1, function () { var t = sec.games[gi]; sec.games[gi] = sec.games[gi + 1]; sec.games[gi + 1] = t; gmRenderSecs(); }],
+                 ['×', '移除', true, function () { sec.games.splice(gi, 1); gmRenderSecs(); }]]
+                    .forEach(function (def) {
+                        var b = document.createElement('button');
+                        b.type = 'button';
+                        b.className = 'gm-cfg-op' + (def[2] ? '' : ' disabled');
+                        b.textContent = def[0];
+                        b.title = def[1];
+                        if (def[2]) b.addEventListener('click', function () { def[3](); });
+                        ops.appendChild(b);
+                    });
+                r.appendChild(ops);
+                list.appendChild(r);
+            });
+            block.appendChild(list);
+            // 候选搜索与列表（点击添加到本区块）
+            var si = document.createElement('input');
+            si.type = 'text';
+            si.className = 'gm-sec-search';
+            si.placeholder = '按名称筛选游戏并点击添加（仅上架游戏）';
+            si.value = sec._kw || '';
+            si.addEventListener('input', function () { sec._kw = si.value; renderCands(); });
+            block.appendChild(si);
+            var cands = document.createElement('div');
+            cands.className = 'gm-cfg-cands gm-sec-cands';
+            block.appendChild(cands);
+            function renderCands() {
+                cands.innerHTML = '';
+                var kw = (sec._kw || '').trim().toLowerCase();
+                var picked = {};
+                sec.games.forEach(function (g) { picked[g.id] = true; });
+                var shown = 0;
+                gmCands.forEach(function (g) {
+                    if (kw && g.name.toLowerCase().indexOf(kw) < 0) return;
+                    if (shown >= 30) return; // 候选区最多渲染 30 行，更多请用搜索过滤
+                    shown++;
+                    var cr = document.createElement('div');
+                    cr.className = 'gm-cfg-feat-row' + (picked[g.id] ? ' picked' : '');
+                    cr.appendChild(Object.assign(document.createElement('span'), { className: 'gm-cfg-name', textContent: g.name + (picked[g.id] ? '（已添加）' : '') }));
+                    cr.addEventListener('click', function () {
+                        if (picked[g.id]) return;
+                        if (sec.games.length >= 12) { showToast('每区块最多 12 款游戏'); return; }
+                        sec.games.push({ id: g.id, name: g.name, cover: g.cover });
+                        gmRenderSecs();
+                    });
+                    cands.appendChild(cr);
+                });
+                if (!shown) cands.innerHTML = '<div class="gm-cfg-empty">无匹配游戏</div>';
+            }
+            renderCands();
+            host.appendChild(block);
+        });
+    }
+
+    function gmSecMove(i, d) {
+        var t = gmSecs[i];
+        gmSecs[i] = gmSecs[i + d];
+        gmSecs[i + d] = t;
+        gmRenderSecs();
+    }
+
+    $('gm-sec-add').addEventListener('click', function () {
+        if (gmSecs.length >= 8) { showToast('推荐区块最多 8 个'); return; }
+        gmSecs.push({ title: '', style: 'promo', _kw: '', games: [] });
+        gmRenderSecs();
+        var host = $('gm-sec-list');
+        host.scrollTop = host.scrollHeight;
+        var inputs = host.querySelectorAll('.gm-sec-title-input');
+        if (inputs.length) inputs[inputs.length - 1].focus();
+    });
+
+    $('gm-sec-save').addEventListener('click', function () {
+        var body = { sections: gmSecs.map(function (sec) {
+            return { title: (sec.title || '').trim(), style: sec.style, games: sec.games.map(function (g) { return g.id; }) };
+        }) };
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = '保存中…';
+        api('PUT', '/admin/api/game/sections', body).then(function (result) {
+            btn.disabled = false;
+            btn.textContent = '保存区块';
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            showToast('推荐区块已保存，用户下次打开商店即生效');
+            gmSecLoad();
+        }).catch(function () {
+            btn.disabled = false;
+            btn.textContent = '保存区块';
+            showToast('网络异常');
+        });
+    });
+
+    // ===== 启动：已有 Token 直接进主界面（会话失效由 API 统一回登录） =====
+    // 归位说明：启动必须放在 IIFE 末尾——此前位于积分管理区块之前（L2975），带 #gn/#games 等
+    // hash 刷新时 restoreViewFromHash 在此同步触发视图加载，而公告等视图的状态变量声明在其后
+    // 尚未赋值（var 提升值为 undefined），gnLoad 内 gnGames.length 直接 TypeError，IIFE 中断、
+    // 后续全部绑定失效，页面永久卡在"加载中…"（v1.58 起带 #gn 刷新必现）
+    if (getToken()) {
+        enterMain(); // 显示名恢复 + hash 视图原位恢复（无 hash 默认仪表盘），全程无中间态闪烁
+    } else {
+        showLogin();
+    }
 })();

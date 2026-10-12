@@ -13,7 +13,7 @@
     </script>
     <!-- 复用聊天端主题变量体系（--primary/--panel-bg 等，主题色跟随现有设定与明暗切换） -->
     <link rel="stylesheet" href="css/style.css?v=1.52">
-    <link rel="stylesheet" href="css/admin.css?v=1.29">
+    <link rel="stylesheet" href="css/admin.css?v=1.38">
 </head>
 <body>
     <!-- 启动骨架层：脚本编译期间（echarts/admin.js 数百 KB）保持主题背景+spinner，
@@ -50,6 +50,8 @@
                 <button class="admin-nav-item" data-view="mcp">MCP 服务器</button>
                 <button class="admin-nav-item" data-view="mcpplugins">MCP 插件库</button>
                 <button class="admin-nav-item" data-view="toolchains">工具链市场</button>
+                <button class="admin-nav-item" data-view="games">游戏管理</button>
+                <button class="admin-nav-item sub" data-view="gn">游戏公告</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1204,6 +1206,146 @@
                 </table>
             </div>
             </section>
+
+            <!-- 游戏管理（Steam 同款游戏上架运营：元数据维护 + 版本分片上传） -->
+            <section id="admin-view-games" class="admin-view">
+            <header class="admin-view-head">
+                <h2>游戏管理</h2>
+                <span id="gm-status" class="admin-view-tip">加载中…</span>
+            </header>
+            <p class="admin-view-tip">游戏中心运营归口（Steam 同款）：维护游戏元数据与版本安装包。新建游戏先填 slug（即安装目录名，创建后不可修改）；版本经「版本管理」选择整个游戏目录上传——逐文件 SHA-256 校验、8MB 分片直传、登记后客户端商店立即可见。单文件前端上限 2GB（超出请压缩后上传），文件清单上限 5000 项，空文件自动跳过。</p>
+            <!-- 工具条：关键词搜索 + 刷新 + 新建 -->
+            <div class="vec-toolbar">
+                <input type="text" id="gm-search" class="admin-input vec-search-input" placeholder="按名称 / slug 搜索">
+                <button id="gm-refresh" class="admin-btn small">刷新</button>
+                <button id="gm-create" class="admin-btn small primary">新建游戏</button>
+            </div>
+            <!-- 游戏表格 -->
+            <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>封面</th>
+                            <th>名称 / slug</th>
+                            <th>标签</th>
+                            <th>最新版本</th>
+                            <th>大小</th>
+                            <th>积分价格</th>
+                            <th>下载次数</th>
+                            <th>排序</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gm-tbody">
+                        <tr><td colspan="11" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- 分页条 -->
+            <div class="vec-pager">
+                <button id="gm-prev" class="admin-btn small">上一页</button>
+                <span id="gm-page-info" class="admin-view-tip">-</span>
+                <button id="gm-next" class="admin-btn small">下一页</button>
+            </div>
+            <!-- 商店布局设置（Steam 化模板/区块开关/置顶推荐，保存后用户下次打开商店热生效） -->
+            <div class="gm-layout-card">
+                <div class="gm-layout-head">
+                    <span class="gm-pub-title">商店布局设置</span>
+                    <button id="gm-cfg-save" class="admin-btn small primary">保存布局</button>
+                </div>
+                <p class="admin-view-tip">布局模板与区块开关保存后，用户下次打开游戏中心商店页即按新配置渲染（热生效）。置顶推荐最多 8 款，按列表顺序在特色轮播与热门精选中优先展示；已下架游戏不可置顶。</p>
+                <div class="gm-layout-body">
+                    <div class="gm-layout-col">
+                        <div class="gm-cfg-label">布局模板</div>
+                        <label class="gm-cfg-radio"><input type="radio" name="gm-cfg-layout" value="steam"><span>Steam 同款（轮播 + 精选 + 标签条 + 全部游戏）</span></label>
+                        <label class="gm-cfg-radio"><input type="radio" name="gm-cfg-layout" value="grid"><span>经典网格（仅全部游戏网格）</span></label>
+                        <div class="gm-cfg-label">区块开关（仅 Steam 同款布局生效）</div>
+                        <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-carousel"><i></i><span>特色推荐轮播</span></label>
+                        <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-featured"><i></i><span>热门精选卡片流</span></label>
+                        <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-tagbar"><i></i><span>标签筛选条</span></label>
+                    </div>
+                    <div class="gm-layout-col">
+                        <div class="gm-cfg-label">置顶推荐（最多 8 款，按顺序轮播展示，可调整顺序）</div>
+                        <div class="gm-cfg-feat" id="gm-cfg-feat"></div>
+                        <div class="gm-cfg-label">添加游戏（仅上架游戏，点击添加）</div>
+                        <input type="text" id="gm-cfg-search" class="admin-input" placeholder="按名称筛选游戏">
+                        <div class="gm-cfg-cands" id="gm-cfg-cands"></div>
+                    </div>
+                </div>
+            </div>
+            <!-- 推荐区块（Steam 首页多区块同款：每区块=标题+展示样式+有序游戏，商店页多样式并存） -->
+            <div class="gm-layout-card">
+                <div class="gm-layout-head">
+                    <span class="gm-pub-title">推荐区块（多样式并存）</span>
+                    <span>
+                        <button id="gm-sec-add" class="admin-btn small">添加区块</button>
+                        <button id="gm-sec-save" class="admin-btn small primary">保存区块</button>
+                    </span>
+                </div>
+                <p class="admin-view-tip">商店页可同时显示多个样式区块（Steam 首页同款），每区块单独设置标题、展示样式与游戏列表，哪些游戏放进哪个区块由此处配置；区块自上而下按列表顺序渲染在顶部轮播之后。每区块最多 12 款游戏、最多 8 个区块，保存后用户下次打开商店即生效。</p>
+                <div id="gm-sec-list"></div>
+            </div>
+            </section>
+            <!-- 游戏公告管理（游戏管理二级页：表格一行一条，服务端分页+关键词搜索，公告量不限） -->
+            <section id="admin-view-gn" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>游戏公告</h2>
+                    <span id="gn-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">全部游戏公告统一管理：本页发布、按游戏筛选、按标题/内容关键词搜索，每行一条公告。删除后玩家端游戏库该游戏「动态」区立即消失。</p>
+                <!-- 公告发布卡（自游戏管理页移入：发布与管理同页闭环，新公告发布后表格即时可见） -->
+                <div class="gm-np-card">
+                    <div class="gm-np-head">
+                        <span class="gm-pub-title">发布公告</span>
+                    </div>
+                    <p class="admin-view-tip">选择游戏发布运营公告，可不定期持续发布。标题与内容均可空（支持纯图片公告），图片单次最多 9 张且支持 GIF 动图；发布后立即在玩家游戏库该游戏的「动态」区展示。<span id="gm-np-count"></span></p>
+                    <div class="gm-np-body">
+                        <div class="gm-np-form">
+                            <div class="gm-np-row">
+                                <select id="gm-np-game" class="admin-input"></select>
+                                <select id="gm-np-layout" class="admin-input" title="公告卡片布局样式">
+                                    <option value="thumb">横向缩略图（左图右文）</option>
+                                    <option value="grid">图片网格（横排多图）</option>
+                                    <option value="banner">通栏大图（图上文下）</option>
+                                </select>
+                            </div>
+                            <input id="gm-np-title" class="admin-input" placeholder="公告标题（可空，纯图片公告留空）" maxlength="64">
+                            <textarea id="gm-np-content" class="admin-input gm-np-content" rows="3" placeholder="公告内容（支持换行，可空）" maxlength="2000"></textarea>
+                            <div class="gm-np-row">
+                                <button id="gm-np-img-btn" class="admin-btn small" type="button">添加图片</button>
+                                <input type="file" id="gm-np-img-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+                                <span class="admin-field-hint">png/jpg/jpeg/gif/webp（GIF 动图），单张 ≤20MB，最多 9 张</span>
+                            </div>
+                            <div id="gm-np-imgs" class="gm-np-imgs"></div>
+                            <div class="gm-np-row">
+                                <button id="gm-np-publish" class="admin-btn small primary" type="button">发布公告</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="gn-toolbar">
+                    <select id="gn-game" class="admin-input gn-game-sel"><option value="0">全部游戏</option></select>
+                    <input id="gn-kw" class="admin-input gn-kw-input" placeholder="搜索标题 / 内容关键词" maxlength="64">
+                    <button id="gn-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr><th style="width:60px">ID</th><th style="width:150px">游戏</th><th>标题</th><th>内容 / 图片</th><th style="width:60px">图片数</th><th style="width:170px">发布时间</th><th style="width:130px">操作</th></tr>
+                        </thead>
+                        <tbody id="gn-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="gn-pager" class="gm-np-pager hidden">
+                    <button id="gn-pager-prev" class="admin-btn small" type="button">上一页</button>
+                    <span id="gn-page-info" class="gm-np-pager-info">-</span>
+                    <button id="gn-pager-next" class="admin-btn small" type="button">下一页</button>
+                </div>
+            </section>
         </main>
     </div>
 
@@ -1500,12 +1642,151 @@
         </div>
     </div>
 
+    <!-- 游戏编辑弹窗（新建/编辑元数据；封面截图上传回填 URL 预览，全部自绘禁用系统弹窗） -->
+    <div id="gm-edit-mask" class="modal-mask hidden">
+        <div class="modal-box gm-edit-box">
+            <div id="gm-edit-title" class="modal-title">新建游戏</div>
+            <div class="gm-modal-body">
+                <div class="gm-form-row">
+                    <input id="gm-f-name" class="admin-input" placeholder="游戏名称（必填）" maxlength="128">
+                    <input id="gm-f-slug" class="admin-input gm-slug-input" placeholder="slug（小写字母/数字/_/-）" maxlength="64">
+                </div>
+                <input id="gm-f-short" class="admin-input" placeholder="一句话简介（列表卡片展示，可空）" maxlength="255">
+                <textarea id="gm-f-desc" class="admin-input gm-desc-input" rows="4" placeholder="详细介绍（详情页图文混排：正文任意换行，插入的图片单独成行自动展示，支持 GIF 动图；可空）"></textarea>
+                <!-- 图文混排：插入图片行（[img]URL 独立成行协议，详情页渲染为配图块） -->
+                <div class="gm-form-row">
+                    <button id="gm-desc-img-btn" class="admin-btn small" type="button">插入图片</button>
+                    <input id="gm-desc-img-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple hidden>
+                    <span class="admin-field-hint">图片按选择顺序插入到光标处，详情页单独成行展示（png/jpg/jpeg/gif/webp，单张 ≤20MB）</span>
+                </div>
+                <!-- 分类标签：预设胶囊多选 + 自定义补充（保存合并逗号串入 tags，商店标签条/筛选共用） -->
+                <div id="gm-tag-picks" class="gm-tag-picks"></div>
+                <input id="gm-f-tag-custom" class="admin-input" placeholder="自定义分类（回车 / 逗号确认，可空）" maxlength="32">
+                <div class="gm-form-row">
+                    <input id="gm-f-developer" class="admin-input" placeholder="开发商（可空）" maxlength="64">
+                    <input id="gm-f-publisher" class="admin-input" placeholder="发行商（可空）" maxlength="64">
+                </div>
+                <div class="gm-form-row">
+                    <input id="gm-f-price" type="number" step="0.001" min="0" class="admin-input gm-num-input" placeholder="积分价格" value="0" title="用户获取游戏时扣除的积分（0=免费），移出库全额退还">
+                    <input id="gm-f-sort" type="number" class="admin-input gm-num-input" placeholder="排序值（小在前）" value="0">
+                    <select id="gm-f-status" class="admin-input gm-num-input" title="上架后客户端商店可见，下架仅已入库用户可下载">
+                        <option value="0">上架</option>
+                        <option value="1">下架</option>
+                    </select>
+                </div>
+                <span class="admin-field-hint">积分价格：用户从商店获取游戏时从其积分钱包扣除（0=免费），移出游戏库全额退还</span>
+                <!-- 封面行：上传回填 URL 并预览（复用公告封面预览样式） -->
+                <div class="gm-form-row">
+                    <button id="gm-cover-btn" class="admin-btn small" type="button">上传封面</button>
+                    <input type="file" id="gm-cover-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">
+                    <img id="gm-cover-preview" class="ann-cover-preview hidden" alt="封面预览">
+                    <button id="gm-cover-clear" class="admin-btn small hidden" type="button">清除封面</button>
+                </div>
+                <!-- 库横幅行：游戏库页签选中游戏的 hero 大图（Steam 库同款），空回退封面 -->
+                <div class="gm-form-row">
+                    <button id="gm-banner-btn" class="admin-btn small" type="button">上传库横幅</button>
+                    <input type="file" id="gm-banner-file" accept=".png,.jpg,.jpeg,.gif,.webp" class="hidden">
+                    <img id="gm-banner-preview" class="ann-cover-preview hidden" alt="横幅预览">
+                    <button id="gm-banner-clear" class="admin-btn small hidden" type="button">清除横幅</button>
+                    <span class="admin-field-hint">游戏库选中游戏后的顶部大图（横图更佳，可空=用封面）</span>
+                </div>
+                <!-- 截图行：多选上传，缩略图列表可逐张删除 -->
+                <div class="gm-form-row">
+                    <button id="gm-shots-btn" class="admin-btn small" type="button">添加截图</button>
+                    <input type="file" id="gm-shots-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+                    <span class="admin-field-hint">png/jpg/jpeg/gif/webp，单张 ≤20MB，可多选；按选择顺序展示</span>
+                </div>
+                <div id="gm-shots-list" class="gm-shots-list"></div>
+                <!-- 宣传视频行：分片上传（Steam 同款详情页预告片，展示在截图之前） -->
+                <div class="gm-form-row">
+                    <button id="gm-vids-btn" class="admin-btn small" type="button">添加视频</button>
+                    <input type="file" id="gm-vids-file" accept=".mp4,.webm,.mkv,video/mp4,video/webm" class="hidden">
+                    <span id="gm-vids-hint" class="admin-field-hint">mp4/webm/mkv，单个 ≤200MB，最多 8 个</span>
+                </div>
+                <div id="gm-vids-list" class="gm-vids-list"></div>
+            </div>
+            <div class="modal-btns">
+                <button id="gm-edit-cancel" class="modal-btn">取消</button>
+                <button id="gm-edit-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏公告编辑弹窗（公告管理页表格行"编辑"入口：游戏归属/标题/内容/图片均可改，校验同发布） -->
+    <div id="gn-edit-mask" class="modal-mask hidden">
+        <div class="modal-box gn-edit-box">
+            <div class="modal-title">编辑公告</div>
+            <div class="gm-modal-body">
+                <div class="gm-form-row">
+                    <select id="gn-f-game" class="admin-input gn-f-game-sel"></select>
+                    <select id="gn-f-layout" class="admin-input" title="公告卡片布局样式">
+                        <option value="thumb">横向缩略图（左图右文）</option>
+                        <option value="grid">图片网格（横排多图）</option>
+                        <option value="banner">通栏大图（图上文下）</option>
+                    </select>
+                </div>
+                <input id="gn-f-title" class="admin-input" placeholder="公告标题（可空，纯图片公告留空）" maxlength="64">
+                <textarea id="gn-f-content" class="admin-input gm-np-content" rows="4" placeholder="公告内容（支持换行，可空）" maxlength="2000"></textarea>
+                <div class="gm-form-row">
+                    <button id="gn-f-img-btn" class="admin-btn small" type="button">添加图片</button>
+                    <input type="file" id="gn-f-img-file" accept=".png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+                    <span class="admin-field-hint">png/jpg/jpeg/gif/webp，单张 ≤20MB，最多 9 张，支持 GIF 动图</span>
+                </div>
+                <div id="gn-f-imgs" class="gm-np-imgs"></div>
+            </div>
+            <div class="modal-btns">
+                <button id="gn-edit-cancel" class="modal-btn">取消</button>
+                <button id="gn-edit-ok" class="modal-btn primary">保 存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏版本管理弹窗（版本列表 + 上架新版本：目录/多文件选择 + 逐文件 SHA256 与分片上传进度） -->
+    <div id="gm-ver-mask" class="modal-mask hidden">
+        <div class="modal-box gm-ver-box">
+            <div id="gm-ver-title" class="modal-title">版本管理</div>
+            <div class="gm-modal-body">
+                <div class="vec-table-wrap gm-ver-list-wrap">
+                    <table class="vec-table gm-ver-table">
+                        <thead>
+                            <tr><th>版本号</th><th>文件数</th><th>大小</th><th>更新日志</th><th>上传时间</th><th>操作</th></tr>
+                        </thead>
+                        <tbody id="gm-ver-tbody">
+                            <tr><td colspan="6" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="gm-pub-box" class="gm-pub-box">
+                    <div class="gm-pub-title">上架新版本</div>
+                    <input id="gm-pub-version" class="admin-input" placeholder="版本号（必填，如 1.0.0；1-32 字符，禁路径分隔符）" maxlength="32">
+                    <textarea id="gm-pub-changelog" class="admin-input gm-desc-input" rows="2" placeholder="更新日志（客户端详情页展示，可空）"></textarea>
+                    <textarea id="gm-pub-minreq" class="admin-input gm-desc-input" rows="2" placeholder="最低配置要求（可空，如：Win10 / 8GB 内存 / GTX1060）"></textarea>
+                    <div class="gm-form-row">
+                        <button id="gm-pick-dir" class="admin-btn small" type="button">选择游戏目录</button>
+                        <button id="gm-pick-files" class="admin-btn small" type="button">追加文件</button>
+                        <button id="gm-pick-clear" class="admin-btn small" type="button">清空清单</button>
+                        <input type="file" id="gm-file-dir" webkitdirectory multiple class="hidden">
+                        <input type="file" id="gm-file-multi" multiple class="hidden">
+                    </div>
+                    <div class="admin-field-hint">选目录按相对路径登记（自动去掉根目录名），追加文件按文件名登记；同路径重复项与空文件自动跳过；单文件前端上限 2GB。上传期间逐文件计算 SHA-256 并按 8MB 分片直传，请勿关闭窗口。</div>
+                    <div id="gm-file-list" class="gm-file-list"></div>
+                    <div id="gm-file-summary" class="admin-view-tip">未选择文件</div>
+                </div>
+            </div>
+            <div class="modal-btns">
+                <button id="gm-pub-cancel" class="modal-btn hidden" type="button">取消上传</button>
+                <button id="gm-ver-close" class="modal-btn">关 闭</button>
+                <button id="gm-pub-ok" class="modal-btn primary" type="button">开始上传并上架</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast 轻提示 -->
     <div id="admin-toast" class="toast hidden"></div>
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.49"></script>
+    <script src="js/admin.js?v=1.64"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

@@ -316,6 +316,9 @@ func main() {
 	server.RegisterDriveRoutes(srv)
 	// 网盘分享路由（二期：好友/群卡片投递 + 站内链接 /s/<code>，服务端归口校验与零拷贝保存）
 	server.RegisterDriveShareRoutes(srv)
+	// 游戏中心（Steam 同款游戏浏览/下载：用户端商店/库/分文件断点续传下载 + 管理端上架/版本/分片上传归口）
+	server.InitGame(cfg)
+	server.RegisterGameRoutes(srv)
 	// 阶段二百六十一：向日葵同款远程控制路由（设备注册/验证码管理/历史话单；信令面 rc_connect 归 remote.go）
 	server.RegisterRCRoutes(srv, cfg.RC)
 	// DCDN 远程鉴权路由（drive.edge_auth.enabled：公开端点 GET /auth 供阿里云 DCDN 边缘节点

@@ -21,6 +21,50 @@ const webCache = require('./web-cache.js');
 const remoteInput = require('./remote-input.js');
 // 阶段二百六十：自动更新模块（electron-updater；未安装依赖/未打包形态内部静默降级）
 const updater = require('./updater.js');
+// 阶段二百八十一：游戏中心下载管理器（Steam 同款游戏浏览/下载——多任务断点续传/SHA256 校验/进度节流）
+const GameDownloadManager = require('./download-manager.js');
+
+// 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
+// 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
+// 只置 aura 层内部状态（isMinimized() 返回 true 假象），Win32 层 IsIconic 恒 false 窗口不动；
+// 而直接 ShowWindow(SW_MINIMIZE) 实测有效，故经 user32 兜底。主窗口/会议窗最小化同通道受益。
+let _user32Minimize = null; // function(hwndBigInt) → void（惰性初始化，失败保持 null）
+function user32MinimizeOf() {
+    if (_user32Minimize !== null) return _user32Minimize.minimize;
+    _user32Minimize = { minimize: null };
+    try {
+        const koffi = require('koffi');
+        const user32 = koffi.load('user32.dll');
+        const showWindow = user32.func('bool __stdcall ShowWindow(int64 hWnd, int nCmdShow)');
+        _user32Minimize.minimize = function (hwndBuf) {
+            if (!hwndBuf || !hwndBuf.length) return;
+            const hwnd = hwndBuf.length >= 8 ? hwndBuf.readBigInt64LE(0) : BigInt(hwndBuf.readUInt32LE(0));
+            showWindow(hwnd, 6); // SW_MINIMIZE
+        };
+    } catch (err) { /* koffi 未安装/加载失败：保持 null，调用侧跳过兜底 */ }
+    return _user32Minimize.minimize;
+}
+// 窗口最小化归口：先走 Electron minimize（正常窗口即生效），150ms 后经 IsIconic 实判，
+// 未真实最小化才 ShowWindow 兜底（跨线程调用为异步投递，返回值不代表最终状态）
+function winMinimizeReliable(w) {
+    if (!w || w.isDestroyed()) return;
+    w.minimize();
+    setTimeout(function () {
+        if (!w || w.isDestroyed()) return;
+        try {
+            const koffi = require('koffi');
+            const user32 = koffi.load('user32.dll');
+            const isIconic = user32.func('bool __stdcall IsIconic(int64 hWnd)');
+            const buf = w.getNativeWindowHandle();
+            if (!buf || !buf.length) return;
+            const hwnd = buf.length >= 8 ? buf.readBigInt64LE(0) : BigInt(buf.readUInt32LE(0));
+            if (!isIconic(hwnd)) {
+                const minimize = user32MinimizeOf();
+                if (minimize) minimize(buf);
+            }
+        } catch (err) { /* 兜底链路异常不外抛 */ }
+    }, 150);
+}
 
 // 阶段一百六十四：主进程全局异常兜底——未捕获异常/未处理 Promise 拒绝一律记日志，不弹模态框
 // （原实现：Electron 默认对 uncaughtException 弹 showErrorBox 模态对话框。实测 LSP 语言服务器
@@ -159,7 +203,7 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'https://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:2087/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1210,6 +1254,217 @@ ipcMain.handle('image:save', async function (event, data) {
 ipcMain.on('image:need-more', function () {
     if (mainWindow) mainWindow.webContents.send('viewer:need-more');
 });
+
+// ===== 阶段二百八十一：游戏中心（Steam 同款游戏浏览/下载，独立窗口 + 下载管理 + 启动归口） =====
+var gameStoreWin = null; // 游戏中心窗口（单例复用：close 隐藏，重复打开仅 focus，同查看器模式）
+var gameDownloads = new GameDownloadManager(); // 游戏下载管理器实例（模块见 download-manager.js）
+
+function ensureGameStoreWindow() {
+    if (gameStoreWin) return gameStoreWin;
+    gameStoreWin = new BrowserWindow({
+        icon: WIN_ICON,
+        width: 1280,
+        height: 820,
+        minWidth: 960,
+        minHeight: 640,
+        show: false,
+        frame: false, // 无边框：商店页自绘标题栏（与图片查看器/截图编辑器同款承载）
+        backgroundColor: editorWinDark() ? '#111111' : '#f5f5f5', // 跟随主题明暗，加载期不闪异色底
+        title: '游戏中心',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=4'); // v4：P2 商店化（购买块/评测/视频媒体/库页签重构）防远程缓存
+    // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
+    // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
+    var pushGameMaxState = function () {
+        if (!gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('game-win:maximized', gameStoreWin.isMaximized());
+    };
+    gameStoreWin.on('maximize', pushGameMaxState);
+    gameStoreWin.on('unmaximize', pushGameMaxState);
+    gameStoreWin.webContents.on('did-finish-load', pushGameMaxState);
+    gameStoreWin.on('close', function (e) {
+        if (app.isQuitting) return; // 托盘退出流程：放行销毁
+        // 关闭改为隐藏复用：下载进行中隐藏窗口不中断任务（进度经 IPC 持续广播主窗口）
+        if (gameStoreWin.isVisible()) {
+            e.preventDefault();
+            gameStoreWin.hide();
+        }
+    });
+    gameStoreWin.on('closed', function () { gameStoreWin = null; });
+    return gameStoreWin;
+}
+
+// 打开游戏中心：渲染层任意窗口 send 即开（含 isLoading 等待 did-finish-load，同 image:open 写法）
+ipcMain.on('game:openWindow', function () {
+    var win = ensureGameStoreWindow();
+    var show = function () {
+        win.show();
+        win.focus();
+    };
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', show);
+    } else {
+        show();
+    }
+});
+
+// 游戏中心窗最大化/还原切换（无边框窗自绘标题栏按钮，sender 窗口归口）→ 返回切换后是否最大化
+ipcMain.handle('game:win-toggle-maximize', function (e) {
+    var w = BrowserWindow.fromWebContents(e.sender);
+    if (!w || w.isDestroyed()) return false;
+    if (w.isMaximized()) {
+        w.unmaximize();
+    } else {
+        w.maximize();
+    }
+    return w.isMaximized();
+});
+
+// 游戏中心窗最小化（与最大化同构 invoke 通道；内部经 IsIconic 实判 + ShowWindow 兜底）
+ipcMain.handle('game:win-minimize', function (e) {
+    var w = BrowserWindow.fromWebContents(e.sender);
+    winMinimizeReliable(w);
+    return true;
+});
+
+// 下载进度事件转发：manager 已做 500ms 节流（done/error 必发），此处广播全部窗口（主窗口/商店窗均可能订阅）
+gameDownloads.on('progress', function (evt) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send('game-download:progress', evt);
+    }
+});
+
+// 任务全部文件完成：探测安装目录根下唯一 .exe 自动登记启动注册表（用户手动登记过则不覆盖；
+// 0 个或多个 exe 不猜，交商店页 needExe 分支由用户手动选择，符合"禁止猜测"原则）
+gameDownloads.on('done', function (info) {
+    try {
+        if (!info || !info.gameId || !info.installDir) return;
+        var exes = fs.readdirSync(info.installDir).filter(function (n) { return /\.exe$/i.test(n); });
+        if (exes.length !== 1) return;
+        var reg = gameLaunchRegLoad();
+        if (reg[info.gameId]) return;
+        reg[info.gameId] = { installDir: info.installDir, exe: path.join(info.installDir, exes[0]) };
+        gameLaunchRegSave(reg);
+    } catch (e) { /* 探测失败不影响任务完成状态，下次启动可手动登记 */ }
+});
+
+// 下载控制归口：start 注册并立即开始（幂等）/ pause resume cancel 按任务控制 / status 全量摘要。
+// 返回统一 {ok, tasks?/error?}，tasks 携带最新全量摘要供页面直接刷新列表
+ipcMain.handle('game:download', function (event, payload) {
+    try {
+        var action = payload && payload.action;
+        if (action === 'start') {
+            var r = gameDownloads.start(payload);
+            return r.ok ? { ok: true, tasks: gameDownloads.status() } : { ok: false, error: r.error };
+        }
+        if (action === 'pause' || action === 'resume' || action === 'cancel') {
+            var r2 = gameDownloads[action](payload && payload.taskId);
+            return r2.ok ? { ok: true, tasks: gameDownloads.status() } : { ok: false, error: r2.error };
+        }
+        if (action === 'status') return { ok: true, tasks: gameDownloads.status() };
+        return { ok: false, error: '未知操作' };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '下载管理异常' };
+    }
+});
+
+// 选择游戏安装目录（openDirectory + createDirectory，同 p2pfile:pickDir 交互）
+ipcMain.handle('game:choose-install-dir', async function (event) {
+    var win = BrowserWindow.fromWebContents(event.sender);
+    var r = await dialog.showOpenDialog(win, { title: '选择游戏安装目录', properties: ['openDirectory', 'createDirectory'] });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { canceled: true, filePath: '' };
+    return { canceled: false, filePath: r.filePaths[0] };
+});
+
+// 选择游戏主程序 exe（needExe 分支：注册表无记录/记录失效时由用户手动指定）
+ipcMain.handle('game:choose-game-exe', async function (event) {
+    var win = BrowserWindow.fromWebContents(event.sender);
+    var r = await dialog.showOpenDialog(win, {
+        title: '选择游戏主程序',
+        properties: ['openFile'],
+        filters: [{ name: '可执行文件', extensions: ['exe'] }]
+    });
+    if (r.canceled || !r.filePaths || !r.filePaths.length) return { canceled: true, filePath: '' };
+    return { canceled: false, filePath: r.filePaths[0] };
+});
+
+// —— 游戏启动注册表（userData/game-launch.json）：{gameId: {installDir, exe}}，
+// 仅登记经 game:choose-game-exe 手动选择或下载完成自动探测的路径（启动白名单归口，不硬编码路径）——
+var GAME_LAUNCH_REG = path.join(app.getPath('userData'), 'game-launch.json');
+function gameLaunchRegLoad() {
+    try { return JSON.parse(fs.readFileSync(GAME_LAUNCH_REG, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function gameLaunchRegSave(reg) {
+    try {
+        fs.mkdirSync(path.dirname(GAME_LAUNCH_REG), { recursive: true });
+        fs.writeFileSync(GAME_LAUNCH_REG, JSON.stringify(reg, null, 2), 'utf8');
+    } catch (e) { /* 写失败仅影响本次登记，下次可重试 */ }
+}
+
+// 登记游戏主程序路径（商店页 needExe 分支选完 exe 后调用；校验文件存在才落表）
+ipcMain.handle('game:register-exe', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        var exePath = String((data && data.exePath) || '').trim();
+        if (!gameId || !exePath) return { ok: false, error: '参数缺失' };
+        if (!fs.existsSync(exePath)) return { ok: false, error: '所选文件不存在' };
+        var reg = gameLaunchRegLoad();
+        reg[gameId] = { installDir: path.dirname(exePath), exe: exePath };
+        gameLaunchRegSave(reg);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '登记失败' };
+    }
+});
+
+var runningGames = new Map(); // gameId → 子进程（exit 后通知主窗口，页面据 startedAt 统计游玩时长）
+// 启动游戏：读启动注册表归口——无记录时兼容商店页随 launch 传入的 exePath（needExe 分支
+// 选完主程序重试场景：登记后立即启动，避免注册/启动两次往返）；exe 失效同样回退手动选择。
+// spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口
+ipcMain.handle('game:launch', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        var reg = gameLaunchRegLoad();
+        var item = reg[gameId];
+        // needExe 分支重试兼容：页面选完主程序把 exePath 随 launch 传入，存在即登记再启动
+        var passedExe = String((data && data.exePath) || '').trim();
+        if (passedExe && fs.existsSync(passedExe)) {
+            reg[gameId] = { installDir: path.dirname(passedExe), exe: passedExe };
+            gameLaunchRegSave(reg);
+            item = reg[gameId];
+        }
+        if (!item || !item.exe) return { ok: false, needExe: true };
+        if (!fs.existsSync(item.exe)) return { ok: false, needExe: true, error: '游戏主程序不存在，请重新选择' };
+        var cwd = item.installDir || path.dirname(item.exe);
+        var child = spawn(item.exe, [], { cwd: cwd, detached: true, stdio: 'ignore' });
+        var startedAt = Date.now();
+        var info = { gameId: gameId, startedAt: startedAt };
+        child.once('exit', function () {
+            runningGames.delete(gameId);
+            gameExitBroadcast(info);
+        });
+        child.once('error', function () { runningGames.delete(gameId); }); // spawn 失败清理表，避免残留
+        child.unref();
+        runningGames.set(gameId, child);
+        return { ok: true, startedAt: startedAt };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '启动失败' };
+    }
+});
+// 游戏进程退出事件广播全部窗口（商店页订阅结算游玩时长；仅发主窗口会使独立商店窗口收不到）
+// 与 game-download:progress 的全窗口广播同口径
+function gameExitBroadcast(info) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send('game-exit', info);
+    }
+}
 
 // ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====
 // 独立 BrowserWindow 单例复用：freeze/record 模式全屏+screen-saver 置顶展示冻结画面（主窗口保持隐藏，
@@ -2315,8 +2570,7 @@ ipcMain.on('call:share-protect', function (e, on) {
 
 // 阶段一百五十一补丁：会议窗最小化（Electron 无边框窗无系统按钮，页面自绘按钮经此最小化到任务栏）
 ipcMain.on('call:minimize', function (e) {
-    var w = BrowserWindow.fromWebContents(e.sender);
-    if (w && !w.isDestroyed()) w.minimize();
+    winMinimizeReliable(BrowserWindow.fromWebContents(e.sender));
 });
 
 // ===== 阶段一百四十四：会议桌面共享（getDisplayMedia 放行） =====

@@ -5249,10 +5249,12 @@ html.m .m-plus-item:active {
 
 /* ---- 3. 底部导航五入口：聊天/通讯录/AI助手/工作台/我（图标+文字，微信同款） ---- */
 /* 公告/网盘移入个人页；添加好友/主题/退出（nav-bottom 整组）移入个人页与顶栏加号菜单；
-   阶段二百六十二：远程控制同样收口个人页（移动端 rc-view 为 main-chat 内全屏页，无需底栏入口） */
+   阶段二百六十二：远程控制同样收口个人页（移动端 rc-view 为 main-chat 内全屏页，无需底栏入口）；
+   阶段二百八十一：游戏中心为 PC/WEB 独立窗口形态（Capacitor 无 desktop 桥），手机端不展示该入口 */
 html.m .nav-icon[data-tab="announcement"],
 html.m .nav-icon[data-tab="drive"],
 html.m .nav-icon[data-tab="rc"],
+html.m #game-center-btn,
 html.m #rc-panel,
 html.m .nav-bottom {
     display: none;

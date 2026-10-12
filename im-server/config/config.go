@@ -128,6 +128,9 @@ type Config struct {
 	// 网盘配置（百度网盘同款个人云盘：元数据 MySQL + 文件本体经 store.ObjectStore 落 MinIO/本地双后端）
 	Drive DriveConfig `yaml:"drive"`
 
+	// 游戏中心配置（Steam 同款游戏浏览/下载：管理员上架自建游戏库，P1 全免费）
+	Game GameConfig `yaml:"game"`
+
 	// 阶段二百四十一：APP 启动广告图配置（微信启动页同款思路：APK 内置保底图 + 服务端下发可运营广告图；
 	// APP 预下载缓存、下次启动生效。仅 APP 原生层消费，WEB/PC 不涉及）
 	SplashAd SplashAdConfig `yaml:"splash_ad"`
@@ -141,6 +144,22 @@ type CardConfig struct {
 	// Enabled 抓取总开关：true 时纯 URL 文本消息落库后服务端异步抓取 OG 元数据出卡片，
 	// false 时消息保持纯 URL 文本（前端仍做链接化高亮+安全确认，不抓取不出卡片）
 	Enabled bool `yaml:"enabled"`
+}
+
+// GameConfig 游戏中心配置节（Steam 同款游戏浏览/下载，server/game.go + gameadmin.go 归口）
+// 文件本体落本地磁盘 game_data/games/<slug>/<version>/（local_dir 可自定义），
+// 分片临时目录 game_data/tmp_chunks/<upload_id>/，超期由惰性清理归口
+type GameConfig struct {
+	// Enabled 总开关（false 时用户端商店入口隐藏、接口统一拒绝，管理端同步停用）
+	Enabled bool `yaml:"enabled"`
+	// MaxFileSize 单文件大小上限（字节，0=50GB；游戏包单文件可能很大，上限需远超聊天文件）
+	MaxFileSize int64 `yaml:"max_file_size"`
+	// ChunkSize 分片上传单片大小（字节，0=8MB，上限 64MB；单片过大放大失败重传粒度）
+	ChunkSize int64 `yaml:"chunk_size"`
+	// LocalDir 游戏数据根目录（空=exe目录/game_data；相对路径基于 exe 所在目录解析）
+	LocalDir string `yaml:"local_dir"`
+	// VideoMaxSize 商店详情页宣传视频单文件上限（字节，0=200MB；落 WebDir/static/upload/games/videos/）
+	VideoMaxSize int64 `yaml:"video_max_size"`
 }
 
 // SplashAdConfig 阶段二百四十一：APP 启动广告图配置节
@@ -599,6 +618,13 @@ func Default() *Config {
 			// 远程鉴权默认关闭（需 DCDN 控制台配合配置后打开；TTL/限流缺省归口 EdgeAuthConfig 注释）
 			EdgeAuth: EdgeAuthConfig{Enabled: false, TicketTTL: 1800, RateLimit: 500},
 		},
+		// 游戏中心默认参数（默认启用；P1 文件本体落本地磁盘，storage 后端扩展预留）
+		Game: GameConfig{
+			Enabled:      true,
+			MaxFileSize:  50 << 30,  // 单文件上限 50GB（游戏包常见数 GB~数十 GB）
+			ChunkSize:    8 << 20,   // 分片单片 8MB（与网盘大文件链路同量级）
+			VideoMaxSize: 200 << 20, // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
+		},
 	}
 }
 
@@ -802,6 +828,21 @@ func Load() *Config {
 	}
 	if cfg.Drive.LocalDir != "" {
 		cfg.Drive.LocalDir = resolvePath(cfg.Drive.LocalDir)
+	}
+	// 游戏中心配置兜底（单文件上限/单片大小/数据根目录锚定 exe 解析）
+	if cfg.Game.MaxFileSize <= 0 {
+		cfg.Game.MaxFileSize = 50 << 30
+	}
+	if cfg.Game.ChunkSize <= 0 {
+		cfg.Game.ChunkSize = 8 << 20
+	}
+	if cfg.Game.ChunkSize > 64<<20 {
+		cfg.Game.ChunkSize = 64 << 20
+	}
+	if cfg.Game.LocalDir == "" {
+		cfg.Game.LocalDir = filepath.Join(exeDir(), "game_data")
+	} else {
+		cfg.Game.LocalDir = resolvePath(cfg.Game.LocalDir)
 	}
 	return cfg
 }
