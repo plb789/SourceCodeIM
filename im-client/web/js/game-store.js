@@ -574,6 +574,51 @@
         return wrap;
     }
 
+    // 好友正在玩列表（服务端 friends_playing：仅"在线且正在玩本游戏"的好友；离线/心跳过期的已被服务端剔除）
+    function friendsPlaying(g) {
+        return (g && g.friends_playing && g.friends_playing.length) ? g.friends_playing : null;
+    }
+
+    // 好友头像填充（图/首字母占位）：有头像用图，加载失败回退主题色首字母块（与气泡"好友拥有"同款）
+    function fillFriendAvatar(box, f, phCls) {
+        var name = (f && (f.nickname || f.username)) || '?';
+        var ch = String(name).charAt(0).toUpperCase();
+        if (f && f.avatar) {
+            var img = document.createElement('img');
+            img.src = assetUrl(f.avatar);
+            img.loading = 'lazy';
+            img.alt = name;
+            img.onerror = function () {
+                box.innerHTML = '';
+                var ph = el('div', phCls);
+                ph.style.filter = 'hue-rotate(' + hashHue(name) + 'deg)';
+                ph.appendChild(el('b', '', ch));
+                box.appendChild(ph);
+            };
+            box.appendChild(img);
+        } else {
+            var ph2 = el('div', phCls);
+            ph2.style.filter = 'hue-rotate(' + hashHue(name) + 'deg)';
+            ph2.appendChild(el('b', '', ch));
+            box.appendChild(ph2);
+        }
+    }
+
+    // 封面右下角"好友正在玩"头像堆叠标记（Steam 同款）：最多 3 张（绿环压边），超出补 "+N"；
+    // 与悬停气泡"N 名好友正在玩"同源数据（服务端随行下发，零额外请求）
+    function buildFriendsPlaying(g) {
+        var list = friendsPlaying(g);
+        if (!list) return null;
+        var box = el('div', 'gs-fplay');
+        list.slice(0, 3).forEach(function (f) {
+            var av = el('div', 'gs-fplay-av');
+            fillFriendAvatar(av, f, 'gs-fplay-ph');
+            box.appendChild(av);
+        });
+        if (list.length > 3) box.appendChild(el('span', 'gs-fplay-more', '+' + (list.length - 3)));
+        return box;
+    }
+
     function buildCard(g) {
         var card = el('div', 'gs-card');
         card.addEventListener('click', function () { hideHover(); openDetail(g.id); });
@@ -581,6 +626,9 @@
         card.addEventListener('mouseenter', function () { showHover(g, card); });
         card.addEventListener('mouseleave', hideHover);
         var cover = buildCover(g.cover, g.name, 'gs-cover');
+        // 好友正在玩标记（封面右下角头像堆叠，Steam 同款）：与悬停气泡"N 名好友正在玩"同源
+        var fplay = buildFriendsPlaying(g);
+        if (fplay) cover.appendChild(fplay);
         // 入库徽标（in_library 0-4；undefined=未入库不显示）
         if (g.in_library !== undefined && g.in_library !== null) {
             var badge = el('div', 'gs-badge' + (g.in_library === 1 || g.in_library === 4 ? ' hot' : ''),
@@ -630,6 +678,24 @@
     function buildHoverContent(g, opts) {
         hovEl.innerHTML = '';
         hovEl.appendChild(el('div', 'gs-hover-title', g.name || ('游戏 #' + g.id)));
+        // 好友正在玩（Steam 同款：标题下方第一块，绿色圆点 + "N 名好友正在玩" + 头像横排）
+        var fpl = friendsPlaying(g);
+        if (fpl) {
+            var fp = el('div', 'gs-hover-fplay');
+            var fpLabel = el('div', 'gs-hover-fplay-label');
+            fpLabel.appendChild(el('span', 'gs-hover-dot'));
+            fpLabel.appendChild(el('span', '', fpl.length + ' 名好友正在玩'));
+            fp.appendChild(fpLabel);
+            var fpRow = el('div', 'gs-hover-own-avatars');
+            fpl.slice(0, 6).forEach(function (f) {
+                var av = el('div', 'gs-hover-own-av');
+                fillFriendAvatar(av, f, 'gs-hover-own-ph');
+                fpRow.appendChild(av);
+            });
+            if (fpl.length > 6) fpRow.appendChild(el('span', 'gs-hover-own-more', '+' + (fpl.length - 6)));
+            fp.appendChild(fpRow);
+            hovEl.appendChild(fp);
+        }
         // 媒体轮播区（仅库"最近游戏"卡请求：Steam 同款预览，截图/视频混排轮换）
         if (opts && opts.media) {
             var media = buildHoverMedia(g);
@@ -1677,7 +1743,10 @@
                 var lib = it.lib || {};
                 var g = it.game || state.games[lib.game_id] || {};
                 var card = el('div', 'gs-lib-rcard');
-                card.appendChild(buildCover(g.cover, g.name, 'gs-lib-rthumb'));
+                var thumb = buildCover(g.cover, g.name, 'gs-lib-rthumb');
+                var rfp = buildFriendsPlaying(g); // 好友正在玩标记（缩略图右下角，与商店卡同款）
+                if (rfp) thumb.appendChild(rfp);
+                card.appendChild(thumb);
                 var bd = el('div', 'gs-lib-rbody');
                 bd.appendChild(el('div', 'gs-lib-rname', g.name || ('游戏 #' + lib.game_id)));
                 bd.appendChild(el('div', 'gs-lib-rmeta', lib.last_play_at ? '最近游玩 ' + fmtDate(lib.last_play_at) : '尚未游玩'));
@@ -2196,7 +2265,10 @@
             list.forEach(function (x) {
                 if (!x || x.gameId === undefined || x.gameId === null) return;
                 state.running[x.gameId] = x.startedAt || Date.now();
+                // 重启/刷新后重新申明"正在玩"（客户端断开时服务端已摘除 presence，此处补登记）
+                api('POST', '/api/game/play/' + x.gameId, { action: 'start' });
             });
+            if (list.length) ensurePlayHeartbeat();
             refreshViews();
         }).catch(function () { /* 查询失败静默：下次启动/退出事件仍会校正 */ });
     }
@@ -2592,11 +2664,27 @@
         $('gsCardPwCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(pwVal); });
     })();
 
+    // 运行期间"正在玩"心跳：60s 一次复用 action=start（服务端据此刻入/续期 presence，
+    // 好友侧"N 名好友正在玩"据此保持；客户端崩溃/异常退出时服务端 3 个周期后自动收敛）
+    var playHbTimer = null;
+    function ensurePlayHeartbeat() {
+        if (playHbTimer) return;
+        playHbTimer = setInterval(function () {
+            var any = false;
+            for (var gid in state.running) {
+                any = true;
+                api('POST', '/api/game/play/' + gid, { action: 'start' });
+            }
+            if (!any) { clearInterval(playHbTimer); playHbTimer = null; }
+        }, 60000);
+    }
+
     function onLaunched(gid, startedAt) {
         state.sessions[gid] = startedAt || Date.now();
         state.running[gid] = startedAt || Date.now(); // 侧栏行/启动按钮切"运行中"（game-start 广播兜底同口径）
         toast('已启动');
         api('POST', '/api/game/play/' + gid, { action: 'start' });
+        ensurePlayHeartbeat(); // 运行期间保活"正在玩"（好友侧可见）
         refreshViews();
     }
 
@@ -3733,6 +3821,7 @@
             if (gid === undefined || gid === null) return;
             state.running[gid] = (info && info.startedAt) || Date.now();
             if (state.sessions[gid] === undefined) state.sessions[gid] = state.running[gid];
+            ensurePlayHeartbeat(); // 多窗口启动的窗口自身也保活"正在玩"presence
             scheduleRefresh();
         });
     }

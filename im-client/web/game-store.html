@@ -847,6 +847,56 @@
 
         .gs-badge.hot { background: var(--primary); }
 
+        /* 好友正在玩标记（Steam 同款）：封面右下角半叠加头像，绿环压边（主题色关联） */
+        .gs-fplay {
+            position: absolute;
+            right: 6px;
+            bottom: 6px;
+            display: flex;
+            align-items: center;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .gs-fplay-av {
+            width: 26px;
+            height: 26px;
+            border-radius: 3px;
+            overflow: hidden;
+            flex: none;
+            background: var(--panel-bg);
+            border: 2px solid var(--gs-run);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+        }
+
+        .gs-fplay-av + .gs-fplay-av, .gs-fplay-more { margin-left: -8px; }
+
+        .gs-fplay-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-fplay-ph {
+            width: 100%;
+            height: 100%;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-fplay-ph b { font-size: 11px; font-weight: 600; color: var(--bg); }
+
+        .gs-fplay-more {
+            height: 26px;
+            padding: 0 6px;
+            border-radius: 3px;
+            flex: none;
+            display: flex;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: var(--header-bg);
+            border: 2px solid var(--gs-run);
+        }
+
         .gs-card-body { padding: 10px 12px 12px; }
 
         .gs-card-name {
@@ -1088,6 +1138,29 @@
             background: var(--header-bg);
             border: 2px solid var(--divider);
         }
+
+        /* 气泡"N 名好友正在玩"块（Steam 同款位置：标题正下方，绿点 + 头像横排，头像绿环） */
+        .gs-hover-fplay { margin-bottom: 10px; }
+
+        .gs-hover-fplay-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .gs-hover-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex: none;
+            background: var(--gs-run);
+        }
+
+        .gs-hover-fplay .gs-hover-own-av { border-color: var(--gs-run); }
 
         /* ===== 我的游戏库：列表行 ===== */
         .gs-lib-row {
@@ -2040,7 +2113,7 @@
 
         .gs-lib-rcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
 
-        .gs-lib-rthumb { aspect-ratio: 16 / 9; }
+        .gs-lib-rthumb { position: relative; aspect-ratio: 16 / 9; } /* relative：承载"好友正在玩"头像标记定位 */
 
         .gs-lib-rthumb img { width: 100%; height: 100%; object-fit: cover; display: block; } /* 缺约束时竖图按原始尺寸撑破卡片 */
 
@@ -3002,7 +3075,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=45"></script>
+    <script src="js/game-store.js?v=46"></script>
     <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

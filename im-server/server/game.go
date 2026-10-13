@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"im-server/config"
@@ -109,7 +111,7 @@ func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]inter
 				fids = append(fids, id)
 			}
 			revOf := gameReviewAggOf(fids)
-			ownOf := friendOwnersOf(viewer, fids)
+			ownOf, playOf := friendSocialOf(viewer, fids)
 			seen := map[uint]bool{}
 			for _, id := range ids { // 按管理员指定的置顶顺序保序输出，去重兜底
 				if g, ok := byID[id]; ok && !seen[id] {
@@ -120,6 +122,9 @@ func gameStoreConfig(viewer string) (string, map[string]bool, []map[string]inter
 					}
 					if fs, ok2 := ownOf[g.ID]; ok2 {
 						item["friends_own"] = fs
+					}
+					if fs, ok2 := playOf[g.ID]; ok2 {
+						item["friends_playing"] = fs
 					}
 					featured = append(featured, item)
 				}
@@ -180,7 +185,7 @@ func gameSectionList(viewer string) []map[string]interface{} {
 				gids = append(gids, id)
 			}
 			revOf := gameReviewAggOf(gids)
-			ownOf := friendOwnersOf(viewer, gids)
+			ownOf, playOf := friendSocialOf(viewer, gids)
 			seen := map[uint]bool{}
 			for _, id := range ids {
 				if g, ok := byID[id]; ok && !seen[id] {
@@ -191,6 +196,9 @@ func gameSectionList(viewer string) []map[string]interface{} {
 					}
 					if fs, ok2 := ownOf[g.ID]; ok2 {
 						item["friends_own"] = fs
+					}
+					if fs, ok2 := playOf[g.ID]; ok2 {
+						item["friends_playing"] = fs
 					}
 					games = append(games, item)
 				}
@@ -265,6 +273,72 @@ func gameLaunchPassword(secret, username string, gameID uint) string {
 		b.WriteByte(byte('0' + sum[i]%10))
 	}
 	return b.String()
+}
+
+// ===== 好友正在玩（Steam 同款"N 名好友正在玩"） =====
+// 内存 presence 归口：username → 正在运行的 gameID 集合（值为最近一次心跳时刻）。
+// 写入：客户端 /api/game/play/{id} action=start 记入并在运行期间周期心跳续期，action=end 摘除；
+// 用户全部连接断开时 unregister 归口清理（下线即摘，不留幽灵"在线游戏"态）。
+// 读取：按 gamePlayingTTL 新鲜度过滤——客户端崩溃/异常退出（心跳停止）3 个周期后自动收敛
+var (
+	gamePlayMu  sync.RWMutex
+	gamePlaying = map[string]map[uint]time.Time{}
+)
+
+const gamePlayingTTL = 180 * time.Second // 心跳周期 60s，超 3 个周期未续期即判定为残留
+
+// gamePresenceStart 记入/续期"正在玩"（同账号同游戏重复上报幂等，仅刷新心跳时刻）
+func gamePresenceStart(username string, gid uint) {
+	if username == "" || gid == 0 {
+		return
+	}
+	gamePlayMu.Lock()
+	set := gamePlaying[username]
+	if set == nil {
+		set = map[uint]time.Time{}
+		gamePlaying[username] = set
+	}
+	set[gid] = time.Now()
+	gamePlayMu.Unlock()
+}
+
+// gamePresenceEnd 摘除单款游戏的"正在玩"（同账号多款并行时仅移除本款；集合空即删账号键）
+func gamePresenceEnd(username string, gid uint) {
+	if username == "" {
+		return
+	}
+	gamePlayMu.Lock()
+	if set := gamePlaying[username]; set != nil {
+		delete(set, gid)
+		if len(set) == 0 {
+			delete(gamePlaying, username)
+		}
+	}
+	gamePlayMu.Unlock()
+}
+
+// gamePresenceClear 账号整体摘除（最后一条连接断开时归口调用）
+func gamePresenceClear(username string) {
+	if username == "" {
+		return
+	}
+	gamePlayMu.Lock()
+	delete(gamePlaying, username)
+	gamePlayMu.Unlock()
+}
+
+// gamePlayingUsers 仍在新鲜窗口内、正在运行指定游戏的账号（读侧过滤残留；非好友过滤在调用方）
+func gamePlayingUsers(gid uint) []string {
+	deadline := time.Now().Add(-gamePlayingTTL)
+	gamePlayMu.RLock()
+	defer gamePlayMu.RUnlock()
+	out := make([]string, 0, 4)
+	for un, set := range gamePlaying {
+		if t, ok := set[gid]; ok && t.After(deadline) {
+			out = append(out, un)
+		}
+	}
+	return out
 }
 
 // RegisterGameRoutes 游戏中心路由注册（用户端 + 管理端归口一次挂载）
@@ -354,7 +428,7 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 		gids = append(gids, g.ID)
 	}
 	revOf := gameReviewAggOf(gids)
-	ownOf := friendOwnersOf(viewer, gids) // 好友拥有（气泡"N 位好友拥有此游戏"；viewer 为空返回空表零开销）
+	ownOf, playOf := friendSocialOf(viewer, gids) // 好友拥有/正在玩（气泡"N 位好友拥有""N 名好友正在玩"；viewer 为空返回空表零开销）
 	list := make([]map[string]interface{}, 0, len(games))
 	for _, g := range games {
 		item := gameSummary(g)
@@ -368,6 +442,9 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 		}
 		if fs, ok := ownOf[g.ID]; ok {
 			item["friends_own"] = fs
+		}
+		if fs, ok := playOf[g.ID]; ok {
+			item["friends_playing"] = fs
 		}
 		list = append(list, item)
 	}
@@ -409,6 +486,10 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	item := gameSummary(g)
+	// 好友正在玩（Steam 同款详情页"N 名好友正在玩"；仅本款一条归口查询）
+	if _, playOf := friendSocialOf(username, []uint{g.ID}); len(playOf) > 0 {
+		item["friends_playing"] = playOf[g.ID]
+	}
 	item["description"] = g.Description
 	item["versions"] = verList
 	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏确定性派生，仅本人可得；真实登录密码不下发）
@@ -471,10 +552,16 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	list := make([]map[string]interface{}, 0, len(libs))
+	// 好友正在玩（Steam 同款库卡片标记）：本批一次归口（好友集/用户资料各一条 SQL），仅命中游戏下发
+	_, playOf := friendSocialOf(username, ids)
 	for _, l := range libs {
 		g, ok := gameByID[l.GameID]
 		if !ok {
 			continue // 游戏被彻底删除的孤儿条目跳过（管理端删除时已级联清行，此处兜底）
+		}
+		gm := gameSummary(g)
+		if fs, ok := playOf[l.GameID]; ok {
+			gm["friends_playing"] = fs
 		}
 		list = append(list, map[string]interface{}{
 			"lib": map[string]interface{}{
@@ -487,7 +574,7 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 				// 启动参数 {1} 专属密码（按当前账号+本游戏派生；真实登录密码不下发）
 				"launch_password": gameLaunchPassword(s.cfg.Game.LaunchSecret, username, l.GameID),
 			},
-			"game": gameSummary(g),
+			"game": gm,
 		})
 	}
 	adminJSON(w, map[string]interface{}{"list": list})
@@ -822,8 +909,10 @@ func (s *Server) HandleGamePlay(w http.ResponseWriter, r *http.Request) {
 		if req.Seconds > 0 && req.Seconds <= 86400 {
 			updates["play_seconds"] = lib.PlaySeconds + req.Seconds
 		}
+		gamePresenceEnd(username, uint(id)) // 退出即摘除"好友正在玩"标记（读侧另按心跳新鲜度兜底）
 	case "start":
-		// 开始游玩仅刷新最近游玩时间
+		// 开始游玩仅刷新最近游玩时间；同时记入/续期"正在玩"presence（客户端运行期间周期心跳复用本动作）
+		gamePresenceStart(username, uint(id))
 	default:
 		adminFail(w, http.StatusBadRequest, "action 须为 start/end")
 		return
@@ -924,20 +1013,22 @@ func attachReviewSummary(item map[string]interface{}, a revAgg) {
 	item["review_summary"] = gameReviewSummaryText(a.Total, a.Positive)
 }
 
-// friendOwnersOf 好友拥有者聚合（商店悬停气泡卡"N 位好友拥有此游戏"Steam 同款）：
-// viewer 好友集 → 游戏库归属 → 头像/昵称，固定 3 条 SQL 归口（严禁逐游戏/逐好友 N 次查询）；
+// friendSocialOf 好友"拥有 / 正在玩"归口（Steam 同款气泡"N 位好友拥有""N 名好友正在玩"）：
+// viewer 好友集 → 游戏库归属 + 内存 presence 命中 → 头像/昵称，固定 3 条 SQL 归口
+// （严禁逐游戏/逐好友 N 次查询；presence 为内存读取零 SQL）；
 // 隐私口径：仅展示查看者自己的好友，零越权关系链下发；已注销号（status=2）与 viewer 自身剔除；
 // 每游戏最多 24 人（前端展示前 6 头像 + "+N"，防超大盘好友库膨胀载荷）
-func friendOwnersOf(viewer string, gids []uint) map[uint][]map[string]string {
+func friendSocialOf(viewer string, gids []uint) (map[uint][]map[string]string, map[uint][]map[string]string) {
 	ownOf := map[uint][]map[string]string{}
+	playOf := map[uint][]map[string]string{}
 	if viewer == "" || len(gids) == 0 {
-		return ownOf
+		return ownOf, playOf
 	}
 	// 1. 好友集：关系可能仅单向一行存储，user_id/friend_id 任一侧命中即取对方用户名
 	var fs []model.Friend
 	store.DB.Where("user_id = ? OR friend_id = ?", viewer, viewer).Find(&fs)
 	friends := make([]string, 0, len(fs))
-	inSet := map[string]bool{viewer: true} // viewer 自身永不入集
+	inSet := map[string]bool{viewer: true} // viewer 自身永不入集（自己不算"好友正在玩"）
 	for _, f := range fs {
 		other := f.FriendID
 		if other == viewer {
@@ -949,17 +1040,28 @@ func friendOwnersOf(viewer string, gids []uint) map[uint][]map[string]string {
 		}
 	}
 	if len(friends) == 0 {
-		return ownOf
+		return ownOf, playOf
 	}
-	// 2. 好友库归属：两条 IN 条件一条查询覆盖本批全部游戏
+	// 2. 好友库归属：两条 IN 条件一条查询覆盖本批全部游戏（"拥有"）
 	var libs []model.GameLibrary
 	store.DB.Select("username, game_id").Where("username IN ? AND game_id IN ?", friends, gids).Find(&libs)
 	byGame := map[uint][]string{}
 	for _, l := range libs {
 		byGame[l.GameID] = append(byGame[l.GameID], l.Username)
 	}
-	if len(byGame) == 0 {
-		return ownOf
+	// 2.5 好友正在玩：内存 presence × 本批游戏 × 好友集预筛（零 SQL；新鲜度已在 gamePlayingUsers 过滤）
+	playByGame := map[uint][]string{}
+	playing := 0
+	for _, gid := range gids {
+		for _, un := range gamePlayingUsers(gid) {
+			if inSet[un] {
+				playByGame[gid] = append(playByGame[gid], un)
+				playing++
+			}
+		}
+	}
+	if len(byGame) == 0 && playing == 0 {
+		return ownOf, playOf
 	}
 	// 3. 头像/昵称批量取（排除已注销；展示名昵称优先回退用户名）
 	type uInfo struct {
@@ -974,27 +1076,35 @@ func friendOwnersOf(viewer string, gids []uint) map[uint][]map[string]string {
 	for _, u := range us {
 		info[u.Username] = u
 	}
-	for gid, unames := range byGame {
-		owns := make([]map[string]string, 0, len(unames))
+	build := func(unames []string) []map[string]string {
+		out := make([]map[string]string, 0, len(unames))
 		for _, un := range unames {
 			u, ok := info[un]
-			if !ok { // 已注销好友不下发（拥有状态对查看者不可见）
+			if !ok { // 已注销好友不下发（拥有/在玩状态对查看者不可见）
 				continue
 			}
 			name := u.Nickname
 			if name == "" {
 				name = u.Username
 			}
-			owns = append(owns, map[string]string{"username": un, "avatar": u.Avatar, "nickname": name})
-			if len(owns) >= 24 {
+			out = append(out, map[string]string{"username": un, "avatar": u.Avatar, "nickname": name})
+			if len(out) >= 24 {
 				break
 			}
 		}
-		if len(owns) > 0 {
+		return out
+	}
+	for gid, unames := range byGame {
+		if owns := build(unames); len(owns) > 0 {
 			ownOf[gid] = owns
 		}
 	}
-	return ownOf
+	for gid, unames := range playByGame {
+		if sets := build(unames); len(sets) > 0 {
+			playOf[gid] = sets
+		}
+	}
+	return ownOf, playOf
 }
 
 // HandleGameReviews 评测列表 + 汇总（公开浏览：未登录 username 可缺省，仅 liked 需要身份）。

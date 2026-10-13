@@ -183,8 +183,10 @@ func (s *Server) unregister(c *Client) {
 		return
 	}
 
-	// 最后一个连接断开：删除 Redis 在线缓存
+	// 最后一条连接断开：删除 Redis 在线缓存
 	store.RDB.Del(context.Background(), store.KeyOnlineUser+c.username)
+	// 游戏"正在玩"presence 归口清理（下线即摘除，不留幽灵"好友正在玩"标记；与好友拥有口径一致）
+	gamePresenceClear(c.username)
 
 	// 5号帧热点修复：下线通知不再单独全员广播（原每事件 O(N)，churn 风暴热点），
 	// 并入 93 增量帧 1s 窗口聚合广播——好友在线态与会话上下线提示由前端增量处理器统一维护
