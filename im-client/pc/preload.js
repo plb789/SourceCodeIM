@@ -989,9 +989,11 @@ contextBridge.exposeInMainWorld('desktop', {
     // 订阅云存档同步进度（主进程 500ms 节流；文件切换与终态必发）
     // 负载：{gameId,mode,phase,fileRelPath,fileIndex,filesCount,bytesDone,bytesTotal,percent}
     onGameSaveProgress: function (cb) {
-        if (typeof cb === 'function') ipcRenderer.on('game-save:progress', function (event, data) {
-            cb(data);
-        });
+        if (typeof cb !== 'function') return function () { };
+        var handler = function (event, data) { cb(data); };
+        ipcRenderer.on('game-save:progress', handler);
+        // 返回取消订阅函数：重复调用不再叠加监听（避免同一回调被多次触发）
+        return function () { ipcRenderer.removeListener('game-save:progress', handler); };
     },
     // 云端版本历史（P2）payload={gameId,username,slot} → Promise<{ok,exists,current_revision,revisions:[...]}>
     gameSaveHistory: function (payload) {

@@ -174,7 +174,10 @@ type GameConfig struct {
 
 // GameSaveConfig 云存档配置节（P1 单设备闭环；server/gamesave.go 归口）
 type GameSaveConfig struct {
-	// Enabled 云存档总开关（false 时用户端云存档接口统一拒绝）
+	// Enabled 云存档总开关（false 时用户端云存档接口统一拒绝）。
+	// 缺省由 config.Default() 预置 true：config.yaml 未含 save 节时仍默认启用
+	// （yaml.v3 只覆盖文件中出现的键，不会把未出现的键清零）；
+	// 仅当配置文件显式写 enabled: false 才关闭——避免旧配置升级后云存档静默停用
 	Enabled bool `yaml:"enabled"`
 	// MaxFileSize 单存档文件上限（字节，0=50MB）
 	MaxFileSize int64 `yaml:"max_file_size"`
@@ -647,6 +650,9 @@ func Default() *Config {
 			ChunkSize:    8 << 20,                 // 分片单片 8MB（与网盘大文件链路同量级）
 			VideoMaxSize: 200 << 20,               // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
 			LaunchSecret: "im-game-launch-secret", // 启动参数专属密码派生密钥（生产建议在 config.yaml 覆写）
+			// 云存档默认启用：config.yaml 缺 save 节（旧配置升级）时仍可用；
+			// 显式 enabled: false 才会关闭（yaml.v3 仅覆盖文件中出现的键）
+			Save: GameSaveConfig{Enabled: true},
 		},
 	}
 }

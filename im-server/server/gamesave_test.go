@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -412,4 +413,134 @@ func TestGameSaveP2RetentionRollbackSlots(t *testing.T) {
 	if !found["default"] || !found["bk1"] {
 		t.Fatalf("槽位应含 default 与 bk1：%+v", slotRes.Slots)
 	}
+}
+
+// ===== 阶段二百九十一：共享 sha 覆盖上传 + 并发覆盖（① 修复 + save 组互斥锁）回归测试 =====
+
+// gsRaw 无 t.Fatalf 的请求（可在并发 goroutine 中安全调用，错误回传由主 goroutine 断言）
+func gsRaw(method, fullURL string, body []byte, ctype string) (int, []byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, fullURL, rdr)
+	if err != nil {
+		return 0, nil, err
+	}
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b, nil
+}
+
+func TestGameSaveSharedShaOverwrite(t *testing.T) {
+	cfg := config.Load()
+	if !cfg.Game.Enabled || !cfg.Game.Save.Enabled {
+		t.Skip("游戏中心或云存档未启用，跳过")
+	}
+	if err := store.InitDriveStore(cfg); err != nil {
+		t.Skipf("对象存储不可用，跳过：%v", err)
+	}
+	InitGame(cfg)
+	s := NewServer(cfg)
+	gsEnsureRoutes(s)
+	ts := httptest.NewServer(http.DefaultServeMux)
+	defer ts.Close()
+
+	gsCleanup()
+	if err := store.DB.Create(&model.GameLibrary{Username: gsTestUser, GameID: gsTestGid, State: 3}).Error; err != nil {
+		t.Fatalf("预置游戏库失败：%v", err)
+	}
+	defer gsCleanup()
+
+	gidStr := strconv.Itoa(gsTestGid)
+	relA, relB := "0/a.sav", "0/b.sav"
+	x := []byte("shared-content-跨rel_path同内容")
+	y := []byte("overwrite-A-new-content-A的覆盖内容")
+	ya := []byte("concurrent-A-content-并发甲")
+	yb := []byte("concurrent-B-content-并发乙")
+	shaOf := func(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+	byRel := func(man gsManifest) map[string]uint {
+		m := map[string]uint{}
+		for _, f := range man.Files {
+			m[f.RelPath] = f.ID
+		}
+		return m
+	}
+	dlEq := func(rel string, want []byte, ids map[string]uint) {
+		t.Helper()
+		id, ok := ids[rel]
+		if !ok {
+			t.Fatalf("清单缺少 %s：%+v", rel, ids)
+		}
+		st, dl := gsDo(t, "GET", ts.URL+"/api/game/save/download/"+strconv.Itoa(int(id))+"?username="+gsTestUser, nil, "")
+		if st != 200 || !bytes.Equal(dl, want) {
+			t.Fatalf("%s 下载不一致（status=%d）：%q", rel, st, dl)
+		}
+	}
+
+	// 1) 两条 rel_path 上传同内容 → 共享同一内容寻址对象（不定稿，纯存活行判据）
+	gsUpload(t, ts.URL, gsTestUser, gsTestGid, "", relA, x)
+	gsUpload(t, ts.URL, gsTestUser, gsTestGid, "", relB, x)
+
+	// 2) 仅覆盖 A（B 仍引用旧 sha x）——修复前会误删共享对象使 B 下载 404
+	gsUpload(t, ts.URL, gsTestUser, gsTestGid, "", relA, y)
+	man := gsManifestOf(t, ts.URL, gsTestUser, gsTestGid)
+	if len(man.Files) != 2 {
+		t.Fatalf("应有 2 个文件行：%+v", man)
+	}
+	gotSHA := map[string]string{}
+	for _, f := range man.Files {
+		gotSHA[f.RelPath] = f.SHA256
+	}
+	if gotSHA[relA] != shaOf(y) || gotSHA[relB] != shaOf(x) {
+		t.Fatalf("覆盖后 sha 不符：A=%s(期望%s) B=%s(期望%s)", gotSHA[relA], shaOf(y), gotSHA[relB], shaOf(x))
+	}
+	ids := byRel(man)
+	dlEq(relA, y, ids) // A 覆盖后的新内容可用
+	dlEq(relB, x, ids) // B 的旧内容对象未被误删
+
+	// 3) 复原 A 为 x（与 B 重新共享），并发覆盖 A/B 为不同内容 → 结果须一致无损坏
+	gsUpload(t, ts.URL, gsTestUser, gsTestGid, "", relA, x)
+	up := func(rel string, c []byte) error {
+		q := url.Values{}
+		q.Set("username", gsTestUser)
+		q.Set("slot", "")
+		q.Set("rel_path", rel)
+		q.Set("sha256", shaOf(c))
+		q.Set("size", strconv.Itoa(len(c)))
+		st, body, err := gsRaw("POST", ts.URL+"/api/game/save/file/"+gidStr+"?"+q.Encode(), c, "application/octet-stream")
+		if err != nil {
+			return err
+		}
+		if st < 200 || st >= 300 {
+			return fmt.Errorf("HTTP %d %s", st, body)
+		}
+		return nil
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs <- up(relA, ya) }()
+	go func() { defer wg.Done(); errs <- up(relB, yb) }()
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		if e != nil {
+			t.Fatalf("并发上传失败：%v", e)
+		}
+	}
+	man2 := gsManifestOf(t, ts.URL, gsTestUser, gsTestGid)
+	if len(man2.Files) != 2 {
+		t.Fatalf("并发覆盖后应有 2 个文件行：%+v", man2)
+	}
+	ids2 := byRel(man2)
+	dlEq(relA, ya, ids2)
+	dlEq(relB, yb, ids2)
 }

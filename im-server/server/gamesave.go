@@ -14,9 +14,11 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"os"
@@ -24,10 +26,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"im-server/model"
 	"im-server/store"
+
+	"gorm.io/gorm"
 )
 
 const (
@@ -39,6 +44,30 @@ const (
 
 // gameSaveSlotRe slot 白名单（字母/数字/下划线/中划线，1-32 位；避免落入 ObjectKey 路径穿越）
 var gameSaveSlotRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
+// ===== 云存档并发串行化（阶段二百九十一） =====
+// 对象存储 key 为内容寻址（game_saves/<user>/<game>/<slot>/<sha>），同内容的多 rel_path 共享同一对象；
+// 上传覆盖/定稿/回滚/删除均需「读旧行 → 写对象 → 判定 → 删旧对象 → 更新行」原子完成，
+// 否则并发下会误删他行共享的对象（下载 404）或双方各保留导致孤儿对象泄漏。
+// 归口：按 (username, game_id, slot) 分片加互斥锁——固定 gameSaveLockStripes 把，哈希取模，
+// O(1) 内存、无需清理；同组必得同一把，不同组极少碰撞（碰撞仅轻微串行，语义仍正确）。
+// 1024 把分片锁（2 的幂，哈希取模分布均匀；1024×8B≈8KB 内存，可忽略；分片越多碰撞越少）
+const gameSaveLockStripes = 1024
+
+var gameSaveLocks [gameSaveLockStripes]sync.Mutex
+
+// gameSaveLockFor 返回该存档组对应的互斥锁（同一存档组必得同一把）
+func gameSaveLockFor(username string, gameID uint, slot string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(username))
+	_, _ = h.Write([]byte{0})
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(gameID))
+	_, _ = h.Write(b[:])
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(slot))
+	return &gameSaveLocks[h.Sum32()%gameSaveLockStripes]
+}
 
 // gameSaveEnabled 云存档开关归口（游戏中心未启用或云存档未启用时接口统一拒绝）
 func (s *Server) gameSaveEnabled(w http.ResponseWriter) bool {
@@ -189,16 +218,20 @@ func (s *Server) gameSaveCascadePurge(gameID uint, username string) int {
 	var saves []model.GameSave
 	q.Find(&saves)
 	for _, sv := range saves {
+		lk := gameSaveLockFor(sv.Username, sv.GameID, sv.Slot)
+		lk.Lock()
 		s.gameSaveDropOne(sv)
+		lk.Unlock()
 	}
 	return len(saves)
 }
 
-// gameSavePruneRevisions 裁剪超出保留数的旧修订，返回「仅被被裁剪修订引用」的 sha 列表（供对象 GC）
-func (s *Server) gameSavePruneRevisions(saveID uint) []string {
+// gameSavePruneRevisions 裁剪超出保留数的旧修订（在事务句柄 db 上执行），
+// 返回「仅被被裁剪修订引用」的 sha 列表（供对象 GC）
+func (s *Server) gameSavePruneRevisions(db *gorm.DB, saveID uint) []string {
 	keep := s.gameSaveRetention()
 	var revs []model.GameSaveRev
-	store.DB.Where("save_id = ?", saveID).Order("revision DESC").Find(&revs)
+	db.Where("save_id = ?", saveID).Order("revision DESC").Find(&revs)
 	if len(revs) <= keep {
 		return nil
 	}
@@ -210,7 +243,7 @@ func (s *Server) gameSavePruneRevisions(saveID uint) []string {
 		}
 	}
 	var liveShas []string
-	store.DB.Model(&model.GameSaveFile{}).Where("save_id = ?", saveID).Pluck("sha256", &liveShas)
+	db.Model(&model.GameSaveFile{}).Where("save_id = ?", saveID).Pluck("sha256", &liveShas)
 	for _, sh := range liveShas {
 		ref[sh] = true
 	}
@@ -221,7 +254,7 @@ func (s *Server) gameSavePruneRevisions(saveID uint) []string {
 				drop[f.SHA256] = true
 			}
 		}
-		store.DB.Delete(&model.GameSaveRev{}, revs[i].ID)
+		db.Delete(&model.GameSaveRev{}, revs[i].ID)
 	}
 	out := make([]string, 0, len(drop))
 	for sh := range drop {
@@ -230,41 +263,44 @@ func (s *Server) gameSavePruneRevisions(saveID uint) []string {
 	return out
 }
 
-// gameSaveGCObjects 清理不再被任何引用（存活清单 ∪ 保留修订快照）指向的对象
-// 候选来源：本次被移除的清单行 + 被裁剪修订独享的 sha（candidates 已去重语义见调用方）
-func (s *Server) gameSaveGCObjects(save model.GameSave, removed []model.GameSaveFile, candidateShas []string) {
-	st := store.GetObjectStore()
-	if st == nil {
-		return
-	}
+// gameSaveGCObjects 在事务句柄 db 上按最新视图计算「不再被任何引用（存活清单 ∪ 剩余修订快照）指向」的
+// 对象 key 列表，交由调用方在事务提交后删除。对象存储在 DB 之外、不能纳入事务，故提交后才删：
+// 这样若事务回滚则不会有对象被提前删除（避免回滚后指向已删对象的损坏），失败仅留可回收孤儿。
+// 候选来源：本次被移除的清单行 + 被裁剪修订独享的 sha
+func (s *Server) gameSaveGCObjects(db *gorm.DB, save model.GameSave, removed []model.GameSaveFile, candidateShas []string) []string {
 	ref := map[string]bool{}
 	var liveShas []string
-	store.DB.Model(&model.GameSaveFile{}).Where("save_id = ?", save.ID).Pluck("sha256", &liveShas)
+	db.Model(&model.GameSaveFile{}).Where("save_id = ?", save.ID).Pluck("sha256", &liveShas)
 	for _, sh := range liveShas {
 		ref[sh] = true
 	}
 	var revs []model.GameSaveRev
-	store.DB.Where("save_id = ?", save.ID).Find(&revs)
+	db.Where("save_id = ?", save.ID).Find(&revs)
 	for _, r := range revs {
 		for _, f := range gameSaveParseSnapshot(r.Files) {
 			ref[f.SHA256] = true
 		}
 	}
-	for _, f := range removed {
-		if f.SHA256 != "" && !ref[f.SHA256] {
-			_ = st.Delete(gameSaveObjectKey(save.Username, save.GameID, save.Slot, f.SHA256))
+	var keys []string
+	add := func(sha string) {
+		if sha != "" && !ref[sha] {
+			keys = append(keys, gameSaveObjectKey(save.Username, save.GameID, save.Slot, sha))
 		}
+	}
+	for _, f := range removed {
+		add(f.SHA256)
 	}
 	for _, sh := range candidateShas {
-		if sh != "" && !ref[sh] {
-			_ = st.Delete(gameSaveObjectKey(save.Username, save.GameID, save.Slot, sh))
-		}
+		add(sh)
 	}
+	return keys
 }
 
-// gameSaveCommit 以 desired 快照为准重建该 save 的当前清单：校验对象可用 → 增删改清单行 →
-// 落新修订快照（revision+1）→ 裁剪旧修订 → 更新主行统计 → GC 失效对象。返回新修订号。
-// 上传端与之解耦：上传仅落清单行，定稿/回滚才提交（保证每次提交都是一个完整可回滚的版本）
+// gameSaveCommit 以 desired 快照为准重建该 save 的当前清单：校验对象可用 → 事务内 增删改清单行 →
+// 落新修订快照（revision+1）→ 裁剪旧修订 → 更新主行统计 → 计算待回收对象 → 提交 → 删除对象。返回新修订号。
+// 上传端与之解耦：上传仅落清单行，定稿/回滚才提交（保证每次提交都是一个完整可回滚的版本）。
+// 事务保证中途任一步失败都不会留下「清单与修订不一致」的中间态；对象删除在提交后进行，
+// 事务回滚时不会提前删对象（避免回滚后指向已删对象的损坏）
 func (s *Server) gameSaveCommit(save model.GameSave, desired []gameSaveSnapshotFile) (int64, error) {
 	st := store.GetObjectStore()
 	if st != nil {
@@ -276,48 +312,74 @@ func (s *Server) gameSaveCommit(save model.GameSave, desired []gameSaveSnapshotF
 			rc.Close()
 		}
 	}
-	var live []model.GameSaveFile
-	store.DB.Where("save_id = ?", save.ID).Find(&live)
-	liveByRel := map[string]model.GameSaveFile{}
-	for _, f := range live {
-		liveByRel[f.RelPath] = f
-	}
-	want := map[string]bool{}
-	for _, d := range desired {
-		want[d.RelPath] = true
-	}
-	var removed []model.GameSaveFile
-	for _, f := range live {
-		if !want[f.RelPath] {
-			removed = append(removed, f)
-			store.DB.Delete(&model.GameSaveFile{}, f.ID)
+	var newRev int64
+	var gcKeys []string
+	err := store.DB.Transaction(func(tx *gorm.DB) error {
+		var live []model.GameSaveFile
+		tx.Where("save_id = ?", save.ID).Find(&live)
+		liveByRel := map[string]model.GameSaveFile{}
+		for _, f := range live {
+			liveByRel[f.RelPath] = f
 		}
-	}
-	for _, d := range desired {
-		key := gameSaveObjectKey(save.Username, save.GameID, save.Slot, d.SHA256)
-		if old, ok := liveByRel[d.RelPath]; ok {
-			if old.SHA256 != d.SHA256 || old.SizeBytes != d.Size {
-				store.DB.Model(&old).Updates(map[string]interface{}{
-					"size_bytes": d.Size, "sha256": d.SHA256, "object_key": key,
-				})
+		want := map[string]bool{}
+		for _, d := range desired {
+			want[d.RelPath] = true
+		}
+		var removed []model.GameSaveFile
+		for _, f := range live {
+			if !want[f.RelPath] {
+				removed = append(removed, f)
+				if err := tx.Delete(&model.GameSaveFile{}, f.ID).Error; err != nil {
+					return err
+				}
+			}
+		}
+		for _, d := range desired {
+			key := gameSaveObjectKey(save.Username, save.GameID, save.Slot, d.SHA256)
+			if old, ok := liveByRel[d.RelPath]; ok {
+				if old.SHA256 != d.SHA256 || old.SizeBytes != d.Size {
+					if err := tx.Model(&old).Updates(map[string]interface{}{
+						"size_bytes": d.Size, "sha256": d.SHA256, "object_key": key,
+					}).Error; err != nil {
+						return err
+					}
+				}
+			} else {
+				if err := tx.Create(&model.GameSaveFile{SaveID: save.ID, RelPath: d.RelPath, SizeBytes: d.Size, SHA256: d.SHA256, ObjectKey: key}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		var after []model.GameSaveFile
+		tx.Where("save_id = ?", save.ID).Order("rel_path ASC").Find(&after)
+		snapJSON, totalSize, fileCount := gameSaveSnapshotOf(after)
+		newRev = save.Revision + 1
+		var revRow model.GameSaveRev
+		if err := tx.Where("save_id = ? AND revision = ?", save.ID, newRev).First(&revRow).Error; err == nil {
+			if err := tx.Model(&revRow).Updates(map[string]interface{}{"total_size": totalSize, "file_count": fileCount, "files": snapJSON}).Error; err != nil {
+				return err
 			}
 		} else {
-			store.DB.Create(&model.GameSaveFile{SaveID: save.ID, RelPath: d.RelPath, SizeBytes: d.Size, SHA256: d.SHA256, ObjectKey: key})
+			if err := tx.Create(&model.GameSaveRev{SaveID: save.ID, Revision: newRev, TotalSize: totalSize, FileCount: fileCount, Files: snapJSON}).Error; err != nil {
+				return err
+			}
+		}
+		pruned := s.gameSavePruneRevisions(tx, save.ID)
+		if err := tx.Model(&save).Updates(map[string]interface{}{"revision": newRev, "total_size": totalSize, "file_count": fileCount}).Error; err != nil {
+			return err
+		}
+		gcKeys = s.gameSaveGCObjects(tx, save, removed, pruned)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	// 事务已提交，再删对象（对象存储不参与 DB 事务；失败仅留可再回收孤儿，不影响一致性）
+	if st != nil {
+		for _, k := range gcKeys {
+			_ = st.Delete(k)
 		}
 	}
-	var after []model.GameSaveFile
-	store.DB.Where("save_id = ?", save.ID).Order("rel_path ASC").Find(&after)
-	snapJSON, totalSize, fileCount := gameSaveSnapshotOf(after)
-	newRev := save.Revision + 1
-	var revRow model.GameSaveRev
-	if err := store.DB.Where("save_id = ? AND revision = ?", save.ID, newRev).First(&revRow).Error; err == nil {
-		store.DB.Model(&revRow).Updates(map[string]interface{}{"total_size": totalSize, "file_count": fileCount, "files": snapJSON})
-	} else {
-		store.DB.Create(&model.GameSaveRev{SaveID: save.ID, Revision: newRev, TotalSize: totalSize, FileCount: fileCount, Files: snapJSON})
-	}
-	pruned := s.gameSavePruneRevisions(save.ID)
-	store.DB.Model(&save).Updates(map[string]interface{}{"revision": newRev, "total_size": totalSize, "file_count": fileCount})
-	s.gameSaveGCObjects(save, removed, pruned)
 	return newRev, nil
 }
 
@@ -460,6 +522,10 @@ func (s *Server) HandleGameSaveFileUpload(w http.ResponseWriter, r *http.Request
 		adminFail(w, http.StatusBadRequest, "文件 SHA256 校验不一致")
 		return
 	}
+	// 存档组互斥：覆盖上传的「读旧行→写对象→判定→删旧对象→更新行」必须原子，防并发误删共享对象
+	saveLock := gameSaveLockFor(username, gid, slot)
+	saveLock.Lock()
+	defer saveLock.Unlock()
 	// 找到或创建存档主行
 	var save model.GameSave
 	if err := store.DB.Where("username = ? AND game_id = ? AND slot = ?", username, gid, slot).First(&save).Error; err != nil {
@@ -545,6 +611,10 @@ func (s *Server) HandleGameSaveFinalize(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	// 存档组互斥：定稿（重建清单→裁修订→GC 对象）与上传/回滚/删除串行化
+	saveLock := gameSaveLockFor(username, gid, slot)
+	saveLock.Lock()
+	defer saveLock.Unlock()
 	var save model.GameSave
 	if err := store.DB.Where("username = ? AND game_id = ? AND slot = ?", username, gid, slot).First(&save).Error; err != nil {
 		adminFail(w, http.StatusNotFound, "云存档不存在")
@@ -634,6 +704,10 @@ func (s *Server) HandleGameSaveDelete(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusBadRequest, "slot 非法")
 		return
 	}
+	// 存档组互斥：删除（清对象+行）与上传/定稿/回滚串行化
+	saveLock := gameSaveLockFor(username, gid, slot)
+	saveLock.Lock()
+	defer saveLock.Unlock()
 	var save model.GameSave
 	if err := store.DB.Where("username = ? AND game_id = ? AND slot = ?", username, gid, slot).First(&save).Error; err != nil {
 		adminJSON(w, map[string]interface{}{"ok": true}) // 幂等：不存在视为已删除
@@ -702,6 +776,10 @@ func (s *Server) HandleGameSaveRollback(w http.ResponseWriter, r *http.Request) 
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	// 存档组互斥：回滚（以历史快照重建清单）与上传/定稿/删除串行化
+	saveLock := gameSaveLockFor(username, gid, slot)
+	saveLock.Lock()
+	defer saveLock.Unlock()
 	var save model.GameSave
 	if err := store.DB.Where("username = ? AND game_id = ? AND slot = ?", username, gid, slot).First(&save).Error; err != nil {
 		adminFail(w, http.StatusNotFound, "云存档不存在")
