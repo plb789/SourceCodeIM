@@ -143,6 +143,14 @@
     // 头像缺省首字母（评测卡用）
     function initialOf(name) { return String(name || '用').charAt(0).toUpperCase(); }
 
+    // 评测"总时数"文案：服务端 play_hours 是评测撰写/编辑时刻的时长快照（秒→小时保留 2 位）；
+    // ≥1 小时显示 1 位小数，不足 1 小时（含评测时还没玩过的 0）统一显示"不足 1 小时"——任何评测都带时长行
+    function fmtRevHours(h) {
+        var v = Number(h) || 0;
+        if (v < 1) return '不足 1 小时';
+        return v.toFixed(1) + ' 小时';
+    }
+
     // 游戏名散列出 0-359 色相：无封面占位色块 hue-rotate 变色（底色仍取主题色变量）
     function hashHue(name) {
         var h = 0, s = String(name || '?');
@@ -3287,7 +3295,7 @@
         head.appendChild(el('div', 'gs-rev-mini-name', it.username || '用户'));
         var meta = el('div', 'gs-rev-mini-meta');
         meta.appendChild(el('span', '', fmtDate(it.create_time)));
-        if (it.play_hours > 0) meta.appendChild(el('span', '', Number(it.play_hours).toFixed(1) + ' 小时'));
+        meta.appendChild(el('span', '', '总时数 ' + fmtRevHours(it.play_hours)));
         head.appendChild(meta);
         card.appendChild(head);
         card.appendChild(buildRevContent(it.content || '', true));
@@ -3360,7 +3368,7 @@
         var rec = el('span', 'gs-rev-rec ' + (it.recommended === 1 ? 'up' : 'down'));
         rec.innerHTML = (it.recommended === 1 ? REV_UP_SVG : REV_DOWN_SVG) + '<i>' + (it.recommended === 1 ? '推荐' : '不推荐') + '</i>';
         topline.appendChild(rec);
-        if (it.play_hours > 0) topline.appendChild(el('div', 'gs-rev-hours', Number(it.play_hours).toFixed(1) + ' 小时'));
+        topline.appendChild(el('div', 'gs-rev-hours', '总时数 ' + fmtRevHours(it.play_hours)));
         main2.appendChild(topline);
         main2.appendChild(buildRevContent(it.content || '', false));
         if (username && it.username !== username) {
