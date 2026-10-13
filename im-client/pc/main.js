@@ -1281,7 +1281,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=11'); // v11：启动参数（{0}/{1} 替换）+ 库右键属性 + 悬停卡凭据
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=12'); // v12：库"运行中"状态（game-start/game-exit 联动 + 启动按钮变运行中）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1492,7 +1492,7 @@ ipcMain.handle('game:register-exe', function (event, data) {
     }
 });
 
-var runningGames = new Map(); // gameId → 子进程（exit 后通知主窗口，页面据 startedAt 统计游玩时长）
+var runningGames = new Map(); // gameId → { proc, startedAt }（启动/退出均广播全窗口，页面据此切"运行中"并统计游玩时长）
 // 启动程序解析归口（优先级）：用户在“属性”覆盖/needExe 重试指定 > 管理端默认相对路径 >
 // 管理端名称兜底（<名称>.exe，路径留空时） > 自动探测登记 > needExe 交用户手动选。
 // installDir 取页面传入或注册表旧值（管理端默认相对路径的解析锚点）
@@ -1561,11 +1561,21 @@ ipcMain.handle('game:launch', function (event, data) {
         });
         child.once('error', function () { runningGames.delete(gameId); }); // spawn 失败清理表，避免残留
         child.unref();
-        runningGames.set(gameId, child);
+        runningGames.set(gameId, { proc: child, startedAt: startedAt });
+        gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"
         return { ok: true, startedAt: startedAt };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '启动失败' };
     }
+});
+
+// 当前正在运行的游戏（页面加载/刷新/新开窗口后恢复"运行中"态）→ [{gameId, startedAt}]
+ipcMain.handle('game:running-list', function () {
+    var out = [];
+    runningGames.forEach(function (v, gid) {
+        out.push({ gameId: gid, startedAt: (v && v.startedAt) || 0 });
+    });
+    return out;
 });
 
 // 读取用户在库右键“属性”中设置的启动覆盖（args 为原始模板，占位符未替换）：{exe, args}
@@ -1600,6 +1610,13 @@ ipcMain.handle('game:set-launch-options', function (event, data) {
         return { ok: false, error: (e && e.message) || '保存失败' };
     }
 });
+// 游戏进程启动事件广播全部窗口（商店页订阅后即时切"运行中"；与 game-exit 全窗口广播同口径）
+function gameStartBroadcast(info) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send('game-start', info);
+    }
+}
 // 游戏进程退出事件广播全部窗口（商店页订阅结算游玩时长；仅发主窗口会使独立商店窗口收不到）
 // 与 game-download:progress 的全窗口广播同口径
 function gameExitBroadcast(info) {

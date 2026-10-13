@@ -39,6 +39,7 @@
         tasks: {},         // taskId → 下载任务 {taskId,gameId,name,version,installDir,prevInstalled,received,total,speed,state,fileRelPath,error}
         taskByGame: {},    // gameId → 进行中的 taskId（详情/库按钮态联动）
         sessions: {},      // gameId → 本次启动时间戳（onGameExit 结算游玩时长）
+        running: {},       // gameId → 运行中（Steam 同款）：进程已启动未退出，侧栏行/启动按钮显示"运行中"
         badgeEls: {},      // gameId → 商店卡片徽标元素（进度事件原地刷新徽标，避免整格重绘闪烁）
         balance: null,     // 当前用户积分余额（GET /api/game/points；获取/退库随响应实时刷新）
         libSel: 0,         // 库页签当前选中游戏 id（0=未选中，右侧显示最近游戏横排）
@@ -1425,11 +1426,13 @@
     function buildLibRow(item) {
         var lib = item.lib || {};
         var g = item.game || state.games[lib.game_id] || {};
-        var row = el('div', 'gs-lib-srow' + (state.libSel === lib.game_id ? ' active' : ''));
+        var running = !!state.running[lib.game_id];
+        var row = el('div', 'gs-lib-srow' + (state.libSel === lib.game_id ? ' active' : '') + (running ? ' running' : ''));
         row._gid = lib.game_id;
         row.appendChild(buildCover(g.cover, g.name, 'gs-lib-sthumb'));
         row.appendChild(el('div', 'gs-lib-sname', g.name || ('游戏 #' + lib.game_id)));
-        row.appendChild(el('div', 'gs-lib-sstate', LIB_STATE_TEXT[lib.state] || '未安装'));
+        // 运行中优先于安装态文案（Steam 库列表同款绿色"运行中"）
+        row.appendChild(el('div', 'gs-lib-sstate', running ? '运行中' : (LIB_STATE_TEXT[lib.state] || '未安装')));
         applyRowRing(row); // 有下载任务时才在名称与状态之间插入环形进度（构建即初始化）
         row.addEventListener('click', function () { state.libSel = lib.game_id; renderLibrary(); });
         // 右键菜单（自绘，禁系统菜单）：启动 / 属性（自定义启动参数+主程序）/ 移出库
@@ -1616,11 +1619,14 @@
         var rows = $('gsLibSideRows').querySelectorAll('.gs-lib-srow');
         for (var i = 0; i < rows.length; i++) {
             var item = state.lib[rows[i]._gid];
+            var running = !!state.running[rows[i]._gid];
+            // 运行中类切换：绿色状态字（CSS 归口），与文案同步原地更新不重建行 DOM
+            if (rows[i].classList) rows[i].classList.toggle('running', running);
             var st = rows[i].querySelector('.gs-lib-sstate');
             if (st) {
                 // 文案未变则不写 textContent：下载中↔校验交替帧 lib.state 恒为 1（文案同为"下载中"），
                 // 跳过相同的写入可避免无谓的文本节点替换与布局失效
-                var txt = LIB_STATE_TEXT[item && item.lib ? item.lib.state : 0] || '未安装';
+                var txt = running ? '运行中' : (LIB_STATE_TEXT[item && item.lib ? item.lib.state : 0] || '未安装');
                 if (st.textContent !== txt) st.textContent = txt;
             }
         }
@@ -2084,6 +2090,20 @@
         }).catch(function () { /* 主进程无任务时可能 reject：静默 */ });
     }
 
+    // 页面加载/刷新/新开窗口时从主进程拉"正在运行的游戏"（恢复运行中态；与 pullStatus 同口径）
+    function pullRunning() {
+        if (!DESKTOP || !DESKTOP.gameRunningList) return;
+        Promise.resolve(DESKTOP.gameRunningList()).then(function (list) {
+            if (!Array.isArray(list)) return;
+            state.running = {};
+            list.forEach(function (x) {
+                if (!x || x.gameId === undefined || x.gameId === null) return;
+                state.running[x.gameId] = x.startedAt || Date.now();
+            });
+            refreshViews();
+        }).catch(function () { /* 查询失败静默：下次启动/退出事件仍会校正 */ });
+    }
+
     // 任务操作：暂停/继续/取消（乐观更新本地态并同步服务端库状态；进度事件随后校正）
     function taskAction(taskId, action) {
         var t = state.tasks[taskId];
@@ -2154,6 +2174,9 @@
                 acts.push({ text: '继续', cls: 'primary', fn: function () { taskAction(task.taskId, 'resume'); } });
             }
             acts.push({ text: '取消', cls: '', fn: function () { taskAction(task.taskId, 'cancel'); } });
+        } else if (state.running[gid]) {
+            // 运行中（Steam 同款）：启动入口原地显示为"运行中"，不再可点启动（进程退出自动回落）
+            acts.push({ text: '运行中', cls: 'running', fn: function () { toast('游戏正在运行中'); } });
         } else {
             switch (libState) {
                 case 3:
@@ -2474,6 +2497,7 @@
 
     function onLaunched(gid, startedAt) {
         state.sessions[gid] = startedAt || Date.now();
+        state.running[gid] = startedAt || Date.now(); // 侧栏行/启动按钮切"运行中"（game-start 广播兜底同口径）
         toast('已启动');
         api('POST', '/api/game/play/' + gid, { action: 'start' });
         refreshViews();
@@ -2586,7 +2610,8 @@
         var libState = lib ? Number(lib.state) : null;
         var items = [];
         // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新）
-        if (libState === 3) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
+        if (state.running[gid]) items.push({ label: '运行中', onClick: function () { toast('游戏正在运行中'); } });
+        else if (libState === 3) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
         items.push({ label: '属性', onClick: function () { openPropModal(gid); } });
         items.push({ label: '移出游戏库', danger: true, onClick: function () { removeFromLib(gid); } });
         openCtxMenu(x, y, items);
@@ -3604,11 +3629,23 @@
         });
     }
 
+    // 游戏进程启动：多窗口同步"运行中"（启动窗口自身走 onLaunched，事件重复置位无副作用）
+    if (DESKTOP && DESKTOP.onGameStart) {
+        DESKTOP.onGameStart(function (info) {
+            var gid = info && info.gameId;
+            if (gid === undefined || gid === null) return;
+            state.running[gid] = (info && info.startedAt) || Date.now();
+            if (state.sessions[gid] === undefined) state.sessions[gid] = state.running[gid];
+            scheduleRefresh();
+        });
+    }
+
     // 游戏进程退出：结算本次游玩时长并上报（play end）
     if (DESKTOP && DESKTOP.onGameExit) {
         DESKTOP.onGameExit(function (info) {
             var gid = info && info.gameId;
             if (gid === undefined || gid === null) return;
+            delete state.running[gid]; // 运行中回落：侧栏行/启动按钮恢复"启动"
             var startedAt = state.sessions[gid];
             delete state.sessions[gid];
             var seconds = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : ((info && info.seconds) || 0);
@@ -3771,5 +3808,8 @@
             if (res.ok && res.data) state.balance = res.data.balance;
         });
     }
-    if (IN_ELECTRON) pullStatus(); // 恢复主进程侧下载任务（页面刷新场景）
+    if (IN_ELECTRON) {
+        pullStatus();  // 恢复主进程侧下载任务（页面刷新场景）
+        pullRunning(); // 恢复主进程侧"正在运行的游戏"（页面刷新/新开窗口场景）
+    }
 })();

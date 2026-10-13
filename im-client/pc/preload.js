@@ -918,6 +918,16 @@ contextBridge.exposeInMainWorld('desktop', {
     gameLaunch: function (payload) {
         return ipcRenderer.invoke('game:launch', payload);
     },
+    // 订阅游戏进程启动（主进程启动成功后广播全窗口；页面即时切"运行中"）
+    onGameStart: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-start', function (event, data) {
+            cb(data);
+        });
+    },
+    // 查询当前正在运行的游戏列表（页面加载/刷新后恢复"运行中"态）→ Promise<[{gameId, startedAt}]>
+    gameRunningList: function () {
+        return ipcRenderer.invoke('game:running-list');
+    },
     // 订阅游戏进程退出（主窗口收 {gameId, startedAt}，页面统计游玩时长）
     onGameExit: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-exit', function (event, data) {

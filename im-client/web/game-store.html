@@ -27,14 +27,17 @@
             --primary: #2b6cb8;
             --gs-btn: linear-gradient(180deg, #7cbf42 0%, #588a1b 100%);
             --gs-btn-text: #d9efb9;
+            /* "运行中"状态色（与安装绿同色系，浅色主题深一档保白底对比） */
+            --gs-run: #4e8a12;
         }
 
         [data-theme="dark"] {
             --primary: #66c0f4;
+            --gs-run: #8ec63f;
         }
 
         @media (prefers-color-scheme: dark) {
-            [data-theme="system"] { --primary: #66c0f4; }
+            [data-theme="system"] { --primary: #66c0f4; --gs-run: #8ec63f; }
         }
 
         html, body {
@@ -1142,6 +1145,16 @@
 
         .gs-btn.danger { color: var(--text); border-color: var(--text-secondary); }
 
+        /* 运行中按钮：绿色描边＋绿色字（与填充绿的"启动"区分开，表明当前不可再启动） */
+        .gs-btn.running {
+            background: var(--panel-bg);
+            border-color: var(--gs-run);
+            color: var(--gs-run);
+            cursor: default;
+        }
+
+        .gs-btn.running:hover { background: var(--panel-bg); }
+
         /* ===== 下载管理：任务行 ===== */
         .gs-task { padding: 14px 16px; border-bottom: 1px solid var(--divider); }
 
@@ -1975,6 +1988,9 @@
         }
 
         .gs-lib-sstate { font-size: 10px; color: var(--text-light); flex-shrink: 0; }
+
+        /* 运行中（Steam 库列表同款）：状态字绿色高亮，一眼可辨进程还在跑 */
+        .gs-lib-srow.running .gs-lib-sstate { color: var(--gs-run); }
 
         /* 侧栏安装中环形进度（自绘 SVG，跟随主题色）：底轨 + 主题色进度弧 + 居中百分比。
            dashoffset 由 JS 按 received/total 推进；stroke-linecap 圆头 + 少量过渡让进度平滑 */
@@ -2972,7 +2988,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=42"></script>
+    <script src="js/game-store.js?v=43"></script>
     <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>
