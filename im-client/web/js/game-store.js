@@ -652,8 +652,9 @@
     // 单例挂 body + fixed 定位逃出滚动容器裁剪；pointer-events:none 纯展示；
     // 数据全部来自列表项（服务端已随行下发评测聚合），零额外请求
     var hovEl = null, hovTimer = null;
-    // 气泡媒体轮播（库"最近游戏"卡悬停，Steam 同款预览）：轮播定时器/待播媒体表/当前下标/视频卸载定时器
-    var hovMediaTimer = null, hovMediaList = [], hovMediaIdx = 0, hovVideoStopTimer = null;
+    // 气泡媒体轮播（库"最近游戏"卡悬停，Steam 同款预览）：当前媒体盒/轮播定时器/延迟卸载定时器/构建代号
+    // 媒体表与下标下沉到 buildHoverMedia 闭包内（原为共享变量，会被上一条气泡的在途定时器改写）
+    var hovMediaBox = null, hovMediaTimer = null, hovVideoStopTimer = null, hovMediaGen = 0;
 
     // RFC3339 → 中文日期（发行于行）
     function fmtCnDate(iso) {
@@ -676,6 +677,9 @@
     }
 
     function buildHoverContent(g, opts) {
+        // 重建气泡即释放上一条气泡的媒体 video（同刻作废其待卸载定时器）：否则快速来回悬停时，
+        // 上一条气泡 180ms 的延迟卸载会扫到 hovEl 里"刚建好的本条新视频"并清掉 src → 媒体区空白
+        stopHoverMedia(true);
         hovEl.innerHTML = '';
         hovEl.appendChild(el('div', 'gs-hover-title', g.name || ('游戏 #' + g.id)));
         // 好友正在玩（Steam 同款：标题下方第一块，绿色圆点 + "N 名好友正在玩" + 头像横排）
@@ -762,12 +766,14 @@
         (g.videos || []).forEach(function (u) { if (u) list.push({ kind: 'v', url: u }); });
         (g.screenshots || []).forEach(function (u) { if (u) list.push({ kind: 'i', url: u }); });
         if (!list.length) return null;
-        hovMediaList = list;
-        hovMediaIdx = 0;
+        // 媒体表与下标下沉到本闭包（随气泡共存亡）：上一条气泡的在途定时器即便漏跑也只影响自己的闭包，
+        // 不会改写本条气泡的状态；gen 与本条 box 句柄共同保证过期回调不再触碰任何共享资源
+        var idx = 0, gen = ++hovMediaGen;
         var box = el('div', 'gs-hover-media');
+        hovMediaBox = box;
         function paint() {
             box.innerHTML = '';
-            var m = hovMediaList[hovMediaIdx];
+            var m = list[idx];
             if (!m) return;
             if (m.kind === 'v') {
                 var v = document.createElement('video');
@@ -782,17 +788,17 @@
                 var im = document.createElement('img');
                 im.src = assetUrl(m.url);
                 im.alt = g.name || '';
-                im.loading = 'lazy';
+                // 悬停即预览：不懒加载（loading='lazy' 在快速切换时首帧可能未解码，表现为图片空白）
                 box.appendChild(im);
             }
         }
         function schedule() {
-            if (hovMediaList.length < 2) return;
-            var m = hovMediaList[hovMediaIdx];
+            if (list.length < 2) return;
+            var m = list[idx];
             hovMediaTimer = setTimeout(function () {
+                if (gen !== hovMediaGen) return; // 本气泡已被替换/隐藏：过期链作废，不触碰共享定时器句柄
                 hovMediaTimer = null;
-                if (!hovMediaList.length) return; // 已停表（气泡隐藏）：不再换页
-                hovMediaIdx = (hovMediaIdx + 1) % hovMediaList.length;
+                idx = (idx + 1) % list.length;
                 paint();
                 schedule();
             }, (m && m.kind === 'v') ? 6000 : 3500);
@@ -802,24 +808,41 @@
         return box;
     }
 
-    // 轮播停表 + 延迟卸载 video（先让气泡淡出，再 pause/清 src/load 停解码，避免背景空播占用资源）
-    function stopHoverMedia() {
+    // 轮播停表 + 卸载本条气泡的 video（先让气泡淡出，再 pause/清 src/load 停解码，避免背景空播占用资源）
+    // immediate=true（重建气泡/切换卡片时）：同步卸载；否则延后 180ms 等淡出完成再卸载。
+    // 关键：只卸载"本次捕获的 hovMediaBox"，绝不遍历 hovEl 当前 DOM —— 否则快速来回悬停时，
+    // 上一条气泡的延迟卸载会误杀本条新气泡刚建好的 video/img（媒体区空白的根因）
+    function stopHoverMedia(immediate) {
+        hovMediaGen++; // 代号自增：作废本条气泡所有在途轮播链
         clearTimeout(hovMediaTimer);
         hovMediaTimer = null;
-        hovMediaList = [];
-        hovMediaIdx = 0;
         clearTimeout(hovVideoStopTimer);
+        hovVideoStopTimer = null;
+        var box = hovMediaBox;
+        hovMediaBox = null;
+        if (!box) return;
+        if (immediate) {
+            unloadVideos(box);
+            return;
+        }
         hovVideoStopTimer = setTimeout(function () {
-            if (!hovEl) return;
-            var vids = hovEl.querySelectorAll('video');
-            for (var i = 0; i < vids.length; i++) {
-                try {
-                    vids[i].pause();
-                    vids[i].removeAttribute('src');
-                    vids[i].load();
-                } catch (e) { /* 卸载异常忽略：气泡已隐藏，不影响功能 */ }
-            }
+            hovVideoStopTimer = null;
+            unloadVideos(box);
         }, 180);
+    }
+
+    // 卸载指定媒体盒内的 video（pause + 清 src + load 停解码）。传入的是已捕获的盒引用，
+    // 与当前 DOM 是否已换新气泡无关——过期盒即便不在文档中，释放其解码资源同样安全。
+    function unloadVideos(box) {
+        if (!box) return;
+        var vids = box.querySelectorAll('video');
+        for (var i = 0; i < vids.length; i++) {
+            try {
+                vids[i].pause();
+                vids[i].removeAttribute('src');
+                vids[i].load();
+            } catch (e) { /* 卸载异常忽略：气泡已隐藏，不影响功能 */ }
+        }
     }
 
     // 好友头像回退块（无头像/加载失败）：主题色底 + 首字母，与封面占位 buildPh 同款色相偏移
@@ -857,7 +880,7 @@
     function hideHover() {
         clearTimeout(hovTimer);
         if (hovEl) hovEl.classList.remove('show');
-        stopHoverMedia(); // 轮播停表并卸载 video（隐藏后不再空播/后台解码）
+        stopHoverMedia(); // 轮播停表 + 延后 180ms 卸载本条 video（先淡出再停解码，隐藏后不再空播）
     }
 
     function renderStore() {
