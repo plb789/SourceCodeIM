@@ -160,6 +160,14 @@ type GameConfig struct {
 	LocalDir string `yaml:"local_dir"`
 	// VideoMaxSize 商店详情页宣传视频单文件上限（字节，0=200MB；落 WebDir/static/upload/games/videos/）
 	VideoMaxSize int64 `yaml:"video_max_size"`
+	// LaunchSecret 启动参数 {1} 专属密码的派生密钥（HMAC 种子，仅存本文件，不下发客户端）：
+	// 服务端按 HMAC(secret, username) 确定性派生16位数字密码，同账号恒定、不同账号不同；
+	// 更换后全部账号的启动密码随之改变（需重启服务端生效）
+	LaunchSecret string `yaml:"launch_secret"`
+	// Trackers 全局 BT Tracker 服务器地址列表（下载方式=BT·服务端生成种子时写入种子
+	// announce 与 announce-list，帮助客户端拿到可用 peer；留空=不写 announce，仅公网 DHT 发现）。
+	// 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，重启后自动重建新种子）
+	Trackers []string `yaml:"trackers"`
 }
 
 // SplashAdConfig 阶段二百四十一：APP 启动广告图配置节
@@ -621,9 +629,10 @@ func Default() *Config {
 		// 游戏中心默认参数（默认启用；P1 文件本体落本地磁盘，storage 后端扩展预留）
 		Game: GameConfig{
 			Enabled:      true,
-			MaxFileSize:  50 << 30,  // 单文件上限 50GB（游戏包常见数 GB~数十 GB）
-			ChunkSize:    8 << 20,   // 分片单片 8MB（与网盘大文件链路同量级）
-			VideoMaxSize: 200 << 20, // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
+			MaxFileSize:  50 << 30,                // 单文件上限 50GB（游戏包常见数 GB~数十 GB）
+			ChunkSize:    8 << 20,                 // 分片单片 8MB（与网盘大文件链路同量级）
+			VideoMaxSize: 200 << 20,               // 宣传视频单文件上限 200MB（详情页 <video> 内联播放用）
+			LaunchSecret: "im-game-launch-secret", // 启动参数专属密码派生密钥（生产建议在 config.yaml 覆写）
 		},
 	}
 }
@@ -843,6 +852,9 @@ func Load() *Config {
 		cfg.Game.LocalDir = filepath.Join(exeDir(), "game_data")
 	} else {
 		cfg.Game.LocalDir = resolvePath(cfg.Game.LocalDir)
+	}
+	if cfg.Game.LaunchSecret == "" {
+		cfg.Game.LaunchSecret = "im-game-launch-secret" // 空值兜底（yaml 未配置时保证派生可用）
 	}
 	return cfg
 }

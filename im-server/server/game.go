@@ -12,6 +12,8 @@ package server
 //      文件 ID 逐个下载；库归属校验后才放行，防清单外枚举下载
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -234,11 +236,35 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"size_bytes":     g.SizeBytes,
 		"latest_version": g.LatestVersion,
 		"price":          g.Price,
-		"down_count":     g.DownCount,
-		"sort":           g.Sort,
+		// 下载方式（0=HTTP 清单直连[默认] 1=BT/P2SP 混合）——PC 客户端按此选下载通道
+		"download_method": g.DownloadMethod,
+		"down_count":      g.DownCount,
+		"sort":            g.Sort,
+		// 默认启动程序（管理端上架时配置）：launch_exe 相对安装根的相对路径、launch_name 显示名、
+		// launch_args 参数模板（含 {0}=登录账号 {1}=账号专属16位密码 占位符，仅模板不含密钥）
+		"launch_exe":  g.LaunchExe,
+		"launch_name": g.LaunchName,
+		"launch_args": g.LaunchArgs,
 		// 上架时间（商店悬停气泡卡"发行于"行；RFC3339 由前端本地化格式）
 		"create_time": g.CreateTime,
 	}
+}
+
+// gameLaunchPassword 按"账号+游戏"确定性派生16位专属密码
+// （HMAC-SHA256(secret, "im-game-launch:<username>:<gameID>")）：
+// 同账号同游戏恒定、不同账号/不同游戏不同（单游戏泄露不影响其他游戏）；
+// 作为启动参数 {1} 占位符的值下发给本人，仅本人在库游戏中可得。
+// 与真实登录密码无关（真实密码绝不下发/绝不出现在启动参数），降低明文命令行的隐私风险
+func gameLaunchPassword(secret, username string, gameID uint) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("im-game-launch:" + username + ":" + strconv.FormatUint(uint64(gameID), 10)))
+	sum := mac.Sum(nil)
+	var b strings.Builder
+	b.Grow(16)
+	for i := 0; i < 16; i++ {
+		b.WriteByte(byte('0' + sum[i]%10))
+	}
+	return b.String()
 }
 
 // RegisterGameRoutes 游戏中心路由注册（用户端 + 管理端归口一次挂载）
@@ -254,6 +280,11 @@ func RegisterGameRoutes(s *Server) {
 	// 注意：不可写成 /api/game/{id}/manifest——与 /api/game/file/{fid} 在 ServeMux 中
 	// 产生 /api/game/file/manifest 两可匹配冲突（Go 1.22 启动即 panic），故归口为前缀式路由
 	http.HandleFunc("GET /api/game/manifest/{id}", s.HandleGameManifest)
+	// 方案 A 一期：BT/P2SP 混合下载——版本种子下发（生成+磁盘缓存，与 manifest 同水位鉴权）
+	http.HandleFunc("GET /api/game/torrent/{id}", s.HandleGameTorrent)
+	// P2SP 直链源：字面量前缀式路由（/api/game/p2sp 与 {id} 交叉时字面量优先，无两可冲突）；
+	// 鉴权走路径段（引擎把追加路径拼在 query 之后，query 鉴权必坏）；{rest...} 吞 <slug>/<rel...>
+	http.HandleFunc("GET /api/game/p2sp/{username}/{gid}/{version}/{rest...}", s.HandleGameP2SP)
 	http.HandleFunc("GET /api/game/file/{fid}", s.HandleGameFileDownload)
 	// 同理用字面量前缀式：/api/game/{id}/play 会与 /api/game/library/{id} 在
 	// /api/game/library/play 路径上两可冲突（Go 1.22 启动即 panic）
@@ -380,6 +411,8 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	item := gameSummary(g)
 	item["description"] = g.Description
 	item["versions"] = verList
+	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏确定性派生，仅本人可得；真实登录密码不下发）
+	item["launch_password"] = gameLaunchPassword(s.cfg.Game.LaunchSecret, username, g.ID)
 	// 游戏公告（库内游戏页"动态"区左栏公告卡；管理端发布，倒序；images 解析为数组下发）
 	var notices []model.GameNotice
 	store.DB.Where("game_id = ?", g.ID).Order("id DESC").Find(&notices)
@@ -451,6 +484,8 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 				"install_path":      l.InstallPath,
 				"play_seconds":      l.PlaySeconds,
 				"last_play_at":      l.LastPlayAt.Format("2006-01-02 15:04"),
+				// 启动参数 {1} 专属密码（按当前账号+本游戏派生；真实登录密码不下发）
+				"launch_password": gameLaunchPassword(s.cfg.Game.LaunchSecret, username, l.GameID),
 			},
 			"game": gameSummary(g),
 		})
@@ -615,6 +650,28 @@ func (s *Server) HandleGameLibraryLeave(w http.ResponseWriter, r *http.Request) 
 
 // gameManifest 版本清单构建（version 空=最新版）：文件 ID/相对路径/大小/SHA256/下载地址归口下发
 func (s *Server) gameManifest(g *model.Game, version string) (map[string]interface{}, error) {
+	// 下载方式=2（管理员上传种子）：合成清单——文件清单不下发（完整性由 BT 分片校验承担），
+	// slug 取种子内 info.name（安装锚点必须与引擎落盘根一致，否则 exe 探测/启动错位），
+	// 版本沿用最新版本号（未上架过版本用占位 "torrent"），size/file_count 取种子内统计；
+	// torrent_kind="uploaded" 供客户端识别（纯 BT，不叠加 P2SP 直链源）
+	if g.DownloadMethod == 2 {
+		anchor, total, count, err := s.gameUploadedTorrentMeta(g)
+		if err != nil {
+			return nil, err
+		}
+		ver := "torrent"
+		var v model.GameVersion
+		if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&v).Error; err == nil && v.Version != "" {
+			ver = v.Version
+		}
+		return map[string]interface{}{
+			"game_id": g.ID, "slug": anchor, "name": g.Name,
+			"version": ver, "manifest_hash": "uploaded",
+			"size_bytes": total, "file_count": count,
+			"files":        []map[string]interface{}{},
+			"torrent_kind": "uploaded",
+		}, nil
+	}
 	var v model.GameVersion
 	var err error
 	if version == "" {

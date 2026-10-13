@@ -23,6 +23,7 @@ const remoteInput = require('./remote-input.js');
 const updater = require('./updater.js');
 // 阶段二百八十一：游戏中心下载管理器（Steam 同款游戏浏览/下载——多任务断点续传/SHA256 校验/进度节流）
 const GameDownloadManager = require('./download-manager.js');
+const BtDownloadManager = require('./bt-download-manager.js');
 
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
@@ -1258,6 +1259,9 @@ ipcMain.on('image:need-more', function () {
 // ===== 阶段二百八十一：游戏中心（Steam 同款游戏浏览/下载，独立窗口 + 下载管理 + 启动归口） =====
 var gameStoreWin = null; // 游戏中心窗口（单例复用：close 隐藏，重复打开仅 focus，同查看器模式）
 var gameDownloads = new GameDownloadManager(); // 游戏下载管理器实例（模块见 download-manager.js）
+// 阶段二百八十二：BT/P2SP 混合下载管理器（方案 A：x86 sidecar 宿主 dlbt-host.exe 承载 DLBT 引擎，
+// 接口与 HTTP 管理器镜像，页面 payload via:'bt' 由 game:download 归口路由）
+var btDownloads = new BtDownloadManager();
 
 function ensureGameStoreWindow() {
     if (gameStoreWin) return gameStoreWin;
@@ -1277,7 +1281,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=4'); // v4：P2 商店化（购买块/评测/视频媒体/库页签重构）防远程缓存
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=11'); // v11：启动参数（{0}/{1} 替换）+ 库右键属性 + 悬停卡凭据
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1332,41 +1336,53 @@ ipcMain.handle('game:win-minimize', function (e) {
 });
 
 // 下载进度事件转发：manager 已做 500ms 节流（done/error 必发），此处广播全部窗口（主窗口/商店窗均可能订阅）
-gameDownloads.on('progress', function (evt) {
+// HTTP 与 BT 双通道管理器同构负载，统一转发（页面按 state 渲染，无感通道差异）
+function gameDownloadBroadcast(evt) {
     var wins = BrowserWindow.getAllWindows();
     for (var i = 0; i < wins.length; i++) {
         if (!wins[i].isDestroyed()) wins[i].webContents.send('game-download:progress', evt);
     }
-});
+}
+gameDownloads.on('progress', gameDownloadBroadcast);
+btDownloads.on('progress', gameDownloadBroadcast);
 
 // 任务全部文件完成：探测安装目录根下唯一 .exe 自动登记启动注册表（用户手动登记过则不覆盖；
-// 0 个或多个 exe 不猜，交商店页 needExe 分支由用户手动选择，符合"禁止猜测"原则）
-gameDownloads.on('done', function (info) {
+// 0 个或多个 exe 不猜，交商店页 needExe 分支由用户手动选择，符合"禁止猜测"原则）。
+// BT 任务的 info.installDir 已是安装根（installDir+slug），与 HTTP 布局归一
+function gameDownloadDone(info) {
     try {
         if (!info || !info.gameId || !info.installDir) return;
         var exes = fs.readdirSync(info.installDir).filter(function (n) { return /\.exe$/i.test(n); });
         if (exes.length !== 1) return;
         var reg = gameLaunchRegLoad();
         if (reg[info.gameId]) return;
-        reg[info.gameId] = { installDir: info.installDir, exe: path.join(info.installDir, exes[0]) };
+        reg[info.gameId] = { installDir: info.installDir, exe: path.join(info.installDir, exes[0]), source: 'probe' };
         gameLaunchRegSave(reg);
     } catch (e) { /* 探测失败不影响任务完成状态，下次启动可手动登记 */ }
-});
+}
+gameDownloads.on('done', gameDownloadDone);
+btDownloads.on('done', gameDownloadDone);
 
 // 下载控制归口：start 注册并立即开始（幂等）/ pause resume cancel 按任务控制 / status 全量摘要。
-// 返回统一 {ok, tasks?/error?}，tasks 携带最新全量摘要供页面直接刷新列表
+// 返回统一 {ok, tasks?/error?}，tasks 携带最新全量摘要供页面直接刷新列表。
+// payload.via==='bt' 路由至 BT/P2SP 管理器（sidecar 引擎），其余走 HTTP 清单直连；status 双通道合并
 ipcMain.handle('game:download', function (event, payload) {
     try {
         var action = payload && payload.action;
+        var viaBt = payload && payload.via === 'bt';
         if (action === 'start') {
-            var r = gameDownloads.start(payload);
-            return r.ok ? { ok: true, tasks: gameDownloads.status() } : { ok: false, error: r.error };
+            var mgr0 = viaBt ? btDownloads : gameDownloads;
+            var r = mgr0.start(payload);
+            return r.ok ? { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) } : { ok: false, error: r.error };
         }
         if (action === 'pause' || action === 'resume' || action === 'cancel') {
-            var r2 = gameDownloads[action](payload && payload.taskId);
-            return r2.ok ? { ok: true, tasks: gameDownloads.status() } : { ok: false, error: r2.error };
+            // pause/resume/cancel 页面不带 via：按 taskId 归属路由（双管理器任务表互斥，无歧义）
+            var tid = payload && payload.taskId;
+            var mgr = btDownloads.owns(tid) ? btDownloads : gameDownloads;
+            var r2 = mgr[action](tid);
+            return r2.ok ? { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) } : { ok: false, error: r2.error };
         }
-        if (action === 'status') return { ok: true, tasks: gameDownloads.status() };
+        if (action === 'status') return { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) };
         return { ok: false, error: '未知操作' };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '下载管理异常' };
@@ -1379,6 +1395,60 @@ ipcMain.handle('game:choose-install-dir', async function (event) {
     var r = await dialog.showOpenDialog(win, { title: '选择游戏安装目录', properties: ['openDirectory', 'createDirectory'] });
     if (r.canceled || !r.filePaths || !r.filePaths.length) return { canceled: true, filePath: '' };
     return { canceled: false, filePath: r.filePaths[0] };
+});
+
+// ===== Steam 同款选盘安装（自绘磁盘选择弹窗替代系统目录选择器） =====
+// 产品常量：安装根目录名（选盘后主进程预创建 <盘根>/CdonlgameApp，目录不存在则自动创建）
+var GAME_INSTALL_DIRNAME = 'CdonlgameApp';
+
+// 本地固定磁盘列表（PowerShell Win32_LogicalDisk，DriveType=3 过滤可移动/光驱/网络盘）
+// → Promise<{disk:'C:', total, free, used}[]>（字节；GB 换算在渲染层做，点开弹窗时调用一次）
+ipcMain.handle('game:disk-list', function () {
+    return new Promise(function (resolve) {
+        var finished = false;
+        var child = null;
+        var finish = function (disks) {
+            if (finished) return;
+            finished = true;
+            try { if (child) child.kill(); } catch (e) { /* 已退出忽略 */ }
+            resolve(disks);
+        };
+        try {
+            child = require('child_process').spawn('powershell.exe', ['-NoProfile', '-Command',
+                'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object { "{0}|{1}|{2}" -f $_.DeviceID, $_.Size, $_.FreeSpace }'],
+                { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e) { resolve([]); return; }
+        var out = '';
+        child.stdout.on('data', function (d) { out += d; });
+        child.stderr.on('data', function () { /* 探测失败按空列表兜底 */ });
+        child.on('error', function () { finish([]); });
+        child.on('close', function () {
+            var disks = [];
+            out.split(/\r?\n/).forEach(function (line) {
+                var p = line.trim().split('|');
+                var total = Number(p[1]) || 0, free = Number(p[2]) || 0;
+                if (!p[0] || total <= 0) return;
+                disks.push({ disk: p[0], total: total, free: free, used: Math.max(total - free, 0) });
+            });
+            finish(disks);
+        });
+        setTimeout(function () { finish([]); }, 8000); // 兜底超时：PowerShell 冷启动偶发慢
+    });
+});
+
+// 选盘后预创建安装根目录（入参盘根如 'D:\'，不存在即创建）→ {ok, dir} / {ok:false, error}
+ipcMain.handle('game:prepare-install-dir', function (event, diskRoot) {
+    try {
+        var root = String(diskRoot || '').trim();
+        if (!/^[A-Za-z]:\\?$/.test(root)) return { ok: false, error: '无效的磁盘' };
+        if (root.charAt(root.length - 1) !== '\\') root += '\\';
+        if (!fs.existsSync(root)) return { ok: false, error: '磁盘不可用' };
+        var dir = path.join(root, GAME_INSTALL_DIRNAME);
+        fs.mkdirSync(dir, { recursive: true });
+        return { ok: true, dir: dir };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '创建安装目录失败' };
+    }
 });
 
 // 选择游戏主程序 exe（needExe 分支：注册表无记录/记录失效时由用户手动指定）
@@ -1414,7 +1484,7 @@ ipcMain.handle('game:register-exe', function (event, data) {
         if (!gameId || !exePath) return { ok: false, error: '参数缺失' };
         if (!fs.existsSync(exePath)) return { ok: false, error: '所选文件不存在' };
         var reg = gameLaunchRegLoad();
-        reg[gameId] = { installDir: path.dirname(exePath), exe: exePath };
+        reg[gameId] = { installDir: path.dirname(exePath), exe: exePath, source: 'user', args: (reg[gameId] && reg[gameId].args) || '' };
         gameLaunchRegSave(reg);
         return { ok: true };
     } catch (e) {
@@ -1423,26 +1493,66 @@ ipcMain.handle('game:register-exe', function (event, data) {
 });
 
 var runningGames = new Map(); // gameId → 子进程（exit 后通知主窗口，页面据 startedAt 统计游玩时长）
-// 启动游戏：读启动注册表归口——无记录时兼容商店页随 launch 传入的 exePath（needExe 分支
-// 选完主程序重试场景：登记后立即启动，避免注册/启动两次往返）；exe 失效同样回退手动选择。
+// 启动程序解析归口（优先级）：用户在“属性”覆盖/needExe 重试指定 > 管理端默认相对路径 >
+// 管理端名称兜底（<名称>.exe，路径留空时） > 自动探测登记 > needExe 交用户手动选。
+// installDir 取页面传入或注册表旧值（管理端默认相对路径的解析锚点）
+function gameResolveLaunchExe(reg, gameId, data) {
+    var item = reg[gameId] || {};
+    // 1) needExe 重试：页面选完主程序随 launch 传入 → 视为用户指定并登记（args 保留已有自定义）
+    var passedExe = String((data && data.exePath) || '').trim();
+    if (passedExe && fs.existsSync(passedExe)) {
+        item = { installDir: path.dirname(passedExe), exe: passedExe, source: 'user', args: item.args || '' };
+        reg[gameId] = item;
+        gameLaunchRegSave(reg);
+        return { exe: item.exe, installDir: item.installDir };
+    }
+    // 2) 用户在“属性”中覆盖的主程序（source=user 标记，区别于自动探测）
+    if (item.source === 'user' && item.exe && fs.existsSync(item.exe)) {
+        return { exe: item.exe, installDir: item.installDir || path.dirname(item.exe) };
+    }
+    // 3) 管理端默认启动程序（launch_exe 为相对安装根的相对路径）
+    var dir = String((data && data.installDir) || item.installDir || '').trim();
+    var rel = String((data && data.launchExe) || '').trim();
+    if (dir && rel) {
+        var cand = path.join(dir, rel);
+        if (fs.existsSync(cand)) return { exe: cand, installDir: dir };
+    }
+    // 3.5) 名称兜底：管理端「启动程序路径」留空但填了「启动程序名称」时，按 <名称>.exe 在安装根
+    //      匹配同名主程序（如 名称=War3 → War3.exe）。仅顶层匹配不递归（避免同名误命中深处文件），
+    //      命中即用（不写注册表，与 3) 管理端默认同语义：改名称/填路径后即时生效）
+    var name = String((data && data.launchName) || '').trim();
+    if (dir && !rel && name) {
+        var stem = /\.exe$/i.test(name) ? name : (name + '.exe');
+        var candN = path.join(dir, stem);
+        if (fs.existsSync(candN)) return { exe: candN, installDir: dir };
+    }
+    // 4) 自动探测登记（source=probe，安装完成时探测到的唯一 exe）
+    if (item.exe && fs.existsSync(item.exe)) {
+        return { exe: item.exe, installDir: item.installDir || path.dirname(item.exe) };
+    }
+    return null;
+}
+
+// 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
 // spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口
 ipcMain.handle('game:launch', function (event, data) {
     try {
         var gameId = String((data && data.gameId) || '').trim();
         if (!gameId) return { ok: false, error: '参数缺失' };
         var reg = gameLaunchRegLoad();
-        var item = reg[gameId];
-        // needExe 分支重试兼容：页面选完主程序把 exePath 随 launch 传入，存在即登记再启动
-        var passedExe = String((data && data.exePath) || '').trim();
-        if (passedExe && fs.existsSync(passedExe)) {
-            reg[gameId] = { installDir: path.dirname(passedExe), exe: passedExe };
-            gameLaunchRegSave(reg);
-            item = reg[gameId];
+        var r = gameResolveLaunchExe(reg, gameId, data);
+        if (!r) return { ok: false, needExe: true };
+        // 启动参数：以页面解析后的数组为准（自定义覆盖 > 管理端默认，占位符已替换）；
+        // 兼容仅有注册表原始模板的场景（按空白切分为参数数组）
+        var args = [];
+        if (data && Array.isArray(data.args)) {
+            args = data.args.map(String);
+        } else {
+            var raw = (reg[gameId] && reg[gameId].args) || '';
+            if (raw) args = raw.split(/\s+/).filter(Boolean);
         }
-        if (!item || !item.exe) return { ok: false, needExe: true };
-        if (!fs.existsSync(item.exe)) return { ok: false, needExe: true, error: '游戏主程序不存在，请重新选择' };
-        var cwd = item.installDir || path.dirname(item.exe);
-        var child = spawn(item.exe, [], { cwd: cwd, detached: true, stdio: 'ignore' });
+        var cwd = r.installDir || path.dirname(r.exe);
+        var child = spawn(r.exe, args, { cwd: cwd, detached: true, stdio: 'ignore' });
         var startedAt = Date.now();
         var info = { gameId: gameId, startedAt: startedAt };
         child.once('exit', function () {
@@ -1455,6 +1565,39 @@ ipcMain.handle('game:launch', function (event, data) {
         return { ok: true, startedAt: startedAt };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '启动失败' };
+    }
+});
+
+// 读取用户在库右键“属性”中设置的启动覆盖（args 为原始模板，占位符未替换）：{exe, args}
+ipcMain.handle('game:get-launch-options', function (event, data) {
+    var gameId = String((data && data.gameId) || '').trim();
+    var item = gameLaunchRegLoad()[gameId] || {};
+    return { ok: true, exe: (item.source === 'user' && item.exe) ? item.exe : '', args: item.args || '' };
+});
+
+// 保存用户启动覆盖：exe 空串=清除用户指定主程序（回退管理端默认/自动探测）；args 空串=清除自定义参数
+ipcMain.handle('game:set-launch-options', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        var reg = gameLaunchRegLoad();
+        var item = reg[gameId] || {};
+        var exe = String((data && data.exe) || '').trim();
+        if (exe) {
+            if (!fs.existsSync(exe)) return { ok: false, error: '所选主程序不存在' };
+            item.exe = exe;
+            item.installDir = path.dirname(exe);
+            item.source = 'user';
+        } else {
+            delete item.exe;    // 清除用户指定：回退管理端默认或自动探测
+            delete item.source;
+        }
+        item.args = String((data && data.args) || '').trim();
+        reg[gameId] = item;
+        gameLaunchRegSave(reg);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '保存失败' };
     }
 });
 // 游戏进程退出事件广播全部窗口（商店页订阅结算游玩时长；仅发主窗口会使独立商店窗口收不到）
@@ -3558,6 +3701,7 @@ app.on('will-quit', function () {
     try { debugManager.shutdown(); } catch (e) {} // 阶段一百五十九：调试会话（debugpy/适配器子进程）随应用退出回收
     shotPickerStop(); // 阶段一百三十九：窗口识别命中服务随应用退出回收（stdin 断开子进程自退，此为主动清理）
     try { remoteInput.stop(); } catch (e) {} // 阶段一百五十五：远程协助输入注入服务随应用退出回收（同 shotPicker 惯例）
+    try { btDownloads.shutdown(); } catch (e) {} // 阶段二百八十二：BT sidecar 引擎随应用退出优雅收口（Release 保文件完整，宽限超时强杀）
 });
 
 app.on('window-all-closed', function () {

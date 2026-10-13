@@ -5,6 +5,9 @@
 //           进度事件 500ms 节流（state:'done' 完成必发一条，error 亦必发）。
 // 由 main.js 实例化并监听 progress/done：progress 转发全部窗口；done 探测安装目录唯一 .exe 写启动注册表。
 // 任务不持久化：进程退出任务丢失可接受（页面按库状态重新 start，磁盘 .part 断点自动续传）。
+// 落盘布局（Steam 同款，阶段二百八十三）：每游戏正式目录 <installDir>/<slug>，下载全程先落同盘暂存目录
+//           <installDir>/downloading/<slug>，全部文件校验通过后同盘 rename 一次性换入正式目录（旧版本
+//           先挪 .old-<ts> 腾位，换入失败回滚，成功后异步清理备份）；done 事件 installDir 即正式目录。
 const { EventEmitter } = require('events');
 const http = require('http');
 const https = require('https');
@@ -15,6 +18,7 @@ const crypto = require('crypto');
 const MAX_PARALLEL = 2;    // 跨任务并行下载上限，超出排队
 const EMIT_INTERVAL = 500; // 进度节流窗口（ms），同时作为速度计算窗口
 const MAX_FILE_RETRY = 2;  // 单文件校验失败重试上限（仍失败任务置 error）
+const STAGING_DIRNAME = 'downloading'; // 同盘暂存目录名（正式目录 <root>/<slug>，暂存 <root>/downloading/<slug>）
 
 class GameDownloadManager extends EventEmitter {
     constructor() {
@@ -22,7 +26,8 @@ class GameDownloadManager extends EventEmitter {
         this.tasks = new Map(); // taskId → 任务对象（进程内表，不持久化）
     }
 
-    // 注册并开始任务。payload={taskId, gameId, installDir, username, serverBase, files:[{id,rel_path,size,sha256,url}]}
+    // 注册并开始任务。payload={taskId, gameId, installDir, slug, username, serverBase, files:[{id,rel_path,size,sha256,url}]}
+    // installDir 为安装根（<盘>/CdonlgameApp），实际落盘 <installDir>/<slug>（暂存 <installDir>/downloading/<slug>）
     // 同 taskId 重复 start 幂等返回进行中状态；error/done 旧任务重置重下（磁盘 .part 保留即断点续传）
     start(payload) {
         const taskId = String((payload && payload.taskId) || '').trim();
@@ -32,15 +37,20 @@ class GameDownloadManager extends EventEmitter {
         if (exist && exist.state !== 'error' && exist.state !== 'done') {
             return { ok: true, task: this._summary(exist) }; // 进行中（排队/下载/暂停）：幂等
         }
-        // 防目录穿越：rel_path 解析后必须位于 installDir 内，越界条目丢弃
+        // 每游戏子目录：正式 <installDir>/<slug>，暂存 <installDir>/downloading/<slug>（同盘 rename 一次性换入）
         const root = path.resolve(String(payload.installDir));
+        const slug = String((payload && payload.slug) || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim();
+        if (!slug || slug === '.' || slug === '..') return { ok: false, error: '缺少游戏标识 slug' };
+        const finalDir = path.join(root, slug);
+        const stagingDir = path.join(root, STAGING_DIRNAME, slug);
+        // 防目录穿越：rel_path 解析后必须位于暂存目录内，越界条目丢弃
         const list = [];
         for (let i = 0; i < files.length; i++) {
             const f = files[i] || {};
             const rel = String(f.rel_path || '').replace(/\\/g, '/').replace(/^\/+/, '');
             if (!rel) continue;
-            const abs = path.resolve(root, rel);
-            if (abs !== root && !abs.startsWith(root + path.sep)) continue;
+            const abs = path.resolve(stagingDir, rel);
+            if (abs !== stagingDir && !abs.startsWith(stagingDir + path.sep)) continue;
             list.push({
                 id: f.id,
                 rel_path: rel,
@@ -54,7 +64,9 @@ class GameDownloadManager extends EventEmitter {
         if (exist) {
             // 旧任务重置（error 恢复/重复完成重下）：换目录/账号等元数据一并刷新
             task = exist;
-            task.installDir = root;
+            task.installDir = finalDir;
+            task.stagingDir = stagingDir;
+            task.root = root; // 安装根（对外摘要/库 install_path 口径，恢复/更新复用即此）
             task.username = String(payload.username || '');
             task.serverBase = String(payload.serverBase || '');
             task.files = list;
@@ -68,7 +80,9 @@ class GameDownloadManager extends EventEmitter {
             task = {
                 taskId: taskId,
                 gameId: String(payload.gameId || ''),
-                installDir: root,
+                installDir: finalDir,   // 正式目录（done 事件对外即此，供主进程探测 .exe 登记启动）
+                stagingDir: stagingDir, // 暂存目录（下载全程落此，完成后换入 installDir）
+                root: root,             // 安装根（摘要 installDir 口径 / 库 install_path，恢复/更新复用即此）
                 username: String(payload.username || ''),
                 serverBase: String(payload.serverBase || ''),
                 files: list,
@@ -129,7 +143,7 @@ class GameDownloadManager extends EventEmitter {
         if (task._req) { try { task._req.destroy(); } catch (e) { } }
         const self = this;
         const pend = task.files.map(function (f) {
-            return self._safeUnlink(path.resolve(task.installDir, f.rel_path) + '.part');
+            return self._safeUnlink(path.resolve(task.stagingDir, f.rel_path) + '.part');
         });
         const fin = function () {
             self._emit(task, '', null, true, 'cancel'); // 取消终态必发一条（页面清理 UI），随后任务从表移除
@@ -148,6 +162,9 @@ class GameDownloadManager extends EventEmitter {
         this.tasks.forEach(function (t) { out.push(self._summary(t)); });
         return out;
     }
+
+    // 任务归属判定（主进程 game:download 归口按 taskId 路由：页面 pause/resume/cancel 不带 via）
+    owns(taskId) { return this.tasks.has(String(taskId || '')); }
 
     // —— 以下为内部实现 ——
 
@@ -204,7 +221,7 @@ class GameDownloadManager extends EventEmitter {
     _downloadFile(task, file) {
         const self = this;
         return new Promise(function (resolve, reject) {
-            const abs = path.resolve(task.installDir, file.rel_path);
+            const abs = path.resolve(task.stagingDir, file.rel_path);
             const partAbs = abs + '.part';
             // 上次会话已完整落盘且校验过的文件（rename 前提即校验通过）直接跳过，秒级恢复
             try {
@@ -333,7 +350,7 @@ class GameDownloadManager extends EventEmitter {
         for (let i = 0; i < task.fileIndex && i < task.files.length; i++) sum += task.files[i].size;
         if (task.fileIndex < task.files.length) {
             try {
-                const st = fs.statSync(path.resolve(task.installDir, task.files[task.fileIndex].rel_path) + '.part');
+                const st = fs.statSync(path.resolve(task.stagingDir, task.files[task.fileIndex].rel_path) + '.part');
                 if (st.isFile()) sum += st.size;
             } catch (e) { /* 无断点 */ }
         }
@@ -378,23 +395,67 @@ class GameDownloadManager extends EventEmitter {
         };
     }
 
-    // 任务完成：全部文件下载且校验通过（done 必发一条进度；main.js 监听 done 事件探测主程序写注册表）
+    // 任务完成：全部文件下载且校验通过 → 暂存目录一次性换入正式目录（done 必发一条进度；
+    // main.js 监听 done 事件探测主程序写注册表）
     _finish(task) {
         task.state = 'done';
         task.received = task.total;
         task._speed = 0;
         task._lastEmit = Date.now();
+        const cm = this._commit(task);
+        if (cm && cm.ok === false) {
+            task.state = 'error'; // 换入失败（暂存保留，可重试下载恢复）
+            task._speed = 0;
+            this._emit(task, '', cm.message || '安装目录换入失败', true);
+            this._schedule();
+            return;
+        }
         this.emit('progress', this._evt(task, ''));
         this.emit('done', { taskId: task.taskId, gameId: task.gameId, installDir: task.installDir, username: task.username });
         this._schedule(); // 释放并行槽位，调度排队任务
     }
 
-    // 任务摘要（对外返回/status 数组条目）
+    // 暂存目录 → 正式目录同盘一次性换入（Steam 同款）：旧版本先挪 .old-<ts> 腾位，rename 失败回滚；
+    // 换入成功异步删除旧版本备份（大目录递归删除不阻塞主进程，残留可后续清理）；返回 {ok} 或 {ok:false,message}
+    _commit(task) {
+        const finalDir = task.installDir;
+        const stagingDir = task.stagingDir;
+        if (!stagingDir || !fs.existsSync(stagingDir)) return { ok: true }; // 无暂存内容（全部秒跳）：正式目录已就绪
+        let bak = '';
+        try {
+            if (fs.existsSync(finalDir)) {
+                bak = finalDir + '.old-' + Date.now();
+                fs.renameSync(finalDir, bak); // 同盘 rename，O(1)
+            }
+        } catch (e) {
+            return { ok: false, message: '旧版本目录腾位失败：' + e.message };
+        }
+        try {
+            fs.renameSync(stagingDir, finalDir);
+        } catch (e) {
+            if (bak) { try { fs.renameSync(bak, finalDir); } catch (e2) { /* 回滚失败：备份仍在，交用户手动处理 */ } }
+            return { ok: false, message: '安装目录换入失败：' + e.message };
+        }
+        if (bak) fs.rm(bak, { recursive: true, force: true }, function () { /* 备份清理失败忽略（残留 .old-*） */ });
+        this._pruneStagingParent(stagingDir);
+        return { ok: true };
+    }
+
+    // 清理空的暂存父目录 <root>/downloading（非空/不存在/失败一律忽略）
+    _pruneStagingParent(stagingDir) {
+        try {
+            const parent = path.dirname(stagingDir);
+            if (fs.readdirSync(parent).length === 0) fs.rmdirSync(parent);
+        } catch (e) { /* 目录非空或不存在，忽略 */ }
+    }
+
+    // 任务摘要（对外返回/status 数组条目）。installDir 报安装根（页面持久化 install_path 复用，
+    // 与 BT 通道 installDir 口径差异由页面归一到根），实际落盘由 done 事件 installDir 承载
     _summary(task) {
         return {
             taskId: task.taskId,
             gameId: task.gameId,
-            installDir: task.installDir,
+            installDir: task.root || task.installDir,
             username: task.username,
             state: task.state,
             received: task.received,

@@ -283,8 +283,10 @@
             else if (item.dataset.view === 'workbench') { wbLoadList(); }
             // 阶段二百六十：进入客户端更新视图拉取版本清单
             else if (item.dataset.view === 'appversion') { avLoadList(); }
-            // 游戏管理：进入视图拉取游戏列表（重置到第一页）+ 商店布局配置
-            else if (item.dataset.view === 'games') { gmPage = 1; gmLoadList(); gmLoadConfig(); }
+            // 游戏管理：进入视图拉取商店布局与推荐区块配置
+            else if (item.dataset.view === 'games') { gmLoadConfig(); }
+            // 新增游戏（游戏管理二级页）：拉取游戏列表（重置到第一页）+ 表单复位为「新建」态
+            else if (item.dataset.view === 'gamenew') { gmPage = 1; gmLoadList(); gmOpenEditor(null); }
             // 游戏公告（游戏管理二级页）：进入视图拉取公告表格（重置到第一页）
             else if (item.dataset.view === 'gn') { gnPage = 1; gnLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
@@ -5233,6 +5235,10 @@
     var gmVerGame = null;  // 版本弹窗当前游戏详情（含 versions）
     var gmFiles = [];      // 待上传清单 [{rel_path,size,file,ui:{state,fill}}]
     var gmUploading = false;  // 版本上传进行中（关闭/重复提交归口拦截）
+    // 下载方式=2（BT·上传种子）：暂存上传种子文件名与种子内元信息（保存时随表单提交 torrent_path）
+    var GM_TORRENT_HINT = '上传自制 .torrent（≤8MB）：客户端按种子内 info.name 作为安装目录名下载，故种子内须包含完整游戏文件；该方式为纯 BT，不叠加服务器直链源';
+    var gmTorrentPath = '';   // 已上传种子文件名（服务端 LocalDir/torrents/uploaded/ 下的名字）
+    var gmTorrentMeta = '';   // 种子内元信息回显串（info.name/文件数/大小；编辑回填时为空）
     var gmCancelFlag = false; // 取消标记（当前分片结束即停止后续）
     var gmAbort = null;       // 当前分片 fetch 的 AbortController（取消即时断开）
     var gmStartedIds = [];    // 本批已开始分片上传的 upload_id（取消/失败时统一 cancel 清临时分片）
@@ -5359,7 +5365,7 @@
         });
     }
 
-    // ===== 编辑弹窗 =====
+    // ===== 新建/编辑表单（页内，二级页「新增游戏」；原弹窗已移除） =====
     // 列表接口不含 description，编辑前先拉详情（顺带拿最新全字段，避免覆盖丢数据）
     function gmEdit(a) {
         api('GET', '/admin/api/game/' + a.id).then(function (det) {
@@ -5385,6 +5391,16 @@
         $('gm-f-price').value = d ? (d.price || 0) : 0;
         $('gm-f-sort').value = d ? (d.sort || 0) : 0;
         $('gm-f-status').value = d ? String(d.status === 1 ? 1 : 0) : '0';
+        // 下载方式三态回填（0=HTTP 直连 / 1=BT·生成种子 / 2=BT·上传种子）
+        $('gm-f-dlmethod').value = d ? String(d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)) : '0';
+        // 上传种子回填（编辑时仅文件名；种子内元信息在本次上传时才有，编辑回填不复算）
+        gmTorrentPath = d ? (d.torrent_path || '') : '';
+        gmTorrentMeta = '';
+        gmRenderTorrent();
+        // 启动配置（每个游戏独立）：默认启动程序名称/相对路径 + 启动参数模板
+        $('gm-f-launch-name').value = d ? (d.launch_name || '') : '';
+        $('gm-f-launch-exe').value = d ? (d.launch_exe || '') : '';
+        $('gm-f-launch-args').value = d ? (d.launch_args || '') : '';
         gmCoverUrl = d ? (d.cover || '') : '';
         gmBannerUrl = d ? (d.banner || '') : '';
         gmShots = d && Array.isArray(d.screenshots) ? d.screenshots.slice() : [];
@@ -5394,8 +5410,31 @@
         gmRenderCoverPreview();
         gmRenderBannerPreview();
         gmRenderShots();
+        gmRenderDescImgs();
         gmRenderVids();
-        $('gm-edit-mask').classList.remove('hidden');
+        // 页内表单：编辑时滚动定位到表单卡（新建/编辑同卡，不再有弹窗开合）
+        var card = $('gm-edit-card');
+        if (card) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+
+    // 种子体积展示（B/KB/MB/GB 自适应，服务端回传 info 内文件总字节）
+    function gmFmtBytes(n) {
+        n = Number(n) || 0;
+        if (n < 1024) return n + ' B';
+        var u = ['KB', 'MB', 'GB', 'TB'], v = n, i = -1;
+        while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+        return v.toFixed(v >= 100 ? 0 : 1) + ' ' + u[i];
+    }
+
+    // 上传种子行显隐与回显（仅下载方式=2「BT·上传种子」时出现；已上传时显示文件名与元信息）
+    function gmRenderTorrent() {
+        var isUp = parseInt($('gm-f-dlmethod').value, 10) === 2;
+        $('gm-torrent-row').classList.toggle('hidden', !isUp);
+        $('gm-torrent-clear').classList.toggle('hidden', !gmTorrentPath);
+        var hint = $('gm-torrent-hint');
+        hint.textContent = gmTorrentPath
+            ? ('已上传：' + gmTorrentPath + (gmTorrentMeta ? '（' + gmTorrentMeta + '）' : '') + '；重新上传将替换为新的种子')
+            : GM_TORRENT_HINT;
     }
 
     function gmRenderCoverPreview() {
@@ -5654,6 +5693,43 @@
         });
     }
 
+    // ===== 详细介绍已插入图片预览（解析正文 [img]URL 行渲染缩略图，与截图列表同款；
+    // 删除即从正文移除该行）——上传后即时可见，避免正文只留标记看不到图 =====
+    function gmDescImgLines() {
+        var lines = String($('gm-f-desc').value || '').split('\n');
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+            var m = lines[i].match(/^\s*\[img\]\s*(\S+)\s*$/);
+            if (m) out.push({ line: i, url: m[1] });
+        }
+        return out;
+    }
+    function gmRenderDescImgs() {
+        var box = $('gm-desc-imgs');
+        box.innerHTML = '';
+        gmDescImgLines().forEach(function (it, idx) {
+            var item = document.createElement('div');
+            item.className = 'gm-shot-item';
+            var img = document.createElement('img');
+            img.src = it.url;
+            img.alt = '详情图' + (idx + 1);
+            var del = document.createElement('button');
+            del.className = 'gm-shot-del';
+            del.type = 'button';
+            del.textContent = '×';
+            del.title = '删除该图（从正文移除）';
+            del.addEventListener('click', function () {
+                var lines = String($('gm-f-desc').value || '').split('\n');
+                lines.splice(it.line, 1);
+                $('gm-f-desc').value = lines.join('\n');
+                gmRenderDescImgs();
+            });
+            item.appendChild(img);
+            item.appendChild(del);
+            box.appendChild(item);
+        });
+    }
+
     // ===== 分类标签（预设胶囊多选 + 自定义补充，保存合并逗号串入 tags 字段） =====
     function gmRenderTagPicks() {
         var box = $('gm-tag-picks');
@@ -5810,6 +5886,22 @@
         }).then(cb).catch(function () { cb({ ok: false, msg: '网络异常' }); });
     }
 
+    // 自制种子上传（下载方式=2）：multipart 单文件 → /admin/api/game/upload/torrent，
+    // 服务端轻校验后落 LocalDir/torrents/uploaded/，回 {path, name, size_bytes, file_count}
+    function gmUploadTorrent(file, cb) {
+        if (!/\.torrent$/i.test(file.name || '')) { cb({ ok: false, msg: '仅接受 .torrent 种子文件' }); return; }
+        if (file.size > 8 * 1024 * 1024) { cb({ ok: false, msg: '种子超出 8MB 上限' }); return; }
+        var fd = new FormData();
+        fd.append('file', file);
+        fetch('/admin/api/game/upload/torrent', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + getToken() },
+            body: fd
+        }).then(function (resp) {
+            return resp.json().catch(function () { return { ok: false, msg: '响应解析失败' }; });
+        }).then(cb).catch(function () { cb({ ok: false, msg: '网络异常' }); });
+    }
+
     function gmSave() {
         if (gmVidUploading) { showToast('视频上传中，请稍候'); return; }
         gmAddCustomTag(); // 兜底收编未确认的自定义输入（防失焦时序遗漏）
@@ -5820,6 +5912,8 @@
             showToast('slug 仅允许小写字母/数字/下划线/中划线（1-64 位）');
             return;
         }
+        var dlmethod = parseInt($('gm-f-dlmethod').value, 10) || 0;
+        if (dlmethod === 2 && !gmTorrentPath) { showToast('下载方式为「BT（上传种子）」，请先上传 .torrent 文件'); return; }
         var payload = {
             slug: slug,
             name: name,
@@ -5834,7 +5928,12 @@
             publisher: $('gm-f-publisher').value.trim(),
             price: Math.max(0, parseFloat($('gm-f-price').value) || 0),
             sort: parseInt($('gm-f-sort').value, 10) || 0,
-            status: parseInt($('gm-f-status').value, 10) || 0
+            status: parseInt($('gm-f-status').value, 10) || 0,
+            download_method: dlmethod,
+            torrent_path: gmTorrentPath, // 下载方式=2 必填（服务端二次校验存在性）；其余方式保留/不填均可
+            launch_name: $('gm-f-launch-name').value.trim(),
+            launch_exe: $('gm-f-launch-exe').value.trim(),
+            launch_args: $('gm-f-launch-args').value.trim()
         };
         var btn = $('gm-edit-ok');
         btn.disabled = true;
@@ -5844,8 +5943,8 @@
         req.then(function (result) {
             btn.disabled = false;
             if (!result.ok) { showToast(result.msg || '保存失败'); return; }
-            $('gm-edit-mask').classList.add('hidden');
             showToast('已保存');
+            gmOpenEditor(null); // 页内表单复位为「新建」态（清空已保存内容）
             gmLoadList();
         }).catch(function (e) { btn.disabled = false; showToast(e.message || '网络异常'); });
     }
@@ -5866,7 +5965,13 @@
             publisher: d.publisher || '',
             price: d.price || 0,
             sort: d.sort || 0,
-            status: status
+            download_method: (d.download_method === 2 ? 2 : (d.download_method === 1 ? 1 : 0)), // 全量回写：防上架/下架切换把 BT 游戏重置为 HTTP
+            torrent_path: d.torrent_path || '', // 全量回写：防状态切换丢失已上传种子关联
+            status: status,
+            // 启动配置全量回写（列表/详情含字段）：防上架/下架切换时清空
+            launch_name: d.launch_name || '',
+            launch_exe: d.launch_exe || '',
+            launch_args: d.launch_args || ''
         };
     }
 
@@ -6188,14 +6293,12 @@
     }
 
     // ===== 事件绑定 =====
-    $('gm-create').addEventListener('click', function () { gmOpenEditor(null); });
     $('gm-refresh').addEventListener('click', function () { gmLoadList(); });
     $('gm-search').addEventListener('input', function () { gmPage = 1; gmLoadList(); });
     $('gm-prev').addEventListener('click', function () { if (gmPage > 1) { gmPage--; gmLoadList(); } });
     $('gm-next').addEventListener('click', function () { if (gmPage * GM_PAGE_SIZE < gmTotal) { gmPage++; gmLoadList(); } });
-    // 编辑弹窗
-    $('gm-edit-mask').addEventListener('click', function (e) { if (e.target === this) this.classList.add('hidden'); });
-    $('gm-edit-cancel').addEventListener('click', function () { $('gm-edit-mask').classList.add('hidden'); });
+    // 页内表单：重置回「新建」态（清空表单）；保存
+    $('gm-edit-reset').addEventListener('click', function () { gmOpenEditor(null); });
     $('gm-edit-ok').addEventListener('click', gmSave);
     // 封面上传
     $('gm-cover-btn').addEventListener('click', function () { $('gm-cover-file').click(); });
@@ -6211,6 +6314,31 @@
         });
     });
     $('gm-cover-clear').addEventListener('click', function () { gmCoverUrl = ''; gmRenderCoverPreview(); });
+
+    // 下载方式切换：三态（含 BT·上传种子）时同步上传种子行显隐
+    $('gm-f-dlmethod').addEventListener('change', gmRenderTorrent);
+    // 上传种子（下载方式=2）：上传成功记文件名与种子内元信息（保存时随表单提交 torrent_path）
+    $('gm-torrent-btn').addEventListener('click', function () { $('gm-torrent-file').click(); });
+    $('gm-torrent-file').addEventListener('change', function () {
+        var f = this.files && this.files[0];
+        this.value = '';
+        if (!f) return;
+        gmUploadTorrent(f, function (r) {
+            if (!r.ok) { showToast(r.msg || '种子上传失败'); return; }
+            var d = r.data || {};
+            gmTorrentPath = d.path || '';
+            gmTorrentMeta = (d.name ? ('安装名 ' + d.name) : '') +
+                (d.file_count ? ('，' + d.file_count + ' 个文件') : '') +
+                (d.size_bytes ? ('，' + gmFmtBytes(d.size_bytes)) : '');
+            gmRenderTorrent();
+            showToast('种子已上传');
+        });
+    });
+    $('gm-torrent-clear').addEventListener('click', function () {
+        gmTorrentPath = '';
+        gmTorrentMeta = '';
+        gmRenderTorrent();
+    });
 
     // 库横幅上传（游戏库 hero 大图，同封面小图通道）
     $('gm-banner-btn').addEventListener('click', function () { $('gm-banner-file').click(); });
@@ -6230,6 +6358,8 @@
     // ===== 详细介绍插入图片（[img]URL 独立成行协议，商店详情页渲染为配图块，支持 GIF 动图）：
     // 多选按顺序逐张上传，全部完成后统一插入光标处（保序，失败项跳过并提示）
     $('gm-desc-img-btn').addEventListener('click', function () { $('gm-desc-img-file').click(); });
+    // 正文手改（增删 [img] 行）时预览区跟随刷新
+    $('gm-f-desc').addEventListener('input', gmRenderDescImgs);
     $('gm-desc-img-file').addEventListener('change', function () {
         var files = Array.prototype.slice.call(this.files || []);
         this.value = '';
@@ -6252,6 +6382,7 @@
                     ta.focus();
                     var np = (head + block).length;
                     try { ta.setSelectionRange(np, np); } catch (e) { /* ignore */ }
+                    gmRenderDescImgs(); // 预览区同步（缩略图即时可见）
                     showToast('已插入 ' + ok.length + ' 张图片' + (failed ? '，' + failed + ' 张失败' : ''));
                 }
             });

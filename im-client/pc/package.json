@@ -55,7 +55,9 @@
       "!lsp-manager.js",
       "!remote-input.js",
       "!debug-manager.js",
-      "!updater.js"
+      "!updater.js",
+      "!dlbt-host/**",
+      "!dll/**"
     ],
     "win": {
       "target": "nsis",
@@ -94,6 +96,14 @@
       {
         "from": "bundled/winfsp.msi",
         "to": "winfsp.msi"
+      },
+      {
+        "from": "dlbt-host/dlbt-host.exe",
+        "to": "dlbt-host/dlbt-host.exe"
+      },
+      {
+        "from": "dlbt-host/DLBT.dll",
+        "to": "dlbt-host/DLBT.dll"
       }
     ]
   },

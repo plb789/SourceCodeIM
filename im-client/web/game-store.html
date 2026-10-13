@@ -1162,6 +1162,18 @@
 
         .gs-task-state.gray { color: var(--text-light); }
 
+        /* 下载通道标识（BT/P2SP 任务徽标，主题色描边胶囊，跟随明暗主题） */
+        .gs-task-via {
+            flex-shrink: 0;
+            font-size: 10px;
+            line-height: 1;
+            padding: 3px 6px;
+            border-radius: 3px;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            opacity: 0.85;
+        }
+
         .gs-task-file {
             margin-top: 4px;
             font-size: 11px;
@@ -1964,6 +1976,22 @@
 
         .gs-lib-sstate { font-size: 10px; color: var(--text-light); flex-shrink: 0; }
 
+        /* 侧栏安装中环形进度（自绘 SVG，跟随主题色）：底轨 + 主题色进度弧 + 居中百分比。
+           dashoffset 由 JS 按 received/total 推进；stroke-linecap 圆头 + 少量过渡让进度平滑 */
+        .gs-lib-sprog { width: 26px; height: 26px; flex-shrink: 0; }
+
+        .gs-lib-sprog-track { fill: none; stroke: var(--placeholder-bg); stroke-width: 2.5; }
+
+        .gs-lib-sprog-fill {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.3s linear;
+        }
+
+        .gs-lib-sprog-text { fill: var(--text); font-size: 8px; font-weight: 600; }
+
         .gs-lib-main { flex: 1; min-width: 0; overflow-y: auto; padding: 16px; }
 
         .gs-lib-main-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
@@ -2433,6 +2461,8 @@
         }
 
         /* ===== 自绘确认弹窗（禁用系统 alert/confirm，样式对齐主窗口 modal） ===== */
+        /* 遮罩淡入淡出：显隐走 opacity/visibility（全局 .hidden 的 display:none 被同权重更高优先级覆盖，
+           常驻布局但不可点击），点「安装」弹选盘框时不再瞬间压暗整页闪一下 */
         .gs-modal-mask {
             position: fixed;
             inset: 0;
@@ -2441,6 +2471,18 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            opacity: 1;
+            visibility: visible;
+            transition: opacity 0.18s ease, visibility 0s;
+        }
+
+        /* 隐藏态：先淡出（0.18s）再切 visibility（延迟 0.18s），淡出过程可见 */
+        .gs-modal-mask.hidden {
+            display: flex !important;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.18s ease, visibility 0s linear 0.18s;
         }
 
         .gs-modal {
@@ -2488,6 +2530,234 @@
             from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
             to { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
+
+        /* ===== Steam 同款选盘安装弹窗（磁盘条目：盘符 + 双色占用条 + 总/已用/剩余） ===== */
+        .gs-modal-title.left { text-align: left; }
+
+        .gs-disk-modal { width: 400px; }
+
+        .gs-disk-hint {
+            margin-top: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-light);
+            text-align: left;
+        }
+
+        /* 游戏信息行（Steam 同款）：缩略图 + 名称 + 大小；无游戏（设置流程）时整行隐藏 */
+        .gs-disk-game {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        .gs-disk-gthumb {
+            width: 120px;
+            aspect-ratio: 16 / 9;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--placeholder-bg);
+            flex-shrink: 0;
+        }
+
+        .gs-disk-gthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-disk-gthumb .gs-cover-ph b { font-size: 18px; }
+
+        .gs-disk-gname {
+            flex: 1;
+            min-width: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-disk-gsize { font-size: 13px; font-weight: 600; color: var(--text); flex-shrink: 0; }
+
+        .gs-disk-list {
+            margin-top: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .gs-disk-loading { padding: 18px 0; font-size: 12px; color: var(--text-light); text-align: center; }
+
+        .gs-disk-item {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+        }
+
+        .gs-disk-item:hover { border-color: var(--primary); }
+
+        .gs-disk-item.sel { border-color: var(--primary); background: var(--hover); }
+
+        .gs-disk-item.sel::after {
+            content: '✓';
+            position: absolute;
+            top: 6px;
+            right: 10px;
+            font-size: 12px;
+            color: var(--primary);
+        }
+
+        .gs-disk-letter { font-size: 14px; font-weight: 600; color: var(--text); min-width: 34px; }
+
+        .gs-disk-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+
+        /* 双色占用条：灰底=剩余空间（Steam 同款），已用部分主色亮条填充；剩余不足转警示色 */
+        .gs-disk-cap { height: 6px; border-radius: 3px; background: var(--divider); overflow: hidden; }
+
+        .gs-disk-cap i { display: block; height: 100%; border-radius: 3px; background: var(--primary); }
+
+        .gs-disk-cap i.lack { background: var(--danger, #fa5151); }
+
+        .gs-disk-meta { font-size: 11px; color: var(--text-secondary); display: flex; gap: 8px; white-space: nowrap; }
+
+        .gs-disk-free { color: var(--primary); }
+
+        .gs-disk-free.lack { color: var(--danger, #fa5151); }
+
+        /* ===== 游戏中心设置弹窗（一期：下载目录；值文本允许复制） ===== */
+        .gs-set-row { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; text-align: left; }
+
+        .gs-set-label { font-size: 12px; color: var(--text-light); }
+
+        .gs-set-value { font-size: 12px; line-height: 1.5; color: var(--text-secondary); word-break: break-all; user-select: text; }
+
+        /* ===== 头像悬停资料卡（主题色气泡：主色描边/悬停反馈，与全局黑灰 data-tip 区分） ===== */
+        .gs-user-card {
+            position: fixed;
+            z-index: 1500;
+            min-width: 156px;
+            padding: 10px;
+            border-radius: 10px;
+            background: var(--panel-bg);
+            border: 1px solid var(--primary);
+            box-shadow: var(--shadow-pop);
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .gs-user-card::before {
+            content: '';
+            position: absolute;
+            top: -5.5px;
+            right: 20px;
+            width: 10px;
+            height: 10px;
+            transform: rotate(45deg);
+            background: var(--panel-bg);
+            border-left: 1px solid var(--primary);
+            border-top: 1px solid var(--primary);
+        }
+
+        .gs-user-card-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 2px 2px 8px;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        .gs-user-card-av {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            overflow: hidden;
+            flex-shrink: 0;
+            background: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .gs-user-card-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .gs-user-card-av b { font-size: 15px; font-weight: 600; color: var(--bg); }
+
+        .gs-user-card-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .gs-user-card-btn {
+            display: block;
+            width: 100%;
+            padding: 7px 10px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .gs-user-card-btn:hover { background: var(--hover); color: var(--primary); }
+
+        /* 悬停卡账号信息区（账号ID + 当前游戏凭据；密码默认掩码，点击显示/复制——防截屏与旁人瞥见） */
+        .gs-user-card-info { margin-top: 4px; padding: 6px 2px 0; border-top: 1px solid var(--border); }
+        .gs-user-card-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 12px; }
+        .gs-user-card-label { flex: 0 0 auto; color: var(--text-light); }
+        .gs-user-card-val {
+            flex: 1 1 auto; min-width: 0; color: var(--text);
+            font-family: 'JetBrains Mono', Consolas, monospace;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .gs-user-card-mini {
+            flex: 0 0 auto; padding: 2px 7px; border: 1px solid var(--border); border-radius: 4px;
+            background: transparent; color: var(--text-secondary); font-size: 11px; cursor: pointer;
+        }
+        .gs-user-card-mini:hover { color: var(--primary); border-color: var(--primary); }
+        .gs-user-card-hint { padding: 2px 0 0; font-size: 11px; color: var(--text-light); }
+
+        /* 库左侧列表右键菜单（自绘，禁系统菜单；主题色） */
+        .gs-ctxmenu {
+            position: fixed; z-index: 2000; min-width: 132px; padding: 4px;
+            background: var(--panel-bg); border: 1px solid var(--border); border-radius: 8px;
+            box-shadow: var(--shadow-pop);
+        }
+        .gs-ctxmenu-item { padding: 7px 12px; border-radius: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+        .gs-ctxmenu-item:hover { background: var(--hover); color: var(--primary); }
+        .gs-ctxmenu-item.danger:hover { color: #e5484d; }
+
+        /* 游戏属性弹窗（库右键“属性”，Steam 同款“设置启动选项”） */
+        .gs-prop-modal { width: 520px; max-width: 92vw; }
+        .gs-prop-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+        .gs-prop-row-top { margin-bottom: -4px; }
+        .gs-prop-label { flex: 0 0 auto; color: var(--text-light); }
+        .gs-prop-val {
+            flex: 1 1 auto; min-width: 0; color: var(--text);
+            font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .gs-prop-btns { display: flex; gap: 8px; margin-top: 8px; }
+        .gs-prop-hint { margin-top: 6px; font-size: 11px; color: var(--text-light); }
+        .gs-prop-modal .gs-modal-title { text-align: left; }
     </style>
 </head>
 <body>
@@ -2613,11 +2883,96 @@
         </div>
     </div>
 
+    <!-- Steam 同款选盘安装弹窗（磁盘容量条 + 总/已用/剩余，替代系统目录选择器） -->
+    <div class="gs-modal-mask hidden" id="gsDiskMask">
+        <div class="gs-modal gs-disk-modal">
+            <div class="gs-modal-title left">选择安装位置</div>
+            <!-- 游戏信息行（Steam 同款：缩略图 + 名称 + 大小），仅安装流程由 JS 填充展示 -->
+            <div class="gs-disk-game hidden" id="gsDiskGame"></div>
+            <div class="gs-disk-hint">游戏将安装到所选磁盘的 CdonlgameApp 文件夹（不存在时自动创建）</div>
+            <div class="gs-disk-list" id="gsDiskList"></div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsDiskCancel">取消</button>
+                <button class="gs-btn primary" id="gsDiskOk">选择</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 游戏中心设置弹窗（一期：下载目录查看/更改；其余项二期扩展） -->
+    <div class="gs-modal-mask hidden" id="gsSetMask">
+        <div class="gs-modal">
+            <div class="gs-modal-title">设置</div>
+            <div class="gs-set-row">
+                <span class="gs-set-label">下载目录</span>
+                <span class="gs-set-value" id="gsSetDir">—</span>
+            </div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsSetChange">更改</button>
+                <button class="gs-btn primary" id="gsSetClose">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 头像悬停资料卡（主题色气泡，鼠标可移入操作；区别于全局黑灰 data-tip 气泡） -->
+    <div class="gs-user-card hidden" id="gsUserCard">
+        <div class="gs-user-card-head">
+            <span class="gs-user-card-av" id="gsCardAv"></span>
+            <span class="gs-user-card-name" id="gsCardName"></span>
+        </div>
+        <!-- 账号ID + 当前游戏凭据（Steam 同款账号ID；密码默认掩码，点击显示/复制） -->
+        <div class="gs-user-card-info">
+            <div class="gs-user-card-row">
+                <span class="gs-user-card-label">账号 ID</span>
+                <span class="gs-user-card-val" id="gsCardUid">—</span>
+            </div>
+            <div class="gs-user-card-row">
+                <span class="gs-user-card-label">游戏凭据</span>
+                <span class="gs-user-card-val" id="gsCardPw">—</span>
+                <button class="gs-user-card-mini hidden" id="gsCardPwToggle" type="button">显示</button>
+                <button class="gs-user-card-mini hidden" id="gsCardPwCopy" type="button">复制</button>
+            </div>
+            <div class="gs-user-card-hint" id="gsCardPwHint"></div>
+        </div>
+        <button class="gs-user-card-btn" id="gsCardProfile">个人资料</button>
+        <button class="gs-user-card-btn" id="gsCardSettings">设置</button>
+    </div>
+
+    <!-- 库左侧列表右键菜单（自绘，禁系统菜单；主题色，定位到光标） -->
+    <div class="gs-ctxmenu hidden" id="gsCtxMenu"></div>
+
+    <!-- 游戏属性弹窗（库右键“属性”，Steam 同款“设置启动选项”）：自定义启动参数 + 主程序路径 -->
+    <div class="gs-modal-mask hidden" id="gsPropMask">
+        <div class="gs-modal gs-prop-modal">
+            <div class="gs-modal-title" id="gsPropTitle">属性</div>
+            <div class="gs-prop-row">
+                <span class="gs-prop-label">安装目录</span>
+                <span class="gs-prop-val" id="gsPropDir">—</span>
+            </div>
+            <div class="gs-prop-row">
+                <span class="gs-prop-label">启动程序</span>
+                <span class="gs-prop-val" id="gsPropExe">—</span>
+            </div>
+            <div class="gs-prop-btns">
+                <button class="gs-btn" id="gsPropPickExe" type="button">选择主程序</button>
+                <button class="gs-btn" id="gsPropClearExe" type="button">用默认</button>
+            </div>
+            <div class="gs-prop-row gs-prop-row-top">
+                <span class="gs-prop-label">启动参数</span>
+            </div>
+            <textarea class="gs-rev-input" id="gsPropArgs" maxlength="1024" placeholder="自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码"></textarea>
+            <div class="gs-prop-hint">留空=使用游戏默认参数；“用默认”=清除自定义主程序，回退游戏默认/自动探测</div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsPropCancel" type="button">取消</button>
+                <button class="gs-btn primary" id="gsPropSave" type="button">保存</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 自绘 Toast -->
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=32"></script>
+    <script src="js/game-store.js?v=42"></script>
     <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

@@ -793,7 +793,10 @@
     // 底部圆点指示器；顶部特色轮播与 capsule 自定义区块共用本核心（games 数据源独立、
     // 定时器登记 gsTimers 统一销毁），多游戏时自动轮换 5s/张、悬停暂停
     function buildCarouselCore(games, autoplay) {
-        var wrap = el('div', 'gs-carousel');
+        // 外层容器（纵向：横向行 + 底部圆点）：圆点必须落在主图/面板之下居中，
+        // 不可挂进横向 flex 行（否则成为第三个 flex 子项被挤到最右侧顶对齐——实测 bug）
+        var wrap = el('div', 'gs-carousel-wrap');
+        var row = el('div', 'gs-carousel');
         var main = el('div', 'gs-car-main');
         var info = el('div', 'gs-car-info');
         var descEl = el('div', 'gs-car-desc', ''); // 主图渐隐条一句话简介（名称移至右面板，Steam 同款）
@@ -804,7 +807,7 @@
             var g = games[idx];
             if (g) openDetail(g.id);
         });
-        wrap.appendChild(main);
+        row.appendChild(main);
 
         // 右侧信息面板
         var panel = el('div', 'gs-car-panel');
@@ -818,7 +821,8 @@
         panel.appendChild(pShots);
         panel.appendChild(pTags);
         panel.appendChild(pAction);
-        wrap.appendChild(panel);
+        row.appendChild(panel);
+        wrap.appendChild(row);
 
         // 当前游戏主图源与名称（闭包记录：截图悬停预览移出后恢复主图用）
         var curPic = '';
@@ -1417,7 +1421,7 @@
         return items;
     }
 
-    // 侧栏行构建（分批器回调）：缩略图+名称+状态，_gid 供选中态行级切换
+    // 侧栏行构建（分批器回调）：缩略图 + 名称 + 安装中环形进度 + 状态，_gid 供选中态行级切换
     function buildLibRow(item) {
         var lib = item.lib || {};
         var g = item.game || state.games[lib.game_id] || {};
@@ -1426,8 +1430,75 @@
         row.appendChild(buildCover(g.cover, g.name, 'gs-lib-sthumb'));
         row.appendChild(el('div', 'gs-lib-sname', g.name || ('游戏 #' + lib.game_id)));
         row.appendChild(el('div', 'gs-lib-sstate', LIB_STATE_TEXT[lib.state] || '未安装'));
+        applyRowRing(row); // 有下载任务时才在名称与状态之间插入环形进度（构建即初始化）
         row.addEventListener('click', function () { state.libSel = lib.game_id; renderLibrary(); });
+        // 右键菜单（自绘，禁系统菜单）：启动 / 属性（自定义启动参数+主程序）/ 移出库
+        row.addEventListener('contextmenu', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            openLibCtxMenu(lib.game_id, e.clientX, e.clientY);
+        });
         return row;
+    }
+
+    // 侧栏安装中环形进度（自绘 SVG，遵守"禁用系统默认控件"）：底轨 + 主题色进度弧 + 居中百分比
+    var RING_R = 10, RING_C = 2 * Math.PI * RING_R;
+    function buildSideRing() {
+        var NS = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('class', 'gs-lib-sprog');
+        svg.setAttribute('viewBox', '0 0 26 26');
+        svg.setAttribute('width', '26');
+        svg.setAttribute('height', '26');
+        ['gs-lib-sprog-track', 'gs-lib-sprog-fill'].forEach(function (cls) {
+            var circle = document.createElementNS(NS, 'circle');
+            circle.setAttribute('class', cls);
+            circle.setAttribute('cx', '13');
+            circle.setAttribute('cy', '13');
+            circle.setAttribute('r', String(RING_R));
+            circle.setAttribute('transform', 'rotate(-90 13 13)'); // 进度起点旋到正上方
+            if (cls === 'gs-lib-sprog-fill') { // 进度弧：dasharray=周长，dashoffset 由剩余比例推算
+                circle.setAttribute('stroke-dasharray', String(RING_C));
+                circle.setAttribute('stroke-dashoffset', String(RING_C));
+                svg._fill = circle;
+            }
+            svg.appendChild(circle);
+        });
+        var txt = document.createElementNS(NS, 'text');
+        txt.setAttribute('class', 'gs-lib-sprog-text');
+        txt.setAttribute('x', '13');
+        txt.setAttribute('y', '13');
+        txt.setAttribute('text-anchor', 'middle');
+        txt.setAttribute('dominant-baseline', 'central');
+        txt.setAttribute('font-size', '8');
+        svg.appendChild(txt);
+        svg._text = txt;
+        return svg;
+    }
+
+    // 按当前下载任务刷新单行环：终态（完成/出错/取消）移除环，其余（queued/downloading/verifying/paused）
+    // 一律视为"安装进行中"保留环——主进程每下完一个文件都会先发 state:'verifying' 再回到 'downloading'
+    // （download-manager.js 逐文件校验），若只在 downloading/paused 显示，环会被反复移除+重建，
+    // 左侧行高在 29px↔34px 间跳动，正是用户反馈的"按钮/元素颤抖"
+    var RING_TERMINAL = { done: 1, error: 1, cancel: 1 };
+    function applyRowRing(row) {
+        var svg = row.querySelector('.gs-lib-sprog');
+        var tid = state.taskByGame[row._gid];
+        var t = tid !== undefined && tid !== null ? state.tasks[tid] : null;
+        if (!t || RING_TERMINAL[t.state]) { if (svg) svg.remove(); return; }
+        if (!svg) { // 首次出现进度：插到名称与状态文字之间（名称 flex:1 占据剩余空间）
+            svg = buildSideRing();
+            var st = row.querySelector('.gs-lib-sstate');
+            if (st) row.insertBefore(svg, st); else row.appendChild(svg);
+        }
+        var pct = t.total > 0 ? Math.min(100, Math.max(0, (t.received || 0) / t.total * 100)) : 0;
+        svg._fill.setAttribute('stroke-dashoffset', String(RING_C * (1 - pct / 100)));
+        svg._text.textContent = Math.floor(pct) + '%';
+    }
+
+    // 侧栏所有行环原地同步（进度帧高频调用，仅改 SVG 属性不重建 DOM）
+    function syncLibSideProgress() {
+        var rows = $('gsLibSideRows').querySelectorAll('.gs-lib-srow');
+        for (var i = 0; i < rows.length; i++) applyRowRing(rows[i]);
     }
 
     // 库侧栏行分批渲染器（万级入库防卡顿核心）：数据仍全量拉取（侧栏本地搜索过滤不受影响），
@@ -1524,6 +1595,76 @@
         osbTick($('gsLibMain')); // 侧栏滚动条已在 renderLibRows 内刷新
     }
 
+    // 库页轻刷新（状态迁移帧）：侧栏状态文案 + 选中游戏页的按钮行/元信息/安装目录原地更新，
+    // 不重建主区 DOM——hero 模糊背景与公告图片 DOM 保留，安装/暂停/完成时不再整页可见闪烁
+    // （原实现每次 refreshViews 都 renderLibrary 全量重建，图片重新解码绘制 + 滚动位置丢失）；
+    // 仅当条目集合或选中项失效（首次入库/移出库/侧栏过滤）时才回退 renderLibrary 全量重建
+    function syncLibrary() {
+        var sel = state.libSel;
+        // 未选中游戏（最近游戏列表）或选中项已移出库：主区整页重建；但侧栏行常被复用
+        // （renderLibrary 的同数据源分支不重建行），故重建后必须显式同步侧栏状态文字与环形进度
+        if (!sel || !state.lib[sel]) { renderLibrary(); syncLibSideState(); return; }
+        var items = libItemsSorted();
+        if (!libPager.sameAs(items)) { renderLibrary(); return; } // 侧栏行集合变化：需重建行 DOM（重建时自行初始化）
+        libPager.refreshActive(sel);
+        syncLibSideState();
+        if (!syncLibGamePage(sel)) renderLibrary(); // 主区结构未就绪（未渲染过）时兜底全量重建
+    }
+
+    // 侧栏行状态文案原地更新（下载中/已暂停/已安装等），行 DOM 不重建
+    function syncLibSideState() {
+        var rows = $('gsLibSideRows').querySelectorAll('.gs-lib-srow');
+        for (var i = 0; i < rows.length; i++) {
+            var item = state.lib[rows[i]._gid];
+            var st = rows[i].querySelector('.gs-lib-sstate');
+            if (st) {
+                // 文案未变则不写 textContent：下载中↔校验交替帧 lib.state 恒为 1（文案同为"下载中"），
+                // 跳过相同的写入可避免无谓的文本节点替换与布局失效
+                var txt = LIB_STATE_TEXT[item && item.lib ? item.lib.state : 0] || '未安装';
+                if (st.textContent !== txt) st.textContent = txt;
+            }
+        }
+        syncLibSideProgress(); // 状态迁移帧同步环形进度显隐与取值
+    }
+
+    // 选中游戏页原地同步：操作按钮行 + 元信息 + 安装目录行 + 吸顶条主操作；
+    // 主区尚无游戏页 DOM（未渲染过）时返回 false 由调用方回退全量重建
+    function syncLibGamePage(gid) {
+        var page = $('gsLibMain').querySelector('.gs-lib-game');
+        var btns = page && page.querySelector('.gs-lib-actions-row');
+        if (!btns) return false;
+        var item = state.lib[gid] || {};
+        var lib = item.lib || {};
+        var g = item.game || state.games[gid] || {};
+        var acts = gameActions(gid, true);
+        // 按钮行签名守卫（任务ID + 文案 + 样式）：下载中↔校验 逐文件切换任务态都会走到这里，
+        // 若每次都清空重建按钮行，按钮会重新绘制并在重建瞬间塌陷，出现用户反馈的"按钮尺寸闪烁/颤抖"；
+        // 签名相同（同一任务、同为"暂停/取消"）则跳过重建；任务更换（taskId 变）时强制重建以刷新事件闭包
+        var sig = libBtnSig(gid, acts);
+        if (btns._sig !== sig) {
+            btns.innerHTML = '';
+            acts.forEach(function (a) { btns.appendChild(mkBtn(a.text, a.cls, a.fn)); });
+            btns._sig = sig;
+        }
+        var meta = page.querySelector('.gs-lib-meta');
+        if (meta) { meta.innerHTML = ''; buildLibMeta(meta, g, lib); }
+        // 安装目录行：首装后出现/更新，无记录时移除（与整页构建时同构）
+        var pathEl = page.querySelector('.gs-lib-path');
+        var toprow = page.querySelector('.gs-lib-toprow');
+        if (lib.install_path) {
+            if (!pathEl && toprow) {
+                pathEl = el('div', 'gs-lib-path', '');
+                toprow.insertAdjacentElement('afterend', pathEl);
+            }
+            if (pathEl) pathEl.textContent = '安装目录：' + lib.install_path;
+        } else if (pathEl) {
+            pathEl.remove();
+        }
+        var act = acts[0] || null;
+        if (libBar.gid !== gid || !libBar.act || !act || libBar.act.text !== act.text) libBarFill(gid, g, act);
+        return true;
+    }
+
     // 库页吸顶操作条 + 返回顶部胶囊（Steam 库页滚动同款）：全局单例（fixed 悬浮，不占内容流），
     // hero 滚出视口后吸顶条滑入（主操作按钮 + 游戏图标名），滚过一屏后底部中央浮现返回顶部
     var libBar = { inited: false, gid: 0, heroH: 300, act: null, bar: null, top: null, shown: null, topShown: null };
@@ -1605,6 +1746,22 @@
         if (libBar.topShown) { libBar.topShown = null; libBar.top.classList.remove('show'); }
     }
 
+    // 库内游戏页右侧元信息（需要的空间/最后运行日期/游戏时间/版本）：整页构建与原地同步共用
+    function buildLibMeta(meta, g, lib) {
+        lib = lib || {};
+        [
+            ['需要的空间', fmtSize(g.size_bytes)],
+            ['最后运行日期', lib.last_play_at ? fmtDate(lib.last_play_at) : '—'],
+            ['游戏时间', lib.play_seconds > 0 ? fmtPlay(lib.play_seconds) : '—'],
+            ['版本', lib.installed_version || LIB_STATE_TEXT[lib.state] || '未安装']
+        ].forEach(function (m) {
+            var cell = el('div', 'gs-lib-meta-item');
+            cell.appendChild(el('div', 'gs-lib-meta-label', m[0]));
+            cell.appendChild(el('div', 'gs-lib-meta-val', m[1]));
+            meta.appendChild(cell);
+        });
+    }
+
     // 库内游戏页（Steam 库选中游戏同款）：hero 横幅（后台可配 banner，空回退封面）+
     // 操作按钮行 + 右侧元信息（需要的空间/最后运行/游戏时间/版本）+
     // 页签条（动态/商店页面/评测）+ 动态区（左栏公告卡 / 右栏更新历史）
@@ -1638,19 +1795,10 @@
         var toprow = el('div', 'gs-lib-toprow');
         var btns = el('div', 'gs-lib-actions-row');
         acts.forEach(function (a) { btns.appendChild(mkBtn(a.text, a.cls, a.fn)); });
+        btns._sig = libBtnSig(gid, acts); // 记录构建签名，避免首次 syncLibGamePage 无谓重建
         toprow.appendChild(btns);
         var meta = el('div', 'gs-lib-meta');
-        [
-            ['需要的空间', fmtSize(g.size_bytes)],
-            ['最后运行日期', lib.last_play_at ? fmtDate(lib.last_play_at) : '—'],
-            ['游戏时间', lib.play_seconds > 0 ? fmtPlay(lib.play_seconds) : '—'],
-            ['版本', lib.installed_version || LIB_STATE_TEXT[lib.state] || '未安装']
-        ].forEach(function (m) {
-            var cell = el('div', 'gs-lib-meta-item');
-            cell.appendChild(el('div', 'gs-lib-meta-label', m[0]));
-            cell.appendChild(el('div', 'gs-lib-meta-val', m[1]));
-            meta.appendChild(cell);
-        });
+        buildLibMeta(meta, g, lib);
         toprow.appendChild(meta);
         wrap.appendChild(toprow);
         if (lib.install_path) wrap.appendChild(el('div', 'gs-lib-path', '安装目录：' + lib.install_path));
@@ -1853,6 +2001,7 @@
         var row = el('div', 'gs-task');
         var head = el('div', 'gs-task-head');
         head.appendChild(el('div', 'gs-task-name', taskName(t)));
+        if (t.via === 'bt') head.appendChild(el('div', 'gs-task-via', 'BT')); // 下载通道标识
         var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
         head.appendChild(el('div', 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : ''), stText));
         row.appendChild(head);
@@ -1927,7 +2076,7 @@
                     };
                     if (t.gameId !== undefined && t.gameId !== null) state.taskByGame[t.gameId] = taskId;
                 }
-                ['name', 'version', 'received', 'total', 'speed', 'state', 'fileRelPath', 'error', 'installDir'].forEach(function (k) {
+                ['name', 'version', 'received', 'total', 'speed', 'state', 'fileRelPath', 'error', 'installDir', 'via'].forEach(function (k) {
                     if (raw[k] !== undefined && raw[k] !== null) t[k] = raw[k];
                 });
             });
@@ -1970,6 +2119,17 @@
         var b = el('button', 'gs-btn' + (cls ? ' ' + cls : ''), text);
         b.addEventListener('click', function (e) { e.stopPropagation(); fn(); });
         return b;
+    }
+
+    // 按钮行签名（任务ID + 文案 + 样式）：供 syncLibGamePage 判断按钮行是否需要重建。
+    // 下载中↔校验交替时签名不变（两态都产出"暂停/取消"）→ 跳过重建，消除按钮重绘/尺寸闪烁；
+    // 任务更换（taskId 变化）时签名变化 → 强制重建，确保按钮事件闭包绑定到当前任务对象
+    function libBtnSig(gid, acts) {
+        var tid = state.taskByGame[gid];
+        var t = tid !== undefined && tid !== null ? state.tasks[tid] : null;
+        var parts = [t ? String(t.taskId) : ''];
+        for (var i = 0; i < acts.length; i++) parts.push(acts[i].text + '|' + (acts[i].cls || ''));
+        return parts.join(';');
     }
 
     // 依据游戏当前状态生成操作按钮定义（详情栏与库列表共用）
@@ -2025,11 +2185,16 @@
             var lib = state.lib[gid].lib;
             for (var k in body) lib[k] = body[k];
             if (state.games[gid]) state.games[gid].in_library = body.state;
+            // 服务端合并后全量重绘兜底：进度帧已轻量化（不重建库主区），下载完成等迁移态
+            // 的 PUT 响应晚于迁移帧到达时由这里补一次刷新，避免库页按钮/状态滞留旧值
+            scheduleRefresh();
         });
     }
 
-    // 安装/更新流程：选安装目录（已有路径复用） → POST 加入库取清单 → 主进程开始下载 → PUT 下载中
-    function startInstall(g, reuseDir) {
+    // 安装/更新流程：选安装目录（已有路径复用） → POST 加入库取清单 → 主进程开始下载 → PUT 下载中。
+    // 下载方式按管理端配置路由：download_method=1 走 BT/P2SP 混合（种子 + 服务器直链源），forceHttp
+    // 为 BT 失败自动回退标记（同一游戏重走 HTTP 清单直连）
+    function startInstall(g, reuseDir, forceHttp) {
         if (!username) { toast('请先在主界面登录后再使用游戏中心'); return; }
         if (!DESKTOP || !DESKTOP.gameDownload) { toast('请在 PC 客户端中下载安装'); return; }
         var gid = g.id;
@@ -2042,6 +2207,10 @@
                 if (!res.ok) { toast(res.msg || '加入游戏库失败'); return; }
                 var d = res.data || {};
                 var manifest = d.manifest || {};
+                var slug = manifest.slug || g.slug || '';
+                // 下载方式路由：1=BT·服务端生成种子（P2SP 混合）2=BT·上传种子（纯 BT，不叠加直链源）
+                var dlMethod = Number(g.download_method) || 0;
+                var viaBt = !forceHttp && (dlMethod === 1 || dlMethod === 2) && !!slug; // BT 需种子锚点 slug
                 var taskId = 'g' + gid + '-' + Date.now();
                 state.tasks[taskId] = {
                     taskId: taskId,
@@ -2054,31 +2223,254 @@
                     total: manifest.size_bytes || 0,
                     speed: 0,
                     state: 'downloading',
-                    fileRelPath: ''
+                    fileRelPath: '',
+                    via: viaBt ? 'bt' : 'http'
                 };
                 state.taskByGame[gid] = taskId;
-                // 大文件下载交给主进程下载器（支持 Range 断点续传），页面只订阅进度
-                DESKTOP.gameDownload({
-                    action: 'start',
-                    taskId: taskId,
-                    gameId: gid,
-                    installDir: installDir,
-                    username: username,
-                    serverBase: location.origin,
-                    files: manifest.files || []
-                });
+                if (viaBt) {
+                    // BT/P2SP：主进程下载种子（服务端 /api/game/torrent/{id} 与文件接口同水位鉴权）
+                    // 后挂引擎；落盘 <installDir>/<slug>/<rel_path>（安装根多一层 slug，done 事件已归一）
+                    DESKTOP.gameDownload({
+                        action: 'start',
+                        via: 'bt',
+                        taskId: taskId,
+                        gameId: gid,
+                        installDir: installDir,
+                        username: username,
+                        serverBase: location.origin,
+                        slug: slug,
+                        torrentUrl: '/api/game/torrent/' + gid + '?version=' + encodeURIComponent(manifest.version || ''),
+                        manifestVersion: manifest.version || '', // P2SP 直链源 base URL 构成（路径式鉴权）
+                        p2sp: dlMethod === 1, // 仅服务端生成种子方式叠加 P2SP 直链源；上传种子为纯 BT
+                        files: manifest.files || []
+                    });
+                    toast((dlMethod === 2 ? '开始 BT 下载（上传种子）：' : '开始 BT 下载：') + (g.name || ('游戏 #' + gid)));
+                } else {
+                    // 大文件下载交给主进程下载器（支持 Range 断点续传），页面只订阅进度
+                    // 落盘 <installDir>/<slug>/<rel_path>（主进程同盘暂存后一次性换入，与 BT 通道归一）
+                    DESKTOP.gameDownload({
+                        action: 'start',
+                        taskId: taskId,
+                        gameId: gid,
+                        installDir: installDir,
+                        slug: slug || ('g' + gid),
+                        username: username,
+                        serverBase: location.origin,
+                        files: manifest.files || []
+                    });
+                    toast('开始下载：' + (g.name || ('游戏 #' + gid)));
+                }
                 putLibState(gid, { state: 1, installed_version: prevInstalled, install_path: installDir });
-                toast('开始下载：' + (g.name || ('游戏 #' + gid)));
                 refreshViews();
             });
         };
 
         if (reuseDir && dir) { go(dir); return; }
-        DESKTOP.gameChooseInstallDir().then(function (r) {
-            if (!r || r.canceled || !r.filePath) return;
-            go(r.filePath);
-        }).catch(function () { /* 用户取消目录选择 */ });
+        // 首次安装：Steam 同款自绘选盘弹窗（游戏信息行 + 磁盘容量条 + 剩余空间），选盘后主进程预创建 <盘>/CdonlgameApp
+        openDiskPicker(Number(g.size_bytes) || 0, function (finalDir) { go(finalDir); }, g);
     }
+
+    // ==================== Steam 同款选盘安装（自绘磁盘选择弹窗替代系统目录选择器） ====================
+    var GS_INSTALL_DIRNAME = 'CdonlgameApp'; // 展示文案用；实际目录由主进程归口创建
+    var diskPickSel = '';    // 弹窗内当前选中的盘根（'D:\'）
+    var diskPickOkCb = null; // 选定回调（接收主进程预创建好的最终安装根）
+
+    function fmtGb(bytes) {
+        var gb = (Number(bytes) || 0) / (1024 * 1024 * 1024);
+        return String(gb >= 100 ? Math.round(gb) : Math.round(gb * 10) / 10);
+    }
+
+    // 打开选盘弹窗：sizeBytes 为待装游戏大小（所选盘剩余不足给警示），onOk 接收最终安装目录；
+    // game 存在时为安装流程——顶部展示 Steam 同款游戏信息行（缩略图/名称/大小），设置流程传空则隐藏
+    function openDiskPicker(sizeBytes, onOk, game) {
+        diskPickOkCb = onOk || null;
+        diskPickSel = '';
+        var gbox = $('gsDiskGame');
+        if (gbox) {
+            gbox.innerHTML = '';
+            if (game) {
+                gbox.appendChild(buildCover(game.cover, game.name, 'gs-disk-gthumb'));
+                gbox.appendChild(el('div', 'gs-disk-gname', game.name || ('游戏 #' + game.id)));
+                gbox.appendChild(el('div', 'gs-disk-gsize', fmtSize(game.size_bytes)));
+                gbox.classList.remove('hidden');
+            } else {
+                gbox.classList.add('hidden');
+            }
+        }
+        var list = $('gsDiskList');
+        list.innerHTML = '<div class="gs-disk-loading">正在读取磁盘信息…</div>';
+        $('gsDiskMask').classList.remove('hidden');
+        osbInit(list); // 磁盘列表挂自绘悬浮滑块（原生滚动条已被归零）
+        osbTick(list, 100);
+        var remembered = '';
+        try { remembered = localStorage.getItem('gs_install_disk') || ''; } catch (e) { /* 忽略 */ }
+        Promise.resolve(DESKTOP && DESKTOP.gameDiskList ? DESKTOP.gameDiskList() : []).then(function (disks) {
+            list = $('gsDiskList');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!disks || !disks.length) {
+                list.innerHTML = '<div class="gs-disk-loading">未读取到本地磁盘，请重试</div>';
+                return;
+            }
+            // 上次选盘置顶并默认选中（Steam 同款记忆），其余按盘符排序
+            disks = disks.slice().sort(function (a, b) {
+                var ra = a.disk === remembered ? 0 : 1, rb = b.disk === remembered ? 0 : 1;
+                return (ra - rb) || (a.disk < b.disk ? -1 : 1);
+            });
+            disks.forEach(function (d) {
+                var lack = sizeBytes > 0 && d.free < sizeBytes;
+                if (!diskPickSel && d.disk === remembered) diskPickSel = d.disk;
+                var row = el('button', 'gs-disk-item' + (d.disk === diskPickSel ? ' sel' : ''));
+                row.appendChild(el('span', 'gs-disk-letter', d.disk));
+                var mid = el('div', 'gs-disk-mid');
+                var cap = el('div', 'gs-disk-cap');
+                var usedBar = el('i');
+                usedBar.style.width = Math.min(100, Math.round((d.used / d.total) * 100)) + '%';
+                if (lack) usedBar.classList.add('lack');
+                cap.appendChild(usedBar);
+                var meta = el('div', 'gs-disk-meta');
+                meta.appendChild(el('span', 'gs-disk-free' + (lack ? ' lack' : ''),
+                    '剩余 ' + fmtGb(d.free) + ' GB' + (lack ? '（空间不足）' : '')));
+                meta.appendChild(el('span', '', '已用 ' + fmtGb(d.used) + ' GB'));
+                meta.appendChild(el('span', '', '共 ' + fmtGb(d.total) + ' GB'));
+                mid.appendChild(cap);
+                mid.appendChild(meta);
+                row.appendChild(mid);
+                row.addEventListener('click', function () {
+                    diskPickSel = d.disk;
+                    var rows = list.querySelectorAll('.gs-disk-item');
+                    for (var i = 0; i < rows.length; i++) rows[i].classList.toggle('sel', rows[i] === row);
+                });
+                list.appendChild(row);
+            });
+            osbTick(list, 60); // 渲染完成后刷新滑块位置
+        }).catch(function () {
+            var l = $('gsDiskList');
+            if (l) l.innerHTML = '<div class="gs-disk-loading">磁盘信息读取失败，请重试</div>';
+        });
+    }
+
+    // 确定选盘：主进程预创建 <盘>/CdonlgameApp 后回调（记忆本次选盘，下次默认选中）
+    $('gsDiskOk').addEventListener('click', function () {
+        if (!diskPickSel) { toast('请先选择安装磁盘'); return; }
+        var cb = diskPickOkCb;
+        var done = function (dir) {
+            try { localStorage.setItem('gs_install_disk', diskPickSel); } catch (e) { /* 忽略 */ }
+            $('gsDiskMask').classList.add('hidden');
+            diskPickOkCb = null;
+            if (cb) cb(dir);
+        };
+        if (!DESKTOP || !DESKTOP.gamePrepareInstallDir) { done(diskPickSel + GS_INSTALL_DIRNAME); return; }
+        DESKTOP.gamePrepareInstallDir(diskPickSel).then(function (r) {
+            if (!r || !r.ok) { toast((r && r.error) || '创建安装目录失败'); return; }
+            done(r.dir);
+        }).catch(function () { toast('创建安装目录失败'); });
+    });
+    $('gsDiskCancel').addEventListener('click', function () {
+        $('gsDiskMask').classList.add('hidden');
+        diskPickOkCb = null;
+    });
+
+    // ==================== 游戏中心设置（一期：下载目录查看/更改；其余项二期扩展） ====================
+    // 当前下载目录展示口径：已有安装记录取其 install_path，否则取上次选盘记忆推导
+    function gsInstallRootText() {
+        for (var gid in state.lib) {
+            var lib = state.lib[gid] && state.lib[gid].lib;
+            if (lib && lib.install_path) return lib.install_path;
+        }
+        var d = '';
+        try { d = localStorage.getItem('gs_install_disk') || ''; } catch (e) { /* 忽略 */ }
+        return d ? d + GS_INSTALL_DIRNAME : '';
+    }
+
+    function openGsSettings() {
+        var dirText = gsInstallRootText();
+        $('gsSetDir').textContent = dirText || '尚未选择（首次安装时选择安装位置）';
+        $('gsSetMask').classList.remove('hidden');
+    }
+
+    $('gsSetChange').addEventListener('click', function () {
+        if (!DESKTOP || !DESKTOP.gameDiskList) { toast('请在 PC 客户端中更改下载目录'); return; }
+        $('gsSetMask').classList.add('hidden');
+        // 更改仅重设默认安装盘（下次选盘默认选中），已装游戏不受影响
+        openDiskPicker(0, function (finalDir) {
+            toast('默认安装位置已设为 ' + finalDir);
+        });
+    });
+    $('gsSetClose').addEventListener('click', function () {
+        $('gsSetMask').classList.add('hidden');
+    });
+
+    // ==================== 头像悬停资料卡（主题色气泡：延时出现、鼠标可移入操作） ====================
+    (function () {
+        var userEl = $('gsUser'), card = $('gsUserCard');
+        if (!userEl || !card || !username) return;
+        var showTimer = null, hideTimer = null;
+        var pwVal = '', pwShown = false;
+        var renderPw = function () {
+            var el1 = $('gsCardPw');
+            if (!pwVal) { el1.textContent = '—'; return; }
+            el1.textContent = pwShown ? pwVal : new Array(pwVal.length + 1).join('•');
+            $('gsCardPwToggle').textContent = pwShown ? '隐藏' : '显示';
+        };
+        var fill = function () {
+            var nameEl = $('gsUserName'), avEl = $('gsUserAv');
+            $('gsCardName').textContent = (nameEl && nameEl.textContent) || username;
+            $('gsCardAv').innerHTML = avEl ? avEl.innerHTML : ''; // 复用首字母块或头像 img
+            // 账号ID + 当前游戏凭据（账号+游戏级派生；无游戏上下文时不显示凭据）
+            $('gsCardUid').textContent = username || '—';
+            var gid = currentGameId();
+            var meta = gid ? gameLaunchMeta(gid) : null;
+            var g = gid ? (state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {}) : {};
+            pwVal = (meta && meta.password) || '';
+            pwShown = false;
+            if (pwVal) {
+                $('gsCardPwToggle').classList.remove('hidden');
+                $('gsCardPwCopy').classList.remove('hidden');
+                $('gsCardPwHint').textContent = '当前游戏：' + (g.name || ('游戏 #' + gid));
+            } else {
+                $('gsCardPwToggle').classList.add('hidden');
+                $('gsCardPwCopy').classList.add('hidden');
+                $('gsCardPwHint').textContent = gid ? '该游戏凭据加载中，可进入详情页查看' : '进入游戏详情/库页面可查看该游戏凭据';
+            }
+            renderPw();
+        };
+        var show = function () {
+            fill();
+            var r = userEl.getBoundingClientRect();
+            card.style.top = Math.round(r.bottom + 8) + 'px';
+            card.style.right = Math.max(Math.round(window.innerWidth - r.right), 8) + 'px';
+            card.classList.remove('hidden');
+        };
+        var hide = function () { card.classList.add('hidden'); };
+        userEl.addEventListener('mouseenter', function () {
+            clearTimeout(hideTimer);
+            clearTimeout(showTimer);
+            showTimer = setTimeout(show, 300);
+        });
+        userEl.addEventListener('mouseleave', function () {
+            clearTimeout(showTimer);
+            hideTimer = setTimeout(hide, 180); // 留出移入气泡的间隙时间
+        });
+        card.addEventListener('mouseenter', function () { clearTimeout(hideTimer); });
+        card.addEventListener('mouseleave', function () {
+            hideTimer = setTimeout(hide, 180);
+        });
+        document.addEventListener('mousedown', function (e) {
+            if (!card.classList.contains('hidden') && !card.contains(e.target) && !userEl.contains(e.target)) hide();
+        });
+        $('gsCardProfile').addEventListener('click', function () {
+            hide();
+            toast('个人资料页即将开放，可先在主界面查看');
+        });
+        $('gsCardSettings').addEventListener('click', function () {
+            hide();
+            openGsSettings();
+        });
+        // 凭据掩码切换 / 复制（默认掩码，降低截屏与旁人瞥见的暴露面）
+        $('gsCardPwToggle').addEventListener('click', function (e) { e.stopPropagation(); pwShown = !pwShown; renderPw(); });
+        $('gsCardPwCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(pwVal); });
+    })();
 
     function onLaunched(gid, startedAt) {
         state.sessions[gid] = startedAt || Date.now();
@@ -2087,20 +2479,188 @@
         refreshViews();
     }
 
-    // 启动流程：gameLaunch → needExe 分支（首次无注册 exe：自绘提示后让用户选主程序再重试）
-    function launchGame(gid) {
+    // ==================== 启动参数与凭据（Steam 同款"设置启动选项"） ====================
+    // 当前"游戏上下文"id：详情页优先，其次库页选中（悬停卡凭据与启动参数归口同一上下文）
+    function currentGameId() {
+        if (state.detailId && state.games[state.detailId]) return state.detailId;
+        if (state.libSel) return state.libSel;
+        return 0;
+    }
+
+    // 取游戏启动元数据：管理端默认（相对主程序 exe/参数模板）+ 本账号对该游戏派生的专属密码
+    function gameLaunchMeta(gid) {
+        var g = state.games[gid] || {};
+        var lib = state.lib[gid] && state.lib[gid].lib;
+        if (!g.launch_args && lib && lib.game) g = lib.game; // 详情未加载时退化用库内快照
+        return {
+            exe: g.launch_exe || '',
+            // 启动程序名称：管理端「启动程序路径」留空时，按 <名称>.exe 在安装根匹配同名主程序
+            // （如 名称=War3 → War3.exe），使只填名称也能启动（匹配归口在主进程 gameResolveLaunchExe）
+            name: g.launch_name || '',
+            args: g.launch_args || '',
+            password: g.launch_password || (lib && lib.launch_password) || ''
+        };
+    }
+
+    // 参数分词：空白分隔 + 单/双引号分组（引号内保留空白），返回字符串数组
+    function splitLaunchArgs(s) {
+        var res = [], cur = '', q = '', started = false;
+        for (var i = 0; i < s.length; i++) {
+            var c = s.charAt(i);
+            if (q) {
+                if (c === q) q = ''; else cur += c;
+                continue;
+            }
+            if (c === '"' || c === "'") { q = c; started = true; continue; }
+            if (/\s/.test(c)) { if (started || cur !== '') { res.push(cur); cur = ''; started = false; } continue; }
+            cur += c;
+        }
+        if (started || cur !== '') res.push(cur);
+        return res;
+    }
+
+    // 参数模板 → 参数数组：替换 {0}=登录账号、{1}=账号专属密码（spawn 直传数组，无需再转义引号）
+    function buildLaunchArgs(tpl, gid) {
+        tpl = String(tpl || '').trim();
+        if (!tpl) return [];
+        var meta = gameLaunchMeta(gid);
+        var parts = splitLaunchArgs(tpl);
+        var out = [];
+        for (var i = 0; i < parts.length; i++) {
+            out.push(parts[i].replace(/\{0\}/g, String(username || '')).replace(/\{1\}/g, String(meta.password || '')));
+        }
+        return out;
+    }
+
+    // 复制到剪贴板（优先 Clipboard API；不可用时回退临时 textarea + execCommand）
+    function copyText(text) {
+        text = String(text || '');
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () { toast('已复制'); }, function () { fallbackCopy(text); });
+            return;
+        }
+        fallbackCopy(text);
+    }
+    function fallbackCopy(text) {
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            toast('已复制');
+        } catch (e) { toast('复制失败'); }
+    }
+
+    // ==================== 库左侧列表右键菜单（自绘，禁系统菜单） ====================
+    var ctxOpen = false;
+    function closeCtxMenu() { $('gsCtxMenu').classList.add('hidden'); ctxOpen = false; }
+    function openCtxMenu(x, y, items) {
+        var m = $('gsCtxMenu');
+        m.innerHTML = '';
+        for (var i = 0; i < items.length; i++) {
+            (function (it) {
+                var row = el('div', 'gs-ctxmenu-item' + (it.danger ? ' danger' : ''), it.label);
+                row.addEventListener('click', function (ev) {
+                    ev.stopPropagation(); closeCtxMenu();
+                    if (it.onClick) it.onClick();
+                });
+                m.appendChild(row);
+            })(items[i]);
+        }
+        m.classList.remove('hidden');
+        var w = m.offsetWidth, h = m.offsetHeight;
+        m.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 6)) + 'px';
+        m.style.top = Math.max(4, Math.min(y, window.innerHeight - h - 6)) + 'px';
+        ctxOpen = true;
+    }
+    document.addEventListener('mousedown', function (e) {
+        if (ctxOpen && !$('gsCtxMenu').contains(e.target)) closeCtxMenu();
+    });
+    window.addEventListener('blur', function () { if (ctxOpen) closeCtxMenu(); });
+    document.addEventListener('scroll', function () { if (ctxOpen) closeCtxMenu(); }, true);
+
+    function openLibCtxMenu(gid, x, y) {
+        var lib = state.lib[gid] && state.lib[gid].lib;
+        var libState = lib ? Number(lib.state) : null;
+        var items = [];
+        // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新）
+        if (libState === 3) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
+        items.push({ label: '属性', onClick: function () { openPropModal(gid); } });
+        items.push({ label: '移出游戏库', danger: true, onClick: function () { removeFromLib(gid); } });
+        openCtxMenu(x, y, items);
+    }
+
+    // ==================== 游戏属性弹窗（自定义启动参数 + 主程序路径覆盖） ====================
+    var propGid = 0, propExe = '';
+    function refreshPropExe() {
+        var g = state.games[propGid] || {};
+        if (propExe) $('gsPropExe').textContent = propExe;
+        else if (g.launch_exe) $('gsPropExe').textContent = '游戏默认：' + g.launch_exe;
+        else if (g.launch_name) $('gsPropExe').textContent = '按名称匹配：' + g.launch_name + '.exe';
+        else $('gsPropExe').textContent = '自动探测（未自定义）';
+    }
+    function openPropModal(gid) {
+        if (!gid) return;
+        var g = state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {};
+        var lib = state.lib[gid] && state.lib[gid].lib;
+        propGid = gid; propExe = '';
+        $('gsPropTitle').textContent = (g.name || ('游戏 #' + gid)) + ' · 属性';
+        $('gsPropDir').textContent = (lib && lib.install_path) || '未安装';
+        $('gsPropArgs').value = '';
+        refreshPropExe();
+        $('gsPropMask').classList.remove('hidden');
+        if (DESKTOP && DESKTOP.gameGetLaunchOptions) {
+            DESKTOP.gameGetLaunchOptions(gid).then(function (opts) {
+                if (!opts || !opts.ok || propGid !== gid) return; // 期间切了游戏：丢弃过期响应
+                if (opts.args) $('gsPropArgs').value = opts.args;
+                if (opts.exe) { propExe = opts.exe; refreshPropExe(); }
+            }).catch(function () {});
+        }
+    }
+    $('gsPropArgs').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
+    $('gsPropPickExe').addEventListener('click', function () {
+        if (!DESKTOP || !DESKTOP.gameChooseGameExe) { toast('请在 PC 客户端中操作'); return; }
+        DESKTOP.gameChooseGameExe().then(function (rr) {
+            if (!rr || rr.canceled || !rr.filePath) return;
+            propExe = rr.filePath; refreshPropExe();
+        });
+    });
+    $('gsPropClearExe').addEventListener('click', function () { propExe = ''; refreshPropExe(); });
+    $('gsPropCancel').addEventListener('click', function () { $('gsPropMask').classList.add('hidden'); });
+    $('gsPropSave').addEventListener('click', function () {
+        if (!propGid) return;
+        if (!DESKTOP || !DESKTOP.gameSetLaunchOptions) { toast('请在 PC 客户端中操作'); return; }
+        var args = $('gsPropArgs').value.trim();
+        DESKTOP.gameSetLaunchOptions(propGid, propExe || '', args).then(function (r) {
+            if (r && r.ok) { toast('已保存启动设置'); $('gsPropMask').classList.add('hidden'); }
+            else toast((r && r.error) || '保存失败');
+        }).catch(function () { toast('保存失败'); });
+    });
+
+    // 启动流程：读取用户启动覆盖（属性）→ 组装参数（{0}/{1} 替换）→ gameLaunch → needExe 降级手动选
+    function launchGame(gid, exePath) {
         if (!username) { toast('请先在主界面登录后再使用游戏中心'); return; }
         if (!DESKTOP || !DESKTOP.gameLaunch) { toast('请在 PC 客户端中启动游戏'); return; }
-        DESKTOP.gameLaunch({ gameId: gid, username: username }).then(function (r) {
+        var meta = gameLaunchMeta(gid);
+        var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
+        var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
+        optsP.then(function (opts) {
+            var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
+            var payload = {
+                gameId: gid, username: username, installDir: libDir,
+                launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid)
+            };
+            if (exePath) payload.exePath = exePath;
+            return DESKTOP.gameLaunch(payload);
+        }).then(function (r) {
             if (r && r.ok) { onLaunched(gid, r.startedAt); return; }
             if (r && r.needExe) {
-                showConfirm('选择游戏主程序', '首次启动需要指定游戏主程序（exe），选择后将开始游戏。', '选择文件', function () {
+                showConfirm('选择游戏主程序', '未能找到游戏主程序（exe），请手动选择，选择后将开始游戏。', '选择文件', function () {
                     DESKTOP.gameChooseGameExe().then(function (rr) {
                         if (!rr || rr.canceled || !rr.filePath) return;
-                        DESKTOP.gameLaunch({ gameId: gid, username: username, exePath: rr.filePath }).then(function (r2) {
-                            if (r2 && r2.ok) onLaunched(gid, r2.startedAt);
-                            else toast((r2 && r2.error) || '启动失败');
-                        }).catch(function () { toast('启动失败'); });
+                        launchGame(gid, rr.filePath); // 带 exePath 重试
                     });
                 });
                 return;
@@ -2955,8 +3515,9 @@
 
     // ==================== 进度事件订阅与全局刷新 ====================
     var refreshPending = false;
+    var progressPending = false;
 
-    function scheduleRefresh() { // 进度事件高频：rAF 合帧刷新
+    function scheduleRefresh() { // 状态迁移帧：rAF 合帧全量刷新
         if (refreshPending) return;
         refreshPending = true;
         requestAnimationFrame(function () {
@@ -2967,9 +3528,25 @@
 
     function refreshViews() {
         updateBadges();
-        renderLibrary();
+        syncLibrary(); // 轻刷新：状态迁移不再整页重建（防闪烁）；结构变化时内部回退全量渲染
         renderDownloads();
         if (state.detailId) updateInstallBox();
+    }
+
+    // 进度帧轻刷新（仅 received/speed 推进，无状态迁移）：库主区不重建——buildLibGamePage 含
+    // hero 模糊背景/公告卡图等大块图片 DOM，下载期间 500ms 一推的全量重建会让整页可见闪烁
+    // （用户反馈"像快速刷新"）；进度可视区（下载管理行/商店安装框/导航角标）原地更新，
+    // 任务态迁移与库数据合并（putLibState）仍走 scheduleRefresh 全量重绘
+    function scheduleProgressRefresh() {
+        if (progressPending) return;
+        progressPending = true;
+        requestAnimationFrame(function () {
+            progressPending = false;
+            updateBadges();
+            syncLibSideProgress(); // 侧栏环形进度跟进度帧原地走
+            renderDownloads();
+            if (state.detailId) updateInstallBox();
+        });
     }
 
     if (DESKTOP && DESKTOP.onGameDownload) {
@@ -3009,9 +3586,21 @@
                     });
                 } else if (t.state === 'error') {
                     toast('下载出错：' + taskName(t) + (t.error ? '（' + t.error + '）' : ''));
+                    // BT 通道失败保底：自动切换 HTTP 清单直连（复用原安装目录重下，仅回退一次防循环）
+                    if (t.via === 'bt' && !t.fallbackDone) {
+                        t.fallbackDone = true;
+                        var fg = state.games[t.gameId] || (state.lib[t.gameId] && state.lib[t.gameId].game);
+                        if (fg) {
+                            delete state.tasks[p.taskId];
+                            if (state.taskByGame[t.gameId] === p.taskId) delete state.taskByGame[t.gameId];
+                            toast('BT 通道失败，已自动切换 HTTP 直连下载');
+                            startInstall(fg, true, true);
+                        }
+                    }
                 }
             }
-            scheduleRefresh();
+            // 状态迁移帧全量重绘（按钮/角标随任务态切换）；纯进度帧轻刷新防整页闪烁
+            (prev !== t.state ? scheduleRefresh : scheduleProgressRefresh)();
         });
     }
 

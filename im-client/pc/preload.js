@@ -902,6 +902,14 @@ contextBridge.exposeInMainWorld('desktop', {
     gameChooseInstallDir: function () {
         return ipcRenderer.invoke('game:choose-install-dir');
     },
+    // Steam 同款选盘：本地固定磁盘列表 → Promise<{disk:'C:',total,free,used}[]>（字节，渲染层换算 GB）
+    gameDiskList: function () {
+        return ipcRenderer.invoke('game:disk-list');
+    },
+    // 选盘后预创建安装根目录（<盘根>/CdonlgameApp，不存在即创建）→ Promise<{ok, dir?/error?}>
+    gamePrepareInstallDir: function (diskRoot) {
+        return ipcRenderer.invoke('game:prepare-install-dir', diskRoot);
+    },
     // 选择游戏主程序 exe → Promise<{canceled, filePath}>
     gameChooseGameExe: function () {
         return ipcRenderer.invoke('game:choose-game-exe');
@@ -919,6 +927,14 @@ contextBridge.exposeInMainWorld('desktop', {
     // 登记游戏主程序到启动注册表（needExe 分支选完 exe 后调用）→ Promise<{ok, error?}>
     gameRegisterExe: function (gameId, exePath) {
         return ipcRenderer.invoke('game:register-exe', { gameId: gameId, exePath: exePath });
+    },
+    // 库右键“属性”：读取用户启动覆盖 {exe, args}（args 为原始模板，占位符未替换）
+    gameGetLaunchOptions: function (gameId) {
+        return ipcRenderer.invoke('game:get-launch-options', { gameId: gameId });
+    },
+    // 库右键“属性”保存：exe 空串=清除用户指定主程序；args 空串=清除自定义参数
+    gameSetLaunchOptions: function (gameId, exe, args) {
+        return ipcRenderer.invoke('game:set-launch-options', { gameId: gameId, exe: exe, args: args });
     },
     // 游戏中心窗最大化/还原切换（无边框窗自绘标题栏按钮，sender 窗口归口）→ Promise<boolean> 切换后是否最大化
     gameWinToggleMaximize: function () {

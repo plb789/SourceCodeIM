@@ -1869,6 +1869,17 @@ td .skel-line {
     resize: vertical;
     line-height: 1.5;
 }
+/* 新增游戏页：内嵌表单卡字段排版（沿用弹窗表单间距，不再限制最大高度——页内随页面滚动） */
+.gm-form-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+}
+.gm-form-body .gm-form-row .admin-input {
+    flex: 1;
+    min-width: 0;
+}
 /* 截图缩略图列表（悬浮右上角删除，微信风格小圆钮） */
 .gm-shots-list {
     display: flex;

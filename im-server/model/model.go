@@ -985,6 +985,21 @@ type Game struct {
 	// Price 售价（积分价格：0=免费直接入库；>0=入库需严格扣除对应积分，共用 AI 积分钱包，
 	// 流水 reason=game_purchase/game_refund；P2 商店化启用）
 	Price float64 `gorm:"column:price;type:double;default:0" json:"price"`
+	// DownloadMethod 下载方式（0=HTTP 清单直连[默认] 1=BT 种子下载[服务端按版本文件生成种子]
+	// 2=BT 上传种子[管理员自制 .torrent 直发]）——1 走 P2SP 混合（种子任务叠加 HTTP 直链源），
+	// 2 为纯 BT（不叠加 P2SP，按上传种子自带的 tracker/DHT 找 peer）；仅 PC 客户端生效，
+	// WEB 端无 BT 引擎自动回退 HTTP。AutoMigrate 自动加列，存量游戏默认 0 行为不变
+	DownloadMethod int8 `gorm:"column:download_method;type:tinyint;default:0" json:"download_method"`
+	// TorrentPath 上传种子文件名（仅下载方式=2 使用；服务端私有，绝不外泄——落
+	// LocalDir/torrents/uploaded/<文件名>，json:"-" 保证不下发客户端）
+	TorrentPath string `gorm:"column:torrent_path;type:varchar(255);default:''" json:"-"`
+	// LaunchExe 默认启动程序相对路径（相对安装根 <安装根>/<slug>，如 bin/game.exe；空=客户端自动探测/手动选）
+	LaunchExe string `gorm:"column:launch_exe;type:varchar(255);default:''" json:"launch_exe"`
+	// LaunchName 启动程序显示名称（仅展示/属性弹窗用，不参与启动逻辑）
+	LaunchName string `gorm:"column:launch_name;type:varchar(128);default:''" json:"launch_name"`
+	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
+	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
+	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
 	// DownCount 安装次数（加入库时递增）
 	DownCount int64 `gorm:"column:down_count;default:0" json:"down_count"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）

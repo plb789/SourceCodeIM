@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 // ===== 游戏中心·管理端（Steam 同款游戏库运营，adminGuard 鉴权） =====
 // 设计归口：
@@ -102,6 +102,27 @@ func gameVersionClean(v string) string {
 	return v
 }
 
+// gameLaunchArgsClean 清洗启动参数模板：限 1024 字符（与 varchar(1024) 对齐），去首尾空白；
+// 占位符 {0}=登录账号 {1}=账号专属16位密码 由客户端启动时替换，此处仅做长度/空白归口
+func gameLaunchArgsClean(a string) string {
+	a = strings.TrimSpace(a)
+	if utf8.RuneCountInString(a) > 1024 {
+		r := []rune(a)
+		a = string(r[:1024])
+	}
+	return a
+}
+
+// gameLaunchNameClean 清洗启动程序显示名称：限 128 字符（与 varchar(128) 对齐）
+func gameLaunchNameClean(n string) string {
+	n = strings.TrimSpace(n)
+	if utf8.RuneCountInString(n) > 128 {
+		r := []rune(n)
+		n = string(r[:128])
+	}
+	return n
+}
+
 // sweepExpiredGameUploads 惰性清理过期分片会话（每次首片顺带扫描）
 func (s *Server) sweepExpiredGameUploads() {
 	now := time.Now()
@@ -132,6 +153,8 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/game/upload/chunk", s.adminGuard(s.handleAdminGameChunk))
 	http.HandleFunc("POST /admin/api/game/upload/cancel", s.adminGuard(s.handleAdminGameChunkCancel))
 	http.HandleFunc("POST /admin/api/game/upload/image", s.adminGuard(s.handleAdminGameImage))
+	// 自制种子上传通道（下载方式=2=BT·上传种子；multipart 单文件，轻校验后落 LocalDir/torrents/uploaded/）
+	http.HandleFunc("POST /admin/api/game/upload/torrent", s.adminGuard(s.handleAdminGameTorrentUpload))
 	// 宣传视频分片通道（商店详情页媒体区 <video> 内联播放用；与游戏包通道共用会话表，Kind 区分）
 	http.HandleFunc("POST /admin/api/game/upload/video", s.adminGuard(s.handleAdminGameVideoChunk))
 	http.HandleFunc("POST /admin/api/game/upload/video/finish", s.adminGuard(s.handleAdminGameVideoFinish))
@@ -148,11 +171,16 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
 	}
-	var g model.Game
-	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+	// TorrentPath 在 model.Game 上标记 json:"-"（服务端私有不下发），故请求体单独收 torrent_path
+	var req struct {
+		model.Game
+		TorrentPath string `json:"torrent_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	g := req.Game
 	g.Slug = strings.ToLower(strings.TrimSpace(g.Slug))
 	g.Name = strings.TrimSpace(g.Name)
 	if !gameSlugRe.MatchString(g.Slug) {
@@ -166,6 +194,29 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if g.Price < 0 {
 		g.Price = 0
 	}
+	if g.DownloadMethod != 0 && g.DownloadMethod != 1 && g.DownloadMethod != 2 {
+		g.DownloadMethod = 0 // 下载方式白名单：0=HTTP（默认）1=BT（服务端生成种子）2=BT（上传种子）
+	}
+	tp, terr := s.gameTorrentPathClean(req.TorrentPath)
+	if terr != nil {
+		adminFail(w, http.StatusBadRequest, terr.Error())
+		return
+	}
+	if g.DownloadMethod == 2 && tp == "" {
+		adminFail(w, http.StatusBadRequest, "下载方式为「上传种子」时必须先上传 .torrent 文件")
+		return
+	}
+	g.TorrentPath = tp
+	// 启动程序相对路径：非空时必须通过路径安全清洗（禁 .. / 绝对路径 / 盘符，防目录穿越）
+	if rawExe := strings.TrimSpace(g.LaunchExe); rawExe != "" {
+		g.LaunchExe = gameRelPathClean(rawExe)
+		if g.LaunchExe == "" {
+			adminFail(w, http.StatusBadRequest, "启动程序路径非法（须为安装目录内的相对路径，如 bin/game.exe）")
+			return
+		}
+	}
+	g.LaunchName = gameLaunchNameClean(g.LaunchName)
+	g.LaunchArgs = gameLaunchArgsClean(g.LaunchArgs)
 	vids, verr := gameVideosClean(g.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -241,6 +292,8 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["status"] = g.Status
 	item["description"] = g.Description
 	item["versions"] = verList
+	// 上传种子文件名（管理端表单回填/上架切换全量回写保真；服务端私有字段 json:"-" 不随 model 下发）
+	item["torrent_path"] = g.TorrentPath
 	adminJSON(w, item)
 }
 
@@ -255,37 +308,70 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
-	var req model.Game
+	var req struct {
+		model.Game
+		TorrentPath string `json:"torrent_path"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
-	req.Slug = strings.ToLower(strings.TrimSpace(req.Slug))
-	if req.Slug != "" && req.Slug != g.Slug {
+	u := req.Game
+	u.Slug = strings.ToLower(strings.TrimSpace(u.Slug))
+	if u.Slug != "" && u.Slug != g.Slug {
 		adminFail(w, http.StatusBadRequest, "slug 不可修改（已作为安装目录锚点）")
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
+	u.Name = strings.TrimSpace(u.Name)
+	if u.Name == "" {
 		adminFail(w, http.StatusBadRequest, "游戏名称不能为空")
 		return
 	}
-	if req.Price < 0 {
-		req.Price = 0
+	if u.Price < 0 {
+		u.Price = 0
 	}
-	vids, verr := gameVideosClean(req.Videos)
+	if u.DownloadMethod != 0 && u.DownloadMethod != 1 && u.DownloadMethod != 2 {
+		u.DownloadMethod = 0
+	}
+	// 上传种子归口：请求带 torrent_path=新上传文件名；不带则保留库内既有值
+	// （上架/下架切换等全量回写场景不丢种子）；下载方式=2 时必须最终有值
+	tp, terr := s.gameTorrentPathClean(req.TorrentPath)
+	if terr != nil {
+		adminFail(w, http.StatusBadRequest, terr.Error())
+		return
+	}
+	if tp == "" {
+		tp = g.TorrentPath
+	}
+	if u.DownloadMethod == 2 && strings.TrimSpace(tp) == "" {
+		adminFail(w, http.StatusBadRequest, "下载方式为「上传种子」时必须先上传 .torrent 文件")
+		return
+	}
+	// 启动程序相对路径清洗（同创建：非空必须为安装目录内的安全相对路径）
+	if rawExe := strings.TrimSpace(u.LaunchExe); rawExe != "" {
+		u.LaunchExe = gameRelPathClean(rawExe)
+		if u.LaunchExe == "" {
+			adminFail(w, http.StatusBadRequest, "启动程序路径非法（须为安装目录内的相对路径，如 bin/game.exe）")
+			return
+		}
+	}
+	u.LaunchName = gameLaunchNameClean(u.LaunchName)
+	u.LaunchArgs = gameLaunchArgsClean(u.LaunchArgs)
+	vids, verr := gameVideosClean(u.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
 		return
 	}
-	if req.Status != 0 && req.Status != 1 {
-		req.Status = g.Status
+	if u.Status != 0 && u.Status != 1 {
+		u.Status = g.Status
 	}
 	updates := map[string]interface{}{
-		"name": req.Name, "short_desc": req.ShortDesc, "description": req.Description,
-		"cover": req.Cover, "banner": req.Banner, "screenshots": req.Screenshots, "tags": req.Tags, "videos": vids,
-		"developer": req.Developer, "publisher": req.Publisher,
-		"price": req.Price, "status": req.Status, "sort": req.Sort,
+		"name": u.Name, "short_desc": u.ShortDesc, "description": u.Description,
+		"cover": u.Cover, "banner": u.Banner, "screenshots": u.Screenshots, "tags": u.Tags, "videos": vids,
+		"developer": u.Developer, "publisher": u.Publisher,
+		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
+		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
+		"torrent_path": tp,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "保存失败")
@@ -326,6 +412,17 @@ func (s *Server) handleAdminGameDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 磁盘目录整删（版本子目录随根目录一并清理）
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug))
+	// 上传种子一并清理（LocalDir/torrents/uploaded/<文件名>；文件名经 Base 归一防穿越）
+	if fp := s.gameUploadedTorrentFile(&g); fp != "" {
+		os.Remove(fp)
+	}
+	// 服务端生成种子缓存一并清理（LocalDir/torrents/<slug>-*.torrent；glob 归口防 slug 复用误命中，
+	// slug 字符集限定 [a-z0-9_-] 无 glob 元字符，安全）
+	if matches, err := filepath.Glob(filepath.Join(s.cfg.Game.LocalDir, "torrents", g.Slug+"-*.torrent")); err == nil {
+		for _, m := range matches {
+			os.Remove(m)
+		}
+	}
 	logger.Info("游戏删除: %s (%s), 操作人=%s", g.Name, g.Slug, adminUserFromCtx(r))
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
@@ -415,6 +512,92 @@ func (s *Server) handleAdminGameChunkCancel(w http.ResponseWriter, r *http.Reque
 	gameUploadSessions.Unlock()
 	os.RemoveAll(s.gameTmpDir(req.UploadID))
 	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// gameTorrentPathClean 清洗上传种子文件名（下载方式=2）：仅接受纯文件名（Base 归一防目录穿越）、
+// .torrent 扩展名、且必须存在于 LocalDir/torrents/uploaded/；空串=未上传（非 2 方式可空）
+func (s *Server) gameTorrentPathClean(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	if p != filepath.Base(p) || strings.ContainsAny(p, "/\\") || utf8.RuneCountInString(p) > 255 {
+		return "", errGame("种子文件名非法")
+	}
+	if strings.ToLower(filepath.Ext(p)) != ".torrent" {
+		return "", errGame("仅接受 .torrent 种子文件")
+	}
+	fp := filepath.Join(s.gameUploadedTorrentDir(), p)
+	if st, err := os.Stat(fp); err != nil || !st.Mode().IsRegular() {
+		return "", errGame("种子文件不存在，请重新上传")
+	}
+	return p, nil
+}
+
+// gameTorrentUploadMax 上传种子大小上限（字节，默认 8MB）：种子的 piece 哈希占绝对主体
+// （4MiB 分片下 50GB 游戏约 256KB），8MB 对超大游戏与超长文件清单均有充足余量
+func (s *Server) gameTorrentUploadMax() int64 { return 8 << 20 }
+
+// handleAdminGameTorrentUpload 上传自制 .torrent（下载方式=2 专用）：
+// multipart 字段 file，轻校验（.torrent 扩展名 + 体积上限 + bencode 首字节 'd'）后落
+// LocalDir/torrents/uploaded/<slug 前缀随机名>.torrent，返回 {path, name, size_bytes, file_count}
+// （name/size/file_count 为种子内 info.name 与文件统计，供管理端回显确认，也用于 method=2 的安装锚点）
+func (s *Server) handleAdminGameTorrentUpload(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	maxSize := s.gameTorrentUploadMax()
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+1<<20) // multipart 边界余量
+	if err := r.ParseMultipartForm(maxSize); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数错误或种子超出大小上限")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		adminFail(w, http.StatusBadRequest, "缺少文件")
+		return
+	}
+	defer file.Close()
+	if strings.ToLower(filepath.Ext(header.Filename)) != ".torrent" {
+		adminFail(w, http.StatusBadRequest, "仅接受 .torrent 种子文件")
+		return
+	}
+	if header.Size > maxSize {
+		adminFail(w, http.StatusBadRequest, fmt.Sprintf("种子文件超出 %dMB 上限", maxSize>>20))
+		return
+	}
+	data, err := io.ReadAll(file)
+	if err != nil || len(data) == 0 {
+		adminFail(w, http.StatusBadRequest, "种子读取失败")
+		return
+	}
+	// 轻校验：bencode 顶层必为字典（首字节 'd'），否则多为错误页/文本被当种子喂引擎
+	if data[0] != 'd' {
+		adminFail(w, http.StatusBadRequest, "种子内容非法（非 bencode 字典格式）")
+		return
+	}
+	name, total, count := torrentInfoScan(data)
+	if name == "" {
+		adminFail(w, http.StatusBadRequest, "种子信息解析失败（缺少 info.name，可能非标准 .torrent）")
+		return
+	}
+	dir := s.gameUploadedTorrentDir()
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		adminFail(w, http.StatusInternalServerError, "目录创建失败")
+		return
+	}
+	b := make([]byte, 6)
+	rand.Read(b)
+	fname := fmt.Sprintf("t%d_%s.torrent", time.Now().UnixNano(), hex.EncodeToString(b))
+	if err := os.WriteFile(filepath.Join(dir, fname), data, 0644); err != nil {
+		adminFail(w, http.StatusInternalServerError, "种子写入失败")
+		return
+	}
+	logger.Info("上传游戏种子: %s（info.name=%s, %d 文件, %d 字节）, 操作人=%s",
+		fname, name, count, total, adminUserFromCtx(r))
+	adminJSON(w, map[string]interface{}{
+		"path": fname, "name": name, "size_bytes": total, "file_count": count,
+	})
 }
 
 // handleAdminGameImage 封面/截图上传（multipart 小图 ≤20MB）：落 WebDir/static/upload/games/，
@@ -620,7 +803,7 @@ func gameVideosClean(raw string) (string, error) {
 		u = strings.TrimSpace(u)
 		if u == "" || strings.Contains(u, "\\") || strings.Contains(u, "..") ||
 			!strings.HasPrefix(u, "/static/upload/games/videos/") {
-			return "", fmt.Errorf("非法视频地址: " + u)
+			return "", fmt.Errorf("非法视频地址: %s", u)
 		}
 		out = append(out, u)
 	}
