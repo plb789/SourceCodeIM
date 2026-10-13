@@ -39,7 +39,7 @@ func InitGame(cfg *config.Config) {
 	if !cfg.Game.Enabled {
 		return
 	}
-	if err := store.DB.AutoMigrate(&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{}, &model.GameConfig{}, &model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}); err != nil {
+	if err := store.DB.AutoMigrate(&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{}, &model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{}, &model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}); err != nil {
 		logger.Error("游戏中心表迁移失败: %v", err)
 		return
 	}
@@ -253,6 +253,9 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"launch_exe":  g.LaunchExe,
 		"launch_name": g.LaunchName,
 		"launch_args": g.LaunchArgs,
+		// 云存档采集/排除路径（原始 JSON 数组串直接下发，客户端自行解析；非敏感字段）
+		"save_paths":   g.SavePaths,
+		"save_exclude": g.SaveExclude,
 		// 上架时间（商店悬停气泡卡"发行于"行；RFC3339 由前端本地化格式）
 		"create_time": g.CreateTime,
 	}
@@ -379,6 +382,18 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/game/review/replies", s.HandleGameReviewReplies)
 	http.HandleFunc("POST /api/game/review/reply", s.HandleGameReviewReplyUpsert)
 	http.HandleFunc("DELETE /api/game/review/reply/{rid}", s.HandleGameReviewReplyDelete)
+	// 云存档（Steam 同款 P1 单设备闭环，server/gamesave.go 归口）：一律字面量前缀式 5 段路由
+	// （第 3 段固定字面量 save，与现有 config/list/library/manifest/file/play/reviews/review 均不冲突；
+	// 第 4 段再固定 manifest/file/finalize/download/data 字面量，绝无两可匹配——Go 1.22 启动不 panic）
+	http.HandleFunc("GET /api/game/save/manifest/{id}", s.HandleGameSaveManifest)
+	http.HandleFunc("POST /api/game/save/file/{id}", s.HandleGameSaveFileUpload)
+	http.HandleFunc("POST /api/game/save/finalize/{id}", s.HandleGameSaveFinalize)
+	http.HandleFunc("GET /api/game/save/download/{fid}", s.HandleGameSaveDownload)
+	http.HandleFunc("DELETE /api/game/save/data/{id}", s.HandleGameSaveDelete)
+	// 阶段二百九十：云存档 P2（版本保留 + 历史）与 P3（多槽位）用户端路由
+	http.HandleFunc("GET /api/game/save/history/{id}", s.HandleGameSaveHistory)
+	http.HandleFunc("POST /api/game/save/rollback/{id}", s.HandleGameSaveRollback)
+	http.HandleFunc("GET /api/game/save/slots/{id}", s.HandleGameSaveSlots)
 	// 管理端（上架/版本/分片上传）
 	registerGameAdminRoutes(s)
 }

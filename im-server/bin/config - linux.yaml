@@ -583,6 +583,14 @@ game:
   trackers:
     - "udp://47.92.77.159:8888/announce"
     - "http://tracker.cdonl.com/announce"
+  # 云存档（Steam 同款云存档 P1 单设备闭环，server/gamesave.go 归口）：管理端为每个游戏配置默认存档
+  # 采集路径（glob）随游戏摘要下发客户端，客户端按 glob 采集存档经 /api/game/save/* 上传/拉取；
+  # enabled=false 时用户端云存档接口统一拒绝
+  save:
+    enabled: true              # 云存档总开关（false 时接口统一拒绝）
+    max_file_size: 52428800    # 单存档文件上限（字节，默认 50MB；0=取默认值）
+    max_total_size: 209715200  # 单用户单游戏云存档总上限（字节，默认 200MB；0=取默认值）
+    retention: 5               # 存档版本保留数（P2 用，先占位 0=5）
 
 # ============================================================
 # 阶段二百七十四：网页卡片（微信同款链接分享卡片，server/webcard.go 归口）

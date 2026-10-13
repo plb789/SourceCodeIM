@@ -959,5 +959,58 @@ contextBridge.exposeInMainWorld('desktop', {
         if (typeof cb === 'function') ipcRenderer.on('game-win:maximized', function (event, on) {
             cb(!!on);
         });
+    },
+    // ===== 阶段二百八十九：游戏云存档（Steam 同款云存档 P1）桥接 API =====
+    // 读取用户存档路径覆盖（userData/game-save.json）→ Promise<{ok, paths:[], exclude:[]}>
+    gameSaveConfigGet: function (gameId) {
+        return ipcRenderer.invoke('game:save-config-get', { gameId: gameId });
+    },
+    // 保存用户存档路径覆盖 cfg={paths:[], exclude:[]}（均空=清除覆盖）→ Promise<{ok, error?}>
+    gameSaveConfigSet: function (gameId, cfg) {
+        return ipcRenderer.invoke('game:save-config-set', {
+            gameId: gameId,
+            paths: (cfg && cfg.paths) || [],
+            exclude: (cfg && cfg.exclude) || []
+        });
+    },
+    // 生效存档路径预览（含来源 user/admin/builtin）payload={gameId, installDir, adminPaths, adminExclude}
+    gameSavePathsPreview: function (payload) {
+        return ipcRenderer.invoke('game:save-paths-preview', payload);
+    },
+    // 执行云存档同步 payload={gameId,username,installDir,adminPaths,adminExclude,mode:'push'|'pull'|'auto'}
+    // → Promise<{ok, uploaded?, downloaded?, skipped?, revision?, note?, error?}>
+    gameSaveSync: function (payload) {
+        return ipcRenderer.invoke('game:save-sync', payload);
+    },
+    // 云端存档清单摘要 payload={gameId,username} → Promise<{ok, exists, file_count, total_size, update_time, revision}>
+    gameSaveManifest: function (payload) {
+        return ipcRenderer.invoke('game:save-manifest', payload);
+    },
+    // 订阅云存档同步进度（主进程 500ms 节流；文件切换与终态必发）
+    // 负载：{gameId,mode,phase,fileRelPath,fileIndex,filesCount,bytesDone,bytesTotal,percent}
+    onGameSaveProgress: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-save:progress', function (event, data) {
+            cb(data);
+        });
+    },
+    // 云端版本历史（P2）payload={gameId,username,slot} → Promise<{ok,exists,current_revision,revisions:[...]}>
+    gameSaveHistory: function (payload) {
+        return ipcRenderer.invoke('game:save-history', payload);
+    },
+    // 版本回滚（P2）payload={gameId,username,slot,revision} → Promise<{ok,revision,restored_from}>
+    gameSaveRollback: function (payload) {
+        return ipcRenderer.invoke('game:save-rollback', payload);
+    },
+    // 云端槽位列表（P3）payload={gameId,username} → Promise<{ok,slots:[...]}>
+    gameSaveSlots: function (payload) {
+        return ipcRenderer.invoke('game:save-slots', payload);
+    },
+    // 删除云端槽位（P3）payload={gameId,username,slot} → Promise<{ok}>
+    gameSaveSlotDelete: function (payload) {
+        return ipcRenderer.invoke('game:save-slot-delete', payload);
+    },
+    // 打开本地存档目录（P3）payload={gameId,installDir,adminPaths,adminExclude} → Promise<{ok,dir}>
+    gameSaveOpenDir: function (payload) {
+        return ipcRenderer.invoke('game:save-open-dir', payload);
     }
 });

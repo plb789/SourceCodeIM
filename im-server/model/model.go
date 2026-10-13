@@ -1000,6 +1000,11 @@ type Game struct {
 	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
 	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
+	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["save/**","%USERPROFILE%/Documents/**"]）：
+	// 管理端录入，随游戏摘要下发客户端解析后按 glob 采集存档；AutoMigrate 自动加列，存量游戏默认空行为不变
+	SavePaths string `gorm:"column:save_paths;type:varchar(1024);default:''" json:"save_paths"`
+	// SaveExclude 云存档排除模式 JSON 数组串（如 ["*.log"]）：命中者不上传
+	SaveExclude string `gorm:"column:save_exclude;type:varchar(1024);default:''" json:"save_exclude"`
 	// DownCount 安装次数（加入库时递增）
 	DownCount int64 `gorm:"column:down_count;default:0" json:"down_count"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
@@ -1091,6 +1096,63 @@ type GameLibrary struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (GameLibrary) TableName() string { return "im_game_library" }
+
+// GameSave 云存档主表 im_game_save（Steam 同款云存档 P1：单设备闭环）
+// 设计归口：一个 (username, game_id, slot) 一组存档（联合唯一索引 idx_save_owner）；
+// Revision 单调递增版本号（finalize 时 +1，客户端凭 revision 判断是否需同步）；
+// TotalSize/FileCount 冗余清单统计（免每次聚合查询）；slot 缺省归口 default
+type GameSave struct {
+	ID       uint   `gorm:"primaryKey;autoIncrement" json:"id"`
+	Username string `gorm:"column:username;type:varchar(32);not null;uniqueIndex:idx_save_owner" json:"username"`
+	GameID   uint   `gorm:"column:game_id;not null;uniqueIndex:idx_save_owner" json:"game_id"`
+	Slot     string `gorm:"column:slot;type:varchar(32);default:'';uniqueIndex:idx_save_owner" json:"slot"`
+	// Revision 版本号（每次 finalize 归口 +1）；TotalSize 存档总字节；FileCount 文件数
+	Revision   int64     `gorm:"column:revision;default:0" json:"revision"`
+	TotalSize  int64     `gorm:"column:total_size;default:0" json:"total_size"`
+	FileCount  int       `gorm:"column:file_count;default:0" json:"file_count"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameSave) TableName() string { return "im_game_save" }
+
+// GameSaveFile 云存档文件清单表 im_game_save_file（uniqueIndex(save_id,rel_path)）
+// 设计归口：rel_path 为存档内逻辑相对路径（正斜杠，如 0/save01.sav）；ObjectKey 服务端私有
+// （json:"-" 绝不外泄，下载按文件 ID 归口校验归属）；SHA256/SizeBytes 上传时流式复算落库
+type GameSaveFile struct {
+	ID     uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	SaveID uint `gorm:"column:save_id;not null;uniqueIndex:idx_save_file" json:"save_id"`
+	// rel_path 245 而非 255——与 bigint(save_id) 组成唯一索引 988B 压入服务器 1000B 索引上限（同 im_game_file）
+	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_save_file" json:"rel_path"`
+	SizeBytes int64  `gorm:"column:size_bytes;default:0" json:"size_bytes"`
+	SHA256    string `gorm:"column:sha256;type:char(64);default:''" json:"sha256"`
+	// ObjectKey 对象存储 key（game_saves/<username>/<gameID>/<slot>/<sha256>），json:"-" 绝不外泄
+	ObjectKey  string    `gorm:"column:object_key;type:varchar(512);default:''" json:"-"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameSaveFile) TableName() string { return "im_game_save_file" }
+
+// GameSaveRev 云存档历史修订表 im_game_save_rev（阶段二百九十：云存档 P2 版本保留）
+// 设计归口：每次定稿（finalize/rollback）以「该修订下的文件清单快照」落一行（Files=JSON 数组：
+// [{rel_path,size,sha256}]），同 (save_id, revision) 唯一；仅保留最近 game.save.retention 条，
+// 超出者裁剪。回滚=以某历史修订快照重建当前清单（对象按内容寻址且仍被该修订引用故可用），并 revision+1 落新快照。
+type GameSaveRev struct {
+	ID        uint  `gorm:"primaryKey;autoIncrement" json:"id"`
+	SaveID    uint  `gorm:"column:save_id;not null;uniqueIndex:idx_save_rev" json:"save_id"`
+	Revision  int64 `gorm:"column:revision;not null;uniqueIndex:idx_save_rev" json:"revision"`
+	TotalSize int64 `gorm:"column:total_size;default:0" json:"total_size"`
+	FileCount int   `gorm:"column:file_count;default:0" json:"file_count"`
+	// Files 修订快照 JSON（rel_path/size/sha256 数组；text 承载长清单，json:"-" 不外泄原始串）
+	Files      string    `gorm:"column:files;type:text" json:"-"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GameSaveRev) TableName() string { return "im_game_save_rev" }
 
 // GameConfig 商店布局配置表 im_game_config（单行表 id=1，管理端可改，用户打开商店即热生效）
 // 设计归口：Layout 模板二选一（steam=Steam 同款首页 / grid=经典网格）；Sections 区块开关

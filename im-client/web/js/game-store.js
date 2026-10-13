@@ -2843,7 +2843,9 @@
         $('gsPropDir').textContent = (lib && lib.install_path) || '未安装';
         $('gsPropArgs').value = '';
         refreshPropExe();
+        initSaveSection(gid); // 云存档分栏（仅 PC 端显示；WEB 端隐藏该分栏按钮）
         $('gsPropMask').classList.remove('hidden');
+        showPropPane('general'); // 每次打开归位到「通用」分栏
         if (DESKTOP && DESKTOP.gameGetLaunchOptions) {
             DESKTOP.gameGetLaunchOptions(gid).then(function (opts) {
                 if (!opts || !opts.ok || propGid !== gid) return; // 期间切了游戏：丢弃过期响应
@@ -2852,6 +2854,26 @@
             }).catch(function () {});
         }
     }
+    // 属性弹窗左侧分栏导航（Steam 同款）：点左侧按钮切换右侧内容区，并刷新自绘悬浮滑块
+    function showPropPane(name) {
+        var items = $('gsPropNav').querySelectorAll('.gs-prop-navitem');
+        for (var i = 0; i < items.length; i++) {
+            items[i].classList.toggle('active', items[i].getAttribute('data-pane') === name);
+        }
+        ['general', 'launch', 'cloud'].forEach(function (p) {
+            $('gsPropPane' + cap(p)).classList.toggle('hidden', p !== name);
+        });
+        $('gsPropPanes').scrollTop = 0; // 切分栏回到顶部（分栏内容各自独立阅读）
+        osbTick($('gsPropPanes'), 300);
+    }
+    (function () {
+        var items = $('gsPropNav').querySelectorAll('.gs-prop-navitem');
+        for (var i = 0; i < items.length; i++) {
+            items[i].addEventListener('click', function () {
+                showPropPane(this.getAttribute('data-pane'));
+            });
+        }
+    })();
     $('gsPropArgs').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
     $('gsPropPickExe').addEventListener('click', function () {
         if (!DESKTOP || !DESKTOP.gameChooseGameExe) { toast('请在 PC 客户端中操作'); return; }
@@ -2872,21 +2894,413 @@
         }).catch(function () { toast('保存失败'); });
     });
 
+    // ==================== 云存档区块（PC 端属性弹窗；Steam 同款云存档 P1） ====================
+    function saveSectionAvailable() { return !!(DESKTOP && DESKTOP.gameSaveSync); }
+
+    // 路径字段 → 数组（兼容 JSON 数组串 / 数组 / 换行串）
+    function parseJsonArr(v) {
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        try { var a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    }
+    function linesToArr(s) { return String(s || '').split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean); }
+
+    // 当前存档槽位（P3）：按游戏记录于内存（默认 default）；切换后启动/退出自动沿用同一槽位
+    var saveSlots = {};
+    function curSlot(gid) { return saveSlots[gid] || 'default'; }
+
+    // 组装同步 payload（管理端默认来自游戏数据 save_paths/save_exclude；用户覆盖由主进程读 game-save.json）
+    // extra：并入附加字段（如 resolve=冲突裁决 / force / mirror）
+    function saveSyncPayload(gid, mode, extra) {
+        var g = state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {};
+        var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
+        var p = {
+            gameId: gid, username: username, installDir: libDir,
+            adminPaths: parseJsonArr(g.save_paths), adminExclude: parseJsonArr(g.save_exclude),
+            mode: mode, slot: curSlot(gid)
+        };
+        if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) p[k] = extra[k]; } }
+        return p;
+    }
+
+    var SAVE_SRC_TEXT = { user: '我的覆盖', admin: '管理端默认', builtin: '内置兜底' };
+
+    // 生效路径明细渲染（来源标签 + 生效目录 + 是否存在/越界）；列表内不滚动，超 8 条折叠计数
+    function renderSavePreview(modes) {
+        var box = $('gsPropSavePreview');
+        if (!box) return;
+        box.innerHTML = '';
+        if (!modes || !modes.length) {
+            box.appendChild(el('div', 'gs-save-prev-none', '未解析到生效路径（安装目录为空或路径不存在）'));
+            return;
+        }
+        var limit = 8;
+        for (var i = 0; i < modes.length && i < limit; i++) {
+            var m = modes[i];
+            var row = el('div', 'gs-save-prev-item');
+            row.appendChild(el('span', 'gs-save-src', '[' + (SAVE_SRC_TEXT[m.source] || m.source) + '] '));
+            row.appendChild(document.createTextNode((m.exists ? '✓ ' : '✗ ') + (m.baseDir || m.pattern)));
+            if (m.rejected) row.appendChild(document.createTextNode('（越界已拒绝）'));
+            box.appendChild(row);
+        }
+        if (modes.length > limit) box.appendChild(el('div', 'gs-save-prev-none', '共 ' + modes.length + ' 条生效路径（其余略）'));
+    }
+
+    function refreshSavePreview() {
+        if (!saveSectionAvailable() || !propGid) return;
+        var p = saveSyncPayload(propGid, '');
+        DESKTOP.gameSavePathsPreview({ gameId: propGid, installDir: p.installDir, adminPaths: p.adminPaths, adminExclude: p.adminExclude })
+            .then(function (r) { if (r && r.ok) renderSavePreview(r.modes); })
+            .catch(function () {});
+    }
+
+    function fmtBytes(n) {
+        n = Number(n) || 0;
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+        return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+    function fmtTime(t) {
+        t = Number(t) || 0;
+        if (!t) return '—';
+        var ms = t < 1e12 ? t * 1000 : t; // 秒/毫秒自适应
+        var d = new Date(ms);
+        if (isNaN(d.getTime())) return '—';
+        var pad = function (x) { return (x < 10 ? '0' : '') + x; };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+
+    function refreshSaveCloud() {
+        if (!saveSectionAvailable() || !propGid) return;
+        var gid = propGid;
+        var cloudEl = $('gsPropSaveCloud');
+        cloudEl.textContent = '查询中…';
+        DESKTOP.gameSaveManifest({ gameId: gid, username: username, slot: curSlot(gid) }).then(function (r) {
+            if (propGid !== gid) return; // 期间切了游戏：丢弃过期响应
+            if (!r || !r.ok) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); return; }
+            if (!r.exists) { cloudEl.textContent = '云端暂无存档'; setSaveBadge('idle'); return; }
+            cloudEl.textContent = '云端 ' + (r.file_count || 0) + ' 个文件 · ' + fmtBytes(r.total_size) + ' · ' + fmtTime(r.update_time);
+            setSaveBadge('ok');
+        }).catch(function () { if (propGid === gid) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); } });
+    }
+
+    // 同步状态图标（P3）：悬浮云图标随同步态切换（idle/ok/err/sync/conflict）
+    var SAVE_BADGE_ICON = { idle: '☁', ok: '✓', err: '!', sync: '↻', conflict: '⚠' };
+    function setSaveBadge(st) {
+        var b = $('gsSaveBadge');
+        if (!b) return;
+        b.className = 'gs-save-badge ' + st;
+        b.textContent = SAVE_BADGE_ICON[st] || '☁';
+    }
+
+    function setSaveProgress(txt, pct) {
+        var prog = $('gsPropSaveProg'), bar = $('gsPropSaveBar'), t = $('gsPropSaveProgTxt');
+        if (!prog) return;
+        prog.classList.remove('hidden');
+        if (t) t.textContent = txt;
+        if (bar) bar.style.width = Math.max(0, Math.min(100, Number(pct) || 0)) + '%';
+    }
+    function clearSaveProgress() { var prog = $('gsPropSaveProg'); if (prog) prog.classList.add('hidden'); }
+
+    // 当前槽位按钮文案（P3）
+    function syncSlotBtn(gid) {
+        var b = $('gsPropSaveSlotBtn');
+        if (!b || !gid || !b.firstChild) return;
+        b.firstChild.nodeValue = curSlot(gid) + ' ';
+    }
+
+    // 属性弹窗打开时初始化云存档区块：PC 端显示并载入用户覆盖 + 生效路径预览 + 云端状态
+    function initSaveSection(gid) {
+        var sec = $('gsPropSaveSec');
+        if (!sec) return;
+        var navCloud = $('gsPropNavCloud');
+        if (!saveSectionAvailable()) {
+            // WEB 端：隐藏云存档分栏（左侧按钮 + 右侧内容）
+            sec.classList.add('hidden');
+            navCloud.classList.add('hidden');
+            return;
+        }
+        sec.classList.remove('hidden');
+        navCloud.classList.remove('hidden');
+        clearSaveProgress();
+        setSaveBadge('idle');
+        syncSlotBtn(gid);
+        $('gsPropSavePaths').value = '';
+        $('gsPropSaveExclude').value = '';
+        $('gsPropSaveCloud').textContent = '查询中…';
+        renderSavePreview([]);
+        var seq = gid;
+        DESKTOP.gameSaveConfigGet(gid).then(function (r) {
+            if (propGid !== seq || !r || !r.ok) return;
+            $('gsPropSavePaths').value = (r.paths || []).join('\n');
+            $('gsPropSaveExclude').value = (r.exclude || []).join('\n');
+            refreshSavePreview();
+        }).catch(function () {});
+        refreshSaveCloud();
+    }
+
+    // 冲突裁决（P2）：弹出自绘三选一 → 按选择重发同步；返回最终同步结果（"稍后处理"→null）
+    function handleSaveConflict(gid, cf, mode) {
+        return promptSaveConflict(gid, cf).then(function (choice) {
+            if (!choice) return null;
+            setSaveBadge('sync');
+            setSaveProgress('同步中…', 0);
+            return DESKTOP.gameSaveSync(saveSyncPayload(gid, mode, { resolve: choice }));
+        });
+    }
+
+    // 手动同步（push/pull）：进度经 onGameSaveProgress 订阅刷新；冲突弹窗裁决；完成后 toast 并刷新云端状态
+    function runSaveSync(mode) {
+        if (!saveSectionAvailable() || !propGid) return;
+        var gid = propGid;
+        setSaveBadge('sync');
+        setSaveProgress('同步中…', 0);
+        DESKTOP.gameSaveSync(saveSyncPayload(gid, mode)).then(function (r) {
+            if (r && r.conflict) return handleSaveConflict(gid, r, mode);
+            return r;
+        }).then(function (r) {
+            if (propGid === gid) { clearSaveProgress(); refreshSaveCloud(); refreshSavePreview(); }
+            if (!r) return; // 冲突弹窗选择"稍后处理"：不做变更
+            if (!r.ok) { setSaveBadge('err'); toast((r && r.error) || '云存档同步失败'); return; }
+            var msg = (mode === 'push')
+                ? ('已上传 ' + (r.uploaded || 0) + ' 个文件' + (r.note ? '（' + r.note + '）' : ''))
+                : ('已下载 ' + (r.downloaded || 0) + ' 个文件' + (r.note ? '（' + r.note + '）' : ''));
+            toast(msg);
+        }).catch(function () { if (propGid === gid) clearSaveProgress(); setSaveBadge('err'); toast('云存档同步失败'); });
+    }
+
+    // ==================== 冲突弹窗（P2 自绘） ====================
+    var confResolve = null;
+    // 展示本地/云端两侧摘要并等待用户裁决；返回 Promise<'cloud'|'local'|'both'|null>
+    function promptSaveConflict(gid, cf) {
+        var local = (cf && cf.local) || {}, cloud = (cf && cf.cloud) || {};
+        var lEl = $('gsConfLocal'), cEl = $('gsConfCloud');
+        if (lEl) lEl.textContent = (local.file_count || 0) + ' 个文件 · ' + fmtBytes(local.total_size);
+        if (cEl) {
+            cEl.innerHTML = cloud.exists
+                ? ((cloud.file_count || 0) + ' 个文件 · ' + fmtBytes(cloud.total_size) + '<br>版本 ' + (cloud.revision || 0) + (cloud.update_time ? (' · ' + fmtTime(cloud.update_time)) : ''))
+                : '云端暂无存档';
+        }
+        setSaveBadge('conflict');
+        $('gsConfMask').classList.remove('hidden');
+        return new Promise(function (resolve) {
+            confResolve = function (choice) {
+                confResolve = null;
+                $('gsConfMask').classList.add('hidden');
+                resolve(choice);
+            };
+        });
+    }
+    $('gsConfCloudBtn').addEventListener('click', function () { if (confResolve) confResolve('cloud'); });
+    $('gsConfLocalBtn').addEventListener('click', function () { if (confResolve) confResolve('local'); });
+    $('gsConfBothBtn').addEventListener('click', function () { if (confResolve) confResolve('both'); });
+    $('gsConfCancel').addEventListener('click', function () { if (confResolve) confResolve(null); });
+
+    // ==================== 槽位管理弹窗（P3 自绘） ====================
+    var slotGid = 0;
+    function openSlotModal(gid) {
+        if (!saveSectionAvailable() || !gid) return;
+        slotGid = gid;
+        $('gsSlotNewName').value = '';
+        refreshSlotList();
+        $('gsSlotMask').classList.remove('hidden');
+        osbInit($('gsSlotList')); osbTick($('gsSlotList'), 60);
+    }
+    function refreshSlotList() {
+        var list = $('gsSlotList');
+        if (!list || !slotGid) return;
+        var gid = slotGid;
+        list.innerHTML = '';
+        list.appendChild(el('div', 'gs-slot-empty', '加载中…'));
+        DESKTOP.gameSaveSlots({ gameId: gid, username: username }).then(function (r) {
+            if (slotGid !== gid) return;
+            if (r && r.error) { list.innerHTML = ''; list.appendChild(el('div', 'gs-slot-empty', '槽位加载失败')); return; }
+            renderSlotList((r && r.slots) || []);
+        }).catch(function () { if (slotGid === gid) { list.innerHTML = ''; list.appendChild(el('div', 'gs-slot-empty', '槽位加载失败')); } });
+    }
+    function renderSlotList(slots) {
+        var list = $('gsSlotList');
+        var gid = slotGid;
+        list.innerHTML = '';
+        if (!slots.length) list.appendChild(el('div', 'gs-slot-empty', '暂无云端槽位，先上传一次存档即可创建'));
+        slots.forEach(function (s) {
+            var cur = s.slot === curSlot(gid);
+            var row = el('div', 'gs-slot-item' + (cur ? ' cur' : ''));
+            var main = el('div', 'gs-slot-main');
+            var nm = el('div', 'gs-slot-name', s.slot);
+            if (cur) nm.appendChild(el('span', 'gs-slot-cur', '当前'));
+            main.appendChild(nm);
+            main.appendChild(el('div', 'gs-slot-meta', (s.file_count || 0) + ' 个文件 · ' + fmtBytes(s.total_size) + ' · 版本 ' + (s.revision || 0) + (s.update_time ? (' · ' + s.update_time) : '')));
+            row.appendChild(main);
+            if (!cur) {
+                var useBtn = el('button', 'gs-slot-mini', '切换');
+                useBtn.type = 'button';
+                useBtn.addEventListener('click', function () { switchSlot(gid, s.slot); });
+                row.appendChild(useBtn);
+            }
+            var delBtn = el('button', 'gs-slot-mini danger', '删除');
+            delBtn.type = 'button';
+            delBtn.addEventListener('click', function () {
+                showConfirm('删除槽位', '删除云端槽位「' + s.slot + '」的全部存档与版本历史？此操作不可恢复。', '删除', function () {
+                    DESKTOP.gameSaveSlotDelete({ gameId: gid, username: username, slot: s.slot }).then(function () {
+                        if (curSlot(gid) === s.slot || saveSlots[gid] === s.slot) { saveSlots[gid] = 'default'; syncSlotBtn(gid); }
+                        toast('已删除槽位 ' + s.slot);
+                        refreshSlotList();
+                        if (propGid === gid) refreshSaveCloud();
+                    }).catch(function () { toast('删除失败'); });
+                }, true);
+            });
+            row.appendChild(delBtn);
+            list.appendChild(row);
+        });
+        osbTick(list, 60);
+    }
+    function switchSlot(gid, slot) {
+        saveSlots[gid] = slot;
+        syncSlotBtn(gid);
+        toast('已切换到槽位 ' + slot);
+        refreshSlotList();
+        if (propGid === gid) refreshSaveCloud();
+    }
+    $('gsPropSaveSlotBtn').addEventListener('click', function () { if (propGid) openSlotModal(propGid); });
+    $('gsSlotClose').addEventListener('click', function () { $('gsSlotMask').classList.add('hidden'); });
+    $('gsSlotCreate').addEventListener('click', function () {
+        var gid = slotGid;
+        if (!gid) return;
+        var name = String($('gsSlotNewName').value || '').trim();
+        if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) { toast('槽位名称仅字母/数字/下划线/中划线，且不超过 32 位'); return; }
+        if (name === curSlot(gid)) { toast('已处于该槽位'); return; }
+        saveSlots[gid] = name; // 切到新空槽位：首次上传时云端按此 slot 创建
+        $('gsSlotNewName').value = '';
+        syncSlotBtn(gid);
+        toast('已新建并切换到槽位 ' + name + '（上传一次后生效）');
+        refreshSlotList();
+        if (propGid === gid) refreshSaveCloud();
+    });
+
+    // ==================== 版本历史弹窗（P2 版本保留 + 回滚，自绘） ====================
+    function openHistModal(gid) {
+        if (!saveSectionAvailable() || !gid) return;
+        $('gsHistHint').textContent = '槽位 ' + curSlot(gid) + ' · 仅显示保留窗口内的历史版本';
+        refreshHistList(gid);
+        $('gsHistMask').classList.remove('hidden');
+        osbInit($('gsHistList')); osbTick($('gsHistList'), 60);
+    }
+    function refreshHistList(gid) {
+        var list = $('gsHistList');
+        if (!list) return;
+        list.innerHTML = '';
+        list.appendChild(el('div', 'gs-hist-empty', '加载中…'));
+        DESKTOP.gameSaveHistory({ gameId: gid, username: username, slot: curSlot(gid) }).then(function (r) {
+            if (!$('gsHistMask') || $('gsHistMask').classList.contains('hidden')) return; // 已关闭：丢弃
+            if (r && r.error) { list.innerHTML = ''; list.appendChild(el('div', 'gs-hist-empty', '历史加载失败')); return; }
+            var revs = (r && r.revisions) || [];
+            list.innerHTML = '';
+            if (!revs.length) { list.appendChild(el('div', 'gs-hist-empty', '暂无历史版本')); osbTick(list, 60); return; }
+            revs.forEach(function (rv) {
+                var row = el('div', 'gs-hist-item' + (rv.current ? ' cur' : ''));
+                var main = el('div', 'gs-hist-main');
+                var t = el('div', 'gs-hist-rev', '版本 ' + rv.revision);
+                if (rv.current) t.appendChild(el('span', 'gs-hist-cur', '当前'));
+                main.appendChild(t);
+                main.appendChild(el('div', 'gs-hist-meta', (rv.file_count || 0) + ' 个文件 · ' + fmtBytes(rv.total_size) + (rv.create_time ? (' · ' + rv.create_time) : '')));
+                row.appendChild(main);
+                if (!rv.current) {
+                    var btn = el('button', 'gs-slot-mini', '回滚');
+                    btn.type = 'button';
+                    btn.addEventListener('click', function () {
+                        showConfirm('回滚版本', '将云端存档回滚到版本 ' + rv.revision + '？回滚会生成一个新版本，原版本仍保留在历史中。', '回滚', function () {
+                            DESKTOP.gameSaveRollback({ gameId: gid, username: username, slot: curSlot(gid), revision: rv.revision }).then(function () {
+                                toast('已回滚到版本 ' + rv.revision);
+                                refreshHistList(gid);
+                                if (propGid === gid) refreshSaveCloud();
+                            }).catch(function (e) { toast((e && e.message) || '回滚失败'); });
+                        });
+                    });
+                    row.appendChild(btn);
+                }
+                list.appendChild(row);
+            });
+            osbTick(list, 60);
+        }).catch(function () { list.innerHTML = ''; list.appendChild(el('div', 'gs-hist-empty', '历史加载失败')); });
+    }
+    $('gsPropSaveHistory').addEventListener('click', function () { if (propGid) openHistModal(propGid); });
+    $('gsHistClose').addEventListener('click', function () { $('gsHistMask').classList.add('hidden'); });
+
+    // 打开本地存档目录（P3 手动管理入口）
+    $('gsPropSaveOpenDir').addEventListener('click', function () {
+        if (!propGid) return;
+        if (!saveSectionAvailable() || !DESKTOP.gameSaveOpenDir) { toast('请在 PC 客户端中操作'); return; }
+        var p = saveSyncPayload(propGid, '');
+        DESKTOP.gameSaveOpenDir({ gameId: propGid, installDir: p.installDir, adminPaths: p.adminPaths, adminExclude: p.adminExclude }).then(function (r) {
+            if (!r || !r.ok) toast((r && r.error) || '未找到可打开的存档目录');
+        }).catch(function () { toast('打开目录失败'); });
+    });
+
+    $('gsPropSaveApply').addEventListener('click', function () {
+        if (!propGid) return;
+        if (!saveSectionAvailable()) { toast('请在 PC 客户端中操作'); return; }
+        var paths = linesToArr($('gsPropSavePaths').value);
+        var exclude = linesToArr($('gsPropSaveExclude').value);
+        DESKTOP.gameSaveConfigSet(propGid, { paths: paths, exclude: exclude }).then(function (r) {
+            if (!r || !r.ok) { toast((r && r.error) || '保存失败'); return; }
+            toast('已保存云存档路径设置');
+            refreshSavePreview();
+        }).catch(function () { toast('保存失败'); });
+    });
+    $('gsPropSaveRestore').addEventListener('click', function () {
+        if (!propGid) return;
+        if (!saveSectionAvailable()) { toast('请在 PC 客户端中操作'); return; }
+        $('gsPropSavePaths').value = '';
+        $('gsPropSaveExclude').value = '';
+        DESKTOP.gameSaveConfigSet(propGid, { paths: [], exclude: [] }).then(function () {
+            toast('已恢复默认存档路径');
+            refreshSavePreview();
+        }).catch(function () {});
+    });
+    $('gsPropSaveUpload').addEventListener('click', function () { runSaveSync('push'); });
+    $('gsPropSaveDownload').addEventListener('click', function () { runSaveSync('pull'); });
+
+    // 云存档同步进度订阅（仅刷新当前属性弹窗游戏；终态延时收起进度条）
+    if (DESKTOP && DESKTOP.onGameSaveProgress) {
+        DESKTOP.onGameSaveProgress(function (evt) {
+            if (!evt || !evt.gameId || evt.gameId !== propGid) return;
+            var phaseTxt = (evt.phase === 'done') ? '完成' : (evt.mode === 'push' ? '上传中' : '下载中');
+            var cnt = evt.filesCount ? (' ' + Math.min((evt.fileIndex || 0) + 1, evt.filesCount) + '/' + evt.filesCount) : '';
+            var name = evt.fileRelPath ? (' · ' + evt.fileRelPath) : '';
+            setSaveProgress(phaseTxt + cnt + name, evt.percent || 0);
+            if (evt.phase === 'done') { setTimeout(function () { clearSaveProgress(); refreshSaveCloud(); }, 800); }
+            else setSaveBadge('sync');
+        });
+    }
+
     // 启动流程：读取用户启动覆盖（属性）→ 组装参数（{0}/{1} 替换）→ gameLaunch → needExe 降级手动选
     function launchGame(gid, exePath) {
         if (!username) { toast('请先在主界面登录后再使用游戏中心'); return; }
         if (!DESKTOP || !DESKTOP.gameLaunch) { toast('请在 PC 客户端中启动游戏'); return; }
         var meta = gameLaunchMeta(gid);
         var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
-        var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
-        optsP.then(function (opts) {
-            var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
-            var payload = {
-                gameId: gid, username: username, installDir: libDir,
-                launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid)
-            };
-            if (exePath) payload.exePath = exePath;
-            return DESKTOP.gameLaunch(payload);
+        // 启动前拉取云端存档（P1：仅本地无存档且云端有才下载；P2：两侧都改过则弹冲突裁决后再启动；失败不阻断启动）
+        var pullP = (DESKTOP.gameSaveSync && libDir)
+            ? DESKTOP.gameSaveSync(saveSyncPayload(gid, 'pull')).catch(function () { return null; })
+            : Promise.resolve(null);
+        pullP.then(function (sv) {
+            if (sv && sv.conflict) return handleSaveConflict(gid, sv, 'pull'); // 等待用户裁决后再启动
+            return sv;
+        }).then(function (sv) {
+            if (sv && sv.downloaded) toast('已从云端同步存档（' + sv.downloaded + ' 个文件）');
+            else if (sv && sv.error) toast('云存档下载失败：' + sv.error);
+            var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
+            return optsP.then(function (opts) {
+                var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
+                var payload = {
+                    gameId: gid, username: username, installDir: libDir,
+                    launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid)
+                };
+                if (exePath) payload.exePath = exePath;
+                return DESKTOP.gameLaunch(payload);
+            });
         }).then(function (r) {
             if (r && r.ok) { onLaunched(gid, r.startedAt); return; }
             if (r && r.needExe) {
@@ -3859,6 +4273,16 @@
             delete state.sessions[gid];
             var seconds = startedAt ? Math.max(0, Math.round((Date.now() - startedAt) / 1000)) : ((info && info.seconds) || 0);
             api('POST', '/api/game/play/' + gid, { action: 'end', seconds: seconds });
+            // 退出后上传云端存档（P1 单设备闭环；P2 冲突弹窗裁决）；非阻塞，失败仅提示
+            if (DESKTOP && DESKTOP.gameSaveSync) {
+                DESKTOP.gameSaveSync(saveSyncPayload(gid, 'push')).then(function (sv) {
+                    if (sv && sv.conflict) return handleSaveConflict(gid, sv, 'push');
+                    return sv;
+                }).then(function (sv) {
+                    if (!sv || !sv.ok) { if (sv && sv.error) toast('云存档上传失败：' + sv.error); return; }
+                    if (sv.uploaded) toast('已上传存档到云端（' + sv.uploaded + ' 个文件）');
+                }).catch(function () {});
+            }
             if (state.lib[gid] && state.lib[gid].lib) {
                 state.lib[gid].lib.play_seconds = (state.lib[gid].lib.play_seconds || 0) + seconds;
             }
@@ -4000,6 +4424,9 @@
     osbInit($('gsLibMain'));
     osbInit($('gsDlList'));
     osbInit($('gsDetailScroll'));
+    osbInit($('gsSlotList'));
+    osbInit($('gsHistList'));
+    osbInit($('gsPropPanes')); // 属性弹窗右侧分栏内容区（超高时内部滚动）
 
     showView('store');
     // 先拉商店布局配置（管理端改后用户下次打开即热生效），再加载商店列表渲染

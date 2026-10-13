@@ -5374,6 +5374,20 @@
         }).catch(function () { showToast('网络异常'); });
     }
 
+    // 云存档路径字段：服务端以 JSON 数组串存储，表单以「每行一个 glob」文本展示；
+    // 两侧转换口径一致（提交一律 JSON.stringify 数组，与后端 gameSavePathsClean 对齐）
+    function gmSavePathsToText(v) {
+        if (!v) return '';
+        try {
+            var arr = JSON.parse(v);
+            return Array.isArray(arr) ? arr.join('\n') : String(v);
+        } catch (e) { return String(v); }
+    }
+    function gmSavePathsToJSON(text) {
+        var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+        return lines.length ? JSON.stringify(lines) : '';
+    }
+
     function gmOpenEditor(d) {
         gmEditingId = d ? (d.id || 0) : 0;
         $('gm-edit-title').textContent = gmEditingId ? '编辑游戏' : '新建游戏';
@@ -5401,6 +5415,9 @@
         $('gm-f-launch-name').value = d ? (d.launch_name || '') : '';
         $('gm-f-launch-exe').value = d ? (d.launch_exe || '') : '';
         $('gm-f-launch-args').value = d ? (d.launch_args || '') : '';
+        // 云存档采集/排除路径（服务端存 JSON 数组串，表单以「每行一个 glob」文本回填）
+        $('gm-f-save-paths').value = gmSavePathsToText(d ? d.save_paths : '');
+        $('gm-f-save-exclude').value = gmSavePathsToText(d ? d.save_exclude : '');
         gmCoverUrl = d ? (d.cover || '') : '';
         gmBannerUrl = d ? (d.banner || '') : '';
         gmShots = d && Array.isArray(d.screenshots) ? d.screenshots.slice() : [];
@@ -5933,7 +5950,10 @@
             torrent_path: gmTorrentPath, // 下载方式=2 必填（服务端二次校验存在性）；其余方式保留/不填均可
             launch_name: $('gm-f-launch-name').value.trim(),
             launch_exe: $('gm-f-launch-exe').value.trim(),
-            launch_args: $('gm-f-launch-args').value.trim()
+            launch_args: $('gm-f-launch-args').value.trim(),
+            // 云存档路径：表单文本（每行一个 glob）→ JSON 数组串，与服务端清洗口径一致
+            save_paths: gmSavePathsToJSON($('gm-f-save-paths').value),
+            save_exclude: gmSavePathsToJSON($('gm-f-save-exclude').value)
         };
         var btn = $('gm-edit-ok');
         btn.disabled = true;
@@ -5971,7 +5991,10 @@
             // 启动配置全量回写（列表/详情含字段）：防上架/下架切换时清空
             launch_name: d.launch_name || '',
             launch_exe: d.launch_exe || '',
-            launch_args: d.launch_args || ''
+            launch_args: d.launch_args || '',
+            // 云存档路径全量回写（列表/详情含字段；字段本身即 JSON 数组串，防状态切换清空）
+            save_paths: d.save_paths || '',
+            save_exclude: d.save_exclude || ''
         };
     }
 

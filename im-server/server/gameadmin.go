@@ -123,6 +123,36 @@ func gameLaunchNameClean(n string) string {
 	return n
 }
 
+// gameSavePathsClean 清洗云存档采集/排除路径（归口）：入参须为合法 JSON 数组串（元素 trim 去空后重组），
+// 结果限 1024 字符（与 varchar(1024) 对齐）；解析失败或为空一律回退空串（与现有清洗 helper 一致的容错语义）
+func gameSavePathsClean(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	var raw []string
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return ""
+	}
+	out := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	if utf8.RuneCountInString(string(b)) > 1024 {
+		return ""
+	}
+	return string(b)
+}
+
 // sweepExpiredGameUploads 惰性清理过期分片会话（每次首片顺带扫描）
 func (s *Server) sweepExpiredGameUploads() {
 	now := time.Now()
@@ -171,16 +201,21 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
 		return
 	}
-	// TorrentPath 在 model.Game 上标记 json:"-"（服务端私有不下发），故请求体单独收 torrent_path
+	// TorrentPath 在 model.Game 上标记 json:"-"（服务端私有不下发），故请求体单独收 torrent_path；
+	// SavePaths/SaveExclude 为 JSON 数组串，模型上以具名字段显式接收（与外层同名字段避免歧义）
 	var req struct {
 		model.Game
 		TorrentPath string `json:"torrent_path"`
+		SavePaths   string `json:"save_paths"`
+		SaveExclude string `json:"save_exclude"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
 	g := req.Game
+	g.SavePaths = gameSavePathsClean(req.SavePaths)
+	g.SaveExclude = gameSavePathsClean(req.SaveExclude)
 	g.Slug = strings.ToLower(strings.TrimSpace(g.Slug))
 	g.Name = strings.TrimSpace(g.Name)
 	if !gameSlugRe.MatchString(g.Slug) {
@@ -311,12 +346,16 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		model.Game
 		TorrentPath string `json:"torrent_path"`
+		SavePaths   string `json:"save_paths"`
+		SaveExclude string `json:"save_exclude"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		adminFail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
 	u := req.Game
+	u.SavePaths = gameSavePathsClean(req.SavePaths)
+	u.SaveExclude = gameSavePathsClean(req.SaveExclude)
 	u.Slug = strings.ToLower(strings.TrimSpace(u.Slug))
 	if u.Slug != "" && u.Slug != g.Slug {
 		adminFail(w, http.StatusBadRequest, "slug 不可修改（已作为安装目录锚点）")
@@ -371,6 +410,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
+		"save_paths": u.SavePaths, "save_exclude": u.SaveExclude,
 		"torrent_path": tp,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {

@@ -1320,6 +1320,10 @@
                     <input id="gm-f-launch-exe" class="admin-input" placeholder="启动程序路径（相对安装目录，如 bin/game.exe，可空）" maxlength="255">
                 </div>
                 <input id="gm-f-launch-args" class="admin-input" placeholder="启动参数（可空；占位符：{0}=登录账号，{1}=账号专属密码）" maxlength="1024">
+                <!-- 云存档：默认存档采集路径（Steam 同款云存档 P1，每行一个 glob；客户端据此收集并上传存档） -->
+                <textarea id="gm-f-save-paths" class="admin-input gm-desc-input" rows="3" placeholder="云存档采集路径（每行一个 glob，如 save/**、%USERPROFILE%/Documents/My Games/X/**；可空）"></textarea>
+                <textarea id="gm-f-save-exclude" class="admin-input gm-desc-input" rows="2" placeholder="云存档排除模式（每行一个 glob，如 *.log、*.tmp；可空）"></textarea>
+                <span class="admin-field-hint">云存档：客户端按采集路径 glob 收集存档文件并上传服务器（排除模式命中者不上传）；支持变量 %USERPROFILE% %APPDATA% %LOCALAPPDATA% %DOCUMENTS% %ProgramData%；留空=该游戏不参与云存档</span>
                 <span class="admin-field-hint">启动程序路径为相对该游戏安装目录的相对路径，禁绝对路径/..；路径留空时客户端先按「启动程序名称」在安装根匹配「名称.exe」，仍无则自动探测（均可由用户在库右键“属性”覆盖）；启动参数每个游戏独立配置，占位符启动时替换为本账号信息</span>
                 <!-- 封面行：上传回填 URL 并预览（复用公告封面预览样式） -->
                 <div class="gm-form-row">

@@ -168,6 +168,20 @@ type GameConfig struct {
 	// announce 与 announce-list，帮助客户端拿到可用 peer；留空=不写 announce，仅公网 DHT 发现）。
 	// 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，重启后自动重建新种子）
 	Trackers []string `yaml:"trackers"`
+	// Save 云存档配置节（Steam 同款云存档 P1，server/gamesave.go 归口）
+	Save GameSaveConfig `yaml:"save"`
+}
+
+// GameSaveConfig 云存档配置节（P1 单设备闭环；server/gamesave.go 归口）
+type GameSaveConfig struct {
+	// Enabled 云存档总开关（false 时用户端云存档接口统一拒绝）
+	Enabled bool `yaml:"enabled"`
+	// MaxFileSize 单存档文件上限（字节，0=50MB）
+	MaxFileSize int64 `yaml:"max_file_size"`
+	// MaxTotalSize 单用户单游戏云存档总上限（字节，0=200MB）
+	MaxTotalSize int64 `yaml:"max_total_size"`
+	// Retention 版本保留数（P2 用，先占位 0=5）
+	Retention int `yaml:"retention"`
 }
 
 // SplashAdConfig 阶段二百四十一：APP 启动广告图配置节

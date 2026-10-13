@@ -24,6 +24,8 @@ const updater = require('./updater.js');
 // 阶段二百八十一：游戏中心下载管理器（Steam 同款游戏浏览/下载——多任务断点续传/SHA256 校验/进度节流）
 const GameDownloadManager = require('./download-manager.js');
 const BtDownloadManager = require('./bt-download-manager.js');
+// 阶段二百八十九：游戏云存档管理器（Steam 同款云存档 P1——路径解析/glob 扫描/SHA256/退出上传/启动下载）
+const GameSaveManager = require('./game-save-manager.js');
 
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
@@ -1262,6 +1264,7 @@ var gameDownloads = new GameDownloadManager(); // 游戏下载管理器实例（
 // 阶段二百八十二：BT/P2SP 混合下载管理器（方案 A：x86 sidecar 宿主 dlbt-host.exe 承载 DLBT 引擎，
 // 接口与 HTTP 管理器镜像，页面 payload via:'bt' 由 game:download 归口路由）
 var btDownloads = new BtDownloadManager();
+var gameSaves = new GameSaveManager(); // 游戏云存档管理器实例（模块见 game-save-manager.js）
 
 function ensureGameStoreWindow() {
     if (gameStoreWin) return gameStoreWin;
@@ -1281,7 +1284,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=12'); // v12：库"运行中"状态（game-start/game-exit 联动 + 启动按钮变运行中）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=15'); // v15：属性弹窗左侧分栏导航（带图标）+ 云存档 P3 UI
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1625,6 +1628,258 @@ function gameExitBroadcast(info) {
         if (!wins[i].isDestroyed()) wins[i].webContents.send('game-exit', info);
     }
 }
+
+// ===== 阶段二百八十九：游戏云存档（Steam 同款云存档 P1 单设备闭环）——路由/广播/用户覆盖配置 =====
+// 云存档进度事件转发：manager 已做 500ms 节流（file/phase 切换与终态必发），此处广播全部窗口
+// 负载：{gameId,mode:'push'|'pull',phase,fileRelPath,fileIndex,filesCount,bytesDone,bytesTotal,percent}
+function gameSaveBroadcast(evt) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send('game-save:progress', evt);
+    }
+}
+gameSaves.on('progress', gameSaveBroadcast);
+
+// 云存档用户覆盖配置（userData/game-save.json）：{gameId: {paths:[], exclude:[]}}（仿 game-launch.json）
+var GAME_SAVE_REG = path.join(app.getPath('userData'), 'game-save.json');
+function gameSaveRegLoad() {
+    try { return JSON.parse(fs.readFileSync(GAME_SAVE_REG, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function gameSaveRegSave(reg) {
+    try {
+        fs.mkdirSync(path.dirname(GAME_SAVE_REG), { recursive: true });
+        fs.writeFileSync(GAME_SAVE_REG, JSON.stringify(reg, null, 2), 'utf8');
+    } catch (e) { /* 写失败仅影响本次覆盖，下次可重试 */ }
+}
+
+// 云存档同步基线（userData/game-save-state.json）：{ "gameId|slot": {revision, files:{rel_path:sha}, at} }
+// 用途：判定「本地与云端自上次同步后是否都变过」——两侧都变即冲突（P2 冲突弹窗），单侧变则按侧同步（P2 增量）
+var GAME_SAVE_STATE = path.join(app.getPath('userData'), 'game-save-state.json');
+// 冲突「保留双份」本地备份根目录（独立于存档目录，绝不参与扫描/上传）
+var GAME_SAVE_BACKUP = path.join(app.getPath('userData'), 'game-save-backups');
+function gameSaveStateLoad() {
+    try { return JSON.parse(fs.readFileSync(GAME_SAVE_STATE, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function gameSaveStateSave(st) {
+    try {
+        fs.mkdirSync(path.dirname(GAME_SAVE_STATE), { recursive: true });
+        fs.writeFileSync(GAME_SAVE_STATE, JSON.stringify(st, null, 2), 'utf8');
+    } catch (e) { /* 写失败仅影响本次基线，下次可重试 */ }
+}
+function gameSaveStateKey(gameId, slot) { return String(gameId) + '|' + (String(slot || '').trim() || 'default'); }
+
+// 读取用户覆盖（paths/exclude 为空数组=未覆盖，回退管理端默认/内置兜底）
+ipcMain.handle('game:save-config-get', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        var item = gameSaveRegLoad()[gameId] || {};
+        return { ok: true, paths: Array.isArray(item.paths) ? item.paths : [], exclude: Array.isArray(item.exclude) ? item.exclude : [] };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '读取失败' };
+    }
+});
+
+// 保存用户覆盖：paths/exclude 均为空数组=清除覆盖（回退管理端默认/内置兜底）
+ipcMain.handle('game:save-config-set', function (event, data) {
+    try {
+        var gameId = String((data && data.gameId) || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        var reg = gameSaveRegLoad();
+        var norm = function (v) {
+            if (Array.isArray(v)) return v.map(String).map(function (s) { return s.trim(); }).filter(Boolean);
+            return String(v || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        };
+        var item = { paths: norm(data && data.paths), exclude: norm(data && data.exclude) };
+        if (!item.paths.length && !item.exclude.length) delete reg[gameId]; // 全空=清除覆盖
+        else reg[gameId] = item;
+        gameSaveRegSave(reg);
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '保存失败' };
+    }
+});
+
+// 生效存档路径预览（含来源：user/admin/builtin；供属性弹窗展示）。payload 可带 gameId 以并入用户覆盖
+ipcMain.handle('game:save-paths-preview', function (event, payload) {
+    try {
+        payload = payload || {};
+        var gameId = String(payload.gameId || '').trim();
+        var userPaths = payload.userPaths, userExclude = payload.userExclude;
+        if (gameId) {
+            var item = gameSaveRegLoad()[gameId] || {};
+            userPaths = Array.isArray(item.paths) ? item.paths : [];
+            userExclude = Array.isArray(item.exclude) ? item.exclude : [];
+        }
+        return { ok: true, modes: gameSaves.resolvePathsPreview({
+            installDir: String(payload.installDir || ''),
+            adminPaths: payload.adminPaths,
+            adminExclude: payload.adminExclude,
+            userPaths: userPaths,
+            userExclude: userExclude
+        }) };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '预览失败', modes: [] };
+    }
+});
+
+// 执行同步：payload={gameId,username,installDir,adminPaths,adminExclude,mode:'push'|'pull'|'auto',slot,force,mirror,resolve}
+// 用户覆盖从 game-save.json 读取（渲染层不传）；serverBase 归口主进程 SERVER_URL；
+// 基线从 game-save-state.json 读取并在成功后回写（P2 冲突判定/增量同步的核心状态）
+ipcMain.handle('game:save-sync', async function (event, payload) {
+    try {
+        payload = payload || {};
+        var gameId = String(payload.gameId || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        var item = gameSaveRegLoad()[gameId] || {};
+        var slot = String(payload.slot || '');
+        var key = gameSaveStateKey(gameId, slot);
+        var stt = gameSaveStateLoad();
+        var opts = {
+            gameId: gameId,
+            username: String(payload.username || ''),
+            installDir: String(payload.installDir || ''),
+            adminPaths: payload.adminPaths,
+            adminExclude: payload.adminExclude,
+            userPaths: Array.isArray(item.paths) ? item.paths : [],
+            userExclude: Array.isArray(item.exclude) ? item.exclude : [],
+            slot: slot,
+            mode: String(payload.mode || 'auto'),
+            baseline: stt[key] || null,
+            backupDir: GAME_SAVE_BACKUP,
+            serverBase: SERVER_URL
+        };
+        // 冲突解决归口：cloud=以云端为准（镜像拉取覆盖本地）；local=以本地为准（强制上传覆盖云端）；both=保留双份（本地备份后以云端为准）
+        var resolve = String(payload.resolve || '');
+        if (resolve === 'cloud' || resolve === 'both') { opts.mode = 'pull'; opts.force = true; opts.mirror = true; }
+        else if (resolve === 'local') { opts.mode = 'push'; opts.force = true; }
+        if (payload.force) opts.force = true;
+        if (payload.mirror) opts.mirror = true;
+        var r = await gameSaves.sync(opts);
+        // 基线回写：成功且返回基线则记录；成功但云端已无存档（revision=null）则清除
+        if (r && r.ok) {
+            if (r.baseline) { stt[key] = r.baseline; gameSaveStateSave(stt); }
+            else if (r.revision === null) { delete stt[key]; gameSaveStateSave(stt); }
+        }
+        return r;
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '云存档同步失败' };
+    }
+});
+
+// 云端清单摘要（供属性弹窗展示"云端存档"状态，不拉取文件列表内容）
+ipcMain.handle('game:save-manifest', async function (event, payload) {
+    try {
+        payload = payload || {};
+        var gameId = String(payload.gameId || '').trim();
+        if (!gameId) return { ok: false, error: '参数缺失' };
+        return await gameSaves.manifest({
+            gameId: gameId,
+            username: String(payload.username || ''),
+            slot: String(payload.slot || ''),
+            serverBase: SERVER_URL
+        });
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '清单查询失败' };
+    }
+});
+
+// 云端版本历史（P2）：payload={gameId,username,slot} → {ok,exists,current_revision,revisions:[...]}
+ipcMain.handle('game:save-history', async function (event, payload) {
+    try {
+        payload = payload || {};
+        return await gameSaves.history({
+            gameId: String(payload.gameId || ''),
+            username: String(payload.username || ''),
+            slot: String(payload.slot || ''),
+            serverBase: SERVER_URL
+        });
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '版本历史查询失败' };
+    }
+});
+
+// 版本回滚（P2）：payload={gameId,username,slot,revision} → {ok,revision,restored_from}
+ipcMain.handle('game:save-rollback', async function (event, payload) {
+    try {
+        payload = payload || {};
+        var key = gameSaveStateKey(String(payload.gameId || ''), String(payload.slot || ''));
+        var r0 = await gameSaves.rollback({
+            gameId: String(payload.gameId || ''),
+            username: String(payload.username || ''),
+            slot: String(payload.slot || ''),
+            revision: payload.revision,
+            serverBase: SERVER_URL
+        });
+        // 回滚后云端当前版本已变（revision+1）→ 本地基线失效，清除强制下次启动重新拉取
+        var stt = gameSaveStateLoad();
+        delete stt[key];
+        gameSaveStateSave(stt);
+        return r0;
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '版本回滚失败' };
+    }
+});
+
+// 云端槽位列表（P3）：payload={gameId,username} → {ok,slots:[...]}
+ipcMain.handle('game:save-slots', async function (event, payload) {
+    try {
+        payload = payload || {};
+        return await gameSaves.slots({
+            gameId: String(payload.gameId || ''),
+            username: String(payload.username || ''),
+            serverBase: SERVER_URL
+        });
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '槽位查询失败' };
+    }
+});
+
+// 删除云端槽位（P3）：payload={gameId,username,slot} → {ok}；同时清该槽位基线
+ipcMain.handle('game:save-slot-delete', async function (event, payload) {
+    try {
+        payload = payload || {};
+        var key = gameSaveStateKey(String(payload.gameId || ''), String(payload.slot || ''));
+        var r0 = await gameSaves.deleteSlot({
+            gameId: String(payload.gameId || ''),
+            username: String(payload.username || ''),
+            slot: String(payload.slot || ''),
+            serverBase: SERVER_URL
+        });
+        var stt = gameSaveStateLoad();
+        delete stt[key];
+        gameSaveStateSave(stt);
+        return r0;
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '槽位删除失败' };
+    }
+});
+
+// 打开本地存档目录（P3 手动管理入口）：解析生效路径取第一个现存目录 → shell.openPath
+ipcMain.handle('game:save-open-dir', async function (event, payload) {
+    try {
+        payload = payload || {};
+        var gameId = String(payload.gameId || '').trim();
+        var item = gameId ? (gameSaveRegLoad()[gameId] || {}) : {};
+        var modes = gameSaves.resolvePathsPreview({
+            installDir: String(payload.installDir || ''),
+            adminPaths: payload.adminPaths,
+            adminExclude: payload.adminExclude,
+            userPaths: Array.isArray(item.paths) ? item.paths : (payload.userPaths || []),
+            userExclude: Array.isArray(item.exclude) ? item.exclude : (payload.userExclude || [])
+        });
+        var target = '';
+        for (var i = 0; i < modes.length; i++) {
+            if (!modes[i].rejected && modes[i].exists && modes[i].baseDir) { target = modes[i].baseDir; break; }
+        }
+        if (!target) return { ok: false, error: '未找到已存在的本地存档目录' };
+        var err = await shell.openPath(target);
+        if (err) return { ok: false, error: err };
+        return { ok: true, dir: target };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '打开目录失败' };
+    }
+});
 
 // ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====
 // 独立 BrowserWindow 单例复用：freeze/record 模式全屏+screen-saver 置顶展示冻结画面（主窗口保持隐藏，
