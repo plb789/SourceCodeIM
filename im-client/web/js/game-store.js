@@ -604,6 +604,8 @@
     // 单例挂 body + fixed 定位逃出滚动容器裁剪；pointer-events:none 纯展示；
     // 数据全部来自列表项（服务端已随行下发评测聚合），零额外请求
     var hovEl = null, hovTimer = null;
+    // 气泡媒体轮播（库"最近游戏"卡悬停，Steam 同款预览）：轮播定时器/待播媒体表/当前下标/视频卸载定时器
+    var hovMediaTimer = null, hovMediaList = [], hovMediaIdx = 0, hovVideoStopTimer = null;
 
     // RFC3339 → 中文日期（发行于行）
     function fmtCnDate(iso) {
@@ -621,11 +623,18 @@
         window.addEventListener('blur', hideHover);
         var store = $('gsStoreScroll');
         if (store) store.addEventListener('scroll', hideHover, { passive: true });
+        var lib = $('gsLibMain'); // 库页主区滚动（"最近游戏"卡所在容器）
+        if (lib) lib.addEventListener('scroll', hideHover, { passive: true });
     }
 
-    function buildHoverContent(g) {
+    function buildHoverContent(g, opts) {
         hovEl.innerHTML = '';
         hovEl.appendChild(el('div', 'gs-hover-title', g.name || ('游戏 #' + g.id)));
+        // 媒体轮播区（仅库"最近游戏"卡请求：Steam 同款预览，截图/视频混排轮换）
+        if (opts && opts.media) {
+            var media = buildHoverMedia(g);
+            if (media) hovEl.appendChild(media);
+        }
         var date = fmtCnDate(g.create_time);
         if (date) hovEl.appendChild(el('div', 'gs-hover-date', '发行于: ' + date));
         if (g.short_desc) hovEl.appendChild(el('div', 'gs-hover-desc', g.short_desc));
@@ -670,6 +679,81 @@
             own.appendChild(row);
             hovEl.appendChild(own);
         }
+        // 库场景附加：游戏时间（我自己对该游戏的总时数/最近游玩，Steam 气泡底部同款位置）
+        if (opts && opts.lib) {
+            hovEl.appendChild(el('div', 'gs-hover-label', '游戏时间'));
+            var lb = el('div', 'gs-hover-lib');
+            lb.appendChild(el('div', 'gs-hover-litime', '总数 ' + fmtPlay(opts.lib.play_seconds)));
+            if (opts.lib.last_play_at) lb.appendChild(el('div', 'gs-hover-litime', '最近游玩 ' + opts.lib.last_play_at));
+            hovEl.appendChild(lb);
+        }
+    }
+
+    // 气泡媒体轮播区（Steam 同款预览）：视频在前截图在后，一次只挂一张（换页整块重画，
+    // 上一张的 video 随 DOM 丢弃同步停播）；静图 3.5s、视频 6s 后切下一张，仅 1 条时不轮播
+    function buildHoverMedia(g) {
+        var list = [];
+        (g.videos || []).forEach(function (u) { if (u) list.push({ kind: 'v', url: u }); });
+        (g.screenshots || []).forEach(function (u) { if (u) list.push({ kind: 'i', url: u }); });
+        if (!list.length) return null;
+        hovMediaList = list;
+        hovMediaIdx = 0;
+        var box = el('div', 'gs-hover-media');
+        function paint() {
+            box.innerHTML = '';
+            var m = hovMediaList[hovMediaIdx];
+            if (!m) return;
+            if (m.kind === 'v') {
+                var v = document.createElement('video');
+                v.src = assetUrl(m.url);
+                v.muted = true;
+                v.loop = true;
+                v.autoplay = true;
+                v.setAttribute('playsinline', '');
+                v.setAttribute('preload', 'metadata');
+                box.appendChild(v);
+            } else {
+                var im = document.createElement('img');
+                im.src = assetUrl(m.url);
+                im.alt = g.name || '';
+                im.loading = 'lazy';
+                box.appendChild(im);
+            }
+        }
+        function schedule() {
+            if (hovMediaList.length < 2) return;
+            var m = hovMediaList[hovMediaIdx];
+            hovMediaTimer = setTimeout(function () {
+                hovMediaTimer = null;
+                if (!hovMediaList.length) return; // 已停表（气泡隐藏）：不再换页
+                hovMediaIdx = (hovMediaIdx + 1) % hovMediaList.length;
+                paint();
+                schedule();
+            }, (m && m.kind === 'v') ? 6000 : 3500);
+        }
+        paint();
+        schedule();
+        return box;
+    }
+
+    // 轮播停表 + 延迟卸载 video（先让气泡淡出，再 pause/清 src/load 停解码，避免背景空播占用资源）
+    function stopHoverMedia() {
+        clearTimeout(hovMediaTimer);
+        hovMediaTimer = null;
+        hovMediaList = [];
+        hovMediaIdx = 0;
+        clearTimeout(hovVideoStopTimer);
+        hovVideoStopTimer = setTimeout(function () {
+            if (!hovEl) return;
+            var vids = hovEl.querySelectorAll('video');
+            for (var i = 0; i < vids.length; i++) {
+                try {
+                    vids[i].pause();
+                    vids[i].removeAttribute('src');
+                    vids[i].load();
+                } catch (e) { /* 卸载异常忽略：气泡已隐藏，不影响功能 */ }
+            }
+        }, 180);
     }
 
     // 好友头像回退块（无头像/加载失败）：主题色底 + 首字母，与封面占位 buildPh 同款色相偏移
@@ -680,11 +764,12 @@
         return ph;
     }
 
-    function showHover(g, card) {
+    // opts.media=库卡请求媒体轮播预览；opts.lib=库条目（气泡底部显示我的游戏时间）
+    function showHover(g, card, opts) {
         ensureHover();
         clearTimeout(hovTimer);
         hovTimer = setTimeout(function () {
-            buildHoverContent(g);
+            buildHoverContent(g, opts);
             hovEl.classList.add('show'); // 先显示再测量（display 未隐藏时 offsetHeight 即时有效）
             var r = card.getBoundingClientRect();
             var W = 318, M = 12; // 300 宽 + 2px 边框
@@ -706,6 +791,7 @@
     function hideHover() {
         clearTimeout(hovTimer);
         if (hovEl) hovEl.classList.remove('show');
+        stopHoverMedia(); // 轮播停表并卸载 video（隐藏后不再空播/后台解码）
     }
 
     function renderStore() {
@@ -1597,6 +1683,9 @@
                 bd.appendChild(el('div', 'gs-lib-rmeta', lib.last_play_at ? '最近游玩 ' + fmtDate(lib.last_play_at) : '尚未游玩'));
                 card.appendChild(bd);
                 card.addEventListener('click', function () { state.libSel = lib.game_id; renderLibrary(); });
+                // 悬停气泡（Steam 同款）：媒体轮播预览 + 游戏时间；移出即隐（与商店卡同口径 150ms 延迟）
+                card.addEventListener('mouseenter', function () { showHover(g, card, { media: true, lib: lib }); });
+                card.addEventListener('mouseleave', hideHover);
                 recentRow.appendChild(card);
             });
             main.appendChild(recentRow);

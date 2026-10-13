@@ -1012,6 +1012,17 @@
             border-right: 1px solid var(--divider);
             border-top: 1px solid var(--divider);
         }
+        /* 气泡媒体轮播区（Steam 同款预览）：16:9 定高裁切，截图/视频统一裁切填充不撑破气泡 */
+        .gs-hover-media {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--panel-bg);
+        }
+        .gs-hover-media img,
+        .gs-hover-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
         .gs-hover-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
         .gs-hover-date { font-size: 11px; color: var(--text-light); margin-bottom: 8px; }
         .gs-hover-desc {
@@ -1042,6 +1053,9 @@
             border-radius: 4px;
         }
         .gs-hover-own-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+        /* 库气泡底部游戏时间（总数/最近游玩，Steam 气泡底部同款位置） */
+        .gs-hover-lib { border-top: 1px solid var(--divider); padding-top: 6px; }
+        .gs-hover-litime { font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
         .gs-hover-own-avatars { display: flex; align-items: center; }
         .gs-hover-own-av {
             width: 28px;
@@ -2988,7 +3002,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=44"></script>
+    <script src="js/game-store.js?v=45"></script>
     <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>
