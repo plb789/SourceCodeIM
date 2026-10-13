@@ -446,6 +446,10 @@ func (s *Server) handleAdminGameDelete(w http.ResponseWriter, r *http.Request) {
 		store.DB.Where("review_id IN ?", revIDs).Delete(&model.GameReviewLike{})
 	}
 	store.DB.Where("game_id = ?", g.ID).Delete(&model.GameReview{})
+	// 云存档级联清理：删游戏后存档不可再访问，清行 + 清 game_saves/ 对象（防孤儿数据累积）
+	if n := s.gameSaveCascadePurge(g.ID, ""); n > 0 {
+		logger.Info("删除游戏级联清理云存档: %s (%s), 存档组=%d", g.Name, g.Slug, n)
+	}
 	if err := store.DB.Delete(&g).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "删除失败")
 		return

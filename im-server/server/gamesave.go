@@ -135,6 +135,65 @@ func (s *Server) gameSaveShaReferenced(saveID uint, sha string) bool {
 	return false
 }
 
+// gameSaveShaLiveReferenced 该 sha 是否仍被「其他」存活清单行（除 exceptID 外）引用；
+// 与 gameSaveShaReferenced（修订快照判据）互补：同内容多路径时防覆盖一行误删他行仍指向的对象
+func (s *Server) gameSaveShaLiveReferenced(saveID uint, sha string, exceptID uint) bool {
+	if sha == "" {
+		return false
+	}
+	var cnt int64
+	store.DB.Model(&model.GameSaveFile{}).
+		Where("save_id = ? AND sha256 = ? AND id <> ?", saveID, sha, exceptID).
+		Count(&cnt)
+	return cnt > 0
+}
+
+// gameSaveDropOne 删除单个存档组（对象 + 文件行 + 修订行 + 主行）：对象引用取存活清单 ∪ 全部修订快照，
+// 幂等；供「用户删除存档」与「删游戏/退库级联」共用
+func (s *Server) gameSaveDropOne(save model.GameSave) {
+	st := store.GetObjectStore()
+	var files []model.GameSaveFile
+	store.DB.Where("save_id = ?", save.ID).Find(&files)
+	shas := map[string]bool{}
+	for i := range files {
+		if files[i].SHA256 != "" {
+			shas[files[i].SHA256] = true
+		}
+	}
+	var revs []model.GameSaveRev
+	store.DB.Where("save_id = ?", save.ID).Find(&revs)
+	for _, r := range revs {
+		for _, f := range gameSaveParseSnapshot(r.Files) {
+			if f.SHA256 != "" {
+				shas[f.SHA256] = true
+			}
+		}
+	}
+	if st != nil {
+		for sh := range shas {
+			_ = st.Delete(gameSaveObjectKey(save.Username, save.GameID, save.Slot, sh))
+		}
+	}
+	store.DB.Where("save_id = ?", save.ID).Delete(&model.GameSaveFile{})
+	store.DB.Where("save_id = ?", save.ID).Delete(&model.GameSaveRev{})
+	store.DB.Delete(&model.GameSave{}, save.ID)
+}
+
+// gameSaveCascadePurge 级联清理某游戏的全部云存档（username 空=全部用户；非空=仅该用户）：
+// 删游戏时调用（防孤儿行/孤儿对象累积）；返回清理的存档组数
+func (s *Server) gameSaveCascadePurge(gameID uint, username string) int {
+	q := store.DB.Where("game_id = ?", gameID)
+	if username != "" {
+		q = q.Where("username = ?", username)
+	}
+	var saves []model.GameSave
+	q.Find(&saves)
+	for _, sv := range saves {
+		s.gameSaveDropOne(sv)
+	}
+	return len(saves)
+}
+
 // gameSavePruneRevisions 裁剪超出保留数的旧修订，返回「仅被被裁剪修订引用」的 sha 列表（供对象 GC）
 func (s *Server) gameSavePruneRevisions(saveID uint) []string {
 	keep := s.gameSaveRetention()
@@ -432,9 +491,10 @@ func (s *Server) HandleGameSaveFileUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// 旧对象清理（同 rel_path 覆盖且 key 变化时；key 内含 sha，内容相同则 key 相同不重复删）
-	// 阶段二百九十：若旧内容仍被历史修订快照引用则保留（回滚依赖），仅清理不再被引用的对象
+	// 阶段二百九十一：旧内容既未被历史修订快照引用、也未被其他存活清单行引用时才删除
+	// （防同内容多路径时误删他行仍指向的对象，导致该行下载 404）
 	if hasOld && old.ObjectKey != "" && old.ObjectKey != objectKey {
-		if !s.gameSaveShaReferenced(save.ID, old.SHA256) {
+		if !s.gameSaveShaReferenced(save.ID, old.SHA256) && !s.gameSaveShaLiveReferenced(save.ID, old.SHA256, old.ID) {
 			_ = st.Delete(old.ObjectKey)
 		}
 	}
@@ -579,33 +639,7 @@ func (s *Server) HandleGameSaveDelete(w http.ResponseWriter, r *http.Request) {
 		adminJSON(w, map[string]interface{}{"ok": true}) // 幂等：不存在视为已删除
 		return
 	}
-	st := store.GetObjectStore()
-	var files []model.GameSaveFile
-	store.DB.Where("save_id = ?", save.ID).Find(&files)
-	// 收集全部引用对象：存活清单行 ∪ 全部历史修订快照（阶段二百九十：随删除一并清理）
-	shas := map[string]bool{}
-	for i := range files {
-		if files[i].SHA256 != "" {
-			shas[files[i].SHA256] = true
-		}
-	}
-	var revs []model.GameSaveRev
-	store.DB.Where("save_id = ?", save.ID).Find(&revs)
-	for _, r := range revs {
-		for _, f := range gameSaveParseSnapshot(r.Files) {
-			if f.SHA256 != "" {
-				shas[f.SHA256] = true
-			}
-		}
-	}
-	if st != nil {
-		for sh := range shas {
-			_ = st.Delete(gameSaveObjectKey(save.Username, save.GameID, save.Slot, sh))
-		}
-	}
-	store.DB.Where("save_id = ?", save.ID).Delete(&model.GameSaveFile{})
-	store.DB.Where("save_id = ?", save.ID).Delete(&model.GameSaveRev{})
-	store.DB.Delete(&model.GameSave{}, save.ID)
+	s.gameSaveDropOne(save)
 	adminJSON(w, map[string]interface{}{"ok": true})
 }
 

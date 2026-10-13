@@ -18,6 +18,7 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024;         // 单文件上限（镜像服�
 const MAX_TOTAL_SIZE = 200 * 1024 * 1024;       // 单游戏存档总上限（镜像服务端 game.save.max_total_size 默认 200MB）
 const MAX_SCAN_FILES = 20000;                   // 扫描文件数上限（防误配超大 glob 拖死主进程）
 const WALK_VISIT_LIMIT = MAX_SCAN_FILES * 6;    // 目录遍历访问上限
+const REQUEST_TIMEOUT = 20000;                  // HTTP 无活动超时（ms）：防连接卡死长期阻塞（尤其启动前 pull 阻塞启动）
 const BUILTIN_PATTERN = 'save/**';              // 内置兜底（相对 installDir 的存档目录）
 
 // 系统白名单根（变量展开目标，同时作为安全允许根）：用户主目录 + AppData + 文档 + ProgramData
@@ -550,6 +551,7 @@ class GameSaveManager extends EventEmitter {
                 });
             });
             req.on('error', function (err) { if (!settled) { settled = true; reject(err); } });
+            req.setTimeout(REQUEST_TIMEOUT, function () { if (!settled) { settled = true; reject(new Error('上传超时')); } try { req.destroy(); } catch (e) { } });
             var rs = fs.createReadStream(f.absPath);
             rs.on('data', function (c) { if (onBytes) onBytes(c.length); });
             rs.on('error', function (err) { if (!settled) { settled = true; } try { req.destroy(); } catch (e) { } reject(err); });
@@ -580,6 +582,7 @@ class GameSaveManager extends EventEmitter {
                     res.pipe(ws);
                 });
                 req.on('error', function (err) { if (!settled) { settled = true; reject(err); } });
+                req.setTimeout(REQUEST_TIMEOUT, function () { if (!settled) { settled = true; reject(new Error('下载超时')); } try { req.destroy(); } catch (e) { } });
             });
         });
     }
@@ -702,6 +705,7 @@ class GameSaveManager extends EventEmitter {
                 });
             });
             req.on('error', reject);
+            req.setTimeout(REQUEST_TIMEOUT, function () { try { req.destroy(new Error('请求超时')); } catch (e) { } });
             if (data) req.write(data);
             req.end();
         });
