@@ -973,11 +973,11 @@ contextBridge.exposeInMainWorld('desktop', {
             exclude: (cfg && cfg.exclude) || []
         });
     },
-    // 生效存档路径预览（含来源 user/admin/builtin）payload={gameId, installDir, adminPaths, adminExclude}
+    // 生效存档路径预览（含来源 user/admin/builtin）payload={gameId, installDir, slug, adminPaths, adminExclude}
     gameSavePathsPreview: function (payload) {
         return ipcRenderer.invoke('game:save-paths-preview', payload);
     },
-    // 执行云存档同步 payload={gameId,username,installDir,adminPaths,adminExclude,mode:'push'|'pull'|'auto'}
+    // 执行云存档同步 payload={gameId,username,installDir,slug,adminPaths,adminExclude,mode:'push'|'pull'|'auto'}（slug 供内置兜底锚定本游戏目录）
     // → Promise<{ok, uploaded?, downloaded?, skipped?, revision?, note?, error?}>
     gameSaveSync: function (payload) {
         return ipcRenderer.invoke('game:save-sync', payload);
@@ -1011,7 +1011,7 @@ contextBridge.exposeInMainWorld('desktop', {
     gameSaveSlotDelete: function (payload) {
         return ipcRenderer.invoke('game:save-slot-delete', payload);
     },
-    // 打开本地存档目录（P3）payload={gameId,installDir,adminPaths,adminExclude} → Promise<{ok,dir}>
+    // 打开本地存档目录（P3）payload={gameId,installDir,slug,adminPaths,adminExclude} → Promise<{ok,dir}>
     gameSaveOpenDir: function (payload) {
         return ipcRenderer.invoke('game:save-open-dir', payload);
     }

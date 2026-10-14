@@ -40,6 +40,7 @@
         taskByGame: {},    // gameId → 进行中的 taskId（详情/库按钮态联动）
         sessions: {},      // gameId → 本次启动时间戳（onGameExit 结算游玩时长）
         running: {},       // gameId → 运行中（Steam 同款）：进程已启动未退出，侧栏行/启动按钮显示"运行中"
+        saveSync: {},      // gameId → 'push'|'pull' 云存档同步中（Steam 同款）：侧栏行显示"存档中/读档中"
         badgeEls: {},      // gameId → 商店卡片徽标元素（进度事件原地刷新徽标，避免整格重绘闪烁）
         balance: null,     // 当前用户积分余额（GET /api/game/points；获取/退库随响应实时刷新）
         libSel: 0,         // 库页签当前选中游戏 id（0=未选中，右侧显示最近游戏横排）
@@ -1605,17 +1606,24 @@
         return items;
     }
 
+    // 云存档同步中的侧栏文案（Steam 同款）：push=存档中（上传到云端） pull=读档中（从云端下载）；无则空串
+    function saveSyncLabel(gid) {
+        var m = state.saveSync[gid];
+        return m === 'push' ? '存档中' : (m === 'pull' ? '读档中' : '');
+    }
+
     // 侧栏行构建（分批器回调）：缩略图 + 名称 + 安装中环形进度 + 状态，_gid 供选中态行级切换
     function buildLibRow(item) {
         var lib = item.lib || {};
         var g = item.game || state.games[lib.game_id] || {};
         var running = !!state.running[lib.game_id];
-        var row = el('div', 'gs-lib-srow' + (state.libSel === lib.game_id ? ' active' : '') + (running ? ' running' : ''));
+        var sync = saveSyncLabel(lib.game_id);
+        var row = el('div', 'gs-lib-srow' + (state.libSel === lib.game_id ? ' active' : '') + (running ? ' running' : '') + (sync ? ' cloudsync' : ''));
         row._gid = lib.game_id;
         row.appendChild(buildCover(g.cover, g.name, 'gs-lib-sthumb'));
         row.appendChild(el('div', 'gs-lib-sname', g.name || ('游戏 #' + lib.game_id)));
-        // 运行中优先于安装态文案（Steam 库列表同款绿色"运行中"）
-        row.appendChild(el('div', 'gs-lib-sstate', running ? '运行中' : (LIB_STATE_TEXT[lib.state] || '未安装')));
+        // 云存档同步中（读档中/存档中）优先于运行中优先于安装态文案（Steam 库列表同款）
+        row.appendChild(el('div', 'gs-lib-sstate', sync || (running ? '运行中' : (LIB_STATE_TEXT[lib.state] || '未安装'))));
         applyRowRing(row); // 有下载任务时才在名称与状态之间插入环形进度（构建即初始化）
         row.addEventListener('click', function () { state.libSel = lib.game_id; renderLibrary(); });
         // 右键菜单（自绘，禁系统菜单）：启动 / 属性（自定义启动参数+主程序）/ 移出库
@@ -1809,13 +1817,17 @@
         for (var i = 0; i < rows.length; i++) {
             var item = state.lib[rows[i]._gid];
             var running = !!state.running[rows[i]._gid];
-            // 运行中类切换：绿色状态字（CSS 归口），与文案同步原地更新不重建行 DOM
-            if (rows[i].classList) rows[i].classList.toggle('running', running);
+            var sync = saveSyncLabel(rows[i]._gid);
+            // 运行中/云存档同步类切换：状态字着色（CSS 归口），与文案同步原地更新不重建行 DOM
+            if (rows[i].classList) {
+                rows[i].classList.toggle('running', running);
+                rows[i].classList.toggle('cloudsync', !!sync);
+            }
             var st = rows[i].querySelector('.gs-lib-sstate');
             if (st) {
                 // 文案未变则不写 textContent：下载中↔校验交替帧 lib.state 恒为 1（文案同为"下载中"），
                 // 跳过相同的写入可避免无谓的文本节点替换与布局失效
-                var txt = running ? '运行中' : (LIB_STATE_TEXT[item && item.lib ? item.lib.state : 0] || '未安装');
+                var txt = sync || (running ? '运行中' : (LIB_STATE_TEXT[item && item.lib ? item.lib.state : 0] || '未安装'));
                 if (st.textContent !== txt) st.textContent = txt;
             }
         }
@@ -2916,6 +2928,7 @@
         var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
         var p = {
             gameId: gid, username: username, installDir: libDir,
+            slug: String(g.slug || ''), // 内置兜底自适应：install_path 为安装根时锚定 <slug>/save，为游戏目录时用 save/**
             adminPaths: parseJsonArr(g.save_paths), adminExclude: parseJsonArr(g.save_exclude),
             mode: mode, slot: curSlot(gid)
         };
@@ -2949,7 +2962,7 @@
     function refreshSavePreview() {
         if (!saveSectionAvailable() || !propGid) return;
         var p = saveSyncPayload(propGid, '');
-        DESKTOP.gameSavePathsPreview({ gameId: propGid, installDir: p.installDir, adminPaths: p.adminPaths, adminExclude: p.adminExclude })
+        DESKTOP.gameSavePathsPreview({ gameId: propGid, installDir: p.installDir, slug: p.slug, adminPaths: p.adminPaths, adminExclude: p.adminExclude })
             .then(function (r) { if (r && r.ok) renderSavePreview(r.modes); })
             .catch(function () {});
     }
@@ -3258,7 +3271,7 @@
         if (!propGid) return;
         if (!saveSectionAvailable() || !DESKTOP.gameSaveOpenDir) { toast('请在 PC 客户端中操作'); return; }
         var p = saveSyncPayload(propGid, '');
-        DESKTOP.gameSaveOpenDir({ gameId: propGid, installDir: p.installDir, adminPaths: p.adminPaths, adminExclude: p.adminExclude }).then(function (r) {
+        DESKTOP.gameSaveOpenDir({ gameId: propGid, installDir: p.installDir, slug: p.slug, adminPaths: p.adminPaths, adminExclude: p.adminExclude }).then(function (r) {
             if (!r || !r.ok) toast((r && r.error) || '未找到可打开的存档目录');
         }).catch(function () { toast('打开目录失败'); });
     });
@@ -3287,10 +3300,19 @@
     $('gsPropSaveUpload').addEventListener('click', function () { runSaveSync('push'); });
     $('gsPropSaveDownload').addEventListener('click', function () { runSaveSync('pull'); });
 
-    // 云存档同步进度订阅（仅刷新当前属性弹窗游戏；终态延时收起进度条）
+    // 云存档同步进度订阅：侧栏行全局显示"读档中/存档中"（Steam 同款），属性弹窗（当前游戏）显示进度条，终态收起
     if (DESKTOP && DESKTOP.onGameSaveProgress) {
         DESKTOP.onGameSaveProgress(function (evt) {
-            if (!evt || !evt.gameId || evt.gameId !== propGid) return;
+            if (!evt || !evt.gameId) return;
+            // 侧栏行"读档中/存档中"（Steam 同款）：与属性弹窗无关，全局原地更新；终态立即回落
+            if (evt.phase === 'done') {
+                if (state.saveSync[evt.gameId]) { delete state.saveSync[evt.gameId]; syncLibSideState(); }
+            } else {
+                var m = (evt.mode === 'pull') ? 'pull' : 'push';
+                if (state.saveSync[evt.gameId] !== m) { state.saveSync[evt.gameId] = m; syncLibSideState(); }
+            }
+            // 属性弹窗进度条：仅当前打开的游戏
+            if (evt.gameId !== propGid) return;
             var phaseTxt = (evt.phase === 'done') ? '完成' : (evt.mode === 'push' ? '上传中' : '下载中');
             var cnt = evt.filesCount ? (' ' + Math.min((evt.fileIndex || 0) + 1, evt.filesCount) + '/' + evt.filesCount) : '';
             var name = evt.fileRelPath ? (' · ' + evt.fileRelPath) : '';

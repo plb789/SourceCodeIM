@@ -19,7 +19,7 @@ const MAX_TOTAL_SIZE = 200 * 1024 * 1024;       // 单游戏存档总上限（�
 const MAX_SCAN_FILES = 20000;                   // 扫描文件数上限（防误配超大 glob 拖死主进程）
 const WALK_VISIT_LIMIT = MAX_SCAN_FILES * 6;    // 目录遍历访问上限
 const REQUEST_TIMEOUT = 20000;                  // HTTP 无活动超时（ms）：防连接卡死长期阻塞（尤其启动前 pull 阻塞启动）
-const BUILTIN_PATTERN = 'save/**';              // 内置兜底（相对 installDir 的存档目录）
+const BUILTIN_PATTERN = 'save/**';             // 内置兜底缺省值（相对 installDir）；正常走 _builtinPattern(installDir, slug) 自适应（installDir 已是游戏目录→save/**，否则→<slug>/save/**）
 
 // 系统白名单根（变量展开目标，同时作为安全允许根）：用户主目录 + AppData + 文档 + ProgramData
 function systemRoots() {
@@ -114,7 +114,7 @@ class GameSaveManager extends EventEmitter {
     }
 
     // —— 路径解析：优先级 用户覆盖 > 管理端默认 > 内置兜底；产出生效模式列表（含来源与 baseDir） ——
-    // opts={installDir, adminPaths, adminExclude, userPaths, userExclude}
+    // opts={installDir, slug, adminPaths, adminExclude, userPaths, userExclude}（slug 用于内置兜底锚定本游戏目录）
     resolveSavePaths(opts) {
         opts = opts || {};
         var installDirRaw = String(opts.installDir || '').trim();
@@ -128,7 +128,7 @@ class GameSaveManager extends EventEmitter {
         var adminPaths = norm(opts.adminPaths);
         var userExclude = norm(opts.userExclude);
         var adminExclude = norm(opts.adminExclude);
-        var source = 'builtin', patterns = [BUILTIN_PATTERN];
+        var source = 'builtin', patterns = [this._builtinPattern(installDirRaw, opts.slug)];
         if (userPaths.length) { source = 'user'; patterns = userPaths; }
         else if (adminPaths.length) { source = 'admin'; patterns = adminPaths; }
         // 排除：用户覆盖优先，否则管理端默认（内置兜底无排除）
@@ -358,6 +358,19 @@ class GameSaveManager extends EventEmitter {
             return t.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
         }
         return [];
+    }
+
+    // 内置兜底模式（实测库 install_path 有两种形态，需自适应，避免多一层/少一层目录）：
+    //   ① install_path = 安装根（如 H:\CdonlgameApp）      → 游戏实际落盘 <installDir>/<slug>，取 <slug>/save/**
+    //   ② install_path = 游戏目录（如 H:\CdonlgameApp\War3）→ 该层已含游戏目录，再追加 slug 会变成 \War3\war3 双层，故取 save/**
+    // 判据：installDir 末级目录名（忽略大小写）等于 slug 即视为形态②。两形态均不跨游戏，无串档。
+    _builtinPattern(installDir, slug) {
+        var s = String(slug || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim();
+        if (!s || s === '.' || s === '..') return BUILTIN_PATTERN;
+        var leaf = '';
+        try { leaf = path.basename(String(installDir || '').replace(/[\\/]+$/, '')); } catch (e) { leaf = ''; }
+        if (leaf && leaf.toLowerCase() === s.toLowerCase()) return BUILTIN_PATTERN;
+        return s + '/save/**';
     }
 
     // 单个模式 → 生效模式对象：变量展开 → 相对锚定 installDir → 取第一个通配符前固定目录为 baseDir

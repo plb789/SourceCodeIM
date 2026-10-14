@@ -1000,7 +1000,10 @@ type Game struct {
 	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
 	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
-	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["save/**","%USERPROFILE%/Documents/**"]）：
+	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["%USERPROFILE%/Documents/My Games/X/**"]）：
+	// 相对路径以该游戏库记录的安装目录（install_path）为锚点；实测 install_path 有「安装根 <盘>/CdonlgameApp」
+	// 与「游戏目录 <盘>/CdonlgameApp/<slug>」两种形态，相对写法易多/少一层目录，推荐直接使用绝对路径（支持
+	// %USERPROFILE% %APPDATA% %LOCALAPPDATA% %DOCUMENTS% %ProgramData% 变量）；
 	// 管理端录入，随游戏摘要下发客户端解析后按 glob 采集存档；AutoMigrate 自动加列，存量游戏默认空行为不变
 	SavePaths string `gorm:"column:save_paths;type:varchar(1024);default:''" json:"save_paths"`
 	// SaveExclude 云存档排除模式 JSON 数组串（如 ["*.log"]）：命中者不上传

@@ -2079,6 +2079,9 @@
         /* 运行中（Steam 库列表同款）：状态字绿色高亮，一眼可辨进程还在跑 */
         .gs-lib-srow.running .gs-lib-sstate { color: var(--gs-run); }
 
+        /* 云存档同步中（Steam 库列表同款）：状态字用主题强调色，区别于绿色"运行中"、灰色安装态 */
+        .gs-lib-srow.cloudsync .gs-lib-sstate { color: var(--primary); }
+
         /* 侧栏安装中环形进度（自绘 SVG，跟随主题色）：底轨 + 主题色进度弧 + 居中百分比。
            dashoffset 由 JS 按 received/total 推进；stroke-linecap 圆头 + 少量过渡让进度平滑 */
         .gs-lib-sprog { width: 26px; height: 26px; flex-shrink: 0; }
@@ -2587,6 +2590,11 @@
             pointer-events: none;
             transition: opacity 0.18s ease, visibility 0s linear 0.18s;
         }
+
+        /* 确认弹窗（#gsModalMask）会被任意已打开弹窗内调用（槽位管理/冲突裁决/属性面板…）：
+           同类 .gs-modal-mask 等值 z-index 时 DOM 靠后的元素盖住靠前者，而 #gsModalMask 定义在最前，
+           故单独抬高其层级，确保二次确认始终位于所有弹窗之上（仍低于 toast 3000，保证提示可见） */
+        #gsModalMask { z-index: 2500; }
 
         .gs-modal {
             width: 320px;

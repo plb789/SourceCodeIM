@@ -1713,6 +1713,7 @@ ipcMain.handle('game:save-paths-preview', function (event, payload) {
         }
         return { ok: true, modes: gameSaves.resolvePathsPreview({
             installDir: String(payload.installDir || ''),
+            slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,
             userPaths: userPaths,
@@ -1739,6 +1740,7 @@ ipcMain.handle('game:save-sync', async function (event, payload) {
             gameId: gameId,
             username: String(payload.username || ''),
             installDir: String(payload.installDir || ''),
+            slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,
             userPaths: Array.isArray(item.paths) ? item.paths : [],
@@ -1863,6 +1865,7 @@ ipcMain.handle('game:save-open-dir', async function (event, payload) {
         var item = gameId ? (gameSaveRegLoad()[gameId] || {}) : {};
         var modes = gameSaves.resolvePathsPreview({
             installDir: String(payload.installDir || ''),
+            slug: String(payload.slug || ''),
             adminPaths: payload.adminPaths,
             adminExclude: payload.adminExclude,
             userPaths: Array.isArray(item.paths) ? item.paths : (payload.userPaths || []),
