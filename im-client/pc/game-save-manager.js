@@ -508,6 +508,7 @@ class GameSaveManager extends EventEmitter {
             exists: !!(man && man.exists),
             revision: (man && man.revision) || 0,
             total_size: (man && man.total_size) || 0,
+            max_total_size: (man && man.max_total_size) || 0, // 该用户对该游戏的总量配额（供 UI 展示已用百分比）
             file_count: (man && man.file_count) || 0,
             update_time: (man && man.update_time) || 0
         };

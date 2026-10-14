@@ -2917,6 +2917,11 @@
         .gs-save-prog-txt { font-size: 11.5px; color: var(--text-secondary); }
         .gs-save-bar { margin-top: 5px; height: 6px; border-radius: 3px; background: var(--placeholder-bg); overflow: hidden; }
         .gs-save-bar i { display: block; height: 100%; width: 0; background: var(--primary); transition: width 0.2s ease; }
+        /* 空间用量（每游戏配额）：已用/总量百分比；接近上限（≥90%）文字与进度条转警示色 */
+        .gs-save-quota { margin-top: 8px; }
+        .gs-save-quota-txt { font-size: 11.5px; color: var(--text-secondary); }
+        .gs-save-quota-txt.warn { color: var(--danger, #fa5151); }
+        .gs-save-bar i.warn { background: var(--danger, #fa5151); }
         /* 同步状态图标（P3）：idle=云图标 / ok=对勾 / err=叹号 / sync=旋转 / conflict=警告 */
         .gs-save-badge {
             display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center;
@@ -3228,6 +3233,11 @@
                             <div class="gs-prop-row gs-prop-row-top">
                                 <span class="gs-prop-label">云端状态 <i class="gs-save-badge idle" id="gsSaveBadge">☁</i></span>
                                 <span class="gs-save-status" id="gsPropSaveCloud">—</span>
+                            </div>
+                            <!-- 云存档空间用量（每游戏配额）：已用/总量 + 百分比；接近上限转警示色 -->
+                            <div class="gs-save-quota">
+                                <div class="gs-save-quota-txt" id="gsPropSaveQuotaTxt">—</div>
+                                <div class="gs-save-bar"><i id="gsPropSaveQuotaBar"></i></div>
                             </div>
                             <!-- 存档槽位（P3 Steam 同款多槽位）：当前槽位 + 打开管理 -->
                             <div class="gs-save-slotrow">

@@ -411,7 +411,9 @@ func (s *Server) gameSaveAccess(w http.ResponseWriter, r *http.Request) (string,
 }
 
 // HandleGameSaveManifest 云存档清单拉取 GET /api/game/save/manifest/{id}?username=&slot=
-// 无存档返回 {exists:false,files:[]}；有则返回 revision/total_size/file_count/update_time/files（按 rel_path 升序）
+// 无存档返回 {exists:false,total_size:0,max_total_size,files:[]}；
+// 有则返回 revision/total_size/max_total_size/file_count/update_time/files（按 rel_path 升序）
+// max_total_size 为该用户对该游戏的云存档总量配额（game.save.max_total_size），供前端展示已用百分比
 func (s *Server) HandleGameSaveManifest(w http.ResponseWriter, r *http.Request) {
 	if !s.gameSaveEnabled(w) {
 		return
@@ -427,7 +429,7 @@ func (s *Server) HandleGameSaveManifest(w http.ResponseWriter, r *http.Request) 
 	}
 	var save model.GameSave
 	if err := store.DB.Where("username = ? AND game_id = ? AND slot = ?", username, gid, slot).First(&save).Error; err != nil {
-		adminJSON(w, map[string]interface{}{"exists": false, "slot": slot, "files": []map[string]interface{}{}})
+		adminJSON(w, map[string]interface{}{"exists": false, "slot": slot, "total_size": 0, "max_total_size": s.gameSaveMaxTotal(), "files": []map[string]interface{}{}})
 		return
 	}
 	var files []model.GameSaveFile
@@ -443,13 +445,14 @@ func (s *Server) HandleGameSaveManifest(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	adminJSON(w, map[string]interface{}{
-		"exists":      true,
-		"slot":        slot,
-		"revision":    save.Revision,
-		"total_size":  save.TotalSize,
-		"file_count":  save.FileCount,
-		"update_time": save.UpdateTime.Format("2006-01-02 15:04"),
-		"files":       list,
+		"exists":         true,
+		"slot":           slot,
+		"revision":       save.Revision,
+		"total_size":     save.TotalSize,
+		"max_total_size": s.gameSaveMaxTotal(), // 该用户对该游戏的云存档总量配额（供用量百分比展示）
+		"file_count":     save.FileCount,
+		"update_time":    save.UpdateTime.Format("2006-01-02 15:04"),
+		"files":          list,
 	})
 }
 

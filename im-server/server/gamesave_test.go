@@ -47,8 +47,10 @@ type gsManifest struct {
 	Exists    bool  `json:"exists"`
 	Revision  int64 `json:"revision"`
 	TotalSize int64 `json:"total_size"`
-	FileCount int   `json:"file_count"`
-	Files     []struct {
+	// MaxTotalSize 该用户对该游戏的云存档总量配额（供前端展示已用百分比）
+	MaxTotalSize int64 `json:"max_total_size"`
+	FileCount    int   `json:"file_count"`
+	Files        []struct {
 		ID       uint   `json:"id"`
 		RelPath  string `json:"rel_path"`
 		Size     int64  `json:"size"`
@@ -202,6 +204,14 @@ func TestGameSaveP1Flow(t *testing.T) {
 	}
 	if man.Files[0].ObjKeyLe != "" {
 		t.Fatalf("object_key 不应外泄：%q", man.Files[0].ObjKeyLe)
+	}
+	// 配额随清单下发（供前端展示已用/总量百分比）：与配置一致，0 时回退缺省 200MB
+	wantQuota := cfg.Game.Save.MaxTotalSize
+	if wantQuota <= 0 {
+		wantQuota = gameSaveDefaultMaxTotal
+	}
+	if man.MaxTotalSize != wantQuota {
+		t.Fatalf("清单应下发总量配额 %d，实际：%d", wantQuota, man.MaxTotalSize)
 	}
 
 	// 3) 下载：字节一致

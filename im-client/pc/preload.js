@@ -982,7 +982,7 @@ contextBridge.exposeInMainWorld('desktop', {
     gameSaveSync: function (payload) {
         return ipcRenderer.invoke('game:save-sync', payload);
     },
-    // 云端存档清单摘要 payload={gameId,username} → Promise<{ok, exists, file_count, total_size, update_time, revision}>
+    // 云端存档清单摘要 payload={gameId,username} → Promise<{ok, exists, file_count, total_size, max_total_size, update_time, revision}>
     gameSaveManifest: function (payload) {
         return ipcRenderer.invoke('game:save-manifest', payload);
     },

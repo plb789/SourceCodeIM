@@ -2976,13 +2976,15 @@
         var gid = propGid;
         var cloudEl = $('gsPropSaveCloud');
         cloudEl.textContent = '查询中…';
+        setSaveQuota(0, 0);
         DESKTOP.gameSaveManifest({ gameId: gid, username: username, slot: curSlot(gid) }).then(function (r) {
             if (propGid !== gid) return; // 期间切了游戏：丢弃过期响应
-            if (!r || !r.ok) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); return; }
-            if (!r.exists) { cloudEl.textContent = '云端暂无存档'; setSaveBadge('idle'); return; }
+            if (!r || !r.ok) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); setSaveQuota(0, 0); return; }
+            if (!r.exists) { cloudEl.textContent = '云端暂无存档'; setSaveBadge('idle'); setSaveQuota(0, r.max_total_size); return; }
             cloudEl.textContent = '云端 ' + (r.file_count || 0) + ' 个文件 · ' + fmtBytes(r.total_size) + ' · ' + fmtTime(r.update_time);
             setSaveBadge('ok');
-        }).catch(function () { if (propGid === gid) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); } });
+            setSaveQuota(r.total_size, r.max_total_size);
+        }).catch(function () { if (propGid === gid) { cloudEl.textContent = '云端状态不可用'; setSaveBadge('err'); setSaveQuota(0, 0); } });
     }
 
     // 同步状态图标（P3）：悬浮云图标随同步态切换（idle/ok/err/sync/conflict）
@@ -3002,6 +3004,28 @@
         if (bar) bar.style.width = Math.max(0, Math.min(100, Number(pct) || 0)) + '%';
     }
     function clearSaveProgress() { var prog = $('gsPropSaveProg'); if (prog) prog.classList.add('hidden'); }
+
+    // 云存档空间用量（每游戏配额）：已用/总量 + 已用百分比；缺配额（total<=0）时仅显示已用；≥90% 转警示色
+    function setSaveQuota(used, total) {
+        var txt = $('gsPropSaveQuotaTxt'), bar = $('gsPropSaveQuotaBar');
+        if (!txt || !bar) return;
+        used = Number(used) || 0;
+        total = Number(total) || 0;
+        if (total <= 0) {
+            txt.textContent = used > 0 ? ('已用 ' + fmtBytes(used)) : '—';
+            txt.classList.remove('warn');
+            bar.style.width = '0%';
+            bar.classList.remove('warn');
+            return;
+        }
+        var pct = Math.min(100, used / total * 100);
+        var warn = pct >= 90;
+        var pctTxt = (pct > 0 && pct < 1) ? pct.toFixed(1) : String(Math.round(pct));
+        txt.textContent = '空间 ' + fmtBytes(used) + ' / ' + fmtBytes(total) + '（已用 ' + pctTxt + '%）';
+        txt.classList.toggle('warn', warn);
+        bar.style.width = pct + '%';
+        bar.classList.toggle('warn', warn);
+    }
 
     // 当前槽位按钮文案（P3）
     function syncSlotBtn(gid) {
@@ -3029,6 +3053,7 @@
         $('gsPropSavePaths').value = '';
         $('gsPropSaveExclude').value = '';
         $('gsPropSaveCloud').textContent = '查询中…';
+        setSaveQuota(0, 0);
         renderSavePreview([]);
         var seq = gid;
         DESKTOP.gameSaveConfigGet(gid).then(function (r) {
