@@ -28,12 +28,14 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] 剔除无需内嵌 APK 的 PC 分发大文件（static/download 安装包、编译工具链 zip，
-echo        这些文件仅供 WEB 端下载区使用，内嵌会使 APK 膨胀到 1GB；APP 下载走 im-server 接口）...
-if exist "android\app\src\main\assets\public\static\download" rmdir /s /q "android\app\src\main\assets\public\static\download"
-for %%F in ("android\app\src\main\assets\public\static\*-toolchain.zip") do (
-    if exist "%%F" del /q "%%F"
-)
+echo [2/4] 剔除无需内嵌 APK 的服务端运行时/PC 专属大文件：
+echo        - static/ 整棵子树：用户数据与分发大文件（avatar/upload/download/_git_extract/工具链 zip），
+echo          归口服务端静态托管（见 webmanifest.go「static 子树整段排除」约定），客户端按
+echo          服务端 URL（location.origin + /static/...）加载，内嵌纯属白打（曾使 APK 暴增上百 MB）；
+echo        - doc-viewer.html + lib/pdfjs：仅 PC Electron 端联网打开，手机端 PDF 走 doc-preview.html...
+if exist "android\app\src\main\assets\public\static" rmdir /s /q "android\app\src\main\assets\public\static"
+if exist "android\app\src\main\assets\public\doc-viewer.html" del /q "android\app\src\main\assets\public\doc-viewer.html"
+if exist "android\app\src\main\assets\public\lib\pdfjs" rmdir /s /q "android\app\src\main\assets\public\lib\pdfjs"
 
 echo.
 echo [3/4] 编译 Release APK（首次编译需下载依赖，耗时较长）...
