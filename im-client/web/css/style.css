@@ -19296,6 +19296,543 @@ html.m .settings-view {
     max-width: 100%;
 }
 
+/* ===================== 阶段二百九十二 M5：局域网游戏跨公网联机·房间层（gn-room.js） ===================== */
+/* 覆盖层形态同 .rc-view（absolute 盖 .main-chat，左侧列表保持可见）；全部颜色走主题变量（跟随主题色）；
+   滚动容器挂自绘悬浮滑块（.osb-thumb，原生滚动条已全局禁用）；弹窗/表单全自绘，禁系统默认样式 */
+.gn-view {
+    position: absolute;
+    inset: 0;
+    z-index: 1600;
+    display: flex;
+    flex-direction: column;
+    background: var(--chat-bg);
+}
+.gn-view.hidden { display: none; }
+.gn-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+    flex-shrink: 0;
+}
+.gn-logo { color: var(--primary); display: flex; align-items: center; }
+.gn-title { font-size: 16px; font-weight: bold; color: var(--text); flex-shrink: 0; }
+.gn-flex { flex: 1; }
+.gn-tb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.gn-tb-btn:hover { background: var(--hover); }
+.gn-tb-btn.hidden { display: none; }
+.gn-page { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 20px 24px 24px; }
+.gn-page-lobby { overflow-y: auto; }
+.gn-page-room { overflow: hidden; }
+.gn-page.hidden { display: none; }
+.gn-unsupported {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text-light);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.gn-unsupported.hidden { display: none; }
+.gn-sec-title { font-size: 13px; color: var(--text-light); margin: 0 0 10px; display: flex; align-items: center; flex-shrink: 0; }
+.gn-list-title { margin-top: 22px; }
+.gn-link {
+    margin-left: auto;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+.gn-create-box,
+.gn-join-box {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+    flex-shrink: 0;
+}
+.gn-join-box { margin-top: 16px; }
+.gn-form-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.gn-form-row label { width: 64px; flex-shrink: 0; font-size: 13px; color: var(--text-light); }
+.gn-form-row input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.gn-form-row input:focus { border-color: var(--primary); }
+.gn-form-row input::placeholder { color: var(--text-light); }
+.gn-form-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.gn-hint { margin-top: 8px; font-size: 12px; color: var(--text-light); line-height: 1.5; }
+.gn-btn {
+    height: 32px;
+    padding: 0 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s, filter 0.15s;
+}
+.gn-btn:hover { background: var(--hover); }
+.gn-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.gn-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.gn-btn.primary:hover { background: var(--primary); filter: brightness(1.06); }
+.gn-btn.danger { color: var(--danger, #fa5151); border-color: var(--danger, #fa5151); background: transparent; }
+.gn-btn.danger:hover { background: rgba(250, 81, 81, 0.10); }
+.gn-btn.tiny { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 5px; }
+.gn-list { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+.gn-room-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+}
+.gn-room-ico { color: var(--primary); display: flex; align-items: center; flex-shrink: 0; }
+.gn-room-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gn-room-title { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gn-room-sub { font-size: 12px; color: var(--text-light); }
+.gn-room-num { font-size: 13px; color: var(--primary); font-weight: 600; letter-spacing: 1px; flex-shrink: 0; }
+.gn-empty { padding: 24px 0; text-align: center; font-size: 13px; color: var(--text-light); }
+.gn-empty.hidden { display: none; }
+/* 房间页：房间信息 + 联机链路 + 成员区（唯一滚动区） + 底部操作 */
+.gn-room-head { flex-shrink: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.gn-room-name { font-size: 17px; font-weight: bold; color: var(--text); margin-bottom: 6px; }
+.gn-room-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--text-light); }
+.gn-meta-item b { color: var(--text); font-weight: 600; letter-spacing: 0.5px; }
+.gn-badge-host { color: var(--primary); }
+.gn-link-bar {
+    flex-shrink: 0;
+    margin: 12px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    background: var(--bg);
+    color: var(--text-light);
+}
+.gn-link-bar.on { color: var(--primary); }
+.gn-link-bar.off { color: var(--danger, #fa5151); }
+.gn-member-count { color: var(--text-light); font-weight: normal; }
+.gn-members { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
+.gn-member-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-bg);
+}
+.gn-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--placeholder-bg);
+}
+.gn-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gn-avatar-ch { color: #fff; font-size: 14px; }
+.gn-member-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gn-member-name { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gn-member-sub { font-size: 11px; color: var(--text-light); }
+.gn-member-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+.gn-tag { font-size: 11px; padding: 2px 7px; border-radius: 9px; border: 1px solid var(--border); color: var(--text-light); }
+.gn-tag.on,
+.gn-tag.ink,
+.gn-tag.host { color: var(--primary); border-color: var(--primary-soft); }
+.gn-tag.off { color: var(--danger, #fa5151); border-color: var(--danger, #fa5151); }
+.gn-room-actions {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 14px;
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+}
+/* 自实现弹窗（确认/输入；遮罩点击不关闭，防误触） */
+.gn-modal-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 1700;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.gn-modal-mask.hidden { display: none; }
+.gn-modal { width: 320px; max-width: 86%; padding: 20px; border-radius: 12px; background: var(--panel-bg); box-shadow: var(--shadow-pop); }
+.gn-modal-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.gn-modal-text { font-size: 13px; color: var(--text-light); line-height: 1.6; margin-bottom: 14px; }
+.gn-modal-text.hidden { display: none; }
+.gn-modal-in {
+    width: 100%;
+    height: 34px;
+    padding: 0 12px;
+    margin-bottom: 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+.gn-modal-in:focus { border-color: var(--primary); }
+.gn-modal-in.hidden { display: none; }
+.gn-modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ===== 阶段二百九十二：游戏联机邀请卡片（111，微信同款聊天卡片：图标 + 房名/房主 + 加入按钮） ===== */
+/* 气泡底色沿用 .message-bubble（己方绿/对方白，跟随主题），文字/按钮全部走主题变量，禁纯白纯黑硬编码 */
+.message .message-bubble.bubble-game-invite {
+    display: flex;
+    flex-direction: column;
+    width: 224px;
+    padding: 0;
+    overflow: hidden;
+}
+.gi-main { display: flex; align-items: center; gap: 10px; padding: 12px; }
+.gi-ico {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--hover);
+    color: var(--primary);
+}
+.gi-info { min-width: 0; flex: 1; }
+.gi-title {
+    font-size: 14px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gi-sub { margin-top: 3px; font-size: 12px; color: var(--text-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gi-foot { margin-top: 2px; font-size: 11px; color: var(--text-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gi-actions { border-top: 0.5px solid var(--border); }
+.gi-join {
+    display: block;
+    width: 100%;
+    padding: 9px 0;
+    border: none;
+    background: transparent;
+    color: var(--primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.gi-join:hover { background: var(--hover); }
+html.m .message .message-bubble.bubble-game-invite { width: 200px; }
+
+/* 邀请好友弹窗（微信同款选人：搜索 + 好友多选；自绘浮层，禁系统弹窗） */
+.gn-invite-mask {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+}
+.gn-invite-mask.hidden { display: none; }
+.gn-invite-dialog {
+    width: 340px;
+    max-width: 88%;
+    height: 460px;
+    max-height: 84%;
+    display: flex;
+    flex-direction: column;
+    padding: 18px 0 0;
+    border-radius: 12px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-pop);
+}
+.gn-invite-title { padding: 0 18px 12px; font-size: 15px; font-weight: 600; color: var(--text); }
+.gn-invite-search {
+    margin: 0 18px 10px;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+.gn-invite-search:focus { border-color: var(--primary); }
+.gn-invite-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px; }
+.gn-invite-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.gn-invite-item:hover { background: var(--hover); }
+.gn-invite-name { flex: 1; min-width: 0; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gn-invite-check {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    border: 1.5px solid var(--border);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+}
+.gn-invite-item.selected .gn-invite-check { border-color: var(--primary); background: var(--primary); color: #fff; }
+.gn-invite-empty { padding: 24px 0; text-align: center; font-size: 13px; color: var(--text-light); }
+.gn-invite-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px; border-top: 0.5px solid var(--border); }
+/* 阶段二百九十二 M7：房主游戏端口自动探测候选浮层（复用 .gn-invite-* 骨架，仅高度自适应 + 行内版式） */
+.gn-port-dialog { height: auto; max-height: 72%; }
+.gn-port-hint { padding: 0 18px 10px; font-size: 12px; line-height: 1.5; color: var(--text-light); }
+.gn-port-item { justify-content: space-between; }
+.gn-port-num { flex-shrink: 0; font-size: 14px; font-weight: 600; color: var(--primary); font-variant-numeric: tabular-nums; }
+.gn-port-proc { flex: 1; min-width: 0; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ===== 阶段二百九十二 M8：联机大厅·对战平台布局（页签整页形态，三栏：游戏 | 房间表格 | 大厅聊天） =====
+   房间层由主窗口聊天区覆盖层迁入游戏中心窗 gsViewOnline，故 .gn-page 由留白版式改为满铺版式 */
+.gn-page-lobby { padding: 0; overflow: hidden; }
+.gn-page-room { padding: 0; }
+.gn-page-lobby .gn-unsupported { margin: 12px 20px 0; }
+.gn-bp { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gn-bp-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--header-bg);
+    flex-shrink: 0;
+}
+.gn-bp-flex { flex: 1; }
+.gn-bp-cols { flex: 1; min-height: 0; display: flex; }
+.gn-bp-col-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+/* 左列：联机游戏筛选（游戏中心窗游戏库注入，已入库可联机游戏） */
+.gn-bp-games {
+    width: 190px;
+    flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+}
+.gn-game-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.gn-game-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.gn-game-row:hover { background: var(--hover); }
+.gn-game-row.active { background: var(--primary-soft); color: var(--primary); }
+/* 联机游戏图标：封面图（object-fit 裁剪）→ 无封面走主题色首字母占位（.gs-cover-ph 同款） */
+.gn-game-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--primary);
+}
+.gn-game-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gn-game-icon b { font-size: 12px; font-weight: 600; color: var(--bg); }
+.gn-game-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gn-game-empty { padding: 10px; font-size: 12px; color: var(--text-light); }
+/* 中列：房间表格（房名/游戏/模式/人数/房主/状态/加入） */
+.gn-bp-rooms { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px; }
+.gn-room-table-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+.gn-room-table { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding-top: 4px; }
+.gn-room-table > .gn-room-row {
+    border: none;
+    border-bottom: 0.5px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    padding: 9px 12px;
+    gap: 10px;
+}
+.gn-room-table > .gn-room-row:hover { background: var(--hover); }
+.gn-rt-col-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gn-room-table-head .gn-rt-col-name { display: block; }
+.gn-rt-col-game { width: 110px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gn-rt-col-mode { width: 56px; flex-shrink: 0; color: var(--primary); }
+.gn-rt-col-slot { width: 62px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.gn-rt-col-host { width: 96px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gn-rt-col-st { width: 68px; flex-shrink: 0; }
+.gn-rt-col-act { width: 72px; flex-shrink: 0; display: flex; justify-content: flex-end; }
+.gn-room-table-head .gn-rt-col-act { display: block; }
+/* 中列底：房间号直达加入 */
+.gn-join-row {
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+.gn-join-row input {
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.gn-join-row input:focus { border-color: var(--primary); }
+.gn-join-row input::placeholder { color: var(--text-light); }
+.gn-join-row input:first-child { flex: 0 0 104px; }
+.gn-join-row input + input { flex: 1; min-width: 0; }
+/* 右列：大厅聊天（在场人数 + 消息流 + 自绘输入） */
+.gn-bp-chat {
+    width: 264px;
+    flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 12px;
+    border-left: 1px solid var(--border);
+    background: var(--bg);
+}
+.gn-chat-count { font-size: 12px; color: var(--primary); font-weight: normal; }
+.gn-chat-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.gn-chat-row { display: flex; align-items: flex-start; gap: 8px; }
+.gn-chat-row.mine { flex-direction: row-reverse; }
+.gn-chat-main { min-width: 0; max-width: 78%; display: flex; flex-direction: column; gap: 2px; }
+.gn-chat-row.mine .gn-chat-main { align-items: flex-end; }
+.gn-chat-meta { font-size: 11px; color: var(--text-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.gn-chat-text {
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+.gn-chat-row.mine .gn-chat-text { background: var(--primary); color: #fff; }
+.gn-chat-sys { text-align: center; font-size: 11px; color: var(--text-light); }
+.gn-chat-empty { padding: 18px 0; text-align: center; font-size: 12px; color: var(--text-light); }
+.gn-chat-input { flex-shrink: 0; display: flex; gap: 6px; margin-top: 10px; }
+.gn-chat-input input {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.gn-chat-input input:focus { border-color: var(--primary); }
+.gn-chat-input input::placeholder { color: var(--text-light); }
+/* 房间页：左（房间信息/链路/成员/操作） | 右（房内聊天） */
+.gn-room-cols { flex: 1; min-height: 0; display: flex; }
+.gn-room-left { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 16px 18px; }
+.gn-room-right {
+    width: 280px;
+    flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 14px;
+    border-left: 1px solid var(--border);
+    background: var(--bg);
+}
+/* 建房弹窗（自绘表单，高度自适应） */
+.gn-create-dialog { height: auto; max-height: 88%; }
+.gn-create-form { padding: 0 18px; }
+.gn-create-form .gn-form-row select {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+.gn-create-form .gn-form-row select:focus { border-color: var(--primary); }
+.gn-create-dialog .gn-hint { padding: 0 18px; }
+/* 窄窗自适应（游戏中心窗最小宽度 960，仍保三栏可读；以下为极端收窄兜底） */
+@media (max-width: 900px) {
+    .gn-bp-games { width: 150px; }
+    .gn-bp-chat { width: 220px; }
+}
+
 /* ===================== 阶段二百六十一：向日葵同款远程控制页面（rc-panel.js） ===================== */
 /* 覆盖层形态同 .drive-view（absolute 盖 .main-chat，左侧列表保持可见）；全部颜色走主题变量 */
 .rc-view {

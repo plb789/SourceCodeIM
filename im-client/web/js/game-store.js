@@ -455,25 +455,32 @@
     function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
     function showView(name) {
-        ['store', 'library', 'downloads', 'detail'].forEach(function (v) {
+        ['store', 'library', 'downloads', 'detail', 'online'].forEach(function (v) {
             $('gsView' + cap(v)).classList.toggle('hidden', v !== name);
         });
         // 导航高亮：详情归属商店页签
         var tab = name === 'detail' ? 'store' : name;
-        ['store', 'library', 'downloads'].forEach(function (t) {
+        ['store', 'library', 'downloads', 'online'].forEach(function (t) {
             $('gsNav' + cap(t)).classList.toggle('active', t === tab);
         });
         state.tab = tab;
+        // 阶段二百九十二 M8：联机大厅页签的开关与房间层联动（进页打开面板 / 离页收口面板）
+        if (window.IMGameRoom) {
+            if (name === 'online') { if (!window.IMGameRoom.isOpen()) window.IMGameRoom.open(); }
+            else if (window.IMGameRoom.isOpen()) window.IMGameRoom.close();
+        }
         // 离开详情视图时暂停页面内视频（display:none 不会自动暂停，防后台续播出声）
         if (name !== 'detail') {
             var sv = $('gsDetailScroll').querySelectorAll('video');
             for (var k = 0; k < sv.length; k++) { try { sv[k].pause(); } catch (e) { /* 忽略 */ } }
         }
         // 切换后刷新对应滚动容器的悬浮滑块（视图显隐导致尺寸变化）
-        var scrollId = name === 'detail' ? 'gsDetailScroll'
-            : (name === 'store' ? 'gsStoreScroll'
-                : (name === 'library' ? 'gsLibMain' : 'gsDlList'));
-        osbTick($(scrollId), 400);
+        // 联机大厅页签的滚动容器由 gn-room.js 自持自绘滑块（此处不代管，避免双挂）
+        var scrollId = name === 'online' ? ''
+            : name === 'detail' ? 'gsDetailScroll'
+                : (name === 'store' ? 'gsStoreScroll'
+                    : (name === 'library' ? 'gsLibMain' : 'gsDlList'));
+        if (scrollId) osbTick($(scrollId), 400);
         // 库页吸顶条/返回顶部：离开库视图即隐藏；进入时显隐校准（display 后滚动状态可能已变）
         if (name === 'library') {
             setTimeout(function () { if (typeof libBarUpdate === 'function') libBarUpdate(); }, 60);
@@ -4456,6 +4463,16 @@
         pullStatus();
         renderDownloads();
     });
+    // 阶段二百九十二 M8：联机大厅——已是本窗页签（右侧主区显示对战平台大厅，而非主窗口聊天区覆盖面板）；
+    // 109/110/112 经 gn-signal.js + 主进程 IPC 中继复用主窗口唯一 WS
+    $('gsNavOnline').addEventListener('click', function () {
+        if (window.desktop && typeof window.desktop.gnSignalSend === 'function') {
+            showView('online');
+        } else {
+            // 网页端（无桌面桥）：无隧道能力，仅提示（房间层仍可渲染房间列表，但无法建房/加入）
+            showView('online');
+        }
+    });
 
     // 商店无限滚动（Steam 同款）：滚动接近底部（root=gsStoreScroll，400px 预载余量）自动拉下一页，
     // "加载更多"按钮已由 #gsStoreInf 底部容器替代（spinner/已加载全部，状态归口 updateStoreInf）
@@ -4474,6 +4491,37 @@
     osbInit($('gsSlotList'));
     osbInit($('gsHistList'));
     osbInit($('gsPropPanes')); // 属性弹窗右侧分栏内容区（超高时内部滚动）
+
+    // ===== 阶段二百九十二 M8：联机大厅页签对外口（gn-room.js 在本窗运行，复用本窗既有能力）=====
+    // 自绘悬浮滚动条 / Toast 归口：主窗口由 chat.js 暴露同名全局，游戏中心窗本页暴露，口径一致
+    window._osbInit = osbInit;
+    window._osbTick = osbTick;
+    window.showToast = toast;
+    // 页签切换口（gn-room.js 不直接依赖本模块内部实现，避免耦合）
+    window.GSShowOnline = function () { if (state.tab !== 'online') showView('online'); };
+    window.GSOnlineExit = function () { showView('store'); };
+    // 联机游戏数据源：已入库（已安装/待更新）游戏清单 —— 建房弹窗「联机游戏」下拉的数据源。
+    // 注：管理端「支持联机」标记与默认端口字段为三期前置项（当前按已入库全量可选，联机能力由端口隧道兜底）
+    window.GSOnlineGames = function () {
+        var out = [];
+        try {
+            Object.keys(state.lib).forEach(function (gid) {
+                var e = state.lib[gid];
+                var g = e && e.game;
+                if (!g) return;
+                var st = e.lib && e.lib.state;
+                if (st !== 3 && st !== 4) return; // 仅已安装/待更新（可联机）
+                out.push({
+                    id: Number(gid),
+                    name: g.name || ('#' + gid),
+                    // 联机大厅左列按游戏图标展示：与商店卡片同源（封面 → 首屏截图 → 空则前端占位），
+                    // 此处直接归一为可直用 URL，避免调用方重复拼接 origin
+                    cover: assetUrl(g.cover || (g.screenshots && g.screenshots[0]) || '')
+                });
+            });
+        } catch (err) { out = []; }
+        return out;
+    };
 
     showView('store');
     // 先拉商店布局配置（管理端改后用户下次打开即热生效），再加载商店列表渲染

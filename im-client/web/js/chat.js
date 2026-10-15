@@ -21295,6 +21295,34 @@
             }
             return;
         }
+        // 阶段二百九十二：联机邀请卡片(111)历史持久化渲染（content 为 JSON：{invite:{room_id,room_name,host,host_name,host_port,status,count}} 服务端读房间态富化）
+        if (r.msg_type === 111) {
+            var giEnv = null;
+            try { giEnv = JSON.parse(r.content); } catch (e) { giEnv = null; }
+            if (giEnv && giEnv.invite && giEnv.invite.room_id) {
+                var giDiv = giBuildBubbleEl(r.from_user, giEnv.invite, isMine ? 'self' : 'other', isPrivate);
+                if (r.id) giDiv.setAttribute('data-msg-id', r.id);
+                giDiv.setAttribute('data-ts', ts);
+                if (beforeEl) {
+                    messageList.insertBefore(giDiv, beforeEl);
+                } else {
+                    messageList.appendChild(giDiv);
+                    messageList.scrollTop = messageList.scrollHeight;
+                }
+                return;
+            }
+            // 信封异常降级为系统提示，避免渲染成原始 JSON 串
+            var giTip = document.createElement('div');
+            giTip.className = 'system-tip';
+            giTip.textContent = I18N.t('[联机邀请]');
+            if (beforeEl) {
+                messageList.insertBefore(giTip, beforeEl);
+            } else {
+                messageList.appendChild(giTip);
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+            return;
+        }
         // 阶段一百五十四：红包消息(86)历史持久化渲染（content 为 JSON：{rp:{id,type,count,amount,greeting,status}}）
         if (r.msg_type === 86) {
             var rpEnv = null;
@@ -23251,6 +23279,8 @@
         if (agentAvatars[name] && aiAvatarIsUrl(agentAvatars[name])) return agentAvatars[name];
         return userAvatars[name] || '';
     }
+    // 阶段二百九十二 M5：头像归口外露（游戏房间成员列表等面板复用，避免各自重造头像解析）
+    window.IMAvatarUrl = getAvatarUrl;
 
     // 头像缺失修复：按发送者解析头像并构建头像元素（返回 DOM 节点）
     // 优先级：自己（LOGIN_RESP/上传成功下发） > 好友列表（FRIEND_LIST 携带 avatar） > 在线用户表（USER_LIST 推送） > 首字母占位
@@ -27813,6 +27843,104 @@
             content: JSON.stringify({ user: ccPicked })
         });
         ccClose();
+    });
+
+    // ===== 阶段二百九十二：游戏联机邀请卡片（微信同款聊天卡片入口，111） =====
+    // 链路：房间页「邀请好友」→ 自绘选人弹窗 → 上行 111 {invite:{room_id}}（服务端读房间态富化房名/房主/端口防伪造）
+    // → 双方实时 111 帧 → 卡片「加入房间」打开联机面板并直接加入（端口隧道仅 PC 客户端可用，其他端给出提示）
+    function giBuildBubbleEl(fromUser, invite, type, isPrivate) {
+        var div = document.createElement('div');
+        div.className = 'message ' + type;
+        div.setAttribute('data-from', fromUser);
+        var body = document.createElement('div');
+        body.className = 'message-body';
+        // 私聊窗口标题已显示对方名称，气泡内昵称冗余，仅群聊显示发送者昵称（与文字/图片消息同规则）
+        if (!isPrivate) {
+            var nameEl = document.createElement('div');
+            nameEl.className = 'message-name';
+            nameEl.textContent = senderDisplayName(fromUser);
+            body.appendChild(nameEl);
+        }
+        var bubble = document.createElement('div');
+        bubble.className = 'message-bubble bubble-game-invite';
+        var main = document.createElement('div');
+        main.className = 'gi-main';
+        var ico = document.createElement('span');
+        ico.className = 'gi-ico';
+        ico.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21.58 16.09l-1.09-7.66A3.996 3.996 0 0 0 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 15.5h6l2.25 2.75c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H4V9h7v2zm9-1c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1zm-2-3c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1z"/></svg>';
+        main.appendChild(ico);
+        var info = document.createElement('div');
+        info.className = 'gi-info';
+        var title = document.createElement('div');
+        title.className = 'gi-title';
+        title.textContent = invite.room_name || (I18N.t('联机房间') + ' ' + (invite.room_id || ''));
+        var sub = document.createElement('div');
+        sub.className = 'gi-sub';
+        var parts = [I18N.t('房主') + ' ' + (invite.host_name || invite.host || '')];
+        if (invite.count) parts.push(invite.count + ' ' + I18N.t('人'));
+        parts.push(invite.status === 'playing' ? I18N.t('游戏中') : I18N.t('等待中'));
+        sub.textContent = parts.join(' · ');
+        var foot = document.createElement('div');
+        foot.className = 'gi-foot';
+        foot.textContent = I18N.t('房间号') + ' ' + (invite.room_id || '') + (invite.host_port ? ' · ' + I18N.t('端口') + ' ' + invite.host_port : '');
+        info.appendChild(title);
+        info.appendChild(sub);
+        info.appendChild(foot);
+        main.appendChild(info);
+        bubble.appendChild(main);
+        var act = document.createElement('div');
+        act.className = 'gi-actions';
+        var btn = document.createElement('button');
+        btn.className = 'gi-join';
+        btn.textContent = I18N.t('加入房间');
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            giJoinRoom(invite.room_id);
+        });
+        act.appendChild(btn);
+        bubble.appendChild(act);
+        body.appendChild(bubble);
+        div.appendChild(getAvatarEl(fromUser));
+        div.appendChild(body);
+        return div;
+    }
+    function giAppendBubble(fromUser, invite, type, isPrivate) {
+        var div = giBuildBubbleEl(fromUser, invite, type, isPrivate);
+        messageList.appendChild(div);
+        messageList.scrollTop = messageList.scrollHeight;
+        return div;
+    }
+    // 加入房间：阶段二百九十二 M8 房间层已迁入游戏中心窗「联机大厅」页签——
+    // 本端（主窗口）经主进程唤醒游戏中心窗并投递 {room_id, join:true}，由该窗 gn-room.js 切页并直接加入；
+    // 隧道能力仅 PC 客户端具备（网页/手机端无 desktop 桥，给出明确提示）
+    function giJoinRoom(roomId) {
+        roomId = String(roomId || '').replace(/[^0-9]/g, '');
+        if (!/^[0-9]{6}$/.test(roomId)) { showToast(I18N.t('邀请的房间号无效')); return; }
+        if (window.desktop && typeof window.desktop.gameNetOpenLobby === 'function') {
+            window.desktop.gameNetOpenLobby({ room_id: roomId, join: true });
+            return;
+        }
+        showToast(I18N.t('当前环境不支持联机，请在 PC 客户端加入'));
+    }
+
+    // 111 实时接收（与 107/104 同口径：会话归属归一 + msg_id 去重 + 服务端昵称合并 + 私聊已读回执）
+    IMSocket.on(MSG.GAME_INVITE, function (msg) {
+        var isMine0 = msg.from_user === IMSocket.getUsername();
+        var to0 = msg.to_user || '';
+        var target = isGroupTarget(to0) ? to0 : (isMine0 ? to0 : msg.from_user);
+        if (target !== currentChatUser) return;
+        if (msg.msg_id && messageList.querySelector('.message[data-msg-id="' + msg.msg_id + '"]')) return;
+        var env = {};
+        try { env = JSON.parse(msg.content) || {}; } catch (e) { return; }
+        var invite = env.invite;
+        if (!invite || !invite.room_id) return;
+        if (msg.from_name) nickCache[msg.from_user] = msg.from_name;
+        var el = giAppendBubble(msg.from_user, invite, isMine0 ? 'self' : 'other', !isGroupTarget(target));
+        if (msg.msg_id) el.setAttribute('data-msg-id', msg.msg_id);
+        if (msg.timestamp) el.setAttribute('data-ts', msg.timestamp);
+        if (!isMine0 && msg.msg_id && !isGroupTarget(target)) {
+            sendReadReceipt(target, msg.msg_id);
+        }
     });
 
     // ===== 阶段二百六十八：位置功能（微信同款发送位置 + 实时位置共享，高德 JS API GCJ-02） =====

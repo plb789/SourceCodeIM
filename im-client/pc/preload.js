@@ -1014,5 +1014,100 @@ contextBridge.exposeInMainWorld('desktop', {
     // 打开本地存档目录（P3）payload={gameId,installDir,slug,adminPaths,adminExclude} → Promise<{ok,dir}>
     gameSaveOpenDir: function (payload) {
         return ipcRenderer.invoke('game:save-open-dir', payload);
+    },
+    // ===== 阶段二百九十二 M4：局域网游戏跨公网联机·本地端口隧道（仅 PC 端，形态二）======
+    // 主进程持 UDP/TCP 套接字，渲染进程（gn-net.js）持 WebRTC DataChannel，经以下受控方法对接：
+    // 渲染进程拿不到裸 socket（无任意端口/任意目标能力；端口白名单与角色校验在主进程归口）。
+    // open：args={room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?} → Promise<{ok, port?, err?}>
+    gnTunnelOpen: function (args) {
+        return ipcRenderer.invoke('gn:tunnel-open', args || {});
+    },
+    // close：args={room_id, peer?, proto?, role?, quiet?}（缺省 peer/proto/role = 该房间全部）→ Promise<{ok, closed}>
+    gnTunnelClose: function (args) {
+        return ipcRenderer.invoke('gn:tunnel-close', args || {});
+    },
+    // deliver：对端 DataChannel 收到的字节/流控制帧 → 主进程套接字（数据面高频，fire-and-forget）
+    // frame={room_id, peer, proto, sid, kind:'data'|'open'|'close', buf?}
+    gnTunnelDeliver: function (frame) {
+        ipcRenderer.send('gn:tunnel-deliver', frame || {});
+    },
+    // 阶段二百九十二 M7：房主游戏端口自动探测（设计文档 §4.3 第 1 层）
+    // args={procs?:string[]}（已登记游戏进程名，供过滤）→ Promise<{ok, list:[{port,pid,proc,protos}], filtered}>
+    // 仅读取本机监听端口清单（netstat -ano + tasklist），不触碰游戏字节
+    gnDetectPort: function (args) {
+        return ipcRenderer.invoke('gn:detect-port', args || {});
+    },
+    // 本机套接字 → 渲染进程（data 帧：本机游戏发出的字节/流控制帧，待转发进 DataChannel）
+    onGnTunnelData: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn-tunnel:data', function (event, frame) { cb(frame); });
+    },
+    // 隧道事件（listen/open/close/error/closed/idle）——供 UI 提示与流生命周期同步
+    onGnTunnelEvent: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn-tunnel:event', function (event, frame) { cb(frame); });
+    },
+    // ===== 阶段二百九十二 M5/M8：联机大厅跨窗桥接 =====
+    // 主窗口（邀请卡片「加入房间」/ 游戏详情「联机」）→ 主进程 → 唤醒游戏中心窗并联机大厅页
+    // payload={name?,port?,room_id?,join?,procs?}
+    gameNetOpenLobby: function (payload) {
+        ipcRenderer.send('game:net-open', payload || {});
+    },
+    // 游戏中心窗订阅：切联机大厅页 + 预填/（join 时）直接加入（payload 同上，可缺省）
+    onGameNetOpen: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('game:net-open', function (event, payload) { cb(payload || {}); });
+    },
+    // ===== 阶段二百九十二 M8：联机信令跨窗中继（房间层/引擎已迁入游戏中心窗，复用主窗口唯一 WS）=====
+    // 上行（游戏中心窗 → 主进程 → 主窗口）：payload={msg_type,to_user?,content}
+    gnSignalSend: function (payload) {
+        ipcRenderer.send('gn:signal-send', payload || {});
+    },
+    // 主窗口订阅上行信令：收到后调用 IMSocket.send（本端是唯一 WS 持有者）
+    onGnSignalOut: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:signal-out', function (event, payload) { cb(payload || {}); });
+    },
+    // 下行（主窗口 → 主进程 → 游戏中心窗）：msg={msg_type,from_user,content}
+    gnSignalForward: function (msg) {
+        ipcRenderer.send('gn:signal-recv', msg || {});
+    },
+    // 游戏中心窗订阅下行信令（分发到 GNSignal.on 注册的处理口）
+    onGnSignalIn: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:signal-in', function (event, msg) { cb(msg || {}); });
+    },
+    // WS 连接态：主窗口上报（变化才发）→ 主进程缓存 → 游戏中心窗订阅 + 首开主动拉取
+    gnSocketState: function (on) {
+        ipcRenderer.send('gn:socket-state', !!on);
+    },
+    onGnSocketState: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:socket-state', function (event, on) { cb(!!on); });
+    },
+    gnSocketStateGet: function () {
+        return ipcRenderer.invoke('gn:socket-state-get');
+    },
+    // 服务端归口参数（登录响应 game_net_*）：主窗口上报 → 主进程缓存 → 游戏中心窗订阅/首开拉取
+    gnNetConfig: function (cfg) {
+        ipcRenderer.send('gn:net-config', cfg || {});
+    },
+    onGnNetConfig: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:net-config', function (event, cfg) { cb(cfg || {}); });
+    },
+    gnNetConfigGet: function () {
+        return ipcRenderer.invoke('gn:net-config-get');
+    },
+    // 好友通讯录快照（游戏中心窗「邀请好友」选人数据源；主窗口 IMContacts 为唯一归口）→ Promise<[{username,name,avatar}]>
+    gnContactsGet: function () {
+        return ipcRenderer.invoke('gn:contacts-get');
+    },
+    onGnContactsNeed: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:contacts-need', function (event, id) { cb(id); });
+    },
+    gnContactsReply: function (id, list) {
+        ipcRenderer.send('gn:contacts-reply', id, list || []);
     }
 });

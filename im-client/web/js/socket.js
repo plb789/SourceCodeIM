@@ -308,7 +308,8 @@
         LOCATION_SHARE: 105,     // 阶段二百六十八：实时位置共享信令（action 模式，纯信令不落库坐标；上行 start/join/leave/update/end，下行 started/joined/state/left/ended/error，房间态服务端内存归口）
         CARD_UPDATE: 106,        // 阶段二百七十四：网页卡片回填（微信同款链接分享卡片；下行 content 为卡片元数据 JSON {msg_id,url,title,desc,thumb,icon,domain}，前端按 msg_id 原位把纯 URL 气泡升级为卡片）
         CONTACT_CARD: 107,      // 阶段二百七十六：联系人名片（微信同款"个人名片"，上行 {user:"用户名"} 服务端查库富化；下行/历史 {user,name,avatar} 快照，点击打开资料卡可加好友）
-        MOMENT_SYNC: 108        // 阶段二百八十：朋友圈互动实时同步（下行 content 为 JSON {action,moment_id,actor}；红点 + 已打开页面原位刷新，不轮询）
+        MOMENT_SYNC: 108,       // 阶段二百八十：朋友圈互动实时同步（下行 content 为 JSON {action,moment_id,actor}；红点 + 已打开页面原位刷新，不轮询）
+        GAME_INVITE: 111        // 阶段二百九十二：局域网游戏联机邀请卡片（上行 {invite:{room_id}}；下行/历史 {invite:{room_id,room_name,host,host_name,host_port,status,count}} 服务端读房间态富化，点击「加入房间」打开联机面板）
     };
 
     // 阶段二百四十八：连接入口统一锁屏门禁——FSI 来电会把页面在锁屏后面拉起（onNewIntent/
@@ -747,6 +748,20 @@
                     p2pCfg.archive = !!info.file_p2p_archive;
                 }
                 if (window.P2PFile && window.P2PFile.config) window.P2PFile.config(p2pCfg);
+                // 阶段二百九十二：游戏联机（109/110）决策参数下发（服务端归口，客户端零硬编码：
+                // enabled=可用性，mode=接入形态（一期主线 tunnel=通用端口隧道），negotiate_timeout=协商超时秒，
+                // relay_only=强制中继，max_members=房间成员上限）→ 注入 GameNet 引擎
+                // 阶段二百九十二 M8：引擎（gn-net.js）与房间层已迁入游戏中心窗，本端（主窗口）无引擎实例，
+                // 参数须经主进程跨窗同步（desktop.gnNetConfig → 游戏中心窗订阅/首开拉取），本端存在引擎时仍就地注入
+                var gnCfg = {
+                    enabled: !!(info && info.game_net_enabled),
+                    mode: (info && info.game_net_mode) || 'both',
+                    negotiateTimeout: (info && info.game_net_negotiate_timeout > 0) ? info.game_net_negotiate_timeout : 10,
+                    relayOnly: !!(info && info.game_net_relay_only),
+                    maxMembers: (info && info.game_net_max_members > 0) ? info.game_net_max_members : 6
+                };
+                if (window.GameNet && window.GameNet.config) window.GameNet.config(gnCfg);
+                if (window.desktop && typeof window.desktop.gnNetConfig === 'function') window.desktop.gnNetConfig(gnCfg);
             } catch (e) {}
             // 阶段二百二十五：登录成功后启动原生前台服务（保存凭据+拉起服务，幂等）；
             // 回前台交接重连成功后派发历史补拉事件（后台期消息由原生连接接收，WebView 未渲染）
@@ -775,6 +790,18 @@
         // 气泡 UI 由 chat.js 自行注册 91 处理器，两侧职责解耦）
         if (msg.msg_type === 91 && window.P2PFile && window.P2PFile.onSignal) {
             window.P2PFile.onSignal(msg);
+        }
+        // 阶段二百九十二 M8：游戏联机信令（109 房间层 / 110 连接层 / 112 大厅层）跨窗中继——
+        // 房间层 UI 与引擎已整页迁入游戏中心窗（无 WS 独立窗），本端（主窗口）为唯一 WS 持有者，
+        // 收到即经主进程转投游戏中心窗（由 GNSignal 分发）；本端不再持房间/引擎状态（防双份脑裂）。
+        // 注：111 联机邀请卡片不在此列——卡片本就在主窗口聊天区渲染，随到随用不经中继。
+        // 9（通用错误帧）一并中继：游戏建房/加入/匹配的服务端拒绝一律以 9 回包（109 层无成功回执），
+        // 不中继则游戏中心窗完全静默（实测"你已加入的房间过多"等拒绝无任何提示）；
+        // 游戏中心窗仅在本端请求在途（busy.create/busy.join）时呈现，不与其他模块错误混淆。
+        if (msg.msg_type === 9 || msg.msg_type === 109 || msg.msg_type === 110 || msg.msg_type === 112) {
+            if (window.desktop && typeof window.desktop.gnSignalForward === 'function') {
+                window.desktop.gnSignalForward({ msg_type: msg.msg_type, from_user: msg.from_user || '', content: msg.content || '' });
+            }
         }
         var handlers = messageHandlers[msg.msg_type];
         if (handlers) {
@@ -892,4 +919,36 @@
         getP2PConfig: getP2PConfig,
         stopHeartbeat: stopHeartbeat
     };
+
+    // ===== 阶段二百九十二 M8：游戏中心窗联机信令中继（本端为主窗口唯一 WS 持有者） =====
+    // 上行：游戏中心窗 → 主进程 → 本端 IMSocket.send（本端零房间/引擎状态，纯转发）
+    // 连接态：每秒上报（变化才发）→ 主进程缓存 → 游戏中心窗据此判定「未连接」提示
+    // 好友通讯录：游戏中心窗「邀请好友」选人数据源（本端 IMContacts 为唯一归口，避免双源分叉）
+    if (window.desktop) {
+        if (typeof window.desktop.onGnSignalOut === 'function') {
+            window.desktop.onGnSignalOut(function (payload) {
+                if (!payload || !payload.msg_type) return;
+                if (window.IMSocket && IMSocket.send) IMSocket.send(payload);
+            });
+        }
+        if (typeof window.desktop.onGnContactsNeed === 'function') {
+            window.desktop.onGnContactsNeed(function (id) {
+                var list = [];
+                try {
+                    var fs = (window.IMContacts && typeof window.IMContacts.friends === 'function') ? (window.IMContacts.friends() || []) : [];
+                    list = fs.map(function (f) {
+                        return { username: f.username, name: ((f.remark || f.name || '').trim()) || f.username, avatar: f.avatar || '' };
+                    });
+                } catch (e) { list = []; }
+                if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list);
+            });
+        }
+        if (typeof window.desktop.gnSocketState === 'function') {
+            var _gnLastConn = -1;
+            setInterval(function () {
+                var s = isConnected() ? 1 : 0;
+                if (s !== _gnLastConn) { _gnLastConn = s; window.desktop.gnSocketState(!!s); }
+            }, 1000);
+        }
+    }
 })();

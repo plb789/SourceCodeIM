@@ -241,6 +241,28 @@ const (
 	// content 为 JSON {action: like/unlike/comment/reply/publish/delete, moment_id, actor, target}
 	// 接收方点亮朋友圈红点并按需刷新已打开的朋友圈页面（不轮询）
 	MsgTypeMomentSync = 108
+
+	// 阶段二百九十二：局域网游戏跨公网联机（Steam 同款"局域网联机跨公网"，P2P 打洞优先 + TURN 中继兜底）
+	// 109 房间层：create/join/leave/kick/ready/start/state/list/closed（action 模式，对齐 70/90/91/105）
+	// 110 连接层：probe/accept/offer/answer/candidate/relay/ping/abort（整体照搬 file_p2p 骨架）
+	// 服务端只见信令不见游戏字节（数据走 DataChannel 点对点或经 TURN 中继）
+	MsgTypeGameRoomSignal = 109
+	MsgTypeGameNetSignal  = 110
+
+	// 阶段二百九十二：局域网游戏跨公网联机「邀请卡片」消息（微信同款聊天卡片入口，归口 gameinvite.go）。
+	// 上行 content 为 JSON {invite:{room_id}}——仅携带房间号，房名/房主/端口由服务端读房间态富化，
+	// 防伪造（客户端自填房名端口冒充）与泄漏成员名单（只带人数不带名单）；
+	// 下行/历史 content 为 JSON {invite:{room_id,room_name,host,host_name,host_port,status,count}}，
+	// 落库 msg_type=111，走私聊/群聊普通消息链路（对齐位置 104 / 名片 107）。
+	// 点击卡片「加入房间」打开联机面板并直接加入（端口隧道仅在 PC 客户端可用，其他端给出提示）
+	MsgTypeGameInvite = 111
+
+	// 阶段二百九十二 M8：联机大厅层（112，归口 gamenet.go）。大厅页与房间页分离后的公共层：
+	//   上行 {action: enter/ping/leave} 在场心跳（Redis ZSET 带 TTL 语义，45s 未续期即离线）
+	//   上行 {action: msg, text} 大厅聊天
+	//   下行 {action: users, users:[{username,name}]} 在场名单 / {action: msg, from, from_name, text, ts} 聊天广播
+	// 一律不落库、不进离线队列/历史/未读：新连接仅收在场名单与之后的即时消息（对齐"大厅不持久化"口径）
+	MsgTypeGameLobbySignal = 112
 )
 
 // Message 客户端与服务端统一 JSON 消息协议

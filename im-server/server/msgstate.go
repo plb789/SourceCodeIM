@@ -203,7 +203,7 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 	if gid, err := strconv.Atoi(strings.TrimPrefix(record.ToUser, "g")); err == nil && record.ToUser != "" && strings.HasPrefix(record.ToUser, "g") && gid > 0 {
 		// 补测回归修复：多群（gN）撤回摘要联动——原实现只适配全局群（target 空）与私聊，
 		// gN 落入私聊分支后 users 含 "gN" 无会话行，群成员会话摘要残留已撤回内容
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86, 104, 107}, record.ToUser)
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 86, 104, 107, 111}, record.ToUser)
 		users = getGroupMemberIDs(uint(gid))
 	} else if record.ToUser == "" {
 		// 群聊会话：全部群消息，摘要更新所有已存在群会话行的用户
@@ -211,14 +211,14 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 		// 需限定 to_user 为空，私聊图片同样为 msg_type=4 但 to_user 非空
 		// 原实现：query = query.Where("msg_type = ?", 1)
 		// 阶段一百五十四：纳入红包消息(86)——红包不可撤回但可作为"最新可见消息"，撤回旧消息时摘要应重算为红包摘要
-		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 86, 104, 107})
+		query = query.Where("msg_type IN ? AND to_user = ''", []int{1, 4, 86, 104, 107, 111})
 		store.DB.Model(&model.Conversation{}).Where("target = ''").Pluck("user_id", &users)
 	} else {
 		// 私聊会话：双方互发消息，摘要更新双方
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，撤回文字后摘要应重算为最新的图片/文件消息摘要
 		// 阶段一百五十四：纳入红包消息(86)，语义同群聊分支
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 104, 107}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
+			[]int{2, 4, 5, 86, 104, 107, 111}, record.FromUser, record.ToUser, record.ToUser, record.FromUser)
 		users = []string{record.FromUser, record.ToUser}
 	}
 	var latest model.Message
@@ -255,9 +255,10 @@ func (s *Server) refreshConvSummaryAfterRecall(record model.Message) {
 			// 阶段一百五十四：红包信封归口——撤回中间消息且最新可见消息为红包时，
 			// 摘要显示"[红包] 祝福语"，复用 messageSummary 与正常会话摘要链路同口径，防 JSON 原串外泄
 			summary = messageSummary(latest.Content)
-		case 104, 107:
+		case 104, 107, 111:
 			// 阶段二百七十六：位置/名片信封归口——撤回中间消息且最新可见消息为位置或名片时，
 			// 摘要经 messageSummary 显示"[位置]/[联系人] 名称"，防 JSON 原串外泄（原 104 缺分支会泄漏原串）
+			// 阶段二百九十二：联机邀请(111)同口径——显示"[联机邀请] 房名"
 			summary = messageSummary(latest.Content)
 		}
 		if len(summary) > 200 {

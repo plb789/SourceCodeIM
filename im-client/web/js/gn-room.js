@@ -1,0 +1,1217 @@
+// gn-room.js - 阶段二百九十二 M8：局域网游戏跨公网联机·房间层（游戏中心窗「联机大厅」页签）
+// 设计文档：docs/局域网公网联机开发文档.md（§5.2 房间层 109 / §11 客户端 UI 设计）
+//
+// 职责划分：
+//   1. 信令面：109 上行 create/join/leave/kick/ready/start/state/list/chat 收发与下行信封
+//      created/state/list/closed/chat 状态流转（GNSignal 分流入口 onSignal）
+//   2. 引擎联动：建房成功即 GameNet.hostStart；加入成功即 GameNet.connect；
+//      退房/被踢/关房即 hostStop/disconnect（隧道与信令同收口，防孤儿）
+//   3. UI：联机大厅（对战平台布局：顶栏 + 左联机游戏列 + 中房间表格 + 右大厅聊天）
+//      与房间页（成员列表/就绪/踢人/开局 + 房内聊天）
+//   4. 项目 UI 规则：全部颜色走主题 CSS 变量（跟随主题色）；自绘悬浮滚动条（window._osbInit）；
+//      自实现弹窗（页内自绘确认/输入/建房表单，禁系统弹窗）；禁纯白/纯黑硬编码
+//
+// 位置归口（M8 修正）：本模块随「联机大厅」页签整页迁入游戏中心窗（game-store.html gsViewOnline），
+// 不再覆盖主窗口聊天区；109/110/111/112 经 gn-signal.js + 主进程 IPC 中继复用主窗口唯一 WS
+// （不给游戏中心窗开第二条 WS：同端互踢/未读双计/双心跳风险）。
+
+(function () {
+    'use strict';
+
+    var view = document.getElementById('gn-view');
+    if (!view) return; // 页面异常裁剪：静默退出
+
+    var MSG_ROOM = 109;                 // protocol.MsgTypeGameRoomSignal
+    var MSG_INVITE = 111;               // protocol.MsgTypeGameInvite
+    var MSG_LOBBY = 112;                // protocol.MsgTypeGameLobbySignal（大厅聊天/在场名单，不落库）
+    var MSG_ERR = 9;                    // 通用错误帧：游戏请求的服务端拒绝（109 层无成功回执，须显式提示）
+    var MODE_TUNNEL = 'tunnel';         // 一期主线：通用端口隧道（服务端收敛，客户端声明用）
+    var LOBBY_PING = 20000;             // 大厅在场心跳（服务端 45s 判定离线）
+
+    // 对战模式（一期放行 ≤6 人：1v1/2v2/3v3；4v4 及以上需 Mesh 三期承载，UI 展示但置灰）
+    var MODES = [
+        { k: '1v1', label: '1v1', n: 2 },
+        { k: '2v2', label: '2v2', n: 4 },
+        { k: '3v3', label: '3v3', n: 6 },
+        { k: '4v4', label: '4v4', n: 8, need: true },
+        { k: '5v5', label: '5v5', n: 10, need: true },
+        { k: '8v8', label: '8v8', n: 16, need: true },
+        { k: '16v16', label: '16v16', n: 32, need: true },
+        { k: 'ffa', label: '混战', n: 0 }   // 0 = 人数自定义（2-6）
+    ];
+
+    // 模式显示归口：'ffa' → 「混战」（列表/房间页与建房下拉口径一致），未知值原样展示
+    function modeLabel(k) {
+        for (var i = 0; i < MODES.length; i++) { if (MODES[i].k === k) return MODES[i].label; }
+        return k;
+    }
+
+    // ===== 运行时状态 =====
+    var my = null;          // 我的房间：{room_id,name,host,host_port,mode,game_mode,max_players,game_id,game_name,status,members[],isHost,ready,msgs[]}
+    var myName = '';        // 建房/加入时本端已知房间名（下行信封不带 name，本地留存展示）
+    var rooms = [];         // 大厅房间列表（下行 list.rooms）
+    var visible = false;
+    var curPage = 'lobby';  // lobby / room
+    var busy = { create: false, join: false }; // 请求在途（防重复提交）
+    var pendingJoinId = ''; // 加入请求在途的房间号（首个 state 广播到达即确认入房）
+    var busyTimer = null;   // 请求超时兜底（服务端错误走通用错误帧，无成功回执时须解锁）
+    var lastListAt = 0;     // 列表节流（避免频繁切换抖动刷屏）
+    // 聊天在途标记（''/'room'/'lobby'）：9 帧是全局通用错误，原先只建房/加入在途才呈现，
+    // 聊天被服务端拒绝时彻底静默——实测：房间被回收后仍停在房间页发消息，输入框被清空且无任何反馈。
+    // 发送成功以本人 chat/msg 回显为清标记信号（服务端广播含发送者本人）。
+    var awaitingChat = '';
+    var portBusy = false;   // 端口自动探测在途（防连点）
+    var portProcs = [];     // 已登记游戏进程名（用于过滤本机监听端口）
+    var gameFilter = 0;     // 左列选中的联机游戏 id（0=全部）
+    var games = [];         // 联机游戏列表（游戏中心窗游戏库注入：{id,name}）
+    var friendsCache = [];  // 好友列表（邀请选人数据源；主窗口环境取 IMContacts，游戏中心窗经 IPC 拉取）
+    var lobbyUsers = [];    // 大厅在场玩家（下行 users）
+    var lobbyMsgs = [];     // 大厅聊天消息（下行 msg；仅本次会话内存态，不落库）
+    var roomMsgs = [];      // 房内聊天消息（下行 chat；仅本次会话内存态，不落库）
+    var lobbyTimer = null;  // 大厅在场心跳
+
+    // ===== 工具 =====
+    function u() {
+        if (window.IMSocket && IMSocket.getUsername) return IMSocket.getUsername() || '';
+        // 游戏中心窗（无 WS）：从 localStorage im_auth 解出登录名（与 game-store.js 同款编码）
+        try { return (JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || {}).u || ''; } catch (e) { return ''; }
+    }
+    function T(s, p) {
+        if (!window.I18N) return s;
+        var t = I18N.t(s, p);
+        return (t === s && p) ? s : t;
+    }
+    function avail() { return !!(window.GameNet && window.GameNet.available && window.GameNet.available()); }
+    function isMobile() { return document.documentElement.classList.contains('m'); }
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function toast(text) {
+        if (typeof window.showToast === 'function') { window.showToast(text); return; }
+        var el = document.getElementById('toast');
+        if (!el) return;
+        el.textContent = text;
+        el.classList.remove('hidden');
+        clearTimeout(el._gnT);
+        el._gnT = setTimeout(function () { el.classList.add('hidden'); }, 2500);
+    }
+    // 头像：全局归口（chat.js 暴露 window.IMAvatarUrl）优先；缺失回落首字母圆形占位（项目既有口径）
+    function avatarHtml(username, name) {
+        var url = (typeof window.IMAvatarUrl === 'function') ? (window.IMAvatarUrl(username) || '') : '';
+        var ch = (name || username || '?').slice(0, 1).toUpperCase();
+        if (url) return '<span class="gn-avatar"><img src="' + esc(url) + '" alt=""></span>';
+        return '<span class="gn-avatar gn-avatar-ch">' + esc(ch) + '</span>';
+    }
+    // 信令出口：统一走 GNSignal（游戏中心窗经 IPC 复用主窗口唯一 WS）
+    function send(obj) {
+        if (!window.GNSignal || !GNSignal.isConnected()) { toast(T('未连接，请稍后重试')); return false; }
+        return GNSignal.send({ msg_type: MSG_ROOM, content: JSON.stringify(obj) });
+    }
+    function sendLobby(obj) {
+        if (!window.GNSignal || !GNSignal.isConnected()) return false;
+        return GNSignal.send({ msg_type: MSG_LOBBY, content: JSON.stringify(obj) });
+    }
+    function hhmm(ts) {
+        var d = ts ? new Date(ts * 1000) : new Date();
+        return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    }
+
+    // ===== DOM 构建（容器 #gn-view 常驻游戏中心窗 gsViewOnline，内部结构本模块一次性构建） =====
+    var elRefresh, elClose, elPageLobby, elPageRoom, elName, elPort, elPortDetect, elPass, elCreateBtn, elCreateOpen, elCreateCancel, elCreateMask,
+        elInGame, elInMode, elInMax, elGameList,
+        elRoomIn, elJoinPass, elJoinBtn, elMatchBtn,
+        elRoomList, elListEmpty,
+        elLobbyChat, elLobbyIn, elLobbySend, elLobbyCount,
+        elRoomName, elRoomMeta, elLinkBar, elMembers, elMemberCount, elRoomActions,
+        elRoomChat, elRoomIn2, elRoomSend2,
+        elMask, elModalTitle, elModalText, elModalIn, elModalOk, elModalCancel, elUnsupported,
+        elInviteMask, elInviteList, elInviteSearch, elInviteSend, elInviteCancel,
+        elPortMask, elPortList, elPortHint, elPortCancel;
+
+    function buildDom() {
+        view.innerHTML =
+            '<div class="gn-bp">' +
+            // 顶栏：标题 + 创建房间 / 快速匹配 / 刷新
+            '<div class="gn-bp-top">' +
+            '<span class="gn-logo"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M21.58 16.09l-1.09-7.66A3.996 3.996 0 0 0 16.53 5H7.47C5.48 5 3.79 6.46 3.51 8.43l-1.09 7.66C2.2 17.63 3.39 19 4.94 19c.68 0 1.32-.27 1.8-.75L9 15.5h6l2.25 2.75c.48.48 1.13.75 1.8.75 1.56 0 2.75-1.37 2.53-2.91zM11 11H4V9h7v2zm9-1c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1zm-2-3c0 .55-.45 1-1 1s-1-.45-1-1 .45-1 1-1 1 .45 1 1z"/></svg></span>' +
+            '<span class="gn-title">' + T('联机大厅') + '</span>' +
+            '<span class="gn-bp-flex"></span>' +
+            '<button id="gn-create-open" class="gn-btn primary">' + T('创建房间') + '</button>' +
+            '<button id="gn-match-btn" class="gn-btn">' + T('快速匹配') + '</button>' +
+            '<button id="gn-refresh" class="gn-tb-btn" title="' + T('刷新') + '">' +
+            '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>' +
+            '<span>' + T('刷新') + '</span></button>' +
+            '<button id="gn-close" class="gn-tb-btn">' + T('返回') + '</button>' +
+            '</div>' +
+            // 大厅页：左联机游戏列 | 中房间表格 | 右大厅聊天
+            '<div id="gn-page-lobby" class="gn-page gn-page-lobby">' +
+            '<div class="gn-unsupported hidden" id="gn-unsupported">' + T('当前环境不支持联机（仅 PC 客户端可创建/加入房间）') + '</div>' +
+            '<div class="gn-bp-cols">' +
+            // 左列：联机游戏筛选
+            '<div class="gn-bp-games">' +
+            '<div class="gn-bp-col-title">' + T('联机游戏') + '</div>' +
+            '<div class="gn-game-list gs-scroll" id="gn-game-list"></div>' +
+            '</div>' +
+            // 中列：房间表格 + 房间号加入
+            '<div class="gn-bp-rooms">' +
+            '<div class="gn-room-table-head">' +
+            '<span class="gn-rt-col-name">' + T('房间名') + '</span>' +
+            '<span class="gn-rt-col-game">' + T('游戏') + '</span>' +
+            '<span class="gn-rt-col-mode">' + T('模式') + '</span>' +
+            '<span class="gn-rt-col-slot">' + T('人数') + '</span>' +
+            '<span class="gn-rt-col-host">' + T('房主') + '</span>' +
+            '<span class="gn-rt-col-st">' + T('状态') + '</span>' +
+            '<span class="gn-rt-col-act"></span>' +
+            '</div>' +
+            '<div class="gn-room-table" id="gn-room-list"></div>' +
+            '<div class="gn-empty hidden" id="gn-list-empty">' + T('暂无数据') + '</div>' +
+            '<div class="gn-join-row">' +
+            '<input id="gn-in-room" type="text" inputmode="numeric" maxlength="6" placeholder="' + T('输入 6 位房间号加入') + '">' +
+            '<input id="gn-in-join-pass" type="text" maxlength="32" placeholder="' + T('口令（选填）') + '">' +
+            '<button id="gn-join-btn" class="gn-btn">' + T('加入') + '</button>' +
+            '</div>' +
+            '</div>' +
+            // 右列：大厅聊天
+            '<div class="gn-bp-chat">' +
+            '<div class="gn-bp-col-title">' + T('大厅聊天') + ' <span class="gn-chat-count" id="gn-lobby-count"></span></div>' +
+            '<div class="gn-chat-list" id="gn-lobby-chat"></div>' +
+            '<div class="gn-chat-input">' +
+            '<input id="gn-lobby-in" type="text" maxlength="200" placeholder="' + T('和在大厅的玩家聊聊…') + '">' +
+            '<button id="gn-lobby-send" class="gn-btn primary tiny">' + T('发送') + '</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>' +
+            '</div>' +
+            // 房间页：左（房间信息/链路/成员/操作） | 右（房内聊天）
+            '<div id="gn-page-room" class="gn-page gn-page-room hidden">' +
+            '<div class="gn-room-cols">' +
+            '<div class="gn-room-left">' +
+            '<div class="gn-room-head">' +
+            '<div class="gn-room-name" id="gn-room-name"></div>' +
+            '<div class="gn-room-meta" id="gn-room-meta"></div>' +
+            '</div>' +
+            '<div class="gn-link-bar" id="gn-link-bar"></div>' +
+            '<div class="gn-sec-title">' + T('成员') + ' <span id="gn-member-count" class="gn-member-count"></span></div>' +
+            '<div class="gn-members" id="gn-members"></div>' +
+            '<div class="gn-room-actions" id="gn-room-actions"></div>' +
+            '</div>' +
+            '<div class="gn-room-right">' +
+            '<div class="gn-bp-col-title">' + T('房间聊天') + '</div>' +
+            '<div class="gn-chat-list" id="gn-room-chat"></div>' +
+            '<div class="gn-chat-input">' +
+            '<input id="gn-room-in" type="text" maxlength="200" placeholder="' + T('和房间内的玩家聊聊…') + '">' +
+            '<button id="gn-room-send" class="gn-btn primary tiny">' + T('发送') + '</button>' +
+            '</div>' +
+            '</div>' +
+            '</div>' +
+            '</div>' +
+            // 建房弹窗（自绘表单：房名/联机游戏/对战模式/房间人数/游戏端口(自动探测)/口令）
+            '<div class="gn-invite-mask hidden" id="gn-create-mask">' +
+            '<div class="gn-invite-dialog gn-create-dialog">' +
+            '<div class="gn-invite-title">' + T('创建房间') + '</div>' +
+            '<div class="gn-create-form">' +
+            '<div class="gn-form-row"><label>' + T('房间名') + '</label><input id="gn-in-name" type="text" maxlength="32" placeholder="' + T('如：我的世界生存') + '"></div>' +
+            '<div class="gn-form-row"><label>' + T('联机游戏') + '</label><select id="gn-in-game"></select></div>' +
+            '<div class="gn-form-row"><label>' + T('对战模式') + '</label><select id="gn-in-mode"></select></div>' +
+            '<div class="gn-form-row"><label>' + T('房间人数') + '</label><select id="gn-in-max"></select></div>' +
+            '<div class="gn-form-row"><label>' + T('游戏端口') + '</label><input id="gn-in-port" type="text" inputmode="numeric" maxlength="5" placeholder="' + T('游戏局域网端口（1024-65535）') + '"><button id="gn-port-detect" class="gn-link">' + T('自动探测') + '</button></div>' +
+            '<div class="gn-form-row"><label>' + T('房间口令') + '</label><input id="gn-in-pass" type="text" maxlength="32" placeholder="' + T('选填，留空则好友可直接加入') + '"></div>' +
+            '</div>' +
+            '<div class="gn-hint" id="gn-create-hint">' + T('创建后把房间号发给好友，对方在「加入房间」输入即可联机') + '</div>' +
+            '<div class="gn-invite-actions">' +
+            '<button class="gn-btn" id="gn-create-cancel">' + T('取消') + '</button>' +
+            '<button class="gn-btn primary" id="gn-create-btn">' + T('创建房间') + '</button>' +
+            '</div></div></div>' +
+            // 邀请好友弹窗（微信同款选人：搜索 + 好友多选；自绘浮层）
+            '<div class="gn-invite-mask hidden" id="gn-invite-mask">' +
+            '<div class="gn-invite-dialog">' +
+            '<div class="gn-invite-title">' + T('邀请好友联机') + '</div>' +
+            '<input class="gn-invite-search" id="gn-invite-search" type="text" maxlength="32" placeholder="' + T('搜索好友') + '">' +
+            '<div class="gn-invite-list" id="gn-invite-list"></div>' +
+            '<div class="gn-invite-actions">' +
+            '<button class="gn-btn" id="gn-invite-cancel">' + T('取消') + '</button>' +
+            '<button class="gn-btn primary" id="gn-invite-send" disabled>' + T('发送邀请') + '</button>' +
+            '</div></div></div>' +
+            // 端口自动探测候选浮层（设计文档 §4.3 第 1 层；自绘浮层，列出本机监听端口 + 进程名供房主点选）
+            '<div class="gn-invite-mask hidden" id="gn-port-mask">' +
+            '<div class="gn-invite-dialog gn-port-dialog">' +
+            '<div class="gn-invite-title">' + T('选择游戏端口') + '</div>' +
+            '<div class="gn-port-hint" id="gn-port-hint"></div>' +
+            '<div class="gn-invite-list" id="gn-port-list"></div>' +
+            '<div class="gn-invite-actions">' +
+            '<button class="gn-btn" id="gn-port-cancel">' + T('取消') + '</button>' +
+            '</div></div></div>' +
+            // 自实现弹窗（确认/口令输入；禁系统弹窗）
+            '<div class="gn-modal-mask hidden" id="gn-mask">' +
+            '<div class="gn-modal">' +
+            '<div class="gn-modal-title" id="gn-modal-title"></div>' +
+            '<div class="gn-modal-text" id="gn-modal-text"></div>' +
+            '<input class="gn-modal-in hidden" id="gn-modal-in" type="text" maxlength="32">' +
+            '<div class="gn-modal-actions">' +
+            '<button class="gn-btn" id="gn-modal-cancel">' + T('取消') + '</button>' +
+            '<button class="gn-btn primary" id="gn-modal-ok">' + T('确定') + '</button>' +
+            '</div></div></div>';
+
+        var g = function (id) { return document.getElementById(id); };
+        elRefresh = g('gn-refresh'); elClose = g('gn-close');
+        elPageLobby = g('gn-page-lobby'); elPageRoom = g('gn-page-room');
+        elUnsupported = g('gn-unsupported');
+        elCreateOpen = g('gn-create-open'); elCreateMask = g('gn-create-mask');
+        elName = g('gn-in-name'); elPort = g('gn-in-port'); elPass = g('gn-in-pass');
+        elInGame = g('gn-in-game'); elInMode = g('gn-in-mode'); elInMax = g('gn-in-max');
+        elGameList = g('gn-game-list');
+        elCreateBtn = g('gn-create-btn'); elCreateCancel = g('gn-create-cancel');
+        elRoomIn = g('gn-in-room'); elJoinPass = g('gn-in-join-pass'); elJoinBtn = g('gn-join-btn');
+        elMatchBtn = g('gn-match-btn');
+        elRoomList = g('gn-room-list'); elListEmpty = g('gn-list-empty');
+        elLobbyChat = g('gn-lobby-chat'); elLobbyIn = g('gn-lobby-in'); elLobbySend = g('gn-lobby-send'); elLobbyCount = g('gn-lobby-count');
+        elRoomName = g('gn-room-name'); elRoomMeta = g('gn-room-meta');
+        elLinkBar = g('gn-link-bar'); elMembers = g('gn-members'); elMemberCount = g('gn-member-count');
+        elRoomActions = g('gn-room-actions');
+        elRoomChat = g('gn-room-chat'); elRoomIn2 = g('gn-room-in'); elRoomSend2 = g('gn-room-send');
+        elMask = g('gn-mask'); elModalTitle = g('gn-modal-title'); elModalText = g('gn-modal-text');
+        elModalIn = g('gn-modal-in'); elModalOk = g('gn-modal-ok'); elModalCancel = g('gn-modal-cancel');
+        elInviteMask = g('gn-invite-mask'); elInviteList = g('gn-invite-list');
+        elInviteSearch = g('gn-invite-search'); elInviteSend = g('gn-invite-send'); elInviteCancel = g('gn-invite-cancel');
+        elPortDetect = g('gn-port-detect'); elPortMask = g('gn-port-mask');
+        elPortList = g('gn-port-list'); elPortHint = g('gn-port-hint'); elPortCancel = g('gn-port-cancel');
+
+        buildModeOptions();
+        // 自绘悬浮滚动条（原生条已全局禁用）：房间表格 + 成员区 + 大厅聊天 + 房内聊天 + 游戏列 + 选人/端口候选列表
+        if (window._osbInit) {
+            window._osbInit(elRoomList); window._osbInit(elMembers); window._osbInit(elLobbyChat);
+            window._osbInit(elRoomChat); window._osbInit(elGameList);
+            window._osbInit(elInviteList); window._osbInit(elPortList);
+        }
+        bindEvents();
+    }
+
+    // 模式下拉：4v4 及以上展示但置灰（一期 ≤6 人，Mesh 三期承载）
+    function buildModeOptions() {
+        elInMode.innerHTML = '';
+        MODES.forEach(function (m) {
+            var o = document.createElement('option');
+            o.value = m.k;
+            o.textContent = m.need ? (m.label + '（' + T('需 Mesh（三期）') + '）') : m.label;
+            if (m.need) o.disabled = true;
+            elInMode.appendChild(o);
+        });
+        elInMode.value = '1v1';
+        syncMaxOptions();
+    }
+    function modeOf(k) {
+        for (var i = 0; i < MODES.length; i++) { if (MODES[i].k === k) return MODES[i]; }
+        return MODES[0];
+    }
+    // 人数下拉：由模式决定（混战可自选 2-6；一期上限为服务端 max_members）
+    function syncMaxOptions() {
+        var m = modeOf(elInMode.value);
+        var cap = maxMembers();
+        elInMax.innerHTML = '';
+        if (m.n > 0) {
+            var o = document.createElement('option');
+            o.value = String(m.n); o.textContent = m.n + ' ' + T('人'); elInMax.appendChild(o);
+            elInMax.disabled = true;
+        } else {
+            for (var i = 2; i <= cap; i++) {
+                var o2 = document.createElement('option');
+                o2.value = String(i); o2.textContent = i + ' ' + T('人'); elInMax.appendChild(o2);
+            }
+            elInMax.value = String(Math.min(4, cap));
+            elInMax.disabled = false;
+        }
+    }
+    // 房间人数上限（服务端 game_net.max_members 归口；兜底 6）
+    function maxMembers() {
+        var n = (window.GameNet && GameNet.maxMembers) ? GameNet.maxMembers() : 0;
+        return n > 0 ? n : 6;
+    }
+
+    // ===== 自实现弹窗（确认 / 口令输入；同一时刻仅一个，遮罩点击不关闭防误触） =====
+    var modalCb = null;
+    function showModal(opts) {
+        elModalTitle.textContent = opts.title || T('提示');
+        elModalText.textContent = opts.text || '';
+        elModalText.classList.toggle('hidden', !opts.text);
+        if (opts.input) {
+            elModalIn.classList.remove('hidden');
+            elModalIn.value = opts.value || '';
+            elModalIn.placeholder = opts.placeholder || '';
+        } else {
+            elModalIn.classList.add('hidden');
+            elModalIn.value = '';
+        }
+        elModalOk.textContent = opts.okText || T('确定');
+        elModalCancel.classList.toggle('hidden', !!opts.single);
+        modalCb = opts.onOk || null;
+        elMask.classList.remove('hidden');
+        if (opts.input) setTimeout(function () { try { elModalIn.focus(); } catch (e) { } }, 30);
+    }
+    function closeModal() {
+        elMask.classList.add('hidden');
+        modalCb = null;
+        elModalIn.value = '';
+    }
+    function confirmBox(title, text, okText, fn) {
+        showModal({ title: title, text: text, okText: okText, onOk: fn });
+    }
+
+    // ===== 页面切换 / 开关 =====
+    function showPage(name) {
+        curPage = name;
+        elPageLobby.classList.toggle('hidden', name !== 'lobby');
+        elPageRoom.classList.toggle('hidden', name !== 'room');
+        if (name === 'lobby') { renderLobby(); renderGameList(); renderRoomList(); renderLobbyChat(); refreshList(true); }
+        else { renderRoom(); renderRoomChat(); }
+    }
+    function open(payload) {
+        // 桥接入口可能携带预填（邀请卡片 → {room_id}；游戏详情 → {name,port,procs}）
+        if (payload && typeof payload === 'object') {
+            if (payload.name) elName.value = String(payload.name).slice(0, 32);
+            if (payload.port) elPort.value = String(payload.port).replace(/[^0-9]/g, '').slice(0, 5);
+            if (payload.room_id) elRoomIn.value = String(payload.room_id).replace(/[^0-9]/g, '').slice(0, 6);
+            if (Array.isArray(payload.procs)) portProcs = payload.procs.slice(0, 64);
+        }
+        visible = true;
+        view.classList.remove('hidden');
+        showPage(my ? 'room' : 'lobby');
+        lobbyEnter();
+        loadFriends();
+    }
+    function close() {
+        visible = false;
+        closeModal();
+        createClose();
+        inviteClose();   // 邀请选人弹窗随面板一同收口，避免残留浮层
+        portClose();     // 端口候选浮层同理
+        view.classList.add('hidden');
+        lobbyLeave();
+    }
+    function isOpen() { return visible; }
+
+    // ===== 大厅在场（112 心跳：open 进入 / close 退出 / 20s 续期；不落库） =====
+    function lobbyEnter() {
+        sendLobby({ action: 'enter' });
+        if (lobbyTimer) clearInterval(lobbyTimer);
+        lobbyTimer = setInterval(function () {
+            if (!visible || curPage !== 'lobby') { lobbyLeave(); return; }
+            sendLobby({ action: 'ping' });
+        }, LOBBY_PING);
+    }
+    function lobbyLeave() {
+        if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
+        sendLobby({ action: 'leave' });
+        lobbyUsers = [];
+        lobbyMsgs = [];
+    }
+
+    // ===== 列表拉取（节流） =====
+    function refreshList(force) {
+        if (!avail() || !window.GNSignal || !GNSignal.isConnected()) return;
+        var now = Date.now();
+        if (!force && now - lastListAt < 1200) return;
+        lastListAt = now;
+        send({ action: 'list' });
+    }
+
+    // ===== 请求在途锁（服务端错误走通用错误帧、无成功回执，须超时兜底解锁） =====
+    function lockBusy(kind) { busy[kind] = true; armBusy(); }
+    function armBusy() {
+        if (busyTimer) clearTimeout(busyTimer);
+        busyTimer = setTimeout(function () {
+            busyTimer = null;
+            busy.create = false; busy.join = false; pendingJoinId = '';
+            renderLobby();
+        }, 6000);
+    }
+    function unlockBusy() {
+        if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
+        busy.create = false; busy.join = false; pendingJoinId = '';
+        // 忙标志复位必须同步重绘（与 armBusy 超时分支同口径）：created/state 成功路径原先只清标志不重绘，
+        // 实测导致建房成功后「创建房间」提交按钮永久置灰（文案停在「创建中…」），再点无任何反应。
+        renderLobby();
+    }
+
+    // ===== 渲染：大厅 =====
+    function renderLobby() {
+        elUnsupported.classList.toggle('hidden', avail());
+        elCreateOpen.disabled = !avail();
+        elMatchBtn.disabled = !avail() || busy.join;
+        elJoinBtn.disabled = !avail() || busy.join;
+        elJoinBtn.textContent = busy.join ? T('加入中…') : T('加入');
+        elCreateBtn.disabled = !avail() || busy.create;
+        elCreateBtn.textContent = busy.create ? T('创建中…') : T('创建房间');
+    }
+    // 无封面图标占位：主题色底按游戏名散列色相 + 首字母（与游戏中心卡片 .gs-cover-ph 同款口径）
+    function iconPh(name) {
+        var h = 0, s = String(name || '?');
+        for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+        var b = document.createElement('b');
+        b.textContent = s.charAt(0).toUpperCase();
+        return { hue: h % 360, node: b };
+    }
+    function fillGameIcon(box, name) {
+        var ph = iconPh(name);
+        box.style.filter = 'hue-rotate(' + ph.hue + 'deg)';
+        box.innerHTML = '';
+        box.appendChild(ph.node);
+    }
+    // 左列：联机游戏（游戏中心窗游戏库注入；0=全部）——图标取游戏封面，无封面走主题色首字母占位
+    function renderGameList() {
+        // 每次渲染同步游戏库：此前 games 仅在「创建房间」弹窗打开时填充（renderGameOptions），
+        // 导致进入大厅时左列常只有「全部游戏」，须先开一次建房弹窗才出现游戏项（图标随之为空）
+        if (typeof window.GSOnlineGames === 'function') games = window.GSOnlineGames() || [];
+        var list = [{ id: 0, name: T('全部游戏') }].concat(games);
+        elGameList.innerHTML = '';
+        list.forEach(function (g_) {
+            var row = document.createElement('div');
+            row.className = 'gn-game-row' + (gameFilter === g_.id ? ' active' : '');
+            var ic = document.createElement('span');
+            ic.className = 'gn-game-icon';
+            if (g_.cover) {
+                var im = document.createElement('img');
+                im.src = g_.cover;
+                im.alt = '';
+                im.draggable = false;
+                im.onerror = function () { fillGameIcon(ic, g_.name); }; // 加载失败回退占位（不留破图）
+                ic.appendChild(im);
+            } else {
+                fillGameIcon(ic, g_.name);
+            }
+            var nm = document.createElement('span');
+            nm.className = 'gn-game-name';
+            nm.textContent = g_.name;
+            row.appendChild(ic);
+            row.appendChild(nm);
+            row.addEventListener('click', function () { gameFilter = g_.id; renderGameList(); renderRoomList(); });
+            elGameList.appendChild(row);
+        });
+        // 无游戏库数据时的兜底提示（不阻断房间表格展示）
+        if (!games.length) {
+            var tip = document.createElement('div');
+            tip.className = 'gn-game-empty';
+            tip.textContent = T('游戏库为空');
+            elGameList.appendChild(tip);
+        }
+    }
+    function visibleRooms() {
+        if (!gameFilter) return rooms || [];
+        return (rooms || []).filter(function (r) { return Number(r.game_id || 0) === gameFilter; });
+    }
+    // 中列：房间表格
+    function renderRoomList() {
+        var list = visibleRooms();
+        elRoomList.innerHTML = '';
+        if (!list.length) {
+            elListEmpty.classList.remove('hidden');
+            elListEmpty.textContent = T('暂无数据');
+            return;
+        }
+        elListEmpty.classList.add('hidden');
+        list.forEach(function (r) {
+            var row = document.createElement('div');
+            row.className = 'gn-room-row';
+            var st = r.status === 'playing' ? T('游戏中') : T('等待中');
+            var mp = Number(r.max_players || 0);
+            var slot = (r.count || 0) + (mp ? '/' + mp : '');
+            row.innerHTML =
+                '<span class="gn-rt-col-name"><span class="gn-room-title">' + esc(r.name || (T('房间') + ' ' + r.room_id)) + '</span>' +
+                '<span class="gn-room-sub">' + T('房间号') + ' ' + esc(r.room_id) + '</span></span>' +
+                '<span class="gn-rt-col-game">' + esc(r.game_name || '—') + '</span>' +
+                '<span class="gn-rt-col-mode">' + esc(r.game_mode ? modeLabel(r.game_mode) : '—') + '</span>' +
+                '<span class="gn-rt-col-slot">' + esc(slot) + '</span>' +
+                '<span class="gn-rt-col-host">' + esc(r.host_name || r.host) + '</span>' +
+                '<span class="gn-rt-col-st">' + esc(st) + '</span>' +
+                '<span class="gn-rt-col-act"><button class="gn-btn tiny gn-join-one">' + T('加入') + '</button></span>';
+            row.querySelector('.gn-join-one').addEventListener('click', function () {
+                joinRoom(r.room_id, '', r.name);
+            });
+            elRoomList.appendChild(row);
+        });
+    }
+    // 右列：大厅聊天 + 在场名单
+    function renderLobbyChat() {
+        elLobbyCount.textContent = lobbyUsers.length ? ('· ' + lobbyUsers.length + ' ' + T('人在线')) : '';
+        elLobbyChat.innerHTML = '';
+        if (!lobbyMsgs.length) {
+            var tip = document.createElement('div');
+            tip.className = 'gn-chat-empty';
+            tip.textContent = T('暂无消息');
+            elLobbyChat.appendChild(tip);
+            return;
+        }
+        lobbyMsgs.forEach(function (m) {
+            elLobbyChat.appendChild(chatRowEl(m, false));
+        });
+        elLobbyChat.scrollTop = elLobbyChat.scrollHeight;
+    }
+    // 聊天行（微信式：他人左对齐黑白气泡 / 自己右对齐主题色气泡；系统行居中）
+    function chatRowEl(m, mine) {
+        var row = document.createElement('div');
+        if (m.sys) {
+            row.className = 'gn-chat-sys';
+            row.textContent = m.text;
+            return row;
+        }
+        row.className = 'gn-chat-row' + (mine ? ' mine' : '');
+        row.innerHTML = avatarHtml(m.from, m.name) +
+            '<span class="gn-chat-main"><span class="gn-chat-meta">' + esc(m.name || m.from) + ' · ' + esc(hhmm(m.ts)) + '</span>' +
+            '<span class="gn-chat-text">' + esc(m.text) + '</span></span>';
+        return row;
+    }
+
+    // ===== 渲染：房间页 =====
+    function incoming() { return '<span class="gn-tag ing">' + T('连接中') + '</span>'; }
+    function renderRoom() {
+        if (!my) { showPage('lobby'); return; }
+        elRoomName.textContent = my.name || (T('房间') + ' ' + my.room_id);
+        elRoomMeta.innerHTML =
+            '<span class="gn-meta-item">' + T('房间号') + ' <b>' + esc(my.room_id) + '</b></span>' +
+            '<span class="gn-meta-item">' + T('游戏端口') + ' <b>' + esc(my.host_port || '-') + '</b></span>' +
+            (my.game_name ? '<span class="gn-meta-item">' + T('游戏') + ' <b>' + esc(my.game_name) + '</b></span>' : '') +
+            (my.game_mode ? '<span class="gn-meta-item">' + T('模式') + ' <b>' + esc(modeLabel(my.game_mode)) + '</b></span>' : '') +
+            '<span class="gn-meta-item">' + (my.status === 'playing' ? T('游戏中') : T('等待中')) + '</span>' +
+            (my.isHost ? '<span class="gn-meta-item gn-badge-host">' + T('我是房主') + '</span>' : '');
+        renderMembers();
+        renderActions();
+        renderLinkBar();
+    }
+    function renderMembers() {
+        var st = (window.GameNet && GameNet.stateOf) ? GameNet.stateOf(my.room_id) : null;
+        var peerMap = {};
+        if (st && st.role === 'host' && st.peers) {
+            st.peers.forEach(function (p) { peerMap[p.peer] = p; });
+        }
+        elMembers.innerHTML = '';
+        elMemberCount.textContent = '(' + (my.members ? my.members.length : 0) + (my.max_players ? '/' + my.max_players : '') + ')';
+        (my.members || []).forEach(function (m) {
+            var row = document.createElement('div');
+            row.className = 'gn-member-row';
+            // 准备态徽标：已开局（status=playing）后准备语义失效，统一显示「游戏中」，与房间 meta
+            // （游戏中/等待中）及房主按钮（游戏进行中）同口径——原实现只看 m.ready，开局后成员行仍挂
+            // 「未准备」，出现"游戏都已开始却提示未准备"的自相矛盾。
+            // 房主不参与准备（服务端仅校验除房主外成员就绪），未开局时房主行不再挂「未准备」以免误导。
+            var ready;
+            if (my.status === 'playing') {
+                ready = '<span class="gn-tag ink">' + T('游戏中') + '</span>';
+            } else if (m.host) {
+                ready = '';
+            } else {
+                ready = m.ready ? '<span class="gn-tag ink">' + T('已准备') + '</span>' : '<span class="gn-tag wait">' + T('未准备') + '</span>';
+            }
+            // 联机链路：房主视角按对端映射；加入者视角只有自己一条链路（在链路条展示）
+            var link = '';
+            if (my.isHost && !m.host && peerMap[m.username]) {
+                var ps = peerMap[m.username].state;
+                link = (ps === 'linked' && peerMap[m.username].tunnel) ? '<span class="gn-tag ink">' + T('已联通') + '</span>'
+                    : (ps === 'failed' || ps === 'aborted') ? '<span class="gn-tag off">' + T('未联接') + '</span>' : incoming();
+            } else if (!my.isHost && !m.host && m.username === u()) {
+                link = my._selfLinkCls === 'on' ? '<span class="gn-tag ink">' + T('已联通') + '</span>'
+                    : my._selfLinkCls === 'off' ? '<span class="gn-tag off">' + T('未联接') + '</span>' : incoming();
+            } else if (m.host) {
+                link = my.isHost ? '<span class="gn-tag ink">' + T('本机') + '</span>' : '<span class="gn-tag off">' + T('房主') + '</span>';
+            }
+            row.innerHTML =
+                avatarHtml(m.username, m.name) +
+                '<span class="gn-member-main"><span class="gn-member-name">' + esc(m.name || m.username) + '</span>' +
+                '<span class="gn-member-sub">' + esc(m.username) + '</span></span>' +
+                '<span class="gn-member-tags">' + (m.host ? '<span class="gn-tag host">' + T('房主') + '</span>' : '') + ready + link + '</span>';
+            // 房主踢人（除自己/房主外）
+            if (my.isHost && !m.host) {
+                var kick = document.createElement('button');
+                kick.className = 'gn-btn tiny danger';
+                kick.textContent = T('移出');
+                kick.addEventListener('click', function () { kickMember(m.username, m.name || m.username); });
+                row.appendChild(kick);
+            }
+            elMembers.appendChild(row);
+        });
+    }
+    function renderLinkBar() {
+        if (!my) return;
+        var st = (window.GameNet && GameNet.stateOf) ? GameNet.stateOf(my.room_id) : null;
+        var txt = '', cls = '';
+        if (!avail()) { txt = T('当前环境不支持联机'); cls = 'off'; }
+        else if (my.isHost) {
+            var n = (st && st.peers) ? st.peers.length : 0;
+            txt = n ? T('已连接 {n} 位玩家', { n: n }) : T('等待玩家加入…');
+            cls = n ? 'on' : 'wait';
+        } else if (!st) { txt = T('尚未建立联机'); cls = 'wait'; }
+        else {
+            txt = my._selfLinkText || T('正在连接房主…');
+            cls = my._selfLinkCls || 'wait';
+        }
+        elLinkBar.className = 'gn-link-bar ' + cls;
+        elLinkBar.textContent = txt;
+    }
+    function renderActions() {
+        elRoomActions.innerHTML = '';
+        if (!my) return;
+        if (my.isHost) {
+            var canStart = (my.members || []).every(function (m) { return m.host || m.ready; });
+            var btn = document.createElement('button');
+            btn.className = 'gn-btn primary';
+            btn.textContent = my.status === 'playing' ? T('游戏进行中') : T('开始游戏');
+            btn.disabled = my.status === 'playing' || !canStart;
+            btn.addEventListener('click', function () { if (!my) return; send({ action: 'start', room_id: my.room_id }); });
+            elRoomActions.appendChild(btn);
+        } else {
+            var rb = document.createElement('button');
+            rb.className = 'gn-btn' + (my.ready ? '' : ' primary');
+            rb.textContent = my.ready ? T('取消准备') : T('准备');
+            rb.addEventListener('click', function () { if (!my) return; send({ action: 'ready', room_id: my.room_id }); });
+            elRoomActions.appendChild(rb);
+        }
+        // 邀请好友（房内成员均可邀请；走聊天邀请卡片 111，服务端校验邀请人须为房内成员）
+        var iv = document.createElement('button');
+        iv.className = 'gn-btn';
+        iv.textContent = T('邀请好友');
+        iv.addEventListener('click', function () { if (!my) return; inviteOpen(); });
+        elRoomActions.appendChild(iv);
+        var lv = document.createElement('button');
+        lv.className = 'gn-btn danger';
+        lv.textContent = my.isHost ? T('解散房间') : T('退出房间');
+        lv.addEventListener('click', function () {
+            if (!my) return;   // 关房/被踢后房间页可能残留旧按钮，防空引用
+            confirmBox(my.isHost ? T('解散房间') : T('退出房间'),
+                my.isHost ? T('解散后全部成员将被移出房间，确定吗？') : T('确定退出当前房间吗？'),
+                T('确定'), function () { doLeave(); });
+        });
+        elRoomActions.appendChild(lv);
+    }
+    // 右列：房内聊天（仅成员可见，服务端只广播不落库）
+    function renderRoomChat() {
+        elRoomChat.innerHTML = '';
+        if (!roomMsgs.length) {
+            var tip = document.createElement('div');
+            tip.className = 'gn-chat-empty';
+            tip.textContent = T('暂无消息');
+            elRoomChat.appendChild(tip);
+            return;
+        }
+        roomMsgs.forEach(function (m) {
+            elRoomChat.appendChild(chatRowEl(m, m.from === u()));
+        });
+        elRoomChat.scrollTop = elRoomChat.scrollHeight;
+    }
+
+    // ===== 服务端错误帧（9）：仅在本端游戏请求在途时呈现 =====
+    // 109 层请求成功走 109 回包、失败走通用 9 错误帧（无成功回执故不可靠"等回包"判定），
+    // 只认"有请求在途（建房/加入/聊天）"的 9，避免把主窗口其他模块的错误帧误当联机错误；
+    // 此前 9 未中继到游戏中心窗——建房被拒（如"你已加入的房间过多"）完全静默，实测已修正。
+    function onErr(msg) {
+        var kind = awaitingChat;
+        awaitingChat = '';
+        if (!busy.create && !busy.join && !kind) return;
+        var text = (msg && msg.content) ? String(msg.content) : T('操作失败，请重试');
+        unlockBusy();
+        toast(text);
+        // 房内聊天被服务端拒绝（房间已解散 / 本端已不在成员表）→ 本端房间态已失效：
+        // 就地收口回大厅并刷新列表，避免停在幽灵房间页反复空转（房间 TTL 到期/异常清理后即会命中）
+        if (kind === 'room' && my) {
+            teardownLocal('closed');
+            showPage('lobby');
+        }
+        refreshList(true);
+    }
+
+    // ===== 动作 =====
+    function openCreate() {
+        if (!avail()) { toast(T('当前环境不支持联机')); return; }
+        renderGameOptions();
+        syncMaxOptions();
+        elCreateMask.classList.remove('hidden');
+        setTimeout(function () { try { elName.focus(); } catch (e) { } }, 30);
+    }
+    function createClose() { elCreateMask.classList.add('hidden'); }
+    // 联机游戏下拉：游戏中心窗游戏库注入（window.GSOnlineGames，已入库可联机游戏）
+    function renderGameOptions() {
+        games = (typeof window.GSOnlineGames === 'function') ? (window.GSOnlineGames() || []) : [];
+        elInGame.innerHTML = '';
+        var o = document.createElement('option');
+        o.value = '0'; o.textContent = T('不指定（通用端口隧道）');
+        elInGame.appendChild(o);
+        games.forEach(function (g_) {
+            var op = document.createElement('option');
+            op.value = String(g_.id); op.textContent = g_.name;
+            elInGame.appendChild(op);
+        });
+    }
+    function doCreate() {
+        if (busy.create) return;
+        if (!avail()) { toast(T('当前环境不支持联机')); return; }
+        // 已在房间中不再发起建房：服务端 max_per_user 必然拒绝（且房间 TTL 内不会释放），
+        // 本地直接回到自己的房间页并说明，避免一次无意义的往返与"点了没反应"的观感
+        if (my && my.room_id) {
+            createClose();
+            showPage('room');
+            toast(T('你已在房间中，请先退出房间再创建'));
+            return;
+        }
+        var name = (elName.value || '').trim();
+        var port = parseInt((elPort.value || '').trim(), 10);
+        var pass = (elPass.value || '').trim();
+        var m = modeOf(elInMode.value);
+        var maxN = parseInt(elInMax.value || '', 10);
+        var gid = parseInt(elInGame.value || '0', 10) || 0;
+        var gname = '';
+        if (gid) { games.forEach(function (x) { if (x.id === gid) gname = x.name; }); }
+        if (!name) { toast(T('请填写房间名')); return; }
+        if (!isFinite(port) || port < 1024 || port > 65535) { toast(T('游戏端口需为 1024-65535')); return; }
+        if (!isFinite(maxN) || maxN < 2) { toast(T('房间人数至少 2 人')); return; }
+        myName = name;
+        lockBusy('create'); renderLobby();
+        var ok = send({
+            action: 'create', name: name, pass: pass, host_port: port, mode: MODE_TUNNEL, group_id: 0,
+            game_mode: m.k, max_players: maxN, game_id: gid, game_name: gname
+        });
+        if (ok) createClose();
+        else { unlockBusy(); renderLobby(); }
+    }
+    // ===== 房主游戏端口自动探测（设计文档 §4.3 第 1 层）=====
+    // 主进程枚举本机监听端口（netstat -ano + tasklist）→ 本面板自绘浮层供房主点选；
+    // 命中唯一候选直接填入；零候选/探测失败/环境不支持一律回落手动输入（输入框始终可用）。
+    function portPick(p) {
+        elPort.value = String(p).replace(/[^0-9]/g, '').slice(0, 5);
+        elPortMask.classList.add('hidden');
+    }
+    function portRenderList(list, filtered) {
+        elPortHint.textContent = filtered
+            ? T('以下是已登记游戏进程正在监听的端口，请选择游戏实际使用的那个')
+            : T('以下是本机正在监听的端口，请选择游戏实际使用的那个');
+        elPortList.innerHTML = '';
+        for (var i = 0; i < list.length; i++) {
+            var row = document.createElement('div');
+            row.className = 'gn-invite-item gn-port-item';
+            var tags = (list[i].protos || []).join('/').toUpperCase();
+            var num = document.createElement('span');
+            num.className = 'gn-port-num';
+            num.textContent = String(list[i].port);
+            var proc = document.createElement('span');
+            proc.className = 'gn-port-proc';
+            proc.textContent = list[i].proc || T('未知进程');
+            var tag = document.createElement('span');
+            tag.className = 'gn-tag';
+            tag.textContent = tags;
+            row.appendChild(num); row.appendChild(proc); row.appendChild(tag);
+            row.addEventListener('click', (function (p) {
+                return function () { portPick(p); };
+            })(list[i].port));
+            elPortList.appendChild(row);
+        }
+        elPortMask.classList.remove('hidden');
+        if (window._osbInit) window._osbInit(elPortList); // 内容变更后重挂悬浮滑块（幂等）
+    }
+    function portDetect() {
+        if (portBusy) return;
+        if (!avail()) { toast(T('当前环境不支持联机')); return; }
+        var api = window.desktop;
+        if (!api || typeof api.gnDetectPort !== 'function') { toast(T('当前环境不支持自动探测，请手动填写端口')); return; }
+        portBusy = true;
+        elPortDetect.textContent = T('探测中…');
+        // 已选联机游戏的进程名并入过滤名单（游戏中心窗游戏库比启动注册表更准）
+        var procs = portProcs.slice(0, 64);
+        api.gnDetectPort({ procs: procs }).then(function (r) {
+            portBusy = false;
+            elPortDetect.textContent = T('自动探测');
+            var list = (r && r.ok && r.list) || [];
+            if (!list.length) { toast(T('未探测到本机监听端口，请手动填写')); return; }
+            if (list.length === 1) {
+                portPick(list[0].port);
+                toast(T('已填入端口 {p}', { p: list[0].port }));
+                return;
+            }
+            portRenderList(list, !!(r && r.filtered));
+        }, function () {
+            portBusy = false;
+            elPortDetect.textContent = T('自动探测');
+            toast(T('探测失败，请手动填写端口'));
+        });
+    }
+    function portClose() { elPortMask.classList.add('hidden'); }
+
+    function joinRoom(roomId, pass, roomName) {
+        if (busy.join) return;
+        if (!avail()) { toast(T('当前环境不支持联机')); return; }
+        roomId = String(roomId || '').replace(/[^0-9]/g, '');
+        if (!/^[0-9]{6}$/.test(roomId)) { toast(T('房间号需为 6 位数字')); return; }
+        myName = roomName || '';
+        pendingJoinId = roomId;
+        lockBusy('join'); renderLobby();
+        if (!send({ action: 'join', room_id: roomId, pass: pass || '' })) {
+            unlockBusy(); renderLobby();
+        }
+    }
+    function doJoin() {
+        var rid = (elRoomIn.value || '').replace(/[^0-9]/g, '');
+        if (!/^[0-9]{6}$/.test(rid)) { toast(T('房间号需为 6 位数字')); return; }
+        joinRoom(rid, (elJoinPass.value || '').trim(), '');
+    }
+    // 快速匹配：按当前游戏筛选，挑一个「等待中且有位」的房间直接加入；无可用房间给出提示
+    function doMatch() {
+        if (!avail()) { toast(T('当前环境不支持联机')); return; }
+        var cand = visibleRooms().filter(function (r) {
+            if (r.status === 'playing') return false;
+            var mp = Number(r.max_players || 0);
+            return !mp || (r.count || 0) < mp;
+        });
+        if (!cand.length) { toast(T('暂无可用房间，先创建一个吧')); return; }
+        cand.sort(function (a, b) { return (b.count || 0) - (a.count || 0); }); // 优先人多（更快开局）
+        joinRoom(cand[0].room_id, '', cand[0].name);
+    }
+    function doLeave() {
+        if (!my) return;
+        var roomId = my.room_id;
+        send({ action: 'leave', room_id: roomId });
+        teardownLocal('left');
+        showPage('lobby');
+    }
+    function kickMember(username, name) {
+        if (!my) return;
+        confirmBox(T('移出成员'), T('确定将「') + name + T('」移出房间吗？'), T('移出'), function () {
+            if (!my) return;
+            send({ action: 'kick', room_id: my.room_id, target: username });
+        });
+    }
+    // 房内聊天：上行 109 chat（服务端只广播房内成员、不落库）
+    function roomSendMsg() {
+        if (!my) return;
+        var t = (elRoomIn2.value || '').trim();
+        if (!t) return;
+        elRoomIn2.value = '';
+        if (!send({ action: 'chat', room_id: my.room_id, text: t.slice(0, 200) })) { elRoomIn2.value = t; return; }
+        awaitingChat = 'room'; // 未收到本人回显前，任何 9 帧都归因于本次聊天发送
+    }
+    // 大厅聊天：上行 112（服务端只广播在场玩家、不落库）
+    function lobbySendMsg() {
+        var t = (elLobbyIn.value || '').trim();
+        if (!t) return;
+        elLobbyIn.value = '';
+        if (!sendLobby({ action: 'msg', text: t.slice(0, 200) })) { elLobbyIn.value = t; return; }
+        awaitingChat = 'lobby';
+    }
+
+    // ===== 邀请好友（微信同款选人弹窗；上行 111 邀请卡片，落在聊天窗口） =====
+    var invitePicked = {};     // username → true（多选）
+    var inviteSearchTimer = null;
+
+    // 好友数据源：主窗口环境取全局通讯录 window.IMContacts；游戏中心窗经 IPC 向主窗口拉取快照
+    function loadFriends() {
+        if (window.IMContacts && typeof IMContacts.friends === 'function') {
+            friendsCache = IMContacts.friends() || [];
+            return;
+        }
+        if (window.desktop && typeof window.desktop.gnContactsGet === 'function') {
+            try {
+                window.desktop.gnContactsGet().then(function (list) {
+                    friendsCache = Array.isArray(list) ? list : [];
+                }, function () { friendsCache = []; });
+            } catch (e) { friendsCache = []; }
+        }
+    }
+    function inviteEntries() {
+        var me = u();
+        var out = [];
+        var list = (window.IMContacts && typeof IMContacts.friends === 'function') ? (IMContacts.friends() || []) : friendsCache;
+        (list || []).forEach(function (f) {
+            if (!f || !f.username || f.username === me) return;
+            out.push({
+                username: f.username,
+                display: ((f.name || f.remark || '').trim()) || f.username,
+                avatar: f.avatar || ''
+            });
+        });
+        return out;
+    }
+    function inviteRenderList(kw) {
+        var k = (kw || '').trim().toLowerCase();
+        elInviteList.innerHTML = '';
+        inviteEntries().forEach(function (it) {
+            if (k && it.display.toLowerCase().indexOf(k) < 0 && it.username.toLowerCase().indexOf(k) < 0) return;
+            var item = document.createElement('div');
+            item.className = 'gn-invite-item' + (invitePicked[it.username] ? ' selected' : '');
+            item.innerHTML = avatarHtml(it.username, it.display) +
+                '<span class="gn-invite-name">' + esc(it.display) + '</span>' +
+                '<span class="gn-invite-check"><svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg></span>';
+            item.addEventListener('click', function () {
+                invitePicked[it.username] = !invitePicked[it.username];
+                item.classList.toggle('selected', !!invitePicked[it.username]);
+                inviteUpdateSend();
+            });
+            elInviteList.appendChild(item);
+        });
+        if (!elInviteList.children.length) {
+            var empty = document.createElement('div');
+            empty.className = 'gn-invite-empty';
+            empty.textContent = T('暂无好友');
+            elInviteList.appendChild(empty);
+        }
+    }
+    function inviteUpdateSend() {
+        var n = Object.keys(invitePicked).filter(function (k) { return invitePicked[k]; }).length;
+        elInviteSend.disabled = n === 0;
+        elInviteSend.textContent = n > 0 ? (T('发送邀请') + ' (' + n + ')') : T('发送邀请');
+    }
+    function inviteOpen() {
+        if (!my) { toast(T('请先加入房间')); return; }
+        invitePicked = {};
+        elInviteSearch.value = '';
+        loadFriends();
+        setTimeout(function () { inviteRenderList(elInviteSearch.value); }, 220); // 好友快照异步到达后再渲染
+        inviteUpdateSend();
+        elInviteMask.classList.remove('hidden');
+        if (window._osbInit) window._osbInit(elInviteList);
+        setTimeout(function () { try { elInviteSearch.focus(); } catch (e) { } }, 50);
+    }
+    function inviteClose() {
+        elInviteMask.classList.add('hidden');
+    }
+    // 发送：上行 111 帧（仅携带 room_id，房名/房主/端口由服务端读房间态富化），
+    // 落库后双方聊天窗口实时出邀请卡片
+    function inviteSend() {
+        if (!my) { inviteClose(); return; }
+        var names = Object.keys(invitePicked).filter(function (k) { return invitePicked[k]; });
+        if (!names.length) return;
+        var ok = 0;
+        names.forEach(function (n) {
+            if (window.GNSignal && GNSignal.isConnected()) {
+                if (GNSignal.send({ msg_type: MSG_INVITE, to_user: n, content: JSON.stringify({ invite: { room_id: my.room_id } }) })) ok++;
+            }
+        });
+        inviteClose();
+        toast(ok > 0 ? T('已发送 {n} 个联机邀请', { n: ok }) : T('邀请发送失败，请检查网络'));
+    }
+
+    // 邀请卡片「加入房间」入口：唤醒游戏中心联机大厅并直接加入（端口隧道仅 PC 客户端可用）
+    function joinFromInvite(roomId) {
+        roomId = String(roomId || '').replace(/[^0-9]/g, '');
+        if (!/^[0-9]{6}$/.test(roomId)) { toast(T('邀请的房间号无效')); return; }
+        if (!avail()) { toast(T('当前环境不支持联机（请在 PC 客户端加入）')); return; }
+        if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
+        if (my && my.room_id === roomId) { open({ room_id: roomId }); return; }   // 已在房内：直接进房间页
+        if (my && my.room_id !== roomId) { toast(T('请先退出当前房间再接受邀请')); open({ room_id: roomId }); return; }
+        open({ room_id: roomId });
+        joinRoom(roomId, '', '');
+    }
+
+    // 本端收口：房主关房收口全部隧道，加入者断开自身连接（与 GameNet 引擎联动，防孤儿）
+    function teardownLocal(reason) {
+        if (my) {
+            try {
+                if (my.isHost) { if (window.GameNet && GameNet.hostStop) GameNet.hostStop(my.room_id); }
+                else if (window.GameNet && GameNet.disconnect) GameNet.disconnect(my.room_id);
+            } catch (e) { }
+        }
+        my = null;
+        myName = '';
+        pendingJoinId = '';
+        roomMsgs = [];
+    }
+
+    // ===== 下行信封状态机（GNSignal 分流 109 帧） =====
+    function onSignal(msg) {
+        var env = null;
+        try { env = JSON.parse(msg.content || '{}'); } catch (e) { return; }
+        if (!env || !env.action) return;
+        switch (env.action) {
+            case 'created': {
+                // 建房成功（仅发房主）：落房间态 + 联动 hostStart（隧道按对端惰性开启）
+                if (env.room_id) {
+                    my = normRoom(env, true);
+                    roomMsgs = [];
+                    if (window.GameNet && GameNet.hostStart) {
+                        try { GameNet.hostStart(my.room_id, my.host_port); } catch (e) { }
+                    }
+                    unlockBusy();
+                    if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
+                    open(); // 已在页内则仅切页
+                    toast(T('房间已创建，房间号 {id}', { id: my.room_id }));
+                }
+                break;
+            }
+            case 'state': {
+                // 房间态全量广播（成员变更/就绪/开局），只发给房内成员
+                if (!my) {
+                    // 加入者的首次确认：本端无房且 room_id 与本端在途 join 一致 → 入房 + 发起连接
+                    if (!pendingJoinId || env.room_id !== pendingJoinId) break;
+                    my = normRoom(env, false);
+                    roomMsgs = [];
+                    if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
+                    unlockBusy();
+                    if (window.GameNet && GameNet.connect && my.host && my.host_port) {
+                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { }
+                    }
+                    if (visible) showPage('room');
+                    toast(T('已加入房间'));
+                    if (visible && curPage === 'room') renderRoom();
+                    break;
+                }
+                if (env.room_id !== my.room_id) break;
+                var prev = my.status;
+                my = normRoom(env, my.isHost);
+                if (prev !== 'playing' && my.status === 'playing') toast(T('房主已开始游戏'));
+                if (visible && curPage === 'room') renderRoom();
+                break;
+            }
+            case 'list': {
+                rooms = env.rooms || [];
+                renderRoomList();
+                break;
+            }
+            case 'chat': {
+                // 房内聊天广播（仅成员；不落库）
+                if (!my || env.room_id !== my.room_id) break;
+                if (env.from === u() && awaitingChat === 'room') awaitingChat = ''; // 本人回显：发送成功
+                roomMsgs.push({ from: env.from || '', name: env.from_name || env.from || '', text: env.text || '', ts: env.ts || (Date.now() / 1000) });
+                if (roomMsgs.length > 200) roomMsgs = roomMsgs.slice(-200);
+                if (visible && curPage === 'room') renderRoomChat();
+                break;
+            }
+            case 'closed': {
+                // 关房（host_left/empty/kicked）：本端收口并回大厅
+                if (my && env.room_id === my.room_id) {
+                    var r = env.reason || '';
+                    teardownLocal(r);
+                    unlockBusy();
+                    if (visible) showPage('lobby');
+                    toast(r === 'kicked' ? T('你已被移出房间')
+                        : r === 'host_left' ? T('房主已解散房间')
+                            : r === 'empty' ? T('房间已解散') : T('房间已关闭'));
+                }
+                break;
+            }
+            default: break;
+        }
+    }
+    function normRoom(env, isHost) {
+        var members = env.members || [];
+        var self = null;
+        for (var i = 0; i < members.length; i++) { if (members[i].username === u()) { self = members[i]; break; } }
+        return {
+            room_id: env.room_id || (my && my.room_id) || '',
+            name: (my && my.room_id === env.room_id && my.name) || myName || '',
+            host: env.host || (my && my.host) || '',
+            host_port: env.host_port || (my && my.host_port) || 0,
+            mode: env.mode || (my && my.mode) || MODE_TUNNEL,
+            game_mode: env.game_mode || (my && my.game_mode) || '',
+            max_players: env.max_players || (my && my.max_players) || 0,
+            game_id: env.game_id || (my && my.game_id) || 0,
+            game_name: env.game_name || (my && my.game_name) || '',
+            group_id: env.group_id || 0,
+            status: env.status || 'waiting',
+            members: members,
+            isHost: !!isHost,
+            ready: !!(self && self.ready),
+            _selfLinkText: (my && my._selfLinkText) || '',
+            _selfLinkCls: (my && my._selfLinkCls) || ''
+        };
+    }
+
+    // ===== 下行信封（112 大厅：在场名单 + 聊天，不落库） =====
+    function onLobbySignal(msg) {
+        var env = null;
+        try { env = JSON.parse(msg.content || '{}'); } catch (e) { return; }
+        if (!env) return;
+        if (env.action === 'users') {
+            lobbyUsers = env.users || [];
+            renderLobbyChat();
+        } else if (env.action === 'msg') {
+            if (env.from === u() && awaitingChat === 'lobby') awaitingChat = ''; // 本人回显：发送成功
+            lobbyMsgs.push({ from: env.from || '', name: env.from_name || env.from || '', text: env.text || '', ts: env.ts || (Date.now() / 1000) });
+            if (lobbyMsgs.length > 200) lobbyMsgs = lobbyMsgs.slice(-200);
+            renderLobbyChat();
+        } else if (env.action === 'sys') {
+            lobbyMsgs.push({ sys: true, text: env.text || '' });
+            if (lobbyMsgs.length > 200) lobbyMsgs = lobbyMsgs.slice(-200);
+            renderLobbyChat();
+        }
+    }
+
+    // ===== GameNet 引擎事件（链路态/降级/错误）→ 房间页实时反馈 =====
+    function onNetEvent(ev) {
+        if (!ev || !my || ev.room_id !== my.room_id) return;
+        if (ev.type === 'ready') { my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; }
+        else if (ev.type === 'accepted' || ev.type === 'probe') { my._selfLinkText = T('正在建立联机…'); my._selfLinkCls = 'wait'; }
+        else if (ev.type === 'relay') { my._selfLinkText = T('联机已走中继转发'); my._selfLinkCls = 'on'; }
+        else if (ev.type === 'listen') { my._selfLinkText = T('游戏端口隧道已就绪'); my._selfLinkCls = 'on'; }
+        else if (ev.type === 'abort') { my._selfLinkText = T('联机已断开'); my._selfLinkCls = 'off'; }
+        else if (ev.type === 'error') { my._selfLinkText = T('联机异常：') + (ev.reason || ''); my._selfLinkCls = 'off'; }
+        if (visible && curPage === 'room') { renderLinkBar(); renderMembers(); }
+    }
+
+    // ===== 事件绑定 =====
+    function bindEvents() {
+        elRefresh.addEventListener('click', function () { refreshList(true); });
+        elCreateOpen.addEventListener('click', openCreate);
+        elCreateCancel.addEventListener('click', createClose);
+        elCreateMask.addEventListener('click', function (e) { if (e.target === elCreateMask) createClose(); });
+        elCreateBtn.addEventListener('click', doCreate);
+        elMatchBtn.addEventListener('click', doMatch);
+        elJoinBtn.addEventListener('click', doJoin);
+        elInMode.addEventListener('change', syncMaxOptions);
+        elRoomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
+        elJoinPass.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
+        [elName, elPort, elPass].forEach(function (inp) {
+            inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') doCreate(); });
+        });
+        // 聊天输入（房间 / 大厅）
+        elRoomSend2.addEventListener('click', roomSendMsg);
+        elRoomIn2.addEventListener('keydown', function (e) { if (e.key === 'Enter') roomSendMsg(); });
+        elLobbySend.addEventListener('click', lobbySendMsg);
+        elLobbyIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') lobbySendMsg(); });
+        elModalOk.addEventListener('click', function () {
+            var cb = modalCb, val = elModalIn.value;
+            closeModal();
+            if (cb) cb(val);
+        });
+        elModalCancel.addEventListener('click', closeModal);
+        elModalIn.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { elModalOk.click(); }
+        });
+        // 邀请好友弹窗（自绘选人：搜索节流 + 多选 + 点遮罩关闭 + Esc 关闭）
+        elInviteSend.addEventListener('click', inviteSend);
+        elInviteCancel.addEventListener('click', inviteClose);
+        elInviteMask.addEventListener('click', function (e) { if (e.target === elInviteMask) inviteClose(); });
+        elInviteSearch.addEventListener('input', function () {
+            clearTimeout(inviteSearchTimer);
+            inviteSearchTimer = setTimeout(function () { inviteRenderList(elInviteSearch.value); }, 150);
+        });
+        elInviteSearch.addEventListener('keydown', function (e) { if (e.key === 'Escape') inviteClose(); });
+        // 端口自动探测（自绘候选浮层：点条目填入 + 点遮罩/取消关闭 + Esc 关闭）
+        elPortDetect.addEventListener('click', portDetect);
+        elPortCancel.addEventListener('click', portClose);
+        elPortMask.addEventListener('click', function (e) { if (e.target === elPortMask) portClose(); });
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            if (!elPortMask.classList.contains('hidden')) { portClose(); return; }
+            if (!elCreateMask.classList.contains('hidden')) createClose();
+        });
+        elClose.addEventListener('click', function () {
+            // 页签化后「返回」交还宿主（游戏中心切回商店；主窗口环境回落关闭面板）
+            if (typeof window.GSOnlineExit === 'function') { window.GSOnlineExit(); return; }
+            close();
+        });
+        // 角色切换时刷新（GameNet 事件回调归口为 UI 唯一消费者）
+        if (window.GameNet) window.GameNet.onEvent = onNetEvent;
+        // 信令分流注册（109 房间层 / 112 大厅层；110 由引擎自注册）
+        if (window.GNSignal) {
+            GNSignal.on(MSG_ROOM, function (msg) { onSignal(msg); });
+            GNSignal.on(MSG_LOBBY, function (msg) { onLobbySignal(msg); });
+            GNSignal.on(MSG_ERR, function (msg) { onErr(msg); });
+        }
+        // 跨窗桥：主进程 game:net-open（游戏详情「联机」/ 邀请卡片）→ 切联机页签 + 预填 +（可选）直接加入
+        if (window.desktop && typeof window.desktop.onGameNetOpen === 'function') {
+            window.desktop.onGameNetOpen(function (payload) {
+                payload = payload || {};
+                if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
+                if (payload.join && payload.room_id) { joinFromInvite(payload.room_id); return; }
+                open(payload);
+            });
+        }
+    }
+
+    buildDom();
+    window.IMGameRoom = { open: open, close: close, isOpen: isOpen, onSignal: onSignal, joinFromInvite: joinFromInvite };
+})();

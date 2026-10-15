@@ -490,6 +490,17 @@ func (s *Server) handleMessage(c *Client, msg *protocol.Message) {
 	// 阶段二百七十六：联系人名片推荐（微信同款，归口 contactcard.go）
 	case protocol.MsgTypeContactCard:
 		s.handleContactCardSend(c, msg)
+	// 阶段二百九十二：局域网游戏跨公网联机（109 房间层 / 110 连接层，归口 gamenet.go）
+	case protocol.MsgTypeGameRoomSignal:
+		s.HandleGameRoomSignal(c, msg)
+	case protocol.MsgTypeGameNetSignal:
+		s.HandleGameNetSignal(c, msg)
+	// 阶段二百九十二 M8：联机大厅层（112 在场心跳/大厅聊天，归口 gamenet.go，不落库）
+	case protocol.MsgTypeGameLobbySignal:
+		s.HandleGameLobbySignal(c, msg)
+	// 阶段二百九十二：联机邀请卡片（落库转发，归口 gameinvite.go）
+	case protocol.MsgTypeGameInvite:
+		s.handleGameInviteSend(c, msg)
 	default:
 		s.sendError(c, "未知消息类型")
 	}
@@ -766,6 +777,20 @@ func messageSummary(content string) string {
 		}
 		return "[联系人]"
 	}
+	// 阶段二百九十二：联机邀请信封归口——会话摘要显示"[联机邀请] 房名"，JSON 原串不外泄
+	// （gameinvite.go 发送时写入的已是摘要文本，本分支兜底读取侧自愈等其它调用方）
+	var giEnv struct {
+		Invite struct {
+			RoomName string `json:"room_name"`
+			RoomID   string `json:"room_id"`
+		} `json:"invite"`
+	}
+	if err := json.Unmarshal([]byte(content), &giEnv); err == nil && giEnv.Invite.RoomID != "" {
+		if giEnv.Invite.RoomName != "" {
+			return "[联机邀请] " + giEnv.Invite.RoomName
+		}
+		return "[联机邀请]"
+	}
 	return content
 }
 
@@ -1040,7 +1065,8 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 网盘二期：纳入网盘分享卡片(92)——卡片同走持久化链路，实时可见、历史同样可见
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，实时可见、重新登录后历史查询不丢失
 		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
-		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104, 107}, msg.ToUser)
+		// 阶段二百九十二：纳入联机邀请(111)——同 86 口径，实时可见、重新登录后历史查询不丢失
+		query = query.Where("msg_type IN ? AND to_user = ?", []int{1, 4, 5, 86, 92, 104, 107, 111}, msg.ToUser)
 	} else {
 		// 私聊历史：双方互发的私聊消息
 		// 阶段二十四：纳入图片消息(4)与文件消息(5)，content 为 JSON（url/name/size），前端按类型渲染
@@ -1048,8 +1074,9 @@ func (s *Server) handleHistory(c *Client, msg *protocol.Message) {
 		// 网盘二期：纳入网盘分享卡片(92)——同 86 口径，卡片历史渲染归口 renderHistoryRecord
 		// 阶段二百六十八：纳入位置消息(104)——同 86 口径，历史渲染位置气泡
 		// 阶段二百七十六：纳入名片消息(107)——同 86 口径，历史渲染名片气泡
+		// 阶段二百九十二：纳入联机邀请(111)——同 86 口径，历史渲染联机邀请卡片
 		query = query.Where("msg_type IN ? AND ((from_user = ? AND to_user = ?) OR (from_user = ? AND to_user = ?))",
-			[]int{2, 4, 5, 86, 92, 104, 107}, c.username, msg.ToUser, msg.ToUser, c.username)
+			[]int{2, 4, 5, 86, 92, 104, 107, 111}, c.username, msg.ToUser, msg.ToUser, c.username)
 		// 阶段七十一：AI 多会话历史归口——智能体会话按消息盖戳 ai_session_id 过滤
 		// （0=默认会话存量全量；普通私聊无会话语义不受影响。会话归属由上行声明、服务端校验）。
 		// 图片/文件消息不经 AI_CHAT 通道，恒为默认会话盖戳（已知边界，后续可按需扩展上行声明）
@@ -1276,6 +1303,15 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		"file_p2p_high_water":        s.cfg.FileP2P.HighWater,
 		"file_p2p_low_water":         s.cfg.FileP2P.LowWater,
 		"file_p2p_archive":           s.cfg.FileP2P.Archive,
+		// 阶段二百九十二：下发游戏联机（109 房间层 / 110 连接层）决策与传输参数（服务端归口，
+		// 客户端零硬编码：enabled=可用性判定，mode=接入形态（一期主线 tunnel=通用端口隧道），
+		// negotiate_timeout=客户端协商超时秒，relay_only=强制中继（客户端只用 relay 候选），
+		// max_members=单房间成员上限（UI 提示与建群校验口径一致））
+		"game_net_enabled":           s.cfg.GameNet.Enabled,
+		"game_net_mode":              s.cfg.GameNet.Mode,
+		"game_net_negotiate_timeout": s.cfg.GameNet.NegotiateTimeout,
+		"game_net_relay_only":        s.cfg.GameNet.RelayOnly,
+		"game_net_max_members":       s.cfg.GameNet.MaxMembers,
 		// 原代码：无 avatar 字段
 		"avatar": user.Avatar,
 		// 阶段二百四十：下发归口账号名（扫码登录凭码登录时前端未输入账号，以服务端签发为准

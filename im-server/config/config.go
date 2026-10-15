@@ -116,6 +116,9 @@ type Config struct {
 	// 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
 	FileP2P FileP2PConfig `yaml:"file_p2p"`
 
+	// 阶段二百九十二：局域网游戏跨公网联机（109 房间层 / 110 连接层，P2P 打洞优先 + TURN 中继兜底）
+	GameNet GameNetConfig `yaml:"game_net"`
+
 	// 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，server/remotedevice.go + remote.go rc_* 信令）
 	RC RCConfig `yaml:"rc"`
 
@@ -345,6 +348,27 @@ type FileP2PConfig struct {
 	Archive bool `yaml:"archive"`
 	// MaxPerUser 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail(busy)）
 	MaxPerUser int `yaml:"max_per_user"`
+}
+
+// GameNetConfig 阶段二百九十二：局域网游戏跨公网联机配置节（Steam 同款"局域网联机跨公网"）
+// 形态：P2P 打洞直连优先 + TURN 中继兜底；服务端只见 109/110 信令，游戏字节走 DataChannel 或中继
+type GameNetConfig struct {
+	// Enabled 总开关：false 时 109/110 信令一律回错，既有功能零回归
+	Enabled bool `yaml:"enabled"`
+	// MaxRooms 全局房间数上限（防滥用）
+	MaxRooms int `yaml:"max_rooms"`
+	// RoomTTL 空房回收秒（全员离开/房主退出后到期回收）
+	RoomTTL int `yaml:"room_ttl"`
+	// MaxMembers 单房间成员上限（一期 ≤6：星型拓扑以房主为 hub，控房主扇出）
+	MaxMembers int `yaml:"max_members"`
+	// MaxPerUser 单用户并发房间数（防滥用）
+	MaxPerUser int `yaml:"max_per_user"`
+	// NegotiateTimeout 客户端协商超时秒（同 file_p2p，随登录响应下发）
+	NegotiateTimeout int `yaml:"negotiate_timeout"`
+	// Mode 接入形态：lane=原生 SDK 通道 / tunnel=通用端口映射 / both（一期主线为 tunnel）
+	Mode string `yaml:"mode"`
+	// RelayOnly 强制走中继（企业网/调试；客户端只用 relay 候选）
+	RelayOnly bool `yaml:"relay_only"`
 }
 
 // RCConfig 阶段二百六十一：向日葵同款远程控制配置节（设备ID+验证码直连）
@@ -632,6 +656,19 @@ func Default() *Config {
 			MaxPerUser:       3,
 		},
 
+		// 阶段二百九十二：局域网游戏跨公网联机默认参数（一期做通用端口隧道形态，直连优先）
+		// 任一环节失败自动降级中继；enabled=false 时 109/110 一律回错，开启零回归
+		GameNet: GameNetConfig{
+			Enabled:          true,
+			MaxRooms:         500,
+			RoomTTL:          7200,
+			MaxMembers:       6,
+			MaxPerUser:       2,
+			NegotiateTimeout: 10,
+			Mode:             "both",
+			RelayOnly:        false,
+		},
+
 		// 网盘默认参数（默认启用；未配置 MinIO 时自动降级本地磁盘，功能开箱可用）
 		Drive: DriveConfig{
 			Enabled:     true,
@@ -817,6 +854,28 @@ func Load() *Config {
 	}
 	if cfg.FileP2P.MaxPerUser <= 0 {
 		cfg.FileP2P.MaxPerUser = 3
+	}
+	// 阶段二百九十二：局域网游戏跨公网联机参数兜底（配置缺省或非法时回退默认值）
+	if cfg.GameNet.MaxRooms <= 0 {
+		cfg.GameNet.MaxRooms = 500
+	}
+	if cfg.GameNet.RoomTTL <= 0 {
+		cfg.GameNet.RoomTTL = 7200
+	}
+	if cfg.GameNet.MaxMembers <= 0 {
+		cfg.GameNet.MaxMembers = 6
+	} else if cfg.GameNet.MaxMembers > 6 {
+		// 一期定 ≤6（星型拓扑以房主为 hub，控房主扇出）：超配静默收敛到 6
+		cfg.GameNet.MaxMembers = 6
+	}
+	if cfg.GameNet.MaxPerUser <= 0 {
+		cfg.GameNet.MaxPerUser = 2
+	}
+	if cfg.GameNet.NegotiateTimeout <= 0 {
+		cfg.GameNet.NegotiateTimeout = 10
+	}
+	if cfg.GameNet.Mode != "lane" && cfg.GameNet.Mode != "tunnel" && cfg.GameNet.Mode != "both" {
+		cfg.GameNet.Mode = "both"
 	}
 	// 阶段二百六十一：远程控制（设备ID+验证码）参数兜底（配置缺省或非法时回退默认值）
 	if cfg.RC.DynCodeTTL <= 0 {

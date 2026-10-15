@@ -27,6 +27,9 @@ const BtDownloadManager = require('./bt-download-manager.js');
 // 阶段二百八十九：游戏云存档管理器（Steam 同款云存档 P1——路径解析/glob 扫描/SHA256/退出上传/启动下载）
 const GameSaveManager = require('./game-save-manager.js');
 
+// 阶段二百九十二 M4：局域网游戏跨公网联机·本地端口隧道（主进程持 UDP/TCP 套接字，渲染进程持 DataChannel）
+const gameTunnel = require('./game-tunnel.js');
+
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
 // 只置 aura 层内部状态（isMinimized() 返回 true 假象），Win32 层 IsIconic 恒 false 窗口不动；
@@ -206,7 +209,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://127.0.0.1:2087/';
+//const SERVER_URL = 'http://127.0.0.1:2087/';
+const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1284,7 +1288,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=15'); // v15：属性弹窗左侧分栏导航（带图标）+ 云存档 P3 UI
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=17'); // v17：联机大厅页签（阶段二百九十二 M8 房间层/引擎迁入）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1293,6 +1297,13 @@ function ensureGameStoreWindow() {
     gameStoreWin.on('maximize', pushGameMaxState);
     gameStoreWin.on('unmaximize', pushGameMaxState);
     gameStoreWin.webContents.on('did-finish-load', pushGameMaxState);
+    // 阶段二百九十二 M8：加载完成即推送跨窗镜像态（连接态/服务端归口参数），避免首开判定真空
+    // （gnSocketState/gnNetConfigCache 为文件后段声明，var 提升 + 闭包后置执行，此处引用安全）
+    gameStoreWin.webContents.on('did-finish-load', function () {
+        if (gameStoreWin.isDestroyed()) return;
+        gameStoreWin.webContents.send('gn:socket-state', gnSocketState);
+        if (gnNetConfigCache) gameStoreWin.webContents.send('gn:net-config', gnNetConfigCache);
+    });
     gameStoreWin.on('close', function (e) {
         if (app.isQuitting) return; // 托盘退出流程：放行销毁
         // 关闭改为隐藏复用：下载进行中隐藏窗口不中断任务（进度经 IPC 持续广播主窗口）
@@ -1336,6 +1347,78 @@ ipcMain.handle('game:win-minimize', function (e) {
     var w = BrowserWindow.fromWebContents(e.sender);
     winMinimizeReliable(w);
     return true;
+});
+
+// 阶段二百九十二 M5：游戏联机房间面板跨窗桥接
+// 阶段二百九十二 M8：联机大厅已整页迁入游戏中心窗（game-store.html gsViewOnline = 左侧导航「联机大厅」页签），
+// 本 IPC 语义由「转发主窗口打开覆盖面板」改为「唤醒游戏中心窗并联机大厅页」：
+// 来源为主窗口（邀请卡片「加入房间」/ 游戏详情「联机」）→ 唤起/前置游戏中心窗并投递预填载荷。
+ipcMain.on('game:net-open', function (e, payload) {
+    payload = payload || {};
+    // 阶段二百九十二 M7：附带已登记游戏进程名（启动注册表 exe 的文件名）——
+    // 端口自动探测按此过滤出「游戏进程占用的监听端口」；未登记/未命中时探测回落全量候选
+    if (!Array.isArray(payload.procs)) {
+        try {
+            var reg = gameLaunchRegLoad();
+            var names = [];
+            Object.keys(reg).forEach(function (k) {
+                var exe = (reg[k] && reg[k].exe) || '';
+                if (exe) names.push(path.basename(exe));
+            });
+            payload.procs = names.filter(function (n) { return /\.exe$/i.test(n); });
+        } catch (err) { payload.procs = []; }
+    }
+    var win = ensureGameStoreWindow();
+    var deliver = function () {
+        if (win.isDestroyed()) return;
+        win.webContents.send('game:net-open', payload);
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+    };
+    // 首次创建/隐藏复用时 WebContents 可能仍在加载：等 did-finish-load 再投递（同 image:open 写法）
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', deliver);
+    else deliver();
+});
+
+// ===== 阶段二百九十二 M8：联机信令跨窗中继（房间层/引擎迁入游戏中心窗，复用主窗口唯一 WS）=====
+// 上行：游戏中心窗 → 本进程 → 主窗口（IMSocket.send，唯一 WS 持有者）
+// 下行：主窗口 socket.js dispatch 109/110/112 → 本进程 → 游戏中心窗（GNSignal 分发）
+// 另同步：WS 连接态 / 服务端归口参数(game_net_*) / 好友通讯录快照（均为跨窗只读镜像）
+var gnSocketState = false;      // 主窗口 WS 连接态缓存（游戏中心窗首开拉取，避免判定真空）
+var gnNetConfigCache = null;    // 登录响应 game_net_* 归口参数缓存
+var gnContactsPending = {};     // 好友快照请求在途（id → resolve；超时兜底空列表）
+ipcMain.on('gn:signal-send', function (e, payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('gn:signal-out', payload || {});
+});
+ipcMain.on('gn:signal-recv', function (e, msg) {
+    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:signal-in', msg || {});
+});
+ipcMain.on('gn:socket-state', function (e, on) {
+    gnSocketState = !!on;
+    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:socket-state', gnSocketState);
+});
+ipcMain.handle('gn:socket-state-get', function () { return gnSocketState; });
+ipcMain.on('gn:net-config', function (e, cfg) {
+    gnNetConfigCache = cfg || {};
+    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:net-config', gnNetConfigCache);
+});
+ipcMain.handle('gn:net-config-get', function () { return gnNetConfigCache; });
+// 好友快照：游戏中心窗「邀请好友」选人数据源（主窗口 IMContacts 归口应答，避免双源分叉）
+ipcMain.handle('gn:contacts-get', function () {
+    return new Promise(function (resolve) {
+        if (!mainWindow || mainWindow.isDestroyed()) { resolve([]); return; }
+        var id = 'c' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        gnContactsPending[id] = resolve;
+        setTimeout(function () {
+            if (gnContactsPending[id]) { delete gnContactsPending[id]; resolve([]); }
+        }, 3000);
+        mainWindow.webContents.send('gn:contacts-need', id);
+    });
+});
+ipcMain.on('gn:contacts-reply', function (e, id, list) {
+    var r = gnContactsPending[id];
+    if (r) { delete gnContactsPending[id]; r(Array.isArray(list) ? list : []); }
 });
 
 // 下载进度事件转发：manager 已做 500ms 节流（done/error 必发），此处广播全部窗口（主窗口/商店窗均可能订阅）
@@ -1882,6 +1965,44 @@ ipcMain.handle('game:save-open-dir', async function (event, payload) {
     } catch (e) {
         return { ok: false, error: (e && e.message) || '打开目录失败' };
     }
+});
+
+// ===== 阶段二百九十二 M4：局域网游戏跨公网联机·本地端口隧道 IPC 桥（形态二，游戏零改动）=====
+// 主进程持 UDP/TCP 套接字（OS 层能力只能在主进程），渲染进程持 WebRTC DataChannel（gn-net.js），
+// 两者经以下受控通道对接；渲染进程无法直接触达裸 socket，参数（钥匙串/端口/角色）由主进程校验归口。
+// 房间/对端/协议三键归口：隧道按 (room_id, peer, proto) 一套，房主端每个加入者一套（星型拓扑）。
+function gnBroadcast(channel, payload) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        try {
+            if (!wins[i].isDestroyed()) wins[i].webContents.send(channel, payload);
+        } catch (e) { }
+    }
+}
+gameTunnel.setEmitter(gnBroadcast);
+
+// 开启隧道（幂等）：args = {room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?}
+// → Promise<{ok:true, port, host_ip} | {ok:false, err}>；err 枚举 bad_key/bad_args/bad_port/bad_host_ip/
+//   udp_bind:*/tcp_listen:*（端口被占等）
+ipcMain.handle('gn:tunnel-open', function (event, args) {
+    try { return gameTunnel.open(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'open_fail' }; }
+});
+
+// 关闭隧道：{room_id, peer?, proto?, role?, quiet?}（缺省 peer/proto/role = 该房间全部对端/协议/角色）
+ipcMain.handle('gn:tunnel-close', function (event, args) {
+    try { return gameTunnel.close(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'close_fail' }; }
+});
+
+// 渲染进程投递（对端 DataChannel 字节 → 本机套接字）；数据面高频、fire-and-forget（不回执不阻塞）
+ipcMain.on('gn:tunnel-deliver', function (event, frame) {
+    try { gameTunnel.deliver(frame || {}); } catch (e) { }
+});
+
+// 阶段二百九十二 M7：房主游戏端口自动探测（设计文档 §4.3 第 1 层）
+// args = {procs?: string[]}（已登记游戏进程名，供过滤）→ Promise<{ok, list:[{port,pid,proc,protos}], filtered}>
+// 枚举本机监听端口（netstat -ano + tasklist，只读、不接触游戏字节）；探测失败/零候选由前端回落手动填写
+ipcMain.handle('gn:detect-port', function (event, args) {
+    try { return gameTunnel.detectPorts(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'detect_fail' }; }
 });
 
 // ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====
@@ -3977,6 +4098,7 @@ app.on('will-quit', function () {
     shotPickerStop(); // 阶段一百三十九：窗口识别命中服务随应用退出回收（stdin 断开子进程自退，此为主动清理）
     try { remoteInput.stop(); } catch (e) {} // 阶段一百五十五：远程协助输入注入服务随应用退出回收（同 shotPicker 惯例）
     try { btDownloads.shutdown(); } catch (e) {} // 阶段二百八十二：BT sidecar 引擎随应用退出优雅收口（Release 保文件完整，宽限超时强杀）
+    try { gameTunnel.closeAll(); } catch (e) {} // 阶段二百九十二：游戏联机本地端口隧道随应用退出全量收口（防孤儿监听端口）
 });
 
 app.on('window-all-closed', function () {
