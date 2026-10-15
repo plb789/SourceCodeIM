@@ -39,8 +39,21 @@ func InitGame(cfg *config.Config) {
 	if !cfg.Game.Enabled {
 		return
 	}
-	if err := store.DB.AutoMigrate(&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{}, &model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{}, &model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}); err != nil {
-		logger.Error("游戏中心表迁移失败: %v", err)
+	// 逐表迁移：单表失败不再连坐其余表。原实现整批 AutoMigrate 一处报错即提前 return，
+	// 实测生产库（MySQL 5.6）因 im_game_file 索引键超长只建成 im_game/im_game_version 两张表，
+	// im_game_library 等 11 张表全部缺失 → 用户端 /api/game/library 返回 500「查询游戏库失败」，
+	// 商店空态下也弹出该报错 toast。逐表迁移 + 按表记日志，失败面收窄且可直接定位到具体表。
+	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
+		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
+		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}}
+	migrateFailed := false
+	for _, t := range tables {
+		if err := store.DB.AutoMigrate(t); err != nil {
+			migrateFailed = true
+			logger.Error("游戏中心表迁移失败(%T): %v", t, err)
+		}
+	}
+	if migrateFailed {
 		return
 	}
 	// 商店布局配置单行表种子（幂等：已存在则跳过；缺省全默认=Steam 布局+全区块开+无置顶）

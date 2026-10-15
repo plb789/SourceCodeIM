@@ -1064,9 +1064,13 @@ func (GameNotice) TableName() string { return "im_game_notice" }
 
 // GameFile 版本文件清单表 im_game_file（uniqueIndex(version_id,rel_path)）
 type GameFile struct {
-	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	VersionID uint   `gorm:"column:version_id;not null;uniqueIndex:idx_game_file" json:"version_id"`
-	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_game_file" json:"rel_path"` // 版本内相对路径（正斜杠；245 而非 512——与 bigint 组成唯一索引 988B 压入服务器 1000B 索引上限）
+	ID        uint `gorm:"primaryKey;autoIncrement" json:"id"`
+	VersionID uint `gorm:"column:version_id;not null;uniqueIndex:idx_game_file" json:"version_id"`
+	// RelPath 版本内相对路径（正斜杠）。唯一索引必须限长：MySQL 5.6（innodb_large_prefix=0 + COMPACT 行格式）
+	// 的索引键上限是 767 字节（非 1000），bigint(8)+varchar(245)*4=988B 会让建表直接报
+	// Error 1071 并使整批 AutoMigrate 中断（实测生产库因此只有 im_game/im_game_version 两张表）；
+	// 改为前缀索引 rel_path(189)：189*4+8=764B ≤ 767B，MySQL 8 同样兼容
+	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_game_file,length:189" json:"rel_path"`
 	SizeBytes int64  `gorm:"column:size_bytes;default:0" json:"size_bytes"`
 	// SHA256 全文件指纹（服务端合并分片时流式复算校验，不信任客户端声明）
 	SHA256 string `gorm:"column:sha256;type:char(64);default:''" json:"sha256"`
@@ -1126,8 +1130,9 @@ func (GameSave) TableName() string { return "im_game_save" }
 type GameSaveFile struct {
 	ID     uint `gorm:"primaryKey;autoIncrement" json:"id"`
 	SaveID uint `gorm:"column:save_id;not null;uniqueIndex:idx_save_file" json:"save_id"`
-	// rel_path 245 而非 255——与 bigint(save_id) 组成唯一索引 988B 压入服务器 1000B 索引上限（同 im_game_file）
-	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_save_file" json:"rel_path"`
+	// RelPath 存档内逻辑相对路径（正斜杠，如 0/save01.sav）。与 im_game_file 同因：唯一索引须限长
+	// （MySQL 5.6 索引键上限 767B，bigint+245*4=988B 会报 Error 1071），故取前缀索引 rel_path(189)
+	RelPath   string `gorm:"column:rel_path;type:varchar(245);not null;uniqueIndex:idx_save_file,length:189" json:"rel_path"`
 	SizeBytes int64  `gorm:"column:size_bytes;default:0" json:"size_bytes"`
 	SHA256    string `gorm:"column:sha256;type:char(64);default:''" json:"sha256"`
 	// ObjectKey 对象存储 key（game_saves/<username>/<gameID>/<slot>/<sha256>），json:"-" 绝不外泄
