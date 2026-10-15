@@ -103,26 +103,44 @@ function makeReq(req22) {
 // ===== Node http/https 直连（绕过 Chromium protocol 拦截；22 无 bypass 选项，防递归归口） =====
 // input: string URL（下载场景）或 makeReq 产物（拦截透传场景）；opts: {signal, headers}
 // 返回 Promise<Response>（本地实现，body 为 Node Readable 流式）
+// 阶段二百九十三：补「302 跟随 + 跨域 Referer」——Node http 原生不跟随重定向，而服务端网盘下载/预览
+//   （serveDriveFile）对 MinIO 后端下发 302 到文件域名预签名直连；该文件域名挂 DCDN Referer 防盗链
+//   （白名单=IM 站点域名），跟随跳转时须带 Referer 才放行。实测此前表现：不跟随 → status=302 ok=false
+//   → 文档查看器另存直接抛 'HTTP 302'；即便跟随但无 Referer → 被防盗链拒 → 再 302 到错误页域名。
+//   语义对齐浏览器：跨域跳转 Referer 归到 origin（strict-origin-when-cross-origin）。
+const REDIRECT_CODES = [301, 302, 303, 307, 308];
+const MAX_REDIRECTS = 5;
+
 function netFetch(input, opts) {
     opts = opts || {};
     var isReq = input && input._isW7Req;
-    var url = isReq ? input.url : String(input);
-    var method = isReq ? input.method : (opts.method || 'GET');
-    var u = new URL(url);
-    var mod = u.protocol === 'https:' ? https : http;
-
-    var sendHeaders = {};
+    var headers = {};
     if (isReq) {
         // 透传：请求头原样带回（cookie/UA/content-type 等保持页面语义），host 由 Node 生成
         var plain = input.headers.toPlain();
-        for (var k in plain) {
-            if (k === 'host') continue;
-            sendHeaders[k] = plain[k];
-        }
+        for (var k in plain) { if (k !== 'host') headers[k] = plain[k]; }
     }
     if (opts.headers) {
-        for (var k2 in opts.headers) sendHeaders[String(k2).toLowerCase()] = String(opts.headers[k2]);
+        for (var k2 in opts.headers) headers[String(k2).toLowerCase()] = String(opts.headers[k2]);
     }
+    return hopFetch({
+        url: isReq ? input.url : String(input),
+        method: isReq ? input.method : (opts.method || 'GET'),
+        headers: headers,
+        body: isReq ? input._body : opts.body,
+        signal: opts.signal
+    }, 0);
+}
+
+// hopFetch 单跳请求 + 重定向跟随（h: {url, method, headers(明文对象), body, signal}）
+// 跨域跟随按 origin 补 Referer（命中文件域名防盗链白名单）；同域沿用完整上一跳 URL
+function hopFetch(h, hop) {
+    var url = h.url;
+    var u = new URL(url);
+    var mod = u.protocol === 'https:' ? https : http;
+    var method = h.method || 'GET';
+    var sendHeaders = {};
+    for (var k in h.headers) sendHeaders[k] = h.headers[k];
     // 强制不压缩：Node 不解压响应体，压缩字节透传会破坏 arrayBuffer/缓存落盘语义
     sendHeaders['accept-encoding'] = 'identity';
     // 同源 cookie 注入（session cookie jar → 查看器下载/secure-file 等鉴权场景）
@@ -136,21 +154,44 @@ function netFetch(input, opts) {
 
     return new Promise(function (resolve, reject) {
         var rq = mod.request(u, { method: method, headers: sendHeaders }, function (rs) {
-            var h = {};
+            var st = rs.statusCode;
+            var loc = rs.headers.location;
+            var nextUrl = '';
+            if (loc && hop < MAX_REDIRECTS && REDIRECT_CODES.indexOf(st) >= 0) {
+                try { nextUrl = new URL(loc, u).toString(); } catch (e) { nextUrl = ''; }
+            }
+            if (nextUrl) {
+                rs.resume(); // 跳转响应体丢弃（不消费会占住连接）
+                // 303 与 301/302 的非 GET/HEAD 一律降为 GET（浏览器语义）；307/308 保持方法与体
+                var nextMethod = (st === 303 || ((st === 301 || st === 302) && method !== 'GET' && method !== 'HEAD')) ? 'GET' : method;
+                var nextHeaders = {};
+                for (var k2 in sendHeaders) {
+                    if (k2 === 'cookie') continue; // 跳转后按新 URL 重新从 cookie jar 取
+                    if (nextMethod === 'GET' && (k2 === 'content-length' || k2 === 'content-type')) continue; // 无体请求不得带长度/类型
+                    nextHeaders[k2] = sendHeaders[k2];
+                }
+                var nu = new URL(nextUrl);
+                // 跨域按 origin 补 Referer（与浏览器 referrer policy 同构），同域沿用完整上一跳 URL
+                nextHeaders['referer'] = (nu.host === u.host) ? u.toString() : (u.origin + '/');
+                resolve(hopFetch({ url: nextUrl, method: nextMethod, headers: nextHeaders,
+                    body: nextMethod === 'GET' ? null : h.body, signal: h.signal }, hop + 1));
+                return;
+            }
+            var rh = {};
             for (var k3 in rs.headers) {
                 if (k3 === 'transfer-encoding') continue; // 流式回调自带分块，双重分块会坏
-                h[k3] = rs.headers[k3];
+                rh[k3] = rs.headers[k3];
             }
-            resolve(new Response(rs, { status: rs.statusCode, headers: h }));
+            resolve(new Response(rs, { status: st, headers: rh }));
         });
         rq.on('error', function (e) { reject(e); });
-        if (opts.signal) {
+        if (h.signal) {
             try {
-                if (opts.signal.aborted) rq.destroy(new Error('aborted'));
-                else opts.signal.addEventListener('abort', function () { rq.destroy(new Error('aborted')); });
+                if (h.signal.aborted) rq.destroy(new Error('aborted'));
+                else h.signal.addEventListener('abort', function () { rq.destroy(new Error('aborted')); });
             } catch (e) { /* signal 异常忽略 */ }
         }
-        var body = isReq ? input._body : opts.body;
+        var body = h.body;
         if (body && method !== 'GET' && method !== 'HEAD') rq.write(body);
         rq.end();
     });

@@ -42,6 +42,23 @@ const DOWNLOAD_CONCURRENCY = 4;
 // 阶段二百六十三：/static/avatar/ 不再透传——改走头像磁盘缓存（见 handleAvatar），首次联网下载
 // 落盘、之后启动本地直出（微信同款），文件名含上传纳秒时间戳全局唯一，换头像必然换 URL 无陈旧风险
 const AVATAR_PREFIX = '/static/avatar/';
+// 阶段二百八十五：跨域直连下载接口 Referer 补正清单（仅这些接口转发时显式补 Referer）——
+// 服务端 drive.go 对 MinIO 后端下发 302 预签名直连 URL（省服务端带宽），文件域名（如 minio.sxgyxny.com）
+// 挂 DCDN 防盗链白名单（白名单=IM 站点域名），必须带命中白名单的 Referer 才放行。WEB/手机由浏览器网络栈
+// 跟随跨域重定向时自动带上 Referer（归到 origin），故正常；PC 端这些请求经 protocol.handle + net.fetch
+// 转发时 Referer 被按 referrer 控制语义丢弃（实测服务端收到 referer=undefined），302 后跳文件域名的那一跳
+// 无 Referer → 被判 403 并 302 到错误页域名（该域名不存在）→ net.fetch 抛 net::ERR_* → 预览与下载全部
+// 兜底成 500“本地资源处理失败”（实测坐实：预览框直显该文案 / 预览加载失败(500) / 下载失败: HTTP 500）。
+// 修复方式与范围：仅清单内接口在转发时补 serverUrl 作 Referer（实测首跳与 302 后的文件域名那一跳都带上
+// 并命中白名单放行）；其余路径一律维持原透传不动——高德 o4.amap.com 教训：无关 host 补 Referer 会被
+// 其防盗链反杀（矢量数据白屏），故绝不做全局补 Referer
+const REFERER_PATCH_PREFIXES = [
+    '/api/drive/download',       // 网盘本人下载与在线预览（preview=1 时 inline）
+    '/api/drive/share/download'  // 分享页下载（同一 serveDriveFile 收口，同样 302 直连）
+];
+function needRefererPatch(pathname) {
+    return REFERER_PATCH_PREFIXES.some(function (pre) { return pathname === pre || pathname.indexOf(pre) === 0; });
+}
 const DYNAMIC_PREFIXES = [
     '/api/',
     '/admin/api/',
@@ -413,11 +430,18 @@ function tryServeBlob(pathname, req) {
 }
 
 // passthrough 原样透传请求到真实网络（bypass 防递归；方法/头/体流式透传，上传 POST 场景依赖）
-function passthrough(req) {
+// 阶段二百八十五：withReferer=true 时（仅跨域直连下载接口传入）额外补 Referer（见 REFERER_PATCH_PREFIXES
+// 注释）——只在渲染层未带 Referer 时补 serverUrl，不覆盖已有值；其余请求完全维持原实现
+function passthrough(req, withReferer) {
     var init = { bypassCustomProtocolHandlers: true };
     if (req.method !== 'GET' && req.method !== 'HEAD') {
         init.body = req.body; // ReadableStream 直接透传（分片/大文件上传不落内存）
         init.duplex = 'half';
+    }
+    if (withReferer && !req.headers.get('referer')) {
+        var h = new Headers(req.headers);
+        h.set('Referer', serverUrl);
+        init.headers = h;
     }
     // 阶段一百三十四复盘：此前排查"查看器图片黑屏/下载损坏"时加过透传状态码诊断日志，已定性为
     // 双实例并发写同一 userData 的存储冲突（非本模块缺陷），诊断代码按惯例注释保留并还原原实现
@@ -519,7 +543,8 @@ async function handleRequest(req) {
             return await handleAvatar(pathname, req);
         }
         if (isDynamicPath(pathname)) {
-            return await passthrough(req);
+            // 阶段二百八十五：跨域直连下载接口（会 302 到文件域名）转发时补 Referer，其余动态前缀维持原样
+            return await passthrough(req, needRefererPatch(pathname));
         }
         // 阶段一百三十六：加密链路——磁盘零明文，内存解密响应
         if (secureKey) {

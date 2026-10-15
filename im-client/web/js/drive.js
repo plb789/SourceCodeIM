@@ -876,7 +876,7 @@
             row.innerHTML =
                 '<div class="drive-up-top">' +
                 '  <span class="drive-up-name" title="' + esc(t.name) + '">' + esc(t.name) + '</span>' +
-                '  <button class="drive-up-cancel" title="' + T('取消') + '" hidden><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' +
+                '  <button class="drive-up-cancel" title="' + T('取消') + '"><svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' +
                 '</div>' +
                 '<div class="drive-up-bar"><div class="drive-up-fill"></div></div>' +
                 '<div class="drive-up-meta">' +
@@ -888,27 +888,41 @@
             t.stateEl = row.querySelector('.drive-up-status');
             t.extraEl = row.querySelector('.drive-up-extra');
             t.cancelEl = row.querySelector('.drive-up-cancel');
-            // 取消：传输中点 × 中止（上传经 onCancel 归口：校验阶段 terminate Worker / 传片阶段
-            // abort XHR，取消按失败留痕"已取消"；服务端会话保留，下次同文件自动断点续传）
+            // × 归口：传输中（run）= 取消（上传经 onCancel 归口：校验阶段 terminate Worker / 传片阶段
+            // abort XHR，取消按失败留痕"已取消"；服务端会话保留，下次同文件自动断点续传）；
+            // 其余状态（wait 尚未启动 / ok 完成 / fail 失败）= 移除该条记录（阶段二百九十四：
+            // 此前 hidden 被作者样式 .drive-up-cancel{display:flex} 压掉致 × 常驻可见，而点击
+            // 在非 run 态直接早退——表现为"点 × 没反应"）
             t.cancelEl.addEventListener('click', function (tt) {
                 return function () {
-                    if (tt.state !== 'run') return;
-                    if (tt.onCancel) { tt.onCancel(); return; }
-                    if (tt.abort) tt.abort.abort();
-                    if (tt.xhr) tt.xhr.abort();
+                    if (tt.state === 'run') {
+                        if (tt.onCancel) { tt.onCancel(); return; }
+                        if (tt.abort) tt.abort.abort();
+                        if (tt.xhr) tt.xhr.abort();
+                        return;
+                    }
+                    removeTask(tt);
                 };
             }(t));
             container.appendChild(row);
             updateTaskUI(t); // 行创建即填充初始状态（等待上传/下载 + 大小），避免 wait 任务文案空白
         }
     }
-    // 任务行 UI 归口（进度条宽度/状态文案/速度与剩余时间/取消按钮显隐）
+    // removeTask 移除单条任务记录（非 run 态点 × 归口）：出队 + 移除行，面板无任务时自动隐藏
+    function removeTask(t) {
+        var q = t.kind === 'up' ? upQueue : downQueue;
+        var i = q.indexOf(t);
+        if (i >= 0) q.splice(i, 1);
+        if (t.el) { t.el.remove(); t.el = null; }
+        renderTransfers();
+    }
+    // 任务行 UI 归口（进度条宽度/状态文案/速度与剩余时间/× 提示语义）
     function updateTaskUI(t) {
         if (!t.el) return;
         t.el.classList.toggle('is-ok', t.state === 'ok');
         t.el.classList.toggle('is-fail', t.state === 'fail');
         t.fillEl.style.width = t.pct + '%';
-        t.cancelEl.hidden = t.state !== 'run';
+        t.cancelEl.title = T(t.state === 'run' ? '取消' : '移除'); // × 语义随状态切换（run=取消，其余=移除）
         var up = t.kind === 'up';
         var sizeText = fmtSize(t.loaded) + ' / ' + (t.size ? fmtSize(t.size) : T('未知大小'));
         if (t.state === 'wait') {
