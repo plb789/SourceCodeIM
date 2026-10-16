@@ -225,10 +225,10 @@ GameBroadcast.prototype.onSearch = function (roomId, msg, rinfo) {
     if (!sess) return null;
     if (!sess.relayGI) return null;   // 无主机真实数据（未建主/已消失）：静默，不出条目
     if (msg.length < 12 || msg[0] !== 0xF7 || msg[1] !== W3GS_SEARCH_GAME) return null;
-    var buf = this.patchPort(roomId, Buffer.from(sess.relayGI, 'hex'));
+    var buf = this.patchGI(roomId, Buffer.from(sess.relayGI, 'hex'));
     if (!sess.dumped) {
         sess.dumped = true;
-        this.log('首次应答搜索（主机中继真实数据，' + buf.length + 'B）：' + buf.toString('hex'));
+        this.log('首次应答搜索（主机中继真实数据，' + buf.length + 'B，条目名已补丁）：' + buf.toString('hex'));
     }
     this.log('应答游戏搜索：' + rinfo.address + ':' + rinfo.port + '（房间 ' + roomId + '，主机真实数据）');
     return [buf];
@@ -241,11 +241,11 @@ GameBroadcast.prototype.heartbeat = function (roomId) {
     if (!sess || !sess.udp) return;
     if (!sess.relayGI) return;   // 主机游戏不存在/已消失：不注入（防幻影房间）
     var hb = this.buildHeartbeat32(sess);
-    var gi = this.patchPort(roomId, Buffer.from(sess.relayGI, 'hex'));
+    var gi = this.patchGI(roomId, Buffer.from(sess.relayGI, 'hex'));
     if (!sess.dumpedDirect) {
         sess.dumpedDirect = true;
         this.log('直投 0x32（' + hb.length + 'B）：' + hb.toString('hex'));
-        this.log('直投 0x30（' + gi.length + 'B）：' + gi.toString('hex'));
+        this.log('直投 0x30（' + gi.length + 'B，条目名已补丁）：' + gi.toString('hex'));
     }
     // 广播心跳（255.255.255.255 本机回环实测可达）+ GameInfo 单播直投（仅 127.0.0.1 单目标——
     // 多目标会被 war3 按来源地址建成多个同名条目，实测双份即此因）
@@ -279,6 +279,26 @@ GameBroadcast.prototype.patchPort = function (roomId, buf) {
     var out = Buffer.from(buf);
     out.writeUInt16LE(dp & 0xFFFF, out.length - 2);
     return out;
+};
+
+// 条目可视补丁：在端口补丁之上把列表条目名称改为 IM 房间名（sess.gameName = "[IM] 房主名的房间"），
+// 其余字节（HC/EC 指纹、地图设置块、槽位、uptime）逐位保真——条目去重与游戏内解析不受影响。
+// 名称区为变长区（偏移 20 起，UTF-8 + 00 00 终止）：改名即重组帧体并重写帧长字段（帧长=总长，实测口径）
+GameBroadcast.prototype.patchGI = function (roomId, buf) {
+    var out = this.patchPort(roomId, buf);
+    var sess = this.rooms.get(roomId);
+    if (!sess || !sess.gameName || out.length < 130) return out;
+    var nb = Buffer.from(utf8Safe(sess.gameName, NAME_MAX), 'utf8');
+    if (!nb.length) return out;
+    var start = 20, i = start, end = -1;                     // 头4+产品4+版本4+HC4+EC4=20：名称区起点
+    while (i + 1 < out.length) {
+        if (out[i] === 0x00 && out[i + 1] === 0x00) { end = i; break; } // 名称终止 00 00（实测口径）
+        i++;
+    }
+    if (end < 0 || end === start) return out;                // 结构异常：放弃改名（保真原帧）
+    var rebuilt = Buffer.concat([out.slice(0, start), nb, Buffer.from([0x00, 0x00]), out.slice(end + 2)]);
+    rebuilt.writeUInt16LE(rebuilt.length & 0xFFFF, 2);       // 帧长字段=总长（含 4B 头）
+    return rebuilt;
 };
 
 // GameInfo 0x30：变长名称拼接（真实主机即变长；总长 = 125 + 名称字节数）
