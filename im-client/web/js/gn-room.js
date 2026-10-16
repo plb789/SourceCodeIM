@@ -1443,11 +1443,36 @@
         }
     }
 
+    // 断链自动重连：会话死亡后不依赖房间状态广播（对局结束无 state 变更，原补连无触发点，
+    // 实测须手动取消/准备才能重连）——指数退避自动重连（3s 起倍增封顶 60s）；
+    // 重连成功/退出房间/新会话在途即停，幂等防抖与状态沿补连共享 _lastConnectAt
+    function gnAutoReconnect() {
+        if (!my || my.isHost || !my.host || !my.host_port || !window.GameNet || !GameNet.connect) return;
+        if (my._reconnTimer) { clearTimeout(my._reconnTimer); my._reconnTimer = null; }
+        var n = (my._reconnN || 0) + 1;
+        my._reconnN = n;
+        var delay = Math.min(3000 * Math.pow(2, n - 1), 60000);
+        my._reconnTimer = setTimeout(function () {
+            my._reconnTimer = null;
+            if (!my || my.isHost || !my.host || !my.host_port) return; // 已退房/变房主：放弃
+            var st = (typeof GameNet.stateOf === 'function') ? GameNet.stateOf(my.room_id) : null;
+            if (st && (st.state === 'probing' || st.state === 'accepted' || st.state === 'linked')) return; // 已有会话在途/建立
+            if (Date.now() - (my._lastConnectAt || 0) < 10000) return; // 状态沿补连刚发过：让路
+            my._lastConnectAt = Date.now();
+            gnDbg('auto-reconnect #' + n + ' (delay=' + delay + 'ms)');
+            try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('auto-reconnect threw: ' + (e && e.message)); }
+        }, delay);
+    }
+
     // ===== GameNet 引擎事件（链路态/降级/错误）→ 房间页实时反馈 =====
     function onNetEvent(ev) {
         gnDbg('net-event ' + (ev && ev.type) + ' room=' + (ev && ev.room_id) + (ev && ev.reason ? ' reason=' + ev.reason : '') + (ev && ev.type === 'gameinfo' ? ' hex=' + ((ev.d || '').length) + 'B' : ''));
         if (!ev || !my || ev.room_id !== my.room_id) return;
-        if (ev.type === 'ready') { my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; perfHintCheck(); }
+        if (ev.type === 'ready') {
+            my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; perfHintCheck();
+            my._reconnN = 0; // 链路建立：清退避计数
+            if (my._reconnTimer) { clearTimeout(my._reconnTimer); my._reconnTimer = null; }
+        }
         else if (ev.type === 'accepted' || ev.type === 'probe') { my._selfLinkText = T('正在建立联机…'); my._selfLinkCls = 'wait'; }
         else if (ev.type === 'relay') { my._selfLinkText = T('联机已走中继转发'); my._selfLinkCls = 'on'; }
         else if (ev.type === 'listen') {
@@ -1468,8 +1493,12 @@
         else if (ev.type === 'abort') {
             my._selfLinkText = T('联机已断开'); my._selfLinkCls = 'off'; perfHintRearm();
             gnBroadcastStopQuiet(); // 功能二期方案 B：断链即停局域网发现（幂等）
+            gnAutoReconnect(); // 断链自动重连（对局结束无 state 广播，原补连无触发点须手动取消/准备）
         }
-        else if (ev.type === 'error') { my._selfLinkText = T('联机异常：') + (ev.reason || ''); my._selfLinkCls = 'off'; perfHintRearm(); }
+        else if (ev.type === 'error') {
+            my._selfLinkText = T('联机异常：') + (ev.reason || ''); my._selfLinkCls = 'off'; perfHintRearm();
+            gnAutoReconnect(); // 异常路径同样自动重连（幂等：与 abort 共享退避计时）
+        }
         if (visible && curPage === 'room') { renderLinkBar(); renderMembers(); }
     }
 
