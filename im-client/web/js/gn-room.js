@@ -52,6 +52,11 @@
     function gnDbg(m) {
         try { if (window.desktop && typeof window.desktop.gnDebugLog === 'function') window.desktop.gnDebugLog('[room] ' + m); } catch (e) { }
     }
+    // war3 等独占端口游戏判定：加入方数据隧道让出游戏端口（war3 进局域网页要独占绑定 6112，
+    // 被隧道占用即报"不能连入网络"）——发现链路自动切广播代理直投注入，不依赖端口拦截
+    function gnIsWar3() {
+        return !!(my && /魔兽|war3|wc3/i.test(String(my.game_name || '')));
+    }
     var myName = '';        // 建房/加入时本端已知房间名（下行信封不带 name，本地留存展示）
     var rooms = [];         // 大厅房间列表（下行 list.rooms）
     var visible = false;
@@ -1294,8 +1299,8 @@
                     if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
                     unlockBusy();
                     if (window.GameNet && GameNet.connect && my.host && my.host_port) {
-                        gnDbg('join-confirm → GameNet.connect');
-                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { gnDbg('connect threw: ' + (e && e.message)); }
+                        gnDbg('join-confirm → GameNet.connect skipPort=' + gnIsWar3());
+                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('connect threw: ' + (e && e.message)); }
                     } else {
                         gnDbg('join-confirm gate blocked: GameNet=' + (window.GameNet ? 'ok' : 'null') + ' host=' + my.host + ' port=' + my.host_port);
                     }
@@ -1325,7 +1330,7 @@
                     gnDbg('state-sync room=' + my.room_id + ' st=' + (gnSt ? gnSt.state : 'null') + ' port=' + my.host_port + ' → ' + (gnBusy ? 'in-flight skip' : (Date.now() - (my._lastConnectAt || 0) > 10000 ? 'reconnect' : 'backoff skip')));
                     if (!gnBusy && Date.now() - (my._lastConnectAt || 0) > 10000) {
                         my._lastConnectAt = Date.now();
-                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { gnDbg('reconnect threw: ' + (e && e.message)); }
+                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('reconnect threw: ' + (e && e.message)); }
                     }
                 }
                 // 功能二期：房主转让——host 字段切换即重挂隧道（服务端已 abort 旧隧道，双方按新 host 重连）

@@ -106,11 +106,13 @@ function validPort(p) {
 // 同房间同对端的 UDP 数据口与 TCP 监听口必须同号（GameInfo 仅一个 GamePort 字段，游戏按它同时发起
 // TCP 加入与 UDP 对战流量）；渲染层两路 open 并发到达（Promise.all），由 UDP 侧裁决：先试原端口，
 // 被本机游戏先占则顺延扫描；TCP 侧等待裁决结果后按同端口监听。
-GameTunnel.prototype.joinPlan = function (roomId, peer, reqPort) {
+// skip=true（war3 等独占端口游戏）：数据面从 reqPort+1 起扫，原端口永远留给本机游戏（war3 进局域网
+// 页要独占绑定 6112，被占即报"不能连入网络"）；发现链路由广播代理直投注入承担，不依赖拦截
+GameTunnel.prototype.joinPlan = function (roomId, peer, reqPort, skip) {
     var key = roomId + '|' + peer;
     var plan = this.joinPlans.get(key);
     if (plan) return plan;
-    plan = { reqPort: reqPort, dataPort: 0, ready: false, waiters: [] };
+    plan = { reqPort: reqPort, skip: !!skip, dataPort: 0, ready: false, waiters: [] };
     this.joinPlans.set(key, plan);
     plan.settle = function (port) {
         plan.dataPort = port | 0;
@@ -123,7 +125,7 @@ GameTunnel.prototype.joinPlan = function (roomId, peer, reqPort) {
     plan.wait = function (fn) {
         if (plan.ready) { fn(plan.dataPort); return; }
         plan.waiters.push(fn);
-        setTimeout(function () { plan.settle(plan.reqPort); }, PLAN_WAIT_MS); // UDP 侧异常未裁决兜底：按原端口继续
+        setTimeout(function () { plan.settle(plan.skip ? plan.reqPort + 1 : plan.reqPort); }, PLAN_WAIT_MS); // UDP 侧异常未裁决兜底
     };
     return plan;
 };
@@ -253,6 +255,7 @@ GameTunnel.prototype.open = function (args) {
     var ctx = {
         roomId: roomId, peer: peer, proto: a.proto, role: a.role,
         port: a.port, reqPort: a.port, hostIp: a.role === 'host' ? hostIp : '',
+        skipPort: a.role === 'join' && !!a.skip_port, // war3 等独占端口游戏：数据面永不占用游戏端口
         lastAct: Date.now(), closed: false, quiet: false,
         udp: null, tcpServer: null, streams: new Map(), sid: 1,
         lastSrc: null, localOnly: localAddrs()
@@ -375,7 +378,7 @@ GameTunnel.prototype.deliver = function (frame) {
 GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
     var self = this;
     var settled = false;
-    var plan = this.joinPlan(ctx.roomId, ctx.peer, ctx.reqPort);
+    var plan = this.joinPlan(ctx.roomId, ctx.peer, ctx.reqPort, ctx.skipPort);
     // 套接字接线归口（原端口与顺延端口共用）：本机游戏字节进隧道转发；搜索帧（0xF7 0x2F）交代理本地应答
     function wire(sk) {
         sk.on('error', function (e) {
@@ -408,9 +411,25 @@ GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
         ctx.port = port;
         plan.settle(port); // 端口方案归口：TCP 侧等此裁决（漏调曾致 TCP 每次固定等满 3s 兜底，挤占协商预算）
         self.log('UDP 监听就绪 0.0.0.0:' + port + '（房间 ' + ctx.roomId +
-            (port !== plan.reqPort ? '，原端口被本机游戏先占已顺延' : '') + '）');
+            (port !== plan.reqPort ? '，游戏端口已留给本机游戏' : '') + '）');
         self.emitEvent(ctx, 0, 'listen'); // 渲染层据此启动广播代理（拦截/直投两态由代理按 udpBindOk 自选）
         if (!settled) { settled = true; ctx.fail = null; ok(); }
+    }
+    // 顺延扫描归口（skip 模式直入 / 原端口被占错误路径共用）
+    function scanFallback(fromPort, why) {
+        self.log('UDP ' + why + '：顺延扫描备用端口（房间 ' + ctx.roomId + '）');
+        scanUdp(fromPort, FALLBACK_SPAN, function (p, sk2) {
+            if (ctx.closed) { if (sk2) { try { sk2.close(); } catch (e3) { } } return; }
+            if (!p) { self.log('顺延扫描无可用端口（房间 ' + ctx.roomId + '）'); if (ctx.fail) ctx.fail('udp_bind:exhausted'); return; }
+            wire(sk2);
+            finish(sk2, p);
+        });
+    }
+    if (ctx.skipPort) {
+        // war3 等独占端口游戏：原端口永远留给本机游戏（其进局域网页要独占绑定，被占即报
+        // "不能连入网络"），数据面直接顺延；发现链路由广播代理直投注入承担，不依赖 6112 拦截
+        scanFallback(ctx.port + 1, '跳过游戏端口（留给本机游戏）');
+        return;
     }
     var sk = dgram.createSocket({ type: 'udp4', reuseAddr: false });
     wire(sk);
@@ -420,13 +439,7 @@ GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
         try { sk.close(); } catch (e2) { }
         if (ctx.udp) { if (ctx.fail) ctx.fail('udp_bind:' + msg); return; }
         // 原端口绑定失败 → 顺延扫描（数据面端口经 plan 与 TCP 侧保持同号）
-        self.log('UDP ' + ctx.port + ' 绑定失败（本机游戏先占）：顺延扫描备用端口（房间 ' + ctx.roomId + '）');
-        scanUdp(ctx.port + 1, FALLBACK_SPAN, function (p, sk2) {
-            if (ctx.closed) { if (sk2) { try { sk2.close(); } catch (e3) { } } return; }
-            if (!p) { self.log('顺延扫描无可用端口（房间 ' + ctx.roomId + '）'); if (ctx.fail) ctx.fail('udp_bind:' + msg); return; }
-            wire(sk2);
-            finish(sk2, p);
-        });
+        scanFallback(ctx.port + 1, '绑定失败（本机游戏先占，' + msg + '）');
     });
     sk.bind(ctx.port, '0.0.0.0', function () {
         if (ctx.closed) { try { sk.close(); } catch (e) { } return; }

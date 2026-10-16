@@ -378,13 +378,15 @@
     }
 
     // ----- 隧道开启 -----
-    function openTunnel(sess, role, port, hostIp) {
+    function openTunnel(sess, role, port, hostIp, skipPort) {
         if (!window.desktop || !window.desktop.gnTunnelOpen) return Promise.resolve({ ok: false, err: 'unsupported' });
         var base = { room_id: sess.room, peer: sess.peer, role: role, port: port };
         if (hostIp) base.host_ip = hostIp;
+        if (skipPort) base.skip_port = true; // war3 等独占端口游戏：数据面让出游戏端口（游戏要独占绑定）
         var p1 = { room_id: base.room_id, peer: base.peer, proto: 'udp', role: role, port: port };
         var p2 = { room_id: base.room_id, peer: base.peer, proto: 'tcp', role: role, port: port };
         if (hostIp) { p1.host_ip = hostIp; p2.host_ip = hostIp; }
+        if (skipPort) { p1.skip_port = true; p2.skip_port = true; }
         return Promise.all([window.desktop.gnTunnelOpen(p1), window.desktop.gnTunnelOpen(p2)]).then(function (rs) {
             var e1 = rs[0] && rs[0].ok ? '' : ((rs[0] && rs[0].err) || 'udp');
             var e2 = rs[1] && rs[1].ok ? '' : ((rs[1] && rs[1].err) || 'tcp');
@@ -434,7 +436,7 @@
             joinByRoom[roomId] = id;
             startTimers(sess);
             // 先开本地监听再 probe：端口被占（游戏端口冲突）立即收口，不白等房主 accept
-            openTunnel(sess, 'join', port, (opts && opts.host_ip) || '').then(function (r) {
+            openTunnel(sess, 'join', port, (opts && opts.host_ip) || '', opts && opts.skipPort).then(function (r) {
                 dbg('openTunnel → ' + JSON.stringify(r));
                 if (sess.dead) return;
                 if (!r.ok) { fail(sess, 'local_tunnel:' + r.err); return; }
