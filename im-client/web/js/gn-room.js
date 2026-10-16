@@ -759,6 +759,16 @@
         var kind = awaitingChat;
         awaitingChat = '';
         var text = (msg && msg.content) ? String(msg.content) : T('操作失败，请重试');
+        // 功能二期：重连沿房间重同步被拒（房间不存在或已解散 / 你不在该房间中）——幽灵房间就地收口：
+        // 断线期间房间被解散本端收不到 closed，重连后停在旧成员列表且后续操作错误全被静默，此处统一恢复
+        if (my && my._resyncPending) {
+            my._resyncPending = false;
+            toast(text);
+            teardownLocal('closed');
+            if (visible) showPage('lobby');
+            refreshList(true);
+            return;
+        }
         // 功能二期：开局被服务端拒绝（成员未就绪等）——toast 错误 + 恢复「开局中…」按钮（否则永久卡死）
         if (my && my._startPending) {
             my._startPending = false;
@@ -1244,6 +1254,7 @@
         my = null;
         myName = '';
         pendingJoinId = '';
+        awaitingChat = ''; // 房间收口连带清房内聊天在途锁（关房瞬间发送的信令不会再来回显，防发送锁死）
         roomMsgs = [];
     }
 
@@ -1293,6 +1304,7 @@
                     break;
                 }
                 if (env.room_id !== my.room_id) break;
+                my._resyncPending = false; // 重同步成功（房间仍在）：撤销恢复标记
                 var prev = my.status;
                 var prevHost = my.host;
                 my = normRoom(env, env.host === u()); // 功能二期：isHost 以服务端 host 字段为准（房主转让后随广播切换）
@@ -1539,6 +1551,16 @@
             GNSignal.on(MSG_ROOM, function (msg) { onSignal(msg); });
             GNSignal.on(MSG_LOBBY, function (msg) { onLobbySignal(msg); });
             GNSignal.on(MSG_ERR, function (msg) { onErr(msg); });
+            // 功能二期：重连沿房间态重同步——断线期间房间被解散/成员被移出时本端收不到 closed，
+            // 重连后会停在幽灵房间页（旧玩家列表）。重连成功且房态存在即主动拉一次 state：
+            // 房间仍在 → 全量刷新成员列表；已解散/被移出 → 服务端 9 → onErr 按 _resyncPending 恢复回大厅
+            if (typeof GNSignal.onState === 'function') {
+                GNSignal.onState(function (on_) {
+                    if (!on_ || !my || !my.room_id) return;
+                    my._resyncPending = true;
+                    send({ action: 'state', room_id: my.room_id });
+                });
+            }
         }
         // 跨窗桥：主进程 game:net-open（游戏详情「联机」/ 邀请卡片）→ 切联机页签 + 预填 +（可选）直接加入
         if (window.desktop && typeof window.desktop.onGameNetOpen === 'function') {

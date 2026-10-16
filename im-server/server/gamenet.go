@@ -526,17 +526,23 @@ func (s *Server) gnRoomsChanged() {
 	gnRoomsNotifyMu.Unlock()
 	s.gnRoomsChangedPush()
 	// 尾沿补推：窗口结束后若仍有变更（窗口内被合并的最后一次），再推一轮
-	time.AfterFunc(gnRoomsNotifyGap, func() {
-		gnRoomsNotifyMu.Lock()
-		if !gnRoomsNotifyPending {
-			gnRoomsNotifyMu.Unlock()
-			return
-		}
-		gnRoomsNotifyPending = false
-		gnRoomsNotifyAt = time.Now()
+	time.AfterFunc(gnRoomsNotifyGap, s.gnRoomsChangedTail)
+}
+
+// gnRoomsChangedTail 尾沿补推处理器（实测修复：原实现闭包只跑一轮且不续挂——「立即推送→尾沿补推→
+// 窗口内又来新变更」序列中，新变更标 pending 后永远等不到下一轮补推，关房通知真实丢失）。
+// 尾沿推送后必须链式续挂，直到某个窗口内无新变更链才终止（AfterFunc 时间差递归，无栈深风险）。
+func (s *Server) gnRoomsChangedTail() {
+	gnRoomsNotifyMu.Lock()
+	if !gnRoomsNotifyPending {
 		gnRoomsNotifyMu.Unlock()
-		s.gnRoomsChangedPush()
-	})
+		return
+	}
+	gnRoomsNotifyPending = false
+	gnRoomsNotifyAt = time.Now()
+	gnRoomsNotifyMu.Unlock()
+	s.gnRoomsChangedPush()
+	time.AfterFunc(gnRoomsNotifyGap, s.gnRoomsChangedTail)
 }
 
 func (s *Server) gnRoomsChangedPush() {
@@ -623,6 +629,22 @@ func (s *Server) gnBroadcastState(ctx context.Context, roomID string) {
 		names = append(names, m.Username)
 	}
 	s.gnBroadcast(names, env)
+}
+
+// gnBroadcastMemberRooms 登录/重连沿房间态全量广播：成员 Online 字段是广播时刻实时快照
+// （isOnlineFast），但断网沿（30s 宽限，设计无感）与重连沿都没有成员变更事件——其他成员的
+// 成员列表在线标记无限期停留旧值（断网者「假在线」误拦房主开局判定 canStart；宽限内回来者
+// 他人列表不恢复）。仅在重连沿广播一次修正；断网沿维持宽限无感口径（30s 到期清退沿另有广播）。
+func (s *Server) gnBroadcastMemberRooms(username string) {
+	ctx := context.Background()
+	ids, _ := store.RDB.SMembers(ctx, gnUserKey(username)).Result()
+	for _, roomID := range ids {
+		if ok, _ := store.RDB.HExists(ctx, gnMemberKey(roomID), username).Result(); !ok {
+			store.RDB.SRem(ctx, gnUserKey(username), roomID) // 悬空索引惰性清理
+			continue
+		}
+		s.gnBroadcastState(ctx, roomID)
+	}
 }
 
 // gnCloseRoom 关闭房间：向剩余成员广播 closed（先广播后删），再清理全部房间键与索引

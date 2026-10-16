@@ -610,6 +610,8 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 		store.RDB.HSet(ctx, KeyUserList, user.Username, strconv.FormatInt(time.Now().Unix(), 10))
 		invalidateGlobalListCache()
 	}
+	// 功能二期：重连沿房间态广播（在线缓存写入后才广播，成员列表 Online 快照随 isOnlineFast 修正）
+	s.gnBroadcastMemberRooms(user.Username)
 
 	// 登录成功响应
 	// 头像缺失修复：原实现仅下发 result 与 recall_window，前端拿不到自己头像，聊天消息气泡无法渲染头像

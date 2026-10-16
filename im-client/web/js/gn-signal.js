@@ -37,6 +37,17 @@
         (handlers[msgType] = handlers[msgType] || []).push(fn);
     }
 
+    // 连接态变化订阅（true=重连成功 / false=断开）：房间层据此做重连沿状态重同步
+    var stateHandlers = [];
+    function onState(fn) {
+        if (typeof fn === 'function') stateHandlers.push(fn);
+    }
+    function fireState(v) {
+        for (var i = 0; i < stateHandlers.length; i++) {
+            try { stateHandlers[i](v); } catch (e) { /* 单订阅者异常不阻断其余 */ }
+        }
+    }
+
     function dispatch(msg) {
         if (!msg || !msg.msg_type) return;
         var list = handlers[msg.msg_type];
@@ -46,14 +57,18 @@
         }
     }
 
-    window.GNSignal = { on: on, send: send, isConnected: isConnected };
+    window.GNSignal = { on: on, onState: onState, send: send, isConnected: isConnected };
 
     if (window.desktop) {
         if (typeof window.desktop.onGnSignalIn === 'function') {
             window.desktop.onGnSignalIn(function (msg) { dispatch(msg); });
         }
         if (typeof window.desktop.onGnSocketState === 'function') {
-            window.desktop.onGnSocketState(function (on_) { connected = !!on_; });
+            window.desktop.onGnSocketState(function (on_) {
+                var prev = connected;
+                connected = !!on_;
+                if (connected !== prev) fireState(connected); // 仅变化沿派发（主窗口本就变化才上报）
+            });
         }
         if (typeof window.desktop.gnSocketStateGet === 'function') {
             try { window.desktop.gnSocketStateGet().then(function (on_) { connected = !!on_; }); } catch (e) { /* 拉取失败按未连接 */ }
