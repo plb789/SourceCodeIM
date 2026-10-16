@@ -1611,12 +1611,13 @@
         // （真实名称/人数/槽位/地图——广播帧不含名称，加入方列表条目数据必经此中继）
         if (window.desktop && typeof window.desktop.onGnBroadcastGameInfo === 'function') {
             window.desktop.onGnBroadcastGameInfo(function (p) {
-                if (!p || !p.room_id || !p.hex) return;
+                // hex 为空字符串=「主机游戏已消失」信令（防幻影），须放行——仅拦截非法载荷
+                if (!p || !p.room_id || typeof p.hex !== 'string') return;
                 if (!my || my.room_id !== p.room_id || !my.isHost) return;
                 if (window.GameNet && typeof GameNet.sendGameInfo === 'function') {
                     try {
                         var gnSent = GameNet.sendGameInfo(p.room_id, p.hex);
-                        gnDbg('host relay gi ' + p.hex.length + 'B → ctl 发给 ' + gnSent + ' 个对端');
+                        gnDbg('host relay gi ' + (p.hex ? p.hex.length + 'B' : 'gone') + ' → ctl 发给 ' + gnSent + ' 个对端');
                     } catch (e) { gnDbg('host relay gi threw: ' + (e && e.message)); }
                 }
             });

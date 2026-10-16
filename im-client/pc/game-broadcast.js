@@ -64,6 +64,7 @@ GameBroadcast.prototype.setLogger = function (fn) { if (typeof fn === 'function'
 GameBroadcast.prototype.setRelayHandler = function (fn) { if (typeof fn === 'function') this.relayHandler = fn; };
 
 // 加入端接收主机中继（hex 非空=真实 GameInfo 缓存；空=主机游戏已消失——撤下条目）
+// 幂等：消失期间主机每拍重发同一信令，仅在状态翻转时记日志/生效，防日志刷屏
 GameBroadcast.prototype.setRelayGI = function (args) {
     var a = args || {};
     var roomId = typeof a.room_id === 'string' ? a.room_id.trim() : '';
@@ -71,12 +72,15 @@ GameBroadcast.prototype.setRelayGI = function (args) {
     if (!sess) return { ok: false, err: 'no_sess' };
     var hex = String(a.hex || '').toLowerCase();
     if (hex && hex.slice(0, 4) === 'f730') {
+        var wasGone = !!sess.gameGone;
         sess.relayGI = hex;
         sess.gameGone = false;
+        if (wasGone) this.log('主机游戏已恢复：恢复条目注入（房间 ' + roomId + '）');
         return { ok: true, state: 'alive' };
     }
     // 主机游戏已消失（主机关闭游戏/未建主）：清缓存并标记——停止一切注入与应答，
     // 加入方列表条目随 war3 自身条目超时自然消失（不喂假数据防幻影房间）
+    if (sess.gameGone) return { ok: true, state: 'gone' }; // 幂等：重复消失信令不再记日志
     sess.relayGI = null;
     sess.gameGone = true;
     this.log('主机游戏已消失信令：停止条目注入（房间 ' + roomId + '）');
@@ -138,16 +142,20 @@ GameBroadcast.prototype.start = function (args) {
         });
         sessH.probeTimer = setInterval(function () {
             // 游戏消失检测：连续多个探测周期无应答 → 中继「已消失」信令（空 hex），
-            // 加入方收到后停止注入/应答，其列表条目随 war3 自身超时自然消失
-            if (!sessH.goneSent && sessH.lastReplyAt && Date.now() - sessH.lastReplyAt > PROBE_GONE_MS) {
-                sessH.goneSent = true;
-                self.log('主机游戏已消失（' + (PROBE_GONE_MS / 1000) + 's 无应答）：通知加入方撤下条目（房间 ' + roomId + '）');
+            // 加入方收到后停止注入/应答，其列表条目随 war3 自身超时自然消失。
+            // 消失期间信令每拍重发（自愈：单次信令若遇对端重连窗口会丢，重发保证最终一致）；
+            // 且探测帧必须继续发——房主重新建主后由应答自动恢复（漏发探测会永久卡死在消失态）
+            if (sessH.lastReplyAt && Date.now() - sessH.lastReplyAt > PROBE_GONE_MS) {
+                if (!sessH.goneSent) {
+                    sessH.goneSent = true;
+                    self.log('主机游戏已消失（' + (PROBE_GONE_MS / 1000) + 's 无应答）：通知加入方撤下条目（房间 ' + roomId + '）');
+                }
                 if (self.relayHandler) {
                     try { self.relayHandler(roomId, ''); } catch (e) { }
                 }
-                return;
+            } else if (sessH.goneSent) {
+                sessH.goneSent = false; // 已恢复（应答重新到达）
             }
-            if (sessH.goneSent && Date.now() - sessH.lastReplyAt <= PROBE_GONE_MS) sessH.goneSent = false; // 已恢复（防御）
             try {
                 probe.send(Buffer.from([0xF7, 0x2F, 0x10, 0x00, 0x50, 0x58, 0x33, 0x57, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), 6112, '127.0.0.1');
             } catch (e) { }

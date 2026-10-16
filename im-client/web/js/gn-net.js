@@ -223,7 +223,8 @@
                 if (s.length > 6 && s.charCodeAt(0) === 123) { // '{'
                     try {
                         var f = JSON.parse(s);
-                        if (f && f.t === 'gi' && f.d) emit({ type: 'gameinfo', room_id: sess.room, peer: sess.peer, conn_id: sess.id, role: sess.role, d: f.d });
+                        // d 为空字符串=「主机游戏已消失」信令（防幻影），须放行——仅拦截非字符串
+                        if (f && f.t === 'gi' && typeof f.d === 'string') emit({ type: 'gameinfo', room_id: sess.room, peer: sess.peer, conn_id: sess.id, role: sess.role, d: f.d });
                     } catch (err) { }
                 }
             };
@@ -478,9 +479,10 @@
 
     // 功能二期：主机端游戏信息中继（真实 GameInfo 原始 hex → 本房间全部对端 ctl 通道）
     // 主机代理探测本机 war3 得到真实 GameInfo（名称/人数/槽位/地图）后调用；对端经 gameinfo 事件接收
+    // hex 为空字符串=「主机游戏已消失」信令（防幻影），须放行转发
     function sendGameInfo(roomId, hex) {
         var room = hostRooms[roomId];
-        if (!room || !hex) return 0;
+        if (!room || typeof hex !== 'string') return 0;
         var n = 0;
         for (var peer in room.peers) {
             var s = sessions[room.peers[peer]];
