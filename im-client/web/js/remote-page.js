@@ -50,6 +50,13 @@
         d.remoteSend({ msg_type: MSG_REMOTE, to_user: st.peer, content: JSON.stringify(obj) });
     }
 
+    // ===== 联机二期 §9.4-5：本机并发活动态上报（远程协助是否在跑 → 主进程缓存，供游戏中心窗建立联机时反查）=====
+    // 口径：只在活跃态翻转处调用（媒体链路 connected / 会话收口 finish），零额外逻辑；Web 端无 desktop 时静默跳过
+    function reportActOther() {
+        if (!window.desktop || typeof window.desktop.actOtherReport !== 'function') return;
+        window.desktop.actOtherReport('remote', !!(st.connected && !st.ended));
+    }
+
     // ===== 收口：发 disconnect（notify=true）→ 停媒体 → 遮罩提示 → 关窗 =====
     // 修复（实测：点断开后重连恒报"你正在远程协助中"，需等被控端 ICE 自保 15-30s 才能再连）：
     // 必须先发 disconnect 再置 st.ended——send 开头有 st.ended 拦截，先置位会把本端主动断开的
@@ -58,6 +65,7 @@
         if (st.ended) return;
         if (notify) send('disconnect', { reason: 'controller-close' });
         st.ended = true;
+        reportActOther(); // 联机二期 §9.4-5：收口即撤销本机「远程协助中」标记（主进程缓存同步）
         stopInput();
         if (st.watchdog) { clearTimeout(st.watchdog); st.watchdog = null; }
         if (st.connectTimer) { clearTimeout(st.connectTimer); st.connectTimer = null; }
@@ -121,6 +129,7 @@
             var s = st.pc.connectionState;
             if (s === 'connected') {
                 st.connected = true;
+                reportActOther(); // 联机二期 §9.4-5：媒体链路一接通即标记本机「远程协助中」（供游戏中心窗反查）
                 if (st.watchdog) { clearTimeout(st.watchdog); st.watchdog = null; }
                 if (st.connectTimer) { clearTimeout(st.connectTimer); st.connectTimer = null; } // 已接通：连接超时兜底解除
                 setMode(st.grant === 'control' ? '已连接 · 控制中' : '已连接 · 观看中');

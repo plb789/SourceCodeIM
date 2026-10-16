@@ -209,8 +209,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-//const SERVER_URL = 'http://127.0.0.1:2087/';
-const SERVER_URL = 'https://im.sxgyxny.com/';
+const SERVER_URL = 'http://127.0.0.1:2087/';
+//const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1421,6 +1421,24 @@ ipcMain.on('gn:contacts-reply', function (e, id, list) {
     if (r) { delete gnContactsPending[id]; r(Array.isArray(list) ? list : []); }
 });
 
+// ===== 联机二期 §9.4-5：同机并发活动态跨窗归口（降级提示只落在联机侧）=====
+// 口径（用户选定"最小改动"）：通话窗/远程窗只上报自身活跃态变化，零 UI 改动；游戏中心窗在建立联机时
+// 经 act:other-get 反查本机是否另有通话/会议/远程协助在跑，命中则在该窗自绘 toast 提示一次
+var actOther = { call: false, remote: false };  // 通话·会议 / 远程协助 活跃态缓存（各自上报，变化才发）
+var actOtherWc = { call: 0, remote: 0 };        // kind → 上报窗口 id（窗口销毁兜底复位，防异常退出留下"假活跃"）
+ipcMain.on('act:other-report', function (e, kind, on) {
+    if (kind !== 'call' && kind !== 'remote') return;
+    actOther[kind] = !!on;
+    var id = e.sender.id;
+    if (actOtherWc[kind] !== id) {
+        actOtherWc[kind] = id;
+        e.sender.once('destroyed', function () {
+            if (actOtherWc[kind] === id) { actOtherWc[kind] = 0; actOther[kind] = false; }
+        });
+    }
+});
+ipcMain.handle('act:other-get', function () { return { call: actOther.call, remote: actOther.remote }; });
+
 // 下载进度事件转发：manager 已做 500ms 节流（done/error 必发），此处广播全部窗口（主窗口/商店窗均可能订阅）
 // HTTP 与 BT 双通道管理器同构负载，统一转发（页面按 state 渲染，无感通道差异）
 function gameDownloadBroadcast(evt) {
@@ -2003,6 +2021,21 @@ ipcMain.on('gn:tunnel-deliver', function (event, frame) {
 // 枚举本机监听端口（netstat -ano + tasklist，只读、不接触游戏字节）；探测失败/零候选由前端回落手动填写
 ipcMain.handle('gn:detect-port', function (event, args) {
     try { return gameTunnel.detectPorts(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'detect_fail' }; }
+});
+
+// ===== 功能二期方案 B：广播发现代理 IPC 桥（形态 A，PC 客户端内置虚拟主机应答）=====
+// 策略与包体构造归口 game-broadcast.js；收发复用 game-tunnel 的 join 隧道套接字（setTunnel 注入）
+const gameBroadcast = require('./game-broadcast.js');
+gameBroadcast.setTunnel(gameTunnel);
+
+// 启动（加入方 join 隧道就绪后）：args = {room_id, game, port, game_name, host_name, slots_total, slots_used}
+ipcMain.handle('gn:broadcast-start', function (event, args) {
+    try { return gameBroadcast.start(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'start_fail' }; }
+});
+
+// 停止（幂等）：args = {room_id}
+ipcMain.handle('gn:broadcast-stop', function (event, args) {
+    try { return gameBroadcast.stop(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'stop_fail' }; }
 });
 
 // ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====
@@ -4099,6 +4132,7 @@ app.on('will-quit', function () {
     try { remoteInput.stop(); } catch (e) {} // 阶段一百五十五：远程协助输入注入服务随应用退出回收（同 shotPicker 惯例）
     try { btDownloads.shutdown(); } catch (e) {} // 阶段二百八十二：BT sidecar 引擎随应用退出优雅收口（Release 保文件完整，宽限超时强杀）
     try { gameTunnel.closeAll(); } catch (e) {} // 阶段二百九十二：游戏联机本地端口隧道随应用退出全量收口（防孤儿监听端口）
+    try { gameBroadcast.stopAll(); } catch (e) {} // 功能二期方案 B：广播代理会话随应用退出全量收口
 });
 
 app.on('window-all-closed', function () {

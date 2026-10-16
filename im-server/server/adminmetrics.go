@@ -125,6 +125,16 @@ type adminMetricsBusiness struct {
 	CallCompleted int64 `json:"call_completed"` // 已接通话单数
 	CallP2P       int64 `json:"call_p2p"`       // P2P 直连话单数（已接通中客户端上报 link_type=p2p）
 	CallRelay     int64 `json:"call_relay"`     // TURN 中继话单数（已接通中客户端上报 link_type=relay）
+	// 联机二期 §9.4-4：TURN 中继占用量可观测（pion Server.AllocationCount 现成 API 实时读取）
+	RelayAllocations int  `json:"relay_allocations"` // 当前活跃中继会话数（UDP+TCP 合计）
+	RelayCapacity    int  `json:"relay_capacity"`    // 中继端口段容量（占用水位分母）
+	RelayAllocPeak   int  `json:"relay_alloc_peak"`  // 服务启动以来中继占用峰值（容量规划依据）
+	RelayEnabled     bool `json:"relay_enabled"`     // TURN 是否启用（未启用时前端该项显示占位符）
+	// 功能二期：联机专用中继实例占用（独立端口池，与上面主实例互不干扰）
+	GnRelayAllocations int  `json:"gn_relay_allocations"` // 联机专用实例当前活跃中继会话数
+	GnRelayCapacity    int  `json:"gn_relay_capacity"`    // 联机专用实例端口子段容量
+	GnRelayAllocPeak   int  `json:"gn_relay_alloc_peak"`  // 联机专用实例占用峰值
+	GnRelayEnabled     bool `json:"gn_relay_enabled"`     // 联机专用实例是否启用（未启用=联机复用主实例池）
 	// 并发优化观测扩展：消息速率（两次采样差值/间隔，条/s）
 	MsgRate float64 `json:"msg_rate"`
 }
@@ -270,6 +280,22 @@ func (s *Server) collectBusinessMetrics() adminMetricsBusiness {
 	store.DB.Model(&model.CallLog{}).Where("status = ?", "completed").Count(&b.CallCompleted)
 	store.DB.Model(&model.CallLog{}).Where("status = ? AND link_type = ?", "completed", "p2p").Count(&b.CallP2P)
 	store.DB.Model(&model.CallLog{}).Where("status = ? AND link_type = ?", "completed", "relay").Count(&b.CallRelay)
+
+	// 联机二期 §9.4-4：TURN 中继占用现况（pion 现成 API 实时读取，微秒级开销；
+	// TURN 未启用/实例未就绪时 ok=false，前端显示占位符）
+	if cur, peak, capacity, ok := turnAllocationStats(); ok {
+		b.RelayEnabled = true
+		b.RelayAllocations = cur
+		b.RelayCapacity = capacity
+		b.RelayAllocPeak = peak
+	}
+	// 功能二期：联机专用中继实例占用（未启用时 ok=false，前端显示占位符）
+	if cur, peak, capacity, ok := gnTurnAllocationStats(); ok {
+		b.GnRelayEnabled = true
+		b.GnRelayAllocations = cur
+		b.GnRelayCapacity = capacity
+		b.GnRelayAllocPeak = peak
+	}
 
 	return b
 }

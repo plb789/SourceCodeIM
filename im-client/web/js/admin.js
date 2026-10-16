@@ -2317,6 +2317,26 @@
             $('dash-calls-unknown').textContent = unknown > 0 ? unknown : 0;
             $('dash-calls-rate').textContent = biz.call_completed > 0 ?
                 (biz.call_p2p * 100 / biz.call_completed).toFixed(1) + '%' : '-';
+            // 联机二期 §9.4-4：TURN 中继占用卡片（当前占用/端口容量/占用峰值；未启用时占位符）
+            if (biz.relay_enabled) {
+                $('dash-relay-now').textContent = biz.relay_allocations + ' / ' + biz.relay_capacity;
+                $('dash-relay-cap').textContent = biz.relay_capacity + ' 个';
+                $('dash-relay-peak').textContent = biz.relay_alloc_peak + ' 个';
+            } else {
+                $('dash-relay-now').textContent = '未启用';
+                $('dash-relay-cap').textContent = '-';
+                $('dash-relay-peak').textContent = '-';
+            }
+            // 功能二期：联机专用中继实例占用卡片（未启用时联机复用主实例池，此处显示占位符）
+            if (biz.gn_relay_enabled) {
+                $('dash-gnrelay-now').textContent = biz.gn_relay_allocations + ' / ' + biz.gn_relay_capacity;
+                $('dash-gnrelay-cap').textContent = biz.gn_relay_capacity + ' 个';
+                $('dash-gnrelay-peak').textContent = biz.gn_relay_alloc_peak + ' 个';
+            } else {
+                $('dash-gnrelay-now').textContent = '未启用';
+                $('dash-gnrelay-cap').textContent = '-';
+                $('dash-gnrelay-peak').textContent = '-';
+            }
             // 运行环境小卡片
             $('dash-heap').textContent = sys.heap_alloc_mb.toFixed(1) + ' MB';
             $('dash-goroutines').textContent = sys.goroutines;
@@ -5415,6 +5435,9 @@
         $('gm-f-launch-name').value = d ? (d.launch_name || '') : '';
         $('gm-f-launch-exe').value = d ? (d.launch_exe || '') : '';
         $('gm-f-launch-args').value = d ? (d.launch_args || '') : '';
+        // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
+        $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
+        $('gm-f-ports-udp').value = d ? (d.online_ports_udp || '') : '';
         // 云存档采集/排除路径（服务端存 JSON 数组串，表单以「每行一个 glob」文本回填）
         $('gm-f-save-paths').value = gmSavePathsToText(d ? d.save_paths : '');
         $('gm-f-save-exclude').value = gmSavePathsToText(d ? d.save_exclude : '');
@@ -5951,6 +5974,9 @@
             launch_name: $('gm-f-launch-name').value.trim(),
             launch_exe: $('gm-f-launch-exe').value.trim(),
             launch_args: $('gm-f-launch-args').value.trim(),
+            // 功能二期：联机端口登记（逗号分隔多端口，服务端清洗去重/范围校验）
+            online_ports_tcp: $('gm-f-ports-tcp').value.trim(),
+            online_ports_udp: $('gm-f-ports-udp').value.trim(),
             // 云存档路径：表单文本（每行一个 glob）→ JSON 数组串，与服务端清洗口径一致
             save_paths: gmSavePathsToJSON($('gm-f-save-paths').value),
             save_exclude: gmSavePathsToJSON($('gm-f-save-exclude').value)
@@ -5992,6 +6018,9 @@
             launch_name: d.launch_name || '',
             launch_exe: d.launch_exe || '',
             launch_args: d.launch_args || '',
+            // 功能二期：联机端口登记全量回写（列表/详情含字段）：防上架/下架切换时清空
+            online_ports_tcp: d.online_ports_tcp || '',
+            online_ports_udp: d.online_ports_udp || '',
             // 云存档路径全量回写（列表/详情含字段；字段本身即 JSON 数组串，防状态切换清空）
             save_paths: d.save_paths || '',
             save_exclude: d.save_exclude || ''

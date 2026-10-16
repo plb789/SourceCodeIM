@@ -77,6 +77,12 @@ func NewServer(cfg *config.Config) *Server {
 		startUserListCleanup()
 	}
 	startAlertEvaluator(s) // 监控告警评估协程（30s 周期，仪表盘告警横幅数据源）
+	// 功能二期：游戏房间启动补偿扫描（延迟 5s 等连接初始化稳定）——服务端重启会丢失离线清退
+	// 定时器（进程内存态），启动时清理残留的孤儿房间（离线成员/房主离线），详见 gamenet.go
+	go func() {
+		time.Sleep(5 * time.Second)
+		s.gnStartupSweep()
+	}()
 	return s
 }
 
@@ -196,6 +202,11 @@ func (s *Server) unregister(c *Client) {
 	// 仅延迟"展示面"广播（93 增量/名单/集群在场事件）；Redis 在线缓存已在上方立即删除，
 	// 消息路由与离线队列判定（isOnlineFast/isOnline）不受宽限影响，宽限期内新消息照常入离线队列
 	s.scheduleOfflineBroadcast(c.username)
+	// 功能二期：游戏房间离线清退调度（30s 宽限，宽限内重连取消；到期自动移出全部房间，
+	// 防客户端直接退出进程后离线成员残留房间表并卡死房主开局）
+	s.gnScheduleOfflineLeave(c.username)
+	// 功能二期：大厅在场断连即离场（进程直接退出不会发 112 leave，防「N 人在线」滞留旧值）
+	s.gnLobbyDisconnect(c.username)
 
 	// 通话/会议状态离线收口：响铃/通话/会议中掉线若不收口，忙态与房间残留，
 	// 重连后被服务端恒判"忙"（无法再发起/被邀）。hangup 未命中 1v1 会话时自动回落
@@ -589,6 +600,7 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	firstDevice := s.hub.Add(c)
 	// 阶段二百四十三：登录重连取消挂起中的下线广播宽限（APP 息屏/切后台交接、切网闪断回来，好友无感）
 	cancelOfflineBroadcast(user.Username)
+	gnCancelOfflineLeave(user.Username) // 功能二期：宽限内重连取消游戏房间离线清退（与下线广播取消同点挂载）
 
 	// 写入 Redis 在线缓存
 	ctx := context.Background()
@@ -1141,6 +1153,19 @@ var (
 
 // avatarCache 在线名单快照头像缓存（username -> avatar；头像上传低频，avatar.go 更新时同步覆盖）
 var avatarCache sync.Map
+
+// avatarOf 用户头像 URL（功能二期：游戏房间成员头像下发用；与 nicknameOf 同款缓存口径，
+// avatar.go 上传成功时 Store 覆盖，本函数缓存缺失时回源 DB 并回填）
+func avatarOf(username string) string {
+	if v, ok := avatarCache.Load(username); ok {
+		s, _ := v.(string)
+		return s
+	}
+	var av string
+	store.DB.Model(&model.User{}).Select("avatar").Where("username = ?", username).Scan(&av)
+	avatarCache.Store(username, av)
+	return av
+}
 
 // avatarsByNames 批量取头像：缓存命中直取，miss 分批回源 DB 并回填（含查无用户缓存空串防重复回源）
 func avatarsByNames(names []string) map[string]string {

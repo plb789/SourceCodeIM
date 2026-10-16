@@ -52,7 +52,7 @@
     var rooms = [];         // 大厅房间列表（下行 list.rooms）
     var visible = false;
     var curPage = 'lobby';  // lobby / room
-    var busy = { create: false, join: false }; // 请求在途（防重复提交）
+    var busy = { create: false, join: false, transfer: false }; // 请求在途（防重复提交；功能二期加 transfer）
     var pendingJoinId = ''; // 加入请求在途的房间号（首个 state 广播到达即确认入房）
     var busyTimer = null;   // 请求超时兜底（服务端错误走通用错误帧，无成功回执时须解锁）
     var lastListAt = 0;     // 列表节流（避免频繁切换抖动刷屏）
@@ -76,10 +76,19 @@
         // 游戏中心窗（无 WS）：从 localStorage im_auth 解出登录名（与 game-store.js 同款编码）
         try { return (JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || {}).u || ''; } catch (e) { return ''; }
     }
+    // T() 翻译归口：i18n.js 仅主窗口引入（game-store.html 不引）——游戏中心窗 window.I18N 不存在，
+    // 原实现直接返回原文导致所有带 {x} 占位符的 toast 显示占位符原文（如「房间号 {id}」）。
+    // 现 I18N 缺失时本地兜底做占位符替换（中文界面 i18n 也仅是透传中文，行为一致）
     function T(s, p) {
-        if (!window.I18N) return s;
-        var t = I18N.t(s, p);
-        return (t === s && p) ? s : t;
+        if (window.I18N) return I18N.t(s, p);
+        if (!p) return s;
+        var out = String(s);
+        for (var k in p) {
+            if (Object.prototype.hasOwnProperty.call(p, k)) {
+                out = out.split('{' + k + '}').join(String(p[k]));
+            }
+        }
+        return out;
     }
     function avail() { return !!(window.GameNet && window.GameNet.available && window.GameNet.available()); }
     function isMobile() { return document.documentElement.classList.contains('m'); }
@@ -97,9 +106,10 @@
         clearTimeout(el._gnT);
         el._gnT = setTimeout(function () { el.classList.add('hidden'); }, 2500);
     }
-    // 头像：全局归口（chat.js 暴露 window.IMAvatarUrl）优先；缺失回落首字母圆形占位（项目既有口径）
-    function avatarHtml(username, name) {
-        var url = (typeof window.IMAvatarUrl === 'function') ? (window.IMAvatarUrl(username) || '') : '';
+    // 头像：优先服务端 state.members 下发的 avatar（功能二期：游戏中心窗无主窗好友缓存，
+    // chat.js 的 IMAvatarUrl 在本窗不可用）；缺失时回落 IMAvatarUrl（预留）→ 首字母占位
+    function avatarHtml(username, name, avatarUrl) {
+        var url = avatarUrl || ((typeof window.IMAvatarUrl === 'function') ? (window.IMAvatarUrl(username) || '') : '');
         var ch = (name || username || '?').slice(0, 1).toUpperCase();
         if (url) return '<span class="gn-avatar"><img src="' + esc(url) + '" alt=""></span>';
         return '<span class="gn-avatar gn-avatar-ch">' + esc(ch) + '</span>';
@@ -363,7 +373,13 @@
         curPage = name;
         elPageLobby.classList.toggle('hidden', name !== 'lobby');
         elPageRoom.classList.toggle('hidden', name !== 'room');
-        if (name === 'lobby') { renderLobby(); renderGameList(); renderRoomList(); renderLobbyChat(); refreshList(true); }
+        if (name === 'lobby') {
+            // 修复：从房间页返回大厅必须重新进入 112 在场集合——原实现 lobbyEnter 仅在面板 open 时
+            // 调用一次，而心跳 tick 检测到 curPage!=='lobby' 即 lobbyLeave 退出集合；此后他人建房/
+            // 解散的 rooms_changed 全部收不到（服务端只向在场集合广播），列表必须手动刷新才更新
+            lobbyEnter();
+            renderLobby(); renderGameList(); renderRoomList(); renderLobbyChat(); refreshList(true);
+        }
         else { renderRoom(); renderRoomChat(); }
     }
     function open(payload) {
@@ -422,13 +438,14 @@
         if (busyTimer) clearTimeout(busyTimer);
         busyTimer = setTimeout(function () {
             busyTimer = null;
-            busy.create = false; busy.join = false; pendingJoinId = '';
+            busy.create = false; busy.join = false; busy.transfer = false; pendingJoinId = '';
             renderLobby();
+            if (curPage === 'room' && my) renderRoom(); // 移交在途超时：复位后重绘成员行（按钮恢复可用）
         }, 6000);
     }
     function unlockBusy() {
         if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
-        busy.create = false; busy.join = false; pendingJoinId = '';
+        busy.create = false; busy.join = false; busy.transfer = false; pendingJoinId = '';
         // 忙标志复位必须同步重绘（与 armBusy 超时分支同口径）：created/state 成功路径原先只清标志不重绘，
         // 实测导致建房成功后「创建房间」提交按钮永久置灰（文案停在「创建中…」），再点无任何反应。
         renderLobby();
@@ -614,12 +631,18 @@
                 link = my.isHost ? '<span class="gn-tag ink">' + T('本机') + '</span>' : '<span class="gn-tag off">' + T('房主') + '</span>';
             }
             row.innerHTML =
-                avatarHtml(m.username, m.name) +
+                avatarHtml(m.username, m.name || m.username, m.avatar) +
                 '<span class="gn-member-main"><span class="gn-member-name">' + esc(m.name || m.username) + '</span>' +
                 '<span class="gn-member-sub">' + esc(m.username) + '</span></span>' +
                 '<span class="gn-member-tags">' + (m.host ? '<span class="gn-tag host">' + T('房主') + '</span>' : '') + ready + link + '</span>';
-            // 房主踢人（除自己/房主外）
+            // 房主操作（除自己/房主外）：移交房主 + 移出（功能二期）
             if (my.isHost && !m.host) {
+                var tr = document.createElement('button');
+                tr.className = 'gn-btn tiny';
+                tr.textContent = T('移交');
+                tr.disabled = !!busy.transfer;
+                tr.addEventListener('click', function () { transferMember(m.username, m.name || m.username); });
+                row.appendChild(tr);
                 var kick = document.createElement('button');
                 kick.className = 'gn-btn tiny danger';
                 kick.textContent = T('移出');
@@ -649,14 +672,45 @@
     function renderActions() {
         elRoomActions.innerHTML = '';
         if (!my) return;
+        var startPending = !!my._startPending && my.status !== 'playing';
+        // 功能二期：游戏已启动但等待用户在游戏内创建房间（War3 等游戏建主后才监听端口）——
+        // 主按钮禁用显示等待态，旁挂「跳过等待直接开局」兜底（按登记端口开局）
+        var waitingHost = !!my._waitingHost && my.status !== 'playing';
         if (my.isHost) {
-            var canStart = (my.members || []).every(function (m) { return m.host || m.ready; });
+            var canStart = (my.members || []).every(function (m) { return m.host || m.ready || m.online === false; });
             var btn = document.createElement('button');
             btn.className = 'gn-btn primary';
-            btn.textContent = my.status === 'playing' ? T('游戏进行中') : T('开始游戏');
-            btn.disabled = my.status === 'playing' || !canStart;
-            btn.addEventListener('click', function () { if (!my) return; send({ action: 'start', room_id: my.room_id }); });
+            // 按钮四态：开始游戏(waiting) / 开局中(启动游戏在途) / 等待游戏内建主(已启动) / 游戏进行中(playing)
+            btn.textContent = startPending ? T('开局中…')
+                : waitingHost ? T('等待游戏内创建房间…')
+                : (my.status === 'playing' ? T('游戏进行中') : T('开始游戏'));
+            btn.disabled = my.status === 'playing' || startPending || waitingHost || !canStart;
+            btn.addEventListener('click', function () { if (!my) return; doStart(btn); });
             elRoomActions.appendChild(btn);
+            if (waitingHost) {
+                var skip = document.createElement('button');
+                skip.className = 'gn-btn';
+                skip.textContent = T('跳过等待直接开局');
+                skip.addEventListener('click', function () {
+                    if (!my) return;
+                    my._waitingHost = false;
+                    send({ action: 'start', room_id: my.room_id, host_port: my.host_port || 0 }); // 按登记端口开局
+                });
+                elRoomActions.appendChild(skip);
+            }
+            // 功能二期：playing 态提供「结束对局」——回到等待中（成员保留），按钮回「开始游戏」可再开局
+            if (my.status === 'playing') {
+                var eb = document.createElement('button');
+                eb.className = 'gn-btn danger';
+                eb.textContent = T('结束游戏');
+                eb.addEventListener('click', function () {
+                    if (!my) return;
+                    confirmBox(T('结束游戏'), T('结束本局对局？房间保留，成员重新准备后可再次开局。'), T('结束'), function () {
+                        send({ action: 'end', room_id: my.room_id });
+                    });
+                });
+                elRoomActions.appendChild(eb);
+            }
         } else {
             var rb = document.createElement('button');
             rb.className = 'gn-btn' + (my.ready ? '' : ' primary');
@@ -704,8 +758,14 @@
     function onErr(msg) {
         var kind = awaitingChat;
         awaitingChat = '';
-        if (!busy.create && !busy.join && !kind) return;
         var text = (msg && msg.content) ? String(msg.content) : T('操作失败，请重试');
+        // 功能二期：开局被服务端拒绝（成员未就绪等）——toast 错误 + 恢复「开局中…」按钮（否则永久卡死）
+        if (my && my._startPending) {
+            my._startPending = false;
+            toast(text);
+            if (curPage === 'room') renderRoom();
+        }
+        if (!busy.create && !busy.join && !busy.transfer && !kind) return;
         unlockBusy();
         toast(text);
         // 房内聊天被服务端拒绝（房间已解散 / 本端已不在成员表）→ 本端房间态已失效：
@@ -713,6 +773,8 @@
         if (kind === 'room' && my) {
             teardownLocal('closed');
             showPage('lobby');
+        } else if (curPage === 'room' && my) {
+            renderRoom(); // 移交失败等房内操作被拒：复位后重绘成员行（移交按钮恢复可用）
         }
         refreshList(true);
     }
@@ -738,6 +800,13 @@
             op.value = String(g_.id); op.textContent = g_.name;
             elInGame.appendChild(op);
         });
+        if (!games.length) {
+            // 游戏库零已安装：追加禁用提示项——此前下拉只有「不指定」，房主无从知晓开局不会启动游戏
+            var hint = document.createElement('option');
+            hint.value = '0'; hint.disabled = true;
+            hint.textContent = T('（游戏库暂无已安装游戏，可先到游戏中心安装）');
+            elInGame.appendChild(hint);
+        }
     }
     function doCreate() {
         if (busy.create) return;
@@ -809,11 +878,22 @@
         if (!avail()) { toast(T('当前环境不支持联机')); return; }
         var api = window.desktop;
         if (!api || typeof api.gnDetectPort !== 'function') { toast(T('当前环境不支持自动探测，请手动填写端口')); return; }
+        // 功能二期：游戏登记端口先预填（游戏未启动时探测不到监听端口——登记端口即答案，不空转）；
+        // 随后运行时探测实测合并：探测命中已填端口不重复处理（同端口只记一次），新端口提示追加
+        var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+        var reg = (gm && gm.portsTCP && gm.portsTCP.length) ? gm.portsTCP
+            : (gm && gm.portsUDP ? gm.portsUDP : []);
+        if (reg.length && !elPort.value.trim()) {
+            elPort.value = String(reg[0]);
+            if (reg.length > 1) toast(T('已按登记填入主端口 {p}（该游戏联机端口：{all}）', { p: reg[0], all: reg.join(' / ') }));
+        }
         portBusy = true;
         elPortDetect.textContent = T('探测中…');
-        // 已选联机游戏的进程名并入过滤名单（游戏中心窗游戏库比启动注册表更准）
-        var procs = portProcs.slice(0, 64);
-        api.gnDetectPort({ procs: procs }).then(function (r) {
+        // 探测名单：所选联机游戏进程优先（精准命中），已登记游戏进程名兜底（游戏中心窗比启动注册表更准）
+        var procs = [];
+        if (gm && gm.proc) procs.push(gm.proc);
+        portProcs.forEach(function (p) { if (procs.indexOf(p) === -1) procs.push(p); });
+        api.gnDetectPort({ procs: procs.slice(0, 64) }).then(function (r) {
             portBusy = false;
             elPortDetect.textContent = T('自动探测');
             var list = (r && r.ok && r.list) || [];
@@ -831,6 +911,126 @@
         });
     }
     function portClose() { elPortMask.classList.add('hidden'); }
+
+    // ===== 功能二期：房主开始游戏联动（启动真实游戏 → 等待游戏内建主 → 探测监听端口 → 开局） =====
+    // 关联游戏库游戏（game_id>0）时：游戏未运行则先启动（复用游戏库 launchGame，含云存档同步），
+    // 随后进入「等待游戏内创建房间」态——War3 等 LAN 游戏在游戏内建主后才监听端口，探测循环
+    // 持续轮询（不限时，跟随房间生命周期）命中即自动开局；「跳过等待直接开局」按钮按登记端口兜底。
+    function doStart(btn) {
+        if (!my || my.status === 'playing') return;
+        var gid = my.game_id || 0;
+        var sendStart = function (port) {
+            if (!my) return;
+            var payload = { action: 'start', room_id: my.room_id };
+            if (port) payload.host_port = port;
+            // 开局在途标志：按钮转「开局中…」；服务端拒绝走 onErr 恢复，无响应 6s 超时兜底恢复
+            my._startPending = true;
+            if (!send(payload)) {
+                my._startPending = false;
+                if (btn) { btn.disabled = false; btn.textContent = T('开始游戏'); }
+            } else if (btn) {
+                setTimeout(function () {
+                    if (my && my._startPending && my.status !== 'playing') {
+                        my._startPending = false;
+                        renderRoom();
+                    }
+                }, 6000);
+            }
+        };
+        if (!gid) {
+            // 无游戏关联：没有可执行信息，无法自动启动游戏——原实现静默按端口直接开局，
+            // 实测反馈「点了开始游戏游戏没启动」（建房时下拉停在「不指定」即触发）。
+            // 现明示原因由房主决定：仍可按端口直接开局（手动开游戏走通用隧道），或取消后重新建房关联游戏
+            confirmBox(T('未关联游戏'),
+                T('当前房间未关联游戏库游戏，无法自动启动游戏。确定按端口 {p} 直接开局吗？取消可解散房间，重新建房时在「联机游戏」下拉选择已安装的游戏。', { p: my.host_port || '' }),
+                T('仍要开局'), function () { sendStart(0); });
+            return;
+        }
+        var meta = (typeof window.GSGameMeta === 'function') ? window.GSGameMeta(gid) : null;
+        var canLaunch = !!(meta && meta.proc && window.GSLaunchGame && window.desktop &&
+            typeof window.desktop.gnDetectPort === 'function');
+        if (!canLaunch) {
+            // 关联了游戏但启动能力不可用（未安装/未登记主程序/WEB 端）：同样明示后回落，不静默开局
+            var why = !meta ? T('游戏未安装或已不在游戏库')
+                : (!meta.proc ? T('未登记游戏主程序，无法自动启动') : T('当前环境不支持自动启动游戏'));
+            confirmBox(T('无法自动启动游戏'),
+                T('《{g}》{w}。确定按端口 {p} 直接开局吗？（也可先手动启动游戏，端口探测命中后自动开局）', { g: my.game_name || '', w: why, p: my.host_port || '' }),
+                T('仍要开局'), function () { sendStart(0); });
+            return;
+        }
+        var tryDetect = function () {
+            return window.desktop.gnDetectPort({ procs: [meta.proc] }).then(function (r) {
+                var list = (r && r.ok && r.list) || [];
+                // 功能二期修复：filtered=false = 按游戏进程过滤零命中（接口回落返回全量监听端口，
+                // 那些是无关进程的端口——实测曾把系统 1900 端口当游戏端口直接开局而未启动游戏）。
+                // 开局自动联动只认「按进程过滤命中」的结果，未命中视为游戏未运行 → 走启动流程
+                return (r && r.filtered && list.length)
+                    ? { port: list[0].port, list: list }
+                    : { port: 0, list: [] };
+            }, function () { return { port: 0, list: [] }; });
+        };
+        if (btn) { btn.disabled = true; btn.textContent = T('启动游戏中…'); }
+        var launched = false, exePick = false;
+        // 实测端口分类上报：探测结果按协议分桶，剔除已登记端口（服务端仅累加新端口，同端口只记一次）
+        var report = function (list) {
+            var tcp = [], udp = [];
+            (list || []).forEach(function (x) {
+                var known = (meta && ((meta.portsTCP || []).indexOf(x.port) !== -1 || (meta.portsUDP || []).indexOf(x.port) !== -1));
+                if (known) return;
+                (x.protos && x.protos.indexOf('tcp') !== -1 ? tcp : udp).push(x.port);
+            });
+            return { tcp: tcp, udp: udp };
+        };
+        var poll = function () {
+            if (!my || my.status === 'playing') return; // 已开局：轮询结束（playing 由 state 驱动 UI）
+            tryDetect().then(function (res) {
+                if (!my || stopped()) return;
+                if (res && res.port) {
+                    var payload = { action: 'start', room_id: my.room_id, host_port: res.port };
+                    var rep = report(res.list);
+                    if (rep.tcp.length) payload.online_ports_tcp = rep.tcp;
+                    if (rep.udp.length) payload.online_ports_udp = rep.udp;
+                    send(payload);
+                    return;
+                }
+                if (!launched) {
+                    if (my._gameLaunched) {
+                        // 本房间已启动过游戏（如结束对局后重开局）：不重复 spawn，直接进等待轮询
+                        my._waitingHost = true;
+                        renderRoom();
+                        setTimeout(poll, 2000);
+                        return;
+                    }
+                    launched = true;
+                    my._gameLaunched = true;
+                    // 启动真实游戏（结果回调驱动后续，绝不静默）：成功→切「等待游戏内创建房间」态；
+                    // need_exe→等用户在弹窗中选择（选择后自动重试并继续）；其余失败→toast 原因并按原端口开局
+                    window.GSLaunchGame(gid, function (ok, info) {
+                        if (!my || stopped()) return;
+                        if (ok) {
+                            // 游戏已启动：War3 等 LAN 游戏需用户在游戏内「局域网游戏」建主后才监听端口——
+                            // 引导 + 持续探测（不限时），建主完成自动开局；「跳过等待直接开局」按钮兜底
+                            my._waitingHost = true;
+                            toast(T('游戏已启动：请进入游戏「局域网游戏」创建房间，创建后将自动开局'));
+                            renderRoom();
+                            setTimeout(poll, 2000);
+                            return;
+                        }
+                        my._gameLaunched = false; // 启动失败：下次点开始可重试启动
+                        if (info === 'need_exe') { exePick = true; toast(T('请在弹窗中选择游戏主程序，选择后将自动继续开局')); setTimeout(poll, 2000); return; }
+                        if (info === 'canceled') { toast(T('已取消选择，按房间端口 {p} 开局', { p: my.host_port || '' })); sendStart(0); return; }
+                        toast(T('游戏启动失败（{r}），按房间端口 {p} 开局', { r: info || '', p: my.host_port || '' }));
+                        sendStart(0);
+                    });
+                    return;
+                }
+                if (exePick) { setTimeout(poll, 2000); return; } // 用户选 exe 中：持续等待（选择后自动续跑）
+                setTimeout(poll, 2000); // 持续等待游戏内建主（探测命中即自动开局；跳过按钮兜底）
+            });
+        };
+        var stopped = function () { return !my || !my.room_id; }; // 房间失效（解散/退出/被踢）即停
+        poll();
+    }
 
     function joinRoom(roomId, pass, roomName) {
         if (busy.join) return;
@@ -874,6 +1074,42 @@
             if (!my) return;
             send({ action: 'kick', room_id: my.room_id, target: username });
         });
+    }
+    // 成员显示名（房主转让 toast 用）
+    function memberName(username) {
+        var ms = (my && my.members) || [];
+        for (var i = 0; i < ms.length; i++) { if (ms[i].username === username) return ms[i].name || ms[i].username; }
+        return username;
+    }
+    // 功能二期：房主转让（仅房主可发起；服务端校验目标为房内在线 PC 成员）。
+    // 移交后由接收方提供游戏端口（需在相同端口运行同一款游戏），原房主变为普通成员需重新准备。
+    function transferMember(username, name) {
+        if (!my || !my.isHost || busy.transfer) return;
+        confirmBox(T('移交房主'),
+            T('将房主移交给「') + name + T('」？移交后由对方提供游戏端口（需在相同端口运行同一款游戏），你将变为普通成员并需重新准备。'),
+            T('移交'),
+            function () {
+                if (!my || !my.isHost) return;
+                if (!send({ action: 'transfer', room_id: my.room_id, target: username })) return;
+                busy.transfer = true; armBusy();
+                renderMembers(); // 移交按钮置灰（本轮在途防重复提交）
+            });
+    }
+    // 功能二期：房主变更后重挂隧道（服务端已 abort 房间内全部旧隧道，双方按新 host 重连）
+    // 原房主 hostStop→connect(新房主)；新房主 disconnect→hostStart(本机端口)；其余成员 disconnect→connect(新 host)
+    function rewireHost(prevHost, nextHost) {
+        if (!my || !window.GameNet) return;
+        var wasHost = prevHost === u(), isHostNow = nextHost === u();
+        if (isHostNow) gnBroadcastStopQuiet(); // 功能二期方案 B：成员变房主即停局域网发现（房主不广播）
+        try {
+            if (wasHost) { if (GameNet.hostStop) GameNet.hostStop(my.room_id); }
+            else if (GameNet.disconnect) { GameNet.disconnect(my.room_id); }
+        } catch (e) { }
+        my._selfLinkText = ''; my._selfLinkCls = ''; // 链路态复位，等待新链路事件回填
+        try {
+            if (isHostNow) { if (GameNet.hostStart) GameNet.hostStart(my.room_id, my.host_port); }
+            else if (my.host && my.host_port && GameNet.connect) { GameNet.connect(my.room_id, my.host, my.host_port); }
+        } catch (e) { }
     }
     // 房内聊天：上行 109 chat（服务端只广播房内成员、不落库）
     function roomSendMsg() {
@@ -1003,6 +1239,7 @@
                 if (my.isHost) { if (window.GameNet && GameNet.hostStop) GameNet.hostStop(my.room_id); }
                 else if (window.GameNet && GameNet.disconnect) GameNet.disconnect(my.room_id);
             } catch (e) { }
+            gnBroadcastStopQuiet(); // 功能二期方案 B：房间页统一收口即停局域网发现
         }
         my = null;
         myName = '';
@@ -1036,7 +1273,7 @@
                 if (!my) {
                     // 加入者的首次确认：本端无房且 room_id 与本端在途 join 一致 → 入房 + 发起连接
                     if (!pendingJoinId || env.room_id !== pendingJoinId) break;
-                    my = normRoom(env, false);
+                    my = normRoom(env, env.host === u());
                     roomMsgs = [];
                     if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
                     unlockBusy();
@@ -1045,13 +1282,48 @@
                     }
                     if (visible) showPage('room');
                     toast(T('已加入房间'));
+                    // 功能二期：房间关联了游戏库游戏但本机未安装——提前提醒获取安装，
+                    // 免得到房主开局时才发现玩不了（开局沿另有引导；此处一次性提示）
+                    if ((my.game_id || 0) > 0 && !my._installHinted &&
+                        window.GSGameMeta && !window.GSGameMeta(my.game_id)) {
+                        my._installHinted = true;
+                        toast(T('该房间游戏《{g}》未安装，请先在游戏中心获取并安装', { g: my.game_name || '' }));
+                    }
                     if (visible && curPage === 'room') renderRoom();
                     break;
                 }
                 if (env.room_id !== my.room_id) break;
                 var prev = my.status;
-                my = normRoom(env, my.isHost);
-                if (prev !== 'playing' && my.status === 'playing') toast(T('房主已开始游戏'));
+                var prevHost = my.host;
+                my = normRoom(env, env.host === u()); // 功能二期：isHost 以服务端 host 字段为准（房主转让后随广播切换）
+                // 功能二期：房主转让——host 字段切换即重挂隧道（服务端已 abort 旧隧道，双方按新 host 重连）
+                if (prevHost && my.host && prevHost !== my.host) {
+                    unlockBusy(); // 移交在途（发起者）成功收口
+                    toast(my.host === u() ? T('你已成为房主') : T('房主已转让给 {name}', { name: memberName(my.host) }));
+                    rewireHost(prevHost, my.host);
+                }
+                if (prev === 'playing' && my.status !== 'playing') {
+                    // 功能二期：结束对局回环——清「等待游戏内建主/已启动」标志（下次开局重新走启动流程）
+                    my._waitingHost = false;
+                    my._gameLaunched = false;
+                }
+                if (prev !== 'playing' && my.status === 'playing') {
+                    toast(T('房主已开始游戏'));
+                    // 功能二期：关联游戏库游戏时询问启动（加入方本机未运行该游戏则弹自绘确认；
+                    // 未入库/WEB 端无启动能力则仅提示手动启动；每房间只询问一次）
+                    if (!my.isHost && (my.game_id || 0) > 0 && !my._launchAsked) {
+                        my._launchAsked = true;
+                        var gl = my.game_name || '';
+                        if (typeof window.GSLaunchGame === 'function' && window.GSGameMeta && window.GSGameMeta(my.game_id)) {
+                            confirmBox(T('启动游戏'), T('房主已开局《{g}》，是否立即启动游戏并加入？', { g: gl }), T('启动'), function () {
+                                window.GSLaunchGame(my.game_id);
+                            });
+                        } else {
+                            toast(T('请先在游戏中心安装并启动《{g}》', { g: gl }));
+                        }
+                    }
+                }
+                gnBroadcastEnsure(); // 功能二期方案 B：成员/人数变化同步到局域网发现广播包（幂等更新）
                 if (visible && curPage === 'room') renderRoom();
                 break;
             }
@@ -1126,19 +1398,81 @@
             lobbyMsgs.push({ sys: true, text: env.text || '' });
             if (lobbyMsgs.length > 200) lobbyMsgs = lobbyMsgs.slice(-200);
             renderLobbyChat();
+        } else if (env.action === 'rooms_changed') {
+            // 功能二期：房间表变更实时通知（建房/加入/退出/踢人/开局/转让/关房）——自动重拉列表，
+            // 无需手动点刷新；服务端已 1s 尾沿节流（推送频率≤2 次/秒），此处 force 拉取保证
+            // 补推不被客户端节流窗口吞掉（force 拉取复用既有 list 链路与过滤，量小可控）
+            refreshList(true);
         }
     }
 
     // ===== GameNet 引擎事件（链路态/降级/错误）→ 房间页实时反馈 =====
     function onNetEvent(ev) {
         if (!ev || !my || ev.room_id !== my.room_id) return;
-        if (ev.type === 'ready') { my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; }
+        if (ev.type === 'ready') { my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; perfHintCheck(); }
         else if (ev.type === 'accepted' || ev.type === 'probe') { my._selfLinkText = T('正在建立联机…'); my._selfLinkCls = 'wait'; }
         else if (ev.type === 'relay') { my._selfLinkText = T('联机已走中继转发'); my._selfLinkCls = 'on'; }
-        else if (ev.type === 'listen') { my._selfLinkText = T('游戏端口隧道已就绪'); my._selfLinkCls = 'on'; }
-        else if (ev.type === 'abort') { my._selfLinkText = T('联机已断开'); my._selfLinkCls = 'off'; }
-        else if (ev.type === 'error') { my._selfLinkText = T('联机异常：') + (ev.reason || ''); my._selfLinkCls = 'off'; }
+        else if (ev.type === 'listen') {
+            my._selfLinkText = T('游戏端口隧道已就绪'); my._selfLinkCls = 'on';
+            // 功能二期方案 B：广播发现代理——加入方 join 隧道就绪即启动虚拟主机应答，
+            // 本机游戏「局域网游戏」列表直接出现好友房间（房主侧不广播：本机游戏自建主机）
+            if (ev.role === 'join' && ev.proto === 'udp') gnBroadcastEnsure();
+        }
+        else if (ev.type === 'abort') {
+            my._selfLinkText = T('联机已断开'); my._selfLinkCls = 'off'; perfHintRearm();
+            gnBroadcastStopQuiet(); // 功能二期方案 B：断链即停局域网发现（幂等）
+        }
+        else if (ev.type === 'error') { my._selfLinkText = T('联机异常：') + (ev.reason || ''); my._selfLinkCls = 'off'; perfHintRearm(); }
         if (visible && curPage === 'room') { renderLinkBar(); renderMembers(); }
+    }
+
+    // 功能二期方案 B：局域网发现启动/同步（幂等；房主侧不广播——本机游戏自建主机局域网直接可见）
+    // 发现模式分流：魔兽 III 走本地伪造应答（毫秒级，免跨机往返）；其余游戏走 L1 透传反射——
+    // 搜索包经既有隧道由真实主机进程应答（零协议适配，无需代理会话，本函数直接跳过）
+    // 成员变化时重发（主进程同端口重入仅更新名称/人数字段，条目指纹不变，列表平滑刷新）
+    function gnBroadcastEnsure() {
+        if (!my || my.isHost || !window.desktop || typeof window.desktop.gnBroadcastStart !== 'function') return;
+        if (!/魔兽|war3|wc3/i.test(String(my.game_name || ''))) return; // 非 war3：透传反射，无需代理
+        var bHost = null;
+        var mems = my.members || [];
+        for (var bi = 0; bi < mems.length; bi++) { if (mems[bi].host) { bHost = mems[bi]; break; } }
+        window.desktop.gnBroadcastStart({
+            room_id: my.room_id, game: 'war3', port: my.host_port || 0,
+            game_name: T('[IM] {name}的房间', { name: (bHost && bHost.name) || '' }),
+            host_name: (bHost && bHost.name) || '',
+            slots_total: my.max_players || 0, slots_used: mems.length
+        }).then(function (r) {
+            if (r && r.ok && !r.updated) toast(T('已开启局域网发现：游戏列表将直接显示本房间'));
+        }).catch(function () { });
+    }
+
+    // 功能二期方案 B：局域网发现停止归口（主进程幂等；非 PC/未启动时静默）
+    function gnBroadcastStopQuiet() {
+        if (!window.desktop || typeof window.desktop.gnBroadcastStop !== 'function') return;
+        try { window.desktop.gnBroadcastStop({ room_id: my ? my.room_id : '' }); } catch (e) { }
+    }
+
+    // ===== 联机二期 §9.4-5：同机并发降级提示（按用户选定口径只落在联机侧）=====
+    // 语义：联机真正建立（ready：本端与房主/对端隧道打通）时，反查本机是否另有通话/会议/远程协助在跑；
+    // 命中则由本窗自绘 toast 提示一次——同机同时跑联机与实时音视频会争抢网络与上行带宽（体验级影响，
+    // 非阻断）；同一次并存期内只提示一次，联机全部会话收口后重新武装（perfHintRearm）。
+    // 依赖：主进程 act:other-get（通话窗/远程窗上报的活跃态缓存）；Web 端/非 Electron 环境无 desktop 即静默跳过。
+    var perfHintDone = false;
+    function perfHintCheck() {
+        if (perfHintDone) return;
+        if (!window.GameNet || !window.desktop || typeof window.desktop.actOtherGet !== 'function') return;
+        var act = GameNet.activeCount();
+        if (!act || !act.sessions) return; // 尚未真正联通（仅建房/等待成员时不算并发，不提示）
+        Promise.resolve(window.desktop.actOtherGet()).then(function (s) {
+            if (perfHintDone || !s || (!s.call && !s.remote)) return;
+            perfHintDone = true;
+            toast(T('本机正在通话/远程协助，与游戏联机同时运行会争抢网络与上行带宽，可能出现卡顿或话音不清'));
+        }).catch(function () { /* 查询失败不提示（不阻塞联机） */ });
+    }
+    function perfHintRearm() {
+        if (!window.GameNet) return;
+        var act = GameNet.activeCount();
+        if (!act || !act.sessions) perfHintDone = false;
     }
 
     // ===== 事件绑定 =====
@@ -1151,6 +1485,11 @@
         elMatchBtn.addEventListener('click', doMatch);
         elJoinBtn.addEventListener('click', doJoin);
         elInMode.addEventListener('change', syncMaxOptions);
+        // 功能二期：建房选择联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填；
+        // 未运行则提示手动填写或点自动探测，游戏启动后探测会命中）
+        elInGame.addEventListener('change', function () {
+            if (elInGame.value !== '0') portDetect();
+        });
         elRoomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
         elJoinPass.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
         [elName, elPort, elPass].forEach(function (inp) {

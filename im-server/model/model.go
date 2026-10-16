@@ -1000,6 +1000,12 @@ type Game struct {
 	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
 	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
+	// OnlinePortsTCP/OnlinePortsUDP 功能二期：联机端口登记（逗号分隔多端口，如 "6112,6113"）——
+	// 管理端上架时录入该游戏 LAN 联机的 TCP/UDP 监听端口，建房选游戏自动预填（游戏未启动时
+	// 探测不到监听端口的矛盾解法）；开局实测发现的新端口由服务端自动追加去重（管理端手工
+	// 登记为准，实测仅累加不覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
+	OnlinePortsTCP string `gorm:"column:online_ports_tcp;type:varchar(255);default:''" json:"online_ports_tcp"`
+	OnlinePortsUDP string `gorm:"column:online_ports_udp;type:varchar(255);default:''" json:"online_ports_udp"`
 	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["%USERPROFILE%/Documents/My Games/X/**"]）：
 	// 相对路径以该游戏库记录的安装目录（install_path）为锚点；实测 install_path 有「安装根 <盘>/CdonlgameApp」
 	// 与「游戏目录 <盘>/CdonlgameApp/<slug>」两种形态，相对写法易多/少一层目录，推荐直接使用绝对路径（支持

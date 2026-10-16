@@ -449,7 +449,7 @@ turn:
   password: "im-turn-secret"
   # 媒体中继 UDP 端口段（需放行安全组）
   min_port: 49160
-  max_port: 49200
+  max_port: 49960
 
 # 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
 file_p2p:
@@ -477,6 +477,13 @@ game_net:
   negotiate_timeout: 10    # 客户端协商超时秒（同 file_p2p）
   mode: "both"             # 接入形态：lane=原生SDK通道 / tunnel=通用端口映射 / both（一期主线 tunnel）
   relay_only: false        # 强制走中继（企业网/调试：客户端只用 relay 候选）
+  # 功能二期：联机专用中继（独立 TURN 实例 + 独立端口子段，避免联机中继与通话/会议抢同一端口池）
+  # 前提：turn.enabled=true 且本项 enabled=true 才启动；未启用时联机复用 turn 主实例池（历史行为零回归）
+  relay:
+    enabled: false         # 联机专用中继开关（false=复用 turn 主实例，零额外部署；true 时按下述端口启动第二实例）
+    port: 3479             # 联机专用 STUN/TURN 监听端口（UDP+TCP 双栈，须与 turn.port 不同且放行安全组）
+    min_port: 49961        # 联机专用媒体中继 UDP 端口子段（须与 turn.min_port~max_port 不重叠，需放行安全组）
+    max_port: 50760
 
 # ============================================================
 # 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，server/remotedevice.go + remote.go rc_* 信令）

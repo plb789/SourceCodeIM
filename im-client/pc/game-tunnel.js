@@ -74,6 +74,26 @@ function localAddrs() {
 
 function isLocalAddr(a) { return !!localAddrs()[normalizeAddr(a)]; }
 
+// localPrimaryIP 本机首个非回环 IPv4（优先私网段）——host 侧发往本机游戏的包源地址归口。
+// 透传反射（功能二期 L1 通用发现）要求：转发给本机真实游戏主机的搜索包，来源须为"局域网合法
+// 地址"——部分游戏对来源 127.0.0.1 的 LAN 搜索应答异常（过滤回环来源），非回环本机 IP 全兼容。
+function localPrimaryIP() {
+    var ifs = os.networkInterfaces();
+    var fallback = '';
+    for (var k in ifs) {
+        var arr = ifs[k] || [];
+        for (var i = 0; i < arr.length; i++) {
+            var a = normalizeAddr(arr[i] && arr[i].address);
+            if (!a || a === '127.0.0.1' || a === '::1' || a.indexOf(':') !== -1) continue;
+            if (arr[i].internal) continue;
+            if (a.indexOf('169.254.') === 0) continue; // 链路本地不作为主机地址
+            if (a.indexOf('192.168.') === 0 || a.indexOf('10.') === 0 || /^172\.(1[6-9]|2\d|3[01])\./.test(a)) return a;
+            if (!fallback) fallback = a;
+        }
+    }
+    return fallback;
+}
+
 function validPort(p) {
     if (typeof p !== 'number' || !isFinite(p) || Math.floor(p) !== p) return false;
     return p >= MIN_PORT && p <= MAX_PORT && !RESERVED_PORTS[p];
@@ -97,10 +117,30 @@ function GameTunnel() {
     this.emit = function () { };              // main.js 注入：主进程 → 渲染进程帧送出
     this.log = function (msg) { console.log('[game-tunnel] ' + msg); };
     this.sweepTimer = null;
+    // 功能二期方案 B：广播发现代理钩子（game-broadcast.js 注入）——join 隧道收到本机游戏
+    // SearchGame（0xF7 0x2F）时回调构造应答；返回 Buffer 数组即本地消费（不进隧道转发）
+    this.broadcastHook = null;
 }
 
 GameTunnel.prototype.setEmitter = function (fn) { if (typeof fn === 'function') this.emit = fn; };
 GameTunnel.prototype.setLogger = function (fn) { if (typeof fn === 'function') this.log = fn; };
+GameTunnel.prototype.setBroadcastHook = function (fn) { if (typeof fn === 'function') this.broadcastHook = fn; };
+
+// 广播发现代理发送口（game-broadcast.js 周期 RefreshGame 用）：复用该房间 join 隧道的
+// UDP 套接字向子网广播（源端口=游戏端口，条目刷新匹配一致）；socket 已 setBroadcast(true)
+GameTunnel.prototype.broadcastSend = function (roomId, buf) {
+    var body = toBuf(buf);
+    if (!body) return { ok: false, err: 'bad_buf' };
+    var ctx = null;
+    this.tunnels.forEach(function (c) {
+        if (!ctx && c.roomId === roomId && c.role === 'join' && c.proto === 'udp' && c.udp) ctx = c;
+    });
+    if (!ctx) return { ok: false, err: 'no_tunnel' };
+    try { ctx.udp.send(body, 0, body.length, ctx.port, '255.255.255.255'); } catch (e) {
+        return { ok: false, err: 'send_fail:' + ((e && e.message) || '') };
+    }
+    return { ok: true };
+};
 
 // 打开（幂等：同 room+peer+proto 重复打开先收口旧隧道）
 // args: {room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?}
@@ -115,8 +155,11 @@ GameTunnel.prototype.open = function (args) {
     }
     if (!PROTOCOLS[a.proto] || !ROLES[a.role]) return Promise.resolve({ ok: false, err: 'bad_args' });
     if (!validPort(a.port)) return Promise.resolve({ ok: false, err: 'bad_port' });
-    var hostIp = String(a.host_ip || '127.0.0.1');
-    if (a.role === 'host' && !isLocalAddr(hostIp)) return Promise.resolve({ ok: false, err: 'bad_host_ip' });
+    var hostIp = String(a.host_ip || '');
+    if (a.role === 'host') {
+        if (!hostIp) hostIp = localPrimaryIP() || '127.0.0.1'; // 缺省用本机局域网 IP（透传反射源地址兼容性，见 localPrimaryIP）
+        if (!isLocalAddr(hostIp)) return Promise.resolve({ ok: false, err: 'bad_host_ip' });
+    }
 
     // 幂等：同键重复打开先收口（静默，不向渲染进程回事件，防重复 ready）
     self.close({ room_id: roomId, peer: peer, proto: a.proto, role: a.role, quiet: true });
@@ -253,10 +296,24 @@ GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
         if (!ctx.localOnly[normalizeAddr(rinfo.address)]) return; // 仅本机来源（他人直连本端口一律丢弃）
         ctx.lastAct = Date.now();
         ctx.lastSrc = { address: rinfo.address, port: rinfo.port };
+        // 功能二期方案 B：广播发现代理——本机游戏的 SearchGame（0xF7 0x2F）帧由代理本地应答
+        // （虚拟主机模型），不进隧道转发（转发会给房主游戏塞垃圾包）；无代理/非搜索帧照旧转发
+        if (msg.length >= 4 && msg[0] === 0xF7 && msg[1] === 0x2F && self.broadcastHook) {
+            var replies = null;
+            try { replies = self.broadcastHook(ctx.roomId, msg, rinfo); } catch (e) { replies = null; }
+            if (replies && replies.length) {
+                for (var i = 0; i < replies.length; i++) {
+                    var rb = replies[i];
+                    try { sock.send(rb, 0, rb.length, rinfo.port, rinfo.address); } catch (e) { }
+                }
+                return;
+            }
+        }
         self.emitData(ctx, 0, msg);
     });
     sock.bind(ctx.port, '0.0.0.0', function () {
         if (ctx.closed) return;
+        try { sock.setBroadcast(true); } catch (e) { } // 功能二期方案 B：RefreshGame 子网广播需要
         self.log('UDP 监听就绪 0.0.0.0:' + ctx.port + '（房间 ' + ctx.roomId + '）');
         self.emitEvent(ctx, 0, 'listen');
         ok();
@@ -278,8 +335,9 @@ GameTunnel.prototype.startUdpHost = function (ctx, ok, bad) {
         ctx.lastAct = Date.now();
         self.emitData(ctx, 0, msg);
     });
-    // 绑定回环（不对外暴露）：仅作为向本机游戏发问/收回包的出口
-    sock.bind(0, '127.0.0.1', function () {
+    // 绑定全接口（源地址=本机出口 IP）：收本机游戏回包 + 向本机游戏端口单播发数据时
+    // 源地址为局域网合法地址（非回环），透传反射下真实游戏对搜索的应答兼容性最佳
+    sock.bind(0, function () {
         if (ctx.closed) return;
         self.log('UDP 房主隧道就绪 → ' + ctx.hostIp + ':' + ctx.port + '（房间 ' + ctx.roomId + '）');
         ok();

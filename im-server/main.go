@@ -334,6 +334,12 @@ func main() {
 		logger.Error("%v", err)
 		os.Exit(1)
 	}
+	// 功能二期：联机专用 TURN 实例（独立监听端口 + 独立端口子段，避免联机中继与通话抢同一池；
+	// game_net.relay.enabled=false 时静默不启动，联机中继回退主实例池，零回归）
+	if err := server.StartGameNetTURN(cfg); err != nil {
+		logger.Error("%v", err)
+		os.Exit(1)
+	}
 	// 阶段一百五十四：积分红包 24 小时过期退回后台扫描（未领完红包剩余积分自动退回发送者）
 	server.StartRedPacketRefundLoop()
 	// 阶段一百六十：聊天文件定期清理（static/upload 超期文件物理删除，默认保留 7 天，-1 永不清理；

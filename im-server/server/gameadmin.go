@@ -411,6 +411,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"save_paths": u.SavePaths, "save_exclude": u.SaveExclude,
+		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
 		"torrent_path": tp,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {
@@ -419,6 +420,22 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	store.DB.First(&g, id)
 	adminJSON(w, gameSummary(g))
+}
+
+// gamePortsClean 联机端口登记串清洗：逗号/空格分隔 → 去重 + 1024~65535 范围校验 + 升序还原逗号串。
+// 非法片段丢弃（不做整串失败，管理端录入容错）；空串/全非法返回空串
+func gamePortsClean(s string) string {
+	seen := map[int]bool{}
+	var out []string
+	for _, seg := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '；' || r == '，' }) {
+		p, err := strconv.Atoi(strings.TrimSpace(seg))
+		if err != nil || p < 1024 || p > 65535 || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, strconv.Itoa(p))
+	}
+	return strings.Join(out, ",")
 }
 
 // handleAdminGameDelete 下架删除：级联清版本/文件清单行与磁盘目录（不可恢复，管理端二次确认归口前端）

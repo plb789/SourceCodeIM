@@ -168,21 +168,9 @@ func callSessionOf(callID string) *callSession {
 
 // callInjectICE 阶段一百四十二二期：invite/accept 转发帧注入服务端 ICE 配置（stun/turn 条目）
 // TURN 未启用返回原 content（纯 P2P 直连模式，客户端零改动兼容）；凭证归口 config.yaml，不信任客户端传值
+// 功能二期：注入逻辑统一归口 turn.go injectICE（联机侧另走 gnInjectICE → 联机专用实例）
 func callInjectICE(content string) string {
-	ice := TurnICEServers()
-	if ice == nil {
-		return content
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(content), &m); err != nil {
-		return content // 轻解析原则：非 JSON content 原样中继不拦
-	}
-	m["ice"] = ice
-	b, err := json.Marshal(m)
-	if err != nil {
-		return content
-	}
-	return string(b)
+	return injectICE(content, TurnICEServers())
 }
 
 // staleRingOf 忙态指向的会话是否为「同主叫同被叫且仍在响铃」的残留会话（须持 callMu 调用）。

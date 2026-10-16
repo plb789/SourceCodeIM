@@ -167,6 +167,24 @@ func evaluateAlerts(s *Server) {
 			alertClear("conn_high")
 		}
 	}
+	// 10. 联机二期 §9.4-4：TURN 中继占用水位（≥80% 端口段容量 = 打洞失败的通话/联机即将分不到中继端口，
+	// 表现隐蔽，故提前告警；TURN 未启用时自动跳过）
+	if cur, _, capacity, ok := turnAllocationStats(); ok && capacity > 0 {
+		if cur >= capacity*8/10 {
+			alertSet("relay_high", "error", "TURN 中继占用 "+i64s(int64(cur))+"/"+i64s(int64(capacity))+"（≥80% 容量，后续打洞失败会话将无中继端口可用）")
+		} else {
+			alertClear("relay_high")
+		}
+	}
+	// 11. 功能二期：联机专用中继占用水位（独立端口池，判据同上；未启用联机专用实例时自动跳过，
+	// 此时联机复用主实例池，由上方 relay_high 统一覆盖）
+	if cur, _, capacity, ok := gnTurnAllocationStats(); ok && capacity > 0 {
+		if cur >= capacity*8/10 {
+			alertSet("gn_relay_high", "error", "联机专用中继占用 "+i64s(int64(cur))+"/"+i64s(int64(capacity))+"（≥80% 容量，后续打洞失败的联机会话将无中继端口可用）")
+		} else {
+			alertClear("gn_relay_high")
+		}
+	}
 }
 
 // i64s int64 转字符串（告警文案拼接用）

@@ -1031,6 +1031,15 @@ contextBridge.exposeInMainWorld('desktop', {
     gnTunnelDeliver: function (frame) {
         ipcRenderer.send('gn:tunnel-deliver', frame || {});
     },
+    // 功能二期方案 B：广播发现代理（PC 客户端内置虚拟主机应答）
+    // start：加入方 join 隧道就绪后启动（args={room_id, game, port, game_name, host_name, slots_total, slots_used}）
+    // stop：房间收口/断链即停（幂等，args={room_id}）
+    gnBroadcastStart: function (args) {
+        return ipcRenderer.invoke('gn:broadcast-start', args || {});
+    },
+    gnBroadcastStop: function (args) {
+        return ipcRenderer.invoke('gn:broadcast-stop', args || {});
+    },
     // 阶段二百九十二 M7：房主游戏端口自动探测（设计文档 §4.3 第 1 层）
     // args={procs?:string[]}（已登记游戏进程名，供过滤）→ Promise<{ok, list:[{port,pid,proc,protos}], filtered}>
     // 仅读取本机监听端口清单（netstat -ano + tasklist），不触碰游戏字节
@@ -1109,5 +1118,15 @@ contextBridge.exposeInMainWorld('desktop', {
     },
     gnContactsReply: function (id, list) {
         ipcRenderer.send('gn:contacts-reply', id, list || []);
+    },
+    // ===== 联机二期 §9.4-5：同机并发活动态跨窗归口（降级提示只落在联机侧）=====
+    // 通话窗/远程窗上报自身活跃态变化（kind='call'|'remote'，变化才发；主进程缓存并做窗口销毁兜底复位）
+    actOtherReport: function (kind, on) {
+        if (kind !== 'call' && kind !== 'remote') return;
+        ipcRenderer.send('act:other-report', kind, !!on);
+    },
+    // 游戏中心窗在建立联机时反查本机是否另有通话/会议/远程协助在跑 → Promise<{call,remote}>
+    actOtherGet: function () {
+        return ipcRenderer.invoke('act:other-get');
     }
 });

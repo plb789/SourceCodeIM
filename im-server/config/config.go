@@ -369,6 +369,20 @@ type GameNetConfig struct {
 	Mode string `yaml:"mode"`
 	// RelayOnly 强制走中继（企业网/调试；客户端只用 relay 候选）
 	RelayOnly bool `yaml:"relay_only"`
+	// 功能二期：联机专用中继（独立 TURN 实例 + 独立端口子段，避免与通话抢同一中继端口池）
+	Relay GameNetRelayConfig `yaml:"relay"`
+}
+
+// GameNetRelayConfig 功能二期：联机专用 TURN 实例配置（与通话主实例并存，各自独立端口池）
+// 前提：turn.enabled=true 且本项 enabled=true 才启动；未启用时联机复用通话主实例池（历史行为零回归）
+type GameNetRelayConfig struct {
+	// Enabled 联机专用中继开关（缺省 false=复用 turn 主实例，零额外部署；true 时按下述端口启动第二实例）
+	Enabled bool `yaml:"enabled"`
+	// Port 联机专用 STUN/TURN 监听端口（UDP+TCP 双栈，须与 turn.port 不同且放行安全组；0=3479）
+	Port int `yaml:"port"`
+	// MinPort/MaxPort 联机专用媒体中继 UDP 端口子段（须与 turn 主实例端口段不重叠；0=49961-50760，需放行安全组）
+	MinPort int `yaml:"min_port"`
+	MaxPort int `yaml:"max_port"`
 }
 
 // RCConfig 阶段二百六十一：向日葵同款远程控制配置节（设备ID+验证码直连）
@@ -405,7 +419,7 @@ type TurnConfig struct {
 	// Username/Password 长期凭证账号（RFC 5766；仅允许该账号 Allocation，缺一启动报错）
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
-	// MinPort/MaxPort 媒体中继 UDP 端口段（0=49160-49200，需放行安全组）
+	// MinPort/MaxPort 媒体中继 UDP 端口段（0=49160-49960，需放行安全组）
 	MinPort int `yaml:"min_port"`
 	MaxPort int `yaml:"max_port"`
 }
@@ -876,6 +890,21 @@ func Load() *Config {
 	}
 	if cfg.GameNet.Mode != "lane" && cfg.GameNet.Mode != "tunnel" && cfg.GameNet.Mode != "both" {
 		cfg.GameNet.Mode = "both"
+	}
+	// 功能二期：联机专用中继（独立 TURN 实例）端口/端口子段兜底
+	if cfg.GameNet.Relay.Port <= 0 {
+		cfg.GameNet.Relay.Port = 3479
+	}
+	if cfg.GameNet.Relay.MinPort <= 0 {
+		cfg.GameNet.Relay.MinPort = 49961
+	}
+	if cfg.GameNet.Relay.MaxPort <= 0 {
+		cfg.GameNet.Relay.MaxPort = 50760
+	}
+	// 端口段非法（max < min）时按默认段收敛，避免启动即失败（口径同 turn 主实例）
+	if cfg.GameNet.Relay.MaxPort < cfg.GameNet.Relay.MinPort {
+		cfg.GameNet.Relay.MinPort = 49961
+		cfg.GameNet.Relay.MaxPort = 50760
 	}
 	// 阶段二百六十一：远程控制（设备ID+验证码）参数兜底（配置缺省或非法时回退默认值）
 	if cfg.RC.DynCodeTTL <= 0 {

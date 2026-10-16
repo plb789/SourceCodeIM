@@ -266,6 +266,10 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"launch_exe":  g.LaunchExe,
 		"launch_name": g.LaunchName,
 		"launch_args": g.LaunchArgs,
+		// 功能二期：联机端口登记（逗号分隔串原样下发，客户端自行解析；建房选游戏自动预填 +
+		// 开局实测发现新端口自动累加，管理端手工登记为准）
+		"online_ports_tcp": g.OnlinePortsTCP,
+		"online_ports_udp": g.OnlinePortsUDP,
 		// 云存档采集/排除路径（原始 JSON 数组串直接下发，客户端自行解析；非敏感字段）
 		"save_paths":   g.SavePaths,
 		"save_exclude": g.SaveExclude,

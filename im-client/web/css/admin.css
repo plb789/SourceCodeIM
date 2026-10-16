@@ -523,6 +523,9 @@ td .skel-line {
 .dash-cards-small {
     grid-template-columns: repeat(6, 1fr);
 }
+.dash-cards-3 {
+    grid-template-columns: repeat(3, 1fr);
+}
 .dash-card {
     background: var(--panel-bg);
     border: 1px solid var(--border);
@@ -587,6 +590,9 @@ td .skel-line {
         grid-template-columns: repeat(2, 1fr);
     }
     .dash-cards-small {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .dash-cards-3 {
         grid-template-columns: repeat(2, 1fr);
     }
     .dash-charts {

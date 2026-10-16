@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"im-server/logger"
+	"im-server/model"
 	"im-server/protocol"
 	"im-server/store"
 
@@ -140,6 +141,10 @@ type gnRoomSignal struct {
 	GameID     int    `json:"game_id"`     // 已入库联机游戏 id（0=未指定）
 	GameName   string `json:"game_name"`   // 游戏名（列表展示；服务端按 rune 裁剪归口）
 	Text       string `json:"text"`        // chat：房内聊天正文（服务端裁剪 + 归口 from/ts）
+	// 功能二期：开局实测端口（房主启动游戏后探测的监听端口）——服务端累加进游戏登记集
+	// （追加去重，不覆盖管理端手工登记），下次建房选游戏预填直接可用
+	OnlinePortsTCP []int `json:"online_ports_tcp,omitempty"`
+	OnlinePortsUDP []int `json:"online_ports_udp,omitempty"`
 }
 
 // gnLobbySignal 112 上行信令体（大厅层：在场心跳 + 大厅聊天）
@@ -161,6 +166,7 @@ type gnMemberView struct {
 	Ready    bool   `json:"ready"`
 	Host     bool   `json:"host"`
 	Online   bool   `json:"online"`
+	Avatar   string `json:"avatar,omitempty"` // 功能二期：头像 URL 服务端归口下发（游戏中心窗无主窗好友缓存，IMAvatarUrl 不可用）
 }
 
 // gnRoomBrief 房间列表条目（下行 list.rooms）
@@ -222,10 +228,16 @@ func (s *Server) HandleGameRoomSignal(c *Client, msg *protocol.Message) {
 		s.gnHandleLeave(c, &p)
 	case "kick":
 		s.gnHandleKick(c, &p)
+	// 功能二期：房主转让（仅当前房主可发起，目标须为房内在线成员）
+	case "transfer":
+		s.gnHandleTransfer(c, &p)
 	case "ready":
 		s.gnHandleReady(c, &p)
 	case "start":
 		s.gnHandleStart(c, &p)
+	// 功能二期：结束对局（仅房主；playing → waiting，成员保留重新准备，按钮回「开始游戏」可再开局）
+	case "end":
+		s.gnHandleEnd(c, &p)
 	case "state":
 		s.gnHandleState(c, &p)
 	case "list":
@@ -369,6 +381,20 @@ func gnLobbyViews(users []string) []gnLobbyUser {
 	return out
 }
 
+// gnLobbyDisconnect 断连即离场：客户端进程直接退出不会发 112 leave，在场 ZSET 条目要等
+// 45s 惰性过期，且过期后没有任何触发点广播 users——其他玩家的大厅「N 人在线」与在场名单
+// 长期停留在旧值（实测：对方退出进程后仍显示 2 人在线）。unregister 最后连接断开路径调用：
+// 仍在场即移除并广播最新名单；同端互踢/多端场景由 unregister 的 remaining>0 早退挡住不误清。
+func (s *Server) gnLobbyDisconnect(username string) {
+	ctx := context.Background()
+	n, _ := store.RDB.ZRem(ctx, gnKeyLobby, username).Result()
+	if n == 0 {
+		return // 不在大厅（未打开联机大厅/页面切换时已显式离场）：零开销旁路
+	}
+	users := gnLobbyUsers(ctx, time.Now().Unix())
+	s.gnBroadcastLobby(users, &gnEnvelope{Action: "users", Users: gnLobbyViews(users)})
+}
+
 // gnTouch 房间活跃续期（room_ttl 惰性续期 + updated_at；110 连接层 ping 亦调用此函数）
 func (s *Server) gnTouch(roomID string) {
 	ctx := context.Background()
@@ -414,6 +440,7 @@ func (s *Server) gnStateEnv(ctx context.Context, roomID, action string) *gnEnvel
 			Ready:    r == "1",
 			Host:     u == env.Host,
 			Online:   s.isOnlineFast(u),
+			Avatar:   avatarOf(u),
 		})
 	}
 	sort.Slice(env.Members, func(i, j int) bool {
@@ -468,6 +495,123 @@ func (s *Server) gnBroadcastLobby(users []string, env *gnEnvelope) {
 	s.sendToUsers(users, data)
 }
 
+// ----- 功能二期：房间列表变更实时通知（建房/加入/退出/踢人/开局/转让/关房 → 大厅即时可见） -----
+// 原实现：房间列表纯手动拉取（109 list），他人建房/解散后须手动点刷新才可见。
+// 现口径：房间表变更 → 向 112 大厅在场用户广播轻量 rooms_changed 事件（不含列表内容——
+// 列表按"好友或同群"因人而异，推送统一内容会泄露无关系房间；客户端收到即自动拉取），
+// 客户端复用既有 list 拉取链路（自带 1.2s 节流）。服务端 1s 尾沿节流：窗口内多次变更合并，
+// 窗口结束补推一次（最后一次变更不丢）；大厅无人时零开销旁路。
+const gnRoomsNotifyGap = time.Second
+
+var (
+	gnRoomsNotifyMu      sync.Mutex
+	gnRoomsNotifyAt      time.Time
+	gnRoomsNotifyPending bool
+)
+
+// gnRoomsChanged 房间表变更入口（各变更点调用；幂等无害）
+func (s *Server) gnRoomsChanged() {
+	users := gnLobbyUsers(context.Background(), time.Now().Unix())
+	if len(users) == 0 {
+		return
+	}
+	gnRoomsNotifyMu.Lock()
+	now := time.Now()
+	if !gnRoomsNotifyAt.IsZero() && now.Sub(gnRoomsNotifyAt) < gnRoomsNotifyGap {
+		gnRoomsNotifyPending = true
+		gnRoomsNotifyMu.Unlock()
+		return
+	}
+	gnRoomsNotifyAt = now
+	gnRoomsNotifyMu.Unlock()
+	s.gnRoomsChangedPush()
+	// 尾沿补推：窗口结束后若仍有变更（窗口内被合并的最后一次），再推一轮
+	time.AfterFunc(gnRoomsNotifyGap, func() {
+		gnRoomsNotifyMu.Lock()
+		if !gnRoomsNotifyPending {
+			gnRoomsNotifyMu.Unlock()
+			return
+		}
+		gnRoomsNotifyPending = false
+		gnRoomsNotifyAt = time.Now()
+		gnRoomsNotifyMu.Unlock()
+		s.gnRoomsChangedPush()
+	})
+}
+
+func (s *Server) gnRoomsChangedPush() {
+	users := gnLobbyUsers(context.Background(), time.Now().Unix())
+	if len(users) == 0 {
+		return
+	}
+	s.gnBroadcastLobby(users, &gnEnvelope{Action: "rooms_changed"})
+}
+
+// ----- 功能二期：离线成员自动清退（客户端退出进程/断网不会显式 leave，防成员表残留） -----
+// 原实现：成员仅显式 leave/被踢才移出，直接退出客户端后残留为离线成员——既造成成员表失真，
+// 又卡死房主开局（其 ready 恒未就绪），只能等 room_ttl（2h）回收。
+// 现口径：最后一个连接断开（unregister）时挂 30s 宽限定时器——闪断/APP 息屏交接（1~3s 重连）
+// 宽限内回来即取消（handleLogin 取消），真退出/长断网到期自动移出全部房间（房主离线=关房，
+// 语义同"房主退出即关房"）。同端互踢路径不走此处（旧连接 unregister 时新连接已在集合，
+// remaining>0 提前返回，见 hub.Add 互踢语义）。
+const gnOfflineLeaveGrace = 30 * time.Second
+
+var (
+	gnOfflineLeaveMu     sync.Mutex
+	gnOfflineLeaveTimers = make(map[string]*time.Timer)
+)
+
+// gnScheduleOfflineLeave 调度离线清退（unregister 最后连接断开路径调用；同用户重复断开续窗）
+func (s *Server) gnScheduleOfflineLeave(username string) {
+	gnOfflineLeaveMu.Lock()
+	if t := gnOfflineLeaveTimers[username]; t != nil {
+		t.Reset(gnOfflineLeaveGrace)
+	} else {
+		gnOfflineLeaveTimers[username] = time.AfterFunc(gnOfflineLeaveGrace, func() {
+			gnOfflineLeaveMu.Lock()
+			delete(gnOfflineLeaveTimers, username)
+			gnOfflineLeaveMu.Unlock()
+			// 宽限内重连由 gnCancelOfflineLeave 删定时器，此处防御性双查（Redis 在线缓存为准）
+			if s.isOnlineFast(username) {
+				return
+			}
+			s.gnOfflineLeaveSweep(username)
+		})
+	}
+	gnOfflineLeaveMu.Unlock()
+}
+
+// gnCancelOfflineLeave 宽限内重连即取消清退（handleLogin 登录成功路径调用）
+func gnCancelOfflineLeave(username string) {
+	gnOfflineLeaveMu.Lock()
+	if t := gnOfflineLeaveTimers[username]; t != nil {
+		t.Stop()
+		delete(gnOfflineLeaveTimers, username)
+	}
+	gnOfflineLeaveMu.Unlock()
+}
+
+// gnOfflineLeaveSweep 到期清扫：移出该用户在所有房间的成员身份
+func (s *Server) gnOfflineLeaveSweep(username string) {
+	ctx := context.Background()
+	ids, _ := store.RDB.SMembers(ctx, gnUserKey(username)).Result()
+	for _, roomID := range ids {
+		meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
+		if len(meta) == 0 {
+			store.RDB.SRem(ctx, gnUserKey(username), roomID) // 惰性清理悬空索引
+			continue
+		}
+		reason := "offline"
+		if meta["host"] == username {
+			reason = "host_offline" // 房主离线：关房，语义同"房主退出即关房"
+		}
+		s.gnRemoveMember(ctx, roomID, username, reason)
+	}
+	if len(ids) > 0 {
+		logger.Info("用户 %s 离线超时，已自动移出 %d 个游戏房间", username, len(ids))
+	}
+}
+
 // gnBroadcastState 向房间全部成员广播最新房间态（成员变更即时同步，对齐 105 state 全量广播）
 func (s *Server) gnBroadcastState(ctx context.Context, roomID string) {
 	env := s.gnStateEnv(ctx, roomID, "state")
@@ -499,6 +643,7 @@ func (s *Server) gnCloseRoom(ctx context.Context, roomID, reason string) {
 		store.RDB.SRem(ctx, gnUserKey(u), roomID)
 	}
 	logger.Info("游戏房间 %s 关闭（原因 %s）", roomID, reason)
+	s.gnRoomsChanged() // 功能二期：房间从列表消失，通知大厅即时刷新
 }
 
 // ----- action 处理 -----
@@ -585,6 +730,7 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 	case 1:
 		logger.Info("游戏房间 %s 建立：房主 %s（%d 端口，mode=%s，group=%d，game=%s/%s，人数=%d）",
 			roomID, from, p.HostPort, mode, p.GroupID, gameName, gameMode, maxPlayers)
+		s.gnRoomsChanged() // 功能二期：新房间进入列表，通知大厅即时刷新
 		s.gnSendRoom(from, s.gnStateEnv(ctx, roomID, "created"))
 	case -1:
 		s.sendError(c, "房间数量已达上限，请稍后再试")
@@ -664,7 +810,42 @@ func (s *Server) gnHandleJoin(c *Client, p *gnRoomSignal) {
 		return
 	}
 	logger.Info("游戏房间 %s 成员加入：%s", roomID, from)
+	s.gnRoomsChanged() // 功能二期：列表人数变化，通知大厅即时刷新
 	s.gnBroadcastState(ctx, roomID)
+}
+
+// gnRemoveMember 房间成员移出归口（显式 leave 与离线清退共用，单一口径防两处漂移）：
+// 房主移出=关房（host_<reason>）；剩余为空=关房（empty）；否则广播剩余成员 +
+// 收口该用户 110 隧道会话（对端收 abort(reason)）+ 通知大厅列表刷新。返回房间是否仍存在。
+func (s *Server) gnRemoveMember(ctx context.Context, roomID, username, reason string) bool {
+	meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
+	if len(meta) == 0 {
+		return false // 房间已解散，静默（客户端态以 closed 为准）
+	}
+	// 成员资格预检：非成员（重复 leave/悬空索引/清退竞态残留请求）仅惰性清理索引后静默返回——
+	// 原实现无条件继续走广播+日志，非成员 leave 会产出虚假「成员退出」记录与冗余 state/rooms_changed。
+	// 房主分支不受预检影响（房主退出/离线即关房语义优先，成员哈希缺失时仍按关房收口）。
+	isMember, _ := store.RDB.HExists(ctx, gnMemberKey(roomID), username).Result()
+	store.RDB.HDel(ctx, gnMemberKey(roomID), username)
+	store.RDB.SRem(ctx, gnUserKey(username), roomID)
+	if username == meta["host"] {
+		s.gnCloseRoom(ctx, roomID, "host_"+reason)
+		return false
+	}
+	if !isMember {
+		return false
+	}
+	if remain, _ := store.RDB.HLen(ctx, gnMemberKey(roomID)).Result(); remain <= 0 {
+		s.gnCloseRoom(ctx, roomID, "empty")
+		return false
+	}
+	s.gnTouch(roomID)
+	s.gnBroadcastState(ctx, roomID)
+	// 连接层收口（110）：移出者在该房间的隧道会话摘除，双方收 abort(<reason>)
+	s.gnNetAbortUser(roomID, username, reason)
+	logger.Info("游戏房间 %s 成员退出：%s（%s）", roomID, username, reason)
+	s.gnRoomsChanged()
+	return true
 }
 
 // gnHandleLeave 退出：房主退出即关房；全员走空自动回收；否则广播剩余成员
@@ -674,27 +855,7 @@ func (s *Server) gnHandleLeave(c *Client, p *gnRoomSignal) {
 	if roomID == "" {
 		return
 	}
-	ctx := context.Background()
-	meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
-	if len(meta) == 0 {
-		return // 房间已解散，静默（客户端态以 closed 为准）
-	}
-	host := meta["host"]
-	store.RDB.HDel(ctx, gnMemberKey(roomID), from)
-	store.RDB.SRem(ctx, gnUserKey(from), roomID)
-	if from == host {
-		s.gnCloseRoom(ctx, roomID, "host_left")
-		return
-	}
-	if remain, _ := store.RDB.HLen(ctx, gnMemberKey(roomID)).Result(); remain <= 0 {
-		s.gnCloseRoom(ctx, roomID, "empty")
-		return
-	}
-	s.gnTouch(roomID)
-	s.gnBroadcastState(ctx, roomID)
-	// 连接层收口（110）：退出者在该房间的隧道会话摘除，双方收 abort(left)
-	s.gnNetAbortUser(roomID, from, "left")
-	logger.Info("游戏房间 %s 成员退出：%s", roomID, from)
+	s.gnRemoveMember(context.Background(), roomID, from, "left")
 }
 
 // gnHandleKick 踢人：仅房主；向被踢者下发 closed(kicked)，其余成员广播房间态
@@ -726,8 +887,63 @@ func (s *Server) gnHandleKick(c *Client, p *gnRoomSignal) {
 	s.gnNetAbortUser(roomID, target, "kicked")
 	s.gnSendRoom(target, &gnEnvelope{Action: "closed", RoomID: roomID, Reason: "kicked"})
 	s.gnTouch(roomID)
+	s.gnRoomsChanged() // 功能二期：列表人数变化，通知大厅即时刷新
 	s.gnBroadcastState(ctx, roomID)
 	logger.Info("游戏房间 %s 成员被踢：%s（房主 %s）", roomID, target, from)
+}
+
+// gnHandleTransfer 房主转让（功能二期）：仅当前房主可发起；目标须为房内成员、在线且为 PC 端
+// （端口隧道由 PC 端 Electron 主进程承载，WEB/APP 端无法提供游戏端口，故拒绝对其转让）。
+// 转让后房间态 host 字段切换，随 state 全量广播同步给全部成员；同时摘除房间内全部既有隧道
+// （双方 abort(host_transfer)），由客户端据新 host 重新建链，避免指向旧房主的半死隧道残留。
+func (s *Server) gnHandleTransfer(c *Client, p *gnRoomSignal) {
+	from := c.username
+	roomID := strings.TrimSpace(p.RoomID)
+	target := strings.TrimSpace(p.Target)
+	ctx := context.Background()
+	meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
+	if len(meta) == 0 {
+		s.sendError(c, "房间不存在或已解散")
+		return
+	}
+	if meta["host"] != from {
+		s.sendError(c, "仅房主可移交房主")
+		return
+	}
+	if target == "" || target == from {
+		s.sendError(c, "移交目标无效")
+		return
+	}
+	if ok, _ := store.RDB.HExists(ctx, gnMemberKey(roomID), target).Result(); !ok {
+		s.sendError(c, "该成员不在房间中")
+		return
+	}
+	if !s.isOnlineFast(target) {
+		s.sendError(c, "该成员当前不在线，无法移交房主")
+		return
+	}
+	// 目标端能力归口：端口隧道需 PC 端承载（同 gnNetProbe 口径；跨实例未知端放行，由其自身判定）
+	if !s.hub.HasPC(target) && len(s.hub.GetAll(target)) > 0 {
+		s.sendError(c, "该成员所在端不支持作为房主（需 PC 客户端）")
+		return
+	}
+	// 转让归口：房主字段切换 + 活跃续期；新 host 的 ready 标记清零（房主不参与准备，同建房口径）
+	ttl := time.Duration(s.cfg.GameNet.RoomTTL) * time.Second
+	pipe := store.RDB.Pipeline()
+	pipe.HSet(ctx, gnRoomKey(roomID), "host", target, "updated_at", strconv.FormatInt(time.Now().Unix(), 10))
+	pipe.HSet(ctx, gnMemberKey(roomID), target, "0")
+	pipe.Expire(ctx, gnRoomKey(roomID), ttl)
+	pipe.Expire(ctx, gnMemberKey(roomID), ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		logger.Error("游戏房间 %s 房主转让写库失败：%v", roomID, err)
+		s.sendError(c, "移交房主失败，请重试")
+		return
+	}
+	// 连接层收口（110）：房主变更后既有隧道（原 host 为端点）全部失效，摘除并双方 abort(host_transfer)
+	s.gnNetAbortRoom(roomID, "host_transfer")
+	s.gnRoomsChanged() // 功能二期：列表建主名变化，通知大厅即时刷新
+	s.gnBroadcastState(ctx, roomID)
+	logger.Info("游戏房间 %s 房主转让：%s → %s", roomID, from, target)
 }
 
 // gnHandleReady 就绪切换：成员自身上报，翻转后广播房间态
@@ -769,15 +985,176 @@ func (s *Server) gnHandleStart(c *Client, p *gnRoomSignal) {
 		return
 	}
 	for u, r := range gnRoomMembers(ctx, roomID) {
-		if u != from && r != "1" {
-			s.sendError(c, "有成员未就绪，无法开局")
-			return
+		if u == from || r == "1" {
+			continue
+		}
+		// 功能二期：离线成员不阻塞开局——其 ready 恒未就绪但已无法操作（断线宽限内，30s 后自动移出）；
+		// 若不放行，客户端退出进程即永久卡死房主开局
+		if !s.isOnlineFast(u) {
+			continue
+		}
+		s.sendError(c, "有成员未就绪，无法开局")
+		return
+	}
+	// 功能二期：开局实测端口回填——房主端「开始游戏」联动启动真实游戏并自动探测监听端口，
+	// 探测结果与建房预填不同时经 start 信令携带（host_port 合法范围才生效，0=沿用原端口），
+	// 加入方随 state 更新 host_port 后 connect 自动对准真实端口
+	if p.HostPort >= 1024 && p.HostPort <= 65535 {
+		store.RDB.HSet(ctx, gnRoomKey(roomID), "host_port", strconv.Itoa(p.HostPort))
+	}
+	// 功能二期：实测发现的新端口自动累加进游戏登记集（追加去重，管理端手工登记为准不覆盖），
+	// 同端口不重复登记（天然只记一次）；下次建房选该游戏即预填完整端口集。
+	// 游戏归属以房间 meta.game_id 为准（start 信令无需重复携带）
+	if len(p.OnlinePortsTCP) > 0 || len(p.OnlinePortsUDP) > 0 {
+		if gid, _ := strconv.Atoi(meta["game_id"]); gid > 0 {
+			s.gnMergeOnlinePorts(gid, p.OnlinePortsTCP, p.OnlinePortsUDP)
 		}
 	}
 	store.RDB.HSet(ctx, gnRoomKey(roomID), "status", "playing")
 	s.gnTouch(roomID)
+	s.gnRoomsChanged() // 功能二期：列表状态变化（等待→进行中），通知大厅即时刷新
 	s.gnBroadcastState(ctx, roomID)
 	logger.Info("游戏房间 %s 开局（房主 %s）", roomID, from)
+}
+
+// gnHandleEnd 结束对局（功能二期）：仅房主；playing → waiting（幂等：非 playing 静默）。
+// 成员 ready 清零（新对局重新准备）、对局隧道收口（对局结束连接即失效）——
+// 房间与成员保留，房主可再次开局（按钮回「开始游戏」），加入方无需重新加入
+func (s *Server) gnHandleEnd(c *Client, p *gnRoomSignal) {
+	from := c.username
+	roomID := strings.TrimSpace(p.RoomID)
+	ctx := context.Background()
+	meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
+	if len(meta) == 0 {
+		return
+	}
+	if meta["host"] != from {
+		s.sendError(c, "仅房主可结束对局")
+		return
+	}
+	if meta["status"] != "playing" {
+		return
+	}
+	members := gnRoomMembers(ctx, roomID)
+	for u := range members {
+		if u != from {
+			store.RDB.HSet(ctx, gnMemberKey(roomID), u, "0")
+		}
+	}
+	store.RDB.HSet(ctx, gnRoomKey(roomID), "status", "waiting")
+	s.gnTouch(roomID)
+	s.gnNetAbortRoom(roomID, "game_end")
+	s.gnRoomsChanged() // 列表状态回「等待中」
+	s.gnBroadcastState(ctx, roomID)
+	logger.Info("游戏房间 %s 结束对局（房主 %s）", roomID, from)
+}
+
+// gnStartupSweep 启动补偿扫描（功能二期）：离线清退定时器为进程内存态，服务端重启即丢失——
+// 重启前未到期的清退随之失效，孤儿房间（成员已全部断线）会挂到 room_ttl（2h）才回收。
+// 启动后延迟扫描全部活跃房间：全离线=关房；房主离线=关房；部分离线=逐个移出。
+// 重启场景全体连接必然已断（unregister 已删 Redis 在线缓存），30s 宽限无意义，直接清；
+// 启动后已重连上线的用户（isOnlineFast=true）保留其房间（断线重连恢复语义不受影响）
+func (s *Server) gnStartupSweep() {
+	if !s.cfg.GameNet.Enabled {
+		return
+	}
+	ctx := context.Background()
+	ids, _ := store.RDB.SMembers(ctx, gnKeyRoomsIndex).Result()
+	for _, roomID := range ids {
+		meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result()
+		if len(meta) == 0 {
+			store.RDB.SRem(ctx, gnKeyRoomsIndex, roomID) // 惰性清理悬空索引
+			continue
+		}
+		members := gnRoomMembers(ctx, roomID)
+		var offline []string
+		allOffline := true
+		for u := range members {
+			if s.isOnlineFast(u) {
+				allOffline = false
+				continue
+			}
+			offline = append(offline, u)
+		}
+		if len(offline) == 0 {
+			continue // 全员在线：正常房间保留
+		}
+		if allOffline || isHostOffline(meta, offline) {
+			s.gnCloseRoom(ctx, roomID, "startup_sweep")
+			continue
+		}
+		for _, u := range offline {
+			s.gnRemoveMember(ctx, roomID, u, "offline")
+		}
+	}
+	if len(ids) > 0 {
+		logger.Info("游戏房间启动补偿扫描完成：扫描 %d 个活跃房间（清理离线成员/孤儿房间）", len(ids))
+	}
+}
+
+// isHostOffline 房主是否在离线名单中（启动补偿用）
+func isHostOffline(meta map[string]string, offline []string) bool {
+	host := meta["host"]
+	for _, u := range offline {
+		if u == host {
+			return true
+		}
+	}
+	return false
+}
+
+// gnMergeOnlinePorts 开局实测端口累加进游戏登记集（功能二期）：读 im_game.online_ports_tcp/udp
+// 现值 → 与实测端口并集去重 → 仅在有新增时写回（追加不覆盖，管理端手工登记为准）；
+// 游戏不存在（已下架）静默跳过。写库失败仅记日志（不影响本局联机，端口已在房间 meta 生效）。
+// 全局互斥：读-改-写非原子，两个房间同游戏并发开局累加时无锁会互相覆盖丢端口（稳定性实测项）
+var gnMergeOnlinePortsMu sync.Mutex
+
+func (s *Server) gnMergeOnlinePorts(gameID int, tcpPorts, udpPorts []int) {
+	gnMergeOnlinePortsMu.Lock()
+	defer gnMergeOnlinePortsMu.Unlock()
+	var g model.Game
+	if err := store.DB.First(&g, gameID).Error; err != nil {
+		return
+	}
+	merge := func(cur string, add []int) (string, bool) {
+		seen := map[int]bool{}
+		var out []string
+		for _, seg := range strings.Split(cur, ",") {
+			p, err := strconv.Atoi(strings.TrimSpace(seg))
+			if err != nil || p < 1024 || p > 65535 || seen[p] {
+				continue
+			}
+			seen[p] = true
+			out = append(out, strconv.Itoa(p))
+		}
+		changed := false
+		for _, p := range add {
+			if p < 1024 || p > 65535 || seen[p] {
+				continue
+			}
+			seen[p] = true
+			out = append(out, strconv.Itoa(p))
+			changed = true
+		}
+		return strings.Join(out, ","), changed
+	}
+	nt, ct := merge(g.OnlinePortsTCP, tcpPorts)
+	nu, cu := merge(g.OnlinePortsUDP, udpPorts)
+	if !ct && !cu {
+		return
+	}
+	updates := map[string]interface{}{}
+	if ct {
+		updates["online_ports_tcp"] = nt
+	}
+	if cu {
+		updates["online_ports_udp"] = nu
+	}
+	if err := store.DB.Model(&model.Game{}).Where("id = ?", gameID).Updates(updates).Error; err != nil {
+		logger.Error("游戏 %d 联机端口登记累加失败：%v", gameID, err)
+		return
+	}
+	logger.Info("游戏 %d 联机端口登记累加：tcp=%s udp=%s", gameID, nt, nu)
 }
 
 // gnHandleState 主动拉取房间态（仅成员可查）
@@ -1097,8 +1474,9 @@ func (s *Server) gnNetProbe(c *Client, msg *protocol.Message, from string, p *gn
 	gnNetMu.Unlock()
 
 	logger.Info("游戏连接探测：%s → %s（房间 %s，host_port=%d，conn_id=%s）", from, to, roomID, hostPort, sess.ConnID)
-	// 转发房主全部在线端（多端在线全部自动 accept）；TURN 启用时服务端注入 iceServers（复用 callInjectICE）
-	s.gnNetForward(from, to, callInjectICE(msg.Content))
+	// 转发房主全部在线端（多端在线全部自动 accept）；功能二期：注入联机专用中继 iceServers
+	// （未启用联机专用实例时 gnInjectICE 回退主实例池，与历史行为一致）
+	s.gnNetForward(from, to, gnInjectICE(msg.Content))
 }
 
 // gnNetAccept 房主端应答（多端在线全部自动 accept，服务端会话表先到先得锁定唯一赢家）
@@ -1135,12 +1513,12 @@ func (s *Server) gnNetAccept(from, content string, p *gnNetSignalPayload) {
 
 	logger.Info("游戏连接应答：%s 接受 %s 的隧道（端=%s，房间=%s，conn_id=%s）",
 		from, sess.From, p.Platform, sess.RoomID, sess.ConnID)
-	// accept 转发加入者（from 强制房主；TURN 启用时服务端注入 iceServers）
-	s.gnNetForward(from, sess.From, callInjectICE(content))
+	// accept 转发加入者（from 强制房主；功能二期：注入联机专用中继 iceServers）
+	s.gnNetForward(from, sess.From, gnInjectICE(content))
 }
 
 // gnNetRelay 协商中继（offer/answer/candidate/relay）：校验会话存在与参与者身份后向对端转发，
-// TURN 启用时服务端注入 iceServers（复用 callInjectICE，原样中继媒体字段不解析）
+// 功能二期：注入联机专用中继 iceServers（未启用专用实例时回退主实例池，原样中继媒体字段不解析）
 func (s *Server) gnNetRelay(from, content string, p *gnNetSignalPayload) {
 	sess := gnNetSessionOf(p.ConnID)
 	if sess == nil {
@@ -1163,7 +1541,7 @@ func (s *Server) gnNetRelay(from, content string, p *gnNetSignalPayload) {
 	if peer == "" {
 		return
 	}
-	s.gnNetForward(from, peer, callInjectICE(content))
+	s.gnNetForward(from, peer, gnInjectICE(content))
 }
 
 // gnNetPing 联机期保活帧：刷新会话活跃 + 续期房间 TTL（联机期间房间活跃由 110 共同维持），

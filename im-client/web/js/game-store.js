@@ -3330,9 +3330,9 @@
     }
 
     // 启动流程：读取用户启动覆盖（属性）→ 组装参数（{0}/{1} 替换）→ gameLaunch → needExe 降级手动选
-    function launchGame(gid, exePath) {
-        if (!username) { toast('请先在主界面登录后再使用游戏中心'); return; }
-        if (!DESKTOP || !DESKTOP.gameLaunch) { toast('请在 PC 客户端中启动游戏'); return; }
+    function launchGame(gid, exePath, onResult) {
+        if (!username) { if (onResult) onResult(false, '请先在主界面登录'); toast('请先在主界面登录后再使用游戏中心'); return; }
+        if (!DESKTOP || !DESKTOP.gameLaunch) { if (onResult) onResult(false, '请在 PC 客户端中启动游戏'); toast('请在 PC 客户端中启动游戏'); return; }
         var meta = gameLaunchMeta(gid);
         var libDir = (state.lib[gid] && state.lib[gid].lib && state.lib[gid].lib.install_path) || '';
         // 启动前拉取云端存档（P1：仅本地无存档且云端有才下载；P2：两侧都改过则弹冲突裁决后再启动；失败不阻断启动）
@@ -3340,9 +3340,10 @@
             ? DESKTOP.gameSaveSync(saveSyncPayload(gid, 'pull')).catch(function () { return null; })
             : Promise.resolve(null);
         pullP.then(function (sv) {
-            if (sv && sv.conflict) return handleSaveConflict(gid, sv, 'pull'); // 等待用户裁决后再启动
+            if (sv && sv.conflict) { if (onResult) onResult(false, '云存档冲突待裁决'); return handleSaveConflict(gid, sv, 'pull'); }
             return sv;
         }).then(function (sv) {
+            if (sv && sv.conflict) return null; // 冲突未裁决：中止本次启动（结果已回调，弹窗交由用户处理）
             if (sv && sv.downloaded) toast('已从云端同步存档（' + sv.downloaded + ' 个文件）');
             else if (sv && sv.error) toast('云存档下载失败：' + sv.error);
             var optsP = DESKTOP.gameGetLaunchOptions ? DESKTOP.gameGetLaunchOptions(gid) : Promise.resolve(null);
@@ -3356,18 +3357,20 @@
                 return DESKTOP.gameLaunch(payload);
             });
         }).then(function (r) {
-            if (r && r.ok) { onLaunched(gid, r.startedAt); return; }
+            if (r && r.ok) { onLaunched(gid, r.startedAt); if (onResult) onResult(true, ''); return; }
             if (r && r.needExe) {
+                if (onResult) onResult(false, 'need_exe');
                 showConfirm('选择游戏主程序', '未能找到游戏主程序（exe），请手动选择，选择后将开始游戏。', '选择文件', function () {
                     DESKTOP.gameChooseGameExe().then(function (rr) {
-                        if (!rr || rr.canceled || !rr.filePath) return;
-                        launchGame(gid, rr.filePath); // 带 exePath 重试
+                        if (!rr || rr.canceled || !rr.filePath) { if (onResult) onResult(false, 'canceled'); return; }
+                        launchGame(gid, rr.filePath, onResult); // 带 exePath 重试（结果继续回调）
                     });
                 });
                 return;
             }
+            if (onResult) onResult(false, (r && r.error) || '启动失败');
             toast((r && r.error) || '启动失败');
-        }).catch(function () { toast('启动失败'); });
+        }).catch(function (e) { if (onResult) onResult(false, (e && e.message) || '启动失败'); toast('启动失败'); });
     }
 
     // 加入库/获取（Steam 同款购买流）：免费直接入库；收费弹自绘确认后扣积分（服务端严格扣减，
@@ -4522,6 +4525,43 @@
         } catch (err) { out = []; }
         return out;
     };
+    // 功能二期：联机房间启动联动归口——gn-room.js「开始游戏」/加入方开局确认框复用游戏库启动链路
+    // （launchGame 内含云存档同步/启动参数/needExe 引导，与游戏库「启动」按钮完全同源）。
+    // onResult(ok, info) 可选回调：启动最终结果（成功/失败原因）回传调用方——联机开局据此决定
+    // 继续探测端口还是提示用户；云存档冲突弹窗期间 onResult(false,'云存档冲突待裁决') 先行回传
+    window.GSLaunchGame = function (gid, onResult) {
+        try { launchGame(String(gid || '0'), '', onResult); } catch (err) { if (onResult) onResult(false, (err && err.message) || '启动异常'); }
+    };
+    // 游戏启动元数据（探测用）：proc=进程镜像名（launch_exe 文件名，缺省按 launch_name 推导）
+    // 供联机端口自动探测按进程过滤（房间开始游戏轮询 / 建房端口预填）
+    // 未入库/未安装（state 非 3/4）返回 null——联机房间开局联动据此区分「可启动」与「引导安装」，
+    // 避免对未安装游戏弹启动确认后落入手动选 exe 的混乱体验
+    window.GSGameMeta = function (gid) {
+        try {
+            var e = state.lib[String(gid || '0')];
+            var st = e && e.lib && e.lib.state;
+            if (st !== 3 && st !== 4) return null; // 未入库/未安装：无启动元数据
+            var m = gameLaunchMeta(String(gid || '0')) || {};
+            var g = (e.game) || {};
+            var exe = String(m.exe || '').replace(/^.*[\\/]/, '');
+            var nm = String(m.name || '').replace(/\.exe$/i, '');
+            var proc = (exe || (nm ? nm + '.exe' : '')).toLowerCase();
+            return {
+                name: nm || (m.exe || ''), exe: exe, proc: proc,
+                // 功能二期：联机端口登记（逗号分隔串 → 数组；建房预填 + 开局实测累加回传）
+                portsTCP: parsePorts(g.online_ports_tcp),
+                portsUDP: parsePorts(g.online_ports_udp)
+            };
+        } catch (err) { return null; }
+    };
+    function parsePorts(s) {
+        var out = [];
+        String(s || '').split(/[,\s，；]+/).forEach(function (seg) {
+            var p = parseInt(seg, 10);
+            if (isFinite(p) && p >= 1024 && p <= 65535 && out.indexOf(p) === -1) out.push(p);
+        });
+        return out;
+    }
 
     showView('store');
     // 先拉商店布局配置（管理端改后用户下次打开即热生效），再加载商店列表渲染

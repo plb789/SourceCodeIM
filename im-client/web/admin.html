@@ -174,6 +174,20 @@
                     <div class="dash-card"><span class="dash-card-label">直连率</span><span class="dash-card-value sm" id="dash-calls-rate">-</span></div>
                     <div class="dash-card"><span class="dash-card-label">链路未统计</span><span class="dash-card-value sm" id="dash-calls-unknown">-</span></div>
                 </div>
+                <!-- 联机二期 §9.4-4：TURN 中继占用量（实时存量，接近容量水位即告警） -->
+                <h3 class="dash-subtitle">TURN 中继占用</h3>
+                <div class="dash-cards dash-cards-3">
+                    <div class="dash-card"><span class="dash-card-label">当前占用</span><span class="dash-card-value sm" id="dash-relay-now">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">端口容量</span><span class="dash-card-value sm" id="dash-relay-cap">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">占用峰值</span><span class="dash-card-value sm" id="dash-relay-peak">-</span></div>
+                </div>
+                <!-- 功能二期：联机专用中继实例占用（独立监听端口 + 独立端口子段，与上方主实例池互不干扰） -->
+                <h3 class="dash-subtitle">联机中继占用（专用实例）</h3>
+                <div class="dash-cards dash-cards-3">
+                    <div class="dash-card"><span class="dash-card-label">当前占用</span><span class="dash-card-value sm" id="dash-gnrelay-now">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">端口容量</span><span class="dash-card-value sm" id="dash-gnrelay-cap">-</span></div>
+                    <div class="dash-card"><span class="dash-card-label">占用峰值</span><span class="dash-card-value sm" id="dash-gnrelay-peak">-</span></div>
+                </div>
                 <p class="admin-view-tip" id="dash-meta"></p>
             </section>
 
@@ -1320,6 +1334,11 @@
                     <input id="gm-f-launch-exe" class="admin-input" placeholder="启动程序路径（相对安装目录，如 bin/game.exe，可空）" maxlength="255">
                 </div>
                 <input id="gm-f-launch-args" class="admin-input" placeholder="启动参数（可空；占位符：{0}=登录账号，{1}=账号专属密码）" maxlength="1024">
+                <!-- 功能二期：联机端口登记（逗号分隔多端口）——建房选游戏自动预填 + 开局实测新端口自动累加 -->
+                <div class="gm-form-row">
+                    <input id="gm-f-ports-tcp" class="admin-input" placeholder="联机 TCP 端口（逗号分隔，如 6112,6113；可空）" maxlength="255">
+                    <input id="gm-f-ports-udp" class="admin-input" placeholder="联机 UDP 端口（逗号分隔，如 6112；可空）" maxlength="255">
+                </div>
                 <!-- 云存档：默认存档采集路径（Steam 同款云存档 P1，每行一个 glob；客户端据此收集并上传存档） -->
                 <textarea id="gm-f-save-paths" class="admin-input gm-desc-input" rows="3" placeholder="云存档采集路径（每行一个 glob；相对路径以该游戏库记录的安装目录为锚点（有「安装根」/「游戏目录」两种形态，易多/少一层目录），建议用绝对路径如 %USERPROFILE%/Documents/My Games/X/**；可空）"></textarea>
                 <textarea id="gm-f-save-exclude" class="admin-input gm-desc-input" rows="2" placeholder="云存档排除模式（每行一个 glob，如 *.log、*.tmp；可空）"></textarea>

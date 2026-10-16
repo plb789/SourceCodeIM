@@ -444,9 +444,17 @@
         restartTimer = setInterval(tryIceRestart, 3000);
     }
 
+    // 联机二期 §9.4-5：本机并发活动态上报（通话/会议 是否在跑 → 主进程缓存，供游戏中心窗建立联机时反查）
+    // 口径：只在活跃态翻转处调用（接通 setActive / 收口 finish），零额外逻辑；Web 端无 desktop 时静默跳过
+    function reportActOther() {
+        if (!window.desktop || typeof window.desktop.actOtherReport !== 'function') return;
+        window.desktop.actOtherReport('call', st.state === 'active');
+    }
+
     function setActive() {
         if (st.state === 'active' || st.ended) return;
         st.state = 'active';
+        reportActOther();
         clearWatchdog();
         toneStop();
         st.startedAt = Date.now();
@@ -505,6 +513,7 @@
         if (st.ended) return;
         st.ended = true;
         st.state = 'ended';
+        reportActOther(); // 联机二期 §9.4-5：收口即撤销本机「通话中」标记（主进程缓存同步）
         stopMeetRecording(); // 会议录制随收口自动停并保存（写盘异步由主进程完成，关窗不丢数据）
         closeInvitePanel(); // 阶段一百五十三：会议收口同步关邀请面板（防面板滞留遮挡收口遮罩）
         toneStop();
