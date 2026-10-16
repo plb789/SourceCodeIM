@@ -40,6 +40,9 @@ const KEY_RE = /^[^\s|:]{1,64}$/;
 const PROTOCOLS = { udp: true, tcp: true };
 const ROLES = { host: true, join: true };
 
+const FALLBACK_SPAN = 16;      // 端口顺延扫描跨度（原端口+1 起，如 6112 被占 → 6113~6128）
+const PLAN_WAIT_MS = 3000;     // TCP 侧等待 UDP 侧端口裁决的兜底时长（两路 open 并发，正常毫秒级即裁决）
+
 const LOCAL_CACHE_MS = 60000;   // 本机地址表缓存（网卡地址变动罕见，避免每次连接枚举）
 const IDLE_SWEEP_MS = 30000;    // 空闲清扫周期
 const IDLE_CLOSE_MS = 900000;   // 15 分钟双向零字节 → 收口（防孤儿隧道；正常联机由 110 ping 保活，此处仅兜底）
@@ -99,6 +102,93 @@ function validPort(p) {
     return p >= MIN_PORT && p <= MAX_PORT && !RESERVED_PORTS[p];
 }
 
+// ----- join 数据端口方案归口 -----
+// 同房间同对端的 UDP 数据口与 TCP 监听口必须同号（GameInfo 仅一个 GamePort 字段，游戏按它同时发起
+// TCP 加入与 UDP 对战流量）；渲染层两路 open 并发到达（Promise.all），由 UDP 侧裁决：先试原端口，
+// 被本机游戏先占则顺延扫描；TCP 侧等待裁决结果后按同端口监听。
+GameTunnel.prototype.joinPlan = function (roomId, peer, reqPort) {
+    var key = roomId + '|' + peer;
+    var plan = this.joinPlans.get(key);
+    if (plan) return plan;
+    plan = { reqPort: reqPort, dataPort: 0, ready: false, waiters: [] };
+    this.joinPlans.set(key, plan);
+    plan.settle = function (port) {
+        plan.dataPort = port | 0;
+        if (plan.ready) return;
+        plan.ready = true;
+        var ws = plan.waiters;
+        plan.waiters = [];
+        for (var i = 0; i < ws.length; i++) { try { ws[i](plan.dataPort); } catch (e) { } }
+    };
+    plan.wait = function (fn) {
+        if (plan.ready) { fn(plan.dataPort); return; }
+        plan.waiters.push(fn);
+        setTimeout(function () { plan.settle(plan.reqPort); }, PLAN_WAIT_MS); // UDP 侧异常未裁决兜底：按原端口继续
+    };
+    return plan;
+};
+
+// 房间加入侧隧道实际数据端口（顺延后 UDP/TCP 同号；0=无可用隧道——代理据此跳过 GamePort 补丁）
+GameTunnel.prototype.dataPortOf = function (roomId) {
+    var p = 0;
+    this.tunnels.forEach(function (c) {
+        if (!p && c.roomId === roomId && c.role === 'join' && (c.udp || c.tcpServer)) p = c.port;
+    });
+    return p;
+};
+
+// 备用端口顺序扫描（UDP/TCP 共用骨架）：逐个试独占绑定，成功即连同套接字交还（避免重绑竞态）；
+// 全部失败回调 (0, null)。bindFn(p, cb) 由调用方按协议注入
+function scanPort(from, span, bindFn, cb) {
+    var p = from;
+    var end = from + span;
+    (function next() {
+        if (p > end || p > MAX_PORT) { cb(0, null); return; }
+        if (RESERVED_PORTS[p]) { p++; next(); return; }
+        bindFn(p, function (ok, sk) {
+            if (ok) { cb(p, sk); return; }
+            p++;
+            next();
+        });
+    })();
+}
+
+function scanUdp(from, span, cb) {
+    scanPort(from, span, function (p, done) {
+        var sk = dgram.createSocket({ type: 'udp4', reuseAddr: false });
+        var fired = false;
+        sk.on('error', function () {
+            if (fired) return;
+            fired = true;
+            try { sk.close(); } catch (e) { }
+            done(false, null);
+        });
+        sk.bind(p, '0.0.0.0', function () {
+            if (fired) { try { sk.close(); } catch (e) { } return; }
+            fired = true;
+            done(true, sk);
+        });
+    }, cb);
+}
+
+function scanTcp(from, span, cb) {
+    scanPort(from, span, function (p, done) {
+        var sk = net.createServer({ allowHalfOpen: false, pauseOnConnect: false });
+        var fired = false;
+        sk.on('error', function () {
+            if (fired) return;
+            fired = true;
+            try { sk.close(); } catch (e) { }
+            done(false, null);
+        });
+        sk.listen(p, '0.0.0.0', function () {
+            if (fired) { try { sk.close(); } catch (e) { } return; }
+            fired = true;
+            done(true, sk);
+        });
+    }, cb);
+}
+
 function keyOf(roomId, peer, proto) { return roomId + '|' + peer + '|' + proto; }
 
 function toBuf(b) {
@@ -114,6 +204,7 @@ function toBuf(b) {
 // ===== 隧道管理器 =====
 function GameTunnel() {
     this.tunnels = new Map(); // key → ctx
+    this.joinPlans = new Map(); // room|peer → {reqPort, dataPort, ready, waiters}（join 数据端口方案，UDP 侧裁决）
     this.emit = function () { };              // main.js 注入：主进程 → 渲染进程帧送出
     this.log = function (msg) { console.log('[game-tunnel] ' + msg); };
     this.sweepTimer = null;
@@ -134,15 +225,26 @@ GameTunnel.prototype.open = function (args) {
     var a = args || {};
     var roomId = typeof a.room_id === 'string' ? a.room_id.trim() : '';
     var peer = typeof a.peer === 'string' ? a.peer.trim() : '';
+    self.log('隧道开请求：room=' + roomId + ' peer=' + peer + ' proto=' + a.proto + ' role=' + a.role + ' port=' + a.port + (a.host_ip ? ' host_ip=' + a.host_ip : ''));
     if (!KEY_RE.test(roomId) || !KEY_RE.test(peer)) {
+        self.log('隧道开拒绝：bad_key（键格式不符）');
         return Promise.resolve({ ok: false, err: 'bad_key' });
     }
-    if (!PROTOCOLS[a.proto] || !ROLES[a.role]) return Promise.resolve({ ok: false, err: 'bad_args' });
-    if (!validPort(a.port)) return Promise.resolve({ ok: false, err: 'bad_port' });
+    if (!PROTOCOLS[a.proto] || !ROLES[a.role]) {
+        self.log('隧道开拒绝：bad_args（proto/role 非法）');
+        return Promise.resolve({ ok: false, err: 'bad_args' });
+    }
+    if (!validPort(a.port)) {
+        self.log('隧道开拒绝：bad_port（端口 ' + a.port + ' 越界/保留）');
+        return Promise.resolve({ ok: false, err: 'bad_port' });
+    }
     var hostIp = String(a.host_ip || '');
     if (a.role === 'host') {
         if (!hostIp) hostIp = localPrimaryIP() || '127.0.0.1'; // 缺省用本机局域网 IP（透传反射源地址兼容性，见 localPrimaryIP）
-        if (!isLocalAddr(hostIp)) return Promise.resolve({ ok: false, err: 'bad_host_ip' });
+        if (!isLocalAddr(hostIp)) {
+            self.log('隧道开拒绝：bad_host_ip（' + hostIp + ' 非本机地址）');
+            return Promise.resolve({ ok: false, err: 'bad_host_ip' });
+        }
     }
 
     // 幂等：同键重复打开先收口（静默，不向渲染进程回事件，防重复 ready）
@@ -150,7 +252,7 @@ GameTunnel.prototype.open = function (args) {
 
     var ctx = {
         roomId: roomId, peer: peer, proto: a.proto, role: a.role,
-        port: a.port, hostIp: a.role === 'host' ? hostIp : '',
+        port: a.port, reqPort: a.port, hostIp: a.role === 'host' ? hostIp : '',
         lastAct: Date.now(), closed: false, quiet: false,
         udp: null, tcpServer: null, streams: new Map(), sid: 1,
         lastSrc: null, localOnly: localAddrs()
@@ -165,6 +267,7 @@ GameTunnel.prototype.open = function (args) {
         function bad(err) {
             if (settled) { self.emitEvent(ctx, 0, 'error', err); return; }
             settled = true;
+            self.log('隧道开失败：' + err + '（room=' + roomId + ' proto=' + ctx.proto + ' role=' + ctx.role + '）');
             self.destroy(ctx);
             resolve({ ok: false, err: err });
         }
@@ -266,42 +369,78 @@ GameTunnel.prototype.deliver = function (frame) {
 };
 
 // ----- UDP -----
+// 加入方 UDP：先试原端口（与房主游戏同号——拦截模式下搜索帧钩子在此应答）；被本机游戏先占
+// （先开游戏后加入——实测 War3 列表页即预占 6112 的 TCP+UDP，管理员权限下普通进程无法旁路绑定）
+// 则数据面顺延扫备用端口，GameInfo 的 GamePort 字段由广播代理补丁为实际端口，游戏连接仍命中隧道
 GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
     var self = this;
-    var sock = dgram.createSocket({ type: 'udp4', reuseAddr: false });
-    ctx.udp = sock;
-    sock.on('error', function (e) {
-        if (ctx.closed) return;
-        if (ctx.fail) { ctx.fail('udp_bind:' + ((e && e.message) || '')); return; }
-        self.emitEvent(ctx, 0, 'error', (e && e.message) || 'udp_error');
-    });
-    sock.on('message', function (msg, rinfo) {
-        if (ctx.closed) return;
-        if (!ctx.localOnly[normalizeAddr(rinfo.address)]) return; // 仅本机来源（他人直连本端口一律丢弃）
-        ctx.lastAct = Date.now();
-        ctx.lastSrc = { address: rinfo.address, port: rinfo.port };
-        // 功能二期方案 B：广播发现代理——本机游戏的 SearchGame（0xF7 0x2F）帧由代理本地应答
-        // （虚拟主机模型），不进隧道转发（转发会给房主游戏塞垃圾包）；无代理/非搜索帧照旧转发
-        if (msg.length >= 4 && msg[0] === 0xF7 && msg[1] === 0x2F && self.broadcastHook) {
-            var replies = null;
-            try { replies = self.broadcastHook(ctx.roomId, msg, rinfo); } catch (e) { replies = null; }
-            if (replies && replies.length) {
-                for (var i = 0; i < replies.length; i++) {
-                    var rb = replies[i];
-                    try { sock.send(rb, 0, rb.length, rinfo.port, rinfo.address); } catch (e) { }
+    var settled = false;
+    var plan = this.joinPlan(ctx.roomId, ctx.peer, ctx.reqPort);
+    // 套接字接线归口（原端口与顺延端口共用）：本机游戏字节进隧道转发；搜索帧（0xF7 0x2F）交代理本地应答
+    function wire(sk) {
+        sk.on('error', function (e) {
+            if (ctx.closed) return;
+            self.log('UDP 套接字错误（房间 ' + ctx.roomId + '）：' + ((e && e.message) || 'udp_error'));
+        });
+        sk.on('message', function (msg, rinfo) {
+            if (ctx.closed) return;
+            if (!ctx.localOnly[normalizeAddr(rinfo.address)]) return; // 仅本机来源（他人直连本端口一律丢弃）
+            ctx.lastAct = Date.now();
+            ctx.lastSrc = { address: rinfo.address, port: rinfo.port };
+            // 功能二期方案 B：广播发现代理——本机游戏的 SearchGame（0xF7 0x2F）帧由代理本地应答
+            // （虚拟主机模型），不进隧道转发（转发会给房主游戏塞垃圾包）；无代理/非搜索帧照旧转发
+            if (msg.length >= 4 && msg[0] === 0xF7 && msg[1] === 0x2F && self.broadcastHook) {
+                var replies = null;
+                try { replies = self.broadcastHook(ctx.roomId, msg, rinfo); } catch (e) { replies = null; }
+                if (replies && replies.length) {
+                    for (var i = 0; i < replies.length; i++) {
+                        var rb = replies[i];
+                        try { sk.send(rb, 0, rb.length, rinfo.port, rinfo.address); } catch (e) { }
+                    }
+                    return;
                 }
-                return;
             }
-        }
-        self.emitData(ctx, 0, msg);
+            self.emitData(ctx, 0, msg);
+        });
+    }
+    function finish(sk, port) {
+        ctx.udp = sk;
+        ctx.port = port;
+        plan.settle(port); // 端口方案归口：TCP 侧等此裁决（漏调曾致 TCP 每次固定等满 3s 兜底，挤占协商预算）
+        self.log('UDP 监听就绪 0.0.0.0:' + port + '（房间 ' + ctx.roomId +
+            (port !== plan.reqPort ? '，原端口被本机游戏先占已顺延' : '') + '）');
+        self.emitEvent(ctx, 0, 'listen'); // 渲染层据此启动广播代理（拦截/直投两态由代理按 udpBindOk 自选）
+        if (!settled) { settled = true; ctx.fail = null; ok(); }
+    }
+    var sk = dgram.createSocket({ type: 'udp4', reuseAddr: false });
+    wire(sk);
+    sk.on('error', function (e) {
+        if (ctx.closed || settled) return;
+        var msg = (e && e.message) || 'udp_error';
+        try { sk.close(); } catch (e2) { }
+        if (ctx.udp) { if (ctx.fail) ctx.fail('udp_bind:' + msg); return; }
+        // 原端口绑定失败 → 顺延扫描（数据面端口经 plan 与 TCP 侧保持同号）
+        self.log('UDP ' + ctx.port + ' 绑定失败（本机游戏先占）：顺延扫描备用端口（房间 ' + ctx.roomId + '）');
+        scanUdp(ctx.port + 1, FALLBACK_SPAN, function (p, sk2) {
+            if (ctx.closed) { if (sk2) { try { sk2.close(); } catch (e3) { } } return; }
+            if (!p) { self.log('顺延扫描无可用端口（房间 ' + ctx.roomId + '）'); if (ctx.fail) ctx.fail('udp_bind:' + msg); return; }
+            wire(sk2);
+            finish(sk2, p);
+        });
     });
-    sock.bind(ctx.port, '0.0.0.0', function () {
-        if (ctx.closed) return;
-        try { sock.setBroadcast(true); } catch (e) { } // 功能二期方案 B：RefreshGame 子网广播需要
-        self.log('UDP 监听就绪 0.0.0.0:' + ctx.port + '（房间 ' + ctx.roomId + '）');
-        self.emitEvent(ctx, 0, 'listen');
-        ok();
+    sk.bind(ctx.port, '0.0.0.0', function () {
+        if (ctx.closed) { try { sk.close(); } catch (e) { } return; }
+        finish(sk, ctx.port);
     });
+};
+
+// 查询房间 join UDP 是否仍持有原端口（未顺延）——广播代理据此选择拦截模式（钩子应答）或直投模式
+GameTunnel.prototype.udpBindOk = function (roomId) {
+    var ok = false;
+    this.tunnels.forEach(function (c) {
+        if (!ok && c.roomId === roomId && c.role === 'join' && c.proto === 'udp' && c.udp && c.port === c.reqPort) ok = true;
+    });
+    return ok;
 };
 
 GameTunnel.prototype.startUdpHost = function (ctx, ok, bad) {
@@ -324,54 +463,88 @@ GameTunnel.prototype.startUdpHost = function (ctx, ok, bad) {
     sock.bind(0, function () {
         if (ctx.closed) return;
         self.log('UDP 房主隧道就绪 → ' + ctx.hostIp + ':' + ctx.port + '（房间 ' + ctx.roomId + '）');
+        // 必发 listen：渲染层据此启动主机端探测代理（探测本机游戏真实 GameInfo 中继给加入方）。
+        // 缺失此事件时主机端代理永不启动 → 加入方收不到 relayGI → 防幻影静默 → 列表永远为空（实测根因）
+        self.emitEvent(ctx, 0, 'listen');
         ok();
     });
 };
 
 // ----- TCP -----
+// 加入方 TCP：端口随 UDP 侧裁决（两路 open 并发——数据端口必须同号，GameInfo 仅一个 GamePort 字段）；
+// 裁决端口监听失败（罕见竞态）→ 顺延扫描；扫描耗尽 → 会话失败（可见报错，不再无限重试同端口）
 GameTunnel.prototype.startTcpJoin = function (ctx, ok, bad) {
     var self = this;
-    var srv = net.createServer({ allowHalfOpen: false, pauseOnConnect: false });
-    ctx.tcpServer = srv;
-    srv.on('error', function (e) {
+    var settled = false;
+    var plan = this.joinPlan(ctx.roomId, ctx.peer, ctx.reqPort);
+    plan.wait(function (dp) {
         if (ctx.closed) return;
-        if (ctx.fail) { ctx.fail('tcp_listen:' + ((e && e.message) || '')); return; }
-        self.emitEvent(ctx, 0, 'error', (e && e.message) || 'tcp_error');
-    });
-    srv.on('connection', function (sock) {
-        if (ctx.closed) { try { sock.destroy(); } catch (e) { } return; }
-        if (!ctx.localOnly[normalizeAddr(sock.remoteAddress)]) {
-            self.log('TCP 拒绝非本机来源 ' + sock.remoteAddress + '（房间 ' + ctx.roomId + '）');
-            try { sock.destroy(); } catch (e) { }
-            return;
+        if (dp && dp !== ctx.port) {
+            self.log('TCP 数据端口随 UDP 侧裁决 → ' + dp + '（房间 ' + ctx.roomId + '）');
+            ctx.port = dp;
         }
-        ctx.lastAct = Date.now();
-        var sid = ctx.sid++;
-        if (sid > 0x7fffffff) ctx.sid = 1;
-        ctx.streams.set(sid, sock);
-        try { sock.setNoDelay(true); } catch (e) { }
-        sock.on('data', function (chunk) {
-            if (ctx.closed) return;
-            ctx.lastAct = Date.now();
-            self.emitData(ctx, sid, chunk);
-        });
-        sock.on('close', function () {
-            if (ctx.streams.get(sid) === sock) {
-                ctx.streams.delete(sid);
-                if (!ctx.closed) self.emitEvent(ctx, sid, 'close');
+        listen(ctx.port);
+    });
+    // 套接字接线归口（裁决端口与顺延端口共用）：本机游戏加入连接（TCP）进隧道转发
+    function wire(server) {
+        server.on('connection', function (sock) {
+            if (ctx.closed) { try { sock.destroy(); } catch (e) { } return; }
+            if (!ctx.localOnly[normalizeAddr(sock.remoteAddress)]) {
+                self.log('TCP 拒绝非本机来源 ' + sock.remoteAddress + '（房间 ' + ctx.roomId + '）');
+                try { sock.destroy(); } catch (e) { }
+                return;
             }
+            ctx.lastAct = Date.now();
+            var sid = ctx.sid++;
+            if (sid > 0x7fffffff) ctx.sid = 1;
+            ctx.streams.set(sid, sock);
+            try { sock.setNoDelay(true); } catch (e) { }
+            sock.on('data', function (chunk) {
+                if (ctx.closed) return;
+                ctx.lastAct = Date.now();
+                self.emitData(ctx, sid, chunk);
+            });
+            sock.on('close', function () {
+                if (ctx.streams.get(sid) === sock) {
+                    ctx.streams.delete(sid);
+                    if (!ctx.closed) self.emitEvent(ctx, sid, 'close');
+                }
+            });
+            sock.on('error', function () {
+                try { sock.destroy(); } catch (e) { }
+            });
+            self.emitEvent(ctx, sid, 'open');
         });
-        sock.on('error', function () {
-            try { sock.destroy(); } catch (e) { }
+    }
+    function listen(port) {
+        var sk = net.createServer({ allowHalfOpen: false, pauseOnConnect: false });
+        sk.on('error', function (e) {
+            if (ctx.closed) return;
+            var msg = (e && e.message) || 'tcp_error';
+            if (settled) { self.emitEvent(ctx, 0, 'error', msg); return; } // 运行期错误：报事件不失败
+            try { sk.close(); } catch (e2) { }
+            self.log('TCP ' + port + ' 监听失败：顺延扫描备用端口（房间 ' + ctx.roomId + '）');
+            scanTcp(port + 1, FALLBACK_SPAN, function (p, sk2) {
+                if (ctx.closed) { if (sk2) { try { sk2.close(); } catch (e3) { } } return; }
+                if (!p) { self.log('顺延扫描无可用端口（房间 ' + ctx.roomId + '）'); if (ctx.fail) ctx.fail('tcp_listen:' + msg); return; }
+                ctx.port = p; // 与 UDP 数据口失配（仅 GamePort 补丁取 UDP 侧时加入连接受限），日志可见
+                wire(sk2);
+                ready(sk2, p); // 扫描返回的 server 已在监听，直接进入就绪（不可重复 listen）
+            });
         });
-        self.emitEvent(ctx, sid, 'open');
-    });
-    srv.listen(ctx.port, '0.0.0.0', function () {
-        if (ctx.closed) return;
-        self.log('TCP 监听就绪 0.0.0.0:' + ctx.port + '（房间 ' + ctx.roomId + '）');
-        self.emitEvent(ctx, 0, 'listen');
-        ok();
-    });
+        wire(sk);
+        sk.listen(port, '0.0.0.0', function () {
+            if (ctx.closed) { try { sk.close(); } catch (e) { } return; }
+            ready(sk, port);
+        });
+    }
+    // 监听就绪归口（裁决端口与顺延端口共用）：登记 server + 发 listen + resolve open
+    function ready(sk, port) {
+        ctx.tcpServer = sk;
+        self.log('TCP 监听就绪 0.0.0.0:' + port + '（房间 ' + ctx.roomId + '）');
+        self.emitEvent(ctx, 0, 'listen'); // 渲染层据此更新链路态（广播代理仅由 UDP listen 启动）
+        if (!settled) { settled = true; ctx.fail = null; ok(); }
+    }
 };
 
 // host 侧按远端 open 帧连本机游戏（connect 失败即回 close，令对端游戏得到明确断链）
@@ -427,6 +600,14 @@ GameTunnel.prototype.destroy = function (ctx) {
     ctx.closed = true;
     ctx.fail = null;
     this.tunnels.delete(keyOf(ctx.roomId, ctx.peer, ctx.proto));
+    // join 端口方案清理：该房间该对端已无任何 join 隧道时摘除（下次加入重新裁决）
+    if (ctx.role === 'join') {
+        var alive = false;
+        this.tunnels.forEach(function (c) {
+            if (c.role === 'join' && c.roomId === ctx.roomId && c.peer === ctx.peer) alive = true;
+        });
+        if (!alive) this.joinPlans.delete(ctx.roomId + '|' + ctx.peer);
+    }
     ctx.streams.forEach(function (sock) { try { sock.destroy(); } catch (e) { } });
     ctx.streams.clear();
     if (ctx.udp) { try { ctx.udp.close(); } catch (e) { } ctx.udp = null; }

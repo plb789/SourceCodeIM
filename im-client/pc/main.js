@@ -2027,11 +2027,52 @@ ipcMain.handle('gn:detect-port', function (event, args) {
 // 策略与包体构造归口 game-broadcast.js；收发复用 game-tunnel 的 join 隧道套接字（setTunnel 注入）
 const gameBroadcast = require('./game-broadcast.js');
 gameBroadcast.setTunnel(gameTunnel);
+// 联机隧道/发现代理日志落盘（此前仅 console.log——打包运行时不可见，联机排障只能靠猜；
+// 256KB 轮转，仅生命周期级事件不记包内容）
+var GN_LOG_MAX = 256 * 1024;
+var gnLogPath = path.join(app.getPath('userData'), 'gn-tunnel.log');
+function gnLogWrite(line) {
+    try {
+        var st = null;
+        try { st = fs.statSync(gnLogPath); } catch (e) { }
+        if (st && st.size > GN_LOG_MAX) fs.writeFileSync(gnLogPath, '');
+        fs.appendFileSync(gnLogPath, '[' + new Date().toLocaleString('zh-CN', { hour12: false }) + '] ' + line + '\r\n');
+    } catch (e) { }
+}
+gameTunnel.setLogger(function (msg) { gnLogWrite('[tunnel] ' + msg); });
+gameBroadcast.setLogger(function (msg) { gnLogWrite('[bcast] ' + msg); });
+gnLogWrite('[main] 客户端启动：隧道/发现代理日志归口就绪');
+// 功能二期：主机端探测到的真实 GameInfo（hex）→ 推给渲染层经隧道 ctl 通道中继给加入方
+gameBroadcast.setRelayHandler(function (roomId, hex) {
+    try { gnBroadcast('gn-broadcast-gi', { room_id: roomId, hex: hex }); } catch (e) { }
+});
 
 // 启动（加入方 join 隧道就绪后）：args = {room_id, game, port, game_name, host_name, slots_total, slots_used}
 ipcMain.handle('gn:broadcast-start', function (event, args) {
     try { return gameBroadcast.start(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'start_fail' }; }
 });
+
+// 加入端接收主机中继的真实 GameInfo（hex）→ 代理缓存，应答/直投优先使用真实数据
+ipcMain.handle('gn:broadcast-relay', function (event, args) {
+    try { return gameBroadcast.setRelayGI(args || {}); } catch (e) { return { ok: false, err: 'relay_fail' }; }
+});
+
+// 渲染层诊断日志桥（联机排障）：渲染层关键分支经此落盘 gn-tunnel.log
+ipcMain.handle('gn:debug-log', function (event, line) {
+    try { gnLogWrite('[render] ' + String(line == null ? '' : line)); } catch (e) { }
+});
+
+// 联机保活时钟（主进程驱动）：游戏全屏/窗口遮挡时渲染层定时器被 Chromium 节流至分钟级，
+// 110 保活停摆 → 服务端 30s 收口/对端看门狗判死 → 已建立链路无故掉线（实测"连上一会就掉"根因）。
+// IPC 投递不受定时器节流影响：到点即唤醒渲染层发送保活帧（渲染层无会话时忽略，开销可忽略）
+setInterval(function () {
+    try {
+        var ws = BrowserWindow.getAllWindows();
+        for (var i = 0; i < ws.length; i++) {
+            if (!ws[i].isDestroyed()) ws[i].webContents.send('gn:keepalive-tick');
+        }
+    } catch (e) { }
+}, 15000).unref();
 
 // 停止（幂等）：args = {room_id}
 ipcMain.handle('gn:broadcast-stop', function (event, args) {

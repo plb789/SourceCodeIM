@@ -48,6 +48,10 @@
 
     // ===== 运行时状态 =====
     var my = null;          // 我的房间：{room_id,name,host,host_port,mode,game_mode,max_players,game_id,game_name,status,members[],isHost,ready,msgs[]}
+    // 联机排障：房间层关键分支落盘主进程 gn-tunnel.log（渲染层无 console 可见的打包形态下唯一观测口）
+    function gnDbg(m) {
+        try { if (window.desktop && typeof window.desktop.gnDebugLog === 'function') window.desktop.gnDebugLog('[room] ' + m); } catch (e) { }
+    }
     var myName = '';        // 建房/加入时本端已知房间名（下行信封不带 name，本地留存展示）
     var rooms = [];         // 大厅房间列表（下行 list.rooms）
     var visible = false;
@@ -1286,10 +1290,14 @@
                     if (!pendingJoinId || env.room_id !== pendingJoinId) break;
                     my = normRoom(env, env.host === u());
                     roomMsgs = [];
+                    gnDbg('join-confirm room=' + my.room_id + ' host=' + my.host + ' port=' + my.host_port + ' isHost=' + my.isHost);
                     if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
                     unlockBusy();
                     if (window.GameNet && GameNet.connect && my.host && my.host_port) {
-                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { }
+                        gnDbg('join-confirm → GameNet.connect');
+                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { gnDbg('connect threw: ' + (e && e.message)); }
+                    } else {
+                        gnDbg('join-confirm gate blocked: GameNet=' + (window.GameNet ? 'ok' : 'null') + ' host=' + my.host + ' port=' + my.host_port);
                     }
                     if (visible) showPage('room');
                     toast(T('已加入房间'));
@@ -1308,6 +1316,18 @@
                 var prev = my.status;
                 var prevHost = my.host;
                 my = normRoom(env, env.host === u()); // 功能二期：isHost 以服务端 host 字段为准（房主转让后随广播切换）
+                // host_port 晚到/会话失效补连（服务端设计口径"加入方随 state 对准真实端口"原缺执行体，实测
+                // 房主开局探测回填 host_port 晚于首次确认时，加入方被门卫跳过 connect 后永不开隧道）：
+                // 会话不在途/未建立即按当前房态端口补连；失败重试间隔 10s 防风暴；链路已建立不重连防断游戏
+                if (!my.isHost && my.host && my.host_port && window.GameNet && GameNet.connect) {
+                    var gnSt = (typeof GameNet.stateOf === 'function') ? GameNet.stateOf(my.room_id) : null;
+                    var gnBusy = gnSt && (gnSt.state === 'probing' || gnSt.state === 'accepted' || gnSt.state === 'linked');
+                    gnDbg('state-sync room=' + my.room_id + ' st=' + (gnSt ? gnSt.state : 'null') + ' port=' + my.host_port + ' → ' + (gnBusy ? 'in-flight skip' : (Date.now() - (my._lastConnectAt || 0) > 10000 ? 'reconnect' : 'backoff skip')));
+                    if (!gnBusy && Date.now() - (my._lastConnectAt || 0) > 10000) {
+                        my._lastConnectAt = Date.now();
+                        try { GameNet.connect(my.room_id, my.host, my.host_port); } catch (e) { gnDbg('reconnect threw: ' + (e && e.message)); }
+                    }
+                }
                 // 功能二期：房主转让——host 字段切换即重挂隧道（服务端已 abort 旧隧道，双方按新 host 重连）
                 if (prevHost && my.host && prevHost !== my.host) {
                     unlockBusy(); // 移交在途（发起者）成功收口
@@ -1420,6 +1440,7 @@
 
     // ===== GameNet 引擎事件（链路态/降级/错误）→ 房间页实时反馈 =====
     function onNetEvent(ev) {
+        gnDbg('net-event ' + (ev && ev.type) + ' room=' + (ev && ev.room_id) + (ev && ev.reason ? ' reason=' + ev.reason : '') + (ev && ev.type === 'gameinfo' ? ' hex=' + ((ev.d || '').length) + 'B' : ''));
         if (!ev || !my || ev.room_id !== my.room_id) return;
         if (ev.type === 'ready') { my._selfLinkText = T('已与房主建立联机'); my._selfLinkCls = 'on'; perfHintCheck(); }
         else if (ev.type === 'accepted' || ev.type === 'probe') { my._selfLinkText = T('正在建立联机…'); my._selfLinkCls = 'wait'; }
@@ -1429,6 +1450,15 @@
             // 功能二期方案 B：广播发现代理——加入方 join 隧道就绪即启动虚拟主机应答，
             // 本机游戏「局域网游戏」列表直接出现好友房间（房主侧不广播：本机游戏自建主机）
             if (ev.role === 'join' && ev.proto === 'udp') gnBroadcastEnsure();
+            // 功能二期：主机端探测模式——本机游戏为真实主机，代理周期探测本机游戏并把真实
+            // GameInfo（名称/人数/槽位/地图）经 ctl 通道中继给加入方（广播帧不含名称，必经此路）
+            else if (ev.role === 'host' && ev.proto === 'udp') gnBroadcastEnsure();
+        }
+        else if (ev.type === 'gameinfo') {
+            // 功能二期：主机探测到的真实 GameInfo（hex）→ 交代理在应答/直投中使用真实数据
+            if (window.desktop && typeof window.desktop.gnBroadcastRelay === 'function') {
+                try { window.desktop.gnBroadcastRelay({ room_id: ev.room_id, hex: ev.d }); } catch (e) { }
+            }
         }
         else if (ev.type === 'abort') {
             my._selfLinkText = T('联机已断开'); my._selfLinkCls = 'off'; perfHintRearm();
@@ -1438,23 +1468,24 @@
         if (visible && curPage === 'room') { renderLinkBar(); renderMembers(); }
     }
 
-    // 功能二期方案 B：局域网发现启动/同步（幂等；房主侧不广播——本机游戏自建主机局域网直接可见）
+    // 功能二期方案 B：局域网发现启动/同步（幂等；双模——加入方拦截/直投应答，主机端探测中继）
     // 发现模式分流：魔兽 III 走本地伪造应答（毫秒级，免跨机往返）；其余游戏走 L1 透传反射——
     // 搜索包经既有隧道由真实主机进程应答（零协议适配，无需代理会话，本函数直接跳过）
     // 成员变化时重发（主进程同端口重入仅更新名称/人数字段，条目指纹不变，列表平滑刷新）
     function gnBroadcastEnsure() {
-        if (!my || my.isHost || !window.desktop || typeof window.desktop.gnBroadcastStart !== 'function') return;
+        if (!my || !window.desktop || typeof window.desktop.gnBroadcastStart !== 'function') return;
         if (!/魔兽|war3|wc3/i.test(String(my.game_name || ''))) return; // 非 war3：透传反射，无需代理
         var bHost = null;
         var mems = my.members || [];
         for (var bi = 0; bi < mems.length; bi++) { if (mems[bi].host) { bHost = mems[bi]; break; } }
         window.desktop.gnBroadcastStart({
             room_id: my.room_id, game: 'war3', port: my.host_port || 0,
+            role: my.isHost ? 'host' : 'join',
             game_name: T('[IM] {name}的房间', { name: (bHost && bHost.name) || '' }),
             host_name: (bHost && bHost.name) || '',
             slots_total: my.max_players || 0, slots_used: mems.length
         }).then(function (r) {
-            if (r && r.ok && !r.updated) toast(T('已开启局域网发现：游戏列表将直接显示本房间'));
+            if (r && r.ok && !r.updated && !my.isHost) toast(T('已开启局域网发现：游戏列表将直接显示本房间'));
         }).catch(function () { });
     }
 
@@ -1569,6 +1600,20 @@
                 if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
                 if (payload.join && payload.room_id) { joinFromInvite(payload.room_id); return; }
                 open(payload);
+            });
+        }
+        // 功能二期：主机端探测到的真实 GameInfo → 经隧道 ctl 通道中继给全部加入方
+        // （真实名称/人数/槽位/地图——广播帧不含名称，加入方列表条目数据必经此中继）
+        if (window.desktop && typeof window.desktop.onGnBroadcastGameInfo === 'function') {
+            window.desktop.onGnBroadcastGameInfo(function (p) {
+                if (!p || !p.room_id || !p.hex) return;
+                if (!my || my.room_id !== p.room_id || !my.isHost) return;
+                if (window.GameNet && typeof GameNet.sendGameInfo === 'function') {
+                    try {
+                        var gnSent = GameNet.sendGameInfo(p.room_id, p.hex);
+                        gnDbg('host relay gi ' + p.hex.length + 'B → ctl 发给 ' + gnSent + ' 个对端');
+                    } catch (e) { gnDbg('host relay gi threw: ' + (e && e.message)); }
+                }
             });
         }
     }

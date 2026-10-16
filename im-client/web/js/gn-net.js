@@ -78,6 +78,11 @@
         }
     }
 
+    // 联机排障：引擎关键事件落盘主进程日志（连接层/握手/断链归口，房间层为 [room]、隧道层为 [tunnel]）
+    function gdbg(m) {
+        try { if (window.desktop && typeof window.desktop.gnDebugLog === 'function') window.desktop.gnDebugLog('[net] ' + m); } catch (e) { }
+    }
+
     // ----- 信令（msg_type=110；from_user 由服务端以连接登录名归口，客户端不伪造）-----
     // 阶段二百九十二 M8：引擎迁入游戏中心窗（无 WS 独立窗），收发统一走 GNSignal 中继口
     // （gn-signal.js：游戏中心窗经 IPC 复用主窗口唯一 WS；主窗口环境自动回落 IMSocket 直发）
@@ -187,6 +192,7 @@
     function fail(sess, reason) {
         if (!sess || sess.state === 'failed' || sess.state === 'aborted' || sess.dead) return;
         sess.state = 'failed';
+        gdbg('fail conn=' + sess.id + ' role=' + sess.role + ' state=' + sess.state + ' reason=' + reason + ' idleMs=' + (now() - sess.lastAct));
         sig(sess.peer, { action: 'abort', conn_id: sess.id, reason: reason });
         var r = sess.resolve; sess.resolve = null;
         var info = { type: 'abort', room_id: sess.room, peer: sess.peer, conn_id: sess.id, reason: reason };
@@ -209,7 +215,18 @@
         } else if (proto === 'tcp') {
             dc.onmessage = function (e) { onTcpIn(sess, e.data); };
         } else {
-            dc.onmessage = function () { touch(sess); }; // ctl 保活帧：仅刷新活跃
+            dc.onmessage = function (e) {
+                touch(sess); // ctl 保活帧：仅刷新活跃
+                // 功能二期：主机游戏信息中继帧（{t:'gi', d:hex}）——主机代理探测本机 war3 的真实
+                // GameInfo 经 ctl 通道直达加入方（真实名称/人数/槽位/地图，广播帧不含名称）
+                var s = (e && typeof e.data === 'string') ? e.data : '';
+                if (s.length > 6 && s.charCodeAt(0) === 123) { // '{'
+                    try {
+                        var f = JSON.parse(s);
+                        if (f && f.t === 'gi' && f.d) emit({ type: 'gameinfo', room_id: sess.room, peer: sess.peer, conn_id: sess.id, role: sess.role, d: f.d });
+                    } catch (err) { }
+                }
+            };
         }
     }
 
@@ -229,6 +246,7 @@
 
     function onChanDown(sess, proto) {
         if (sess.dead) return;
+        gdbg('chan-down conn=' + sess.id + ' role=' + sess.role + ' proto=' + proto + ' state=' + sess.state);
         if (sess.state === 'linked' || sess.state === 'accepted' || sess.state === 'probing') {
             if (proto === 'ctl') fail(sess, 'channel_lost');
         }
@@ -389,32 +407,44 @@
             }
             sess.tunnelReady = true;
             flushQueue(sess);
+            // 触发房间页重绘：tunnelReady 翻转后无事件则成员徽标停留「连接中」（链路已通但显示不同步）
+            emit({ type: 'hosttunnel', room_id: sess.room, peer: sess.peer, conn_id: sess.id, role: sess.role });
         });
     }
 
     // ----- 加入者入口 -----
     function connect(roomId, hostUser, hostPort, opts) {
         return new Promise(function (resolve) {
-            if (!available()) { resolve({ ok: false, reason: 'unsupported' }); return; }
-            if (!window.IMSocket || !IMSocket.isConnected()) { resolve({ ok: false, reason: 'offline' }); return; }
+            // 联机排障：connect 全分支落盘主进程日志（渲染层无 console 可见的打包形态下唯一观测口）
+            var dbg = (window.desktop && typeof window.desktop.gnDebugLog === 'function') ? function (m) { try { window.desktop.gnDebugLog('[connect] ' + m); } catch (e) { } } : function () { };
+            dbg('enter room=' + roomId + ' host=' + hostUser + ' port=' + hostPort);
+            if (!available()) { dbg('bail available=false (enabled=' + cfg.enabled + ' mode=' + cfg.mode + ' tunnelCapable=' + tunnelCapable() + ' rtc=' + (typeof RTCPeerConnection !== 'undefined') + ')'); resolve({ ok: false, reason: 'unsupported' }); return; }
+            // 信令在线判定与 sig() 同源（M8 引擎迁游戏中心窗后无 WS，走 GNSignal IPC 中继；主窗口环境回落
+            // IMSocket）——原检查 window.IMSocket 是迁窗前遗留：游戏中心窗里恒不在线，connect 静默返回
+            // 'offline'，加入方永不开隧道（实测根因）
+            var sigOk = (window.GNSignal && GNSignal.isConnected()) || (window.IMSocket && IMSocket.isConnected());
+            if (!sigOk) { dbg('bail signaling offline (GNSignal=' + (!!(window.GNSignal && GNSignal.isConnected())) + ' IMSocket=' + (!!(window.IMSocket && IMSocket.isConnected())) + ')'); resolve({ ok: false, reason: 'offline' }); return; }
             var port = normPort(hostPort);
-            if (!port) { resolve({ ok: false, reason: 'bad_port' }); return; }
-            if (!hostUser) { resolve({ ok: false, reason: 'forbidden' }); return; }
+            if (!port) { dbg('bail bad_port (' + hostPort + ')'); resolve({ ok: false, reason: 'bad_port' }); return; }
+            if (!hostUser) { dbg('bail no hostUser'); resolve({ ok: false, reason: 'forbidden' }); return; }
             if (joinByRoom[roomId]) disconnect(roomId); // 幂等重建
             var id = genId();
             var sess = newSess({ id: id, role: 'join', room: roomId, peer: hostUser, hostPort: port, state: 'probing', resolve: resolve });
             sessions[id] = sess;
             joinByRoom[roomId] = id;
             startTimers(sess);
-            // 协商超时兜底（服务端下发 negotiate_timeout；probe_fail 由信令即时回退，不产生等待）
-            sess.timers.negotiate = setTimeout(function () {
-                if (sess.state === 'probing' || sess.state === 'accepted') fail(sess, 'timeout');
-            }, Math.max(3, cfg.negotiateTimeout) * 1000);
             // 先开本地监听再 probe：端口被占（游戏端口冲突）立即收口，不白等房主 accept
             openTunnel(sess, 'join', port, (opts && opts.host_ip) || '').then(function (r) {
+                dbg('openTunnel → ' + JSON.stringify(r));
                 if (sess.dead) return;
                 if (!r.ok) { fail(sess, 'local_tunnel:' + r.err); return; }
                 sess.tunnelReady = true;
+                // 协商预算从 probe 发出起算（设计口径"probe 起到 ctl 通道打通"）：开隧道耗时不再挤占握手窗口
+                if (!sess.timers.negotiate) {
+                    sess.timers.negotiate = setTimeout(function () {
+                        if (sess.state === 'probing' || sess.state === 'accepted') fail(sess, 'timeout');
+                    }, Math.max(3, cfg.negotiateTimeout) * 1000);
+                }
                 sig(hostUser, { action: 'probe', conn_id: id, room_id: roomId });
             });
         });
@@ -442,6 +472,20 @@
         }
         delete hostRooms[roomId];
         return { ok: true, stopped: n };
+    }
+
+    // 功能二期：主机端游戏信息中继（真实 GameInfo 原始 hex → 本房间全部对端 ctl 通道）
+    // 主机代理探测本机 war3 得到真实 GameInfo（名称/人数/槽位/地图）后调用；对端经 gameinfo 事件接收
+    function sendGameInfo(roomId, hex) {
+        var room = hostRooms[roomId];
+        if (!room || !hex) return 0;
+        var n = 0;
+        for (var peer in room.peers) {
+            var s = sessions[room.peers[peer]];
+            if (!s || !s.senders.ctl || !s.opened.ctl) continue;
+            try { s.senders.ctl(JSON.stringify({ t: 'gi', d: String(hex) })); n++; } catch (e) { }
+        }
+        return n;
     }
 
     function disconnect(roomId) {
@@ -516,6 +560,7 @@
         try { p = JSON.parse(msg.content || '{}'); } catch (e) { return; }
         if (!p.action || !p.conn_id) return;
         var sess = sessions[p.conn_id];
+        if (p.action !== 'ping') gdbg('signal ' + p.action + ' conn=' + p.conn_id + ' from=' + (msg.from_user || '?') + (sess ? '' : ' (无会话)'));
 
         switch (p.action) {
             case 'probe': {
@@ -637,6 +682,7 @@
         },
         hostStart: hostStart,
         hostStop: hostStop,
+        sendGameInfo: sendGameInfo,
         connect: connect,
         disconnect: disconnect,
         disconnectAll: disconnectAll,
@@ -678,5 +724,25 @@
         if (typeof window.desktop.gnNetConfigGet === 'function') {
             try { window.desktop.gnNetConfigGet().then(function (c) { applyCfg(c); }); } catch (e) { /* 拉取失败用兜底默认 */ }
         }
+    }
+    // 主进程保活时钟：游戏全屏/窗口遮挡时本窗定时器被 Chromium 节流至分钟级，110 保活停摆即被
+    // 服务端 30s 收口/对端看门狗判死（实测"连上一会就掉"根因）——IPC 唤醒不受节流，到点即补发
+    if (window.desktop && typeof window.desktop.onGnKeepaliveTick === 'function') {
+        window.desktop.onGnKeepaliveTick(function () {
+            for (var k in sessions) {
+                var s = sessions[k];
+                if (!s || s.dead) continue;
+                if (s.state === 'probing' || s.state === 'accepted' || s.state === 'linked') {
+                    sig(s.peer, { action: 'ping', conn_id: s.id }); // 保活 + 刷新服务端会话活跃
+                }
+                if (now() - s.lastAct > cfg.watchdog) fail(s, 'watchdog');
+            }
+        });
+    }
+    // M8 迁窗遗留总根因：引擎迁入游戏中心窗后 110 连接层帧改经 GNSignal 中继抵达本窗，但跨窗迁移
+    // 只注册了 109/112/9——110 从未注册分发口，probe/accept/offer/answer/candidate/abort 全部静默
+    // 丢弃，P2P 永不建立（实测加入方协商必超时）。此处补齐注册（socket.js 直连形态由主窗口分发，兼容）
+    if (window.GNSignal && typeof GNSignal.on === 'function') {
+        GNSignal.on(110, function (msg) { onSignal(msg); });
     }
 })();

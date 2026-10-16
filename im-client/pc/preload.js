@@ -1040,6 +1040,24 @@ contextBridge.exposeInMainWorld('desktop', {
     gnBroadcastStop: function (args) {
         return ipcRenderer.invoke('gn:broadcast-stop', args || {});
     },
+    // 功能二期：加入端接收主机中继的真实 GameInfo（hex）→ 代理缓存（应答/直投优先真实数据）
+    gnBroadcastRelay: function (args) {
+        return ipcRenderer.invoke('gn:broadcast-relay', args || {});
+    },
+    // 功能二期：主机端探测到的真实 GameInfo 推送（main → 渲染层，经渲染层 ctl 通道中继给加入方）
+    onGnBroadcastGameInfo: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn-broadcast-gi', function (event, payload) { cb(payload || {}); });
+    },
+    // 联机排障诊断日志桥：渲染层关键分支落盘主进程 gn-tunnel.log（只进不出，无敏感数据）
+    gnDebugLog: function (line) {
+        try { ipcRenderer.invoke('gn:debug-log', String(line == null ? '' : line)); } catch (e) { }
+    },
+    // 联机保活时钟：主进程 15s 一拍（渲染层被游戏全屏遮挡时定时器节流，保活改由 IPC 唤醒）
+    onGnKeepaliveTick: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:keepalive-tick', function () { try { cb(); } catch (e) { } });
+    },
     // 阶段二百九十二 M7：房主游戏端口自动探测（设计文档 §4.3 第 1 层）
     // args={procs?:string[]}（已登记游戏进程名，供过滤）→ Promise<{ok, list:[{port,pid,proc,protos}], filtered}>
     // 仅读取本机监听端口清单（netstat -ano + tasklist），不触碰游戏字节
