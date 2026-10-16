@@ -682,6 +682,10 @@
         if (store) store.addEventListener('scroll', hideHover, { passive: true });
         var lib = $('gsLibMain'); // 库页主区滚动（"最近游戏"卡所在容器）
         if (lib) lib.addEventListener('scroll', hideHover, { passive: true });
+        // 任意点击即收起（Steam 同款）：锚点卡被点击或所在区域重建后 DOM 已移除，
+        // mouseleave 不会再触发（如悬停最近游戏卡出气泡后点击左侧列表/卡片进详情），
+        // 气泡会永久滞留在原地 —— 点击即收起兜底
+        document.addEventListener('click', hideHover);
     }
 
     function buildHoverContent(g, opts) {
@@ -892,6 +896,7 @@
     }
 
     function renderStore() {
+        hideHover(); // 网格重建会移除气泡锚点卡（已移除 DOM 不会触发 mouseleave），先收起防气泡滞留
         var grid = $('gsStoreGrid');
         grid.innerHTML = '';
         state.badgeEls = {};
@@ -1747,6 +1752,7 @@
     // 库页签渲染：Steam 同款双栏——左侧游戏侧栏（搜索框 + 缩略图+名称+状态，选中高亮），
     // 右侧未选中时显示最近游戏横排，选中后显示 hero 大图 + 操作按钮 + 状态行 + 简介
     function renderLibrary() {
+        hideHover(); // 主区重建会移除气泡锚点卡（已移除 DOM 不会触发 mouseleave），先收起防气泡滞留
         var main = $('gsLibMain');
         main.innerHTML = '';
         var items = libItemsSorted();

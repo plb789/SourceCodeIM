@@ -126,22 +126,6 @@ GameTunnel.prototype.setEmitter = function (fn) { if (typeof fn === 'function') 
 GameTunnel.prototype.setLogger = function (fn) { if (typeof fn === 'function') this.log = fn; };
 GameTunnel.prototype.setBroadcastHook = function (fn) { if (typeof fn === 'function') this.broadcastHook = fn; };
 
-// 广播发现代理发送口（game-broadcast.js 周期 RefreshGame 用）：复用该房间 join 隧道的
-// UDP 套接字向子网广播（源端口=游戏端口，条目刷新匹配一致）；socket 已 setBroadcast(true)
-GameTunnel.prototype.broadcastSend = function (roomId, buf) {
-    var body = toBuf(buf);
-    if (!body) return { ok: false, err: 'bad_buf' };
-    var ctx = null;
-    this.tunnels.forEach(function (c) {
-        if (!ctx && c.roomId === roomId && c.role === 'join' && c.proto === 'udp' && c.udp) ctx = c;
-    });
-    if (!ctx) return { ok: false, err: 'no_tunnel' };
-    try { ctx.udp.send(body, 0, body.length, ctx.port, '255.255.255.255'); } catch (e) {
-        return { ok: false, err: 'send_fail:' + ((e && e.message) || '') };
-    }
-    return { ok: true };
-};
-
 // 打开（幂等：同 room+peer+proto 重复打开先收口旧隧道）
 // args: {room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?}
 //   返回 Promise<{ok:true, port, host_ip} | {ok:false, err}>
