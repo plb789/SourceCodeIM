@@ -1129,6 +1129,11 @@ func isHostOffline(meta map[string]string, offline []string) bool {
 // 现值 → 与实测端口并集去重 → 仅在有新增时写回（追加不覆盖，管理端手工登记为准）；
 // 游戏不存在（已下架）静默跳过。写库失败仅记日志（不影响本局联机，端口已在房间 meta 生效）。
 // 全局互斥：读-改-写非原子，两个房间同游戏并发开局累加时无锁会互相覆盖丢端口（稳定性实测项）
+//
+// 首登记制门控（2026-10-17）：端口集非空即跳过累加，以管理端手工登记为准——
+// SC:R 等客户端每次启动绑定大量内部 IPC 动态口（实测逐局全变），开局实测会把这些动态口
+// 逐局累加进登记集污染端口预填（实测：6112,51720,54144,62208）。首次学习后锁定；
+// 游戏真口变更由管理端手工修正（联机端口以游戏实际监听为准）。
 var gnMergeOnlinePortsMu sync.Mutex
 
 func (s *Server) gnMergeOnlinePorts(gameID int, tcpPorts, udpPorts []int) {
@@ -1137,6 +1142,9 @@ func (s *Server) gnMergeOnlinePorts(gameID int, tcpPorts, udpPorts []int) {
 	var g model.Game
 	if err := store.DB.First(&g, gameID).Error; err != nil {
 		return
+	}
+	if strings.TrimSpace(g.OnlinePortsTCP) != "" || strings.TrimSpace(g.OnlinePortsUDP) != "" {
+		return // 端口集非空：以管理端登记为准，不再自动累加（防动态口逐局污染）
 	}
 	merge := func(cur string, add []int) (string, bool) {
 		seen := map[int]bool{}

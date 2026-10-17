@@ -2027,6 +2027,9 @@ ipcMain.handle('gn:detect-port', function (event, args) {
 // 策略与包体构造归口 game-broadcast.js；收发复用 game-tunnel 的 join 隧道套接字（setTunnel 注入）
 const gameBroadcast = require('./game-broadcast.js');
 gameBroadcast.setTunnel(gameTunnel);
+// SC:R（星际争霸重制版）发现适配：mDNS 应答器（校准文档 docs/星际争霸重制版LAN发现协议校准.md）
+const gameMdns = require('./game-mdns.js');
+gameMdns.setTunnel(gameTunnel);
 // 联机隧道/发现代理日志落盘（此前仅 console.log——打包运行时不可见，联机排障只能靠猜；
 // 256KB 轮转，仅生命周期级事件不记包内容）
 var GN_LOG_MAX = 256 * 1024;
@@ -2041,20 +2044,32 @@ function gnLogWrite(line) {
 }
 gameTunnel.setLogger(function (msg) { gnLogWrite('[tunnel] ' + msg); });
 gameBroadcast.setLogger(function (msg) { gnLogWrite('[bcast] ' + msg); });
+gameMdns.setLogger(function (msg) { gnLogWrite('[mdns] ' + msg); });
+gameMdns.setRelayHandler(function (roomId, hex) {
+    try { gnBroadcast('gn-broadcast-gi', { room_id: roomId, hex: hex }); } catch (e) { }
+});
 gnLogWrite('[main] 客户端启动：隧道/发现代理日志归口就绪');
 // 功能二期：主机端探测到的真实 GameInfo（hex）→ 推给渲染层经隧道 ctl 通道中继给加入方
 gameBroadcast.setRelayHandler(function (roomId, hex) {
     try { gnBroadcast('gn-broadcast-gi', { room_id: roomId, hex: hex }); } catch (e) { }
 });
 
-// 启动（加入方 join 隧道就绪后）：args = {room_id, game, port, game_name, host_name, slots_total, slots_used}
+// 启动（加入方 join 隧道就绪后）：按游戏路由——war3 → 广播代理；scr → mDNS 应答器
 ipcMain.handle('gn:broadcast-start', function (event, args) {
-    try { return gameBroadcast.start(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'start_fail' }; }
+    try {
+        var a = args || {};
+        if (a.game === 'scr') return gameMdns.start(a);
+        return gameBroadcast.start(a);
+    } catch (e) { return { ok: false, err: (e && e.message) || 'start_fail' }; }
 });
 
-// 加入端接收主机中继的真实 GameInfo（hex）→ 代理缓存，应答/直投优先使用真实数据
+// 加入端接收房主端中继（war3=真实 GameInfo hex；scr=原始 mDNS 应答包 hex）→ 按房间路由
 ipcMain.handle('gn:broadcast-relay', function (event, args) {
-    try { return gameBroadcast.setRelayGI(args || {}); } catch (e) { return { ok: false, err: 'relay_fail' }; }
+    try {
+        var a = args || {};
+        if (gameMdns.has(a.room_id)) return gameMdns.relayPacket(a.room_id, a.hex);
+        return gameBroadcast.setRelayGI(a);
+    } catch (e) { return { ok: false, err: 'relay_fail' }; }
 });
 
 // 渲染层诊断日志桥（联机排障）：渲染层关键分支经此落盘 gn-tunnel.log
@@ -2074,9 +2089,13 @@ setInterval(function () {
     } catch (e) { }
 }, 15000).unref();
 
-// 停止（幂等）：args = {room_id}
+// 停止（幂等）：两套发现代理一并收口（未启动的 stop 为无害空操作）
 ipcMain.handle('gn:broadcast-stop', function (event, args) {
-    try { return gameBroadcast.stop(args || {}); } catch (e) { return { ok: false, err: (e && e.message) || 'stop_fail' }; }
+    try {
+        gameBroadcast.stop(args || {});
+        gameMdns.stop(args || {});
+        return { ok: true };
+    } catch (e) { return { ok: false, err: (e && e.message) || 'stop_fail' }; }
 });
 
 // ===== 阶段一百四十：截图编辑器独立窗口（用户需求：编辑器不再嵌在主窗体内，与图片查看器/长截图条窗同款独立承载） =====

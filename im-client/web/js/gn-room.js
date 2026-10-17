@@ -52,10 +52,14 @@
     function gnDbg(m) {
         try { if (window.desktop && typeof window.desktop.gnDebugLog === 'function') window.desktop.gnDebugLog('[room] ' + m); } catch (e) { }
     }
-    // war3 等独占端口游戏判定：加入方数据隧道让出游戏端口（war3 进局域网页要独占绑定 6112，
-    // 被隧道占用即报"不能连入网络"）——发现链路自动切广播代理直投注入，不依赖端口拦截
-    function gnIsWar3() {
-        return !!(my && /魔兽|war3|wc3/i.test(String(my.game_name || '')));
+    // 游戏适配类型：war3（广播代理注入）/ scr（星际重制版，mDNS 发现代理）/ null（未适配，透传反射）。
+    // 独占端口游戏（war3/scr 均实测独占绑定游戏端口）加入方数据隧道都让出游戏端口，skipPort 生效
+    function gnGameKind() {
+        if (!my) return null;
+        var n = String(my.game_name || '');
+        if (/魔兽|war3|wc3/i.test(n)) return 'war3';
+        if (/星际|starcraft/i.test(n)) return 'scr';
+        return null;
     }
     var myName = '';        // 建房/加入时本端已知房间名（下行信封不带 name，本地留存展示）
     var rooms = [];         // 大厅房间列表（下行 list.rooms）
@@ -1299,8 +1303,8 @@
                     if (typeof window.GSShowOnline === 'function') window.GSShowOnline();
                     unlockBusy();
                     if (window.GameNet && GameNet.connect && my.host && my.host_port) {
-                        gnDbg('join-confirm → GameNet.connect skipPort=' + gnIsWar3());
-                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('connect threw: ' + (e && e.message)); }
+                        gnDbg('join-confirm → GameNet.connect skipPort=' + !!gnGameKind());
+                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: !!gnGameKind() }); } catch (e) { gnDbg('connect threw: ' + (e && e.message)); }
                     } else {
                         gnDbg('join-confirm gate blocked: GameNet=' + (window.GameNet ? 'ok' : 'null') + ' host=' + my.host + ' port=' + my.host_port);
                     }
@@ -1330,7 +1334,7 @@
                     gnDbg('state-sync room=' + my.room_id + ' st=' + (gnSt ? gnSt.state : 'null') + ' port=' + my.host_port + ' → ' + (gnBusy ? 'in-flight skip' : (Date.now() - (my._lastConnectAt || 0) > 10000 ? 'reconnect' : 'backoff skip')));
                     if (!gnBusy && Date.now() - (my._lastConnectAt || 0) > 10000) {
                         my._lastConnectAt = Date.now();
-                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('reconnect threw: ' + (e && e.message)); }
+                        try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: !!gnGameKind() }); } catch (e) { gnDbg('reconnect threw: ' + (e && e.message)); }
                     }
                 }
                 // 功能二期：房主转让——host 字段切换即重挂隧道（服务端已 abort 旧隧道，双方按新 host 重连）
@@ -1460,7 +1464,7 @@
             if (Date.now() - (my._lastConnectAt || 0) < 10000) return; // 状态沿补连刚发过：让路
             my._lastConnectAt = Date.now();
             gnDbg('auto-reconnect #' + n + ' (delay=' + delay + 'ms)');
-            try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: gnIsWar3() }); } catch (e) { gnDbg('auto-reconnect threw: ' + (e && e.message)); }
+            try { GameNet.connect(my.room_id, my.host, my.host_port, { skipPort: !!gnGameKind() }); } catch (e) { gnDbg('auto-reconnect threw: ' + (e && e.message)); }
         }, delay);
     }
 
@@ -1508,15 +1512,16 @@
     // 成员变化时重发（主进程同端口重入仅更新名称/人数字段，条目指纹不变，列表平滑刷新）
     function gnBroadcastEnsure() {
         if (!my || !window.desktop || typeof window.desktop.gnBroadcastStart !== 'function') return;
-        if (!/魔兽|war3|wc3/i.test(String(my.game_name || ''))) return; // 非 war3：透传反射，无需代理
+        if (!gnGameKind()) return; // 未适配游戏：透传反射，无需代理
         var bHost = null;
         var mems = my.members || [];
         for (var bi = 0; bi < mems.length; bi++) { if (mems[bi].host) { bHost = mems[bi]; break; } }
         window.desktop.gnBroadcastStart({
-            room_id: my.room_id, game: 'war3', port: my.host_port || 0,
+            room_id: my.room_id, game: gnGameKind(), port: my.host_port || 0,
             role: my.isHost ? 'host' : 'join',
             game_name: T('[IM] {name}的房间', { name: (bHost && bHost.name) || '' }),
             host_name: (bHost && bHost.name) || '',
+            host_ip: (bHost && (bHost.host_ip || bHost.ip)) || '',
             slots_total: my.max_players || 0, slots_used: mems.length
         }).then(function (r) {
             if (r && r.ok && !r.updated && !my.isHost) toast(T('已开启局域网发现：游戏列表将直接显示本房间'));
@@ -1641,6 +1646,8 @@
         if (window.desktop && typeof window.desktop.onGnBroadcastGameInfo === 'function') {
             window.desktop.onGnBroadcastGameInfo(function (p) {
                 // hex 为空字符串=「主机游戏已消失」信令（防幻影），须放行——仅拦截非法载荷
+                gnDbg('broadcast-gi 收到 room=' + (p && p.room_id) + ' hex=' + (p && typeof p.hex === 'string' ? p.hex.length + 'B' : typeof (p && p.hex)) +
+                    ' | my=' + (my ? my.room_id + '/isHost=' + my.isHost : 'null'));
                 if (!p || !p.room_id || typeof p.hex !== 'string') return;
                 if (!my || my.room_id !== p.room_id || !my.isHost) return;
                 if (window.GameNet && typeof GameNet.sendGameInfo === 'function') {

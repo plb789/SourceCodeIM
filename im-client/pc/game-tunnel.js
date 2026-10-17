@@ -61,7 +61,7 @@ function normalizeAddr(a) {
 function localAddrs() {
     var t = Date.now();
     if (localAddrsCache && t - localAddrsAt < LOCAL_CACHE_MS) return localAddrsCache;
-    var s = { '127.0.0.1': true, '0.0.0.0': true, '::1': true };
+    var s = { '127.0.0.1': true, '127.0.0.2': true, '0.0.0.0': true, '::1': true }; // 127.0.0.2 = SC:R 发现注入的回环别名（A/AAAA 记录目标）
     var ifs = os.networkInterfaces();
     for (var k in ifs) {
         var arr = ifs[k] || [];
@@ -390,6 +390,11 @@ GameTunnel.prototype.startUdpJoin = function (ctx, ok, bad) {
             if (!ctx.localOnly[normalizeAddr(rinfo.address)]) return; // 仅本机来源（他人直连本端口一律丢弃）
             ctx.lastAct = Date.now();
             ctx.lastSrc = { address: rinfo.address, port: rinfo.port };
+            if (!ctx.dbgData) { ctx.dbgData = 0; } // 数据面首包日志（联机排障：游戏会话帧是否进入隧道）
+            if (ctx.dbgData < 3) {
+                ctx.dbgData++;
+                self.log('UDP 数据 ← ' + rinfo.address + ':' + rinfo.port + ' len=' + msg.length + ' head=' + msg.slice(0, 12).toString('hex') + '（房间 ' + ctx.roomId + ' #' + ctx.dbgData + '）');
+            }
             // 功能二期方案 B：广播发现代理——本机游戏的 SearchGame（0xF7 0x2F）帧由代理本地应答
             // （虚拟主机模型），不进隧道转发（转发会给房主游戏塞垃圾包）；无代理/非搜索帧照旧转发
             if (msg.length >= 4 && msg[0] === 0xF7 && msg[1] === 0x2F && self.broadcastHook) {
@@ -469,6 +474,11 @@ GameTunnel.prototype.startUdpHost = function (ctx, ok, bad) {
         if (ctx.closed) return;
         if (!ctx.localOnly[normalizeAddr(rinfo.address)]) return; // 仅本机游戏来源
         ctx.lastAct = Date.now();
+        if (!ctx.dbgData) { ctx.dbgData = 0; } // 数据面首包日志（房主游戏对加入方握手的应答观测）
+        if (ctx.dbgData < 3) {
+            ctx.dbgData++;
+            self.log('UDP 数据 ← ' + rinfo.address + ':' + rinfo.port + ' len=' + msg.length + ' head=' + msg.slice(0, 12).toString('hex') + '（房间 ' + ctx.roomId + ' #' + ctx.dbgData + '）');
+        }
         self.emitData(ctx, 0, msg);
     });
     // 绑定全接口（源地址=本机出口 IP）：收本机游戏回包 + 向本机游戏端口单播发数据时
@@ -672,6 +682,8 @@ function execOut(file, args) {
 }
 
 // netstat -ano 解析：TCP 仅取 LISTENING（已建立连接的服务端口不重复计），UDP 取全部绑定
+// TCP 127.0.0.1 监听排除：内部 IPC 特征（SC:R 等客户端每次启动绑定大量动态回环口，实测逐局全变，
+// 混入探测会把动态口当游戏端口回填进游戏库污染登记集——真 LAN 口绑 0.0.0.0/具体 IP，不受影响）
 function parseNetstat(out) {
     var byPort = {};
     var lines = String(out || '').split(/\r?\n/);
@@ -679,7 +691,10 @@ function parseNetstat(out) {
         var f = lines[i].trim().split(/\s+/);
         if (f.length < 4) continue;
         var proto = (f[0] || '').toLowerCase();
-        if (proto === 'tcp') { if (f[3] !== 'LISTENING') continue; }
+        if (proto === 'tcp') {
+            if (f[3] !== 'LISTENING') continue;
+            if (/^127\./.test(f[1] || '')) continue;
+        }
         else if (proto !== 'udp') continue;
         var m = /:(\d+)$/.exec(f[1] || '');
         if (!m) continue;

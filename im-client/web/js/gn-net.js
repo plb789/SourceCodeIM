@@ -482,13 +482,15 @@
     // hex 为空字符串=「主机游戏已消失」信令（防幻影），须放行转发
     function sendGameInfo(roomId, hex) {
         var room = hostRooms[roomId];
-        if (!room || typeof hex !== 'string') return 0;
+        if (!room) { gdbg('sendGameInfo 房间未登记 hostRooms[' + roomId + ']（会话表 ' + Object.keys(hostRooms).join(',') + '）'); return 0; }
+        if (typeof hex !== 'string') { gdbg('sendGameInfo hex 非字符串'); return 0; }
         var n = 0;
         for (var peer in room.peers) {
             var s = sessions[room.peers[peer]];
-            if (!s || !s.senders.ctl || !s.opened.ctl) continue;
-            try { s.senders.ctl(JSON.stringify({ t: 'gi', d: String(hex) })); n++; } catch (e) { }
+            if (!s || !s.senders.ctl || !s.opened.ctl) { gdbg('sendGameInfo 跳过 peer=' + peer + '（会话' + (s ? '在/ctl未开' : '不存在') + '）'); continue; }
+            try { s.senders.ctl(JSON.stringify({ t: 'gi', d: String(hex) })); n++; } catch (e) { gdbg('sendGameInfo 发送异常 peer=' + peer + ': ' + (e && e.message)); }
         }
+        gdbg('sendGameInfo 完成：发给 ' + n + ' 个对端');
         return n;
     }
 
