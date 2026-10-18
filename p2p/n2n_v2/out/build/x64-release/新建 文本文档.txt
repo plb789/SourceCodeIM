@@ -1,0 +1,543 @@
+下面是一个简单的示例代码，展示了如何使用 Visual Studio 2022 (VS2022) 中的 C++ 来实现客户端和服务端之间的通信。服务端从配置文件 `IP.TXT` 中读取 IP 地址和掩码，并根据客户端发送的 ID 返回相应的 IP 地址和掩码。
+
+用VS2022 C++帮我写个客户端连接服务端后  服务端发给客户端IP地址和掩码， 服务端读取配置文件IP.TXT 里面的格式是1,192.168.1.1,255.255.255.0  2,192.168.1.2,255.255.255.0 服务端启动加载这个IP.TXT文件内容到 缓存里 客户端连接后发给服务端ID1   服务端查询缓存里ID是1的内容后返回给客户端 然后客户端接收到 IP和掩码后 输出到控制台 的代码，支持多个客户端并发连接和错误处理 加入中文注释
+
+------------------------------------服务端----------------------------------------------------
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <map>
+#include <thread>
+#include <mutex>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#define MAX_BUFFER_SIZE 1024
+
+std::map<int, std::pair<std::string, std::string>> ipCache; // 缓存存储IP和掩码
+std::mutex cacheMutex; // 用于保护缓存的互斥锁
+
+void LoadIPCache(const std::string& filename)
+{
+    std::ifstream file(filename);
+    if (!file)
+    {
+        std::cout << "Failed to open IP.TXT" << std::endl;
+        return;
+    }
+
+    std::string line;
+    while (std::getline(file, line))
+    {
+        std::stringstream ss(line);
+        std::string id, ip, mask;
+        std::getline(ss, id, ',');
+        std::getline(ss, ip, ',');
+        std::getline(ss, mask, ',');
+        int key = std::stoi(id);
+        ipCache[key] = std::make_pair(ip, mask);
+    }
+
+    file.close();
+}
+
+void HandleClient(SOCKET clientSocket)
+{
+    char buffer[MAX_BUFFER_SIZE];
+    memset(buffer, 0, sizeof(buffer));
+
+    // 接收客户端发来的ID
+    int id = 0;
+    if (recv(clientSocket, (char*)&id, sizeof(id), 0) <= 0)
+    {
+        std::cout << "Failed to receive ID from client" << std::endl;
+        closesocket(clientSocket);
+        return;
+    }
+
+    // 查询缓存中的IP和掩码
+    std::string ip, mask;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        auto it = ipCache.find(id);
+        if (it != ipCache.end())
+        {
+            ip = it->second.first;
+            mask = it->second.second;
+        }
+    }
+
+    // 发送IP和掩码给客户端
+    if (!ip.empty() && !mask.empty())
+    {
+        std::string response = ip + "," + mask;
+        if (send(clientSocket, response.c_str(), response.length(), 0) <= 0)
+        {
+            std::cout << "Failed to send IP and mask to client" << std::endl;
+        }
+    }
+
+    closesocket(clientSocket);
+}
+
+int main()
+{
+    // 加载IP缓存
+    LoadIPCache("IP.TXT");
+
+    // 初始化Winsock
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        std::cout << "Failed to initialize Winsock" << std::endl;
+        return -1;
+    }
+
+    // 创建监听socket
+    SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenSocket == INVALID_SOCKET)
+    {
+        std::cout << "Failed to create listen socket" << std::endl;
+        WSACleanup();
+        return -1;
+    }
+
+    // 绑定监听地址和端口
+    sockaddr_in serverAddress;
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = INADDR_ANY;
+    serverAddress.sin_port = htons(8888);
+
+    if (bind(listenSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR)
+    {
+        std::cout << "Failed to bind listen socket" << std::endl;
+        closesocket(listenSocket);
+        WSACleanup();
+        return -1;
+    }
+
+    // 开始监听
+    if (listen(listenSocket, SOMAXCONN) == SOCKET_ERROR)
+    {
+        std::cout << "Failed to start listening" << std::endl;
+        closesocket(listenSocket);
+        WSACleanup();
+        return -1;
+    }
+
+    std::cout << "Server started, listening on port 8888..." << std::endl;
+
+    while (true)
+    {
+        // 接受客户端连接
+        sockaddr_in clientAddress;
+        int addrLen = sizeof(clientAddress);
+        SOCKET clientSocket = accept(listenSocket, (sockaddr*)&clientAddress, &addrLen);
+        if (clientSocket == INVALID_SOCKET)
+        {
+            std::cout << "Failed to accept client connection" << std::endl;
+            continue;
+        }
+
+        std::cout << "Client connected: " << inet_ntoa(clientAddress.sin_addr) << std::endl;
+
+        // 创建新线程处理客户端请求
+        std::thread clientThread(HandleClient, clientSocket);
+        clientThread.detach();
+    }
+
+    // 关闭监听socket
+    closesocket(listenSocket);
+
+    // 清理Winsock
+    WSACleanup();
+
+    return 0;
+}
+
+--------------------------------------------客户端-------------------------------------------------------
+
+#include <iostream>
+#include <string>
+#include <sstream>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#define MAX_BUFFER_SIZE 1024
+
+int main()
+{
+    // 初始化Winsock
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        std::cout << "Failed to initialize Winsock" << std::endl;
+        return -1;
+    }
+
+    // 创建socket
+    SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket == INVALID_SOCKET)
+    {
+        std::cout << "Failed to create socket" << std::endl;
+        WSACleanup();
+        return -1;
+    }
+
+    // 连接服务端
+    sockaddr_in serverAddress;
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1"); // 服务端IP地址
+    serverAddress.sin_port = htons(8888); // 服务端端口
+
+    if (connect(clientSocket, (sockaddr*)&serverAddress, sizeof(serverAddress)) == SOCKET_ERROR)
+    {
+        std::cout << "Failed to connect to server" << std::endl;
+        closesocket(clientSocket);
+        WSACleanup();
+        return -1;
+    }
+
+    // 发送ID给服务端
+    int id = 1; // 发送的ID
+    if (send(clientSocket, (char*)&id, sizeof(id), 0) <= 0)
+    {
+        std::cout << "Failed to send ID to server" << std::endl;
+        closesocket(clientSocket);
+        WSACleanup();
+        return -1;
+    }
+
+    // 接收服务端返回的IP和掩码
+    char buffer[MAX_BUFFER_SIZE];
+    memset(buffer, 0, sizeof(buffer));
+    std::string response;
+    int bytesRead = 0;
+
+    while ((bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0)) > 0)
+    {
+        response += buffer;
+        memset(buffer, 0, sizeof(buffer));
+    }
+
+    if (bytesRead < 0)
+    {
+        std::cout << "Failed to receive IP and mask from server" << std::endl;
+        closesocket(clientSocket);
+        WSACleanup();
+        return -1;
+    }
+
+    // 输出IP和掩码到控制台
+    std::stringstream ss(response);
+    std::string ip, mask;
+    std::getline(ss, ip, ',');
+    std::getline(ss, mask, ',');
+
+    std::cout << "IP: " << ip << std::endl;
+    std::cout << "Mask: " << mask << std::endl;
+
+    // 关闭socket
+    closesocket(clientSocket);
+
+    // 清理Winsock
+    WSACleanup();
+
+    return 0;
+}
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+### 服务端代码 (Server.cpp)
+
+```cpp
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
+#include <string>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+
+#pragma comment(lib, "ws2_32.lib")
+
+int main() {
+    WSADATA wsaData;
+    SOCKET ListenSocket = INVALID_SOCKET;
+    SOCKET ClientSocket = INVALID_SOCKET;
+    struct addrinfo* result = NULL;
+    struct addrinfo hints;
+    std::unordered_map<int, std::pair<std::string, std::string>> ipCache;
+
+    // Initialize Winsock
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        std::cerr << "WSAStartup failed: " << iResult << std::endl;
+        return 1;
+    }
+
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+
+    // Resolve the server address and port
+    iResult = getaddrinfo(NULL, "8888", &hints, &result);
+    if (iResult != 0) {
+        std::cerr << "getaddrinfo failed: " << iResult << std::endl;
+        WSACleanup();
+        return 1;
+    }
+
+    // Create a socket for the server
+    ListenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (ListenSocket == INVALID_SOCKET) {
+        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
+        freeaddrinfo(result);
+        WSACleanup();
+        return 1;
+    }
+
+    // Bind the socket
+    iResult = bind(ListenSocket, result->ai_addr, (int)result->ai_addrlen);
+    if (iResult == SOCKET_ERROR) {
+        std::cerr << "Bind failed with error: " << WSAGetLastError() << std::endl;
+        freeaddrinfo(result);
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    freeaddrinfo(result);
+
+    // Listen for incoming connections
+    if (listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR) {
+        std::cerr << "Listen failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // Load IP addresses from IP.TXT into cache
+    std::ifstream ipFile("IP.TXT");
+    if (!ipFile.is_open()) {
+        std::cerr << "Could not open IP.TXT" << std::endl;
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    std::string line;
+    while (std::getline(ipFile, line)) {
+        std::istringstream iss(line);
+        int id;
+        std::string ip, mask;
+        if (iss >> id >> ip >> mask) {
+            ipCache[id] = { ip, mask };
+        }
+    }
+
+    ipFile.close();
+
+    // Accept a client connection
+    ClientSocket = accept(ListenSocket, NULL, NULL);
+    if (ClientSocket == INVALID_SOCKET) {
+        std::cerr << "Accept failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    closesocket(ListenSocket);
+
+    // Receive until the peer shuts down the connection
+    char recvbuf[1024];
+    int recvbuflen = 1024;
+    iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
+    if (iResult > 0) {
+        recvbuf[iResult] = '\0';
+        std::string idStr(recvbuf);
+        int id = std::stoi(idStr);
+
+        if (ipCache.find(id) != ipCache.end()) {
+            std::string response = ipCache[id].first + "," + ipCache[id].second;
+            iResult = send(ClientSocket, response.c_str(), response.size(), 0);
+            if (iResult == SOCKET_ERROR) {
+                std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
+                closesocket(ClientSocket);
+                WSACleanup();
+                return 1;
+            }
+        } else {
+            std::string response = "ID not found";
+            iResult = send(ClientSocket, response.c_str(), response.size(), 0);
+            if (iResult == SOCKET_ERROR) {
+                std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
+                closesocket(ClientSocket);
+                WSACleanup();
+                return 1;
+            }
+        }
+    } else if (iResult == 0) {
+        std::cout << "Connection closing..." << std::endl;
+    } else {
+        std::cerr << "Recv failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ClientSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // Shutdown the connection
+    iResult = shutdown(ClientSocket, SD_SEND);
+    if (iResult == SOCKET_ERROR) {
+        std::cerr << "Shutdown failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ClientSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    closesocket(ClientSocket);
+    WSACleanup();
+
+    return 0;
+}
+```
+
+### 客户端代码 (Client.cpp)
+
+```cpp
+#include <iostream>
+#include <string>
+#include <WinSock2.h>
+#include <WS2tcpip.h>
+
+#pragma comment(lib, "ws2_32.lib")
+
+int main() {
+    WSADATA wsaData;
+    SOCKET ConnectSocket = INVALID_SOCKET;
+    struct addrinfo* result = NULL, * ptr = NULL, hints;
+    std::string sendbuf = "1"; // ID to send
+    char recvbuf[1024];
+    int iResult;
+
+    // Initialize Winsock
+    iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        std::cerr << "WSAStartup failed: " << iResult << std::endl;
+        return 1;
+    }
+
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    // Resolve the server address and port
+    iResult = getaddrinfo("127.0.0.1", "8888", &hints, &result);
+    if (iResult != 0) {
+        std::cerr << "getaddrinfo failed: " << iResult << std::endl;
+        WSACleanup();
+        return 1;
+    }
+
+    // Attempt to connect to an address until one succeeds
+    for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
+        // Create a socket for connecting to server
+        ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if (ConnectSocket == INVALID_SOCKET) {
+            std::cerr << "Socket failed with error: " << WSAGetLastError() << std::endl;
+            WSACleanup();
+            return 1;
+        }
+
+        // Connect to server
+        iResult = connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
+        if (iResult == SOCKET_ERROR) {
+            closesocket(ConnectSocket);
+            ConnectSocket = INVALID_SOCKET;
+            continue;
+        }
+        break;
+    }
+
+    freeaddrinfo(result);
+
+    if (ConnectSocket == INVALID_SOCKET) {
+        std::cerr << "Unable to connect to server!" << std::endl;
+        WSACleanup();
+        return 1;
+    }
+
+    // Send an ID to the server
+    iResult = send(ConnectSocket, sendbuf.c_str(), (int)sendbuf.size(), 0);
+    if (iResult == SOCKET_ERROR) {
+        std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ConnectSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // Receive until the peer closes the connection
+    iResult = recv(ConnectSocket, recvbuf, 1024, 0);
+    if (iResult > 0) {
+        recvbuf[iResult] = '\0';
+        std::string response(recvbuf);
+        std::cout << "Received: " << response << std::endl;
+    } else if (iResult == 0) {
+        std::cout << "Connection closed" << std::endl;
+    } else {
+        std::cerr << "Recv failed with error: " << WSAGetLastError() << std::endl;
+    }
+
+    // Shutdown the connection
+    iResult = shutdown(ConnectSocket, SD_SEND);
+    if (iResult == SOCKET_ERROR) {
+        std::cerr << "Shutdown failed with error: " << WSAGetLastError() << std::endl;
+        closesocket(ConnectSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    closesocket(ConnectSocket);
+    WSACleanup();
+
+    return 0;
+}
+```
+
+### 配置文件 (`IP.TXT`)
+
+```
+1,192.168.1.1,255.255.255.0
+2,192.168.1.2,255.255.255.0
+```
+
+### 说明
+
+1. **服务端**：
+    - 服务端监听端口 `8888`。
+    - 服务端从 `IP.TXT` 文件中读取 IP 地址和掩码，并存储在 `ipCache` 中。
+    - 当客户端连接时，服务端接收客户端发送的 ID，并根据 ID 查找对应的 IP 地址和掩码，然后将其发送回客户端。
+
+2. **客户端**：
+    - 客户端连接到服务端的 `8888` 端口。
+    - 客户端发送 ID `1` 到服务端。
+    - 客户端接收服务端返回的 IP 地址和掩码，并将其打印到控制台。
+
+### 编译和运行
+
+1. 创建两个项目：一个用于服务端 (`Server.cpp`)，一个用于客户端 (`Client.cpp`)。
+2. 编译并运行服务端程序。
+3. 编译并运行客户端程序。
+
+### 注意
+
+- 这个示例是一个简单的演示，实际应用中可能需要更多的错误处理和安全性检查。
+- 你可以根据需要扩展代码以支持更多的功能，例如支持多个客户端并发连接等。
+
+希望这个示例对你有帮助！

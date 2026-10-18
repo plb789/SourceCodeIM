@@ -1,0 +1,143 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-e98a666b183fa65983ce.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "2.6"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						6,
+						7
+					]
+				},
+				{
+					"build" : "win32",
+					"jsonFile" : "directory-win32-Debug-63c9e31085bf026d26d4.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "2.6"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "win32",
+					"targetIndexes" : 
+					[
+						5
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0,
+						1
+					],
+					"name" : "n2n",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "benchmark::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-benchmark-Debug-efe497876006fe57ad6a.json",
+					"name" : "benchmark",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "benchmark_hashtable::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-benchmark_hashtable-Debug-253eab8e0d8b3068f02c.json",
+					"name" : "benchmark_hashtable",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "edge::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-edge-Debug-426bbc035a9032141adb.json",
+					"name" : "edge",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "n2n::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-n2n-Debug-6a4e8d5732c5b394fb2c.json",
+					"name" : "n2n",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "n2n_test::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-n2n_test-Debug-4b052e86f09edb1ee93c.json",
+					"name" : "n2n_test",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "n2n_win32::@542d95a434e4e78fdfcc",
+					"jsonFile" : "target-n2n_win32-Debug-39060e9bfab87544d8b9.json",
+					"name" : "n2n_win32",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "scm::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-scm-Debug-8e612193b5a0d19c5dcb.json",
+					"name" : "scm",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "supernode::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-supernode-Debug-2b06e1086c6fdc25b45c.json",
+					"name" : "supernode",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "E:/SourceCode/P2p/n2n_v2/out/build/x64-debug",
+		"source" : "E:/SourceCode/P2p/n2n_v2"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 6
+	}
+}
