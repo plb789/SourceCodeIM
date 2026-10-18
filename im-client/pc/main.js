@@ -2741,6 +2741,81 @@ setTimeout(function () {
     console.log('[网盘挂载] 已自动恢复:', st.letter + ':', '(' + (st.username || '') + ')');
 }, 5000);
 
+// ===== 阶段二百八十四：TAP 虚拟网卡驱动管理（tapinstall 静默安装/卸载，UAC 由用户确认） =====
+// 驱动文件随包分发 resources/Driver（dev 形态取 pc\Driver，已在 package.json extraResources 归口）。
+// 检测走 tapinstall hwids 只读查询（免管理员，实测退出码恒 0 不可依赖，须解析输出文本——
+// "N matching device(s) found." = 已装 / "No matching devices found." = 未装；通配 *tap0901*
+// 同时兼容 root 枚举（root\tap0901）与 legacy 枚举（tap0901）两种形态）。
+// 安装/卸载经 PowerShell Start-Process -Verb RunAs 提权静默执行（比照上方 winfsp.msi 成熟模式）——
+// UAC 授权框无法避免（Windows 安全机制），"静默"体现为无安装向导无进度窗，授权后一条命令完成。
+function tapDriverFile(name) {
+    if (app.isPackaged) return path.join(process.resourcesPath, 'Driver', name);
+    return path.join(__dirname, 'Driver', name);
+}
+function tapDriverAvailable() {
+    return fs.existsSync(tapDriverFile('tapinstall.exe')) && fs.existsSync(tapDriverFile('OemVista.inf'));
+}
+// tapDriverInstalled 检测 TAP 驱动是否已安装（只读免提权；输出文本判定，异常兜底视为未装）
+function tapDriverInstalled() {
+    if (!tapDriverAvailable()) return false;
+    var out = '';
+    try {
+        out = String(require('child_process').execFileSync(tapDriverFile('tapinstall.exe'),
+            ['hwids', '*tap0901*'], { windowsHide: true, timeout: 15000 }));
+    } catch (e) {
+        out = String((e && e.stdout) || '');
+    }
+    if (/no matching devices/i.test(out)) return false;
+    return /matching device/i.test(out);
+}
+// tapElevatedRun 提权执行 tapinstall（argLine: "install" / "remove"；PS 单引号包路径防空格，
+// inf 路径内嵌双引号供子进程命令行解析；UAC 取消时 Start-Process 抛错由调用方接住）。
+// -WindowStyle Hidden 压制提权子进程的黑框：tapinstall 为控制台程序，Start-Process 不带窗口
+// 样式时会新开可见控制台（实测安装/卸载各闪一次黑框），隐藏后仅剩 UAC 授权框交互
+function tapElevatedRun(argLine) {
+    var exe = tapDriverFile('tapinstall.exe');
+    var argStr = argLine === 'install'
+        ? ('install "' + tapDriverFile('OemVista.inf') + '" tap0901')
+        : 'remove tap0901';
+    require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
+        "Start-Process -FilePath '" + exe + "' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '" + argStr + "'"],
+        { windowsHide: true, timeout: 180000 });
+}
+// 检测状态查询（设置页开关回显归口；available=false 表示安装包内驱动文件缺失，页面据此置灰）
+ipcMain.handle('tap:get', function () {
+    return { installed: tapDriverInstalled(), available: tapDriverAvailable() };
+});
+// 安装（启用开关）：已装直接回执；提权后复查实际状态回传，页面以真实状态回显
+ipcMain.handle('tap:install', function () {
+    if (tapDriverInstalled()) return { ok: true, installed: true, already: true };
+    if (!tapDriverAvailable()) return { ok: false, installed: false, err: '驱动文件缺失（tapinstall/OemVista.inf）' };
+    try {
+        tapElevatedRun('install');
+        var ok = tapDriverInstalled();
+        return ok ? { ok: true, installed: true } : { ok: false, installed: false, err: '安装后未检测到驱动（可能取消了授权）' };
+    } catch (e) {
+        return { ok: false, installed: tapDriverInstalled(), err: '安装未完成（可能已取消授权或需要管理员权限）' };
+    }
+});
+// 卸载（停用开关）：未装直接回执；卸载会同时移除设备与 tap0901 服务
+ipcMain.handle('tap:remove', function () {
+    if (!tapDriverInstalled()) return { ok: true, installed: false, already: true };
+    try {
+        tapElevatedRun('remove');
+        return { ok: true, installed: tapDriverInstalled() };
+    } catch (e) {
+        return { ok: false, installed: tapDriverInstalled(), err: '卸载未完成（可能已取消授权或需要管理员权限）' };
+    }
+});
+// 启动检测推送：延迟 8 秒避开启动高峰（比照上方网盘自动重挂节奏），未装且驱动文件在包内
+// 才推 tap:prompt，页面弹自定义确认弹窗（拒绝记忆在渲染层 localStorage，主进程不落盘不重复打扰）
+setTimeout(function () {
+    if (!tapDriverAvailable() || tapDriverInstalled()) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('tap:prompt', {});
+    console.log('[TAP驱动] 启动检测：未安装，已推送安装引导');
+}, 8000);
+
 // ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
 // 两个独立 BrowserWindow（禁止主窗体内嵌弹层，与图片查看器/截图编辑器同方案）：
 //   1. 通话窗 callWin：主/被叫共用，承载 WebRTC 媒体面（getUserMedia + RTCPeerConnection P2P 直连），

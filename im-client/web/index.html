@@ -1757,6 +1757,20 @@
                         <input id="settings-file-p2p" type="checkbox" class="slide-switch" checked>
                     </div>
                 </div>
+                <!-- 阶段二百八十四：TAP 虚拟网卡驱动开关（仅 PC 端显示，chat.js 按端判定显隐）。
+                     开启=静默安装（tapinstall 提权，UAC 由用户确认）、关闭=卸载；开关状态以系统真实
+                     驱动为准（tapinstall hwids 只读检测回显，不落本地缓存），主进程启动检测到未安装
+                     会另行推送安装引导弹窗 -->
+                <h3 class="settings-subtitle" id="settings-tap-subtitle" style="display:none;">虚拟网络</h3>
+                <div class="settings-card" id="settings-tap-card" style="display:none;">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">虚拟网卡 (TAP)</div>
+                            <div class="settings-card-desc">安装或卸载 TAP 虚拟网卡驱动，供 P2P 组网等网络功能使用；安装与卸载需在系统授权框（UAC）中确认，卸载后相关网络功能不可用。</div>
+                        </div>
+                        <input id="settings-tap-driver" type="checkbox" class="slide-switch">
+                    </div>
+                </div>
                 <h3 class="settings-subtitle">接收文件缓存</h3>
                 <!-- 阶段一百五十九：接收端本地缓存双开关（用户需求：刷新后文件卡片不失效、可再次另存为/预览） -->
                 <div class="settings-card">

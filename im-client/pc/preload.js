@@ -449,6 +449,25 @@ contextBridge.exposeInMainWorld('desktop', {
         ipcRenderer.send('hwaccel:set', !!disabled);
     },
 
+    // ===== TAP 虚拟网卡驱动（设置-网络-虚拟网络；tapinstall 静默装/卸，UAC 由用户确认）=====
+    // tapGet 返回 { installed, available }（真实驱动状态归口，页面开关回显以此为准）
+    // tapInstall/tapRemove 返回 { ok, installed, err? }（提权执行后复查实际状态）
+    // onTapPrompt：主进程启动检测到未安装时推送安装引导（页面弹自定义确认弹窗）
+    tapGet: function () {
+        return ipcRenderer.invoke('tap:get');
+    },
+    tapInstall: function () {
+        return ipcRenderer.invoke('tap:install');
+    },
+    tapRemove: function () {
+        return ipcRenderer.invoke('tap:remove');
+    },
+    onTapPrompt: function (callback) {
+        if (typeof callback === 'function') {
+            ipcRenderer.on('tap:prompt', function (event, data) { callback(data || {}); });
+        }
+    },
+
     // ===== 阶段九十一：内置浏览器（TRAE CN 同款浏览区）=====
     // 面板显隐（agent 工具链路在主进程侧自动展开；渲染层按钮显式开关走这里）
     browserPanel: function (visible) {

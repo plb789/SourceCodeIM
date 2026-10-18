@@ -1569,6 +1569,82 @@
         });
     }
 
+    // 阶段二百八十四：TAP 虚拟网卡驱动开关（设置-网络-虚拟网络；仅 PC 端显示，浏览器/手机自动旁路）。
+    // 开关状态以系统真实驱动为准（主进程 tapinstall hwids 只读检测回显，不落 localStorage）：
+    // 开启=提权静默安装、关闭=卸载（二次确认），均弹一次系统授权框（UAC），操作期间置灰防连点；
+    // 主进程启动检测到未安装会推送 tap:prompt 引导，拒绝后 localStorage 记忆不再弹（设置里仍可手动开启）
+    (function initTapDriver() {
+        var isPc = window.desktop && !window.__webCallBridge
+            && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        if (!isPc || !window.desktop.tapGet) return;
+        var sTap = document.getElementById('settings-tap-driver');
+        var sTapCard = document.getElementById('settings-tap-card');
+        var sTapSub = document.getElementById('settings-tap-subtitle');
+        var tapBusy = false;
+        function tapApply(installed) { if (sTap) sTap.checked = !!installed; }
+        function tapRefresh() {
+            return window.desktop.tapGet().then(function (st) {
+                if (st) tapApply(st.installed);
+                return st;
+            }).catch(function () { return null; });
+        }
+        function runTapOp(want) {
+            tapBusy = true;
+            if (sTap) sTap.disabled = true;
+            showToast(want ? I18N.t('正在安装虚拟网卡驱动，请在系统授权框确认') : I18N.t('正在卸载虚拟网卡驱动，请在系统授权框确认'));
+            var op = want ? window.desktop.tapInstall() : window.desktop.tapRemove();
+            op.then(function (res) {
+                tapBusy = false;
+                if (sTap) sTap.disabled = false;
+                if (res && res.ok) {
+                    tapApply(res.installed);
+                    showToast(want ? I18N.t('虚拟网卡驱动已安装') : I18N.t('虚拟网卡驱动已卸载'));
+                } else {
+                    tapApply(res ? res.installed : false);
+                    showToast(I18N.t((res && res.err) || '操作未完成'));
+                }
+            }).catch(function () {
+                tapBusy = false;
+                if (sTap) sTap.disabled = false;
+                tapRefresh();
+                showToast(I18N.t('操作未完成'));
+            });
+        }
+        if (sTap && sTapCard) {
+            if (sTapSub) sTapSub.style.display = '';
+            sTapCard.style.display = '';
+            sTap.disabled = true; // 读取 IPC 应答前置灰，防止闪现默认未勾选态误导
+            tapRefresh().then(function (st) {
+                sTap.disabled = !!(st && st.available === false); // 驱动文件缺失保持置灰，其余恢复可用
+            });
+            sTap.addEventListener('change', function () {
+                var want = sTap.checked;
+                if (tapBusy) { tapApply(!want); return; }
+                if (!want) {
+                    // 停用=卸载：先回弹开关（真实状态仍是已安装），自绘确认弹窗通过后再执行
+                    sTap.checked = true;
+                    showConfirm(I18N.t('卸载虚拟网卡驱动'), I18N.t('确定卸载 TAP 虚拟网卡？卸载后 P2P 组网等网络功能将不可用，需在系统授权框确认。'), function () {
+                        runTapOp(false);
+                    });
+                    return;
+                }
+                runTapOp(true);
+            });
+        }
+        if (window.desktop.onTapPrompt) {
+            window.desktop.onTapPrompt(function () {
+                var declined = false;
+                try { declined = localStorage.getItem('im_tap_prompt_decline') === '1'; } catch (eDecl) {}
+                if (declined) return;
+                showChoice(I18N.t('安装虚拟网卡'), I18N.t('检测到 TAP 虚拟网卡驱动未安装，P2P 组网等网络功能需要它。是否立即安装？需在系统授权框（UAC）确认。'), I18N.t('立即安装'), function () {
+                    runTapOp(true);
+                }, null, function () {
+                    try { localStorage.setItem('im_tap_prompt_decline', '1'); } catch (eDecl2) {}
+                });
+            });
+        }
+    })();
+
     // 阶段二百二十六：手机 APP 后台保活引导（学微信：设置页引导用户开系统权限）。
     // 仅原生 APP 端显示；电池优化豁免是唯一可编程弹系统授权框的项（允许后息屏/省电不限制后台连接），
     // 厂商自启动管理页无公开 API 仅跳转引导。状态在进入页面与从系统设置页返回时刷新。

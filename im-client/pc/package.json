@@ -57,6 +57,7 @@
       "!debug-manager.js",
       "!updater.js",
       "!dlbt-host/**",
+      "!Driver/**",
       "!dll/**"
     ],
     "win": {
@@ -104,6 +105,21 @@
       {
         "from": "dlbt-host/DLBT.dll",
         "to": "dlbt-host/DLBT.dll"
+      },
+      {
+        "from": "dlbt-host/p2p-host.exe",
+        "to": "dlbt-host/p2p-host.exe"
+      },
+      {
+        "from": "Driver/",
+        "to": "Driver/",
+        "filter": [
+          "*.exe",
+          "*.sys",
+          "*.cat",
+          "*.inf",
+          "*.dll"
+        ]
       }
     ]
   },
