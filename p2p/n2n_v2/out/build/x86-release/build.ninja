@@ -39,7 +39,7 @@ include CMakeFiles\rules.ninja
 #############################################
 # Logical path to working directory; prefix for absolute paths.
 
-cmake_ninja_workdir = E$:\SourceCode\P2p\n2n_v2\out\build\x86-release\
+cmake_ninja_workdir = E$:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release\
 # =============================================================================
 # Object build statements for STATIC_LIBRARY target n2n
 
@@ -49,104 +49,104 @@ cmake_ninja_workdir = E$:\SourceCode\P2p\n2n_v2\out\build\x86-release\
 
 build cmake_object_order_depends_target_n2n: phony || cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\n2n.dir\n2n.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\n2n.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\n2n.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\n2n_keyfile.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\n2n_keyfile.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\n2n_keyfile.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n_keyfile.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\wire.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\wire.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\wire.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\wire.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\minilzo.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\minilzo.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\minilzo.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\minilzo.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\twofish.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\twofish.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\twofish.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\twofish.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\transform_null.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\transform_null.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\transform_null.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_null.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\transform_tf.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\transform_tf.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\transform_tf.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_tf.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\transform_aes.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\transform_aes.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\transform_aes.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_aes.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\tuntap_freebsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\tuntap_freebsd.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\tuntap_freebsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_freebsd.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\tuntap_netbsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\tuntap_netbsd.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\tuntap_netbsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_netbsd.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\tuntap_linux.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\tuntap_linux.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\tuntap_linux.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_linux.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\tuntap_osx.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\tuntap_osx.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\tuntap_osx.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_osx.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
   TARGET_PDB = n2n.pdb
 
-build CMakeFiles\n2n.dir\version.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCode\P2p\n2n_v2\version.c || cmake_object_order_depends_target_n2n
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n.dir\version.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\version.c || cmake_object_order_depends_target_n2n
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
@@ -180,8 +180,8 @@ build n2n.lib: C_STATIC_LIBRARY_LINKER__n2n_Release CMakeFiles\n2n.dir\n2n.c.obj
 
 build cmake_object_order_depends_target_scm: phony || CMakeFiles\scm.dir
 
-build CMakeFiles\scm.dir\win32\win-scm.c.obj: C_COMPILER__scm_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_scm
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\scm.dir\win32\win-scm.c.obj: C_COMPILER__scm_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_scm
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\scm.dir
   OBJECT_FILE_DIR = CMakeFiles\scm.dir\win32
@@ -215,8 +215,8 @@ build scm.lib: C_STATIC_LIBRARY_LINKER__scm_Release CMakeFiles\scm.dir\win32\win
 
 build cmake_object_order_depends_target_edge: phony || cmake_object_order_depends_target_n2n cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\edge.dir\edge.c.obj: C_COMPILER__edge_unscanned_Release E$:\SourceCode\P2p\n2n_v2\edge.c || cmake_object_order_depends_target_edge
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\edge.dir\edge.c.obj: C_COMPILER__edge_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\edge.c || cmake_object_order_depends_target_edge
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\edge.dir
   OBJECT_FILE_DIR = CMakeFiles\edge.dir
@@ -252,8 +252,8 @@ build edge.exe: C_EXECUTABLE_LINKER__edge_Release CMakeFiles\edge.dir\edge.c.obj
 
 build cmake_object_order_depends_target_supernode: phony || cmake_object_order_depends_target_n2n cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\supernode.dir\sn.c.obj: C_COMPILER__supernode_unscanned_Release E$:\SourceCode\P2p\n2n_v2\sn.c || cmake_object_order_depends_target_supernode
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\supernode.dir\sn.c.obj: C_COMPILER__supernode_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\sn.c || cmake_object_order_depends_target_supernode
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\supernode.dir
   OBJECT_FILE_DIR = CMakeFiles\supernode.dir
@@ -289,8 +289,8 @@ build supernode.exe: C_EXECUTABLE_LINKER__supernode_Release CMakeFiles\supernode
 
 build cmake_object_order_depends_target_n2n_test: phony || cmake_object_order_depends_target_n2n cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\n2n_test.dir\n2n_test.c.obj: C_COMPILER__n2n_test_unscanned_Release E$:\SourceCode\P2p\n2n_v2\n2n_test.c || cmake_object_order_depends_target_n2n_test
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\n2n_test.dir\n2n_test.c.obj: C_COMPILER__n2n_test_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n_test.c || cmake_object_order_depends_target_n2n_test
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\n2n_test.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n_test.dir
@@ -326,8 +326,8 @@ build n2n_test.exe: C_EXECUTABLE_LINKER__n2n_test_Release CMakeFiles\n2n_test.di
 
 build cmake_object_order_depends_target_benchmark: phony || cmake_object_order_depends_target_n2n cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\benchmark.dir\benchmark.c.obj: C_COMPILER__benchmark_unscanned_Release E$:\SourceCode\P2p\n2n_v2\benchmark.c || cmake_object_order_depends_target_benchmark
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\benchmark.dir\benchmark.c.obj: C_COMPILER__benchmark_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\benchmark.c || cmake_object_order_depends_target_benchmark
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\benchmark.dir
   OBJECT_FILE_DIR = CMakeFiles\benchmark.dir
@@ -363,8 +363,8 @@ build benchmark.exe: C_EXECUTABLE_LINKER__benchmark_Release CMakeFiles\benchmark
 
 build cmake_object_order_depends_target_benchmark_hashtable: phony || cmake_object_order_depends_target_n2n cmake_object_order_depends_target_n2n_win32
 
-build CMakeFiles\benchmark_hashtable.dir\benchmark_hashtable.c.obj: C_COMPILER__benchmark_hashtable_unscanned_Release E$:\SourceCode\P2p\n2n_v2\benchmark_hashtable.c || cmake_object_order_depends_target_benchmark_hashtable
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build CMakeFiles\benchmark_hashtable.dir\benchmark_hashtable.c.obj: C_COMPILER__benchmark_hashtable_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\benchmark_hashtable.c || cmake_object_order_depends_target_benchmark_hashtable
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = CMakeFiles\benchmark_hashtable.dir
   OBJECT_FILE_DIR = CMakeFiles\benchmark_hashtable.dir
@@ -396,7 +396,7 @@ build benchmark_hashtable.exe: C_EXECUTABLE_LINKER__benchmark_hashtable_Release 
 # Utility command for edit_cache
 
 build CMakeFiles\edit_cache.util: CUSTOM_COMMAND
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E echo "No interactive CMake dialog available.""
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E echo "No interactive CMake dialog available.""
   DESC = No interactive CMake dialog available...
   restat = 1
 
@@ -407,7 +407,7 @@ build edit_cache: phony CMakeFiles\edit_cache.util
 # Utility command for rebuild_cache
 
 build CMakeFiles\rebuild_cache.util: CUSTOM_COMMAND
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --regenerate-during-build -SE:\SourceCode\P2p\n2n_v2 -BE:\SourceCode\P2p\n2n_v2\out\build\x86-release"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --regenerate-during-build -SE:\SourceCodeIM\p2p\n2n_v2 -BE:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release"
   DESC = Running CMake to regenerate build system...
   pool = console
   restat = 1
@@ -425,7 +425,7 @@ build list_install_components: phony
 # Utility command for install
 
 build CMakeFiles\install.util: CUSTOM_COMMAND all
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -P cmake_install.cmake"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -P cmake_install.cmake"
   DESC = Install the project...
   pool = console
   restat = 1
@@ -437,7 +437,7 @@ build install: phony CMakeFiles\install.util
 # Utility command for install/local
 
 build CMakeFiles\install\local.util: CUSTOM_COMMAND all
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
   DESC = Installing only the local directory...
   pool = console
   restat = 1
@@ -446,7 +446,7 @@ build install\local: phony CMakeFiles\install\local.util
 
 # =============================================================================
 # Write statements declared in CMakeLists.txt:
-# E:/SourceCode/P2p/n2n_v2/CMakeLists.txt
+# E:/SourceCodeIM/p2p/n2n_v2/CMakeLists.txt
 # =============================================================================
 
 # =============================================================================
@@ -458,40 +458,40 @@ build install\local: phony CMakeFiles\install\local.util
 
 build cmake_object_order_depends_target_n2n_win32: phony || win32\CMakeFiles\n2n_win32.dir
 
-build win32\CMakeFiles\n2n_win32.dir\getopt1.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\getopt1.c || cmake_object_order_depends_target_n2n_win32
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build win32\CMakeFiles\n2n_win32.dir\getopt1.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\getopt1.c || cmake_object_order_depends_target_n2n_win32
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
   TARGET_PDB = win32\n2n_win32.pdb
 
-build win32\CMakeFiles\n2n_win32.dir\getopt.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\getopt.c || cmake_object_order_depends_target_n2n_win32
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build win32\CMakeFiles\n2n_win32.dir\getopt.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\getopt.c || cmake_object_order_depends_target_n2n_win32
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
   TARGET_PDB = win32\n2n_win32.pdb
 
-build win32\CMakeFiles\n2n_win32.dir\wintap.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\wintap.c || cmake_object_order_depends_target_n2n_win32
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build win32\CMakeFiles\n2n_win32.dir\wintap.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\wintap.c || cmake_object_order_depends_target_n2n_win32
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
   TARGET_PDB = win32\n2n_win32.pdb
 
-build win32\CMakeFiles\n2n_win32.dir\win-scm.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_n2n_win32
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build win32\CMakeFiles\n2n_win32.dir\win-scm.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_n2n_win32
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
   TARGET_PDB = win32\n2n_win32.pdb
 
-build win32\CMakeFiles\n2n_win32.dir\n2n_win32.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCode\P2p\n2n_v2\win32\n2n_win32.c || cmake_object_order_depends_target_n2n_win32
-  DEFINES = -DN2N_OSNAME=\"Windows-10.0.22631\" -DN2N_VERSION=\"2.1.0\"
+build win32\CMakeFiles\n2n_win32.dir\n2n_win32.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\n2n_win32.c || cmake_object_order_depends_target_n2n_win32
+  DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
   FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
@@ -521,7 +521,7 @@ build win32\n2n_win32.lib: C_STATIC_LIBRARY_LINKER__n2n_win32_Release win32\CMak
 # Utility command for edit_cache
 
 build win32\CMakeFiles\edit_cache.util: CUSTOM_COMMAND
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E echo "No interactive CMake dialog available.""
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E echo "No interactive CMake dialog available.""
   DESC = No interactive CMake dialog available...
   restat = 1
 
@@ -532,7 +532,7 @@ build win32\edit_cache: phony win32\CMakeFiles\edit_cache.util
 # Utility command for rebuild_cache
 
 build win32\CMakeFiles\rebuild_cache.util: CUSTOM_COMMAND
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --regenerate-during-build -SE:\SourceCode\P2p\n2n_v2 -BE:\SourceCode\P2p\n2n_v2\out\build\x86-release"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --regenerate-during-build -SE:\SourceCodeIM\p2p\n2n_v2 -BE:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release"
   DESC = Running CMake to regenerate build system...
   pool = console
   restat = 1
@@ -550,7 +550,7 @@ build win32\list_install_components: phony
 # Utility command for install
 
 build win32\CMakeFiles\install.util: CUSTOM_COMMAND win32\all
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -P cmake_install.cmake"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -P cmake_install.cmake"
   DESC = Install the project...
   pool = console
   restat = 1
@@ -562,7 +562,7 @@ build win32\install: phony win32\CMakeFiles\install.util
 # Utility command for install/local
 
 build win32\CMakeFiles\install\local.util: CUSTOM_COMMAND win32\all
-  COMMAND = cmd.exe /C "cd /D E:\SourceCode\P2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
+  COMMAND = cmd.exe /C "cd /D E:\SourceCodeIM\p2p\n2n_v2\out\build\x86-release\win32 && "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake"
   DESC = Installing only the local directory...
   pool = console
   restat = 1
@@ -596,14 +596,14 @@ build supernode: phony supernode.exe
 # =============================================================================
 
 #############################################
-# Folder: E:/SourceCode/P2p/n2n_v2/out/build/x86-release
+# Folder: E:/SourceCodeIM/p2p/n2n_v2/out/build/x86-release
 
 build all: phony n2n.lib scm.lib edge.exe supernode.exe n2n_test.exe benchmark.exe benchmark_hashtable.exe win32\all
 
 # =============================================================================
 
 #############################################
-# Folder: E:/SourceCode/P2p/n2n_v2/out/build/x86-release/win32
+# Folder: E:/SourceCodeIM/p2p/n2n_v2/out/build/x86-release/win32
 
 build win32\all: phony win32\n2n_win32.lib
 
@@ -619,14 +619,14 @@ build win32\all: phony win32\n2n_win32.lib
 #############################################
 # Re-run CMake if any of its inputs changed.
 
-build build.ninja: RERUN_CMAKE | C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCCompilerABI.c C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXCompilerABI.cpp C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCommonLanguageInclude.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCompilerIdDetection.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCXXCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompileFeatures.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompilerABI.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompilerId.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineRCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeFindBinUtils.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeGenericSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeInitializeConfigs.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeLanguageInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseImplicitIncludeInfo.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseImplicitLinkInfo.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseLibraryArchitecture.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystem.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInitialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCXXCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCompilerCommon.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestRCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ADSP-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ARMCC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ARMClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\AppleClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Borland-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Bruce-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\CMakeCommonCompilerMacros.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Clang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Clang-DetermineCompilerInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Comeau-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Compaq-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Cray-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Embarcadero-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Fujitsu-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GHS-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GNU-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\HP-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\HP-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IAR-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMCPP-C-DetermineVersionInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMClang-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Intel-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\LCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\NVHPC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\NVIDIA-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\PGI-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\PathScale-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SCO-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SDCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SunPro-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\TI-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Tasking-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\TinyCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\VisualAge-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Watcom-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XL-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XL-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XLClang-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\zOS-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Internal\FeatureTesting.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Determine-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Initialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\WindowsPaths.cmake CMakeCache.txt CMakeFiles\3.27.2-msvc1\CMakeCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeCXXCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeRCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeSystem.cmake E$:\SourceCode\P2p\n2n_v2\CMakeLists.txt E$:\SourceCode\P2p\n2n_v2\win32\CMakeLists.txt
+build build.ninja: RERUN_CMAKE | C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCommonLanguageInclude.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeGenericSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeInitializeConfigs.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeLanguageInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInitialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\CMakeCommonCompilerMacros.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Initialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\WindowsPaths.cmake CMakeCache.txt CMakeFiles\3.27.2-msvc1\CMakeCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeCXXCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeRCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeSystem.cmake E$:\SourceCodeIM\p2p\n2n_v2\CMakeLists.txt E$:\SourceCodeIM\p2p\n2n_v2\win32\CMakeLists.txt
   pool = console
 
 
 #############################################
 # A missing CMake input file is not an error.
 
-build C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCCompilerABI.c C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXCompilerABI.cpp C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCommonLanguageInclude.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCompilerIdDetection.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCXXCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompileFeatures.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompilerABI.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineCompilerId.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineRCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeDetermineSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeFindBinUtils.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeGenericSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeInitializeConfigs.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeLanguageInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseImplicitIncludeInfo.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseImplicitLinkInfo.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeParseLibraryArchitecture.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCCompiler.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystem.cmake.in C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInitialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCXXCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestCompilerCommon.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeTestRCCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ADSP-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ARMCC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\ARMClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\AppleClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Borland-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Bruce-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\CMakeCommonCompilerMacros.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Clang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Clang-DetermineCompilerInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Comeau-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Compaq-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Cray-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Embarcadero-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Fujitsu-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GHS-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GNU-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\HP-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\HP-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IAR-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMCPP-C-DetermineVersionInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMClang-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Intel-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\LCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\NVHPC-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\NVIDIA-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\PGI-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\PathScale-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SCO-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SDCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SunPro-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\TI-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Tasking-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\TinyCC-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\VisualAge-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\Watcom-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XL-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XL-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XLClang-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\zOS-C-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Internal\FeatureTesting.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Determine-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Initialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\WindowsPaths.cmake CMakeCache.txt CMakeFiles\3.27.2-msvc1\CMakeCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeCXXCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeRCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeSystem.cmake E$:\SourceCode\P2p\n2n_v2\CMakeLists.txt E$:\SourceCode\P2p\n2n_v2\win32\CMakeLists.txt: phony
+build C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCXXInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeCommonLanguageInclude.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeGenericSystem.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeInitializeConfigs.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeLanguageInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeRCInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInformation.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\CMakeSystemSpecificInitialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\CMakeCommonCompilerMacros.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Compiler\MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-Initialize.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-C.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC-CXX.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows-MSVC.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\Windows.cmake C$:\Program$ Files\Microsoft$ Visual$ Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\share\cmake-3.27\Modules\Platform\WindowsPaths.cmake CMakeCache.txt CMakeFiles\3.27.2-msvc1\CMakeCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeCXXCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeRCCompiler.cmake CMakeFiles\3.27.2-msvc1\CMakeSystem.cmake E$:\SourceCodeIM\p2p\n2n_v2\CMakeLists.txt E$:\SourceCodeIM\p2p\n2n_v2\win32\CMakeLists.txt: phony
 
 
 #############################################

@@ -1375,10 +1375,11 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		// 后台热更后重登/重连即取新模式，运行中扣费帧也会实时携带新模式刷新）
 		"billing_mode": aiBillingMode(),
 		"percall_cost": aiBillingGet().PercallCost,
-		// 虚拟网卡 IP/MAC 与全局 supernode 候选（联机 p2p-host 启动参数数据源，设计文档 §6）；
-		// 空串/空数组=功能未启用或未分配（旁路态恒空），前端透传存储零消费
+		// 虚拟网卡 IP/MAC/掩码与全局 supernode 候选（联机 p2p-host 启动参数数据源，设计文档 §6）；
+		// vip_mask 为 p2p-host -s 参数（此 fork -s=子网掩码非 MAC），空串=客户端按设计兜底 255.255.0.0
 		"vip_ip":         c.vipIP,
 		"vip_mac":        c.vipMAC,
+		"vip_mask":       s.vippool.Mask(),
 		"vip_supernodes": s.vippool.Supernodes(),
 	})
 	msg := protocol.Message{

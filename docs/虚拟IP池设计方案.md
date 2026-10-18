@@ -2,7 +2,7 @@
 
 > 状态：设计评审稿（未实施）
 > 关联文档：`docs/局域网公网联机开发文档.md`（十三、风险与边界——虚拟网卡路线"另案评估"即本案）、`docs/联机原生SDK设计.md`（M3 虚拟网卡路线重评）
-> 关联代码：`im-server`（本方案主体）、`im-client/pc`（p2p-host.exe 承载宿主，后续另案）、`im-client/pc/Driver`（TAP 驱动，已随包分发并在设置页支持安装/卸载）
+> 关联代码：`im-server`（本方案主体）、`im-client/pc`（p2p-host.exe 承载宿主，后续另案）、`im-client/pc/Driver`（TAP 驱动，已随包分发并在设置页支持安装/卸载；安装成功后自动重命名适配器连接名为 **IM-client** 并固定**接口跃点数为 1**（关闭自动跃点；TAP 无默认网关不劫持互联网流量，跃点 1 使受限广播/多播的源接口优先选虚拟网卡，配合 n2n 广播转发与 `-E` 多播放行完成发现闭环；游戏间对连流量目标即对端虚拟 IP，最长前缀匹配天然走 TAP）（InterfaceGuid 差集只改本包新装块；设备描述受 cat 签名保护不可改，wintap 按 GUID 探测定位与名字无关））
 
 ---
 
@@ -208,7 +208,7 @@ p2p-host 的 `-c`（社区名=组名）与 `-k`（社区密钥）决定谁能加
 - `Client` 结构（[server/client.go](../im-server/server/client.go)）新增 `vipIP string`、`vipMAC string` 字段（finishLogin 中分配后写入，连接级缓存，连接生命周期与绑定一致）
 - `vip_supernodes` 来自服务端配置（§7），登录时随回执统一下发，作为**全局兜底**——联机房间会另行下发游戏级 supernodes（§8.3），客户端取值优先级：房间级 > 登录全局；supernode 部署变更只改服务端配置，客户端零更新
 - **协议向后兼容**：新增字段为纯增量，旧客户端忽略未知字段，零回归
-- 前端接收：socket.js 登录响应处理处存 `sessionStorage`（联机模块另案消费）；本期前端仅透传存储，不做 UI
+- 前端接收：socket.js 登录响应处理处存 `localStorage`（**跨窗口共享**——联机房间层运行在游戏中心独立窗，sessionStorage 按窗隔离读不到）；本期前端仅透传存储，不做 UI
 
 ## 七、配置设计（config/config.go + config.yaml）
 
@@ -374,9 +374,22 @@ PUT /admin/api/vipip/unbind  {"ip":"10.28.1.5"}
 
 ---
 
-## 附录 A：p2p-host.exe 启动参数规范（预留）
+## 附录 A：p2p-host.exe 启动参数规范
 
 p2p-host 为虚拟网边缘节点进程（参数与 n2n edge 对齐），由 PC 客户端在联机开始时以 sidecar 方式启动（参照 [bt-download-manager.js](../im-client/pc/bt-download-manager.js) 的 dlbt-host 生命周期管理模式：dev 取 `pc/dlbt-host/`、打包取 `resources/dlbt-host/`，进程随联机会话启停）。
+
+### A.0 启动授权与停止指令（安全门槛）
+
+exe 仅允许本项目客户端拉起，双重校验缺一即退出（code 1）：
+
+1. **父进程校验**：父进程必须是 `im-client.exe`（打包版）/ `electron.exe`（dev）；
+2. **stdin 密钥握手**：父进程 spawn 后 10 秒内经 stdin 写入 32 位授权密钥（与客户端 `P2P_HOST_AUTH` 常量一致），错误/超时即退。
+
+管理控制台端口由客户端**随机分配**（`-t`，40000-59999，仅绑 127.0.0.1），停止指令需带密钥：`stop <key>`——优雅退出（反注册 supernode、关 TAP）；密钥错误指令被忽略。客户端停止归口：退房/关房先发 UDP stop、1.5s 后 taskkill 兜底；app 退出/社区切换直接 taskkill。
+
+**父进程存活看门狗**：授权 stdin 管道在客户端存活期间保持打开（任何路径不得 `stdin.end()`）——客户端崩溃/被强杀时管道 EOF，p2p-host 检测到后自行优雅退出，杜绝孤儿进程（正常退出与意外退出均不遗留）。
+
+> 密钥编译于 exe 内，防的是第三方程序直接复用与手工运行，非绝对防逆向。
 
 ### A.1 参数总表与取值来源
 
@@ -384,19 +397,23 @@ p2p-host 为虚拟网边缘节点进程（参数与 n2n edge 对齐），由 PC 
 |---|---|---|
 | `-r` | 开启数据包转发（路由模式） | 固定开启（联机转发依赖） |
 | `-a` | 指定虚拟网卡 IP | 登录回执 `vip_ip`（服务端分配，§4） |
-| `-s` | 指定虚拟网卡 MAC 地址 | 登录回执 `vip_mac`（与 IP 同生，§4.4） |
+| `-s` | 指定虚拟网卡**子网掩码**（n2n v2 此 fork 语义；MAC 无 CLI 参数，由 TAP 驱动自取） | 登录回执 `vip_mask`（服务端 `vip_pool.mask`，§4）；空串时客户端按 `255.255.0.0`（设计网段 /16）兜底 |
 | `-c` | 社区名（组名） | 建房时服务端自动生成，5 位纯数字，活跃房间内唯一（§5.2） |
 | `-k` | 社区密钥 | 建房时服务端自动生成，6 位纯数字，仅房间成员信令下发（§5.2） |
-| `-B` | 开启双向广播（局域网游戏联机常用） | 固定开启（老游戏广播发现依赖） |
+| `-E` | 接受多播以太网帧（`01:00:5E:*`/`33:33:*`，mDNS/SSDP 类发现依赖；固定 `drop_multicast=0`） | 固定开启（多播发现类应用依赖）；局域网游戏的纯广播 `FF:FF:FF:FF:FF:FF` 默认即转发无需参数（原 `-B` 此 fork getopt 未定义、被静默忽略，已移除） |
+| `-t <port>` | 管理控制台端口（仅绑 127.0.0.1） | 客户端每次启动**随机分配**（40000-59999），UDP stop 发往该口——多实例无冲突、固定端口不再被扫 |
+| `-i <秒>` | 打洞/重注册**初始**间隔（默认 25s） | 客户端固定 20s；实际运行值由 supernode ACK lifetime 覆盖并钳制在 10-120 秒 |
 | `-l` | supernode 地址，可写多个，自动选可用节点 | 优先级链：房间开局下发的**游戏级配置**（admin 游戏表单所选，§8.3）→ 登录回执 `vip_supernodes` 全局兜底 |
 
 ### A.2 启动命令示例
 
 ```
-p2p-host.exe -r -a 10.28.1.5 -s 02:00:0A:1C:01:05 -c 57321 -k 830471 -B -l supernode1.example.com:7654 -l supernode2.example.com:7654
+p2p-host.exe -r -a 10.28.1.5 -s 255.255.0.0 -c 57321 -k 830471 -E -l supernode1.example.com:7654 -l supernode2.example.com:7654
 ```
 
-> 组网语义：所有 `-c` 相同且 `-k` 匹配的边缘节点经 supernode 汇聚为同一虚拟二层网，各自 `10.28.x.x` 直互通——局域网广播（-B）让只认广播发现的老游戏可见同房间成员，虚拟 IP 池保证每用户地址唯一不冲突。
+> 组网语义：所有 `-c` 相同且 `-k` 匹配的边缘节点经 supernode 汇聚为同一虚拟二层网，各自 `10.28.x.x` 直互通——老游戏的纯广播发现帧（FF:FF:FF:FF:FF:FF）默认即转发，多播发现（mDNS/SSDP）由 `-E` 放行，虚拟 IP 池保证每用户地址唯一不冲突。
+>
+> MAC 说明：`vip_mac`（§4.4）随登录回执下发仅作身份记录——n2n v2 此 fork 的 edge/wintap 未实装 MAC 设置（`device_mac` 形参未使用），实际 MAC 由 TAP 驱动分配。若后续需要 MAC 绑定校验，需扩展 wintap（注册表 NetworkAddress 方案）另案实施。
 
 ### A.3 与本期实施的边界
 

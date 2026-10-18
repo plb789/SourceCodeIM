@@ -16,7 +16,6 @@
 
 #define N2N_SN_MGMT_PORT                5645
 
-const char* SHARED_MEMORY_NAME = "&奇诺宝宝";
 struct sn_stats
 {
     size_t errors;              /* Number of errors encountered. */
@@ -703,18 +702,8 @@ static const struct option long_options[] = {
 /** 来自内核的主程序入口点. */
 int main( int argc, char * const argv[] )
 {
-    // 修改控制台窗口标题
-    SetConsoleTitleA("战争前线-V20: DistributedGateway - 奇诺宝宝QQ4722100");
-
-    // 打开共享内存
-    HANDLE hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHARED_MEMORY_NAME);
-    if (hMapFile == NULL) {
-        //fprintf(stderr, "无法打开共享内存\n");
-        traceEvent(TRACE_NORMAL, "联系QQ4722100.");
-        return 1;
-}
     n2n_sn_t sss;
-    traceEvent(TRACE_NORMAL, "正在启动分布式网关服务 版本:2.1.0 更新时间:Nov 27 2024 17:03:13 奇诺宝宝QQ4722100.");
+    traceEvent(TRACE_NORMAL, "正在启动分布式网关服务 版本:2.1.0 更新时间:Nov 27 2024 17:03:13 .");
 #ifndef WIN32
     uid_t   userid=0; /* root is the only guaranteed ID */
     gid_t   groupid=0; /* root is the only guaranteed ID */
@@ -852,6 +841,21 @@ static int run_loop( n2n_sn_t * sss )
 
                 if ( bread < 0 ) /* For UDP bread of zero just means no data (unlike TCP). */
                 {
+#if defined(WIN32)
+                    int err = WSAGetLastError();
+                    /* Transient errors (e.g. WSAECONNRESET delivered after an ICMP
+                       port-unreachable from a client that closed its port) must not
+                       take the whole supernode down. */
+                    if ( err == WSAECONNRESET || err == WSAEWOULDBLOCK || err == WSAETIMEDOUT || err == WSAECONNREFUSED )
+                    {
+                        continue; /* drop and keep serving */
+                    }
+#else
+                    if ( errno == ECONNREFUSED || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR )
+                    {
+                        continue; /* transient: drop and keep serving */
+                    }
+#endif
                     /* The fd is no good now. Maybe we lost our interface. */
                     traceEvent( TRACE_ERROR, "recvfrom() failed %d errno %d (%s)", bread, errno, strerror(errno) );
                     keep_running=0;
@@ -875,15 +879,31 @@ static int run_loop( n2n_sn_t * sss )
                 bread = recvfrom( sss->mgmt_sock, pktbuf, N2N_SN_PKTBUF_SIZE, 0/*flags*/,
 				  (struct sockaddr *)&sender_sock, (socklen_t*)&i);
 
-                if ( bread <= 0 )
+                if ( bread < 0 )
                 {
+#if defined(WIN32)
+                    int err = WSAGetLastError();
+                    if ( err == WSAECONNRESET || err == WSAEWOULDBLOCK || err == WSAETIMEDOUT || err == WSAECONNREFUSED )
+                    {
+                        continue; /* transient: drop and keep serving */
+                    }
+#else
+                    if ( errno == ECONNREFUSED || errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR )
+                    {
+                        continue;
+                    }
+#endif
                     traceEvent( TRACE_ERROR, "recvfrom() failed %d errno %d (%s)", bread, errno, strerror(errno) );
                     keep_running=0;
                     break;
                 }
 
-                /* We have a datagram to process */
-                process_mgmt( sss, &sender_sock, pktbuf, bread, now );
+                /* bread == 0: empty datagram (e.g. port scan) - ignore, do not die */
+                if ( bread > 0 )
+                {
+                    /* We have a datagram to process */
+                    process_mgmt( sss, &sender_sock, pktbuf, bread, now );
+                }
             }
         }
         else

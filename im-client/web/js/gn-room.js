@@ -611,11 +611,6 @@
             (my.game_mode ? '<span class="gn-meta-item">' + T('模式') + ' <b>' + esc(modeLabel(my.game_mode)) + '</b></span>' : '') +
             '<span class="gn-meta-item">' + (my.status === 'playing' ? T('游戏中') : T('等待中')) + '</span>' +
             (my.isHost ? '<span class="gn-meta-item gn-badge-host">' + T('我是房主') + '</span>' : '');
-        // supernode 房间开局提示（p2p-host 启动器另案未落地前的过渡告知；每房间一次防重复）
-        if (my.status === 'playing' && my.mode === 'supernode' && !my._nmTiped) {
-            my._nmTiped = true;
-            toast(T('虚拟网卡启动器即将支持，本房间暂按端口隧道链路处理'));
-        }
         renderMembers();
         renderActions();
         renderLinkBar();
@@ -1322,11 +1317,53 @@
             } catch (e) { }
             gnBroadcastStopQuiet(); // 功能二期方案 B：房间页统一收口即停局域网发现
         }
+        gnP2pStop(reason); // 虚拟网卡路线：supernode 房间收口即停 p2p-host（幂等，非 supernode 房间 no-op）
         my = null;
         myName = '';
         pendingJoinId = '';
         awaitingChat = ''; // 房间收口连带清房内聊天在途锁（关房瞬间发送的信令不会再来回显，防发送锁死）
         roomMsgs = [];
+    }
+
+    // ===== p2p-host.exe 启动器联动（联机虚拟网卡路线，设计文档 §七；生命周期归口主进程 p2pHost 块）=====
+    // 开局（status→playing 且 mode=supernode）：收集参数启动（vip_ip/mac/mask 登录回执 localStorage +
+    // comm/comm_key/supernodes 房间信令）；对局结束/退房/关房（teardownLocal）停止。单实例主进程归口
+    // 注意：p2p-host -s 是子网掩码（n2n v2 此 fork 语义），非 MAC——MAC 由 TAP 驱动自取
+    function gnP2pStart() {
+        if (!window.desktop || typeof window.desktop.p2pHostStart !== 'function') {
+            toast(T('当前客户端不支持虚拟网卡启动器，请联系升级'));
+            return;
+        }
+        var vipIp = '', vipMac = '', vipMask = '';
+        try {
+            vipIp = localStorage.getItem('vip_ip') || '';
+            vipMac = localStorage.getItem('vip_mac') || '';
+            vipMask = localStorage.getItem('vip_mask') || '';
+        } catch (eV) { }
+        window.desktop.p2pHostStart({
+            vip_ip: vipIp, vip_mac: vipMac,
+            mask: vipMask || '255.255.0.0', // 设计网段 10.28.0.0/16；服务端回执缺省时按设计兜底
+            comm: my.comm || '', comm_key: my.comm_key || '',
+            supernodes: my.supernodes || []
+        }).then(function (r) {
+            if (r && r.ok) {
+                toast(r.already ? T('虚拟网卡组网已在运行') : T('p2p-host 已启动，虚拟网卡组网中…'));
+            } else {
+                toast(T((r && r.err) || 'p2p-host 启动失败'));
+            }
+        }).catch(function () { toast(T('p2p-host 启动失败')); });
+    }
+    function gnP2pStop(reason) {
+        if (!window.desktop || typeof window.desktop.p2pHostStop !== 'function') return;
+        try { window.desktop.p2pHostStop(reason || 'room-teardown'); } catch (e) { }
+    }
+    // p2p-host 状态推送（全窗广播）：对局中异常退出即时告知（正常收口由 teardownLocal 触发不重复提示）
+    if (window.desktop && typeof window.desktop.onP2pHostStatus === 'function') {
+        window.desktop.onP2pHostStatus(function (st) {
+            if (st && !st.running && my && my.status === 'playing' && my.mode === 'supernode') {
+                toast(T('虚拟网卡组网已断开（{r}）', { r: st.reason || '进程退出' }));
+            }
+        });
     }
 
     // ===== 下行信封状态机（GNSignal 分流 109 帧） =====
@@ -1408,6 +1445,9 @@
                 }
                 if (prev !== 'playing' && my.status === 'playing') {
                     toast(T('房主已开始游戏'));
+                    // 虚拟网卡路线：supernode 房间开局即启动 p2p-host（房主与成员各自拉起，组网参数随信令已到位；
+                    // 启动器异常由 onP2pHostStatus 推送告知。启动器另案落地前此路径即真实启动链）
+                    if (my.mode === 'supernode') gnP2pStart();
                     // 功能二期：关联游戏库游戏时询问启动（加入方本机未运行该游戏则弹自绘确认；
                     // 未入库/WEB 端无启动能力则仅提示手动启动；每房间只询问一次）
                     if (!my.isHost && (my.game_id || 0) > 0 && !my._launchAsked) {
@@ -1466,6 +1506,10 @@
             host: env.host || (my && my.host) || '',
             host_port: env.host_port || (my && my.host_port) || 0,
             mode: env.mode || (my && my.mode) || MODE_TUNNEL,
+            // 虚拟网卡组网参数（supernode 房间随信令下发：建房生成的社区名/密钥 + 游戏级 supernode 列表）
+            comm: env.comm || '',
+            comm_key: env.comm_key || '',
+            supernodes: env.supernodes || [],
             game_mode: env.game_mode || (my && my.game_mode) || '',
             max_players: env.max_players || (my && my.max_players) || 0,
             game_id: env.game_id || (my && my.game_id) || 0,

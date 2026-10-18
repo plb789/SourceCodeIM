@@ -468,6 +468,24 @@ contextBridge.exposeInMainWorld('desktop', {
         }
     },
 
+    // ===== p2p-host 启动器（联机虚拟网卡路线；生命周期归口 main.js p2pHost 块）=====
+    // p2pHostStart 参数 {vip_ip, vip_mac, comm, comm_key, supernodes:[...]}——收集自登录回执（localStorage）
+    // 与房间信令（comm/comm_key/supernodes）；onP2pHostStatus 全窗状态推送（启动/停止/异常退出）
+    p2pHostStart: function (params) {
+        return ipcRenderer.invoke('p2p-host:start', params);
+    },
+    p2pHostStop: function (reason) {
+        return ipcRenderer.invoke('p2p-host:stop', reason);
+    },
+    p2pHostStatus: function () {
+        return ipcRenderer.invoke('p2p-host:status');
+    },
+    onP2pHostStatus: function (callback) {
+        if (typeof callback === 'function') {
+            ipcRenderer.on('p2p-host:status', function (event, data) { callback(data || {}); });
+        }
+    },
+
     // ===== 阶段九十一：内置浏览器（TRAE CN 同款浏览区）=====
     // 面板显隐（agent 工具链路在主进程侧自动展开；渲染层按钮显式开关走这里）
     browserPanel: function (visible) {

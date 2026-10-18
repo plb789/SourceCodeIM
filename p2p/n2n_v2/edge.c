@@ -32,49 +32,81 @@
 #include "scm.h"
 #include <stdio.h>
 #include <Windows.h>
+#include <string.h>
+#include <tlhelp32.h>
 
 int n2n_main(int, char **);// 主函数
 int n2n_stop(void *);// 停止函数
 // 共享内存名称
-const char* SHARED_MEMORY_NAME = "&奇诺宝宝";
-#define SOCKET_SHARE_MEMORY 1024
+// ===== launch guard: this binary is private to the project client =====
+// 1) parent process must be the project client (im-client.exe; electron.exe for dev run)
+// 2) parent must write the auth secret to stdin within timeout, or we exit silently
+// (old shared-memory gate removed; UDP mgmt "stop" now requires the same secret)
+#define LAUNCH_AUTH_SECRET      "b7e4a91c5d2f83a60f4d1c8e97b25a36"
+#define LAUNCH_AUTH_TIMEOUT_MS  10000
 
-// 共享内存监视线程函数
-DWORD WINAPI SharedMemoryMonitor(LPVOID lpParam) {
-    HANDLE hMapFile = (HANDLE)lpParam;
-    int* sharedMemory = (int*)MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(int));
-    if (sharedMemory == NULL) {
-        fprintf(stderr, "映射共享内存失败\n");
-        return 1;
+int keep_running = 1; /* global run flag: n2n_stop/mgmt-stop clear it; TAP reader thread polls it */
+
+static HANDLE g_authEvent = NULL;
+
+static int checkParentProcess(void) {
+    DWORD selfPid = GetCurrentProcessId();
+    DWORD parentPid = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe;
+        ZeroMemory(&pe, sizeof(pe));
+        pe.dwSize = sizeof(pe);
+        if (Process32First(snap, &pe)) {
+            do {
+                if (pe.th32ProcessID == selfPid) { parentPid = pe.th32ParentProcessID; break; }
+            } while (Process32Next(snap, &pe));
+        }
+        CloseHandle(snap);
     }
+    if (parentPid == 0) return 0;
+    {
+        HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, parentPid);
+        char path[MAX_PATH];
+        DWORD sz = MAX_PATH;
+        int ok = 0;
+        if (hp) {
+            if (QueryFullProcessImageNameA(hp, 0, path, &sz) && sz > 0 && sz < MAX_PATH) {
+                const char *base = path + sz;
+                const char *q;
+                for (q = path; q < path + sz; q++)
+                    if (*q == '\\' || *q == '/') base = q + 1;
+                ok = (_stricmp(base, "im-client.exe") == 0) || (_stricmp(base, "electron.exe") == 0);
+            }
+            CloseHandle(hp);
+        }
+        return ok;
+    }
+}
 
-    while (1) {
-        // 监视共享内存变化
-        int data = *sharedMemory;
-        //printf("内存地址测试: %d\n", data);
-
-        // 可以在这里添加其他监视逻辑
-        if (data != SOCKET_SHARE_MEMORY) {
-            // 共享内存中写入1，表示需要停止
+static DWORD WINAPI authReadThread(LPVOID unused) {
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    char buf[64];
+    DWORD n = 0, total = 0;
+    (void)unused;
+    ZeroMemory(buf, sizeof(buf));
+    while (total < sizeof(buf) - 1) {
+        if (!ReadFile(in, buf + total, 1, &n, NULL) || n == 0) break;
+        if (buf[total] == '\n') break;
+        total++;
+    }
+    buf[total] = 0;
+    if (strcmp(buf, LAUNCH_AUTH_SECRET) == 0) SetEvent(g_authEvent);
+    /* parent-liveness watchdog: the stdin pipe stays open while the project client runs;
+       EOF/error here means the client died (crash/force-kill) -> graceful stop, no orphan */
+    for (;;) {
+        char sink[256];
+        if (!ReadFile(in, sink, sizeof(sink), &n, NULL) || n == 0) {
+            n2n_stop(NULL);
             break;
         }
-
-        DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND) {
-            fprintf(stderr, "共享内存不存在\n");
-            
-            break;
-        }
-
-        Sleep(1000); // 等待一秒钟
     }
-
-    // 清理资源
-    UnmapViewOfFile(sharedMemory);// 解除映射
-    CloseHandle(hMapFile);// 关闭映射文件
-    traceEvent(TRACE_NORMAL, "登录服务连接失败即将退出.");
-    n2n_stop(NULL);// 调用停止函数
-    //return 0;
+    return 0;
 }
 
 struct SCM_def sd = {
@@ -1678,7 +1710,9 @@ static void readFromMgmtSocket( n2n_edge_t * eee, int * keep_running )
 
     if ( recvlen >= 4 )
     {
-        if ( 0 == memcmp( udp_buf, "stop", 4 ) )
+        if ( ( recvlen >= 5 + (int)strlen(LAUNCH_AUTH_SECRET) ) &&
+             ( 0 == memcmp( udp_buf, "stop ", 5 ) ) &&
+             ( 0 == memcmp( udp_buf + 5, LAUNCH_AUTH_SECRET, strlen(LAUNCH_AUTH_SECRET) ) ) )
         {
             traceEvent( TRACE_ERROR, "收到停止命令." );
             *keep_running = 0;
@@ -1692,7 +1726,7 @@ static void readFromMgmtSocket( n2n_edge_t * eee, int * keep_running )
 
             msg_len += snprintf( (char *)(udp_buf+msg_len), (N2N_PKT_BUF_SIZE-msg_len),
                                  "Help for edge management console:\n"
-                                 "  stop    Gracefully exit edge\n"
+                                 "  stop <key>  Gracefully exit edge\n"
                                  "  help    This help message\n"
                                  "  +verb   Increase verbosity of logging\n"
                                  "  -verb   Decrease verbosity of logging\n"
@@ -2172,7 +2206,7 @@ static DWORD tunReadThread(LPVOID lpArg )
 {
     n2n_edge_t *eee = (n2n_edge_t*)lpArg;
 
-    while(1)
+    while(keep_running) /* was while(1): thread must observe the stop flag or it touches freed eee */
     {
         readFromTAPSocket(eee);
     }
@@ -2183,12 +2217,13 @@ static DWORD tunReadThread(LPVOID lpArg )
 
 /** Start a second thread in Windows because TUNTAP interfaces do not expose
  *  file descriptors. */
+static HANDLE s_tapThread = NULL; /* TAP reader thread handle, for orderly shutdown */
+
 static void startTunReadThread(n2n_edge_t *eee)
 {
-    HANDLE hThread;
     DWORD dwThreadId;
 
-    hThread = CreateThread(NULL,         /* security attributes */
+    s_tapThread = CreateThread(NULL,     /* security attributes */
                            0,            /* use default stack size */
                            (LPTHREAD_START_ROUTINE)tunReadThread, /* thread function */
                            (void*)eee,   /* argument to thread function */
@@ -2750,7 +2785,7 @@ int real_main(int argc, char* argv[])
 #endif /* #ifdef N2N_HAVE_DAEMON */
 
 
-    traceEvent( TRACE_NORMAL, "正在启动负载服务 版本:%s 更新时间:%s 奇诺宝宝QQ4722100", n2n_sw_version, n2n_sw_buildDate );// 输出启动信息
+    traceEvent( TRACE_NORMAL, "正在启动负载服务 版本:%s 更新时间:%s ", n2n_sw_version, n2n_sw_buildDate );// 输出启动信息
 
 
     for (i=0; i< N2N_EDGE_NUM_SUPERNODES; ++i )// 输出超级节点列表信息 目前上限设置为2个
@@ -2869,7 +2904,6 @@ int real_main(int argc, char* argv[])
     return run_loop(&eee);
 }
 
-int keep_running = 1;
 static int run_loop(n2n_edge_t *eee)
 {
     size_t numPurged;
@@ -2991,6 +3025,19 @@ static int run_loop(n2n_edge_t *eee)
 
     send_deregister(eee, &(eee->supernode));// 发送注销消息
 
+#ifdef WIN32
+    /* tear down the TAP reader thread BEFORE freeing eee/device: the thread runs
+       readFromTAPSocket(eee) concurrently and would otherwise hit freed memory
+       (use-after-free -> 0xC0000005) while the stop path cleans up */
+    keep_running = 0;
+    if ( s_tapThread != NULL )
+    {
+        CancelIoEx( eee->device.device_handle, NULL ); /* unblock pending ReadFile */
+        WaitForSingleObject( s_tapThread, 5000 );
+        CloseHandle( s_tapThread );
+        s_tapThread = NULL;
+    }
+#endif
     closesocket(eee->udp_sock);// 关闭UDP套接字
     tuntap_close(&(eee->device));// 关闭TAP设备
 
@@ -3010,61 +3057,20 @@ int n2n_stop(void *param1) {
 // 主函数
 int main(int argc, char **argv)
 {
-    /* 注册服务 */
+    /* launch guard: parent must be the project client and pass the stdin secret */
+    SetConsoleTitleA("IM P2P Host");
 
-    // 修改控制台窗口标题
-    SetConsoleTitleA("对战平台:P2P服务 - 奇诺宝宝QQ4722100");
-    //traceEvent(TRACE_NORMAL, "正在启动负载服务 版本:2.1.0 更新时间:Nov 27 2024 17:03:13 奇诺宝宝QQ4722100.");
-
-    // 打开共享内存
-    HANDLE hMapFile = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, SHARED_MEMORY_NAME);
-    if (hMapFile == NULL) {
-        //fprintf(stderr, "无法打开共享内存\n");
-        traceEvent(TRACE_NORMAL, "QQ4722100.");
+    if ( !checkParentProcess() ) {
         return 1;
     }
 
-    // 映射共享内存
-    int* sharedMemory = (int*)MapViewOfFile(hMapFile, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(int));
-    if (sharedMemory == NULL) {
-        //fprintf(stderr, "映射共享内存失败\n");
-        traceEvent(TRACE_NORMAL, "登录服务连接失败.");
-        CloseHandle(hMapFile);
+    g_authEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if ( g_authEvent == NULL ) return 1;
+    if ( CreateThread(NULL, 0, authReadThread, NULL, 0, NULL) == NULL ) return 1;
+    if ( WaitForSingleObject(g_authEvent, LAUNCH_AUTH_TIMEOUT_MS) != WAIT_OBJECT_0 ) {
         return 1;
     }
 
-    // 读取内存数据
-    //int data = *sharedMemory;
-    //printf("内存地址: %d\n", data);
-
-    // 创建共享内存监视线程
-    HANDLE hThread = CreateThread(NULL, 0, SharedMemoryMonitor, hMapFile, 0, NULL);
-    if (hThread == NULL) {
-        traceEvent(TRACE_NORMAL, "创建登录服务监视线程失败.");
-        //fprintf(stderr, "创建监控线程失败\n");
-        UnmapViewOfFile(sharedMemory);
-        CloseHandle(hMapFile);
-        return 1;
-    }
-    else {
-        traceEvent(TRACE_NORMAL, "登录服务连接成功.");
-    }
-
-    /* 启动服务 */
-    
-        if (SCM_Start(&sd, argc, argv) != SVC_OK) {// 调用SCM_Start函数启动服务，如果返回值不等于SVC_OK表示启动失败
-                return 1;// 退出程序
-        }
-
-        return 0;// 退出程序
-
-        // 等待监视线程退出
-        WaitForSingleObject(hThread, INFINITE);// 等待监视线程退出
-
-        traceEvent(TRACE_NORMAL, "登录服务已停止.");
-        // 清理资源
-        CloseHandle(hThread);// 关闭监视线程
-        UnmapViewOfFile(sharedMemory);// 解除映射共享内存
-        CloseHandle(hMapFile);// 关闭共享内存
+    if ( SCM_Start(&sd, argc, argv) != SVC_OK ) return 1;
+    return 0;
 }
-

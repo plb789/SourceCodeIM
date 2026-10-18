@@ -1999,6 +1999,127 @@ function gnBroadcast(channel, payload) {
 }
 gameTunnel.setEmitter(gnBroadcast);
 
+// ===== 虚拟网卡路线：p2p-host.exe 启动器（联机方式路由设计 §七；参数规范见虚拟IP池方案附录 A） =====
+// 生命周期归口：supernode 房间开局启动（渲染层经房间信令 comm/comm_key/supernodes + 登录回执
+// vip_ip/vip_mac 收集参数后 IPC 下发），对局结束/退房/关房（teardownLocal）与关停时停止；
+// 单实例（同 comm 幂等、异 comm 先停后启）；exe 随包 resources/dlbt-host/（与 dlbt-host 同目录）
+var p2pProc = null; // 当前 p2p-host 子进程（单实例归口）
+var p2pMeta = null; // 当前运行参数 {comm, vip_ip}
+var P2P_HOST_AUTH = 'b7e4a91c5d2f83a60f4d1c8e97b25a36'; // 启动授权密钥（p2p-host.exe 启动握手 + UDP stop 校验，与 edge.c LAUNCH_AUTH_SECRET 一致）
+var P2P_HOLEPUNCH_INTERVAL = 20; // 打洞/重注册初始间隔秒（-i）；实际运行值由 supernode ACK lifetime 覆盖并钳制在 10-120
+
+function p2pHostFile() {
+    if (app.isPackaged) return path.join(process.resourcesPath, 'dlbt-host', 'p2p-host.exe');
+    return path.join(__dirname, 'dlbt-host', 'p2p-host.exe');
+}
+
+// p2pHostStop 终止归口：优先 UDP 管理端口 5644 发授权 stop 指令优雅退出（反注册、关 TAP），
+// taskkill /T /F 进程树兜底；app-quit/restart 路径无优雅窗口直接强杀。幂等
+function p2pHostStop(reason) {
+    var proc = p2pProc;
+    var meta = p2pMeta;
+    p2pProc = null;
+    p2pMeta = null;
+    if (!proc && !meta) return;
+    var why = String(reason || '');
+    logger.Info('[p2p-host] 停止（%s）comm=%s', why, (meta && meta.comm) || '');
+    if (proc && proc.pid) {
+        var killTree = function () {
+            try { require('child_process').exec('taskkill /PID ' + proc.pid + ' /T /F', { windowsHide: true }); } catch (e) { }
+            try { proc.kill(); } catch (e) { }
+        };
+        if (why === 'app-quit' || why === 'restart') {
+            killTree(); // 退出/重启路径：确定性优先，立即强杀
+        } else {
+            try {
+                var mgmtPort = (meta && meta.mgmt_port) || 5644; // stop 目标 = 本实例 -t 随机管理口（缺省兜底默认口）
+                var sock = require('dgram').createSocket('udp4');
+                sock.send(Buffer.from('stop ' + P2P_HOST_AUTH, 'utf8'), mgmtPort, '127.0.0.1', function () {
+                    try { sock.close(); } catch (e2) { }
+                });
+            } catch (e) { }
+            setTimeout(function () {
+                if (proc.exitCode !== null) return; // 已优雅退出：跳过兜底强杀（防 PID 复用误杀无关进程）
+                killTree();
+            }, 1500); // 优雅退出窗口后强杀兜底（密钥错/端口异常时仍能收口）
+        }
+    }
+    gnBroadcast('p2p-host:status', { running: false, comm: (meta && meta.comm) || '', reason: why });
+}
+
+// p2pHostStart 启动归口：params = {vip_ip, vip_mac, mask?, comm, comm_key, supernodes:[host:port...]}。
+// -s 语义为子网掩码（n2n v2 此 fork：MAC 由 TAP 驱动自取，vip_mac 仅作身份记录不进参数）；
+// mask 缺省按设计网段 10.28.0.0/16 兜底 255.255.0.0。
+// 安全：ip/mask 严格 IPv4 校验（edge 内部 netsh 经 system() 拼接执行，渲染层来源值必须白名单化防注入）；
+// 参数不完整/文件缺失回 err；同 comm 幂等回 already；异 comm 先停后启（社区切换）；
+// 进程立即退出（参数错/驱动缺失）经 exit 事件广播 running=false 供房间页告知
+function p2pIpv4Valid(s) {
+    if (!/^(\d{1,3})(\.\d{1,3}){3}$/.test(s)) return false;
+    return s.split('.').every(function (o) { var n = +o; return n <= 255; });
+}
+
+function p2pHostStart(params) {
+    params = params || {};
+    var exe = p2pHostFile();
+    if (!fs.existsSync(exe)) return { ok: false, err: 'p2p-host.exe 缺失（' + exe + '）' };
+    var ip = String(params.vip_ip || '').trim();
+    var mac = String(params.vip_mac || '').trim();
+    var mask = String(params.mask || '').trim() || '255.255.0.0';
+    var comm = String(params.comm || '').trim();
+    var key = String(params.comm_key || '').trim();
+    var sns = Array.isArray(params.supernodes) ? params.supernodes.filter(function (s) {
+        s = String(s || '').trim();
+        return !!s;
+    }) : [];
+    if (!ip || !mac || !comm || !key || !sns.length) {
+        return { ok: false, err: '组网参数不完整（虚拟 IP/MAC/社区名/密钥/supernode 缺一不可）' };
+    }
+    if (!p2pIpv4Valid(ip) || !p2pIpv4Valid(mask)) {
+        logger.Warn('[p2p-host] 非法 IPv4 参数拒绝启动 ip=%s mask=%s', ip, mask);
+        return { ok: false, err: '虚拟 IP/掩码格式非法（需合法 IPv4）' };
+    }
+    if (p2pProc && p2pMeta && p2pMeta.comm === comm) {
+        return { ok: true, already: true, comm: comm }; // 同社区幂等（重开局/重连沿）
+    }
+    p2pHostStop('restart'); // 社区切换：先停旧实例
+    // 管理口（-t）随机分配（40000-59999）：多实例无冲突、UDP stop 目标精确、固定端口不再被扫；
+    // 2 万端口空间冲突概率极低，edge 绑定失败会退出并广播 running=false，重开局即换新口
+    var mgmtPort = 40000 + Math.floor(Math.random() * 20000);
+    var args = ['-r', '-a', ip, '-s', mask, '-c', comm, '-k', key, '-E',
+                '-t', String(mgmtPort), '-i', String(P2P_HOLEPUNCH_INTERVAL)];
+    sns.forEach(function (s) { args.push('-l'); args.push(s); });
+    try {
+        var proc = require('child_process').spawn(exe, args, { windowsHide: true, cwd: path.dirname(exe) });
+        try { proc.stdin.write(P2P_HOST_AUTH + '\n'); } catch (e) { } // 启动授权握手（edge.c main 入口 10s 内校验，未过即退）；stdin 管道保持打开作父进程存活看门狗——本进程意外退出时管道 EOF，p2p-host 自行优雅退出防孤儿，故任何路径不得 stdin.end()
+        p2pProc = proc;
+        p2pMeta = { comm: comm, vip_ip: ip, mgmt_port: mgmtPort }; // mgmt_port：UDP stop 目标（-t 随机分配）
+        logger.Info('[p2p-host] 启动 pid=%d comm=%s ip=%s supernodes=%d', proc.pid, comm, ip, sns.length);
+        proc.on('exit', function (code) {
+            if (p2pProc !== proc) return; // 主动停止路径已清指针并广播，不重复
+            p2pProc = null;
+            p2pMeta = null;
+            logger.Warn('[p2p-host] 进程退出 code=%s comm=%s', code, comm);
+            gnBroadcast('p2p-host:status', { running: false, comm: comm, reason: 'exit:' + code });
+        });
+        proc.on('error', function (e) {
+            logger.Error('[p2p-host] 进程错误: %s', (e && e.message) || e);
+        });
+    } catch (e) {
+        p2pProc = null;
+        p2pMeta = null;
+        return { ok: false, err: '启动异常：' + ((e && e.message) || e) };
+    }
+    gnBroadcast('p2p-host:status', { running: true, comm: comm, vip_ip: ip });
+    return { ok: true, comm: comm };
+}
+
+ipcMain.handle('p2p-host:start', function (e, params) { return p2pHostStart(params); });
+ipcMain.handle('p2p-host:stop', function (e, reason) { p2pHostStop(String(reason || 'manual')); return { ok: true }; });
+ipcMain.handle('p2p-host:status', function () {
+    return { running: !!p2pProc, comm: (p2pMeta && p2pMeta.comm) || '', vip_ip: (p2pMeta && p2pMeta.vip_ip) || '' };
+});
+app.on('before-quit', function () { p2pHostStop('app-quit'); }); // 关停归口：子进程不随父退出，显式终止
+
 // 开启隧道（幂等）：args = {room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?}
 // → Promise<{ok:true, port, host_ip} | {ok:false, err}>；err 枚举 bad_key/bad_args/bad_port/bad_host_ip/
 //   udp_bind:*/tcp_listen:*（端口被占等）
@@ -2722,8 +2843,15 @@ ipcMain.handle('dav:winfsp-install', function () {
     if (davWinfspInstalled()) return { ok: true, already: true };
     if (!fs.existsSync(davBundledFile('winfsp.msi'))) return { ok: false, err: 'WinFsp 安装包缺失' };
     try {
+        // 提权命令经 -EncodedCommand（UTF-16LE Base64）+ PS 单引号字面量传参（比照下方 tapElevatedRun 同款）：
+        // 旧写法外层 PS 双引号串内嵌反引号转义引号，路径含 $ 会被展开致 msiexec 参数破坏；
+        // Base64 + 单引号字面量双保险（空格/特殊字符路径均安全）。提权会话内直接跑 msiexec（已具管理员），
+        // Start-Process -Wait 等安装完成（msiexec 为 GUI 子系统，& 调用不会阻塞）。
+        var psq = function (p) { return "'" + String(p).replace(/'/g, "''") + "'"; };
+        var inner = 'Start-Process msiexec -ArgumentList \'/i\',' + psq(davBundledFile('winfsp.msi')) + ',\'/qn\',\'/norestart\' -Wait';
+        var enc = Buffer.from(inner, 'utf16le').toString('base64');
         require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
-            'Start-Process msiexec -Verb RunAs -Wait -ArgumentList "/i `"" + davBundledFile("winfsp.msi") + "`" /qn /norestart"'], { windowsHide: true, timeout: 180000 });
+            "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"], { windowsHide: true, timeout: 180000 });
         return davWinfspInstalled() ? { ok: true } : { ok: false, err: '安装后未检测到 WinFsp 组件' };
     } catch (e) {
         return { ok: false, err: '安装未完成（可能已取消授权或需要管理员权限）' };
@@ -2768,17 +2896,36 @@ function tapDriverInstalled() {
     if (/no matching devices/i.test(out)) return false;
     return /matching device/i.test(out);
 }
-// tapElevatedRun 提权执行 tapinstall（argLine: "install" / "remove"；PS 单引号包路径防空格，
-// inf 路径内嵌双引号供子进程命令行解析；UAC 取消时 Start-Process 抛错由调用方接住）。
-// -WindowStyle Hidden 压制提权子进程的黑框：tapinstall 为控制台程序，Start-Process 不带窗口
-// 样式时会新开可见控制台（实测安装/卸载各闪一次黑框），隐藏后仅剩 UAC 授权框交互
+// tapElevatedRun 提权执行 tapinstall（argLine: "install" / "remove"；UAC 取消时 Start-Process 抛错由调用方接住）。
+// 提权子进程命令经 -EncodedCommand（UTF-16LE Base64）传递——Start-Process -ArgumentList 在 PS5.1 拼接时
+// 不转义引号，内嵌双引号（含空格的 INF 路径/描述串）会被命令行解析吃掉致参数打散（实测改名静默失败的根因），
+// Base64 编码彻底规避，且修复原实现"安装路径含空格即失效"的隐患。
+// 路径一律用 PS 单引号字面量（psq）包裹：单引号内 $/反引号不展开（防安装路径含 $ 致参数破坏），
+// 内嵌单引号按 PS 规则加倍转义；-WindowStyle Hidden 压制提权子进程的黑框（tapinstall 为控制台程序）。
+// install 分支同一次提权顺带重命名新装适配器连接名为"IM-client"（Rename-NetAdapter 需提权，
+// 合并免二次 UAC）：先记既有 TAP 的 InterfaceGuid 差集，只改本包新装块（防误改 OpenVPN 等
+// 其他软件的同名 TAP）；PnP 注册异步，tapinstall 返回时适配器可能未就绪，10s 内轮询后改名；
+// 改名仅影响连接名显示，wintap.c 靠 GUID+设备句柄探测定位不受影响。
+// 设备描述"TAP-Windows Adapter V9"来自 INF 字符串且受 tap0901.cat 签名覆盖，不可改（改即签名失效）
 function tapElevatedRun(argLine) {
-    var exe = tapDriverFile('tapinstall.exe');
-    var argStr = argLine === 'install'
-        ? ('install "' + tapDriverFile('OemVista.inf') + '" tap0901')
-        : 'remove tap0901';
+    var psq = function (p) { return "'" + String(p).replace(/'/g, "''") + "'"; }; // PS 单引号字面量（内嵌单引号加倍）
+    var exe = psq(tapDriverFile('tapinstall.exe'));
+    var inf = psq(tapDriverFile('OemVista.inf'));
+    var inner;
+    if (argLine === 'install') {
+        inner = '& ' + exe + ' install ' + inf + ' tap0901; if($?){ ' +
+            '$b=(Get-NetAdapter -InterfaceDescription "TAP-Windows Adapter V9" -ErrorAction SilentlyContinue).InterfaceGuid; ' +
+            '$n=0; while($n -lt 20){ Start-Sleep -Milliseconds 500; ' +
+            '$a=Get-NetAdapter -InterfaceDescription "TAP-Windows Adapter V9" -ErrorAction SilentlyContinue | ' +
+            'Where-Object { $b -notcontains $_.InterfaceGuid }; ' +
+            'if($a){ $a | Rename-NetAdapter -NewName "IM-client" -ErrorAction SilentlyContinue; ' +
+            '$a | ForEach-Object { Set-NetIPInterface -InterfaceIndex $_.ifIndex -InterfaceMetric 1 -ErrorAction SilentlyContinue }; break }; $n++ } }';
+    } else {
+        inner = '& ' + exe + ' remove tap0901';
+    }
+    var enc = Buffer.from(inner, 'utf16le').toString('base64');
     require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
-        "Start-Process -FilePath '" + exe + "' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '" + argStr + "'"],
+        "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"],
         { windowsHide: true, timeout: 180000 });
 }
 // 检测状态查询（设置页开关回显归口；available=false 表示安装包内驱动文件缺失，页面据此置灰）

@@ -1692,8 +1692,15 @@ ipcMain.handle('dav:winfsp-install', function () {
     if (davWinfspInstalled()) return { ok: true, already: true };
     if (!fs.existsSync(davBundledFile('winfsp.msi'))) return { ok: false, err: 'WinFsp 安装包缺失' };
     try {
+        // 提权命令经 -EncodedCommand（UTF-16LE Base64，PS2+ 均支持，Win7 兼容）+ PS 单引号字面量传参
+        // （比照 pc 版 main.js tapElevatedRun 同款）：旧写法外层 PS 双引号串路径含 $ 会被展开致 msiexec
+        // 参数破坏；Base64 + 单引号字面量双保险（空格/特殊字符路径均安全）。提权会话内直接跑 msiexec
+        // （已具管理员），Start-Process -Wait 等安装完成（msiexec 为 GUI 子系统，& 调用不会阻塞）。
+        var psq = function (p) { return "'" + String(p).replace(/'/g, "''") + "'"; };
+        var inner = 'Start-Process msiexec -ArgumentList \'/i\',' + psq(davBundledFile('winfsp.msi')) + ',\'/qn\',\'/norestart\' -Wait';
+        var enc = Buffer.from(inner, 'utf16le').toString('base64');
         require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
-            'Start-Process msiexec -Verb RunAs -Wait -ArgumentList "/i `"" + davBundledFile("winfsp.msi") + "`" /qn /norestart"'], { windowsHide: true, timeout: 180000 });
+            "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"], { windowsHide: true, timeout: 180000 });
         return davWinfspInstalled() ? { ok: true } : { ok: false, err: '安装后未检测到 WinFsp 组件' };
     } catch (e) {
         return { ok: false, err: '安装未完成（可能已取消授权或需要管理员权限）' };

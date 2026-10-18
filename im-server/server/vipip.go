@@ -27,7 +27,8 @@ import (
 	"im-server/store"
 )
 
-// vipLease 一次分配的完整租约：IP + 配套 MAC（p2p-host -a/-s 参数数据源，随登录回执下发）
+// vipLease 一次分配的完整租约：IP + 配套 MAC（p2p-host -a 参数数据源；MAC 为预留身份标识，
+// n2n v2 此 fork 不支持 CLI 设 MAC——由 TAP 驱动自取，随登录回执下发仅作记录）
 type vipLease struct {
 	IP  string
 	MAC string
@@ -179,6 +180,17 @@ func (p *vipPool) Supernodes() []string {
 		return []string{}
 	}
 	return list
+}
+
+// Mask 虚拟网掩码（登录回执 vip_mask 下发，客户端 p2p-host -s 参数数据源；旁路态返回空串由客户端兜底）。
+// 注意：n2n v2 此 fork 的 -s 语义是子网掩码（netmask），不是 MAC——MAC 由 TAP 驱动自取（wintap.c device_mac 形参未实装）
+func (p *vipPool) Mask() string {
+	if !p.enabled {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mask
 }
 
 // ===== supernode 候选热更管理（admin 后台界面化，比照 linkwhitelist.go 全局 KV 模式） =====
