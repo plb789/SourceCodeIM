@@ -196,6 +196,11 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/online/kick", s.adminGuard(s.handleAdminOnlineKick))
 	// 虚拟 IP 池（联机虚拟网卡路线：统计+占用明细+全局 supernode 候选，实现归口 adminvipip.go）
 	http.HandleFunc("GET /admin/api/vipip", s.adminGuard(s.handleAdminVipIP))
+	// 虚拟 IP 静态绑定/解绑（绑定后独占不参与动态分配，登录优先分配；实现归口 adminvipip.go）
+	http.HandleFunc("PUT /admin/api/vipip/bind", s.adminGuard(s.handleAdminVipIPBind))
+	http.HandleFunc("PUT /admin/api/vipip/unbind", s.adminGuard(s.handleAdminVipIPUnbind))
+	// 全局 supernode 候选热更（后台界面化管理，保存即热生效 + 落库持久化）
+	http.HandleFunc("PUT /admin/api/vipip/supernodes", s.adminGuard(s.handleAdminVipIPSupernodesSave))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====

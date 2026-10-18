@@ -20,10 +20,11 @@ import (
 
 // VipPoolSeed 启动加载的池种子（server.newVipPool 消费；Enabled=false 时不填充不使用）
 type VipPoolSeed struct {
-	IPs        []string        // 全量池 IP（升序，点分十进制）
-	Reserved   map[string]bool // status=1 预留集合（不入空闲栈）
-	Base       uint32          // 分配池起始 IP 的 uint32（如 10.28.1.1）
-	Size       int             // 分配池容量（含预留——预留位在 free 栈构建时跳过）
+	IPs        []string          // 全量池 IP（升序，点分十进制）
+	Reserved   map[string]bool   // status=1 预留集合（不入空闲栈）
+	Bindings   map[string]string // username → ip（status=1 且 username 非空的静态绑定，登录优先分配）
+	Base       uint32            // 分配池起始 IP 的 uint32（如 10.28.1.1）
+	Size       int               // 分配池容量（含预留——预留位在 free 栈构建时跳过）
 	Gateway    string
 	Mask       string
 	Supernodes []string
@@ -81,13 +82,19 @@ func InitVipPool(cfg *config.Config) (*VipPoolSeed, error) {
 	}
 	seed.IPs = make([]string, 0, len(rows))
 	seed.Reserved = map[string]bool{}
+	seed.Bindings = map[string]string{}
 	for _, r := range rows {
 		seed.IPs = append(seed.IPs, r.IP)
 		if r.Status == 1 {
 			seed.Reserved[r.IP] = true
+			// 静态绑定（admin 后台绑定用户，设计 §8.4）：status=1 且 username 非空 → 登录优先分配该 IP
+			if r.Username != "" {
+				seed.Bindings[r.Username] = r.IP
+			}
 		}
 	}
-	logger.Info("虚拟IP池就绪: 总 %d 预留 %d（网关 %s 掩码 %s）", len(seed.IPs), len(seed.Reserved), seed.Gateway, seed.Mask)
+	logger.Info("虚拟IP池就绪: 总 %d 预留 %d 静态绑定 %d（网关 %s 掩码 %s）",
+		len(seed.IPs), len(seed.Reserved), len(seed.Bindings), seed.Gateway, seed.Mask)
 	VipPool = seed
 	return seed, nil
 }

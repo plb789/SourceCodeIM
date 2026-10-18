@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 // ===== 游戏中心·管理端（Steam 同款游戏库运营，adminGuard 鉴权） =====
 // 设计归口：
@@ -254,7 +254,7 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	g.LaunchArgs = gameLaunchArgsClean(g.LaunchArgs)
 	// 联机 supernode 白名单校验（虚拟网卡路线 §8.3）：所选必须 ⊆ vip_pool.supernodes 全局候选，
 	// 防后台接口被直接调用提交任意地址；空=未配置走全局兜底
-	snClean, serr := vipSupernodesClean(s.cfg, g.Supernodes)
+	snClean, serr := vipSupernodesClean(g.Supernodes)
 	if serr != nil {
 		adminFail(w, http.StatusBadRequest, serr.Error())
 		return
@@ -407,7 +407,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	u.LaunchName = gameLaunchNameClean(u.LaunchName)
 	u.LaunchArgs = gameLaunchArgsClean(u.LaunchArgs)
 	// 联机 supernode 白名单校验（同创建口径：⊆ vip_pool.supernodes 全局候选，空=全局兜底）
-	snClean, serr := vipSupernodesClean(s.cfg, u.Supernodes)
+	snClean, serr := vipSupernodesClean(u.Supernodes)
 	if serr != nil {
 		adminFail(w, http.StatusBadRequest, serr.Error())
 		return

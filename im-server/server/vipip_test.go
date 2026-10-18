@@ -5,8 +5,10 @@ package server
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
+	"im-server/model"
 	"im-server/store"
 )
 
@@ -111,6 +113,100 @@ func TestVipPoolBypass(t *testing.T) {
 	}
 }
 
+// TestVipStaticBind 静态绑定全语义（设计 §8.4）：绑定独占/登录优先/下线保留/重上线回原 IP/
+// 解绑回池/换绑释放旧 IP/冲突拒绝
+func TestVipStaticBind(t *testing.T) {
+	p := newTestPool(t) // 池 3 地址：1.1/1.3 可分配，1.2 预留
+
+	// 绑定 1.1 → alice（空闲 IP 预绑：Check 无旧绑定 → Apply 移出空闲栈）
+	if old, err := p.CheckBind("10.28.1.1", "alice"); err != nil || old != "" {
+		t.Fatalf("首次绑定校验失败: old=%s err=%v", old, err)
+	} else {
+		p.ApplyBind("10.28.1.1", "alice", old)
+	}
+	// alice 登录直接拿绑定 IP
+	if l, err := p.Alloc("alice"); err != nil || l.IP != "10.28.1.1" {
+		t.Fatalf("绑定用户登录应拿绑定 IP: %+v err=%v", l, err)
+	}
+	// bob 动态分配不得命中 1.1（已出栈独占）
+	l2, err := p.Alloc("bob")
+	if err != nil || l2.IP == "10.28.1.1" || l2.IP == "10.28.1.2" {
+		t.Fatalf("动态分配命中绑定/预留位: %+v", l2)
+	}
+	// 可分配仅剩 0 个 → carol 耗尽
+	if _, err := p.Alloc("carol"); err != errVipExhausted {
+		t.Fatalf("应耗尽, got %v", err)
+	}
+	// alice 全设备下线：绑定 IP 不回池（独占保留）
+	p.Release("alice")
+	if _, err := p.Alloc("dave"); err != errVipExhausted {
+		t.Fatalf("绑定 IP 下线后不得回池, got %v", err)
+	}
+	// alice 重上线即回绑定 IP
+	if l, _ := p.Alloc("alice"); l.IP != "10.28.1.1" {
+		t.Fatalf("重上线应回绑定 IP, got %s", l.IP)
+	}
+	// 冲突拒绝：绑定已绑他人的 IP
+	if _, err := p.CheckBind("10.28.1.1", "bob"); err == nil {
+		t.Fatal("绑定他人绑定 IP 应被拒绝")
+	}
+	// 在线占用中解绑：IP 不立即回池（owner 占用），下线后经动态分支回池
+	if u, err := p.CheckUnbind("10.28.1.1"); err != nil || u != "alice" {
+		t.Fatalf("解绑校验失败: %s %v", u, err)
+	}
+	p.ApplyUnbind("10.28.1.1") // alice 仍在线占用 → 不回池
+	if _, err := p.Alloc("carol"); err != errVipExhausted {
+		t.Fatal("在线占用中解绑不得立即回池")
+	}
+	p.Release("alice") // 下线：static 映射已删 → 动态分支回池
+	lc, err := p.Alloc("carol")
+	if err != nil || lc.IP != "10.28.1.1" {
+		t.Fatalf("解绑+下线后 1.1 应回池被动态分配: %+v err=%v", lc, err)
+	}
+	// 换绑序列：bob 先下线（1.3 回池）→ alice 绑 1.3 → 再改绑 1.1 → 旧 IP 1.3 回池（泄漏防护）
+	p.Release("bob")
+	if old, err := p.CheckBind("10.28.1.3", "alice"); err != nil || old != "" {
+		t.Fatalf("绑定 1.3 校验失败: old=%s err=%v", old, err)
+	} else {
+		p.ApplyBind("10.28.1.3", "alice", old)
+	}
+	// carol 先下线释放 1.1（否则被其动态占用，换绑被拒）
+	p.Release("carol")
+	if old, err := p.CheckBind("10.28.1.1", "alice"); err != nil || old != "10.28.1.3" {
+		t.Fatalf("换绑应返回旧绑定 1.3: old=%s err=%v", old, err)
+	} else {
+		p.ApplyBind("10.28.1.1", "alice", old)
+	}
+	// 换绑泄漏防护：旧 IP 1.3 已回池（无在线占用），可被动态分配
+	ld, err := p.Alloc("dave")
+	if err != nil || ld.IP != "10.28.1.3" {
+		t.Fatalf("换绑后旧 IP 1.3 应回池复用: %+v err=%v", ld, err)
+	}
+	// 当前态：alice 静态绑 1.1（离线保留——绑定 IP 出栈，Free 不含它）、dave 动态占 1.3、1.2 纯预留
+	// 口径：Used=在线占用+绑定未在线=2；Free=0（仅剩预留位不入栈）；Reserved=纯预留=1
+	st := p.Stats()
+	if st.Used != 2 || st.Free != 0 || st.Reserved != 1 {
+		t.Fatalf("统计不符: %+v", st)
+	}
+	// 绑定列表含 alice 条目（未在线）
+	bs := p.Bindings()
+	if len(bs) != 1 || bs[0].IP != "10.28.1.1" || bs[0].Username != "alice" || bs[0].Online {
+		t.Fatalf("绑定列表不符: %+v", bs)
+	}
+	// 解绑（离线态）：绑定列表清空（1.1 已在上一步回池，统计不变）
+	if u, err := p.CheckUnbind("10.28.1.1"); err != nil || u != "alice" {
+		t.Fatalf("解绑校验失败: %s %v", u, err)
+	}
+	p.ApplyUnbind("10.28.1.1")
+	if b := p.Bindings(); len(b) != 0 {
+		t.Fatalf("解绑后绑定列表应为空: %+v", b)
+	}
+	// 解绑后 1.1 回池：Used=1（dave 1.3）、Free=1（1.1）、Reserved=1（1.2）
+	if st := p.Stats(); st.Used != 1 || st.Free != 1 || st.Reserved != 1 {
+		t.Fatalf("解绑后统计不符: %+v", st)
+	}
+}
+
 // TestClaimCommunityFormat 社区名/密钥格式（-c 5 位纯数字 10000~99999 / -k 6 位纯数字 100000~999999）
 func TestClaimCommunityFormat(t *testing.T) {
 	re5 := regexp.MustCompile(`^\d{5}$`)
@@ -126,4 +222,71 @@ func TestClaimCommunityFormat(t *testing.T) {
 		}
 	}
 	_ = context.Background()
+}
+
+// TestVipSupValidate supernode 候选校验：host:port 格式/多行逗号混排归一/去重/非法拒绝/空串清空
+func TestVipSupValidate(t *testing.T) {
+	norm, err := vipSupValidate("1.2.3.4:7654\nsupernode.example.com:7654, 1.2.3.4:7654")
+	if err != nil || norm != "1.2.3.4:7654,supernode.example.com:7654" {
+		t.Fatalf("归一结果不符: %s err %v", norm, err)
+	}
+	for _, bad := range []string{"1.2.3.4", "1.2.3.4:", ":7654", "1.2.3.4:0", "1.2.3.4:99999", "ht tp:7654", "a[b.com:7654"} {
+		if _, err := vipSupValidate(bad); err == nil {
+			t.Errorf("非法候选应被拒绝: %q", bad)
+		}
+	}
+	// 总长超限对齐 KV 列容量（varchar(512)）：254 字节 host × 2 条 + 逗号 > 512
+	long := strings.Repeat("a", 254) + ":7654"
+	if _, err := vipSupValidate(long + "," + long); err == nil {
+		t.Error("候选总长超限应被拒绝")
+	}
+	if norm, err := vipSupValidate(""); err != nil || norm != "" {
+		t.Fatalf("空串应清空: %s err %v", norm, err)
+	}
+}
+
+// TestVipSupHotUpdate supernode 候选热更轮转（需 DB——AgentWhitelist KV 行，测后清理+重置内存态）：
+// 未接管=config 兜底 → Set 接管 → 清空=显式空（不回退 config，接管标记语义）→ 模拟重启保持空态
+func TestVipSupHotUpdate(t *testing.T) {
+	if err := store.DB.AutoMigrate(&model.AgentWhitelist{}); err != nil {
+		t.Skip("无库环境跳过")
+	}
+	defer func() {
+		store.DB.Where("kind = ?", vipSupKind).Delete(&model.AgentWhitelist{})
+		// 重置懒初始化态：防残留接管状态影响同包其他测试（vipSup 为包级单例）
+		vipSupMu.Lock()
+		vipSupKnow, vipSupRow, vipSupRaw = false, false, ""
+		vipSupMu.Unlock()
+	}()
+	// 重置懒初始化态并注入 config 兜底（模拟启动后未接管）
+	vipSupMu.Lock()
+	vipSupKnow, vipSupRow, vipSupRaw = false, false, ""
+	vipSupFb = []string{"10.0.0.1:7654"}
+	vipSupMu.Unlock()
+
+	// 1. 未接管：config 兜底生效
+	if l := vipSupList(); len(l) != 1 || l[0] != "10.0.0.1:7654" {
+		t.Fatalf("未接管应回退 config 兜底: %v", l)
+	}
+	// 2. 后台保存 → 接管，热更值生效
+	if err := vipSupSet("5.6.7.8:7654"); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	if l := vipSupList(); len(l) != 1 || l[0] != "5.6.7.8:7654" {
+		t.Fatalf("接管后应热更生效: %v", l)
+	}
+	// 3. 清空（DB 行存在且空）：显式空，不回退 config 兜底（接管标记语义）
+	if err := vipSupSet(""); err != nil {
+		t.Fatalf("清空失败: %v", err)
+	}
+	if l := vipSupList(); len(l) != 0 {
+		t.Fatalf("清空后应显式空不回退兜底: %v", l)
+	}
+	// 4. 模拟重启（重置内存态，DB 行仍在 value=""）→ 接管空态保持
+	vipSupMu.Lock()
+	vipSupKnow, vipSupRow, vipSupRaw = false, false, ""
+	vipSupMu.Unlock()
+	if l := vipSupList(); len(l) != 0 {
+		t.Fatalf("重启后接管空态应保持: %v", l)
+	}
 }

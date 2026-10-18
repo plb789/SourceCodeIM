@@ -465,7 +465,7 @@
                     <h2>虚拟 IP</h2>
                     <span id="vipip-status" class="admin-view-tip">加载中…</span>
                 </header>
-                <p class="admin-view-tip">联机虚拟网卡路线的 10.28.x.x 虚拟地址分配情况：每个在线用户占用一个虚拟 IP（多端共用同一 IP，全部设备下线即释放防空占用），配合社区名/密钥与 supernode 完成 p2p-host 组网。占用明细每 10 秒自动刷新；服务端未启用（config.yaml vip_pool.enabled=false）时本页提示未启用。</p>
+                <p class="admin-view-tip">联机虚拟网卡路线的 10.28.x.x 虚拟地址分配情况：每个在线用户占用一个虚拟 IP（多端共用同一 IP，全部设备下线即释放防空占用），配合社区名/密钥与 supernode 完成 p2p-host 组网。支持静态绑定：绑定后该 IP 独占给指定用户（不参与动态分配，其重新上线即回绑定 IP）；解绑后回池。占用明细每 10 秒自动刷新；服务端未启用（config.yaml vip_pool.enabled=false）时本页提示未启用。</p>
                 <!-- 统计卡片：复用仪表盘 dash-cards 样式 -->
                 <div class="dash-cards">
                     <div class="dash-card">
@@ -476,7 +476,7 @@
                     <div class="dash-card">
                         <span class="dash-card-label">已占用</span>
                         <span class="dash-card-value" id="vipip-stat-used">-</span>
-                        <span class="dash-card-sub">在线用户占用</span>
+                        <span class="dash-card-sub">在线占用 + 静态绑定</span>
                     </div>
                     <div class="dash-card">
                         <span class="dash-card-label">空闲</span>
@@ -489,23 +489,38 @@
                         <span class="dash-card-sub">管理员保留不分配</span>
                     </div>
                 </div>
-                <!-- 搜索工具条：q 参数服务端过滤（IP/账号模糊） -->
+                <!-- supernode 候选热更管理（每行一个 host:port；保存即热生效 + 落库持久化，无需重启）：
+                     此列表是 admin 游戏表单「联机 supernode」多选的候选来源，也是游戏未单独配置时的全局兜底 -->
+                <div id="vipip-sup-card" style="display:none;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+                    <div style="font-size:14px;font-weight:600;margin-bottom:4px;">supernode 候选</div>
+                    <div class="admin-view-tip" style="margin-bottom:8px;">联机组网中心节点地址（每行一个 host:port，如 1.2.3.4:7654）。保存即热生效（无需重启）：游戏表单的「联机 supernode」多选项即来自此列表；游戏未单独配置 supernode 时，登录回执以此列表兜底下发。留空=未配置（游戏联机走既有隧道链路）。</div>
+                    <textarea id="vipip-sup-list" class="admin-input gm-desc-input" rows="3" placeholder="每行一个 supernode 地址（host:port），如：&#10;1.2.3.4:7654&#10;supernode.example.com:7654"></textarea>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                        <button id="vipip-sup-save" class="admin-btn small">保存 supernode 候选</button>
+                        <span id="vipip-sup-status" class="admin-view-tip"></span>
+                    </div>
+                </div>
+                <!-- 搜索工具条：q 参数服务端过滤（IP/账号模糊）+ 按 IP 绑定入口（空闲 IP 预绑给用户） -->
                 <div class="vec-toolbar">
                     <input type="text" id="vipip-search" class="admin-input vec-search-input" placeholder="按 IP/账号搜索（服务端过滤）">
                     <button id="vipip-refresh" class="admin-btn small">刷新</button>
+                    <button id="vipip-bind-new" class="admin-btn small">按 IP 绑定</button>
                 </div>
-                <!-- 占用明细表格 -->
+                <!-- 占用/绑定明细表格：状态列区分动态占用与静态绑定（绑定独占不参与动态分配）；
+                     操作列：绑定（把当前动态占用升格为该用户固定 IP）/ 解绑（回池可被动态分配） -->
                 <div class="vec-table-wrap">
                     <table class="vec-table">
                         <thead>
                             <tr>
                                 <th>虚拟 IP</th>
                                 <th>占用账号</th>
+                                <th>状态</th>
                                 <th>分配时间</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="vipip-tbody">
-                            <tr><td colspan="3" class="vec-empty">加载中…</td></tr>
+                            <tr><td colspan="5" class="vec-empty">加载中…</td></tr>
                         </tbody>
                     </table>
                 </div>

@@ -306,6 +306,18 @@ PUT /admin/api/vipip/unbind  {"ip":"10.28.1.5"}
 
 **UI**（虚拟 IP 页签增强）：明细表加「状态」列（在线占用/已绑定含未在线）与「操作」列（绑定/解绑，确认弹窗输账号防误操作）；工具条加「按 IP 绑定」入口（空闲 IP 预绑）；统计口径 `已占用 = 在线占用 + 静态绑定未在线`。
 
+### 8.5 全局 supernode 候选热更管理（admin 界面化）
+
+**背景**：原设计候选仅存 config.yaml（改后需重启）。现升级为后台界面化管理（比照链接白名单的全局 KV 模式）。
+
+**存储与生效**：复用 `model.AgentWhitelist` 全局 KV 表（`kind="vip_supernodes"`，零新表）；保存即内存直更热生效 + 落库持久化（重启不丢）；DB 无行时回退 config.yaml `vip_pool.supernodes`（首次部署平滑过渡，config 改为纯兜底）。
+
+**接口**：`PUT /admin/api/vipip/supernodes`（`{"list":"每行/逗号分隔 host:port"}`）——host=域名/IPv4（不支持 IPv6 字面量）、port 1~65535、去重去空、上限 20 条、格式非法拒绝；空串=清空。
+
+**生效面**：登录回执 `vip_supernodes`（下次登录）→ admin 游戏表单多选候选（打开即拉）→ 游戏未单独配置时的全局兜底。
+
+**UI**（虚拟 IP 页签）：统计卡下方「supernode 候选」卡（textarea 每行一个 + 保存按钮，保存后状态行显示热生效时间；轮询回填仅在用户未编辑 textarea 时进行，防覆盖输入）。
+
 ## 九、边界与降级
 
 | # | 场景 | 处理 |

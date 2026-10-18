@@ -3612,30 +3612,48 @@
         }
         api('GET', '/admin/api/vipip' + (q ? '?q=' + encodeURIComponent(q) : '')).then(function (result) {
             if (!result.ok) {
-                // 未启用（403）等业务拒绝：状态与表格提示原因，统计卡片保持 '-'
+                // 未启用（403）等业务拒绝：状态与表格提示原因，统计卡片保持 '-'，supernode 管理卡隐藏
                 $('vipip-status').textContent = result.msg || '加载失败';
-                $('vipip-tbody').innerHTML = '<tr><td colspan="3" class="vec-empty">' + escHtml(result.msg || '加载失败') + '</td></tr>';
+                $('vipip-tbody').innerHTML = '<tr><td colspan="5" class="vec-empty">' + escHtml(result.msg || '加载失败') + '</td></tr>';
+                $('vipip-sup-card').style.display = 'none';
                 if (!quiet) showToast(result.msg || '虚拟 IP 加载失败');
                 return;
             }
+            $('vipip-sup-card').style.display = '';
             var d = result.data || {};
             $('vipip-stat-total').textContent = String(d.total != null ? d.total : '-');
             $('vipip-stat-used').textContent = String(d.used != null ? d.used : '-');
             $('vipip-stat-free').textContent = String(d.free != null ? d.free : '-');
             $('vipip-stat-reserved').textContent = String(d.reserved != null ? d.reserved : '-');
             $('vipip-status').textContent = '占用 ' + d.used + ' / 总 ' + d.total + '，更新于 ' + new Date().toLocaleTimeString();
+            // supernode 候选回填（textarea 每行一个；仅在用户未编辑时回填，防轮询覆盖输入中内容）
+            var supTa = $('vipip-sup-list');
+            if (document.activeElement !== supTa) {
+                supTa.value = ((d.supernodes || [])).join('\n');
+            }
             var list = d.list || [];
             var tbody = $('vipip-tbody');
             if (!list.length) {
-                tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">' + (q ? '暂无匹配占用' : '当前没有占用（全部空闲）') + '</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="vec-empty">' + (q ? '暂无匹配占用' : '当前没有占用（全部空闲）') + '</td></tr>';
                 return;
             }
             var html = '';
             list.forEach(function (e) {
+                var bound = !!e.bound;
+                // 状态徽标：已绑定（含未在线）显示绑定态，动态占用显示在线徽标
+                var statusCell = bound
+                    ? '<span class="at-badge at-st-completed" title="静态绑定：该 IP 独占给此用户，不参与动态分配；其重新上线即回绑定 IP">已绑定' + (e.online ? '' : '（未在线）') + '</span>'
+                    : '<span class="at-badge at-st-completed">在线占用</span>';
+                // 操作列：绑定（动态占用升格静态）/ 解绑（回池）；已绑定行永远显示解绑
+                var opCell = bound
+                    ? '<button class="admin-btn small vipip-unbind-btn" data-ip="' + escAttr(e.ip || '') + '" data-username="' + escAttr(e.username || '') + '">解绑</button>'
+                    : '<button class="admin-btn small vipip-bind-btn" data-ip="' + escAttr(e.ip || '') + '" data-username="' + escAttr(e.username || '') + '">绑定</button>';
                 html += '<tr>' +
                     '<td class="points-username">' + escHtml(e.ip || '') + '</td>' +
                     '<td>' + escHtml(e.username || '-') + '</td>' +
+                    '<td>' + statusCell + '</td>' +
                     '<td class="points-time">' + escHtml(e.alloc_time || '-') + '</td>' +
+                    '<td>' + opCell + '</td>' +
                     '</tr>';
             });
             tbody.innerHTML = html;
@@ -3646,6 +3664,79 @@
     }
     $('vipip-search').addEventListener('input', function () { loadVipIP(true); });
     $('vipip-refresh').addEventListener('click', function () { loadVipIP(true); });
+
+    // supernode 候选保存（每行一个 host:port；服务端格式校验+落库+热生效，无需重启）
+    $('vipip-sup-save').addEventListener('click', function () {
+        var btn = $('vipip-sup-save');
+        btn.disabled = true;
+        api('PUT', '/admin/api/vipip/supernodes', { list: $('vipip-sup-list').value }).then(function (result) {
+            btn.disabled = false;
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            // 回填服务端归一值（小写/去重/逗号→换行），界面与实际生效数据一致
+            $('vipip-sup-list').value = String(result.data.list || '').split(',').filter(Boolean).join('\n');
+            $('vipip-sup-status').textContent = '已保存并热生效，更新于 ' + new Date().toLocaleTimeString();
+            showToast('supernode 候选已保存（热生效）');
+        }).catch(function (e) {
+            btn.disabled = false;
+            showToast(e.message || '网络异常');
+        });
+    });
+
+    // ===== 虚拟 IP 静态绑定（服务端归口 adminvipip.go，Check→DB→Apply 两阶段） =====
+    // 绑定后 IP 独占（不参与动态分配，用户重上线即回绑定 IP）；解绑回池。
+    // 三个入口：占用行「绑定」（升格静态）/ 已绑定行「解绑」/ 工具条「按 IP 绑定」（空闲 IP 预绑）
+    function doVipBind(ip, username) {
+        api('PUT', '/admin/api/vipip/bind', { ip: ip, username: username }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '绑定失败'); return; }
+            showToast('已绑定 ' + ip + ' → ' + username);
+            loadVipIP(true);
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+    function doVipUnbind(ip) {
+        api('PUT', '/admin/api/vipip/unbind', { ip: ip }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '解绑失败'); return; }
+            showToast('已解绑 ' + ip + (result.data && result.data.username ? '（原绑定 ' + result.data.username + '）' : ''));
+            loadVipIP(true);
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+    // 占用行绑定：确认弹窗（输账号确认，防误点把他人正用的 IP 静态化）
+    function openVipBindModal(ip, username) {
+        openEditModal('绑定虚拟 IP - ' + ip, [
+            { key: 'confirm', label: '确认账号', type: 'text', placeholder: '请输入账号 ' + username + ' 以确认', hint: '绑定后该 IP 独占给此账号：不参与动态分配，其全部设备下线后 IP 仍保留，重新上线即回此 IP。' }
+        ], {}, function (data) {
+            if (String(data.confirm || '').trim() !== username) { showToast('输入的账号不一致，请重新输入'); return; }
+            doVipBind(ip, username);
+        });
+    }
+    // 按 IP 绑定：空闲 IP 预绑给指定账号（服务端校验 IP 在池内/账号存在/无占用冲突）
+    function openVipBindNewModal() {
+        openEditModal('按 IP 绑定虚拟地址', [
+            { key: 'ip', label: '虚拟 IP', type: 'text', placeholder: '如 10.28.1.5（须在分配池范围内）' },
+            { key: 'username', label: '绑定账号', type: 'text', placeholder: '已注册用户账号', hint: '该 IP 若正被其他用户动态占用将拒绝绑定；绑定后独占给此账号，重新上线即回绑定 IP。' }
+        ], {}, function (data) {
+            var ip = String(data.ip || '').trim();
+            var u = String(data.username || '').trim();
+            if (!ip || !u) { showToast('IP 与账号不能为空'); return; }
+            doVipBind(ip, u);
+        });
+    }
+    // 解绑：确认弹窗（提示回池语义）
+    function openVipUnbindModal(ip, username) {
+        openEditModal('解绑虚拟 IP - ' + ip, [
+            { key: 'confirm', label: '确认解绑', type: 'text', placeholder: '请输入账号 ' + username + ' 以确认', hint: '解绑后该 IP 回池可被动态分配；若用户当前在线仍占用，其下线后 IP 才实际回池。' }
+        ], {}, function (data) {
+            if (String(data.confirm || '').trim() !== username) { showToast('输入的账号不一致，请重新输入'); return; }
+            doVipUnbind(ip);
+        });
+    }
+    // 表格按钮事件委托（10 秒轮询重渲染无需重复绑定）
+    $('vipip-tbody').addEventListener('click', function (e) {
+        var bindBtn = e.target.closest('.vipip-bind-btn');
+        if (bindBtn) { openVipBindModal(bindBtn.getAttribute('data-ip'), bindBtn.getAttribute('data-username')); return; }
+        var unbindBtn = e.target.closest('.vipip-unbind-btn');
+        if (unbindBtn) { openVipUnbindModal(unbindBtn.getAttribute('data-ip'), unbindBtn.getAttribute('data-username')); }
+    });
+    $('vipip-bind-new').addEventListener('click', openVipBindNewModal);
 
     // ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，服务端归口建连与调用） =====
     var mcpServers = [];
@@ -5469,19 +5560,23 @@
     }
 
     // ===== 联机 supernode 多选（虚拟网卡路线 §8.3） =====
-    // 候选来自 /admin/api/vipip 响应的全局配置（vip_pool.supernodes）；未启用/未配置时整行隐藏并提示。
-    // 选中集保存为逗号串随游戏表单提交（服务端校验 ⊆ 全局候选，防提交任意地址）；空=走全局兜底
+    // 候选来自 /admin/api/vipip 响应的全局配置（admin「虚拟 IP」页热更管理）；区分两种空态：
+    // 未启用（403）与已启用未配置（候选空），提示语分别引导。选中集保存为逗号串随游戏表单提交
+    // （服务端校验 ⊆ 当前生效候选，防提交任意地址）；空=走全局兜底
     var gmSuperCandidates = [];
     var gmSuperLoaded = false;
+    var gmSuperEnabled = false;
     var gmSupernodes = [];
 
     function loadSuperCandidates() {
         if (gmSuperLoaded) return Promise.resolve();
         return api('GET', '/admin/api/vipip').then(function (result) {
             gmSuperLoaded = true;
+            gmSuperEnabled = !!result.ok;
             gmSuperCandidates = (result.ok && result.data && result.data.supernodes) || [];
         }).catch(function () {
             gmSuperLoaded = true;
+            gmSuperEnabled = false;
             gmSuperCandidates = [];
         });
     }
@@ -5493,7 +5588,9 @@
         if (!gmSuperCandidates.length) {
             row.style.display = 'none';
             hint.style.display = '';
-            hint.textContent = '联机 supernode：服务端未启用虚拟 IP 池或未配置 vip_pool.supernodes 全局候选，本项不可用（游戏联机将走既有隧道链路）';
+            hint.textContent = gmSuperEnabled
+                ? '联机 supernode：尚未配置候选，请前往后台「虚拟 IP」页的 supernode 候选卡添加（本游戏将走既有隧道链路）'
+                : '联机 supernode：服务端未启用虚拟 IP 池（config.yaml vip_pool.enabled=false），本项不可用（游戏联机将走既有隧道链路）';
             return;
         }
         hint.style.display = 'none';
