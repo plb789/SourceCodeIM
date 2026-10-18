@@ -58,6 +58,7 @@
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
                 <button class="admin-nav-item" data-view="accounts">账号管理</button>
                 <button class="admin-nav-item" data-view="online">在线账号</button>
+                <button class="admin-nav-item" data-view="vipip">虚拟 IP</button>
                 <button class="admin-nav-item" data-view="announcements">公告管理</button>
                 <button class="admin-nav-item" data-view="workbench">工作台管理</button>
                 <button class="admin-nav-item" data-view="appversion">客户端更新</button>
@@ -452,6 +453,59 @@
                         </thead>
                         <tbody id="online-tbody">
                             <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 虚拟 IP 池（联机虚拟网卡路线：统计+占用明细，10 秒轮询；数据源 vippool 内存态，
+                 服务端归口 adminvipip.go。未启用 vip_pool 时本页 403 语义提示，页签保留可进） -->
+            <section id="admin-view-vipip" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>虚拟 IP</h2>
+                    <span id="vipip-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">联机虚拟网卡路线的 10.28.x.x 虚拟地址分配情况：每个在线用户占用一个虚拟 IP（多端共用同一 IP，全部设备下线即释放防空占用），配合社区名/密钥与 supernode 完成 p2p-host 组网。占用明细每 10 秒自动刷新；服务端未启用（config.yaml vip_pool.enabled=false）时本页提示未启用。</p>
+                <!-- 统计卡片：复用仪表盘 dash-cards 样式 -->
+                <div class="dash-cards">
+                    <div class="dash-card">
+                        <span class="dash-card-label">地址总数</span>
+                        <span class="dash-card-value" id="vipip-stat-total">-</span>
+                        <span class="dash-card-sub" id="vipip-stat-sub">分配池容量</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">已占用</span>
+                        <span class="dash-card-value" id="vipip-stat-used">-</span>
+                        <span class="dash-card-sub">在线用户占用</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">空闲</span>
+                        <span class="dash-card-value" id="vipip-stat-free">-</span>
+                        <span class="dash-card-sub">可分配余量</span>
+                    </div>
+                    <div class="dash-card">
+                        <span class="dash-card-label">预留</span>
+                        <span class="dash-card-value" id="vipip-stat-reserved">-</span>
+                        <span class="dash-card-sub">管理员保留不分配</span>
+                    </div>
+                </div>
+                <!-- 搜索工具条：q 参数服务端过滤（IP/账号模糊） -->
+                <div class="vec-toolbar">
+                    <input type="text" id="vipip-search" class="admin-input vec-search-input" placeholder="按 IP/账号搜索（服务端过滤）">
+                    <button id="vipip-refresh" class="admin-btn small">刷新</button>
+                </div>
+                <!-- 占用明细表格 -->
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr>
+                                <th>虚拟 IP</th>
+                                <th>占用账号</th>
+                                <th>分配时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vipip-tbody">
+                            <tr><td colspan="3" class="vec-empty">加载中…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -1339,6 +1393,14 @@
                     <input id="gm-f-ports-tcp" class="admin-input" placeholder="联机 TCP 端口（逗号分隔，如 6112,6113；可空）" maxlength="255">
                     <input id="gm-f-ports-udp" class="admin-input" placeholder="联机 UDP 端口（逗号分隔，如 6112；可空）" maxlength="255">
                 </div>
+                <!-- 联机 supernode 多选（虚拟网卡路线 §8.3）：候选取自服务端 vip_pool.supernodes 全局配置，
+                     多选保存为逗号串（服务端校验 ⊆ 候选，防提交任意地址）；空=走全局兜底。
+                     JS 按候选动态渲染复选；未启用虚拟 IP 池时整行隐藏、提示语代替 -->
+                <div id="gm-f-super-row" class="gm-form-row" style="display:none;flex-wrap:wrap;align-items:flex-start;">
+                    <span class="admin-field-hint" style="margin:0;white-space:nowrap;">联机 supernode（可多选，空=走全局兜底）：</span>
+                    <div id="gm-f-super-list" style="display:flex;flex-wrap:wrap;gap:6px;flex:1;"></div>
+                </div>
+                <span id="gm-f-super-hint" class="admin-field-hint" style="display:none;"></span>
                 <!-- 云存档：默认存档采集路径（Steam 同款云存档 P1，每行一个 glob；客户端据此收集并上传存档） -->
                 <textarea id="gm-f-save-paths" class="admin-input gm-desc-input" rows="3" placeholder="云存档采集路径（每行一个 glob；相对路径以该游戏库记录的安装目录为锚点（有「安装根」/「游戏目录」两种形态，易多/少一层目录），建议用绝对路径如 %USERPROFILE%/Documents/My Games/X/**；可空）"></textarea>
                 <textarea id="gm-f-save-exclude" class="admin-input gm-desc-input" rows="2" placeholder="云存档排除模式（每行一个 glob，如 *.log、*.tmp；可空）"></textarea>

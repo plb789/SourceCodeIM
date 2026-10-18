@@ -252,6 +252,14 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	g.LaunchName = gameLaunchNameClean(g.LaunchName)
 	g.LaunchArgs = gameLaunchArgsClean(g.LaunchArgs)
+	// 联机 supernode 白名单校验（虚拟网卡路线 §8.3）：所选必须 ⊆ vip_pool.supernodes 全局候选，
+	// 防后台接口被直接调用提交任意地址；空=未配置走全局兜底
+	snClean, serr := vipSupernodesClean(s.cfg, g.Supernodes)
+	if serr != nil {
+		adminFail(w, http.StatusBadRequest, serr.Error())
+		return
+	}
+	g.Supernodes = snClean
 	vids, verr := gameVideosClean(g.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -329,6 +337,8 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["versions"] = verList
 	// 上传种子文件名（管理端表单回填/上架切换全量回写保真；服务端私有字段 json:"-" 不随 model 下发）
 	item["torrent_path"] = g.TorrentPath
+	// 联机 supernode 列表回填（管理端表单多选编辑用；仅管理端详情下发，商店公开摘要 gameSummary 不含）
+	item["supernodes"] = g.Supernodes
 	adminJSON(w, item)
 }
 
@@ -396,6 +406,13 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	u.LaunchName = gameLaunchNameClean(u.LaunchName)
 	u.LaunchArgs = gameLaunchArgsClean(u.LaunchArgs)
+	// 联机 supernode 白名单校验（同创建口径：⊆ vip_pool.supernodes 全局候选，空=全局兜底）
+	snClean, serr := vipSupernodesClean(s.cfg, u.Supernodes)
+	if serr != nil {
+		adminFail(w, http.StatusBadRequest, serr.Error())
+		return
+	}
+	u.Supernodes = snClean
 	vids, verr := gameVideosClean(u.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -412,6 +429,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"save_paths": u.SavePaths, "save_exclude": u.SaveExclude,
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
+		"supernodes":   u.Supernodes,
 		"torrent_path": tp,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {

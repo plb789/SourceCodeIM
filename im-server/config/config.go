@@ -119,6 +119,10 @@ type Config struct {
 	// 阶段二百九十二：局域网游戏跨公网联机（109 房间层 / 110 连接层，P2P 打洞优先 + TURN 中继兜底）
 	GameNet GameNetConfig `yaml:"game_net"`
 
+	// 虚拟 IP 池（联机虚拟网卡路线：为每个在线用户分配 10.28.x.x 虚拟 IP + 配套 MAC，
+	// p2p-host.exe 启动参数数据源；设计文档 docs/虚拟IP池设计方案.md）
+	VipPool VipPoolConfig `yaml:"vip_pool"`
+
 	// 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，server/remotedevice.go + remote.go rc_* 信令）
 	RC RCConfig `yaml:"rc"`
 
@@ -371,6 +375,26 @@ type GameNetConfig struct {
 	RelayOnly bool `yaml:"relay_only"`
 	// 功能二期：联机专用中继（独立 TURN 实例 + 独立端口子段，避免与通话抢同一中继端口池）
 	Relay GameNetRelayConfig `yaml:"relay"`
+}
+
+// VipPoolConfig 虚拟 IP 池配置节（联机虚拟网卡路线：p2p-host.exe -a/-s/-l 参数数据源）
+// 设计文档：docs/虚拟IP池设计方案.md。enabled=false 时全链路旁路（不建表不加载不分配，
+// 登录回执 vip_* 字段恒空、109 信令不携带社区/组网字段，既有联机链路零回归）
+type VipPoolConfig struct {
+	// Enabled 总开关（新功能默认关闭，部署方显式开启；集群模式 cluster_enabled=true 时强制旁路）
+	Enabled bool `yaml:"enabled"`
+	// Segment 虚拟网段（保留地址自动排除：网络地址/网关/广播）
+	Segment string `yaml:"segment"`
+	// Gateway 虚拟网关（p2p-host 组网参数预留下发）
+	Gateway string `yaml:"gateway"`
+	// RangeStart/RangeEnd 分配池起止（区间内全部地址参与分配）
+	RangeStart string `yaml:"range_start"`
+	RangeEnd   string `yaml:"range_end"`
+	// Mask 子网掩码（p2p-host 组网参数预留下发）
+	Mask string `yaml:"mask"`
+	// Supernodes 全局 supernode 候选池/兜底（登录回执 vip_supernodes 下发；游戏未单独配置时用；
+	// admin 游戏表单多选项即来自此列表，可配多个由 p2p-host 自动选可用节点）
+	Supernodes []string `yaml:"supernodes"`
 }
 
 // GameNetRelayConfig 功能二期：联机专用 TURN 实例配置（与通话主实例并存，各自独立端口池）
@@ -681,6 +705,17 @@ func Default() *Config {
 			NegotiateTimeout: 10,
 			Mode:             "both",
 			RelayOnly:        false,
+		},
+
+		// 虚拟 IP 池默认参数（新功能默认关闭——联机虚拟网卡路线部署方显式开启；
+		// 网段规划见设计文档 §2：10.28.0.x 为网关保留段，广播地址 10.28.255.255 排除）
+		VipPool: VipPoolConfig{
+			Enabled:    false,
+			Segment:    "10.28.0.0/16",
+			Gateway:    "10.28.0.1",
+			RangeStart: "10.28.1.1",
+			RangeEnd:   "10.28.255.254",
+			Mask:       "255.255.0.0",
 		},
 
 		// 网盘默认参数（默认启用；未配置 MinIO 时自动降级本地磁盘，功能开箱可用）

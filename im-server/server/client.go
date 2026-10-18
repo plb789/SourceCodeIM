@@ -37,6 +37,10 @@ type Client struct {
 	// 阶段二百二十二：真实客户端 IP（HandleWS 入口 realClientIP 解析，经 CDN/反代链路）——
 	// 后台在线账号管理展示与按 IP 排查用；连接级属性，随连接对象生命周期
 	ip string
+	// 虚拟网卡 IP/MAC（联机虚拟网卡路线，登录时由 vippool 按用户名级绑定分配，随登录回执下发；
+	// 连接级缓存与绑定生命周期一致——同端互踢重连沿用同租约，全设备下线服务端释放）
+	vipIP  string
+	vipMAC string
 }
 
 // newClient 创建客户端连接对象

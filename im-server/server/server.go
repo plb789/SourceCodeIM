@@ -43,6 +43,9 @@ type Server struct {
 	// 过期由 location.go 的 locSweep 协程统一清理
 	locRooms map[string]*locRoom
 	locMu    sync.Mutex
+	// 虚拟 IP 内存池（联机虚拟网卡路线：登录分配 10.28.x.x + 配套 MAC，全设备下线释放；
+	// 建房社区名/密钥与 admin 展示数据源。enabled=false 时为禁用空池全链路旁路零开销）
+	vippool *vipPool
 }
 
 // 阶段一百五十四：服务端实例引用（红包过期退回后台扫描等无连接上下文的包级函数广播帧用）
@@ -61,6 +64,7 @@ func NewServer(cfg *config.Config) *Server {
 		uploadSessions: make(map[string]*directUploadSession),
 		rpCtSeen:       make(map[string]time.Time), // 阶段二百四十六：红包发送幂等缓存
 		locRooms:       make(map[string]*locRoom),  // 阶段二百六十八：位置共享房间表
+		vippool:        newVipPool(cfg),            // 虚拟 IP 内存池（store 种子为 nil 时禁用空池，全链路旁路）
 	}
 	s.startLocSweeper() // 阶段二百六十八：位置共享房间过期扫描协程
 	defaultServerRef = s
@@ -191,6 +195,9 @@ func (s *Server) unregister(c *Client) {
 
 	// 最后一条连接断开：删除 Redis 在线缓存
 	store.RDB.Del(context.Background(), store.KeyOnlineUser+c.username)
+	// 虚拟网卡 IP 释放（用户名级绑定随全设备下线解绑回池，防空占用——设计核心诉求；
+	// 重启后重连用户重新分配，可能换 IP，联机会话随重启本就重建）
+	s.vippool.Release(c.username)
 	// 游戏"正在玩"presence 归口清理（下线即摘除，不留幽灵"好友正在玩"标记；与好友拥有口径一致）
 	gamePresenceClear(c.username)
 
@@ -590,6 +597,14 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 
 	c.username = user.Username
 	c.loginTime = time.Now() // 记录登录时间，用于好友申请去重
+	// 虚拟网卡 IP 分配（联机虚拟网卡路线，用户名级绑定：多端共用同 IP、同端互踢不变，全设备下线释放）。
+	// 分配失败（池耗尽/旁路）不阻塞登录——vip_ip 下发空串，联机侧按"未分配"降级（设计 §9.1）
+	if lease, err := s.vippool.Alloc(user.Username); err != nil {
+		c.vipIP, c.vipMAC = "", ""
+		logger.Warn("虚拟IP分配失败（%s）：%v", user.Username, err)
+	} else {
+		c.vipIP, c.vipMAC = lease.IP, lease.MAC
+	}
 	// 阶段一百九十八：签发网盘 API 鉴权 token（登录回执下发；连接断开即吊销，签发失败回空串走前端兼容路径）
 	c.driveToken = DriveTokenIssue(user.Username)
 	// 阶段六十：记录登录设备类型（"pc"=Electron 桌面端）——Agent 本地执行器据此判定工具下发目标
@@ -1360,6 +1375,11 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		// 后台热更后重登/重连即取新模式，运行中扣费帧也会实时携带新模式刷新）
 		"billing_mode": aiBillingMode(),
 		"percall_cost": aiBillingGet().PercallCost,
+		// 虚拟网卡 IP/MAC 与全局 supernode 候选（联机 p2p-host 启动参数数据源，设计文档 §6）；
+		// 空串/空数组=功能未启用或未分配（旁路态恒空），前端透传存储零消费
+		"vip_ip":         c.vipIP,
+		"vip_mac":        c.vipMAC,
+		"vip_supernodes": s.vippool.Supernodes(),
 	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,

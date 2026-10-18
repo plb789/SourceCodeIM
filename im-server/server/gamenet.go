@@ -64,6 +64,7 @@ func gnUserKey(u string) string    { return gnKeyUserPrefix + u }
 //	     ARGV[6]=host_port ARGV[7]=mode ARGV[8]=now ARGV[9]=max_rooms ARGV[10]=max_per_user
 //	     ARGV[11]=ttl ARGV[12]=房间键前缀
 //	     ARGV[13]=game_mode ARGV[14]=max_players ARGV[15]=game_id ARGV[16]=game_name（M8 建房扩展）
+//	     ARGV[17]=supernodes（虚拟网卡路线：按 game_id 读游戏级联机 supernode CSV，空=全局兜底）
 //
 // 返回：1=成功 / -1=房间数达上限 / -2=用户并发房间达上限 / -3=房间号冲突
 const gnCreateScript = `
@@ -85,7 +86,8 @@ if redis.call('EXISTS', meta) == 1 then return -3 end
 redis.call('HSET', meta, 'host', ARGV[2], 'name', ARGV[3], 'group_id', ARGV[4],
   'pass', ARGV[5], 'host_port', ARGV[6], 'mode', ARGV[7], 'status', 'waiting',
   'created_at', ARGV[8], 'updated_at', ARGV[8],
-  'game_mode', ARGV[13], 'max_players', ARGV[14], 'game_id', ARGV[15], 'game_name', ARGV[16])
+  'game_mode', ARGV[13], 'max_players', ARGV[14], 'game_id', ARGV[15], 'game_name', ARGV[16],
+  'supernodes', ARGV[17])
 redis.call('HSET', mem, ARGV[2], '0')
 redis.call('SADD', idx, ARGV[1])
 redis.call('SADD', uset, ARGV[1])
@@ -206,6 +208,13 @@ type gnEnvelope struct {
 	Text       string        `json:"text,omitempty"`      // chat/msg：正文
 	TS         int64         `json:"ts,omitempty"`        // chat/msg：服务端时间戳（秒）
 	Users      []gnLobbyUser `json:"users,omitempty"`     // 112 users：大厅在场名单
+	// 虚拟网卡组网字段（设计文档 §5.2/§8.3，仅房间成员信令携带——state/created/join 全走
+	// gnStateEnv 装配且均成员鉴权，大厅房间列表 gnRoomBrief 不含、登录回执不含）：
+	// supernodes=游戏级联机 supernode 列表（p2p-host -l 参数，空=客户端回退登录回执全局兜底）；
+	// comm/comm_key=建房时生成的社区名（5 位纯数字）与密钥（6 位纯数字），p2p-host -c/-k 参数
+	Supernodes []string `json:"supernodes,omitempty"`
+	Comm       string   `json:"comm,omitempty"`
+	CommKey    string   `json:"comm_key,omitempty"`
 }
 
 // HandleGameRoomSignal 房间层信令入口（msg_type=109）
@@ -431,6 +440,14 @@ func (s *Server) gnStateEnv(ctx context.Context, roomID, action string) *gnEnvel
 	env.MaxPlayers, _ = strconv.Atoi(meta["max_players"])
 	gid, _ := strconv.Atoi(meta["group_id"])
 	env.GroupID = uint(gid)
+	// 虚拟网卡组网字段回吐（仅成员信令；本函数全部调用点均成员鉴权后装配）：
+	// supernodes 建房时按 game_id 落 meta（游戏级配置，空=客户端回退登录回执全局兜底）；
+	// comm/comm_key 建房时服务端生成（-c 5 位纯数字/-k 6 位纯数字，生命周期与房间一致）
+	if sn := meta["supernodes"]; sn != "" {
+		env.Supernodes = strings.Split(sn, ",")
+	}
+	env.Comm = meta["comm"]
+	env.CommKey = meta["comm_key"]
 	members := gnRoomMembers(ctx, roomID)
 	env.Members = make([]gnMemberView, 0, len(members))
 	for u, r := range members {
@@ -657,6 +674,10 @@ func (s *Server) gnCloseRoom(ctx context.Context, roomID, reason string) {
 	if len(names) > 0 {
 		s.gnBroadcast(names, &gnEnvelope{Action: "closed", RoomID: roomID, Reason: reason})
 	}
+	// 社区名释放（活跃社区 HASH 归口，比对房号防误删他房；房间键 TTL 过期路径由撞名惰性剪枝兜底）
+	if meta, _ := store.RDB.HGetAll(ctx, gnRoomKey(roomID)).Result(); len(meta) > 0 {
+		s.vippool.ReleaseCommunity(ctx, meta["comm"], roomID)
+	}
 	// 连接层收口（110）：房间关闭即摘除该房间全部隧道会话，双方收 abort(room_closed/host_left/...)，防孤儿隧道
 	s.gnNetAbortRoom(roomID, reason)
 	store.RDB.Del(ctx, gnRoomKey(roomID), gnMemberKey(roomID))
@@ -720,6 +741,15 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 		maxPlayers = 2
 	}
 	gameName := gnTrimRunes(p.GameName, 32)
+	// 虚拟网卡路线：按 game_id 读该游戏配置的联机 supernode 列表（admin 游戏表单多选，§8.3）；
+	// 空=客户端回退登录回执全局兜底（vip_supernodes）。读失败不阻塞建房（组网字段缺省降级）
+	gameSupernodes := ""
+	if p.GameID > 0 {
+		var g model.Game
+		if err := store.DB.Select("supernodes").First(&g, p.GameID).Error; err == nil {
+			gameSupernodes = strings.TrimSpace(g.Supernodes)
+		}
+	}
 
 	ctx := context.Background()
 	gnPruneUser(from)
@@ -736,7 +766,7 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 			[]string{gnKeyRoomsIndex, gnUserKey(from), gnRoomKey(roomID), gnMemberKey(roomID)},
 			roomID, from, name, strconv.Itoa(int(p.GroupID)), passHash,
 			strconv.Itoa(p.HostPort), mode, now, maxRooms, maxPerUser, ttl, gnKeyRoomPrefix,
-			gameMode, strconv.Itoa(maxPlayers), strconv.Itoa(p.GameID), gameName).Int()
+			gameMode, strconv.Itoa(maxPlayers), strconv.Itoa(p.GameID), gameName, gameSupernodes).Int()
 		if err != nil {
 			logger.Error("游戏房间创建失败（房主 %s）：%v", from, err)
 			s.sendError(c, "创建房间失败，请重试")
@@ -750,8 +780,17 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 	}
 	switch ret {
 	case 1:
-		logger.Info("游戏房间 %s 建立：房主 %s（%d 端口，mode=%s，group=%d，game=%s/%s，人数=%d）",
-			roomID, from, p.HostPort, mode, p.GroupID, gameName, gameMode, maxPlayers)
+		// 社区名/密钥领取（-c 5 位纯数字活跃房间内唯一 / -k 6 位纯数字，设计 §5.2）：
+		// 建房已成功才领取（失败路径不领取无占位泄漏面）；生成失败不回滚建房——组网字段为空
+		// 走既有联机隧道链路，仅记 WARN 排查
+		comm, commKey, cerr := s.vippool.ClaimCommunity(ctx, roomID)
+		if cerr != nil {
+			logger.Warn("游戏房间 %s 社区名领取失败（组网字段为空）：%v", roomID, cerr)
+		} else if comm != "" {
+			store.RDB.HSet(ctx, gnRoomKey(roomID), "comm", comm, "comm_key", commKey)
+		}
+		logger.Info("游戏房间 %s 建立：房主 %s（%d 端口，mode=%s，group=%d，game=%s/%s，人数=%d，comm=%s）",
+			roomID, from, p.HostPort, mode, p.GroupID, gameName, gameMode, maxPlayers, comm)
 		s.gnRoomsChanged() // 功能二期：新房间进入列表，通知大厅即时刷新
 		s.gnSendRoom(from, s.gnStateEnv(ctx, roomID, "created"))
 	case -1:
@@ -1078,6 +1117,11 @@ func (s *Server) gnHandleEnd(c *Client, p *gnRoomSignal) {
 // 启动后已重连上线的用户（isOnlineFast=true）保留其房间（断线重连恢复语义不受影响）
 func (s *Server) gnStartupSweep() {
 	if !s.cfg.GameNet.Enabled {
+		return
+	}
+	// 测试环境守卫：TestMain 仅初始化 MySQL 不初始化 Redis（RDB=nil）——既有测试包耗时 <5s
+	// 时本延迟协程未醒即退出，单测加入后包耗时跨过 5s 线首次踩响。生产 RDB 必然已初始化，零影响
+	if store.RDB == nil {
 		return
 	}
 	ctx := context.Background()

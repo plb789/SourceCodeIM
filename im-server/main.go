@@ -90,6 +90,12 @@ func main() {
 		logger.Error("%v", err)
 		os.Exit(1)
 	}
+	// 2.5 虚拟 IP 池初始化（联机虚拟网卡路线：校验配置+建表+建池+全量加载种子；
+	// enabled=false 或集群模式时旁路返回零值种子，失败即退出——联机是核心依赖，半死池不如明确报错）
+	if _, err := store.InitVipPool(cfg); err != nil {
+		logger.Error("%v", err)
+		os.Exit(1)
+	}
 	// 3. 缓存预热
 	prewarm()
 

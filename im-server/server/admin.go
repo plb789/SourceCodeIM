@@ -194,6 +194,8 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段二百二十二：在线账号管理（在线连接列表 + 强制下线，实现归口 adminonline.go）
 	http.HandleFunc("GET /admin/api/online", s.adminGuard(s.handleAdminOnlineList))
 	http.HandleFunc("POST /admin/api/online/kick", s.adminGuard(s.handleAdminOnlineKick))
+	// 虚拟 IP 池（联机虚拟网卡路线：统计+占用明细+全局 supernode 候选，实现归口 adminvipip.go）
+	http.HandleFunc("GET /admin/api/vipip", s.adminGuard(s.handleAdminVipIP))
 }
 
 // ===== Agent 运行参数设置（阶段八十一/八十二：后台热更新） =====

@@ -1006,6 +1006,11 @@ type Game struct {
 	// 登记为准，实测仅累加不覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	OnlinePortsTCP string `gorm:"column:online_ports_tcp;type:varchar(255);default:''" json:"online_ports_tcp"`
 	OnlinePortsUDP string `gorm:"column:online_ports_udp;type:varchar(255);default:''" json:"online_ports_udp"`
+	// Supernodes 联机 supernode 列表（逗号分隔，如 "supernode1.example.com:7654,supernode2.example.com:7654"）——
+	// 管理端上架时从 vip_pool.supernodes 全局候选中多选（服务端保存时校验 ⊆ 候选，防提交任意地址）；
+	// 建房按 game_id 读入房间 meta 随房间信令下发，客户端启动 p2p-host 的 -l 参数数据源；
+	// 空=走 vip_pool.supernodes 全局兜底。AutoMigrate 自动加列，存量游戏默认空行为不变
+	Supernodes string `gorm:"column:supernodes;type:varchar(512);default:''" json:"supernodes"`
 	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["%USERPROFILE%/Documents/My Games/X/**"]）：
 	// 相对路径以该游戏库记录的安装目录（install_path）为锚点；实测 install_path 有「安装根 <盘>/CdonlgameApp」
 	// 与「游戏目录 <盘>/CdonlgameApp/<slug>」两种形态，相对写法易多/少一层目录，推荐直接使用绝对路径（支持
@@ -1025,6 +1030,19 @@ type Game struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (Game) TableName() string { return "im_game" }
+
+// VipIP 虚拟 IP 池表 im_vip_ip（联机虚拟网卡路线：为在线用户分配 10.28.x.x 虚拟 IP）
+// 启动时建池幂等生成/补齐；运行态以内存为权威（分配/释放不实时写库，重启即全量空闲），
+// DB 仅存池本体与预留标记；Username/AllocAt 为最近一次使用的历史参考（运行期不追写）
+type VipIP struct {
+	IP       string `gorm:"column:ip;type:varchar(15);primaryKey" json:"ip"`    // 点分十进制，如 10.28.1.1
+	Status   int8   `gorm:"column:status;type:tinyint;default:0" json:"status"` // 0=空闲 1=预留（管理员保留，不参与分配）
+	Username string `gorm:"column:username;type:varchar(64);default:''" json:"username"`
+	AllocAt  int64  `gorm:"column:alloc_at;default:0" json:"alloc_at"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (VipIP) TableName() string { return "im_vip_ip" }
 
 // GameVersion 游戏版本表 im_game_version（uniqueIndex(game_id,version) 防重）
 type GameVersion struct {

@@ -26,6 +26,7 @@
             agenttasks: 'M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z',
             accounts: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
             online: 'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
+            vipip: 'M17 16l-4-4V8.82C14.16 8.4 15 7.3 15 6c0-1.66-1.34-3-3-3S9 4.34 9 6c0 1.3.84 2.4 2 2.82V12l-4 4H3v5h5v-1.63l4-4 4 4V21h5v-5h-4z',
             announcements: 'M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z',
             workbench: 'M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z',
             appversion: 'M12 2L4 5v6.09c0 5.42 3.43 10.25 8 11.91 4.57-1.66 8-6.49 8-11.91V5l-8-3zm-1 11h-2v-2h2v2zm0-4h-2V7h2v2zm4 4h-2v-2h2v2zm0-4h-2V7h2v2z',
@@ -244,6 +245,7 @@
             if (view) view.classList.add('active');
             stopMCPPolling(); // 阶段八十九：切换视图统一切断 MCP 状态轮询，mcp 分支按需重启
             stopOnlinePolling(); // 阶段二百二十二：切换视图统一切断在线列表轮询，online 分支按需重启
+            stopVipPolling(); // 虚拟 IP：切换视图统一切断占用明细轮询，vipip 分支按需重启
             // 进入列表页时刷新数据（agents 依赖 providers 下拉数据，串行加载避免竞态）
             if (item.dataset.view === 'providers') loadProviders();
             if (item.dataset.view === 'agents') loadProviders().then(loadAgents);
@@ -258,6 +260,8 @@
             else if (item.dataset.view === 'accounts') { loadAccounts(); }
             // 阶段二百二十二：进入在线账号视图拉取连接列表并启动轮询
             else if (item.dataset.view === 'online') { loadOnline(); startOnlinePolling(); }
+            // 虚拟 IP：进入视图拉取统计与占用明细并启动轮询（10 秒，与在线页同节奏）
+            else if (item.dataset.view === 'vipip') { loadVipIP(); startVipPolling(); }
             // 阶段八十一：进入 Agent 设置视图拉取当前生效参数
             else if (item.dataset.view === 'agentsettings') { loadAgentSettings(); loadGitPrompts(); }
             // 阶段一百三十八：进入 AI 计费设置视图拉取当前生效计费配置
@@ -3587,6 +3591,62 @@
     $('online-search').addEventListener('input', applyOnlineFilter);
     $('online-refresh').addEventListener('click', function () { loadOnline(true); });
 
+    // ===== 虚拟 IP 池（联机虚拟网卡路线：统计+占用明细 10 秒轮询；服务端归口 adminvipip.go） =====
+    // 明细/统计为 vippool 内存态快照（纯内存读取）；未启用时 403 语义，本页提示原因、页签保留
+    var vipPollTimer = null;
+
+    function startVipPolling() {
+        stopVipPolling();
+        vipPollTimer = setInterval(function () { loadVipIP(true); }, 10000);
+    }
+    function stopVipPolling() {
+        if (vipPollTimer) { clearInterval(vipPollTimer); vipPollTimer = null; }
+    }
+
+    // 拉取统计与占用明细（q 服务端过滤；quiet=轮询静默刷新）
+    function loadVipIP(quiet) {
+        var q = ($('vipip-search').value || '').trim();
+        if (!quiet) {
+            $('vipip-status').textContent = '加载中…';
+            skelRows('vipip-tbody', 3);
+        }
+        api('GET', '/admin/api/vipip' + (q ? '?q=' + encodeURIComponent(q) : '')).then(function (result) {
+            if (!result.ok) {
+                // 未启用（403）等业务拒绝：状态与表格提示原因，统计卡片保持 '-'
+                $('vipip-status').textContent = result.msg || '加载失败';
+                $('vipip-tbody').innerHTML = '<tr><td colspan="3" class="vec-empty">' + escHtml(result.msg || '加载失败') + '</td></tr>';
+                if (!quiet) showToast(result.msg || '虚拟 IP 加载失败');
+                return;
+            }
+            var d = result.data || {};
+            $('vipip-stat-total').textContent = String(d.total != null ? d.total : '-');
+            $('vipip-stat-used').textContent = String(d.used != null ? d.used : '-');
+            $('vipip-stat-free').textContent = String(d.free != null ? d.free : '-');
+            $('vipip-stat-reserved').textContent = String(d.reserved != null ? d.reserved : '-');
+            $('vipip-status').textContent = '占用 ' + d.used + ' / 总 ' + d.total + '，更新于 ' + new Date().toLocaleTimeString();
+            var list = d.list || [];
+            var tbody = $('vipip-tbody');
+            if (!list.length) {
+                tbody.innerHTML = '<tr><td colspan="3" class="vec-empty">' + (q ? '暂无匹配占用' : '当前没有占用（全部空闲）') + '</td></tr>';
+                return;
+            }
+            var html = '';
+            list.forEach(function (e) {
+                html += '<tr>' +
+                    '<td class="points-username">' + escHtml(e.ip || '') + '</td>' +
+                    '<td>' + escHtml(e.username || '-') + '</td>' +
+                    '<td class="points-time">' + escHtml(e.alloc_time || '-') + '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = html;
+        }).catch(function (e) {
+            if (!quiet) showToast(e.message || '网络异常');
+            if (!quiet) $('vipip-status').textContent = e.message || '网络异常';
+        });
+    }
+    $('vipip-search').addEventListener('input', function () { loadVipIP(true); });
+    $('vipip-refresh').addEventListener('click', function () { loadVipIP(true); });
+
     // ===== 阶段八十九：MCP 服务器管理（TRAE CN 同款，服务端归口建连与调用） =====
     var mcpServers = [];
     var mcpSettingsInfo = null;
@@ -5408,6 +5468,56 @@
         return lines.length ? JSON.stringify(lines) : '';
     }
 
+    // ===== 联机 supernode 多选（虚拟网卡路线 §8.3） =====
+    // 候选来自 /admin/api/vipip 响应的全局配置（vip_pool.supernodes）；未启用/未配置时整行隐藏并提示。
+    // 选中集保存为逗号串随游戏表单提交（服务端校验 ⊆ 全局候选，防提交任意地址）；空=走全局兜底
+    var gmSuperCandidates = [];
+    var gmSuperLoaded = false;
+    var gmSupernodes = [];
+
+    function loadSuperCandidates() {
+        if (gmSuperLoaded) return Promise.resolve();
+        return api('GET', '/admin/api/vipip').then(function (result) {
+            gmSuperLoaded = true;
+            gmSuperCandidates = (result.ok && result.data && result.data.supernodes) || [];
+        }).catch(function () {
+            gmSuperLoaded = true;
+            gmSuperCandidates = [];
+        });
+    }
+
+    function gmRenderSuper() {
+        var row = $('gm-f-super-row');
+        var hint = $('gm-f-super-hint');
+        if (!gmSuperLoaded) return; // 候选首拉未回，loadSuperCandidates 回调后再渲染
+        if (!gmSuperCandidates.length) {
+            row.style.display = 'none';
+            hint.style.display = '';
+            hint.textContent = '联机 supernode：服务端未启用虚拟 IP 池或未配置 vip_pool.supernodes 全局候选，本项不可用（游戏联机将走既有隧道链路）';
+            return;
+        }
+        hint.style.display = 'none';
+        row.style.display = 'flex';
+        var box = $('gm-f-super-list');
+        var html = '';
+        gmSuperCandidates.forEach(function (s) {
+            var checked = gmSupernodes.indexOf(s) !== -1 ? ' checked' : '';
+            html += '<label style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--admin-border,rgba(128,128,128,.35));border-radius:10px;cursor:pointer;font-size:12px;">' +
+                '<input type="checkbox" class="gm-super-ck" value="' + escAttr(s) + '"' + checked + '> ' + escHtml(s) + '</label>';
+        });
+        box.innerHTML = html;
+    }
+
+    // 多选变更（事件委托：重渲染无需重复绑定）
+    $('gm-f-super-list').addEventListener('change', function (e) {
+        var ck = e.target.closest('.gm-super-ck');
+        if (!ck) return;
+        var v = ck.getAttribute('value');
+        var i = gmSupernodes.indexOf(v);
+        if (ck.checked && i === -1) gmSupernodes.push(v);
+        if (!ck.checked && i !== -1) gmSupernodes.splice(i, 1);
+    });
+
     function gmOpenEditor(d) {
         gmEditingId = d ? (d.id || 0) : 0;
         $('gm-edit-title').textContent = gmEditingId ? '编辑游戏' : '新建游戏';
@@ -5438,6 +5548,10 @@
         // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
         $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
         $('gm-f-ports-udp').value = d ? (d.online_ports_udp || '') : '';
+        // 联机 supernode 多选回填（详情返回逗号串；候选取自服务端 vip_pool.supernodes 全局配置，
+        // 未启用/未配置时 gmRenderSuper 整行隐藏为提示语）
+        gmSupernodes = d && d.supernodes ? String(d.supernodes).split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
+        loadSuperCandidates().then(gmRenderSuper);
         // 云存档采集/排除路径（服务端存 JSON 数组串，表单以「每行一个 glob」文本回填）
         $('gm-f-save-paths').value = gmSavePathsToText(d ? d.save_paths : '');
         $('gm-f-save-exclude').value = gmSavePathsToText(d ? d.save_exclude : '');
@@ -5977,6 +6091,8 @@
             // 功能二期：联机端口登记（逗号分隔多端口，服务端清洗去重/范围校验）
             online_ports_tcp: $('gm-f-ports-tcp').value.trim(),
             online_ports_udp: $('gm-f-ports-udp').value.trim(),
+            // 联机 supernode 多选（逗号串；服务端校验 ⊆ vip_pool.supernodes 全局候选，空=全局兜底）
+            supernodes: gmSupernodes.join(','),
             // 云存档路径：表单文本（每行一个 glob）→ JSON 数组串，与服务端清洗口径一致
             save_paths: gmSavePathsToJSON($('gm-f-save-paths').value),
             save_exclude: gmSavePathsToJSON($('gm-f-save-exclude').value)
@@ -6021,6 +6137,8 @@
             // 功能二期：联机端口登记全量回写（列表/详情含字段）：防上架/下架切换时清空
             online_ports_tcp: d.online_ports_tcp || '',
             online_ports_udp: d.online_ports_udp || '',
+            // 联机 supernode 全量回写（详情含字段）：防上架/下架切换时清空游戏级 supernode 配置
+            supernodes: d.supernodes || '',
             // 云存档路径全量回写（列表/详情含字段；字段本身即 JSON 数组串，防状态切换清空）
             save_paths: d.save_paths || '',
             save_exclude: d.save_exclude || ''
