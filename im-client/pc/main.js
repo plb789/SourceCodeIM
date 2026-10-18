@@ -30,6 +30,10 @@ const GameSaveManager = require('./game-save-manager.js');
 // 阶段二百九十二 M4：局域网游戏跨公网联机·本地端口隧道（主进程持 UDP/TCP 套接字，渲染进程持 DataChannel）
 const gameTunnel = require('./game-tunnel.js');
 
+// —— 安装/检测类子进程的异步封装：安装类长操作（UAC 等待/tapinstall/msiexec）绝不允许阻塞主进程
+// 消息循环——同步版（execFileSync）会让窗口 5 秒无响应触发系统"应用程序没有响应"假死弹窗（实测 2026-10-19）
+const execFileP = require('util').promisify(require('child_process').execFile);
+
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
 // 只置 aura 层内部状态（isMinimized() 返回 true 假象），Win32 层 IsIconic 恒 false 窗口不动；
@@ -2723,12 +2727,13 @@ function davStateLoad() {
 function davStateSave(st) {
     try { fs.mkdirSync(DAV_DIR, { recursive: true }); fs.writeFileSync(DAV_STATE, JSON.stringify(st), 'utf8'); } catch (e) { }
 }
-// WinFsp 安装检测：注册表 InstallDir 归口（WinFsp 安装器写入，路径含空格故整行截取），常见默认路径兜底
-function davWinfspInstalled() {
+// WinFsp 安装检测：注册表 InstallDir 归口（WinFsp 安装器写入，路径含空格故整行截取），常见默认路径兜底。
+// 异步化（execFile）：reg query 不阻塞主进程消息循环（同步 execSync 会致设置页假死）。
+// 注意：promisify(execFile) resolve 的是 {stdout, stderr} 对象——必须取 r.stdout（同 tapDriverInstalled 教训）
+async function davWinfspInstalled() {
     try {
-        var out = require('child_process').execSync(
-            'reg query "HKLM\\SOFTWARE\\WOW6432Node\\WinFsp" /v InstallDir', { windowsHide: true }).toString();
-        var m = out.match(/InstallDir\s+REG(?:_EXPAND)?_SZ\s+(.+)/);
+        var r = await execFileP('reg', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\WinFsp', '/v', 'InstallDir'], { windowsHide: true, timeout: 10000 });
+        var m = String((r && r.stdout) || '').match(/InstallDir\s+REG(?:_EXPAND)?_SZ\s+(.+)/);
         if (m && m[1]) return fs.existsSync(path.join(m[1].trim(), 'bin', 'winfsp-x64.dll'));
     } catch (e) { }
     return fs.existsSync('C:\\Program Files (x86)\\WinFsp\\bin\\winfsp-x64.dll');
@@ -2777,8 +2782,8 @@ function davStopProc() {
 }
 function davSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-// 状态查询（设置页轮询归口）：WinFsp/引擎/盘符占用/当前挂载态一次回齐
-ipcMain.handle('dav:status', function () {
+// 状态查询（设置页轮询归口）：WinFsp/引擎/盘符占用/当前挂载态一次回齐（异步：winfsp 检测走 execFile）
+ipcMain.handle('dav:status', async function () {
     var st = davStateLoad();
     var mounted = false, letter = '';
     if (davProc && davProc.exitCode === null) {
@@ -2786,7 +2791,7 @@ ipcMain.handle('dav:status', function () {
     }
     return {
         ok: true,
-        winfsp: davWinfspInstalled(),
+        winfsp: await davWinfspInstalled(),
         engineReady: fs.existsSync(davBundledFile('rclone.exe')),
         msiReady: fs.existsSync(davBundledFile('winfsp.msi')),
         mounted: mounted, letter: letter,
@@ -2805,7 +2810,7 @@ ipcMain.handle('dav:mount', async function (event, data) {
         if (!username || !davPassword) return { ok: false, err: '缺少挂载凭据' };
         if (!/^[D-Z]$/.test(letter)) return { ok: false, err: '盘符无效' };
         if (!fs.existsSync(davBundledFile('rclone.exe'))) return { ok: false, err: '挂载引擎缺失（rclone.exe）' };
-        if (!davWinfspInstalled()) return { ok: false, err: 'WinFsp 运行时未安装' };
+        if (!await davWinfspInstalled()) return { ok: false, err: 'WinFsp 运行时未安装' };
         var wasOurs = davStateLoad().letter || '';
         davStopProc();
         if (wasOurs) await davSleep(800); // 旧实例卸载收尾（WinFsp 盘符释放异步）
@@ -2838,9 +2843,10 @@ ipcMain.handle('dav:unmount', async function () {
     return { ok: true };
 });
 
-// WinFsp 静默安装（bundled\winfsp.msi；msiexec /qn 需管理员，PowerShell RunAs 触发 UAC 由用户确认）
-ipcMain.handle('dav:winfsp-install', function () {
-    if (davWinfspInstalled()) return { ok: true, already: true };
+// WinFsp 静默安装（bundled\winfsp.msi；msiexec /qn 需管理员，PowerShell RunAs 触发 UAC 由用户确认）。
+// 异步化（execFile）：msiexec 静默安装耗时不定，同步版会阻塞主进程消息循环致窗口"没有响应"假死
+ipcMain.handle('dav:winfsp-install', async function () {
+    if (await davWinfspInstalled()) return { ok: true, already: true };
     if (!fs.existsSync(davBundledFile('winfsp.msi'))) return { ok: false, err: 'WinFsp 安装包缺失' };
     try {
         // 提权命令经 -EncodedCommand（UTF-16LE Base64）+ PS 单引号字面量传参（比照下方 tapElevatedRun 同款）：
@@ -2850,9 +2856,9 @@ ipcMain.handle('dav:winfsp-install', function () {
         var psq = function (p) { return "'" + String(p).replace(/'/g, "''") + "'"; };
         var inner = 'Start-Process msiexec -ArgumentList \'/i\',' + psq(davBundledFile('winfsp.msi')) + ',\'/qn\',\'/norestart\' -Wait';
         var enc = Buffer.from(inner, 'utf16le').toString('base64');
-        require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
-            "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"], { windowsHide: true, timeout: 180000 });
-        return davWinfspInstalled() ? { ok: true } : { ok: false, err: '安装后未检测到 WinFsp 组件' };
+        await execFileP('powershell.exe', ['-NoProfile', '-Command',
+            "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"], { windowsHide: true, timeout: 180000, maxBuffer: 4 * 1024 * 1024 });
+        return (await davWinfspInstalled()) ? { ok: true } : { ok: false, err: '安装后未检测到 WinFsp 组件' };
     } catch (e) {
         return { ok: false, err: '安装未完成（可能已取消授权或需要管理员权限）' };
     }
@@ -2860,10 +2866,10 @@ ipcMain.handle('dav:winfsp-install', function () {
 
 // 客户端启动自动重挂（延迟 5 秒避开启动高峰；凭据复用既有 rclone.conf 无需重新获取；
 // 服务端未就绪时挂载仍成立，服务端恢复后读写自动可用；修改过登录密码的用户重新开关一次即可刷新凭据）
-setTimeout(function () {
+setTimeout(async function () {
     var st = davStateLoad();
     if (!st.enabled || !st.letter || !fs.existsSync(DAV_CONF)) return;
-    if (!davWinfspInstalled() || !fs.existsSync(davBundledFile('rclone.exe'))) return;
+    if (!(await davWinfspInstalled()) || !fs.existsSync(davBundledFile('rclone.exe'))) return;
     try { fs.accessSync(st.letter + ':\\'); return; } catch (e) { } // 盘符已被他占则放弃
     davSpawnMount(st.letter);
     console.log('[网盘挂载] 已自动恢复:', st.letter + ':', '(' + (st.username || '') + ')');
@@ -2883,13 +2889,17 @@ function tapDriverFile(name) {
 function tapDriverAvailable() {
     return fs.existsSync(tapDriverFile('tapinstall.exe')) && fs.existsSync(tapDriverFile('OemVista.inf'));
 }
-// tapDriverInstalled 检测 TAP 驱动是否已安装（只读免提权；输出文本判定，异常兜底视为未装）
-function tapDriverInstalled() {
+// tapDriverInstalled 检测 TAP 驱动是否已安装（只读查询；输出文本判定，异常兜底视为未装）。
+// 异步化（execFile）：tapinstall 查询不阻塞主进程消息循环（同步版会致设置页假死）。
+// 注意：promisify(execFile) resolve 的是 {stdout, stderr} 对象——必须取 r.stdout，
+// 直接 String(结果) 会得到 "[object Object]" 致检测恒 false（实测致重复安装引导，2026-10-19）
+async function tapDriverInstalled() {
     if (!tapDriverAvailable()) return false;
     var out = '';
     try {
-        out = String(require('child_process').execFileSync(tapDriverFile('tapinstall.exe'),
-            ['hwids', '*tap0901*'], { windowsHide: true, timeout: 15000 }));
+        var r = await execFileP(tapDriverFile('tapinstall.exe'),
+            ['hwids', '*tap0901*'], { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024 });
+        out = String((r && r.stdout) || '');
     } catch (e) {
         out = String((e && e.stdout) || '');
     }
@@ -2905,7 +2915,8 @@ function tapDriverInstalled() {
 // 路径一律用 PS 单引号字面量（psq）包裹：单引号内 $/反引号不展开（防安装路径含 $ 致参数破坏），
 // 内嵌单引号按 PS 规则加倍转义；-WindowStyle Hidden 压制提权子进程的黑框（tapinstall 为控制台程序）。
 // install 分支同一次提权顺带重命名新装适配器连接名为"IM-client"（Rename-NetAdapter 需提权，
-// 合并免二次 UAC）：先记既有 TAP 的 InterfaceGuid 差集，只改本包新装块（防误改 OpenVPN 等
+// 合并免二次 UAC）：install 前先记既有 TAP 的 InterfaceGuid 集合（时序关键——install 后新设备
+// PnP 往往已就绪，再取差集会把新块记进集合致轮询永不命中），只改本包新装块（防误改 OpenVPN 等
 // 其他软件的同名 TAP）；PnP 注册异步，tapinstall 返回时适配器可能未就绪，10s 内轮询后改名；
 // 改名仅影响连接名显示，wintap.c 靠 GUID+设备句柄探测定位不受影响。
 // 设备描述"TAP-Windows Adapter V9"来自 INF 字符串且受 tap0901.cat 签名覆盖，不可改（改即签名失效）
@@ -2915,8 +2926,11 @@ function tapElevatedRun(argLine) {
     var inf = psq(tapDriverFile('OemVista.inf'));
     var inner;
     if (argLine === 'install') {
-        inner = '& ' + exe + ' install ' + inf + ' tap0901; if($?){ ' +
-            '$b=(Get-NetAdapter -InterfaceDescription "TAP-Windows Adapter V9" -ErrorAction SilentlyContinue).InterfaceGuid; ' +
+        // $b 必须在 install 之前求值：tapinstall 返回时新设备 PnP 往往已就绪，
+        // 若 install 后再取差集会把新块自己也记进 $b，差集恒空 → 轮询 20 次全部落空，
+        // 改名/跃点静默失效（实测 2026-10-19：卸载重装场景必现，装出"以太网 2"）
+        inner = '$b=(Get-NetAdapter -InterfaceDescription "TAP-Windows Adapter V9" -ErrorAction SilentlyContinue).InterfaceGuid; ' +
+            '& ' + exe + ' install ' + inf + ' tap0901; if($?){ ' +
             '$n=0; while($n -lt 20){ Start-Sleep -Milliseconds 500; ' +
             '$a=Get-NetAdapter -InterfaceDescription "TAP-Windows Adapter V9" -ErrorAction SilentlyContinue | ' +
             'Where-Object { $b -notcontains $_.InterfaceGuid }; ' +
@@ -2926,40 +2940,44 @@ function tapElevatedRun(argLine) {
         inner = '& ' + exe + ' remove tap0901';
     }
     var enc = Buffer.from(inner, 'utf16le').toString('base64');
-    require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
+    // 异步执行（execFile）：UAC 等待 + tapinstall 安装 + 改名/跃点轮询全程不阻塞主进程消息循环，
+    // 外层 powershell 退出码非零（UAC 取消）经 reject 传递，由调用方 catch 归口
+    return execFileP('powershell.exe', ['-NoProfile', '-Command',
         "Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + enc + "'"],
-        { windowsHide: true, timeout: 180000 });
+        { windowsHide: true, timeout: 180000, maxBuffer: 4 * 1024 * 1024 });
 }
 // 检测状态查询（设置页开关回显归口；available=false 表示安装包内驱动文件缺失，页面据此置灰）
-ipcMain.handle('tap:get', function () {
-    return { installed: tapDriverInstalled(), available: tapDriverAvailable() };
+ipcMain.handle('tap:get', async function () {
+    return { installed: await tapDriverInstalled(), available: tapDriverAvailable() };
 });
-// 安装（启用开关）：已装直接回执；提权后复查实际状态回传，页面以真实状态回显
-ipcMain.handle('tap:install', function () {
-    if (tapDriverInstalled()) return { ok: true, installed: true, already: true };
+// 安装（启用开关）：已装直接回执；提权后复查实际状态回传，页面以真实状态回显。
+// 异步化：tapElevatedRun（UAC 等待 + tapinstall + 改名/跃点轮询，最长 ~15s+）期间主进程消息循环
+// 保持畅通——同步版会触发系统"应用程序没有响应"假死弹窗（实测 2026-10-19）
+ipcMain.handle('tap:install', async function () {
+    if (await tapDriverInstalled()) return { ok: true, installed: true, already: true };
     if (!tapDriverAvailable()) return { ok: false, installed: false, err: '驱动文件缺失（tapinstall/OemVista.inf）' };
     try {
-        tapElevatedRun('install');
-        var ok = tapDriverInstalled();
+        await tapElevatedRun('install');
+        var ok = await tapDriverInstalled();
         return ok ? { ok: true, installed: true } : { ok: false, installed: false, err: '安装后未检测到驱动（可能取消了授权）' };
     } catch (e) {
-        return { ok: false, installed: tapDriverInstalled(), err: '安装未完成（可能已取消授权或需要管理员权限）' };
+        return { ok: false, installed: await tapDriverInstalled(), err: '安装未完成（可能已取消授权或需要管理员权限）' };
     }
 });
 // 卸载（停用开关）：未装直接回执；卸载会同时移除设备与 tap0901 服务
-ipcMain.handle('tap:remove', function () {
-    if (!tapDriverInstalled()) return { ok: true, installed: false, already: true };
+ipcMain.handle('tap:remove', async function () {
+    if (!(await tapDriverInstalled())) return { ok: true, installed: false, already: true };
     try {
-        tapElevatedRun('remove');
-        return { ok: true, installed: tapDriverInstalled() };
+        await tapElevatedRun('remove');
+        return { ok: true, installed: await tapDriverInstalled() };
     } catch (e) {
-        return { ok: false, installed: tapDriverInstalled(), err: '卸载未完成（可能已取消授权或需要管理员权限）' };
+        return { ok: false, installed: await tapDriverInstalled(), err: '卸载未完成（可能已取消授权或需要管理员权限）' };
     }
 });
 // 启动检测推送：延迟 8 秒避开启动高峰（比照上方网盘自动重挂节奏），未装且驱动文件在包内
 // 才推 tap:prompt，页面弹自定义确认弹窗（拒绝记忆在渲染层 localStorage，主进程不落盘不重复打扰）
-setTimeout(function () {
-    if (!tapDriverAvailable() || tapDriverInstalled()) return;
+setTimeout(async function () {
+    if (!tapDriverAvailable() || (await tapDriverInstalled())) return;
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('tap:prompt', {});
     console.log('[TAP驱动] 启动检测：未安装，已推送安装引导');
