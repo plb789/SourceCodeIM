@@ -2022,7 +2022,7 @@ function p2pHostStop(reason) {
     p2pMeta = null;
     if (!proc && !meta) return;
     var why = String(reason || '');
-    logger.Info('[p2p-host] 停止（%s）comm=%s', why, (meta && meta.comm) || '');
+    gnLogWrite('[p2p-host] 停止（' + why + '）comm=' + ((meta && meta.comm) || '')); // logger 未定义会在此抛 ReferenceError 致收口全跳过（历史缺陷，已换 gnLogWrite）
     if (proc && proc.pid) {
         var killTree = function () {
             try { require('child_process').exec('taskkill /PID ' + proc.pid + ' /T /F', { windowsHide: true }); } catch (e) { }
@@ -2075,7 +2075,7 @@ function p2pHostStart(params) {
         return { ok: false, err: '组网参数不完整（虚拟 IP/MAC/社区名/密钥/supernode 缺一不可）' };
     }
     if (!p2pIpv4Valid(ip) || !p2pIpv4Valid(mask)) {
-        logger.Warn('[p2p-host] 非法 IPv4 参数拒绝启动 ip=%s mask=%s', ip, mask);
+        gnLogWrite('[p2p-host] 非法 IPv4 参数拒绝启动 ip=' + ip + ' mask=' + mask);
         return { ok: false, err: '虚拟 IP/掩码格式非法（需合法 IPv4）' };
     }
     if (p2pProc && p2pMeta && p2pMeta.comm === comm) {
@@ -2093,16 +2093,16 @@ function p2pHostStart(params) {
         try { proc.stdin.write(P2P_HOST_AUTH + '\n'); } catch (e) { } // 启动授权握手（edge.c main 入口 10s 内校验，未过即退）；stdin 管道保持打开作父进程存活看门狗——本进程意外退出时管道 EOF，p2p-host 自行优雅退出防孤儿，故任何路径不得 stdin.end()
         p2pProc = proc;
         p2pMeta = { comm: comm, vip_ip: ip, mgmt_port: mgmtPort }; // mgmt_port：UDP stop 目标（-t 随机分配）
-        logger.Info('[p2p-host] 启动 pid=%d comm=%s ip=%s supernodes=%d', proc.pid, comm, ip, sns.length);
+        gnLogWrite('[p2p-host] 启动 pid=' + proc.pid + ' comm=' + comm + ' ip=' + ip + ' supernodes=' + sns.length + ' mgmt=' + mgmtPort);
         proc.on('exit', function (code) {
             if (p2pProc !== proc) return; // 主动停止路径已清指针并广播，不重复
             p2pProc = null;
             p2pMeta = null;
-            logger.Warn('[p2p-host] 进程退出 code=%s comm=%s', code, comm);
+            gnLogWrite('[p2p-host] 进程退出 code=' + code + ' comm=' + comm);
             gnBroadcast('p2p-host:status', { running: false, comm: comm, reason: 'exit:' + code });
         });
         proc.on('error', function (e) {
-            logger.Error('[p2p-host] 进程错误: %s', (e && e.message) || e);
+            gnLogWrite('[p2p-host] 进程错误: ' + ((e && e.message) || e));
         });
     } catch (e) {
         p2pProc = null;
