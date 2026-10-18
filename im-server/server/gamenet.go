@@ -702,18 +702,6 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 		s.sendError(c, "游戏端口无效")
 		return
 	}
-	// 接入形态：以房间声明为准，受全局 mode 收敛（一期主线 tunnel）
-	mode := "tunnel"
-	switch s.cfg.GameNet.Mode {
-	case "lane":
-		mode = "lane"
-	case "tunnel":
-		mode = "tunnel"
-	default:
-		if m := strings.TrimSpace(p.Mode); m == "lane" || m == "tunnel" {
-			mode = m
-		}
-	}
 	name := gnTrimRunes(p.Name, 32)
 	passHash := ""
 	if pw := strings.TrimSpace(p.Pass); pw != "" {
@@ -741,13 +729,42 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 		maxPlayers = 2
 	}
 	gameName := gnTrimRunes(p.GameName, 32)
-	// 虚拟网卡路线：按 game_id 读该游戏配置的联机 supernode 列表（admin 游戏表单多选，§8.3）；
-	// 空=客户端回退登录回执全局兜底（vip_supernodes）。读失败不阻塞建房（组网字段缺省降级）
+	// 联机方式路由（设计文档 docs/联机方式路由设计方案.md）：按 game_id 读该应用配置的
+	// 联机方式（NetMode）与 supernode 列表（管理员上架配置）；读失败不阻塞建房（字段缺省降级）
 	gameSupernodes := ""
+	gameNetMode := ""
 	if p.GameID > 0 {
 		var g model.Game
-		if err := store.DB.Select("supernodes").First(&g, p.GameID).Error; err == nil {
+		if err := store.DB.Select("supernodes", "net_mode").First(&g, p.GameID).Error; err == nil {
 			gameSupernodes = strings.TrimSpace(g.Supernodes)
+			gameNetMode = strings.TrimSpace(g.NetMode)
+		}
+	}
+
+	// 接入形态收敛（应用级 NetMode 覆盖优先，全局收敛兜底）：
+	//   supernode 方式前置校验（vip_pool 启用 + 应用配置 supernode 节点），不满足自动降级隧道 + WARN；
+	//   tunnel 方式强制隧道；空=跟随全局（以房间声明为准，受全局 mode 收敛，一期主线 tunnel）
+	mode := "tunnel"
+	switch gameNetMode {
+	case "supernode":
+		if s.cfg.VipPool.Enabled && gameSupernodes != "" {
+			mode = "supernode"
+		} else {
+			logger.Warn("游戏房间应用 %s 配置虚拟网卡方式但前置条件不满足（vip_pool=%v supernodes=%q），已降级隧道",
+				gameName, s.cfg.VipPool.Enabled, gameSupernodes)
+		}
+	case "tunnel":
+		mode = "tunnel"
+	default:
+		switch s.cfg.GameNet.Mode {
+		case "lane":
+			mode = "lane"
+		case "tunnel":
+			mode = "tunnel"
+		default:
+			if m := strings.TrimSpace(p.Mode); m == "lane" || m == "tunnel" {
+				mode = m
+			}
 		}
 	}
 

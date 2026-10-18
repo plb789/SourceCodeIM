@@ -1403,6 +1403,14 @@
                     <input id="gm-f-launch-exe" class="admin-input" placeholder="启动程序路径（相对安装目录，如 bin/game.exe，可空）" maxlength="255">
                 </div>
                 <input id="gm-f-launch-args" class="admin-input" placeholder="启动参数（可空；占位符：{0}=登录账号，{1}=账号专属密码）" maxlength="1024">
+                <!-- 联机方式路由（三态单选，设计文档 docs/联机方式路由设计方案.md §四）：
+                     supernode=虚拟网卡组网（展开 supernode 多选）/ tunnel=既有端口隧道（隐藏多选并清空）/ 空=跟随全局 -->
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:14px;align-items:center;">
+                    <span style="font-size:13px;">联机方式：</span>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="radio" name="gm-f-netmode" value="">跟随全局</label>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="radio" name="gm-f-netmode" value="supernode">虚拟网卡</label>
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="radio" name="gm-f-netmode" value="tunnel">端口隧道</label>
+                </div>
                 <!-- 功能二期：联机端口登记（逗号分隔多端口）——建房选游戏自动预填 + 开局实测新端口自动累加 -->
                 <div class="gm-form-row">
                     <input id="gm-f-ports-tcp" class="admin-input" placeholder="联机 TCP 端口（逗号分隔，如 6112,6113；可空）" maxlength="255">

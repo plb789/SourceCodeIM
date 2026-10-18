@@ -763,12 +763,13 @@
                 if (window.GameNet && window.GameNet.config) window.GameNet.config(gnCfg);
                 if (window.desktop && typeof window.desktop.gnNetConfig === 'function') window.desktop.gnNetConfig(gnCfg);
                 // 虚拟网卡 IP/MAC 与全局 supernode 候选（联机 p2p-host 启动参数数据源，设计文档 §6；
-                // 空串/空数组=服务端未启用或未分配）。透传存 sessionStorage 供联机模块消费（另案），
-                // 房间级组网字段（comm/comm_key/游戏级 supernodes）走 109 信令实时下发不经此处
+                // 空串/空数组=服务端未启用或未分配）。存 localStorage——**跨窗口共享**：联机房间层运行在
+                // 游戏中心独立窗（gn-room.js），sessionStorage 按窗口隔离读不到（实测建房报"虚拟 IP 未分配"
+                // 即此因）；登录响应每次覆盖，房间级组网字段（comm/comm_key/游戏级 supernodes）走 109 信令
                 try {
-                    sessionStorage.setItem('vip_ip', (info && info.vip_ip) || '');
-                    sessionStorage.setItem('vip_mac', (info && info.vip_mac) || '');
-                    sessionStorage.setItem('vip_supernodes', JSON.stringify((info && info.vip_supernodes) || []));
+                    localStorage.setItem('vip_ip', (info && info.vip_ip) || '');
+                    localStorage.setItem('vip_mac', (info && info.vip_mac) || '');
+                    localStorage.setItem('vip_supernodes', JSON.stringify((info && info.vip_supernodes) || []));
                 } catch (eVip) {}
             } catch (e) {}
             // 阶段二百二十五：登录成功后启动原生前台服务（保存凭据+拉起服务，幂等）；

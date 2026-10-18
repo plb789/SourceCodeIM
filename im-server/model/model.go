@@ -1011,6 +1011,11 @@ type Game struct {
 	// 建房按 game_id 读入房间 meta 随房间信令下发，客户端启动 p2p-host 的 -l 参数数据源；
 	// 空=走 vip_pool.supernodes 全局兜底。AutoMigrate 自动加列，存量游戏默认空行为不变
 	Supernodes string `gorm:"column:supernodes;type:varchar(512);default:''" json:"supernodes"`
+	// NetMode 联机方式（建房房间跟随，管理员上架配置；空=跟随全局 game_net.mode 现状，存量零回归）：
+	// "supernode"=虚拟网卡（p2p-host.exe 组网，需 Supernodes 非空）/ "tunnel"=端口隧道（既有方式）。
+	// 建房时应用级覆盖优先于全局收敛；vip_pool 未启用或节点为空时 supernode 自动降级 tunnel。
+	// AutoMigrate 自动加列，存量游戏默认空行为不变。设计文档 docs/联机方式路由设计方案.md
+	NetMode string `gorm:"column:net_mode;type:varchar(16);default:''" json:"net_mode"`
 	// SavePaths 云存档采集路径 JSON 数组串（glob 模式，如 ["%USERPROFILE%/Documents/My Games/X/**"]）：
 	// 相对路径以该游戏库记录的安装目录（install_path）为锚点；实测 install_path 有「安装根 <盘>/CdonlgameApp」
 	// 与「游戏目录 <盘>/CdonlgameApp/<slug>」两种形态，相对写法易多/少一层目录，推荐直接使用绝对路径（支持

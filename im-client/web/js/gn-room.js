@@ -143,7 +143,7 @@
 
     // ===== DOM 构建（容器 #gn-view 常驻游戏中心窗 gsViewOnline，内部结构本模块一次性构建） =====
     var elRefresh, elClose, elPageLobby, elPageRoom, elName, elPort, elPortDetect, elPass, elCreateBtn, elCreateOpen, elCreateCancel, elCreateMask,
-        elInGame, elInMode, elInMax, elGameList,
+        elInGame, elInMode, elInMax, elGameList, elNetModeRow, elNetMode, elPortRow,
         elRoomIn, elJoinPass, elJoinBtn, elMatchBtn,
         elRoomList, elListEmpty,
         elLobbyChat, elLobbyIn, elLobbySend, elLobbyCount,
@@ -237,9 +237,11 @@
             '<div class="gn-create-form">' +
             '<div class="gn-form-row"><label>' + T('房间名') + '</label><input id="gn-in-name" type="text" maxlength="32" placeholder="' + T('如：我的世界生存') + '"></div>' +
             '<div class="gn-form-row"><label>' + T('联机游戏') + '</label><select id="gn-in-game"></select></div>' +
+            // 联机方式行（随应用带出只读，服务端建房收敛归口；supernode=虚拟网卡 / tunnel=端口隧道 / 空=跟随全局）
+            '<div class="gn-form-row" id="gn-in-netmode-row" style="display:none;"><label>' + T('联机方式') + '</label><span class="gn-tag" id="gn-in-netmode"></span></div>' +
             '<div class="gn-form-row"><label>' + T('对战模式') + '</label><select id="gn-in-mode"></select></div>' +
             '<div class="gn-form-row"><label>' + T('房间人数') + '</label><select id="gn-in-max"></select></div>' +
-            '<div class="gn-form-row"><label>' + T('游戏端口') + '</label><input id="gn-in-port" type="text" inputmode="numeric" maxlength="5" placeholder="' + T('游戏局域网端口（1024-65535）') + '"><button id="gn-port-detect" class="gn-link">' + T('自动探测') + '</button></div>' +
+            '<div class="gn-form-row" id="gn-in-port-row"><label>' + T('游戏端口') + '</label><input id="gn-in-port" type="text" inputmode="numeric" maxlength="5" placeholder="' + T('游戏局域网端口（1024-65535）') + '"><button id="gn-port-detect" class="gn-link">' + T('自动探测') + '</button></div>' +
             '<div class="gn-form-row"><label>' + T('房间口令') + '</label><input id="gn-in-pass" type="text" maxlength="32" placeholder="' + T('选填，留空则好友可直接加入') + '"></div>' +
             '</div>' +
             '<div class="gn-hint" id="gn-create-hint">' + T('创建后把房间号发给好友，对方在「加入房间」输入即可联机') + '</div>' +
@@ -284,6 +286,8 @@
         elCreateOpen = g('gn-create-open'); elCreateMask = g('gn-create-mask');
         elName = g('gn-in-name'); elPort = g('gn-in-port'); elPass = g('gn-in-pass');
         elInGame = g('gn-in-game'); elInMode = g('gn-in-mode'); elInMax = g('gn-in-max');
+        elNetModeRow = g('gn-in-netmode-row'); elNetMode = g('gn-in-netmode');
+        elPortRow = g('gn-in-port-row');
         elGameList = g('gn-game-list');
         elCreateBtn = g('gn-create-btn'); elCreateCancel = g('gn-create-cancel');
         elRoomIn = g('gn-in-room'); elJoinPass = g('gn-in-join-pass'); elJoinBtn = g('gn-join-btn');
@@ -597,13 +601,21 @@
     function renderRoom() {
         if (!my) { showPage('lobby'); return; }
         elRoomName.textContent = my.name || (T('房间') + ' ' + my.room_id);
+        // 联机方式徽标（服务端房间 mode 归口：supernode=虚拟网卡组网 / tunnel=端口隧道 / 其他=跟随全局）
+        var nmLabel = my.mode === 'supernode' ? T('虚拟网卡') : (my.mode === 'tunnel' ? T('端口隧道') : T('跟随全局'));
         elRoomMeta.innerHTML =
             '<span class="gn-meta-item">' + T('房间号') + ' <b>' + esc(my.room_id) + '</b></span>' +
-            '<span class="gn-meta-item">' + T('游戏端口') + ' <b>' + esc(my.host_port || '-') + '</b></span>' +
+            '<span class="gn-meta-item">' + T('联机方式') + ' <b>' + esc(nmLabel) + '</b></span>' +
+            (my.mode !== 'supernode' ? '<span class="gn-meta-item">' + T('游戏端口') + ' <b>' + esc(my.host_port || '-') + '</b></span>' : '') +
             (my.game_name ? '<span class="gn-meta-item">' + T('游戏') + ' <b>' + esc(my.game_name) + '</b></span>' : '') +
             (my.game_mode ? '<span class="gn-meta-item">' + T('模式') + ' <b>' + esc(modeLabel(my.game_mode)) + '</b></span>' : '') +
             '<span class="gn-meta-item">' + (my.status === 'playing' ? T('游戏中') : T('等待中')) + '</span>' +
             (my.isHost ? '<span class="gn-meta-item gn-badge-host">' + T('我是房主') + '</span>' : '');
+        // supernode 房间开局提示（p2p-host 启动器另案未落地前的过渡告知；每房间一次防重复）
+        if (my.status === 'playing' && my.mode === 'supernode' && !my._nmTiped) {
+            my._nmTiped = true;
+            toast(T('虚拟网卡启动器即将支持，本房间暂按端口隧道链路处理'));
+        }
         renderMembers();
         renderActions();
         renderLinkBar();
@@ -830,6 +842,40 @@
             hint.textContent = T('（游戏库暂无已安装游戏，可先到游戏中心安装）');
             elInGame.appendChild(hint);
         }
+        gnSyncNetMode();
+    }
+    // 联机方式随应用带出（只读，服务端建房收敛归口——联机方式路由设计 §五）：
+    // supernode=虚拟网卡（隐藏端口行，虚拟网无需端口）/ tunnel=端口隧道 / 空=跟随全局。
+    // 数据源 GSGameMeta().netMode（应用上架配置随库数据下发），缺省优雅降级"跟随全局"
+    var gnTapInstalled = false; // TAP 驱动安装态缓存（supernode 应用建房前置校验；gnSyncNetMode 异步刷新）
+    function gnNetModeSel() {
+        var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+        return (gm && gm.netMode) || '';
+    }
+    function gnSyncNetMode() {
+        var nm = gnNetModeSel();
+        var label = nm === 'supernode' ? T('虚拟网卡') : (nm === 'tunnel' ? T('端口隧道') : T('跟随全局'));
+        elNetMode.textContent = label;
+        elNetModeRow.style.display = nm ? '' : 'none';
+        // 虚拟网卡方式隐藏端口行（UI 层面无端口概念），但**内部预填登记主端口**——
+        // 服务端前置不满足自动降级隧道时，房间仍有可用端口（防 host_port=0 断链）
+        elPortRow.style.display = nm === 'supernode' ? 'none' : '';
+        if (nm === 'supernode') {
+            var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+            var reg = (gm && gm.portsTCP && gm.portsTCP.length) ? gm.portsTCP : (gm && gm.portsUDP ? gm.portsUDP : []);
+            if (reg.length && !elPort.value.trim()) elPort.value = String(reg[0]);
+        }
+        // supernode 前置状态异步刷新（TAP 驱动安装态；未装时徽标附引导，doCreate 亦拦截）
+        if (nm === 'supernode' && window.desktop && typeof window.desktop.tapGet === 'function') {
+            window.desktop.tapGet().then(function (st) {
+                gnTapInstalled = !!(st && st.installed);
+                if (!gnTapInstalled) {
+                    elNetMode.textContent = label + T('（TAP 驱动未安装，请到 设置 → 网络 启用）');
+                }
+            }).catch(function () { });
+        } else {
+            gnTapInstalled = false;
+        }
     }
     function doCreate() {
         if (busy.create) return;
@@ -850,8 +896,20 @@
         var gid = parseInt(elInGame.value || '0', 10) || 0;
         var gname = '';
         if (gid) { games.forEach(function (x) { if (x.id === gid) gname = x.name; }); }
+        // 联机方式路由（客户端侧前置引导，服务端建房收敛仍有兜底）：
+        // supernode 应用：TAP 未装 → 引导设置页；虚拟 IP 未分配 → 提示服务端池未启用/耗尽
+        var gmNet = gnNetModeSel();
+        if (gmNet === 'supernode') {
+            if (!gnTapInstalled) { toast(T('该应用为虚拟网卡联机，请先到 设置 → 网络 启用虚拟网卡驱动')); return; }
+            // vip_ip 存主窗口 localStorage（socket.js 登录响应写入，跨窗口共享；sessionStorage 按窗隔离读不到）
+            var vipIp = '';
+            try { vipIp = localStorage.getItem('vip_ip') || ''; } catch (eVip) { }
+            if (!vipIp) { toast(T('虚拟 IP 未分配（服务端虚拟 IP 池未启用或已耗尽）')); return; }
+        }
         if (!name) { toast(T('请填写房间名')); return; }
-        if (!isFinite(port) || port < 1024 || port > 65535) { toast(T('游戏端口需为 1024-65535')); return; }
+        // 端口校验与 payload：supernode 方式 UI 隐藏端口行但内部已预填登记主端口——
+        // 服务端前置满足走虚拟网卡（不消费端口）、前置不满足自动降级隧道时端口仍可用（防断链）
+        if (gmNet !== 'supernode' && (!isFinite(port) || port < 1024 || port > 65535)) { toast(T('游戏端口需为 1024-65535')); return; }
         if (!isFinite(maxN) || maxN < 2) { toast(T('房间人数至少 2 人')); return; }
         myName = name;
         lockBusy('create'); renderLobby();
@@ -1570,7 +1628,8 @@
         // 功能二期：建房选择联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填；
         // 未运行则提示手动填写或点自动探测，游戏启动后探测会命中）
         elInGame.addEventListener('change', function () {
-            if (elInGame.value !== '0') portDetect();
+            gnSyncNetMode(); // 联机方式随应用带出（supernode 时隐藏端口行并刷新 TAP 前置状态）
+            if (elInGame.value !== '0' && gnNetModeSel() !== 'supernode') portDetect();
         });
         elRoomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
         elJoinPass.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });

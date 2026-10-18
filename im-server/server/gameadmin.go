@@ -252,12 +252,26 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	g.LaunchName = gameLaunchNameClean(g.LaunchName)
 	g.LaunchArgs = gameLaunchArgsClean(g.LaunchArgs)
-	// 联机 supernode 白名单校验（虚拟网卡路线 §8.3）：所选必须 ⊆ vip_pool.supernodes 全局候选，
+	// 联机方式路由（设计文档 §二/四）：白名单校验 + 与 supernode 多选联动——
+	// supernode 方式需至少一个节点；tunnel 方式清空 Supernodes（隧道不消费，防脏数据）
+	g.NetMode = strings.TrimSpace(g.NetMode)
+	if g.NetMode != "" && g.NetMode != "supernode" && g.NetMode != "tunnel" {
+		adminFail(w, http.StatusBadRequest, "联机方式非法（仅支持 跟随全局/虚拟网卡/端口隧道）")
+		return
+	}
+	// 联机 supernode 白名单校验（虚拟网卡路线 §8.3）：所选必须 ⊆ 当前生效候选（后台热更值优先），
 	// 防后台接口被直接调用提交任意地址；空=未配置走全局兜底
 	snClean, serr := vipSupernodesClean(g.Supernodes)
 	if serr != nil {
 		adminFail(w, http.StatusBadRequest, serr.Error())
 		return
+	}
+	if g.NetMode == "supernode" && snClean == "" {
+		adminFail(w, http.StatusBadRequest, "虚拟网卡方式需至少选择一个 supernode")
+		return
+	}
+	if g.NetMode == "tunnel" {
+		snClean = ""
 	}
 	g.Supernodes = snClean
 	vids, verr := gameVideosClean(g.Videos)
@@ -337,8 +351,10 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["versions"] = verList
 	// 上传种子文件名（管理端表单回填/上架切换全量回写保真；服务端私有字段 json:"-" 不随 model 下发）
 	item["torrent_path"] = g.TorrentPath
-	// 联机 supernode 列表回填（管理端表单多选编辑用；仅管理端详情下发，商店公开摘要 gameSummary 不含）
+	// 联机 supernode 列表/联机方式回填（管理端表单编辑用；仅管理端详情下发，商店公开摘要 gameSummary 的
+	// net_mode 为建房页数据源非敏感，supernodes 仍仅管理端可见）
 	item["supernodes"] = g.Supernodes
+	item["net_mode"] = g.NetMode
 	adminJSON(w, item)
 }
 
@@ -406,11 +422,23 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	u.LaunchName = gameLaunchNameClean(u.LaunchName)
 	u.LaunchArgs = gameLaunchArgsClean(u.LaunchArgs)
-	// 联机 supernode 白名单校验（同创建口径：⊆ vip_pool.supernodes 全局候选，空=全局兜底）
+	// 联机方式路由（同创建口径）：白名单 + 联动校验（supernode 需节点 / tunnel 清空 Supernodes）
+	u.NetMode = strings.TrimSpace(u.NetMode)
+	if u.NetMode != "" && u.NetMode != "supernode" && u.NetMode != "tunnel" {
+		adminFail(w, http.StatusBadRequest, "联机方式非法（仅支持 跟随全局/虚拟网卡/端口隧道）")
+		return
+	}
 	snClean, serr := vipSupernodesClean(u.Supernodes)
 	if serr != nil {
 		adminFail(w, http.StatusBadRequest, serr.Error())
 		return
+	}
+	if u.NetMode == "supernode" && snClean == "" {
+		adminFail(w, http.StatusBadRequest, "虚拟网卡方式需至少选择一个 supernode")
+		return
+	}
+	if u.NetMode == "tunnel" {
+		snClean = ""
 	}
 	u.Supernodes = snClean
 	vids, verr := gameVideosClean(u.Videos)
@@ -429,7 +457,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
 		"save_paths": u.SavePaths, "save_exclude": u.SaveExclude,
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
-		"supernodes":   u.Supernodes,
+		"supernodes": u.Supernodes, "net_mode": u.NetMode,
 		"torrent_path": tp,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {

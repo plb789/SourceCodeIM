@@ -4525,7 +4525,9 @@
                     name: g.name || ('#' + gid),
                     // 联机大厅左列按游戏图标展示：与商店卡片同源（封面 → 首屏截图 → 空则前端占位），
                     // 此处直接归一为可直用 URL，避免调用方重复拼接 origin
-                    cover: assetUrl(g.cover || (g.screenshots && g.screenshots[0]) || '')
+                    cover: assetUrl(g.cover || (g.screenshots && g.screenshots[0]) || ''),
+                    // 联机方式路由（supernode/tunnel/空=跟随全局）：建房弹窗随应用带出显示
+                    netMode: g.net_mode || ''
                 });
             });
         } catch (err) { out = []; }
@@ -4554,6 +4556,8 @@
             var proc = (exe || (nm ? nm + '.exe' : '')).toLowerCase();
             return {
                 name: nm || (m.exe || ''), exe: exe, proc: proc,
+                // 联机方式路由（supernode/tunnel/空=跟随全局）：建房弹窗联机方式行 + supernode 前置校验
+                netMode: g.net_mode || '',
                 // 功能二期：联机端口登记（逗号分隔串 → 数组；建房预填 + 开局实测累加回传）
                 portsTCP: parsePorts(g.online_ports_tcp),
                 portsUDP: parsePorts(g.online_ports_udp)

@@ -5605,7 +5605,45 @@
         box.innerHTML = html;
     }
 
-    // 多选变更（事件委托：重渲染无需重复绑定）
+    // 联机方式选中值归口（三态单选：''=跟随全局 / supernode=虚拟网卡 / tunnel=端口隧道）
+    function gmNetModeSel() {
+        var r = document.querySelector('input[name="gm-f-netmode"]:checked');
+        return r ? r.value : '';
+    }
+
+    function gmRenderSuper() {
+        var row = $('gm-f-super-row');
+        var hint = $('gm-f-super-hint');
+        var netMode = gmNetModeSel();
+        // 联机方式联动：仅虚拟网卡方式消费 supernode 多选；隧道/跟随全局隐藏（tunnel 保存即清空）
+        if (netMode !== 'supernode') {
+            row.style.display = 'none';
+            hint.style.display = '';
+            hint.textContent = netMode === 'tunnel'
+                ? '端口隧道方式不消费 supernode：保存后将清空该应用已配置的 supernode 列表'
+                : '跟随全局方式：由服务端全局联机配置（game_net.mode）决定接入形态';
+            return;
+        }
+        if (!gmSuperLoaded) return; // 候选首拉未回，loadSuperCandidates 回调后再渲染
+        if (!gmSuperCandidates.length) {
+            row.style.display = 'none';
+            hint.style.display = '';
+            hint.textContent = '联机 supernode：尚未配置候选，请前往后台「虚拟 IP」页的 supernode 候选卡添加（虚拟网卡方式需至少选择一个）';
+            return;
+        }
+        hint.style.display = 'none';
+        row.style.display = 'flex';
+        var box = $('gm-f-super-list');
+        var html = '';
+        gmSuperCandidates.forEach(function (s) {
+            var checked = gmSupernodes.indexOf(s) !== -1 ? ' checked' : '';
+            html += '<label style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--admin-border,rgba(128,128,128,.35));border-radius:10px;cursor:pointer;font-size:12px;">' +
+                '<input type="checkbox" class="gm-super-ck" value="' + escAttr(s) + '"' + checked + '> ' + escHtml(s) + '</label>';
+        });
+        box.innerHTML = html;
+    }
+
+    // 多选变更（事件委托：重渲染无需重复绑定）+ 联机方式切换联动重渲染
     $('gm-f-super-list').addEventListener('change', function (e) {
         var ck = e.target.closest('.gm-super-ck');
         if (!ck) return;
@@ -5613,6 +5651,9 @@
         var i = gmSupernodes.indexOf(v);
         if (ck.checked && i === -1) gmSupernodes.push(v);
         if (!ck.checked && i !== -1) gmSupernodes.splice(i, 1);
+    });
+    document.querySelectorAll('input[name="gm-f-netmode"]').forEach(function (r) {
+        r.addEventListener('change', gmRenderSuper);
     });
 
     function gmOpenEditor(d) {
@@ -5645,8 +5686,11 @@
         // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
         $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
         $('gm-f-ports-udp').value = d ? (d.online_ports_udp || '') : '';
-        // 联机 supernode 多选回填（详情返回逗号串；候选取自服务端 vip_pool.supernodes 全局配置，
-        // 未启用/未配置时 gmRenderSuper 整行隐藏为提示语）
+        // 联机方式三态回填（详情返回 net_mode；空=跟随全局）+ supernode 多选回填（联动显隐）
+        var gmNm = d ? (d.net_mode || '') : '';
+        document.querySelectorAll('input[name="gm-f-netmode"]').forEach(function (r) {
+            r.checked = r.value === gmNm;
+        });
         gmSupernodes = d && d.supernodes ? String(d.supernodes).split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
         loadSuperCandidates().then(gmRenderSuper);
         // 云存档采集/排除路径（服务端存 JSON 数组串，表单以「每行一个 glob」文本回填）
@@ -6188,8 +6232,10 @@
             // 功能二期：联机端口登记（逗号分隔多端口，服务端清洗去重/范围校验）
             online_ports_tcp: $('gm-f-ports-tcp').value.trim(),
             online_ports_udp: $('gm-f-ports-udp').value.trim(),
-            // 联机 supernode 多选（逗号串；服务端校验 ⊆ vip_pool.supernodes 全局候选，空=全局兜底）
+            // 联机 supernode 多选（逗号串；服务端校验 ⊆ 当前生效候选，空=全局兜底）
             supernodes: gmSupernodes.join(','),
+            // 联机方式三态（''=跟随全局 / supernode / tunnel；服务端白名单+联动校验）
+            net_mode: gmNetModeSel(),
             // 云存档路径：表单文本（每行一个 glob）→ JSON 数组串，与服务端清洗口径一致
             save_paths: gmSavePathsToJSON($('gm-f-save-paths').value),
             save_exclude: gmSavePathsToJSON($('gm-f-save-exclude').value)
@@ -6236,6 +6282,8 @@
             online_ports_udp: d.online_ports_udp || '',
             // 联机 supernode 全量回写（详情含字段）：防上架/下架切换时清空游戏级 supernode 配置
             supernodes: d.supernodes || '',
+            // 联机方式全量回写（详情含字段）：防上架/下架切换时清空联机方式配置
+            net_mode: d.net_mode || '',
             // 云存档路径全量回写（列表/详情含字段；字段本身即 JSON 数组串，防状态切换清空）
             save_paths: d.save_paths || '',
             save_exclude: d.save_exclude || ''

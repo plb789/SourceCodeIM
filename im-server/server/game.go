@@ -256,6 +256,8 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"publisher":      g.Publisher,
 		"size_bytes":     g.SizeBytes,
 		"latest_version": g.LatestVersion,
+		// 联机方式（建房页随应用带出显示，只读；空=跟随全局。非敏感路由标记，公开摘要可下发）
+		"net_mode": g.NetMode,
 		"price":          g.Price,
 		// 下载方式（0=HTTP 清单直连[默认] 1=BT/P2SP 混合）——PC 客户端按此选下载通道
 		"download_method": g.DownloadMethod,
