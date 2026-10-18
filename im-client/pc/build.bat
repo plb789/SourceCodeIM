@@ -158,6 +158,8 @@ if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 xcopy "%UNPACKED_DIR%\*" "%BIN_DIR%\" /e /y /q >nul
 rem productName=im-client 时产物拷入即 im-client.exe；旧中文 productName 产物需改名兼容
 if exist "%BIN_DIR%\即时通讯.exe" ren "%BIN_DIR%\即时通讯.exe" "im-client.exe"
+rem elevator launcher: copy alongside client when built (shortcuts point to it)
+if exist "%~dp0elevator\elevator.exe" copy /y "%~dp0elevator\elevator.exe" "%BIN_DIR%" >nul
 if not exist "%BIN_DIR%\im-client.exe" (
     echo [错误] 部署失败，请检查 %BIN_DIR% 目录
     pause

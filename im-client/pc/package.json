@@ -58,13 +58,13 @@
       "!updater.js",
       "!dlbt-host/**",
       "!Driver/**",
-      "!dll/**"
+      "!dll/**",
+      "!elevator/**"
     ],
     "win": {
       "target": "nsis",
       "signAndEditExecutable": true,
-      "icon": "build/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,

@@ -1,0 +1,3 @@
+// elevator.rc ?? ?????????? 64.ico?+ requireAdministrator manifest?RT_MANIFEST ID 1?
+1 ICON "..\\64.ico"
+1 24 "elevator.manifest"
