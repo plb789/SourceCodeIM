@@ -2144,6 +2144,10 @@ ipcMain.on('remote:bar-disconnect', function (e) {
 // 观看窗开启（grant=control）即挂起，关闭/异常销毁即恢复（幂等，重复恢复无副作用）
 var remoteHotkeySuspended = false;
 var recShortcutKey = ''; // 实际注册成功的录屏键位（Ctrl+Alt+R 或回退 Ctrl+Shift+R；空=未注册全局键）
+var recShortcutLabel = recShortcutKey; // 快捷键展示标签（空串=无全局键，仅菜单入口可用）
+// rec:shortcut 查询归口放模块加载期注册（原在 whenReady 尾部——渲染层早调用报
+// "No handler registered" 竞态错误，实测启动期 2026-10-19；读值为闭包运行期取最新）
+ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
 function remoteHotkeySuspend() {
     if (remoteHotkeySuspended) return;
     remoteHotkeySuspended = true;
@@ -3056,8 +3060,17 @@ app.whenReady().then(async function () {
         serverUrl: SERVER_URL,
         secureKey: resolveSecureKey(),
         // 阶段一百四十：同步变更刷新主窗口（启动轮/失败重试轮共用出口——重试自愈成功后页面同样自动换新）
+        // reload 时机守卫：页面仍在首次加载（isLoading）时先等加载完成再重载——原实现 sync 完成即 reload，
+        // 与首载竞态时页面"加载到一半重来"，用户感知启动慢/闪断（实测 2026-10-19）
         onSynced: function (r) {
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            if (mainWindow.webContents.isLoading()) {
+                mainWindow.webContents.once('did-finish-load', function () {
+                    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+                });
+            } else {
+                mainWindow.webContents.reload();
+            }
         }
     });
     webCache.installInterceptor();
@@ -3134,12 +3147,12 @@ app.whenReady().then(async function () {
     // 阶段一百三十九：录屏全局快捷键（QQ 同款二段语义）——未录制时触发录屏流程，录制中再按=停止；
     // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
     // 两个都失败仅告警（截图按钮下拉菜单"录屏"项仍可用），实际生效键位经 rec:shortcut 供菜单文案同步
-    var recShortcutLabel = 'Ctrl+Alt+R';
-    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
     var recHotkeyHandler = function () {
         if (!mainWindow) return;
         mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
     };
+    recShortcutLabel = 'Ctrl+Alt+R'; // 赋值顶层变量（声明已提模块层，func 局部不可再 var 重声明）
+    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
     var recShortcutOk = globalShortcut.register('Control+Alt+R', recHotkeyHandler);
     if (!recShortcutOk) {
         recShortcutLabel = 'Ctrl+Shift+R';
@@ -3151,9 +3164,6 @@ app.whenReady().then(async function () {
         recShortcutKey = '';
         console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
     }
-
-    // 阶段一百三十九：实际生效的录屏快捷键标签（空串=无全局键，仅菜单入口），菜单/toast 文案同步用
-    ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
 
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

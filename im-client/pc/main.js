@@ -3,6 +3,10 @@
 // 阶段三十八：dialog（查看器另存为对话框）+ fs（保存图片写文件）
 // 阶段六十：Agent 本地执行器——服务端下发的文件/命令工具在用户电脑本地执行（agent-executor.js 核心 + agent:exec IPC）
 const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, desktopCapturer, ipcMain, globalShortcut, screen, dialog, safeStorage, net, session, shell } = require('electron');
+
+// 启动时间线基准：main.js 执行第一行时刻（require 链之前的最早打点）
+var BOOT_T0 = Date.now();
+console.log('[BOOT] main.js 开始执行');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -33,6 +37,10 @@ const gameTunnel = require('./game-tunnel.js');
 // —— 安装/检测类子进程的异步封装：安装类长操作（UAC 等待/tapinstall/msiexec）绝不允许阻塞主进程
 // 消息循环——同步版（execFileSync）会让窗口 5 秒无响应触发系统"应用程序没有响应"假死弹窗（实测 2026-10-19）
 const execFileP = require('util').promisify(require('child_process').execFile);
+
+// 启动时间线打点（性能排查归口，日志随打包版 stdout 可见）：各阶段相对差值用于定位
+// require 链/窗口创建/启动同步/各管理器初始化的耗时占比；BOOT_T0 在首个 require 前取值
+console.log('[BOOT] require 链完成 +' + (Date.now() - BOOT_T0) + 'ms');
 
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
@@ -510,7 +518,10 @@ function createWindow() {
         }
         if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
     };
-    mainWindow.webContents.once('did-finish-load', revealMainWindow);
+    mainWindow.webContents.once('did-finish-load', function () {
+        console.log('[BOOT] 主窗口页面加载完成（即将显示主窗口） +' + (Date.now() - BOOT_T0) + 'ms');
+        revealMainWindow();
+    });
     setTimeout(revealMainWindow, 8000);
 
     // 阶段九十二：主窗口固定 100% 缩放——页面缩放（Ctrl+滚轮）会让 CSS px 与 BrowserView
@@ -2974,14 +2985,18 @@ ipcMain.handle('tap:remove', async function () {
         return { ok: false, installed: await tapDriverInstalled(), err: '卸载未完成（可能已取消授权或需要管理员权限）' };
     }
 });
-// 启动检测推送：延迟 8 秒避开启动高峰（比照上方网盘自动重挂节奏），未装且驱动文件在包内
-// 才推 tap:prompt，页面弹自定义确认弹窗（拒绝记忆在渲染层 localStorage，主进程不落盘不重复打扰）
+// 启动检测推送：延迟 5 秒（原 8s 实测用户感知"过好一会才弹"——查询本身仅 ~50ms，
+// 缩短等待同时仍避开登录输入高峰），未装且驱动文件在包内才推 tap:prompt，页面弹自定义
+// 确认弹窗（拒绝记忆在渲染层 localStorage，主进程不落盘不重复打扰）
 setTimeout(async function () {
-    if (!tapDriverAvailable() || (await tapDriverInstalled())) return;
+    var tq = Date.now();
+    var installed = await tapDriverInstalled();
+    console.log('[BOOT] TAP 检测 +' + (Date.now() - BOOT_T0) + 'ms（tapinstall 查询耗时 ' + (Date.now() - tq) + 'ms，installed=' + installed + '）');
+    if (!tapDriverAvailable() || installed) return;
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('tap:prompt', {});
     console.log('[TAP驱动] 启动检测：未安装，已推送安装引导');
-}, 8000);
+}, 5000);
 
 // ===== 阶段一百四十一：音视频通话（第一期 PC↔PC 1v1，微信同款交互） =====
 // 两个独立 BrowserWindow（禁止主窗体内嵌弹层，与图片查看器/截图编辑器同方案）：
@@ -3409,6 +3424,10 @@ ipcMain.on('remote:bar-disconnect', function (e) {
 // 观看窗开启（grant=control）即挂起，关闭/异常销毁即恢复（幂等，重复恢复无副作用）
 var remoteHotkeySuspended = false;
 var recShortcutKey = ''; // 实际注册成功的录屏键位（Ctrl+Alt+R 或回退 Ctrl+Shift+R；空=未注册全局键）
+var recShortcutLabel = recShortcutKey; // 快捷键展示标签（空串=无全局键，仅菜单入口可用）
+// rec:shortcut 查询归口放模块加载期注册（原在 whenReady 尾部——渲染层早调用报
+// "No handler registered" 竞态错误，实测启动期 2026-10-19；读值为闭包运行期取最新）
+ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
 function remoteHotkeySuspend() {
     if (remoteHotkeySuspended) return;
     remoteHotkeySuspended = true;
@@ -4297,6 +4316,7 @@ ipcMain.on('tray:flash', function () {
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 app.whenReady().then(async function () {
+    console.log('[BOOT] whenReady +' + (Date.now() - BOOT_T0) + 'ms');
     // 阶段一百三十四：单实例锁二次守卫——非首实例 app.quit() 异步执行期间 whenReady 仍会触发，
     // 不建窗口直接返回（否则第二实例闪现一个窗口后被 quit 杀掉，实测 2026-09-16）
     // 原实现：无此守卫（窗口闪现根因）
@@ -4309,6 +4329,7 @@ app.whenReady().then(async function () {
     // 阶段一百五十四：启动闪屏最先创建（早于 webCache 初始化与主窗口）——双击启动后最快露出
     // logo 卡片，消除原"灰黑空窗"（用户实测反馈）；data URL 加载零导航开销，见 createSplash
     createSplash();
+    console.log('[BOOT] 闪屏已创建 +' + (Date.now() - BOOT_T0) + 'ms');
 
     // 阶段一百二十二：本地缓存初始化 → http 拦截安装 → 窗口创建（内含页面加载）→ 启动增量同步
     // 拦截必须先于页面加载安装（静态资源命中本地秒开）；sync 内部自带 4s 总超时与全静默兜底，
@@ -4320,15 +4341,26 @@ app.whenReady().then(async function () {
         serverUrl: SERVER_URL,
         secureKey: resolveSecureKey(),
         // 阶段一百四十：同步变更刷新主窗口（启动轮/失败重试轮共用出口——重试自愈成功后页面同样自动换新）
+        // reload 时机守卫：页面仍在首次加载（isLoading）时先等加载完成再重载——原实现 sync 完成即 reload，
+        // 与首载竞态时页面"加载到一半重来"，用户感知启动慢/闪断（实测 2026-10-19）
         onSynced: function (r) {
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            if (mainWindow.webContents.isLoading()) {
+                mainWindow.webContents.once('did-finish-load', function () {
+                    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+                });
+            } else {
+                mainWindow.webContents.reload();
+            }
         }
     });
     webCache.installInterceptor();
     createWindow();
+    console.log('[BOOT] 主窗口已创建（页面开始加载） +' + (Date.now() - BOOT_T0) + 'ms');
     // 阶段一百四十：同步失败不再死等下次重启（原先 cacheDir 旧副本遮蔽内置新快照、页面时好时坏根因）
     // ——失败后 web-cache 内部定时重试（30s 起指数退避封顶 5 分钟），自愈成功经 onSynced 刷新主窗口
     var syncResult = await webCache.sync();
+    console.log('[BOOT] 启动增量同步返回 +' + (Date.now() - BOOT_T0) + 'ms');
     createTray();
     // 阶段二百六十：自动更新初始化（electron-updater generic feed 指向服务端 win 安装包目录；
     // dev/未打包形态内部静默跳过，不影响开发调试）
@@ -4398,12 +4430,12 @@ app.whenReady().then(async function () {
     // 阶段一百三十九：录屏全局快捷键（QQ 同款二段语义）——未录制时触发录屏流程，录制中再按=停止；
     // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
     // 两个都失败仅告警（截图按钮下拉菜单"录屏"项仍可用），实际生效键位经 rec:shortcut 供菜单文案同步
-    var recShortcutLabel = 'Ctrl+Alt+R';
-    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
     var recHotkeyHandler = function () {
         if (!mainWindow) return;
         mainWindow.webContents.send('rec:global-ctrl', { action: recActive ? 'stop' : 'start' });
     };
+    recShortcutLabel = 'Ctrl+Alt+R'; // 赋值顶层变量（声明已提模块层，func 局部不可再 var 重声明）
+    recShortcutKey = 'Control+Alt+R'; // 模块层记录实际生效键位（快捷键挂起/恢复用）
     var recShortcutOk = globalShortcut.register('Control+Alt+R', recHotkeyHandler);
     if (!recShortcutOk) {
         recShortcutLabel = 'Ctrl+Shift+R';
@@ -4416,12 +4448,10 @@ app.whenReady().then(async function () {
         console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
     }
 
-    // 阶段一百三十九：实际生效的录屏快捷键标签（空串=无全局键，仅菜单入口），菜单/toast 文案同步用
-    ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
-
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+    console.log('[BOOT] 启动主链完成（托盘/更新/管理器/快捷键全就绪） +' + (Date.now() - BOOT_T0) + 'ms');
 });
 
 // 退出前释放全部全局快捷键（避免残留占用），并回收全部 MCP 子进程树

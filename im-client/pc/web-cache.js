@@ -624,6 +624,8 @@ function walkFiles(root) {
 }
 
 // downloadOne 下载单个文件到缓存（tmp+rename 原子替换，回写服务端 mtime 供下次比对）
+// 写盘全异步（fs.promises）：版本更新后差异文件可达数百个，同步写会持续霸占主进程
+// 消息循环（每文件 mkdir+write+rename+utimes 四次磁盘往返）→ 窗口卡顿甚至"无响应"（实测 2026-10-19）
 async function downloadOne(relPath, info, signal) {
     var url = serverUrl.replace(/\/+$/, '') + '/' + relPath;
     var res = await net.fetch(url, { signal: signal, bypassCustomProtocolHandlers: true });
@@ -631,13 +633,14 @@ async function downloadOne(relPath, info, signal) {
     var buf = Buffer.from(await res.arrayBuffer());
     if (buf.length !== info.s) throw new Error('下载 ' + relPath + ' 大小不符 ' + buf.length + '!=' + info.s);
     var fp = path.join(cacheDir, relPath);
-    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    var fsp = fs.promises;
+    await fsp.mkdir(path.dirname(fp), { recursive: true });
     var tmp = fp + '.tmp';
-    fs.writeFileSync(tmp, buf);
-    fs.renameSync(tmp, fp);
+    await fsp.writeFile(tmp, buf);
+    await fsp.rename(tmp, fp);
     // 回写服务端修改时间：下次启动 size+mtime 比对才跨启动有效
     var mt = new Date(info.t);
-    fs.utimesSync(fp, mt, mt);
+    await fsp.utimes(fp, mt, mt);
 }
 
 // downloadEncOne 阶段一百三十六：下载单个文件的密文容器到缓存（/api/secure-file；tmp+rename
@@ -654,13 +657,14 @@ async function downloadEncOne(relPath, info, signal) {
     }
     secureDecrypt(buf); // 下载即验签：GCM 认证失败立即中止本轮（缓存保持一致旧版，下次启动重试）
     var fp = path.join(cacheDir, relPath + '.enc');
-    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    var fsp = fs.promises;
+    await fsp.mkdir(path.dirname(fp), { recursive: true });
     var tmp = fp + '.tmp';
-    fs.writeFileSync(tmp, buf);
-    fs.renameSync(tmp, fp);
+    await fsp.writeFile(tmp, buf);
+    await fsp.rename(tmp, fp);
     // 回写服务端修改时间：下次启动 mtime 比对才跨启动有效（密文长度 es 另记清单）
     var mt = new Date(info.t);
-    fs.utimesSync(fp, mt, mt);
+    await fsp.utimes(fp, mt, mt);
     return buf.length;
 }
 
