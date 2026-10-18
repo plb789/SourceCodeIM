@@ -490,11 +490,11 @@
                     </div>
                 </div>
                 <!-- supernode 候选热更管理（每行一个 host:port；保存即热生效 + 落库持久化，无需重启）：
-                     此列表是 admin 游戏表单「联机 supernode」多选的候选来源，也是游戏未单独配置时的全局兜底 -->
+                     此列表是 admin 应用表单「联机 supernode」多选的候选来源，也是应用未单独配置时的全局兜底 -->
                 <div id="vipip-sup-card" style="display:none;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:8px;padding:12px 14px;margin-bottom:14px;">
                     <div style="font-size:14px;font-weight:600;margin-bottom:4px;">supernode 候选</div>
-                    <div class="admin-view-tip" style="margin-bottom:8px;">联机组网中心节点地址（每行一个 host:port，如 1.2.3.4:7654）。保存即热生效（无需重启）：游戏表单的「联机 supernode」多选项即来自此列表；游戏未单独配置 supernode 时，登录回执以此列表兜底下发。留空=未配置（游戏联机走既有隧道链路）。</div>
-                    <textarea id="vipip-sup-list" class="admin-input gm-desc-input" rows="3" placeholder="每行一个 supernode 地址（host:port），如：&#10;1.2.3.4:7654&#10;supernode.example.com:7654"></textarea>
+                    <div class="admin-view-tip" style="margin-bottom:8px;">联机组网中心节点地址（每行一个 host:port，如 1.2.3.4:7654）。保存即热生效（无需重启）：应用表单的「联机 supernode」多选项即来自此列表；应用未单独配置 supernode 时，登录回执以此列表兜底下发。留空=未配置（应用联机走既有隧道链路）。</div>
+                    <textarea id="vipip-sup-list" class="admin-input gm-desc-input" rows="3" style="width:100%;box-sizing:border-box;display:block;" placeholder="每行一个 supernode 地址（host:port），如：&#10;1.2.3.4:7654&#10;supernode.example.com:7654"></textarea>
                     <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
                         <button id="vipip-sup-save" class="admin-btn small">保存 supernode 候选</button>
                         <span id="vipip-sup-status" class="admin-view-tip"></span>
