@@ -390,6 +390,8 @@ exe 仅允许本项目客户端拉起，双重校验缺一即退出（code 1）�
 **父进程存活看门狗**：授权 stdin 管道在客户端存活期间保持打开（任何路径不得 `stdin.end()`）——客户端崩溃/被强杀时管道 EOF，p2p-host 检测到后自行优雅退出，杜绝孤儿进程（正常退出与意外退出均不遗留）。
 
 > 密钥编译于 exe 内，防的是第三方程序直接复用与手工运行，非绝对防逆向。
+>
+> 提权说明：客户端以 `requireAdministrator` 提权运行（package.json `win.requestExecutionLevel`），启动时 UAC 确认一次，p2p-host.exe 经 Windows 令牌继承自动获得管理员权限——TAP 的 netsh 配 IP/跃点、驱动装卸均无需额外提权，p2p-host 自身不含提权检测代码。
 
 ### A.1 参数总表与取值来源
 

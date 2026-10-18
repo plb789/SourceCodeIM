@@ -2897,9 +2897,11 @@ function tapDriverInstalled() {
     return /matching device/i.test(out);
 }
 // tapElevatedRun 提权执行 tapinstall（argLine: "install" / "remove"；UAC 取消时 Start-Process 抛错由调用方接住）。
-// 提权子进程命令经 -EncodedCommand（UTF-16LE Base64）传递——Start-Process -ArgumentList 在 PS5.1 拼接时
+// 提权命令经 -EncodedCommand（UTF-16LE Base64）传递——Start-Process -ArgumentList 在 PS5.1 拼接时
 // 不转义引号，内嵌双引号（含空格的 INF 路径/描述串）会被命令行解析吃掉致参数打散（实测改名静默失败的根因），
 // Base64 编码彻底规避，且修复原实现"安装路径含空格即失效"的隐患。
+// UAC 行为自适应：非提权客户端弹 UAC 确认一次；requireAdministrator 提权客户端下 RunAs 静默继承
+// 令牌不弹框（实测双层 RunAs 全程 1.5s）——安装/卸载驱动天然以管理员运行。
 // 路径一律用 PS 单引号字面量（psq）包裹：单引号内 $/反引号不展开（防安装路径含 $ 致参数破坏），
 // 内嵌单引号按 PS 规则加倍转义；-WindowStyle Hidden 压制提权子进程的黑框（tapinstall 为控制台程序）。
 // install 分支同一次提权顺带重命名新装适配器连接名为"IM-client"（Rename-NetAdapter 需提权，
