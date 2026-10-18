@@ -51,7 +51,7 @@ build cmake_object_order_depends_target_n2n: phony || cmake_object_order_depends
 
 build CMakeFiles\n2n.dir\n2n.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -59,7 +59,7 @@ build CMakeFiles\n2n.dir\n2n.c.obj: C_COMPILER__n2n_unscanned_Release E$:\Source
 
 build CMakeFiles\n2n.dir\n2n_keyfile.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n_keyfile.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -67,7 +67,7 @@ build CMakeFiles\n2n.dir\n2n_keyfile.c.obj: C_COMPILER__n2n_unscanned_Release E$
 
 build CMakeFiles\n2n.dir\wire.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\wire.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -75,7 +75,7 @@ build CMakeFiles\n2n.dir\wire.c.obj: C_COMPILER__n2n_unscanned_Release E$:\Sourc
 
 build CMakeFiles\n2n.dir\minilzo.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\minilzo.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -83,7 +83,7 @@ build CMakeFiles\n2n.dir\minilzo.c.obj: C_COMPILER__n2n_unscanned_Release E$:\So
 
 build CMakeFiles\n2n.dir\twofish.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\twofish.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -91,7 +91,7 @@ build CMakeFiles\n2n.dir\twofish.c.obj: C_COMPILER__n2n_unscanned_Release E$:\So
 
 build CMakeFiles\n2n.dir\transform_null.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_null.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -99,7 +99,7 @@ build CMakeFiles\n2n.dir\transform_null.c.obj: C_COMPILER__n2n_unscanned_Release
 
 build CMakeFiles\n2n.dir\transform_tf.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_tf.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -107,7 +107,7 @@ build CMakeFiles\n2n.dir\transform_tf.c.obj: C_COMPILER__n2n_unscanned_Release E
 
 build CMakeFiles\n2n.dir\transform_aes.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\transform_aes.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -115,7 +115,7 @@ build CMakeFiles\n2n.dir\transform_aes.c.obj: C_COMPILER__n2n_unscanned_Release 
 
 build CMakeFiles\n2n.dir\tuntap_freebsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_freebsd.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -123,7 +123,7 @@ build CMakeFiles\n2n.dir\tuntap_freebsd.c.obj: C_COMPILER__n2n_unscanned_Release
 
 build CMakeFiles\n2n.dir\tuntap_netbsd.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_netbsd.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -131,7 +131,7 @@ build CMakeFiles\n2n.dir\tuntap_netbsd.c.obj: C_COMPILER__n2n_unscanned_Release 
 
 build CMakeFiles\n2n.dir\tuntap_linux.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_linux.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -139,7 +139,7 @@ build CMakeFiles\n2n.dir\tuntap_linux.c.obj: C_COMPILER__n2n_unscanned_Release E
 
 build CMakeFiles\n2n.dir\tuntap_osx.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\tuntap_osx.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -147,7 +147,7 @@ build CMakeFiles\n2n.dir\tuntap_osx.c.obj: C_COMPILER__n2n_unscanned_Release E$:
 
 build CMakeFiles\n2n.dir\version.c.obj: C_COMPILER__n2n_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\version.c || cmake_object_order_depends_target_n2n
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n.dir\n2n.pdb
@@ -162,7 +162,7 @@ build CMakeFiles\n2n.dir\version.c.obj: C_COMPILER__n2n_unscanned_Release E$:\So
 # Link the static library n2n.lib
 
 build n2n.lib: C_STATIC_LIBRARY_LINKER__n2n_Release CMakeFiles\n2n.dir\n2n.c.obj CMakeFiles\n2n.dir\n2n_keyfile.c.obj CMakeFiles\n2n.dir\wire.c.obj CMakeFiles\n2n.dir\minilzo.c.obj CMakeFiles\n2n.dir\twofish.c.obj CMakeFiles\n2n.dir\transform_null.c.obj CMakeFiles\n2n.dir\transform_tf.c.obj CMakeFiles\n2n.dir\transform_aes.c.obj CMakeFiles\n2n.dir\tuntap_freebsd.c.obj CMakeFiles\n2n.dir\tuntap_netbsd.c.obj CMakeFiles\n2n.dir\tuntap_linux.c.obj CMakeFiles\n2n.dir\tuntap_osx.c.obj CMakeFiles\n2n.dir\version.c.obj || win32\n2n_win32.lib
-  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86
   OBJECT_DIR = CMakeFiles\n2n.dir
   POST_BUILD = cd .
@@ -182,7 +182,7 @@ build cmake_object_order_depends_target_scm: phony || CMakeFiles\scm.dir
 
 build CMakeFiles\scm.dir\win32\win-scm.c.obj: C_COMPILER__scm_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_scm
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\scm.dir
   OBJECT_FILE_DIR = CMakeFiles\scm.dir\win32
   TARGET_COMPILE_PDB = CMakeFiles\scm.dir\scm.pdb
@@ -197,7 +197,7 @@ build CMakeFiles\scm.dir\win32\win-scm.c.obj: C_COMPILER__scm_unscanned_Release 
 # Link the static library scm.lib
 
 build scm.lib: C_STATIC_LIBRARY_LINKER__scm_Release CMakeFiles\scm.dir\win32\win-scm.c.obj
-  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86
   OBJECT_DIR = CMakeFiles\scm.dir
   POST_BUILD = cd .
@@ -217,7 +217,7 @@ build cmake_object_order_depends_target_edge: phony || cmake_object_order_depend
 
 build CMakeFiles\edge.dir\edge.c.obj: C_COMPILER__edge_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\edge.c || cmake_object_order_depends_target_edge
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\edge.dir
   OBJECT_FILE_DIR = CMakeFiles\edge.dir
   TARGET_COMPILE_PDB = CMakeFiles\edge.dir\
@@ -232,7 +232,7 @@ build CMakeFiles\edge.dir\edge.c.obj: C_COMPILER__edge_unscanned_Release E$:\Sou
 # Link the executable edge.exe
 
 build edge.exe: C_EXECUTABLE_LINKER__edge_Release CMakeFiles\edge.dir\edge.c.obj | n2n.lib win32\n2n_win32.lib || n2n.lib win32\n2n_win32.lib
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86 /INCREMENTAL:NO /subsystem:console
   LINK_LIBRARIES = n2n.lib  win32\n2n_win32.lib  ws2_32.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\edge.dir
@@ -254,7 +254,7 @@ build cmake_object_order_depends_target_supernode: phony || cmake_object_order_d
 
 build CMakeFiles\supernode.dir\sn.c.obj: C_COMPILER__supernode_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\sn.c || cmake_object_order_depends_target_supernode
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\supernode.dir
   OBJECT_FILE_DIR = CMakeFiles\supernode.dir
   TARGET_COMPILE_PDB = CMakeFiles\supernode.dir\
@@ -269,7 +269,7 @@ build CMakeFiles\supernode.dir\sn.c.obj: C_COMPILER__supernode_unscanned_Release
 # Link the executable supernode.exe
 
 build supernode.exe: C_EXECUTABLE_LINKER__supernode_Release CMakeFiles\supernode.dir\sn.c.obj | n2n.lib win32\n2n_win32.lib || n2n.lib win32\n2n_win32.lib
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86 /INCREMENTAL:NO /subsystem:console
   LINK_LIBRARIES = n2n.lib  win32\n2n_win32.lib  ws2_32.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\supernode.dir
@@ -291,7 +291,7 @@ build cmake_object_order_depends_target_n2n_test: phony || cmake_object_order_de
 
 build CMakeFiles\n2n_test.dir\n2n_test.c.obj: C_COMPILER__n2n_test_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\n2n_test.c || cmake_object_order_depends_target_n2n_test
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\n2n_test.dir
   OBJECT_FILE_DIR = CMakeFiles\n2n_test.dir
   TARGET_COMPILE_PDB = CMakeFiles\n2n_test.dir\
@@ -306,7 +306,7 @@ build CMakeFiles\n2n_test.dir\n2n_test.c.obj: C_COMPILER__n2n_test_unscanned_Rel
 # Link the executable n2n_test.exe
 
 build n2n_test.exe: C_EXECUTABLE_LINKER__n2n_test_Release CMakeFiles\n2n_test.dir\n2n_test.c.obj | n2n.lib win32\n2n_win32.lib || n2n.lib win32\n2n_win32.lib
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86 /INCREMENTAL:NO /subsystem:console
   LINK_LIBRARIES = n2n.lib  win32\n2n_win32.lib  ws2_32.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\n2n_test.dir
@@ -328,7 +328,7 @@ build cmake_object_order_depends_target_benchmark: phony || cmake_object_order_d
 
 build CMakeFiles\benchmark.dir\benchmark.c.obj: C_COMPILER__benchmark_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\benchmark.c || cmake_object_order_depends_target_benchmark
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\benchmark.dir
   OBJECT_FILE_DIR = CMakeFiles\benchmark.dir
   TARGET_COMPILE_PDB = CMakeFiles\benchmark.dir\
@@ -343,7 +343,7 @@ build CMakeFiles\benchmark.dir\benchmark.c.obj: C_COMPILER__benchmark_unscanned_
 # Link the executable benchmark.exe
 
 build benchmark.exe: C_EXECUTABLE_LINKER__benchmark_Release CMakeFiles\benchmark.dir\benchmark.c.obj | n2n.lib win32\n2n_win32.lib || n2n.lib win32\n2n_win32.lib
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86 /INCREMENTAL:NO /subsystem:console
   LINK_LIBRARIES = n2n.lib  win32\n2n_win32.lib  ws2_32.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\benchmark.dir
@@ -365,7 +365,7 @@ build cmake_object_order_depends_target_benchmark_hashtable: phony || cmake_obje
 
 build CMakeFiles\benchmark_hashtable.dir\benchmark_hashtable.c.obj: C_COMPILER__benchmark_hashtable_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\benchmark_hashtable.c || cmake_object_order_depends_target_benchmark_hashtable
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = CMakeFiles\benchmark_hashtable.dir
   OBJECT_FILE_DIR = CMakeFiles\benchmark_hashtable.dir
   TARGET_COMPILE_PDB = CMakeFiles\benchmark_hashtable.dir\
@@ -380,7 +380,7 @@ build CMakeFiles\benchmark_hashtable.dir\benchmark_hashtable.c.obj: C_COMPILER__
 # Link the executable benchmark_hashtable.exe
 
 build benchmark_hashtable.exe: C_EXECUTABLE_LINKER__benchmark_hashtable_Release CMakeFiles\benchmark_hashtable.dir\benchmark_hashtable.c.obj | n2n.lib win32\n2n_win32.lib || n2n.lib win32\n2n_win32.lib
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86 /INCREMENTAL:NO /subsystem:console
   LINK_LIBRARIES = n2n.lib  win32\n2n_win32.lib  ws2_32.lib  kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib
   OBJECT_DIR = CMakeFiles\benchmark_hashtable.dir
@@ -460,7 +460,7 @@ build cmake_object_order_depends_target_n2n_win32: phony || win32\CMakeFiles\n2n
 
 build win32\CMakeFiles\n2n_win32.dir\getopt1.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\getopt1.c || cmake_object_order_depends_target_n2n_win32
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
@@ -468,7 +468,7 @@ build win32\CMakeFiles\n2n_win32.dir\getopt1.c.obj: C_COMPILER__n2n_win32_unscan
 
 build win32\CMakeFiles\n2n_win32.dir\getopt.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\getopt.c || cmake_object_order_depends_target_n2n_win32
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
@@ -476,7 +476,7 @@ build win32\CMakeFiles\n2n_win32.dir\getopt.c.obj: C_COMPILER__n2n_win32_unscann
 
 build win32\CMakeFiles\n2n_win32.dir\wintap.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\wintap.c || cmake_object_order_depends_target_n2n_win32
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
@@ -484,7 +484,7 @@ build win32\CMakeFiles\n2n_win32.dir\wintap.c.obj: C_COMPILER__n2n_win32_unscann
 
 build win32\CMakeFiles\n2n_win32.dir\win-scm.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\win-scm.c || cmake_object_order_depends_target_n2n_win32
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
@@ -492,7 +492,7 @@ build win32\CMakeFiles\n2n_win32.dir\win-scm.c.obj: C_COMPILER__n2n_win32_unscan
 
 build win32\CMakeFiles\n2n_win32.dir\n2n_win32.c.obj: C_COMPILER__n2n_win32_unscanned_Release E$:\SourceCodeIM\p2p\n2n_v2\win32\n2n_win32.c || cmake_object_order_depends_target_n2n_win32
   DEFINES = -DN2N_OSNAME=\"Windows-10.0.26200\" -DN2N_VERSION=\"2.1.0\"
-  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   OBJECT_FILE_DIR = win32\CMakeFiles\n2n_win32.dir
   TARGET_COMPILE_PDB = win32\CMakeFiles\n2n_win32.dir\n2n_win32.pdb
@@ -507,7 +507,7 @@ build win32\CMakeFiles\n2n_win32.dir\n2n_win32.c.obj: C_COMPILER__n2n_win32_unsc
 # Link the static library win32\n2n_win32.lib
 
 build win32\n2n_win32.lib: C_STATIC_LIBRARY_LINKER__n2n_win32_Release win32\CMakeFiles\n2n_win32.dir\getopt1.c.obj win32\CMakeFiles\n2n_win32.dir\getopt.c.obj win32\CMakeFiles\n2n_win32.dir\wintap.c.obj win32\CMakeFiles\n2n_win32.dir\win-scm.c.obj win32\CMakeFiles\n2n_win32.dir\n2n_win32.c.obj
-  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG
+  LANGUAGE_COMPILE_FLAGS = /DWIN32 /D_WINDOWS /W3 /MD /O2 /Ob2 /DNDEBUG /MT
   LINK_FLAGS = /machine:X86
   OBJECT_DIR = win32\CMakeFiles\n2n_win32.dir
   POST_BUILD = cd .

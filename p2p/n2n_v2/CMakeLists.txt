@@ -45,13 +45,20 @@ endif(APPLE)
 if(NOT WIN32)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wshadow -Wpointer-arith -Wmissing-declarations -Wnested-externs -fPIC")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wshadow -Wpointer-arith -Wmissing-declarations -Wnested-externs")
-# Debug 
+# Debug
 set(CMAKE_C_FLAGS_DEBUG "-g -fsanitize=address")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -fsanitize=address")
 # Release
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 endif(NOT WIN32)
+
+# Windows：静态 CRT（/MT）——p2p-host.exe 零 VC 运行库依赖（动态 /MD 需目标机安装 VC Redist，
+# 未装则 p2p-host 启动失败；静态后与 dlbt-host/elevator 的分发策略一致，sidecar 全链路自足）
+if(WIN32)
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /MT")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /MTd")
+endif(WIN32)
 
 #for macOS, add openssl include dir
 if(APPLE)
