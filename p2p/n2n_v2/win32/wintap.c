@@ -16,7 +16,7 @@ void initWin32() {
   if( err != 0 ) {
     /* Tell the user that we could not find a usable */
     /* WinSock DLL.                                  */
-    printf("ÖÂÃü´íÎó: ÎÞ·¨³õÊ¼»¯ Winsock 2.x.");
+    printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: ï¿½Þ·ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½ Winsock 2.x.");
     exit(-1);
   }
 }
@@ -46,7 +46,7 @@ int open_wintap(struct tuntap_dev *device,
 
   /* Open registry and look for network adapters */
   if((rc = RegOpenKeyEx(HKEY_LOCAL_MACHINE, NETWORK_CONNECTIONS_KEY, 0, KEY_READ, &key))) {
-    printf("ÎÞ·¨¶ÁÈ¡×¢²á±í: [rc=%d]\n", rc);
+    printf("ï¿½Þ·ï¿½ï¿½ï¿½È¡×¢ï¿½ï¿½ï¿? [rc=%d]\n", rc);
     exit(-1);
     /* MSVC Note: If you keep getting rc=2 errors, make sure you set:
        Project -> Properties -> Configuration Properties -> General -> Character set
@@ -103,7 +103,7 @@ int open_wintap(struct tuntap_dev *device,
   RegCloseKey(key);
 
   if(!found) {
-    printf("ÕÒ²»µ½ Windows tap Éè±¸!\n");
+    printf("ï¿½Ò²ï¿½ï¿½ï¿½ Windows tap ï¿½è±¸!\n");
     exit(0);
   }
 
@@ -124,7 +124,7 @@ int open_wintap(struct tuntap_dev *device,
   }
 
   if(device->device_handle == INVALID_HANDLE_VALUE) {
-    printf("%s (%s) ²»ÊÇ¿ÉÓÃµÄ Windows tap Éè±¸\n", device->device_name, device->ifName);
+    printf("%s (%s) ï¿½ï¿½ï¿½Ç¿ï¿½ï¿½Ãµï¿½ Windows tap ï¿½è±¸\n", device->device_name, device->ifName);
     exit(-1);
   }
 
@@ -133,14 +133,14 @@ int open_wintap(struct tuntap_dev *device,
   if(!DeviceIoControl(device->device_handle, TAP_IOCTL_GET_MAC,
                       device->mac_addr, sizeof(device->mac_addr),
                       device->mac_addr, sizeof(device->mac_addr), &len, 0)) {
-    printf("ÎÞ·¨´ÓWindows Tap½Ó¿Ú %s (%s) »ñÈ¡MACµØÖ·\n",
+    printf("ï¿½Þ·ï¿½ï¿½ï¿½Windows Tapï¿½Ó¿ï¿½ %s (%s) ï¿½ï¿½È¡MACï¿½ï¿½Ö·\n",
            device->device_name, device->ifName);
     return -1;
   }
 
    device->mtu = mtu;
-   /*************************20241130ÆÁ±ÎµôÏÂÃæÕâ¶Î´úÂë*************
-   printf("´ò¿ªÉè±¸ [Ãû³Æ=%s][ip=%s][½Ó¿Ú=%s][MTU=%d][mac=%02X:%02X:%02X:%02X:%02X:%02X]\n",
+   /*************************20241130ï¿½ï¿½ï¿½Îµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î´ï¿½ï¿½ï¿?************
+   printf("ï¿½ï¿½ï¿½è±¸ [ï¿½ï¿½ï¿½ï¿½=%s][ip=%s][ï¿½Ó¿ï¿½=%s][MTU=%d][mac=%02X:%02X:%02X:%02X:%02X:%02X]\n",
 	 device->device_name, device_ip, device->ifName, device->mtu,
 	 device->mac_addr[0] & 0xFF,
 	 device->mac_addr[1] & 0xFF,
@@ -151,7 +151,7 @@ int open_wintap(struct tuntap_dev *device,
 
   /* ****************** */
 
-  //printf("ÕýÔÚÅäÖÃ %s Áª»úµØÖ·...\n", device->ifName);
+  //printf("ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ %s ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·...\n", device->ifName);
 
   if ( 0 == strcmp("dhcp", address_mode) )
   {
@@ -169,23 +169,40 @@ int open_wintap(struct tuntap_dev *device,
   if(system(cmd) == 0) {
     device->ip_addr = inet_addr(device_ip);
     device->device_mask = inet_addr(device_mask);
-    traceEvent(TRACE_NORMAL, "¸ºÔØ¾ùºâÆ÷µØÖ·ÉèÖÃ³É¹¦ %s/%s", device_ip, device_mask);
-    //printf("¸ºÔØ¾ùºâÆ÷µØÖ·ÉèÖÃ³É¹¦: %s/%s\n",//ÉèÖÃ %s µØÖ·³Ø: %s/%s
+    traceEvent(TRACE_NORMAL, "ï¿½ï¿½ï¿½Ø¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½Ã³É¹ï¿½ %s/%s", device_ip, device_mask);
+    //printf("ï¿½ï¿½ï¿½Ø¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö·ï¿½ï¿½ï¿½Ã³É¹ï¿½: %s/%s\n",//ï¿½ï¿½ï¿½ï¿½ %s ï¿½ï¿½Ö·ï¿½ï¿½: %s/%s
 	   /*device->ifName, *///device_ip, device_mask);
   } else
-    printf("ÌáÊ¾: ÎÞ·¨ÉèÖÃ %s µÄIPµØÖ·,¸ÄÓÃ[%s]\n",
+    printf("ï¿½ï¿½Ê¾: ï¿½Þ·ï¿½ï¿½ï¿½ï¿½ï¿½ %s ï¿½ï¿½IPï¿½ï¿½Ö·,ï¿½ï¿½ï¿½ï¿½[%s]\n",
 			device->ifName, cmd);
 
   /* ****************** */
 
   if(device->mtu != DEFAULT_MTU)
-	printf("¾¯¸æ£ºÔÚ Windows ÉÏ²»Ö§³ÖÉèÖÃ MTU\n");
+	printf("ï¿½ï¿½ï¿½æ£ºï¿½ï¿½ Windows ï¿½Ï²ï¿½Ö§ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ MTU\n");
 
   /* set driver media status to 'connected' (i.e. set the interface up) */
-  if (!DeviceIoControl (device->device_handle, TAP_IOCTL_SET_MEDIA_STATUS,
-			&status, sizeof (status),
-			&status, sizeof (status), &len, NULL))
-    printf("¾¯¸æ£ºÎÞ·¨ÆôÓÃ TAP ÊÊÅäÆ÷\n");
+  /* handle is opened FILE_FLAG_OVERLAPPED: passing lpOverlapped=NULL here makes the
+     ioctl fail on modern Windows and the adapter stays "cable pulled" (IP traffic
+     dead, cross-node probes unreachable) -- use a temp event + wait completion */
+  {
+    OVERLAPPED ov;
+    DWORD le = 0;
+    ZeroMemory(&ov, sizeof(ov));
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (ov.hEvent != NULL) {
+      if (!DeviceIoControl (device->device_handle, TAP_IOCTL_SET_MEDIA_STATUS,
+                            &status, sizeof (status),
+                            &status, sizeof (status), &len, &ov)) {
+        le = GetLastError();
+        if (le != ERROR_IO_PENDING)
+          printf("warning: TAP_IOCTL_SET_MEDIA_STATUS failed le=%lu\n", (unsigned long)le);
+      }
+      if (le == ERROR_IO_PENDING)
+        GetOverlappedResult(device->device_handle, &ov, &len, TRUE);
+      CloseHandle(ov.hEvent);
+    }
+  }
 
   /*
    * Initialize overlapped structures
@@ -217,7 +234,7 @@ int tuntap_read(struct tuntap_dev *tuntap, unsigned char *buf, int len)
     return read_size;
     break;
   default:
-    printf("GetLastError() ·µ»ØÁË %d\n", last_err);
+    printf("GetLastError() ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ %d\n", last_err);
     break;
   }
 
@@ -286,7 +303,7 @@ int main(int argc, char* argv[]) {
   int i;
   int mtu = 1400;
 
-  printf("»¶Ó­Ê¹ÓÃ¸ºÔØ¾ùºâÆ÷:ÆæÅµ±¦±¦QQ4722100\n");
+  printf("ï¿½ï¿½Ó­Ê¹ï¿½Ã¸ï¿½ï¿½Ø¾ï¿½ï¿½ï¿½ï¿½ï¿½:ï¿½ï¿½Åµï¿½ï¿½ï¿½ï¿½QQ4722100\n");
   initWin32();
   open_wintap(&tuntap, "static", "1.2.3.20", "255.255.255.0", mtu);
 
@@ -299,9 +316,9 @@ int main(int argc, char* argv[]) {
     buf[1]=3;
     buf[2]=4;
 
-    printf("tun_read ·µ»ØÁË %d\n", rc);
+    printf("tun_read ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ %d\n", rc);
     rc = tun_write(&tuntap, buf, rc);
-    printf("tun_write ·µ»ØÁË %d\n", rc);
+    printf("tun_write ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ %d\n", rc);
   }
   // rc = tun_open (device->device_name, IF_MODE_TUN);
   WSACleanup ();
