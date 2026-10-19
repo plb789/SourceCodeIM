@@ -82,6 +82,19 @@
     var lobbyMsgs = [];     // 大厅聊天消息（下行 msg；仅本次会话内存态，不落库）
     var roomMsgs = [];      // 房内聊天消息（下行 chat；仅本次会话内存态，不落库）
     var lobbyTimer = null;  // 大厅在场心跳
+    // ===== 快速匹配状态机（纯前端事件驱动：房间列表更新即重新评估候选，命中自动加入） =====
+    var MATCH_TIMEOUT = 30000;           // 匹配限时（30s 倒计时，超时未命中进失败结果页）
+    var match = {
+        active: false,                   // 匹配流程进行中（设置→搜索→结果 任一阶段）
+        phase: '',                       // '' / 'search' / 'success' / 'fail'
+        gameId: 0,                       // 匹配游戏 id（0=全部游戏）
+        gameName: '',                    // 匹配游戏名（筛选摘要展示）
+        statuses: { waiting: true, playing: false }, // 房间状态多选（默认仅等待中）
+        deadline: 0,                     // 搜索截止时间戳 ms
+        timer: null,                     // 倒计时 tick（200ms：数字 + 进度条平滑）
+        tried: {},                       // 本轮已尝试且加入被拒的房间号（口令/满员变化等）→ 自动换下一间
+        lastPoll: 0                      // 搜索中兜底拉列表节流（防 rooms_changed 推送丢失时卡死）
+    };
 
     // ===== 工具 =====
     function u() {
@@ -153,7 +166,12 @@
         elRoomChat, elRoomIn2, elRoomSend2,
         elMask, elModalTitle, elModalText, elModalIn, elModalOk, elModalCancel, elUnsupported,
         elInviteMask, elInviteList, elInviteSearch, elInviteSend, elInviteCancel,
-        elPortMask, elPortList, elPortHint, elPortCancel;
+        elPortMask, elPortList, elPortHint, elPortCancel,
+        elMatchMask, elMatchStart, elMatchCancel, elMatchStatus,
+        elMgsel, elMgselToggle, elMgselIco, elMgselName, elMgselPanel, elMgselSearch, elMgselList,
+        elMatchRunMask, elMatchRunSearch, elMatchRunOk, elMatchRunFail,
+        elMatchRunFilter, elMatchRunCount, elMatchRunBar, elMatchRunCancel, elMatchRunRoom, elMatchRunFailSub,
+        elMatchRunCreate, elMatchRunRetry, elMatchRunBack;
 
     function buildDom() {
         view.innerHTML =
@@ -278,6 +296,54 @@
             '<div class="gn-invite-actions">' +
             '<button class="gn-btn" id="gn-port-cancel">' + T('取消') + '</button>' +
             '</div></div></div>' +
+            // 快速匹配设置弹窗（自绘：联机游戏选择 + 房间状态多选；复用 .gn-invite-* / .gn-gsel-* 骨架）
+            '<div class="gn-invite-mask hidden" id="gn-match-mask">' +
+            '<div class="gn-invite-dialog gn-match-dialog">' +
+            '<div class="gn-invite-title">' + T('快速匹配') + '</div>' +
+            '<div class="gn-match-form">' +
+            '<div class="gn-form-row"><label>' + T('联机游戏') + '</label><div class="gn-gsel" id="gn-mgsel">' +
+            '<button type="button" class="gn-gsel-toggle" id="gn-mgsel-toggle"><span class="gn-gsel-ico" id="gn-mgsel-ico"></span><span class="gn-gsel-name" id="gn-mgsel-name"></span><span class="gn-gsel-caret" id="gn-mgsel-caret"></span></button>' +
+            '<div class="gn-gsel-panel hidden" id="gn-mgsel-panel">' +
+            '<input class="gn-gsel-search" id="gn-mgsel-search" type="text" maxlength="32" placeholder="' + T('搜索游戏…') + '">' +
+            '<div class="gn-gsel-list gs-scroll" id="gn-mgsel-list"></div>' +
+            '</div></div></div>' +
+            '<div class="gn-form-row"><label>' + T('房间状态') + '</label><div class="gn-match-status" id="gn-match-status">' +
+            '<button type="button" class="gn-match-st sel" data-v="waiting">' + T('等待中') + '</button>' +
+            '<button type="button" class="gn-match-st" data-v="playing">' + T('游戏中') + '</button>' +
+            '</div></div>' +
+            '</div>' +
+            '<div class="gn-hint">' + T('在 30 秒内自动寻找符合条件且有空位的房间并加入') + '</div>' +
+            '<div class="gn-invite-actions">' +
+            '<button class="gn-btn" id="gn-match-cancel">' + T('取消') + '</button>' +
+            '<button class="gn-btn primary" id="gn-match-start">' + T('开始匹配') + '</button>' +
+            '</div></div></div>' +
+            // 快速匹配进行/结果浮层（三态同壳切换：搜索中含雷达动画 + 30s 倒计时；成功/失败为结果页）
+            '<div class="gn-invite-mask hidden" id="gn-matchrun-mask">' +
+            '<div class="gn-matchrun-dialog">' +
+            '<div class="gn-matchrun-stage" id="gn-matchrun-search">' +
+            '<div class="gn-match-radar"><span class="gn-match-radar-ring"></span><span class="gn-match-radar-ring d2"></span><span class="gn-match-radar-sweep"></span><span class="gn-match-radar-core"></span></div>' +
+            '<div class="gn-matchrun-title">' + T('正在匹配房间…') + '</div>' +
+            '<div class="gn-matchrun-sub" id="gn-matchrun-filter"></div>' +
+            '<div class="gn-matchrun-count" id="gn-matchrun-count">30</div>' +
+            '<div class="gn-matchrun-bar"><i id="gn-matchrun-bar"></i></div>' +
+            '<div class="gn-matchrun-actions"><button class="gn-btn" id="gn-matchrun-cancel">' + T('取消匹配') + '</button></div>' +
+            '</div>' +
+            '<div class="gn-matchrun-stage hidden" id="gn-matchrun-ok">' +
+            '<div class="gn-match-res ok">✓</div>' +
+            '<div class="gn-matchrun-title">' + T('匹配成功') + '</div>' +
+            '<div class="gn-matchrun-room" id="gn-matchrun-room"></div>' +
+            '<div class="gn-matchrun-sub">' + T('正在进入房间…') + '</div>' +
+            '</div>' +
+            '<div class="gn-matchrun-stage hidden" id="gn-matchrun-fail">' +
+            '<div class="gn-match-res fail">✕</div>' +
+            '<div class="gn-matchrun-title">' + T('未找到匹配房间') + '</div>' +
+            '<div class="gn-matchrun-sub" id="gn-matchrun-failsub"></div>' +
+            '<div class="gn-matchrun-actions">' +
+            '<button class="gn-btn" id="gn-matchrun-create">' + T('创建房间') + '</button>' +
+            '<button class="gn-btn" id="gn-matchrun-retry">' + T('重新匹配') + '</button>' +
+            '<button class="gn-btn primary" id="gn-matchrun-back">' + T('返回') + '</button>' +
+            '</div></div>' +
+            '</div></div>' +
             // 自实现弹窗（确认/口令输入；禁系统弹窗）
             '<div class="gn-modal-mask hidden" id="gn-mask">' +
             '<div class="gn-modal">' +
@@ -318,6 +384,16 @@
         elInviteSearch = g('gn-invite-search'); elInviteSend = g('gn-invite-send'); elInviteCancel = g('gn-invite-cancel');
         elPortDetect = g('gn-port-detect'); elPortMask = g('gn-port-mask');
         elPortList = g('gn-port-list'); elPortHint = g('gn-port-hint'); elPortCancel = g('gn-port-cancel');
+        // 快速匹配（设置弹窗 + 进行/结果浮层）
+        elMatchMask = g('gn-match-mask'); elMatchStart = g('gn-match-start'); elMatchCancel = g('gn-match-cancel');
+        elMgsel = g('gn-mgsel'); elMgselToggle = g('gn-mgsel-toggle'); elMgselIco = g('gn-mgsel-ico'); elMgselName = g('gn-mgsel-name');
+        elMgselPanel = g('gn-mgsel-panel'); elMgselSearch = g('gn-mgsel-search'); elMgselList = g('gn-mgsel-list');
+        elMatchStatus = g('gn-match-status');
+        elMatchRunMask = g('gn-matchrun-mask');
+        elMatchRunSearch = g('gn-matchrun-search'); elMatchRunOk = g('gn-matchrun-ok'); elMatchRunFail = g('gn-matchrun-fail');
+        elMatchRunFilter = g('gn-matchrun-filter'); elMatchRunCount = g('gn-matchrun-count'); elMatchRunBar = g('gn-matchrun-bar');
+        elMatchRunCancel = g('gn-matchrun-cancel'); elMatchRunRoom = g('gn-matchrun-room'); elMatchRunFailSub = g('gn-matchrun-failsub');
+        elMatchRunCreate = g('gn-matchrun-create'); elMatchRunRetry = g('gn-matchrun-retry'); elMatchRunBack = g('gn-matchrun-back');
 
         buildModeOptions();
         // 自绘悬浮滚动条（原生条已全局禁用）：房间表格 + 成员区 + 大厅聊天 + 房内聊天 + 游戏列 + 选人/端口候选列表
@@ -326,6 +402,7 @@
             window._osbInit(elRoomChat); window._osbInit(elGameList);
             window._osbInit(elInviteList); window._osbInit(elPortList);
             window._osbInit(elGselList); // 联机游戏选择器列表（.gs-scroll 悬停浮现滑块，与大厅游戏列同模式）
+            window._osbInit(elMgselList); // 快速匹配游戏选择器列表（同上）
         }
         bindEvents();
     }
@@ -434,6 +511,7 @@
         createClose();
         inviteClose();   // 邀请选人弹窗随面板一同收口，避免残留浮层
         portClose();     // 端口候选浮层同理
+        matchAbort();    // 快速匹配浮层/状态随面板一同收口（重进大厅重新发起）
         view.classList.add('hidden');
         lobbyLeave();
     }
@@ -470,6 +548,8 @@
         if (busyTimer) clearTimeout(busyTimer);
         busyTimer = setTimeout(function () {
             busyTimer = null;
+            // 快速匹配加入在途超时兜底：无法确认结果，标记 tried 防倒计时 tick 反复撞同一间
+            if (busy.join && pendingJoinId) matchTried(pendingJoinId);
             busy.create = false; busy.join = false; busy.transfer = false; pendingJoinId = '';
             renderLobby();
             if (curPage === 'room' && my) renderRoom(); // 移交在途超时：复位后重绘成员行（按钮恢复可用）
@@ -830,8 +910,11 @@
             if (curPage === 'room') renderRoom();
         }
         if (!busy.create && !busy.join && !busy.transfer && !kind) return;
+        var joinTried = busy.join ? pendingJoinId : ''; // 匹配加入被拒：先截获房间号（unlockBusy 会清空）
         unlockBusy();
         toast(text);
+        // 快速匹配中自动加入被拒（口令错误/瞬间满员等）：标记不再撞同一间，立即换下一候选继续匹配
+        if (joinTried) matchTried(joinTried);
         // 房内聊天被服务端拒绝（房间已解散 / 本端已不在成员表）→ 本端房间态已失效：
         // 就地收口回大厅并刷新列表，避免停在幽灵房间页反复空转（房间 TTL 到期/异常清理后即会命中）
         if (kind === 'room' && my) {
@@ -1349,16 +1432,18 @@
         poll();
     }
 
-    function joinRoom(roomId, pass, roomName) {
+    function joinRoom(roomId, pass, roomName, fromMatch) {
         if (busy.join) return;
         if (!avail()) { toast(T('当前环境不支持联机')); return; }
         roomId = String(roomId || '').replace(/[^0-9]/g, '');
         if (!/^[0-9]{6}$/.test(roomId)) { toast(T('房间号需为 6 位数字')); return; }
+        if (!fromMatch) matchAbort(); // 手动加入/邀请加入：终止进行中的匹配（匹配自动加入不受影响）
         myName = roomName || '';
         pendingJoinId = roomId;
         lockBusy('join'); renderLobby();
         if (!send({ action: 'join', room_id: roomId, pass: pass || '' })) {
             unlockBusy(); renderLobby();
+            if (fromMatch) matchTried(roomId); // 发送失败（断连等）：标记跳过，倒计时 tick 自动换下一候选
         }
     }
     function doJoin() {
@@ -1366,17 +1451,211 @@
         if (!/^[0-9]{6}$/.test(rid)) { toast(T('房间号需为 6 位数字')); return; }
         joinRoom(rid, (elJoinPass.value || '').trim(), '');
     }
-    // 快速匹配：按当前游戏筛选，挑一个「等待中且有位」的房间直接加入；无可用房间给出提示
+    // ===== 快速匹配（设置弹窗 → 搜索中(30s 倒计时) → 成功/失败结果页；全程自绘浮层） =====
+    // 点击入口：匹配未启动 → 设置弹窗；已在匹配 → 复位到当前阶段浮层（防重复点开设置）
     function doMatch() {
         if (!avail()) { toast(T('当前环境不支持联机')); return; }
-        var cand = visibleRooms().filter(function (r) {
-            if (r.status === 'playing') return false;
+        if (my) { toast(T('已在房间中，请先退出房间再匹配')); return; }
+        if (match.active) { matchRunShow(); return; }
+        matchOpen();
+    }
+    // —— 设置弹窗 ——
+    function matchOpen() {
+        // 游戏选择器：选项=全部游戏 + 已入库联机游戏（本地游戏无服务端房间，不参与匹配）；
+        // 默认带出左列当前游戏筛选，改选不影响左列
+        if (typeof window.GSOnlineGames === 'function') games = window.GSOnlineGames() || [];
+        mGselItems = [{ val: '0', name: T('全部游戏'), cover: '' }];
+        games.forEach(function (g_) { mGselItems.push({ val: String(g_.id), name: g_.name, cover: g_.cover || '' }); });
+        var cur = String(match.gameId || gameFilter || 0);
+        if (!mGselItems.some(function (it) { return it.val === cur; })) cur = '0';
+        mGselValCur = cur;
+        mGselSyncToggle();
+        mGselRender(); // 重建选择器列表（与建房 renderGameOptions 收口一致：防首次展开列表为空）
+        mGselOpen(false);
+        elMatchMask.classList.remove('hidden');
+    }
+    function matchClose() {
+        elMatchMask.classList.add('hidden');
+        mGselOpen(false);
+    }
+    // 开始匹配：读取设置 → 进搜索浮层
+    function matchStart() {
+        var sts = {};
+        var rows = elMatchStatus.querySelectorAll('.gn-match-st.sel');
+        for (var i = 0; i < rows.length; i++) sts[rows[i].getAttribute('data-v')] = true;
+        if (!Object.keys(sts).length) { toast(T('请至少选择一种房间状态')); return; }
+        var it = null;
+        for (var j = 0; j < mGselItems.length; j++) { if (mGselItems[j].val === mGselValCur) { it = mGselItems[j]; break; } }
+        match.gameId = Number(mGselValCur || 0) || 0;
+        match.gameName = (it && it.name) || T('全部游戏');
+        match.statuses = sts;
+        matchClose();
+        matchRunStart();
+    }
+    // —— 搜索中 ——
+    function matchRunStart() {
+        match.active = true;
+        match.phase = 'search';
+        match.tried = {};
+        match.deadline = Date.now() + MATCH_TIMEOUT;
+        matchRunShow();
+        elMatchRunFilter.textContent = T('{game} · {sts}', { game: match.gameName, sts: matchStsLabel() });
+        elMatchRunCount.textContent = String(MATCH_TIMEOUT / 1000); // 立即重置数字（防重试时残留上轮旧值至下个 tick）
+        elMatchRunBar.style.width = '100%';
+        matchEval(); // 列表现存候选立即命中（不必等下一次推送）
+        if (match.timer) clearInterval(match.timer);
+        match.timer = setInterval(matchTick, 200);
+    }
+    function matchStsLabel() {
+        var arr = [];
+        if (match.statuses.waiting) arr.push(T('等待中'));
+        if (match.statuses.playing) arr.push(T('游戏中'));
+        return arr.join('/') || T('等待中');
+    }
+    // 搜索浮层三态切换（search/ok/fail 同壳换内容，原位 display 切换无闪烁）
+    function matchRunShow() {
+        elMatchRunSearch.classList.toggle('hidden', match.phase !== 'search');
+        elMatchRunOk.classList.toggle('hidden', match.phase !== 'success');
+        elMatchRunFail.classList.toggle('hidden', match.phase !== 'fail');
+        elMatchRunMask.classList.remove('hidden');
+    }
+    // 倒计时 tick：数字 + 进度条 + 超时收口；搜索中兜底拉列表（防 rooms_changed 推送丢失）
+    function matchTick() {
+        if (!match.active || match.phase !== 'search') return;
+        var left = match.deadline - Date.now();
+        if (left <= 0) { matchFail(); return; }
+        elMatchRunCount.textContent = String(Math.ceil(left / 1000));
+        elMatchRunBar.style.width = Math.max(0, Math.min(100, left / MATCH_TIMEOUT * 100)) + '%';
+        if (Date.now() - match.lastPoll > 5000) { match.lastPoll = Date.now(); refreshList(true); }
+        matchEval();
+    }
+    // 候选评估：按 游戏 + 状态 + 有空位 过滤（排除本轮加入被拒的房间），优先人多（更快开局）→ 自动加入
+    function matchEval() {
+        if (!match.active || match.phase !== 'search' || busy.join) return;
+        var cand = (rooms || []).filter(function (r) {
+            if (match.tried[r.room_id]) return false;
+            if (match.gameId && Number(r.game_id || 0) !== match.gameId) return false;
+            if (!match.statuses[r.status || 'waiting']) return false;
             var mp = Number(r.max_players || 0);
             return !mp || (r.count || 0) < mp;
         });
-        if (!cand.length) { toast(T('暂无可用房间，先创建一个吧')); return; }
-        cand.sort(function (a, b) { return (b.count || 0) - (a.count || 0); }); // 优先人多（更快开局）
-        joinRoom(cand[0].room_id, '', cand[0].name);
+        if (!cand.length) return;
+        cand.sort(function (a, b) { return (b.count || 0) - (a.count || 0); });
+        joinRoom(cand[0].room_id, '', cand[0].name, true);
+    }
+    // 加入被拒（口令错误/瞬间满员等）：标记本轮不再撞同一间，立即换下一候选（onErr 调用）
+    function matchTried(roomId) {
+        if (!match.active || match.phase !== 'search' || !roomId) return;
+        match.tried[roomId] = true;
+        matchEval();
+    }
+    // 匹配成功（join-confirm 收口调用）：成功结果页，短暂展示后随房间页自动收口
+    function matchSucceed() {
+        if (!match.active) return;
+        matchStopTimer();
+        match.phase = 'success';
+        elMatchRunRoom.innerHTML =
+            '<div class="gn-matchrun-row"><span>' + T('房间名') + '</span><b>' + esc(my.name || (T('房间') + ' ' + my.room_id)) + '</b></div>' +
+            '<div class="gn-matchrun-row"><span>' + T('房间号') + '</span><b>' + esc(my.room_id) + '</b></div>' +
+            (my.game_name ? '<div class="gn-matchrun-row"><span>' + T('游戏') + '</span><b>' + esc(my.game_name) + '</b></div>' : '') +
+            '<div class="gn-matchrun-row"><span>' + T('状态') + '</span><b>' + (my.status === 'playing' ? T('游戏中') : T('等待中')) + '</b></div>';
+        matchRunShow();
+        setTimeout(function () {
+            // 结果页随入房完成自动关闭（room 页已由 join-confirm 切换）；期间面板已关则由 close() 收口
+            if (match.active && match.phase === 'success') matchAbort();
+        }, 1800);
+    }
+    // 匹配失败（30s 超时未命中）：失败结果页 + 三项后续操作
+    function matchFail() {
+        matchStopTimer();
+        match.phase = 'fail';
+        elMatchRunFailSub.textContent = T('30 秒内没有符合筛选条件且有空位的房间，可调整筛选后重试');
+        matchRunShow();
+        refreshList(true);
+    }
+    function matchRunCancel() {
+        // 取消匹配：停搜索回大厅（在途 join 无法撤回，确认后照常进房，不额外提示）
+        matchAbort();
+        toast(T('已取消匹配'));
+    }
+    function matchAbort() {
+        matchStopTimer();
+        match.active = false;
+        match.phase = '';
+        elMatchMask.classList.add('hidden');
+        elMatchRunMask.classList.add('hidden');
+        mGselOpen(false);
+    }
+    function matchStopTimer() {
+        if (match.timer) { clearInterval(match.timer); match.timer = null; }
+    }
+    // —— 匹配游戏选择器（建房 gn-gsel 同款骨架的独立实例：全部游戏 + 联机游戏，带搜索） ——
+    var mGselItems = [];    // 选项 [{val,name,cover}]
+    var mGselValCur = '0';  // 当前选中值（'0'=全部游戏 / 数字字符串=游戏 id）
+    function mGselSyncToggle() {
+        var it = null;
+        for (var i = 0; i < mGselItems.length; i++) { if (mGselItems[i].val === mGselValCur) { it = mGselItems[i]; break; } }
+        var name = it ? it.name : T('全部游戏');
+        if (elMgselName.textContent !== name) elMgselName.textContent = name;
+        gnGselRenderIco(elMgselIco, it ? it.cover : '', name);
+    }
+    function mGselRender() {
+        var kw = (elMgselSearch.value || '').trim().toLowerCase();
+        elMgselList.innerHTML = '';
+        var shown = mGselItems.filter(function (it) {
+            if (!kw) return true;
+            return String(it.name || '').toLowerCase().indexOf(kw) >= 0;
+        });
+        if (!shown.length) {
+            var empty = document.createElement('div');
+            empty.className = 'gn-gsel-empty';
+            empty.textContent = T('无匹配游戏');
+            elMgselList.appendChild(empty);
+        } else {
+            shown.forEach(function (it) {
+                var row = document.createElement('div');
+                row.className = 'gn-gsel-item' + (it.val === mGselValCur ? ' sel' : '');
+                row.setAttribute('data-val', it.val);
+                var ico = document.createElement('span');
+                ico.className = 'gn-gsel-ico';
+                row.appendChild(ico);
+                gnGselRenderIco(ico, it.cover, it.name);
+                var nm = document.createElement('span');
+                nm.className = 'gn-gsel-nm';
+                nm.textContent = it.name;
+                row.appendChild(nm);
+                if (it.val === mGselValCur) {
+                    var ck = document.createElement('span');
+                    ck.className = 'gn-gsel-ck';
+                    ck.textContent = '✓';
+                    row.appendChild(ck);
+                }
+                elMgselList.appendChild(row);
+            });
+        }
+        if (window._osbTick) window._osbTick(elMgselList);
+    }
+    function mGselSelect(val) {
+        if (mGselValCur !== val) {
+            mGselValCur = val;
+            mGselSyncToggle();
+        }
+        mGselOpen(false);
+    }
+    function mGselOpen(open) {
+        if (!elMgselPanel) return;
+        var willOpen = (open === undefined) ? elMgselPanel.classList.contains('hidden') : !!open;
+        if (willOpen) {
+            if (elMgselSearch.value) { elMgselSearch.value = ''; mGselRender(); }
+            elMgselPanel.classList.remove('hidden');
+            elMgsel.classList.add('open');
+            setTimeout(function () { try { elMgselSearch.focus(); } catch (e) { } }, 30);
+            if (window._osbTick) window._osbTick(elMgselList, 200);
+        } else {
+            elMgselPanel.classList.add('hidden');
+            elMgsel.classList.remove('open');
+            if (window._osbTick) window._osbTick(elMgselList);
+        }
     }
     function doLeave() {
         if (!my) return;
@@ -1648,6 +1927,7 @@
             case 'created': {
                 // 建房成功（仅发房主）：落房间态 + 联动 hostStart（隧道按对端惰性开启）
                 if (env.room_id) {
+                    matchAbort(); // 建房即终局：终止进行中的匹配（含失败结果页残留）
                     my = normRoom(env, true);
                     roomMsgs = [];
                     if (window.GameNet && GameNet.hostStart) {
@@ -1678,6 +1958,7 @@
                     }
                     if (visible) showPage('room');
                     toast(T('已加入房间'));
+                    matchSucceed(); // 快速匹配自动加入命中：成功结果页（未在匹配中为空操作）
                     // 功能二期：房间关联了游戏库游戏但本机未安装——提前提醒获取安装，
                     // 免得到房主开局时才发现玩不了（开局沿另有引导；此处一次性提示）
                     if ((my.game_id || 0) > 0 && !my._installHinted &&
@@ -1997,10 +2278,38 @@
         });
         elPortCancel.addEventListener('click', portClose);
         elPortMask.addEventListener('click', function (e) { if (e.target === elPortMask) portClose(); });
+        // 快速匹配：设置弹窗（开始/取消/状态多选/游戏选择器）+ 匹配浮层（取消/重试/建房/返回）
+        elMatchStart.addEventListener('click', matchStart);
+        elMatchCancel.addEventListener('click', matchClose);
+        elMatchMask.addEventListener('click', function (e) { if (e.target === elMatchMask) matchClose(); });
+        elMatchStatus.addEventListener('click', function (e) {
+            var btn = e.target && e.target.closest ? e.target.closest('.gn-match-st') : null;
+            if (btn) btn.classList.toggle('sel');
+        });
+        elMgselToggle.addEventListener('click', function () { mGselOpen(); });
+        elMgselSearch.addEventListener('input', mGselRender);
+        elMgselSearch.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { e.stopPropagation(); mGselOpen(false); }
+            else if (e.key === 'Enter') e.preventDefault();
+        });
+        elMgselList.addEventListener('click', function (e) {
+            var row = e.target && e.target.closest ? e.target.closest('.gn-gsel-item') : null;
+            if (row && row.getAttribute('data-val')) mGselSelect(row.getAttribute('data-val'));
+        });
+        document.addEventListener('click', function (e) {
+            if (elMgselPanel.classList.contains('hidden')) return;
+            if (!elMgsel.contains(e.target)) mGselOpen(false);
+        });
+        elMatchRunCancel.addEventListener('click', matchRunCancel);
+        elMatchRunBack.addEventListener('click', matchAbort);
+        elMatchRunRetry.addEventListener('click', matchRunStart); // 重新匹配：沿用本轮筛选立即再开一轮
+        elMatchRunCreate.addEventListener('click', function () { matchAbort(); openCreate(); });
         document.addEventListener('keydown', function (e) {
             if (e.key !== 'Escape') return;
             if (!elPortMask.classList.contains('hidden')) { portClose(); return; }
             if (!elCreateMask.classList.contains('hidden')) createClose();
+            if (!elMatchRunMask.classList.contains('hidden')) { match.phase === 'fail' ? matchAbort() : matchRunCancel(); return; }
+            if (!elMatchMask.classList.contains('hidden')) matchClose();
         });
         elClose.addEventListener('click', function () {
             // 页签化后「返回」交还宿主（游戏中心切回商店；主窗口环境回落关闭面板）
