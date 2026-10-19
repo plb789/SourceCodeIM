@@ -3188,6 +3188,12 @@
                 <span class="gs-user-card-label">账号 ID</span>
                 <span class="gs-user-card-val" id="gsCardUid">—</span>
             </div>
+            <!-- 虚拟 IP（登录回执分配的联机组网 IP；未启用虚拟组网时显示 —，不出现复制按钮） -->
+            <div class="gs-user-card-row">
+                <span class="gs-user-card-label">虚拟 IP</span>
+                <span class="gs-user-card-val" id="gsCardVip">—</span>
+                <button class="gs-user-card-mini hidden" id="gsCardVipCopy" type="button">复制</button>
+            </div>
             <div class="gs-user-card-row">
                 <span class="gs-user-card-label">游戏凭据</span>
                 <span class="gs-user-card-val" id="gsCardPw">—</span>
@@ -3359,7 +3365,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=54"></script>
+    <script src="js/game-store.js?v=55"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

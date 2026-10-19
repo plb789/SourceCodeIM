@@ -2647,6 +2647,7 @@
         if (!userEl || !card || !username) return;
         var showTimer = null, hideTimer = null;
         var pwVal = '', pwShown = false;
+        var vipVal = '';
         var renderPw = function () {
             var el1 = $('gsCardPw');
             if (!pwVal) { el1.textContent = '—'; return; }
@@ -2659,6 +2660,11 @@
             $('gsCardAv').innerHTML = avEl ? avEl.innerHTML : ''; // 复用首字母块或头像 img
             // 账号ID + 当前游戏凭据（账号+游戏级派生；无游戏上下文时不显示凭据）
             $('gsCardUid').textContent = username || '—';
+            // 虚拟 IP（登录回执分配，localStorage 每次登录响应覆盖，悬停时读到的即为最新值；
+            // 空=服务端未启用虚拟组网，显示 — 且不出现复制按钮）
+            try { vipVal = localStorage.getItem('vip_ip') || ''; } catch (eVip) { vipVal = ''; }
+            $('gsCardVip').textContent = vipVal || '—';
+            $('gsCardVipCopy').classList.toggle('hidden', !vipVal);
             var gid = currentGameId();
             var meta = gid ? gameLaunchMeta(gid) : null;
             var g = gid ? (state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {}) : {};
@@ -2710,6 +2716,8 @@
         // 凭据掩码切换 / 复制（默认掩码，降低截屏与旁人瞥见的暴露面）
         $('gsCardPwToggle').addEventListener('click', function (e) { e.stopPropagation(); pwShown = !pwShown; renderPw(); });
         $('gsCardPwCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(pwVal); });
+        // 虚拟 IP 复制（联机时分享/诊断用）
+        $('gsCardVipCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(vipVal); });
     })();
 
     // 运行期间"正在玩"心跳：60s 一次复用 action=start（服务端据此刻入/续期 presence，

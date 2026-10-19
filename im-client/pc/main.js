@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=17'); // v17：联机大厅页签（阶段二百九十二 M8 房间层/引擎迁入）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=18'); // v18：头像悬停卡片新增虚拟 IP 行（v17：联机大厅页签）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
