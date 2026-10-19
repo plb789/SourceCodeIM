@@ -963,7 +963,7 @@
             gnSyncNetMode(); // 选中变化：联机方式/端口行/启动路径行随应用带出刷新（原 select change 同语义）
             // 功能二期保留：选联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填）；
             // 「不指定」两类（虚拟网卡/通用端口隧道）无游戏进程可探测，不触发（避免全端口误推荐）
-            if (val !== '0' && val !== '0-tunnel' && gnNetModeSel() !== 'supernode') portDetect();
+            if (val !== '0' && val !== '0-tunnel' && gnNetModeSel() !== 'supernode') portDetect(false);
         }
         gnGselOpen(false);
     }
@@ -1126,7 +1126,10 @@
         elPortMask.classList.remove('hidden');
         if (window._osbInit) window._osbInit(elPortList); // 内容变更后重挂悬浮滑块（幂等）
     }
-    function portDetect() {
+    // manual=true：手动点「自动探测」——游戏进程命中优先，零命中回落全量候选（由房主自行辨认）；
+    // manual=false：选联机游戏自动触发——仅按该游戏进程过滤，零命中不弹窗（全量无关端口只添乱）：
+    // 端口由登记端口预填兜底，唯一直接填入，多命中只列该游戏自己的端口
+    function portDetect(manual) {
         if (portBusy) return;
         if (!avail()) { toast(T('当前环境不支持联机')); return; }
         var api = window.desktop;
@@ -1140,16 +1143,37 @@
             elPort.value = String(reg[0]);
             if (reg.length > 1) toast(T('已按登记填入主端口 {p}（该游戏联机端口：{all}）', { p: reg[0], all: reg.join(' / ') }));
         }
-        portBusy = true;
-        elPortDetect.textContent = T('探测中…');
-        // 探测名单：所选联机游戏进程优先（精准命中），已登记游戏进程名兜底（游戏中心窗比启动注册表更准）
+        // 探测名单：手动=所选游戏进程优先+已登记进程名兜底（游戏中心窗比启动注册表更准）；
+        // 自动=仅所选游戏进程（精准命中，绝不回落全量）
         var procs = [];
         if (gm && gm.proc) procs.push(gm.proc);
-        portProcs.forEach(function (p) { if (procs.indexOf(p) === -1) procs.push(p); });
+        if (manual) portProcs.forEach(function (p) { if (procs.indexOf(p) === -1) procs.push(p); });
+        if (!manual && !(gm && gm.proc)) {
+            // 自动触发但所选游戏无进程可过滤（未安装/未登记主程序）：无从精准探测，不弹全量端口窗
+            toast(T('未登记该游戏进程，无法自动探测，请手动填写端口'));
+            return;
+        }
+        portBusy = true;
+        elPortDetect.textContent = T('探测中…');
         api.gnDetectPort({ procs: procs.slice(0, 64) }).then(function (r) {
             portBusy = false;
             elPortDetect.textContent = T('自动探测');
             var list = (r && r.ok && r.list) || [];
+            if (!manual) {
+                // 自动探测只认游戏进程命中：零命中（游戏未运行）不弹全量端口窗，提示启动游戏后再试
+                if (!r || !r.ok || !r.filtered || !list.length) {
+                    var it = gnGameSelItem();
+                    toast(T('未检测到《{g}》进程监听的端口，可启动游戏后再点「自动探测」或手动填写', { g: (it && it.name) || '' }));
+                    return;
+                }
+                if (list.length === 1) {
+                    portPick(list[0].port);
+                    toast(T('已填入端口 {p}', { p: list[0].port }));
+                    return;
+                }
+                portRenderList(list, true);
+                return;
+            }
             if (!list.length) { toast(T('未探测到本机监听端口，请手动填写')); return; }
             if (list.length === 1) {
                 portPick(list[0].port);
@@ -1956,8 +1980,8 @@
             inviteSearchTimer = setTimeout(function () { inviteRenderList(elInviteSearch.value); }, 150);
         });
         elInviteSearch.addEventListener('keydown', function (e) { if (e.key === 'Escape') inviteClose(); });
-        // 端口自动探测（自绘候选浮层：点条目填入 + 点遮罩/取消关闭 + Esc 关闭）
-        elPortDetect.addEventListener('click', portDetect);
+        // 端口自动探测（自绘候选浮层：点条目填入 + 点遮罩/取消关闭 + Esc 关闭）；手动点击=全量候选口径
+        elPortDetect.addEventListener('click', function () { portDetect(true); });
         // 启动路径浏览/清空（「不指定（虚拟网卡）」房的本机游戏 exe 记忆，开局自动启动）
         elExePathPick.addEventListener('click', function () {
             if (!window.desktop || typeof window.desktop.gameChooseGameExe !== 'function') { toast(T('请在 PC 客户端中操作')); return; }
