@@ -9951,16 +9951,9 @@
         renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
         var projectLive = agentMcpLiveStatus.filter(function (s) { return s.project === true; }); // 阶段一百一十六：项目级会话状态行
-        if (!agentMcpServers.length && !agentMcpBuiltinEnabled && !projectLive.length) {
-            var empty = document.createElement('div');
-            empty.className = 'agent-mcp-empty';
-            // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
-            empty.innerHTML = I18N.t('尚未配置本机 MCP 服务器') + '<br>' + I18N.t('点击右上角「+ 添加」开始：可从插件库一键预填，或手动配置');
-            agentMcpListEl.appendChild(empty);
-            return;
-        }
-        // 阶段一百一十四：内置 Computer Use 服务器行（TRAE Built-in 同款——常显首行、开关启停、无编辑/删除）
-        (function () {
+        // 阶段一百一十四：内置 Computer Use 服务器行（TRAE Built-in 同款——常显首行、开关启停、无编辑/删除）。
+        // 渲染提为函数供两处复用：空状态兜底分支（内置停用时补挂首行与启用开关）与正常路径
+        var renderBuiltinRow = function () {
             var wrap = document.createElement('div');
             wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded['computer-use'] ? ' expanded' : '');
             var row = document.createElement('div');
@@ -10053,7 +10046,19 @@
                 wrap.appendChild(toolsBox);
             }
             agentMcpListEl.appendChild(wrap);
-        })();
+        };
+        if (!agentMcpServers.length && !agentMcpBuiltinEnabled && !projectLive.length) {
+            var empty = document.createElement('div');
+            empty.className = 'agent-mcp-empty';
+            // 阶段一百一十二：空状态加引导（指明添加入口与两条路径），避免大片空白像排版错位
+            empty.innerHTML = I18N.t('尚未配置本机 MCP 服务器') + '<br>' + I18N.t('点击右上角「+ 添加」开始：可从插件库一键预填，或手动配置');
+            agentMcpListEl.appendChild(empty);
+            // 修复：兜底引导保留的同时，内置行以停用态补挂在引导之后（带"点击启用"开关）——
+            // 原实现此处直接 return 吞掉内置行，停用后无开关可再启用（装任意市场插件才恢复渲染）
+            renderBuiltinRow();
+            return;
+        }
+        renderBuiltinRow();
         // 阶段一百一十六：项目级服务器行（来源 .im/agent_mcp.json；tag「项目」，启停在 JSON 文件 enabled 字段，可展开工具清单）
         projectLive.forEach(function (ps) {
             var wrap = document.createElement('div');
