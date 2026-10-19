@@ -9886,26 +9886,40 @@
     }
 
     // 工具清单上报归口：主进程快照变化才上报（服务端 sync.Map 全量覆盖，空清单=清除注入）
+    // 返回 Promise<boolean>：true=本轮因会话建连中未定型而跳过（调用方不消耗轮询窗口）。
+    // 启动竞态守卫：首次快照时本机 MCP 会话尚在异步建连（connecting），listTools 仅返回已连会话，
+    // 此时上报空清单会造成"先报 0 再报 N"的双 toast与服务端注入空窗——建连未就绪跳过，就绪后一次报准
     function reportPcMcpTools() {
-        if (!agentMcpSupported()) return;
-        window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
-            agentMcpAllTools = (st && st.tools) || []; // 阶段一百一十一：同步全量工具快照（展开清单数据源）
-            var fingerprint = JSON.stringify((st && st.tools) || []);
-            if (fingerprint === agentMcpLastReport) return;
+        if (!agentMcpSupported()) return Promise.resolve(false);
+        return window.desktop.mcpSyncState(IMSocket.getUsername()).then(function (st) {
+            var tools = (st && st.tools) || [];
+            agentMcpAllTools = tools; // 阶段一百一十一：同步全量工具快照（展开清单数据源）
+            var connecting = ((st && st.status) || []).some(function (s) { return s && s.status === 'connecting'; });
+            if (connecting && !tools.length) return true; // 会话仍在建连且清单尚空：状态未定型，等下一轮快照
+            var fingerprint = JSON.stringify(tools);
+            if (fingerprint === agentMcpLastReport) return false;
             agentMcpLastReport = fingerprint;
             IMSocket.send({
                 msg_type: MSG.AGENT_PC_TOOLS,
-                content: JSON.stringify({ tools: (st && st.tools) || [] })
+                content: JSON.stringify({ tools: tools })
             });
-        }).catch(function () { /* 主进程异常时静默，下轮重试 */ });
+            return false;
+        }).catch(function () { return false; /* 主进程异常时静默，下轮重试 */ });
     }
 
-    // 建连/保存后的上报窗口：会话建连异步，窗口期内每秒快照一次，清单稳定即自动停报
+    // 建连/保存后的上报窗口：会话建连异步，窗口期内每秒快照一次，清单稳定即自动停报；
+    // 建连中跳过的轮次不消耗有效窗口（left 回补），总轮数绝对上限 times+60 兜底——
+    // 防"回补恰好抵消递减导致 left 永不归零"的会话挂死无限轮询（实测推演修正）
     function startPcMcpReportLoop(times) {
-        var n = 0;
+        var left = times; // 剩余有效轮数
+        var total = 0;    // 总轮数（含建连跳过轮，绝对上限）
         (function tick() {
-            if (n++ >= times) return;
-            reportPcMcpTools();
+            if (left <= 0 || total >= times + 60) return;
+            total++;
+            left--;
+            Promise.resolve(reportPcMcpTools()).then(function (pending) {
+                if (pending) left++; // 建连未定型：不消耗有效窗口，待就绪后继续报准
+            });
             setTimeout(tick, 1000);
         })();
     }
@@ -10352,7 +10366,7 @@
             showToast(r.enabled ? I18N.t('已启用项目级 MCP，正在加载 .im/agent_mcp.json') : I18N.t('已停用项目级 MCP'));
             agentMcpLastReport = ''; // 工具清单可能变化（项目服务器增减），允许重新上报
             agentMcpProjectRefresh();
-            reportPcMcpTools();
+            startPcMcpReportLoop(12); // 与保存/启停流程同归口：建连窗口内清单稳定后自动上报（直接单次上报会落在建连期被守卫跳过）
         }).catch(function (e) { showToast(I18N.t('切换失败：') + (e && e.message || e)); });
     });
     function agentMcpAddMenuOutside(ev) {
@@ -18922,12 +18936,13 @@
             if (!ev || !ev.step) return;
             if (activeExec && activeExec.step === ev.step) window.desktop.agentBg(IMSocket.getUsername());
         });
-        // 阶段九十：本机 MCP 工具清单上报的服务端确认帧（下行回执：{ok,count}）
+        // 阶段九十：本机 MCP 工具清单上报的服务端确认帧（下行回执：{ok,count}）；
+        // count=0 表示清除注入（空清单），无实质内容不弹 toast 免打扰
         IMSocket.on(MSG.AGENT_PC_TOOLS, function (msg) {
             if (msg.to_user !== IMSocket.getUsername()) return;
             var ev;
             try { ev = JSON.parse(msg.content); } catch (e) { return; }
-            if (ev && ev.ok) showToast(I18N.t('本机 MCP 工具已上报（') + (ev.count || 0) + I18N.t(' 个）'));
+            if (ev && ev.ok && (ev.count || 0) > 0) showToast(I18N.t('本机 MCP 工具已上报（') + (ev.count || 0) + I18N.t(' 个）'));
         });
         // 阶段七十六：工作区文件面板本地操作桥（服务端下行 msg 64 → 主进程 fs → 结果经 65 回传）
         IMSocket.on(MSG.PC_FILE_REQ, function (msg) {
