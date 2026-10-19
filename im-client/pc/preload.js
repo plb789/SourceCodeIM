@@ -951,6 +951,27 @@ contextBridge.exposeInMainWorld('desktop', {
     gameChooseGameExe: function () {
         return ipcRenderer.invoke('game:choose-game-exe');
     },
+    // ===== 本地游戏（用户手动添加的非商店游戏，存储在渲染层 localStorage）=====
+    // 启动本地游戏：{id, exe, args?} → Promise<{ok, startedAt?/error?}>
+    localGameLaunch: function (payload) {
+        return ipcRenderer.invoke('local-game:launch', payload);
+    },
+    // 本地游戏运行态查询 → Promise<[{id, startedAt}]>
+    localGameRunningList: function () {
+        return ipcRenderer.invoke('local-game:running-list');
+    },
+    // 订阅本地游戏进程启动（全窗口广播 {id, startedAt}）
+    onLocalGameStart: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('local-game-start', function (event, data) {
+            cb(data);
+        });
+    },
+    // 订阅本地游戏进程退出（全窗口广播 {id, startedAt}）
+    onLocalGameExit: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('local-game-exit', function (event, data) {
+            cb(data);
+        });
+    },
     // 启动游戏（主进程读启动注册表归口）→ Promise<{ok, startedAt}> / {ok:false, needExe:true}
     gameLaunch: function (payload) {
         return ipcRenderer.invoke('game:launch', payload);

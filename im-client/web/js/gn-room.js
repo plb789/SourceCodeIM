@@ -143,7 +143,9 @@
 
     // ===== DOM 构建（容器 #gn-view 常驻游戏中心窗 gsViewOnline，内部结构本模块一次性构建） =====
     var elRefresh, elClose, elPageLobby, elPageRoom, elName, elPort, elPortDetect, elPass, elCreateBtn, elCreateOpen, elCreateCancel, elCreateMask,
-        elInGame, elInMode, elInMax, elGameList, elNetModeRow, elNetMode, elPortRow,
+        elGsel, elGselToggle, elGselIco, elGselName, elGselCaret, elGselPanel, elGselSearch, elGselList,
+        elInMode, elInMax, elGameList, elNetModeRow, elNetMode, elPortRow,
+        elExePathRow, elExePath, elExePathPick, elExePathClear,
         elRoomIn, elJoinPass, elJoinBtn, elMatchBtn,
         elRoomList, elListEmpty,
         elLobbyChat, elLobbyIn, elLobbySend, elLobbyCount,
@@ -236,9 +238,17 @@
             '<div class="gn-invite-title">' + T('创建房间') + '</div>' +
             '<div class="gn-create-form">' +
             '<div class="gn-form-row"><label>' + T('房间名') + '</label><input id="gn-in-name" type="text" maxlength="32" placeholder="' + T('如：我的世界生存') + '"></div>' +
-            '<div class="gn-form-row"><label>' + T('联机游戏') + '</label><select id="gn-in-game"></select></div>' +
+            // 联机游戏自绘选择器（替代原生 select：原生无法显示游戏图标、无法搜索过滤，游戏多时下拉超长溢出）
+            '<div class="gn-form-row"><label>' + T('联机游戏') + '</label><div class="gn-gsel" id="gn-gsel">' +
+            '<button type="button" class="gn-gsel-toggle" id="gn-gsel-toggle"><span class="gn-gsel-ico" id="gn-gsel-ico"></span><span class="gn-gsel-name" id="gn-gsel-name"></span><span class="gn-gsel-caret" id="gn-gsel-caret"></span></button>' +
+            '<div class="gn-gsel-panel hidden" id="gn-gsel-panel">' +
+            '<input class="gn-gsel-search" id="gn-gsel-search" type="text" maxlength="32" placeholder="' + T('搜索游戏…') + '">' +
+            '<div class="gn-gsel-list gs-scroll" id="gn-gsel-list"></div>' +
+            '</div></div></div>' +
             // 联机方式行（随应用带出只读，服务端建房收敛归口；supernode=虚拟网卡 / tunnel=端口隧道 / 空=跟随全局）
             '<div class="gn-form-row" id="gn-in-netmode-row" style="display:none;"><label>' + T('联机方式') + '</label><span class="gn-tag" id="gn-in-netmode"></span></div>' +
+            // 启动路径行（仅「不指定（虚拟网卡）」显示：本机游戏 exe，开局时自动启动；localStorage 各机自记忆）
+            '<div class="gn-form-row" id="gn-in-exepath-row" style="display:none;"><label>' + T('启动路径') + '</label><span class="gn-exepath" id="gn-in-exepath"></span><button id="gn-exepath-pick" class="gn-link">' + T('浏览…') + '</button><button id="gn-exepath-clear" class="gn-link">' + T('清空') + '</button></div>' +
             '<div class="gn-form-row"><label>' + T('对战模式') + '</label><select id="gn-in-mode"></select></div>' +
             '<div class="gn-form-row"><label>' + T('房间人数') + '</label><select id="gn-in-max"></select></div>' +
             '<div class="gn-form-row" id="gn-in-port-row"><label>' + T('游戏端口') + '</label><input id="gn-in-port" type="text" inputmode="numeric" maxlength="5" placeholder="' + T('游戏局域网端口（1024-65535）') + '"><button id="gn-port-detect" class="gn-link">' + T('自动探测') + '</button></div>' +
@@ -285,9 +295,13 @@
         elUnsupported = g('gn-unsupported');
         elCreateOpen = g('gn-create-open'); elCreateMask = g('gn-create-mask');
         elName = g('gn-in-name'); elPort = g('gn-in-port'); elPass = g('gn-in-pass');
-        elInGame = g('gn-in-game'); elInMode = g('gn-in-mode'); elInMax = g('gn-in-max');
+        elGsel = g('gn-gsel'); elGselToggle = g('gn-gsel-toggle'); elGselIco = g('gn-gsel-ico'); elGselName = g('gn-gsel-name');
+        elGselCaret = g('gn-gsel-caret'); elGselPanel = g('gn-gsel-panel'); elGselSearch = g('gn-gsel-search'); elGselList = g('gn-gsel-list');
+        elInMode = g('gn-in-mode'); elInMax = g('gn-in-max');
         elNetModeRow = g('gn-in-netmode-row'); elNetMode = g('gn-in-netmode');
         elPortRow = g('gn-in-port-row');
+        elExePathRow = g('gn-in-exepath-row'); elExePath = g('gn-in-exepath');
+        elExePathPick = g('gn-exepath-pick'); elExePathClear = g('gn-exepath-clear');
         elGameList = g('gn-game-list');
         elCreateBtn = g('gn-create-btn'); elCreateCancel = g('gn-create-cancel');
         elRoomIn = g('gn-in-room'); elJoinPass = g('gn-in-join-pass'); elJoinBtn = g('gn-join-btn');
@@ -311,6 +325,7 @@
             window._osbInit(elRoomList); window._osbInit(elMembers); window._osbInit(elLobbyChat);
             window._osbInit(elRoomChat); window._osbInit(elGameList);
             window._osbInit(elInviteList); window._osbInit(elPortList);
+            window._osbInit(elGselList); // 联机游戏选择器列表（.gs-scroll 悬停浮现滑块，与大厅游戏列同模式）
         }
         bindEvents();
     }
@@ -638,9 +653,14 @@
             } else {
                 ready = m.ready ? '<span class="gn-tag ink">' + T('已准备') + '</span>' : '<span class="gn-tag wait">' + T('未准备') + '</span>';
             }
-            // 联机链路：房主视角按对端映射；加入者视角只有自己一条链路（在链路条展示）
+            // 联机链路：房主视角按对端映射；加入者视角只有自己一条链路（在链路条展示）。
+            // 「不指定（虚拟网卡）」房（supernode 且无隧道端口）：无 GameNet 会话——成员链接列
+            // 统一显示「虚拟网卡」徽标（组网由 p2p-host 承担），避免永久挂"连接中"误导
             var link = '';
-            if (my.isHost && !m.host && peerMap[m.username]) {
+            var vnicOnly = my.mode === 'supernode' && !my.host_port;
+            if (vnicOnly) {
+                link = '<span class="gn-tag ink">' + T('虚拟网卡') + '</span>';
+            } else if (my.isHost && !m.host && peerMap[m.username]) {
                 var ps = peerMap[m.username].state;
                 link = (ps === 'linked' && peerMap[m.username].tunnel) ? '<span class="gn-tag ink">' + T('已联通') + '</span>'
                     : (ps === 'failed' || ps === 'aborted') ? '<span class="gn-tag off">' + T('未联接') + '</span>' : incoming();
@@ -677,6 +697,11 @@
         var st = (window.GameNet && GameNet.stateOf) ? GameNet.stateOf(my.room_id) : null;
         var txt = '', cls = '';
         if (!avail()) { txt = T('当前环境不支持联机'); cls = 'off'; }
+        else if (my.mode === 'supernode' && !my.host_port) {
+            // 「不指定（虚拟网卡）」房：无隧道会话，链接栏显示组网态而非"等待玩家加入/尚未建立联机"
+            if (my.status === 'playing') { txt = T('虚拟网卡组网中，游戏局域网列表互见'); cls = 'on'; }
+            else { txt = T('虚拟网卡联机，开局后自动组网'); cls = 'wait'; }
+        }
         else if (my.isHost) {
             var n = (st && st.peers) ? st.peers.length : 0;
             txt = n ? T('已连接 {n} 位玩家', { n: n }) : T('等待玩家加入…');
@@ -735,7 +760,16 @@
             var rb = document.createElement('button');
             rb.className = 'gn-btn' + (my.ready ? '' : ' primary');
             rb.textContent = my.ready ? T('取消准备') : T('准备');
-            rb.addEventListener('click', function () { if (!my) return; send({ action: 'ready', room_id: my.room_id }); });
+            rb.addEventListener('click', function () {
+                if (!my) return;
+                // 中途加入主入口：对局中点准备 = 明确加入意图——拉起虚拟网卡组网（幂等静默，已运行不重复提示）
+                // + 一次性启动引导（与开局过渡同口径）；waiting 态点准备为纯就绪信号，无附加动作
+                if (my.status === 'playing' && my.mode === 'supernode' && !my.isHost) {
+                    gnP2pStart(true);
+                    gnJoinerLaunchAsk();
+                }
+                send({ action: 'ready', room_id: my.room_id });
+            });
             elRoomActions.appendChild(rb);
         }
         // 邀请好友（房内成员均可邀请；走聊天邀请卡片 111，服务端校验邀请人须为房内成员）
@@ -817,34 +851,151 @@
         elCreateMask.classList.remove('hidden');
         setTimeout(function () { try { elName.focus(); } catch (e) { } }, 30);
     }
-    function createClose() { elCreateMask.classList.add('hidden'); }
-    // 联机游戏下拉：游戏中心窗游戏库注入（window.GSOnlineGames，已入库可联机游戏）
+    function createClose() { elCreateMask.classList.add('hidden'); gnGselOpen(false); }
+    // 联机游戏自绘选择器（替代原生 select：原生无法显示游戏图标、无法搜索过滤，游戏多时下拉超长溢出屏幕）。
+    // 数据源：游戏中心窗游戏库注入（window.GSOnlineGames，已入库可联机游戏，cover 为归一化封面 URL）
+    var gnGameItems = [];   // 全量选项 [{val,name,cover}]（两个「不指定」置顶 + 已安装游戏）
+    var gnGameValCur = '0'; // 当前选中值（'0'=虚拟网卡 / '0-tunnel'=通用端口隧道 / 数字字符串=游戏 id）
+    function gnGameVal() { return gnGameValCur; }
+    // 当前选中项完整数据（{val,name,cover,exe,local}）；本地游戏开局启动直接取 exe
+    function gnGameSelItem() {
+        for (var i = 0; i < gnGameItems.length; i++) { if (gnGameItems[i].val === gnGameValCur) return gnGameItems[i]; }
+        return null;
+    }
     function renderGameOptions() {
         games = (typeof window.GSOnlineGames === 'function') ? (window.GSOnlineGames() || []) : [];
-        elInGame.innerHTML = '';
-        var o = document.createElement('option');
-        o.value = '0'; o.textContent = T('不指定（通用端口隧道）');
-        elInGame.appendChild(o);
-        games.forEach(function (g_) {
-            var op = document.createElement('option');
-            op.value = String(g_.id); op.textContent = g_.name;
-            elInGame.appendChild(op);
-        });
-        if (!games.length) {
-            // 游戏库零已安装：追加禁用提示项——此前下拉只有「不指定」，房主无从知晓开局不会启动游戏
-            var hint = document.createElement('option');
-            hint.value = '0'; hint.disabled = true;
-            hint.textContent = T('（游戏库暂无已安装游戏，可先到游戏中心安装）');
-            elInGame.appendChild(hint);
-        }
+        gnGameItems = [
+            { val: '0', name: T('不指定（虚拟网卡）'), cover: '' },
+            { val: '0-tunnel', name: T('不指定（通用端口隧道）'), cover: '' }
+        ];
+        games.forEach(function (g_) { gnGameItems.push({ val: String(g_.id), name: g_.name, cover: g_.cover || '' }); });
+        // 本地游戏（游戏库「添加本地游戏」入库，local_ 前缀 id，仅本机）：可选参与联机，
+        // 选中后等同「不指定（虚拟网卡）」（服务端无此应用配置，显式声明 supernode），开局直接用其 exe 启动
+        var locals = (typeof window.GSLocalGames === 'function') ? (window.GSLocalGames() || []) : [];
+        locals.forEach(function (l_) { gnGameItems.push({ val: l_.id, name: l_.name, cover: '', exe: l_.exe, local: true }); });
+        // 选中值失效自愈（游戏卸载/库刷新后 id 不存在）：回落默认「不指定（虚拟网卡）」
+        var still = gnGameItems.some(function (it) { return it.val === gnGameValCur; });
+        if (!still) gnGameValCur = '0';
+        gnGselSyncToggle();
+        gnGselOpen(false);
+        gnGselRender();
         gnSyncNetMode();
+    }
+    // 收起态同步（图标 + 名称，原位更新防闪烁）
+    function gnGselSyncToggle() {
+        var it = null;
+        for (var i = 0; i < gnGameItems.length; i++) { if (gnGameItems[i].val === gnGameValCur) { it = gnGameItems[i]; break; } }
+        var name = it ? it.name : T('不指定（虚拟网卡）');
+        if (elGselName.textContent !== name) elGselName.textContent = name;
+        gnGselRenderIco(elGselIco, it ? it.cover : '', name);
+    }
+    // 图标渲染：有封面用封面（src 变化才重设，防闪烁）；无封面显示名称首字占位（商店卡片同风格）
+    function gnGselRenderIco(box, cover, name) {
+        if (cover) {
+            var img = box.querySelector('img');
+            if (!img) { box.innerHTML = '<img alt="">'; img = box.querySelector('img'); }
+            if (img.getAttribute('src') !== cover) img.setAttribute('src', cover);
+            img.onerror = function () { img.onerror = null; gnGselPlaceholder(box, name || ''); };
+        } else {
+            gnGselPlaceholder(box, name || '');
+        }
+    }
+    function gnGselPlaceholder(box, name) {
+        var ch = (name || '·').trim().charAt(0).toUpperCase() || '·';
+        ch = ch.replace(/[<>&]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]; });
+        if (box.textContent !== ch) box.innerHTML = '<span class="gn-gsel-ph">' + ch + '</span>';
+    }
+    // 面板列表渲染（搜索过滤：名称包含关键词忽略大小写；选中项打勾高亮；零游戏给提示行）
+    function gnGselRender() {
+        var kw = (elGselSearch.value || '').trim().toLowerCase();
+        elGselList.innerHTML = '';
+        var shown = gnGameItems.filter(function (it) {
+            if (!kw) return true;
+            return String(it.name || '').toLowerCase().indexOf(kw) >= 0;
+        });
+        if (!shown.length) {
+            var empty = document.createElement('div');
+            empty.className = 'gn-gsel-empty';
+            empty.textContent = T('无匹配游戏');
+            elGselList.appendChild(empty);
+        } else {
+            shown.forEach(function (it) {
+                var row = document.createElement('div');
+                row.className = 'gn-gsel-item' + (it.val === gnGameValCur ? ' sel' : '');
+                row.setAttribute('data-val', it.val);
+                var ico = document.createElement('span');
+                ico.className = 'gn-gsel-ico';
+                row.appendChild(ico);
+                gnGselRenderIco(ico, it.cover, it.name);
+                var nm = document.createElement('span');
+                nm.className = 'gn-gsel-nm';
+                nm.textContent = it.name;
+                row.appendChild(nm);
+                if (it.local) {
+                    // 本地游戏徽标：与商店游戏区分（无服务端配置/云存档，联机走虚拟网卡）
+                    var tg = document.createElement('span');
+                    tg.className = 'gn-gsel-tag';
+                    tg.textContent = T('本地');
+                    row.appendChild(tg);
+                }
+                if (it.val === gnGameValCur) {
+                    var ck = document.createElement('span');
+                    ck.className = 'gn-gsel-ck';
+                    ck.textContent = '✓';
+                    row.appendChild(ck);
+                }
+                elGselList.appendChild(row);
+            });
+        }
+        if (!games.length) {
+            // 游戏库零已安装：提示行（不可选）——房主无从知晓开局不会启动游戏
+            var hint = document.createElement('div');
+            hint.className = 'gn-gsel-hint';
+            hint.textContent = T('（游戏库暂无已安装游戏，可先到游戏中心安装）');
+            elGselList.appendChild(hint);
+        }
+        if (window._osbTick) window._osbTick(elGselList); // 滑块重定位（内容重建后滚动范围变化）
+    }
+    function gnGselSelect(val) {
+        if (gnGameValCur !== val) {
+            gnGameValCur = val;
+            gnGselSyncToggle();
+            gnSyncNetMode(); // 选中变化：联机方式/端口行/启动路径行随应用带出刷新（原 select change 同语义）
+            // 功能二期保留：选联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填）；
+            // 「不指定」两类（虚拟网卡/通用端口隧道）无游戏进程可探测，不触发（避免全端口误推荐）
+            if (val !== '0' && val !== '0-tunnel' && gnNetModeSel() !== 'supernode') portDetect();
+        }
+        gnGselOpen(false);
+    }
+    // 面板开合（开后清空搜索词并聚焦，便于直接输入过滤；点外部/Esc 关闭）
+    function gnGselOpen(open) {
+        if (!elGselPanel) return;
+        var willOpen = (open === undefined) ? elGselPanel.classList.contains('hidden') : !!open;
+        if (willOpen) {
+            if (elGselSearch.value) { elGselSearch.value = ''; gnGselRender(); }
+            elGselPanel.classList.remove('hidden');
+            elGsel.classList.add('open');
+            setTimeout(function () { try { elGselSearch.focus(); } catch (e) { } }, 30);
+            if (window._osbTick) window._osbTick(elGselList, 200); // 开面板多帧复查滑块位置（图片加载布局收敛）
+        } else {
+            elGselPanel.classList.add('hidden');
+            elGsel.classList.remove('open');
+            if (window._osbTick) window._osbTick(elGselList); // 关面板即隐滑块（列表不可滚，防残留浮层）
+        }
     }
     // 联机方式随应用带出（只读，服务端建房收敛归口——联机方式路由设计 §五）：
     // supernode=虚拟网卡（隐藏端口行，虚拟网无需端口）/ tunnel=端口隧道 / 空=跟随全局。
     // 数据源 GSGameMeta().netMode（应用上架配置随库数据下发），缺省优雅降级"跟随全局"
     var gnTapInstalled = false; // TAP 驱动安装态缓存（supernode 应用建房前置校验；gnSyncNetMode 异步刷新）
     function gnNetModeSel() {
-        var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+        // 「不指定（虚拟网卡）」（game_id=0）：无应用配置可跟随，客户端显式声明 supernode
+        // （服务端建房收敛据此前置校验，不满足直接拒绝建房而非降级）
+        if (gnGameVal() === '0') return 'supernode';
+        // 「不指定（通用端口隧道）」：同样无应用配置，跟随全局走老隧道链路（端口行显示，需填端口）
+        if (gnGameVal() === '0-tunnel') return '';
+        // 本地游戏（local_ 前缀，仅本机库）：服务端无应用配置，等同「不指定（虚拟网卡）」声明 supernode
+        if (gnGameVal().indexOf('local_') === 0) return 'supernode';
+        var gm = window.GSGameMeta ? window.GSGameMeta(gnGameVal()) : null;
         return (gm && gm.netMode) || '';
     }
     function gnSyncNetMode() {
@@ -856,7 +1007,7 @@
         // 服务端前置不满足自动降级隧道时，房间仍有可用端口（防 host_port=0 断链）
         elPortRow.style.display = nm === 'supernode' ? 'none' : '';
         if (nm === 'supernode') {
-            var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+            var gm = (gnGameVal() !== '0' && window.GSGameMeta) ? window.GSGameMeta(gnGameVal()) : null;
             var reg = (gm && gm.portsTCP && gm.portsTCP.length) ? gm.portsTCP : (gm && gm.portsUDP ? gm.portsUDP : []);
             if (reg.length && !elPort.value.trim()) elPort.value = String(reg[0]);
         }
@@ -871,6 +1022,19 @@
         } else {
             gnTapInstalled = false;
         }
+        // 启动路径行：仅「不指定（虚拟网卡）」显示（应用房走游戏库启动链，无需本机路径）
+        var noApp = gnGameVal() === '0';
+        elExePathRow.style.display = noApp ? '' : 'none';
+        if (noApp) gnSyncExePath();
+    }
+    // 本机游戏启动路径记忆（localStorage 各机各自记忆，不下发房主、不同步服务端）
+    function gnLocalGamePath() {
+        try { return localStorage.getItem('gn_local_game_path') || ''; } catch (e) { return ''; }
+    }
+    function gnSyncExePath() {
+        var p = gnLocalGamePath();
+        elExePath.textContent = p || T('（可选）未设置，开局时将询问选择');
+        elExePathClear.style.display = p ? '' : 'none';
     }
     function doCreate() {
         if (busy.create) return;
@@ -888,14 +1052,19 @@
         var pass = (elPass.value || '').trim();
         var m = modeOf(elInMode.value);
         var maxN = parseInt(elInMax.value || '', 10);
-        var gid = parseInt(elInGame.value || '0', 10) || 0;
+        var gid = parseInt(gnGameVal() || '0', 10) || 0;
         var gname = '';
         if (gid) { games.forEach(function (x) { if (x.id === gid) gname = x.name; }); }
+        else {
+            // 本地游戏房（game_id=0）：房间名带出本地游戏名（仅作展示，加入方仍按本机路径启动）
+            var lit = gnGameSelItem();
+            if (lit && lit.local) gname = lit.name;
+        }
         // 联机方式路由（客户端侧前置引导，服务端建房收敛仍有兜底）：
         // supernode 应用：TAP 未装 → 引导设置页；虚拟 IP 未分配 → 提示服务端池未启用/耗尽
         var gmNet = gnNetModeSel();
         if (gmNet === 'supernode') {
-            if (!gnTapInstalled) { toast(T('该应用为虚拟网卡联机，请先到 设置 → 网络 启用虚拟网卡驱动')); return; }
+            if (!gnTapInstalled) { toast(T('虚拟网卡联机需先启用虚拟网卡驱动，请到 设置 → 网络 启用')); return; }
             // vip_ip 存主窗口 localStorage（socket.js 登录响应写入，跨窗口共享；sessionStorage 按窗隔离读不到）
             var vipIp = '';
             try { vipIp = localStorage.getItem('vip_ip') || ''; } catch (eVip) { }
@@ -908,10 +1077,18 @@
         if (!isFinite(maxN) || maxN < 2) { toast(T('房间人数至少 2 人')); return; }
         myName = name;
         lockBusy('create'); renderLobby();
-        var ok = send({
+        var payload = {
             action: 'create', name: name, pass: pass, host_port: port, mode: MODE_TUNNEL, group_id: 0,
             game_mode: m.k, max_players: maxN, game_id: gid, game_name: gname
-        });
+        };
+        if (!gid && gmNet === 'supernode') {
+            // 仅「不指定（虚拟网卡）」显式声明 supernode（服务端前置校验不满足直接拒绝建房）；
+            // 虚拟网卡无端口概念，host_port 置 0（隧道端口链不参与）。
+            // 「不指定（通用端口隧道）」不声明：走老隧道链路（host_port 取端口输入，服务端默认 tunnel）
+            payload.net_mode = 'supernode';
+            payload.host_port = 0;
+        }
+        var ok = send(payload);
         if (ok) createClose();
         else { unlockBusy(); renderLobby(); }
     }
@@ -956,7 +1133,7 @@
         if (!api || typeof api.gnDetectPort !== 'function') { toast(T('当前环境不支持自动探测，请手动填写端口')); return; }
         // 功能二期：游戏登记端口先预填（游戏未启动时探测不到监听端口——登记端口即答案，不空转）；
         // 随后运行时探测实测合并：探测命中已填端口不重复处理（同端口只记一次），新端口提示追加
-        var gm = (elInGame.value !== '0' && window.GSGameMeta) ? window.GSGameMeta(elInGame.value) : null;
+        var gm = (gnGameVal() !== '0' && window.GSGameMeta) ? window.GSGameMeta(gnGameVal()) : null;
         var reg = (gm && gm.portsTCP && gm.portsTCP.length) ? gm.portsTCP
             : (gm && gm.portsUDP ? gm.portsUDP : []);
         if (reg.length && !elPort.value.trim()) {
@@ -1014,6 +1191,46 @@
             }
         };
         if (!gid) {
+            // 「不指定（虚拟网卡）」房（supernode）：无端口隧道链——跳过端口确认与探测，
+            // 开局即按本机记忆路径启动游戏（各机自记忆，不下发房主）；组网由 p2p-host 承担
+            if (my.mode === 'supernode') {
+                var launchLocal = function (path) {
+                    if (path && window.desktop && typeof window.desktop.localGameLaunch === 'function') {
+                        window.desktop.localGameLaunch({ id: 'gn_room', exe: path }).then(function (r) {
+                            if (r && r.ok) toast(T('游戏已启动：虚拟网卡组网中，进入游戏局域网列表即可互见'));
+                            else toast(T('游戏启动失败（{r}），可手动启动游戏后进入局域网列表', { r: (r && (r.error || r.err)) || '' }));
+                        });
+                    } else {
+                        toast(T('虚拟网卡组网中，进入游戏局域网列表即可互见'));
+                    }
+                    sendStart(0);
+                };
+                // 启动路径优先级：选中本地游戏直接用其库内 exe（建房会话内选择态仍在）；
+                // 否则用本机记忆路径（页面刷新后选择态丢失/普通「不指定」房均回落此链）
+                var selIt = gnGameSelItem();
+                var exe = (selIt && selIt.local && selIt.exe) ? selIt.exe : gnLocalGamePath();
+                if (exe) { launchLocal(exe); return; }
+                if (window.desktop && typeof window.desktop.gameChooseGameExe === 'function') {
+                    confirmBox(T('启动游戏'),
+                        T('未设置本机游戏启动路径。现在选择游戏主程序并启动？（选择后本机会记住，下次自动启动）'),
+                        T('选择并启动'), function () {
+                            window.desktop.gameChooseGameExe().then(function (rr) {
+                                if (rr && !rr.canceled && rr.filePath) {
+                                    try { localStorage.setItem('gn_local_game_path', rr.filePath); } catch (e) { }
+                                    launchLocal(rr.filePath);
+                                } else {
+                                    toast(T('已取消选择，直接开局（可手动启动游戏）'));
+                                    sendStart(0);
+                                }
+                            });
+                        });
+                    return;
+                }
+                // WEB 端无启动能力：直接开局，提示手动启动
+                toast(T('虚拟网卡组网中，请手动启动游戏，进入游戏局域网列表即可互见'));
+                sendStart(0);
+                return;
+            }
             // 无游戏关联：没有可执行信息，无法自动启动游戏——原实现静默按端口直接开局，
             // 实测反馈「点了开始游戏游戏没启动」（建房时下拉停在「不指定」即触发）。
             // 现明示原因由房主决定：仍可按端口直接开局（手动开游戏走通用隧道），或取消后重新建房关联游戏
@@ -1329,7 +1546,8 @@
     // 开局（status→playing 且 mode=supernode）：收集参数启动（vip_ip/mac/mask 登录回执 localStorage +
     // comm/comm_key/supernodes 房间信令）；对局结束/退房/关房（teardownLocal）停止。单实例主进程归口
     // 注意：p2p-host -s 是子网掩码（n2n v2 此 fork 语义），非 MAC——MAC 由 TAP 驱动自取
-    function gnP2pStart() {
+    // quiet：静默成功分支（准备按钮/中途加入兜底触发用——已运行时不再重复 toast，失败仍告知）
+    function gnP2pStart(quiet) {
         if (!window.desktop || typeof window.desktop.p2pHostStart !== 'function') {
             toast(T('当前客户端不支持虚拟网卡启动器，请联系升级'));
             return;
@@ -1347,7 +1565,7 @@
             supernodes: my.supernodes || []
         }).then(function (r) {
             if (r && r.ok) {
-                toast(r.already ? T('虚拟网卡组网已在运行') : T('p2p-host 已启动，虚拟网卡组网中…'));
+                if (!quiet) toast(r.already ? T('虚拟网卡组网已在运行') : T('p2p-host 已启动，虚拟网卡组网中…'));
             } else {
                 toast(T((r && r.err) || 'p2p-host 启动失败'));
             }
@@ -1356,6 +1574,37 @@
     function gnP2pStop(reason) {
         if (!window.desktop || typeof window.desktop.p2pHostStop !== 'function') return;
         try { window.desktop.p2pHostStop(reason || 'room-teardown'); } catch (e) { }
+    }
+    // 加入方启动引导（开局过渡 / 中途加入共用，每房一次 _launchAsked）：按房类型引导启动本机游戏。
+    // 「不指定（虚拟网卡）」房按本机记忆路径询问（无记忆仅提示）；关联游戏房走游戏库启动链（云存档/启动参数同源）
+    function gnJoinerLaunchAsk() {
+        if (my._launchAsked) return;
+        my._launchAsked = true;
+        if (!(my.game_id || 0)) {
+            // 不指定房分两种联机方式：虚拟网卡（局域网列表互见）/ 通用端口隧道（隧道已自动连接）——文案随方式区分
+            var vnic = my.mode === 'supernode';
+            var lp = gnLocalGamePath();
+            if (lp && window.desktop && typeof window.desktop.localGameLaunch === 'function') {
+                confirmBox(T('启动游戏'),
+                    vnic ? T('对局进行中，是否立即启动本机游戏？进入游戏局域网列表即可互见。')
+                         : T('对局进行中，是否立即启动本机游戏并加入？'),
+                    T('启动'), function () {
+                    window.desktop.localGameLaunch({ id: 'gn_room', exe: lp });
+                });
+            } else {
+                toast(vnic ? T('虚拟网卡组网中，请启动游戏后进入局域网列表即可互见')
+                           : T('端口隧道已连接，请启动游戏后即可加入对局'));
+            }
+            return;
+        }
+        var gl = my.game_name || '';
+        if (typeof window.GSLaunchGame === 'function' && window.GSGameMeta && window.GSGameMeta(my.game_id)) {
+            confirmBox(T('启动游戏'), T('对局进行中，是否立即启动《{g}》并加入？', { g: gl }), T('启动'), function () {
+                window.GSLaunchGame(my.game_id);
+            });
+        } else {
+            toast(T('请先在游戏中心安装并启动《{g}》', { g: gl }));
+        }
     }
     // p2p-host 状态推送（全窗广播）：对局中异常退出即时告知（正常收口由 teardownLocal 触发不重复提示）
     if (window.desktop && typeof window.desktop.onP2pHostStatus === 'function') {
@@ -1412,6 +1661,11 @@
                         my._installHinted = true;
                         toast(T('该房间游戏《{g}》未安装，请先在游戏中心获取并安装', { g: my.game_name || '' }));
                     }
+                    // 中途加入（加入确认时房间已在游戏中）：不自动组网——以「准备」为明确加入意图，
+                    // 点准备时才拉起 p2p-host 并引导启动游戏（见准备按钮）；此处仅提示操作路径防迷路
+                    if (!my.isHost && my.status === 'playing' && my.mode === 'supernode') {
+                        toast(T('对局进行中：点击「准备」后将自动组网并引导启动游戏'));
+                    }
                     if (visible && curPage === 'room') renderRoom();
                     break;
                 }
@@ -1448,19 +1702,9 @@
                     // 虚拟网卡路线：supernode 房间开局即启动 p2p-host（房主与成员各自拉起，组网参数随信令已到位；
                     // 启动器异常由 onP2pHostStatus 推送告知。启动器另案落地前此路径即真实启动链）
                     if (my.mode === 'supernode') gnP2pStart();
-                    // 功能二期：关联游戏库游戏时询问启动（加入方本机未运行该游戏则弹自绘确认；
-                    // 未入库/WEB 端无启动能力则仅提示手动启动；每房间只询问一次）
-                    if (!my.isHost && (my.game_id || 0) > 0 && !my._launchAsked) {
-                        my._launchAsked = true;
-                        var gl = my.game_name || '';
-                        if (typeof window.GSLaunchGame === 'function' && window.GSGameMeta && window.GSGameMeta(my.game_id)) {
-                            confirmBox(T('启动游戏'), T('房主已开局《{g}》，是否立即启动游戏并加入？', { g: gl }), T('启动'), function () {
-                                window.GSLaunchGame(my.game_id);
-                            });
-                        } else {
-                            toast(T('请先在游戏中心安装并启动《{g}》', { g: gl }));
-                        }
-                    }
+                    // 加入方启动引导（不指定房按本机记忆路径 / 游戏房走游戏库启动链；每房一次）。
+                    // 中途加入的等价引导在 join-confirm 分支（状态已是 playing 时此处不会触发）
+                    if (!my.isHost && (my.mode === 'supernode' || (my.game_id || 0) > 0)) gnJoinerLaunchAsk();
                 }
                 gnBroadcastEnsure(); // 功能二期方案 B：成员/人数变化同步到局域网发现广播包（幂等更新）
                 if (visible && curPage === 'room') renderRoom();
@@ -1669,11 +1913,20 @@
         elMatchBtn.addEventListener('click', doMatch);
         elJoinBtn.addEventListener('click', doJoin);
         elInMode.addEventListener('change', syncMaxOptions);
-        // 功能二期：建房选择联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填；
-        // 未运行则提示手动填写或点自动探测，游戏启动后探测会命中）
-        elInGame.addEventListener('change', function () {
-            gnSyncNetMode(); // 联机方式随应用带出（supernode 时隐藏端口行并刷新 TAP 前置状态）
-            if (elInGame.value !== '0' && gnNetModeSel() !== 'supernode') portDetect();
+        // 联机游戏自绘选择器：开合/搜索过滤/点选/点外部关闭（替代原生 select 的 change 监听）
+        elGselToggle.addEventListener('click', function () { gnGselOpen(); });
+        elGselSearch.addEventListener('input', gnGselRender);
+        elGselSearch.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { e.stopPropagation(); gnGselOpen(false); } // 防冒泡触发外层弹窗关闭
+            else if (e.key === 'Enter') e.preventDefault(); // 搜索即时生效，回车无其他语义
+        });
+        elGselList.addEventListener('click', function (e) {
+            var row = e.target && e.target.closest ? e.target.closest('.gn-gsel-item') : null;
+            if (row && row.getAttribute('data-val')) gnGselSelect(row.getAttribute('data-val'));
+        });
+        document.addEventListener('click', function (e) {
+            if (elGselPanel.classList.contains('hidden')) return;
+            if (!elGsel.contains(e.target)) gnGselOpen(false);
         });
         elRoomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
         elJoinPass.addEventListener('keydown', function (e) { if (e.key === 'Enter') doJoin(); });
@@ -1705,6 +1958,19 @@
         elInviteSearch.addEventListener('keydown', function (e) { if (e.key === 'Escape') inviteClose(); });
         // 端口自动探测（自绘候选浮层：点条目填入 + 点遮罩/取消关闭 + Esc 关闭）
         elPortDetect.addEventListener('click', portDetect);
+        // 启动路径浏览/清空（「不指定（虚拟网卡）」房的本机游戏 exe 记忆，开局自动启动）
+        elExePathPick.addEventListener('click', function () {
+            if (!window.desktop || typeof window.desktop.gameChooseGameExe !== 'function') { toast(T('请在 PC 客户端中操作')); return; }
+            window.desktop.gameChooseGameExe().then(function (rr) {
+                if (!rr || rr.canceled || !rr.filePath) return;
+                try { localStorage.setItem('gn_local_game_path', rr.filePath); } catch (e) { }
+                gnSyncExePath();
+            });
+        });
+        elExePathClear.addEventListener('click', function () {
+            try { localStorage.removeItem('gn_local_game_path'); } catch (e) { }
+            gnSyncExePath();
+        });
         elPortCancel.addEventListener('click', portClose);
         elPortMask.addEventListener('click', function (e) { if (e.target === elPortMask) portClose(); });
         document.addEventListener('keydown', function (e) {

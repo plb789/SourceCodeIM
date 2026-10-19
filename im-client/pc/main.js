@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=18'); // v18：头像悬停卡片新增虚拟 IP 行（v17：联机大厅页签）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=24'); // v24：中途加入改为点「准备」后组网+启动引导（加入确认仅提示路径）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1736,6 +1736,51 @@ function gameStartBroadcast(info) {
         if (!wins[i].isDestroyed()) wins[i].webContents.send('game-start', info);
     }
 }
+
+// ===== 本地游戏（用户手动添加的非商店游戏，Steam「添加非 Steam 游戏」同款）=====
+// 存储在渲染层 localStorage（本机数据不上服务端）；主进程仅承担启动与运行态追踪。
+// id 为渲染层分配的 'local_' 前缀键，与商店数字 gameId 命名空间隔离
+var runningLocalGames = new Map(); // localId → { proc, startedAt }
+
+// 启动本地游戏：{id, exe, args?} → spawn 分离进程（与 game:launch 同口径 detached/unref）
+ipcMain.handle('local-game:launch', function (event, data) {
+    try {
+        var id = String((data && data.id) || '').trim();
+        var exe = String((data && data.exe) || '').trim();
+        if (!id || !exe) return { ok: false, error: '参数缺失' };
+        if (!fs.existsSync(exe)) return { ok: false, error: '游戏主程序不存在，请重新选择' };
+        var args = (data && Array.isArray(data.args)) ? data.args.map(String) : [];
+        var child = spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: true });
+        var startedAt = Date.now();
+        var info = { id: id, startedAt: startedAt };
+        child.once('exit', function () {
+            runningLocalGames.delete(id);
+            localGameBroadcast('local-game-exit', info);
+        });
+        child.once('error', function () { runningLocalGames.delete(id); });
+        child.unref();
+        runningLocalGames.set(id, { proc: child, startedAt: startedAt });
+        localGameBroadcast('local-game-start', info);
+        return { ok: true, startedAt: startedAt };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '启动失败' };
+    }
+});
+// 本地游戏运行态查询（页面加载/刷新后恢复"运行中"）→ [{id, startedAt}]
+ipcMain.handle('local-game:running-list', function () {
+    var out = [];
+    runningLocalGames.forEach(function (v, id) {
+        out.push({ id: id, startedAt: (v && v.startedAt) || 0 });
+    });
+    return out;
+});
+function localGameBroadcast(channel, info) {
+    var wins = BrowserWindow.getAllWindows();
+    for (var i = 0; i < wins.length; i++) {
+        if (!wins[i].isDestroyed()) wins[i].webContents.send(channel, info);
+    }
+}
+
 // 游戏进程退出事件广播全部窗口（商店页订阅结算游玩时长；仅发主窗口会使独立商店窗口收不到）
 // 与 game-download:progress 的全窗口广播同口径
 function gameExitBroadcast(info) {

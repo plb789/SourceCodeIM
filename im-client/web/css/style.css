@@ -19386,6 +19386,8 @@ html.m .settings-view {
 }
 .gn-form-row input:focus { border-color: var(--primary); }
 .gn-form-row input::placeholder { color: var(--text-light); }
+/* 建房弹窗启动路径行（不指定（虚拟网卡））：路径长时尾部省略，主题色跟随变量 */
+.gn-exepath { flex: 1; min-width: 0; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gn-form-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .gn-hint { margin-top: 8px; font-size: 12px; color: var(--text-light); line-height: 1.5; }
 .gn-btn {
@@ -19826,6 +19828,52 @@ html.m .message .message-bubble.bubble-game-invite { width: 200px; }
     outline: none;
 }
 .gn-create-form .gn-form-row select:focus { border-color: var(--primary); }
+/* 联机游戏自绘选择器（搜索 + 图标 + 限高滚动，替代原生 select；全部颜色走主题变量） */
+.gn-gsel { position: relative; flex: 1; min-width: 0; }
+.gn-gsel-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 8px;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);
+    font-family: inherit; font-size: 13px; cursor: pointer; outline: none; transition: border-color 0.15s;
+}
+.gn-gsel-toggle:hover, .gn-gsel.open .gn-gsel-toggle { border-color: var(--primary); }
+.gn-gsel-ico {
+    width: 20px; height: 20px; flex-shrink: 0; border-radius: 4px; overflow: hidden;
+    background: var(--border); display: flex; align-items: center; justify-content: center;
+}
+.gn-gsel-ico img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gn-gsel-ph { font-size: 11px; color: var(--text-light); line-height: 1; }
+.gn-gsel-name, .gn-gsel-nm {
+    flex: 1; min-width: 0; text-align: left; font-size: 13px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gn-gsel-caret {
+    width: 0; height: 0; flex-shrink: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid var(--text-light); transition: transform 0.15s;
+}
+.gn-gsel.open .gn-gsel-caret { transform: rotate(180deg); }
+.gn-gsel-panel {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 80;
+    padding: 6px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-bg); box-shadow: var(--shadow-pop);
+}
+.gn-gsel-panel.hidden { display: none; }
+.gn-gsel-search {
+    width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text); font-size: 13px; outline: none;
+}
+.gn-gsel-search:focus { border-color: var(--primary); }
+.gn-gsel-search::placeholder { color: var(--text-light); }
+.gn-gsel-list { max-height: 236px; overflow-y: auto; margin-top: 4px; }
+.gn-gsel-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.gn-gsel-item:hover { background: var(--hover); }
+.gn-gsel-item.sel .gn-gsel-nm { color: var(--primary); font-weight: 600; }
+.gn-gsel-ck { flex-shrink: 0; font-size: 12px; color: var(--primary); }
+.gn-gsel-tag {
+    flex-shrink: 0; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px;
+    font-size: 10px; line-height: 1.4; color: var(--text-light);
+}
+.gn-gsel-empty { padding: 18px 0; text-align: center; font-size: 13px; color: var(--text-light); }
+.gn-gsel-hint { padding: 8px 8px 4px; font-size: 12px; color: var(--text-light); }
 .gn-create-dialog .gn-hint { padding: 0 18px; }
 /* 窄窗自适应（游戏中心窗最小宽度 960，仍保三栏可读；以下为极端收窄兜底） */
 @media (max-width: 900px) {

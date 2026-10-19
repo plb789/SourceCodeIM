@@ -147,6 +147,9 @@ type gnRoomSignal struct {
 	// （追加去重，不覆盖管理端手工登记），下次建房选游戏预填直接可用
 	OnlinePortsTCP []int `json:"online_ports_tcp,omitempty"`
 	OnlinePortsUDP []int `json:"online_ports_udp,omitempty"`
+	// 不指定游戏房联机方式声明（"supernode"=虚拟网卡；仅 game_id=0 时生效，指定游戏房仍随应用
+	// NetMode 收敛——不指定房无应用配置可跟随，需客户端显式声明；空=跟随全局现状，零回归）
+	NetMode string `json:"net_mode,omitempty"`
 }
 
 // gnLobbySignal 112 上行信令体（大厅层：在场心跳 + 大厅聊天）
@@ -740,11 +743,30 @@ func (s *Server) gnHandleCreate(c *Client, p *gnRoomSignal) {
 			gameNetMode = strings.TrimSpace(g.NetMode)
 		}
 	}
+	// supernodes 全局兜底链：游戏级为空时回落 vip_pool.supernodes 全局候选池
+	// （不指定游戏房没有游戏级配置，只能走此链；游戏级已配置时保持原口径）
+	if gameSupernodes == "" && store.VipPool != nil && len(store.VipPool.Supernodes) > 0 {
+		gameSupernodes = strings.Join(store.VipPool.Supernodes, ",")
+	}
 
 	// 接入形态收敛（应用级 NetMode 覆盖优先，全局收敛兜底）：
-	//   supernode 方式前置校验（vip_pool 启用 + 应用配置 supernode 节点），不满足自动降级隧道 + WARN；
-	//   tunnel 方式强制隧道；空=跟随全局（以房间声明为准，受全局 mode 收敛，一期主线 tunnel）
+	//   supernode 方式前置校验（vip_pool 启用 + supernode 节点非空），不满足自动降级隧道 + WARN；
+	//   tunnel 方式强制隧道；空=跟随全局（以房间声明为准，受全局 mode 收敛，一期主线 tunnel）；
+	//   不指定游戏房（game_id=0）由客户端 net_mode 声明驱动：supernode 声明前置不满足直接拒绝
+	//   ——无端口可降级（降级必断链），客户端建房前置已拦截，此处为服务端兜底收敛
 	mode := "tunnel"
+	declaredSupernode := p.GameID == 0 && strings.TrimSpace(p.NetMode) == "supernode"
+	if declaredSupernode {
+		if !s.cfg.VipPool.Enabled || gameSupernodes == "" {
+			s.sendError(c, "虚拟网卡联机不可用（虚拟 IP 池未启用或 supernode 未配置），请联系管理员")
+			return
+		}
+		if c.vipIP == "" {
+			s.sendError(c, "虚拟 IP 未分配（虚拟 IP 池已耗尽或未启用），请重新登录后重试")
+			return
+		}
+		gameNetMode = "supernode"
+	}
 	switch gameNetMode {
 	case "supernode":
 		if s.cfg.VipPool.Enabled && gameSupernodes != "" {

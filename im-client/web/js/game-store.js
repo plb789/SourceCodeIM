@@ -40,6 +40,8 @@
         taskByGame: {},    // gameId → 进行中的 taskId（详情/库按钮态联动）
         sessions: {},      // gameId → 本次启动时间戳（onGameExit 结算游玩时长）
         running: {},       // gameId → 运行中（Steam 同款）：进程已启动未退出，侧栏行/启动按钮显示"运行中"
+        localLib: {},      // localId('local_xx') → {id,name,exe,addedAt,lastPlayAt}：本机添加的本地游戏（localStorage 持久化，不同步服务端）
+        localRunning: {},  // localId → 启动时间戳（本地游戏运行中；local-game-start/exit 全窗广播维护）
         saveSync: {},      // gameId → 'push'|'pull' 云存档同步中（Steam 同款）：侧栏行显示"存档中/读档中"
         badgeEls: {},      // gameId → 商店卡片徽标元素（进度事件原地刷新徽标，避免整格重绘闪烁）
         balance: null,     // 当前用户积分余额（GET /api/game/points；获取/退库随响应实时刷新）
@@ -1607,14 +1609,61 @@
         });
     }
 
+    // ==================== 本地游戏（用户手动添加的非商店游戏；本机 localStorage 持久化，不同步服务端） ====================
+    // id 统一 'local_' 前缀与商店数字 gameId 隔离；不参与云存档/成就/服务端联机发现
+    function localGamesLoad() {
+        state.localLib = {};
+        try {
+            var arr = JSON.parse(localStorage.getItem('gs_local_games') || '[]') || [];
+            arr.forEach(function (it) {
+                if (it && it.id && it.exe) state.localLib[it.id] = it;
+            });
+        } catch (e) { }
+    }
+    function localGamesSave() {
+        var arr = [];
+        for (var id in state.localLib) arr.push(state.localLib[id]);
+        try { localStorage.setItem('gs_local_games', JSON.stringify(arr)); } catch (e) { }
+    }
+    function localNameFromExe(exe) {
+        var base = String(exe || '').split(/[\\/]/).pop() || '';
+        return base.replace(/\.exe$/i, '') || '本地游戏';
+    }
+    function localGameAdd(exe) {
+        var id = 'local_' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+        state.localLib[id] = { id: id, name: localNameFromExe(exe), exe: exe, addedAt: Math.floor(Date.now() / 1000), lastPlayAt: 0 };
+        localGamesSave();
+        return id;
+    }
+    // 最近游玩排序键归一：服务端 last_play_at 是日期串，本地条目是秒时间戳——统一折算毫秒比较
+    function playKey(it) {
+        var v = it.lib && it.lib.last_play_at;
+        if (!v) return 0;
+        if (typeof v === 'number') return v > 1e12 ? v : v * 1000;
+        var ms = Date.parse(String(v).replace(/-/g, '/'));
+        return isNaN(ms) ? 0 : ms;
+    }
+    // 本地游戏伪 lib 条目缓存（lid → 条目；引用稳定——libPager.sameAs 逐引用比较，
+    // 每次新建对象会导致同数据源判定失效、轻刷新退化为全量重建闪烁）
+    var localItemCache = {};
+    function localPseudoItem(lo) {
+        var it = localItemCache[lo.id];
+        if (!it) {
+            it = { lib: { game_id: lo.id, state: 3 }, game: { name: lo.name }, localGame: lo };
+            localItemCache[lo.id] = it;
+        }
+        it.lib.last_play_at = lo.lastPlayAt || 0; // 游玩时间/名称可变：原地更新保引用
+        it.game.name = lo.name;
+        return it;
+    }
+
     // 库条目收集与排序（最近游玩倒序）：renderLibrary 与侧栏搜索过滤共用
     function libItemsSorted() {
         var items = [];
         for (var gid in state.lib) items.push(state.lib[gid]);
-        items.sort(function (a, b) {
-            var la = (a.lib && a.lib.last_play_at) || '', lb = (b.lib && b.lib.last_play_at) || '';
-            return String(lb).localeCompare(String(la));
-        });
+        // 本地游戏合并入库列表（伪 lib 条目：state=3 已安装，localGame 携带本机数据供行/页渲染分支）
+        for (var lid in state.localLib) items.push(localPseudoItem(state.localLib[lid]));
+        items.sort(function (a, b) { return playKey(b) - playKey(a); });
         return items;
     }
 
@@ -1627,6 +1676,22 @@
     // 侧栏行构建（分批器回调）：缩略图 + 名称 + 安装中环形进度 + 状态，_gid 供选中态行级切换
     function buildLibRow(item) {
         var lib = item.lib || {};
+        // 本地游戏行：占位封面 + 名称 + 运行中/本地游戏状态；右键走本地菜单（启动/属性/移除）
+        if (item.localGame) {
+            var lo = item.localGame;
+            var lrun = !!state.localRunning[lo.id];
+            var lrow = el('div', 'gs-lib-srow' + (state.libSel === lo.id ? ' active' : '') + (lrun ? ' running' : ''));
+            lrow._gid = lo.id;
+            lrow.appendChild(buildCover('', lo.name, 'gs-lib-sthumb'));
+            lrow.appendChild(el('div', 'gs-lib-sname', lo.name));
+            lrow.appendChild(el('div', 'gs-lib-sstate', lrun ? '运行中' : '本地游戏'));
+            lrow.addEventListener('click', function () { state.libSel = lo.id; renderLibrary(); });
+            lrow.addEventListener('contextmenu', function (e) {
+                e.preventDefault(); e.stopPropagation();
+                openLocalCtxMenu(lo.id, e.clientX, e.clientY);
+            });
+            return lrow;
+        }
         var g = item.game || state.games[lib.game_id] || {};
         var running = !!state.running[lib.game_id];
         var sync = saveSyncLabel(lib.game_id);
@@ -1724,7 +1789,8 @@
     libPager.refreshActive = function (sel) {
         var rows = $('gsLibSideRows').querySelectorAll('.gs-lib-srow');
         for (var i = 0; i < rows.length; i++) {
-            rows[i].classList.toggle('active', Number(rows[i]._gid) === Number(sel));
+            // String 归一比较：商店行 _gid 是数字，本地游戏行是 'local_xx' 字符串
+            rows[i].classList.toggle('active', String(rows[i]._gid) === String(sel));
         }
     };
 
@@ -1762,7 +1828,7 @@
             main.appendChild(el('div', 'gs-empty', '请先在主界面登录后再使用游戏中心'));
             return;
         }
-        if (state.libSel && !state.lib[state.libSel]) state.libSel = 0; // 选中项已被移出库：回退
+        if (state.libSel && !state.lib[state.libSel] && !state.localLib[state.libSel]) state.libSel = 0; // 选中项已被移出库：回退
         $('gsLibSideTitle').textContent = '库（' + items.length + '）';
         if (libPager.sameAs(items)) {
             libPager.refreshActive(state.libSel); // 同数据源仅选中态变化：行级高亮切换不重建
@@ -1796,12 +1862,17 @@
                 bd.appendChild(el('div', 'gs-lib-rmeta', lib.last_play_at ? '最近游玩 ' + fmtDate(lib.last_play_at) : '尚未游玩'));
                 card.appendChild(bd);
                 card.addEventListener('click', function () { state.libSel = lib.game_id; renderLibrary(); });
-                // 悬停气泡（Steam 同款）：媒体轮播预览 + 游戏时间；移出即隐（与商店卡同口径 150ms 延迟）
-                card.addEventListener('mouseenter', function () { showHover(g, card, { media: true, lib: lib }); });
-                card.addEventListener('mouseleave', hideHover);
+                // 悬停气泡（Steam 同款）：媒体轮播预览 + 游戏时间；移出即隐（与商店卡同口径 150ms 延迟）。
+                // 本地游戏无商店媒体/评测数据：跳过气泡挂载
+                if (!it.localGame) {
+                    card.addEventListener('mouseenter', function () { showHover(g, card, { media: true, lib: lib }); });
+                    card.addEventListener('mouseleave', hideHover);
+                }
                 recentRow.appendChild(card);
             });
             main.appendChild(recentRow);
+        } else if (state.localLib[state.libSel]) {
+            main.appendChild(buildLocalGamePage(state.localLib[state.libSel])); // 本地游戏精简详情页
         } else {
             main.appendChild(buildLibGamePage(state.libSel));
         }
@@ -1816,7 +1887,16 @@
         var sel = state.libSel;
         // 未选中游戏（最近游戏列表）或选中项已移出库：主区整页重建；但侧栏行常被复用
         // （renderLibrary 的同数据源分支不重建行），故重建后必须显式同步侧栏状态文字与环形进度
-        if (!sel || !state.lib[sel]) { renderLibrary(); syncLibSideState(); return; }
+        if (!sel || (!state.lib[sel] && !state.localLib[sel])) { renderLibrary(); syncLibSideState(); return; }
+        // 本地游戏选中页：无下载/公告/元信息动态帧，仅侧栏状态 + 启动按钮原地轻同步（防整页重建闪烁）
+        if (state.localLib[sel]) {
+            var litems = libItemsSorted();
+            if (!libPager.sameAs(litems)) { renderLibrary(); return; }
+            libPager.refreshActive(sel);
+            syncLibSideState();
+            syncLocalGamePage(sel);
+            return;
+        }
         var items = libItemsSorted();
         if (!libPager.sameAs(items)) { renderLibrary(); return; } // 侧栏行集合变化：需重建行 DOM（重建时自行初始化）
         libPager.refreshActive(sel);
@@ -1828,6 +1908,15 @@
     function syncLibSideState() {
         var rows = $('gsLibSideRows').querySelectorAll('.gs-lib-srow');
         for (var i = 0; i < rows.length; i++) {
+            // 本地游戏行：运行态独立维护（无安装态/云存档概念），文案未变不触发文本节点替换
+            if (typeof rows[i]._gid === 'string' && rows[i]._gid.indexOf('local_') === 0) {
+                var lrun = !!state.localRunning[rows[i]._gid];
+                rows[i].classList.toggle('running', lrun);
+                rows[i].classList.toggle('cloudsync', false);
+                var lst = rows[i].querySelector('.gs-lib-sstate');
+                if (lst) { var ltxt = lrun ? '运行中' : '本地游戏'; if (lst.textContent !== ltxt) lst.textContent = ltxt; }
+                continue;
+            }
             var item = state.lib[rows[i]._gid];
             var running = !!state.running[rows[i]._gid];
             var sync = saveSyncLabel(rows[i]._gid);
@@ -2058,6 +2147,44 @@
         wrap.appendChild(feedBody);
         loadLibFeed(gid, feedBody);
         return wrap;
+    }
+
+    // 本地游戏详情页（库右侧主区）：无商店动态/评测，仅启动操作 + 路径/时间信息（Steam 非 Steam 游戏同款精简页）
+    function buildLocalGamePage(lo) {
+        var wrap = el('div', 'gs-lib-game gs-lib-local');
+        wrap._lid = lo.id; // 供 syncLocalGamePage 归属判定（原位更新防闪烁）
+        var hero = el('div', 'gs-lib-hero');
+        hero.appendChild(buildCover('', lo.name, 'gs-lib-hero-img'));
+        hero.appendChild(el('div', 'gs-lib-hero-name', lo.name || '本地游戏'));
+        wrap.appendChild(hero);
+        var toprow = el('div', 'gs-lib-toprow');
+        var btns = el('div', 'gs-lib-actions-row');
+        var running = !!state.localRunning[lo.id];
+        var launchBtn = mkBtn(running ? '运行中' : '启动游戏', 'primary', function () { launchLocalGame(lo.id); });
+        launchBtn.disabled = running;
+        btns.appendChild(launchBtn);
+        btns.appendChild(mkBtn('属性', '', function () { openLocalPropModal(lo.id); }));
+        btns.appendChild(mkBtn('从库中移除', 'danger', function () { removeLocalGame(lo.id); }));
+        toprow.appendChild(btns);
+        var meta = el('div', 'gs-lib-meta');
+        meta.appendChild(el('span', '', lo.lastPlayAt ? '最近游玩 ' + fmtDate(lo.lastPlayAt) : '尚未游玩'));
+        toprow.appendChild(meta);
+        wrap.appendChild(toprow);
+        wrap.appendChild(el('div', 'gs-lib-path', '启动路径：' + lo.exe));
+        wrap.appendChild(el('div', 'gs-lib-local-note', '本地游戏仅保存在本机，不同步到其他设备；联机请到「联机」页创建「不指定（虚拟网卡）」房间。'));
+        return wrap;
+    }
+
+    // 本地游戏页启动按钮原地同步（运行态翻转轻更新，不重建主区 DOM；页面对不上时静默跳过）
+    function syncLocalGamePage(lid) {
+        var page = $('gsLibMain').querySelector('.gs-lib-local');
+        if (!page || page._lid !== lid) return;
+        var btn = page.querySelector('.gs-lib-actions-row .gs-btn');
+        if (!btn) return;
+        var running = !!state.localRunning[lid];
+        var txt = running ? '运行中' : '启动游戏';
+        if (btn.textContent !== txt) btn.textContent = txt;
+        btn.disabled = running;
     }
 
     // 动态数据懒加载：GET /api/game/{id}（含 notices+versions），按游戏缓存避免重复请求
@@ -2319,6 +2446,19 @@
             if (list.length) ensurePlayHeartbeat();
             refreshViews();
         }).catch(function () { /* 查询失败静默：下次启动/退出事件仍会校正 */ });
+    }
+
+    // 恢复主进程侧本地游戏运行态（页面刷新/新开窗口场景；gn_room=联机房间启动的本机游戏不归属库条目）
+    function pullLocalRunning() {
+        if (!DESKTOP || !DESKTOP.localGameRunningList) return;
+        Promise.resolve(DESKTOP.localGameRunningList()).then(function (list) {
+            if (!Array.isArray(list)) return;
+            list.forEach(function (x) {
+                if (!x || !x.id || x.id === 'gn_room') return;
+                state.localRunning[x.id] = x.startedAt || Date.now();
+            });
+            syncLibSideState();
+        }).catch(function () { /* 查询失败静默：启动/退出事件仍会校正 */ });
     }
 
     // 任务操作：暂停/继续/取消（乐观更新本地态并同步服务端库状态；进度事件随后校正）
@@ -2857,6 +2997,78 @@
         items.push({ label: '移出游戏库', danger: true, onClick: function () { removeFromLib(gid); } });
         openCtxMenu(x, y, items);
     }
+
+    // ==================== 本地游戏操作（启动/右键菜单/属性弹窗/移除） ====================
+    // 启动本地游戏（主进程 local-game:launch 归口；运行态经 local-game-start/exit 全窗广播维护）
+    function launchLocalGame(lid) {
+        var lo = state.localLib[lid];
+        if (!lo) return;
+        if (state.localRunning[lid]) { toast('游戏正在运行中'); return; }
+        if (!DESKTOP || !DESKTOP.localGameLaunch) { toast('请在 PC 客户端中操作'); return; }
+        DESKTOP.localGameLaunch({ id: lid, exe: lo.exe }).then(function (r) {
+            if (r && r.ok) {
+                lo.lastPlayAt = Math.floor(Date.now() / 1000);
+                localGamesSave();
+            } else {
+                toast((r && r.error) || '启动失败');
+            }
+        }).catch(function () { toast('启动失败'); });
+    }
+
+    // 本地游戏右键菜单（自绘，禁系统菜单）：启动 / 属性（改名+换路径）/ 从库中移除
+    function openLocalCtxMenu(lid, x, y) {
+        var items = [];
+        if (state.localRunning[lid]) items.push({ label: '运行中', onClick: function () { toast('游戏正在运行中'); } });
+        else items.push({ label: '启动游戏', onClick: function () { launchLocalGame(lid); } });
+        items.push({ label: '属性', onClick: function () { openLocalPropModal(lid); } });
+        items.push({ label: '从库中移除', danger: true, onClick: function () { removeLocalGame(lid); } });
+        openCtxMenu(x, y, items);
+    }
+
+    // 从库中移除本地游戏（仅移除库内条目，不删本机文件；二次确认走自绘弹窗）
+    function removeLocalGame(lid) {
+        var lo = state.localLib[lid];
+        if (!lo) return;
+        showConfirm('从库中移除', '将「' + (lo.name || '') + '」从游戏库移除？仅移除库内条目，不会删除本机游戏文件。', '移除', function () {
+            delete state.localLib[lid];
+            delete localItemCache[lid]; // 伪条目缓存同步清除（防悬挂引用）
+            localGamesSave();
+            if (state.libSel === lid) state.libSel = 0;
+            renderLibrary();
+        }, true);
+    }
+
+    // 本地游戏属性弹窗：改名 + 更换启动路径（浏览走主进程文件选择对话框）
+    var lpropId = '', lpropExe = '';
+    function openLocalPropModal(lid) {
+        var lo = state.localLib[lid];
+        if (!lo) return;
+        lpropId = lid; lpropExe = lo.exe;
+        $('gsLPropName').value = lo.name || '';
+        $('gsLPropExe').textContent = lpropExe;
+        $('gsLocalPropMask').classList.remove('hidden');
+    }
+    $('gsLPropName').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
+    $('gsLPropPick').addEventListener('click', function () {
+        if (!DESKTOP || !DESKTOP.gameChooseGameExe) { toast('请在 PC 客户端中操作'); return; }
+        DESKTOP.gameChooseGameExe().then(function (rr) {
+            if (!rr || rr.canceled || !rr.filePath) return;
+            lpropExe = rr.filePath;
+            $('gsLPropExe').textContent = lpropExe;
+        });
+    });
+    $('gsLPropCancel').addEventListener('click', function () { $('gsLocalPropMask').classList.add('hidden'); });
+    $('gsLPropSave').addEventListener('click', function () {
+        var lo = state.localLib[lpropId];
+        if (!lo) { $('gsLocalPropMask').classList.add('hidden'); return; }
+        var nm = ($('gsLPropName').value || '').trim();
+        if (!nm) { toast('请填写游戏名称'); return; }
+        if (!lpropExe) { toast('请选择游戏主程序'); return; }
+        lo.name = nm; lo.exe = lpropExe;
+        localGamesSave();
+        $('gsLocalPropMask').classList.add('hidden');
+        renderLibrary();
+    });
 
     // ==================== 游戏属性弹窗（自定义启动参数 + 主程序路径覆盖） ====================
     var propGid = 0, propExe = '';
@@ -4361,6 +4573,26 @@
         });
     }
 
+    // 本地游戏进程启动/退出：多窗口同步"运行中"（local-game-* 全窗广播；gn_room=联机房间启动不归属库条目）
+    if (DESKTOP && DESKTOP.onLocalGameStart) {
+        DESKTOP.onLocalGameStart(function (info) {
+            var lid = info && info.id;
+            if (!lid || lid === 'gn_room') return;
+            state.localRunning[lid] = (info && info.startedAt) || Date.now();
+            syncLibSideState();
+            if (state.libSel === lid) syncLocalGamePage(lid);
+        });
+    }
+    if (DESKTOP && DESKTOP.onLocalGameExit) {
+        DESKTOP.onLocalGameExit(function (info) {
+            var lid = info && info.id;
+            if (!lid || lid === 'gn_room') return;
+            delete state.localRunning[lid];
+            syncLibSideState();
+            if (state.libSel === lid) syncLocalGamePage(lid);
+        });
+    }
+
     // ==================== 顶部工具栏 / 导航 / 快捷键 ====================
     // 关闭：Electron 独立窗口无专用关闭 IPC，window.close() 兜底；浏览器返回来源页
     function closePage() {
@@ -4541,6 +4773,18 @@
         } catch (err) { out = []; }
         return out;
     };
+    // 本地游戏列表导出（联机建房选择器用）：仅本机 localStorage 数据（local_ 前缀 id），不上服务端
+    window.GSLocalGames = function () {
+        var out = [];
+        try {
+            Object.keys(state.localLib).forEach(function (lid) {
+                var lo = state.localLib[lid];
+                if (!lo || !lo.exe) return;
+                out.push({ id: lid, name: lo.name || lid, exe: lo.exe });
+            });
+        } catch (err) { out = []; }
+        return out;
+    };
     // 功能二期：联机房间启动联动归口——gn-room.js「开始游戏」/加入方开局确认框复用游戏库启动链路
     // （launchGame 内含云存档同步/启动参数/needExe 引导，与游戏库「启动」按钮完全同源）。
     // onResult(ok, info) 可选回调：启动最终结果（成功/失败原因）回传调用方——联机开局据此决定
@@ -4582,6 +4826,21 @@
     }
 
     showView('store');
+    localGamesLoad(); // 本地游戏入 state（库列表合并渲染依赖；仅本机 localStorage，不发网络请求）
+    // 「＋ 添加本地游戏」入口（Steam「添加非 Steam 游戏」同款；仅 PC 端，WEB 端无进程启动能力隐藏）
+    (function () {
+        var addBtn = $('gsLibAddLocal');
+        if (!addBtn) return;
+        if (!DESKTOP || !DESKTOP.gameChooseGameExe || !DESKTOP.localGameLaunch) { addBtn.style.display = 'none'; return; }
+        addBtn.addEventListener('click', function () {
+            DESKTOP.gameChooseGameExe().then(function (rr) {
+                if (!rr || rr.canceled || !rr.filePath) return;
+                var lid = localGameAdd(rr.filePath);
+                renderLibrary();
+                toast('已添加「' + (state.localLib[lid] ? state.localLib[lid].name : '') + '」到游戏库');
+            });
+        });
+    })();
     // 先拉商店布局配置（管理端改后用户下次打开即热生效），再加载商店列表渲染
     api('GET', '/api/game/config').then(function (res) {
         if (res.ok && res.data) {
@@ -4600,5 +4859,6 @@
     if (IN_ELECTRON) {
         pullStatus();  // 恢复主进程侧下载任务（页面刷新场景）
         pullRunning(); // 恢复主进程侧"正在运行的游戏"（页面刷新/新开窗口场景）
+        pullLocalRunning(); // 恢复主进程侧本地游戏运行态（页面刷新场景）
     }
 })();

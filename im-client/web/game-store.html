@@ -2087,6 +2087,54 @@
         /* 云存档同步中（Steam 库列表同款）：状态字用主题强调色，区别于绿色"运行中"、灰色安装态 */
         .gs-lib-srow.cloudsync .gs-lib-sstate { color: var(--primary); }
 
+        /* 添加本地游戏入口（侧栏底部；悬浮底色+主题色图标文字，与库行同构） */
+        .gs-lib-addlocal {
+            margin: 6px 4px 8px;
+            padding: 7px 8px;
+            border-radius: 6px;
+            border: 1px dashed var(--border);
+            font-size: 12px;
+            color: var(--text-light);
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .gs-lib-addlocal:hover { background: var(--hover); color: var(--primary); border-color: var(--primary); }
+
+        /* 本地游戏属性弹窗表单行（名称/启动路径） */
+        .gs-lprop-row { margin-top: 14px; display: flex; align-items: center; gap: 8px; text-align: left; }
+
+        .gs-lprop-row label { width: 56px; flex-shrink: 0; font-size: 12.5px; color: var(--text-light); }
+
+        .gs-lprop-row input {
+            flex: 1;
+            min-width: 0;
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            outline: none;
+        }
+
+        .gs-lprop-row input:focus { border-color: var(--primary); }
+
+        .gs-lprop-exe {
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 本地游戏详情页说明行（库右侧主区底部提示） */
+        .gs-lib-local-note { margin-top: 18px; font-size: 12px; color: var(--text-light); line-height: 1.6; }
+
         /* 侧栏安装中环形进度（自绘 SVG，跟随主题色）：底轨 + 主题色进度弧 + 居中百分比。
            dashoffset 由 JS 按 received/total 推进；stroke-linecap 圆头 + 少量过渡让进度平滑 */
         .gs-lib-sprog { width: 26px; height: 26px; flex-shrink: 0; }
@@ -3077,6 +3125,8 @@
                         </div>
                         <div class="gs-lib-side-title" id="gsLibSideTitle">库</div>
                         <div id="gsLibSideRows"></div>
+                        <!-- 添加本地游戏入口（Steam「添加非 Steam 游戏」同款；仅 PC 端显示，WEB 端 JS 隐藏） -->
+                        <div class="gs-lib-addlocal" id="gsLibAddLocal">＋ 添加本地游戏</div>
                     </div>
                     <div class="gs-lib-main gs-scroll" id="gsLibMain"></div>
                 </div>
@@ -3119,6 +3169,19 @@
             <div class="gs-modal-btns">
                 <button class="gs-btn" id="gsModalCancel">取消</button>
                 <button class="gs-btn primary" id="gsModalOk">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 本地游戏属性弹窗（自绘，禁系统弹窗）：改名 + 更换启动路径 -->
+    <div class="gs-modal-mask hidden" id="gsLocalPropMask">
+        <div class="gs-modal">
+            <div class="gs-modal-title">本地游戏属性</div>
+            <div class="gs-lprop-row"><label>名称</label><input id="gsLPropName" maxlength="40" spellcheck="false"></div>
+            <div class="gs-lprop-row"><label>启动路径</label><div class="gs-lprop-exe" id="gsLPropExe"></div><button class="gs-btn" id="gsLPropPick">浏览…</button></div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsLPropCancel">取消</button>
+                <button class="gs-btn primary" id="gsLPropSave">保存</button>
             </div>
         </div>
     </div>
@@ -3365,12 +3428,12 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=55"></script>
+    <script src="js/game-store.js?v=57"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>
     <script src="js/gn-net.js?v=1.1"></script>
-    <script src="js/gn-room.js?v=2.9"></script>
+    <script src="js/gn-room.js?v=3.5"></script>
     <!-- 全局自绘 tooltip（接管原生 title 提示，与主窗口一致） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>
