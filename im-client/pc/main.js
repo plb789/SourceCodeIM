@@ -2101,7 +2101,8 @@ function p2pHostStart(params) {
     // 2 万端口空间冲突概率极低，edge 绑定失败会退出并广播 running=false，重开局即换新口
     var mgmtPort = 40000 + Math.floor(Math.random() * 20000);
     var args = ['-r', '-a', ip, '-s', mask, '-c', comm, '-k', key, '-E',
-                '-t', String(mgmtPort), '-i', String(P2P_HOLEPUNCH_INTERVAL)];
+                '-t', String(mgmtPort), '-i', String(P2P_HOLEPUNCH_INTERVAL),
+                '-j', '1']; // -j：开局即把 TAP 接口跃点设为 1（p2p-host 内 netsh，提权链下静默成功）
     sns.forEach(function (s) { args.push('-l'); args.push(s); });
     try {
         var proc = require('child_process').spawn(exe, args, { windowsHide: true, cwd: path.dirname(exe) });

@@ -2476,6 +2476,7 @@ int real_main(int argc, char* argv[])
     int     opt;// getopt_long()选项
     int     local_port = 0 /* 本地端口，初始值为0（任意端口） */;
     int     mgmt_port = N2N_EDGE_MGMT_PORT; /* 管理端口，默认为5644 */
+    int     iface_metric = 0; /* -j <n>: set TAP interface metric after IP config; 0 = skip */
     char    tuntap_dev_name[N2N_IFNAMSIZ] = "edge0";// TUN/TAP设备名称，默认为"edge0"
     char    ip_mode[N2N_IF_MODE_SIZE] = "static";// IP模式，默认为"static"（静态）
     char    ip_addr[N2N_NETMASK_STR_SIZE] = "";// IP地址，默认为空
@@ -2583,7 +2584,7 @@ int real_main(int argc, char* argv[])
     optarg = NULL;// 初始化getopt_long()函数的选项参数
     while((opt = getopt_long(effectiveargc,
                              effectiveargv,
-                             "K:k:a:bc:Eu:g:m:M:s:d:l:L:i:p:fvhrt:R", long_options, NULL)) != EOF)// 循环读取命令行参数
+                             "K:k:a:bc:Eu:g:j:m:M:s:d:l:L:i:p:fvhrt:R", long_options, NULL)) != EOF) /* parse cmd line */
     {
         switch (opt)// 根据命令行参数的选项进行处理
         {
@@ -2732,6 +2733,12 @@ int real_main(int argc, char* argv[])
             break;
         }
 
+        case 'j': /* interface metric for the TAP adapter */
+        {
+            iface_metric = atoi(optarg);
+            break;
+        }
+            break;
         case 's': /* Subnet Mask */
         {
             if (0 != got_s)
@@ -2843,6 +2850,18 @@ int real_main(int argc, char* argv[])
 
     if(tuntap_open(&(eee.device), tuntap_dev_name, ip_mode, ip_addr, netmask, device_mac, mtu) < 0)
         return(-1);
+#ifdef WIN32
+    if ( iface_metric > 0 ) { /* -j <n>: prefer TAP route (netsh needs admin; silent-skip on failure) */
+        char metriccmd[256];
+        snprintf( metriccmd, sizeof(metriccmd),
+                  "netsh interface ipv4 set interface \"%s\" metric=%d",
+                  eee.device.ifName, iface_metric );
+        if ( system(metriccmd) == 0 )
+            traceEvent( TRACE_NORMAL, "interface metric set to %d (%s)", iface_metric, eee.device.ifName );
+        else
+            traceEvent( TRACE_ERROR, "failed to set interface metric %d", iface_metric );
+    }
+#endif
 
 #ifndef WIN32
     if ( (userid != 0) || (groupid != 0 ) ) {
