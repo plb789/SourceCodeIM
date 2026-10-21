@@ -51,6 +51,12 @@ const BINARY_EXTS = ['docx', 'docm', 'xlsx', 'xlsm', 'pptx', 'pptm', 'pdf', 'png
 let pathGuard = null;  // main.js 注入 agentExecutor.safePath（browser-manager 不可反向 require，防循环依赖）
 let wsRootFn = null;   // main.js 注入 agentExecutor.userRoot（用户主工作区根，LSP 跳转 rel 口径归一用）
 let taskBackupApi = null; // 阶段九十七：main.js 注入任务备份查询/保留/撤销（agentExecutor.getTaskBackup 等）
+
+// ===== 阶段二百九十三：browser_* Agent 工具族开关（MCP 面板内置行切换，main.js 经 setAgentToolsEnabled 归口） =====
+// 只门控 Agent 工具执行入口，不影响浏览器面板/预览等其他用途；注入侧联动由渲染层 msg 67 browser_enabled 上报归口
+let agentToolsEnabled = true;
+function setAgentToolsEnabled(v) { agentToolsEnabled = !!v; return agentToolsEnabled; }
+function isAgentToolsEnabled() { return agentToolsEnabled; }
 let viewerUrl = '';    // main.js 注入 SERVER_URL + 'file-viewer.html'
 
 // 配置文件：userData/agent_browser.json（{cdp_port: 0}；0=关闭 CDP 端口）
@@ -1429,6 +1435,8 @@ module.exports = {
     findFileTabInfo: findFileTabInfo, // 阶段一百五十九：file 标签信息归口（debug IPC 目标解析）
     setTabCloseHook: setTabCloseHook, // 阶段一百五十九：file 标签关闭联动钩子（调试会话随关停）
     agentExecute: agentExecute,
+    setAgentToolsEnabled: setAgentToolsEnabled, // 阶段二百九十三：browser_* Agent 工具族开关（MCP 面板内置行）
+    isAgentToolsEnabled: isAgentToolsEnabled,
     statePush: statePush,
     notifySandboxReady: notifySandboxReady, // 阶段一百三十八：沙箱就绪通知（main.js 登录后 sandbox:get 时调）——重试待恢复文件标签
     lspHover: lspHover,         // 阶段一百三十：LSP 悬停归口（main.js ipcMain 'lsp:hover' 调用）

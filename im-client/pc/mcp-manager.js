@@ -88,7 +88,9 @@ function nodeCmdResolved(command) {
 const PROTOCOL_VERSION = '2024-11-05';
 const CLIENT_INFO = { name: 'im-pc-client', version: '1.0.0' };
 const TOOL_OUT_MAX_CHARS = 8000;          // 与 agent-executor 命令输出限额一致
-const CALL_TIMEOUT_MS = 90 * 1000;        // 单工具调用超时（服务端挂起等待=服务端工具超时+15s，需小于其值）
+const CALL_TIMEOUT_MS = 60 * 1000;        // 单工具调用超时——必须小于服务端挂起窗口（工具超时 60s+余量 15s=75s）：
+                                          // 原值 90s > 75s，本地调用挂死时错误回传永远迟到 15s，服务端已先判
+                                          // "PC 离线或回传超时"误导模型；改为 60s 后本地错误提前 15s 送回，AI 可自纠
 const INIT_TIMEOUT_MS = 15 * 1000;        // 握手超时
 const UV_INIT_TIMEOUT_MS = 120 * 1000;    // 阶段一百一十九：uv 系握手超时（uvx 首次拉起插件需联网下载 Python 包+创建临时环境，远超 15s）
 const RUNTIME_INSTALL_WAIT_MS = 180 * 1000; // 便携 Node 自动安装等待上限（下载 35MB + 解压，3 分钟兜底）

@@ -2604,6 +2604,24 @@ ipcMain.handle('mcp:builtin-toggle', function (event, payload) {
     return { ok: true, enabled: enabled };
 });
 
+// ===== 阶段二百九十三：内置浏览器工具开关（MCP 面板第二内置行；mcp store 的 __browser 键归口） =====
+// 只门控 browser_* Agent 工具族（渲染层经 msg 67 browser_enabled 字段上报服务端，注入 schema 联动），
+// 不影响 browser-manager 的预览等其他用途，也无 MCP 会话可重建
+function mcpBrowserEnabledLoad() {
+    const store = mcpStoreLoad();
+    return !(store.__browser && store.__browser.enabled === false);
+}
+browserManager.setAgentToolsEnabled(mcpBrowserEnabledLoad());
+
+ipcMain.handle('mcp:browser-toggle', function (event, payload) {
+    const enabled = !!(payload && payload.enabled);
+    const store = mcpStoreLoad();
+    store.__browser = { enabled: enabled };
+    mcpStoreSave(store);
+    browserManager.setAgentToolsEnabled(enabled);
+    return { ok: true, enabled: enabled };
+});
+
 // ===== 阶段一百一十六：项目级 MCP（TRAE 同款）——自动从项目根目录 .im/agent_mcp.json 加载 =====
 
 // 项目级 MCP 配置文件路径归口：<工作区根>/.im/agent_mcp.json（工作区根 = 用户自选工作区，未配置回退默认）
@@ -2713,7 +2731,7 @@ ipcMain.handle('mcp:project-toggle', function (event, payload) {
 ipcMain.handle('mcp:get', function (event, username) {
     const store = mcpStoreLoad();
     const rec = store[String(username || '')];
-    return { servers: (rec && rec.servers) || [], builtinEnabled: mcpBuiltinEnabledLoad() };
+    return { servers: (rec && rec.servers) || [], builtinEnabled: mcpBuiltinEnabledLoad(), browserEnabled: mcpBrowserEnabledLoad() };
 });
 
 // 保存配置（归一化落盘 + 重建常驻会话；工具清单上报由渲染层在会话就绪后经 msg 67 归口）

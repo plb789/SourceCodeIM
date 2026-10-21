@@ -2830,21 +2830,161 @@ function davSpawnMount(letter) {
     try { if (fs.existsSync(DAV_LOG) && fs.statSync(DAV_LOG).size > 5 * 1024 * 1024) fs.unlinkSync(DAV_LOG); } catch (e) { }
     var proc = require('child_process').spawn(davBundledFile('rclone.exe'), davMountArgs(letter), { windowsHide: true, stdio: 'ignore' });
     proc.on('exit', function () { if (davProc === proc) davProc = null; });
+    davPidWrite(proc.pid); // pid 落盘：跨重启孤儿清理（davTaskProcKill 命令行核对防误杀）
     davProc = proc;
     return proc;
 }
 function davStopProc() {
+    if (davProc && davProc.external) {
+        // 计划任务型进程非子进程（无 kill 句柄）：pid 文件定点杀，异步不阻塞调用方
+        davTaskProcKill();
+        davTaskCleanup();
+        davProc = null;
+        return;
+    }
     if (davProc && davProc.exitCode === null) { try { davProc.kill(); } catch (e) { } }
     davProc = null;
 }
 function davSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+// ===== 提权自适应：客户端经 elevator.exe 提权运行时，rclone 直启以提权令牌挂载——
+// UAC 拆分登录会话后，盘符符号链接落在提权会话设备表，桌面资源管理器（普通令牌）不可见，
+// 而客户端自身（提权态）探测恒成功，致"提示挂载成功却看不到盘符"（实测 2026-10-21：
+// 提权实例挂 J: 资源管理器不可见，普通实例同参数可见）。
+// 解法：提权态改经计划任务以用户交互令牌（LogonType Interactive + RunLevel Limited）
+// 拉起 rclone，盘符落回桌面会话；普通态维持直启（原路径零回归）。
+var DAV_TASK_NAME = 'IMClientDavMount';
+var DAV_PID_FILE = path.join(DAV_DIR, 'mount.pid');
+var davElevatedP = null; // 提权检测结果缓存（Promise，客户端运行期提权态不变）
+function davIsElevated() {
+    if (!davElevatedP) {
+        // whoami /groups csv 内 Mandatory Label SID：High=12288/System=16384/Protected=20480 为提权态
+        davElevatedP = execFileP('whoami', ['/groups', '/fo', 'csv'], { windowsHide: true, timeout: 10000 })
+            .then(function (r) { return /S-1-16-(12288|16384|20480)\b/.test(String((r && r.stdout) || '')); })
+            .catch(function () { return false; });
+    }
+    return davElevatedP;
+}
+function davPidWrite(pid) {
+    try { fs.mkdirSync(DAV_DIR, { recursive: true }); fs.writeFileSync(DAV_PID_FILE, String(pid), 'utf8'); } catch (e) { }
+}
+function davTaskPidRead() {
+    try { var pid = parseInt(String(fs.readFileSync(DAV_PID_FILE, 'utf8')).trim(), 10); return pid > 0 ? pid : 0; } catch (e) { return 0; }
+}
+function davPidFileClear() { try { fs.unlinkSync(DAV_PID_FILE); } catch (e) { } }
+// pid 存活探测（tasklist 过滤查询；提权/非提权上下文均可查询，映像名核对防 pid 复用误判）
+async function davPidAlive(pid) {
+    try {
+        var r = await execFileP('tasklist', ['/FI', 'PID eq ' + pid, '/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 10000 });
+        return String((r && r.stdout) || '').toLowerCase().indexOf('rclone.exe') >= 0;
+    } catch (e) { return false; }
+}
+// pid 发现（任务型专用）：vbs Run 隐藏窗口方式拿不到子进程 pid，按命令行特征（含 davmount
+// 配置目录，davTaskProcKill 同签名核对）WMI 检索 rclone pid；挂载前已清场单实例，无歧义
+async function davTaskPidDiscover() {
+    try {
+        var r = await execFileP('powershell.exe', ['-NoProfile', '-Command',
+            "(Get-CimInstance Win32_Process -Filter \"Name='rclone.exe'\" | Where-Object { $_.CommandLine -like '*" + DAV_DIR + "*' } | Select-Object -First 1).ProcessId"],
+            { windowsHide: true, timeout: 15000 });
+        var pid = parseInt(String((r && r.stdout) || '').trim(), 10);
+        return pid > 0 ? pid : 0;
+    } catch (e) { return 0; }
+}
+// pid 定点清理（映像名 + 命令行含 davmount 双重核对，防 pid 复用误杀无关进程）；
+// 直启与任务型统一走 pid 文件追踪，兼收跨重启孤儿 rclone 清理之效
+async function davTaskProcKill() {
+    var pid = davTaskPidRead();
+    if (pid) {
+        try {
+            var r = await execFileP('powershell.exe', ['-NoProfile', '-Command',
+                '(Get-CimInstance Win32_Process -Filter "ProcessId=' + pid + '").CommandLine'],
+                { windowsHide: true, timeout: 15000 });
+            var cl = String((r && r.stdout) || '');
+            if (cl.indexOf('rclone') >= 0 && cl.toLowerCase().indexOf('davmount') >= 0)
+                await execFileP('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true, timeout: 10000 });
+        } catch (e) { }
+    }
+    davPidFileClear();
+}
+function davTaskCleanup() {
+    davPidFileClear();
+    execFileP('schtasks', ['/Delete', '/TN', DAV_TASK_NAME, '/F'], { windowsHide: true, timeout: 10000 }).catch(function () { });
+}
+// 计划任务拉起（提权态专用）：Interactive+Limited 令牌即用户桌面会话令牌，盘符对其可见；
+// 无触发器纯手动启动，不落 schtasks /TR 261 字符限制；任务进程为 wscript（GUI 子系统自身无窗口），
+// vbs 内 Run(cmd, 0, True) 以 SW_HIDE 隐藏窗口运行 rclone 并驻留等待——rclone 存活期即挂载存活期；
+// pid 由主进程 WMI 发现后落盘（Run 无 Exec 的 .ProcessId，Exec 会给控制台程序开可见窗口故弃用）
+async function davSpawnMountTask(letter) {
+    fs.mkdirSync(DAV_DIR, { recursive: true });
+    // vbs 启动脚本（UTF-16LE 带 BOM：wscript 按 UTF-16 解析，volname 中文安全；
+    // Run 第 2 参 0 = SW_HIDE 隐藏控制台，第 3 参 True = 驻留等待 rclone 退出）
+    var qt = function (t) { return /[\s"]/.test(t) ? '"' + t + '"' : t; };
+    var cmdline = qt(davBundledFile('rclone.exe')) + ' ' + davMountArgs(letter).map(qt).join(' ');
+    var vbs = 'Set sh = CreateObject("WScript.Shell")\r\n'
+        + 'sh.Run "' + cmdline.replace(/"/g, '""') + '", 0, True\r\n';
+    fs.writeFileSync(path.join(DAV_DIR, 'mount-task.vbs'), '\ufeff' + vbs, 'utf16le');
+    davPidFileClear();
+    // 任务注册/启动经 -EncodedCommand（UTF-16LE Base64，路径含空格/中文均安全，同 winfsp.msi 安装成熟模式）；
+    // Register/Start 用 -ErrorAction Stop 保证失败显式上抛（回退直启），不静默假成功
+    var psq = function (p) { return "'" + String(p).replace(/'/g, "''") + "'"; };
+    var wscript = path.join(process.env.windir || 'C:\\Windows', 'System32', 'wscript.exe');
+    var inner = 'Stop-ScheduledTask -TaskName ' + psq(DAV_TASK_NAME) + ' -ErrorAction SilentlyContinue; '
+        + 'Unregister-ScheduledTask -TaskName ' + psq(DAV_TASK_NAME) + ' -Confirm:$false -ErrorAction SilentlyContinue; '
+        + '$a = New-ScheduledTaskAction -Execute ' + psq(wscript) + ' -Argument ' + psq('"' + path.join(DAV_DIR, 'mount-task.vbs') + '"') + '; '
+        + '$p = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\\$env:USERNAME" -LogonType Interactive -RunLevel Limited; '
+        + '$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; '
+        + 'Register-ScheduledTask -TaskName ' + psq(DAV_TASK_NAME) + ' -Action $a -Principal $p -Settings $s -ErrorAction Stop | Out-Null; '
+        + 'Start-ScheduledTask -TaskName ' + psq(DAV_TASK_NAME) + ' -ErrorAction Stop';
+    var enc = Buffer.from(inner, 'utf16le').toString('base64');
+    await execFileP('powershell.exe', ['-NoProfile', '-EncodedCommand', enc], { windowsHide: true, timeout: 30000 });
+}
+
+// 退出同步卸载（will-quit 回调不被 Electron 等待，必须 execFileSync 同步收口，防"客户端已退盘符残留"——
+// Windows 子进程不随父退出，rclone 直启/任务型均会变孤儿）：
+// 直启子进程直接 kill；任务型经 pid 文件定位，tasklist 映像名 + WMI 命令行双重核对后强杀并删任务；
+// 断电/强杀等 before-quit 不触发的场景，残留孤儿由下次启动自动重挂前置的 davTaskProcKill 兜底清理。
+// kill 时 vfs-write-back 1s 窗口内未回传的脏文件留本地缓存，重挂后由 rclone 自愈续传
+function davUnmountSync() {
+    try {
+        if (davProc && !davProc.external && davProc.exitCode === null) { try { davProc.kill(); } catch (e) { } }
+        var pid = davTaskPidRead();
+        if (pid) {
+            var ours = false;
+            try {
+                var tl = require('child_process').execFileSync('tasklist', ['/FI', 'PID eq ' + pid, '/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 10000 }).toString().toLowerCase();
+                if (tl.indexOf('rclone.exe') >= 0) {
+                    try {
+                        var cl = require('child_process').execFileSync('powershell.exe', ['-NoProfile', '-Command',
+                            '(Get-CimInstance Win32_Process -Filter "ProcessId=' + pid + '").CommandLine'],
+                            { windowsHide: true, timeout: 15000 }).toString().toLowerCase();
+                        ours = cl.indexOf('rclone') >= 0 && cl.indexOf('davmount') >= 0;
+                    } catch (e) { }
+                }
+            } catch (e) { }
+            if (ours) { try { require('child_process').execFileSync('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true, timeout: 10000 }); } catch (e) { } }
+        }
+        davPidFileClear();
+        try { require('child_process').execFileSync('schtasks', ['/Delete', '/TN', DAV_TASK_NAME, '/F'], { windowsHide: true, timeout: 10000 }); } catch (e) { }
+        davProc = null;
+    } catch (e) { }
+}
+
 // 状态查询（设置页轮询归口）：WinFsp/引擎/盘符占用/当前挂载态一次回齐（异步：winfsp 检测走 execFile）
 ipcMain.handle('dav:status', async function () {
     var st = davStateLoad();
     var mounted = false, letter = '';
-    if (davProc && davProc.exitCode === null) {
+    if (davProc && davProc.external) {
+        // 计划任务型：rclone 存活即挂载存活（任务进程非子进程无 exitCode；提权会话内
+        // accessSync 探测不到桌面盘符不可用）；pid 未回填视为启动中
+        if (davProc.pid > 0 && await davPidAlive(davProc.pid)) { mounted = true; letter = st.letter; }
+        else if (davProc.pid > 0) { davProc = null; davTaskCleanup(); }
+    } else if (davProc && davProc.exitCode === null) {
         try { fs.accessSync((st.letter || '?') + ':\\'); mounted = true; letter = st.letter; } catch (e) { davProc = null; }
+    } else if (!davProc && st.letter) {
+        // 跨重启恢复显示：pid 文件追踪的 rclone 仍在（客户端重启/崩溃后进程句柄丢失），
+        // 依 pid 存活回显挂载态，避免"盘符实际在而设置页显示未挂载"
+        var pid = davTaskPidRead();
+        if (pid && await davPidAlive(pid)) { mounted = true; letter = st.letter; }
     }
     return {
         ok: true,
@@ -2868,11 +3008,37 @@ ipcMain.handle('dav:mount', async function (event, data) {
         if (!/^[D-Z]$/.test(letter)) return { ok: false, err: '盘符无效' };
         if (!fs.existsSync(davBundledFile('rclone.exe'))) return { ok: false, err: '挂载引擎缺失（rclone.exe）' };
         if (!await davWinfspInstalled()) return { ok: false, err: 'WinFsp 运行时未安装' };
+        await davTaskProcKill(); // 清理上次会话遗留（pid 文件跨启动追踪；孤儿 rclone 占盘符致重挂失败）
         var wasOurs = davStateLoad().letter || '';
         davStopProc();
         if (wasOurs) await davSleep(800); // 旧实例卸载收尾（WinFsp 盘符释放异步）
         try { fs.accessSync(letter + ':\\'); return { ok: false, err: '盘符 ' + letter + ' 已被占用' }; } catch (e) { }
         davConfWrite(username, davPassword);
+        // 提权态走计划任务（盘符落用户桌面会话，资源管理器可见）：成功判定不能用 accessSync
+        // （提权会话内探测不到盘符），改 pid 文件回填 + 进程存活；任务路径失败回退直启保底
+        if (await davIsElevated()) {
+            var taskOk = false;
+            try { await davSpawnMountTask(letter); taskOk = true; } catch (e) { }
+            if (taskOk) {
+                var taskDeadline = Date.now() + 12000; // 任务拉起 + rclone 建联一般 2~4 秒
+                while (Date.now() < taskDeadline) {
+                    var tpid = davTaskPidRead() || await davTaskPidDiscover();
+                    if (tpid) {
+                        davPidWrite(tpid); // 发现即落盘（vbs Run 方式不写 pid）
+                        if (await davPidAlive(tpid)) {
+                            davProc = { external: true, pid: tpid };
+                            davStateSave({ enabled: true, letter: letter, username: username });
+                            return { ok: true, letter: letter };
+                        }
+                        davProc = null; davTaskCleanup();
+                        return { ok: false, err: '挂载失败（引擎启动异常，详见 rclone 日志）' };
+                    }
+                    await davSleep(300);
+                }
+                davProc = null; davTaskCleanup();
+                return { ok: false, err: '挂载超时，请检查服务端可达' };
+            }
+        }
         var proc = davSpawnMount(letter);
         var deadline = Date.now() + 12000; // WinFsp 建联一般 1~3 秒；超时兜底
         while (Date.now() < deadline) {
@@ -2890,10 +3056,19 @@ ipcMain.handle('dav:mount', async function (event, data) {
 // 卸载（kill 即卸载，WinFsp 进程退出自动清理盘符——本机已实测盘符即时消失）
 ipcMain.handle('dav:unmount', async function () {
     var st = davStateLoad();
-    davStopProc();
-    var deadline = Date.now() + 5000;
-    while (st.letter && Date.now() < deadline) {
-        try { fs.accessSync(st.letter + ':\\'); await davSleep(250); } catch (e) { break; }
+    if (davProc && davProc.external) {
+        // 计划任务型：pid 定点杀 rclone（wscript 随 rclone 退出，任务实例自行结束）；
+        // 提权会话内探测不到桌面盘符，释放确认以固定收尾延时替代
+        await davTaskProcKill();
+        davProc = null;
+        davTaskCleanup();
+        await davSleep(800);
+    } else {
+        davStopProc();
+        var deadline = Date.now() + 5000;
+        while (st.letter && Date.now() < deadline) {
+            try { fs.accessSync(st.letter + ':\\'); await davSleep(250); } catch (e) { break; }
+        }
     }
     st.enabled = false;
     davStateSave(st);
@@ -2927,7 +3102,20 @@ setTimeout(async function () {
     var st = davStateLoad();
     if (!st.enabled || !st.letter || !fs.existsSync(DAV_CONF)) return;
     if (!(await davWinfspInstalled()) || !fs.existsSync(davBundledFile('rclone.exe'))) return;
+    await davTaskProcKill(); // 先清崩溃/强杀残留孤儿（pid 文件追踪；健康场景无 pid 文件零开销，提权/普通态统一兜底）
     try { fs.accessSync(st.letter + ':\\'); return; } catch (e) { } // 盘符已被他占则放弃
+    if (await davIsElevated()) {
+        // 提权态走计划任务（盘符落用户桌面会话）；失败回退直启（保底客户端内可用）
+        try { await davSpawnMountTask(st.letter); } catch (e) { davSpawnMount(st.letter); return; }
+        var deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+            var pid = davTaskPidRead() || await davTaskPidDiscover();
+            if (pid) { davPidWrite(pid); if (await davPidAlive(pid)) davProc = { external: true, pid: pid }; break; }
+            await davSleep(300);
+        }
+        console.log('[网盘挂载] 已自动恢复(计划任务):', st.letter + ':', '(' + (st.username || '') + ')');
+        return;
+    }
     davSpawnMount(st.letter);
     console.log('[网盘挂载] 已自动恢复:', st.letter + ':', '(' + (st.username || '') + ')');
 }, 5000);
@@ -3929,6 +4117,24 @@ ipcMain.handle('mcp:builtin-toggle', function (event, payload) {
     return { ok: true, enabled: enabled };
 });
 
+// ===== 阶段二百九十三：内置浏览器工具开关（MCP 面板第二内置行；mcp store 的 __browser 键归口） =====
+// 只门控 browser_* Agent 工具族（渲染层经 msg 67 browser_enabled 字段上报服务端，注入 schema 联动），
+// 不影响 browser-manager 的预览等其他用途，也无 MCP 会话可重建
+function mcpBrowserEnabledLoad() {
+    const store = mcpStoreLoad();
+    return !(store.__browser && store.__browser.enabled === false);
+}
+browserManager.setAgentToolsEnabled(mcpBrowserEnabledLoad());
+
+ipcMain.handle('mcp:browser-toggle', function (event, payload) {
+    const enabled = !!(payload && payload.enabled);
+    const store = mcpStoreLoad();
+    store.__browser = { enabled: enabled };
+    mcpStoreSave(store);
+    browserManager.setAgentToolsEnabled(enabled);
+    return { ok: true, enabled: enabled };
+});
+
 // ===== 阶段一百一十六：项目级 MCP（TRAE 同款）——自动从项目根目录 .im/agent_mcp.json 加载 =====
 
 // 项目级 MCP 配置文件路径归口：<工作区根>/.im/agent_mcp.json（工作区根 = 用户自选工作区，未配置回退默认）
@@ -4038,7 +4244,7 @@ ipcMain.handle('mcp:project-toggle', function (event, payload) {
 ipcMain.handle('mcp:get', function (event, username) {
     const store = mcpStoreLoad();
     const rec = store[String(username || '')];
-    return { servers: (rec && rec.servers) || [], builtinEnabled: mcpBuiltinEnabledLoad() };
+    return { servers: (rec && rec.servers) || [], builtinEnabled: mcpBuiltinEnabledLoad(), browserEnabled: mcpBrowserEnabledLoad() };
 });
 
 // 保存配置（归一化落盘 + 重建常驻会话；工具清单上报由渲染层在会话就绪后经 msg 67 归口）
@@ -4511,6 +4717,7 @@ app.on('will-quit', function () {
     try { btDownloads.shutdown(); } catch (e) {} // 阶段二百八十二：BT sidecar 引擎随应用退出优雅收口（Release 保文件完整，宽限超时强杀）
     try { gameTunnel.closeAll(); } catch (e) {} // 阶段二百九十二：游戏联机本地端口隧道随应用退出全量收口（防孤儿监听端口）
     try { gameBroadcast.stopAll(); } catch (e) {} // 功能二期方案 B：广播代理会话随应用退出全量收口
+    davUnmountSync(); // 网盘挂载随应用退出同步卸载（Windows 子进程不随父退出，不显式杀则盘符残留）
 });
 
 app.on('window-all-closed', function () {

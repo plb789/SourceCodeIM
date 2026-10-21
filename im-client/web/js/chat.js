@@ -1069,6 +1069,7 @@
             window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
                 agentMcpServers = (r && r.servers) || [];
                 agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
+                agentBrowserBuiltinEnabled = !!(r && r.browserEnabled !== false);
                 renderAgentMcpList();
                 agentMcpProjectRefresh(); // 阶段一百一十六：导航直进 MCP 分类同样回填项目级状态 + 自动创建模板
             }).catch(function () {
@@ -8005,7 +8006,12 @@
             }
             // 阶段九十：登录后拉起本机 MCP 会话并上报工具清单（首查触发主进程自动建连，
             // 建连异步完成，轮询窗口内每次工具清单变化即重报，服务端全量覆盖语义）
-            if (agentMcpSupported()) startPcMcpReportLoop(12);
+            // 阶段二百九十三：重登先清上报指纹——服务端快照为内存态，重启即丢；指纹相同会跳过
+            // 重报，造成 mcp_pc_ 工具注入静默空窗（断线自动重登场景必现），清空后首轮强制重报
+            if (agentMcpSupported()) {
+                agentMcpLastReport = '';
+                startPcMcpReportLoop(12);
+            }
         } else {
             // 登录持久化：登录失败（如密码已被修改）清除已保存凭据，避免刷新后反复自动登录失败，
             // 并从乐观显示的聊天界面回退到登录界面
@@ -9845,6 +9851,7 @@
     var agentMcpEditEl = document.getElementById('agent-mcp-edit');
     var agentMcpServers = [];     // 编辑态：本机服务器配置（与主进程存储同构）
     var agentMcpBuiltinEnabled = true; // 阶段一百一十四：内置 Computer Use 服务器开关（mcpGet 回填，toggle 走专用 IPC）
+    var agentBrowserBuiltinEnabled = true; // 阶段二百九十三：内置浏览器工具族开关（browser_*，mcpGet 回填，随 msg 67 browser_enabled 上报服务端联动注入）
     var agentMcpEditing = -1;     // 当前编辑行索引（-1=新增）
     var agentMcpLiveStatus = [];  // 会话状态快照：[{name,status,status_msg,tool_count}]
     var agentMcpAllTools = [];    // 阶段一百一十一：全量工具快照 [{server,name,description}]（展开清单数据源）
@@ -9896,12 +9903,13 @@
             agentMcpAllTools = tools; // 阶段一百一十一：同步全量工具快照（展开清单数据源）
             var connecting = ((st && st.status) || []).some(function (s) { return s && s.status === 'connecting'; });
             if (connecting && !tools.length) return true; // 会话仍在建连且清单尚空：状态未定型，等下一轮快照
-            var fingerprint = JSON.stringify(tools);
+            // 指纹含内置浏览器开关（阶段二百九十三）：开关切换即视为清单变化，触发重报让服务端同步注入口径
+            var fingerprint = JSON.stringify({ tools: tools, be: agentBrowserBuiltinEnabled });
             if (fingerprint === agentMcpLastReport) return false;
             agentMcpLastReport = fingerprint;
             IMSocket.send({
                 msg_type: MSG.AGENT_PC_TOOLS,
-                content: JSON.stringify({ tools: tools })
+                content: JSON.stringify({ tools: tools, browser_enabled: agentBrowserBuiltinEnabled })
             });
             return false;
         }).catch(function () { return false; /* 主进程异常时静默，下轮重试 */ });
@@ -9946,51 +9954,62 @@
     function renderAgentMcpList() {
         // 阶段一百零五：签名比对防闪烁——面板打开期间 1.2 秒轮询会话状态，每次回调都调本函数，
         // 状态无变化时跳过重建（原实现每次清空重建，MCP 面板开着列表就持续闪烁且悬停态丢失）
-        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools, agentMcpBuiltinEnabled, agentMcpProjectState]);
+        var sig = JSON.stringify([agentMcpServers, agentMcpLiveStatus, agentMcpExpanded, agentMcpAllTools, agentMcpBuiltinEnabled, agentBrowserBuiltinEnabled, agentMcpProjectState]);
         if (sig === renderAgentMcpList._sig) return;
         renderAgentMcpList._sig = sig;
         agentMcpListEl.innerHTML = '';
         var projectLive = agentMcpLiveStatus.filter(function (s) { return s.project === true; }); // 阶段一百一十六：项目级会话状态行
         // 阶段一百一十四：内置 Computer Use 服务器行（TRAE Built-in 同款——常显首行、开关启停、无编辑/删除）。
         // 渲染提为函数供两处复用：空状态兜底分支（内置停用时补挂首行与启用开关）与正常路径
-        var renderBuiltinRow = function () {
+        // 内置浏览器工具静态清单（MCP 面板内置行展开用；服务端 schema 归口 agenttools_browser.go）
+        var AGENT_BROWSER_ROW_TOOLS = [
+            { tool: 'browser_navigate', description: '在内置浏览器打开网页（自动展示浏览区面板）' },
+            { tool: 'browser_snapshot', description: '读取页面可交互元素清单（带 ref）与文本概要' },
+            { tool: 'browser_click', description: '按 ref 点击页面元素' },
+            { tool: 'browser_input', description: '按 ref 填写输入框' },
+            { tool: 'browser_screenshot', description: '截取当前页面' },
+            { tool: 'browser_eval', description: '在页面执行 JS 脚本' },
+            { tool: 'browser_tabs', description: '标签页管理（新建/列表/切换）' },
+            { tool: 'browser_close', description: '关闭浏览器或标签页' }
+        ];
+        var renderBuiltinRow = function (cfg) {
+            var enabled = cfg.enabled();
             var wrap = document.createElement('div');
-            wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded['computer-use'] ? ' expanded' : '');
+            wrap.className = 'agent-mcp-server-wrap' + (agentMcpExpanded[cfg.key] ? ' expanded' : '');
             var row = document.createElement('div');
             row.className = 'agent-mcp-server-row';
-            var live = null;
-            agentMcpLiveStatus.forEach(function (s) { if (s.name === 'computer-use') live = s; });
             var caret = document.createElement('span');
             caret.className = 'agent-mcp-caret';
-            caret.textContent = agentMcpExpanded['computer-use'] ? '▾' : '▸';
+            caret.textContent = agentMcpExpanded[cfg.key] ? '▾' : '▸';
             caret.title = I18N.t('展开/收起工具清单');
             caret.addEventListener('click', function () {
-                agentMcpExpanded['computer-use'] = !agentMcpExpanded['computer-use'];
+                agentMcpExpanded[cfg.key] = !agentMcpExpanded[cfg.key];
                 renderAgentMcpList();
             });
             var badge = document.createElement('span');
             badge.className = 'agent-mcp-badge'; // 阶段一百一十五：与用户行同款主题徽标（原 market-badge 中性底与卡片同色，视觉无背景）
-            badge.textContent = 'C';
+            badge.textContent = cfg.badge;
             var info = document.createElement('div');
             info.className = 'agent-mcp-server-info';
             var name = document.createElement('span');
             name.className = 'agent-mcp-server-name';
-            name.textContent = 'computer-use';
+            name.textContent = cfg.name;
             var btag = document.createElement('span');
             btag.className = 'agent-mcp-builtin-tag';
             btag.textContent = I18N.t('内置');
             name.appendChild(btag);
             var metaline = document.createElement('div');
             metaline.className = 'agent-mcp-server-metaline';
+            var liveStatus = cfg.liveStatus();
             var dot = document.createElement('span');
-            dot.className = 'mcp-dot ' + (agentMcpBuiltinEnabled ? ((live && live.status) || 'connecting') : 'disabled');
-            dot.title = mcpStatusText(agentMcpBuiltinEnabled ? ((live && live.status) || 'connecting') : 'disabled');
+            dot.className = 'mcp-dot ' + (enabled ? (liveStatus || 'connecting') : 'disabled');
+            dot.title = mcpStatusText(enabled ? (liveStatus || 'connecting') : 'disabled');
             var meta = document.createElement('span');
             meta.className = 'agent-mcp-server-meta';
-            if (!agentMcpBuiltinEnabled) {
+            if (!enabled) {
                 meta.textContent = I18N.t('已停用');
             } else {
-                meta.textContent = I18N.t('桌面 GUI 操作 · 工具 ') + ((live && live.tool_count) || 0) + I18N.t(' 个 · ') + mcpStatusText((live && live.status) || 'connecting');
+                meta.textContent = cfg.meta();
             }
             metaline.appendChild(dot);
             metaline.appendChild(meta);
@@ -10000,32 +10019,22 @@
             row.appendChild(badge);
             row.appendChild(info);
             var sw = document.createElement('span');
-            sw.className = 'mcp-switch' + (agentMcpBuiltinEnabled ? ' on' : '');
-            sw.title = agentMcpBuiltinEnabled ? I18N.t('点击停用内置服务器') : I18N.t('点击启用内置服务器');
+            sw.className = 'mcp-switch' + (enabled ? ' on' : '');
+            sw.title = enabled ? I18N.t('点击停用内置服务器') : I18N.t('点击启用内置服务器');
             var knob = document.createElement('span');
             knob.className = 'mcp-switch-knob';
             sw.appendChild(knob);
-            sw.addEventListener('click', function () {
-                var want = !agentMcpBuiltinEnabled;
-                window.desktop.mcpBuiltinToggle({ enabled: want }).then(function (r) {
-                    if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('切换失败')); return; }
-                    agentMcpBuiltinEnabled = !!r.enabled;
-                    agentMcpLastReport = ''; // 工具清单变化（内置工具随开关增减），允许重新上报
-                    startPcMcpReportLoop(12);
-                    renderAgentMcpList();
-                    showToast(r.enabled ? I18N.t('已启用内置 Computer Use，正在建连并上报工具清单') : I18N.t('已停用内置 Computer Use'));
-                });
-            });
+            sw.addEventListener('click', function () { cfg.toggle(); });
             row.appendChild(sw);
             wrap.appendChild(row);
-            if (agentMcpExpanded['computer-use']) {
+            if (agentMcpExpanded[cfg.key]) {
                 var toolsBox = document.createElement('div');
                 toolsBox.className = 'agent-mcp-tools-box';
-                var tl = agentMcpAllTools.filter(function (t) { return t.server === 'computer-use'; });
+                var tl = cfg.tools();
                 if (!tl.length) {
                     var tempty = document.createElement('div');
                     tempty.className = 'agent-mcp-tool-empty';
-                    tempty.textContent = agentMcpBuiltinEnabled ? I18N.t('暂无工具：连接中') : I18N.t('已停用，启用后可见工具清单');
+                    tempty.textContent = enabled ? I18N.t('暂无工具：连接中') : I18N.t('已停用，启用后可见工具清单');
                     toolsBox.appendChild(tempty);
                 } else {
                     tl.forEach(function (t) {
@@ -10047,6 +10056,57 @@
             }
             agentMcpListEl.appendChild(wrap);
         };
+        // 两类内置行定义归口：computer-use（MCP 会话，live 状态/工具快照）+ browser（原生内置浏览器
+        // 工具族，阶段二百九十三——静态清单无会话，开关经 msg 67 browser_enabled 上报联动服务端注入）
+        var builtinRowDefs = [
+            {
+                key: 'computer-use', name: 'computer-use', badge: 'C',
+                enabled: function () { return agentMcpBuiltinEnabled; },
+                liveStatus: function () {
+                    var live = null;
+                    agentMcpLiveStatus.forEach(function (s) { if (s.name === 'computer-use') live = s; });
+                    return (live && live.status) || null;
+                },
+                meta: function () {
+                    var live = null;
+                    agentMcpLiveStatus.forEach(function (s) { if (s.name === 'computer-use') live = s; });
+                    return I18N.t('桌面 GUI 操作 · 工具 ') + ((live && live.tool_count) || 0) + I18N.t(' 个 · ') + mcpStatusText((live && live.status) || 'connecting');
+                },
+                toggle: function () {
+                    window.desktop.mcpBuiltinToggle({ enabled: !agentMcpBuiltinEnabled }).then(function (r) {
+                        if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('切换失败')); return; }
+                        agentMcpBuiltinEnabled = !!r.enabled;
+                        agentMcpLastReport = ''; // 工具清单变化（内置工具随开关增减），允许重新上报
+                        startPcMcpReportLoop(12);
+                        renderAgentMcpList();
+                        showToast(r.enabled ? I18N.t('已启用内置 Computer Use，正在建连并上报工具清单') : I18N.t('已停用内置 Computer Use'));
+                    });
+                },
+                tools: function () { return agentMcpAllTools.filter(function (t) { return t.server === 'computer-use'; }); }
+            },
+            {
+                key: 'browser', name: 'browser', badge: 'B',
+                enabled: function () { return agentBrowserBuiltinEnabled; },
+                liveStatus: function () { return 'connected'; }, // 原生工具族无会话概念：启用即就绪
+                meta: function () { return I18N.t('网页打开/读取/点击/填表/截图/脚本 · 本地执行 · 工具 8 个'); },
+                toggle: function () {
+                    // 兼容守卫：web 热更先于客户端重编时，旧主进程无 mcpBrowserToggle 通道——提示升级而非 JS 报错
+                    if (!window.desktop || typeof window.desktop.mcpBrowserToggle !== 'function') {
+                        showToast(I18N.t('该开关需升级 PC 客户端后可用'));
+                        return;
+                    }
+                    window.desktop.mcpBrowserToggle({ enabled: !agentBrowserBuiltinEnabled }).then(function (r) {
+                        if (!r || !r.ok) { showToast((r && r.msg) || I18N.t('切换失败')); return; }
+                        agentBrowserBuiltinEnabled = !!r.enabled;
+                        agentMcpLastReport = ''; // 开关随工具清单上报（browser_enabled 字段），允许重新上报
+                        startPcMcpReportLoop(12);
+                        renderAgentMcpList();
+                        showToast(r.enabled ? I18N.t('已启用内置浏览器工具') : I18N.t('已停用内置浏览器工具，AI 将不再使用 browser_* 工具'));
+                    });
+                },
+                tools: function () { return AGENT_BROWSER_ROW_TOOLS; }
+            }
+        ];
         if (!agentMcpServers.length && !agentMcpBuiltinEnabled && !projectLive.length) {
             var empty = document.createElement('div');
             empty.className = 'agent-mcp-empty';
@@ -10055,10 +10115,10 @@
             agentMcpListEl.appendChild(empty);
             // 修复：兜底引导保留的同时，内置行以停用态补挂在引导之后（带"点击启用"开关）——
             // 原实现此处直接 return 吞掉内置行，停用后无开关可再启用（装任意市场插件才恢复渲染）
-            renderBuiltinRow();
+            builtinRowDefs.forEach(renderBuiltinRow);
             return;
         }
-        renderBuiltinRow();
+        builtinRowDefs.forEach(renderBuiltinRow);
         // 阶段一百一十六：项目级服务器行（来源 .im/agent_mcp.json；tag「项目」，启停在 JSON 文件 enabled 字段，可展开工具清单）
         projectLive.forEach(function (ps) {
             var wrap = document.createElement('div');
@@ -10250,6 +10310,7 @@
         window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
             agentMcpServers = (r && r.servers) || [];
             agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
+            agentBrowserBuiltinEnabled = !!(r && r.browserEnabled !== false);
             agentMcpLiveStatus = [];
             agentMcpEditEl.classList.add('hidden');
             if (agentMcpAddMenu) agentMcpAddMenu.classList.add('hidden'); // 阶段一百一十一：重置下拉与插件库视图（防上次打开残留）
@@ -10357,6 +10418,7 @@
         window.desktop.mcpGet(IMSocket.getUsername()).then(function (r) {
             agentMcpServers = (r && r.servers) || [];
             agentMcpBuiltinEnabled = !!(r && r.builtinEnabled !== false);
+            agentBrowserBuiltinEnabled = !!(r && r.browserEnabled !== false);
             renderAgentMcpList();
         });
         agentMcpProjectRefresh(); // 阶段一百一十六：刷新同步项目级状态

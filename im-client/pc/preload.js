@@ -415,6 +415,10 @@ contextBridge.exposeInMainWorld('desktop', {
     mcpBuiltinToggle: function (payload) {
         return ipcRenderer.invoke('mcp:builtin-toggle', payload);
     },
+    // ===== 阶段二百九十三：内置浏览器工具开关（payload = {enabled}，返回 Promise<{ok, enabled}>） =====
+    mcpBrowserToggle: function (payload) {
+        return ipcRenderer.invoke('mcp:browser-toggle', payload);
+    },
     mcpProjectStatus: function (payload) {
         return ipcRenderer.invoke('mcp:project-status', payload); // 阶段一百一十六：项目级 MCP 状态（含自动创建 .im/agent_mcp.json）
     },

@@ -1231,6 +1231,11 @@ function execTool(req, done) {
 // ===== 阶段九十一：内置浏览器工具调用 =====
 // browser-manager.js 归口实现（WebContentsView 多标签页/快照/截图/脚本），这里仅 Promise→done 桥接
 function callBrowserTool(tool, params, done) {
+    // 阶段二百九十三：MCP 面板内置浏览器行停用时拒绝执行（兜底防线——正常路径服务端已不注入 schema）
+    if (!browserManager.isAgentToolsEnabled()) {
+        done({ ok: false, output: '错误：内置浏览器工具已停用（可在 MCP 面板重新开启）' });
+        return;
+    }
     browserManager.agentExecute(tool, params).then(function (r) {
         done(r || { ok: false, output: '错误：内置浏览器工具无返回' });
     }).catch(function (e) {

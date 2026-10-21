@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -18,16 +19,29 @@ import (
 // agentBrowserEnabled 内置浏览器工具开关（InitAgent 从 ai.agent.pc_browser 加载，后台可热改）
 var agentBrowserEnabled atomic.Bool
 
+// agentBrowserUserToggle username → bool 用户级内置浏览器工具开关（PC 端 MCP 面板切换，随 msg 67
+// 工具清单上报同步；仅内存不落库，服务端重启后等 PC 重新上报。缺省视为启用——旧版客户端不上报
+// 该字段，行为与原实现完全一致）
+var agentBrowserUserToggle sync.Map
+
+// agentBrowserUserEnabled 读用户级开关（未上报过=启用）
+func agentBrowserUserEnabled(username string) bool {
+	if v, ok := agentBrowserUserToggle.Load(username); ok {
+		return v.(bool)
+	}
+	return true
+}
+
 // agentBrowserTools browser_* 工具名集合（注入/审批/label 归口判定用）
 var agentBrowserTools = map[string]bool{
-	"browser_navigate":  true,
-	"browser_snapshot":  true,
-	"browser_click":     true,
-	"browser_input":     true,
+	"browser_navigate":   true,
+	"browser_snapshot":   true,
+	"browser_click":      true,
+	"browser_input":      true,
 	"browser_screenshot": true,
-	"browser_eval":      true,
-	"browser_tabs":      true,
-	"browser_close":     true,
+	"browser_eval":       true,
+	"browser_tabs":       true,
+	"browser_close":      true,
 }
 
 // agentBrowserSnapshotMax 快照回传字符上限（防超长页面撑爆模型上下文）
@@ -57,7 +71,7 @@ func agentBrowserToolDefs() []aiToolDefinition {
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "browser_snapshot",
 			"description": "读取当前浏览器页面：返回可交互元素清单（带 ref 编号：链接/按钮/输入框/下拉框等）与页面文本概要。点击或填写前必须先调用本工具获取元素 ref。",
-			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		}},
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "browser_click",
@@ -86,7 +100,7 @@ func agentBrowserToolDefs() []aiToolDefinition {
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "browser_screenshot",
 			"description": "对当前浏览器页面截图（PNG），保存到用户电脑并返回文件路径（用户可在浏览区实时看到页面）。",
-			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		}},
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "browser_eval",
@@ -114,7 +128,7 @@ func agentBrowserToolDefs() []aiToolDefinition {
 		{Type: "function", Function: map[string]interface{}{
 			"name":        "browser_close",
 			"description": "关闭当前浏览器标签页（不传 tab_id）；全部标签页关闭后浏览区自动收起。",
-			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		}},
 	}
 }

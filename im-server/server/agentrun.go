@@ -858,8 +858,9 @@ func (s *Server) agentToolDefinitions(username string) []aiToolDefinition {
 	// 阶段一百七十八：spawn_agent 子 Agent 派生工具（恒注入——服务端专属，子 Agent 工具集不含它=防递归）
 	tools = append(tools, agentSubToolDef())
 	// 阶段九十一：内置浏览器工具注入（WebContentsView 在用户电脑上，PC 端本地执行；
-	// 开关 ai.agent.pc_browser + 仅发起人 PC 端在线时注入——离线时调用必失败，schema 反而误导模型）
-	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
+	// 开关 ai.agent.pc_browser + 仅发起人 PC 端在线时注入——离线时调用必失败，schema 反而误导模型；
+	// 阶段二百九十三：叠加用户级开关——PC 端 MCP 面板可按用户停用内置浏览器工具族）
+	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) && agentBrowserUserEnabled(username) {
 		tools = append(tools, agentBrowserToolDefs()...)
 	}
 	// 阶段八十九：MCP 工具注入（TRAE CN 同款）——已连接且启用的 MCP 服务器工具动态进入
@@ -1745,10 +1746,14 @@ func (s *Server) handleAgentPcTools(c *Client, msg *protocol.Message) {
 		return // 工具由 PC 本地进程发现并执行，其他端上报无执行载体
 	}
 	var req struct {
-		Tools []AgentPcTool `json:"tools"`
+		Tools          []AgentPcTool `json:"tools"`
+		BrowserEnabled *bool         `json:"browser_enabled"` // 用户级内置浏览器工具开关（PC 端 MCP 面板切换；指针区分"未上报"与 false，旧客户端缺省不覆盖）
 	}
 	if err := json.Unmarshal([]byte(msg.Content), &req); err != nil {
 		return
+	}
+	if req.BrowserEnabled != nil {
+		agentBrowserUserToggle.Store(c.username, *req.BrowserEnabled)
 	}
 	cleaned := make([]AgentPcTool, 0, len(req.Tools))
 	seen := make(map[string]bool)   // server+tool 去重
@@ -3348,7 +3353,7 @@ func (s *Server) agentSystemPrompt(username string, wsDir string, sandbox *Agent
 	toolList += "、spawn_agent（派生子 Agent 并行执行只读调研子任务并返回结论；把大调研拆成多个互不依赖的方向，一次回复发多个即可并行执行）"
 	// 阶段九十一：内置浏览器工具提示（仅 PC 在线时已注入 schema，这里给分工纪律：
 	// JS 渲染/登录态页面用 browser_*，纯接口/静态抓取仍优先 http_request）
-	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) {
+	if agentBrowserEnabled.Load() && agentPcExec.Load() && s.hub.HasPC(username) && agentBrowserUserEnabled(username) {
 		toolList += "、内置浏览器工具（browser_navigate/browser_snapshot/browser_click/browser_input/browser_screenshot/browser_eval/browser_tabs/browser_close，在用户电脑内置浏览器打开与操作网页；登录态/JS 渲染页面优先用本族工具，纯接口调用仍用 http_request）"
 	}
 	// 阶段八十九：服务端 MCP 工具纪律说明（schema 已动态注入，这里给命名空间说明防误用）
