@@ -774,8 +774,9 @@
         }
     }
 
-    // 气泡媒体轮播区（Steam 同款预览）：视频在前截图在后，一次只挂一张（换页整块重画，
-    // 上一张的 video 随 DOM 丢弃同步停播）；静图 3.5s、视频 6s 后切下一张，仅 1 条时不轮播
+    // 气泡媒体轮播区（Steam 同款预览）：视频在前截图在后；静图 3.5s、视频 6s 后切下一张，仅 1 条时不轮播。
+    // 截图项复用同一 img 元素换 src（同元素换源浏览器保持旧像素直到新图就绪，换页零灰闪——与详情页
+    // stageImg 同款）；视频项保持逐次重建（随 DOM 丢弃同步停播释放解码器）
     function buildHoverMedia(g) {
         var list = [];
         (g.videos || []).forEach(function (u) { if (u) list.push({ kind: 'v', url: u }); });
@@ -786,11 +787,13 @@
         var idx = 0, gen = ++hovMediaGen;
         var box = el('div', 'gs-hover-media');
         hovMediaBox = box;
+        var shotImg = null; // 截图复用元素（video 项重画时被 innerHTML 清空即置空，下次重建）
         function paint() {
-            box.innerHTML = '';
             var m = list[idx];
             if (!m) return;
             if (m.kind === 'v') {
+                box.innerHTML = ''; // 丢弃旧内容（img 随之丢弃：视频需要独立元素，切走即释放）
+                shotImg = null;
                 var v = document.createElement('video');
                 v.src = assetUrl(m.url);
                 v.muted = true;
@@ -799,12 +802,16 @@
                 v.setAttribute('playsinline', '');
                 v.setAttribute('preload', 'metadata');
                 box.appendChild(v);
+            } else if (shotImg && shotImg.isConnected) {
+                shotImg.src = assetUrl(m.url); // 同元素换 src：旧图保持显示直到新图解码完成
             } else {
+                box.innerHTML = '';
                 var im = document.createElement('img');
                 im.src = assetUrl(m.url);
                 im.alt = g.name || '';
                 // 悬停即预览：不懒加载（loading='lazy' 在快速切换时首帧可能未解码，表现为图片空白）
                 box.appendChild(im);
+                shotImg = im;
             }
         }
         function schedule() {
@@ -1028,20 +1035,41 @@
         var curPic = '';
         var curName = '';
 
-        // 主图绘制归口：换页与截图悬停预览共用（移除现有主图/占位块后重画，
-        // pic 为空画主题色占位块；加载失败回退占位块）
+        // 主图绘制归口：换页与截图悬停预览共用。双 buffer 防灰闪——新图解码就绪（onload）后才
+        // 移除旧图，就绪前 pending 透明叠放露出旧图/占位底色；picGen 代号防连续换页竞态
+        //（上一次的图加载完成时发现已非最新，自清理不参与 swap）。pic 为空画主题色占位块；
+        // 加载失败移除自身回退占位块
+        var picGen = 0;
         function setMainPic(pic) {
-            var old = main.querySelector('img, .gs-cover-ph');
-            if (old) old.remove();
-            if (pic) {
-                var im = document.createElement('img');
-                im.src = pic;
-                im.draggable = false;
-                im.onerror = function () { im.remove(); main.insertBefore(buildPh(curName), info); };
-                main.insertBefore(im, info);
-            } else {
+            var gen = ++picGen;
+            var old = main.querySelector('img.gs-car-cover, .gs-cover-ph');
+            if (!pic) {
+                if (old) old.remove();
                 main.insertBefore(buildPh(curName), info);
+                return;
             }
+            var im = document.createElement('img');
+            im.className = 'gs-car-cover pending';
+            im.src = pic;
+            im.draggable = false;
+            var done = false;
+            var swap = function () {
+                if (done) return;
+                done = true;
+                if (gen !== picGen) { im.remove(); return; } // 已被后续换页取代：自清理
+                im.classList.remove('pending'); // 淡入
+                if (old) old.remove(); // 新图可见后才移除旧图
+            };
+            im.onload = swap;
+            im.onerror = function () {
+                im.remove();
+                if (gen !== picGen) return; // 已被后续换页取代：旧图/占位由当次绘制管理
+                if (old) old.remove();
+                main.insertBefore(buildPh(curName), info);
+            };
+            main.insertBefore(im, info);
+            // 缓存命中同步解码完成的兜底（onload 异步仍会触发，done 防重入）
+            if (im.complete && im.naturalWidth > 0) swap();
         }
 
         // 截图悬停预览恢复：鼠标离开整个截图网格时清除预览描边并恢复当前游戏主图
@@ -1142,6 +1170,8 @@
                 im.src = assetUrl(s);
                 im.loading = 'lazy';
                 im.draggable = false;
+                im.classList.add('pending'); // 解码就绪前透明露出格子底色，onload 淡入（防灰闪）
+                im.onload = function () { im.classList.remove('pending'); };
                 im.onerror = function () { im.remove(); cell.classList.add('bad'); };
                 cell.appendChild(im);
                 cell.addEventListener('click', function () { openDetail(g.id); });

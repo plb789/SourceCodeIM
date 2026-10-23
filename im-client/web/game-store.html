@@ -241,11 +241,18 @@
         }
 
         .gs-car-main img {
+            position: absolute; /* 双 buffer 叠放：换页时新图与旧图并存（新图就绪后才移除旧图，零灰闪） */
+            inset: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
             display: block;
             transition: opacity 0.25s;
+        }
+
+        /* 主图待就绪态：解码完成前保持透明露出旧图/占位底色，onload 后淡入（防灰闪） */
+        .gs-car-main img.pending {
+            opacity: 0;
         }
 
         /* 主图底部渐隐信息条（名称/简介，Steam 特色推荐同构） */
@@ -302,7 +309,8 @@
             cursor: pointer;
         }
 
-        .gs-car-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .gs-car-shot img { width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity 0.2s; }
+        .gs-car-shot img.pending { opacity: 0; } /* 缩略图解码完成前透明（露出格子底色），就绪后淡入防灰闪 */
 
         .gs-car-shot.bad { visibility: hidden; }
 
