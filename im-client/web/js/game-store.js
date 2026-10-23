@@ -1194,6 +1194,15 @@
                 try { if (wrap.matches(':hover')) return; } catch (e) { /* 匹配失败不暂停 */ }
                 carShow(idx + 1);
             }, 5000));
+            // 预载下一张主图（Steam 同款缓存预热）：浏览器提前拉取落缓存，轮播换页零灰闪。
+            // PC 端配合本地媒体磁盘缓存（web-cache gameMediacache）二次访问零回源
+            var preloadNext = function () {
+                var ng = games[(idx + 1) % games.length];
+                var p = ng ? (ng.cover || (ng.screenshots && ng.screenshots[0]) || '') : '';
+                if (p) { var im = new Image(); im.src = assetUrl(p); }
+            };
+            preloadNext();
+            gsTimers.push(setInterval(preloadNext, 5000)); // 与轮播同周期错半拍预热
         }
         return wrap;
     }
@@ -2544,7 +2553,9 @@
                     acts.push({ text: '启动', cls: 'primary', fn: function () { launchGame(gid); } });
                     break;
                 case 4:
+                    // 待更新（Steam 同款）：旧版仍可启动继续玩，更新按钮并行提供
                     acts.push({ text: '更新', cls: 'primary', fn: function () { startInstall(g, true); } });
+                    acts.push({ text: '启动', cls: '', fn: function () { launchGame(gid); } });
                     break;
                 case 1:
                 case 2:
@@ -3066,9 +3077,9 @@
         var lib = state.lib[gid] && state.lib[gid].lib;
         var libState = lib ? Number(lib.state) : null;
         var items = [];
-        // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新）
+        // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新，旧版仍可启动）
         if (state.running[gid]) items.push({ label: '运行中', onClick: function () { toast('游戏正在运行中'); } });
-        else if (libState === 3) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
+        else if (libState === 3 || libState === 4) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
         items.push({ label: '属性', onClick: function () { openPropModal(gid); } });
         items.push({ label: '移出游戏库', danger: true, onClick: function () { removeFromLib(gid); } });
         openCtxMenu(x, y, items);

@@ -600,6 +600,8 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	// 游戏专属派生密钥强制服务端生成（覆盖请求可能携带的任意值；模型 json:"-" 本就不接收，
 	// 此处双保险）：每游戏独立持钥，单游戏密钥泄露/轮换不影响其他游戏
 	g.GameSecret = gameRandomSecret()
+	// BT·上传种子方式：从落盘种子填充 size_bytes/latest_version（用户端详情"游戏大小/最新版本"展示源）
+	s.gameTorrentMetaFill(&g)
 	if err := store.DB.Create(&g).Error; err != nil {
 		adminFail(w, http.StatusConflict, "slug 已存在或保存失败")
 		return
@@ -772,6 +774,10 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
 		return
 	}
+	// BT·上传种子方式：种子落定后重扫填充 size_bytes/latest_version（换新种子保存即更新大小与版本日期；
+	// 编辑保存一次即可为存量 BT 游戏补齐展示数据）
+	u.TorrentPath = tp
+	s.gameTorrentMetaFill(&u)
 	vids, verr := gameVideosClean(u.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -792,6 +798,8 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
 		"supernodes": u.Supernodes, "net_mode": u.NetMode,
 		"torrent_path": tp,
+		// BT·上传种子元信息全量回写（种子重扫结果）：换新种子保存即更新大小与版本日期
+		"size_bytes": u.SizeBytes, "latest_version": u.LatestVersion,
 	}
 	if err := store.DB.Model(&g).Updates(updates).Error; err != nil {
 		adminFail(w, http.StatusInternalServerError, "保存失败")
@@ -1040,6 +1048,29 @@ func (s *Server) handleAdminGameTorrentUpload(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// gameTorrentMetaFill BT·上传种子游戏的元信息归口（下载方式=2 且种子已上传时调用）：
+// 从落盘的 .torrent 重扫 info（与上传接口同源），填充 size_bytes（种子内文件总大小）与
+// latest_version（种子文件上传日期 yyyy-MM-dd——BT 方式无版本概念，换新种子=日期自动更新，
+// 语义即"该版本的发布日期"）。解析失败静默跳过（保留原值，不阻塞保存）
+func (s *Server) gameTorrentMetaFill(g *model.Game) {
+	if g.DownloadMethod != 2 || strings.TrimSpace(g.TorrentPath) == "" {
+		return
+	}
+	fp := filepath.Join(s.gameUploadedTorrentDir(), g.TorrentPath)
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		return
+	}
+	_, total, count := torrentInfoScan(data)
+	if total <= 0 || count <= 0 {
+		return
+	}
+	g.SizeBytes = total
+	if st, err := os.Stat(fp); err == nil {
+		g.LatestVersion = st.ModTime().Format("2006-01-02")
+	}
+}
+
 // handleAdminGameImage 封面/截图上传（multipart 小图 ≤20MB）：落 WebDir/static/upload/games/，
 // 返回 {url}（静态服务天然托管，客户端预览与商店展示同 URL）
 func (s *Server) handleAdminGameImage(w http.ResponseWriter, r *http.Request) {
@@ -1274,6 +1305,14 @@ func (s *Server) handleAdminGameVersionCreate(w http.ResponseWriter, r *http.Req
 		adminFail(w, http.StatusNotFound, "游戏不存在")
 		return
 	}
+	// BT·上传种子方式禁走版本上架：客户端清单按种子合成（files 恒空，下载走 BT 分片校验），
+	// 上架的版本文件客户端永远不下载（孤儿数据）；且版本表记录会让 BT 清单版本号恒为该版本号，
+	// 覆盖"换新种子=日期变=触发更新"的检测闭环（gameManifest 版本号优先级：版本表 > latest_version）。
+	// 换新版本请走「编辑游戏 → 上传新种子」：gameTorrentMetaFill 重扫即更新大小与版本日期
+	if g.DownloadMethod == 2 {
+		adminFail(w, http.StatusBadRequest, "BT 种子方式无需版本上架：换新种子（编辑游戏→上传新种子文件）即自动更新大小与版本日期")
+		return
+	}
 	var req struct {
 		Version   string `json:"version"`
 		Changelog string `json:"changelog"`
@@ -1469,14 +1508,22 @@ func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Req
 	store.DB.Where("version_id = ?", v.ID).Delete(&model.GameFile{})
 	store.DB.Delete(&v)
 	os.RemoveAll(filepath.Join(s.cfg.Game.LocalDir, "games", g.Slug, v.Version))
-	// 最新版冗余回退
-	var rest model.GameVersion
-	if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&rest).Error; err == nil {
-		var total int64
-		store.DB.Model(&model.GameFile{}).Select("COALESCE(SUM(size_bytes),0)").Where("version_id = ?", rest.ID).Scan(&total)
-		store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": rest.Version, "size_bytes": total})
+	// 最新版冗余回退。BT·上传种子游戏不走版本体系（版本行只可能是历史误上架的孤儿数据），
+	// 删除后冗余字段须回填种子重扫结果（latest_version=种子上传日期、size_bytes=种子总大小），
+	// 而非按版本逻辑清空/置剩余版本号——否则 BT 清单版本号回退 "torrent" 占位且全部玩家
+	// installed 与清单不一致，种子未变却被误标"待更新"触发一轮无意义重装
+	if g.DownloadMethod == 2 {
+		s.gameTorrentMetaFill(&g)
+		store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": g.LatestVersion, "size_bytes": g.SizeBytes})
 	} else {
-		store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": "", "size_bytes": 0})
+		var rest model.GameVersion
+		if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&rest).Error; err == nil {
+			var total int64
+			store.DB.Model(&model.GameFile{}).Select("COALESCE(SUM(size_bytes),0)").Where("version_id = ?", rest.ID).Scan(&total)
+			store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": rest.Version, "size_bytes": total})
+		} else {
+			store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": "", "size_bytes": 0})
+		}
 	}
 	logger.Info("游戏版本删除: %s v%s, 操作人=%s", g.Name, v.Version, adminUserFromCtx(r))
 	adminJSON(w, map[string]interface{}{"ok": true})

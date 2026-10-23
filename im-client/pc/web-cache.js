@@ -42,6 +42,17 @@ const DOWNLOAD_CONCURRENCY = 4;
 // 阶段二百六十三：/static/avatar/ 不再透传——改走头像磁盘缓存（见 handleAvatar），首次联网下载
 // 落盘、之后启动本地直出（微信同款），文件名含上传纳秒时间戳全局唯一，换头像必然换 URL 无陈旧风险
 const AVATAR_PREFIX = '/static/avatar/';
+// 阶段三百零二：游戏中心媒体磁盘缓存归口——游戏封面/截图/宣传视频（管理端上传，文件名含纳秒
+// 时间戳+随机数全局唯一、内容与 URL 一一不可变）原走 DYNAMIC_PREFIXES 每次请求透传服务端：
+// 轮播 5s 一换页、每页主图+4 张缩略图（paintShots 重建 DOM）逐张回源（生产公网往返数十 ms 起），
+// 体感"每次轮播都重新加载"（右侧截图网格长时间灰块）。与头像同款磁盘缓存根治：首次联网下载
+// 落盘，之后本地流式直出零回源（视频 Range/206 走 serveFile 手写分段）。仅缓存 games/ 子树
+// （管理端媒体，量级有限）；/static/upload/ 其余子树（聊天文件/网盘等）维持透传不变
+const GAME_MEDIA_PREFIX = '/static/upload/games/';
+// 容量守卫：宣传视频单文件上限 200MB（服务端 game.video_max_size），数十款游戏封面+截图+若干
+// 视频常态远达不到 2GB；超上限按 mtime 最旧优先删至软上限（与头像守卫同语义）
+const GAME_MEDIA_CLEAN_BYTES = 2 * 1024 * 1024 * 1024;
+const GAME_MEDIA_SOFT_BYTES = 1 * 1024 * 1024 * 1024;
 // 阶段二百八十五：跨域直连下载接口 Referer 补正清单（仅这些接口转发时显式补 Referer）——
 // 服务端 drive.go 对 MinIO 后端下发 302 预签名直连 URL（省服务端带宽），文件域名（如 minio.sxgyxny.com）
 // 挂 DCDN 防盗链白名单（白名单=IM 站点域名），必须带命中白名单的 Referer 才放行。WEB/手机由浏览器网络栈
@@ -84,6 +95,9 @@ let snapshotDir = ''; // 内置明文快照目录（仅明文回退链路使用�
 // 阶段二百六十三：头像磁盘缓存目录（userData/avatarcache）——好友/群/自己头像首次联网下载落盘，
 // 之后每次启动本地直出零回源，慢网启动不再因头像逐张回源出现占位符长时间闪烁（微信同款）
 let avatarCacheDir = '';
+// 阶段三百零二：游戏媒体磁盘缓存目录（userData/gameMediacache）——封面/截图/视频首次联网下载
+// 落盘，之后本地流式直出零回源（轮播换页图片秒出，不再逐张回源闪烁）
+let gameMediaCacheDir = '';
 // 头像缓存容量守卫阈值：总量超 CLEAN 上限按最旧优先删至 SOFT（头像单张几十 KB，正常使用远达不到，
 // 仅防经年累积无限增长）
 const AVATAR_CLEAN_BYTES = 200 * 1024 * 1024;
@@ -150,6 +164,8 @@ function init(cfg) {
     cacheDir = path.join(app.getPath('userData'), 'webcache');
     avatarCacheDir = path.join(app.getPath('userData'), 'avatarcache');
     try { fs.mkdirSync(avatarCacheDir, { recursive: true }); } catch (e) { }
+    gameMediaCacheDir = path.join(app.getPath('userData'), 'gameMediacache');
+    try { fs.mkdirSync(gameMediaCacheDir, { recursive: true }); } catch (e) { }
     // 快照目录：打包后取 resources/web-snapshot；dev（npm start）取仓库 web 目录
     snapshotDir = (cfg && cfg.snapshotDir) || (app.isPackaged
         ? path.join(process.resourcesPath, 'web-snapshot')
@@ -168,6 +184,8 @@ function init(cfg) {
     blobState = 0; // 重置 blob 探测状态（init 理论上仅调用一次，防御性归零）
     // 阶段二百六十三：头像缓存容量守卫（延迟 10s 异步执行，避开启动 IO 高峰；总量超 200MB 才动）
     setTimeout(sweepAvatarCache, 10000);
+    // 阶段三百零二：游戏媒体缓存容量守卫（延迟 15s 与头像清理错峰；总量超 2GB 才动）
+    setTimeout(sweepGameMediaCache, 15000);
     console.log('[web-cache] 缓存目录:', cacheDir, '| 快照目录:', snapshotDir,
         '| 加密链路:', secureKey ? '启用（磁盘零明文）' : '关闭（明文回退）');
 }
@@ -527,6 +545,80 @@ function sweepAvatarCache() {
     });
 }
 
+// handleGameMedia 阶段三百零二：游戏中心媒体磁盘缓存归口（封面/截图/宣传视频）——
+//   命中本地（gameMediacache/<games/ 下的相对路径>）磁盘流式直出秒出，零网络零回源；
+//   未命中完整 GET 下载落盘（tmp+rename 原子写），下次轮播/启动秒出。
+// 安全性：管理端上传文件名含纳秒时间戳+随机数全局唯一（gameadmin.go），换图必然换 URL，
+//   按 URL 永久缓存不存在陈旧风险；防穿越校验（禁 .. 与反斜杠、解析后必须仍在缓存目录内），
+//   不合法一律透传兜底；404/403 等错误响应原样透传不落盘
+async function handleGameMedia(pathname, req) {
+    var rel;
+    try { rel = decodeURIComponent(pathname.substring(GAME_MEDIA_PREFIX.length)); } catch (e) { }
+    if (!rel || rel.indexOf('\\') !== -1 || rel.split('/').indexOf('..') !== -1) {
+        return passthrough(req);
+    }
+    var fp = path.join(gameMediaCacheDir, rel);
+    if (fp !== gameMediaCacheDir && fp.indexOf(gameMediaCacheDir + path.sep) !== 0) return passthrough(req);
+    // 命中本地缓存：磁盘流式直读（serveFile 自带 Range/206 分段，视频拖动条零回源）
+    try {
+        if (fs.statSync(fp).isFile()) return serveFile(fp, req);
+    } catch (e) { }
+    // 非 GET（HEAD/预检等）不可缓存直接透传
+    if (req.method !== 'GET') return passthrough(req);
+    // 未命中：完整 GET 下载落盘——原请求若带 Range 必须剔除（部分响应落盘=坏缓存），
+    // 落盘后按原请求 Range 流式服务
+    var res;
+    try {
+        res = await net.fetch(req.url, { method: 'GET', bypassCustomProtocolHandlers: true });
+    } catch (e) {
+        return new Response(null, { status: 502 });
+    }
+    if (res.status !== 200) return res;
+    var buf;
+    try {
+        buf = Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+        // 响应流读取失败（网络中断）：等同透传失败，无法重放
+        return new Response(null, { status: 502 });
+    }
+    // 落盘失败（磁盘满/权限等）不影响本次展示，下次启动重下；递归建目录防目录被外力删除
+    try {
+        fs.mkdirSync(path.dirname(fp), { recursive: true });
+        var tmp = fp + '.tmp';
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, fp);
+    } catch (e) {
+        console.warn('[web-cache] 游戏媒体缓存落盘失败:', rel, e && e.message);
+    }
+    return serveFile(fp, req);
+}
+
+// sweepGameMediaCache 游戏媒体缓存容量守卫：目录总量超上限时按 mtime 最旧优先删至软上限
+// （异步执行不阻塞启动；init 延迟触发与头像清理错峰；递归含 videos/ 子目录）
+function sweepGameMediaCache() {
+    if (!gameMediaCacheDir) return;
+    var items = [];
+    (function walk(dir) {
+        var entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        entries.forEach(function (ent) {
+            var fp = path.join(dir, ent.name);
+            if (ent.isDirectory()) walk(fp);
+            else if (ent.isFile()) {
+                try { var st = fs.statSync(fp); items.push({ p: fp, t: st.mtimeMs, s: st.size }); } catch (e) { }
+            }
+        });
+    })(gameMediaCacheDir);
+    var total = items.reduce(function (a, x) { return a + x.s; }, 0);
+    if (total <= GAME_MEDIA_CLEAN_BYTES) return;
+    items.sort(function (a, b) { return a.t - b.t; }); // 最旧优先
+    var removed = 0;
+    for (var i = 0; i < items.length && total > GAME_MEDIA_SOFT_BYTES; i++) {
+        try { fs.unlinkSync(items[i].p); total -= items[i].s; removed++; } catch (e) { }
+    }
+    console.log('[web-cache] 游戏媒体缓存超限清理: 删除 ' + removed + ' 个最旧文件，剩余 ' + Math.round(total / 1024 / 1024) + 'MB');
+}
+
 // handleRequest 服务端地址请求处理归口：头像缓存 → 动态前缀透传 → 加密链路（缓存.enc → blob 快照 → 透传兜底）
 //   / 明文链路（缓存 → 快照 → 透传兜底，原实现）
 async function handleRequest(req) {
@@ -541,6 +633,11 @@ async function handleRequest(req) {
         // 阶段二百六十三：头像磁盘缓存（优先于动态前缀判断）
         if (pathname.indexOf(AVATAR_PREFIX) === 0) {
             return await handleAvatar(pathname, req);
+        }
+        // 阶段三百零二：游戏中心媒体磁盘缓存（优先于动态前缀判断——/static/upload/games/ 原在
+        // DYNAMIC_PREFIXES 内每次透传回源，轮播换页逐张重加载；现本地缓存直出）
+        if (pathname.indexOf(GAME_MEDIA_PREFIX) === 0) {
+            return await handleGameMedia(pathname, req);
         }
         if (isDynamicPath(pathname)) {
             // 阶段二百八十五：跨域直连下载接口（会 302 到文件域名）转发时补 Referer，其余动态前缀维持原样

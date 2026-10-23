@@ -572,6 +572,17 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)
 }
 
+// libStateForView 库状态展示映射：已安装（3）且已装版本 ≠ 当前最新版本 → 视为待更新（4）。
+// 仅影响下发展示，不改库内存储（玩家点"更新"重装完成后上报 state=3+新版本，自然归位）。
+// 覆盖全部下载方式：HTTP/BT·生成种子的版本上架、BT·上传种子的换种（latest_version 随种子日期
+// 刷新，见 gameTorrentMetaFill）都会驱动此映射产生"待更新"提示
+func libStateForView(state int8, installed, latest string) int8 {
+	if state == 3 && latest != "" && installed != latest {
+		return 4
+	}
+	return state
+}
+
 // HandleGameList 商店列表：仅上架游戏，keyword 命中名称/简介，tag 精确命中标签串
 func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 	if !s.gameEnabled(w) {
@@ -601,14 +612,19 @@ func (s *Server) HandleGameList(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusInternalServerError, "查询游戏列表失败")
 		return
 	}
-	// 用户已入库状态随行下发（未传 username 概略浏览则缺省）
+	// 用户已入库状态随行下发（未传 username 概略浏览则缺省）；已安装条目按版本比对映射
+	// 待更新（4）——最新版本 ≠ 已装版本时玩家在商店卡片即见"待更新"徽标
 	viewer := strings.TrimSpace(q.Get("username"))
 	libState := map[uint]int8{}
 	if viewer != "" {
 		var libs []model.GameLibrary
 		store.DB.Where("username = ?", viewer).Find(&libs)
+		gameLatest := map[uint]string{}
+		for _, g := range games {
+			gameLatest[g.ID] = g.LatestVersion
+		}
 		for _, l := range libs {
-			libState[l.GameID] = l.State
+			libState[l.GameID] = libStateForView(l.State, l.InstalledVersion, gameLatest[l.GameID])
 		}
 	}
 	// 评测聚合随行下发（商店悬停气泡卡"评测"行 Steam 同款摘要；一条 GROUP BY 归口仅查本页游戏）
@@ -700,12 +716,12 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	item["notices"] = noticeList
 	// 个人库状态（未入库不下发 in_library：前端以 undefined/null=未入库渲染 Steam 同款购买块，
-	// 入库后值为库状态 0-4，0=正常在库渲染安装/启动按钮组）
+	// 入库后值为库状态 0-4，0=正常在库渲染安装/启动按钮组）；已安装且版本落后 → 映射待更新（4）
 	var lib model.GameLibrary
 	if err := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&lib).Error; err == nil {
-		item["in_library"] = lib.State
+		item["in_library"] = libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion)
 		item["lib"] = map[string]interface{}{
-			"state":             lib.State,
+			"state":             libStateForView(lib.State, lib.InstalledVersion, g.LatestVersion),
 			"installed_version": lib.InstalledVersion,
 			"install_path":      lib.InstallPath,
 			"play_seconds":      lib.PlaySeconds,
@@ -759,8 +775,10 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 		}
 		list = append(list, map[string]interface{}{
 			"lib": map[string]interface{}{
-				"game_id":           l.GameID,
-				"state":             l.State,
+				"game_id": l.GameID,
+				// 库状态展示映射：已安装但版本落后（管理端版本上架/BT 换新种子）→ 下发待更新（4），
+				// 玩家点"更新"重装完成上报 state=3+新版本后自然归位（不改库内存储）
+				"state":             libStateForView(l.State, l.InstalledVersion, g.LatestVersion),
 				"installed_version": l.InstalledVersion,
 				"install_path":      l.InstallPath,
 				"play_seconds":      l.PlaySeconds,
@@ -946,7 +964,12 @@ func (s *Server) gameManifest(g *model.Game, version string) (map[string]interfa
 		if err != nil {
 			return nil, err
 		}
+		// 版本号 = latest_version（BT·上传种子方式由 gameTorrentMetaFill 填充为种子上传日期）：
+		// 换新种子 → 日期变化 → 客户端 installed_version 不一致 → 触发"待更新"提示与重装
 		ver := "torrent"
+		if g.LatestVersion != "" {
+			ver = g.LatestVersion
+		}
 		var v model.GameVersion
 		if err := store.DB.Where("game_id = ?", g.ID).Order("id DESC").First(&v).Error; err == nil && v.Version != "" {
 			ver = v.Version

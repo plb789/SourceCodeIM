@@ -5533,7 +5533,16 @@
             var tdOp = document.createElement('td');
             tdOp.className = 'vec-td-actions';
             tdOp.appendChild(opBtn('编辑', '', function () { gmEdit(a); }));
-            tdOp.appendChild(opBtn('版本', '', function () { gmOpenVersions(a); }));
+            tdOp.appendChild(opBtn('版本', '', function () {
+                // BT·上传种子方式：版本上架无意义（客户端清单按种子合成，下载走 BT 分片校验，上架的
+                // 版本文件永远不下载），提示引导走换种子流程；确定后仍可进入弹窗——仅供清理此前误上架的
+                // 孤儿版本（服务端 create 已对 BT 游戏拦截，弹窗内只删不增）
+                if (a.download_method === 2) {
+                    confirmBox('该游戏为 BT 种子方式，无需版本上架：换新版本请在「编辑」中上传新种子文件，游戏大小与最新版本自动更新。若此前误上架过版本需清理，点「确定」进入版本管理删除。', function () { gmOpenVersions(a); });
+                    return;
+                }
+                gmOpenVersions(a);
+            }));
             tdOp.appendChild(opBtn(a.status === 0 ? '下架' : '上架', '', function () { gmToggleStatus(a); }));
             tdOp.appendChild(opBtn('删除', 'danger', function () {
                 confirmBox('删除游戏「' + a.name + '」将同时删除全部版本文件与磁盘数据，不可恢复，确定删除？', function () {
@@ -6767,6 +6776,8 @@
     async function gmRunPublish() {
         if (gmUploading) return;
         if (!gmVerGame) { showToast('请先打开版本管理'); return; }
+        // BT·上传种子方式禁上架（与服务端 create 拦截同口径的前置引导，避免选完文件传到一半才被 400）
+        if (gmVerGame.download_method === 2) { showToast('BT 种子方式无需版本上架：请关闭弹窗，在「编辑」中上传新种子文件'); return; }
         var version = $('gm-pub-version').value.trim();
         var changelog = $('gm-pub-changelog').value;
         var minReq = $('gm-pub-minreq').value;

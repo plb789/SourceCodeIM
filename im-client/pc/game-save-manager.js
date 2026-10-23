@@ -400,6 +400,13 @@ class GameSaveManager extends EventEmitter {
         // 安全：baseDir 必须位于允许根内，否则拒绝该模式
         if (!this._withinRoots(baseDir, roots)) { mode.rejected = true; return mode; }
         try { mode.exists = fs.statSync(baseDir).isDirectory(); } catch (e) { mode.exists = false; }
+        // 无通配符精确路径指向实际存在的目录 → 整目录递归采集（管理员填目录名的直觉语义，
+        // 如 %USERPROFILE%\Saved Games\Game\mod\TCP；原实现按"精确文件"处理导致目录内容采不到）。
+        // baseDir 改为该目录本身，rel_path 自目录内起算；指向文件/不存在时保持精确文件语义不变。
+        // abs 在 baseDir 之下，baseDir 已过根校验则 abs 必在根内（前缀关系），无越界面
+        if (firstWild < 0 && mode.exists) {
+            try { if (fs.statSync(abs).isDirectory()) { mode.baseDir = baseDir = abs; mode.globSegs = ['**']; } } catch (e) { /* 文件或竞态删除：保持精确文件 */ }
+        }
         return mode;
     }
 
