@@ -238,6 +238,12 @@ func newDbwriteRunner(cfg *Config) (*dbwriteRunner, error) {
 		}
 		r.upd = t
 	}
+	// mssql/postgres 的 URL 形态连接串中，密码含 # 会被 URL 解析器当 fragment 截断（实测
+	// parse "sqlserver://sa:sq#123@…" invalid port，Open 阶段即失败）——Open 前预判给明确指引：
+	// 建议改用 key=value 形态（密码无需转义）或将 # 编码为 %23
+	if (d.Type == "mssql" || d.Type == "postgres") && strings.Contains(dsn, "://") && strings.Contains(dsn, "#") {
+		return nil, fmt.Errorf("连接串含 # 会被 URL 截断（密码无法正确解析）：请改用 key=value 形态，密码无需转义——mssql: server=…;user id=…;password=…;database=…｜postgres: host=… port=… user=… password=… dbname=… sslmode=disable；或将 # 编码为 %%23")
+	}
 	// 连接池（Ping 失败不致命：写库时再报错，恢复后自动续写；驱动名经映射归口）。
 	// sqlite 固定单连接：modernc sqlite 多连接并发写会 SQLITE_BUSY（拉取器 loop 本就串行，池收为 1 最稳）
 	db, err := sql.Open(dbwriteDriverName(d.Type), dsn)
@@ -254,6 +260,12 @@ func newDbwriteRunner(cfg *Config) (*dbwriteRunner, error) {
 	db.SetConnMaxLifetime(5 * time.Minute)
 	r.db = db
 	if err := r.db.Ping(); err != nil {
+		// mssql/postgres 的 URL 形态连接串中，密码含 # 会被当 URL fragment 截断（实测
+		// parse "sqlserver://sa:sq#123@…" invalid port）——识别到该特征时附明确指引
+		if strings.Contains(dsn, "://") && strings.Contains(dsn, "#") {
+			log.Printf("[dbwrite] 数据库暂时不可达（将继续重试）：%v", err)
+			return nil, fmt.Errorf("数据库连接失败：%v——连接串含 # 会被 URL 截断：请改用 key=value 形态（mssql: server=…;user id=…;password=…;database=…｜postgres: host=… user=… password=… dbname=… sslmode=disable，密码无需转义），或将 # 编码为 %%23", err)
+		}
 		log.Printf("[dbwrite] 数据库暂时不可达（将继续重试）：%v", err)
 	}
 	return r, nil
@@ -491,6 +503,10 @@ func dbwriteTestConn(dbType, dsn string) error {
 	}
 	if strings.TrimSpace(dsn) == "" {
 		return errors.New("dsn 未填写")
+	}
+	// mssql/postgres URL 形态密码含 # 会被 URL 截断（实测 invalid port）——预检给明确指引
+	if (dbType == "mssql" || dbType == "postgres") && strings.Contains(dsn, "://") && strings.Contains(dsn, "#") {
+		return errors.New("连接串含 # 会被 URL 截断：请改用 key=value 形态（密码无需转义，如 mssql: server=…;user id=…;password=…;database=…），或将 # 编码为 %23")
 	}
 	db, err := sql.Open(dbwriteDriverName(dbType), strings.TrimSpace(dsn))
 	if err != nil {

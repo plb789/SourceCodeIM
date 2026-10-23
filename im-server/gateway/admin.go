@@ -537,8 +537,10 @@ button.act.secondary{background:none;border:1px solid #2f3640;color:#9aa2ac}
 <div class="row"><label>自报网关名</label><input id="dbw-gateway_name" placeholder="与 im-server 地址簿条目名一致"></div>
 <div class="row"><label>im-server 地址</label><input id="dbw-im_addr" placeholder="http://im服务器地址:2087"></div>
 <div class="row"><label>数据库类型</label><select id="dbw-type"><option value="mysql">mysql</option><option value="mssql">mssql</option><option value="postgres">postgres</option><option value="sqlite">sqlite</option></select></div>
-<div class="row"><label>连接串（DSN）</label><input class="wide" id="dbw-dsn" placeholder="切换类型自动填默认模板；mysql: root:root@tcp(127.0.0.1:3306)/gamedb｜postgres: postgres://…@127.0.0.1:5432/gamedb｜sqlite: file:gamedb.db"><button class="act secondary" id="dbw-test">测试连接</button></div>
-<div class="hint">sqlite 支持<b>绝对路径</b>与<b>相对路径</b>：file:E:/gamedata/game.db（Windows 建议正斜杠）、file:/home/game/gamedb.db、file:gamedb.db（相对网关工作目录）。库文件不存在时自动创建（表结构需预先建好）；路径中目录须已存在。可追加 URI 参数，如 ?_pragma=journal_mode(WAL)。</div>
+<div class="row"><label>连接串（DSN）</label><input class="wide" id="dbw-dsn" placeholder="切换类型自动填默认模板；mysql: root:root@tcp(127.0.0.1:3306)/gamedb｜mssql/pg: key=value 形态（见下方说明）｜sqlite: file:gamedb.db"><button class="act secondary" id="dbw-test">测试连接</button></div>
+<div class="hint">sqlite 支持<b>绝对路径</b>与<b>相对路径</b>：file:E:/gamedata/game.db（Windows 建议正斜杠）、file:/home/game/gamedb.db、file:gamedb.db（相对网关工作目录）。库文件不存在时自动创建（表结构需预先建好）；路径中目录须已存在。可追加 URI 参数，如 ?_pragma=journal_mode(WAL)。<br>
+<b>密码含 # 等特殊字符</b>：mssql/pg 的 URL 形态（sqlserver://…、postgres://…）中 # 会被截断导致连接失败——请使用默认模板的 <b>key=value 形态</b>（mssql: server=…;user id=…;password=…;database=…｜postgres: host=… user=… password=… dbname=…），密码无需任何转义；mysql 的 DSN 密码可原样使用。<br>
+<b>TLS 握手失败</b>（server selected unsupported protocol version 301 等）：老版本 SQL Server（2008/2012/2014）仅支持 TLS1.0，而新版驱动最低要求 TLS1.2——在 DSN 末尾追加 <b>;encrypt=disable</b> 即可（本机/内网连接无加密需求，安全无损）。</div>
 <div class="row"><label>写入策略</label><select id="dbw-strategy"><option value="upsert">upsert（先改后插）</option><option value="insert">insert（只插入）</option><option value="update">update（只更新）</option></select></div>
 <div class="row"><label>拉取周期（秒）</label><input id="dbw-poll_sec" type="number" value="30"></div>
 <div class="row"><label>INSERT 模板</label><textarea id="dbw-sql_insert" rows="2" placeholder="切换类型自动填默认模板；自定义改库/表/字段"></textarea></div>
@@ -553,72 +555,79 @@ button.act.secondary{background:none;border:1px solid #2f3640;color:#9aa2ac}
 </div>
 {{GROUPS}}
 <script>
+// 老浏览器兼容（Server2008R2 场景的 IE9~11）：不用 fetch（IE 全系缺失）与 NodeList.forEach（IE11 缺失），
+// 统一 XHR 回调 + for 循环 + ES5 语法，现代浏览器同样兼容
 function $(id){return document.getElementById(id)}
 function setv(id,v){var el=$(id);if(el!=null)el.value=(v==null?"":String(v));}
-dbwLoad();
-// 各数据库类型默认连接串模板（IP=127.0.0.1，账号=该库默认管理员，密码统一 root）：
-// 切换类型时仅在 DSN 为空或仍是任一默认模板时替换——用户自定义过的连接信息绝不覆盖
+function ajax(method,url,body,cb){
+  var x=new XMLHttpRequest();
+  x.open(method,url,true);
+  if(body!=null)x.setRequestHeader("Content-Type","application/json");
+  x.onreadystatechange=function(){
+    if(x.readyState!==4)return;
+    var j=null;try{j=JSON.parse(x.responseText);}catch(e){}
+    cb(j,x.status);
+  };
+  x.send(body==null?null:body);
+}
 var DBW_DSN_DEFAULTS={
  mysql:"root:root@tcp(127.0.0.1:3306)/gamedb",
- mssql:"sqlserver://sa:root@127.0.0.1:1433?database=gamedb",
- postgres:"postgres://postgres:root@127.0.0.1:5432/gamedb?sslmode=disable",
+ mssql:"server=127.0.0.1;user id=sa;password=root;database=gamedb",
+ postgres:"host=127.0.0.1 port=5432 user=postgres password=root dbname=gamedb sslmode=disable",
  sqlite:"file:gamedb.db"};
 var DBW_DSN_ALL=Object.keys(DBW_DSN_DEFAULTS).map(function(k){return DBW_DSN_DEFAULTS[k]});
-$("dbw-type").addEventListener("change",function(){
-  var cur=$("dbw-dsn").value.trim();
-  if(cur===""||DBW_DSN_ALL.indexOf(cur)>=0){$("dbw-dsn").value=DBW_DSN_DEFAULTS[$("dbw-type").value]||"";}
-});
-// SQL 模板默认语句：占位符 {user}/{password} 方言无关，四类型通用；切换类型时仅在模板为空
-// 或仍是默认语句时替换——用户自定义的库/表/字段语句绝不覆盖（INSERT/UPDATE 独立判断）
 var DBW_SQL_DEFAULTS={
  insert:"INSERT INTO members(account, password) VALUES({user}, {password})",
  update:"UPDATE members SET password={password} WHERE account={user}"};
 var DBW_SQL_ALL=Object.keys(DBW_SQL_DEFAULTS).map(function(k){return DBW_SQL_DEFAULTS[k]});
 $("dbw-type").addEventListener("change",function(){
+  var cur=$("dbw-dsn").value.trim();
+  if(cur===""||DBW_DSN_ALL.indexOf(cur)>=0){$("dbw-dsn").value=DBW_DSN_DEFAULTS[$("dbw-type").value]||"";}
   var ci=$("dbw-sql_insert").value.trim();
   if(ci===""||DBW_SQL_ALL.indexOf(ci)>=0){$("dbw-sql_insert").value=DBW_SQL_DEFAULTS.insert;}
   var cu=$("dbw-sql_update").value.trim();
   if(cu===""||DBW_SQL_ALL.indexOf(cu)>=0){$("dbw-sql_update").value=DBW_SQL_DEFAULTS.update;}
 });
-function dbwLoad(){fetch("/api/dbwrite").then(function(r){return r.json()}).then(function(j){
-  if(!j.ok){$("dbw-state").textContent="加载失败";return;}
-  var d=j.config||{};
-  $("dbw-enabled").checked=!!d.enabled;
-  setv("dbw-gateway_name",d.gateway_name);setv("dbw-im_addr",d.im_addr);setv("dbw-type",d.type||"mysql");
-  setv("dbw-dsn",d.dsn);setv("dbw-strategy",d.strategy||"upsert");setv("dbw-poll_sec",d.poll_sec||30);
-  setv("dbw-sql_insert",d.sql_insert);setv("dbw-sql_update",d.sql_update);
-  var st=$("dbw-state");st.textContent=j.running?"拉取器运行中":"拉取器未运行";st.className="dbw-state"+(j.running?"":" off");
-});}
+function dbwLoad(){
+  ajax("GET","/api/dbwrite",null,function(j){
+    if(!j||!j.ok){var st=$("dbw-state");if(st)st.textContent="加载失败";return;}
+    var d=j.config||{};
+    $("dbw-enabled").checked=!!d.enabled;
+    setv("dbw-gateway_name",d.gateway_name);setv("dbw-im_addr",d.im_addr);setv("dbw-type",d.type||"mysql");
+    setv("dbw-dsn",d.dsn);setv("dbw-strategy",d.strategy||"upsert");setv("dbw-poll_sec",d.poll_sec||30);
+    setv("dbw-sql_insert",d.sql_insert);setv("dbw-sql_update",d.sql_update);
+    var st=$("dbw-state");st.textContent=j.running?"拉取器运行中":"拉取器未运行";st.className="dbw-state"+(j.running?"":" off");
+  });
+}
+dbwLoad();
 function dbwPayload(){return {enabled:$("dbw-enabled").checked,gateway_name:$("dbw-gateway_name").value.trim(),
   im_addr:$("dbw-im_addr").value.trim(),type:$("dbw-type").value,dsn:$("dbw-dsn").value.trim(),
   strategy:$("dbw-strategy").value,poll_sec:parseInt($("dbw-poll_sec").value,10)||30,
   sql_insert:$("dbw-sql_insert").value.trim(),sql_update:$("dbw-sql_update").value.trim()};}
 $("dbw-test").addEventListener("click",function(){
   var msg=$("dbw-msg");msg.className="msg";msg.textContent="测试中…";
-  fetch("/api/dbwrite/test",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({type:$("dbw-type").value,dsn:$("dbw-dsn").value.trim()})})
-  .then(function(r){return r.json()}).then(function(j){
-    msg.className="msg "+(j.ok?"ok":"fail");msg.textContent=j.ok?"连接成功":(j.err||"连接失败");});
+  ajax("POST","/api/dbwrite/test",JSON.stringify({type:$("dbw-type").value,dsn:$("dbw-dsn").value.trim()}),function(j){
+    msg.className="msg "+(j&&j.ok?"ok":"fail");msg.textContent=j?(j.ok?"连接成功":(j.err||"连接失败")):"请求失败";
+  });
 });
 $("dbw-save").addEventListener("click",function(){
   var msg=$("dbw-msg");msg.className="msg";msg.textContent="保存中…";
-  fetch("/api/dbwrite",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(dbwPayload())})
-  .then(function(r){return r.json()}).then(function(j){
-    msg.className="msg "+(j.ok?"ok":"fail");msg.textContent=j.ok?(j.warn?j.warn:"已热生效并落盘"):(j.err||"保存失败");
-    if(j.ok)dbwLoad();
-  }).catch(function(){msg.className="msg fail";msg.textContent="请求失败";});
+  ajax("POST","/api/dbwrite",JSON.stringify(dbwPayload()),function(j){
+    msg.className="msg "+(j&&j.ok?"ok":"fail");msg.textContent=j?(j.ok?(j.warn?j.warn:"已热生效并落盘"):(j.err||"保存失败")):"请求失败";
+    if(j&&j.ok)dbwLoad();
+  });
 });
-document.querySelectorAll("button.save").forEach(function(btn){
+var saveBtns=document.querySelectorAll("button.save");
+for(var bi=0;bi<saveBtns.length;bi++){(function(btn){
   btn.addEventListener("click",function(){
     var g=btn.getAttribute("data-g");
     var ports=document.getElementById("allow-"+g).value.split(",").map(function(s){return parseInt(s.trim(),10)}).filter(function(n){return n>0});
     var msg=document.getElementById("msg-"+g);
     msg.className="msg";msg.textContent="保存中…";
-    fetch("/api/allow_targets",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({group:g,ports:ports})}).then(function(r){return r.json()}).then(function(j){
-      if(j.ok){msg.className="msg ok";msg.textContent=j.warn?j.warn:"已热生效并落盘";}
-      else{msg.className="msg fail";msg.textContent=j.err||"失败";}}).catch(function(){
-      msg.className="msg fail";msg.textContent="请求失败";});
+    ajax("POST","/api/allow_targets",JSON.stringify({group:g,ports:ports}),function(j){
+      if(j&&j.ok){msg.className="msg ok";msg.textContent=j.warn?j.warn:"已热生效并落盘";}
+      else{msg.className="msg fail";msg.textContent=(j&&j.err)||"失败";}
+    });
   });
-});
+})(saveBtns[bi]);}
 </script></div></body></html>`
