@@ -40,17 +40,20 @@ import (
 	"im-server/gwproto"
 )
 
-// DbwriteConfig gateway.yaml dbwrite 配置节（可选；enabled 才启动拉取器）
+// DbwriteConfig gateway.yaml dbwrite 配置节（可选；enabled 才启动拉取器）。
+// json tag 与 yaml 一致（snake_case）：Web 后台 GET 回显/POST 保存的 JSON body 靠它解析——
+// 无 tag 时 Go 按字段名大小写不敏感匹配（GatewayName≠gateway_name，下划线不忽略），
+// 下划线字段全部解析失败（实测踩坑：后台保存报 gateway_name 未配置）
 type DbwriteConfig struct {
-	Enabled     bool   `yaml:"enabled"`      // 总开关
-	GatewayName string `yaml:"gateway_name"` // 自报网关名（须与 im-server 地址簿条目名一致，服务端据此按网关过滤）
-	IMAddr      string `yaml:"im_addr"`      // im-server 拉取地址（http://host:2087）
-	Type        string `yaml:"type"`         // mysql / mssql（P1）
-	DSN         string `yaml:"dsn"`          // 驱动连接串
-	Strategy    string `yaml:"strategy"`     // insert / update / upsert
-	PollSec     int    `yaml:"poll_sec"`     // 拉取周期秒（默认 30，clamp 5~600）
-	SQLInsert   string `yaml:"sql_insert"`   // INSERT 模板（{user}/{password} 占位符）
-	SQLUpdate   string `yaml:"sql_update"`   // UPDATE 模板（strategy=update/upsert 必填）
+	Enabled     bool   `yaml:"enabled" json:"enabled"`           // 总开关
+	GatewayName string `yaml:"gateway_name" json:"gateway_name"` // 自报网关名（须与 im-server 地址簿条目名一致，服务端据此按网关过滤）
+	IMAddr      string `yaml:"im_addr" json:"im_addr"`           // im-server 拉取地址（http://host:2087）
+	Type        string `yaml:"type" json:"type"`                 // mysql / mssql / postgres / sqlite
+	DSN         string `yaml:"dsn" json:"dsn"`                   // 驱动连接串
+	Strategy    string `yaml:"strategy" json:"strategy"`         // insert / update / upsert
+	PollSec     int    `yaml:"poll_sec" json:"poll_sec"`         // 拉取周期秒（默认 30，clamp 5~600）
+	SQLInsert   string `yaml:"sql_insert" json:"sql_insert"`     // INSERT 模板（{user}/{password} 占位符）
+	SQLUpdate   string `yaml:"sql_update" json:"sql_update"`     // UPDATE 模板（strategy=update/upsert 必填）
 }
 
 // dbwriteDriverName 配置 type → database/sql 驱动注册名映射归口：
