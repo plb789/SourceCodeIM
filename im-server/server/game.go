@@ -521,6 +521,7 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/game/config", s.HandleGameStoreConfig) // 字面量段与 /api/game/{id} 交叉时字面量优先（Go 1.22 ServeMux 规则），无两可冲突
 	http.HandleFunc("GET /api/game/list", s.HandleGameList)
 	http.HandleFunc("GET /api/game/library", s.HandleGameLibrary)
+	http.HandleFunc("GET /api/game/library/sig", s.HandleGameLibrarySig)
 	http.HandleFunc("POST /api/game/library/{id}", s.HandleGameLibraryJoin)
 	http.HandleFunc("PUT /api/game/library/{id}/state", s.HandleGameLibraryState)
 	http.HandleFunc("DELETE /api/game/library/{id}", s.HandleGameLibraryLeave)
@@ -794,8 +795,66 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 		if gwResp != nil {
 			out["gateway"] = gwResp // 网关配置+token（未配置不下发，客户端 gw 规则拒绝并提示）
 		}
+		// 库状态签名（与轻量轮询端点 /api/game/library/sig 同源计算）：客户端记下后仅轮询签名，
+		// 签名变化才拉本全量接口（50000 在线规模下全量直轮询会产生数十 MB/s 带宽与重计算压力）
+		if sig, err := s.libStateSigOf(username); err == nil {
+			out["sig"] = sig
+		}
 		return out
 	}())
+}
+
+// libStateSigOf 库状态签名计算归口（全量接口附带 + 轻量轮询端点共用，两处格式严格一致）：
+// 逐条目 game_id|viewState|installed_version|install_path|latest_version 按 game_id 升序拼接。
+// viewState 走 libStateForView（含 BT latest_version 映射，管理端同日重传 .2 即签名变化）；
+// latest_version 独立入签（installed 未变但服务端版本推进的场景——玩家未装时 state 不变但
+// 首装按钮态依赖 latest）。play_seconds/好友在玩等展示字段不进签名（不影响按钮态，全量拉取自然刷新）
+func (s *Server) libStateSigOf(username string) (string, error) {
+	var libs []model.GameLibrary
+	if err := store.DB.Select("game_id", "state", "installed_version", "install_path").
+		Where("username = ?", username).Order("game_id ASC").Find(&libs).Error; err != nil {
+		return "", err
+	}
+	ids := make([]uint, 0, len(libs))
+	for _, l := range libs {
+		ids = append(ids, l.GameID)
+	}
+	latestOf := map[uint]string{}
+	if len(ids) > 0 {
+		var games []model.Game
+		store.DB.Select("id", "latest_version").Where("id IN ?", ids).Find(&games)
+		for _, g := range games {
+			latestOf[g.ID] = g.LatestVersion
+		}
+	}
+	parts := make([]string, 0, len(libs))
+	for _, l := range libs {
+		parts = append(parts, fmt.Sprintf("%d|%d|%s|%s|%s", l.GameID,
+			libStateForView(l.State, l.InstalledVersion, latestOf[l.GameID]),
+			l.InstalledVersion, l.InstallPath, latestOf[l.GameID]))
+	}
+	return strings.Join(parts, ";"), nil
+}
+
+// HandleGameLibrarySig 库状态签名轻量轮询端点（GET /api/game/library/sig，鉴权水位同全量）：
+// 常驻客户端 45~75s 随机间隔轮询本端点，签名变化才拉全量 /api/game/library——50000 在线规模下
+// 全量直轮询（游戏详情+好友社交+网关 token+HMAC 派生，响应数十 KB）会产生数十 MB/s 公网带宽与
+// 重计算压力；本端点两条索引轻查询（库条目限定列+游戏主键取 latest_version）+ 响应 <200B。
+// 客户端侧随机抖动防登录高峰齐步轮询（瞬时尖峰）
+func (s *Server) HandleGameLibrarySig(w http.ResponseWriter, r *http.Request) {
+	if !s.gameEnabled(w) {
+		return
+	}
+	username, ok := gameUsername(w, r)
+	if !ok {
+		return
+	}
+	sig, err := s.libStateSigOf(username)
+	if err != nil {
+		adminFail(w, http.StatusInternalServerError, "查询游戏库失败")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"sig": sig})
 }
 
 // HandleGameLibraryJoin 加入游戏库（P2 商店化 Steam 同款购买流）：

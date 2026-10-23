@@ -6,6 +6,7 @@ package server
 // 推进到后续正常校验环节）。
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -196,5 +197,66 @@ func TestTorrentMetaFillVersionSeq(t *testing.T) {
 	s.gameTorrentMetaFill(&g, false)
 	if g.LatestVersion != yesterday {
 		t.Fatalf("存量补齐应为种子日期 %q，实际 %q", yesterday, g.LatestVersion)
+	}
+}
+
+// 库状态签名轻量轮询端点：签名随服务端 latest_version 变化而变化（BT 同日重传 .2 即签名推进，
+// 客户端据此感知拉全量），鉴权水位与全量同（缺 username 拒绝）
+func TestGameLibrarySigEndpoint(t *testing.T) {
+	s := NewServer(config.Load())
+	if !s.cfg.Game.Enabled {
+		t.Skip("游戏中心未启用，跳过")
+	}
+	store.DB.Where("slug = ?", "btversig").Delete(&model.Game{})
+	g := model.Game{Name: "签名端点测试", Slug: "btversig", DownloadMethod: 2, Status: 0, LatestVersion: "2026-01-01"}
+	if err := store.DB.Create(&g).Error; err != nil {
+		t.Fatalf("建测试游戏失败：%v", err)
+	}
+	defer store.DB.Unscoped().Where("slug = ?", "btversig").Delete(&model.Game{})
+	store.DB.Where("username = ?", "sigtest").Delete(&model.GameLibrary{})
+	lib := model.GameLibrary{Username: "sigtest", GameID: g.ID, State: 3, InstalledVersion: "2026-01-01", InstallPath: `H:\T`}
+	if err := store.DB.Create(&lib).Error; err != nil {
+		t.Fatalf("建库条目失败：%v", err)
+	}
+	defer store.DB.Where("username = ?", "sigtest").Delete(&model.GameLibrary{})
+
+	sigOf := func() string {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/game/library/sig?username=sigtest", nil)
+		s.HandleGameLibrarySig(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("sig 端点应 200，实际 %d：%s", w.Code, w.Body.String())
+		}
+		var out struct {
+			Ok   bool `json:"ok"`
+			Data struct {
+				Sig string `json:"sig"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatalf("解析 sig 响应失败：%v", err)
+		}
+		return out.Data.Sig
+	}
+
+	sig1 := sigOf()
+	if !strings.Contains(sig1, strconv.FormatUint(uint64(g.ID), 10)) {
+		t.Fatalf("签名应含游戏条目：%q", sig1)
+	}
+	// 模拟同日重传：latest_version 推进 → 签名变化
+	store.DB.Model(&g).Update("latest_version", "2026-01-01.2")
+	sig2 := sigOf()
+	if sig2 == sig1 {
+		t.Fatalf("latest_version 推进后签名应变化")
+	}
+	// 未变化：签名稳定
+	if sig2 != sigOf() {
+		t.Fatalf("服务端无变化签名应稳定")
+	}
+	// 缺 username：400
+	w := httptest.NewRecorder()
+	s.HandleGameLibrarySig(w, httptest.NewRequest(http.MethodGet, "/api/game/library/sig", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("缺 username 应 400，实际 %d", w.Code)
 	}
 }

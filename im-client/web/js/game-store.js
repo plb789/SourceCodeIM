@@ -36,6 +36,7 @@
         allTags: [], // 首页全量标签缓存（筛选态下标签条仍用全量渲染）
         games: {},         // gameId → 游戏数据（商店列表项/详情数据归口，徽标渲染取 in_library）
         lib: {},           // gameId → { lib:{state,installed_version,install_path,play_seconds,...}, game:{...} }
+        libSig: '',        // 库状态签名（服务端 /api/game/library/sig 同源计算）：轮询对比用，变化才拉全量
         tasks: {},         // taskId → 下载任务 {taskId,gameId,name,version,installDir,prevInstalled,received,total,speed,state,fileRelPath,error}
         taskByGame: {},    // gameId → 进行中的 taskId（详情/库按钮态联动）
         sessions: {},      // gameId → 本次启动时间戳（onGameExit 结算游玩时长）
@@ -1642,21 +1643,31 @@
         $('gsLibSideTitle').textContent = '库';
     }
 
-    function loadLibrary() {
+    // silent=true（轮询/切页静默刷新）：不渲染骨架屏、无变化跳过重绘（防列表滚动位置重置与按钮
+    // 闪烁）——管理端换种子/上架新版本后，常驻页面自动感知按钮变"更新"（此前仅登录/点库
+    // 才拉库，用户须重新登录才能看到更新态）
+    function loadLibrary(silent) {
         if (!username) { renderLibrary(); return; }
-        renderLibSkeleton();
+        if (!silent) renderLibSkeleton();
         api('GET', '/api/game/library').then(function (res) {
-            if (!res.ok) { toast(res.msg || '游戏库加载失败'); return; }
-            state.lib = {};
+            if (!res.ok) { if (!silent) toast(res.msg || '游戏库加载失败'); return; }
+            // 服务端同源库状态签名：轮询端点对比基线（变化才拉全量，两处格式由服务端单点保证一致）；
+            // 静默拉取时对比前后签名——服务端无变化则跳过重绘（仅徽标保守刷新）
+            var prevSig = state.libSig;
+            if (res.data && res.data.sig) state.libSig = res.data.sig;
+            var next = (res.data && res.data.list) || [];
+            var gateway = (res.data && res.data.gateway) || null;
             // 端口透传·远程加密网关配置（服务端三项齐备才下发：addr/fingerprint/token，token 24h 短效；
             // 随启动透传给主进程转发器的 gateway 模式规则）
-            state.gateway = (res.data && res.data.gateway) || null;
-            ((res.data && res.data.list) || []).forEach(function (item) {
+            state.gateway = gateway;
+            state.lib = {};
+            next.forEach(function (item) {
                 var gid = item.lib && item.lib.game_id;
                 if (!gid) return;
                 state.lib[gid] = item;
                 if (item.game) state.games[gid] = item.game;
             });
+            if (silent && state.libSig === prevSig) { updateBadges(); return; } // 无变化：仅徽标保守刷新
             renderLibrary();
             updateBadges();
             if (state.detailId) updateInstallBox();
@@ -4846,11 +4857,11 @@
         showView('store');
         if (!state.store.list.length) loadStore(true);
         else renderStore();
+        if (username) loadLibrary(true); // 切商店页签静默刷新库状态（卡片"已安装"徽标即时感知服务端变化）
     });
     $('gsNavLibrary').addEventListener('click', function () {
         showView('library');
-        if (username) loadLibrary();
-        else renderLibrary();
+        loadLibrary(true); // 切库页签静默刷新（有变化才重绘，防滚动重置）
     });
     $('gsNavDownloads').addEventListener('click', function () {
         showView('downloads');
@@ -5000,6 +5011,19 @@
         api('GET', '/api/game/points').then(function (res) { // 积分余额（购买块/确认弹窗显示）
             if (res.ok && res.data) state.balance = res.data.balance;
         });
+        // 库状态签名轮询（45~75s 随机抖动，防登录高峰齐步轮询瞬时尖峰）：先调轻量签名端点
+        // （服务端两条索引轻查询，响应 <200B——50000 在线规模全量直轮询会产生数十 MB/s 带宽压力），
+        // 签名变化才拉全量库接口刷新按钮/徽标。签名基线由全量响应附带（loadLibrary 内记录）
+        (function pollLibSig() {
+            setTimeout(function () {
+                if (username && state.libSig) {
+                    api('GET', '/api/game/library/sig').then(function (res) {
+                        if (res.ok && res.data && res.data.sig && res.data.sig !== state.libSig) loadLibrary(true);
+                    }).catch(function () { /* 网络异常静默：下轮重试 */ });
+                }
+                pollLibSig();
+            }, 45000 + Math.floor(Math.random() * 30000));
+        })();
     }
     if (IN_ELECTRON) {
         pullStatus();  // 恢复主进程侧下载任务（页面刷新场景）
