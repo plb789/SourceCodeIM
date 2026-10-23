@@ -61,7 +61,8 @@ func startAdmin(cfg *Config, cfgPath string, grps []*listenRuntime) {
 				return
 			}
 			if guarded && !a.checkSession(r) {
-				if strings.HasPrefix(r.URL.Path, "/api/") {
+				w.Header().Set("Cache-Control", "no-store")
+if strings.HasPrefix(r.URL.Path, "/api/") {
 					w.WriteHeader(http.StatusUnauthorized)
 					_, _ = w.Write([]byte(`{"ok":false,"err":"unauthorized"}`))
 				} else {
@@ -142,7 +143,8 @@ func (a *adminServer) checkSession(r *http.Request) bool {
 func (a *adminServer) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.checkSession(r) {
-			if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+if strings.HasPrefix(r.URL.Path, "/api/") {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"ok":false,"err":"unauthorized"}`))
 			} else {
