@@ -479,6 +479,9 @@ func saveAllowTargetsYAML(cfgPath, group string, ports []int) error {
 }
 
 func writeAdminJSON(w http.ResponseWriter, v interface{}) {
+	// 动态配置/状态接口禁缓存：IE 内核对同 URL 的 GET XHR 会用启发式缓存，缺此头会导致
+	// 保存成功后 dbwLoad 回显到缓存的旧值（实测：刷新浏览器才显示新值）
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	b, _ := json.Marshal(v)
 	_, _ = w.Write(b)
@@ -592,7 +595,7 @@ $("dbw-type").addEventListener("change",function(){
   if(cu===""||DBW_SQL_ALL.indexOf(cu)>=0){$("dbw-sql_update").value=DBW_SQL_DEFAULTS.update;}
 });
 function dbwLoad(){
-  ajax("GET","/api/dbwrite",null,function(j){
+  ajax("GET","/api/dbwrite?t="+new Date().getTime(),null,function(j){
     if(!j||!j.ok){var st=$("dbw-state");if(st)st.textContent="加载失败";return;}
     var d=j.config||{};
     $("dbw-enabled").checked=!!d.enabled;
