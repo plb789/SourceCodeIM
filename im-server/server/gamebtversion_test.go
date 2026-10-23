@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"im-server/config"
 	"im-server/model"
@@ -124,5 +125,76 @@ func TestAdminGameVersionDeleteBtRefill(t *testing.T) {
 	}
 	if got.LatestVersion == "" || got.LatestVersion == "0.0.0-bad" {
 		t.Fatalf("BT 删版后 latest_version 应回填种子日期，实际 %q", got.LatestVersion)
+	}
+}
+
+// 同日重传种子 latest_version 序号递归：客户端按字符串比较判"待更新"，日期粒度下同日重传
+// 不变会漏掉更新提示——种子实际更换（seedChanged=true）时同日自动递增 .2/.3、跨日自然重置；
+// 种子未换（false，普通编辑保存/删版回填）原值保留防误触全员更新
+func TestTorrentMetaFillVersionSeq(t *testing.T) {
+	s := NewServer(config.Load())
+	if !s.cfg.Game.Enabled {
+		t.Skip("游戏中心未启用，跳过")
+	}
+	dir := s.gameUploadedTorrentDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("建种子目录失败：%v", err)
+	}
+	mk := func(name string, mt time.Time) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("d4:infod4:name4:seqx6:lengthi100eee"), 0o644); err != nil {
+			t.Fatalf("写测试种子失败：%v", err)
+		}
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatalf("设种子 mtime 失败：%v", err)
+		}
+		t.Cleanup(func() { os.Remove(p) })
+	}
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	mk("seqa.torrent", now)
+	mk("seqb.torrent", now)
+	mk("seqc.torrent", now)
+	mk("seqd.torrent", now.AddDate(0, 0, -1))
+
+	g := model.Game{Name: "序号递归测试", Slug: "btverseq", DownloadMethod: 2, TorrentPath: "seqa.torrent"}
+	defer store.DB.Unscoped().Where("slug = ?", "btverseq").Delete(&model.Game{})
+
+	// 首次填充（无旧值）：种子日期
+	g.LatestVersion = ""
+	s.gameTorrentMetaFill(&g, true)
+	if g.LatestVersion != today {
+		t.Fatalf("首次填充应为今天 %q，实际 %q", today, g.LatestVersion)
+	}
+	// 同日重传（换种子 B）：递增 .2
+	g.TorrentPath = "seqb.torrent"
+	s.gameTorrentMetaFill(&g, true)
+	if g.LatestVersion != today+".2" {
+		t.Fatalf("同日重传应递增为 %q，实际 %q", today+".2", g.LatestVersion)
+	}
+	// 同日再重传（换种子 C）：递增 .3
+	g.TorrentPath = "seqc.torrent"
+	s.gameTorrentMetaFill(&g, true)
+	if g.LatestVersion != today+".3" {
+		t.Fatalf("同日二度重传应递增为 %q，实际 %q", today+".3", g.LatestVersion)
+	}
+	// 跨日重传（换种子 D，mtime=昨天）：重置为新日期无序号
+	g.TorrentPath = "seqd.torrent"
+	s.gameTorrentMetaFill(&g, true)
+	if g.LatestVersion != yesterday {
+		t.Fatalf("跨日重传应重置为 %q，实际 %q", yesterday, g.LatestVersion)
+	}
+	// 种子未换（普通编辑保存）：原值保留（含序号形态）不递增
+	g.LatestVersion = yesterday + ".7"
+	s.gameTorrentMetaFill(&g, false)
+	if g.LatestVersion != yesterday+".7" {
+		t.Fatalf("未换种子应保留原值 %q，实际 %q", yesterday+".7", g.LatestVersion)
+	}
+	// 未换种子且库中无值（存量补齐）：按种子日期填充
+	g.LatestVersion = ""
+	s.gameTorrentMetaFill(&g, false)
+	if g.LatestVersion != yesterday {
+		t.Fatalf("存量补齐应为种子日期 %q，实际 %q", yesterday, g.LatestVersion)
 	}
 }

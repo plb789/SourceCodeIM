@@ -601,7 +601,7 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	// 此处双保险）：每游戏独立持钥，单游戏密钥泄露/轮换不影响其他游戏
 	g.GameSecret = gameRandomSecret()
 	// BT·上传种子方式：从落盘种子填充 size_bytes/latest_version（用户端详情"游戏大小/最新版本"展示源）
-	s.gameTorrentMetaFill(&g)
+	s.gameTorrentMetaFill(&g, true)
 	if err := store.DB.Create(&g).Error; err != nil {
 		adminFail(w, http.StatusConflict, "slug 已存在或保存失败")
 		return
@@ -774,10 +774,13 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
 		return
 	}
-	// BT·上传种子方式：种子落定后重扫填充 size_bytes/latest_version（换新种子保存即更新大小与版本日期；
-	// 编辑保存一次即可为存量 BT 游戏补齐展示数据）
+	// BT·上传种子方式：种子落定后重扫填充 size_bytes/latest_version。种子实际更换（tp≠旧值）时
+	// latest_version 按种子日期递增（同日重传自动追加序号 .2/.3——客户端按字符串比较判更新，
+	// 同日重传日期不变会漏掉更新提示）；未换种子（普通编辑保存）latest_version 原值保留不递增
+	// （防每次编辑保存都误触全员更新）。u.LatestVersion 先预置库中旧值作递增基线
 	u.TorrentPath = tp
-	s.gameTorrentMetaFill(&u)
+	u.LatestVersion = g.LatestVersion
+	s.gameTorrentMetaFill(&u, tp != "" && tp != g.TorrentPath)
 	vids, verr := gameVideosClean(u.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -1050,9 +1053,12 @@ func (s *Server) handleAdminGameTorrentUpload(w http.ResponseWriter, r *http.Req
 
 // gameTorrentMetaFill BT·上传种子游戏的元信息归口（下载方式=2 且种子已上传时调用）：
 // 从落盘的 .torrent 重扫 info（与上传接口同源），填充 size_bytes（种子内文件总大小）与
-// latest_version（种子文件上传日期 yyyy-MM-dd——BT 方式无版本概念，换新种子=日期自动更新，
-// 语义即"该版本的发布日期"）。解析失败静默跳过（保留原值，不阻塞保存）
-func (s *Server) gameTorrentMetaFill(g *model.Game) {
+// latest_version（种子上传日期 yyyy-MM-dd——BT 方式无版本概念，换新种子=日期自动更新，
+// 语义即"该版本的发布日期"）。seedChanged=true（种子实际更换：新建/重传）时同日重传自动追加
+// 递增序号（2026-10-24 → 2026-10-24.2 → .3，跨日自然重置）——客户端按 latest_version 字符串
+// 比较判定"待更新"，同日重传日期不变会漏掉更新提示；seedChanged=false（普通编辑保存/冗余回填）
+// 仅重扫大小，latest_version 原值保留（防每次编辑保存都递增序号误触全员更新）。解析失败静默跳过
+func (s *Server) gameTorrentMetaFill(g *model.Game, seedChanged bool) {
 	if g.DownloadMethod != 2 || strings.TrimSpace(g.TorrentPath) == "" {
 		return
 	}
@@ -1067,7 +1073,27 @@ func (s *Server) gameTorrentMetaFill(g *model.Game) {
 	}
 	g.SizeBytes = total
 	if st, err := os.Stat(fp); err == nil {
-		g.LatestVersion = st.ModTime().Format("2006-01-02")
+		today := st.ModTime().Format("2006-01-02")
+		if !seedChanged {
+			if g.LatestVersion == "" {
+				g.LatestVersion = today // 存量补齐（库中无旧值）：按种子日期填充
+			}
+			return // 种子未换：latest_version 原值保留（含同日序号）
+		}
+		// 种子更换：同日重传序号递增（防同日重传漏更新提示）
+		prev := g.LatestVersion
+		switch {
+		case prev == today:
+			g.LatestVersion = today + ".2"
+		case strings.HasPrefix(prev, today+"."):
+			if n, err := strconv.Atoi(strings.TrimPrefix(prev, today+".")); err == nil {
+				g.LatestVersion = today + "." + strconv.Itoa(n+1)
+			} else {
+				g.LatestVersion = today
+			}
+		default:
+			g.LatestVersion = today // 跨日/无旧值：自然重置为新日期
+		}
 	}
 }
 
@@ -1513,7 +1539,7 @@ func (s *Server) handleAdminGameVersionDelete(w http.ResponseWriter, r *http.Req
 	// 而非按版本逻辑清空/置剩余版本号——否则 BT 清单版本号回退 "torrent" 占位且全部玩家
 	// installed 与清单不一致，种子未变却被误标"待更新"触发一轮无意义重装
 	if g.DownloadMethod == 2 {
-		s.gameTorrentMetaFill(&g)
+		s.gameTorrentMetaFill(&g, false) // 种子未换：latest_version 原值保留（含同日序号），仅重扫大小
 		store.DB.Model(&g).Updates(map[string]interface{}{"latest_version": g.LatestVersion, "size_bytes": g.SizeBytes})
 	} else {
 		var rest model.GameVersion
