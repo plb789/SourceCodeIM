@@ -613,9 +613,10 @@ game:
   max_file_size: 53687091200     # 单文件上传上限（字节，默认 50GB）
   chunk_size: 8388608            # 分片上传单片大小（字节，0=8MB，上限 64MB）
   video_max_size: 209715200      # 商店详情页宣传视频单文件上限（字节，0=200MB）
-  # launch_secret: "im-game-launch-secret"  # 启动参数 {1} 专属密码派生密钥（HMAC 种子，仅存本文件，
-  #                                         # 不下发客户端）；同账号恒定、不同账号不同。留空=内置默认；
-  #                                         # 生产建议改强随机值，更换后全部账号启动密码变化（需重启生效）
+  # launch_secret: "im-game-launch-secret"  # 启动密码派生兜底密钥（HMAC 种子，仅存本文件，不下发
+  #                                         # 客户端）。正常派生走每游戏独立密钥（im_game.game_secret，
+  #                                         # 上架/启动时自动生成：单游戏密钥泄露/轮换不影响其他游戏），
+  #                                         # 本值仅在该游戏密钥缺失且补种写回失败时兜底；留空=内置默认
   # local_dir: ""                # 游戏数据根目录（留空=exe目录/game_data；相对路径基于 exe 所在目录解析）
   # 全局 BT Tracker 服务器地址列表（阶段二百七十五）：下载方式=「BT·服务端生成种子」时把下列地址
   # 写入种子的 announce（首个）与 announce-list（BEP12，每地址一个 tier），帮助客户端直接拿到可用
@@ -624,6 +625,24 @@ game:
   trackers:
     - "udp://47.92.77.159:8888/announce"
     - "http://tracker.cdonl.com/announce"
+  # 端口透传·远程加密网关（im-gateway.exe 独立部署，见 gateway/main.go）：多网关部署——每台真实游戏
+  # 服务端所在机器跑一个 im-gateway（各监听 127.0.0.1 端口），不同游戏/规则经 @网关名 引用地址簿决定连
+  # 哪台网关；gateway_token_secret 所有网关统一（客户端 token 账号级签发，任意网关均可验签）。
+  # token_secret 非空且地址簿非空才启用（随库接口下发 gateways+24h token）；gw 规则引用未知网关名时
+  # 客户端启动拒绝并提示。更换 secret 后所有网关的 gateway.yaml 需同步修改并重启
+  gateway_token_secret: "975bc47d0852cabb56f1bbbfe6562e61fbc518c92175f7003f62b8bb31159c28"
+  # gateways:
+  #   - name: "gw-hz"                                # 规则引用名（gtcp:7777=18001@gw-hz；小写字母/数字/_/-）
+  #     addr: "1.2.3.4:30100"                        # 该网关公网地址 host:port（TCP/UDP 同端口）
+  #     fingerprint: "该网关首启日志输出的 SHA256 指纹"      # 客户端 pin 校验防冒充
+  #   - name: "gw-bj"
+  #     addr: "5.6.7.8:30100"
+  #     fingerprint: "SHA256指纹"
+  # 旧版单网关写法仍兼容（gateways 为空时按 name=default 启用）：
+  # gateway:
+  #   addr: "1.2.3.4:30100"
+  #   token_secret: "强随机密钥"
+  #   fingerprint: "SHA256指纹"
   # 云存档（Steam 同款云存档 P1 单设备闭环，server/gamesave.go 归口）：管理端为每个游戏配置默认存档
   # 采集路径（glob）随游戏摘要下发客户端，客户端按 glob 采集存档经 /api/game/save/* 上传/拉取；
   # enabled=false 时用户端云存档接口统一拒绝

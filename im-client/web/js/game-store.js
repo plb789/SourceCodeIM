@@ -42,6 +42,7 @@
         running: {},       // gameId → 运行中（Steam 同款）：进程已启动未退出，侧栏行/启动按钮显示"运行中"
         localLib: {},      // localId('local_xx') → {id,name,exe,addedAt,lastPlayAt}：本机添加的本地游戏（localStorage 持久化，不同步服务端）
         localRunning: {},  // localId → 启动时间戳（本地游戏运行中；local-game-start/exit 全窗广播维护）
+        gateway: null,     // 端口透传·远程加密网关配置 {addr,fingerprint,token}（库接口下发，token 24h 随拉库刷新）
         saveSync: {},      // gameId → 'push'|'pull' 云存档同步中（Steam 同款）：侧栏行显示"存档中/读档中"
         badgeEls: {},      // gameId → 商店卡片徽标元素（进度事件原地刷新徽标，避免整格重绘闪烁）
         balance: null,     // 当前用户积分余额（GET /api/game/points；获取/退库随响应实时刷新）
@@ -1597,6 +1598,9 @@
         api('GET', '/api/game/library').then(function (res) {
             if (!res.ok) { toast(res.msg || '游戏库加载失败'); return; }
             state.lib = {};
+            // 端口透传·远程加密网关配置（服务端三项齐备才下发：addr/fingerprint/token，token 24h 短效；
+            // 随启动透传给主进程转发器的 gateway 模式规则）
+            state.gateway = (res.data && res.data.gateway) || null;
             ((res.data && res.data.list) || []).forEach(function (item) {
                 var gid = item.lib && item.lib.game_id;
                 if (!gid) return;
@@ -2892,6 +2896,76 @@
         return 0;
     }
 
+    // ===== 端口透传转发（启动游戏自动开启：游戏连 127.0.0.1 → 透传到远端真实服务器）=====
+    // 服务端下发 JSON 数组串 [{proto,listen,remote_host,remote_port}]（管理端配置）；
+    // 本地游戏规则存于 localStorage 条目（属性弹窗编辑，同结构数组）。客户端宽松解析，
+    // 主进程启动前二次校验（任一非法中止启动并提示）
+    function parsePortForwards(v) {
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        try {
+            var a = JSON.parse(v);
+            // gateway 规则 remote_host 为空（目标由网关承载），不能按 host 过滤
+            return Array.isArray(a) ? a.filter(function (r) { return r && r.listen && (r.remote_host || r.mode === 'gateway'); }) : [];
+        } catch (e) { return []; }
+    }
+    // 规则数组 → 行文本（本地游戏属性回填/只读展示）：网关规则带 g 前缀（@网关名可选），直连含远端地址
+    function pfRulesToText(rules) {
+        return (rules || []).map(function (r) {
+            var mode = r.mode || '';
+            if (mode === 'gateway') {
+                return 'g' + (r.proto || 'tcp') + ':' + r.listen + '=' + r.remote_port + (r.gw ? '@' + r.gw : '');
+            }
+            return (r.proto || 'tcp') + ':' + r.listen + '=' + r.remote_host + ':' + r.remote_port;
+        }).join('\n');
+    }
+    // 行文本 → 规则数组：全部合法回 {rules}，任一行非法回 {err:'第 N 行…'}（调用方 toast 后中止保存）。
+    // 三种行格式：直连 `tcp:7777=1.2.3.4:7777`；网关 `gtcp:7777=7777` 或 `gtcp:7777=7777@网关名`
+    // （g 前缀=经远程加密网关，远端=网关本机 127.0.0.1 端口；@网关名 指定连哪台网关——
+    // 网关地址/指纹/token 由服务端地址簿随库接口下发，缺省名=地址簿第一条）。
+    // 端口范围/保留端口校验与主进程 game-forward.validateRules 同口径，保存时即拦（不等启动才报错）
+    function pfLinesParse(text) {
+        var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        if (!lines.length) return { rules: [] };
+        if (lines.length > 16) return { err: '转发规则最多 16 条' };
+        var reGw = /^(g?)(tcp|udp):(\d{1,5})=(\d{1,5})(?:@([a-z0-9_-]{1,32}))?$/;           // 网关：g协议:本机口=网关口[@名]
+        var reDirect = /^(tcp|udp):(\d{1,5})=([A-Za-z0-9._-]+):(\d{1,5})$/;                  // 直连：协议:本机口=地址:口
+        var seen = {};
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+            var ln = lines[i].toLowerCase();
+            var mg = reGw.exec(ln);
+            if (mg && mg[1]) { // 带 g 前缀：网关模式（纯端口=网关本机端口）
+                var listenG = parseInt(mg[3], 10), rportG = parseInt(mg[4], 10);
+                if (listenG < 1024 || listenG > 65535) return { err: '第 ' + (i + 1) + ' 行本机端口须在 1024~65535' };
+                if (listenG === 3478 || listenG === 2087) return { err: '第 ' + (i + 1) + ' 行端口 ' + listenG + ' 为客户端保留端口' };
+                if (rportG < 1 || rportG > 65535) return { err: '第 ' + (i + 1) + ' 行远端端口非法' };
+                var keyG = mg[2] + ':' + listenG;
+                if (seen[keyG]) return { err: '第 ' + (i + 1) + ' 行重复监听 ' + keyG };
+                seen[keyG] = true;
+                out.push({ proto: mg[2], mode: 'gateway', gw: mg[5] || '', listen: listenG, remote_host: '', remote_port: rportG });
+                continue;
+            }
+            var md = reDirect.exec(ln);
+            if (md) {
+                var listenD = parseInt(md[2], 10), rportD = parseInt(md[4], 10);
+                if (listenD < 1024 || listenD > 65535) return { err: '第 ' + (i + 1) + ' 行本机端口须在 1024~65535' };
+                if (listenD === 3478 || listenD === 2087) return { err: '第 ' + (i + 1) + ' 行端口 ' + listenD + ' 为客户端保留端口' };
+                if (rportD < 1 || rportD > 65535) return { err: '第 ' + (i + 1) + ' 行远端端口非法' };
+                if (!/^[A-Za-z0-9._-]{1,253}$/.test(md[3]) || md[3].indexOf('..') !== -1 || /^[.-]/.test(md[3]) || /[.-]$/.test(md[3])) {
+                    return { err: '第 ' + (i + 1) + ' 行远端地址非法（须为 IPv4 或域名）' };
+                }
+                var keyD = md[1] + ':' + listenD;
+                if (seen[keyD]) return { err: '第 ' + (i + 1) + ' 行重复监听 ' + keyD };
+                seen[keyD] = true;
+                out.push({ proto: md[1], mode: '', listen: listenD, remote_host: md[3], remote_port: rportD });
+                continue;
+            }
+            return { err: '第 ' + (i + 1) + ' 行格式错误（直连：协议:本机端口=远端地址:远端端口；网关：g协议:本机端口=网关端口[@网关名]）' };
+        }
+        return { rules: out };
+    }
+
     // 取游戏启动元数据：管理端默认（相对主程序 exe/参数模板）+ 本账号对该游戏派生的专属密码
     function gameLaunchMeta(gid) {
         var g = state.games[gid] || {};
@@ -2903,7 +2977,9 @@
             // （如 名称=War3 → War3.exe），使只填名称也能启动（匹配归口在主进程 gameResolveLaunchExe）
             name: g.launch_name || '',
             args: g.launch_args || '',
-            password: g.launch_password || (lib && lib.launch_password) || ''
+            password: g.launch_password || (lib && lib.launch_password) || '',
+            // 端口透传转发规则（管理端 port_forwards 字段；空=不开启转发零开销直通）
+            portForwards: parsePortForwards(g.port_forwards)
         };
     }
 
@@ -3005,7 +3081,11 @@
         if (!lo) return;
         if (state.localRunning[lid]) { toast('游戏正在运行中'); return; }
         if (!DESKTOP || !DESKTOP.localGameLaunch) { toast('请在 PC 客户端中操作'); return; }
-        DESKTOP.localGameLaunch({ id: lid, exe: lo.exe }).then(function (r) {
+        DESKTOP.localGameLaunch({
+            id: lid, exe: lo.exe,
+            portForwards: parsePortForwards(lo.portForwards), // 本地游戏属性配置的转发规则
+            gateway: state.gateway // 远程加密网关配置（gw 规则经网关加密透传）
+        }).then(function (r) {
             if (r && r.ok) {
                 lo.lastPlayAt = Math.floor(Date.now() / 1000);
                 localGamesSave();
@@ -3038,7 +3118,7 @@
         }, true);
     }
 
-    // 本地游戏属性弹窗：改名 + 更换启动路径（浏览走主进程文件选择对话框）
+    // 本地游戏属性弹窗：改名 + 更换启动路径（浏览走主进程文件选择对话框）+ 端口透传转发规则
     var lpropId = '', lpropExe = '';
     function openLocalPropModal(lid) {
         var lo = state.localLib[lid];
@@ -3046,9 +3126,11 @@
         lpropId = lid; lpropExe = lo.exe;
         $('gsLPropName').value = lo.name || '';
         $('gsLPropExe').textContent = lpropExe;
+        $('gsLPropPf').value = pfRulesToText(lo.portForwards); // 转发规则回填（行文本）
         $('gsLocalPropMask').classList.remove('hidden');
     }
     $('gsLPropName').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
+    $('gsLPropPf').addEventListener('keydown', function (e) { e.stopPropagation(); });
     $('gsLPropPick').addEventListener('click', function () {
         if (!DESKTOP || !DESKTOP.gameChooseGameExe) { toast('请在 PC 客户端中操作'); return; }
         DESKTOP.gameChooseGameExe().then(function (rr) {
@@ -3064,7 +3146,11 @@
         var nm = ($('gsLPropName').value || '').trim();
         if (!nm) { toast('请填写游戏名称'); return; }
         if (!lpropExe) { toast('请选择游戏主程序'); return; }
+        // 端口透传转发规则：行文本 → 结构化数组（任一行非法 toast 提示并中止保存）
+        var pf = pfLinesParse($('gsLPropPf').value);
+        if (pf.err) { toast(pf.err); return; }
         lo.name = nm; lo.exe = lpropExe;
+        lo.portForwards = pf.rules; // 空数组=不开启转发（与「留空」语义一致）
         localGamesSave();
         $('gsLocalPropMask').classList.add('hidden');
         renderLibrary();
@@ -3087,6 +3173,9 @@
         $('gsPropTitle').textContent = (g.name || ('游戏 #' + gid)) + ' · 属性';
         $('gsPropDir').textContent = (lib && lib.install_path) || '未安装';
         $('gsPropArgs').value = '';
+        // 端口透传转发（管理端配置，只读展示；本地游戏才可编辑自己的规则）
+        var pfs = parsePortForwards(g.port_forwards);
+        $('gsPropPf').textContent = pfs.length ? pfRulesToText(pfs) : '无（直连游戏默认服务器）';
         refreshPropExe();
         initSaveSection(gid); // 云存档分栏（仅 PC 端显示；WEB 端隐藏该分栏按钮）
         $('gsPropMask').classList.remove('hidden');
@@ -3577,7 +3666,9 @@
                 var tpl = (opts && opts.args) ? opts.args : meta.args; // 用户自定义覆盖 > 管理端默认
                 var payload = {
                     gameId: gid, username: username, installDir: libDir,
-                    launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid)
+                    launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid),
+                    portForwards: meta.portForwards, // 端口透传转发规则（主进程 spawn 前开启、游戏退出自动关闭）
+                    gateway: state.gateway // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
                 };
                 if (exePath) payload.exePath = exePath;
                 return DESKTOP.gameLaunch(payload);

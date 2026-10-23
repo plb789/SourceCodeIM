@@ -167,16 +167,46 @@ type GameConfig struct {
 	LocalDir string `yaml:"local_dir"`
 	// VideoMaxSize 商店详情页宣传视频单文件上限（字节，0=200MB；落 WebDir/static/upload/games/videos/）
 	VideoMaxSize int64 `yaml:"video_max_size"`
-	// LaunchSecret 启动参数 {1} 专属密码的派生密钥（HMAC 种子，仅存本文件，不下发客户端）：
-	// 服务端按 HMAC(secret, username) 确定性派生16位数字密码，同账号恒定、不同账号不同；
-	// 更换后全部账号的启动密码随之改变（需重启服务端生效）
+	// LaunchSecret 启动密码派生兜底密钥（HMAC 种子，仅存本文件，不下发客户端）：
+	// 正常派生走每游戏独立密钥（im_game.game_secret，创建/补种自动生成，单游戏泄露/轮换
+	// 半径=该游戏互不影响）；本值仅在该游戏密钥缺失且补种写回失败时兜底使用
 	LaunchSecret string `yaml:"launch_secret"`
 	// Trackers 全局 BT Tracker 服务器地址列表（下载方式=BT·服务端生成种子时写入种子
 	// announce 与 announce-list，帮助客户端拿到可用 peer；留空=不写 announce，仅公网 DHT 发现）。
 	// 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，重启后自动重建新种子）
 	Trackers []string `yaml:"trackers"`
+	// GatewayTokenSecret 端口透传·远程加密网关的 token 验签密钥（所有网关共享一个：客户端 token 是
+	// 账号级签发，任何网关都能验签；仅存本文件不下发。与每个 im-gateway 的 gateway.yaml token_secret 一致）
+	GatewayTokenSecret string `yaml:"gateway_token_secret"`
+	// Gateways 网关地址簿（多网关部署：不同游戏/规则经 @网关名 引用不同网关；name 需在地址簿内唯一）。
+	// 三项（token_secret 非空 + 条目 addr/fingerprint 齐备）才启用，随库接口下发客户端
+	Gateways []GameGatewayItem `yaml:"gateways"`
+	// Gateway 旧版单网关写法（向后兼容：Gateways 为空时自动转为地址簿中 name=default 的一项；
+	// 其 token_secret 作为 GatewayTokenSecret 的回退）。新部署建议直接用 gateways 数组
+	Gateway GameGatewayConfig `yaml:"gateway"`
 	// Save 云存档配置节（Steam 同款云存档 P1，server/gamesave.go 归口）
 	Save GameSaveConfig `yaml:"save"`
+}
+
+// GameGatewayItem 网关地址簿条目（多网关部署：每条目=一台部署了 im-gateway 的远程服务器）
+type GameGatewayItem struct {
+	// Name 网关引用名（游戏转发规则 @名 后缀引用，如 gtcp:7777=18001@gw-hz；小写字母/数字/_/-）
+	Name string `yaml:"name"`
+	// Addr 网关公网地址 host:port（TCP/UDP 同端口；客户端 TLS/加密 UDP 均连此地址）
+	Addr string `yaml:"addr"`
+	// Fingerprint 该网关 TLS 证书 SHA256 指纹（im-gateway 首启日志输出；客户端 pin 校验防冒充）
+	Fingerprint string `yaml:"fingerprint"`
+}
+
+// GameGatewayConfig 旧版单网关配置（向后兼容；新部署用 Gateways 数组，见上方 Game 节说明）
+type GameGatewayConfig struct {
+	// Addr 网关公网地址 host:port（TCP/UDP 同端口；客户端 TLS/加密 UDP 均连此地址）
+	Addr string `yaml:"addr"`
+	// TokenSecret 会话 token 验签密钥（与 im-gateway 的 gateway.yaml 一致，仅存本文件不下发；
+	// token=HMAC(secret,"im-gateway:"+user+":"+hex(expire)) 前16字节 hex，24h 短效随库接口下发）
+	TokenSecret string `yaml:"token_secret"`
+	// Fingerprint 网关 TLS 证书 SHA256 指纹（im-gateway 首次启动日志输出；客户端 pin 校验防冒充）
+	Fingerprint string `yaml:"fingerprint"`
 }
 
 // GameSaveConfig 云存档配置节（P1 单设备闭环；server/gamesave.go 归口）

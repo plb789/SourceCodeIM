@@ -53,6 +53,7 @@
                 <button class="admin-nav-item" data-view="games">游戏管理</button>
                 <button class="admin-nav-item sub" data-view="gamenew">新增游戏</button>
                 <button class="admin-nav-item sub" data-view="gn">游戏公告</button>
+                <button class="admin-nav-item sub" data-view="gwbook">网关地址簿</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1403,6 +1404,16 @@
                     <input id="gm-f-launch-exe" class="admin-input" placeholder="启动程序路径（相对安装目录，如 bin/game.exe，可空）" maxlength="255">
                 </div>
                 <input id="gm-f-launch-args" class="admin-input" placeholder="启动参数（可空；占位符：{0}=登录账号，{1}=账号专属密码）" maxlength="1024">
+                <!-- 端口透传转发规则（每行一条：协议:本机端口=远端地址:远端端口）：客户端启动该游戏时
+                     自动在本机 127.0.0.1:本机端口 开启监听透传到远端，游戏退出自动关闭；服务端保存时逐条校验 -->
+                <textarea id="gm-f-pf" class="admin-input gm-desc-input" rows="2" placeholder="端口透传转发规则（可空；每行一条——直连：协议:本机端口=远端地址:远端端口，如 tcp:7777=1.2.3.4:7777；网关：g协议:本机端口=网关端口[@网关名]，如 gtcp:7777=18001、gtcp:7777=18001@gw-hz）"></textarea>
+                <span id="gm-f-pf-gw-hint" class="admin-field-hint" style="display:block;"></span>
+                <span class="admin-field-hint">端口透传转发：客户端启动该游戏时自动在本机 127.0.0.1:本机端口 开启 TCP/UDP 监听，把流量原样透传到远端地址（游戏退出自动关闭）——游戏内服务器地址填 127.0.0.1:本机端口 即可。直连行远端为公网地址；网关行（g 前缀）远端为网关本机 127.0.0.1 端口，@网关名 引用服务端地址簿决定连哪台网关（缺省第一个）。上限 16 条，本机端口范围 1024~65535（3478/2087 为客户端保留端口）</span>
+                <!-- 仅写库网关（无转发规则的游戏）：显式声明账号写到哪台网关后面的游戏库（空=纯游戏不写库） -->
+                <div class="gm-form-row">
+                    <select id="gm-f-dbw-gw" class="admin-input" style="max-width:320px;"><option value="">不使用（纯游戏，不写库）</option></select>
+                </div>
+                <span class="admin-field-hint">仅写库网关：游戏<b>不配转发规则</b>但需要自动把玩家账号写进网关后面的游戏库时，选一台网关（玩家客户端直连游戏服务器，无隧道）。已配网关转发规则的游戏会自动按规则 @网关名 写库，此处留空即可；两者都配则并集生效。网关侧需启用「游戏账号写库」（见网关后台）</span>
                 <!-- 联机方式路由（三态单选，设计文档 docs/联机方式路由设计方案.md §四）：
                      supernode=虚拟网卡组网（展开 supernode 多选）/ tunnel=既有端口隧道（隐藏多选并清空）/ 空=跟随全局 -->
                 <div class="gm-form-row" style="flex-wrap:wrap;gap:14px;align-items:center;">
@@ -1549,6 +1560,30 @@
                     <button id="gn-pager-prev" class="admin-btn small" type="button">上一页</button>
                     <span id="gn-page-info" class="gm-np-pager-info">-</span>
                     <button id="gn-pager-next" class="admin-btn small" type="button">下一页</button>
+                </div>
+            </section>
+
+            <!-- 网关地址簿（端口透传·远程加密网关的 im-gateway 条目，后台热更：改完玩家下次拉游戏库即生效，无需重启） -->
+            <section id="admin-view-gwbook" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>网关地址簿</h2>
+                    <span id="gw-status" class="admin-view-tip">加载中…</span>
+                </header>
+                <p class="admin-view-tip">远程加密网关（im-gateway）登记处：游戏转发规则的 <b>g协议:本机端口=网关端口@网关名</b> 经「网关名」在此查地址与证书指纹。保存后立即生效——玩家下次打开游戏库即拿到新地址簿，无需重启服务端与网关。证书指纹取网关首启日志输出的 SHA256（网关更换证书后须同步更新）。<b>专属密钥</b>：逐网关独立验签密钥（新增自动生成），须复制到该网关机 gateway.yaml 的 token_secret 并重启网关——泄露/轮换半径仅该网关；留空条目回退共享 gateway_token_secret（兼容存量）。首次部署也可继续用 config.yaml game.gateways 静态配置（表为空时自动兜底生效）。</p>
+                <div class="gn-toolbar">
+                    <button id="gw-add" class="admin-btn small primary" type="button">添加网关</button>
+                    <button id="gw-refresh" class="admin-btn small" type="button">刷新</button>
+                    <span class="admin-field-hint">@网关名 缺省引用排序第一个启用条目；停用条目不再下发（存量客户端下次拉库收敛）</span>
+                </div>
+                <div class="vec-table-wrap">
+                    <table class="vec-table">
+                        <thead>
+                            <tr><th style="width:56px">排序</th><th style="width:150px">网关名（@名）</th><th style="width:200px">地址</th><th>证书指纹（SHA256 前 16 位…）</th><th style="width:120px">专属密钥</th><th style="width:72px">状态</th><th style="width:130px">操作</th></tr>
+                        </thead>
+                        <tbody id="gw-tbody">
+                            <tr><td colspan="7" class="vec-empty">加载中…</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </main>

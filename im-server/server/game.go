@@ -13,7 +13,9 @@ package server
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -45,7 +47,8 @@ func InitGame(cfg *config.Config) {
 	// 商店空态下也弹出该报错 toast。逐表迁移 + 按表记日志，失败面收窄且可直接定位到具体表。
 	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
 		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
-		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}}
+		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}, &model.GatewayBook{},
+		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}}
 	migrateFailed := false
 	for _, t := range tables {
 		if err := store.DB.AutoMigrate(t); err != nil {
@@ -61,6 +64,34 @@ func InitGame(cfg *config.Config) {
 	store.DB.Model(&model.GameConfig{}).Count(&cnt)
 	if cnt == 0 {
 		store.DB.Create(&model.GameConfig{ID: 1, Layout: "steam", Sections: "{}", Featured: "[]"})
+	}
+	// 网关地址簿种子（后台热更归口）：config.yaml game.gateways 条目仅在首次启动时导入 DB 表，
+	// 此后地址簿以后台管理为准（config 条目不再参与下发）；表非空=已导入/已在后台维护，跳过
+	var gwCnt int64
+	store.DB.Model(&model.GatewayBook{}).Count(&gwCnt)
+	if gwCnt == 0 && len(cfg.Game.Gateways) > 0 {
+		for i, g := range cfg.Game.Gateways {
+			row := model.GatewayBook{Name: strings.ToLower(strings.TrimSpace(g.Name)),
+				Addr: strings.TrimSpace(g.Addr), Fingerprint: strings.ToLower(strings.TrimSpace(g.Fingerprint)), Enabled: true, Sort: i}
+			if row.Name == "" || row.Addr == "" || row.Fingerprint == "" {
+				continue // 残缺条目静默跳过（与下发归口的过滤口径一致）
+			}
+			store.DB.Create(&row)
+		}
+		logger.Info("网关地址簿种子导入完成：%d 条（config.yaml game.gateways → 后台「网关地址簿」，此后以后台为准）", len(cfg.Game.Gateways))
+	}
+	// 游戏专属派生密钥批量补种（每游戏独立持钥：单游戏泄露/轮换半径=该游戏，互不影响）——
+	// 存量游戏一次性补齐；新上架游戏在创建 handler 生成，此处兜底遗漏项
+	var needSecret []model.Game
+	if err := store.DB.Where("game_secret = '' OR game_secret IS NULL").Find(&needSecret).Error; err == nil && len(needSecret) > 0 {
+		n := 0
+		for i := range needSecret {
+			sec := gameRandomSecret()
+			if err := store.DB.Model(&model.Game{}).Where("id = ?", needSecret[i].ID).Update("game_secret", sec).Error; err == nil {
+				n++
+			}
+		}
+		logger.Info("游戏专属密钥补种完成：%d/%d（im_game.game_secret，启动密码改由各游戏独立密钥派生）", n, len(needSecret))
 	}
 	logger.Info("游戏中心已启用，数据目录: %s", cfg.Game.LocalDir)
 }
@@ -258,7 +289,7 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"latest_version": g.LatestVersion,
 		// 联机方式（建房页随应用带出显示，只读；空=跟随全局。非敏感路由标记，公开摘要可下发）
 		"net_mode": g.NetMode,
-		"price":          g.Price,
+		"price":    g.Price,
 		// 下载方式（0=HTTP 清单直连[默认] 1=BT/P2SP 混合）——PC 客户端按此选下载通道
 		"download_method": g.DownloadMethod,
 		"down_count":      g.DownCount,
@@ -268,6 +299,9 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"launch_exe":  g.LaunchExe,
 		"launch_name": g.LaunchName,
 		"launch_args": g.LaunchArgs,
+		// 端口透传转发规则（JSON 数组串原样下发，客户端启动游戏时自动开启本机监听透传到远端服务器；
+		// 非敏感路由标记，空串=无规则不开启转发）
+		"port_forwards": g.PortForwards,
 		// 功能二期：联机端口登记（逗号分隔串原样下发，客户端自行解析；建房选游戏自动预填 +
 		// 开局实测发现新端口自动累加，管理端手工登记为准）
 		"online_ports_tcp": g.OnlinePortsTCP,
@@ -280,11 +314,12 @@ func gameSummary(g model.Game) map[string]interface{} {
 	}
 }
 
-// gameLaunchPassword 按"账号+游戏"确定性派生16位专属密码
-// （HMAC-SHA256(secret, "im-game-launch:<username>:<gameID>")）：
+// gameLaunchPassword 按"账号+游戏"确定性派生16位专属密码（HMAC-SHA256(secret, "im-game-launch:<username>:<gameID>")）：
 // 同账号同游戏恒定、不同账号/不同游戏不同（单游戏泄露不影响其他游戏）；
 // 作为启动参数 {1} 占位符的值下发给本人，仅本人在库游戏中可得。
-// 与真实登录密码无关（真实密码绝不下发/绝不出现在启动参数），降低明文命令行的隐私风险
+// 与真实登录密码无关（真实密码绝不下发/绝不出现在启动参数），降低明文命令行的隐私风险。
+// 密钥来源归口 gameLaunchSecretPick/Of：正常为游戏专属密钥（im_game.game_secret），
+// 全局 launch_secret 仅作兜底——单游戏密钥泄露/轮换半径=该游戏
 func gameLaunchPassword(secret, username string, gameID uint) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte("im-game-launch:" + username + ":" + strconv.FormatUint(uint64(gameID), 10)))
@@ -295,6 +330,123 @@ func gameLaunchPassword(secret, username string, gameID uint) string {
 		b.WriteByte(byte('0' + sum[i]%10))
 	}
 	return b.String()
+}
+
+// gameRandomSecret 生成游戏专属派生密钥（16 字节随机 → 32 hex）
+func gameRandomSecret() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// gameLaunchSecretPick 密钥源归口（无 Server 上下文场景：写库入队等）：游戏专属密钥优先
+// （泄露/轮换半径=单游戏），空则回退全局 launch_secret（仅存量未补种/补种失败时发生，降级兜底）
+func gameLaunchSecretPick(g *model.Game, fallback string) string {
+	if g != nil {
+		if sec := strings.TrimSpace(g.GameSecret); sec != "" {
+			return sec
+		}
+	}
+	return fallback
+}
+
+// gameLaunchSecretOf 服务端归口：取游戏专属密钥，缺列时懒补种（生成+写回；写回失败回退全局）。
+// 并发补种幂等收敛（最后一次写生效，密钥稳定后派生恒定）；game_secret 随游戏行带出时本函数零查询
+func (s *Server) gameLaunchSecretOf(g *model.Game) string {
+	if strings.TrimSpace(g.GameSecret) != "" {
+		return g.GameSecret
+	}
+	sec := gameRandomSecret()
+	if err := store.DB.Model(&model.Game{}).Where("id = ?", g.ID).Update("game_secret", sec).Error; err == nil {
+		g.GameSecret = sec
+		return sec
+	}
+	logger.Warn("游戏#%d 专属密钥补种失败，本次派生回退全局 launch_secret", g.ID)
+	return s.cfg.Game.LaunchSecret
+}
+
+// gameGatewayToken 端口透传·远程加密网关会话 token（24h 短效，随库接口下发当前账号）：
+// token = hex(expire) + "." + username + "." + hex16(HMAC-SHA256(secret,"im-gateway:"+username+":"+hex(expire)))
+// 与 im-gateway（gateway/main.go verifyToken）验签口径一致——网关共享密钥本地校验，无需回调 im-server。
+// 短时效+绑定账号：只有登录的合法客户端能在有效期内开出加密隧道
+func gameGatewayToken(secret, username string, now time.Time) string {
+	expire := now.Add(24 * time.Hour).Unix()
+	expHex := strconv.FormatInt(expire, 16)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("im-gateway:" + username + ":" + expHex))
+	return expHex + "." + username + "." + hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// gameGatewaySecret 归一 token 验签密钥（gateway_token_secret 优先，回退旧单网关 gateway.token_secret）
+func (s *Server) gameGatewaySecret() string {
+	if sec := strings.TrimSpace(s.cfg.Game.GatewayTokenSecret); sec != "" {
+		return sec
+	}
+	return strings.TrimSpace(s.cfg.Game.Gateway.TokenSecret)
+}
+
+// gameGatewayList 归一网关地址簿（后台热更归口）：优先读 DB 表（enabled，sort 小在前）；
+// 表空或读失败时回退 config 静态条目（gateways 数组优先；为空时旧单网关 gateway 节转 name=default 一项，
+// 作为种子导入失败/DB 异常时的兜底）。仅保留 addr/fingerprint 齐备的条目（残缺条目静默剔除，避免客户端 pin 到空指纹必失败）。
+// 条目含 secret（本网关专属验签密钥，空=回退共享 gateway_token_secret）
+func (s *Server) gameGatewayList() []map[string]string {
+	var rows []model.GatewayBook
+	if err := store.DB.Where("enabled = ?", true).Order("sort asc, id asc").Find(&rows).Error; err == nil && len(rows) > 0 {
+		out := make([]map[string]string, 0, len(rows))
+		for _, r := range rows {
+			if r.Name == "" || r.Addr == "" || r.Fingerprint == "" {
+				continue
+			}
+			out = append(out, map[string]string{"name": r.Name, "addr": r.Addr, "fingerprint": r.Fingerprint, "secret": strings.TrimSpace(r.Secret)})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	// —— 兜底路径：config 静态条目（config 无逐网关密钥，secret 恒空=回退共享） ——
+	var out []map[string]string
+	add := func(name, addr, fp string) {
+		name = strings.ToLower(strings.TrimSpace(name))
+		addr = strings.TrimSpace(addr)
+		fp = strings.ToLower(strings.TrimSpace(fp))
+		if name == "" || addr == "" || fp == "" {
+			return
+		}
+		out = append(out, map[string]string{"name": name, "addr": addr, "fingerprint": fp, "secret": ""})
+	}
+	if len(s.cfg.Game.Gateways) > 0 {
+		for _, g := range s.cfg.Game.Gateways {
+			add(g.Name, g.Addr, g.Fingerprint)
+		}
+	} else if g := s.cfg.Game.Gateway; g.Addr != "" {
+		add("default", g.Addr, g.Fingerprint) // 旧单网关写法兼容
+	}
+	return out
+}
+
+// gameGatewayResp 库接口的网关下发块（地址簿+token 齐备才启用；客户端存内存随启动传给转发器，
+// gw 规则经 @网关名 查地址簿决定连哪台网关）。逐网关独立密钥：条目配置了专属 secret 的用其签发
+// 条目级 token（泄露/轮换半径=单网关）；未配置的走顶层共享 token（兼容存量）。顶层 token 始终
+// 保留（共享密钥签发，旧客户端回退使用）
+func (s *Server) gameGatewayResp(username string) map[string]interface{} {
+	sec := s.gameGatewaySecret()
+	list := s.gameGatewayList()
+	if sec == "" || len(list) == 0 {
+		return nil // 未配置/未启用：客户端 gw 规则启动时拒绝并提示
+	}
+	now := time.Now()
+	gws := make([]map[string]string, 0, len(list))
+	for _, g := range list {
+		item := map[string]string{"name": g["name"], "addr": g["addr"], "fingerprint": g["fingerprint"]}
+		if gsec := g["secret"]; gsec != "" {
+			item["token"] = gameGatewayToken(gsec, username, now) // 条目专属 token（新客户端优先用）
+		}
+		gws = append(gws, item)
+	}
+	return map[string]interface{}{
+		"token":    gameGatewayToken(sec, username, now), // 顶层共享 token（旧客户端回退；未配专属密钥网关也用它）
+		"gateways": gws,
+	}
 }
 
 // ===== 好友正在玩（Steam 同款"N 名好友正在玩"） =====
@@ -415,6 +567,9 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/game/save/slots/{id}", s.HandleGameSaveSlots)
 	// 管理端（上架/版本/分片上传）
 	registerGameAdminRoutes(s)
+	// 端口透传·网关写库内部接口（网关专用 HMAC 鉴权，与用户端/管理端隔离；见 gatewaydbwrite.go）
+	http.HandleFunc("GET /internal/gateway/dbwrite", s.handleInternalGatewayDbwrite)
+	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)
 }
 
 // HandleGameList 商店列表：仅上架游戏，keyword 命中名称/简介，tag 精确命中标签串
@@ -526,8 +681,8 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	item["description"] = g.Description
 	item["versions"] = verList
-	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏确定性派生，仅本人可得；真实登录密码不下发）
-	item["launch_password"] = gameLaunchPassword(s.cfg.Game.LaunchSecret, username, g.ID)
+	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏专属密钥确定性派生，仅本人可得；真实登录密码不下发）
+	item["launch_password"] = gameLaunchPassword(s.gameLaunchSecretOf(&g), username, g.ID)
 	// 游戏公告（库内游戏页"动态"区左栏公告卡；管理端发布，倒序；images 解析为数组下发）
 	var notices []model.GameNotice
 	store.DB.Where("game_id = ?", g.ID).Order("id DESC").Find(&notices)
@@ -588,6 +743,11 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 	list := make([]map[string]interface{}, 0, len(libs))
 	// 好友正在玩（Steam 同款库卡片标记）：本批一次归口（好友集/用户资料各一条 SQL），仅命中游戏下发
 	_, playOf := friendSocialOf(username, ids)
+	// 端口透传·远程加密网关配置+会话 token（配置齐备才下发；客户端每次拉库刷新 24h token）
+	var gwResp map[string]interface{}
+	if gw := s.gameGatewayResp(username); gw != nil {
+		gwResp = gw
+	}
 	for _, l := range libs {
 		g, ok := gameByID[l.GameID]
 		if !ok {
@@ -605,13 +765,19 @@ func (s *Server) HandleGameLibrary(w http.ResponseWriter, r *http.Request) {
 				"install_path":      l.InstallPath,
 				"play_seconds":      l.PlaySeconds,
 				"last_play_at":      l.LastPlayAt.Format("2006-01-02 15:04"),
-				// 启动参数 {1} 专属密码（按当前账号+本游戏派生；真实登录密码不下发）
-				"launch_password": gameLaunchPassword(s.cfg.Game.LaunchSecret, username, l.GameID),
+				// 启动参数 {1} 专属密码（按当前账号+本游戏专属密钥派生；真实登录密码不下发）
+				"launch_password": gameLaunchPassword(s.gameLaunchSecretOf(&g), username, l.GameID),
 			},
 			"game": gm,
 		})
 	}
-	adminJSON(w, map[string]interface{}{"list": list})
+	adminJSON(w, func() map[string]interface{} {
+		out := map[string]interface{}{"list": list}
+		if gwResp != nil {
+			out["gateway"] = gwResp // 网关配置+token（未配置不下发，客户端 gw 规则拒绝并提示）
+		}
+		return out
+	}())
 }
 
 // HandleGameLibraryJoin 加入游戏库（P2 商店化 Steam 同款购买流）：
@@ -947,6 +1113,9 @@ func (s *Server) HandleGamePlay(w http.ResponseWriter, r *http.Request) {
 	case "start":
 		// 开始游玩仅刷新最近游玩时间；同时记入/续期"正在玩"presence（客户端运行期间周期心跳复用本动作）
 		gamePresenceStart(username, uint(id))
+		// 端口透传·网关写库兜底补队（网关开发文档 §3.1 触发点三）：异步不阻塞心跳，
+		// 覆盖"玩家先装后登录/登录早于游戏上架"等队列缺口（内部自过滤网关规则+幂等）
+		go gwDbwriteEnqueue(username, s.cfg.Game.LaunchSecret, []uint{uint(id)})
 	default:
 		adminFail(w, http.StatusBadRequest, "action 须为 start/end")
 		return

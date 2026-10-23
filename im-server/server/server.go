@@ -634,6 +634,10 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 	// 阶段三十：改传整个 user，登录响应携带完整个人资料（昵称/性别/地区/签名）
 	s.sendLoginResp(c, "ok", *user)
 
+	// 端口透传·网关写库（网关开发文档 §3.1）：登录成功异步入队该玩家库内全部含网关规则的
+	// 游戏（gwDbwriteEnqueue 内部自过滤+失败仅记日志），不阻塞登录链路；游戏中心未启用时函数内直接返回
+	go s.GwDbwriteEnqueueForUser(user.Username)
+
 	// 仅首个设备上线时广播上线通知，多端重复登录/同端替换登录不重复广播（E9：判定改用 Add 返回值）
 	// 5号帧热点修复：上线通知不再单独全员广播（原每事件 O(N)，上下线 churn 风暴下成为热点），
 	// 并入下方 93 增量帧 1s 窗口聚合广播——好友在线态由前端增量处理器统一维护

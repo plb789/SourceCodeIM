@@ -1653,8 +1653,10 @@ function gameResolveLaunchExe(reg, gameId, data) {
 }
 
 // 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
-// spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口
-ipcMain.handle('game:launch', function (event, data) {
+// spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口。
+// 端口透传转发联动：管理端配置的 portForwards 规则在 spawn 前开启本机监听（任一失败中止启动——
+// 避免游戏起来连不上服务器），游戏退出/启动失败自动关闭；无规则时零开销直通原逻辑
+ipcMain.handle('game:launch', async function (event, data) {
     try {
         var gameId = String((data && data.gameId) || '').trim();
         if (!gameId) return { ok: false, error: '参数缺失' };
@@ -1670,15 +1672,36 @@ ipcMain.handle('game:launch', function (event, data) {
             var raw = (reg[gameId] && reg[gameId].args) || '';
             if (raw) args = raw.split(/\s+/).filter(Boolean);
         }
+        // 端口透传转发：规则随启动下发（管理端 port_forwards 字段 → 页面随 payload 传入）；
+        // gateway 加密模式规则需附带网关配置（页面从库接口 gateway 字段透传：addr/fingerprint/token）
+        var pfRules = (data && Array.isArray(data.portForwards)) ? data.portForwards : [];
+        var pfTag = 'game:' + gameId;
+        if (pfRules.length) {
+            var pfRet = await gameForward.start(pfTag, pfRules, data && data.gateway);
+            if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
+        }
         var cwd = r.installDir || path.dirname(r.exe);
-        var child = spawn(r.exe, args, { cwd: cwd, detached: true, stdio: 'ignore' });
+        var child;
+        try {
+            child = spawn(r.exe, args, { cwd: cwd, detached: true, stdio: 'ignore' });
+        } catch (spawnErr) {
+            if (pfRules.length) gameForward.stop(pfTag); // spawn 失败：联动收口已开启的转发
+            throw spawnErr;
+        }
         var startedAt = Date.now();
         var info = { gameId: gameId, startedAt: startedAt };
         child.once('exit', function () {
             runningGames.delete(gameId);
+            // 本实例退出才收口转发：同 gameId 竞态重复启动时旧实例 exit 不得误杀新实例的转发
+            var cur = runningGames.get(gameId);
+            if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
             gameExitBroadcast(info);
         });
-        child.once('error', function () { runningGames.delete(gameId); }); // spawn 失败清理表，避免残留
+        // error（spawn 失败如 exe 权限/架构错误）路径可能不触发 exit：同样联动收口防监听残留
+        child.once('error', function () {
+            runningGames.delete(gameId); // spawn 失败清理表，避免残留
+            if (pfRules.length) gameForward.stop(pfTag);
+        });
         child.unref();
         runningGames.set(gameId, { proc: child, startedAt: startedAt });
         gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"
@@ -1742,22 +1765,43 @@ function gameStartBroadcast(info) {
 // id 为渲染层分配的 'local_' 前缀键，与商店数字 gameId 命名空间隔离
 var runningLocalGames = new Map(); // localId → { proc, startedAt }
 
-// 启动本地游戏：{id, exe, args?} → spawn 分离进程（与 game:launch 同口径 detached/unref）
-ipcMain.handle('local-game:launch', function (event, data) {
+// 启动本地游戏：{id, exe, args?, portForwards?} → spawn 分离进程（与 game:launch 同口径 detached/unref）。
+// 端口透传转发联动同 game:launch：规则来自本地游戏属性（渲染层 localStorage），spawn 前开启、退出自动关闭
+ipcMain.handle('local-game:launch', async function (event, data) {
     try {
         var id = String((data && data.id) || '').trim();
         var exe = String((data && data.exe) || '').trim();
         if (!id || !exe) return { ok: false, error: '参数缺失' };
         if (!fs.existsSync(exe)) return { ok: false, error: '游戏主程序不存在，请重新选择' };
         var args = (data && Array.isArray(data.args)) ? data.args.map(String) : [];
-        var child = spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: true });
+        // 端口透传转发：本地游戏属性中配置的规则（无规则零开销直通）；网关配置同 game:launch 透传
+        var pfRules = (data && Array.isArray(data.portForwards)) ? data.portForwards : [];
+        var pfTag = 'local:' + id;
+        if (pfRules.length) {
+            var pfRet = await gameForward.start(pfTag, pfRules, data && data.gateway);
+            if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
+        }
+        var child;
+        try {
+            child = spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: true });
+        } catch (spawnErr) {
+            if (pfRules.length) gameForward.stop(pfTag); // spawn 失败：联动收口
+            throw spawnErr;
+        }
         var startedAt = Date.now();
         var info = { id: id, startedAt: startedAt };
         child.once('exit', function () {
             runningLocalGames.delete(id);
+            // 本实例退出才收口转发：同 id 竞态重复启动时旧实例 exit 不得误杀新实例的转发
+            var cur = runningLocalGames.get(id);
+            if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
             localGameBroadcast('local-game-exit', info);
         });
-        child.once('error', function () { runningLocalGames.delete(id); });
+        // error（spawn 失败）路径可能不触发 exit：同样联动收口防监听残留
+        child.once('error', function () {
+            runningLocalGames.delete(id);
+            if (pfRules.length) gameForward.stop(pfTag);
+        });
         child.unref();
         runningLocalGames.set(id, { proc: child, startedAt: startedAt });
         localGameBroadcast('local-game-start', info);
@@ -2179,7 +2223,10 @@ ipcMain.handle('p2p-host:stop', function (e, reason) { p2pHostStop(String(reason
 ipcMain.handle('p2p-host:status', function () {
     return { running: !!p2pProc, comm: (p2pMeta && p2pMeta.comm) || '', vip_ip: (p2pMeta && p2pMeta.vip_ip) || '' };
 });
-app.on('before-quit', function () { p2pHostStop('app-quit'); }); // 关停归口：子进程不随父退出，显式终止
+app.on('before-quit', function () {
+    p2pHostStop('app-quit'); // 关停归口：子进程不随父退出，显式终止
+    gameForward.stopAll(); // 端口透传转发全部收口（游戏侧分离进程不随父退出，监听须显式关闭）
+});
 
 // 开启隧道（幂等）：args = {room_id, peer, proto:'udp'|'tcp', role:'host'|'join', port, host_ip?}
 // → Promise<{ok:true, port, host_ip} | {ok:false, err}>；err 枚举 bad_key/bad_args/bad_port/bad_host_ip/
@@ -2227,6 +2274,10 @@ function gnLogWrite(line) {
 gameTunnel.setLogger(function (msg) { gnLogWrite('[tunnel] ' + msg); });
 gameBroadcast.setLogger(function (msg) { gnLogWrite('[bcast] ' + msg); });
 gameMdns.setLogger(function (msg) { gnLogWrite('[mdns] ' + msg); });
+// ===== 游戏端口透传转发（game:launch / local-game:launch 随启动联动；游戏退出/应用收口自动关闭）=====
+// 上架游戏连 127.0.0.1 → 透传到远端真实服务器；规则来源：管理端游戏配置 port_forwards / 本地游戏属性
+const gameForward = require('./game-forward.js');
+gameForward.setLogger(function (msg) { gnLogWrite(msg); });
 gameMdns.setRelayHandler(function (roomId, hex) {
     try { gnBroadcast('gn-broadcast-gi', { room_id: roomId, hex: hex }); } catch (e) { }
 });

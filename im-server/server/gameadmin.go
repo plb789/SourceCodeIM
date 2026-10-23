@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 // ===== 游戏中心·管理端（Steam 同款游戏库运营，adminGuard 鉴权） =====
 // 设计归口：
@@ -14,10 +14,16 @@
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"im-server/logger"
+	"im-server/model"
+	"im-server/store"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,10 +34,6 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
-
-	"im-server/logger"
-	"im-server/model"
-	"im-server/store"
 
 	"gorm.io/gorm"
 )
@@ -153,6 +155,103 @@ func gameSavePathsClean(s string) string {
 	return string(b)
 }
 
+// gamePortForwardsClean 端口透传转发规则清洗（归口）：入参须为合法 JSON 数组串，元素逐条校验——
+// proto 仅 tcp/udp；mode 仅 空串=直连 / gateway=经加密网关（网关模式 remote_host 留空，远端端口
+// 语义=网关本机 127.0.0.1 端口，网关地址/指纹/token 由服务端全局配置随库接口下发）；
+// listen 1024~65535（保留端口 3478/2087 禁用）；remote_port 1~65535；
+// 直连模式 remote_host 须为 IPv4/域名字符集；同批 proto+listen 去重；上限 16 条。
+// 任一条非法整串拒绝（管理端保存即报错，避免脏规则下发后客户端启动失败）；结果限 2048 字符。
+// 空串/空数组一律回空串（无规则=客户端不开启转发，零开销直通）
+func gamePortForwardsClean(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	var raw []struct {
+		Proto      string `json:"proto"`
+		Mode       string `json:"mode"`
+		Gw         string `json:"gw"`
+		Listen     int    `json:"listen"`
+		RemoteHost string `json:"remote_host"`
+		RemotePort int    `json:"remote_port"`
+	}
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		return "", fmt.Errorf("端口转发规则须为 JSON 数组")
+	}
+	if len(raw) == 0 {
+		return "", nil
+	}
+	if len(raw) > 16 {
+		return "", errors.New("端口转发规则过多（上限 16 条）")
+	}
+	type rule struct {
+		Proto      string `json:"proto"`
+		Mode       string `json:"mode,omitempty"`
+		Gw         string `json:"gw,omitempty"`
+		Listen     int    `json:"listen"`
+		RemoteHost string `json:"remote_host,omitempty"`
+		RemotePort int    `json:"remote_port"`
+	}
+	out := make([]rule, 0, len(raw))
+	seen := map[string]bool{}
+	hostRe := regexp.MustCompile(`^[A-Za-z0-9._-]{1,253}$`)
+	gwRe := regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+	for _, r := range raw {
+		r.Proto = strings.ToLower(strings.TrimSpace(r.Proto))
+		r.Mode = strings.ToLower(strings.TrimSpace(r.Mode))
+		r.Gw = strings.ToLower(strings.TrimSpace(r.Gw))
+		r.RemoteHost = strings.TrimSpace(r.RemoteHost)
+		if r.Proto != "tcp" && r.Proto != "udp" {
+			return "", fmt.Errorf("第 %d 条规则协议非法（仅 tcp/udp）", len(out)+1)
+		}
+		if r.Mode != "" && r.Mode != "gateway" {
+			return "", fmt.Errorf("第 %d 条规则模式非法（仅 空串=直连 / gateway=经加密网关）", len(out)+1)
+		}
+		if r.Listen < 1024 || r.Listen > 65535 {
+			return "", fmt.Errorf("第 %d 条规则监听端口须在 1024~65535", len(out)+1)
+		}
+		if r.Listen == 3478 || r.Listen == 2087 {
+			return "", fmt.Errorf("第 %d 条规则监听端口 %d 为客户端保留端口", len(out)+1, r.Listen)
+		}
+		if r.RemotePort < 1 || r.RemotePort > 65535 {
+			return "", fmt.Errorf("第 %d 条规则远端端口非法", len(out)+1)
+		}
+		if r.Mode == "gateway" {
+			// 网关模式：远端=网关本机 127.0.0.1 端口（remote_host 留空；gw=@网关名 引用服务端
+			// 地址簿 gateways 中的条目决定连哪台网关，留空=缺省第一条）。仅格式校验不做存在性
+			// 校验（网关改名/删除不应卡死历史游戏规则的编辑；客户端启动时查不到会明确提示）
+			r.RemoteHost = ""
+			if r.Gw != "" && !gwRe.MatchString(r.Gw) {
+				return "", fmt.Errorf("第 %d 条规则网关名非法（小写字母/数字/_/-，1-32 位）", len(out)+1)
+			}
+		} else {
+			// 直连模式：不允许带网关名；remote_host 必填且须为 IPv4/域名字符集
+			if r.Gw != "" {
+				return "", fmt.Errorf("第 %d 条规则为直连模式，不应携带网关名（@名 仅网关模式使用）", len(out)+1)
+			}
+			if r.RemoteHost == "" || !hostRe.MatchString(r.RemoteHost) || strings.Contains(r.RemoteHost, "..") ||
+				strings.HasPrefix(r.RemoteHost, ".") || strings.HasPrefix(r.RemoteHost, "-") ||
+				strings.HasSuffix(r.RemoteHost, ".") || strings.HasSuffix(r.RemoteHost, "-") {
+				return "", fmt.Errorf("第 %d 条规则远端地址非法（须为 IPv4 或域名）", len(out)+1)
+			}
+		}
+		key := r.Proto + ":" + strconv.Itoa(r.Listen)
+		if seen[key] {
+			return "", fmt.Errorf("存在重复监听 %s", key)
+		}
+		seen[key] = true
+		out = append(out, rule{Proto: r.Proto, Mode: r.Mode, Gw: r.Gw, Listen: r.Listen, RemoteHost: r.RemoteHost, RemotePort: r.RemotePort})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("端口转发规则序列化失败")
+	}
+	if len(b) > 2048 {
+		return "", fmt.Errorf("端口转发规则串超长（上限 2048 字节）")
+	}
+	return string(b), nil
+}
+
 // sweepExpiredGameUploads 惰性清理过期分片会话（每次首片顺带扫描）
 func (s *Server) sweepExpiredGameUploads() {
 	now := time.Now()
@@ -194,6 +293,206 @@ func registerGameAdminRoutes(s *Server) {
 	// 自定义推荐区块（同上字面量优先先例）
 	http.HandleFunc("GET /admin/api/game/sections", s.adminGuard(s.handleAdminGameSectionsGet))
 	http.HandleFunc("PUT /admin/api/game/sections", s.adminGuard(s.handleAdminGameSectionsPut))
+	// 网关地址簿（后台热更归口：增删改查全走 DB 表 im_gateway_book；token 密钥仍留 config.yaml）
+	http.HandleFunc("GET /admin/api/game/gateways", s.adminGuard(s.handleAdminGameGateways))
+	http.HandleFunc("POST /admin/api/game/gateways", s.adminGuard(s.handleAdminGameGatewayCreate))
+	http.HandleFunc("PUT /admin/api/game/gateways/{id}", s.adminGuard(s.handleAdminGameGatewayUpdate))
+	http.HandleFunc("DELETE /admin/api/game/gateways/{id}", s.adminGuard(s.handleAdminGameGatewayDelete))
+	// 指纹自动探测（添加/编辑弹窗「从网关获取」按钮：TLS 连公网地址取对端证书算 SHA256）
+	http.HandleFunc("POST /admin/api/game/gateway/probe", s.adminGuard(s.handleAdminGameGatewayProbe))
+}
+
+// 网关地址簿条目清洗正则（包级编译一次：name 规则 / addr host / fingerprint hex）
+var (
+	gwBookNameRe   = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+	gwBookHostRe   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,253}$`)
+	gwBookFPRe     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	gwBookSecretRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+// gameGatewayBookClean 网关地址簿条目清洗（后台增改归口）：name 小写化后须匹配 ^[a-z0-9_-]{1,64}$ 且全表唯一；
+// addr 须为 IPv4/域名:端口（host 字符集 [A-Za-z0-9._-]+，端口 1~65535）且全表唯一（同 addr 两条目语义重复无意义）；
+// fingerprint 须为 64 位 hex；secret 可选——空=回退共享 gateway_token_secret，非空须 64hex（本网关专属
+// 验签密钥，须与该网关机 gateway.yaml token_secret 一致）。返回清洗后的行与错误说明
+func gameGatewayBookClean(req *model.GatewayBook) (model.GatewayBook, string) {
+	row := model.GatewayBook{
+		Name:        strings.ToLower(strings.TrimSpace(req.Name)),
+		Addr:        strings.TrimSpace(req.Addr),
+		Fingerprint: strings.ToLower(strings.TrimSpace(req.Fingerprint)),
+		Secret:      strings.ToLower(strings.TrimSpace(req.Secret)),
+		Enabled:     req.Enabled,
+		Sort:        req.Sort,
+	}
+	if !gwBookNameRe.MatchString(row.Name) {
+		return row, "引用名须为 1~64 位小写字母/数字/_/-"
+	}
+	host, portStr, err := net.SplitHostPort(row.Addr)
+	if err != nil || host == "" || !gwBookHostRe.MatchString(host) {
+		return row, "地址须为 host:port 格式（如 1.2.3.4:30100）"
+	}
+	if p, e := strconv.Atoi(portStr); e != nil || p < 1 || p > 65535 {
+		return row, "地址端口须为 1~65535"
+	}
+	if !gwBookFPRe.MatchString(row.Fingerprint) {
+		return row, "证书指纹须为 64 位十六进制（SHA256，取网关首启日志输出）"
+	}
+	if row.Secret != "" && !gwBookSecretRe.MatchString(row.Secret) {
+		return row, "专属密钥须为 64 位十六进制（留空=回退共享密钥）"
+	}
+	if row.Sort < 0 {
+		row.Sort = 0
+	}
+	return row, ""
+}
+
+// handleAdminGameGateways 管理端查询网关地址簿（全字段回显：编辑弹窗需回填指纹；
+// adminGuard 已鉴权，管理员本就可改 config，无泄漏面）。
+// 未配置返回 {ok:true, gateways:[]}，前端提示到本页添加
+func (s *Server) handleAdminGameGateways(w http.ResponseWriter, r *http.Request) {
+	var rows []model.GatewayBook
+	store.DB.Order("sort asc, id asc").Find(&rows)
+	out := make([]model.GatewayBook, 0, len(rows))
+	for _, g := range rows {
+		g.Fingerprint = strings.ToLower(strings.TrimSpace(g.Fingerprint))
+		out = append(out, g)
+	}
+	adminJSON(w, map[string]interface{}{"gateways": out})
+}
+
+// handleAdminGameGatewayCreate 新增网关条目（清洗 + name/addr 唯一校验 + 上限 32 条）
+func (s *Server) handleAdminGameGatewayCreate(w http.ResponseWriter, r *http.Request) {
+	var req model.GatewayBook
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	row, why := gameGatewayBookClean(&req)
+	if why != "" {
+		adminFail(w, http.StatusBadRequest, why)
+		return
+	}
+	var cnt int64
+	store.DB.Model(&model.GatewayBook{}).Count(&cnt)
+	if cnt >= 32 {
+		adminFail(w, http.StatusBadRequest, "地址簿已达上限 32 条")
+		return
+	}
+	var dup int64
+	store.DB.Model(&model.GatewayBook{}).Where("name = ? OR addr = ?", row.Name, row.Addr).Count(&dup)
+	if dup > 0 {
+		adminFail(w, http.StatusBadRequest, "引用名或地址已存在（同地址勿重复登记）")
+		return
+	}
+	// 专属密钥留空=服务端自动生成（推荐：逐网关独立密钥，泄露/轮换半径=单网关）；非空=管理员手填
+	if row.Secret == "" {
+		row.Secret = gameRandomSecret() + gameRandomSecret() // 2×32hex = 64hex（32 字节）
+	}
+	if err := store.DB.Create(&row).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "保存失败")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"gateway": row})
+}
+
+// handleAdminGameGatewayUpdate 更新网关条目（清洗 + 唯一性排除自身 + 启用状态随改随生效）
+func (s *Server) handleAdminGameGatewayUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	var g model.GatewayBook
+	if err := store.DB.First(&g, id).Error; err != nil {
+		adminFail(w, http.StatusNotFound, "条目不存在")
+		return
+	}
+	var req model.GatewayBook
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	row, why := gameGatewayBookClean(&req)
+	if why != "" {
+		adminFail(w, http.StatusBadRequest, why)
+		return
+	}
+	var dup int64
+	store.DB.Model(&model.GatewayBook{}).Where("(name = ? OR addr = ?) AND id <> ?", row.Name, row.Addr, id).Count(&dup)
+	if dup > 0 {
+		adminFail(w, http.StatusBadRequest, "引用名或地址已存在（同地址勿重复登记）")
+		return
+	}
+	// 专属密钥留空=保留库内原值（不打断在用网关）；非空=更新为指定值（64hex，前端「重新生成」
+	// 按钮本地随机生成后填入——更换后须同步更新该网关机 gateway.yaml 并重启，否则验签/拉取 401）
+	finalSecret := g.Secret
+	if row.Secret != "" {
+		finalSecret = row.Secret
+	}
+	if err := store.DB.Model(&g).Updates(map[string]interface{}{
+		"name": row.Name, "addr": row.Addr, "fingerprint": row.Fingerprint, "secret": finalSecret, "enabled": row.Enabled, "sort": row.Sort,
+	}).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "保存失败")
+		return
+	}
+	store.DB.First(&g, id)
+	adminJSON(w, map[string]interface{}{"gateway": g})
+}
+
+// handleAdminGameGatewayDelete 删除网关条目（引用了该 @名 的游戏规则将在客户端启动时报"未在地址簿中配置"）
+func (s *Server) handleAdminGameGatewayDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil || id == 0 {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	if err := store.DB.Delete(&model.GatewayBook{}, id).Error; err != nil {
+		adminFail(w, http.StatusInternalServerError, "删除失败")
+		return
+	}
+	adminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleAdminGameGatewayProbe 自动获取网关证书指纹（后台「添加/编辑网关」的「从网关获取」按钮归口）：
+// im-server 主动向公网地址发起 TLS 连接（网关为自签证书，跳过系统校验——TOFU 首次信任语义），
+// 取回对端证书算 DER SHA256 指纹。安全面说明：证书在 TLS 握手阶段本就向任何连接者公开（协议设计如此），
+// 指纹是公开摘要非机密，本接口不放大暴露面；TOFU 污染窗口仅"获取时刻"一次，结果附证书有效期供人工核对，
+// 之后客户端 pin 校验比获取时更严格（后续劫持者指纹对不上直接被拒）。仅 adminGuard 后可调、5s 超时
+func (s *Server) handleAdminGameGatewayProbe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Addr string `json:"addr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminFail(w, http.StatusBadRequest, "参数错误")
+		return
+	}
+	host, portStr, err := net.SplitHostPort(strings.TrimSpace(req.Addr))
+	if err != nil || host == "" || !gwBookHostRe.MatchString(host) {
+		adminFail(w, http.StatusBadRequest, "地址须为 host:port 格式（如 1.2.3.4:30100）")
+		return
+	}
+	if p, e := strconv.Atoi(portStr); e != nil || p < 1 || p > 65535 {
+		adminFail(w, http.StatusBadRequest, "地址端口须为 1~65535")
+		return
+	}
+	// TLS 探测：InsecureSkipVerify 因网关为自签（我们正是要取它的自签证书）；5s 超时防挂死
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	conn, err := tls.DialWithDialer(d, "tcp", host+":"+portStr, &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		adminFail(w, http.StatusBadGateway, "连接网关失败（检查公网地址/防火墙/网关是否已启动）："+err.Error())
+		return
+	}
+	defer conn.Close()
+	crt := conn.ConnectionState().PeerCertificates[0]
+	sum := sha256.Sum256(crt.Raw)
+	fp := hex.EncodeToString(sum[:])
+	issuer := strings.TrimSpace(crt.Issuer.String())
+	selfSigned := issuer != "" && issuer == strings.TrimSpace(crt.Subject.String())
+	adminJSON(w, map[string]interface{}{
+		"fingerprint": fp,
+		"not_before":  crt.NotBefore.Format("2006-01-02"),
+		"not_after":   crt.NotAfter.Format("2006-01-02"),
+		"self_signed": selfSigned,
+	})
 }
 
 // handleAdminGameCreate 上架游戏（元数据先行，版本与文件随后登记）
@@ -252,6 +551,13 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	g.LaunchName = gameLaunchNameClean(g.LaunchName)
 	g.LaunchArgs = gameLaunchArgsClean(g.LaunchArgs)
+	// 端口透传转发规则清洗（保存即校验：任一条非法整串拒绝，防脏规则下发后客户端启动失败）
+	pfClean, pfErr := gamePortForwardsClean(g.PortForwards)
+	if pfErr != nil {
+		adminFail(w, http.StatusBadRequest, pfErr.Error())
+		return
+	}
+	g.PortForwards = pfClean
 	// 联机方式路由（设计文档 §二/四）：白名单校验 + 与 supernode 多选联动——
 	// supernode 方式需至少一个节点；tunnel 方式清空 Supernodes（隧道不消费，防脏数据）
 	g.NetMode = strings.TrimSpace(g.NetMode)
@@ -274,6 +580,13 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 		snClean = ""
 	}
 	g.Supernodes = snClean
+	// 写库网关名清洗（仅写库游戏归口）：小写格式校验（与转发规则 @名 同口径，仅格式不做存在性
+	// 校验——网关改名/删除不卡死编辑；不命中则静默不写）。空=纯游戏/走转发规则归属
+	g.DbwriteGw = strings.ToLower(strings.TrimSpace(g.DbwriteGw))
+	if g.DbwriteGw != "" && !gwBookNameRe.MatchString(g.DbwriteGw) {
+		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
+		return
+	}
 	vids, verr := gameVideosClean(g.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -284,6 +597,9 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 		g.Status = 0
 	}
 	g.ID = 0
+	// 游戏专属派生密钥强制服务端生成（覆盖请求可能携带的任意值；模型 json:"-" 本就不接收，
+	// 此处双保险）：每游戏独立持钥，单游戏密钥泄露/轮换不影响其他游戏
+	g.GameSecret = gameRandomSecret()
 	if err := store.DB.Create(&g).Error; err != nil {
 		adminFail(w, http.StatusConflict, "slug 已存在或保存失败")
 		return
@@ -355,6 +671,8 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	// net_mode 为建房页数据源非敏感，supernodes 仍仅管理端可见）
 	item["supernodes"] = g.Supernodes
 	item["net_mode"] = g.NetMode
+	// 写库网关名回填（管理端编辑弹窗下拉；仅写库游戏——无网关转发规则时显式声明写库归属）
+	item["dbwrite_gw"] = g.DbwriteGw
 	adminJSON(w, item)
 }
 
@@ -422,6 +740,13 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	u.LaunchName = gameLaunchNameClean(u.LaunchName)
 	u.LaunchArgs = gameLaunchArgsClean(u.LaunchArgs)
+	// 端口透传转发规则清洗（同创建口径：任一条非法整串拒绝）
+	pfClean, pfErr := gamePortForwardsClean(u.PortForwards)
+	if pfErr != nil {
+		adminFail(w, http.StatusBadRequest, pfErr.Error())
+		return
+	}
+	u.PortForwards = pfClean
 	// 联机方式路由（同创建口径）：白名单 + 联动校验（supernode 需节点 / tunnel 清空 Supernodes）
 	u.NetMode = strings.TrimSpace(u.NetMode)
 	if u.NetMode != "" && u.NetMode != "supernode" && u.NetMode != "tunnel" {
@@ -441,6 +766,12 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		snClean = ""
 	}
 	u.Supernodes = snClean
+	// 写库网关名清洗（同创建口径）：小写格式校验，非法拒绝
+	u.DbwriteGw = strings.ToLower(strings.TrimSpace(u.DbwriteGw))
+	if u.DbwriteGw != "" && !gwBookNameRe.MatchString(u.DbwriteGw) {
+		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
+		return
+	}
 	vids, verr := gameVideosClean(u.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -455,7 +786,9 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
-		"save_paths": u.SavePaths, "save_exclude": u.SaveExclude,
+		"port_forwards": u.PortForwards,
+		"dbwrite_gw":    u.DbwriteGw,
+		"save_paths":    u.SavePaths, "save_exclude": u.SaveExclude,
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
 		"supernodes": u.Supernodes, "net_mode": u.NetMode,
 		"torrent_path": tp,

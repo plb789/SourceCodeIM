@@ -293,6 +293,8 @@
             else if (item.dataset.view === 'gamenew') { gmPage = 1; gmLoadList(); gmOpenEditor(null); }
             // 游戏公告（游戏管理二级页）：进入视图拉取公告表格（重置到第一页）
             else if (item.dataset.view === 'gn') { gnPage = 1; gnLoad(); }
+            // 网关地址簿（游戏管理二级页）：进入视图拉取 im-gateway 条目表格（后台热更归口）
+            else if (item.dataset.view === 'gwbook') { gwLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -415,6 +417,17 @@
                     wrap.appendChild(hint);
                 } else {
                     wrap.appendChild(input2);
+                }
+                // 字段级辅助按钮（如网关指纹「从网关获取」）：渲染在输入框之后；onClick(getVal) 取本字段当前值
+                if (f.button) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'admin-btn small';
+                    b.textContent = f.button.label;
+                    var self2 = input2;
+                    b.addEventListener('click', function () { f.button.onClick(function () { return self2.value; }, self2); });
+                    wrap.appendChild(document.createTextNode(' '));
+                    wrap.appendChild(b);
                 }
             }
             form.appendChild(wrap);
@@ -5559,6 +5572,187 @@
         return lines.length ? JSON.stringify(lines) : '';
     }
 
+    // 端口透传转发规则字段：服务端以 JSON 数组串存储，表单以「每行一条」文本展示；
+    // 直连行格式 tcp:7777=1.2.3.4:7777 / udp:6112=game.example.com:6112；
+    // 网关行格式 gtcp:7777=18001 或 gtcp:7777=18001@网关名（g 前缀=经远程加密网关，远端=网关本机
+    // 127.0.0.1 端口；@网关名 引用服务端地址簿 game.gateways 决定连哪台网关，留空=缺省第一条）。
+    // 提交转 JSON 数组串，与服务端 gamePortForwardsClean 对齐；非法行返回 null 并提示，服务端二次校验兜底
+    function gmPortForwardsToText(v) {
+        if (!v) return '';
+        try {
+            var arr = JSON.parse(v);
+            if (!Array.isArray(arr)) return String(v);
+            return arr.map(function (r) {
+                if (r.mode === 'gateway') {
+                    return 'g' + (r.proto || 'tcp') + ':' + r.listen + '=' + r.remote_port + (r.gw ? '@' + r.gw : '');
+                }
+                return (r.proto || 'tcp') + ':' + r.listen + '=' + r.remote_host + ':' + r.remote_port;
+            }).join('\n');
+        } catch (e) { return String(v); }
+    }
+    function gmPortForwardsToJSON(text) {
+        var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+        if (!lines.length) return '';
+        var out = [];
+        var reGw = /^(g?)(tcp|udp):(\d{1,5})=(\d{1,5})(?:@([a-z0-9_-]{1,32}))?$/;
+        var reDirect = /^(tcp|udp):(\d{1,5})=([A-Za-z0-9._-]+):(\d{1,5})$/;
+        var seen = {};
+        for (var i = 0; i < lines.length; i++) {
+            var ln = lines[i].toLowerCase();
+            var mg = reGw.exec(ln);
+            if (mg && mg[1]) {
+                var listen = parseInt(mg[3], 10), rport = parseInt(mg[4], 10);
+                var key = mg[2] + ':' + listen;
+                if (seen[key]) { showToast('转发规则第 ' + (i + 1) + ' 行重复监听 ' + key); return null; }
+                seen[key] = true;
+                out.push({ proto: mg[2], mode: 'gateway', gw: mg[5] || '', listen: listen, remote_host: '', remote_port: rport });
+                continue;
+            }
+            var md = reDirect.exec(ln);
+            if (md) {
+                var listen2 = parseInt(md[2], 10), rport2 = parseInt(md[4], 10);
+                var key2 = md[1] + ':' + listen2;
+                if (seen[key2]) { showToast('转发规则第 ' + (i + 1) + ' 行重复监听 ' + key2); return null; }
+                seen[key2] = true;
+                out.push({ proto: md[1], mode: '', listen: listen2, remote_host: md[3], remote_port: rport2 });
+                continue;
+            }
+            showToast('转发规则第 ' + (i + 1) + ' 行格式错误（直连：协议:本机端口=远端地址:远端端口；网关：g协议:本机端口=网关端口[@网关名]）');
+            return null;
+        }
+        return JSON.stringify(out);
+    }
+    // ===== 网关地址簿管理（端口透传·远程加密网关，后台热更归口） =====
+    // 数据 = im_gateway_book 表；保存立即生效（玩家下次拉游戏库即下发新地址簿），无需重启服务端与网关。
+    // token 验签密钥不在此页（config.yaml game.gateway_token_secret：全员 token 失效级变更不走后台）
+    var gwRows = [];
+    function gwLoad() {
+        $('gw-status').textContent = '加载中…';
+        return api('GET', '/admin/api/game/gateways').then(function (r) {
+            gwRows = (r.ok && r.data && r.data.gateways) || [];
+            $('gw-status').textContent = '共 ' + gwRows.length + ' 条';
+            gwRender();
+        }).catch(function () { $('gw-status').textContent = '加载失败'; });
+    }
+    function gwRender() {
+        var tb = $('gw-tbody');
+        tb.innerHTML = '';
+        if (!gwRows.length) {
+            var tr0 = document.createElement('tr');
+            tr0.innerHTML = '<td colspan="7" class="vec-empty">暂无网关条目——点上方「添加网关」登记第一台 im-gateway</td>';
+            tb.appendChild(tr0);
+            return;
+        }
+        gwRows.forEach(function (g) {
+            var tr = document.createElement('tr');
+            var td = function (t) { var d = document.createElement('td'); d.textContent = t; return d; };
+            tr.appendChild(td(g.sort));
+            tr.appendChild(td(g.name));
+            tr.appendChild(td(g.addr));
+            var fp = String(g.fingerprint || '');
+            tr.appendChild(td(fp.length > 16 ? fp.slice(0, 16) + '…' : fp));
+            // 专属密钥打码列（完整值在编辑弹窗查看/复制；空=回退共享密钥）
+            var sc = String(g.secret || '');
+            tr.appendChild(td(sc ? sc.slice(0, 8) + '…' : '共享'));
+            var st = document.createElement('td');
+            st.textContent = g.enabled ? '启用' : '停用';
+            if (!g.enabled) st.style.opacity = '.55';
+            tr.appendChild(st);
+            var op = document.createElement('td');
+            var bE = document.createElement('button'); bE.className = 'admin-btn small'; bE.textContent = '编辑';
+            bE.addEventListener('click', function () { gwOpenEditor(g); });
+            var bD = document.createElement('button'); bD.className = 'admin-btn small'; bD.textContent = '删除';
+            bD.addEventListener('click', function () {
+                confirmBox('确认删除网关「' + g.name + '」？引用了 @' + g.name + ' 的游戏转发规则将无法启用。', function () {
+                    api('DELETE', '/admin/api/game/gateways/' + g.id).then(function (r) {
+                        if (r.ok) { gwLoad(); gmLoadGatewayNames(); } else showToast(r.msg || '删除失败');
+                    }).catch(function () { showToast('删除失败'); });
+                });
+            });
+            op.appendChild(bE);
+            op.appendChild(document.createTextNode(' '));
+            op.appendChild(bD);
+            tr.appendChild(op);
+            tb.appendChild(tr);
+        });
+    }
+    // 从动态弹窗表单取「公网地址」当前值（指纹「从网关获取」按钮依赖；输入框 id = af_addr）
+    function gwGetAddrVal() {
+        var el = document.getElementById('af_addr');
+        return el ? el.value.trim() : '';
+    }
+    function gwOpenEditor(g) {
+        var isNew = !g;
+        openEditModal(isNew ? '添加网关' : '编辑网关「' + g.name + '」', [
+            { key: 'name', label: '网关名（@名）', placeholder: '如 gw-hz（小写字母/数字/_/-）', hint: '游戏转发规则行尾 @此名 引用；缺省引用排序第一个启用条目' },
+            { key: 'addr', label: '公网地址', placeholder: '如 1.2.3.4:30100（host:port）', hint: '客户端加密隧道连接地址' },
+            {
+                key: 'fingerprint', label: '证书指纹（SHA256）', placeholder: '64 位十六进制', hint: '取网关首启日志输出，或填好公网地址后点「从网关获取」；网关更换证书后须同步更新，否则客户端 pin 校验拒绝连接',
+                button: {
+                    label: '从网关获取',
+                    onClick: function (getVal, inputEl) {
+                        var addr = gwGetAddrVal();
+                        if (!addr) { showToast('请先填写公网地址'); return; }
+                        inputEl.value = '获取中…';
+                        api('POST', '/admin/api/game/gateway/probe', { addr: addr }).then(function (r) {
+                            if (r.ok && r.data && r.data.fingerprint) {
+                                inputEl.value = r.data.fingerprint;
+                                showToast('已获取指纹（证书有效期 ' + r.data.not_before + ' ~ ' + r.data.not_after + (r.data.self_signed ? '，自签' : '') + '），请核对');
+                            } else {
+                                inputEl.value = '';
+                                showToast(r.msg || '获取失败');
+                            }
+                        }).catch(function () { inputEl.value = ''; showToast('获取失败'); });
+                    }
+                }
+            },
+            {
+                key: 'secret', label: '专属密钥（token_secret）', placeholder: '64 位十六进制；新增留空=自动生成，编辑留空=保留原值', hint: '逐网关独立验签密钥：保存后复制到该网关机 gateway.yaml 的 token_secret 并重启网关（两端不一致该网关 401）。泄露/轮换只影响本网关；「重新生成」后须同步更新网关机配置',
+                button: {
+                    label: '重新生成',
+                    onClick: function (getVal, inputEl) {
+                        var b = new Uint8Array(32);
+                        crypto.getRandomValues(b);
+                        inputEl.value = Array.prototype.map.call(b, function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+                        showToast('已生成新密钥：保存后须同步更新该网关机 gateway.yaml 并重启');
+                    }
+                }
+            },
+            { key: 'sort', label: '排序（小在前）', type: 'number', default: 0 },
+            { key: 'enabled', label: '启用（停用后不再下发客户端）', type: 'checkbox', default: true }
+        ], g || {}, function (data) {
+            var payload = { name: data.name, addr: data.addr, fingerprint: data.fingerprint, secret: String(data.secret || '').trim(), sort: parseInt(data.sort, 10) || 0, enabled: !!data.enabled };
+            api(isNew ? 'POST' : 'PUT', isNew ? '/admin/api/game/gateways' : '/admin/api/game/gateways/' + g.id, payload).then(function (r) {
+                if (r.ok) { closeEditModal(); gwLoad(); gmLoadGatewayNames(); }
+                else showToast(r.msg || '保存失败');
+            }).catch(function () { showToast('保存失败'); });
+        });
+    }
+    $('gw-add').addEventListener('click', function () { gwOpenEditor(null); });
+    $('gw-refresh').addEventListener('click', gwLoad);
+    // 网关地址簿缓存（管理端表单"转发规则"提示 @网关名 候选；来自 GET /admin/api/game/gateways）
+    var gmGatewayNames = [];
+    function gmLoadGatewayNames() {
+        return api('GET', '/admin/api/game/gateways').then(function (r) {
+            gmGatewayNames = (r.ok && r.data && r.data.gateways) || [];
+            var el = $('gm-f-pf-gw-hint');
+            if (el) {
+                el.textContent = gmGatewayNames.length
+                    ? '服务端已配置网关：' + gmGatewayNames.map(function (g) { return g.name + '（' + g.addr + (g.enabled === false ? '，已停用' : '') + '）'; }).join('、') + '；gw 规则行尾用 @网关名 指定，缺省用第一个（在「游戏管理 → 网关地址簿」维护）'
+                    : '服务端尚未配置网关地址簿：到「游戏管理 → 网关地址簿」添加条目后 gw 规则方可启用';
+            }
+            // 刷新「仅写库网关」下拉选项（保留当前选择；空选项=纯游戏不写库）
+            var sel = $('gm-f-dbw-gw');
+            if (sel) {
+                var cur = sel.value;
+                sel.innerHTML = '<option value="">不使用（纯游戏，不写库）</option>' + gmGatewayNames.map(function (g) {
+                    return '<option value="' + g.name + '">' + g.name + '（' + g.addr + (g.enabled === false ? '，已停用' : '') + '）</option>';
+                }).join('');
+                sel.value = cur; // 已选值仍在候选中则保留
+            }
+        }).catch(function () { });
+    }
+
     // ===== 联机 supernode 多选（虚拟网卡路线 §8.3） =====
     // 候选来自 /admin/api/vipip 响应的全局配置（admin「虚拟 IP」页热更管理）；区分两种空态：
     // 未启用（403）与已启用未配置（候选空），提示语分别引导。选中集保存为逗号串随游戏表单提交
@@ -5683,6 +5877,11 @@
         $('gm-f-launch-name').value = d ? (d.launch_name || '') : '';
         $('gm-f-launch-exe').value = d ? (d.launch_exe || '') : '';
         $('gm-f-launch-args').value = d ? (d.launch_args || '') : '';
+        // 端口透传转发规则（服务端存 JSON 数组串，表单以「每行一条」文本回填）+ 网关地址簿提示刷新
+        $('gm-f-pf').value = gmPortForwardsToText(d ? d.port_forwards : '');
+        // 仅写库网关回填（无转发规则游戏的写库归属；options 由 gmLoadGatewayNames 刷新）
+        $('gm-f-dbw-gw').value = d ? (d.dbwrite_gw || '') : '';
+        gmLoadGatewayNames();
         // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
         $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
         $('gm-f-ports-udp').value = d ? (d.online_ports_udp || '') : '';
@@ -6209,6 +6408,9 @@
         }
         var dlmethod = parseInt($('gm-f-dlmethod').value, 10) || 0;
         if (dlmethod === 2 && !gmTorrentPath) { showToast('下载方式为「BT（上传种子）」，请先上传 .torrent 文件'); return; }
+        // 端口透传转发规则（行文本 → JSON 数组串；返回 null=行格式错误，toast 已提示并中止提交）
+        var pfJSON = gmPortForwardsToJSON($('gm-f-pf').value);
+        if (pfJSON === null) return;
         var payload = {
             slug: slug,
             name: name,
@@ -6229,6 +6431,10 @@
             launch_name: $('gm-f-launch-name').value.trim(),
             launch_exe: $('gm-f-launch-exe').value.trim(),
             launch_args: $('gm-f-launch-args').value.trim(),
+            // 端口透传转发规则（JSON 数组串，服务端清洗校验；空=不开启转发）
+            port_forwards: pfJSON,
+            // 仅写库网关（无转发规则游戏的写库归属；空=纯游戏不写库；服务端格式校验）
+            dbwrite_gw: $('gm-f-dbw-gw').value.trim(),
             // 功能二期：联机端口登记（逗号分隔多端口，服务端清洗去重/范围校验）
             online_ports_tcp: $('gm-f-ports-tcp').value.trim(),
             online_ports_udp: $('gm-f-ports-udp').value.trim(),
@@ -6277,6 +6483,10 @@
             launch_name: d.launch_name || '',
             launch_exe: d.launch_exe || '',
             launch_args: d.launch_args || '',
+            // 端口透传转发规则全量回写（详情含字段，JSON 数组串原样透传）：防上架/下架切换时清空
+            port_forwards: d.port_forwards || '',
+            // 仅写库网关全量回写（详情含字段）：防上架/下架切换时清空仅写库游戏归属
+            dbwrite_gw: d.dbwrite_gw || '',
             // 功能二期：联机端口登记全量回写（列表/详情含字段）：防上架/下架切换时清空
             online_ports_tcp: d.online_ports_tcp || '',
             online_ports_udp: d.online_ports_udp || '',

@@ -1024,14 +1024,77 @@ type Game struct {
 	SavePaths string `gorm:"column:save_paths;type:varchar(1024);default:''" json:"save_paths"`
 	// SaveExclude 云存档排除模式 JSON 数组串（如 ["*.log"]）：命中者不上传
 	SaveExclude string `gorm:"column:save_exclude;type:varchar(1024);default:''" json:"save_exclude"`
+	// PortForwards 端口透传转发规则 JSON 数组串（管理端上架配置；启动游戏时客户端自动开启本机监听，
+	// 把 127.0.0.1:listen 的 TCP/UDP 流量透传到远端真实服务器 remote_host:remote_port）。
+	// 元素格式：{"proto":"tcp|udp","listen":7777,"remote_host":"1.2.3.4或域名","remote_port":7777}；
+	// 服务端保存时逐条校验清洗（协议/端口范围/主机字符集/去重，上限16条），客户端启动前二次校验。
+	// AutoMigrate 自动加列，存量游戏默认空串行为不变（无规则=不开启转发，零开销直通）
+	PortForwards string `gorm:"column:port_forwards;type:varchar(2048);default:''" json:"port_forwards"`
 	// DownCount 安装次数（加入库时递增）
 	DownCount int64 `gorm:"column:down_count;default:0" json:"down_count"`
+	// GameSecret 游戏专属启动密码派生密钥（32hex，服务端私有 json:"-"：不随任何接口下发、
+	// 不接收外部提交——创建时服务端强制生成）。每游戏独立持钥：单游戏密钥泄露/轮换半径=该游戏
+	// （重派生 → 写库队列自动重写该游戏库自愈，其他游戏零感知）；管理端创建时生成、存量游戏
+	// 启动时批量补种（InitGame）、读取兜底懒补种（写回失败回退全局 launch_secret）
+	GameSecret string `gorm:"column:game_secret;size:64;default:''" json:"-"`
+	// DbwriteGw 写库网关名（网关写库的归属声明，可空）：游戏未配置网关模式转发规则但需要自动
+	// 写库时，显式指定账号写到哪台网关后面的游戏库（=后台「网关地址簿」条目名）。与转发规则
+	// 的 @网关名 双路并集命中（按网关过滤归口 gwGamesForGateway）；空且无网关规则=纯游戏不写库
+	DbwriteGw string `gorm:"column:dbwrite_gw;size:64;default:''" json:"dbwrite_gw"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
 	Status     int8      `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
 	Sort       int       `gorm:"column:sort;default:0" json:"sort"` // 排序（小在前）
 	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
 	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
 }
+
+// GatewayBook 网关地址簿（端口透传·远程加密网关的 im-gateway 条目，后台热更）：
+// 每条目 = 一台部署了 im-gateway 的远程服务器；游戏 gw 转发规则经 @name 引用。
+// 与 config.yaml game.gateways 的关系：config 条目在首次启动时作为种子导入本表（此后以后台为准，
+// config 不再参与下发）；token 验签密钥 gateway_token_secret 仍留 config.yaml（安全事件级变更不走后台）。
+// 下发路径：库接口 gameGatewayResp 实时读本表（enabled），玩家下次拉库即生效，无需重启服务端
+type GatewayBook struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"column:name;size:64;uniqueIndex" json:"name"`     // 引用名（gw 规则 @名 后缀；小写字母/数字/_/-）
+	Addr        string    `gorm:"column:addr;size:128" json:"addr"`                // 网关公网地址 host:port
+	Fingerprint string    `gorm:"column:fingerprint;size:128" json:"fingerprint"`  // TLS 证书 SHA256 指纹（64 位 hex）
+	Secret      string    `gorm:"column:secret;size:128;default:''" json:"secret"` // 本网关专属验签密钥（64hex，空=回退共享 gateway_token_secret）：与该网关机 gateway.yaml token_secret 一致；泄露/轮换半径=单网关，写库拉取签名通过即密码学证明网关身份
+	Enabled     bool      `gorm:"column:enabled;default:true" json:"enabled"`      // 停用后不再下发（存量客户端下次拉库收敛）
+	Sort        int       `gorm:"column:sort;default:0" json:"sort"`               // 排序（小在前；@名 缺省引用取第一个启用条目）
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime  time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// GatewayDbwrite 游戏账号写库队列表 im_gateway_dbwrite（网关开发文档 §3.1：服务端产生凭证，
+// 网关主动拉取后参数化写入网关后面的游戏库）。持久化重启不丢；uniqueIndex(username,game_id)
+// 幂等——同账号同游戏仅一行，重复触发仅刷新 password/时间。
+// 仅收"带网关模式转发规则的游戏"（纯单机/直连游戏无写库意义，入队前过滤防队列膨胀）；
+// 拉取侧按网关过滤：game.port_forwards 里 @网关名 决定哪台网关可见该条目。
+// credential 游戏凭证列 P1 不建（已拍板预留；将来启用时 AutoMigrate 自动加列）
+type GatewayDbwrite struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	Username   string    `gorm:"column:username;size:64;uniqueIndex:uq_user_game" json:"username"` // IM 账号
+	GameID     uint      `gorm:"column:game_id;uniqueIndex:uq_user_game" json:"game_id"`           // 游戏 ID（按网关过滤的关联键）
+	Password   string    `gorm:"column:password;size:32" json:"password"`                          // 启动密码（launch_secret HMAC 派生 16 位数字，可轮换自愈）
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"column:update_time;autoUpdateTime" json:"update_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GatewayDbwrite) TableName() string { return "im_gateway_dbwrite" }
+
+// GatewayDbwriteAck 网关写库回执表 im_gateway_dbwrite_ack：唯一索引(dbwrite_id, gateway_name)——
+// 每台启用写库的网关各自写各自的库、各自回执；"待写"判定 = 该网关对此条目无回执行。
+// 网关写库失败不回执 → im-server 侧保持待写 → 下次拉取仍返回，天然重试
+type GatewayDbwriteAck struct {
+	ID          uint64    `gorm:"primaryKey" json:"id"`
+	DbwriteID   uint64    `gorm:"column:dbwrite_id;uniqueIndex:uq_id_gw" json:"dbwrite_id"`
+	GatewayName string    `gorm:"column:gateway_name;size:64;uniqueIndex:uq_id_gw" json:"gateway_name"`
+	CreateTime  time.Time `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (GatewayDbwriteAck) TableName() string { return "im_gateway_dbwrite_ack" }
 
 // TableName 表名沿用 im_ 前缀约定
 func (Game) TableName() string { return "im_game" }

@@ -1,0 +1,649 @@
+# IM 服务端核心配置（与《开发文档》5.2 保持一致）
+# 说明：本文件由服务端启动时读取，缺省项自动回退内置默认值
+
+# WebSocket 监听地址
+ws_addr: ":2087"
+# 心跳超时时间（秒）：超过该时间未收到任何消息判定离线
+heartbeat_timeout: 90
+# 心跳发送间隔（秒，客户端侧）
+heartbeat_interval: 30
+# 文件分片大小（字节）
+# 原实现：chunk_size: 4096（4KB 分片在大文件场景产生海量 WS 消息与 Redis 操作，20MB 文件需 5120 片）
+# 阶段三十一：提升至 64KB（base64 后约 87KB，仍在服务端单条消息 1MB 读取上限内），消息数降 16 倍
+chunk_size: 65536
+# 最大在线连接数（阶段三十一起在 HandleWS 实际执行校验，原实现该配置从未生效）
+# 原实现：max_connections: 1000 → 10000；阶段一百六十一：按 5 万人在线容量目标调至 55000（预留 10% 余量）
+max_connections: 55000
+# 单 IP 连接频率上限（并发改造 B3）：统计窗口内最多该次数新建连接，超过拒绝（防异常高频连接）
+# 缺省 20 次/10 秒与历史硬编码一致；NAT 办公网全公司共用出口 IP、登录并发高时可调大防误伤
+# ip_conn_limit: 20
+# ip_conn_window: 10
+# 未登录（半开）连接防护（阶段二百二十一 DoS 加固）：恶意刷连接/重连风暴场景
+# 未登录连接不受 max_connections 约束，本项限制其总量（超限回提示后关闭）；
+# 未登录连接另有硬超时——建连后须在该秒数内完成登录，发帧不可续命
+# pending_limit: 5000
+# pending_timeout: 60
+# 单连接发送队列缓冲条数（阶段三十一：文件分片与聊天消息共用队列，过小会溢出丢消息）
+# 原实现：固定 256
+send_queue_size: 1024
+# 大文件直传阈值（字节，阶段三十一）：超过该值走 HTTP 直传链路（服务端流式落盘），WebSocket 仅传信令
+http_upload_threshold: 1048576
+# 单请求直传大小上限（字节）：1MB~20MB 走单请求直传；超过该值走分片直传（阶段三十二）
+max_file_size: 20971520
+# 群聊文件大小上限（字节，阶段一百五十七）：群聊文件独立于 max_file_size，默认 20MB；
+# 群聊文件走 /upload/group/file 链路（服务端 MaxBytesReader 强制截断 + 前端发送前校验），调整后需重启服务端生效
+group_file_max_size: 20971520
+# 服务器文件保留天数（阶段一百六十）：static/upload 下的聊天文件（私聊/群聊文件与 AI 文件，不含图片和头像）
+# 超过该天数物理删除，避免长期占用服务器磁盘；默认 7 天，配 -1 表示永不清理；
+# 清理只删文件本体不删消息记录，用户点击过期文件提示"文件已过期"（微信同款）；启动时先执行一次，之后每 6 小时扫描一轮；修改后需重启服务端生效
+file_retention_days: 7
+# 客户端安装包上传大小上限（字节，阶段二百六十）：admin 后台上传 APP/PC 更新安装包（APK / Setup exe）的单文件上限；
+# 默认 512MB（APK 数十 MB、PC 安装包含内置工具链可达数百 MB），缺省或非法时回退 512MB；修改后需重启服务端生效
+app_pkg_max_size: 536870912
+# 分片直传单片大小（字节，阶段三十二）：超大文件按该值分片逐片 HTTP 上传（服务端节流推送接收进度）
+upload_chunk_size: 4194304
+# 分片直传文件大小上限（字节，阶段三十二）：超过该值前端直接拒绝发送
+max_direct_size: 2147483648
+# 消息撤回时间窗口（秒）：仅该窗口内自己发送的消息可撤回
+recall_window: 120
+
+# ============================================================
+# 阶段二百六十八：高德地图（位置消息 + 实时位置共享功能，Web JS API）
+# amap_key：高德开放平台 Web端(JS API) Key，https://lbs.amap.com/ 申请（须配置域名白名单防盗用）
+# amap_security：配套安全密钥 securityJsCode（新申请 Key 必填，与 Key 同页获取）
+# amap_web_key：高德"Web服务"类型 Key（与 amap_key 同应用下再创建一个即可）——专用于位置气泡静态地图缩略图
+#               （restapi.amap.com REST 接口按平台校验 Key，JS API 类型 Key 调用报 USERKEY_PLAT_NOMATCH；
+#               留空回退 amap_key，此时若 amap_key 为 JS API 类型则气泡仅无缩略图，收发与共享不受影响）
+# 前两项均留空 = 位置功能整体停用（前端位置入口隐藏，信令回"管理员未配置地图服务"）
+amap_key: "你的高德Web服务Key"
+amap_security: "你的高德安全密钥"
+amap_web_key: "你的高德JS API Key"
+
+# ============================================================
+# 并发改造 C 系列：集群模式（hub 分布式化 + Redis pub/sub 跨实例广播，修改后需重启服务端生效）
+# true = 启动集群总线：消息投递/全员广播/会话刷新/缓存失效经 Redis 频道跨实例投递，
+#        多实例水平扩展（须共享同一 MySQL 与 Redis），ws_addr 各实例监听不同端口；
+#        多端跨实例在线、离线判定（全局在线名单 im:ulist）、黑名单/注册名单缓存失效均自动生效
+# false（默认）= 单实例模式：全部本地内存投递，与历史行为完全一致，零额外开销
+# 已知边界：同端互踢仅同实例生效（跨实例同端多连接共存，多端语义扩展）；
+#           通话/会议/远程协助的离线宽限收口为进程内存态（跨实例重连不取消收口）；
+#           带用户上下文的 HTTP 接口（上传/网盘等）与 WS 建议按用户会话粘性路由到同实例
+# ============================================================
+# cluster_enabled: false
+# 集群总线频道名（同一集群所有实例必须一致；缺省 im:bus）
+# cluster_channel: "im:bus"
+
+
+# 阶段一四五：注册开关（修改后需重启服务端生效）
+# true  = 保留"首次登录即注册"默认行为（登录时账号不存在自动注册），独立注册页亦可正常注册
+# false = 登录不再自动注册，账号不存在时提示"该账号不存在，请先注册账号"引导前往注册页；
+#         独立注册页 register.html 始终可用（注册经 REGISTER 信令显式完成）
+register_enabled: false
+
+# ============================================================
+# 阶段一百六十一：登录排队系统（服务重启集中重连风暴削峰，修改后需重启服务端生效）
+# 原实现问题：服务重启后全员瞬时重连（如 5 万在线同时重登），登录链路（密码验证 DB 查询 +
+# 登录后并行推送 + 名单快照单发）瞬时过载；max_connections 超限只能硬拒绝后来者。
+# 排队系统按速率平滑放行（软排队），排队者前端显示"第 N 位，预计 X 秒"，排到队首自动进入；
+# 队列上限与等待超时双保险防资源被拖垮。与 max_connections 互补：一个软平滑、一个硬保护
+# ============================================================
+login_queue:
+  enabled: true       # 总开关（false 时完全旁路零开销，登录链路与历史行为一致）
+  rate: 200           # 每秒放行登录数（令牌桶速率；突发上限为 1 秒额度；0=默认 200）
+  max_len: 20000      # 等待队列长度上限，超限直接提示"服务器繁忙"（建议不超过 max_connections——排队连接同样占用 WS 连接配额；0=默认 20000）
+  timeout: 60         # 排队等待超时秒，超时提示"登录排队超时"防僵尸连接（0=默认 60）
+
+# 阶段一百三十八：AI 计费模式（热更：修改保存后下一次模型调用即生效，无需重启服务端）
+# mode 两种可选：
+#   usage   = 按量计费（原模式）：按当次实际消耗折算，1000 tokens = 1 积分（上下文越长单次扣费越多）
+#   percall = 按次计费（TRAE CN 同款）：每次模型调用固定扣 percall_cost 积分，与 token 数无关
+ai_billing:
+  mode: usage
+  # 按次计费单次扣费（积分）：仅 mode=percall 时生效
+  percall_cost: 0.01
+
+
+# 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
+# 用途：/api/secure-file 密文接口与 PC 端加密快照 web-snapshot.enc 共用同一密钥；
+# 密钥仅存本文件与 PC 构建产物（掩码扰乱后嵌入 secure-key.js），明文不下发不下盘
+# 留空 = 密文接口停用，PC 端自动回退明文链路（功能不受影响，仅无加密）
+# 生成方式（PowerShell）：-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
+secure_file_key: "请改成64位强随机hex（openssl rand -hex 32）"
+
+# MySQL 数据源
+mysql_dsn: "root:数据库密码@tcp(127.0.0.1:3306)/im?charset=utf8mb4&parseTime=True&loc=Local"
+# MySQL 连接池参数（并发优化 E4，缺省：max_open=2000 / max_idle=50 / lifetime 不设）
+# max_open 为懒建立软上限（不预占），但受 MySQL 服务端 max_connections 硬顶（默认 151）——
+# 调大本项时服务端须配套 SET GLOBAL max_connections（每连接约 1-10MB 内存，自行评估）
+# max_idle：高峰后保留的空闲连接数，避免风暴再来时重建连接握手开销
+# db_conn_max_lifetime：连接最长复用秒数（防服务端 wait_timeout 单方面掐断后报错），0=不设
+# db_max_open_conns: 2000
+# db_max_idle_conns: 50
+# db_conn_max_lifetime: 3600
+# 读写分离适配 E5：撤回兜底重试窗口（秒）——主备从中间件无"写后读主"粘滞时，撤回在复制延迟
+# 窗口内每秒重查（0=默认跳过；复制延迟 10s 建议配 12）
+# db_recall_retry_window: 12
+# Redis 配置
+redis_addr: "127.0.0.1:6379"
+redis_password: ""
+redis_db: 0
+
+# 前端静态目录（缺省留空：自动从 exe 所在目录逐级向上查找 im-client/web；相对路径基于 exe 所在目录解析）
+web_dir: ""
+# 阶段二十四：聊天文件持久化存储目录
+# 原实现：upload_dir: "../im-client/web/static/upload"（相对进程工作目录，仅根目录启动时正确）
+# 现改为留空：由服务端基于 web_dir 自动推导（exe 位于 bin 时推导结果为 im-client/web/static/upload）；如需自定义可配置绝对路径
+# upload_dir: "../im-client/web/static/upload"
+# 阶段二十四：聊天文件持久化大小上限（字节，默认 20MB）
+# 阶段三十二：语义调整为"单请求直传上限"，1MB~20MB 走单请求直传，超过走分片直传（上限见 max_direct_size）
+# max_file_size: 20971520
+
+# ============================================================
+# 阶段四十三：AI 问答配置（服务端归口：API 地址与密钥仅存本文件，客户端不接触密钥）
+# providers 为 OpenAI 兼容 chat/completions 接口（可接 DeepSeek/Kimi/智谱/通义/OpenAI 等）
+# agents 为面向用户的智能体，通过 provider 名称绑定模型服务；未配置时内置"AI助手"（本地 Mock 应答）
+# 阶段四十九起：本节仅作首次启动的种子数据（自动迁入数据库），此后以后台管理界面增删改为准（热生效无需重启）
+# ============================================================
+# ============================================================
+# AI 问答配置（服务端归口：密钥仅存本文件；阶段四十九起本节仅作种子数据，运行时以数据库为准）
+# ============================================================
+ai:
+  # 多轮对话携带的历史消息条数（按 用户+智能体 隔离取最近 N 条）
+  # 阶段八十五：上下文按"稳定前缀在前、逐问易变内容在后"组装（系统提示→摘要→历史→知识库/记忆→提问），
+  # 可命中 DeepSeek/GLM/Kimi/硅基流动等服务的隐式前缀缓存（命中部分约 1/10 计费），长会话 prompt 消耗显著降低
+  context_window: 20
+  # 限流：单用户在 limit_window 秒内最多提问 limit_count 次
+  limit_count: 10
+  limit_window: 60
+  # 阶段四十五：文档问答单文档提取文本上限（字符），超出截断后再送模型
+  doc_max_chars: 60000
+
+  # 阶段八十四：TRAE 同款历史对话压缩——历史上下文超阈值时把较旧部分 LLM 摘要成一条摘要消息
+  # 注入（最近 N 条保留原文），长会话/长任务显著降低 token 消耗并加速模型首字响应；
+  # AI 问答同时回溯窗口外更早历史进摘要（不再滑走即丢）
+  # 阶段一百三十九：口径拆分——Agent 任务改 KB 判据（见 compress_threshold_kb），
+  # compress_threshold_tokens 仅对 AI 问答生效
+  compress_threshold_tokens: 12000     # AI 问答触发阈值（估算 token；负数=禁用 AI 问答压缩）
+  compress_keep_messages: 6            # 压缩时保留最近原文条数（摘要覆盖更早历史）
+  # 阶段一百三十九：Agent 任务上下文压缩阈值（KB 口径，与 TRAE CN 状态栏同款，UTF-8 字节计）——
+  # 任务循环上下文累计达到该值时把较早完整工具轮 LLM 摘要归并（最近 N 轮保留原文）；
+  # 200KB 中文约 6.8 万 token，请结合所用模型上下文窗口调整；负数=禁用 Agent 任务压缩
+  compress_threshold_kb: 200
+
+  # 阶段一百九十：轻量模型服务名（任务内分工·多模型协同，须为后台已启用模型服务名）——
+  # 配置后子 Agent（spawn_agent 调研）与历史压缩摘要等辅助调用自动走该轻量模型，
+  # 主对话/主任务仍用智能体绑定（或会话所选）模型；留空=不启用分工（维持现状）
+  light_provider: ""
+
+  # 阶段一百九十五：AI 响应空闲超时（秒）——上游建连后断流（连接未断但长时间无数据，实测
+  # deepseek 偶发）时读取会一直阻塞到 ask 超时才兜底，任务卡死观感差；数据块间空闲超过该值
+  # 即中断请求转超时类错误（多源兜底直接换源），断流恢复提速到阈值秒级。0=默认 90，负数=禁用
+  stream_idle_timeout: 90
+
+  # 阶段五十一：知识库向量化 embedding 服务（OpenAI 兼容 /embeddings 接口归口）
+  # DeepSeek 不提供 embedding API，可接任意兼容服务（硅基流动 bge-m3 / 智谱 embedding-3 / 本地 ollama 等）
+  # api_url 为空时知识库功能静默降级（可建库但文件不向量化），不影响聊天与 AI 问答
+  embedding:
+    api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"                          # OpenAI 兼容 /embeddings 完整地址（示例：https://api.siliconflow.cn/v1/embeddings）；留空=知识库向量化降级关闭；本地 ollama 填 http://127.0.0.1:11434/v1/embeddings（注意是 embeddings 不是 chat/completions）
+    api_key: "sk-你的API密钥"                          # API 密钥（仅存服务端，不下发客户端）
+    model: "qwen3.7-text-embedding"                 # 向量模型名（需与 api_url 服务支持的模型一致）免费限流调试可用BAAI/bge-m3模型或本地nomic-embed-text模型
+    batch_size: 16                       # 单次请求批量条数
+  # 阶段五十一：知识库参数（data_dir 相对路径基于 exe 所在目录解析）
+  kb:
+    chunk_size: 500                      # 切片字符数（按段落聚合，超长段落硬切）
+    chunk_overlap: 50                    # 相邻切片重叠字符数
+    top_k: 3                             # AI 对话单次注入的最大命中条数
+    max_context: 4000                    # 注入参考资料总长上限（字符）
+    # score_threshold: 0.25              # 旧值保留：实测 nomic-embed-text 中文无关文本基线相似度≈0.59，此值形同虚设
+    # score_threshold: 0.62              # 旧值保留：实测部分无关问题（语义词重叠）最高相似度可达 0.67，仍会注入
+    score_threshold: 0.68                # 阶段五十三：按检索调试实测校准（无关问题最高 0.67 被过滤，相关问题首条 0.83 有余量；0=不过滤；可用管理后台「检索调试」继续校准）
+    data_dir: "kb_data"                  # 知识文件与向量库根目录
+
+  # 阶段五十八：智能体长期记忆（按 用户+智能体 隔离；回复后异步提取，提问时向量召回注入 system 上下文）
+  # enabled=false 或 embedding 未配置时全链路静默降级，不影响聊天主链路
+  memory:
+    enabled: true                        # 总开关（关闭后不提取不注入，管理接口仍可查看/删除已存记忆）
+    top_k: 5                             # 每次提问注入的召回记忆条数
+    max_per_agent: 200                   # 每 用户+智能体 记忆条数上限（超出淘汰最旧）
+    dedup_threshold: 0.88                # 去重相似度阈值（实测 12 对样本：同义改写 0.74~0.98、不同记忆 0.59~0.86 区间交叠，取 0.88 零误杀优先；0.74 级轻微改写会漏存为冗余条目，可在记忆弹窗手动删；原 0.85 会误杀、0.68 误杀更多）
+    extract_provider: ""                 # 提取用模型服务名（留空=用智能体当前绑定模型；建议填本地 ollama 零成本）
+
+  # 阶段五十九：智能 Agent 自动化任务（工具调用闭环 + 权限审批，事件流实时推送发起用户）
+  # enabled=false 时 AGENT_RUN 返回明确提示，功能整体关闭
+  # 阶段八十一/八十二：下列参数均可在 管理后台→Agent 设置 热更新（保存即生效+落库重启不丢），
+  # 本文件仅作首次启动的初始默认（后台调整属最新意图，DB 值优先）；workspace_root 不开放后台修改
+  agent:
+    enabled: true                        # 总开关
+    max_steps: 30                        # 单任务最大迭代步数（防模型死循环）
+    tool_timeout_seconds: 60             # run_command 默认超时秒（上限 300）
+    approve_timeout_seconds: 300         # 高危工具审批等待超时秒（超时任务自动失败）
+    auto_write: false                    # write_file 是否免审批（全局开关，默认 false 走审批；内网信任环境可开）
+    auto_commands:                       # run_command 命令前缀白名单（全局：命中自动放行，其余强制审批）
+                                         # 阶段八十三：审批弹窗"同意并加白"为用户个人白名单（按用户隔离，仅本人生效），与本全局名单并行
+      - "dir"
+      - "type"
+      - "ls"
+      - "cat"
+      - "echo"
+      - "go version"
+      - "git status"
+      - "git log"
+      - "git diff"
+      - "node"
+      - "python"
+    workspace_root: ""                   # 工作区根目录（空=exe目录/agent_workspace，按 username 隔离子目录）
+    # 阶段八十四：工具结果入模型上下文的字符上限（read_file/grep/http_request 等工具的超长输出
+    # 保留头 2/3 + 尾 1/3 后再进历史，前端执行控制台与留痕仍显示全量）。0=默认 8000，负数=不截断
+    tool_result_max_chars: 8000
+    # 阶段六十：本地执行器——true 时用户 PC 客户端（Electron）在线，文件/命令工具自动下放到其电脑本地执行，
+    # 文件直接落在用户磁盘（%APPDATA%/即时通讯/agent_workspace/<用户名>/）；
+    # PC 离线或本地执行超时自动回退服务端工作区执行，任务不中断。false 时全部在服务端执行（阶段五十九行为）
+    pc_executor: true
+    # 阶段九十一：内置浏览器工具开关（默认开启，nil 视为 true）——TRAE CN 同款内置浏览区，
+    # browser_* 工具族（navigate/snapshot/click/input/screenshot/eval/tabs/close）经用户 PC 客户端
+    # 的内置浏览器（WebContentsView，与主应用会话隔离）在本地真实执行，可操作 JS 渲染页面与登录态；
+    # 点击/输入/执行脚本需用户审批，打开/快照/截图自动放行；false 时不注入不执行（http_request 等不受影响）。
+    # 注意：依赖 PC 客户端在线（pc_executor 亦为 true 时才下发）
+    pc_browser: true
+    # 阶段六十七：任务队列——每用户同时运行任务数上限（concurrency，0=1）与排队上限（queue_size，0=5）；
+    # 超出并发数的新任务自动排队（FIFO，任务完成/取消后自动派发队首），排队已满时新任务直接拒绝
+    concurrency: 1
+    queue_size: 5
+    # 阶段六十八：http_request 工具——服务端代理 HTTP 请求（调接口/查数据/抓取网页），
+    # GET/HEAD 只读自动放行，POST/PUT/DELETE/PATCH 需用户审批；默认开启，false 时模型工具列表不注入
+    http_enabled: true
+    # 是否允许 http_request 访问内网/回环地址（默认 true 适配内网信任部署）；
+    # false 时在拨号层拦截私网/回环/链路本地 IP（按 DNS 解析后的真实 IP 拦截，域名绕不过），防模型被诱导探测内网
+    http_allow_private: true
+    # 阶段六十八：web_search 联网搜索工具（默认关闭，须配置服务商后开启 enabled=true）
+    # provider 四选一：
+    #   tavily     —— AI 搜索 API（https://tavily.com 注册取 key，需 api_key）
+    #   bocha      —— 博查搜索，国内直连（https://open.bochaai.com 注册取 key，需 api_key）
+    #   searxng    —— 自建元搜索实例（需 endpoint，实例须开启 JSON 输出 format=json）
+    #   duckduckgo —— 免 Key 兜底（国内网络环境通常不可达，建议 tavily/bocha）
+    web_search:
+      enabled: true                        # 开启联网搜索工具（博查，国内直连）
+      provider: "bocha"
+      api_key: "sk-你的API密钥"
+      endpoint: ""                         # bocha 不使用，留空
+
+  # 模型服务列表（可同时配置多个，智能体按 name 绑定）
+  # supports_image: 是否支持图片识别（多模态模型如 glm-4v/qwen-vl/gpt-4o 填 true，
+  # 为 true 时绑定的智能体开放图片提问入口，前端可发图片给模型识别）
+  providers:
+    # DeepSeek
+    - name: deepseek
+      api_url: "https://api.deepseek.com/v1/chat/completions"
+      api_key: "sk-你的API密钥"
+      # 原实现：model: "deepseek-v4-flash"（2026-09-15 实测该模型已从 /models 列表下线，且官方对无效模型名不报错直接挂起，导致 AI 问答无响应）
+      # model: "deepseek-v4-flash"          # 可选：deepseek-v4-flash / deepseek-v4-flash-vision-exp
+      model: "deepseek-flash"             # 2026-09-15 实测 /models 当前可用：deepseek-flash / deepseek-v4-pro
+      supports_image: false
+    # 智谱 GLM
+    - name: zhipu
+      api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+      api_key: "你的密钥"
+      model: "glm-4-flash"            # 免费额度模型；高端可换 glm-4-plus
+      supports_image: false
+    # 智谱视觉模型（图片识别示例：绑定到智能体后可发图提问）
+    # - name: zhipu-vision
+    #   api_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    #   api_key: "你的密钥"
+    #   model: "glm-4v-plus"
+    #   supports_image: true
+    # Kimi (Moonshot)
+    - name: kimi
+      api_url: "https://api.moonshot.cn/v1/chat/completions"
+      api_key: "sk-你的API密钥"
+      model: "moonshot-v1-8k"
+    # 通义千问（DashScope 兼容模式）
+    - name: qwen
+      api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+      api_key: "sk-你的API密钥"
+      model: "qwen-plus"
+    # OpenAI
+    - name: openai
+      api_url: "https://api.openai.com/v1/chat/completions"
+      api_key: "sk-你的API密钥"
+      model: "gpt-4o-mini"
+    # 本地 Ollama（无需密钥，api_key 留空即可）
+    - name: ollama
+      api_url: "http://127.0.0.1:11434/v1/chat/completions"
+      api_key: ""
+      model: "gemma4:26b"
+    # 阶段四十五 E2E 临时：文档导出/问答测试用 provider（实测完毕已停用，需要时取消注释并启动 tmpmock mockdoc）
+    # - name: doc-mock
+    #   api_url: "http://192.168.1.25:19128/v1/chat/completions"
+    #   api_key: "mock-key"
+    #   model: "mock-doc"
+    #   supports_image: true
+
+  # 智能体列表（左侧 AI 图标里可选的聊天助手；provider 未启用时该智能体降级为本地演示应答）
+  agents:
+    - name: "AI助手"                   # 全局唯一，会话列表展示名
+      provider: deepseek               # 绑定上面的 provider name
+      system_prompt: "你是一个即时通讯软件内的智能助手，回答简洁、准确、友好，使用中文回复。"
+      avatar: ""                       # 头像 URL，留空时前端显示 🤖 占位
+    - name: "翻译助手"
+      provider: zhipu
+      system_prompt: "你是一个专业翻译助手：自动检测用户输入的语言，中文译英文、其他语言译中文，仅输出译文，不要解释。"
+      avatar: ""
+    - name: "编程助手"
+      provider: kimi
+      system_prompt: "你是一个资深编程助手，用中文回答技术问题，先给结论再给可运行的代码示例。"
+      avatar: ""
+    - name: "创意写作"
+      provider: qwen
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""
+    - name: "本地测试"
+      provider: ollama
+      system_prompt: "你是一个创意写作助手，擅长文案、故事与润色，风格生动自然。"
+      avatar: ""
+    # 阶段四十五 E2E 临时：导出测试智能体（配套 doc-mock，实测完毕已停用）
+    # - name: "导出测试"
+    #   provider: doc-mock
+    #   system_prompt: "你是文档生成测试助手。"
+    #   avatar: ""
+
+  # 阶段五十七：用户自建智能体（个人智能体仅归属者可见可对话；模型从下面白名单中选，防费用失控）
+  user_agent:
+    enabled: true                     # 用户自建智能体总开关（false 时用户端整体关闭该功能）
+    providers: ["deepseek", "ollama"] # 用户可选模型服务白名单（须与上面 providers 中已启用的 name 匹配）
+    max_per_user: 10                  # 每人自建数量上限
+    prompt_limit: 2000                # 提示词最大字符数
+
+# ============================================================
+# 阶段八十八：MCP（Model Context Protocol）——TRAE CN 同款 MCP 能力，服务端归口
+# Go 服务端作为 MCP Host 统一管理连接：stdio 在服务端本机拉起子进程，sse/http 直连远程端点；
+# 发现的工具供 AI 问答与智能 Agent 注入调用。服务器配置以 im_mcp_server 表为唯一数据源
+# （后台管理界面增删改热生效），下方 servers 仅首次启动表空时作种子导入
+# ============================================================
+mcp:
+  enabled: true                       # 总开关（false 时断开全部连接，工具不参与 AI 对话，后台配置记录保留）
+  user_enabled: true                  # 用户自建 MCP 总开关（阶段九十：PC 端"我的 MCP 服务器"入口——
+                                      # 用户在自己电脑配置本地 stdio 服务器，工具清单经 msg 67 上报注入
+                                      # Agent，调用经 PC 本地执行器执行，命令/凭据仅存用户本机；
+                                      # false 时本机工具不注入不执行，其他能力不受影响）
+  stdio_whitelist:                    # 用户自建服务器（owner 非空）的 stdio 命令白名单（可执行名比对，
+                                      # 兼容 .exe/.cmd/.bat 后缀；空=用户自建 stdio 全部拒绝。
+                                      # 管理员公共服务器不受限——管理员本就掌控服务端主机）
+    - "npx"
+    - "uvx"
+    - "node"
+    - "python"
+    - "python3"
+  connect_timeout_seconds: 30         # 建连（初始化握手）与工具发现超时秒
+  tool_timeout_seconds: 300            # 单次工具调用超时秒
+  # servers:                          # 种子服务器示例（仅首次启动导入；之后以后台管理配置为准）
+  # ===== 生产可用实例（均为官方维护、开箱即用；按需取消注释后重启） =====
+  #   - name: filesystem               # 文件系统访问（官方 @modelcontextprotocol/server-filesystem）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-filesystem", "D:/workspace", "E:/docs"]
+  #     # 注意：args 末尾的目录列表为允许访问的根目录，务必改成实际业务目录，避免放开整盘
+  #   - name: fetch                    # 网页抓取（官方 mcp-server-fetch，把网页转为 Markdown 供模型阅读）
+  #     transport: stdio
+  #     command: uvx
+  #     args: ["mcp-server-fetch"]
+  #   - name: memory                   # 长期记忆知识图谱（官方 @modelcontextprotocol/server-memory）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-memory"]
+  #     env: { "MEMORY_FILE_PATH": "./data/memory.json" }
+  #   - name: github                   # GitHub 仓库/Issue/PR 操作（官方，需个人访问令牌）
+  #     transport: stdio
+  #     command: npx
+  #     args: ["-y", "@modelcontextprotocol/server-github"]
+  #     env: { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxx" }
+  #   - name: remote-demo              # 远程 MCP 端点（新版 Streamable HTTP 协议，推荐）
+  #     transport: http
+  #     url: "https://mcp.example.com/mcp"
+  #     headers: { "Authorization": "Bearer xxx" }
+
+# ============================================================
+# 阶段四十九：后台管理
+# admin_users 为管理员用户名白名单：启动时自动将名单内已注册账号标记为管理员角色（im_user.role=1）
+# 管理登录实时比对白名单：未注册账号先用 IM 客户端登录一次自动注册，下次启动自动补标记
+# 管理后台入口：浏览器访问 http://<服务地址>:8888/admin.html
+# ============================================================
+admin_users:
+  - admin
+  - maxtest88
+
+# ============================================================
+# 阶段四十六：OnlyOffice 在线文档编辑（自建 DocumentServer，docx/xlsx/pptx 在线编辑）
+# enabled 为 false 时前端点击文件保持原下载行为（未部署可保持关闭，零影响）
+# 部署步骤见 /docs/开发文档.md 阶段四十六；修改后需重启服务端生效
+# ============================================================
+onlyoffice:
+  # 是否启用在线编辑
+  enabled: false
+  # 浏览器加载编辑器 api.js 的完整地址（DocumentServer 对浏览器可见的地址，Windows 版默认端口 80）
+  api_url: "http://127.0.0.1:80/web-apps/apps/api/documents/api.js"
+  # DocumentServer 回源拉取/保存文档时访问 im-server 的地址（需与 DS 网络互通）
+  server_url: "http://127.0.0.1:8888"
+  # 与 DocumentServer local.json 中三处 secret 一致的服务端 JWT 密钥
+  jwt_secret: "请改成强随机字符串"
+# 阶段一百四十二：内置 TURN/STUN 中继服务（音视频通话 P2P 打洞失败兜底；false 时零开销纯 P2P）
+# 使用前提：im-server 部署在公网 IP 服务器上，安全组放行 port(UDP+TCP) 与 min_port~max_port(UDP)
+# 客户端接入已完成（1v1 通话/群会议/文件 P2P 直传/远程协助信令均注入 ice，call-page.js iceServers 消费）
+turn:
+  enabled: true
+  # 中继对外报告的 IP 或域名：NAT 后部署必填公网 IP/域名；单公网 IP 直挂可留空（自动取本机非回环 IPv4）
+  # 阶段一百四十五：支持域名（启动时 DNS 解析取首个 IPv4 作中继报告地址，解析失败启动报错）；
+  # iceServers 下发用配置原值（域名时客户端自解析，DNS 活跃检测故障转移/三线优选实时生效）
+  # 适用：单台服务器多线路（电信/联通/移动 IP 均映射到本机）可直接填多线路域名；
+  # 注意：多机集群不能共享同一轮询域名（中继会话绑定具体机器），每台须配独立域名或直接填 IP
+  # 阶段一百四十五：域名巡检自动跟随——当前中继 IP 被上游活跃检测剔除后自动重建 TURN 服务
+  # 切换到可用 IP，零重启；0/缺省=30 秒；public_ip 直接填 IP 时无巡检本值不参与
+  public_ip: "192.168.1.25"
+  # 域名巡检间隔秒（0/缺省=30）
+  ip_recheck_sec: 30
+  # STUN/TURN 监听端口（UDP+TCP 双栈，coturn 同款默认 3478）
+  port: 3478
+  # 凭证域（参与长期凭证 MD5 计算）
+  realm: "im-server"
+  # 长期凭证账号（RFC 5766，仅允许该账号分配中继）
+  username: "imcall"
+  password: "请改成强随机字符串"
+  # 媒体中继 UDP 端口段（需放行安全组）
+  min_port: 49160
+  max_port: 49960
+
+# 阶段一百五十六：好友文件 P2P 直传（WebRTC DataChannel，P2P 优先 + 现有 HTTP 链路兜底）
+file_p2p:
+  enabled: true            # 总开关：false 时全部文件走现有链路（客户端 probe 一律回 probe_fail(disabled)）
+  threshold: 1048576       # 大于该字节数（1MB）且私聊才尝试 P2P；小文件 WS 分片更快更简单
+  negotiate_timeout: 10    # 客户端协商超时秒（ICE failed/超时自动回退 HTTP 链路）
+  chunk_size: 16384        # DataChannel 分片字节
+  high_water: 8388608      # 发送缓冲高水位（暂停读文件）
+  low_water: 1048576       # 发送缓冲低水位（恢复读文件）
+  archive: false           # 直传完成后发送方是否异步归档副本到服务端（false 历史仅元信息）
+  max_per_user: 3          # 单用户并发 P2P 传输会话上限（防滥用，超限 probe_fail）
+
+# ============================================================
+# 阶段二百九十二：局域网游戏跨公网联机（Steam 同款"局域网联机跨公网"）
+# 形态：P2P 打洞直连优先 + TURN 中继兜底（依赖上方 turn 段，需放行 3478 与中继端口段 49160~49960）
+# 一期做形态二「通用端口隧道」：客户端本地监听游戏端口，游戏零改动，仅 PC 端
+# 服务端只见 109 房间层 / 110 连接层信令，游戏字节走 DataChannel 点对点或经 TURN 中继
+# 设计文档：docs/局域网公网联机开发文档.md
+game_net:
+  enabled: true            # 总开关：false 时 109/110 信令一律回错（既有功能零回归）
+  max_rooms: 500           # 全局房间数上限
+  room_ttl: 7200           # 空房回收秒（全员离开/房主退出后到期回收）
+  max_members: 6           # 单房间成员上限（一期定 ≤6：星型拓扑以房主为 hub，控房主扇出）
+  max_per_user: 2          # 单用户并发房间数（防滥用）
+  negotiate_timeout: 10    # 客户端协商超时秒（同 file_p2p）
+  mode: "both"             # 接入形态：lane=原生SDK通道 / tunnel=通用端口映射 / both（一期主线 tunnel）
+  relay_only: false        # 强制走中继（企业网/调试：客户端只用 relay 候选）
+  # 功能二期：联机专用中继（独立 TURN 实例 + 独立端口子段，避免联机中继与通话/会议抢同一端口池）
+  # 前提：turn.enabled=true 且本项 enabled=true 才启动；未启用时联机复用 turn 主实例池（历史行为零回归）
+  relay:
+    enabled: false         # 联机专用中继开关（false=复用 turn 主实例，零额外部署；true 时按下述端口启动第二实例）
+    port: 3479             # 联机专用 STUN/TURN 监听端口（UDP+TCP 双栈，须与 turn.port 不同且放行安全组）
+    min_port: 49961        # 联机专用媒体中继 UDP 端口子段（须与 turn.min_port~max_port 不重叠，需放行安全组）
+    max_port: 50760
+
+# ============================================================
+# 虚拟 IP 池（联机虚拟网卡路线：为每个在线用户分配 10.28.x.x 虚拟 IP + 配套 MAC，
+# p2p-host.exe 启动参数（-a/-s/-c/-k/-l）数据源；建房自动生成 5 位社区名 + 6 位纯数字密钥
+# 随房间信令下发；admin 后台「虚拟 IP」页签展示占用情况。设计文档：docs/虚拟IP池设计方案.md）
+# enabled=false 时全链路旁路：不建表不加载不分配，登录回执 vip_* 字段恒空，既有功能零回归；
+# 集群模式（cluster_enabled=true）下强制旁路（内存态分配跨实例冲突，Redis 原子分配为后续演进）
+vip_pool:
+  enabled: false           # 总开关（新功能默认关闭，需要虚拟网卡联机时显式开启；开启后重启生效）
+  segment: "10.28.0.0/16"  # 虚拟网段（网络地址/网关/广播地址自动排除在分配池外）
+  gateway: "10.28.0.1"     # 虚拟网关（p2p-host 组网参数预留；不得落在分配区间内）
+  range_start: "10.28.1.1" # 分配池起（约 6.5 万地址，按用户名级分配——多端共用同 IP）
+  range_end: "10.28.255.254" # 分配池止（10.28.255.255 为 /16 广播地址必须排除）
+  mask: "255.255.0.0"      # 子网掩码（登录回执 vip_mask 下发，客户端 p2p-host -s 参数；空串时客户端按 255.255.0.0 兜底）
+  supernodes: []           # 全局 supernode 候选列表（p2p-host -l 参数；如 ["1.2.3.4:7654"]）：
+                           # admin 游戏表单多选项即来自此列表，游戏未单独配置时作兜底下发
+
+# ============================================================
+# 阶段二百六十一：向日葵同款远程控制（设备ID+验证码直连，server/remotedevice.go + remote.go rc_* 信令）
+# 每台 PC 登录注册固定数字设备ID（im_device 表），控制端输入 设备ID+验证码 即自动接通被控 PC
+# （无需对方点击接受，被控端仅显示悬浮提示条）。验证码双模式：动态码（面板展示、定期刷新）
+# + 用户自设静态访问密码。跨 NAT 依赖上方 turn 段中继（rc 信令自动注入 iceServers）。
+rc:
+  disabled: false          # 关闭开关：true 时 rc_connect 一律拒绝、设备注册接口空转（零回归）
+  dyn_code_ttl: 300        # 动态验证码有效期秒（过期后连接校验时惰性重生成并推送被控端刷新）
+  max_fails: 5             # 同一设备ID连续验证码错误上限（达到即锁定，防爆破）
+  lock_sec: 600            # 防爆破锁定时长秒（锁定期间该设备ID一律拒绝连接）
+  static_pw_min_len: 6     # 静态访问密码最小长度（设置接口校验）
+
+# ============================================================
+# 阶段二百二十六：厂商推送通道（方案 B：进程被杀兜底，修改后需重启服务端生效）
+# 接收端无任何在线连接（APP 进程被杀/彻底退出）时，经厂商系统级推送下发消息摘要通知，
+# 点击通知经深链打开对应会话（与前台服务通知同款）。厂商推送服务为系统常驻进程，
+# 应用进程不在也能收到——这是微信"消息永远收得到"的兜底机制；
+# FGS 后台接管时连接在线，不进入本通道，天然不重复推送。
+# 通道二选一（EMAS 启用即优先，全量替代路线）：
+#   emas  = 阿里云 EMAS 移动推送（聚合推送，推荐）：服务端只调阿里云一个 OpenAPI，按账号
+#           推送（客户端 SDK 原生 bindAccount 绑定，无需 regId 注册表）；在线走阿里云 ACCS
+#           长连接、进程被杀自动降级华为/小米/OPPO/vivo 等厂商离线通道。使用前提：
+#           阿里云控制台开通移动推送 → EMAS 控制台创建应用（包名 com.gengyang.im）拿 AppKey
+#           → RAM 创建 AccessKey（建议子账号最小权限）→ 各厂商离线通道凭据在 EMAS 控制台配置；
+#           客户端需接入 EMAS SDK；服务器须能出网访问 cloudpush.aliyuncs.com
+#   mipush = 小米直连（备用）：先到小米开放平台（dev.mi.com）注册应用并开通推送服务取得
+#           AppSecret，并把 APK 重新打包集成 MiPush SDK；按设备 regId 定向推送
+# ============================================================
+push:
+  enabled: true        # 厂商推送总开关（false 时全链路直通，零开销零回归）
+  emas:
+    enabled: true      # 阿里云 EMAS 聚合推送通道开关（启用时优先于 mipush）
+    access_key_id: ""      # 阿里云 RAM AccessKey ID（留空=通道停用；真值仅填本地，禁止提交进 Git）
+    access_key_secret: ""  # 阿里云 RAM AccessKey Secret（仅存本文件，不下发客户端；真值仅填本地，禁止提交进 Git）
+    app_key: 0000000
+    region: "cn-hangzhou"  # OpenAPI 接入区域（与 EMAS 应用开通区域一致）
+    package: "com.gengyang.im"  # 应用包名（与 APK applicationId 一致；厂商离线通道辅助弹窗参数
+                           # AndroidPopupActivity=<package>.EmasPopupActivity 组装用，
+                           # 留空=不带辅助弹窗参数，进程被杀后厂商离线通道不可达，仅在线可达）
+  mipush:
+    enabled: false     # 小米推送通道开关（EMAS 启用时本通道不投递，保留备用）
+    app_secret: ""     # 小米推送 AppSecret（开放平台推送服务页获取；留空=通道停用）
+    package: ""        # 应用包名（须与 APK applicationId 完全一致）
+
+# ============================================================
+# 网盘（百度网盘同款个人云盘：元数据 MySQL im_drive_file + 文件本体经服务端归口
+# 落 MinIO 或本地磁盘；客户端永不接触 MinIO 凭据，全部操作经 /api/drive/* 代理）
+# ============================================================
+drive:
+  enabled: true                  # 总开关（false 时客户端入口隐藏，接口统一拒绝）
+  max_file_size: 524288000       # 单文件上传上限（字节，默认 500MB）
+  quota_bytes: 10737418240       # 每用户容量配额（字节，默认 10GB；-1 表示不限）
+  # 存储后端：auto（默认）= MinIO 四项配置齐全即用 MinIO，否则降级本地磁盘；
+  # minio = 强制 MinIO；local = 强制本地磁盘（目录 exe所在目录/drive_data，可用 local_dir 自定义）
+  storage: "auto"
+  # 分片上传单片大小（字节，0=8MB，上限 64MB；网盘二期大文件链路：MD5 秒传 + 分片上传 +
+  # 断点续传，单片大小随 init 响应下发前端；修改后需重启服务端生效）
+  chunk_size: 8388608
+  # local_dir: ""                 # 本地存储根目录（留空=exe目录/drive_data；相对路径基于 exe 所在目录解析）
+  # 上传扩展名黑名单（逗号分隔；挂载盘 WebDAV 与网盘上传统一拦截，命中返回 403）。
+  # 留空=内置默认黑名单：exe/msi/com/scr/cpl/hta/dll/lnk/bat/cmd/vbs/vbe/ps1/psm1/reg；
+  # 设值则完全覆盖默认（如只拦 exe 填 ".exe"）；修改后需重启服务端生效
+  # block_exts: ""
+  # share_cache: false           # 下载响应 CDN 缓存开关（后台可热更新，本项仅作首次启动默认；false=no-store
+                                 # 取消分享/吊销即时生效；true=public,max-age=3600 允许 DCDN 边缘缓存代理下载省带宽，
+                                 # 取消分享的即时性降级为缓存过期后失效；302 预签名跳转不受影响永远 no-store）
+  minio:
+    endpoint: ""                 # MinIO 地址（如 127.0.0.1:9000，不带 http:// 前缀）；留空=使用本地磁盘
+    public_endpoint: ""          # 外网客户端直连下载地址（内外网分流：服务端 API 读写走 endpoint，
+                                 # 预签名下载 URL 用本地址生成给外网客户端；留空=与 endpoint 相同——
+                                 # 本机不在 MinIO 内网，读写与下载同走公网域名，无需配置）
+    public_ssl: false            # 外网直连地址是否 HTTPS（上 HTTPS 后改 true）
+    access_key: "请改成访问账号"
+    secret_key: "请改成访问密钥"
+    bucket: "im-drive"           # 桶名（不存在启动时自动创建）
+    use_ssl: false               # MinIO 是否 HTTPS
+    # 下载链路说明：MinIO 后端下载为 302 跳 30 分钟短时效预签名地址（客户端直连 MinIO 下载，
+    # 省服务端带宽），URL 域名取 public_endpoint（内外网分流）否则取 endpoint；MinIO 不可达时服务端自动回退流式代理
+  # 阿里云 DCDN 远程鉴权（阶段一百九十七）：minio 外网域名（public_endpoint）接入 DCDN 且控制台
+  # 开启远程鉴权（鉴权服务器地址填 https://<im域名>/auth、GET、保留所有参数）后，边缘节点把每个
+  # 文件请求转发本服务 /auth 校验——预签名 URL 附带短时效票据 auth_ticket（纳入 MinIO 签名），
+  # 票据有效 200 放行、无效 403；分享取消即时吊销，防跳过分享页直连 MinIO 下载。
+  # 部署顺序：先启用本配置并重启服务端，再到 DCDN 控制台开远程鉴权（控制台建议：
+  # 「其他状态码是否放行」选否——仅 200 放行；「鉴权超时动作」按可用性权衡）
+  edge_auth:
+    enabled: false               # 总开关（false 不签发票据、GET /auth 返回 404 与未注册语义一致）
+                                 # 三项均可在管理后台-网盘设置热更新（保存即生效+落库重启不丢，yaml 仅作首次默认）
+    ticket_ttl: 1800             # 票据滑动有效期秒（0=1800 与预签名 30min 对齐；每次校验通过续期，
+                                 # 支持视频 Range 多段请求；调小可收紧重放窗口，中断后重新下载即获新票）
+    rate_limit: 500              # /auth 全局限流 QPS（0=500；请求源为 DCDN 节点无法按 IP 限流）
+    # 本地部署 MinIO 参考（Windows 单文件免安装）：
+  #   下载 https://dl.min.io/server/minio/release/windows-amd64/minio.exe
+  #   启动：set MINIO_ROOT_USER=minioadmin && set MINIO_ROOT_PASSWORD=minioadmin && minio.exe server D:\minio-data --console-address ":9001"
+
+# 阶段二百四十一：APP 启动广告图（微信启动页同款：APK 内置保底图 + 服务端下发可运营广告图。
+# APP 每次冷启动后台拉取本配置，URL 变化自动预下载新图缓存、下次启动显示；enabled=false 或
+# 拉取失败时 APP 显示内置保底图直接进入，不阻塞启动。仅 APP 端消费，WEB/PC 不涉及）
+splash_ad:
+  enabled: false                 # 广告图总开关（false 时接口返回空，APP 不显示缓存图并清空旧缓存）
+  image_url: ""                  # 广告图下载地址（竖版 1080x1920 以上；更换 URL 即换广告，建议走网盘分享或固定 CDN 地址）
+  duration: 3                    # 广告页显示秒数（0=默认 3；右上角跳过按钮可提前进入主界面）
+
+# ============================================================
+# 游戏中心（Steam 同款游戏浏览/下载：管理员上架自建游戏库，P1 全免费 price 字段预留）
+# 文件本体落本地磁盘 games/<slug>/<version>/，分片临时目录 tmp_chunks/<upload_id>/
+# （均基于 local_dir，留空=exe目录/game_data）；修改后需重启服务端生效
+# ============================================================
+game:
+  enabled: true                  # 总开关（false 时客户端商店入口隐藏、接口统一拒绝）
+  max_file_size: 53687091200     # 单文件上传上限（字节，默认 50GB）
+  chunk_size: 8388608            # 分片上传单片大小（字节，0=8MB，上限 64MB）
+  video_max_size: 209715200      # 商店详情页宣传视频单文件上限（字节，0=200MB）
+  # launch_secret: "im-game-launch-secret"  # 启动参数 {1} 专属密码派生密钥（HMAC 种子，仅存本文件，
+  #                                         # 不下发客户端）；同账号恒定、不同账号不同。留空=内置默认；
+  #                                         # 生产建议改强随机值，更换后全部账号启动密码变化（需重启生效）
+  # local_dir: ""                # 游戏数据根目录（留空=exe目录/game_data；相对路径基于 exe 所在目录解析）
+  # 全局 BT Tracker 服务器地址列表（阶段二百七十五）：下载方式=「BT·服务端生成种子」时把下列地址
+  # 写入种子的 announce（首个）与 announce-list（BEP12，每地址一个 tier），帮助客户端直接拿到可用
+  # peer；留空=种子不写 announce，仅走公网 DHT。地址须带协议前缀，如 udp://host:port/announce。
+  # 修改后需重启服务端生效（种子缓存锚点已并入 tracker 指纹，改后自动重建新种子，无需清缓存）
+  trackers:
+    - "udp://47.92.77.159:8888/announce"
+    - "http://tracker.cdonl.com/announce"
+  # 端口透传·远程加密网关（im-gateway.exe 独立部署，见 gateway/main.go）：三项齐备时客户端库接口
+  # 下发 gateway 字段（addr+fingerprint+24h token），客户端 port_forwards 的 gw 前缀规则经网关加密
+  # 透传到网关本机 127.0.0.1 的真实游戏服务端；任一留空=不启用（gw 规则启动时拒绝并提示）
+  # gateway:
+  #   addr: "1.2.3.4:30100"                        # 网关公网地址 host:port（TCP/UDP 同端口）
+  #   token_secret: "与 im-gateway 的 gateway.yaml 一致"  # token 验签密钥（仅存本文件不下发）
+  #   fingerprint: "im-gateway 首启日志输出的 SHA256 指纹"   # 网关 TLS 证书指纹（客户端 pin 防冒充）
+  # 云存档（Steam 同款云存档 P1 单设备闭环，server/gamesave.go 归口）：管理端为每个游戏配置默认存档
+  # 采集路径（glob）随游戏摘要下发客户端，客户端按 glob 采集存档经 /api/game/save/* 上传/拉取；
+  # enabled=false 时用户端云存档接口统一拒绝
+  save:
+    enabled: true              # 云存档总开关（false 时接口统一拒绝）
+    max_file_size: 52428800    # 单存档文件上限（字节，默认 50MB；0=取默认值）
+    max_total_size: 209715200  # 单用户单游戏云存档总上限（字节，默认 200MB；0=取默认值）
+    retention: 5               # 存档版本保留数（P2 用，先占位 0=5）
+
+# ============================================================
+# 阶段二百七十四：网页卡片（微信同款链接分享卡片，server/webcard.go 归口）
+# 聊天消息内容为纯 http/https 链接时，服务端异步抓取网页 OG 元数据（标题/摘要/缩略图/favicon）
+# 出卡片气泡；抓取带 SSRF 防护（私网/环回段拒绝）、5s 超时、256KB 限读、8 并发上限与 URL 级缓存
+# ============================================================
+card:
+  enabled: true                  # 抓取总开关（false 时消息保持纯 URL 文本，前端仍做链接高亮+安全确认；修改后需重启服务端生效）

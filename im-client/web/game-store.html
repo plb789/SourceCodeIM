@@ -2104,6 +2104,16 @@
 
         /* 本地游戏属性弹窗表单行（名称/启动路径） */
         .gs-lprop-row { margin-top: 14px; display: flex; align-items: center; gap: 8px; text-align: left; }
+        .gs-lprop-row-top { align-items: flex-start; }
+        .gs-lprop-row-top label { margin-top: 7px; }
+        .gs-lprop-row textarea {
+            flex: 1; min-width: 0; height: auto; padding: 8px 10px; box-sizing: border-box;
+            background: var(--bg-in); border: 1px solid var(--border-in); border-radius: 6px;
+            color: var(--text); font-size: 12.5px; font-family: var(--mono, monospace); line-height: 1.6;
+            resize: vertical; outline: none;
+        }
+        .gs-lprop-row textarea:focus { border-color: var(--primary); }
+        .gs-lprop-hint { margin-top: 8px; text-align: left; font-size: 11.5px; color: var(--text-light); opacity: .75; line-height: 1.6; }
 
         .gs-lprop-row label { width: 56px; flex-shrink: 0; font-size: 12.5px; color: var(--text-light); }
 
@@ -3179,6 +3189,9 @@
             <div class="gs-modal-title">本地游戏属性</div>
             <div class="gs-lprop-row"><label>名称</label><input id="gsLPropName" maxlength="40" spellcheck="false"></div>
             <div class="gs-lprop-row"><label>启动路径</label><div class="gs-lprop-exe" id="gsLPropExe"></div><button class="gs-btn" id="gsLPropPick">浏览…</button></div>
+            <!-- 端口透传转发规则（每行一条：协议:本机端口=远端地址:远端端口）：启动游戏自动开启，退出自动关闭 -->
+            <div class="gs-lprop-row gs-lprop-row-top"><label>转发规则</label><textarea id="gsLPropPf" rows="3" maxlength="2048" spellcheck="false" placeholder="可空；每行一条：协议:本机端口=远端地址:远端端口&#10;如 tcp:7777=1.2.3.4:7777&#10;&#10;&#160;&#160;udp:6112=game.example.com:6112"></textarea></div>
+            <div class="gs-lprop-hint">启动游戏时自动在本机 127.0.0.1:本机端口 开启 TCP/UDP 监听，流量原样透传到远端地址（游戏退出自动关闭）——游戏内服务器地址填 127.0.0.1:本机端口 即可；留空=不开启转发</div>
             <div class="gs-modal-btns">
                 <button class="gs-btn" id="gsLPropCancel">取消</button>
                 <button class="gs-btn primary" id="gsLPropSave">保存</button>
@@ -3304,6 +3317,11 @@
                         <div class="gs-prop-row">
                             <span class="gs-prop-label">启动程序</span>
                             <span class="gs-prop-val" id="gsPropExe">—</span>
+                        </div>
+                        <!-- 端口透传转发（管理端配置，只读展示）：启动游戏自动开启，游戏退出自动关闭 -->
+                        <div class="gs-prop-row gs-prop-row-top">
+                            <span class="gs-prop-label">端口转发</span>
+                            <span class="gs-prop-val" id="gsPropPf" style="white-space:pre-line;">—</span>
                         </div>
                         <div class="gs-prop-btns">
                             <button class="gs-btn" id="gsPropPickExe" type="button">选择主程序</button>
