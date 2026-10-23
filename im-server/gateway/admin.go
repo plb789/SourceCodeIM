@@ -229,7 +229,8 @@ func (a *adminServer) handleDbwriteGet(w http.ResponseWriter, r *http.Request) {
 func (a *adminServer) handleDbwriteSave(w http.ResponseWriter, r *http.Request) {
 	var d DbwriteConfig
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16384)).Decode(&d); err != nil {
-		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": "参数错误"})
+		// 返回具体解析原因（字段类型/JSON 语法），不笼统报"参数错误"
+		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": "参数解析失败：" + err.Error()})
 		return
 	}
 	old := a.cfg.Dbwrite // 备份（校验失败回滚，保证运行中配置与内存一致）
@@ -565,6 +566,8 @@ function ajax(method,url,body,cb){
   if(body!=null)x.setRequestHeader("Content-Type","application/json");
   x.onreadystatechange=function(){
     if(x.readyState!==4)return;
+    // 会话过期（2h 滑动/网关重启）：明确提示并跳登录，杜绝静默失败导致"改了没保存"的困惑
+    if(x.status===401){alert("登录已过期，请重新登录后再保存");location.href="/login";return;}
     var j=null;try{j=JSON.parse(x.responseText);}catch(e){}
     cb(j,x.status);
   };
