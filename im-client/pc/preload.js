@@ -976,6 +976,12 @@ contextBridge.exposeInMainWorld('desktop', {
             cb(data);
         });
     },
+    // 订阅本地游戏启动异步失败（spawn 成功但进程报 error）→ {id, message}（无声失败修复，同 game-launch-error 口径）
+    onLocalGameLaunchError: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('local-game-launch-error', function (event, data) {
+            cb(data);
+        });
+    },
     // 启动游戏（主进程读启动注册表归口）→ Promise<{ok, startedAt}> / {ok:false, needExe:true}
     gameLaunch: function (payload) {
         return ipcRenderer.invoke('game:launch', payload);
@@ -993,6 +999,13 @@ contextBridge.exposeInMainWorld('desktop', {
     // 订阅游戏进程退出（主窗口收 {gameId, startedAt}，页面统计游玩时长）
     onGameExit: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-exit', function (event, data) {
+            cb(data);
+        });
+    },
+    // 订阅游戏启动异步失败（spawn 成功但进程报 error：exe 损坏/依赖缺失/权限等）→ {gameId, message}
+    // 此前无声失败：页面已切"运行中"但游戏未起，用户只见"点了没反应"
+    onGameLaunchError: function (cb) {
+        if (typeof cb === 'function') ipcRenderer.on('game-launch-error', function (event, data) {
             cb(data);
         });
     },

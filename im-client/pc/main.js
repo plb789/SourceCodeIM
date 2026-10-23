@@ -1697,10 +1697,18 @@ ipcMain.handle('game:launch', async function (event, data) {
             if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
             gameExitBroadcast(info);
         });
-        // error（spawn 失败如 exe 权限/架构错误）路径可能不触发 exit：同样联动收口防监听残留
-        child.once('error', function () {
+        // error（spawn 失败如 exe 权限/架构错误）路径可能不触发 exit：同样联动收口防监听残留；
+        // 且必须广播失败原因到全部窗口——此前无声失败（页面已切"运行中"但游戏未起，用户只见
+        // "点了没反应"，无法定位是 exe 损坏/依赖缺失/权限问题）
+        child.once('error', function (err) {
             runningGames.delete(gameId); // spawn 失败清理表，避免残留
             if (pfRules.length) gameForward.stop(pfTag);
+            BrowserWindow.getAllWindows().forEach(function (w) {
+                if (!w.isDestroyed()) w.webContents.send('game-launch-error', {
+                    gameId: gameId,
+                    message: (err && err.message) || '游戏进程启动失败'
+                });
+            });
         });
         child.unref();
         runningGames.set(gameId, { proc: child, startedAt: startedAt });
@@ -1797,10 +1805,15 @@ ipcMain.handle('local-game:launch', async function (event, data) {
             if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
             localGameBroadcast('local-game-exit', info);
         });
-        // error（spawn 失败）路径可能不触发 exit：同样联动收口防监听残留
-        child.once('error', function () {
+        // error（spawn 失败）路径可能不触发 exit：同样联动收口防监听残留；广播失败原因到全部窗口
+        // （此前无声失败，页面已切"运行中"但游戏未起，用户只见"点了没反应"——与 game:launch 同口径）
+        child.once('error', function (err) {
             runningLocalGames.delete(id);
             if (pfRules.length) gameForward.stop(pfTag);
+            localGameBroadcast('local-game-launch-error', {
+                id: id,
+                message: (err && err.message) || '游戏进程启动失败'
+            });
         });
         child.unref();
         runningLocalGames.set(id, { proc: child, startedAt: startedAt });

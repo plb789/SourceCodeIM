@@ -4702,6 +4702,19 @@
         });
     }
 
+    // 游戏启动异步失败（spawn 成功但进程报 error：exe 损坏/依赖缺失/权限等）：运行中回落 +
+    // 明确报错（此前无声失败，用户只见"点了没反应"无法定位）
+    if (DESKTOP && DESKTOP.onGameLaunchError) {
+        DESKTOP.onGameLaunchError(function (info) {
+            var gid = info && info.gameId;
+            if (gid === undefined || gid === null) return;
+            delete state.running[gid]; // "运行中"回落为启动按钮
+            delete state.sessions[gid];
+            toast('游戏启动失败：' + ((info && info.message) || '进程启动出错') + '（游戏文件可能损坏，请尝试点"更新"重装）');
+            scheduleRefresh();
+        });
+    }
+
     // 游戏进程退出：结算本次游玩时长并上报（play end）
     if (DESKTOP && DESKTOP.onGameExit) {
         DESKTOP.onGameExit(function (info) {
@@ -4744,6 +4757,17 @@
             var lid = info && info.id;
             if (!lid || lid === 'gn_room') return;
             delete state.localRunning[lid];
+            syncLibSideState();
+            if (state.libSel === lid) syncLocalGamePage(lid);
+        });
+    }
+    // 本地游戏启动异步失败：运行中回落 + 明确报错（与商店游戏 game-launch-error 同口径）
+    if (DESKTOP && DESKTOP.onLocalGameLaunchError) {
+        DESKTOP.onLocalGameLaunchError(function (info) {
+            var lid = info && info.id;
+            if (!lid || lid === 'gn_room') return;
+            delete state.localRunning[lid];
+            toast('游戏启动失败：' + ((info && info.message) || '进程启动出错') + '，请检查游戏文件是否完整');
             syncLibSideState();
             if (state.libSel === lid) syncLocalGamePage(lid);
         });
