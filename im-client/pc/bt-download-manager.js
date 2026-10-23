@@ -71,9 +71,12 @@ class BtDownloadManager extends EventEmitter {
         const taskId = String((payload && payload.taskId) || '').trim();
         const slug = String((payload && payload.slug) || '').trim();
         const installDir = (payload && payload.installDir) ? path.resolve(String(payload.installDir)) : '';
+        // finalDir 直传（更新/重装）：库 install_path 已是游戏根（含 slug 层），直传沿用原目录不再叠 slug
+        // （此前更新下载把游戏根当安装根再拼 slug → 双层 slug 目录的根因）；引擎落盘目录取其父目录
+        const directRoot = (payload && payload.finalDir) ? path.resolve(String(payload.finalDir)) : '';
         const p2sp = !(payload && payload.p2sp === false); // 缺省 true（方式 1 及历史行为不变）
         const files = (payload && Array.isArray(payload.files)) ? payload.files : [];
-        if (!taskId || !installDir || !slug) return { ok: false, error: '参数缺失' };
+        if (!taskId || (!installDir && !directRoot) || !slug) return { ok: false, error: '参数缺失' };
         if (p2sp && !files.length) return { ok: false, error: '参数缺失' };
         const torrentUrl = String((payload && payload.torrentUrl) || '');
         if (!torrentUrl) return { ok: false, error: '种子地址缺失' };
@@ -81,7 +84,8 @@ class BtDownloadManager extends EventEmitter {
         if (exist && exist.state !== 'error' && exist.state !== 'done') {
             return { ok: true, task: this._summary(exist) }; // 进行中（下载/暂停）：幂等
         }
-        const root = path.join(installDir, slug); // BT 安装根（种子 info.name=slug 必然嵌套一层）
+        const root = directRoot || path.join(installDir, slug); // BT 安装根（游戏根口径：done 事件/exe 探测/库 install_path）
+        const engineOut = directRoot ? path.dirname(directRoot) : installDir; // 引擎落盘目录（安装根，内部路径含 info.name 根）
         // 防目录穿越：rel_path 解析后必须位于安装根内，越界条目丢弃（与 HTTP 管理器同水位）
         const list = [];
         let total = 0;
@@ -114,7 +118,7 @@ class BtDownloadManager extends EventEmitter {
             this._ignoreClosed.add(taskId);
             this._send({ cmd: 'cancel', id: taskId, del: 0 });
             task = exist;
-            task.installDir = installDir;
+            task.installDir = engineOut; // 引擎落盘目录（out 透传值）
             task.root = root;
             task.username = String(payload.username || '');
             task.serverBase = String(payload.serverBase || '');
@@ -132,7 +136,7 @@ class BtDownloadManager extends EventEmitter {
                 taskId: taskId,
                 gameId: String(payload.gameId || ''),
                 slug: slug,
-                installDir: installDir,
+                installDir: engineOut, // 引擎落盘目录（out 透传值）
                 root: root,
                 username: String(payload.username || ''),
                 serverBase: String(payload.serverBase || ''),

@@ -1035,41 +1035,31 @@
         var curPic = '';
         var curName = '';
 
-        // 主图绘制归口：换页与截图悬停预览共用。双 buffer 防灰闪——新图解码就绪（onload）后才
-        // 移除旧图，就绪前 pending 透明叠放露出旧图/占位底色；picGen 代号防连续换页竞态
-        //（上一次的图加载完成时发现已非最新，自清理不参与 swap）。pic 为空画主题色占位块；
-        // 加载失败移除自身回退占位块
-        var picGen = 0;
+        // 主图绘制归口：换页与截图悬停预览共用。**单元素换 src 模式**（与详情页 stageImg 同款）——
+        // 同一 img 元素换源时浏览器保持旧像素显示直到新图解码完成，圆点来回切/换页零闪零重建；
+        // 双 buffer（新图叠放淡入）方案实测残留问题：每次换页重建 img 即使缓存命中也重新解码，
+        // 且淡入起点 opacity≈0 与旧图移除的时序缝隙仍露灰。pic 为空画主题色占位块；加载失败回退占位块
+        var coverEl = null; // 主图单元素（惰性创建，随轮播实例共存亡）
         function setMainPic(pic) {
-            var gen = ++picGen;
-            var old = main.querySelector('img.gs-car-cover, .gs-cover-ph');
+            var ph = main.querySelector('.gs-cover-ph');
+            if (ph) ph.remove();
             if (!pic) {
-                if (old) old.remove();
+                if (coverEl) { coverEl.remove(); coverEl = null; }
                 main.insertBefore(buildPh(curName), info);
                 return;
             }
-            var im = document.createElement('img');
-            im.className = 'gs-car-cover pending';
-            im.src = pic;
-            im.draggable = false;
-            var done = false;
-            var swap = function () {
-                if (done) return;
-                done = true;
-                if (gen !== picGen) { im.remove(); return; } // 已被后续换页取代：自清理
-                im.classList.remove('pending'); // 淡入
-                if (old) old.remove(); // 新图可见后才移除旧图
-            };
-            im.onload = swap;
-            im.onerror = function () {
-                im.remove();
-                if (gen !== picGen) return; // 已被后续换页取代：旧图/占位由当次绘制管理
-                if (old) old.remove();
-                main.insertBefore(buildPh(curName), info);
-            };
-            main.insertBefore(im, info);
-            // 缓存命中同步解码完成的兜底（onload 异步仍会触发，done 防重入）
-            if (im.complete && im.naturalWidth > 0) swap();
+            if (!coverEl) {
+                coverEl = document.createElement('img');
+                coverEl.className = 'gs-car-cover';
+                coverEl.draggable = false;
+                coverEl.onerror = function () {
+                    if (coverEl) { coverEl.remove(); coverEl = null; }
+                    main.insertBefore(buildPh(curName), info);
+                };
+                main.insertBefore(coverEl, info);
+            }
+            // 同值赋 src 会触发重新加载管线（圆点点击当前游戏时高频触发），必须短路
+            if (coverEl.getAttribute('src') !== pic) coverEl.src = pic;
         }
 
         // 截图悬停预览恢复：鼠标离开整个截图网格时清除预览描边并恢复当前游戏主图
@@ -1157,11 +1147,25 @@
             wrap.appendChild(dots);
         }
 
+        // 缩略图 DOM 按游戏缓存（gid -> {cells:[], ph:null}）：圆点在已看过的游戏间来回切换时
+        // 直接复用同批节点重新 append（img 元素不重建——浏览器不重新加载/解码，src 未变瞬时恢复
+        // 零闪）；首次构建照旧 pending 淡入。同一批节点的 click/mouseenter 闭包绑定各自游戏，复用安全
+        var shotDOMs = {};
         function paintShots(g) {
+            var cached = shotDOMs[g.id];
+            if (cached) {
+                pShots.innerHTML = '';
+                if (cached.ph) pShots.appendChild(cached.ph);
+                cached.cells.forEach(function (c) { pShots.appendChild(c); });
+                return;
+            }
             pShots.innerHTML = '';
+            var cells = [], phEl = null;
             var shots = (g.screenshots || []).slice(0, 4);
             if (!shots.length) {
-                pShots.appendChild(el('div', 'gs-car-shot-ph', '暂无截图'));
+                phEl = el('div', 'gs-car-shot-ph', '暂无截图');
+                pShots.appendChild(phEl);
+                shotDOMs[g.id] = { cells: cells, ph: phEl };
                 return;
             }
             shots.forEach(function (s) {
@@ -1170,7 +1174,7 @@
                 im.src = assetUrl(s);
                 im.loading = 'lazy';
                 im.draggable = false;
-                im.classList.add('pending'); // 解码就绪前透明露出格子底色，onload 淡入（防灰闪）
+                im.classList.add('pending'); // 首次解码就绪前透明露出格子底色，onload 淡入（防灰闪）
                 im.onload = function () { im.classList.remove('pending'); };
                 im.onerror = function () { im.remove(); cell.classList.add('bad'); };
                 cell.appendChild(im);
@@ -1185,7 +1189,9 @@
                     setMainPic(assetUrl(s));
                 });
                 pShots.appendChild(cell);
+                cells.push(cell);
             });
+            shotDOMs[g.id] = { cells: cells, ph: phEl };
         }
 
         function carShow(i) {
@@ -1224,15 +1230,20 @@
                 try { if (wrap.matches(':hover')) return; } catch (e) { /* 匹配失败不暂停 */ }
                 carShow(idx + 1);
             }, 5000));
-            // 预载下一张主图（Steam 同款缓存预热）：浏览器提前拉取落缓存，轮播换页零灰闪。
-            // PC 端配合本地媒体磁盘缓存（web-cache gameMediacache）二次访问零回源
+            // 预载下一张主图+全部截图（Steam 同款缓存预热）：浏览器提前拉取落缓存，换页时主图与
+            // 右侧 2×2 截图网格即秒出（首次访问也不见灰格）。PC 端配合本地媒体磁盘缓存二次零回源
             var preloadNext = function () {
                 var ng = games[(idx + 1) % games.length];
-                var p = ng ? (ng.cover || (ng.screenshots && ng.screenshots[0]) || '') : '';
-                if (p) { var im = new Image(); im.src = assetUrl(p); }
+                if (!ng) return;
+                var urls = [ng.cover || (ng.screenshots && ng.screenshots[0]) || ''].concat(ng.screenshots || []);
+                urls.forEach(function (p) {
+                    if (!p) return;
+                    var im = new Image();
+                    im.src = assetUrl(p);
+                });
             };
             preloadNext();
-            gsTimers.push(setInterval(preloadNext, 5000)); // 与轮播同周期错半拍预热
+            gsTimers.push(setInterval(preloadNext, 5000)); // 与轮播同周期预热
         }
         return wrap;
     }
@@ -2627,7 +2638,9 @@
         var dir = (libEntry && libEntry.lib && libEntry.lib.install_path) || '';
         var prevInstalled = (libEntry && libEntry.lib && libEntry.lib.installed_version) || '';
 
-        var go = function (installDir) {
+        // isGameRoot=true：installDir 为库记录的 install_path（已是游戏根，含 slug 层）——payload 走
+        // finalDir 直传（更新/重装沿用原目录不再叠 slug）；false：installDir 为安装根（首次选盘），管理器拼 slug
+        var go = function (installDir, isGameRoot) {
             api('POST', '/api/game/library/' + gid).then(function (res) {
                 if (!res.ok) { toast(res.msg || '加入游戏库失败'); return; }
                 var d = res.data || {};
@@ -2637,6 +2650,7 @@
                 var dlMethod = Number(g.download_method) || 0;
                 var viaBt = !forceHttp && (dlMethod === 1 || dlMethod === 2) && !!slug; // BT 需种子锚点 slug
                 var taskId = 'g' + gid + '-' + Date.now();
+                var dirPayload = isGameRoot ? { finalDir: installDir } : { installDir: installDir };
                 state.tasks[taskId] = {
                     taskId: taskId,
                     gameId: gid,
@@ -2654,13 +2668,12 @@
                 state.taskByGame[gid] = taskId;
                 if (viaBt) {
                     // BT/P2SP：主进程下载种子（服务端 /api/game/torrent/{id} 与文件接口同水位鉴权）
-                    // 后挂引擎；落盘 <installDir>/<slug>/<rel_path>（安装根多一层 slug，done 事件已归一）
-                    DESKTOP.gameDownload({
+                    // 后挂引擎；首次落盘 <installDir>/<slug>/<rel_path>，更新 finalDir 直传沿用游戏根
+                    DESKTOP.gameDownload(Object.assign({
                         action: 'start',
                         via: 'bt',
                         taskId: taskId,
                         gameId: gid,
-                        installDir: installDir,
                         username: username,
                         serverBase: location.origin,
                         slug: slug,
@@ -2668,21 +2681,21 @@
                         manifestVersion: manifest.version || '', // P2SP 直链源 base URL 构成（路径式鉴权）
                         p2sp: dlMethod === 1, // 仅服务端生成种子方式叠加 P2SP 直链源；上传种子为纯 BT
                         files: manifest.files || []
-                    });
+                    }, dirPayload));
                     toast((dlMethod === 2 ? '开始 BT 下载（上传种子）：' : '开始 BT 下载：') + (g.name || ('游戏 #' + gid)));
                 } else {
                     // 大文件下载交给主进程下载器（支持 Range 断点续传），页面只订阅进度
-                    // 落盘 <installDir>/<slug>/<rel_path>（主进程同盘暂存后一次性换入，与 BT 通道归一）
-                    DESKTOP.gameDownload({
+                    // 首次落盘 <installDir>/<slug>/<rel_path>（主进程同盘暂存后一次性换入，与 BT 通道归一）；
+                    // 更新 finalDir 直传沿用游戏根（防游戏根被当安装根再叠一层 slug → 双层目录）
+                    DESKTOP.gameDownload(Object.assign({
                         action: 'start',
                         taskId: taskId,
                         gameId: gid,
-                        installDir: installDir,
                         slug: slug || ('g' + gid),
                         username: username,
                         serverBase: location.origin,
                         files: manifest.files || []
-                    });
+                    }, dirPayload));
                     toast('开始下载：' + (g.name || ('游戏 #' + gid)));
                 }
                 putLibState(gid, { state: 1, installed_version: prevInstalled, install_path: installDir });
@@ -2690,7 +2703,7 @@
             });
         };
 
-        if (reuseDir && dir) { go(dir); return; }
+        if (reuseDir && dir) { go(dir, true); return; } // dir=库 install_path（游戏根），finalDir 直传防 slug 叠层
         // 首次安装：Steam 同款自绘选盘弹窗（游戏信息行 + 磁盘容量条 + 剩余空间），选盘后主进程预创建 <盘>/CdonlgameApp
         openDiskPicker(Number(g.size_bytes) || 0, function (finalDir) { go(finalDir); }, g);
     }

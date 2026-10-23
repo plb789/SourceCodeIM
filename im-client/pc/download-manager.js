@@ -28,20 +28,24 @@ class GameDownloadManager extends EventEmitter {
 
     // 注册并开始任务。payload={taskId, gameId, installDir, slug, username, serverBase, files:[{id,rel_path,size,sha256,url}]}
     // installDir 为安装根（<盘>/CdonlgameApp），实际落盘 <installDir>/<slug>（暂存 <installDir>/downloading/<slug>）
-    // 同 taskId 重复 start 幂等返回进行中状态；error/done 旧任务重置重下（磁盘 .part 保留即断点续传）
+    // finalDir 直传（更新/重装）：库记录的 install_path 已是游戏根（含 slug 层），直传沿用原目录不再叠 slug
+    // （此前更新下载把游戏根当安装根再拼 slug → 双层 slug 目录的根因）；同 taskId 重复 start 幂等返回进行中状态；
+    // error/done 旧任务重置重下（磁盘 .part 保留即断点续传）
     start(payload) {
         const taskId = String((payload && payload.taskId) || '').trim();
         const files = (payload && Array.isArray(payload.files)) ? payload.files : null;
-        if (!taskId || !files || !files.length || !(payload && payload.installDir)) return { ok: false, error: '参数缺失' };
+        const directRoot = (payload && payload.finalDir) ? path.resolve(String(payload.finalDir)) : '';
+        if (!taskId || !files || !files.length || !(directRoot || (payload && payload.installDir))) return { ok: false, error: '参数缺失' };
         const exist = this.tasks.get(taskId);
         if (exist && exist.state !== 'error' && exist.state !== 'done') {
             return { ok: true, task: this._summary(exist) }; // 进行中（排队/下载/暂停）：幂等
         }
-        // 每游戏子目录：正式 <installDir>/<slug>，暂存 <installDir>/downloading/<slug>（同盘 rename 一次性换入）
-        const root = path.resolve(String(payload.installDir));
+        // 每游戏子目录：正式 <installDir>/<slug>，暂存 <installDir>/downloading/<slug>（同盘 rename 一次性换入）；
+        // finalDir 直传时安装根取游戏根父目录（暂存同盘不跨盘）
+        const root = directRoot ? path.dirname(directRoot) : path.resolve(String(payload.installDir));
         const slug = String((payload && payload.slug) || '').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_').trim();
         if (!slug || slug === '.' || slug === '..') return { ok: false, error: '缺少游戏标识 slug' };
-        const finalDir = path.join(root, slug);
+        const finalDir = directRoot || path.join(root, slug);
         const stagingDir = path.join(root, STAGING_DIRNAME, slug);
         // 防目录穿越：rel_path 解析后必须位于暂存目录内，越界条目丢弃
         const list = [];
