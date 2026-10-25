@@ -83,9 +83,11 @@ func gwGamesForGateway(games []model.Game, name, defaultGW string) map[uint]bool
 
 // gwDbwriteEnqueue 入队归口（幂等 upsert）：候选游戏过滤"带网关规则 或 指定写库网关"后
 // 派生启动密码入队，同账号同游戏仅一行、密码变化才更新；失败仅记日志——写库链路绝不阻塞
-// 登录/心跳主链路。纯游戏（无网关规则且 dbwrite_gw 空）不入队
+// 登录/心跳主链路。纯游戏（无网关规则且 dbwrite_gw 空）不入队。
+// launchSecret 仅作游戏专属密钥缺失时的兜底材料（config.Load 保证非空），空不再整体阻断——
+// 有专属密钥的游戏主路径不受兜底缺省影响
 func gwDbwriteEnqueue(username, launchSecret string, gameIDs []uint) {
-	if username == "" || launchSecret == "" || len(gameIDs) == 0 {
+	if username == "" || len(gameIDs) == 0 {
 		return
 	}
 	var games []model.Game
@@ -98,8 +100,14 @@ func gwDbwriteEnqueue(username, launchSecret string, gameIDs []uint) {
 		if !gwGameHasGatewayRule(g.PortForwards) && strings.TrimSpace(g.DbwriteGw) == "" {
 			continue
 		}
-		// 密钥源归口：游戏专属密钥优先，空（未补种/异常）回退全局 launch_secret 兜底
-		pw := gameLaunchPassword(gameLaunchSecretPick(&g, launchSecret), username, g.ID)
+		// 密钥源归口：游戏专属密钥优先，空（未补种/异常）回退全局 launch_secret 兜底；
+		// 两者皆空（派生无材料，空密钥 HMAC 密码等同无防护）跳过该游戏并记日志
+		sec := gameLaunchSecretPick(&g, launchSecret)
+		if strings.TrimSpace(sec) == "" {
+			logger.Error("网关写库入队跳过（%s 游戏#%d）：启动密码派生密钥缺失（游戏专属与全局兜底均空）", username, g.ID)
+			continue
+		}
+		pw := gameLaunchPassword(sec, username, g.ID)
 		var row model.GatewayDbwrite
 		if err := store.DB.Where("username = ? AND game_id = ?", username, g.ID).First(&row).Error; err != nil {
 			if err := store.DB.Create(&model.GatewayDbwrite{Username: username, GameID: g.ID, Password: pw}).Error; err != nil {

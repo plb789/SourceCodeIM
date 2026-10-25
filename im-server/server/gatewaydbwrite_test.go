@@ -67,7 +67,9 @@ func dbwCleanup(t *testing.T) {
 	t.Helper()
 	store.DB.Where("slug LIKE ?", "dbwtest-%").Delete(&model.Game{})
 	store.DB.Where("name LIKE ?", "gw-dbwtest-%").Delete(&model.GatewayBook{})
-	store.DB.Where("username = ?", dbwTestUser).Delete(&model.GatewayDbwrite{})
+	// 队列/回执按测试用户前缀清（含派生用户 dbwTestUser-empty 等，防失败路径残留跨运行累计）
+	store.DB.Where("username LIKE ?", dbwTestUser+"%").Delete(&model.GatewayDbwrite{})
+	store.DB.Where("username LIKE ?", dbwTestUser+"%").Delete(&model.GatewayDbwriteAck{})
 	store.DB.Where("gateway_name LIKE ?", "gw-dbwtest-%").Delete(&model.GatewayDbwriteAck{})
 }
 
@@ -137,6 +139,26 @@ func TestGwDbwriteFlow(t *testing.T) {
 	if rows2Count != 3 {
 		t.Fatalf("重复入队应仍为 3 行，实得 %d", rows2Count)
 	}
+
+	// 2.5 兜底密钥缺失语义（空 launchSecret 不再整体阻断——有专属密钥的游戏主路径不受影响）：
+	//     g2 有专属密钥 → 正常入队；gd/gw3 无专属密钥且兜底为空 → 跳过（派生无材料，空密钥 HMAC 密码等同无防护）
+	emptyUser := dbwTestUser + "-empty"
+	store.DB.Where("username = ?", emptyUser).Delete(&model.GatewayDbwrite{}) // 清历史运行残留（幂等起点）
+	gwDbwriteEnqueue(emptyUser, "", onlyGateway)
+	var pwEmpty string
+	if err := store.DB.Model(&model.GatewayDbwrite{}).Where("username = ? AND game_id = ?", emptyUser, g2).Pluck("password", &pwEmpty).Error; err != nil || pwEmpty == "" {
+		t.Fatalf("空兜底密钥：有专属密钥的游戏应正常入队（err=%v pw=%q）", err, pwEmpty)
+	}
+	if pwEmpty != gameLaunchPassword("dbwtest-game-secret-2", emptyUser, g2) {
+		t.Fatalf("空兜底下专属密钥派生密码不符：%s ≠ 期望（按 emptyUser+专属密钥派生）", pwEmpty)
+	}
+	var cntEmpty int64
+	store.DB.Model(&model.GatewayDbwrite{}).Where("username = ?", emptyUser).Count(&cntEmpty)
+	if cntEmpty != 1 {
+		t.Fatalf("空兜底密钥：无专属密钥的游戏应跳过（仅专属密钥游戏入队 1 行），实得 %d", cntEmpty)
+	}
+	// 用后即删（拉取按网关过滤不分 username，残留行会污染步骤 3 的拉取计数断言）
+	store.DB.Where("username = ?", emptyUser).Delete(&model.GatewayDbwrite{})
 
 	// 3. 按网关过滤拉取：two 仅见游戏二；one 仅见缺省游戏（互斥）
 	code, items := dbwPull(t, s, "gw-dbwtest-two")
