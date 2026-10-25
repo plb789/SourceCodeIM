@@ -186,13 +186,28 @@ func startDbwrite(cfg *Config) {
 	go r.loop()
 }
 
+// dbwriteAddrNorm 规范化 im_addr（保存/启动/热更共用，防手填格式错误带进运行期）：
+// 剥离首尾空白与 Markdown 反引号/引号（实测用户从文档复制 `http://…` 带代码标记，整串包进
+// URL 致解析超时）；scheme 后缺 // 自动补全（实测 http:1.2.3.4:2087 → no Host in request URL）
+func dbwriteAddrNorm(s string) string {
+	s = strings.Trim(strings.TrimSpace(s), "`\"' ")
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "http:") && !strings.HasPrefix(s, "http://") {
+		s = "http://" + strings.TrimPrefix(s, "http:")
+	} else if strings.HasPrefix(s, "https:") && !strings.HasPrefix(s, "https://") {
+		s = "https://" + strings.TrimPrefix(s, "https:")
+	}
+	return s
+}
+
 // newDbwriteRunner 配置校验 + runner 构建归口（启动与热更共用同一校验口径，热更绝不绕过）：
 // 必填项/类型/策略白名单/模板编译在此拦截；DSN 连通性不在此阻断（写库失败自动重试，「测试连接」负责提前验证）
 func newDbwriteRunner(cfg *Config) (*dbwriteRunner, error) {
 	d := cfg.Dbwrite
 	name := strings.ToLower(strings.TrimSpace(d.GatewayName))
 	dsn := strings.TrimSpace(d.DSN)
-	imAddr := strings.TrimRight(strings.TrimSpace(d.IMAddr), "/")
+	imAddr := strings.TrimRight(dbwriteAddrNorm(d.IMAddr), "/")
+	d.IMAddr = imAddr // 规范化回写：落盘与拉取 URL 同源干净值（cfg 为指针，保存热更路径的落盘随此值）
 	d.Type = strings.ToLower(strings.TrimSpace(d.Type))
 	d.Strategy = strings.ToLower(strings.TrimSpace(d.Strategy))
 	if name == "" {
@@ -200,6 +215,10 @@ func newDbwriteRunner(cfg *Config) (*dbwriteRunner, error) {
 	}
 	if imAddr == "" {
 		return nil, errors.New("im_addr 未配置")
+	}
+	// 畸形地址拦截（须能解析出主机名）：防 http:1.2.3.4:2087 缺 //、纯主机名、多余字符等带进运行期
+	if u, err := url.Parse(imAddr); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("im_addr 非法（须为完整 http://host:port 或 https://host，当前 %q）", imAddr)
 	}
 	if d.Type != "mysql" && d.Type != "mssql" && d.Type != "postgres" && d.Type != "sqlite" {
 		return nil, fmt.Errorf("type 仅支持 mysql/mssql/postgres/sqlite（当前 %q）", d.Type)

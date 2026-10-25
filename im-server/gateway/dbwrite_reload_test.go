@@ -45,6 +45,35 @@ func TestDbwriteDriverNames(t *testing.T) {
 	}
 }
 
+// TestDbwriteAddrNorm im_addr 规范化（实测用户手填两类格式错误带进运行期）：
+// Markdown 反引号包裹（`http://…` → URL 整串带引号解析超时）、scheme 缺 //（http:1.2.3.4 → no Host）；
+// 正常值原样、畸形值由 newDbwriteRunner 拒绝保存
+func TestDbwriteAddrNorm(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"http://1.2.3.4:2087", "http://1.2.3.4:2087"},     // 正常值原样
+		{"`http://1.2.3.4:2087`", "http://1.2.3.4:2087"},   // Markdown 反引号剥离
+		{"  http://1.2.3.4:2087  ", "http://1.2.3.4:2087"}, // 首尾空白
+		{"http:1.2.3.4:2087", "http://1.2.3.4:2087"},       // scheme 缺 // 补全
+		{"https:im.sxgyxny.com", "https://im.sxgyxny.com"}, // https 同款补全
+		{"\"http://1.2.3.4:2087\"", "http://1.2.3.4:2087"}, // 双引号剥离
+		{"`http://1.2.3.4:2087` ", "http://1.2.3.4:2087"},  // 反引号+空格混合
+		{"http://1.2.3.4:2087/", "http://1.2.3.4:2087/"},   // 尾斜杠保留（TrimRight 在调用方）
+	}
+	for _, c := range cases {
+		if got := dbwriteAddrNorm(c.in); got != c.want {
+			t.Fatalf("dbwriteAddrNorm(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+	}
+	// 畸形值（无法清洗）经 runner 校验拒绝：im_addr 带非法 scheme
+	cfg := reloadCfg(true, "INSERT INTO t VALUES ({user},{password})")
+	cfg.Dbwrite.IMAddr = "ftp://1.2.3.4"
+	if _, err := newDbwriteRunner(cfg); err == nil || !strings.Contains(err.Error(), "im_addr 非法") {
+		t.Fatalf("非法 scheme 应被拒绝且提示 im_addr 非法，实得 err=%v", err)
+	}
+}
+
 func TestDbwriteReloadLifecycle(t *testing.T) {
 	t.Cleanup(func() { // 测试结束清理全局 runner
 		if old := dbwriteMgr.Swap(nil); old != nil {
