@@ -1328,6 +1328,7 @@ function ensureGameStoreWindow() {
         }
     });
     gameStoreWin.on('closed', function () { gameStoreWin = null; });
+    gnRelayAdd(gameStoreWin); // 游戏内 Overlay 一期：gn 中继订阅表（广播集合多一个悬浮窗不影响本窗语义）
     return gameStoreWin;
 }
 
@@ -1387,6 +1388,9 @@ ipcMain.on('game:net-open', function (e, payload) {
     var deliver = function () {
         if (win.isDestroyed()) return;
         win.webContents.send('game:net-open', payload);
+        if (payload && payload.silent) return; // 游戏内 Overlay 一期（设计文档 §4.4）：后台归口——
+        // 悬浮窗游戏内加入房间/接受邀请时由隧道引擎所在的游戏中心窗静默执行，不 restore/show/focus
+        // 抢游戏焦点（窗口保持隐藏/最小化，WebRTC 引擎照常建连）
         if (win.isMinimized()) win.restore();
         win.show();
         win.focus();
@@ -1400,23 +1404,51 @@ ipcMain.on('game:net-open', function (e, payload) {
 // 上行：游戏中心窗 → 本进程 → 主窗口（IMSocket.send，唯一 WS 持有者）
 // 下行：主窗口 socket.js dispatch 109/110/112 → 本进程 → 游戏中心窗（GNSignal 分发）
 // 另同步：WS 连接态 / 服务端归口参数(game_net_*) / 好友通讯录快照（均为跨窗只读镜像）
+// 游戏内 Overlay 一期（docs/游戏内Overlay功能技术设计.md §4.3）：订阅窗由 gameStoreWin 单目标
+// 升级为注册表广播——悬浮窗（overlayWin）经 onWindowCreated 加入，原语义不变（集合里只有 gameStoreWin 时=原单投）
 var gnSocketState = false;      // 主窗口 WS 连接态缓存（游戏中心窗首开拉取，避免判定真空）
 var gnNetConfigCache = null;    // 登录响应 game_net_* 归口参数缓存
 var gnContactsPending = {};     // 好友快照请求在途（id → resolve；超时兜底空列表）
+var gnRelayWins = new Set();    // gn 中继订阅窗注册表（gameStoreWin / overlayWin；销毁自动出表）
+function gnRelayAdd(win) {
+    if (!win || win.isDestroyed()) return;
+    gnRelayWins.add(win);
+    win.once('closed', function () { gnRelayWins.delete(win); });
+}
+function gnRelayBroadcast(channel, payload) {
+    gnRelayWins.forEach(function (w) {
+        if (!w.isDestroyed()) w.webContents.send(channel, payload);
+    });
+}
 ipcMain.on('gn:signal-send', function (e, payload) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('gn:signal-out', payload || {});
 });
+// 安全归口（与项目"只接受主窗口来源"惯例一致，L1089/L2503 等先例）：下行中继四通道均为
+// 主窗口 socket.js 独有上行（109-112 分流/聊天镜像/连接态上报/归口参数上报），不校验来源则
+// 被攻陷的渲染进程可伪造房间态/假聊天注入悬浮窗与游戏中心窗（本地钓鱼显示面）
+function gnFromMain(e) { return mainWindow && !mainWindow.isDestroyed() && e.sender === mainWindow.webContents; }
 ipcMain.on('gn:signal-recv', function (e, msg) {
-    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:signal-in', msg || {});
+    if (!gnFromMain(e)) return;
+    gnRelayBroadcast('gn:signal-in', msg || {});
+});
+// 私聊/邀请镜像（悬浮窗聊天与邀请卡数据面）：主窗口 socket.js 转发 msg_type∈{1,111,好友上下线}
+// → 本进程 → 订阅窗广播（'gn:chat-in'）。服务端已回显发送方全连接（server.go L924-926），
+// 悬浮窗收发闭环成立；主窗口不在订阅表内（自身即 WS 持有者，无回环）
+ipcMain.on('gn:chat-mirror', function (e, msg) {
+    if (!gnFromMain(e)) return;
+    gnRelayBroadcast('gn:chat-in', msg || {});
+    gameOverlay.bufferChatMirror(msg || {}); // 通知窗冷启动缓存：页面加载期到达的消息就绪后补投（§十）
 });
 ipcMain.on('gn:socket-state', function (e, on) {
+    if (!gnFromMain(e)) return;
     gnSocketState = !!on;
-    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:socket-state', gnSocketState);
+    gnRelayBroadcast('gn:socket-state', gnSocketState);
 });
 ipcMain.handle('gn:socket-state-get', function () { return gnSocketState; });
 ipcMain.on('gn:net-config', function (e, cfg) {
+    if (!gnFromMain(e)) return;
     gnNetConfigCache = cfg || {};
-    if (gameStoreWin && !gameStoreWin.isDestroyed()) gameStoreWin.webContents.send('gn:net-config', gnNetConfigCache);
+    gnRelayBroadcast('gn:net-config', gnNetConfigCache);
 });
 ipcMain.handle('gn:net-config-get', function () { return gnNetConfigCache; });
 // 好友快照：游戏中心窗「邀请好友」选人数据源（主窗口 IMContacts 归口应答，避免双源分叉）
@@ -1430,6 +1462,28 @@ ipcMain.handle('gn:contacts-get', function () {
         }, 3000);
         mainWindow.webContents.send('gn:contacts-need', id);
     });
+});
+// 悬浮窗房间镜像查询（docs/游戏内Overlay功能技术设计.md §4.5 补强）：房间态唯一持有者是
+// 游戏中心窗 gn-room.js（建房/加入时持有 my），悬浮窗（游戏内面板）页面后加载无从得知"我在哪个房"，
+// 109 广播已错过——经本通道向其查快照（模式同 gn:contacts-get：在途表 + 3s 超时兜底 null；
+// 游戏中心窗未创建=不可能在房，直接 null）
+var overlayRoomPending = {};
+ipcMain.handle('overlay:room-get', function () {
+    return new Promise(function (resolve) {
+        if (!gameStoreWin || gameStoreWin.isDestroyed()) { resolve(null); return; }
+        var id = 'r' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        overlayRoomPending[id] = resolve;
+        setTimeout(function () {
+            if (overlayRoomPending[id]) { delete overlayRoomPending[id]; resolve(null); }
+        }, 3000);
+        gameStoreWin.webContents.send('overlay:room-need', id);
+    });
+});
+ipcMain.on('overlay:room-reply', function (e, id, snap) {
+    // 来源守卫（项目"只接受预期窗口来源"惯例）：快照应答仅接受游戏中心窗，防其他渲染进程伪造房间态
+    if (!gameStoreWin || gameStoreWin.isDestroyed() || e.sender !== gameStoreWin.webContents) return;
+    var r = overlayRoomPending[id];
+    if (r) { delete overlayRoomPending[id]; r(snap || null); }
 });
 ipcMain.on('gn:contacts-reply', function (e, id, list) {
     var r = gnContactsPending[id];
@@ -1692,6 +1746,7 @@ ipcMain.handle('game:launch', async function (event, data) {
         var info = { gameId: gameId, startedAt: startedAt };
         child.once('exit', function () {
             runningGames.delete(gameId);
+            gameOverlay.onGameExit(gameId); // 游戏内 Overlay：热键联动收口（最后一款游戏退出即注销 Shift+Tab）
             // 本实例退出才收口转发：同 gameId 竞态重复启动时旧实例 exit 不得误杀新实例的转发
             var cur = runningGames.get(gameId);
             if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
@@ -1702,6 +1757,7 @@ ipcMain.handle('game:launch', async function (event, data) {
         // "点了没反应"，无法定位是 exe 损坏/依赖缺失/权限问题）
         child.once('error', function (err) {
             runningGames.delete(gameId); // spawn 失败清理表，避免残留
+            gameOverlay.onGameExit(gameId); // 游戏内 Overlay：启动失败路径同样收口热键（与 exit 同口径）
             if (pfRules.length) gameForward.stop(pfTag);
             BrowserWindow.getAllWindows().forEach(function (w) {
                 if (!w.isDestroyed()) w.webContents.send('game-launch-error', {
@@ -1712,6 +1768,7 @@ ipcMain.handle('game:launch', async function (event, data) {
         });
         child.unref();
         runningGames.set(gameId, { proc: child, startedAt: startedAt });
+        gameOverlay.onGameStart(gameId, child.pid); // 游戏内 Overlay：热键联动开启（预注册 Shift+Tab + 悬浮窗预热）
         gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"
         return { ok: true, startedAt: startedAt };
     } catch (e) {
@@ -1813,6 +1870,7 @@ ipcMain.handle('local-game:launch', async function (event, data) {
         var info = { id: id, startedAt: startedAt };
         child.once('exit', function () {
             runningLocalGames.delete(id);
+            gameOverlay.onGameExit('local_' + id); // 游戏内 Overlay：热键联动收口（本地游戏与商店游戏同口径）
             // 本实例退出才收口转发：同 id 竞态重复启动时旧实例 exit 不得误杀新实例的转发
             var cur = runningLocalGames.get(id);
             if (pfRules.length && (!cur || cur.proc === child)) gameForward.stop(pfTag);
@@ -1822,6 +1880,7 @@ ipcMain.handle('local-game:launch', async function (event, data) {
         // （此前无声失败，页面已切"运行中"但游戏未起，用户只见"点了没反应"——与 game:launch 同口径）
         child.once('error', function (err) {
             runningLocalGames.delete(id);
+            gameOverlay.onGameExit('local_' + id); // 游戏内 Overlay：启动失败路径同样收口热键
             if (pfRules.length) gameForward.stop(pfTag);
             localGameBroadcast('local-game-launch-error', {
                 id: id,
@@ -1830,6 +1889,7 @@ ipcMain.handle('local-game:launch', async function (event, data) {
         });
         child.unref();
         runningLocalGames.set(id, { proc: child, startedAt: startedAt });
+        gameOverlay.onGameStart('local_' + id, child.pid); // 游戏内 Overlay：热键联动开启（本地游戏同口径）
         localGameBroadcast('local-game-start', info);
         return { ok: true, startedAt: startedAt };
     } catch (e) {
@@ -2304,6 +2364,10 @@ gameMdns.setLogger(function (msg) { gnLogWrite('[mdns] ' + msg); });
 // 上架游戏连 127.0.0.1 → 透传到远端真实服务器；规则来源：管理端游戏配置 port_forwards / 本地游戏属性
 const gameForward = require('./game-forward.js');
 gameForward.setLogger(function (msg) { gnLogWrite(msg); });
+// 游戏内 Overlay 悬浮窗（Steam 同款 Shift+Tab 好友/大厅面板，一期零注入）：热键随游戏启停、
+// 置顶透明窗管理、焦点归还（设计文档 docs/游戏内Overlay功能技术设计.md）；init 于 whenReady 处调用
+const gameOverlay = require('./game-overlay.js');
+gameOverlay.setLogger(function (msg) { gnLogWrite(msg); });
 gameMdns.setRelayHandler(function (roomId, hex) {
     try { gnBroadcast('gn-broadcast-gi', { room_id: roomId, hex: hex }); } catch (e) { }
 });
@@ -4654,6 +4718,15 @@ app.whenReady().then(async function () {
     // 原实现：未设置应用菜单，Windows 上自动显示 Electron 默认英文菜单
     // Menu.setApplicationMenu(Menu.buildFromTemplate([]));
     Menu.setApplicationMenu(null);
+
+    // 游戏内 Overlay 悬浮窗（docs/游戏内Overlay功能技术设计.md）：IPC 注册 + 设置加载（enabled/热键）；
+    // 热键不在此注册——绑定游戏运行态（game:launch / local-game:launch 处 onGameStart/onGameExit 联动），
+    // 平时零占用不影响 Alt+A 截图 / 录屏热键
+    gameOverlay.init({
+        serverUrl: SERVER_URL,
+        log: function (msg) { gnLogWrite(msg); },
+        onWindowCreated: function (win) { gnRelayAdd(win); } // 悬浮窗加入 gn 中继订阅表（§4.3 多订阅广播）
+    });
 
     // 阶段一百五十四：启动闪屏最先创建（早于 webCache 初始化与主窗口）——双击启动后最快露出
     // logo 卡片，消除原"灰黑空窗"（用户实测反馈）；data URL 加载零导航开销，见 createSplash

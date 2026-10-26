@@ -13134,6 +13134,23 @@ html.m .ua-form-row .modal-input {
     background: var(--active);
 }
 
+/* 游戏内 Overlay 热键输入框（设置页「游戏」分类；跟随主题变量，settings 表单输入同款观感） */
+.settings-hotkey-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 10px;
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 6px;
+    background: var(--search-bg, #fff);
+    color: var(--text, #333);
+    font-size: 12px;
+    outline: none;
+}
+
+.settings-hotkey-input:focus {
+    border-color: var(--primary, #07c160);
+}
+
 /* 阶段一百五十九补：自绘滑块开关（微信同款，替代网络页原生勾选框；跟随主题色，关闭态用边框色） */
 .slide-switch {
     flex: none;

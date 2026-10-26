@@ -1,6 +1,6 @@
 # 游戏内 Overlay（Shift+Tab 好友/大厅面板）技术设计
 
-> 状态：**一期已实施**（2026-10-26 评审通过并落地；二期注入式待启动）。归属：游戏中心 / 联机功能增强。
+> 状态：**一期已实施**（2026-10-26）；**十、游戏内通知小窗：已实施**（2026-10-27 评审通过并落地）。归属：游戏中心 / 联机功能增强。
 > 关联文档：`docs/局域网公网联机开发文档.md`（109/110/112 房间信令）、`docs/联机原生SDK设计.md`（二期注入式的 `platform=game` WS 共存基础）。
 
 ---
@@ -230,7 +230,8 @@ ipcMain.on('game:net-open', function (e, payload) {
 
 - **不改**其核心状态机与引擎联动（游戏中心窗继续全权持有）；
 - 仅当镜像广播送达悬浮窗时，悬浮窗用**自有的轻量渲染逻辑**（overlay.js 内 ~150 行）解析 109 信封（`created/state/list/closed/chat`）与 112（`msg/users`）——信封格式为既有协议，无服务端改动；
-- L933 `gnSyncRoomName` 等函数不受影响（仍归属游戏中心窗环境）。
+- L933 `gnSyncRoomName` 等函数不受影响（仍归属游戏中心窗环境）；
+- **房间镜像冷启动查询**（真机实测补强）：面板页后加载，建房/加入时的 109 广播已错过，悬浮窗无从得知"我在哪个房"——新增 `overlay:room-get` 查询链路（悬浮窗 → 主进程 → 游戏中心窗 gn-room.js 回房间快照，模式同 `gn:contacts-get`，3s 超时兜底；游戏中心窗未创建=不可能在房直接 null），悬浮窗打开房间页签时查询补全 `myRoom`，快照后的状态变化仍走 109 广播实时跟随。
 
 ## 4.6 服务端：零改动
 
@@ -327,8 +328,123 @@ overlay.dll（C++）：MinHook 钩 D3D9/11/12/OpenGL/Vulkan Present
 
 # 九、开放问题（评审拍板）
 
-1. **面板形态**：全屏遮罩 + 居中卡片（Steam 式，本文默认）vs 右侧停靠半屏面板（微信式）？
-2. **「支持游戏内面板」标注的数据源**：管理端游戏字段（需动服务端+后台）vs 客户端本地名单（零服务端改动）？
-3. **默认热键** Shift+Tab 是否合适（部分游戏 Tab 为计分板，Shift+Tab 冲突概率低但非零；可否接受默认改为 Ctrl+Tab 或首启引导选择）？
-4. **游戏内通知策略**：面板开启期间主窗口 OS 通知是否静音（避免游戏内被打断）？
-5. **收起角标**（第六节 P2）是否一期就要？
+1. **面板形态**：全屏遮罩 + 居中卡片（Steam 式，本文默认）vs 右侧停靠半屏面板（微信式）？——已按默认实施
+2. **「支持游戏内面板」标注的数据源**：管理端游戏字段（需动服务端+后台）vs 客户端本地名单（零服务端改动）？——一期未做标注（所有游戏均可呼出）
+3. **默认热键** Shift+Tab 是否合适（部分游戏 Tab 为计分板，Shift+Tab 冲突概率低但非零；可否接受默认改为 Ctrl+Tab 或首启引导选择）？——已按 Shift+Tab 实施（可配置）
+4. **游戏内通知策略**：面板开启期间主窗口 OS 通知是否静音？——v1 并存（Steam 同款），静音方案见 §10.7.3
+5. **收起角标**（第六节 P2）——由 **§十、游戏内通知小窗** 覆盖（堆叠 toast 形态优于静态角标）
+
+---
+
+# 十、游戏内通知小窗（Steam 式消息/邀请提醒）——已实施（2026-10-27）
+
+## 10.1 目标与交互对照
+
+Steam 游戏内通知行为对照：
+
+| Steam 行为 | 本设计 |
+|---|---|
+| 好友消息 → 右下角滑入 toast（头像+昵称+内容预览） | 同款（avatarEl 降级头像 + 昵称 + 两行截断预览） |
+| 多条堆叠，悬停暂停，失焦自动消失 | 同款（堆叠上限 4 条，同会话合并 ×N，6s 计时） |
+| 点击 toast → 打开与该好友的聊天页（游戏内） | 点击 → 呼出 Shift+Tab 面板并**直达该好友会话**（游戏内完成） |
+| 好友邀请 → 邀请卡 toast，点击进入 | 点击 → 呼出面板并落**房间页签**（邀请条可见可接受） |
+| 面板/好友列表打开期间不弹 toast | 面板打开时抑制（消息面板内可见） |
+
+范围：一期仅**好友私聊（2）+ 联机邀请（111）**；群聊不弹（面板/主窗口承载）。
+
+## 10.2 总体架构
+
+```
+主窗口 WS（唯一连接）
+   │ gn:chat-mirror（已有：2 私聊 / 111 邀请 / 93 在线增量）
+   ▼
+主进程 gnRelayBroadcast（多订阅广播，已有）
+   ├─► 游戏中心窗（已有，忽略 chat-in）
+   ├─► Overlay 面板窗（已有）
+   └─► 通知小窗 notifyWin（新增）★
+          │ 通知页自管堆叠/计时/合并
+          ├─ 栈空 = 窗口隐藏（不占游戏画面不挡操作）
+          ├─ 点击 toast → ipc 'notify:open' {username|invite}
+          ▼
+       主进程：gameOverlay.showOverlay() + 面板页投递直达参数
+       （overlay:open-chat → 直达好友会话 / overlay:open-room → 房间页签）
+```
+
+关键决策：
+1. **独立小窗而非复用全屏面板窗**——面板关闭即 hide，若借面板窗弹通知，需全屏透明遮罩层参与鼠标穿透（`setIgnoreMouseEvents` + hover 前瞻切换，复杂易碎）。独立小窗 = 窗口本体即通知区域（remote-bar 悬浮条同款先例），天然不挡游戏操作；
+2. **数据面零新增**：通知窗加入 `gnRelayWins` 订阅 `gn:chat-in`，头像/昵称复用 `gn:contacts-get`；109/110/112 到达即忽略（仅面板关心）；不新开 WS、服务端零改动；
+3. **抑制规则**：`overlay:state` 广播（已有）通知页订阅——面板打开期间不弹 toast，关闭恢复；
+4. **不夺焦**：通知窗 `focusable:false`（toast 悬停/消失不打断游戏输入），仅点击时经 `showOverlay()` 夺焦（与热键呼出同语义，RegisterHotKey 激活授予前台权限）。
+
+## 10.3 窗口规格（pc/game-overlay.js 扩展）
+
+- BrowserWindow：宽 320 × 高 ~660（堆叠区，内容锚定底部右对齐），`transparent + frame:false + alwaysOnTop('screen-saver') + skipTaskbar + focusable:false + resizable:false`；
+- 位置：`gameDisplay.bounds` 右下角内缩 12px（复用面板窗的显示器解析结果，多显示器/副屏自动跟随）；
+- 生命周期：与面板窗同款——`armHotkey` 预热创建（隐藏）、`disarmHotkey` 收口、WIN7 随 overlay 硬性禁用、设置「游戏内通知」开关控制是否创建与订阅；
+- 显隐归口：通知页栈空/非空时经 `notify:visible` 请求，主进程只执行 show/hide（不猜内容）。
+
+## 10.4 IPC 协议新增
+
+| 通道 | 方向 | 说明 |
+|---|---|---|
+| `notify:visible` | 通知页 → 主 | 堆叠非空 show / 清空 hide |
+| `notify:open` | 通知页 → 主 | 点击 toast：`{username}`（私聊）或 `{invite:true}`（邀请）→ `showOverlay()` + 向面板页投递直达参数 |
+| `overlay:open-chat` | 主 → 面板页 | 面板 overlay.js 订阅：`{username}` → showTab('friends') + openChat(username) |
+| `overlay:open-room` | 主 → 面板页 | `{}` → showTab('room')（邀请条可见可接受） |
+
+`overlay:state` 广播（已有）通知页订阅 → 面板打开抑制。preload.js 新增 `notifyVisible / notifyOpen / onOverlayOpenChat / onOverlayOpenRoom` 桥。
+
+## 10.5 通知页（web/notify.html + js/notify.js + css/notify.css）
+
+- 数据：`desktop.onGnChatIn`（2/111/93）+ `gnContactsGet` 快照（avatar/name 映射）；93 增量仅刷新头像昵称缓存；
+- toast 结构：左头像（avatarEl 同款降级）+ 右昵称/预览；邀请卡显示「X 邀请你加入房间 Y + 房间名/房主」；
+- 堆叠：同会话新消息**合并更新**（×N 计数 + 最新内容置顶）；上限 4 条，超出丢最旧并显示「+N 更多」；
+- 计时：6s 自动消失；`mouseenter` 暂停 / `mouseleave` 恢复；滑入滑出动画（transform + opacity，150ms）；
+- 主题：style.css 变量同源 + `im_theme` storage 监听跟随（面板同款）；
+- 显窗：栈空 → `notifyVisible(false)`；非空 → `(true)`。
+
+## 10.6 设置项
+
+设置页「游戏」分类新增「游戏内通知」开关（默认开启，与「游戏内面板」并列）：关闭 = 主进程不创建通知窗且不加入镜像订阅（动态生效，免重启）。
+
+## 10.7 边界与风险
+
+| # | 问题 | 对策 |
+|---|---|---|
+| 1 | `focusable:false` 窗口的点击行为存在 Electron 版本差异 | 实测验证；异常回退 `focusable:true + showInactive`（不夺焦） |
+| 2 | toast 区域遮挡游戏右下角 UI（小地图/聊天框） | 宽 320 仅角部；位置设置项（右下/右上）列 P2 |
+| 3 | 与主窗口 OS 通知并存（双份提醒） | v1 并存（Steam 同款）；后续可做「面板+通知窗运行期静音主窗口通知」 |
+| 4 | 消息风暴刷屏 | 同会话合并 + 上限 4 条 + 主窗口 mirror 单窗节流已有 |
+| 5 | 面板开着时到达的消息 | 订阅 `overlay:state` 抑制；面板关闭瞬间的未读不回放 toast（一期接受，面板内有未读徽标） |
+| 6 | Win7 | 随 overlay 硬性禁用（`supported=false` 已有，通知窗不创建） |
+| 7 | 已读语义 | 点击 toast 直达会话 = 打开会话，自动发已读回执（与面板内打开会话行为一致，评审确认） |
+
+## 10.8 实施清单
+
+- P1 主进程：`game-overlay.js` 扩展（`ensureNotifyWindow`/右下定位/`notify:visible`/`notify:open`/设置开关接入）；`main.js`：通知窗加入 `gnRelayWins`（`gnRelayAdd`）；`preload.js`：四桥新增；
+- P2 渲染层：`web/notify.html` + `web/js/notify.js` + `web/css/notify.css`（新增三件套）；`overlay.js`：`overlay:open-chat/room` 订阅（直达会话/房间页签）；i18n 键补齐（zh+en）；
+- P3 设置：「游戏内通知」开关（设置页「游戏」分类，默认开）；
+- P4 测试项见 §10.10。
+
+## 10.9 版本与部署
+
+- `notify.html?v=1` 新增；`overlay.js` bump v4；设置页 index.html 不变（开关复用既有结构）；i18n PACK_VER bump；
+- 部署：web 三件套 + i18n + preload/game-overlay/main 重打包，与一期同一批发布可合并。
+
+## 10.10 测试项（验收矩阵）
+
+| 维度 | 用例 |
+|---|---|
+| 消息 toast | 面板关闭时私聊到达→右下滑入（头像/昵称/预览）；同会话合并 ×N；点击→面板呼出并直达该好友会话；6s 自动消失；悬停暂停恢复 |
+| 邀请 toast | 面板关闭时收到 111→邀请卡 toast；点击→面板呼出并落房间页签（邀请条可见可接受） |
+| 堆叠 | 3 个好友各发 1 条→3 条堆叠；第 5 条到达→最旧丢弃显示 +N；同一好友连发→合并为一条 ×N |
+| 抑制 | 面板打开时不弹 toast；面板关闭后恢复弹 |
+| 焦点 | toast 悬停/消失不夺游戏焦点（游戏输入持续）；点击唤起面板后焦点行为与热键呼出一致 |
+| 生命周期 | 游戏退出通知窗收口；Win7 不创建；「游戏内通知」开关关闭后立即不再弹（免重启） |
+| 回归 | 面板/游戏中心窗/主窗口聊天不受影响（通知窗只读镜像）；gnRelayWins 新增订阅窗后无回环；镜像来源守卫（gnFromMain）不拦截通知窗收流 |
+
+## 10.11 开放问题（评审拍板）
+
+1. toast 位置一期固定右下（Steam 同款），右上设置项列 P2——是否接受？
+2. 点击私聊 toast 直达会话即发已读回执（=点击即读）——是否接受？（主窗口未读徽标随之消除）
+3. 群聊消息一期不通知——是否接受？

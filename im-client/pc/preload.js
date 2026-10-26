@@ -1216,6 +1216,67 @@ contextBridge.exposeInMainWorld('desktop', {
     gnContactsReply: function (id, list) {
         ipcRenderer.send('gn:contacts-reply', id, list || []);
     },
+    // ===== 游戏内 Overlay 悬浮窗（docs/游戏内Overlay功能技术设计.md）=====
+    // 呼出/收起请求（设置页测试按钮/托盘扩展用）；悬浮窗内 Esc/×/点遮罩走 overlayHide（收起+焦点归还游戏）
+    overlayToggle: function () {
+        ipcRenderer.send('overlay:toggle');
+    },
+    overlayHide: function () {
+        ipcRenderer.send('overlay:hide');
+    },
+    // 设置读写（设置页「游戏」分类）：{enabled, hotkey}；主进程即时重注册热键并广播 overlay:state
+    overlaySettingsGet: function () {
+        return ipcRenderer.invoke('overlay:settings-get');
+    },
+    overlaySettingsSet: function (s) {
+        ipcRenderer.send('overlay:settings-set', s || {});
+    },
+    // 显隐/热键状态广播（全窗口）：{open, enabled, hotkey, hotkeyOk, armed}
+    onOverlayState: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('overlay:state', function (event, st) { cb(st || {}); });
+    },
+    // 私聊/邀请镜像上行（主窗口 socket.js 归口转发）：msg_type∈{1,111,好友上下线} → 主进程广播订阅窗
+    gnChatMirror: function (msg) {
+        ipcRenderer.send('gn:chat-mirror', msg || {});
+    },
+    // 镜像下行（悬浮窗渲染层订阅）：'gn:chat-in'，与 gn:signal-in 同形（{msg_type, from_user, content})
+    onGnChatIn: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('gn:chat-in', function (event, msg) { cb(msg || {}); });
+    },
+    // ===== 游戏内通知小窗（docs/游戏内Overlay功能技术设计.md §十）=====
+    // 通知页栈空/非空的显隐请求（主进程 showInactive 不夺游戏焦点 / hide）
+    notifyVisible: function (on) {
+        ipcRenderer.send('notify:visible', !!on);
+    },
+    // 点击 toast：{username}=直达该好友会话 / {invite:true}=面板落房间页签（主进程唤起面板并投递直达参数）
+    notifyOpen: function (payload) {
+        ipcRenderer.send('notify:open', payload || {});
+    },
+    // 直达参数下行（面板 overlay.js 订阅）：私聊 toast 点击 → {username}
+    onOverlayOpenChat: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('overlay:open-chat', function (event, p) { cb(p || {}); });
+    },
+    // 直达参数下行（面板 overlay.js 订阅）：邀请 toast 点击 → 面板落房间页签
+    onOverlayOpenRoom: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('overlay:open-room', function (event, p) { cb(p || {}); });
+    },
+    // ===== 悬浮窗房间镜像查询（docs/游戏内Overlay功能技术设计.md §4.5 补强）=====
+    // 房间态唯一持有者=游戏中心窗 gn-room.js（建房/加入时持有 my）；悬浮窗页面后加载无从得知
+    // "我在哪个房"——游戏中心窗收 onOverlayRoomNeed(id, reply) 后调 overlayRoomReply(id, snap) 应答
+    onOverlayRoomNeed: function (cb) {
+        if (typeof cb !== 'function') return;
+        ipcRenderer.on('overlay:room-need', function (event, id) {
+            cb(id, function (snap) { ipcRenderer.send('overlay:room-reply', id, snap || null); });
+        });
+    },
+    // 悬浮窗侧查询：Promise<snapshot|null>（主进程经游戏中心窗查询，3s 超时兜底 null）
+    overlayRoomGet: function () {
+        return ipcRenderer.invoke('overlay:room-get');
+    },
     // ===== 联机二期 §9.4-5：同机并发活动态跨窗归口（降级提示只落在联机侧）=====
     // 通话窗/远程窗上报自身活跃态变化（kind='call'|'remote'，变化才发；主进程缓存并做窗口销毁兜底复位）
     actOtherReport: function (kind, on) {

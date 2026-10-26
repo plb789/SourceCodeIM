@@ -814,6 +814,23 @@
                 window.desktop.gnSignalForward({ msg_type: msg.msg_type, from_user: msg.from_user || '', content: msg.content || '' });
             }
         }
+        // 游戏内 Overlay 一期（docs/游戏内Overlay功能技术设计.md §4.2.4）：私聊/邀请/在线态镜像——
+        // 悬浮窗无 WS（复用主窗口唯一连接），聊天/邀请卡/好友上下线经 gnChatMirror 转发，
+        // 主进程广播订阅窗（'gn:chat-in'）。2=私聊文本 PRIVATE（含自己发送的服务端回显，悬浮窗收发闭环；
+        // 1=群聊不在悬浮窗一期范围）；111=联机邀请卡（悬浮窗精简渲染+接受加入）；
+        // 93=USER_LIST_DELTA 在线名单增量（好友在线点跟随）
+        if (window.desktop && typeof window.desktop.gnChatMirror === 'function') {
+            if (msg.msg_type === 2 || msg.msg_type === 111 || msg.msg_type === 93) {
+                window.desktop.gnChatMirror({
+                    msg_type: msg.msg_type,
+                    from_user: msg.from_user || '',
+                    to_user: msg.to_user || '',
+                    content: msg.content || '',
+                    msg_id: msg.msg_id || 0,
+                    timestamp: msg.timestamp || 0
+                });
+            }
+        }
         var handlers = messageHandlers[msg.msg_type];
         if (handlers) {
             handlers.forEach(function (h) { h(msg); });
@@ -947,8 +964,10 @@
                 var list = [];
                 try {
                     var fs = (window.IMContacts && typeof window.IMContacts.friends === 'function') ? (window.IMContacts.friends() || []) : [];
+                    // 游戏内 Overlay 一期：附带 online 在线态（friendList 条目的 .online 由 chat.js
+                    // USER_LIST/USER_LIST_DELTA 处理器维护）——悬浮窗好友列表在线点数据源
                     list = fs.map(function (f) {
-                        return { username: f.username, name: ((f.remark || f.name || '').trim()) || f.username, avatar: f.avatar || '' };
+                        return { username: f.username, name: ((f.remark || f.name || '').trim()) || f.username, avatar: f.avatar || '', online: !!f.online };
                     });
                 } catch (e) { list = []; }
                 if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list);

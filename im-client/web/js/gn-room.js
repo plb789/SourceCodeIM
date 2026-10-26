@@ -2369,6 +2369,23 @@
                 open(payload);
             });
         }
+        // 悬浮窗房间镜像查询（docs/游戏内Overlay功能技术设计.md §4.5 补强）：本窗为房间态唯一持有者
+        // （建房/加入时持有 my），悬浮窗（游戏内面板）页面后加载无从得知"我在哪个房"、109 广播已错过——
+        // 经主进程中继来查（overlay:room-get → overlay:room-need），回快照（无房回 null）；
+        // 快照后房间状态变化仍走 109 广播实时跟随
+        if (window.desktop && typeof window.desktop.onOverlayRoomNeed === 'function') {
+            window.desktop.onOverlayRoomNeed(function (id, reply) {
+                var snap = null;
+                if (my && my.room_id) {
+                    snap = {
+                        room_id: my.room_id, name: my.name, host: my.host, host_port: my.host_port,
+                        game_id: my.game_id, game_name: my.game_name, status: my.status,
+                        members: my.members || []
+                    };
+                }
+                try { reply(snap); } catch (e) { gnDbg('overlay-room-reply threw: ' + (e && e.message)); }
+            });
+        }
         // 功能二期：主机端探测到的真实 GameInfo → 经隧道 ctl 通道中继给全部加入方
         // （真实名称/人数/槽位/地图——广播帧不含名称，加入方列表条目数据必经此中继）
         if (window.desktop && typeof window.desktop.onGnBroadcastGameInfo === 'function') {

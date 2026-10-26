@@ -1,0 +1,486 @@
+/* overlay.css - 游戏内 Overlay 悬浮窗（docs/游戏内Overlay功能技术设计.md §4.2）
+   全部颜色引用 style.css 主题变量（跟随 im_theme 明暗）；布局参考微信聊天界面；
+   原生滚动条已被 style.css 全局归零，滚动容器由 overlay.js 挂自绘悬浮滑块（.osb-thumb） */
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent; /* 窗口透明：遮罩与卡片自绘，四周透出游戏画面 */
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    color: var(--text);
+}
+
+/* ===== 全屏暗色遮罩（Steam overlay 观感；点击空白收起） ===== */
+#ov-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+/* ===== 居中卡片 ===== */
+#ov-panel {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 540px;
+    height: min(700px, calc(100vh - 48px));
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ===== 标题栏 ===== */
+#ov-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--border);
+}
+#ov-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+#ov-hotkey {
+    font-size: 11px;
+    color: var(--text-light);
+    background: var(--search-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 8px;
+}
+#ov-close {
+    margin-left: auto;
+    cursor: pointer;
+    color: var(--text-light);
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    user-select: none;
+}
+#ov-close:hover { color: var(--text); background: var(--hover); }
+
+/* 断线提示条 */
+#ov-conn {
+    flex: 0 0 auto;
+    padding: 5px 14px;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--active);
+}
+
+/* ===== 页签 ===== */
+#ov-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    background: var(--panel-bg);
+    border-bottom: 1px solid var(--border);
+}
+.ov-tab {
+    flex: 1;
+    text-align: center;
+    padding: 9px 0 7px;
+    font-size: 13px;
+    color: var(--text-light);
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 2px solid transparent;
+}
+.ov-tab:hover { color: var(--text); }
+.ov-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 600;
+}
+
+/* ===== 页面容器 ===== */
+#ov-body { flex: 1 1 auto; min-height: 0; position: relative; }
+.ov-page { display: none; width: 100%; height: 100%; }
+.ov-page.active { display: flex; }
+
+/* ===== 好友页签：左列表 / 右会话（微信式） ===== */
+#ov-friends { flex-direction: row; }
+#ov-friend-list {
+    width: 190px;
+    flex: 0 0 auto;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+}
+.ov-friend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    position: relative;
+}
+.ov-friend:hover { background: var(--hover); }
+.ov-friend.active { background: var(--active); }
+.ov-avatar {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    border-radius: 6px;
+    background: var(--placeholder-bg);
+    color: var(--panel-bg);
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+.ov-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.ov-friend-info { min-width: 0; flex: 1; }
+.ov-friend-name {
+    font-size: 13px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ov-friend-sub { font-size: 11px; color: var(--text-light); margin-top: 1px; }
+.ov-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--placeholder-bg);
+}
+.ov-dot.on { background: var(--primary); }
+.ov-unread {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    text-align: center;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: var(--panel-bg);
+    font-size: 10px;
+}
+.ov-empty { padding: 24px 12px; font-size: 12px; color: var(--text-light); text-align: center; }
+
+/* 私聊会话区 */
+#ov-chat {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+#ov-chat.hidden, .hidden { display: none !important; }
+#ov-chat-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--divider);
+    background: var(--header-bg);
+}
+#ov-chat-back {
+    cursor: pointer;
+    color: var(--text-light);
+    font-size: 15px;
+    padding: 0 4px;
+    user-select: none;
+}
+#ov-chat-back:hover { color: var(--text); }
+#ov-chat-name { font-size: 13px; font-weight: 600; color: var(--text); }
+#ov-chat-status { font-size: 11px; color: var(--text-light); }
+#ov-chat-hint {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-light);
+    background: var(--header-bg);
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--divider);
+}
+#ov-chat-msgs { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; background: var(--chat-bg); }
+
+/* 聊天气泡（微信式：对方左/自己右） */
+.ov-msg { display: flex; margin-bottom: 10px; gap: 8px; align-items: flex-start; }
+.ov-msg.mine { flex-direction: row-reverse; }
+.ov-msg-body { max-width: 72%; display: flex; flex-direction: column; }
+.ov-msg.mine .ov-msg-body { align-items: flex-end; }
+.ov-msg-text {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: var(--bubble-other);
+    color: var(--text);
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+.ov-msg.mine .ov-msg-text { background: var(--bubble-self); }
+.ov-msg-time { font-size: 10px; color: var(--text-light); margin-top: 3px; }
+.ov-msg.sys { justify-content: center; }
+.ov-msg.sys .ov-msg-text { background: transparent; color: var(--text-light); font-size: 11px; }
+
+/* 输入区 */
+#ov-chat-input-wrap, #ov-room-input-wrap, #ov-lobby-input-wrap {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--header-bg);
+}
+#ov-chat-input {
+    flex: 1;
+    resize: none;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.4;
+    border-radius: 6px;
+    padding: 7px 9px;
+    max-height: 72px;
+    font-family: inherit;
+}
+#ov-chat-input::placeholder, #ov-room-input::placeholder, #ov-lobby-input::placeholder { color: var(--text-light); }
+.ov-send-btn {
+    flex: 0 0 auto;
+    border: none;
+    outline: none;
+    cursor: pointer;
+    background: var(--primary);
+    color: var(--panel-bg);
+    font-size: 12px;
+    padding: 7px 14px;
+    border-radius: 6px;
+}
+.ov-send-btn:disabled { opacity: 0.5; cursor: default; }
+#ov-room-input, #ov-lobby-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: var(--search-bg);
+    color: var(--text);
+    font-size: 13px;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-family: inherit;
+}
+
+/* ===== 房间页签 ===== */
+#ov-room { flex-direction: column; }
+/* 邀请条：两种状态共享（在房时收到的其他房间邀请也可见可接受，§深查遗漏 A） */
+#ov-invites {
+    flex: 0 0 auto;
+    max-height: 132px;
+    overflow-y: auto;
+    padding: 8px 12px 0;
+}
+#ov-invites .ov-room-row { margin-bottom: 6px; }
+#ov-room-mine { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#ov-room-card {
+    flex: 0 0 auto;
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+    background: var(--header-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+#ov-room-line1 { display: flex; align-items: center; gap: 8px; }
+#ov-room-name { font-size: 14px; font-weight: 600; color: var(--text); }
+#ov-room-status {
+    font-size: 11px;
+    color: var(--primary);
+    background: var(--panel-bg);
+    border: 1px solid var(--primary);
+    border-radius: 999px;
+    padding: 0 8px;
+}
+#ov-room-line2 { font-size: 11px; color: var(--text-light); margin-top: 4px; }
+#ov-room-actions { display: flex; gap: 8px; margin-top: 10px; }
+#ov-room-actions button, #ov-room-none-actions button {
+    border: 1px solid var(--primary);
+    background: var(--panel-bg);
+    color: var(--primary);
+    font-size: 12px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+#ov-room-actions button:hover, #ov-room-none-actions button:hover { background: var(--primary); color: var(--panel-bg); }
+#ov-room-hint { font-size: 11px; color: var(--text-light); margin-top: 8px; }
+#ov-room-members {
+    flex: 0 1 auto;
+    max-height: 180px;
+    overflow-y: auto;
+    margin: 10px 12px 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.ov-member {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--divider);
+}
+.ov-member:last-child { border-bottom: none; }
+.ov-member .ov-avatar { width: 26px; height: 26px; font-size: 11px; }
+.ov-member-name { font-size: 12px; color: var(--text); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-tag {
+    font-size: 10px;
+    border-radius: 999px;
+    padding: 1px 7px;
+    border: 1px solid var(--border);
+    color: var(--text-light);
+}
+.ov-tag.host { border-color: var(--primary); color: var(--primary); }
+.ov-tag.ready { border-color: var(--primary); color: var(--primary); }
+#ov-room-msgs { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; background: var(--chat-bg); }
+
+/* 未在房：房间列表 */
+#ov-room-none { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+#ov-room-none-tip { padding: 12px 14px 4px; font-size: 12px; color: var(--text-light); }
+#ov-room-list { flex: 1 1 auto; overflow-y: auto; padding: 4px 12px; }
+.ov-room-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    margin-bottom: 6px;
+    background: var(--header-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.ov-room-row-info { flex: 1; min-width: 0; }
+.ov-room-row-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-room-row-sub { font-size: 11px; color: var(--text-light); margin-top: 2px; }
+.ov-room-row .ov-join-btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--primary);
+    background: var(--panel-bg);
+    color: var(--primary);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ov-room-row .ov-join-btn:hover { background: var(--primary); color: var(--panel-bg); }
+#ov-room-none-actions { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); }
+#ov-room-none-hint { font-size: 11px; color: var(--text-light); }
+
+/* ===== 大厅页签 ===== */
+#ov-lobby { flex-direction: column; }
+#ov-lobby-users {
+    flex: 0 0 auto;
+    max-height: 120px;
+    overflow-y: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--divider);
+    background: var(--bg);
+}
+.ov-lobby-user {
+    font-size: 11px;
+    color: var(--text);
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px;
+}
+#ov-lobby-msgs { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; background: var(--chat-bg); }
+
+/* ===== 邀请好友弹层 ===== */
+#ov-invite-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+}
+#ov-invite-box {
+    width: 320px;
+    max-height: 420px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#ov-invite-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--header-bg);
+}
+#ov-invite-close { cursor: pointer; color: var(--text-light); font-size: 12px; padding: 2px 6px; border-radius: 6px; user-select: none; }
+#ov-invite-close:hover { color: var(--text); background: var(--hover); }
+#ov-invite-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 8px; }
+.ov-invite-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
+.ov-invite-row:hover { background: var(--hover); }
+.ov-invite-row .ov-invite-btn {
+    margin-left: auto;
+    border: 1px solid var(--primary);
+    background: var(--panel-bg);
+    color: var(--primary);
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.ov-invite-row .ov-invite-btn:hover { background: var(--primary); color: var(--panel-bg); }
+.ov-invite-row .ov-invite-btn:disabled { opacity: 0.5; cursor: default; }
+.ov-invite-row .ov-invite-btn.off { border-color: var(--border); color: var(--text-light); cursor: default; opacity: 1; background: transparent; }
+
+/* ===== Toast（页内自绘，禁系统弹窗） ===== */
+#ov-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 84px;
+    transform: translateX(-50%);
+    background: var(--active);
+    color: var(--text);
+    font-size: 12px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    box-shadow: var(--shadow-pop);
+    z-index: 30;
+    max-width: 70%;
+    text-align: center;
+}
+
+/* 主题跟随：html[data-theme] 由 head 内联脚本按 localStorage('im_theme') 设置，
+   变量定义在 style.css（:root / [data-theme=dark] / system 媒体查询），本页零硬编码色 */

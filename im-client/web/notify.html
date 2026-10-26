@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>游戏内通知</title>
+    <script>
+        /* 主题首绘引导：与主界面同源读 im_theme（dark/light，默认 dark），
+           先于样式渲染设置 data-theme，避免深色主题下先浅后深闪屏（overlay.html 同款） */
+        try { document.documentElement.setAttribute('data-theme', localStorage.getItem('im_theme') || 'dark'); }
+        catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    </script>
+    <!-- 引用全站样式表：主题 CSS 变量（--panel-bg/--border/--text 等），本页禁止硬编码颜色 -->
+    <link rel="stylesheet" href="css/style.css?v=3.80">
+    <link rel="stylesheet" href="css/notify.css?v=1">
+</head>
+<body>
+    <!-- toast 堆叠区：窗口本体即通知区域（右下角 320×660，内容锚定底部），
+         栈空时主进程隐藏窗口（不占游戏画面不挡操作） -->
+    <div id="nt-stack"></div>
+
+    <script src="js/i18n.js?v=1"></script>
+    <script src="js/notify.js?v=1"></script>
+</body>
+</html>

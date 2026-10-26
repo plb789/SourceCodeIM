@@ -63,7 +63,7 @@
         // 强制揭幕，防 chat.js 因异常未执行时永远白屏（正常路径由 autoLogin 摘除该类）
         setTimeout(function () { document.documentElement.classList.remove('app-booting'); }, 2500);
     </script>
-    <link rel="stylesheet" href="/css/style.css?v=3.79">
+    <link rel="stylesheet" href="/css/style.css?v=3.80">
     <!-- 阶段四十三：highlight.js 本地语法高亮主题（豆包同款深色代码块） -->
     <link rel="stylesheet" href="/css/hljs-github-dark.css?v=11.9">
 </head>
@@ -1615,6 +1615,12 @@
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4zm0 2h16v10H4V7zm2 2v2h12V9H6zm0 4v2h6v-2H6zm9.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>
                     <span>网盘挂载</span>
                 </button>
+                <!-- 游戏内 Overlay（docs/游戏内Overlay功能技术设计.md）：Steam 同款 Shift+Tab 面板设置；
+                     仅 PC 客户端显示（chat.js 按端隐藏，WEB/手机端无主进程热键能力） -->
+                <button class="settings-nav-item" data-view="game" id="settings-nav-game">
+                    <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 6h10a5 5 0 0 1 5 5v3a3 3 0 0 1-5.6 1.5L15 13H9l-1.4 2.5A3 3 0 0 1 2 14v-3a5 5 0 0 1 5-5zm1 3v1H7v2h1v1h2v-1h1v-2h-1V9H8zm8.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-2.5 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
+                    <span>游戏</span>
+                </button>
                 <button class="settings-nav-item" data-view="rules">
                     <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM9 13v2h6v-2H9zm0 4v2h4v-2H9z"/></svg>
                     <span>规则与记忆</span>
@@ -1849,6 +1855,42 @@
                     </div>
                     <p class="settings-desc">开启后正在使用其他应用时收到邀请，接听画面直接弹出，无需点击通知。</p>
                     <button id="settings-call-overlay-btn" class="settings-btn">去开启悬浮窗</button>
+                </div>
+            </section>
+            <!-- 游戏内 Overlay（docs/游戏内Overlay功能技术设计.md）：Steam 同款 Shift+Tab 游戏内好友/大厅面板。
+                 仅 PC 客户端生效（依赖主进程全局热键与置顶窗，无 desktop 桥的 WEB/手机端隐藏整个分类） -->
+            <section id="settings-view-game" class="settings-view hidden">
+                <h2 class="settings-title">游戏</h2>
+                <h3 class="settings-subtitle">游戏内面板</h3>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">游戏内面板（Shift+Tab）</div>
+                            <div class="settings-card-desc">从客户端启动游戏后，游戏内按热键呼出好友/大厅面板：好友私聊、房间邀请、大厅聊天；再按收起并回到游戏。独占全屏游戏需切换为无边框全屏或窗口化方可显示。</div>
+                        </div>
+                        <input id="settings-overlay-enable" type="checkbox" class="slide-switch" checked>
+                    </div>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-switch-row">
+                        <div class="settings-card-head-text">
+                            <div class="settings-card-title">游戏内通知</div>
+                            <div class="settings-card-desc">游戏中收到好友消息或联机邀请时，游戏右下角弹出通知（头像+内容），点击直达聊天或房间；面板打开期间不重复弹。</div>
+                        </div>
+                        <input id="settings-overlay-notify" type="checkbox" class="slide-switch" checked>
+                    </div>
+                </div>
+                <div class="settings-card">
+                    <div class="settings-card-row">
+                        <span class="settings-card-label">呼出热键</span>
+                        <span id="settings-overlay-hotkey" class="settings-card-value">Shift+Tab</span>
+                    </div>
+                    <div class="settings-disk-path" id="settings-overlay-hotkey-edit" style="display:none;">
+                        <input id="settings-overlay-hotkey-input" type="text" class="settings-hotkey-input" maxlength="32" placeholder="如 Ctrl+Tab">
+                        <button id="settings-overlay-hotkey-save" class="settings-disk-path-btn">保存</button>
+                    </div>
+                    <p class="settings-desc">热键仅在游戏运行期间生效，不影响日常使用；若与其他软件冲突可在此修改。</p>
+                    <button id="settings-overlay-hotkey-btn" class="settings-btn">修改热键</button>
                 </div>
             </section>
             <!-- 阶段一百六十五：网盘挂载（WinFsp+rclone 把网盘映射成本地盘符，阿里云盘挂载盘同原理；
@@ -2794,7 +2836,7 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.46"></script>
+    <script src="/js/socket.js?v=1.47"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
     <script src="/js/screenshot.js?v=1.10"></script>
@@ -2816,7 +2858,7 @@
     <script src="/js/remote-engine.js?v=1.0"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
     <script src="/js/p2p-file.js?v=1.11"></script>
-    <script src="/js/chat.js?v=3.193"></script>
+    <script src="/js/chat.js?v=3.194"></script>
     <!-- 阶段二百九十二 M8：联机引擎（gn-net.js）与房间层（gn-room.js）已迁入游戏中心窗
          （game-store.html 加载），主窗口仅保留 109/110/112 跨窗中继（socket.js）与 111 邀请卡片（chat.js）；
          两窗同持房间状态会脑裂，故此处不得再引入 -->
