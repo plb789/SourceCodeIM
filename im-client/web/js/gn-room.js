@@ -930,6 +930,7 @@
     function openCreate() {
         if (!avail()) { toast(T('当前环境不支持联机')); return; }
         renderGameOptions();
+        gnSyncRoomName(); // 房间名默认值：随当前所选游戏带出（用户可直接创建免输入）
         syncMaxOptions();
         elCreateMask.classList.remove('hidden');
         setTimeout(function () { try { elName.focus(); } catch (e) { } }, 30);
@@ -944,6 +945,20 @@
     function gnGameSelItem() {
         for (var i = 0; i < gnGameItems.length; i++) { if (gnGameItems[i].val === gnGameValCur) return gnGameItems[i]; }
         return null;
+    }
+    // 房间名默认生成（用户免输入）：游戏房=「{游戏名}的房间」，不指定=「{用户名}的房间」。
+    // 仅当输入框为空或仍是上次自动生成值时刷新——用户手改过的名字不覆盖
+    var gnNameAuto = ''; // 上次自动生成的房间名
+    function gnDefaultRoomName() {
+        var it = gnGameSelItem();
+        if (it && it.val !== '0' && it.val !== '0-tunnel' && it.name) return it.name + T('的房间'); // 商店/本地游戏房
+        var un = u();
+        return (un ? un : T('我的')) + T('的房间'); // 「不指定」两类：用户名的房间（无登录名兜底）
+    }
+    function gnSyncRoomName() {
+        var d = gnDefaultRoomName();
+        var cur = (elName.value || '').trim();
+        if (!cur || cur === gnNameAuto) { elName.value = d; gnNameAuto = d; }
     }
     function renderGameOptions() {
         // 上次选中记忆（本机 localStorage）：窗体重开/页面刷新后带出上次所选（下方自愈仍校验有效性）
@@ -1050,6 +1065,7 @@
             // 选中即同步列表 ✓ 位置（此前仅在开面板/搜索时渲染——重开面板 ✓ 停留在旧项，
             // 视觉上"明明选了游戏、再展开却在虚拟网卡上"）
             gnGselRender();
+            gnSyncRoomName(); // 房间名默认值随所选游戏刷新（用户手改过则保留）
             gnSyncNetMode(); // 选中变化：联机方式/端口行/启动路径行随应用带出刷新（原 select change 同语义）
             // 功能二期保留：选联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填）；
             // 「不指定」两类（虚拟网卡/通用端口隧道）无游戏进程可探测，不触发（避免全端口误推荐）
@@ -1151,6 +1167,8 @@
             var lit = gnGameSelItem();
             if (lit && lit.local) gname = lit.name;
         }
+        // 免输入兜底：清空未填时静默用默认名（必非空）——置于路由校验之前，保证任何方式下名字都被回填
+        if (!name) { name = gnDefaultRoomName(); elName.value = name; gnNameAuto = name; }
         // 联机方式路由（客户端侧前置引导，服务端建房收敛仍有兜底）：
         // supernode 应用：TAP 未装 → 引导设置页；虚拟 IP 未分配 → 提示服务端池未启用/耗尽
         var gmNet = gnNetModeSel();
@@ -1161,7 +1179,6 @@
             try { vipIp = localStorage.getItem('vip_ip') || ''; } catch (eVip) { }
             if (!vipIp) { toast(T('虚拟 IP 未分配（服务端虚拟 IP 池未启用或已耗尽）')); return; }
         }
-        if (!name) { toast(T('请填写房间名')); return; }
         // 端口校验与 payload：supernode 方式 UI 隐藏端口行但内部已预填登记主端口——
         // 服务端前置满足走虚拟网卡（不消费端口）、前置不满足自动降级隧道时端口仍可用（防断链）
         if (gmNet !== 'supernode' && (!isFinite(port) || port < 1024 || port > 65535)) { toast(T('游戏端口需为 1024-65535')); return; }
