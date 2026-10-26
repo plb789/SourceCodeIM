@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=26'); // v26：本地游戏属性与商店游戏统一为 Steam 同款分栏弹窗（名称/转发可编辑，无云存档分栏）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=28'); // v28：本地游戏详情页 hero 图标模糊铺底+居中图标、右键菜单带游戏图标头、建房选游戏器显示本地游戏图标
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1772,6 +1772,19 @@ function gameStartBroadcast(info) {
 // 存储在渲染层 localStorage（本机数据不上服务端）；主进程仅承担启动与运行态追踪。
 // id 为渲染层分配的 'local_' 前缀键，与商店数字 gameId 命名空间隔离
 var runningLocalGames = new Map(); // localId → { proc, startedAt }
+
+// 读取本地游戏 exe 程序图标（侧栏行名称左侧显示）：app.getFileIcon 转 PNG dataURL 直接回传渲染层，
+// 由渲染层存入本地游戏条目（localStorage）持久化；不落盘、不上服务端
+ipcMain.handle('local-game:get-icon', async function (event, data) {
+    try {
+        var exe = String((data && data.exe) || '').trim();
+        if (!exe || !fs.existsSync(exe)) return { ok: false, error: '文件不存在' };
+        var icon = await app.getFileIcon(exe, { size: 'large' }); // Windows 下 48x48，侧栏缩略足够清晰
+        return { ok: true, dataUrl: icon.toDataURL() };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '图标读取失败' };
+    }
+});
 
 // 启动本地游戏：{id, exe, args?, portForwards?} → spawn 分离进程（与 game:launch 同口径 detached/unref）。
 // 端口透传转发联动同 game:launch：规则来自本地游戏属性（渲染层 localStorage），spawn 前开启、退出自动关闭

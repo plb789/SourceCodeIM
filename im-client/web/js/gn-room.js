@@ -955,7 +955,7 @@
         // 本地游戏（游戏库「添加本地游戏」入库，local_ 前缀 id，仅本机）：可选参与联机，
         // 选中后等同「不指定（虚拟网卡）」（服务端无此应用配置，显式声明 supernode），开局直接用其 exe 启动
         var locals = (typeof window.GSLocalGames === 'function') ? (window.GSLocalGames() || []) : [];
-        locals.forEach(function (l_) { gnGameItems.push({ val: l_.id, name: l_.name, cover: '', exe: l_.exe, local: true }); });
+        locals.forEach(function (l_) { gnGameItems.push({ val: l_.id, name: l_.name, cover: l_.icon || '', exe: l_.exe, local: true }); });
         // 选中值失效自愈（游戏卸载/库刷新后 id 不存在）：回落默认「不指定（虚拟网卡）」
         var still = gnGameItems.some(function (it) { return it.val === gnGameValCur; });
         if (!still) gnGameValCur = '0';

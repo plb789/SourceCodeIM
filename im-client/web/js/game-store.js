@@ -1698,7 +1698,45 @@
         var id = 'local_' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
         state.localLib[id] = { id: id, name: localNameFromExe(exe), exe: exe, addedAt: Math.floor(Date.now() / 1000), lastPlayAt: 0 };
         localGamesSave();
+        // 选完启动程序即读 exe 图标（PC 端）：异步完成后重建侧栏行显示图标（失败静默回退首字母占位）
+        localIconFetch(id).then(function (okr) { if (okr) renderLibrary(); });
         return id;
+    }
+
+    // 本地游戏 exe 图标读取（PC 端主进程 app.getFileIcon → PNG dataURL）：成功写入条目并持久化；
+    // dataURL 体积保护 localStorage（>100KB 视为异常丢弃）；期间条目被改路径/移除则丢弃过期结果
+    // （exe 须捕获调用时的字符串快照——lo 是活引用，异步回调里直接对比 lo.exe 会恒等失效）
+    function localIconFetch(lid) {
+        var lo = state.localLib[lid];
+        if (!lo || !lo.exe) return Promise.resolve(false);
+        var exe = lo.exe; // 快照：供回调判断期间是否换过程序
+        if (!DESKTOP || !DESKTOP.localGameGetIcon) return Promise.resolve(false); // WEB/APP/旧版客户端：回退占位图
+        return DESKTOP.localGameGetIcon(exe).then(function (r) {
+            var cur = state.localLib[lid];
+            if (!cur || cur.exe !== exe) return false; // 期间被改路径/移除：丢弃
+            if (r && r.ok && r.dataUrl && String(r.dataUrl).length < 100000) {
+                cur.icon = r.dataUrl;
+                localGamesSave();
+                delete localItemCache[lid]; // 伪条目缓存失效：下次 renderLibrary 重建该行显示图标
+                return true;
+            }
+            return false;
+        }).catch(function () { return false; });
+    }
+    // 老条目批量回填图标（升级存量数据；串行读取防瞬时 IPC 风暴，全部完成后单次刷新防闪烁）
+    function localIconsBackfill() {
+        var ids = [];
+        for (var lid in state.localLib) {
+            var lo = state.localLib[lid];
+            if (lo && lo.exe && !lo.icon) ids.push(lid);
+        }
+        if (!ids.length) return;
+        var p = Promise.resolve();
+        var got = 0;
+        ids.forEach(function (lid) {
+            p = p.then(function () { return localIconFetch(lid).then(function (okr) { if (okr) got++; }); });
+        });
+        p.then(function () { if (got) renderLibrary(); });
     }
     // 最近游玩排序键归一：服务端 last_play_at 是日期串，本地条目是秒时间戳——统一折算毫秒比较
     function playKey(it) {
@@ -1747,7 +1785,8 @@
             var lrun = !!state.localRunning[lo.id];
             var lrow = el('div', 'gs-lib-srow' + (state.libSel === lo.id ? ' active' : '') + (lrun ? ' running' : ''));
             lrow._gid = lo.id;
-            lrow.appendChild(buildCover('', lo.name, 'gs-lib-sthumb'));
+            // 有 exe 图标显示图标（contain 防方形图标被 16:9 框裁切），否则首字母占位
+            lrow.appendChild(buildCover(lo.icon || '', lo.name, 'gs-lib-sthumb' + (lo.icon ? ' gs-lib-sicon' : '')));
             lrow.appendChild(el('div', 'gs-lib-sname', lo.name));
             lrow.appendChild(el('div', 'gs-lib-sstate', lrun ? '运行中' : '本地游戏'));
             lrow.addEventListener('click', function () { state.libSel = lo.id; renderLibrary(); });
@@ -2218,8 +2257,20 @@
     function buildLocalGamePage(lo) {
         var wrap = el('div', 'gs-lib-game gs-lib-local');
         wrap._lid = lo.id; // 供 syncLocalGamePage 归属判定（原位更新防闪烁）
-        var hero = el('div', 'gs-lib-hero');
-        hero.appendChild(buildCover('', lo.name, 'gs-lib-hero-img'));
+        var hero = el('div', 'gs-lib-hero' + (lo.icon ? ' gs-lib-hero-local' : ''));
+        if (lo.icon) {
+            // Steam 非 Steam 同款：exe 图标放大模糊铺底 + 居中方角图标（48px 源直铺大图必糊，模糊层掩盖低分辨率）
+            var hbg = el('div', 'gs-lib-hero-bg');
+            hbg.style.backgroundImage = 'url("' + lo.icon + '")';
+            hero.appendChild(hbg);
+            var hicon = el('div', 'gs-lib-hero-icon');
+            var himg = document.createElement('img');
+            himg.src = lo.icon; himg.draggable = false; himg.alt = '';
+            hicon.appendChild(himg);
+            hero.appendChild(hicon);
+        } else {
+            hero.appendChild(buildCover('', lo.name, 'gs-lib-hero-img'));
+        }
         hero.appendChild(el('div', 'gs-lib-hero-name', lo.name || '本地游戏'));
         wrap.appendChild(hero);
         var toprow = el('div', 'gs-lib-toprow');
@@ -3112,9 +3163,18 @@
     // ==================== 库左侧列表右键菜单（自绘，禁系统菜单） ====================
     var ctxOpen = false;
     function closeCtxMenu() { $('gsCtxMenu').classList.add('hidden'); ctxOpen = false; }
-    function openCtxMenu(x, y, items) {
+    function openCtxMenu(x, y, items, header) {
         var m = $('gsCtxMenu');
         m.innerHTML = '';
+        // 菜单头（可选）：图标 + 名称，标识操作对象（本地游戏=exe 图标 / 商店游戏=封面）
+        if (header && header.img) {
+            var head = el('div', 'gs-ctxmenu-head');
+            var himg = document.createElement('img');
+            himg.src = header.img; himg.draggable = false; himg.alt = '';
+            head.appendChild(himg);
+            head.appendChild(el('span', '', header.name || ''));
+            m.appendChild(head);
+        }
         for (var i = 0; i < items.length; i++) {
             (function (it) {
                 var row = el('div', 'gs-ctxmenu-item' + (it.danger ? ' danger' : ''), it.label);
@@ -3138,7 +3198,9 @@
     document.addEventListener('scroll', function () { if (ctxOpen) closeCtxMenu(); }, true);
 
     function openLibCtxMenu(gid, x, y) {
-        var lib = state.lib[gid] && state.lib[gid].lib;
+        var entry = state.lib[gid] || {};
+        var lib = entry.lib;
+        var g = entry.game || state.games[gid] || {};
         var libState = lib ? Number(lib.state) : null;
         var items = [];
         // 启动入口仅已安装（3）可见：与库卡片按钮态一致（0未安装=安装 / 1下载中·2暂停=暂停·继续 / 4待更新=更新，旧版仍可启动）
@@ -3146,7 +3208,7 @@
         else if (libState === 3 || libState === 4) items.push({ label: '启动游戏', onClick: function () { launchGame(gid); } });
         items.push({ label: '属性', onClick: function () { openPropModal(gid); } });
         items.push({ label: '移出游戏库', danger: true, onClick: function () { removeFromLib(gid); } });
-        openCtxMenu(x, y, items);
+        openCtxMenu(x, y, items, g.cover ? { img: assetUrl(g.cover), name: g.name } : null);
     }
 
     // ==================== 本地游戏操作（启动/右键菜单/属性弹窗/移除） ====================
@@ -3173,12 +3235,13 @@
 
     // 本地游戏右键菜单（自绘，禁系统菜单）：启动 / 属性（改名+换路径）/ 从库中移除
     function openLocalCtxMenu(lid, x, y) {
+        var lo = state.localLib[lid];
         var items = [];
         if (state.localRunning[lid]) items.push({ label: '运行中', onClick: function () { toast('游戏正在运行中'); } });
         else items.push({ label: '启动游戏', onClick: function () { launchLocalGame(lid); } });
         items.push({ label: '属性', onClick: function () { openLocalPropModal(lid); } });
         items.push({ label: '从库中移除', danger: true, onClick: function () { removeLocalGame(lid); } });
-        openCtxMenu(x, y, items);
+        openCtxMenu(x, y, items, lo && lo.icon ? { img: lo.icon, name: lo.name } : null);
     }
 
     // 从库中移除本地游戏（仅移除库内条目，不删本机文件；二次确认走自绘弹窗）
@@ -3223,6 +3286,7 @@
         if (!lo) { $('gsPropMask').classList.add('hidden'); return; }
         var nm = ($('gsPropName').value || '').trim();
         if (!nm) { toast('请填写游戏名称'); return; }
+        var exeChanged = propExe && propExe !== lo.exe;
         if (propExe) lo.exe = propExe; // 本次重新选择了主程序
         if (!lo.exe) { toast('请选择游戏主程序'); return; }
         var pf = pfLinesParse($('gsPropPfEdit').value);
@@ -3230,10 +3294,12 @@
         lo.name = nm;
         lo.args = String($('gsPropArgs').value || '').trim();
         lo.portForwards = pf.rules; // 空数组=不开启转发（与「留空」语义一致）
+        if (exeChanged) lo.icon = ''; // 主程序变更：旧图标作废，异步重取（失败回退首字母占位）
         localGamesSave();
         delete localItemCache[propLid]; // 名称/路径可变：伪条目缓存失效，强制侧栏行重建（引用变化触发 libPager 全量重绘）
         $('gsPropMask').classList.add('hidden');
         renderLibrary();
+        if (exeChanged) localIconFetch(propLid).then(function (okr) { if (okr) renderLibrary(); });
     }
     $('gsPropName').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
     $('gsPropPfEdit').addEventListener('keydown', function (e) { e.stopPropagation(); });
@@ -4991,7 +5057,7 @@
             Object.keys(state.localLib).forEach(function (lid) {
                 var lo = state.localLib[lid];
                 if (!lo || !lo.exe) return;
-                out.push({ id: lid, name: lo.name || lid, exe: lo.exe });
+                out.push({ id: lid, name: lo.name || lid, exe: lo.exe, icon: lo.icon || '' }); // icon 供建房选游戏器/菜单显示
             });
         } catch (err) { out = []; }
         return out;
@@ -5038,6 +5104,7 @@
 
     showView('store');
     localGamesLoad(); // 本地游戏入 state（库列表合并渲染依赖；仅本机 localStorage，不发网络请求）
+    localIconsBackfill(); // 老条目缺 exe 图标时批量回填（PC 端；WEB/旧版客户端静默跳过）
     // 「＋ 添加本地游戏」入口（Steam「添加非 Steam 游戏」同款；仅 PC 端，WEB 端无进程启动能力隐藏）
     (function () {
         var addBtn = $('gsLibAddLocal');

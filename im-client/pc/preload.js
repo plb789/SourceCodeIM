@@ -960,6 +960,10 @@ contextBridge.exposeInMainWorld('desktop', {
     localGameLaunch: function (payload) {
         return ipcRenderer.invoke('local-game:launch', payload);
     },
+    // 读取本地游戏 exe 图标 → Promise<{ok, dataUrl?/error?}>（app.getFileIcon 48x48 PNG dataURL）
+    localGameGetIcon: function (exe) {
+        return ipcRenderer.invoke('local-game:get-icon', { exe: exe });
+    },
     // 本地游戏运行态查询 → Promise<[{id, startedAt}]>
     localGameRunningList: function () {
         return ipcRenderer.invoke('local-game:running-list');
