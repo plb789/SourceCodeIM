@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=25'); // v25：建房选游戏自动探测改为仅游戏进程口径（零命中不弹全量端口窗，手动点击保留全量）
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=26'); // v26：本地游戏属性与商店游戏统一为 Steam 同款分栏弹窗（名称/转发可编辑，无云存档分栏）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {

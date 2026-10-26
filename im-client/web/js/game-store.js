@@ -3078,6 +3078,16 @@
         return out;
     }
 
+    // 本地游戏启动参数：属性「启动选项」模板 → 数组（与商店游戏同口径占位符替换；
+    // 本地游戏无账号专属密码，{1} 替换为空串）
+    function buildLocalArgs(lo) {
+        var tpl = String((lo && lo.args) || '').trim();
+        if (!tpl) return [];
+        return splitLaunchArgs(tpl).map(function (p) {
+            return p.replace(/\{0\}/g, String(username || '')).replace(/\{1\}/g, '');
+        });
+    }
+
     // 复制到剪贴板（优先 Clipboard API；不可用时回退临时 textarea + execCommand）
     function copyText(text) {
         text = String(text || '');
@@ -3148,6 +3158,7 @@
         if (!DESKTOP || !DESKTOP.localGameLaunch) { toast('请在 PC 客户端中操作'); return; }
         DESKTOP.localGameLaunch({
             id: lid, exe: lo.exe,
+            args: buildLocalArgs(lo), // 启动参数（属性「启动选项」模板，占位符已替换为实际值）
             portForwards: parsePortForwards(lo.portForwards), // 本地游戏属性配置的转发规则
             gateway: state.gateway // 远程加密网关配置（gw 规则经网关加密透传）
         }).then(function (r) {
@@ -3183,47 +3194,59 @@
         }, true);
     }
 
-    // 本地游戏属性弹窗：改名 + 更换启动路径（浏览走主进程文件选择对话框）+ 端口透传转发规则
-    var lpropId = '', lpropExe = '';
+    // 本地游戏属性弹窗：与商店游戏共用 Steam 同款分栏弹窗（gsPropMask），通用分栏多出
+    // 可编辑「名称」与「端口转发」，云存档分栏隐藏（本地游戏数据仅存本机，无云存档）
     function openLocalPropModal(lid) {
         var lo = state.localLib[lid];
         if (!lo) return;
-        lpropId = lid; lpropExe = lo.exe;
-        $('gsLPropName').value = lo.name || '';
-        $('gsLPropExe').textContent = lpropExe;
-        $('gsLPropPf').value = pfRulesToText(lo.portForwards); // 转发规则回填（行文本）
-        $('gsLocalPropMask').classList.remove('hidden');
+        propLid = lid; propGid = 0; propExe = '';
+        $('gsPropTitle').textContent = (lo.name || '本地游戏') + ' · 属性';
+        $('gsPropNameRow').classList.remove('hidden');
+        $('gsPropName').value = lo.name || '';
+        $('gsPropDir').textContent = lo.exe ? String(lo.exe).replace(/[\\/][^\\/]*$/, '') : '未设置';
+        $('gsPropPfRow').classList.add('hidden'); // 商店只读展示切换为可编辑规则
+        $('gsPropPfEditRow').classList.remove('hidden');
+        $('gsPropPfEdit').value = pfRulesToText(lo.portForwards); // 转发规则回填（行文本）
+        $('gsPropPfHint').classList.remove('hidden');
+        $('gsPropExeHint').textContent = '“用默认”=清除本次选择，回退当前保存的启动路径';
+        $('gsPropArgs').value = lo.args || '';
+        $('gsPropArgs').placeholder = '自定义启动参数（留空则不带参数启动）。支持占位符：{0}=登录账号，{1}=账号专属密码';
+        refreshPropExe();
+        $('gsPropSaveSec').classList.add('hidden'); // 本地游戏无云存档：隐藏分栏按钮 + 内容区
+        $('gsPropNavCloud').classList.add('hidden');
+        $('gsPropMask').classList.remove('hidden');
+        showPropPane('general'); // 每次打开归位到「通用」分栏
     }
-    $('gsLPropName').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
-    $('gsLPropPf').addEventListener('keydown', function (e) { e.stopPropagation(); });
-    $('gsLPropPick').addEventListener('click', function () {
-        if (!DESKTOP || !DESKTOP.gameChooseGameExe) { toast('请在 PC 客户端中操作'); return; }
-        DESKTOP.gameChooseGameExe().then(function (rr) {
-            if (!rr || rr.canceled || !rr.filePath) return;
-            lpropExe = rr.filePath;
-            $('gsLPropExe').textContent = lpropExe;
-        });
-    });
-    $('gsLPropCancel').addEventListener('click', function () { $('gsLocalPropMask').classList.add('hidden'); });
-    $('gsLPropSave').addEventListener('click', function () {
-        var lo = state.localLib[lpropId];
-        if (!lo) { $('gsLocalPropMask').classList.add('hidden'); return; }
-        var nm = ($('gsLPropName').value || '').trim();
+    // 本地游戏属性保存：名称/主程序/启动参数/转发规则 → localStorage；args 为原始模板（启动时替换占位符）
+    function saveLocalProp() {
+        var lo = state.localLib[propLid];
+        if (!lo) { $('gsPropMask').classList.add('hidden'); return; }
+        var nm = ($('gsPropName').value || '').trim();
         if (!nm) { toast('请填写游戏名称'); return; }
-        if (!lpropExe) { toast('请选择游戏主程序'); return; }
-        // 端口透传转发规则：行文本 → 结构化数组（任一行非法 toast 提示并中止保存）
-        var pf = pfLinesParse($('gsLPropPf').value);
+        if (propExe) lo.exe = propExe; // 本次重新选择了主程序
+        if (!lo.exe) { toast('请选择游戏主程序'); return; }
+        var pf = pfLinesParse($('gsPropPfEdit').value);
         if (pf.err) { toast(pf.err); return; }
-        lo.name = nm; lo.exe = lpropExe;
+        lo.name = nm;
+        lo.args = String($('gsPropArgs').value || '').trim();
         lo.portForwards = pf.rules; // 空数组=不开启转发（与「留空」语义一致）
         localGamesSave();
-        $('gsLocalPropMask').classList.add('hidden');
+        delete localItemCache[propLid]; // 名称/路径可变：伪条目缓存失效，强制侧栏行重建（引用变化触发 libPager 全量重绘）
+        $('gsPropMask').classList.add('hidden');
         renderLibrary();
-    });
+    }
+    $('gsPropName').addEventListener('keydown', function (e) { e.stopPropagation(); }); // 防输入被全局快捷键吞
+    $('gsPropPfEdit').addEventListener('keydown', function (e) { e.stopPropagation(); });
 
-    // ==================== 游戏属性弹窗（自定义启动参数 + 主程序路径覆盖） ====================
-    var propGid = 0, propExe = '';
+    // ==================== 游戏属性弹窗（商店游戏与本地游戏共用；自定义启动参数 + 主程序路径覆盖） ====================
+    // propGid>0 = 商店游戏模式；propLid 非空 = 本地游戏模式（通用分栏多名称/可编辑转发，无云存档）
+    var propGid = 0, propLid = '', propExe = '';
     function refreshPropExe() {
+        if (propLid) { // 本地游戏：启动程序=属性保存的路径（本次重选则先显示新选路径）
+            var lo = state.localLib[propLid] || {};
+            $('gsPropExe').textContent = propExe || lo.exe || '未设置';
+            return;
+        }
         var g = state.games[propGid] || {};
         if (propExe) $('gsPropExe').textContent = propExe;
         else if (g.launch_exe) $('gsPropExe').textContent = '游戏默认：' + g.launch_exe;
@@ -3234,8 +3257,15 @@
         if (!gid) return;
         var g = state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {};
         var lib = state.lib[gid] && state.lib[gid].lib;
-        propGid = gid; propExe = '';
+        propGid = gid; propLid = ''; propExe = '';
         $('gsPropTitle').textContent = (g.name || ('游戏 #' + gid)) + ' · 属性';
+        // 复位本地游戏专属行（名称/可编辑转发/提示）：商店模式只读展示端口转发、无名称编辑
+        $('gsPropNameRow').classList.add('hidden');
+        $('gsPropPfRow').classList.remove('hidden');
+        $('gsPropPfEditRow').classList.add('hidden');
+        $('gsPropPfHint').classList.add('hidden');
+        $('gsPropExeHint').textContent = '“用默认”=清除自定义主程序，回退游戏默认/自动探测';
+        $('gsPropArgs').placeholder = '自定义启动参数（留空则用游戏默认）。支持占位符：{0}=登录账号，{1}=账号专属密码';
         $('gsPropDir').textContent = (lib && lib.install_path) || '未安装';
         $('gsPropArgs').value = '';
         // 端口透传转发（管理端配置，只读展示；本地游戏才可编辑自己的规则）
@@ -3284,6 +3314,7 @@
     $('gsPropClearExe').addEventListener('click', function () { propExe = ''; refreshPropExe(); });
     $('gsPropCancel').addEventListener('click', function () { $('gsPropMask').classList.add('hidden'); });
     $('gsPropSave').addEventListener('click', function () {
+        if (propLid) { saveLocalProp(); return; } // 本地游戏模式：存 localStorage（名称/主程序/参数/转发）
         if (!propGid) return;
         if (!DESKTOP || !DESKTOP.gameSetLaunchOptions) { toast('请在 PC 客户端中操作'); return; }
         var args = $('gsPropArgs').value.trim();
