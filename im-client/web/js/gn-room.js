@@ -946,6 +946,8 @@
         return null;
     }
     function renderGameOptions() {
+        // 上次选中记忆（本机 localStorage）：窗体重开/页面刷新后带出上次所选（下方自愈仍校验有效性）
+        try { var savedVal = localStorage.getItem('gn_gsel_val'); if (savedVal) gnGameValCur = savedVal; } catch (e) { }
         games = (typeof window.GSOnlineGames === 'function') ? (window.GSOnlineGames() || []) : [];
         gnGameItems = [
             { val: '0', name: T('不指定（虚拟网卡）'), cover: '' },
@@ -956,9 +958,11 @@
         // 选中后等同「不指定（虚拟网卡）」（服务端无此应用配置，显式声明 supernode），开局直接用其 exe 启动
         var locals = (typeof window.GSLocalGames === 'function') ? (window.GSLocalGames() || []) : [];
         locals.forEach(function (l_) { gnGameItems.push({ val: l_.id, name: l_.name, cover: l_.icon || '', exe: l_.exe, local: true }); });
-        // 选中值失效自愈（游戏卸载/库刷新后 id 不存在）：回落默认「不指定（虚拟网卡）」
+        // 选中值失效自愈（游戏卸载/库刷新后 id 不存在）：回落默认「不指定（虚拟网卡）」。
+        // 仅在库数据已到达（games 非空）时才判定缺失——刚进大厅库接口未返回的间隙 games 为空，
+        // 此时保留选中（多为仍有效的上次选择），防"每次打开建房弹窗都被清回虚拟网卡"
         var still = gnGameItems.some(function (it) { return it.val === gnGameValCur; });
-        if (!still) gnGameValCur = '0';
+        if (!still && games.length) gnGameValCur = '0';
         gnGselSyncToggle();
         gnGselOpen(false);
         gnGselRender();
@@ -1043,10 +1047,14 @@
         if (gnGameValCur !== val) {
             gnGameValCur = val;
             gnGselSyncToggle();
+            // 选中即同步列表 ✓ 位置（此前仅在开面板/搜索时渲染——重开面板 ✓ 停留在旧项，
+            // 视觉上"明明选了游戏、再展开却在虚拟网卡上"）
+            gnGselRender();
             gnSyncNetMode(); // 选中变化：联机方式/端口行/启动路径行随应用带出刷新（原 select change 同语义）
             // 功能二期保留：选联机游戏后自动探测该游戏进程监听端口（游戏已在跑则直接预填）；
             // 「不指定」两类（虚拟网卡/通用端口隧道）无游戏进程可探测，不触发（避免全端口误推荐）
             if (val !== '0' && val !== '0-tunnel' && gnNetModeSel() !== 'supernode') portDetect(false);
+            try { localStorage.setItem('gn_gsel_val', val); } catch (e) { } // 选中记忆（本机）：窗体重开/刷新后带出
         }
         gnGselOpen(false);
     }
@@ -1639,6 +1647,7 @@
         if (mGselValCur !== val) {
             mGselValCur = val;
             mGselSyncToggle();
+            mGselRender(); // 选中即同步列表 ✓ 位置（与建房 gnGselSelect 同口径，防重开面板 ✓ 停留旧项）
         }
         mGselOpen(false);
     }
