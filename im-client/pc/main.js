@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=28'); // v28：本地游戏详情页 hero 图标模糊铺底+居中图标、右键菜单带游戏图标头、建房选游戏器显示本地游戏图标
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=29'); // v29：云存档来源标签「内置兜底」改「内置」，留空提示简化为「留空=默认」
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {

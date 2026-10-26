@@ -3357,7 +3357,7 @@
                                 <button class="gs-save-slotbtn" id="gsPropSaveSlotBtn" type="button">default <svg viewBox="0 0 24 24" width="11" height="11"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 9l6 6 6-6"/></svg></button>
                             </div>
                             <div class="gs-save-preview" id="gsPropSavePreview"></div>
-                            <div class="gs-save-lbl">存档路径模式（每行一个；留空=用管理端默认/内置兜底）</div>
+                            <div class="gs-save-lbl">存档路径模式（每行一个；留空=默认）</div>
                             <textarea class="gs-rev-input gs-save-input" id="gsPropSavePaths" maxlength="2048" placeholder="例如：%USERPROFILE%\Documents\My Games\Game\**；填目录名不加通配符=整目录递归；支持 %USERPROFILE% 等变量；路径含空格无影响"></textarea>
                             <div class="gs-save-lbl">排除模式（每行一个，支持 * ? **）</div>
                             <textarea class="gs-rev-input gs-save-input gs-save-input-sm" id="gsPropSaveExclude" maxlength="2048" placeholder="例如：*.log"></textarea>
@@ -3448,7 +3448,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=60"></script>
+    <script src="js/game-store.js?v=61"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

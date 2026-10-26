@@ -3420,7 +3420,7 @@
         return p;
     }
 
-    var SAVE_SRC_TEXT = { user: '我的覆盖', admin: '管理端默认', builtin: '内置兜底' };
+    var SAVE_SRC_TEXT = { user: '我的覆盖', admin: '管理端默认', builtin: '内置' };
 
     // 生效路径明细渲染（来源标签 + 生效目录 + 是否存在/越界）；列表内不滚动，超 8 条折叠计数
     function renderSavePreview(modes) {
