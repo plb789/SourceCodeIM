@@ -2812,12 +2812,19 @@
 
         .gs-disk-free.lack { color: var(--danger, #fa5151); }
 
-        /* ===== 游戏中心设置弹窗（一期：下载目录；值文本允许复制） ===== */
+        /* ===== 游戏中心设置弹窗（Steam 属性弹窗同款左导航分栏；值文本允许复制） =====
+           弹窗骨架复用 .gs-prop-modal 左导航布局，仅收窄宽度（内容比属性弹窗少） */
+        .gs-prop-modal.gs-set-modal { width: 560px; }
         .gs-set-row { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; text-align: left; }
 
         .gs-set-label { font-size: 12px; color: var(--text-light); }
 
         .gs-set-value { font-size: 12px; line-height: 1.5; color: var(--text-secondary); word-break: break-all; user-select: text; }
+
+        /* 分栏首元素去顶边距（.gs-set-row 自带 margin-top，卡片自带外距） */
+        .gs-set-row-first, .gs-set-card-first { margin-top: 0; }
+        /* 游戏分栏复用主设置页 .settings-card（全局样式表自带），分栏内收紧卡片间距 */
+        .gs-set-modal .settings-card + .settings-card { margin-top: 8px; }
 
         /* ===== 头像悬停资料卡（主题色气泡：主色描边/悬停反馈，与全局黑灰 data-tip 区分） ===== */
         .gs-user-card {
@@ -3229,16 +3236,82 @@
         </div>
     </div>
 
-    <!-- 游戏中心设置弹窗（一期：下载目录查看/更改；其余项二期扩展） -->
+    <!-- 游戏中心设置弹窗（Steam 属性弹窗同款左导航分栏）：「下载」=下载目录查看/更改；
+         「游戏」=游戏内面板设置（原主客户端设置页「游戏」分类迁入，PC 端专属，WEB 端隐藏入口） -->
     <div class="gs-modal-mask hidden" id="gsSetMask">
-        <div class="gs-modal">
+        <div class="gs-modal gs-prop-modal gs-set-modal">
             <div class="gs-modal-title">设置</div>
-            <div class="gs-set-row">
-                <span class="gs-set-label">下载目录</span>
-                <span class="gs-set-value" id="gsSetDir">—</span>
+            <div class="gs-prop-body">
+                <!-- 左侧分栏导航（复用属性弹窗 .gs-prop-navitem：选中态主题色高亮） -->
+                <div class="gs-prop-nav" id="gsSetNav">
+                    <button class="gs-prop-navitem active" data-pane="download" type="button">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v8.59l3.3-3.3a1 1 0 0 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V4a1 1 0 0 1 1-1zM5 19a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1z"/></svg>
+                        <span>下载</span>
+                    </button>
+                    <!-- 游戏内面板分栏：仅 PC 端显示（game-store.js 按 DESKTOP.overlaySettingsGet 显隐） -->
+                    <button class="gs-prop-navitem" data-pane="game" id="gsSetNavGame" type="button">
+                        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 6h10a5 5 0 0 1 5 5v3a3 3 0 0 1-5.6 1.5L15 13H9l-1.4 2.5A3 3 0 0 1 2 14v-3a5 5 0 0 1 5-5zm1 3v1H7v2h1v1h2v-1h1v-2h-1V9H8zm8.5 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-2.5 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
+                        <span>游戏</span>
+                    </button>
+                </div>
+                <!-- 右侧内容区（可滚动，走全站自绘悬浮滑块 .osb-thumb） -->
+                <div class="gs-prop-panes gs-scroll" id="gsSetPanes">
+                    <!-- 下载分栏：下载目录（安装根，非游戏目录）查看/更改 -->
+                    <div class="gs-prop-pane" id="gsSetPaneDownload">
+                        <div class="gs-set-row gs-set-row-first">
+                            <span class="gs-set-label">下载目录</span>
+                            <span class="gs-set-value" id="gsSetDir">—</span>
+                        </div>
+                        <div class="gs-prop-hint">新安装的游戏默认下载到所选磁盘的 CdonlgameApp 文件夹；更改仅影响之后的安装，已装游戏不受影响。</div>
+                        <div class="gs-prop-btns">
+                            <button class="gs-btn" id="gsSetChange" type="button">更改</button>
+                        </div>
+                    </div>
+                    <!-- 游戏分栏：游戏内面板设置（原主客户端设置页「游戏」分类整体迁入；仅 PC 客户端生效） -->
+                    <div class="gs-prop-pane hidden" id="gsSetPaneGame">
+                        <div class="settings-card gs-set-card-first">
+                            <div class="settings-switch-row">
+                                <div class="settings-card-head-text">
+                                    <div class="settings-card-title">游戏内面板（Shift+Tab）</div>
+                                    <div class="settings-card-desc">从客户端启动游戏后，游戏内按热键呼出好友/大厅面板：好友私聊、房间邀请、大厅聊天；再按收起并回到游戏。独占全屏游戏需切换为无边框全屏或窗口化方可显示。</div>
+                                </div>
+                                <input id="gsSetOverlayEnable" type="checkbox" class="slide-switch" checked>
+                            </div>
+                        </div>
+                        <div class="settings-card">
+                            <div class="settings-switch-row">
+                                <div class="settings-card-head-text">
+                                    <div class="settings-card-title">游戏内通知</div>
+                                    <div class="settings-card-desc">游戏中收到好友消息或联机邀请时，游戏右下角弹出通知（头像+内容），点击直达聊天或房间；面板打开期间不重复弹。</div>
+                                </div>
+                                <input id="gsSetOverlayNotify" type="checkbox" class="slide-switch" checked>
+                            </div>
+                        </div>
+                        <div class="settings-card">
+                            <div class="settings-switch-row">
+                                <div class="settings-card-head-text">
+                                    <div class="settings-card-title">游戏帧内渲染（实验）</div>
+                                    <div class="settings-card-desc">从客户端启动游戏时向游戏进程注入渲染面板（Steam 同款体验：面板与游戏同帧、游戏中可直接打字聊天）。部分游戏可能不兼容，注入失败将自动回退为悬浮窗面板。</div>
+                                </div>
+                                <input id="gsSetOverlayNative" type="checkbox" class="slide-switch">
+                            </div>
+                        </div>
+                        <div class="settings-card">
+                            <div class="settings-card-row">
+                                <span class="settings-card-label">呼出热键</span>
+                                <span id="gsSetOverlayHotkey" class="settings-card-value">Shift+Tab</span>
+                            </div>
+                            <div class="settings-disk-path" id="gsSetOverlayHotkeyEdit" style="display:none;">
+                                <input id="gsSetOverlayHotkeyInput" type="text" class="settings-hotkey-input" maxlength="32" placeholder="按下组合键自动录入，如 Ctrl+Tab" readonly>
+                                <button id="gsSetOverlayHotkeySave" class="settings-disk-path-btn">保存</button>
+                            </div>
+                            <p class="settings-desc">热键仅在游戏运行期间生效，不影响日常使用；若与其他软件冲突可在此修改。</p>
+                            <button id="gsSetOverlayHotkeyBtn" class="settings-btn">修改热键</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="gs-modal-btns">
-                <button class="gs-btn" id="gsSetChange">更改</button>
                 <button class="gs-btn primary" id="gsSetClose">关闭</button>
             </div>
         </div>
@@ -3448,7 +3521,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=61"></script>
+    <script src="js/game-store.js?v=62"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

@@ -2871,21 +2871,51 @@
         diskPickOkCb = null;
     });
 
-    // ==================== 游戏中心设置（一期：下载目录查看/更改；其余项二期扩展） ====================
-    // 当前下载目录展示口径：已有安装记录取其 install_path，否则取上次选盘记忆推导
+    // ==================== 游戏中心设置（左导航分栏：「下载」下载目录 +「游戏」游戏内面板） ====================
+    // 当前下载目录展示口径：优先取上次选盘记忆（<盘>/CdonlgameApp 安装根）；无记忆时从已有
+    // 安装记录的 install_path 定位安装根——install_path 是游戏根（<安装根>/<slug>，如
+    // H:\CdonlgameApp\War3），不能直接展示（用户反馈：没选 War3 目录却显示成 War3，误以为选错）
     function gsInstallRootText() {
+        try {
+            var d = localStorage.getItem('gs_install_disk') || '';
+            if (d) return (/[\\/]$/.test(d) ? d : d + '\\') + GS_INSTALL_DIRNAME; // 盘符记忆无尾反斜杠（如 'H:'），补齐后拼接
+        } catch (e) { /* 忽略 */ }
         for (var gid in state.lib) {
             var lib = state.lib[gid] && state.lib[gid].lib;
-            if (lib && lib.install_path) return lib.install_path;
+            var p = (lib && lib.install_path) || '';
+            if (!p) continue;
+            var sep = p.indexOf('\\') >= 0 ? '\\' : '/';
+            var marker = sep + GS_INSTALL_DIRNAME;
+            var m = p.indexOf(marker);
+            if (m >= 0) return p.slice(0, m + marker.length); // 截到首个安装根段末尾
+            return p; // 路径不含安装根名（异常/旧数据）：原样展示
         }
-        var d = '';
-        try { d = localStorage.getItem('gs_install_disk') || ''; } catch (e) { /* 忽略 */ }
-        return d ? d + GS_INSTALL_DIRNAME : '';
+        return '';
     }
 
+    // 左侧分栏切换（复用属性弹窗 showPropPane 同款：高亮左项 + 显隐右栏 + 回顶刷新自绘悬浮滑块）
+    function showGsSetPane(name) {
+        var items = $('gsSetNav').querySelectorAll('.gs-prop-navitem');
+        for (var i = 0; i < items.length; i++) {
+            items[i].classList.toggle('active', items[i].getAttribute('data-pane') === name);
+        }
+        $('gsSetPaneDownload').classList.toggle('hidden', name !== 'download');
+        $('gsSetPaneGame').classList.toggle('hidden', name !== 'game');
+        $('gsSetPanes').scrollTop = 0; // 切分栏回到顶部（分栏内容各自独立阅读）
+        osbTick($('gsSetPanes'), 300);
+    }
+    (function () {
+        var items = $('gsSetNav').querySelectorAll('.gs-prop-navitem');
+        for (var i = 0; i < items.length; i++) {
+            items[i].addEventListener('click', function () {
+                showGsSetPane(this.getAttribute('data-pane'));
+            });
+        }
+    })();
+
     function openGsSettings() {
-        var dirText = gsInstallRootText();
-        $('gsSetDir').textContent = dirText || '尚未选择（首次安装时选择安装位置）';
+        showGsSetPane('download'); // 每次打开回到「下载」分栏
+        $('gsSetDir').textContent = gsInstallRootText() || '尚未选择（首次安装时选择安装位置）';
         $('gsSetMask').classList.remove('hidden');
     }
 
@@ -2900,6 +2930,94 @@
     $('gsSetClose').addEventListener('click', function () {
         $('gsSetMask').classList.add('hidden');
     });
+
+    // 游戏分栏：游戏内面板设置（原主客户端设置页「游戏」分类整体迁入；docs/游戏内Overlay功能技术设计.md §P3）。
+    // 仅 PC 客户端显示（无 desktop 桥的 WEB 端隐藏分栏入口——热键/置顶窗是主进程能力）；
+    // 开关与热键经主进程 overlay:settings-* 归口（即时重注册热键 + userData 落盘，免重启生效）
+    (function initGsOverlaySettings() {
+        var navBtn = $('gsSetNavGame');
+        if (!navBtn) return;
+        if (!DESKTOP || !DESKTOP.overlaySettingsGet || !DESKTOP.overlaySettingsSet) {
+            navBtn.classList.add('hidden'); // WEB 端隐藏「游戏」分栏
+            return;
+        }
+        var sEn = $('gsSetOverlayEnable');
+        var sNt = $('gsSetOverlayNotify');
+        var sNa = $('gsSetOverlayNative'); // 二期：游戏帧内渲染（实验）
+        var sHk = $('gsSetOverlayHotkey');
+        var sHkBtn = $('gsSetOverlayHotkeyBtn');
+        var sHkEdit = $('gsSetOverlayHotkeyEdit');
+        var sHkInput = $('gsSetOverlayHotkeyInput');
+        var sHkSave = $('gsSetOverlayHotkeySave');
+        DESKTOP.overlaySettingsGet().then(function (s) {
+            if (!s) return;
+            if (s.supported === false) { navBtn.classList.add('hidden'); return; } // WIN7 等不支持端：主进程裁决，隐藏分栏
+            if (sEn) sEn.checked = !!s.enabled;
+            if (sNt) sNt.checked = s.notify !== false;
+            if (sNa) sNa.checked = !!s.native;
+            if (sHk) sHk.textContent = s.hotkey || 'Shift+Tab';
+        }).catch(function () { });
+        if (sEn) sEn.addEventListener('change', function () {
+            DESKTOP.overlaySettingsSet({ enabled: sEn.checked });
+            toast(sEn.checked ? '已开启游戏内面板' : '已关闭游戏内面板');
+        });
+        if (sNt) sNt.addEventListener('change', function () {
+            DESKTOP.overlaySettingsSet({ notify: sNt.checked });
+            toast(sNt.checked ? '已开启游戏内通知' : '已关闭游戏内通知');
+        });
+        if (sNa) sNa.addEventListener('change', function () {
+            DESKTOP.overlaySettingsSet({ native: sNa.checked }); // 二期：下一次启动游戏生效（注入链在启动处读取）
+            toast(sNa.checked
+                ? '已开启游戏帧内渲染：下一次启动游戏生效'
+                : '已关闭游戏帧内渲染，将使用悬浮窗面板');
+        });
+        if (sHkBtn) sHkBtn.addEventListener('click', function () {
+            var show = sHkEdit.style.display === 'none';
+            sHkEdit.style.display = show ? '' : 'none';
+            if (show && sHkInput) {
+                sHkInput.value = sHk.textContent || '';
+                sHkInput.focus(); // 微信/QQ 同款：进入编辑即待捕获，直接按组合键录入
+            }
+        });
+        // 组合键捕获（微信/QQ 同款）：按下即把 Ctrl/Shift/Alt + 主键组合显示进框，Enter 保存 / Esc 取消 / 失焦自动保存
+        function hkKeyLabel(e) {
+            var k = e.key;
+            if (k === ' ' || k === 'Spacebar') return 'Space';
+            if (k.length === 1) return k.toUpperCase(); // 字母/数字统一大写（globalShortcut 口径）
+            if (/^F\d{1,2}$/.test(k) || 'Tab,Home,End,PageUp,PageDown,Insert,Delete,Up,Down,Left,Right'.indexOf(k) >= 0) return k;
+            return ''; // 修饰键单按/其他系统键不作为主键
+        }
+        function hkCombo(e) {
+            var main = hkKeyLabel(e);
+            if (!main) return '';
+            var parts = [];
+            if (e.ctrlKey) parts.push('Ctrl');
+            if (e.shiftKey) parts.push('Shift');
+            if (e.altKey) parts.push('Alt');
+            parts.push(main);
+            return parts.join('+');
+        }
+        if (sHkSave) sHkSave.addEventListener('click', function () {
+            var v = (sHkInput.value || '').replace(/^\s+|\s+$/g, '');
+            if (!v) { toast('热键不能为空'); return; }
+            DESKTOP.overlaySettingsSet({ hotkey: v });
+            if (sHk) sHk.textContent = v;
+            sHkEdit.style.display = 'none';
+            toast('热键已更新：' + v);
+        });
+        if (sHkInput) sHkInput.addEventListener('keydown', function (e) {
+            e.preventDefault(); // 捕获态吞掉一切按键（防 Tab 走焦点/Esc 关页）
+            e.stopPropagation();
+            if (e.key === 'Escape') { sHkInput.value = sHk.textContent || ''; sHkInput.blur(); return; } // 取消
+            if (e.key === 'Enter') { if (sHkSave) sHkSave.click(); return; } // 确认
+            var c = hkCombo(e);
+            if (c) sHkInput.value = c; // 实时显示组合（未含主键的修饰单按不更新）
+        });
+        if (sHkInput) sHkInput.addEventListener('blur', function () {
+            // 失焦自动保存（微信风格）：框内有新组合即生效
+            if (sHkSave && sHkInput.value && sHkInput.value !== (sHk.textContent || '')) sHkSave.click();
+        });
+    })();
 
     // ==================== 头像悬停资料卡（主题色气泡：延时出现、鼠标可移入操作） ====================
     (function () {
@@ -5017,6 +5135,7 @@
     osbInit($('gsSlotList'));
     osbInit($('gsHistList'));
     osbInit($('gsPropPanes')); // 属性弹窗右侧分栏内容区（超高时内部滚动）
+    osbInit($('gsSetPanes')); // 设置弹窗右侧分栏内容区（游戏分栏卡片较多，超高时内部滚动）
 
     // ===== 阶段二百九十二 M8：联机大厅页签对外口（gn-room.js 在本窗运行，复用本窗既有能力）=====
     // 自绘悬浮滚动条 / Toast 归口：主窗口由 chat.js 暴露同名全局，游戏中心窗本页暴露，口径一致

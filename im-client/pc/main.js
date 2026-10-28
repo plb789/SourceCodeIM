@@ -1303,7 +1303,7 @@ function ensureGameStoreWindow() {
             nodeIntegration: false
         }
     });
-    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=29'); // v29：云存档来源标签「内置兜底」改「内置」，留空提示简化为「留空=默认」
+    gameStoreWin.loadURL(SERVER_URL + 'game-store.html?v=31'); // v31：热键设置改按键捕获录入（微信/QQ 同款，readonly 禁手输）
     // 最大化状态推送（自绘最大化/还原按钮图标跟随；系统级 Win+Up/拖顶最大化同样触发），
     // did-finish-load 推初始态（页面刷新/窗口复用重载后同步）
     var pushGameMaxState = function () {
@@ -1430,6 +1430,7 @@ function gnFromMain(e) { return mainWindow && !mainWindow.isDestroyed() && e.sen
 ipcMain.on('gn:signal-recv', function (e, msg) {
     if (!gnFromMain(e)) return;
     gnRelayBroadcast('gn:signal-in', msg || {});
+    gameOverlay.onGnSignal(msg || {}); // 二期 M2：109 房间信令 → 注入式面板房间快照节流刷新（触发器，不解析内容）
 });
 // 私聊/邀请镜像（悬浮窗聊天与邀请卡数据面）：主窗口 socket.js 转发 msg_type∈{1,111,好友上下线}
 // → 本进程 → 订阅窗广播（'gn:chat-in'）。服务端已回显发送方全连接（server.go L924-926），
@@ -1482,10 +1483,12 @@ ipcMain.handle('overlay:room-get', function () {
 ipcMain.on('overlay:room-reply', function (e, id, snap) {
     // 来源守卫（项目"只接受预期窗口来源"惯例）：快照应答仅接受游戏中心窗，防其他渲染进程伪造房间态
     if (!gameStoreWin || gameStoreWin.isDestroyed() || e.sender !== gameStoreWin.webContents) return;
+    gameOverlay.onRoomReply(id, snap); // 二期 M2：注入式面板的快照请求按 id 前缀 'or' 分流（无匹配即忽略）
     var r = overlayRoomPending[id];
     if (r) { delete overlayRoomPending[id]; r(snap || null); }
 });
-ipcMain.on('gn:contacts-reply', function (e, id, list) {
+ipcMain.on('gn:contacts-reply', function (e, id, list, u) {
+    gameOverlay.onContactsReply(id, list, u); // 二期 M1/M2：快照应答分流（'oc' 前缀）；u=本端账号（回显 self 判定）
     var r = gnContactsPending[id];
     if (r) { delete gnContactsPending[id]; r(Array.isArray(list) ? list : []); }
 });
@@ -1706,6 +1709,87 @@ function gameResolveLaunchExe(reg, gameId, data) {
     return null;
 }
 
+// ===== 二期注入式 Overlay：spawn 注入链（docs/游戏内Overlay二期注入式设计.md §3.3）=====
+// settings.native 开启（游戏中心-设置-游戏「游戏帧内渲染」，原主设置页「游戏」分类已迁入）且
+// overlay-native 二进制齐备时，游戏经
+// injector.exe --launch 包装启动：CREATE_SUSPENDED 建进程 → 注入 overlay_hook_x86.dll → resume
+// → 等待游戏退出（exit code 透传，主进程 exit/close 监听不变）。包装器把真实游戏 pid 以首行
+// "pid:<n>" 写 stdout，主进程异步回读后 gameOverlay.onGamePid 校正（pipe 名依赖真实 pid）。
+// 任一环节失败回退普通 spawn（一期悬浮窗口径）——注入失败不影响游戏启动（硬性边界）。
+var OV_NATIVE_BIN = null; // 惰性定位（M4）：打包态 resources/overlay-native/bin（extraResources 分发，惯例同 dlbt-host），开发态源码目录
+function ovNativeBinDir() {
+    if (OV_NATIVE_BIN) return OV_NATIVE_BIN;
+    OV_NATIVE_BIN = gameOverlay.nativeBinDir();
+    return OV_NATIVE_BIN;
+}
+// 读 PE 头 machine 字段：0=未知 0x14C=x86 0x8664=x64（e_lfanew 定位 COFF header）
+function peMachineOf(exe) {
+    try {
+        const fd = fs.openSync(exe, 'r');
+        const dos = Buffer.alloc(0x40);
+        fs.readSync(fd, dos, 0, 0x40, 0);
+        if (dos.length < 0x40 || dos.readUInt16LE(0) !== 0x5A4D) { fs.closeSync(fd); return 0; }
+        const eLfanew = dos.readUInt32LE(0x3c);
+        const coff = Buffer.alloc(6);
+        fs.readSync(fd, coff, 0, 6, eLfanew);
+        fs.closeSync(fd);
+        if (coff.readUInt32LE(0) !== 0x00004550) return 0; // 'PE\0\0'
+        return coff.readUInt16LE(4);
+    } catch (e) { return 0; }
+}
+function spawnGameChild(exe, args, cwd, extraOpts) {
+    var base = { cwd: cwd, detached: true, stdio: 'ignore' };
+    if (extraOpts) { for (var k in extraOpts) base[k] = extraOpts[k]; }
+    // M4 排障日志：注入链判定结果与原因（走兜底时可在客户端日志一眼定位是哪一关）
+    if (!gameOverlay.isNativeActive(exe)) {
+        gnLogWrite('[overlay] 注入链未启用（开关未开或游戏不在兼容名单）→ 悬浮窗形态: ' + exe);
+    } else if (!fs.existsSync(path.join(ovNativeBinDir(), 'injector.exe'))) {
+        gnLogWrite('[overlay] 注入组件缺失（injector.exe）→ 悬浮窗形态');
+    } else if (!fs.existsSync(path.join(ovNativeBinDir(), 'overlay_hook_x86.dll'))) {
+        gnLogWrite('[overlay] 注入组件缺失（overlay_hook_x86.dll）→ 悬浮窗形态');
+    }
+    if (gameOverlay.isNativeActive(exe) // M4：native 开关 + 兼容名单按等级判定（名单内/全量模式才走注入链）
+        && fs.existsSync(path.join(ovNativeBinDir(), 'injector.exe'))
+        && fs.existsSync(path.join(ovNativeBinDir(), 'overlay_hook_x86.dll'))) {
+        // 按游戏位数选 helper 与 DLL：x64 游戏用 injector_x64.exe（x64 DLL 注入）；x86/未知用 x86 套件
+        // （对应套件缺失或位数判断失误时，injector --launch 自身会跳过注入照常 resume——降级安全）
+        var isX64 = peMachineOf(exe) === 0x8664;
+        var helper = isX64 ? 'injector_x64.exe' : 'injector.exe';
+        var dll = isX64 ? 'overlay_hook_x64.dll' : 'overlay_hook_x86.dll';
+        if (fs.existsSync(path.join(ovNativeBinDir(), helper)) && fs.existsSync(path.join(ovNativeBinDir(), dll))) {
+            try {
+                var child = spawn(path.join(ovNativeBinDir(), helper),
+                    ['--launch', exe, '--'].concat(args.map(String)),
+                    Object.assign({}, base, { stdio: ['ignore', 'pipe', 'ignore'] }));
+                return { child: child, native: true };
+            } catch (e) { /* 包装器 spawn 失败：回退普通启动 */ }
+        }
+    }
+    return { child: spawn(exe, args, base), native: false };
+}
+// 包装器模式：读首行 pid 后回调；超时/异常兜底 0（pipe 缺位只影响注入式面板，热键/悬浮窗不受影响）
+function ovReadGamePid(child, cb) {
+    var done = false;
+    var finish = function (pid) {
+        if (done) return;
+        done = true;
+        try { child.stdout.destroy(); } catch (e) { } // pid 已到手，释放管道不挂事件循环
+        cb(pid || 0);
+    };
+    var buf = '';
+    try {
+        child.stdout.on('data', function (d) {
+            buf += String(d || '');
+            var i = buf.indexOf('\n');
+            if (i < 0) return;
+            var m = buf.slice(0, i).trim().match(/^pid:(\d+)$/);
+            finish(m ? Number(m[1]) : 0);
+        });
+        child.stdout.on('error', function () { finish(0); });
+    } catch (e) { finish(0); }
+    setTimeout(function () { finish(0); }, 10000);
+}
+
 // 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
 // spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口。
 // 端口透传转发联动：管理端配置的 portForwards 规则在 spawn 前开启本机监听（任一失败中止启动——
@@ -1735,13 +1819,8 @@ ipcMain.handle('game:launch', async function (event, data) {
             if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
         }
         var cwd = r.installDir || path.dirname(r.exe);
-        var child;
-        try {
-            child = spawn(r.exe, args, { cwd: cwd, detached: true, stdio: 'ignore' });
-        } catch (spawnErr) {
-            if (pfRules.length) gameForward.stop(pfTag); // spawn 失败：联动收口已开启的转发
-            throw spawnErr;
-        }
+        var spawned = spawnGameChild(r.exe, args, cwd); // 二期：native 开启时经注入包装器启动（失败自动回退）
+        var child = spawned.child;
         var startedAt = Date.now();
         var info = { gameId: gameId, startedAt: startedAt };
         child.once('exit', function () {
@@ -1769,6 +1848,7 @@ ipcMain.handle('game:launch', async function (event, data) {
         child.unref();
         runningGames.set(gameId, { proc: child, startedAt: startedAt });
         gameOverlay.onGameStart(gameId, child.pid); // 游戏内 Overlay：热键联动开启（预注册 Shift+Tab + 悬浮窗预热）
+        if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid(gameId, pid); }); // 二期：真实游戏 pid 回读校正（pipe 名依赖）
         gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"
         return { ok: true, startedAt: startedAt };
     } catch (e) {
@@ -1859,13 +1939,8 @@ ipcMain.handle('local-game:launch', async function (event, data) {
             var pfRet = await gameForward.start(pfTag, pfRules, data && data.gateway);
             if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
         }
-        var child;
-        try {
-            child = spawn(exe, args, { cwd: path.dirname(exe), detached: true, stdio: 'ignore', windowsHide: true });
-        } catch (spawnErr) {
-            if (pfRules.length) gameForward.stop(pfTag); // spawn 失败：联动收口
-            throw spawnErr;
-        }
+        var spawned = spawnGameChild(exe, args, path.dirname(exe), { windowsHide: true }); // 二期：native 开启时经注入包装器启动（失败自动回退）
+        var child = spawned.child;
         var startedAt = Date.now();
         var info = { id: id, startedAt: startedAt };
         child.once('exit', function () {
@@ -1890,6 +1965,7 @@ ipcMain.handle('local-game:launch', async function (event, data) {
         child.unref();
         runningLocalGames.set(id, { proc: child, startedAt: startedAt });
         gameOverlay.onGameStart('local_' + id, child.pid); // 游戏内 Overlay：热键联动开启（本地游戏同口径）
+        if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid('local_' + id, pid); }); // 二期：真实游戏 pid 回读校正
         localGameBroadcast('local-game-start', info);
         return { ok: true, startedAt: startedAt };
     } catch (e) {
@@ -4725,7 +4801,9 @@ app.whenReady().then(async function () {
     gameOverlay.init({
         serverUrl: SERVER_URL,
         log: function (msg) { gnLogWrite(msg); },
-        onWindowCreated: function (win) { gnRelayAdd(win); } // 悬浮窗加入 gn 中继订阅表（§4.3 多订阅广播）
+        onWindowCreated: function (win) { gnRelayAdd(win); }, // 悬浮窗加入 gn 中继订阅表（§4.3 多订阅广播）
+        getMainWindow: function () { return mainWindow; }, // 二期 M1：overlay askContacts 向主窗口发 gn:contacts-need
+        getGameStoreWin: function () { return gameStoreWin; } // 二期 M2：房间快照查询（房间态唯一持有者）
     });
 
     // 阶段一百五十四：启动闪屏最先创建（早于 webCache 初始化与主窗口）——双击启动后最快露出

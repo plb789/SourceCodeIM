@@ -21,6 +21,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const net = require('net'); // 二期 M1：Named Pipe 服务端（DLL 注入式 Overlay 下行通道）
 const { execFile } = require('child_process');
 const { app, BrowserWindow, globalShortcut, screen, ipcMain } = require('electron');
 
@@ -34,7 +35,9 @@ function log(msg) { try { if (logger) logger(msg); } catch (e) { } }
 
 var overlayWin = null;          // 悬浮窗单例（close 仅 hide，app.isQuitting 才真销毁）
 var notifyWin = null;           // 通知小窗单例（Steam 式游戏内消息/邀请 toast，设计文档 §十）
-var settings = { enabled: true, notify: true, hotkey: 'Shift+Tab' }; // 持久化 userData/game-overlay.json
+var settings = { enabled: true, notify: true, native: false, hotkey: 'Shift+Tab' }; // 持久化 userData/game-overlay.json
+// native（二期 M2）：游戏帧内渲染开关（默认关）。开启后游戏启动经 injector --launch 包装注入
+// overlay_hook.dll（CREATE_SUSPENDED → 注入 → resume）；关闭=一期悬浮窗口径（零注入）。
 var hotkeyArmed = false;        // 游戏运行态（应注册热键）
 var hotkeyRegistered = false;   // globalShortcut 实际处于注册态（重注册/注销的判据；与 hotkeyOk 区分）
 var hotkeyOk = false;           // 最近一次注册成功与否（被占用时 false，仅告警一次）
@@ -51,6 +54,7 @@ function settingsLoad() {
         if (s && typeof s === 'object') {
             if (typeof s.enabled === 'boolean') settings.enabled = s.enabled;
             if (typeof s.notify === 'boolean') settings.notify = s.notify;
+            if (typeof s.native === 'boolean') settings.native = s.native;
             if (typeof s.hotkey === 'string' && s.hotkey.trim()) settings.hotkey = s.hotkey.trim();
         }
     } catch (e) { /* 首启无文件=默认值 */ }
@@ -150,8 +154,10 @@ function ensureNotifyWindow() {
 // 镜像冷启动缓存（main.js gn:chat-mirror 处调用）：通知页监听器注册前到达的消息先入队，
 // 页面就绪后按序补投（广播给未注册监听器的页面会被丢弃，缓存副本是唯一送达路径）
 function bufferChatMirror(msg) {
+    msg = msg || {};
+    pipeForwardMirror(msg); // 二期 M1：注入式 Overlay pipe 转发（私聊文本帧 / 93 触发快照刷新），先于冷启动缓存早退
     if (!notifyWin || notifyWin.isDestroyed() || notifyReady) return; // 无窗/已就绪：广播链路即正常送达
-    notifyBuf.push(msg || {});
+    notifyBuf.push(msg);
     if (notifyBuf.length > 20) notifyBuf.shift(); // 与 toast 堆叠上限同量级的防刷屏封顶
     if (!notifyFlushTimer) notifyFlushTimer = setInterval(flushNotifyBuf, 500); // 兜底轮询（did-finish-load 漏触发时自愈）
 }
@@ -294,6 +300,259 @@ function psForeground(pid) {
     runPs(script, function () { });
 }
 
+// ===== 二期注入式 Overlay：Named Pipe 服务端（docs/游戏内Overlay二期注入式设计.md M1）=====
+// 每个游戏实例一条 pipe（\\.\pipe\im-overlay-<pid>）：DLL 注入后主动连接（断线 3s 重连由 DLL 侧负责）。
+// 协议 = NDJSON（每行一帧）：
+//   下行（主进程→DLL）：{t:'hello-ack'} / {t:'friends',list:[{u,n,on}]} / {t:'msg',from,name,text}
+//   上行（DLL→主进程）：{t:'hello',pid}（M1 仅日志登记；面板事件上行属 M2）
+// DLL 零业务逻辑：好友/消息全部由主进程推帧，DLL 只画。数据源口径与一期悬浮窗一致
+// （好友快照 = 主窗口 IMContacts 唯一归口；消息 = gn:chat-in 镜像流语义复用）。
+var pipes = new Map();        // pid → { server, sock }（游戏运行期存活；退出即关，DLL 看门狗据此感知卸载）
+var ovContactsPending = {};   // 好友快照在途表（'oc' 前缀与 main.js gn:contacts-get 的 'c' 前缀隔离）
+var contactsCache = [];       // 最近一次好友快照 [{username,name,online}]（连接建立/变化时推送）
+var contactsReqTimer = null;  // 快照刷新节流（93 在线增量可能连发，1.5s 合并一次）
+var selfUname = '';           // 本端账号（contacts 应答顺带捎回；DLL 回显消息 self 判定用）
+var getGameStoreWin = null;   // init 注入：游戏中心窗引用（M2 房间快照查询，房间态唯一持有者）
+var ovRoomPending = {};       // 房间快照在途表（'or' 前缀，与 main.js overlay:room-get 的 'r' 隔离）
+var roomReqTimer = null;      // 房间快照刷新节流（109 信令连发合并，1s 一次）
+var nativePanelOpen = false;  // M4：DLL 注入式面板呼出中（上行 panel 帧）——面板期悬浮窗热键让位防叠加
+var nativePanelActive = false; // M4：帧内渲染生效（DLL 已连接）——Shift+Tab 全权归 DLL（globalShortcut 系统级
+                               // 先于游戏窗口 WndProc 拦截按键，若不注销，DLL 永远收不到热键、面板永远弹不出）
+// 热键归属切换：DLL 连上=让位（注销全局热键）；DLL 断开/初始化失败（nopanel）=收回（重注册，悬浮窗兜底恢复）
+function setNativePanelActive(v) {
+    if (nativePanelActive === v) return;
+    nativePanelActive = v;
+    if (v) {
+        if (hotkeyRegistered) { try { globalShortcut.unregister(settings.hotkey); } catch (e) { } hotkeyRegistered = false; }
+        // M5.5：帧内渲染生效期通知改由 DLL 帧内 toast 承接，屏外通知窗立即隐藏（避免跑游戏窗口外被任务栏遮挡）
+        if (notifyWin && !notifyWin.isDestroyed() && notifyWin.isVisible()) notifyWin.hide();
+        log('[overlay] 帧内渲染生效：Shift+Tab 归 DLL 面板（全局热键已注销）');
+    } else {
+        if (hotkeyArmed) registerHotkey();
+        log('[overlay] 帧内渲染失效：Shift+Tab 还给悬浮窗（全局热键已恢复）');
+    }
+}
+
+function pipeName(pid) { return '\\\\.\\pipe\\im-overlay-' + pid; }
+function pipeSend(sock, frame) {
+    if (!sock) return;
+    try { sock.write(JSON.stringify(frame) + '\n'); } catch (e) { log('[overlay] pipe 写帧失败: ' + e.message); }
+}
+function pipeBroadcast(frame) {
+    pipes.forEach(function (p) { if (p && p.sock) pipeSend(p.sock, frame); });
+}
+function friendsFrameList() {
+    return contactsCache.slice(0, 50).map(function (c) {
+        return { u: String(c.username || ''), n: String(c.name || c.username || ''), on: !!c.online };
+    });
+}
+// 好友快照请求（模式同 main.js gn:contacts-get：主窗口 IMContacts 应答；在途表 + 3s 超时自愈）
+function askContacts() {
+    var mw = getMainWindow ? getMainWindow() : null;
+    if (!mw || mw.isDestroyed()) return;
+    var id = 'oc' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    ovContactsPending[id] = true;
+    setTimeout(function () { delete ovContactsPending[id]; }, 3000);
+    try { mw.webContents.send('gn:contacts-need', id); } catch (e) { }
+}
+function askContactsThrottled() {
+    if (contactsReqTimer) return;
+    contactsReqTimer = setTimeout(function () { contactsReqTimer = null; askContacts(); }, 1500);
+}
+// main.js gn:contacts-reply 处调用（与 gn:contacts-get 共用一条应答通道，按 id 分流）；
+// u = 主窗口顺带捎回的本端账号（socket.js gnContactsReply 第三参，IMSocket.getUsername 兜底 im_auth）
+function onContactsReply(id, list, u) {
+    if (!ovContactsPending[id]) return;
+    delete ovContactsPending[id];
+    contactsCache = (Array.isArray(list) ? list : []).slice(0, 200).map(function (c) {
+        c = c || {};
+        return { username: String(c.username || ''), name: String(c.name || ''), online: !!c.online };
+    });
+    var newU = String(u || '');
+    var meChanged = newU && newU !== selfUname;
+    if (meChanged) selfUname = newU;
+    log('[overlay] 好友快照更新: ' + contactsCache.length + ' 人' + (meChanged ? '（me=' + selfUname + '）' : ''));
+    pipeBroadcast({ t: 'friends', list: friendsFrameList() });
+    if (meChanged) pipeBroadcast({ t: 'me', u: selfUname }); // DLL 回显消息 self 判定
+}
+// ===== M2 上行帧路由（DLL 面板事件 → 与一期悬浮窗同口径：gn:signal-out 经主窗口 WS 上行）=====
+// 白名单收敛：只放行私聊文本与房间三动作，防被攻陷的游戏进程借 pipe 注入任意信令
+function sendUplink(payload) {
+    var mw = getMainWindow ? getMainWindow() : null;
+    if (!mw || mw.isDestroyed()) return;
+    try { mw.webContents.send('gn:signal-out', payload); } catch (e) { log('[overlay] 上行转发异常: ' + e.message); }
+}
+function onPipeFrame(pid, line) {
+    var f = null;
+    try { f = JSON.parse(line); } catch (e) { return; }
+    if (!f || typeof f !== 'object') return;
+    if (f.t === 'chat-send') {
+        var payload = { msg_type: 2, to_user: String(f.to || '').slice(0, 64), content: String(f.text || '').slice(0, 2000) };
+        if (!payload.to_user || !payload.content) return;
+        log('[overlay] 上行私聊 → ' + payload.to_user);
+        sendUplink(payload);
+    } else if (f.t === 'room-act') {
+        var act = String(f.action || '').slice(0, 16);
+        if (act !== 'ready' && act !== 'leave' && act !== 'chat') return;
+        var content = { action: act, room_id: Number(f.room_id) || 0 };
+        if (act === 'chat') content.text = String(f.text || '').slice(0, 500);
+        log('[overlay] 上行房间动作: ' + act + ' #' + content.room_id);
+        sendUplink({ msg_type: 109, content: JSON.stringify(content) }); // 109 信封包装（一期 overlay.js send() 同款）
+    } else if (f.t === 'hello') {
+        log('[overlay] DLL 登记pid=' + f.pid); // M1 仅日志；看门狗/卸载语义属 M3
+    } else if (f.t === 'panel') {
+        // M4：DLL 面板呼出/收起上报——nativePanelOpen=true 时悬浮窗让位防叠加（热键归属另由 panel-ready 帧管理）
+        nativePanelOpen = !!f.on;
+        log('[overlay] DLL 面板' + (nativePanelOpen ? '呼出（悬浮窗让位）' : '收起（悬浮窗恢复）'));
+    } else if (f.t === 'nopanel') {
+        // M4：DLL 面板初始化失败（imgui 起不来）——Shift+Tab 若继续归 DLL 就是死键，立即收回给悬浮窗
+        setNativePanelActive(false);
+    } else if (f.t === 'panel-ready') {
+        // M4.1（审计修复）：DLL WndProc 钩装好（ImGui 初始化成功）——Shift+Tab 从此刻起归 DLL，
+        // 让位全局热键（连接就让位会让无 D3D 的启动器进程全程死键）
+        setNativePanelActive(true);
+    } else if (f.t === 'child') {
+        // M4 方案 A：启动器拉起游戏子进程（跟随注入成功）→ 为子进程建 pipe（好友/房间推流闭环）。
+        // 游戏 DLL 3s 重连循环会连上；子 pipe 随客户端进程退出回收（运行期残留一条空转 server 可接受）
+        var cpid = Number(f.pid) || 0;
+        if (cpid && !pipes.has(cpid)) {
+            log('[overlay] 启动器拉起游戏子进程 pid=' + cpid + ' → 建 pipe');
+            startPipeServer(cpid);
+        }
+    }
+}
+// ===== M2 房间快照（模式同 M1 askContacts：向唯一持有者 gameStoreWin 查询，3s 超时兜底 null）=====
+function roomFrameFromSnap(snap) {
+    if (!snap || !snap.room_id) return null;
+    return {
+        room_id: Number(snap.room_id) || 0,
+        name: String(snap.name || ''),
+        game_name: String(snap.game_name || ''),
+        status: String(snap.status || ''),
+        members: (Array.isArray(snap.members) ? snap.members : []).slice(0, 8).map(function (m) {
+            m = m || {};
+            return { u: String(m.username || ''), n: String(m.name || m.username || ''), r: !!m.ready, h: !!m.host };
+        })
+    };
+}
+function queryRoomSnapshot(cb) {
+    var gw = getGameStoreWin ? getGameStoreWin() : null;
+    if (!gw || gw.isDestroyed()) { cb(null); return; }
+    var id = 'or' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    ovRoomPending[id] = cb;
+    setTimeout(function () {
+        if (ovRoomPending[id]) { delete ovRoomPending[id]; cb(null); }
+    }, 3000);
+    try { gw.webContents.send('overlay:room-need', id); } catch (e) { delete ovRoomPending[id]; cb(null); }
+}
+// main.js overlay:room-reply 处调用（与悬浮窗 overlay:room-get 共用应答通道，按 id 前缀 'or' 分流）
+function onRoomReply(id, snap) {
+    var cb = ovRoomPending[id];
+    if (!cb) return;
+    delete ovRoomPending[id];
+    var room = roomFrameFromSnap(snap);
+    pipeBroadcast({ t: 'room', room: room }); // null = 未在房（DLL 据此清空镜像）
+}
+// main.js gn:signal-recv 处调用：109 房间信令 → 节流刷新房间快照推帧（不解析信令内容，只做触发器）
+function onGnSignal(msg) {
+    msg = msg || {};
+    if (msg.msg_type !== 109 || !pipes.size) return;
+    if (roomReqTimer) return;
+    roomReqTimer = setTimeout(function () {
+        roomReqTimer = null;
+        queryRoomSnapshot(onRoomReply);
+    }, 1000);
+}
+// 镜像转发（bufferChatMirror 入口内调用，M1 口径）：
+//   2=私聊文本 → {t:'msg'} 帧（名字按 from_user 查快照，缺省用 username；正文截 60 字防长帧）
+//   93=在线名单增量 → 节流刷新好友快照（在线点变化推新 friends 帧）
+function pipeForwardMirror(msg) {
+    if (!pipes.size) return;
+    var t = msg.msg_type;
+    if (t === 2) {
+        var from = String(msg.from_user || '');
+        var name = from;
+        for (var i = 0; i < contactsCache.length; i++) {
+            if (contactsCache[i].username === from) { name = contactsCache[i].name || from; break; }
+        }
+        // to=接收方（回显消息 from=我 → DLL 据 to 路由进对方会话；服务端回显发送方全连接）
+        pipeBroadcast({ t: 'msg', from: from, to: String(msg.to_user || ''), name: name, text: String(msg.content || '').slice(0, 60) });
+    } else if (t === 93) {
+        askContactsThrottled();
+    }
+}
+function startPipeServer(pid) {
+    if (!pid || WIN7 || pipes.has(pid)) return; // WIN7 硬性禁用口径一致（DLL 注入本身属 M2 且 WIN7 不注入）
+    var p = { server: null, sock: null };
+    var server;
+    try {
+        server = net.createServer(function (sock) {
+            // 单连接语义：DLL 重连竞态时旧连接挤掉；服务端已收口则拒连
+            if (!pipes.has(pid)) { try { sock.destroy(); } catch (e) { } return; }
+            if (p.sock) { try { p.sock.destroy(); } catch (e) { } }
+            p.sock = sock;
+            log('[overlay] DLL 已连接: ' + pipeName(pid));
+            // 热键让位不在这里（审计修复）：连接≠面板可用——启动器型进程无 D3D 设备永远到不了初始化，
+            // 连接就让位会让启动器阶段 Shift+Tab 全程死键。等 DLL 'panel-ready' 帧（WndProc 钩装好）才让位
+            var buf = '';
+            sock.on('data', function (chunk) {
+                buf += chunk;
+                var idx;
+                while ((idx = buf.indexOf('\n')) >= 0) {
+                    var line = buf.slice(0, idx).trim();
+                    buf = buf.slice(idx + 1);
+                    if (line) {
+                        try { onPipeFrame(pid, line); } catch (e) { log('[overlay] 上行帧处理异常: ' + e.message); }
+                        try { log('[overlay] DLL 帧(pid=' + pid + '): ' + line.slice(0, 120)); } catch (e) { }
+                    }
+                }
+                if (buf.length > 16384) { try { sock.destroy(); } catch (e) { } } // 单行超限=协议错，断开等 DLL 重连
+            });
+            var gone = function () {
+                if (p.sock !== sock) return; // 已被重连的新连接顶替：热键归属归新连接管，不得误收回
+                p.sock = null;
+                log('[overlay] DLL 断开: ' + pipeName(pid));
+                nativePanelOpen = false; // 二轮审计修复：DLL 崩溃时若面板开着，让位标记必须复位（否则悬浮窗被 showOverlay 让位守卫挡住打不开）
+                setNativePanelActive(false); // 审计修复：断开即收回热键（DLL 崩溃/看门狗卸载后 Shift+Tab 不能死键；
+                // 活着的 DLL 3s 重连 → panel-ready 重发 → 热键再让回）
+            };
+            sock.on('close', gone);
+            sock.on('error', gone);
+            // 连接即推：握手确认 + 本端账号（回显 self 判定）+ 系统欢迎消息 + 好友快照 + 房间快照 + 兼容名单（子进程跟随）
+            pipeSend(sock, { t: 'hello-ack' });
+            if (selfUname) pipeSend(sock, { t: 'me', u: selfUname });
+            pipeSend(sock, { t: 'msg', from: '', name: '系统', text: '游戏内 Overlay 已连接' });
+            pipeSend(sock, { t: 'friends', list: friendsFrameList() });
+            var ng = nativeGamesLoad();
+            pipeSend(sock, { t: 'follow', mode: ng.mode, list: ng.list });
+            queryRoomSnapshot(function (snap) {
+                if (p.sock === sock) pipeSend(sock, { t: 'room', room: roomFrameFromSnap(snap) });
+            });
+        });
+    } catch (e) { log('[overlay] pipe 服务端创建失败(pid=' + pid + '): ' + e.message); return; }
+    server.on('error', function (err) {
+        log('[overlay] pipe 服务端异常(pid=' + pid + '): ' + err.message);
+        if (pipes.get(pid) === p) pipes.delete(pid);
+        try { server.close(); } catch (e2) { }
+    });
+    server.listen(pipeName(pid), function () {
+        log('[overlay] pipe 就绪: ' + pipeName(pid));
+        askContacts(); // 预热快照：DLL 连接时即有数据可推
+    });
+    p.server = server;
+    pipes.set(pid, p);
+}
+function stopPipeServer(pid) {
+    var p = pipes.get(pid);
+    if (!p) return;
+    pipes.delete(pid);
+    nativePanelOpen = false; // 面板随 pipe 断开重置（悬浮窗热键恢复）
+    setNativePanelActive(false); // 热键收回：悬浮窗兜底重新可用（DLL 死亡/看门狗卸载/游戏退出）
+    if (p.sock) { try { p.sock.destroy(); } catch (e) { } }
+    try { p.server.close(); } catch (e) { }
+    log('[overlay] pipe 关闭: ' + pipeName(pid));
+}
+
 // ===== 显隐状态机 =====
 function broadcastState() {
     var payload = { open: !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()), enabled: settings.enabled, hotkey: settings.hotkey, hotkeyOk: hotkeyOk };
@@ -304,6 +563,7 @@ function broadcastState() {
 }
 function showOverlay() {
     if (!settings.enabled || WIN7) return; // WIN7 硬性禁用（透明窗黑屏挡游戏，见头部说明）
+    if (nativePanelOpen) return; // M4：DLL 注入式面板呼出中——悬浮窗让位防叠加（Shift+Tab 此时由 DLL 接管）
     var win = ensureOverlayWindow();
     if (!gameDisplay) resolveGameDisplay();
     var show = function () {
@@ -333,6 +593,7 @@ function toggleOverlay() {
 
 // ===== 热键生命周期（绑定游戏运行态）=====
 function registerHotkey() {
+    if (nativePanelActive) return; // 审计修复：DLL 面板就绪期热键已让位——设置改键位/重挂等路径不得抢回（等 DLL 断开时 setNativePanelActive(false) 再按新键位注册）
     if (hotkeyRegistered) { try { globalShortcut.unregister(settings.hotkey); } catch (e) { } hotkeyRegistered = false; }
     hotkeyOk = false;
     try { hotkeyOk = globalShortcut.register(settings.hotkey, toggleOverlay); } catch (e) { hotkeyOk = false; }
@@ -364,12 +625,83 @@ function onGameStart(key, pid) {
     if (pid) latestPid = pid;
     games.set(key, { pid: pid || 0 });
     if (!gameDisplay || games.size === 1) resolveGameDisplay();
+    startPipeServer(pid); // 二期 M1：注入式 Overlay 下行通道（每实例一条 pipe，游戏退出即关）
     armHotkey();
 }
 function onGameExit(key) {
+    var g = games.get(key);
     games.delete(key);
+    if (g && g.pid) stopPipeServer(g.pid); // pipe 断连 → DLL 看门狗感知自卸载
     if (!games.size) latestPid = 0;
     disarmHotkey();
+}
+// M2 注入链：包装器（injector --launch）回读真实游戏 pid 后校正（helper pid → 游戏 pid；
+// pipe 名依赖真实 pid。游戏已退出/重复校正/无效 pid 均幂等跳过）
+function onGamePid(key, pid) {
+    var g = games.get(key);
+    if (!g || !pid || g.pid === pid) return;
+    stopPipeServer(g.pid);
+    g.pid = pid;
+    latestPid = pid;
+    startPipeServer(pid);
+    log('[overlay] 游戏 pid 校正: ' + key + ' → ' + pid);
+}
+// M2 注入链判据（main.js spawn 处调用）：native 开关 + WIN7 门禁 + 兼容名单（M4）。
+// 兼容等级 = 本地名单起步（设计 §3.3，服务端零改动）：名单内游戏走注入链（游戏帧内渲染），
+// 名单外走一期悬浮窗；用户可编辑名单文件把 mode 改为 "all" 全量注入（未知游戏兼容风险自担——
+// 注入失败自动回退一期悬浮窗，不会拖死游戏）。
+// 二进制定位：打包态 extraResources 分发于 resources/overlay-native/bin（惯例同 dlbt-host），
+// 开发态为源码目录；名单文件用户可编辑副本在 userData/overlay-native-games.json（优先），
+// 否则读分发模板（asar 内/extraResources 均只读可读）。
+var nativeBinDirCache = null;
+function nativeBinDir() {
+    if (nativeBinDirCache) return nativeBinDirCache;
+    var dev = path.join(__dirname, 'overlay-native', 'bin');
+    if (app.isPackaged && process.resourcesPath) {
+        var p = path.join(process.resourcesPath, 'overlay-native', 'bin');
+        nativeBinDirCache = fs.existsSync(p) ? p : dev; // 打包产物缺资源时回退开发路径（便于本地直跑排查）
+    } else {
+        nativeBinDirCache = dev;
+    }
+    return nativeBinDirCache;
+}
+var nativeGames = null;      // 名单缓存 {mode:'list'|'all', list:[exeName]}；null=未加载
+var NATIVE_GAMES_LIST_TMPL = 'overlay-native' + path.sep + 'native-games.json'; // 分发模板相对路径
+function nativeGamesUserFile() { return path.join(app.getPath('userData'), 'overlay-native-games.json'); }
+function nativeGamesParse(s) {
+    if (!s || typeof s !== 'object') return { mode: 'list', list: [] };
+    return {
+        mode: s.mode === 'all' ? 'all' : 'list',
+        list: Array.isArray(s.list) ? s.list.map(function (x) { return String(x || '').toLowerCase(); }) : []
+    };
+}
+function nativeGamesLoad() {
+    if (nativeGames) return nativeGames;
+    // 读序：userData 用户可编辑副本（打包后 resources 只读）→ 分发模板（extraResources / 开发态源文件 / asar 内均 fs 可读）
+    try {
+        nativeGames = nativeGamesParse(JSON.parse(fs.readFileSync(nativeGamesUserFile(), 'utf8')));
+    } catch (e1) {
+        try {
+            nativeGames = nativeGamesParse(JSON.parse(fs.readFileSync(path.join(__dirname, NATIVE_GAMES_LIST_TMPL), 'utf8')));
+        } catch (e2) {
+            try {
+                if (app.isPackaged && process.resourcesPath) {
+                    nativeGames = nativeGamesParse(JSON.parse(fs.readFileSync(path.join(process.resourcesPath, NATIVE_GAMES_LIST_TMPL.replace(/\\/g, '/')), 'utf8')));
+                } else nativeGames = { mode: 'list', list: [] };
+            } catch (e3) {
+                nativeGames = { mode: 'list', list: [] }; // 名单缺失/损坏：保守全走悬浮窗
+            }
+        }
+    }
+    return nativeGames;
+}
+function isNativeActive(exe) {
+    if (WIN7 || settings.native !== true) return false;
+    if (!exe) return true; // 无 exe 上下文：仅门禁判定（旧调用口径）
+    var ng = nativeGamesLoad();
+    if (ng.mode === 'all') return true;
+    var name = String(path.basename(exe) || '').toLowerCase();
+    return ng.list.indexOf(name) >= 0;
 }
 
 // ===== IPC 注册（main.js init 时调用一次）=====
@@ -379,13 +711,15 @@ function init(opts) {
     serverUrl = opts.serverUrl || serverUrl;
     logger = opts.log || logger;
     onWindowCreated = opts.onWindowCreated || null;
+    getMainWindow = opts.getMainWindow || null; // 二期 M1：askContacts 需向主窗口发 gn:contacts-need
+    getGameStoreWin = opts.getGameStoreWin || null; // 二期 M2：房间快照查询（房间态唯一持有者）
     settingsLoad();
 
     ipcMain.on('overlay:toggle', function () { try { toggleOverlay(); } catch (e) { log('[overlay] toggle 异常: ' + e.message); } });
     ipcMain.on('overlay:hide', function () { try { hideOverlay(true); } catch (e) { log('[overlay] hide 异常: ' + e.message); } }); // 渲染层 Esc/×/点遮罩：收起+还焦点
     ipcMain.handle('overlay:settings-get', function () {
         // supported=false（WIN7）：设置页据此隐藏整个「游戏」分类（透明窗能力缺失，功能硬性禁用）
-        return { enabled: WIN7 ? false : settings.enabled, notify: WIN7 ? false : settings.notify, hotkey: settings.hotkey, hotkeyOk: hotkeyOk, armed: hotkeyArmed, supported: !WIN7 };
+        return { enabled: WIN7 ? false : settings.enabled, notify: WIN7 ? false : settings.notify, native: WIN7 ? false : settings.native, hotkey: settings.hotkey, hotkeyOk: hotkeyOk, armed: hotkeyArmed, supported: !WIN7 };
     });
     ipcMain.on('overlay:settings-set', function (e, s) {
         try {
@@ -394,6 +728,7 @@ function init(opts) {
             var notifyChanged = false;
             if (typeof s.enabled === 'boolean') settings.enabled = s.enabled;
             if (typeof s.notify === 'boolean' && s.notify !== settings.notify) { settings.notify = s.notify; notifyChanged = true; }
+            if (typeof s.native === 'boolean') settings.native = s.native; // 注入链读取时机在启动处，无需动态生效
             if (typeof s.hotkey === 'string' && s.hotkey.trim()) settings.hotkey = s.hotkey.trim();
             settingsSave();
             // 通知窗动态生效（免重启）：关闭=真销毁（webContents destroyed 自动出 gnRelayWins 订阅表）；开启=游戏运行中立即创建
@@ -415,6 +750,7 @@ function init(opts) {
         // 通知页栈空/非空的显隐请求；主进程只执行不猜内容。showInactive 不夺游戏焦点
         try {
             if (!notifyReady) { notifyReady = true; flushNotifyBuf(); } // 首次请求=页面监听器已注册：标记就绪并补投冷启动缓存
+            if (nativePanelActive) return; // M5.5：帧内渲染生效期通知由 DLL 帧内 toast 承接，屏外通知窗停用
             if (!notifyWin || notifyWin.isDestroyed()) return;
             if (on) { positionNotifyWindow(); notifyWin.showInactive(); }
             else if (notifyWin.isVisible()) notifyWin.hide();
@@ -447,6 +783,12 @@ module.exports = {
     onGameExit: safe(onGameExit),
     showOverlay: safe(showOverlay),
     hideOverlay: safe(hideOverlay),
-    bufferChatMirror: safe(bufferChatMirror), // main.js gn:chat-mirror 处调用：通知窗冷启动镜像缓存（§十）
+    bufferChatMirror: safe(bufferChatMirror), // main.js gn:chat-mirror 处调用：通知窗冷启动镜像缓存（§十）+ M1 pipe 转发
+    onContactsReply: safe(onContactsReply),   // main.js gn:contacts-reply 处调用：好友快照应答（M2 增 u=本端账号）
+    onRoomReply: safe(onRoomReply),           // main.js overlay:room-reply 处调用：M2 房间快照应答（'or' 前缀分流）
+    onGnSignal: safe(onGnSignal),             // main.js gn:signal-recv 处调用：109 → M2 房间快照节流刷新
+    onGamePid: safe(onGamePid),               // main.js 注入链回读真实 pid 后校正（helper pid → 游戏 pid）
+    isNativeActive: isNativeActive,           // main.js spawn 处判据：二期注入链是否启用（WIN7/native/兼容名单三重门禁）
+    nativeBinDir: nativeBinDir,               // main.js 注入链二进制目录（打包态 resources，开发态源码目录）
     isOpen: function () { return !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()); }
 };

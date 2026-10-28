@@ -970,7 +970,14 @@
                         return { username: f.username, name: ((f.remark || f.name || '').trim()) || f.username, avatar: f.avatar || '', online: !!f.online };
                     });
                 } catch (e) { list = []; }
-                if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list);
+                // 二期 M2：顺带捎回本端账号（IMSocket.getUsername 兜底 im_auth 解码）——
+                // 注入式 Overlay DLL 据此判定服务端回显消息的 self 态（一期悬浮窗在渲染层本地可解，DLL 无 localStorage）
+                var me = '';
+                try {
+                    if (window.IMSocket && typeof IMSocket.getUsername === 'function') me = IMSocket.getUsername() || '';
+                    if (!me) me = (JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || {}).u || '';
+                } catch (e2) { me = ''; }
+                if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list, me);
             });
         }
         if (typeof window.desktop.gnSocketState === 'function') {

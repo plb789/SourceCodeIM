@@ -1570,62 +1570,9 @@
         });
     }
 
-    // 游戏内 Overlay 设置（设置-游戏；docs/游戏内Overlay功能技术设计.md §P3）：
-    // 仅 PC 客户端显示（无 desktop 桥的 WEB/手机端隐藏整个分类——热键/置顶窗是主进程能力）；
-    // 开关与热键经主进程 overlay:settings-* 归口（即时重注册热键 + userData 落盘，免重启生效）
-    (function initOverlaySettings() {
-        var isPc = window.desktop && !window.__webCallBridge
-            && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-        var navBtn = document.getElementById('settings-nav-game');
-        var view = document.getElementById('settings-view-game');
-        if (!isPc || !window.desktop.overlaySettingsGet) {
-            if (navBtn) navBtn.style.display = 'none';
-            if (view) view.style.display = 'none';
-            return;
-        }
-        var sEn = document.getElementById('settings-overlay-enable');
-        var sNt = document.getElementById('settings-overlay-notify');
-        var sHk = document.getElementById('settings-overlay-hotkey');
-        var sHkBtn = document.getElementById('settings-overlay-hotkey-btn');
-        var sHkEdit = document.getElementById('settings-overlay-hotkey-edit');
-        var sHkInput = document.getElementById('settings-overlay-hotkey-input');
-        var sHkSave = document.getElementById('settings-overlay-hotkey-save');
-        function hideGameView() {
-            if (navBtn) navBtn.style.display = 'none';
-            if (view) view.style.display = 'none';
-        }
-        window.desktop.overlaySettingsGet().then(function (s) {
-            if (!s) return;
-            if (s.supported === false) { hideGameView(); return; } // WIN7 等不支持端：主进程裁决，隐藏整个分类
-            if (sEn) sEn.checked = !!s.enabled;
-            if (sNt) sNt.checked = s.notify !== false;
-            if (sHk) sHk.textContent = s.hotkey || 'Shift+Tab';
-        }).catch(function () { });
-        if (sEn) sEn.addEventListener('change', function () {
-            window.desktop.overlaySettingsSet({ enabled: sEn.checked });
-            showToast(sEn.checked ? I18N.t('已开启游戏内面板') : I18N.t('已关闭游戏内面板'));
-        });
-        if (sNt) sNt.addEventListener('change', function () {
-            window.desktop.overlaySettingsSet({ notify: sNt.checked });
-            showToast(sNt.checked ? I18N.t('已开启游戏内通知') : I18N.t('已关闭游戏内通知'));
-        });
-        if (sHkBtn) sHkBtn.addEventListener('click', function () {
-            var show = sHkEdit.style.display === 'none';
-            sHkEdit.style.display = show ? '' : 'none';
-            if (show && sHkInput) sHkInput.value = sHk.textContent || '';
-        });
-        if (sHkSave) sHkSave.addEventListener('click', function () {
-            var v = (sHkInput.value || '').replace(/^\s+|\s+$/g, '');
-            if (!v) { showToast(I18N.t('热键不能为空')); return; }
-            window.desktop.overlaySettingsSet({ hotkey: v });
-            if (sHk) sHk.textContent = v;
-            sHkEdit.style.display = 'none';
-            showToast(I18N.t('热键已更新：') + v);
-        });
-        if (sHkInput) sHkInput.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' && sHkSave) sHkSave.click();
-        });
-    })();
+    // 游戏内 Overlay 设置已整体迁入游戏中心设置弹窗「游戏」分栏（game-store.js initGsOverlaySettings），
+    // 主设置页不再保留「游戏」分类（用户反馈：游戏行为设置应归口游戏中心）；开关与热键仍经
+    // 主进程 overlay:settings-* 归口（即时重注册热键 + userData 落盘，免重启生效）
 
     // 阶段二百八十四：TAP 虚拟网卡驱动开关（设置-网络-虚拟网络；仅 PC 端显示，浏览器/手机自动旁路）。
     // 开关状态以系统真实驱动为准（主进程 tapinstall hwids 只读检测回显，不落 localStorage）：

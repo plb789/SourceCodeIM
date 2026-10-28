@@ -59,7 +59,8 @@
       "!dlbt-host/**",
       "!Driver/**",
       "!dll/**",
-      "!elevator/**"
+      "!elevator/**",
+      "!overlay-native/**"
     ],
     "win": {
       "target": "nsis",
@@ -110,6 +111,18 @@
       {
         "from": "dlbt-host/p2p-host.exe",
         "to": "dlbt-host/p2p-host.exe"
+      },
+      {
+        "from": "overlay-native/bin/",
+        "to": "overlay-native/bin/",
+        "filter": [
+          "*.dll",
+          "*.exe"
+        ]
+      },
+      {
+        "from": "overlay-native/native-games.json",
+        "to": "overlay-native/native-games.json"
       },
       {
         "from": "Driver/",

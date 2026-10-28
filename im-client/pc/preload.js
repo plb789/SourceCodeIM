@@ -1213,8 +1213,8 @@ contextBridge.exposeInMainWorld('desktop', {
         if (typeof cb !== 'function') return;
         ipcRenderer.on('gn:contacts-need', function (event, id) { cb(id); });
     },
-    gnContactsReply: function (id, list) {
-        ipcRenderer.send('gn:contacts-reply', id, list || []);
+    gnContactsReply: function (id, list, u) {
+        ipcRenderer.send('gn:contacts-reply', id, list || [], u || ''); // u=本端账号（二期 M2：注入式面板回显 self 判定）
     },
     // ===== 游戏内 Overlay 悬浮窗（docs/游戏内Overlay功能技术设计.md）=====
     // 呼出/收起请求（设置页测试按钮/托盘扩展用）；悬浮窗内 Esc/×/点遮罩走 overlayHide（收起+焦点归还游戏）
