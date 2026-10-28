@@ -1012,7 +1012,13 @@ static bool ImGuiEnsure9(IDirect3DDevice9* dev) {
     g_imguiDev = dev;
     inited = true;
     LogLine("imgui initialized (msyh + dx9 + win32)");
-    InterlockedExchange(&g_panelBroken, 0); // 此前失败置的 broken 作废——init 已成功，恢复切换能力
+    // 此前失败置的 broken 作废——init 已成功，恢复切换能力。broken 曾置位说明客户端已被
+    // nopanel 收回（悬浮窗热键态）——必须重发 panel-ready 重新让位（ReportPanelReadyOnce
+    // 的 g_panelReady 幂等挡住重发，须主动 Push）
+    if (InterlockedExchange(&g_panelBroken, 0)) {
+        PipePushOut("{\"t\":\"panel-ready\"}\n");
+        LogLine("imgui dx9 init ok: panel broken cleared, panel-ready re-reported");
+    }
     return true;
 }
 
@@ -1843,6 +1849,14 @@ static HRESULT WINAPI Hooked_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEV
         g_device = *out; // 总是记录最新设备（引擎可能先建测试设备再建真设备；渲染以 Present 实参设备为准）
         g_gameHwnd = hFocus;
         InterlockedExchange(&g_probeEnvDenied, 0); // 设备捕获成功=环境不拒绝，热键回落标志复位
+        // 捕获成功即彻底自愈（Warface 实测 2026-10-29：启动器阶段探针自建被反作弊拒→25 fails
+        // env-denied/8s 超时 nopanel 置 broken→用户进对局后游戏重建设备→此处捕获）：broken
+        // 清零 + panel-ready 重发（客户端重新让位热键）——「启动器 nopanel」→「进对局帧内面板
+        // 自动恢复」闭环；否则 broken 永久卡死热键（按热键只弹悬浮窗）
+        if (InterlockedExchange(&g_panelBroken, 0)) {
+            PipePushOut("{\"t\":\"panel-ready\"}\n");
+            LogLine("device captured: panel broken cleared, panel-ready re-reported");
+        }
         PatchDeviceVtableSlots(*out); // Present/Reset 槽补丁（幂等；防重复钩——二次 create 重补会把 orig 覆写成钩自身→递归）
         HookImplicitSwapChain(*out);  // 隐式交换链 Present 补钩（第二呈现路径）
         // 立即初始化 ImGui + WndProc 子类化（不能等首次激活帧：Shift+Tab 检测依赖 WndProc 钩，
@@ -1888,6 +1902,11 @@ static HRESULT WINAPI Hooked_CreateDeviceEx(IDirect3D9Ex* self, UINT adapter, D3
         g_device = (IDirect3DDevice9*)*out; // Ex→9 指针兼容（Ex 虚表前缀含 Present/Reset 同槽语义）
         g_gameHwnd = hFocus;
         InterlockedExchange(&g_probeEnvDenied, 0); // 设备捕获成功=环境不拒绝，热键回落标志复位
+        // 同 std 捕获段：broken 清零 + panel-ready 重发（自愈闭环，注释见 Hooked_CreateDevice）
+        if (InterlockedExchange(&g_panelBroken, 0)) {
+            PipePushOut("{\"t\":\"panel-ready\"}\n");
+            LogLine("device captured (Ex): panel broken cleared, panel-ready re-reported");
+        }
         PatchDeviceVtableSlots((IDirect3DDevice9*)*out);
         HookImplicitSwapChain((IDirect3DDevice9*)*out);
         ImGuiEnsure9((IDirect3DDevice9*)*out);
@@ -2174,25 +2193,68 @@ static BOOL WINAPI Hooked_CreateProcessW(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES,
 static BOOL WINAPI Hooked_CreateProcessA(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
 static HINSTANCE WINAPI Hooked_ShellExecuteA(HWND, LPCSTR, LPCSTR, LPCSTR, LPCSTR, INT);
 static HINSTANCE WINAPI Hooked_ShellExecuteW(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, INT);
+extern "C" __declspec(dllexport) void __stdcall OverlayHookD3D9Object(IDirect3D9* d3d); // 前置声明（定义在 D3D11 段：slot 16/20 补钩，幂等）
+static HMODULE WINAPI Hooked_LoadLibraryW(LPCWSTR name);  // 前置声明（定义在 LoadLibrary 钩段；GPA_Map 映射用）
+static HMODULE WINAPI Hooked_LoadLibraryA(LPCSTR name);
+static volatile LONG s_llHooksReady = 0; // LoadLibraryW/A 钩安装完成标志（GPA_Map 映射判据——g_orig 定义在后段）
+
+// d3d9 动态解析 shim（Warface 回归修复 2026-10-29）：CryEngine 对 d3d9 的解析全走
+// GetProcAddress 动态（IAT 类钩全无效的根因）。解析瞬间返回包装钩——对象创建是纯用户态
+// 调用不受设备创建拦截（探针自建设备才被 D3DKMT 拦），拿到对象即 OverlayHookD3D9Object
+// 补 slot 16/20——游戏随后 CreateDevice(Ex) 必经同实现类静态虚表钩 → Hooked_CreateDevice
+// 捕获游戏设备 → Present/Reset 钩 → 渲染。时序零竞态：钩严格发生在游戏拿到对象之前。
+static IDirect3D9* WINAPI Hooked_D3D9Create9ExShim(UINT sdk, IDirect3D9Ex** out) {
+    if (!out) return NULL;
+    *out = NULL;
+    FARPROC f = ::GetProcAddress(GetModuleHandleW(L"d3d9.dll"), "Direct3DCreate9Ex");
+    if (!f) return NULL;
+    HRESULT hr = ((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))f)(sdk, out);
+    if (SUCCEEDED(hr) && *out) {
+        OverlayHookD3D9Object((IDirect3D9*)*out);
+        LogLine("d3d9 create9ex shim: object slots hooked");
+    }
+    return SUCCEEDED(hr) ? (IDirect3D9*)*out : NULL;
+}
+static IDirect3D9* WINAPI Hooked_D3D9Create9Shim(UINT sdk) {
+    FARPROC f = ::GetProcAddress(GetModuleHandleW(L"d3d9.dll"), "Direct3DCreate9");
+    if (!f) return NULL;
+    IDirect3D9* o = ((IDirect3D9 * (WINAPI*)(UINT))f)(sdk);
+    if (o) {
+        OverlayHookD3D9Object(o);
+        LogLine("d3d9 create9 shim: object slots hooked");
+    }
+    return o;
+}
 
 // 启动器防 hook 惯例：IAT 里的 CreateProcessA 被改后，运行时用 GetProcAddress 动态重解析绕开
 //（真机 GameCdonl 实测：IAT hooked 成功但进对局无 child 日志）。钩掉 IAT 里的 GetProcAddress，
 // 动态解析 CreateProcessA/W、ShellExecuteA/W 时直接返回我们的钩（双覆盖：IAT 直调 + 动态解析都进钩）。
 // g_origGPA NULL 竞态兜底（IAT 换入与赋值间极小窗口他线程可调到）：直调自身导入——HookIAT 只扫主 exe
 // 的导入表（GetModuleHandleW(NULL)），本 DLL 自身 IAT 未被改，无递归风险
-static FARPROC WINAPI Hooked_GetProcAddress(HMODULE mod, LPCSTR name) {
-    if (!g_origGPA) return ::GetProcAddress(mod, name);
-    FARPROC r = g_origGPA(mod, name);
-    if (r && name) {
-        if (mod == GetModuleHandleW(L"kernel32.dll")) {
-            if (lstrcmpiA(name, "CreateProcessA") == 0) return (FARPROC)&Hooked_CreateProcessA;
-            if (lstrcmpiA(name, "CreateProcessW") == 0) return (FARPROC)&Hooked_CreateProcessW;
-        } else if (mod == GetModuleHandleW(L"shell32.dll")) {
-            if (lstrcmpiA(name, "ShellExecuteA") == 0) return (FARPROC)&Hooked_ShellExecuteA;
-            if (lstrcmpiA(name, "ShellExecuteW") == 0) return (FARPROC)&Hooked_ShellExecuteW;
-        }
+// 动态解析映射表：命中返回钩地址，未命中返回 NULL（透传原解析）
+static FARPROC GPA_Map(HMODULE mod, LPCSTR name) {
+    if (!name) return NULL;
+    if (mod == GetModuleHandleW(L"kernel32.dll")) {
+        if (lstrcmpiA(name, "CreateProcessA") == 0) return (FARPROC)&Hooked_CreateProcessA;
+        if (lstrcmpiA(name, "CreateProcessW") == 0) return (FARPROC)&Hooked_CreateProcessW;
+        // LoadLibrary 映射（s_llHooksReady 判据：钩未装时返回 Hooked_ 会 NULL 调用崩）
+        if (lstrcmpiA(name, "LoadLibraryW") == 0 && InterlockedExchangeAdd(&s_llHooksReady, 0)) return (FARPROC)&Hooked_LoadLibraryW;
+        if (lstrcmpiA(name, "LoadLibraryA") == 0 && InterlockedExchangeAdd(&s_llHooksReady, 0)) return (FARPROC)&Hooked_LoadLibraryA;
+    } else if (mod == GetModuleHandleW(L"shell32.dll")) {
+        if (lstrcmpiA(name, "ShellExecuteA") == 0) return (FARPROC)&Hooked_ShellExecuteA;
+        if (lstrcmpiA(name, "ShellExecuteW") == 0) return (FARPROC)&Hooked_ShellExecuteW;
+    } else if (mod == GetModuleHandleW(L"d3d9.dll")) {
+        // Warface 修复：CryEngine 动态解析 Direct3DCreate9(Ex)——返回 shim（对象创建即补 slot 钩）
+        if (lstrcmpiA(name, "Direct3DCreate9Ex") == 0) return (FARPROC)&Hooked_D3D9Create9ExShim;
+        if (lstrcmpiA(name, "Direct3DCreate9") == 0) return (FARPROC)&Hooked_D3D9Create9Shim;
     }
-    return r;
+    return NULL;
+}
+static FARPROC WINAPI Hooked_GetProcAddress(HMODULE mod, LPCSTR name) {
+    FARPROC mapped = GPA_Map(mod, name);
+    if (mapped) return mapped;
+    if (!g_origGPA) return ::GetProcAddress(mod, name);
+    return g_origGPA(mod, name);
 }
 
 static void ReportChildAndPipe(DWORD childPid) {
@@ -2491,6 +2553,35 @@ static PFN_LoadLibraryA_t   g_origLLA = NULL;
 static PFN_LoadLibraryExW_t g_origLLExW = NULL;
 static PFN_LoadLibraryExA_t g_origLLExA = NULL;
 
+// d3d9 加载瞬间对象钩兜底（Warface 2026-10-29）：hotpatch/IAT 全败时，CryEngine 在 d3d9
+// 加载后毫秒级 Direct3DCreate9Ex→CreateDeviceEx——400ms 探针轮询必错过。对象创建是纯用户态
+// 调用不受设备创建拦截（D3DKMT 拦的是 CreateDevice）——slot 16/20 补钩后游戏建设备必经
+// 同实现类静态虚表钩捕获。LoadLibrary 钩内同步执行=零窗口。
+static void HookD3D9ObjectSlots(HMODULE d3d9) {
+    static bool s_done = false;
+    if (s_done || g_origPresent || !d3d9) return;
+    FARPROC f = ::GetProcAddress(d3d9, "Direct3DCreate9Ex");
+    if (f) {
+        IDirect3D9Ex* obj = NULL;
+        if (SUCCEEDED(((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))f)(D3D_SDK_VERSION, &obj)) && obj) {
+            OverlayHookD3D9Object((IDirect3D9*)obj);
+            obj->Release();
+            s_done = true;
+            LogLine("post-load: d3d9 object slots hooked (Ex)");
+            return;
+        }
+    }
+    f = ::GetProcAddress(d3d9, "Direct3DCreate9");
+    if (f) {
+        IDirect3D9* o = ((IDirect3D9 * (WINAPI*)(UINT))f)(D3D_SDK_VERSION);
+        if (o) {
+            OverlayHookD3D9Object(o);
+            o->Release();
+            s_done = true;
+            LogLine("post-load: d3d9 object slots hooked (std)");
+        }
+    }
+}
 // 模块加载后处理：d3d8/d3d9 → 挂钩（幂等）；返回是否命中目标模块
 static bool PostLoadCheck(HMODULE mod) {
     if (!mod) return false;
@@ -2500,6 +2591,7 @@ static bool PostLoadCheck(HMODULE mod) {
     while (fn > path && fn[-1] != L'\\' && fn[-1] != L'/') --fn;
     if (_wcsicmp(fn, L"d3d9.dll") == 0) {
         if (!g_origD3DCreate9) TryHookD3D9(mod);
+        HookD3D9ObjectSlots(mod); // 加载瞬间对象钩（TryHookD3D9 失败时的零窗口兜底）
         return true;
     }
 #ifndef _WIN64
@@ -2560,6 +2652,7 @@ static bool HookLoadLibraries() {
     char lb[64];
     snprintf(lb, sizeof(lb), "LoadLibrary hooks installed: %d/4", okN);
     LogLine(lb);
+    if (g_origLLW && g_origLLA) InterlockedExchange(&s_llHooksReady, 1); // GPA_Map LoadLibrary 映射生效判据
     return okN > 0;
 }
 
@@ -3378,6 +3471,10 @@ static DWORD WINAPI InitThread(LPVOID) {
     LogLine("hook dll attached");
     // 第一步：挂 LoadLibrary 钩（kernel32 启动即加载，无竞态；此后目标模块加载瞬间即挂钩）
     HookLoadLibraries();
+    // 【回滚 2026-10-29】全模块 IAT 补钩（GetProcAddress/LoadLibraryW/A）在进程极早期篡改
+    // 20+ 模块导入表 → Warface/SC:R 反作弊完整性检测即拦=「游戏都启动不了」。GPA_Map 映射
+    // 与 shim 保留（主 exe IAT 钩生效面内无害），捕获链退化为：PostLoadCheck 对象钩（被钩
+    // LoadLibrary 可见的 d3d9 加载）+ 主 exe IAT 钩 + 探针
     // 第二步：查模块表兜底（静态导入游戏：注入时模块已在，LoadLibrary 钩等不到）
     HMODULE d3d9 = GetModuleHandleW(K_D3D9_MODULE);
     if (d3d9) TryHookD3D9(d3d9);
