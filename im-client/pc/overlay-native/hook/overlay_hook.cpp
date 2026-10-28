@@ -267,6 +267,35 @@ static volatile LONG g_hotkeyVK = VK_TAB;
 static volatile LONG g_hotkeyCtrl = 0;
 static volatile LONG g_hotkeyShift = 1;
 static volatile LONG g_hotkeyAlt = 0;
+static char g_hotkeyLabel[40] = "Shift+Tab"; // M5.11b：标题条热键提示（跟随设置；hotkey 帧到达时重建；pipe 线程写/渲染线程读，单帧撕裂无害）
+static void HotkeyLabelRebuild() {
+    int vk = g_hotkeyVK;
+    char kb[16];
+    const char* kn = NULL;
+    if (vk >= 'A' && vk <= 'Z') { kb[0] = (char)vk; kb[1] = 0; kn = kb; }
+    else if (vk >= '0' && vk <= '9') { kb[0] = (char)vk; kb[1] = 0; kn = kb; }
+    else if (vk >= VK_F1 && vk <= VK_F12) { snprintf(kb, sizeof(kb), "F%d", vk - VK_F1 + 1); kn = kb; }
+    else if (vk == VK_TAB) kn = "Tab";
+    else if (vk == VK_SPACE) kn = "Space";
+    else if (vk == VK_UP) kn = "Up";
+    else if (vk == VK_DOWN) kn = "Down";
+    else if (vk == VK_LEFT) kn = "Left";
+    else if (vk == VK_RIGHT) kn = "Right";
+    else if (vk == VK_HOME) kn = "Home";
+    else if (vk == VK_END) kn = "End";
+    else if (vk == VK_PRIOR) kn = "PgUp";
+    else if (vk == VK_NEXT) kn = "PgDn";
+    else if (vk == VK_INSERT) kn = "Ins";
+    else if (vk == VK_DELETE) kn = "Del";
+    else { snprintf(kb, sizeof(kb), "VK%02X", vk); kn = kb; }
+    char lb[32];
+    int o = 0;
+    if (g_hotkeyCtrl) o += snprintf(lb + o, sizeof(lb) - o, "Ctrl+");
+    if (g_hotkeyShift) o += snprintf(lb + o, sizeof(lb) - o, "Shift+");
+    if (g_hotkeyAlt) o += snprintf(lb + o, sizeof(lb) - o, "Alt+");
+    snprintf(lb + o, sizeof(lb) - o, "%s", kn);
+    snprintf(g_hotkeyLabel, sizeof(g_hotkeyLabel), "%s", lb);
+}
 // M5.8：好友头像（客户端 nativeImage 缩 48x48 转 BGRA 位图 base64 下发；D3D9 MANAGED 纹理懒建）
 struct AvatarSlot { char uname[OV_UNAME_CAP]; int w, h; std::vector<unsigned char> px; IDirect3DTexture9* tex; void* dev; };
 static AvatarSlot g_avatars[64] = { 0 };
@@ -628,6 +657,7 @@ static void HandleLine(const char* line) {
             JsonInt(line, "ctrl", &c); InterlockedExchange(&g_hotkeyCtrl, c);
             JsonInt(line, "shift", &s); InterlockedExchange(&g_hotkeyShift, s);
             JsonInt(line, "alt", &a); InterlockedExchange(&g_hotkeyAlt, a);
+            HotkeyLabelRebuild(); // M5.11b：标题条提示跟随实际热键
             LogLine("hotkey updated from settings");
         }
         return;
@@ -1295,6 +1325,12 @@ static void DrawRoomTab(PanelData* d) {
     rsend = ImGui::Button(u8"发送") || rsend;
     if (rsend) { SendRoomChat(); g_roomRefocus = true; }
 }
+// M5.11：面板拖拽（按住绿色标题条移动位置；位置本会话内保持——面板开关/重开不回中）
+static ImVec2 s_ovPos = ImVec2(0, 0);        // 当前窗口位置
+static bool   s_ovPosInit = false;           // 首开初始化（默认居中）
+static bool   s_ovDragging = false;
+static ImVec2 s_ovDragOff = ImVec2(0, 0);    // 按下点相对窗口左上角的偏移
+
 static void DrawPanel() {
     ImGuiIO& io = ImGui::GetIO();
     // 面板高度自适应：矮窗口（如 720p 全屏含标题栏）不超出 client 区（输入行被裁实测踩坑）
@@ -1303,7 +1339,8 @@ static void DrawPanel() {
     if (ph < 320.0f) ph = 320.0f;
     float py = (io.DisplaySize.y - ph) * 0.5f;
     if (py < 8.0f) py = 8.0f;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f - 270.0f, py), ImGuiCond_Always);
+    if (!s_ovPosInit) { s_ovPos = ImVec2(io.DisplaySize.x * 0.5f - 270.0f, py); s_ovPosInit = true; }
+    ImGui::SetNextWindowPos(s_ovPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(540.0f, ph), ImGuiCond_Always);
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -1313,8 +1350,25 @@ static void DrawPanel() {
     ImVec2 p0 = ImGui::GetWindowPos();
     dl->AddRectFilled(p0, ImVec2(p0.x + 540.0f, p0.y + 44.0f), COL_GREEN, 6.0f, ImDrawFlags_RoundCornersTop);
     dl->AddText(ImVec2(p0.x + 16.0f, p0.y + 10.0f), IM_COL32(255, 255, 255, 255), u8"游戏内 Overlay");
-    dl->AddText(ImVec2(p0.x + 540.0f - 120.0f, p0.y + 12.0f), IM_COL32(255, 255, 255, 200), u8"Shift+Tab 收起");
-    ImGui::Dummy(ImVec2(0, 30.0f)); // 让出标题条高度
+    char hkTxt[48];
+    snprintf(hkTxt, sizeof(hkTxt), "%s %s", g_hotkeyLabel, u8"收起");
+    ImVec2 ht = ImGui::CalcTextSize(hkTxt);
+    dl->AddText(ImVec2(p0.x + 540.0f - ht.x - 16.0f, p0.y + 12.0f), IM_COL32(255, 255, 255, 200), hkTxt); // M5.11b：跟随设置热键（右对齐）
+    // M5.11：标题条拖拽热区（ InvisibleButton 占位同原 Dummy——既让出标题条高度又当拖拽手柄；NoMove 窗口的手动移动）
+    ImGui::InvisibleButton("##ovdrag", ImVec2(540.0f - ImGui::GetStyle().WindowPadding.x * 2.0f, 30.0f));
+    if (ImGui::IsItemActive()) {
+        if (!s_ovDragging) { s_ovDragging = true; ImVec2 mp = io.MousePos; s_ovDragOff = ImVec2(mp.x - s_ovPos.x, mp.y - s_ovPos.y); }
+        float nx = io.MousePos.x - s_ovDragOff.x;
+        float ny = io.MousePos.y - s_ovDragOff.y;
+        if (nx < 4.0f) nx = 4.0f;
+        if (ny < 4.0f) ny = 4.0f;
+        if (nx > io.DisplaySize.x - 544.0f) nx = io.DisplaySize.x - 544.0f; // 夹紧：面板不出屏（标题条恒可见）
+        if (ny > io.DisplaySize.y - 40.0f) ny = io.DisplaySize.y - 40.0f;
+        if (nx < 4.0f) nx = 4.0f; // 极窄屏兜底
+        s_ovPos = ImVec2(nx, ny);
+    } else {
+        s_ovDragging = false;
+    }
     PanelData d;
     SnapshotPanel(&d);
     if (d.chatOpen) {
