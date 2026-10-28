@@ -802,10 +802,15 @@ var nativeGames = null;      // 名单缓存 {mode:'list'|'all', list:[exeName]}
 var NATIVE_GAMES_LIST_TMPL = 'overlay-native' + path.sep + 'native-games.json'; // 分发模板相对路径
 function nativeGamesUserFile() { return path.join(app.getPath('userData'), 'overlay-native-games.json'); }
 function nativeGamesParse(s) {
-    if (!s || typeof s !== 'object') return { mode: 'list', list: [] };
+    if (!s || typeof s !== 'object') return { mode: 'list', list: [], hijack: [] };
     return {
         mode: s.mode === 'all' ? 'all' : 'list',
-        list: Array.isArray(s.list) ? s.list.map(function (x) { return String(x || '').toLowerCase(); }) : []
+        list: Array.isArray(s.list) ? s.list.map(function (x) { return String(x || '').toLowerCase(); }) : [],
+        // 版本劫持名单（SC:R 收口方案）：名单内游戏 spawn 前把代理 d3d9.dll（转发真身）+
+        // d3d9_orig.dll（System32 真身复制）+ overlay_hook_x64.dll 幂等部署到游戏目录——
+        // 借 DLL 搜索顺序（应用目录优先）在游戏加载 d3d9 的时刻拉起注入链（该环境对进程内
+        // 新建设备 D3DKMT 层拦截、设备注入前建好永不重建，注入式探针唯一可行介入窗口）
+        hijack: Array.isArray(s.hijack) ? s.hijack.map(function (x) { return String(x || '').toLowerCase(); }) : []
     };
 }
 function nativeGamesLoad() {
@@ -835,6 +840,13 @@ function isNativeActive(exe) {
     if (ng.mode === 'all') return true;
     var name = String(path.basename(exe) || '').toLowerCase();
     return ng.list.indexOf(name) >= 0;
+}
+// 版本劫持判定：native 门禁通过 + hijack 名单命中（前提名单 mode=list 命中或 mode=all）
+function isNativeHijack(exe) {
+    if (!isNativeActive(exe) || !exe) return false;
+    var ng = nativeGamesLoad();
+    var name = String(path.basename(exe) || '').toLowerCase();
+    return ng.hijack.indexOf(name) >= 0;
 }
 
 // ===== IPC 注册（main.js init 时调用一次）=====
@@ -923,6 +935,7 @@ module.exports = {
     onGnSignal: safe(onGnSignal),             // main.js gn:signal-recv 处调用：109 → M2 房间快照节流刷新
     onGamePid: safe(onGamePid),               // main.js 注入链回读真实 pid 后校正（helper pid → 游戏 pid）
     isNativeActive: isNativeActive,           // main.js spawn 处判据：二期注入链是否启用（WIN7/native/兼容名单三重门禁）
+    isNativeHijack: isNativeHijack,           // main.js spawn 处判据：版本劫持名单（SC:R 收口——部署代理 d3d9 到游戏目录）
     nativeBinDir: nativeBinDir,               // main.js 注入链二进制目录（打包态 resources，开发态源码目录）
     isOpen: function () { return !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()); }
 };

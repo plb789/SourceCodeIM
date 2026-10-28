@@ -37,6 +37,9 @@
 #ifndef IMGUI_DISABLE
 #include "imgui_impl_dx11.h"
 
+// SC:R 排障（2026-10-28）：主 TU（overlay_hook.cpp）导出的加锁日志通道——Init 逐行定位用
+extern "C" void __stdcall OverlayLogLine(const char* msg);
+
 // DirectX
 #include <stdio.h>
 #include <d3d11.h>
@@ -545,33 +548,37 @@ void    ImGui_ImplDX11_InvalidateDeviceObjects()
 
 bool    ImGui_ImplDX11_Init(ID3D11Device* device, ID3D11DeviceContext* device_context)
 {
+    // SC:R 排障（2026-10-28）：Init 内崩溃逐行定位——日志走主 TU 导出的加锁通道（链接期直接
+    // 绑定，不经 GetProcAddress 间接调用——排除间接调用自己的变量）
+    OverlayLogLine("init: enter");
     ImGuiIO& io = ImGui::GetIO();
+    OverlayLogLine("init: GetIO ok");
     IMGUI_CHECKVERSION();
+    OverlayLogLine("init: CheckVersion ok");
     IM_ASSERT(io.BackendRendererUserData == nullptr && "Already initialized a renderer backend!");
+    OverlayLogLine("init: IM_NEW begin");
 
-    // Setup backend capabilities flags
     ImGui_ImplDX11_Data* bd = IM_NEW(ImGui_ImplDX11_Data)();
+    OverlayLogLine("init: IM_NEW ok");
     io.BackendRendererUserData = (void*)bd;
+    OverlayLogLine("init: UserData written");
     io.BackendRendererName = "imgui_impl_dx11";
+    OverlayLogLine("init: Name written");
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;  // We can honor the ImDrawCmd::VtxOffset field, allowing for large meshes.
+    OverlayLogLine("init: Flags written");
 
     // Get factory from device
-    IDXGIDevice* pDXGIDevice = nullptr;
-    IDXGIAdapter* pDXGIAdapter = nullptr;
-    IDXGIFactory* pFactory = nullptr;
-
-    if (device->QueryInterface(IID_PPV_ARGS(&pDXGIDevice)) == S_OK)
-        if (pDXGIDevice->GetParent(IID_PPV_ARGS(&pDXGIAdapter)) == S_OK)
-            if (pDXGIAdapter->GetParent(IID_PPV_ARGS(&pFactory)) == S_OK)
-            {
-                bd->pd3dDevice = device;
-                bd->pd3dDeviceContext = device_context;
-                bd->pFactory = pFactory;
-            }
-    if (pDXGIDevice) pDXGIDevice->Release();
-    if (pDXGIAdapter) pDXGIAdapter->Release();
+    // SC:R 环境修复（2026-10-28 终版）：GetParent 链（Device→Adapter→Factory）在该环境下调用
+    // 即崩（设备 dxgi 父链不可用，反作弊/驱动层性质，报告 ID F591BF4F...）——bd->pFactory 仅
+    // Shutdown 清理时使用（本 DLL 常驻不触发），NewFrame/CreateDeviceObjects 均不依赖——直接
+    // 跳过整段 GetParent，pFactory 置空
+    bd->pd3dDevice = device;
+    bd->pd3dDeviceContext = device_context;
+    OverlayLogLine("init: AddRef device begin");
     bd->pd3dDevice->AddRef();
+    OverlayLogLine("init: AddRef device ok");
     bd->pd3dDeviceContext->AddRef();
+    OverlayLogLine("init: AddRef ctx ok");
 
     return true;
 }

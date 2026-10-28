@@ -1737,6 +1737,38 @@ function peMachineOf(exe) {
         return coff.readUInt16LE(4);
     } catch (e) { return 0; }
 }
+// 版本劫持部署（SC:R 收口方案，2026-10-28）：五件套幂等复制到游戏目录——
+//   d3d9_proxy.dll→d3d9.dll / System32 d3d9 真身→d3d9_orig.dll（D3D9 次要组件路径）
+//   d3d11_proxy.dll→d3d11.dll / System32 d3d11 真身→d3d11_orig.dll（D3D11 主渲染路径——
+//   deny-time 模块快照实锤 SC:R 主渲染 = D3D11，d3d9 链路对主渲染无捕获面）
+//   overlay_hook_x64.dll（同名，两代理共同拉起）
+// 借 DLL 搜索顺序（应用目录优先）在游戏加载渲染 DLL 的时刻拉起注入链。幂等口径：目标存在且
+// size 相同跳过；任一步失败仅日志不阻断启动（返回 false 由调用方降级）。每次启动重部署。
+function deployD3D9Hijack(dir) {
+    try {
+        var bin = ovNativeBinDir();
+        var windir = process.env.windir || 'C:\\Windows';
+        var jobs = [
+            { src: path.join(bin, 'd3d9_proxy.dll'), dst: path.join(dir, 'd3d9.dll') },
+            { src: path.join(windir, 'System32', 'd3d9.dll'), dst: path.join(dir, 'd3d9_orig.dll') },
+            { src: path.join(bin, 'd3d11_proxy.dll'), dst: path.join(dir, 'd3d11.dll') },
+            { src: path.join(windir, 'System32', 'd3d11.dll'), dst: path.join(dir, 'd3d11_orig.dll') },
+            { src: path.join(bin, 'overlay_hook_x64.dll'), dst: path.join(dir, 'overlay_hook_x64.dll') }
+        ];
+        for (var i = 0; i < jobs.length; i++) {
+            var j = jobs[i];
+            if (!fs.existsSync(j.src)) { gnLogWrite('[overlay] 版本劫持部署缺源: ' + j.src); return false; }
+            try {
+                var s1 = fs.statSync(j.src), s2 = null;
+                try { s2 = fs.statSync(j.dst); } catch (e) { }
+                if (s2 && s2.size === s1.size) continue; // 幂等：同尺寸视为已部署
+                fs.copyFileSync(j.src, j.dst);
+            } catch (e) { gnLogWrite('[overlay] 版本劫持部署失败: ' + j.dst + ' ' + e.message); return false; }
+        }
+        gnLogWrite('[overlay] 版本劫持部署完成: ' + dir);
+        return true;
+    } catch (e) { gnLogWrite('[overlay] 版本劫持部署异常: ' + e.message); return false; }
+}
 function spawnGameChild(exe, args, cwd, extraOpts) {
     var base = { cwd: cwd, detached: true, stdio: 'ignore' };
     if (extraOpts) { for (var k in extraOpts) base[k] = extraOpts[k]; }
@@ -1747,6 +1779,19 @@ function spawnGameChild(exe, args, cwd, extraOpts) {
         gnLogWrite('[overlay] 注入组件缺失（injector.exe）→ 悬浮窗形态');
     } else if (!fs.existsSync(path.join(ovNativeBinDir(), 'overlay_hook_x86.dll'))) {
         gnLogWrite('[overlay] 注入组件缺失（overlay_hook_x86.dll）→ 悬浮窗形态');
+    }
+    // 版本劫持（SC:R 收口）：hijack 名单命中 → 部署三件套 + 直接 spawn（不套 injector——
+    // 代理 d3d9 在游戏加载 d3d9 时拉起同目录 hook DLL，injector 再注入部署目录的 hook DLL
+    // 会形成两个模块实例并存冲突）。native:true 标记下 onGameStart 收到的 child.pid 直接
+    // 就是游戏 pid（pipe 名无需校正）。部署失败 → 保守降级普通 spawn（悬浮窗形态，不回退
+    // injector——防代理拉旧版 hook 与注入版并存的混态）
+    if (gameOverlay.isNativeHijack(exe) && peMachineOf(exe) === 0x8664) {
+        if (deployD3D9Hijack(path.dirname(exe))) {
+            gnLogWrite('[overlay] 版本劫持启动: ' + exe);
+            return { child: spawn(exe, args, base), native: true };
+        }
+        gnLogWrite('[overlay] 版本劫持部署失败 → 普通启动（悬浮窗形态）: ' + exe);
+        return { child: spawn(exe, args, base), native: false };
     }
     if (gameOverlay.isNativeActive(exe) // M4：native 开关 + 兼容名单按等级判定（名单内/全量模式才走注入链）
         && fs.existsSync(path.join(ovNativeBinDir(), 'injector.exe'))

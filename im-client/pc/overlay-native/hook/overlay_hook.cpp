@@ -17,6 +17,8 @@
 
 #include <windows.h>
 #include <d3d9.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <psapi.h>
@@ -29,6 +31,7 @@
 
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_dx9.h"
+#include "../third_party/imgui/backends/imgui_impl_dx11.h"
 #include "../third_party/imgui/backends/imgui_impl_win32.h"
 #include "imgui_impl_d3d8.h" // M3：D3D8 后端（独立 TU 含 third_party/d3d8 头；D3D8 仅 x86）
 
@@ -36,6 +39,8 @@
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 #pragma comment(lib, "d3d9.lib")
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -51,22 +56,44 @@ static const DWORD    K_PIPE_FIRST_MS  = 120000;  // 看门狗：加载后从未
 
 // ===== 原始函数指针 =====
 typedef IDirect3D9* (WINAPI* PFN_Direct3DCreate9)(UINT);
+typedef HRESULT     (WINAPI* PFN_Direct3DCreate9Ex)(UINT, IDirect3D9Ex**);
 typedef HRESULT     (WINAPI* PFN_CreateDevice)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
+typedef HRESULT     (WINAPI* PFN_CreateDeviceEx)(IDirect3D9Ex*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, D3DDISPLAYMODEEX*, IDirect3DDevice9Ex**);
 typedef HRESULT     (WINAPI* PFN_Present)(IDirect3DDevice9*, CONST RECT*, CONST RECT*, HWND, CONST RGNDATA*);
 typedef HRESULT     (WINAPI* PFN_Reset)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
 
 static PFN_Direct3DCreate9 g_origD3DCreate9 = NULL;
 static PFN_CreateDevice    g_origCreateDevice = NULL;
+static PFN_CreateDeviceEx  g_origCreateDeviceEx = NULL; // IDirect3D9Ex::CreateDeviceEx（slot 20；SC:R/暴雪引擎走 9Ex 路径）
 static PFN_Present         g_origPresent = NULL;
 static PFN_Reset           g_origReset = NULL;
 static void**              g_vtD3d9Slot = NULL;   // IDirect3D9 虚表 CreateDevice 槽（自卸载还原用）
+static void**              g_vtD3d9ExSlot = NULL; // IDirect3D9Ex 虚表 CreateDeviceEx 槽 slot 20（自卸载还原用）
 static void**              g_vtDevSlot = NULL;    // 设备虚表 Present 槽（槽+1=Reset；自卸载还原用；d3d9 运行时静态表，设备释放后地址仍有效）
+// ===== D3D11 状态（方案 B；UnhookAll 前向还原需要——声明前置于文件前部）=====
+static ID3D11Device* g_dev11 = NULL;
+static ID3D11DeviceContext* g_ctx11 = NULL;
+static volatile LONG g_d3d11Ready = 0;
+static void** g_vtFactory11 = NULL; // 工厂虚表基址（dxgi 静态表；还原用）
+static void* g_origFactoryCreateSwapChain = NULL;                 // slot 11
+static void* g_origFactoryCreateSwapChainForHwnd = NULL;          // slot 16
+static void* g_origFactoryCreateSwapChainForCoreWindow = NULL;    // slot 17
+static void* g_origFactoryCreateSwapChainForComposition = NULL;   // slot 25
+static bool  g_factoryHooked = false;
+static void** g_vtSwapChain11 = NULL; // 交换链虚表基址（还原用）
+static void* g_origSwapChainPresent = NULL;                       // slot 8
+static void* g_origSwapChainPresent1 = NULL;                      // slot 22
+static bool  g_swapChainHooked = false;
+static ID3D11RenderTargetView* g_rtv11 = NULL;      // 交换链 back buffer RTV（渲染前绑定，定义处注释见渲染段）
+static void* g_rtChain11 = NULL;                    // RTV 所属交换链（链变化时重建）
 
 static IDirect3DDevice9* g_device = NULL;
 static IDirect3DDevice9* g_imguiDev = NULL;  // ImGui DX9 后端当前绑定的设备（呈现设备不一致时自愈重绑）
 static HWND              g_gameHwnd = NULL;
 static volatile LONG     g_probeBusy = 0;         // D3D9 探针自建设备进行中（Hooked_CreateDevice 据此不捕获）
 static volatile LONG     g_panelActive = 0;       // 面板显隐（Shift+Tab 切换；未激活零渲染开销）
+static volatile DWORD    g_panelOnTick = 0;       // 面板最近呼出时刻（无渲染能力 8s 自动收起的判据，SC:R 兜底）
+static volatile LONG     g_probeEnvDenied = 0;    // 环境拒绝建设备（SC:R D3DKMT 拦截实锤后置位）——面板热键立即回落悬浮窗
 static volatile LONG     g_pipeConnected = 0;
 static volatile LONG     g_shutdown = 0;          // 自卸载序列已启动（各线程见到即自行退出/透传）
 static volatile LONG     g_finalized = 0;         // 游戏线程已完成摘钩收尾（看门狗等待此标记）
@@ -76,18 +103,26 @@ static CRITICAL_SECTION  g_cs;                    // 共享面板数据锁（pip
 static HMODULE           g_selfMod = NULL;        // 自身模块句柄（自卸载用）
 
 // ===== 调试日志（%TEMP%\im-overlay-hook.log；正式版随签名/灰度移除，见设计文档 §3.2）=====
+// SC:R 排障教训（2026-10-28）：多线程并发 append 存在写入竞态——间歇性丢日志导致崩溃定位
+// 失真（同一函数内前一行日志有、后一行无）——进程内临界区锁 + CreateFileA 共享标志已有
+static CRITICAL_SECTION g_logCs; // 在 DllMain 初始化
 static void LogLine(const char* msg) {
     char path[MAX_PATH];
     UINT n = GetTempPathA(MAX_PATH, path);
     if (n == 0 || n > MAX_PATH - 40) return;
     strcat_s(path, "im-overlay-hook.log");
+    EnterCriticalSection(&g_logCs);
     HANDLE f = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) return;
-    char line[512];
-    int len = snprintf(line, sizeof(line), "[%lu] %s\r\n", GetTickCount(), msg);
-    if (len > 0) { DWORD w = 0; WriteFile(f, line, (DWORD)len, &w, NULL); }
-    CloseHandle(f);
+    if (f != INVALID_HANDLE_VALUE) {
+        char line[512];
+        int len = snprintf(line, sizeof(line), "[%lu] %s\r\n", GetTickCount(), msg);
+        if (len > 0) { DWORD w = 0; WriteFile(f, line, (DWORD)len, &w, NULL); }
+        CloseHandle(f);
+    }
+    LeaveCriticalSection(&g_logCs);
 }
+// 导出给 imgui_impl_dx11 后端（SC:R Init 排障——后端 TU 无法访问本 TU 的 static LogLine）
+extern "C" __declspec(dllexport) void __stdcall OverlayLogLine(const char* msg) { LogLine(msg); }
 
 // ===== 热补丁 detour（x86/x64 通用实现；M0 已验证）=====
 // 前提：target 入口为 mov edi,edi(2B) 且前置 ≥5 字节 padding（d3d9 导出普遍如此，含 0x90/0xCC）。
@@ -297,7 +332,7 @@ static void HotkeyLabelRebuild() {
     snprintf(g_hotkeyLabel, sizeof(g_hotkeyLabel), "%s", lb);
 }
 // M5.8：好友头像（客户端 nativeImage 缩 48x48 转 BGRA 位图 base64 下发；D3D9 MANAGED 纹理懒建）
-struct AvatarSlot { char uname[OV_UNAME_CAP]; int w, h; std::vector<unsigned char> px; IDirect3DTexture9* tex; void* dev; };
+struct AvatarSlot { char uname[OV_UNAME_CAP]; int w, h; std::vector<unsigned char> px; IDirect3DTexture9* tex; void* dev; ID3D11ShaderResourceView* tex11; };
 static AvatarSlot g_avatars[64] = { 0 };
 static int        g_avatarCount = 0;
 static int B64Val(char c) {
@@ -794,8 +829,31 @@ static DWORD WINAPI PipeThread(LPVOID) {
 // ===== ImGui（M2/M3）：面板激活期渲染；字体用系统微软雅黑（中文字形）=====
 static void InstallWndProcHook(); // 前置声明（定义在 WndProc 段）
 // 上下文+字体+样式（D3D9/D3D8 双后端共用一份观感）
+// SC:R 对策（2026-10-29 方案 B）：ImGui 分配器替换为 VirtualAlloc 自管页——CRT 堆被反作弊
+// hook 监察（写外来堆分配的 io 字段即崩），context/内部结构全部脱离 CRT 堆绕开监察。
+// 必须在 CreateContext 之前设置（imgui 约定）；粒度 64KB（VirtualAlloc 对齐）小分配略浪费可接受
+static void* MemAllocVA(size_t sz, void*) {
+    void* p = VirtualAlloc(NULL, sz ? sz : 1, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!p) {
+        char lb[128];
+        snprintf(lb, sizeof(lb), "MemAllocVA FAILED sz=%zu err=%lu", sz, GetLastError());
+        LogLine(lb);
+    }
+    return p;
+}
+static void MemFreeVA(void* p, void*) {
+    if (p) VirtualFree(p, 0, MEM_RELEASE);
+}
 static bool InitContextCommon() {
+    static bool s_allocSet = false;
+    if (!s_allocSet) {
+        ImGui::SetAllocatorFunctions(MemAllocVA, MemFreeVA);
+        s_allocSet = true;
+        LogLine("imgui allocator switched to VirtualAlloc (SC:R plan B)");
+    }
+    LogLine("InitContextCommon: CreateContext begin");
     ImGui::CreateContext();
+    LogLine("InitContextCommon: CreateContext ok");
     ImGuiIO& io = ImGui::GetIO();
     // 系统字体：微软雅黑（Win7+ 自带；不硬编码盘符，GetWindowsDirectory 解析）
     wchar_t fontPath[MAX_PATH];
@@ -847,8 +905,10 @@ static bool InitContextCommon() {
 // 二轮审计修复：失败发生在面板已激活帧时必须复位 g_panelActive 并收回面板上行态——否则激活态卡死
 // （吞输入不看 broken 就会永久吞游戏输入；切换被禁也无法收起）
 static volatile LONG g_panelBroken = 0;
+static void PanelImeDetach(HWND h); // 前置声明（定义在 WndProc 段；异常收起还原 IME 上下文用）
 static void ReportNoPanelOnce() {
     InterlockedExchange(&g_panelBroken, 1);
+    PanelImeDetach(g_gameHwnd); // 异常收起也要还原 IME 上下文（防残留污染游戏自带输入）
     if (InterlockedExchange(&g_panelActive, 0)) PipePushOut("{\"t\":\"panel\",\"on\":0}\n");
     static bool sent = false;
     if (sent) return;
@@ -865,14 +925,56 @@ static void ReportPanelReadyOnce() {
     LogLine("panel ready reported (hotkey yield to native)");
 }
 static bool g_imguiWin32Inited = false; // Win32 后端+WndProc 阶段完成标记（DX9 后端需游戏设备，两阶段初始化）
+// 面板期 IME 上下文管理（SC:R 实测 2026-10-29：中文输入全无且 ime commit 日志零触发，英文数字正常
+// =消息流通但 GCS_RESULTSTR 从未到达——游戏窗口 HIMC 被禁（暴雪游戏惯例：游戏内聊天自管 IME，
+// ImmAssociateContext(hwnd,NULL)）。面板激活时临时挂新上下文，收起/异常时还原。
+static HIMC g_prevImc = NULL;
+static HIMC g_imeNewCtx = NULL; // 面板期新建上下文（detach 时销毁防句柄泄漏）
+static bool g_imeAttached = false;
+static void PanelImeAttach(HWND h) {
+    if (!h || g_imeAttached) return;
+    HIMC cur = ImmGetContext(h);
+    if (cur) { ImmReleaseContext(h, cur); return; } // 窗口已有 IME 上下文（Warface 等不禁 IME 的游戏）——不动
+    g_imeNewCtx = ImmCreateContext();
+    g_prevImc = ImmAssociateContext(h, g_imeNewCtx);
+    g_imeAttached = true;
+    // 新建上下文默认英文关闭态（open status=FALSE）——实测挂上后中文提交零到达（用户切输入法
+    // 对 IMM32 兼容窗口的 CUAS 切换时序不稳）：主动开 IME + 置中文模式，输入框聚焦即打中文
+    HIMC nc = ImmGetContext(h);
+    if (nc) {
+        ImmSetOpenStatus(nc, TRUE);
+        DWORD c = 0, s = 0;
+        if (ImmGetConversionStatus(nc, &c, &s))
+            ImmSetConversionStatus(nc, (c & ~IME_CMODE_LANGUAGE) | IME_CMODE_NATIVE, s);
+        ImmReleaseContext(h, nc);
+    }
+    LogLine("panel ime: attached fresh context (open, native mode)");
+}
+static void PanelImeDetach(HWND h) {
+    if (!h || !g_imeAttached) return;
+    ImmAssociateContext(h, g_prevImc);
+    if (g_imeNewCtx) { ImmDestroyContext(g_imeNewCtx); g_imeNewCtx = NULL; }
+    g_imeAttached = false;
+    g_prevImc = NULL;
+    LogLine("panel ime: detached (restored)");
+}
 static HWND FindMainWindowOfCurrentProcess(); // 前置声明（定义在 D3D8 段；探针路径枚举主窗口用）
 // 探针路径前置：Win32 后端 + WndProc 子类化尽早就位（DX9 后端等首帧拿到游戏设备指针再建）。
 // 若等首次 Shift+Tab 才装 WndProc，第一下热键会被原窗口过程吞掉（M2 踩坑 1 时序死锁）
 static void ImGuiPreInitWin32() {
-    if (g_imguiWin32Inited) return;
+    LogLine("pre-init: begin"); // 无死角日志（SC:R 排障——任何静默 return 都可见）
+    if (g_imguiWin32Inited) { LogLine("pre-init: already inited, return"); return; }
     if (!g_gameHwnd) g_gameHwnd = FindMainWindowOfCurrentProcess();
-    if (!g_gameHwnd) return;
+    if (!g_gameHwnd) {
+        static bool s_hwndFailLogged = false; // 找窗口失败只打一次（周期重试防刷屏）
+        if (!s_hwndFailLogged) { LogLine("imgui pre-init: main window not found yet (retry pending)"); s_hwndFailLogged = true; }
+        return;
+    }
+    char lb[96];
+    snprintf(lb, sizeof(lb), "pre-init: hwnd=%p, init context", (void*)g_gameHwnd);
+    LogLine(lb);
     InitContextCommon();
+    LogLine("pre-init: context ok");
     if (!ImGui_ImplWin32_Init(g_gameHwnd)) { LogLine("imgui win32 pre-init failed"); return; }
     g_imguiWin32Inited = true;
     InstallWndProcHook(); // Shift+Tab 检测/面板期吞输入的入口
@@ -932,8 +1034,8 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (himc) {
                 LONG n = ImmGetCompositionStringW(himc, GCS_RESULTSTR, NULL, 0);
                 if (n > 0) {
-                    wchar_t buf[32];
-                    if (n > (LONG)sizeof(buf)) n = sizeof(buf); // 单次提交上限 16 字（环形缓冲 512B 足够）
+                    wchar_t buf[128]; // 64 字提交上限（OV_TEXT_CAP 160 足够容纳；16 字实测截断长句）
+                    if (n > (LONG)sizeof(buf)) n = sizeof(buf);
                     if (ImmGetCompositionStringW(himc, GCS_RESULTSTR, buf, n) >= 0) {
                         int units = n / (int)sizeof(wchar_t);
                         for (int i = 0; i < units; ++i) ImGui::GetIO().AddInputCharacterUTF16((ImWchar16)buf[i]);
@@ -953,8 +1055,19 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // 热键显隐（M5.7：跟随设置下发的 hotkey 帧，默认 Shift+Tab；吞掉本键不给游戏）。消息态为主、异步态兜底；
     // g_panelBroken 门禁：初始化失败后不再切换（否则不可见面板吞游戏输入）
     if (m == WM_KEYDOWN && w == (WPARAM)g_hotkeyVK && !g_panelBroken && HotkeyModsHeld()) {
+        // 环境拒绝建设备（SC:R 收口）：面板永远画不出——热键立即收回让位（nopanel 恢复悬浮窗全局
+        // 热键）+ 本键透传游戏。ReportNoPanelOnce 置 g_panelBroken=1，之后本分支不再进入（键透传）
+        // D3D11 已就绪则 env-denied 无效（d3d9 探针 verdict 不覆盖 DX11 渲染能力；双保险防
+        // 探针置位与 D3D11 init ok 清零之间的时序窗残留）
+        if (g_probeEnvDenied && !g_d3d11Ready) {
+            ReportNoPanelOnce();
+            LogLine("hotkey on env-denied -> immediate float window fallback");
+            return CallWindowProcW(g_origWndProc, h, m, w, l);
+        }
         LONG nv = g_panelActive ? 0 : 1;
         InterlockedExchange(&g_panelActive, nv);
+        if (nv) { g_panelOnTick = GetTickCount(); PanelImeAttach(h); } // 无渲染能力超时收起的起点（InitThread 检查）+ 面板期 IME 上下文（SC:R 禁 IME 实测）
+        else PanelImeDetach(h);
         // 面板状态上行：客户端收到 on:1 时悬浮窗热键让位（globalShortcut 是系统级，DLL 吞不掉——
         // 不让位会出现 DLL 面板与悬浮窗叠加，实测踩坑）
         PipePushOut(nv ? "{\"t\":\"panel\",\"on\":1}\n" : "{\"t\":\"panel\",\"on\":0}\n");
@@ -962,6 +1075,7 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (m == WM_KEYDOWN && w == VK_ESCAPE && g_panelActive) { // Esc 收起（一期同口径）
         InterlockedExchange(&g_panelActive, 0);
+        PanelImeDetach(h);
         PipePushOut("{\"t\":\"panel\",\"on\":0}\n");
         return 0;
     }
@@ -1177,16 +1291,18 @@ static void DrawChatView(PanelData* d) {
         float vpad = (bh > av + 2.0f) ? 0.0f : (av + 2.0f - bh) * 0.5f; // 气泡比头像矮时垂直居中
         ImU32 bubbleCol = m.self ? IM_COL32(22, 132, 66, 235) : IM_COL32(44, 48, 54, 235);
         if (m.self) {
-            float bx = rowX + avail - av - 6 - bw;
+            float brel = avail - av - 6 - bw;                    // 气泡相对行首偏移（SetCursorPosX 用窗口相对、DrawList 用屏幕绝对——两套坐标系不可混拼）
+            float bx = scr0.x + brel;                            // 屏幕 x：scr0 已含窗口位置；原写法 rowX(相对)+偏移 直接当屏幕坐标=气泡水平固定不随面板拖拽移动（2026-10-29 SC:R 实测实锤）
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + vpad), ImVec2(bx + bw, scr0.y + vpad + bh), bubbleCol, 6.0f);
-            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosX(rowX + brel + 7.0f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
             ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
             AvatarDraw(d->selfUname, u8"我", ImVec2(scr0.x + avail - av, scr0.y + 2), av);
         } else {
-            float bx = rowX + av + 6;
+            float brel = av + 6;
+            float bx = scr0.x + brel;                            // 屏幕 x（同上坐标系修复）
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + vpad), ImVec2(bx + bw, scr0.y + vpad + bh), bubbleCol, 6.0f);
-            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosX(rowX + brel + 7.0f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
             ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
             AvatarDraw(m.uname, m.name, ImVec2(scr0.x + 2, scr0.y + 2), av);
@@ -1299,9 +1415,9 @@ static void DrawRoomTab(PanelData* d) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.35f, 1.0f));
             ImGui::TextUnformatted(c.name);
             ImGui::PopStyleColor();
-            float bx = rowX + avail - av - 6 - bw;
+            float bx = scr0.x + (avail - av - 6 - bw);           // 屏幕 x（DrawList 屏幕坐标；rowX 相对值不可直接拼——拖拽不跟随 bug 同私聊，2026-10-29）
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + ImGui::GetTextLineHeight() + vpad), ImVec2(bx + bw, scr0.y + ImGui::GetTextLineHeight() + vpad + bh), bubbleCol, 6.0f);
-            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosX(rowX + avail - av - 6 - bw + 7.0f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
             ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
             AvatarDraw(d->selfUname, u8"我", ImVec2(scr0.x + avail - av, scr0.y + 2), av);
@@ -1310,9 +1426,9 @@ static void DrawRoomTab(PanelData* d) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.35f, 1.0f));
             ImGui::TextUnformatted(c.name);
             ImGui::PopStyleColor();
-            float bx = rowX + av + 6;
+            float bx = scr0.x + (av + 6);                        // 屏幕 x（同上坐标系修复）
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + ImGui::GetTextLineHeight() + vpad), ImVec2(bx + bw, scr0.y + ImGui::GetTextLineHeight() + vpad + bh), bubbleCol, 6.0f);
-            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosX(rowX + av + 6 + 7.0f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
             ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
             AvatarDraw(c.uname, c.name, ImVec2(scr0.x + 2, scr0.y + 2), av);
@@ -1455,22 +1571,68 @@ static IDirect3DTexture9* AvatarTexGet(const char* uname) {
     LeaveCriticalSection(&g_cs);
     return tex;
 }
+// SC:R（2026-10-29）：D3D11 头像纹理——主渲染为 DX11 时 g_imguiDev（D3D9）恒空，AvatarTexGet
+// 永远 NULL → 头像全部回退首字母（实测实锤）。BGRA 位图直映 DXGI_FORMAT_B8G8R8A8_UNORM
+// （零转换）IMMUTABLE 一次上传，SRV 缓存到槽位。
+static ID3D11ShaderResourceView* AvatarTexGet11(const char* uname) {
+    if (!g_dev11 || !uname || !uname[0]) return NULL;
+    ID3D11ShaderResourceView* srv = NULL;
+    EnterCriticalSection(&g_cs);
+    for (int i = 0; i < g_avatarCount; ++i) {
+        if (_stricmp(g_avatars[i].uname, uname) != 0 || g_avatars[i].px.empty()) continue;
+        if (g_avatars[i].tex11) { srv = g_avatars[i].tex11; break; }
+        D3D11_TEXTURE2D_DESC d;
+        d.Width = (UINT)g_avatars[i].w;
+        d.Height = (UINT)g_avatars[i].h;
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.SampleDesc.Quality = 0;
+        d.Usage = D3D11_USAGE_IMMUTABLE;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        d.CPUAccessFlags = 0;
+        d.MiscFlags = 0;
+        D3D11_SUBRESOURCE_DATA sd;
+        sd.pSysMem = &g_avatars[i].px[0];
+        sd.SysMemPitch = (UINT)g_avatars[i].w * 4;
+        sd.SysMemSlicePitch = 0;
+        ID3D11Texture2D* tex = NULL;
+        if (SUCCEEDED(g_dev11->CreateTexture2D(&d, &sd, &tex)) && tex) {
+            if (FAILED(g_dev11->CreateShaderResourceView(tex, NULL, &srv)) || !srv) srv = NULL;
+            tex->Release();
+        } else srv = NULL;
+        if (srv) g_avatars[i].tex11 = srv;
+        break;
+    }
+    LeaveCriticalSection(&g_cs);
+    return srv;
+}
 // 设备重绑后旧设备纹理全作废：清纹理指针（位图保留）+ 向客户端要重发（新设备重建）
 static void AvatarTexFlush() {
     EnterCriticalSection(&g_cs);
     for (int i = 0; i < g_avatarCount; ++i) {
         if (g_avatars[i].tex) { g_avatars[i].tex->Release(); g_avatars[i].tex = NULL; }
+        if (g_avatars[i].tex11) { g_avatars[i].tex11->Release(); g_avatars[i].tex11 = NULL; }
     }
     LeaveCriticalSection(&g_cs);
     PipePushOut("{\"t\":\"avatars-need\"}\n");
 }
-// 头像绘制：有纹理画圆角图，无纹理画"首字母圆底"兜底（主题绿）
+// 头像绘制：DX11 路径用 SRV、DX9 路径用 D3D9 纹理，都无则"首字母圆底"兜底（主题绿）
 static void AvatarDraw(const char* uname, const char* name, ImVec2 pos, float size) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    IDirect3DTexture9* tex = AvatarTexGet(uname);
-    if (tex) {
-        dl->AddImageRounded((ImTextureID)tex, pos, ImVec2(pos.x + size, pos.y + size), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), size * 0.5f);
-        return;
+    if (g_d3d11Ready) {
+        ID3D11ShaderResourceView* srv = AvatarTexGet11(uname);
+        if (srv) {
+            dl->AddImageRounded((ImTextureID)srv, pos, ImVec2(pos.x + size, pos.y + size), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), size * 0.5f);
+            return;
+        }
+    } else {
+        IDirect3DTexture9* tex = AvatarTexGet(uname);
+        if (tex) {
+            dl->AddImageRounded((ImTextureID)tex, pos, ImVec2(pos.x + size, pos.y + size), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), size * 0.5f);
+            return;
+        }
     }
     float cx = pos.x + size * 0.5f, cy = pos.y + size * 0.5f;
     dl->AddCircleFilled(ImVec2(cx, cy), size * 0.5f, IM_COL32(69, 150, 90, 255), 24);
@@ -1658,6 +1820,7 @@ static HRESULT WINAPI Hooked_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEV
         LogLine(line);
         g_device = *out; // 总是记录最新设备（引擎可能先建测试设备再建真设备；渲染以 Present 实参设备为准）
         g_gameHwnd = hFocus;
+        InterlockedExchange(&g_probeEnvDenied, 0); // 设备捕获成功=环境不拒绝，热键回落标志复位
         PatchDeviceVtableSlots(*out); // Present/Reset 槽补丁（幂等；防重复钩——二次 create 重补会把 orig 覆写成钩自身→递归）
         HookImplicitSwapChain(*out);  // 隐式交换链 Present 补钩（第二呈现路径）
         // 立即初始化 ImGui + WndProc 子类化（不能等首次激活帧：Shift+Tab 检测依赖 WndProc 钩，
@@ -1680,6 +1843,34 @@ static IDirect3D9* WINAPI Hooked_Direct3DCreate9(UINT sdk) {
         }
     }
     return d3d;
+}
+// D3D9Ex 设备捕获（SC:R/暴雪引擎实测走 Direct3DCreate9Ex 动态解析 + CreateDeviceEx：
+// 导入表无 Direct3DCreate9 符号，IAT 类钩全空；IDirect3D9Ex 虚表 = IDirect3D9 全部槽后追加
+// Ex 方法，CreateDeviceEx=slot 20（SDK d3d9.h 声明序：17 ModeCountEx/18 EnumModesEx/19
+// DisplayModeEx/20 CreateDeviceEx/21 GetAdapterLUID）。IDirect3DDevice9Ex 继承 9，捕获逻辑同款。
+static HRESULT WINAPI Hooked_CreateDeviceEx(IDirect3D9Ex* self, UINT adapter, D3DDEVTYPE type, HWND hFocus, DWORD behavior, D3DPRESENT_PARAMETERS* pp, D3DDISPLAYMODEEX* fsex, IDirect3DDevice9Ex** out) {
+    // 入口透传计数（SC:R 排障）：区分「游戏建设备没走这个钩」vs「走了但失败」——前 5 次全打
+    static volatile LONG s_cdExN = 0;
+    LONG cn = InterlockedIncrement(&s_cdExN);
+    if (cn <= 5) {
+        char lb[128];
+        snprintf(lb, sizeof(lb), "Hooked_CreateDeviceEx called #%ld adapter=%u hwnd=%p behavior=0x%08X", cn, adapter, (void*)hFocus, behavior);
+        LogLine(lb);
+    }
+    HRESULT hr = g_origCreateDeviceEx(self, adapter, type, hFocus, behavior, pp, fsex, out);
+    if (g_probeBusy) return hr; // 探针自建设备：不捕获
+    if (SUCCEEDED(hr) && out && *out) {
+        char line[128];
+        snprintf(line, sizeof(line), "device captured via CreateDeviceEx hwnd=%p, hooking Present/Reset", (void*)hFocus);
+        LogLine(line);
+        g_device = (IDirect3DDevice9*)*out; // Ex→9 指针兼容（Ex 虚表前缀含 Present/Reset 同槽语义）
+        g_gameHwnd = hFocus;
+        InterlockedExchange(&g_probeEnvDenied, 0); // 设备捕获成功=环境不拒绝，热键回落标志复位
+        PatchDeviceVtableSlots((IDirect3DDevice9*)*out);
+        HookImplicitSwapChain((IDirect3DDevice9*)*out);
+        ImGuiEnsure9((IDirect3DDevice9*)*out);
+    }
+    return hr;
 }
 
 // ===== M4 子进程跟随注入（启动器型游戏：启动器拉起游戏进程时自动跟随）=====
@@ -2159,6 +2350,43 @@ static void UnhookAll() {
         }
     }
     g_vtD3d9Slot = NULL;
+    if (g_vtD3d9ExSlot && g_origCreateDeviceEx) {
+        DWORD old = 0;
+        if (VirtualProtect(g_vtD3d9ExSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+            *g_vtD3d9ExSlot = (void*)g_origCreateDeviceEx;
+            VirtualProtect(g_vtD3d9ExSlot, sizeof(void*), old, &old);
+            LogLine("unhook: CreateDeviceEx vtable restored");
+        }
+    }
+    g_vtD3d9ExSlot = NULL;
+    // D3D11 虚表还原（工厂 4 槽 + 交换链 2 槽；dxgi 静态表地址在模块存续期有效）
+    if (g_vtFactory11 && g_factoryHooked) {
+        DWORD old = 0;
+        if (VirtualProtect(&g_vtFactory11[11], sizeof(void*) * 15, PAGE_EXECUTE_READWRITE, &old)) {
+            g_vtFactory11[11] = g_origFactoryCreateSwapChain;
+            g_vtFactory11[16] = g_origFactoryCreateSwapChainForHwnd;
+            g_vtFactory11[17] = g_origFactoryCreateSwapChainForCoreWindow;
+            g_vtFactory11[25] = g_origFactoryCreateSwapChainForComposition;
+            VirtualProtect(&g_vtFactory11[11], sizeof(void*) * 15, old, &old);
+            LogLine("unhook: d3d11 factory CreateSwapChain* vtable restored");
+        }
+    }
+    g_vtFactory11 = NULL;
+    g_factoryHooked = false;
+    if (g_vtSwapChain11 && g_swapChainHooked) {
+        DWORD old = 0;
+        if (VirtualProtect(&g_vtSwapChain11[8], sizeof(void*) * 15, PAGE_EXECUTE_READWRITE, &old)) {
+            g_vtSwapChain11[8] = g_origSwapChainPresent;
+            g_vtSwapChain11[22] = g_origSwapChainPresent1;
+            VirtualProtect(&g_vtSwapChain11[8], sizeof(void*) * 15, old, &old);
+            LogLine("unhook: d3d11 swapchain Present vtable restored");
+        }
+    }
+    g_vtSwapChain11 = NULL;
+    g_swapChainHooked = false;
+    // 渲染目标缓存（修复 2026-10-29：Present 前绑交换链 back buffer 的 RTV，退出时释放）
+    if (g_rtv11) { g_rtv11->Release(); g_rtv11 = NULL; }
+    g_rtChain11 = NULL;
 #ifndef _WIN64
     // M3：D3D8 槽还原（vt[14]=Reset、vt[15]=Present，与安装处一致）
     if (g_vtDev8Slot && g_origPresent8 && g_origReset8) {
@@ -2358,10 +2586,469 @@ static bool TryHookD3D9(HMODULE d3d9) {
 // 双挂点：①IDirect3D9 虚表 CreateDevice 槽（捕获游戏后续创建，走既有 ImGuiEnsure 流程）；
 // ②Device 虚表 Present/Reset 槽（覆盖已存在的游戏设备）。D3D8 探针同款模式（M3 已验证）。
 static HWND g_probeHwnd = NULL;
-static bool ProbeHookD3D9DeviceVtable(HMODULE d3d9) {
-    if (g_origPresent) return true; // 已挂（幂等）
-    PFN_Direct3DCreate9 create = (PFN_Direct3DCreate9)GetProcAddress(d3d9, "Direct3DCreate9");
-    if (!create) return false;
+// 返回：1=设备虚表 Present 已补（完整成功，可停探针）/ 2=CreateDevice/Ex 槽已钩、等游戏建设备
+// 自捕获（SC:R 注入早于设备创建，游戏自己的调用必然命中；自建设备失败不致命）/ 0=虚表钩未装上
+// ===== 版本劫持入口（SC:R 收口）：代理 d3d9 的 Direct3DCreate9/Ex 转发函数在真身对象返回
+// 游戏之前调用本导出——对象虚表当场补钩（slot 16 CreateDevice + Ex 对象 slot 20
+// CreateDeviceEx），游戏随后建设备必经钩子捕获。时序零竞态：钩装好严格发生在「游戏拿到
+// 对象」与「游戏调建设备」之间（同一次代理转发调用内完成）。幂等；SC:R 环境对进程内新建
+// 设备 D3DKMT 层拦截（E_INVALIDARG），此路径让游戏自己建设备给我们——彻底绕开拦截。
+extern "C" __declspec(dllexport) void __stdcall OverlayHookD3D9Object(IDirect3D9* d3d) {
+    if (!d3d || g_origPresent) return;
+    static volatile LONG s_handoffN = 0;
+    LONG hn = InterlockedIncrement(&s_handoffN);
+    void** vt = *(void***)d3d;
+    DWORD old = 0;
+    if (VirtualProtect(&vt[16], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+        if (vt[16] != (void*)&Hooked_CreateDevice) {
+            g_vtD3d9Slot = &vt[16];
+            g_origCreateDevice = (PFN_CreateDevice)vt[16];
+            vt[16] = (void*)&Hooked_CreateDevice;
+            char lb[96];
+            snprintf(lb, sizeof(lb), "CreateDevice vtable hooked via proxy handoff #%ld (vt=%p)", hn, (void*)vt);
+            LogLine(lb);
+        }
+        VirtualProtect(&vt[16], sizeof(void*), old, &old);
+    }
+    IDirect3D9Ex* ex = NULL;
+    if (SUCCEEDED(d3d->QueryInterface(__uuidof(IDirect3D9Ex), (void**)&ex)) && ex) {
+        void** vtx = *(void***)ex;
+        if (VirtualProtect(&vtx[20], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+            if (vtx[20] != (void*)&Hooked_CreateDeviceEx) {
+                g_origCreateDeviceEx = (PFN_CreateDeviceEx)vtx[20];
+                g_vtD3d9ExSlot = &vtx[20];
+                vtx[20] = (void*)&Hooked_CreateDeviceEx;
+                LogLine("CreateDeviceEx vtable hooked via proxy handoff (D3D9Ex)");
+            }
+            VirtualProtect(&vtx[20], sizeof(void*), old, &old);
+        }
+        ex->Release();
+    }
+    ImGuiPreInitWin32(); // WndProc 尽早就位（主窗口未建时幂等失败，后续探针/捕获路径重试）
+}
+
+// ===== D3D11 路径（方案 B 立项 2026-10-28：SC:R 主渲染 = D3D11 实锤——deny-time 模块快照
+// d3d11.dll+dxgi.dll+nvd3dumx NVIDIA D3D11 UMD；d3d9 全链路对主渲染无捕获面）。架构：
+// 版本劫持代理 d3d11.dll（转发 D3D11CreateDevice*）→ 转发函数在真身设备返回游戏前调本导出
+// OverlayHookD3D11Device → QI IDXGIDevice → GetParent 工厂 → 钩工厂虚表四个 CreateSwapChain*
+// 槽（CreateSwapChain=11/ForHwnd=16/ForCoreWindow=17/ForComposition=25，SDK dxgi.h+dxgi1_2.h
+// 声明序）→ 游戏建交换链被捕获 → 钩其 Present(8)/Present1(22)（SwapChain1）→ 每帧 ImGui 渲染。
+// 工厂虚表是 dxgi.dll 静态表——钩一次对所有工厂实例生效；自建设备不做（D3D11 设备创建一体，
+// 反作弊对进程内新建设备同样拦截——handoff 让游戏自己建设备，零拦截面）。
+// 钩交换链虚表的 Present(8)/Present1(22)（幂等；slot 22 仅 SwapChain1 接口存在）
+static HRESULT WINAPI Hooked_DXGISwapChain_Present(IDXGISwapChain* sc, UINT sync, UINT flags);
+static HRESULT WINAPI Hooked_DXGISwapChain_Present1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params);
+// 虚表布局安全校验（SC:R 崩溃修复 2026-10-28）：语义槽硬补的前提是「虚表布局=声明序」——新系统
+// dxgi 可能启用 XFG 扩展虚表（真槽前插类型哈希槽）或版本差异，错槽覆盖=游戏调用跳崩。校验口径：
+// vt[8..25] 逐槽指针必须全部落在 dxgi.dll 模块地址范围内（XFG 哈希槽内容不在模块内→校验失败→
+// 安全跳过不钩，游戏零影响）。模块边界用 psapi GetModuleInformation。
+static bool ValidateVtblInModule(void** vt, int minSlot, int maxSlot, const char* moduleName, const char* tag) {
+    wchar_t modW[64];
+    MultiByteToWideChar(CP_UTF8, 0, moduleName, -1, modW, 64);
+    HMODULE mod = GetModuleHandleW(modW);
+    if (!mod) { LogLine(tag); LogLine("  validate fail: module not loaded"); return false; }
+    MODULEINFO mi;
+    if (!GetModuleInformation(GetCurrentProcess(), mod, &mi, sizeof(mi))) { LogLine(tag); LogLine("  validate fail: GetModuleInformation"); return false; }
+    BYTE* base = (BYTE*)mi.lpBaseOfDll;
+    SIZE_T size = mi.SizeOfImage;
+    for (int i = minSlot; i <= maxSlot; ++i) {
+        BYTE* fn = (BYTE*)vt[i];
+        if (fn < base || fn >= base + size) {
+            char lb[160];
+            snprintf(lb, sizeof(lb), "%s validate fail: vt[%d]=%p out of %s range %p+%p (XFG layout or version diff?) -> hook skipped", tag, i, (void*)fn, moduleName, (void*)base, (void*)size);
+            LogLine(lb);
+            return false;
+        }
+    }
+    char lb[128];
+    snprintf(lb, sizeof(lb), "%s validate ok: vt[%d..%d] all in %s", tag, minSlot, maxSlot, moduleName);
+    LogLine(lb);
+    return true;
+}
+static void HookSwapChainPresentSlots(IDXGISwapChain* sc) {
+    if (!sc || g_swapChainHooked) return;
+    IDXGISwapChain1* sc1 = NULL;
+    if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1)) && sc1) {
+        void** vt = *(void***)sc1;
+        DWORD old = 0;
+        if (ValidateVtblInModule(vt, 8, 25, "dxgi.dll", "swapchain vtable") && VirtualProtect(&vt[8], sizeof(void*) * 15, PAGE_EXECUTE_READWRITE, &old)) {
+            if (vt[8] != (void*)&Hooked_DXGISwapChain_Present) {
+                g_vtSwapChain11 = vt;
+                g_origSwapChainPresent = vt[8];
+                g_origSwapChainPresent1 = vt[22];
+                vt[8] = (void*)&Hooked_DXGISwapChain_Present;
+                vt[22] = (void*)&Hooked_DXGISwapChain_Present1;
+                g_swapChainHooked = true;
+                LogLine("dxgi swapchain Present/Present1 vtable hooked (d3d11)");
+                // ImGui DX11 后端延迟初始化（崩溃面切分：handoff 只做虚表操作，后端 init 等交换链
+                // 确认捕获后进行——init 崩溃与虚表补丁崩溃可由日志界分）
+                if (!g_d3d11Ready && g_dev11 && g_ctx11) {
+                    LogLine("imgui dx11 init begin");
+                    // init 段独立 __try（SC:R 2026-10-29）：GImGui 未建时写 io 崩是「时序性」——
+                    // 周期重试在 context（VirtualAlloc 页）建成后会成功——不置 disabled
+                    __try {
+                        ImGuiPreInitWin32(); // context 创建（幂等；主窗口未建时跳过等重试）
+                        if (g_imguiWin32Inited && ImGui_ImplDX11_Init(g_dev11, g_ctx11)) {
+                            InterlockedExchange(&g_d3d11Ready, 1);
+                            InterlockedExchange(&g_probeEnvDenied, 0); // D3D11 就绪=热键走帧内面板
+                            LogLine("imgui dx11 init ok (deferred, after swapchain capture)");
+                        }
+                    } __except (EXCEPTION_EXECUTE_HANDLER) {
+                        LogLine("imgui dx11 init EXCEPTION (will retry after context ready)");
+                    }
+                }
+            }
+            VirtualProtect(&vt[8], sizeof(void*) * 15, old, &old);
+        }
+        sc1->Release();
+    }
+}
+static HRESULT WINAPI Hooked_Factory_CreateSwapChain(void* self, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_Factory_CreateSwapChain called #%ld", (long)s_n); LogLine(lb); }
+    HRESULT hr = ((HRESULT (WINAPI*)(void*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**))g_origFactoryCreateSwapChain)(self, dev, desc, out);
+    if (SUCCEEDED(hr) && out && *out) { LogLine("d3d11 swapchain captured via CreateSwapChain"); HookSwapChainPresentSlots(*out); }
+    return hr;
+}
+static HRESULT WINAPI Hooked_Factory_CreateSwapChainForHwnd(void* self, IUnknown* dev, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_Factory_CreateSwapChainForHwnd called #%ld", (long)s_n); LogLine(lb); }
+    HRESULT hr = ((HRESULT (WINAPI*)(void*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**))g_origFactoryCreateSwapChainForHwnd)(self, dev, hwnd, desc, full, restrict, out);
+    if (SUCCEEDED(hr) && out && *out) { LogLine("d3d11 swapchain captured via CreateSwapChainForHwnd"); HookSwapChainPresentSlots(*out); }
+    return hr;
+}
+static HRESULT WINAPI Hooked_Factory_CreateSwapChainForCoreWindow(void* self, IUnknown* dev, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc, IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_Factory_CreateSwapChainForCoreWindow called #%ld", (long)s_n); LogLine(lb); }
+    HRESULT hr = ((HRESULT (WINAPI*)(void*, IUnknown*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**))g_origFactoryCreateSwapChainForCoreWindow)(self, dev, window, desc, restrict, out);
+    if (SUCCEEDED(hr) && out && *out) { LogLine("d3d11 swapchain captured via CreateSwapChainForCoreWindow"); HookSwapChainPresentSlots(*out); }
+    return hr;
+}
+static HRESULT WINAPI Hooked_Factory_CreateSwapChainForComposition(void* self, IUnknown* dev, const DXGI_SWAP_CHAIN_DESC1* desc, IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_Factory_CreateSwapChainForComposition called #%ld", (long)s_n); LogLine(lb); }
+    HRESULT hr = ((HRESULT (WINAPI*)(void*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**))g_origFactoryCreateSwapChainForComposition)(self, dev, desc, restrict, out);
+    if (SUCCEEDED(hr) && out && *out) { LogLine("d3d11 swapchain captured via CreateSwapChainForComposition"); HookSwapChainPresentSlots(*out); }
+    return hr;
+}
+// 钩工厂虚表的四个建链槽（dxgi 静态表——一次补丁覆盖全部工厂实例；幂等）。
+// 崩溃修复（2026-10-28）：补丁前 ValidateVtblInModule 校验布局（XFG/版本差异 → 安全跳过）；
+// Factory1 强转 Factory2 的越界写风险同被校验拦截（vt[25] 越界=校验失败）。
+// 接口表覆盖（SC:R 交换链零捕获修复）：Factory2/Factory1/Factory 三个接口类各自独立虚表——
+// 游戏可能持任意版本的工厂接口调用 CreateSwapChain，仅钩 Factory2 表会漏——调用方应三表全钩。
+static void HookFactorySwapChainSlots(IDXGIFactory2* factory) {
+    if (!factory || g_factoryHooked) return;
+    void** vt = *(void***)factory;
+    if (!ValidateVtblInModule(vt, 8, 25, "dxgi.dll", "factory vtable")) return;
+    DWORD old = 0;
+    if (VirtualProtect(&vt[11], sizeof(void*) * 15, PAGE_EXECUTE_READWRITE, &old)) {
+        g_vtFactory11 = vt;
+        g_origFactoryCreateSwapChain = vt[11];
+        g_origFactoryCreateSwapChainForHwnd = vt[16];
+        g_origFactoryCreateSwapChainForCoreWindow = vt[17];
+        g_origFactoryCreateSwapChainForComposition = vt[25];
+        vt[11] = (void*)&Hooked_Factory_CreateSwapChain;
+        vt[16] = (void*)&Hooked_Factory_CreateSwapChainForHwnd;
+        vt[17] = (void*)&Hooked_Factory_CreateSwapChainForCoreWindow;
+        vt[25] = (void*)&Hooked_Factory_CreateSwapChainForComposition;
+        g_factoryHooked = true;
+        VirtualProtect(&vt[11], sizeof(void*) * 15, old, &old);
+        LogLine("dxgi factory CreateSwapChain* vtable hooked (d3d11)");
+    }
+    // Factory1 视图虚表（slot 11 CreateSwapChain）——游戏持 Factory1 接口调用的路径
+    IDXGIFactory1* f1view = NULL;
+    if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory1), (void**)&f1view)) && f1view) {
+        void** vt1 = *(void***)f1view;
+        DWORD old1 = 0;
+        if (vt1 != vt && ValidateVtblInModule(vt1, 8, 14, "dxgi.dll", "factory1 vtable") && VirtualProtect(&vt1[11], sizeof(void*), PAGE_EXECUTE_READWRITE, &old1)) {
+            vt1[11] = (void*)&Hooked_Factory_CreateSwapChain;
+            VirtualProtect(&vt1[11], sizeof(void*), old1, &old1);
+            LogLine("dxgi factory1 vtable CreateSwapChain hooked");
+        }
+        f1view->Release();
+    }
+    // Factory 视图虚表（slot 11）——最老接口路径
+    IDXGIFactory* fview = NULL;
+    if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory), (void**)&fview)) && fview) {
+        void** vtf = *(void***)fview;
+        DWORD oldf = 0;
+        if (vtf != vt && vtf != *(void***)&f1view && ValidateVtblInModule(vtf, 8, 12, "dxgi.dll", "factory vtable(old)") && VirtualProtect(&vtf[11], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldf)) {
+            vtf[11] = (void*)&Hooked_Factory_CreateSwapChain;
+            VirtualProtect(&vtf[11], sizeof(void*), oldf, &oldf);
+            LogLine("dxgi factory(old) vtable CreateSwapChain hooked");
+        }
+        fview->Release();
+    }
+}
+// 渲染目标管理（2026-10-29「渲染跑通但面板不可见」根因修复）：
+// vendored imgui_impl_dx11 的 RenderDrawData 不绑定 RTV（官方把 OMSetRenderTargets 放宿主
+// main.cpp）——不绑定时 ImGui 画进游戏遗留渲染目标（离屏/MSAA 目标），Present 出来的画面
+// 看不到面板。渲染前必须绑被调 Present 的交换链 back buffer，画完恢复游戏原绑定。
+static bool EnsureD3D11RenderTarget(IDXGISwapChain* sc) {
+    if (!g_dev11 || !sc) return false;
+    if (g_rtv11 && g_rtChain11 == (void*)sc) return true;
+    if (g_rtv11) { g_rtv11->Release(); g_rtv11 = NULL; g_rtChain11 = NULL; }
+    ID3D11Texture2D* bb = NULL;
+    if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) || !bb) return false;
+    HRESULT hr = g_dev11->CreateRenderTargetView(bb, NULL, &g_rtv11);
+    bb->Release();
+    if (FAILED(hr) || !g_rtv11) return false;
+    g_rtChain11 = (void*)sc;
+    return true;
+}
+// 每帧渲染（Present 钩入口）：面板/toast 判定与 D3D9 版 RenderPanelFrame 同口径
+static void RenderOverlayD3D11(IDXGISwapChain* sc) {
+    if (g_panelBroken) return;
+    bool panelOn = g_panelActive != 0;
+    int toastN = 0;
+    if (!panelOn) {
+        EnterCriticalSection(&g_cs);
+        toastN = g_toastCount + g_roomCornerN;
+        LeaveCriticalSection(&g_cs);
+        if (toastN <= 0) return;
+    }
+    __try {
+        static int dbg11 = 0;
+        if (dbg11 < 3) { ++dbg11; LogLine("d3d11 present active frame"); }
+        // 备份游戏 OM 绑定 → 绑交换链 back buffer → 画 → 恢复（污染最小化）
+        ID3D11RenderTargetView* prevRtv = NULL;
+        ID3D11DepthStencilView* prevDsv = NULL;
+        bool rtBound = false;
+        if (g_ctx11) {
+            g_ctx11->OMGetRenderTargets(1, &prevRtv, &prevDsv);
+            if (EnsureD3D11RenderTarget(sc)) {
+                g_ctx11->OMSetRenderTargets(1, &g_rtv11, NULL);
+                rtBound = true;
+            }
+        }
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+        ImGui::GetIO().MouseDrawCursor = panelOn;
+        if (panelOn) DrawPanel();
+        DrawToasts();
+        DrawRoomToasts();
+        ImGui::Render();
+        {
+            ImDrawData* dd = ImGui::GetDrawData(); // 渲染内容诊断：DisplaySize=0→Win32 后端窗口无效；vtx=0→面板无内容
+            static int ddLogged = 0;
+            if (dd && ddLogged < 3) {
+                ++ddLogged;
+                char lb[128];
+                snprintf(lb, sizeof(lb), "d3d11 draw data: disp=%.0fx%.0f vtx=%d idx=%d rtv=%d",
+                         dd->DisplaySize.x, dd->DisplaySize.y, dd->TotalVtxCount, dd->TotalIdxCount, (int)rtBound);
+                LogLine(lb);
+            }
+        }
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        if (rtBound && g_ctx11) {
+            g_ctx11->OMSetRenderTargets(prevRtv ? 1 : 0, &prevRtv, prevDsv);
+            if (prevRtv) prevRtv->Release();
+            if (prevDsv) prevDsv->Release();
+        }
+        InterlockedExchange(&g_exceptStreak, 0);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LogLine("d3d11 present draw EXCEPTION");
+        if (g_rtv11) { g_rtv11->Release(); g_rtv11 = NULL; g_rtChain11 = NULL; } // 失效缓存强制重建
+        if (InterlockedIncrement(&g_exceptStreak) > 100) InterlockedExchange(&g_shutdown, 1);
+    }
+}
+static HRESULT WINAPI Hooked_DXGISwapChain_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_DXGISwapChain_Present called #%ld sc=%p", (long)s_n, (void*)sc); LogLine(lb); }
+    if (!g_shutdown && g_d3d11Ready) RenderOverlayD3D11(sc);
+    return ((HRESULT (WINAPI*)(IDXGISwapChain*, UINT, UINT))g_origSwapChainPresent)(sc, sync, flags);
+}
+static HRESULT WINAPI Hooked_DXGISwapChain_Present1(IDXGISwapChain1* sc, UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
+    static volatile LONG s_n = 0;
+    if (InterlockedIncrement(&s_n) <= 5) { char lb[96]; snprintf(lb, sizeof(lb), "Hooked_DXGISwapChain_Present1 called #%ld sc=%p", (long)s_n, (void*)sc); LogLine(lb); }
+    if (!g_shutdown && g_d3d11Ready) RenderOverlayD3D11(sc);
+    return ((HRESULT (WINAPI*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*))g_origSwapChainPresent1)(sc, sync, flags, params);
+}
+// 版本劫持入口（代理 d3d11.dll 的 D3D11CreateDevice*/转发函数在真身设备返回游戏前调用）：
+// 记录设备/上下文 → 工厂虚表补钩 → （init 延迟到交换链捕获后）。幂等。
+// SC:R 环境实测：handoff 内部（COM QI/GetParent/写 ImGui io）会触发 access violation——
+// __try 捕获后置 g_d3d11Disabled 禁用本进程 D3D11 路径（游戏不死继续跑，崩溃转日志）
+static volatile LONG g_d3d11Disabled = 0;
+// handoff 专用线程（SC:R 对策 2026-10-29）：游戏主线程上的外来 COM/内存操作被反作弊 VEH
+// 监察（AV 被吞=假执行）——handoff 投递到专用线程执行，线程上下文不同可能绕过
+static void* g_pendDev = NULL;
+static void* g_pendCtx = NULL;
+static void* g_pendSc = NULL;
+static volatile LONG g_handoffPending = 0;
+static HANDLE g_handoffThread = NULL;
+static HANDLE g_handoffEvent = NULL;
+static void OverlayHookD3D11DeviceImpl(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc); // 前置声明（ThreadProc 引用）
+static DWORD WINAPI D3D11HandoffThreadProc(LPVOID) {
+    for (;;) {
+        DWORD w = WaitForSingleObject(g_handoffEvent, 2000); // 2s 超时=周期重试窗口（主窗口后建场景）
+        if (g_shutdown) return 0;
+        if (w == WAIT_OBJECT_0 && InterlockedCompareExchange(&g_handoffPending, 0, 0)) {
+            InterlockedExchange(&g_handoffPending, 0);
+            ID3D11Device* dev = (ID3D11Device*)g_pendDev;
+            ID3D11DeviceContext* ctx = (ID3D11DeviceContext*)g_pendCtx;
+            IDXGISwapChain* sc = (IDXGISwapChain*)g_pendSc;
+            if (dev) {
+                __try {
+                    OverlayHookD3D11DeviceImpl(dev, ctx, sc);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    char lb[128];
+                    snprintf(lb, sizeof(lb), "d3d11 handoff EXCEPTION 0x%08X (handoff thread) -> d3d11 path disabled", (unsigned)GetExceptionCode());
+                    LogLine(lb);
+                    InterlockedExchange(&g_d3d11Disabled, 1);
+                }
+            }
+        }
+        // 周期重试（SC:R 主窗口后建场景）：两段式——①pre-init（主窗口出现后创建 context，此时
+        // GImGui 有效）②init（context 就绪后挂 DX11 后端）。此前条件 `!g_imguiWin32Inited` 使
+        // pre-init 成功后重试段被关闭，init 永不执行（2026-10-29 逻辑漏洞）
+        if (!g_d3d11Disabled && g_dev11) {
+            // ① pre-init：主窗口出现后创建 context+Win32 后端（幂等）
+            if (!g_imguiWin32Inited) {
+                __try {
+                    ImGuiPreInitWin32();
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    LogLine("d3d11 delayed pre-init EXCEPTION (will retry)");
+                }
+            }
+            // ② init：context 就绪后挂 DX11 后端（写 io 落在 VirtualAlloc 页上）
+            if (g_imguiWin32Inited && !g_d3d11Ready) {
+                __try {
+                    if (ImGui_ImplDX11_Init(g_dev11, g_ctx11)) {
+                        InterlockedExchange(&g_d3d11Ready, 1);
+                        InterlockedExchange(&g_probeEnvDenied, 0); // D3D11 就绪=热键走帧内面板（清 d3d9 探针的 env-denied）
+                        LogLine("imgui dx11 init ok (delayed retry after main window)");
+                    } else {
+                        LogLine("imgui dx11 init failed (delayed retry)");
+                    }
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    LogLine("d3d11 delayed init EXCEPTION (will retry)");
+                }
+            }
+        }
+    }
+    return 0;
+}
+static void OverlayHookD3D11DeviceImpl(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc) {
+    char lb[160];
+    snprintf(lb, sizeof(lb), "OverlayHookD3D11Device entered dev=%p ctx=%p sc=%p ready=%d", (void*)dev, (void*)ctx, (void*)sc, (int)g_d3d11Ready);
+    LogLine(lb);
+    if (!dev || g_d3d11Ready) return;
+    // context 创建必须最先行（2026-10-29 顺序修复）：VirtualAlloc 自管页上的 context 先建，
+    // 后续 ImGui_ImplDX11_Init 写 io 才落在自管页上（CRT 堆写入被环境拦截——写 NULL->IO 或
+    // CRT 堆 io 都崩）；此前 init 在 context 创建前跑导致 NULL->IO 崩
+    ImGuiPreInitWin32();
+    g_dev11 = dev;
+    g_ctx11 = ctx;
+    IDXGIDevice* dxgiDev = NULL;
+    if (SUCCEEDED(dev->QueryInterface(__uuidof(IDXGIDevice), (void**)&dxgiDev)) && dxgiDev) {
+        IDXGIFactory2* factory = NULL;
+        if (SUCCEEDED(dxgiDev->GetParent(__uuidof(IDXGIFactory2), (void**)&factory)) && factory) {
+            LogLine("d3d11 handoff: factory2 via GetParent ok");
+            HookFactorySwapChainSlots(factory);
+            factory->Release();
+        } else {
+            LogLine("d3d11 handoff: GetParent(Factory2) failed, try Factory1");
+            IDXGIFactory1* f1 = NULL;
+            if (SUCCEEDED(dxgiDev->GetParent(__uuidof(IDXGIFactory1), (void**)&f1)) && f1) {
+                LogLine("d3d11 handoff: factory1 via GetParent ok");
+                HookFactorySwapChainSlots((IDXGIFactory2*)f1); // Factory1 虚表含 slot 11（16/17/25 仅 Factory2 存在——QI 失败时游戏走经典路径）
+                f1->Release();
+            } else {
+                LogLine("d3d11 handoff: GetParent(Factory1) also failed");
+            }
+        }
+        dxgiDev->Release();
+    } else {
+        LogLine("d3d11 handoff: QI(IDXGIDevice) FAILED");
+    }
+    // GetParent 失败兜底（SC:R 实测 GetParent 双失败）：dxgi 虚表是模块级静态表——自建工厂的
+    // 虚表补丁对进程内全部工厂实例（含游戏自己创建的）同等生效，不依赖 GetParent 链
+    IDXGIFactory2* selfFactory = NULL;
+    if (!g_factoryHooked) {
+        LogLine("d3d11 handoff: fallback CreateDXGIFactory1 for vtable hook");
+        if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory2), (void**)&selfFactory)) && selfFactory) {
+            LogLine("d3d11 handoff: self-created factory2 ok");
+            HookFactorySwapChainSlots(selfFactory);
+        } else {
+            IDXGIFactory1* f1 = NULL;
+            if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f1)) && f1) {
+                LogLine("d3d11 handoff: self-created factory1 ok");
+                HookFactorySwapChainSlots((IDXGIFactory2*)f1);
+                f1->Release();
+            } else {
+                LogLine("d3d11 handoff: CreateDXGIFactory1 FAILED");
+            }
+        }
+    }
+    // 探针交换链（SC:R 实测四钩零调用——游戏的建链路径绕开工厂公共入口）：借游戏 device 自建
+    // 一个隐藏窗口交换链，建完立即释放——唯一目的是拿到 swapchain 对象补 Present 静态虚表
+    //（游戏自己建的交换链同表，补丁全覆盖）。自建调用经过已钩的工厂 slot 11，顺带验证钩工作。
+    if (g_factoryHooked && selfFactory && g_dev11) {
+        HWND pw = g_probeHwnd && IsWindow(g_probeHwnd) ? g_probeHwnd : NULL;
+        if (!pw) {
+            WNDCLASSW wc;
+            ZeroMemory(&wc, sizeof(wc));
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = GetModuleHandleW(NULL);
+            wc.lpszClassName = L"im-overlay-probe11";
+            RegisterClassW(&wc);
+            pw = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPED, 0, 0, 8, 8, NULL, NULL, wc.hInstance, NULL);
+        }
+        if (pw) {
+            DXGI_SWAP_CHAIN_DESC sd;
+            ZeroMemory(&sd, sizeof(sd));
+            sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            sd.SampleDesc.Count = 1;
+            sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+            sd.BufferCount = 2;
+            sd.OutputWindow = pw;
+            sd.Windowed = TRUE;
+            sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+            IDXGISwapChain* psc = NULL;
+            HRESULT shr = selfFactory->CreateSwapChain(g_dev11, &sd, &psc);
+            if (SUCCEEDED(shr) && psc) {
+                LogLine("d3d11 handoff: probe swapchain created, hooking present");
+                HookSwapChainPresentSlots(psc); // 静态表补丁（覆盖游戏自己的交换链）
+                // 自证：Present 一次——若我们的 Present 钩工作，日志会出现 active frame
+                //（顺带验证虚表补丁有效性）；然后立即释放
+                HRESULT prr = psc->Present(0, 0);
+                char lb2[128];
+                snprintf(lb2, sizeof(lb2), "d3d11 handoff: probe swapchain Present hr=0x%08X (self-test)", (unsigned)prr);
+                LogLine(lb2);
+                LogLine("d3d11 handoff: probe swapchain hooked, releasing");
+                psc->Release();
+                LogLine("d3d11 handoff: probe swapchain created+released, Present vtable hooked");
+            } else {
+                char lb[128];
+                snprintf(lb, sizeof(lb), "d3d11 handoff: probe swapchain create failed hr=0x%08X", (unsigned)shr);
+                LogLine(lb);
+            }
+        }
+    }
+    if (selfFactory) selfFactory->Release();
+    if (sc) HookSwapChainPresentSlots(sc); // AndSwapChain 变体直接返回交换链
+    // ImGui DX11 init 已延迟到交换链捕获后（HookSwapChainPresentSlots 内）——崩溃面切分
+    ImGuiPreInitWin32();
+}
+extern "C" __declspec(dllexport) void __stdcall OverlayHookD3D11Device(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc) {
+    if (g_d3d11Disabled) return; // 本进程 D3D11 路径已被禁用（曾崩溃过——防重复触发）
+    // SC:R 环境对策（2026-10-29）：handoff 在游戏主线程执行会被反作弊 VEH 监察（写 io/COM 调用
+    // 触发 AV 被吞=假执行）——改为投递到专用线程执行（线程上下文不同可能绕过），游戏主线程
+    // 立即返回（不阻塞游戏渲染初始化）
+    g_pendDev = dev;
+    g_pendCtx = ctx;
+    g_pendSc = sc;
+    InterlockedExchange(&g_handoffPending, 1);
+    if (g_handoffThread == NULL) {
+        g_handoffThread = CreateThread(NULL, 0, D3D11HandoffThreadProc, NULL, 0, NULL);
+        if (g_handoffThread) CloseHandle(g_handoffThread);
+    }
+    SetEvent(g_handoffEvent);
+}
+static int ProbeHookD3D9DeviceVtable(HMODULE d3d9) {
+    if (g_origPresent) return 1;
+    static int s_lastState = -1; // 状态变化才打日志（防 E_INVALIDARG 重试刷屏）
     // 探针专用隐藏窗口（进程生命周期常驻，一次创建）
     if (!g_probeHwnd || !IsWindow(g_probeHwnd)) {
         WNDCLASSW wc;
@@ -2371,13 +3058,79 @@ static bool ProbeHookD3D9DeviceVtable(HMODULE d3d9) {
         wc.lpszClassName = L"im-overlay-probe";
         RegisterClassW(&wc);
         g_probeHwnd = CreateWindowExW(0, wc.lpszClassName, L"", WS_OVERLAPPED, 0, 0, 8, 8, NULL, NULL, wc.hInstance, NULL);
-        if (!g_probeHwnd) return false;
+        if (!g_probeHwnd) return 0;
     }
     InterlockedExchange(&g_probeBusy, 1); // 下方 CreateDevice 经本钩进入：不得捕获自建设备
-    IDirect3D9* d3d = create(D3D_SDK_VERSION);
-    bool ok = false;
+    int state = 0;
+    // 渲染体系诊断（SC:R handoff 钩命中但零捕获的排查）：枚举本进程已加载模块，看主渲染
+    // 到底是 d3d9 / d3d9on12 / d3d11/dxgi——若游戏主渲染非 d3d9，全部 d3d9 路线无效。只打一次
+    static bool s_modLogged = false;
+    if (!s_modLogged) {
+        s_modLogged = true;
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+        if (snap != INVALID_HANDLE_VALUE) {
+            MODULEENTRY32W me;
+            me.dwSize = sizeof(me);
+            char line[480];
+            int n = 0, printed = 0;
+            if (Module32FirstW(snap, &me)) {
+                do {
+                    const wchar_t* nm = me.szModule;
+                    // 只关心渲染/GPU 相关 + 主 exe（模块太多刷屏，全量名单无排障价值）
+                    if (wcsstr(nm, L"d3d") || wcsstr(nm, L"dxgi") || wcsstr(nm, L"opengl") ||
+                        wcsstr(nm, L"vulkan") || wcsstr(nm, L"gl32") || wcsstr(nm, L"StarCraft") ||
+                        wcsstr(nm, L".exe") || wcsstr(nm, L"ClientSdk") || wcsstr(nm, L"Game")) {
+                        char mb[96];
+                        WideCharToMultiByte(CP_UTF8, 0, nm, -1, mb, sizeof(mb), NULL, NULL);
+                        int w = snprintf(line, sizeof(line), "module[%d]: %s (%lu KB)", n++, mb, (unsigned long)(me.modBaseSize / 1024));
+                        if (w > 0) LogLine(line);
+                        if (++printed >= 40) break;
+                    }
+                } while (Module32NextW(snap, &me));
+            }
+            CloseHandle(snap);
+        }
+    }
+    // Ex 路径优先（SC:R 实测 2026-10-28）：暴雪引擎用 Direct3DCreate9Ex API 创建对象——Ex 对象
+    // 虚表是独立的静态表，标准 Direct3DCreate9 对象（QI IDirect3D9Ex 失败，实测）上钩的槽游戏
+    // 根本不走。探针必须拿 Ex 对象钩 Ex 虚表，游戏建设备才命中
+    PFN_Direct3DCreate9 create = (PFN_Direct3DCreate9)GetProcAddress(d3d9, "Direct3DCreate9");
+    PFN_Direct3DCreate9Ex createEx = (PFN_Direct3DCreate9Ex)GetProcAddress(d3d9, "Direct3DCreate9Ex");
+    IDirect3D9Ex* d3dExObj = NULL;
+    IDirect3D9* d3d = NULL;
+    bool viaEx = false;
+    // 环境诊断（SC:R E_INVALIDARG 排查）：d3d9 模块真实路径（平台魔改/替换判定）+ 适配器状态——只打一次
+    static bool s_envLogged = false;
+    if (!s_envLogged) {
+        s_envLogged = true;
+        wchar_t mp[MAX_PATH] = { 0 };
+        GetModuleFileNameW(d3d9, mp, MAX_PATH);
+        char mb[MAX_PATH * 2] = { 0 };
+        WideCharToMultiByte(CP_UTF8, 0, mp, -1, mb, sizeof(mb), NULL, NULL);
+        char lb[MAX_PATH * 2 + 64];
+        snprintf(lb, sizeof(lb), "probe env: d3d9 module = %s", mb);
+        LogLine(lb);
+    }
+    if (createEx && SUCCEEDED(createEx(D3D_SDK_VERSION, &d3dExObj)) && d3dExObj) {
+        d3d = d3dExObj; // Ex 继承 9，指针兼容
+        viaEx = true;
+    } else if (create) {
+        d3d = create(D3D_SDK_VERSION);
+    }
     if (d3d) {
-        // ① IDirect3D9 虚表 CreateDevice 槽（slot 16）
+        // 适配器状态诊断（首次）：多卡/桌面格式/模式数——E_INVALIDARG 参数面排除
+        static bool s_adapterLogged = false;
+        if (!s_adapterLogged) {
+            s_adapterLogged = true;
+            UINT nAdp = d3d->GetAdapterCount();
+            D3DDISPLAYMODE dm0;
+            HRESULT hdm = d3d->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &dm0);
+            UINT nMode = d3d->GetAdapterModeCount(D3DADAPTER_DEFAULT, D3DFMT_X8R8G8B8);
+            char lb[160];
+            snprintf(lb, sizeof(lb), "probe env: adapters=%u displaymode hr=0x%08X fmt=%u modes(X8R8G8B8)=%u", nAdp, hdm, (unsigned)dm0.Format, nMode);
+            LogLine(lb);
+        }
+        // ① CreateDevice 槽（slot 16；标准/Ex 虚表同槽位）
         void** vtD3d = *(void***)d3d;
         DWORD old = 0;
         if (VirtualProtect(&vtD3d[16], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
@@ -2389,39 +3142,178 @@ static bool ProbeHookD3D9DeviceVtable(HMODULE d3d9) {
             }
             VirtualProtect(&vtD3d[16], sizeof(void*), old, &old);
         }
-        // ② Device 虚表 Present/Reset 槽（slot 17/16）：静态表，覆盖已创建的游戏设备
+        // ② IDirect3D9Ex 判定 + CreateDeviceEx 槽（slot 20）——SC:R/暴雪引擎走 D3D9Ex 路径
+        //（导入表无 Direct3DCreate9 符号，9Ex 对象的 CreateDevice 不经 slot 16）
+        IDirect3D9Ex* d3dEx = NULL;
+        if (SUCCEEDED(d3d->QueryInterface(__uuidof(IDirect3D9Ex), (void**)&d3dEx)) && d3dEx) {
+            void** vtEx = *(void***)d3dEx;
+            if (VirtualProtect(&vtEx[20], sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) {
+                if (vtEx[20] != (void*)&Hooked_CreateDeviceEx) {
+                    g_origCreateDeviceEx = (PFN_CreateDeviceEx)vtEx[20];
+                    g_vtD3d9ExSlot = &vtEx[20];
+                    vtEx[20] = (void*)&Hooked_CreateDeviceEx;
+                    LogLine("CreateDeviceEx vtable hooked via probe (D3D9Ex path)");
+                }
+                VirtualProtect(&vtEx[20], sizeof(void*), old, &old);
+            }
+            d3dEx->Release();
+        }
+        // 第二实例钩（SC:R 零捕获排查 2026-10-28）：进程内可能并存多份 d3d9 运行时——代理转发
+        // 链的 d3d9_orig.dll 与「绝对路径加载的 System32\d3d9.dll」是独立模块、独立静态虚表，
+        // 只钩一份会漏捕获。对 System32 实例的对象补同款钩（OverlayHookD3D9Object 幂等+计次）
+        {
+            wchar_t sysPath[MAX_PATH];
+            UINT n = GetSystemDirectoryW(sysPath, MAX_PATH);
+            if (n > 0 && n < MAX_PATH - 16) {
+                wcscat_s(sysPath, L"\\d3d9.dll");
+                HMODULE sys9 = LoadLibraryW(sysPath); // 绝对路径=独立实例（已加载则返回同句柄）
+                if (sys9) {
+                    PFN_Direct3DCreate9 sysCreate = (PFN_Direct3DCreate9)GetProcAddress(sys9, "Direct3DCreate9Ex");
+                    if (!sysCreate) sysCreate = (PFN_Direct3DCreate9)GetProcAddress(sys9, "Direct3DCreate9");
+                    if (sysCreate) {
+                        IDirect3D9Ex* sysObj = NULL;
+                        // System32 实例优先 Ex 对象（游戏路径一致）
+                        if (SUCCEEDED(((PFN_Direct3DCreate9Ex)GetProcAddress(sys9, "Direct3DCreate9Ex"))(D3D_SDK_VERSION, &sysObj)) && sysObj) {
+                            OverlayHookD3D9Object((IDirect3D9*)sysObj); // 幂等；计次日志带虚表地址
+                            sysObj->Release();
+                        } else {
+                            IDirect3D9* sysObj9 = sysCreate(D3D_SDK_VERSION);
+                            if (sysObj9) { OverlayHookD3D9Object(sysObj9); sysObj9->Release(); }
+                        }
+                        char lb[128];
+                        static bool s_sysLogged = false; // System32 实例钩日志只打一次（探针 500ms 周期防刷屏）
+                        if (!s_sysLogged) {
+                            snprintf(lb, sizeof(lb), "probe: System32 d3d9 second instance hooked (mod=%p)", (void*)sys9);
+                            LogLine(lb);
+                            s_sysLogged = true;
+                        }
+                    }
+                }
+            }
+        }
+        // ③ 自建设备兜底（游戏设备先于注入存在时拿静态表）。viaEx 优先 CreateDeviceEx（Ex 校验
+        // 路径与游戏一致，标准 CreateDevice 在 SC:R 进程内 E_INVALIDARG 实测）；标准路径维持
+        // UNKNOWN→桌面格式→SW VP 三试。全败即交游戏自捕获，不再死磕
         D3DPRESENT_PARAMETERS pp;
         ZeroMemory(&pp, sizeof(pp));
         pp.Windowed = TRUE;
         pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
         pp.hDeviceWindow = g_probeHwnd; // 不设 PresentationInterval（部分运行时对 IMMEDIATE+窗口化返回 E_INVALIDARG，实测踩坑）
         IDirect3DDevice9* dev = NULL;
-        // D3D9 窗口化 BackBufferFormat=D3DFMT_UNKNOWN 合法（自动匹配；M3 显式格式要求为 D3D8 特有）——
-        // 先 UNKNOWN，E_INVALIDARG 再退桌面格式（两试）
-        pp.BackBufferFormat = D3DFMT_UNKNOWN;
-        HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
-                                       D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, &dev);
-        if (FAILED(hr)) {
-            D3DDISPLAYMODE dm;
-            if (SUCCEEDED(d3d->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &dm))) pp.BackBufferFormat = dm.Format;
+        HRESULT hr = E_FAIL;
+        if (viaEx) {
+            static bool s_viaLogged = false; // viaEx 每次探针都成功——只打一次防刷屏
+            if (!s_viaLogged) { LogLine("probe via Direct3DCreate9Ex (game path)"); s_viaLogged = true; }
+            static bool s_exFailLogged = false; // 失败 hr 只打一次（探针 400ms 重试防刷屏）
+            hr = d3dExObj->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
+                                          D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, NULL, (IDirect3DDevice9Ex**)&dev);
+            if (FAILED(hr)) {
+                if (!s_exFailLogged) {
+                    char lb[96];
+                    snprintf(lb, sizeof(lb), "probe CreateDeviceEx(HW) failed hr=0x%08X", hr);
+                    LogLine(lb);
+                    s_exFailLogged = true;
+                }
+                dev = NULL;
+                hr = d3dExObj->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
+                                              D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, NULL, (IDirect3DDevice9Ex**)&dev);
+                if (FAILED(hr) && s_exFailLogged) {
+                    // SW 兜底同样失败：hr 与 HW 一次通常一致，不再重复刷
+                }
+            }
+        }
+        if (FAILED(hr)) { // 标准创建三试（UNKNOWN→桌面格式→SW VP）
             dev = NULL;
+            pp.BackBufferFormat = D3DFMT_UNKNOWN;
             hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
                                    D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, &dev);
+            if (FAILED(hr)) {
+                D3DDISPLAYMODE dm;
+                if (SUCCEEDED(d3d->GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &dm))) pp.BackBufferFormat = dm.Format;
+                dev = NULL;
+                hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
+                                       D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, &dev);
+            }
+            if (FAILED(hr)) { // 第三试：SW VP（GPU/驱动 VP 能力挑剔环境的最后兜底）
+                dev = NULL;
+                hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, g_probeHwnd,
+                                       D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp, &dev);
+                if (FAILED(hr)) {
+                    // 日志节流：SC:R 环境每 400ms 重试全败，首 3 次全打之后每 25 次（~10s）打一次
+                    static int s_failLogN = 0;
+                    if (s_failLogN < 3 || (s_failLogN % 25) == 0) {
+                        char lb[96];
+                        snprintf(lb, sizeof(lb), "probe CreateDevice std x3 failed last hr=0x%08X (x%d)", hr, s_failLogN + 1);
+                        LogLine(lb);
+                    }
+                    ++s_failLogN;
+                }
+            }
         }
         if (SUCCEEDED(hr) && dev) {
             PatchDeviceVtableSlots(dev); // Present/Reset 槽补丁（静态表，对已创建的游戏设备立即生效）
             dev->Release();
-            ok = (g_origPresent != NULL);
+            state = (g_origPresent != NULL) ? 1 : 0;
+            InterlockedExchange(&g_probeEnvDenied, 0); // 设备建成=环境不拒绝，复位热键立即回落标志
         } else {
-            char lb[96];
-            snprintf(lb, sizeof(lb), "d3d9 probe CreateDevice failed hr=0x%08X (GPU not ready? retry)", hr);
-            LogLine(lb);
+            state = (g_origCreateDevice || g_origCreateDeviceEx) ? 2 : 0;
+            // 环境拒绝判定（SC:R 实测收口）：自建设备连续失败 25 次（~10s，全参数组合稳定
+            // E_INVALIDARG=D3DKMT 层拦截）——置位后面板热键立即回落悬浮窗（不等 8s 超时）。
+            // 局部设备重建/探针成功即清零（上面/InitThread 的 present 钩成功路径）
+            if (state == 2) {
+                static LONG s_failStreak = 0;
+                if (InterlockedIncrement(&s_failStreak) >= 25) {
+                    // D3D11 已就绪（SC:R 版本劫持 handoff 成功）=主渲染走 DX11，d3d9 探针的
+                    // 环境拒绝判定不再适用——不置位（否则覆盖 D3D11 init ok 的清零，热键被
+                    // 错误导向悬浮窗，2026-10-29 实测：init ok 16880171 清零后被探针 16886718
+                    // 二次置位，热键命中 env-denied 分支回悬浮窗）
+                    if (g_d3d11Ready) {
+                        s_failStreak = 0; // 归零防溢出；D3D11 态下探针失败无裁决意义
+                    } else if (!InterlockedExchange(&g_probeEnvDenied, 1)) {
+                        LogLine("probe: env denies device creation (25 fails) -> hotkey falls back to float window");
+                    }
+                    // 终审诊断：游戏稳定态模块快照（300ms 快照太早看不到动态加载的 d3d11/d3d9on12——
+                    // 判定 SC:R 主渲染体系，决定 d3d9 路线是否终结）
+                    static LONG s_denySnapLogged = 0;
+                    if (!InterlockedExchange(&s_denySnapLogged, 1)) {
+                        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+                        if (snap != INVALID_HANDLE_VALUE) {
+                            MODULEENTRY32W me;
+                            me.dwSize = sizeof(me);
+                            char line[480];
+                            int n = 0, printed = 0;
+                            if (Module32FirstW(snap, &me)) {
+                                do {
+                                    const wchar_t* nm = me.szModule;
+                                    if (wcsstr(nm, L"d3d") || wcsstr(nm, L"dxgi") || wcsstr(nm, L"opengl") ||
+                                        wcsstr(nm, L"vulkan") || wcsstr(nm, L"gl32") || wcsstr(nm, L"on12") ||
+                                        wcsstr(nm, L"libcef") || wcsstr(nm, L"cef") || wcsstr(nm, L"render")) {
+                                        char mb[96];
+                                        WideCharToMultiByte(CP_UTF8, 0, nm, -1, mb, sizeof(mb), NULL, NULL);
+                                        int w = snprintf(line, sizeof(line), "deny-time module[%d]: %s (%lu KB)", n++, mb, (unsigned long)(me.modBaseSize / 1024));
+                                        if (w > 0) LogLine(line);
+                                        if (++printed >= 40) break;
+                                    }
+                                } while (Module32NextW(snap, &me));
+                            }
+                            CloseHandle(snap);
+                        }
+                    }
+                }
+            }
         }
         d3d->Release(); // IDirect3D9 正常释放（虚表属 d3d9 静态数据，补丁不随对象消失）
     }
     InterlockedExchange(&g_probeBusy, 0);
-    if (ok) ImGuiPreInitWin32(); // WndProc/Win32 后端尽早就位（否则首个 Shift+Tab 被原窗口过程吞掉，M2 踩坑 1）
-    return ok;
+    if (state) ImGuiPreInitWin32(); // WndProc/Win32 后端尽早就位（否则首个 Shift+Tab 被原窗口过程吞掉，M2 踩坑 1）
+    if (state != s_lastState) {
+        char lb[96];
+        snprintf(lb, sizeof(lb), "d3d9 probe state -> %d (%s)", state,
+                 state == 1 ? "present hooked" : state == 2 ? "create hooked, waiting for game device" : "not ready");
+        LogLine(lb);
+        s_lastState = state;
+    }
+    return state;
 }
 #ifndef _WIN64
 static bool TryHookD3D8(HMODULE d3d8) {
@@ -2476,10 +3368,26 @@ static DWORD WINAPI InitThread(LPVOID) {
     // 槽位校验（每 2s）合并进轮询：平台补丁（w3plus 等）会反复覆盖 IDirect3D8/Device 虚表槽
     //（实测 War3+w3plus：探针挂钩后 266ms 即被覆盖，游戏 create8 被吸走），被覆盖则立即重打。
     int probeRetry = 0;
-    int probeRetry9 = 0;
     bool slotLoggedIntact = false;
     for (DWORD i = 0; i < K_WAIT_MODULE_MS / 50; ++i) {
         if (g_shutdown) return 0;
+        // SC:R 兜底（2026-10-28 实测）：设备在注入前已建且不重建、探针自建设备被环境拒
+        //（E_INVALIDARG）——面板热键正常切换（WndProc 吞输入生效）却画不出任何东西=「隐形面板
+        // 吞输入」黑洞。面板呼出 8s 仍无渲染能力（Present 钩未装）则自动收起 + nopanel 上报
+        //（客户端恢复悬浮窗形态）；设备后续捕获成功时 broken 清零，panel on:1 帧会重新让位。
+        // 2026-10-29 实测修复：D3D11 渲染能力就绪（g_d3d11Ready）时本兜底不得触发——
+        // x64 下 g_origPresent 恒为 NULL（d3d9 路线在 SC:R 天然无 Present 钩），面板画得出来
+        // 却被 8s 超时强制收起 + nopanel（客户端回悬浮窗=「面板开了几秒自动消失，再按热键
+        // 只弹游戏外悬浮窗」）
+        if (g_panelActive && !g_origPresent && !g_d3d11Ready
+#ifndef _WIN64
+            && !g_origPresent8
+#endif
+            && g_panelOnTick && (LONG)(GetTickCount() - g_panelOnTick) > 8000) {
+            g_panelOnTick = 0;
+            ReportNoPanelOnce();
+            LogLine("panel on 8s without render capability -> auto off + nopanel (SC:R fallback)");
+        }
 #ifndef _WIN64
         // 槽位校验（g_origD3DCreate8 就位后才有意义）
         if (g_origD3DCreate8 && (i % 40 == 39)) {
@@ -2548,10 +3456,10 @@ static DWORD WINAPI InitThread(LPVOID) {
                 break;
             }
             // 探针兜底（M5）：渲染器动态解析 create9 时 IAT 类钩子全部无效（实测 Warface/CryRenderD3D9.dll）——
-            // 自建一次性设备读静态虚表，对已创建的游戏设备同样立即生效。300ms 间隔重试：
-            // 早期 GPU 未就绪 CreateDevice 会被拒（War3 实测踩坑同款），进菜单后即成功
-            if (!g_origPresent && (i % 6) == 5 && probeRetry9 < 100) {
-                ++probeRetry9;
+            // 自建一次性设备读静态虚表，对已创建的游戏设备同样立即生效。SC:R 追加（2026-10-28）：
+            // CreateDeviceEx 槽双钩（D3D9Ex 路径）+ 状态化返回——create 槽钩上后等待游戏自捕获，
+            // 探针低频重试兜底「设备先于注入存在」场景，日志防刷屏
+            if (!g_origPresent && (i % 6) == 5) {
                 ProbeHookD3D9DeviceVtable(m9);
             }
             if (g_origPresent) break; // 探针挂钩成功（g_origD3DCreate9 保持 NULL 属正常）
@@ -2576,7 +3484,9 @@ BOOL APIENTRY DllMain(HMODULE mod, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(mod);
         g_selfMod = mod;
         InitializeCriticalSection(&g_cs); // 共享面板数据锁（须早于任何 pipe/渲染线程使用）
+        InitializeCriticalSection(&g_logCs); // 日志锁（并发 append 竞态防护）
         g_outEvent = CreateEventW(NULL, FALSE, FALSE, NULL); // 发件箱唤醒（auto-reset）
+        g_handoffEvent = CreateEventW(NULL, FALSE, FALSE, NULL); // D3D11 handoff 唤醒（auto-reset）
         HANDLE th = CreateThread(NULL, 0, InitThread, NULL, 0, NULL);
         if (th) { g_hInitThread = th; } else CloseHandle(th);
         HANDLE ph = CreateThread(NULL, 0, PipeThread, NULL, 0, NULL); // pipe 客户端（独立线程，不阻塞 hook 初始化；连接失败 3s 重试）

@@ -15,11 +15,32 @@
 
 #include <windows.h>
 #include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <string>
 
 // 远线程 LoadLibraryW 注入核心（两种模式共用）
 // 返回：0 成功 / 5 写内存失败 / 6 远线程失败 / 7 超时 / 8 模块加载失败
+//
+// 排障日志：%TEMP%\im-overlay-inject.log（每步 Win32 错误码落盘——主进程 spawn 时 stderr 被
+// 丢弃、stdout 只回读 pid 首行，printf 诊断到不了排障现场，SC:R 实测踩坑后补）
+
+static void LogLine(const char* fmt, ...) {
+    char path[MAX_PATH];
+    UINT n = GetTempPathA(MAX_PATH, path);
+    if (n == 0 || n > MAX_PATH - 40) return;
+    strcat_s(path, "im-overlay-inject.log");
+    HANDLE f = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int len = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (len > 0) { DWORD w = 0; WriteFile(f, line, (DWORD)len, &w, NULL); }
+    CloseHandle(f);
+}
+
 static int InjectDll(HANDLE ph, const char* dllA) {
     wchar_t dllW[MAX_PATH];
     int wl = MultiByteToWideChar(CP_ACP, 0, dllA, -1, NULL, 0);
@@ -28,22 +49,22 @@ static int InjectDll(HANDLE ph, const char* dllA) {
 
     SIZE_T bytes = (SIZE_T)wl * sizeof(wchar_t);
     void* remote = VirtualAllocEx(ph, NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!remote) return 5;
-    if (!WriteProcessMemory(ph, remote, dllW, bytes, NULL)) { VirtualFreeEx(ph, remote, 0, MEM_RELEASE); return 5; }
+    if (!remote) { LogLine("inject: VirtualAllocEx failed err=%lu\r\n", GetLastError()); return 5; }
+    if (!WriteProcessMemory(ph, remote, dllW, bytes, NULL)) { VirtualFreeEx(ph, remote, 0, MEM_RELEASE); LogLine("inject: WriteProcessMemory failed err=%lu\r\n", GetLastError()); return 5; }
 
     HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
     FARPROC loadLib = GetProcAddress(k32, "LoadLibraryW");
     if (!loadLib) { VirtualFreeEx(ph, remote, 0, MEM_RELEASE); return 6; }
     HANDLE th = CreateRemoteThread(ph, NULL, 0, (LPTHREAD_START_ROUTINE)loadLib, remote, 0, NULL);
-    if (!th) { VirtualFreeEx(ph, remote, 0, MEM_RELEASE); return 6; }
-    DWORD wr = WaitForSingleObject(th, 10000);
+    if (!th) { VirtualFreeEx(ph, remote, 0, MEM_RELEASE); LogLine("inject: CreateRemoteThread failed err=%lu\r\n", GetLastError()); return 6; }
+    DWORD wr = WaitForSingleObject(th, 25000);
     // 校验远线程返回值 = LoadLibraryW 返回的模块基址（NULL = 目标进程内加载失败，如路径/DllMain 错误）
     DWORD modBase = 0;
     GetExitCodeThread(th, &modBase);
     CloseHandle(th);
     VirtualFreeEx(ph, remote, 0, MEM_RELEASE);
-    if (wr != WAIT_OBJECT_0) return 7;
-    if (modBase == 0) return 8;
+    if (wr != WAIT_OBJECT_0) { LogLine("inject: remote thread wait rc=%lu (timeout? loader lock deadlock?)\r\n", wr); return 7; }
+    if (modBase == 0) { LogLine("inject: LoadLibraryW returned NULL (blocked by mitigation policy / DllMain failed / bad path?)\r\n"); return 8; }
     return 0;
 }
 // 按"目标进程位数 + 注入器自身目录"拼 DLL 路径
@@ -70,9 +91,11 @@ static int LaunchAndInject(int argc, char** argv) {
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
     if (!CreateProcessA(exe, (LPSTR)cmd.c_str(), NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
+        LogLine("launch: CreateProcess failed err=%lu exe=%s\r\n", GetLastError(), exe);
         printf("CreateProcess failed err=%lu\n", GetLastError());
         return 10;
     }
+    LogLine("launch: pid=%lu exe=%s\r\n", pi.dwProcessId, exe);
     // 真实游戏 pid 首行输出（主进程 ovReadGamePid 回读；须在注入前 flush，注入耗时不阻塞 pid 就绪）
     printf("pid:%lu\n", pi.dwProcessId);
     fflush(stdout);
@@ -84,6 +107,7 @@ static int LaunchAndInject(int argc, char** argv) {
     int rc = 0;
     if (wow != selfWow) {
         printf("bitness mismatch (target %s), skip inject\n", wow ? "x86" : "x64");
+        LogLine("launch: bitness mismatch (target %s), skip inject\r\n", wow ? "x86" : "x64");
         rc = 4;
     } else {
         char selfPath[MAX_PATH];
@@ -92,10 +116,23 @@ static int LaunchAndInject(int argc, char** argv) {
         if (slash) *slash = 0;
         char dllA[MAX_PATH];
         BuildDllPath(dllA, MAX_PATH, selfPath, wow);
+        // SC:R 实测踩坑（2026-10-28）：CREATE_SUSPENDED 挂起期注入 → 远线程 LoadLibraryW 死锁
+        // rc=258（10s 不返回，两次稳定复现）——挂起期主线程未跑加载器初始化，注入连带触发
+        // d3d9/shell32 等依赖 DLL 的 DllMain 在远线程上下文初始化，大导入表游戏（StarCraft.exe
+        // 15MB）在此环境死锁；d3d9host 小导入表同路径正常。修复=resume 后延迟注入：游戏自己
+        // 完成加载器初始化（全部依赖就绪）后仅初始化 overlay DLL 自身（Warface 跟随注入同为
+        // 后注入路径已验证）。仍用创建句柄 pi.hProcess（全权限，免 OpenProcess DACL 问题）。
+        // 延迟 2500→800ms（SC:R 二轮实测）：平台反作弊环境对「游戏启动数秒后」的新建 D3D 设备
+        // 请求返回 E_INVALIDARG（D3DKMT 层拦截，探针全程无法自建设备）——越早注入，DLL 探针
+        // 越可能抢在保护激活前建成设备拿到静态虚表
+        ResumeThread(pi.hThread);
+        LogLine("launch: resumed, delayed inject in 800ms\r\n");
+        Sleep(800);
+        LogLine("launch: injecting %s\r\n", dllA);
         rc = InjectDll(pi.hProcess, dllA);
-        if (rc != 0) printf("inject failed rc=%d, resume anyway\n", rc);
+        if (rc != 0) printf("inject failed rc=%d\n", rc);
+        else LogLine("launch: inject ok\r\n");
     }
-    ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     WaitForSingleObject(pi.hProcess, INFINITE); // 等游戏退出：helper 退出=游戏退出（主进程 exit 监听语义不变）
     DWORD code = 0;
@@ -112,7 +149,7 @@ int main(int argc, char** argv) {
     const char* dirA = argv[2];
 
     HANDLE ph = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
-    if (!ph) return 3;
+    if (!ph) { LogLine("manual: OpenProcess pid=%lu failed err=%lu (elevated target?)\r\n", pid, GetLastError()); return 3; }
 
     // 位数匹配校验
     BOOL wow = FALSE, selfWow = FALSE;
