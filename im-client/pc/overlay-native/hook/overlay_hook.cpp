@@ -257,6 +257,11 @@ struct GameToast { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; char text[O
 static GameToast g_toasts[3] = { 0 };
 static int       g_toastCount = 0;
 static volatile LONG g_toastsVisible = 0; // toast 可见（WndProc 据此把鼠标喂 ImGui 做命中测试=可点击）
+// M5.10：房间消息左下角角标（面板关闭期；NoInputs 点击透传 + 纯文字无背景 + 1px 黑影；6s 过期=无新消息自动隐藏）
+struct RoomCornerMsg { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; char text[OV_TEXT_CAP]; double until; };
+#define OV_ROOMCORNER_CAP 4
+static RoomCornerMsg g_roomCorner[OV_ROOMCORNER_CAP] = { 0 };
+static int g_roomCornerN = 0; // g_cs 保护（pipe 线程写 / 渲染线程读）
 // M5.7：帧内热键（hotkey 帧下发，客户端把设置里的加速器映射成 VK；默认 Shift+Tab 与旧行为一致）
 static volatile LONG g_hotkeyVK = VK_TAB;
 static volatile LONG g_hotkeyCtrl = 0;
@@ -498,6 +503,7 @@ static void HandleLine(const char* line) {
         EnterCriticalSection(&g_cs);
         if (strncmp(p, "null", 4) == 0) {
             g_room.inRoom = false;
+            g_roomCornerN = 0; // M5.10：退出房间清空左下角角标
         } else {
             const char* os = strchr(p, '{');
             const char* oe = NULL;
@@ -509,7 +515,7 @@ static void HandleLine(const char* line) {
                 }
             }
             if (os && oe) {
-                char obj[4096];
+                char obj[16384]; // M5.9f 审计：4096 装不下 20 条长聊天快照（中文 UTF-8 最坏 ~13KB）→ chats 数组被截断丢历史；16384 覆盖最坏情形
                 size_t len = (size_t)(oe - os + 1);
                 if (len >= sizeof(obj)) len = sizeof(obj) - 1;
                 memcpy(obj, os, len); obj[len] = 0;
@@ -598,6 +604,18 @@ static void HandleLine(const char* line) {
             snprintf(g_room.chats[g_room.chatCount].text, OV_TEXT_CAP, "%s", x);
             g_room.chats[g_room.chatCount].self = self;
             g_room.chatCount++;
+        }
+        // M5.10：面板关闭期其他人发言 → 左下角角标（面板打开时房间页签直接可见，不入角标）
+        if (g_room.inRoom && !self && g_panelActive == 0) {
+            int idx = g_roomCornerN < OV_ROOMCORNER_CAP ? g_roomCornerN : OV_ROOMCORNER_CAP - 1;
+            if (g_roomCornerN >= OV_ROOMCORNER_CAP) { // 满则前移丢最旧
+                for (int i = 1; i < OV_ROOMCORNER_CAP; ++i) g_roomCorner[i - 1] = g_roomCorner[i];
+            }
+            snprintf(g_roomCorner[idx].uname, OV_UNAME_CAP, "%s", u);
+            snprintf(g_roomCorner[idx].name, OV_NAME_CAP, "%s", n);
+            snprintf(g_roomCorner[idx].text, OV_TEXT_CAP, "%s", x);
+            g_roomCorner[idx].until = GetTickCount64() / 1000.0 + 6.0;
+            g_roomCornerN = idx + 1;
         }
         LeaveCriticalSection(&g_cs);
         return;
@@ -947,7 +965,7 @@ static void RestoreWndProc() {
 // UI 线程状态声明在共享数据段（g_chatOpen/g_activeChatUname/g_activeChatName/g_chatInput）
 
 static void SendChatText() {
-    char text[384] = { 0 };
+    char text[OV_TEXT_CAP] = { 0 }; // M5.9f 审计：384B 文本转义后 ~770B 超出发件箱槽 560→snprintf 截断=坏帧+尾部 \n 被切污染流（长消息静默丢失）；160B×2+头 < 560
     snprintf(text, sizeof(text), "%s", g_chatInput);
     // 首尾去空白
     char* s = text;
@@ -970,7 +988,7 @@ static void SendRoomAct(const char* action) {
 }
 // M5.9：房内聊天发送（客户端 room-act chat 分支已支持 → 109 信封上行）
 static void SendRoomChat() {
-    char text[384] = { 0 };
+    char text[OV_TEXT_CAP] = { 0 }; // M5.9f 审计：同 SendChatText，超槽位截断会丢帧污染流
     snprintf(text, sizeof(text), "%s", g_roomInput);
     char* s = text;
     while (*s == ' ' || *s == '\t') ++s;
@@ -1030,6 +1048,71 @@ static void WrapTextCJK(const char* src, float maxw, char* dst, size_t dstcap) {
         lw += cw;
     }
     dst[o] = 0;
+}
+
+// M5.10：房间消息左下角角标渲染（纯文字：绿色名字 + 白色正文 + 1px 黑影保证游戏画面可读；NoInputs 点击透传）
+// 快照压实：g_cs 内拷出有效项并清理过期（ImGui 调用一律在锁外）
+static int RoomCornerSnapshot(RoomCornerMsg* out, int cap) {
+    EnterCriticalSection(&g_cs);
+    double now = GetTickCount64() / 1000.0;
+    int keep = 0;
+    for (int i = 0; i < g_roomCornerN; ++i) {
+        if (g_roomCorner[i].until <= now) continue;
+        g_roomCorner[keep] = g_roomCorner[i];
+        if (keep < cap) out[keep] = g_roomCorner[i];
+        keep++;
+    }
+    g_roomCornerN = keep;
+    LeaveCriticalSection(&g_cs);
+    return keep < cap ? keep : cap;
+}
+static void DrawRoomToasts() {
+    RoomCornerMsg tmp[OV_ROOMCORNER_CAP];
+    int n = RoomCornerSnapshot(tmp, OV_ROOMCORNER_CAP);
+    if (n <= 0) return; // 无新消息：整窗不建（需求：没消息时隐藏）
+    float lineH = ImGui::GetTextLineHeight();
+    float av = 22.0f;
+    ImGui::SetNextWindowPos(ImVec2(16.0f, ImGui::GetIO().DisplaySize.y - 14.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f)); // 左下角底对齐，向上堆叠
+    ImGui::SetNextWindowBgAlpha(0.0f); // 全透明背景
+    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                          ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    ImGui::Begin("##roomcorner", NULL, wf);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (int i = 0; i < n; ++i) {
+        // 正文 40 字符码点安全截断（角标提示性质，全文在房间页签）
+        char tpart[OV_TEXT_CAP];
+        size_t o = 0;
+        int cp = 0;
+        bool trunc = false;
+        const char* p = tmp[i].text;
+        while (*p && o + 8 < sizeof(tpart)) {
+            if (cp >= 40) { trunc = true; break; }
+            const char* s = p;
+            p++;
+            while ((*p & 0xC0) == 0x80) p++;
+            for (const char* q = s; q < p; q++) tpart[o++] = *q;
+            cp++;
+        }
+        if (trunc && o + 4 < sizeof(tpart)) { tpart[o++] = '.'; tpart[o++] = '.'; tpart[o++] = '.'; }
+        tpart[o] = 0;
+        char npart[OV_NAME_CAP + 4];
+        snprintf(npart, sizeof(npart), "%s:", tmp[i].name);
+        float nameW = ImGui::CalcTextSize(npart).x + 4.0f;
+        float textW = ImGui::CalcTextSize(tpart).x;
+        float rowH = (av > lineH ? av : lineH) + 4.0f;
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        float ty = p0.y + (rowH - lineH) * 0.5f;
+        char line[OV_NAME_CAP + OV_TEXT_CAP + 8];
+        snprintf(line, sizeof(line), "%s %s", npart, tpart);
+        // M5.10 修复：行项必须带真实宽度撑开窗口（纯 0 宽 Dummy 会让 AlwaysAutoResize 塌缩到内边距宽，DrawList 文字全被窗口矩形裁掉只剩首字母）
+        ImGui::Dummy(ImVec2(av + 7.0f + nameW + textW + 4.0f, rowH));
+        dl->AddText(ImVec2(p0.x + av + 7.0f + 1.0f, ty + 1.0f), IM_COL32(0, 0, 0, 200), line); // 黑影（可读性，非背景色）
+        AvatarDraw(tmp[i].uname, tmp[i].name, ImVec2(p0.x, p0.y + (rowH - av) * 0.5f), av);
+        dl->AddText(ImVec2(p0.x + av + 7.0f, ty), IM_COL32(120, 220, 140, 255), npart);
+        dl->AddText(ImVec2(p0.x + av + 7.0f + nameW, ty), IM_COL32(235, 235, 235, 255), tpart);
+    }
+    ImGui::End();
 }
 
 static void DrawChatView(PanelData* d) {
@@ -1411,12 +1494,12 @@ static void DrawToasts() {
 // 误判为同帧双入口而跳帧=面板闪烁（实测 Warface 聚焦闪烁/失焦正常的根因）
 static void RenderPanelFrame(IDirect3DDevice9* dev) {
     if (g_panelBroken) return;
-    // M5.5：面板激活或存在未过期 toast 才渲染（通知 toast 在面板关闭期也要画进帧内）
+    // M5.5/M5.10：面板激活或存在未过期 toast/房间角标才渲染（两者在面板关闭期也要画进帧内）
     bool panelOn = g_panelActive != 0;
     int toastN = 0;
     if (!panelOn) {
         EnterCriticalSection(&g_cs);
-        toastN = g_toastCount;
+        toastN = g_toastCount + g_roomCornerN;
         LeaveCriticalSection(&g_cs);
         if (toastN <= 0) return;
     }
@@ -1442,11 +1525,12 @@ static void RenderPanelFrame(IDirect3DDevice9* dev) {
             ImGui_ImplDX9_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
+            ImGui::GetIO().MouseDrawCursor = panelOn; // 面板期自绘光标兜底；关面板期必须复位（否则 toast/角标帧残留软件光标叠在游戏光标上）
             if (panelOn) {
-                ImGui::GetIO().MouseDrawCursor = true; // 部分游戏隐藏系统光标：面板期 ImGui 自绘光标兜底
                 DrawPanel();
             }
             DrawToasts(); // M5.5：通知 toast（面板关闭期也渲染；内部无 toast 时直接跳过）
+            DrawRoomToasts(); // M5.10：房间消息左下角角标（面板关闭期；无条目整窗不建）
             ImGui::Render();
             // 注意：此处位于游戏 EndScene 之后（场景外渲染）。实测 场景外渲染长期稳定（160s+ 常开面板），
             // 而 BeginScene/EndScene 包裹反而在 ~130s 后确定性 d3d9 AV（实测踩坑，勿"按官方例程"改回去）
@@ -1658,7 +1742,14 @@ static HRESULT WINAPI Hooked_Present8(void* dev, CONST RECT* src, CONST RECT* ds
             }
         }
     }
-    if (g_panelActive && dev && !g_panelBroken) {
+    // M5.10：D3D8 面板关闭期也渲染 toast/房间角标（与 D3D9 RenderPanelFrame 对称；此前 D3D8 关面板期 toast 静默丢失）
+    bool d8render = g_panelActive != 0;
+    if (!d8render && dev) {
+        EnterCriticalSection(&g_cs);
+        d8render = (g_toastCount + g_roomCornerN) > 0;
+        LeaveCriticalSection(&g_cs);
+    }
+    if (d8render && dev && !g_panelBroken) {
         { // M3 诊断：Present 钩激活链路可见性（前 2 帧记录）
             static int logged = 0;
             if (logged < 2) {
@@ -1673,8 +1764,10 @@ static HRESULT WINAPI Hooked_Present8(void* dev, CONST RECT* src, CONST RECT* ds
                 ImGui_ImplD3D8_NewFrame();
                 ImGui_ImplWin32_NewFrame();
                 ImGui::NewFrame();
-                ImGui::GetIO().MouseDrawCursor = true;
-                DrawPanel();
+                ImGui::GetIO().MouseDrawCursor = (g_panelActive != 0); // 同 D3D9：关面板期复位，防残留软件光标
+                if (g_panelActive) DrawPanel();
+                DrawToasts();
+                DrawRoomToasts(); // M5.10：房间角标（D3D8 对称）
                 ImGui::Render();
                 ImGui_ImplD3D8_RenderDrawData(ImGui::GetDrawData());
             } else {

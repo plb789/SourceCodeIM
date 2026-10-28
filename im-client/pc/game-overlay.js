@@ -539,7 +539,8 @@ function roomFrameFromSnap(snap) {
         }),
         chats: (Array.isArray(snap.chats) ? snap.chats : []).slice(-20).map(function (c) {
             c = c || {};
-            return { n: String(c.n || ''), x: String(c.x || ''), u: String(c.u || ''), s: c.s ? 1 : 0 };
+            // M5.9f 审计：截断保帧体积（20 条中文最坏 ~10KB，DLL obj 16384 覆盖）
+            return { n: String(c.n || '').slice(0, 24), x: String(c.x || '').slice(0, 120), u: String(c.u || '').slice(0, 32), s: c.s ? 1 : 0 };
         })
     };
 }
