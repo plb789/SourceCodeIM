@@ -977,7 +977,9 @@
                     if (window.IMSocket && typeof IMSocket.getUsername === 'function') me = IMSocket.getUsername() || '';
                     if (!me) me = (JSON.parse(decodeURIComponent(atob(localStorage.getItem('im_auth') || ''))) || {}).u || '';
                 } catch (e2) { me = ''; }
-                if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list, me);
+                // M5.9：自己头像 URL（chat.js 登录态）——游戏内 Overlay 自己消息头像下发
+                var ma = (window.IMContacts && typeof window.IMContacts.myAvatar === 'function') ? (window.IMContacts.myAvatar() || '') : '';
+                if (typeof window.desktop.gnContactsReply === 'function') window.desktop.gnContactsReply(id, list, me, ma);
             });
         }
         if (typeof window.desktop.gnSocketState === 'function') {

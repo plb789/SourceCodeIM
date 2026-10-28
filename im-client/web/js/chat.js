@@ -29270,6 +29270,7 @@
     window.IMContacts = {
         friends: function () { return friendList || []; },
         groups: function () { return groupMap || {}; },
-        displayNameOf: senderDisplayName
+        displayNameOf: senderDisplayName,
+        myAvatar: function () { return myAvatar || ''; } // M5.9：自己头像 URL（游戏内 Overlay 自己消息头像下发）
     };
 })();

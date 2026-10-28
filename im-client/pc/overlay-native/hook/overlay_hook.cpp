@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <vector>
 
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_dx9.h"
@@ -214,14 +215,16 @@ static void HookCreateProcessIAT();              // 前置声明（follow 名单
 #define OV_CHAT_CAP    16       // 会话上限（来过消息或打开过的对象按需建）
 #define OV_MSG_CAP     64       // 单会话消息环形上限
 #define OV_ROOM_MEMBER_CAP 8    // 房间成员显示上限
+#define OV_ROOM_CHAT_CAP   20   // M5.9：房内聊天显示上限（快照带近 20 条历史）
 #define OV_UNAME_CAP   32
 #define OV_NAME_CAP    48
 #define OV_TEXT_CAP    160      // 主进程已截 60 字符（UTF-8 中文 3B/字 ≈ 180B），留余量
 
 struct FriendRow { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; bool on; int unread; };
-struct ChatMsg   { char ts[10]; char name[OV_NAME_CAP]; char text[OV_TEXT_CAP]; bool self; };
+struct ChatMsg   { char uname[OV_UNAME_CAP]; char ts[10]; char name[OV_NAME_CAP]; char text[OV_TEXT_CAP]; bool self; };
 struct ChatLog   { char uname[OV_UNAME_CAP]; ChatMsg items[OV_MSG_CAP]; int count; };
 struct RoomMember { char name[OV_NAME_CAP]; bool ready; bool host; };
+struct RoomChatMsg { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; char text[OV_TEXT_CAP]; bool self; };
 struct RoomSnap {
     bool inRoom;
     int roomId;
@@ -230,6 +233,8 @@ struct RoomSnap {
     char status[16];
     int memberCount;
     RoomMember members[OV_ROOM_MEMBER_CAP];
+    int chatCount;                       // M5.9：房内聊天（快照历史 + roomchat 实时帧）
+    RoomChatMsg chats[OV_ROOM_CHAT_CAP];
 };
 
 static FriendRow g_friends[OV_FRIEND_CAP];
@@ -244,6 +249,8 @@ static bool g_chatOpen = false;                // 私聊视图（替代好友列
 static char g_activeChatUname[OV_UNAME_CAP] = { 0 };
 static char g_activeChatName[OV_NAME_CAP] = { 0 };
 static char g_chatInput[512] = { 0 };
+static char g_roomInput[512] = { 0 };   // M5.9：房间聊天输入（独立于私聊输入）
+static bool g_roomRefocus = false;      // M5.9：房间聊天发送后重聚焦（同私聊 refocus 语义）
 static bool g_chatRefocus = false;  // M5.6：发送后重聚焦输入框（Enter/点按钮会提交并释放 ActiveID——连续输入靠主动要回焦点）
 // M5.5：帧内通知 toast（Steam 式右下角堆叠；面板关闭也渲染；屏外通知窗在帧内渲染期停用）
 struct GameToast { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; char text[OV_TEXT_CAP]; DWORD born; };
@@ -255,6 +262,31 @@ static volatile LONG g_hotkeyVK = VK_TAB;
 static volatile LONG g_hotkeyCtrl = 0;
 static volatile LONG g_hotkeyShift = 1;
 static volatile LONG g_hotkeyAlt = 0;
+// M5.8：好友头像（客户端 nativeImage 缩 48x48 转 BGRA 位图 base64 下发；D3D9 MANAGED 纹理懒建）
+struct AvatarSlot { char uname[OV_UNAME_CAP]; int w, h; std::vector<unsigned char> px; IDirect3DTexture9* tex; void* dev; };
+static AvatarSlot g_avatars[64] = { 0 };
+static int        g_avatarCount = 0;
+static int B64Val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+static int B64Decode(const char* in, int inLen, unsigned char* out, int outCap) {
+    int o = 0, acc = 0, bits = 0;
+    for (int i = 0; i < inLen && o < outCap; ++i) {
+        int v = B64Val(in[i]);
+        if (v < 0 || in[i] == '=') break;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; out[o++] = (unsigned char)((acc >> bits) & 0xFF); }
+    }
+    return o;
+}
+static IDirect3DTexture9* AvatarTexGet(const char* uname); // 前置声明（定义在 M5.2 段；好友列表/Toast 绘制用）
+static void AvatarDraw(const char* uname, const char* name, ImVec2 pos, float size);
 
 // ===== 简易 JSON 提取器（M1 已验证；处理 \" \\ \n \t \r；\uXXXX 协议不用）=====
 // 局限：值内含转义引号的极端串可能错位——本协议键名恒在值前 emit；完整解析器待实测需要时再换
@@ -359,6 +391,7 @@ static void AppendMsg(const char* uname, const char* name, const char* text, boo
     GetLocalTime(&st);
     ChatMsg m;
     snprintf(m.ts, sizeof(m.ts), "%02d:%02d", st.wHour, st.wMinute);
+    snprintf(m.uname, sizeof(m.uname), "%s", uname);
     snprintf(m.name, OV_NAME_CAP, "%s", name);
     snprintf(m.text, OV_TEXT_CAP, "%s", text);
     m.self = self;
@@ -467,9 +500,16 @@ static void HandleLine(const char* line) {
             g_room.inRoom = false;
         } else {
             const char* os = strchr(p, '{');
-            const char*oe = os ? strchr(os, '}') : NULL;
+            const char* oe = NULL;
+            if (os) { // M5.9：房间对象边界改括号深度匹配（原 strchr 首 '}' 截断嵌套 members/chats——多成员房间只解析到首个成员）
+                int depth = 0;
+                for (const char* q = os; *q; ++q) {
+                    if (*q == '{') ++depth;
+                    else if (*q == '}') { if (--depth == 0) { oe = q; break; } }
+                }
+            }
             if (os && oe) {
-                char obj[1024];
+                char obj[4096];
                 size_t len = (size_t)(oe - os + 1);
                 if (len >= sizeof(obj)) len = sizeof(obj) - 1;
                 memcpy(obj, os, len); obj[len] = 0;
@@ -510,10 +550,56 @@ static void HandleLine(const char* line) {
                     mp = me + 1;
                 }
                 g_room.memberCount = mc;
+                // M5.9：房内聊天历史（快照 chats 数组，{n,x} 对；与 members 同款顺序扫描）
+                const char* ca = strstr(obj, "\"chats\"");
+                ca = ca ? strchr(ca, '[') : NULL;
+                int cc = 0;
+                const char* cp = ca ? ca + 1 : NULL;
+                while (cp && *cp && *cp != ']' && cc < OV_ROOM_CHAT_CAP) {
+                    const char* cs2 = strchr(cp, '{');
+                    if (!cs2) break;
+                    const char* ce = strchr(cs2, '}');
+                    if (!ce) break;
+                    char cobj[512];
+                    size_t clen = (size_t)(ce - cs2 + 1);
+                    if (clen >= sizeof(cobj)) clen = sizeof(cobj) - 1;
+                    memcpy(cobj, cs2, clen); cobj[clen] = 0;
+                    char cn[OV_NAME_CAP] = { 0 }, cx[OV_TEXT_CAP] = { 0 }, cu[OV_UNAME_CAP] = { 0 };
+                    bool cself = false;
+                    JsonStr(cobj, "n", cn, sizeof(cn));
+                    JsonStr(cobj, "x", cx, sizeof(cx));
+                    JsonStr(cobj, "u", cu, sizeof(cu));
+                    JsonBool(cobj, "s", &cself);
+                    snprintf(g_room.chats[cc].uname, OV_UNAME_CAP, "%s", cu);
+                    snprintf(g_room.chats[cc].name, OV_NAME_CAP, "%s", cn);
+                    snprintf(g_room.chats[cc].text, OV_TEXT_CAP, "%s", cx);
+                    g_room.chats[cc].self = cself;
+                    cc++;
+                    cp = ce + 1;
+                }
+                g_room.chatCount = cc;
             }
         }
         LeaveCriticalSection(&g_cs);
         LogLine("pipe: room");
+        return;
+    }
+    if (strcmp(t, "roomchat") == 0) { // M5.9：房内聊天实时帧（109 chat 广播 → 快照节流窗口内的即时显示）
+        char n[OV_NAME_CAP] = { 0 }, x[OV_TEXT_CAP] = { 0 }, u[OV_UNAME_CAP] = { 0 };
+        bool self = false;
+        JsonStr(line, "name", n, sizeof(n));
+        JsonStr(line, "text", x, sizeof(x));
+        JsonStr(line, "u", u, sizeof(u));
+        JsonBool(line, "self", &self);
+        EnterCriticalSection(&g_cs);
+        if (g_room.inRoom && g_room.chatCount < OV_ROOM_CHAT_CAP) {
+            snprintf(g_room.chats[g_room.chatCount].uname, OV_UNAME_CAP, "%s", u);
+            snprintf(g_room.chats[g_room.chatCount].name, OV_NAME_CAP, "%s", n);
+            snprintf(g_room.chats[g_room.chatCount].text, OV_TEXT_CAP, "%s", x);
+            g_room.chats[g_room.chatCount].self = self;
+            g_room.chatCount++;
+        }
+        LeaveCriticalSection(&g_cs);
         return;
     }
     if (strcmp(t, "follow") == 0) { HandleFollowFrame(line); return; } // M4：兼容名单下发（子进程跟随启用）
@@ -526,6 +612,32 @@ static void HandleLine(const char* line) {
             JsonInt(line, "alt", &a); InterlockedExchange(&g_hotkeyAlt, a);
             LogLine("hotkey updated from settings");
         }
+        return;
+    }
+    if (strcmp(t, "avatar") == 0) { // M5.8：好友头像位图（BGRA，客户端 nativeImage 缩放；纹理懒建到绘制时）
+        char u[OV_UNAME_CAP] = { 0 }, b64[24576 + 16] = { 0 };
+        int w = 0, h = 0;
+        JsonStr(line, "u", u, sizeof(u));
+        JsonInt(line, "w", &w);
+        JsonInt(line, "h", &h);
+        if (!u[0] || w <= 0 || h <= 0 || w > 128 || h > 128 || !JsonStr(line, "b64", b64, sizeof(b64))) return;
+        int need = w * h * 4;
+        std::vector<unsigned char> px((size_t)need);
+        int got = B64Decode(b64, (int)strlen(b64), &px[0], need);
+        if (got < need) return; // 位图不完整丢弃（等客户端重发）
+        EnterCriticalSection(&g_cs);
+        AvatarSlot* slot = NULL;
+        for (int i = 0; i < g_avatarCount; ++i) {
+            if (_stricmp(g_avatars[i].uname, u) == 0) { slot = &g_avatars[i]; break; }
+        }
+        if (!slot && g_avatarCount < 64) slot = &g_avatars[g_avatarCount++];
+        if (slot) {
+            snprintf(slot->uname, sizeof(slot->uname), "%s", u);
+            slot->w = w; slot->h = h;
+            slot->px.swap(px); // 换入新位图（旧纹理由绘制线程按 dev 失配重建）
+        }
+        LeaveCriticalSection(&g_cs);
+        LogLine("pipe: avatar");
         return;
     }
     LogLine("pipe: unknown frame");
@@ -563,7 +675,7 @@ static DWORD WINAPI PipeThread(LPVOID) {
         // 发件箱清空（重连后新会话）
         InterlockedExchange(&g_outTail, InterlockedExchangeAdd(&g_outHead, 0));
         if (InterlockedExchangeAdd(&g_panelReady, 0)) PipePushOut("{\"t\":\"panel-ready\"}\n"); // 必须在清空之后入队
-        char acc[16384]; // 下行帧累计缓冲（NDJSON 按行切分；超长行丢弃防溢出）
+        char acc[262144]; // 下行帧累计缓冲（NDJSON 按行切分；M5.8 头像帧 ~12KB 且多帧可合并到达，超长行丢弃防溢出）
         int accLen = 0;
         char buf[4096];
         OVERLAPPED orv = { 0 };
@@ -856,6 +968,23 @@ static void SendRoomAct(const char* action) {
     snprintf(frame, sizeof(frame), "{\"t\":\"room-act\",\"action\":\"%s\",\"room_id\":%d}\n", action, g_room.roomId);
     PipePushOut(frame);
 }
+// M5.9：房内聊天发送（客户端 room-act chat 分支已支持 → 109 信封上行）
+static void SendRoomChat() {
+    char text[384] = { 0 };
+    snprintf(text, sizeof(text), "%s", g_roomInput);
+    char* s = text;
+    while (*s == ' ' || *s == '\t') ++s;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) --e;
+    *e = 0;
+    if (!s[0] || !g_room.roomId) return;
+    char esc[768];
+    JsonEscape(s, esc, sizeof(esc));
+    char frame[OV_OUTBOX_SLOT];
+    snprintf(frame, sizeof(frame), "{\"t\":\"room-act\",\"action\":\"chat\",\"room_id\":%d,\"text\":\"%s\"}\n", g_room.roomId, esc);
+    PipePushOut(frame);
+    g_roomInput[0] = 0;
+}
 // 快照到本地（短临界区；ImGui 绘制不持锁）
 struct PanelData {
     FriendRow friends[OV_FRIEND_CAP];
@@ -865,6 +994,7 @@ struct PanelData {
     RoomSnap room;
     char sysMsg[160];
     bool chatOpen;
+    char selfUname[OV_UNAME_CAP]; // M5.9：本端账号（自己消息头像用）
 };
 static void SnapshotPanel(PanelData* d) {
     EnterCriticalSection(&g_cs);
@@ -872,6 +1002,7 @@ static void SnapshotPanel(PanelData* d) {
     for (int i = 0; i < g_friendCount && i < OV_FRIEND_CAP; ++i) d->friends[i] = g_friends[i];
     d->room = g_room;
     snprintf(d->sysMsg, sizeof(d->sysMsg), "%s", g_sysMsg);
+    snprintf(d->selfUname, sizeof(d->selfUname), "%s", g_selfUname);
     d->chatOpen = g_chatOpen;
     ChatLog* c = g_activeChatUname[0] ? FindChat(g_activeChatUname, false) : NULL;
     d->msgCount = c ? c->count : 0;
@@ -881,6 +1012,25 @@ static void SnapshotPanel(PanelData* d) {
 static const ImU32 COL_GREEN = IM_COL32(7, 193, 96, 255);
 static const ImU32 COL_GRAY = IM_COL32(150, 150, 150, 255);
 static const ImU32 COL_TEXT = IM_COL32(230, 230, 230, 255);
+
+// M5.9e：CJK/无空格长串手动折行——ImGui 词折行按空格/标点断行，中文长句/长数字串（无空格）整串视为一个词永不折行溢出裁断；
+// 逐 UTF-8 码点测宽、超宽插 '\n'，渲染端直接 TextUnformatted（嵌入式换行生效），气泡尺寸按折后文本实测
+static void WrapTextCJK(const char* src, float maxw, char* dst, size_t dstcap) {
+    size_t o = 0;
+    float lw = 0.0f;
+    const char* p = src;
+    while (*p && o + 8 < dstcap) {
+        if (*p == '\n') { dst[o++] = '\n'; lw = 0.0f; p++; continue; }
+        const char* s = p;
+        p++;
+        while ((*p & 0xC0) == 0x80) p++; // UTF-8 续字节
+        float cw = ImGui::CalcTextSize(s, p).x;
+        if (lw > 0.0f && lw + cw > maxw) { dst[o++] = '\n'; lw = 0.0f; }
+        for (const char* q = s; q < p && o + 1 < dstcap; q++) dst[o++] = *q;
+        lw += cw;
+    }
+    dst[o] = 0;
+}
 
 static void DrawChatView(PanelData* d) {
     if (ImGui::Button(u8"返回")) { g_chatOpen = false; g_activeChatUname[0] = 0; return; }
@@ -894,13 +1044,37 @@ static void DrawChatView(PanelData* d) {
     int n = d->msgCount;
     for (int i = 0; i < n; ++i) {
         ChatMsg& m = d->msgs[i];
-        ImGui::PushStyleColor(ImGuiCol_Text, m.self ? ImVec4(0.10f, 0.85f, 0.45f, 1.0f) : ImVec4(0.62f, 0.62f, 0.62f, 1.0f));
-        ImGui::Text("%s %s", m.ts, m.name);
-        ImGui::PopStyleColor();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.92f, 0.92f, 1.0f));
-        ImGui::TextWrapped("%s", m.text);
-        ImGui::PopStyleColor();
-        ImGui::Spacing();
+        // M5.9d/e：PC 客户端同款气泡布局 + CJK 手动折行（词折行切不动无空格长串）
+        float avail = ImGui::GetContentRegionAvail().x;
+        float av = 26.0f;
+        float wrapW = avail - av - 36.0f;
+        char wt[1024];
+        WrapTextCJK(m.text, wrapW, wt, sizeof(wt));
+        ImVec2 tsz = ImGui::CalcTextSize(wt);               // 折后尺寸（嵌入式换行）
+        float bw = tsz.x + 14.0f;                            // 气泡宽 = 最长行 + 内边距
+        float bh = tsz.y + 10.0f;                            // 气泡高
+        float rowX = ImGui::GetCursorPosX();
+        ImVec2 scr0 = ImGui::GetCursorScreenPos(); // 行首屏幕坐标（气泡/头像 DrawList 定位）
+        float vpad = (bh > av + 2.0f) ? 0.0f : (av + 2.0f - bh) * 0.5f; // 气泡比头像矮时垂直居中
+        ImU32 bubbleCol = m.self ? IM_COL32(22, 132, 66, 235) : IM_COL32(44, 48, 54, 235);
+        if (m.self) {
+            float bx = rowX + avail - av - 6 - bw;
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + vpad), ImVec2(bx + bw, scr0.y + vpad + bh), bubbleCol, 6.0f);
+            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
+            ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
+            AvatarDraw(d->selfUname, u8"我", ImVec2(scr0.x + avail - av, scr0.y + 2), av);
+        } else {
+            float bx = rowX + av + 6;
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + vpad), ImVec2(bx + bw, scr0.y + vpad + bh), bubbleCol, 6.0f);
+            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
+            ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
+            AvatarDraw(m.uname, m.name, ImVec2(scr0.x + 2, scr0.y + 2), av);
+        }
+        float used = vpad + 5.0f + tsz.y;                            // 光标实际推进量
+        float deficit = (bh > used ? bh : (av + 4.0f > used ? av + 4.0f : used)) - used; // 行高补差（不重复计入已推进部分）
+        ImGui::Dummy(ImVec2(0, deficit > 0 ? deficit : 0));
     }
     // 新消息跟随滚动到底（用户上翻时不动）
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 8.0f) ImGui::SetScrollHereY(1.0f);
@@ -921,13 +1095,14 @@ static void DrawFriendsList(PanelData* d) {
     ImGui::BeginChild("friends", ImVec2(0, 0), ImGuiChildFlags_None);
     for (int i = 0; i < d->friendCount; ++i) {
         FriendRow& f = d->friends[i];
-        char label[OV_UNAME_CAP + OV_NAME_CAP + 8];
-        snprintf(label, sizeof(label), "%s %s##%s", f.on ? "\xe2\x97\x8f" : "\xe2\x97\x8b", f.name, f.uname); // ●/○
         ImVec4 dotCol = f.on ? ImVec4(0.10f, 0.85f, 0.45f, 1.0f) : ImVec4(0.47f, 0.47f, 0.47f, 1.0f);
         ImGui::PushStyleColor(ImGuiCol_Text, dotCol);
         // 在线点与名字同色难分：名字列由 selectable 自身文字色接管——用两段绘制太繁琐，POC 精简版整行同色，
         // 在线态由圆点符号形状区分（●/○），正式版换两列布局（M3 皮肤细化）
-        if (ImGui::Selectable(label, false)) {
+        ImVec2 avPos = ImGui::GetCursorScreenPos();
+        char label[OV_UNAME_CAP + 8];
+        snprintf(label, sizeof(label), "##%s", f.uname);
+        if (ImGui::Selectable(label, false, ImGuiSelectableFlags_AllowOverlap, ImVec2(0, 30))) {
             snprintf(g_activeChatUname, OV_UNAME_CAP, "%s", f.uname);
             snprintf(g_activeChatName, OV_NAME_CAP, "%s", f.name);
             g_chatOpen = true;
@@ -939,6 +1114,11 @@ static void DrawFriendsList(PanelData* d) {
             }
             LeaveCriticalSection(&g_cs);
         }
+        AvatarDraw(f.uname, f.name, ImVec2(avPos.x + 2, avPos.y + 2), 26); // M5.8：头像（纹理或首字母圆底）
+        ImDrawList* fdl = ImGui::GetWindowDrawList();
+        ImU32 fcol = ImGui::GetColorU32(dotCol);
+        fdl->AddText(ImVec2(avPos.x + 32, avPos.y + 7), fcol, f.on ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // 在线点（头像右侧起，不再被遮挡）
+        fdl->AddText(ImVec2(avPos.x + 46, avPos.y + 7), fcol, f.name); // 名字
         ImGui::PopStyleColor();
         if (f.unread > 0) {
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 24.0f);
@@ -974,6 +1154,63 @@ static void DrawRoomTab(PanelData* d) {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.28f, 0.28f, 1.0f));
     if (ImGui::Button(u8"退出房间", ImVec2(120, 0))) SendRoomAct("leave");
     ImGui::PopStyleColor(2);
+    // M5.9：房内聊天（历史 + 输入；成员上方区域让给状态，聊天区占余下全部高度）
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.62f, 0.62f, 0.62f, 1.0f), u8"房内聊天");
+    float inH = ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("roomchats", ImVec2(0, -inH), ImGuiChildFlags_None);
+    for (int i = 0; i < d->room.chatCount; ++i) {
+        RoomChatMsg& c = d->room.chats[i];
+        // M5.9d：房间群聊——名字行（群聊语义保留）+ 气泡；Dummy 只补差值（修复双倍计数=间距过宽根因）
+        float avail = ImGui::GetContentRegionAvail().x;
+        float av = 26.0f;
+        float wrapW = avail - av - 36.0f;
+        char wt[1024];
+        WrapTextCJK(c.text, wrapW, wt, sizeof(wt));
+        ImVec2 tsz = ImGui::CalcTextSize(wt);
+        float bw = tsz.x + 14.0f;
+        float bh = tsz.y + 10.0f;
+        float nameW = ImGui::CalcTextSize(c.name).x;
+        float rowX = ImGui::GetCursorPosX();
+        ImVec2 scr0 = ImGui::GetCursorScreenPos();
+        float vpad = (bh > av + 2.0f) ? 0.0f : (av + 2.0f - bh) * 0.5f;
+        ImU32 bubbleCol = c.self ? IM_COL32(22, 132, 66, 235) : IM_COL32(44, 48, 54, 235);
+        if (c.self) {
+            ImGui::SetCursorPosX(rowX + avail - av - 6 - bw + (bw > nameW ? bw - nameW : 0)); // 名字右对齐气泡右缘
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.35f, 1.0f));
+            ImGui::TextUnformatted(c.name);
+            ImGui::PopStyleColor();
+            float bx = rowX + avail - av - 6 - bw;
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + ImGui::GetTextLineHeight() + vpad), ImVec2(bx + bw, scr0.y + ImGui::GetTextLineHeight() + vpad + bh), bubbleCol, 6.0f);
+            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
+            ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
+            AvatarDraw(d->selfUname, u8"我", ImVec2(scr0.x + avail - av, scr0.y + 2), av);
+        } else {
+            ImGui::SetCursorPosX(rowX + av + 6);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.35f, 1.0f));
+            ImGui::TextUnformatted(c.name);
+            ImGui::PopStyleColor();
+            float bx = rowX + av + 6;
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bx, scr0.y + ImGui::GetTextLineHeight() + vpad), ImVec2(bx + bw, scr0.y + ImGui::GetTextLineHeight() + vpad + bh), bubbleCol, 6.0f);
+            ImGui::SetCursorPosX(bx + 7.0f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + vpad + 5.0f);
+            ImGui::TextColored(ImVec4(0.94f, 0.94f, 0.94f, 1.0f), "%s", wt);
+            AvatarDraw(c.uname, c.name, ImVec2(scr0.x + 2, scr0.y + 2), av);
+        }
+        float nameH = ImGui::GetTextLineHeight();
+        float used = nameH + vpad + 5.0f + tsz.y;
+        float want = (nameH + bh > used ? nameH + bh : (av + 4.0f > used ? av + 4.0f : used));
+        float deficit = want - used;
+        ImGui::Dummy(ImVec2(0, deficit > 0 ? deficit : 0));
+    }
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 8.0f) ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+    if (g_roomRefocus) { ImGui::SetKeyboardFocusHere(0); g_roomRefocus = false; }
+    bool rsend = ImGui::InputText("##roomin", g_roomInput, sizeof(g_roomInput), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    rsend = ImGui::Button(u8"发送") || rsend;
+    if (rsend) { SendRoomChat(); g_roomRefocus = true; }
 }
 static void DrawPanel() {
     ImGuiIO& io = ImGui::GetIO();
@@ -1051,6 +1288,62 @@ static void** g_vtSCSlot = NULL;            // 隐式交换链虚表 Present 槽
 static void** g_vtDevBase = NULL;           // 捕获时的设备虚表基址（守护比对：实例指针被换即重打）
                                             // g_scLastTick 定义上移至 Hooked_Present 前（渲染归属判据）
 
+// M5.8：头像纹理懒建（客户端下发的 BGRA 位图 → D3D9 MANAGED 纹理；设备重绑后旧纹理作废重建）
+static IDirect3DTexture9* AvatarTexGet(const char* uname) {
+    if (!g_imguiDev || !uname || !uname[0]) return NULL;
+    IDirect3DTexture9* tex = NULL;
+    EnterCriticalSection(&g_cs);
+    for (int i = 0; i < g_avatarCount; ++i) {
+        if (_stricmp(g_avatars[i].uname, uname) != 0 || g_avatars[i].px.empty()) continue;
+        if (g_avatars[i].tex && g_avatars[i].dev == (void*)g_imguiDev) { tex = g_avatars[i].tex; break; }
+        if (g_avatars[i].tex) { g_avatars[i].tex->Release(); g_avatars[i].tex = NULL; }
+        if (SUCCEEDED(g_imguiDev->CreateTexture(g_avatars[i].w, g_avatars[i].h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL))) {
+            D3DLOCKED_RECT lr;
+            if (SUCCEEDED(tex->LockRect(0, &lr, NULL, 0))) {
+                for (int y = 0; y < g_avatars[i].h; ++y)
+                    memcpy((unsigned char*)lr.pBits + y * lr.Pitch, &g_avatars[i].px[(size_t)y * g_avatars[i].w * 4], (size_t)g_avatars[i].w * 4);
+                tex->UnlockRect(0);
+            }
+            g_avatars[i].tex = tex;
+            g_avatars[i].dev = (void*)g_imguiDev;
+        } else tex = NULL;
+        break;
+    }
+    LeaveCriticalSection(&g_cs);
+    return tex;
+}
+// 设备重绑后旧设备纹理全作废：清纹理指针（位图保留）+ 向客户端要重发（新设备重建）
+static void AvatarTexFlush() {
+    EnterCriticalSection(&g_cs);
+    for (int i = 0; i < g_avatarCount; ++i) {
+        if (g_avatars[i].tex) { g_avatars[i].tex->Release(); g_avatars[i].tex = NULL; }
+    }
+    LeaveCriticalSection(&g_cs);
+    PipePushOut("{\"t\":\"avatars-need\"}\n");
+}
+// 头像绘制：有纹理画圆角图，无纹理画"首字母圆底"兜底（主题绿）
+static void AvatarDraw(const char* uname, const char* name, ImVec2 pos, float size) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    IDirect3DTexture9* tex = AvatarTexGet(uname);
+    if (tex) {
+        dl->AddImageRounded((ImTextureID)tex, pos, ImVec2(pos.x + size, pos.y + size), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 255), size * 0.5f);
+        return;
+    }
+    float cx = pos.x + size * 0.5f, cy = pos.y + size * 0.5f;
+    dl->AddCircleFilled(ImVec2(cx, cy), size * 0.5f, IM_COL32(69, 150, 90, 255), 24);
+    char ini[8] = { 0 };
+    const char* src = (name && name[0]) ? name : uname;
+    if (src[0]) {
+        unsigned char c = (unsigned char)src[0];
+        if (c < 0x80) { ini[0] = src[0]; } // ASCII 取首字母
+        else { ini[0] = src[0]; ini[1] = src[1]; } // UTF-8 中文取首字节对（字体裁剪安全：只需该字符字形在 atlas 内）
+    }
+    if (ini[0]) {
+        ImVec2 ts = ImGui::CalcTextSize(ini);
+        dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), IM_COL32(255, 255, 255, 255), ini);
+    }
+}
+
 // M5.5：帧内通知 toast 绘制（右下角堆叠；6s 自愈过期；面板关闭期可点击=打开面板直达该会话，
 // 面板打开期 NoInputs 只展示——防 toast 窗口抢面板输入）
 static void DrawToasts() {
@@ -1080,13 +1373,19 @@ static void DrawToasts() {
     for (int i = 0; i < n; ++i) {
         ImGui::BeginGroup();
         if (i) ImGui::Separator();
+        ImVec2 avPos = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(30, 30)); // 头像位
+        ImGui::SameLine(48); // 头像右缘外起文（窗口 padding 12 + 30 头像 + 6 间距）
+        ImGui::BeginGroup();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.35f, 1.0f)); // 名字=主题绿（跟随主界面观感）
         ImGui::TextUnformatted(snap[i].name);
-        ImGui::PopStyleColor();
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tw - 24);
+        ImGui::PopStyleColor(); // M5.8b：名字色出栈（缺失=每条 toast 泄漏一次 PushStyleColor→EndFrame 断言弹窗，实测崩溃）
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tw - 62);
         ImGui::TextUnformatted(snap[i].text);
         ImGui::PopTextWrapPos();
         ImGui::EndGroup();
+        ImGui::EndGroup();
+        AvatarDraw(snap[i].uname, snap[i].name, avPos, 30); // M5.8：头像（纹理或首字母圆底）
         // 点击 toast：打开面板直达该会话（Steam 同款）；清掉全部 toast（视觉收敛）
         if (interactive && ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
             InterlockedExchange(&g_panelActive, 1); // 呼出面板（与 Shift+Tab 同语义）
@@ -1136,6 +1435,7 @@ static void RenderPanelFrame(IDirect3DDevice9* dev) {
             ImGui_ImplDX9_Shutdown();
             ImGui_ImplDX9_Init(dev);
             g_imguiDev = dev;
+            AvatarTexFlush(); // M5.8：旧设备头像纹理作废 + 向客户端要重发
             LogLine("imgui dx9 rebound to presenting device");
         }
         if (ImGuiEnsure9(dev)) {

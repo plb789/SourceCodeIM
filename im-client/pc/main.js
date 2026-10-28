@@ -1487,8 +1487,8 @@ ipcMain.on('overlay:room-reply', function (e, id, snap) {
     var r = overlayRoomPending[id];
     if (r) { delete overlayRoomPending[id]; r(snap || null); }
 });
-ipcMain.on('gn:contacts-reply', function (e, id, list, u) {
-    gameOverlay.onContactsReply(id, list, u); // 二期 M1/M2：快照应答分流（'oc' 前缀）；u=本端账号（回显 self 判定）
+ipcMain.on('gn:contacts-reply', function (e, id, list, u, ma) {
+    gameOverlay.onContactsReply(id, list, u, ma); // 二期 M1/M2：快照应答分流（'oc' 前缀）；u=本端账号（回显 self 判定）；ma=自己头像 URL（M5.9）
     var r = gnContactsPending[id];
     if (r) { delete gnContactsPending[id]; r(Array.isArray(list) ? list : []); }
 });

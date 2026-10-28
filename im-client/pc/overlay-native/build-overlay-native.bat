@@ -33,7 +33,7 @@ if not exist "%SCRIPT_DIR%injector\x86" mkdir "%SCRIPT_DIR%injector\x86"
 if not exist "%SCRIPT_DIR%host\x86" mkdir "%SCRIPT_DIR%host\x86"
 
 echo [2/5] 编译 overlay_hook_x86.dll（D3D9 + D3D8 适配层）...
-cl /nologo /utf-8 /LD /MT /O2 /W3 /DUNICODE /D_UNICODE ^
+cl /nologo /utf-8 /LD /MT /O2 /DNDEBUG /W3 /DUNICODE /D_UNICODE ^
   /I"%IMGUI%" /I"%IMGUI%\backends" /I"%SCRIPT_DIR%third_party\d3d8" ^
   "%SCRIPT_DIR%hook\overlay_hook.cpp" ^
   "%IMGUI%\imgui.cpp" ^
@@ -73,7 +73,7 @@ if not exist "%SCRIPT_DIR%injector\x64" mkdir "%SCRIPT_DIR%injector\x64"
 if not exist "%SCRIPT_DIR%host\x64" mkdir "%SCRIPT_DIR%host\x64"
 
 echo [3/5] 编译 overlay_hook_x64.dll（D3D9 only）...
-cl /nologo /utf-8 /LD /MT /O2 /W3 /DUNICODE /D_UNICODE ^
+cl /nologo /utf-8 /LD /MT /O2 /DNDEBUG /W3 /DUNICODE /D_UNICODE ^
   /I"%IMGUI%" /I"%IMGUI%\backends" ^
   "%SCRIPT_DIR%hook\overlay_hook.cpp" ^
   "%IMGUI%\imgui.cpp" ^

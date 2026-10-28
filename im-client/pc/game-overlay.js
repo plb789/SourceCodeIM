@@ -23,7 +23,7 @@ const fs = require('fs');
 const os = require('os');
 const net = require('net'); // 二期 M1：Named Pipe 服务端（DLL 注入式 Overlay 下行通道）
 const { execFile } = require('child_process');
-const { app, BrowserWindow, globalShortcut, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, globalShortcut, screen, ipcMain, nativeImage } = require('electron');
 
 // Win7（os.release 6.1.x）硬性禁用：win7 壳强制 disableHardwareAcceleration + Electron 22/Chromium 108，
 // transparent 窗口在关 DWM/软渲染下是黑屏整块挡游戏（设计文档 §4.1.1/§五.9 降级策略取"整体禁用"）
@@ -360,6 +360,77 @@ function pipePushHotkey(sock) {
     var h = hotkeyToVk(settings.hotkey);
     pipeSend(sock, { t: 'hotkey', vk: h.vk, ctrl: h.ctrl, shift: h.shift, alt: h.alt });
 }
+
+// M5.8：好友头像位图下发（nativeImage 缩 48x48 → toBitmap BGRA → base64；DLL 建 D3D9 纹理帧内绘制）
+var avatarCache = {};   // username → { w, h, b64 }（__self__ = 自己头像）
+var avatarBusy = {};    // username → 下载中
+var avatarSent = {};    // username → 本 DLL 连接已发送（防每轮联系人刷新重发 ~174KB 突发挤压 msg 帧=toast 延迟，实测根因）
+var selfAvatarUrl = ''; // M5.9：自己头像 URL（gnContactsReply 捎回的登录态）
+function deliverAvatarsToPipes(sockFilter) {
+    // M5.9：自己头像（selfUname 键；AvatarDraw self 行已按 selfUname 取纹理）
+    if (selfAvatarUrl && selfUname) {
+        var sendSelf = function (frame) {
+            avatarSent['__self__'] = true;
+            if (sockFilter) pipeSend(sockFilter, frame);
+            else pipeBroadcast(frame);
+        };
+        if (avatarCache['__self__']) { sendSelf(Object.assign({ t: 'avatar', u: selfUname }, avatarCache['__self__'])); }
+        else if (!avatarBusy['__self__']) {
+            avatarBusy['__self__'] = true;
+            resolveAvatar(selfAvatarUrl).then(function (img) {
+                avatarBusy['__self__'] = false;
+                if (!img || img.isEmpty()) return;
+                var r = img.resize({ width: 48, height: 48 });
+                var sz = r.getSize();
+                if (!sz.width || !sz.height) return;
+                avatarCache['__self__'] = { w: sz.width, h: sz.height, b64: r.toBitmap().toString('base64') };
+                sendSelf(Object.assign({ t: 'avatar', u: selfUname }, avatarCache['__self__']));
+            }).catch(function () { avatarBusy['__self__'] = false; });
+        }
+    }
+    contactsCache.forEach(function (c) {
+        if (!c.avatar || !c.username) return;
+        var send = function (frame) {
+            avatarSent[c.username] = true; // 已发标记（本连接内不重发）
+            if (sockFilter) pipeSend(sockFilter, frame);
+            else pipeBroadcast(frame);
+        };
+        if (avatarSent[c.username]) return; // 本连接已发：跳过（热键/消息等小帧不被头像突发挤压）
+        if (avatarCache[c.username]) { send(Object.assign({ t: 'avatar', u: c.username }, avatarCache[c.username])); return; }
+        if (avatarBusy[c.username]) return;
+        avatarBusy[c.username] = true;
+        resolveAvatar(c.avatar).then(function (img) {
+            avatarBusy[c.username] = false;
+            if (!img || img.isEmpty()) return;
+            var r = img.resize({ width: 48, height: 48 });
+            var sz = r.getSize();
+            if (!sz.width || !sz.height) return;
+            avatarCache[c.username] = { w: sz.width, h: sz.height, b64: r.toBitmap().toString('base64') };
+            send(Object.assign({ t: 'avatar', u: c.username }, avatarCache[c.username]));
+        }).catch(function () { avatarBusy[c.username] = false; });
+    });
+}
+function resolveAvatar(url) {
+    return new Promise(function (resolve) {
+        try {
+            var u = String(url || '');
+            if (!u) return resolve(null);
+            if (u.indexOf('//') === -1 || u.charAt(0) === '/') { // 相对路径 → 补主窗口源
+                var mw = getMainWindow ? getMainWindow() : null;
+                var origin = '';
+                try { origin = new URL(mw && !mw.isDestroyed() ? mw.webContents.getURL() : 'about:blank').origin; } catch (eO) { }
+                if (!origin || origin === 'null') return resolve(null);
+                u = origin + (u.charAt(0) === '/' ? '' : '/') + u;
+            }
+            var mod = u.indexOf('https:') === 0 ? require('https') : require('http');
+            mod.get(u, function (res) {
+                var chunks = [];
+                res.on('data', function (c) { chunks.push(c); });
+                res.on('end', function () { try { resolve(nativeImage.createFromBuffer(Buffer.concat(chunks))); } catch (eD) { resolve(null); } });
+            }).on('error', function () { resolve(null); });
+        } catch (e) { resolve(null); }
+    });
+}
 function pipeSend(sock, frame) {
     if (!sock) return;
     try { sock.write(JSON.stringify(frame) + '\n'); } catch (e) { log('[overlay] pipe 写帧失败: ' + e.message); }
@@ -387,19 +458,21 @@ function askContactsThrottled() {
 }
 // main.js gn:contacts-reply 处调用（与 gn:contacts-get 共用一条应答通道，按 id 分流）；
 // u = 主窗口顺带捎回的本端账号（socket.js gnContactsReply 第三参，IMSocket.getUsername 兜底 im_auth）
-function onContactsReply(id, list, u) {
+function onContactsReply(id, list, u, ma) {
     if (!ovContactsPending[id]) return;
     delete ovContactsPending[id];
     contactsCache = (Array.isArray(list) ? list : []).slice(0, 200).map(function (c) {
         c = c || {};
-        return { username: String(c.username || ''), name: String(c.name || ''), online: !!c.online };
+        return { username: String(c.username || ''), name: String(c.name || ''), online: !!c.online, avatar: String(c.avatar || '') };
     });
     var newU = String(u || '');
     var meChanged = newU && newU !== selfUname;
     if (meChanged) selfUname = newU;
+    if (String(ma || '')) selfAvatarUrl = String(ma); // M5.9：自己头像 URL（登录态，chat.js 经 socket.js 捎回）
     log('[overlay] 好友快照更新: ' + contactsCache.length + ' 人' + (meChanged ? '（me=' + selfUname + '）' : ''));
     pipeBroadcast({ t: 'friends', list: friendsFrameList() });
     if (meChanged) pipeBroadcast({ t: 'me', u: selfUname }); // DLL 回显消息 self 判定
+    deliverAvatarsToPipes(); // M5.8：好友头像位图下发（缓存命中直发，未下载的异步取；含自己头像）
 }
 // ===== M2 上行帧路由（DLL 面板事件 → 与一期悬浮窗同口径：gn:signal-out 经主窗口 WS 上行）=====
 // 白名单收敛：只放行私聊文本与房间三动作，防被攻陷的游戏进程借 pipe 注入任意信令
@@ -420,7 +493,8 @@ function onPipeFrame(pid, line) {
     } else if (f.t === 'room-act') {
         var act = String(f.action || '').slice(0, 16);
         if (act !== 'ready' && act !== 'leave' && act !== 'chat') return;
-        var content = { action: act, room_id: Number(f.room_id) || 0 };
+        // M5.9：room_id 必须字符串——服务端 gnRoomSignal.RoomID 是 string，数字会让 JSON 解析报错静默丢帧（实测房间聊天发不出根因）
+        var content = { action: act, room_id: String(Number(f.room_id) || 0) };
         if (act === 'chat') content.text = String(f.text || '').slice(0, 500);
         log('[overlay] 上行房间动作: ' + act + ' #' + content.room_id);
         sendUplink({ msg_type: 109, content: JSON.stringify(content) }); // 109 信封包装（一期 overlay.js send() 同款）
@@ -445,6 +519,10 @@ function onPipeFrame(pid, line) {
             log('[overlay] 启动器拉起游戏子进程 pid=' + cpid + ' → 建 pipe');
             startPipeServer(cpid);
         }
+    } else if (f.t === 'avatars-need') {
+        // M5.8：DLL 设备重绑后要重发头像（清已发标记 → 全量重发）
+        avatarSent = {};
+        deliverAvatarsToPipes();
     }
 }
 // ===== M2 房间快照（模式同 M1 askContacts：向唯一持有者 gameStoreWin 查询，3s 超时兜底 null）=====
@@ -458,6 +536,10 @@ function roomFrameFromSnap(snap) {
         members: (Array.isArray(snap.members) ? snap.members : []).slice(0, 8).map(function (m) {
             m = m || {};
             return { u: String(m.username || ''), n: String(m.name || m.username || ''), r: !!m.ready, h: !!m.host };
+        }),
+        chats: (Array.isArray(snap.chats) ? snap.chats : []).slice(-20).map(function (c) {
+            c = c || {};
+            return { n: String(c.n || ''), x: String(c.x || ''), u: String(c.u || ''), s: c.s ? 1 : 0 };
         })
     };
 }
@@ -483,6 +565,17 @@ function onRoomReply(id, snap) {
 function onGnSignal(msg) {
     msg = msg || {};
     if (msg.msg_type !== 109 || !pipes.size) return;
+    try {
+        var env = JSON.parse(msg.content || '{}');
+        if (env.action === 'chat') {
+            // M5.9：房内聊天广播 → DLL 房间页聊天区（快照刷新走下方节流通道，两者互补）；self 供左右分栏
+            pipeBroadcast({
+                t: 'roomchat', name: String(env.from_name || env.from || '').slice(0, 48),
+                text: String(env.text || '').slice(0, 160), u: String(env.from || ''),
+                self: env.from && env.from === selfUname ? 1 : 0
+            });
+        }
+    } catch (e) { }
     if (roomReqTimer) return;
     roomReqTimer = setTimeout(function () {
         roomReqTimer = null;
@@ -532,7 +625,7 @@ function startPipeServer(pid) {
                         try { log('[overlay] DLL 帧(pid=' + pid + '): ' + line.slice(0, 120)); } catch (e) { }
                     }
                 }
-                if (buf.length > 16384) { try { sock.destroy(); } catch (e) { } } // 单行超限=协议错，断开等 DLL 重连
+                if (buf.length > 262144) { try { sock.destroy(); } catch (e) { } } // 单行超限=协议错，断开等 DLL 重连（M5.8 头像帧 ~12KB 放宽）
             });
             var gone = function () {
                 if (p.sock !== sock) return; // 已被重连的新连接顶替：热键归属归新连接管，不得误收回
@@ -550,6 +643,8 @@ function startPipeServer(pid) {
             pipeSend(sock, { t: 'msg', from: '', name: '系统', text: '游戏内 Overlay 已连接' });
             pipeSend(sock, { t: 'friends', list: friendsFrameList() });
             pipePushHotkey(sock); // M5.7：帧内热键跟随设置
+            avatarSent = {}; // M5.8：新 DLL 连接=全新实例，头像全量重发
+            deliverAvatarsToPipes(sock); // M5.8：缓存头像直发（未下载的由联系人快照触发）
             var ng = nativeGamesLoad();
             pipeSend(sock, { t: 'follow', mode: ng.mode, list: ng.list });
             queryRoomSnapshot(function (snap) {

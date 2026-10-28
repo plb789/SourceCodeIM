@@ -2380,7 +2380,8 @@
                     snap = {
                         room_id: my.room_id, name: my.name, host: my.host, host_port: my.host_port,
                         game_id: my.game_id, game_name: my.game_name, status: my.status,
-                        members: my.members || []
+                        members: my.members || [],
+                        chats: (roomMsgs || []).slice(-20).map(function (m) { return { n: m.name || m.from || '', x: m.text || '', u: m.from || '', s: m.from === u() ? 1 : 0 }; }) // M5.9：近 20 条房内聊天（DLL 房间页聊天区历史；u/s 供左右分栏）
                     };
                 }
                 try { reply(snap); } catch (e) { gnDbg('overlay-room-reply threw: ' + (e && e.message)); }
