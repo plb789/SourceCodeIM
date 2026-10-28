@@ -931,24 +931,42 @@ static bool g_imguiWin32Inited = false; // Win32 后端+WndProc 阶段完成标�
 static HIMC g_prevImc = NULL;
 static HIMC g_imeNewCtx = NULL; // 面板期新建上下文（detach 时销毁防句柄泄漏）
 static bool g_imeAttached = false;
-static void PanelImeAttach(HWND h) {
-    if (!h || g_imeAttached) return;
+// 面板期 IME 帧确保（渲染帧调用；SC:R 窗口 HIMC 被禁——暴雪惯例）。统一覆盖三条路径：
+// ①热键打开 ②toast 点击打开（不走热键分支——首挂只发生在热键路径的漏洞，2026-10-29 实测）
+// ③焦点回归后游戏重新禁 IME 的重挂。新建上下文默认英文关闭态——必须主动开 IME+中文模式
+//（实测挂上后提交零到达：用户切输入法对 IMM32 兼容窗口的 CUAS 切换时序不稳）
+static void PanelImeFrameEnsure(HWND h) {
+    if (!h || !g_panelActive) return;
     HIMC cur = ImmGetContext(h);
-    if (cur) { ImmReleaseContext(h, cur); return; } // 窗口已有 IME 上下文（Warface 等不禁 IME 的游戏）——不动
-    g_imeNewCtx = ImmCreateContext();
-    g_prevImc = ImmAssociateContext(h, g_imeNewCtx);
-    g_imeAttached = true;
-    // 新建上下文默认英文关闭态（open status=FALSE）——实测挂上后中文提交零到达（用户切输入法
-    // 对 IMM32 兼容窗口的 CUAS 切换时序不稳）：主动开 IME + 置中文模式，输入框聚焦即打中文
-    HIMC nc = ImmGetContext(h);
-    if (nc) {
-        ImmSetOpenStatus(nc, TRUE);
-        DWORD c = 0, s = 0;
-        if (ImmGetConversionStatus(nc, &c, &s))
-            ImmSetConversionStatus(nc, (c & ~IME_CMODE_LANGUAGE) | IME_CMODE_NATIVE, s);
-        ImmReleaseContext(h, nc);
+    if (cur) { // 有上下文：确保中文开态（焦点回归被重置 / Warface 等游戏自带上下文）
+        if (!ImmGetOpenStatus(cur)) {
+            ImmSetOpenStatus(cur, TRUE);
+            DWORD c = 0, s = 0;
+            if (ImmGetConversionStatus(cur, &c, &s))
+                ImmSetConversionStatus(cur, (c & ~IME_CMODE_LANGUAGE) | IME_CMODE_NATIVE, s);
+            LogLine("panel ime: open status ensured");
+        }
+        ImmReleaseContext(h, cur);
+        return;
     }
-    LogLine("panel ime: attached fresh context (open, native mode)");
+    // 无上下文（SC:R 禁了）：首挂（toast 路径）或重挂（焦点回归被游戏再禁）
+    if (!g_imeAttached) {
+        g_imeNewCtx = ImmCreateContext();
+        g_prevImc = ImmAssociateContext(h, g_imeNewCtx);
+        g_imeAttached = true;
+        LogLine("panel ime: attached (frame ensure)");
+    } else if (g_imeNewCtx) {
+        ImmAssociateContext(h, g_imeNewCtx);
+        LogLine("panel ime: re-attached (frame ensure)");
+    } else return;
+    cur = ImmGetContext(h);
+    if (cur) {
+        ImmSetOpenStatus(cur, TRUE);
+        DWORD c = 0, s = 0;
+        if (ImmGetConversionStatus(cur, &c, &s))
+            ImmSetConversionStatus(cur, (c & ~IME_CMODE_LANGUAGE) | IME_CMODE_NATIVE, s);
+        ImmReleaseContext(h, cur);
+    }
 }
 static void PanelImeDetach(HWND h) {
     if (!h || !g_imeAttached) return;
@@ -1052,6 +1070,9 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (m == WM_KEYDOWN && w == VK_SHIFT) InterlockedExchange(&g_shiftMsgDown, 1);
     if (m == WM_KEYUP && w == VK_SHIFT) InterlockedExchange(&g_shiftMsgDown, 0);
+    // 面板期窗口重新激活：游戏在失焦/激活流程会重新禁 IME——回归时重挂+恢复中文开态
+    //（SC:R 实测 2026-10-29：切外部程序再返回游戏后中文失效；渲染帧 Ensure 为兜底）
+    if (m == WM_ACTIVATE && g_panelActive && LOWORD(w) != WA_INACTIVE) PanelImeFrameEnsure(h);
     // 热键显隐（M5.7：跟随设置下发的 hotkey 帧，默认 Shift+Tab；吞掉本键不给游戏）。消息态为主、异步态兜底；
     // g_panelBroken 门禁：初始化失败后不再切换（否则不可见面板吞游戏输入）
     if (m == WM_KEYDOWN && w == (WPARAM)g_hotkeyVK && !g_panelBroken && HotkeyModsHeld()) {
@@ -1066,8 +1087,9 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         LONG nv = g_panelActive ? 0 : 1;
         InterlockedExchange(&g_panelActive, nv);
-        if (nv) { g_panelOnTick = GetTickCount(); PanelImeAttach(h); } // 无渲染能力超时收起的起点（InitThread 检查）+ 面板期 IME 上下文（SC:R 禁 IME 实测）
+        if (nv) g_panelOnTick = GetTickCount(); // 无渲染能力超时收起的起点（InitThread 检查）
         else PanelImeDetach(h);
+        // 面板打开路径的 IME 挂载统一走渲染帧 PanelImeFrameEnsure（热键/toast 点击双路径覆盖）
         // 面板状态上行：客户端收到 on:1 时悬浮窗热键让位（globalShortcut 是系统级，DLL 吞不掉——
         // 不让位会出现 DLL 面板与悬浮窗叠加，实测踩坑）
         PipePushOut(nv ? "{\"t\":\"panel\",\"on\":1}\n" : "{\"t\":\"panel\",\"on\":0}\n");
@@ -2822,6 +2844,7 @@ static void RenderOverlayD3D11(IDXGISwapChain* sc) {
             }
         }
         ImGui_ImplDX11_NewFrame();
+        PanelImeFrameEnsure(g_gameHwnd); // 面板期 IME 帧确保（热键/toast 点击双路径+焦点回归重挂统一覆盖）
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
         ImGui::GetIO().MouseDrawCursor = panelOn;
