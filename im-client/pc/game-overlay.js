@@ -590,13 +590,18 @@ function pipeForwardMirror(msg) {
     if (!pipes.size) return;
     var t = msg.msg_type;
     if (t === 2) {
+        var text = String(msg.content || '');
+        // M5.10c：通话信令/话单（{"type":"call",...}）以 type=2 下发，不是聊天文本——转发 DLL 会弹 JSON 原文 toast（实测挂断时弹话单 JSON）
+        if (text.charAt(0) === '{') {
+            try { if (JSON.parse(text).type === 'call') return; } catch (e) { }
+        }
         var from = String(msg.from_user || '');
         var name = from;
         for (var i = 0; i < contactsCache.length; i++) {
             if (contactsCache[i].username === from) { name = contactsCache[i].name || from; break; }
         }
         // to=接收方（回显消息 from=我 → DLL 据 to 路由进对方会话；服务端回显发送方全连接）
-        pipeBroadcast({ t: 'msg', from: from, to: String(msg.to_user || ''), name: name, text: String(msg.content || '').slice(0, 60) });
+        pipeBroadcast({ t: 'msg', from: from, to: String(msg.to_user || ''), name: name, text: text.slice(0, 60) });
     } else if (t === 93) {
         askContactsThrottled();
     }
