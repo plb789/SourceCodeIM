@@ -566,6 +566,7 @@ function onRoomReply(id, snap) {
 function onGnSignal(msg) {
     msg = msg || {};
     if (msg.msg_type !== 109 || !pipes.size) return;
+    var isChat = false;
     try {
         var env = JSON.parse(msg.content || '{}');
         if (env.action === 'chat') {
@@ -575,8 +576,12 @@ function onGnSignal(msg) {
                 text: String(env.text || '').slice(0, 160), u: String(env.from || ''),
                 self: env.from && env.from === selfUname ? 1 : 0
             });
+            isChat = true;
         }
     } catch (e) { }
+    // M5.10d 审计：聊天信号不触发快照——快照整体替换聊天区，滞后快照会抹掉刚显示的实时消息（显示回退=延迟感）；
+    // 仅房间状态变化（进出/准备/状态）才刷新快照
+    if (isChat) return;
     if (roomReqTimer) return;
     roomReqTimer = setTimeout(function () {
         roomReqTimer = null;

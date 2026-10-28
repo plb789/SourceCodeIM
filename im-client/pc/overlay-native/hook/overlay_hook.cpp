@@ -627,7 +627,13 @@ static void HandleLine(const char* line) {
         JsonStr(line, "u", u, sizeof(u));
         JsonBool(line, "self", &self);
         EnterCriticalSection(&g_cs);
-        if (g_room.inRoom && g_room.chatCount < OV_ROOM_CHAT_CAP) {
+        if (g_room.inRoom) {
+            // M5.10d 审计：缓冲满必须环形丢最旧再追加——原 chatCount<20 直接丢弃新消息，
+            // 聊满 20 条后每条实时消息都被静默丢弃、只能等快照整体替换才显示（实测"延迟起来就一直延迟"根因）
+            if (g_room.chatCount >= OV_ROOM_CHAT_CAP) {
+                for (int i = 1; i < OV_ROOM_CHAT_CAP; ++i) g_room.chats[i - 1] = g_room.chats[i];
+                g_room.chatCount = OV_ROOM_CHAT_CAP - 1;
+            }
             snprintf(g_room.chats[g_room.chatCount].uname, OV_UNAME_CAP, "%s", u);
             snprintf(g_room.chats[g_room.chatCount].name, OV_NAME_CAP, "%s", n);
             snprintf(g_room.chats[g_room.chatCount].text, OV_TEXT_CAP, "%s", x);
