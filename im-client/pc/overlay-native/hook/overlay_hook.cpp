@@ -250,6 +250,11 @@ struct GameToast { char uname[OV_UNAME_CAP]; char name[OV_NAME_CAP]; char text[O
 static GameToast g_toasts[3] = { 0 };
 static int       g_toastCount = 0;
 static volatile LONG g_toastsVisible = 0; // toast 可见（WndProc 据此把鼠标喂 ImGui 做命中测试=可点击）
+// M5.7：帧内热键（hotkey 帧下发，客户端把设置里的加速器映射成 VK；默认 Shift+Tab 与旧行为一致）
+static volatile LONG g_hotkeyVK = VK_TAB;
+static volatile LONG g_hotkeyCtrl = 0;
+static volatile LONG g_hotkeyShift = 1;
+static volatile LONG g_hotkeyAlt = 0;
 
 // ===== 简易 JSON 提取器（M1 已验证；处理 \" \\ \n \t \r；\uXXXX 协议不用）=====
 // 局限：值内含转义引号的极端串可能错位——本协议键名恒在值前 emit；完整解析器待实测需要时再换
@@ -512,6 +517,17 @@ static void HandleLine(const char* line) {
         return;
     }
     if (strcmp(t, "follow") == 0) { HandleFollowFrame(line); return; } // M4：兼容名单下发（子进程跟随启用）
+    if (strcmp(t, "hotkey") == 0) { // M5.7：设置热键下发（帧内热键跟随设置；默认 Shift+Tab）
+        int vk = 0, c = 0, s = 0, a = 0;
+        if (JsonInt(line, "vk", &vk) && vk > 0) {
+            InterlockedExchange(&g_hotkeyVK, vk);
+            JsonInt(line, "ctrl", &c); InterlockedExchange(&g_hotkeyCtrl, c);
+            JsonInt(line, "shift", &s); InterlockedExchange(&g_hotkeyShift, s);
+            JsonInt(line, "alt", &a); InterlockedExchange(&g_hotkeyAlt, a);
+            LogLine("hotkey updated from settings");
+        }
+        return;
+    }
     LogLine("pipe: unknown frame");
 }
 
@@ -721,6 +737,14 @@ static volatile LONG g_shiftMsgDown = 0; // 消息驱动 shift 跟踪（WM_KEYDO
 static volatile LONG g_imeSwallowUntil = 0; // M5.4：IME 提交后吞 WM_CHAR 的截止 tick（引擎/IME 链路会把提交串
                                             // 以"UTF-16 字节对被 GBK 误读"的形态送入 WM_CHAR，实测 Warface 试→諎）
 
+// M5.7：配置热键的修饰键是否按住（Ctrl/Shift/Alt 按需检查；Shift 保留消息态兜底——注入输入读不到异步态）
+static bool HotkeyModsHeld() {
+    if (g_hotkeyCtrl && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) return false;
+    if (g_hotkeyShift && !(g_shiftMsgDown || (GetAsyncKeyState(VK_SHIFT) & 0x8000))) return false;
+    if (g_hotkeyAlt && !(GetAsyncKeyState(VK_MENU) & 0x8000)) return false;
+    return true;
+}
+
 static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_DESTROY) { // 游戏窗口销毁：先还原子类再透传（防卸载后打死窗口）
         LogLine("wndproc: WM_DESTROY");
@@ -760,9 +784,9 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (m == WM_KEYDOWN && w == VK_SHIFT) InterlockedExchange(&g_shiftMsgDown, 1);
     if (m == WM_KEYUP && w == VK_SHIFT) InterlockedExchange(&g_shiftMsgDown, 0);
-    // Shift+Tab 显隐（两态都要检测；吞掉本键不给游戏）。消息态为主、异步态兜底；
+    // 热键显隐（M5.7：跟随设置下发的 hotkey 帧，默认 Shift+Tab；吞掉本键不给游戏）。消息态为主、异步态兜底；
     // g_panelBroken 门禁：初始化失败后不再切换（否则不可见面板吞游戏输入）
-    if (m == WM_KEYDOWN && w == VK_TAB && !g_panelBroken && (g_shiftMsgDown || (GetAsyncKeyState(VK_SHIFT) & 0x8000))) {
+    if (m == WM_KEYDOWN && w == (WPARAM)g_hotkeyVK && !g_panelBroken && HotkeyModsHeld()) {
         LONG nv = g_panelActive ? 0 : 1;
         InterlockedExchange(&g_panelActive, nv);
         // 面板状态上行：客户端收到 on:1 时悬浮窗热键让位（globalShortcut 是系统级，DLL 吞不掉——

@@ -334,6 +334,32 @@ function setNativePanelActive(v) {
 }
 
 function pipeName(pid) { return '\\\\.\\pipe\\im-overlay-' + pid; }
+
+// M5.7：设置热键下发 DLL（帧内热键跟随设置；Electron 加速器 → VK 码）
+function hotkeyToVk(acc) {
+    var parts = String(acc || 'Shift+Tab').split('+');
+    var main = parts.pop() || 'Tab';
+    var vk = 0;
+    if (/^F([1-9]|1[0-9]|2[0-4])$/.test(main)) vk = 0x70 + (parseInt(main.slice(1), 10) - 1);
+    else if (main === 'Tab') vk = 0x09;
+    else if (main === 'Space') vk = 0x20;
+    else if (main === 'Insert') vk = 0x2D;
+    else if (main === 'Delete') vk = 0x2E;
+    else if (main === 'Home') vk = 0x24;
+    else if (main === 'End') vk = 0x23;
+    else if (main === 'PageUp') vk = 0x21;
+    else if (main === 'PageDown') vk = 0x22;
+    else if (main === 'Up') vk = 0x26;
+    else if (main === 'Down') vk = 0x28;
+    else if (main === 'Left') vk = 0x25;
+    else if (main === 'Right') vk = 0x27;
+    else if (main.length === 1) vk = main.toUpperCase().charCodeAt(0);
+    return { vk: vk, ctrl: parts.indexOf('Ctrl') >= 0 ? 1 : 0, shift: parts.indexOf('Shift') >= 0 ? 1 : 0, alt: parts.indexOf('Alt') >= 0 ? 1 : 0 };
+}
+function pipePushHotkey(sock) {
+    var h = hotkeyToVk(settings.hotkey);
+    pipeSend(sock, { t: 'hotkey', vk: h.vk, ctrl: h.ctrl, shift: h.shift, alt: h.alt });
+}
 function pipeSend(sock, frame) {
     if (!sock) return;
     try { sock.write(JSON.stringify(frame) + '\n'); } catch (e) { log('[overlay] pipe 写帧失败: ' + e.message); }
@@ -518,11 +544,12 @@ function startPipeServer(pid) {
             };
             sock.on('close', gone);
             sock.on('error', gone);
-            // 连接即推：握手确认 + 本端账号（回显 self 判定）+ 系统欢迎消息 + 好友快照 + 房间快照 + 兼容名单（子进程跟随）
+            // 连接即推：握手确认 + 本端账号（回显 self 判定）+ 系统欢迎消息 + 好友快照 + 房间快照 + 兼容名单（子进程跟随）+ 热键
             pipeSend(sock, { t: 'hello-ack' });
             if (selfUname) pipeSend(sock, { t: 'me', u: selfUname });
             pipeSend(sock, { t: 'msg', from: '', name: '系统', text: '游戏内 Overlay 已连接' });
             pipeSend(sock, { t: 'friends', list: friendsFrameList() });
+            pipePushHotkey(sock); // M5.7：帧内热键跟随设置
             var ng = nativeGamesLoad();
             pipeSend(sock, { t: 'follow', mode: ng.mode, list: ng.list });
             queryRoomSnapshot(function (snap) {
@@ -731,6 +758,7 @@ function init(opts) {
             if (typeof s.native === 'boolean') settings.native = s.native; // 注入链读取时机在启动处，无需动态生效
             if (typeof s.hotkey === 'string' && s.hotkey.trim()) settings.hotkey = s.hotkey.trim();
             settingsSave();
+            pipeBroadcast(Object.assign({ t: 'hotkey' }, hotkeyToVk(settings.hotkey))); // M5.7：帧内热键实时跟随
             // 通知窗动态生效（免重启）：关闭=真销毁（webContents destroyed 自动出 gnRelayWins 订阅表）；开启=游戏运行中立即创建
             if (notifyChanged) {
                 if (settings.notify) { if (games.size) ensureNotifyWindow(); }
