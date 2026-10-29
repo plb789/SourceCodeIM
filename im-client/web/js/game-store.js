@@ -485,6 +485,8 @@
                 : (name === 'store' ? 'gsStoreScroll'
                     : (name === 'library' ? 'gsLibMain' : 'gsDlList'));
         if (scrollId) osbTick($(scrollId), 400);
+        // 下载页签进入时重绘吞吐曲线（display:none 期间 canvas 尺寸为 0 跳绘，显示后补一帧）
+        if (name === 'downloads') setTimeout(function () { renderDlGraph(); }, 80);
         // 库页吸顶条/返回顶部：离开库视图即隐藏；进入时显隐校准（display 后滚动状态可能已变）
         if (name === 'library') {
             setTimeout(function () { if (typeof libBarUpdate === 'function') libBarUpdate(); }, 60);
@@ -2512,7 +2514,147 @@
         return row;
     }
 
+    // ==================== 下载吞吐曲线（Steam 同款：磁盘写入面积 + 网络下载线，60s 滚动窗口） ====================
+    // 数据源：进度帧自带 speed（网络）/diskSpeed（落盘），页面侧维护环形序列；canvas 自绘滚动曲线，
+    // 纵轴峰值"升快降慢"平滑防抖；多任务可在顶部选择查看总览或单任务（页签隐藏时 canvas 尺寸 0 跳绘）
+    var DL_GRAPH_WINDOW = 60000; // 曲线时间窗（ms）
+    var dlHistTasks = {};        // taskId → [{t,net,disk}]（进度帧序列）
+    var dlHistAll = [];          // 总览聚合序列（每帧汇总各活跃任务最新速率求和）
+    var dlGraphSel = '';         // 当前查看任务（''=总览）
+    var dlGraphSelSig = '';      // 选择器 DOM 签名（任务集/选中变化才重建，防进度帧高频重建）
+    var dlGraphYMax = 1024 * 1024; // 纵轴平滑峰值（B/s，下限 1MB/s）
+
+    function dlHistPush(taskId, p) {
+        var now = Date.now();
+        var arr = dlHistTasks[taskId] || (dlHistTasks[taskId] = []);
+        arr.push({ t: now, net: p.speed || 0, disk: p.diskSpeed || 0 });
+        while (arr.length && arr[0].t < now - DL_GRAPH_WINDOW - 2000) arr.shift();
+        // 总览聚合：取各任务 1.5s 内最新速率求和（帧率≈每任务 2 帧/s，聚合帧随任一任务进度帧推进）
+        var net = 0, disk = 0;
+        for (var id in dlHistTasks) {
+            var a = dlHistTasks[id];
+            if (a.length && now - a[a.length - 1].t < 1500) { net += a[a.length - 1].net; disk += a[a.length - 1].disk; }
+        }
+        dlHistAll.push({ t: now, net: net, disk: disk });
+        while (dlHistAll.length && dlHistAll[0].t < now - DL_GRAPH_WINDOW - 2000) dlHistAll.shift();
+    }
+
+    // 图卡显隐 + 选择器 + 头部即时数值 + 曲线重绘（进度帧/页签切换/刷新均走此入口）
+    function renderDlGraph() {
+        var card = $('gsDlGraphCard');
+        if (!card) return;
+        var ids = Object.keys(state.tasks);
+        // 已移出任务表的序列超窗即弃（取消/失败清理，不留陈旧序列）
+        for (var id in dlHistTasks) {
+            if (!state.tasks[id]) {
+                var a = dlHistTasks[id];
+                if (!a.length || a[a.length - 1].t < Date.now() - DL_GRAPH_WINDOW) delete dlHistTasks[id];
+            }
+        }
+        if (!ids.length) {
+            card.classList.add('hidden');
+            dlGraphSel = '';
+            dlGraphSelSig = '';
+            return;
+        }
+        if (dlGraphSel && !state.tasks[dlGraphSel]) dlGraphSel = ''; // 选中任务消失回总览
+        card.classList.remove('hidden');
+        var sig = ids.join('|') + '#' + dlGraphSel;
+        if (sig !== dlGraphSelSig) {
+            dlGraphSelSig = sig;
+            var sel = $('gsDlGraphSel');
+            sel.innerHTML = '';
+            var mk = function (label, val) {
+                var b = el('button', 'gs-dl-gsel-btn' + (dlGraphSel === val ? ' active' : ''), label);
+                b.type = 'button';
+                b.addEventListener('click', function () {
+                    if (dlGraphSel === val) return;
+                    dlGraphSel = val;
+                    dlGraphSelSig = '';
+                    renderDlGraph(); // 仅重绘图表与选择器（任务行无需重建）
+                });
+                return b;
+            };
+            sel.appendChild(mk('总览', ''));
+            ids.forEach(function (id) { sel.appendChild(mk(taskName(state.tasks[id]), id)); });
+        }
+        var data = dlGraphSel ? (dlHistTasks[dlGraphSel] || []) : dlHistAll;
+        var last = data.length ? data[data.length - 1] : { net: 0, disk: 0 };
+        $('gsDlDiskNow').textContent = fmtSpeed(last.disk);
+        $('gsDlNetNow').textContent = fmtSpeed(last.net);
+        drawDlGraph(data);
+    }
+
+    function drawDlGraph(data) {
+        var cv = $('gsDlGraph');
+        if (!cv) return;
+        var w = cv.clientWidth, h = cv.clientHeight;
+        if (!w || !h) return; // 页签隐藏（display:none）时跳绘，显示后由 showView 补帧
+        var dpr = window.devicePixelRatio || 1;
+        if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+            cv.width = Math.round(w * dpr);
+            cv.height = Math.round(h * dpr);
+        }
+        var ctx = cv.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        var css = getComputedStyle(document.documentElement);
+        var cDisk = (css.getPropertyValue('--gs-run') || '#8ec63f').trim();
+        var cNet = (css.getPropertyValue('--primary') || '#66c0f4').trim();
+        var cGrid = (css.getPropertyValue('--divider') || 'rgba(128,128,128,.25)').trim();
+        var cText = (css.getPropertyValue('--text-light') || '#888').trim();
+        var now = Date.now();
+        var pad = { l: 0, r: 46, t: 6, b: 4 };
+        var iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+        if (iw <= 0 || ih <= 0) return;
+        // 纵轴平滑峰值：升快降慢（每帧最多回落 8%，防样本抖动引起刻度跳动）
+        var peak = 0;
+        for (var i = 0; i < data.length; i++) { if (data[i].disk > peak) peak = data[i].disk; if (data[i].net > peak) peak = data[i].net; }
+        dlGraphYMax = Math.max(peak, Math.round(dlGraphYMax * 0.92), 1024 * 1024);
+        var yMax = dlGraphYMax;
+        // 横向网格 3 条 + 右侧速率刻度
+        ctx.font = '10px "Microsoft YaHei",sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 1;
+        for (var g = 1; g <= 3; g++) {
+            var gy = Math.round(pad.t + ih - ih * g / 3) + 0.5;
+            ctx.strokeStyle = cGrid;
+            ctx.globalAlpha = 0.55;
+            ctx.beginPath();
+            ctx.moveTo(pad.l, gy);
+            ctx.lineTo(pad.l + iw, gy);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = cText;
+            ctx.fillText(fmtSpeed(yMax * g / 3), pad.l + iw + 6, gy);
+        }
+        if (!data.length) return;
+        var xOf = function (t) { return pad.l + iw - Math.max(0, Math.min(1, (now - t) / DL_GRAPH_WINDOW)) * iw; };
+        var yOf = function (v) { return pad.t + ih - Math.max(0, Math.min(1, v / yMax)) * ih; };
+        // 磁盘写入：半透明面积 + 描边（Steam 磁盘吞吐同款视觉）
+        ctx.beginPath();
+        ctx.moveTo(xOf(data[0].t), yOf(0));
+        for (i = 0; i < data.length; i++) ctx.lineTo(xOf(data[i].t), yOf(data[i].disk));
+        ctx.lineTo(xOf(data[data.length - 1].t), yOf(0));
+        ctx.closePath();
+        ctx.globalAlpha = 0.22;
+        ctx.fillStyle = cDisk;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = cDisk;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        // 网络下载：细线
+        ctx.beginPath();
+        for (i = 0; i < data.length; i++) { var x = xOf(data[i].t), y = yOf(data[i].net); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+        ctx.strokeStyle = cNet;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    }
+
     function renderDownloads() {
+        renderDlGraph(); // 吞吐图卡显隐/重绘（无任务自动隐藏，页签隐藏时 canvas 尺寸 0 内部跳绘）
         var rows = $('gsDlRows');
         rows.innerHTML = '';
         var empty = $('gsDlEmpty');
@@ -2553,7 +2695,7 @@
                     };
                     if (t.gameId !== undefined && t.gameId !== null) state.taskByGame[t.gameId] = taskId;
                 }
-                ['name', 'version', 'received', 'total', 'speed', 'upSpeed', 'state', 'fileRelPath', 'error', 'installDir', 'via'].forEach(function (k) {
+                ['name', 'version', 'received', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error', 'installDir', 'via'].forEach(function (k) {
                     if (raw[k] !== undefined && raw[k] !== null) t[k] = raw[k];
                 });
             });
@@ -2935,6 +3077,7 @@
     function openGsSettings() {
         showGsSetPane('download'); // 每次打开回到「下载」分栏
         $('gsSetDir').textContent = gsInstallRootText() || '尚未选择（首次安装时选择安装位置）';
+        gsSpeedFill(); // 限速输入框回填（未配置过展示生效中的默认值）
         $('gsSetMask').classList.remove('hidden');
     }
 
@@ -2949,6 +3092,46 @@
     $('gsSetClose').addEventListener('click', function () {
         $('gsSetMask').classList.add('hidden');
     });
+
+    // 下载分栏限速设置（仅 PC 客户端）：下载/上传限速 KB/s（0=不限速），保存即时生效并持久化。
+    // 主进程归口应用双通道：HTTP 下载令牌桶 + BT 引擎全局限速（上传含做种上传）；WEB 端无桥隐藏卡片。
+    // 未配置过时主进程 get 下发生效中的默认值（下载不限/BT 上传 2MB/s），展示即实际生效口径
+    var gsSpeedFill = function () { /* 无桥时为空实现（卡片已隐藏） */ };
+    (function initGsSpeedSettings() {
+        var card = $('gsSetSpeedCard');
+        if (!card) return;
+        if (!DESKTOP || !DESKTOP.gameDownloadSettings) { card.classList.add('hidden'); return; }
+        var inDown = $('gsSetDownInput');
+        var inUp = $('gsSetUpInput');
+        var KB2B = function (v) {
+            var n = Math.floor(Number(String(v).replace(/\D/g, '')) || 0); // 非数字/负数按 0（不限速）
+            return Math.min(2097151, n) * 1024; // 上限≈2GB/s（int32 字节口径）
+        };
+        var B2KB = function (b) { return Math.max(0, Math.round((Number(b) || 0) / 1024)); };
+        gsSpeedFill = function () {
+            Promise.resolve(DESKTOP.gameDownloadSettings({ action: 'get' })).then(function (r) {
+                if (!r || !r.ok) return;
+                var down = (r.downLimit === null || r.downLimit === undefined) ? (r.defaults ? r.defaults.down : 0) : r.downLimit;
+                var up = (r.upLimit === null || r.upLimit === undefined) ? (r.defaults ? r.defaults.up : 0) : r.upLimit;
+                inDown.value = down > 0 ? String(B2KB(down)) : '';
+                inUp.value = up > 0 ? String(B2KB(up)) : '';
+            }).catch(function () { /* 主进程异常：保留当前输入 */ });
+        };
+        [inDown, inUp].forEach(function (inp) {
+            inp.addEventListener('input', function () { this.value = this.value.replace(/\D/g, ''); }); // 仅正整数
+            inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') $('gsSetSpeedSave').click(); });
+        });
+        $('gsSetSpeedSave').addEventListener('click', function () {
+            Promise.resolve(DESKTOP.gameDownloadSettings({
+                action: 'set',
+                downLimit: KB2B(inDown.value.trim()),
+                upLimit: KB2B(inUp.value.trim())
+            })).then(function (r) {
+                if (r && r.ok) toast('限速已保存并即时生效');
+                else toast('限速保存失败：' + ((r && r.error) || '未知错误'));
+            }).catch(function () { toast('限速保存失败'); });
+        });
+    })();
 
     // 游戏分栏：游戏内面板设置（原主客户端设置页「游戏」分类整体迁入；docs/游戏内Overlay功能技术设计.md §P3）。
     // 仅 PC 客户端显示（无 desktop 桥的 WEB 端隐藏分栏入口——热键/置顶窗是主进程能力）；
@@ -4887,9 +5070,10 @@
             }
             if (p.gameId !== undefined && p.gameId !== null && t.gameId === undefined) t.gameId = p.gameId;
             var prev = t.state;
-            ['received', 'total', 'speed', 'upSpeed', 'state', 'fileRelPath', 'error'].forEach(function (k) {
+            ['received', 'total', 'speed', 'diskSpeed', 'upSpeed', 'state', 'fileRelPath', 'error'].forEach(function (k) {
                 if (p[k] !== undefined && p[k] !== null) t[k] = p[k];
             });
+            dlHistPush(p.taskId, p); // 吞吐曲线环形序列推进（网络/磁盘双序列）
             // 状态迁移时同步服务端库状态（仅切换帧 PUT，避免每个进度帧打请求）
             if (t.gameId !== undefined && prev !== t.state) {
                 if (t.state === 'done') {

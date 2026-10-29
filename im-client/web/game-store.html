@@ -1276,6 +1276,51 @@
 
         .gs-task-main { flex: 1; min-width: 0; }
 
+        /* ===== Steam 同款实时吞吐曲线（磁盘写入面积 + 网络下载线，canvas 自绘） ===== */
+        .gs-dl-graph {
+            margin: 12px 16px 4px;
+            padding: 10px 12px 8px;
+            border: 1px solid var(--divider);
+            border-radius: 6px;
+            background: var(--panel-bg);
+        }
+
+        .gs-dl-graph-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+
+        .gs-dl-graph-stats { display: flex; gap: 16px; }
+
+        .gs-dl-gstat { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+
+        .gs-dl-gstat b { font-weight: 600; color: var(--text); }
+
+        .gs-dl-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+        .gs-dl-dot.disk { background: var(--gs-run); }
+
+        .gs-dl-dot.net { background: var(--primary); }
+
+        .gs-dl-graph-sel { display: flex; gap: 6px; flex-wrap: wrap; }
+
+        .gs-dl-gsel-btn {
+            padding: 2px 10px;
+            font-size: 11px;
+            border: 1px solid var(--divider);
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            max-width: 140px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .gs-dl-gsel-btn:hover { background: var(--hover); }
+
+        .gs-dl-gsel-btn.active { border-color: var(--primary); color: var(--primary); }
+
+        .gs-dl-graph-cv { display: block; width: 100%; height: 72px; }
+
         .gs-task-head { display: flex; align-items: center; gap: 10px; }
 
         .gs-task-name {
@@ -2841,6 +2886,19 @@
 
         /* 分栏首元素去顶边距（.gs-set-row 自带 margin-top，卡片自带外距） */
         .gs-set-row-first, .gs-set-card-first { margin-top: 0; }
+
+        /* 下载分栏限速卡片（复用 settings 输入/按钮样式，KB/s 单位缀于输入框右侧） */
+        .gs-set-speed { margin-top: 14px; }
+
+        .gs-set-speed .settings-card-title { margin-bottom: 6px; }
+
+        .gs-set-speed .settings-disk-path { margin-bottom: 4px; }
+
+        .gs-set-speed .settings-hotkey-input { flex: 1; }
+
+        .gs-set-speed-title2 { margin-top: 12px; }
+
+        .gs-set-unit { flex-shrink: 0; margin-left: 8px; font-size: 12px; color: var(--text-light); }
         /* 游戏分栏复用主设置页 .settings-card（全局样式表自带），分栏内收紧卡片间距 */
         .gs-set-modal .settings-card + .settings-card { margin-top: 8px; }
 
@@ -3178,6 +3236,18 @@
             <!-- 下载管理页签 -->
             <div class="gs-view hidden" id="gsViewDownloads">
                 <div class="gs-scroll" id="gsDlList">
+                    <!-- Steam 同款实时吞吐曲线：磁盘写入面积 + 网络下载线（canvas 自绘，60s 滚动窗口，
+                         多任务可在头部选择查看总览/单任务；无任务时整卡隐藏） -->
+                    <div class="gs-dl-graph hidden" id="gsDlGraphCard">
+                        <div class="gs-dl-graph-head">
+                            <div class="gs-dl-graph-stats">
+                                <span class="gs-dl-gstat"><i class="gs-dl-dot disk"></i>磁盘写入 <b id="gsDlDiskNow">—</b></span>
+                                <span class="gs-dl-gstat"><i class="gs-dl-dot net"></i>网络下载 <b id="gsDlNetNow">—</b></span>
+                            </div>
+                            <div class="gs-dl-graph-sel" id="gsDlGraphSel"></div>
+                        </div>
+                        <canvas id="gsDlGraph" class="gs-dl-graph-cv" height="72"></canvas>
+                    </div>
                     <div id="gsDlRows"></div>
                     <div class="gs-empty hidden" id="gsDlEmpty">暂无数据</div>
                     <div class="gs-empty hidden" id="gsDlHint"></div>
@@ -3274,7 +3344,7 @@
                 </div>
                 <!-- 右侧内容区（可滚动，走全站自绘悬浮滑块 .osb-thumb） -->
                 <div class="gs-prop-panes gs-scroll" id="gsSetPanes">
-                    <!-- 下载分栏：下载目录（安装根，非游戏目录）查看/更改 -->
+                    <!-- 下载分栏：下载目录（安装根，非游戏目录）查看/更改 + 下载/上传限速（仅 PC 客户端生效） -->
                     <div class="gs-prop-pane" id="gsSetPaneDownload">
                         <div class="gs-set-row gs-set-row-first">
                             <span class="gs-set-label">下载目录</span>
@@ -3283,6 +3353,24 @@
                         <div class="gs-prop-hint">新安装的游戏默认下载到所选磁盘的 CdonlgameApp 文件夹；更改仅影响之后的安装，已装游戏不受影响。</div>
                         <div class="gs-prop-btns">
                             <button class="gs-btn" id="gsSetChange" type="button">更改</button>
+                        </div>
+                        <!-- 下载/上传限速（Steam 同款全局限速口径）：KB/s，0=不限速；保存即时生效并持久化，
+                             game-store.js 按 DESKTOP.gameDownloadSettings 桥显隐（WEB 端无下载能力，隐藏） -->
+                        <div class="settings-card gs-set-speed" id="gsSetSpeedCard">
+                            <div class="settings-card-title">下载限速</div>
+                            <div class="settings-disk-path">
+                                <input id="gsSetDownInput" type="text" class="settings-hotkey-input" inputmode="numeric" maxlength="7" placeholder="0 = 不限速">
+                                <span class="gs-set-unit">KB/s</span>
+                            </div>
+                            <div class="settings-card-title gs-set-speed-title2">上传限速</div>
+                            <div class="settings-disk-path">
+                                <input id="gsSetUpInput" type="text" class="settings-hotkey-input" inputmode="numeric" maxlength="7" placeholder="0 = 不限速">
+                                <span class="gs-set-unit">KB/s</span>
+                            </div>
+                            <p class="settings-desc">限速对全部下载任务全局生效；上传限速约束 BT 通道向其他用户供速与完成后的做种上传，避免占满上行带宽影响游戏和聊天。设置即时生效并自动记忆。</p>
+                            <div class="gs-prop-btns">
+                                <button class="gs-btn primary" id="gsSetSpeedSave" type="button">保存</button>
+                            </div>
                         </div>
                     </div>
                     <!-- 游戏分栏：游戏内面板设置（原主客户端设置页「游戏」分类整体迁入；仅 PC 客户端生效） -->
@@ -3546,7 +3634,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=63"></script>
+    <script src="js/game-store.js?v=65"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

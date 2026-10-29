@@ -933,11 +933,16 @@ contextBridge.exposeInMainWorld('desktop', {
         return ipcRenderer.invoke('game:download', payload);
     },
     // 订阅下载进度（主进程 500ms 节流推送；任务完成必发一条 state:'done'，error/cancel 同样必发）
-    // 负载：{taskId, gameId, received, total, speed, state:'downloading'|'paused'|'done'|'error'|'verifying'|'cancel', fileRelPath, error}
+    // 负载：{taskId, gameId, received, total, speed, upSpeed, state:'downloading'|'paused'|'done'|'error'|'verifying'|'cancel', fileRelPath, error}
     onGameDownload: function (cb) {
         if (typeof cb === 'function') ipcRenderer.on('game-download:progress', function (event, data) {
             cb(data);
         });
+    },
+    // 下载限速设置（游戏中心设置「下载」分栏）：payload={action:'get'|'set', downLimit?, upLimit?}
+    // 值为字节/秒（0=不限速）；get 未配置过时返回 {downLimit:null, upLimit:null, defaults:{down,up}}
+    gameDownloadSettings: function (payload) {
+        return ipcRenderer.invoke('game:download-settings', payload);
     },
     // 选择游戏安装目录 → Promise<{canceled, filePath}>
     gameChooseInstallDir: function () {

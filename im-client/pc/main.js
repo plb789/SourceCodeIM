@@ -1285,6 +1285,28 @@ var gameDownloads = new GameDownloadManager(); // 游戏下载管理器实例（
 var btDownloads = new BtDownloadManager();
 var gameSaves = new GameSaveManager(); // 游戏云存档管理器实例（模块见 game-save-manager.js）
 
+// ===== 下载限速设置（游戏中心设置「下载」分栏）：userData/game-download-settings.json 持久化，
+// 双通道即时生效。downLimit/upLimit 为字节/秒（0=不限速）；HTTP 通道仅下载限速，BT 上传限速含做种上传。
+// 文件不存在（用户从未配置过）时不下发，保留各通道内置默认（BT 宿主内置 2MB/s 上传保护）
+function gameDownloadSettingsLoad() {
+    try {
+        return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'game-download-settings.json'), 'utf8'));
+    } catch (e) { return null; } // 无文件/损坏：视为未配置
+}
+function gameDownloadSettingsSave(s) {
+    try {
+        fs.writeFileSync(path.join(app.getPath('userData'), 'game-download-settings.json'), JSON.stringify(s, null, 2), 'utf8');
+    } catch (e) { /* 落盘失败不阻塞：本次会话限速仍生效，下次启动回默认 */ }
+}
+(function gameDownloadSettingsApply() {
+    var s = gameDownloadSettingsLoad();
+    if (!s) return; // 从未配置：保持通道内置默认
+    var down = Math.min(2147483647, Math.max(0, Math.floor(Number(s.downLimit) || 0)));
+    var up = Math.min(2147483647, Math.max(0, Math.floor(Number(s.upLimit) || 0)));
+    gameDownloads.setLimits(down);
+    btDownloads.setLimits(down, up);
+})();
+
 function ensureGameStoreWindow() {
     if (gameStoreWin) return gameStoreWin;
     gameStoreWin = new BrowserWindow({
@@ -1562,6 +1584,34 @@ ipcMain.handle('game:download', function (event, payload) {
         return { ok: false, error: '未知操作' };
     } catch (e) {
         return { ok: false, error: (e && e.message) || '下载管理异常' };
+    }
+});
+
+// 下载限速设置读写（游戏中心设置「下载」分栏）：get 返回当前生效值（字节/秒，未配置过返回 null 值对）；
+// set 校验后即时应用双管理器并落盘（BT 上传限速含做种上传；HTTP 通道忽略上传值）
+ipcMain.handle('game:download-settings', function (event, payload) {
+    try {
+        var action = payload && payload.action;
+        if (action === 'get') {
+            var s0 = gameDownloadSettingsLoad();
+            if (!s0) return { ok: true, downLimit: null, upLimit: null, defaults: { down: 0, up: 2 * 1024 * 1024 } };
+            return {
+                ok: true,
+                downLimit: Math.min(2147483647, Math.max(0, Math.floor(Number(s0.downLimit) || 0))),
+                upLimit: Math.min(2147483647, Math.max(0, Math.floor(Number(s0.upLimit) || 0)))
+            };
+        }
+        if (action === 'set') {
+            var down = Math.min(2147483647, Math.max(0, Math.floor(Number(payload && payload.downLimit) || 0)));
+            var up = Math.min(2147483647, Math.max(0, Math.floor(Number(payload && payload.upLimit) || 0)));
+            gameDownloads.setLimits(down);
+            btDownloads.setLimits(down, up);
+            gameDownloadSettingsSave({ downLimit: down, upLimit: up });
+            return { ok: true, downLimit: down, upLimit: up };
+        }
+        return { ok: false, error: '未知操作' };
+    } catch (e) {
+        return { ok: false, error: (e && e.message) || '限速设置异常' };
     }
 });
 

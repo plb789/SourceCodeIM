@@ -62,6 +62,19 @@ class BtDownloadManager extends EventEmitter {
         this._readyTimer = null;
         this._ignoreClosed = new Set(); // 内部 release（done 后释放句柄/重置前清理）期间忽略 closed 回执
         this._quitting = false;
+        this._limits = { down: 0, up: 0 };      // 全局限速（B/s，0=不限速）：ready 前暂存，就绪/重启后补发
+        this._limitsApplied = false;            // 主进程是否显式下发过限速（未下发时保持宿主内置 2MB/s 上传默认）
+    }
+
+    // 全局下载/上传限速（字节/秒，0=不限速）：引擎级共享配额（全部任务+做种上传统一受限），
+    // 设置页变更即时下发；宿主未就绪/异常重启时暂存，ready 后补发（见 _dispatch ready 分支）
+    setLimits(downBps, upBps) {
+        this._limits = {
+            down: Math.min(2147483647, Math.max(0, Math.floor(Number(downBps) || 0))),
+            up: Math.min(2147483647, Math.max(0, Math.floor(Number(upBps) || 0)))
+        };
+        this._limitsApplied = true;
+        this._send({ cmd: 'limit', down: this._limits.down, up: this._limits.up });
     }
 
     // 注册并开始任务。payload={taskId, gameId, installDir, username, serverBase, slug, torrentUrl,
@@ -343,6 +356,9 @@ class BtDownloadManager extends EventEmitter {
             this._ready = true;
             if (this._readyTimer) { clearTimeout(this._readyTimer); this._readyTimer = null; }
             console.log('[dlbt-host] ready, listen port', m.port);
+            // 限速补发：宿主首次就绪/异常重启后，把主进程显式下发过的限速设置同步给引擎
+            // （从未配置过限速则保持宿主内置 2MB/s 上传默认值，不无谓覆盖）
+            if (this._limitsApplied) this._send({ cmd: 'limit', down: this._limits.down, up: this._limits.up });
             const waiters = this._readyWaiters.splice(0);
             for (let i = 0; i < waiters.length; i++) waiters[i].resolve();
             return;
@@ -546,6 +562,7 @@ class BtDownloadManager extends EventEmitter {
             received: task.received,
             total: task.total,
             speed: task._speed,
+            diskSpeed: task._speed, // BT 引擎内部直写磁盘，落盘吞吐≈下载速率（口径与 HTTP 通道对齐）
             upSpeed: task._upSpeed || 0, // BT 上传速率（HTTP 通道无此字段，页面按 via 区分展示）
             state: stateOverride || task.state,
             fileRelPath: '', // BT 通道引擎不回报单文件粒度，页面展示整体进度
@@ -564,6 +581,7 @@ class BtDownloadManager extends EventEmitter {
             total: task.total,
             filesCount: task.files.length,
             speed: task._speed,
+            diskSpeed: task._speed,
             upSpeed: task._upSpeed || 0,
             via: 'bt'
         };

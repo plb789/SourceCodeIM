@@ -5,6 +5,8 @@
 // 协议（stdin 命令 / stdout 事件，均 UTF-8，一行一个 JSON，'\n' 结尾；日志走 stderr 不污染协议）：
 //   命令：{"cmd":"start","id":"g1-1700","torrent":"C:\\a\\x.torrent","out":"C:\\install","status":"C:\\Status","http":["url1","url2"]}
 //         {"cmd":"pause","id":"..."}  {"cmd":"resume","id":"..."}  {"cmd":"cancel","id":"...","del":true}
+//         {"cmd":"limit","down":B,"up":B}（全局下载/上传限速，字节/秒，0=不限速——宿主换算为引擎上限值
+//          下发，含任务级服务器源限速同步；设置页变更即时下发，宿主重启后主进程 ready 时补发）
 //         {"cmd":"quit"}
 //   事件：{"evt":"ready","port":29123}  {"evt":"progress","id":...,"state":"downloading","progress":0.42,
 //         "received":...,"total":...,"down":B/s,"up":B/s,"error":""}
@@ -152,6 +154,7 @@ static void pollLoop() {
 // reportIp：Tracker 自报 IP（服务端登录回执核实的真实外网地址，主进程经 stdio 协议透传）——
 // announce 时引擎以 ip= 参数上报，供自建 Tracker 优先采信（公共 Tracker 按 BEP42 忽略跨网段
 // 自报，不影响）；空串=不设置，走引擎默认行为（Tracker 记录 announce 连接来源）
+static long long g_downLimit = 2147483647; // 当前下载限速（字节/秒，cmdLimit 更新；start 建任务时同步服务器源限速）
 static void cmdStart(const std::wstring& id, const std::wstring& torrent,
                      const std::wstring& out, const std::wstring& statusDir,
                      const std::vector<std::string>& httpUrls,
@@ -181,6 +184,8 @@ static void cmdStart(const std::wstring& id, const std::wstring& torrent,
         std::string u = httpUrls[i];
         DLBT_Downloader_AddHttpDownload(h, &u[0]);
     }
+    // HTTP 源会话不吃全局下载限速（E2E 实测），建任务即同步当前下载限速（未限速=上限值，等效不限）
+    DLBT_Downloader_SetServerDownloadLimit(h, (int)g_downLimit);
     Task t;
     t.id = id;
     t.h = h;
@@ -202,6 +207,31 @@ static void cmdResume(const std::wstring& id) {
         DLBT_Downloader_Resume(it->second.h);
     }
 }
+// limit：全局下载/上传限速（字节/秒，协议 0/负数=不限速）。引擎级共享配额：全部任务与做种上传统一受限；
+// P2SP HTTP 直链源会话不受 DLBT_SetDownloadSpeedLimit 约束（E2E 实测），需叠加任务级
+// DLBT_Downloader_SetServerDownloadLimit（逐任务同步当前下载限速）。"不限速"下发引擎上限值而非 0
+// （0 在引擎侧语义未文档化，不猜测），上限值实际等效不限速
+static int limitClamp(long long v) {
+    if (v <= 0) return 2147483647;
+    if (v > 2147483647) return 2147483647;
+    return (int)v;
+}
+static void applyServerLimit_locked() {
+    for (auto& kv : g_tasks) {
+        if (kv.second.h) DLBT_Downloader_SetServerDownloadLimit(kv.second.h, (int)g_downLimit);
+    }
+}
+static void cmdLimit(long long down, long long up) {
+    std::lock_guard<std::mutex> lock(g_mtx);
+    g_downLimit = limitClamp(down);
+    DLBT_SetDownloadSpeedLimit((int)g_downLimit);
+    DLBT_SetUploadSpeedLimit(limitClamp(up));
+    // 引擎默认不对局域网/回环连接应用限速（DLBT.h：默认不对同局域网用户限速），用户设置限速
+    // 后应全场景生效（含局域网 peer 与 P2SP 服务器源），显式开启同值限速；不限速则保持引擎默认豁免
+    DLBT_SetLocalNetworkLimit(down > 0 ? TRUE : FALSE, (int)g_downLimit, limitClamp(up));
+    applyServerLimit_locked();
+}
+
 static void cmdCancel(const std::wstring& id, bool del) {
     std::wstring statusFile;
     {
@@ -325,6 +355,11 @@ static void stdinLoop() {
                             long long del = 0;
                             jGetNum(line, "del", del);
                             cmdCancel(wid, del != 0);
+                        } else if (cmd == "limit") {
+                            long long down = 0, up = 0;
+                            jGetNum(line, "down", down);
+                            jGetNum(line, "up", up);
+                            cmdLimit(down, up);
                         } else if (cmd == "quit") {
                             g_quit.store(true);
                             break;

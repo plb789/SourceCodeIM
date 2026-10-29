@@ -24,6 +24,43 @@ class GameDownloadManager extends EventEmitter {
     constructor() {
         super();
         this.tasks = new Map(); // taskId → 任务对象（进程内表，不持久化）
+        // 全局下载限速（令牌桶，跨任务共享配额）：down=B/s（0=不限），桶容量=1 秒配额防长暂停后爆发。
+        // 注意不能用 res.pipe + res.pause 实现节流：pipe 会在写盘 drain 时自动 resume 源流覆盖 pause，
+        // 故下载改为手动写盘 + 请求级挂起队列（见 _downloadFile 门控），令牌恢复由补充定时器放行
+        this._lim = { down: 0, tokens: 0, last: 0, timer: null, waiters: new Set() };
+    }
+
+    // 全局下载限速（字节/秒，0=不限速）：设置页变更即时生效——清限速时放行全部挂起数据并停补充定时器
+    // （HTTP 通道无上传概念，上传限速仅 BT 引擎侧生效）
+    setLimits(downBps) {
+        const L = this._lim;
+        L.down = Math.min(2147483647, Math.max(0, Math.floor(Number(downBps) || 0)));
+        if (L.down <= 0) {
+            if (L.timer) { clearInterval(L.timer); L.timer = null; }
+            const ws = Array.from(L.waiters);
+            L.waiters.clear();
+            L.tokens = 0;
+            ws.forEach(function (w) { w.flush(); }); // 全速放行（down=0 时 pump 不再判令牌）
+        }
+    }
+
+    // 补充定时器（100ms 粒度）：令牌恢复至非负后唤醒全部限速挂起的请求写入门控
+    _armRefill() {
+        const L = this._lim;
+        if (L.timer) return;
+        L.last = Date.now();
+        L.timer = setInterval(function () {
+            const now = Date.now();
+            L.tokens += L.down * (now - L.last) / 1000; // 按实际间隔补充（防定时器漂移超发）
+            L.last = now;
+            if (L.tokens > L.down) L.tokens = L.down;   // 桶容量上限=1 秒配额
+            if (L.tokens >= 0) {
+                const ws = Array.from(L.waiters);
+                ws.forEach(function (w) { w.pump(); });
+                if (!L.waiters.size) { clearInterval(L.timer); L.timer = null; } // 全部放行后停表（防常驻）
+            }
+        }, 100);
+        if (L.timer.unref) L.timer.unref(); // 不阻止主进程退出
     }
 
     // 注册并开始任务。payload={taskId, gameId, installDir, slug, username, serverBase, files:[{id,rel_path,size,sha256,url}]}
@@ -98,6 +135,9 @@ class GameDownloadManager extends EventEmitter {
                 retries: 0,
                 _req: null,        // 进行中的 http 请求（暂停/取消中断用）
                 _speed: 0,         // 500ms 窗口速度（B/s）
+                _diskBytes: 0,     // 磁盘写入字节累计（落盘吞吐采集）
+                _diskSpeed: 0,     // 500ms 窗口磁盘写入速度（B/s）
+                _lastDiskBytes: 0, // 磁盘写入窗口基准字节
                 _lastEmit: 0,      // 上次进度推送时间（节流）
                 _lastBytes: 0,     // 速度窗口基准字节
                 _lastTime: 0,      // 速度窗口基准时间
@@ -118,6 +158,7 @@ class GameDownloadManager extends EventEmitter {
             task._paused = true;
             task.state = 'paused';
             task._speed = 0;
+            task._diskSpeed = 0;
             if (task._req) { try { task._req.destroy(); } catch (e) { } }
             this._emit(task, task._currentRel, null, true); // 暂停终态必发一条
         }
@@ -213,6 +254,7 @@ class GameDownloadManager extends EventEmitter {
                 }
                 task.state = 'error';
                 task._speed = 0;
+                task._diskSpeed = 0;
                 self._emit(task, file.rel_path, (err && err.message) || '下载失败', true); // error 必发
                 self._schedule();
             });
@@ -224,6 +266,9 @@ class GameDownloadManager extends EventEmitter {
     // reject 载荷：{paused:true} 暂停中断 / {verify:true} 校验类失败（可重试）/ {message} 其它错误
     _downloadFile(task, file) {
         const self = this;
+        // 请求代数在入口同步递增（mkdir 回调是异步跳板，代数必须先于任何异步事件落定）：
+        // 暂停后快速恢复时，旧请求的中止回调晚于新请求发起到达，gen 不符即整体忽略，防误判新下载失败
+        const myGen = task._reqGen = (task._reqGen || 0) + 1;
         return new Promise(function (resolve, reject) {
             const abs = path.resolve(task.stagingDir, file.rel_path);
             const partAbs = abs + '.part';
@@ -277,20 +322,93 @@ class GameDownloadManager extends EventEmitter {
                         const fail = function (err) {
                             if (settled) return;
                             settled = true;
+                            self._lim.waiters.delete(gate); // 中断路径清理等待资格（end/close 不清：pend 可能仍有未写盘数据）
                             try { stream.destroy(); } catch (e) { }
+                            if (myGen !== task._reqGen) { reject({ paused: true }); return; } // 过期请求回调：已被新请求取代，交由调度处理
                             if (task.state === 'paused') reject({ paused: true });
                             else reject(err);
+                        };
+                        // 请求级写入门控（限速 + 写盘背压统一走挂起队列）：原 res.pipe 会在写盘 drain 时
+                        // 自动 resume 源流覆盖限速 pause（E2E 实测失效根因），故改为手动写盘。recv 收
+                        // chunk 按令牌扣减入队，pump 按"令牌充足 + 写盘可写"节奏落盘；源流由 pause/resume 控制
+                        const L = self._lim;
+                        const gate = {
+                            pend: [],        // 待写盘数据（限速挂起/背压回退，内存排队量级≈1 秒配额+往返缓冲）
+                            paused: false,   // 源流暂停中（令牌不足）
+                            drainWait: false,// 写盘背压等待中（write 返回 false）
+                            pumping: false,  // pump 重入保护
+                            ended: false,    // 源已结束（挂起数据写完后手动 end 流）
+                            recv: function (chunk) {
+                                if (L.down > 0) L.tokens -= chunk.length; // 令牌预扣（挂起数据已计费，放行不再扣）
+                                this.pend.push(chunk);
+                                // 令牌不足：先完成挂起登记（入等待集 + 暂停源流 + 武装补充定时器）再尝试写盘。
+                                // 登记必须在 recv 内完成——pump 尾部 res.resume() 会同步触发 data 递归进 recv，
+                                // 此时 pump 被 pumping 守卫挡掉，登记若依赖 pump 会丢失导致末尾 chunk 永久滞留（E2E 实测死锁根因）
+                                if (L.down > 0 && L.tokens < 0) {
+                                    L.waiters.add(this);
+                                    if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
+                                    self._armRefill();
+                                }
+                                if (!this.pumping) this.pump();
+                            },
+                            pump: function () {
+                                if (this.pumping) return;
+                                this.pumping = true;
+                                try {
+                                    while (this.pend.length) {
+                                        if (this.drainWait) break;                     // 写盘背压：等 drain
+                                        if (L.down > 0 && L.tokens < 0) {              // 令牌不足：等补充定时器唤醒
+                                            L.waiters.add(this);
+                                            if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
+                                            self._armRefill();
+                                            break;
+                                        }
+                                        const c = this.pend.shift();
+                                        task._diskBytes += c.length; // 磁盘写入字节采集（落盘吞吐曲线数据源）
+                                        if (!stream.write(c)) {                        // 写盘背压：剩余留队
+                                            this.drainWait = true;
+                                            // 背压时同步暂停源流（对齐原 pipe 自动背压行为）：不限速模式下若
+                                            // 网络快于磁盘且不暂停，pend 会无界增长；drain 后由 pump 续写并放行
+                                            if (!this.paused) { this.paused = true; try { res.pause(); } catch (e) { } }
+                                            const g = this;
+                                            stream.once('drain', function () {
+                                                g.drainWait = false; // drain 回调先复位标志再续 pump（否则 pump 首行判 drainWait 死锁）
+                                                g.pump();
+                                            });
+                                            break;
+                                        }
+                                    }
+                                } finally { this.pumping = false; }
+                                if (!this.pend.length && !this.drainWait) {
+                                    if (this.paused) { this.paused = false; try { res.resume(); } catch (e) { } }
+                                    // 仅在确认无挂起时才移除等待资格：resume 会同步触发 data 递归，recv 可能
+                                    // 刚重新入队挂起并登记等待（此时不能删，否则补充定时器不再唤醒它——死锁）
+                                    if (!this.pend.length) L.waiters.delete(this);
+                                    this.settleEnd();
+                                }
+                            },
+                            flush: function () { this.pump(); }, // setLimits(0)/补充定时器唤醒入口
+                            settleEnd: function () {
+                                if (this.ended && !this.pend.length && !this.drainWait) {
+                                    try { stream.end(); } catch (e) { }
+                                }
+                            }
                         };
                         res.on('data', function (chunk) {
                             task.received += chunk.length;
                             written += chunk.length;
                             hash.update(chunk);
                             self._tick(task); // 速度计算 + 500ms 节流推送
+                            gate.recv(chunk); // 限速/写盘门控：令牌不足挂起队列（不 pipe，防 drain 自动 resume）
                         });
+                        // end/close 不移除等待资格：数据虽已全部送达（end 触发），pend 队列可能仍压着
+                        // 未写盘数据，删除会让补充定时器不再唤醒该门控（E2E 实测收尾死锁根因）；
+                        // 正常收尾由 pump 写空 pend 后自行移除并 end 流，错误路径由 fail 统一清理
+                        res.on('end', function () { gate.ended = true; gate.settleEnd(); });
                         res.on('error', fail);
                         res.on('aborted', function () { fail({ message: '连接中断' }); });
                         stream.on('error', fail);
-                        res.pipe(stream);
+                        res.resume(); // 手动写盘模式（无 pipe）：data 监听已置 flowing，显式 resume 对齐语义
                         stream.on('finish', function () {
                             if (settled) return;
                             settled = true;
@@ -361,16 +479,19 @@ class GameDownloadManager extends EventEmitter {
         task.received = sum;
         task._lastBytes = sum;
         task._lastTime = 0;
+        task._lastDiskBytes = task._diskBytes; // 磁盘写入窗口基准同步重置（暂停恢复/重试基线校准）
     }
 
     // 速度计算 + 进度节流推送（500ms 窗口字节差；数据回调高频触发，窗口内不 emit）
     _tick(task) {
         const now = Date.now();
-        if (!task._lastTime) { task._lastTime = now; task._lastBytes = task.received; return; }
+        if (!task._lastTime) { task._lastTime = now; task._lastBytes = task.received; task._lastDiskBytes = task._diskBytes; return; }
         const dt = now - task._lastTime;
         if (dt >= EMIT_INTERVAL) {
             task._speed = Math.max(0, Math.round((task.received - task._lastBytes) / (dt / 1000)));
+            task._diskSpeed = Math.max(0, Math.round((task._diskBytes - task._lastDiskBytes) / (dt / 1000))); // 落盘吞吐（写盘字节窗口差）
             task._lastBytes = task.received;
+            task._lastDiskBytes = task._diskBytes;
             task._lastTime = now;
             task._lastEmit = now;
             this.emit('progress', this._evt(task, task._currentRel));
@@ -385,7 +506,7 @@ class GameDownloadManager extends EventEmitter {
         this.emit('progress', this._evt(task, rel, error, stateOverride));
     }
 
-    // 进度事件负载：{taskId, gameId, received, total, speed, state, fileRelPath, error}
+    // 进度事件负载：{taskId, gameId, received, total, speed, diskSpeed, state, fileRelPath, error}
     _evt(task, rel, error, stateOverride) {
         return {
             taskId: task.taskId,
@@ -393,6 +514,7 @@ class GameDownloadManager extends EventEmitter {
             received: task.received,
             total: task.total,
             speed: task._speed,
+            diskSpeed: task._diskSpeed || 0, // 磁盘写入速率（落盘吞吐曲线）
             state: stateOverride || task.state,
             fileRelPath: rel || task._currentRel || '',
             error: error || null
@@ -405,6 +527,7 @@ class GameDownloadManager extends EventEmitter {
         task.state = 'done';
         task.received = task.total;
         task._speed = 0;
+        task._diskSpeed = 0;
         task._lastEmit = Date.now();
         const cm = this._commit(task);
         if (cm && cm.ok === false) {
@@ -467,6 +590,7 @@ class GameDownloadManager extends EventEmitter {
             fileIndex: task.fileIndex,
             filesCount: task.files.length,
             speed: task._speed,
+            diskSpeed: task._diskSpeed || 0,
             startedAt: task.startedAt
         };
     }
