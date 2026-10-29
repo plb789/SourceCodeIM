@@ -144,6 +144,21 @@ type Config struct {
 
 	// 阶段二百七十四：网页卡片配置节（微信同款链接分享卡片，server/webcard.go 归口）
 	Card CardConfig `yaml:"card"`
+
+	// IP 属地显示配置节（ip2region 离线解析，设计文档 docs/IP属地显示设计方案.md；server/ipregion.go 归口）
+	IPRegion IPRegionConfig `yaml:"ip_region"`
+}
+
+// IPRegionConfig IP 属地显示配置节（ip2region 离线解析，微信同款资料卡「IP属地」标签）
+// enabled=false 或数据文件缺失/损坏时功能降级关闭（属地恒空串，前端整行隐藏），不影响其他功能。
+// IPv4/IPv6 双栈独立加载互不拖累：某一栈文件缺失仅该栈属地降级为空（另一栈不受影响）
+type IPRegionConfig struct {
+	// Enabled 总开关
+	Enabled bool `yaml:"enabled"`
+	// XdbPathV4 IPv4 数据文件路径（相对路径基于 exe 所在目录解析，空=exe目录/data/ip2region_v4.xdb）
+	XdbPathV4 string `yaml:"xdb_path_v4"`
+	// XdbPathV6 IPv6 数据文件路径（可选，空=exe目录/data/ip2region_v6.xdb；文件缺失仅 IPv6 栈降级）
+	XdbPathV6 string `yaml:"xdb_path_v6"`
 }
 
 // CardConfig 阶段二百七十四：网页卡片抓取配置节
@@ -770,6 +785,13 @@ func Default() *Config {
 			// 显式 enabled: false 才会关闭（yaml.v3 仅覆盖文件中出现的键）
 			Save: GameSaveConfig{Enabled: true},
 		},
+
+		// IP 属地默认开启（IPv4+IPv6 双栈；数据文件缺失时对应栈加载失败自动降级，不阻塞启动、不影响其他功能）
+		IPRegion: IPRegionConfig{
+			Enabled:   true,
+			XdbPathV4: "data/ip2region_v4.xdb",
+			XdbPathV6: "data/ip2region_v6.xdb",
+		},
 	}
 }
 
@@ -876,6 +898,17 @@ func Load() *Config {
 		cfg.AI.KB.DataDir = filepath.Join(exeDir(), "data", "kb")
 	} else {
 		cfg.AI.KB.DataDir = resolvePath(cfg.AI.KB.DataDir)
+	}
+	// IP 属地数据文件路径兜底（相对路径锚定 exe 所在目录解析，与知识库数据目录同规则不硬编码绝对路径）
+	if cfg.IPRegion.XdbPathV4 == "" {
+		cfg.IPRegion.XdbPathV4 = filepath.Join(exeDir(), "data", "ip2region_v4.xdb")
+	} else {
+		cfg.IPRegion.XdbPathV4 = resolvePath(cfg.IPRegion.XdbPathV4)
+	}
+	if cfg.IPRegion.XdbPathV6 == "" {
+		cfg.IPRegion.XdbPathV6 = filepath.Join(exeDir(), "data", "ip2region_v6.xdb")
+	} else {
+		cfg.IPRegion.XdbPathV6 = resolvePath(cfg.IPRegion.XdbPathV6)
 	}
 	// 阶段五十九：Agent 工作区根目录兜底（锚定 exe 目录/agent_workspace，按 username 隔离子目录）
 	if cfg.AI.Agent.WorkspaceRoot == "" {

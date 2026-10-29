@@ -94,6 +94,9 @@
     var friendCardGender = document.getElementById('friend-card-gender');
     var friendCardUsername = document.getElementById('friend-card-username');
     var friendCardRegion = document.getElementById('friend-card-region');
+    // IP属地行（ip2region 服务端归口解析，随 PROFILE_RESP 下发；ip_region 为空串时整行隐藏）
+    var friendCardIpRegionRow = document.getElementById('friend-card-ipregion-row');
+    var friendCardIpRegion = document.getElementById('friend-card-ipregion');
     var friendCardSignature = document.getElementById('friend-card-signature');
     var friendCardChatBtn = document.getElementById('friend-card-chat');
     var friendCardRemarkBtn = document.getElementById('friend-card-remark');
@@ -2277,6 +2280,8 @@
         friendCardGender.className = 'friend-card-gender';
         friendCardUsername.textContent = username;
         friendCardRegion.textContent = '';
+        // IP属地行占位隐藏（PROFILE_RESP 回来后按 ip_region 非空显隐）
+        friendCardIpRegionRow.classList.add('hidden');
         friendCardSignature.textContent = '';
         friendCardRemarkBtn.classList.add('hidden');
         friendCardAddBtn.classList.add('hidden'); // 阶段二百七十六：占位态先隐藏，PROFILE_RESP 回来后按好友关系显隐
@@ -2305,6 +2310,10 @@
         }
         setFriendCardAvatar(info.avatar, info.username); // 阶段二百七十六补丁：统一降级入口（原空 src 渲染碎图）
         friendCardRegion.textContent = info.region || I18N.t('暂无');
+        // IP属地（服务端 ip2region 归口解析；空串=不可用整行隐藏，"内网"为正常值照常渲染）
+        var ipRegionText = info.ip_region || '';
+        friendCardIpRegionRow.classList.toggle('hidden', !ipRegionText);
+        friendCardIpRegion.textContent = ipRegionText;
         friendCardSignature.textContent = info.signature || I18N.t('暂无');
         // 仅好友可设置备注（非好友隐藏按钮，服务端同样归口校验）
         friendCardRemarkBtn.classList.toggle('hidden', !info.is_friend);

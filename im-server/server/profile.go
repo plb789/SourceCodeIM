@@ -21,6 +21,9 @@ type ProfileInfo struct {
 	Avatar    string `json:"avatar"`
 	IsFriend  bool   `json:"is_friend"` // 查询者与目标是否好友（自己为 false）
 	Remark    string `json:"remark"`    // 查询者给目标设置的备注名（非好友为空）
+	// IP 属地（ip2region 离线解析，微信同款口径：国内省份/海外国家/内网「内网」）。
+	// 服务端归口解析，报文只含属地文本不含 IP 明文；空串=不可用（未启用/目标离线/集群跨实例），前端整行隐藏
+	IpRegion string `json:"ip_region"`
 }
 
 // profileUpdateReq 个人资料更新请求（content JSON，仅允许修改这四个字段，用户名/头像走原有通道）
@@ -56,6 +59,10 @@ func (s *Server) buildProfileInfo(viewer, target string) (ProfileInfo, bool) {
 		Region:    u.Region,
 		Signature: u.Signature,
 		Avatar:    u.Avatar,
+	}
+	// IP 属地：目标在线时由其连接真实 IP 解析（服务端归口，离线/跨实例/未启用为空串降级）
+	if ipRegionEnabled() {
+		info.IpRegion = ipRegion(s.onlineIPOf(target))
 	}
 	if viewer != target {
 		var f model.Friend

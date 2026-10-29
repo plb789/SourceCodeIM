@@ -66,7 +66,8 @@ func NewServer(cfg *config.Config) *Server {
 		locRooms:       make(map[string]*locRoom),  // 阶段二百六十八：位置共享房间表
 		vippool:        newVipPool(cfg),            // 虚拟 IP 内存池（store 种子为 nil 时禁用空池，全链路旁路）
 	}
-	s.startLocSweeper() // 阶段二百六十八：位置共享房间过期扫描协程
+	initIPRegion(&cfg.IPRegion) // IP 属地数据加载（ip2region 离线解析，失败自动降级关闭不阻塞启动）
+	s.startLocSweeper()         // 阶段二百六十八：位置共享房间过期扫描协程
 	defaultServerRef = s
 	// 阶段一百六十一：登录排队器（enabled=false 时零开销旁路）
 	s.loginQ = newLoginQueue(cfg.LoginQueue)
