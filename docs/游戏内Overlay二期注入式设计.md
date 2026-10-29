@@ -206,3 +206,60 @@ POC 通过 = 整个方案的技术定心丸；不通过则回退评估（如 vta
 | 独占全屏 + 未适配游戏 | 引导切无边框（一期策略） |
 
 一期代码全部保留，二期是叠加的第三种呈现面；`game:launch` 注入失败自动回退一期，玩家无感。
+
+
+---
+
+# 十、SC:R（星际争霸重制版）D3D11 适配终版战果（2026-10-29 实测闭环）
+
+## 10.1 架构：版本劫持代理（方案 B）
+
+SC:R 主渲染为 **D3D11**（deny-time 模块快照实锤：d3d11.dll + dxgi.dll + nvd3dumx NVIDIA UMD），且反作弊对进程内外来模块行为全方位拦截（探针自建设备 D3DKMT 层 E_INVALIDARG、GetParent 父链失败、写外来堆 AV 被吞）。最终架构：
+
+```
+spawnGameChild（hijack 名单命中 + x64）
+  → deployD3D9Hijack 五件套幂等部署到游戏目录
+      d3d9_proxy.dll→d3d9.dll   （17 导出代码级转发 + handoff：对象返回游戏前补虚表钩）
+      System32 d3d9→d3d9_orig.dll
+      d3d11_proxy.dll→d3d11.dll （D3D11CreateDevice* 精确签名转发 + handoff）
+      System32 d3d11→d3d11_orig.dll
+      overlay_hook_x64.dll      （同目录，代理惰性 LoadLibrary）
+  → 直接 spawn（不套 injector，防双 hook 实例）
+游戏启动 → DLL 搜索顺序（应用目录优先）加载代理 → 代理转发真身 → handoff 出口
+  → OverlayHookD3D9Object（slot 16+20）/ OverlayHookD3D11Device（工厂四槽+交换链双槽）
+  → 探针交换链自证（自建链 Present 自探）→ 游戏交换链 Present 钩生效
+  → 两段式延迟 init（pre-init 主窗口后建 context / init 挂 DX11 后端）
+  → 每帧 RenderOverlayD3D11（Present 钩内）
+```
+
+## 10.2 关键修复链（实测排障定论）
+
+| 问题 | 根因 | 修复 |
+|---|---|---|
+| 渲染跑通但面板不可见 | vendored imgui_impl_dx11 的 RenderDrawData **不绑 RTV**（官方把 OMSetRenderTargets 放宿主 main.cpp）——画进游戏遗留渲染目标（离屏/MSAA） | Present 钩内 GetBuffer+CreateRenderTargetView+OMSetRenderTargets 绑交换链 back buffer，画完恢复游戏原绑定；异常分支清 RTV 缓存 |
+| 面板开几秒自动消失 | 8s 无渲染能力兜底（`!g_origPresent` 在 x64 恒真）未排除 D3D11 就绪态 | 兜底加 `!g_d3d11Ready` |
+| 热键弹游戏外悬浮窗 | d3d9 探针 25 fails 置位 env-denied，覆盖 D3D11 init ok 的清零（时序竞争） | 置位处加 `g_d3d11Ready` 门禁 + 热键分支双保险 `!g_d3d11Ready` |
+| 无法输入中文 | 游戏窗口 HIMC 被禁（暴雪惯例）；新建 IME 上下文默认英文关闭态 | 面板期渲染帧 `PanelImeFrameEnsure`：无上下文则挂+SetOpenStatus(TRUE)+中文模式；WM_ACTIVATE 焦点回归重挂——统一覆盖热键/toast 点击/焦点回归三路径 |
+| 头像只显示首字母 | 头像纹理是纯 D3D9 实现，g_imguiDev（D3D9 设备）恒空 | 新增 AvatarTexGet11：BGRA 位图直映 DXGI_FORMAT_B8G8R8A8_UNORM（零转换）IMMUTABLE 上传+SRV 缓存 |
+| 拖拽时气泡水平不跟随 | DrawList 屏幕绝对坐标混入窗口相对值（GetCursorPosX）——气泡偏移一个面板位置 | 气泡/头像统一 scr0.x（屏幕坐标）+ SetCursorPosX（窗口相对）双坐标系各归其位（私聊/房间共 4 处） |
+
+## 10.3 IME 上下文管理（帧确保模式）
+
+游戏窗口 IME 被禁的场景（暴雪/CryEngine 惯例）下，IME 生命周期必须与面板可见性严格绑定：
+
+- **挂载**：面板期渲染帧确保（有上下文则保开态，无则挂新建上下文+中文模式）——覆盖热键/toast 点击/焦点回归全部打开路径；
+- **还原**：热键收起 / Esc / ReportNoPanelOnce 异常收起——ImmAssociateContext 还原 + ImmDestroyContext 防句柄泄漏；
+- **提交链**：WndProc 拦 GCS_RESULTSTR（ImmGetCompositionStringW 恒 UTF-16）注入 ImGui + 吞 WM_IME_CHAR 与 150ms 污染 WM_CHAR 回声；提交缓冲 64 字。
+
+## 10.4 Warface 连带回归与修复（同日）
+
+SC:R 适配期间两处连带损伤，均已修复并实测闭环：
+
+1. **x86 DLL 丢失 → 注入链降级**：overlay_hook_x86.dll 在部署/清理事故中丢失，main.js 注入分支历史口径不分数位一律要求 x86 DLL 存在 → x64 的 Warface 整链降级悬浮窗。修复：重编 x86 套件 + **门禁按位数拆分**（x64 游戏只查 x64 套件，缺失日志带位数与文件名）。
+2. **env-denied/8s 兜底误伤 → broken 永久卡死**：探针 25 fails 置位 env-denied → 热键回悬浮窗 → ReportNoPanelOnce 置 g_panelBroken → 无恢复路径。修复：设备捕获成功 / ImGuiEnsure9 init 成功时清 broken + 重发 panel-ready（「启动器 nopanel → 进游戏自动恢复」闭环）。根因补全：旧 injector 注入太晚（游戏设备已建、探针追不上）——新 injector 800ms 延迟注入赶在设备创建前装好 slot 钩，游戏建设备即被 Hooked_CreateDevice 捕获。
+3. **翻车记录（反面教材）**：曾尝试「InitThread 极早期全模块 GetProcAddress/LoadLibrary IAT 补钩（20+ 模块）」修捕获链——**Warface/SC:R 反作弊完整性检测即拦=游戏都启动不了**，立即回滚。结论：IAT 钩覆盖面扩张必须评估反作弊检测面，宁走「早注入+slot 钩+设备捕获」的既有安全路径。
+
+## 10.5 部署清单（SC:R 形态）
+
+游戏目录（H:\...\XJ1R\x86_64）：d3d9.dll、d3d9_orig.dll、d3d11.dll、d3d11_orig.dll、overlay_hook_x64.dll 五件套（deployD3D9Hijack 幂等维护，size 相同跳过）。
+客户端 resources\overlay-native\bin：双架构 overlay_hook_x*.dll + 双架构 injector*.exe + native-games.json（list + hijack 名单）——**双架构产物必须成对维护，部署后读回验证**。

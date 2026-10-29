@@ -1772,14 +1772,6 @@ function deployD3D9Hijack(dir) {
 function spawnGameChild(exe, args, cwd, extraOpts) {
     var base = { cwd: cwd, detached: true, stdio: 'ignore' };
     if (extraOpts) { for (var k in extraOpts) base[k] = extraOpts[k]; }
-    // M4 排障日志：注入链判定结果与原因（走兜底时可在客户端日志一眼定位是哪一关）
-    if (!gameOverlay.isNativeActive(exe)) {
-        gnLogWrite('[overlay] 注入链未启用（开关未开或游戏不在兼容名单）→ 悬浮窗形态: ' + exe);
-    } else if (!fs.existsSync(path.join(ovNativeBinDir(), 'injector.exe'))) {
-        gnLogWrite('[overlay] 注入组件缺失（injector.exe）→ 悬浮窗形态');
-    } else if (!fs.existsSync(path.join(ovNativeBinDir(), 'overlay_hook_x86.dll'))) {
-        gnLogWrite('[overlay] 注入组件缺失（overlay_hook_x86.dll）→ 悬浮窗形态');
-    }
     // 版本劫持（SC:R 收口）：hijack 名单命中 → 部署三件套 + 直接 spawn（不套 injector——
     // 代理 d3d9 在游戏加载 d3d9 时拉起同目录 hook DLL，injector 再注入部署目录的 hook DLL
     // 会形成两个模块实例并存冲突）。native:true 标记下 onGameStart 收到的 child.pid 直接
@@ -1793,11 +1785,10 @@ function spawnGameChild(exe, args, cwd, extraOpts) {
         gnLogWrite('[overlay] 版本劫持部署失败 → 普通启动（悬浮窗形态）: ' + exe);
         return { child: spawn(exe, args, base), native: false };
     }
-    if (gameOverlay.isNativeActive(exe) // M4：native 开关 + 兼容名单按等级判定（名单内/全量模式才走注入链）
-        && fs.existsSync(path.join(ovNativeBinDir(), 'injector.exe'))
-        && fs.existsSync(path.join(ovNativeBinDir(), 'overlay_hook_x86.dll'))) {
-        // 按游戏位数选 helper 与 DLL：x64 游戏用 injector_x64.exe（x64 DLL 注入）；x86/未知用 x86 套件
-        // （对应套件缺失或位数判断失误时，injector --launch 自身会跳过注入照常 resume——降级安全）
+    // M4 注入链：native 开关 + 兼容名单判定。组件检查按游戏位数拆分（2026-10-29 收口——
+    // 历史口径不分数位一律要求 overlay_hook_x86.dll 存在，x86 DLL 单文件丢失曾把 x64 游戏
+    //（Warface）整链降级悬浮窗）：x64 游戏只查 x64 套件，x86/未知只查 x86 套件
+    if (gameOverlay.isNativeActive(exe)) {
         var isX64 = peMachineOf(exe) === 0x8664;
         var helper = isX64 ? 'injector_x64.exe' : 'injector.exe';
         var dll = isX64 ? 'overlay_hook_x64.dll' : 'overlay_hook_x86.dll';
@@ -1809,6 +1800,10 @@ function spawnGameChild(exe, args, cwd, extraOpts) {
                 return { child: child, native: true };
             } catch (e) { /* 包装器 spawn 失败：回退普通启动 */ }
         }
+        // 排障日志：注入链判定结果与原因（走兜底时可在客户端日志一眼定位是哪一关）
+        gnLogWrite('[overlay] 注入组件缺失（' + (isX64 ? 'x64' : 'x86') + ' 套件: ' + helper + '/' + dll + '）→ 悬浮窗形态: ' + exe);
+    } else {
+        gnLogWrite('[overlay] 注入链未启用（开关未开或游戏不在兼容名单）→ 悬浮窗形态: ' + exe);
     }
     return { child: spawn(exe, args, base), native: false };
 }
