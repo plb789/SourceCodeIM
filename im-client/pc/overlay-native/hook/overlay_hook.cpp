@@ -1773,6 +1773,7 @@ static void RenderPanelFrame(IDirect3DDevice9* dev) {
         }
         if (ImGuiEnsure9(dev)) {
             ImGui_ImplDX9_NewFrame();
+            PanelImeFrameEnsure(g_gameHwnd); // 通用性补齐（2026-10-29）：禁 IME 的 D3D9 游戏覆盖 toast 点击路径——有上下文（游戏自带）则只保开态零干扰，无则挂
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
             ImGui::GetIO().MouseDrawCursor = panelOn; // 面板期自绘光标兜底；关面板期必须复位（否则 toast/角标帧残留软件光标叠在游戏光标上）
