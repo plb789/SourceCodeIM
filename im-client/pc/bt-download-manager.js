@@ -373,9 +373,10 @@ class BtDownloadManager extends EventEmitter {
         if (!task) return; // 已取消/内部 release 的任务回执：忽略
         if (m.evt === 'progress') {
             if (task.state === 'done') {
-                // 做种中：完成终态不再刷下载进度，上传速度仍转发（页面"做种中"实时展示供速）
-                const upSeed = Number(m.up) || 0;
-                if (upSeed !== task._upSpeed) { task._upSpeed = upSeed; this._emit(task, false); }
+                // 做种中：完成终态不再刷下载进度，但每秒照发帧（上传速率实时展示 + 页面吞吐曲线
+                // 滚动归零——若仅在 upSpeed 变化时发帧，无 peer 静默期页面将冻结在最后下载状态）
+                task._upSpeed = Number(m.up) || 0;
+                this._emit(task, false);
                 return;
             }
             const received = Number(m.received) || 0;

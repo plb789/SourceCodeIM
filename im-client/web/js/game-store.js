@@ -2472,8 +2472,9 @@
         head.appendChild(el('div', 'gs-task-name', taskName(t)));
         if (t.via === 'bt') head.appendChild(el('div', 'gs-task-via', 'BT')); // 下载通道标识
         var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
-        // BT 完成即转做种（最长 12h）：仍有上传流量时状态显示"做种中"并实时展示供速
-        if (t.state === 'done' && t.via === 'bt' && (t.upSpeed || 0) > 0) stText = '做种中';
+        // BT 完成即转做种（最长 12h，任务留在表内期间引擎持续 announce）：状态显示"做种中"，
+        // 上传速率数字实时展示（随 peer 波动归零/恢复，状态文本不随流量抖动切换）
+        if (t.state === 'done' && t.via === 'bt') stText = '做种中';
         head.appendChild(el('div', 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : ''), stText));
         main.appendChild(head);
         if (t.fileRelPath) main.appendChild(el('div', 'gs-task-file', t.fileRelPath));
@@ -2540,6 +2541,8 @@
     }
 
     // 图卡显隐 + 选择器 + 头部即时数值 + 曲线重绘（进度帧/页签切换/刷新均走此入口）
+    // 显隐口径：仅存在活跃任务（下载中/校验中/排队/暂停）时显示——全部完成/出错后整卡隐藏，
+    // 避免"完成后曲线与刻度停留在最后一次状态"的残留感
     function renderDlGraph() {
         var card = $('gsDlGraphCard');
         if (!card) return;
@@ -2551,7 +2554,13 @@
                 if (!a.length || a[a.length - 1].t < Date.now() - DL_GRAPH_WINDOW) delete dlHistTasks[id];
             }
         }
-        if (!ids.length) {
+        // 活跃任务判定：下载中/校验中/排队/暂停（做种/完成/出错不算——不写盘无吞吐可看）
+        var active = false;
+        for (var k = 0; k < ids.length; k++) {
+            var st = state.tasks[ids[k]].state;
+            if (st === 'downloading' || st === 'verifying' || st === 'queued' || st === 'paused') { active = true; break; }
+        }
+        if (!ids.length || !active) {
             card.classList.add('hidden');
             dlGraphSel = '';
             dlGraphSelSig = '';
@@ -2559,6 +2568,11 @@
         }
         if (dlGraphSel && !state.tasks[dlGraphSel]) dlGraphSel = ''; // 选中任务消失回总览
         card.classList.remove('hidden');
+        // 空闲补零：最新样本距今超过 1s（BT 做种静默/暂停后帧停止等场景）时追加虚拟零样本，
+        // 使曲线在 1-2s 内滚动归零，而不是冻结在最后一次绘制的状态（用户实测反馈的残留 bug）
+        var now0 = Date.now();
+        var src = dlGraphSel ? (dlHistTasks[dlGraphSel] || (dlHistTasks[dlGraphSel] = [])) : dlHistAll;
+        if (src.length && now0 - src[src.length - 1].t > 1000) src.push({ t: now0, net: 0, disk: 0 });
         var sig = ids.join('|') + '#' + dlGraphSel;
         if (sig !== dlGraphSelSig) {
             dlGraphSelSig = sig;
@@ -2607,10 +2621,11 @@
         var pad = { l: 0, r: 46, t: 6, b: 4 };
         var iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
         if (iw <= 0 || ih <= 0) return;
-        // 纵轴平滑峰值：升快降慢（每帧最多回落 8%，防样本抖动引起刻度跳动）
+        // 纵轴即时跟随窗口峰值（Steam 同款）：窗口内旧样本滚出后刻度自然回落，无冻结/无残留；
+        // 下限 256KB/s（慢速下载时刻度随之回落，避免停留在上次量级）
         var peak = 0;
         for (var i = 0; i < data.length; i++) { if (data[i].disk > peak) peak = data[i].disk; if (data[i].net > peak) peak = data[i].net; }
-        dlGraphYMax = Math.max(peak, Math.round(dlGraphYMax * 0.92), 1024 * 1024);
+        dlGraphYMax = Math.max(peak, 256 * 1024);
         var yMax = dlGraphYMax;
         // 横向网格 3 条 + 右侧速率刻度
         ctx.font = '10px "Microsoft YaHei",sans-serif';
