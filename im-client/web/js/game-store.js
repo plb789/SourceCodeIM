@@ -2461,29 +2461,41 @@
     }
 
     function buildTaskRow(t) {
+        var g = state.games[t.gameId] || (state.lib[t.gameId] && state.lib[t.gameId].game) || null;
         var row = el('div', 'gs-task');
+        var body = el('div', 'gs-task-body');
+        body.appendChild(buildCover((g && g.cover) || '', taskName(t), 'gs-task-thumb')); // Steam 同款左侧封面缩略
+        var main = el('div', 'gs-task-main');
         var head = el('div', 'gs-task-head');
         head.appendChild(el('div', 'gs-task-name', taskName(t)));
         if (t.via === 'bt') head.appendChild(el('div', 'gs-task-via', 'BT')); // 下载通道标识
         var stText = TASK_STATE_TEXT[t.state] || t.state || '—';
+        // BT 完成即转做种（最长 12h）：仍有上传流量时状态显示"做种中"并实时展示供速
+        if (t.state === 'done' && t.via === 'bt' && (t.upSpeed || 0) > 0) stText = '做种中';
         head.appendChild(el('div', 'gs-task-state' + (t.state === 'done' || t.state === 'error' ? ' gray' : ''), stText));
-        row.appendChild(head);
-        if (t.fileRelPath) row.appendChild(el('div', 'gs-task-file', t.fileRelPath));
+        main.appendChild(head);
+        if (t.fileRelPath) main.appendChild(el('div', 'gs-task-file', t.fileRelPath));
 
         var pct = t.total > 0 ? Math.min(100, (t.received || 0) / t.total * 100) : 0;
         var track = el('div', 'gs-progress');
         var fill = el('div', 'gs-progress-fill');
         fill.style.width = pct.toFixed(1) + '%';
         track.appendChild(fill);
-        row.appendChild(track);
+        main.appendChild(track);
 
         var meta = el('div', 'gs-task-meta');
         meta.appendChild(el('span', '', pct.toFixed(1) + '%'));
         meta.appendChild(el('span', '', fmtSize(t.received) + ' / ' + fmtSize(t.total)));
-        meta.appendChild(el('span', '', '速度 ' + fmtSpeed(t.speed)));
+        if (t.via === 'bt') {
+            // BT 通道下载/上传分示（上传含下载中供速与完成做种供速；做种期下载速率为 0 不再展示）
+            if (t.state !== 'done') meta.appendChild(el('span', '', '下载 ' + fmtSpeed(t.speed)));
+            meta.appendChild(el('span', '', '上传 ' + fmtSpeed(t.upSpeed || 0)));
+        } else {
+            meta.appendChild(el('span', '', '速度 ' + fmtSpeed(t.speed)));
+        }
         meta.appendChild(el('span', '', '剩余 ' + (t.speed > 0 && t.total > 0 ? fmtEta((t.total - t.received) / t.speed) : '—')));
         if (t.state === 'error' && t.error) meta.appendChild(el('span', '', '原因：' + t.error));
-        row.appendChild(meta);
+        main.appendChild(meta);
 
         if (IN_ELECTRON && t.state !== 'done' && t.state !== 'verifying') {
             var acts = el('div', 'gs-task-actions');
@@ -2493,8 +2505,10 @@
                 acts.appendChild(mkBtn('继续', 'primary', function () { taskAction(t.taskId, 'resume'); }));
             }
             acts.appendChild(mkBtn('取消', '', function () { taskAction(t.taskId, 'cancel'); }));
-            row.appendChild(acts);
+            main.appendChild(acts);
         }
+        body.appendChild(main);
+        row.appendChild(body);
         return row;
     }
 
@@ -2539,7 +2553,7 @@
                     };
                     if (t.gameId !== undefined && t.gameId !== null) state.taskByGame[t.gameId] = taskId;
                 }
-                ['name', 'version', 'received', 'total', 'speed', 'state', 'fileRelPath', 'error', 'installDir', 'via'].forEach(function (k) {
+                ['name', 'version', 'received', 'total', 'speed', 'upSpeed', 'state', 'fileRelPath', 'error', 'installDir', 'via'].forEach(function (k) {
                     if (raw[k] !== undefined && raw[k] !== null) t[k] = raw[k];
                 });
             });
@@ -4873,7 +4887,7 @@
             }
             if (p.gameId !== undefined && p.gameId !== null && t.gameId === undefined) t.gameId = p.gameId;
             var prev = t.state;
-            ['received', 'total', 'speed', 'state', 'fileRelPath', 'error'].forEach(function (k) {
+            ['received', 'total', 'speed', 'upSpeed', 'state', 'fileRelPath', 'error'].forEach(function (k) {
                 if (p[k] !== undefined && p[k] !== null) t[k] = p[k];
             });
             // 状态迁移时同步服务端库状态（仅切换帧 PUT，避免每个进度帧打请求）

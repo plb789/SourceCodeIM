@@ -137,6 +137,7 @@ class BtDownloadManager extends EventEmitter {
             task.total = total;
             task.received = 0;
             task._speed = 0;
+            task._upSpeed = 0;
             task._torReady = false;
             task._torPath = this._torPathOf(taskId);
             task._statusDir = this._statusDirOf(taskId);
@@ -157,6 +158,7 @@ class BtDownloadManager extends EventEmitter {
                 received: 0,
                 state: 'queued',
                 _speed: 0,
+                _upSpeed: 0,
                 _lastEmit: 0,
                 _torReady: false,
                 _torPath: this._torPathOf(taskId),
@@ -175,6 +177,7 @@ class BtDownloadManager extends EventEmitter {
         if (task.state === 'downloading' || task.state === 'queued') {
             task.state = 'paused';
             task._speed = 0;
+            task._upSpeed = 0;
             this._send({ cmd: 'pause', id: task.taskId });
             this._emit(task, true); // 暂停终态必发一条
         }
@@ -187,6 +190,7 @@ class BtDownloadManager extends EventEmitter {
         if (task.state === 'paused') {
             task.state = 'downloading';
             task._speed = 0;
+            task._upSpeed = 0;
             this._emit(task, true);
             if (task._torReady) {
                 this._send({ cmd: 'resume', id: task.taskId }); // 引擎侧错误态自动走 ResumeInError
@@ -257,6 +261,7 @@ class BtDownloadManager extends EventEmitter {
             if (task.state !== 'downloading') return; // 取消/暂停竞态
             task.state = 'error';
             task._speed = 0;
+            task._upSpeed = 0;
             self._emit(task, true, (err && err.message) || 'BT 任务启动失败'); // error 必发
         });
     }
@@ -303,6 +308,7 @@ class BtDownloadManager extends EventEmitter {
                             if (t.state === 'downloading' || t.state === 'queued' || t.state === 'verifying') {
                                 t.state = 'error';
                                 t._speed = 0;
+                                t._upSpeed = 0;
                                 self._emit(t, true, 'BT 引擎异常退出');
                             }
                         });
@@ -350,12 +356,18 @@ class BtDownloadManager extends EventEmitter {
         const task = this.tasks.get(id);
         if (!task) return; // 已取消/内部 release 的任务回执：忽略
         if (m.evt === 'progress') {
-            if (task.state === 'done') return; // 做种中：完成态已终态转达，做种进度不再刷页面
+            if (task.state === 'done') {
+                // 做种中：完成终态不再刷下载进度，上传速度仍转发（页面"做种中"实时展示供速）
+                const upSeed = Number(m.up) || 0;
+                if (upSeed !== task._upSpeed) { task._upSpeed = upSeed; this._emit(task, false); }
+                return;
+            }
             const received = Number(m.received) || 0;
             const total = Number(m.total) || task.total;
             task.received = received;
             task.total = total;
             task._speed = Number(m.down) || 0;
+            task._upSpeed = Number(m.up) || 0; // BT 上传速率（给 peer 供速），页面与下载速率分示
             const mapped = mapEngineState(String(m.state || ''));
             if (mapped && task.state !== 'done' && task.state !== 'error') {
                 if (task.state !== mapped) { task.state = mapped; this._emit(task, true); return; }
@@ -385,6 +397,7 @@ class BtDownloadManager extends EventEmitter {
             if (task.state === 'done' || task.state === 'cancelled' || task.state === 'error') return;
             task.state = 'error';
             task._speed = 0;
+            task._upSpeed = 0;
             this._emit(task, true, String(m.error || 'BT 下载失败')); // error 必发
         } else if (m.evt === 'closed') {
             if (this._ignoreClosed.delete(id)) return; // 内部 release 的回执
@@ -393,6 +406,7 @@ class BtDownloadManager extends EventEmitter {
             if (task.state === 'done' || task.state === 'cancelled') return;
             task.state = 'error';
             task._speed = 0;
+            task._upSpeed = 0;
             this._emit(task, true, 'BT 任务挂载失败（' + String(m.error || '未知错误') + '）');
         }
     }
@@ -532,6 +546,7 @@ class BtDownloadManager extends EventEmitter {
             received: task.received,
             total: task.total,
             speed: task._speed,
+            upSpeed: task._upSpeed || 0, // BT 上传速率（HTTP 通道无此字段，页面按 via 区分展示）
             state: stateOverride || task.state,
             fileRelPath: '', // BT 通道引擎不回报单文件粒度，页面展示整体进度
             error: error || null
@@ -549,6 +564,7 @@ class BtDownloadManager extends EventEmitter {
             total: task.total,
             filesCount: task.files.length,
             speed: task._speed,
+            upSpeed: task._upSpeed || 0,
             via: 'bt'
         };
     }
