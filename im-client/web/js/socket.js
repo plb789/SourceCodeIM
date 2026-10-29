@@ -772,6 +772,10 @@
                     localStorage.setItem('vip_mac', (info && info.vip_mac) || '');
                     localStorage.setItem('vip_mask', (info && info.vip_mask) || '');
                     localStorage.setItem('vip_supernodes', JSON.stringify((info && info.vip_supernodes) || []));
+                    // 阶段二百九十六：服务端核实的登录真实外网 IP（realClientIP 解析，经 CDN/反代链路）——
+                    // 游戏中心 BT 下载转做种时经主进程→dlbt-host→DLBT_SetReportIP 向 Tracker 自报，
+                    // 供自建 Tracker 优先采信；空串=服务端未取到，客户端跳过自报走引擎默认来源记录
+                    localStorage.setItem('real_ip', (info && info.real_ip) || '');
                 } catch (eVip) {}
             } catch (e) {}
             // 阶段二百二十五：登录成功后启动原生前台服务（保存凭据+拉起服务，幂等）；

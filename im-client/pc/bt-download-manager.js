@@ -25,6 +25,8 @@ const HOST_READY_TIMEOUT = 15000; // sidecar 启动超时（含 DLBT 内核初�
 const EMIT_INTERVAL = 500;        // 进度节流窗口（ms），与 HTTP 管理器一致
 const QUIT_GRACE = 2000;          // shutdown 时等待引擎优雅退出宽限（超时强杀）
 const ESC_PREFIX = '__x__';       // 种子内转义文件名前缀（与服务端 gametorrent.go torrentEscPrefix 同规）
+const SEED_MAX_MS = 12 * 3600 * 1000; // 做种上限：下载完成后引擎任务保留供种，最长 12h 自动释放；
+                                      // 进程退出即停（引擎 PreShutdown 通知 Tracker Stop），重启不恢复
 
 // 转义名映射（与服务端 gametorrent.go torrentEscName 同规）：rel 含非 ASCII →
 // "__x__"+sha1(utf8(rel)) 前 16 hex。DLBT 引擎落盘时把种子内文件名字节按系统 ANSI 代码页
@@ -80,6 +82,11 @@ class BtDownloadManager extends EventEmitter {
         if (p2sp && !files.length) return { ok: false, error: '参数缺失' };
         const torrentUrl = String((payload && payload.torrentUrl) || '');
         if (!torrentUrl) return { ok: false, error: '种子地址缺失' };
+        // 阶段二百九十六：Tracker 自报 IP（服务端登录回执核实的真实外网地址，socket.js → game-store
+        // 透传）。仅收合法 IPv4（防域名/IPv6/非法串喂引擎），非法或空=跳过自报走引擎默认来源记录
+        const reportIpRaw = String((payload && payload.reportIp) || '').trim();
+        const reportIp = (/^(\d{1,3}\.){3}\d{1,3}$/.test(reportIpRaw) &&
+            reportIpRaw.split('.').every(function (n) { return Number(n) <= 255; })) ? reportIpRaw : '';
         const exist = this.tasks.get(taskId);
         if (exist && exist.state !== 'error' && exist.state !== 'done') {
             return { ok: true, task: this._summary(exist) }; // 进行中（下载/暂停）：幂等
@@ -114,10 +121,12 @@ class BtDownloadManager extends EventEmitter {
         let task;
         if (exist) {
             // 旧任务重置（error 恢复/重复完成重下）：引擎侧旧句柄先释放（保数据，closed 回执忽略），
-            // 元数据一并刷新；引擎按 status 文件续传
+            // 元数据一并刷新；引擎按 status 文件续传。做种中旧任务先撤做种定时器再释放
+            if (exist._seedTimer) { clearTimeout(exist._seedTimer); exist._seedTimer = null; }
             this._ignoreClosed.add(taskId);
             this._send({ cmd: 'cancel', id: taskId, del: 0 });
             task = exist;
+            task.reportIp = reportIp; // Tracker 自报 IP（重置重下场景刷新，可能已重新登录变更）
             task.installDir = engineOut; // 引擎落盘目录（out 透传值）
             task.root = root;
             task.username = String(payload.username || '');
@@ -136,6 +145,7 @@ class BtDownloadManager extends EventEmitter {
                 taskId: taskId,
                 gameId: String(payload.gameId || ''),
                 slug: slug,
+                reportIp: reportIp, // Tracker 自报 IP（合法 IPv4，空=跳过自报）
                 installDir: engineOut, // 引擎落盘目录（out 透传值）
                 root: root,
                 username: String(payload.username || ''),
@@ -192,6 +202,7 @@ class BtDownloadManager extends EventEmitter {
     cancel(taskId) {
         const task = this.tasks.get(String(taskId || ''));
         if (!task) return { ok: false, error: '任务不存在' };
+        if (task._seedTimer) { clearTimeout(task._seedTimer); task._seedTimer = null; }
         task.state = 'cancelled';
         task._speed = 0;
         this._send({ cmd: 'cancel', id: task.taskId, del: 1 });
@@ -238,7 +249,8 @@ class BtDownloadManager extends EventEmitter {
                 self._send({
                     cmd: 'start', id: task.taskId,
                     torrent: task._torPath, out: task.installDir,
-                    status: task._statusDir, http: task.httpUrls
+                    status: task._statusDir, http: task.httpUrls,
+                    report_ip: task.reportIp || '' // 引擎 DLBT_SetReportIP（空=不设置）
                 });
             });
         }).catch(function (err) {
@@ -338,6 +350,7 @@ class BtDownloadManager extends EventEmitter {
         const task = this.tasks.get(id);
         if (!task) return; // 已取消/内部 release 的任务回执：忽略
         if (m.evt === 'progress') {
+            if (task.state === 'done') return; // 做种中：完成态已终态转达，做种进度不再刷页面
             const received = Number(m.received) || 0;
             const total = Number(m.total) || task.total;
             task.received = received;
@@ -360,11 +373,14 @@ class BtDownloadManager extends EventEmitter {
                 installDir: task.root, // BT 安装根（installDir+slug），主进程 exe 探测/注册表归一
                 username: task.username
             });
-            // 释放引擎句柄保数据（closed 回执忽略），status 文件完成即清（taskId 每次尝试唯一，无复用）
-            this._ignoreClosed.add(task.taskId);
-            this._send({ cmd: 'cancel', id: task.taskId, del: 0 });
+            // 完成即转做种：引擎句柄保留（不再立即 cancel），任务在 BTDS_SEEDING 态对外供种，
+            // 引擎按种子内 tracker + DHT 周期 announce 让其他 peer 发现本机；SEED_MAX_MS 到期
+            // 或进程退出（引擎 PreShutdown 通知 Tracker Stop）即停，重启不恢复做种（需求口径）。
+            // 种子文件已加载进引擎内存，磁盘缓存照删；status 文件无保留价值（不跨重启续做种），
+            // 引擎持有句柄时删除失败仅残留（taskId 每次尝试唯一，无复用风险）
             this._safeUnlink(task._torPath);
             this._safeUnlink(path.join(task._statusDir, task.taskId + '.dat'));
+            this._armSeedTimer(task);
         } else if (m.evt === 'error') {
             if (task.state === 'done' || task.state === 'cancelled' || task.state === 'error') return;
             task.state = 'error';
@@ -379,6 +395,23 @@ class BtDownloadManager extends EventEmitter {
             task._speed = 0;
             this._emit(task, true, 'BT 任务挂载失败（' + String(m.error || '未知错误') + '）');
         }
+    }
+
+    // 做种定时：完成后挂 SEED_MAX_MS 到期收口（进程退出定时器不阻止退出）；收口时释放引擎
+    // 句柄（del=0 保数据），任务移出任务表（closed 回执由 _ignoreClosed 挡掉）
+    _armSeedTimer(task) {
+        const self = this;
+        if (task._seedTimer) clearTimeout(task._seedTimer);
+        task._seedTimer = setTimeout(function () { self._releaseSeed(task); }, SEED_MAX_MS);
+        if (task._seedTimer && task._seedTimer.unref) task._seedTimer.unref();
+    }
+
+    _releaseSeed(task) {
+        if (task._seedTimer) { clearTimeout(task._seedTimer); task._seedTimer = null; }
+        if (task.state !== 'done') return; // 仅完成做种态走此收口（取消/重下有各自清理链）
+        this.tasks.delete(task.taskId);
+        this._ignoreClosed.add(task.taskId);
+        this._send({ cmd: 'cancel', id: task.taskId, del: 0 });
     }
 
     // 转义名回真实名：种子内非 ASCII 文件以 __x__<sha1 前 16 hex> 落盘（见 torrentEscName 注释），

@@ -1386,6 +1386,10 @@ func (s *Server) sendLoginResp(c *Client, result string, user model.User) {
 		"vip_mac":        c.vipMAC,
 		"vip_mask":       s.vippool.Mask(),
 		"vip_supernodes": s.vippool.Supernodes(),
+		// 阶段二百九十六：下发登录连接的真实客户端 IP（HandleWS 入口 realClientIP 解析，经 CDN/反代
+		// 链路取真实用户 IP）——客户端 BT 做种时经 DLBT_SetReportIP 向 Tracker 自报该地址，供自建
+		// Tracker 优先采信（公共 Tracker 按 BEP42 忽略跨网段自报，不影响）；空串=客户端跳过自报
+		"real_ip": c.ip,
 	})
 	msg := protocol.Message{
 		MsgType: protocol.MsgTypeLoginResp,

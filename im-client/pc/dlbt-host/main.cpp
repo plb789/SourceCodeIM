@@ -149,11 +149,17 @@ static void pollLoop() {
 }
 
 // start：种子文件(本地路径) + 输出目录 + 状态目录 + P2SP HTTP 源列表 → 引擎任务
+// reportIp：Tracker 自报 IP（服务端登录回执核实的真实外网地址，主进程经 stdio 协议透传）——
+// announce 时引擎以 ip= 参数上报，供自建 Tracker 优先采信（公共 Tracker 按 BEP42 忽略跨网段
+// 自报，不影响）；空串=不设置，走引擎默认行为（Tracker 记录 announce 连接来源）
 static void cmdStart(const std::wstring& id, const std::wstring& torrent,
                      const std::wstring& out, const std::wstring& statusDir,
-                     const std::vector<std::string>& httpUrls) {
+                     const std::vector<std::string>& httpUrls,
+                     const std::string& reportIp) {
     std::lock_guard<std::mutex> lock(g_mtx);
     if (g_tasks.find(id) != g_tasks.end()) { emitLine("{\"evt\":\"log\",\"m\":\"task exists\"}"); return; }
+    // 全局设置在首个任务 start 时刷新即可（引擎内核已启动，幂等）；每次 start 重设同值无害
+    if (!reportIp.empty()) DLBT_SetReportIP(reportIp.c_str());
     CreateDirectoryW(statusDir.c_str(), NULL);
     std::wstring statusFile = statusDir + L"\\" + id + L".dat";
     HANDLE h = DLBT_Downloader_Initialize(
@@ -305,13 +311,14 @@ static void stdinLoop() {
                         jGetStr(line, "id", id);
                         std::wstring wid = utf8ToWide(id);
                         if (cmd == "start") {
-                            std::string torrent, out, status;
+                            std::string torrent, out, status, reportIp;
                             std::vector<std::string> http;
                             jGetStr(line, "torrent", torrent);
                             jGetStr(line, "out", out);
                             jGetStr(line, "status", status);
                             jGetArr(line, "http", http);
-                            cmdStart(wid, utf8ToWide(torrent), utf8ToWide(out), utf8ToWide(status), http);
+                            jGetStr(line, "report_ip", reportIp); // 可选：缺失时保持空串=不自报
+                            cmdStart(wid, utf8ToWide(torrent), utf8ToWide(out), utf8ToWide(status), http, reportIp);
                         } else if (cmd == "pause") cmdPause(wid);
                         else if (cmd == "resume") cmdResume(wid);
                         else if (cmd == "cancel") {
@@ -347,6 +354,11 @@ int main() {
     // extName 传空=不追加扩展名伪装，bUseRandParam=false=不加随机防缓存参数（污染 URL 匹配）。
     // E2E 实测：中文文件名缺此设置会 404 死循环，单 HTTP 会话被阻塞拖垮整任务吞吐（80% 数据丢弃）。
     DLBT_SetP2SPExtName("", false, false);
+
+    // 全局上传限速 2MB/s（接口单位为字节/秒，见 DLBT.h"限速1M请输入1024*1024"）：完成转做种后
+    // 引擎持续对外供种，不限速会占满上行带宽拖慢用户游戏/聊天体验（下载时 BT 通道上传贡献同样
+    // 受此约束，P2SP 下行主力是 HTTP 源，不受影响）
+    DLBT_SetUploadSpeedLimit(2 * 1024 * 1024);
 
     // 内核启动：DHT + UPnP + 局域网发现全开；监听端口 29010-29030（避开 im-server 常用端口段）
     DLBT_KERNEL_START_PARAM param;

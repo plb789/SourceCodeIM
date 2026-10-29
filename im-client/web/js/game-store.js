@@ -2731,6 +2731,10 @@
                 if (viaBt) {
                     // BT/P2SP：主进程下载种子（服务端 /api/game/torrent/{id} 与文件接口同水位鉴权）
                     // 后挂引擎；首次落盘 <installDir>/<slug>/<rel_path>，更新 finalDir 直传沿用游戏根
+                    // 阶段二百九十六：带服务端核实的登录真实外网 IP（socket.js 登录回执落 localStorage），
+                    // 引擎 DLBT_SetReportIP 向 Tracker 自报供自建 Tracker 优先采信；空=跳过走默认来源记录
+                    var reportIp = '';
+                    try { reportIp = localStorage.getItem('real_ip') || ''; } catch (eRip) {}
                     DESKTOP.gameDownload(Object.assign({
                         action: 'start',
                         via: 'bt',
@@ -2742,6 +2746,7 @@
                         torrentUrl: '/api/game/torrent/' + gid + '?version=' + encodeURIComponent(manifest.version || ''),
                         manifestVersion: manifest.version || '', // P2SP 直链源 base URL 构成（路径式鉴权）
                         p2sp: dlMethod === 1, // 仅服务端生成种子方式叠加 P2SP 直链源；上传种子为纯 BT
+                        reportIp: reportIp,
                         files: manifest.files || []
                     }, dirPayload));
                     toast((dlMethod === 2 ? '开始 BT 下载（上传种子）：' : '开始 BT 下载：') + (g.name || ('游戏 #' + gid)));
@@ -3026,6 +3031,7 @@
         var showTimer = null, hideTimer = null;
         var pwVal = '', pwShown = false;
         var vipVal = '';
+        var extVal = '';
         var renderPw = function () {
             var el1 = $('gsCardPw');
             if (!pwVal) { el1.textContent = '—'; return; }
@@ -3043,6 +3049,11 @@
             try { vipVal = localStorage.getItem('vip_ip') || ''; } catch (eVip) { vipVal = ''; }
             $('gsCardVip').textContent = vipVal || '—';
             $('gsCardVipCopy').classList.toggle('hidden', !vipVal);
+            // 外网 IP（服务端登录连接核实的真实客户端地址，socket.js 登录回执落 localStorage；
+            // BT 做种向 Tracker 自报即此值。空=服务端未取到，显示 — 且不出现复制按钮）
+            try { extVal = localStorage.getItem('real_ip') || ''; } catch (eExt) { extVal = ''; }
+            $('gsCardExtIp').textContent = extVal || '—';
+            $('gsCardExtIpCopy').classList.toggle('hidden', !extVal);
             var gid = currentGameId();
             var meta = gid ? gameLaunchMeta(gid) : null;
             var g = gid ? (state.games[gid] || (state.lib[gid] && state.lib[gid].game) || {}) : {};
@@ -3096,6 +3107,8 @@
         $('gsCardPwCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(pwVal); });
         // 虚拟 IP 复制（联机时分享/诊断用）
         $('gsCardVipCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(vipVal); });
+        // 外网 IP 复制（BT 做种诊断/分享用）
+        $('gsCardExtIpCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(extVal); });
     })();
 
     // 运行期间"正在玩"心跳：60s 一次复用 action=start（服务端据此刻入/续期 presence，
