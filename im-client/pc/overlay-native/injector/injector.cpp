@@ -119,15 +119,17 @@ static int LaunchAndInject(int argc, char** argv) {
         // SC:R 实测踩坑（2026-10-28）：CREATE_SUSPENDED 挂起期注入 → 远线程 LoadLibraryW 死锁
         // rc=258（10s 不返回，两次稳定复现）——挂起期主线程未跑加载器初始化，注入连带触发
         // d3d9/shell32 等依赖 DLL 的 DllMain 在远线程上下文初始化，大导入表游戏（StarCraft.exe
-        // 15MB）在此环境死锁；d3d9host 小导入表同路径正常。修复=resume 后延迟注入：游戏自己
-        // 完成加载器初始化（全部依赖就绪）后仅初始化 overlay DLL 自身（Warface 跟随注入同为
-        // 后注入路径已验证）。仍用创建句柄 pi.hProcess（全权限，免 OpenProcess DACL 问题）。
-        // 延迟 2500→800ms（SC:R 二轮实测）：平台反作弊环境对「游戏启动数秒后」的新建 D3D 设备
-        // 请求返回 E_INVALIDARG（D3DKMT 层拦截，探针全程无法自建设备）——越早注入，DLL 探针
-        // 越可能抢在保护激活前建成设备拿到静态虚表
+        // 15MB）在此环境死锁；d3d9host 小导入表同路径正常。
+        // 延迟注入窗口调整（2026-10-30）：2500→800ms 仍存在 Warface 间歇性设备捕获失败——
+        // 游戏该局启动快（文件缓存热）时设备创建抢在探针钩就位之前（注入晚 800ms+探针还需等
+        // d3d9 模块出现），设备已建不重建=无渲染能力→nopanel。修复=resume 后立即注入（50ms
+        // 仅让 resume 生效）：resume 后主线程已开始 loader 初始化，远线程 LoadLibraryW 在
+        // loader lock 上「等待」而非死锁（挂起期死锁是主线程从未启动 init 所致，语义不同），
+        // 注入完成时刻≈依赖就绪，仍远早于设备创建（游戏窗口 ~10s 后）——捕获窗口最大化。
+        // 仍用创建句柄 pi.hProcess（全权限，免 OpenProcess DACL 问题）。
         ResumeThread(pi.hThread);
-        LogLine("launch: resumed, delayed inject in 800ms\r\n");
-        Sleep(800);
+        LogLine("launch: resumed, injecting immediately\r\n");
+        Sleep(50);
         LogLine("launch: injecting %s\r\n", dllA);
         rc = InjectDll(pi.hProcess, dllA);
         if (rc != 0) printf("inject failed rc=%d\n", rc);

@@ -89,6 +89,10 @@ static void* g_rtChain11 = NULL;                    // RTV 所属交换链（链
 
 static IDirect3DDevice9* g_device = NULL;
 static IDirect3DDevice9* g_imguiDev = NULL;  // ImGui DX9 后端当前绑定的设备（呈现设备不一致时自愈重绑）
+static volatile LONG     g_cryGpaHooked = 0; // 引擎 DLL（CryGame）GetProcAddress IAT 钩动态检测标志（InitThread 轮询用）
+static volatile LONG     g_rndGpaHooked = 0; // 渲染器 DLL（CryRenderD3D9）GetProcAddress IAT 钩动态检测标志（真正解析 create9 的模块）
+static HANDLE             g_d3d9LoadEvent = NULL; // d3d9.dll 加载通知事件（LdrRegisterDllNotification 置位——轮询即时唤醒替代盲等）
+static void*              g_ldrNotifCookie = NULL; // LdrRegisterDllNotification 注销句柄
 static HWND              g_gameHwnd = NULL;
 static volatile LONG     g_probeBusy = 0;         // D3D9 探针自建设备进行中（Hooked_CreateDevice 据此不捕获）
 static volatile LONG     g_panelActive = 0;       // 面板显隐（Shift+Tab 切换；未激活零渲染开销）
@@ -226,6 +230,39 @@ static bool HookIATInModule(HMODULE mod, const char* dllName, const char* funcNa
 static bool HookIAT(const char* dllName, const char* funcName, void* hook, void** origOut) {
     int patched = 0;
     return HookIATInModule(GetModuleHandleW(NULL), dllName, funcName, hook, origOut, &patched); // 主 exe
+}
+// 按「槽位当前值」匹配的 IAT 补丁（2026-10-30 Warface 引擎钩静默失效的鲁棒替代）：不依赖 INT
+// 名字解析（bound import/名字节序/描述符差异等任何解析怪癖都绕开）——扫目标 DLL 描述符的
+// FirstThunk，槽位当前值==真函数地址即换为钩。realFunc 由调用方 ::GetProcAddress 取真址。
+static int HookIATByValue(HMODULE mod, const char* dllName, void* realFunc, void* hook, void** origOut) {
+    if (!mod || !realFunc) return 0;
+    BYTE* base = (BYTE*)mod;
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+    DWORD impRva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!impRva) return 0;
+    IMAGE_IMPORT_DESCRIPTOR* desc = (IMAGE_IMPORT_DESCRIPTOR*)(base + impRva);
+    int patched = 0;
+    for (; desc->Name; ++desc) {
+        const char* name = (const char*)(base + desc->Name);
+        if (_stricmp(name, dllName) != 0) continue;
+        IMAGE_THUNK_DATA* first = (IMAGE_THUNK_DATA*)(base + desc->FirstThunk);
+        for (int i = 0; first[i].u1.Function; ++i) {
+            void** slot = (void**)&first[i].u1.Function;
+            if (*slot == hook) continue; // 已是钩
+            if (*slot != realFunc) continue; // 按值匹配：当前值==真函数地址
+            DWORD old = 0;
+            if (!VirtualProtect(slot, sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) continue;
+            if (origOut && !*origOut) *origOut = *slot;
+            *slot = hook;
+            VirtualProtect(slot, sizeof(void*), old, &old);
+            ++patched;
+        }
+        break; // 该 dll 描述符处理完毕
+    }
+    return patched;
 }
 // 全模块 IAT 补丁：渲染器 DLL（CryRenderD3D9 等）才导入 Direct3DCreate9 的游戏（主 exe 导入表无 d3d9 项，
 // 实测 Warface/GameCdonl）——枚举全部已加载模块逐个尝试。返回本次实际补丁数
@@ -2785,6 +2822,22 @@ static void HookSwapChainPresentSlots(IDXGISwapChain* sc) {
     if (!sc || g_swapChainHooked) return;
     IDXGISwapChain1* sc1 = NULL;
     if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&sc1)) && sc1) {
+        // 工厂探针路径（injector 注入游戏，2026-10-30）：无 handoff device——从捕获的链反查
+        // 设备激活 D3D11 链（GetDevice+QI，游戏线程内同步完成；与 handoff 提供的 dev/ctx 等价）
+        if (!g_dev11) {
+            IUnknown* unk = NULL;
+            if (SUCCEEDED(sc1->GetDevice(IID_IUnknown, (void**)&unk)) && unk) {
+                ID3D11Device* dev = NULL;
+                if (SUCCEEDED(unk->QueryInterface(__uuidof(ID3D11Device), (void**)&dev)) && dev) {
+                    ID3D11DeviceContext* ctx = NULL;
+                    dev->GetImmediateContext(&ctx);
+                    g_dev11 = dev;
+                    g_ctx11 = ctx;
+                    LogLine("d3d11 device resolved from captured swapchain (factory-probe path)");
+                }
+                unk->Release();
+            }
+        }
         void** vt = *(void***)sc1;
         DWORD old = 0;
         if (ValidateVtblInModule(vt, 8, 25, "dxgi.dll", "swapchain vtable") && VirtualProtect(&vt[8], sizeof(void*) * 15, PAGE_EXECUTE_READWRITE, &old)) {
@@ -3080,19 +3133,23 @@ static void OverlayHookD3D11DeviceImpl(ID3D11Device* dev, ID3D11DeviceContext* c
         LogLine("d3d11 handoff: QI(IDXGIDevice) FAILED");
     }
     // GetParent 失败兜底（SC:R 实测 GetParent 双失败）：dxgi 虚表是模块级静态表——自建工厂的
-    // 虚表补丁对进程内全部工厂实例（含游戏自己创建的）同等生效，不依赖 GetParent 链
+    // 虚表补丁对进程内全部工厂实例（含游戏自己创建的）同等生效，不依赖 GetParent 链。
+    // 【无条件自建】（2026-10-30 SC:R 回归修复）：工厂探针（InitThread）可能已置 g_factoryHooked
+    // ——原 `if (!g_factoryHooked)` 门禁会跳过本段 → selfFactory=NULL → 下面的探针交换链自证段
+    // （SC:R 的唯一 Present 静态表钩来源）整段被跳过 → 面板吞输入零渲染（实测回归）。本段改为
+    // 无条件自建 selfFactory（HookFactorySwapChainSlots 内部幂等：已钩则跳过重复补丁）
     IDXGIFactory2* selfFactory = NULL;
-    if (!g_factoryHooked) {
+    {
         LogLine("d3d11 handoff: fallback CreateDXGIFactory1 for vtable hook");
         if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory2), (void**)&selfFactory)) && selfFactory) {
             LogLine("d3d11 handoff: self-created factory2 ok");
-            HookFactorySwapChainSlots(selfFactory);
+            if (!g_factoryHooked) HookFactorySwapChainSlots(selfFactory);
         } else {
             IDXGIFactory1* f1 = NULL;
             if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f1)) && f1) {
                 LogLine("d3d11 handoff: self-created factory1 ok");
-                HookFactorySwapChainSlots((IDXGIFactory2*)f1);
-                f1->Release();
+                if (!g_factoryHooked) HookFactorySwapChainSlots((IDXGIFactory2*)f1);
+                selfFactory = (IDXGIFactory2*)f1;
             } else {
                 LogLine("d3d11 handoff: CreateDXGIFactory1 FAILED");
             }
@@ -3470,6 +3527,36 @@ static bool TryHookD3D8(HMODULE d3d8) {
 
 static DWORD WINAPI InitThread(LPVOID) {
     LogLine("hook dll attached");
+    g_cryGpaHooked = false; // 引擎 GPA 钩动态检测标志（InitThread 置 false 供轮询启动；定义见文件头）
+    // 第零步：LdrRegisterDllNotification（2026-10-30 Warface 热启动竞态的最终解）——Warface 的
+    // d3d9.dll 由 loader 作为 CryRenderD3D9 的静态依赖加载（不经任何可钩 IAT），热启动下
+    // 「d3d9 出现→设备创建」<15ms，盲轮询必输。loader 的 DLL 加载通知是**纯注册零篡改面**
+    //（反作弊无法检测 API 注册）：d3d9 映像映射完成的瞬间置事件，轮询线程即时唤醒探针钩
+    //（响应 0-1ms vs 盲等 15ms），抢先于 CryRender init。未公开 API 但 Vista+ 稳定，失败
+    // 静默降级为 15ms 轮询（现状）
+    {
+        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll) {
+            typedef struct { USHORT Len; USHORT Max; PWSTR Buf; } DUW;
+            typedef struct { ULONG Flags; const DUW* Full; const DUW* Base; void* DllBase; ULONG Size; const DUW* FullImg; } LDR_LOADED_NTF;
+            typedef union { LDR_LOADED_NTF Loaded; BYTE pad[64]; } LDR_NOTIF_DATA;
+            typedef void (CALLBACK* PLDR_NOTIF_FN)(ULONG, const LDR_NOTIF_DATA*, void*);
+            typedef ULONG (NTAPI* PFN_LdrRegNotif)(ULONG, PLDR_NOTIF_FN, void*, void**);
+            PFN_LdrRegNotif reg = (PFN_LdrRegNotif)::GetProcAddress(ntdll, "LdrRegisterDllNotification");
+            g_d3d9LoadEvent = CreateEventW(NULL, TRUE, FALSE, NULL); // 手动复位：唤醒后保持（探针钩完复位）
+            if (reg && g_d3d9LoadEvent) {
+                static PLDR_NOTIF_FN s_fn = [](ULONG reason, const LDR_NOTIF_DATA* data, void*) {
+                    if (reason == 1 /*LOADED*/ && data && g_d3d9LoadEvent) {
+                        const DUW* b = data->Loaded.Base;
+                        if (b && b->Buf && b->Len >= 16 && _wcsnicmp(b->Buf, L"d3d9.dll", 4) == 0)
+                            SetEvent(g_d3d9LoadEvent);
+                    }
+                };
+                if (reg(0, s_fn, NULL, &g_ldrNotifCookie) == 0)
+                    LogLine("ldr dll-notification registered (d3d9 load event, zero-poll-latency)");
+            }
+        }
+    }
     // 第一步：挂 LoadLibrary 钩（kernel32 启动即加载，无竞态；此后目标模块加载瞬间即挂钩）
     HookLoadLibraries();
     // 【回滚 2026-10-29】全模块 IAT 补钩（GetProcAddress/LoadLibraryW/A）在进程极早期篡改
@@ -3479,6 +3566,23 @@ static DWORD WINAPI InitThread(LPVOID) {
     // 第二步：查模块表兜底（静态导入游戏：注入时模块已在，LoadLibrary 钩等不到）
     HMODULE d3d9 = GetModuleHandleW(K_D3D9_MODULE);
     if (d3d9) TryHookD3D9(d3d9);
+    // 第二步半：引擎 DLL 定向 GPA 钩（2026-10-30 Warface 交替成败的零竞态路径）——CryEngine
+    // 动态解析 Direct3DCreate9Ex 走引擎 DLL（CryGame.dll）自有 IAT，主 exe 钩覆盖不到。
+    // 定向钩单模块单函数（面积≈此前触雷的全模块方案 1/60，且非极早期），GPA_Map 的 d3d9
+    // shim 即可触达：游戏解析 create9 时返回包装钩，对象创建（纯用户态）即补 slot 16/20——
+    // 游戏「之后」建设备必经钩子（shim 严格发生在游戏拿到对象之前=零竞态，热启动 <63ms
+    // 建设备也覆盖）。若单模块 IAT 补丁触发反作弊（游戏异常），回退本段仅保留时序优化。
+    // 【注意】CryGame.dll 与 d3d9 同为运行时动态加载（attach 后 ~11s 才出现）——启动时
+    // GetModuleHandle 落空（实测 3 连失败根因），钩安装挪进下方 15ms 轮询循环动态检测
+    {
+        HMODULE eng = GetModuleHandleW(L"CryGame.dll");
+        if (eng && !g_origGPA) {
+            void* o = NULL;
+            int n = HookIATInModule(eng, "kernel32.dll", "GetProcAddress", (void*)&Hooked_GetProcAddress, &o, NULL);
+            if (o && !g_origGPA) g_origGPA = (PFN_GetProcAddress_t)o;
+            if (n > 0) LogLine("engine dll (CryGame) GetProcAddress IAT hooked -> d3d9 shim path (early)");
+        }
+    }
 #ifndef _WIN64
     HMODULE d3d8 = GetModuleHandleW(L"d3d8.dll");
     if (d3d8) TryHookD3D8(d3d8);
@@ -3490,8 +3594,83 @@ static DWORD WINAPI InitThread(LPVOID) {
     //（实测 War3+w3plus：探针挂钩后 266ms 即被覆盖，游戏 create8 被吸走），被覆盖则立即重打。
     int probeRetry = 0;
     bool slotLoggedIntact = false;
-    for (DWORD i = 0; i < K_WAIT_MODULE_MS / 50; ++i) {
+    // 轮询粒度 15ms（2026-10-30 Warface 交替成败修复）：d3d9 出现→设备创建的热启动窗口 <63ms，
+    // 50ms 发现粒度会输掉竞态；GetModuleHandleW 轮询极轻，15ms 无感
+    for (DWORD i = 0; i < K_WAIT_MODULE_MS / 15; ++i) {
         if (g_shutdown) return 0;
+#ifdef _WIN64
+        // D3D11 工厂探针（2026-10-30 Warface 渲染 API 随启动环境变化实锤：部分会话主菜单走
+        // D3D11 渲染，d3d9 路线零捕获面=间歇 nopanel）。CreateDXGIFactory1 纯用户态（不建设备，
+        // 反作弊无拦截面——SC:R handoff fallback 已验证可用）→ 钩工厂虚表四槽（dxgi 静态表
+        // 覆盖所有工厂实例）→ 游戏 D3D11 会话建交换链被捕获 → HookSwapChainPresentSlots 内
+        // 从链反查 device 激活完整链（d3d11 factory-probe path）
+        if (!g_factoryHooked && !g_d3d11Ready && !g_swapChainHooked) {
+            HMODULE dxgiMod = GetModuleHandleW(L"dxgi.dll");
+            if (dxgiMod) {
+                typedef HRESULT (WINAPI* PFN_CreateDXGIFactory1_t)(const IID&, void**);
+                PFN_CreateDXGIFactory1_t f = (PFN_CreateDXGIFactory1_t)::GetProcAddress(dxgiMod, "CreateDXGIFactory1");
+                if (f) {
+                    IDXGIFactory2* pf = NULL;
+                    if (SUCCEEDED(f(__uuidof(IDXGIFactory2), (void**)&pf)) && pf) {
+                        HookFactorySwapChainSlots(pf);
+                        pf->Release();
+                        LogLine("d3d11 factory probe hooked (DX11-session capture path)");
+                    }
+                }
+            }
+        }
+#endif
+        // 引擎 DLL 定向 GPA 钩（动态检测）：CryGame.dll 与 d3d9 同为运行时动态加载——
+        // 出现后 15ms 内钩其 GetProcAddress IAT，GPA_Map 的 d3d9 shim 即可触达游戏的
+        // Direct3DCreate9Ex 动态解析（游戏拿到对象前补 slot 16/20=零竞态）
+        if (!g_cryGpaHooked && !g_origPresent) {
+            HMODULE eng = GetModuleHandleW(L"CryGame.dll");
+            if (eng) {
+                // 双法钩 CryGame 的 KERNEL32 导入（GetProcAddress + LoadLibraryW）：
+                // ①名字匹配（HookIATInModule）②按值匹配（HookIATByValue，绕开 INT 名字解析怪癖）
+                // ——带 n 诊断日志（静默失效已实测 3 连，必须可见）
+                void* oG = NULL, *oL = NULL;
+                HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                FARPROC realGPA = k32 ? ::GetProcAddress(k32, "GetProcAddress") : NULL;
+                FARPROC realLLW = k32 ? ::GetProcAddress(k32, "LoadLibraryW") : NULL;
+                int n1 = 0, n2 = 0;
+                if (realGPA) {
+                    n1 = HookIATInModule(eng, "kernel32.dll", "GetProcAddress", (void*)&Hooked_GetProcAddress, &oG, NULL);
+                    if (n1 == 0) n1 = HookIATByValue(eng, "KERNEL32.dll", (void*)realGPA, (void*)&Hooked_GetProcAddress, &oG);
+                }
+                if (realLLW) {
+                    n2 = HookIATInModule(eng, "kernel32.dll", "LoadLibraryW", (void*)&Hooked_LoadLibraryW, &oL, NULL);
+                    if (n2 == 0) n2 = HookIATByValue(eng, "KERNEL32.dll", (void*)realLLW, (void*)&Hooked_LoadLibraryW, &oL);
+                }
+                if (oG && !g_origGPA) g_origGPA = (PFN_GetProcAddress_t)oG;
+                g_cryGpaHooked = true; // 一次性（含 n=0 失败——诊断日志可见后按实情修，不盲试）
+                char lb[128];
+                snprintf(lb, sizeof(lb), "engine dll (CryGame) IAT hook: gpa=%d llw=%d orig=%p", n1, n2, (void*)oG);
+                LogLine(lb);
+            }
+        }
+        // 渲染器 DLL 的 GPA 钩（2026-10-30 二落点）：CryGame 的 IAT 被 CryEngine 运行时自解析
+        // 替换（gpa=0 实锤=反钩设计），但**真正解析 Direct3DCreate9Ex 并建设备的是渲染器
+        // CryRenderD3D9.dll**（dumpbin 证实其导入表含 GetProcAddress）——钩它=解析必经 shim。
+        // 渲染器加载晚于 CryGame（引擎 init 装载插件），同样 15ms 轮询动态检测
+        if (!g_rndGpaHooked && !g_origPresent) {
+            HMODULE rend = GetModuleHandleW(L"CryRenderD3D9.dll");
+            if (rend) {
+                void* oR = NULL;
+                HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                FARPROC realGPA = k32 ? ::GetProcAddress(k32, "GetProcAddress") : NULL;
+                int n1 = 0;
+                if (realGPA) {
+                    n1 = HookIATInModule(rend, "kernel32.dll", "GetProcAddress", (void*)&Hooked_GetProcAddress, &oR, NULL);
+                    if (n1 == 0) n1 = HookIATByValue(rend, "KERNEL32.dll", (void*)realGPA, (void*)&Hooked_GetProcAddress, &oR);
+                }
+                if (oR && !g_origGPA) g_origGPA = (PFN_GetProcAddress_t)oR;
+                g_rndGpaHooked = true;
+                char lb[128];
+                snprintf(lb, sizeof(lb), "renderer dll (CryRenderD3D9) IAT hook: gpa=%d orig=%p", n1, (void*)oR);
+                LogLine(lb);
+            }
+        }
         // SC:R 兜底（2026-10-28 实测）：设备在注入前已建且不重建、探针自建设备被环境拒
         //（E_INVALIDARG）——面板热键正常切换（WndProc 吞输入生效）却画不出任何东西=「隐形面板
         // 吞输入」黑洞。面板呼出 8s 仍无渲染能力（Present 钩未装）则自动收起 + nopanel 上报
@@ -3564,7 +3743,26 @@ static DWORD WINAPI InitThread(LPVOID) {
         // 真游戏永不挂钩（d3d9host 静态导入走注入时模块检查，测试一直正常掩盖了此缺陷）
         HMODULE m9 = GetModuleHandleW(K_D3D9_MODULE);
         if (m9) {
-            if (TryHookD3D9(m9) && g_origD3DCreate9) {
+            // 探针先行（2026-10-30 Warface 交替成败修复）：发现 d3d9 的首迭代立即钩 slot——
+            // TryHookD3D9 的全模块枚举是重负载且排在前面会把首探推迟数十 ms；热启动场景
+            //（连续重开，d3d9 秒加载）设备创建快于 63ms，先后顺序=成败
+            static int s_probeFast = 0;
+            // 【state 2 后停止自建】（2026-10-30 Warface 交替成败深层根因）：探针的失败设备创建
+            // 请求在喂反作弊——累计 25 次（env denies）触发保护升级，**连游戏自己的建设备都被拦**，
+            // 游戏被迫降级 D3D11（内部直调，绕开一切钩）=零捕获。slot 钩上（g_origCreateDevice/Ex
+            // 就位=state 2）后自建尝试已无目的（等游戏建设备即可），立即停止——保护不升级，
+            // 游戏总能建成 D3D9 → 必捕获
+            if (!g_origPresent && !g_origCreateDevice && !g_origCreateDeviceEx &&
+                ((i % 6) == 5 || s_probeFast < 3)) {
+                ++s_probeFast;
+                ProbeHookD3D9DeviceVtable(m9);
+            }
+            if (g_origPresent) break; // 探针挂钩成功（g_origD3DCreate9 保持 NULL 属正常）
+            // 失败缓存（2026-10-30）：hotpatch（x64 无 prologue）/主 exe IAT（静态导入无此项）/
+            // 全模块 IAT（CryEngine 动态解析）三类失败全是确定性的——失败一次即永久失败，
+            // 缓存后不再每迭代重试（全模块枚举重负载会拉长迭代、推迟探针首钩）
+            static bool s_try9Failed = false;
+            if (!s_try9Failed && TryHookD3D9(m9) && g_origD3DCreate9) {
                 // Loader 绑定竞态校验：全模块补丁若落在「依赖已映射、IAT 未绑定完成」窗口内，
                 // 绑定会把槽位覆写回原地址——补上后 300ms×3 次复检，发现丢失立即重补。
                 // 仅全模块 IAT 路径需要（hotpatch/主 exe 路径无此竞态；重补会把 hotpatch 域搞出递归）
@@ -3576,16 +3774,16 @@ static DWORD WINAPI InitThread(LPVOID) {
                 }
                 break;
             }
-            // 探针兜底（M5）：渲染器动态解析 create9 时 IAT 类钩子全部无效（实测 Warface/CryRenderD3D9.dll）——
-            // 自建一次性设备读静态虚表，对已创建的游戏设备同样立即生效。SC:R 追加（2026-10-28）：
-            // CreateDeviceEx 槽双钩（D3D9Ex 路径）+ 状态化返回——create 槽钩上后等待游戏自捕获，
-            // 探针低频重试兜底「设备先于注入存在」场景，日志防刷屏
-            if (!g_origPresent && (i % 6) == 5) {
-                ProbeHookD3D9DeviceVtable(m9);
-            }
+            if (!g_origD3DCreate9) s_try9Failed = true;
             if (g_origPresent) break; // 探针挂钩成功（g_origD3DCreate9 保持 NULL 属正常）
         }
-        Sleep(50);
+        // 等待：d3d9 加载事件即时唤醒（Ldr 通知 0-1ms 响应），无事件时 15ms 盲轮询保底；
+        // 探针钩上（create 槽或 Present 任一就位）即 Reset 回盲等节流（后续重试无需抢时间，
+        // 防事件保持置位导致 0ms 空转）
+        if (g_d3d9LoadEvent) {
+            DWORD w = WaitForSingleObject(g_d3d9LoadEvent, 15);
+            if (w == WAIT_OBJECT_0 && (g_origPresent || g_origCreateDevice || g_origCreateDeviceEx)) ResetEvent(g_d3d9LoadEvent);
+        } else Sleep(15);
     }
     // M5.2 虚表完整性守护：引擎可能建设备后整体替换实例虚表指针（12:33 会话实测 Present 从未被调的头号
     // 嫌疑，w3plus 同款对抗 M3 已有先例）——每 2s 校验实例虚表基址，被换表立即在新表重打 Present/Reset；
