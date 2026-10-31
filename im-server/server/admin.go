@@ -167,6 +167,10 @@ func RegisterAdminRoutes(s *Server) {
 	http.HandleFunc("GET /api/branding", handleBrandingPublicGet)
 	http.HandleFunc("GET /admin/api/branding", s.adminGuard(s.handleAdminBrandingGet))
 	http.HandleFunc("PUT /admin/api/branding", s.adminGuard(s.handleAdminBrandingSave))
+	// 阶段二百九十五扩展：客户端功能开关统一归口（游戏中心/工作台入口显隐后台可配，公开拉取，归口 features.go）
+	http.HandleFunc("GET /api/features", handleFeaturesPublicGet)
+	http.HandleFunc("GET /admin/api/features", s.adminGuard(s.handleAdminFeaturesGet))
+	http.HandleFunc("PUT /admin/api/features", s.adminGuard(s.handleAdminFeaturesSave))
 	// 用户端公开只读拉取（客户端登录后预热缓存，命中白名单的链接免安全确认直接打开）
 	http.HandleFunc("GET /api/link/whitelist", s.handleLinkWhitelistPublic)
 	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）

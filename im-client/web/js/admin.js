@@ -39,7 +39,8 @@
             uploads: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
             agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
             linksec: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z',
-            branding: 'M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 5.24l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z'
+            branding: 'M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 5.24l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z',
+            features: 'M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -274,6 +275,8 @@
             else if (item.dataset.view === 'linksec') { loadLinkWhitelist(); }
             // 阶段二百七十六扩展：进入品牌设置视图拉取当前单位名称
             else if (item.dataset.view === 'branding') { loadBranding(); }
+            // 阶段二百九十五扩展：进入功能开关视图拉取当前开关状态
+            else if (item.dataset.view === 'features') { loadFeatures(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1788,6 +1791,31 @@
             if (!result.ok) { showToast(result.msg || '保存失败'); return; }
             showToast('品牌设置已保存并热生效');
             loadBranding(); // 回读刷新归一值与来源标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    });
+
+    // ===== 功能开关：客户端界面入口显隐统一归口（阶段二百九十五扩展，游戏中心/工作台入口） =====
+    // 读取当前开关状态回填表单（含来源标注）；通用 kv 归口（features.go），新增开关仅需加控件
+    function loadFeatures() {
+        api('GET', '/admin/api/features').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            $('feat-game-center').checked = d.game_center !== false;
+            $('feat-workbench').checked = d.workbench !== false;
+            $('features-source-tip').textContent = d.source === 'override' ? '当前值来源：后台设置（持久化）' : '当前值来源：内置默认全开（后台保存后转为持久化）';
+            $('features-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 保存：全量 bool 集合提交；服务端归一落库 + 内存直更（保存即热生效）
+    $('features-save').addEventListener('click', function () {
+        api('PUT', '/admin/api/features', { game_center: $('feat-game-center').checked, workbench: $('feat-workbench').checked }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            showToast('功能开关已保存并热生效');
+            loadFeatures(); // 回读刷新来源标注
         }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 

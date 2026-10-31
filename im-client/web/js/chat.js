@@ -23854,6 +23854,36 @@
     }
     ensureLinkWhitelist(); // 预热：登录页/主界面加载即拉取，首击链接即有现值判定
 
+    // ===== 客户端功能开关（阶段二百九十五扩展：后台「功能开关」归口 features.go） =====
+    // 游戏中心/工作台等界面入口显隐后台可配：页面加载即拉取（与链接白名单预热同模式），
+    // localStorage 缓存兜底——首绘先按缓存应用（登录页遮罩下不可见，零闪烁），
+    // fetch 返回修正并更新缓存；接口不可达沿用缓存值（首次失败=默认全显示，安全侧：入口可见仅多入口，不可见则功能失联）。
+    // 语义归口：显式 false 才隐藏，undefined/缺字段/旧缓存=显示（向后兼容）
+    function applyUiFeatures(f) {
+        if (!f || typeof f !== 'object') return;
+        var gc = document.getElementById('game-center-btn');
+        if (gc) gc.style.display = f.game_center === false ? 'none' : '';
+        var wb = document.querySelector('.nav-icon.sidebar-tab[data-tab="workbench"]');
+        if (wb) wb.style.display = f.workbench === false ? 'none' : '';
+        // 被隐藏面板若正激活（如刷新前停在工作台且开关已关），切回聊天面板防"空白侧栏"
+        if (f.workbench === false && wb && wb.classList.contains('active')) {
+            var chatTab = document.querySelector('.nav-icon.sidebar-tab[data-tab="chat"]');
+            if (chatTab) chatTab.click();
+        }
+    }
+    (function initUiFeatures() {
+        var cached = null;
+        try { cached = JSON.parse(localStorage.getItem('im_ui_features') || 'null'); } catch (e) { cached = null; }
+        applyUiFeatures(cached); // 缓存优先应用（通常登录页阶段完成，无可见闪烁）
+        fetch('/api/features', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+            var f = d && d.data ? d.data : d; // adminJSON 包装结构 {ok, data:{开关集}}，兼容裸对象
+            if (!f || typeof f !== 'object' || Array.isArray(f)) return;
+            try { localStorage.setItem('im_ui_features', JSON.stringify(f)); } catch (e2) { /* 存储满/隐私模式忽略 */ }
+            applyUiFeatures(f);
+        }).catch(function () { /* 接口不可达沿用缓存值，下次加载重试 */ });
+    })();
+
+
     function openLinkConfirm(url) {
         // 阶段二百七十五：命中白名单直接打开（缓存过期时后台刷新，本击按现值判定，点击零延迟）
         ensureLinkWhitelist();

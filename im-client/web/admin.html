@@ -73,6 +73,7 @@
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
                 <button class="admin-nav-item" data-view="linksec">链接安全</button>
                 <button class="admin-nav-item" data-view="branding">品牌设置</button>
+                <button class="admin-nav-item" data-view="features">功能开关</button>
             </nav>
             <div class="admin-side-foot">
                 <span id="admin-current-user" class="admin-current-user"></span>
@@ -874,6 +875,31 @@
                 <div class="agentset-actions">
                     <button id="branding-save" class="admin-btn primary">保存设置</button>
                     <span class="agentset-sub-tip">展示位：登录页安全接入 · 登录/注册页版权行 · 设置页关于-单位</span>
+                </div>
+            </section>
+
+            <!-- 阶段二百九十五扩展：功能开关（客户端界面入口显隐统一归口，归口服务端 features.go） -->
+            <section id="admin-view-features" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>功能开关</h2>
+                    <span id="features-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">客户端界面入口显隐统一归口：关闭后对应入口在各端隐藏（手机端工作台底栏入口同步隐藏）。保存后立即热生效（无需重启服务端），客户端下次打开/刷新页面时应用；设置持久化保存，重启后保持。勾选=显示入口，取消勾选=隐藏入口。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">界面入口</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="feat-game-center" checked> 游戏中心入口（PC/WEB 左侧栏手柄图标；手机端本就不展示该入口）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <label class="agentset-switch-label"><input type="checkbox" id="feat-workbench" checked> 工作台入口（PC/WEB 左侧栏九宫格图标；手机端底部导航「工作台」同步隐藏）</label>
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-sub-tip" id="features-source-tip"></span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="features-save" class="admin-btn primary">保存设置</button>
+                    <span class="agentset-sub-tip">客户端应用时机：页面加载即拉取（localStorage 缓存兜底），刷新/重开生效</span>
                 </div>
             </section>
 
@@ -1980,7 +2006,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.68"></script>
+    <script src="js/admin.js?v=1.69"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>
