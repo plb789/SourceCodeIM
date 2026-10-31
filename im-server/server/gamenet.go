@@ -226,6 +226,11 @@ func (s *Server) HandleGameRoomSignal(c *Client, msg *protocol.Message) {
 		s.sendError(c, "游戏联机未启用")
 		return
 	}
+	// 阶段二百九十五扩展：后台「功能开关」停用游戏中心时信令层同步拒绝（硬禁用归口 features.go）
+	if !uiFeatureEnabled("game_center") {
+		s.sendError(c, "游戏中心已被管理员停用")
+		return
+	}
 	var p gnRoomSignal
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.Action == "" {
 		s.sendError(c, "游戏房间信令格式错误")
@@ -271,6 +276,11 @@ func (s *Server) HandleGameLobbySignal(c *Client, msg *protocol.Message) {
 		s.sendError(c, "游戏联机未启用")
 		return
 	}
+	// 阶段二百九十五扩展：后台「功能开关」停用游戏中心时信令层同步拒绝（硬禁用归口 features.go）
+	if !uiFeatureEnabled("game_center") {
+		s.sendError(c, "游戏中心已被管理员停用")
+		return
+	}
 	var p gnLobbySignal
 	if err := json.Unmarshal([]byte(msg.Content), &p); err != nil || p.Action == "" {
 		s.sendError(c, "游戏大厅信令格式错误")
@@ -312,6 +322,11 @@ func (s *Server) HandleGameLobbySignal(c *Client, msg *protocol.Message) {
 func (s *Server) HandleGameNetSignal(c *Client, msg *protocol.Message) {
 	if !s.cfg.GameNet.Enabled {
 		s.sendError(c, "游戏联机未启用")
+		return
+	}
+	// 阶段二百九十五扩展：后台「功能开关」停用游戏中心时信令层同步拒绝（硬禁用归口 features.go）
+	if !uiFeatureEnabled("game_center") {
+		s.sendError(c, "游戏中心已被管理员停用")
 		return
 	}
 	var p gnNetSignalPayload

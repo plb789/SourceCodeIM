@@ -42,6 +42,11 @@ func (s *Server) handleGameInviteSend(c *Client, msg *protocol.Message) {
 		s.sendError(c, "游戏联机未启用")
 		return
 	}
+	// 阶段二百九十五扩展：后台「功能开关」停用游戏中心时邀请信令同步拒绝（硬禁用归口 features.go）
+	if !uiFeatureEnabled("game_center") {
+		s.sendError(c, "游戏中心已被管理员停用")
+		return
+	}
 	var p struct {
 		Invite struct {
 			RoomID string `json:"room_id"`

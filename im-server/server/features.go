@@ -11,6 +11,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 
 	"im-server/logger"
@@ -21,10 +22,47 @@ import (
 const uiFeaturesKind = "ui_features"
 
 var (
-	uiFeaturesMu      sync.Mutex
-	uiFeaturesVals    map[string]bool
-	uiFeaturesInited  bool
+	uiFeaturesMu     sync.Mutex
+	uiFeaturesVals   map[string]bool
+	uiFeaturesInited bool
 )
+
+// uiFeatureEnabled 带锁安全读取（HTTP 中间件与 socket 信令层统一归口，防 map 并发读写）：
+// 缺字段/未初始化=true（默认放行；显式 false 才禁用，向后兼容）
+func uiFeatureEnabled(name string) bool {
+	uiFeaturesMu.Lock()
+	uiFeaturesInit()
+	v := uiFeatureOn(name)
+	uiFeaturesMu.Unlock()
+	return v
+}
+
+// FeatureGate HTTP 层硬禁用中间件（阶段二百九十五扩展：包装默认 mux，main.go ListenAndServe 挂载）。
+// 按路径前缀判定功能归属，被后台「功能开关」停用的功能其用户端接口一律 403 拒绝：
+//   - /api/game/*        → game_center（游戏中心全部用户端接口：清单/详情/下载/云存档/评价/积分等 30 条）
+//   - /api/workbench*    → workbench（工作台启用清单下发）
+// 管理端 /admin/api/game*、/admin/api/workbench* 前缀不同不受影响（管理员维护入口保留）；
+// 静态资源（game-store.html 商店页本体）不下发拦截——页面可打开但数据接口全 403，属预期硬禁用效果。
+func FeatureGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		feature := ""
+		switch {
+		case p == "/api/workbench" || strings.HasPrefix(p, "/api/workbench/"):
+			feature = "workbench"
+		case p == "/api/game" || strings.HasPrefix(p, "/api/game/"):
+			feature = "game_center"
+		}
+		if feature != "" && !uiFeatureEnabled(feature) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "msg": "该功能已被管理员停用"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // featurePayload 开关快照（GET 响应与保存回执共用归口）。
 // 新增开关：在此补字段 + 默认 true 即可（kv 全量覆盖存储，无需迁移）

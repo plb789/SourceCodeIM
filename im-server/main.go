@@ -359,7 +359,9 @@ func main() {
 	server.StartShareCleanupLoop()
 
 	logger.Info("IM 服务端启动，监听 %s", cfg.WSAddr)
-	if err := http.ListenAndServe(cfg.WSAddr, nil); err != nil {
+	// 阶段二百九十五扩展：FeatureGate 硬禁用中间件（后台「功能开关」关闭的功能其用户端 HTTP 接口
+	// 按路径前缀 403 拒绝：/api/game/* → game_center、/api/workbench* → workbench；归口 features.go）
+	if err := http.ListenAndServe(cfg.WSAddr, server.FeatureGate(http.DefaultServeMux)); err != nil {
 		logger.Error("服务启动失败: %v", err)
 		os.Exit(1)
 	}
