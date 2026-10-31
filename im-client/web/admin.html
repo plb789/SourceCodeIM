@@ -72,6 +72,7 @@
                 <button class="admin-nav-item" data-view="uploads">聊天附件管理</button>
                 <button class="admin-nav-item" data-view="agentsettings">Agent 设置</button>
                 <button class="admin-nav-item" data-view="linksec">链接安全</button>
+                <button class="admin-nav-item" data-view="branding">品牌设置</button>
             </nav>
             <div class="admin-side-foot">
                 <span id="admin-current-user" class="admin-current-user"></span>
@@ -850,6 +851,29 @@
                 <div class="agentset-actions">
                     <button id="linkwl-save" class="admin-btn primary">保存白名单</button>
                     <span id="linkwl-source-tip" class="agentset-sub-tip"></span>
+                </div>
+            </section>
+
+            <!-- 阶段二百七十六扩展：品牌设置（单位名称后台统一归口，归口服务端 branding.go） -->
+            <section id="admin-view-branding" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>品牌设置</h2>
+                    <span id="branding-status" class="admin-view-tip"></span>
+                </header>
+                <p class="admin-view-tip">单位名称统一归口：客户端登录页「安全接入」、登录/注册页版权行、设置页「关于-单位」等展示位统一显示此处配置的单位名称。保存后立即热生效（无需重启服务端），各客户端下次打开登录/注册页或进入「关于」时拉取新值；设置持久化保存，重启后保持。留空保存表示恢复默认文案。</p>
+                <div class="agentset-group">
+                    <h3 class="agentset-group-title">单位名称</h3>
+                    <div class="agentset-row">
+                        <label class="agentset-label" for="branding-company" title="客户端各品牌展示位统一显示的单位名称；不能含换行，不超过 60 个字符；留空=恢复内置默认文案">单位名称</label>
+                        <input type="text" id="branding-company" class="admin-input" style="flex:1" maxlength="60" placeholder="留空=恢复内置默认文案">
+                    </div>
+                    <div class="agentset-row">
+                        <span class="agentset-sub-tip" id="branding-source-tip"></span>
+                    </div>
+                </div>
+                <div class="agentset-actions">
+                    <button id="branding-save" class="admin-btn primary">保存设置</button>
+                    <span class="agentset-sub-tip">展示位：登录页安全接入 · 登录/注册页版权行 · 设置页关于-单位</span>
                 </div>
             </section>
 
@@ -1956,7 +1980,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.67"></script>
+    <script src="js/admin.js?v=1.68"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

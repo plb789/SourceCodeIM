@@ -163,6 +163,10 @@ func RegisterAdminRoutes(s *Server) {
 	// 阶段二百七十五：链接域名白名单热更设置（命中免安全确认直接打开，归口 linkwhitelist.go）
 	http.HandleFunc("GET /admin/api/link/whitelist", s.adminGuard(s.handleAdminLinkWhitelistGet))
 	http.HandleFunc("PUT /admin/api/link/whitelist", s.adminGuard(s.handleAdminLinkWhitelistSave))
+	// 阶段二百七十六扩展：品牌信息统一归口（单位名称后台可配，客户端登录/注册/关于页公开拉取，归口 branding.go）
+	http.HandleFunc("GET /api/branding", handleBrandingPublicGet)
+	http.HandleFunc("GET /admin/api/branding", s.adminGuard(s.handleAdminBrandingGet))
+	http.HandleFunc("PUT /admin/api/branding", s.adminGuard(s.handleAdminBrandingSave))
 	// 用户端公开只读拉取（客户端登录后预热缓存，命中白名单的链接免安全确认直接打开）
 	http.HandleFunc("GET /api/link/whitelist", s.handleLinkWhitelistPublic)
 	// 阶段一百六十七：文件存储管理（全站文件/回收站/分享统一管理，删除/还原归口 drive.go 引用计数）

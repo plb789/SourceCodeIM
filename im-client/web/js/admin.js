@@ -38,7 +38,8 @@
             fileshares: 'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z',
             uploads: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
             agentsettings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
-            linksec: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z'
+            linksec: 'M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 15l-4-4 1.41-1.41L11 13.17l4.59-4.58L17 10l-6 6z',
+            branding: 'M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 5.24l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z'
         };
         var nav = document.querySelector('.admin-nav');
         if (!nav) return;
@@ -271,6 +272,8 @@
             else if (item.dataset.view === 'drive') { loadDriveBlockExts(); loadDriveEdgeAuth(); loadShareClientDl(); }
             // 阶段二百七十五：进入链接安全视图拉取当前生效白名单
             else if (item.dataset.view === 'linksec') { loadLinkWhitelist(); }
+            // 阶段二百七十六扩展：进入品牌设置视图拉取当前单位名称
+            else if (item.dataset.view === 'branding') { loadBranding(); }
             // 阶段七十八：进入积分管理视图拉取用户积分列表与流水
             else if (item.dataset.view === 'points') { loadPointsUsers(); loadPointsLogs(); }
             // 阶段八十九：进入 MCP 视图拉取服务器列表并启动状态轮询（连接中/断线状态实时可见）
@@ -1761,6 +1764,31 @@
         api('PUT', '/admin/api/share/clientdl', { pc_url: pcUrl, apk_url: apkUrl }).then(function (result) {
             finish(result.ok ? null : (result.msg || '下载链接保存失败'));
         }).catch(function (e) { finish(e.message || '网络异常'); });
+    });
+
+    // ===== 品牌设置：单位名称统一归口（阶段二百七十六扩展，客户端登录/注册/关于页展示位） =====
+    // 读取当前生效单位名称回填表单（含来源标注）；空值回显为空串（placeholder 提示留空=默认）
+    function loadBranding() {
+        api('GET', '/admin/api/branding').then(function (result) {
+            if (!result.ok) {
+                showToast(result.msg || '加载失败');
+                return;
+            }
+            var d = result.data;
+            $('branding-company').value = d.company || ''; // 回显当前生效值；管理员清空再保存即恢复默认
+            $('branding-source-tip').textContent = d.source === 'override' ? '当前值来源：后台设置（持久化）' : '当前值来源：内置默认（后台保存后转为持久化）';
+            $('branding-status').textContent = '';
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
+    }
+
+    // 保存：空串=恢复默认文案；服务端归一（trim/剔换行）后落库 + 内存直更（保存即热生效）
+    $('branding-save').addEventListener('click', function () {
+        var company = $('branding-company').value.trim();
+        api('PUT', '/admin/api/branding', { company: company }).then(function (result) {
+            if (!result.ok) { showToast(result.msg || '保存失败'); return; }
+            showToast('品牌设置已保存并热生效');
+            loadBranding(); // 回读刷新归一值与来源标注
+        }).catch(function (e) { showToast(e.message || '网络异常'); });
     });
 
     // ===== 链接安全：链接域名白名单（阶段二百七十五，命中免安全确认直接打开；保存即热生效 + 持久化） =====

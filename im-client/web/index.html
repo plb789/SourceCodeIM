@@ -7,6 +7,7 @@
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
     <script src="/js/i18n.js?v=3.21"></script>
+    <script src="/js/branding.js?v=1.0"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -132,7 +133,7 @@
                     </div>
                     <div class="login-brand-foot">
                         <p class="login-foot-label">安全接入</p>
-                        <p class="login-foot-links"><span class="login-foot-link">山西梗阳新能源有限公司</span></p>
+                        <p class="login-foot-links"><span class="login-foot-link" id="brand-unit-foot">山西梗阳新能源有限公司</span></p>
                     </div>
                 </div>
             </div>
@@ -191,7 +192,7 @@
                     </div>
                     <p class="login-qr-tip">请使用手机 APP「+」菜单中的「扫一扫」扫描二维码登录</p>
                 </div>
-                <p class="login-form-foot">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
+                <p class="login-form-foot" id="brand-copy">© 2026 即时通讯 · 山西梗阳新能源有限公司</p>
             </div>
         </div>
     </div>
@@ -2056,7 +2057,7 @@
                     </div>
                     <div class="settings-card-row">
                         <span class="settings-card-label">单位</span>
-                        <span class="settings-card-value">山西梗阳新能源有限公司</span>
+                        <span class="settings-card-value" id="brand-unit-about">山西梗阳新能源有限公司</span>
                     </div>
                     <div class="settings-card-row">
                         <span class="settings-card-label">功能阶段</span>
