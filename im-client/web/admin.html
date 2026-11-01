@@ -1454,6 +1454,16 @@
                     <input id="gm-f-launch-exe" class="admin-input" placeholder="启动程序路径（相对安装目录，如 bin/game.exe，可空）" maxlength="255">
                 </div>
                 <input id="gm-f-launch-args" class="admin-input" placeholder="启动参数（可空；占位符：{0}=登录账号，{1}=账号专属密码）" maxlength="1024">
+                <!-- 启动方式与 Steam 模拟：SmartSteamEmu 游戏由客户端写入内置 SmartSteamEmu.ini
+                     （Target/StartIn/账号16位凭证/昵称/头像）后经 Steam.exe loader 拉起；
+                     Steam AppId 供联机大厅匹配（空=0 读游戏目录 steam_appid.txt） -->
+                <div class="gm-form-row">
+                    <select id="gm-f-steamemu" class="admin-input gm-num-input" title="启动方式：直接启动=常规拉起游戏主程序；SmartSteamEmu=经客户端内置 Steam.exe 模拟器启动（steam_api 系游戏免 Steam 运行，每账号独立凭证写入 ini 支持局域网联机）">
+                        <option value="0">直接启动</option>
+                        <option value="1">SmartSteamEmu</option>
+                    </select>
+                    <input id="gm-f-steamappid" class="admin-input" placeholder="Steam AppId（SmartSteamEmu 联机匹配大厅用，纯数字，可空；如 381210）" maxlength="32">
+                </div>
                 <!-- 端口透传转发规则（每行一条：协议:本机端口=远端地址:远端端口）：客户端启动该游戏时
                      自动在本机 127.0.0.1:本机端口 开启监听透传到远端，游戏退出自动关闭；服务端保存时逐条校验 -->
                 <textarea id="gm-f-pf" class="admin-input gm-desc-input" rows="2" placeholder="端口透传转发规则（可空；每行一条——直连：协议:本机端口=远端地址:远端端口，如 tcp:7777=1.2.3.4:7777；网关：g协议:本机端口=网关端口[@网关名]，如 gtcp:7777=18001、gtcp:7777=18001@gw-hz）"></textarea>

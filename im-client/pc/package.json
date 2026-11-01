@@ -105,6 +105,10 @@
         "to": "dlbt-host/dlbt-host.exe"
       },
       {
+        "from": "Steam/",
+        "to": "Steam/"
+      },
+      {
         "from": "dlbt-host/DLBT.dll",
         "to": "dlbt-host/DLBT.dll"
       },

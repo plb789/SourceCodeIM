@@ -5942,6 +5942,9 @@
         $('gm-f-launch-name').value = d ? (d.launch_name || '') : '';
         $('gm-f-launch-exe').value = d ? (d.launch_exe || '') : '';
         $('gm-f-launch-args').value = d ? (d.launch_args || '') : '';
+        // 启动方式与 Steam AppId 回填（steam_emu: 0=直接启动 1=SmartSteamEmu 模拟器）
+        $('gm-f-steamemu').value = d ? String(d.steam_emu === 1 ? 1 : 0) : '0';
+        $('gm-f-steamappid').value = d ? (d.steam_app_id || '') : '';
         // 端口透传转发规则（服务端存 JSON 数组串，表单以「每行一条」文本回填）+ 网关地址簿提示刷新
         $('gm-f-pf').value = gmPortForwardsToText(d ? d.port_forwards : '');
         // 仅写库网关回填（无转发规则游戏的写库归属；options 由 gmLoadGatewayNames 刷新）
@@ -6496,6 +6499,10 @@
             launch_name: $('gm-f-launch-name').value.trim(),
             launch_exe: $('gm-f-launch-exe').value.trim(),
             launch_args: $('gm-f-launch-args').value.trim(),
+            // 启动方式与 Steam AppId（steam_emu=1 时客户端经内置 SmartSteamEmu 启动该游戏；
+            // AppId 纯数字联机匹配用，服务端清洗非法值归空）
+            steam_emu: parseInt($('gm-f-steamemu').value, 10) || 0,
+            steam_app_id: $('gm-f-steamappid').value.trim(),
             // 端口透传转发规则（JSON 数组串，服务端清洗校验；空=不开启转发）
             port_forwards: pfJSON,
             // 仅写库网关（无转发规则游戏的写库归属；空=纯游戏不写库；服务端格式校验）
@@ -6548,6 +6555,9 @@
             launch_name: d.launch_name || '',
             launch_exe: d.launch_exe || '',
             launch_args: d.launch_args || '',
+            // 启动方式/Steam AppId 全量回写（详情含字段）：防上架/下架切换时清空模拟器标记
+            steam_emu: (d.steam_emu === 1 ? 1 : 0),
+            steam_app_id: d.steam_app_id || '',
             // 端口透传转发规则全量回写（详情含字段，JSON 数组串原样透传）：防上架/下架切换时清空
             port_forwards: d.port_forwards || '',
             // 仅写库网关全量回写（详情含字段）：防上架/下架切换时清空仅写库游戏归属

@@ -299,6 +299,10 @@ func gameSummary(g model.Game) map[string]interface{} {
 		"launch_exe":  g.LaunchExe,
 		"launch_name": g.LaunchName,
 		"launch_args": g.LaunchArgs,
+		// 启动方式（0=直接启动[默认] 1=SmartSteamEmu 模拟器）与 Steam AppId（联机大厅匹配，
+		// 空=读游戏目录 steam_appid.txt）——客户端启动时按 steam_emu 分流并写入 SmartSteamEmu.ini
+		"steam_emu":    g.SteamEmu,
+		"steam_app_id": g.SteamAppId,
 		// 端口透传转发规则（JSON 数组串原样下发，客户端启动游戏时自动开启本机监听透传到远端服务器；
 		// 非敏感路由标记，空串=无规则不开启转发）
 		"port_forwards": g.PortForwards,

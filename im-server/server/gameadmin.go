@@ -531,6 +531,10 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 	if g.DownloadMethod != 0 && g.DownloadMethod != 1 && g.DownloadMethod != 2 {
 		g.DownloadMethod = 0 // 下载方式白名单：0=HTTP（默认）1=BT（服务端生成种子）2=BT（上传种子）
 	}
+	if g.SteamEmu != 0 && g.SteamEmu != 1 {
+		g.SteamEmu = 0 // 启动方式白名单：0=直接启动（默认）1=SmartSteamEmu 模拟器
+	}
+	g.SteamAppId = gameSteamAppIdClean(g.SteamAppId)
 	tp, terr := s.gameTorrentPathClean(req.TorrentPath)
 	if terr != nil {
 		adminFail(w, http.StatusBadRequest, terr.Error())
@@ -718,6 +722,10 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	if u.DownloadMethod != 0 && u.DownloadMethod != 1 && u.DownloadMethod != 2 {
 		u.DownloadMethod = 0
 	}
+	if u.SteamEmu != 0 && u.SteamEmu != 1 {
+		u.SteamEmu = 0 // 启动方式白名单（同创建口径）：0=直接启动 1=SmartSteamEmu 模拟器
+	}
+	u.SteamAppId = gameSteamAppIdClean(u.SteamAppId)
 	// 上传种子归口：请求带 torrent_path=新上传文件名；不带则保留库内既有值
 	// （上架/下架切换等全量回写场景不丢种子）；下载方式=2 时必须最终有值
 	tp, terr := s.gameTorrentPathClean(req.TorrentPath)
@@ -795,6 +803,7 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"developer": u.Developer, "publisher": u.Publisher,
 		"price": u.Price, "download_method": u.DownloadMethod, "status": u.Status, "sort": u.Sort,
 		"launch_exe": u.LaunchExe, "launch_name": u.LaunchName, "launch_args": u.LaunchArgs,
+		"steam_emu": u.SteamEmu, "steam_app_id": u.SteamAppId,
 		"port_forwards": u.PortForwards,
 		"dbwrite_gw":    u.DbwriteGw,
 		"save_paths":    u.SavePaths, "save_exclude": u.SaveExclude,
@@ -810,6 +819,21 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	store.DB.First(&g, id)
 	adminJSON(w, gameSummary(g))
+}
+
+// gameSteamAppIdClean Steam 应用 ID 清洗（SmartSteamEmu 联机匹配用）：去空白；仅允许纯数字
+// （Steam AppId 本身即数字串），非法/超长返回空串（=客户端写 0 由 SSE 读游戏目录 steam_appid.txt）
+func gameSteamAppIdClean(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 32 {
+		return ""
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return s
 }
 
 // gamePortsClean 联机端口登记串清洗：逗号/空格分隔 → 去重 + 1024~65535 范围校验 + 升序还原逗号串。

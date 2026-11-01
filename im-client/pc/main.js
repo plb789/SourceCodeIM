@@ -1880,6 +1880,87 @@ function ovReadGamePid(child, cb) {
     setTimeout(function () { finish(0); }, 10000);
 }
 
+// ===== SmartSteamEmu 启动链路（steam_emu=1 游戏） =====
+// 写客户端内置 SmartSteamEmu.ini（Target=游戏主程序 / StartIn=游戏目录 / AppId=管理端配置 /
+// ManualSteamId=账号专属16位凭证（每账号唯一→联机 SteamID 不冲突）/ PersonaName=用户昵称 /
+// AvatarFilename=客户端自带头像）后经 resources\Steam\Steam.exe loader 拉起游戏。
+// ini 为单份全局配置——同机同时只允许一个 SSE 游戏（game:launch 入口拦截，并发启动互相覆盖）。
+// 定位：打包态 resources\Steam；开发态回退源码目录 pc\Steam（同构布局，asar 内无 Steam 天然落空）
+function sseSteamDir() {
+    var res = process.resourcesPath ? path.join(process.resourcesPath, 'Steam') : '';
+    if (res && fs.existsSync(path.join(res, 'Steam.exe'))) return res;
+    return path.join(__dirname, 'Steam');
+}
+
+// sseIniApply 按「节+键」改写 ini 文本：目标节内存在同名键（含被 ;/# 注释的行）→ 原位替换/取消
+// 注释；不存在 → 插到该节末尾（下一个节头前）。仅动目标键，SSEOverlay/联机网络等其余配置原样保留
+function sseIniApply(text, section, key, value) {
+    var lines = text.split(/\r?\n/);
+    var cur = '', secStart = -1, secEnd = lines.length, found = false;
+    for (var i = 0; i < lines.length; i++) {
+        var t = lines[i].trim();
+        var m = /^\[(.+)\]$/.exec(t);
+        if (m) {
+            if (cur === section) { secEnd = i; break; } // 目标节终止于下一个节头
+            cur = m[1];
+            if (cur === section) secStart = i;
+            continue;
+        }
+        if (cur === section && !found) {
+            var km = /^[;#]?\s*([A-Za-z0-9_]+)\s*=/.exec(t);
+            if (km && km[1] === key) { lines[i] = key + ' = ' + value; found = true; }
+        }
+    }
+    if (!found) {
+        if (secStart < 0) return text; // 模板无该节：不创建（目标键均属内置模板既有节）
+        lines.splice(secEnd, 0, key + ' = ' + value);
+    }
+    return lines.join('\n');
+}
+
+// sseWriteIni 读模板 ini（兼容 UTF-8/UTF-16LE，运行时写过后即为 UTF-16LE）→ 逐键改写 →
+// 统一 UTF-16LE（带 BOM）写出：SSE 官方支持 Unicode ini，中文昵称/路径不乱码
+function sseWriteIni(exeFile, startIn, data, steamDir) {
+    var iniPath = path.join(steamDir, 'SmartSteamEmu.ini');
+    var buf = fs.readFileSync(iniPath);
+    var text;
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) text = buf.toString('utf16le').slice(1);
+    else text = buf.toString('utf8').replace(/^\uFEFF/, '');
+    var cred = String((data && data.credential) || '').trim();
+    var appid = String((data && data.steamAppId) || '').replace(/[^0-9]/g, '');
+    // persona 来自用户昵称（用户可控）：剥掉换行防 ini 结构注入（换行后可伪造任意键行），
+    // 再截断到 64 字符防超长行；cred/appid 已按纯数字归口无注入面
+    var persona = String((data && data.persona) || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 64);
+    var avatar = path.join(steamDir, 'SmartSteamEmu', 'Common', 'avatar.png');
+    text = sseIniApply(text, 'Launcher', 'Target', exeFile);
+    text = sseIniApply(text, 'Launcher', 'StartIn', startIn);
+    text = sseIniApply(text, 'Launcher', 'CommandLine', '');
+    text = sseIniApply(text, 'SmartSteamEmu', 'AppId', appid || '0'); // 空=0 读游戏目录 steam_appid.txt
+    // 凭证（账号专属16位密码，服务端 HMAC 派生）为空时退化为 GenerateRandom 保证可玩，联机身份随机
+    text = sseIniApply(text, 'SmartSteamEmu', 'SteamIdGeneration', cred ? 'Manual' : 'GenerateRandom');
+    text = sseIniApply(text, 'SmartSteamEmu', 'ManualSteamId', cred);
+    text = sseIniApply(text, 'SmartSteamEmu', 'PersonaName', persona || 'Player');
+    if (fs.existsSync(avatar)) text = sseIniApply(text, 'SmartSteamEmu', 'AvatarFilename', avatar);
+    fs.writeFileSync(iniPath, Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(text, 'utf16le')]));
+}
+
+// spawnSteamEmuGame 写 ini 后拉起 Steam.exe loader（loader 读同目录 ini；Persist=0 时 loader
+// 随游戏退出而退出——runningGames 挂 loader 进程即可复用 exit 收口/转发关闭/热键注销全链路）。
+// 不走 spawnGameChild：SSE 模式与注入式 Overlay/版本劫持链互斥，天然跳过
+function spawnSteamEmuGame(r, data) {
+    var steamDir = sseSteamDir();
+    var loader = path.join(steamDir, 'Steam.exe');
+    if (!fs.existsSync(loader)) return { ok: false, error: 'SmartSteamEmu 组件缺失（Steam.exe）' };
+    // StartIn 必须用游戏 exe 所在目录（dirname），不能用 installDir——install_path 有「安装根」
+    // 与「游戏目录」两种形态（如 <根>\SoulatStake vs <根>\SoulatStake\Nw\Binaries\Win64），
+    // 用安装根会导致 loader 在错误层级找 Target 启动失败；exe 所在目录同时是游戏的标准工作目录
+    try { sseWriteIni(path.basename(r.exe), path.dirname(r.exe), data, steamDir); }
+    catch (e) { return { ok: false, error: 'SmartSteamEmu.ini 写入失败：' + ((e && e.message) || e) }; }
+    try {
+        return { ok: true, child: spawn(loader, [], { cwd: steamDir, detached: true, stdio: 'ignore' }) };
+    } catch (e) { return { ok: false, error: 'Steam.exe 启动失败：' + ((e && e.message) || e) }; }
+}
+
 // 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
 // spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口。
 // 端口透传转发联动：管理端配置的 portForwards 规则在 spawn 前开启本机监听（任一失败中止启动——
@@ -1909,7 +1990,25 @@ ipcMain.handle('game:launch', async function (event, data) {
             if (!pfRet.ok) return { ok: false, error: '端口转发开启失败：' + (pfRet.err || '未知错误') };
         }
         var cwd = r.installDir || path.dirname(r.exe);
-        var spawned = spawnGameChild(r.exe, args, cwd); // 二期：native 开启时经注入包装器启动（失败自动回退）
+        var spawned;
+        if (data && data.steamEmu === 1) {
+            // SmartSteamEmu 分流：单实例限制（ini 单份全局配置，并发启动互相覆盖）→ 写 ini →
+            // Steam.exe loader 拉起（不走 spawnGameChild，注入/劫持链互斥跳过）。
+            // 失败路径必须先收口端口转发（监听已开启，残留会一直占用端口直到进程退出）
+            var sseBusy = false;
+            runningGames.forEach(function (v) { if (v && v.steamEmu) sseBusy = true; });
+            if (sseBusy) {
+                if (pfRules.length) gameForward.stop(pfTag);
+                return { ok: false, error: '已有 SmartSteamEmu 游戏在运行（模拟器配置为单份，不可并行），请先退出后再启动' };
+            }
+            spawned = spawnSteamEmuGame(r, data);
+            if (!spawned.ok) {
+                if (pfRules.length) gameForward.stop(pfTag);
+                return { ok: false, error: spawned.error };
+            }
+        } else {
+            spawned = spawnGameChild(r.exe, args, cwd); // 二期：native 开启时经注入包装器启动（失败自动回退）
+        }
         var child = spawned.child;
         var startedAt = Date.now();
         var info = { gameId: gameId, startedAt: startedAt };
@@ -1936,7 +2035,7 @@ ipcMain.handle('game:launch', async function (event, data) {
             });
         });
         child.unref();
-        runningGames.set(gameId, { proc: child, startedAt: startedAt });
+        runningGames.set(gameId, { proc: child, startedAt: startedAt, steamEmu: !!(data && data.steamEmu === 1) });
         gameOverlay.onGameStart(gameId, child.pid); // 游戏内 Overlay：热键联动开启（预注册 Shift+Tab + 悬浮窗预热）
         if (spawned.native) ovReadGamePid(child, function (pid) { gameOverlay.onGamePid(gameId, pid); }); // 二期：真实游戏 pid 回读校正（pipe 名依赖）
         gameStartBroadcast(info); // 全窗口广播：商店页即时把该游戏切为"运行中"

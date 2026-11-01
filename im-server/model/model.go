@@ -1000,6 +1000,15 @@ type Game struct {
 	// LaunchArgs 默认启动参数模板：支持 {0}=登录账号 {1}=账号专属16位密码 占位符（启动时替换；
 	// 用户可在库右键"属性"中覆盖）。AutoMigrate 自动加列，存量游戏默认空行为不变
 	LaunchArgs string `gorm:"column:launch_args;type:varchar(1024);default:''" json:"launch_args"`
+	// SteamEmu 启动方式（0=直接启动[默认] 1=SmartSteamEmu 模拟器启动）——1 时客户端不直接 spawn
+	// 游戏主程序，改为写入客户端内置 SmartSteamEmu.ini（Target=游戏主程序 / StartIn=游戏目录 /
+	// ManualSteamId=账号专属16位凭证 / PersonaName=用户昵称 / AvatarFilename=客户端自带头像）后
+	// 经 resources\Steam\Steam.exe loader 拉起游戏（steam_api 系游戏免 Steam 运行 + 局域网联机）。
+	// AutoMigrate 自动加列，存量游戏默认 0 行为不变
+	SteamEmu int8 `gorm:"column:steam_emu;type:tinyint;default:0" json:"steam_emu"`
+	// SteamAppId Steam 应用 ID（SmartSteamEmu 联机按相同 AppId 匹配大厅，管理端录入；纯数字串，
+	// 空=0 由 SSE 读游戏目录 steam_appid.txt）。随摘要下发客户端写入 ini 的 AppId 键
+	SteamAppId string `gorm:"column:steam_app_id;type:varchar(32);default:''" json:"steam_app_id"`
 	// OnlinePortsTCP/OnlinePortsUDP 功能二期：联机端口登记（逗号分隔多端口，如 "6112,6113"）——
 	// 管理端上架时录入该游戏 LAN 联机的 TCP/UDP 监听端口，建房选游戏自动预填（游戏未启动时
 	// 探测不到监听端口的矛盾解法）；开局实测发现的新端口由服务端自动追加去重（管理端手工

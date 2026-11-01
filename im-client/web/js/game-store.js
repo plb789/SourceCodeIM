@@ -19,6 +19,7 @@
         catch (e) { return null; }
     }
     var username = (function () { var a = getAuth(); return (a && a.u) || ''; })();
+    var myNickname = ''; // 当前登录用户昵称（资料接口异步拉取；SmartSteamEmu 启动写 ini 的 PersonaName，空回退账号）
 
     // ==================== 常量 ====================
     var PAGE_SIZE = 24;                                                              // 商店分页大小
@@ -3437,6 +3438,10 @@
             name: g.launch_name || '',
             args: g.launch_args || '',
             password: g.launch_password || (lib && lib.launch_password) || '',
+            // 启动方式与 Steam AppId（管理端上架配置，随摘要/详情下发）：steam_emu=1 时主进程
+            // 写 SmartSteamEmu.ini 后经内置 Steam.exe 拉起；g 兼容摘要/详情/库内旧快照三来源
+            steamEmu: (g.steam_emu === 1 || (state.games[gid] && state.games[gid].steam_emu === 1)) ? 1 : 0,
+            steamAppId: String(g.steam_app_id || (state.games[gid] && state.games[gid].steam_app_id) || ''),
             // 端口透传转发规则（管理端 port_forwards 字段；空=不开启转发零开销直通）
             portForwards: parsePortForwards(g.port_forwards)
         };
@@ -4173,7 +4178,14 @@
                     gameId: gid, username: username, installDir: libDir,
                     launchExe: meta.exe, launchName: meta.name, args: buildLaunchArgs(tpl, gid),
                     portForwards: meta.portForwards, // 端口透传转发规则（主进程 spawn 前开启、游戏退出自动关闭）
-                    gateway: state.gateway // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
+                    gateway: state.gateway, // 远程加密网关配置（gw 规则经网关加密透传；未配置时 gw 规则拒绝）
+                    // SmartSteamEmu 启动（steam_emu=1 生效）：steamAppId 写 ini 的 AppId（空=0 读
+                    // steam_appid.txt）、credential 写 ManualSteamId（与 {1} 占位符同源的账号专属16位
+                    // 凭证，每账号唯一保证联机 SteamID 不冲突）、persona 写 PersonaName（昵称回退账号）
+                    steamEmu: meta.steamEmu,
+                    steamAppId: meta.steamAppId,
+                    credential: meta.password,
+                    persona: myNickname || username
                 };
                 if (exePath) payload.exePath = exePath;
                 return DESKTOP.gameLaunch(payload);
@@ -5236,6 +5248,7 @@
         if (!avEl || !nameEl || !username) return;
         api('GET', '/api/game/me').then(function (res) {
             if (!res.ok || !res.data) return;
+            myNickname = String(res.data.nickname || '').trim(); // SmartSteamEmu 启动 PersonaName 数据源
             nameEl.textContent = res.data.nickname || res.data.username;
             var ch = String(res.data.nickname || res.data.username || '?').charAt(0).toUpperCase();
             if (res.data.avatar) {
