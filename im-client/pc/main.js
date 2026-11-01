@@ -1931,14 +1931,26 @@ function sseWriteIni(exeFile, startIn, data, steamDir) {
     // persona 来自用户昵称（用户可控）：剥掉换行防 ini 结构注入（换行后可伪造任意键行），
     // 再截断到 64 字符防超长行；cred/appid 已按纯数字归口无注入面
     var persona = String((data && data.persona) || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 64);
+    // 16 位游戏凭证 → 合法 SteamID64：SSE 把 ManualSteamId 原样当 SteamID64 用（实测日志大厅
+    // OWNINGID 即原始值），而 SteamID64 合法域自 76561197960265728 起，非标准 16 位值过不了游戏
+    // 联机身份校验。映射算法（确定性）：accountId = 凭证 mod 2^32（16 位数字可能超 Number 安全
+    // 整数，用 BigInt），SteamID64 = 基准 + accountId——每账号+游戏恒定唯一；游戏登录参数 {1}
+    // 占位符仍用原始 16 位凭证，两处互不影响。非纯数字凭证退化为 GenerateRandom
+    var steamId = '';
+    if (/^\d+$/.test(cred)) {
+        try {
+            var acct = BigInt(cred) % 4294967296n;
+            steamId = (76561197960265728n + acct).toString();
+        } catch (e) { steamId = ''; }
+    }
     var avatar = path.join(steamDir, 'SmartSteamEmu', 'Common', 'avatar.png');
     text = sseIniApply(text, 'Launcher', 'Target', exeFile);
     text = sseIniApply(text, 'Launcher', 'StartIn', startIn);
     text = sseIniApply(text, 'Launcher', 'CommandLine', '');
     text = sseIniApply(text, 'SmartSteamEmu', 'AppId', appid || '0'); // 空=0 读游戏目录 steam_appid.txt
-    // 凭证（账号专属16位密码，服务端 HMAC 派生）为空时退化为 GenerateRandom 保证可玩，联机身份随机
-    text = sseIniApply(text, 'SmartSteamEmu', 'SteamIdGeneration', cred ? 'Manual' : 'GenerateRandom');
-    text = sseIniApply(text, 'SmartSteamEmu', 'ManualSteamId', cred);
+    // 凭证为空/非数字时退化为 GenerateRandom 保证可玩，联机身份随机
+    text = sseIniApply(text, 'SmartSteamEmu', 'SteamIdGeneration', steamId ? 'Manual' : 'GenerateRandom');
+    text = sseIniApply(text, 'SmartSteamEmu', 'ManualSteamId', steamId);
     text = sseIniApply(text, 'SmartSteamEmu', 'PersonaName', persona || 'Player');
     if (fs.existsSync(avatar)) text = sseIniApply(text, 'SmartSteamEmu', 'AvatarFilename', avatar);
     fs.writeFileSync(iniPath, Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(text, 'utf16le')]));
