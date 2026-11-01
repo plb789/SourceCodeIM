@@ -180,11 +180,11 @@ function destroyNotifyWindow() {
     notifyBuf = [];
     if (notifyFlushTimer) { clearInterval(notifyFlushTimer); notifyFlushTimer = null; }
 }
-// 右下角定位：游戏所在显示器 bounds 内缩 12px（复用面板窗的显示器解析结果，副屏自动跟随）
+// 右下角定位：游戏所在显示器 workArea 内缩 12px（复用面板窗的显示器解析结果，副屏自动跟随）
 function positionNotifyWindow() {
     if (!notifyWin || notifyWin.isDestroyed() || !gameDisplay) return;
     try {
-        var b = gameDisplay.bounds;
+        var b = gameDisplay.workArea || gameDisplay.bounds; // workArea 扣除任务栏：窗口化游戏/桌面态 toast 不被任务栏遮住下半截（实测 2026-11-01）
         notifyWin.setBounds({
             x: b.x + b.width - 320 - 12,
             y: b.y + b.height - 660 - 12,
@@ -750,7 +750,9 @@ function disarmHotkey(force) {
     if (hotkeyRegistered) { try { globalShortcut.unregister(settings.hotkey); } catch (e) { } }
     hotkeyRegistered = false;
     if (overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()) hideOverlay(false); // 游戏全退收面板
-    if (notifyWin && !notifyWin.isDestroyed() && notifyWin.isVisible()) notifyWin.hide(); // 通知窗随游戏退出隐藏（保留页面状态）
+    destroyNotifyWindow(); // 通知窗随游戏退出销毁（原仅隐藏：窗口存活期间继续接收私聊镜像，
+    // notify:visible 无游戏运行守卫 → 未运行游戏也在桌面右下角弹 toast，实测 2026-11-01；
+    // 下次 onGameStart 经 armHotkey 重新预热，页面状态无需保留）
     broadcastState();
 }
 // main.js 广播函数挂接口（info.pid 由 game/local launch 处附带）
@@ -897,6 +899,7 @@ function init(opts) {
         try {
             if (!notifyReady) { notifyReady = true; flushNotifyBuf(); } // 首次请求=页面监听器已注册：标记就绪并补投冷启动缓存
             if (nativePanelActive) return; // M5.5：帧内渲染生效期通知由 DLL 帧内 toast 承接，屏外通知窗停用
+            if (!games.size) return; // 游戏运行守卫：无游戏时窗口不应显示（onGameExit 漏报等残留态兜底，防桌面态弹游戏内 toast）
             if (!notifyWin || notifyWin.isDestroyed()) return;
             if (on) { positionNotifyWindow(); notifyWin.showInactive(); }
             else if (notifyWin.isVisible()) notifyWin.hide();
