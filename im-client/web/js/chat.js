@@ -5248,7 +5248,10 @@
         return false;
     }
     window.addEventListener('dragover', function (e) {
-        if (dragHasFiles(e)) e.preventDefault();
+        // 一律阻止默认（原实现仅拦 Files 类型）：QQ/微信等非标准拖拽源的 dataTransfer.types
+        // 可能不含 'files'，漏拦即出现禁止光标且 drop 不触发（实测 2026-11-01）；
+        // preventDefault 仅表示"允许落放"，文本拖入 textarea 的插入由 drop 默认行为完成不受影响
+        e.preventDefault();
     });
     window.addEventListener('drop', function (e) {
         if (dragHasFiles(e)) e.preventDefault();
@@ -7128,12 +7131,19 @@
     var recShortcutLabel = 'Ctrl+Alt+R';
     if (window.desktop && window.desktop.recShortcut) {
         window.desktop.recShortcut().then(function (label) {
-            if (typeof label === 'string') recShortcutLabel = label;
+            // 空串不采纳：启动竞态下拉取可能早于主进程注册（实测 2026-11-01，菜单热键文案因此整段
+            // 隐藏），保持默认文案，注册就绪后主进程经 onRecShortcutLabel 推送真实键位（含空=无全局键）
+            if (label) recShortcutLabel = label;
         }).catch(function () { /* 取失败保持默认文案 */ });
+    }
+    if (window.desktop && window.desktop.onRecShortcutLabel) {
+        window.desktop.onRecShortcutLabel(function (label) {
+            if (typeof label === 'string') recShortcutLabel = label; // 注册就绪/变更推送，菜单每次打开按此渲染
+        });
     }
 
     // 拿全屏屏幕流（录屏/长截图共用）：主进程给屏幕源 id → getUserMedia desktop 源（无系统共享弹窗）
-    function getDesktopStream() {
+    function getDesktopStream(retried) {
         return window.desktop.recSource().then(function (sourceId) {
             if (!sourceId) throw new Error(I18N.t('未找到屏幕源'));
             var dpr = window.devicePixelRatio || 1;
@@ -7148,6 +7158,12 @@
                         maxFrameRate: 30
                     }
                 }
+            }).catch(function (err) {
+                // 重取源 id 重试一次（源 id 失效/捕获器首次启动竞态的常见兜底，实测 2026-11-01）
+                if (retried) throw err;
+                return new Promise(function (r) { setTimeout(r, 300); }).then(function () {
+                    return getDesktopStream(true);
+                });
             });
         });
     }
@@ -7192,7 +7208,10 @@
                 startRecRecorder();
             };
         }).catch(function (e) {
-            showToast(I18N.t('录屏启动失败') + (e && e.message ? I18N.t('：') + e.message : ''));
+            // 错误名一并展示（TrackStartError/NotAllowedError 等定位捕获链路用）；落盘日志供远程排查
+            var detail = (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : '');
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('录屏取流失败: ' + detail);
+            showToast(I18N.t('录屏启动失败') + (detail ? I18N.t('：') + detail : ''));
             recCleanup();
             window.desktop.recShow();
         });
@@ -7838,11 +7857,36 @@
 
     // ===== 阶段三十七（第三期）：Alt+A 全局快捷键抓屏结果（Electron 主进程 globalShortcut 推送） =====
     // 微信同款：任意界面按 Alt+A 静默抓屏进入截图编辑器；未登录丢弃、编辑器已开不重复进入
+    if (window.desktop && window.desktop.onMainToast) {
+        window.desktop.onMainToast(function (text) {
+            showToast(text); // 主进程侧失败反馈（全局截图失败等无窗口场景）
+        });
+    }
+    // 截图快捷键标签同步（Alt+A 被微信等占用回退 Alt+Q 时悬停提示跟随实际键位；拉取容错同录屏键位）
+    if (window.desktop && window.desktop.shotShortcut) {
+        window.desktop.shotShortcut().then(function (label) {
+            if (label) applyShotShortcutLabel(label);
+        }).catch(function () { });
+    }
+    if (window.desktop && window.desktop.onShotShortcutLabel) {
+        window.desktop.onShotShortcutLabel(function (label) {
+            if (typeof label === 'string') applyShotShortcutLabel(label);
+        });
+    }
+    function applyShotShortcutLabel(label) {
+        var btn = document.getElementById('screenshot-btn');
+        if (btn && label) btn.title = I18N.t('截图发送') + ' (' + label + ')';
+    }
     if (window.desktop && window.desktop.onGlobalShot) {
         window.desktop.onGlobalShot(function (dataUrl) {
-            if (!IMSocket.isConnected()) return; // 未登录不响应
-            if (stitchState.active) return; // 长截图进行中不响应（窗口已是悬浮小条，冻结态冲突）
-            if (editorWinBusy) return; // 独立编辑器窗口打开中不重复进入
+            // 早退丢弃快照必须通知主进程恢复主窗口——抓屏时主窗口已被移出屏幕，不通知则窗口
+            // 滞留屏幕外"找不回"（实测 2026-11-01 最小化态丢窗口事故同源）
+            var drop = function () {
+                if (window.desktop && window.desktop.shotGlobalDiscard) window.desktop.shotGlobalDiscard();
+            };
+            if (!IMSocket.isConnected()) { drop(); return; } // 未登录不响应
+            if (stitchState.active) { drop(); return; } // 长截图进行中不响应（窗口已是悬浮小条，冻结态冲突）
+            if (editorWinBusy) { drop(); return; } // 独立编辑器窗口打开中不重复进入
             openShotEditor(dataUrl); // 阶段一百四十：dataURL 直送独立编辑器窗口（原 dataUrlToBlob 后主窗体内开编辑器）
         });
     }

@@ -42,6 +42,33 @@ const execFileP = require('util').promisify(require('child_process').execFile);
 // require 链/窗口创建/启动同步/各管理器初始化的耗时占比；BOOT_T0 在首个 require 前取值
 console.log('[BOOT] require 链完成 +' + (Date.now() - BOOT_T0) + 'ms');
 
+// 阶段二百九十四：主进程运行日志（userData/main.log，128KB 自动截断）——提权/打包形态 stdout
+// 不可见（elevator.exe 启动无控制台），启动里程碑/快捷键注册/抓屏失败等关键事件落文件供远程排查
+function mainLog(text) {
+    try {
+        const p = path.join(app.getPath('userData'), 'main.log');
+        let line = new Date().toLocaleString('zh-CN', { hour12: false }) + ' ' + text + '\n';
+        try {
+            const st = fs.statSync(p);
+            if (st.size > 128 * 1024) line = new Date().toLocaleString('zh-CN', { hour12: false }) + ' [日志超限，以下为新一段]\n' + line;
+        } catch (e) { /* 首次写入文件不存在 */ }
+        fs.appendFileSync(p, line);
+    } catch (e) { /* 日志失败不外抛 */ }
+}
+// 渲染层日志转发（录屏/截图失败等渲染层错误经此落同一文件，排查链路全貌）
+ipcMain.on('client:log', function (e, text) {
+    mainLog('[renderer] ' + String(text == null ? '' : text));
+});
+// 渲染层丢弃全局快照通知（未登录/编辑器占用/长截图进行中等早退场景）——抓屏时主窗口已被移出
+// 屏幕且 shotSavedBounds 待恢复，渲染层若不消费快照必须通知主进程恢复，否则窗口滞留屏幕外"找不回"
+ipcMain.on('shot:global-discard', function () {
+    mainLog('[capture] 渲染层丢弃快照（未登录/编辑器占用/长截图进行中），恢复主窗口');
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    restoreShotHiddenWindow(true);
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+});
+
 // 阶段二百八十七：Win32 最小化兜底（koffi FFI，缺失/加载失败时静默降级为纯 Electron minimize）
 // 背景：Electron 44 实测 BrowserWindow.minimize() 在游戏中心窗（frame:false + show:false 创建）
 // 只置 aura 层内部状态（isMinimized() 返回 true 假象），Win32 层 IsIconic 恒 false 窗口不动；
@@ -82,6 +109,93 @@ function winMinimizeReliable(w) {
             }
         } catch (err) { /* 兜底链路异常不外抛 */ }
     }, 150);
+}
+
+// 阶段二百九十四：GDI 抓屏兜底（koffi BitBlt 主屏 → BGRA → nativeImage）——desktopCapturer 缩略图
+// 依赖 Chromium 捕获栈（WGC/DXGI），在管理员提权进程下可能整体失效（实测 2026-11-01：提权后
+// getSources 缩略图为空 → 截图/录屏全挂）。GDI GetDC(NULL)+BitBlt 走窗口管理器屏幕 DC，提权进程
+// 可靠可用。仅作空缩略图时的回退路径，koffi 缺失/失败返回 null 由调用侧走既有失败分支
+let _gdiCaptureFn = null; // 惰性初始化
+function gdiCaptureOf() {
+    if (_gdiCaptureFn !== null) return _gdiCaptureFn;
+    _gdiCaptureFn = null;
+    try {
+        const koffi = require('koffi');
+        const user32 = koffi.load('user32.dll');
+        const gdi32 = koffi.load('gdi32.dll');
+        const getDc = user32.func('void* __stdcall GetDC(void* hWnd)');
+        const releaseDc = user32.func('int32 __stdcall ReleaseDC(void* hWnd, void* hdc)');
+        const createCompatibleDc = gdi32.func('void* __stdcall CreateCompatibleDC(void* hdc)');
+        const createCompatibleBitmap = gdi32.func('void* __stdcall CreateCompatibleBitmap(void* hdc, int32 w, int32 h)');
+        const selectObject = gdi32.func('void* __stdcall SelectObject(void* hdc, void* obj)');
+        const deleteObject = gdi32.func('bool __stdcall DeleteObject(void* obj)');
+        const deleteDc = gdi32.func('bool __stdcall DeleteDC(void* hdc)');
+        const bitBlt = gdi32.func('bool __stdcall BitBlt(void* dst, int32 dx, int32 dy, int32 w, int32 h, void* src, int32 sx, int32 sy, uint32 rop)');
+        const getDIBits = gdi32.func('int32 __stdcall GetDIBits(void* hdc, void* hbmp, uint32 start, uint32 lines, void* bits, void* lpbi, uint32 usage)');
+        const { nativeImage, screen } = require('electron');
+        _gdiCaptureFn = function () {
+            const display = screen.getPrimaryDisplay();
+            const w = Math.max(1, Math.round(display.size.width * display.scaleFactor));
+            const h = Math.max(1, Math.round(display.size.height * display.scaleFactor));
+            const screenDc = getDc(null);
+            if (!screenDc) return null;
+            let memDc = null, bmp = null, old = null;
+            try {
+                memDc = createCompatibleDc(screenDc);
+                if (!memDc) return null;
+                bmp = createCompatibleBitmap(screenDc, w, h);
+                if (!bmp) return null;
+                old = selectObject(memDc, bmp);
+                // SRCCOPY|CAPTUREBLT：含分层窗口（CAPTUREBLT 单用会闪光标，组合为抓屏惯例）
+                if (!bitBlt(memDc, 0, 0, w, h, screenDc, 0, 0, 0x00CC0020 | 0x40000000)) return null;
+                // GetDIBits 硬性要求：目标位图不得选中在任何 DC 中（微软文档明确）——必须先摘下
+                // 位图再取像素，否则恒返 0（实测 2026-11-01：未摘除导致 GDI 兜底整体失效）
+                selectObject(memDc, old);
+                old = null;
+                // BITMAPINFOHEADER（40 字节，biHeight 取负 = 自上而下行序）+ 4 字节调色板占位
+                const bi = Buffer.alloc(44);
+                bi.writeUInt32LE(40, 0);
+                bi.writeInt32LE(w, 4);
+                bi.writeInt32LE(-h, 8); // 负高：top-down（nativeImage.createFromBitmap 要求自上而下）
+                bi.writeUInt16LE(1, 12); // biPlanes
+                bi.writeUInt16LE(32, 14); // biBitCount
+                const pixels = Buffer.alloc(w * h * 4);
+                if (getDIBits(memDc, bmp, 0, h, pixels, bi, 0 /* DIB_RGB_COLORS */) !== h) return null;
+                return nativeImage.createFromBitmap(pixels, { width: w, height: h });
+            } finally {
+                try { if (old) selectObject(memDc, old); } catch (e) { }
+                try { if (bmp) deleteObject(bmp); } catch (e) { }
+                try { if (memDc) deleteDc(memDc); } catch (e) { }
+                try { releaseDc(null, screenDc); } catch (e) { }
+            }
+        };
+    } catch (err) { /* koffi 缺失/加载失败：保持 null，调用侧走既有失败分支 */ }
+    return _gdiCaptureFn;
+}
+
+// 阶段二百九十四：提权运行放行拖放（UIPI 消息过滤）——客户端经 elevator.exe 以管理员运行时，
+// Windows UIPI 默认拦截低权限资源管理器向高权限窗口的拖放消息（拖到聊天框显示禁止光标，
+// 实测 2026-11-01）。微软文档口径：提权进程对 WM_DROPFILES(0x233)/WM_COPYGLOBALDATA(0x0049)/
+// WM_COPYDATA(0x004A) 调 ChangeWindowMessageFilterEx(MSGFLT_ALLOW) 即可接收低权限拖放；
+// 非提权运行调用无副作用（消息过滤仅对高完整性进程生效），故无条件执行。koffi 缺失/失败静默
+// 跳过（行为退回系统默认=拖放被拦，不影响其他功能）
+function allowElevatedDragDrop(w) {
+    if (!w || w.isDestroyed() || process.platform !== 'win32') return;
+    try {
+        const koffi = require('koffi');
+        const user32 = koffi.load('user32.dll');
+        const changeFilter = user32.func('bool __stdcall ChangeWindowMessageFilterEx(int64 hWnd, uint32 message, uint32 action, void* pChangeFilter)');
+        // 进程级归口（legacy API）：Chromium 的 OLE 放落目标注册在渲染子窗口 HWND 上，仅对顶层
+        // 窗口调 Ex 版可能覆盖不到，进程级一并放行保证子窗口同样生效（两 API 均微软文档口径）
+        const changeFilterProc = user32.func('bool __stdcall ChangeWindowMessageFilter(uint32 message, uint32 dwFlag)');
+        const buf = w.getNativeWindowHandle();
+        if (!buf || !buf.length) return;
+        const hwnd = buf.length >= 8 ? buf.readBigInt64LE(0) : BigInt(buf.readUInt32LE(0));
+        [0x233, 0x0049, 0x004A].forEach(function (msg) {
+            try { changeFilter(hwnd, msg, 1 /* MSGFLT_ALLOW */, null); } catch (e) { }
+            try { changeFilterProc(msg, 1 /* MSGFLT_ALLOW */); } catch (e) { }
+        });
+    } catch (err) { /* koffi 缺失/加载失败：保持系统默认（拖放被拦），不外抛 */ }
 }
 
 // 阶段一百六十四：主进程全局异常兜底——未捕获异常/未处理 Promise 拒绝一律记日志，不弹模态框
@@ -174,7 +288,12 @@ if (!singleInstanceAllowed) {
 // 阶段四十五：禁用 Windows Fluent/Overlay 悬浮滚动条特性——新 Chromium 在滚轮滚动时会浮现原生悬浮滚动条，
 // 且该特性无视页面 ::-webkit-scrollbar 自定义样式，与自绘悬浮滑块叠加出现"同一条轨道两条滚动条"。
 // 禁用后原生滚动条完全由页面 CSS 控制（宽度归零），仅保留自绘滑块
-app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar,OverlayScrollbars');
+// 阶段二百九十四：并禁 WGC 屏幕捕获（AllowWgcDesktopCapturer，旧名 WgcDesktopCapturer 一并列入，
+// 未知特性名 Chromium 自动忽略）——Electron 44 屏幕捕获默认走 Windows.Graphics.Capture，其在
+// 管理员提权进程中创建捕获会话失败（实测 2026-11-01：elevator.exe 提权运行后录屏 getUserMedia
+// 报 "Could not start video source"）。禁用后回落 DXGI Desktop Duplication，提权/非提权均可用。
+// 注意 disable-features 同名开关后者覆盖前者，新增特性必须合并进本条而非再 append 一次
+app.commandLine.appendSwitch('disable-features', 'FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar,OverlayScrollbars,AllowWgcDesktopCapturer,WgcDesktopCapturer');
 
 // 阶段二百六十四：Chromium HTTP 磁盘缓存上限 + 启动期超限自愈（用户反馈：userData 缓存涨到 3G
 // 后操作页面容易卡）——默认会话资源经 web-cache 拦截后，动态路径与外部主机请求由 net.fetch 透传
@@ -504,6 +623,7 @@ function createWindow() {
     // 原实现：mainWindow.loadURL(webCache.pageUrl('/'))（app:// 方案，实测导航稳定性问题后回退）
     // 更早原实现：mainWindow.loadURL(SERVER_URL)（每个静态资源都经服务端 no-cache 回源校验，页面打开慢）
     mainWindow.loadURL(SERVER_URL);
+    allowElevatedDragDrop(mainWindow); // 阶段二百九十四：提权运行放行低权限 Explorer 拖放（UIPI 消息过滤，见函数注释）
 
     // 阶段一百五十四：启动闪屏已提前至 whenReady 最前（createSplash，data URL 加载零导航开销——
     // 原实现：闪屏在 createWindow 内经 http 拦截加载 splash.html，导航期间露出灰黑背景色，即
@@ -667,10 +787,18 @@ function fetchAvatarImage(rawUrl, cb) {
     try { req.end(); } catch (e) { clearTimeout(timer); once(null); }
 }
 
+// 主进程主动推渲染层 toast（全局截图失败等无窗口/无自绘 UI 场景的失败反馈；渲染层经 onMainToast 接收）
+function pushMainToast(text) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.send('main:toast', text); } catch (e) { }
+    }
+}
+
 // 桌面通知（供新消息提醒）；阶段一百九十四：通知点击 → 聚焦窗口 + 通知渲染层（渲染层
 // 按 agentNotifyTarget 直达任务归属会话，与 Web 端 Toast 点击行为一致）
 // avatarUrl：好友头像地址（有则下载作通知大图，缺失/失败回退应用图标 64.ico）
-function showNotification(title, body, avatarUrl) {
+// onClick：自定义点击回调（录屏通知=停止录制）；缺省走聚焦主窗口+desktop-notify-click 通用路径
+function showNotification(title, body, avatarUrl, onClick) {
     if (!Notification.isSupported()) return;
     function present(icon) {
         var opts = { title: title, body: body };
@@ -683,7 +811,10 @@ function showNotification(title, body, avatarUrl) {
         }
         var n = new Notification(opts);
         n.on('click', function () {
-            var win = BrowserWindow.getAllWindows()[0];
+            if (onClick) { try { onClick(); } catch (e) { } return; }
+            // 主窗口直取引用（原实现 getAllWindows()[0] 按创建序取首窗：新增编辑器预热窗/录制悬浮条/
+            // 游戏通知窗后不再保证首窗即主窗口，通知点击可能聚焦错窗）
+            var win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
             if (win) {
                 if (win.isMinimized()) win.restore();
                 win.show();
@@ -725,6 +856,19 @@ ipcMain.handle('titlebar:overlay', function (event, colors) {
 // 抓取主屏全分辨率画面并转为 dataURL（desktopCapturer 无系统共享弹窗，替代浏览器 getDisplayMedia 的 PC 端方案）
 // useJpeg=true 时编码 JPEG（质量 90，编码比 PNG 快数倍，冻结截图预览画质足够）；默认 PNG
 function captureScreen(useJpeg) {
+    // 阶段二百九十四：GDI 升为主抓屏通道——本机实测 GDI BitBlt+GetDIBits 26~49ms，desktopCapturer
+    // 全分辨率 getSources 360~440ms（快 10 倍），且 GDI 在提权进程可靠可用（WGC/DXGI 失效场景见下）；
+    // desktopCapturer 降为回退（GDI 失败的极端环境）。注意 GDI 抓不到独占全屏独占模式画面，
+    // 该场景走 desktopCapturer 回退亦无法覆盖（原本即 WGC/DXGI 源），行为与 QQ 截图一致
+    try {
+        var gdi = gdiCaptureOf();
+        if (gdi && !gdi.isEmpty()) {
+            return Promise.resolve(useJpeg
+                ? 'data:image/jpeg;base64,' + gdi.toJPEG(90).toString('base64')
+                : gdi.toDataURL());
+        }
+        mainLog('[capture] GDI 主通道失败/空 → desktopCapturer 回退');
+    } catch (e) { /* GDI 异常走回退 */ }
     var display = screen.getPrimaryDisplay();
     // 抓屏分辨率必须传入物理像素（逻辑分辨率 * 缩放比），否则高 DPI 屏幕会抓出模糊的低分辨率缩略图
     var size = {
@@ -738,7 +882,13 @@ function captureScreen(useJpeg) {
             if (sources[i].display_id === String(display.id)) { src = sources[i]; break; }
         }
         if (!src && sources.length) src = sources[0];
-        if (!src) return '';
+        // 空缩略图显式判失败（原实现空 NativeImage 的 toJPEG 产出空前缀 dataURL，truthy 令上层
+        // 误判成功：编辑器打不开且主窗口滞留屏幕外——提权运行 WGC/DXGI 捕获失效时即此现象，
+        // 实测 2026-11-01）
+        if (!src || !src.thumbnail || src.thumbnail.isEmpty()) {
+            mainLog('[capture] desktopCapturer 回退缩略图仍空 → 判失败');
+            return '';
+        }
         // toJPEG 返回 Buffer（二进制），需转 base64 dataURL 字符串——直接传 Buffer 渲染层无法按 dataURL 解析
         // 原实现：useJpeg ? src.thumbnail.toJPEG(90) : src.thumbnail.toDataURL()（Buffer 被当 dataURL 用导致"截图失败"且全屏卡住）
         return useJpeg
@@ -776,6 +926,17 @@ function restoreShotHiddenWindow(force, keepHidden) {
     }
     shotRestoreTries = 0;
     var b = shotSavedBounds;
+    // 原位合法性兜底：屏幕外坐标（x/y < -10000，最小化态 -32000 误存）视为无效——历史污染数据
+    // 也在此自愈（不再把窗口恢复到屏幕外"找不回"），回落主屏工作区内可见位置
+    if (b && (b.x < -10000 || b.y < -10000)) {
+        var wa = screen.getPrimaryDisplay().workArea;
+        b = {
+            x: wa.x + Math.max(8, Math.round((wa.width - b.width) / 2)),
+            y: wa.y + Math.max(8, Math.round((wa.height - b.height) / 3)),
+            width: b.width,
+            height: b.height
+        };
+    }
     var wasMax = shotSavedMaximized;
     shotSavedBounds = null;
     shotSavedMaximized = false;
@@ -803,6 +964,9 @@ async function captureWithHide(hideMain) {
             // WS_EX_LAYERED 未生效、GetLayeredWindowAttributes=false，GDI/DXGI 抓屏均仍拍到主窗口，
             // "截图时隐藏当前窗口"开关形同虚设）——改移出屏幕方案：setBounds 瞬时无动画、任务栏无
             // 闪动、抓屏画面不含本窗口；原位由抓屏失败分支或 exit-freeze（编辑器关闭）恢复
+            // 最小化态先还原：Windows 最小化窗口 getBounds 为屏幕外 -32000 坐标，直接保存会把原位
+            // 记成屏幕外，编辑器关闭/抓屏失败后窗口恢复到屏幕外"永远找不回"（实测 2026-11-01）
+            if (mainWindow.isMinimized()) mainWindow.restore();
             shotSavedMaximized = mainWindow.isMaximized();
             shotSavedBounds = mainWindow.getBounds();
             mainWindow.unmaximize(); // 最大化态下 setBounds 不生效，先还原再移出
@@ -883,8 +1047,67 @@ ipcMain.handle('rec:begin', async function () {
         await new Promise(function (r) { setTimeout(r, 100); });
     }
     mainWindow.hide();
-    showNotification('录屏已开始', '按 Ctrl+Alt+R 停止录屏');
+    // 停止方式随实际键位显示（Ctrl+Alt+R 被占用回退 Ctrl+Shift+R / 双占用无键位）；
+    // 通知可点击=停止录制（主窗口已隐藏无自绘 UI，通知是唯一"停止按钮"，实测 2026-11-01）
+    showNotification('录屏已开始',
+        recShortcutLabel ? '按 ' + recShortcutLabel + ' 停止录屏，点击本通知也可停止' : '点击本通知停止录屏',
+        '', function () {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('rec:global-ctrl', { action: 'stop' });
+            }
+        });
+    showRecBar(); // 录制中悬浮条（计时+停止按钮，QQ 同款）：可视化停止入口不依赖通知/热键
     return true;
+});
+
+// ===== 阶段二百九十四：录制中悬浮条（QQ 同款：计时+停止按钮，整条可拖动）=====
+// 原设计录制期仅系统通知+快捷键停止：编辑器关闭/主窗口隐藏后屏幕上无任何可视化入口，
+// 通知可被忽略、热键可能被占用 → 用户"找不到停止按钮"（实测 2026-11-01）。悬浮条不夺焦点
+//（focusable:false）、skipTaskbar、置顶，停止=向主窗口渲染层转发 rec:global-ctrl stop
+var recBarWin = null;
+function ensureRecBar() {
+    if (recBarWin && !recBarWin.isDestroyed()) return recBarWin;
+    recBarWin = new BrowserWindow({
+        width: 230,
+        height: 58,
+        show: false,
+        frame: false,
+        transparent: true,
+        hasShadow: false,
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+        focusable: false, // 不参与焦点竞争（录制中不打断游戏/其他窗口输入）
+        title: '录制中',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false
+        }
+    });
+    recBarWin.setAlwaysOnTop(true, 'screen-saver');
+    recBarWin.on('closed', function () { recBarWin = null; });
+    return recBarWin;
+}
+function showRecBar() {
+    try {
+        var win = ensureRecBar();
+        var wa = screen.getPrimaryDisplay().workArea;
+        win.setPosition(Math.round(wa.x + (wa.width - 230) / 2), wa.y + 12); // 顶部居中
+        win.loadURL(SERVER_URL + 'rec-bar.html?t0=' + Date.now()); // t0 随每次录制重置计时
+        win.showInactive(); // 不夺焦点
+    } catch (e) { mainLog('[rec] 悬浮条显示失败: ' + (e && e.message)); }
+}
+function hideRecBar() {
+    if (recBarWin && !recBarWin.isDestroyed() && recBarWin.isVisible()) recBarWin.hide();
+}
+ipcMain.on('recbar:stop', function () {
+    hideRecBar();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('rec:global-ctrl', { action: 'stop' });
+    }
 });
 
 // 屏幕源 id（渲染层 getUserMedia 的 chromeMediaSourceId；只取 id 用 1x1 缩略图加速）
@@ -903,6 +1126,7 @@ ipcMain.handle('rec:source', function () {
 // 录制结束：主窗口归位（show 自动带出隐藏期窗口；全屏已在 rec:begin 退出，恢复普通窗口）
 ipcMain.on('rec:show', function () {
     recActive = false;
+    hideRecBar(); // 悬浮条随录制结束收起
     if (!mainWindow) return;
     mainWindow.show();
     mainWindow.focus();
@@ -911,6 +1135,7 @@ ipcMain.on('rec:show', function () {
 // 录制状态同步（渲染层 MediaRecorder 实际 start/stop 时上报，与 rec:begin/rec:show 解耦防竞态）
 ipcMain.on('rec:active', function (e, on) {
     recActive = !!on;
+    if (!on) hideRecBar(); // 兜底：任何停止路径（含最长时长保护/启动失败清理）都收起悬浮条
 });
 
 // ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地，服务端零媒体参与） =====
@@ -4292,23 +4517,28 @@ ipcMain.on('remote:bar-disconnect', function (e) {
 var remoteHotkeySuspended = false;
 var recShortcutKey = ''; // 实际注册成功的录屏键位（Ctrl+Alt+R 或回退 Ctrl+Shift+R；空=未注册全局键）
 var recShortcutLabel = recShortcutKey; // 快捷键展示标签（空串=无全局键，仅菜单入口可用）
+var shotShortcutKey = ''; // 实际注册成功的截图键位（Alt+A 或回退 Alt+Q；空=未注册全局键）
+var shotShortcutLabel = 'Alt+A'; // 截图键位展示标签（渲染层悬停提示/文案同步用，注册结果就绪后推送覆盖）
 // rec:shortcut 查询归口放模块加载期注册（原在 whenReady 尾部——渲染层早调用报
 // "No handler registered" 竞态错误，实测启动期 2026-10-19；读值为闭包运行期取最新）
 ipcMain.handle('rec:shortcut', function () { return recShortcutLabel; });
+ipcMain.handle('shot:shortcut', function () { return shotShortcutLabel; });
 function remoteHotkeySuspend() {
     if (remoteHotkeySuspended) return;
     remoteHotkeySuspended = true;
-    try { globalShortcut.unregister('Alt+A'); } catch (e) { }
+    if (shotShortcutKey) { try { globalShortcut.unregister(shotShortcutKey); } catch (e) { } }
     if (recShortcutKey) { try { globalShortcut.unregister(recShortcutKey); } catch (e) { } }
 }
 function remoteHotkeyResume() {
     if (!remoteHotkeySuspended) return;
     remoteHotkeySuspended = false;
-    try {
-        globalShortcut.register('Alt+A', function () {
-            captureWithHide().catch(function (err) { console.warn('Alt+A 全局截图失败:', err); });
-        });
-    } catch (e) { }
+    if (shotShortcutKey) {
+        try {
+            globalShortcut.register(shotShortcutKey, function () {
+                captureWithHide().catch(function (err) { console.warn('全局截图失败:', err); });
+            });
+        } catch (e) { }
+    }
     if (recShortcutKey) {
         try {
             globalShortcut.register(recShortcutKey, function () {
@@ -5315,13 +5545,43 @@ app.whenReady().then(async function () {
     // Alt+A 全局快捷键：任意界面静默抓屏并推送渲染层进入截图编辑器（微信同款快捷键）
     // 阶段三十八：改走 captureWithHide——先让主窗口消失再抓屏（QQ 同款），可截到被自己窗口挡住的内容；
     // 快照经 shot:prepare 推送渲染层预加载冻结编辑器，就绪后揭幕（此处不再单独推送，避免重复打开）
-    var shortcutOk = globalShortcut.register('Alt+A', function () {
-        captureWithHide().catch(function (err) {
-            console.warn('Alt+A 全局截图失败:', err);
+    // 阶段二百九十四：Alt+A 被占用时自动回退 Alt+Q（微信默认占用 Alt+A 截图——同机共存即注册恒失败，
+    // 用户按键"没反应"且无提示，实测 2026-11-01）；实际键位落盘日志 + 推送渲染层同步悬停提示
+    var shotHotkeyHandler = function () {
+        mainLog('[hotkey] 截图快捷键触发');
+        captureWithHide().then(function (dataUrl) {
+            // 抓屏结果必须回投渲染层打开编辑器——渲染层 onGlobalShot 监听 'shot:global-result'，
+            // 而主进程原实现从不发送（历史重构遗留断链）：抓屏成功但结果被丢弃，编辑器永不弹出
+            // （main.log 实测 2026-11-01：快捷键触发后无任何后续）。失败仍补 toast
+            if (!dataUrl) {
+                pushMainToast('截图失败，请重试');
+                return;
+            }
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('shot:global-result', dataUrl);
+            }
+        }).catch(function (err) {
+            console.warn('全局截图失败:', err);
+            mainLog('[capture] 全局截图异常: ' + (err && err.message));
+            pushMainToast('截图失败，请重试');
         });
-        // 原实现：抓屏后 send('shot:global-result') 推送渲染层打开编辑器（与 prepare 链路重复）
-    });
-    if (!shortcutOk) console.warn('Alt+A 全局快捷键注册失败（可能被其他应用占用）');
+    };
+    shotShortcutLabel = 'Alt+A';
+    shotShortcutKey = 'Alt+A';
+    var shotOk = globalShortcut.register('Alt+A', shotHotkeyHandler);
+    if (!shotOk) {
+        shotShortcutLabel = 'Alt+Q';
+        shotShortcutKey = 'Alt+Q';
+        shotOk = globalShortcut.register('Alt+Q', shotHotkeyHandler);
+    }
+    if (!shotOk) {
+        shotShortcutLabel = '';
+        shotShortcutKey = '';
+        console.warn('截图全局快捷键注册失败（Alt+A 与 Alt+Q 均被占用，仅按钮入口可用）');
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('shot:shortcut-label', shotShortcutLabel);
+    }
 
     // 阶段一百三十九：录屏全局快捷键（QQ 同款二段语义）——未录制时触发录屏流程，录制中再按=停止；
     // Ctrl+Alt+R 被占用时自动回退 Ctrl+Shift+R（实测本机 Ctrl+Alt+R 被其他程序长期占用，注册恒失败）；
@@ -5343,6 +5603,20 @@ app.whenReady().then(async function () {
         recShortcutKey = '';
         console.warn('录屏全局快捷键注册失败（Ctrl+Alt+R 与 Ctrl+Shift+R 均被占用，仅菜单入口可用）');
     }
+    // 键位注册就绪后主动推送渲染层（渲染层启动即拉取可能早于本注册——启动竞态，拉到空串后
+    // 菜单"录屏"项热键文案整段隐藏，实测 2026-11-01；推送兜底保证文案最终一致）
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('rec:shortcut-label', recShortcutLabel);
+    }
+    var elevatedFlag = '-';
+    try {
+        const sh = require('koffi').load('shell32.dll');
+        elevatedFlag = String(sh.func('bool __stdcall IsUserAnAdmin()')());
+    } catch (e) { }
+    mainLog('[boot] 快捷键注册完成，提权运行=' + elevatedFlag);
+    ensureEditorWindow(); // 编辑器窗口预热（启动即创建+加载页）：原实现首次截图/录屏才创建，
+    // 首开整页加载延迟数百 ms~秒级（实测 2026-11-01 "编辑框出现特别慢"主因）；预热后秒开。
+    // 窗口 show:false 常驻隐藏，单例复用逻辑不变（startEditorTask 的 isLoading 分支兼容预热态）
 
     app.on('activate', function () {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

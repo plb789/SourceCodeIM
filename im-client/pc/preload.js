@@ -204,6 +204,39 @@ contextBridge.exposeInMainWorld('desktop', {
     recShortcut: function () {
         return ipcRenderer.invoke('rec:shortcut');
     },
+    // 键位标签推送订阅（主进程注册就绪后主动推送，兜底渲染层早拉取的启动竞态，实测 2026-11-01）
+    onRecShortcutLabel: function (callback) {
+        ipcRenderer.on('rec:shortcut-label', function (event, label) {
+            callback(label);
+        });
+    },
+    // 主进程 toast 推送（全局截图失败等主进程侧无窗口反馈场景）
+    onMainToast: function (callback) {
+        ipcRenderer.on('main:toast', function (event, text) {
+            callback(text);
+        });
+    },
+    // 截图快捷键标签（Ctrl+Alt+A 占用时回退键位）拉取与推送订阅——悬停提示动态同步
+    shotShortcut: function () {
+        return ipcRenderer.invoke('shot:shortcut');
+    },
+    onShotShortcutLabel: function (callback) {
+        ipcRenderer.on('shot:shortcut-label', function (event, label) {
+            callback(label);
+        });
+    },
+    // 渲染层日志转发主进程（录屏/截图失败等错误落 userData/main.log，远程排查用）
+    clientLog: function (text) {
+        ipcRenderer.send('client:log', String(text == null ? '' : text));
+    },
+    // 渲染层丢弃全局快照通知（未登录/编辑器占用/长截图进行中早退）——主进程恢复被移出屏幕的主窗口
+    shotGlobalDiscard: function () {
+        ipcRenderer.send('shot:global-discard');
+    },
+    // 录制中悬浮条停止按钮（转发主窗口渲染层走统一停止链路，与快捷键/通知点击同语义）
+    recbarStop: function () {
+        ipcRenderer.send('recbar:stop');
+    },
     // ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地） =====
     // 开始录制：主进程弹保存对话框（data = {name: 默认文件名}），返回 {ok, path?, canceled?, err?}
     recMeetStart: function (data) {
