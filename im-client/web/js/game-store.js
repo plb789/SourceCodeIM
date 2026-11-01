@@ -3442,6 +3442,8 @@
             // 写 SmartSteamEmu.ini 后经内置 Steam.exe 拉起；g 兼容摘要/详情/库内旧快照三来源
             steamEmu: (g.steam_emu === 1 || (state.games[gid] && state.games[gid].steam_emu === 1)) ? 1 : 0,
             steamAppId: String(g.steam_app_id || (state.games[gid] && state.games[gid].steam_app_id) || ''),
+            // 联机方式（supernode/tunnel 随摘要下发）：主进程据此决定是否建立联机防火墙放行规则
+            netMode: String(g.net_mode || (state.games[gid] && state.games[gid].net_mode) || ''),
             // 端口透传转发规则（管理端 port_forwards 字段；空=不开启转发零开销直通）
             portForwards: parsePortForwards(g.port_forwards)
         };
@@ -4185,7 +4187,8 @@
                     steamEmu: meta.steamEmu,
                     steamAppId: meta.steamAppId,
                     credential: meta.password,
-                    persona: myNickname || username
+                    persona: myNickname || username,
+                    netMode: meta.netMode // 联机方式（主进程按 supernode/tunnel/steamEmu 决定防火墙放行范围）
                 };
                 if (exePath) payload.exePath = exePath;
                 return DESKTOP.gameLaunch(payload);

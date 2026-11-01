@@ -1569,6 +1569,7 @@ ipcMain.handle('game:download', function (event, payload) {
         var action = payload && payload.action;
         var viaBt = payload && payload.via === 'bt';
         if (action === 'start') {
+            if (viaBt) fwEnsureDlbtHost(); // BT 引擎入站放行（fire-and-forget，异步不阻塞下载启动）
             var mgr0 = viaBt ? btDownloads : gameDownloads;
             var r = mgr0.start(payload);
             return r.ok ? { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) } : { ok: false, error: r.error };
@@ -1973,6 +1974,214 @@ function spawnSteamEmuGame(r, data) {
     } catch (e) { return { ok: false, error: 'Steam.exe 启动失败：' + ((e && e.message) || e) }; }
 }
 
+// ===== 联机防火墙放行（按需白名单：虚拟局域网/端口隧道/SmartSteamEmu 游戏专用） =====
+// 触发范围（最小开放）：仅 net_mode=supernode（虚拟局域网）/ tunnel（端口隧道）/ steam_emu=1
+// （SmartSteamEmu）三类游戏启动时检查，普通直连游戏零接触。规则三重限定（程序路径+协议+方向），
+// 统一前缀命名便于管理/清理/卸载。权限策略：查询规则无需提权（netsh show），创建需管理员——
+// 提权态（elevator 启动链）netsh 静默批量建；非提权态首次缺规则经 PowerShell RunAs 弹一次
+// UAC 批量建齐（EncodedCommand 规避路径/规则名的编码与引号问题），用户拒绝后 7 天内不再弹
+// （userData/fw-deny.json 记忆）。任何失败静默降级记日志，绝不阻断游戏启动（域策略禁改等场景）。
+var FW_RULE_PREFIX = 'IMClient-GameNet-';
+var FW_DENY_FILE = path.join(app.getPath('userData'), 'fw-deny.json');
+var FW_DENY_MS = 7 * 86400000;
+
+function fwRuleName(slug, comp, proto) { return FW_RULE_PREFIX + slug + '-' + comp + '-' + proto + '-In'; }
+function fwDeniedRecently() {
+    try { var j = JSON.parse(fs.readFileSync(FW_DENY_FILE, 'utf8')); return (Date.now() - (j.ts || 0)) < FW_DENY_MS; } catch (e) { return false; }
+}
+function fwMarkDenied() { try { fs.writeFileSync(FW_DENY_FILE, JSON.stringify({ ts: Date.now() }), 'utf8'); } catch (e) { } }
+
+// fwRuleExists 查询规则是否存在（netsh show 无需提权；中英文系统输出都含规则名行）
+function fwRuleExists(name) {
+    return execFileP('netsh', ['advfirewall', 'firewall', 'show', 'rule', 'name=' + name], { windowsHide: true, timeout: 10000 })
+        .then(function (r) { return /Rule Name|规则名称/.test(String((r && r.stdout) || '')); })
+        .catch(function () { return false; });
+}
+// fwAddArgs 组单条 netsh 参数（rule={name, program, proto, local?}）
+function fwAddArgs(rule) {
+    var a = ['advfirewall', 'firewall', 'add', 'rule', 'name=' + rule.name, 'dir=in', 'action=allow',
+        'program=' + rule.program, 'protocol=' + rule.proto, 'profile=any', 'enable=yes'];
+    if (rule.local) a.push('localport=' + rule.local);
+    return a;
+}
+// fwBuildRules 组建某游戏启动所需的全部规则清单
+// needP2P: 虚拟局域网（p2p-host.exe TAP 组网进程需入站互通）；needSSE: SmartSteamEmu（发现/游戏端口）
+function fwBuildRules(slug, gameExe, needP2P, needSSE) {
+    var rules = [];
+    var exeName = path.basename(gameExe);
+    ['UDP', 'TCP'].forEach(function (p) {
+        rules.push({ name: fwRuleName(slug, exeName, p), program: gameExe, proto: p });
+    });
+    if (needP2P) {
+        var ph = p2pHostFile();
+        if (fs.existsSync(ph)) ['UDP', 'TCP'].forEach(function (p) {
+            rules.push({ name: fwRuleName('p2phost', path.basename(ph), p), program: ph, proto: p });
+        });
+    }
+    if (needSSE) {
+        var se = path.join(sseSteamDir(), 'Steam.exe');
+        if (fs.existsSync(se)) {
+            rules.push({ name: fwRuleName('sse', 'Steam-31313', 'UDP'), program: se, proto: 'UDP', local: '31313' });
+            rules.push({ name: fwRuleName('sse', 'Steam-7777', 'UDP'), program: se, proto: 'UDP', local: '7777' });
+        }
+    }
+    return rules;
+}
+// fwEnsureRules 补建缺失规则：提权态 netsh 直建；非提权态一次 UAC（EncodedCommand）批量建。
+// 单飞锁：并发调用（多窗口同时启动联机游戏）共享同一在途 Promise，防重复建规则/重复弹 UAC
+var fwEnsuringP = null;
+// fwSafeForInline UAC 内联脚本安全检查：program/name 混入 PowerShell 语句分隔符等字符可被
+// 用来拆分注入任意命令（Windows 文件名允许 ; & ' 等但禁止 "）。命中即跳过该规则的 UAC 批量
+// （提权态 netsh 走 execFile 数组参数不经 shell，无此注入面，不受限）
+function fwSafeForInline(rule) {
+    var s = (rule.name || '') + '\n' + (rule.program || '');
+    return !/[;`&|<>"']/.test(s) && (rule.program || '').indexOf('\n') < 0;
+}
+async function fwEnsureRules(rules) {
+    if (fwEnsuringP) return fwEnsuringP;
+    fwEnsuringP = (async function () {
+        return await fwEnsureRulesInner(rules);
+    })().finally(function () { fwEnsuringP = null; });
+    return fwEnsuringP;
+}
+async function fwEnsureRulesInner(rules) {
+    if (!rules || !rules.length) return { ok: true, added: 0 };
+    var missing = [];
+    for (var i = 0; i < rules.length; i++) {
+        if (!(await fwRuleExists(rules[i].name))) missing.push(rules[i]);
+    }
+    if (!missing.length) return { ok: true, added: 0 };
+    var elevated = await davIsElevated();
+    if (!elevated && fwDeniedRecently()) return { ok: false, reason: '用户此前拒绝 UAC（7 天内不再弹）' };
+    if (elevated) {
+        var okN = 0;
+        for (var j = 0; j < missing.length; j++) {
+            try {
+                await execFileP('netsh', fwAddArgs(missing[j]), { windowsHide: true, timeout: 15000 });
+                okN++;
+            } catch (e) { gnLogWrite('[fw] netsh 建规则失败 ' + missing[j].name + ': ' + ((e && e.message) || e)); }
+        }
+        return { ok: okN > 0, added: okN, mode: 'elevated' };
+    }
+    // 非提权态：一次 UAC——提权 PowerShell 以 -EncodedCommand 执行全部 netsh（Base64 UTF-16LE，
+    // 规避中文路径/引号嵌套在 bat/命令行里的编码坑），-Wait 等待完成后验证。
+    // 注入防护：含内联分隔符字符的规则在此路径跳过（fwSafeForInline），绝不进提权脚本
+    var safe = missing.filter(fwSafeForInline);
+    var skipped = missing.length - safe.length;
+    if (skipped > 0) gnLogWrite('[fw] ' + skipped + ' 条规则含特殊字符，跳过 UAC 内联建（提权启动可建）');
+    if (!safe.length) return { ok: false, reason: '规则名/路径含特殊字符（UAC 路径跳过）' };
+    var script = safe.map(function (r) {
+        return 'netsh advfirewall firewall add rule name="' + r.name + '" dir=in action=allow program="' + r.program + '" protocol=' + r.proto + ' profile=any enable=yes' + (r.local ? ' localport=' + r.local : '') + ' | Out-Null';
+    }).join('; ');
+    var b64 = Buffer.from(script, 'utf16le').toString('base64');
+    try {
+        await execFileP('powershell.exe', ['-NoProfile', '-Command',
+            "Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile','-EncodedCommand','" + b64 + "'"],
+            { windowsHide: true, timeout: 180000 });
+        var verified = await fwRuleExists(missing[0].name);
+        if (verified) return { ok: true, added: missing.length, mode: 'uac' };
+        fwMarkDenied();
+        return { ok: false, reason: 'UAC 后规则未生效' };
+    } catch (e) {
+        fwMarkDenied(); // 用户拒绝 UAC：7 天内不再打扰
+        return { ok: false, reason: 'UAC 拒绝或超时' };
+    }
+}
+// fwExportDeployBat 生成「其他电脑部署辅助」bat：自动遍历盘符定位游戏 exe（安装目录相对结构
+// 与本机一致，盘符可不同），固定组件按正式安装路径定位；纯 ASCII 内容规避 bat 编码坑。
+// 落盘桌面\IM联机防火墙部署\<slug>.bat（拷到其他联机电脑管理员运行即可）
+function fwExportDeployBat(slug, gameExe, installDir, needP2P, needSSE) {
+    try {
+        var exeName = path.basename(gameExe);
+        var relDir = path.dirname(path.relative(installDir, gameExe)).replace(/^\.([\\/]?)$/, '');
+        var relPath = (relDir ? relDir + '\\' : '') + exeName;
+        var absRel = /^[A-Za-z]:[\\/]/.test(relPath); // 手选 exe 与 installDir 跨盘时 relative 返回绝对路径
+        var L = [];
+        L.push('@echo off');
+        L.push('rem IM Client LAN firewall deploy helper (run as Administrator): ' + slug);
+        L.push('rem Locates the game exe on any drive letter, then adds the same rules as the client.');
+        if (!absRel) {
+            L.push('set "GAMEEXE="');
+            L.push('for %%D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (');
+            L.push('  if not defined GAMEEXE if exist "%%D:\\' + relPath + '" set "GAMEEXE=%%D:\\' + relPath + '"');
+            L.push(')');
+            L.push('if not defined GAMEEXE (');
+            L.push('  echo [!] Game exe not found on any drive: ' + relPath);
+            L.push('  pause');
+            L.push('  exit /b 1');
+            L.push(')');
+        } else {
+            L.push('set "GAMEEXE=' + relPath + '"');
+        }
+        if (needP2P) {
+            L.push('set "P2PEXE=%LOCALAPPDATA%\\Programs\\im-client\\resources\\dlbt-host\\p2p-host.exe"');
+            L.push('if not exist "%P2PEXE%" set "P2PEXE=%~dp0..\\resources\\dlbt-host\\p2p-host.exe"');
+            ['UDP', 'TCP'].forEach(function (p) {
+                L.push('if exist "%P2PEXE%" netsh advfirewall firewall add rule name="' + fwRuleName('p2phost', 'p2p-host.exe', p) + '" dir=in action=allow program="%P2PEXE%" protocol=' + p + ' profile=any enable=yes');
+            });
+        }
+        // BT 下载引擎固定随部署（任何 BT 下载游戏都用到，与是否联机无关）
+        L.push('set "DLBTEXE=%LOCALAPPDATA%\\Programs\\im-client\\resources\\dlbt-host\\dlbt-host.exe"');
+        L.push('if not exist "%DLBTEXE%" set "DLBTEXE=%~dp0..\\resources\\dlbt-host\\dlbt-host.exe"');
+        ['UDP', 'TCP'].forEach(function (p) {
+            L.push('if exist "%DLBTEXE%" netsh advfirewall firewall add rule name="' + fwRuleName('dlbthost', 'dlbt-host.exe', p) + '" dir=in action=allow program="%DLBTEXE%" protocol=' + p + ' profile=any enable=yes');
+        });
+        if (needSSE) {
+            L.push('set "SSEEXE=%LOCALAPPDATA%\\Programs\\im-client\\resources\\Steam\\Steam.exe"');
+            L.push('if not exist "%SSEEXE%" set "SSEEXE=%~dp0..\\resources\\Steam\\Steam.exe"');
+            ['31313', '7777'].forEach(function (lp) {
+                L.push('if exist "%SSEEXE%" netsh advfirewall firewall add rule name="' + fwRuleName('sse', 'Steam-' + lp, 'UDP') + '" dir=in action=allow program="%SSEEXE%" protocol=UDP localport=' + lp + ' profile=any enable=yes');
+            });
+        }
+        L.push('echo [OK] Firewall rules deployed for ' + slug);
+        L.push('pause');
+        var desktop = app.getPath('desktop');
+        var dir = path.join(desktop, 'IM联机防火墙部署');
+        fs.mkdirSync(dir, { recursive: true });
+        var out = path.join(dir, slug + '.bat');
+        fs.writeFileSync(out, L.join('\r\n'), 'utf8');
+        return out;
+    } catch (e) { gnLogWrite('[fw] 部署 bat 导出失败(不阻断): ' + ((e && e.message) || e)); return null; }
+}
+// fwEnsureForLaunch 启动前归口（fire-and-forget，绝不阻断/抛出）：按游戏类型组装规则 → 补建 →
+// 成功建齐后刷新部署辅助 bat
+function fwEnsureForLaunch(data, r) {
+    (async function () {
+        try {
+            var steamEmu = !!(data && data.steamEmu === 1);
+            var netMode = String((data && data.netMode) || '');
+            if (!steamEmu && netMode !== 'supernode' && netMode !== 'tunnel') return; // 最小开放：直连游戏不建
+            var slug = String((data && data.gameId) || 'game');
+            var rules = fwBuildRules(slug, r.exe, netMode === 'supernode', steamEmu);
+            var ret = await fwEnsureRules(rules);
+            gnLogWrite('[fw] 联机防火墙规则 ' + slug + ': ' + JSON.stringify(ret));
+            if (ret.ok && ret.added > 0) {
+                var bat = fwExportDeployBat(slug, r.exe, r.installDir || path.dirname(r.exe), netMode === 'supernode', steamEmu);
+                if (bat) gnLogWrite('[fw] 部署辅助 bat 已更新: ' + bat);
+            }
+        } catch (e) { gnLogWrite('[fw] 防火墙流程异常(不阻断): ' + ((e && e.message) || e)); }
+    })();
+}
+
+// fwEnsureDlbtHost BT 下载引擎入站放行（game:download 的 via:'bt' 启动任务时触发）：
+// dlbt-host.exe 监听端口做 P2P 上传/下载，入站被防火墙拦会显著拉低 BT 传输效率（做不了被动连接）
+function fwEnsureDlbtHost() {
+    (async function () {
+        try {
+            var exe = app.isPackaged
+                ? path.join(process.resourcesPath, 'dlbt-host', 'dlbt-host.exe')
+                : path.join(__dirname, 'dlbt-host', 'dlbt-host.exe');
+            if (!fs.existsSync(exe)) return;
+            var rules = [];
+            ['UDP', 'TCP'].forEach(function (p) {
+                rules.push({ name: fwRuleName('dlbthost', 'dlbt-host.exe', p), program: exe, proto: p });
+            });
+            var ret = await fwEnsureRules(rules);
+            gnLogWrite('[fw] dlbt-host 防火墙规则: ' + JSON.stringify(ret));
+        } catch (e) { gnLogWrite('[fw] dlbt-host 防火墙异常(不阻断): ' + ((e && e.message) || e)); }
+    })();
+}
+
 // 启动游戏：解析主程序（见 gameResolveLaunchExe 优先级）→ spawn 传入启动参数（页面已替换占位符）。
 // spawn 分离进程独立运行（detached + stdio ignore + unref，主进程退出不牵连游戏），exit 后广播全窗口。
 // 端口透传转发联动：管理端配置的 portForwards 规则在 spawn 前开启本机监听（任一失败中止启动——
@@ -1984,6 +2193,7 @@ ipcMain.handle('game:launch', async function (event, data) {
         var reg = gameLaunchRegLoad();
         var r = gameResolveLaunchExe(reg, gameId, data);
         if (!r) return { ok: false, needExe: true };
+        fwEnsureForLaunch(data, r); // 联机防火墙按需放行（fire-and-forget：虚拟局域网/端口隧道/SSE 游戏专用，异步不阻塞启动）
         // 启动参数：以页面解析后的数组为准（自定义覆盖 > 管理端默认，占位符已替换）；
         // 兼容仅有注册表原始模板的场景（按空白切分为参数数组）
         var args = [];

@@ -73,7 +73,8 @@
       "deleteAppDataOnUninstall": false,
       "artifactName": "im-client-setup-${version}.${ext}",
       "installerIcon": "64.ico",
-      "uninstallerIcon": "64.ico"
+      "uninstallerIcon": "64.ico",
+      "include": "installer.nsh"
     },
     "extraResources": [
       {
