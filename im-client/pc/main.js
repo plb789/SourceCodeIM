@@ -1845,8 +1845,13 @@ function spawnGameChild(exe, args, cwd, extraOpts) {
         var dll = isX64 ? 'overlay_hook_x64.dll' : 'overlay_hook_x86.dll';
         if (fs.existsSync(path.join(ovNativeBinDir(), helper)) && fs.existsSync(path.join(ovNativeBinDir(), dll))) {
             try {
+                // --suspend（2026-11-01 LUNA 实测）：设备早建竞态游戏专项——LUNA 的 d3d9 静态导入
+                // +引擎 init 极快，resume 后注入的探针/hotpatch 追不上设备创建（零捕获=隐形面板
+                // 8s 超时回悬浮窗）。suspend 名单内游戏走 CREATE_SUSPENDED 挂起期注入（设备创建
+                // 必然在钩就位后=零竞态）；注入失败/超时仍 resume（游戏照常启动，降级悬浮窗形态）
+                var extraArgs = gameOverlay.isNativeSuspend(exe) ? ['--suspend'] : [];
                 var child = spawn(path.join(ovNativeBinDir(), helper),
-                    ['--launch', exe, '--'].concat(args.map(String)),
+                    ['--launch', exe].concat(extraArgs, ['--'], args.map(String)),
                     Object.assign({}, base, { stdio: ['ignore', 'pipe', 'ignore'] }));
                 return { child: child, native: true };
             } catch (e) { /* 包装器 spawn 失败：回退普通启动 */ }

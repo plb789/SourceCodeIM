@@ -340,6 +340,7 @@ static volatile LONG g_hotkeyCtrl = 0;
 static volatile LONG g_hotkeyShift = 1;
 static volatile LONG g_hotkeyAlt = 0;
 static char g_hotkeyLabel[40] = "Shift+Tab"; // M5.11b：标题条热键提示（跟随设置；hotkey 帧到达时重建；pipe 线程写/渲染线程读，单帧撕裂无害）
+static volatile DWORD g_lastHkToggleTick = 0; // 热键去抖共享时间戳（WndProc 消息路径与轮询兜底线程双触发防护）
 static void HotkeyLabelRebuild() {
     int vk = g_hotkeyVK;
     char kb[16];
@@ -1014,12 +1015,19 @@ static void PanelImeDetach(HWND h) {
     LogLine("panel ime: detached (restored)");
 }
 static HWND FindMainWindowOfCurrentProcess(); // 前置声明（定义在 D3D8 段；探针路径枚举主窗口用）
+static HWND g_probeHwnd = NULL; // 探针窗口（定义在探针段 L2774；pre-init 的误绑排除用——前置声明）
 // 探针路径前置：Win32 后端 + WndProc 子类化尽早就位（DX9 后端等首帧拿到游戏设备指针再建）。
 // 若等首次 Shift+Tab 才装 WndProc，第一下热键会被原窗口过程吞掉（M2 踩坑 1 时序死锁）
 static void ImGuiPreInitWin32() {
     LogLine("pre-init: begin"); // 无死角日志（SC:R 排障——任何静默 return 都可见）
     if (g_imguiWin32Inited) { LogLine("pre-init: already inited, return"); return; }
-    if (!g_gameHwnd) g_gameHwnd = FindMainWindowOfCurrentProcess();
+    if (!g_gameHwnd) {
+        HWND mw = FindMainWindowOfCurrentProcess();
+        // suspend 注入专项（2026-11-01 LUNA 实测）：挂起期探针窗口是本进程唯一窗口——
+        // FindMainWindow 会把它误绑成游戏主窗口（面板/IME/渲染全挂错窗口，游戏真窗口
+        // 出现后反而不被子类化）。排除探针窗口：挂起期返回 NULL → 周期重试等游戏真窗口
+        if (mw && mw != g_probeHwnd) g_gameHwnd = mw;
+    }
     if (!g_gameHwnd) {
         static bool s_hwndFailLogged = false; // 找窗口失败只打一次（周期重试防刷屏）
         if (!s_hwndFailLogged) { LogLine("imgui pre-init: main window not found yet (retry pending)"); s_hwndFailLogged = true; }
@@ -1119,6 +1127,12 @@ static LRESULT CALLBACK Hooked_WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     // 热键显隐（M5.7：跟随设置下发的 hotkey 帧，默认 Shift+Tab；吞掉本键不给游戏）。消息态为主、异步态兜底；
     // g_panelBroken 门禁：初始化失败后不再切换（否则不可见面板吞游戏输入）
     if (m == WM_KEYDOWN && w == (WPARAM)g_hotkeyVK && !g_panelBroken && HotkeyModsHeld()) {
+        // 轮询兜底共享去抖（2026-11-01）：LL 钩子吞键场景轮询线程已处理同一次按键——去抖窗内
+        // 的重复触发（消息路径/轮询路径撞车、按键 repeat）一律忽略，防面板开→关闪烁
+        DWORD hkTk = GetTickCount();
+        if ((LONG)(hkTk - (DWORD)g_lastHkToggleTick) < 250)
+            return CallWindowProcW(g_origWndProc, h, m, w, l);
+        g_lastHkToggleTick = hkTk;
         // 环境拒绝建设备（SC:R 收口）：面板永远画不出——热键立即收回让位（nopanel 恢复悬浮窗全局
         // 热键）+ 本键透传游戏。ReportNoPanelOnce 置 g_panelBroken=1，之后本分支不再进入（键透传）
         // D3D11 已就绪则 env-denied 无效（d3d9 探针 verdict 不覆盖 DX11 渲染能力；双保险防
@@ -1879,6 +1893,17 @@ static HRESULT WINAPI Hooked_SCPresent(IDirect3DSwapChain9* sc, CONST RECT* src,
 }
 static HRESULT WINAPI Hooked_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEVTYPE type, HWND hFocus, DWORD behavior, D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out) {
     HRESULT hr = g_origCreateDevice(self, adapter, type, hFocus, behavior, pp, out);
+    // 失败诊断（2026-11-01 LUNA suspend 实测同款）：与 Hooked_CreateDeviceEx 的失败日志同口径
+    if (FAILED(hr) && pp) {
+        static volatile LONG s_cdFailN = 0;
+        LONG fn = InterlockedIncrement(&s_cdFailN);
+        if (fn <= 5) {
+            char lb[160];
+            snprintf(lb, sizeof(lb), "Hooked_CreateDevice #%ld FAILED hr=0x%08X type=%u win=%u bb=%ux%u fmt=%u",
+                fn, (unsigned)hr, (unsigned)type, (unsigned)pp->Windowed, pp->BackBufferWidth, pp->BackBufferHeight, (unsigned)pp->BackBufferFormat);
+            LogLine(lb);
+        }
+    }
     if (g_probeBusy) return hr; // 探针自建设备：不捕获（防探针设备被当游戏设备、释放后悬空）
     if (SUCCEEDED(hr) && out && *out) {
         char line[128];
@@ -1932,6 +1957,15 @@ static HRESULT WINAPI Hooked_CreateDeviceEx(IDirect3D9Ex* self, UINT adapter, D3
         LogLine(lb);
     }
     HRESULT hr = g_origCreateDeviceEx(self, adapter, type, hFocus, behavior, pp, fsex, out);
+    // 失败诊断（2026-11-01 LUNA suspend 实测：游戏建设备进钩但转发后失败零捕获——hr+present
+    // 参数全打，一次定案参数错/设备不支持/状态丢失；前 5 次全打与入口计数共用窗口）
+    if (cn <= 5 && FAILED(hr) && pp) {
+        char lb[160];
+        snprintf(lb, sizeof(lb), "Hooked_CreateDeviceEx #%ld FAILED hr=0x%08X type=%u win=%u bb=%ux%u fmt=%u refresh=%u fsex=%p",
+            cn, (unsigned)hr, (unsigned)type, (unsigned)pp->Windowed, pp->BackBufferWidth, pp->BackBufferHeight,
+            (unsigned)pp->BackBufferFormat, (unsigned)pp->BackBufferFormat ? (unsigned)pp->FullScreen_RefreshRateInHz : 0u, (void*)fsex);
+        LogLine(lb);
+    }
     if (g_probeBusy) return hr; // 探针自建设备：不捕获
     if (SUCCEEDED(hr) && out && *out) {
         char line[128];
@@ -2738,7 +2772,7 @@ static bool TryHookD3D9(HMODULE d3d9) {
 // 和创建时机完全解耦；虚表为 d3d9 运行时静态表，对已创建的游戏设备同样立即生效。
 // 双挂点：①IDirect3D9 虚表 CreateDevice 槽（捕获游戏后续创建，走既有 ImGuiEnsure 流程）；
 // ②Device 虚表 Present/Reset 槽（覆盖已存在的游戏设备）。D3D8 探针同款模式（M3 已验证）。
-static HWND g_probeHwnd = NULL;
+// g_probeHwnd 定义在文件头（pre-init 误绑排除用，suspend 注入专项）
 // 返回：1=设备虚表 Present 已补（完整成功，可停探针）/ 2=CreateDevice/Ex 槽已钩、等游戏建设备
 // 自捕获（SC:R 注入早于设备创建，游戏自己的调用必然命中；自建设备失败不致命）/ 0=虚表钩未装上
 // ===== 版本劫持入口（SC:R 收口）：代理 d3d9 的 Direct3DCreate9/Ex 转发函数在真身对象返回
@@ -3367,8 +3401,11 @@ static int ProbeHookD3D9DeviceVtable(HMODULE d3d9) {
         }
         // ③ 自建设备兜底（游戏设备先于注入存在时拿静态表）。viaEx 优先 CreateDeviceEx（Ex 校验
         // 路径与游戏一致，标准 CreateDevice 在 SC:R 进程内 E_INVALIDARG 实测）；标准路径维持
-        // UNKNOWN→桌面格式→SW VP 三试。全败即交游戏自捕获，不再死磕
-        D3DPRESENT_PARAMETERS pp;
+        // UNKNOWN→桌面格式→SW VP 三试。全败即交游戏自捕获，不再死磕。
+        // static 存储（2026-11-01 LUNA suspend 实测）：栈上 pp 在转发期间被踩（日志 bb=120x0
+        // 而 ZeroMemory+Windowed=TRUE 的构造不可能产生）——E_INVALIDARG 实锤。单探针线程
+        // 独占，static 无并发问题
+        static D3DPRESENT_PARAMETERS pp;
         ZeroMemory(&pp, sizeof(pp));
         pp.Windowed = TRUE;
         pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
@@ -3525,9 +3562,52 @@ static bool TryHookD3D8(HMODULE d3d8) {
 }
 #endif
 
+// 热键轮询兜底线程（2026-11-01 LUNA 实测）：全屏游戏装 WH_KEYBOARD_LL 低级键盘钩子吞掉
+// 组合键——WM_KEYDOWN 不产生=WndProc 热键分支收不到（客户端侧 RegisterHotKey 同理，已在
+// 客户端加 GetAsyncKeyState 轮询）。DLL 侧同款兜底：50ms 轮询物理键态（钩子拦不住），
+// 沿检测+共享去抖后执行与 WndProc 热键分支等价的切换。游戏窗口就绪（g_gameHwnd）才生效
+static DWORD WINAPI HotkeyPollThread(LPVOID) {
+    bool prev = false;
+    while (!g_shutdown) {
+        Sleep(50);
+        int hvk = g_hotkeyVK;
+        bool down = (hvk > 0 && (::GetAsyncKeyState(hvk) & 0x8000)) != 0 && HotkeyModsHeld();
+        if (down && !prev && !g_panelBroken && g_gameHwnd) {
+            DWORD tk = GetTickCount();
+            if ((LONG)(tk - (DWORD)g_lastHkToggleTick) >= 250) {
+                g_lastHkToggleTick = tk;
+                if (g_probeEnvDenied && !g_d3d11Ready) {
+                    ReportNoPanelOnce();
+                    LogLine("poll hotkey on env-denied -> float window fallback");
+                } else {
+                    LONG nv = g_panelActive ? 0 : 1;
+                    InterlockedExchange(&g_panelActive, nv);
+                    if (nv) g_panelOnTick = GetTickCount();
+                    else PanelImeDetach(g_gameHwnd);
+                    LogLine("hotkey toggle via poll fallback");
+                }
+            }
+        }
+        prev = down;
+    }
+    return 0;
+}
+
 static DWORD WINAPI InitThread(LPVOID) {
     LogLine("hook dll attached");
     g_cryGpaHooked = false; // 引擎 GPA 钩动态检测标志（InitThread 置 false 供轮询启动；定义见文件头）
+    CreateThread(NULL, 0, HotkeyPollThread, NULL, 0, NULL); // 热键轮询兜底（LL 钩子吞键防护，定义见上）
+    // 设备早建竞态（LUNA 实测 2026-11-01）：LUNA 的 d3d9 由静态导入在 attach 前加载（Ldr 事件
+    // 错过时机），设备创建紧随主窗口——「注入完成→探针钩上」的 ~600ms 窗口（前序钩子步骤耗时）
+    // 内设备已建，state 2 即停自建的新逻辑下「设备先于钩」=零捕获。InitThread 最前立即快探
+    //（d3d9 已在则直接钩 slot，省 ~500ms；WARface 的 Ldr 事件路径不受影响——事件触发后同走此函数）
+    {
+        HMODULE m9early = GetModuleHandleW(L"d3d9.dll");
+        if (m9early) {
+            ProbeHookD3D9DeviceVtable(m9early);
+            LogLine("early probe at init (device-race mitigation)");
+        }
+    }
     // 第零步：LdrRegisterDllNotification（2026-10-30 Warface 热启动竞态的最终解）——Warface 的
     // d3d9.dll 由 loader 作为 CryRenderD3D9 的静态依赖加载（不经任何可钩 IAT），热启动下
     // 「d3d9 出现→设备创建」<15ms，盲轮询必输。loader 的 DLL 加载通知是**纯注册零篡改面**
@@ -3598,6 +3678,15 @@ static DWORD WINAPI InitThread(LPVOID) {
     // 50ms 发现粒度会输掉竞态；GetModuleHandleW 轮询极轻，15ms 无感
     for (DWORD i = 0; i < K_WAIT_MODULE_MS / 15; ++i) {
         if (g_shutdown) return 0;
+        // 渲染 API 模块监视（2026-11-01 LUNA 探测）：LUNA 渲染画面正常但 D3D9 设备创建零调用——
+        // SS3D 引擎 DLL 只导 KERNEL32/USER32（渲染 API 运行时动态解析），实际渲染可能走
+        // OpenGL/DDraw/D3D8。模块出现即打日志（一次性）定案渲染归属，决定捕获路径
+        {
+            static bool s_oglLogged = false, s_ddLogged = false, s_d8Logged = false;
+            if (!s_oglLogged && GetModuleHandleW(L"opengl32.dll")) { LogLine("render api detect: opengl32.dll loaded"); s_oglLogged = true; }
+            if (!s_ddLogged && GetModuleHandleW(L"ddraw.dll")) { LogLine("render api detect: ddraw.dll loaded"); s_ddLogged = true; }
+            if (!s_d8Logged && GetModuleHandleW(L"d3d8.dll")) { LogLine("render api detect: d3d8.dll loaded"); s_d8Logged = true; }
+        }
 #ifdef _WIN64
         // D3D11 工厂探针（2026-10-30 Warface 渲染 API 随启动环境变化实锤：部分会话主菜单走
         // D3D11 渲染，d3d9 路线零捕获面=间歇 nopanel）。CreateDXGIFactory1 纯用户态（不建设备，

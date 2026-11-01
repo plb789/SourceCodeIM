@@ -324,11 +324,12 @@ function setNativePanelActive(v) {
     nativePanelActive = v;
     if (v) {
         if (hotkeyRegistered) { try { globalShortcut.unregister(settings.hotkey); } catch (e) { } hotkeyRegistered = false; }
+        stopKeyPoll(); // DLL 面板期轮询兜底同步让位（帧内 WndProc 接管热键）
         // M5.5：帧内渲染生效期通知改由 DLL 帧内 toast 承接，屏外通知窗立即隐藏（避免跑游戏窗口外被任务栏遮挡）
         if (notifyWin && !notifyWin.isDestroyed() && notifyWin.isVisible()) notifyWin.hide();
         log('[overlay] 帧内渲染生效：Shift+Tab 归 DLL 面板（全局热键已注销）');
     } else {
-        if (hotkeyArmed) registerHotkey();
+        if (hotkeyArmed) { registerHotkey(); startKeyPoll(); } // 恢复：全局热键+轮询兜底一并复位
         log('[overlay] 帧内渲染失效：Shift+Tab 还给悬浮窗（全局热键已恢复）');
     }
 }
@@ -712,8 +713,11 @@ function showOverlay() {
     var show = function () {
         if (!overlayWin || overlayWin.isDestroyed()) return;
         try { overlayWin.setBounds(gameDisplay.bounds); } catch (e) { /* 显示器热拔出等极端态兜底主屏 */ }
-        overlayWin.show();
-        overlayWin.focus(); // 呼出即夺焦点：游戏收不到输入（Steam overlay 同语义）
+        // 无焦点呼出（2026-11-01 用户实测：show+focus 夺焦导致全屏游戏最小化/失焦）——
+        // showInactive 显示但不夺焦：游戏保持前台运行（Steam overlay 同语义）。点击面板时
+        // Windows 天然激活窗口（键盘进输入框），点游戏窗口焦点归还；收起走热键，
+        // blur 收起逻辑保留兜底（点游戏窗口后若面板曾获焦，blur 触发收起）
+        overlayWin.showInactive();
         openGuard = Date.now();
         broadcastState();
     };
@@ -730,6 +734,9 @@ function hideOverlay(refocus) {
     }
 }
 function toggleOverlay() {
+    // 诊断补齐（2026-11-01）：按键触发实锤日志——此行出现=globalShortcut 链路通（问题在显示层：
+    // 全屏独占游戏盖住悬浮窗）；不出现=注册或按键链路问题
+    log('[overlay] 热键触发: ' + settings.hotkey + '（当前可见=' + (!!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible())) + '）');
     if (overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()) hideOverlay(true);
     else showOverlay();
 }
@@ -745,11 +752,53 @@ function registerHotkey() {
         log('[overlay] 热键注册失败（被占用）: ' + settings.hotkey);
     }
     hotkeyRegistered = hotkeyOk;
+    // 诊断补齐（2026-11-01 LUNA 热键黑洞排查）：注册成功此前完全静默——按键无响应时无法区分
+    // 「注册失败」「按键未触发」「触发了没显示」三段。成功也打（键位+armed 态），每次注册都可见
+    if (hotkeyOk) log('[overlay] 热键注册成功: ' + settings.hotkey + '（armed=' + hotkeyArmed + '）');
+}
+
+// ===== 热键轮询兜底（2026-11-01 LUNA 热键黑洞实锤修复）=====
+// 现象：RegisterHotKey 注册成功（诊断日志实锤）但按键零触发——全屏游戏（LUNA）装
+// WH_KEYBOARD_LL 低级键盘钩子吞掉按键，键盘钩子链先于系统热键分发（Steam 文档同款问题）。
+// 兜底：koffi FFI 调 GetAsyncKeyState 50ms 轮询——钩子层拦不住轮询（不走消息分发）。
+// 按下沿检测 + 250ms 去抖（与 RegisterHotKey 回调双触发防护：正常场景热键回调先跑，
+// 轮询沿落在去抖窗内被忽略；钩子吞键场景仅轮询触发）。游戏运行态才轮询（平时零开销）。
+var koffiMod = null;
+try { koffiMod = require('koffi'); } catch (e) { }
+var gaksFn = null;
+if (koffiMod) {
+    try {
+        var user32Lib = koffiMod.load('user32.dll');
+        gaksFn = user32Lib.func('GetAsyncKeyState', 'int16', ['int']);
+    } catch (e) { gaksFn = null; }
+}
+var keyPollTimer = null, keyPollPrev = false, keyPollLast = 0;
+function startKeyPoll() {
+    if (keyPollTimer || !gaksFn || WIN7) return;
+    keyPollPrev = false;
+    keyPollTimer = setInterval(function () {
+        if (!hotkeyArmed || nativePanelActive) return;
+        var down = gaksFn(0x11 /*VK_CONTROL*/) < 0 && gaksFn(0x09 /*VK_TAB*/) < 0;
+        if (down && !keyPollPrev) {
+            var t = Date.now();
+            if (t - keyPollLast > 250) {
+                keyPollLast = t;
+                log('[overlay] 热键触发(轮询兜底)');
+                toggleOverlay();
+            }
+        }
+        keyPollPrev = down;
+    }, 50);
+    log('[overlay] 热键轮询兜底已启动（低级钩子吞键防护）');
+}
+function stopKeyPoll() {
+    if (keyPollTimer) { clearInterval(keyPollTimer); keyPollTimer = null; }
 }
 function armHotkey() {
     if (WIN7 || !settings.enabled || hotkeyArmed) return; // WIN7 硬性禁用：热键不注册、悬浮窗不预热
     hotkeyArmed = true;
     registerHotkey();
+    startKeyPoll(); // 轮询兜底（钩子吞键防护——注册成功与否都启动，去抖保证不双触发）
     ensureOverlayWindow(); // 预热：首呼出零加载白窗
     ensureNotifyWindow();  // 通知小窗预热（Steam 式 toast，§十；notify 关闭/WIN7 时内部跳过）
     broadcastState();
@@ -757,6 +806,7 @@ function armHotkey() {
 function disarmHotkey(force) {
     if (games.size > 0 && !force) return; // 仅最后一款游戏退出才收口；force=设置里手动关闭（游戏运行中也要立即生效）
     hotkeyArmed = false;
+    stopKeyPoll(); // 轮询兜底随游戏全退停止（平时零开销保证）
     if (hotkeyRegistered) { try { globalShortcut.unregister(settings.hotkey); } catch (e) { } }
     hotkeyRegistered = false;
     if (overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()) hideOverlay(false); // 游戏全退收面板
@@ -814,10 +864,14 @@ var nativeGames = null;      // 名单缓存 {mode:'list'|'all', list:[exeName]}
 var NATIVE_GAMES_LIST_TMPL = 'overlay-native' + path.sep + 'native-games.json'; // 分发模板相对路径
 function nativeGamesUserFile() { return path.join(app.getPath('userData'), 'overlay-native-games.json'); }
 function nativeGamesParse(s) {
-    if (!s || typeof s !== 'object') return { mode: 'list', list: [], hijack: [] };
+    if (!s || typeof s !== 'object') return { mode: 'list', list: [], hijack: [], suspend: [] };
     return {
         mode: s.mode === 'all' ? 'all' : 'list',
         list: Array.isArray(s.list) ? s.list.map(function (x) { return String(x || '').toLowerCase(); }) : [],
+        // suspend 名单（2026-11-01 LUNA 实测）：设备早建竞态游戏（d3d9 静态导入+引擎 init 极快，
+        // resume 后注入的探针/hotpatch 追不上设备创建）——挂起期注入零竞态；大导入表死锁风险由
+        // injector 的注入超时+失败 resume 兜底（失败安全降级悬浮窗）
+        suspend: Array.isArray(s.suspend) ? s.suspend.map(function (x) { return String(x || '').toLowerCase(); }) : [],
         // 版本劫持名单（SC:R 收口方案）：名单内游戏 spawn 前把代理 d3d9.dll（转发真身）+
         // d3d9_orig.dll（System32 真身复制）+ overlay_hook_x64.dll 幂等部署到游戏目录——
         // 借 DLL 搜索顺序（应用目录优先）在游戏加载 d3d9 的时刻拉起注入链（该环境对进程内
@@ -859,6 +913,14 @@ function isNativeHijack(exe) {
     var ng = nativeGamesLoad();
     var name = String(path.basename(exe) || '').toLowerCase();
     return ng.hijack.indexOf(name) >= 0;
+}
+// suspend 注入判定（2026-11-01 LUNA 实测）：设备早建竞态游戏——挂起期注入（零竞态），
+// 大导入表死锁风险由 injector 注入超时+失败 resume 兜底
+function isNativeSuspend(exe) {
+    if (!isNativeActive(exe) || !exe) return false;
+    var ng = nativeGamesLoad();
+    var name = String(path.basename(exe) || '').toLowerCase();
+    return ng.suspend.indexOf(name) >= 0;
 }
 
 // ===== IPC 注册（main.js init 时调用一次）=====
@@ -949,6 +1011,7 @@ module.exports = {
     onGamePid: safe(onGamePid),               // main.js 注入链回读真实 pid 后校正（helper pid → 游戏 pid）
     isNativeActive: isNativeActive,           // main.js spawn 处判据：二期注入链是否启用（WIN7/native/兼容名单三重门禁）
     isNativeHijack: isNativeHijack,           // main.js spawn 处判据：版本劫持名单（SC:R 收口——部署代理 d3d9 到游戏目录）
+    isNativeSuspend: isNativeSuspend,         // main.js spawn 处判据：suspend 挂起期注入名单（LUNA 设备早建竞态专项）
     nativeBinDir: nativeBinDir,               // main.js 注入链二进制目录（打包态 resources，开发态源码目录）
     isOpen: function () { return !!(overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()); }
 };

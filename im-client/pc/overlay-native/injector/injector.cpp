@@ -72,11 +72,21 @@ static void BuildDllPath(char* out, int outCap, const char* dirA, BOOL wow) {
     snprintf(out, outCap, "%s\\overlay_hook_%s.dll", dirA, wow ? "x86" : "x64");
 }
 
-// 模式 2：启动注入（M2 spawn 链）。argv[2]=exe，argv[3] 预期 "--"，argv[4..]=游戏参数
+// 模式 2：启动注入（M2 spawn 链）。argv[2]=exe，可选标志（--suspend），"--"，argv[..]=游戏参数
 static int LaunchAndInject(int argc, char** argv) {
     const char* exe = argv[2];
+    int suspendMode = 0;
     int argStart = 4; // argv[3] == "--"
-    if (argc < 4 || strcmp(argv[3], "--") != 0) { printf("usage: injector.exe --launch <exe> -- <args...>\n"); return 2; }
+    if (argc < 4) { printf("usage: injector.exe --launch <exe> [--suspend] -- <args...>\n"); return 2; }
+    if (strcmp(argv[3], "--") != 0) {
+        // 可选标志段（2026-11-01 LUNA 设备早建竞态专项）：exe 与 "--" 之间的参数为注入器标志
+        int i = 3;
+        for (; i < argc && strcmp(argv[i], "--") != 0; ++i) {
+            if (strcmp(argv[i], "--suspend") == 0) suspendMode = 1; // 未知标志忽略（向前兼容）
+        }
+        if (i >= argc) { printf("usage: missing \"--\" separator\n"); return 2; }
+        argStart = i + 1;
+    }
 
     // 游戏命令行（含空格的参数加引号）
     std::string cmd = "\"" + std::string(exe) + "\"";
@@ -127,13 +137,30 @@ static int LaunchAndInject(int argc, char** argv) {
         // loader lock 上「等待」而非死锁（挂起期死锁是主线程从未启动 init 所致，语义不同），
         // 注入完成时刻≈依赖就绪，仍远早于设备创建（游戏窗口 ~10s 后）——捕获窗口最大化。
         // 仍用创建句柄 pi.hProcess（全权限，免 OpenProcess DACL 问题）。
-        ResumeThread(pi.hThread);
-        LogLine("launch: resumed, injecting immediately\r\n");
-        Sleep(50);
-        LogLine("launch: injecting %s\r\n", dllA);
-        rc = InjectDll(pi.hProcess, dllA);
-        if (rc != 0) printf("inject failed rc=%d\n", rc);
-        else LogLine("launch: inject ok\r\n");
+        // --suspend 模式（2026-11-01 LUNA 实测）：设备早建竞态的最终解——LUNA 的 d3d9 静态导入
+        // + 引擎 init 极快，resume 后注入的探针/hotpatch 追不上设备创建（hotpatch 就位时设备已
+        // 建，游戏不重建=零捕获→隐形面板 8s 超时回悬浮窗）。挂起期注入=设备创建必然在钩就位后
+        //（零竞态）。SC:R 死锁教训的失败安全：InjectDll 内部远线程 10s 超时（rc=258）→ 放弃
+        // 注入照常 resume——游戏照常启动（可能无注入=悬浮窗回落），绝不卡死启动流程
+        if (suspendMode) {
+            LogLine("launch: suspend-mode injecting (device-race elimination)\r\n");
+            rc = InjectDll(pi.hProcess, dllA); // 挂起期注入（超时/失败均不阻塞启动）
+            if (rc != 0) {
+                printf("suspend inject failed rc=%d, resume anyway\n", rc);
+                LogLine("launch: suspend inject failed rc=%d -> resume (float fallback)\r\n", rc);
+            } else {
+                LogLine("launch: suspend inject ok\r\n");
+            }
+            ResumeThread(pi.hThread); // 无论成败都 resume：注入失败=降级悬浮窗，游戏启动不受影响
+        } else {
+            ResumeThread(pi.hThread);
+            LogLine("launch: resumed, injecting immediately\r\n");
+            Sleep(50);
+            LogLine("launch: injecting %s\r\n", dllA);
+            rc = InjectDll(pi.hProcess, dllA);
+            if (rc != 0) printf("inject failed rc=%d\n", rc);
+            else LogLine("launch: inject ok\r\n");
+        }
     }
     CloseHandle(pi.hThread);
     WaitForSingleObject(pi.hProcess, INFINITE); // 等游戏退出：helper 退出=游戏退出（主进程 exit 监听语义不变）
