@@ -141,15 +141,34 @@
     }
 
     // ===== 镜像下行 =====
+    // toast 展示文本归口（与主窗口 quoteDisplayText/pinDisplayText 同口径）：引用/AI 图片/文档信封取
+    // 正文附言，合并转发显示摘要，通话信令/话单（type=call，非聊天文本）返回 null=不弹 toast；
+    // 其余（普通文本/未知 JSON）原样——原实现直接显示 content 原串，引用回复弹 JSON 原文（实测 2026-11-01）
+    function toastText(content) {
+        var s = String(content == null ? '' : content);
+        if (s.charAt(0) !== '{') return s;
+        var m = null;
+        try { m = JSON.parse(s); } catch (e) { return s; }
+        if (!m || typeof m !== 'object') return s;
+        if (m.type === 'call') return null; // 与 DLL 帧内 toast M5.10c 同口径：挂断/话单不提示
+        if (m.quote && typeof m.quote === 'object' && typeof m.text === 'string') return m.text;
+        if (m.merged && typeof m.merged === 'object' && Object.prototype.toString.call(m.merged.i) === '[object Array]') {
+            return T('聊天记录') + '（' + (m.merged.c || m.merged.i.length) + T('条消息') + '）';
+        }
+        if (typeof m.text === 'string') return m.text; // AI 图片/文档信封取附言
+        return s;
+    }
     function onChatMirror(msg) {
         if (!msg || !msg.msg_type) return;
         if (panelOpen) return; // 面板打开抑制：消息面板内可见（未读徽标联动）
         if (msg.msg_type === MSG_PRIVATE) {
             var me = getUsername();
-            var peer = msg.from_user === me ? (msg.to_user || '') : (msg.from_user || '');
+            if (msg.from_user === me) return; // 自己发送的服务端回显不弹 toast（面板会话内可见，弹了等于重复打扰）
+            var peer = msg.from_user || '';
             if (!peer || peer === me) return;
-            var text = String(msg.content || '');
-            if (!text) return;
+            var text = toastText(msg.content);
+            if (text === null) return; // 通话话单等信令帧不提示
+            if (!text) text = T('发来新消息'); // 信封无附言（如 AI 图片无文字）兜底
             if (text.length > 60) text = text.slice(0, 60) + '…'; // 预览两行截断（CSS line-clamp 兜底）
             pushToast({ username: peer, text: text });
             return;

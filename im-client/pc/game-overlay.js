@@ -597,8 +597,18 @@ function pipeForwardMirror(msg) {
     if (t === 2) {
         var text = String(msg.content || '');
         // M5.10c：通话信令/话单（{"type":"call",...}）以 type=2 下发，不是聊天文本——转发 DLL 会弹 JSON 原文 toast（实测挂断时弹话单 JSON）
+        // M5.11：引用/AI 图片/文档/合并转发信封同为 JSON 串——按主窗口展示口径取正文附言/摘要，DLL 端不露 JSON 原文（实测 2026-11-01）
         if (text.charAt(0) === '{') {
-            try { if (JSON.parse(text).type === 'call') return; } catch (e) { }
+            try {
+                var env = JSON.parse(text);
+                if (env && typeof env === 'object') {
+                    if (env.type === 'call') return;
+                    if (env.quote && typeof env.quote === 'object' && typeof env.text === 'string') text = env.text;
+                    else if (env.merged && typeof env.merged === 'object' && Object.prototype.toString.call(env.merged.i) === '[object Array]') {
+                        text = '聊天记录（' + (env.merged.c || env.merged.i.length) + '条消息）';
+                    } else if (typeof env.text === 'string') text = env.text;
+                }
+            } catch (e) { }
         }
         var from = String(msg.from_user || '');
         var name = from;

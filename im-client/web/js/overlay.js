@@ -327,12 +327,28 @@
     }
 
     // ===== 镜像下行（2 私聊 / 111 邀请 / 93 在线增量） =====
+    // 展示文本归口（与主窗口 quoteDisplayText/pinDisplayText 同口径）：引用/AI 图片/文档信封取正文附言，
+    // 合并转发显示摘要，通话话单显示"通话记录"——原实现直接显示 content 原串，引用回复露出 JSON（实测 2026-11-01）
+    function mirrorText(content) {
+        var s = String(content == null ? '' : content);
+        if (s.charAt(0) !== '{') return s;
+        var m = null;
+        try { m = JSON.parse(s); } catch (e) { return s; }
+        if (!m || typeof m !== 'object') return s;
+        if (m.type === 'call') return T('通话记录');
+        if (m.quote && typeof m.quote === 'object' && typeof m.text === 'string') return m.text;
+        if (m.merged && typeof m.merged === 'object' && Object.prototype.toString.call(m.merged.i) === '[object Array]') {
+            return T('聊天记录') + '（' + (m.merged.c || m.merged.i.length) + T('条消息') + '）';
+        }
+        if (typeof m.text === 'string') return m.text; // AI 图片/文档信封取附言
+        return s;
+    }
     function onChatMirror(msg) {
         if (!msg || !msg.msg_type) return;
         if (msg.msg_type === MSG_PRIVATE) {
             var peer = peerOf(msg);
             if (!peer || peer === me) return;
-            var text = String(msg.content || '');
+            var text = mirrorText(msg.content);
             if (!text) return;
             (chatMsgs[peer] = chatMsgs[peer] || []).push({
                 from: msg.from_user || '', text: text,
