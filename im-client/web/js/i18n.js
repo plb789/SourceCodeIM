@@ -19,7 +19,7 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
-    var PACK_VER = '3.30';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：drive/gn-room/rc-mobile 别名 T() 词条全量补齐）
+    var PACK_VER = '3.31';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：浏览区默认标签标题"新标签页"）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
 

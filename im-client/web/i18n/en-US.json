@@ -2480,5 +2480,6 @@
     "对方已断开": "Peer disconnected",
     "连接已结束": "Session ended",
     "正在建立屏幕通道…": "Establishing screen channel…",
-    "连接超时，对方未响应": "Connection timed out — peer not responding"
+    "连接超时，对方未响应": "Connection timed out — peer not responding",
+    "新标签页": "New tab"
 }

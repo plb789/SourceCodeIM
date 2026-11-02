@@ -12106,7 +12106,8 @@
             var chip = document.createElement('div');
             chip.className = 'browser-tab' + (t.id === state.active_id ? ' active' : '') + (isFile ? ' is-file' : '') + (t.dirty ? ' dirty' : '') + (t.pinned ? ' pinned' : '');
             // 阶段九十四：悬停 tooltip 显示完整路径（TRAE 同款）——文件标签显绝对路径，网页标签仍显标题
-            chip.title = isFile ? (t.file_path || t.file_name || t.title || '') : (t.title || I18N.t('(无标题)'));
+            // （t() 仅全等命中词条才替换：主进程默认标题"新标签页/文件预览"得译，站点标题原样透传零风险）
+            chip.title = isFile ? (t.file_path || t.file_name || I18N.t(t.title) || '') : (I18N.t(t.title) || I18N.t('(无标题)'));
             if (t.pinned) { // 阶段九十四：固定标签——锁形小图标（防误关，批量关闭跳过，菜单可取消固定）
                 var pin = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 pin.setAttribute('viewBox', '0 0 24 24');
@@ -12125,7 +12126,7 @@
             }
             var title = document.createElement('span');
             title.className = 'browser-tab-title';
-            title.textContent = t.title || I18N.t('(无标题)');
+            title.textContent = I18N.t(t.title) || I18N.t('(无标题)');
             chip.appendChild(title);
             var close = document.createElement('span');
             close.className = 'browser-icon-btn browser-tab-close';
