@@ -22,7 +22,7 @@
         var about = document.getElementById('brand-unit-about');
         if (about) about.textContent = t(company);
         var copy = document.getElementById('brand-copy');
-        if (copy) copy.textContent = t('© 2026 即时通讯 · ' + company);
+        if (copy) copy.textContent = t(I18N.t('© 2026 即时通讯 · ') + company);
     }
 
     function fetchBranding() {

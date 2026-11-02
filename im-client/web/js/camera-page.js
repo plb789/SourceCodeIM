@@ -76,24 +76,24 @@
                 '<video id="cam-video" autoplay playsinline muted></video>' +
                 '<div class="cam-flash-layer"></div>' +
                 '<div class="cam-topbar">' +
-                    '<button id="cam-close" class="cam-ico-btn" aria-label="关闭"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' +
+                    '<button id="cam-close" class="cam-ico-btn" aria-label="' + I18N.t('关闭') + '"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>' +
                     '<span style="flex:1"></span>' +
-                    '<button id="cam-torch" class="cam-ico-btn hidden" aria-label="闪光灯"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></button>' +
+                    '<button id="cam-torch" class="cam-ico-btn hidden" aria-label="' + I18N.t('闪光灯') + '"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></button>' +
                 '</div>' +
                 '<div class="cam-cancel-tip"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="m12 4 7 7-1.4 1.4L13 7.8V20h-2V7.8l-4.6 4.6L5 11z"/></svg>' + T('松开取消') + '</div>' +
                 '<div class="cam-rec-timer"><span class="dot"></span><span id="cam-rec-text">0:00</span></div>' +
                 '<div class="cam-bottom">' +
-                    '<button id="cam-album" class="cam-side-btn" aria-label="相册"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>' +
+                    '<button id="cam-album" class="cam-side-btn" aria-label="' + I18N.t('相册') + '"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M21 4H3a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1zm-1 12.5-4.5-5-3.5 4-3-3.5L4 17.5V6h16v10.5zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></button>' +
                     '<div class="cam-shutter-wrap">' +
                         '<svg class="cam-ring" viewBox="0 0 100 100"><circle class="cam-ring-bg" cx="50" cy="50" r="48"/><circle class="cam-ring-fg" id="cam-ring-fg" cx="50" cy="50" r="48"/></svg>' +
-                        '<button id="cam-shutter" aria-label="快门"><span class="cam-shutter-core"></span></button>' +
+                        '<button id="cam-shutter" aria-label="' + I18N.t('快门') + '"><span class="cam-shutter-core"></span></button>' +
                     '</div>' +
-                    '<button id="cam-flip" class="cam-side-btn" aria-label="切换摄像头"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5 0 1-.3 1.94-.82 2.72l1.47 1.47A6.94 6.94 0 0 0 19 13c0-3.87-3.13-7-7-7zm0 12v3l4-4-4-4v3c-2.76 0-5-2.24-5-5 0-1 .3-1.94.82-2.72L6.35 7.81A6.94 6.94 0 0 0 5 13c0 3.87 3.13 7 7 7z"/></svg></button>' +
+                    '<button id="cam-flip" class="cam-side-btn" aria-label="' + I18N.t('切换摄像头') + '"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 6V3L8 7l4 4V8c2.76 0 5 2.24 5 5 0 1-.3 1.94-.82 2.72l1.47 1.47A6.94 6.94 0 0 0 19 13c0-3.87-3.13-7-7-7zm0 12v3l4-4-4-4v3c-2.76 0-5-2.24-5-5 0-1 .3-1.94.82-2.72L6.35 7.81A6.94 6.94 0 0 0 5 13c0 3.87 3.13 7 7 7z"/></svg></button>' +
                 '</div>' +
                 '<div id="cam-preview" class="cam-preview hidden">' +
                     '<img id="cam-pv-img" class="cam-pv-media hidden" alt="">' +
                     '<video id="cam-pv-video" class="cam-pv-media hidden" autoplay loop muted playsinline></video>' +
-                    '<div class="cam-pv-top"><button id="cam-pv-back" class="cam-ico-btn" aria-label="返回"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button><span id="cam-pv-dur" class="cam-pv-dur hidden"></span></div>' +
+                    '<div class="cam-pv-top"><button id="cam-pv-back" class="cam-ico-btn" aria-label="' + I18N.t('返回') + '"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button><span id="cam-pv-dur" class="cam-pv-dur hidden"></span></div>' +
                     '<div class="cam-pv-bar">' +
                         '<button id="cam-pv-cancel" class="cam-pv-btn ghost">' + T('取消') + '</button>' +
                         '<button id="cam-pv-ok" class="cam-pv-btn ok">' + T('确认') + '</button>' +

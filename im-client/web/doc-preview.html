@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <title>文档预览</title>
     <!-- 阶段四十六：免费纯前端文档预览页（iframe 内运行，与主应用样式/全局变量完全隔离）
@@ -70,7 +73,7 @@
         function showError(msg) {
             loadingEl.style.display = 'none';
             errEl.style.display = 'block';
-            errEl.innerHTML = '预览失败：' + msg + '<br>可点击窗口右上角"下载"按钮获取文件';
+            errEl.innerHTML = I18N.t('预览失败：') + msg + '<br>' + I18N.t('可点击窗口右上角"下载"按钮获取文件');
         }
 
         // xlsx 预览：逐 Sheet 转 HTML 表格（SheetJS 免费版即可满足）
@@ -101,7 +104,7 @@
             }).then(function () {
                 loadingEl.style.display = 'none';
             }).catch(function (e) {
-                showError('文档解析异常');
+                showError(I18N.t('文档解析异常'));
             });
         }
 
@@ -128,7 +131,7 @@
                     }).catch(function () { loadingEl.style.display = 'none'; });
                 })();
             }).catch(function () {
-                showError('PDF 解析失败');
+                showError(I18N.t('PDF 解析失败'));
             });
         }
 
@@ -161,17 +164,17 @@
         function loadAndRender(u) {
             if (P2P && P2P.cacheRead &&
                 u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
-                loadingEl.textContent = '正在检查本地缓存…';
+                loadingEl.textContent = I18N.t('正在检查本地缓存…');
                 // 阶段二百八十三：小文件读缓存直渲染（零下载秒开）；超大文件拒绝读回（Filesystem.readFile
                 // 内存 ≈ 体积×3.7，161.9MB 实测 OOM 闪退）——微信同款直接系统打开已缓存文件
                 P2P.cacheRead(u, urlName(u), 25 * 1024 * 1024).then(function (r) {
                     if (r && r.tooBig) {
-                        loadingEl.textContent = '文件较大（约 ' + (r.size / 1048576).toFixed(1) + ' MB），已改用本地应用打开';
+                        loadingEl.textContent = I18N.t('文件较大（约 ') + (r.size / 1048576).toFixed(1) + I18N.t(' MB），已改用本地应用打开');
                         if (P2P.openCached) P2P.openCached(u, urlName(u));
                         return;
                     }
                     if (r) {
-                        loadingEl.textContent = '已从本地缓存读取…';
+                        loadingEl.textContent = I18N.t('已从本地缓存读取…');
                         renderBuf(r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength));
                         return;
                     }
@@ -192,7 +195,7 @@
                 }
                 renderBuf(buf);
             }).catch(function (e) {
-                showError('文档加载失败');
+                showError(I18N.t('文档加载失败'));
             });
         }
         function renderBuf(buf) {

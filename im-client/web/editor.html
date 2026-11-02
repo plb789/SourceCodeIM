@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <title>截图编辑</title>
     <link rel="stylesheet" href="css/style.css">
@@ -10,7 +13,7 @@
          编辑器画面全部由 ScreenshotEditor（js/screenshot.js）惰性构建，body 保持空壳；
          主题变量随 style.css 的 html[data-theme] 分支生效（editor-page.js 启动时按 localStorage 设置）；
          编辑任务由主进程经 editor:load 推送，完成/取消/长截图移交/录屏启动经 editor-page.js 桥接回传 -->
-    <script src="js/screenshot.js?v=1.10"></script>
+    <script src="js/screenshot.js?v=1.11"></script>
     <script src="js/editor-page.js"></script>
 </body>
 </html>

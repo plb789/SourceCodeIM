@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>注册账号 - 即时通讯</title>
     <!-- 阶段一四五：独立账号注册页（与登录页同款左右分栏卡片风格，主题变量/深色模式复用 css/style.css） -->
     <!-- 手机版 APP 壳引导（Capacitor 专用）：浏览器环境自动跳过；页面间导航携带 __app=1 标记防壳层误跳转 -->
     <script src="js/app-shell.js?v=1.0"></script>
-    <script src="js/branding.js?v=1.0"></script>
+    <script src="js/branding.js?v=1.1"></script>
     <link rel="stylesheet" href="css/style.css?v=2.43">
     <style>
         /* 注册页专属样式（仅少量补充，主体复用登录页类名；主题色归口 --primary） */
@@ -156,13 +159,13 @@
             password2El.type = show ? 'text' : 'password';
             eyeShow.classList.toggle('hidden', show);
             eyeHide.classList.toggle('hidden', !show);
-            eyeBtn.title = show ? '隐藏密码' : '显示密码';
+            eyeBtn.title = show ? I18N.t('隐藏密码') : I18N.t('显示密码');
         });
 
         function setSubmitting(v) {
             submitting = v;
             btn.disabled = v;
-            btn.textContent = v ? '注册中…' : '注 册';
+            btn.textContent = v ? I18N.t('注册中…') : I18N.t('注 册');
         }
 
         // ===== 注册提交 =====
@@ -171,9 +174,9 @@
             var username = usernameEl.value.trim();
             var password = passwordEl.value;
             var password2 = password2El.value;
-            if (!username) { showToast('请输入账号', true); usernameEl.focus(); return; }
-            if (!password) { showToast('请输入密码', true); passwordEl.focus(); return; }
-            if (password !== password2) { showToast('两次输入的密码不一致', true); password2El.focus(); return; }
+            if (!username) { showToast(I18N.t('请输入账号'), true); usernameEl.focus(); return; }
+            if (!password) { showToast(I18N.t('请输入密码'), true); passwordEl.focus(); return; }
+            if (password !== password2) { showToast(I18N.t('两次输入的密码不一致'), true); password2El.focus(); return; }
             setSubmitting(true);
             // 独立注册通道：短连接发 REGISTER 信令，服务端校验（重名/保留字/空值）后回执
             IMSocket.register(username, password, function (ok, text) {
@@ -183,13 +186,13 @@
                     try {
                         localStorage.setItem('im_auth', btoa(encodeURIComponent(JSON.stringify({ u: username, p: password }))));
                     } catch (e) {}
-                    showToast(text || '注册成功，正在进入…', false);
+                    showToast(text || I18N.t('注册成功，正在进入…'), false);
                     setTimeout(function () {
                         location.href = 'index.html?__app=1';
                     }, 900);
                 } else {
                     setSubmitting(false);
-                    showToast(text || '注册失败，请稍后重试', true);
+                    showToast(text || I18N.t('注册失败，请稍后重试'), true);
                 }
             });
         }

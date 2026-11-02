@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <title>幻灯片预览</title>
     <!-- 阶段四十六：免费纯前端 PPT 预览页（iframe 内运行，与主应用全局变量完全隔离）
@@ -100,7 +103,7 @@
         function showError(msg) {
             loadingEl.style.display = 'none';
             errEl.style.display = 'block';
-            errEl.innerHTML = '预览失败：' + msg + '<br>可点击窗口右上角"下载"按钮获取文件';
+            errEl.innerHTML = I18N.t('预览失败：') + msg + '<br>' + I18N.t('可点击窗口右上角"下载"按钮获取文件');
         }
 
         // ===== 阶段二百二十二：大文件真实进度与大文件确认 =====
@@ -152,22 +155,22 @@
                         // 移除进度条令收态轮询退出，避免空转
                         var m = document.querySelector('.slides-loadnig-msg');
                         if (m && m.parentNode) m.parentNode.removeChild(m);
-                        showError('文件下载失败：' + (err && err.message || err));
+                        showError(I18N.t('文件下载失败：') + (err && err.message || err));
                         return;
                     }
                     // 下载完成 → 先异步预解压（绕开 JSZip v2 inflate 对 stored-block 流的死循环）
                     preInflate(data, function () {
                         // 预解压完成 → 解析阶段（此时 JSZip 条目命中 preMap，同步装配极快，文字先行绘制）
-                        setLoadMsg('下载完成，正在解析幻灯片…（超大内嵌媒体将自动跳过以加快解析）');
-                        syncBar(100, '解析中…');
+                        setLoadMsg(I18N.t('下载完成，正在解析幻灯片…（超大内嵌媒体将自动跳过以加快解析）'));
+                        syncBar(100, I18N.t('解析中…'));
                         if (real) real(null, data);
                     });
                 };
                 var prog = function (loaded, total) {
                     if (!total) return;
                     var pct = loaded / total * 100;
-                    setLoadMsg('正在下载 ' + pct.toFixed(0) + '%（' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' MB）');
-                    syncBar(pct, '下载中 ' + pct.toFixed(0) + '%');
+                    setLoadMsg(I18N.t('正在下载 ') + pct.toFixed(0) + '%（' + fmtMB(loaded) + ' / ' + fmtMB(total) + ' MB）');
+                    syncBar(pct, I18N.t('下载中 ') + pct.toFixed(0) + '%');
                 };
                 // 阶段二百八十三：缓存命中预注入数据（__im_predata__ 标记 URL）——不走 XHR 零网络，
                 // 直接以 Uint8Array 的 buffer 进入 preInflate/JSZip 既有管线
@@ -195,7 +198,7 @@
                             done(new Error('Ajax error for ' + url + ' : ' + x.status + ' ' + x.statusText));
                         }
                     };
-                    x.onerror = function () { done(new Error('网络错误：' + url)); };
+                    x.onerror = function () { done(new Error(I18N.t('网络错误：') + url)); };
                     x.send();
                 } catch (err) { done(err); }
             };
@@ -236,11 +239,11 @@
             ctx.fillStyle = '#666666';
             ctx.textAlign = 'center';
             ctx.font = 'bold 30px "Microsoft YaHei", sans-serif';
-            ctx.fillText('内嵌媒体体积过大', cv.width / 2, 138);
+            ctx.fillText(I18N.t('内嵌媒体体积过大'), cv.width / 2, 138);
             ctx.font = '22px "Microsoft YaHei", sans-serif';
-            ctx.fillText('约 ' + fmtMB(sizeBytes) + ' MB，预览已跳过', cv.width / 2, 182);
+            ctx.fillText(I18N.t('约 ') + fmtMB(sizeBytes) + I18N.t(' MB，预览已跳过'), cv.width / 2, 182);
             ctx.fillStyle = '#999999';
-            ctx.fillText('下载后使用本地 PowerPoint / WPS 查看', cv.width / 2, 218);
+            ctx.fillText(I18N.t('下载后使用本地 PowerPoint / WPS 查看'), cv.width / 2, 218);
             var b64 = cv.toDataURL('image/png').split(',')[1];
             var bin = atob(b64);
             var u8 = new Uint8Array(bin.length);
@@ -309,7 +312,7 @@
                 // 无 deflate-raw 能力：大文件直接提示下载（进入 JSZip 会被 tinf 死循环冻结主线程）；
                 // 小文件中毒流概率低，维持原 JSZip 行为（老环境小文件预览不受影响）
                 if (data.byteLength >= SMALL_PPTX_BYTES) {
-                    showError('文档较大且当前浏览器内核不支持在线预解压，请点击右上角"下载"按钮查看');
+                    showError(I18N.t('文档较大且当前浏览器内核不支持在线预解压，请点击右上角"下载"按钮查看'));
                 } else { onDone(); }
                 return;
             }
@@ -326,8 +329,8 @@
             if (!keep.length) { onDone(); return; }
             window.__preMap = {};
             var doneN = 0, idx = 0, inflight = 0, released = false, lastTick = Date.now();
-            setLoadMsg('下载完成，正在预解压资源…（0 / ' + keep.length + '）');
-            syncBar(100, '解析中…');
+            setLoadMsg(I18N.t('下载完成，正在预解压资源…（0 / ') + keep.length + '）');
+            syncBar(100, I18N.t('解析中…'));
             function release() {
                 if (released) return;
                 released = true;
@@ -339,7 +342,7 @@
                 doneN++;
                 lastTick = Date.now();
                 if (doneN % 5 === 0 || doneN === keep.length) {
-                    setLoadMsg('下载完成，正在预解压资源…（' + doneN + ' / ' + keep.length + '）');
+                    setLoadMsg(I18N.t('下载完成，正在预解压资源…（') + doneN + ' / ' + keep.length + '）');
                 }
                 if (doneN === keep.length) release();
                 else pump();
@@ -457,7 +460,7 @@
                     'align-items:center;justify-content:center;background:#f2f2f2;color:#666;' +
                     'font-family:"Microsoft YaHei",sans-serif;font-size:14px;text-align:center;' +
                     'line-height:1.9;border-radius:4px;';
-                dv.innerHTML = '该内嵌媒体格式不支持网页预览<br>请下载后使用本地 PowerPoint / WPS 打开';
+                dv.innerHTML = I18N.t('该内嵌媒体格式不支持网页预览') + '<br>' + I18N.t('请下载后使用本地 PowerPoint / WPS 打开');
                 imgs[i].parentNode.replaceChild(dv, imgs[i]);
             }
             if (skippedMedia.count > 0) {
@@ -466,8 +469,8 @@
                     'z-index:30;background:rgba(0,0,0,0.72);color:#ffffff;font-size:13px;' +
                     'padding:8px 16px;border-radius:8px;font-family:"Microsoft YaHei",sans-serif;' +
                     'max-width:86%;box-sizing:border-box;';
-                t.textContent = '已跳过 ' + skippedMedia.count + ' 个超大内嵌媒体（合计约 ' +
-                    fmtMB(skippedMedia.bytes) + ' MB），下载后本地打开可查看';
+                t.textContent = I18N.t('已跳过 ') + skippedMedia.count + I18N.t(' 个超大内嵌媒体（合计约 ') +
+                    fmtMB(skippedMedia.bytes) + I18N.t(' MB），下载后本地打开可查看');
                 document.body.appendChild(t);
                 setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 6000);
             }
@@ -481,14 +484,14 @@
             });
             document.getElementById('bw-cancel').addEventListener('click', function () {
                 warnEl.classList.remove('on');
-                setLoadMsg('已取消在线预览：可点击查看器窗口的"下载"按钮获取文件后，使用本地 PowerPoint / WPS 打开');
+                setLoadMsg(I18N.t('已取消在线预览：可点击查看器窗口的"下载"按钮获取文件后，使用本地 PowerPoint / WPS 打开'));
             });
         })();
 
         function askBig(u, size) {
             loadingEl.style.display = 'none';
             document.getElementById('big-warn-text').textContent =
-                '当前文件约 ' + fmtMB(size) + ' MB，在线解析幻灯片耗时较长且大文件可能失败，建议下载后使用本地 PowerPoint / WPS 打开。';
+                I18N.t('当前文件约 ') + fmtMB(size) + I18N.t(' MB，在线解析幻灯片耗时较长且大文件可能失败，建议下载后使用本地 PowerPoint / WPS 打开。');
             warnEl.dataset.url = u;
             warnEl.classList.add('on');
         }
@@ -530,15 +533,15 @@
             // 大文件交本地应用），页内仅提示去向
             if (P2P && P2P.cacheRead &&
                 u.indexOf('blob:') !== 0 && u.indexOf('data:') !== 0) {
-                setLoadMsg('正在检查本地缓存…');
+                setLoadMsg(I18N.t('正在检查本地缓存…'));
                 P2P.cacheRead(u, urlName(u), CACHE_READ_MAX).then(function (r) {
                     if (r && r.tooBig) {
-                        setLoadMsg('文件较大（约 ' + fmtMB(r.size) + ' MB），已改用本地应用打开');
+                        setLoadMsg(I18N.t('文件较大（约 ') + fmtMB(r.size) + I18N.t(' MB），已改用本地应用打开'));
                         if (P2P.openCached) P2P.openCached(u, urlName(u));
                         return;
                     }
                     if (r) {
-                        setLoadMsg('已从本地缓存读取…');
+                        setLoadMsg(I18N.t('已从本地缓存读取…'));
                         window.__imPreData = r; // Uint8Array 直注管线：省 Blob 构造与 blob: XHR 两份整文件拷贝
                         startRender('__im_predata__');
                         return;
@@ -550,7 +553,7 @@
             renderPptxNet(u);
         }
         function renderPptxNet(u) {
-            setLoadMsg('正在获取文件信息…');
+            setLoadMsg(I18N.t('正在获取文件信息…'));
             probeSize(u, function (n) {
                 if (n > LARGE_PPTX_BYTES) { askBig(u, n); return; }
                 startRender(u);
@@ -560,7 +563,7 @@
         function startRender(u) {
             var go = function (realUrl) {
                 try {
-                    setLoadMsg('正在准备下载…'); // 确认点击后、首个进度事件前的即时反馈
+                    setLoadMsg(I18N.t('正在准备下载…')); // 确认点击后、首个进度事件前的即时反馈
                     $('#pptx-viewer').pptxToHtml({
                         pptxFileUrl: realUrl,
                         slideMode: false,
@@ -580,16 +583,16 @@
                     }, 300);
                 } catch (e) {
                     // 异常信息直接透出（含 PPTXjs 内部抛出的原始 message），便于实测定位
-                    showError('幻灯片解析异常：' + (e && e.message ? e.message : e));
+                    showError(I18N.t('幻灯片解析异常：') + (e && e.message ? e.message : e));
                 }
             };
             if (u.indexOf('data:') === 0) {
                 // data: URL 无法被 XHR 请求（jszip-utils 内部走 XHR）——先 fetch 转 blob: URL 再渲染
-                setLoadMsg('正在读取文件…');
+                setLoadMsg(I18N.t('正在读取文件…'));
                 fetch(u).then(function (r) { return r.blob(); }).then(function (b) {
                     go(URL.createObjectURL(b));
                 }).catch(function (e) {
-                    showError('文件读取失败：' + (e && e.message ? e.message : e));
+                    showError(I18N.t('文件读取失败：') + (e && e.message ? e.message : e));
                 });
                 return;
             }

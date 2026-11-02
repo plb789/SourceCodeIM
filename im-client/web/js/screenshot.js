@@ -94,14 +94,14 @@
             var btn = document.createElement('button');
             btn.className = 'shot-tool';
             btn.dataset.tool = t;
-            btn.title = { select: '选区', rect: '矩形', ellipse: '椭圆', arrow: '箭头', brush: '画笔', text: '文字', mosaic: '马赛克' }[t];
+            btn.title = { select: I18N.t('选区'), rect: I18N.t('矩形'), ellipse: I18N.t('椭圆'), arrow: I18N.t('箭头'), brush: I18N.t('画笔'), text: I18N.t('文字'), mosaic: I18N.t('马赛克') }[t];
             btn.innerHTML = ICONS[t];
             toolbarEl.appendChild(btn);
         });
         var undoBtn = document.createElement('button');
         undoBtn.className = 'shot-tool';
         undoBtn.dataset.tool = 'undo';
-        undoBtn.title = '撤销';
+        undoBtn.title = I18N.t('撤销');
         undoBtn.innerHTML = ICONS.undo;
         toolbarEl.appendChild(undoBtn);
 
@@ -109,20 +109,20 @@
         var ocrBtn = document.createElement('button');
         ocrBtn.className = 'shot-tool';
         ocrBtn.dataset.action = 'ocr';
-        ocrBtn.title = '提取文字';
+        ocrBtn.title = I18N.t('提取文字');
         ocrBtn.innerHTML = ICONS.ocr;
         toolbarEl.appendChild(ocrBtn);
         var trBtn = document.createElement('button');
         trBtn.className = 'shot-tool';
         trBtn.dataset.action = 'translate';
-        trBtn.title = '屏幕翻译';
+        trBtn.title = I18N.t('屏幕翻译');
         trBtn.innerHTML = ICONS.translate;
         toolbarEl.appendChild(trBtn);
         // 阶段一百三十九：长截图（滚动拼接）——动作按钮，dataset.action 区分；仅 PC 冻结态显示（load 里控制显隐）
         stitchBtn = document.createElement('button');
         stitchBtn.className = 'shot-tool';
         stitchBtn.dataset.action = 'stitch';
-        stitchBtn.title = '长截图';
+        stitchBtn.title = I18N.t('长截图');
         stitchBtn.innerHTML = ICONS.stitch;
         toolbarEl.appendChild(stitchBtn);
 
@@ -141,17 +141,17 @@
 
         var cancelBtn = document.createElement('button');
         cancelBtn.className = 'shot-btn';
-        cancelBtn.textContent = '取消';
+        cancelBtn.textContent = I18N.t('取消');
         var sendBtn = document.createElement('button');
         sendBtn.className = 'shot-btn primary';
-        sendBtn.textContent = '发送';
+        sendBtn.textContent = I18N.t('发送');
         toolbarEl.appendChild(cancelBtn);
         toolbarEl.appendChild(sendBtn);
 
         // 文字工具自定义输入框（禁止系统默认弹窗）
         textInputEl = document.createElement('input');
         textInputEl.className = 'shot-text-input hidden';
-        textInputEl.placeholder = '输入文字，回车确认';
+        textInputEl.placeholder = I18N.t('输入文字，回车确认');
 
         // 选区尺寸标签（伪冻结模式：拖拽时实时显示 宽×高，微信同款）
         sizeLabel = document.createElement('div');
@@ -160,7 +160,7 @@
         // 冻结态操作提示条（自绘非系统弹窗）：告知用户需拖拽框选（微信 Alt+A 同款引导）
         hintEl = document.createElement('div');
         hintEl.className = 'shot-hint hidden';
-        hintEl.textContent = '拖拽框选截图区域 · Enter 发送 · Esc 取消';
+        hintEl.textContent = I18N.t('拖拽框选截图区域 · Enter 发送 · Esc 取消');
 
         // 阶段一百三十九：悬停窗口高亮框（QQ 同款）——置顶于画布之上但不挡鼠标事件
         winHoverEl = document.createElement('div');
@@ -173,10 +173,10 @@
         recSizeEl.className = 'shot-rec-size';
         var recStartBtn = document.createElement('button');
         recStartBtn.className = 'shot-btn rec-start';
-        recStartBtn.textContent = '开始录制';
+        recStartBtn.textContent = I18N.t('开始录制');
         var recCancelBtn = document.createElement('button');
         recCancelBtn.className = 'shot-btn';
-        recCancelBtn.textContent = '取消';
+        recCancelBtn.textContent = I18N.t('取消');
         recStartBtn.addEventListener('click', function () { startRecCountdown(); });
         recCancelBtn.addEventListener('click', function () { close(); });
         recToolbarEl.appendChild(recSizeEl);
@@ -197,7 +197,7 @@
         var ocrClose = document.createElement('button');
         ocrClose.className = 'shot-ocr-close';
         ocrClose.textContent = '×';
-        ocrClose.title = '关闭';
+        ocrClose.title = I18N.t('关闭');
         ocrClose.addEventListener('click', function () { hideOcrCard(); });
         ocrHead.appendChild(ocrTitleEl);
         ocrHead.appendChild(ocrClose);
@@ -207,15 +207,15 @@
         ocrFoot.className = 'shot-ocr-foot';
         ocrCopyBtn = document.createElement('button');
         ocrCopyBtn.className = 'shot-btn';
-        ocrCopyBtn.textContent = '复制全部';
+        ocrCopyBtn.textContent = I18N.t('复制全部');
         ocrCopyBtn.addEventListener('click', function () {
             var txt = ocrCopyBtn._text || '';
             if (!txt) return;
             // 项目规则：程序化剪贴板（禁选环境下不依赖选区）
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(txt).then(function () {
-                    ocrCopyBtn.textContent = '已复制';
-                    setTimeout(function () { ocrCopyBtn.textContent = '复制全部'; }, 1200);
+                    ocrCopyBtn.textContent = I18N.t('已复制');
+                    setTimeout(function () { ocrCopyBtn.textContent = I18N.t('复制全部'); }, 1200);
                 });
             }
         });
@@ -491,7 +491,7 @@
                 toolbarEl.classList.remove('visible'); // 选区完成后工具栏才出现
                 recToolbarEl.classList.add('hidden');  // 阶段一百三十九：录屏工具栏复位隐藏
                 recCountEl.classList.add('hidden');    // 阶段一百三十九：倒计时层复位隐藏
-                hintEl.textContent = mode === 'record' ? '拖拽框选录屏区域 · Esc 取消' : '拖拽框选截图区域 · Enter 发送 · Esc 取消';
+                hintEl.textContent = mode === 'record' ? I18N.t('拖拽框选录屏区域 · Esc 取消') : I18N.t('拖拽框选截图区域 · Enter 发送 · Esc 取消');
                 hintEl.classList.remove('hidden');     // 顶部操作提示：告知拖拽框选
                 // 阶段一百三十九：长截图按钮仅 PC 冻结态显示（录屏/浏览器无 stitchCb 时隐藏）
                 if (stitchBtn) stitchBtn.classList.toggle('hidden', !(mode === 'freeze' && stitchCb));
@@ -592,7 +592,7 @@
         if (mode !== 'freeze' || !sel || !stitchCb) return;
         if (sel.w < STITCH_MIN_W || sel.h < STITCH_MIN_H) {
             // 选区过小：提示后保留编辑器现状（不关闭），用户可重新框选
-            hintEl.textContent = '选区太小，无法长截图（请框选更高的区域）';
+            hintEl.textContent = I18N.t('选区太小，无法长截图（请框选更高的区域）');
             hintEl.classList.remove('hidden');
             return;
         }
@@ -633,11 +633,11 @@
 
     // 浮层 loading 态（withTranslate：true=屏幕翻译，false=提取文字）
     function showOcrCard(loading, withTranslate) {
-        ocrTitleEl.textContent = loading ? (withTranslate ? '屏幕翻译' : '提取文字') : (withTranslate ? '翻译结果' : '提取结果');
+        ocrTitleEl.textContent = loading ? (withTranslate ? I18N.t('屏幕翻译') : I18N.t('提取文字')) : (withTranslate ? I18N.t('翻译结果') : I18N.t('提取结果'));
         ocrBodyEl.innerHTML = '';
         var tip = document.createElement('div');
         tip.className = 'shot-ocr-loading';
-        tip.textContent = loading ? (withTranslate ? '识别并翻译中，请稍候…' : '识别中，请稍候…') : '';
+        tip.textContent = loading ? (withTranslate ? I18N.t('识别并翻译中，请稍候…') : I18N.t('识别中，请稍候…')) : '';
         ocrBodyEl.appendChild(tip);
         ocrCopyBtn._text = '';
         ocrCopyBtn.classList.add('hidden');
@@ -646,12 +646,12 @@
 
     // 浮层结果渲染：translated 为 null 表示纯提取模式（仅原文行）
     function renderOcrResult(lines, translated) {
-        ocrTitleEl.textContent = translated === null ? '提取结果' : '翻译结果';
+        ocrTitleEl.textContent = translated === null ? I18N.t('提取结果') : I18N.t('翻译结果');
         ocrBodyEl.innerHTML = '';
         if (!lines.length) {
             var empty = document.createElement('div');
             empty.className = 'shot-ocr-empty';
-            empty.textContent = '未识别到文字';
+            empty.textContent = I18N.t('未识别到文字');
             ocrBodyEl.appendChild(empty);
             return;
         }
@@ -659,13 +659,13 @@
         if (translated !== null) {
             var srcLabel = document.createElement('div');
             srcLabel.className = 'shot-ocr-label';
-            srcLabel.textContent = '原文';
+            srcLabel.textContent = I18N.t('原文');
             var src = document.createElement('div');
             src.className = 'shot-ocr-text src';
             src.textContent = full; // textContent 防 XSS 归口
             var dstLabel = document.createElement('div');
             dstLabel.className = 'shot-ocr-label';
-            dstLabel.textContent = '译文';
+            dstLabel.textContent = I18N.t('译文');
             var dst = document.createElement('div');
             dst.className = 'shot-ocr-text dst';
             dst.textContent = translated;
@@ -686,7 +686,7 @@
 
     // 浮层错误态（识别/翻译失败统一从浮层出，不弹系统框）
     function renderOcrError(msg) {
-        ocrTitleEl.textContent = '提示';
+        ocrTitleEl.textContent = I18N.t('提示');
         ocrBodyEl.innerHTML = '';
         var err = document.createElement('div');
         err.className = 'shot-ocr-empty';
@@ -717,11 +717,11 @@
         if (ocrBusy) return; // 请求在途防重入
         if (!sel || sel.w < 2 || sel.h < 2) {
             // 未框选：从浮层出引导提示（交互与结果展示一致，不混用 hintEl）
-            ocrTitleEl.textContent = '提示';
+            ocrTitleEl.textContent = I18N.t('提示');
             ocrBodyEl.innerHTML = '';
             var tip = document.createElement('div');
             tip.className = 'shot-ocr-empty';
-            tip.textContent = '请先拖拽框选要识别的文字区域';
+            tip.textContent = I18N.t('请先拖拽框选要识别的文字区域');
             ocrBodyEl.appendChild(tip);
             ocrCopyBtn._text = '';
             ocrCopyBtn.classList.add('hidden');
@@ -736,7 +736,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image: cropSelDataUrl() })
         }).then(function (r) { return r.json(); }).then(function (j) {
-            if (!j.ok) throw new Error(j.msg || '识别失败');
+            if (!j.ok) throw new Error(j.msg || I18N.t('识别失败'));
             var lines = (j.data && j.data.lines) || [];
             if (!withTranslate) { ocrBusy = false; renderOcrResult(lines, null); return null; }
             if (!lines.length) { ocrBusy = false; renderOcrResult(lines, null); return null; }
@@ -746,11 +746,11 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: lines.join('\n') })
             }).then(function (r2) { return r2.json(); }).then(function (j2) {
-                if (!j2.ok) throw new Error(j2.msg || '翻译失败');
+                if (!j2.ok) throw new Error(j2.msg || I18N.t('翻译失败'));
                 renderOcrResult(lines, (j2.data && j2.data.translated) || '');
             });
         }).catch(function (e) {
-            renderOcrError((e && e.message) || '请求失败');
+            renderOcrError((e && e.message) || I18N.t('请求失败'));
         }).then(function () { ocrBusy = false; });
     }
 

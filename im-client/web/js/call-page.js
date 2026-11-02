@@ -210,7 +210,7 @@
         watchdogId = setTimeout(function () {
             if (st.ended || (st.state !== 'connecting' && st.state !== 'active')) return;
             send('hangup', {});
-            finish(st.state === 'active' ? '网络连接中断' : '连接超时，请稍后再试');
+            finish(st.state === 'active' ? I18N.t('网络连接中断') : I18N.t('连接超时，请稍后再试'));
         }, ms);
     }
 
@@ -275,15 +275,15 @@
     function applyMediaMarks() {
         btnMute.classList.toggle('dev-off', st.micUnavailable);
         btnMute.disabled = st.micUnavailable;
-        if (st.micUnavailable) btnMute.title = '麦克风不可用';
+        if (st.micUnavailable) btnMute.title = I18N.t('麦克风不可用');
         btnCam.classList.toggle('dev-off', st.camUnavailable);
         btnCam.disabled = st.camUnavailable;
-        if (st.camUnavailable) btnCam.title = '摄像头不可用';
+        if (st.camUnavailable) btnCam.title = I18N.t('摄像头不可用');
         if (btnShare && !btnShare.classList.contains('hidden')) {
             // 原代码：btnShare.disabled = st.camUnavailable; title='摄像头不可用，无法共享屏幕'
             // 阶段一百四十九：无摄像头不再禁共享（video m 行 sendrecv 空轨占位，共享零重协商）
             btnShare.disabled = false;
-            btnShare.title = '共享屏幕';
+            btnShare.title = I18N.t('共享屏幕');
         }
         document.body.classList.toggle('cam-dead', st.camUnavailable);
     }
@@ -365,7 +365,7 @@
             } else if (s === 'failed' || s === 'closed') {
                 // 协商失败/连接关闭：通知对端并收口（对端有看门狗兜底）
                 send('hangup', {});
-                finish('连接已断开');
+                finish(I18N.t('连接已断开'));
             } else if (s === 'disconnected') {
                 // 阶段一百四十七：断网先走 ICE restart 自动重连（主叫单点发起）；
                 // 看门狗 30s（与服务端下线宽限对齐）：网络抖动可能自愈/WS 闪断后重连恢复，未恢复再收口，不立即挂断
@@ -480,7 +480,7 @@
             if (!lc || !rc) return;
             var relayed = lc.candidateType === 'relay' || rc.candidateType === 'relay';
             console.log('[通话] 媒体链路: 本端 ' + lc.candidateType + ' ↔ 对端 ' + rc.candidateType +
-                (relayed ? '（TURN 中继）' : '（P2P 直连）'));
+                (relayed ? I18N.t('（TURN 中继）') : I18N.t('（P2P 直连）')));
         }).catch(function () { });
     }
 
@@ -539,8 +539,9 @@
         }
         try { if (st.local) st.local.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
         st.local = null;
-        setStatusText(reason, true);
-        elMaskText.textContent = reason;
+        var showReason = I18N.tr(reason); // 服务端中文文案（对方不在线/黑名单等）按包全等翻译
+        setStatusText(showReason, true);
+        elMaskText.textContent = showReason;
         elMask.classList.add('visible');
         // 延迟关窗让用户看到结束原因；callClose 会通知主窗口清通话态并销毁窗口
         setTimeout(function () { d.callClose && d.callClose(); }, 1800);
@@ -551,16 +552,16 @@
         if (st.meet) {
             // 会议：退房信令（服务端广播余员；最后一人离开时服务端解散落话单）
             send('hangup', {});
-            finish('会议已结束');
+            finish(I18N.t('会议已结束'));
             return;
         }
         // 响铃期取消（微信"已取消"话单语义）；接通后为挂断
-        if (st.state === 'waiting') { send('cancel', {}); finish('通话已结束'); return; }
+        if (st.state === 'waiting') { send('cancel', {}); finish(I18N.t('通话已结束')); return; }
         // 话单链路类型归口：挂断前采样最终选中候选对（最长 500ms，不阻塞收口体验）随挂断信令上报
         collectLinkType(function (link) {
             if (st.ended) return; // 连点守卫：首次回调已收口则跳过
             send('hangup', { link_type: link });
-            finish('通话已结束');
+            finish(I18N.t('通话已结束'));
         });
     }
 
@@ -594,7 +595,7 @@
         recBadgeRefresh();
         btnInvite.classList.add('hidden');
         btnShare.classList.add('hidden');
-        if (btnRecord) { btnRecord.classList.add('hidden'); btnRecord.classList.remove('rec-on'); btnRecord.title = '开始录制'; }
+        if (btnRecord) { btnRecord.classList.add('hidden'); btnRecord.classList.remove('rec-on'); btnRecord.title = I18N.t('开始录制'); }
         try { if (st.local) st.local.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
         st.local = null; st.remote = null;
         st.pendingCands = [];
@@ -609,7 +610,7 @@
         btnMute.classList.remove('active'); btnCam.classList.remove('active');
         btnMute.classList.remove('dev-off'); btnCam.classList.remove('dev-off');
         btnMute.disabled = false; btnCam.disabled = false; btnShare.disabled = false;
-        btnMute.title = '静音'; btnCam.title = '关闭摄像头'; btnShare.title = '共享屏幕';
+        btnMute.title = I18N.t('静音'); btnCam.title = I18N.t('关闭摄像头'); btnShare.title = I18N.t('共享屏幕');
         document.body.classList.remove('cam-off', 'cam-dead');
         // 阶段二百五十四：换场清共享舞台态与沉浸全屏类（残留会遮住下场顶栏/控制条）
         st.stageUser = ''; st.stageFull = false;
@@ -630,7 +631,7 @@
             armWatchdog(20000); // offer 后 20s 未连通自收口（ICE 全挂时 connectionState 亦会兜底）
         }).catch(function () {
             send('hangup', {});
-            finish('建立连接失败');
+            finish(I18N.t('建立连接失败'));
         });
     }
     function calleeAnswerOffer(p) {
@@ -667,7 +668,7 @@
         }).catch(function () {
             if (isRestart) return; // restart 乱序 offer 处理失败：静默，交由重试/看门狗兜底
             send('hangup', {});
-            finish('建立连接失败');
+            finish(I18N.t('建立连接失败'));
         });
     }
 
@@ -689,9 +690,9 @@
         st.callId = data.call_id;
         st.callType = data.call_type === 'video' ? 'video' : 'audio';
         st.groupId = data.group_id || 0;
-        st.meetTitle = data.meet_title || '多人会议';
+        st.meetTitle = data.meet_title || I18N.t('多人会议');
         st.meetNo = data.meet_no || ''; // 阶段一百五十二：会议号（服务端建房生成，顶部徽标展示，点击复制）
-        st.selfName = data.self_name || '我';
+        st.selfName = data.self_name || I18N.t('我');
         st.selfAvatar = data.self_avatar || '';
         if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = 'mode-meet ' + (st.callType === 'video' ? 'mode-video' : 'mode-audio');
@@ -711,7 +712,7 @@
         btnInvite.classList.remove('hidden');
         // 会议录制按钮（语音/视频会议均可录——语音=纯录音；仅 PC 端亮出，WEB 端 iframe 桥无写盘 IPC）
         if (btnRecord && window.desktop && window.desktop.recMeetStart) btnRecord.classList.remove('hidden');
-        $('meetStatus').textContent = st.role === 'caller' ? '等待成员加入…' : '正在加入会议…';
+        $('meetStatus').textContent = st.role === 'caller' ? I18N.t('等待成员加入…') : I18N.t('正在加入会议…');
         getMediaDegrade().then(function (r) {
             if (st.ended) {
                 if (r.stream) { try { r.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { } }
@@ -744,7 +745,7 @@
                         if (nt) st.local.addTrack(nt);
                         if (!still) micSwapSenders(nt); // 录制混音由 recSyncAudio 1s 内自动重挂新轨
                         if (still && micTries-- > 0) setTimeout(micRetry, 600);
-                        else if (still) setMeetStatus('麦克风被系统静音：请检查 Windows 声音设置（输入设备静音状态）');
+                        else if (still) setMeetStatus(I18N.t('麦克风被系统静音：请检查 Windows 声音设置（输入设备静音状态）'));
                     }).catch(function () { if (micTries-- > 0) setTimeout(micRetry, 600); });
                 };
                 setTimeout(micRetry, 400);
@@ -770,9 +771,9 @@
                 st.state = 'connecting'; // 被叫等 room_info 后与各成员协商
             }
             // 降级提示（一次性；后续状态/计时文案覆盖）
-            if (st.micUnavailable && st.camUnavailable) setMeetStatus('麦克风/摄像头不可用，仅接收');
-            else if (st.camUnavailable) setMeetStatus('摄像头不可用，以语音加入');
-            else if (st.micUnavailable) setMeetStatus('麦克风不可用');
+            if (st.micUnavailable && st.camUnavailable) setMeetStatus(I18N.t('麦克风/摄像头不可用，仅接收'));
+            else if (st.camUnavailable) setMeetStatus(I18N.t('摄像头不可用，以语音加入'));
+            else if (st.micUnavailable) setMeetStatus(I18N.t('麦克风不可用'));
         });
     }
 
@@ -786,7 +787,7 @@
         var el = $('meetNo');
         if (!el) return;
         if (st.meetNo) {
-            el.textContent = '会议号 ' + st.meetNo;
+            el.textContent = I18N.t('会议号 ') + st.meetNo;
             el.classList.remove('hidden');
         } else {
             el.classList.add('hidden');
@@ -796,7 +797,7 @@
     function flashMeetNoCopied() {
         var el = $('meetNo');
         if (!el || !st.meetNo) return;
-        el.textContent = '已复制';
+        el.textContent = I18N.t('已复制');
         if (meetNoFlashTimer) clearTimeout(meetNoFlashTimer);
         meetNoFlashTimer = setTimeout(function () {
             meetNoFlashTimer = null;
@@ -918,7 +919,7 @@
                 var sv = stageTile.querySelector('video');
                 if (sv) recDrawCover(ctx, sv, 0, 0, cv.width, cv.height);
                 var su = meetUserOf(st.stageUser);
-                recDrawName(ctx, (su.name || '') + (st.stageUser === 'self' ? '（我）' : '') + '（共享屏幕）', 0, 0, cv.width, cv.height);
+                recDrawName(ctx, (su.name || '') + (st.stageUser === 'self' ? I18N.t('（我）') : '') + I18N.t('（共享屏幕）'), 0, 0, cv.width, cv.height);
             }
             return;
         }
@@ -936,7 +937,7 @@
             var u2 = tiles[j].getAttribute('data-user');
             var ui = meetUserOf(u2);
             if (v2) recDrawCover(ctx, v2, x, y, w, h);
-            recDrawName(ctx, (ui.name || '') + (u2 === 'self' ? '（我）' : ''), x, y, w, h);
+            recDrawName(ctx, (ui.name || '') + (u2 === 'self' ? I18N.t('（我）') : ''), x, y, w, h);
         }
     }
 
@@ -948,11 +949,11 @@
         if (rec.active) {
             var s = Math.floor((Date.now() - rec.startedAt) / 1000);
             function p2(n) { return (n < 10 ? '0' : '') + n; }
-            who = '录制中 ' + p2(Math.floor(s / 60)) + ':' + p2(s % 60);
+            who = I18N.t('录制中 ') + p2(Math.floor(s / 60)) + ':' + p2(s % 60);
         } else {
             for (var u in recRemote) {
                 var m = st.members[u];
-                who = (m ? (m.name || u) : u) + ' 录制中';
+                who = (m ? (m.name || u) : u) + I18N.t(' 录制中');
                 break;
             }
         }
@@ -1002,7 +1003,7 @@
         setTimeout(function () {
             if (window.desktop && window.desktop.recMeetEnd) {
                 window.desktop.recMeetEnd().then(function (r) {
-                    if (r && r.ok && r.path && !st.ended) setMeetStatus('录制已保存：' + r.path);
+                    if (r && r.ok && r.path && !st.ended) setMeetStatus(I18N.t('录制已保存：') + r.path);
                 });
             }
             try { if (rec.ctx) rec.ctx.close(); } catch (e) { }
@@ -1026,7 +1027,7 @@
         var ts = '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '_' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds());
         var r;
         try {
-            r = await window.desktop.recMeetStart({ name: '会议录制_' + (st.meetTitle || st.meetNo || '会议') + '_' + ts + '.webm' });
+            r = await window.desktop.recMeetStart({ name: I18N.t('会议录制_') + (st.meetTitle || st.meetNo || I18N.t('会议')) + '_' + ts + '.webm' });
         } catch (e) { return; }
         if (!r || !r.ok) return; // 用户取消保存对话框/写盘失败：不开始录制（ctx 留作下次点击复用）
         if (st.ended) { // 对话框停留期间会议已收口：不空跑起录，立即收掉刚建的写流防残留坏文件
@@ -1043,7 +1044,7 @@
         recBadgeTimer = setInterval(recBadgeRefresh, 1000);
         if (btnRecord) {
             btnRecord.classList.add('rec-on');
-            btnRecord.title = '停止录制';
+            btnRecord.title = I18N.t('停止录制');
         }
         recBadgeRefresh();
         send('meet_record', { on: true }); // 全员广播（服务端落快照，中途入会者补发）
@@ -1057,7 +1058,7 @@
         if (recBadgeTimer) { clearInterval(recBadgeTimer); recBadgeTimer = null; }
         if (btnRecord) {
             btnRecord.classList.remove('rec-on');
-            btnRecord.title = '开始录制';
+            btnRecord.title = I18N.t('开始录制');
         }
         recBadgeRefresh();
         try { rec.recorder.stop(); } catch (e) { recOnRecorderStop(); } // onstop→延迟收口写流
@@ -1080,9 +1081,9 @@
         var search = $('inviteSearch');
         search.value = '';
         search.disabled = true; // 名单未到前禁搜索（防误以为无成员）
-        $('inviteCount').textContent = '已选 0 人';
+        $('inviteCount').textContent = I18N.t('已选 0 人');
         $('btnInviteConfirm').classList.add('disabled');
-        $('inviteList').innerHTML = '<div class="invite-empty">正在获取成员列表…</div>';
+        $('inviteList').innerHTML = '<div class="invite-empty">' + I18N.t('正在获取成员列表…') + '</div>';
         send('meet_members_ask', {}); // send 自带 call_id，服务端按房间归口回 meet_members_list
     }
     function closeInvitePanel() {
@@ -1104,7 +1105,7 @@
         box.innerHTML = '';
         if (!rows.length) {
             // 查无数据显示"暂无"语义（区分搜索无结果与名单为空），不用"加载失败"
-            box.innerHTML = '<div class="invite-empty">' + (inviteMembers.length ? '未找到匹配成员' : '暂无可邀请的成员') + '</div>';
+            box.innerHTML = '<div class="invite-empty">' + (inviteMembers.length ? I18N.t('未找到匹配成员') : I18N.t('暂无可邀请的成员')) + '</div>';
             return;
         }
         rows.forEach(function (m) {
@@ -1128,7 +1129,7 @@
             nm.textContent = m.name || m.username;
             var stt = document.createElement('div');
             stt.className = 'invite-status' + (invitable ? ' ok' : '');
-            stt.textContent = !m.online ? '离线' : (!m.call_ok ? '设备不支持' : (m.in_meeting ? '会议中' : (m.busy ? '通话中' : '可邀请')));
+            stt.textContent = !m.online ? I18N.t('离线') : (!m.call_ok ? I18N.t('设备不支持') : (m.in_meeting ? I18N.t('会议中') : (m.busy ? I18N.t('通话中') : I18N.t('可邀请'))));
             info.appendChild(nm);
             info.appendChild(stt);
             var chk = document.createElement('span');
@@ -1150,7 +1151,7 @@
     function updateInviteFoot() {
         var n = 0;
         for (var k in inviteSelected) n++;
-        $('inviteCount').textContent = '已选 ' + n + ' 人';
+        $('inviteCount').textContent = I18N.t('已选 ') + n + I18N.t(' 人');
         $('btnInviteConfirm').classList.toggle('disabled', n === 0);
     }
 
@@ -1171,7 +1172,7 @@
         var rows = Math.ceil(n / cols);
         var h = 'calc((100% - ' + ((Math.min(rows, cols) - 1) * gap) + 'px) / ' + Math.ceil(n / cols) + ')';
         // 自己 tile（本地预览 muted 防啸叫）；共享中预览切屏幕画面（原恒 st.local）
-        grid.appendChild(buildMeetTile('self', st.selfName || '我', st.selfAvatar || '', (sharing && screenStream) ? screenStream : st.local, true, w, h));
+        grid.appendChild(buildMeetTile('self', st.selfName || I18N.t('我'), st.selfAvatar || '', (sharing && screenStream) ? screenStream : st.local, true, w, h));
         users.forEach(function (u) {
             var m = st.members[u];
             grid.appendChild(buildMeetTile(u, m.name, m.avatar, m.stream, false, w, h));
@@ -1220,7 +1221,7 @@
             toggle.innerHTML = st.stageFull
                 ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l7-7"/><path d="M3 21l7-7"/></svg>'
                 : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
-            toggle.title = st.stageFull ? '退出全屏观看' : '全屏观看共享';
+            toggle.title = st.stageFull ? I18N.t('退出全屏观看') : I18N.t('全屏观看共享');
         }
         var su = st.stageUser;
         var si = meetUserOf(su);
@@ -1235,7 +1236,7 @@
             var ti = meetUserOf(tu);
             var th = document.createElement('div');
             th.className = 'meet-thumb' + (tu === su ? ' active' : '');
-            th.title = '点击切换主画面';
+            th.title = I18N.t('点击切换主画面');
             th.appendChild(buildMeetTile(tu, ti.name, ti.avatar, stageStreamOf(tu), tu === 'self', '100%', '100%', true));
             th.onclick = function () {
                 if (st.stageUser !== tu) {
@@ -1259,7 +1260,7 @@
 
     // 成员显示信息归口（'self'=自己，其余查成员表）
     function meetUserOf(u) {
-        if (u === 'self') return { name: st.selfName || '我', avatar: st.selfAvatar || '' };
+        if (u === 'self') return { name: st.selfName || I18N.t('我'), avatar: st.selfAvatar || '' };
         var m = st.members[u];
         return m ? { name: m.name || u, avatar: m.avatar || '' } : { name: u, avatar: '' };
     }
@@ -1300,7 +1301,7 @@
             if (isSelf && st.camUnavailable && !(sharing && screenStream)) {
                 var ph = document.createElement('div');
                 ph.className = 'no-video-ph';
-                ph.textContent = '无视频可用';
+                ph.textContent = I18N.t('无视频可用');
                 tile.appendChild(ph);
             }
         } else {
@@ -1333,11 +1334,11 @@
         // 名字条 + 麦克风状态图标（远端静音由 track.muted 事件联动）
         var nm = document.createElement('div');
         nm.className = 'mt-name';
-        nm.textContent = name + (isSelf ? '（我）' : '');
+        nm.textContent = name + (isSelf ? I18N.t('（我）') : '');
         // 阶段一百四十八：连接中断标记（成员级 lost=true 显示「连接中断」，恢复自动清除）
         if (user !== 'self' && st.members[user] && st.members[user].lost) {
             tile.classList.add('lost');
-            nm.textContent += '（连接中断）';
+            nm.textContent += I18N.t('（连接中断）');
         }
         tile.appendChild(nm);
         var mic = document.createElement('span');
@@ -1648,7 +1649,7 @@
             //（对端 WS 仍在时服务端不会收口房间）——补发退房信令防房间滞留本端忙态；
             // hangup 帧对服务端 meetLeave 幂等无害（房间已解散时仅清忙标记）
             send('hangup', {});
-            finish('会议已结束');
+            finish(I18N.t('会议已结束'));
         }
     }
 
@@ -1675,7 +1676,7 @@
                 });
                 st.state = 'connecting';
                 toneStop();
-                setMeetStatus('正在建立连接…');
+                setMeetStatus(I18N.t('正在建立连接…'));
                 renderMeetStage(); // 阶段一百五十一：舞台布局归口
                 // 修复：应答方也必须有 pc 才能处理 offer（此前漏建，offer 到达时被 !m.pc 丢弃，
                 // 双方永久互等卡"等待成员加入"）；asOfferer=false 仅建 pc 不发 offer，幂等安全
@@ -1800,10 +1801,10 @@
                 meetDropMember(from);
                 break;
             case 'meet_declined':
-                setMeetStatus((p.name || '成员') + ' 已拒绝加入');
+                setMeetStatus((p.name || I18N.t('成员')) + I18N.t(' 已拒绝加入'));
                 break;
             case 'meet_skipped':
-                setMeetStatus('部分成员无法加入：' + (p.names || []).join('、'));
+                setMeetStatus(I18N.t('部分成员无法加入：') + (p.names || []).join('、'));
                 break;
             case 'meet_share':
                 // 阶段一百五十一：成员共享状态广播（frame.from_user=共享者，服务端转发其他成员）——
@@ -1813,7 +1814,7 @@
                 msu.sharing = !!p.on;
                 if (p.on) {
                     st.stageUser = from;
-                    setMeetStatus((msu.name || from) + ' 正在共享屏幕');
+                    setMeetStatus((msu.name || from) + I18N.t(' 正在共享屏幕'));
                 } else if (st.stageUser === from) {
                     st.stageUser = '';
                 }
@@ -1837,7 +1838,7 @@
                 if (p.on) recRemote[from] = true;
                 else delete recRemote[from];
                 var rru = st.members[from];
-                if (p.on && rru) setMeetStatus((rru.name || from) + ' 开始录制会议');
+                if (p.on && rru) setMeetStatus((rru.name || from) + I18N.t(' 开始录制会议'));
                 recBadgeRefresh();
                 break;
             case 'meet_members_list':
@@ -1858,7 +1859,7 @@
             case 'error':
                 // 服务端归口错误帧（reason 为中文文案）：全员拒绝/60s 无人接听自动解散等场景收口会议窗
                 // 原代码：无此分支——error 帧经会议分流进入本 switch 后被静默忽略，发起人会议窗滞留不关
-                finish(p.reason || '会议已结束');
+                finish(p.reason || I18N.t('会议已结束'));
                 break;
         }
     }
@@ -1954,7 +1955,7 @@
             screenStream = null;
         }
         btnShare.classList.remove('active');
-        btnShare.title = '共享屏幕';
+        btnShare.title = I18N.t('共享屏幕');
         btnCam.disabled = false;
         // 本地预览切回摄像头（原手动改 srcObject——占位元素残留盖住预览，统一重绘解决）
         // 阶段一百五十一：广播共享关闭（服务端转发其他成员撤主舞台）+ 舞台布局归口（原 renderMeetGrid 仅宫格）
@@ -1981,7 +1982,7 @@
             meetReplaceVideoTrack(vt);
             vt.onended = function () { stopMeetShare(); }; // 用户点系统停止条自动收
             btnShare.classList.add('active');
-            btnShare.title = '停止共享';
+            btnShare.title = I18N.t('停止共享');
             btnCam.disabled = true; // 共享期间禁摄像头开关（同一视频轨道）
             // 本地预览切共享画面（原手动改 srcObject——无摄像头时"无视频可用"占位残留盖住预览，
             // 统一走重绘：self tile 流参数与占位显隐一次到位）
@@ -1992,10 +1993,10 @@
         }).catch(function (e) {
             // 阶段一百四十九：失败可见化（原静默吞错——点击无反应用户无从判断）
             // 阶段一百五十一补丁：兜底文案附带错误名（PC 端排障定位）
-            var msg = '屏幕共享不可用';
-            if (e && e.name === 'NotAllowedError') msg = '屏幕共享未授权（浏览器拒绝或已取消）';
-            else if (e && e.name === 'NotSupportedError') msg = '当前环境不支持屏幕共享';
-            else if (e && (e.name || e.message)) msg = '屏幕共享不可用（' + (e.name || e.message) + '）';
+            var msg = I18N.t('屏幕共享不可用');
+            if (e && e.name === 'NotAllowedError') msg = I18N.t('屏幕共享未授权（浏览器拒绝或已取消）');
+            else if (e && e.name === 'NotSupportedError') msg = I18N.t('当前环境不支持屏幕共享');
+            else if (e && (e.name || e.message)) msg = I18N.t('屏幕共享不可用（') + (e.name || e.message) + '）';
             setMeetStatus(msg);
         });
     }
@@ -2031,7 +2032,7 @@
                 if (Array.isArray(p.ice) && p.ice.length) st.iceServers = p.ice;
                 toneStop();
                 st.state = 'connecting';
-                setStatusText('正在建立连接…');
+                setStatusText(I18N.t('正在建立连接…'));
                 buildPC();
                 callerStartOffer();
                 break;
@@ -2057,20 +2058,20 @@
                 }
                 break;
             case 'reject':
-                finish('对方已拒绝');
+                finish(I18N.t('对方已拒绝'));
                 break;
             case 'cancel':
-                finish('对方已取消');
+                finish(I18N.t('对方已取消'));
                 break;
             case 'hangup':
-                finish('通话已结束');
+                finish(I18N.t('通话已结束'));
                 break;
             case 'timeout':
-                finish(st.role === 'caller' ? '无人接听' : '未接听');
+                finish(st.role === 'caller' ? I18N.t('无人接听') : I18N.t('未接听'));
                 break;
             case 'error':
                 // 服务端归口错误帧（reason 为中文文案：对方不在线/黑名单/对方忙等）
-                finish(p.reason || '通话失败');
+                finish(p.reason || I18N.t('通话失败'));
                 break;
             default:
                 break;
@@ -2106,7 +2107,7 @@
         if (Array.isArray(data.ice_servers) && data.ice_servers.length) st.iceServers = data.ice_servers;
         document.body.className = st.callType === 'video' ? 'mode-video' : 'mode-audio';
         fillProfile();
-        setStatusText(st.role === 'caller' ? '等待对方接受邀请…' : '正在接听…');
+        setStatusText(st.role === 'caller' ? I18N.t('等待对方接受邀请…') : I18N.t('正在接听…'));
         getMediaDegrade().then(function (r) {
             if (st.ended) {
                 if (r.stream) { try { r.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { } }
@@ -2129,9 +2130,9 @@
             }
             // 降级提示（一次性；后续状态/计时文案覆盖）
             // 阶段一百四十五：非安全上下文（http 非 localhost）时补充浏览器硬约束说明（getUserMedia 不可用的根因）
-            if (st.micUnavailable && st.camUnavailable) setStatusText(mediaInsecure() ? '浏览器需 HTTPS 或 localhost 访问方可通话' : '麦克风/摄像头不可用');
-            else if (st.camUnavailable) setStatusText('摄像头不可用');
-            else if (st.micUnavailable) setStatusText(mediaInsecure() ? '浏览器需 HTTPS 或 localhost 访问方可通话' : '麦克风不可用');
+            if (st.micUnavailable && st.camUnavailable) setStatusText(mediaInsecure() ? I18N.t('浏览器需 HTTPS 或 localhost 访问方可通话') : I18N.t('麦克风/摄像头不可用'));
+            else if (st.camUnavailable) setStatusText(I18N.t('摄像头不可用'));
+            else if (st.micUnavailable) setStatusText(mediaInsecure() ? I18N.t('浏览器需 HTTPS 或 localhost 访问方可通话') : I18N.t('麦克风不可用'));
         });
     });
 
@@ -2144,7 +2145,7 @@
         st.muted = !st.muted;
         st.local.getAudioTracks().forEach(function (t) { t.enabled = !st.muted; });
         btnMute.classList.toggle('active', st.muted);
-        btnMute.title = st.muted ? '取消静音' : '静音';
+        btnMute.title = st.muted ? I18N.t('取消静音') : I18N.t('静音');
         refreshSelfMarks(); // 自己 tile 同步叉麦标记
         // 阶段一百五十一补丁：静音/关摄状态走显式信令归口（接收端 track 事件对 enabled=false 不可靠）
         if (st.meet) send('meet_media', { mic: !st.micUnavailable && !st.muted, cam: !st.camUnavailable && !st.camOff });
@@ -2154,7 +2155,7 @@
         st.camOff = !st.camOff;
         st.local.getVideoTracks().forEach(function (t) { t.enabled = !st.camOff; });
         btnCam.classList.toggle('active', st.camOff);
-        btnCam.title = st.camOff ? '开启摄像头' : '关闭摄像头';
+        btnCam.title = st.camOff ? I18N.t('开启摄像头') : I18N.t('关闭摄像头');
         document.body.classList.toggle('cam-off', st.camOff);
         refreshSelfMarks(); // 自己 tile 同步叉摄标记
         // 阶段一百五十一补丁：关摄/静音状态走显式信令归口（接收端 track 事件对 enabled=false 不可靠）
@@ -2379,7 +2380,7 @@
         // send 自带 call_id；新成员 accept 后经 meet_join/room_info 增量建连，反馈走 meet_skipped）
         send('meet_invite', { call_type: st.callType, group_id: st.groupId, members: picked });
         closeInvitePanel();
-        setMeetStatus('邀请已发送，等待成员加入…');
+        setMeetStatus(I18N.t('邀请已发送，等待成员加入…'));
     });
     // Esc 关面板（会议窗无既有 keydown 监听，此处唯一入口；优先于其他 Esc 语义）
     document.addEventListener('keydown', function (e) {

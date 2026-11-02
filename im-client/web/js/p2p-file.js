@@ -774,10 +774,10 @@
                 mimeType: mime || extMime(name)
             });
         }).then(function () {
-            if (window.__imToast) window.__imToast(I18N_COMPAT('已保存，正在打开…'));
+            if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已保存，正在打开…')));
             return true;
         }).catch(function (e) {
-            if (window.__imToast) window.__imToast(I18N_COMPAT('无法打开该文件类型'));
+            if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('无法打开该文件类型')));
             return false;
         });
     }
@@ -821,7 +821,7 @@
         return fetch(url).then(function (r) { return r.blob(); }).then(function (b) {
             return saveOpen(b, name, b.type);
         }).catch(function () {
-            if (window.__imToast) window.__imToast(I18N_COMPAT('无法打开该文件类型'));
+            if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('无法打开该文件类型')));
             return false;
         });
     }
@@ -866,11 +866,11 @@
         if (DT && DT.docCacheOpen) {
             return DT.docCacheOpen({ url: url, name: name }).then(function (r) {
                 if (r && r.opened) {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已从缓存打开')));
                     return true;
                 }
                 if (r && r.found) {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开（无应用可打开该文件类型）'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已从缓存打开（无应用可打开该文件类型）')));
                     return true;
                 }
                 return false;
@@ -881,10 +881,10 @@
             var P = window.Capacitor && window.Capacitor.Plugins;
             if (!P || !P.FileOpener) return false;
             return P.FileOpener.open({ filePath: c.uri, mimeType: extMime(name || 'file') }).then(function () {
-                if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开'));
+                if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已从缓存打开')));
                 return true;
             }).catch(function () {
-                if (window.__imToast) window.__imToast(I18N_COMPAT('已从缓存打开（无应用可打开该文件类型）'));
+                if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已从缓存打开（无应用可打开该文件类型）')));
                 return true; // 文件已在本地，打开失败仅提示类型问题，不重复下载
             });
         }).catch(function () { return false; });
@@ -1058,14 +1058,14 @@
                 }).then(function (u) {
                     if (open !== false && P.FileOpener && u && u.uri) {
                         return P.FileOpener.open({ filePath: u.uri, mimeType: extMime(fname) }).then(function () {
-                            if (window.__imToast) window.__imToast(I18N_COMPAT('已下载，正在打开…'));
+                            if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已下载，正在打开…')));
                             return { uri: u.uri, bytes: loaded };
                         }).catch(function () {
-                            if (window.__imToast) window.__imToast(I18N_COMPAT('已下载（无应用可打开该文件类型）'));
+                            if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已下载（无应用可打开该文件类型）')));
                             return { uri: u.uri, bytes: loaded };
                         });
                     }
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已保存到设备 Documents')));
                     return { uri: u && u.uri, bytes: loaded };
                 });
             });
@@ -1116,7 +1116,7 @@
         saveAndOpen: function (msgId, name) {
             return cacheBlob(msgId, name).then(function (p) {
                 if (!p) {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('文件不在本机，请对方重新发送')));
                     return false;
                 }
                 return p.blob ? saveOpen(p.blob, p.name, p.mime) : saveOpenUrl(p.url, p.name);
@@ -1126,15 +1126,15 @@
         saveOnly: function (msgId, name) {
             return cacheBlob(msgId, name).then(function (p) {
                 if (!p) {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('文件不在本机，请对方重新发送'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('文件不在本机，请对方重新发送')));
                     return false;
                 }
                 var w = p.blob ? writeDevice(p.blob, p.name) : saveBlobUrlWrite(p.url, p.name);
                 return w.then(function () {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已保存到设备 Documents')));
                     return true;
                 }).catch(function () {
-                    if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                    if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('保存失败')));
                     return false;
                 });
             });
@@ -1149,16 +1149,16 @@
             }).then(function (b) {
                 if (open === false) {
                     return writeDevice(b, name || 'file').then(function () {
-                        if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                        if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已保存到设备 Documents')));
                         return true;
                     }).catch(function () {
-                        if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                        if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('保存失败')));
                         return false;
                     });
                 }
                 return saveOpen(b, name || 'file', b.type);
             }).catch(function () {
-                if (window.__imToast) window.__imToast(I18N_COMPAT('文件下载失败'));
+                if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('文件下载失败')));
                 return false;
             });
         },
@@ -1169,10 +1169,10 @@
         },
         writeBlob: function (blob, name) {
             return writeDevice(blob, name || 'file').then(function () {
-                if (window.__imToast) window.__imToast(I18N_COMPAT('已保存到设备 Documents'));
+                if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('已保存到设备 Documents')));
                 return true;
             }).catch(function () {
-                if (window.__imToast) window.__imToast(I18N_COMPAT('保存失败'));
+                if (window.__imToast) window.__imToast(I18N_COMPAT(I18N.t('保存失败')));
                 return false;
             });
         },

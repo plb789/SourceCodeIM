@@ -1107,7 +1107,7 @@
         t.onCancel = function () {
             if (finished) return;
             if (t.xhr) { t.xhr.abort(); return; }
-            fail('已取消');
+            fail(I18N.t('已取消'));
         };
         var sample = makeSampler();
         function setProgress(loaded) {
@@ -1119,7 +1119,7 @@
         // 阶段一：本地分块 MD5（秒传判定与服务端 complete 复核共用指纹）
         t.worker = computeMD5(t.file, function (loaded) { if (!finished) setProgress(loaded); }, function (hex, err) {
             if (finished) return;
-            if (err || !hex) { fail('文件校验失败'); return; }
+            if (err || !hex) { fail(I18N.t('文件校验失败')); return; }
             t.md5 = hex;
             t.phase = 'up';
             t.loaded = 0;
@@ -1172,8 +1172,8 @@
                 try { msg = JSON.parse(xhr.responseText).error; } catch (e) { /* 纯文本错误兜底 */ }
                 fail(msg || ('HTTP ' + xhr.status));
             };
-            xhr.onerror = function () { t.xhr = null; fail('网络异常'); };
-            xhr.onabort = function () { t.xhr = null; fail('已取消'); };
+            xhr.onerror = function () { t.xhr = null; fail(I18N.t('网络异常')); };
+            xhr.onabort = function () { t.xhr = null; fail(I18N.t('已取消')); };
             xhr.send(blob);
         }
         function doComplete() {

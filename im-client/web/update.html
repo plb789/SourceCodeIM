@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>发现新版本</title>
@@ -192,43 +195,43 @@
         $('force-tag').classList.toggle('hidden', !force);
 
         if (info && info.version) {
-            $('ver-big').textContent = '发现新版本 v' + info.version;
-            $('ver-from').textContent = info.current ? ('当前 v' + info.current) : '';
+            $('ver-big').textContent = I18N.t('发现新版本 v') + info.version;
+            $('ver-from').textContent = info.current ? (I18N.t('当前 v') + info.current) : '';
             $('notes').textContent = info.notes || '';
         }
         var ph = state.phase;
         var showProg = (ph === 'downloading' || ph === 'downloaded' || ph === 'installing');
         $('prog-zone').classList.toggle('show', showProg);
         $('err-text').classList.toggle('show', ph === 'error');
-        if (ph === 'error') $('err-text').textContent = state.msg || '更新失败，请稍后重试';
+        if (ph === 'error') $('err-text').textContent = state.msg || I18N.t('更新失败，请稍后重试');
 
         var bu = $('btn-update');
         var bl = $('btn-later');
         bu.disabled = false;
         if (ph === 'available' || ph === 'idle') {
-            bu.textContent = '立即更新' + (info && info.size ? '（' + fmtSize(info.size) + '）' : '');
+            bu.textContent = I18N.t('立即更新') + (info && info.size ? '（' + fmtSize(info.size) + '）' : '');
             bu.classList.remove('hidden');
         } else if (ph === 'downloading') {
-            bu.textContent = '下载中…';
+            bu.textContent = I18N.t('下载中…');
             bu.disabled = true;
             bl.disabled = true;
         } else if (ph === 'downloaded') {
-            bu.textContent = '立即重启安装';
+            bu.textContent = I18N.t('立即重启安装');
             bu.classList.remove('hidden');
             bl.disabled = true;
         } else if (ph === 'installing') {
-            bu.textContent = '正在安装…';
+            bu.textContent = I18N.t('正在安装…');
             bu.disabled = true;
             bl.disabled = true;
         } else if (ph === 'error') {
-            bu.textContent = '重试更新';
+            bu.textContent = I18N.t('重试更新');
             bu.classList.remove('hidden');
             bl.disabled = force;
         }
         if (showProg) {
             $('prog-bar').style.width = (state.percent || 0) + '%';
             $('prog-pct').textContent = (state.percent || 0) + '%';
-            $('prog-label').textContent = ph === 'downloaded' ? '下载完成' : (ph === 'installing' ? '正在安装并重启…' : '下载中…');
+            $('prog-label').textContent = ph === 'downloaded' ? I18N.t('下载完成') : (ph === 'installing' ? I18N.t('正在安装并重启…') : I18N.t('下载中…'));
         }
     }
 
@@ -268,7 +271,7 @@
         $('tb-close').addEventListener('click', function () { bridge.updaterDismiss(); });
     } else {
         // 浏览器直开（非 Electron）：静态预览态
-        $('ver-big').textContent = '发现新版本';
+        $('ver-big').textContent = I18N.t('发现新版本');
     }
     render();
 })();

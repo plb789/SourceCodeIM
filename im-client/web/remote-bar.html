@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <title>远程协助</title>
     <style>
@@ -77,10 +80,10 @@
         (function () {
             var d = window.desktop || {};
             if (d.onRemoteBarLoad) d.onRemoteBarLoad(function (data) {
-                var name = (data && (data.peer_name || data.peer)) || '对方';
+                var name = (data && (data.peer_name || data.peer)) || I18N.t('对方');
                 var ctrl = data && data.grant === 'control';
                 document.getElementById('barText').textContent =
-                    name + (ctrl ? ' 正在控制你的电脑' : ' 正在观看你的屏幕');
+                    name + (ctrl ? I18N.t(' 正在控制你的电脑') : I18N.t(' 正在观看你的屏幕'));
             });
             document.getElementById('barQuit').addEventListener('click', function () {
                 if (d.remoteBarDisconnect) d.remoteBarDisconnect();

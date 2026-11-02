@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <!-- 阶段九十二：内置浏览区文件查看页（PC 端 file kind 标签专用，TRAE CN 归一）。
          由 PC 主进程 BrowserView 加载（服务端同源静态文件），外部网页进不了本页所在分区。
@@ -740,13 +743,13 @@
                 // 注：不提供"命令面板"条目——Monaco QuickAccess 面板本身全英文且无法本地化，
                 // 点开反而又冒英文 UI（快捷键 F1 仍可用）
                 var items = [];
-                if (changeAll) items.push({ label: '更改所有匹配项', key: 'Ctrl+F2', run: function () { changeAll.run(); } });
+                if (changeAll) items.push({ label: I18N.t('更改所有匹配项'), key: 'Ctrl+F2', run: function () { changeAll.run(); } });
                 if (items.length) items.push({ sep: true });
-                if (!readonly) items.push({ label: '剪切', key: 'Ctrl+X', run: cmd('editor.action.clipboardCutAction') });
-                items.push({ label: '复制', key: 'Ctrl+C', run: cmd('editor.action.clipboardCopyAction') });
-                if (!readonly) items.push({ label: '粘贴', key: 'Ctrl+V', run: cmd('editor.action.clipboardPasteAction') });
+                if (!readonly) items.push({ label: I18N.t('剪切'), key: 'Ctrl+X', run: cmd('editor.action.clipboardCutAction') });
+                items.push({ label: I18N.t('复制'), key: 'Ctrl+C', run: cmd('editor.action.clipboardCopyAction') });
+                if (!readonly) items.push({ label: I18N.t('粘贴'), key: 'Ctrl+V', run: cmd('editor.action.clipboardPasteAction') });
                 items.push({ sep: true });
-                items.push({ label: '全选', key: 'Ctrl+A', run: function () {
+                items.push({ label: I18N.t('全选'), key: 'Ctrl+A', run: function () {
                     var m = actEditor.getModel();
                     if (m) { actEditor.setSelection(m.getFullModelRange()); actEditor.focus(); }
                 } });
@@ -1104,318 +1107,318 @@
             //   左右栏全覆盖（语言级注册全局生效）。
             // 符号按 model 惰性扫描并 WeakMap 缓存（模型销毁随 GC 回收，diff 模型每次重建互不串扰）
             var GO_BUILTINS = { // Go 内建函数文档（sig=签名；doc=中文说明，与官方文档语义一致）
-                append: { sig: 'func append(slice []Type, elems ...Type) []Type', doc: '向切片末尾追加元素；容量不足时重新分配底层数组。返回更新后的切片（通常回赋给原变量）。' },
-                len: { sig: 'func len(v Type) int', doc: '返回 v 的长度：字符串字节数、数组/切片（或其指针）元素数、映射键数、通道已缓冲元素数。' },
-                cap: { sig: 'func cap(v Type) int', doc: '返回 v 的容量：数组（或其指针）、切片、通道的容量（映射没有容量概念）。' },
-                make: { sig: 'func make(t Type, size ...IntegerType) Type', doc: '分配并初始化切片/映射/通道，返回已初始化（非零值）的对象，仅适用于这三种类型。' },
-                new: { sig: 'func new(Type) *Type', doc: '分配零值内存并返回指向它的指针，适用于任意类型。' },
-                copy: { sig: 'func copy(dst, src []Type) int', doc: '把 src 的元素复制到 dst，返回实际复制的元素数（取二者长度的较小值）。' },
-                delete: { sig: 'func delete(m map[Type]Type1, key Type)', doc: '从映射中删除指定键及其值；键不存在时静默无操作。' },
-                close: { sig: 'func close(c chan<- Type)', doc: '关闭通道；之后向其发送会 panic，接收方取尽缓冲后收到零值与关闭标志。' },
-                panic: { sig: 'func panic(v any)', doc: '中止当前函数执行并沿调用栈向上传播 panic；defer 注册的函数仍会执行。' },
-                recover: { sig: 'func recover() any', doc: '捕获 panic 并恢复正常执行，返回 panic 传入的值；仅在 defer 函数中直接调用才有效。' },
-                print: { sig: 'func print(args ...Type)', doc: '内置打印（格式随实现，输出到标准错误）；正式代码建议使用 fmt 包。' },
-                println: { sig: 'func println(args ...Type)', doc: '内置打印并换行（输出到标准错误）；正式代码建议使用 fmt 包。' },
-                complex: { sig: 'func complex(r, i FloatType) ComplexType', doc: '由实部与虚部构造复数。' },
-                real: { sig: 'func real(c ComplexType) FloatType', doc: '返回复数的实部。' },
-                imag: { sig: 'func imag(c ComplexType) FloatType', doc: '返回复数的虚部。' },
-                min: { sig: 'func min(x ...OrderedType) OrderedType', doc: '返回若干有序值中的最小值（Go 1.21+）。' },
-                max: { sig: 'func max(x ...OrderedType) OrderedType', doc: '返回若干有序值中的最大值（Go 1.21+）。' },
-                clear: { sig: 'func clear(m|s)', doc: '清空映射（删除全部键）或将切片元素全部置零值（Go 1.21+）。' }
+                append: { sig: 'func append(slice []Type, elems ...Type) []Type', doc: I18N.t('向切片末尾追加元素；容量不足时重新分配底层数组。返回更新后的切片（通常回赋给原变量）。') },
+                len: { sig: 'func len(v Type) int', doc: I18N.t('返回 v 的长度：字符串字节数、数组/切片（或其指针）元素数、映射键数、通道已缓冲元素数。') },
+                cap: { sig: 'func cap(v Type) int', doc: I18N.t('返回 v 的容量：数组（或其指针）、切片、通道的容量（映射没有容量概念）。') },
+                make: { sig: 'func make(t Type, size ...IntegerType) Type', doc: I18N.t('分配并初始化切片/映射/通道，返回已初始化（非零值）的对象，仅适用于这三种类型。') },
+                new: { sig: 'func new(Type) *Type', doc: I18N.t('分配零值内存并返回指向它的指针，适用于任意类型。') },
+                copy: { sig: 'func copy(dst, src []Type) int', doc: I18N.t('把 src 的元素复制到 dst，返回实际复制的元素数（取二者长度的较小值）。') },
+                delete: { sig: 'func delete(m map[Type]Type1, key Type)', doc: I18N.t('从映射中删除指定键及其值；键不存在时静默无操作。') },
+                close: { sig: 'func close(c chan<- Type)', doc: I18N.t('关闭通道；之后向其发送会 panic，接收方取尽缓冲后收到零值与关闭标志。') },
+                panic: { sig: 'func panic(v any)', doc: I18N.t('中止当前函数执行并沿调用栈向上传播 panic；defer 注册的函数仍会执行。') },
+                recover: { sig: 'func recover() any', doc: I18N.t('捕获 panic 并恢复正常执行，返回 panic 传入的值；仅在 defer 函数中直接调用才有效。') },
+                print: { sig: 'func print(args ...Type)', doc: I18N.t('内置打印（格式随实现，输出到标准错误）；正式代码建议使用 fmt 包。') },
+                println: { sig: 'func println(args ...Type)', doc: I18N.t('内置打印并换行（输出到标准错误）；正式代码建议使用 fmt 包。') },
+                complex: { sig: 'func complex(r, i FloatType) ComplexType', doc: I18N.t('由实部与虚部构造复数。') },
+                real: { sig: 'func real(c ComplexType) FloatType', doc: I18N.t('返回复数的实部。') },
+                imag: { sig: 'func imag(c ComplexType) FloatType', doc: I18N.t('返回复数的虚部。') },
+                min: { sig: 'func min(x ...OrderedType) OrderedType', doc: I18N.t('返回若干有序值中的最小值（Go 1.21+）。') },
+                max: { sig: 'func max(x ...OrderedType) OrderedType', doc: I18N.t('返回若干有序值中的最大值（Go 1.21+）。') },
+                clear: { sig: 'func clear(m|s)', doc: I18N.t('清空映射（删除全部键）或将切片元素全部置零值（Go 1.21+）。') }
             };
             var GO_TYPES = { // Go 内建类型/常量（悬停裸名出卡；包名限定名走 GO_STDLIB）
-                string: { sig: 'type string', doc: '字符串类型：底层为不可变的 UTF-8 字节序列；len 返回字节数而非字符数，range 按字符迭代。' },
-                bool: { sig: 'type bool', doc: '布尔类型，仅有 true 与 false 两个值；零值为 false。' },
-                int: { sig: 'type int', doc: '有符号整型，平台相关宽度（64 位平台为 64 位）；另有无符号 uint 与定宽 int8/16/32/64。' },
-                int64: { sig: 'type int64', doc: '64 位有符号整型，范围约 ±9.2×10^18；常用于时间戳、大计数。' },
-                uint64: { sig: 'type uint64', doc: '64 位无符号整型，范围 0 ~ 2^64-1。' },
-                byte: { sig: 'type byte = uint8', doc: 'byte 是 uint8 的别名，表示一个字节；[]byte 与 string 可互转。' },
-                rune: { sig: 'type rune = int32', doc: 'rune 是 int32 的别名，表示一个 Unicode 码点；字符字面量 \'中\' 的类型即 rune。' },
-                float64: { sig: 'type float64', doc: '64 位 IEEE-754 浮点数；Go 的数值字面量默认推断为 float64。' },
-                error: { sig: 'type error interface { Error() string }', doc: '内建接口：任何实现 Error() string 的值都可作错误返回；惯用 if err != nil 判定。' },
-                any: { sig: 'type any = interface{}', doc: 'any 是空接口 interface{} 的别名（Go 1.18+），可承接任意类型的值。' },
-                nil: { sig: 'nil', doc: '指针、接口、映射、切片、通道、函数的零值；nil 映射可读不可写，nil 切片可 append。' },
-                iota: { sig: 'iota', doc: 'const 块内的自增计数器，每行常量声明自动加一，常配合 << 或枚举连写使用。' },
-                true: { sig: 'true', doc: '布尔常量真值。' },
-                false: { sig: 'false', doc: '布尔常量假值。' }
+                string: { sig: 'type string', doc: I18N.t('字符串类型：底层为不可变的 UTF-8 字节序列；len 返回字节数而非字符数，range 按字符迭代。') },
+                bool: { sig: 'type bool', doc: I18N.t('布尔类型，仅有 true 与 false 两个值；零值为 false。') },
+                int: { sig: 'type int', doc: I18N.t('有符号整型，平台相关宽度（64 位平台为 64 位）；另有无符号 uint 与定宽 int8/16/32/64。') },
+                int64: { sig: 'type int64', doc: I18N.t('64 位有符号整型，范围约 ±9.2×10^18；常用于时间戳、大计数。') },
+                uint64: { sig: 'type uint64', doc: I18N.t('64 位无符号整型，范围 0 ~ 2^64-1。') },
+                byte: { sig: 'type byte = uint8', doc: I18N.t('byte 是 uint8 的别名，表示一个字节；[]byte 与 string 可互转。') },
+                rune: { sig: 'type rune = int32', doc: I18N.t('rune 是 int32 的别名，表示一个 Unicode 码点；字符字面量 \'中\' 的类型即 rune。') },
+                float64: { sig: 'type float64', doc: I18N.t('64 位 IEEE-754 浮点数；Go 的数值字面量默认推断为 float64。') },
+                error: { sig: 'type error interface { Error() string }', doc: I18N.t('内建接口：任何实现 Error() string 的值都可作错误返回；惯用 if err != nil 判定。') },
+                any: { sig: 'type any = interface{}', doc: I18N.t('any 是空接口 interface{} 的别名（Go 1.18+），可承接任意类型的值。') },
+                nil: { sig: 'nil', doc: I18N.t('指针、接口、映射、切片、通道、函数的零值；nil 映射可读不可写，nil 切片可 append。') },
+                iota: { sig: 'iota', doc: I18N.t('const 块内的自增计数器，每行常量声明自动加一，常配合 << 或枚举连写使用。') },
+                true: { sig: 'true', doc: I18N.t('布尔常量真值。') },
+                false: { sig: 'false', doc: I18N.t('布尔常量假值。') }
             };
             var GO_STDLIB = { // 常用标准库（pkg.Member 限定名悬停出卡；sig=官方签名，doc=中文精释）
                 fmt: {
-                    Sprintf: { sig: 'func Sprintf(format string, a ...any) string', doc: '按格式动词格式化并返回字符串（不打印）。常用动词：%s 字符串、%d 整数、%v 默认格式、%+v 结构体带字段名、%#v Go 语法、%q 带引号、%T 类型、%x 十六进制、%% 百分号。' },
-                    Errorf: { sig: 'func Errorf(format string, a ...any) error', doc: '生成携带格式化消息的错误；消息含 %w 时返回可被 errors.Is/As 解包的包装错误。' },
-                    Printf: { sig: 'func Printf(format string, a ...any) (n int, err error)', doc: '按格式动词输出到标准输出（不换行）。' },
-                    Println: { sig: 'func Println(a ...any) (n int, err error)', doc: '以默认格式输出操作数到标准输出并换行（操作数间加空格）。' },
-                    Sprint: { sig: 'func Sprint(a ...any) string', doc: '以默认格式串联操作数返回字符串（相邻字符串间自动加空格）。' },
-                    Sprintln: { sig: 'func Sprintln(a ...any) string', doc: '以默认格式串联操作数并追加换行符返回字符串（操作数间恒加空格）。' },
-                    Fprintf: { sig: 'func Fprintf(w io.Writer, format string, a ...any) (n int, err error)', doc: '按格式动词写入指定 Writer（如 http 响应、文件、日志）。' }
+                    Sprintf: { sig: 'func Sprintf(format string, a ...any) string', doc: I18N.t('按格式动词格式化并返回字符串（不打印）。常用动词：%s 字符串、%d 整数、%v 默认格式、%+v 结构体带字段名、%#v Go 语法、%q 带引号、%T 类型、%x 十六进制、%% 百分号。') },
+                    Errorf: { sig: 'func Errorf(format string, a ...any) error', doc: I18N.t('生成携带格式化消息的错误；消息含 %w 时返回可被 errors.Is/As 解包的包装错误。') },
+                    Printf: { sig: 'func Printf(format string, a ...any) (n int, err error)', doc: I18N.t('按格式动词输出到标准输出（不换行）。') },
+                    Println: { sig: 'func Println(a ...any) (n int, err error)', doc: I18N.t('以默认格式输出操作数到标准输出并换行（操作数间加空格）。') },
+                    Sprint: { sig: 'func Sprint(a ...any) string', doc: I18N.t('以默认格式串联操作数返回字符串（相邻字符串间自动加空格）。') },
+                    Sprintln: { sig: 'func Sprintln(a ...any) string', doc: I18N.t('以默认格式串联操作数并追加换行符返回字符串（操作数间恒加空格）。') },
+                    Fprintf: { sig: 'func Fprintf(w io.Writer, format string, a ...any) (n int, err error)', doc: I18N.t('按格式动词写入指定 Writer（如 http 响应、文件、日志）。') }
                 },
                 strings: {
-                    TrimSpace: { sig: 'func TrimSpace(s string) string', doc: '去除 s 首尾的全部空白字符（空格、\\t、\\n、\\r 等 Unicode 空白）。' },
-                    Contains: { sig: 'func Contains(s, substr string) bool', doc: '判断子串 substr 是否出现在 s 中。' },
-                    ContainsAny: { sig: 'func ContainsAny(s, chars string) bool', doc: '判断 s 是否包含 chars 中的任一字符（按 rune 匹配）。' },
-                    HasPrefix: { sig: 'func HasPrefix(s, prefix string) bool', doc: '判断 s 是否以 prefix 开头。' },
-                    HasSuffix: { sig: 'func HasSuffix(s, suffix string) bool', doc: '判断 s 是否以 suffix 结尾。' },
-                    ToUpper: { sig: 'func ToUpper(s string) string', doc: '返回所有 Unicode 字母转为大写后的新字符串。' },
-                    ToLower: { sig: 'func ToLower(s string) string', doc: '返回所有 Unicode 字母转为小写后的新字符串。' },
-                    EqualFold: { sig: 'func EqualFold(s, t string) bool', doc: '按 Unicode 大小写折叠（不区分大小写）比较两字符串是否相等。' },
-                    Trim: { sig: 'func Trim(s, cutset string) string', doc: '去除 s 首尾所有位于 cutset 中的字符。' },
-                    TrimPrefix: { sig: 'func TrimPrefix(s, prefix string) string', doc: '去掉 s 的指定前缀（不匹配则原样返回）；常配 HasPrefix 使用。' },
-                    TrimSuffix: { sig: 'func TrimSuffix(s, suffix string) string', doc: '去掉 s 的指定后缀（不匹配则原样返回）。' },
-                    TrimLeft: { sig: 'func TrimLeft(s, cutset string) string', doc: '从左侧去除所有位于 cutset 中的字符。' },
-                    TrimRight: { sig: 'func TrimRight(s, cutset string) string', doc: '从右侧去除所有位于 cutset 中的字符。' },
-                    Split: { sig: 'func Split(s, sep string) []string', doc: '按分隔符 sep 切分 s；sep 为空时按 UTF-8 字符逐个切分。' },
-                    SplitN: { sig: 'func SplitN(s, sep string, n int) []string', doc: '按分隔符切分，最多产出 n 个子串（n>0 末段保留剩余部分）。' },
-                    Join: { sig: 'func Join(elems []string, sep string) string', doc: '用 sep 把字符串切片连接为单个字符串（Split 的逆操作）。' },
-                    ReplaceAll: { sig: 'func ReplaceAll(s, old, new string) string', doc: '把 s 中所有 old 子串替换为 new；等价于 Replace(s, old, new, -1)。' },
-                    Replace: { sig: 'func Replace(s, old, new string, n int) string', doc: '把 s 中前 n 个 old 子串替换为 new（n<0 替换全部）。' },
-                    Repeat: { sig: 'func Repeat(s string, count int) string', doc: '把 s 重复 count 次拼接返回。' },
-                    Index: { sig: 'func Index(s, substr string) int', doc: '返回 substr 在 s 中首次出现的字节下标，不存在返回 -1。' },
-                    LastIndex: { sig: 'func LastIndex(s, substr string) int', doc: '返回 substr 在 s 中最后一次出现的字节下标，不存在返回 -1。' },
-                    Fields: { sig: 'func Fields(s string) []string', doc: '按连续空白切分 s 并去掉空串（等价 Split 后过滤空白段）。' },
-                    Count: { sig: 'func Count(s, substr string) int', doc: '统计 substr 在 s 中出现的非重叠次数。' },
-                    Cut: { sig: 'func Cut(s, sep string) (before, after string, found bool)', doc: '按首个 sep 切成前后两段；found 表示是否切中（Go 1.18+）。' },
-                    NewReader: { sig: 'func NewReader(s string) *Reader', doc: '把字符串包装为 io.Reader（零拷贝，供需要 Reader 的接口使用）。' },
-                    NewReplacer: { sig: 'func NewReplacer(oldnew ...string) *Replacer', doc: '构造多组替换规则的批量替换器（oldnew 成对给出）。' }
+                    TrimSpace: { sig: 'func TrimSpace(s string) string', doc: I18N.t('去除 s 首尾的全部空白字符（空格、\\t、\\n、\\r 等 Unicode 空白）。') },
+                    Contains: { sig: 'func Contains(s, substr string) bool', doc: I18N.t('判断子串 substr 是否出现在 s 中。') },
+                    ContainsAny: { sig: 'func ContainsAny(s, chars string) bool', doc: I18N.t('判断 s 是否包含 chars 中的任一字符（按 rune 匹配）。') },
+                    HasPrefix: { sig: 'func HasPrefix(s, prefix string) bool', doc: I18N.t('判断 s 是否以 prefix 开头。') },
+                    HasSuffix: { sig: 'func HasSuffix(s, suffix string) bool', doc: I18N.t('判断 s 是否以 suffix 结尾。') },
+                    ToUpper: { sig: 'func ToUpper(s string) string', doc: I18N.t('返回所有 Unicode 字母转为大写后的新字符串。') },
+                    ToLower: { sig: 'func ToLower(s string) string', doc: I18N.t('返回所有 Unicode 字母转为小写后的新字符串。') },
+                    EqualFold: { sig: 'func EqualFold(s, t string) bool', doc: I18N.t('按 Unicode 大小写折叠（不区分大小写）比较两字符串是否相等。') },
+                    Trim: { sig: 'func Trim(s, cutset string) string', doc: I18N.t('去除 s 首尾所有位于 cutset 中的字符。') },
+                    TrimPrefix: { sig: 'func TrimPrefix(s, prefix string) string', doc: I18N.t('去掉 s 的指定前缀（不匹配则原样返回）；常配 HasPrefix 使用。') },
+                    TrimSuffix: { sig: 'func TrimSuffix(s, suffix string) string', doc: I18N.t('去掉 s 的指定后缀（不匹配则原样返回）。') },
+                    TrimLeft: { sig: 'func TrimLeft(s, cutset string) string', doc: I18N.t('从左侧去除所有位于 cutset 中的字符。') },
+                    TrimRight: { sig: 'func TrimRight(s, cutset string) string', doc: I18N.t('从右侧去除所有位于 cutset 中的字符。') },
+                    Split: { sig: 'func Split(s, sep string) []string', doc: I18N.t('按分隔符 sep 切分 s；sep 为空时按 UTF-8 字符逐个切分。') },
+                    SplitN: { sig: 'func SplitN(s, sep string, n int) []string', doc: I18N.t('按分隔符切分，最多产出 n 个子串（n>0 末段保留剩余部分）。') },
+                    Join: { sig: 'func Join(elems []string, sep string) string', doc: I18N.t('用 sep 把字符串切片连接为单个字符串（Split 的逆操作）。') },
+                    ReplaceAll: { sig: 'func ReplaceAll(s, old, new string) string', doc: I18N.t('把 s 中所有 old 子串替换为 new；等价于 Replace(s, old, new, -1)。') },
+                    Replace: { sig: 'func Replace(s, old, new string, n int) string', doc: I18N.t('把 s 中前 n 个 old 子串替换为 new（n<0 替换全部）。') },
+                    Repeat: { sig: 'func Repeat(s string, count int) string', doc: I18N.t('把 s 重复 count 次拼接返回。') },
+                    Index: { sig: 'func Index(s, substr string) int', doc: I18N.t('返回 substr 在 s 中首次出现的字节下标，不存在返回 -1。') },
+                    LastIndex: { sig: 'func LastIndex(s, substr string) int', doc: I18N.t('返回 substr 在 s 中最后一次出现的字节下标，不存在返回 -1。') },
+                    Fields: { sig: 'func Fields(s string) []string', doc: I18N.t('按连续空白切分 s 并去掉空串（等价 Split 后过滤空白段）。') },
+                    Count: { sig: 'func Count(s, substr string) int', doc: I18N.t('统计 substr 在 s 中出现的非重叠次数。') },
+                    Cut: { sig: 'func Cut(s, sep string) (before, after string, found bool)', doc: I18N.t('按首个 sep 切成前后两段；found 表示是否切中（Go 1.18+）。') },
+                    NewReader: { sig: 'func NewReader(s string) *Reader', doc: I18N.t('把字符串包装为 io.Reader（零拷贝，供需要 Reader 的接口使用）。') },
+                    NewReplacer: { sig: 'func NewReplacer(oldnew ...string) *Replacer', doc: I18N.t('构造多组替换规则的批量替换器（oldnew 成对给出）。') }
                 },
                 strconv: {
-                    Atoi: { sig: 'func Atoi(s string) (int, error)', doc: '字符串转 int；非法格式返回语法错误（ParseInt 的 int 简版）。' },
-                    Itoa: { sig: 'func Itoa(i int) string', doc: 'int 转字符串（FormatInt 的 int 简版）。' },
-                    ParseInt: { sig: 'func ParseInt(s string, base int, bitSize int) (int64, error)', doc: '按进制解析有符号整数；base=0 自动识别 0x/0o/0b 前缀。' },
-                    ParseUint: { sig: 'func ParseUint(s string, base int, bitSize int) (uint64, error)', doc: '按进制解析无符号整数（不接受负号）。' },
-                    ParseFloat: { sig: 'func ParseFloat(s string, bitSize int) (float64, error)', doc: '解析十进制或十六进制浮点串为 float64/float32。' },
-                    ParseBool: { sig: 'func ParseBool(str string) (bool, error)', doc: '解析布尔串：1/t/T/TRUE/true/True 与 0/f/F/FALSE/false/False。' },
-                    FormatInt: { sig: 'func FormatInt(i int64, base int) string', doc: '把 int64 按指定进制（2~36）格式化为字符串。' },
-                    FormatUint: { sig: 'func FormatUint(i uint64, base int) string', doc: '把 uint64 按指定进制格式化为字符串。' },
-                    FormatFloat: { sig: 'func FormatFloat(f float64, fmt byte, prec, bitSize int) string', doc: '浮点转字符串；fmt 取 f/e/g，prec=-1 表示最短精确表示。' },
-                    Quote: { sig: 'func Quote(s string) string', doc: '返回 s 的 Go 语法双引号字面量（转义不可打印字符）。' },
-                    Unquote: { sig: 'func Unquote(s string) (string, error)', doc: '解析 Go 语法的带引号字符串字面量，返回去引号内容。' }
+                    Atoi: { sig: 'func Atoi(s string) (int, error)', doc: I18N.t('字符串转 int；非法格式返回语法错误（ParseInt 的 int 简版）。') },
+                    Itoa: { sig: 'func Itoa(i int) string', doc: I18N.t('int 转字符串（FormatInt 的 int 简版）。') },
+                    ParseInt: { sig: 'func ParseInt(s string, base int, bitSize int) (int64, error)', doc: I18N.t('按进制解析有符号整数；base=0 自动识别 0x/0o/0b 前缀。') },
+                    ParseUint: { sig: 'func ParseUint(s string, base int, bitSize int) (uint64, error)', doc: I18N.t('按进制解析无符号整数（不接受负号）。') },
+                    ParseFloat: { sig: 'func ParseFloat(s string, bitSize int) (float64, error)', doc: I18N.t('解析十进制或十六进制浮点串为 float64/float32。') },
+                    ParseBool: { sig: 'func ParseBool(str string) (bool, error)', doc: I18N.t('解析布尔串：1/t/T/TRUE/true/True 与 0/f/F/FALSE/false/False。') },
+                    FormatInt: { sig: 'func FormatInt(i int64, base int) string', doc: I18N.t('把 int64 按指定进制（2~36）格式化为字符串。') },
+                    FormatUint: { sig: 'func FormatUint(i uint64, base int) string', doc: I18N.t('把 uint64 按指定进制格式化为字符串。') },
+                    FormatFloat: { sig: 'func FormatFloat(f float64, fmt byte, prec, bitSize int) string', doc: I18N.t('浮点转字符串；fmt 取 f/e/g，prec=-1 表示最短精确表示。') },
+                    Quote: { sig: 'func Quote(s string) string', doc: I18N.t('返回 s 的 Go 语法双引号字面量（转义不可打印字符）。') },
+                    Unquote: { sig: 'func Unquote(s string) (string, error)', doc: I18N.t('解析 Go 语法的带引号字符串字面量，返回去引号内容。') }
                 },
                 time: {
-                    Now: { sig: 'func Now() Time', doc: '返回当前本地时间。链式常用：.Format("2006-01-02 15:04:05")、.Unix()、.Add(d)、.Sub(t)、.Before/.After/.Equal。' },
-                    Since: { sig: 'func Since(t Time) Duration', doc: '返回自 t 起经过的时长，等价 time.Now().Sub(t)；常用于耗时统计。' },
-                    Sleep: { sig: 'func Sleep(d Duration)', doc: '阻塞当前 goroutine 至少 d 时长。' },
-                    ParseDuration: { sig: 'func ParseDuration(s string) (Duration, error)', doc: '解析 "300ms"、"1.5h"、"2h45m" 形式的时长串。' },
-                    Parse: { sig: 'func Parse(layout, value string) (Time, error)', doc: '按 layout（参考时间 Mon Jan 2 15:04:05 MST 2006）解析时间串。' },
-                    Date: { sig: 'func Date(year int, month Month, day, hour, min, sec, nsec int, loc *Location) Time', doc: '由年月日时分秒构造指定时区的 Time。' },
-                    Unix: { sig: 'func Unix(sec int64, nsec int64) Time', doc: '由 Unix 秒+纳秒构造 Time（秒级时间戳转时间常用）。' },
-                    UnixMilli: { sig: 'func UnixMilli(msec int64) Time', doc: '由 Unix 毫秒时间戳构造 Time。' },
-                    Tick: { sig: 'func Tick(d Duration) <-chan Time', doc: '返回周期性报时的通道（d<=0 返回 nil）；服务端周期任务慎用（无法停止），建议 NewTicker。' },
-                    NewTicker: { sig: 'func NewTicker(d Duration) *Ticker', doc: '创建周期触发器，d<=0 会 panic；用完须调用 Stop 释放。' },
-                    NewTimer: { sig: 'func NewTimer(d Duration) *Timer', doc: '创建单次定时器，到期向 C 发送一次当前时间；Reset/Stop 可复用或停止。' },
-                    After: { sig: 'func After(d Duration) <-chan Time', doc: 'd 后向返回通道发送一次时间；常用于 select 超时分支。' },
-                    Duration: { sig: 'type Duration int64', doc: '时长类型（纳秒为基本单位）。常量 Nanosecond/Millisecond/Second/Minute/Hour；常用方法：Seconds()/Milliseconds()/String()。' },
-                    Time: { sig: 'type Time struct { }', doc: '时间点类型。常用方法：Format/Add/Sub/Before/After/Equal/Unix/UnixMilli/Year/Month/Day/Hour/Minute/Second/In/UTC/Local/IsZero/Truncate/Round/AddDate。' }
+                    Now: { sig: 'func Now() Time', doc: I18N.t('返回当前本地时间。链式常用：.Format("2006-01-02 15:04:05")、.Unix()、.Add(d)、.Sub(t)、.Before/.After/.Equal。') },
+                    Since: { sig: 'func Since(t Time) Duration', doc: I18N.t('返回自 t 起经过的时长，等价 time.Now().Sub(t)；常用于耗时统计。') },
+                    Sleep: { sig: 'func Sleep(d Duration)', doc: I18N.t('阻塞当前 goroutine 至少 d 时长。') },
+                    ParseDuration: { sig: 'func ParseDuration(s string) (Duration, error)', doc: I18N.t('解析 "300ms"、"1.5h"、"2h45m" 形式的时长串。') },
+                    Parse: { sig: 'func Parse(layout, value string) (Time, error)', doc: I18N.t('按 layout（参考时间 Mon Jan 2 15:04:05 MST 2006）解析时间串。') },
+                    Date: { sig: 'func Date(year int, month Month, day, hour, min, sec, nsec int, loc *Location) Time', doc: I18N.t('由年月日时分秒构造指定时区的 Time。') },
+                    Unix: { sig: 'func Unix(sec int64, nsec int64) Time', doc: I18N.t('由 Unix 秒+纳秒构造 Time（秒级时间戳转时间常用）。') },
+                    UnixMilli: { sig: 'func UnixMilli(msec int64) Time', doc: I18N.t('由 Unix 毫秒时间戳构造 Time。') },
+                    Tick: { sig: 'func Tick(d Duration) <-chan Time', doc: I18N.t('返回周期性报时的通道（d<=0 返回 nil）；服务端周期任务慎用（无法停止），建议 NewTicker。') },
+                    NewTicker: { sig: 'func NewTicker(d Duration) *Ticker', doc: I18N.t('创建周期触发器，d<=0 会 panic；用完须调用 Stop 释放。') },
+                    NewTimer: { sig: 'func NewTimer(d Duration) *Timer', doc: I18N.t('创建单次定时器，到期向 C 发送一次当前时间；Reset/Stop 可复用或停止。') },
+                    After: { sig: 'func After(d Duration) <-chan Time', doc: I18N.t('d 后向返回通道发送一次时间；常用于 select 超时分支。') },
+                    Duration: { sig: 'type Duration int64', doc: I18N.t('时长类型（纳秒为基本单位）。常量 Nanosecond/Millisecond/Second/Minute/Hour；常用方法：Seconds()/Milliseconds()/String()。') },
+                    Time: { sig: 'type Time struct { }', doc: I18N.t('时间点类型。常用方法：Format/Add/Sub/Before/After/Equal/Unix/UnixMilli/Year/Month/Day/Hour/Minute/Second/In/UTC/Local/IsZero/Truncate/Round/AddDate。') }
                 },
                 errors: {
-                    New: { sig: 'func New(text string) error', doc: '创建携带给定文本的新错误（不可比较包装，仅字符串信息）。' },
-                    Is: { sig: 'func Is(err, target error) bool', doc: '判断错误链中是否存在与 target 等值（或实现 Is 方法匹配）的错误——用于哨兵错误判定。' },
-                    As: { sig: 'func As(err error, target any) bool', doc: '在错误链中查找可赋值给 target 类型指点的错误——用于自定义错误类型解包。' },
-                    Unwrap: { sig: 'func Unwrap(err error) error', doc: '解包一层错误（要求 err 实现 Unwrap() error），无内层返回 nil。' },
-                    Join: { sig: 'func Join(errs ...error) error', doc: '合并多个错误为一个（nil 条目被忽略），Is/As 可遍历各分支（Go 1.20+）。' }
+                    New: { sig: 'func New(text string) error', doc: I18N.t('创建携带给定文本的新错误（不可比较包装，仅字符串信息）。') },
+                    Is: { sig: 'func Is(err, target error) bool', doc: I18N.t('判断错误链中是否存在与 target 等值（或实现 Is 方法匹配）的错误——用于哨兵错误判定。') },
+                    As: { sig: 'func As(err error, target any) bool', doc: I18N.t('在错误链中查找可赋值给 target 类型指点的错误——用于自定义错误类型解包。') },
+                    Unwrap: { sig: 'func Unwrap(err error) error', doc: I18N.t('解包一层错误（要求 err 实现 Unwrap() error），无内层返回 nil。') },
+                    Join: { sig: 'func Join(errs ...error) error', doc: I18N.t('合并多个错误为一个（nil 条目被忽略），Is/As 可遍历各分支（Go 1.20+）。') }
                 },
                 json: {
-                    Marshal: { sig: 'func Marshal(v any) ([]byte, error)', doc: '把 v 序列化为 JSON；结构体字段按 json tag 导出（无 tag 用字段名），小写无 tag 字段不导出。' },
-                    Unmarshal: { sig: 'func Unmarshal(data []byte, v any) error', doc: '把 JSON 反序列化到 v（v 须传指针）；字段匹配规则同 tag。' },
-                    MarshalIndent: { sig: 'func MarshalIndent(v any, prefix, indent string) ([]byte, error)', doc: '带缩进的格式化序列化（如 indent="  "），便于人读输出。' },
-                    NewDecoder: { sig: 'func NewDecoder(r io.Reader) *Decoder', doc: '构造流式解码器；常用链式 d.Decode(&obj)，适合请求体/文件流。' },
-                    NewEncoder: { sig: 'func NewEncoder(w io.Writer) *Encoder', doc: '构造流式编码器；e.Encode(v) 写出并追加换行。' },
-                    Valid: { sig: 'func Valid(data []byte) bool', doc: '快速校验 data 是否为合法 JSON（Go 1.9+）。' },
-                    RawMessage: { sig: 'type RawMessage []byte', doc: '延迟解码的原始 JSON 字节；先收下原文，后续再按需 Unmarshal。' }
+                    Marshal: { sig: 'func Marshal(v any) ([]byte, error)', doc: I18N.t('把 v 序列化为 JSON；结构体字段按 json tag 导出（无 tag 用字段名），小写无 tag 字段不导出。') },
+                    Unmarshal: { sig: 'func Unmarshal(data []byte, v any) error', doc: I18N.t('把 JSON 反序列化到 v（v 须传指针）；字段匹配规则同 tag。') },
+                    MarshalIndent: { sig: 'func MarshalIndent(v any, prefix, indent string) ([]byte, error)', doc: I18N.t('带缩进的格式化序列化（如 indent="  "），便于人读输出。') },
+                    NewDecoder: { sig: 'func NewDecoder(r io.Reader) *Decoder', doc: I18N.t('构造流式解码器；常用链式 d.Decode(&obj)，适合请求体/文件流。') },
+                    NewEncoder: { sig: 'func NewEncoder(w io.Writer) *Encoder', doc: I18N.t('构造流式编码器；e.Encode(v) 写出并追加换行。') },
+                    Valid: { sig: 'func Valid(data []byte) bool', doc: I18N.t('快速校验 data 是否为合法 JSON（Go 1.9+）。') },
+                    RawMessage: { sig: 'type RawMessage []byte', doc: I18N.t('延迟解码的原始 JSON 字节；先收下原文，后续再按需 Unmarshal。') }
                 },
                 os: {
-                    Remove: { sig: 'func Remove(name string) error', doc: '删除文件或空目录；目录非空报错（递归删除用 RemoveAll）。' },
-                    RemoveAll: { sig: 'func RemoveAll(path string) error', doc: '递归删除目录及其全部内容；路径不存在返回 nil（幂等）。' },
-                    MkdirAll: { sig: 'func MkdirAll(path string, perm FileMode) error', doc: '递归创建多级目录（含父目录），已存在返回 nil。' },
-                    WriteFile: { sig: 'func WriteFile(name string, data []byte, perm FileMode) error', doc: '把 data 一次性写入文件（不存在则创建，存在则截断覆盖）。' },
-                    ReadFile: { sig: 'func ReadFile(name string) ([]byte, error)', doc: '一次性读入整个文件内容。' },
-                    Stat: { sig: 'func Stat(name string) (FileInfo, error)', doc: '获取文件/目录元信息（大小、模式、ModTime）；IsNotExist(err) 判不存在。' },
-                    Create: { sig: 'func Create(name string) (*File, error)', doc: '以 0666 权限创建/截断文件并返回可写句柄（用完须 Close）。' },
-                    Open: { sig: 'func Open(name string) (*File, error)', doc: '只读打开文件（写操作用 OpenFile 带标志）。' },
-                    Getenv: { sig: 'func Getenv(key string) string', doc: '读取环境变量，不存在返回空串（区分"空值"用 LookupEnv）。' },
-                    Setenv: { sig: 'func Setenv(key, value string) error', doc: '设置环境变量（影响当前进程及后续 exec 子进程）。' },
-                    Exit: { sig: 'func Exit(code int)', doc: '立即以指定退出码终止进程（defer 不执行）。' },
-                    Rename: { sig: 'func Rename(oldpath, newpath string) error', doc: '重命名/移动文件或目录（同盘原子操作）。' },
-                    ReadDir: { sig: 'func ReadDir(name string) ([]DirEntry, error)', doc: '读取目录项列表（名称、类型、信息）。' },
-                    UserHomeDir: { sig: 'func UserHomeDir() (string, error)', doc: '返回当前用户主目录（Windows 为 %USERPROFILE%）。' },
-                    TempDir: { sig: 'func TempDir() string', doc: '返回系统临时目录路径。' },
-                    CreateTemp: { sig: 'func CreateTemp(dir, pattern string) (*File, error)', doc: '在 dir 创建随机名临时文件（pattern 含 * 处替换为随机串；空 dir 用系统临时目录）。' },
-                    IsNotExist: { sig: 'func IsNotExist(err error) bool', doc: '判断错误是否为"路径不存在"（配合 errors.Is 亦可）。' },
-                    Args: { sig: 'var Args []string', doc: '命令行参数切片；Args[0] 为程序路径，其后为参数。' }
+                    Remove: { sig: 'func Remove(name string) error', doc: I18N.t('删除文件或空目录；目录非空报错（递归删除用 RemoveAll）。') },
+                    RemoveAll: { sig: 'func RemoveAll(path string) error', doc: I18N.t('递归删除目录及其全部内容；路径不存在返回 nil（幂等）。') },
+                    MkdirAll: { sig: 'func MkdirAll(path string, perm FileMode) error', doc: I18N.t('递归创建多级目录（含父目录），已存在返回 nil。') },
+                    WriteFile: { sig: 'func WriteFile(name string, data []byte, perm FileMode) error', doc: I18N.t('把 data 一次性写入文件（不存在则创建，存在则截断覆盖）。') },
+                    ReadFile: { sig: 'func ReadFile(name string) ([]byte, error)', doc: I18N.t('一次性读入整个文件内容。') },
+                    Stat: { sig: 'func Stat(name string) (FileInfo, error)', doc: I18N.t('获取文件/目录元信息（大小、模式、ModTime）；IsNotExist(err) 判不存在。') },
+                    Create: { sig: 'func Create(name string) (*File, error)', doc: I18N.t('以 0666 权限创建/截断文件并返回可写句柄（用完须 Close）。') },
+                    Open: { sig: 'func Open(name string) (*File, error)', doc: I18N.t('只读打开文件（写操作用 OpenFile 带标志）。') },
+                    Getenv: { sig: 'func Getenv(key string) string', doc: I18N.t('读取环境变量，不存在返回空串（区分"空值"用 LookupEnv）。') },
+                    Setenv: { sig: 'func Setenv(key, value string) error', doc: I18N.t('设置环境变量（影响当前进程及后续 exec 子进程）。') },
+                    Exit: { sig: 'func Exit(code int)', doc: I18N.t('立即以指定退出码终止进程（defer 不执行）。') },
+                    Rename: { sig: 'func Rename(oldpath, newpath string) error', doc: I18N.t('重命名/移动文件或目录（同盘原子操作）。') },
+                    ReadDir: { sig: 'func ReadDir(name string) ([]DirEntry, error)', doc: I18N.t('读取目录项列表（名称、类型、信息）。') },
+                    UserHomeDir: { sig: 'func UserHomeDir() (string, error)', doc: I18N.t('返回当前用户主目录（Windows 为 %USERPROFILE%）。') },
+                    TempDir: { sig: 'func TempDir() string', doc: I18N.t('返回系统临时目录路径。') },
+                    CreateTemp: { sig: 'func CreateTemp(dir, pattern string) (*File, error)', doc: I18N.t('在 dir 创建随机名临时文件（pattern 含 * 处替换为随机串；空 dir 用系统临时目录）。') },
+                    IsNotExist: { sig: 'func IsNotExist(err error) bool', doc: I18N.t('判断错误是否为"路径不存在"（配合 errors.Is 亦可）。') },
+                    Args: { sig: 'var Args []string', doc: I18N.t('命令行参数切片；Args[0] 为程序路径，其后为参数。') }
                 },
                 filepath: {
-                    Join: { sig: 'func Join(elem ...string) string', doc: '按平台分隔符智能拼接路径（自动清理多余分隔符与 ..）。' },
-                    Ext: { sig: 'func Ext(path string) string', doc: '返回路径最后一个点的扩展名（含点，如 ".go"；无扩展名返回空串）。' },
-                    Base: { sig: 'func Base(path string) string', doc: '返回路径最后一段（文件名或目录名）。' },
-                    Dir: { sig: 'func Dir(path string) string', doc: '返回路径中 Base 之前的目录部分。' },
-                    Abs: { sig: 'func Abs(path string) (string, error)', doc: '把相对路径转为基于当前工作目录的绝对路径。' },
-                    Rel: { sig: 'func Rel(basepath, targpath string) (string, error)', doc: '计算 targpath 相对 basepath 的相对路径。' },
-                    Clean: { sig: 'func Clean(path string) string', doc: '按词典规约清理路径（合并重复分隔符、消解 . 与 ..）。' },
-                    IsAbs: { sig: 'func IsAbs(path string) bool', doc: '判断是否绝对路径（Windows 带盘符/UNC）。' },
-                    Walk: { sig: 'func Walk(root string, fn WalkFunc) error', doc: '递归遍历目录树，逐项回调（新版推荐 WalkDir，性能更好）。' },
-                    WalkDir: { sig: 'func WalkDir(root string, fn fs.WalkDirFunc) error', doc: '基于 DirEntry 的递归遍历（Go 1.16+，比 Walk 快）。' },
-                    ToSlash: { sig: 'func ToSlash(path string) string', doc: '把平台分隔符统一替换为 /（跨平台路径归一）。' }
+                    Join: { sig: 'func Join(elem ...string) string', doc: I18N.t('按平台分隔符智能拼接路径（自动清理多余分隔符与 ..）。') },
+                    Ext: { sig: 'func Ext(path string) string', doc: I18N.t('返回路径最后一个点的扩展名（含点，如 ".go"；无扩展名返回空串）。') },
+                    Base: { sig: 'func Base(path string) string', doc: I18N.t('返回路径最后一段（文件名或目录名）。') },
+                    Dir: { sig: 'func Dir(path string) string', doc: I18N.t('返回路径中 Base 之前的目录部分。') },
+                    Abs: { sig: 'func Abs(path string) (string, error)', doc: I18N.t('把相对路径转为基于当前工作目录的绝对路径。') },
+                    Rel: { sig: 'func Rel(basepath, targpath string) (string, error)', doc: I18N.t('计算 targpath 相对 basepath 的相对路径。') },
+                    Clean: { sig: 'func Clean(path string) string', doc: I18N.t('按词典规约清理路径（合并重复分隔符、消解 . 与 ..）。') },
+                    IsAbs: { sig: 'func IsAbs(path string) bool', doc: I18N.t('判断是否绝对路径（Windows 带盘符/UNC）。') },
+                    Walk: { sig: 'func Walk(root string, fn WalkFunc) error', doc: I18N.t('递归遍历目录树，逐项回调（新版推荐 WalkDir，性能更好）。') },
+                    WalkDir: { sig: 'func WalkDir(root string, fn fs.WalkDirFunc) error', doc: I18N.t('基于 DirEntry 的递归遍历（Go 1.16+，比 Walk 快）。') },
+                    ToSlash: { sig: 'func ToSlash(path string) string', doc: I18N.t('把平台分隔符统一替换为 /（跨平台路径归一）。') }
                 },
                 http: {
-                    Error: { sig: 'func Error(w ResponseWriter, error string, code int)', doc: '向响应写入纯文本错误消息与 HTTP 状态码（Content-Type: text/plain）。' },
-                    HandleFunc: { sig: 'func HandleFunc(pattern string, handler func(ResponseWriter, *Request))', doc: '注册路由处理器（DefaultServeMux）；pattern 精确或前缀 /path/。' },
-                    Handle: { sig: 'func Handle(pattern string, handler Handler)', doc: '注册实现 Handler 接口的处理器到 DefaultServeMux。' },
-                    ListenAndServe: { sig: 'func ListenAndServe(addr string, handler Handler) error', doc: '监听 addr 并启动 HTTP 服务（handler 为 nil 时用 DefaultServeMux）；阻塞调用。' },
-                    NewRequest: { sig: 'func NewRequest(method, url string, body io.Reader) (*Request, error)', doc: '构造客户端请求对象（发请求前设置 Header 后经 client.Do 发出）。' },
-                    NewServeMux: { sig: 'func NewServeMux() *ServeMux', doc: '创建独立路由器（避免污染 DefaultServeMux，支持方法匹配 Go 1.22+）。' },
-                    StatusText: { sig: 'func StatusText(code int) string', doc: '返回状态码的标准原因短语（如 200 → "OK"）。' },
-                    Get: { sig: 'func Get(url string) (resp *Response, err error)', doc: '简易 GET 请求；resp.Body 用完必须 Close。' },
-                    Post: { sig: 'func Post(url, contentType string, body io.Reader) (resp *Response, err error)', doc: '简易 POST 请求。' },
-                    ServeFile: { sig: 'func ServeFile(w ResponseWriter, r *Request, name string)', doc: '把本地文件作为响应体写出（自动处理范围请求与类型）。' },
-                    Redirect: { sig: 'func Redirect(w ResponseWriter, r *Request, url string, code int)', doc: '向客户端发起重定向（301/302/307 等）。' },
-                    MaxBytesReader: { sig: 'func MaxBytesReader(w ResponseWriter, r io.ReadCloser, n int64) io.ReadCloser', doc: '限制请求体读取上限，超限报错（防大包攻击）。' }
+                    Error: { sig: 'func Error(w ResponseWriter, error string, code int)', doc: I18N.t('向响应写入纯文本错误消息与 HTTP 状态码（Content-Type: text/plain）。') },
+                    HandleFunc: { sig: 'func HandleFunc(pattern string, handler func(ResponseWriter, *Request))', doc: I18N.t('注册路由处理器（DefaultServeMux）；pattern 精确或前缀 /path/。') },
+                    Handle: { sig: 'func Handle(pattern string, handler Handler)', doc: I18N.t('注册实现 Handler 接口的处理器到 DefaultServeMux。') },
+                    ListenAndServe: { sig: 'func ListenAndServe(addr string, handler Handler) error', doc: I18N.t('监听 addr 并启动 HTTP 服务（handler 为 nil 时用 DefaultServeMux）；阻塞调用。') },
+                    NewRequest: { sig: 'func NewRequest(method, url string, body io.Reader) (*Request, error)', doc: I18N.t('构造客户端请求对象（发请求前设置 Header 后经 client.Do 发出）。') },
+                    NewServeMux: { sig: 'func NewServeMux() *ServeMux', doc: I18N.t('创建独立路由器（避免污染 DefaultServeMux，支持方法匹配 Go 1.22+）。') },
+                    StatusText: { sig: 'func StatusText(code int) string', doc: I18N.t('返回状态码的标准原因短语（如 200 → "OK"）。') },
+                    Get: { sig: 'func Get(url string) (resp *Response, err error)', doc: I18N.t('简易 GET 请求；resp.Body 用完必须 Close。') },
+                    Post: { sig: 'func Post(url, contentType string, body io.Reader) (resp *Response, err error)', doc: I18N.t('简易 POST 请求。') },
+                    ServeFile: { sig: 'func ServeFile(w ResponseWriter, r *Request, name string)', doc: I18N.t('把本地文件作为响应体写出（自动处理范围请求与类型）。') },
+                    Redirect: { sig: 'func Redirect(w ResponseWriter, r *Request, url string, code int)', doc: I18N.t('向客户端发起重定向（301/302/307 等）。') },
+                    MaxBytesReader: { sig: 'func MaxBytesReader(w ResponseWriter, r io.ReadCloser, n int64) io.ReadCloser', doc: I18N.t('限制请求体读取上限，超限报错（防大包攻击）。') }
                 },
                 context: {
-                    Background: { sig: 'func Background() Context', doc: '返回根上下文（永不取消）；服务端入口/顶层使用。' },
-                    TODO: { sig: 'func TODO() Context', doc: '占位上下文（尚未确定用哪个父上下文时）。' },
-                    WithTimeout: { sig: 'func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)', doc: '派生带超时的子上下文；到期自动取消，超时错误为 DeadlineExceeded。' },
-                    WithCancel: { sig: 'func WithCancel(parent Context) (Context, CancelFunc)', doc: '派生可手动取消的子上下文；用完调用 cancel 释放资源。' },
-                    WithDeadline: { sig: 'func WithDeadline(parent Context, d time.Time) (Context, CancelFunc)', doc: '派生到指定时间点自动取消的子上下文。' },
-                    WithValue: { sig: 'func WithValue(parent Context, key, val any) Context', doc: '在上下文挂载请求级数据（须用自定义类型作 key，避免键冲突）。' }
+                    Background: { sig: 'func Background() Context', doc: I18N.t('返回根上下文（永不取消）；服务端入口/顶层使用。') },
+                    TODO: { sig: 'func TODO() Context', doc: I18N.t('占位上下文（尚未确定用哪个父上下文时）。') },
+                    WithTimeout: { sig: 'func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)', doc: I18N.t('派生带超时的子上下文；到期自动取消，超时错误为 DeadlineExceeded。') },
+                    WithCancel: { sig: 'func WithCancel(parent Context) (Context, CancelFunc)', doc: I18N.t('派生可手动取消的子上下文；用完调用 cancel 释放资源。') },
+                    WithDeadline: { sig: 'func WithDeadline(parent Context, d time.Time) (Context, CancelFunc)', doc: I18N.t('派生到指定时间点自动取消的子上下文。') },
+                    WithValue: { sig: 'func WithValue(parent Context, key, val any) Context', doc: I18N.t('在上下文挂载请求级数据（须用自定义类型作 key，避免键冲突）。') }
                 },
                 sync: {
-                    Mutex: { sig: 'type Mutex struct { }', doc: '互斥锁。方法：Lock()/Unlock()/TryLock()；必须 Lock 与 Unlock 成对（常用 defer Unlock）。' },
-                    RWMutex: { sig: 'type RWMutex struct { }', doc: '读写锁。读锁 RLock()/RUnlock()（共享），写锁 Lock()/Unlock()（独占）；写优先防饿死。' },
-                    WaitGroup: { sig: 'type WaitGroup struct { }', doc: '等待一组 goroutine 完成：Add(n) 计数 → Done() 递减 → Wait() 阻塞至归零。' },
-                    Once: { sig: 'type Once struct { }', doc: '单次执行器：Do(f) 保证并发下 f 仅执行一次（单例/懒初始化常用）。' },
-                    Map: { sig: 'type Map struct { }', doc: '并发安全映射（Go 1.9+）。方法 Load/Store/LoadOrStore/Delete/Range；键类型需可比较。' },
-                    NewCond: { sig: 'func NewCond(l Locker) *Cond', doc: '创建条件变量，配合 Broadcast/Signal 与 Wait 实现等待唤醒。' }
+                    Mutex: { sig: 'type Mutex struct { }', doc: I18N.t('互斥锁。方法：Lock()/Unlock()/TryLock()；必须 Lock 与 Unlock 成对（常用 defer Unlock）。') },
+                    RWMutex: { sig: 'type RWMutex struct { }', doc: I18N.t('读写锁。读锁 RLock()/RUnlock()（共享），写锁 Lock()/Unlock()（独占）；写优先防饿死。') },
+                    WaitGroup: { sig: 'type WaitGroup struct { }', doc: I18N.t('等待一组 goroutine 完成：Add(n) 计数 → Done() 递减 → Wait() 阻塞至归零。') },
+                    Once: { sig: 'type Once struct { }', doc: I18N.t('单次执行器：Do(f) 保证并发下 f 仅执行一次（单例/懒初始化常用）。') },
+                    Map: { sig: 'type Map struct { }', doc: I18N.t('并发安全映射（Go 1.9+）。方法 Load/Store/LoadOrStore/Delete/Range；键类型需可比较。') },
+                    NewCond: { sig: 'func NewCond(l Locker) *Cond', doc: I18N.t('创建条件变量，配合 Broadcast/Signal 与 Wait 实现等待唤醒。') }
                 },
                 atomic: {
-                    AddInt64: { sig: 'func AddInt64(addr *int64, delta int64) (new int64)', doc: '原子地把 delta 加到 *addr 并返回新值（计数器并发自增标准做法）。' },
-                    AddUint64: { sig: 'func AddUint64(addr *uint64, delta uint64) (new uint64)', doc: '原子无符号 64 位加法。' },
-                    AddInt32: { sig: 'func AddInt32(addr *int32, delta int32) (new int32)', doc: '原子 32 位加法。' },
-                    LoadInt64: { sig: 'func LoadInt64(addr *int64) (val int64)', doc: '原子读取 *addr（保证可见性，防读半写）。' },
-                    StoreInt64: { sig: 'func StoreInt64(addr *int64, val int64)', doc: '原子写入 *addr。' },
-                    CompareAndSwapInt64: { sig: 'func CompareAndSwapInt64(addr *int64, old, new int64) (swapped bool)', doc: 'CAS：*addr 等于 old 才写入 new，返回是否成功（无锁算法核心）。' },
-                    Value: { sig: 'type Value struct { }', doc: '原子任意类型读写（Load/Store/Swap/CompareAndSwap），存取值须类型一致。' },
-                    Bool: { sig: 'type Bool struct { }', doc: '原子布尔（Go 1.19+）：Load/Store/CompareAndSwap/Swap。' }
+                    AddInt64: { sig: 'func AddInt64(addr *int64, delta int64) (new int64)', doc: I18N.t('原子地把 delta 加到 *addr 并返回新值（计数器并发自增标准做法）。') },
+                    AddUint64: { sig: 'func AddUint64(addr *uint64, delta uint64) (new uint64)', doc: I18N.t('原子无符号 64 位加法。') },
+                    AddInt32: { sig: 'func AddInt32(addr *int32, delta int32) (new int32)', doc: I18N.t('原子 32 位加法。') },
+                    LoadInt64: { sig: 'func LoadInt64(addr *int64) (val int64)', doc: I18N.t('原子读取 *addr（保证可见性，防读半写）。') },
+                    StoreInt64: { sig: 'func StoreInt64(addr *int64, val int64)', doc: I18N.t('原子写入 *addr。') },
+                    CompareAndSwapInt64: { sig: 'func CompareAndSwapInt64(addr *int64, old, new int64) (swapped bool)', doc: I18N.t('CAS：*addr 等于 old 才写入 new，返回是否成功（无锁算法核心）。') },
+                    Value: { sig: 'type Value struct { }', doc: I18N.t('原子任意类型读写（Load/Store/Swap/CompareAndSwap），存取值须类型一致。') },
+                    Bool: { sig: 'type Bool struct { }', doc: I18N.t('原子布尔（Go 1.19+）：Load/Store/CompareAndSwap/Swap。') }
                 },
                 regexp: {
-                    MustCompile: { sig: 'func MustCompile(str string) *Regexp', doc: '编译正则；表达式非法直接 panic（适合全局 var 初始化，只编译一次）。' },
-                    Compile: { sig: 'func Compile(expr string) (*Regexp, error)', doc: '编译正则（返回错误而非 panic，适合运行期动态表达式）。' },
-                    MatchString: { sig: 'func MatchString(pattern string, s string) (bool, error)', doc: '一次性匹配（每次都重新编译，性能敏感场景应先 MustCompile）。' },
-                    QuoteMeta: { sig: 'func QuoteMeta(s string) string', doc: '转义 s 中所有正则元字符（把用户输入当字面量匹配）。' },
-                    Regexp: { sig: 'type Regexp struct { }', doc: '编译后的正则。常用方法：MatchString/FindString/FindStringSubmatch/FindAllString/ReplaceAllString/Split/Longest。' }
+                    MustCompile: { sig: 'func MustCompile(str string) *Regexp', doc: I18N.t('编译正则；表达式非法直接 panic（适合全局 var 初始化，只编译一次）。') },
+                    Compile: { sig: 'func Compile(expr string) (*Regexp, error)', doc: I18N.t('编译正则（返回错误而非 panic，适合运行期动态表达式）。') },
+                    MatchString: { sig: 'func MatchString(pattern string, s string) (bool, error)', doc: I18N.t('一次性匹配（每次都重新编译，性能敏感场景应先 MustCompile）。') },
+                    QuoteMeta: { sig: 'func QuoteMeta(s string) string', doc: I18N.t('转义 s 中所有正则元字符（把用户输入当字面量匹配）。') },
+                    Regexp: { sig: 'type Regexp struct { }', doc: I18N.t('编译后的正则。常用方法：MatchString/FindString/FindStringSubmatch/FindAllString/ReplaceAllString/Split/Longest。') }
                 },
                 sort: {
-                    Slice: { sig: 'func Slice(x any, less func(i, j int) bool)', doc: '按 less 回调对切片不稳定排序（不一定保持相等元素原序）。' },
-                    SliceStable: { sig: 'func SliceStable(x any, less func(i, j int) bool)', doc: '稳定排序：相等元素保持原有相对顺序。' },
-                    Strings: { sig: 'func Strings(x []string)', doc: '字符串切片升序排序。' },
-                    Ints: { sig: 'func Ints(x []int)', doc: 'int 切片升序排序。' },
-                    Sort: { sig: 'func Sort(data Interface)', doc: '对实现 sort.Interface（Len/Less/Swap）的数据排序。' },
-                    Reverse: { sig: 'func Reverse(data Interface) Interface', doc: '返回倒序排列的包装器（sort.Sort(sort.Reverse(x))）。' },
-                    IsSorted: { sig: 'func IsSorted(data Interface) bool', doc: '判断数据是否已按序排列。' },
-                    SearchInts: { sig: 'func SearchInts(a []int, x int) int', doc: '在升序 int 切片中二分查找 x 的插入位置。' }
+                    Slice: { sig: 'func Slice(x any, less func(i, j int) bool)', doc: I18N.t('按 less 回调对切片不稳定排序（不一定保持相等元素原序）。') },
+                    SliceStable: { sig: 'func SliceStable(x any, less func(i, j int) bool)', doc: I18N.t('稳定排序：相等元素保持原有相对顺序。') },
+                    Strings: { sig: 'func Strings(x []string)', doc: I18N.t('字符串切片升序排序。') },
+                    Ints: { sig: 'func Ints(x []int)', doc: I18N.t('int 切片升序排序。') },
+                    Sort: { sig: 'func Sort(data Interface)', doc: I18N.t('对实现 sort.Interface（Len/Less/Swap）的数据排序。') },
+                    Reverse: { sig: 'func Reverse(data Interface) Interface', doc: I18N.t('返回倒序排列的包装器（sort.Sort(sort.Reverse(x))）。') },
+                    IsSorted: { sig: 'func IsSorted(data Interface) bool', doc: I18N.t('判断数据是否已按序排列。') },
+                    SearchInts: { sig: 'func SearchInts(a []int, x int) int', doc: I18N.t('在升序 int 切片中二分查找 x 的插入位置。') }
                 },
                 bytes: {
-                    NewReader: { sig: 'func NewReader(b []byte) *Reader', doc: '把字节切片包装为 io.Reader/Seeker（零拷贝）。' },
-                    NewBuffer: { sig: 'func NewBuffer(buf []byte) *Buffer', doc: '以 buf 为初始内容构造缓冲区（容量不足自动扩容）。' },
-                    NewBufferString: { sig: 'func NewBufferString(s string) *Buffer', doc: '以字符串为初始内容构造缓冲区。' },
-                    Contains: { sig: 'func Contains(b, subslice []byte) bool', doc: '判断 b 是否包含子切片。' },
-                    Equal: { sig: 'func Equal(a, b []byte) bool', doc: '比较两个字节切片内容是否完全一致（长度+内容）。' },
-                    Compare: { sig: 'func Compare(a, b []byte) int', doc: '字典序比较：-1/0/1。' },
-                    TrimSpace: { sig: 'func TrimSpace(b []byte) []byte', doc: '去除字节切片首尾空白。' },
-                    Index: { sig: 'func Index(b, sep []byte) int', doc: '返回 sep 在 b 中首次出现的下标，不存在返回 -1。' },
-                    HasPrefix: { sig: 'func HasPrefix(s, prefix []byte) bool', doc: '判断字节切片是否以 prefix 开头。' },
-                    ReplaceAll: { sig: 'func ReplaceAll(s, old, new []byte) []byte', doc: '把 s 中所有 old 替换为 new。' }
+                    NewReader: { sig: 'func NewReader(b []byte) *Reader', doc: I18N.t('把字节切片包装为 io.Reader/Seeker（零拷贝）。') },
+                    NewBuffer: { sig: 'func NewBuffer(buf []byte) *Buffer', doc: I18N.t('以 buf 为初始内容构造缓冲区（容量不足自动扩容）。') },
+                    NewBufferString: { sig: 'func NewBufferString(s string) *Buffer', doc: I18N.t('以字符串为初始内容构造缓冲区。') },
+                    Contains: { sig: 'func Contains(b, subslice []byte) bool', doc: I18N.t('判断 b 是否包含子切片。') },
+                    Equal: { sig: 'func Equal(a, b []byte) bool', doc: I18N.t('比较两个字节切片内容是否完全一致（长度+内容）。') },
+                    Compare: { sig: 'func Compare(a, b []byte) int', doc: I18N.t('字典序比较：-1/0/1。') },
+                    TrimSpace: { sig: 'func TrimSpace(b []byte) []byte', doc: I18N.t('去除字节切片首尾空白。') },
+                    Index: { sig: 'func Index(b, sep []byte) int', doc: I18N.t('返回 sep 在 b 中首次出现的下标，不存在返回 -1。') },
+                    HasPrefix: { sig: 'func HasPrefix(s, prefix []byte) bool', doc: I18N.t('判断字节切片是否以 prefix 开头。') },
+                    ReplaceAll: { sig: 'func ReplaceAll(s, old, new []byte) []byte', doc: I18N.t('把 s 中所有 old 替换为 new。') }
                 },
                 io: {
-                    Copy: { sig: 'func Copy(dst Writer, src Reader) (written int64, err error)', doc: '从 src 拷贝到 dst 直到 EOF；返回拷贝字节数（内部经缓冲，流式不占大内存）。' },
-                    ReadAll: { sig: 'func ReadAll(r Reader) ([]byte, error)', doc: '读取 r 直到 EOF，返回全部内容（一次性进内存，大流慎用）。' },
-                    Pipe: { sig: 'func Pipe() (*PipeReader, *PipeWriter)', doc: '创建同步内存管道：写端写入阻塞至读端读出（goroutine 间流式传输）。' },
-                    MultiWriter: { sig: 'func MultiWriter(writers ...Writer) Writer', doc: '把写入复制到多个 Writer（日志同时落盘+控制台）。' },
-                    TeeReader: { sig: 'func TeeReader(r Reader, w Writer) Reader', doc: '读取的同时把内容写入 w（旁路记录）。' },
-                    NopCloser: { sig: 'func NopCloser(r Reader) ReadCloser', doc: '给 Reader 包一个空 Close，满足需要 Closer 的接口。' },
-                    Discard: { sig: 'var Discard Writer', doc: '丢弃一切写入的 Writer（黑洞，用于忽略输出）。' },
-                    EOF: { sig: 'var EOF error', doc: '流的结束标记；读循环以 err == io.EOF 判定正常结束。' },
-                    WriteString: { sig: 'func WriteString(w Writer, s string) (n int, err error)', doc: '向 w 写入字符串（w 实现 StringWriter 则直通）。' }
+                    Copy: { sig: 'func Copy(dst Writer, src Reader) (written int64, err error)', doc: I18N.t('从 src 拷贝到 dst 直到 EOF；返回拷贝字节数（内部经缓冲，流式不占大内存）。') },
+                    ReadAll: { sig: 'func ReadAll(r Reader) ([]byte, error)', doc: I18N.t('读取 r 直到 EOF，返回全部内容（一次性进内存，大流慎用）。') },
+                    Pipe: { sig: 'func Pipe() (*PipeReader, *PipeWriter)', doc: I18N.t('创建同步内存管道：写端写入阻塞至读端读出（goroutine 间流式传输）。') },
+                    MultiWriter: { sig: 'func MultiWriter(writers ...Writer) Writer', doc: I18N.t('把写入复制到多个 Writer（日志同时落盘+控制台）。') },
+                    TeeReader: { sig: 'func TeeReader(r Reader, w Writer) Reader', doc: I18N.t('读取的同时把内容写入 w（旁路记录）。') },
+                    NopCloser: { sig: 'func NopCloser(r Reader) ReadCloser', doc: I18N.t('给 Reader 包一个空 Close，满足需要 Closer 的接口。') },
+                    Discard: { sig: 'var Discard Writer', doc: I18N.t('丢弃一切写入的 Writer（黑洞，用于忽略输出）。') },
+                    EOF: { sig: 'var EOF error', doc: I18N.t('流的结束标记；读循环以 err == io.EOF 判定正常结束。') },
+                    WriteString: { sig: 'func WriteString(w Writer, s string) (n int, err error)', doc: I18N.t('向 w 写入字符串（w 实现 StringWriter 则直通）。') }
                 },
                 hex: {
-                    EncodeToString: { sig: 'func EncodeToString(src []byte) string', doc: '字节切片编码为小写十六进制字符串（哈希/摘要展示常用）。' },
-                    DecodeString: { sig: 'func DecodeString(s string) ([]byte, error)', doc: '十六进制字符串解码为字节切片。' },
-                    Encode: { sig: 'func Encode(dst, src []byte) int', doc: '把 src 编码为十六进制写入 dst（返回写入长度）。' },
-                    Decode: { sig: 'func Decode(dst, src []byte) (int, error)', doc: '把十六进制 src 解码写入 dst。' }
+                    EncodeToString: { sig: 'func EncodeToString(src []byte) string', doc: I18N.t('字节切片编码为小写十六进制字符串（哈希/摘要展示常用）。') },
+                    DecodeString: { sig: 'func DecodeString(s string) ([]byte, error)', doc: I18N.t('十六进制字符串解码为字节切片。') },
+                    Encode: { sig: 'func Encode(dst, src []byte) int', doc: I18N.t('把 src 编码为十六进制写入 dst（返回写入长度）。') },
+                    Decode: { sig: 'func Decode(dst, src []byte) (int, error)', doc: I18N.t('把十六进制 src 解码写入 dst。') }
                 },
                 rand: {
-                    Read: { sig: 'func Read(p []byte) (n int, err error)', doc: 'crypto/rand：用密码学安全随机源填充 p（生成 token/密钥/盐必须用它，勿用 math/rand）。' },
-                    Intn: { sig: 'func Intn(n int) int', doc: 'math/rand：返回 [0,n) 的伪随机整数（非加密安全）。' },
-                    Int63: { sig: 'func Int63() int64', doc: 'math/rand：返回 [0, 2^63) 的非负伪随机数。' },
-                    New: { sig: 'func New(src Source) *Rand', doc: 'math/rand：以给定随机源创建独立 Rand 实例（并发需各自加锁或用独立实例）。' },
-                    Seed: { sig: 'func Seed(seed int64)', doc: 'math/rand：设置全局随机种子（Go 1.20+ 默认自动随机化，无需手动 Seed）。' },
-                    Shuffle: { sig: 'func Shuffle(n int, swap func(i, j int))', doc: 'math/rand：Fisher-Yates 洗牌，通过 swap 回调打乱 n 个元素。' }
+                    Read: { sig: 'func Read(p []byte) (n int, err error)', doc: I18N.t('crypto/rand：用密码学安全随机源填充 p（生成 token/密钥/盐必须用它，勿用 math/rand）。') },
+                    Intn: { sig: 'func Intn(n int) int', doc: I18N.t('math/rand：返回 [0,n) 的伪随机整数（非加密安全）。') },
+                    Int63: { sig: 'func Int63() int64', doc: I18N.t('math/rand：返回 [0, 2^63) 的非负伪随机数。') },
+                    New: { sig: 'func New(src Source) *Rand', doc: I18N.t('math/rand：以给定随机源创建独立 Rand 实例（并发需各自加锁或用独立实例）。') },
+                    Seed: { sig: 'func Seed(seed int64)', doc: I18N.t('math/rand：设置全局随机种子（Go 1.20+ 默认自动随机化，无需手动 Seed）。') },
+                    Shuffle: { sig: 'func Shuffle(n int, swap func(i, j int))', doc: I18N.t('math/rand：Fisher-Yates 洗牌，通过 swap 回调打乱 n 个元素。') }
                 },
                 bufio: {
-                    NewScanner: { sig: 'func NewScanner(r io.Reader) *Scanner', doc: '构造行扫描器：for sc.Scan() { sc.Text() } 逐行读取（默认单行上限 64KB，大行需 sc.Buffer 扩容）。' },
-                    NewReader: { sig: 'func NewReader(rd io.Reader) *Reader', doc: '构造带缓冲读取器：ReadString(\'\\n\')/ReadBytes 按分隔符读取。' },
-                    NewWriter: { sig: 'func NewWriter(w io.Writer) *Writer', doc: '构造带缓冲写入器；写完必须 Flush 才落盘。' },
-                    Scanner: { sig: 'type Scanner struct { }', doc: '扫描器。方法：Scan()/Text()/Bytes()/Buf()/Err()/Split()。' }
+                    NewScanner: { sig: 'func NewScanner(r io.Reader) *Scanner', doc: I18N.t('构造行扫描器：for sc.Scan() { sc.Text() } 逐行读取（默认单行上限 64KB，大行需 sc.Buffer 扩容）。') },
+                    NewReader: { sig: 'func NewReader(rd io.Reader) *Reader', doc: I18N.t('构造带缓冲读取器：ReadString(\'\\n\')/ReadBytes 按分隔符读取。') },
+                    NewWriter: { sig: 'func NewWriter(w io.Writer) *Writer', doc: I18N.t('构造带缓冲写入器；写完必须 Flush 才落盘。') },
+                    Scanner: { sig: 'type Scanner struct { }', doc: I18N.t('扫描器。方法：Scan()/Text()/Bytes()/Buf()/Err()/Split()。') }
                 },
                 url: {
-                    Parse: { sig: 'func Parse(rawURL string) (*URL, error)', doc: '解析 URL 字符串；取参数用 u.Query().Get("k")。' },
-                    QueryEscape: { sig: 'func QueryEscape(s string) string', doc: '对查询串组件编码（空格变 +）。' },
-                    QueryUnescape: { sig: 'func QueryUnescape(s string) (string, error)', doc: '解码查询串（+ 变空格）。' },
-                    PathEscape: { sig: 'func PathEscape(s string) string', doc: '对 URL 路径段编码（空格变 %20）。' },
-                    ParseQuery: { sig: 'func ParseQuery(query string) (Values, error)', doc: '解析 a=1&b=2 形式查询串为 Values。' },
-                    Values: { sig: 'type Values url.Values map[string][]string', doc: '查询参数表。方法：Get/Add/Set/Encode()（Encode 生成 a=1&b=2 串）。' }
+                    Parse: { sig: 'func Parse(rawURL string) (*URL, error)', doc: I18N.t('解析 URL 字符串；取参数用 u.Query().Get("k")。') },
+                    QueryEscape: { sig: 'func QueryEscape(s string) string', doc: I18N.t('对查询串组件编码（空格变 +）。') },
+                    QueryUnescape: { sig: 'func QueryUnescape(s string) (string, error)', doc: I18N.t('解码查询串（+ 变空格）。') },
+                    PathEscape: { sig: 'func PathEscape(s string) string', doc: I18N.t('对 URL 路径段编码（空格变 %20）。') },
+                    ParseQuery: { sig: 'func ParseQuery(query string) (Values, error)', doc: I18N.t('解析 a=1&b=2 形式查询串为 Values。') },
+                    Values: { sig: 'type Values url.Values map[string][]string', doc: I18N.t('查询参数表。方法：Get/Add/Set/Encode()（Encode 生成 a=1&b=2 串）。') }
                 },
                 net: {
-                    JoinHostPort: { sig: 'func JoinHostPort(host, port string) string', doc: '拼接 host:port（IPv6 自动加方括号）。' },
-                    SplitHostPort: { sig: 'func SplitHostPort(hostPort string) (host, port string, err error)', doc: '拆分 host:port（IPv6 兼容）。' },
-                    Dial: { sig: 'func Dial(network, address string) (Conn, error)', doc: '建立网络连接（tcp/udp/unix）；建议带超时用 DialTimeout。' },
-                    DialTimeout: { sig: 'func DialTimeout(network, address string, timeout time.Duration) (Conn, error)', doc: '带超时建立连接。' },
-                    Listen: { sig: 'func Listen(network, address string) (Listener, error)', doc: '监听端口，Accept 循环接收连接。' }
+                    JoinHostPort: { sig: 'func JoinHostPort(host, port string) string', doc: I18N.t('拼接 host:port（IPv6 自动加方括号）。') },
+                    SplitHostPort: { sig: 'func SplitHostPort(hostPort string) (host, port string, err error)', doc: I18N.t('拆分 host:port（IPv6 兼容）。') },
+                    Dial: { sig: 'func Dial(network, address string) (Conn, error)', doc: I18N.t('建立网络连接（tcp/udp/unix）；建议带超时用 DialTimeout。') },
+                    DialTimeout: { sig: 'func DialTimeout(network, address string, timeout time.Duration) (Conn, error)', doc: I18N.t('带超时建立连接。') },
+                    Listen: { sig: 'func Listen(network, address string) (Listener, error)', doc: I18N.t('监听端口，Accept 循环接收连接。') }
                 },
                 math: {
-                    Abs: { sig: 'func Abs(x float64) float64', doc: '返回 x 的绝对值。' },
-                    Max: { sig: 'func Max(x, y float64) float64', doc: '返回较大值（含 NaN 传播规则；两 int 请用内建 max）。' },
-                    Min: { sig: 'func Min(x, y float64) float64', doc: '返回较小值。' },
-                    Floor: { sig: 'func Floor(x float64) float64', doc: '向下取整。' },
-                    Ceil: { sig: 'func Ceil(x float64) float64', doc: '向上取整。' },
-                    Round: { sig: 'func Round(x float64) float64', doc: '四舍五入到最近整数（.5 远离零）。' },
-                    Sqrt: { sig: 'func Sqrt(x float64) float64', doc: '算术平方根（负数返回 NaN）。' },
-                    Pow: { sig: 'func Pow(x, y float64) float64', doc: 'x 的 y 次幂。' },
-                    Trunc: { sig: 'func Trunc(x float64) float64', doc: '向零截断（去小数部分）。' },
-                    Mod: { sig: 'func Mod(x, y float64) float64', doc: '浮点取模（结果符号随 x）。' },
-                    Inf: { sig: 'func Inf(sign int) float64', doc: '返回正/负无穷大（sign>=0 为正）。' },
-                    NaN: { sig: 'func NaN() float64', doc: '返回 IEEE-754 "非数"；NaN 与任何值比较均为 false（判 NaN 用 IsNaN）。' },
-                    IsNaN: { sig: 'func IsNaN(f float64) (is bool)', doc: '判断 f 是否为 NaN。' },
-                    Pi: { sig: 'const Pi = 3.141592653589793', doc: '圆周率常量。' }
+                    Abs: { sig: 'func Abs(x float64) float64', doc: I18N.t('返回 x 的绝对值。') },
+                    Max: { sig: 'func Max(x, y float64) float64', doc: I18N.t('返回较大值（含 NaN 传播规则；两 int 请用内建 max）。') },
+                    Min: { sig: 'func Min(x, y float64) float64', doc: I18N.t('返回较小值。') },
+                    Floor: { sig: 'func Floor(x float64) float64', doc: I18N.t('向下取整。') },
+                    Ceil: { sig: 'func Ceil(x float64) float64', doc: I18N.t('向上取整。') },
+                    Round: { sig: 'func Round(x float64) float64', doc: I18N.t('四舍五入到最近整数（.5 远离零）。') },
+                    Sqrt: { sig: 'func Sqrt(x float64) float64', doc: I18N.t('算术平方根（负数返回 NaN）。') },
+                    Pow: { sig: 'func Pow(x, y float64) float64', doc: I18N.t('x 的 y 次幂。') },
+                    Trunc: { sig: 'func Trunc(x float64) float64', doc: I18N.t('向零截断（去小数部分）。') },
+                    Mod: { sig: 'func Mod(x, y float64) float64', doc: I18N.t('浮点取模（结果符号随 x）。') },
+                    Inf: { sig: 'func Inf(sign int) float64', doc: I18N.t('返回正/负无穷大（sign>=0 为正）。') },
+                    NaN: { sig: 'func NaN() float64', doc: I18N.t('返回 IEEE-754 "非数"；NaN 与任何值比较均为 false（判 NaN 用 IsNaN）。') },
+                    IsNaN: { sig: 'func IsNaN(f float64) (is bool)', doc: I18N.t('判断 f 是否为 NaN。') },
+                    Pi: { sig: 'const Pi = 3.141592653589793', doc: I18N.t('圆周率常量。') }
                 },
                 log: {
-                    Printf: { sig: 'func Printf(format string, v ...any)', doc: '写标准日志（默认 stderr，带日期时间前缀，不换行自动补）。' },
-                    Println: { sig: 'func Println(v ...any)', doc: '写一行标准日志。' },
-                    Fatal: { sig: 'func Fatal(v ...any)', doc: '写日志后调用 os.Exit(1)（defer 不执行）。' },
-                    Fatalf: { sig: 'func Fatalf(format string, v ...any)', doc: '写格式化日志后 os.Exit(1)。' },
-                    SetOutput: { sig: 'func SetOutput(w io.Writer)', doc: '重定向日志输出目标（如写文件）。' },
-                    SetFlags: { sig: 'func SetFlags(flag int)', doc: '设置日志前缀格式位（log.LstdFlags|log.Lshortfile 等）。' },
-                    New: { sig: 'func New(out io.Writer, prefix string, flag int) *Logger', doc: '创建独立 Logger 实例。' }
+                    Printf: { sig: 'func Printf(format string, v ...any)', doc: I18N.t('写标准日志（默认 stderr，带日期时间前缀，不换行自动补）。') },
+                    Println: { sig: 'func Println(v ...any)', doc: I18N.t('写一行标准日志。') },
+                    Fatal: { sig: 'func Fatal(v ...any)', doc: I18N.t('写日志后调用 os.Exit(1)（defer 不执行）。') },
+                    Fatalf: { sig: 'func Fatalf(format string, v ...any)', doc: I18N.t('写格式化日志后 os.Exit(1)。') },
+                    SetOutput: { sig: 'func SetOutput(w io.Writer)', doc: I18N.t('重定向日志输出目标（如写文件）。') },
+                    SetFlags: { sig: 'func SetFlags(flag int)', doc: I18N.t('设置日志前缀格式位（log.LstdFlags|log.Lshortfile 等）。') },
+                    New: { sig: 'func New(out io.Writer, prefix string, flag int) *Logger', doc: I18N.t('创建独立 Logger 实例。') }
                 },
                 base64: {
-                    StdEncoding: { sig: 'var StdEncoding = NewEncoding(encodeStd)', doc: '标准 Base64 编码器（带填充）。用法：base64.StdEncoding.EncodeToString(b)。' },
-                    URLEncoding: { sig: 'var URLEncoding = NewEncoding(encodeURL)', doc: 'URL 安全 Base64（-/ 替代 +/，适合放进 URL/令牌）。' },
-                    NewEncoder: { sig: 'func NewEncoder(enc *Encoding, w io.Writer) io.WriteCloser', doc: '流式 Base64 编码器。' },
-                    NewDecoder: { sig: 'func NewDecoder(enc *Encoding, r io.Reader) io.Reader', doc: '流式 Base64 解码器。' }
+                    StdEncoding: { sig: 'var StdEncoding = NewEncoding(encodeStd)', doc: I18N.t('标准 Base64 编码器（带填充）。用法：base64.StdEncoding.EncodeToString(b)。') },
+                    URLEncoding: { sig: 'var URLEncoding = NewEncoding(encodeURL)', doc: I18N.t('URL 安全 Base64（-/ 替代 +/，适合放进 URL/令牌）。') },
+                    NewEncoder: { sig: 'func NewEncoder(enc *Encoding, w io.Writer) io.WriteCloser', doc: I18N.t('流式 Base64 编码器。') },
+                    NewDecoder: { sig: 'func NewDecoder(enc *Encoding, r io.Reader) io.Reader', doc: I18N.t('流式 Base64 解码器。') }
                 },
                 unicode: {
-                    IsLetter: { sig: 'func IsLetter(r rune) bool', doc: '判断 r 是否为 Unicode 字母（含中文）。' },
-                    IsDigit: { sig: 'func IsDigit(r rune) bool', doc: '判断 r 是否为十进制数字字符。' },
-                    IsUpper: { sig: 'func IsUpper(r rune) bool', doc: '判断 r 是否为大写字母。' },
-                    IsSpace: { sig: 'func IsSpace(r rune) bool', doc: '判断 r 是否为空白字符（\\t \\n \\v \\f \\r 空格及 Unicode 空白）。' },
-                    ToUpper: { sig: 'func ToUpper(r rune) rune', doc: '单个字符转大写。' },
-                    ToLower: { sig: 'func ToLower(r rune) rune', doc: '单个字符转小写。' }
+                    IsLetter: { sig: 'func IsLetter(r rune) bool', doc: I18N.t('判断 r 是否为 Unicode 字母（含中文）。') },
+                    IsDigit: { sig: 'func IsDigit(r rune) bool', doc: I18N.t('判断 r 是否为十进制数字字符。') },
+                    IsUpper: { sig: 'func IsUpper(r rune) bool', doc: I18N.t('判断 r 是否为大写字母。') },
+                    IsSpace: { sig: 'func IsSpace(r rune) bool', doc: I18N.t('判断 r 是否为空白字符（\\t \\n \\v \\f \\r 空格及 Unicode 空白）。') },
+                    ToUpper: { sig: 'func ToUpper(r rune) rune', doc: I18N.t('单个字符转大写。') },
+                    ToLower: { sig: 'func ToLower(r rune) rune', doc: I18N.t('单个字符转小写。') }
                 },
                 testing: {
-                    T: { sig: 'type T struct { }', doc: '单元测试句柄。常用方法：Fatal/Fatalf（终止本测试）、Error/Errorf（标记失败继续）、Helper()（标记辅助函数）、Cleanup(f)（测试后清理）、Logf、Parallel。' },
-                    B: { sig: 'type B struct { }', doc: '基准测试句柄。核心方法：ResetTimer/StartTimer/StopTimer、ReportAllocs、N（迭代次数，for i := 0; i < b.N; i++）。' }
+                    T: { sig: 'type T struct { }', doc: I18N.t('单元测试句柄。常用方法：Fatal/Fatalf（终止本测试）、Error/Errorf（标记失败继续）、Helper()（标记辅助函数）、Cleanup(f)（测试后清理）、Logf、Parallel。') },
+                    B: { sig: 'type B struct { }', doc: I18N.t('基准测试句柄。核心方法：ResetTimer/StartTimer/StopTimer、ReportAllocs、N（迭代次数，for i := 0; i < b.N; i++）。') }
                 },
                 yaml: {
-                    Unmarshal: { sig: 'func Unmarshal(in []byte, out interface{}) (err error)', doc: 'gopkg.in/yaml.v3：把 YAML 字节解析到 out（结构体按 yaml tag 匹配字段）。' },
-                    Marshal: { sig: 'func Marshal(in interface{}) (out []byte, err error)', doc: 'gopkg.in/yaml.v3：把值序列化为 YAML 字节。' }
+                    Unmarshal: { sig: 'func Unmarshal(in []byte, out interface{}) (err error)', doc: I18N.t('gopkg.in/yaml.v3：把 YAML 字节解析到 out（结构体按 yaml tag 匹配字段）。') },
+                    Marshal: { sig: 'func Marshal(in interface{}) (out []byte, err error)', doc: I18N.t('gopkg.in/yaml.v3：把值序列化为 YAML 字节。') }
                 }
             };
             var fvHoverCache = new WeakMap(); // model → { funcs: 函数/类表, vars: 变量/形参表 }（惰性扫描，model 销毁自动回收）
@@ -1482,10 +1485,10 @@
                 var gb = (langId === 'go' && !callPkg) ? GO_BUILTINS[callName] : null;
                 if (se) { // 标准库限定调用：签名卡 + 实参序号
                     sig = se.sig;
-                    tip = 'ƒ ' + callPkg + '.' + callName + ' · 标准库 · 第 ' + (argIdx + 1) + ' 个参数';
+                    tip = 'ƒ ' + callPkg + '.' + callName + I18N.t(' · 标准库 · 第 ') + (argIdx + 1) + I18N.t(' 个参数');
                 } else if (gb) {
                     sig = gb.sig;
-                    tip = 'ƒ ' + callName + ' · 内建函数 · 第 ' + (argIdx + 1) + ' 个参数';
+                    tip = 'ƒ ' + callName + I18N.t(' · 内建函数 · 第 ') + (argIdx + 1) + I18N.t(' 个参数');
                 } else if (!callPkg) {
                     var fn = null;
                     for (i = 0; i < tables.funcs.length; i++) {
@@ -1499,7 +1502,7 @@
                     for (i = 0; i < tables.vars.length; i++) {
                         if (tables.vars[i].kind === 'param' && tables.vars[i].line === fn.line) names.push(tables.vars[i].name);
                     }
-                    tip = 'ƒ 函数 ' + callName + ' · 第 ' + (argIdx + 1) + (names.length ? '/' + names.length : '') + ' 个参数' +
+                    tip = I18N.t('ƒ 函数 ') + callName + I18N.t(' · 第 ') + (argIdx + 1) + (names.length ? '/' + names.length : '') + I18N.t(' 个参数') +
                           (names[argIdx] ? ' ' + names[argIdx] : '');
                 } else { // 限定名但未收录：不出卡避免噪音
                     return null;
@@ -1564,7 +1567,7 @@
                 if (word && langId === 'go' && (GO_BUILTINS[word.word] || GO_TYPES[word.word])) {
                     var gb = GO_BUILTINS[word.word] || GO_TYPES[word.word];
                     contents.push({ value: '```go\n' + gb.sig + '\n```' });
-                    contents.push({ value: (GO_TYPES[word.word] ? '内建类型\n\n' : '内建函数\n\n') + gb.doc });
+                    contents.push({ value: (GO_TYPES[word.word] ? I18N.t('内建类型\n\n') : I18N.t('内建函数\n\n')) + gb.doc });
                     return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
                 }
                 // ①b Go 标准库限定名（pkg.Member）：悬停词前紧邻 "pkg." → 查 GO_STDLIB
@@ -1575,7 +1578,7 @@
                     if (pkgm && GO_STDLIB[pkgm[1]] && GO_STDLIB[pkgm[1]][word.word]) {
                         var se = GO_STDLIB[pkgm[1]][word.word];
                         contents.push({ value: '```go\n' + se.sig + '\n```' });
-                        contents.push({ value: '包 ' + pkgm[1] + ' · 标准库\n\n' + se.doc });
+                        contents.push({ value: I18N.t('包 ') + pkgm[1] + I18N.t(' · 标准库\n\n') + se.doc });
                         return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
                     }
                 }
@@ -1587,7 +1590,7 @@
                             var raw = (model.getLineContent(s.line) || '').trim();
                             if (raw.length > 200) raw = raw.substring(0, 200) + '…';
                             contents.push({ value: '```' + langId + '\n' + raw + '\n```' });
-                            contents.push({ value: (s.kind === 'class' ? '◇ 类' : 'ƒ 函数') + ' · 定义于本项目 · 第 ' + s.line + ' 行' });
+                            contents.push({ value: (s.kind === 'class' ? I18N.t('◇ 类') : I18N.t('ƒ 函数')) + I18N.t(' · 定义于本项目 · 第 ') + s.line + I18N.t(' 行') });
                         });
                         return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
                     }
@@ -1598,10 +1601,10 @@
                         vh.forEach(function (v) { if (v.line <= position.lineNumber && (!pick || v.line > pick.line)) pick = v; });
                         if (!pick) pick = vh[0];
                         contents.push({ value: '```' + langId + '\n' + word.word + (pick.type ? ' ' + pick.type : '') + '\n```' });
-                        contents.push({ value: (pick.kind === 'param' ? '参数' : (pick.kind === 'field' ? '字段' : '变量')) +
-                            (pick.type ? ' · 类型 ' + pick.type : '') +
-                            (pick.owner ? ' · 属于 ' + pick.owner : '') +
-                            ' · 定义于本项目 · 第 ' + pick.line + ' 行' });
+                        contents.push({ value: (pick.kind === 'param' ? I18N.t('参数') : (pick.kind === 'field' ? I18N.t('字段') : I18N.t('变量'))) +
+                            (pick.type ? I18N.t(' · 类型 ') + pick.type : '') +
+                            (pick.owner ? I18N.t(' · 属于 ') + pick.owner : '') +
+                            I18N.t(' · 定义于本项目 · 第 ') + pick.line + I18N.t(' 行') });
                         return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents: contents };
                     }
                 }
@@ -1811,7 +1814,7 @@
                 if (fvQuickState.sel >= fvQuickState.cur.length) fvQuickState.sel = Math.max(0, fvQuickState.cur.length - 1);
                 dbgEl.quickList.innerHTML = '';
                 if (!fvQuickState.cur.length) {
-                    var e = document.createElement('div'); e.className = 'fv-quick-empty'; e.textContent = '无匹配项';
+                    var e = document.createElement('div'); e.className = 'fv-quick-empty'; e.textContent = I18N.t('无匹配项');
                     dbgEl.quickList.appendChild(e); return;
                 }
                 fvQuickState.cur.forEach(function (it, i) {
@@ -1844,10 +1847,10 @@
                 if (pick) pick(it);
             }
             function fvQuickOpen(items, opts) { // items: [{ico, nm, ct, ln, d}]；opts: {placeholder, onPick}
-                if (!items || !items.length) { setStatus('未找到匹配项'); return; }
+                if (!items || !items.length) { setStatus(I18N.t('未找到匹配项')); return; }
                 fvQuickState = { all: items, cur: items, onPick: (opts && opts.onPick) || function () {}, sel: 0 };
                 dbgEl.quickInput.value = '';
-                dbgEl.quickInput.placeholder = (opts && opts.placeholder) || '输入过滤…';
+                dbgEl.quickInput.placeholder = (opts && opts.placeholder) || I18N.t('输入过滤…');
                 dbgEl.quickPanel.classList.add('show');
                 fvQuickRender();
                 setTimeout(function () { try { dbgEl.quickInput.focus(); } catch (e) {} }, 20);
@@ -1879,17 +1882,17 @@
                     return;
                 }
                 var br = fvLspBridge();
-                if (!br || !br.lspReferences) { setStatus('当前环境不支持查找引用'); return; }
+                if (!br || !br.lspReferences) { setStatus(I18N.t('当前环境不支持查找引用')); return; }
                 var word = model.getWordAtPosition(pos);
-                setStatus('正在查找引用…');
+                setStatus(I18N.t('正在查找引用…'));
                 fvLspRace(br.lspReferences(fvLspReq(model, pos)), 2500).then(function (r) {
-                    if (!r || !r.length) { setStatus('未找到引用'); return; }
+                    if (!r || !r.length) { setStatus(I18N.t('未找到引用')); return; }
                     setStatus('');
                     fvQuickOpen(r.map(function (h) {
                         var rel = String(h.rel || h.path || '');
                         return { ico: '※', nm: rel.split('/').pop() || rel, ct: rel, ln: ':' + (h.line || 1), d: h };
                     }), {
-                        placeholder: '引用 ' + ((word && word.word) || '') + '（共 ' + r.length + ' 处）',
+                        placeholder: I18N.t('引用 ') + ((word && word.word) || '') + I18N.t('（共 ') + r.length + I18N.t(' 处）'),
                         onPick: function (it) { fvJumpToLoc(it.d); }
                     });
                 });
@@ -1904,16 +1907,16 @@
                     return;
                 }
                 var br = fvLspBridge();
-                if (!br || !br.lspDefinition) { setStatus('当前环境不支持定义预览'); return; }
+                if (!br || !br.lspDefinition) { setStatus(I18N.t('当前环境不支持定义预览')); return; }
                 fvLspRace(br.lspDefinition(fvLspReq(model, pos)), 2600).then(function (hits) {
-                    if (!hits || !hits.length) { setStatus('未找到定义'); return; }
+                    if (!hits || !hits.length) { setStatus(I18N.t('未找到定义')); return; }
                     var h0 = hits[0] || {};
                     if (h0.rel && h0.rel.indexOf('..') !== 0 && !/^[a-zA-Z]:/.test(h0.rel)) { fvJumpToLoc(h0); return; } // 单一可靠定义直接跳（工作区外同 definition provider 规则跳不了）
                     fvQuickOpen(hits.map(function (h) {
                         var rel = String(h.rel || h.path || '');
                         return { ico: '→', nm: rel.split('/').pop() || rel, ct: rel, ln: ':' + (h.line || 1), d: h };
                     }), {
-                        placeholder: '定义预览（共 ' + hits.length + ' 处）',
+                        placeholder: I18N.t('定义预览（共 ') + hits.length + I18N.t(' 处）'),
                         onPick: function (it) { fvJumpToLoc(it.d); }
                     });
                 });
@@ -1976,7 +1979,7 @@
                                 else if (rel) cross[rel] = 1;
                             });
                             var n = Object.keys(cross).length;
-                            if (n) setStatus('重命名涉及另外 ' + n + ' 个文件，本页已应用当前文件改动', 'dirty');
+                            if (n) setStatus(I18N.t('重命名涉及另外 ') + n + I18N.t(' 个文件，本页已应用当前文件改动'), 'dirty');
                             if (!mine.length) return null;
                             return {
                                 edits: mine.map(function (t) {
@@ -2019,7 +2022,7 @@
             // ---- 快捷键（内置 action 优先复用官方交互；LSP 语言引用/Peek 分流自绘浮层） ----
             monacoEditor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, function () { // 格式化
                 var a = monacoEditor.getAction('editor.action.formatDocument');
-                if (a) a.run(); else setStatus('当前文件不支持格式化');
+                if (a) a.run(); else setStatus(I18N.t('当前文件不支持格式化'));
             });
             monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Period, function () { // 快速修复（灯泡）
                 var a = monacoEditor.getAction('editor.action.quickFix');
@@ -2051,7 +2054,7 @@
                     btnKeep.classList.add('hidden');    // dirty 后由保存接管（保存=保留全部改动）
                     btnRevert.classList.add('hidden');
                     if (hasViewer() && data) viewerBridge().setDirty(data.tab_id, true);
-                    setStatus('已修改（未保存）', 'dirty');
+                    setStatus(I18N.t('已修改（未保存）'), 'dirty');
                 }
                 scheduleGutter(); // 红蓝绿 gutter 防抖重算（含 setValue 引发的一次）
                 try { var cm = monacoEditor.getModel(); if (cm) fvHoverCache.delete(cm); } catch (e) {} // 阶段一百一十八：悬停符号/变量表即刻失效（编辑与切文件共用同一 model，不删则沿用旧文件缓存）
@@ -2083,7 +2086,7 @@
                 bodyEl.style.display = '';
             }
             render();
-            setStatus('编辑器加载失败，已切换为预览（可点"编辑"重试）', 'dirty');
+            setStatus(I18N.t('编辑器加载失败，已切换为预览（可点"编辑"重试）'), 'dirty');
             fvLoaded(); // 阶段一百三十一：失败兜底同为加载完结（回落静态预览已渲染），回执收条
         }
         // ===== 阶段九十八：CSS 选择器特性 hover（TRAE CN 同款：悬停选择器显示应用预览与 (ID, 类, 元素) 特性三元组） =====
@@ -2099,7 +2102,7 @@
                             range: new monaco.Range(p1.lineNumber, p1.column, p2.lineNumber, p2.column),
                             contents: [
                                 { value: '```html\n' + cssHoverPreview(hit.sel) + '\n```' },
-                                { value: '选择器特性: (' + cssSpecificity(hit.sel).join(', ') + ')' }
+                                { value: I18N.t('选择器特性: (') + cssSpecificity(hit.sel).join(', ') + ')' }
                             ]
                         };
                     }
@@ -2328,8 +2331,8 @@
             aiPopBadge.className = 'fv-ai-badge ' + (kind === 'add' ? 'b-add' : (kind === 'del' ? 'b-del' : 'b-mod'));
             var isTask = !!(data && data.task_modified); // 任务文件=AI 改动；普通文件=本地未保存编辑（文案区分，不冒充 AI）
             aiPopBadge.textContent = isTask
-                ? (kind === 'add' ? 'AI 新增' : (kind === 'del' ? 'AI 删除' : 'AI 修改'))
-                : (kind === 'add' ? '新增' : (kind === 'del' ? '删除' : '修改'));
+                ? (kind === 'add' ? I18N.t('AI 新增') : (kind === 'del' ? I18N.t('AI 删除') : I18N.t('AI 修改')))
+                : (kind === 'add' ? I18N.t('新增') : (kind === 'del' ? I18N.t('删除') : I18N.t('修改')));
             var adds = (data && data.adds != null) ? data.adds : (lastGutterMarks ? lastGutterMarks.added.length : 0);
             var dels = (data && data.dels != null) ? data.dels : (lastGutterMarks ? lastGutterMarks.deleted.length : 0);
             aiPopStat.innerHTML = '';
@@ -2339,13 +2342,13 @@
                 aiPopStat.appendChild(sa); aiPopStat.appendChild(sd);
             }
             var b = aiPopBlock || { start: l0, end: l0 };
-            aiPopLines.textContent = b.start === b.end ? ('第 ' + (b.start + 1) + ' 行') : ('第 ' + (b.start + 1) + ' - ' + (b.end + 1) + ' 行');
-            aiPopText.textContent = isTask ? ((data && data.explanation) || '本次 AI 修改') : '与最近保存内容存在差异（本地未保存编辑）'; // 说明空降级（旧服务端/存量任务兼容）
+            aiPopLines.textContent = b.start === b.end ? (I18N.t('第 ') + (b.start + 1) + I18N.t(' 行')) : (I18N.t('第 ') + (b.start + 1) + ' - ' + (b.end + 1) + I18N.t(' 行'));
+            aiPopText.textContent = isTask ? ((data && data.explanation) || I18N.t('本次 AI 修改')) : I18N.t('与最近保存内容存在差异（本地未保存编辑）'); // 说明空降级（旧服务端/存量任务兼容）
             // 回滚按钮：与顶栏撤销同门槛（任务文件+桥在+未 dirty）；dirty 时置灰提示先保存
             var can = !!(data && data.task_modified && hasViewer() && !dirtyNow);
             aiPopRevert.classList.toggle('hidden', !can);
             aiPopRevert.disabled = !can;
-            aiPopRevert.title = can ? '还原该文件到任务前内容（需二次确认）' : (dirtyNow ? '请先保存或撤销未保存编辑' : '');
+            aiPopRevert.title = can ? I18N.t('还原该文件到任务前内容（需二次确认）') : (dirtyNow ? I18N.t('请先保存或撤销未保存编辑') : '');
         }
 
         function fvAiPopShow(e, block) { // 定位：鼠标 +14px 偏移，边缘翻转（fvShowCtxMenu 同公式）；锚定不跟随（稳定可点）
@@ -2574,15 +2577,15 @@
         function renderDocx(buf) {
             var el = document.createElement('div');
             el.className = 'fv-md';
-            el.innerHTML = '<p class="fv-hint" style="padding:0">文档解析中…</p>';
+            el.innerHTML = '<p class="fv-hint" style="padding:0">' + I18N.t('文档解析中…') + '</p>';
             bodyEl.appendChild(el);
             var seq = fvLoadSeq;   // 阶段一百三十一：捕获注入序号（解析期间若注入新内容，过期回执不上报）
             fvAsyncRender = true;  // 解析为异步通道，完成由 then/catch 回执收条
             window.mammoth.convertToHtml({ arrayBuffer: buf }).then(function (r) {
-                el.innerHTML = r.value || '<p>（空文档）</p>';
+                el.innerHTML = r.value || '<p>' + I18N.t('（空文档）') + '</p>';
                 fvLoaded(seq);
             }).catch(function (e) {
-                el.innerHTML = '<p class="fv-hint" style="padding:0">解析失败：' + esc(e && e.message || e) + '</p>';
+                el.innerHTML = '<p class="fv-hint" style="padding:0">' + I18N.t('解析失败：') + esc(e && e.message || e) + '</p>';
                 fvLoaded(seq);
             });
         }
@@ -2591,11 +2594,11 @@
             var wb;
             try { wb = window.XLSX.read(buf, { type: 'array' }); }
             catch (e) {
-                bodyEl.innerHTML = '<div class="fv-hint">解析失败：' + esc(e && e.message || e) + '</div>';
+                bodyEl.innerHTML = '<div class="fv-hint">' + I18N.t('解析失败：') + esc(e && e.message || e) + '</div>';
                 return;
             }
             var names = wb.SheetNames || [];
-            if (!names.length) { bodyEl.innerHTML = '<div class="fv-hint">（空工作簿）</div>'; return; }
+            if (!names.length) { bodyEl.innerHTML = '<div class="fv-hint">' + I18N.t('（空工作簿）') + '</div>'; return; }
             var bar = document.createElement('div');
             bar.className = 'fv-xlsx-tabs';
             var xbody = document.createElement('div');
@@ -2603,16 +2606,16 @@
             function showSheet(idx) {
                 Array.prototype.forEach.call(bar.children, function (c, ci) { c.className = 'fv-xlsx-chip' + (ci === idx ? ' active' : ''); });
                 try {
-                    xbody.innerHTML = window.XLSX.utils.sheet_to_html(wb.Sheets[names[idx]], { header: '', footer: '' }) || '<p>（空表）</p>';
+                    xbody.innerHTML = window.XLSX.utils.sheet_to_html(wb.Sheets[names[idx]], { header: '', footer: '' }) || '<p>' + I18N.t('（空表）') + '</p>';
                 } catch (e) {
-                    xbody.innerHTML = '<p>渲染失败：' + esc(e && e.message || e) + '</p>';
+                    xbody.innerHTML = '<p>' + I18N.t('渲染失败：') + esc(e && e.message || e) + '</p>';
                 }
             }
             names.forEach(function (nm, si) {
                 var chip = document.createElement('span');
                 chip.className = 'fv-xlsx-chip';
                 chip.textContent = nm;
-                chip.title = '切换到 ' + nm;
+                chip.title = I18N.t('切换到 ') + nm;
                 (function (idx) { chip.addEventListener('click', function () { showSheet(idx); }); })(si);
                 bar.appendChild(chip);
             });
@@ -2628,13 +2631,13 @@
             bar.className = 'fv-pptx-bar';
             var btnPrev = document.createElement('button');
             btnPrev.className = 'fv-pptx-btn';
-            btnPrev.textContent = '‹ 上一页';
+            btnPrev.textContent = I18N.t('‹ 上一页');
             var idx = document.createElement('span');
             idx.className = 'fv-pptx-idx';
-            idx.textContent = '加载中…';
+            idx.textContent = I18N.t('加载中…');
             var btnNext = document.createElement('button');
             btnNext.className = 'fv-pptx-btn';
-            btnNext.textContent = '下一页 ›';
+            btnNext.textContent = I18N.t('下一页 ›');
             bar.appendChild(btnPrev); bar.appendChild(idx); bar.appendChild(btnNext);
             var canvas = document.createElement('canvas');
             canvas.className = 'fv-pptx-canvas';
@@ -2656,13 +2659,13 @@
                     syncIdx();
                     fvLoaded(seq);
                 }).catch(function (e) {
-                    idx.textContent = '解析失败：' + (e && e.message || e);
+                    idx.textContent = I18N.t('解析失败：') + (e && e.message || e);
                     fvLoaded(seq);
                 });
                 btnPrev.addEventListener('click', function () { viewer.previousSlide().then(syncIdx).catch(function () {}); });
                 btnNext.addEventListener('click', function () { viewer.nextSlide().then(syncIdx).catch(function () {}); });
             } catch (e) {
-                idx.textContent = '加载失败：' + (e && e.message || e);
+                idx.textContent = I18N.t('加载失败：') + (e && e.message || e);
             }
         }
 
@@ -2713,7 +2716,7 @@
             if (!text) {
                 var hint = document.createElement('div');
                 hint.className = 'fv-hint';
-                hint.textContent = '— 无差异（文件与上次提交一致，或仅有暂存区外的格式变化）—';
+                hint.textContent = I18N.t('— 无差异（文件与上次提交一致，或仅有暂存区外的格式变化）—');
                 bodyEl.appendChild(hint);
             }
         }
@@ -2773,7 +2776,7 @@
                     diffInfo.appendChild(d);
                 }
             } else if (p.meta && p.meta.path) {
-                diffInfo.textContent = '文件：' + p.meta.path;
+                diffInfo.textContent = I18N.t('文件：') + p.meta.path;
                 // 阶段一百五十八：AI 说明行 + 统计徽标（变更审查条点击进入 diff 预览时经 meta 透传，无则不建节点）
                 var ex = p.meta.expl;
                 if (ex && (ex.text || ex.adds || ex.dels)) {
@@ -2813,7 +2816,7 @@
                     renderDiffStatic(p.content || '');
                     return;
                 }
-                setStatus('对比器加载中…');
+                setStatus(I18N.t('对比器加载中…'));
                 monacoPendingCb = function () { if (diffWrap.style.display !== 'none') renderDiffApply(data); };
                 fvAsyncRender = true; // 阶段一百三十一：对比器懒加载为异步通道，完成由 monacoBoot/失败兜底回执
                 ensureMonaco();
@@ -2822,7 +2825,7 @@
             renderDiffApply(p);
         }
         function renderDiffApply(p) {
-            setStatus('只读');
+            setStatus(I18N.t('只读'));
             var text = p.content || '';
             var fallback = function () { // 兜底：恢复 bodyEl + 静态渲染
                 diffWrap.style.display = 'none';
@@ -2839,7 +2842,7 @@
                 diffEd = monaco.editor.createDiffEditor(diffBox, {
                     theme: fvThemeDark() ? 'im-dark' : 'im-light', readOnly: true,
                     // 只读提示换中文（Monaco 默认英文 "Cannot edit in read-only editor"，点/输入时弹出）
-                    readOnlyMessage: { value: '对比视图为只读，如需修改请打开对应文件标签编辑' },
+                    readOnlyMessage: { value: I18N.t('对比视图为只读，如需修改请打开对应文件标签编辑') },
                     originalEditable: false,
                     automaticLayout: true, fontSize: 14, lineHeight: 21, // TRAE CN 同款：14px/21（1.5 倍行高）
                     fontFamily: '"JetBrains Mono IM", "Cascadia Code", Consolas, "Courier New", monospace',
@@ -2872,20 +2875,20 @@
             // 阶段一百一十六：diff 符号面包屑——扫工作树侧（modified），行号与右栏一致，
             // 宿主页地址栏显示 文件名 › ƒ函数（点击经 __fvReveal 跳 diff 右栏对应行，与文件浏览同款）
             try { viewerBridge().reportSymbols(data.tab_id, fvScanSymbols(parsed.modified, diffExtOf(p, text))); } catch (e) {}
-            btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
-            btnDiffScope.textContent = diffFull ? '仅变更' : '全文'; // 按钮文案=点击后的目标视图（与 diffmode 同款语义）
+            btnDiffMode.textContent = diffSide ? I18N.t('行内对比') : I18N.t('并排对比');
+            btnDiffScope.textContent = diffFull ? I18N.t('仅变更') : I18N.t('全文'); // 按钮文案=点击后的目标视图（与 diffmode 同款语义）
         }
         btnDiffMode.addEventListener('click', function () { // 并排/行内切换（TRAE CN 同款）
             if (!diffEd) return;
             diffSide = !diffSide;
             diffEd.updateOptions({ renderSideBySide: diffSide });
-            btnDiffMode.textContent = diffSide ? '行内对比' : '并排对比';
+            btnDiffMode.textContent = diffSide ? I18N.t('行内对比') : I18N.t('并排对比');
         });
         btnDiffScope.addEventListener('click', function () { // 全文/仅变更切换（diffopen 送全文，折叠纯前端行为）
             if (!diffEd) return;
             diffFull = !diffFull;
             diffEd.updateOptions({ hideUnchangedRegions: { enabled: !diffFull, contextLineCount: 3 } });
-            btnDiffScope.textContent = diffFull ? '仅变更' : '全文';
+            btnDiffScope.textContent = diffFull ? I18N.t('仅变更') : I18N.t('全文');
         });
 
         // ===== 阶段一百五十九：断点调试（TRAE CN 同款；主进程 debug-manager DAP 客户端归口） =====
@@ -3054,10 +3057,10 @@
             dbgEl.ctrl.classList.remove('hidden');
             var st = dbg.status;
             dbgEl.dot.className = st || '';
-            dbgEl.dot.title = st === 'starting' ? '调试启动中' : st === 'running' ? '程序运行中' : st === 'paused' ? '已暂停' : st === 'ended' ? '调试已结束' : '未在调试';
+            dbgEl.dot.title = st === 'starting' ? I18N.t('调试启动中') : st === 'running' ? I18N.t('程序运行中') : st === 'paused' ? I18N.t('已暂停') : st === 'ended' ? I18N.t('调试已结束') : I18N.t('未在调试');
             var showStart = !st || st === 'ended';
             dbgEl.start.classList.toggle('hidden', !showStart);
-            dbgEl.start.textContent = st === 'ended' ? '重新调试' : '调试';
+            dbgEl.start.textContent = st === 'ended' ? I18N.t('重新调试') : I18N.t('调试');
             dbgEl.cont.classList.toggle('hidden', st !== 'paused');
             dbgEl.pause.classList.toggle('hidden', !(st === 'running' || st === 'starting'));
             dbgEl.next.classList.toggle('hidden', st !== 'paused');
@@ -3077,7 +3080,7 @@
             var decos = dbg.bps.filter(function (l) { return l >= 1 && l <= lineCount; }).map(function (l) {
                 var meta = dbg.bpMeta[l] || {};
                 var cls = meta.logMessage ? 'fv-bp-log' : (meta.condition ? 'fv-bp-dot-cond' : 'fv-bp-dot');
-                var tip = meta.condition ? ('条件断点：' + meta.condition) : (meta.logMessage ? ('日志点：' + meta.logMessage) : '');
+                var tip = meta.condition ? (I18N.t('条件断点：') + meta.condition) : (meta.logMessage ? (I18N.t('日志点：') + meta.logMessage) : '');
                 return {
                     range: new monaco.Range(l, 1, l, 1),
                     options: {
@@ -3151,9 +3154,9 @@
                     Object.keys(dbg.bpMeta).forEach(function (k) { if (!keep[parseInt(k, 10)]) delete dbg.bpMeta[k]; });
                     dbgRenderBps(); dbgRenderBpsPane();
                 } else if (r && !r.ok) {
-                    setStatus('断点设置失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                    setStatus(I18N.t('断点设置失败：') + ((r && r.error) || I18N.t('未知错误')), 'dirty');
                 }
-            }).catch(function (e) { setStatus('断点设置失败：' + (e && e.message || e), 'dirty'); });
+            }).catch(function (e) { setStatus(I18N.t('断点设置失败：') + (e && e.message || e), 'dirty'); });
         }
         function dbgToggleBp(line, opts) {
             if (!dbgSupported()) return;
@@ -3179,7 +3182,7 @@
             if (isNode && isLog) isLog = false;
             dbgEl.bpEditorType.value = isLog ? 'log' : 'cond';
             dbgEl.bpEditorInput.value = isLog ? (meta.logMessage || '') : (meta.condition || '');
-            dbgEl.bpEditorInput.placeholder = isLog ? '日志文本，如 hit i=' + line : '条件表达式，如 i > 10';
+            dbgEl.bpEditorInput.placeholder = isLog ? I18N.t('日志文本，如 hit i=') + line : I18N.t('条件表达式，如 i > 10');
             dbgEl.bpEditor.classList.add('show');
             try { // 定位到目标行右侧（页面不滚动，视口坐标即页面坐标）
                 var boxRect = monacoBox.getBoundingClientRect();
@@ -3208,7 +3211,7 @@
             if (!api || !data || dbg.status === 'starting') return;
             dbg.status = 'starting'; dbgUpdateBar();
             dbgOpenPanel(true); dbgHideBanner();
-            dbgAppendOut('dbg', '正在启动调试会话…\n');
+            dbgAppendOut('dbg', I18N.t('正在启动调试会话…\n'));
             api.debugStart(data.tab_id, data.path).then(function (r) {
                 if (r && r.ok) {
                     dbg.status = 'running'; dbgUpdateBar();
@@ -3216,62 +3219,62 @@
                     else if (r.breakpoints) { dbg.bps = r.breakpoints.slice().sort(function (a, b) { return a - b; }); dbgRenderBps(); dbgRenderBpsPane(); }
                 } else if (r && r.code === 'no_python_env') {
                     dbg.status = ''; dbgUpdateBar();
-                    dbgShowBanner('未检测到可用的 Python 3 + debugpy（' + (r.detail || '') + '）。点击"一键安装"自动创建调试环境（首次约 1-3 分钟）。');
+                    dbgShowBanner(I18N.t('未检测到可用的 Python 3 + debugpy（') + (r.detail || '') + I18N.t('）。点击"一键安装"自动创建调试环境（首次约 1-3 分钟）。'));
                 } else if (r && r.code === 'no_gcc_env') {
                     dbg.status = ''; dbgUpdateBar();
-                    dbgShowBanner('未检测到 gcc/gdb（' + (r.detail || '') + '）。点击"一键安装"自动准备内置编译工具链（首次约需数分钟）。');
+                    dbgShowBanner(I18N.t('未检测到 gcc/gdb（') + (r.detail || '') + I18N.t('）。点击"一键安装"自动准备内置编译工具链（首次约需数分钟）。'));
                 } else {
                     dbg.status = ''; dbgUpdateBar();
-                    dbgAppendOut('stderr', '调试启动失败：' + ((r && r.error) || '未知错误') + '\n');
+                    dbgAppendOut('stderr', I18N.t('调试启动失败：') + ((r && r.error) || I18N.t('未知错误')) + '\n');
                 }
             }).catch(function (e) {
                 dbg.status = ''; dbgUpdateBar();
-                dbgAppendOut('stderr', '调试启动失败：' + (e && e.message || e) + '\n');
+                dbgAppendOut('stderr', I18N.t('调试启动失败：') + (e && e.message || e) + '\n');
             });
         }
         function dbgStep(op) { // continue/pause/next/stepIn/stepOut（状态变化由事件回推，这里只发令）
             var api = dbgBridge();
             if (!api || !dbg.status || dbg.status === 'ended' || dbg.status === 'starting') return;
             api.debugCmd(op).then(function (r) {
-                if (!r || !r.ok) dbgAppendOut('stderr', (op === 'pause' ? '暂停' : '单步') + '失败：' + ((r && r.error) || '') + '\n');
-            }).catch(function (e) { dbgAppendOut('stderr', '操作失败：' + (e && e.message || e) + '\n'); });
+                if (!r || !r.ok) dbgAppendOut('stderr', (op === 'pause' ? I18N.t('暂停') : I18N.t('单步')) + I18N.t('失败：') + ((r && r.error) || '') + '\n');
+            }).catch(function (e) { dbgAppendOut('stderr', I18N.t('操作失败：') + (e && e.message || e) + '\n'); });
         }
         function dbgRestart() {
             var api = dbgBridge();
             if (!api || !dbg.status || dbg.status === 'starting') return;
             dbg.status = 'starting'; dbgClearPause(); dbgUpdateBar();
             api.debugCmd('restart').then(function (r) {
-                if (!r || !r.ok) dbgAppendOut('stderr', '重启失败：' + ((r && r.error) || '') + '\n');
+                if (!r || !r.ok) dbgAppendOut('stderr', I18N.t('重启失败：') + ((r && r.error) || '') + '\n');
             });
         }
         function dbgStop() {
             var api = dbgBridge();
             if (!api) return;
-            api.debugStop().catch(function (e) { dbgAppendOut('stderr', '停止失败：' + (e && e.message || e) + '\n'); });
+            api.debugStop().catch(function (e) { dbgAppendOut('stderr', I18N.t('停止失败：') + (e && e.message || e) + '\n'); });
         }
         function dbgBootstrap() { // 一键安装调试环境（Python：uv 托管 Py + debugpy；C/C++：内置 gcc 工具链）
             var api = dbgBridge();
             if (!api || dbg.bootstrapping) return;
             dbg.bootstrapping = true;
-            dbgEl.bannerBtn.disabled = true; dbgEl.bannerBtn.textContent = '安装中…';
+            dbgEl.bannerBtn.disabled = true; dbgEl.bannerBtn.textContent = I18N.t('安装中…');
             dbgOpenPanel(false); dbgSwitchPane('fv-dbg-out');
             var lang = dbgLangOfExt(data && data.ext);
             var boot = (lang === 'cpp' && api.debugBootstrapCpp) ? api.debugBootstrapCpp(data.tab_id) : api.debugBootstrapPython(data.tab_id);
-            dbgAppendOut('dbg', '开始安装调试环境（进度见下方输出）…\n');
+            dbgAppendOut('dbg', I18N.t('开始安装调试环境（进度见下方输出）…\n'));
             boot.then(function (r) {
                 dbg.bootstrapping = false;
-                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = '一键安装';
+                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = I18N.t('一键安装');
                 if (r && r.ok) {
                     dbgHideBanner();
-                    dbgAppendOut('dbg', '调试环境已就绪，点击"调试"重新启动。\n');
+                    dbgAppendOut('dbg', I18N.t('调试环境已就绪，点击"调试"重新启动。\n'));
                     dbgUpdateBar();
                 } else {
-                    dbgAppendOut('stderr', '调试环境安装失败：' + ((r && r.error) || '未知错误') + '\n');
+                    dbgAppendOut('stderr', I18N.t('调试环境安装失败：') + ((r && r.error) || I18N.t('未知错误')) + '\n');
                 }
             }).catch(function (e) {
                 dbg.bootstrapping = false;
-                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = '一键安装';
-                dbgAppendOut('stderr', '调试环境安装失败：' + (e && e.message || e) + '\n');
+                dbgEl.bannerBtn.disabled = false; dbgEl.bannerBtn.textContent = I18N.t('一键安装');
+                dbgAppendOut('stderr', I18N.t('调试环境安装失败：') + (e && e.message || e) + '\n');
             });
         }
         // ---- 控制台输出 ----
@@ -3304,18 +3307,18 @@
                 var f0 = dbg.frames[0];
                 dbg.pauseLine = (f0 && dbgFrameInThisFile(f0.file)) ? f0.line : 0; // 顶帧不在本文件（如库内部）不高亮
                 dbgRenderPause(); dbgRenderStackPane(); dbgRebuildVars(); dbgRenderBpsPane(); dbgRefreshWatches();
-            }).catch(function (e) { dbgAppendOut('stderr', '获取堆栈失败：' + (e && e.message || e) + '\n'); });
+            }).catch(function (e) { dbgAppendOut('stderr', I18N.t('获取堆栈失败：') + (e && e.message || e) + '\n'); });
         }
         function dbgRenderStackPane() {
             dbgEl.stack.innerHTML = '';
             if (!dbg.frames.length) {
-                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = '无调用堆栈';
+                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = I18N.t('无调用堆栈');
                 dbgEl.stack.appendChild(h); return;
             }
             dbg.frames.forEach(function (f, idx) {
                 var row = document.createElement('div');
                 row.className = 'fv-dbg-row' + (idx === 0 ? ' active' : '');
-                var fn = document.createElement('span'); fn.className = 'fn'; fn.textContent = f.name || '(匿名)';
+                var fn = document.createElement('span'); fn.className = 'fn'; fn.textContent = f.name || I18N.t('(匿名)');
                 fn.title = f.name || '';
                 var loc = document.createElement('span'); loc.className = 'loc';
                 loc.textContent = (f.name2 || f.file.split(/[\\/]/).pop() || '') + ':' + f.line;
@@ -3339,17 +3342,17 @@
         function dbgRebuildVars() {
             var api = dbgBridge();
             if (!api) return;
-            if (dbg.status !== 'paused') { dbgSetVarsHint(dbg.status === 'running' ? '运行中…' : dbg.status === 'starting' ? '启动中…' : '未暂停（变量在程序暂停时展示）'); return; }
+            if (dbg.status !== 'paused') { dbgSetVarsHint(dbg.status === 'running' ? I18N.t('运行中…') : dbg.status === 'starting' ? I18N.t('启动中…') : I18N.t('未暂停（变量在程序暂停时展示）')); return; }
             dbgEl.vars.innerHTML = '';
             api.debugCmd('scopes', dbg.frameId).then(function (r) {
-                if (!r || !r.ok) { dbgSetVarsHint('作用域获取失败'); return; }
+                if (!r || !r.ok) { dbgSetVarsHint(I18N.t('作用域获取失败')); return; }
                 var scopes = r.scopes || [];
-                if (!scopes.length) { dbgSetVarsHint('当前帧无作用域'); return; }
+                if (!scopes.length) { dbgSetVarsHint(I18N.t('当前帧无作用域')); return; }
                 scopes.forEach(function (sc) {
                     var autoOpen = sc.name !== 'Globals'; // 局部/参数默认展开，全局折叠
                     dbgEl.vars.appendChild(dbgVarNode({ name: sc.name, value: '', type: '', ref: sc.variablesReference }, autoOpen, 0));
                 });
-            }).catch(function (e) { dbgSetVarsHint('作用域获取失败：' + (e && e.message || e)); });
+            }).catch(function (e) { dbgSetVarsHint(I18N.t('作用域获取失败：') + (e && e.message || e)); });
         }
         function dbgVarNode(v, expand, depth) {
             var wrap = document.createElement('div');
@@ -3387,14 +3390,14 @@
                         var list = (r && r.variables) || [];
                         if (!list.length) {
                             var e2 = document.createElement('div'); e2.className = 'fv-dbg-node';
-                            e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">（空）</span>';
+                            e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">' + I18N.t('（空）') + '</span>';
                             kids.appendChild(e2); return;
                         }
                         list.forEach(function (cv) { kids.appendChild(dbgVarNode(cv, false, depth + 1)); });
                     }).catch(function (e) {
                         kids.innerHTML = '';
                         var e2 = document.createElement('div'); e2.className = 'fv-dbg-node';
-                        e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">获取失败</span>';
+                        e2.innerHTML = '<span class="fv-dbg-twist leaf"></span><span class="fv-dbg-type">' + I18N.t('获取失败') + '</span>';
                         kids.appendChild(e2);
                     });
                 }
@@ -3407,7 +3410,7 @@
         function dbgRenderBpsPane() {
             dbgEl.bps.innerHTML = '';
             if (!dbg.bps.length) {
-                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = '无断点（点击编辑器行号左侧空白处添加）';
+                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = I18N.t('无断点（点击编辑器行号左侧空白处添加）');
                 dbgEl.bps.appendChild(h); return;
             }
             dbg.bps.forEach(function (l) {
@@ -3418,12 +3421,12 @@
                 if (meta.logMessage) dot.style.cssText += 'background:#e5534b;transform:rotate(45deg);border-radius:2px;'; // 日志点：红菱形
                 else if (meta.condition) dot.style.cssText += 'background:#e5534b;border-radius:50%;box-shadow:inset 0 0 0 2px #fff, 0 0 0 1px #e5534b;'; // 条件断点：圆+白环
                 else dot.style.cssText += 'background:#e5534b;border-radius:50%;';
-                if (meta.condition || meta.logMessage) dot.title = meta.condition ? ('条件：' + meta.condition) : ('日志：' + meta.logMessage);
+                if (meta.condition || meta.logMessage) dot.title = meta.condition ? (I18N.t('条件：') + meta.condition) : (I18N.t('日志：') + meta.logMessage);
                 var fn = document.createElement('span'); fn.className = 'fn';
-                var tag = meta.condition ? ' [条件]' : (meta.logMessage ? ' [日志]' : '');
+                var tag = meta.condition ? I18N.t(' [条件]') : (meta.logMessage ? I18N.t(' [日志]') : '');
                 fn.textContent = (data ? (data.name || data.path) : '') + ' : ' + l + tag;
-                var loc = document.createElement('span'); loc.className = 'loc'; loc.textContent = '第 ' + l + ' 行';
-                var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = '删除断点';
+                var loc = document.createElement('span'); loc.className = 'loc'; loc.textContent = I18N.t('第 ') + l + I18N.t(' 行');
+                var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = I18N.t('删除断点');
                 rm.addEventListener('click', function (e) { e.stopPropagation(); dbgToggleBp(l); });
                 row.appendChild(dot); row.appendChild(fn); row.appendChild(loc); row.appendChild(rm);
                 row.addEventListener('click', function () {
@@ -3439,13 +3442,13 @@
         function dbgRenderWatch() {
             dbgEl.watchList.innerHTML = '';
             if (!dbg.watch.length) {
-                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = '无监视表达式（下方输入后回车添加）';
+                var h = document.createElement('div'); h.className = 'fv-hint'; h.textContent = I18N.t('无监视表达式（下方输入后回车添加）');
                 dbgEl.watchList.appendChild(h); return;
             }
             dbg.watch.forEach(function (expr, idx) {
                 var row = document.createElement('div'); row.className = 'fv-watch-row';
                 var body = document.createElement('div'); body.className = 'fv-watch-body';
-                var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = '删除监视';
+                var rm = document.createElement('span'); rm.className = 'rm'; rm.textContent = '×'; rm.title = I18N.t('删除监视');
                 rm.addEventListener('click', function (e) { e.stopPropagation(); dbg.watch.splice(idx, 1); dbgRenderWatch(); dbgRefreshWatches(); });
                 row.appendChild(body); row.appendChild(rm);
                 dbgEl.watchList.appendChild(row);
@@ -3457,7 +3460,7 @@
                     if (v) body.appendChild(dbgVarNode(v, false, 1));
                     else {
                         var er = document.createElement('div'); er.className = 'fv-dbg-node';
-                        er.innerHTML = '<span class="fv-dbg-name">' + esc(expr) + '</span><span class="fv-dbg-type">求值失败</span>';
+                        er.innerHTML = '<span class="fv-dbg-name">' + esc(expr) + '</span><span class="fv-dbg-type">' + I18N.t('求值失败') + '</span>';
                         body.appendChild(er);
                     }
                 };
@@ -3470,7 +3473,7 @@
                             else fill(null);
                         }).catch(function () { fill(null); });
                 } else {
-                    body.title = dbg.status === 'paused' ? '' : '程序暂停时求值';
+                    body.title = dbg.status === 'paused' ? '' : I18N.t('程序暂停时求值');
                 }
             });
         }
@@ -3490,13 +3493,13 @@
             dbgEl.replInput.value = '';
             dbgAppendOut('dbg', '> ' + expr + '\n');
             var api = dbgBridge();
-            if (!api) { dbgAppendOut('stderr', '调试桥不可用\n'); return; }
+            if (!api) { dbgAppendOut('stderr', I18N.t('调试桥不可用\n')); return; }
             var req = { expr: expr, context: 'repl' };
             if (dbg.status === 'paused' && dbg.frameId) req.frameId = dbg.frameId;
             api.debugCmd('evaluate', req).then(function (r) {
                 if (r && r.ok) dbgAppendOut('stdout', String(r.result != null ? r.result : '') + '\n');
-                else dbgAppendOut('stderr', ((r && r.error) || '求值失败') + '\n');
-            }).catch(function (e) { dbgAppendOut('stderr', '求值失败：' + (e && e.message || e) + '\n'); });
+                else dbgAppendOut('stderr', ((r && r.error) || I18N.t('求值失败')) + '\n');
+            }).catch(function (e) { dbgAppendOut('stderr', I18N.t('求值失败：') + (e && e.message || e) + '\n'); });
         }
         // ---- 悬停变量求值（暂停时；LSP/静态悬停之上第一优先层） ----
         function dbgExprAt(model, position) { // 光标词 + 向左扩展点号链（a.b.c → 最多 4 段）
@@ -3573,20 +3576,20 @@
                 case 'stopped':
                     dbg.status = 'paused';
                     dbg.threadId = d.threadId || 0;
-                    dbgAppendOut('dbg', '已暂停' + (d.reason === 'breakpoint' ? '于断点' : d.reason === 'step' ? '（单步）' : d.reason === 'pause' ? '（手动暂停）' : '') + '\n');
+                    dbgAppendOut('dbg', I18N.t('已暂停') + (d.reason === 'breakpoint' ? I18N.t('于断点') : d.reason === 'step' ? I18N.t('（单步）') : d.reason === 'pause' ? I18N.t('（手动暂停）') : '') + '\n');
                     dbgPauseRefresh();
                     break;
                 case 'continued':
                     dbg.status = 'running';
-                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint('运行中…');
+                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint(I18N.t('运行中…'));
                     break;
                 case 'output':
                     dbgAppendOut(d.category || 'stdout', d.text || '');
                     break;
                 case 'terminated':
                     dbg.status = 'ended';
-                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint('调试已结束');
-                    dbgAppendOut('dbg', '调试会话已结束\n');
+                    dbgClearPause(); dbgUpdateBar(); dbgSetVarsHint(I18N.t('调试已结束'));
+                    dbgAppendOut('dbg', I18N.t('调试会话已结束\n'));
                     break;
                 case 'breakpoints':
                     if (d.lines) {
@@ -3624,8 +3627,8 @@
             if (dbgEl.bpEditor) {
                 var bpTypeSync = function () {
                     dbgEl.bpEditorInput.placeholder = dbgEl.bpEditorType.value === 'log'
-                        ? '日志文本，如 hit i=' + (dbg.bpEditLine || '')
-                        : '条件表达式，如 i > 10';
+                        ? I18N.t('日志文本，如 hit i=') + (dbg.bpEditLine || '')
+                        : I18N.t('条件表达式，如 i > 10');
                 };
                 dbgEl.bpEditorType.addEventListener('change', bpTypeSync);
                 dbgEl.bpEditorInput.addEventListener('keydown', function (e) {
@@ -3656,12 +3659,12 @@
             btnKeep.classList.add('hidden');
             btnRevert.classList.add('hidden');
             btnCancel.classList.add('hidden');
-            if (!data) { nameEl.textContent = '（未打开）'; setStatus(''); return; }
+            if (!data) { nameEl.textContent = I18N.t('（未打开）'); setStatus(''); return; }
             nameEl.textContent = data.title || data.name || '';
             var p = data;
 
             if (p.kind === 'md') { // 审查报告等：md 只读渲染
-                setStatus('只读');
+                setStatus(I18N.t('只读'));
                 var md = document.createElement('div');
                 md.className = 'fv-md';
                 md.innerHTML = renderMarkdown(p.content);
@@ -3675,12 +3678,12 @@
             // kind === 'file'
             if (p.mime === 'binary') {
                 var buf = b64ToBuf(p.b64);
-                if (p.ext === 'docx' || p.ext === 'docm') { setStatus('Word 文档预览（只读）'); renderDocx(buf); return; }
-                if (p.ext === 'xlsx' || p.ext === 'xlsm') { setStatus('Excel 表格预览（只读）'); renderXlsx(buf); return; }
-                if (p.ext === 'pptx' || p.ext === 'pptm') { setStatus('PPT 幻灯片预览（只读）'); renderPptx(buf); return; }
-                if (IMG_TYPES[p.ext]) { setStatus('图片预览（只读）'); renderBinaryMedia(p.b64, p.ext); return; }
-                if (p.ext === 'pdf') { setStatus('PDF 预览（只读）'); renderBinaryMedia(p.b64, 'pdf'); return; }
-                setStatus('二进制文件（不支持预览）');
+                if (p.ext === 'docx' || p.ext === 'docm') { setStatus(I18N.t('Word 文档预览（只读）')); renderDocx(buf); return; }
+                if (p.ext === 'xlsx' || p.ext === 'xlsm') { setStatus(I18N.t('Excel 表格预览（只读）')); renderXlsx(buf); return; }
+                if (p.ext === 'pptx' || p.ext === 'pptm') { setStatus(I18N.t('PPT 幻灯片预览（只读）')); renderPptx(buf); return; }
+                if (IMG_TYPES[p.ext]) { setStatus(I18N.t('图片预览（只读）')); renderBinaryMedia(p.b64, p.ext); return; }
+                if (p.ext === 'pdf') { setStatus(I18N.t('PDF 预览（只读）')); renderBinaryMedia(p.b64, 'pdf'); return; }
+                setStatus(I18N.t('二进制文件（不支持预览）'));
                 bodyEl.innerHTML = '<div class="fv-hint">该文件为二进制格式（.' + esc(p.ext) + '），暂不支持在线预览。</div>';
                 return;
             }
@@ -3688,7 +3691,7 @@
             if (p.truncated) {
                 var ban = document.createElement('div');
                 ban.className = 'fv-banner';
-                ban.textContent = '文件过大，仅显示前 512KB（只读）';
+                ban.textContent = I18N.t('文件过大，仅显示前 512KB（只读）');
                 bodyEl.appendChild(ban);
             }
             if (!editing) {
@@ -3719,13 +3722,13 @@
             }
             if (editing) { // 编辑态：dirty 优先，任务修改次之（有 AI 说明时缩短为"AI 已修改"，悬停顶栏看全文）
                 statusEl.title = (!dirtyNow && p.task_modified && p.explanation) ? p.explanation : '';
-                setStatus(dirtyNow ? '已修改（未保存）' : (p.task_modified ? (p.explanation ? 'AI 已修改' : '任务已修改，可保留或撤销') : ''), (dirtyNow || p.task_modified) ? 'dirty' : '');
+                setStatus(dirtyNow ? I18N.t('已修改（未保存）') : (p.task_modified ? (p.explanation ? I18N.t('AI 已修改') : I18N.t('任务已修改，可保留或撤销')) : ''), (dirtyNow || p.task_modified) ? 'dirty' : '');
             } else if (p.editable) {
                 statusEl.title = (p.task_modified && p.explanation) ? p.explanation : '';
-                setStatus(p.task_modified ? (p.explanation ? 'AI 已修改' : '任务已修改，可保留或撤销') : '', p.task_modified ? 'dirty' : '');
+                setStatus(p.task_modified ? (p.explanation ? I18N.t('AI 已修改') : I18N.t('任务已修改，可保留或撤销')) : '', p.task_modified ? 'dirty' : '');
             } else {
                 statusEl.title = '';
-                setStatus('只读', '');
+                setStatus(I18N.t('只读'), '');
             }
             updateTaskButtons(); // 预览/编辑态统一收口（预览态任务文件也可保留/撤销）
             dbgUpdateBar(); // 阶段一百五十九：调试控制条显隐随 payload（语言/桥/会话状态归口）
@@ -3743,7 +3746,7 @@
                 setStatus(''); // setValue 会触发一次内容变更提示，重置（render 尾部按 dirty/任务标记落最终状态）
             } else {
                 monacoBox.style.display = 'block';
-                setStatus('编辑器加载中…');
+                setStatus(I18N.t('编辑器加载中…'));
                 monacoPendingCb = function () { if (editing && monacoBox.style.display === 'block') { monacoTakeOver(draft || (data && data.content) || ''); setStatus(''); } };
                 fvAsyncRender = true; // 阶段一百三十一：Monaco 懒加载为异步通道，完成由 monacoBoot/失败兜底回执
                 ensureMonaco(); // 首次进入编辑才加载 Monaco（本地资源毫秒级），加载完成自动接管
@@ -3789,14 +3792,14 @@
                     delete data.baseline;
                     fvBase = (data.__saved != null) ? data.__saved : (data.content || '');
                     updateTaskButtons();
-                    setStatus('已保留任务变更', 'saved');
+                    setStatus(I18N.t('已保留任务变更'), 'saved');
                     setTimeout(function () { if (statusEl.textContent === '已保留任务变更') setStatus('', ''); }, 2000);
                 } else {
-                    setStatus('保留失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                    setStatus(I18N.t('保留失败：') + ((r && r.error) || I18N.t('未知错误')), 'dirty');
                 }
             }).catch(function (e) {
                 btnKeep.disabled = false;
-                setStatus('保留失败：' + (e && e.message || e), 'dirty');
+                setStatus(I18N.t('保留失败：') + (e && e.message || e), 'dirty');
             });
         });
         // ===== 阶段一百五十八：撤销任务变更公共流程（顶栏按钮与悬停浮层共用 armed 二次确认）=====
@@ -3804,20 +3807,20 @@
         function fvRevertReset() { // 复位确认态（顶栏与浮层按钮同步恢复文案）
             revertArmed = false;
             if (revertArmTimer) { clearTimeout(revertArmTimer); revertArmTimer = null; }
-            btnRevert.textContent = '撤销变更';
+            btnRevert.textContent = I18N.t('撤销变更');
             btnRevert.classList.remove('danger');
-            aiPopRevert.textContent = '回滚此文件';
+            aiPopRevert.textContent = I18N.t('回滚此文件');
             aiPopRevert.classList.remove('danger');
         }
         // fromPop=浮层按钮元素（顶栏撤销传 null）；二次确认 3 秒未确认自动复位防误触
         function fvTaskRevertFlow(fromPop) {
             if (!data || !data.task_modified || !hasViewer()) return;
-            if (fromPop && dirtyNow) { setStatus('请先保存或撤销未保存编辑', 'dirty'); return; } // 浮层入口：dirty 由保存接管
+            if (fromPop && dirtyNow) { setStatus(I18N.t('请先保存或撤销未保存编辑'), 'dirty'); return; } // 浮层入口：dirty 由保存接管
             if (!revertArmed) {
                 revertArmed = true;
-                btnRevert.textContent = '确认撤销？';
+                btnRevert.textContent = I18N.t('确认撤销？');
                 btnRevert.classList.add('danger');
-                if (fromPop) { fromPop.textContent = '确认回滚？'; fromPop.classList.add('danger'); }
+                if (fromPop) { fromPop.textContent = I18N.t('确认回滚？'); fromPop.classList.add('danger'); }
                 revertArmTimer = setTimeout(fvRevertReset, 3000);
                 return;
             }
@@ -3830,11 +3833,11 @@
                 if (fromPop) fromPop.disabled = false;
                 fvAiPopHide(); // 回滚发起即收浮层（payload 重推后全量刷新）
                 if (r && r.ok) { /* 主进程重读盘并重注入 payload → __wsFileLoad 全量刷新 */ }
-                else setStatus('撤销失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                else setStatus(I18N.t('撤销失败：') + ((r && r.error) || I18N.t('未知错误')), 'dirty');
             }).catch(function (e) {
                 btnRevert.disabled = false;
                 if (fromPop) fromPop.disabled = false;
-                setStatus('撤销失败：' + (e && e.message || e), 'dirty');
+                setStatus(I18N.t('撤销失败：') + (e && e.message || e), 'dirty');
             });
         }
         btnRevert.addEventListener('click', function () { fvTaskRevertFlow(null); });
@@ -3853,14 +3856,14 @@
                     fvBase = content; // gutter 基线对齐已保存内容
                     viewerBridge().setDirty(data.tab_id, false);
                     render();
-                    setStatus('已保存', 'saved');
-                    setTimeout(function () { if (statusEl.textContent === '已保存') setStatus(data.editable ? '' : '只读', ''); }, 2000);
+                    setStatus(I18N.t('已保存'), 'saved');
+                    setTimeout(function () { if (statusEl.textContent === '已保存') setStatus(data.editable ? '' : I18N.t('只读'), ''); }, 2000);
                 } else {
-                    setStatus('保存失败：' + ((r && r.error) || '未知错误'), 'dirty');
+                    setStatus(I18N.t('保存失败：') + ((r && r.error) || I18N.t('未知错误')), 'dirty');
                 }
             }).catch(function (e) {
                 btnSave.disabled = false;
-                setStatus('保存失败：' + (e && e.message || e), 'dirty');
+                setStatus(I18N.t('保存失败：') + (e && e.message || e), 'dirty');
             });
         }
         btnSave.addEventListener('click', doSave);
@@ -3872,7 +3875,7 @@
             draft = '';
             previewLock = false; // 阶段九十七：新 payload 注入重置预览锁（重开文件自动进编辑态）
             fvApplyTheme(); // 阶段一百零七：注入时同步主题（storage 事件兜底，防跨 BrowserView 边界丢事件）
-            document.title = data ? (data.name || data.title || '文件预览') : '文件预览';
+            document.title = data ? (data.name || data.title || I18N.t('文件预览')) : I18N.t('文件预览');
             fvLoadSeq++;           // 阶段一百三十一：新注入序号递增（过期异步回执以此判定丢弃）
             fvAsyncRender = false; // 每次注入重置异步通道标记（render 内走异步会置 true）
             render();

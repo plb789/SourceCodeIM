@@ -6,8 +6,8 @@
     <title>即时通讯</title>
     <!-- 阶段一百五十二补丁：国际化核心模块（中/英双语）——置于最前同步加载语言包，
          保证任何可见文本首绘语言即正确（未归口文本自动回退中文，渐进式迁移零风险） -->
-    <script src="/js/i18n.js?v=3.21"></script>
-    <script src="/js/branding.js?v=1.0"></script>
+    <script src="/js/i18n.js?v=3.33"></script>
+    <script src="/js/branding.js?v=1.1"></script>
     <!-- 阶段一百五十一补丁：主题首绘引导（同步脚本，先于任何 CSS/JS 渲染执行）——
          读取主题偏好立即挂 data-theme 并按深浅定死根背景，消除"页面首绘浅色 → chat.js 再套深色"的启动白屏
          （根因定位：窗口底色/按钮初值环节早已按 im_theme.json 正确取深，白屏发生在页面自身——
@@ -47,12 +47,12 @@
     <!-- 阶段一百四十五：WEB 端浏览器通话桥——纯浏览器环境以页内形态承载音视频通话（iframe 通话窗 + 页内响铃条），
          仅向 window.desktop 注入通话相关方法（PC 端 preload 已注入则整脚本旁路；手机端 Capacitor 恒旁路），
          须先于 socket.js/chat.js 加载（登录 platform 上报与通话入口注册依赖） -->
-    <script src="/js/web-call-bridge.js?v=2.4"></script>
+    <script src="/js/web-call-bridge.js?v=2.5"></script>
     <!-- 微信手机版移动端适配层：视口状态机 + 长按菜单桥接 + 视图互切（PC/WEB 宽窗口自动旁路） -->
-    <script src="/js/mobile.js?v=1.26"></script>
+    <script src="/js/mobile.js?v=1.27"></script>
     <!-- 阶段二百六十：客户端自动更新（APP 原生壳检测/下载/安装弹窗 + PC 设置页检查更新接线；
          纯浏览器 WEB 端服务端托管即全员生效，本脚本自动旁路） -->
-    <script src="/js/app-update.js?v=1.0"></script>
+    <script src="/js/app-update.js?v=1.1"></script>
     <!-- 阶段七十七：PC 端自定义标题栏引导——仅 Electron 壳内启用（浏览器/手机 APP 无 desktop 桥自动旁路），
          尽早挂根类让 CSS 提前让位顶栏，避免布局闪动；preload 注入的 setTitlebarColors 存在才启用 -->
     <script>
@@ -2803,10 +2803,10 @@
 
     <div id="toast" class="toast hidden"></div>
 
-    <script src="/js/socket.js?v=1.47"></script>
+    <script src="/js/socket.js?v=1.48"></script>
     <script>if (window.bootStage) bootStage(I18N.t('基础模块已就绪，正在加载功能组件…'));</script>
     <!-- 阶段三十五：截图编辑器模块（截图按钮抓帧/Ctrl+V 粘贴 → 选区+标注编辑 → 确认发送），需在 chat.js 之前加载 -->
-    <script src="/js/screenshot.js?v=1.10"></script>
+    <script src="/js/screenshot.js?v=1.11"></script>
     <!-- 阶段四十三：highlight.js 本地库（代码语法高亮），先于 chat.js 加载 -->
     <script src="/js/lib/highlight.min.js?v=11.9"></script>
     <!-- 阶段四十五：AI 生成 PPT（本地化引入，内网/离线可用；bundle 含 JSZip 无外部依赖） -->
@@ -2822,33 +2822,33 @@
     <script src="/js/lib/xlsx.full.min.js?v=0.20"></script>
     <!-- 阶段一百五十五：远程协助被控端屏幕共享引擎（getDisplayMedia + RTCPeerConnection + DataChannel），
          先于 chat.js 加载（chat.js 初始化时注入信令上行回调） -->
-    <script src="/js/remote-engine.js?v=1.0"></script>
+    <script src="/js/remote-engine.js?v=1.1"></script>
     <!-- 阶段一百五十六：好友文件 P2P 直传引擎（须先于 chat.js，sendFile 分流与 91 UI 归口引用 P2PFile） -->
-    <script src="/js/p2p-file.js?v=1.11"></script>
-    <script src="/js/chat.js?v=3.197"></script>
+    <script src="/js/p2p-file.js?v=1.12"></script>
+    <script src="/js/chat.js?v=3.198"></script>
     <!-- 阶段二百九十二 M8：联机引擎（gn-net.js）与房间层（gn-room.js）已迁入游戏中心窗
          （game-store.html 加载），主窗口仅保留 109/110/112 跨窗中继（socket.js）与 111 邀请卡片（chat.js）；
          两窗同持房间状态会脑裂，故此处不得再引入 -->
     <!-- 阶段二百二十四：拍摄相机页（微信同款自绘相机，仅 APP 端入口；成片走 chat.js 既有发送链路） -->
-    <script src="/js/camera-page.js?v=1.1"></script>
+    <script src="/js/camera-page.js?v=1.3"></script>
     <!-- 网盘模块（须在 chat.js 之后加载：复用 _osbInit 自绘滚动条注册；Tab 切换经 window.IMDrive.open/close 联动）；
          md5.js 为网盘大文件链路的本地增量 MD5（秒传/续传指纹），drive.js 经 fetch 内联源码进 Worker blob -->
     <script src="/js/md5.js?v=1.0"></script>
     <script src="/js/office-preview.js?v=1.1"></script>
-    <script src="/js/drive.js?v=2.32"></script>
+    <script src="/js/drive.js?v=2.34"></script>
     <!-- 阶段二百六十一：远程控制面板（向日葵同款：设备ID+验证码直连；须在 chat.js 之后加载，
          复用 _osbInit 自绘滚动条与 window.rcConnect 发起 API；Tab 切换经 window.IMRC.open/close 联动） -->
-    <script src="/js/rc-panel.js?v=1.3"></script>
+    <script src="/js/rc-panel.js?v=1.5"></script>
     <!-- 阶段二百八十：朋友圈（微信同款：时间线/发布/点赞/评论/楼中楼回复；须在 chat.js 之后加载：
          复用 _osbInit 自绘滚动条与 IMContacts 好友数据源；Tab 切换经 window.IMMoments.open/close 联动） -->
-    <script src="/js/moments.js?v=1.99"></script>
+    <script src="/js/moments.js?v=2.01"></script>
     <!-- 阶段二百六十一：手机/WEB 控制端页内全屏观看层（无 Electron 桥环境的远程控制观看面；
          须在 chat.js 之后加载：rc_ok 分支运行时引用 window.RCMobileView） -->
-    <script src="/js/rc-mobile-view.js?v=1.1"></script>
+    <script src="/js/rc-mobile-view.js?v=1.3"></script>
     <!-- 阶段二百一十：二维码生成/解码库（均本地化，内网离线可用）+ 名片/扫一扫业务模块（归口 chat.js 添加好友链路） -->
     <script src="/js/lib/qrcode.min.js?v=1.4.4"></script>
     <script src="/js/lib/jsQR.min.js?v=1.4.0"></script>
-    <script src="/js/qr.js?v=1.0.9"></script>
+    <script src="/js/qr.js?v=1.0.10"></script>
     <!-- 阶段二百二十：移动端页内图片查看层（微信同款，替代跳页 image-viewer 在 APP 白屏的问题） -->
     <script src="/js/image-layer.js?v=1.1"></script>
     <script>if (window.bootStage) bootStage(I18N.t('正在初始化会话…'));</script>

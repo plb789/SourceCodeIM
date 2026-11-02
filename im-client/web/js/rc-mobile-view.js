@@ -209,10 +209,10 @@
             }).then(function (ans) {
                 return st.pc.setLocalDescription(ans).then(function () {
                     if (st.sendFn) st.sendFn({ action: 'answer', session_id: st.sessionId, sdp: { type: ans.type, sdp: ans.sdp } });
-                    log('answer 已发送');
+                    log(I18N.t('answer 已发送'));
                 });
             }).catch(function (e) {
-                log('answer 失败：', e);
+                log(I18N.t('answer 失败：'), e);
                 finish(T('连接失败'), true);
             });
         } else if (p.action === 'candidate') {

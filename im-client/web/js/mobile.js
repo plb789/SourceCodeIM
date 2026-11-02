@@ -798,7 +798,7 @@
                         if (btn.classList.contains('hidden')) return;
                         var item = document.createElement('button');
                         item.className = 'chat-more-item';
-                        var label = btn.getAttribute('title') || '功能';
+                        var label = btn.getAttribute('title') || I18N.t('功能');
                         item.setAttribute('data-target', btn.id);
                         item.innerHTML = btn.querySelector('svg') ? btn.querySelector('svg').outerHTML : '';
                         var txt = document.createElement('span');
@@ -947,7 +947,7 @@
     function initHomeTitle() {
         var homeTitle = document.querySelector('.m-home-title');
         if (!homeTitle) return;
-        var TAB_NAMES = { chat: '聊天', friends: '通讯录', ai: 'AI助手', workbench: '工作台', announcement: '公告', drive: '网盘', moments: '朋友圈' };
+        var TAB_NAMES = { chat: I18N.t('聊天'), friends: I18N.t('通讯录'), ai: I18N.t('AI助手'), workbench: I18N.t('工作台'), announcement: I18N.t('公告'), drive: I18N.t('网盘'), moments: I18N.t('朋友圈') };
         function syncTitle() {
             var a = document.querySelector('.sidebar-tab.active');
             if (a) {
@@ -963,7 +963,7 @@
         // 个人页（头像，无 active 类机制）保留点击委托
         document.addEventListener('click', function (e) {
             if (!inMobile()) return;
-            if (e.target.closest('.nav-top')) homeTitle.textContent = '我';
+            if (e.target.closest('.nav-top')) homeTitle.textContent = I18N.t('我');
         });
     }
 

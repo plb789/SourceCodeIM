@@ -76,16 +76,16 @@
         m.className = 'im-up-mask';
         var force = !!(curInfo && curInfo.force);
         var html = '<div class="im-up-box">' +
-            '<div class="im-up-title">发现新版本' + (force ? '<span class="im-up-force-tag">需更新</span>' : '') + '</div>' +
+            '<div class="im-up-title">' + I18N.t('发现新版本') + (force ? '<span class="im-up-force-tag">' + I18N.t('需更新') + '</span>' : '') + '</div>' +
             '<div class="im-up-meta">v' + esc(curInfo && curInfo.version_name) +
-            (curVersion ? '　·　当前 ' + esc(curVersion) : '') +
+            (curVersion ? I18N.t('　·　当前 ') + esc(curVersion) : '') +
             (curInfo && curInfo.size ? '　·　' + fmtSize(curInfo.size) : '') + '</div>' +
-            '<div class="im-up-notes" id="im-up-notes">' + (esc(curInfo && curInfo.notes) || '优化体验，修复已知问题。') + '</div>' +
+            '<div class="im-up-notes" id="im-up-notes">' + (esc(curInfo && curInfo.notes) || I18N.t('优化体验，修复已知问题。')) + '</div>' +
             '<div class="im-up-progress-wrap" id="im-up-pwrap"><div class="im-up-progress" id="im-up-pbar"></div></div>' +
             '<div class="im-up-state" id="im-up-state"></div>' +
             '<div class="im-up-btns">' +
-            (force ? '' : '<button class="im-up-btn" id="im-up-later">以后再说</button>') +
-            '<button class="im-up-btn primary" id="im-up-go">立即更新</button>' +
+            (force ? '' : '<button class="im-up-btn" id="im-up-later">' + I18N.t('以后再说') + '</button>') +
+            '<button class="im-up-btn primary" id="im-up-go">' + I18N.t('立即更新') + '</button>' +
             '</div></div>';
         m.innerHTML = html;
         document.body.appendChild(m);
@@ -146,13 +146,13 @@
             return PLG.check({ baseUrl: location.origin });
         }).then(function (d) {
             if (!d || !d.has_update) {
-                if (manual) toast('已是最新版本');
+                if (manual) toast(I18N.t('已是最新版本'));
                 return;
             }
             curInfo = d;
             openModal();
         }).catch(function (e) {
-            if (manual) toast('检查更新失败：' + ((e && e.message) || '网络异常'));
+            if (manual) toast(I18N.t('检查更新失败：') + ((e && e.message) || I18N.t('网络异常')));
         });
     }
 
@@ -162,14 +162,14 @@
         if (lastPath) { doInstall(lastPath); return; }
         if (downloading) return;
         downloading = true;
-        setGoText('下载中…', true);
+        setGoText(I18N.t('下载中…'), true);
         setProgress(0, true);
-        setState('正在下载新版本（' + fmtSize(curInfo.size) + '）');
+        setState(I18N.t('正在下载新版本（') + fmtSize(curInfo.size) + '）');
         var url = curInfo.url;
         if (url && url.charAt(0) === '/') url = location.origin + url;
         Promise.resolve(PLG.addListener('downloadProgress', function (p) {
             setProgress(p.percent || 0, true);
-            setState('已下载 ' + fmtSize(p.received) + (p.total ? ' / ' + fmtSize(p.total) : ''));
+            setState(I18N.t('已下载 ') + fmtSize(p.received) + (p.total ? ' / ' + fmtSize(p.total) : ''));
         })).then(function (handle) {
             return PLG.download({ url: url, sha256: curInfo.sha256 || '', fileName: curInfo.file_name || 'imapp-update.apk' })
                 .then(function (r) { if (handle && handle.remove) handle.remove(); return r; })
@@ -178,29 +178,29 @@
             downloading = false;
             lastPath = (r && r.path) || '';
             setProgress(100, true);
-            setGoText('立即安装', false);
-            setState('下载完成，点击安装');
+            setGoText(I18N.t('立即安装'), false);
+            setState(I18N.t('下载完成，点击安装'));
         }).catch(function (e) {
             downloading = false;
-            setGoText('重试下载', false);
+            setGoText(I18N.t('重试下载'), false);
             setProgress(0, false);
-            setState((e && e.message) || '下载失败，请重试');
+            setState((e && e.message) || I18N.t('下载失败，请重试'));
         });
     }
 
     function doInstall(path) {
-        setGoText('安装中…', true);
+        setGoText(I18N.t('安装中…'), true);
         PLG.install({ path: path }).then(function () {
             // 系统安装页已拉起；弹窗保持（用户取消安装可再次点击），页面回来后可重试
-            setGoText('重新安装', false);
-            setState('请在系统安装页完成安装');
+            setGoText(I18N.t('重新安装'), false);
+            setState(I18N.t('请在系统安装页完成安装'));
         }).catch(function (e) {
-            setGoText('立即安装', false);
+            setGoText(I18N.t('立即安装'), false);
             if (e && e.code === 'NEED_PERM') {
-                setState('需授予「安装未知应用」权限');
+                setState(I18N.t('需授予「安装未知应用」权限'));
                 PLG.openInstallSetting().catch(function () { /* 个别 ROM 无此设置页 */ });
             } else {
-                setState((e && e.message) || '拉起安装页失败');
+                setState((e && e.message) || I18N.t('拉起安装页失败'));
             }
         });
     }

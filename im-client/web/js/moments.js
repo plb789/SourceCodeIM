@@ -126,7 +126,7 @@
             var a = shown[i];
             var isLast = i === shown.length - 1;
             var tip = a.nickname || a.username;
-            if (isLast && extra > 0) tip += ' 等 ' + actors.length + ' 位好友有新动态';
+            if (isLast && extra > 0) tip += I18N.t(' 等 ') + actors.length + I18N.t(' 位好友有新动态');
             html += '<span class="mas-item">'
                 + avatarHTML(a, 'mas-av')
                 + (isLast && extra > 0 ? '<i class="mas-plus">+' + extra + '</i>' : '<i class="mas-dot"></i>')

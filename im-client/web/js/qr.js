@@ -64,7 +64,7 @@
         // 注意：createImgTag 返回 HTML 字符串（非元素），须 innerHTML 注入后再补 alt
         box.innerHTML = qr.createImgTag(6, 8); // 模块 6px、留白 8 模块，微信名片同款大码
         var img = box.querySelector('img');
-        if (img) img.alt = '我的二维码';
+        if (img) img.alt = I18N.t('我的二维码');
     }
 
     function showCard() {
@@ -132,7 +132,7 @@
         var mask = document.getElementById('qr-scan-mask');
         if (!mask) return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            toast('当前环境不支持扫码');
+            toast(I18N.t('当前环境不支持扫码'));
             return;
         }
         // 阶段二百一十九：幂等清残留——上次扫码流未释放（切后台/系统强断）时先停干净，
@@ -162,19 +162,19 @@
                 vt.addEventListener('ended', function () {
                     if (scanStream === stream) {
                         closeScanner();
-                        toast('相机已断开');
+                        toast(I18N.t('相机已断开'));
                     }
                 });
             }
         }).catch(function () {
             closeScanner();
-            toast('无法打开摄像头');
+            toast(I18N.t('无法打开摄像头'));
         });
     }
 
     function handleResult(data) {
         if (typeof data !== 'string' || !data) {
-            toast('未识别的二维码');
+            toast(I18N.t('未识别的二维码'));
             return;
         }
         // 阶段二百四十：扫码登录分支——识别 PC/WEB 登录页二维码（/qrl?t=<qr_id> 链接），
@@ -185,18 +185,18 @@
             return;
         }
         if (data.indexOf(PROTOCOL) !== 0) {
-            toast('未识别的二维码');
+            toast(I18N.t('未识别的二维码'));
             return;
         }
         var u = data.slice(PROTOCOL.length).trim();
-        if (!u) { toast('二维码内容为空'); return; }
+        if (!u) { toast(I18N.t('二维码内容为空')); return; }
         // 扫到自己的码：账号归口信令层（扫码场景资料面板未必打开过）
         var me = (window.IMSocket && typeof IMSocket.getUsername === 'function') ? (IMSocket.getUsername() || '').trim() : '';
-        if (me && me === u) { toast('这是你自己的二维码'); return; }
+        if (me && me === u) { toast(I18N.t('这是你自己的二维码')); return; }
         if (typeof window.__imAddFriendByCode === 'function') {
             window.__imAddFriendByCode(u); // 归口 chat.js 既有添加好友弹窗+查询链路
         } else {
-            toast('添加好友功能未就绪');
+            toast(I18N.t('添加好友功能未就绪'));
         }
     }
 
@@ -217,14 +217,14 @@
     // handleQRLoginScan 发起扫描上报（97 scan）——回执 ok 后弹确认授权卡
     function handleQRLoginScan(qrId) {
         var me = (window.IMSocket && typeof IMSocket.getUsername === 'function') ? (IMSocket.getUsername() || '').trim() : '';
-        if (!me) { toast('请先登录后再扫码'); return; }
+        if (!me) { toast(I18N.t('请先登录后再扫码')); return; }
         qrLoginPendingId = qrId;
         var sent = IMSocket.send({
             msg_type: IMSocket.MSG.QR_SIGN,
             from_user: me,
             content: JSON.stringify({ action: 'scan', qr_id: qrId })
         });
-        if (!sent) toast('连接未就绪，请稍后重试');
+        if (!sent) toast(I18N.t('连接未就绪，请稍后重试'));
     }
 
     // showQrLoginConfirm 弹出微信同款授权卡（头像/昵称取当前登录账号，端别文案服务端下发）
@@ -273,14 +273,14 @@
                     showQrLoginConfirm(msg.platform);
                 } else {
                     qrLoginPendingId = '';
-                    toast(msg.reason || '扫码失败，请重新扫描');
+                    toast(msg.reason || I18N.t('扫码失败，请重新扫描'));
                 }
             } else if (action === 'confirm') {
                 if (msg.ok) {
-                    toast('已确认，请在电脑上查看');
+                    toast(I18N.t('已确认，请在电脑上查看'));
                     hideQrLoginConfirm();
                 } else {
-                    toast(msg.reason || '确认失败');
+                    toast(msg.reason || I18N.t('确认失败'));
                     var okBtn = document.getElementById('qr-login-ok');
                     if (okBtn) okBtn.disabled = false;
                 }

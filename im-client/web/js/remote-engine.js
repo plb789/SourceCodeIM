@@ -42,7 +42,7 @@
             try { evt = JSON.parse(e.data); } catch (err) { return; }
             if (window.desktop && window.desktop.remoteInputSend) window.desktop.remoteInputSend(evt);
         };
-        dc.onopen = function () { log('DataChannel 就绪'); };
+        dc.onopen = function () { log(I18N.t('DataChannel 就绪')); };
         st.dc = dc;
         pc.onicecandidate = function (e) {
             if (!e.candidate) return;
@@ -52,7 +52,7 @@
             });
         };
         pc.onconnectionstatechange = function () {
-            log('连接状态：', pc.connectionState);
+            log(I18N.t('连接状态：'), pc.connectionState);
             // 连接失败/对端关闭：收口（信令面由 chat.js disconnect 流程归口，此处仅媒体面自保）
             if (st.active && (pc.connectionState === 'failed' || pc.connectionState === 'closed')) {
                 stop();
@@ -72,8 +72,8 @@
 
     // 启动共享（chat.js remoteAcceptInvite 调用）：抓屏 → 建连 → offer
     function startSharer(task) {
-        if (st.active) { log('已在共享中，忽略重复启动'); return; }
-        if (!sendFn) { log('信令通道未注入，无法启动'); return; }
+        if (st.active) { log(I18N.t('已在共享中，忽略重复启动')); return; }
+        if (!sendFn) { log(I18N.t('信令通道未注入，无法启动')); return; }
         st.sessionId = task.session_id;
         st.grant = task.grant === 'control' ? 'control' : 'view';
         st.ice = Array.isArray(task.ice) && task.ice.length ? task.ice : null; // 远程控制跨 NAT 中继配置
@@ -95,7 +95,7 @@
             return pc.createOffer().then(function (off) {
                 return pc.setLocalDescription(off).then(function () {
                     sendFn({ action: 'offer', session_id: st.sessionId, sdp: { type: off.type, sdp: off.sdp } });
-                    log('offer 已发送');
+                    log(I18N.t('offer 已发送'));
                     // 阶段二百六十一：answer 迟到兜底（仅 rc 场景）——控制端 rc_connect 20s 超时收口后
                     // 会话即悬挂，被控端悬浮条/抓屏不能无限等待：offer 后 30s 未收到 answer 自动收口
                     // （stop → onStop 发 disconnect 归口服务端结束会话，防隐私悬挂）；旧协助 rcMode=false 不启用
@@ -104,7 +104,7 @@
                         st.answerTimer = setTimeout(function () {
                             st.answerTimer = null;
                             if (st.active && (!st.pc || !st.pc.remoteDescription)) {
-                                log('等待 answer 超时（控制端可能已超时收口），自动结束');
+                                log(I18N.t('等待 answer 超时（控制端可能已超时收口），自动结束'));
                                 stop();
                             }
                         }, 30000);
@@ -112,7 +112,7 @@
                 });
             });
         }).catch(function (err) {
-            log('抓屏失败：', err && err.name, err && err.message);
+            log(I18N.t('抓屏失败：'), err && err.name, err && err.message);
             stop();
         });
     }
@@ -125,7 +125,7 @@
             if (st.answerTimer) { clearTimeout(st.answerTimer); st.answerTimer = null; } // 阶段二百六十一：answer 到达解除超时兜底
             st.pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).then(function () {
                 flushCands();
-            }).catch(function (e) { log('answer 失败：', e); });
+            }).catch(function (e) { log(I18N.t('answer 失败：'), e); });
         } else if (p.action === 'candidate') {
             if (!st.pc || !st.pc.remoteDescription) { st.pendingCands.push(p.candidate); return; }
             try { st.pc.addIceCandidate(new RTCIceCandidate(p.candidate)); } catch (e) { }
@@ -147,7 +147,7 @@
         st.rcMode = false;
         if (st.answerTimer) { clearTimeout(st.answerTimer); st.answerTimer = null; }
         if (wasActive && stopCb) { try { stopCb(); } catch (e) { } }
-        log('共享已停止');
+        log(I18N.t('共享已停止'));
     }
 
     // chat.js 初始化注入信令上行回调（避免跨文件直连 chat.js 内部函数）

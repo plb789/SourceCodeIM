@@ -485,7 +485,7 @@
         try { info = JSON.parse(msg.content); } catch (e) { return; }
         if (!info || typeof info.position !== 'number' || !queueMask) return;
         var wait = (typeof info.wait === 'number' && info.wait > 0) ? info.wait : 1;
-        queueText.textContent = '当前第 ' + info.position + ' 位，预计等待约 ' + wait + ' 秒';
+        queueText.textContent = I18N.t('当前第 ') + info.position + I18N.t(' 位，预计等待约 ') + wait + I18N.t(' 秒');
         queueMask.classList.remove('hidden');
     });
 
@@ -1684,9 +1684,9 @@
         var caOState = document.getElementById('settings-call-overlay-state');
         var caOBtn = document.getElementById('settings-call-overlay-btn');
         if (caSub && caSub.style) { caSub.style.display = ''; }
-        var MF_NAMES = { xiaomi: '小米/红米', redmi: '小米/红米', huawei: '华为/荣耀', honor: '华为/荣耀',
-            oppo: 'OPPO/一加', realme: 'OPPO/一加', oneplus: 'OPPO/一加', vivo: 'vivo/iQOO', iqoo: 'vivo/iQOO',
-            meizu: '魅族', samsung: '三星', letv: '乐视', google: '通用' };
+        var MF_NAMES = { xiaomi: I18N.t('小米/红米'), redmi: I18N.t('小米/红米'), huawei: I18N.t('华为/荣耀'), honor: I18N.t('华为/荣耀'),
+            oppo: I18N.t('OPPO/一加'), realme: I18N.t('OPPO/一加'), oneplus: I18N.t('OPPO/一加'), vivo: 'vivo/iQOO', iqoo: 'vivo/iQOO',
+            meizu: I18N.t('魅族'), samsung: I18N.t('三星'), letv: I18N.t('乐视'), google: I18N.t('通用') };
         // 阶段二百五十四：各厂商"后台白名单"开关（标签 / 说明 / 按钮文案）——国产 ROM 的后台限制
         // 均为私有机制，标准"电池优化豁免"（Doze 白名单）对其无效，须按厂商引导开启各自开关：
         // vivo/iQOO=后台耗电管理（实测 cgroup 整进程冻结，已在 Doze 白名单仍冻）、
@@ -1697,21 +1697,21 @@
             function reg(keys, label, desc, btn) {
                 keys.split(' ').forEach(function (k) { KA_HP[k] = [label, desc, btn]; });
             }
-            reg('vivo iqoo', '后台高耗电',
-                'vivo/iQOO 会冻结后台应用（标准电池优化豁免无效），须在打开的页面底部点击“后台耗电管理”并允许本应用后台高耗电，否则切后台会掉线收不到消息。',
-                '去开启后台高耗电');
-            reg('xiaomi redmi', '省电策略',
-                '小米/红米需把本应用“省电策略”设为“无限制”，并在最近任务中下拉卡片加锁，否则切后台可能被限制联网而掉线。',
-                '去设置省电策略');
-            reg('huawei honor', '后台活动',
-                '华为/荣耀需在“应用启动管理”中改为“手动管理”，并打开“允许自启动/关联启动/后台活动”三项，否则切后台会被系统清理而掉线。',
-                '去开启后台活动');
-            reg('oppo realme oneplus', '后台运行',
-                'OPPO/一加需在“耗电管理”中允许本应用后台运行并允许自启动，否则切后台会被省电策略限制而掉线。',
-                '去开启后台运行');
-            reg('samsung', '不受限制',
-                '三星需把本应用电池设为“不受限制”，并关闭“将未使用的应用休眠”，否则后台会被限制而掉线。',
-                '去设置电池不受限制');
+            reg('vivo iqoo', I18N.t('后台高耗电'),
+                I18N.t('vivo/iQOO 会冻结后台应用（标准电池优化豁免无效），须在打开的页面底部点击“后台耗电管理”并允许本应用后台高耗电，否则切后台会掉线收不到消息。'),
+                I18N.t('去开启后台高耗电'));
+            reg('xiaomi redmi', I18N.t('省电策略'),
+                I18N.t('小米/红米需把本应用“省电策略”设为“无限制”，并在最近任务中下拉卡片加锁，否则切后台可能被限制联网而掉线。'),
+                I18N.t('去设置省电策略'));
+            reg('huawei honor', I18N.t('后台活动'),
+                I18N.t('华为/荣耀需在“应用启动管理”中改为“手动管理”，并打开“允许自启动/关联启动/后台活动”三项，否则切后台会被系统清理而掉线。'),
+                I18N.t('去开启后台活动'));
+            reg('oppo realme oneplus', I18N.t('后台运行'),
+                I18N.t('OPPO/一加需在“耗电管理”中允许本应用后台运行并允许自启动，否则切后台会被省电策略限制而掉线。'),
+                I18N.t('去开启后台运行'));
+            reg('samsung', I18N.t('不受限制'),
+                I18N.t('三星需把本应用电池设为“不受限制”，并关闭“将未使用的应用休眠”，否则后台会被限制而掉线。'),
+                I18N.t('去设置电池不受限制'));
         })();
         function refreshKaStatus() {
             try {
@@ -4327,7 +4327,7 @@
                             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                             canvas.toBlob(function (blob) {
                                 if (blob) {
-                                    frames.push(new File([blob], base + '_帧' + (idx + 1) + '.jpg', { type: 'image/jpeg' }));
+                                    frames.push(new File([blob], base + I18N.t('_帧') + (idx + 1) + '.jpg', { type: 'image/jpeg' }));
                                 }
                                 step(idx + 1); // 单帧 toBlob 失败跳过不中断整体
                             }, 'image/jpeg', 0.8);
@@ -7210,7 +7210,7 @@
         var beginPromise = window.desktop.recBegin().catch(function () { return false; }); // 退场失败不阻断录制（画面可能带主窗口）
         var fail = function (e) {
             var detail = (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : '');
-            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('录屏取流失败: ' + detail);
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog(I18N.t('录屏取流失败: ') + detail);
             showToast(I18N.t('录屏启动失败') + (detail ? I18N.t('：') + detail : ''));
             recCleanup();
             window.desktop.recShow();
@@ -7238,7 +7238,7 @@
             };
         }).catch(function (e) {
             // getUserMedia 失败 → GDI 帧兜底（非提权偶发捕获失效场景；主进程 BitBlt 逐帧推流，链路其余复用）
-            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('getUserMedia 失败切 GDI 帧: ' + (e && e.name ? e.name + ' ' + e.message : e));
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog(I18N.t('getUserMedia 失败切 GDI 帧: ') + (e && e.name ? e.name + ' ' + e.message : e));
             return beginPromise.then(function () { return startGdiRecorder(); }).then(function () {
                 startRecRecorder();
             });
@@ -7538,7 +7538,7 @@
         }).catch(function (e) {
             // 阶段二百九十四：getUserMedia 失败（提权 WGC E_ACCESSDENIED 等）→ GDI 区域采样兜底：
             // 主进程 gdiCaptureRegion 按 250ms 节奏直接抓选区矩形，链路（对齐/拼接/长图）完全复用
-            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('长截图 getUserMedia 失败切 GDI 采样: ' + (e && e.name ? e.name + ' ' + e.message : e));
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog(I18N.t('长截图 getUserMedia 失败切 GDI 采样: ') + (e && e.name ? e.name + ' ' + e.message : e));
             stitchState.gdi = true;
             stitchState.video = null;
             startStitchEngine();
@@ -7672,9 +7672,9 @@
             stitchSampleFrame().then(function (ok) {
                 try {
                     if (ok && stitchState.active) processStitchFrame();
-                    else stitchDiag('采样失败（invoke 空/异常）');
+                    else stitchDiag(I18N.t('采样失败（invoke 空/异常）'));
                 } catch (err) {
-                    stitchDiag('帧处理异常: ' + (err && err.message));
+                    stitchDiag(I18N.t('帧处理异常: ') + (err && err.message));
                 } finally {
                     stitchState.busy = false;
                 }
@@ -7759,7 +7759,7 @@
             if (sum < best) { best = sum; bestTy = ty; }
         }
         if (bestTy < 0 || best / (sw * sh) >= STITCH_TH) {
-            stitchDiag('对齐失败 best=' + (bestTy < 0 ? 'none' : Math.round(best / (sw * sh) * 100) / 100) + '，丢帧'); // 错误路径日志（滚动过快/内容突变时逐帧）
+            stitchDiag(I18N.t('对齐失败 best=') + (bestTy < 0 ? 'none' : Math.round(best / (sw * sh) * 100) / 100) + I18N.t('，丢帧')); // 错误路径日志（滚动过快/内容突变时逐帧）
             warnStitchFast(); // 无重叠/滚动过快：丢帧
             return;
         }
@@ -10201,14 +10201,14 @@
         // 渲染提为函数供两处复用：空状态兜底分支（内置停用时补挂首行与启用开关）与正常路径
         // 内置浏览器工具静态清单（MCP 面板内置行展开用；服务端 schema 归口 agenttools_browser.go）
         var AGENT_BROWSER_ROW_TOOLS = [
-            { tool: 'browser_navigate', description: '在内置浏览器打开网页（自动展示浏览区面板）' },
-            { tool: 'browser_snapshot', description: '读取页面可交互元素清单（带 ref）与文本概要' },
-            { tool: 'browser_click', description: '按 ref 点击页面元素' },
-            { tool: 'browser_input', description: '按 ref 填写输入框' },
-            { tool: 'browser_screenshot', description: '截取当前页面' },
-            { tool: 'browser_eval', description: '在页面执行 JS 脚本' },
-            { tool: 'browser_tabs', description: '标签页管理（新建/列表/切换）' },
-            { tool: 'browser_close', description: '关闭浏览器或标签页' }
+            { tool: 'browser_navigate', description: I18N.t('在内置浏览器打开网页（自动展示浏览区面板）') },
+            { tool: 'browser_snapshot', description: I18N.t('读取页面可交互元素清单（带 ref）与文本概要') },
+            { tool: 'browser_click', description: I18N.t('按 ref 点击页面元素') },
+            { tool: 'browser_input', description: I18N.t('按 ref 填写输入框') },
+            { tool: 'browser_screenshot', description: I18N.t('截取当前页面') },
+            { tool: 'browser_eval', description: I18N.t('在页面执行 JS 脚本') },
+            { tool: 'browser_tabs', description: I18N.t('标签页管理（新建/列表/切换）') },
+            { tool: 'browser_close', description: I18N.t('关闭浏览器或标签页') }
         ];
         var renderBuiltinRow = function (cfg) {
             var enabled = cfg.enabled();
@@ -19323,7 +19323,7 @@
         return '<div class="ai-code-block">'
             + '<div class="ai-code-head">'
             + '<span class="ai-code-lang">' + (displayLang || I18N.t('代码')) + '</span>'
-            + I18N.t('<span class="ai-code-copy" title="复制代码">')
+            + '<span class="ai-code-copy" title="' + I18N.t('复制代码') + '">'
             + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>'
             + '</span></div>'
             + '<pre class="ai-md-pre"><code class="hljs">' + highlighted + '</code></pre>'
@@ -20441,7 +20441,7 @@
             fetch('/upload/group-avatar?group_id=' + gid + '&username=' + encodeURIComponent(IMSocket.getUsername()), {
                 method: 'POST', body: formData
             }).then(function (r) {
-                if (!r.ok) return r.text().then(function (t) { throw new Error(t || '上传失败'); });
+                if (!r.ok) return r.text().then(function (t) { throw new Error(t || I18N.t('上传失败')); });
                 return r.json();
             }).then(function (data) {
                 if (data.avatar) showToast(I18N.t('群头像已更新'));
@@ -24147,15 +24147,15 @@
         panel.appendChild(domain);
         panel.appendChild(urlEl);
         panel.appendChild(tip);
-        panel.appendChild(mkBtn('继续访问', 'primary', function () {
+        panel.appendChild(mkBtn(I18N.t('继续访问'), 'primary', function () {
             closeLinkConfirm();
             window.open(url, '_blank');
         }));
-        panel.appendChild(mkBtn('复制链接', '', function () {
+        panel.appendChild(mkBtn(I18N.t('复制链接'), '', function () {
             copyTextToClipboard(url);
             closeLinkConfirm();
         }));
-        panel.appendChild(mkBtn('取消', 'cancel', closeLinkConfirm));
+        panel.appendChild(mkBtn(I18N.t('取消'), 'cancel', closeLinkConfirm));
         mask.appendChild(panel);
         // 点遮罩空白关闭（面板内点击不冒泡穿透）
         mask.addEventListener('click', function (e) {
@@ -28661,7 +28661,7 @@
         locPickerMapObj.on('click', function (e) {
             if (locPickerMapObj && e && e.lnglat) locPickerMapObj.setCenter(e.lnglat);
         });
-        locPlaceSearch = new AMap.PlaceSearch({ city: '全国', pageSize: 8 });
+        locPlaceSearch = new AMap.PlaceSearch({ city: I18N.t('全国'), pageSize: 8 });
         locGeocoder = new AMap.Geocoder();
         // 搜索输入防抖实时出候选列表；回车立即搜索（微信同款：列表点选而非直取首个）
         locSearchInput.addEventListener('input', function () {
@@ -28692,7 +28692,7 @@
         var a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
             + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
         var d = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        if (d < 1000) return Math.max(1, Math.round(d)) + ' m内';
+        if (d < 1000) return Math.max(1, Math.round(d)) + I18N.t(' m内');
         return (d / 1000).toFixed(1) + ' km';
     }
     // 渲染 POI 候选列表（activeIdx 高亮当前选中项；点击条目选中上图）

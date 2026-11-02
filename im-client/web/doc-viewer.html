@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <!-- i18n 国际化（须最先引入，先于任何含界面文本的脚本）：中英双语跟随 im_lang 偏好 -->
+    <script src="js/i18n.js?v=3.33"></script>
+
     <meta charset="UTF-8">
     <title>文档查看</title>
     <style>
@@ -175,7 +178,7 @@
             var loadingEl = document.getElementById('dv-loading');
             var topBtn = document.getElementById('dv-top');
             var isTop = false;
-            var curName = '文档';
+            var curName = I18N.t('文档');
             var curUrl = '';
             var lastPdfObjUrl = ''; // 阶段一百三十五：data: URL 转 blob 中转的 objectURL（换文件时 revoke 释放）
 
@@ -224,7 +227,7 @@
             function render(url, name) {
                 clearStage();
                 curUrl = url;
-                curName = name || '文档';
+                curName = name || I18N.t('文档');
                 titleEl.textContent = curName;
                 titleEl.title = curName;
                 // 阶段一百三十五：扩展名优先取文件名（本地文件走 blob: URL，其 uuid 无扩展名，
@@ -309,7 +312,7 @@
                         if (nul > 0) {
                             var warn = document.createElement('div');
                             warn.className = 'dv-text';
-                            warn.textContent = '该文件为二进制内容，请在工具栏点"下载"后用本地程序打开。';
+                            warn.textContent = I18N.t('该文件为二进制内容，请在工具栏点"下载"后用本地程序打开。');
                             stage.appendChild(warn);
                             return;
                         }
@@ -320,7 +323,7 @@
                     }).catch(function (e) {
                         var err = document.createElement('div');
                         err.className = 'dv-text';
-                        err.textContent = '加载失败：' + (e && e.message ? e.message : e);
+                        err.textContent = I18N.t('加载失败：') + (e && e.message ? e.message : e);
                         stage.appendChild(err);
                     }).finally(function () { setLoading(false); });
                     return;

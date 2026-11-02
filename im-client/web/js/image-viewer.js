@@ -210,7 +210,7 @@
             if (editBusy || !img.src || !img.naturalWidth) return;
             editBusy = true;
             fetch(list[index], { cache: 'no-store' }).then(function (r) { return r.blob(); }).then(function (blob) {
-                if (blob.type === 'image/gif') { editBusy = false; btnEdit.title = 'GIF 动图暂不支持编辑'; return; }
+                if (blob.type === 'image/gif') { editBusy = false; btnEdit.title = I18N.t('GIF 动图暂不支持编辑'); return; }
                 return blob.arrayBuffer().then(function (buf) {
                     var bytes = new Uint8Array(buf);
                     var bin = '';

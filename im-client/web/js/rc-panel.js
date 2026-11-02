@@ -437,7 +437,7 @@
     }
 
     // ===== 控制记录 =====
-    var RC_STATUS = { connected: '已接通', missed: '未接通', rejected: '已拒绝', canceled: '已取消' };
+    var RC_STATUS = { connected: I18N.t('已接通'), missed: I18N.t('未接通'), rejected: I18N.t('已拒绝'), canceled: I18N.t('已取消') };
     function fmtDur(sec) {
         sec = Math.max(0, sec | 0);
         var m = Math.floor(sec / 60), s = sec % 60;

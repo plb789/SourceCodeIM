@@ -497,15 +497,15 @@
             var msg;
             try { msg = JSON.parse(e.data); } catch (err) { return; }
             if (msg.msg_type !== MSG.REGISTER && msg.msg_type !== MSG.ERROR) return;
-            done(msg.content === 'ok', msg.content !== 'ok' ? msg.content : '注册成功');
+            done(msg.content === 'ok', msg.content !== 'ok' ? msg.content : I18N.t('注册成功'));
         };
         regWs.onclose = function () {
             // 服务端拒绝注册时先发错误帧再关连接，onmessage 已回执；
             // 未收到任何帧即断开视为网络/服务异常
-            done(false, '注册服务连接异常，请稍后重试');
+            done(false, I18N.t('注册服务连接异常，请稍后重试'));
         };
         regWs.onerror = function () {
-            done(false, '注册服务连接异常，请稍后重试');
+            done(false, I18N.t('注册服务连接异常，请稍后重试'));
         };
     }
 
