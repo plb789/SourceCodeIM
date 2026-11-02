@@ -41,8 +41,9 @@
     ];
 
     // 模式显示归口：'ffa' → 「混战」（列表/房间页与建房下拉口径一致），未知值原样展示
+    // （label 经 T() 翻译：'混战' 在 en 包有词条，'2v2' 等原样透传）
     function modeLabel(k) {
-        for (var i = 0; i < MODES.length; i++) { if (MODES[i].k === k) return MODES[i].label; }
+        for (var i = 0; i < MODES.length; i++) { if (MODES[i].k === k) return T(MODES[i].label); }
         return k;
     }
 
@@ -413,7 +414,7 @@
         MODES.forEach(function (m) {
             var o = document.createElement('option');
             o.value = m.k;
-            o.textContent = m.need ? (m.label + '（' + T('需 Mesh（三期）') + '）') : m.label;
+            o.textContent = m.need ? (T(m.label) + '（' + T('需 Mesh（三期）') + '）') : T(m.label);
             if (m.need) o.disabled = true;
             elInMode.appendChild(o);
         });
@@ -1939,7 +1940,7 @@
     if (window.desktop && typeof window.desktop.onP2pHostStatus === 'function') {
         window.desktop.onP2pHostStatus(function (st) {
             if (st && !st.running && my && my.status === 'playing' && my.mode === 'supernode') {
-                toast(T('虚拟网卡组网已断开（{r}）', { r: st.reason || '进程退出' }));
+                toast(T('虚拟网卡组网已断开（{r}）', { r: st.reason || T('进程退出') }));
             }
         });
     }
