@@ -2313,7 +2313,7 @@
         // IP属地（服务端 ip2region 归口解析；空串=不可用整行隐藏，"内网"为正常值照常渲染）
         var ipRegionText = info.ip_region || '';
         friendCardIpRegionRow.classList.toggle('hidden', !ipRegionText);
-        friendCardIpRegion.textContent = ipRegionText;
+        friendCardIpRegion.textContent = I18N.tr(ipRegionText);
         friendCardSignature.textContent = info.signature || I18N.t('暂无');
         // 仅好友可设置备注（非好友隐藏按钮，服务端同样归口校验）
         friendCardRemarkBtn.classList.toggle('hidden', !info.is_friend);

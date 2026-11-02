@@ -19,7 +19,7 @@
     'use strict';
     var LANG_KEY = 'im_lang';                       // 偏好存储键（与 im_theme 同风格）
     var BASE = 'zh';                                // 基准语言（key 即中文原文，零查表）
-    var PACK_VER = '3.28';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：游戏内通知小窗设置键）
+    var PACK_VER = '3.29';                          // 语言包缓存版本（bump 强制刷新浏览器缓存的 JSON；本次：主界面遗漏词条全量补齐）
     var lang = BASE;                                // 当前语言
     var packs = { zh: {}, en: {} };                 // 语言包缓存（zh 包同时充当静态文本反查基准）
 
@@ -85,7 +85,7 @@
     // 语言切换采用"保存偏好后刷新页面"策略（reload 后同步语言包首绘即新语言，
     // app-booting 遮罩期间完成替换无闪烁），运行期不再全文档重扫，杜绝用户消息
     // 恰好命中词条被误替换的风险（如用户发送"图片"/"OK"等常用词）。
-    var I18N_ATTRS = ['placeholder', 'title', 'aria-label', 'data-tip'];
+    var I18N_ATTRS = ['placeholder', 'title', 'aria-label', 'data-tip', 'data-tip-text'];
     function apply(root) {
         if (lang === BASE) return;                  // 中文模式：页面原文即中文，无需替换
         var zh = packs.zh || {};
