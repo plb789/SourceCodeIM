@@ -237,6 +237,26 @@ contextBridge.exposeInMainWorld('desktop', {
     recbarStop: function () {
         ipcRenderer.send('recbar:stop');
     },
+    // GDI 帧录制兜底（提权录屏）：主进程只抓选区矩形（30fps 含光标）JPEG 推流；启动/停止/帧订阅
+    recGdiStart: function (x, y, w, h) {
+        return ipcRenderer.invoke('rec:gdi-start', x, y, w, h);
+    },
+    recGdiStop: function () {
+        ipcRenderer.send('rec:gdi-stop');
+    },
+    onRecGdiFrame: function (callback) {
+        ipcRenderer.on('rec:gdi-frame', function (event, buf) {
+            callback(buf);
+        });
+    },
+    // 长截图 GDI 区域采样（提权 getUserMedia 失败兜底）：单帧选区矩形 JPEG（null=采样失败）
+    stitchSample: function (x, y, w, h) {
+        return ipcRenderer.invoke('stitch:sample', x, y, w, h);
+    },
+    // 进程提权状态（渲染层据此跳过 getUserMedia 直走 GDI 通道，省提权下白试延迟）
+    isElevated: function () {
+        return ipcRenderer.invoke('sys:is-elevated');
+    },
     // ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地） =====
     // 开始录制：主进程弹保存对话框（data = {name: 默认文件名}），返回 {ok, path?, canceled?, err?}
     recMeetStart: function (data) {

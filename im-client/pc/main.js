@@ -44,6 +44,7 @@ console.log('[BOOT] require 链完成 +' + (Date.now() - BOOT_T0) + 'ms');
 
 // 阶段二百九十四：主进程运行日志（userData/main.log，128KB 自动截断）——提权/打包形态 stdout
 // 不可见（elevator.exe 启动无控制台），启动里程碑/快捷键注册/抓屏失败等关键事件落文件供远程排查
+var procElevated = false; // 进程是否提权运行（whenReady 检测；渲染层经 sys:is-elevated 查询）
 function mainLog(text) {
     try {
         const p = path.join(app.getPath('userData'), 'main.log');
@@ -115,62 +116,113 @@ function winMinimizeReliable(w) {
 // 依赖 Chromium 捕获栈（WGC/DXGI），在管理员提权进程下可能整体失效（实测 2026-11-01：提权后
 // getSources 缩略图为空 → 截图/录屏全挂）。GDI GetDC(NULL)+BitBlt 走窗口管理器屏幕 DC，提权进程
 // 可靠可用。仅作空缩略图时的回退路径，koffi 缺失/失败返回 null 由调用侧走既有失败分支
-let _gdiCaptureFn = null; // 惰性初始化
-function gdiCaptureOf() {
-    if (_gdiCaptureFn !== null) return _gdiCaptureFn;
-    _gdiCaptureFn = null;
+let _gdiBindings = null; // koffi user32/gdi32 绑定缓存（惰性初始化，失败保持 null）
+function gdiBindings() {
+    if (_gdiBindings !== null) return _gdiBindings;
+    _gdiBindings = null;
     try {
         const koffi = require('koffi');
         const user32 = koffi.load('user32.dll');
         const gdi32 = koffi.load('gdi32.dll');
-        const getDc = user32.func('void* __stdcall GetDC(void* hWnd)');
-        const releaseDc = user32.func('int32 __stdcall ReleaseDC(void* hWnd, void* hdc)');
-        const createCompatibleDc = gdi32.func('void* __stdcall CreateCompatibleDC(void* hdc)');
-        const createCompatibleBitmap = gdi32.func('void* __stdcall CreateCompatibleBitmap(void* hdc, int32 w, int32 h)');
-        const selectObject = gdi32.func('void* __stdcall SelectObject(void* hdc, void* obj)');
-        const deleteObject = gdi32.func('bool __stdcall DeleteObject(void* obj)');
-        const deleteDc = gdi32.func('bool __stdcall DeleteDC(void* hdc)');
-        const bitBlt = gdi32.func('bool __stdcall BitBlt(void* dst, int32 dx, int32 dy, int32 w, int32 h, void* src, int32 sx, int32 sy, uint32 rop)');
-        const getDIBits = gdi32.func('int32 __stdcall GetDIBits(void* hdc, void* hbmp, uint32 start, uint32 lines, void* bits, void* lpbi, uint32 usage)');
-        const { nativeImage, screen } = require('electron');
-        _gdiCaptureFn = function () {
-            const display = screen.getPrimaryDisplay();
-            const w = Math.max(1, Math.round(display.size.width * display.scaleFactor));
-            const h = Math.max(1, Math.round(display.size.height * display.scaleFactor));
-            const screenDc = getDc(null);
-            if (!screenDc) return null;
-            let memDc = null, bmp = null, old = null;
-            try {
-                memDc = createCompatibleDc(screenDc);
-                if (!memDc) return null;
-                bmp = createCompatibleBitmap(screenDc, w, h);
-                if (!bmp) return null;
-                old = selectObject(memDc, bmp);
-                // SRCCOPY|CAPTUREBLT：含分层窗口（CAPTUREBLT 单用会闪光标，组合为抓屏惯例）
-                if (!bitBlt(memDc, 0, 0, w, h, screenDc, 0, 0, 0x00CC0020 | 0x40000000)) return null;
-                // GetDIBits 硬性要求：目标位图不得选中在任何 DC 中（微软文档明确）——必须先摘下
-                // 位图再取像素，否则恒返 0（实测 2026-11-01：未摘除导致 GDI 兜底整体失效）
-                selectObject(memDc, old);
-                old = null;
-                // BITMAPINFOHEADER（40 字节，biHeight 取负 = 自上而下行序）+ 4 字节调色板占位
-                const bi = Buffer.alloc(44);
-                bi.writeUInt32LE(40, 0);
-                bi.writeInt32LE(w, 4);
-                bi.writeInt32LE(-h, 8); // 负高：top-down（nativeImage.createFromBitmap 要求自上而下）
-                bi.writeUInt16LE(1, 12); // biPlanes
-                bi.writeUInt16LE(32, 14); // biBitCount
-                const pixels = Buffer.alloc(w * h * 4);
-                if (getDIBits(memDc, bmp, 0, h, pixels, bi, 0 /* DIB_RGB_COLORS */) !== h) return null;
-                return nativeImage.createFromBitmap(pixels, { width: w, height: h });
-            } finally {
-                try { if (old) selectObject(memDc, old); } catch (e) { }
-                try { if (bmp) deleteObject(bmp); } catch (e) { }
-                try { if (memDc) deleteDc(memDc); } catch (e) { }
-                try { releaseDc(null, screenDc); } catch (e) { }
-            }
+        _gdiBindings = {
+            getDc: user32.func('void* __stdcall GetDC(void* hWnd)'),
+            releaseDc: user32.func('int32 __stdcall ReleaseDC(void* hWnd, void* hdc)'),
+            createCompatibleDc: gdi32.func('void* __stdcall CreateCompatibleDC(void* hdc)'),
+            createCompatibleBitmap: gdi32.func('void* __stdcall CreateCompatibleBitmap(void* hdc, int32 w, int32 h)'),
+            selectObject: gdi32.func('void* __stdcall SelectObject(void* hdc, void* obj)'),
+            deleteObject: gdi32.func('bool __stdcall DeleteObject(void* obj)'),
+            deleteDc: gdi32.func('bool __stdcall DeleteDC(void* hdc)'),
+            bitBlt: gdi32.func('bool __stdcall BitBlt(void* dst, int32 dx, int32 dy, int32 w, int32 h, void* src, int32 sx, int32 sy, uint32 rop)'),
+            getDIBits: gdi32.func('int32 __stdcall GetDIBits(void* hdc, void* hbmp, uint32 start, uint32 lines, void* bits, void* lpbi, uint32 usage)'),
+            // 光标绘制（录屏帧内嵌光标）：GetCursorInfo 取位置/句柄（扁平布局对齐 CURSORINFO x64），
+            // DrawIconEx DI_NORMAL 画进帧
+            getCursorInfo: user32.func('bool __stdcall GetCursorInfo(void* pci)'),
+            drawIconEx: user32.func('bool __stdcall DrawIconEx(void* hdc, int32 x, int32 y, void* hIcon, int32 cx, int32 cy, uint32 istep, void* hbrFlicker, uint32 flags)'),
+            // 线程 DPI 上下文切换：Electron 主线程 GDI 坐标空间默认被 DPI 虚拟化到 CSS 尺寸
+            //（实测 2026-11-02：请求 2561x1601 只捕到 1707x1067）——抓屏期间切 PMv2(-4) 到物理空间
+            setThreadDpiCtx: user32.func('int64 __stdcall SetThreadDpiAwarenessContext(int64 ctx)')
         };
     } catch (err) { /* koffi 缺失/加载失败：保持 null，调用侧走既有失败分支 */ }
-    return _gdiCaptureFn;
+    return _gdiBindings;
+}
+// 区域抓屏（GDI BitBlt，主屏物理像素坐标）：x/y/w/h 为目标矩形，withCursor=true 时把系统光标
+// 绘制进帧（录屏用；截图不含光标）。返回 nativeImage，失败/空返回 null。
+// 性能关键：只抓目标矩形（录屏选区通常远小于全屏）——单帧数 ms 级，30fps 无压力、主线程占用大降
+function gdiCaptureRegion(x, y, w, h, withCursor) {
+    const b = gdiBindings();
+    // 与主屏物理边界求交：选区可能略越出屏幕（整屏选区 -11,-11 等），越界部分 BitBlt 结果未定义。
+    // 注意物理边界 = display.size × scaleFactor（CSS 边界 ×1.5 才是物理，混用会把抓屏裁成局部）
+    const pd = screen.getPrimaryDisplay();
+    const pw = Math.round(pd.size.width * pd.scaleFactor);
+    const ph = Math.round(pd.size.height * pd.scaleFactor);
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > pw) w = pw - x;
+    if (y + h > ph) h = ph - y;
+    if (!b || w < 1 || h < 1) return null;
+    // 线程 DPI 上下文切 PMv2(-4)：主线程 GDI 默认被 DPI 虚拟化（GetDC(NULL)/BitBlt 坐标=CSS 尺寸），
+    // 不切换则物理请求只能捕到 CSS 大小的局部图（实测 2026-11-02 "背景放大"根因）；抓完立即恢复
+    var oldCtx = null;
+    try { oldCtx = b.setThreadDpiCtx(-4); } catch (eDpi) { }
+    const screenDc = b.getDc(null);
+    if (!screenDc) {
+        try { if (oldCtx !== null) b.setThreadDpiCtx(oldCtx); } catch (eDpi2) { }
+        return null;
+    }
+    let memDc = null, bmp = null, old = null;
+    try {
+        memDc = b.createCompatibleDc(screenDc);
+        if (!memDc) return null;
+        bmp = b.createCompatibleBitmap(screenDc, w, h);
+        if (!bmp) return null;
+        old = b.selectObject(memDc, bmp);
+        // SRCCOPY|CAPTUREBLT：含分层窗口（CAPTUREBLT 单用会闪光标，组合为抓屏惯例）
+        if (!b.bitBlt(memDc, 0, 0, w, h, screenDc, x, y, 0x00CC0020 | 0x40000000)) return null;
+        if (withCursor) {
+            try {
+                // CURSORINFO 扁平缓冲（x64 布局）：cbSize(4) flags(4) hCursor(8) pt.x(4) pt.y(4)
+                const ci = Buffer.alloc(24);
+                ci.writeUInt32LE(24, 0);
+                if (b.getCursorInfo(ci)) {
+                    const flags = ci.readUInt32LE(4);
+                    const hcur = ci.readBigUInt64LE(8);
+                    const px = ci.readInt32LE(16), py = ci.readInt32LE(20);
+                    if ((flags & 1 /* CURSOR_SHOWING */) && hcur !== 0n) {
+                        b.drawIconEx(memDc, px - x, py - y, hcur, 0, 0, 0, null, 0x3 /* DI_NORMAL */);
+                    }
+                }
+            } catch (eCursor) { /* 光标绘制失败不影响帧 */ }
+        }
+        // GetDIBits 硬性要求：目标位图不得选中在任何 DC 中（微软文档明确）——先摘下再取像素
+        b.selectObject(memDc, old);
+        old = null;
+        // BITMAPINFOHEADER（40 字节，biHeight 取负 = 自上而下行序）+ 4 字节调色板占位
+        const bi = Buffer.alloc(44);
+        bi.writeUInt32LE(40, 0);
+        bi.writeInt32LE(w, 4);
+        bi.writeInt32LE(-h, 8); // 负高：top-down（nativeImage.createFromBitmap 要求自上而下）
+        bi.writeUInt16LE(1, 12); // biPlanes
+        bi.writeUInt16LE(32, 14); // biBitCount
+        const pixels = Buffer.alloc(w * h * 4);
+        if (b.getDIBits(memDc, bmp, 0, h, pixels, bi, 0) !== h) return null;
+        return nativeImage.createFromBitmap(pixels, { width: w, height: h });
+    } finally {
+        try { if (old) b.selectObject(memDc, old); } catch (e) { }
+        try { if (bmp) b.deleteObject(bmp); } catch (e) { }
+        try { if (memDc) b.deleteDc(memDc); } catch (e) { }
+        try { b.releaseDc(null, screenDc); } catch (e) { }
+        try { if (oldCtx !== null) b.setThreadDpiCtx(oldCtx); } catch (e) { } // 恢复原 DPI 上下文
+    }
+}
+// 执行一次区域抓屏并归一（gdi 绑定缺失/执行异常/空图统一返 null）
+function gdiCaptureNow(x, y, w, h, withCursor) {
+    try {
+        var img = gdiCaptureRegion(x, y, w, h, withCursor);
+        return (img && !img.isEmpty()) ? img : null;
+    } catch (e) {
+        mainLog('[capture] GDI 抓屏执行异常: ' + (e && e.message));
+        return null;
+    }
 }
 
 // 阶段二百九十四：提权运行放行拖放（UIPI 消息过滤）——客户端经 elevator.exe 以管理员运行时，
@@ -860,21 +912,23 @@ function captureScreen(useJpeg) {
     // 全分辨率 getSources 360~440ms（快 10 倍），且 GDI 在提权进程可靠可用（WGC/DXGI 失效场景见下）；
     // desktopCapturer 降为回退（GDI 失败的极端环境）。注意 GDI 抓不到独占全屏独占模式画面，
     // 该场景走 desktopCapturer 回退亦无法覆盖（原本即 WGC/DXGI 源），行为与 QQ 截图一致
-    try {
-        var gdi = gdiCaptureOf();
-        if (gdi && !gdi.isEmpty()) {
-            return Promise.resolve(useJpeg
-                ? 'data:image/jpeg;base64,' + gdi.toJPEG(90).toString('base64')
-                : gdi.toDataURL());
-        }
-        mainLog('[capture] GDI 主通道失败/空 → desktopCapturer 回退');
-    } catch (e) { /* GDI 异常走回退 */ }
     var display = screen.getPrimaryDisplay();
     // 抓屏分辨率必须传入物理像素（逻辑分辨率 * 缩放比），否则高 DPI 屏幕会抓出模糊的低分辨率缩略图
     var size = {
         width: Math.round(display.size.width * display.scaleFactor),
         height: Math.round(display.size.height * display.scaleFactor)
     };
+    try {
+        var gdi = gdiCaptureNow(0, 0, size.width, size.height, false); // 截图不含光标
+        if (gdi) {
+            var sz = gdi.getSize();
+            mainLog('[capture] GDI 主屏抓屏 ' + sz.width + 'x' + sz.height + '（请求 ' + size.width + 'x' + size.height + '，DPI=' + display.scaleFactor + '）');
+            return Promise.resolve(useJpeg
+                ? 'data:image/jpeg;base64,' + gdi.toJPEG(90).toString('base64')
+                : gdi.toDataURL());
+        }
+        mainLog('[capture] GDI 主通道失败/空 → desktopCapturer 回退');
+    } catch (e) { /* GDI 异常走回退 */ }
     return desktopCapturer.getSources({ types: ['screen'], thumbnailSize: size }).then(function (sources) {
         // 多显示器环境优先匹配主屏 display_id，匹配不到时退回首个屏幕
         var src = null;
@@ -1127,6 +1181,7 @@ ipcMain.handle('rec:source', function () {
 ipcMain.on('rec:show', function () {
     recActive = false;
     hideRecBar(); // 悬浮条随录制结束收起
+    stopRecGdiLoop(); // GDI 推帧兜底循环随录制结束停止（渲染层先行调用，此处兜底）
     if (!mainWindow) return;
     mainWindow.show();
     mainWindow.focus();
@@ -1135,7 +1190,60 @@ ipcMain.on('rec:show', function () {
 // 录制状态同步（渲染层 MediaRecorder 实际 start/stop 时上报，与 rec:begin/rec:show 解耦防竞态）
 ipcMain.on('rec:active', function (e, on) {
     recActive = !!on;
-    if (!on) hideRecBar(); // 兜底：任何停止路径（含最长时长保护/启动失败清理）都收起悬浮条
+    if (!on) { hideRecBar(); stopRecGdiLoop(); } // 兜底：任何停止路径（含最长时长保护/启动失败清理）都收起悬浮条与 GDI 推帧
+});
+
+// ===== 阶段二百九十四：GDI 帧录制兜底（提权录屏专用） =====
+// 实测（2026-11-02 提权对照实验）：getUserMedia 桌面流在管理员进程 WGC CreateForMonitor 恒返
+// E_ACCESSDENIED（禁 WGC 特性/禁 GPU/禁沙箱均无效），而 GDI BitBlt 可靠（截图已验证）。主进程
+// GDI 逐帧抓屏 → JPEG 推渲染层 → 画 canvas → captureStream → MediaRecorder，录制链路其余复用
+var recGdiLoop = { timer: null, frames: 0, sx: 0, sy: 0, sw: 0, sh: 0, warnAt: 0 };
+function stopRecGdiLoop() {
+    if (recGdiLoop.timer) {
+        clearInterval(recGdiLoop.timer);
+        recGdiLoop.timer = null;
+        mainLog('[rec] GDI 推帧循环停止，共推 ' + recGdiLoop.frames + ' 帧');
+        recGdiLoop.frames = 0;
+    }
+}
+ipcMain.handle('rec:gdi-start', function (e, sx, sy, sw, sh) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return false; // 只接受主窗口来源
+    stopRecGdiLoop();
+    recGdiLoop.frames = 0;
+    recGdiLoop.sx = Math.round(sx); recGdiLoop.sy = Math.round(sy);
+    recGdiLoop.sw = Math.max(2, Math.round(sw)); recGdiLoop.sh = Math.max(2, Math.round(sh));
+    // 30fps 目标：区域抓屏只抓选区矩形（单帧数 ms 级）+ 光标内嵌；选区通常远小于全屏，主线程占用大降
+    recGdiLoop.timer = setInterval(function () {
+        try {
+            var img = gdiCaptureNow(recGdiLoop.sx, recGdiLoop.sy, recGdiLoop.sw, recGdiLoop.sh, true);
+            if (!img) {
+                if (!recGdiLoop.warnAt || Date.now() - recGdiLoop.warnAt > 2000) {
+                    recGdiLoop.warnAt = Date.now();
+                    mainLog('[rec] GDI 推帧：抓屏持续为空/异常（2s 节流）');
+                }
+                return;
+            }
+            var buf = img.toJPEG(85);
+            recGdiLoop.frames++;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('rec:gdi-frame', buf);
+            }
+        } catch (err) { /* 单帧异常跳过，循环继续 */ }
+    }, 33);
+    mainLog('[rec] GDI 推帧循环启动（选区 ' + recGdiLoop.sw + 'x' + recGdiLoop.sh + ' @30fps 含光标）');
+    return true;
+});
+ipcMain.on('rec:gdi-stop', function () { stopRecGdiLoop(); });
+// 提权状态查询：渲染层据此跳过 getUserMedia（提权下 WGC 必失败）直走 GDI 通道，省白试延迟
+ipcMain.handle('sys:is-elevated', function () { return procElevated; });
+
+// 长截图 GDI 区域采样（提权 getUserMedia 失败兜底）：渲染层每个采样 tick 请求一帧选区矩形，
+// 不含光标（光标会被重复烙进长图）。单次 invoke 应答式，无常驻循环。
+ipcMain.handle('stitch:sample', function (e, x, y, w, h) {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return null;
+    var img = gdiCaptureNow(Math.round(x), Math.round(y), Math.max(2, Math.round(w)), Math.max(2, Math.round(h)), false);
+    if (!img) return null;
+    return img.toJPEG(85);
 });
 
 // ===== 会议录制本地写盘（腾讯会议同款本地录制：文件只保存本地，服务端零媒体参与） =====
@@ -1245,8 +1353,19 @@ function createStitchBar() {
     });
     stitchBarWin.setAlwaysOnTop(true, 'screen-saver');
     stitchBarWin.loadURL(SERVER_URL + 'bar.html');
+    mainLog('[stitch] 条窗创建 @' + JSON.stringify(b));
     stitchBarWin.once('ready-to-show', function () {
         if (stitchBarWin && !stitchBarWin.isDestroyed()) stitchBarWin.show();
+    });
+    // 兜底显示：ready-to-show 未触发/被吞时 800ms 后强制显示（实测 2026-11-02 提权直走 GDI 通道后
+    // 条窗偶现"在 Alt+Tab 有内容但屏幕上看不到"——不显示则长截图无法继续）
+    stitchBarWin.webContents.once('did-finish-load', function () {
+        setTimeout(function () {
+            if (stitchBarWin && !stitchBarWin.isDestroyed() && !stitchBarWin.isVisible()) {
+                mainLog('[stitch] 条窗兜底显示（ready-to-show 后仍不可见）');
+                stitchBarWin.show();
+            }
+        }, 800);
     });
     stitchBarWin.on('closed', function () { stitchBarWin = null; });
 }
@@ -1269,6 +1388,9 @@ ipcMain.handle('stitch:begin', function (e, selPx) {
     x = Math.max(wa.x + 8, Math.min(x, wa.x + wa.width - w - 8));
     var y = Math.round(sy + sh + 12);
     if (y + h > wa.y + wa.height - 8) y = Math.round(sy - h - 12); // 选区下方放不下：翻转上方
+    // 阶段二百九十四：翻转/越界后必须夹紧进工作区——整屏选区（sy≈0，sh≈屏高）翻转后 y 为负值，
+    // 条窗被放到屏幕外顶部"看不到、点不开"（实测 2026-11-02：全屏选区 y=-73）
+    y = Math.max(wa.y + 8, Math.min(y, wa.y + wa.height - h - 8));
     stitchToolbarBounds = { x: x, y: y, width: w, height: h };
     // 原实现：主窗口 landStitchToolbar 缩条为 300×54（stitchRestore 记录恢复态 + setMinimumSize(0,0) 解除
     // 最小尺寸钳制 + Promise 轮询落地）——三态（全屏/最大化/普通）恢复复杂且 overlay 按钮遮挡工具条
@@ -3216,6 +3338,7 @@ function startEditorTask(data) {
     editorPending = { mode: mode, callback: data.callback || 'pending' };
     var win = ensureEditorWindow();
     var freezeLike = (mode === 'freeze' || mode === 'record');
+    mainLog('[editor] 编辑任务 mode=' + mode + ' 视口=' + JSON.stringify(win.getContentSize()) + ' 图=' + (function () { try { var m = data.dataUrl.match(/^data:image\/[a-z]+;base64,/); if (!m) return '?'; return require('electron').nativeImage.createFromDataURL(data.dataUrl).getSize().width + 'x' + require('electron').nativeImage.createFromDataURL(data.dataUrl).getSize().height; } catch (err) { return 'err'; } })());
     // 形态切换（复用窗口可能上次是另一模式）：freeze/record 全屏+置顶盖满屏幕，open 普通居中窗
     if (freezeLike) {
         if (!win.isFullScreen()) win.setFullScreen(true);
@@ -5613,6 +5736,7 @@ app.whenReady().then(async function () {
         const sh = require('koffi').load('shell32.dll');
         elevatedFlag = String(sh.func('bool __stdcall IsUserAnAdmin()')());
     } catch (e) { }
+    procElevated = elevatedFlag === 'true'; // 模块层缓存（渲染层据此跳过 getUserMedia 直走 GDI 通道，省去提权下必然失败的尝试）
     mainLog('[boot] 快捷键注册完成，提权运行=' + elevatedFlag);
     ensureEditorWindow(); // 编辑器窗口预热（启动即创建+加载页）：原实现首次截图/录屏才创建，
     // 首开整页加载延迟数百 ms~秒级（实测 2026-11-01 "编辑框出现特别慢"主因）；预热后秒开。

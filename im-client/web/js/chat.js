@@ -7124,9 +7124,20 @@
         sel: null,       // 录制选区（冻结底图坐标=屏幕物理像素）
         snapW: 0, snapH: 0, // 冻结底图尺寸（选区坐标归口，屏幕流分辨率不一致时按比例换算）
         startedAt: 0,    // 录制开始时间戳（时长统计）
-        maxTimer: 0      // 最长录制时长保护定时器
+        maxTimer: 0,     // 最长录制时长保护定时器
+        // 阶段二百九十四：GDI 帧录制兜底——提权（管理员）进程 WGC CreateForMonitor 返回
+        // E_ACCESSDENIED（实测 4 种启动开关形态均失败），getUserMedia 桌面流不可用；改由主进程
+        // GDI BitBlt 逐帧抓屏（~30ms/帧）JPEG 推帧，渲染层画到 canvas 后 captureStream，链路其余复用
+        gdi: false,      // 当前录制使用 GDI 帧模式（false=getUserMedia 屏幕流）
+        gdiW: 0, gdiH: 0,   // GDI 帧尺寸（主屏物理像素）
+        gdiPaint: null   // 帧到达回调（startRecRecorder 按当前裁剪矩形绘制；recCleanup 置空）
     };
     var REC_MAX_MS = 10 * 60 * 1000; // 最长录制 10 分钟（内存防线，到点自动停止）
+    // 进程提权状态（主进程检测；提权下 getUserMedia 桌面流必失败，直接走 GDI 通道省白试延迟）
+    var procElevated = false;
+    if (window.desktop && window.desktop.isElevated) {
+        window.desktop.isElevated().then(function (v) { procElevated = !!v; }).catch(function () { });
+    }
     // 实际生效的录屏全局快捷键（QQ 同款 Ctrl+Alt+R；被其他程序占用时主进程自动回退 Ctrl+Shift+R，启动时同步实际键位）
     var recShortcutLabel = 'Ctrl+Alt+R';
     if (window.desktop && window.desktop.recShortcut) {
@@ -7189,14 +7200,32 @@
     }
 
     // 倒计时结束：主窗口退场 → 拿屏幕流 → 启动裁剪录制（退场完成前不进录制，窗口残影不入镜）
+    // 阶段二百九十四：双通道——非提权 getUserMedia 屏幕流；提权直接 GDI 帧模式（WGC 必失败，
+    // 白试链路含重试约 1~1.5s 纯浪费，实测 2026-11-02），失败时非提权也自动落 GDI 兜底
     function onRecAreaStart(selImg, snapW, snapH) {
         recState.sel = selImg;
         recState.snapW = snapW;
         recState.snapH = snapH;
+        recState.gdi = false;
         var beginPromise = window.desktop.recBegin().catch(function () { return false; }); // 退场失败不阻断录制（画面可能带主窗口）
+        var fail = function (e) {
+            var detail = (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : '');
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('录屏取流失败: ' + detail);
+            showToast(I18N.t('录屏启动失败') + (detail ? I18N.t('：') + detail : ''));
+            recCleanup();
+            window.desktop.recShow();
+        };
+        if (procElevated) {
+            // 提权：跳过 getUserMedia（必失败），直走 GDI 帧
+            beginPromise.then(function () { return startGdiRecorder(); }).then(function () {
+                startRecRecorder();
+            }).catch(fail);
+            return;
+        }
         getDesktopStream().then(function (stream) {
             recState.stream = stream;
-            return beginPromise.then(function () { return stream; }); // 主窗口退场完成后再开播
+            recState.gdi = false;
+            return beginPromise.then(function () { return stream; });
         }).then(function (stream) {
             var video = document.createElement('video');
             recState.video = video;
@@ -7208,31 +7237,75 @@
                 startRecRecorder();
             };
         }).catch(function (e) {
-            // 错误名一并展示（TrackStartError/NotAllowedError 等定位捕获链路用）；落盘日志供远程排查
-            var detail = (e && e.name ? e.name + ' ' : '') + (e && e.message ? e.message : '');
-            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('录屏取流失败: ' + detail);
-            showToast(I18N.t('录屏启动失败') + (detail ? I18N.t('：') + detail : ''));
-            recCleanup();
-            window.desktop.recShow();
+            // getUserMedia 失败 → GDI 帧兜底（非提权偶发捕获失效场景；主进程 BitBlt 逐帧推流，链路其余复用）
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('getUserMedia 失败切 GDI 帧: ' + (e && e.name ? e.name + ' ' + e.message : e));
+            return beginPromise.then(function () { return startGdiRecorder(); }).then(function () {
+                startRecRecorder();
+            });
+        }).catch(fail);
+    }
+
+    // GDI 帧录制兜底：主进程只抓选区矩形（30fps 含光标）推 JPEG，渲染层等首帧到达后由 startRecRecorder 起录制
+    function startGdiRecorder() {
+        return new Promise(function (resolve, reject) {
+            var sel = recState.sel;
+            recState.gdi = true;
+            // 宽高强制偶数：VP8/VP9 编码器要求偶数尺寸，奇数选区会导致 MediaRecorder 失败
+            recState.gdiW = Math.max(2, Math.round(sel.w / 2) * 2);
+            recState.gdiH = Math.max(2, Math.round(sel.h / 2) * 2);
+            recState.gdiFrame = null;
+            recState.stream = null;
+            recState.video = null;
+            var waited = 0;
+            var iv = setInterval(function () {
+                waited += 50;
+                if (recState.gdiFrame) { clearInterval(iv); resolve(); }
+                else if (waited > 2000) { clearInterval(iv); reject(new Error(I18N.t('GDI 帧通道无数据'))); }
+            }, 50);
+            // 主进程只抓选区矩形（屏幕物理像素坐标 = 冻结底图坐标），帧即选区内容，渲染层无需再裁
+            window.desktop.recGdiStart(Math.round(sel.x), Math.round(sel.y), recState.gdiW, recState.gdiH).catch(function (err) {
+                clearInterval(iv);
+                reject(err);
+            });
         });
     }
 
     // 裁剪录制启动：选区坐标（冻结底图物理像素）按屏幕流实际分辨率比例换算后实时绘制
+    // 阶段二百九十四：双绘制源——getUserMedia 视频轨（rAF 裁剪循环）或 GDI 推帧（帧即选区内容，直接绘制），其余链路同源
     function startRecRecorder() {
         var video = recState.video, sel = recState.sel;
-        var fx = video.videoWidth / recState.snapW, fy = video.videoHeight / recState.snapH;
-        var cx = Math.round(sel.x * fx), cy = Math.round(sel.y * fy);
-        var cw = Math.max(2, Math.round(sel.w * fx)), ch = Math.max(2, Math.round(sel.h * fy));
         var canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
+        canvas.width = recState.gdi ? recState.gdiW : Math.max(2, Math.round(sel.w * (video.videoWidth / recState.snapW)));
+        canvas.height = recState.gdi ? recState.gdiH : Math.max(2, Math.round(sel.h * (video.videoHeight / recState.snapH)));
         recState.canvas = canvas;
         var ctx = canvas.getContext('2d');
-        var draw = function () {
-            if (!recState.recorder) return;
-            ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
-            recState.raf = requestAnimationFrame(draw);
-        };
+        var cx = 0, cy = 0, cw = canvas.width, ch = canvas.height, sx = 0, sy = 0;
+        if (!recState.gdi) {
+            // video 源：屏幕流分辨率与冻结底图可能不一致，按比例换算选区在视频帧中的像素矩形
+            sx = Math.round(sel.x * (video.videoWidth / recState.snapW));
+            sy = Math.round(sel.y * (video.videoHeight / recState.snapH));
+        }
+        if (recState.gdi) {
+            // GDI 推帧模式：帧即选区内容（主进程已按选区矩形抓屏+内嵌光标），帧到达直接整幅绘制；
+            // captureStream 随画布重绘自动采样，无 rAF 循环
+            recState.gdiPaint = function (buf) {
+                try {
+                    var blob = new Blob([buf], { type: 'image/jpeg' });
+                    createImageBitmap(blob).then(function (bmp) {
+                        try { ctx.drawImage(bmp, 0, 0, cw, ch); } catch (e) { }
+                        bmp.close();
+                    }).catch(function () { });
+                } catch (e) { }
+            };
+        } else {
+            var draw = function () {
+                if (!recState.recorder) return;
+                ctx.drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
+                recState.raf = requestAnimationFrame(draw);
+            };
+            recState.raf = 0;
+            recState.drawLoop = draw; // 起录后启动（video 元素在 GDI 模式不存在）
+        }
         var cstream = canvas.captureStream(30);
         var mime = 'video/webm;codecs=vp9';
         if (!window.MediaRecorder || !MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
@@ -7248,7 +7321,7 @@
         recState.active = true;
         recState.startedAt = Date.now();
         if (window.desktop.recActive) window.desktop.recActive(true);
-        draw();
+        if (!recState.gdi) recState.drawLoop(); // video 源：启动 rAF 绘制循环（GDI 源由帧到达驱动）
         // 最长时长保护：到点自动停止（内存防线）
         recState.maxTimer = setTimeout(function () {
             if (recState.active) {
@@ -7271,6 +7344,7 @@
     function onRecStopped() {
         if (recState.raf) cancelAnimationFrame(recState.raf);
         if (recState.stream) recState.stream.getTracks().forEach(function (t) { t.stop(); });
+        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop(); // GDI 推帧循环随录制结束停止
         var blob = new Blob(recState.chunks, { type: 'video/webm' });
         var durationMs = Date.now() - recState.startedAt;
         recState.chunks = [];
@@ -7279,6 +7353,9 @@
         recState.canvas = null;
         recState.stream = null;
         recState.raf = 0;
+        recState.gdi = false;
+        recState.gdiPaint = null;
+        recState.gdiFrame = null;
         window.desktop.recShow();
         if (!blob.size) { showToast(I18N.t('录屏数据为空')); return; }
         showRecPreview(blob, durationMs);
@@ -7294,12 +7371,16 @@
         recState.active = false;
         clearTimeout(recState.maxTimer);
         if (window.desktop.recActive) window.desktop.recActive(false);
+        if (recState.gdi && window.desktop.recGdiStop) window.desktop.recGdiStop(); // GDI 推帧循环随录制停止
         recState.chunks = [];
         recState.recorder = null;
         recState.video = null;
         recState.canvas = null;
         recState.stream = null;
         recState.raf = 0;
+        recState.gdi = false;
+        recState.gdiPaint = null;
+        recState.gdiFrame = null;
     }
 
     // 录屏预览浮层（自绘，禁止系统弹窗）：video 播放 + 时长/大小/目标会话 + 发送/取消
@@ -7379,12 +7460,13 @@
 
     // ===== 阶段一百三十九：QQ 同款长截图（冻结选区 → 悬浮小工具条 → 屏幕流采样 → 底部条带对齐拼接） =====
     // 链路：截图冻结选区后点工具栏"长截图"→ stitchBegin 主窗口缩为选区下方悬浮小条（置顶悬浮，
-    // 露出目标应用）→ getUserMedia 屏幕流每 250ms 抓选区帧 → 长图底部 30px 条带（1/2 降采样灰度）
-    // 在新帧自底向上 SSD 搜索对齐点 → 粗对齐命中后 full 域 ±3 行二次精对齐 → 把对齐点以下新内容追加
-    // 到长图 → 滚动过快匹配失败丢帧（toast 节流提示）→ 点"完成"恢复窗口 → 长图进既有编辑器标注/发送
-    var STITCH_INTERVAL = 250;  // 采样间隔 ms（4fps，CPU 占用与滚动跟手度平衡）
-    var STITCH_STRIP = 15;      // 对齐模板高度（1/2 降采样 small 行，= 原始 30 物理像素行）
-    var STITCH_TH = 12;         // 对齐判定阈值（灰度差均值/像素，低于视为匹配成功）
+    // 露出目标应用）→ 每 150ms 采样选区帧（提权走主进程 GDI 直抓，非提权走 getUserMedia 屏幕流）
+    // → 长图底部 60px 条带（1/2 降采样灰度）在新帧自底向上 SSD 搜索对齐点 → 粗对齐命中后 full 域
+    // ±3 行二次精对齐 → 把对齐点以下新内容追加到长图 → 滚动过快匹配失败丢帧（toast 节流提示）
+    // → 点"完成"恢复窗口 → 长图进既有编辑器标注/发送
+    var STITCH_INTERVAL = 150;  // 采样间隔 ms（6.7fps，更多机会采到滚动动画稳定帧；150% DPI 平滑滚动下 250ms 常采到亚像素偏移帧）
+    var STITCH_STRIP = 30;      // 对齐模板高度（1/2 降采样 small 行，= 原始 60 物理像素行；加高抗噪——30px 薄模板在亚像素偏移下均值波动大）
+    var STITCH_TH = 20;         // 对齐判定阈值（灰度差均值/像素，低于视为匹配成功；模板加高后误匹配风险更低，20 容忍亚像素偏移帧——实测失败帧 best 稳定 15~17.9）
     var STITCH_STATIC_TH = 2;   // 静止判定阈值（期望位置灰度差均值/像素，闪烁/压缩噪声级即视为未滚动）
     var STITCH_MAX_H = 16384;   // 长图最大高度（canvas 尺寸防线，到点自动完成）
     var stitchState = {
@@ -7400,7 +7482,8 @@
         timer: 0,          // 采样定时器句柄
         busy: false,       // 帧处理在途标记（防重入）
         finishing: false,  // 完成等待首帧中标记（防等待期重复点击）
-        lastWarn: 0        // 丢帧提示上次时间（toast 节流 2s）
+        lastWarn: 0,       // 丢帧提示上次时间（toast 节流 2s）
+        gdi: false         // 阶段二百九十四：GDI 区域采样模式（提权 getUserMedia 失败兜底；帧即选区内容）
     };
     var stitchToolbarEl = null; // 悬浮小工具条单例（状态文本 + 完成 + 取消）
 
@@ -7425,6 +7508,13 @@
         //    改为串行：窗口缩条落地后再拿屏幕流（缩条最多约 3s 轮询，捕获开始稍晚可接受）
         window.desktop.stitchBegin(selImg).catch(function () { /* 完成时统一恢复 */ }).then(function () {
             if (stitchState.active && stitchToolbarEl) stitchToolbarEl.classList.remove('hidden');
+            if (procElevated) {
+                // 提权：跳过 getUserMedia（必失败），直走 GDI 区域采样（帧即选区内容）
+                stitchState.gdi = true;
+                stitchState.video = null;
+                startStitchEngine();
+                return;
+            }
             return getDesktopStream(); // 3) 拿屏幕流（复用录屏链路）→ video 就绪后启动采样拼接循环
         }).then(function (stream) {
             if (!stitchState.active) { // 期间已被取消（Esc）：流直接释放
@@ -7446,8 +7536,12 @@
                 startStitchEngine();
             };
         }).catch(function (e) {
-            showToast(I18N.t('长截图启动失败') + (e && e.message ? I18N.t('：') + e.message : ''));
-            cancelStitch();
+            // 阶段二百九十四：getUserMedia 失败（提权 WGC E_ACCESSDENIED 等）→ GDI 区域采样兜底：
+            // 主进程 gdiCaptureRegion 按 250ms 节奏直接抓选区矩形，链路（对齐/拼接/长图）完全复用
+            if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('长截图 getUserMedia 失败切 GDI 采样: ' + (e && e.name ? e.name + ' ' + e.message : e));
+            stitchState.gdi = true;
+            stitchState.video = null;
+            startStitchEngine();
         });
     }
 
@@ -7500,15 +7594,24 @@
     // 拼接引擎启动：首帧落长图 → 建底部条带模板 → 定时采样
     function startStitchEngine() {
         var video = stitchState.video, sel = stitchState.sel;
-        if (!stitchState.active || !video || video.readyState < 2) { // 已取消或帧未就绪：取消直接退出；未就绪延后重进（画布重建幂等，longH 从 0 起算不受影响）
+        var gdi = stitchState.gdi;
+        if (!gdi && (!stitchState.active || !video || video.readyState < 2)) { // 已取消或帧未就绪：取消直接退出；未就绪延后重进（画布重建幂等，longH 从 0 起算不受影响）
             if (stitchState.active) setTimeout(startStitchEngine, 50);
             return;
         }
-        var fx = video.videoWidth / stitchState.snapW, fy = video.videoHeight / stitchState.snapH; // 底图→流 坐标比例
-        stitchState.cx = Math.round(sel.x * fx);
-        stitchState.cy = Math.round(sel.y * fy);
-        stitchState.cw = Math.max(2, Math.round(sel.w * fx));
-        stitchState.ch = Math.max(2, Math.round(sel.h * fy));
+        if (gdi) {
+            // GDI 区域采样：帧即选区内容（主进程 gdiCaptureRegion 直抓 sel 矩形），坐标零换算
+            stitchState.cx = 0;
+            stitchState.cy = 0;
+            stitchState.cw = Math.max(2, Math.round(sel.w));
+            stitchState.ch = Math.max(2, Math.round(sel.h));
+        } else {
+            var fx = video.videoWidth / stitchState.snapW, fy = video.videoHeight / stitchState.snapH; // 底图→流 坐标比例
+            stitchState.cx = Math.round(sel.x * fx);
+            stitchState.cy = Math.round(sel.y * fy);
+            stitchState.cw = Math.max(2, Math.round(sel.w * fx));
+            stitchState.ch = Math.max(2, Math.round(sel.h * fy));
+        }
         var work = document.createElement('canvas');
         work.width = stitchState.cw;
         work.height = stitchState.ch;
@@ -7524,17 +7627,61 @@
         stitchState.tmp = tmp;
         stitchState.tctx = tmp.getContext('2d', { willReadFrequently: true });
         // 首帧全量入长图并建模板
-        stitchState.wctx.drawImage(video, stitchState.cx, stitchState.cy, stitchState.cw, stitchState.ch, 0, 0, stitchState.cw, stitchState.ch);
-        stitchState.lctx.drawImage(work, 0, 0);
-        stitchState.longH = stitchState.ch;
-        buildStitchStrip();
-        updateStitchStatus(I18N.t('已捕获 ') + stitchState.longH + I18N.t('px，滚动页面继续'));
-        stitchState.timer = setInterval(stitchTick, STITCH_INTERVAL);
+        if (gdi) {
+            stitchSampleFrame().then(function (ok) {
+                if (!ok || !stitchState.active) { cancelStitch(); return; } // GDI 采样不可用：按取消收口
+                stitchState.lctx.drawImage(stitchState.work, 0, 0);
+                stitchState.longH = stitchState.ch;
+                buildStitchStrip();
+                updateStitchStatus(I18N.t('已捕获 ') + stitchState.longH + I18N.t('px，滚动页面继续'));
+                stitchState.timer = setInterval(stitchTick, STITCH_INTERVAL);
+            });
+        } else {
+            stitchState.wctx.drawImage(video, stitchState.cx, stitchState.cy, stitchState.cw, stitchState.ch, 0, 0, stitchState.cw, stitchState.ch);
+            stitchState.lctx.drawImage(work, 0, 0);
+            stitchState.longH = stitchState.ch;
+            buildStitchStrip();
+            updateStitchStatus(I18N.t('已捕获 ') + stitchState.longH + I18N.t('px，滚动页面继续'));
+            stitchState.timer = setInterval(stitchTick, STITCH_INTERVAL);
+        }
+    }
+
+    // GDI 区域采样一帧（主进程 gdiCaptureRegion 直抓 sel 矩形，JPEG 返回）→ 落入 wctx 快照；返回是否成功
+    function stitchSampleFrame() {
+        if (!window.desktop || !window.desktop.stitchSample) return Promise.resolve(false);
+        return window.desktop.stitchSample(Math.round(stitchState.sel.x), Math.round(stitchState.sel.y), stitchState.cw, stitchState.ch).then(function (buf) {
+            if (!buf) return Promise.resolve(false);
+            return createImageBitmap(new Blob([buf], { type: 'image/jpeg' })).then(function (bmp) {
+                var ok = true;
+                try { stitchState.wctx.drawImage(bmp, 0, 0, stitchState.cw, stitchState.ch); } catch (e) { ok = false; }
+                bmp.close();
+                return ok;
+            }).catch(function () { return false; });
+        }).catch(function () { return false; });
     }
 
     // 采样 tick：抓帧 → 对齐 → 追加（busy 防重入；单帧异常不中断循环）
+    function stitchDiag(msg) {
+        if (window.desktop && window.desktop.clientLog) window.desktop.clientLog('[stitch-gdi] ' + msg);
+    }
     function stitchTick() {
-        if (!stitchState.active || stitchState.busy || !stitchState.video || stitchState.video.readyState < 2) return;
+        if (!stitchState.active || stitchState.busy) return;
+        if (stitchState.gdi) {
+            // GDI 区域采样：主进程直抓 sel 矩形（异步 invoke），成功后走同一对齐/拼接管线
+            stitchState.busy = true;
+            stitchSampleFrame().then(function (ok) {
+                try {
+                    if (ok && stitchState.active) processStitchFrame();
+                    else stitchDiag('采样失败（invoke 空/异常）');
+                } catch (err) {
+                    stitchDiag('帧处理异常: ' + (err && err.message));
+                } finally {
+                    stitchState.busy = false;
+                }
+            });
+            return;
+        }
+        if (!stitchState.video || stitchState.video.readyState < 2) return;
         stitchState.busy = true;
         try {
             processStitchFrame();
@@ -7548,7 +7695,9 @@
     function processStitchFrame() {
         var cw = stitchState.cw, ch = stitchState.ch;
         // 1) 抓帧落快照（后续匹配/追加统一以快照为源，避免同帧两次 drawImage 画面撕裂）
-        stitchState.wctx.drawImage(stitchState.video, stitchState.cx, stitchState.cy, cw, ch, 0, 0, cw, ch);
+        if (!stitchState.gdi) {
+            stitchState.wctx.drawImage(stitchState.video, stitchState.cx, stitchState.cy, cw, ch, 0, 0, cw, ch);
+        } // GDI 模式：wctx 快照已由 stitchSampleFrame 直接落入（帧即选区内容）
         // 2) 新帧 1/2 降采样灰度
         var sw = stitchState.stripW, sh = stitchState.stripH; // 模板尺寸（降采样域）
         var smallW = Math.max(1, cw >> 1), smallH = Math.max(1, ch >> 1);
@@ -7558,25 +7707,46 @@
         stitchState.tctx.drawImage(stitchState.work, 0, 0, cw, ch, 0, 0, smallW, smallH);
         var small = grayOf(stitchState.tctx.getImageData(0, 0, smallW, smallH));
         var strip = stitchState.strip; // 模板须在静止短路前取值（var 不提升初始化，后置声明会致短路块引用 undefined）
-        // 3a) 静止短路：先比对期望对齐位置（帧底部条带 vs 长图底边模板），差异仅闪烁/压缩噪声级
-        //     即页面未滚动，直接跳过全帧搜索。防误追加：光标闪烁等微小动画使正确位置 SAD 偶发
-        //     劣于上方相似内容，静止帧会被误对齐追加重复条带（实测完成后静置期误增 486px）；
-        //     静止页面（最常见状态）同时省去每帧全帧搜索的 CPU 开销
-        var ty0 = smallH - sh;
-        if (ty0 >= 0) {
-            var sum0 = 0;
-            for (var y0 = 0; y0 < sh; y0++) {
-                var a0 = (ty0 + y0) * smallW, b0 = y0 * sw;
-                for (var x0 = 0; x0 < sw; x0++) {
-                    var d0 = small[a0 + x0] - strip[b0 + x0];
-                    sum0 += d0 < 0 ? -d0 : d0;
+        // 3a-1) 静态底栏检测（阶段二百九十四）：逐行对比上一帧，底部连续不变行=不可滚动 chrome
+        // （IDE 工具栏/任务栏等）。chrome 带不参与静止判定/模板/追加——否则模板恒匹配 chrome 原位、
+        // addH=0 永不拼接（实测 2026-11-02：选区底部为 IDE 工具栏时长截图冻结）
+        var rowsTotal = small.length / smallW;
+        var chromeRows = 0, contentSum = 0, contentLen = 0;
+        var prev = stitchState.prevSmall;
+        if (prev && prev.length === small.length) {
+            for (var ry = rowsTotal - 1; ry >= 0; ry--) {
+                var rSum = 0, rBase = ry * smallW;
+                for (var rx = 0; rx < smallW; rx++) {
+                    var rv = small[rBase + rx] - prev[rBase + rx];
+                    rSum += rv < 0 ? -rv : rv;
+                }
+                if (rSum / smallW < STITCH_STATIC_TH && ry >= (rowsTotal >> 1)) {
+                    chromeRows = rowsTotal - ry; // 底部连续静止带（上限半帧）
+                } else {
+                    for (var rx2 = 0; rx2 < smallW; rx2++) {
+                        var rv2 = small[rBase + rx2] - prev[rBase + rx2];
+                        contentSum += rv2 < 0 ? -rv2 : rv2;
+                    }
+                    contentLen += smallW;
                 }
             }
-            if (sum0 / (sw * sh) < STITCH_STATIC_TH) return; // 页面未滚动，无新内容
         }
-        // 3) 自底向上搜索模板（模板顶 ty ∈ [0, smallH-sh]）：绝对差和最小者即对齐点
+        // 3a-2) 静止判定：内容区整帧对比上一帧（chrome 带除外——整屏/带工具栏选区不再误判静止）
+        if (contentLen > 0 && contentSum / contentLen < STITCH_STATIC_TH) {
+            stitchState.prevSmall = small;
+            return; // 与上一帧完全相同：无任何变化
+        }
+        stitchState.prevSmall = small;
+        // 3a-3) chrome 检出后收缩长图内容底边（模板/追加不再包含 chrome 行；最终长图=纯滚动内容）
+        // 仅在首帧未被追加前裁剪一次（longH===ch）：chromeRows 逐帧波动（光标闪烁/阈值噪声），
+        // 逐帧收缩会把已拼接的 longH 反复砍短、追加内容互相覆盖（实测 2026-11-02：longH 在 583~841 抖动）
+        var chromeFull = chromeRows * 2;
+        var chEff = ch - chromeFull;
+        if (chromeRows > 0 && stitchState.longH === ch && chEff < ch) stitchState.longH = chEff;
+        // 3) 自底向上搜索模板（模板顶 ty ∈ [0, 内容区底-sh]）
         var best = Infinity, bestTy = -1;
-        for (var ty = smallH - sh; ty >= 0; ty--) {
+        var searchH = rowsTotal - chromeRows;
+        for (var ty = searchH - sh; ty >= 0; ty--) {
             var sum = 0;
             for (var y = 0; y < sh; y++) {
                 var a = (ty + y) * smallW, b = y * sw;
@@ -7589,16 +7759,17 @@
             if (sum < best) { best = sum; bestTy = ty; }
         }
         if (bestTy < 0 || best / (sw * sh) >= STITCH_TH) {
+            stitchDiag('对齐失败 best=' + (bestTy < 0 ? 'none' : Math.round(best / (sw * sh) * 100) / 100) + '，丢帧'); // 错误路径日志（滚动过快/内容突变时逐帧）
             warnStitchFast(); // 无重叠/滚动过快：丢帧
             return;
         }
         // 4) 精细二次对齐：full 域粗点 ±3 行内重搜（降采样域 ±2px 量化误差，精对齐消除拼接错位）
-        var alignY = fineStitchAlign(bestTy * 2);
+        var alignY = fineStitchAlign(bestTy * 2, chEff);
         if (alignY < 0) { warnStitchFast(); return; }
-        // 5) 追加对齐点以下的新内容（模板行之下 → 选区底边）
-        var stripFull = Math.min(STITCH_STRIP * 2, ch);
+        // 5) 追加对齐点以下的新内容（模板行之下 → 内容区底边=chrome 上沿）
+        var stripFull = Math.min(STITCH_STRIP * 2, chEff);
         var addY = alignY + stripFull;
-        var addH = ch - addY;
+        var addH = chEff - addY;
         if (addH <= 0) return; // 未滚动：无新内容
         if (stitchState.longH >= STITCH_MAX_H) { completeStitch(true); return; } // 达上限自动完成
         if (addH > STITCH_MAX_H - stitchState.longH) addH = STITCH_MAX_H - stitchState.longH;
@@ -7625,16 +7796,16 @@
 
     // 精细二次对齐（full 域）：模板=长图底部 stripFull 行原始分辨率灰度，在粗对齐点 ±3 行内重搜；
     // 返回模板顶在选区帧中的 full 域 y（<0 = 失败）
-    function fineStitchAlign(coarseY) {
-        var cw = stitchState.cw, ch = stitchState.ch;
-        var stripFull = Math.min(STITCH_STRIP * 2, ch);
+    function fineStitchAlign(coarseY, chEff) {
+        var cw = stitchState.cw;
+        var stripFull = Math.min(STITCH_STRIP * 2, chEff);
         var tmp = stitchState.tmp;
         tmp.width = cw;
         tmp.height = stripFull;
         stitchState.tctx.drawImage(stitchState.long, 0, stitchState.longH - stripFull, cw, stripFull, 0, 0, cw, stripFull);
         var tmpl = grayOf(stitchState.tctx.getImageData(0, 0, cw, stripFull));
-        var workGray = grayOf(stitchState.wctx.getImageData(0, 0, cw, ch)); // 整帧原始分辨率灰度
-        var lo = Math.max(0, coarseY - 3), hi = Math.min(ch - stripFull, coarseY + 3);
+        var workGray = grayOf(stitchState.wctx.getImageData(0, 0, cw, chEff)); // 整帧原始分辨率灰度（内容区）
+        var lo = Math.max(0, coarseY - 3), hi = Math.min(chEff - stripFull, coarseY + 3);
         var best = Infinity, bestY = -1;
         for (var y = lo; y <= hi; y++) {
             var sum = 0;
@@ -7790,6 +7961,7 @@
         if (stitchState.stream) stitchState.stream.getTracks().forEach(function (t) { t.stop(); });
         stitchState.stream = null;
         stitchState.video = null;
+        stitchState.gdi = false; // GDI 区域采样模式复位
         stitchState.work = null;
         stitchState.wctx = null;
         stitchState.tmp = null;
@@ -7860,6 +8032,15 @@
     if (window.desktop && window.desktop.onMainToast) {
         window.desktop.onMainToast(function (text) {
             showToast(text); // 主进程侧失败反馈（全局截图失败等无窗口场景）
+        });
+    }
+    // GDI 帧录制兜底：主进程 BitBlt 逐帧 JPEG → 当前裁剪矩形绘制（提权 WGC 不可用场景，见 recState 注释）
+    if (window.desktop && window.desktop.onRecGdiFrame) {
+        window.desktop.onRecGdiFrame(function (buf) {
+            // 帧必须先落地再触发绘制——startGdiRecorder 以 gdiFrame 非空为首帧就绪判定，
+            // 只调 gdiPaint（此时为 null）会造成"等首帧死锁"（实测 2026-11-02：GDI 帧通道无数据）
+            recState.gdiFrame = buf;
+            if (recState.gdiPaint) recState.gdiPaint(buf);
         });
     }
     // 截图快捷键标签同步（Alt+A 被微信等占用回退 Alt+Q 时悬停提示跟随实际键位；拉取容错同录屏键位）
