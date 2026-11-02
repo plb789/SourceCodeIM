@@ -72,6 +72,22 @@
     function enterChat() {
         if (document.body.classList.contains('in-chat')) return;
         document.body.classList.add('in-chat');
+        // 收起首页顶栏展开的搜索框并复位搜索状态（chat.js 的 closeSidebarSearch 未导出，此处同口径收口），
+        // 否则未关闭搜索框直接点会话进聊天页时，搜索框浮层会残留在聊天页上方遮挡内容
+        var searchBar = document.querySelector('.search-bar');
+        if (searchBar) searchBar.classList.remove('search-open');
+        var searchInput = document.getElementById('search-input');
+        if (searchInput) {
+            searchInput.blur();
+            searchInput.value = '';
+        }
+        var searchClearBtn = document.getElementById('search-clear-btn');
+        if (searchClearBtn) searchClearBtn.classList.add('hidden');
+        var searchPanel = document.getElementById('search-panel');
+        if (searchPanel) {
+            searchPanel.classList.add('hidden');
+            searchPanel.innerHTML = '';
+        }
         // 物理返回键桥接：推入一条历史记录，Android 返回键触发 popstate 时退回列表视图
         try {
             if (isNative && !history.state) history.pushState({ im_chat: true }, '');
