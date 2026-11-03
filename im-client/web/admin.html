@@ -1364,9 +1364,9 @@
                 <div class="gm-layout-body">
                     <div class="gm-layout-col">
                         <div class="gm-cfg-label">布局模板</div>
-                        <label class="gm-cfg-radio"><input type="radio" name="gm-cfg-layout" value="steam"><span>Steam 同款（轮播 + 精选 + 标签条 + 全部游戏）</span></label>
+                        <label class="gm-cfg-radio"><input type="radio" name="gm-cfg-layout" value="steam"><span>完整布局（轮播 + 精选 + 标签条 + 全部游戏）</span></label>
                         <label class="gm-cfg-radio"><input type="radio" name="gm-cfg-layout" value="grid"><span>经典网格（仅全部游戏网格）</span></label>
-                        <div class="gm-cfg-label">区块开关（仅 Steam 同款布局生效）</div>
+                        <div class="gm-cfg-label">区块开关（仅完整布局生效）</div>
                         <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-carousel"><i></i><span>特色推荐轮播</span></label>
                         <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-featured"><i></i><span>热门精选卡片流</span></label>
                         <label class="gm-cfg-switch"><input type="checkbox" id="gm-cfg-tagbar"><i></i><span>标签筛选条</span></label>
@@ -1389,7 +1389,7 @@
                         <button id="gm-sec-save" class="admin-btn small primary">保存区块</button>
                     </span>
                 </div>
-                <p class="admin-view-tip">商店页可同时显示多个样式区块（Steam 首页同款），每区块单独设置标题、展示样式与游戏列表，哪些游戏放进哪个区块由此处配置；区块自上而下按列表顺序渲染在顶部轮播之后。每区块最多 12 款游戏、最多 8 个区块，保存后用户下次打开商店即生效。</p>
+                <p class="admin-view-tip">商店页可同时显示多个样式区块，每区块单独设置标题、展示样式与游戏列表，哪些游戏放进哪个区块由此处配置；区块自上而下按列表顺序渲染在顶部轮播之后。每区块最多 12 款游戏、最多 8 个区块，保存后用户下次打开商店即生效。</p>
                 <div id="gm-sec-list"></div>
             </div>
             </section>
@@ -1400,7 +1400,7 @@
                 <h2>新增游戏</h2>
                 <span id="gm-status" class="admin-view-tip">加载中…</span>
             </header>
-            <p class="admin-view-tip">游戏中心运营归口（Steam 同款）：维护游戏元数据与版本安装包。新建游戏先填 slug（即安装目录名，创建后不可修改）；版本经列表「版本」选择整个游戏目录上传——逐文件 SHA-256 校验、8MB 分片直传、登记后客户端商店立即可见。单文件前端上限 2GB（超出请压缩后上传），文件清单上限 5000 项，空文件自动跳过。</p>
+            <p class="admin-view-tip">游戏中心运营归口：维护游戏元数据与版本安装包。新建游戏先填 slug（即安装目录名，创建后不可修改）；版本经列表「版本」选择整个游戏目录上传——逐文件 SHA-256 校验、8MB 分片直传、登记后客户端商店立即可见。单文件前端上限 2GB（超出请压缩后上传），文件清单上限 5000 项，空文件自动跳过。</p>
             <!-- 新建/编辑表单卡（进入本页即新建态；点列表「编辑」切换为编辑态并回填） -->
             <div class="gm-layout-card" id="gm-edit-card">
                 <div class="gm-layout-head">
@@ -1484,7 +1484,7 @@
                     <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="checkbox" id="gm-f-rgw-enabled">启用积分充值</label>
                     <select id="gm-f-rgw-gw" class="admin-input" style="max-width:280px;"><option value="">充值网关（必选）</option></select>
                     <input id="gm-f-rgw-rate" type="number" step="0.001" min="0" class="admin-input gm-num-input" placeholder="汇率 1积分=N币" value="1" title="1 积分兑换的游戏币数量（到账数值=积分×汇率，下单时快照）">
-                    <input id="gm-f-rgw-tiers" class="admin-input" style="max-width:280px;" placeholder="积分档位（逗号分隔，如 100,500,1000）" maxlength="255" title="档位式充值：玩家只能按这些固定档位下单（Steam 添加资金同款），档位即单笔白名单">
+                    <input id="gm-f-rgw-tiers" class="admin-input" style="max-width:280px;" placeholder="积分档位（逗号分隔，如 100,500,1000）" maxlength="255" title="档位式充值：玩家只能按这些固定档位下单，档位即单笔白名单">
                     <input id="gm-f-rgw-daily" type="number" step="0.001" min="0" class="admin-input gm-num-input" placeholder="单日限额（0=不限）" value="0">
                 </div>
                 <span class="admin-field-hint">积分充值（档位式）：开启并选择承接网关后，玩家在游戏详情页按固定档位用积分兑换游戏币（到账=积分×汇率），订单由网关参数化 SQL 写入游戏库，失败自动退分。档位即单笔白名单（非法数值一律拒绝）；日限额按用户按游戏每日累计（pending 占额）。网关侧需在网关后台「积分兑换充值」配置该游戏 ID 的 DSN 与 SQL</span>
@@ -1584,7 +1584,7 @@
                     <h2>充值订单</h2>
                     <span id="grod-status" class="admin-view-tip">-</span>
                 </header>
-                <p class="admin-view-tip">积分兑换充值订单审计：玩家按档位用积分兑换游戏币（Steam 添加资金同款），订单经网关参数化 SQL 写入游戏库。处理中（pending）积分已扣待网关执行，超 30 分钟未完成自动退分（failed）；成功（success）已到账游戏库。</p>
+                <p class="admin-view-tip">积分兑换充值订单审计：玩家按档位用积分兑换游戏币，订单经网关参数化 SQL 写入游戏库。处理中（pending）积分已扣待网关执行，超 30 分钟未完成自动退分（failed）；成功（success）已到账游戏库。</p>
                 <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">
                     <input id="grod-f-user" class="admin-input" style="max-width:200px;" placeholder="用户名关键词（可空）" maxlength="64">
                     <input id="grod-f-game" type="number" class="admin-input gm-num-input" placeholder="游戏 ID（可空）" style="max-width:140px;">

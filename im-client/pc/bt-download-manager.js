@@ -215,14 +215,16 @@ class BtDownloadManager extends EventEmitter {
     }
 
     // 取消：引擎侧删全部已下数据与 status 文件（del=1），任务移出任务表；
-    // 已完整落盘文件由引擎按种子分片记录删除，与 HTTP 取消（删 .part）语义对齐
-    cancel(taskId) {
+    // 已完整落盘文件由引擎按种子分片记录删除，与 HTTP 取消（删 .part）语义对齐。
+    // keepData=true（done 任务收口：移出库/新任务顶替做种）：del=0 仅释放引擎句柄停做种，
+    // 已装游戏文件保留——UI 承诺"已安装文件不会被删除"，done 任务绝不可走 del=1
+    cancel(taskId, keepData) {
         const task = this.tasks.get(String(taskId || ''));
         if (!task) return { ok: false, error: '任务不存在' };
         if (task._seedTimer) { clearTimeout(task._seedTimer); task._seedTimer = null; }
         task.state = 'cancelled';
         task._speed = 0;
-        this._send({ cmd: 'cancel', id: task.taskId, del: 1 });
+        this._send({ cmd: 'cancel', id: task.taskId, del: keepData ? 0 : 1 });
         this.tasks.delete(task.taskId);
         this._emit(task, true, null, 'cancel'); // 取消终态必发一条（页面清理 UI）
         this._safeUnlink(task._torPath);        // 本地种子缓存一并清理

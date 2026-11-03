@@ -2709,9 +2709,22 @@
         Promise.resolve(DESKTOP.gameDownload({ action: 'status' })).then(function (r) {
             var list = Array.isArray(r) ? r : (r && (r.tasks || r.list)) || [];
             if (!Array.isArray(list)) list = [];
+            // 活动任务优先处理：固定先 HTTP 后 BT 的原始顺序会让同游戏"HTTP 错误任务 + BT 活动任务"
+            // 场景下错误卡先占 taskByGame，守卫反把活动任务拦在页面外；按 活动态→终态 重排后逐项走守卫
+            var actList = [], termList = [];
             list.forEach(function (raw) {
+                var st = String((raw && raw.state) || '');
+                if (st === 'cancel' || st === 'cancelled') return; // 取消终态不复活
+                (st === 'queued' || st === 'downloading' || st === 'paused' || st === 'verifying' ? actList : termList).push(raw);
+            });
+            actList.concat(termList).forEach(function (raw) {
                 var taskId = raw && (raw.taskId || raw.task_id || raw.id);
                 if (!taskId) return;
+                var rawGid = raw.gameId !== undefined ? raw.gameId : raw.game_id;
+                // 同游戏页面已有任务（进行中/出错）时跳过主进程残留旧任务：BT 失败回退 HTTP 重下后，
+                // 旧 BT 任务仍驻主进程表（error 态保留供"继续"），全量拉取会把它复活成同游戏第二张卡片
+                if (rawGid !== undefined && rawGid !== null && state.taskByGame[rawGid] &&
+                    state.taskByGame[rawGid] !== taskId && state.tasks[state.taskByGame[rawGid]]) return;
                 var t = state.tasks[taskId];
                 if (!t) {
                     t = state.tasks[taskId] = {
@@ -2895,6 +2908,13 @@
                 var dlMethod = Number(g.download_method) || 0;
                 var viaBt = !forceHttp && (dlMethod === 1 || dlMethod === 2) && !!slug; // BT 需种子锚点 slug
                 var taskId = 'g' + gid + '-' + Date.now();
+                // 同游戏旧任务卡清理：重下/回退重建换新 taskId，页面残留旧任务（如 BT 失败任务、
+                // 重复点下载产生的旧卡）一并移除，防同游戏双卡片（gameId 可能字符串/数字异型，归一比较）
+                for (var oldTid in state.tasks) {
+                    var ot = state.tasks[oldTid];
+                    if (ot && oldTid !== taskId && ot.gameId !== undefined && ot.gameId !== null &&
+                        String(ot.gameId) === String(gid)) delete state.tasks[oldTid];
+                }
                 var dirPayload = isGameRoot ? { finalDir: installDir } : { installDir: installDir };
                 state.tasks[taskId] = {
                     taskId: taskId,
@@ -2911,6 +2931,36 @@
                     via: viaBt ? 'bt' : 'http'
                 };
                 state.taskByGame[gid] = taskId;
+                // 主进程同游戏活动任务去重回填：另一窗口已先行 start（多窗口同帧 BT 失败回退）或
+                // 重复点下载时，主进程复用既有任务返回其摘要——本地卡换绑到真实 taskId 并对齐进度，
+                // 否则本地新 taskId 永远等不到进度帧（卡死 0%），主进程也在重复下载
+                var adoptDedup = function (r) {
+                    var rt = r && r.task;
+                    if (!r || !r.ok || !rt || !rt.taskId || rt.taskId === taskId) return;
+                    var local = state.tasks[taskId];
+                    delete state.tasks[taskId];
+                    if (local) {
+                        local.taskId = rt.taskId;
+                        if (rt.state) local.state = rt.state;
+                        if (typeof rt.received === 'number') local.received = rt.received;
+                        if (typeof rt.total === 'number' && rt.total > 0) local.total = rt.total;
+                        if (rt.via) local.via = rt.via;
+                        if (rt.installDir) local.installDir = rt.installDir;
+                        state.tasks[rt.taskId] = local;
+                    } else {
+                        state.tasks[rt.taskId] = {
+                            taskId: rt.taskId, gameId: gid, name: g.name || '',
+                            state: rt.state || 'downloading', received: rt.received || 0,
+                            total: rt.total || 0, via: rt.via || ''
+                        };
+                    }
+                    state.taskByGame[gid] = rt.taskId;
+                    if (rt.state === 'paused') {
+                        putLibState(gid, { state: 2, installed_version: prevInstalled, install_path: installDir });
+                    }
+                    toast(T('该游戏已在下载中，已关联现有任务'));
+                    refreshViews();
+                };
                 if (viaBt) {
                     // BT/P2SP：主进程下载种子（服务端 /api/game/torrent/{id} 与文件接口同水位鉴权）
                     // 后挂引擎；首次落盘 <installDir>/<slug>/<rel_path>，更新 finalDir 直传沿用游戏根
@@ -2918,7 +2968,7 @@
                     // 引擎 DLBT_SetReportIP 向 Tracker 自报供自建 Tracker 优先采信；空=跳过走默认来源记录
                     var reportIp = '';
                     try { reportIp = localStorage.getItem('real_ip') || ''; } catch (eRip) {}
-                    DESKTOP.gameDownload(Object.assign({
+                    Promise.resolve(DESKTOP.gameDownload(Object.assign({
                         action: 'start',
                         via: 'bt',
                         taskId: taskId,
@@ -2931,13 +2981,13 @@
                         p2sp: dlMethod === 1, // 仅服务端生成种子方式叠加 P2SP 直链源；上传种子为纯 BT
                         reportIp: reportIp,
                         files: manifest.files || []
-                    }, dirPayload));
+                    }, dirPayload))).then(adoptDedup);
                     toast((dlMethod === 2 ? T('开始 BT 下载（上传种子）：') : T('开始 BT 下载：')) + (g.name || (T('游戏 #') + gid)));
                 } else {
                     // 大文件下载交给主进程下载器（支持 Range 断点续传），页面只订阅进度
                     // 首次落盘 <installDir>/<slug>/<rel_path>（主进程同盘暂存后一次性换入，与 BT 通道归一）；
                     // 更新 finalDir 直传沿用游戏根（防游戏根被当安装根再叠一层 slug → 双层目录）
-                    DESKTOP.gameDownload(Object.assign({
+                    Promise.resolve(DESKTOP.gameDownload(Object.assign({
                         action: 'start',
                         taskId: taskId,
                         gameId: gid,
@@ -2945,7 +2995,7 @@
                         username: username,
                         serverBase: location.origin,
                         files: manifest.files || []
-                    }, dirPayload));
+                    }, dirPayload))).then(adoptDedup);
                     toast(T('开始下载：') + (g.name || (T('游戏 #') + gid)));
                 }
                 putLibState(gid, { state: 1, installed_version: prevInstalled, install_path: installDir });
@@ -4300,12 +4350,17 @@
         var g = state.games[gid] || {};
         var name = g.name || (state.lib[gid] && state.lib[gid].game && state.lib[gid].game.name) || (T('游戏 #') + gid);
         showConfirm(T('移出游戏库'), T('确定将「') + name + T('」移出游戏库？进行中的下载将被取消，已安装文件不会被删除，获取时支付的积分将全额退还。'), T('移出'), function () {
-            var taskId = state.taskByGame[gid];
-            if (taskId && DESKTOP && DESKTOP.gameDownload) {
-                DESKTOP.gameDownload({ action: 'cancel', taskId: taskId, gameId: gid, username: username });
-                delete state.tasks[taskId];
-                delete state.taskByGame[gid];
+            // 同游戏任务全量清扫：主进程按 gameId 取消双管理器全部同游戏任务（all=true，含页面
+            // 未知的残留任务——其帧被页面去重守卫挡在页面外，逐个 taskId cancel 够不着）；本地
+            // 卡片/映射一并移除，防 pullStatus 复活旧任务成卡
+            if (DESKTOP && DESKTOP.gameDownload) {
+                DESKTOP.gameDownload({ action: 'cancel', all: true, gameId: gid, username: username });
             }
+            for (var dtid in state.tasks) {
+                var dt = state.tasks[dtid];
+                if (dt && dt.gameId !== undefined && dt.gameId !== null && String(dt.gameId) === String(gid)) delete state.tasks[dtid];
+            }
+            delete state.taskByGame[gid];
             api('DELETE', '/api/game/library/' + gid).then(function (res) {
                 if (!res.ok) { toast(res.msg || T('移出失败')); return; }
                 if (res.data && res.data.balance !== undefined && res.data.balance !== null) { state.balance = res.data.balance; syncPointsOut(res.data.balance); }
@@ -5176,7 +5231,7 @@
     function rchgRenderAmount() {
         var c = rchg.cfg;
         if (!rchg.pick) {
-            $('gsRchgAmount').textContent = T('请选择充值档位（固定档位，Steam 添加资金同款）');
+            $('gsRchgAmount').textContent = T('请选择充值档位（固定档位）');
             return;
         }
         $('gsRchgAmount').innerHTML = T('将扣除 ') + '<b>' + fmtPoints(rchg.pick) + '</b>' + T(' 积分，到账 ') +
@@ -5313,8 +5368,23 @@
     if (DESKTOP && DESKTOP.onGameDownload) {
         DESKTOP.onGameDownload(function (p) {
             if (!p || !p.taskId) return;
+            // 取消终态帧收口：taskAction('cancel') 已先行删任务，此处不得按帧复活
+            // （主进程取消必发一条 state='cancel' 终态帧，此前未知 taskId 被无条件重建 → 幽灵卡常驻）
+            if (p.state === 'cancel' || p.state === 'cancelled') {
+                var deadT = state.tasks[p.taskId];
+                delete state.tasks[p.taskId];
+                if (deadT && deadT.gameId !== undefined && deadT.gameId !== null &&
+                    state.taskByGame[deadT.gameId] === p.taskId) delete state.taskByGame[deadT.gameId];
+                scheduleRefresh();
+                return;
+            }
             var t = state.tasks[p.taskId];
             if (!t) {
+                // 同游戏已有存活任务时忽略未知旧任务晚到帧：BT 失败回退 HTTP 重下后，旧 BT 任务
+                // 仍驻主进程任务表（error 态保留供"继续"），其进度/错误帧晚到会把旧任务复活成
+                // 同游戏第二张卡片
+                var liveTid = (p.gameId !== undefined && p.gameId !== null) ? state.taskByGame[p.gameId] : undefined;
+                if (liveTid && liveTid !== p.taskId && state.tasks[liveTid]) return;
                 t = state.tasks[p.taskId] = { taskId: p.taskId, gameId: p.gameId };
                 if (p.gameId !== undefined && p.gameId !== null) state.taskByGame[p.gameId] = p.taskId;
             }

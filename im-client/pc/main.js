@@ -392,8 +392,8 @@ browserManager.setCdpSwitch();
 app.setAppUserModelId('com.im.client');
 
 // 服务端地址（默认本地）
-const SERVER_URL = 'http://127.0.0.1:2087/';
-//const SERVER_URL = 'https://im.sxgyxny.com/';
+//const SERVER_URL = 'http://127.0.0.1:2087/';
+const SERVER_URL = 'https://im.sxgyxny.com/';
 
 // ===== 阶段一百四十五：非安全上下文媒体能力兜底（公网/局域网 IP 部署场景） =====
 // SERVER_URL 配置为 http://非localhost（公网/局域网 IP 直连部署）时，Chromium 安全策略对 Electron
@@ -1917,11 +1917,50 @@ ipcMain.handle('game:download', function (event, payload) {
         var viaBt = payload && payload.via === 'bt';
         if (action === 'start') {
             if (viaBt) fwEnsureDlbtHost(); // BT 引擎入站放行（fire-and-forget，异步不阻塞下载启动）
+            // 同游戏活动任务去重：多窗口同帧收到 BT 失败回退各自动 start、或重复点下载时，
+            // 同游戏（跨 BT/HTTP 双管理器）只允许一个活动任务（queued/downloading/paused/verifying），
+            // 复用既有任务返回其摘要（页面按返回 taskId 对齐本地卡）；error/done 不拦——失败回退
+            // HTTP 重下与完成后重下均为合法新任务。IPC 串行处理 + 两管理器 start 同步注册任务表，
+            // 并发 start 无检查-插入竞态
+            var gidS = String((payload && payload.gameId) || '');
+            if (gidS) {
+                var all0 = gameDownloads.status().concat(btDownloads.status());
+                for (var i0 = 0; i0 < all0.length; i0++) {
+                    var t0 = all0[i0];
+                    if (String(t0.gameId || '') !== gidS) continue;
+                    // 同游戏旧 done 任务先收口（BT keepData 释放句柄停做种保文件，HTTP 移表）：
+                    // 重下/更新后旧做种已无意义（文件将被新任务覆写），且防 pullStatus 复活出
+                    // 同游戏双"做种中"卡
+                    if (t0.state === 'done') {
+                        if (btDownloads.owns(t0.taskId)) btDownloads.cancel(t0.taskId, true);
+                        else gameDownloads.cancel(t0.taskId);
+                        continue;
+                    }
+                    if (t0.state === 'queued' || t0.state === 'downloading' || t0.state === 'paused' || t0.state === 'verifying') {
+                        return { ok: true, deduped: true, task: t0, tasks: gameDownloads.status().concat(btDownloads.status()) };
+                    }
+                }
+            }
             var mgr0 = viaBt ? btDownloads : gameDownloads;
             var r = mgr0.start(payload);
             return r.ok ? { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) } : { ok: false, error: r.error };
         }
         if (action === 'pause' || action === 'resume' || action === 'cancel') {
+            // 移出库全量清扫（all=true + gameId）：按 gameId 取消双管理器全部同游戏任务——
+            // 含页面未知的残留任务（其进度/错误帧被页面同游戏去重守卫挡在页面外，state.tasks 无记录，
+            // 页面按 taskId 逐个 cancel 够不着；漏掉会在下次 pullStatus 复活成卡）。
+            // done 任务走 keepData 收口（BT del=0 保已装文件停做种，HTTP 移表）：UI 承诺
+            // "已安装文件不会被删除"，done 任务绝不可 del=1
+            if (action === 'cancel' && payload.all && payload.gameId !== undefined && payload.gameId !== null) {
+                var gidC = String(payload.gameId);
+                gameDownloads.status().forEach(function (t) {
+                    if (String(t.gameId || '') === gidC) gameDownloads.cancel(t.taskId);
+                });
+                btDownloads.status().forEach(function (t) {
+                    if (String(t.gameId || '') === gidC) btDownloads.cancel(t.taskId, t.state === 'done');
+                });
+                return { ok: true, tasks: gameDownloads.status().concat(btDownloads.status()) };
+            }
             // pause/resume/cancel 页面不带 via：按 taskId 归属路由（双管理器任务表互斥，无歧义）
             var tid = payload && payload.taskId;
             var mgr = btDownloads.owns(tid) ? btDownloads : gameDownloads;

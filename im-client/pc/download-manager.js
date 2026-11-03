@@ -591,7 +591,8 @@ class GameDownloadManager extends EventEmitter {
             filesCount: task.files.length,
             speed: task._speed,
             diskSpeed: task._diskSpeed || 0,
-            startedAt: task.startedAt
+            startedAt: task.startedAt,
+            via: 'http' // 通道标识（与 BT 摘要同口径；页面去重采纳/徽标展示按此区分）
         };
     }
 
