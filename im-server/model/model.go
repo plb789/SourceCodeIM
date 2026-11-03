@@ -1148,6 +1148,33 @@ type RechargeOrder struct {
 // TableName 表名沿用 im_ 前缀约定
 func (RechargeOrder) TableName() string { return "im_recharge_order" }
 
+// 充值卡状态（卡密充值，状态机单向迁移：0→1 核销 / 0→2 作废，终态不可逆）
+const (
+	RechargeCardStatusUnused  int8 = 0 // 未使用
+	RechargeCardStatusUsed    int8 = 1 // 已使用（used_by/used_at 记录核销人与时间）
+	RechargeCardStatusVoided  int8 = 2 // 已作废（管理端操作，仅未使用卡可作废）
+)
+
+// RechargeCard 充值卡表 im_recharge_card（充值卡功能开发文档 §3.1.1）：管理员按面值批量生成
+// 卡号+卡密，玩家在游戏中心标题栏弹窗核销入积分钱包（事务内条件更新 status 0→1，RowsAffected=1
+// 唯一赢家——并发/重复提交绝不可能双得）。明文存储（已拍板：可按批次重新导出补发）。
+// 索引：card_no/card_key 唯一索引（防碰撞主防线）、batch_no（批次导出/列表）、status（筛选）
+type RechargeCard struct {
+	ID         uint64     `gorm:"primaryKey" json:"id"`
+	CardNo     string     `gorm:"column:card_no;size:24;uniqueIndex" json:"card_no"`  // 卡号（前缀+12位纯数字）
+	CardKey    string     `gorm:"column:card_key;size:24;uniqueIndex" json:"card_key"` // 卡密（16位去易混淆字符字母数字）
+	Points     float64    `gorm:"column:points;type:double" json:"points"`             // 面值（积分，3 位小数口径）
+	Status     int8       `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
+	BatchNo    string     `gorm:"column:batch_no;size:32;index" json:"batch_no"`      // 批次号（CR+时间戳，同次生成归组）
+	CreatedBy  string     `gorm:"column:created_by;size:64;default:''" json:"created_by"` // 生成管理员
+	UsedBy     string     `gorm:"column:used_by;size:64;default:''" json:"used_by"`   // 核销用户
+	UsedAt     *time.Time `gorm:"column:used_at" json:"used_at"`                      // 核销时间
+	CreateTime time.Time  `gorm:"column:create_time;autoCreateTime" json:"create_time"`
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RechargeCard) TableName() string { return "im_recharge_card" }
+
 // TableName 表名沿用 im_ 前缀约定
 func (Game) TableName() string { return "im_game" }
 

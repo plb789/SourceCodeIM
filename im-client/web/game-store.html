@@ -3505,8 +3505,24 @@
             </div>
             <div class="gs-user-card-hint" id="gsCardPwHint"></div>
         </div>
+        <button class="gs-user-card-btn" id="gsCardRedeem">卡密充值</button>
         <button class="gs-user-card-btn" id="gsCardProfile">个人资料</button>
         <button class="gs-user-card-btn" id="gsCardSettings">设置</button>
+    </div>
+
+    <!-- 自绘卡密充值弹窗：卡号+卡密核销入积分钱包（Steam 兑换码风格；无系统弹窗，主题变量取色） -->
+    <div class="gs-modal-mask hidden" id="gsCardRchgMask">
+        <div class="gs-modal gs-rchg-modal">
+            <div class="gs-modal-title left" id="gsCardRchgTitle">卡密充值</div>
+            <div class="gs-rchg-info" id="gsCardRchgHint">输入充值卡卡号与卡密，积分即时到账。</div>
+            <input class="gs-rev-input" id="gsCardNoInput" maxlength="24" placeholder="卡号（如 IM123456789012）" style="min-height:0;padding:10px 12px;">
+            <input class="gs-rev-input" id="gsCardKeyInput" maxlength="24" placeholder="卡密（16 位）" style="min-height:0;margin-top:10px;padding:10px 12px;">
+            <div class="gs-rchg-amount" id="gsCardRchgResult"></div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsCardRchgCancel">取消</button>
+                <button class="gs-btn primary" id="gsCardRchgOk">立即充值</button>
+            </div>
+        </div>
     </div>
 
     <!-- 库左侧列表右键菜单（自绘，禁系统菜单；主题色，定位到光标） -->
@@ -3683,7 +3699,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=71"></script>
+    <script src="js/game-store.js?v=73"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

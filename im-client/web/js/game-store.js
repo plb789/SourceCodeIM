@@ -3333,6 +3333,46 @@
         $('gsCardVipCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(vipVal); });
         // 外网 IP 复制（BT 做种诊断/分享用）
         $('gsCardExtIpCopy').addEventListener('click', function (e) { e.stopPropagation(); copyText(extVal); });
+
+        // ── 卡密充值（充值卡功能开发文档 §3.3）：悬停卡入口 → 自绘弹窗 → 核销入积分钱包 ──
+        $('gsCardRedeem').addEventListener('click', function () {
+            hide();
+            $('gsCardNoInput').value = '';
+            $('gsCardKeyInput').value = '';
+            $('gsCardRchgResult').textContent = '';
+            $('gsCardRchgMask').classList.remove('hidden');
+            setTimeout(function () { $('gsCardNoInput').focus(); }, 50);
+        });
+        var cardRchgSubmit = function () {
+            var cardNo = $('gsCardNoInput').value.trim();
+            var cardKey = $('gsCardKeyInput').value.trim();
+            if (!cardNo || !cardKey) {
+                $('gsCardRchgResult').textContent = T('请输入卡号与卡密');
+                return;
+            }
+            var btn = $('gsCardRchgOk');
+            btn.disabled = true;
+            $('gsCardRchgResult').textContent = T('核销中…');
+            api('POST', '/api/game/card/redeem', { card_no: cardNo, card_key: cardKey }).then(function (res) {
+                btn.disabled = false;
+                if (!res.ok) {
+                    $('gsCardRchgResult').textContent = res.msg || T('核销失败');
+                    return;
+                }
+                var d = res.data || {};
+                if (d.balance !== undefined && d.balance !== null) { state.balance = d.balance; syncPointsOut(d.balance); }
+                $('gsCardRchgResult').textContent = '';
+                toast(T('充值成功，到账 ') + fmtPoints(d.points) + T(' 积分，当前余额 ') + fmtPoints(d.balance));
+                $('gsCardRchgMask').classList.add('hidden');
+                refreshViews(); // 标题栏/购买块余额即时刷新
+            }).catch(function () {
+                btn.disabled = false;
+                $('gsCardRchgResult').textContent = T('网络异常，请稍后重试');
+            });
+        };
+        $('gsCardRchgOk').addEventListener('click', cardRchgSubmit);
+        $('gsCardRchgCancel').addEventListener('click', function () { $('gsCardRchgMask').classList.add('hidden'); });
+        $('gsCardKeyInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') cardRchgSubmit(); });
     })();
 
     // 运行期间"正在玩"心跳：60s 一次复用 action=start（服务端据此刻入/续期 presence，
@@ -4237,7 +4277,7 @@
             api('POST', '/api/game/library/' + gid).then(function (res) {
                 if (!res.ok) { toast(res.msg || T('获取失败')); return; }
                 var d = res.data || {};
-                if (d.balance !== undefined && d.balance !== null) state.balance = d.balance;
+                if (d.balance !== undefined && d.balance !== null) { state.balance = d.balance; syncPointsOut(d.balance); }
                 if (state.games[gid]) state.games[gid].in_library = 0;
                 if (!state.lib[gid]) state.lib[gid] = { lib: { game_id: gid, state: 0 }, game: state.games[gid] || g };
                 else state.lib[gid].lib.state = 0;
@@ -4268,7 +4308,7 @@
             }
             api('DELETE', '/api/game/library/' + gid).then(function (res) {
                 if (!res.ok) { toast(res.msg || T('移出失败')); return; }
-                if (res.data && res.data.balance !== undefined && res.data.balance !== null) state.balance = res.data.balance;
+                if (res.data && res.data.balance !== undefined && res.data.balance !== null) { state.balance = res.data.balance; syncPointsOut(res.data.balance); }
                 delete state.lib[gid];
                 if (state.games[gid]) { state.games[gid].in_library = undefined; }
                 toast(T('已移出游戏库，积分已退还'));
@@ -5155,7 +5195,7 @@
             btn.disabled = false;
             if (!res.ok) { toast(res.msg || T('下单失败')); return; }
             var d = res.data || {};
-            if (d.balance !== undefined && d.balance !== null) state.balance = d.balance;
+            if (d.balance !== undefined && d.balance !== null) { state.balance = d.balance; syncPointsOut(d.balance); }
             toast(T('已提交，处理中…'));
             var orderId = d.order_id;
             var tries = 0;
@@ -5215,6 +5255,23 @@
     $('gsRchgRecsBtn').addEventListener('click', function () {
         rchg.showRecs = !rchg.showRecs;
         rchgRender();
+    });
+
+    // ===== 跨窗口积分余额同步（主界面 ↔ 游戏中心，同源 storage 事件） =====
+    // 本窗口写不触发本窗口监听、对方窗口写不触发对方监听 → 双向天然不递归；同值写入不触发（天然防抖）
+    function syncPointsOut(b) {
+        if (b === undefined || b === null) return;
+        try { localStorage.setItem('im_points_sync', JSON.stringify({ b: Number(b), t: Date.now() })); } catch (eSync) { /* 忽略 */ }
+    }
+    window.addEventListener('storage', function (e) {
+        if (e.key !== 'im_points_sync' || !e.newValue) return;
+        try {
+            var v = JSON.parse(e.newValue);
+            if (v.b != null && Number(v.b) !== Number(state.balance)) {
+                state.balance = Number(v.b);
+                refreshViews(); // 购买块/弹窗余额即时跟随主窗口变动（AI 扣费/红包/管理员调整）
+            }
+        } catch (eParse) { /* 忽略脏数据 */ }
     });
 
     // ==================== 进度事件订阅与全局刷新 ====================

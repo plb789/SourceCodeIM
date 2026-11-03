@@ -4086,5 +4086,12 @@
   "确认充值": "Confirm top-up",
   "失败已退分": "Failed & refunded",
   "积分不足，请联系管理员发放": "Insufficient points. Please contact an admin.",
-  "积分赞助": "Sponsor with points"
+  "积分赞助": "Sponsor with points",
+  "卡密充值": "Redeem card",
+  "输入充值卡卡号与卡密，积分即时到账。": "Enter the card number and key, points are credited instantly.",
+  "卡号（如 IM123456789012）": "Card number (e.g. IM123456789012)",
+  "卡密（16 位）": "Card key (16 chars)",
+  "请输入卡号与卡密": "Enter both card number and key",
+  "核销中…": "Redeeming…",
+  "核销失败": "Redeem failed"
 }

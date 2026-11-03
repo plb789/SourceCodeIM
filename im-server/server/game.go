@@ -48,7 +48,7 @@ func InitGame(cfg *config.Config) {
 	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
 		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
 		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}, &model.GatewayBook{},
-		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}}
+		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}, &model.RechargeCard{}}
 	migrateFailed := false
 	for _, t := range tables {
 		if err := store.DB.AutoMigrate(t); err != nil {
@@ -587,6 +587,8 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("POST /api/game/recharge", s.guardRecharge(s.HandleGameRecharge))
 	http.HandleFunc("GET /api/game/recharge/orders", s.guardRecharge(s.HandleGameRechargeOrders))
 	http.HandleFunc("GET /api/game/recharge/config", s.HandleGameRechargeConfig)
+	// 卡密充值（gamecard.go 归口）：资金接口同款 X-Drive-Token 强校验
+	http.HandleFunc("POST /api/game/card/redeem", s.guardRecharge(s.HandleGameCardRedeem))
 	http.HandleFunc("GET /api/game/reviews/{id}", s.HandleGameReviews)
 	http.HandleFunc("POST /api/game/review/{id}", s.guardGame(s.HandleGameReviewUpsert))
 	http.HandleFunc("DELETE /api/game/review/{id}", s.guardGame(s.HandleGameReviewDelete))

@@ -58,6 +58,7 @@
                 <button class="admin-nav-item sub" data-view="gn">游戏公告</button>
                 <button class="admin-nav-item sub" data-view="gwbook">网关地址簿</button>
                 <button class="admin-nav-item sub" data-view="groders">充值订单</button>
+                <button class="admin-nav-item sub" data-view="cards">充值卡</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1613,6 +1614,57 @@
                     <button id="grod-next" class="admin-btn small">下一页</button>
                 </div>
             </section>
+            <!-- 充值卡（游戏管理二级页：按面值批量生成卡号卡密、批次筛选、作废、三格式导出） -->
+            <section id="admin-view-cards" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>充值卡</h2>
+                    <span id="cards-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">按积分面值批量生成充值卡（卡号+卡密），导出 TXT/CSV/XLSX 发放给玩家；玩家在游戏中心标题栏账号区弹窗输入卡号卡密核销，积分即时入账（流水 reason=card_recharge）。卡密明文存储，请妥善保管导出文件。</p>
+                <div class="gm-layout-card">
+                    <div class="gm-layout-head"><span class="gm-pub-title">生成充值卡</span></div>
+                    <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;">
+                        <input id="cards-f-points" type="number" step="0.001" min="0.001" class="admin-input gm-num-input" placeholder="面值（积分，如 100）" title="每张卡核销后到账的积分数量">
+                        <input id="cards-f-count" type="number" min="1" max="5000" class="admin-input gm-num-input" placeholder="数量（1~5000）" value="100">
+                        <input id="cards-f-prefix" class="admin-input" style="max-width:160px;" placeholder="卡号前缀（可空，默认 IM）" maxlength="8">
+                        <button id="cards-generate" class="admin-btn small primary" type="button">批量生成</button>
+                    </div>
+                    <span class="admin-field-hint">卡号=前缀+12 位数字，卡密=16 位字母数字（去易混淆字符 0O1IL）；生成后凭批次号导出。单批上限 5000 张。</span>
+                </div>
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 12px;">
+                    <input id="cards-f-batch" class="admin-input" style="max-width:240px;" placeholder="批次号（可空，如 CR20261103…）" maxlength="32">
+                    <select id="cards-f-status" class="admin-input gm-num-input">
+                        <option value="">全部状态</option>
+                        <option value="0">未使用</option>
+                        <option value="1">已使用</option>
+                        <option value="2">已作废</option>
+                    </select>
+                    <button id="cards-refresh" class="admin-btn small primary" type="button">查询</button>
+                    <span style="flex:1;"></span>
+                    <button id="cards-exp-txt" class="admin-btn small" type="button">导出 TXT</button>
+                    <button id="cards-exp-csv" class="admin-btn small" type="button">导出 CSV</button>
+                    <button id="cards-exp-xlsx" class="admin-btn small" type="button">导出 XLSX</button>
+                    <button id="cards-void" class="admin-btn small" type="button" style="color:var(--danger,#e5484d);">作废选中未使用</button>
+                </div>
+                <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th style="width:34px;"><input type="checkbox" id="cards-sel-all" title="全选本页"></th>
+                            <th>卡号</th><th>卡密</th><th>面值</th><th>状态</th><th>使用者</th><th>使用时间</th><th>批次</th><th>生成时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cards-tbody">
+                        <tr><td colspan="9" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+                </div>
+                <div class="vec-pager">
+                    <button id="cards-prev" class="admin-btn small">上一页</button>
+                    <span id="cards-page-info" class="admin-view-tip">-</span>
+                    <button id="cards-next" class="admin-btn small">下一页</button>
+                </div>
+            </section>
             <!-- 游戏公告管理（游戏管理二级页：表格一行一条，服务端分页+关键词搜索，公告量不限） -->
             <section id="admin-view-gn" class="admin-view">
                 <header class="admin-view-head">
@@ -2065,7 +2117,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.70"></script>
+    <script src="js/admin.js?v=1.71"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

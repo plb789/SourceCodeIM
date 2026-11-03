@@ -2097,7 +2097,23 @@
         // 阶段八十六：资料面板积分行同步刷新（面板打开时实时跟随，Web/手机端仅此处可见积分）
         if (profilePointsEl) profilePointsEl.textContent = String(v);
         // 悬停提示走 index.html 静态 data-tip + CSS 自绘气泡（不设原生 title，否则停留 1-2 秒会叠出系统气泡）
+        // 跨窗口广播（同源 storage 事件本窗口不触发、游戏中心窗口触发）：主窗口任何余额变动
+        // （登录帧/AI 扣费帧/红包/HTTP 刷新）同步到游戏中心 state.balance，双向不递归（对方只读不写）
+        try {
+            var prev = localStorage.getItem('im_points_sync');
+            if (!prev || JSON.parse(prev).b !== v) {
+                localStorage.setItem('im_points_sync', JSON.stringify({ b: v, t: Date.now() }));
+            }
+        } catch (eSync) { /* 忽略：跨窗口同步为增强体验，失败不影响本窗口显示 */ }
     }
+    // 反向监听：游戏中心窗口余额变动（卡密核销/积分赞助/商店购买/退库退款）→ 主窗口标题栏实时刷新
+    window.addEventListener('storage', function (e) {
+        if (e.key !== 'im_points_sync' || !e.newValue) return;
+        try {
+            var v = JSON.parse(e.newValue);
+            if (v.b != null) setPointsBalance(Number(v.b));
+        } catch (eParse) { /* 忽略脏数据 */ }
+    });
 
     // ===== 头像降级修复：资料面板大头像统一入口 =====
     function setProfileAvatar(url) {

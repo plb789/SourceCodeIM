@@ -303,6 +303,8 @@
             else if (item.dataset.view === 'gwbook') { gwLoad(); }
             // 充值订单（游戏管理二级页）：进入视图拉取积分兑换充值订单表（重置到第一页）
             else if (item.dataset.view === 'groders') { grodPage = 1; grodLoad(); }
+            // 充值卡（游戏管理二级页）：进入视图拉取卡密列表（重置到第一页）
+            else if (item.dataset.view === 'cards') { cardsPage = 1; cardsLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -6088,6 +6090,116 @@
     $('grod-refresh').addEventListener('click', function () { grodPage = 1; grodLoad(); });
     $('grod-prev').addEventListener('click', function () { if (grodPage > 1) { grodPage--; grodLoad(); } });
     $('grod-next').addEventListener('click', function () { grodPage++; grodLoad(); });
+
+    // ===== 充值卡（游戏管理二级页）：批量生成/批次筛选/作废/三格式导出 =====
+    var cardsPage = 1;
+
+    function cardsQuery() {
+        var batch = $('cards-f-batch').value.trim();
+        var st = $('cards-f-status').value;
+        return 'batch=' + encodeURIComponent(batch) + (st !== '' ? '&status=' + st : '');
+    }
+
+    function cardsLoad() {
+        var qs = '?page=' + cardsPage + '&size=50&' + cardsQuery();
+        $('cards-tbody').innerHTML = '<tr><td colspan="9" class="vec-empty">加载中…</td></tr>';
+        api('GET', '/admin/api/game/card/list' + qs).then(function (result) {
+            if (!result.ok) { $('cards-tbody').innerHTML = '<tr><td colspan="9" class="vec-empty">' + (result.msg || '加载失败') + '</td></tr>'; return; }
+            var data = result.data || {};
+            var items = data.items || [];
+            $('cards-page-info').textContent = '第 ' + cardsPage + ' 页 / 共 ' + (data.total || 0) + ' 张';
+            $('cards-status').textContent = '共 ' + (data.total || 0) + ' 张';
+            if (!items.length) {
+                $('cards-tbody').innerHTML = '<tr><td colspan="9" class="vec-empty">' + ($('cards-f-batch').value.trim() || $('cards-f-status').value !== '' ? '没有符合当前筛选条件的卡' : '暂无充值卡，请先批量生成') + '</td></tr>';
+                return;
+            }
+            var stTxt = ['未使用', '已使用', '已作废'];
+            var stCls = ['', 'r-ok', 'r-fail'];
+            $('cards-tbody').innerHTML = items.map(function (c) {
+                var used = c.used_at ? String(c.used_at).replace('T', ' ').slice(0, 19) : '-';
+                return '<tr data-id="' + c.id + '" data-status="' + c.status + '">' +
+                    '<td><input type="checkbox" class="cards-sel" data-id="' + c.id + '" data-status="' + c.status + '"' + (c.status === 0 ? '' : ' disabled') + '></td>' +
+                    '<td style="font-family:Consolas,monospace;">' + (c.card_no || '') + '</td>' +
+                    '<td style="font-family:Consolas,monospace;">' + (c.card_key || '') + '</td>' +
+                    '<td>' + (Number(c.points) || 0) + '</td>' +
+                    '<td class="' + (stCls[c.status] || '') + '">' + (stTxt[c.status] || c.status) + '</td>' +
+                    '<td>' + (c.used_by || '-') + '</td>' +
+                    '<td>' + (c.used_at ? String(c.used_at).replace('T', ' ').slice(0, 19) : '-') + '</td>' +
+                    '<td>' + (c.batch_no || '') + '</td>' +
+                    '<td>' + (c.create_time ? String(c.create_time).replace('T', ' ').slice(0, 19) : '-') + '</td></tr>';
+            }).join('');
+        }).catch(function () {
+            $('cards-tbody').innerHTML = '<tr><td colspan="9" class="vec-empty">网络异常</td></tr>';
+        });
+    }
+
+    // 导出（GET 需 Bearer：fetch → blob → 临时链路下载）
+    function cardsExport(format) {
+        var qs = '?format=' + format + '&' + cardsQuery();
+        fetch('/admin/api/game/card/export' + qs, { headers: { 'Authorization': 'Bearer ' + getToken() } })
+            .then(function (r) {
+                if (!r.ok) { return r.json().catch(function () { return { msg: '导出失败' }; }).then(function (j) { throw new Error(j.msg || '导出失败'); }); }
+                return r.blob().then(function (blob) {
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = 'cards_' + ($('cards-f-batch').value.trim() || 'all') + '_' + Date.now() + '.' + format;
+                    document.body.appendChild(a); a.click(); a.remove();
+                    showToast('已导出');
+                });
+            })
+            .catch(function (e) { showToast(e.message || '导出失败'); });
+    }
+
+    $('cards-generate').addEventListener('click', function () {
+        var points = parseFloat($('cards-f-points').value);
+        var count = parseInt($('cards-f-count').value, 10) || 0;
+        if (!(points > 0) || count < 1 || count > 5000) { showToast('面值须大于 0，数量 1~5000'); return; }
+        var btn = $('cards-generate');
+        btn.disabled = true;
+        api('POST', '/admin/api/game/card/generate', { points: points, count: count, prefix: $('cards-f-prefix').value.trim() })
+            .then(function (r) {
+                btn.disabled = false;
+                if (!r.ok) { showToast(r.msg || '生成失败'); return; }
+                var d = r.data || {};
+                showToast('已生成 ' + (d.count || 0) + ' 张，批次 ' + (d.batch_no || ''));
+                $('cards-f-batch').value = d.batch_no || '';
+                $('cards-f-status').value = '';
+                cardsPage = 1; cardsLoad();
+            })
+            .catch(function () { btn.disabled = false; showToast('网络异常'); });
+    });
+    $('cards-refresh').addEventListener('click', function () { cardsPage = 1; cardsLoad(); });
+    $('cards-prev').addEventListener('click', function () { if (cardsPage > 1) { cardsPage--; cardsLoad(); } });
+    $('cards-next').addEventListener('click', function () { cardsPage++; cardsLoad(); });
+    $('cards-sel-all').addEventListener('change', function () {
+        var on = this.checked;
+        document.querySelectorAll('.cards-sel').forEach(function (cb) { if (!cb.disabled) cb.checked = on; });
+    });
+    $('cards-exp-txt').addEventListener('click', function () { cardsExport('txt'); });
+    $('cards-exp-csv').addEventListener('click', function () { cardsExport('csv'); });
+    $('cards-exp-xlsx').addEventListener('click', function () { cardsExport('xlsx'); });
+    // 作废两步确认（无系统 confirm；3 秒内二次点击执行，超时复位）
+    var voidArmed = false, voidTimer = null;
+    $('cards-void').addEventListener('click', function () {
+        var ids = [];
+        document.querySelectorAll('.cards-sel').forEach(function (cb) { if (cb.checked) ids.push(parseInt(cb.getAttribute('data-id'), 10)); });
+        if (!ids.length) { showToast('请先勾选未使用的卡'); return; }
+        var btn = this;
+        if (!voidArmed) {
+            voidArmed = true;
+            btn.textContent = '再点一次确认作废（' + ids.length + ' 张）';
+            voidTimer = setTimeout(function () { voidArmed = false; btn.textContent = '作废选中未使用'; }, 3000);
+            return;
+        }
+        voidArmed = false;
+        clearTimeout(voidTimer);
+        btn.textContent = '作废选中未使用';
+        api('POST', '/admin/api/game/card/void', { ids: ids }).then(function (r) {
+            if (!r.ok) { showToast(r.msg || '作废失败'); return; }
+            showToast('已作废 ' + ((r.data && r.data.voided) || 0) + ' 张');
+            cardsLoad();
+        }).catch(function () { showToast('网络异常'); });
+    });
 
     // ===== 游戏公告发布（游戏管理页独立卡）：可不定期选择不同游戏发布公告 =====
     // 支持纯图片公告（标题/内容可空）与图文混合；图片含 GIF 动图，≤9 张（首图兼作动态卡头图）

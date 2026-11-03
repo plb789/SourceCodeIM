@@ -302,6 +302,11 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("POST /admin/api/game/gateway/probe", s.adminGuard(s.handleAdminGameGatewayProbe))
 	// 积分兑换充值订单审计页（gamerecharge.go 归口；管理端只读）
 	http.HandleFunc("GET /admin/api/game/recharge/orders", s.adminGuard(s.HandleAdminGameRechargeOrders))
+	// 充值卡（gamecard.go 归口）：生成/列表/作废/导出
+	http.HandleFunc("POST /admin/api/game/card/generate", s.adminGuard(s.HandleAdminCardGenerate))
+	http.HandleFunc("GET /admin/api/game/card/list", s.adminGuard(s.HandleAdminCardList))
+	http.HandleFunc("POST /admin/api/game/card/void", s.adminGuard(s.HandleAdminCardVoid))
+	http.HandleFunc("GET /admin/api/game/card/export", s.adminGuard(s.HandleAdminCardExport))
 }
 
 // 网关地址簿条目清洗正则（包级编译一次：name 规则 / addr host / fingerprint hex）

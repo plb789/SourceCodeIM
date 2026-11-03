@@ -558,7 +558,7 @@ func (s *Server) handleLogin(c *Client, msg *protocol.Message) {
 	if err == ErrUserNotFound {
 		if s.cfg.RegisterEnabled {
 			// 注册开关开启：尝试注册（全局群废弃：注册名单缓存已随全局群离线入队归口删除）
-			user, err = registerUser(username, password)
+			user, err = registerUser(username, password, s.registerGiftPoints())
 		} else {
 			// 注册开关关闭：登录链路不做静默注册，明确提示需先注册账号
 			err = ErrNeedRegister
@@ -687,7 +687,7 @@ func (s *Server) finishLogin(c *Client, msg *protocol.Message, user *model.User)
 // 说明：注册页为短连接，注册成功不在此登录（客户端保存凭据后跳转 index.html 走正式登录链路），
 // 失败时同步写错误后关闭连接（与 handleLogin 错误同模式，防异步队列竞态导致提示丢失）
 func (s *Server) handleRegister(c *Client, msg *protocol.Message) {
-	user, err := registerUser(msg.FromUser, msg.Content)
+	user, err := registerUser(msg.FromUser, msg.Content, s.registerGiftPoints())
 	if err != nil {
 		// 错误分级：仅业务校验错误（用户名已存在/密码不能为空等）原样下发；
 		// 底层依赖错误统一下发通用中文提示，完整错误记日志排查

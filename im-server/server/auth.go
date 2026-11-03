@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -85,8 +86,19 @@ func upgradePasswordHash(userID uint, password string) {
 	}
 }
 
-// registerUser 注册新用户，用户名查重
-func registerUser(username, password string) (*model.User, error) {
+// registerGiftPoints 注册赠送积分取值归口（nil 安全：config.Load 保证非 nil，
+// 测试/旁路直构造 Server{cfg:&config.Config{}} 时回退默认 100，防空指针解引用）
+func (s *Server) registerGiftPoints() float64 {
+	if s.cfg == nil || s.cfg.RegisterGiftPoints == nil {
+		return 100
+	}
+	return *s.cfg.RegisterGiftPoints
+}
+
+// registerUser 注册新用户，用户名查重。
+// giftPoints 注册赠送积分（config.yaml register_gift_points 归口，Load 已归一：
+// 缺省该键=100、显式写 0/负数=0 不赠送），>0 时到账并写 register_grant 流水
+func registerUser(username, password string, giftPoints float64) (*model.User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, ErrEmptyUsername
@@ -108,16 +120,28 @@ func registerUser(username, password string) (*model.User, error) {
 		return nil, ErrUserExists
 	}
 
+	if giftPoints < 0 {
+		giftPoints = 0 // 负数防御归一（Load 已兜，直调场景兜底）
+	}
 	user := &model.User{
 		Username: username,
 		Password: hashPassword(password),
-		Points:   100, // 阶段七十八：新用户注册赠送 100 积分（列默认值兜底，此处显式赋值防 GORM 零值插 0）
+		Points:   giftPoints, // 新用户注册赠送积分（写 0=不赠送）
 	}
 	if err := store.DB.Create(user).Error; err != nil {
 		return nil, err
 	}
-	// 阶段七十八：注册赠送流水审计（系统行为，操作人 system）
-	recordPointsLog(username, 100, 100, "register_grant", "system", "新用户注册赠送 100 积分")
+	if giftPoints == 0 {
+		// GORM default:100 零值陷阱（实测踩坑）：Points=0 会被列默认值标签跳过插成 100，
+		// "写 0 就是不送"必须显式归零落库
+		if err := store.DB.Model(&model.User{}).Where("id = ?", user.ID).Update("points", 0).Error; err != nil {
+			return nil, err
+		}
+		user.Points = 0
+	} else {
+		// 注册赠送流水审计（系统行为，操作人 system）；0 赠送不写流水（无资金变动）
+		recordPointsLog(username, giftPoints, giftPoints, "register_grant", "system", fmt.Sprintf("新用户注册赠送 %v 积分", giftPoints))
+	}
 	return user, nil
 }
 

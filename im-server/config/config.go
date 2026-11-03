@@ -52,6 +52,10 @@ type Config struct {
 	// false = 登录不再自动注册，账号不存在时提示"该账号不存在，请先注册账号"引导用户前往注册页；
 	//         独立注册页（register.html）始终可用，注册链路经 REGISTER 信令显式完成
 	RegisterEnabled bool `yaml:"register_enabled"`
+	// 新用户注册赠送积分（register_gift_points）：注册成功一次性到账并写 register_grant 流水。
+	// 指针语义区分"未配置"与"显式写 0"：配置文件缺省该键=回退默认 100（存量部署零回归）；
+	// 写 0=注册不赠送积分（Load 归一，负数同 0）。修改后需重启服务端生效
+	RegisterGiftPoints *float64 `yaml:"register_gift_points"`
 	// 阶段一百三十六：PC 前端资源密文下发密钥（AES-256-GCM，64 位 hex = 32 字节）
 	// 留空时 /api/secure-file 密文接口停用（返回 503），PC 端自动回退明文链路
 	// 与 PC 构建期注入密钥（secure-key.js 掩码扰乱）同源，明文仅存本文件不下发
@@ -812,6 +816,14 @@ func Load() *Config {
 		break
 	}
 	// 关键参数兜底：配置缺省或非法时回退默认值
+	// 注册赠送积分：缺省该键=回退默认 100（与历史硬编码行为一致）；显式写 0/负数=不赠送（Load 归一为 0）
+	if cfg.RegisterGiftPoints == nil {
+		v := 100.0
+		cfg.RegisterGiftPoints = &v
+	} else if *cfg.RegisterGiftPoints < 0 {
+		v := 0.0
+		cfg.RegisterGiftPoints = &v
+	}
 	if cfg.RecallWindow <= 0 {
 		cfg.RecallWindow = 120
 	}
