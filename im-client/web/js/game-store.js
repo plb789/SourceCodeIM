@@ -5288,14 +5288,14 @@
             if (!res.ok) { list.innerHTML = el('div', 'gs-rchg-rec', res.msg || T('加载失败')).outerHTML; return; }
             var items = (res.data && res.data.items) || [];
             if (!items.length) { list.innerHTML = el('div', 'gs-rchg-rec', T('暂无兑换记录')).outerHTML; return; }
-            var stMap = { 0: ['<span class="r-pend">', T('处理中') + '</span>'], 1: ['<span class="r-ok">', T('成功') + '</span>'], 2: ['<span class="r-fail">', T('失败已退分') + '</span>'] };
+            var stMap = { 0: ['r-pend', T('处理中')], 1: ['r-ok', T('成功')], 2: ['r-fail', T('失败已退分')] };
             list.innerHTML = '';
             items.forEach(function (o) {
-                var st = stMap[o.status] || ['<span class="r-pend">', o.status, '</span>'].join('');
+                var stDef = stMap[o.status] || ['r-pend', String(o.status)];
                 var rec = el('div', 'gs-rchg-rec');
                 var head = el('div', 'r-head');
                 head.appendChild(el('span', '', '#' + o.id + ' · ' + fmtPoints(o.points) + T(' 积分 → ') + fmtPoints(o.amount) + T(' 游戏币')));
-                head.appendChild(el('span', '', st));
+                head.appendChild(el('span', stDef[0], stDef[1])); // 样式类+纯文本建 DOM（el 走 textContent，拼 HTML 串会被当字面量显示）
                 rec.appendChild(head);
                 var ft = o.done_time ? new Date(o.done_time) : null;
                 rec.appendChild(el('div', '', (ft && !isNaN(ft.getTime()) ? ft.toLocaleString() : '') + (o.fail_reason ? ' · ' + o.fail_reason : '')));
