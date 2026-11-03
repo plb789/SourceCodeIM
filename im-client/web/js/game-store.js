@@ -86,15 +86,20 @@
         return location.origin + (p.charAt(0) === '/' ? '' : '/') + p;
     }
 
-    // API 封装：同源 + username 查询参数鉴权；响应 {ok:true,data}/{ok:false,msg}
+    // API 封装：同源 + username 查询参数鉴权；响应 {ok:true,data}/{ok:false,msg}。
+    // X-Drive-Token 统一携带（登录回执签发、localStorage 持久化，主窗口与游戏中心窗口同源共享）：
+    // 充值等资金类接口服务端强校验 token 归属，缺失/过期返回 401
     function api(method, path, body) {
         var sep = path.indexOf('?') >= 0 ? '&' : '?';
         var url = location.origin + path + sep + 'username=' + encodeURIComponent(username);
-        var opts = { method: method || 'GET' };
-        if (body !== undefined) {
-            opts.headers = { 'Content-Type': 'application/json' };
-            opts.body = JSON.stringify(body);
-        }
+        var headers = {};
+        try {
+            var dt = localStorage.getItem('drive_token');
+            if (dt) headers['X-Drive-Token'] = dt;
+        } catch (eDt) { /* 忽略：无 token 时资金接口按 401 提示重登 */ }
+        if (body !== undefined) headers['Content-Type'] = 'application/json';
+        var opts = { method: method || 'GET', headers: headers };
+        if (body !== undefined) opts.body = JSON.stringify(body);
         return fetch(url, opts)
             .then(function (r) { return r.json(); })
             .catch(function () { return { ok: false, msg: T('网络异常，请稍后重试') }; });
@@ -3770,10 +3775,16 @@
             gameId: gid, username: username, installDir: libDir,
             slug: String(g.slug || ''), // 内置兜底自适应：install_path 为安装根时锚定 <slug>/save，为游戏目录时用 save/**
             adminPaths: parseJsonArr(g.save_paths), adminExclude: parseJsonArr(g.save_exclude),
-            mode: mode, slot: curSlot(gid)
+            mode: mode, slot: curSlot(gid),
+            driveToken: getDriveToken() // 主进程存档请求经 query dt 注入（服务端 guardGame 强校验）
         };
         if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) p[k] = extra[k]; } }
         return p;
+    }
+
+    // 登录会话 token 读取归口（socket.js 登录回执落 localStorage；游戏中心窗口与主窗口同源共享）
+    function getDriveToken() {
+        try { return localStorage.getItem('drive_token') || ''; } catch (e) { return ''; }
     }
 
     var SAVE_SRC_TEXT = { user: T('我的覆盖'), admin: T('管理端默认'), builtin: T('内置') };
@@ -4563,6 +4574,7 @@
             }
             var buyActs = el('div', 'gs-install-actions');
             buyActs.appendChild(mkBtn((Number(g.price) || 0) > 0 ? T('用积分获取') : T('加入库'), 'primary', function () { joinLibrary(g); }));
+            if (username && g.recharge_enabled) buyActs.appendChild(mkBtn(T('积分赞助'), '', function () { openRecharge(gid); })); // 仅开放充值的游戏显示（服务端下单仍全量校验）
             box.appendChild(buyActs);
             if (!IN_ELECTRON) box.appendChild(el('div', 'gs-bar-hint', T('下载与启动请在 PC 客户端中进行')));
             return;
@@ -4578,6 +4590,7 @@
         gameActions(gid, false).forEach(function (a) {
             acts.appendChild(mkBtn(a.text, a.cls, a.fn));
         });
+        if (username && g.recharge_enabled) acts.appendChild(mkBtn(T('积分赞助'), '', function () { openRecharge(gid); })); // 已入库同样可充值（仅开放充值的游戏显示）
         box.appendChild(acts);
         if (!IN_ELECTRON) box.appendChild(el('div', 'gs-bar-hint', T('下载与启动请在 PC 客户端中进行')));
     }
@@ -5058,6 +5071,150 @@
             loadReviews(revTarget, true);
             loadRecentReviews(revTarget); // 自己的评测也进右栏"最近发布"，提交后同步刷新
         });
+    });
+
+    // ==================== 积分兑换充值（Steam"添加资金"同款档位式） ====================
+    // 服务端档位白名单（recharge_tiers）→ 客户端纯点选（无自由输入）→ 确认下单 → 轮询订单状态；
+    // 到账数值=积分×汇率（服务端下单时快照，客户端仅展示）；失败自动退分，兑换记录可查
+    var rchg = { gid: 0, cfg: null, pick: 0, showRecs: false, pollTimer: null };
+
+    function rchgClose() {
+        if (rchg.pollTimer) { clearTimeout(rchg.pollTimer); rchg.pollTimer = null; }
+        $('gsRchgMask').classList.add('hidden');
+    }
+
+    // 打开充值弹窗：拉配置（开关/汇率/档位/日限额/今日已用/余额），未开放给明确提示
+    function openRecharge(gid) {
+        api('GET', '/api/game/recharge/config?game_id=' + gid).then(function (res) {
+            if (!res.ok) { toast(res.msg || T('充值配置获取失败')); return; }
+            var c = res.data || {};
+            if (!c.enabled || !(c.tiers || []).length) { toast(T('该游戏未开放积分充值')); return; }
+            rchg.gid = gid;
+            rchg.cfg = c;
+            rchg.pick = 0;
+            rchg.showRecs = false;
+            rchgRender();
+            $('gsRchgMask').classList.remove('hidden');
+        }).catch(function () { toast(T('网络异常')); });
+    }
+
+    function rchgRender() {
+        var c = rchg.cfg;
+        var g = state.games[rchg.gid] || {};
+        $('gsRchgTitle').textContent = T('积分赞助') + ' — ' + (g.name || (T('游戏 #') + rchg.gid));
+        $('gsRchgMain').classList.toggle('hidden', rchg.showRecs);
+        $('gsRchgRecs').classList.toggle('hidden', !rchg.showRecs);
+        $('gsRchgRecsBtn').textContent = rchg.showRecs ? T('返回充值') : T('兑换记录');
+        $('gsRchgOk').classList.toggle('hidden', rchg.showRecs);
+        if (rchg.showRecs) { rchgLoadRecs(); return; }
+        var daily = Number(c.daily_max) || 0;
+        var info = T('汇率：1 积分 = ') + fmtPoints(c.rate) + T(' 游戏币');
+        if (c.balance !== undefined && c.balance !== null) {
+            info += T('，当前余额 ') + fmtPoints(c.balance) + T(' 积分');
+            if (daily > 0) info += T('，今日已兑 ') + fmtPoints(c.today_used) + ' / ' + fmtPoints(daily) + T(' 积分');
+        } else if (daily > 0) {
+            info += T('，单日限额 ') + fmtPoints(daily) + T(' 积分');
+        }
+        $('gsRchgInfo').textContent = info;
+        var wrap = $('gsRchgTiers');
+        wrap.innerHTML = '';
+        c.tiers.forEach(function (t) {
+            var card = el('div', 'gs-rchg-tier' + (rchg.pick === t ? ' active' : ''));
+            card.appendChild(el('div', 't-pts', fmtPoints(t)));
+            card.appendChild(el('div', 't-cur', fmtPoints(t * (Number(c.rate) || 1)) + T(' 游戏币')));
+            card.addEventListener('click', function () {
+                rchg.pick = t;
+                Array.prototype.forEach.call(wrap.children, function (n) { n.classList.remove('active'); });
+                card.classList.add('active');
+                rchgRenderAmount();
+            });
+            wrap.appendChild(card);
+        });
+        rchgRenderAmount();
+    }
+
+    function rchgRenderAmount() {
+        var c = rchg.cfg;
+        if (!rchg.pick) {
+            $('gsRchgAmount').textContent = T('请选择充值档位（固定档位，Steam 添加资金同款）');
+            return;
+        }
+        $('gsRchgAmount').innerHTML = T('将扣除 ') + '<b>' + fmtPoints(rchg.pick) + '</b>' + T(' 积分，到账 ') +
+            '<b>' + fmtPoints(rchg.pick * (Number(c.rate) || 1)) + '</b>' + T(' 游戏币') +
+            (c.balance !== undefined && rchg.pick > c.balance ? '，<span style="color:var(--danger,#e5484d)">' + T('余额不足') + '</span>' : '');
+    }
+
+    // 确认充值：下单 → 3s 轮询本人订单状态（首个订单号匹配），30s 未终态提示稍后查看
+    function rchgSubmit() {
+        var c = rchg.cfg;
+        if (!rchg.pick) { toast(T('请先选择充值档位')); return; }
+        if (c.balance !== undefined && rchg.pick > c.balance) { toast(T('积分不足，请联系管理员发放')); return; }
+        var btn = $('gsRchgOk');
+        btn.disabled = true;
+        api('POST', '/api/game/recharge', { game_id: rchg.gid, points: rchg.pick }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok) { toast(res.msg || T('下单失败')); return; }
+            var d = res.data || {};
+            if (d.balance !== undefined && d.balance !== null) state.balance = d.balance;
+            toast(T('已提交，处理中…'));
+            var orderId = d.order_id;
+            var tries = 0;
+            var poll = function () {
+                tries++;
+                api('GET', '/api/game/recharge/orders?game_id=' + rchg.gid + '&page=1&size=1').then(function (r2) {
+                    var it = (r2.ok && r2.data && r2.data.items && r2.data.items[0]) || null;
+                    if (it && orderId && it.id === orderId && it.status !== 0) {
+                        if (it.status === 1) {
+                            toast(T('充值成功，到账 ') + fmtPoints(it.amount) + T(' 游戏币'));
+                            rchgClose();
+                        } else {
+                            toast(T('充值失败：') + (it.fail_reason || '') + T('，积分已退还'));
+                            rchgLoadRecs();
+                        }
+                        refreshViews();
+                        return;
+                    }
+                    if (tries >= 10) { toast(T('仍在处理中，可稍后在兑换记录查看')); rchgClose(); return; }
+                    rchg.pollTimer = setTimeout(poll, 3000);
+                }).catch(function () {
+                    if (tries >= 10) { rchgClose(); return; }
+                    rchg.pollTimer = setTimeout(poll, 3000);
+                });
+            };
+            poll();
+        }).catch(function () { btn.disabled = false; toast(T('网络异常')); });
+    }
+
+    // 兑换记录（本人本游戏，倒序一页 20 条；自绘卡片列表，悬浮滑块复用 osbInit）
+    function rchgLoadRecs() {
+        var list = $('gsRchgRecList');
+        list.innerHTML = el('div', 'gs-rchg-rec', T('加载中…')).outerHTML;
+        api('GET', '/api/game/recharge/orders?game_id=' + rchg.gid + '&page=1&size=20').then(function (res) {
+            if (!res.ok) { list.innerHTML = el('div', 'gs-rchg-rec', res.msg || T('加载失败')).outerHTML; return; }
+            var items = (res.data && res.data.items) || [];
+            if (!items.length) { list.innerHTML = el('div', 'gs-rchg-rec', T('暂无兑换记录')).outerHTML; return; }
+            var stMap = { 0: ['<span class="r-pend">', T('处理中') + '</span>'], 1: ['<span class="r-ok">', T('成功') + '</span>'], 2: ['<span class="r-fail">', T('失败已退分') + '</span>'] };
+            list.innerHTML = '';
+            items.forEach(function (o) {
+                var st = stMap[o.status] || ['<span class="r-pend">', o.status, '</span>'].join('');
+                var rec = el('div', 'gs-rchg-rec');
+                var head = el('div', 'r-head');
+                head.appendChild(el('span', '', '#' + o.id + ' · ' + fmtPoints(o.points) + T(' 积分 → ') + fmtPoints(o.amount) + T(' 游戏币')));
+                head.appendChild(el('span', '', st));
+                rec.appendChild(head);
+                var ft = o.done_time ? new Date(o.done_time) : null;
+                rec.appendChild(el('div', '', (ft && !isNaN(ft.getTime()) ? ft.toLocaleString() : '') + (o.fail_reason ? ' · ' + o.fail_reason : '')));
+                list.appendChild(rec);
+            });
+            if (!list._osb) osbInit(list); // 自绘悬浮滑块（禁止系统默认滚动条）
+        }).catch(function () { list.innerHTML = el('div', 'gs-rchg-rec', T('网络异常')).outerHTML; });
+    }
+
+    $('gsRchgCancel').addEventListener('click', rchgClose);
+    $('gsRchgOk').addEventListener('click', rchgSubmit);
+    $('gsRchgRecsBtn').addEventListener('click', function () {
+        rchg.showRecs = !rchg.showRecs;
+        rchgRender();
     });
 
     // ==================== 进度事件订阅与全局刷新 ====================

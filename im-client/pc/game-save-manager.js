@@ -93,12 +93,16 @@ function mapToObj(m) {
     return o;
 }
 
-// 拼请求地址：serverBase + 逻辑路径 + 查询参数（跳过 null/undefined；均做 URL 编码）
+// 拼请求地址：serverBase + 逻辑路径 + 查询参数（跳过 null/undefined；均做 URL 编码）。
+// 登录会话 token（X-Drive-Token）经 dt 查询参数注入：服务端 guardGame 对云存档全家桶强校验
+// （主进程无渲染进程 localStorage，token 由渲染进程 saveSyncPayload.driveToken 经 IPC 携带）
+var saveAuthToken = '';
 function buildUrl(serverBase, urlPath, params) {
     var base = String(serverBase || '').replace(/\/+$/, '');
     var p = String(urlPath || '');
     if (p.charAt(0) !== '/') p = '/' + p;
     var qs = [];
+    if (saveAuthToken) qs.push('dt=' + encodeURIComponent(saveAuthToken));
     Object.keys(params || {}).forEach(function (k) {
         var v = params[k];
         if (v === undefined || v === null) return;
@@ -301,6 +305,7 @@ class GameSaveManager extends EventEmitter {
 
     // 统一入口（主进程 game:save-sync 归口）：pull | push | auto（auto=本地空且云端有则下载，否则上传）
     async sync(payload) {
+        saveAuthToken = String((payload && payload.driveToken) || ''); // 本轮请求全部 buildUrl 注入 dt
         var mode = String((payload && payload.mode) || 'push');
         if (mode === 'pull') return await this.pull(payload);
         if (mode === 'push') return await this.push(payload);

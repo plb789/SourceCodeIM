@@ -2070,6 +2070,32 @@
 
         .gs-rev-count { margin-top: 4px; text-align: right; font-size: 11px; color: var(--text-light); }
 
+        /* ===== 积分充值弹窗（Steam"添加资金"同款档位式）与兑换记录（主题变量取色，无系统弹窗） ===== */
+        .gs-rchg-modal { width: 460px; max-width: 92vw; }
+        .gs-rchg-info { font-size: 12px; color: var(--text-secondary); line-height: 1.8; margin-top: 10px; }
+        .gs-rchg-info b { color: var(--text); font-weight: 600; }
+        .gs-rchg-tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+        .gs-rchg-tier {
+            padding: 12px 0 10px; border-radius: 8px; border: 1px solid var(--border);
+            background: var(--panel-bg); cursor: pointer; text-align: center;
+        }
+        .gs-rchg-tier:hover { background: var(--hover); }
+        .gs-rchg-tier.active { border-color: var(--primary); background: var(--hover); }
+        .gs-rchg-tier .t-pts { font-size: 17px; font-weight: 700; color: var(--text); }
+        .gs-rchg-tier.active .t-pts { color: var(--primary); }
+        .gs-rchg-tier .t-cur { font-size: 11px; color: var(--text-light); margin-top: 2px; }
+        .gs-rchg-amount {
+            margin-top: 12px; padding: 9px 12px; border-radius: 8px; font-size: 13px;
+            background: var(--search-bg); color: var(--text-secondary);
+        }
+        .gs-rchg-amount b { color: var(--primary); font-weight: 600; }
+        .gs-rchg-recs { max-height: 300px; overflow-y: auto; margin-top: 10px; }
+        .gs-rchg-rec { padding: 9px 10px; border-radius: 8px; background: var(--search-bg); margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
+        .gs-rchg-rec .r-head { display: flex; justify-content: space-between; margin-bottom: 3px; color: var(--text); font-size: 13px; }
+        .gs-rchg-rec .r-ok { color: var(--ok, #4caf50); }
+        .gs-rchg-rec .r-fail { color: var(--danger, #e5484d); }
+        .gs-rchg-rec .r-pend { color: var(--text-light); }
+
         /* 库页签：Steam 同款双栏（左侧游戏侧栏 + 右侧内容区） */
         .gs-lib-wrap { flex: 1; min-height: 0; display: flex; }
 
@@ -3312,6 +3338,26 @@
         </div>
     </div>
 
+    <!-- 自绘积分充值弹窗（Steam"添加资金"同款档位式）：档位点选 → 确认 → 轮询订单状态；含兑换记录切换 -->
+    <div class="gs-modal-mask hidden" id="gsRchgMask">
+        <div class="gs-modal gs-rchg-modal">
+            <div class="gs-modal-title left" id="gsRchgTitle">积分赞助</div>
+            <div id="gsRchgMain">
+                <div class="gs-rchg-info" id="gsRchgInfo"></div>
+                <div class="gs-rchg-tiers" id="gsRchgTiers"></div>
+                <div class="gs-rchg-amount" id="gsRchgAmount"></div>
+            </div>
+            <div id="gsRchgRecs" class="hidden">
+                <div class="gs-rchg-recs" id="gsRchgRecList"></div>
+            </div>
+            <div class="gs-modal-btns">
+                <button class="gs-btn" id="gsRchgRecsBtn">兑换记录</button>
+                <button class="gs-btn" id="gsRchgCancel">关闭</button>
+                <button class="gs-btn primary" id="gsRchgOk">确认充值</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Steam 同款选盘安装弹窗（磁盘容量条 + 总/已用/剩余，替代系统目录选择器） -->
     <div class="gs-modal-mask hidden" id="gsDiskMask">
         <div class="gs-modal gs-disk-modal">
@@ -3637,7 +3683,7 @@
     <div class="gs-toast hidden" id="gsToast"></div>
 
     <!-- 游戏中心窗口逻辑（商店/游戏库/下载管理/详情/评测，Steam 布局按管理端配置渲染） -->
-    <script src="js/game-store.js?v=67"></script>
+    <script src="js/game-store.js?v=71"></script>
     <!-- 阶段二百九十二 M8：联机大厅（transport 中继口 + 连接层引擎 + 房间层 UI，仅在游戏中心窗加载，
          复用主窗口唯一 WS：gn-signal.js 经 IPC 中继收发 109/110/111/112） -->
     <script src="js/gn-signal.js?v=1.1"></script>

@@ -1050,6 +1050,20 @@ type Game struct {
 	// 写库时，显式指定账号写到哪台网关后面的游戏库（=后台「网关地址簿」条目名）。与转发规则
 	// 的 @网关名 双路并集命中（按网关过滤归口 gwGamesForGateway）；空且无网关规则=纯游戏不写库
 	DbwriteGw string `gorm:"column:dbwrite_gw;size:64;default:''" json:"dbwrite_gw"`
+	// RechargeEnabled 积分充值开关（积分兑换网关充值，docs/积分兑换网关充值功能开发文档 §3.1.1）：
+	// 开启且 recharge_gw 非空且 recharge_tiers 非空时，客户端游戏详情页才显示"积分充值"入口；
+	// AutoMigrate 自动加列，存量游戏默认 false 行为不变
+	RechargeEnabled bool `gorm:"column:recharge_enabled;default:false" json:"recharge_enabled"`
+	// RechargeGw 充值归属网关名（=后台「网关地址簿」条目名）：充值订单按此字段过滤下发到
+	// 对应网关执行 SQL（与 dbwrite_gw 同语义但独立配置——写库与充值可走不同网关）
+	RechargeGw string `gorm:"column:recharge_gw;size:64;default:''" json:"recharge_gw"`
+	// RechargeRate 汇率：1 积分 = N 游戏币（服务端下单时计算到账数值并快照进订单，网关只执行数值 SQL）
+	RechargeRate float64 `gorm:"column:recharge_rate;type:double;default:1" json:"recharge_rate"`
+	// RechargeTiers 积分档位 JSON 数组串（Steam"添加资金"同款档位式，如 [100,500,1000]）：
+	// 下单 points 必须与某档完全一致（档位白名单，拒绝任意数值）；空=未配置档位，充值视为不可用
+	RechargeTiers string `gorm:"column:recharge_tiers;size:255;default:''" json:"recharge_tiers"`
+	// RechargeDailyMax 单用户单日累计积分限额（0=不限；pending 也占额，防并发双下单绕过）
+	RechargeDailyMax float64 `gorm:"column:recharge_daily_max;type:double;default:0" json:"recharge_daily_max"`
 	// Status 0上架 1下架（下架后商店列表/详情不展示，已入库用户可继续下载已拥有版本）
 	Status     int8      `gorm:"column:status;type:tinyint;default:0;index" json:"status"`
 	Sort       int       `gorm:"column:sort;default:0" json:"sort"` // 排序（小在前）
@@ -1104,6 +1118,35 @@ type GatewayDbwriteAck struct {
 
 // TableName 表名沿用 im_ 前缀约定
 func (GatewayDbwriteAck) TableName() string { return "im_gateway_dbwrite_ack" }
+
+// 充值订单状态（积分兑换网关充值，状态机单向迁移：pending→success / pending→failed）
+const (
+	RechargeOrderStatusPending int8 = 0 // 待网关执行（积分已扣，占日限额）
+	RechargeOrderStatusSuccess int8 = 1 // 网关已写入游戏库（ack 回执）
+	RechargeOrderStatusFailed  int8 = 2 // 失败已退分（超时/网关明确失败，fail_reason 说明）
+)
+
+// RechargeOrder 积分兑换充值订单表 im_recharge_order（积分兑换网关充值功能开发文档 §3.1.1）：
+// 玩家档位式下单（Steam 添加资金同款）→ im-server 事务内原子扣积分+建单 → 网关周期拉取
+// （HMAC+AES-GCM，按 game.recharge_gw 过滤）→ 参数化执行游戏库 SQL → ack。
+// points 为扣除积分数，amount 为到账数值（=points×recharge_rate 下单时快照，网关绝不接触汇率）；
+// 失败不 ack=天然重试；超时（30 分钟）由服务端定时任务标 failed 并自动全额退分。
+// 索引：username（兑换记录页）、status+create_time（超时扫描）、game_id（按游戏审计）
+type RechargeOrder struct {
+	ID         uint64    `gorm:"primaryKey" json:"id"`
+	Username   string    `gorm:"column:username;size:64;index" json:"username"`  // 兑换用户（=游戏账号，模板 {user}）
+	GameID     uint      `gorm:"column:game_id;index" json:"game_id"`            // 游戏 ID（网关按 game_id 路由 DSN/SQL，模板 {game}）
+	Points     float64   `gorm:"column:points;type:double" json:"points"`        // 扣除积分数（3 位小数口径）
+	Amount     float64   `gorm:"column:amount;type:double" json:"amount"`        // 到账数值（下单快照，模板 {amount}，纯数字校验）
+	Status     int8      `gorm:"column:status;type:tinyint;default:0;index:idx_status_ctime" json:"status"`
+	Gw         string    `gorm:"column:gw;size:64;default:''" json:"gw"`         // 下单时快照的归属网关名（防游戏后续改归属歧义）
+	FailReason string    `gorm:"column:fail_reason;size:255;default:''" json:"fail_reason"`
+	CreateTime time.Time `gorm:"column:create_time;autoCreateTime;index:idx_status_ctime" json:"create_time"`
+	DoneTime   *time.Time `gorm:"column:done_time" json:"done_time"` // 终态时间（success/failed 落定时刻）
+}
+
+// TableName 表名沿用 im_ 前缀约定
+func (RechargeOrder) TableName() string { return "im_recharge_order" }
 
 // TableName 表名沿用 im_ 前缀约定
 func (Game) TableName() string { return "im_game" }

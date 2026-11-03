@@ -86,6 +86,11 @@ if strings.HasPrefix(r.URL.Path, "/api/") {
 		http.MethodGet: a.handleDbwriteGet, http.MethodPost: a.handleDbwriteSave,
 	})
 	register("/api/dbwrite/test", true, map[string]http.HandlerFunc{http.MethodPost: a.handleDbwriteTest})
+	// 积分兑换充值配置（在线编辑 + 热生效 + 落盘，见 recharge.go/rechargeReload）
+	register("/api/recharge", true, map[string]http.HandlerFunc{
+		http.MethodGet: a.handleRechargeGet, http.MethodPost: a.handleRechargeSave,
+	})
+	register("/api/recharge/test", true, map[string]http.HandlerFunc{http.MethodPost: a.handleRechargeTest})
 	srv := &http.Server{Addr: cfg.AdminListen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("[admin] Web 后台已启动：http://%s（默认仅本机可达，远程用 SSH 隧道）", cfg.AdminListen)
 	go func() {
@@ -306,6 +311,115 @@ func (a *adminServer) handleDbwriteTest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeAdminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleRechargeGet 当前充值配置 + 运行状态（DSN 含游戏库密码：adminGuard+仅本机后台内回显，与 dbwrite 同语义）
+func (a *adminServer) handleRechargeGet(w http.ResponseWriter, r *http.Request) {
+	running := rechargeMgr.Load() != nil
+	writeAdminJSON(w, map[string]interface{}{"ok": true, "config": a.cfg.Recharge, "running": running})
+}
+
+// handleRechargeSave 充值配置保存热更归口：服务端先完整校验（newRechargeRunner 同口径，非法拒绝保存）
+// → 内存热生效（rechargeReload）→ gateway.yaml 落盘；校验失败回滚内存配置（运行中配置不受影响）
+func (a *adminServer) handleRechargeSave(w http.ResponseWriter, r *http.Request) {
+	var d RechargeConfig
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 65536)).Decode(&d); err != nil {
+		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": "参数解析失败：" + err.Error()})
+		return
+	}
+	old := a.cfg.Recharge // 备份（校验失败回滚，保证运行中配置与内存一致）
+	a.cfg.Recharge = d
+	if err := rechargeReload(a.cfg); err != nil {
+		a.cfg.Recharge = old
+		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": err.Error()})
+		return
+	}
+	if err := saveRechargeYAML(a.cfgPath, &a.cfg.Recharge); err != nil {
+		log.Printf("[admin] recharge 配置落盘失败（内存已热生效，重启后回退旧值）：%v", err)
+		writeAdminJSON(w, map[string]interface{}{"ok": true, "warn": "已热生效但落盘失败：" + err.Error()})
+		return
+	}
+	log.Printf("[admin] recharge 配置热更生效并落盘（enabled=%v 游戏 %d 个）", a.cfg.Recharge.Enabled, len(a.cfg.Recharge.Games))
+	writeAdminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// handleRechargeTest 「测试连接」：按表单 type+dsn 现场建临时连接 Ping（5s 超时），即建即关不落状态
+func (a *adminServer) handleRechargeTest(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type string `json:"type"`
+		DSN  string `json:"dsn"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&req); err != nil {
+		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": "参数错误"})
+		return
+	}
+	if err := dbwriteTestConn(req.Type, req.DSN); err != nil {
+		writeAdminJSON(w, map[string]interface{}{"ok": false, "err": err.Error()})
+		return
+	}
+	writeAdminJSON(w, map[string]interface{}{"ok": true})
+}
+
+// saveRechargeYAML gateway.yaml 落盘归口（recharge 节）：yaml.Node 定位顶层 recharge 键；
+// 节已存在则整节点重建（games 为动态数组，原位逐键编辑无意义——该节内注释不保留，文档注释写在节外），
+// 不存在（首次启用）则追加整个 recharge 键；其余文档内容原样保留
+func saveRechargeYAML(cfgPath string, d *RechargeConfig) error {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("解析 gateway.yaml：%w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("gateway.yaml 结构异常")
+	}
+	root := doc.Content[0]
+	scalar := func(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
+	intScalar := func(v int) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(v)} }
+	boolScalar := func(v bool) *yaml.Node {
+		n := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}
+		if v {
+			n.Value = "true"
+		}
+		return n
+	}
+	// 构建 recharge 节节点（enabled/gateway_name/im_addr/poll_sec/games）
+	node := &yaml.Node{Kind: yaml.MappingNode}
+	node.Content = append(node.Content,
+		scalar("enabled"), boolScalar(d.Enabled),
+		scalar("gateway_name"), scalar(d.GatewayName),
+		scalar("im_addr"), scalar(d.IMAddr),
+		scalar("poll_sec"), intScalar(clampRechargePollSec(d.PollSec)))
+	games := &yaml.Node{Kind: yaml.SequenceNode}
+	for _, g := range d.Games {
+		gm := &yaml.Node{Kind: yaml.MappingNode}
+		gm.Content = append(gm.Content,
+			scalar("game"), scalar(strings.TrimSpace(g.Game)),
+			scalar("type"), scalar(strings.ToLower(strings.TrimSpace(g.Type))),
+			scalar("dsn"), scalar(g.DSN),
+			scalar("sql"), scalar(g.SQL))
+		games.Content = append(games.Content, gm)
+	}
+	node.Content = append(node.Content, scalar("games"), games)
+	// 定位顶层 recharge 键：存在则整体替换，不存在追加
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Kind == yaml.ScalarNode && root.Content[i].Value == "recharge" {
+			root.Content[i+1] = node
+			out, err := yaml.Marshal(&doc)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(cfgPath, out, 0600)
+		}
+	}
+	root.Content = append(root.Content, scalar("recharge"), node)
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, out, 0600)
 }
 
 // saveDbwriteYAML gateway.yaml 落盘归口（dbwrite 节）：yaml.Node 原位编辑保留注释/格式；
@@ -598,6 +712,18 @@ button.act.secondary{background:none;border:1px solid #2f3640;color:#9aa2ac}
 </div>
 <div class="row" style="margin-top:12px"><label></label><button class="act" id="dbw-save">保存并热生效</button><span class="msg" id="dbw-msg"></span></div>
 </div>
+<div class="card"><div class="dbw-head"><h2>积分兑换充值</h2><span class="dbw-state" id="rchg-state">加载中…</span></div>
+<div class="row"><label>启用充值</label><input type="checkbox" id="rchg-enabled" style="width:auto"></div>
+<div class="row"><label>自报网关名</label><input id="rchg-gateway_name" placeholder="与 im-server 地址簿条目一致（空=复用上方写库网关名）"></div>
+<div class="row"><label>im-server 地址</label><input id="rchg-im_addr" placeholder="http://im服务器地址:2087"></div>
+<div class="row"><label>拉取周期（秒）</label><input id="rchg-poll_sec" type="number" value="15"></div>
+<div class="hint" style="margin-left:0"><b>工作方式</b>：玩家在 PC 客户端用积分档位下单 → im-server 扣分建单 → 本网关周期拉取订单并按下方各游戏配置的 SQL 参数化写入对应游戏库 → 成功回执。执行失败的订单不回执自动重试，持续失败 30 分钟后 im-server 自动退分给玩家。<br>
+<b>SQL 模板</b>：占位符仅 <code>{user}</code>（IM 账号=游戏账号）、<code>{amount}</code>（到账数值，纯数字）、<code>{order}</code>（订单号，幂等键）；支持 INSERT/UPDATE/MERGE/CALL·EXEC 存储过程，禁 SELECT/DELETE、禁多语句与注释，参数绑定强制执行。<br>
+<b>幂等建议</b>：复杂充值逻辑写在游戏库端存储过程，过程内按订单号 <code>{order}</code> 去重（充值流水表 EXISTS 检查），即使网关重启重放也不会重复加钱。MySQL 示例：<code>CALL recharge_gold({user}, {amount}, {order})</code>。</div>
+<div id="rchg-games"></div>
+<div class="row" style="margin-top:8px"><label></label><button class="act secondary" id="rchg-add">+ 添加游戏</button></div>
+<div class="row" style="margin-top:12px"><label></label><button class="act" id="rchg-save">保存并热生效</button><span class="msg" id="rchg-msg"></span></div>
+</div>
 {{GROUPS}}
 <script>
 // 老浏览器兼容（Server2008R2 场景的 IE9~11）：不用 fetch（IE 全系缺失）与 NodeList.forEach（IE11 缺失），
@@ -662,6 +788,69 @@ $("dbw-save").addEventListener("click",function(){
   ajax("POST","/api/dbwrite",JSON.stringify(dbwPayload()),function(j){
     msg.className="msg "+(j&&j.ok?"ok":"fail");msg.textContent=j?(j.ok?(j.warn?j.warn:"已热生效并落盘"):(j.err||"保存失败")):"请求失败";
     if(j&&j.ok)dbwLoad();
+  });
+});
+// ===== 积分兑换充值（动态游戏条目行；ES5 同款兼容） =====
+function rchgRow(g){
+  g=g||{game:"",type:"mysql",dsn:"",sql:"UPDATE members SET gold=gold+{amount} WHERE account={user}"};
+  var box=document.createElement("div");
+  box.style.cssText="border:1px solid #2a3038;border-radius:8px;padding:10px 12px;margin:8px 0 0 130px";
+  var h=document.createElement("div");h.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:6px";
+  h.innerHTML='<label style="font-size:13px;color:#9aa2ac">游戏 ID</label>';
+  var game=document.createElement("input");game.style.width="120px";game.value=g.game;game.placeholder="im-server 后台游戏 ID（如 1）";
+  var type=document.createElement("select");
+  var types=["mysql","mssql","postgres","sqlite"];
+  for(var ti=0;ti<types.length;ti++){var op=document.createElement("option");op.value=types[ti];op.text=types[ti];type.appendChild(op);}
+  type.value=(g.type==="mssql"||g.type==="postgres"||g.type==="sqlite")?g.type:"mysql";
+  type.addEventListener("change",function(){
+    if(dsn.value.trim()===""||DBW_DSN_ALL.indexOf(dsn.value.trim())>=0){dsn.value=DBW_DSN_DEFAULTS[type.value];}
+  });
+  var test=document.createElement("button");test.className="act secondary";test.textContent="测试连接";
+  var del=document.createElement("button");del.className="act secondary";del.textContent="删除";
+  var msg=document.createElement("span");msg.className="msg";
+  h.appendChild(game);h.appendChild(type);h.appendChild(test);h.appendChild(del);h.appendChild(msg);
+  var r2=document.createElement("div");r2.style.cssText="display:flex;gap:10px;margin-bottom:6px";
+  r2.innerHTML='<label style="font-size:13px;color:#9aa2ac;min-width:60px">DSN</label>';
+  var dsn=document.createElement("input");dsn.className="wide";dsn.style.flex="1";dsn.value=g.dsn||"";
+  r2.appendChild(dsn);
+  var r3=document.createElement("div");r3.style.cssText="display:flex;gap:10px";
+  r3.innerHTML='<label style="font-size:13px;color:#9aa2ac;min-width:60px">SQL</label>';
+  var sql=document.createElement("textarea");sql.rows=2;sql.style.cssText="flex:1;font-family:Consolas,monospace";
+  sql.value=g.sql||"";r3.appendChild(sql);
+  box.appendChild(h);box.appendChild(r2);box.appendChild(r3);
+  test.addEventListener("click",function(){
+    msg.className="msg";msg.textContent="测试中…";
+    ajax("POST","/api/recharge/test",JSON.stringify({type:type.value,dsn:dsn.value.trim()}),function(j){
+      msg.className="msg "+(j&&j.ok?"ok":"fail");msg.textContent=j?(j.ok?"连接成功":(j.err||"连接失败")):"请求失败";
+    });
+  });
+  del.addEventListener("click",function(){box.parentNode.removeChild(box);});
+  box._get=function(){return {game:game.value.trim(),type:type.value,dsn:dsn.value.trim(),sql:sql.value.trim()};};
+  return box;
+}
+function rchgLoad(){
+  ajax("GET","/api/recharge?t="+new Date().getTime(),null,function(j){
+    if(!j||!j.ok){var st=$("rchg-state");if(st)st.textContent="加载失败";return;}
+    var d=j.config||{};
+    $("rchg-enabled").checked=!!d.enabled;
+    setv("rchg-gateway_name",d.gateway_name);setv("rchg-im_addr",d.im_addr);setv("rchg-poll_sec",d.poll_sec||15);
+    var wrap=$("rchg-games");wrap.innerHTML="";
+    var games=d.games||[];
+    for(var i=0;i<games.length;i++){wrap.appendChild(rchgRow(games[i]));}
+    var st=$("rchg-state");st.textContent=j.running?"拉取器运行中":"拉取器未运行";st.className="dbw-state"+(j.running?"":" off");
+  });
+}
+rchgLoad();
+$("rchg-add").addEventListener("click",function(){$("rchg-games").appendChild(rchgRow(null));});
+$("rchg-save").addEventListener("click",function(){
+  var msg=$("rchg-msg");msg.className="msg";msg.textContent="保存中…";
+  var wrap=$("rchg-games");var games=[];
+  for(var i=0;i<wrap.children.length;i++){games.push(wrap.children[i]._get());}
+  var payload={enabled:$("rchg-enabled").checked,gateway_name:$("rchg-gateway_name").value.trim(),
+    im_addr:$("rchg-im_addr").value.trim(),poll_sec:parseInt($("rchg-poll_sec").value,10)||15,games:games};
+  ajax("POST","/api/recharge",JSON.stringify(payload),function(j){
+    msg.className="msg "+(j&&j.ok?"ok":"fail");msg.textContent=j?(j.ok?(j.warn?j.warn:"已热生效并落盘"):(j.err||"保存失败")):"请求失败";
+    if(j&&j.ok)rchgLoad();
   });
 });
 var saveBtns=document.querySelectorAll("button.save");

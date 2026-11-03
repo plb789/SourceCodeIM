@@ -48,7 +48,7 @@ func InitGame(cfg *config.Config) {
 	tables := []interface{}{&model.Game{}, &model.GameVersion{}, &model.GameFile{}, &model.GameLibrary{},
 		&model.GameSave{}, &model.GameSaveFile{}, &model.GameSaveRev{}, &model.GameConfig{},
 		&model.GameReview{}, &model.GameReviewLike{}, &model.GameReviewReply{}, &model.GameSection{}, &model.GameNotice{}, &model.GatewayBook{},
-		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}}
+		&model.GatewayDbwrite{}, &model.GatewayDbwriteAck{}, &model.RechargeOrder{}}
 	migrateFailed := false
 	for _, t := range tables {
 		if err := store.DB.AutoMigrate(t); err != nil {
@@ -94,6 +94,8 @@ func InitGame(cfg *config.Config) {
 		logger.Info("游戏专属密钥补种完成：%d/%d（im_game.game_secret，启动密码改由各游戏独立密钥派生）", n, len(needSecret))
 	}
 	logger.Info("游戏中心已启用，数据目录: %s", cfg.Game.LocalDir)
+	// 积分兑换充值超时退分定时任务（60s 周期；gamerecharge.go 归口）
+	go rechargeRefundLoop()
 }
 
 // gameEnabled 游戏中心开关归口（关闭时用户端与管理端接口统一拒绝）
@@ -113,6 +115,36 @@ func gameUsername(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return username, true
+}
+
+// gameAuthToken 登录会话 token 解析归口（收口存量"username 自报"水线）：
+// header X-Drive-Token 优先，兼容主进程请求的 dt 查询参数（云存档管理器走 query 注入）；
+// 返回 token 归属用户名与校验结果
+func gameAuthToken(r *http.Request) (string, bool) {
+	tk := r.Header.Get("X-Drive-Token")
+	if tk == "" {
+		tk = r.URL.Query().Get("dt")
+	}
+	return DriveTokenVerify(tk)
+}
+
+// guardGame 游戏中心资金/身份/隐私接口统一守卫（收口存量接口，与 guardRecharge 同范式）：
+// 自报 username 必须与登录签发的 X-Drive-Token 归属一致（Redis 会话、断开即吊销），否则 401。
+// 覆盖：入库扣分/移出退分/状态上报/游玩上报/余额/云存档全家桶/评测写接口——无 token 时任何人
+// 可冒名消耗他人积分、读写他人云存档、冒名发评（审计修复）。公开浏览面（config/list/detail 读）
+// 不收口；detail 的启动密码按 token 校验门控（敏感字段不随公开面下发，guardDrive 同款语义）。
+// 兼容性：token 由登录回执下发（阶段一百九十八起），未随登录持久化 drive_token 的旧客户端需升级
+func (s *Server) guardGame(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username := r.URL.Query().Get("username")
+		tu, ok := gameAuthToken(r)
+		if !ok || tu != username {
+			logger.Warn("游戏接口鉴权失败：tokenUser=%q queryUser=%q %s %s ip=%s", tu, username, r.Method, r.URL.Path, r.RemoteAddr)
+			adminFail(w, http.StatusUnauthorized, "身份校验失败，请重新登录")
+			return
+		}
+		h(w, r)
+	}
 }
 
 // gameStoreConfig 商店布局配置归口加载（单行表 im_game_config id=1）：
@@ -521,14 +553,15 @@ func gamePlayingUsers(gid uint) []string {
 
 // RegisterGameRoutes 游戏中心路由注册（用户端 + 管理端归口一次挂载）
 func RegisterGameRoutes(s *Server) {
-	// 用户端（商店/库/下载）
+	// 用户端（商店/库/下载）。资金/身份/隐私接口挂 guardGame（token 强校验收口，见 guardGame 注释）；
+	// 公开浏览面（config/list/detail/reviews 读/me）保持开放
 	http.HandleFunc("GET /api/game/config", s.HandleGameStoreConfig) // 字面量段与 /api/game/{id} 交叉时字面量优先（Go 1.22 ServeMux 规则），无两可冲突
 	http.HandleFunc("GET /api/game/list", s.HandleGameList)
-	http.HandleFunc("GET /api/game/library", s.HandleGameLibrary)
-	http.HandleFunc("GET /api/game/library/sig", s.HandleGameLibrarySig)
-	http.HandleFunc("POST /api/game/library/{id}", s.HandleGameLibraryJoin)
-	http.HandleFunc("PUT /api/game/library/{id}/state", s.HandleGameLibraryState)
-	http.HandleFunc("DELETE /api/game/library/{id}", s.HandleGameLibraryLeave)
+	http.HandleFunc("GET /api/game/library", s.guardGame(s.HandleGameLibrary))
+	http.HandleFunc("GET /api/game/library/sig", s.guardGame(s.HandleGameLibrarySig))
+	http.HandleFunc("POST /api/game/library/{id}", s.guardGame(s.HandleGameLibraryJoin))
+	http.HandleFunc("PUT /api/game/library/{id}/state", s.guardGame(s.HandleGameLibraryState))
+	http.HandleFunc("DELETE /api/game/library/{id}", s.guardGame(s.HandleGameLibraryLeave))
 	http.HandleFunc("GET /api/game/{id}", s.HandleGameDetail)
 	// 注意：不可写成 /api/game/{id}/manifest——与 /api/game/file/{fid} 在 ServeMux 中
 	// 产生 /api/game/file/manifest 两可匹配冲突（Go 1.22 启动即 panic），故归口为前缀式路由
@@ -541,40 +574,50 @@ func RegisterGameRoutes(s *Server) {
 	http.HandleFunc("GET /api/game/file/{fid}", s.HandleGameFileDownload)
 	// 同理用字面量前缀式：/api/game/{id}/play 会与 /api/game/library/{id} 在
 	// /api/game/library/play 路径上两可冲突（Go 1.22 启动即 panic）
-	http.HandleFunc("POST /api/game/play/{id}", s.HandleGamePlay)
+	http.HandleFunc("POST /api/game/play/{id}", s.guardGame(s.HandleGamePlay))
 	// P2 商店化：积分余额 + Steam 同款评测。路由形态沿用项目踩坑先例（见下方 manifest/play
 	// 注释）：评测一律用字面量前缀式 /api/game/review[s]/...，绝不写 /api/game/{id}/reviews——
 	// 那会与 /api/game/file/{fid}、/api/game/library/{id}、/api/game/play/{id} 在
 	// /api/game/file/reviews 等路径两可匹配（Go 1.22 启动即 panic）
-	http.HandleFunc("GET /api/game/points", s.HandleGamePoints) // 字面量段与 /{id} 交叉时字面量优先
-	http.HandleFunc("GET /api/game/me", s.HandleGameMe)         // 游戏中心标题栏账号区（头像/昵称；字面量段精确优先同 points 先例）
+	http.HandleFunc("GET /api/game/points", s.guardGame(s.HandleGamePoints)) // 字面量段与 /{id} 交叉时字面量优先
+	http.HandleFunc("GET /api/game/me", s.HandleGameMe)                      // 游戏中心标题栏账号区（头像/昵称；字面量段精确优先同 points 先例）
+	// 积分兑换充值（gamerecharge.go 归口）：一律字面量前缀式（recharge 与 {id}/review/file/library/
+	// play/save 交叉处字面量优先，Go 1.22 精确优先无两可冲突）。资金类接口（下单/记录）挂
+	// guardRecharge token 强校验；config 为公开定价信息保持开放（弹窗渲染用）
+	http.HandleFunc("POST /api/game/recharge", s.guardRecharge(s.HandleGameRecharge))
+	http.HandleFunc("GET /api/game/recharge/orders", s.guardRecharge(s.HandleGameRechargeOrders))
+	http.HandleFunc("GET /api/game/recharge/config", s.HandleGameRechargeConfig)
 	http.HandleFunc("GET /api/game/reviews/{id}", s.HandleGameReviews)
-	http.HandleFunc("POST /api/game/review/{id}", s.HandleGameReviewUpsert)
-	http.HandleFunc("DELETE /api/game/review/{id}", s.HandleGameReviewDelete)
+	http.HandleFunc("POST /api/game/review/{id}", s.guardGame(s.HandleGameReviewUpsert))
+	http.HandleFunc("DELETE /api/game/review/{id}", s.guardGame(s.HandleGameReviewDelete))
 	// 字面量 /helpful 比通配 /{id} 更具体，Go 1.22 精确优先无冲突
-	http.HandleFunc("POST /api/game/review/helpful", s.HandleGameReviewHelpful)
+	http.HandleFunc("POST /api/game/review/helpful", s.guardGame(s.HandleGameReviewHelpful))
 	// 评测回复三接口：字面量段精确优先于 {id}（helpful 同款先例），DELETE /reply/{rid} 5 段
 	// 与 DELETE /api/game/review/{id}（4 段）长度不同无冲突
 	http.HandleFunc("GET /api/game/review/replies", s.HandleGameReviewReplies)
-	http.HandleFunc("POST /api/game/review/reply", s.HandleGameReviewReplyUpsert)
-	http.HandleFunc("DELETE /api/game/review/reply/{rid}", s.HandleGameReviewReplyDelete)
+	http.HandleFunc("POST /api/game/review/reply", s.guardGame(s.HandleGameReviewReplyUpsert))
+	http.HandleFunc("DELETE /api/game/review/reply/{rid}", s.guardGame(s.HandleGameReviewReplyDelete))
 	// 云存档（Steam 同款 P1 单设备闭环，server/gamesave.go 归口）：一律字面量前缀式 5 段路由
 	// （第 3 段固定字面量 save，与现有 config/list/library/manifest/file/play/reviews/review 均不冲突；
-	// 第 4 段再固定 manifest/file/finalize/download/data 字面量，绝无两可匹配——Go 1.22 启动不 panic）
-	http.HandleFunc("GET /api/game/save/manifest/{id}", s.HandleGameSaveManifest)
-	http.HandleFunc("POST /api/game/save/file/{id}", s.HandleGameSaveFileUpload)
-	http.HandleFunc("POST /api/game/save/finalize/{id}", s.HandleGameSaveFinalize)
-	http.HandleFunc("GET /api/game/save/download/{fid}", s.HandleGameSaveDownload)
-	http.HandleFunc("DELETE /api/game/save/data/{id}", s.HandleGameSaveDelete)
+	// 第 4 段再固定 manifest/file/finalize/download/data 字面量，绝无两可匹配——Go 1.22 启动不 panic）。
+	// 云存档为个人隐私数据（他人存档可读可覆写），全家桶挂 guardGame
+	http.HandleFunc("GET /api/game/save/manifest/{id}", s.guardGame(s.HandleGameSaveManifest))
+	http.HandleFunc("POST /api/game/save/file/{id}", s.guardGame(s.HandleGameSaveFileUpload))
+	http.HandleFunc("POST /api/game/save/finalize/{id}", s.guardGame(s.HandleGameSaveFinalize))
+	http.HandleFunc("GET /api/game/save/download/{fid}", s.guardGame(s.HandleGameSaveDownload))
+	http.HandleFunc("DELETE /api/game/save/data/{id}", s.guardGame(s.HandleGameSaveDelete))
 	// 阶段二百九十：云存档 P2（版本保留 + 历史）与 P3（多槽位）用户端路由
-	http.HandleFunc("GET /api/game/save/history/{id}", s.HandleGameSaveHistory)
-	http.HandleFunc("POST /api/game/save/rollback/{id}", s.HandleGameSaveRollback)
-	http.HandleFunc("GET /api/game/save/slots/{id}", s.HandleGameSaveSlots)
+	http.HandleFunc("GET /api/game/save/history/{id}", s.guardGame(s.HandleGameSaveHistory))
+	http.HandleFunc("POST /api/game/save/rollback/{id}", s.guardGame(s.HandleGameSaveRollback))
+	http.HandleFunc("GET /api/game/save/slots/{id}", s.guardGame(s.HandleGameSaveSlots))
 	// 管理端（上架/版本/分片上传）
 	registerGameAdminRoutes(s)
 	// 端口透传·网关写库内部接口（网关专用 HMAC 鉴权，与用户端/管理端隔离；见 gatewaydbwrite.go）
 	http.HandleFunc("GET /internal/gateway/dbwrite", s.handleInternalGatewayDbwrite)
 	http.HandleFunc("POST /internal/gateway/dbwrite/ack", s.handleInternalGatewayDbwriteAck)
+	// 积分兑换充值内部接口（同鉴权口径，见 gamerecharge.go）
+	http.HandleFunc("GET /internal/gateway/recharge", s.handleInternalGatewayRecharge)
+	http.HandleFunc("POST /internal/gateway/recharge/ack", s.handleInternalGatewayRechargeAck)
 }
 
 // libStateForView 库状态展示映射：已安装（3）且已装版本 ≠ 当前最新版本 → 视为待更新（4）。
@@ -702,8 +745,14 @@ func (s *Server) HandleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	item["description"] = g.Description
 	item["versions"] = verList
-	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏专属密钥确定性派生，仅本人可得；真实登录密码不下发）
-	item["launch_password"] = gameLaunchPassword(s.gameLaunchSecretOf(&g), username, g.ID)
+	// 积分充值可用性（仅布尔开关，非敏感）：客户端据此显隐"积分赞助"入口（服务端下单时仍全量校验）
+	item["recharge_enabled"] = g.RechargeEnabled
+	// 启动参数 {1} 占位符专属密码（按请求者账号+本游戏专属密钥确定性派生，仅本人可得；真实登录密码不下发）。
+	// token 门控（guardDrive 敏感字段同款语义）：detail 为公开浏览面，启动密码仅对 token 校验通过的
+	// 本人请求下发——防冒名 username 拉取他人游戏启动密码（网关写库游戏可凭密码登录他人游戏账号）
+	if tu, ok := gameAuthToken(r); ok && tu == username {
+		item["launch_password"] = gameLaunchPassword(s.gameLaunchSecretOf(&g), username, g.ID)
+	}
 	// 游戏公告（库内游戏页"动态"区左栏公告卡；管理端发布，倒序；images 解析为数组下发）
 	var notices []model.GameNotice
 	store.DB.Where("game_id = ?", g.ID).Order("id DESC").Find(&notices)

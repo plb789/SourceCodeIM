@@ -86,6 +86,8 @@ type Config struct {
 	AdminPassword string `yaml:"admin_password"` // 后台登录密码（强密码；登录后发内存 session）
 	// ===== 游戏账号写库（可选；dbwrite.enabled 才启动拉取器，见 dbwrite.go）=====
 	Dbwrite DbwriteConfig `yaml:"dbwrite"`
+	// ===== 积分兑换充值（可选；recharge.enabled 才启动拉取器，见 recharge.go）=====
+	Recharge RechargeConfig `yaml:"recharge"`
 	// —— 以下为旧版单监听格式（向后兼容：listens 为空时自动转为 name=default 的一组）——
 	ListenTCP      string `yaml:"listen_tcp"`       // TLS 监听（TCP 数据面 + UDP 控制面同端口）
 	ListenUDP      string `yaml:"listen_udp"`       // UDP 数据面监听（可与 TCP 同号）
@@ -715,6 +717,8 @@ func main() {
 	}
 	// 游戏账号写库拉取器（可选：dbwrite.enabled 才启动；配置/模板非法仅记日志不启动，隧道不受影响）
 	startDbwrite(cfg)
+	// 积分兑换充值拉取器（可选：recharge.enabled 才启动；同上独立 goroutine，隧道不受影响）
+	startRecharge(cfg)
 
 	select {} // 常驻
 }

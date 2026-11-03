@@ -32,9 +32,10 @@ func DriveTokenIssue(username string) string {
 	return token
 }
 
-// DriveTokenVerify 校验并滑动续期（返回 token 归属用户名）
+// DriveTokenVerify 校验并滑动续期（返回 token 归属用户名）。
+// RDB 未初始化（极端降级场景/无 Redis 测试环境）按未验证处理——绝不 panic
 func DriveTokenVerify(token string) (string, bool) {
-	if token == "" {
+	if token == "" || store.RDB == nil {
 		return "", false
 	}
 	ctx := context.Background()

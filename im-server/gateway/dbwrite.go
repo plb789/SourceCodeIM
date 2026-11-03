@@ -87,9 +87,15 @@ var dbwritePlaceholderRe = regexp.MustCompile(`\{[a-z_]+\}`)
 //     安全模型不变；sqlite 无存储过程不支持）。DELETE/DROP/TRUNCATE/ALTER/CREATE 等一律拒绝
 var dbwriteStmtRe = regexp.MustCompile(`(?i)^\s*(insert|update|merge|call|exec|execute)\b`)
 
-// compileDbwriteTemplate 模板编译归口：白名单校验 + 占位符→方言参数符替换。
+// compileSQLTemplate 模板编译归口（dbwrite/recharge 共用）：白名单校验 + 占位符→方言参数符替换。
 // dialect：mysql/sqlite→?；mssql→@p1/@p2...；postgres→$1/$2...
-func compileDbwriteTemplate(tpl, dialect string) (*dbwriteTemplate, error) {
+// allowed：占位符白名单（仅小写名）——dbwrite 链路 {user}/{password}；recharge 链路 {user}/{amount}/{order}
+//（充值模板出现 {password} 即"未知占位符"拒绝：充值链路无密码语义）
+func compileSQLTemplate(tpl, dialect string, allowed []string) (*dbwriteTemplate, error) {
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, a := range allowed {
+		allowedSet[a] = true
+	}
 	raw := strings.TrimSpace(tpl)
 	if raw == "" {
 		return nil, errors.New("模板为空")
@@ -111,13 +117,13 @@ func compileDbwriteTemplate(tpl, dialect string) (*dbwriteTemplate, error) {
 	}
 	ph := dbwritePlaceholderRe.FindAllString(raw, -1)
 	if len(ph) == 0 {
-		return nil, errors.New("模板不含任何占位符（须含 {user} 或 {password}）")
+		return nil, errors.New("模板不含任何占位符")
 	}
 	args := make([]string, 0, len(ph))
 	for _, p := range ph {
 		name := strings.Trim(p, "{}")
-		if name != "user" && name != "password" {
-			return nil, fmt.Errorf("未知占位符 %s（仅支持 {user}/{password}）", p)
+		if !allowedSet[name] {
+			return nil, fmt.Errorf("未知占位符 %s（仅支持小写 {%s}）", p, strings.Join(allowed, "}/{"))
 		}
 		args = append(args, name)
 	}
@@ -138,9 +144,14 @@ func compileDbwriteTemplate(tpl, dialect string) (*dbwriteTemplate, error) {
 	})
 	// 未知占位符形态（如 {User}/{foo}/{1}）替换后残留花括号 → 拒绝（绝不带未解析占位符进 SQL）
 	if strings.ContainsAny(out, "{}") {
-		return nil, errors.New("模板含未知占位符形态（仅支持小写 {user}/{password}）")
+		return nil, errors.New("模板含未知占位符形态（仅支持小写白名单占位符）")
 	}
 	return &dbwriteTemplate{SQL: out, Args: args, Kind: kind}, nil
+}
+
+// compileDbwriteTemplate 游戏账号写库模板编译（占位符白名单 {user}/{password}，兼容既有调用点）
+func compileDbwriteTemplate(tpl, dialect string) (*dbwriteTemplate, error) {
+	return compileSQLTemplate(tpl, dialect, []string{"user", "password"})
 }
 
 // dbwriteEntry 拉取响应条目

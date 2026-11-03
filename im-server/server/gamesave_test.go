@@ -97,9 +97,28 @@ func gsCleanup() {
 	store.DB.Where("username = ? AND game_id = ?", gsTestUser, gsTestGid).Delete(&model.GameLibrary{})
 }
 
-// gsDo 发请求返回 (状态码, 响应体)；非 2xx 不视为失败（由用例断言）
+// gsDo 发请求返回 (状态码, 响应体)；非 2xx 不视为失败（由用例断言）。
+// guardGame 收口后云存档全家桶需登录会话 token：此处惰性初始化 Redis 并按 URL 中 username
+// 逐请求签发 token 注入 X-Drive-Token 头（Redis 不可用则跳过用例——环境依赖降级）
+var gsRedisOnce sync.Once
+var gsRedisOK bool
+
+func gsEnsureRedis(t *testing.T) {
+	gsRedisOnce.Do(func() {
+		if err := store.InitRedis(config.Load()); err != nil {
+			gsRedisOK = false
+			return
+		}
+		gsRedisOK = true
+	})
+	if !gsRedisOK {
+		t.Skip("Redis 不可用：guardGame 强校验无法签发会话 token，跳过")
+	}
+}
+
 func gsDo(t *testing.T, method, fullURL string, body []byte, ctype string) (int, []byte) {
 	t.Helper()
+	gsEnsureRedis(t)
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -110,6 +129,11 @@ func gsDo(t *testing.T, method, fullURL string, body []byte, ctype string) (int,
 	}
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
+	}
+	if u, perr := url.Parse(fullURL); perr == nil {
+		if uq := u.Query().Get("username"); uq != "" {
+			req.Header.Set("X-Drive-Token", DriveTokenIssue(uq))
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -439,6 +463,11 @@ func gsRaw(method, fullURL string, body []byte, ctype string) (int, []byte, erro
 	}
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
+	}
+	if u, perr := url.Parse(fullURL); perr == nil {
+		if uq := u.Query().Get("username"); uq != "" {
+			req.Header.Set("X-Drive-Token", DriveTokenIssue(uq)) // guardGame 强校验（与 gsDo 同水位）
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

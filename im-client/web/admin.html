@@ -57,6 +57,7 @@
                 <button class="admin-nav-item sub" data-view="gamenew">新增游戏</button>
                 <button class="admin-nav-item sub" data-view="gn">游戏公告</button>
                 <button class="admin-nav-item sub" data-view="gwbook">网关地址簿</button>
+                <button class="admin-nav-item sub" data-view="groders">充值订单</button>
                 <button class="admin-nav-item" data-view="knowledge">知识库</button>
                 <button class="admin-nav-item" data-view="vecdata">量化数据管理</button>
                 <button class="admin-nav-item" data-view="agenttasks">Agent 任务</button>
@@ -1477,6 +1478,15 @@
                     <select id="gm-f-dbw-gw" class="admin-input" style="max-width:320px;"><option value="">不使用（纯游戏，不写库）</option></select>
                 </div>
                 <span class="admin-field-hint">仅写库网关：游戏<b>不配转发规则</b>但需要自动把玩家账号写进网关后面的游戏库时，选一台网关（玩家客户端直连游戏服务器，无隧道）。已配网关转发规则的游戏会自动按规则 @网关名 写库，此处留空即可；两者都配则并集生效。网关侧需启用「游戏账号写库」（见网关后台）</span>
+                <!-- 积分兑换充值（档位式，Steam"添加资金"同款）：开启后客户端详情页显示充值入口，订单经网关 SQL 落游戏库 -->
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;">
+                    <label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;"><input type="checkbox" id="gm-f-rgw-enabled">启用积分充值</label>
+                    <select id="gm-f-rgw-gw" class="admin-input" style="max-width:280px;"><option value="">充值网关（必选）</option></select>
+                    <input id="gm-f-rgw-rate" type="number" step="0.001" min="0" class="admin-input gm-num-input" placeholder="汇率 1积分=N币" value="1" title="1 积分兑换的游戏币数量（到账数值=积分×汇率，下单时快照）">
+                    <input id="gm-f-rgw-tiers" class="admin-input" style="max-width:280px;" placeholder="积分档位（逗号分隔，如 100,500,1000）" maxlength="255" title="档位式充值：玩家只能按这些固定档位下单（Steam 添加资金同款），档位即单笔白名单">
+                    <input id="gm-f-rgw-daily" type="number" step="0.001" min="0" class="admin-input gm-num-input" placeholder="单日限额（0=不限）" value="0">
+                </div>
+                <span class="admin-field-hint">积分充值（档位式）：开启并选择承接网关后，玩家在游戏详情页按固定档位用积分兑换游戏币（到账=积分×汇率），订单由网关参数化 SQL 写入游戏库，失败自动退分。档位即单笔白名单（非法数值一律拒绝）；日限额按用户按游戏每日累计（pending 占额）。网关侧需在网关后台「积分兑换充值」配置该游戏 ID 的 DSN 与 SQL</span>
                 <!-- 联机方式路由（三态单选，设计文档 docs/联机方式路由设计方案.md §四）：
                      supernode=虚拟网卡组网（展开 supernode 多选）/ tunnel=既有端口隧道（隐藏多选并清空）/ 空=跟随全局 -->
                 <div class="gm-form-row" style="flex-wrap:wrap;gap:14px;align-items:center;">
@@ -1566,6 +1576,42 @@
                 <span id="gm-page-info" class="admin-view-tip">-</span>
                 <button id="gm-next" class="admin-btn small">下一页</button>
             </div>
+            </section>
+            <!-- 积分充值订单（游戏管理二级页：档位式积分兑换网关充值的订单审计，服务端分页+筛选，只读） -->
+            <section id="admin-view-groders" class="admin-view">
+                <header class="admin-view-head">
+                    <h2>充值订单</h2>
+                    <span id="grod-status" class="admin-view-tip">-</span>
+                </header>
+                <p class="admin-view-tip">积分兑换充值订单审计：玩家按档位用积分兑换游戏币（Steam 添加资金同款），订单经网关参数化 SQL 写入游戏库。处理中（pending）积分已扣待网关执行，超 30 分钟未完成自动退分（failed）；成功（success）已到账游戏库。</p>
+                <div class="gm-form-row" style="flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">
+                    <input id="grod-f-user" class="admin-input" style="max-width:200px;" placeholder="用户名关键词（可空）" maxlength="64">
+                    <input id="grod-f-game" type="number" class="admin-input gm-num-input" placeholder="游戏 ID（可空）" style="max-width:140px;">
+                    <select id="grod-f-status" class="admin-input gm-num-input">
+                        <option value="">全部状态</option>
+                        <option value="0">处理中</option>
+                        <option value="1">成功</option>
+                        <option value="2">失败已退分</option>
+                    </select>
+                    <button id="grod-refresh" class="admin-btn small primary" type="button">查询</button>
+                </div>
+                <div class="vec-table-wrap">
+                <table class="vec-table">
+                    <thead>
+                        <tr>
+                            <th>订单号</th><th>用户</th><th>游戏</th><th>扣积分</th><th>到账数值</th><th>网关</th><th>状态</th><th>说明</th><th>下单时间</th><th>完成时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="grod-tbody">
+                        <tr><td colspan="10" class="vec-empty">加载中…</td></tr>
+                    </tbody>
+                </table>
+                </div>
+                <div class="vec-pager">
+                    <button id="grod-prev" class="admin-btn small">上一页</button>
+                    <span id="grod-page-info" class="admin-view-tip">-</span>
+                    <button id="grod-next" class="admin-btn small">下一页</button>
+                </div>
             </section>
             <!-- 游戏公告管理（游戏管理二级页：表格一行一条，服务端分页+关键词搜索，公告量不限） -->
             <section id="admin-view-gn" class="admin-view">
@@ -2019,7 +2065,7 @@
 
     <!-- ECharts 本地图表库（内网离线可用，与 highlight.js 同规则） -->
     <script src="js/lib/echarts.min.js?v=5.5.1"></script>
-    <script src="js/admin.js?v=1.69"></script>
+    <script src="js/admin.js?v=1.70"></script>
     <!-- 阶段七十八：全局自绘 tooltip（接管全站原生 title 提示，主题反色+圆角+指向三角） -->
     <script src="js/tooltip.js?v=1.1"></script>
 </body>

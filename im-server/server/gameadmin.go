@@ -300,6 +300,8 @@ func registerGameAdminRoutes(s *Server) {
 	http.HandleFunc("DELETE /admin/api/game/gateways/{id}", s.adminGuard(s.handleAdminGameGatewayDelete))
 	// 指纹自动探测（添加/编辑弹窗「从网关获取」按钮：TLS 连公网地址取对端证书算 SHA256）
 	http.HandleFunc("POST /admin/api/game/gateway/probe", s.adminGuard(s.handleAdminGameGatewayProbe))
+	// 积分兑换充值订单审计页（gamerecharge.go 归口；管理端只读）
+	http.HandleFunc("GET /admin/api/game/recharge/orders", s.adminGuard(s.HandleAdminGameRechargeOrders))
 }
 
 // 网关地址簿条目清洗正则（包级编译一次：name 规则 / addr host / fingerprint hex）
@@ -591,6 +593,11 @@ func (s *Server) handleAdminGameCreate(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
 		return
 	}
+	// 积分充值配置清洗（gamerecharge.go 归口，创建/更新同口径：网关名/汇率/日限额/档位归一）
+	if err := rechargeGameCfgClean(&g); err != nil {
+		adminFail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	vids, verr := gameVideosClean(g.Videos)
 	if verr != nil {
 		adminFail(w, http.StatusBadRequest, verr.Error())
@@ -679,6 +686,12 @@ func (s *Server) handleAdminGameDetail(w http.ResponseWriter, r *http.Request) {
 	item["net_mode"] = g.NetMode
 	// 写库网关名回填（管理端编辑弹窗下拉；仅写库游戏——无网关转发规则时显式声明写库归属）
 	item["dbwrite_gw"] = g.DbwriteGw
+	// 积分充值配置回填（管理端编辑弹窗；档位还原为原始数组便于表单回显）
+	item["recharge_enabled"] = g.RechargeEnabled
+	item["recharge_gw"] = g.RechargeGw
+	item["recharge_rate"] = g.RechargeRate
+	item["recharge_tiers"] = g.RechargeTiers
+	item["recharge_daily_max"] = g.RechargeDailyMax
 	adminJSON(w, item)
 }
 
@@ -782,6 +795,11 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		adminFail(w, http.StatusBadRequest, "写库网关名须为 1~64 位小写字母/数字/_/-（留空=不写库或按转发规则归属）")
 		return
 	}
+	// 积分充值配置清洗（gamerecharge.go 归口，创建/更新同口径）
+	if err := rechargeGameCfgClean(&u); err != nil {
+		adminFail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// BT·上传种子方式：种子落定后重扫填充 size_bytes/latest_version。种子实际更换（tp≠旧值）时
 	// latest_version 按种子日期递增（同日重传自动追加序号 .2/.3——客户端按字符串比较判更新，
 	// 同日重传日期不变会漏掉更新提示）；未换种子（普通编辑保存）latest_version 原值保留不递增
@@ -806,6 +824,12 @@ func (s *Server) handleAdminGameUpdate(w http.ResponseWriter, r *http.Request) {
 		"steam_emu": u.SteamEmu, "steam_app_id": u.SteamAppId,
 		"port_forwards": u.PortForwards,
 		"dbwrite_gw":    u.DbwriteGw,
+		// 积分充值配置（gamerecharge.go 清洗后的归一值全量回写）
+		"recharge_enabled":   u.RechargeEnabled,
+		"recharge_gw":        u.RechargeGw,
+		"recharge_rate":      u.RechargeRate,
+		"recharge_tiers":     u.RechargeTiers,
+		"recharge_daily_max": u.RechargeDailyMax,
 		"save_paths":    u.SavePaths, "save_exclude": u.SaveExclude,
 		"online_ports_tcp": gamePortsClean(u.OnlinePortsTCP), "online_ports_udp": gamePortsClean(u.OnlinePortsUDP),
 		"supernodes": u.Supernodes, "net_mode": u.NetMode,

@@ -301,6 +301,8 @@
             else if (item.dataset.view === 'gn') { gnPage = 1; gnLoad(); }
             // 网关地址簿（游戏管理二级页）：进入视图拉取 im-gateway 条目表格（后台热更归口）
             else if (item.dataset.view === 'gwbook') { gwLoad(); }
+            // 充值订单（游戏管理二级页）：进入视图拉取积分兑换充值订单表（重置到第一页）
+            else if (item.dataset.view === 'groders') { grodPage = 1; grodLoad(); }
             // 阶段一百六十七：进入文件存储管理视图拉取存储总览与文件列表（重置到第一页）
             else if (item.dataset.view === 'filemgr') { stopKBPolling(); fmPage = 1; fmLoadStats(); fmLoadFiles(); }
             // 阶段一百六十七：进入分享管理视图拉取全站分享列表（重置到第一页）
@@ -5815,6 +5817,15 @@
                 }).join('');
                 sel.value = cur; // 已选值仍在候选中则保留
             }
+            // 刷新「充值网关」下拉选项（积分兑换充值归属；语义同写库网关，独立选择）
+            var rsel = $('gm-f-rgw-gw');
+            if (rsel) {
+                var rcur = rsel.value;
+                rsel.innerHTML = '<option value="">充值网关（必选）</option>' + gmGatewayNames.map(function (g) {
+                    return '<option value="' + g.name + '">' + g.name + '（' + g.addr + (g.enabled === false ? '，已停用' : '') + '）</option>';
+                }).join('');
+                rsel.value = rcur;
+            }
         }).catch(function () { });
     }
 
@@ -5949,6 +5960,16 @@
         $('gm-f-pf').value = gmPortForwardsToText(d ? d.port_forwards : '');
         // 仅写库网关回填（无转发规则游戏的写库归属；options 由 gmLoadGatewayNames 刷新）
         $('gm-f-dbw-gw').value = d ? (d.dbwrite_gw || '') : '';
+        // 积分兑换充值配置回填（档位还原为逗号串便于编辑；options 由 gmLoadGatewayNames 刷新）
+        $('gm-f-rgw-enabled').checked = !!(d && d.recharge_enabled);
+        $('gm-f-rgw-gw').value = d ? (d.recharge_gw || '') : '';
+        $('gm-f-rgw-rate').value = d ? (d.recharge_rate || 1) : 1;
+        var rTiers = d && d.recharge_tiers ? d.recharge_tiers : '';
+        if (rTiers.charAt(0) === '[') {
+            try { rTiers = JSON.parse(rTiers).join(','); } catch (e) { /* 保持原串，服务端清洗兜底 */ }
+        }
+        $('gm-f-rgw-tiers').value = rTiers;
+        $('gm-f-rgw-daily').value = d ? (d.recharge_daily_max || 0) : 0;
         gmLoadGatewayNames();
         // 功能二期：联机端口登记（逗号分隔多端口；开局实测新端口由服务端自动累加进这里）
         $('gm-f-ports-tcp').value = d ? (d.online_ports_tcp || '') : '';
@@ -6022,6 +6043,51 @@
             $('gm-banner-clear').classList.add('hidden');
         }
     }
+
+    // ===== 积分充值订单（游戏管理二级页：订单审计，服务端分页 + 用户/游戏/状态筛选，只读） =====
+    var grodPage = 1;
+
+    function grodFmtTime(t) {
+        if (!t) return '-';
+        var d = new Date(t);
+        if (isNaN(d.getTime())) return '-';
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') +
+            ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+
+    function grodLoad() {
+        var kw = $('grod-f-user').value.trim();
+        var gid = parseInt($('grod-f-game').value, 10) || 0;
+        var st = $('grod-f-status').value;
+        var qs = '?page=' + grodPage + '&size=20' + (kw ? '&username=' + encodeURIComponent(kw) : '') +
+            (gid ? '&game_id=' + gid : '') + (st !== '' ? '&status=' + st : '');
+        $('grod-tbody').innerHTML = '<tr><td colspan="10" class="vec-empty">加载中…</td></tr>';
+        api('GET', '/admin/api/game/recharge/orders' + qs).then(function (result) {
+            if (!result.ok) { $('grod-tbody').innerHTML = '<tr><td colspan="10" class="vec-empty">' + (result.msg || '加载失败') + '</td></tr>'; return; }
+            var data = result.data || {};
+            var items = data.items || [];
+            $('grod-page-info').textContent = '第 ' + grodPage + ' 页 / 共 ' + (data.total || 0) + ' 条';
+            $('grod-status').textContent = '共 ' + (data.total || 0) + ' 条';
+            if (!items.length) {
+                var hasFilter = kw || gid || st !== '';
+                $('grod-tbody').innerHTML = '<tr><td colspan="10" class="vec-empty">' + (hasFilter ? '没有符合当前筛选条件的订单' : '暂无充值订单') + '</td></tr>';
+                return;
+            }
+            var stTxt = ['处理中', '成功', '失败已退分'];
+            $('grod-tbody').innerHTML = items.map(function (o) {
+                return '<tr><td>#' + o.id + '</td><td>' + (o.username || '') + '</td><td>' + (o.game_name || ('#' + o.game_id)) +
+                    '</td><td>' + (Number(o.points) || 0) + '</td><td>' + (Number(o.amount) || 0) + '</td><td>' + (o.gw || '-') +
+                    '</td><td>' + (stTxt[o.status] || o.status) + '</td><td style="max-width:220px;word-break:break-all;">' + (o.fail_reason || '-') +
+                    '</td><td>' + grodFmtTime(o.create_time) + '</td><td>' + grodFmtTime(o.done_time) + '</td></tr>';
+            }).join('');
+        }).catch(function () {
+            $('grod-tbody').innerHTML = '<tr><td colspan="10" class="vec-empty">网络异常</td></tr>';
+        });
+    }
+
+    $('grod-refresh').addEventListener('click', function () { grodPage = 1; grodLoad(); });
+    $('grod-prev').addEventListener('click', function () { if (grodPage > 1) { grodPage--; grodLoad(); } });
+    $('grod-next').addEventListener('click', function () { grodPage++; grodLoad(); });
 
     // ===== 游戏公告发布（游戏管理页独立卡）：可不定期选择不同游戏发布公告 =====
     // 支持纯图片公告（标题/内容可空）与图文混合；图片含 GIF 动图，≤9 张（首图兼作动态卡头图）
@@ -6507,6 +6573,12 @@
             port_forwards: pfJSON,
             // 仅写库网关（无转发规则游戏的写库归属；空=纯游戏不写库；服务端格式校验）
             dbwrite_gw: $('gm-f-dbw-gw').value.trim(),
+            // 积分兑换充值配置（档位式；档位/汇率/限额由服务端清洗归一，非法整串拒绝）
+            recharge_enabled: $('gm-f-rgw-enabled').checked,
+            recharge_gw: $('gm-f-rgw-gw').value.trim(),
+            recharge_rate: Math.max(0, parseFloat($('gm-f-rgw-rate').value) || 0),
+            recharge_tiers: $('gm-f-rgw-tiers').value.trim(),
+            recharge_daily_max: Math.max(0, parseFloat($('gm-f-rgw-daily').value) || 0),
             // 功能二期：联机端口登记（逗号分隔多端口，服务端清洗去重/范围校验）
             online_ports_tcp: $('gm-f-ports-tcp').value.trim(),
             online_ports_udp: $('gm-f-ports-udp').value.trim(),
@@ -6562,6 +6634,12 @@
             port_forwards: d.port_forwards || '',
             // 仅写库网关全量回写（详情含字段）：防上架/下架切换时清空仅写库游戏归属
             dbwrite_gw: d.dbwrite_gw || '',
+            // 积分兑换充值配置全量回写（详情含字段）：防上架/下架切换时清空充值配置
+            recharge_enabled: !!d.recharge_enabled,
+            recharge_gw: d.recharge_gw || '',
+            recharge_rate: d.recharge_rate || 0,
+            recharge_tiers: d.recharge_tiers || '',
+            recharge_daily_max: d.recharge_daily_max || 0,
             // 功能二期：联机端口登记全量回写（列表/详情含字段）：防上架/下架切换时清空
             online_ports_tcp: d.online_ports_tcp || '',
             online_ports_udp: d.online_ports_udp || '',
